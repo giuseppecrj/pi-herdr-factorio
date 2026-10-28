@@ -14,6 +14,13 @@ peer_match='[.Peer // {} | .[]
 echo "visible peers: $(jq '.Peer // {} | length' <<<"$st")"
 echo "proxy among peers: $(jq --arg h "$short" "$peer_match" <<<"$st")"
 echo "MagicDNS suffix set: $(jq '.MagicDNSSuffix != ""' <<<"$st")"
+lock=$(tailscale lock status 2>&1)
+case $lock in
+  *"LOCKED OUT"*) echo "tailnet lock: this node is LOCKED OUT" ;;
+  *"is accessible"*) echo "tailnet lock: this node is signed" ;;
+  *DISABLED*) echo "tailnet lock: disabled" ;;
+  *) echo "tailnet lock: unknown ($(head -1 <<<"$lock" | head -c 80))" ;;
+esac
 
 ip=$(getent hosts "$host" | awk '{print $1}' | head -1)
 if [ -n "$ip" ]; then

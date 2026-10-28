@@ -27,8 +27,9 @@ jobs:
 
       - uses: tailscale/github-action@99a8333667fff04fdd6cffb46dfd409f8329a7bf  # v4.3.0
         with:
-          oauth-client-id: ${{ vars.TS_OIDC_CLIENT_ID }}
-          audience: ${{ vars.TS_OIDC_AUDIENCE }}
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          oauth-client-id: ${{ secrets.TS_AUTHKEY == '' && vars.TS_OIDC_CLIENT_ID || '' }}
+          audience: ${{ secrets.TS_AUTHKEY == '' && vars.TS_OIDC_AUDIENCE || '' }}
           tags: tag:factory-ci
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
