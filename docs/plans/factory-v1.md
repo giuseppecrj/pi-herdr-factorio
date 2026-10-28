@@ -132,7 +132,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Merge.**
 
-- [ ] Record the root's exact-head local verdict and complete Bugbot triage. Record the owner-only configuration bootstrap separately from the later full main-backed verdict.
+- [ ] Record the root's exact-head local verdict and complete Bugbot triage. Record the configuration bootstrap merge, made by the root under the owner's build-PR grant, separately from the later full main-backed verdict.
 - [ ] Apply `playbooks/shipping.md`'s patch-id rule after any rebase. Merge `F04a` as the configuration bootstrap under the owner's build-PR grant. Finish its main-backed checks before enabling dependent dispatch.
 
 ## Admit GitHub label events through the adapter (F04b)
@@ -510,7 +510,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Merge.**
 
-- [ ] Record the exact-head local verdict and Bugbot triage. Record the owner-only bootstrap decision separately from the later full hosted verdict.
+- [ ] Record the exact-head local verdict and Bugbot triage. Record the CI bootstrap merge, made by the root under the owner's build-PR grant, separately from the later full hosted verdict.
 - [ ] Apply the patch-id rule in `playbooks/shipping.md`. Merge the bootstrap after its parent PRs, then finish hosted proof on the resulting trusted revision. No dependent runtime publication proceeds on a local-only verdict.
 
 ## Publish held-out tests and bind CI verdicts (F07c)
