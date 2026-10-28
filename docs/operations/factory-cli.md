@@ -44,7 +44,7 @@ A branch name contains only letters, digits, `.`, `_`, `-` and `/`. It does not 
 
 | `kind` | Cause |
 | --- | --- |
-| `source_unavailable` | The branch did not resolve to a SHA: it does not exist, the name is invalid, or `gh` failed. `sha` is `null`. |
+| `source_unavailable` | The branch did not resolve to a SHA: it does not exist, the name is invalid, or `gh` failed. `sha` is `null`. It is also reported when `gh` could not be run at all, at either step. In that case `sha` is set if the branch had already resolved. |
 | `missing_workflow_file` | The branch resolved, but fetching `WORKFLOW.md` at that SHA failed. The message says `not found` for HTTP 404 and gives `gh`'s first stderr line otherwise. |
 | `workflow_parse_error` | The front matter has no closing `---`, its YAML has an error or a warning, such as a duplicate key or an unresolved tag, or it uses an anchor or alias. Line numbers count from the first line of `WORKFLOW.md`. |
 | `workflow_front_matter_missing` | The file does not start with a `---` line. Front matter is required. |

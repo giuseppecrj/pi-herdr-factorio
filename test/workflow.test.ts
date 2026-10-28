@@ -1162,3 +1162,32 @@ describe("shell-command keys", () => {
 		});
 	}
 });
+
+describe("rejecting exec", () => {
+	const reason = new Error(`spawn gh ENOENT ${credentialedOrigin}`);
+
+	const steps: [string, Exec][] = [
+		["resolve", async () => Promise.reject(reason)],
+		[
+			"fetch",
+			async (_command, args) =>
+				args.includes("--jq")
+					? { stdout: `${mainSha}\n`, stderr: "", code: 0 }
+					: Promise.reject(reason),
+		],
+	];
+
+	for (const [step, exec] of steps) {
+		it(`reports a rejected ${step} step as source_unavailable`, async () => {
+			const loaded = await loadWorkflow({ exec, repo, ref: "main", env });
+
+			assert.equal(loaded.kind, "failed");
+
+			if (loaded.kind !== "failed") return;
+
+			assert.equal(loaded.error.kind, "source_unavailable");
+			assert.match(loaded.error.message, /ENOENT/);
+			assertNoCredential(loaded.error.message);
+		});
+	}
+});

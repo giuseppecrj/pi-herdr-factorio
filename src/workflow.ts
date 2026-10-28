@@ -840,6 +840,20 @@ function firstLine(text: string): string {
 	return text.trim().split("\n")[0] ?? "";
 }
 
+type GhResult = ExecResult | { readonly rejected: string };
+
+async function runGh(exec: Exec, args: readonly string[]): Promise<GhResult> {
+	try {
+		return await exec("gh", args);
+	} catch (error) {
+		return {
+			rejected: firstLine(
+				error instanceof Error ? error.message : String(error),
+			),
+		};
+	}
+}
+
 /**
  * Loads WORKFLOW.md from `ref` of `repo` on GitHub: resolve the branch to a
  * SHA, then fetch the file at that SHA. It never reads a local checkout.
@@ -873,12 +887,19 @@ export async function loadWorkflow(input: {
 		});
 	}
 
-	const resolved = await exec("gh", [
+	const resolved = await runGh(exec, [
 		"api",
 		`repos/${repo}/git/ref/heads/${ref}`,
 		"--jq",
 		".object.sha",
 	]);
+
+	if ("rejected" in resolved) {
+		return failed(null, null, {
+			kind: "source_unavailable",
+			message: `cannot resolve ${repo} ${ref}: ${resolved.rejected}`,
+		});
+	}
 
 	const sha = resolved.stdout.trim();
 
@@ -889,12 +910,19 @@ export async function loadWorkflow(input: {
 		});
 	}
 
-	const fetched = await exec("gh", [
+	const fetched = await runGh(exec, [
 		"api",
 		"-H",
 		"Accept: application/vnd.github.raw",
 		`repos/${repo}/contents/${WORKFLOW_PATH}?ref=${sha}`,
 	]);
+
+	if ("rejected" in fetched) {
+		return failed(sha, null, {
+			kind: "source_unavailable",
+			message: `cannot fetch ${WORKFLOW_PATH} at ${sha}: ${fetched.rejected}`,
+		});
+	}
 
 	if (fetched.code !== 0) {
 		const reason = /HTTP 404/.test(fetched.stderr)
