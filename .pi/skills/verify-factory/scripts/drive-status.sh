@@ -2,9 +2,11 @@
 set -euo pipefail
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
 pr="$1"; n="$2"
+require_lane_ids "$pr" "$n" || exit 2
 lane="/home/exedev/factory-verification/$pr-w$n"
 out="/tmp/swarm-$pr/worker-$n"
 mkdir -p "$out"
+rm -f "$out/evidence.txt" "$out/status.txt" "$out/status.err"
 cp "$lane/ws/.pi/skills/verify-factory/scripts/status-driver.ts" "$lane/ws/.status-driver.ts" 2>/dev/null \
   || { echo "driver missing from lane workspace" >&2; exit 2; }
 start="$(date -u +%FT%TZ)"
