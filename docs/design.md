@@ -152,7 +152,7 @@ Riskiest unknowns first. Each unit ends in a check before the next starts.
 | # | Unit | Check |
 | --- | --- | --- |
 | 0 | Model access from a hosted runner over the tailnet | `model-smoke` run prints `factory-smoke-ok` |
-| 1 | Can Herdr run headless on a hosted runner? Decides whether pstack's fan-out skills (interrogate, architect) work in CI or get a sequential `pi -p` fallback | prototype workflow launches one Herdr pane child and gets its result |
+| 1 | Can Herdr run headless on a hosted runner? Decides whether pstack's fan-out skills (interrogate, architect) work in CI or get a sequential `pi -p` fallback | VERIFIED: run 40768344796, one child, 10 s setup (`docs/prototypes/herdr-on-runner.md`) |
 | 2 | Package skeleton: manifest, controller types, stage table, fake adapter, `npm run check` | unit tests green; `pi -e .` loads the extension and lists factory skills |
 | 3 | admit + kill switch + GitHub adapter | tests 3 and 4 of the definition of done on a real issue |
 | 4 | specify + accept | a vague issue ends `needs_info`; a clear one yields a contract and a held-out suite |
