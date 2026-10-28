@@ -11,13 +11,13 @@ Treat units 0 through 3 as historical prototype evidence, not work to repeat.
 
 One box is one unit of work. Every box names the evidence that checks it. A nested box is a sub-step of the box above it. Check a box only when its evidence exists, such as a file, a log, a test result, or a SHA. The body is a how-to. The appendices explain and record.
 
-The program runs the poteto-mode playbook `playbooks/autopilot-stack.md`. Every PR, `F04a` through `F13`, is an operator item and stops at merge-ready. The root prepares the verified stack. The owner reviews and lands it bottom-up. No agent merges or arms auto-merge. This document grants no execution, commit, push, PR, issue, service, or configuration action.
+The program runs the poteto-mode playbook `playbooks/autopilot-full.md`, with merge-then-branch for this serial chain. On 2026-10-28 the owner granted the root merge authority for build PRs. The root squash-merges a PR after a clean swarm verdict on the exact head and a passing hosted `check` on that head. The `main` ruleset requires both a PR and that check. No agent arms auto-merge. This grant covers build PRs only. The factory's runtime still stops at Human Review, and the owner merges every PR the factory opens. This document grants no other execution, commit, push, PR, issue, service, or configuration action.
 
 Use the **Factory CLI control procedure** below as the control skill. It combines `ssh`, `gh`, and the factory CLI and extension. There is no installed factory-specific control skill yet. This backend has no visual interface to verify. Live lanes drive real scenarios on `pi-factorio` against real GitHub issues in this repository, not fake-adapter tests. Save redacted logs, JSON snapshots, and issue or PR URLs instead of screenshots or video. Appendix C records this template adaptation and the other exceptions.
 
 Treat every new path, symbol, command, log field, and numerical budget below as a proposed implementation contract, not an existing capability. At the planning base `04b69c3`, only the pure state machine, policy helpers, fake adapter, provisioning script, and `/factory status` exist. Do not check future boxes with those prototypes alone.
 
-Use `openai/gpt-6.1-sol` through exe.dev's `llm` integration for every runtime stage. Use fresh sessions for acceptance and review. Label their evidence `context-isolated, same family, not cross-family`. The cross-family part of design definition-of-done item 2 remains incomplete until the owner's Anthropic proxy is available. Do not spend exe.dev Anthropic credits as a fallback.
+Use `openai/gpt-6.1-sol` through exe.dev's `llm` integration for every runtime stage. When it refuses a security-review or other security-flavored request on a content-policy flag, retry that request once on `xai/grok-4.6` through the same integration. The owner chose this fallback on 2026-10-28. exe.dev lists per-token prices for its xAI models, so the fallback spends exe.dev credits. Use it only after a recorded refusal, and count its tokens in the run total. Use fresh sessions for acceptance and review. Label their evidence `context-isolated, same family, not cross-family`. The cross-family part of design definition-of-done item 2 remains incomplete until the owner's Anthropic proxy is available. Do not spend exe.dev Anthropic credits as a fallback.
 
 Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
@@ -25,9 +25,9 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 
 ### Arm the program
 
-- [ ] State the protocol and this plan to the operator, then stop. Start execution only on the operator's explicit go. Record separate grants for commits, pushes, PR operations, fixture issues and comments, VM changes, and repository settings. Keep merge authority with the owner.
+- [ ] State the protocol and this plan to the operator, then stop. Start execution only on the operator's explicit go. Record separate grants for commits, pushes, PR operations, fixture issues and comments, VM changes, repository settings, and merging build PRs.
 - [ ] Read these from the installed skill directories at program start. Re-read them at every audit. Record their versions and paths in the execution trail.
-  - [ ] Read `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/poteto-mode/playbooks/autopilot-stack.md`.
+  - [ ] Read `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/poteto-mode/playbooks/autopilot-full.md`.
   - [ ] Read the swarm skill at `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/swarm/SKILL.md`.
   - [ ] Read the Factory CLI control procedure in this plan's boot recipe. Add its maintained command reference at `docs/operations/factory-cli.md` in `F04a`.
   - [ ] Read `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/poteto-mode/playbooks/opening-a-pr.md` and `playbooks/shipping.md` beside it.
@@ -38,13 +38,13 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 
 ### Launch owner rounds
 
-- [ ] Give each PR one owner role with the full lifecycle that `autopilot-stack` names, except merging. Launch each round as a fresh bare leaf with `fork: false`, bounded files, explicit model and thinking, verification, and commit policy. Keep one retained checkout and one canonical branch per owner.
-- [ ] Follow this dependency graph. Stack dependent work on its parent's committed tip or wait for the owner to merge the parent. Record the parent SHA in each brief.
+- [ ] Give each PR one owner role with the full lifecycle that `autopilot-full` names. The root, not the owner round, runs the merge. Launch each round as a fresh bare leaf with `fork: false`, bounded files, explicit model and thinking, verification, and commit policy. Keep one retained checkout and one canonical branch per owner.
+- [ ] Follow this dependency graph. Branch dependent work from `main` after its parent merges, or stack it on the parent's committed tip while the parent is still in review. Record the parent SHA in each brief.
   - [ ] Start `F04a` from `main`. Follow `F04a -> F04b -> F04c -> F05 -> F06a -> F06b -> F07a -> F07b -> F07c -> F08 -> F09a -> F09b -> F10 -> F11 -> F12 -> F13`.
   - [ ] Keep this chain serial for code writes. It changes shared controller contracts and tests. Parallelize read-only verification with separate fixture issues, not dependent implementation.
-  - [ ] Treat `F04a`'s first main-owned configuration and `F07b`'s first main-owned CI workflow as owner bootstrap gates. Prove parsing and execution locally first. Complete their main-backed live checks after the owner lands those trusted files, before dependent dispatch or publication. Record the bootstrap exceptions in Appendix C rather than claiming clean full verdicts early.
+  - [ ] Treat `F04a`'s first main-owned configuration and `F07b`'s first main-owned CI workflow as bootstrap gates. Prove parsing and execution locally first. Complete their main-backed live checks after those trusted files land on `main`, before dependent dispatch or publication. Record the bootstrap exceptions in Appendix C rather than claiming clean full verdicts early.
 - [ ] Hold the file boundaries in each PR's **Files** block. Treat listed directories as that PR's only directory-wide allowances. Obtain a revised scope before editing another path. New prototype receipts belong only in that PR's named documentation directory.
-- [ ] Hold the review gate for every PR. Present CLI evidence to the operator in chat. Replace the template's screenshots and video with the named text artifacts. Stop at merge-ready.
+- [ ] Hold the review gate for every PR. Present CLI evidence to the operator in chat. Replace the template's screenshots and video with the named text artifacts. Merge on a clean verdict and a passing `check`.
 - [ ] Distinguish operator-authored program changes from factory-produced patches. The owner may authorize these PRs to add `.github/` files. A runtime factory ticket may never edit `.github/` or the held-out acceptance directory.
 
 ### PR mechanics, for every PR
@@ -61,7 +61,12 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 - [ ] At the code-ready head SHA and at each later push that changes the patch, run the swarm per `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/swarm/SKILL.md`. The root launches every lane per `references/fan-out.md`. Run one gates lane, the ten live verifier lanes, and the perf lane. Two or more audit lanes read the full brief and diff, with separate focuses on authorization and lifecycle correctness. The root audits the receipts before the verdict.
 - [ ] Resolve `task:qa` against the live scoped catalog before launch. Use the owner's approved default `openai/gpt-6.1-sol` explicitly where routing is unavailable. Set supported thinking explicitly, medium for ordinary verification and high for security review. Do not rewrite shared model preferences. Label same-family audit seats context-isolated. Record the unavailable cross-family gate separately from behavior passes.
 - [ ] Require every named lane to return `PASS` before a clean behavior verdict. Findings go back to the owner. A defect that a lane filed as a note is a finding. Missing identities, missing permissions, unreachable services, or missing scenarios yield `BLOCKED`, never a substituted fake pass. A new head gets a fresh swarm and verdict, except for evidence retained under the patch-id rule in `playbooks/shipping.md`.
-- [ ] Append a PR to the stack only at the verified head, subject to the explicit `F04a` and `F07b` bootstrap exceptions. Record the verdict SHA, base SHA, patch-id, and evidence paths. Apply the patch-id rule in `playbooks/shipping.md` after rebases. Re-run CI and mergeability after rewritten pushes. The owner lands bottom-up. Never merge, arm auto-merge, or infer a merge from a green check.
+- [ ] Merge a PR only at the verified head, subject to the explicit `F04a` and `F07b` bootstrap exceptions. Record the verdict SHA, base SHA, patch-id, and evidence paths. Apply the patch-id rule in `playbooks/shipping.md` after rebases. Re-run CI and mergeability after rewritten pushes. The root squash-merges under the owner's build-PR grant, then branches the next PR from the new `main`. Never arm auto-merge, and never infer a verdict from a green check.
+
+### Keep dependencies current
+
+- [ ] Upgrade `@earendil-works/pi-coding-agent`, a devDependency and peer, as soon as a release ships an `undici` that clears the advisories `npm audit` reports. On 2026-10-28, the latest release, 1.4.0, pins `undici` 8.10.2, with 1 high and 2 moderate advisories, and `undici` 8.12.3 exists. Check with `npm view @earendil-works/pi-coding-agent version dependencies.undici`. Land the upgrade as its own PR. Prove it with `npm audit` clean or reduced, `npm run check`, and the `/factory status` drive in the verification skill.
+- [ ] Upgrade the VM's Pi in the same PR by bumping `PI_VERSION` in `server/provision.sh` and rerunning provisioning. Pi on the VM is a standalone binary, so record its bundled `undici` version separately rather than assuming it matches npm.
 
 ### Boot recipe, for every live lane
 
@@ -91,7 +96,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [ ] Implement `loadWorkflow` for YAML front matter and Markdown stage guidance at `.github/factory/WORKFLOW.md`. Load the configured repository's trusted `main` revision, never a candidate's copy. Record its SHA and content digest.
 - [ ] Validate repository identity, the 30-second poll interval, concurrency 2, model choices, positive turn and wall limits, stall timeout, retry cap, and per-run usage caps. Reject unknown checkpoint modes instead of enabling automatic landing. Default all model stages to `openai/gpt-6.1-sol`.
 - [ ] Match Symphony loader semantics for parse failures, defaults, environment expansion of named configuration values, and hot reload. Keep the last valid snapshot on a bad reload. Pin one immutable workflow snapshot per attempt and persist its digest. Do not interpolate ticket text into configuration or shell commands.
-- [ ] Implement CLI `workflow-check --json` and `status --json`. Keep `/factory status` useful without a daemon. Show unavailable runtime state explicitly. Document each command and exit code in the control procedure. Include `server` in typecheck, lint, and format checks. Before the first workflow exists on main, prove fail-closed behavior and parser cases locally. Leave valid-main and hot-reload live proof pending until the owner bootstraps the configuration.
+- [ ] Implement CLI `workflow-check --json` and `status --json`. Keep `/factory status` useful without a daemon. Show unavailable runtime state explicitly. Document each command and exit code in the control procedure. Include `server` in typecheck, lint, and format checks. Before the first workflow exists on main, prove fail-closed behavior and parser cases locally. Leave valid-main and hot-reload live proof pending until the configuration lands on `main`.
 
 **You see.**
 
@@ -123,12 +128,12 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Review gate.** The operator reviews before merge.
 
-- [ ] Post `status.json` and available reload evidence in the operator's chat review bundle. Use text artifacts instead of a screenshot or video. Stop for the owner's configuration bootstrap with pending live boxes explicit, then complete those boxes on the trusted main revision.
+- [ ] Post `status.json` and available reload evidence in the operator's chat review bundle. Use text artifacts instead of a screenshot or video. Merge it as the owner's configuration bootstrap with pending live boxes explicit, then complete those boxes on the trusted main revision.
 
 **Merge.**
 
-- [ ] Record the root's exact-head local verdict and complete Bugbot triage. Record the owner-only configuration bootstrap separately from the later full main-backed verdict.
-- [ ] Apply `playbooks/shipping.md`'s patch-id rule after any rebase. Deliver `F04a` as the stack root for the owner's bootstrap merge. Finish its main-backed checks before enabling dependent dispatch.
+- [ ] Record the root's exact-head local verdict and complete Bugbot triage. Record the configuration bootstrap merge, made by the root under the owner's build-PR grant, separately from the later full main-backed verdict.
+- [ ] Apply `playbooks/shipping.md`'s patch-id rule after any rebase. Merge `F04a` as the configuration bootstrap under the owner's build-PR grant. Finish its main-backed checks before enabling dependent dispatch.
 
 ## Admit GitHub label events through the adapter (F04b)
 
@@ -177,12 +182,12 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Review gate.** The operator reviews before merge.
 
-- [ ] Post `admission.json`, `snapshot-binding.json`, and `unauthorized.json` to the operator. Use logs instead of a screenshot or video. Stop at merge-ready with R2 unresolved if binding is not proved.
+- [ ] Post `admission.json`, `snapshot-binding.json`, and `unauthorized.json` to the operator. Use logs instead of a screenshot or video. If binding is not proved, do not merge. Report R2 as unresolved.
 
 **Merge.**
 
 - [ ] Record the exact-head verdict and Bugbot triage, including the snapshot prototype result.
-- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Append `F04b` after `F04a` for the owner.
+- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Squash-merge `F04b` on a clean verdict and a passing `check`, then branch the next PR from the new `main`.
 
 ## Reconcile claims and recover interrupted runs (F04c)
 
@@ -231,12 +236,12 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Review gate.** The operator reviews before merge.
 
-- [ ] Post `claim.json` and both restart logs to the operator. Use text receipts instead of a screenshot or video. Stop at merge-ready.
+- [ ] Post `claim.json` and both restart logs to the operator. Use text receipts instead of a screenshot or video. Merge on a clean verdict and a passing `check`.
 
 **Merge.**
 
 - [ ] Record the exact-head verdict and complete Bugbot triage after the restart prototype passes.
-- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Append `F04c` after `F04b` for the owner.
+- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Squash-merge `F04c` on a clean verdict and a passing `check`, then branch the next PR from the new `main`.
 
 ## Isolate Pi stages on the VM (F05)
 
@@ -252,6 +257,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [ ] Prototype rootless execution and enforced egress before running issue-driven code. Prove user namespaces, resource limits, cleanup, and real Herdr fan-out inside the container. Do not treat Docker availability or a non-root container UID as proof of rootless isolation.
 - [ ] Resolve risk R1 with a host-controlled egress gateway that distinguishes allowed TLS destinations. Both exe.dev integration names currently resolve to `169.254.169.254`. Prove that allowed model access cannot tunnel to the GitHub integration by changing Host, SNI, redirects, IP spelling, or proxy variables. Block direct network bypass and public GitHub API access. Allow only `llm.int.exe.xyz` and required npm registry endpoints.
 - [ ] Implement `runStage` using Pi RPC and wait for `agent_settled`, not `agent_end` or prompt acceptance. Keep the parent alive until Herdr children settle. Handle malformed output, errors, approval requests, aborts, and hard deadlines deterministically.
+- [ ] Treat a provider content-policy refusal as its own stage exit reason, distinct from errors and budget exhaustion. Add an optional per-stage `fallback_model` to `WORKFLOW.md`. On a refusal, retry the request once on the fallback. Record both model IDs, the primary's refusal, and the fallback's outcome. If the fallback also refuses, or no fallback is set, end the stage `failed` with the refusal as evidence. A refusal never becomes a pass.
 - [ ] Mount only the stage workspace and explicitly trusted read-only runtime assets. Exclude host home, Docker socket, controller state, other stage workspaces, SSH agent, and held-out artifacts from build containers. Disable inherited MCP and untrusted Pi extensions. Install pinned dependencies and record their versions.
 - [ ] Enforce stage turns, wall time, stall time, tokens, and run totals including children. Stop with `budget_exhausted` before another request when a cap is reached. Reserve cleanup time. Record unavailable monetary pricing explicitly and use token/time caps until an approved price source exists.
 - [ ] Correct `STAGE_PROFILES` and `formatStageTable` so the CLI no longer implies that model stages receive GitHub read tokens. Only the controller uses the integration. Add the approved rootless setup to provisioning only after prototype proof and an explicit VM-change grant.
@@ -286,12 +292,12 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Review gate.** The operator reviews before merge.
 
-- [ ] Post the rootless and egress receipts to the operator. Use logs instead of a screenshot or video. Stop at merge-ready only after R1 passes, otherwise report the concrete blocker.
+- [ ] Post the rootless and egress receipts to the operator. Use logs instead of a screenshot or video. Merge only after R1 passes. Otherwise report the concrete blocker and do not merge.
 
 **Merge.**
 
 - [ ] Record the exact-head security and behavior verdicts and complete Bugbot triage.
-- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Append `F05` after `F04c` for the owner.
+- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Squash-merge `F05` on a clean verdict and a passing `check`, then branch the next PR from the new `main`.
 
 ## Specify tickets and return missing questions (F06a)
 
@@ -339,12 +345,12 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Review gate.** The operator reviews before merge.
 
-- [ ] Post the contract and clarification round trip to the operator. Use text evidence instead of a screenshot or video. Stop at merge-ready.
+- [ ] Post the contract and clarification round trip to the operator. Use text evidence instead of a screenshot or video. Merge on a clean verdict and a passing `check`.
 
 **Merge.**
 
 - [ ] Record the exact-head verdict, license review, and completed Bugbot triage.
-- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Append `F06a` after `F05` for the owner.
+- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Squash-merge `F06a` on a clean verdict and a passing `check`, then branch the next PR from the new `main`.
 
 ## Generate and store held-out acceptance scenarios (F06b)
 
@@ -392,12 +398,12 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Review gate.** The operator reviews before merge.
 
-- [ ] Post the redacted manifest and canary-denial receipt to the operator. Use logs instead of a screenshot or video. Keep suite bytes private. Stop at merge-ready with the cross-family limitation visible.
+- [ ] Post the redacted manifest and canary-denial receipt to the operator. Use logs instead of a screenshot or video. Keep suite bytes private. Merge on a clean verdict, with the cross-family limitation visible.
 
 **Merge.**
 
 - [ ] Record the exact-head behavior verdict, the incomplete cross-family requirement, and Bugbot triage.
-- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Append `F06b` after `F06a` for the owner.
+- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Squash-merge `F06b` on a clean verdict and a passing `check`, then branch the next PR from the new `main`.
 
 ## Build patches without publication rights (F07a)
 
@@ -445,16 +451,16 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Review gate.** The operator reviews before merge.
 
-- [ ] Post `patch.json`, `red-green.log`, and `no-publish.log` to the operator. Use logs instead of a screenshot or video. Stop at merge-ready.
+- [ ] Post `patch.json`, `red-green.log`, and `no-publish.log` to the operator. Use logs instead of a screenshot or video. Merge on a clean verdict and a passing `check`.
 
 **Merge.**
 
 - [ ] Record the exact-head verdict and complete Bugbot triage.
-- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Append `F07a` after `F06b` for the owner.
+- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Squash-merge `F07a` on a clean verdict and a passing `check`, then branch the next PR from the new `main`.
 
 ## Run main's gates against candidate code (F07b)
 
-**Depends on.** F07a. This supplies unit 7's trusted CI gates. Hosted proof needs the owner bootstrap described in Appendix C.
+**Depends on.** F07a. This supplies unit 7's trusted CI gates. Hosted proof needs the bootstrap merge described in Appendix C.
 
 **Files.**
 
@@ -468,7 +474,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [ ] Isolate candidate execution from the trusted reporter and read-only gate files. Prototype the mount layout and dependency resolution in an unprivileged container on the hosted runner. Ensure test process writes cannot replace the gate runner or its results. Record required package install scripts instead of granting unrestricted privileged lifecycle execution.
 - [ ] Add seeded patches that delete a regression test, make `package.json` checks no-ops, alter lint/typecheck configuration, and return the wrong behavior. Require every cheating patch to fail a main-owned check. Also prove a known-good patch passes.
 - [ ] Use pinned Actions and minimal permissions with no stored secrets, no model calls, no `pull_request_target`, no persisted checkout credentials, and no privileged shared cache. Distinguish GitHub's ephemeral read-only checkout token from stored repository secrets. Return named gate results bound to exact SHAs.
-- [ ] Deliver the locally verified workflow for the owner's bootstrap merge. Keep the hosted live boxes pending until the owner lands the workflow. Then dispatch against fixed good/bad candidate SHAs on GitHub and complete proof before `F07c` proceeds.
+- [ ] Merge the locally verified workflow as the CI bootstrap under the owner's build-PR grant. Keep the hosted live boxes pending until it lands. Then dispatch against fixed good/bad candidate SHAs on GitHub and complete proof before `F07c` proceeds.
 
 **You see.**
 
@@ -500,12 +506,12 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Review gate.** The operator reviews before merge.
 
-- [ ] Post good/bad candidate receipts to the operator. Use logs and run URLs instead of a screenshot or video. Explain the bootstrap exception before asking the owner to merge the workflow. Do not call that bootstrap fully verified until the hosted lanes pass.
+- [ ] Post good/bad candidate receipts to the operator. Use logs and run URLs instead of a screenshot or video. Record the bootstrap exception in the PR before the root merges the workflow. Do not call that bootstrap fully verified until the hosted lanes pass.
 
 **Merge.**
 
-- [ ] Record the exact-head local verdict and Bugbot triage. Record the owner-only bootstrap decision separately from the later full hosted verdict.
-- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Let the owner land the bootstrap after prior stack links, then finish hosted proof on the resulting trusted revision. No dependent runtime publication proceeds on a local-only verdict.
+- [ ] Record the exact-head local verdict and Bugbot triage. Record the CI bootstrap merge, made by the root under the owner's build-PR grant, separately from the later full hosted verdict.
+- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Merge the bootstrap after its parent PRs, then finish hosted proof on the resulting trusted revision. No dependent runtime publication proceeds on a local-only verdict.
 
 ## Publish held-out tests and bind CI verdicts (F07c)
 
@@ -554,12 +560,12 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Review gate.** The operator reviews before merge.
 
-- [ ] Post the exact-head CI receipt and holdout-denial logs to the operator. Use text artifacts instead of a screenshot or video. Stop at merge-ready only when R3 and R4 have evidence.
+- [ ] Post the exact-head CI receipt and holdout-denial logs to the operator. Use text artifacts instead of a screenshot or video. Merge only when R3 and R4 have evidence.
 
 **Merge.**
 
 - [ ] Record the exact-head verdict and complete Bugbot triage.
-- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Append `F07c` after the verified CI bootstrap for the owner.
+- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Squash-merge `F07c` on a clean verdict and a passing `check`, then branch the next PR from the new `main`.
 
 ## Review candidates and bound repair rounds (F08)
 
@@ -568,12 +574,14 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Files.**
 
 - [ ] Create `src/review.ts`, `test/review.test.ts`, `test/fixtures/review/`, and `skills/code-review/`, `skills/security-review/`, `skills/simplify/`, `skills/ultrareview/` with provenance.
-- [ ] Edit `src/stages.ts`, `src/run.ts`, `server/controller.ts`, `test/stages.test.ts`, `test/pipeline.test.ts`, and `skills/README.md` for review orchestration and repair receipts.
+- [ ] Edit `src/stages.ts`, `src/run.ts`, `server/controller.ts`, `test/stages.test.ts`, `test/pipeline.test.ts`, `skills/README.md`, and `.github/factory/WORKFLOW.md` for review orchestration, repair receipts, and the security-review fallback model.
 
 **Build.**
 
 - [ ] Implement `reviewCandidate` using fresh sessions over the validated candidate and contract. Adapt the selected licensed code-review and security-review sources. Write simplify and ultrareview from permitted documentation and pstack patterns, not unlicensed prompt copies.
 - [ ] Bind findings to candidate SHA and patch digest. Use deterministic risk selection for extra review on policy, security, dependency, and factory-skill changes. Label every same-family seat honestly. Leave cross-family enforcement incomplete under R8.
+- [ ] Set the security-review seat to `openai/gpt-6.1-sol` with `fallback_model: xai/grok-4.6`. Prove the fallback on a seeded vulnerability whose review prompt the primary refuses. If no such prompt can be found, record that the fallback path was tested only by an injected refusal. A security review that both models refuse blocks handoff.
+- [ ] Label a review answered by the xAI fallback as cross-family for that seat only. It does not settle R8 for acceptance. Save `review-receipt.json` with the seat, the model that answered, its family label, and R8 still marked incomplete.
 - [ ] Preserve `MAX_REPAIR_ROUNDS = 2` across validation and review. Send blocking findings to a fresh sanitized builder session. Clear stale candidate, verdict, and review evidence. Run CI and review again for the new head.
 - [ ] Keep simplify changes inside build before validation or treat them as a new patch requiring full revalidation. Treat malformed reviews, missing expected seats, and budget exhaustion as failure, never approval. Let no model judge override a failing hard check.
 
@@ -607,12 +615,12 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Review gate.** The operator reviews before merge.
 
-- [ ] Post the planted-defect and two-round-cap receipts to the operator. Use JSON instead of a screenshot or video. Stop at merge-ready and disclose the incomplete cross-family requirement.
+- [ ] Post the planted-defect and two-round-cap receipts to the operator. Use JSON instead of a screenshot or video. Merge on a clean verdict and disclose the incomplete cross-family requirement.
 
 **Merge.**
 
 - [ ] Record the exact-head behavior verdict and Bugbot triage with model-family limitations.
-- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Append `F08` after `F07c` for the owner.
+- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Squash-merge `F08` on a clean verdict and a passing `check`, then branch the next PR from the new `main`.
 
 ## Hand off verified PRs and require human merge (F09a)
 
@@ -662,12 +670,12 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Review gate.** The operator reviews before merge.
 
-- [ ] Post the real PR URL, required-check proof, and owner-action receipts to the operator. Use text artifacts instead of a screenshot or video. Stop at merge-ready. Never perform the owner's test merge yourself.
+- [ ] Post the real PR URL, required-check proof, and owner-action receipts to the operator. Use text artifacts instead of a screenshot or video. Merge this build PR on a clean verdict. Never perform the owner's test merge of a factory-opened fixture PR yourself.
 
 **Merge.**
 
 - [ ] Record the exact-head verdict and Bugbot triage. Leave branch-protection or owner-action boxes unchecked when their evidence is missing.
-- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Append `F09a` for the owner. No agent gains merge authority from this PR.
+- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Squash-merge `F09a` on a clean verdict and a passing `check`, then branch the next PR from the new `main`. No agent gains merge authority from this PR.
 
 ## Record finished runs on the ledger branch (F09b)
 
@@ -715,12 +723,12 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Review gate.** The operator reviews before merge.
 
-- [ ] Post redacted ledger rows and the restart receipt to the operator. Use JSON instead of a screenshot or video. Stop at merge-ready.
+- [ ] Post redacted ledger rows and the restart receipt to the operator. Use JSON instead of a screenshot or video. Merge on a clean verdict and a passing `check`.
 
 **Merge.**
 
 - [ ] Record the exact-head verdict and complete Bugbot triage after the orphan-branch prototype passes.
-- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Append `F09b` for the owner.
+- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Squash-merge `F09b` on a clean verdict and a passing `check`, then branch the next PR from the new `main`.
 
 ## Apply authorized PR feedback in place (F10)
 
@@ -769,12 +777,12 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Review gate.** The operator reviews before merge.
 
-- [ ] Post the same-PR before/after URLs, head SHAs, and fresh checks to the operator. Use text artifacts instead of a screenshot or video. Stop at merge-ready.
+- [ ] Post the same-PR before/after URLs, head SHAs, and fresh checks to the operator. Use text artifacts instead of a screenshot or video. Merge on a clean verdict and a passing `check`.
 
 **Merge.**
 
 - [ ] Record the exact-head verdict and Bugbot triage, including a real owner-feedback round trip.
-- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Append `F10` for the owner.
+- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Squash-merge `F10` on a clean verdict and a passing `check`, then branch the next PR from the new `main`.
 
 ## File bounded maintenance proposals on a schedule (F11)
 
@@ -822,12 +830,12 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Review gate.** The operator reviews before merge.
 
-- [ ] Post the proposed issue and no-duplicate receipt to the operator. Use logs instead of a screenshot or video. Stop at merge-ready.
+- [ ] Post the proposed issue and no-duplicate receipt to the operator. Use logs instead of a screenshot or video. Merge on a clean verdict and a passing `check`.
 
 **Merge.**
 
 - [ ] Record the exact-head verdict, license review, and Bugbot triage.
-- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Append `F11` for the owner.
+- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Squash-merge `F11` on a clean verdict and a passing `check`, then branch the next PR from the new `main`.
 
 ## Measure outcomes and propose tested factory improvements (F12)
 
@@ -875,12 +883,12 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Review gate.** The operator reviews before merge.
 
-- [ ] Post the metric, replay comparison, and proposed issue to the operator. Use JSON instead of a screenshot or video. Stop at merge-ready. Do not count the seven-day claim as verified before real mature evidence exists.
+- [ ] Post the metric, replay comparison, and proposed issue to the operator. Use JSON instead of a screenshot or video. Merge on a clean verdict. Do not count the seven-day claim as verified before real mature evidence exists.
 
 **Merge.**
 
 - [ ] Record the exact-head verdict and Bugbot triage. Keep immature-cohort evidence gaps explicit.
-- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Append `F12` for the owner.
+- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Squash-merge `F12` on a clean verdict and a passing `check`, then branch the next PR from the new `main`.
 
 ## Add a polled Linear adapter without changing stages (F13)
 
@@ -929,18 +937,18 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Review gate.** The operator reviews before merge.
 
-- [ ] Post the paired ticket/PR URLs and adapter-parity evidence to the operator. Use logs instead of a screenshot or video. Stop at merge-ready. Keep the Linear live gate incomplete if workspace access is unavailable.
+- [ ] Post the paired ticket/PR URLs and adapter-parity evidence to the operator. Use logs instead of a screenshot or video. Merge on a clean verdict. Keep the Linear live gate incomplete if workspace access is unavailable.
 
 **Merge.**
 
 - [ ] Record the exact-head verdict, live adapter proof, and Bugbot triage.
-- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Append `F13` for the owner. Leave deployment and package publication manual.
+- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Squash-merge `F13` on a clean verdict and a passing `check`, then branch the next PR from the new `main`. Leave deployment and package publication manual.
 
 ## Close the program
 
 - [ ] Check every completed box against its artifact and exact revision. Leave blocked boxes unchecked. Do not describe this program as fully verified while Linear live proof, branch protection, mature metrics, or the required cross-family acceptance evidence is absent.
 - [ ] Re-run the eight definition-of-done scenarios from `docs/design.md` on the assembled GitHub controller. Link the results from `F04b`, `F04c`, `F06a`, `F07b`, `F07c`, `F09a`, `F09b`, and `F10`. Explicitly report item 2's cross-family clause as incomplete under the approved same-family v1 limitation.
-- [ ] Deliver the `autopilot-stack` report with root/tip URLs, a one-line verdict per PR, exact heads, remaining owner review/merge actions, external actions and grants, and excluded work with reasons. Include evidence and decision-trail paths. Do not merge any link.
+- [ ] Deliver the `autopilot-full` report with each PR's URL, merge commit, one-line verdict and exact verified head, the external actions taken and their grants, and excluded work with reasons. Include evidence and decision-trail paths.
 - [ ] Confirm that the factory stops at Human Review, uses no stored GitHub token on the VM, uses no GitHub secrets for model access, and has no GitHub App, webhook receiver, or Tailscale dependency. Leave npm publishing and any future deployment outside this program.
 
 ## Appendix A. Prototype evidence
@@ -966,7 +974,7 @@ No new sandbox, snapshot-at-label-time, main-gates, post-publication holdout, le
 
 - A GitHub App or webhook receiver conflicts with the chosen `gh` polling controller. No public ingress is needed.
 - Tailscale and hosted model execution belong to the retired prototypes. The VM now uses exe.dev integrations, and hosted CI runs deterministic checks without stored secrets.
-- Automatic merge conflicts with v1's Human Review boundary. `autopilot-full` requires merge authority and does not fit this coupled implementation chain. Later autonomy belongs in checkpoint policy, not a hidden merge command.
+- Automatic merge of factory-opened PRs conflicts with v1's Human Review boundary. Later autonomy belongs in checkpoint policy, not a hidden merge command. The root's merges of its own build PRs are a separate owner grant from 2026-10-28, and they need a clean verdict and a passing hosted check.
 - A one-shot `pi -p` parent cannot stand in for persistent Herdr RPC orchestration. Unit 1 proved result delivery only while the parent remained alive.
 - A workspace directory, Git worktree, non-root container UID, or prompt prohibition is not the OS and network boundary required by the integration's VM-wide authority.
 - Candidate-owned checks alone can be weakened by editing scripts or deleting tests. Main-owned gates, candidate tests, and held-out tests must all pass.
@@ -986,11 +994,11 @@ No new sandbox, snapshot-at-label-time, main-gates, post-publication holdout, le
 
 `F04b` and `F04c` own label-event identity, actor authority, and restart markers. Current issue text is not necessarily the text at label time. The adapter prototype must establish available event/version evidence and a conservative fail-closed rule for edits before collection. If GitHub cannot supply the required historical snapshot, keep that case blocked and explain the needed owner-approved contract adjustment. Never call a poll-time body a proven label-time snapshot. A marker written by anyone other than the integration bot is not controller state.
 
-### R3. Main-owned configuration and CI need owner bootstraps
+### R3. Main-owned configuration and CI need bootstrap merges
 
-`F04a` introduces the first `.github/factory/WORKFLOW.md`. Its parser and fail-closed behavior can be tested before merge, but a valid production-main read cannot be claimed before the owner lands that file. Keep those live checks pending through the owner bootstrap and complete them before dispatch is enabled. Never add an untrusted candidate-config fallback merely to make the test pass.
+`F04a` introduces the first `.github/factory/WORKFLOW.md`. Its parser and fail-closed behavior can be tested before merge, but a valid production-main read cannot be claimed before that file lands on `main`. The root merges it under the owner's build-PR grant. Keep those live checks pending until it lands, and complete them before dispatch is enabled. Never add an untrusted candidate-config fallback merely to make the test pass.
 
-`F07b`, `F07c`, and `F09a` own the CI trust path. The repository currently has no CI workflow after the old tailnet workflows were removed. A workflow that must come from `main` cannot prove its hosted dispatch path before it exists on `main`. The owner must land the bootstrap after local/container proof, with hosted boxes explicitly pending. This is an exception to normal all-lanes-before-merge, not a claimed full pass. If the owner does not accept it, stop the hosted path rather than run untrusted candidate workflow code as a substitute.
+`F07b`, `F07c`, and `F09a` own the CI trust path. The repository's only CI workflow is `.github/workflows/check.yml`, which runs the candidate's own `npm run check`. A workflow that must come from `main` cannot prove its hosted dispatch path before it exists on `main`. The root merges the bootstrap under the owner's build-PR grant after local and container proof, with the hosted boxes explicitly pending. This is an exception to the normal rule that every lane passes before merge, and it is not a claimed full pass. If that proof fails, stop the hosted path rather than run untrusted candidate workflow code as a substitute.
 
 The gate prototype must settle test import routing, dependencies, read-only trusted files, and result ownership. `F09a` must prove how the trusted validation result becomes a required candidate-SHA check without exposing a write credential to candidate code. Missing or unrelated checks never pass. Branch-rule mutations require the owner's separate authorization and may need manual application if the integration lacks permission.
 
@@ -1026,9 +1034,9 @@ These are every intentional template adaptation in this document.
 2. Each live lane saves a concrete text/JSON artifact or URL list instead of a `.png`. The checker calls this a screenshot requirement but only enforces a literal `Save` path. Those artifacts prove backend behavior without invented screenshots.
 3. Each review gate explicitly says that logs replace a screenshot or video. Those words satisfy the checker's literal review-block requirements. No recording or screenshot is claimed or required where it adds no evidence.
 4. The template's cross-family reviewer language becomes context-isolated same-family seats under the owner's explicit interim model decision. The missing cross-family gate remains visible, not silently waived as passed.
-5. All PRs stop for the owner, including changes without a visual interaction. This is stricter than the template's optional interaction-only review gate. `autopilot-stack` never grants merging.
+5. Every PR gets a full verdict before merge, including changes without a visual interaction. This is stricter than the template's optional interaction-only review gate. Since 2026-10-28 the root merges build PRs under the owner's grant. PRs the factory opens at runtime still stop for the owner.
 6. The dependency graph is one serial chain rather than a fabricated pair of independent first PRs. Shared contracts and the CI bootstrap justify that choice. Ten verifier lanes mean ten scenarios, not ten concurrent controllers on a two-vCPU VM. Read-only lanes may run concurrently, while mutation/resource-heavy scenarios use scoped fixtures and service capacity limits.
-7. The `F04a` main-owned configuration and the `F07b` main-owned CI workflow require owner bootstraps before their main-backed proof. These explicit exceptions do not create false all-green verdicts. The root still cannot merge either PR.
+7. The `F04a` main-owned configuration and the `F07b` main-owned CI workflow must land on `main` before their main-backed proof can run. The root merges both under the owner's build-PR grant. These explicit exceptions do not create false all-green verdicts. Their main-backed boxes stay pending until the post-merge checks pass.
 8. The playbook's prototype-before-plan and child investigation steps were constrained by this leaf's plan-only authorization. Existing prototypes are recorded, code was read directly, no children were launched, and unproved engineering choices became named prototype-first gates.
 9. The check script is not silent on success. It always prints one box-count line per PR and a summary. The success predicate is exit code 0 and `16 PR sections, 0 problems`, with no diagnostic lines. Its source was read before writing this plan.
 10. New CLI commands, runtime symbols, and paths are planned deliverables. Trunk lanes record unsupported features instead of pretending that the skeleton already runs the controller. Performance uses absolute budgets for new work rather than ratios to missing behavior.
