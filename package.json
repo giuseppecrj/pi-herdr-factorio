@@ -1,0 +1,62 @@
+{
+  "name": "pi-herdr-factorio",
+  "version": "0.1.0",
+  "description": "Ticket-triggered software factory for Pi: a pure controller that drives specify, accept, build, validate, review and land",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "herdr",
+    "factory"
+  ],
+  "license": "MIT",
+  "author": {
+    "name": "Giuseppe Rodriguez",
+    "url": "https://github.com/giuseppecrj"
+  },
+  "type": "module",
+  "files": [
+    "extension/",
+    "src/",
+    "skills/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm test",
+    "format": "biome format --write src extension test",
+    "format:check": "biome format src extension test",
+    "lint": "oxlint src extension test",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --experimental-strip-types --test --test-concurrency=1 test/*.test.ts"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "pi-herdr-pstack": ">=0.4.0"
+  },
+  "pi": {
+    "extensions": [
+      "./extension/index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.11",
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@types/node": "^22.20.5",
+    "oxlint": "^1.80.0",
+    "typescript": "5.9.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/giuseppecrj/pi-herdr-factorio.git"
+  },
+  "homepage": "https://github.com/giuseppecrj/pi-herdr-factorio#readme",
+  "bugs": {
+    "url": "https://github.com/giuseppecrj/pi-herdr-factorio/issues"
+  }
+}
