@@ -103,7 +103,6 @@ function parseCliArgs(argv: readonly string[]) {
 	});
 }
 
-/** Runs one CLI command and returns its exit code. */
 export async function runCli(
 	argv: readonly string[],
 	io: CliIo,

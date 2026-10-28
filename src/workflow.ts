@@ -679,8 +679,6 @@ export function parseWorkflow(input: {
 		});
 	}
 
-	// The failsafe schema keeps every scalar a string, so the readers above
-	// decide every type.
 	const document = parseDocument(split.frontMatter, { schema: "failsafe" });
 	const problem = document.errors[0] ?? document.warnings[0];
 
