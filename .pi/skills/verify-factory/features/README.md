@@ -28,8 +28,8 @@ This directory is the maintained source for verifying pi-herdr-factorio. Read th
 - **VM doctor** (`vm-doctor.md`): VM reachability, tool versions, scoped repository read.
 - **Repository reads** (`gh-reads.md`): `gh` repo view, label list, issue list.
 - **Factory status command** (`factory-status.md`): `/factory status`.
-- **workflow-check** (`workflow-check.md`): stub, arrives in F04a.
-- **status --json** (`status-json.md`): stub, arrives in F04a.
+- **workflow-check** (`workflow-check.md`): load and validate the trusted `WORKFLOW.md` from a branch.
+- **status --json** (`status-json.md`): trusted settings and disabled execution as JSON, without a controller.
 - **admit** (`admit.md`): stub, not implemented.
 - **tick --once** (`tick-once.md`): stub, not implemented.
 - **serve** (`serve.md`): stub, not implemented.

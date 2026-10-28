@@ -1,6 +1,6 @@
 ---
 name: verify-factory
-description: Verify pi-herdr-factorio on its real surfaces. Use to prove a change on the pi-factorio exe.dev VM, through repository-scoped gh reads and the /factory status command, and when a PR needs live evidence. Later PRs add factory CLI commands.
+description: Verify pi-herdr-factorio on its real surfaces. Use to prove a change on the pi-factorio exe.dev VM, through repository-scoped gh reads, the /factory status command and the factory CLI (workflow-check, status --json), and when a PR needs live evidence.
 ---
 
 # Verify pi-herdr-factorio
@@ -9,7 +9,8 @@ The factory is a Pi package plus a controller that runs on the exe.dev VM `pi-fa
 
 - the VM, over ssh as `exedev`;
 - GitHub, through `gh` with `GH_HOST=github.int.exe.xyz`, scoped to `giuseppecrj/pi-herdr-factorio`;
-- the `/factory status` extension command.
+- the `/factory status` extension command;
+- the factory CLI, `node server/cli.ts`, documented in `docs/operations/factory-cli.md`.
 
 Run every command from the repository root of the checkout under test. Helpers live in `.pi/skills/verify-factory/scripts/`. Below, `S` means that directory.
 
@@ -49,6 +50,7 @@ Send multi-line scripts with `ssh host bash -s < script`. `vm.sh <script> [args]
 ```bash
 $S/vm.sh $S/drive-status.sh <pr-id> <worker-n>   # /factory status
 $S/vm.sh $S/drive-gh.sh <pr-id> <worker-n>       # gh repo, label and issue reads
+$S/vm.sh $S/drive-workflow.sh <pr-id> <worker-n> [branch...]  # workflow-check and status --json
 ```
 
 Feature recipes are in `features/`. Each lists the command and the observable result that proves it.
@@ -61,7 +63,7 @@ Mutations (creating fixture issues, labels, comments, restarts) need the fixture
 
 Save each lane's evidence under `/tmp/swarm-<pr-id>/worker-<n>/` on the VM and return that absolute path. The drive scripts write it. Each lane directory has:
 
-- the raw output (`status.txt`, `repo.json`, `labels.txt`, `issues.json`);
+- the raw output (`status.txt`, `repo.json`, `labels.txt`, `issues.json`, `workflow-check-<ref>.json`, `status-<ref>.json`);
 - an evidence file with the command, start and end timestamps, head SHA, expected result, actual result and exit status.
 
 Proof standards:
@@ -93,6 +95,7 @@ Run cleanup after a failed attempt too.
 | `lane-setup.sh` | local, calls `remote-setup.sh` | `lane-setup.sh <pr-id> <n>` |
 | `drive-status.sh` | VM | `vm.sh drive-status.sh <pr-id> <n>` |
 | `drive-gh.sh` | VM | `vm.sh drive-gh.sh <pr-id> <n>` |
+| `drive-workflow.sh` | VM | `vm.sh drive-workflow.sh <pr-id> <n> [branch...]` |
 | `cleanup.sh` | VM | `vm.sh cleanup.sh <pr-id> <n>` |
 | `status-driver.ts` | VM, copied by `drive-status.sh` | not run directly |
 
