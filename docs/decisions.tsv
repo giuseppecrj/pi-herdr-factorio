@@ -26,3 +26,6 @@ ts	phase	decision	why	evidence	result
 2026-10-28T21:20:38Z	vm	models come from exe.dev's llm integration: Anthropic through the gateway, OpenAI through the ChatGPT subscription	owner chose option C; no model key on the VM and no tailnet	server/provision.sh	decided
 2026-10-28T21:20:38Z	vm	provisioned the VM with a committed idempotent script	a script is the lever a reviewer can rerun	server/provision.sh	node 22.23.4, pi 1.4.0, herdr 0.9.5
 2026-10-28T21:20:38Z	vm	pi -p answers from the VM on two Anthropic and two OpenAI models	unit 3 predicate; two families keep cross-family review possible	smoke on pi-factorio: 4/4 PASS	VERIFIED
+2026-10-28T21:28:04Z	vm	default model on the VM is openai/gpt-6.1-sol; Anthropic waits for the owner's proxy	owner choice: the owner's Anthropic key lives in that proxy, and exe.dev credits are finite	pi -p with no --model answered default-ok on pi-factorio	VERIFIED
+2026-10-28T21:28:04Z	vm	review seats are same-family and context-isolated until Anthropic is back	only one family is in use; disclosed rather than faked	docs/design.md	open
+2026-10-28T21:28:04Z	cleanup	removed the factory-skeleton and factory-herdr-probe worktrees, branches kept	owner approved; both were merged	worktree_remove	done

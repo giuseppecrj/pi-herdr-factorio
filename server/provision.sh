@@ -6,6 +6,8 @@ PI_VERSION=1.4.0
 HERDR_VERSION=0.9.5
 HERDR_SHA256=14d9e8bc8b4a9e0118d77c32266f76d461f09b40342eb23752960bd89f59929d
 LLM=https://llm.int.exe.xyz
+DEFAULT_PROVIDER=openai
+DEFAULT_MODEL=gpt-6.1-sol
 
 if ! command -v mise >/dev/null; then
   curl -fsSL https://mise.run | sh
@@ -39,9 +41,15 @@ cat >~/.pi/agent/models.json <<JSON
 }
 JSON
 
+settings=~/.pi/agent/settings.json
+[ -f "$settings" ] || echo '{}' >"$settings"
+jq --arg p "$DEFAULT_PROVIDER" --arg m "$DEFAULT_MODEL" \
+  '.defaultProvider = $p | .defaultModel = $m' "$settings" >"$settings.tmp"
+mv "$settings.tmp" "$settings"
+
 for pkg in pi-herdr-agents pi-herdr-pstack; do
   pi list 2>/dev/null | grep -q "npm:$pkg" || pi install "npm:$pkg"
 done
 
-printf 'node %s, pi %s, %s, gh %s\n' "$(node --version)" "$(pi --version)" \
-  "$(herdr --version)" "$(gh --version | head -1 | awk '{print $3}')"
+printf 'node %s, pi %s, %s, gh %s, default %s/%s\n' "$(node --version)" "$(pi --version)" \
+  "$(herdr --version)" "$(gh --version | head -1 | awk '{print $3}')" "$DEFAULT_PROVIDER" "$DEFAULT_MODEL"

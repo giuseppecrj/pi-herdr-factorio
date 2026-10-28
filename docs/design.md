@@ -233,7 +233,8 @@ Riskiest unknowns first. Each unit ends in a check before the next starts.
 
 - **Integrations answer anything on the VM.** No key can be stolen, but code running on the VM can use them. The sandbox network blocks the GitHub integration, and the model integration is the only one agents can reach.
 - **Public repo.** Anyone can write issue and comment text, and anyone can read logs. Only text from write-access accounts is fed to a model, raw sessions never leave the VM, and no workflow uses `pull_request_target`.
-- **Anthropic usage spends exe.dev credits** ($119.75 available on 2026-10-28, no automatic top-up). The ledger records spend per run, and a per-run budget stops a run that would exceed it. Heavy stages default to OpenAI through the subscription; Anthropic models fill the cross-family seats.
+- **Anthropic usage spends exe.dev credits** ($119.75 available on 2026-10-28, no automatic top-up). So every stage defaults to `openai/gpt-6.1-sol` through the ChatGPT subscription, set in `server/provision.sh`. Anthropic moves in when the owner's own proxy is plugged in as a provider.
+- **Review is context-isolated, not cross-family, until then.** Reviewer and acceptance seats run the same family as the builder in fresh sessions, and every evidence comment says so. The cross-family requirement in the definition of done stays unmet until Anthropic is available through the proxy.
 - **One VM is a single point of failure.** If it is down, nothing runs, and nothing lands anyway without a human merge. The reconcile tick and issue markers let it resume after a restart.
 - **Correlated blind spots.** The acceptance writer, the judge and the builder are all models. Different families reduce this but do not remove it. The seeded-defect fixtures measure it, and that is the most we can claim.
 - **Merged means done for now.** This repo has no deployment. Publishing to npm stays manual until a deploy contract with a smoke check and a rollback exists.
