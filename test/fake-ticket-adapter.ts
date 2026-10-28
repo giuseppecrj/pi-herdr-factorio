@@ -1,6 +1,11 @@
 import { hasWriteAccess, type PermissionLevel } from "../src/policy.ts";
 import type { Run, TicketRef } from "../src/run.ts";
-import type { FactoryEvent, Ticket, TicketAdapter } from "../src/tickets.ts";
+import type {
+	FactoryEvent,
+	JsonValue,
+	Ticket,
+	TicketAdapter,
+} from "../src/tickets.ts";
 
 export type Call =
 	| { kind: "report"; ref: TicketRef; run: Run }
@@ -11,7 +16,7 @@ export class FakeTicketAdapter implements TicketAdapter {
 	readonly calls: Call[] = [];
 	readonly #tickets = new Map<string, Ticket>();
 	readonly #permissions = new Map<string, PermissionLevel>();
-	readonly #raw = new WeakMap<object, FactoryEvent>();
+	readonly #raw = new Map<JsonValue, FactoryEvent>();
 
 	addTicket(ticket: Ticket): void {
 		this.#tickets.set(ticket.ref.key, ticket);
@@ -25,16 +30,14 @@ export class FakeTicketAdapter implements TicketAdapter {
 		return this.#permissions.get(actor) ?? "none";
 	}
 
-	rawEvent(event: FactoryEvent): object {
+	rawEvent(event: FactoryEvent) {
 		const raw = {};
 		this.#raw.set(raw, event);
 
 		return raw;
 	}
 
-	normalize(event: unknown): FactoryEvent | null {
-		if (typeof event !== "object" || event === null) return null;
-
+	normalize(event: JsonValue): FactoryEvent | null {
 		return this.#raw.get(event) ?? null;
 	}
 

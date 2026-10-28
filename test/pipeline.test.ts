@@ -94,7 +94,7 @@ describe("controller driven through the fake adapter", () => {
 		assert.notEqual(admitted, "refused");
 		assert.notEqual(admitted, "ignored");
 
-		if (typeof admitted === "string") return;
+		if (admitted === "refused" || admitted === "ignored") return;
 
 		const fetched = await adapter.fetch(admitted.ticket);
 		assert.equal(fetched.title, "Add a thing");
@@ -126,7 +126,8 @@ describe("controller driven through the fake adapter", () => {
 		const adapter = fixture();
 		const admitted = await admitFromLabel(adapter, "maintainer");
 
-		if (typeof admitted === "string") throw new Error(admitted);
+		if (admitted === "refused" || admitted === "ignored")
+			throw new Error(admitted);
 		const questions: [string, ...string[]] = ["Which database?"];
 		const done = apply(admitted, { kind: "needs_info", questions });
 		const outcome = outcomeOf(done);
@@ -145,7 +146,8 @@ describe("controller driven through the fake adapter", () => {
 		const adapter = fixture();
 		const admitted = await admitFromLabel(adapter, "maintainer");
 
-		if (typeof admitted === "string") throw new Error(admitted);
+		if (admitted === "refused" || admitted === "ignored")
+			throw new Error(admitted);
 
 		const built = apply(
 			admitted,

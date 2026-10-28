@@ -23,12 +23,9 @@ describe("/factory command", () => {
 	it("status reports the package version and every stage", () => {
 		const manifest: unknown = JSON.parse(readFileSync("package.json", "utf8"));
 
-		const version =
-			typeof manifest === "object" && manifest !== null && "version" in manifest
-				? manifest.version
-				: undefined;
+		const version = readPackageVersion();
 
-		assert.equal(readPackageVersion(), version);
+		assert.partialDeepStrictEqual(manifest, { version });
 
 		const text = factoryCommandText("status");
 		assert.ok(text.startsWith(`pi-herdr-factorio ${version}\n`));

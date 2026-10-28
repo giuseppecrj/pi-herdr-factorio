@@ -56,6 +56,8 @@ describe("admission", () => {
 		};
 
 		for (const [level, expected] of Object.entries(levels)) {
+			// SAFETY: `levels` is a literal typed Record<PermissionLevel, boolean>,
+			// so its own keys are exactly the PermissionLevel members.
 			assert.equal(hasWriteAccess(level as PermissionLevel), expected, level);
 		}
 	});
