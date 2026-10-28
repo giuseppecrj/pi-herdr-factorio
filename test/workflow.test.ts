@@ -1191,3 +1191,70 @@ describe("rejecting exec", () => {
 		});
 	}
 });
+
+describe("workflow file shapes", () => {
+	it("rejects duplicate stage headings", () => {
+		const error = validation(
+			`${frontMatter("")}\n## build\na\n\n## build\nb\n`,
+		);
+
+		assert.equal(error.field, "guidance");
+		assert.match(error.message, /duplicate heading "## build"/);
+	});
+
+	it("rejects an unknown stage heading", () => {
+		const error = validation(`${frontMatter("")}\n## ship\nnow\n`);
+
+		assert.equal(error.field, "guidance");
+		assert.match(error.message, /unknown stage heading "## ship"/);
+	});
+
+	it("reads CRLF line endings", () => {
+		const parsed = parse(valid.replaceAll("\n", "\r\n"));
+
+		assert.equal(parsed.kind, "valid");
+
+		if (parsed.kind !== "valid") return;
+
+		assert.equal(parsed.config.stages.build.budget.maxTurns, 30);
+		assert.equal(parsed.guidance.general, "General guidance.");
+		assert.equal(parsed.guidance.stages.build, "Write the test first.");
+		assert.doesNotMatch(JSON.stringify(parsed.guidance), /\\r/);
+	});
+
+	it("reads a file with a leading BOM", () => {
+		const parsed = parse(`\uFEFF${valid}`);
+
+		assert.equal(parsed.kind, "valid");
+
+		if (parsed.kind === "valid") {
+			assert.equal(parsed.config.agent.maxConcurrent, 2);
+		}
+	});
+
+	it("keeps a --- line in the body as guidance", () => {
+		const parsed = parse(`${frontMatter("")}\n## build\nabove\n---\nbelow\n`);
+
+		assert.equal(parsed.kind, "valid");
+
+		if (parsed.kind === "valid") {
+			assert.equal(parsed.guidance.stages.build, "above\n---\nbelow");
+		}
+	});
+
+	it("chooses a non-default model for one stage", () => {
+		const parsed = parse(
+			frontMatter("stages:\n  review:\n    model: openai/gpt-6.1-terra"),
+		);
+
+		assert.equal(parsed.kind, "valid");
+
+		if (parsed.kind !== "valid") return;
+
+		assert.equal(parsed.config.stages.review.model, "openai/gpt-6.1-terra");
+
+		for (const stage of MODEL_STAGES.filter((name) => name !== "review")) {
+			assert.equal(parsed.config.stages[stage].model, DEFAULT_MODEL);
+		}
+	});
+});
