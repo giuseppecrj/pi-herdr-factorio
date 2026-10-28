@@ -42,7 +42,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 - [ ] Follow this dependency graph. Branch dependent work from `main` after its parent merges, or stack it on the parent's committed tip while the parent is still in review. Record the parent SHA in each brief.
   - [ ] Start `F04a` from `main`. Follow `F04a -> F04b -> F04c -> F05 -> F06a -> F06b -> F07a -> F07b -> F07c -> F08 -> F09a -> F09b -> F10 -> F11 -> F12 -> F13`.
   - [ ] Keep this chain serial for code writes. It changes shared controller contracts and tests. Parallelize read-only verification with separate fixture issues, not dependent implementation.
-  - [ ] Treat `F04a`'s first main-owned configuration and `F07b`'s first main-owned CI workflow as owner bootstrap gates. Prove parsing and execution locally first. Complete their main-backed live checks after the owner lands those trusted files, before dependent dispatch or publication. Record the bootstrap exceptions in Appendix C rather than claiming clean full verdicts early.
+  - [ ] Treat `F04a`'s first main-owned configuration and `F07b`'s first main-owned CI workflow as bootstrap gates. Prove parsing and execution locally first. Complete their main-backed live checks after those trusted files land on `main`, before dependent dispatch or publication. Record the bootstrap exceptions in Appendix C rather than claiming clean full verdicts early.
 - [ ] Hold the file boundaries in each PR's **Files** block. Treat listed directories as that PR's only directory-wide allowances. Obtain a revised scope before editing another path. New prototype receipts belong only in that PR's named documentation directory.
 - [ ] Hold the review gate for every PR. Present CLI evidence to the operator in chat. Replace the template's screenshots and video with the named text artifacts. Merge on a clean verdict and a passing `check`.
 - [ ] Distinguish operator-authored program changes from factory-produced patches. The owner may authorize these PRs to add `.github/` files. A runtime factory ticket may never edit `.github/` or the held-out acceptance directory.
@@ -96,7 +96,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [ ] Implement `loadWorkflow` for YAML front matter and Markdown stage guidance at `.github/factory/WORKFLOW.md`. Load the configured repository's trusted `main` revision, never a candidate's copy. Record its SHA and content digest.
 - [ ] Validate repository identity, the 30-second poll interval, concurrency 2, model choices, positive turn and wall limits, stall timeout, retry cap, and per-run usage caps. Reject unknown checkpoint modes instead of enabling automatic landing. Default all model stages to `openai/gpt-6.1-sol`.
 - [ ] Match Symphony loader semantics for parse failures, defaults, environment expansion of named configuration values, and hot reload. Keep the last valid snapshot on a bad reload. Pin one immutable workflow snapshot per attempt and persist its digest. Do not interpolate ticket text into configuration or shell commands.
-- [ ] Implement CLI `workflow-check --json` and `status --json`. Keep `/factory status` useful without a daemon. Show unavailable runtime state explicitly. Document each command and exit code in the control procedure. Include `server` in typecheck, lint, and format checks. Before the first workflow exists on main, prove fail-closed behavior and parser cases locally. Leave valid-main and hot-reload live proof pending until the owner bootstraps the configuration.
+- [ ] Implement CLI `workflow-check --json` and `status --json`. Keep `/factory status` useful without a daemon. Show unavailable runtime state explicitly. Document each command and exit code in the control procedure. Include `server` in typecheck, lint, and format checks. Before the first workflow exists on main, prove fail-closed behavior and parser cases locally. Leave valid-main and hot-reload live proof pending until the configuration lands on `main`.
 
 **You see.**
 
@@ -460,7 +460,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 ## Run main's gates against candidate code (F07b)
 
-**Depends on.** F07a. This supplies unit 7's trusted CI gates. Hosted proof needs the owner bootstrap described in Appendix C.
+**Depends on.** F07a. This supplies unit 7's trusted CI gates. Hosted proof needs the bootstrap merge described in Appendix C.
 
 **Files.**
 
@@ -994,7 +994,7 @@ No new sandbox, snapshot-at-label-time, main-gates, post-publication holdout, le
 
 `F04b` and `F04c` own label-event identity, actor authority, and restart markers. Current issue text is not necessarily the text at label time. The adapter prototype must establish available event/version evidence and a conservative fail-closed rule for edits before collection. If GitHub cannot supply the required historical snapshot, keep that case blocked and explain the needed owner-approved contract adjustment. Never call a poll-time body a proven label-time snapshot. A marker written by anyone other than the integration bot is not controller state.
 
-### R3. Main-owned configuration and CI need owner bootstraps
+### R3. Main-owned configuration and CI need bootstrap merges
 
 `F04a` introduces the first `.github/factory/WORKFLOW.md`. Its parser and fail-closed behavior can be tested before merge, but a valid production-main read cannot be claimed before that file lands on `main`. The root merges it under the owner's build-PR grant. Keep those live checks pending until it lands, and complete them before dispatch is enabled. Never add an untrusted candidate-config fallback merely to make the test pass.
 
