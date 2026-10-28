@@ -325,7 +325,10 @@ describe("parseWorkflow", () => {
 
 		if (parsed.kind === "valid") {
 			assert.equal(parsed.config.workspace.expandedRoot, "/srv/workspaces");
-			assert.equal(parsed.config.workspace.rootAsWritten, "$FACTORY_WORKSPACES");
+			assert.equal(
+				parsed.config.workspace.rootAsWritten,
+				"$FACTORY_WORKSPACES",
+			);
 		}
 
 		const error = validation(

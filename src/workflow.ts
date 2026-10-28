@@ -39,7 +39,10 @@ export type WorkflowConfig = {
 	readonly repository: RepoSlug;
 	readonly polling: { readonly intervalMs: number };
 	readonly agent: { readonly maxConcurrent: number };
-	readonly workspace: { readonly expandedRoot: string; readonly rootAsWritten: string };
+	readonly workspace: {
+		readonly expandedRoot: string;
+		readonly rootAsWritten: string;
+	};
 	readonly retry: {
 		readonly maxAttempts: number;
 		readonly maxBackoffMs: number;
@@ -329,7 +332,10 @@ function readWorkspaceRoot(
 
 	if (!isAbsolute(path)) fail(field, "must resolve to an absolute path");
 
-	return Object.freeze({ expandedRoot: normalize(path), rootAsWritten: source });
+	return Object.freeze({
+		expandedRoot: normalize(path),
+		rootAsWritten: source,
+	});
 }
 
 const BUDGET_KEYS = ["max_turns", "wall_ms", "stall_ms"];
