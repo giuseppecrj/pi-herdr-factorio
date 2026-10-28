@@ -18,7 +18,7 @@ Preconditions:
 
 - The headless agent socket exists at `$HOME/.ssh/headless-agent.sock`.
 
-- **Run doctor.** `.pi/skills/verify-factory/scripts/vm.sh .pi/skills/verify-factory/scripts/doctor.sh`. Exit code 0. Output has `node=v22.`, `pi=1.4.0`, `herdr=herdr 0.9.5`, `repo=giuseppecrj/pi-herdr-factorio default=main`, and `doctor=ok`.
+- **Run doctor.** `.pi/skills/verify-factory/scripts/vm.sh .pi/skills/verify-factory/scripts/doctor.sh`. Exit code 0. Output has `node=v26.`, `pi=1.4.0`, `herdr=herdr 0.9.5`, `repo=giuseppecrj/pi-herdr-factorio default=main`, and `doctor=ok`.
 - **Reconcile versions.** Compare with `PI_VERSION` and `HERDR_VERSION` in `server/provision.sh`. They match.
 
 ## Gotchas

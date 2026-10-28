@@ -30,7 +30,7 @@
     "test": "node --experimental-strip-types --test --test-concurrency=1 test/*.test.ts"
   },
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=26.12.1"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
@@ -47,7 +47,7 @@
   "devDependencies": {
     "@biomejs/biome": "2.5.11",
     "@earendil-works/pi-coding-agent": "1.4.0",
-    "@types/node": "^22.20.5",
+    "@types/node": "^26.6.6",
     "oxlint": "^1.80.0",
     "typescript": "5.9.3"
   },

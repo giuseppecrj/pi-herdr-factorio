@@ -8,12 +8,29 @@ HERDR_SHA256=14d9e8bc8b4a9e0118d77c32266f76d461f09b40342eb23752960bd89f59929d
 LLM=https://llm.int.exe.xyz
 DEFAULT_PROVIDER=openai
 DEFAULT_MODEL=gpt-6.1-sol
+NODE_MIN=26.12.1
+
+version_at_least() {
+  local IFS=. i a b
+  read -r -a a <<<"${1#v}"
+  read -r -a b <<<"$2"
+  for i in 0 1 2; do
+    [ "${a[i]:-0}" -gt "${b[i]:-0}" ] && return 0
+    [ "${a[i]:-0}" -lt "${b[i]:-0}" ] && return 1
+  done
+  return 0
+}
 
 if ! command -v mise >/dev/null; then
   curl -fsSL https://mise.run | sh
 fi
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
-mise use -g node@22 >/dev/null
+mise use -g node@26 >/dev/null
+mise reshim
+if ! version_at_least "$(node --version)" "$NODE_MIN"; then
+  echo "provision: node $(node --version) is below required $NODE_MIN" >&2
+  exit 1
+fi
 grep -q 'mise activate' ~/.bashrc || echo 'eval "$(~/.local/bin/mise activate bash)"' >>~/.bashrc
 
 if [ "$(pi --version 2>/dev/null)" != "$PI_VERSION" ]; then
