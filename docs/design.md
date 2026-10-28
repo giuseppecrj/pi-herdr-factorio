@@ -105,7 +105,7 @@ The controller's scheduling state follows Symphony §4.1.8: `running`, `claimed`
 
 ```ts
 interface TicketAdapter {
-  normalize(event: unknown): FactoryEvent | null;
+  normalize(event: JsonValue): FactoryEvent | null; // parsed gh output
   fetchCandidates(): Promise<Ticket[]>;
   fetchStates(refs: TicketRef[]): Promise<Map<string, TicketState>>;
   canAdmit(ref: TicketRef, actor: string): Promise<boolean>;
