@@ -38,7 +38,7 @@ Read-only. Run it first, and again whenever anything looks off.
 $S/vm.sh $S/doctor.sh
 ```
 
-It connects with `SSH_AUTH_SOCK=$HOME/.ssh/headless-agent.sock ssh exedev@pi-factorio.exe.xyz`, sets `PATH` to include `$HOME/.local/bin` and `$HOME/.local/share/mise/shims`, and prints the node, Pi, Herdr and `gh` versions and the OS image. It then proves a repository-scoped read with `GH_HOST=github.int.exe.xyz gh repo view giuseppecrj/pi-herdr-factorio`. Expected today: node 22.x, pi 1.4.0, herdr 0.9.5, and `doctor=ok` on the last line.
+It connects with `SSH_AUTH_SOCK=$HOME/.ssh/headless-agent.sock ssh exedev@pi-factorio.exe.xyz`, sets `PATH` to include `$HOME/.local/bin` and `$HOME/.local/share/mise/shims`, and prints the node, Pi, Herdr and `gh` versions and the OS image. It then proves a repository-scoped read with `GH_HOST=github.int.exe.xyz gh repo view giuseppecrj/pi-herdr-factorio`. Expected today: node 26.x (at least 26.12.1), pi 1.4.0, herdr 0.9.5, and `doctor=ok` on the last line.
 
 Do not call `gh api user`. The integration is repository-scoped and that call fails. The doctor prints no credentials.
 

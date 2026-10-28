@@ -39,7 +39,7 @@ Build `pi-herdr-factorio`, a Pi package that works like a software factory: a Gi
 ## VM
 
 - Reach it with `SSH_AUTH_SOCK=$HOME/.ssh/headless-agent.sock ssh pi-factorio.exe.xyz` (user `exedev`). The same socket drives `ssh exe.dev <command>` for the exe.dev CLI.
-- Provisioning is `server/provision.sh`. Rerun it with `ssh pi-factorio.exe.xyz bash -s < server/provision.sh`. It installs Node 22, Pi 1.4.0, Herdr 0.9.5, pi-herdr-agents, pi-herdr-pstack, and sets the default model.
+- Provisioning is `server/provision.sh`. Rerun it with `ssh pi-factorio.exe.xyz bash -s < server/provision.sh`. It installs Node 26 (at least 26.12.1), Pi 1.4.0, Herdr 0.9.5, pi-herdr-agents, pi-herdr-pstack, and sets the default model.
 - `GH_HOST=github.int.exe.xyz gh ...` reads and writes this repo as `exe-dev-github-integration[bot]`. Integration name `pi-factorio-repo`, attached to this VM only. Repo-scoped calls work; `gh api user` does not.
 - Models: `https://llm.int.exe.xyz`. Pi's built-in `anthropic` and `openai` providers point there in `~/.pi/agent/models.json` on the VM.
 - Docker is installed but not rootless. `github.int.exe.xyz` and `llm.int.exe.xyz` resolve to the same address, so the sandbox must filter by hostname, not IP (plan risk R1, PR `F05`).

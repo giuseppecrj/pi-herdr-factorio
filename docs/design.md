@@ -227,7 +227,7 @@ Riskiest unknowns first. Each unit ends in a check before the next starts.
 - `pi-factorio` on exe.dev: 2 vCPU, 8 GB, 40 GB, Ubuntu 24.04, tag `factory`, created fresh rather than cloned from `dotfiles` so it inherits no personal integrations.
 - Integration `pi-factorio-repo`: exe.dev's GitHub integration for this repo only, acting as its bot, attached to this VM only.
 - Model access: exe.dev's built-in `llm` integration at `https://llm.int.exe.xyz`, so no model key and no tailnet on this VM. Anthropic models come through exe.dev's gateway and draw on the account's exe.dev credits. OpenAI models come through the owner's ChatGPT subscription. Pi reaches both by overriding the built-in `anthropic` and `openai` providers' `baseUrl` (`server/provision.sh`).
-- Provisioning is `server/provision.sh`, idempotent, run with `ssh pi-factorio.exe.xyz bash -s < server/provision.sh`. It installs Node 22, Pi 1.4.0, Herdr 0.9.5 (checksum-pinned), pi-herdr-agents and pi-herdr-pstack.
+- Provisioning is `server/provision.sh`, idempotent, run with `ssh pi-factorio.exe.xyz bash -s < server/provision.sh`. It installs Node 26 (at least 26.12.1), Pi 1.4.0, Herdr 0.9.5 (checksum-pinned), pi-herdr-agents and pi-herdr-pstack.
 
 ## Known risks
 
