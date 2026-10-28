@@ -73,12 +73,7 @@ describe("forbidden paths", () => {
 	it("is clean for ordinary source and test files", () => {
 		assert.deepEqual(
 			checkChangedPaths({
-				changedPaths: [
-					"src/run.ts",
-					"test/run.test.ts",
-					"README.md",
-					".github/CODEOWNERS",
-				],
+				changedPaths: ["src/run.ts", "test/run.test.ts", "README.md"],
 			}),
 			{ kind: "clean" },
 		);
@@ -90,18 +85,23 @@ describe("forbidden paths", () => {
 		});
 	});
 
-	it("rejects anything under .github/workflows", () => {
+	it("rejects anything under .github, not only workflows", () => {
 		assert.deepEqual(
 			checkChangedPaths({
 				changedPaths: [
 					"src/a.ts",
 					".github/workflows/ci.yml",
-					".github/workflows/sub/x.yml",
+					".github/actions/setup/action.yml",
+					".github/CODEOWNERS",
 				],
 			}),
 			{
 				kind: "forbidden",
-				paths: [".github/workflows/ci.yml", ".github/workflows/sub/x.yml"],
+				paths: [
+					".github/workflows/ci.yml",
+					".github/actions/setup/action.yml",
+					".github/CODEOWNERS",
+				],
 			},
 		);
 	});
@@ -137,7 +137,8 @@ describe("forbidden paths", () => {
 		assert.deepEqual(
 			checkChangedPaths({
 				changedPaths: [
-					".github/workflows-notes.md",
+					".github-notes.md",
+					"docs/.github/x.md",
 					`${ACCEPTANCE_SUITE_DIR}-helpers/x.ts`,
 				],
 			}),

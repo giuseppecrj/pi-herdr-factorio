@@ -10,3 +10,6 @@ ts	phase	decision	why	evidence	result
 2026-10-28T20:54:32Z	harness	switched the runner to a pre-signed ephemeral auth key	Tailnet Lock locks out runner devices joined through the trust credential	run 40766313387 LOCKED OUT	fixed
 2026-10-28T20:54:32Z	harness	smoke test passes end to end	unit 0 predicate: runner prints factory-smoke-ok	run 40767252647	VERIFIED
 2026-10-28T20:54:32Z	harness	scheduled the smoke test weekly	the auth key expires in 90 days and would otherwise fail silently	.github/workflows/model-smoke.yml	built
+2026-10-28T21:02:10Z	skeleton	accepted the package skeleton after reading the core and rerunning check	child summary alone is not proof	commit 8ef1924, npm run check 60/60	VERIFIED
+2026-10-28T21:02:10Z	skeleton	widened forbidden paths from .github/workflows to all of .github	composite actions and CODEOWNERS steer gates without touching workflow files; the old test called CODEOWNERS ordinary	src/policy.ts, test/policy.test.ts	60/60 green
+2026-10-28T21:02:10Z	design	validate must run the base branch's checks against the candidate	a patch could otherwise edit package.json scripts or delete tests to pass	docs/design.md	proposed

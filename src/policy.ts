@@ -7,7 +7,9 @@ import {
 } from "./run.ts";
 
 export const READY_LABEL = "factory:ready";
-export const WORKFLOWS_DIR = ".github/workflows";
+// All of `.github/`, not just workflows: composite actions, CODEOWNERS and
+// dependabot config steer the gates too.
+export const CONTROL_PLANE_DIR = ".github";
 export const ACCEPTANCE_SUITE_DIR = "test/acceptance";
 
 export type PermissionLevel =
@@ -58,13 +60,13 @@ function isForbidden(changed: string, acceptanceDir: string): boolean {
 	return (
 		path.startsWith("../") ||
 		path.startsWith("/") ||
-		isAtOrUnder(path, WORKFLOWS_DIR) ||
+		isAtOrUnder(path, CONTROL_PLANE_DIR) ||
 		isAtOrUnder(path, posix.normalize(acceptanceDir).toLowerCase())
 	);
 }
 
 // Paths are compared lowercase so a case-insensitive checkout cannot reach
-// `.GitHub/Workflows`. Callers pass both sides of a rename.
+// `.GitHub/`. Callers pass both sides of a rename.
 export function checkChangedPaths(input: {
 	changedPaths: readonly string[];
 	acceptanceDir?: string;
