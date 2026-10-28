@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Remote, read-only. Run: scripts/vm.sh scripts/doctor.sh
-# Prints versions and one repository-scoped gh read. Never prints credentials.
 set -euo pipefail
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
 echo "host=$(hostname)"

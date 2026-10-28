@@ -1,5 +1,3 @@
-// Drives the real /factory command: loads the extension, registers it on a
-// stub Pi, invokes the registered handler and prints the message it sends.
 import piHerdrFactorio from "./extension/index.ts";
 
 type Handler = (args: string, ctx: unknown) => Promise<void>;

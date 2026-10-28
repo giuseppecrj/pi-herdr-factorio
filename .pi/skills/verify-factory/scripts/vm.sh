@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Run a script on the pi-factorio VM: vm.sh <script> [args...]
-# The script is sent on stdin with `bash -s`, so no quoting crosses ssh.
 set -euo pipefail
 script="$1"
 shift

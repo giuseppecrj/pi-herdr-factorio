@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Local. Run from the checkout under test: scripts/lane-setup.sh <pr-id> <worker-n>
-# Ships `git archive HEAD` to the lane workspace on the VM and installs
-# the committed dependencies there. Never touches the controller's checkout.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 pr="$1"

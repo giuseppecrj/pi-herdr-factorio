@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Remote. Run: scripts/vm.sh scripts/drive-status.sh <pr-id> <worker-n>
-# Drives /factory status in the lane workspace and saves evidence under
-# /tmp/swarm-<pr-id>/worker-<n>/.
 set -euo pipefail
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
 pr="$1"; n="$2"

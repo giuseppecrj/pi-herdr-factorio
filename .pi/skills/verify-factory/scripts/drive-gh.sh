@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Remote, read-only. Run: scripts/vm.sh scripts/drive-gh.sh <pr-id> <worker-n>
-# Repository-scoped gh reads: repo view, label list, issue list.
-# Saves evidence under /tmp/swarm-<pr-id>/worker-<n>/.
 set -euo pipefail
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
 export GH_HOST=github.int.exe.xyz

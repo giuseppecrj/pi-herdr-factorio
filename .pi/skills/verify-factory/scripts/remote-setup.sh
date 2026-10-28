@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Remote. Called by lane-setup.sh with <pr-id> <worker-n> <sha>.
 set -euo pipefail
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
 pr="$1"; n="$2"; sha="$3"
