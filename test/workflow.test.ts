@@ -1061,3 +1061,58 @@ describe("YAML anchors and aliases", () => {
 		});
 	}
 });
+
+describe("valid reload onto a valid snapshot", () => {
+	it("replaces the snapshot and leaves the old one frozen and unchanged", async () => {
+		const nextText = `---
+repository: giuseppecrj/pi-herdr-factorio
+polling:
+  interval_ms: 60000
+stages:
+  build:
+    model: openai/gpt-6.1-terra
+---
+## build
+Run the suite.
+`;
+
+		const first = await load(
+			new Map([["main", { sha: mainSha, text: valid }]]),
+		);
+
+		const second = await load(
+			new Map([["main", { sha: candidateSha, text: nextText }]]),
+		);
+
+		assert.equal(first.kind, "loaded");
+		assert.equal(second.kind, "loaded");
+
+		if (first.kind !== "loaded" || second.kind !== "loaded") return;
+
+		const before = JSON.stringify(first.snapshot);
+		const reload = reloadWorkflow(first.snapshot, second);
+
+		assert.equal(reload.kind, "applied");
+
+		if (reload.kind !== "applied") return;
+
+		assert.equal(reload.snapshot, second.snapshot);
+		assert.notEqual(reload.snapshot, first.snapshot);
+		assert.equal(reload.snapshot.sha, candidateSha);
+		assert.equal(reload.snapshot.digest, digestOf(nextText));
+		assert.notEqual(reload.snapshot.digest, first.snapshot.digest);
+		assert.equal(reload.snapshot.config.polling.intervalMs, 60_000);
+		assert.equal(
+			reload.snapshot.config.stages.build.model,
+			"openai/gpt-6.1-terra",
+		);
+		assert.equal(reload.snapshot.guidance.stages.build, "Run the suite.");
+		assert.equal(reload.snapshot.guidance.stages.review, undefined);
+
+		assert.equal(JSON.stringify(first.snapshot), before);
+		assert.ok(Object.isFrozen(first.snapshot));
+		assert.ok(Object.isFrozen(first.snapshot.config));
+		assert.ok(Object.isFrozen(first.snapshot.guidance));
+		assert.equal(first.snapshot.config.polling.intervalMs, 30_000);
+	});
+});
