@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
+import { EXIT, runCli } from "../server/cli.ts";
 import { digestOf } from "../src/run.ts";
 import { STAGE_ORDER, STAGE_PROFILES } from "../src/stages.ts";
+import type { JsonValue } from "../src/tickets.ts";
 import {
 	checkReport,
 	DEFAULT_MODEL,
@@ -669,5 +671,155 @@ describe("githubRepoFromRemote", () => {
 			null,
 		);
 		assert.equal(githubRepoFromRemote("/srv/git/repo.git"), null);
+	});
+});
+
+type CliRun = { code: number; json: JsonValue; stderr: string };
+
+async function cli(
+	argv: string[],
+	branches: Map<string, Branch>,
+): Promise<CliRun> {
+	let stdout = "";
+	let stderr = "";
+
+	const code = await runCli(argv, {
+		exec: fakeGh(branches).exec,
+		env,
+		stdout: (text) => {
+			stdout += text;
+		},
+		stderr: (text) => {
+			stderr += text;
+		},
+	});
+
+	const json: JsonValue = stdout === "" ? null : JSON.parse(stdout);
+
+	return { code, json, stderr };
+}
+
+describe("server/cli.ts", () => {
+	const repoArgs = ["--json", "--repo", repo];
+	const trusted = new Map([["main", { sha: mainSha, text: valid }]]);
+	const missing = new Map([["main", { sha: mainSha, text: null }]]);
+
+	it("workflow-check exits 0 with the snapshot when valid", async () => {
+		const run = await cli(["workflow-check", ...repoArgs], trusted);
+
+		assert.equal(run.code, EXIT.ok);
+
+		assert.partialDeepStrictEqual(run.json, {
+			valid: true,
+			ref: "main",
+			sha: mainSha,
+			digest: digestOf(valid),
+			verification: false,
+			config: { agent: { maxConcurrent: 2 } },
+		});
+	});
+
+	it("workflow-check exits 1 and names the field when invalid", async () => {
+		const broken = new Map([
+			[
+				"main",
+				{
+					sha: mainSha,
+					text: frontMatter("stages:\n  build:\n    max_turns: 0"),
+				},
+			],
+		]);
+
+		const run = await cli(["workflow-check", ...repoArgs], broken);
+
+		assert.equal(run.code, EXIT.invalid);
+
+		assert.partialDeepStrictEqual(run.json, {
+			valid: false,
+			error: {
+				kind: "workflow_validation_error",
+				field: "stages.build.max_turns",
+			},
+		});
+
+		const absent = await cli(["workflow-check", ...repoArgs], missing);
+
+		assert.equal(absent.code, EXIT.invalid);
+		assert.partialDeepStrictEqual(absent.json, {
+			error: { kind: "missing_workflow_file" },
+		});
+	});
+
+	it("status exits 0 even when the workflow is missing", async () => {
+		const run = await cli(["status", ...repoArgs], missing);
+
+		assert.equal(run.code, EXIT.ok);
+
+		assert.partialDeepStrictEqual(run.json, {
+			workflow: "invalid",
+			workflowSha: mainSha,
+			executionEnabled: false,
+			controller: { state: "unavailable" },
+		});
+	});
+
+	it("status prints models, limits and the workflow digest", async () => {
+		const run = await cli(["status", ...repoArgs], trusted);
+
+		assert.equal(run.code, EXIT.ok);
+
+		assert.partialDeepStrictEqual(run.json, {
+			workflow: "valid",
+			workflowDigest: digestOf(valid),
+			models: { build: DEFAULT_MODEL, review: DEFAULT_MODEL },
+			limits: { pollIntervalMs: 30_000, maxConcurrent: 2 },
+			executionEnabled: false,
+		});
+	});
+
+	it("--reload-ref shows the last valid snapshot staying in force", async () => {
+		const branches = new Map([
+			["main", { sha: mainSha, text: valid }],
+			["broken", { sha: candidateSha, text: frontMatter("hooks: {}") }],
+		]);
+
+		const run = await cli(
+			["workflow-check", ...repoArgs, "--reload-ref", "broken"],
+			branches,
+		);
+
+		assert.equal(run.code, EXIT.invalid);
+
+		assert.partialDeepStrictEqual(run.json, {
+			valid: true,
+			reload: {
+				ref: "broken",
+				valid: false,
+				outcome: "kept",
+				error: { field: "hooks" },
+				inForce: { ref: "main", sha: mainSha, digest: digestOf(valid) },
+			},
+		});
+	});
+
+	it("exits 2 on usage errors", async () => {
+		const cases = [
+			[],
+			["workflow-check", "--repo", repo],
+			["workflow-check", "--json"],
+			["workflow-check", "--json", "--repo", "not a repo"],
+			["status", ...repoArgs, "--reload-ref", "x"],
+			["status", ...repoArgs, "--ref", "../main"],
+			["status", ...repoArgs, "--bogus"],
+			["deploy", ...repoArgs],
+		];
+
+		for (const argv of cases) {
+			const run = await cli(argv, trusted);
+
+			assert.equal(run.code, EXIT.usage, argv.join(" "));
+			assert.equal(run.json, null);
+			assert.match(run.stderr, /Usage:/);
+		}
 	});
 });
