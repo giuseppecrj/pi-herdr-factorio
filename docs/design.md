@@ -92,6 +92,30 @@ Rules the controller enforces in code:
 
 One GitHub quirk shapes land. Pull requests opened with `GITHUB_TOKEN` do not start other workflows without approval, so required checks cannot come from a separate PR workflow. Instead, land posts a `factory/validate` commit status from the verdict, and branch protection on `main` requires it. A separate `ci.yml` runs the same checks and posts the same status for human PRs.
 
+## Human checkpoints
+
+The default is no human. A repo can name the decisions it wants a person to see, and only those runs stop and wait.
+
+The rules live in `.github/factory-policy.yml`, which is under `.github/`, so the factory can never edit its own checkpoints:
+
+```yaml
+approve_contract:          # pause after specify, before any code
+  labels: ["factory:plan-first"]
+  when: [architecture_change, public_api_change]
+approve_merge:             # pause after review, before land
+  paths: ["src/policy.ts", "src/stages.ts", "skills/**", "package.json"]
+  when: [new_dependency, migration, security_finding_accepted]
+  diff_lines_over: 400
+```
+
+- **Two checkpoints, same mechanism.** `approve_contract` shows the person the contract and acceptance criteria before anything is built, which is the cheap place to catch a wrong direction. `approve_merge` shows the finished PR with its evidence.
+- **How waiting works.** The run moves to a `waiting` state with the reason, the PR or contract link and a request for review from the owner. Nothing runs while it waits. An `Approve` review from an account with write access, on the exact head SHA, resumes it into land. `Request changes` becomes a feedback round. A new push invalidates an earlier approval.
+- **Who enforces it.** Path rules also go into `CODEOWNERS` with "require review from code owners" on `main`, so GitHub itself blocks the merge, and the factory's App cannot approve its own PR. Rules GitHub cannot express (new dependency, migration, diff size) are evaluated by the deterministic land code using `main`'s copy of the policy file.
+- **Classifying the patch.** The `when` signals come from code, not a model: lockfile changes for `new_dependency`, files under migration directories for `migration`, an exported-symbol diff for `public_api_change`. A model may add a signal but never remove one.
+- **Forbidden paths become checkpoints where it helps.** A ticket that needs a `.github/` change can stop at `approve_merge` with the patch attached instead of being rejected. A human with workflow rights then applies it.
+
+In the data model, `Progress` gains `{ kind: "waiting"; checkpoint: "contract" | "merge"; reasons: NonEmpty<string> }`, and `RunEvent` gains `approved` and `changes_requested`.
+
 ## Feedback and cadence
 
 - **PR feedback.** A review or comment on an open factory PR triggers address-pr-comments (mnapoli, MIT) as a build round with the comments as input. It cannot push or reply itself. Land does both. Feedback on an already-merged PR becomes a new issue labeled `factory:proposed`.

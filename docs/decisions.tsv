@@ -13,3 +13,4 @@ ts	phase	decision	why	evidence	result
 2026-10-28T21:02:10Z	skeleton	accepted the package skeleton after reading the core and rerunning check	child summary alone is not proof	commit 8ef1924, npm run check 60/60	VERIFIED
 2026-10-28T21:02:10Z	skeleton	widened forbidden paths from .github/workflows to all of .github	composite actions and CODEOWNERS steer gates without touching workflow files; the old test called CODEOWNERS ordinary	src/policy.ts, test/policy.test.ts	60/60 green
 2026-10-28T21:02:10Z	design	validate must run the base branch's checks against the candidate	a patch could otherwise edit package.json scripts or delete tests to pass	docs/design.md	proposed
+2026-10-28T21:02:55Z	design	added opt-in human checkpoints before build and before merge, driven by a policy file under .github	owner wants a person to see some decisions; the factory must not be able to edit its own checkpoints	docs/design.md#human-checkpoints	proposed
