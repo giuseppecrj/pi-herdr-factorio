@@ -10,6 +10,7 @@ import {
 	isRepoSlug,
 	loadWorkflow,
 	type RepoSlug,
+	redactCredentials,
 	reloadWorkflow,
 	statusReport,
 	TRUSTED_REF,
@@ -105,8 +106,14 @@ function parseCliArgs(argv: readonly string[]) {
 
 export async function runCli(
 	argv: readonly string[],
-	io: CliIo,
+	caller: CliIo,
 ): Promise<number> {
+	const io: CliIo = {
+		...caller,
+		stdout: (text) => caller.stdout(redactCredentials(text)),
+		stderr: (text) => caller.stderr(redactCredentials(text)),
+	};
+
 	const parsed = parse(argv);
 
 	if (parsed.kind === "usage") {

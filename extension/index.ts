@@ -8,6 +8,7 @@ import {
 	loadWorkflow,
 	MODEL_STAGES,
 	NO_CONTROLLER,
+	redactCredentials,
 	TRUSTED_REF,
 	type WorkflowLoad,
 } from "../src/workflow.ts";
@@ -77,7 +78,7 @@ export async function readWorkflowState(
 	if (repo === null) {
 		return {
 			kind: "no_repository",
-			reason: `origin is not a GitHub repository: ${remote.stdout.trim()}`,
+			reason: "origin is not a GitHub repository",
 		};
 	}
 
@@ -97,7 +98,9 @@ export async function factoryCommandText(
 
 	if (subcommand !== "status") return USAGE;
 
-	return formatStatus(readPackageVersion(), await readWorkflowState(sources));
+	const state = await readWorkflowState(sources);
+
+	return redactCredentials(formatStatus(readPackageVersion(), state));
 }
 
 export function registerFactory(

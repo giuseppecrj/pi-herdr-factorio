@@ -10,6 +10,8 @@ Every command reads `.github/factory/WORKFLOW.md` from GitHub through `gh`, neve
 
 No command starts a controller, calls a model or writes to GitHub.
 
+Output never contains URL credentials. Anything shaped like `scheme://user:secret@` in stdout, stderr or `/factory status` text, including `gh` errors and text quoted from `WORKFLOW.md`, is printed as `scheme://<redacted>@`.
+
 ## Commands
 
 | Command | Purpose |
@@ -97,7 +99,7 @@ The `reload` object has these fields:
 
 ## `/factory status`
 
-The Pi extension command shows the same workflow state as text. It finds the repository from `git remote get-url origin` in the session's working directory and always loads `main`. When `origin` is missing or is not a `github.com` remote, or when `gh` fails, it prints `workflow    unavailable:` with the reason. It always prints `controller  unavailable` and `execution   disabled`, followed by the stage table.
+The Pi extension command shows the same workflow state as text. It finds the repository from `git remote get-url origin` in the session's working directory and always loads `main`. An `https` origin with credentials in it still resolves to its repository. When `origin` is missing or is not a `github.com` remote, or when `gh` fails, it prints `workflow    unavailable:` with the reason. For a remote that is not on GitHub, the reason is only `origin is not a GitHub repository`, and the URL is never printed. It always prints `controller  unavailable` and `execution   disabled`, followed by the stage table.
 
 ## Configuration
 

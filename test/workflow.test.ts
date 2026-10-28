@@ -825,3 +825,99 @@ describe("server/cli.ts", () => {
 		}
 	});
 });
+
+const token = "ghp_TOKEN0123456789";
+const credentialedOrigin = `https://x-access-token:${token}@github.com/giuseppecrj/pi-herdr-factorio.git`;
+const leakyStderr = `fatal: unable to access '${credentialedOrigin}/': Could not resolve host`;
+
+function assertNoCredential(printed: string): void {
+	assert.doesNotMatch(printed, new RegExp(token));
+	assert.doesNotMatch(printed, /x-access-token/);
+	assert.doesNotMatch(printed, /hunter2/);
+}
+
+describe("credential redaction", () => {
+	it("resolves a credentialed GitHub remote to its repository", () => {
+		assert.equal(githubRepoFromRemote(`${credentialedOrigin}\n`), repo);
+		assert.equal(
+			githubRepoFromRemote(
+				`https://${token}@github.com/giuseppecrj/pi-herdr-factorio`,
+			),
+			repo,
+		);
+		assert.equal(
+			githubRepoFromRemote(
+				"https://user:hunter2@gitlab.com/giuseppecrj/pi-herdr-factorio.git",
+			),
+			null,
+		);
+	});
+
+	it("redacts credentials in gh stderr at both fetch steps", async () => {
+		const failResolve: Exec = async () => ({
+			stdout: "",
+			stderr: leakyStderr,
+			code: 1,
+		});
+
+		const failFetch: Exec = async (_command, args) =>
+			args.includes("--jq")
+				? { stdout: `${mainSha}\n`, stderr: "", code: 0 }
+				: { stdout: "", stderr: leakyStderr, code: 1 };
+
+		for (const exec of [failResolve, failFetch]) {
+			const loaded = await loadWorkflow({ exec, repo, ref: "main", env });
+
+			assert.equal(loaded.kind, "failed");
+
+			if (loaded.kind !== "failed") continue;
+
+			assert.match(loaded.error.message, /github\.com\/giuseppecrj/);
+			assertNoCredential(
+				JSON.stringify([
+					loaded,
+					checkReport(loaded, null),
+					statusReport(loaded, "0.1.0"),
+				]),
+			);
+		}
+	});
+
+	it("redacts credentials quoted from the workflow file and arguments", async () => {
+		const url = "https://user:hunter2@example.com/x";
+
+		const files = [
+			frontMatter(`source: ${url}: y`),
+			"---\nrepository: https://user:hunter2@example.com/x\n---\n",
+			frontMatter(`stages:\n  build:\n    model: ${url}`),
+			frontMatter(`"${url}": 1`),
+			`${frontMatter("")}\nSee ${url}.\n`,
+		];
+
+		for (const text of files) {
+			const branches = new Map([["main", { sha: mainSha, text }]]);
+
+			for (const command of ["workflow-check", "status"]) {
+				const run = await cli([command, "--json", "--repo", repo], branches);
+
+				assertNoCredential(JSON.stringify(run.json));
+			}
+
+			const parsed = parse(text);
+
+			assertNoCredential(
+				JSON.stringify(
+					parsed.kind === "valid" ? parsed.warnings : parsed.error,
+				),
+			);
+		}
+
+		const usage = await cli(
+			["status", "--json", "--repo", repo, "--ref", url],
+			new Map(),
+		);
+
+		assert.equal(usage.code, EXIT.usage);
+		assertNoCredential(usage.stderr);
+	});
+});

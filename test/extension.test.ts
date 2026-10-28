@@ -21,6 +21,14 @@ repository: giuseppecrj/pi-herdr-factorio
 Write the test first.
 `;
 
+const token = "ghp_TOKEN0123456789";
+const credentialedOrigin = `https://x-access-token:${token}@github.com/giuseppecrj/pi-herdr-factorio.git`;
+
+function assertNoCredential(text: string): void {
+	assert.doesNotMatch(text, new RegExp(token));
+	assert.doesNotMatch(text, /x-access-token/);
+}
+
 function ok(stdout: string): ExecResult {
 	return { stdout, stderr: "", code: 0 };
 }
@@ -141,6 +149,70 @@ describe("/factory command", () => {
 		const none = await factoryCommandText("status", sources(offline, online));
 
 		assert.match(none, /^workflow +unavailable: no git remote named origin$/m);
+	});
+
+	it("resolves a credentialed GitHub origin without printing the token", async () => {
+		const text = await factoryCommandText(
+			"status",
+			sources(ok(`${credentialedOrigin}\n`), online),
+		);
+
+		assert.match(text, /^workflow +giuseppecrj\/pi-herdr-factorio main /m);
+		assertNoCredential(text);
+	});
+
+	it("prints no part of a credentialed non-GitHub origin", async () => {
+		const origin = "https://deploy:hunter2@gitlab.example.com/team/repo.git\n";
+
+		const text = await factoryCommandText(
+			"status",
+			sources(ok(origin), online),
+		);
+
+		assert.match(
+			text,
+			/^workflow +unavailable: origin is not a GitHub repository$/m,
+		);
+		assert.doesNotMatch(text, /hunter2|deploy|gitlab|team\/repo/);
+	});
+
+	it("redacts credentials in gh stderr and failing exec messages", async () => {
+		const leak = `fatal: unable to access '${credentialedOrigin}/': Could not resolve host`;
+
+		const stderrText = await factoryCommandText(
+			"status",
+			sources(ok(remote), () => ({ stdout: "", stderr: leak, code: 1 })),
+		);
+
+		assert.match(stderrText, /^workflow +unavailable: source_unavailable: /m);
+		assertNoCredential(stderrText);
+
+		const sent: string[] = [];
+		let handler: ((args: string) => Promise<void>) | undefined;
+
+		registerFactory({
+			registerCommand: (_name, options) => {
+				// SAFETY: the factory handler reads only `cwd` from its context.
+				const ctx = { cwd: "/work/checkout" } as Parameters<
+					typeof options.handler
+				>[1];
+
+				handler = (args) => options.handler(args, ctx);
+			},
+			sendMessage: (message) => {
+				sent.push(String(message.content));
+			},
+			exec: async (command) => {
+				if (command === "git") return { ...ok(remote), killed: false };
+
+				throw new Error(`spawn failed: ${leak}`);
+			},
+		});
+
+		await handler?.("status");
+
+		assert.match(sent[0] ?? "", /spawn failed/);
+		assertNoCredential(sent[0] ?? "");
 	});
 
 	it("reads main, never another branch", async () => {

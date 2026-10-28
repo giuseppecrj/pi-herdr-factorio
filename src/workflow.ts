@@ -142,6 +142,15 @@ const ENV_REFERENCE = /^\$([A-Za-z_][A-Za-z0-9_]*)$/;
 const GITHUB_REMOTE =
 	/^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/;
 
+const HTTPS_USERINFO = /^(https:\/\/)[^/]*@/;
+
+const URL_USERINFO = /([a-z][a-z0-9+.-]*:\/\/)[^\s/?#]*@/gi;
+
+/** Replaces the userinfo of every `scheme://user:secret@host` in `text`. */
+export function redactCredentials(text: string): string {
+	return text.replace(URL_USERINFO, "$1<redacted>@");
+}
+
 export function isRepoSlug(input: string): input is RepoSlug {
 	return REPO_SLUG.test(input);
 }
@@ -163,7 +172,8 @@ function isStage(input: string): input is Stage {
 }
 
 export function githubRepoFromRemote(url: string): RepoSlug | null {
-	const slug = GITHUB_REMOTE.exec(url.trim())?.[1];
+	const bare = url.trim().replace(HTTPS_USERINFO, "$1");
+	const slug = GITHUB_REMOTE.exec(bare)?.[1];
 
 	return slug !== undefined && isRepoSlug(slug) ? slug : null;
 }
@@ -699,7 +709,7 @@ export function parseWorkflow(input: {
 			kind: "valid",
 			config,
 			guidance,
-			warnings: Object.freeze(warnings),
+			warnings: Object.freeze(warnings.map(redactCredentials)),
 		});
 	} catch (error) {
 		if (!(error instanceof InvalidWorkflow)) throw error;
@@ -712,8 +722,16 @@ export function parseWorkflow(input: {
 	}
 }
 
+function redactError(error: WorkflowError): WorkflowError {
+	const message = redactCredentials(error.message);
+
+	return error.kind === "workflow_validation_error"
+		? { ...error, field: redactCredentials(error.field), message }
+		: { ...error, message };
+}
+
 function invalid(error: WorkflowError): ParsedWorkflow {
-	return { kind: "invalid", error };
+	return { kind: "invalid", error: redactError(error) };
 }
 
 function firstLine(text: string): string {
@@ -737,7 +755,14 @@ export async function loadWorkflow(input: {
 		digest: Digest | null,
 		error: WorkflowError,
 	): WorkflowLoad =>
-		Object.freeze({ kind: "failed", repo, ref, sha, digest, error });
+		Object.freeze({
+			kind: "failed",
+			repo,
+			ref,
+			sha,
+			digest,
+			error: redactError(error),
+		});
 
 	if (!isBranchName(ref)) {
 		return failed(null, null, {
