@@ -23,7 +23,7 @@ Build `pi-herdr-factorio`, a Pi package that works like a software factory: a Gi
 ## Owner decisions in force
 
 - GitHub Issues now, Linear later through the same `TicketAdapter`, polled like GitHub.
-- v1 ends at Human Review. The owner merges every PR, including the factory's own build PRs. Full autonomy comes later through the checkpoint policy.
+- v1 ends at Human Review. The owner merges every PR the factory opens. Since 2026-10-28 the root may squash-merge its own build PRs after a clean swarm verdict and a passing hosted `check` on the exact head. Full autonomy comes later through the checkpoint policy.
 - The controller runs on the exe.dev VM `pi-factorio` and talks to GitHub with plain `gh` through exe.dev's GitHub integration. No GitHub App, no webhooks, no Tailscale.
 - Models on the VM come from exe.dev's `llm` integration. The default for every stage is `openai/gpt-6.1-sol` (ChatGPT subscription). Do not use Anthropic on the VM: it spends exe.dev credits. Anthropic returns when the owner plugs in his own proxy provider. Until then review seats are same-family and must be labeled context-isolated.
 - pstack is a hard dependency. The factory's first target repo is this repo.

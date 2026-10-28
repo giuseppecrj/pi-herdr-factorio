@@ -11,13 +11,13 @@ Treat units 0 through 3 as historical prototype evidence, not work to repeat.
 
 One box is one unit of work. Every box names the evidence that checks it. A nested box is a sub-step of the box above it. Check a box only when its evidence exists, such as a file, a log, a test result, or a SHA. The body is a how-to. The appendices explain and record.
 
-The program runs the poteto-mode playbook `playbooks/autopilot-stack.md`. Every PR, `F04a` through `F13`, is an operator item and stops at merge-ready. The root prepares the verified stack. The owner reviews and lands it bottom-up. No agent merges or arms auto-merge. This document grants no execution, commit, push, PR, issue, service, or configuration action.
+The program runs the poteto-mode playbook `playbooks/autopilot-full.md`, with merge-then-branch for this serial chain. On 2026-10-28 the owner granted the root merge authority for build PRs. The root squash-merges a PR after a clean swarm verdict on the exact head and a passing hosted `check` on that head. The `main` ruleset requires both a PR and that check. No agent arms auto-merge. This grant covers build PRs only. The factory's runtime still stops at Human Review, and the owner merges every PR the factory opens. This document grants no other execution, commit, push, PR, issue, service, or configuration action.
 
 Use the **Factory CLI control procedure** below as the control skill. It combines `ssh`, `gh`, and the factory CLI and extension. There is no installed factory-specific control skill yet. This backend has no visual interface to verify. Live lanes drive real scenarios on `pi-factorio` against real GitHub issues in this repository, not fake-adapter tests. Save redacted logs, JSON snapshots, and issue or PR URLs instead of screenshots or video. Appendix C records this template adaptation and the other exceptions.
 
 Treat every new path, symbol, command, log field, and numerical budget below as a proposed implementation contract, not an existing capability. At the planning base `04b69c3`, only the pure state machine, policy helpers, fake adapter, provisioning script, and `/factory status` exist. Do not check future boxes with those prototypes alone.
 
-Use `openai/gpt-6.1-sol` through exe.dev's `llm` integration for every runtime stage. Use fresh sessions for acceptance and review. Label their evidence `context-isolated, same family, not cross-family`. The cross-family part of design definition-of-done item 2 remains incomplete until the owner's Anthropic proxy is available. Do not spend exe.dev Anthropic credits as a fallback.
+Use `openai/gpt-6.1-sol` through exe.dev's `llm` integration for every runtime stage. When it refuses a security-review or other security-flavored request on a content-policy flag, retry that request once on `xai/grok-4.6` through the same integration. The owner chose this fallback on 2026-10-28. exe.dev lists per-token prices for its xAI models, so the fallback spends exe.dev credits. Use it only after a recorded refusal, and count its tokens in the run total. Use fresh sessions for acceptance and review. Label their evidence `context-isolated, same family, not cross-family`. The cross-family part of design definition-of-done item 2 remains incomplete until the owner's Anthropic proxy is available. Do not spend exe.dev Anthropic credits as a fallback.
 
 Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
@@ -25,7 +25,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 
 ### Arm the program
 
-- [ ] State the protocol and this plan to the operator, then stop. Start execution only on the operator's explicit go. Record separate grants for commits, pushes, PR operations, fixture issues and comments, VM changes, and repository settings. Keep merge authority with the owner.
+- [ ] State the protocol and this plan to the operator, then stop. Start execution only on the operator's explicit go. Record separate grants for commits, pushes, PR operations, fixture issues and comments, VM changes, repository settings, and merging build PRs.
 - [ ] Read these from the installed skill directories at program start. Re-read them at every audit. Record their versions and paths in the execution trail.
   - [ ] Read `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/poteto-mode/playbooks/autopilot-stack.md`.
   - [ ] Read the swarm skill at `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/swarm/SKILL.md`.
@@ -62,6 +62,11 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 - [ ] Resolve `task:qa` against the live scoped catalog before launch. Use the owner's approved default `openai/gpt-6.1-sol` explicitly where routing is unavailable. Set supported thinking explicitly, medium for ordinary verification and high for security review. Do not rewrite shared model preferences. Label same-family audit seats context-isolated. Record the unavailable cross-family gate separately from behavior passes.
 - [ ] Require every named lane to return `PASS` before a clean behavior verdict. Findings go back to the owner. A defect that a lane filed as a note is a finding. Missing identities, missing permissions, unreachable services, or missing scenarios yield `BLOCKED`, never a substituted fake pass. A new head gets a fresh swarm and verdict, except for evidence retained under the patch-id rule in `playbooks/shipping.md`.
 - [ ] Append a PR to the stack only at the verified head, subject to the explicit `F04a` and `F07b` bootstrap exceptions. Record the verdict SHA, base SHA, patch-id, and evidence paths. Apply the patch-id rule in `playbooks/shipping.md` after rebases. Re-run CI and mergeability after rewritten pushes. The owner lands bottom-up. Never merge, arm auto-merge, or infer a merge from a green check.
+
+### Keep dependencies current
+
+- [ ] Upgrade `@earendil-works/pi-coding-agent`, a devDependency and peer, as soon as a release ships an `undici` that clears the advisories `npm audit` reports. On 2026-10-28, the latest release, 1.4.0, pins `undici` 8.10.2, with 1 high and 2 moderate advisories, and `undici` 8.12.3 exists. Check with `npm view @earendil-works/pi-coding-agent version dependencies.undici`. Land the upgrade as its own PR. Prove it with `npm audit` clean or reduced, `npm run check`, and the `/factory status` drive in the verification skill.
+- [ ] Upgrade the VM's Pi in the same PR by bumping `PI_VERSION` in `server/provision.sh` and rerunning provisioning. Pi on the VM is a standalone binary, so record its bundled `undici` version separately rather than assuming it matches npm.
 
 ### Boot recipe, for every live lane
 
@@ -252,6 +257,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [ ] Prototype rootless execution and enforced egress before running issue-driven code. Prove user namespaces, resource limits, cleanup, and real Herdr fan-out inside the container. Do not treat Docker availability or a non-root container UID as proof of rootless isolation.
 - [ ] Resolve risk R1 with a host-controlled egress gateway that distinguishes allowed TLS destinations. Both exe.dev integration names currently resolve to `169.254.169.254`. Prove that allowed model access cannot tunnel to the GitHub integration by changing Host, SNI, redirects, IP spelling, or proxy variables. Block direct network bypass and public GitHub API access. Allow only `llm.int.exe.xyz` and required npm registry endpoints.
 - [ ] Implement `runStage` using Pi RPC and wait for `agent_settled`, not `agent_end` or prompt acceptance. Keep the parent alive until Herdr children settle. Handle malformed output, errors, approval requests, aborts, and hard deadlines deterministically.
+- [ ] Treat a provider content-policy refusal as its own stage exit reason, distinct from errors and budget exhaustion. Add an optional per-stage `fallback_model` to `WORKFLOW.md`. On a refusal, retry the request once on the fallback, and record both model IDs and both refusals. If the fallback also refuses, or no fallback is set, end the stage `failed` with the refusal as evidence. A refusal never becomes a pass.
 - [ ] Mount only the stage workspace and explicitly trusted read-only runtime assets. Exclude host home, Docker socket, controller state, other stage workspaces, SSH agent, and held-out artifacts from build containers. Disable inherited MCP and untrusted Pi extensions. Install pinned dependencies and record their versions.
 - [ ] Enforce stage turns, wall time, stall time, tokens, and run totals including children. Stop with `budget_exhausted` before another request when a cap is reached. Reserve cleanup time. Record unavailable monetary pricing explicitly and use token/time caps until an approved price source exists.
 - [ ] Correct `STAGE_PROFILES` and `formatStageTable` so the CLI no longer implies that model stages receive GitHub read tokens. Only the controller uses the integration. Add the approved rootless setup to provisioning only after prototype proof and an explicit VM-change grant.
@@ -568,12 +574,14 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Files.**
 
 - [ ] Create `src/review.ts`, `test/review.test.ts`, `test/fixtures/review/`, and `skills/code-review/`, `skills/security-review/`, `skills/simplify/`, `skills/ultrareview/` with provenance.
-- [ ] Edit `src/stages.ts`, `src/run.ts`, `server/controller.ts`, `test/stages.test.ts`, `test/pipeline.test.ts`, and `skills/README.md` for review orchestration and repair receipts.
+- [ ] Edit `src/stages.ts`, `src/run.ts`, `server/controller.ts`, `test/stages.test.ts`, `test/pipeline.test.ts`, `skills/README.md`, and `.github/factory/WORKFLOW.md` for review orchestration, repair receipts, and the security-review fallback model.
 
 **Build.**
 
 - [ ] Implement `reviewCandidate` using fresh sessions over the validated candidate and contract. Adapt the selected licensed code-review and security-review sources. Write simplify and ultrareview from permitted documentation and pstack patterns, not unlicensed prompt copies.
 - [ ] Bind findings to candidate SHA and patch digest. Use deterministic risk selection for extra review on policy, security, dependency, and factory-skill changes. Label every same-family seat honestly. Leave cross-family enforcement incomplete under R8.
+- [ ] Set the security-review seat to `openai/gpt-6.1-sol` with `fallback_model: xai/grok-4.6`. Prove the fallback on a seeded vulnerability whose review prompt the primary refuses. If no such prompt can be found, record that the fallback path was tested only by an injected refusal. A security review that both models refuse blocks handoff.
+- [ ] Label a review answered by the xAI fallback as cross-family for that seat only. It does not settle R8 for acceptance.
 - [ ] Preserve `MAX_REPAIR_ROUNDS = 2` across validation and review. Send blocking findings to a fresh sanitized builder session. Clear stale candidate, verdict, and review evidence. Run CI and review again for the new head.
 - [ ] Keep simplify changes inside build before validation or treat them as a new patch requiring full revalidation. Treat malformed reviews, missing expected seats, and budget exhaustion as failure, never approval. Let no model judge override a failing hard check.
 
