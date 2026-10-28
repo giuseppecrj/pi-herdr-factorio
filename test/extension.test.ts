@@ -31,7 +31,6 @@ const offline: ExecResult = {
 	code: 1,
 };
 
-// git answers with `origin`; every gh call gets `gh`'s result.
 function sources(
 	origin: ExecResult,
 	gh: (args: readonly string[]) => ExecResult,

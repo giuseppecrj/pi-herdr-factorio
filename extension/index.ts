@@ -63,7 +63,6 @@ export function formatStatus(version: string, workflow: WorkflowState): string {
 	].join("\n");
 }
 
-/** Reads trusted main of the GitHub repository behind `origin`. */
 export async function readWorkflowState(
 	sources: StatusSources,
 ): Promise<WorkflowState> {

@@ -151,8 +151,6 @@ export async function runCli(
 		: EXIT.invalid;
 }
 
-// Runs gh with an argument array and no shell. GH_HOST and the rest of the
-// environment pass through.
 async function execFile(
 	command: string,
 	args: readonly string[],

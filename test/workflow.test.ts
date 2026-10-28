@@ -88,7 +88,6 @@ type Branch = { sha: string; text: string | null };
 
 type FakeGh = { exec: Exec; calls: string[][] };
 
-// A fake `gh`: branches map a ref to its SHA and the file at that SHA.
 function fakeGh(branches: Map<string, Branch>): FakeGh {
 	const calls: string[][] = [];
 
@@ -325,8 +324,8 @@ describe("parseWorkflow", () => {
 		assert.equal(parsed.kind, "valid");
 
 		if (parsed.kind === "valid") {
-			assert.equal(parsed.config.workspace.root, "/srv/workspaces");
-			assert.equal(parsed.config.workspace.rootSource, "$FACTORY_WORKSPACES");
+			assert.equal(parsed.config.workspace.expandedRoot, "/srv/workspaces");
+			assert.equal(parsed.config.workspace.rootAsWritten, "$FACTORY_WORKSPACES");
 		}
 
 		const error = validation(
@@ -359,7 +358,7 @@ describe("parseWorkflow", () => {
 
 		if (parsed.kind === "valid") {
 			assert.equal(
-				parsed.config.workspace.root,
+				parsed.config.workspace.expandedRoot,
 				"/home/factory/factory-workspaces",
 			);
 		}

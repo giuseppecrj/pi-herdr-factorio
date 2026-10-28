@@ -13,7 +13,6 @@ export type GitSha = string & { readonly __brand: "GitSha" };
 
 export type ModelId = string & { readonly __brand: "ModelId" };
 
-// Stages whose STAGE_PROFILES model access is not "none".
 export const MODEL_STAGES = [
 	"specify",
 	"accept",
@@ -40,8 +39,7 @@ export type WorkflowConfig = {
 	readonly repository: RepoSlug;
 	readonly polling: { readonly intervalMs: number };
 	readonly agent: { readonly maxConcurrent: number };
-	// `root` is expanded and never printed. `rootSource` is the text as written.
-	readonly workspace: { readonly root: string; readonly rootSource: string };
+	readonly workspace: { readonly expandedRoot: string; readonly rootAsWritten: string };
 	readonly retry: {
 		readonly maxAttempts: number;
 		readonly maxBackoffMs: number;
@@ -166,9 +164,6 @@ export function githubRepoFromRemote(url: string): RepoSlug | null {
 
 	return slug !== undefined && isRepoSlug(slug) ? slug : null;
 }
-
-// Parsing. Each reader throws `InvalidWorkflow`. `parseWorkflow` turns it
-// into a `workflow_validation_error`, so the error names one field.
 
 class InvalidWorkflow extends Error {
 	readonly field: string;
@@ -334,7 +329,7 @@ function readWorkspaceRoot(
 
 	if (!isAbsolute(path)) fail(field, "must resolve to an absolute path");
 
-	return Object.freeze({ root: normalize(path), rootSource: source });
+	return Object.freeze({ expandedRoot: normalize(path), rootAsWritten: source });
 }
 
 const BUDGET_KEYS = ["max_turns", "wall_ms", "stall_ms"];
@@ -470,9 +465,7 @@ const ROOT_KEYS = [
 	"checkpoints",
 ];
 
-// Symphony's `hooks` and `codex.command` run shell commands. The factory never
-// runs commands from WORKFLOW.md, so these keys fail instead of being ignored.
-const SHELL_KEYS = [
+const REJECTED_COMMAND_KEYS = [
 	"hooks",
 	"codex",
 	"command",
@@ -493,7 +486,7 @@ function readConfig(
 	const warnings: string[] = [];
 
 	for (const key of root.keys()) {
-		if (SHELL_KEYS.includes(key)) {
+		if (REJECTED_COMMAND_KEYS.includes(key)) {
 			fail(
 				key,
 				"names shell commands, and the factory runs no commands from WORKFLOW.md",
@@ -568,8 +561,6 @@ function readConfig(
 	return { config, warnings };
 }
 
-// Guidance is literal Markdown. `## <stage>` headings outside code fences
-// split it. It is never rendered, interpolated or executed.
 function readGuidance(body: string): Guidance {
 	const sections = new Map<string, string[]>();
 	const general: string[] = [];
@@ -815,9 +806,6 @@ export function reloadWorkflow(
 	return { kind: "kept", snapshot: current, error: next.error };
 }
 
-// JSON views for the CLI and the extension. They print the workspace root as
-// written, never its expanded value.
-
 export type ConfigView = Omit<WorkflowConfig, "workspace"> & {
 	readonly workspace: { readonly root: string };
 };
@@ -906,7 +894,7 @@ export function loadView(load: WorkflowLoad): LoadView {
 }
 
 export function configView(config: WorkflowConfig): ConfigView {
-	return { ...config, workspace: { root: config.workspace.rootSource } };
+	return { ...config, workspace: { root: config.workspace.rootAsWritten } };
 }
 
 export function modelsOf(config: WorkflowConfig): Record<ModelStage, ModelId> {

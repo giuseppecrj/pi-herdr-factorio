@@ -12,8 +12,17 @@ const stub = {
 		sent.push(m.content);
 	},
 	exec: async (command: string, args: string[], options?: { cwd?: string }) => {
-		const r = spawnSync(command, args, { cwd: options?.cwd, encoding: "utf8", timeout: 30_000 });
-		return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.status ?? 1, killed: false };
+		const r = spawnSync(command, args, {
+			cwd: options?.cwd,
+			encoding: "utf8",
+			timeout: 30_000,
+		});
+		return {
+			stdout: r.stdout ?? "",
+			stderr: r.stderr ?? "",
+			code: r.status ?? 1,
+			killed: false,
+		};
 	},
 };
 piHerdrFactorio(stub as unknown as Parameters<typeof piHerdrFactorio>[0]);

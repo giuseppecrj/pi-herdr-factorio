@@ -1,7 +1,7 @@
 ---
-# The factory reads this file only from main. A copy on any other branch,
-# including a factory PR, changes nothing. Field reference:
-# docs/operations/factory-cli.md.
+# The factory reads this file only from main. Editing it on any other branch,
+# including in a PR, changes nothing until that PR merges.
+# Field reference: docs/operations/factory-cli.md.
 repository: giuseppecrj/pi-herdr-factorio
 
 polling:

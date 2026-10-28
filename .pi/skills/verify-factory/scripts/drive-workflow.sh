@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-# Remote, read-only. Run: scripts/vm.sh scripts/drive-workflow.sh <pr-id> <worker-n> [ref...]
-# Runs `server/cli.ts workflow-check --json` and `status --json` in the lane
-# workspace for main and each extra ref. Saves evidence under
-# /tmp/swarm-<pr-id>/worker-<n>/.
 set -uo pipefail
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
 export GH_HOST=github.int.exe.xyz
@@ -34,7 +30,6 @@ for ref in main "$@"; do
   lines="$lines
 command=node server/cli.ts workflow-check --json --repo $repo --ref $ref exit=$check valid=$(field "$f" valid) sha=$(field "$f" sha) digest=$(field "$f" digest) verification=$(field "$f" verification) error_kind=$(field "$f" error.kind) error_field=$(field "$f" error.field)
 command=node server/cli.ts status --json --repo $repo --ref $ref exit=$status workflow=$(field "$s" workflow) workflowSha=$(field "$s" workflowSha) executionEnabled=$(field "$s" executionEnabled) controller=$(field "$s" controller.state) build_model=$(field "$s" models.build)"
-  # Exit 2 is a usage error, which means this script is broken. status must always exit 0.
   { [ "$check" -le 1 ] && [ "$status" -eq 0 ]; } || final=1
 done
 {
