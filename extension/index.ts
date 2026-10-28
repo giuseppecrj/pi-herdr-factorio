@@ -8,6 +8,7 @@ export function readPackageVersion(): string {
 	const manifest: unknown = JSON.parse(
 		readFileSync(new URL("../package.json", import.meta.url), "utf8"),
 	);
+
 	if (
 		typeof manifest === "object" &&
 		manifest !== null &&
@@ -16,6 +17,7 @@ export function readPackageVersion(): string {
 	) {
 		return manifest.version;
 	}
+
 	return "unknown";
 }
 
@@ -25,6 +27,7 @@ export function formatStatus(version: string): string {
 
 export function factoryCommandText(args: string): string {
 	const subcommand = args.trim().split(/\s+/)[0] ?? "";
+
 	return subcommand === "status"
 		? formatStatus(readPackageVersion())
 		: "Usage: /factory status";

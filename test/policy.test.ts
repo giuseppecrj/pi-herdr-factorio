@@ -54,6 +54,7 @@ describe("admission", () => {
 			read: false,
 			none: false,
 		};
+
 		for (const [level, expected] of Object.entries(levels)) {
 			assert.equal(hasWriteAccess(level as PermissionLevel), expected, level);
 		}
@@ -63,6 +64,7 @@ describe("admission", () => {
 describe("kill switch", () => {
 	it("is on only for the exact string true", () => {
 		assert.equal(isFactoryEnabled("true"), true);
+
 		for (const value of [undefined, "", "false", "TRUE", "1", " true"]) {
 			assert.equal(isFactoryEnabled(value), false, String(value));
 		}
@@ -113,6 +115,7 @@ describe("forbidden paths", () => {
 				ACCEPTANCE_SUITE_DIR,
 			],
 		});
+
 		assert.equal(result.kind, "forbidden");
 	});
 
@@ -155,6 +158,7 @@ describe("forbidden paths", () => {
 			".github\\workflows\\ci.yml",
 			".github/workflows",
 		];
+
 		for (const path of spellings) {
 			assert.equal(
 				checkChangedPaths({ changedPaths: [path] }).kind,

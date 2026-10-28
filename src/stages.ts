@@ -47,12 +47,16 @@ export function nextStage(stage: Stage): Stage | undefined {
 export function formatStageTable(): string {
 	const rows = STAGE_ORDER.map((stage) => {
 		const profile = STAGE_PROFILES[stage];
+
 		return [stage, profile.modelAccess, profile.githubToken];
 	});
+
 	const table = [["stage", "model access", "github token"], ...rows];
+
 	const widths = [0, 1, 2].map((column) =>
 		Math.max(...table.map((row) => row[column]?.length ?? 0)),
 	);
+
 	return table
 		.map((row) =>
 			row
@@ -102,6 +106,7 @@ function repairOrFail(run: Run, stage: Stage, evidence: string): Transition {
 	if (run.repairRounds >= MAX_REPAIR_ROUNDS) {
 		return finish(run, { kind: "failed", stage, evidence });
 	}
+
 	// The new build produces a new patch, so the old digest and verdict are stale.
 	return moveTo(run, "build", {
 		repairRounds: run.repairRounds + 1,
@@ -112,7 +117,9 @@ function repairOrFail(run: Run, stage: Stage, evidence: string): Transition {
 
 function failureEvidence(verdict: Verdict): string {
 	const failed = verdict.checks.filter((check) => !check.passed);
+
 	if (failed.length === 0) return "verdict did not pass";
+
 	return `failed checks: ${failed.map((check) => check.name).join(", ")}`;
 }
 
@@ -122,9 +129,11 @@ function wrongStage(event: RunEvent, stage: Stage): Transition {
 
 export function advance(run: Run, event: RunEvent): Transition {
 	const { progress } = run;
+
 	if (progress.kind === "finished") {
 		return invalid(`run already finished: ${progress.outcome.kind}`);
 	}
+
 	const { stage } = progress;
 
 	switch (event.kind) {
@@ -160,16 +169,21 @@ export function advance(run: Run, event: RunEvent): Transition {
 				: wrongStage(event, stage);
 		case "validated": {
 			if (stage !== "validate") return wrongStage(event, stage);
+
 			if (event.verdict.patchDigest !== run.patchDigest) {
 				return invalid("verdict is bound to a different patch");
 			}
+
 			if (!verdictPasses(event.verdict)) {
 				return repairOrFail(run, stage, failureEvidence(event.verdict));
 			}
+
 			return moveTo(run, "review", { verdict: event.verdict });
 		}
+
 		case "reviewed": {
 			if (stage !== "review") return wrongStage(event, stage);
+
 			if (event.blockingFindings.length > 0) {
 				return repairOrFail(
 					run,
@@ -177,18 +191,24 @@ export function advance(run: Run, event: RunEvent): Transition {
 					`blocking findings: ${event.blockingFindings.join("; ")}`,
 				);
 			}
+
 			return moveTo(run, "land");
 		}
+
 		case "landed": {
 			if (stage !== "land") return wrongStage(event, stage);
 			const check = checkLandPrecondition(run);
+
 			if (check.kind === "blocked") {
 				return invalid(`land precondition not met: ${check.reason}`);
 			}
+
 			return finish(run, { kind: "landed", mergeSha: event.mergeSha });
 		}
+
 		default: {
 			const _exhaustive: never = event;
+
 			return _exhaustive;
 		}
 	}

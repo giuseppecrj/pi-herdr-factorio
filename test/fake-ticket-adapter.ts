@@ -28,17 +28,21 @@ export class FakeTicketAdapter implements TicketAdapter {
 	rawEvent(event: FactoryEvent): object {
 		const raw = {};
 		this.#raw.set(raw, event);
+
 		return raw;
 	}
 
 	normalize(event: unknown): FactoryEvent | null {
 		if (typeof event !== "object" || event === null) return null;
+
 		return this.#raw.get(event) ?? null;
 	}
 
 	async fetch(ref: TicketRef): Promise<Ticket> {
 		const ticket = this.#tickets.get(ref.key);
+
 		if (ticket === undefined) throw new Error(`unknown ticket ${ref.key}`);
+
 		return ticket;
 	}
 

@@ -27,7 +27,9 @@ export function isDigest(input: string): input is Digest {
 
 export function digestOf(content: string | Uint8Array): Digest {
 	const hex = createHash("sha256").update(content).digest("hex");
+
 	if (!isDigest(hex)) throw new Error(`sha256 produced a malformed digest`);
+
 	return hex;
 }
 
