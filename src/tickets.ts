@@ -20,8 +20,17 @@ export type FactoryEvent =
 			comment: string;
 	  };
 
+/** A JSON value as `gh` prints it: an event before `normalize` parses it. */
+export type JsonValue =
+	| null
+	| boolean
+	| number
+	| string
+	| JsonValue[]
+	| { [key: string]: JsonValue };
+
 export interface TicketAdapter {
-	normalize(event: unknown): FactoryEvent | null;
+	normalize(event: JsonValue): FactoryEvent | null;
 	fetch(ref: TicketRef): Promise<Ticket>;
 	canAdmit(ref: TicketRef, actor: string): Promise<boolean>;
 	report(ref: TicketRef, run: Run): Promise<void>;

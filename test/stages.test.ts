@@ -35,6 +35,7 @@ describe("stage table", () => {
 			review: true,
 			land: true,
 		};
+
 		assert.deepEqual([...STAGE_ORDER].sort(), Object.keys(all).sort());
 		assert.deepEqual(
 			Object.keys(STAGE_PROFILES).sort(),
@@ -74,10 +75,12 @@ describe("advance: forward path", () => {
 		const validate = apply(build, { kind: "built", patchDigest: patch("a") });
 		assert.equal(stageOf(validate), "validate");
 		assert.equal(validate.patchDigest, patch("a"));
+
 		const review = apply(validate, {
 			kind: "validated",
 			verdict: passingVerdict(patch("a")),
 		});
+
 		assert.equal(stageOf(review), "review");
 		assert.equal(review.verdict?.pass, true);
 		const land = apply(review, { kind: "reviewed", blockingFindings: [] });
@@ -102,6 +105,7 @@ describe("advance: forward path", () => {
 			kind: "built",
 			patchDigest: patch("a"),
 		});
+
 		assert.deepEqual(result, {
 			kind: "invalid",
 			reason: "built is not valid during admit",
@@ -121,10 +125,12 @@ describe("advance: forward path", () => {
 describe("advance: needs_info", () => {
 	it("ends the run with the questions when specify cannot proceed", () => {
 		const run = apply(newRun(), { kind: "admitted" });
+
 		const done = apply(run, {
 			kind: "needs_info",
 			questions: ["Which API?", "Which platform?"],
 		});
+
 		assert.deepEqual(done.progress, {
 			kind: "finished",
 			outcome: {
@@ -139,6 +145,7 @@ describe("advance: needs_info", () => {
 			kind: "needs_info",
 			questions: ["why?"],
 		});
+
 		assert.equal(result.kind, "invalid");
 	});
 });
@@ -149,6 +156,7 @@ describe("advance: validate failure and bounded repair", () => {
 			kind: "validated",
 			verdict: failingVerdict(patch("first")),
 		});
+
 		assert.equal(stageOf(run), "build");
 		assert.equal(run.repairRounds, 1);
 		assert.equal(run.patchDigest, undefined);
@@ -164,6 +172,7 @@ describe("advance: validate failure and bounded repair", () => {
 			{ kind: "built", patchDigest: patch("second") },
 			{ kind: "validated", verdict: passingVerdict(patch("second")) },
 		);
+
 		assert.equal(stageOf(repaired), "review");
 		assert.equal(repaired.repairRounds, 1);
 		assert.equal(repaired.patchDigest, patch("second"));
@@ -172,6 +181,7 @@ describe("advance: validate failure and bounded repair", () => {
 	it("allows exactly the maximum rounds, then fails at validate with evidence", () => {
 		assert.equal(MAX_REPAIR_ROUNDS, 2);
 		let run = reachValidate("p0");
+
 		for (let round = 1; round <= MAX_REPAIR_ROUNDS; round++) {
 			run = apply(
 				run,
@@ -181,10 +191,12 @@ describe("advance: validate failure and bounded repair", () => {
 			assert.equal(run.repairRounds, round);
 			assert.equal(stageOf(run), "validate");
 		}
+
 		const done = apply(run, {
 			kind: "validated",
 			verdict: failingVerdict(patch(`p${MAX_REPAIR_ROUNDS}`)),
 		});
+
 		assert.deepEqual(done.progress, {
 			kind: "finished",
 			outcome: {
@@ -201,6 +213,7 @@ describe("advance: validate failure and bounded repair", () => {
 			...failingVerdict(patch("first")),
 			pass: true,
 		};
+
 		const run = apply(reachValidate("first"), { kind: "validated", verdict });
 		assert.equal(stageOf(run), "build");
 	});
@@ -210,6 +223,7 @@ describe("advance: validate failure and bounded repair", () => {
 			kind: "validated",
 			verdict: passingVerdict(patch("other")),
 		});
+
 		assert.deepEqual(result, {
 			kind: "invalid",
 			reason: "verdict is bound to a different patch",
@@ -223,6 +237,7 @@ describe("advance: review", () => {
 			kind: "reviewed",
 			blockingFindings: ["SQL injection in query builder"],
 		});
+
 		assert.equal(stageOf(run), "build");
 		assert.equal(run.repairRounds, 1);
 		assert.equal(run.patchDigest, undefined);
@@ -241,10 +256,12 @@ describe("advance: review", () => {
 			{ kind: "validated", verdict: passingVerdict(patch("p2")) },
 		);
 		assert.equal(run.repairRounds, 2);
+
 		const done = apply(run, {
 			kind: "reviewed",
 			blockingFindings: ["still bad", "also bad"],
 		});
+
 		assert.deepEqual(done.progress, {
 			kind: "finished",
 			outcome: {
@@ -261,6 +278,7 @@ describe("advance: review", () => {
 			{ kind: "reviewed", blockingFindings: ["x"] },
 			{ kind: "built", patchDigest: patch("second") },
 		);
+
 		assert.equal(stageOf(run), "validate");
 		const result = advance(run, { kind: "reviewed", blockingFindings: [] });
 		assert.equal(result.kind, "invalid");
@@ -273,6 +291,7 @@ describe("advance: land", () => {
 			kind: "landed",
 			mergeSha: "c".repeat(40),
 		});
+
 		assert.equal(done.progress.kind, "finished");
 		assert.equal(
 			done.progress.kind === "finished" && done.progress.outcome.kind,
@@ -283,10 +302,12 @@ describe("advance: land", () => {
 	it("refuses to land when the precondition does not hold", () => {
 		const run = reachLand();
 		const tampered = { ...run, patchDigest: patch("swapped") };
+
 		const result = advance(tampered, {
 			kind: "landed",
 			mergeSha: "d".repeat(40),
 		});
+
 		assert.deepEqual(result, {
 			kind: "invalid",
 			reason: "land precondition not met: digest_mismatch",
@@ -326,6 +347,7 @@ describe("advance: kill switch, cancellation, policy and budget", () => {
 			kind: "rejected",
 			reason: "forbidden_paths",
 		});
+
 		assert.deepEqual(done.progress, {
 			kind: "finished",
 			outcome: { kind: "rejected", reason: "forbidden_paths" },
@@ -337,6 +359,7 @@ describe("advance: kill switch, cancellation, policy and budget", () => {
 			kind: "stage_failed",
 			evidence: "builder crashed",
 		});
+
 		assert.deepEqual(done.progress, {
 			kind: "finished",
 			outcome: { kind: "failed", stage: "build", evidence: "builder crashed" },

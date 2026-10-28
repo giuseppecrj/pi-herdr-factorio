@@ -52,6 +52,7 @@ export function failingVerdict(patchDigest: Digest): Verdict {
 
 export function apply(run: Run, ...events: RunEvent[]): Run {
 	let current = run;
+
 	for (const event of events) {
 		const result = advance(current, event);
 		assert.equal(
@@ -61,6 +62,7 @@ export function apply(run: Run, ...events: RunEvent[]): Run {
 		);
 		current = result.run;
 	}
+
 	return current;
 }
 

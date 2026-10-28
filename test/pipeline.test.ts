@@ -27,6 +27,7 @@ function fixture() {
 	adapter.addTicket(issue);
 	adapter.setPermission("maintainer", "write");
 	adapter.setPermission("stranger", "read");
+
 	return adapter;
 }
 
@@ -37,13 +38,17 @@ async function admitFromLabel(
 	const event = adapter.normalize(
 		adapter.rawEvent({ kind: "ready", ref: ticket, actor }),
 	);
+
 	if (event === null || event.kind !== "ready") return "ignored";
 	const canAdmit = await adapter.canAdmit(event.ref, event.actor);
+
 	const decision = decideAdmission({
 		label: "factory:ready",
 		actorPermission: canAdmit ? "write" : "none",
 	});
+
 	if (decision.kind === "refused") return "refused";
+
 	return apply(
 		startRun({
 			id: "run-1",
@@ -65,6 +70,7 @@ describe("controller driven through the fake adapter", () => {
 
 	it("round-trips events minted by the fake", () => {
 		const adapter = fixture();
+
 		const event: FactoryEvent = {
 			kind: "pr_feedback",
 			ref: ticket,
@@ -72,6 +78,7 @@ describe("controller driven through the fake adapter", () => {
 			prUrl: "https://github.com/giuseppecrj/pi-herdr-factorio/pull/7",
 			comment: "rename this",
 		};
+
 		assert.deepEqual(adapter.normalize(adapter.rawEvent(event)), event);
 	});
 
@@ -86,7 +93,8 @@ describe("controller driven through the fake adapter", () => {
 		const admitted = await admitFromLabel(adapter, "maintainer");
 		assert.notEqual(admitted, "refused");
 		assert.notEqual(admitted, "ignored");
-		if (typeof admitted === "string") return;
+
+		if (admitted === "refused" || admitted === "ignored") return;
 
 		const fetched = await adapter.fetch(admitted.ticket);
 		assert.equal(fetched.title, "Add a thing");
@@ -99,6 +107,7 @@ describe("controller driven through the fake adapter", () => {
 			{ kind: "reviewed", blockingFindings: [] },
 			{ kind: "landed", mergeSha: "e".repeat(40) },
 		];
+
 		const done = apply(admitted, ...events);
 		await adapter.report(done.ticket, done);
 		await adapter.close(done.ticket, done);
@@ -116,14 +125,18 @@ describe("controller driven through the fake adapter", () => {
 	it("asks the ticket's questions when specify needs info", async () => {
 		const adapter = fixture();
 		const admitted = await admitFromLabel(adapter, "maintainer");
-		if (typeof admitted === "string") throw new Error(admitted);
+
+		if (admitted === "refused" || admitted === "ignored")
+			throw new Error(admitted);
 		const questions: [string, ...string[]] = ["Which database?"];
 		const done = apply(admitted, { kind: "needs_info", questions });
 		const outcome = outcomeOf(done);
 		assert.equal(outcome?.kind, "needs_info");
+
 		if (outcome?.kind === "needs_info") {
 			await adapter.ask(done.ticket, outcome.questions);
 		}
+
 		assert.deepEqual(adapter.calls, [
 			{ kind: "ask", ref: ticket, questions: ["Which database?"] },
 		]);
@@ -132,16 +145,21 @@ describe("controller driven through the fake adapter", () => {
 	it("rejects a patch that touches workflows and lands nothing", async () => {
 		const adapter = fixture();
 		const admitted = await admitFromLabel(adapter, "maintainer");
-		if (typeof admitted === "string") throw new Error(admitted);
+
+		if (admitted === "refused" || admitted === "ignored")
+			throw new Error(admitted);
+
 		const built = apply(
 			admitted,
 			{ kind: "specified", contractDigest },
 			{ kind: "accepted", acceptanceDigest },
 			{ kind: "built", patchDigest: patch("bad") },
 		);
+
 		const paths = checkChangedPaths({
 			changedPaths: ["src/a.ts", ".github/workflows/factory.yml"],
 		});
+
 		assert.equal(paths.kind, "forbidden");
 		const done = apply(built, { kind: "rejected", reason: "forbidden_paths" });
 		assert.deepEqual(outcomeOf(done), {
