@@ -4,8 +4,8 @@ This directory is the maintained source for verifying pi-herdr-factorio. Read th
 
 ## Baseline preconditions
 
-- Run `scripts/vm.sh scripts/doctor.sh` and require `doctor=ok`.
-- Commit the change under test, then run `scripts/lane-setup.sh <pr-id> <worker-n>`.
+- Run `.pi/skills/verify-factory/scripts/vm.sh .pi/skills/verify-factory/scripts/doctor.sh` and require `doctor=ok`.
+- Commit the change under test, then run `.pi/skills/verify-factory/scripts/lane-setup.sh <pr-id> <worker-n>`.
 - Work only in `/home/exedev/factory-verification/<pr-id>-w<n>/`.
 - Never drive a process this run did not start. Never run two controllers over the same issues.
 
