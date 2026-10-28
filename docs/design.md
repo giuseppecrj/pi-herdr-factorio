@@ -142,5 +142,6 @@ Riskiest unknowns first. Each unit ends in a check before the next starts.
 ## Known risks
 
 - **The model proxy key is on runners that execute generated code.** A prompt injection that survives admission could exfiltrate it. Mitigations: only maintainers can trigger, the key is dedicated to the factory and revocable, and the tailnet grant reaches only the proxy on 443. The residual risk is accepted for v1 and needs your sign-off.
+- **Public repo.** Secrets stay private, but logs and artifacts are readable by anyone, and anyone can write issue and comment text. So: only text from accounts with write access is ever fed to a model (issue bodies admitted by label, PR feedback filtered by author permission); nothing raw from a model run is uploaded, only redacted evidence; secrets live in a `main`-only environment; no workflow uses `pull_request_target`; and the Tailscale key is consumed by the join step and never reaches agent steps.
 - **Correlated blind spots.** The acceptance writer, the judge and the builder are all models. Using different families reduces this but does not remove it. The seeded-defect fixtures measure it, and that is the most we can claim.
 - **Merged means done for now.** This repo has no deployment. Publishing to npm stays a manual release until a deploy contract with a smoke check and a rollback exists.
