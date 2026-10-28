@@ -30,3 +30,4 @@ ts	phase	decision	why	evidence	result
 2026-10-28T21:28:04Z	vm	review seats are same-family and context-isolated until Anthropic is back	only one family is in use; disclosed rather than faked	docs/design.md	open
 2026-10-28T21:28:04Z	cleanup	removed the factory-skeleton and factory-herdr-probe worktrees, branches kept	owner approved; both were merged	worktree_remove	done
 2026-10-28T21:46:20Z	plan	wrote the v1 plan: 16 serial PRs, F04a to F13, all owner-merged under autopilot-stack	owner asked for a fully fleshed-out plan; pstack's multi-phase-plan playbook	docs/plans/factory-v1.md, check-plan: 16 PR sections, 0 problems	proposed
+2026-10-28T22:09:33Z	handoff	handed the project to a new session in herdr pane wQ:p1	owner is moving the whole setup to that session	docs/handoff.md	done
