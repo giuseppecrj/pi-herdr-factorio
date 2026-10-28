@@ -14,7 +14,7 @@ The factory is a Pi package plus a controller that runs on the exe.dev VM `pi-fa
 
 Run every command from the repository root of the checkout under test. Helpers live in `.pi/skills/verify-factory/scripts/`. Below, `S` means that directory.
 
-Read `features/README.md` for the feature map and the baseline rules before you drive anything.
+Read `.pi/skills/verify-factory/features/README.md` for the feature map and the baseline rules before you drive anything.
 
 ## Launch
 
@@ -47,13 +47,15 @@ Do not call `gh api user`. The integration is repository-scoped and that call fa
 
 Send multi-line scripts with `ssh host bash -s < script`. `vm.sh <script> [args]` does that for you. Never put a multi-line script inside an inline ssh string.
 
+`vm.sh` quotes each argument with bash `printf %q`, and the remote login shell parses that quoting. So the VM user's login shell must be bash. It is bash for `exedev` today.
+
 ```bash
 $S/vm.sh $S/drive-status.sh <pr-id> <worker-n>   # /factory status
 $S/vm.sh $S/drive-gh.sh <pr-id> <worker-n>       # gh repo, label and issue reads
 $S/vm.sh $S/drive-workflow.sh <pr-id> <worker-n> [branch...]  # workflow-check and status --json
 ```
 
-Feature recipes are in `features/`. Each lists the command and the observable result that proves it.
+Feature recipes are in `.pi/skills/verify-factory/features/`. Each lists the command and the observable result that proves it.
 
 Pi's print mode (`pi -p "/factory status"`) sends the text to the model instead of running the command, and spends credits. `status-driver.ts` registers the real extension on a stub Pi and calls the registered `factory` handler. That is the same handler Pi runs.
 

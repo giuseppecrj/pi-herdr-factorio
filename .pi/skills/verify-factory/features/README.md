@@ -1,6 +1,6 @@
 # Factory verification map
 
-This directory is the maintained source for verifying pi-herdr-factorio. Read this index, then use the matching feature file as the recipe.
+`.pi/skills/verify-factory/features/` is the maintained source for verifying pi-herdr-factorio. Read this index, then use the matching feature file in that directory as the recipe.
 
 ## Baseline preconditions
 
@@ -25,11 +25,11 @@ This directory is the maintained source for verifying pi-herdr-factorio. Read th
 
 ## Features
 
-- **VM doctor** (`vm-doctor.md`): VM reachability, tool versions, scoped repository read.
-- **Repository reads** (`gh-reads.md`): `gh` repo view, label list, issue list.
-- **Factory status command** (`factory-status.md`): `/factory status`.
-- **workflow-check** (`workflow-check.md`): load and validate the trusted `WORKFLOW.md` from a branch.
-- **status --json** (`status-json.md`): trusted settings and disabled execution as JSON, without a controller.
-- **admit** (`admit.md`): stub, not implemented.
-- **tick --once** (`tick-once.md`): stub, not implemented.
-- **serve** (`serve.md`): stub, not implemented.
+- **VM doctor** (`.pi/skills/verify-factory/features/vm-doctor.md`): VM reachability, tool versions, scoped repository read.
+- **Repository reads** (`.pi/skills/verify-factory/features/gh-reads.md`): `gh` repo view, label list, issue list.
+- **Factory status command** (`.pi/skills/verify-factory/features/factory-status.md`): `/factory status`.
+- **workflow-check** (`.pi/skills/verify-factory/features/workflow-check.md`): load and validate the trusted `WORKFLOW.md` from a branch.
+- **status --json** (`.pi/skills/verify-factory/features/status-json.md`): trusted settings and disabled execution as JSON, without a controller.
+- **admit** (`.pi/skills/verify-factory/features/admit.md`): stub, not implemented.
+- **tick --once** (`.pi/skills/verify-factory/features/tick-once.md`): stub, not implemented.
+- **serve** (`.pi/skills/verify-factory/features/serve.md`): stub, not implemented.
