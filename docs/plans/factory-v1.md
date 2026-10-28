@@ -506,7 +506,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Review gate.** The operator reviews before merge.
 
-- [ ] Post good/bad candidate receipts to the operator. Use logs and run URLs instead of a screenshot or video. Explain the bootstrap exception before asking the owner to merge the workflow. Do not call that bootstrap fully verified until the hosted lanes pass.
+- [ ] Post good/bad candidate receipts to the operator. Use logs and run URLs instead of a screenshot or video. Record the bootstrap exception in the PR before the root merges the workflow. Do not call that bootstrap fully verified until the hosted lanes pass.
 
 **Merge.**
 
@@ -996,9 +996,9 @@ No new sandbox, snapshot-at-label-time, main-gates, post-publication holdout, le
 
 ### R3. Main-owned configuration and CI need owner bootstraps
 
-`F04a` introduces the first `.github/factory/WORKFLOW.md`. Its parser and fail-closed behavior can be tested before merge, but a valid production-main read cannot be claimed before the owner lands that file. Keep those live checks pending through the owner bootstrap and complete them before dispatch is enabled. Never add an untrusted candidate-config fallback merely to make the test pass.
+`F04a` introduces the first `.github/factory/WORKFLOW.md`. Its parser and fail-closed behavior can be tested before merge, but a valid production-main read cannot be claimed before that file lands on `main`. The root merges it under the owner's build-PR grant. Keep those live checks pending until it lands, and complete them before dispatch is enabled. Never add an untrusted candidate-config fallback merely to make the test pass.
 
-`F07b`, `F07c`, and `F09a` own the CI trust path. The repository currently has no CI workflow after the old tailnet workflows were removed. A workflow that must come from `main` cannot prove its hosted dispatch path before it exists on `main`. The owner must land the bootstrap after local/container proof, with hosted boxes explicitly pending. This is an exception to normal all-lanes-before-merge, not a claimed full pass. If the owner does not accept it, stop the hosted path rather than run untrusted candidate workflow code as a substitute.
+`F07b`, `F07c`, and `F09a` own the CI trust path. The repository's only CI workflow is `.github/workflows/check.yml`, which runs the candidate's own `npm run check`. A workflow that must come from `main` cannot prove its hosted dispatch path before it exists on `main`. The root merges the bootstrap under the owner's build-PR grant after local and container proof, with the hosted boxes explicitly pending. This is an exception to the normal rule that every lane passes before merge, and it is not a claimed full pass. If that proof fails, stop the hosted path rather than run untrusted candidate workflow code as a substitute.
 
 The gate prototype must settle test import routing, dependencies, read-only trusted files, and result ownership. `F09a` must prove how the trusted validation result becomes a required candidate-SHA check without exposing a write credential to candidate code. Missing or unrelated checks never pass. Branch-rule mutations require the owner's separate authorization and may need manual application if the integration lacks permission.
 
@@ -1036,7 +1036,7 @@ These are every intentional template adaptation in this document.
 4. The template's cross-family reviewer language becomes context-isolated same-family seats under the owner's explicit interim model decision. The missing cross-family gate remains visible, not silently waived as passed.
 5. Every PR gets a full verdict before merge, including changes without a visual interaction. This is stricter than the template's optional interaction-only review gate. Since 2026-10-28 the root merges build PRs under the owner's grant. PRs the factory opens at runtime still stop for the owner.
 6. The dependency graph is one serial chain rather than a fabricated pair of independent first PRs. Shared contracts and the CI bootstrap justify that choice. Ten verifier lanes mean ten scenarios, not ten concurrent controllers on a two-vCPU VM. Read-only lanes may run concurrently, while mutation/resource-heavy scenarios use scoped fixtures and service capacity limits.
-7. The `F04a` main-owned configuration and the `F07b` main-owned CI workflow require owner bootstraps before their main-backed proof. These explicit exceptions do not create false all-green verdicts. The root still cannot merge either PR.
+7. The `F04a` main-owned configuration and the `F07b` main-owned CI workflow must land on `main` before their main-backed proof can run. The root merges both under the owner's build-PR grant. These explicit exceptions do not create false all-green verdicts. Their main-backed boxes stay pending until the post-merge checks pass.
 8. The playbook's prototype-before-plan and child investigation steps were constrained by this leaf's plan-only authorization. Existing prototypes are recorded, code was read directly, no children were launched, and unproved engineering choices became named prototype-first gates.
 9. The check script is not silent on success. It always prints one box-count line per PR and a summary. The success predicate is exit code 0 and `16 PR sections, 0 problems`, with no diagnostic lines. Its source was read before writing this plan.
 10. New CLI commands, runtime symbols, and paths are planned deliverables. Trunk lanes record unsupported features instead of pretending that the skeleton already runs the controller. Performance uses absolute budgets for new work rather than ratios to missing behavior.
