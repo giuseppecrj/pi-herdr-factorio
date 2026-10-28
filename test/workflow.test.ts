@@ -1116,3 +1116,49 @@ Run the suite.
 		assert.equal(first.snapshot.config.polling.intervalMs, 30_000);
 	});
 });
+
+describe("shell-command keys", () => {
+	const rootKeys = [
+		"Hooks",
+		"HOOKS",
+		'"hooks "',
+		"run",
+		"bash",
+		"before_run",
+		"after_create",
+		"hook",
+	];
+
+	for (const key of rootKeys) {
+		it(`rejects the top-level key ${key}`, () => {
+			const error = validation(frontMatter(`${key}: x`));
+
+			assert.equal(error.field, key.replaceAll('"', ""));
+			assert.match(error.message, /shell commands/);
+		});
+	}
+
+	const nested: [string, string][] = [
+		["polling:\n  Hooks: x", "polling.Hooks"],
+		["agent:\n  run: x", "agent.run"],
+		["workspace:\n  bash: x", "workspace.bash"],
+		["retry:\n  before_run: x", "retry.before_run"],
+		["usage:\n  Exec: x", "usage.Exec"],
+		["stages:\n  HOOK: x", "stages.HOOK"],
+		["stages:\n  build:\n    after_create: x", "stages.build.after_create"],
+		["checkpoints:\n  script: x", "checkpoints.script"],
+		[
+			"checkpoints:\n  approve_merge:\n    Shell: x",
+			"checkpoints.approve_merge.Shell",
+		],
+	];
+
+	for (const [lines, field] of nested) {
+		it(`rejects the shell-command key ${field}`, () => {
+			const error = validation(frontMatter(lines));
+
+			assert.equal(error.field, field);
+			assert.match(error.message, /shell commands/);
+		});
+	}
+});

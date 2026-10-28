@@ -227,6 +227,8 @@ function optionalEntries(
 	const entries = entriesOf(parent.get(key) ?? null, field);
 
 	for (const name of entries.keys()) {
+		rejectCommandKey(name, `${field}.${name}`);
+
 		if (!allowed.includes(name)) fail(`${field}.${name}`, "unknown key");
 	}
 
@@ -371,6 +373,8 @@ function stageEntries(
 		: new Map<string, YamlNode>();
 
 	for (const name of entries.keys()) {
+		rejectCommandKey(name, `${field}.${name}`);
+
 		if (name === "model" && !allowed.includes(name)) {
 			fail(
 				`${field}.model`,
@@ -499,7 +503,21 @@ const REJECTED_COMMAND_KEYS = [
 	"scripts",
 	"shell",
 	"exec",
+	"run",
+	"bash",
+	"before_run",
+	"after_create",
+	"hook",
 ];
+
+function rejectCommandKey(name: string, field: string): void {
+	if (REJECTED_COMMAND_KEYS.includes(name.trim().toLowerCase())) {
+		fail(
+			field,
+			"names shell commands, and the factory runs no commands from WORKFLOW.md",
+		);
+	}
+}
 
 type ConfigRead = { config: WorkflowConfig; warnings: string[] };
 
@@ -511,12 +529,7 @@ function readConfig(
 	const warnings: string[] = [];
 
 	for (const key of root.keys()) {
-		if (REJECTED_COMMAND_KEYS.includes(key)) {
-			fail(
-				key,
-				"names shell commands, and the factory runs no commands from WORKFLOW.md",
-			);
-		}
+		rejectCommandKey(key, key);
 
 		if (!ROOT_KEYS.includes(key)) warnings.push(`unknown key ${key} ignored`);
 	}

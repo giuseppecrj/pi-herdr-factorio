@@ -129,7 +129,7 @@ These rules apply to every key:
 
 - A value that starts with `$` is rejected in every field except `workspace.root`.
 - An unknown top-level key is ignored and listed in `warnings`.
-- The top-level keys `hooks`, `codex`, `command`, `commands`, `script`, `scripts`, `shell` and `exec` are rejected. The factory runs no commands from `WORKFLOW.md`.
+- The keys `hooks`, `hook`, `codex`, `command`, `commands`, `script`, `scripts`, `shell`, `bash`, `exec`, `run`, `before_run` and `after_create` are rejected at the top level and inside every known section. The match ignores case and surrounding spaces, so `Hooks` and `"hooks "` are rejected too. The factory runs no commands from `WORKFLOW.md`.
 - An unknown key inside `polling`, `agent`, `workspace`, `retry`, `usage`, `stages`, a stage or `checkpoints` is rejected.
 
 ## Guidance
