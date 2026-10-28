@@ -132,7 +132,9 @@ These rules apply to every key:
 
 ## Guidance
 
-The Markdown after the front matter is stage guidance. It is trimmed. A `## <stage>` heading outside a code fence starts that stage's section, and text before the first heading is general guidance. A heading that names no stage, or a stage named twice, fails validation with `field` set to `guidance`. The loader never renders, interpolates or executes guidance.
+The Markdown after the front matter is stage guidance. It is trimmed. A `## <stage>` heading outside a fenced code block starts that stage's section, and text before the first heading is general guidance. A heading that names no stage, or a stage named twice, fails validation with `field` set to `guidance`. The loader never renders, interpolates or executes guidance.
+
+Fenced code blocks follow CommonMark. A fence opens with three or more backticks or tildes, indented by up to three spaces. A backtick fence's info string cannot contain a backtick. The fence closes only on a line of the same character, at least as long as the opening, indented by up to three spaces, with nothing after it but spaces or tabs. A fence that never closes runs to the end of the file.
 
 ## Reload
 

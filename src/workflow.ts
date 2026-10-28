@@ -577,19 +577,47 @@ function readConfig(
 	return { config, warnings };
 }
 
+type Fence = { readonly char: string; readonly length: number };
+
+function fenceOpening(line: string): Fence | null {
+	const match = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+	const marker = match?.[1];
+
+	if (marker === undefined) return null;
+
+	const char = marker.charAt(0);
+
+	// CommonMark: a backtick fence's info string cannot contain a backtick.
+	if (char === "`" && (match?.[2] ?? "").includes("`")) return null;
+
+	return { char, length: marker.length };
+}
+
+function closesFence(line: string, fence: Fence): boolean {
+	const marker = /^ {0,3}(`+|~+)[ \t]*$/.exec(line)?.[1];
+
+	return (
+		marker !== undefined &&
+		marker.charAt(0) === fence.char &&
+		marker.length >= fence.length
+	);
+}
+
 function readGuidance(body: string): Guidance {
 	const sections = new Map<string, string[]>();
 	const general: string[] = [];
 	let current = general;
-	let fence: string | null = null;
+	let fence: Fence | null = null;
 
 	for (const line of body.split("\n")) {
-		const marker = /^(`{3,}|~{3,})/.exec(line)?.[1];
+		if (fence !== null) {
+			if (closesFence(line, fence)) fence = null;
 
-		if (marker !== undefined) {
-			if (fence === null) fence = marker[0] ?? null;
-			else if (marker.startsWith(fence)) fence = null;
+			current.push(line);
+			continue;
 		}
+
+		fence = fenceOpening(line);
 
 		const heading =
 			fence === null ? /^## +(.+?)\s*$/.exec(line)?.[1] : undefined;

@@ -987,3 +987,51 @@ describe("reload verification", () => {
 		});
 	}
 });
+
+describe("guidance code fences", () => {
+	const fenced: [string, string][] = [
+		[
+			"a 4-backtick fence around 3 backticks",
+			"````\n```\n## unknown\n```\n````",
+		],
+		["an indented fence", "   ```\n## unknown\n   ```"],
+		[
+			"an info string that is not a close",
+			"```\n```not-a-close\n## unknown\n```",
+		],
+		["a tilde fence", "~~~\n## unknown\n~~~"],
+		[
+			"a tilde fence with a non-closing line",
+			"~~~\n~~~not-a-close\n```\n## unknown\n~~~",
+		],
+		["a closing fence longer than the opening", "```\n## unknown\n`````"],
+		["an indented closing fence", "~~~~\n## unknown\n   ~~~~  "],
+	];
+
+	for (const [name, block] of fenced) {
+		it(`keeps a heading inside ${name} as guidance text`, () => {
+			const parsed = parse(
+				`${frontMatter("")}\n## build\n${block}\n\n## review\nRead it.\n`,
+			);
+
+			assert.equal(parsed.kind, "valid", JSON.stringify(parsed));
+
+			if (parsed.kind !== "valid") return;
+
+			assert.match(parsed.guidance.stages.build ?? "", /## unknown/);
+			assert.equal(parsed.guidance.stages.review, "Read it.");
+		});
+	}
+
+	it("ends a fence only on a matching close", () => {
+		const parsed = parse(
+			`${frontMatter("")}\n## build\n\`\`\`\ncode\n\`\`\`\n## deploy\n`,
+		);
+
+		assert.equal(parsed.kind, "invalid");
+
+		const indented = parse(`${frontMatter("")}\n    \`\`\`\n## deploy\n`);
+
+		assert.equal(indented.kind, "invalid");
+	});
+});
