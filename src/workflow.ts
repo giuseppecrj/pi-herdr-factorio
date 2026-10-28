@@ -1,5 +1,14 @@
 import { isAbsolute, normalize } from "node:path/posix";
-import { isMap, isScalar, type ParsedNode, parseDocument } from "yaml";
+import {
+	type Document,
+	isAlias,
+	isMap,
+	isScalar,
+	LineCounter,
+	type ParsedNode,
+	parseDocument,
+	visit,
+} from "yaml";
 import { type Digest, digestOf, type Stage } from "./run.ts";
 import { STAGE_ORDER } from "./stages.ts";
 
@@ -674,7 +683,8 @@ function splitFrontMatter(text: string): FrontMatter {
 
 	return {
 		kind: "split",
-		frontMatter: lines.slice(1, end).join("\n"),
+		// A blank first line keeps YAML positions equal to WORKFLOW.md lines.
+		frontMatter: ["", ...lines.slice(1, end)].join("\n"),
 		body: lines
 			.slice(end + 1)
 			.join("\n")
@@ -714,11 +724,30 @@ export function parseWorkflow(input: {
 		});
 	}
 
-	const document = parseDocument(split.frontMatter, { schema: "failsafe" });
+	const lineCounter = new LineCounter();
+
+	const document = parseDocument(split.frontMatter, {
+		schema: "failsafe",
+		lineCounter,
+	});
+
 	const problem = document.errors[0] ?? document.warnings[0];
 
 	if (problem !== undefined) {
 		return invalid({ kind: "workflow_parse_error", message: problem.message });
+	}
+
+	const references = anchorsAndAliases(
+		document,
+		split.frontMatter,
+		lineCounter,
+	);
+
+	if (references !== null) {
+		return invalid({
+			kind: "workflow_parse_error",
+			message: `anchors and aliases are not allowed: ${references}`,
+		});
 	}
 
 	if (!isMap(document.contents)) {
@@ -748,6 +777,38 @@ export function parseWorkflow(input: {
 			message: `${error.field} ${error.message}`,
 		});
 	}
+}
+
+function anchorsAndAliases(
+	document: Document.Parsed,
+	source: string,
+	lineCounter: LineCounter,
+): string | null {
+	const found: string[] = [];
+
+	const at = (offset: number): string => {
+		const { line, col } = lineCounter.linePos(offset);
+
+		return `at line ${line}, column ${col}`;
+	};
+
+	visit(document, {
+		Node: (_key, node) => {
+			const start = node.range?.[0] ?? 0;
+
+			if (isAlias(node)) {
+				found.push(`alias *${node.source} ${at(start)}`);
+			} else if (node.anchor !== undefined) {
+				const offset = source.lastIndexOf(`&${node.anchor}`, start);
+
+				found.push(
+					`anchor &${node.anchor} ${at(offset === -1 ? start : offset)}`,
+				);
+			}
+		},
+	});
+
+	return found.length === 0 ? null : found.join("; ");
 }
 
 function redactError(error: WorkflowError): WorkflowError {

@@ -1035,3 +1035,29 @@ describe("guidance code fences", () => {
 		assert.equal(indented.kind, "invalid");
 	});
 });
+
+describe("YAML anchors and aliases", () => {
+	const cases = [
+		[
+			"a valid alias",
+			"common: &common\n  max_turns: 3\nstages:\n  review: *common",
+			/alias \*common at line 6/,
+		],
+		["an unresolved alias", "future: *missing", /alias \*missing at line 3/],
+		[
+			"an anchor without an alias",
+			"polling: &p\n  interval_ms: 30000",
+			/anchor &p at line 3/,
+		],
+	] as const;
+
+	for (const [name, lines, location] of cases) {
+		it(`rejects ${name} as a parse error naming its location`, () => {
+			const error = errorOf(frontMatter(lines));
+
+			assert.equal(error.kind, "workflow_parse_error");
+			assert.match(error.message, /anchors and aliases are not allowed/);
+			assert.match(error.message, location);
+		});
+	}
+});

@@ -46,7 +46,7 @@ A branch name contains only letters, digits, `.`, `_`, `-` and `/`. It does not 
 | --- | --- |
 | `source_unavailable` | The branch did not resolve to a SHA: it does not exist, the name is invalid, or `gh` failed. `sha` is `null`. |
 | `missing_workflow_file` | The branch resolved, but fetching `WORKFLOW.md` at that SHA failed. The message says `not found` for HTTP 404 and gives `gh`'s first stderr line otherwise. |
-| `workflow_parse_error` | The front matter has no closing `---`, or its YAML has an error or a warning, such as a duplicate key or an unresolved tag. |
+| `workflow_parse_error` | The front matter has no closing `---`, its YAML has an error or a warning, such as a duplicate key or an unresolved tag, or it uses an anchor or alias. Line numbers count from the first line of `WORKFLOW.md`. |
 | `workflow_front_matter_missing` | The file does not start with a `---` line. Front matter is required. |
 | `workflow_front_matter_not_a_map` | The front matter is empty or is not a YAML map. |
 | `workflow_validation_error` | A field failed validation. `field` holds its dotted YAML path, such as `stages.build.max_turns`, `guidance` or `hooks`. |
@@ -105,6 +105,8 @@ The Pi extension command shows the same workflow state as text. It finds the rep
 ## Configuration
 
 The front matter of `.github/factory/WORKFLOW.md` is a YAML map. The loader uses YAML's failsafe schema, so every value is read as text and then converted. Integers accept an optional sign and digits only.
+
+Anchors (`&name`) and aliases (`*name`) are not allowed anywhere in the front matter. The loader does not resolve them. Each one fails the load as `workflow_parse_error`, and the message lists every anchor and alias with its line and column. Write each value out in full instead.
 
 | Field | Type | Default | Rule |
 | --- | --- | --- | --- |
