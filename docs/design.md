@@ -1,32 +1,81 @@
 # Factory design
 
-Status: proposed, 2026-10-28. Built from `research/SYNTHESIS.md` and `research/reports/`. Owner decisions so far: GitHub Issues first with Linear next, GitHub-hosted runners on this public repo, runners join the tailnet for model access, full autonomy through merge, pstack is a dependency, and the factory's first target is this repository.
+Status: proposed, 2026-10-28. Built from `research/SYNTHESIS.md` and `research/reports/`. Owner decisions so far:
+
+- GitHub Issues first, Linear next.
+- Full autonomy through merge, with opt-in human checkpoints.
+- pstack is a dependency.
+- The factory's first target is this repository.
+- Runtime is a controller server on an exe.dev VM, with checks in GitHub-hosted CI, shaped after OpenAI's Symphony.
 
 ## What done means
 
-v1 is done when all of these hold on `giuseppecrj/pi-herdr-factorio`, observed on real Actions runs:
+v1 is done when all of these hold on `giuseppecrj/pi-herdr-factorio`, observed on the real VM and real GitHub:
 
 1. A maintainer labels an issue `factory:ready`. With no further human action, a commit lands on `main`, the issue closes with an evidence comment, and the ledger gains a row for the run.
-2. That commit passed the repository's checks and a held-out acceptance suite that was written from the ticket before any code existed, by a different model family than the builder, and was never visible to the builder.
-3. The same label applied by an account without write access starts nothing visible beyond an admission refusal.
-4. With the kill switch off, a labeled issue starts nothing.
-5. A seeded known-bad patch is rejected by the validate stage, and nothing lands.
+2. That commit passed `main`'s gates and a held-out acceptance suite in GitHub-hosted CI. The suite was written from the ticket before any code existed, by a different model family than the builder, and the builder never saw it.
+3. The same label applied by an account without write access starts no run.
+4. With the kill switch off, a labeled issue starts no run.
+5. A seeded known-bad patch fails CI, and nothing lands.
 6. A ticket too vague to specify ends as `needs_info` with its questions on the issue, and re-labeling after an answer resumes it.
+7. A patch that matches a checkpoint rule waits for a human approval and lands only after it.
+8. Restarting the controller mid-run neither loses the run nor starts a second one.
 
 Rigor is high. Auto-merging to the default branch of a public repo from issue text is the riskiest thing this system does, and issue text is untrusted input.
 
+## Shape
+
+```text
+GitHub ──webhook (Funnel, signed)──▶ exe.dev VM: controller ──Pi RPC in sandbox──▶ agents
+   ▲                                     │   holds: GitHub App key, proxy key       │
+   │                                     │   tailnet: tag:factory-server → cliproxy │
+   └──push, PR, comment, merge (App)─────┘◀──────────── patch, findings ───────────┘
+GitHub-hosted CI: main's gates + held-out acceptance on the PR head, no secrets, no tailnet
+```
+
+- **The VM is the brain.** It receives events, decides, runs agents, and is the only thing that writes to GitHub.
+- **CI is the judge.** It runs on a fresh GitHub VM with nothing to steal, and branch protection makes its result a hard merge requirement that neither the controller nor an agent can switch off.
+- **GitHub holds no model or Tailscale credential** once the VM is live. The `TS_AUTHKEY` and `CLIPROXYAPI_*` repo secrets are deleted then.
+
+## Relation to Symphony
+
+Symphony's spec (`openai/symphony` `SPEC.md`, pinned at `be10a1b`) is the template for the coordination layer. Where we copy it, we copy its semantics, not just its names.
+
+| Symphony | Here | Same or different |
+| --- | --- | --- |
+| Long-running daemon reading a tracker | controller on the VM | same |
+| Poll tick with reconciliation before dispatch (§8.1, §8.5) | webhooks for speed, plus a 60 s reconcile tick as the safety net | same tick, webhooks added |
+| One authoritative state; `claimed` and `running` checked before dispatch (§7.4) | same, plus a `waiting` state for human checkpoints | extended |
+| Retry with backoff `min(10000·2^(n−1), max)`, stall timeout, bounded concurrency (§8.3, §8.4) | same formulas and defaults, concurrency starts at 2 | same |
+| Restart recovery from the tracker and filesystem, no database (§7.4) | from the issue's run marker comment, the PR and the workspace | same idea |
+| Per-issue workspace, sanitized key, cwd and root invariants (§9.5) | same invariants, plus a rootless container per stage | stricter |
+| Repo-owned `WORKFLOW.md`, front matter config, hot reload (§5, §6.2) | `.github/factory/WORKFLOW.md` with the same loader rules | same, but placed under `.github/` so the factory cannot edit it |
+| Tracker adapter normalizing issues (§11) | `TicketAdapter`, GitHub first, Linear second | same |
+| One agent session that loops turns until the issue leaves an active state (§7.1) | fixed stages, each a fresh Pi session running one skill | **different** |
+| Agent writes to the tracker and PR with its own tools (§11.5) | only the controller writes, with the App token | **different** |
+| User-input request fails the attempt (§10.5) | the stage ends `needs_info` and the questions go on the ticket | same intent |
+| Success can end at `Human Review` | lands automatically unless a checkpoint rule matches | **different** |
+| "Proof of work: CI status" | CI is a required gate and also runs the held-out suite | stricter |
+
+Why the three real differences:
+
+- **Fixed stages instead of one looping session.** In Symphony the prompt decides when the work is done. With no human reading the result, "done" has to be decided by code: the validate and review stages, then CI. Fresh sessions per stage also keep the builder away from the acceptance suite.
+- **The agent never writes to GitHub.** Symphony assumes a trusted environment. Our input is public issue text. An agent that can comment, push or merge is one prompt injection away from doing it wrongly, so it gets no write credential at all.
+- **Automatic landing.** You chose full autonomy. Symphony's human acceptance step becomes our checkpoint policy, used only where you ask for it.
+
 ## The data
 
-Everything hangs off one record per ticket attempt.
-
 ```ts
-type TicketRef = { provider: "github" | "linear"; key: string; url: string };
-
 type Stage = "admit" | "specify" | "accept" | "build" | "validate" | "review" | "land";
+
+type Progress =
+  | { kind: "active"; stage: Stage }
+  | { kind: "waiting"; checkpoint: "contract" | "merge"; reasons: NonEmpty<string> }
+  | { kind: "finished"; outcome: Outcome };
 
 type Outcome =
   | { kind: "landed"; mergeSha: string }
-  | { kind: "needs_info"; questions: string[] }
+  | { kind: "needs_info"; questions: NonEmpty<string> }
   | { kind: "rejected"; reason: "policy" | "unauthorized" | "disabled" | "forbidden_paths" }
   | { kind: "failed"; stage: Stage; evidence: string }
   | { kind: "budget_exhausted"; stage: Stage }
@@ -37,23 +86,24 @@ interface Run {
   ticket: TicketRef;
   repo: string;
   baseSha: string;
-  contractDigest?: string;
-  acceptanceDigest?: string;
-  patchDigest?: string;
-  verdict?: { patchDigest: string; pass: boolean; checks: CheckResult[] };
+  contractDigest?: Digest;
+  acceptanceDigest?: Digest;
+  patchDigest?: Digest;
+  verdict?: Verdict;          // always names the patch digest it judged
   repairRounds: number;
-  outcome?: Outcome;
+  progress: Progress;
 }
 ```
 
-A run moves forward through `Stage` or ends in exactly one `Outcome`. Stages are fixed by the controller. The model never chooses the next stage and never chooses whether a gate passed.
+`src/run.ts` and `src/stages.ts` implement this, except `waiting`, which arrives with the checkpoint unit. `advance(run, event)` is pure. The model never chooses the next stage and never decides whether a gate passed.
 
-Ticket systems sit behind one interface, so Linear is a second implementation, not a rewrite:
+The controller's scheduling state follows Symphony §4.1.8: `running`, `claimed`, `retry_attempts`, totals. Each run also writes a marker comment on its issue (`<!-- factory:run {...} -->`), so a restarted controller can rebuild its state from GitHub alone.
 
 ```ts
 interface TicketAdapter {
   normalize(event: unknown): FactoryEvent | null;
-  fetch(ref: TicketRef): Promise<Ticket>;
+  fetchCandidates(): Promise<Ticket[]>;
+  fetchStates(refs: TicketRef[]): Promise<Map<string, TicketState>>;
   canAdmit(ref: TicketRef, actor: string): Promise<boolean>;
   report(ref: TicketRef, run: Run): Promise<void>;
   ask(ref: TicketRef, questions: string[]): Promise<void>;
@@ -61,89 +111,89 @@ interface TicketAdapter {
 }
 ```
 
-`FactoryEvent` is `ready`, `answered`, `cancelled`, or `pr_feedback`. GitHub produces it from `issues.labeled`, `issue_comment` and `pull_request_review`. Linear will produce it from agent-session webhooks relayed to `repository_dispatch` by a small receiver, which v2 adds.
+## Stages
 
-## Pipeline
-
-Each stage is its own Actions job on its own fresh runner. Runner separation is the isolation boundary: a job only sees the artifacts the controller hands it and the token permissions its job declares.
-
-| Stage | Skill source | Model access | GitHub token | Output |
+| Stage | Runs where | Skill source | Credentials inside the sandbox | Output |
 | --- | --- | --- | --- | --- |
-| admit | none, deterministic | no | `issues: write` | snapshot of the issue at label time, or `rejected` |
-| specify | audit-ticket (clean-room), grill-me + grilling (Pocock, MIT), deep-research (Pocock, MIT) when needed | yes | read | `contract.md`: behavior, exclusions, acceptance criteria, non-functional limits; or `needs_info` |
-| accept | new skill, from StrongDM's scenario holdout idea | yes, a different family from build | read | held-out acceptance tests as an artifact, never committed before landing |
-| build | pstack Feature or Bug fix playbook, tdd | yes | read | a patch artifact plus visible tests; no push |
-| validate | none for checks; an LLM judge only for criteria a test cannot express | judge only, different family from build | read | `verdict.json` bound to the patch digest |
-| review | code-review (Anthropic, Apache-2.0), security-review (Anthropic, MIT), simplify (own), ultrareview (own, multi-family) on high-risk patches | yes | read | findings; blocking findings send the run back to build |
-| land | none, deterministic | no | `contents: write`, `pull-requests: write`, `issues: write` | branch, PR with evidence, squash merge on the exact validated head |
+| admit | controller | none, deterministic | none | issue snapshot at label time, or `rejected` |
+| specify | sandbox | audit-ticket (clean-room), grill-me + grilling (Pocock, MIT), deep-research (Pocock, MIT) when needed | proxy key | `contract.md`, or `needs_info` |
+| accept | sandbox, separate from build | new skill, from StrongDM's scenario holdout idea | proxy key, a different model family from build | held-out acceptance tests, kept on the VM |
+| build | sandbox | pstack Feature or Bug fix playbook, tdd | proxy key | a patch plus visible tests |
+| validate | controller + CI | main's gates and the held-out suite in CI; an LLM judge on the VM only for criteria a test cannot express | judge: proxy key | `verdict.json` bound to the PR head SHA |
+| review | sandbox | code-review (Anthropic, Apache-2.0), security-review (Anthropic, MIT), simplify (own), ultrareview (own, via pstack interrogate) on high-risk patches | proxy key | findings; blocking findings send the run back to build |
+| land | controller | none, deterministic | none in a sandbox; the controller uses the App token | squash merge of the exact verified head |
 
-Rules the controller enforces in code:
+### Rules enforced in code
 
 - **Admission.** Only a `factory:ready` label applied by an account with write access counts. The issue body is snapshotted at that moment. Later edits are data for a new run, not permission for this one.
-- **Kill switch.** Repo variable `FACTORY_ENABLED`. Every job checks it before side effects, and land checks it again right before merging.
-- **One run per ticket.** Actions `concurrency: factory-issue-<number>` with `cancel-in-progress: false`.
-- **The builder cannot see or edit the oracle.** The acceptance suite lives in an artifact the build job never downloads. Validate applies the patch to the base, then adds the suite, so a patch that touches the suite's paths is rejected.
+- **Kill switch.** Repo variable `FACTORY_ENABLED` plus a local flag file on the VM. Either one off stops new dispatch. Land re-checks both right before merging.
+- **One run per ticket.** Symphony's claim rule in the controller, with the issue marker as the record that survives restarts.
+- **The builder never sees the oracle.** The acceptance suite stays on the VM until build has finished. The controller then pushes it as its own commit on the PR branch under `test/acceptance/<ticket>/`. A builder patch that touches that path is rejected. In a repair round, the builder gets the names of failing scenarios, not their code.
+- **Gates come from `main`, not the patch.** CI checks out `main`'s gate script, test files and check config and runs them against the candidate, then runs the candidate's own new tests and the held-out suite. A patch that edits `package.json` scripts or deletes tests cannot weaken the gate that judges it.
 - **Hard failures veto.** No review verdict or judge score overrides a failing check.
-- **Bounded repair.** At most two rounds back to build, and each round re-runs validate and review on the new patch.
-- **Land only what passed.** Land merges only if the PR head's tree matches the validated patch applied to the base, using `gh pr merge --squash --match-head-commit`.
-- **Gates come from the base, not the patch.** Validate runs the base branch's check commands and test files against the candidate. A patch that edits `package.json` scripts, deletes tests or changes a script CI calls cannot weaken the gate that judges it.
-- **Forbidden paths.** The factory cannot change anything under `.github/`, because composite actions, CODEOWNERS and dependabot config steer the gates as much as workflow files do. For `.github/workflows/` itself, GitHub also enforces it: neither Actions' `GITHUB_TOKEN` nor an App without the `workflows` permission can push there. A ticket that needs a workflow change ends `rejected: forbidden_paths` with the proposed patch attached to the issue. Lifting this later needs a GitHub App and a separate promotion path that judges factory changes with the previous trusted policy.
-- **Budgets.** Every job has `timeout-minutes`, repair rounds are capped, and the controller writes model and runner time per stage to the ledger.
+- **Bounded repair.** At most two rounds back to build. Each round re-runs CI and review on the new head.
+- **Land only what passed.** Merge uses `--match-head-commit` with the SHA the verdict names.
+- **Forbidden paths.** Nothing under `.github/`. Composite actions, CODEOWNERS, dependabot config and the factory's own `WORKFLOW.md` steer the gates. The App has no `workflows` permission, so GitHub also enforces this for workflow files. A ticket that needs such a change stops at the merge checkpoint with the patch attached.
+- **Budgets.** Per-stage turn and wall-clock limits from `WORKFLOW.md`, Symphony's stall timeout, capped repair rounds, and model and runtime totals per run in the ledger.
 
-One GitHub quirk shapes land. Pull requests opened with `GITHUB_TOKEN` do not start other workflows without approval, so required checks cannot come from a separate PR workflow. Instead, land posts a `factory/validate` commit status from the verdict, and branch protection on `main` requires it. A separate `ci.yml` runs the same checks and posts the same status for human PRs.
+## Sandbox
+
+Each stage runs Pi in RPC mode inside a rootless container on the VM. The controller waits for `agent_settled`, not `agent_end`.
+
+- **Mounts.** Only the issue workspace is mounted. No host home and no controller state.
+- **Network.** Egress is limited to the model proxy and the package registries the repo needs.
+- **Credentials.** The only one inside is a proxy key. No GitHub token and no App key.
+- **Fan-out.** Herdr runs headless inside the container for pstack's fan-out skills. That was verified on a GitHub runner in `docs/prototypes/herdr-on-runner.md`. The VM is the same pattern with more room.
+
+A per-issue directory is not a security boundary on its own. Symphony says so too, and leaves it to the host. The container is our boundary.
 
 ## Human checkpoints
 
-The default is no human. A repo can name the decisions it wants a person to see, and only those runs stop and wait.
-
-The rules live in `.github/factory-policy.yml`, which is under `.github/`, so the factory can never edit its own checkpoints:
+The default is no human. `.github/factory/WORKFLOW.md` front matter can name the decisions that need one:
 
 ```yaml
-approve_contract:          # pause after specify, before any code
-  labels: ["factory:plan-first"]
-  when: [architecture_change, public_api_change]
-approve_merge:             # pause after review, before land
-  paths: ["src/policy.ts", "src/stages.ts", "skills/**", "package.json"]
-  when: [new_dependency, migration, security_finding_accepted]
-  diff_lines_over: 400
+checkpoints:
+  approve_contract:
+    labels: ["factory:plan-first"]
+    when: [architecture_change, public_api_change]
+  approve_merge:
+    paths: ["src/policy.ts", "src/stages.ts", "skills/**", "package.json"]
+    when: [new_dependency, migration, security_finding_accepted]
+    diff_lines_over: 400
 ```
 
-- **Two checkpoints, same mechanism.** `approve_contract` shows the person the contract and acceptance criteria before anything is built, which is the cheap place to catch a wrong direction. `approve_merge` shows the finished PR with its evidence.
-- **How waiting works.** The run moves to a `waiting` state with the reason, the PR or contract link and a request for review from the owner. Nothing runs while it waits. An `Approve` review from an account with write access, on the exact head SHA, resumes it into land. `Request changes` becomes a feedback round. A new push invalidates an earlier approval.
-- **Who enforces it.** Path rules also go into `CODEOWNERS` with "require review from code owners" on `main`, so GitHub itself blocks the merge, and the factory's App cannot approve its own PR. Rules GitHub cannot express (new dependency, migration, diff size) are evaluated by the deterministic land code using `main`'s copy of the policy file.
-- **Classifying the patch.** The `when` signals come from code, not a model: lockfile changes for `new_dependency`, files under migration directories for `migration`, an exported-symbol diff for `public_api_change`. A model may add a signal but never remove one.
-- **Forbidden paths become checkpoints where it helps.** A ticket that needs a `.github/` change can stop at `approve_merge` with the patch attached instead of being rejected. A human with workflow rights then applies it.
-
-In the data model, `Progress` gains `{ kind: "waiting"; checkpoint: "contract" | "merge"; reasons: NonEmpty<string> }`, and `RunEvent` gains `approved` and `changes_requested`.
+- **Two checkpoints.** `approve_contract` pauses after specify, before any code. `approve_merge` pauses after review, before land.
+- **Waiting.** The run moves to `waiting` and requests review from the owner. Nothing runs and no budget is spent while it waits.
+- **Resuming.** An `Approve` review on the exact head SHA, from an account with write access, resumes the run. `Request changes` becomes a feedback round. A new push invalidates an earlier approval.
+- **Enforcement.** Path rules are mirrored in `CODEOWNERS` with "require review from code owners" on `main`, so GitHub blocks the merge. The App cannot approve its own PR. Other rules are evaluated by land using `main`'s copy of `WORKFLOW.md`.
+- **Signals come from code.** Lockfile changes mean `new_dependency`, files under a migrations directory mean `migration`, and an exported-symbol diff means `public_api_change`. A model may add a signal but never remove one.
 
 ## Feedback and cadence
 
-- **PR feedback.** A review or comment on an open factory PR triggers address-pr-comments (mnapoli, MIT) as a build round with the comments as input. It cannot push or reply itself. Land does both. Feedback on an already-merged PR becomes a new issue labeled `factory:proposed`.
-- **Scheduled jobs**, weekly at first:
+- **PR feedback.** A review or comment on an open factory PR, from an account with write access, triggers address-pr-comments (mnapoli, MIT) as a build round. It cannot push or reply; the controller does both. Feedback on a merged PR becomes a new `factory:proposed` issue.
+- **Scheduled jobs**, weekly at first. Each files `factory:proposed` issues and changes no code:
   - improve-codebase-architecture (Pocock, MIT) with codebase-design and domain-modeling;
   - security-review over the whole repo;
   - audit-instructions (melodic-software, MIT, `--unattended`);
   - agent-loop-hygiene (owner skill, adapted) over the ledger.
-
-  Each one files issues labeled `factory:proposed`, and none of them changes code directly.
-- **Self-improvement.** agent-loop-spec (owner skill, adapted) defines the factory's metric. The first metric is the share of `factory:ready` tickets that land with zero repair rounds and no follow-up defect within a week. pstack's `reflect`, adapted to read the ledger instead of a transcript, proposes skill and prompt changes as `factory:proposed` issues. Changes to the factory's own skills go through the same pipeline, but their acceptance suite is a fixed corpus of past tickets replayed against the previous version.
+- **Self-improvement.** agent-loop-spec (owner skill, adapted) defines the metric: the share of `factory:ready` tickets that land with zero repair rounds and no follow-up defect within a week. pstack's `reflect`, adapted to read the ledger, files skill and prompt proposals as `factory:proposed` issues. Changes to the factory's own skills are judged against a fixed corpus of past tickets replayed on the previous version.
 
 ## Ledger and evidence
 
-Each run appends one JSON line to `ledger/runs.jsonl` on an orphan branch `factory/ledger`, written only by land. Stage artifacts (contract, acceptance suite, patch, verdict, review findings, Pi session files with secrets redacted) are uploaded per job and linked from the issue's evidence comment. The ledger is what agent-loop-hygiene and reflect read.
+Each finished run appends one JSON line to `ledger/runs.jsonl` on the orphan branch `factory/ledger`, written only by the controller. Raw Pi sessions stay on the VM. Only redacted evidence (contract, verdict, findings, CI links) is posted to the issue, because this repo is public.
 
 ## Package layout
 
 ```text
 package.json          pi manifest: extension + skills; peer deps pi, pi-herdr-pstack
-extension/            /factory run <issue> for local runs, /factory status
+extension/            /factory status, /factory run <issue> for local runs
 skills/               adapted upstream skills, each with SOURCE.md and its license or NOTICE
-src/                  controller: run state, stage table, policy, adapters, ledger
-.github/workflows/    factory.yml, factory-feedback.yml, factory-cadence.yml, ci.yml, model-smoke.yml
-test/                 controller unit tests with a fake TicketAdapter; seeded-bad-patch fixture
+src/                  run state, stages, policy, adapters, orchestrator, workflow loader
+server/               the VM service entry: webhook receiver, tick loop, sandbox runner
+.github/workflows/    ci.yml (gates + acceptance), model-smoke.yml, herdr-probe.yml
+.github/factory/      WORKFLOW.md: config front matter and repo-specific stage guidance
+test/                 unit tests with fake adapters; seeded-bad-patch fixture
 ```
-
-The same stage table drives two executors. In CI, each stage is an Actions job running `pi -p`. Locally, `/factory run` drives the same stages in one Pi session and can use Herdr panes when they exist.
 
 ## Build order
 
@@ -151,22 +201,36 @@ Riskiest unknowns first. Each unit ends in a check before the next starts.
 
 | # | Unit | Check |
 | --- | --- | --- |
-| 0 | Model access from a hosted runner over the tailnet | `model-smoke` run prints `factory-smoke-ok` |
-| 1 | Can Herdr run headless on a hosted runner? Decides whether pstack's fan-out skills (interrogate, architect) work in CI or get a sequential `pi -p` fallback | VERIFIED: run 40768344796, one child, 10 s setup (`docs/prototypes/herdr-on-runner.md`) |
-| 2 | Package skeleton: manifest, controller types, stage table, fake adapter, `npm run check` | unit tests green; `pi -e .` loads the extension and lists factory skills |
-| 3 | admit + kill switch + GitHub adapter | tests 3 and 4 of the definition of done on a real issue |
-| 4 | specify + accept | a vague issue ends `needs_info`; a clear one yields a contract and a held-out suite |
-| 5 | build + validate | the seeded bad patch is rejected; a good one gets a passing verdict |
-| 6 | review + bounded repair | a planted vulnerability produces a blocking finding and a repair round |
-| 7 | land + branch protection + ledger | definition-of-done test 1 end to end |
-| 8 | PR feedback | a review comment on an open factory PR produces a new round |
-| 9 | cadence jobs | one scheduled run files `factory:proposed` issues |
-| 10 | self-improvement loop | metric computed from the ledger; reflect files one proposal |
-| 11 | Linear adapter and receiver | the same tests driven from a Linear issue |
+| 0 | Model access from a hosted runner over the tailnet | VERIFIED: run 40767252647 |
+| 1 | Herdr headless on a Linux runner | VERIFIED: run 40768344796 (`docs/prototypes/herdr-on-runner.md`) |
+| 2 | Package skeleton and pure controller core | VERIFIED: `npm run check` 60/60, commit `db91d1a` |
+| 3 | VM bring-up: tailnet node, Pi, provider, Herdr, Funnel route, GitHub App webhook | from the VM, `pi -p` answers; a GitHub App ping passes signature verification |
+| 4 | Orchestrator: Symphony claims, reconcile tick, retries, stall; GitHub adapter; admit; kill switch; marker recovery | tests 3, 4 and 8 of the definition of done |
+| 5 | Sandbox runner: Pi RPC in a rootless container with egress limits | an agent inside cannot read the App key or reach GitHub's API |
+| 6 | specify + accept | a vague issue ends `needs_info`; a clear one yields a contract and a held-out suite |
+| 7 | build + CI gates from `main` + held-out suite in CI | the seeded bad patch fails CI; a good one passes |
+| 8 | review + bounded repair | a planted vulnerability produces a blocking finding and a repair round |
+| 9 | land + branch protection + checkpoints + ledger | tests 1, 2 and 7 end to end |
+| 10 | PR feedback | a write-access review comment on an open factory PR produces a new round |
+| 11 | cadence jobs | one scheduled run files `factory:proposed` issues |
+| 12 | self-improvement loop | the metric computed from the ledger; reflect files one proposal |
+| 13 | Linear adapter on the same receiver | the same tests driven from a Linear issue |
+
+## Owner setup for unit 3
+
+- An exe.dev VM.
+- The VM joined to the tailnet as `tag:factory-server`, signed once with `tailscale lock sign`, with a grant to `tag:cliproxy:443` and Funnel allowed for that node only.
+- A GitHub App installed on this repo with these settings:
+  - **Permissions:** contents, pull requests and issues read/write; checks and metadata read; no `workflows`.
+  - **Webhook events:** issues, issue comments, pull requests, pull request reviews, check suites.
+  - **Webhook URL:** the Funnel route.
+- The App's private key and a dedicated proxy key stored on the VM only.
 
 ## Known risks
 
-- **The model proxy key is on runners that execute generated code.** A prompt injection that survives admission could exfiltrate it. Mitigations: only maintainers can trigger, the key is dedicated to the factory and revocable, and the tailnet grant reaches only the proxy on 443. The residual risk is accepted for v1 and needs your sign-off.
-- **Public repo.** Secrets stay private, but logs and artifacts are readable by anyone, and anyone can write issue and comment text. So: only text from accounts with write access is ever fed to a model (issue bodies admitted by label, PR feedback filtered by author permission); nothing raw from a model run is uploaded, only redacted evidence; secrets live in a `main`-only environment; no workflow uses `pull_request_target`; and the Tailscale key is consumed by the join step and never reaches agent steps.
-- **Correlated blind spots.** The acceptance writer, the judge and the builder are all models. Using different families reduces this but does not remove it. The seeded-defect fixtures measure it, and that is the most we can claim.
-- **Merged means done for now.** This repo has no deployment. Publishing to npm stays a manual release until a deploy contract with a smoke check and a rollback exists.
+- **The proxy key is inside agent sandboxes.** A prompt injection could exfiltrate it. It only works from inside the tailnet, the key is dedicated and revocable, and egress from the sandbox is limited. Accepted for v1; needs your sign-off.
+- **Public repo.** Anyone can write issue and comment text, and anyone can read logs. Only text from write-access accounts is fed to a model, raw sessions never leave the VM, and no workflow uses `pull_request_target`.
+- **One VM is a single point of failure.** If it is down, nothing runs, but nothing wrong lands either: CI and branch protection still guard `main`. The reconcile tick and issue markers let it resume after a restart.
+- **Funnel exposes one public route.** It accepts only requests with a valid GitHub (later Linear) signature, acknowledges fast, and queues. Everything else on the VM stays tailnet-only.
+- **Correlated blind spots.** The acceptance writer, the judge and the builder are all models. Different families reduce this but do not remove it. The seeded-defect fixtures measure it, and that is the most we can claim.
+- **Merged means done for now.** This repo has no deployment. Publishing to npm stays manual until a deploy contract with a smoke check and a rollback exists.
