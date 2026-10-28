@@ -8,8 +8,6 @@ import {
 
 export const READY_LABEL = "factory:ready";
 
-// All of `.github/`, not just workflows: composite actions, CODEOWNERS and
-// dependabot config steer the gates too.
 export const CONTROL_PLANE_DIR = ".github";
 export const ACCEPTANCE_SUITE_DIR = "test/acceptance";
 
@@ -45,7 +43,6 @@ export function decideAdmission(input: {
 	return { kind: "admitted" };
 }
 
-// Fails closed: anything but the exact string "true" leaves the factory off.
 export function isFactoryEnabled(variable: string | undefined): boolean {
 	return variable === "true";
 }
@@ -58,6 +55,8 @@ function isAtOrUnder(path: string, dir: string): boolean {
 	return path === dir || path.startsWith(`${dir}/`);
 }
 
+// Paths are compared lowercase so a case-insensitive checkout cannot reach
+// `.GitHub/`.
 function isForbidden(changed: string, acceptanceDir: string): boolean {
 	const path = posix.normalize(changed.replaceAll("\\", "/")).toLowerCase();
 
@@ -69,8 +68,6 @@ function isForbidden(changed: string, acceptanceDir: string): boolean {
 	);
 }
 
-// Paths are compared lowercase so a case-insensitive checkout cannot reach
-// `.GitHub/`. Callers pass both sides of a rename.
 export function checkChangedPaths(input: {
 	changedPaths: readonly string[];
 	acceptanceDir?: string;

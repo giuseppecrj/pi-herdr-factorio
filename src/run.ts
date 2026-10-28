@@ -58,7 +58,6 @@ export type Verdict = {
 	checks: CheckResult[];
 };
 
-// A failing check vetoes the verdict whatever `pass` claims.
 export function verdictPasses(verdict: Verdict): boolean {
 	return verdict.pass && verdict.checks.every((check) => check.passed);
 }

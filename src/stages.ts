@@ -102,16 +102,19 @@ function moveTo(run: Run, stage: Stage, patch: Partial<Run> = {}): Transition {
 	return advanced({ ...run, ...patch, progress: { kind: "active", stage } });
 }
 
+const STALE_ON_REBUILD: Pick<Run, "patchDigest" | "verdict"> = {
+	patchDigest: undefined,
+	verdict: undefined,
+};
+
 function repairOrFail(run: Run, stage: Stage, evidence: string): Transition {
 	if (run.repairRounds >= MAX_REPAIR_ROUNDS) {
 		return finish(run, { kind: "failed", stage, evidence });
 	}
 
-	// The new build produces a new patch, so the old digest and verdict are stale.
 	return moveTo(run, "build", {
 		repairRounds: run.repairRounds + 1,
-		patchDigest: undefined,
-		verdict: undefined,
+		...STALE_ON_REBUILD,
 	});
 }
 
