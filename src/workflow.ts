@@ -696,8 +696,7 @@ function splitFrontMatter(text: string): FrontMatter {
 
 	return {
 		kind: "split",
-		// A blank first line keeps YAML positions equal to WORKFLOW.md lines.
-		frontMatter: ["", ...lines.slice(1, end)].join("\n"),
+		frontMatter: lines.slice(0, end).with(0, "").join("\n"),
 		body: lines
 			.slice(end + 1)
 			.join("\n")
