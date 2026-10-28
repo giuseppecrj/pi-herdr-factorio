@@ -2,6 +2,8 @@
 name: model-smoke
 
 on:
+  schedule:
+    - cron: "17 9 * * 1"
   workflow_dispatch:
     inputs:
       model:
@@ -54,7 +56,7 @@ jobs:
           PI_CODING_AGENT_DIR: ${{ runner.temp }}/pi-agent
           CLIPROXYAPI_BASE_URL: ${{ secrets.CLIPROXYAPI_BASE_URL }}
           CLIPROXYAPI_API_KEY: ${{ secrets.CLIPROXYAPI_API_KEY }}
-          MODEL: ${{ inputs.model }}
+          MODEL: ${{ inputs.model || 'cliproxyapi/claude-haiku-5-5' }}
           PROMPT: "Reply with exactly this token and nothing else: factory-smoke-ok"
         run: |
           out=$(pi -p --no-session --no-approve \

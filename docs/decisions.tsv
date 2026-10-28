@@ -1,0 +1,12 @@
+ts	phase	decision	why	evidence	result
+2026-10-28T20:54:32Z	frame	took the skill list from Cory House's post and found an upstream for each skill	the post names no repos, so each pick is the best-licensed version, not proof of what he runs	research/SYNTHESIS.md, research/PROVENANCE.md	7 adaptable, 3 written from scratch
+2026-10-28T20:54:32Z	frame	kept upstream captures out of git and committed only their provenance	several upstreams have no license and some text is Anthropic's	.gitignore, scripts/provenance.sh	public repo carries no unlicensed text
+2026-10-28T20:54:32Z	frame	kept council, release-waves, autonomous-delivery and daily-log out; adapt agent-loop-spec and agent-loop-hygiene	the rest overlap pstack or need tools a hosted runner lacks	research/reports/factory-review-1.md	2 owner skills adopted
+2026-10-28T20:54:32Z	design	made validation a separate stage with held-out tests the builder never sees	the software-factory reports say agents game tests they can edit	research/reports/factory-research-5.md, docs/design.md	proposed
+2026-10-28T20:54:32Z	design	land is deterministic code holding the only write token; the factory cannot edit workflows	the model must not hold publish rights or loosen its own gates	docs/design.md	proposed
+2026-10-28T20:54:32Z	harness	first unit is a smoke test of model access from a hosted runner	riskiest unknown: the proxy lives on a private tailnet	.github/workflows/model-smoke.yml	built
+2026-10-28T20:54:32Z	harness	fixed the trust credential subject to GitHub's immutable format	token sub is repo:owner@id/repo@id, so the old pattern never matched	run 40765102339 403, gh api .../oidc/customization/sub	fixed
+2026-10-28T20:54:32Z	harness	added a masked path check after the token exchange passed but the model fetch failed	needed to tell DNS, policy and routing apart without leaking tailnet names	scripts/proxy-path-check.sh	runs 40765658722, 40766014841
+2026-10-28T20:54:32Z	harness	switched the runner to a pre-signed ephemeral auth key	Tailnet Lock locks out runner devices joined through the trust credential	run 40766313387 LOCKED OUT	fixed
+2026-10-28T20:54:32Z	harness	smoke test passes end to end	unit 0 predicate: runner prints factory-smoke-ok	run 40767252647	VERIFIED
+2026-10-28T20:54:32Z	harness	scheduled the smoke test weekly	the auth key expires in 90 days and would otherwise fail silently	.github/workflows/model-smoke.yml	built
