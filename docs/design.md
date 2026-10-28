@@ -210,7 +210,7 @@ Riskiest unknowns first. Each unit ends in a check before the next starts.
 | 0 | Model access from a hosted runner over the tailnet | VERIFIED: run 40767252647 |
 | 1 | Herdr headless on a Linux runner | VERIFIED: run 40768344796 (`docs/prototypes/herdr-on-runner.md`) |
 | 2 | Package skeleton and pure controller core | VERIFIED: `npm run check` 60/60, commit `db91d1a` |
-| 3 | VM bring-up: Pi, provider, Herdr, `gh` through the integration, model access through an integration | from the VM, `gh` reads and writes this repo (done: labels created) and `pi -p` answers |
+| 3 | VM bring-up: Pi, Herdr, `gh` and models through exe.dev integrations | VERIFIED: `gh` reads and writes (labels created); `pi -p` passes on anthropic/claude-sonnet-5-5, anthropic/claude-haiku-4-5, openai/gpt-5.6-luna, openai/gpt-6-astra |
 | 4 | Orchestrator: Symphony claims, reconcile tick, retries, stall; GitHub adapter; admit; kill switch; marker recovery | tests 3, 4 and 8 of the definition of done |
 | 5 | Sandbox runner: Pi RPC in a rootless container with egress limits | an agent inside cannot reach `github.int.exe.xyz` or GitHub's API |
 | 6 | specify + accept | a vague issue ends `needs_info`; a clear one yields a contract and a held-out suite |
@@ -226,12 +226,14 @@ Riskiest unknowns first. Each unit ends in a check before the next starts.
 
 - `pi-factorio` on exe.dev: 2 vCPU, 8 GB, 40 GB, Ubuntu 24.04, tag `factory`, created fresh rather than cloned from `dotfiles` so it inherits no personal integrations.
 - Integration `pi-factorio-repo`: exe.dev's GitHub integration for this repo only, acting as its bot, attached to this VM only.
-- Model access: an exe.dev integration to the proxy, so no proxy key and no tailnet on this VM. Pending the owner's choice of route.
+- Model access: exe.dev's built-in `llm` integration at `https://llm.int.exe.xyz`, so no model key and no tailnet on this VM. Anthropic models come through exe.dev's gateway and draw on the account's exe.dev credits. OpenAI models come through the owner's ChatGPT subscription. Pi reaches both by overriding the built-in `anthropic` and `openai` providers' `baseUrl` (`server/provision.sh`).
+- Provisioning is `server/provision.sh`, idempotent, run with `ssh pi-factorio.exe.xyz bash -s < server/provision.sh`. It installs Node 22, Pi 1.4.0, Herdr 0.9.5 (checksum-pinned), pi-herdr-agents and pi-herdr-pstack.
 
 ## Known risks
 
 - **Integrations answer anything on the VM.** No key can be stolen, but code running on the VM can use them. The sandbox network blocks the GitHub integration, and the model integration is the only one agents can reach.
 - **Public repo.** Anyone can write issue and comment text, and anyone can read logs. Only text from write-access accounts is fed to a model, raw sessions never leave the VM, and no workflow uses `pull_request_target`.
+- **Anthropic usage spends exe.dev credits** ($119.75 available on 2026-10-28, no automatic top-up). The ledger records spend per run, and a per-run budget stops a run that would exceed it. Heavy stages default to OpenAI through the subscription; Anthropic models fill the cross-family seats.
 - **One VM is a single point of failure.** If it is down, nothing runs, and nothing lands anyway without a human merge. The reconcile tick and issue markers let it resume after a restart.
 - **Correlated blind spots.** The acceptance writer, the judge and the builder are all models. Different families reduce this but do not remove it. The seeded-defect fixtures measure it, and that is the most we can claim.
 - **Merged means done for now.** This repo has no deployment. Publishing to npm stays manual until a deploy contract with a smoke check and a rollback exists.
