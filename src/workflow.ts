@@ -852,7 +852,7 @@ export type LoadView = {
 	readonly warnings: readonly string[];
 };
 
-export type ReloadView = Omit<LoadView, "verification" | "warnings"> & {
+export type ReloadView = Omit<LoadView, "warnings"> & {
 	readonly outcome: Reload["kind"];
 	readonly inForce: {
 		readonly ref: string;
@@ -955,11 +955,7 @@ function budgetsOf(config: WorkflowConfig): Record<Stage, StageBudget> {
 }
 
 function reloadView(next: WorkflowLoad, reload: Reload): ReloadView {
-	const {
-		verification: _verification,
-		warnings: _warnings,
-		...view
-	} = loadView(next);
+	const { warnings: _warnings, ...view } = loadView(next);
 
 	const inForce =
 		reload.kind === "unavailable"
@@ -970,7 +966,12 @@ function reloadView(next: WorkflowLoad, reload: Reload): ReloadView {
 					digest: reload.snapshot.digest,
 				};
 
-	return { ...view, outcome: reload.kind, inForce };
+	return {
+		...view,
+		verification: (inForce?.ref ?? view.ref) !== TRUSTED_REF,
+		outcome: reload.kind,
+		inForce,
+	};
 }
 
 export function checkReport(

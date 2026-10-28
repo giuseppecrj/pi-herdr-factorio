@@ -921,3 +921,69 @@ describe("credential redaction", () => {
 		assertNoCredential(usage.stderr);
 	});
 });
+
+describe("reload verification", () => {
+	const fixture = { sha: candidateSha, text: valid };
+	const broken = { sha: candidateSha, text: frontMatter("hooks: {}") };
+	const missing = { sha: mainSha, text: null };
+
+	const cases: [string, Map<string, Branch>, string[], string, boolean][] = [
+		[
+			"applied",
+			new Map([
+				["main", { sha: mainSha, text: valid }],
+				["fixture", fixture],
+			]),
+			["--reload-ref", "fixture"],
+			"fixture",
+			true,
+		],
+		[
+			"kept",
+			new Map([
+				["main", { sha: mainSha, text: valid }],
+				["broken", broken],
+			]),
+			["--reload-ref", "broken"],
+			"main",
+			false,
+		],
+		[
+			"kept",
+			new Map([
+				["fixture", fixture],
+				["main", { sha: mainSha, text: frontMatter("hooks: {}") }],
+			]),
+			["--ref", "fixture", "--reload-ref", "main"],
+			"fixture",
+			true,
+		],
+		[
+			"unavailable",
+			new Map([
+				["main", missing],
+				["other", { sha: candidateSha, text: null }],
+			]),
+			["--reload-ref", "other"],
+			"",
+			true,
+		],
+	];
+
+	for (const [outcome, branches, flags, inForce, verification] of cases) {
+		it(`reload view marks verification from the in-force ref: ${outcome} ${flags.join(" ")}`, async () => {
+			const run = await cli(
+				["workflow-check", "--json", "--repo", repo, ...flags],
+				branches,
+			);
+
+			assert.partialDeepStrictEqual(run.json, {
+				reload: {
+					outcome,
+					verification,
+					inForce: inForce === "" ? null : { ref: inForce },
+				},
+			});
+		});
+	}
+});

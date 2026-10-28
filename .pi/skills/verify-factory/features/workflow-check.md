@@ -9,7 +9,7 @@
 - `check-invalid` exits 1 with `error.kind` `workflow_validation_error` and `error.field` naming the offending YAML path, or with `workflow_parse_error`, `workflow_front_matter_missing` or `workflow_front_matter_not_a_map`.
 - `check-unresolved` exits 1 with `error.kind` `source_unavailable` and `sha: null` when the branch does not resolve or `gh` fails.
 - `check-verification` reports `verification: true` for any `--ref` other than `main`.
-- `check-reload` with `--reload-ref <branch>` reports in `reload.inForce` the snapshot that stays in force. An invalid reload keeps the `--ref` snapshot.
+- `check-reload` with `--reload-ref <branch>` reports in `reload.inForce` the snapshot that stays in force. An invalid reload keeps the `--ref` snapshot. `reload.verification` is `true` when the in-force ref is not `main`.
 - `check-usage` exits 2 and prints usage to stderr for a missing `--json` or `--repo`, an unknown flag or a bad branch name.
 
 ## How to get to it (user POV)
@@ -26,7 +26,7 @@ Preconditions:
 
 - **Check main and a branch.** `.pi/skills/verify-factory/scripts/vm.sh .pi/skills/verify-factory/scripts/drive-workflow.sh <pr-id> <worker-n> <branch>`. The script exits 0 when every `workflow-check` exits 0 or 1 and every `status` exits 0. `workflow-evidence.txt` has one `command=... exit=... valid=... sha=... error_kind=...` line per call. Before the owner lands F04a, main gives `exit=1 valid=false error_kind="missing_workflow_file"`. A branch with a valid file gives `exit=0 valid=true verification=true`. Raw output is in `workflow-check-<ref>.json`, with `/` in the ref replaced by `_`.
 - **Confirm the SHA.** Compare the `sha` field with `GH_HOST=github.int.exe.xyz gh api repos/giuseppecrj/pi-herdr-factorio/git/ref/heads/<branch> --jq .object.sha`. They are equal.
-- **Check a reload.** In the lane workspace, run `node server/cli.ts workflow-check --json --repo giuseppecrj/pi-herdr-factorio --ref <valid-branch> --reload-ref <invalid-branch>`. It exits 1. `reload.outcome` is `kept`, `reload.error` names the problem, and `reload.inForce.digest` equals the top-level `digest`.
+- **Check a reload.** In the lane workspace, run `node server/cli.ts workflow-check --json --repo giuseppecrj/pi-herdr-factorio --ref <valid-branch> --reload-ref <invalid-branch>`. It exits 1. `reload.outcome` is `kept`, `reload.error` names the problem, `reload.inForce.digest` equals the top-level `digest`, and `reload.verification` is `true`.
 
 ## Gotchas
 
