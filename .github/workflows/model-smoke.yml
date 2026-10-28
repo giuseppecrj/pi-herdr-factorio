@@ -31,6 +31,16 @@ jobs:
           audience: ${{ vars.TS_OIDC_AUDIENCE }}
           tags: tag:factory-ci
 
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the path to the proxy without printing tailnet names
+        env:
+          CLIPROXYAPI_BASE_URL: ${{ secrets.CLIPROXYAPI_BASE_URL }}
+          CLIPROXYAPI_API_KEY: ${{ secrets.CLIPROXYAPI_API_KEY }}
+        run: scripts/proxy-path-check.sh
+
       - name: Install Pi and the model provider
         env:
           PI_CODING_AGENT_DIR: ${{ runner.temp }}/pi-agent
