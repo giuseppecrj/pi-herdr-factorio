@@ -74,7 +74,9 @@ Each row is a read through the integration after one action on a bot comment.
 
 The owner can edit the bot's comment, and the comment keeps the bot as its author. So the author fields alone do not prove the marker is the text the controller wrote. `lastEditedAt` does: it is `null` until the body changes, and hiding or reacting leaves it `null`. `updated_at` moves on hiding too, so it would call a hidden marker edited.
 
-The controller reads `lastEditedAt` for the bot comments that look like markers, in one request:
+The issue's own `updated_at` moves on each of these too. Measured on 2026-10-29 on issue #119: a bot comment posted at `05:57:35` set it to `05:57:35`, an owner edit of that comment set it to `05:57:42`, and deleting the comment set it to `05:57:50`. The controller re-reads an issue when that value moves. It has whole seconds, so the controller also re-reads an issue it last read within 1 s after its `updated_at` second.
+
+The controller reads `lastEditedAt` for every comment by `exe-dev-github-integration[bot]`, marker or not, at most 100 IDs per request:
 
 ```graphql
 query($ids: [ID!]!) {
@@ -127,6 +129,8 @@ Probed on 2026-10-29 on `pi-factorio`, Node v26.12.1, kernel 6.12.113, with a sm
 | A process binds the name of a different state directory. | Bound. Two directories never collide. |
 | `kill -9` the holder, then bind again. | Bound. The `@pi-herdr-factorio/...` entry left `/proc/net/unix` with the process. |
 | Two processes started at once, 40 trials. | Exactly one bound and one got `EADDRINUSE` in 40 of 40. |
+
+The symlink row probes the lock function on its own. The CLI refuses a `--state-dir` that is itself a symlink with `state_unavailable` before it takes the lock, so through the CLI only a symlinked parent can reach the same directory, and that names the same lock because the name comes from the real path.
 
 `controller.lock` stays only to name the holder for `status`. It is never the authority.
 
