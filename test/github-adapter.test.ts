@@ -4,13 +4,15 @@ import {
 	actorText,
 	GitHubReadError,
 	GitHubTicketAdapter,
+	GitHubTicketWriter,
 	isLogin,
 	type Login,
 } from "../src/adapters/github.ts";
 import { READY_LABEL } from "../src/policy.ts";
 import { type JsonValue, ticketKey } from "../src/tickets.ts";
-import { isRepoSlug, type RepoSlug } from "../src/workflow.ts";
+import { type Exec, isRepoSlug, type RepoSlug } from "../src/workflow.ts";
 import {
+	BOT_LOGIN,
 	commentEvent,
 	FAKE_REPO,
 	FakeGitHub,
@@ -713,5 +715,168 @@ describe("GitHubTicketAdapter as a TicketReader", () => {
 		assert.equal(ticket.author, "(withheld)");
 		assert.equal(actorText({ kind: "withheld" }), "(withheld)");
 		assertScopedCalls(github);
+	});
+});
+
+describe("GitHubTicketAdapter comment reads", () => {
+	it("reads comments with their author, app and issue", async () => {
+		const github = new FakeGitHub();
+		const issue = github.add(fakeIssue(14));
+		const made = github.comment(issue, "hello");
+		const read = await adapterFor(github).readComments(14);
+
+		assert.deepEqual(read, {
+			kind: "ok",
+			value: [
+				{
+					id: String(made.id),
+					nodeId: made.nodeId,
+					issueUrl: `https://api.github.com/repos/${FAKE_REPO}/issues/14`,
+					author: { login: BOT_LOGIN, type: "Bot" },
+					appSlug: "exe-dev-github-integration",
+					body: "hello",
+					createdAt: made.createdAt,
+				},
+			],
+		});
+		assertScopedCalls(github);
+	});
+
+	it("reads each comment's lastEditedAt in one GraphQL request", async () => {
+		const github = new FakeGitHub();
+		const issue = github.add(fakeIssue(14));
+		const first = github.comment(issue, "a");
+
+		const second = github.comment(issue, "b", {
+			lastEditedAt: "2026-10-29T03:00:00Z",
+		});
+
+		const read = await adapterFor(github).readCommentEdits([
+			first.nodeId,
+			second.nodeId,
+		]);
+
+		assert.deepEqual(read, {
+			kind: "ok",
+			value: new Map([
+				[
+					first.nodeId,
+					{
+						id: String(first.id),
+						issue: 14,
+						repo: FAKE_REPO,
+						lastEditedAt: null,
+					},
+				],
+				[
+					second.nodeId,
+					{
+						id: String(second.id),
+						issue: 14,
+						repo: FAKE_REPO,
+						lastEditedAt: "2026-10-29T03:00:00Z",
+					},
+				],
+			]),
+		});
+		assert.equal(github.calls.length, 1);
+	});
+
+	it("fails the edit read when a node is not an issue comment", async () => {
+		const github = new FakeGitHub();
+
+		assert.deepEqual(await adapterFor(github).readCommentEdits(["IC_404"]), {
+			kind: "failed",
+			failure: { kind: "malformed_response" },
+		});
+		assert.deepEqual(await adapterFor(github).readCommentEdits(["bad id"]), {
+			kind: "failed",
+			failure: { kind: "malformed_response" },
+		});
+	});
+
+	it("reads the login gh acts as", async () => {
+		const github = new FakeGitHub();
+
+		assert.deepEqual(await adapterFor(github).readViewer(), {
+			kind: "ok",
+			value: BOT_LOGIN,
+		});
+	});
+
+	it("lists open ready issues by number and skips pull requests", async () => {
+		const github = new FakeGitHub();
+
+		github.add(fakeIssue(20));
+		github.add(fakeIssue(14));
+		github.add(fakeIssue(15, { pullRequest: true }));
+
+		const read = await adapterFor(github).readCandidates();
+
+		assert.equal(read.kind, "ok");
+		assert.deepEqual(
+			read.kind === "ok" ? read.value.map((issue) => issue.number) : [],
+			[14, 20],
+		);
+	});
+});
+
+describe("GitHubTicketWriter", () => {
+	function writerFor(exec: Exec) {
+		return new GitHubTicketWriter({ exec, repo });
+	}
+
+	it("returns the new comment's ID", async () => {
+		const github = new FakeGitHub();
+
+		github.add(fakeIssue(14));
+
+		const post = await writerFor(github.exec).postComment(14, "<!-- x -->");
+
+		assert.equal(post.kind, "posted");
+		assert.deepEqual(github.markers(14), ["<!-- x -->"]);
+		assert.deepEqual(github.calls[0]?.slice(0, 5), [
+			"gh",
+			"api",
+			"--method",
+			"POST",
+			`repos/${FAKE_REPO}/issues/14/comments`,
+		]);
+	});
+
+	it("treats an HTTP 4xx as rejected and anything without an answer as unknown", async () => {
+		const github = new FakeGitHub();
+
+		github.add(fakeIssue(14));
+		github.posts = ["rejected", "lost", "landed_unanswered"];
+
+		const writer = writerFor(github.exec);
+
+		assert.deepEqual(await writer.postComment(14, "a"), { kind: "rejected" });
+		assert.deepEqual(await writer.postComment(14, "b"), { kind: "unknown" });
+		assert.deepEqual(await writer.postComment(14, "c"), { kind: "unknown" });
+		assert.deepEqual(github.markers(14), ["c"]);
+
+		const serverError = writerFor(async () => httpError(502, "Bad Gateway"));
+
+		assert.deepEqual(await serverError.postComment(14, "d"), {
+			kind: "unknown",
+		});
+
+		const garbled = writerFor(async () => ({
+			stdout: "<html>",
+			stderr: "",
+			code: 0,
+		}));
+
+		assert.deepEqual(await garbled.postComment(14, "e"), { kind: "unknown" });
+	});
+
+	it("treats a gh that cannot start as rejected", async () => {
+		const writer = writerFor(async () => {
+			throw new Error("spawn gh ENOENT");
+		});
+
+		assert.deepEqual(await writer.postComment(14, "a"), { kind: "rejected" });
 	});
 });

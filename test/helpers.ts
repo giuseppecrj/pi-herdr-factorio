@@ -11,7 +11,7 @@ import { advance, type RunEvent } from "../src/stages.ts";
 
 export const ticket: TicketRef = {
 	provider: "github",
-	key: "42",
+	key: "giuseppecrj/pi-herdr-factorio#42",
 	url: "https://github.com/giuseppecrj/pi-herdr-factorio/issues/42",
 };
 

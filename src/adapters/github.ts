@@ -5,16 +5,19 @@ import {
 	READY_LABEL,
 	REPO_SWITCH_LABEL,
 } from "../policy.ts";
+import { type Exec, type ExecResult, type GhCause, ghFailure } from "../gh.ts";
 import type { TicketRef } from "../run.ts";
 import {
+	type CommentPost,
 	type FactoryEvent,
 	type JsonValue,
 	type Ticket,
 	type TicketReader,
 	type TicketState,
+	type TicketWriter,
 	ticketKey,
 } from "../tickets.ts";
-import type { Exec, ExecResult, GhCause, RepoSlug } from "../workflow.ts";
+import type { RepoSlug } from "../workflow.ts";
 
 export type Login = string & { readonly __brand: "Login" };
 
@@ -39,6 +42,7 @@ export type Read<T> =
 
 export type IssueRecord = {
 	readonly number: number;
+	readonly updatedAt: string;
 	readonly open: boolean;
 	readonly pullRequest: boolean;
 	readonly labels: readonly string[];
@@ -79,6 +83,25 @@ export type BodyHistory = {
 	readonly renamedTo: string | null;
 };
 
+/** One issue comment from REST. `author` is `null` for a deleted account. */
+export type IssueComment = {
+	readonly id: string;
+	readonly nodeId: string;
+	readonly issueUrl: string;
+	readonly author: { readonly login: string; readonly type: string } | null;
+	readonly appSlug: string | null;
+	readonly body: string;
+	readonly createdAt: string;
+};
+
+/** GraphQL's view of one comment: where it lives and when its body last changed. */
+export type CommentEdit = {
+	readonly id: string;
+	readonly issue: number;
+	readonly repo: string;
+	readonly lastEditedAt: string | null;
+};
+
 /** GitHub looks labels up case-insensitively, so `name` is the stored name. */
 export type RepoSwitch =
 	| { readonly kind: "present"; readonly name: string }
@@ -95,12 +118,23 @@ export const MAX_BODY_VERSIONS = 100;
 
 export const MAX_TITLE_RENAMES = 100;
 
+/** The most node IDs one GraphQL `nodes` request asks for. */
+export const MAX_NODE_IDS = 100;
+
+const NODE_ID = /^[A-Za-z0-9_=-]{1,100}$/;
+
+const COMMENT_EDITS_QUERY = `query($ids: [ID!]!) {
+  nodes(ids: $ids) {
+    __typename
+    ... on IssueComment { databaseId lastEditedAt issue { number repository { nameWithOwner } } }
+  }
+}`;
+
+const VIEWER_QUERY = "query { viewer { login } }";
+
 const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}(?:\[bot\])?$/;
 
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
-
-const NETWORK_FAILURE =
-	/error connecting|could not resolve host|no such host|dial tcp|connection (?:refused|reset)|timed? ?out|ETIMEDOUT|ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|TLS handshake/i;
 
 const BODY_HISTORY_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
@@ -229,23 +263,6 @@ function parseJson(text: string): JsonValue | undefined {
 	}
 }
 
-function ghFailure(result: ExecResult): GitHubFailure {
-	const code = /\bHTTP (\d{3})\b/.exec(result.stderr)?.[1];
-	const status = code === undefined ? null : Number(code);
-
-	if (status === 404) return { kind: "gh_failed", cause: "not_found", status };
-
-	if (status === 401 || status === 403) {
-		return { kind: "gh_failed", cause: "auth", status };
-	}
-
-	if (status !== null) return { kind: "gh_failed", cause: "other", status };
-
-	const cause = NETWORK_FAILURE.test(result.stderr) ? "network" : "other";
-
-	return { kind: "gh_failed", cause, status: null };
-}
-
 function failed(failure: GitHubFailure): Read<never> {
 	return { kind: "failed", failure };
 }
@@ -275,6 +292,7 @@ function parseIssue(value: JsonValue | undefined): IssueRecord | null {
 	if (issue === null) return null;
 
 	const number = countOf(fieldOf(issue, "number"));
+	const updatedAt = timestampOf(fieldOf(issue, "updated_at"));
 	const state = stringOf(fieldOf(issue, "state"));
 	const labels = labelNamesOf(fieldOf(issue, "labels"));
 	const title = stringOf(fieldOf(issue, "title"));
@@ -282,6 +300,7 @@ function parseIssue(value: JsonValue | undefined): IssueRecord | null {
 
 	if (
 		number === null ||
+		updatedAt === null ||
 		(state !== "open" && state !== "closed") ||
 		labels === null ||
 		title === null ||
@@ -292,6 +311,7 @@ function parseIssue(value: JsonValue | undefined): IssueRecord | null {
 
 	return {
 		number,
+		updatedAt,
 		open: state === "open",
 		pullRequest: fieldOf(issue, "pull_request") !== undefined,
 		labels,
@@ -299,6 +319,74 @@ function parseIssue(value: JsonValue | undefined): IssueRecord | null {
 		title,
 		body: bodyText,
 	};
+}
+
+function parseComment(value: JsonValue): IssueComment | null {
+	const comment = objectOf(value);
+
+	if (comment === null) return null;
+
+	const id = idOf(fieldOf(comment, "id"));
+	const nodeId = stringOf(fieldOf(comment, "node_id"));
+	const issueUrl = stringOf(fieldOf(comment, "issue_url"));
+	const body = bodyTextOf(fieldOf(comment, "body"));
+	const createdAt = timestampOf(fieldOf(comment, "created_at"));
+	const user = fieldOf(comment, "user");
+	const login = stringOf(pathOf(user, ["login"]));
+	const type = stringOf(pathOf(user, ["type"]));
+	const app = fieldOf(comment, "performed_via_github_app");
+	const appSlug = app === null ? null : stringOf(pathOf(app, ["slug"]));
+
+	if (
+		id === null ||
+		nodeId === null ||
+		!NODE_ID.test(nodeId) ||
+		issueUrl === null ||
+		body === null ||
+		createdAt === null ||
+		(user !== null && (login === null || type === null)) ||
+		(app !== null && appSlug === null)
+	) {
+		return null;
+	}
+
+	return {
+		id,
+		nodeId,
+		issueUrl,
+		author: login === null || type === null ? null : { login, type },
+		appSlug,
+		body,
+		createdAt,
+	};
+}
+
+function parseCommentEdit(value: JsonValue): CommentEdit | null {
+	const node = objectOf(value);
+
+	if (
+		node === null ||
+		stringOf(fieldOf(node, "__typename")) !== "IssueComment"
+	) {
+		return null;
+	}
+
+	const id = idOf(fieldOf(node, "databaseId"));
+	const edited = fieldOf(node, "lastEditedAt");
+	const lastEditedAt = edited === null ? null : timestampOf(edited);
+	const issue = countOf(pathOf(node, ["issue", "number"]));
+	const repo = stringOf(pathOf(node, ["issue", "repository", "nameWithOwner"]));
+
+	if (
+		id === null ||
+		(edited !== null && lastEditedAt === null) ||
+		issue === null ||
+		repo === null
+	) {
+		return null;
+	}
+
+	return { id, issue, repo, lastEditedAt };
 }
 
 function parseTimelineEntry(value: JsonValue): TimelineEntry | null {
@@ -460,7 +548,9 @@ export class GitHubTicketAdapter implements TicketReader {
 			return failed({ kind: "cannot_run_gh" });
 		}
 
-		if (result.code !== 0) return failed(ghFailure(result));
+		if (result.code !== 0) {
+			return failed({ kind: "gh_failed", ...ghFailure(result) });
+		}
 
 		const parsed = parseJson(result.stdout);
 
@@ -598,6 +688,103 @@ export class GitHubTicketAdapter implements TicketReader {
 			: { kind: "ok", value: { kind: "present", name } };
 	}
 
+	/** Open issues that carry the ready label, oldest number first. */
+	async readCandidates(): Promise<Read<IssueRecord[]>> {
+		const read = await this.#pages(
+			`issues?state=open&labels=${encodeURIComponent(READY_LABEL)}&sort=created&direction=asc`,
+		);
+
+		if (read.kind === "failed") return read;
+
+		const records: IssueRecord[] = [];
+
+		for (const item of read.value) {
+			const record = parseIssue(item);
+
+			if (record === null) return MALFORMED;
+
+			if (record.open && !record.pullRequest) records.push(record);
+		}
+
+		records.sort((left, right) => left.number - right.number);
+
+		return { kind: "ok", value: records };
+	}
+
+	async readComments(issue: number): Promise<Read<IssueComment[]>> {
+		const read = await this.#pages(`issues/${issue}/comments`);
+
+		if (read.kind === "failed") return read;
+
+		const comments: IssueComment[] = [];
+
+		for (const item of read.value) {
+			const comment = parseComment(item);
+
+			if (comment === null) return MALFORMED;
+			comments.push(comment);
+		}
+
+		return { kind: "ok", value: comments };
+	}
+
+	/**
+	 * Reads `lastEditedAt` for each comment node, at most `MAX_NODE_IDS` per
+	 * request. The result is keyed by node ID, and a node that is not an issue
+	 * comment fails the whole read.
+	 */
+	async readCommentEdits(
+		nodeIds: readonly string[],
+	): Promise<Read<Map<string, CommentEdit>>> {
+		const edits = new Map<string, CommentEdit>();
+
+		for (let start = 0; start < nodeIds.length; start += MAX_NODE_IDS) {
+			const chunk = nodeIds.slice(start, start + MAX_NODE_IDS);
+
+			if (chunk.some((id) => !NODE_ID.test(id))) return MALFORMED;
+
+			const read = await this.#gh([
+				"api",
+				"graphql",
+				"-f",
+				`query=${COMMENT_EDITS_QUERY}`,
+				...chunk.flatMap((id) => ["-f", `ids[]=${id}`]),
+			]);
+
+			if (read.kind === "failed") return read;
+
+			const nodes = arrayOf(pathOf(read.value, ["data", "nodes"]));
+
+			if (nodes === null || nodes.length !== chunk.length) return MALFORMED;
+
+			for (const [index, node] of nodes.entries()) {
+				const edit = parseCommentEdit(node);
+				const id = chunk[index];
+
+				if (edit === null || id === undefined) return MALFORMED;
+				edits.set(id, edit);
+			}
+		}
+
+		return { kind: "ok", value: edits };
+	}
+
+	/** The login `gh` acts as. Through the integration it is the bot. */
+	async readViewer(): Promise<Read<string>> {
+		const read = await this.#gh([
+			"api",
+			"graphql",
+			"-f",
+			`query=${VIEWER_QUERY}`,
+		]);
+
+		if (read.kind === "failed") return read;
+
+		const login = stringOf(pathOf(read.value, ["data", "viewer", "login"]));
+
+		return login === null ? MALFORMED : { kind: "ok", value: login };
+	}
+
 	#issueOf(ref: TicketRef): number {
 		const prefix = `${this.repo}#`;
 		const issue = Number(ref.key.slice(prefix.length));
@@ -718,5 +905,49 @@ export class GitHubReadError extends Error {
 	constructor(failure: GitHubFailure) {
 		super(`GitHub read failed: ${failure.kind}`);
 		this.failure = failure;
+	}
+}
+
+/**
+ * Posts issue comments through `gh`. A POST that fails without an HTTP 4xx
+ * status may still have created the comment, so its outcome is `unknown` and
+ * the caller reads the comments back before it posts again.
+ */
+export class GitHubTicketWriter implements TicketWriter {
+	readonly repo: RepoSlug;
+	readonly #exec: Exec;
+
+	constructor(input: { exec: Exec; repo: RepoSlug }) {
+		this.repo = input.repo;
+		this.#exec = input.exec;
+	}
+
+	async postComment(issue: number, body: string): Promise<CommentPost> {
+		let result: ExecResult;
+
+		try {
+			result = await this.#exec("gh", [
+				"api",
+				"--method",
+				"POST",
+				`repos/${this.repo}/issues/${issue}/comments`,
+				"-f",
+				`body=${body}`,
+			]);
+		} catch {
+			return { kind: "rejected" };
+		}
+
+		if (result.code !== 0) {
+			const { status } = ghFailure(result);
+
+			return status !== null && status >= 400 && status < 500
+				? { kind: "rejected" }
+				: { kind: "unknown" };
+		}
+
+		const id = idOf(pathOf(parseJson(result.stdout), ["id"]));
+
+		return id === null ? { kind: "unknown" } : { kind: "posted", id };
 	}
 }

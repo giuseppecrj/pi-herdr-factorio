@@ -10,6 +10,13 @@ import {
 	parseDocument,
 	type YAMLError,
 } from "yaml";
+import {
+	type Exec,
+	type ExecResult,
+	type GhCause,
+	type GhFailure,
+	ghFailure,
+} from "./gh.ts";
 import { type Digest, digestOf, type Stage } from "./run.ts";
 import { STAGE_ORDER } from "./stages.ts";
 
@@ -77,7 +84,7 @@ export type WorkflowSnapshot = {
 	readonly warnings: readonly string[];
 };
 
-export type GhCause = "not_found" | "auth" | "network" | "other";
+export type { Exec, ExecResult, GhCause } from "./gh.ts";
 
 export type WorkflowError =
 	| {
@@ -129,18 +136,6 @@ export type Reload =
 			readonly error: WorkflowError;
 	  }
 	| { readonly kind: "unavailable"; readonly error: WorkflowError };
-
-export type ExecResult = {
-	readonly stdout: string;
-	readonly stderr: string;
-	readonly code: number;
-};
-
-/** Runs a program with an argument array. Never a shell string. */
-export type Exec = (
-	command: string,
-	args: readonly string[],
-) => Promise<ExecResult>;
 
 export type EnvLookup = (name: string) => string | undefined;
 
@@ -917,33 +912,12 @@ function invalid(error: WorkflowError): ParsedWorkflow {
 	return { kind: "invalid", error: redactError(error) };
 }
 
-type GhFailure = { readonly cause: GhCause; readonly status: number | null };
-
-const NETWORK_FAILURE =
-	/error connecting|could not resolve host|no such host|dial tcp|connection (?:refused|reset)|timed? ?out|ETIMEDOUT|ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|TLS handshake/i;
-
 const CAUSE_TEXT: Readonly<Record<GhCause, string>> = {
 	not_found: "not found",
 	auth: "not authorized",
 	network: "network error",
 	other: "gh failed",
 };
-
-function ghFailure(result: ExecResult): GhFailure {
-	const code = /\bHTTP (\d{3})\b/.exec(result.stderr)?.[1];
-	const status = code === undefined ? null : Number(code);
-
-	if (status === 404) return { cause: "not_found", status };
-
-	if (status === 401 || status === 403) return { cause: "auth", status };
-
-	if (status !== null) return { cause: "other", status };
-
-	return {
-		cause: NETWORK_FAILURE.test(result.stderr) ? "network" : "other",
-		status: null,
-	};
-}
 
 function ghMessage(prefix: string, failure: GhFailure): string {
 	const status = failure.status === null ? "" : ` (HTTP ${failure.status})`;

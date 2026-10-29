@@ -8,7 +8,7 @@
 - Commit the change under test, then run `.pi/skills/verify-factory/scripts/lane-setup.sh <pr-id> <worker-n>`.
 - Work only in `/home/exedev/factory-verification/<pr-id>-w<n>/`.
 - Take a VM snapshot before the first lane and after the last one, and diff the two. See "Snapshot" in `SKILL.md`.
-- Never drive a process this run did not start. Never run two controllers over the same issues.
+- Never drive a process this run did not start. Never run two controllers over the same issues. Always scope `tick`, `run` and `serve` with `--issue` to the lane's fixtures.
 
 ## Driving conventions
 
@@ -32,5 +32,5 @@
 - **workflow-check** (`.pi/skills/verify-factory/features/workflow-check.md`): load and validate the trusted `WORKFLOW.md` from a branch.
 - **status --json** (`.pi/skills/verify-factory/features/status-json.md`): trusted settings and disabled execution as JSON, without a controller.
 - **admit** (`.pi/skills/verify-factory/features/admit.md`): admission receipts for `factory:ready` label events, both kill switches, snapshot binding and deduplication.
-- **tick --once** (`.pi/skills/verify-factory/features/tick-once.md`): stub, not implemented.
-- **serve** (`.pi/skills/verify-factory/features/serve.md`): stub, not implemented.
+- **tick --once and run --issue** (`.pi/skills/verify-factory/features/tick-once.md`): one controller tick, claims, markers, capacity, restart recovery, forged and corrupt markers, missing workspaces and the switches.
+- **serve** (`.pi/skills/verify-factory/features/serve.md`): the controller daemon, `controller_ready`, the single-controller lock, reconcile before dispatch and SIGTERM stop.

@@ -5,7 +5,7 @@
 ## Sub-features
 
 - `status-text` prints `pi-herdr-factorio <version>` and the stage table.
-- `status-usage` prints `Usage: /factory status` for any other subcommand.
+- `status-usage` prints `Usage: /factory status | /factory run <issue>` for any other subcommand.
 
 ## How to get to it (user POV)
 
@@ -18,7 +18,7 @@ Preconditions:
 - A lane exists from `lane-setup.sh <pr-id> <worker-n>`.
 
 - **Run status.** `.pi/skills/verify-factory/scripts/vm.sh .pi/skills/verify-factory/scripts/drive-status.sh <pr-id> <worker-n>`. Exit code 0. The first line of `status.txt` is `pi-herdr-factorio <version>` and matches `package.json`. The stage table follows.
-- **Check the unknown subcommand.** On the VM in the lane workspace, run `node --experimental-strip-types .status-driver.ts bogus`. The output is `Usage: /factory status`.
+- **Check the unknown subcommand.** On the VM in the lane workspace, run `node --experimental-strip-types .status-driver.ts bogus`. The output is `Usage: /factory status | /factory run <issue>`.
 
 ## Gotchas
 
