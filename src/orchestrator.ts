@@ -1494,7 +1494,14 @@ export class Orchestrator {
 				continue;
 			}
 
-			if (slots === 0) break;
+			if (run.attempt > limits.maxAttempts) {
+				run.phase = { kind: "ending", status: "failed" };
+				this.state.totals.failures++;
+				await this.#sync(run);
+				continue;
+			}
+
+			if (slots === 0) continue;
 
 			if (await this.#launch(run)) slots--;
 		}

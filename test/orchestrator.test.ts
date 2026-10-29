@@ -4283,6 +4283,40 @@ describe("Orchestrator eligibility before adoption", () => {
 	});
 });
 
+describe("Orchestrator attempt limit at retry launch", () => {
+	it("ends a due retry as failed without launching it when the reloaded max_attempts is below its attempt", async () => {
+		const { github, clock, executor, start } = world();
+
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "fail", usage: 0 }];
+
+		const controller = start();
+
+		await controller.tick();
+		clock.t += 1;
+
+		const queued = await controller.tick();
+
+		assert.equal(queued.runs[0]?.status, "retrying");
+		assert.equal(queued.runs[0]?.attempt, 2);
+
+		setWorkflow(github, "max_attempts: 3", "max_attempts: 1");
+		clock.t += 30_000;
+
+		const report = await controller.tick();
+
+		assert.equal(executor.launches.length, 1);
+		assert.deepEqual(report.runs, []);
+		assert.equal(report.totals.failures, 1);
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:running",
+			"3:retrying",
+			"4:failed",
+		]);
+	});
+});
+
 describe("acquireLock", () => {
 	const now = () => START;
 
