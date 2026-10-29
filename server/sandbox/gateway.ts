@@ -129,10 +129,22 @@ export function addressAllowed(address: string, refused: BlockList): boolean {
 	return !refused.check(address, family === 6 ? "ipv6" : "ipv4");
 }
 
+/**
+ * IPv4 addresses first, each family in resolver order. The VM has no IPv6
+ * route, so dialling the first AAAA record that `registry.npmjs.org`
+ * returns failed every npm request on `pi-factorio`.
+ */
+export function dialOrder(addresses: readonly string[]): string[] {
+	return [
+		...addresses.filter((address) => isIP(address) === 4),
+		...addresses.filter((address) => isIP(address) !== 4),
+	];
+}
+
 async function systemLookup(host: string): Promise<string[]> {
 	const found = await dnsLookup(host, { all: true, verbatim: true });
 
-	return found.map((entry) => entry.address);
+	return dialOrder(found.map((entry) => entry.address));
 }
 
 function writeRaw(socket: Duplex, status: string, code: ProxyCode | null) {

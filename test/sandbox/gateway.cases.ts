@@ -21,7 +21,7 @@ import {
 	type EchoFixture,
 	startEchoFixture,
 } from "../../server/sandbox/echo-fixture.ts";
-import { Gateway } from "../../server/sandbox/gateway.ts";
+import { dialOrder, Gateway } from "../../server/sandbox/gateway.ts";
 import { DENY_CODES } from "../../server/sandbox/policy.ts";
 import {
 	type Route,
@@ -262,6 +262,25 @@ async function startHarness(
 
 	return { gateway, socketPath, events, audit, failAudit };
 }
+
+describe("upstream dial order", () => {
+	it("tries every IPv4 address before any IPv6 one, keeping resolver order within each", () => {
+		assert.deepEqual(
+			dialOrder([
+				"2606:4700::6810:b22",
+				"104.16.1.34",
+				"2606:4700::6810:22",
+				"104.16.0.34",
+			]),
+			[
+				"104.16.1.34",
+				"104.16.0.34",
+				"2606:4700::6810:b22",
+				"2606:4700::6810:22",
+			],
+		);
+	});
+});
 
 describe("gateway over a real unix socket", () => {
 	let dir = "";
