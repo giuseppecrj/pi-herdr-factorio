@@ -484,6 +484,20 @@ describe("gateway over a real unix socket", () => {
 				"body-not-allowed",
 			],
 			[
+				"POST",
+				"/openai/v1/responses",
+				{ "Content-Type": "application/json" },
+				null,
+				"body-not-allowed",
+			],
+			[
+				"POST",
+				"/openai/v1/responses",
+				{ "Content-Length": "0" },
+				null,
+				"body-not-allowed",
+			],
+			[
 				"GET",
 				"/echo/api/echo",
 				{ Accept: ECHO_SECRET },

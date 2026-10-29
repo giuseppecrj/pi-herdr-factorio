@@ -376,8 +376,13 @@ function bodyHolds(
 	rule: BodyRule,
 	contentType: string | null,
 	body: Buffer,
+	method: string,
 ): boolean {
-	if (body.length === 0) return true;
+	// A JSON rule's constraints say what a request body must hold, so an
+	// empty one passes only where no body is expected.
+	if (body.length === 0) {
+		return rule.kind !== "json" || method === "GET" || method === "HEAD";
+	}
 
 	if (rule.kind === "none") return false;
 
@@ -404,10 +409,13 @@ export function checkBody(
 	route: Route,
 	contentType: string | null,
 	body: Buffer,
+	method: string,
 ): DenyCode | null {
 	if (route.body.kind === "none" && body.length > 0) return "body-not-allowed";
 
 	if (body.length > route.limits.maxRequestBytes) return "body-too-large";
 
-	return bodyHolds(route.body, contentType, body) ? null : "body-not-allowed";
+	return bodyHolds(route.body, contentType, body, method)
+		? null
+		: "body-not-allowed";
 }

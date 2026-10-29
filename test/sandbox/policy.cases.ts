@@ -419,6 +419,7 @@ describe("gateway policy: model body", () => {
 					stream: true,
 					tools: [{ type: "function", name: "read" }],
 				}),
+				"POST",
 			),
 			null,
 		);
@@ -427,10 +428,23 @@ describe("gateway policy: model body", () => {
 				openai,
 				"application/json; charset=utf-8",
 				body({ model: "gpt-6.1-sol" }),
+				"POST",
 			),
 			null,
 		);
-		assert.equal(checkBody(openai, null, Buffer.alloc(0)), null);
+		assert.equal(checkBody(openai, null, Buffer.alloc(0), "GET"), null);
+	});
+
+	it("denies an empty body on a JSON route's POST, so its constraints cannot be skipped", () => {
+		assert.equal(
+			checkBody(openai, null, Buffer.alloc(0), "POST"),
+			"body-not-allowed",
+		);
+		assert.equal(
+			checkBody(openai, json, Buffer.alloc(0), "POST"),
+			"body-not-allowed",
+		);
+		assert.equal(checkBody(openai, null, Buffer.alloc(0), "HEAD"), null);
 	});
 
 	it("denies another model, hosted tools, background mode and malformed bodies", () => {
@@ -465,7 +479,7 @@ describe("gateway policy: model body", () => {
 
 		for (const [type, payload] of denied) {
 			assert.equal(
-				checkBody(openai, type, payload),
+				checkBody(openai, type, payload, "POST"),
 				"body-not-allowed",
 				payload.toString(),
 			);
@@ -483,7 +497,7 @@ describe("gateway policy: model body", () => {
 
 		for (const text of duplicated) {
 			assert.equal(
-				checkBody(openai, json, Buffer.from(text)),
+				checkBody(openai, json, Buffer.from(text), "POST"),
 				"body-not-allowed",
 				text,
 			);
@@ -494,20 +508,27 @@ describe("gateway policy: model body", () => {
 			'{"model":"gpt-6.1-sol","input":"a \\" \\\\ \\"model\\":1, {\\"model\\":2}"}',
 			'{"model":"gpt-6.1-sol","tools":[{"type":"function","name":"type"}]}',
 		]) {
-			assert.equal(checkBody(openai, json, Buffer.from(text)), null, text);
+			assert.equal(
+				checkBody(openai, json, Buffer.from(text), "POST"),
+				null,
+				text,
+			);
 		}
 	});
 
 	it("only lets the fallback route carry the fallback model", () => {
 		const xai = route("model-xai");
 
-		assert.equal(checkBody(xai, json, body({ model: "grok-4.6" })), null);
 		assert.equal(
-			checkBody(xai, json, body({ model: "gpt-6.1-sol" })),
+			checkBody(xai, json, body({ model: "grok-4.6" }), "POST"),
+			null,
+		);
+		assert.equal(
+			checkBody(xai, json, body({ model: "gpt-6.1-sol" }), "POST"),
 			"body-not-allowed",
 		);
 		assert.equal(
-			checkBody(openai, json, body({ model: "grok-4.6" })),
+			checkBody(openai, json, body({ model: "grok-4.6" }), "POST"),
 			"body-not-allowed",
 		);
 	});
@@ -524,24 +545,24 @@ describe("gateway policy: model body", () => {
 			},
 		};
 
-		assert.equal(checkBody(capped, json, body({})), null);
+		assert.equal(checkBody(capped, json, body({}), "POST"), null);
 		assert.equal(
-			checkBody(capped, json, body({ max_output_tokens: 100 })),
+			checkBody(capped, json, body({ max_output_tokens: 100 }), "POST"),
 			null,
 		);
 		assert.equal(
-			checkBody(capped, json, body({ max_output_tokens: 101 })),
+			checkBody(capped, json, body({ max_output_tokens: 101 }), "POST"),
 			"body-not-allowed",
 		);
 		assert.equal(
-			checkBody(capped, json, body({ max_output_tokens: "1" })),
+			checkBody(capped, json, body({ max_output_tokens: "1" }), "POST"),
 			"body-not-allowed",
 		);
 	});
 
 	it("denies any body on a route without a body rule", () => {
 		assert.equal(
-			checkBody(route("npm"), null, Buffer.from("x")),
+			checkBody(route("npm"), null, Buffer.from("x"), "GET"),
 			"body-not-allowed",
 		);
 	});

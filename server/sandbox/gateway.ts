@@ -641,7 +641,7 @@ export class Gateway implements AdmissionState {
 
 		const bodyCode = this.#scanner.reveals(body)
 			? "secret-in-request"
-			: checkBody(route, decision.contentType, body);
+			: checkBody(route, decision.contentType, body, exchange.method);
 
 		if (bodyCode !== null) {
 			this.#deny(exchange, res, bodyCode);
