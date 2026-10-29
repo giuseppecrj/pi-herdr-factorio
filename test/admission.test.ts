@@ -745,6 +745,7 @@ describe("label-time snapshot", () => {
 			),
 			totalRenames: 0,
 			renamedAt: [],
+			renamedTo: null,
 		};
 
 		return { ...base, ...change };
@@ -1073,6 +1074,15 @@ describe("label-time snapshot", () => {
 				"rename_history_incomplete",
 			],
 			[history({}), "Old title", "title_changed_between_reads"],
+			[
+				history({
+					totalRenames: 1,
+					renamedAt: ["2026-10-29T01:00:00Z"],
+					renamedTo: "Other",
+				}),
+				"T",
+				"title_changed_between_reads",
+			],
 		];
 
 		for (const [h, issueTitle, detail] of cases) {
@@ -1084,8 +1094,13 @@ describe("label-time snapshot", () => {
 		}
 
 		assert.equal(
-			bind(history({ totalRenames: 1, renamedAt: ["2026-10-29T01:00:00Z"] }))
-				.kind,
+			bind(
+				history({
+					totalRenames: 1,
+					renamedAt: ["2026-10-29T01:00:00Z"],
+					renamedTo: "T",
+				}),
+			).kind,
 			"proved",
 		);
 	});
@@ -1117,6 +1132,16 @@ describe("label-time snapshot", () => {
 					issue.totalRenames = 101;
 				},
 				"rename_history_incomplete",
+			],
+			[
+				(issue) => {
+					issue.renames.push({
+						createdAt: "2026-10-29T01:00:00Z",
+						previousTitle: issue.title,
+						currentTitle: "Renamed",
+					});
+				},
+				"title_changed_between_reads",
 			],
 		];
 

@@ -376,6 +376,7 @@ describe("GitHubTicketAdapter reads", () => {
 				],
 				totalRenames: 0,
 				renamedAt: [],
+				renamedTo: null,
 			},
 		});
 
@@ -427,6 +428,11 @@ describe("GitHubTicketAdapter reads", () => {
 				totalRenames: 3,
 				renames: [
 					{
+						createdAt: "2026-10-29T02:10:00Z",
+						previousTitle: "Older",
+						currentTitle: "Old",
+					},
+					{
 						createdAt: "2026-10-29T02:14:58Z",
 						previousTitle: "Old",
 						currentTitle: "Fixture 26",
@@ -439,7 +445,11 @@ describe("GitHubTicketAdapter reads", () => {
 
 		assert.ok(read.kind === "ok");
 		assert.equal(read.value.totalRenames, 3);
-		assert.deepEqual(read.value.renamedAt, ["2026-10-29T02:14:58Z"]);
+		assert.deepEqual(read.value.renamedAt, [
+			"2026-10-29T02:10:00Z",
+			"2026-10-29T02:14:58Z",
+		]);
+		assert.equal(read.value.renamedTo, "Fixture 26");
 
 		for (const node of [
 			{ previousTitle: "a", currentTitle: "b" },

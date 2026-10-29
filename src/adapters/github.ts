@@ -75,6 +75,8 @@ export type BodyHistory = {
 	readonly totalRenames: number;
 	/** When each returned title rename happened, from the same response as `title`. */
 	readonly renamedAt: readonly string[];
+	/** The title after the newest returned rename, the last node, as `last:` keeps time order. */
+	readonly renamedTo: string | null;
 };
 
 /** GitHub looks labels up case-insensitively, so `name` is the stored name. */
@@ -346,16 +348,20 @@ function parseBodyVersion(value: JsonValue): BodyVersion | null {
 	return { editedAt, deleted: deletedAt !== null, text };
 }
 
-function renameTimeOf(value: JsonValue): string | null {
+function renameOf(
+	value: JsonValue,
+): { readonly at: string; readonly title: string } | null {
 	const rename = objectOf(value);
 
 	if (rename === null) return null;
 
 	const at = timestampOf(fieldOf(rename, "createdAt"));
 	const previous = stringOf(fieldOf(rename, "previousTitle"));
-	const current = stringOf(fieldOf(rename, "currentTitle"));
+	const title = stringOf(fieldOf(rename, "currentTitle"));
 
-	return previous === null || current === null ? null : at;
+	return at === null || previous === null || title === null
+		? null
+		: { at, title };
 }
 
 function parseBodyHistory(value: JsonValue | undefined): BodyHistory | null {
@@ -398,12 +404,14 @@ function parseBodyHistory(value: JsonValue | undefined): BodyHistory | null {
 	}
 
 	const renamedAt: string[] = [];
+	let renamedTo: string | null = null;
 
 	for (const node of renameNodes) {
-		const at = renameTimeOf(node);
+		const rename = renameOf(node);
 
-		if (at === null) return null;
-		renamedAt.push(at);
+		if (rename === null) return null;
+		renamedAt.push(rename.at);
+		renamedTo = rename.title;
 	}
 
 	return {
@@ -415,6 +423,7 @@ function parseBodyHistory(value: JsonValue | undefined): BodyHistory | null {
 		versions,
 		totalRenames,
 		renamedAt,
+		renamedTo,
 	};
 }
 

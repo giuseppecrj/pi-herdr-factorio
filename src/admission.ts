@@ -191,7 +191,10 @@ export function labelTimeSnapshot(input: {
 		return ambiguous("renamed_since_label");
 	}
 
-	if (history.title !== input.issueTitle) {
+	if (
+		history.title !== input.issueTitle ||
+		(history.renamedTo !== null && history.renamedTo !== history.title)
+	) {
 		return ambiguous("title_changed_between_reads");
 	}
 
