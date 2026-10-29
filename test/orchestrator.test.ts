@@ -2993,7 +2993,139 @@ describe("Orchestrator persisted claim slots", () => {
 		assert.equal(files.claims.size, 3);
 		assert.deepEqual(statuses(github, 16), ["1:claimed", "2:blocked"]);
 	});
+
+	it("keeps a ready claim the candidate list omits waiting for a slot on every tick", async () => {
+		const { github, clock, files, wire, start } = world();
+
+		github.add(labeled(14));
+		const other = github.add(labeled(15));
+
+		github.add(labeled(16));
+		capAt(github, 3);
+		await start().tick();
+
+		assert.equal(files.claims.size, 3);
+
+		capAt(github, 2);
+		wire.intercept = omitFromList(github, 14);
+		clock.t += 30_000;
+
+		const controller = start();
+		const lagging = await controller.tick();
+
+		assert.deepEqual(runIssues(lagging), [15, 16]);
+		assert.deepEqual(lagging.queued, [14]);
+		assert.equal(lagging.maxConcurrent, 2);
+
+		clock.t += 30_000;
+
+		const again = await controller.tick();
+
+		assert.deepEqual(runIssues(again), [15, 16]);
+		assert.deepEqual(again.queued, [14]);
+
+		wire.intercept = null;
+		clock.t += 30_000;
+
+		const listed = await controller.tick();
+
+		assert.deepEqual(runIssues(listed), [15, 16]);
+		assert.deepEqual(listed.queued, [14]);
+
+		other.state = "closed";
+		other.updatedAt = "2026-10-29T02:03:00Z";
+		clock.t += 60_000;
+
+		const freed = await controller.tick();
+
+		assert.deepEqual(runIssues(freed), [14, 16]);
+		assert.deepEqual(freed.queued, []);
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+	});
+
+	it("releases a closed claim from the read that shows it closed, without a slot, when a later issue read fails", async () => {
+		const { github, clock, files, logs, wire, start } = world();
+		const issue = github.add(labeled(14));
+
+		github.add(labeled(15));
+		github.add(labeled(16));
+		capAt(github, 3);
+		await start().tick();
+
+		assert.equal(files.claims.size, 3);
+
+		capAt(github, 2);
+		issue.state = "closed";
+		issue.updatedAt = "2026-10-29T02:00:20Z";
+		clock.t += 30_000;
+
+		let gets = 0;
+
+		wire.intercept = async (command, args) => {
+			const path = args.find((arg) => arg.startsWith("repos/")) ?? "";
+
+			if (!args.includes("--method") && /\/issues\/14$/.test(path)) {
+				gets += 1;
+
+				if (gets >= 2) return networkError();
+			}
+
+			return github.exec(command, args);
+		};
+
+		const controller = start();
+		const closed = await controller.tick();
+
+		assert.deepEqual(runIssues(closed), [15, 16]);
+		assert.deepEqual(closed.queued, []);
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:blocked",
+			"3:released",
+		]);
+		assert.equal(files.claims.get(runOf(14))?.status, "released");
+		assert.deepEqual(
+			logs
+				.filter((entry) => entry.event === "claim_released")
+				.map((entry) => [entry.fields.issue, entry.fields.why]),
+			[[14, "closed"]],
+		);
+
+		clock.t += 30_000;
+
+		const next = await controller.tick();
+
+		assert.deepEqual(runIssues(next), [15, 16]);
+		assert.deepEqual(next.queued, []);
+		assert.equal(statuses(github, 14).length, 3);
+	});
 });
+
+function capAt(github: FakeGitHub, limit: number): void {
+	github.workflow = (github.workflow ?? "").replace(
+		/max_concurrent: \d/,
+		`max_concurrent: ${limit}`,
+	);
+}
+
+function omitFromList(github: FakeGitHub, issue: number): Exec {
+	return async (command, args) => {
+		const path = args.find((arg) => arg.startsWith("repos/")) ?? "";
+		const hidden = github.issues.get(issue);
+
+		if (!path.includes("/issues?") || hidden === undefined) {
+			return github.exec(command, args);
+		}
+
+		github.issues.delete(issue);
+
+		try {
+			return await github.exec(command, args);
+		} finally {
+			github.issues.set(issue, hidden);
+		}
+	};
+}
 
 describe("Orchestrator claim record usage", () => {
 	it("keeps the recorded usage when the ledger is behind, so the run budget still ends the run", async () => {

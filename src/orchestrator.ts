@@ -300,6 +300,10 @@ function settled(seen: SeenIssue): boolean {
 	return seen.observedAt >= Date.parse(seen.updatedAt) + 1000 + SETTLE_MS;
 }
 
+function isReady(issue: IssueRecord): boolean {
+	return issue.open && !issue.pullRequest && issue.labels.includes(READY_LABEL);
+}
+
 type Gate =
 	| { readonly kind: "open"; readonly reads: TickReads }
 	| { readonly kind: "closed"; readonly reasons: readonly GateReason[] };
@@ -683,23 +687,23 @@ export class Orchestrator {
 	async #checkEligible(
 		run: ActiveRun,
 		candidates: readonly IssueRecord[],
+		known?: IssueRecord,
 	): Promise<Eligibility> {
 		if (run.phase.kind === "ending") return "unverified";
 
 		let record = candidates.find((item) => item.number === run.issue);
 
 		if (record === undefined) {
-			const read = await this.#adapter.readIssue(run.issue);
+			const read =
+				known === undefined
+					? await this.#adapter.readIssue(run.issue)
+					: { kind: "ok" as const, value: known };
 
 			if (read.kind === "failed") return "unverified";
 
 			const issue = read.value;
 
-			if (
-				!issue.open ||
-				issue.pullRequest ||
-				!issue.labels.includes(READY_LABEL)
-			) {
+			if (!isReady(issue)) {
 				this.#release(run, issue.open ? "unlabeled" : "closed");
 
 				return "released";
@@ -1063,7 +1067,7 @@ export class Orchestrator {
 			const candidate = record.open && candidates.includes(record);
 
 			if (current !== null && !isTerminal(current.status)) {
-				if (candidate && !this.#fits(current.status)) {
+				if ((candidate || isReady(record)) && !this.#fits(current.status)) {
 					this.#recover.add(issue);
 					this.#reserved.add(issue);
 					queued.push(issue);
@@ -1074,7 +1078,7 @@ export class Orchestrator {
 					marker: current,
 					ledger: ledger.value,
 					candidates,
-					updatedAt: record.updatedAt,
+					issue: record,
 				});
 
 				if (adopted === null) {
@@ -1157,7 +1161,7 @@ export class Orchestrator {
 		marker: Marker;
 		ledger: CleanLedger;
 		candidates: readonly IssueRecord[];
-		updatedAt: string;
+		issue: IssueRecord;
 	}): Promise<ActiveRun | null> {
 		const { marker, ledger, candidates } = input;
 
@@ -1173,7 +1177,7 @@ export class Orchestrator {
 			this.#markCorrupt(
 				marker.issue,
 				{ kind: "corrupt", defect: "record_mismatch", commentId: "" },
-				input.updatedAt,
+				input.issue.updatedAt,
 			);
 
 			return null;
@@ -1236,7 +1240,9 @@ export class Orchestrator {
 			};
 		}
 
-		if ((await this.#checkEligible(run, candidates)) !== "dropped") {
+		if (
+			(await this.#checkEligible(run, candidates, input.issue)) !== "dropped"
+		) {
 			await this.#sync(run);
 		}
 
