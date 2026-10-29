@@ -256,6 +256,7 @@ export class FakeGitHub {
 	workflow: string | null = TRUSTED_WORKFLOW;
 	repoLabels: string[] = ["factory:enabled"];
 	beforeGraphql: ((issue: FakeIssue) => void) | null = null;
+	beforeCall: ((args: readonly string[]) => void) | null = null;
 
 	constructor() {
 		this.permissions.set("giuseppecrj", "admin");
@@ -272,6 +273,7 @@ export class FakeGitHub {
 
 	readonly exec: Exec = async (command, args) => {
 		this.calls.push([command, ...args]);
+		this.beforeCall?.(args);
 
 		if (command !== "gh" || args[0] !== "api") return httpError(400);
 

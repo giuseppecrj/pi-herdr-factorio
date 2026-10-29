@@ -435,14 +435,17 @@ export class Orchestrator {
 
 		if (!this.#claimsLoaded) await this.#loadClaims();
 
+		await this.#reconcileStages(now, limitsOf(this.#config));
+
+		const candidates = await this.#candidates();
+
+		await this.#reconcileClaims(candidates);
+
 		const gate = await this.#gate();
 		const limits = limitsOf(this.#config);
-		const candidates = await this.#candidates();
 		const reasons = gate.kind === "closed" ? [...gate.reasons] : [];
 
 		if (candidates.kind === "failed") reasons.push("candidates_unavailable");
-
-		await this.#reconcile(now, candidates, limits);
 
 		if (candidates.kind === "ok") {
 			await this.#discover(candidates.value);
@@ -542,11 +545,8 @@ export class Orchestrator {
 		};
 	}
 
-	async #reconcile(
-		now: number,
-		candidates: Read<IssueRecord[]>,
-		limits: Limits,
-	): Promise<void> {
+	/** Ends finished and stalled stages. It makes no reads, so nothing delays a stall. */
+	async #reconcileStages(now: number, limits: Limits): Promise<void> {
 		for (const run of this.state.runs.values()) {
 			const { phase } = run;
 
@@ -565,7 +565,12 @@ export class Orchestrator {
 				});
 				await this.#failed(run, "stalled", 0, limits);
 			}
+		}
+	}
 
+	/** Refreshes every claim against GitHub, before the per-tick reads that gate dispatch. */
+	async #reconcileClaims(candidates: Read<IssueRecord[]>): Promise<void> {
+		for (const run of this.state.runs.values()) {
 			if (candidates.kind === "ok") {
 				await this.#checkEligible(run, candidates.value);
 			}

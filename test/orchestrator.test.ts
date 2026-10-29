@@ -1249,6 +1249,43 @@ describe("Orchestrator bot comment edits", () => {
 	});
 });
 
+describe("Orchestrator reconcile order", () => {
+	it("terminates a stall and releases a closed claim before the per-tick reads", async () => {
+		const { github, clock, executor, start } = world();
+
+		github.add(labeled(14));
+
+		const closing = github.add(labeled(15));
+
+		executor.behaviors = [{ kind: "hang" }];
+
+		const controller = start();
+
+		await controller.tick();
+
+		const launch = executor.launches[0];
+
+		assert.ok(launch);
+		closing.state = "closed";
+		clock.t += 300_001;
+
+		const atGate: { aborted: boolean; released: string | undefined }[] = [];
+
+		github.beforeCall = (args) => {
+			if (args.some((arg) => arg.includes("labels/factory%3Aenabled"))) {
+				atGate.push({
+					aborted: launch.signal.aborted,
+					released: statuses(github, 15).at(-1),
+				});
+			}
+		};
+
+		await controller.tick();
+
+		assert.deepEqual(atGate, [{ aborted: true, released: "3:released" }]);
+	});
+});
+
 describe("acquireLock", () => {
 	const now = () => START;
 
