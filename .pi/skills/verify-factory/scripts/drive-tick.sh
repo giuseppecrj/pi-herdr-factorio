@@ -31,7 +31,7 @@ summary=$(node -e '
 const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
 if (r.error) { console.log("error=" + r.error + " pid=" + r.pid); process.exit(0); }
 const runs = r.runs.map((x) => `#${x.issue}:${x.status}@${x.stage}/a${x.attempt}/seq${x.seq}/${x.runId.slice(0, 12)}/${x.workspace}`).join(",") || "none";
-console.log(`dispatch=${r.dispatch.enabled} reasons=${r.dispatch.reasons.join("+") || "none"} runs=${runs} queued=${r.queued.join("+") || "none"} absent=${r.absent.join("+") || "none"} refused=${r.refused.map((x) => "#" + x.issue + ":" + x.reasons.join("+")).join(",") || "none"} corrupt=${r.corrupt.map((x) => "#" + x.issue + ":" + x.defect).join(",") || "none"} markersPosted=${r.totals.markersPosted} executionEnabled=${r.executionEnabled}`);
+console.log(`dispatch=${r.dispatch.enabled} reasons=${r.dispatch.reasons.join("+") || "none"} runs=${runs} queued=${r.queued.join("+") || "none"} absent=${r.absent.join("+") || "none"} refused=${r.refused.map((x) => "#" + x.issue + ":" + x.reasons.join("+")).join(",") || "none"} corrupt=${r.corrupt.map((x) => "#" + x.issue + ":" + x.defect).join(",") || "none"} ledgerBehind=${(r.ledgerBehind ?? []).map((x) => "#" + x.issue + ":" + x.ledgerSeq + "<" + x.localSeq).join(",") || "none"} markersPosted=${r.totals.markersPosted} executionEnabled=${r.executionEnabled}`);
 ' "$out/$mode-$stamp.json" 2>/dev/null || echo unparsable)
 markers=""
 for issue in "$@"; do

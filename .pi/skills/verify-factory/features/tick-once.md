@@ -11,7 +11,7 @@
 - `tick-relabel`: after `factory:ready` is removed and added again, the next tick posts `released` for the old run and `claimed`, then `blocked`, for a new `runId`, in that one tick.
 - `tick-forged`: a marker comment from any account but the bot is ignored.
 - `tick-corrupt`: an edited or malformed bot marker, or any edited bot comment, lists the issue in `corrupt` and nothing dispatches for it.
-- `tick-deleted-marker`: after the owner deletes a blocked run's bot comments, the next tick, a fresh process, lists the issue in `corrupt` as `marker_missing` and posts nothing.
+- `tick-ledger-behind`: when a fresh process's comments read for a blocked run comes back empty or short, the claim record carries the run. The tick logs `ledger_behind`, lists the issue in `ledgerBehind`, keeps the run and its slot, posts nothing, and leaves a queued issue queued.
 - `tick-workspace`: a deleted workspace is reported as `missing_replayed` and recreated, with no new marker.
 - `tick-switches`: with either switch off, `dispatch.enabled` is `false` and existing runs stay as they were.
 - `run-issue`: `run --issue` exits 0 when the issue holds a run and 1 otherwise.
@@ -29,12 +29,12 @@ Preconditions:
 - One fixture issue per lane, titled with the PR ID and worker number, labeled `factory:ready` by the owner from the workstation `gh` without `GH_HOST`. The bot's own label is refused as `unauthorized`. Creating and labeling fixtures needs the fixture grant.
 - No `serve` from this lane is running, unless the step tests the lock.
 
-- **Tick.** `.pi/skills/verify-factory/scripts/vm.sh .pi/skills/verify-factory/scripts/drive-tick.sh <pr-id> <worker-n> tick <issue>...`. The script refuses to run without an issue, so a lane never ticks the whole repository. It saves `tick-<UTC time>.json`, `.log` and `-evidence.txt` under `/tmp/swarm-<pr-id>/worker-<n>/`. The evidence has the command, exit code and wall time, a one-line summary of the snapshot (`dispatch`, `reasons`, each run as `#issue:status@stage/attempt/seq/runId-prefix/workspace`, `queued`, `absent`, `refused`, `corrupt`, `markersPosted`), every bot marker on each issue as `seq:status:runId-prefix`, and the controller log.
+- **Tick.** `.pi/skills/verify-factory/scripts/vm.sh .pi/skills/verify-factory/scripts/drive-tick.sh <pr-id> <worker-n> tick <issue>...`. The script refuses to run without an issue, so a lane never ticks the whole repository. It saves `tick-<UTC time>.json`, `.log` and `-evidence.txt` under `/tmp/swarm-<pr-id>/worker-<n>/`. The evidence has the command, exit code and wall time, a one-line summary of the snapshot (`dispatch`, `reasons`, each run as `#issue:status@stage/attempt/seq/runId-prefix/workspace`, `queued`, `absent`, `refused`, `corrupt`, `ledgerBehind` as `#issue:ledgerSeq<localSeq`, `markersPosted`), every bot marker on each issue as `seq:status:runId-prefix`, and the controller log.
 - **Run one issue.** The same script with `run <issue>`.
 - **Restart.** Run the tick a second time. Expect `claim_adopted` in the log, the same run IDs and `markersPosted=0`.
 - **Forged marker.** As the owner, post a comment whose body is a well-formed `<!-- factory:run {...} -->` marker for the run. The next tick ignores it and the bot markers are unchanged.
 - **Missing workspace.** Delete `<lane>/state/workspaces/<runId>` in a script sent with `vm.sh`, then tick. Expect `workspace_missing` in the log, `missing_replayed` in the summary and no new marker.
-- **Deleted marker.** Tick until the run is `blocked`. As the owner, without `GH_HOST`, delete each bot comment with `gh api -X DELETE repos/giuseppecrj/pi-herdr-factorio/issues/comments/<id>`, then tick. Expect `corrupt=#<issue>:marker_missing`, `markersPosted=0` and `event=marker_corrupt ... defect=marker_missing` in the log. The claim record under `<lane>/state/claims/` keeps its `seq`.
+- **Ledger behind.** Open three fixtures and tick until two are `blocked` and the third is `queued`. Run one tick whose CLI child sees a `gh` wrapper that answers `[]` to every GET of `repos/<repo>/issues/<a>/comments*`, as in `F04c/fix-5/behind-tick.sh` in the trail. Put the wrapper only on the `node` PATH, so the evidence read uses the real `gh`, and `export -f node require_lane_ids valid_lane_id`. Expect `event=ledger_behind issue=<a> ledgerSeq=0 localSeq=2`, `ledgerBehind=#<a>:0<2`, both runs still `blocked`, the third issue still `queued`, `corrupt=none` and `markersPosted=0`. A normal tick after it changes nothing and posts nothing. Deleting the bot comments as the owner gives the same result. The claim record under `<lane>/state/claims/` holds `seq`, `status`, `stage` and `attempt`.
 - **Local switch.** `touch <lane>/state/disabled`, then `run`. Expect `reasons=locally_disabled`; an existing run is still listed, and nothing new is claimed.
 
 Results observed on 2026-10-29 at `add4f6b`, on fixtures #66, #67 and #68, each labeled by `giuseppecrj`:
@@ -55,6 +55,8 @@ Observed on 2026-10-29 at `b6acf4e`, on fixture #120 labeled by `giuseppecrj`:
 | First tick | 0 | `blocked`, markers `1:claimed,2:blocked`; claim record `seq: 2` |
 | Owner deleted both bot comments, then a tick | 0 | `corrupt=#120:marker_missing`, `markersPosted=0`, no run |
 | Another tick | 0 | the same; the claim record still `seq: 2` |
+
+`marker_missing` was removed in F04c fix 5. The rows above are the behavior at `b6acf4e`.
 
 ## Gotchas
 
