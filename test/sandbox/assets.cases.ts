@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	chmodSync,
@@ -10,6 +10,7 @@ import {
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
+import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -166,6 +167,161 @@ describe("pinned asset inputs", () => {
 				/^https:\/\/registry\.npmjs\.org\//,
 				path,
 			);
+		}
+	});
+});
+
+describe("asset lock integrity against downloaded bytes", () => {
+	const nameOf = (path: string, entry: ReturnType<typeof objectOf>) =>
+		textOf(fieldOf(entry, "name")) ??
+		path.slice(path.lastIndexOf("node_modules/") + "node_modules/".length);
+
+	function integrities(file: string): Map<string, string> {
+		const packages = objectOf(
+			fieldOf(objectOf(parseJson(readFileSync(file, "utf8"))), "packages"),
+		);
+
+		const found = new Map<string, string>();
+
+		for (const [path, value] of Object.entries(packages ?? {})) {
+			const entry = objectOf(value);
+			const integrity = textOf(fieldOf(entry, "integrity"));
+			const version = textOf(fieldOf(entry, "version"));
+
+			if (path !== "" && integrity !== null && version !== null) {
+				found.set(`${nameOf(path, entry)}@${version}`, integrity);
+			}
+		}
+
+		return found;
+	}
+
+	it("agrees with the repository lock, which CI's npm ci checks against downloaded bytes, on every shared package", () => {
+		const assets = integrities(join(ASSETS, "package-lock.json"));
+
+		const root = integrities(
+			new URL("../../package-lock.json", import.meta.url).pathname,
+		);
+
+		const shared = [...assets].filter(([key]) => root.has(key));
+
+		assert.ok(shared.length > 100, String(shared.length));
+
+		for (const [key, integrity] of shared) {
+			assert.equal(integrity, root.get(key), key);
+		}
+	});
+
+	it("makes the provisioning npm ci fail on a wrong but canonical sha512, offline", {
+		timeout: 60_000,
+	}, async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-npm-integrity-"));
+		const pack = join(dir, "src", "package");
+
+		mkdirSync(pack, { recursive: true });
+		writeFileSync(
+			join(pack, "package.json"),
+			'{"name":"fixture-dep","version":"1.0.0"}\n',
+		);
+		writeFileSync(join(pack, "index.js"), "module.exports = 1;\n");
+
+		const tar = spawnSync("tar", [
+			"-czf",
+			join(dir, "fixture-dep-1.0.0.tgz"),
+			"-C",
+			join(dir, "src"),
+			"package",
+		]);
+
+		assert.equal(tar.status, 0);
+
+		const tarball = readFileSync(join(dir, "fixture-dep-1.0.0.tgz"));
+
+		const server = createHttpServer((_req, res) => {
+			res.writeHead(200, { "Content-Type": "application/octet-stream" });
+			res.end(tarball);
+		});
+
+		await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+
+		const address = server.address();
+
+		const port =
+			address !== null && address instanceof Object ? address.port : 0;
+
+		const resolved = `http://127.0.0.1:${port}/fixture-dep/-/fixture-dep-1.0.0.tgz`;
+
+		const ci = async (integrity: string, name: string) => {
+			const app = join(dir, name);
+			const manifest = { name: "app", version: "1.0.0" };
+			const dependencies = { "fixture-dep": "1.0.0" };
+
+			mkdirSync(app);
+			writeFileSync(
+				join(app, "package.json"),
+				JSON.stringify({ ...manifest, dependencies }),
+			);
+			writeFileSync(
+				join(app, "package-lock.json"),
+				JSON.stringify({
+					...manifest,
+					lockfileVersion: 3,
+					requires: true,
+					packages: {
+						"": { ...manifest, dependencies },
+						"node_modules/fixture-dep": {
+							version: "1.0.0",
+							resolved,
+							integrity,
+						},
+					},
+				}),
+			);
+
+			const child = spawn(
+				"npm",
+				["ci", "--ignore-scripts", "--no-audit", "--no-fund"],
+				{
+					cwd: app,
+					stdio: ["ignore", "ignore", "pipe"],
+					env: {
+						PATH: process.env.PATH ?? "/usr/bin:/bin",
+						HOME: join(dir, "home"),
+						npm_config_cache: join(dir, `cache-${name}`),
+						npm_config_update_notifier: "false",
+						npm_config_fetch_retries: "0",
+					},
+				},
+			);
+
+			let stderr = "";
+
+			child.stderr.on("data", (chunk: Buffer) => {
+				stderr += chunk.toString();
+			});
+
+			const code = await new Promise<number | null>((done) =>
+				child.on("exit", (status) => done(status)),
+			);
+
+			return { code, stderr };
+		};
+
+		try {
+			const wrong = `sha512-${Buffer.alloc(64).toString("base64")}`;
+
+			const right = `sha512-${createHash("sha512").update(tarball).digest("base64")}`;
+
+			assert.match(wrong, /^sha512-[A-Za-z0-9+/]{86}==$/);
+
+			const refused = await ci(wrong, "wrong");
+
+			assert.notEqual(refused.code, 0);
+			assert.match(refused.stderr, /EINTEGRITY/);
+			assert.equal((await ci(right, "right")).code, 0);
+		} finally {
+			server.close();
+			rmSync(dir, { recursive: true, force: true });
 		}
 	});
 });
