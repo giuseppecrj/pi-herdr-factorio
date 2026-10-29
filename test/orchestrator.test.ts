@@ -4076,6 +4076,65 @@ describe("Orchestrator stall aborts", () => {
 	});
 });
 
+describe("Orchestrator timeline with no ready event", () => {
+	it("keeps a claim recorded before its first marker, caches nothing, and recovers it when the event reads again", async () => {
+		const { github, clock, files, start } = world();
+		const issue = github.add(labeled(14));
+
+		github.posts = ["lost"];
+		await start().tick();
+
+		const timeline = issue.timeline;
+
+		issue.timeline = [];
+		issue.updatedAt = "2026-10-29T02:30:00Z";
+		clock.t += 40 * 60_000;
+
+		const controller = start();
+		const empty = await controller.tick();
+
+		assert.deepEqual(empty.runs, []);
+		assert.deepEqual(empty.refused, []);
+		assert.deepEqual(statuses(github, 14), []);
+		assert.equal(files.claims.get(runOf(14))?.status, null);
+
+		issue.timeline = timeline;
+		clock.t += 30_000;
+
+		const restored = await controller.tick();
+
+		assert.equal(restored.runs[0]?.runId, runOf(14));
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+	});
+
+	it("keeps a held run in the same process and does not release it", async () => {
+		const { github, clock, start } = world();
+		const issue = github.add(labeled(14));
+		const controller = start();
+
+		await controller.tick();
+
+		const timeline = issue.timeline;
+
+		issue.timeline = [];
+		issue.updatedAt = "2026-10-29T02:30:00Z";
+		clock.t += 40 * 60_000;
+
+		const empty = await controller.tick();
+
+		assert.equal(empty.runs[0]?.status, "blocked");
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+
+		issue.timeline = timeline;
+		clock.t += 30_000;
+
+		const restored = await controller.tick();
+
+		assert.equal(restored.runs[0]?.status, "blocked");
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+	});
+});
+
 describe("acquireLock", () => {
 	const now = () => START;
 

@@ -288,23 +288,25 @@ type Eligibility = "confirmed" | "unverified" | "released" | "dropped";
 
 type ReleaseReason = "closed" | "unlabeled" | "new_event";
 
+type Replacement = "current" | "unverified" | "unlabeled" | "new_event";
+
 function replacedBy(
 	timeline: readonly TimelineEntry[],
-	eventId: string,
-): "unlabeled" | "new_event" | null {
+	event: { readonly eventId: string; readonly eventAt: string },
+): Replacement {
 	const latest = latestReadyEntry(timeline);
 
-	if (
-		latest.kind === "found" &&
-		latest.entry.kind === "labeled" &&
-		latest.entry.id === eventId
-	) {
-		return null;
-	}
+	if (latest.kind === "tied") return "new_event";
 
-	return latest.kind === "found" && latest.entry.kind === "unlabeled"
-		? "unlabeled"
-		: "new_event";
+	if (latest.kind === "none") return "unverified";
+
+	const { entry } = latest;
+
+	if (entry.kind === "labeled" && entry.id === event.eventId) return "current";
+
+	if (entry.at <= event.eventAt) return "unverified";
+
+	return entry.kind === "unlabeled" ? "unlabeled" : "new_event";
 }
 
 const SETTLE_MS = 1000;
@@ -771,9 +773,11 @@ export class Orchestrator {
 			this.#confirmEnd(run.issue, ledger.value);
 		}
 
-		const replaced = replacedBy(timeline.value, run.eventId);
+		const replaced = replacedBy(timeline.value, run);
 
-		if (replaced !== null) {
+		if (replaced === "unverified") return "unverified";
+
+		if (replaced !== "current") {
 			this.#release(run, replaced);
 
 			return "released";
@@ -1191,7 +1195,18 @@ export class Orchestrator {
 
 				if (timeline.kind === "failed") return "undecided";
 
-				why = replacedBy(timeline.value, claim.eventId);
+				const admitted = await this.#admittedFields(claim);
+
+				if (admitted === null) return "undecided";
+
+				const replaced = replacedBy(timeline.value, {
+					eventId: claim.eventId,
+					eventAt: admitted.eventAt,
+				});
+
+				if (replaced === "unverified") return "undecided";
+
+				why = replaced === "current" ? null : replaced;
 			} else if (candidate) {
 				why = null;
 			}
