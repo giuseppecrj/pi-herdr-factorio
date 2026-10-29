@@ -8,8 +8,9 @@
 - `tick-capacity`: at most `agent.max_concurrent` (2) claims hold a slot; the next candidate is listed in `queued` with no marker.
 - `tick-restart`: a second `tick --once` adopts each run from its markers, keeps its `runId`, and posts nothing.
 - `tick-release`: a closed or unlabeled issue, or one with a newer ready event, gets a `released` marker on the next tick.
+- `tick-relabel`: after `factory:ready` is removed and added again, the next tick posts `released` for the old run and `claimed`, then `blocked`, for a new `runId`, in that one tick.
 - `tick-forged`: a marker comment from any account but the bot is ignored.
-- `tick-corrupt`: an edited or malformed bot marker lists the issue in `corrupt` and nothing dispatches for it.
+- `tick-corrupt`: an edited or malformed bot marker, or any edited bot comment, lists the issue in `corrupt` and nothing dispatches for it.
 - `tick-workspace`: a deleted workspace is reported as `missing_replayed` and recreated, with no new marker.
 - `tick-switches`: with either switch off, `dispatch.enabled` is `false` and existing runs stay as they were.
 - `run-issue`: `run --issue` exits 0 when the issue holds a run and 1 otherwise.

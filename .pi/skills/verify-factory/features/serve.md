@@ -5,7 +5,7 @@
 ## Sub-features
 
 - `serve-ready`: the structured `event=controller_ready pid=<pid> repo=<repo> scope=<issues>` line.
-- `serve-single-authority`: while `serve` holds `<state>/controller.lock`, any other `tick`, `run` or `serve` on that state directory exits 2 with `controller_running` before any `gh` call.
+- `serve-single-authority`: while `serve` holds the state directory's lock, the abstract socket `@pi-herdr-factorio/<sha256 of its real path>`, any other `tick`, `run` or `serve` on that state directory exits 2 with `controller_running` before any `gh` call. Deleting `<state>/controller.lock` does not free it; only the holder's exit does. `grep pi-herdr-factorio /proc/net/unix` on the VM shows the bound name.
 - `serve-reconcile`: an issue closed while `serve` runs is released on the next tick, and a queued issue takes its slot in the same tick.
 - `serve-stop`: SIGTERM ends with `event=controller_stopping`, exit 0 and no lock file.
 - `serve-identity`: without `GH_HOST`, `serve` logs `controller_refused reason=identity_unavailable` and exits 1.

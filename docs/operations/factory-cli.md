@@ -53,7 +53,7 @@ A branch name contains only letters, digits, `.`, `_`, `-` and `/`. It does not 
 | Code | `tick` | `run` | `serve` |
 | --- | --- | --- | --- |
 | 0 | The tick ran. The snapshot was printed. | The issue holds a run after the tick. | Stopped by SIGTERM or SIGINT after finishing its tick. |
-| 1 | The controller refused to start. See `controller_refused`. | The issue holds no run: it was refused, queued, absent or corrupt, or the controller refused to start. | The controller refused to start. |
+| 1 | The controller refused to start. See `controller_refused`: `repo_not_allowed`, `state_unavailable`, `lock_unavailable`, `identity_unavailable` or `identity_mismatch`. | The issue holds no run: it was refused, queued, absent or corrupt, or the controller refused to start. | The controller refused to start. |
 | 2 | Usage error, or `controller_running`: another controller holds the lock. | Same as `tick`. | Same as `tick`. |
 
 ## Error kinds
@@ -135,7 +135,7 @@ The only warning is `(unknown key) ignored`.
 
 A usage error prints one of these lines to stderr, followed by the usage text: `unrecognized or incomplete options`, `expected workflow-check, status, admit, tick, run or serve`, `unexpected extra arguments`, `--json is required`, `--json is required, except for serve, which logs lines`, `--once applies only to tick, and tick requires it`, `--repo <owner/name> is required`, `--reload-ref applies only to workflow-check`, `--ref and --reload-ref must be branch names`, `admit always reads main and takes no --ref`, `tick always reads main and takes no --ref` (also for `run` and `serve`), `--issue <number> is required`, `--issue must be a number`, `--state-dir <dir> is required` or `--issue applies only to admit, tick, run and serve`.
 
-`/factory status` prints `Usage: /factory status` when the first word of its argument is not `status`. When it cannot find a repository, the reason is `cannot run git`, `no git remote named origin` or `origin is not a GitHub repository`.
+`/factory` prints `Usage: /factory status | /factory run <issue>` when its argument is neither `status` nor `run` followed by at most one more word. When it cannot find a repository, the reason is `cannot run git`, `no git remote named origin` or `origin is not a GitHub repository`.
 
 ## `workflow-check` output
 
@@ -339,24 +339,27 @@ The three controller commands share one implementation, `Orchestrator` in `src/o
 Each command does these steps in order and stops at the first that fails:
 
 1. The repository must be on the allowlist and the state directory must pass the `admit` rule: it exists as a directory, not a symlink, owned by the effective user and not writable by group or others. Otherwise it logs `controller_refused` with `repo_not_allowed` or `state_unavailable` and exits 1.
-2. It takes the lock, described below. If another controller holds it, it logs `controller_running` with that controller's pid and exits 2. `tick` and `run` also print `{"error": "controller_running", "pid": <pid>}`. No `gh` call has run yet.
+2. It takes the lock, described below. If another controller holds it, it logs `controller_running` with that controller's pid and exits 2. `tick` and `run` also print `{"error": "controller_running", "pid": <pid>}`. The pid is `null` when the holder's `controller.lock` is missing or unreadable. No `gh` call has run yet. If the lock cannot be taken for another reason, such as a state directory whose real path cannot be resolved, a socket that cannot be bound, or a `controller.lock` that cannot be written, it logs `controller_refused` with `lock_unavailable` and exits 1.
 3. It checks that `gh` acts as the integration bot. It reads `gh api graphql -f query='query { viewer { login } }'` and requires exactly `exe-dev-github-integration[bot]`. Without `GH_HOST`, `gh` on the VM has no credentials and the read fails, and on a workstation it answers as the owner. Either way it logs `controller_refused` with `identity_unavailable` or `identity_mismatch`, releases the lock and exits 1. See `docs/prototypes/restart-recovery/README.md`.
 
 `serve` then logs `controller_ready` with its pid, repository and scope. That line means the service is ready.
 
 ### The lock
 
-The lock is `<state-dir>/controller.lock`, created with `O_EXCL` and mode 0600. It holds the controller's pid, its start time from field 22 of `/proc/<pid>/stat`, and when it took the lock. A lock is stale only when that pid no longer exists or now has a different start time. A stale lock is replaced and logged as `lock_stale_replaced` with the old pid. A live lock is never broken. The controller removes the lock on exit, only while the file still names it. `status --json` reads the lock and never takes it.
+The lock is a Linux abstract Unix socket named `\0pi-herdr-factorio/<sha256 of the state directory's real path>`, bound with `net.createServer().listen({ path, exclusive: true })`. The kernel lets only one process bind a name, so of two controllers started together exactly one runs and the other gets `EADDRINUSE` and exits 2 with `controller_running`. The kernel frees the name when the holder exits for any reason, including `kill -9`, so there is never a stale lock to break. The name comes from the real path, so a symlink to a state directory names the same lock, and two state directories never collide. `docs/prototypes/restart-recovery/README.md` records the probe on the VM.
+
+`<state-dir>/controller.lock`, mode 0600, only names the holder for `status`. The controller writes it after binding the socket, with its pid, its start time from field 22 of `/proc/self/stat`, and when it took the lock. It removes the file on exit, only while the file still names it. A file left by a controller that is gone is replaced and logged as `lock_stale_replaced` with the old pid. The file is never the authority: deleting it does not free the lock. `status --json` connects to the socket to see whether a controller holds it, and never binds it.
 
 ### One tick
 
-A tick runs these steps. Reconciliation always runs, and dispatch runs only when every per-tick read succeeds.
+A tick runs these steps. Reconciliation always runs, before the per-tick reads, and dispatch runs only when every per-tick read succeeds.
 
-1. Per-tick reads, once each: the local switch, the repository switch, and `WORKFLOW.md` on `main` (2 requests). If any fails or is off, dispatch is skipped for this tick and `dispatch.reasons` names why. The last valid workflow's limits stay in force.
+1. Reconcile stages, with no read. A finished stage or a stall becomes a retry or a terminal status, using the last valid workflow's limits.
 2. Candidates: open issues with `factory:ready`, from `gh api repos/<repo>/issues?state=open&labels=factory%3Aready&sort=created&direction=asc&per_page=100&page=<p>`, paged as the timeline is. A failed read adds `candidates_unavailable` and skips dispatch.
-3. Reconcile every claim. A finished stage or a stall becomes a retry or a terminal status. A claim whose issue is closed, lost `factory:ready`, or has a newer `factory:ready` event is released. A marker whose POST did not answer is read back.
-4. Discover. For each candidate the controller has not seen at its current `updated_at`, and for each claim recorded locally before a restart, it reads the issue's markers. A live marker is adopted as the existing run, never admitted again. A corrupt one stops dispatch for that issue.
-5. Dispatch, while slots remain. Slots are `agent.max_concurrent` minus the claims that are `claimed`, `running` or `blocked`. A due retry launches first. Then each new candidate, lowest issue number first, goes through `admitTicket` with the per-tick reads, so it costs only the 4 issue reads. A candidate without a slot is listed in `queued` and is not admitted.
+3. Reconcile every claim. A claim whose issue is closed, lost `factory:ready`, or has a newer `factory:ready` event is released. When a claimed issue's `updated_at` changed since the last check, its timeline and its markers are read again; a corrupt ledger drops the run from dispatch, logs `claim_dropped` and lists the issue in `corrupt`. A marker whose POST did not answer is read back. A claim is confirmed only when these reads succeed.
+4. Per-tick reads, once each: the local switch, the repository switch, and `WORKFLOW.md` on `main` (2 requests). If any fails or is off, dispatch is skipped for this tick and `dispatch.reasons` names why. The last valid workflow's limits stay in force.
+5. Discover. For each candidate the controller has not seen at its current `updated_at`, and for each claim recorded locally before a restart, it reads the issue's markers. A live marker is adopted as the existing run, never admitted again. When that run is released because the issue has a newer ready event, the issue is admitted in the same tick. A corrupt ledger stops dispatch for that issue.
+6. Dispatch, while slots remain. Slots are `agent.max_concurrent` minus the claims that are `claimed`, `running` or `blocked`. Only a claim confirmed in step 3 or 5 launches; one whose read failed waits for a later tick. A due retry launches first. Then each new candidate, lowest issue number first, goes through `admitTicket` with the per-tick reads, so it costs only the 4 issue reads. A claim takes its slot as soon as it is recorded, even while its first marker is unconfirmed, and launches once the marker is confirmed. A candidate without a slot is listed in `queued` and is not admitted.
 
 A switch that is off stops new claims and new launches. It does not end or release runs that already exist.
 
@@ -408,11 +411,11 @@ A marker counts only when all of these hold. Anything else from another author i
 - `user.login` is `exe-dev-github-integration[bot]` and `user.type` is `Bot`.
 - `performed_via_github_app.slug` is `exe-dev-github-integration` when it is present.
 - `issue_url` names the same repository and issue.
-- GraphQL `lastEditedAt` for the comment is `null`. One request reads it for every candidate: `gh api graphql -f query=<nodes query> -f ids[]=<node_id>...`, at most 100 IDs per request.
+- GraphQL `lastEditedAt` for the comment is `null`. One request reads it for every comment by `exe-dev-github-integration[bot]`, marker or not: `gh api graphql -f query=<nodes query> -f ids[]=<node_id>...`, at most 100 IDs per request.
 - The JSON parses with exactly the keys above, `v` is `1`, every value matches its pattern, and `runId` is the digest of its own `repo`, `issue` and `eventId`.
 - When the state directory has an admission record for the event, the marker's `eventAt`, `snapshotDigest`, `workflowSha` and `workflowDigest` match it.
 
-The current marker is the trusted one with the highest `seq`. A bot comment that starts with `<!-- factory:` and fails a rule, two markers with the same `seq`, two markers of one run that disagree on the admission fields, or a marker after its run's terminal one, make the issue corrupt. A corrupt issue is listed in `corrupt` with its `defect`, and nothing is dispatched for it until its `updated_at` changes and a fresh read is clean.
+The current marker is the trusted one with the highest `seq`. A bot comment that was edited, or whose GraphQL node does not name the same comment, issue and repository, whatever its text, a bot comment that starts with `<!-- factory:` and fails a rule, two markers with the same `seq`, two markers of one run that disagree on the admission fields, or a marker after its run's terminal one, make the issue corrupt. A corrupt issue is listed in `corrupt` with its `defect`, and nothing is dispatched for it until its `updated_at` changes and a fresh read is clean.
 
 | `defect` | Cause |
 | --- | --- |
@@ -430,7 +433,7 @@ The controller keeps no database. A restart rebuilds each claim from the markers
 
 - `<state-dir>/claims/<runId>.json`, mode 0600, names each claimed run's issue and event. It is written before the first marker and removed when the run ends. On start, the controller reads the markers of every issue it names, even one that is no longer a candidate, so a claim on an issue closed while the controller was down is released.
 - A live current marker is adopted with its `runId`, `seq`, stage and attempt. A `blocked` or `claimed` run launches its stage once more. When that ends in the same status, stage and attempt, nothing is posted. A `running` run was interrupted, and counts as a failed attempt. A `retrying` run is due at the marker's `created_at` plus its backoff.
-- An admission recorded locally whose marker never landed is claimed again under the same `runId`: the duplicate admission reads the record back with `AdmissionStore.read`.
+- An admission recorded locally whose marker never landed is claimed again under the same `runId`. Before any fresh admission, the controller lists the issue's records with `AdmissionStore.listEvents`. When one has no marker and its event is still the latest `factory:ready` event, it is read back with `AdmissionStore.read` and adopted with its original snapshot and workflow binding, and `admission_recovered` is logged. So an issue edited or renamed after its admission is not refused. The timeline is read for this only when such a record exists.
 - `<state-dir>/workspaces/<runId>/` is created empty with mode 0700 when the run is claimed. If it is missing on restart, the controller logs `workspace_missing`, creates it again, replays the stage and reports `workspace: "missing_replayed"`. It never marks a stage done without evidence.
 
 ### Claim snapshot
@@ -458,20 +461,20 @@ With `--state-dir`, `controller` has `state`, `pid`, `since` and `lastTick`:
 
 | `state` | Meaning |
 | --- | --- |
-| `running` | A live process holds the lock. `pid` and `since` name it. |
-| `stopped` | No lock file exists. |
-| `stale_lock` | The lock names a process that has exited. The next controller replaces it. |
-| `unreadable_lock` | The lock file exists but cannot be read or parsed. |
+| `running` | A process has the lock socket bound. `pid` and `since` come from `controller.lock`, and are `null` when it is missing or unreadable. |
+| `stopped` | No process has the socket bound, and no `controller.lock` exists. |
+| `stale_lock` | No process has the socket bound, and `controller.lock` names a controller that is gone. The next controller replaces the file. |
+| `unreadable_lock` | No process has the socket bound and `controller.lock` cannot be parsed, or the state directory or the socket cannot be checked. |
 
 `lastTick` is the content of `<state-dir>/status.json`, or `null`.
 
 ### Logs
 
-The controller logs one line per event to stderr, as `at=<ISO time> event=<name> key=value ...`. A value outside letters, digits and `:._@/[]+-` is printed as `(withheld)`. The events are `controller_ready`, `controller_running`, `controller_refused`, `controller_stopping`, `lock_stale_replaced`, `tick`, `claim_taken`, `claim_adopted`, `claim_released`, `claim_unwritable`, `stage_launched`, `stage_stalled`, `stage_ended`, `marker_posted`, `marker_unconfirmed`, `marker_corrupt`, `workspace_missing`, `workspace_unavailable` and `status_unwritable`.
+The controller logs one line per event to stderr, as `at=<ISO time> event=<name> key=value ...`. A value outside letters, digits and `:._@/[]+-` is printed as `(withheld)`. The events are `controller_ready`, `controller_running`, `controller_refused`, `controller_stopping`, `lock_stale_replaced`, `tick`, `claim_taken`, `claim_adopted`, `claim_released`, `claim_dropped`, `claim_unwritable`, `admission_recovered`, `stage_launched`, `stage_stalled`, `stage_ended`, `marker_posted`, `marker_unconfirmed`, `marker_corrupt`, `workspace_missing`, `workspace_unavailable` and `status_unwritable`.
 
 ### Stop
 
-SIGTERM or SIGINT lets the current tick finish, then `serve` logs `controller_stopping`, removes the lock and exits 0.
+SIGTERM or SIGINT lets the current tick finish, then `serve` logs `controller_stopping`, removes `controller.lock`, closes the lock socket and exits 0.
 
 ### Install the service
 

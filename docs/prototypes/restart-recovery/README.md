@@ -112,7 +112,23 @@ From these results, a marker comment is controller state only when all of these 
 5. GraphQL `lastEditedAt` for its `node_id` is `null`, and that node names the same `databaseId`, issue and repository.
 6. Its body parses as a version 1 marker whose `repo`, `issue`, `runId` and `eventId` agree with each other and with the issue.
 
-A comment from any other author is ignored. A bot comment that starts with the marker prefix and fails any other rule is corrupt, and the controller stops dispatching that issue.
+A comment from any other author is ignored. Rule 5 applies to every comment by `exe-dev-github-integration[bot]`, whatever its text, so an owner who edits a marker and removes its prefix makes the issue corrupt instead of hiding the marker. A bot comment that starts with the marker prefix and fails any other rule is corrupt too, and the controller stops dispatching that issue.
+
+## The controller lock
+
+The first lock was `controller.lock` created with `O_EXCL`, with a stale-lock takeover. Two processes that both found a stale file could both unlink and recreate it, and both ran: an audit saw that in 13 of 40 trials. The lock is now a Linux abstract Unix socket, `\0pi-herdr-factorio/<sha256 of the state directory's real path>`, bound with `net.createServer().listen({ path, exclusive: true })`.
+
+Probed on 2026-10-29 on `pi-factorio`, Node v26.12.1, kernel 6.12.113, with a small Node script that binds the name for a state directory and holds it:
+
+| Check | Result |
+| --- | --- |
+| A second process binds the same name while the first holds it. | `EADDRINUSE`. |
+| A process binds the name through a symlink to the same directory. | `EADDRINUSE`: the name comes from the real path. |
+| A process binds the name of a different state directory. | Bound. Two directories never collide. |
+| `kill -9` the holder, then bind again. | Bound. The `@pi-herdr-factorio/...` entry left `/proc/net/unix` with the process. |
+| Two processes started at once, 40 trials. | Exactly one bound and one got `EADDRINUSE` in 40 of 40. |
+
+`controller.lock` stays only to name the holder for `status`. It is never the authority.
 
 ## What this does not prove
 
