@@ -104,7 +104,8 @@ export type MarkerDefect =
 	| "duplicate_seq"
 	| "conflicting_run"
 	| "after_terminal"
-	| "record_mismatch";
+	| "record_mismatch"
+	| "marker_missing";
 
 export type MarkerParse =
 	| { readonly kind: "none" }

@@ -83,6 +83,8 @@ export type ClaimRecord = {
 	readonly runId: Digest;
 	readonly issue: number;
 	readonly eventId: string;
+	/** The `seq` of this run's last marker known to have landed, or `null` before the first is confirmed. */
+	readonly seq: number | null;
 };
 
 export type WorkspaceState = "present" | "missing" | "unavailable";
@@ -260,7 +262,17 @@ type Limits = {
 	stallMs(stage: Stage): number;
 };
 
-type Eligibility = "confirmed" | "unverified" | "released" | "dropped";
+/** `stale`: the marker ledger read behind the confirmed floor, so nothing is posted this tick. */
+type Eligibility =
+	| "confirmed"
+	| "unverified"
+	| "stale"
+	| "released"
+	| "dropped";
+
+function mayPublish(eligibility: Eligibility): boolean {
+	return eligibility !== "dropped" && eligibility !== "stale";
+}
 
 type Gate =
 	| { readonly kind: "open"; readonly reads: TickReads }
@@ -406,6 +418,13 @@ export class Orchestrator {
 	readonly #confirmed = new Set<number>();
 	/** Issues whose marker ledger this tick read clean. */
 	readonly #ledgerRead = new Set<number>();
+	/**
+	 * The highest marker `seq` this controller confirmed on each issue, from its
+	 * own landed POSTs, adopted markers and claim records. It outlives the run.
+	 */
+	readonly #floor = new Map<number, number>();
+	/** The tick in which each issue's ledger first read behind its floor. */
+	readonly #stale = new Map<number, number>();
 
 	constructor(input: OrchestratorInput) {
 		this.#input = input;
@@ -505,7 +524,11 @@ export class Orchestrator {
 
 	async #loadClaims(): Promise<void> {
 		for (const claim of await this.#input.files.listClaims()) {
-			if (this.#inScope(claim.issue)) this.#recover.add(claim.issue);
+			if (!this.#inScope(claim.issue)) continue;
+
+			this.#recover.add(claim.issue);
+
+			if (claim.seq !== null) this.#raiseFloor(claim.issue, claim.seq);
 		}
 
 		this.#claimsLoaded = true;
@@ -589,7 +612,7 @@ export class Orchestrator {
 					? await this.#checkEligible(run, candidates.value)
 					: "unverified";
 
-			if (eligibility !== "dropped") await this.#sync(run);
+			if (mayPublish(eligibility)) await this.#sync(run);
 		}
 	}
 
@@ -669,6 +692,21 @@ export class Orchestrator {
 
 				return "dropped";
 			}
+
+			const behind = this.#behind(run.issue, ledger.value);
+
+			if (behind === "stale") {
+				this.state.seen.delete(run.issue);
+
+				return "stale";
+			}
+
+			if (behind === "missing") {
+				this.#markMissing(run.issue, updatedAt);
+				this.#drop(run);
+
+				return "dropped";
+			}
 		}
 
 		this.state.seen.set(run.issue, { updatedAt, verdict: { kind: "claimed" } });
@@ -681,6 +719,7 @@ export class Orchestrator {
 		if (run.phase.kind === "running") run.phase.abort.abort();
 
 		this.state.runs.delete(run.issue);
+		this.#confirmed.delete(run.issue);
 		this.#input.log("claim_dropped", {
 			issue: run.issue,
 			runId: run.runId,
@@ -782,6 +821,43 @@ export class Orchestrator {
 		});
 	}
 
+	#markMissing(issue: number, updatedAt: string | null): void {
+		this.#markCorrupt(
+			issue,
+			{ kind: "corrupt", defect: "marker_missing", commentId: "" },
+			updatedAt,
+		);
+	}
+
+	#raiseFloor(issue: number, seq: number): void {
+		this.#floor.set(issue, Math.max(this.#floor.get(issue) ?? 0, seq));
+	}
+
+	/**
+	 * Checks a clean ledger against the issue's floor. A ledger whose highest
+	 * `seq` is below it lags a confirmed POST or lost comments. The first such
+	 * read defers the issue; one in a later tick is `missing`.
+	 */
+	#behind(issue: number, ledger: CleanLedger): "current" | "stale" | "missing" {
+		const floor = this.#floor.get(issue) ?? 0;
+		const seq = ledger.markers.at(-1)?.marker.seq ?? 0;
+
+		if (seq >= floor) {
+			this.#stale.delete(issue);
+
+			return "current";
+		}
+
+		const since = this.#stale.get(issue);
+
+		if (since !== undefined) return since < this.#ticks ? "missing" : "stale";
+
+		this.#stale.set(issue, this.#ticks);
+		this.#input.log("ledger_stale", { issue, seq, floor });
+
+		return "stale";
+	}
+
 	async #discover(candidates: readonly IssueRecord[]): Promise<void> {
 		const records = new Map(
 			candidates.map((record) => [record.number, record]),
@@ -811,7 +887,22 @@ export class Orchestrator {
 
 			if (ledger.kind === "failed") continue;
 
+			const behind =
+				ledger.value.kind === "clean"
+					? this.#behind(issue, ledger.value)
+					: "current";
+
+			if (behind === "stale") {
+				this.state.seen.delete(issue);
+				continue;
+			}
+
 			this.#recover.delete(issue);
+
+			if (behind === "missing") {
+				this.#markMissing(issue, record.updatedAt);
+				continue;
+			}
 
 			if (ledger.value.kind === "corrupt") {
 				this.#markCorrupt(issue, ledger.value, record.updatedAt);
@@ -930,10 +1021,12 @@ export class Orchestrator {
 		};
 
 		this.state.runs.set(run.issue, run);
+		this.#raiseFloor(run.issue, seq);
 		await this.#input.files.writeClaim({
 			runId: run.runId,
 			issue: run.issue,
 			eventId: run.eventId,
+			seq,
 		});
 
 		this.#input.log("claim_adopted", {
@@ -960,7 +1053,7 @@ export class Orchestrator {
 			};
 		}
 
-		if ((await this.#checkEligible(run, candidates)) !== "dropped") {
+		if (mayPublish(await this.#checkEligible(run, candidates))) {
 			await this.#sync(run);
 		}
 
@@ -1210,7 +1303,7 @@ export class Orchestrator {
 			stage: FIRST_STAGE,
 			attempt: 1,
 			usage: 0,
-			seq: input.seq,
+			seq: Math.max(input.seq, this.#floor.get(issue) ?? 0),
 			marked: null,
 			inflight: null,
 			workspaceMissing: false,
@@ -1223,6 +1316,7 @@ export class Orchestrator {
 				runId,
 				issue,
 				eventId: run.eventId,
+				seq: null,
 			}))
 		) {
 			this.#input.log("claim_unwritable", { issue, runId });
@@ -1334,6 +1428,8 @@ export class Orchestrator {
 	async #sync(run: ActiveRun): Promise<void> {
 		if (run.inflight?.tick === this.#ticks) return;
 
+		const before = run.seq;
+
 		if ((await this.#recoverUncertainPost(run)) === "stop") return;
 
 		await this.#publishMarker(run);
@@ -1341,6 +1437,20 @@ export class Orchestrator {
 		if (run.marked !== null && isTerminal(run.marked.status)) {
 			this.state.runs.delete(run.issue);
 			await this.#input.files.removeClaim(run.runId);
+		} else if (run.marked !== null && run.seq !== before) {
+			const written = await this.#input.files.writeClaim({
+				runId: run.runId,
+				issue: run.issue,
+				eventId: run.eventId,
+				seq: run.marked.seq,
+			});
+
+			if (!written) {
+				this.#input.log("claim_unwritable", {
+					issue: run.issue,
+					runId: run.runId,
+				});
+			}
 		}
 	}
 
@@ -1355,6 +1465,12 @@ export class Orchestrator {
 
 				return "stop";
 			}
+
+			const behind = this.#behind(run.issue, ledger.value);
+
+			if (behind === "missing") this.#markMissing(run.issue, null);
+
+			if (behind !== "current") return "stop";
 
 			const sent = run.inflight.marker;
 			const latest = latestFor(ledger.value, run.runId);
@@ -1422,6 +1538,7 @@ export class Orchestrator {
 		run.marked = marker;
 		run.seq = marker.seq;
 		run.inflight = null;
+		this.#raiseFloor(run.issue, marker.seq);
 		this.#input.log("marker_posted", {
 			issue: run.issue,
 			runId: run.runId,

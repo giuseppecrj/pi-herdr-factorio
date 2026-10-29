@@ -306,13 +306,24 @@ export async function acquireLock(input: {
 	};
 }
 
+/** A record written before claims carried a `seq` has none, and loads with `seq: null`. */
+function claimSeq(value: JsonValue | undefined): number | null | undefined {
+	if (value === undefined || value === null) return null;
+
+	return value === Number(value) && Number.isSafeInteger(value) && value >= 1
+		? value
+		: undefined;
+}
+
 function parseClaim(text: string): ClaimRecord | null {
 	const value = parseJson(text);
 	const runId = fieldOf(value, "runId");
 	const issue = fieldOf(value, "issue");
 	const eventId = fieldOf(value, "eventId");
+	const seq = claimSeq(fieldOf(value, "seq"));
 
 	if (
+		seq === undefined ||
 		runId !== String(runId) ||
 		!isDigest(String(runId)) ||
 		issue !== Number(issue) ||
@@ -327,7 +338,7 @@ function parseClaim(text: string): ClaimRecord | null {
 	const id = String(runId);
 
 	return isDigest(id)
-		? { runId: id, issue: Number(issue), eventId: String(eventId) }
+		? { runId: id, issue: Number(issue), eventId: String(eventId), seq }
 		: null;
 }
 
