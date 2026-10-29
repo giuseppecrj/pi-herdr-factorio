@@ -58,7 +58,6 @@ function marker(change: Partial<Marker> = {}): Marker {
 	};
 }
 
-/** The marker's JSON with `edit` applied, as a raw comment body. */
 function rawBody(edit: (fields: Map<string, JsonValue>) => void): string {
 	const fields = new Map<string, JsonValue>(Object.entries(marker()));
 

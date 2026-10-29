@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# Starts or stops one scoped serve on the lane. start records the PID in
-# <lane>/serve.pid and waits for event=controller_ready. stop sends SIGTERM
-# to that PID only, waits for it to exit and checks the lock is gone.
-# Usage: vm.sh drive-serve.sh <pr-id> <worker-n> start <issue>...
-#        vm.sh drive-serve.sh <pr-id> <worker-n> stop
 set -uo pipefail
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
 export GH_HOST=github.int.exe.xyz

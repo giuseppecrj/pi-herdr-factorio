@@ -275,7 +275,6 @@ function limitsOf(config: WorkflowConfig | null): Limits {
 	};
 }
 
-/** Refusals that stay true until the issue changes, so an unchanged issue is not read again. */
 const SETTLED_REFUSALS: ReadonlySet<RefusalReason["kind"]> = new Set([
 	"pull_request",
 	"issue_closed",
@@ -314,7 +313,6 @@ function holdsSlot(run: ActiveRun): boolean {
 	);
 }
 
-/** `advance` moves an admitted run from `admit` to this stage. */
 const FIRST_STAGE: Stage = "specify";
 
 /**
@@ -705,11 +703,6 @@ export class Orchestrator {
 		});
 	}
 
-	/**
-	 * Reads markers for each issue this controller does not hold yet: changed
-	 * candidates, and claims recorded before a restart. A live marker is adopted
-	 * as the existing run, never admitted again.
-	 */
 	async #discover(candidates: readonly IssueRecord[]): Promise<void> {
 		const records = new Map(
 			candidates.map((record) => [record.number, record]),
@@ -779,12 +772,6 @@ export class Orchestrator {
 		}
 	}
 
-	/**
-	 * Removes claim records the issue no longer backs. The issue has no live
-	 * marker here, so a claim is dead when its run ended, or when the issue is
-	 * no longer a candidate. A candidate's claim without a marker is kept: the
-	 * next admission finds its record and claims the same run again.
-	 */
 	async #forgetClaims(
 		ledger: CleanLedger,
 		issue: number,
@@ -1074,10 +1061,6 @@ export class Orchestrator {
 		return run.inflight === null ? run : null;
 	}
 
-	/**
-	 * Launches the run's current stage. A missing workspace is created again
-	 * and the stage replays from the admitted inputs; nothing is marked done.
-	 */
 	async #launch(run: ActiveRun): Promise<void> {
 		const { files, executor, clock } = this.#input;
 		const workspace = await files.ensureWorkspace(run.runId);
@@ -1149,11 +1132,6 @@ export class Orchestrator {
 		await this.#sync(run);
 	}
 
-	/**
-	 * Brings the issue's markers in line with the run. It posts only when the
-	 * last marker that landed differs in status, stage or attempt. An unknown
-	 * POST is read back first, so a marker is never posted twice.
-	 */
 	async #sync(run: ActiveRun): Promise<void> {
 		if (run.inflight?.tick === this.#ticks) return;
 

@@ -380,10 +380,6 @@ function realRuntime(): ControllerRuntime {
 	};
 }
 
-/**
- * `tick --once`, `run --issue` and `serve`. Each takes the controller lock
- * before any `gh` call, then checks that `gh` acts as the integration bot.
- */
 async function runController(
 	parsed: Extract<Parsed, { kind: "controller" }>,
 	io: CliIo,

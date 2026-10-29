@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-# Restart-recovery probe. Runs on pi-factorio through the GitHub integration.
-# vm.sh checks its first two arguments as lane IDs, so every argument here is
-# a word or a number and the script builds the request text itself.
-# Usage: vm.sh probe.sh identity|create|post <issue>|read <issue>|nodes <issue>|fail <issue>|timeout <issue> <seconds>|close <issue>
 set -uo pipefail
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
 export GH_HOST=github.int.exe.xyz

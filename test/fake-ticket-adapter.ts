@@ -136,7 +136,6 @@ export type FakeComment = {
 	body: string;
 	createdAt: string;
 	lastEditedAt: string | null;
-	/** Overrides the issue the REST `issue_url` names. */
 	issueUrl?: string;
 };
 
@@ -243,7 +242,6 @@ export function networkError(): ExecResult {
 
 export const BOT_LOGIN = "exe-dev-github-integration[bot]";
 
-/** What the next comment POSTs do: answer, fail with a status, or land and then time out. */
 export type PostBehavior = "ok" | "rejected" | "lost" | "landed_unanswered";
 
 export class FakeGitHub {
@@ -290,7 +288,6 @@ export class FakeGitHub {
 		return this.#answer(path, args);
 	};
 
-	/** Adds a comment as `login`, as another account or the bot would. */
 	comment(
 		issue: FakeIssue,
 		body: string,

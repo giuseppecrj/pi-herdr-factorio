@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# One controller tick on the lane: tick --once over the scoped issues, or
-# run --issue for one issue. Prints the claim snapshot and the markers.
-# Usage: vm.sh drive-tick.sh <pr-id> <worker-n> tick|run <issue>...
 set -uo pipefail
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
 export GH_HOST=github.int.exe.xyz
