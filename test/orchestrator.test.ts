@@ -15,7 +15,7 @@ import { EXIT, runCli } from "../server/cli.ts";
 import {
 	acquireLock,
 	fileRunFiles,
-	LOCK_FILE,
+	HOLDER_FILE,
 	type ProcessTable,
 	parseStartTime,
 } from "../server/controller.ts";
@@ -943,7 +943,7 @@ describe("server/cli.ts controller commands", () => {
 
 		assert.equal(run.code, EXIT.ok, run.stderr);
 		assert.equal(JSON.parse(run.stdout).runs[0].status, "blocked");
-		assert.equal(existsSync(join(state, LOCK_FILE)), false);
+		assert.equal(existsSync(join(state, HOLDER_FILE)), false);
 		assert.equal(
 			JSON.parse(readFileSync(join(state, "status.json"), "utf8")).runs.length,
 			1,
@@ -991,9 +991,9 @@ describe("server/cli.ts controller commands", () => {
 			github,
 		);
 
-		assert.ok(existsSync(join(state, LOCK_FILE)));
+		assert.ok(existsSync(join(state, HOLDER_FILE)));
 
-		rmSync(join(state, LOCK_FILE));
+		rmSync(join(state, HOLDER_FILE));
 
 		const unnamed = await cli(
 			["run", "--json", ...base, "--issue", "14", "--state-dir", state],
@@ -1020,7 +1020,7 @@ describe("server/cli.ts controller commands", () => {
 		const github = new FakeGitHub();
 		const state = stateDir();
 
-		writeFileSync(join(state, LOCK_FILE), STALE_HOLDER);
+		writeFileSync(join(state, HOLDER_FILE), STALE_HOLDER);
 
 		const run = await cli(
 			["tick", "--once", "--json", ...base, "--state-dir", state],
@@ -1029,7 +1029,7 @@ describe("server/cli.ts controller commands", () => {
 
 		assert.equal(run.code, EXIT.ok, run.stderr);
 		assert.match(run.stderr, /event=lock_stale_replaced pid=5000/);
-		assert.equal(existsSync(join(state, LOCK_FILE)), false);
+		assert.equal(existsSync(join(state, HOLDER_FILE)), false);
 	});
 
 	it("refuses to start as any identity but the integration bot", async () => {
@@ -1049,7 +1049,7 @@ describe("server/cli.ts controller commands", () => {
 			run.stderr,
 			/event=controller_refused reason=identity_mismatch/,
 		);
-		assert.equal(existsSync(join(state, LOCK_FILE)), false);
+		assert.equal(existsSync(join(state, HOLDER_FILE)), false);
 		assert.deepEqual(statuses(github, 14), []);
 	});
 
@@ -1071,7 +1071,7 @@ describe("server/cli.ts controller commands", () => {
 		);
 		assert.match(run.stderr, /event=controller_stopping/);
 		assert.equal(run.stdout, "");
-		assert.equal(existsSync(join(state, LOCK_FILE)), false);
+		assert.equal(existsSync(join(state, HOLDER_FILE)), false);
 		assert.ok(existsSync(join(state, "status.json")));
 	});
 
@@ -1109,7 +1109,7 @@ describe("server/cli.ts controller commands", () => {
 
 		const stopped = await status();
 
-		writeFileSync(join(state, LOCK_FILE), STALE_HOLDER);
+		writeFileSync(join(state, HOLDER_FILE), STALE_HOLDER);
 
 		const stale = await status();
 
@@ -1537,7 +1537,7 @@ describe("acquireLock", () => {
 		const state = stateDir();
 
 		writeFileSync(
-			join(state, LOCK_FILE),
+			join(state, HOLDER_FILE),
 			JSON.stringify({
 				pid: 5000,
 				startTime: "7",
@@ -1603,7 +1603,7 @@ describe("acquireLock", () => {
 			const state = stateDir();
 
 			writeFileSync(
-				join(state, LOCK_FILE),
+				join(state, HOLDER_FILE),
 				JSON.stringify({
 					pid: 999_999_999,
 					startTime: "7",
@@ -1632,7 +1632,7 @@ describe("acquireLock", () => {
 		});
 
 		assert.equal(first.kind, "acquired");
-		rmSync(join(state, LOCK_FILE), { force: true });
+		rmSync(join(state, HOLDER_FILE), { force: true });
 
 		const second = await acquireLock({
 			stateDir: state,

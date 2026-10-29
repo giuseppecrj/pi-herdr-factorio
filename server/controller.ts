@@ -23,26 +23,22 @@ import type {
 } from "../src/orchestrator.ts";
 import type { JsonValue } from "../src/tickets.ts";
 
-/** Names the lock holder for `status`. The bound socket, not this file, is the lock. */
-export const LOCK_FILE = "controller.lock";
+export const HOLDER_FILE = "controller.lock";
 export const STATUS_FILE = "status.json";
 
-/** Who holds the controller lock: a pid and that process's start time from `/proc/<pid>/stat`. */
 export type LockHolder = {
 	readonly pid: number;
 	readonly startTime: string;
 	readonly acquiredAt: string;
 };
 
-/**
- * What `status` sees. `live` means a controller has the socket bound; its
- * holder is `null` when the lock file is missing or unreadable. `stale` is a
- * lock file left by a controller that is gone.
- */
-export type LockState =
+export type SocketLockState =
 	| { readonly kind: "none" }
-	| { readonly kind: "live"; readonly holder: LockHolder | null }
-	| { readonly kind: "stale"; readonly holder: LockHolder }
+	| { readonly kind: "socket_bound"; readonly holderFile: LockHolder | null }
+	| {
+			readonly kind: "holder_file_without_socket";
+			readonly holderFile: LockHolder;
+	  }
 	| { readonly kind: "unreadable" };
 
 export type LockAcquire =
@@ -54,7 +50,6 @@ export type LockAcquire =
 	| { readonly kind: "held"; readonly holder: LockHolder | null }
 	| { readonly kind: "unavailable" };
 
-/** This process's pid and start time. The real one reads `/proc/self/stat`. */
 export type ProcessTable = {
 	readonly self: { readonly pid: number; readonly startTime: string };
 };
@@ -170,7 +165,6 @@ function holderOf(file: HolderFile): LockHolder | null {
 	return file.kind === "holder" ? file.holder : null;
 }
 
-/** Whether a controller has the name bound, by connecting to it. Connecting never takes the lock. */
 async function probeName(name: string): Promise<"bound" | "free" | "unknown"> {
 	return new Promise((done) => {
 		const socket = createConnection({ path: name });
@@ -189,7 +183,7 @@ async function probeName(name: string): Promise<"bound" | "free" | "unknown"> {
 }
 
 /** Reads the lock without taking it. `status --json` uses this. */
-export async function readLock(stateDir: string): Promise<LockState> {
+export async function readLock(stateDir: string): Promise<SocketLockState> {
 	let real: string;
 
 	try {
@@ -199,20 +193,20 @@ export async function readLock(stateDir: string): Promise<LockState> {
 	}
 
 	const probe = await probeName(lockName(real));
-	const file = await readHolderFile(join(real, LOCK_FILE));
+	const file = await readHolderFile(join(real, HOLDER_FILE));
 
 	if (probe === "unknown") return { kind: "unreadable" };
 
-	if (probe === "bound") return { kind: "live", holder: holderOf(file) };
+	if (probe === "bound")
+		return { kind: "socket_bound", holderFile: holderOf(file) };
 
 	if (file.kind === "absent") return { kind: "none" };
 
 	return file.kind === "holder"
-		? { kind: "stale", holder: file.holder }
+		? { kind: "holder_file_without_socket", holderFile: file.holder }
 		: { kind: "unreadable" };
 }
 
-/** The held lock: the bound socket. `release` removes the lock file only while it still names this process. */
 export class ControllerLock {
 	readonly path: string;
 	readonly holder: LockHolder;
@@ -277,7 +271,7 @@ export async function acquireLock(input: {
 		return { kind: "unavailable" };
 	}
 
-	const path = join(real, LOCK_FILE);
+	const path = join(real, HOLDER_FILE);
 	const server = createServer((socket) => socket.destroy());
 	const bound = await bind(server, lockName(real));
 

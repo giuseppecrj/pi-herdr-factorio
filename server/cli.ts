@@ -38,7 +38,7 @@ import {
 import {
 	acquireLock,
 	fileRunFiles,
-	type LockState,
+	type SocketLockState,
 	lineLog,
 	type ProcessTable,
 	procTable,
@@ -333,16 +333,18 @@ function json(report: Printable): string {
 }
 
 function controllerView(
-	lock: LockState,
+	lock: SocketLockState,
 	lastTick: JsonValue | null,
 ): ControllerView {
 	const holder =
-		lock.kind === "live" || lock.kind === "stale" ? lock.holder : null;
+		lock.kind === "socket_bound" || lock.kind === "holder_file_without_socket"
+			? lock.holderFile
+			: null;
 
 	const state = {
 		none: "stopped",
-		live: "running",
-		stale: "stale_lock",
+		socket_bound: "running",
+		holder_file_without_socket: "stale_lock",
 		unreadable: "unreadable_lock",
 	} as const;
 
