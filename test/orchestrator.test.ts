@@ -4556,6 +4556,122 @@ describe("Orchestrator refusals on unproved evidence", () => {
 	});
 });
 
+function staleList(github: FakeGitHub, issue: number): Exec {
+	return async (command, args) => {
+		const path = args.find((arg) => arg.startsWith("repos/")) ?? "";
+		const stale = github.issues.get(issue);
+
+		if (!path.includes("/issues?") || stale === undefined) {
+			return github.exec(command, args);
+		}
+
+		const { state } = stale;
+
+		stale.state = "open";
+
+		try {
+			return await github.exec(command, args);
+		} finally {
+			stale.state = state;
+		}
+	};
+}
+
+function issueReads(github: FakeGitHub, issue: number): number {
+	const path = `repos/${FAKE_REPO}/issues/${issue}`;
+
+	return github.calls.filter((call) => call.includes(path)).length;
+}
+
+function launched(logs: { event: string; fields: LogFields }[]): unknown[] {
+	return logs.flatMap((entry) =>
+		entry.event === "stage_launched" ? [entry.fields.issue] : [],
+	);
+}
+
+describe("Orchestrator launch after a direct issue read", () => {
+	it("releases a due retry whose closed issue the list still shows open, and gives its slot to the next issue", async () => {
+		const { github, clock, executor, logs, wire, start } = world();
+		const issue = github.add(labeled(14));
+
+		capAt(github, 1);
+		executor.behaviors = [{ kind: "fail", usage: 0 }];
+
+		const controller = start();
+
+		await controller.tick();
+
+		const queued = await controller.tick();
+
+		assert.equal(queued.runs[0]?.status, "retrying");
+
+		github.add(labeled(15));
+		issue.state = "closed";
+		wire.intercept = staleList(github, 14);
+		clock.t += 10_000;
+		logs.length = 0;
+
+		const report = await controller.tick();
+
+		assert.deepEqual(launched(logs), [15]);
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:running",
+			"3:retrying",
+			"4:released",
+		]);
+		assert.deepEqual(
+			report.runs.map((run) => [run.issue, run.status]),
+			[[15, "blocked"]],
+		);
+	});
+
+	it("releases a replayed blocked run whose closed issue the list still shows open, and gives its slot to the next issue", async () => {
+		const { github, logs, wire, start } = world();
+		const issue = github.add(labeled(14));
+
+		capAt(github, 1);
+		await start().tick();
+		github.add(labeled(15));
+		issue.state = "closed";
+		wire.intercept = staleList(github, 14);
+		logs.length = 0;
+
+		const report = await start().tick();
+
+		assert.deepEqual(launched(logs), [15]);
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:blocked",
+			"3:released",
+		]);
+		assert.deepEqual(
+			report.runs.map((run) => [run.issue, run.status]),
+			[[15, "blocked"]],
+		);
+	});
+
+	it("reuses this tick's direct read of an issue the list omits", async () => {
+		const { github, clock, executor, logs, wire, start } = world();
+
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "fail", usage: 0 }];
+
+		const controller = start();
+
+		await controller.tick();
+		await controller.tick();
+		wire.intercept = omitFromList(github, 14);
+		clock.t += 10_000;
+		github.calls.length = 0;
+		logs.length = 0;
+		await controller.tick();
+
+		assert.deepEqual(launched(logs), [14]);
+		assert.equal(issueReads(github, 14), 1, JSON.stringify(github.calls));
+	});
+});
+
 describe("acquireLock", () => {
 	const now = () => START;
 

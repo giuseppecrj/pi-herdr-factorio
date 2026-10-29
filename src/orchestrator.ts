@@ -508,6 +508,7 @@ export class Orchestrator {
 	readonly #reserved = new Set<number>();
 	/** Issues whose claim this tick confirmed eligible. Only these launch. */
 	readonly #confirmed = new Set<number>();
+	readonly #readOpen = new Set<number>();
 	/** Issues whose marker ledger this tick read clean. */
 	readonly #ledgerRead = new Set<number>();
 	readonly #local = new Map<number, ConfirmedRecord>();
@@ -561,6 +562,7 @@ export class Orchestrator {
 		this.#ticks++;
 		this.#tickAt = now;
 		this.#confirmed.clear();
+		this.#readOpen.clear();
 		this.#ledgerRead.clear();
 		const refused: { issue: number; reasons: RefusalReason["kind"][] }[] = [];
 
@@ -782,6 +784,7 @@ export class Orchestrator {
 				return "released";
 			}
 
+			this.#readOpen.add(run.issue);
 			record = issue;
 		}
 
@@ -1102,7 +1105,10 @@ export class Orchestrator {
 
 			records.set(issue, read.value);
 
-			if (isReady(read.value)) direct.push(read.value);
+			if (isReady(read.value)) {
+				this.#readOpen.add(issue);
+				direct.push(read.value);
+			}
 		}
 
 		for (const record of records.values()) {
@@ -1514,12 +1520,6 @@ export class Orchestrator {
 			}
 		}
 
-		const reserved = [...this.#reserved].filter(
-			(issue) => !this.state.runs.has(issue),
-		).length;
-
-		let slots = Math.max(limits.maxConcurrent - this.#active() - reserved, 0);
-
 		for (const run of runs) {
 			if (
 				run.inflight === null &&
@@ -1530,6 +1530,12 @@ export class Orchestrator {
 				await this.#launch(run);
 			}
 		}
+
+		const reserved = [...this.#reserved].filter(
+			(issue) => !this.state.runs.has(issue),
+		).length;
+
+		let slots = Math.max(limits.maxConcurrent - this.#active() - reserved, 0);
 
 		for (const run of runs) {
 			if (
@@ -1593,7 +1599,7 @@ export class Orchestrator {
 
 		if (claimed.inflight === null) await this.#launch(claimed);
 
-		return true;
+		return claimed.phase.kind !== "ending";
 	}
 
 	/**
@@ -1695,7 +1701,11 @@ export class Orchestrator {
 			tick: reads,
 		});
 
-		if (receipt.decision === "admitted") return receipt;
+		if (receipt.decision === "admitted") {
+			this.#readOpen.add(issue);
+
+			return receipt;
+		}
 
 		const kinds = receipt.reasons.map((reason) => reason.kind);
 
@@ -1731,6 +1741,8 @@ export class Orchestrator {
 
 			return null;
 		}
+
+		this.#readOpen.add(issue);
 
 		return stored.receipt;
 	}
@@ -1841,7 +1853,28 @@ export class Orchestrator {
 		return { kind: "fresh" };
 	}
 
+	async #stillReady(run: ActiveRun): Promise<boolean> {
+		if (this.#readOpen.has(run.issue)) return true;
+
+		const read = await this.#adapter.readIssue(run.issue);
+
+		if (read.kind === "failed") return false;
+
+		if (!isReady(read.value)) {
+			this.#release(run, read.value.open ? "unlabeled" : "closed");
+			await this.#sync(run);
+
+			return false;
+		}
+
+		this.#readOpen.add(run.issue);
+
+		return true;
+	}
+
 	async #launch(run: ActiveRun): Promise<boolean> {
+		if (!(await this.#stillReady(run))) return false;
+
 		const { files, executor, clock } = this.#input;
 		const preparation = await this.#prepareWorkspace(run);
 
