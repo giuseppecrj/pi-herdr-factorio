@@ -3,3 +3,4 @@ import "./sandbox/policy.cases.ts";
 import "./sandbox/credentials.cases.ts";
 import "./sandbox/audit.cases.ts";
 import "./sandbox/gateway.cases.ts";
+import "./sandbox/launcher.cases.ts";
