@@ -14,10 +14,10 @@ import { GitHubTicketAdapter } from "../src/adapters/github.ts";
 import {
 	type Clock,
 	checkIdentity,
+	type Log,
 	Orchestrator,
 	type StageExecutor,
 	type TickReport,
-	UNAVAILABLE_EXECUTOR,
 } from "../src/orchestrator.ts";
 import type { JsonValue } from "../src/tickets.ts";
 import {
@@ -48,6 +48,7 @@ import {
 	serveLoop,
 	writeStatus,
 } from "./controller.ts";
+import { sandboxExecutor } from "./sandbox.ts";
 
 export const USAGE = `Usage:
   node server/cli.ts workflow-check --json --repo <owner/name> [--ref <branch>] [--reload-ref <branch>]
@@ -65,8 +66,17 @@ export type ControllerRuntime = {
 	procs: ProcessTable;
 	sleep: Sleep;
 	signal: AbortSignal;
-	executor: StageExecutor;
+	executor: (context: ExecutorContext) => StageExecutor;
 };
+
+export type ExecutorContext = {
+	readonly stateDir: string;
+	readonly exec: Exec;
+	readonly log: Log;
+};
+
+/** The user manager the stage scopes run under. `factory.service` sets it. */
+const XDG_RUNTIME_DIR = "/run/user/1000";
 
 export type CliIo = {
 	exec: Exec;
@@ -378,7 +388,11 @@ function realRuntime(): ControllerRuntime {
 			await delay(ms, undefined, { signal }).catch(() => undefined);
 		},
 		signal: new AbortController().signal,
-		executor: UNAVAILABLE_EXECUTOR,
+		executor: (context) =>
+			sandboxExecutor({
+				...context,
+				xdgRuntimeDir: process.env.XDG_RUNTIME_DIR ?? XDG_RUNTIME_DIR,
+			}),
 	};
 }
 
@@ -457,7 +471,11 @@ async function runController(
 			repo: parsed.repo,
 			store: fileAdmissionStore(parsed.stateDir),
 			files: fileRunFiles(parsed.stateDir),
-			executor: runtime.executor,
+			executor: runtime.executor({
+				stateDir: parsed.stateDir,
+				exec: io.exec,
+				log,
+			}),
 			clock,
 			scope: parsed.scope,
 			log,
@@ -481,7 +499,12 @@ async function runController(
 			return EXIT.ok;
 		}
 
-		const report = await orchestrator.tick();
+		const ticked = await orchestrator.tick();
+
+		const report =
+			(await orchestrator.drain((ms) =>
+				runtime.sleep(ms, new AbortController().signal),
+			)) ?? ticked;
 
 		if (!(await writeStatus(parsed.stateDir, report))) {
 			log("status_unwritable", {});

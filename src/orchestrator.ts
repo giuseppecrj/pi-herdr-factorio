@@ -36,13 +36,21 @@ import {
 } from "./markers.ts";
 import { READY_LABEL } from "./policy.ts";
 import { type Digest, runIdOf, type Stage } from "./run.ts";
+import type {
+	StageResult,
+	StageRunSettings,
+} from "../server/sandbox/result.ts";
 import {
 	DEFAULTS,
 	type EnvLookup,
 	type GitSha,
+	MODEL_STAGES,
+	type ModelStage,
 	type RepoSlug,
 	type WorkflowConfig,
 } from "./workflow.ts";
+
+export type { StageResult, StageRunSettings };
 
 /** Milliseconds since the epoch. Tests pass a fake. */
 export type Clock = { now(): number };
@@ -52,33 +60,46 @@ export type StageLaunch =
 	| {
 			readonly kind: "unavailable";
 			readonly stage: Stage;
-			readonly reason: "stage_runner_not_installed";
+			readonly reason: "sandbox_unavailable";
 	  }
 	| { readonly kind: "started"; readonly done: Promise<StageResult> };
 
-/** A started stage that ended without passing. `usage` counts toward the run budget. */
-export type StageResult = { readonly kind: "failed"; readonly usage: number };
+export type StageLaunchInput = {
+	readonly runId: Digest;
+	readonly stage: ModelStage;
+	readonly attempt: number;
+	readonly workspace: string;
+	readonly settings: StageRunSettings;
+	readonly remainingRunTokens: number;
+	readonly signal: AbortSignal;
+	/** Called on every sign of life, with the tokens the stage has used so far. */
+	readonly progress: (usage: number) => void;
+};
 
 export interface StageExecutor {
-	launch(input: {
-		runId: Digest;
-		stage: Stage;
-		workspace: string;
-		signal: AbortSignal;
-		progress: () => void;
-	}): Promise<StageLaunch>;
+	/** Stops whatever a previous controller left running. Called once, before the first tick adopts a run. */
+	recover(): Promise<void>;
+	/** Whether the stage sandbox can run. A `blocked` run replays only after this passes. */
+	preflight(): Promise<boolean>;
+	launch(input: StageLaunchInput): Promise<StageLaunch>;
 }
 
-/** The only executor until F05 installs the stage runner. It runs no model. */
+/** An executor with no sandbox. Every launch is `sandbox_unavailable`, and no model runs. */
 export const UNAVAILABLE_EXECUTOR: StageExecutor = {
+	async recover() {},
+	async preflight() {
+		return false;
+	},
 	async launch({ stage }) {
-		return {
-			kind: "unavailable",
-			stage,
-			reason: "stage_runner_not_installed",
-		};
+		return { kind: "unavailable", stage, reason: "sandbox_unavailable" };
 	},
 };
+
+type StageEnd = Pick<StageResult, "kind" | "usage">;
+
+function isModelStage(stage: Stage): stage is ModelStage {
+	return MODEL_STAGES.some((known) => known === stage);
+}
 
 /**
  * A local record that a run holds a claim, so a restart finds it even after
@@ -128,12 +149,13 @@ export type RunPhase =
 	| {
 			readonly kind: "running";
 			lastProgressAt: number;
+			usage: number;
 			readonly abort: AbortController;
-			result: StageResult | null;
+			result: StageEnd | null;
 	  }
 	| {
 			readonly kind: "blocked";
-			readonly reason: "stage_runner_not_installed";
+			readonly reason: "sandbox_unavailable";
 	  }
 	| { readonly kind: "retry_queued"; readonly dueAt: number }
 	| { readonly kind: "ending"; readonly status: TerminalStatus };
@@ -242,7 +264,7 @@ export type RunView = {
 export type TickReport = {
 	readonly repo: RepoSlug;
 	readonly at: string;
-	readonly executionEnabled: false;
+	readonly executionEnabled: boolean;
 	readonly dispatch: {
 		readonly enabled: boolean;
 		readonly reasons: readonly GateReason[];
@@ -311,6 +333,26 @@ function replacedBy(
 }
 
 const SETTLE_MS = 1000;
+
+const DRAIN_POLL_MS = 1000;
+
+const END_STATUS: Readonly<
+	Record<Exclude<StageResult["kind"], "failed">, TerminalStatus>
+> = {
+	passed: "stage_passed",
+	refused: "failed",
+	budget_exhausted: "budget_exhausted",
+};
+
+type ReportInput = {
+	readonly now: number;
+	readonly enabled: boolean;
+	readonly reasons: readonly GateReason[];
+	readonly limits: Limits | null;
+	readonly queued: readonly number[];
+	readonly absent: readonly number[];
+	readonly refused: TickReport["refused"];
+};
 
 /**
  * `updated_at` has whole seconds, so a change later in the second the issue
@@ -512,6 +554,9 @@ export class Orchestrator {
 	readonly #local = new Map<number, ConfirmedRecord>();
 	readonly #ended = new Map<Digest, EndedRecord>();
 	readonly #behind = new Map<number, TickReport["ledgerBehind"][number]>();
+	readonly #stages = new Set<Promise<void>>();
+	#enabled = false;
+	#last: ReportInput | null = null;
 
 	constructor(input: OrchestratorInput) {
 		this.#input = input;
@@ -563,7 +608,12 @@ export class Orchestrator {
 		this.#readOpen.clear();
 		const refused: { issue: number; reasons: RefusalReason["kind"][] }[] = [];
 
-		if (!this.#claimsLoaded) await this.#loadClaims();
+		if (!this.#claimsLoaded) {
+			await this.#input.executor.recover();
+			await this.#loadClaims();
+		}
+
+		this.#enabled = await this.#input.executor.preflight();
 
 		const held = this.#limits();
 
@@ -622,7 +672,7 @@ export class Orchestrator {
 					)
 				: [];
 
-		return this.#report({
+		this.#last = {
 			now,
 			enabled: open,
 			reasons,
@@ -630,7 +680,38 @@ export class Orchestrator {
 			queued,
 			absent,
 			refused,
-		});
+		};
+
+		return this.#report(this.#last);
+	}
+
+	/**
+	 * Waits until no stage is running, ending each as step 1 of a tick would:
+	 * a stage that stalls is aborted, and every ended stage posts its marker.
+	 * One-shot commands call this so they never exit with a sandbox running.
+	 * It returns the last tick's report brought up to date, or `null` when no
+	 * stage was running.
+	 */
+	async drain(wait: (ms: number) => Promise<void>): Promise<TickReport | null> {
+		const limits = this.#limits();
+		const last = this.#last;
+
+		if (limits === null || last === null) return null;
+
+		const running = () =>
+			[...this.state.runs.values()].some((run) => run.phase.kind === "running");
+
+		if (!running()) return null;
+
+		while (running()) {
+			await this.#reconcileStages(this.#input.clock.now(), limits);
+
+			if (running()) await wait(DRAIN_POLL_MS);
+		}
+
+		await Promise.all(this.#stages);
+
+		return this.#report(last);
 	}
 
 	async #loadClaims(): Promise<void> {
@@ -719,7 +800,7 @@ export class Orchestrator {
 			const { phase } = run;
 
 			if (phase.kind === "running" && phase.result !== null) {
-				this.#endStage(run, "stage_failed", phase.result.usage, limits);
+				this.#finishStage(run, phase.result, limits);
 				ended.push(run);
 			} else if (
 				phase.kind === "running" &&
@@ -732,7 +813,7 @@ export class Orchestrator {
 					runId: run.runId,
 					stage: run.stage,
 				});
-				this.#endStage(run, "stalled", 0, limits);
+				this.#endStage(run, "stalled", phase.usage, limits);
 				ended.push(run);
 			}
 		}
@@ -855,6 +936,35 @@ export class Orchestrator {
 			issue: run.issue,
 			runId: run.runId,
 			why,
+		});
+	}
+
+	/**
+	 * Ends a stage that returned. A pass stops the run, since later stages are
+	 * not installed. A refusal ends it `failed` with no scheduler retry, and a
+	 * cap ends it `budget_exhausted`. Only a failure goes through the retries.
+	 */
+	#finishStage(run: ActiveRun, result: StageEnd, limits: Limits): void {
+		if (result.kind === "failed") {
+			this.#endStage(run, "stage_failed", result.usage, limits);
+
+			return;
+		}
+
+		run.usage += result.usage;
+		this.state.totals.usage += result.usage;
+
+		const status = END_STATUS[result.kind];
+
+		if (status === "failed") this.state.totals.failures++;
+
+		run.phase = { kind: "ending", status };
+		this.#input.log("stage_ended", {
+			issue: run.issue,
+			runId: run.runId,
+			cause: result.kind,
+			next: status,
+			attempt: run.attempt,
 		});
 	}
 
@@ -1444,7 +1554,7 @@ export class Orchestrator {
 			replay: true,
 			phase:
 				marker.status === "blocked"
-					? { kind: "blocked", reason: "stage_runner_not_installed" }
+					? { kind: "blocked", reason: "sandbox_unavailable" }
 					: { kind: "claimed" },
 		};
 
@@ -1533,7 +1643,7 @@ export class Orchestrator {
 				run.inflight === null &&
 				this.#confirmed.has(run.issue) &&
 				(run.phase.kind === "claimed" ||
-					(run.phase.kind === "blocked" && run.replay))
+					(run.phase.kind === "blocked" && (run.replay || this.#enabled)))
 			) {
 				await this.#launch(run);
 			}
@@ -1884,27 +1994,50 @@ export class Orchestrator {
 		if (!(await this.#stillReady(run))) return false;
 
 		const { files, executor, clock } = this.#input;
+		const config = this.#config;
+
+		if (config === null) return false;
+
 		const preparation = await this.#prepareWorkspace(run);
 
 		if (preparation.kind === "unavailable") return false;
 
+		const stage = run.stage;
+
+		if (!isModelStage(stage)) {
+			run.phase = { kind: "blocked", reason: "sandbox_unavailable" };
+			await this.#sync(run);
+
+			return true;
+		}
+
 		const abort = new AbortController();
 		const now = clock.now();
 
-		const phase: RunPhase = {
+		const phase: Extract<RunPhase, { kind: "running" }> = {
 			kind: "running",
 			lastProgressAt: now,
+			usage: 0,
 			abort,
 			result: null,
 		};
 
 		const launch = await executor.launch({
 			runId: run.runId,
-			stage: run.stage,
+			stage,
+			attempt: run.attempt,
 			workspace: files.workspacePath(run.runId),
+			settings: {
+				model: config.stages[stage].model,
+				fallback: null,
+				budget: config.stages[stage].budget,
+				maxTokens: null,
+			},
+			remainingRunTokens: Math.max(0, config.usage.maxTokensPerRun - run.usage),
 			signal: abort.signal,
-			progress: () => {
+			progress: (usage) => {
 				phase.lastProgressAt = clock.now();
+				phase.usage = Math.max(phase.usage, usage);
 			},
 		});
 
@@ -1914,14 +2047,18 @@ export class Orchestrator {
 			run.phase = { kind: "blocked", reason: launch.reason };
 		} else {
 			run.phase = phase;
-			launch.done.then(
+
+			const settled = launch.done.then(
 				(result) => {
-					phase.result = result;
+					phase.result = { kind: result.kind, usage: result.usage };
 				},
 				() => {
-					phase.result = { kind: "failed", usage: 0 };
+					phase.result = { kind: "failed", usage: phase.usage };
 				},
 			);
+
+			this.#stages.add(settled);
+			settled.then(() => this.#stages.delete(settled));
 		}
 
 		this.#input.log("stage_launched", {
@@ -2044,15 +2181,7 @@ export class Orchestrator {
 		});
 	}
 
-	#report(input: {
-		now: number;
-		enabled: boolean;
-		reasons: readonly GateReason[];
-		limits: Limits | null;
-		queued: readonly number[];
-		absent: readonly number[];
-		refused: TickReport["refused"];
-	}): TickReport {
+	#report(input: ReportInput): TickReport {
 		const runs = [...this.state.runs.values()]
 			.sort((left, right) => left.issue - right.issue)
 			.map(
@@ -2077,7 +2206,7 @@ export class Orchestrator {
 		return {
 			repo: this.#input.repo,
 			at: new Date(input.now).toISOString(),
-			executionEnabled: false,
+			executionEnabled: this.#enabled,
 			dispatch: { enabled: input.enabled, reasons: input.reasons },
 			workflowSha: this.#workflowSha,
 			maxConcurrent: input.limits?.maxConcurrent ?? 0,

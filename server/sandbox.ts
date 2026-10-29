@@ -7,13 +7,21 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, readlink, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import type { Exec } from "../src/gh.ts";
+import type {
+	Log,
+	StageExecutor,
+	StageLaunch,
+	StageLaunchInput,
+} from "../src/orchestrator.ts";
 import type { Digest } from "../src/run.ts";
 import type { ModelId, ModelStage } from "../src/workflow.ts";
 import { PI_AGENT_DIR } from "./sandbox/assets/pi.ts";
+import { manifestDigest, PINNED_VERSIONS } from "./sandbox/manifest.ts";
+import { readUsernsLimit, runPreflight } from "./sandbox/preflight.ts";
 import { BUNDLE, bwrapArgv } from "./sandbox/bwrap.ts";
 import type { CloseReason, ControlEvent } from "./sandbox/control.ts";
 import {
@@ -43,6 +51,7 @@ import {
 import { type PiProcess, parsePiRecord, sendCommand } from "./sandbox/rpc.ts";
 import {
 	DEFAULT_SCOPE_LIMITS,
+	reconcileScopes,
 	scopeArgv,
 	scopeUnit,
 	spawnScoped,
@@ -82,7 +91,7 @@ export type StageRunInput = {
 	readonly settings: StageRunSettings;
 	readonly remainingRunTokens: number;
 	readonly signal: AbortSignal;
-	readonly progress: () => void;
+	readonly progress: (usage: number) => void;
 };
 
 /** Every effect `runStage` needs. Tests pass fakes; `sandboxHost` is the real one. */
@@ -286,7 +295,7 @@ async function runSession(
 			}
 
 			for (const line of lines) {
-				input.progress();
+				input.progress(ledger.total);
 
 				const record = parsePiRecord(line);
 				const signal = tracker.apply(record);
@@ -504,8 +513,6 @@ export async function runStage(
 	};
 
 	gateway.subscribe((event) => {
-		input.progress();
-
 		if (event.event === "usage") {
 			ledger.gateway += (event.inputTokens ?? 0) + (event.outputTokens ?? 0);
 
@@ -516,6 +523,7 @@ export async function runStage(
 			stage.gateReason = event.reason;
 		}
 
+		input.progress(ledger.total);
 		stage.listener?.(event);
 	});
 	gateway.exited.then(() => {
@@ -577,8 +585,27 @@ export type SandboxHostConfig = {
 	readonly assetsDigest: string;
 	readonly versions: PinnedVersions;
 	readonly exec: Exec;
+	readonly blockUnixSockets?: boolean;
 	readonly now?: () => number;
 };
+
+/** A directory that did not exist: `base`, else `base.2`, `base.3` and so on. */
+function freshDir(base: string): string {
+	for (let n = 1; ; n++) {
+		const path = n === 1 ? base : `${base}.${n}`;
+
+		try {
+			mkdirSync(path, { mode: 0o700 });
+
+			return path;
+		} catch (error) {
+			if (
+				!(error instanceof Error && "code" in error && error.code === "EEXIST")
+			)
+				throw error;
+		}
+	}
+}
 
 /** Where the workspace's `.git` stands. A symlink or other file is unsafe to bind. */
 export function gitState(workspace: string): "dir" | "absent" | "unsafe" {
@@ -654,13 +681,6 @@ class ScopedPi implements PiProcess {
  * on the VM.
  */
 export function sandboxHost(config: SandboxHostConfig): StageHost {
-	const stageDir = join(
-		config.stateDir,
-		"stages",
-		config.runId,
-		`${config.stage}-${config.attempt}`,
-	);
-
 	const units = new Map<number, string>();
 	const agentDirs = new Map<number, string>();
 	let socketPath: string | null = null;
@@ -669,7 +689,15 @@ export function sandboxHost(config: SandboxHostConfig): StageHost {
 		recursive: true,
 		mode: 0o700,
 	});
-	mkdirSync(stageDir, { mode: 0o700 });
+
+	const stageDir = freshDir(
+		join(
+			config.stateDir,
+			"stages",
+			config.runId,
+			`${config.stage}-${config.attempt}`,
+		),
+	);
 
 	return {
 		cleanupReserveMs: CLEANUP_RESERVE_MS,
@@ -739,7 +767,9 @@ export function sandboxHost(config: SandboxHostConfig): StageHost {
 
 			const child = spawnScoped({
 				argv,
-				seccomp: seccompProgram(config.arch, { blockUnixSockets: false }),
+				seccomp: seccompProgram(config.arch, {
+					blockUnixSockets: config.blockUnixSockets ?? false,
+				}),
 				seccompFd: 10,
 				xdgRuntimeDir: config.xdgRuntimeDir,
 			});
@@ -791,6 +821,176 @@ export function sandboxHost(config: SandboxHostConfig): StageHost {
 			} catch {
 				return false;
 			}
+		},
+	};
+}
+
+/** Where `server/provision.sh` installs content-addressed asset bundles. */
+export const SANDBOX_ROOT = "/var/lib/factory-sandbox";
+
+const BUNDLE_NAME = /^assets-([0-9a-f]{64})$/;
+
+export type Bundle = { readonly dir: string; readonly digest: string };
+
+/**
+ * The bundle `<root>/current` links to. Its name carries the manifest digest
+ * it was installed under, which the preflight recomputes.
+ */
+export async function locateBundle(root: string): Promise<Bundle | null> {
+	try {
+		const target = await readlink(join(root, "current"));
+		const digest = BUNDLE_NAME.exec(target)?.[1];
+
+		return digest === undefined ? null : { dir: join(root, target), digest };
+	} catch {
+		return null;
+	}
+}
+
+/** The fixed prompt F05 runs for a stage. F06a replaces it with the stage skills. */
+export function probePrompt(stage: ModelStage): string {
+	return `This is the factory's ${stage} stage probe. Do not call any tool. Reply with exactly: factory-${stage}-probe-ok`;
+}
+
+export type SandboxExecutorConfig = {
+	readonly stateDir: string;
+	readonly exec: Exec;
+	readonly log: Log;
+	readonly xdgRuntimeDir: string;
+	readonly root?: string;
+	readonly arch?: string;
+};
+
+const PREFLIGHT_RUN =
+	"0000000000000000000000000000000000000000000000000000000000000000";
+
+/**
+ * The stage executor the controller installs. It stops leftover stage
+ * scopes once at startup, runs the preflight until it passes, and launches
+ * each stage as one `runStage` in a fresh sandbox. Until the preflight has
+ * passed, every launch is `sandbox_unavailable` and no model runs.
+ */
+export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
+	const root = config.root ?? SANDBOX_ROOT;
+
+	let ready: { readonly bundle: Bundle; readonly arch: SeccompArch } | null =
+		null;
+
+	let reported: string | null = null;
+
+	const gatewayReady = async (): Promise<boolean> => {
+		const nonce = randomBytes(4).toString("hex");
+		const dir = join(config.stateDir, "gw");
+		const audit = join(dir, `preflight-${nonce}.jsonl`);
+
+		mkdirSync(dir, { recursive: true, mode: 0o700 });
+
+		const started = await startGatewayProcess({
+			gatewayDir: join(dir, `p-${nonce}`),
+			auditPath: audit,
+			table: builtinTable({
+				stage: "specify",
+				runId: PREFLIGHT_RUN,
+				attempt: 1,
+				model: "preflight",
+				fallback: null,
+				modelTokens: 0,
+				modelRequests: 0,
+			}),
+			readyTimeoutMs: 10_000,
+		});
+
+		if (started.ok) await started.handle.shutdown();
+
+		await rm(join(dir, `p-${nonce}`), { recursive: true, force: true });
+		await rm(audit, { force: true });
+
+		return started.ok;
+	};
+
+	return {
+		async recover() {
+			const result = await reconcileScopes(config.exec);
+
+			config.log("sandbox_reconciled", {
+				stopped: result.stopped.length,
+				failed: result.failed.length,
+			});
+		},
+
+		async preflight() {
+			if (ready !== null) return true;
+
+			const bundle = await locateBundle(root);
+
+			const result = await runPreflight({
+				arch: config.arch ?? process.arch,
+				usernsLimit: readUsernsLimit,
+				exec: config.exec,
+				assetsDigest: async () =>
+					bundle === null ? null : manifestDigest(bundle.dir),
+				expectedDigest: bundle?.digest ?? "",
+				gatewayReady,
+			});
+
+			const summary = result.ok ? "ok" : result.failed.join("+");
+
+			if (summary !== reported) {
+				reported = summary;
+				config.log("sandbox_preflight", {
+					ok: result.ok,
+					failed: result.ok ? "none" : summary,
+					assets: bundle?.digest.slice(0, 12) ?? "none",
+				});
+			}
+
+			if (result.ok && bundle !== null) ready = { bundle, arch: result.arch };
+
+			return ready !== null;
+		},
+
+		async launch(input: StageLaunchInput): Promise<StageLaunch> {
+			if (ready === null) {
+				return {
+					kind: "unavailable",
+					stage: input.stage,
+					reason: "sandbox_unavailable",
+				};
+			}
+
+			const { bundle, arch } = ready;
+
+			const host = sandboxHost({
+				stateDir: config.stateDir,
+				bundleDir: bundle.dir,
+				workspace: input.workspace,
+				runId: input.runId,
+				stage: input.stage,
+				attempt: input.attempt,
+				tools: [],
+				arch,
+				xdgRuntimeDir: config.xdgRuntimeDir,
+				assetsDigest: bundle.digest,
+				versions: PINNED_VERSIONS,
+				exec: config.exec,
+			});
+
+			return {
+				kind: "started",
+				done: runStage(
+					{
+						runId: input.runId,
+						stage: input.stage,
+						attempt: input.attempt,
+						prompt: probePrompt(input.stage),
+						settings: input.settings,
+						remainingRunTokens: input.remainingRunTokens,
+						signal: input.signal,
+						progress: input.progress,
+					},
+					host,
+				),
+			};
 		},
 	};
 }

@@ -27,20 +27,22 @@ export const RUN_STATUSES = [
 	"released",
 	"failed",
 	"budget_exhausted",
+	"stage_passed",
 ] as const;
 
 export type RunStatus = (typeof RUN_STATUSES)[number];
 
 export type TerminalStatus = Extract<
 	RunStatus,
-	"released" | "failed" | "budget_exhausted"
+	"released" | "failed" | "budget_exhausted" | "stage_passed"
 >;
 
 export function isTerminal(status: RunStatus): status is TerminalStatus {
 	return (
 		status === "released" ||
 		status === "failed" ||
-		status === "budget_exhausted"
+		status === "budget_exhausted" ||
+		status === "stage_passed"
 	);
 }
 
@@ -171,11 +173,12 @@ function markerJson(marker: Marker): string {
 const STATUS_TEXT: Readonly<Record<RunStatus, string>> = {
 	claimed: "claimed",
 	running: "running",
-	blocked: "blocked: the stage runner is not installed",
+	blocked: "blocked: the stage sandbox is unavailable",
 	retrying: "waiting to retry",
 	released: "released: the issue is no longer eligible",
 	failed: "failed: retries are exhausted",
 	budget_exhausted: "stopped: the run budget is spent",
+	stage_passed: "stopped: stage passed; later stages are not installed",
 };
 
 /** The full comment body: the marker line, then one line a person can read. */

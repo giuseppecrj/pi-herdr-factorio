@@ -37,9 +37,11 @@ import {
 	type RunFiles,
 	type StageExecutor,
 	type StageLaunch,
+	type StageLaunchInput,
 	type StageResult,
 	type TickReport,
 } from "../src/orchestrator.ts";
+import { type SessionOutcome, stageResult } from "../server/sandbox/result.ts";
 import { READY_LABEL } from "../src/policy.ts";
 import { type Digest, digestOf, runIdOf } from "../src/run.ts";
 import {
@@ -153,42 +155,105 @@ function memoryFiles(): RunFiles & {
 type Behavior =
 	| { readonly kind: "unavailable" }
 	| { readonly kind: "hang" }
-	| { readonly kind: "fail"; readonly usage: number };
+	| { readonly kind: "fail"; readonly usage: number }
+	| { readonly kind: "pass"; readonly usage: number }
+	| { readonly kind: "refuse"; readonly usage: number }
+	| { readonly kind: "budget"; readonly usage: number }
+	| { readonly kind: "later"; readonly result: Promise<StageResult> };
+
+function resultOf(
+	input: StageLaunchInput,
+	outcome: SessionOutcome,
+	usage: number,
+): StageResult {
+	return stageResult({
+		version: 1,
+		runId: input.runId,
+		stage: input.stage,
+		attempt: input.attempt,
+		outcome,
+		settlement: { event: "agent_settled", aborted: false },
+		models: { requested: input.settings.model, observed: null },
+		fallback: null,
+		refusal: null,
+		wallMs: 1,
+		turns: 1,
+		usage: {
+			total: usage,
+			parent: usage,
+			children: 0,
+			byModel: {},
+			gateway: usage,
+			unreadChildren: 0,
+		},
+		egress: null,
+		assetsDigest: "a".repeat(64),
+		versions: { pi: "1.4.0", piHerdrAgents: "3.3.1", piHerdrPstack: "0.5.0" },
+		pricing: "unavailable",
+	});
+}
 
 class FakeExecutor implements StageExecutor {
 	behaviors: Behavior[] = [];
 	fallback: Behavior = { kind: "unavailable" };
-	readonly launches: {
-		runId: Digest;
-		signal: AbortSignal;
-		progress: () => void;
-	}[] = [];
+	readonly launches: StageLaunchInput[] = [];
+	recovered = 0;
+	/** The preflight result. When `null`, it passes unless the next launch is unavailable. */
+	ready: boolean | null = null;
 
-	async launch(input: {
-		runId: Digest;
-		stage: string;
-		signal: AbortSignal;
-		progress: () => void;
-	}): Promise<StageLaunch> {
+	async recover(): Promise<void> {
+		this.recovered++;
+	}
+
+	async preflight(): Promise<boolean> {
+		return (
+			this.ready ?? (this.behaviors[0] ?? this.fallback).kind !== "unavailable"
+		);
+	}
+
+	async launch(input: StageLaunchInput): Promise<StageLaunch> {
 		const behavior = this.behaviors.shift() ?? this.fallback;
 
 		this.launches.push(input);
 
-		if (behavior.kind === "unavailable") {
-			return {
-				kind: "unavailable",
-				stage: "specify",
-				reason: "stage_runner_not_installed",
-			};
+		switch (behavior.kind) {
+			case "unavailable":
+				return {
+					kind: "unavailable",
+					stage: "specify",
+					reason: "sandbox_unavailable",
+				};
+			case "hang":
+				return { kind: "started", done: new Promise(() => undefined) };
+			case "later":
+				return { kind: "started", done: behavior.result };
+			case "fail":
+				return started(
+					resultOf(input, { kind: "failed", exit: "error" }, behavior.usage),
+				);
+			case "pass":
+				return started(resultOf(input, { kind: "passed" }, behavior.usage));
+			case "refuse":
+				return started(resultOf(input, { kind: "refused" }, behavior.usage));
+			case "budget":
+				return started(
+					resultOf(
+						input,
+						{ kind: "budget_exhausted", cap: "tokens" },
+						behavior.usage,
+					),
+				);
+			default: {
+				const _exhaustive: never = behavior;
+
+				return _exhaustive;
+			}
 		}
-
-		const done: Promise<StageResult> =
-			behavior.kind === "hang"
-				? new Promise(() => undefined)
-				: Promise.resolve({ kind: "failed", usage: behavior.usage });
-
-		return { kind: "started", done };
 	}
+}
+
+function started(result: StageResult): StageLaunch {
+	return { kind: "started", done: Promise.resolve(result) };
 }
 
 const EVENT_ID = 34537521383;
@@ -803,7 +868,7 @@ describe("Orchestrator retries and stalls", () => {
 		assert.ok(launch);
 
 		clock.t += 200_000;
-		launch.progress();
+		launch.progress(0);
 		clock.t += 300_000;
 		await controller.tick();
 		assert.equal(launch.signal.aborted, false);
@@ -855,6 +920,220 @@ describe("Orchestrator retries and stalls", () => {
 		assert.deepEqual(report.runs, []);
 		assert.equal(executor.launches.length, 1);
 		assert.equal(statuses(github, 14).at(-1)?.endsWith(":released"), true);
+	});
+});
+
+describe("Orchestrator stage results", () => {
+	it("ends a passing stage as stage_passed, frees its slot and keeps its usage", async () => {
+		const { github, executor, files, start } = world();
+
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 812 }];
+
+		const controller = start();
+		const first = await controller.tick();
+
+		assert.equal(first.executionEnabled, true);
+
+		const launch = executor.launches[0];
+
+		assert.ok(launch);
+		assert.equal(launch.stage, "specify");
+		assert.equal(launch.attempt, 1);
+		assert.equal(launch.remainingRunTokens, 500_000);
+		assert.deepEqual(launch.settings, {
+			model: "openai/gpt-6.1-sol",
+			fallback: null,
+			budget: { maxTurns: 20, wallMs: 900_000, stallMs: 300_000 },
+			maxTokens: null,
+		});
+
+		const report = await controller.tick();
+
+		assert.deepEqual(report.runs, []);
+		assert.equal(report.active, 0);
+		assert.equal(report.totals.usage, 812);
+		assert.equal(report.totals.failures, 0);
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:running",
+			"3:stage_passed",
+		]);
+		assert.deepEqual(
+			[...files.claims.values()],
+			[endedClaim(14, 3, { status: "stage_passed", usage: 812 })],
+		);
+	});
+
+	it("passes the run's remaining tokens and the next attempt to a retry", async () => {
+		const { github, clock, executor, start } = world();
+
+		github.add(labeled(14));
+		executor.behaviors = [
+			{ kind: "fail", usage: 120_000 },
+			{ kind: "pass", usage: 1 },
+		];
+
+		const controller = start();
+
+		await controller.tick();
+		await controller.tick();
+		clock.t += 10_000;
+		await controller.tick();
+
+		assert.equal(executor.launches[1]?.attempt, 2);
+		assert.equal(executor.launches[1]?.remainingRunTokens, 380_000);
+	});
+
+	it("ends the run failed on a refusal, with no scheduler retry", async () => {
+		const { github, executor, start } = world();
+
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "refuse", usage: 40 }];
+		executor.fallback = { kind: "pass", usage: 0 };
+
+		const controller = start();
+
+		await controller.tick();
+
+		const report = await controller.tick();
+
+		assert.deepEqual(report.runs, []);
+		assert.equal(report.totals.retries, 0);
+		assert.equal(report.totals.failures, 1);
+		assert.equal(report.totals.usage, 40);
+		assert.equal(executor.launches.length, 1);
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:running",
+			"3:failed",
+		]);
+	});
+
+	it("ends the run budget_exhausted when the stage hits a cap", async () => {
+		const { github, executor, start } = world();
+
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "budget", usage: 900 }];
+		executor.fallback = { kind: "pass", usage: 0 };
+
+		const controller = start();
+
+		await controller.tick();
+
+		const report = await controller.tick();
+
+		assert.deepEqual(report.runs, []);
+		assert.equal(report.totals.retries, 0);
+		assert.equal(report.totals.usage, 900);
+		assert.equal(statuses(github, 14).at(-1), "3:budget_exhausted");
+	});
+
+	it("keeps the usage a stalled stage reported before it stalled", async () => {
+		const { github, clock, executor, start } = world();
+
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "hang" }];
+
+		const controller = start();
+
+		await controller.tick();
+		executor.launches[0]?.progress(2_500);
+		clock.t += 300_001;
+
+		const report = await controller.tick();
+
+		assert.equal(report.totals.stalls, 1);
+		assert.equal(report.runs[0]?.status, "retrying");
+		assert.equal(report.runs[0]?.usage, 2_500);
+		assert.equal(report.totals.usage, 2_500);
+	});
+
+	it("blocks a run while the preflight fails and replays it once a later preflight passes", async () => {
+		const { github, executor, start } = world();
+
+		github.add(labeled(14));
+
+		const controller = start();
+		const blocked = await controller.tick();
+
+		assert.equal(blocked.executionEnabled, false);
+		assert.equal(blocked.runs[0]?.status, "blocked");
+		assert.equal(executor.launches.length, 1);
+
+		const still = await controller.tick();
+
+		assert.equal(still.runs[0]?.status, "blocked");
+		assert.equal(executor.launches.length, 1);
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+
+		executor.fallback = { kind: "hang" };
+
+		const running = await controller.tick();
+
+		assert.equal(running.executionEnabled, true);
+		assert.equal(running.runs[0]?.status, "running");
+		assert.equal(executor.launches.length, 2);
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:blocked",
+			"3:running",
+		]);
+	});
+
+	it("stops leftover sandboxes once, before the first tick adopts any run", async () => {
+		const { github, executor, start } = world();
+
+		github.add(labeled(14));
+		executor.fallback = { kind: "hang" };
+		await start().tick();
+
+		const controller = start();
+
+		await controller.tick();
+		await controller.tick();
+		assert.equal(executor.recovered, 2);
+	});
+
+	it("waits for a launched stage and posts its end when a one-shot tick drains", async () => {
+		const { github, executor, start } = world();
+		let finish: (result: StageResult) => void = () => undefined;
+
+		github.add(labeled(14));
+		executor.behaviors = [
+			{
+				kind: "later",
+				result: new Promise((done) => {
+					finish = done;
+				}),
+			},
+		];
+
+		const controller = start();
+
+		await controller.tick();
+
+		const launch = executor.launches[0];
+
+		assert.ok(launch);
+
+		let waits = 0;
+
+		const report = await controller.drain(async () => {
+			waits++;
+			finish(resultOf(launch, { kind: "passed" }, 77));
+		});
+
+		assert.ok(waits >= 1);
+		assert.ok(report);
+		assert.deepEqual(report.runs, []);
+		assert.equal(report.totals.usage, 77);
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:running",
+			"3:stage_passed",
+		]);
+		assert.equal(await controller.drain(async () => undefined), null);
 	});
 });
 
@@ -921,6 +1200,7 @@ async function cli(
 	argv: readonly string[],
 	github: FakeGitHub,
 	signal = new AbortController(),
+	executor = new FakeExecutor(),
 ) {
 	let stdout = "";
 	let stderr = "";
@@ -941,7 +1221,7 @@ async function cli(
 				signal.abort();
 			},
 			signal: signal.signal,
-			executor: new FakeExecutor(),
+			executor: () => executor,
 		},
 	});
 
@@ -971,6 +1251,40 @@ describe("server/cli.ts controller commands", () => {
 		);
 		assert.ok(existsSync(join(state, "workspaces", runOf(14))));
 		assert.match(run.stderr, /event=claim_taken issue=14/);
+	});
+
+	it("tick --once waits for the stage it launched and prints its end", async () => {
+		const github = new FakeGitHub();
+		const state = stateDir();
+		const executor = new FakeExecutor();
+
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 9 }];
+
+		const run = await cli(
+			["tick", "--once", "--json", ...base, "--state-dir", state],
+			github,
+			new AbortController(),
+			executor,
+		);
+
+		assert.equal(run.code, EXIT.ok, run.stderr);
+
+		const report = JSON.parse(run.stdout);
+
+		assert.equal(report.executionEnabled, true);
+		assert.deepEqual(report.runs, []);
+		assert.equal(report.totals.usage, 9);
+		assert.equal(executor.recovered, 1);
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:running",
+			"3:stage_passed",
+		]);
+		assert.equal(
+			JSON.parse(readFileSync(join(state, "status.json"), "utf8")).runs.length,
+			0,
+		);
 	});
 
 	it("run --issue uses the same admission and exits 1 when nothing runs", async () => {
@@ -3547,7 +3861,9 @@ describe("Orchestrator before the first workflow load", () => {
 
 		await first.tick();
 		clock.t += 1;
+		executor.ready = false;
 		await first.tick();
+		executor.ready = null;
 
 		assert.equal(statuses(github, 15).at(-1), "3:retrying");
 		assert.equal(statuses(github, 16).at(-1), "2:running");
