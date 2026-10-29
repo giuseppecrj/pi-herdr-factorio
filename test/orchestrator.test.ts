@@ -1229,6 +1229,77 @@ describe("Orchestrator restart reads", () => {
 	});
 });
 
+function relabel(github: FakeGitHub, issue: FakeIssue): Digest {
+	issue.timeline.push(
+		labelEvent({
+			id: 1,
+			at: "2026-10-29T02:30:00Z",
+			actor: "giuseppecrj",
+			event: "unlabeled",
+		}),
+		labelEvent({
+			id: 34537529999,
+			at: "2026-10-29T02:31:00Z",
+			actor: "giuseppecrj",
+		}),
+	);
+	issue.updatedAt = "2026-10-29T02:31:00Z";
+	github.now = "2026-10-29T02:32:00Z";
+
+	return runIdOf({ repo, issue: issue.number, eventId: "34537529999" });
+}
+
+describe("Orchestrator new ready events", () => {
+	it("claims the new event in the restart tick that releases the old run", async () => {
+		const { github, start } = world();
+		const issue = github.add(labeled(14));
+
+		await start().tick();
+
+		const next = relabel(github, issue);
+		const report = await start().tick();
+
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:blocked",
+			"3:released",
+			"4:claimed",
+			"5:blocked",
+		]);
+		assert.deepEqual(
+			report.runs.map((run) => [run.runId, run.status, run.seq]),
+			[[next, "blocked", 5]],
+		);
+	});
+
+	it("claims the new event on the next tick when the release marker is unconfirmed", async () => {
+		const { github, start } = world();
+		const issue = github.add(labeled(14));
+
+		await start().tick();
+
+		const next = relabel(github, issue);
+
+		github.posts = ["landed_unanswered"];
+
+		const controller = start();
+		const first = await controller.tick();
+
+		assert.equal(first.runs[0]?.markerPending, true);
+
+		const second = await controller.tick();
+
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:blocked",
+			"3:released",
+			"4:claimed",
+			"5:blocked",
+		]);
+		assert.equal(second.runs[0]?.runId, next);
+	});
+});
+
 describe("Orchestrator slot accounting", () => {
 	for (const behavior of ["landed_unanswered", "rejected", "lost"] as const) {
 		it(`counts a claim whose first marker POST is ${behavior} against the limit`, async () => {

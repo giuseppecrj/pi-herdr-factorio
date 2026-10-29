@@ -159,7 +159,12 @@ export type ActiveRun = {
 export type SeenIssue = {
 	readonly updatedAt: string;
 	readonly verdict:
-		| { readonly kind: "open"; readonly ledger: CleanLedger }
+		| {
+				readonly kind: "open";
+				readonly ledger: CleanLedger;
+				/** The highest marker `seq` known to have landed on the issue. */
+				readonly seq: number;
+		  }
 		| { readonly kind: "claimed" }
 		| { readonly kind: "decided" }
 		| { readonly kind: "corrupt" };
@@ -817,15 +822,19 @@ export class Orchestrator {
 			this.#ledgerRead.add(issue);
 
 			const current = currentMarker(ledger.value);
+			let seq = ledger.value.markers.at(-1)?.marker.seq ?? 0;
 
 			if (current !== null && !isTerminal(current.status)) {
-				await this.#adoptExistingRun({
+				const adopted = await this.#adoptExistingRun({
 					marker: current,
 					ledger: ledger.value,
 					candidates,
 					updatedAt: record.updatedAt,
 				});
-				continue;
+
+				if (adopted === null || this.state.runs.has(issue)) continue;
+
+				seq = adopted.seq;
 			}
 
 			const candidate = record.open && candidates.includes(record);
@@ -842,7 +851,7 @@ export class Orchestrator {
 
 			this.state.seen.set(issue, {
 				updatedAt: record.updatedAt,
-				verdict: { kind: "open", ledger: ledger.value },
+				verdict: { kind: "open", ledger: ledger.value, seq },
 			});
 		}
 	}
@@ -863,12 +872,18 @@ export class Orchestrator {
 		}
 	}
 
+	/**
+	 * Adopts the live run a marker names. It returns `null` when the run cannot
+	 * be adopted. A run that ends in this call, such as one released for a new
+	 * ready event, is no longer in `runs`, and its issue can be claimed again in
+	 * the same tick.
+	 */
 	async #adoptExistingRun(input: {
 		marker: Marker;
 		ledger: CleanLedger;
 		candidates: readonly IssueRecord[];
 		updatedAt: string;
-	}): Promise<void> {
+	}): Promise<ActiveRun | null> {
 		const { marker, ledger, candidates } = input;
 
 		const record = await this.#input.store.read({
@@ -877,7 +892,7 @@ export class Orchestrator {
 			eventId: marker.eventId,
 		});
 
-		if (record.kind === "unreadable") return;
+		if (record.kind === "unreadable") return null;
 
 		if (record.kind === "found" && !matchesRecord(marker, record.receipt)) {
 			this.#markCorrupt(
@@ -886,7 +901,7 @@ export class Orchestrator {
 				input.updatedAt,
 			);
 
-			return;
+			return null;
 		}
 
 		const workspace = await this.#input.files.workspaceState(marker.runId);
@@ -948,6 +963,8 @@ export class Orchestrator {
 		if ((await this.#checkEligible(run, candidates)) !== "dropped") {
 			await this.#sync(run);
 		}
+
+		return run;
 	}
 
 	async #dispatch(input: {
@@ -1008,6 +1025,7 @@ export class Orchestrator {
 			const claimed = await this.#admit({
 				record,
 				ledger: seen.verdict.ledger,
+				seq: seen.verdict.seq,
 				reads: input.reads,
 				refused: input.refused,
 			});
@@ -1023,6 +1041,7 @@ export class Orchestrator {
 	async #admit(input: {
 		record: IssueRecord;
 		ledger: CleanLedger;
+		seq: number;
 		reads: TickReads;
 		refused: { issue: number; reasons: RefusalReason["kind"][] }[];
 	}): Promise<ActiveRun | null> {
@@ -1105,7 +1124,7 @@ export class Orchestrator {
 			stage: FIRST_STAGE,
 			attempt: 1,
 			usage: 0,
-			seq: ledger.markers.at(-1)?.marker.seq ?? 0,
+			seq: input.seq,
 			marked: null,
 			inflight: null,
 			workspaceMissing: false,
