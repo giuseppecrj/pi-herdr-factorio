@@ -146,9 +146,6 @@ function memoryFiles(): RunFiles & {
 
 			return true;
 		},
-		async removeClaim(runId) {
-			claims.delete(runId);
-		},
 	};
 }
 
@@ -1239,9 +1236,6 @@ describe("fileRunFiles", () => {
 
 		writeFileSync(join(state, "claims", "junk.json"), "{}");
 		assert.equal((await files.listClaims()).length, 1);
-
-		await files.removeClaim(runId);
-		assert.deepEqual(await files.listClaims(), []);
 	});
 
 	it("loads a record without a status as unknown, and rejects a partial or invalid one", async () => {
@@ -3127,6 +3121,139 @@ function omitFromList(github: FakeGitHub, issue: number): Exec {
 		}
 	};
 }
+
+describe("Orchestrator claims recorded before their first marker", () => {
+	it("recovers one the candidate list omits from the issue read, with its own slot, before fresh admissions", async () => {
+		const { github, clock, files, wire, start } = world();
+
+		github.add(labeled(14));
+		github.posts = ["lost"];
+		await start().tick();
+
+		assert.equal(files.claims.get(runOf(14))?.seq, null);
+		assert.deepEqual(statuses(github, 14), []);
+
+		github.add(labeled(15));
+		github.add(labeled(16));
+		wire.intercept = omitFromList(github, 14);
+		clock.t += 30_000;
+
+		const lagging = await start().tick();
+
+		assert.deepEqual(runIssues(lagging), [14, 15]);
+		assert.deepEqual(lagging.queued, [16]);
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+		assert.deepEqual(statuses(github, 16), []);
+
+		wire.intercept = null;
+		clock.t += 30_000;
+
+		const listed = await start().tick();
+
+		assert.deepEqual(runIssues(listed), [14, 15]);
+		assert.deepEqual(listed.queued, [16]);
+		assert.deepEqual(statuses(github, 16), []);
+	});
+
+	it("does not cache a ready one the candidate list omits as decided", async () => {
+		const { github, clock, files, wire, start } = world();
+
+		github.add(labeled(14));
+		github.posts = ["lost"];
+		await start().tick();
+
+		assert.equal(files.claims.get(runOf(14))?.seq, null);
+
+		clock.t += 30_000;
+		wire.intercept = omitFromList(github, 14);
+
+		const controller = start();
+
+		await controller.tick();
+		wire.intercept = null;
+
+		for (let n = 0; n < 2; n++) {
+			clock.t += 30_000;
+
+			const report = await controller.tick();
+
+			assert.deepEqual(runIssues(report), [14]);
+			assert.deepEqual(report.queued, []);
+		}
+
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+		assert.deepEqual(files.claims.get(runOf(14)), blockedClaim(14, 2));
+	});
+
+	it("releases one whose issue closed, keeps the released record, and does not rerun the event on reopen", async () => {
+		const { github, clock, files, executor, logs, start } = world();
+		const issue = github.add(labeled(14));
+
+		github.posts = ["lost"];
+		await start().tick();
+
+		assert.equal(files.claims.get(runOf(14))?.seq, null);
+
+		issue.state = "closed";
+		issue.updatedAt = "2026-10-29T02:00:20Z";
+		clock.t += 30_000;
+
+		const closed = await start().tick();
+
+		assert.deepEqual(closed.runs, []);
+		assert.deepEqual(closed.queued, []);
+		assert.deepEqual(statuses(github, 14), ["1:released"]);
+		assert.deepEqual(
+			[...files.claims.values()],
+			[endedClaim(14, 1, { status: "released" })],
+		);
+		assert.deepEqual(
+			logs
+				.filter((entry) => entry.event === "claim_released")
+				.map((entry) => [entry.fields.issue, entry.fields.why]),
+			[[14, "closed"]],
+		);
+
+		issue.state = "open";
+		issue.updatedAt = "2026-10-29T02:01:00Z";
+		clock.t += 60_000;
+
+		const reopened = await start().tick();
+
+		assert.deepEqual(reopened.runs, []);
+		assert.deepEqual(statuses(github, 14), ["1:released"]);
+		assert.equal(executor.launches.length, 0);
+	});
+
+	it("keeps one whose issue closed while its admission record cannot be read, and releases it once it can", async () => {
+		const { github, clock, files, store, start } = world();
+		const issue = github.add(labeled(14));
+
+		github.posts = ["lost"];
+		await start().tick();
+		issue.state = "closed";
+		issue.updatedAt = "2026-10-29T02:00:20Z";
+
+		const read = store.read;
+
+		store.read = async () => ({ kind: "unreadable" });
+		clock.t += 30_000;
+
+		const controller = start();
+		const unread = await controller.tick();
+
+		assert.deepEqual(unread.runs, []);
+		assert.deepEqual(statuses(github, 14), []);
+		assert.equal(files.claims.get(runOf(14))?.seq, null);
+
+		store.read = read;
+		clock.t += 30_000;
+		await controller.tick();
+
+		assert.deepEqual(statuses(github, 14), ["1:released"]);
+		assert.equal(files.claims.get(runOf(14))?.status, "released");
+	});
+});
 
 describe("Orchestrator claim record usage", () => {
 	it("keeps the recorded usage when the ledger is behind, so the run budget still ends the run", async () => {

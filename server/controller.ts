@@ -489,10 +489,6 @@ export function fileRunFiles(stateDir: string): RunFiles {
 				`${JSON.stringify(claim)}\n`,
 			);
 		},
-
-		async removeClaim(runId) {
-			await unlink(join(claims, `${runId}.json`)).catch(() => undefined);
-		},
 	};
 }
 

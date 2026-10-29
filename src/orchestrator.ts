@@ -117,7 +117,6 @@ export interface RunFiles {
 	): Promise<"present" | "created" | "unavailable">;
 	listClaims(): Promise<ClaimRecord[]>;
 	writeClaim(claim: ClaimRecord): Promise<boolean>;
-	removeClaim(runId: Digest): Promise<void>;
 }
 
 export type RetryCause = "stage_failed" | "stalled" | "interrupted";
@@ -507,9 +506,10 @@ export class Orchestrator {
 
 		if (candidates.kind === "failed") reasons.push("candidates_unavailable");
 
-		if (candidates.kind === "ok") {
-			await this.#discover(candidates.value, queued);
-		}
+		const direct =
+			candidates.kind === "ok"
+				? await this.#discover(candidates.value, queued)
+				: [];
 
 		await this.#confirmEnds();
 
@@ -519,6 +519,7 @@ export class Orchestrator {
 			await this.#dispatch({
 				now,
 				candidates: candidates.value,
+				direct,
 				reads: gate.reads,
 				limits,
 				queued,
@@ -1006,13 +1007,16 @@ export class Orchestrator {
 		);
 	}
 
+	/** Returns the ready issues it read directly because the candidate list omitted them. */
 	async #discover(
 		candidates: readonly IssueRecord[],
 		queued: number[],
-	): Promise<void> {
+	): Promise<IssueRecord[]> {
 		const records = new Map(
 			candidates.map((record) => [record.number, record]),
 		);
+
+		const direct: IssueRecord[] = [];
 
 		for (const issue of this.#recover) {
 			if (this.state.runs.has(issue)) {
@@ -1024,7 +1028,11 @@ export class Orchestrator {
 
 			const read = await this.#adapter.readIssue(issue);
 
-			if (read.kind === "ok") records.set(issue, read.value);
+			if (read.kind !== "ok") continue;
+
+			records.set(issue, read.value);
+
+			if (isReady(read.value)) direct.push(read.value);
 		}
 
 		for (const record of records.values()) {
@@ -1059,10 +1067,11 @@ export class Orchestrator {
 
 			if (local !== null && current === null) continue;
 
-			const candidate = record.open && candidates.includes(record);
+			const candidate =
+				isReady(record) || (record.open && candidates.includes(record));
 
 			if (current !== null && !isTerminal(current.status)) {
-				if ((candidate || isReady(record)) && !this.#fits(current.status)) {
+				if (candidate && !this.#fits(current.status)) {
 					this.#recover.add(issue);
 					this.#reserved.add(issue);
 					queued.push(issue);
@@ -1087,12 +1096,16 @@ export class Orchestrator {
 				}
 			}
 
-			if (await this.#settleClaims(ledger.value, issue, candidate)) {
+			const settled = await this.#settleClaims(ledger.value, record, candidate);
+
+			if (settled === "resolved") {
+				this.#resolve(issue);
+			} else {
 				this.#recover.add(issue);
 				this.#reserved.add(issue);
-			} else {
-				this.#resolve(issue);
 			}
+
+			if (settled === "undecided") continue;
 
 			if (!candidate) {
 				this.#see(issue, record.updatedAt, { kind: "decided" });
@@ -1104,6 +1117,8 @@ export class Orchestrator {
 				ledger: ledger.value,
 			});
 		}
+
+		return direct;
 	}
 
 	#resolve(issue: number): void {
@@ -1122,28 +1137,111 @@ export class Orchestrator {
 		);
 	}
 
+	/**
+	 * Settles the issue's claims that no run holds. A claim on a ready issue is
+	 * held for dispatch, and one on a closed or unlabeled issue is released.
+	 * It is `undecided` when a release cannot be built or posted this tick.
+	 */
 	async #settleClaims(
 		ledger: CleanLedger,
-		issue: number,
+		record: IssueRecord,
 		candidate: boolean,
-	): Promise<boolean> {
-		let held = false;
+	): Promise<"held" | "resolved" | "undecided"> {
+		let settled: "held" | "resolved" = "resolved";
 
 		for (const claim of await this.#input.files.listClaims()) {
-			if (claim.issue !== issue || this.#ended.has(claim.runId)) continue;
+			if (claim.issue !== record.number || this.#ended.has(claim.runId)) {
+				continue;
+			}
 
-			const latest = latestFor(ledger, claim.runId);
+			const latest = latestFor(ledger, claim.runId)?.marker ?? null;
 
-			if (latest !== null && isTerminal(latest.marker.status)) {
-				await this.#keepEnded(recordOf(latest.marker), true);
+			if (latest !== null && isTerminal(latest.status)) {
+				await this.#keepEnded(recordOf(latest), true);
 			} else if (candidate) {
-				held = true;
-			} else {
-				await this.#input.files.removeClaim(claim.runId);
+				settled = "held";
+			} else if (!(await this.#releaseClaim(claim, latest, ledger, record))) {
+				return "undecided";
 			}
 		}
 
-		return held;
+		return settled;
+	}
+
+	/**
+	 * Releases a claim no run holds, such as one recorded before its first
+	 * marker. Its marker fields come from its last marker, or else from its
+	 * admission record. It returns `false` when neither can be read, or when
+	 * another run on the issue is still being published.
+	 */
+	async #releaseClaim(
+		claim: ClaimRecord,
+		marked: Marker | null,
+		ledger: CleanLedger,
+		record: IssueRecord,
+	): Promise<boolean> {
+		if (this.state.runs.has(claim.issue)) return false;
+
+		const base = marked ?? (await this.#admittedFields(claim));
+
+		if (base === null) return false;
+
+		const run: ActiveRun = {
+			runId: claim.runId,
+			issue: claim.issue,
+			eventId: claim.eventId,
+			eventAt: base.eventAt,
+			snapshotDigest: base.snapshotDigest,
+			workflowSha: base.workflowSha,
+			workflowDigest: base.workflowDigest,
+			stage: base.stage,
+			attempt: base.attempt,
+			usage: base.usage,
+			seq: this.#seqFloor(claim.issue, ledger),
+			marked,
+			inflight: null,
+			claimUnwritten: false,
+			workspaceMissing: false,
+			replay: false,
+			phase: { kind: "claimed" },
+		};
+
+		this.state.runs.set(run.issue, run);
+		this.#release(run, record.open ? "unlabeled" : "closed");
+		await this.#sync(run);
+
+		return true;
+	}
+
+	async #admittedFields(
+		claim: ClaimRecord,
+	): Promise<Pick<
+		Marker,
+		| "eventAt"
+		| "snapshotDigest"
+		| "workflowSha"
+		| "workflowDigest"
+		| "stage"
+		| "attempt"
+		| "usage"
+	> | null> {
+		const stored = await this.#input.store.read({
+			repo: this.#input.repo,
+			issue: claim.issue,
+			eventId: claim.eventId,
+		});
+
+		if (stored.kind !== "found") return null;
+
+		return {
+			eventAt: stored.receipt.eventAt,
+			snapshotDigest: stored.receipt.snapshotDigest,
+			workflowSha: stored.receipt.baseSha,
+			workflowDigest: stored.receipt.workflowDigest,
+			stage: claim.stage ?? FIRST_STAGE,
+			attempt: claim.attempt ?? 1,
+			usage: claim.usage ?? 0,
+		};
 	}
 
 	/**
@@ -1247,6 +1345,7 @@ export class Orchestrator {
 	async #dispatch(input: {
 		now: number;
 		candidates: readonly IssueRecord[];
+		direct: readonly IssueRecord[];
 		reads: TickReads;
 		limits: Limits;
 		queued: number[];
@@ -1255,7 +1354,7 @@ export class Orchestrator {
 		const { now, limits } = input;
 		const runs = [...this.state.runs.values()];
 
-		for (const record of input.candidates) {
+		for (const record of [...input.candidates, ...input.direct]) {
 			const issue = record.number;
 			const seen = this.state.seen.get(issue);
 
