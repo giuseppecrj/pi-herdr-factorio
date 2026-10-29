@@ -305,6 +305,21 @@ function desiredStatus(phase: RunPhase): RunStatus {
 	}
 }
 
+type WorkspacePreparation =
+	| { readonly kind: "fresh" }
+	| { readonly kind: "replayed_missing" }
+	| { readonly kind: "unavailable" };
+
+function claimStillHeld(
+	issueIsCandidate: boolean,
+	latestForRun: { readonly marker: Marker } | null,
+): boolean {
+	const runEnded =
+		latestForRun !== null && isTerminal(latestForRun.marker.status);
+
+	return issueIsCandidate && !runEnded;
+}
+
 function holdsSlot(run: ActiveRun): boolean {
 	return (
 		run.phase.kind === "claimed" ||
@@ -744,7 +759,7 @@ export class Orchestrator {
 			const current = currentMarker(ledger.value);
 
 			if (current !== null && !isTerminal(current.status)) {
-				await this.#adopt({
+				await this.#adoptExistingRun({
 					marker: current,
 					ledger: ledger.value,
 					candidates,
@@ -782,13 +797,13 @@ export class Orchestrator {
 
 			const latest = latestFor(ledger, claim.runId);
 
-			if (!candidate || (latest !== null && isTerminal(latest.marker.status))) {
+			if (!claimStillHeld(candidate, latest)) {
 				await this.#input.files.removeClaim(claim.runId);
 			}
 		}
 	}
 
-	async #adopt(input: {
+	async #adoptExistingRun(input: {
 		marker: Marker;
 		ledger: CleanLedger;
 		candidates: readonly IssueRecord[];
@@ -1061,9 +1076,8 @@ export class Orchestrator {
 		return run.inflight === null ? run : null;
 	}
 
-	async #launch(run: ActiveRun): Promise<void> {
-		const { files, executor, clock } = this.#input;
-		const workspace = await files.ensureWorkspace(run.runId);
+	async #prepareWorkspace(run: ActiveRun): Promise<WorkspacePreparation> {
+		const workspace = await this.#input.files.ensureWorkspace(run.runId);
 
 		run.replay = false;
 
@@ -1073,7 +1087,7 @@ export class Orchestrator {
 				runId: run.runId,
 			});
 
-			return;
+			return { kind: "unavailable" };
 		}
 
 		if (workspace === "created") {
@@ -1083,7 +1097,18 @@ export class Orchestrator {
 				runId: run.runId,
 				stage: run.stage,
 			});
+
+			return { kind: "replayed_missing" };
 		}
+
+		return { kind: "fresh" };
+	}
+
+	async #launch(run: ActiveRun): Promise<void> {
+		const { files, executor, clock } = this.#input;
+		const preparation = await this.#prepareWorkspace(run);
+
+		if (preparation.kind === "unavailable") return;
 
 		const abort = new AbortController();
 		const now = clock.now();
@@ -1135,15 +1160,26 @@ export class Orchestrator {
 	async #sync(run: ActiveRun): Promise<void> {
 		if (run.inflight?.tick === this.#ticks) return;
 
+		if ((await this.#recoverUncertainPost(run)) === "stop") return;
+
+		await this.#publishMarker(run);
+
+		if (run.marked !== null && isTerminal(run.marked.status)) {
+			this.state.runs.delete(run.issue);
+			await this.#input.files.removeClaim(run.runId);
+		}
+	}
+
+	async #recoverUncertainPost(run: ActiveRun): Promise<"proceed" | "stop"> {
 		if (run.inflight?.outcome === "unknown") {
 			const ledger = await this.#readLedger(run.issue);
 
-			if (ledger.kind === "failed") return;
+			if (ledger.kind === "failed") return "stop";
 
 			if (ledger.value.kind === "corrupt") {
 				this.#markCorrupt(run.issue, ledger.value, null);
 
-				return;
+				return "stop";
 			}
 
 			const sent = run.inflight.marker;
@@ -1155,6 +1191,10 @@ export class Orchestrator {
 
 		if (run.inflight?.outcome === "rejected") run.inflight = null;
 
+		return "proceed";
+	}
+
+	async #publishMarker(run: ActiveRun): Promise<void> {
 		const status = desiredStatus(run.phase);
 		const marked = run.marked;
 
@@ -1201,11 +1241,6 @@ export class Orchestrator {
 					outcome: post.kind,
 				});
 			}
-		}
-
-		if (run.marked !== null && isTerminal(run.marked.status)) {
-			this.state.runs.delete(run.issue);
-			await this.#input.files.removeClaim(run.runId);
 		}
 	}
 

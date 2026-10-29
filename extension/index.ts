@@ -29,7 +29,7 @@ const ISSUE_NUMBER = /^[1-9][0-9]{0,9}$/;
 const CONTROLLER_ON_VM =
 	"the controller runs on the VM; read it there with status --json --state-dir";
 
-const DRY_RUN_STORE: AdmissionStore = {
+const DRY_RUN_STORE_SWITCH_ASSUMED_ON: AdmissionStore = {
 	async localSwitch() {
 		return "enabled";
 	},
@@ -196,7 +196,7 @@ async function dryRunText(
 		repo: origin.repo,
 		issue: Number(issueArg),
 		allowlist: FACTORY_REPOSITORIES,
-		store: DRY_RUN_STORE,
+		store: DRY_RUN_STORE_SWITCH_ASSUMED_ON,
 	});
 
 	return formatDryRun(receipt);
