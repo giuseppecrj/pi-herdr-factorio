@@ -317,7 +317,6 @@ function claimSeq(value: JsonValue | undefined): number | null | undefined {
 
 type ClaimState = Pick<ClaimRecord, "status" | "stage" | "attempt">;
 
-/** All three mirrored fields, or none of them, as in a record written before they existed. */
 function claimState(value: JsonValue | undefined): ClaimState | undefined {
 	const status = fieldOf(value, "status") ?? null;
 	const stage = fieldOf(value, "stage") ?? null;

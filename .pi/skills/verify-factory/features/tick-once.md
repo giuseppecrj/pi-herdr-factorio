@@ -47,17 +47,6 @@ Results observed on 2026-10-29 at `add4f6b`, on fixtures #66, #67 and #68, each 
 | Owner-forged `released` marker with seq 99 on #67, and its workspace deleted, then tick | 0 | the forged marker ignored; #67 `missing_replayed`, still `blocked`, no new marker |
 | `run --issue 67` with `<state>/disabled` | 0 | `reasons=locally_disabled`; #67 still `blocked` |
 | #67 and #68 closed, then tick | 0 | each got a `released` marker, seq 3; `absent=66+67+68` |
-
-Observed on 2026-10-29 at `b6acf4e`, on fixture #120 labeled by `giuseppecrj`:
-
-| Step | Exit | Result |
-| --- | --- | --- |
-| First tick | 0 | `blocked`, markers `1:claimed,2:blocked`; claim record `seq: 2` |
-| Owner deleted both bot comments, then a tick | 0 | `corrupt=#120:marker_missing`, `markersPosted=0`, no run |
-| Another tick | 0 | the same; the claim record still `seq: 2` |
-
-`marker_missing` was removed in F04c fix 5. The rows above are the behavior at `b6acf4e`.
-
 Observed on 2026-10-29 at `feb9173`, lane `F04c-fix5 1`, on fixtures #175, #176 and #177, each labeled by `giuseppecrj`:
 
 | Step | Exit | Result |

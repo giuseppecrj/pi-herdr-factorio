@@ -256,7 +256,6 @@ export type TickReport = {
 		readonly issue: number;
 		readonly defect: MarkerDefect;
 	}[];
-	/** Issues whose last ledger read was behind the local claim record. The local record carries the run. */
 	readonly ledgerBehind: readonly {
 		readonly issue: number;
 		readonly ledgerSeq: number;
@@ -437,7 +436,6 @@ export class Orchestrator {
 	readonly #confirmed = new Set<number>();
 	/** Issues whose marker ledger this tick read clean. */
 	readonly #ledgerRead = new Set<number>();
-	/** Per issue, the last marker this controller knows landed: from claim records, then from its own posts. */
 	readonly #local = new Map<number, ConfirmedRecord>();
 	readonly #behind = new Map<number, TickReport["ledgerBehind"][number]>();
 
@@ -855,7 +853,6 @@ export class Orchestrator {
 		});
 	}
 
-	/** The local record when its `seq` is above the ledger's, so it is the run's state. That is logged once as `ledger_behind` and reported until a read or a new marker reaches it. */
 	#localAhead(issue: number, ledger: CleanLedger): ConfirmedRecord | null {
 		const local = this.#local.get(issue);
 		const ledgerSeq = ledger.markers.at(-1)?.marker.seq ?? 0;
@@ -877,7 +874,6 @@ export class Orchestrator {
 		return local;
 	}
 
-	/** The highest `seq` known on the issue. The next marker is one above it. */
 	#seqFloor(issue: number, ledger: CleanLedger): number {
 		return Math.max(
 			ledger.markers.at(-1)?.marker.seq ?? 0,
@@ -885,7 +881,6 @@ export class Orchestrator {
 		);
 	}
 
-	/** The marker a local record ahead of the ledger stands for, on the run's admission record, or `null` when that is unreadable. A record without a status takes the run's newest readable marker's, else `claimed` at the first stage. */
 	async #localMarker(
 		local: ConfirmedRecord,
 		ledger: CleanLedger,
