@@ -434,7 +434,7 @@ A marker counts only when all of these hold. Anything else from another author i
 - `issue_url` names the same repository and issue.
 - GraphQL `lastEditedAt` for the comment is `null`. One request reads it for every comment by `exe-dev-github-integration[bot]`, marker or not: `gh api graphql -f query=<nodes query> -f ids[]=<node_id>...`, at most 100 IDs per request.
 - The JSON parses with exactly the keys above, `v` is `1`, every value matches its pattern, and `runId` is the digest of its own `repo`, `issue` and `eventId`.
-- When the state directory has an admission record for the event, the marker's `eventAt`, `snapshotDigest`, `workflowSha` and `workflowDigest` match it.
+- When the state directory has an admission record for the event, the marker's `eventAt`, `snapshotDigest`, `workflowSha` and `workflowDigest` match it. This holds for a terminal marker as for a live one: a terminal marker that disagrees is `record_mismatch`, and the controller does not rewrite its claim record from it.
 
 The current marker is the trusted one with the highest `seq`. A bot comment that was edited, or whose GraphQL node does not name the same comment, issue and repository, whatever its text, a bot comment that starts with `<!-- factory:` and fails a rule, two markers with the same `seq`, two markers of one run that disagree on the admission fields, or a marker after its run's terminal one, make the issue corrupt. A corrupt issue is listed in `corrupt` with its `defect`, and nothing is dispatched for it until its `updated_at` changes and a fresh read is clean.
 

@@ -1180,14 +1180,14 @@ export class Orchestrator {
 
 			const settled = await this.#settleClaims(ledger.value, record, candidate);
 
-			if (settled === "resolved") {
+			if (settled === "resolved" || settled === "corrupt") {
 				this.#resolve(issue);
 			} else {
 				this.#recover.add(issue);
 				this.#reserved.add(issue);
 			}
 
-			if (settled === "undecided") continue;
+			if (settled === "undecided" || settled === "corrupt") continue;
 
 			if (!candidate) {
 				this.#see(issue, record.updatedAt, { kind: "decided" });
@@ -1252,7 +1252,7 @@ export class Orchestrator {
 		ledger: CleanLedger,
 		record: IssueRecord,
 		candidate: boolean,
-	): Promise<"held" | "resolved" | "undecided"> {
+	): Promise<"held" | "resolved" | "undecided" | "corrupt"> {
 		let settled: "held" | "resolved" = "resolved";
 		let timeline: Read<TimelineEntry[]> | null = null;
 
@@ -1264,6 +1264,12 @@ export class Orchestrator {
 			const latest = latestFor(ledger, claim.runId)?.marker ?? null;
 
 			if (latest !== null && isTerminal(latest.status)) {
+				if (!(await this.#matchesAdmission(latest, record.updatedAt))) {
+					return this.state.corrupt.has(record.number)
+						? "corrupt"
+						: "undecided";
+				}
+
 				await this.#keepEnded(recordOf(latest), true);
 				continue;
 			}
@@ -1382,6 +1388,28 @@ export class Orchestrator {
 		};
 	}
 
+	async #matchesAdmission(marker: Marker, updatedAt: string): Promise<boolean> {
+		const record = await this.#input.store.read({
+			repo: this.#input.repo,
+			issue: marker.issue,
+			eventId: marker.eventId,
+		});
+
+		if (record.kind === "unreadable") return false;
+
+		if (record.kind === "found" && !matchesRecord(marker, record.receipt)) {
+			this.#markCorrupt(
+				marker.issue,
+				{ kind: "corrupt", defect: "record_mismatch", commentId: "" },
+				updatedAt,
+			);
+
+			return false;
+		}
+
+		return true;
+	}
+
 	/**
 	 * Adopts the live run a marker names. It returns `null` when the run cannot
 	 * be adopted. A run that ends in this call, such as one released for a new
@@ -1396,21 +1424,7 @@ export class Orchestrator {
 	}): Promise<ActiveRun | null> {
 		const { marker, ledger, eligibility } = input;
 
-		const record = await this.#input.store.read({
-			repo: this.#input.repo,
-			issue: marker.issue,
-			eventId: marker.eventId,
-		});
-
-		if (record.kind === "unreadable") return null;
-
-		if (record.kind === "found" && !matchesRecord(marker, record.receipt)) {
-			this.#markCorrupt(
-				marker.issue,
-				{ kind: "corrupt", defect: "record_mismatch", commentId: "" },
-				input.issue.updatedAt,
-			);
-
+		if (!(await this.#matchesAdmission(marker, input.issue.updatedAt))) {
 			return null;
 		}
 

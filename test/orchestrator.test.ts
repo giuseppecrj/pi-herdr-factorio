@@ -4672,6 +4672,40 @@ describe("Orchestrator launch after a direct issue read", () => {
 	});
 });
 
+describe("Orchestrator terminal marker trust", () => {
+	it("rejects a terminal marker that disagrees with its admission", async () => {
+		const ctx = world();
+		const issue = ctx.github.add(labeled(14));
+
+		await ctx.start().tick();
+
+		const parsed = parseMarker(ctx.github.markers(14).at(-1) ?? "");
+
+		assert.equal(parsed.kind, "marker");
+
+		if (parsed.kind !== "marker") throw new Error("fixture");
+
+		issue.comments = [];
+		ctx.github.comment(
+			issue,
+			formatMarker({
+				...parsed.marker,
+				seq: 3,
+				status: "released",
+				workflowDigest: digestOf("different workflow"),
+			}),
+		);
+
+		const report = await ctx.start().tick();
+
+		assert.deepEqual(report.corrupt, [
+			{ issue: 14, defect: "record_mismatch" },
+		]);
+		assert.deepEqual(statuses(ctx.github, 14), ["3:released"]);
+		assert.deepEqual(ctx.files.claims.get(runOf(14)), blockedClaim(14, 2));
+	});
+});
+
 describe("acquireLock", () => {
 	const now = () => START;
 
