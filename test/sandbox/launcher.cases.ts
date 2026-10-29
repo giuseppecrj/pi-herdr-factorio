@@ -34,6 +34,7 @@ import {
 } from "../../server/sandbox/preflight.ts";
 import {
 	DEFAULT_SCOPE_LIMITS,
+	namesStateDir,
 	parseScopeList,
 	reconcileScopes,
 	scopeArgv,
@@ -52,6 +53,7 @@ import {
 	SYSCALLS,
 } from "../../server/sandbox/seccomp.ts";
 import type { ExecResult } from "../../src/gh.ts";
+import type { LogFields } from "../../src/orchestrator.ts";
 import { modelTable } from "./routes.cases.ts";
 
 const STATE = "/home/exedev/factory-state";
@@ -382,23 +384,26 @@ describe("user scope", () => {
 	});
 
 	it("finds this controller's leftover stage scopes by name and stops only those", async () => {
-		const own = `factory-stage-${OWNER}-${RUN.slice(0, 16)}-build-1-aaaa0000`;
+		const stateDir = "/nonexistent/factory-state";
+		const owner = scopeOwner(stateDir);
+		const own = `factory-stage-${owner}-${RUN.slice(0, 16)}-build-1-aaaa0000`;
+		const legacy = `factory-stage-${RUN.slice(0, 16)}-build-1-cccc0000`;
 
 		const listing = [
 			`${own}.scope loaded active running factory-stage`,
 			`factory-stage-0badf00d-${RUN.slice(0, 16)}-build-1-bbbb0000.scope loaded active running x`,
-			`factory-stage-${RUN.slice(0, 16)}-build-1-cccc0000.scope loaded active running x`,
+			`${legacy}.scope loaded active running x`,
 			"factory-stage-evil;rm.scope loaded active running x",
 			"user@1000.service loaded active running",
 			"",
 		].join("\n");
 
-		assert.deepEqual(parseScopeList(listing, OWNER), [own]);
+		assert.deepEqual(parseScopeList(listing, owner), [own]);
 
 		const calls: string[][] = [];
 
 		const result = await reconcileScopes(
-			OWNER,
+			stateDir,
 			async (command, args): Promise<ExecResult> => {
 				calls.push([command, ...args]);
 
@@ -413,7 +418,7 @@ describe("user scope", () => {
 			},
 		);
 
-		assert.deepEqual(result, { stopped: [own], failed: [] });
+		assert.deepEqual(result, { stopped: [own], failed: [], unowned: [legacy] });
 		assert.deepEqual(calls, [
 			[
 				"systemctl",
@@ -423,10 +428,41 @@ describe("user scope", () => {
 				"--plain",
 				"--no-legend",
 				"--type=scope",
-				`factory-stage-${OWNER}-*`,
+				"factory-stage-*",
+			],
+			[
+				"systemctl",
+				"--user",
+				"show",
+				"-p",
+				"Description",
+				"--value",
+				`${legacy}.scope`,
 			],
 			["systemctl", "--user", "stop", `${own}.scope`],
 		]);
+	});
+
+	it("matches a state dir in a scope's command line only at an argument start", () => {
+		const dir = "/var/lib/factory";
+
+		for (const text of [
+			`bwrap --bind ${dir}/stages/r/build-1/agent-0 /run/pi-agent`,
+			`bwrap --bind "${dir}/gw/0a0b/gw.sock" /run/gw.sock`,
+			`x --bind=${dir}/stages/r`,
+		]) {
+			assert.equal(namesStateDir(text, dir), true, text);
+		}
+
+		for (const text of [
+			`bwrap --bind ${dir}-lane/stages/r /run/pi-agent`,
+			`bwrap --bind /x${dir}/stages/r /run/pi-agent`,
+			`bwrap --bind ${dir}/other/r /run/pi-agent`,
+			`bwrap --bind ${dir}/stages /run/pi-agent`,
+			"",
+		]) {
+			assert.equal(namesStateDir(text, dir), false, text);
+		}
 	});
 
 	it("leaves another controller's live stage scope alone at startup", async () => {
@@ -457,6 +493,86 @@ describe("user scope", () => {
 				calls.some((call) => call.includes("stop")),
 				false,
 				JSON.stringify(calls),
+			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("stops an old-format scope whose command line names this state dir, and logs the rest as unowned", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-legacy-"));
+		const stateDir = join(dir, "state");
+		const stopped: string[] = [];
+		const logs: [string, LogFields][] = [];
+
+		mkdirSync(stateDir);
+
+		const legacy = (nonce: string) =>
+			`factory-stage-${RUN.slice(0, 16)}-build-1-${nonce}`;
+
+		const own = `factory-stage-${scopeOwner(stateDir)}-${RUN.slice(0, 16)}-build-1-aaaa0000`;
+
+		const descriptions = new Map([
+			[
+				legacy("11111111"),
+				`[systemd-run] /usr/bin/env -i PATH=/usr/bin:/bin bwrap --bind ${stateDir}/stages/${RUN}/build-1/agent-0 /run/pi-agent --bind ${stateDir}/gw/0a0b0c0d/gw.sock /run/factory-gw.sock`,
+			],
+			[
+				legacy("22222222"),
+				`[systemd-run] /usr/bin/env -i bwrap --bind ${stateDir}-lane/stages/${RUN}/build-1/agent-0 /run/pi-agent`,
+			],
+		]);
+
+		try {
+			const executor = sandboxExecutor({
+				stateDir,
+				xdgRuntimeDir: "/run/user/1000",
+				log: (event, fields) => logs.push([event, fields]),
+				exec: async (_command, args): Promise<ExecResult> => {
+					const unit = (args.at(-1) ?? "").replace(/\.scope$/, "");
+
+					if (args.includes("list-units")) {
+						return {
+							stdout: [
+								own,
+								legacy("11111111"),
+								legacy("22222222"),
+								legacy("33333333"),
+							]
+								.map((name) => `${name}.scope loaded active running x`)
+								.join("\n"),
+							stderr: "",
+							code: 0,
+						};
+					}
+
+					if (args.includes("show")) {
+						const text = descriptions.get(unit);
+
+						return text === undefined
+							? { stdout: "", stderr: "no", code: 1 }
+							: { stdout: `${text}\n`, stderr: "", code: 0 };
+					}
+
+					if (args.includes("stop")) stopped.push(unit);
+
+					return { stdout: "", stderr: "", code: 0 };
+				},
+			});
+
+			await executor.recover();
+
+			assert.deepEqual(stopped.sort(), [own, legacy("11111111")].sort());
+			assert.deepEqual(
+				logs.filter(([event]) => event === "scope_unowned"),
+				[
+					["scope_unowned", { unit: legacy("22222222") }],
+					["scope_unowned", { unit: legacy("33333333") }],
+				],
+			);
+			assert.deepEqual(
+				logs.find(([event]) => event === "sandbox_reconciled"),
+				["sandbox_reconciled", { stopped: 2, failed: 0, unowned: 2 }],
 			);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });

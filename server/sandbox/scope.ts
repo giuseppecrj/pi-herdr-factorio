@@ -24,6 +24,10 @@ export const SCOPE_PREFIX = "factory-stage-";
 const UNIT =
 	/^factory-stage-([0-9a-f]{8})-[0-9a-f]{16}-[a-z]{1,16}-[0-9]{1,6}-[0-9a-f]{8}$/;
 
+/** The unit name before it carried an owner, as builds up to `d97bbce` made it. */
+const LEGACY_UNIT =
+	/^factory-stage-[0-9a-f]{16}-[a-z]{1,16}-[0-9]{1,6}-[0-9a-f]{8}$/;
+
 /**
  * The controller a stage scope belongs to: the first 8 hex of the sha256 of
  * its state dir's real path. Controllers with different state dirs, such
@@ -90,7 +94,7 @@ export function stopScopeArgv(unit: string): string[] {
 	return ["systemctl", "--user", "stop", `${unit}.scope`];
 }
 
-export function listScopesArgv(owner: string): string[] {
+export function listScopesArgv(): string[] {
 	return [
 		"systemctl",
 		"--user",
@@ -99,8 +103,28 @@ export function listScopesArgv(owner: string): string[] {
 		"--plain",
 		"--no-legend",
 		"--type=scope",
-		`${SCOPE_PREFIX}${owner}-*`,
+		`${SCOPE_PREFIX}*`,
 	];
+}
+
+export function describeScopeArgv(unit: string): string[] {
+	return [
+		"systemctl",
+		"--user",
+		"show",
+		"-p",
+		"Description",
+		"--value",
+		`${unit}.scope`,
+	];
+}
+
+function unitsOf(stdout: string): string[] {
+	return stdout.split("\n").map((line) => {
+		const name = line.trim().split(/\s+/)[0] ?? "";
+
+		return name.endsWith(".scope") ? name.slice(0, -".scope".length) : "";
+	});
 }
 
 /**
@@ -108,46 +132,93 @@ export function listScopesArgv(owner: string): string[] {
  * Anything not shaped like ours, or owned by another controller, is ignored.
  */
 export function parseScopeList(stdout: string, owner: string): string[] {
-	return stdout.split("\n").flatMap((line) => {
-		const name = line.trim().split(/\s+/)[0] ?? "";
-		const unit = name.endsWith(".scope") ? name.slice(0, -".scope".length) : "";
+	return unitsOf(stdout).filter((unit) => UNIT.exec(unit)?.[1] === owner);
+}
 
-		return UNIT.exec(unit)?.[1] === owner ? [unit] : [];
-	});
+/** Stage scopes named before units carried an owner. */
+export function parseLegacyScopes(stdout: string): string[] {
+	return unitsOf(stdout).filter((unit) => LEGACY_UNIT.test(unit));
+}
+
+/**
+ * True when a scope's description, which `systemd-run` sets to the command
+ * it ran, binds a path under this state dir's `stages/` or `gw/`. Only
+ * absolute spellings of the state dir count, each at the start of an
+ * argument, so `/x/state-lane/stages/` never matches `/x/state`.
+ */
+export function namesStateDir(description: string, stateDir: string): boolean {
+	const dirs = new Set([resolve(stateDir)]);
+
+	try {
+		dirs.add(realpathSync(stateDir));
+	} catch {
+		// A state dir that does not resolve is matched by its absolute path only.
+	}
+
+	return [...dirs].some((dir) =>
+		["stages", "gw"].some((sub) => {
+			const needle = `${dir}/${sub}/`;
+			let at = description.indexOf(needle);
+
+			while (at !== -1) {
+				if (at === 0 || /[\s"'=]/.test(description[at - 1] ?? "")) return true;
+
+				at = description.indexOf(needle, at + 1);
+			}
+
+			return false;
+		}),
+	);
 }
 
 export type Reconciled = {
 	readonly stopped: readonly string[];
 	readonly failed: readonly string[];
+	readonly unowned: readonly string[];
 };
 
 /**
  * Stops every leftover stage scope this controller owns, by name. The
  * controller runs this at startup before it adopts `running` markers, so
  * no orphan keeps spending. Scopes another controller owns are left alone.
+ * An old-format scope, named before units carried an owner, is stopped only
+ * when its command line binds this state dir. One whose command line cannot
+ * be read, or names another dir, is `unowned` and left running.
  */
 export async function reconcileScopes(
-	owner: string,
+	stateDir: string,
 	exec: Exec,
 ): Promise<Reconciled> {
-	const [command = "systemctl", ...args] = listScopesArgv(owner);
+	const owner = scopeOwner(stateDir);
+	const [command = "systemctl", ...args] = listScopesArgv();
 	const listed = await exec(command, args);
 
 	if (listed.code !== 0) {
-		return { stopped: [], failed: [`${SCOPE_PREFIX}${owner}-*`] };
+		return { stopped: [], failed: [`${SCOPE_PREFIX}*`], unowned: [] };
 	}
 
 	const stopped: string[] = [];
 	const failed: string[] = [];
+	const unowned: string[] = [];
+	const ours = parseScopeList(listed.stdout, owner);
 
-	for (const unit of parseScopeList(listed.stdout, owner)) {
+	for (const unit of parseLegacyScopes(listed.stdout)) {
+		const [show = "systemctl", ...showArgs] = describeScopeArgv(unit);
+		const shown = await exec(show, showArgs);
+
+		if (shown.code === 0 && namesStateDir(shown.stdout, stateDir))
+			ours.push(unit);
+		else unowned.push(unit);
+	}
+
+	for (const unit of ours) {
 		const [stop, ...stopArgs] = stopScopeArgv(unit);
 		const result = await exec(stop ?? "systemctl", stopArgs);
 
 		(result.code === 0 ? stopped : failed).push(unit);
 	}
 
-	return { stopped, failed };
+	return { stopped, failed, unowned };
 }
 
 /**

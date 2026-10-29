@@ -1162,14 +1162,14 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 
 	return {
 		async recover() {
-			const result = await reconcileScopes(
-				scopeOwner(config.stateDir),
-				config.exec,
-			);
+			const result = await reconcileScopes(config.stateDir, config.exec);
+
+			for (const unit of result.unowned) config.log("scope_unowned", { unit });
 
 			config.log("sandbox_reconciled", {
 				stopped: result.stopped.length,
 				failed: result.failed.length,
+				unowned: result.unowned.length,
 			});
 		},
 
