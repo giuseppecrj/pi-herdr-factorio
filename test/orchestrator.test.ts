@@ -4354,6 +4354,208 @@ describe("Orchestrator cap and claimed runs", () => {
 	});
 });
 
+type Unproved = {
+	readonly name: string;
+	readonly reason: string;
+	readonly degrade: (issue: FakeIssue) => () => void;
+};
+
+const UNPROVED: readonly Unproved[] = [
+	{
+		name: "an empty timeline",
+		reason: "no_label_event",
+		degrade(issue) {
+			const timeline = issue.timeline;
+
+			issue.timeline = [];
+
+			return () => {
+				issue.timeline = timeline;
+			};
+		},
+	},
+	{
+		name: "a timeline whose latest ready entry is an older removal",
+		reason: "not_labeled",
+		degrade(issue) {
+			const timeline = issue.timeline;
+
+			issue.timeline = [
+				labelEvent({
+					id: 1234,
+					at: "2026-10-29T01:20:00Z",
+					actor: "giuseppecrj",
+					event: "unlabeled",
+				}),
+			];
+
+			return () => {
+				issue.timeline = timeline;
+			};
+		},
+	},
+	{
+		name: "an incomplete edit history",
+		reason: "ambiguous_snapshot",
+		degrade(issue) {
+			issue.totalVersions = 1;
+
+			return () => {
+				issue.totalVersions = null;
+			};
+		},
+	},
+];
+
+function touches(call: readonly string[], issue: number): boolean {
+	const path = `/issues/${issue}`;
+
+	return call.some(
+		(arg) =>
+			arg.endsWith(path) ||
+			arg.includes(`${path}/`) ||
+			arg === `number=${issue}`,
+	);
+}
+
+describe("Orchestrator refusals on unproved evidence", () => {
+	for (const { name, reason, degrade } of UNPROVED) {
+		it(`claims a ready issue on the next tick after ${name} reads complete again`, async () => {
+			const { github, clock, start } = world();
+			const restore = degrade(github.add(labeled(14)));
+			const controller = start();
+			const first = await controller.tick();
+
+			assert.deepEqual(first.refused, [{ issue: 14, reasons: [reason] }]);
+			assert.deepEqual(statuses(github, 14), []);
+
+			restore();
+			clock.t += 30_000;
+
+			const second = await controller.tick();
+
+			assert.deepEqual(runIssues(second), [14]);
+			assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+		});
+
+		it(`lets a fresh controller claim the issue after ${name} reads complete again`, async () => {
+			const { github, clock, start } = world();
+			const restore = degrade(github.add(labeled(14)));
+			const first = await start().tick();
+
+			assert.deepEqual(first.refused, [{ issue: 14, reasons: [reason] }]);
+
+			restore();
+			clock.t += 30_000;
+
+			const fresh = await start().tick();
+
+			assert.deepEqual(runIssues(fresh), [14]);
+			assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+		});
+	}
+
+	it("reads only the refused issue again while its evidence is missing, and returns to 4 requests once it is claimed", async () => {
+		const { github, clock, logs, start } = world();
+
+		github.add(labeled(14));
+
+		const restore = UNPROVED[0]?.degrade(github.add(labeled(15)));
+		const controller = start();
+
+		await controller.tick();
+		clock.t += 30_000;
+		await controller.tick();
+		clock.t += 30_000;
+		github.calls.length = 0;
+		logs.length = 0;
+
+		const missing = await controller.tick();
+		const own = github.calls.filter((call) => touches(call, 15));
+
+		assert.deepEqual(runIssues(missing), [14]);
+		assert.deepEqual(missing.refused, [
+			{ issue: 15, reasons: ["no_label_event"] },
+		]);
+		assert.equal(
+			github.calls.length - own.length,
+			4,
+			JSON.stringify(github.calls),
+		);
+		assert.equal(own.length, 2, JSON.stringify(github.calls));
+		assert.ok(!github.calls.some((call) => touches(call, 14)));
+		assert.deepEqual(
+			logs.filter((entry) => entry.event === "admission_refused"),
+			[
+				{
+					event: "admission_refused",
+					fields: { issue: 15, reasons: "no_label_event", retry: true },
+				},
+			],
+		);
+
+		restore?.();
+		clock.t += 30_000;
+
+		const claimed = await controller.tick();
+
+		assert.deepEqual(runIssues(claimed), [14, 15]);
+
+		clock.t += 30_000;
+		await controller.tick();
+		clock.t += 30_000;
+		github.calls.length = 0;
+		await controller.tick();
+
+		assert.equal(github.calls.length, 4, JSON.stringify(github.calls));
+	});
+
+	it("keeps a refusal backed by evidence settled until the issue changes", async () => {
+		const { github, clock, logs, start } = world();
+
+		github.add(
+			labeled(14, {
+				timeline: [
+					labelEvent({
+						id: 5,
+						at: "2026-10-29T01:21:37Z",
+						actor: "giuseppecrj",
+					}),
+					labelEvent({
+						id: 6,
+						at: "2026-10-29T01:21:37Z",
+						actor: "giuseppecrj",
+					}),
+				],
+			}),
+		);
+
+		const controller = start();
+		const first = await controller.tick();
+
+		assert.deepEqual(first.refused, [
+			{ issue: 14, reasons: ["ambiguous_snapshot"] },
+		]);
+		assert.deepEqual(
+			logs.filter((entry) => entry.event === "admission_refused"),
+			[
+				{
+					event: "admission_refused",
+					fields: { issue: 14, reasons: "ambiguous_snapshot", retry: false },
+				},
+			],
+		);
+
+		clock.t += 30_000;
+		github.calls.length = 0;
+
+		const second = await controller.tick();
+
+		assert.deepEqual(second.refused, []);
+		assert.equal(github.calls.length, 4, JSON.stringify(github.calls));
+	});
+});
+
 describe("acquireLock", () => {
 	const now = () => START;
 

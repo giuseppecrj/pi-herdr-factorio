@@ -1,5 +1,6 @@
 import {
 	type AdmissionStore,
+	type Ambiguity,
 	admitTicket,
 	type AdmittedReceipt,
 	FACTORY_REPOSITORIES,
@@ -343,15 +344,72 @@ function limitsOf(config: WorkflowConfig): Limits {
 	};
 }
 
-const SETTLED_REFUSALS: ReadonlySet<RefusalReason["kind"]> = new Set([
-	"pull_request",
-	"issue_closed",
-	"not_labeled",
-	"no_label_event",
-	"actor_withheld",
-	"unauthorized",
-	"ambiguous_snapshot",
-]);
+/**
+ * Whether a candidate's refusal is a decision the watermark may keep until
+ * the issue's `updated_at` changes. Every candidate read as open and ready, so
+ * a refusal that finds the ready label's evidence missing, incomplete or
+ * contradicting that read is retried on the next tick instead, as is one
+ * caused by a failed read or a per-tick condition.
+ */
+function settles(reason: RefusalReason): boolean {
+	switch (reason.kind) {
+		case "pull_request":
+		case "issue_closed":
+		case "actor_withheld":
+		case "unauthorized":
+			return true;
+		case "ambiguous_snapshot":
+			return provedAmbiguous(reason.detail);
+		case "not_labeled":
+		case "no_label_event":
+		case "repo_not_allowed":
+		case "state_unavailable":
+		case "locally_disabled":
+		case "repo_switch_off":
+		case "repo_switch_unavailable":
+		case "issue_unavailable":
+		case "timeline_unavailable":
+		case "permission_unavailable":
+		case "snapshot_unavailable":
+		case "workflow_unavailable":
+		case "duplicate_event":
+		case "state_unwritable":
+			return false;
+		default: {
+			const _exhaustive: never = reason;
+
+			return _exhaustive;
+		}
+	}
+}
+
+/**
+ * Whether an ambiguity is a fact of the issue that a later read returns
+ * again, rather than a read that is incomplete or disagrees with another.
+ */
+function provedAmbiguous(detail: Ambiguity): boolean {
+	switch (detail) {
+		case "label_events_same_second":
+		case "renamed_since_label":
+		case "edited_at_label_time":
+		case "version_withheld":
+			return true;
+		case "rename_history_incomplete":
+		case "title_changed_between_reads":
+		case "body_changed_between_reads":
+		case "history_contradicts_last_edit":
+		case "history_incomplete":
+		case "history_without_original":
+		case "history_disagrees_with_body":
+		case "no_version_before_label":
+			return false;
+		default: {
+			const _exhaustive: never = detail;
+
+			return _exhaustive;
+		}
+	}
+}
 
 function desiredStatus(phase: RunPhase): RunStatus {
 	switch (phase.kind) {
@@ -1653,11 +1711,16 @@ export class Orchestrator {
 		const kinds = receipt.reasons.map((reason) => reason.kind);
 
 		if (!kinds.includes("duplicate_event") || receipt.eventId === null) {
-			refused.push({ issue, reasons: kinds });
+			const settled = receipt.reasons.every(settles);
 
-			if (kinds.every((kind) => SETTLED_REFUSALS.has(kind))) {
-				this.#see(issue, record.updatedAt, { kind: "decided" });
-			}
+			refused.push({ issue, reasons: kinds });
+			this.#input.log("admission_refused", {
+				issue,
+				reasons: kinds.join("+"),
+				retry: !settled,
+			});
+
+			if (settled) this.#see(issue, record.updatedAt, { kind: "decided" });
 
 			return null;
 		}
