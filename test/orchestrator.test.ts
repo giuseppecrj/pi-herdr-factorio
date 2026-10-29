@@ -199,7 +199,6 @@ class FakeExecutor implements StageExecutor {
 	fallback: Behavior = { kind: "unavailable" };
 	readonly launches: StageLaunchInput[] = [];
 	recovered = 0;
-	/** The preflight result. When `null`, it passes unless the next launch is unavailable. */
 	ready: boolean | null = null;
 
 	async recover(): Promise<void> {

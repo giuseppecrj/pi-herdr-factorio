@@ -75,7 +75,6 @@ export type ExecutorContext = {
 	readonly log: Log;
 };
 
-/** The user manager the stage scopes run under. `factory.service` sets it. */
 const XDG_RUNTIME_DIR = "/run/user/1000";
 
 export type CliIo = {

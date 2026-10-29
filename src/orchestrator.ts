@@ -939,11 +939,6 @@ export class Orchestrator {
 		});
 	}
 
-	/**
-	 * Ends a stage that returned. A pass stops the run, since later stages are
-	 * not installed. A refusal ends it `failed` with no scheduler retry, and a
-	 * cap ends it `budget_exhausted`. Only a failure goes through the retries.
-	 */
 	#finishStage(run: ActiveRun, result: StageEnd, limits: Limits): void {
 		if (result.kind === "failed") {
 			this.#endStage(run, "stage_failed", result.usage, limits);

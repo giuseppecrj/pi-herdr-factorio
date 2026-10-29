@@ -602,7 +602,6 @@ export type SandboxHostConfig = {
 	readonly now?: () => number;
 };
 
-/** A directory that did not exist: `base`, else `base.2`, `base.3` and so on. */
 function freshDir(base: string): string {
 	for (let n = 1; ; n++) {
 		const path = n === 1 ? base : `${base}.${n}`;
