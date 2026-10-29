@@ -4107,6 +4107,37 @@ describe("Orchestrator timeline with no ready event", () => {
 		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
 	});
 
+	it("decides nothing for an adopted running marker, and counts the interruption once the event reads again", async () => {
+		const { github, executor, start } = world();
+		const issue = github.add(labeled(14));
+
+		executor.behaviors = [{ kind: "hang" }];
+		await start().tick();
+
+		const timeline = issue.timeline;
+
+		issue.timeline = [];
+		issue.updatedAt = "2026-10-29T02:30:00Z";
+
+		const controller = start();
+		const empty = await controller.tick();
+
+		assert.deepEqual(empty.runs, []);
+		assert.deepEqual(empty.queued, [14]);
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:running"]);
+
+		issue.timeline = timeline;
+
+		const restored = await controller.tick();
+
+		assert.equal(restored.runs[0]?.status, "retrying");
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:running",
+			"3:retrying",
+		]);
+	});
+
 	it("keeps a held run in the same process and does not release it", async () => {
 		const { github, clock, start } = world();
 		const issue = github.add(labeled(14));
@@ -4132,6 +4163,123 @@ describe("Orchestrator timeline with no ready event", () => {
 
 		assert.equal(restored.runs[0]?.status, "blocked");
 		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+	});
+});
+
+describe("Orchestrator eligibility before adoption", () => {
+	it("releases a replaced marker-backed claim before the first workflow load", async () => {
+		const { github, clock, files, start } = world();
+		const issue = github.add(labeled(14));
+
+		await start().tick();
+
+		const next = relabel(github, issue);
+		const workflow = github.workflow;
+
+		github.workflow = null;
+		clock.t += 40 * 60_000;
+
+		const controller = start();
+		const unloaded = await controller.tick();
+
+		assert.deepEqual(unloaded.dispatch.reasons, ["workflow_unavailable"]);
+		assert.deepEqual(unloaded.runs, []);
+		assert.equal(files.claims.get(runOf(14))?.status, "released");
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:blocked",
+			"3:released",
+		]);
+
+		github.workflow = workflow;
+		clock.t += 30_000;
+
+		const loaded = await controller.tick();
+
+		assert.equal(loaded.runs[0]?.runId, next);
+		assert.deepEqual(statuses(github, 14).slice(3), ["4:claimed", "5:blocked"]);
+	});
+
+	it("releases a replaced marker-backed claim without waiting for an adoption slot", async () => {
+		const { github, clock, files, start } = world();
+
+		github.add(labeled(14));
+
+		const issue = github.add(labeled(16));
+
+		await start().tick();
+		capAt(github, 1);
+		relabel(github, issue);
+		clock.t += 40 * 60_000;
+
+		const report = await start().tick();
+
+		assert.equal(files.claims.get(runOf(16))?.status, "released");
+		assert.deepEqual(statuses(github, 16), [
+			"1:claimed",
+			"2:blocked",
+			"3:released",
+		]);
+		assert.deepEqual(runIssues(report), [14]);
+		assert.equal(report.active, 1);
+		assert.deepEqual(report.queued, [16]);
+	});
+
+	it("releases a closed issue's running marker at max_attempts: 1 instead of failing it", async () => {
+		const { github, clock, executor, logs, start } = world();
+
+		setWorkflow(github, "max_attempts: 3", "max_attempts: 1");
+
+		const issue = github.add(labeled(14));
+
+		executor.fallback = { kind: "hang" };
+		await start().tick();
+		issue.state = "closed";
+		issue.updatedAt = "2026-10-29T02:00:20Z";
+		clock.t += 30_000;
+
+		const report = await start().tick();
+
+		assert.deepEqual(report.runs, []);
+		assert.equal(report.totals.failures, 0);
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:running",
+			"3:released",
+		]);
+		assert.deepEqual(
+			logs.flatMap((entry) =>
+				entry.event === "claim_released" ? [entry.fields.why] : [],
+			),
+			["closed"],
+		);
+	});
+
+	it("releases a replaced running marker at max_attempts: 1 and starts the new event", async () => {
+		const { github, clock, executor, start } = world();
+
+		setWorkflow(github, "max_attempts: 3", "max_attempts: 1");
+
+		const issue = github.add(labeled(14));
+
+		executor.fallback = { kind: "hang" };
+		await start().tick();
+
+		const next = relabel(github, issue);
+
+		clock.t += 40 * 60_000;
+
+		const report = await start().tick();
+
+		assert.equal(report.runs[0]?.runId, next);
+		assert.equal(report.totals.failures, 0);
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:running",
+			"3:released",
+			"4:claimed",
+			"5:running",
+		]);
 	});
 });
 

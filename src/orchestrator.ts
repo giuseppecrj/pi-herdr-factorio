@@ -386,6 +386,10 @@ function holdsSlot(run: ActiveRun): boolean {
 	);
 }
 
+function holdsSlotAs(status: RunStatus): boolean {
+	return status === "claimed" || status === "blocked";
+}
+
 const FIRST_STAGE: Stage = "specify";
 
 /**
@@ -713,17 +717,13 @@ export class Orchestrator {
 	async #checkEligible(
 		run: ActiveRun,
 		candidates: readonly IssueRecord[],
-		known?: IssueRecord,
 	): Promise<Eligibility> {
 		if (run.phase.kind === "ending") return "unverified";
 
 		let record = candidates.find((item) => item.number === run.issue);
 
 		if (record === undefined) {
-			const read =
-				known === undefined
-					? await this.#adapter.readIssue(run.issue)
-					: { kind: "ok" as const, value: known };
+			const read = await this.#adapter.readIssue(run.issue);
 
 			if (read.kind === "failed") return "unverified";
 
@@ -1094,7 +1094,13 @@ export class Orchestrator {
 				isReady(record) || (record.open && candidates.includes(record));
 
 			if (current !== null && !isTerminal(current.status)) {
-				if (candidate && !this.#fits(current.status)) {
+				const eligibility = await this.#eligibilityOf(
+					current,
+					record,
+					candidate,
+				);
+
+				if (this.#waits(current.status, eligibility)) {
 					this.#recover.add(issue);
 					this.#reserved.add(issue);
 					queued.push(issue);
@@ -1104,8 +1110,8 @@ export class Orchestrator {
 				const adopted = await this.#adoptExistingRun({
 					marker: current,
 					ledger: ledger.value,
-					candidates,
 					issue: record,
+					eligibility,
 				});
 
 				if (adopted === null) {
@@ -1162,10 +1168,31 @@ export class Orchestrator {
 
 		if (limits === null) return false;
 
-		return (
-			(status !== "claimed" && status !== "blocked") ||
-			this.#active() < limits.maxConcurrent
-		);
+		return !holdsSlotAs(status) || this.#active() < limits.maxConcurrent;
+	}
+
+	#waits(status: RunStatus, eligibility: Replacement | ReleaseReason): boolean {
+		if (eligibility === "current") return !this.#fits(status);
+
+		if (eligibility === "unverified") {
+			return !holdsSlotAs(status) || !this.#fits(status);
+		}
+
+		return false;
+	}
+
+	async #eligibilityOf(
+		marker: Marker,
+		record: IssueRecord,
+		candidate: boolean,
+	): Promise<Replacement | ReleaseReason> {
+		if (!candidate) return record.open ? "unlabeled" : "closed";
+
+		const timeline = await this.#adapter.readTimeline(marker.issue);
+
+		return timeline.kind === "failed"
+			? "unverified"
+			: replacedBy(timeline.value, marker);
 	}
 
 	async #settleClaims(
@@ -1311,10 +1338,10 @@ export class Orchestrator {
 	async #adoptExistingRun(input: {
 		marker: Marker;
 		ledger: CleanLedger;
-		candidates: readonly IssueRecord[];
 		issue: IssueRecord;
+		eligibility: Replacement | ReleaseReason;
 	}): Promise<ActiveRun | null> {
-		const { marker, ledger, candidates } = input;
+		const { marker, ledger, eligibility } = input;
 
 		const record = await this.#input.store.read({
 			repo: this.#input.repo,
@@ -1374,9 +1401,10 @@ export class Orchestrator {
 
 		const limits = this.#limits();
 
-		if (limits !== null && marker.status === "running") {
+		if (eligibility !== "current" && eligibility !== "unverified") {
+			this.#release(run, eligibility);
+		} else if (limits !== null && marker.status === "running") {
 			this.#endStage(run, "interrupted", 0, limits);
-			await this.#sync(run);
 		} else if (limits !== null && marker.status === "retrying") {
 			const created = ledger.markers.find(
 				(entry) => entry.marker.seq === marker.seq,
@@ -1390,11 +1418,12 @@ export class Orchestrator {
 			};
 		}
 
-		if (
-			(await this.#checkEligible(run, candidates, input.issue)) !== "dropped"
-		) {
-			await this.#sync(run);
+		if (eligibility === "current") {
+			this.#confirmed.add(run.issue);
+			this.#see(run.issue, input.issue.updatedAt, { kind: "claimed" });
 		}
+
+		await this.#sync(run);
 
 		return run;
 	}
