@@ -169,8 +169,7 @@ const ENV_REFERENCE = /^\$([A-Za-z_][A-Za-z0-9_]*)$/;
 
 const SCP_REMOTE = /^git@github\.com:([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/;
 const HTTPS_GITHUB_PREFIX = /^https:\/\/(?:[^\s/?#\\@]*@)?github\.com\//;
-const SAFE_KEY = /^[A-Za-z0-9_.-]{1,64}$/;
-const WITHHELD_NAME = "(name withheld)";
+const UNKNOWN_KEY = "(unknown key)";
 
 const URL_USERINFO = /([a-z][a-z0-9+.-]*:\/\/)[^\s/?#]*@/gi;
 
@@ -253,10 +252,6 @@ export function githubRepoFromRemote(remote: string): RepoSlug | null {
 	return repoSlugOf(segments[0] ?? "", segments[1] ?? "");
 }
 
-function keyName(name: string): string {
-	return SAFE_KEY.test(name) ? name : WITHHELD_NAME;
-}
-
 class InvalidWorkflow extends Error {
 	readonly field: string;
 
@@ -297,10 +292,9 @@ function optionalEntries(
 	const entries = entriesOf(parent.get(key) ?? null, field);
 
 	for (const name of entries.keys()) {
-		rejectCommandKey(name, `${field}.${keyName(name)}`);
+		rejectCommandKey(name, `${field}.${UNKNOWN_KEY}`);
 
-		if (!allowed.includes(name))
-			fail(`${field}.${keyName(name)}`, "unknown key");
+		if (!allowed.includes(name)) fail(`${field}.${UNKNOWN_KEY}`, "unknown key");
 	}
 
 	return entries;
@@ -445,7 +439,7 @@ function stageEntries(
 		: new Map<string, YamlNode>();
 
 	for (const name of entries.keys()) {
-		rejectCommandKey(name, `${field}.${keyName(name)}`);
+		rejectCommandKey(name, `${field}.${UNKNOWN_KEY}`);
 
 		if (name === "model" && !allowed.includes(name)) {
 			fail(
@@ -454,8 +448,7 @@ function stageEntries(
 			);
 		}
 
-		if (!allowed.includes(name))
-			fail(`${field}.${keyName(name)}`, "unknown key");
+		if (!allowed.includes(name)) fail(`${field}.${UNKNOWN_KEY}`, "unknown key");
 	}
 
 	return entries;
@@ -602,15 +595,9 @@ function readConfig(
 	const warnings: string[] = [];
 
 	for (const key of root.keys()) {
-		rejectCommandKey(key, keyName(key));
+		rejectCommandKey(key, UNKNOWN_KEY);
 
-		if (!ROOT_KEYS.includes(key)) {
-			warnings.push(
-				SAFE_KEY.test(key)
-					? `unknown key ${key} ignored`
-					: `unknown key ${WITHHELD_NAME}`,
-			);
-		}
+		if (!ROOT_KEYS.includes(key)) warnings.push(`${UNKNOWN_KEY} ignored`);
 	}
 
 	if (!root.has("repository")) fail("repository", "is required");

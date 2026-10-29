@@ -322,7 +322,7 @@ describe("parseWorkflow", () => {
 
 		assert.equal(
 			validation(frontMatter("stages:\n  deploy: {}")).field,
-			"stages.deploy",
+			"stages.(unknown key)",
 		);
 	});
 
@@ -394,18 +394,18 @@ describe("parseWorkflow", () => {
 
 		assert.equal(
 			validation(frontMatter("checkpoints:\n  auto_land: {}")).field,
-			"checkpoints.auto_land",
+			"checkpoints.(unknown key)",
 		);
 	});
 
 	it("rejects a hooks key and other shell-command keys", () => {
 		assert.equal(
 			validation(frontMatter("hooks:\n  after_create: rm -rf /")).field,
-			"hooks",
+			"(unknown key)",
 		);
 		assert.equal(
-			validation(frontMatter("codex:\n  command: codex")).field,
-			"codex",
+			validation(frontMatter("codex:\n  command: codex")).message,
+			"(unknown key) names shell commands, and the factory runs no commands from WORKFLOW.md",
 		);
 	});
 
@@ -415,19 +415,19 @@ describe("parseWorkflow", () => {
 		assert.equal(parsed.kind, "valid");
 
 		if (parsed.kind === "valid") {
-			assert.deepEqual(parsed.warnings, ["unknown key tracker ignored"]);
+			assert.deepEqual(parsed.warnings, ["(unknown key) ignored"]);
 		}
 	});
 
 	it("rejects unknown keys inside known sections", () => {
 		assert.equal(
 			validation(frontMatter("polling:\n  interval: 30000")).field,
-			"polling.interval",
+			"polling.(unknown key)",
 		);
 
 		assert.equal(
 			validation(frontMatter("stages:\n  build:\n    max_turn: 3")).field,
-			"stages.build.max_turn",
+			"stages.build.(unknown key)",
 		);
 	});
 
@@ -821,7 +821,7 @@ describe("server/cli.ts", () => {
 				ref: "broken",
 				valid: false,
 				outcome: "kept",
-				error: { field: "hooks" },
+				error: { field: "(unknown key)" },
 				inForce: { ref: "main", sha: mainSha, digest: digestOf(valid) },
 			},
 		});
@@ -919,6 +919,13 @@ const leakyFiles: [string, string][] = [
 	[
 		"a query string in a value",
 		frontMatter(`polling:\n  interval_ms: "https://h/x?token=${secret}"`),
+	],
+	["a bare token as a top-level key", frontMatter(`${secret}: x`)],
+	["a bare token as a section key", frontMatter(`polling:\n  ${secret}: 1`)],
+	["a bare token as a stage name", frontMatter(`stages:\n  ${secret}: {}`)],
+	[
+		"a bare token as a stage setting",
+		frontMatter(`stages:\n  build:\n    ${secret}: 1`),
 	],
 ];
 
@@ -1215,7 +1222,7 @@ describe("errors built from factory text", () => {
 		});
 	}
 
-	it("names an unknown key only when it is a plain identifier", () => {
+	it("prints every unknown key as (unknown key)", () => {
 		const warnings = (lines: string) => {
 			const parsed = parse(frontMatter(lines));
 
@@ -1224,19 +1231,30 @@ describe("errors built from factory text", () => {
 			return parsed.kind === "valid" ? parsed.warnings : [];
 		};
 
-		assert.deepEqual(warnings("tracker.v2-x_y: 1"), [
-			"unknown key tracker.v2-x_y ignored",
+		assert.deepEqual(warnings(`tracker: 1\n${secret}: 2\n"has space": 3`), [
+			"(unknown key) ignored",
+			"(unknown key) ignored",
+			"(unknown key) ignored",
 		]);
-		assert.deepEqual(warnings('"has space": 1'), [
-			"unknown key (name withheld)",
-		]);
-		assert.deepEqual(warnings(`${"k".repeat(65)}: 1`), [
-			"unknown key (name withheld)",
-		]);
-		assert.equal(
-			validation(frontMatter('polling:\n  "a b": 1')).field,
-			"polling.(name withheld)",
-		);
+
+		const nested: [string, string][] = [
+			[`polling:\n  ${secret}: 1`, "polling.(unknown key)"],
+			[`stages:\n  ${secret}: {}`, "stages.(unknown key)"],
+			[`stages:\n  build:\n    ${secret}: 1`, "stages.build.(unknown key)"],
+			[
+				`checkpoints:\n  approve_merge:\n    ${secret}: 1`,
+				"checkpoints.approve_merge.(unknown key)",
+			],
+			["agent:\n  interval_ms: 1", "agent.(unknown key)"],
+		];
+
+		for (const [lines, field] of nested) {
+			assert.deepEqual(validation(frontMatter(lines)), {
+				kind: "workflow_validation_error",
+				field,
+				message: `${field} unknown key`,
+			});
+		}
 	});
 });
 
@@ -1590,28 +1608,28 @@ describe("shell-command keys", () => {
 		it(`rejects the top-level key ${key}`, () => {
 			const error = validation(frontMatter(`${key}: x`));
 
-			assert.equal(error.field, key.startsWith('"') ? "(name withheld)" : key);
+			assert.equal(error.field, "(unknown key)");
 			assert.match(error.message, /shell commands/);
 		});
 	}
 
 	const nested: [string, string][] = [
-		["polling:\n  Hooks: x", "polling.Hooks"],
-		["agent:\n  run: x", "agent.run"],
-		["workspace:\n  bash: x", "workspace.bash"],
-		["retry:\n  before_run: x", "retry.before_run"],
-		["usage:\n  Exec: x", "usage.Exec"],
-		["stages:\n  HOOK: x", "stages.HOOK"],
-		["stages:\n  build:\n    after_create: x", "stages.build.after_create"],
-		["checkpoints:\n  script: x", "checkpoints.script"],
+		["polling:\n  Hooks: x", "polling.(unknown key)"],
+		["agent:\n  run: x", "agent.(unknown key)"],
+		["workspace:\n  bash: x", "workspace.(unknown key)"],
+		["retry:\n  before_run: x", "retry.(unknown key)"],
+		["usage:\n  Exec: x", "usage.(unknown key)"],
+		["stages:\n  HOOK: x", "stages.(unknown key)"],
+		["stages:\n  build:\n    after_create: x", "stages.build.(unknown key)"],
+		["checkpoints:\n  script: x", "checkpoints.(unknown key)"],
 		[
 			"checkpoints:\n  approve_merge:\n    Shell: x",
-			"checkpoints.approve_merge.Shell",
+			"checkpoints.approve_merge.(unknown key)",
 		],
 	];
 
 	for (const [lines, field] of nested) {
-		it(`rejects the shell-command key ${field}`, () => {
+		it(`rejects the shell-command key in ${JSON.stringify(lines)}`, () => {
 			const error = validation(frontMatter(lines));
 
 			assert.equal(error.field, field);

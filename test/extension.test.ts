@@ -393,6 +393,29 @@ describe("untrusted text never reaches /factory status", () => {
 		});
 	}
 
+	const bareTokenKeys: [string, string][] = [
+		["the top level", frontMatter(`${secret}: x`)],
+		["a known section", frontMatter(`polling:\n  ${secret}: 1`)],
+		["a stage", frontMatter(`stages:\n  build:\n    ${secret}: 1`)],
+	];
+
+	for (const [where, workflowText] of bareTokenKeys) {
+		it(`withholds a bare token key in ${where}`, async () => {
+			const text = await factoryCommandText("status", {
+				exec: async (command, args) =>
+					command === "git" ? ok(remote) : serving(workflowText)(args),
+				env: (key) => (key === "HOME" ? "/home/factory" : undefined),
+			});
+
+			assertNoCredential(text);
+
+			const sent = await sentFor(file(workflowText));
+
+			assert.equal(sent.length, 1);
+			assertNoCredential(sent[0] ?? "");
+		});
+	}
+
 	it("reports a rejected gh exec as other", async () => {
 		const sent = await sentFor(
 			failing(async () => Promise.reject(new Error("spawn failed")), "fetch"),
