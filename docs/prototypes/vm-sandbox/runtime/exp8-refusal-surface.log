@@ -1,0 +1,49 @@
+# exp8 at 2026-10-29T15:22:49+00:00 on pi-factorio
+gateway[exp8] pid=295676 socket=/home/exedev/f05-proto2/gw-exp8/gw.sock args: --fake-openai-port 18998
+## scenario incomplete_content_filter
+  event order: response:get_state response:prompt agent_start turn_start message_start message_end message_start message_end message_start message_end turn_end agent_end agent_settled
+  assistant message_end: {"stopReason": "error", "rawStopReason": "incomplete.content_filter", "errorMessage": "Response incomplete: content_filter", "content": [], "usage": {"input": 7, "output": 5, "cacheRead": 0, "cacheWrite": 0, "reasoning": 0, "totalTokens": 12, "cost": {"input": 1.4e-05, "output": 5e-05, "cacheRead": 0, "cacheWrite": 0, "total": 6.4e-05}}}
+  auto_retry events: []
+  agent_settled: [{'type': 'agent_settled', 'aborted': False}] notes: []
+  upstream (fake) requests for this scenario: 1
+## scenario failed_content_filter
+  event order: response:get_state response:prompt agent_start turn_start message_start message_end message_start message_end message_start message_end turn_end agent_end agent_settled
+  assistant message_end: {"stopReason": "error", "rawStopReason": "failed", "errorMessage": "content_filter: The response was filtered due to the prompt triggering content management policy.", "content": [], "usage": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 0, "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0}}}
+  auto_retry events: []
+  agent_settled: [{'type': 'agent_settled', 'aborted': False}] notes: []
+  upstream (fake) requests for this scenario: 1
+## scenario refusal_part
+  event order: response:get_state response:prompt agent_start turn_start message_start message_end message_start message_end message_start message_update×3 message_end turn_end agent_end agent_settled
+  assistant message_end: {"stopReason": "stop", "rawStopReason": "completed", "errorMessage": null, "content": [{"type": "text", "text": "I can't help with that."}], "usage": {"input": 7, "output": 5, "cacheRead": 0, "cacheWrite": 0, "reasoning": 0, "totalTokens": 12, "cost": {"input": 1.4e-05, "output": 5e-05, "cacheRead": 0, "cacheWrite": 0, "total": 6.4e-05}}}
+  auto_retry events: []
+  agent_settled: [{'type': 'agent_settled', 'aborted': False}] notes: []
+  upstream (fake) requests for this scenario: 1
+## scenario http400_content_policy
+  event order: response:get_state response:prompt agent_start turn_start message_start message_end message_start message_end message_start message_end turn_end agent_end agent_settled
+  assistant message_end: {"stopReason": "error", "rawStopReason": null, "errorMessage": "OpenAI API error (400): {\"message\":\"Your request was rejected as a result of our safety system.\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"content_policy_violation\"}", "content": [], "usage": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 0, "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0}}}
+  auto_retry events: []
+  agent_settled: [{'type': 'agent_settled', 'aborted': False}] notes: []
+  upstream (fake) requests for this scenario: 1
+## scenario http500
+  event order: response:get_state response:prompt agent_start turn_start message_start message_end message_start message_end message_start message_end turn_end agent_end auto_retry_start entry_appended agent_start turn_start message_start message_end turn_end agent_end auto_retry_start entry_appended agent_start turn_start message_start message_end turn_end agent_end auto_retry_start entry_appended agent_start turn_start message_start message_end turn_end agent_end auto_retry_end agent_settled
+  assistant message_end: {"stopReason": "error", "rawStopReason": null, "errorMessage": "OpenAI API error (500): {\"message\":\"The server had an error while processing your request.\",\"type\":\"server_error\",\"param\":null,\"code\":null}", "content": [], "usage": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 0, "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0}}}
+  assistant message_end: {"stopReason": "error", "rawStopReason": null, "errorMessage": "OpenAI API error (500): {\"message\":\"The server had an error while processing your request.\",\"type\":\"server_error\",\"param\":null,\"code\":null}", "content": [], "usage": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 0, "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0}}}
+  assistant message_end: {"stopReason": "error", "rawStopReason": null, "errorMessage": "OpenAI API error (500): {\"message\":\"The server had an error while processing your request.\",\"type\":\"server_error\",\"param\":null,\"code\":null}", "content": [], "usage": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 0, "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0}}}
+  assistant message_end: {"stopReason": "error", "rawStopReason": null, "errorMessage": "OpenAI API error (500): {\"message\":\"The server had an error while processing your request.\",\"type\":\"server_error\",\"param\":null,\"code\":null}", "content": [], "usage": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 0, "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0}}}
+  auto_retry events: [(0.538, 'auto_retry_start', 1, 2000, 'OpenAI API error (500): {"message":"The server had an error while processing your request.","type":"server_error","param'), (2.552, 'auto_retry_start', 2, 4000, 'OpenAI API error (500): {"message":"The server had an error while processing your request.","type":"server_error","param'), (6.559, 'auto_retry_start', 3, 8000, 'OpenAI API error (500): {"message":"The server had an error while processing your request.","type":"server_error","param'), (14.582, 'auto_retry_end', 3, None, '')]
+  agent_settled: [{'type': 'agent_settled', 'aborted': False}] notes: []
+  upstream (fake) requests for this scenario: 4
+## gateway log summary
+#1 t=1793287370.258 POST /openai/v1/responses -> forward route=fake status=200 upstream=('http', 'fixture.local', None, '127.0.0.1') | req model=gpt-6.1-sol tools=[] input_items=3 instr_chars=0 reasoning={'effort': 'medium', 'summary': 'auto'} | resp terminal=incomplete usage={"input_tokens": 7, "input_tokens_details": {"cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 12}
+#2 t=1793287371.284 POST /openai/v1/responses -> forward route=fake status=200 upstream=('http', 'fixture.local', None, '127.0.0.1') | req model=gpt-6.1-sol tools=[] input_items=3 instr_chars=0 reasoning={'effort': 'medium', 'summary': 'auto'} | resp terminal=failed usage={"input_tokens": 7, "input_tokens_details": {"cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 12}
+#3 t=1793287372.317 POST /openai/v1/responses -> forward route=fake status=200 upstream=('http', 'fixture.local', None, '127.0.0.1') | req model=gpt-6.1-sol tools=[] input_items=3 instr_chars=0 reasoning={'effort': 'medium', 'summary': 'auto'} | resp terminal=completed usage={"input_tokens": 7, "input_tokens_details": {"cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 12}
+#4 t=1793287373.335 POST /openai/v1/responses -> forward route=fake status=400 upstream=('http', 'fixture.local', None, '127.0.0.1') | req model=gpt-6.1-sol tools=[] input_items=3 instr_chars=0 reasoning={'effort': 'medium', 'summary': 'auto'} | resp_head='{"error": {"message": "Your request was rejected as a result of our safety system.", "type": "invalid_request_error", "param": null, "code": "content_policy_violation"}}'
+#5 t=1793287374.476 POST /openai/v1/responses -> forward route=fake status=500 upstream=('http', 'fixture.local', None, '127.0.0.1') | req model=gpt-6.1-sol tools=[] input_items=3 instr_chars=0 reasoning={'effort': 'medium', 'summary': 'auto'} | resp_head='{"error": {"message": "The server had an error while processing your request.", "type": "server_error", "param": null, "code": null}}'
+#6 t=1793287376.498 POST /openai/v1/responses -> forward route=fake status=500 upstream=('http', 'fixture.local', None, '127.0.0.1') | req model=gpt-6.1-sol tools=[] input_items=3 instr_chars=0 reasoning={'effort': 'medium', 'summary': 'auto'} | resp_head='{"error": {"message": "The server had an error while processing your request.", "type": "server_error", "param": null, "code": null}}'
+#7 t=1793287380.508 POST /openai/v1/responses -> forward route=fake status=500 upstream=('http', 'fixture.local', None, '127.0.0.1') | req model=gpt-6.1-sol tools=[] input_items=3 instr_chars=0 reasoning={'effort': 'medium', 'summary': 'auto'} | resp_head='{"error": {"message": "The server had an error while processing your request.", "type": "server_error", "param": null, "code": null}}'
+#8 t=1793287388.527 POST /openai/v1/responses -> forward route=fake status=500 upstream=('http', 'fixture.local', None, '127.0.0.1') | req model=gpt-6.1-sol tools=[] input_items=3 instr_chars=0 reasoning={'effort': 'medium', 'summary': 'auto'} | resp_head='{"error": {"message": "The server had an error while processing your request.", "type": "server_error", "param": null, "code": null}}'
+requests=8 forwarded=8 gated=0 denied=0 errors=0
+upstream hosts: [('fixture.local', None)]
+REAL_MODEL_TOKENS_TOTAL=0
+## leftovers check
+no matching processes

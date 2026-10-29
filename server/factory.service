@@ -9,6 +9,9 @@ User=exedev
 Group=exedev
 WorkingDirectory=/home/exedev/pi-herdr-factorio
 Environment=GH_HOST=github.int.exe.xyz
+# Stage sandboxes are `systemd-run --user --scope` units under exedev's user manager.
+# Put no secret in Environment=. Future egress secrets come only through LoadCredential=.
+Environment=XDG_RUNTIME_DIR=/run/user/1000
 Environment=PATH=/home/exedev/.local/bin:/home/exedev/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin
 ExecStart=/home/exedev/.local/share/mise/shims/node server/cli.ts serve --repo giuseppecrj/pi-herdr-factorio --state-dir /home/exedev/factory-state
 KillSignal=SIGTERM

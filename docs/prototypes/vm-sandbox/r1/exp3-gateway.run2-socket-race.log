@@ -1,0 +1,131 @@
+# exp3 run at 2026-10-29T14:55:48+00:00 on pi-factorio
+srwx------ 1 exedev exedev 0 Oct 29 14:55 gw/gw.sock
+gateway pid=293323 (host side, outside sandbox), fixture pid=293322 on 127.0.0.1:18999
+## sandbox launch: systemd-run --user --scope --unit=f05-proto-exp3-293317 -p MemoryMax=512M -p TasksMax=64 -- bwrap --unshare-all --die-with-parent --new-session --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/sbin /sbin --symlink usr/lib /lib --symlink usr/lib64 /lib64 --proc /proc --dev /dev --tmpfs /tmp --ro-bind /etc/resolv.conf /etc/resolv.conf --ro-bind /etc/hosts /etc/hosts --ro-bind /etc/nsswitch.conf /etc/nsswitch.conf --ro-bind /etc/ssl /etc/ssl --ro-bind /etc/alternatives /etc/alternatives --bind /home/exedev/f05-proto/gw/gw.sock /run/gw.sock --ro-bind /home/exedev/f05-proto/exp3_inside.sh /probe.sh --clearenv --setenv PATH /usr/bin:/usr/sbin --setenv HOME /tmp /usr/bin/bash /probe.sh
+## sandbox: interfaces=lo gre0@NONE gretap0@NONE erspan0@NONE  routes=[] gw.sock=srwx------
+## forwarder: socat pid 13, 127.0.0.1:18080 -> /run/gw.sock
+## allowed
+2026/10/29 14:55:48 fwd[16] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+2026/10/29 14:55:48 fwd[20] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=200 got=000|connect=000|redirect=|followed=0 | GET /openai/v1/models | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[31] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=200 got=000|connect=000|redirect=|followed=0 | GET /xai/v1/models | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[42] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=200 got=000|connect=000|redirect=|followed=0 | GET /npm/is-number/7.0.0 (packument version) | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[53] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=200 got=000|connect=000|redirect=|followed=0 | HEAD /npm/is-number | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[64] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=404 got=000|connect=000|redirect=|followed=0 | GET /npm/<missing pkg> (upstream 404 passed through) | curl-stderr: curl: (52) Empty reply from server  | 
+## tarball integrity through the gateway
+2026/10/29 14:55:48 fwd[74] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "/usr/lib/python3.12/json/__init__.py", line 293, in load
+    return loads(fp.read(),
+           ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/json/decoder.py", line 337, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/json/decoder.py", line 355, in raw_decode
+    raise JSONDecodeError("Expecting value", s, err.value) from None
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+packument dist:  
+2026/10/29 14:55:48 fwd[82] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL tarball sha512 sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg== != 
+## denied paths (expect 403, no upstream)
+2026/10/29 14:55:48 fwd[90] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=403 got=000|connect=000|redirect=|followed=0 | /anthropic/v1/models | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[101] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=403 got=000|connect=000|redirect=|followed=0 | POST /anthropic/v1/messages | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[112] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=403 got=000|connect=000|redirect=|followed=0 | /zen | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[123] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=403 got=000|connect=000|redirect=|followed=0 | / | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[134] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=403 got=000|connect=000|redirect=|followed=0 | /github/zen | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[145] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=403 got=000|connect=000|redirect=|followed=0 | /openai/v2/models | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[156] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=403 got=000|connect=000|redirect=|followed=0 | /openai/models (no v1) | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[167] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=403 got=000|connect=000|redirect=|followed=0 | /openai/v1/../../zen (path-as-is) | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[178] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=403 got=000|connect=000|redirect=|followed=0 | /openai/v1/%2e%2e/%2e%2e/zen | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[189] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=403 got=000|connect=000|redirect=|followed=0 | /openai/v1/%2E%2E%2F%2E%2E%2Fzen | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[200] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=403 got=000|connect=000|redirect=|followed=0 | /npm/../zen (path-as-is) | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[211] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=403 got=000|connect=000|redirect=|followed=0 | /npm/%252e%252e/zen (double-encoded) | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[222] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=403 got=000|connect=000|redirect=|followed=0 | //github.int.exe.xyz/zen (network-path) | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[233] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=403 got=000|connect=000|redirect=|followed=0 | /openai/v1//github.int.exe.xyz/zen | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[244] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=403 got=000|connect=000|redirect=|followed=0 | /openai/v1/models\..\zen backslash | curl-stderr: curl: (52) Empty reply from server  | 
+## forged Host / forwarding headers (expect 403)
+2026/10/29 14:55:48 fwd[255] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=403 got=000|connect=000|redirect=|followed=0 | Host: github.int.exe.xyz on /openai/v1/models | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[266] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=403 got=000|connect=000|redirect=|followed=0 | Host: github.int.exe.xyz on /zen | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[277] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=403 got=000|connect=000|redirect=|followed=0 | Host: llm.int.exe.xyz on /openai/v1/models | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[288] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=403 got=000|connect=000|redirect=|followed=0 | X-Forwarded-Host: github.int.exe.xyz | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[299] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=403 got=000|connect=000|redirect=|followed=0 | Forwarded: host=github.int.exe.xyz | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[310] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=403 got=000|connect=000|redirect=|followed=0 | X-Original-URL: https://github.int.exe.xyz/zen | curl-stderr: curl: (52) Empty reply from server  | 
+## absolute URL / proxy use (expect 403)
+2026/10/29 14:55:48 fwd[321] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=403 got=000|connect=000|redirect=|followed=0 | request-target https://github.int.exe.xyz/zen | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[332] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=403 got=000|connect=000|redirect=|followed=0 | request-target https://github.int.exe.xyz/openai/v1/models | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[343] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=403 got=000|connect=000|redirect=|followed=0 | proxy GET http://github.int.exe.xyz/zen (absolute-form) | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[354] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=403 got=000|connect=000|redirect=|followed=0 | proxy CONNECT github.int.exe.xyz:443 | curl-stderr: curl: (56) Proxy CONNECT aborted  | 
+2026/10/29 14:55:48 fwd[365] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=403 got=000|connect=000|redirect=|followed=0 | HTTPS_PROXY env CONNECT api.github.com | curl-stderr: curl: (56) Proxy CONNECT aborted  | 
+## methods (expect 403)
+2026/10/29 14:55:48 fwd[376] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=403 got=000|connect=000|redirect=|followed=0 | POST /npm/is-number | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[387] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=403 got=000|connect=000|redirect=|followed=0 | DELETE /openai/v1/models | curl-stderr: curl: (52) Empty reply from server  | 
+## upstream 3xx (fixture)
+2026/10/29 14:55:48 fwd[398] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=302 got=000|connect=000|redirect=|followed=0 | 302 to github.int passed back, not followed | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[409] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=302 got=000|connect=000|redirect=|followed=0 | 302 to api.github.com passed back, not followed | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[420] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+PASS want=000 got=000|connect=000|redirect=|followed=0 | client -L follows 302 to github.int: fails in sandbox (no DNS/route) | curl-stderr: curl: (52) Empty reply from server  | 
+2026/10/29 14:55:48 fwd[431] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+FAIL want=200 got=000|connect=000|redirect=|followed=0 | client -L follows relative 302 back through gateway | curl-stderr: curl: (52) Empty reply from server  | 
+## direct egress still impossible
+PASS want=000 got=000|connect=000|redirect=|followed=0 | direct https://github.int.exe.xyz/zen | curl-stderr: curl: (6) Could not resolve host: github.int.exe.xyz  | 
+PASS want=000 got=000|connect=000|redirect=|followed=0 | direct https://169.254.169.254/zen | curl-stderr: curl: (7) Failed to connect to 169.254.169.254 port 443 after 0 ms: Couldn't connect to server  | 
+## tiny completion: openai/gpt-6.1-sol, max 16 tokens
+2026/10/29 14:55:48 fwd[460] E connect(, AF=1 "/run/gw.sock", 14): Connection refused
+curl: (52) Empty reply from server
+completion http=000
+non-json: 
+
+FAIL completion via gateway
+## inside summary: pass=3 fail=38
+2026/10/29 14:55:48 fwd[13] W exiting on signal 15
+sandbox exit=0 (inside a user scope)
+## gateway stderr
+f05-gateway listening on /home/exedev/f05-proto/gw/gw.sock
+## fixture stderr
+## gateway log (JSONL, one line per request)
+## gateway log analysis
+requests=0 forwarded=0 denied=0 errors=0
+  every forwarded record has host_header_sent and sni_sent fields: True
+  any upstream Host/SNI naming github: False
+  denied records with an upstream: 0
+  3xx forwarded (status, Location, follow-up upstream requests from gateway): []
+## leftover processes from this run:
+none

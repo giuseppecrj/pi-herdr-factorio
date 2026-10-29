@@ -1,0 +1,361 @@
+{
+ "timings": {
+  "spawn_to_get_state_response": 0.489,
+  "prompt_sent": 0.489,
+  "settled_or_timeout": 14.583,
+  "stdin_closed": 15.083,
+  "exit_after_stdin_close": 0.015
+ },
+ "seq": [
+  "response:get_state",
+  "response:prompt",
+  "agent_start",
+  "turn_start",
+  "message_start",
+  "message_end",
+  "message_start",
+  "message_end",
+  "message_start",
+  "message_end",
+  "turn_end",
+  "agent_end",
+  "auto_retry_start",
+  "entry_appended",
+  "agent_start",
+  "turn_start",
+  "message_start",
+  "message_end",
+  "turn_end",
+  "agent_end",
+  "auto_retry_start",
+  "entry_appended",
+  "agent_start",
+  "turn_start",
+  "message_start",
+  "message_end",
+  "turn_end",
+  "agent_end",
+  "auto_retry_start",
+  "entry_appended",
+  "agent_start",
+  "turn_start",
+  "message_start",
+  "message_end",
+  "turn_end",
+  "agent_end",
+  "auto_retry_end",
+  "agent_settled"
+ ],
+ "settled": [
+  {
+   "t": 14.583,
+   "payload": {
+    "type": "agent_settled",
+    "aborted": false
+   }
+  }
+ ],
+ "assistant": [
+  {
+   "t": 0.535,
+   "stopReason": "error",
+   "rawStopReason": null,
+   "errorMessage": "OpenAI API error (500): {\"message\":\"The server had an error while processing your request.\",\"type\":\"server_error\",\"param\":null,\"code\":null}",
+   "usage": {
+    "input": 0,
+    "output": 0,
+    "cacheRead": 0,
+    "cacheWrite": 0,
+    "totalTokens": 0,
+    "cost": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "total": 0
+    }
+   },
+   "provider": "openai",
+   "model": "gpt-6.1-sol",
+   "api": "openai-responses",
+   "content": [],
+   "keys": [
+    "api",
+    "content",
+    "durationMs",
+    "errorMessage",
+    "model",
+    "provider",
+    "providerThinkingLevel",
+    "role",
+    "stopReason",
+    "thinkingLevel",
+    "timestamp",
+    "usage"
+   ]
+  },
+  {
+   "t": 2.552,
+   "stopReason": "error",
+   "rawStopReason": null,
+   "errorMessage": "OpenAI API error (500): {\"message\":\"The server had an error while processing your request.\",\"type\":\"server_error\",\"param\":null,\"code\":null}",
+   "usage": {
+    "input": 0,
+    "output": 0,
+    "cacheRead": 0,
+    "cacheWrite": 0,
+    "totalTokens": 0,
+    "cost": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "total": 0
+    }
+   },
+   "provider": "openai",
+   "model": "gpt-6.1-sol",
+   "api": "openai-responses",
+   "content": [],
+   "keys": [
+    "api",
+    "content",
+    "durationMs",
+    "errorMessage",
+    "model",
+    "provider",
+    "providerThinkingLevel",
+    "role",
+    "stopReason",
+    "thinkingLevel",
+    "timestamp",
+    "usage"
+   ]
+  },
+  {
+   "t": 6.558,
+   "stopReason": "error",
+   "rawStopReason": null,
+   "errorMessage": "OpenAI API error (500): {\"message\":\"The server had an error while processing your request.\",\"type\":\"server_error\",\"param\":null,\"code\":null}",
+   "usage": {
+    "input": 0,
+    "output": 0,
+    "cacheRead": 0,
+    "cacheWrite": 0,
+    "totalTokens": 0,
+    "cost": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "total": 0
+    }
+   },
+   "provider": "openai",
+   "model": "gpt-6.1-sol",
+   "api": "openai-responses",
+   "content": [],
+   "keys": [
+    "api",
+    "content",
+    "durationMs",
+    "errorMessage",
+    "model",
+    "provider",
+    "providerThinkingLevel",
+    "role",
+    "stopReason",
+    "thinkingLevel",
+    "timestamp",
+    "usage"
+   ]
+  },
+  {
+   "t": 14.58,
+   "stopReason": "error",
+   "rawStopReason": null,
+   "errorMessage": "OpenAI API error (500): {\"message\":\"The server had an error while processing your request.\",\"type\":\"server_error\",\"param\":null,\"code\":null}",
+   "usage": {
+    "input": 0,
+    "output": 0,
+    "cacheRead": 0,
+    "cacheWrite": 0,
+    "totalTokens": 0,
+    "cost": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "total": 0
+    }
+   },
+   "provider": "openai",
+   "model": "gpt-6.1-sol",
+   "api": "openai-responses",
+   "content": [],
+   "keys": [
+    "api",
+    "content",
+    "durationMs",
+    "errorMessage",
+    "model",
+    "provider",
+    "providerThinkingLevel",
+    "role",
+    "stopReason",
+    "thinkingLevel",
+    "timestamp",
+    "usage"
+   ]
+  }
+ ],
+ "retries": [
+  {
+   "t": 0.538,
+   "payload": {
+    "type": "auto_retry_start",
+    "attempt": 1,
+    "maxAttempts": 3,
+    "delayMs": 2000,
+    "errorMessage": "OpenAI API error (500): {\"message\":\"The server had an error while processing your request.\",\"type\":\"server_error\",\"param\":null,\"code\":null}"
+   }
+  },
+  {
+   "t": 2.552,
+   "payload": {
+    "type": "auto_retry_start",
+    "attempt": 2,
+    "maxAttempts": 3,
+    "delayMs": 4000,
+    "errorMessage": "OpenAI API error (500): {\"message\":\"The server had an error while processing your request.\",\"type\":\"server_error\",\"param\":null,\"code\":null}"
+   }
+  },
+  {
+   "t": 6.559,
+   "payload": {
+    "type": "auto_retry_start",
+    "attempt": 3,
+    "maxAttempts": 3,
+    "delayMs": 8000,
+    "errorMessage": "OpenAI API error (500): {\"message\":\"The server had an error while processing your request.\",\"type\":\"server_error\",\"param\":null,\"code\":null}"
+   }
+  },
+  {
+   "t": 14.582,
+   "payload": {
+    "type": "auto_retry_end",
+    "success": false,
+    "attempt": 3,
+    "finalError": "OpenAI API error (500): {\"message\":\"The server had an error while processing your request.\",\"type\":\"server_error\",\"param\":null,\"code\":null}"
+   }
+  }
+ ],
+ "responses": {
+  "st": {
+   "t": 0.489,
+   "command": "get_state",
+   "success": true,
+   "error": null,
+   "data": {
+    "model": {
+     "id": "gpt-6.1-sol",
+     "name": "GPT-6.1 Sol",
+     "api": "openai-responses",
+     "provider": "openai",
+     "baseUrl": "http://127.0.0.1:18080/openai/v1",
+     "reasoning": true,
+     "input": [
+      "text",
+      "image"
+     ],
+     "cost": {
+      "input": 2,
+      "output": 10,
+      "cacheRead": 0.1,
+      "cacheWrite": 2.5,
+      "tiers": [
+       {
+        "inputTokensAbove": 272000,
+        "input": 4,
+        "output": 15,
+        "cacheRead": 0.2,
+        "cacheWrite": 5
+       }
+      ]
+     },
+     "contextWindow": 272000,
+     "maxTokens": 128000,
+     "thinkingLevelMap": {
+      "off": null,
+      "minimal": null,
+      "low": "low",
+      "medium": "medium",
+      "high": "high",
+      "xhigh": "xhigh",
+      "max": "max"
+     },
+     "compat": {
+      "supportsStrictMode": true,
+      "supportsOpenAIGrammarTools": true,
+      "supportsAdditionalTools": true,
+      "supportsToolSearch": true,
+      "supportsMidConvoSystemMessages": true,
+      "supportsExplicitPromptCacheMode": true,
+      "supportsMidConvoEffort": true
+     },
+     "inputLimits": {
+      "maxRequestBytes": 536870912,
+      "images": {
+       "maxPerRequest": 1500,
+       "resize": {
+        "maxWidth": 2000,
+        "maxHeight": 2000,
+        "maxBytes": 4718592,
+        "jpegQuality": 80
+       }
+      }
+     },
+     "type": "chat"
+    },
+    "thinkingLevel": "low",
+    "isStreaming": false,
+    "isCompacting": false,
+    "steeringMode": "one-at-a-time",
+    "followUpMode": "one-at-a-time",
+    "sessionId": "01a18841-c62f-77f7-a9e5-1dae66cb18a6",
+    "autoCompactionEnabled": true,
+    "messageCount": 0,
+    "pendingMessageCount": 0
+   }
+  },
+  "p1": {
+   "t": 0.49,
+   "command": "prompt",
+   "success": true,
+   "error": null,
+   "data": {
+    "disposition": "started"
+   }
+  }
+ },
+ "eof": false,
+ "notes": [],
+ "state": {
+  "thinkingLevel": "low",
+  "isStreaming": false,
+  "sessionFile": null,
+  "sessionId": "01a18841-c62f-77f7-a9e5-1dae66cb18a6",
+  "autoRetryEnabled": null,
+  "autoCompactionEnabled": true,
+  "messageCount": 0,
+  "model": {
+   "provider": "openai",
+   "id": "gpt-6.1-sol",
+   "api": "openai-responses",
+   "baseUrl": "http://127.0.0.1:18080/openai/v1",
+   "reasoning": true
+  }
+ },
+ "exit_code": 0,
+ "scope_after_exit": "inactive"
+}

@@ -56,6 +56,7 @@ $S/vm.sh $S/drive-workflow.sh <pr-id> <worker-n> [branch...]  # workflow-check a
 $S/vm.sh $S/drive-admit.sh <pr-id> <worker-n> <issue>...       # admit --json
 $S/vm.sh $S/drive-tick.sh <pr-id> <worker-n> tick <issue>...   # tick --once, scoped
 $S/vm.sh $S/drive-tick.sh <pr-id> <worker-n> run <issue>       # run --issue
+$S/vm.sh $S/drive-stage.sh <pr-id> <worker-n> <issue> [unavailable]  # tick --once with a sandboxed stage, plus its receipt
 $S/vm.sh $S/drive-serve.sh <pr-id> <worker-n> start <issue>... # serve, scoped, until stop
 $S/vm.sh $S/drive-serve.sh <pr-id> <worker-n> stop             # SIGTERM the recorded PID
 ```
@@ -66,7 +67,7 @@ Feature recipes are in `.pi/skills/verify-factory/features/`. Each lists the com
 
 Pi's print mode (`pi -p "/factory status"`) sends the text to the model instead of running the command, and spends credits. `status-driver.ts` registers the real extension on a stub Pi and calls the registered `factory` handler. That is the same handler Pi runs.
 
-Mutations (creating fixture issues, labels, comments, restarts, and every `tick`, `run` or `serve`, which post marker comments) need the fixture grant from the task. Use one fixture issue per lane, named with the PR ID and worker number. A step that needs the owner to review or merge stays unchecked until the owner acts.
+Mutations (creating fixture issues, labels, comments, restarts, and every `tick`, `run` or `serve`, which post marker comments) need the fixture grant from the task. A `tick`, `run` or `serve` whose sandbox preflight passes also runs a model stage and spends tokens, so it needs the model-spend grant too. See `features/sandbox-stage.md`. Use one fixture issue per lane, named with the PR ID and worker number. A step that needs the owner to review or merge stays unchecked until the owner acts.
 
 ## Snapshot
 
@@ -124,6 +125,7 @@ Run cleanup after a failed attempt too.
 | `drive-workflow.sh` | VM | `vm.sh drive-workflow.sh <pr-id> <n> [branch...]` |
 | `drive-admit.sh` | VM | `vm.sh drive-admit.sh <pr-id> <n> <issue>...` |
 | `drive-tick.sh` | VM | `vm.sh drive-tick.sh <pr-id> <n> tick\|run <issue>...` |
+| `drive-stage.sh` | VM | `vm.sh drive-stage.sh <pr-id> <n> <issue> [unavailable]` |
 | `drive-serve.sh` | VM | `vm.sh drive-serve.sh <pr-id> <n> start <issue>...` or `stop` |
 | `vm-snapshot.sh` | VM | `vm.sh vm-snapshot.sh <pr-id> <n> <minutes> <glob>` |
 | `cleanup.sh` | VM | `vm.sh cleanup.sh <pr-id> <n>` |

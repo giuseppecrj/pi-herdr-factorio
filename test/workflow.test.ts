@@ -190,9 +190,49 @@ describe("parseWorkflow", () => {
 
 		for (const stage of MODEL_STAGES) {
 			assert.equal(parsed.config.stages[stage].model, DEFAULT_MODEL);
+			assert.equal(parsed.config.stages[stage].fallbackModel, null);
 		}
 
 		assert.equal(DEFAULT_MODEL, "openai/gpt-6.1-sol");
+	});
+
+	it("reads an optional per-stage fallback_model", () => {
+		const parsed = parse(
+			frontMatter("stages:\n  review:\n    fallback_model: xai/grok-4.6"),
+		);
+
+		assert.equal(parsed.kind, "valid");
+
+		if (parsed.kind !== "valid") return;
+
+		assert.equal(parsed.config.stages.review.fallbackModel, "xai/grok-4.6");
+		assert.equal(parsed.config.stages.review.model, DEFAULT_MODEL);
+		assert.equal(parsed.config.stages.build.fallbackModel, null);
+	});
+
+	it("checks fallback_model with the model rules and the xai route", () => {
+		const cases: [string, RegExp][] = [
+			["anthropic/claude-sonnet-5-5", /exe\.dev credits/],
+			["grok", /<provider>\/<model>/],
+			["$MODEL", /only in workspace\.root/],
+			["openai/gpt-6.1-terra", /xai route/],
+		];
+
+		for (const [value, message] of cases) {
+			const error = validation(
+				frontMatter(`stages:\n  review:\n    fallback_model: ${value}`),
+			);
+
+			assert.equal(error.field, "stages.review.fallback_model");
+			assert.match(error.message, message);
+		}
+
+		const land = validation(
+			frontMatter("stages:\n  land:\n    fallback_model: xai/grok-4.6"),
+		);
+
+		assert.equal(land.field, "stages.land.fallback_model");
+		assert.match(land.message, /runs no model/);
 	});
 
 	it("names exactly the stages that STAGE_PROFILES gives model access", () => {
@@ -201,6 +241,10 @@ describe("parseWorkflow", () => {
 		);
 
 		assert.deepEqual([...MODEL_STAGES], withModels);
+		assert.deepEqual(
+			[...MODEL_STAGES],
+			STAGE_ORDER.filter((stage) => STAGE_PROFILES[stage].runsIn === "sandbox"),
+		);
 	});
 
 	it("freezes the parsed config", () => {
@@ -310,6 +354,47 @@ describe("parseWorkflow", () => {
 
 		assert.equal(error.field, "stages.review.model");
 		assert.match(error.message, /exe\.dev credits/);
+	});
+
+	it("rejects a primary model whose provider the sandbox cannot route", () => {
+		for (const model of [
+			"xai/grok-4.6",
+			"google/gemini-3-pro",
+			"local/llama",
+		]) {
+			const error = validation(
+				frontMatter(`stages:\n  specify:\n    model: ${model}`),
+			);
+
+			assert.equal(error.field, "stages.specify.model", model);
+			assert.match(error.message, /openai route/, model);
+		}
+
+		assert.equal(
+			parse(frontMatter("stages:\n  specify:\n    model: openai/gpt-6.1-terra"))
+				.kind,
+			"valid",
+		);
+	});
+
+	it("needs a model stage's wall_ms to exceed the 10 s cleanup reserve", () => {
+		for (const value of ["1", "9999", "10000"]) {
+			const error = validation(
+				frontMatter(`stages:\n  specify:\n    wall_ms: ${value}`),
+			);
+
+			assert.equal(error.field, "stages.specify.wall_ms", value);
+			assert.match(error.message, /cleanup reserve/, value);
+		}
+
+		assert.equal(
+			parse(frontMatter("stages:\n  specify:\n    wall_ms: 10001")).kind,
+			"valid",
+		);
+		assert.equal(
+			parse(frontMatter("stages:\n  land:\n    wall_ms: 5000")).kind,
+			"valid",
+		);
 	});
 
 	it("rejects malformed model IDs and a model key on a no-model stage", () => {
@@ -895,6 +980,34 @@ describe("server/cli.ts", () => {
 			workflowSha: mainSha,
 			executionEnabled: false,
 			controller: { state: "unavailable" },
+		});
+	});
+
+	it("workflow-check prints each stage's fallback model", async () => {
+		const run = await cli(
+			["workflow-check", ...repoArgs],
+			new Map([
+				[
+					"main",
+					{
+						sha: mainSha,
+						text: frontMatter(
+							"stages:\n  review:\n    fallback_model: xai/grok-4.6",
+						),
+					},
+				],
+			]),
+		);
+
+		assert.equal(run.code, EXIT.ok);
+
+		assert.partialDeepStrictEqual(run.json, {
+			config: {
+				stages: {
+					review: { model: DEFAULT_MODEL, fallbackModel: "xai/grok-4.6" },
+					build: { fallbackModel: null },
+				},
+			},
 		});
 	});
 

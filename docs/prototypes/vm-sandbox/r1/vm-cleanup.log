@@ -1,0 +1,36 @@
+## before cleanup
+total 76
+drwxr-xr-x  3 exedev exedev 4096 Oct 29 14:56 .
+drwxr-x--- 12 exedev exedev 4096 Oct 29 14:48 ..
+-rw-r--r--  1 exedev exedev 2187 Oct 29 14:48 exp1_curl.sh
+-rw-r--r--  1 exedev exedev 3718 Oct 29 14:47 exp1_h2.mjs
+-rw-r--r--  1 exedev exedev 6149 Oct 29 14:47 exp1_probe.py
+-rw-r--r--  1 exedev exedev 4536 Oct 29 14:51 exp2_inside.sh
+-rw-r--r--  1 exedev exedev 1994 Oct 29 14:56 exp3b_inside.sh
+-rw-r--r--  1 exedev exedev 6163 Oct 29 14:55 exp3_inside.sh
+-rw-r--r--  1 exedev exedev 1187 Oct 29 14:54 fixture.py
+-rwxr-xr-x  1 exedev exedev 9935 Oct 29 14:55 gateway.py
+drwx------  2 exedev exedev 4096 Oct 29 14:56 gw
+-rw-r--r--  1 exedev exedev  654 Oct 29 14:48 run_exp1.sh
+-rw-r--r--  1 exedev exedev 1843 Oct 29 14:51 run_exp2.sh
+-rw-r--r--  1 exedev exedev 3830 Oct 29 14:56 run_exp3.sh
+## sha256 of the scripts the VM ran
+24882ea938fcbb2194499e98ba59b0466d94b55ee20681478e3586c4cabbd076  exp1_probe.py
+38f4adcf48a79dc60a861f2d43ba2fbd141dc23bcfe6e866339fed829aa0cb57  fixture.py
+6439d0f9f53f43da45b3ebcdf16acb4dc9bdac81eaa5e2f2bda80c9e0c619ac7  gateway.py
+b11e515451183b8397fe4d0f546c99c9b0180653e72e96f4163832ac1eb2acd8  exp1_curl.sh
+4a7ca8e3bed5af358ad8a956aa30f9fd8f727140585c3e3078eafd2216673c79  exp2_inside.sh
+16271e5a92f23b5affb9df2c186108ca45756b8a63af5836c84ccf2c50c85a64  exp3b_inside.sh
+c9bea815d5ea0f2b5bd048d3095e64b05e4d8ac24835acda05ac48ed9b3fd7b1  exp3_inside.sh
+058f51d7c666671f59a70e773603771483933c5bb178c8d61cc6ef8e4de67913  run_exp1.sh
+ef54a8a05869fa7b7dc31a86f8d65d9b53a67a21d5fb9b6837254bb96d6a8848  run_exp2.sh
+ea059254cb068b42855fcb8bd6ad2365706354ee19f00e7918271e33a2f715ee  run_exp3.sh
+6592e42847da47af997acc55c4156ce9d3f23ab65f1c0634c305744fb8ddff35  exp1_h2.mjs
+## after cleanup
+ls: cannot access '/home/exedev/f05-proto': No such file or directory
+processes matching gateway/fixture/socat/bwrap/f05:
+none
+user units matching f05:
+(end)
+listeners:
+no 18080/18999/gw.sock listeners

@@ -9,7 +9,7 @@ node server/cli.ts serve --repo <owner/name> --state-dir <dir> [--issue <number>
 
 Every command reads `.github/factory/WORKFLOW.md` from GitHub through `gh`, never from the local checkout. It first resolves the branch to a SHA with `gh api repos/<repo>/git/ref/heads/<branch> --jq .object.sha`, then fetches the file at that SHA with `gh api -H 'Accept: application/vnd.github.raw' repos/<repo>/contents/.github/factory/WORKFLOW.md?ref=<sha>`. Each `gh` call has a 30-second timeout. `gh` inherits the environment, including `GH_HOST`. On the VM, set `GH_HOST=github.int.exe.xyz`.
 
-`admit` makes more `gh` reads, described in its section below. `tick`, `run` and `serve` are the controller, described under "Controller". They are the only commands that write to GitHub, and the only thing they write is run marker comments. No command calls a model. Only `admit` and the controller write local files, and only under `--state-dir`.
+`admit` makes more `gh` reads, described in its section below. `tick`, `run` and `serve` are the controller, described under "Controller". They are the only commands that write to GitHub, and the only thing they write is run marker comments. They are also the only commands that run a model, and only inside the stage sandbox, as described under "Runs". Only `admit` and the controller write local files, and only under `--state-dir`.
 
 Errors and warnings carry only text the factory builds itself. They never quote `gh` output, an exec failure, a YAML error message, a key or value from `WORKFLOW.md` or a command-line argument. A second layer still redacts credentials in stdout, stderr and `/factory status` text. Anything shaped like `scheme://user:secret@` is printed as `scheme://<redacted>@`, and the value of a query parameter named `token`, `access_token`, `auth`, `key`, `password`, `secret`, `sig`, `signature` or `code`, in any case, is printed as `<redacted>`. In JSON output this applies to each string value before it is encoded, so it never spans two lines of one value.
 
@@ -111,7 +111,8 @@ This is every message the factory prints. `<field>` is a dotted path as describe
 | `must be an integer no larger than 9007199254740991` | An integer is too large. |
 | `must be <provider>/<model>` | A model ID has the wrong form. |
 | `provider anthropic is not allowed: on the VM it spends exe.dev credits until the owner's proxy exists` | A model ID uses provider `anthropic`. |
-| `<stage> runs no model, so it takes no model key` | `stages.admit.model` or `stages.land.model`. |
+| `<stage> runs no model, so it takes no model key` | `model` or `fallback_model` under `stages.admit` or `stages.land`. |
+| `must be an xai model: the sandbox serves a fallback only on its xai route` | A `fallback_model` names a provider other than `xai`. |
 | `must be exactly $VAR_NAME to use the environment` | `workspace.root` starts with `$` but is not a plain variable name. |
 | `names an environment variable that is not set` | `workspace.root` names an unset or empty variable. |
 | `uses ~ but HOME is not set` | `workspace.root` starts with `~` and `HOME` is unset or empty. |
@@ -176,7 +177,7 @@ The `reload` object has these fields:
 | `workflowDigest` | string or `null` | Same as `digest` in `workflow-check`. |
 | `workflowError` | object or `null` | Same as `error` in `workflow-check`. |
 | `warnings` | string array | Same as in `workflow-check`. |
-| `executionEnabled` | boolean | Always `false`. No stage runner is installed in this release. |
+| `executionEnabled` | boolean | Always `false`, because `status` runs no preflight. The controller's own value is in `controller.lastTick.executionEnabled`. |
 | `controller` | object | Without `--state-dir`, `state` is `unavailable` and `reason` is `pass --state-dir to read the controller lock`. With it, see below. |
 | `models` | object or `null` | The model for each of `specify`, `accept`, `build`, `validate` and `review`. |
 | `limits` | object or `null` | `pollIntervalMs`, `maxConcurrent`, `retry`, `usage` and `stages`, where `stages` maps each stage to `maxTurns`, `wallMs` and `stallMs`. |
@@ -394,13 +395,31 @@ A run is one admitted `factory:ready` label event. Its `runId` is the sha256 hex
 | --- | --- | --- |
 | `claimed` | The claim is recorded and the stage has not launched. | yes |
 | `running` | A stage runner is working on the stage. | yes |
-| `blocked` | The stage cannot run: no stage runner is installed in this release. | yes |
+| `blocked` | The stage cannot run: the sandbox preflight has not passed (`sandbox_unavailable`). It never falls back to an unsandboxed run. | yes |
 | `retrying` | A stage failed or stalled, and a retry is due at `retryAt`. | no |
 | `released` | The issue closed, lost `factory:ready`, or got a newer ready event. Terminal. | no |
 | `failed` | The attempt cap was reached. Terminal. | no |
-| `budget_exhausted` | The run used `usage.max_tokens_per_run` across all attempts. Terminal. | no |
+| `budget_exhausted` | The run used `usage.max_tokens_per_run` across all attempts, or a stage hit a turn, token, wall or run-token cap. Terminal. | no |
+| `stage_passed` | The stage passed. Later stages are not installed in this release, so the run stops here. Terminal. | no |
 
-Until F05 installs the stage runner, every launch returns `stage_runner_not_installed`. That result is not a failure and is not retried, and no model runs. The run stays `blocked` at `specify` and keeps its slot, so a third issue waits in `queued` while two are blocked. `executionEnabled` stays `false`.
+Each stage runs in the sandbox described in `docs/operations/sandbox.md`. Each stage scope is named `factory-stage-<owner>-<run>-<stage>-<attempt>-<nonce>`, where `<owner>` is the first 8 hex characters of the sha256 of the state directory's real path. On startup, before the first tick adopts a run, the controller stops every leftover `factory-stage-<owner>-*` user scope of its own by name and logs `sandbox_reconciled` with `stopped`, `failed` and `unowned` counts. Scopes of a controller with another state directory, such as a scoped verification controller, are left alone. An old-format scope, `factory-stage-<run>-<stage>-<attempt>-<nonce>` from a build before the owner segment, is stopped only when its description (the command `systemd-run` ran) binds a path under this state directory's `stages/` or `gw/`. Any other old-format scope, or one whose description cannot be read, is logged as `scope_unowned` with its `unit` and left running. Each tick reconciles its running stages first, then runs the sandbox preflight until it passes: a startup scope reconcile that succeeded (a failed one fails the check `reconcile` and is retried by each preflight, so the run stays `blocked` with `sandbox_unavailable` until it succeeds), a known CPU architecture, unprivileged user namespaces, bwrap at least 0.9.0, the asset bundle at `/var/lib/factory-sandbox/current` matching the digest in its name, a user scope that launches, and a gateway that comes up ready. A change in the result is logged as `sandbox_preflight` with `ok`, the `failed` checks joined by `+`, and the first 12 characters of the assets digest. Once the preflight passes, `executionEnabled` is `true` for the rest of the process.
+
+While the preflight fails, a launch returns `sandbox_unavailable`. That result is not a failure and is not retried, and no model runs. The run stays `blocked` at `specify` and keeps its slot, so a third issue waits in `queued` while two are blocked. A `blocked` run launches again on the first tick whose preflight passes.
+
+A launched stage gets the stage's model, fallback model and budget from the loaded workflow, the attempt, and the run's remaining tokens, which are `usage.max_tokens_per_run` minus what the run has used. A run with no remaining tokens, for example a queued retry after the workflow lowered `usage.max_tokens_per_run`, is not launched: it ends `budget_exhausted` and logs `launch_refused` with `why=run_tokens`. In this release a stage runs one fixed probe prompt with no tools. Its result ends the stage:
+
+| Result | Run |
+| --- | --- |
+| `passed` | `stage_passed`, terminal. |
+| `failed` (an error, malformed output, a crash or an abort) | a retry, or `failed` at the attempt cap, as below. |
+| `refused` (a structured content-policy refusal, with no fallback model or a fallback that refused too) | `failed`, terminal, with no scheduler retry. |
+| `budget_exhausted` (a turn, token, wall or run-token cap) | `budget_exhausted`, terminal. |
+
+The stage's tokens are added to the run's `usage` whatever the result. A stage that stalls, or whose run is released or dropped while it runs, keeps the tokens it had reported by then. It is aborted, and tokens it reports while it cleans up are added once more, logged as `stage_late_usage`, without changing the outcome already chosen. Whenever a run's usage changes, its marker is posted again with the new `usage`, and the claim record follows it, so a restart starts from the corrected total. Its retry does not launch, and a terminal marker the stall chose is not posted, until the stage has ended or 15 seconds have passed since the abort: the 10 s cleanup reserve, within which the sandbox ends its cleanup, plus a 5 s grace. So both carry those tokens.
+
+Every stage attempt writes a receipt on the host, `<state-dir>/stages/<runId>/<stage>-<attempt>/receipt.json`, mode 0600, beside the gateway's `egress.jsonl`. A replay of the same attempt writes to `<stage>-<attempt>.2`, and so on. The receipt holds only numbers, enums, model IDs and digests: the outcome, the settlement event and whether it was aborted, the requested and observed models, any fallback record, a refusal code, `wallMs`, `turns`, usage for the parent, the children, by model and as metered by the gateway, the per-route egress summary, `assetsDigest`, the pinned Pi package versions, `pricing: "unavailable"`, and one `stderr` entry per Pi session. It never goes into a marker. It is written to a temp file, fsynced and renamed into place, so it is complete or absent, and an existing receipt is never replaced. When it cannot be written the stage ends `failed` as a crash and retries like any other failure. Each sandbox's stderr goes to `pi-stderr-<session>.log` beside the receipt, mode 0600, holding at most the last 64 KiB. The receipt's `stderr` entry gives only that file name and the total bytes the sandbox wrote. The text is untrusted, so the factory never logs it, prints it or copies it into a receipt or marker.
+
+`tick` and `run` wait for every stage they launched to end before they exit, ending each one as step 1 of the next tick would: a stage that stalls is aborted, and each end posts its marker. So a one-shot command never leaves a sandbox running, and its printed snapshot shows the run's terminal status.
 
 A stage that fails, or makes no progress for its stage's `stall_ms`, is aborted. If `attempt` is below `retry.max_attempts`, the next attempt is due after `min(10000 * 2^(attempt - 1), retry.max_backoff_ms)` milliseconds, where `attempt` is the one that failed. When it is due, the controller relaunches it only if the issue is still eligible and a slot is free. A due retry whose attempt is above the `retry.max_attempts` in force, because the workflow was reloaded with a lower value, ends as `failed` without launching, and needs no slot. Stages are reconciled before the issue is read again, as in step 1 of One tick, so a stage that fails or stalls on its last attempt while its issue is already closed ends `failed`, not `released`. These scheduler retries are separate from `MAX_REPAIR_ROUNDS` in `src/stages.ts`, which counts build rounds after a failed validation or review.
 
@@ -483,7 +502,7 @@ The controller keeps no database. A restart rebuilds each claim from the markers
 - A record written before records carried `usage` loads with `usage: null`, as unknown, and the run's usage comes from the newest trusted marker of the run the controller can read, or `0` when it can read none.
 - A record written before records carried `status`, `stage` and `attempt` loads with them and `usage` `null`, as unknown. When the ledger has the record's `seq`, they come from the ledger. When the ledger is behind it too, they come from the newest trusted marker of the run the controller can read, and from `claimed` at the first stage when it can read none. The run then replays from that older status, stage and attempt, and its next marker is still numbered after the record's `seq`.
 - A record with `seq: null` confirms nothing. That includes a record written before records carried a `seq`, which loads as `seq: null`. Adopting the run's current marker rewrites the record. If the issue has no marker of the run, is open and ready, and the run's event is still its latest `factory:ready` event, the controller treats the record as a crash before the first marker and claims the run again under the same `runId`. If the issue is closed or unlabeled, or a newer ready event replaced the run's, the run is released as described in step 5 of One tick. After a replacement, the newer event is admitted as a new run once a slot is free. So for a run whose markers had already landed when such a record was written, markers deleted while the controller is down go unnoticed: the run is claimed and launched again from its first marker.
-- A live current marker is adopted with its `runId`, `seq`, stage and attempt. A `blocked` or `claimed` run launches its stage once more. When that ends in the same status, stage and attempt, nothing is posted. A `running` run was interrupted, and counts as a failed attempt once its event is confirmed current; one whose issue is closed or unlabeled, or whose event was replaced, is released instead, whatever its attempt. A `retrying` run is due at the marker's `created_at` plus its backoff. Both use the loaded workflow's `retry` and `usage` limits, so neither is adopted before the process has loaded a workflow.
+- A live current marker is adopted with its `runId`, `seq`, stage and attempt. A `blocked` or `claimed` run launches its stage once more. When that ends in the same status, stage and attempt, nothing is posted. A `running` run was interrupted, and counts as a failed attempt once its event is confirmed current; one whose issue is closed or unlabeled, or whose event was replaced, is released instead, whatever its attempt. Either way the tokens that attempt is known to have spent are added to the run's usage first. An attempt's spend is the sum over its execution dirs, `<stage>-<attempt>` and each replay `<stage>-<attempt>.<n>`, each counted once: the dir's receipt `usage.total` when the receipt was written, else the sum of the metered tokens in its `egress.jsonl`, else nothing. For any adopted run past its first attempt, the attempt before the marker's is reconciled the same way, so late usage the marker missed is counted. Each attempt is measured from the run's usage before that attempt began, read from the ledger's last marker of that attempt, so tokens the marker already counts are not added twice. The adopted run reads those records again just before its next attempt launches, after the scope reconcile has stopped any leftover sandbox. A `retrying` run is due at the `created_at` of the first `retrying` marker of its attempt plus its backoff. Both use the loaded workflow's `retry` and `usage` limits, so neither is adopted before the process has loaded a workflow.
 - An admission recorded locally whose marker never landed is claimed again under the same `runId`. Before any fresh admission, the controller lists the issue's records with `AdmissionStore.listEvents`. When one has no marker and its event is still the latest `factory:ready` event, it is read back with `AdmissionStore.read` and adopted with its original snapshot and workflow binding, and `admission_recovered` is logged. So an issue edited or renamed after its admission is not refused. The timeline is read for this only when such a record exists.
 - `<state-dir>/workspaces/<runId>/` is created empty with mode 0700 when the run is claimed. If it is missing on restart, the controller logs `workspace_missing`, creates it again, replays the stage and reports `workspace: "missing_replayed"`. When it cannot be created, the controller logs `workspace_unavailable` and keeps the replay for a later tick. It never marks a stage done without evidence.
 
@@ -495,7 +514,7 @@ The controller keeps no database. A restart rebuilds each claim from the markers
 | --- | --- | --- |
 | `repo` | string | The `--repo` value. |
 | `at` | string | The tick time, ISO 8601. |
-| `executionEnabled` | boolean | Always `false` in this release. |
+| `executionEnabled` | boolean | `true` once the sandbox preflight has passed in this process, as described under Runs. |
 | `dispatch` | object | `enabled`, and `reasons`: any of `state_unavailable`, `locally_disabled`, `repo_switch_off`, `repo_switch_unavailable`, `workflow_unavailable` and `candidates_unavailable`. |
 | `workflowSha` | string or `null` | The `main` SHA of the last valid workflow. |
 | `maxConcurrent` | number | The slot limit in force, `0` until the process has loaded a workflow. |
@@ -523,7 +542,7 @@ With `--state-dir`, `controller` has `state`, `pid`, `since` and `lastTick`:
 
 ### Logs
 
-The controller logs one line per event to stderr, as `at=<ISO time> event=<name> key=value ...`. A value outside letters, digits and `:._@/[]+-` is printed as `(withheld)`. The events are `controller_ready`, `controller_running`, `controller_refused`, `controller_stopping`, `lock_stale_replaced`, `tick`, `claim_taken`, `claim_adopted`, `claim_released`, `claim_dropped`, `claim_unwritable`, `admission_refused`, `admission_recovered`, `ledger_behind`, `stage_launched`, `stage_stalled`, `stage_ended`, `marker_posted`, `marker_unconfirmed`, `marker_corrupt`, `workspace_missing`, `workspace_unavailable` and `status_unwritable`.
+The controller logs one line per event to stderr, as `at=<ISO time> event=<name> key=value ...`. A value outside letters, digits and `:._@/[]+-` is printed as `(withheld)`. The events are `controller_ready`, `controller_running`, `controller_refused`, `controller_stopping`, `lock_stale_replaced`, `tick`, `claim_taken`, `claim_adopted`, `claim_released`, `claim_dropped`, `claim_unwritable`, `admission_refused`, `admission_recovered`, `ledger_behind`, `stage_launched`, `launch_refused`, `stage_stalled`, `stage_ended`, `stage_late_usage`, `marker_posted`, `marker_unconfirmed`, `marker_corrupt`, `workspace_missing`, `workspace_unavailable`, `status_unwritable`, `sandbox_reconciled`, `scope_unowned` and `sandbox_preflight`.
 
 ### Stop
 
@@ -539,7 +558,7 @@ SIGTERM or SIGINT lets the current tick finish, then `serve` logs `controller_st
 4. Start it: `sudo systemctl enable --now factory.service`.
 5. Wait for readiness: `journalctl -u factory.service -f` until it shows `event=controller_ready`.
 
-The unit sets `GH_HOST=github.int.exe.xyz` and passes `--state-dir` explicitly. `systemctl stop factory.service` sends SIGTERM and waits up to 300 seconds for the tick to finish. The unit restarts on failure after 30 seconds, except after exit 2, when another controller holds the lock. To stop dispatch without stopping the service, create `/home/exedev/factory-state/disabled`.
+The unit sets `GH_HOST=github.int.exe.xyz` and `XDG_RUNTIME_DIR=/run/user/1000`, which the stage scopes need, and passes `--state-dir` explicitly. It holds no secret in its environment. Run `bash server/provision.sh` from the checkout first, so the sandbox bundle exists. Without it every run stays `blocked`. `systemctl stop factory.service` sends SIGTERM and waits up to 300 seconds for the tick to finish. The unit restarts on failure after 30 seconds, except after exit 2, when another controller holds the lock. To stop dispatch without stopping the service, create `/home/exedev/factory-state/disabled`.
 
 ## `/factory status`
 
@@ -550,7 +569,7 @@ The Pi extension command shows the same workflow state as text. It finds the rep
 
 The path is checked as written, before any URL normalization. `<owner>` and `<repo>` each contain only letters, digits, `.`, `_` and `-`, and neither may be `.` or `..`, also after removing `.git`. So a path with `%`, a backslash, an empty segment, a `.` or `..` segment, or more than two segments is not accepted.
 
-Any other origin, including `ssh://` URLs, is not a GitHub repository. When `origin` is missing or is not accepted, or when `gh` fails, it prints `workflow    unavailable:` with the reason. For a remote that is not accepted, the reason is only `origin is not a GitHub repository`, and the URL is never printed. It always prints `controller  unavailable: the controller runs on the VM; read it there with status --json --state-dir` and `execution   disabled`, followed by the stage table.
+Any other origin, including `ssh://` URLs, is not a GitHub repository. When `origin` is missing or is not accepted, or when `gh` fails, it prints `workflow    unavailable:` with the reason. For a remote that is not accepted, the reason is only `origin is not a GitHub repository`, and the URL is never printed. It always prints `controller  unavailable: the controller runs on the VM; read it there with status --json --state-dir` and `execution   disabled`, followed by the stage table. The stage table has one row per stage: where it runs, its model access and its GitHub access. Only `admit` and `land` run in the controller, and only the controller uses the GitHub integration. Every model stage runs in the sandbox with GitHub access `none`.
 
 ## `/factory run <issue>`
 
@@ -578,9 +597,10 @@ Anchors (`&name`) and aliases (`*name`) are not allowed anywhere in the front ma
 | `retry.max_backoff_ms` | integer | `300000` | Positive. |
 | `usage.max_tokens_per_run` | integer | `500000` | Positive. |
 | `stages.<stage>.max_turns` | integer | `20` | Positive. |
-| `stages.<stage>.wall_ms` | integer | `1800000` | Positive. |
+| `stages.<stage>.wall_ms` | integer | `1800000` | Positive. For `specify`, `accept`, `build`, `validate` and `review` it must be larger than 10000, the sandbox's cleanup reserve: the stage's hard deadline is `wall_ms` minus that reserve. |
 | `stages.<stage>.stall_ms` | integer | `300000` | Positive. |
-| `stages.<stage>.model` | `provider/model` | `openai/gpt-6.1-sol` | Only for `specify`, `accept`, `build`, `validate` and `review`. Provider `anthropic` is rejected: on the VM it spends exe.dev credits until the owner's proxy exists. |
+| `stages.<stage>.model` | `provider/model` | `openai/gpt-6.1-sol` | Only for `specify`, `accept`, `build`, `validate` and `review`. Provider `anthropic` is rejected: on the VM it spends exe.dev credits until the owner's proxy exists. Any other provider but `openai` is rejected too, because the sandbox serves a stage's model only on its `openai` route. |
+| `stages.<stage>.fallback_model` | `xai/model` | none | Optional, and only for the model stages. The model rules above apply, and the provider must be `xai`. After a structured content-policy refusal on `model`, the stage runs once more on this model. `workflow-check` prints it as `config.stages.<stage>.fallbackModel`, `null` when unset. |
 | `checkpoints.approve_merge.mode` | string | `always` | `always` is the only accepted mode. `never` is rejected because v1 stops every run at Human Review. Any other mode is unknown and rejected. |
 
 `<stage>` is one of `admit`, `specify`, `accept`, `build`, `validate`, `review` and `land`.

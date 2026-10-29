@@ -1,0 +1,156 @@
+# exp1 run at 2026-10-29T14:48:17+00:00 on pi-factorio
+## edge cert
+## raw HTTP/1.1 probes (JSONL)
+/openai/v1/models  base:sni=L,host=L                                                      200  trace=2 sha=76c662daddb3eb6a => LLM-models 
+/openai/v1/models  base:sni=G,host=G                                                      403  trace=1 sha=82ac2f0f38404aa3 => GH-INTEGRATION 
+/openai/v1/models  hostswap:sni=L,host=G                                                  403  trace=1 sha=7b45e77ced8be358 => GH-INTEGRATION 
+/openai/v1/models  hostswap:sni=G,host=L                                                  200  trace=2 sha=76c662daddb3eb6a => LLM-models 
+/openai/v1/models  hostswap:sni=L,host=api.github.com                                     404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/openai/v1/models  hostswap:sni=L,host=unknown.int.exe.xyz                                403  trace=1 sha=33bdaeda5ac22a87 => OTHER:integration not found or not attached to this VM ( 
+/openai/v1/models  sni-none,host=L                                                        ERR  trace=- sha=- => ERR SSLError: [SSL: TLSV1_ALERT_INTERNAL_ERROR] tlsv1 alert internal error (_ssl.c:1000)
+/openai/v1/models  sni-none,host=G                                                        ERR  trace=- sha=- => ERR SSLError: [SSL: TLSV1_ALERT_INTERNAL_ERROR] tlsv1 alert internal error (_ssl.c:1000)
+/openai/v1/models  sni-other(unknown.int.exe.xyz),host=L                                  200  trace=2 sha=76c662daddb3eb6a => LLM-models 
+/openai/v1/models  sni-other(unknown.int.exe.xyz),host=G                                  403  trace=1 sha=ebc0f8da50bc1793 => GH-INTEGRATION 
+/openai/v1/models  sni-upper(LLM.INT.EXE.XYZ),host=G                                      ERR  trace=- sha=- => ERR SSLError: [SSL: TLSV1_ALERT_INTERNAL_ERROR] tlsv1 alert internal error (_ssl.c:1000)
+/openai/v1/models  host-port:sni=L,host=G:443                                             403  trace=1 sha=ffbdc02c74daa0fd => GH-INTEGRATION 
+/openai/v1/models  host-port:sni=L,host=L:443                                             200  trace=2 sha=76c662daddb3eb6a => LLM-models 
+/openai/v1/models  host-port:sni=G,host=L:443                                             200  trace=2 sha=76c662daddb3eb6a => LLM-models 
+/openai/v1/models  host-port:sni=L,host=G:8443                                            403  trace=1 sha=458e77714a273ac9 => GH-INTEGRATION 
+/openai/v1/models  host-dot:sni=L,host=G.                                                 404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/openai/v1/models  host-dot:sni=L,host=L.                                                 404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/openai/v1/models  host-dot:sni=G,host=L.                                                 404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/openai/v1/models  host-case:sni=L,host=GITHUB.INT.EXE.XYZ                                404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/openai/v1/models  host-case:sni=L,host=LLM.INT.EXE.XYZ                                   404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/openai/v1/models  host-case:sni=G,host=LLM.INT.EXE.XYZ                                   404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/openai/v1/models  host-dup:sni=L,host=L+G                                                400  trace=0 sha=19b843cc92cb12aa => OTHER:400 Bad Request 
+/openai/v1/models  host-dup:sni=L,host=G+L                                                400  trace=0 sha=19b843cc92cb12aa => OTHER:400 Bad Request 
+/openai/v1/models  host-missing:sni=L                                                     400  trace=0 sha=d2ea46080e3f7313 => OTHER:400 Bad Request: missing required Host header 
+/openai/v1/models  xfh:sni=L,host=L,XFH=G                                                 200  trace=2 sha=76c662daddb3eb6a => LLM-models 
+/openai/v1/models  xfh:sni=G,host=G,XFH=L                                                 403  trace=1 sha=6b436e20959388d5 => GH-INTEGRATION 
+/openai/v1/models  fwd:sni=L,host=L,Forwarded host=G                                      200  trace=2 sha=76c662daddb3eb6a => LLM-models 
+/openai/v1/models  fwd:sni=G,host=G,Forwarded host=L                                      403  trace=1 sha=0f53853056091b0d => GH-INTEGRATION 
+/openai/v1/models  misc-fwd:sni=L,host=L,X-Original-Host/X-Host/X-Forwarded-Server=G      200  trace=2 sha=76c662daddb3eb6a => LLM-models 
+/openai/v1/models  misc-fwd:sni=L,host=L,X-Original-URL/X-Rewrite-URL=https://G/zen       200  trace=2 sha=76c662daddb3eb6a => LLM-models 
+/openai/v1/models  absform:sni=L,host=L,target=https://G/openai/v1/models                 403  trace=1 sha=adced29425a144fa => GH-INTEGRATION 
+/openai/v1/models  absform:sni=G,host=G,target=https://L/openai/v1/models                 200  trace=2 sha=76c662daddb3eb6a => LLM-models 
+/openai/v1/models  absform:sni=L,host=G,target=https://L/openai/v1/models                 200  trace=2 sha=76c662daddb3eb6a => LLM-models 
+/openai/v1/models  absform:sni=G,host=L,target=https://G/openai/v1/models                 403  trace=1 sha=e46983230fdb145b => GH-INTEGRATION 
+/openai/v1/models  absform-http:sni=L,host=L,target=http://G/openai/v1/models             403  trace=1 sha=f6019fdf3f62f7a5 => GH-INTEGRATION 
+/openai/v1/models  http10-nohost:sni=L                                                    404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/openai/v1/models  http10-nohost:sni=G                                                    404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/xai/v1/models     base:sni=L,host=L                                                      200  trace=2 sha=c41ee33e93246ff0 => LLM-models 
+/xai/v1/models     base:sni=G,host=G                                                      403  trace=1 sha=303dfe9f491ce5ad => GH-INTEGRATION 
+/xai/v1/models     hostswap:sni=L,host=G                                                  403  trace=1 sha=ed9e16a3d65d3644 => GH-INTEGRATION 
+/xai/v1/models     hostswap:sni=G,host=L                                                  200  trace=2 sha=c41ee33e93246ff0 => LLM-models 
+/xai/v1/models     hostswap:sni=L,host=api.github.com                                     404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/xai/v1/models     hostswap:sni=L,host=unknown.int.exe.xyz                                403  trace=1 sha=4a6a1c085b09af46 => OTHER:integration not found or not attached to this VM ( 
+/xai/v1/models     sni-none,host=L                                                        ERR  trace=- sha=- => ERR SSLError: [SSL: TLSV1_ALERT_INTERNAL_ERROR] tlsv1 alert internal error (_ssl.c:1000)
+/xai/v1/models     sni-none,host=G                                                        ERR  trace=- sha=- => ERR SSLError: [SSL: TLSV1_ALERT_INTERNAL_ERROR] tlsv1 alert internal error (_ssl.c:1000)
+/xai/v1/models     sni-other(unknown.int.exe.xyz),host=L                                  200  trace=2 sha=c41ee33e93246ff0 => LLM-models 
+/xai/v1/models     sni-other(unknown.int.exe.xyz),host=G                                  403  trace=1 sha=3d7d04a7f16adb33 => GH-INTEGRATION 
+/xai/v1/models     sni-upper(LLM.INT.EXE.XYZ),host=G                                      ERR  trace=- sha=- => ERR SSLError: [SSL: TLSV1_ALERT_INTERNAL_ERROR] tlsv1 alert internal error (_ssl.c:1000)
+/xai/v1/models     host-port:sni=L,host=G:443                                             403  trace=1 sha=7d44ee2af5c7f7db => GH-INTEGRATION 
+/xai/v1/models     host-port:sni=L,host=L:443                                             200  trace=2 sha=c41ee33e93246ff0 => LLM-models 
+/xai/v1/models     host-port:sni=G,host=L:443                                             200  trace=2 sha=c41ee33e93246ff0 => LLM-models 
+/xai/v1/models     host-port:sni=L,host=G:8443                                            403  trace=1 sha=471dee6a2baaf468 => GH-INTEGRATION 
+/xai/v1/models     host-dot:sni=L,host=G.                                                 404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/xai/v1/models     host-dot:sni=L,host=L.                                                 404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/xai/v1/models     host-dot:sni=G,host=L.                                                 404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/xai/v1/models     host-case:sni=L,host=GITHUB.INT.EXE.XYZ                                404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/xai/v1/models     host-case:sni=L,host=LLM.INT.EXE.XYZ                                   404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/xai/v1/models     host-case:sni=G,host=LLM.INT.EXE.XYZ                                   404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/xai/v1/models     host-dup:sni=L,host=L+G                                                400  trace=0 sha=19b843cc92cb12aa => OTHER:400 Bad Request 
+/xai/v1/models     host-dup:sni=L,host=G+L                                                400  trace=0 sha=19b843cc92cb12aa => OTHER:400 Bad Request 
+/xai/v1/models     host-missing:sni=L                                                     400  trace=0 sha=d2ea46080e3f7313 => OTHER:400 Bad Request: missing required Host header 
+/xai/v1/models     xfh:sni=L,host=L,XFH=G                                                 200  trace=2 sha=c41ee33e93246ff0 => LLM-models 
+/xai/v1/models     xfh:sni=G,host=G,XFH=L                                                 403  trace=1 sha=3f0009aedaf9ccae => GH-INTEGRATION 
+/xai/v1/models     fwd:sni=L,host=L,Forwarded host=G                                      200  trace=2 sha=c41ee33e93246ff0 => LLM-models 
+/xai/v1/models     fwd:sni=G,host=G,Forwarded host=L                                      403  trace=1 sha=00fd7f814e89f791 => GH-INTEGRATION 
+/xai/v1/models     misc-fwd:sni=L,host=L,X-Original-Host/X-Host/X-Forwarded-Server=G      200  trace=2 sha=c41ee33e93246ff0 => LLM-models 
+/xai/v1/models     misc-fwd:sni=L,host=L,X-Original-URL/X-Rewrite-URL=https://G/zen       200  trace=2 sha=c41ee33e93246ff0 => LLM-models 
+/xai/v1/models     absform:sni=L,host=L,target=https://G/xai/v1/models                    403  trace=1 sha=c0fd78f7a70e9758 => GH-INTEGRATION 
+/xai/v1/models     absform:sni=G,host=G,target=https://L/xai/v1/models                    200  trace=2 sha=c41ee33e93246ff0 => LLM-models 
+/xai/v1/models     absform:sni=L,host=G,target=https://L/xai/v1/models                    200  trace=2 sha=c41ee33e93246ff0 => LLM-models 
+/xai/v1/models     absform:sni=G,host=L,target=https://G/xai/v1/models                    403  trace=1 sha=b7322f736b0d365c => GH-INTEGRATION 
+/xai/v1/models     absform-http:sni=L,host=L,target=http://G/xai/v1/models                403  trace=1 sha=836f8dab859302d9 => GH-INTEGRATION 
+/xai/v1/models     http10-nohost:sni=L                                                    404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/xai/v1/models     http10-nohost:sni=G                                                    404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/zen               base:sni=L,host=L                                                      404  trace=2 sha=c1d23a6dc93476cc => OTHER:unsupported endpoint: /zen  
+/zen               base:sni=G,host=G                                                      403  trace=1 sha=e36f9472b2b2d96e => GH-INTEGRATION 
+/zen               hostswap:sni=L,host=G                                                  403  trace=1 sha=130370288f31a934 => GH-INTEGRATION 
+/zen               hostswap:sni=G,host=L                                                  404  trace=2 sha=c1d23a6dc93476cc => OTHER:unsupported endpoint: /zen  
+/zen               hostswap:sni=L,host=api.github.com                                     404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/zen               hostswap:sni=L,host=unknown.int.exe.xyz                                403  trace=1 sha=6229cc0b51511256 => OTHER:integration not found or not attached to this VM ( 
+/zen               sni-none,host=L                                                        ERR  trace=- sha=- => ERR SSLError: [SSL: TLSV1_ALERT_INTERNAL_ERROR] tlsv1 alert internal error (_ssl.c:1000)
+/zen               sni-none,host=G                                                        ERR  trace=- sha=- => ERR SSLError: [SSL: TLSV1_ALERT_INTERNAL_ERROR] tlsv1 alert internal error (_ssl.c:1000)
+/zen               sni-other(unknown.int.exe.xyz),host=L                                  404  trace=2 sha=c1d23a6dc93476cc => OTHER:unsupported endpoint: /zen  
+/zen               sni-other(unknown.int.exe.xyz),host=G                                  403  trace=1 sha=b433e1fa9ddf0789 => GH-INTEGRATION 
+/zen               sni-upper(LLM.INT.EXE.XYZ),host=G                                      ERR  trace=- sha=- => ERR SSLError: [SSL: TLSV1_ALERT_INTERNAL_ERROR] tlsv1 alert internal error (_ssl.c:1000)
+/zen               host-port:sni=L,host=G:443                                             403  trace=1 sha=fda2ddbb5e75fb7c => GH-INTEGRATION 
+/zen               host-port:sni=L,host=L:443                                             404  trace=2 sha=c1d23a6dc93476cc => OTHER:unsupported endpoint: /zen  
+/zen               host-port:sni=G,host=L:443                                             404  trace=2 sha=c1d23a6dc93476cc => OTHER:unsupported endpoint: /zen  
+/zen               host-port:sni=L,host=G:8443                                            403  trace=1 sha=4c2aa13c0cd6e5bc => GH-INTEGRATION 
+/zen               host-dot:sni=L,host=G.                                                 404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/zen               host-dot:sni=L,host=L.                                                 404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/zen               host-dot:sni=G,host=L.                                                 404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/zen               host-case:sni=L,host=GITHUB.INT.EXE.XYZ                                404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/zen               host-case:sni=L,host=LLM.INT.EXE.XYZ                                   404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/zen               host-case:sni=G,host=LLM.INT.EXE.XYZ                                   404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/zen               host-dup:sni=L,host=L+G                                                400  trace=0 sha=19b843cc92cb12aa => OTHER:400 Bad Request 
+/zen               host-dup:sni=L,host=G+L                                                400  trace=0 sha=19b843cc92cb12aa => OTHER:400 Bad Request 
+/zen               host-missing:sni=L                                                     400  trace=0 sha=d2ea46080e3f7313 => OTHER:400 Bad Request: missing required Host header 
+/zen               xfh:sni=L,host=L,XFH=G                                                 404  trace=2 sha=c1d23a6dc93476cc => OTHER:unsupported endpoint: /zen  
+/zen               xfh:sni=G,host=G,XFH=L                                                 403  trace=1 sha=9f4e5ac42db50c75 => GH-INTEGRATION 
+/zen               fwd:sni=L,host=L,Forwarded host=G                                      404  trace=2 sha=c1d23a6dc93476cc => OTHER:unsupported endpoint: /zen  
+/zen               fwd:sni=G,host=G,Forwarded host=L                                      403  trace=1 sha=01ed101dab8f94ac => GH-INTEGRATION 
+/zen               misc-fwd:sni=L,host=L,X-Original-Host/X-Host/X-Forwarded-Server=G      404  trace=2 sha=c1d23a6dc93476cc => OTHER:unsupported endpoint: /zen  
+/zen               misc-fwd:sni=L,host=L,X-Original-URL/X-Rewrite-URL=https://G/zen       404  trace=2 sha=c1d23a6dc93476cc => OTHER:unsupported endpoint: /zen  
+/zen               absform:sni=L,host=L,target=https://G/zen                              403  trace=1 sha=62bfad6cd56b51ed => GH-INTEGRATION 
+/zen               absform:sni=G,host=G,target=https://L/zen                              404  trace=2 sha=c1d23a6dc93476cc => OTHER:unsupported endpoint: /zen  
+/zen               absform:sni=L,host=G,target=https://L/zen                              404  trace=2 sha=c1d23a6dc93476cc => OTHER:unsupported endpoint: /zen  
+/zen               absform:sni=G,host=L,target=https://G/zen                              403  trace=1 sha=102e4b3c2006eb78 => GH-INTEGRATION 
+/zen               absform-http:sni=L,host=L,target=http://G/zen                          403  trace=1 sha=70b0967b30d77c9e => GH-INTEGRATION 
+/zen               http10-nohost:sni=L                                                    404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/zen               http10-nohost:sni=G                                                    404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+## HTTP/2 probes, node v26.12.1 (JSONL)
+/openai/v1/models  h2:sni=L,:auth=L                                                       200  trace=2 sha=76c662daddb3eb6a => LLM-models 
+/openai/v1/models  h2:sni=L,:auth=G                                                       403  trace=1 sha=d5a3e02f198be4f3 => GH-INTEGRATION 
+/openai/v1/models  h2:sni=G,:auth=L                                                       200  trace=2 sha=76c662daddb3eb6a => LLM-models 
+/openai/v1/models  h2:sni=L,:auth=L,host=G                                                200  trace=2 sha=76c662daddb3eb6a => LLM-models 
+/openai/v1/models  h2:sni=L,:auth=G,host=L                                                403  trace=1 sha=ad131655077317fc => GH-INTEGRATION 
+/openai/v1/models  h2:sni=G,:auth=G,host=L                                                403  trace=1 sha=97692c2f997acef8 => GH-INTEGRATION 
+/openai/v1/models  h2:sni=G,:auth=L,host=G                                                200  trace=2 sha=76c662daddb3eb6a => LLM-models 
+/openai/v1/models  h2:sni=L,:auth=L,x-forwarded-host=G                                    200  trace=2 sha=76c662daddb3eb6a => LLM-models 
+/openai/v1/models  h2:sni=L,:auth=L,forwarded host=G                                      200  trace=2 sha=76c662daddb3eb6a => LLM-models 
+/openai/v1/models  h2:sni=L,:auth=G.(dot)                                                 404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/openai/v1/models  h2:sni=L,:auth=GITHUB.INT.EXE.XYZ                                      404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/openai/v1/models  h2:sni=L,:auth=G:443                                                   403  trace=1 sha=35bfb7ea86829848 => GH-INTEGRATION 
+/xai/v1/models     h2:sni=L,:auth=L                                                       200  trace=2 sha=c41ee33e93246ff0 => LLM-models 
+/xai/v1/models     h2:sni=L,:auth=G                                                       403  trace=1 sha=9beb18c4c1a71095 => GH-INTEGRATION 
+/xai/v1/models     h2:sni=G,:auth=L                                                       200  trace=2 sha=c41ee33e93246ff0 => LLM-models 
+/xai/v1/models     h2:sni=L,:auth=L,host=G                                                200  trace=2 sha=c41ee33e93246ff0 => LLM-models 
+/xai/v1/models     h2:sni=L,:auth=G,host=L                                                403  trace=1 sha=204c8f5870a06b08 => GH-INTEGRATION 
+/xai/v1/models     h2:sni=G,:auth=G,host=L                                                403  trace=1 sha=f29d5fe3807af7e5 => GH-INTEGRATION 
+/xai/v1/models     h2:sni=G,:auth=L,host=G                                                200  trace=2 sha=c41ee33e93246ff0 => LLM-models 
+/xai/v1/models     h2:sni=L,:auth=L,x-forwarded-host=G                                    200  trace=2 sha=c41ee33e93246ff0 => LLM-models 
+/xai/v1/models     h2:sni=L,:auth=L,forwarded host=G                                      200  trace=2 sha=c41ee33e93246ff0 => LLM-models 
+/xai/v1/models     h2:sni=L,:auth=G.(dot)                                                 404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/xai/v1/models     h2:sni=L,:auth=GITHUB.INT.EXE.XYZ                                      404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/xai/v1/models     h2:sni=L,:auth=G:443                                                   403  trace=1 sha=565897529d008d41 => GH-INTEGRATION 
+/zen               h2:sni=L,:auth=L                                                       404  trace=2 sha=c1d23a6dc93476cc => OTHER:unsupported endpoint: /zen  
+/zen               h2:sni=L,:auth=G                                                       403  trace=1 sha=16d8cf200ad0c8e6 => GH-INTEGRATION 
+/zen               h2:sni=G,:auth=L                                                       404  trace=2 sha=c1d23a6dc93476cc => OTHER:unsupported endpoint: /zen  
+/zen               h2:sni=L,:auth=L,host=G                                                404  trace=2 sha=c1d23a6dc93476cc => OTHER:unsupported endpoint: /zen  
+/zen               h2:sni=L,:auth=G,host=L                                                403  trace=1 sha=8116cbfafb949836 => GH-INTEGRATION 
+/zen               h2:sni=G,:auth=G,host=L                                                403  trace=1 sha=8fdce6fb5ed12e4b => GH-INTEGRATION 
+/zen               h2:sni=G,:auth=L,host=G                                                404  trace=2 sha=c1d23a6dc93476cc => OTHER:unsupported endpoint: /zen  
+/zen               h2:sni=L,:auth=L,x-forwarded-host=G                                    404  trace=2 sha=c1d23a6dc93476cc => OTHER:unsupported endpoint: /zen  
+/zen               h2:sni=L,:auth=L,forwarded host=G                                      404  trace=2 sha=c1d23a6dc93476cc => OTHER:unsupported endpoint: /zen  
+/zen               h2:sni=L,:auth=G.(dot)                                                 404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/zen               h2:sni=L,:auth=GITHUB.INT.EXE.XYZ                                      404  trace=1 sha=b16e15764b8bc06c => EDGE-404 
+/zen               h2:sni=L,:auth=G:443                                                   403  trace=1 sha=b89b8c508b521759 => GH-INTEGRATION 
+## curl probes
+--- path /openai/v1/models
+--- path /xai/v1/models
+--- path /zen
+--- plain HTTP port 80 (for completeness)

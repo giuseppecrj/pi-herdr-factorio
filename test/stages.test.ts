@@ -55,8 +55,31 @@ describe("stage table", () => {
 	it("renders one row per stage", () => {
 		const lines = formatStageTable().split("\n");
 		assert.equal(lines.length, STAGE_ORDER.length + 1);
-		assert.match(lines[0] ?? "", /^stage\s+model access\s+github token$/);
-		assert.match(lines.at(-1) ?? "", /^land\s+none\s+contents: write/);
+		assert.match(
+			lines[0] ?? "",
+			/^stage\s+runs in\s+model access\s+github access$/,
+		);
+		assert.match(lines[1] ?? "", /^admit\s+controller\s+none\s+issues: write$/);
+		assert.match(lines[2] ?? "", /^specify\s+sandbox\s+full\s+none$/);
+		assert.match(
+			lines.at(-1) ?? "",
+			/^land\s+controller\s+none\s+contents: write/,
+		);
+		assert.doesNotMatch(formatStageTable(), /\bread\b|token/);
+	});
+
+	it("gives GitHub access only to the controller, never to a model stage", () => {
+		for (const stage of STAGE_ORDER) {
+			const profile = STAGE_PROFILES[stage];
+
+			if (profile.modelAccess === "none") {
+				assert.equal(profile.runsIn, "controller", stage);
+				assert.notEqual(profile.githubAccess, "none", stage);
+			} else {
+				assert.equal(profile.runsIn, "sandbox", stage);
+				assert.equal(profile.githubAccess, "none", stage);
+			}
+		}
 	});
 });
 

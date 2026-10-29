@@ -1,0 +1,370 @@
+# exp4 at 2026-10-29T15:15:52+00:00 on pi-factorio
+gateway[exp4] pid=295118 socket=/home/exedev/f05-proto2/gw-exp4/gw.sock args: --gate-file /home/exedev/f05-proto2/gw-exp4-gate.json --auto-gate-tokens 6000
+## variant npm: /opt/pi/node_modules/.bin/pi --mode rpc --no-session --no-mcp --no-approve --no-context-files --no-skills --tools subagent --model openai/gpt-6.1-sol --thinking low
+## launch: systemd-run --user --scope --quiet --unit=f05-proto-exp4-npm -p MemoryMax=512M -p TasksMax=256 -p TimeoutStopSec=5 -- bwrap(...) /opt/scripts/sbx-entry.sh /opt/pi/node_modules/.bin/pi ...
+{
+ "timings": {
+  "spawn_to_get_state_response": 0.481,
+  "prompt_sent": 0.482,
+  "settled_or_timeout": 120.524,
+  "stdin_closed": 121.029,
+  "exit_after_stdin_close": 0.016
+ },
+ "seq": [
+  "response:get_state",
+  "response:prompt",
+  "response:get_session_stats"
+ ],
+ "settled": [],
+ "assistant": [],
+ "retries": [],
+ "responses": {
+  "st": {
+   "t": 0.481,
+   "command": "get_state",
+   "success": true,
+   "error": null,
+   "data": {
+    "model": {
+     "id": "gpt-6.1-sol",
+     "name": "GPT-6.1 Sol",
+     "api": "openai-responses",
+     "provider": "openai",
+     "baseUrl": "http://127.0.0.1:18080/openai/v1",
+     "reasoning": true,
+     "input": [
+      "text",
+      "image"
+     ],
+     "cost": {
+      "input": 2,
+      "output": 10,
+      "cacheRead": 0.1,
+      "cacheWrite": 2.5,
+      "tiers": [
+       {
+        "inputTokensAbove": 272000,
+        "input": 4,
+        "output": 15,
+        "cacheRead": 0.2,
+        "cacheWrite": 5
+       }
+      ]
+     },
+     "contextWindow": 272000,
+     "maxTokens": 128000,
+     "thinkingLevelMap": {
+      "off": null,
+      "minimal": null,
+      "low": "low",
+      "medium": "medium",
+      "high": "high",
+      "xhigh": "xhigh",
+      "max": "max"
+     },
+     "compat": {
+      "supportsStrictMode": true,
+      "supportsOpenAIGrammarTools": true,
+      "supportsAdditionalTools": true,
+      "supportsToolSearch": true,
+      "supportsMidConvoSystemMessages": true,
+      "supportsExplicitPromptCacheMode": true,
+      "supportsMidConvoEffort": true
+     },
+     "inputLimits": {
+      "maxRequestBytes": 536870912,
+      "images": {
+       "maxPerRequest": 1500,
+       "resize": {
+        "maxWidth": 2000,
+        "maxHeight": 2000,
+        "maxBytes": 4718592,
+        "jpegQuality": 80
+       }
+      }
+     },
+     "type": "chat"
+    },
+    "thinkingLevel": "low",
+    "isStreaming": false,
+    "isCompacting": false,
+    "steeringMode": "one-at-a-time",
+    "followUpMode": "one-at-a-time",
+    "sessionId": "01a1883b-5851-74bd-9694-6a30d5c9b51a",
+    "autoCompactionEnabled": true,
+    "messageCount": 0,
+    "pendingMessageCount": 0
+   }
+  },
+  "p1": {
+   "t": 0.482,
+   "command": "prompt",
+   "success": false,
+   "error": "Credential store read failed for openai: EROFS: read-only file system, open '/opt/agent/auth.json'",
+   "data": null
+  },
+  "stats": {
+   "t": 120.527,
+   "command": "get_session_stats",
+   "success": true,
+   "error": null,
+   "data": {
+    "sessionId": "01a1883b-5851-74bd-9694-6a30d5c9b51a",
+    "userMessages": 0,
+    "assistantMessages": 0,
+    "toolCalls": 0,
+    "toolResults": 0,
+    "totalMessages": 0,
+    "tokens": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "total": 0
+    },
+    "cost": 0,
+    "contextUsage": {
+     "tokens": 0,
+     "contextWindow": 272000,
+     "percent": 0
+    }
+   }
+  }
+ },
+ "eof": false,
+ "notes": [
+  "TIMEOUT or EOF before agent_settled"
+ ],
+ "state": {
+  "thinkingLevel": "low",
+  "isStreaming": false,
+  "sessionFile": null,
+  "sessionId": "01a1883b-5851-74bd-9694-6a30d5c9b51a",
+  "autoRetryEnabled": null,
+  "autoCompactionEnabled": true,
+  "messageCount": 0,
+  "model": {
+   "provider": "openai",
+   "id": "gpt-6.1-sol",
+   "api": "openai-responses",
+   "baseUrl": "http://127.0.0.1:18080/openai/v1",
+   "reasoning": true
+  }
+ },
+ "stats": {
+  "sessionId": "01a1883b-5851-74bd-9694-6a30d5c9b51a",
+  "userMessages": 0,
+  "assistantMessages": 0,
+  "toolCalls": 0,
+  "toolResults": 0,
+  "totalMessages": 0,
+  "tokens": {
+   "input": 0,
+   "output": 0,
+   "cacheRead": 0,
+   "cacheWrite": 0,
+   "total": 0
+  },
+  "cost": 0,
+  "contextUsage": {
+   "tokens": 0,
+   "contextWindow": 272000,
+   "percent": 0
+  }
+ },
+ "exit_code": 0,
+ "scope_after_exit": "inactive"
+}
+## npm stderr (Pi diagnostics)
+Warning: Invalid settings file /opt/agent/settings.json: EROFS: read-only file system, mkdir '/opt/agent/settings.json.lock'
+
+## npm agent dir after run (ro bind; must be unchanged):
+/home/exedev/f05-proto2/agent-bare/models.json
+/home/exedev/f05-proto2/agent-bare/settings.json
+## variant standalone: /opt/pi-standalone/pi --mode rpc --no-session --no-mcp --no-approve --no-context-files --no-skills --tools subagent --model openai/gpt-6.1-sol --thinking low
+## launch: systemd-run --user --scope --quiet --unit=f05-proto-exp4-standalone -p MemoryMax=512M -p TasksMax=256 -p TimeoutStopSec=5 -- bwrap(...) /opt/scripts/sbx-entry.sh /opt/pi-standalone/pi ...
+{
+ "timings": {
+  "spawn_to_get_state_response": 0.61,
+  "prompt_sent": 0.61,
+  "settled_or_timeout": 120.641,
+  "stdin_closed": 121.144,
+  "exit_after_stdin_close": 0.032
+ },
+ "seq": [
+  "response:get_state",
+  "response:prompt",
+  "response:get_session_stats"
+ ],
+ "settled": [],
+ "assistant": [],
+ "retries": [],
+ "responses": {
+  "st": {
+   "t": 0.61,
+   "command": "get_state",
+   "success": true,
+   "error": null,
+   "data": {
+    "model": {
+     "id": "gpt-6.1-sol",
+     "name": "GPT-6.1 Sol",
+     "api": "openai-responses",
+     "provider": "openai",
+     "baseUrl": "http://127.0.0.1:18080/openai/v1",
+     "reasoning": true,
+     "input": [
+      "text",
+      "image"
+     ],
+     "cost": {
+      "input": 2,
+      "output": 10,
+      "cacheRead": 0.1,
+      "cacheWrite": 2.5,
+      "tiers": [
+       {
+        "inputTokensAbove": 272000,
+        "input": 4,
+        "output": 15,
+        "cacheRead": 0.2,
+        "cacheWrite": 5
+       }
+      ]
+     },
+     "contextWindow": 272000,
+     "maxTokens": 128000,
+     "thinkingLevelMap": {
+      "off": null,
+      "minimal": null,
+      "low": "low",
+      "medium": "medium",
+      "high": "high",
+      "xhigh": "xhigh",
+      "max": "max"
+     },
+     "compat": {
+      "supportsStrictMode": true,
+      "supportsOpenAIGrammarTools": true,
+      "supportsAdditionalTools": true,
+      "supportsToolSearch": true,
+      "supportsMidConvoSystemMessages": true,
+      "supportsExplicitPromptCacheMode": true,
+      "supportsMidConvoEffort": true
+     },
+     "inputLimits": {
+      "maxRequestBytes": 536870912,
+      "images": {
+       "maxPerRequest": 1500,
+       "resize": {
+        "maxWidth": 2000,
+        "maxHeight": 2000,
+        "maxBytes": 4718592,
+        "jpegQuality": 80
+       }
+      }
+     },
+     "type": "chat"
+    },
+    "thinkingLevel": "low",
+    "isStreaming": false,
+    "isCompacting": false,
+    "steeringMode": "one-at-a-time",
+    "followUpMode": "one-at-a-time",
+    "sessionId": "01a1883d-31cc-7648-8e33-915b79650440",
+    "autoCompactionEnabled": true,
+    "messageCount": 0,
+    "pendingMessageCount": 0
+   }
+  },
+  "p1": {
+   "t": 0.612,
+   "command": "prompt",
+   "success": false,
+   "error": "Credential store read failed for openai: EROFS: read-only file system, open '/opt/agent/auth.json'",
+   "data": null
+  },
+  "stats": {
+   "t": 120.644,
+   "command": "get_session_stats",
+   "success": true,
+   "error": null,
+   "data": {
+    "sessionId": "01a1883d-31cc-7648-8e33-915b79650440",
+    "userMessages": 0,
+    "assistantMessages": 0,
+    "toolCalls": 0,
+    "toolResults": 0,
+    "totalMessages": 0,
+    "tokens": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "total": 0
+    },
+    "cost": 0,
+    "contextUsage": {
+     "tokens": 0,
+     "contextWindow": 272000,
+     "percent": 0
+    }
+   }
+  }
+ },
+ "eof": false,
+ "notes": [
+  "TIMEOUT or EOF before agent_settled"
+ ],
+ "state": {
+  "thinkingLevel": "low",
+  "isStreaming": false,
+  "sessionFile": null,
+  "sessionId": "01a1883d-31cc-7648-8e33-915b79650440",
+  "autoRetryEnabled": null,
+  "autoCompactionEnabled": true,
+  "messageCount": 0,
+  "model": {
+   "provider": "openai",
+   "id": "gpt-6.1-sol",
+   "api": "openai-responses",
+   "baseUrl": "http://127.0.0.1:18080/openai/v1",
+   "reasoning": true
+  }
+ },
+ "stats": {
+  "sessionId": "01a1883d-31cc-7648-8e33-915b79650440",
+  "userMessages": 0,
+  "assistantMessages": 0,
+  "toolCalls": 0,
+  "toolResults": 0,
+  "totalMessages": 0,
+  "tokens": {
+   "input": 0,
+   "output": 0,
+   "cacheRead": 0,
+   "cacheWrite": 0,
+   "total": 0
+  },
+  "cost": 0,
+  "contextUsage": {
+   "tokens": 0,
+   "contextWindow": 272000,
+   "percent": 0
+  }
+ },
+ "exit_code": 0,
+ "scope_after_exit": "inactive"
+}
+## standalone stderr (Pi diagnostics)
+Warning: Invalid settings file /opt/agent/settings.json: EROFS: read-only file system, mkdir '/opt/agent/settings.json.lock'
+
+## standalone agent dir after run (ro bind; must be unchanged):
+/home/exedev/f05-proto2/agent-bare/models.json
+/home/exedev/f05-proto2/agent-bare/settings.json
+## gateway log summary
+requests=0 forwarded=0 gated=0 denied=0 errors=0
+upstream hosts: []
+REAL_MODEL_TOKENS_TOTAL=0
+## leftovers check
+no matching processes

@@ -1,0 +1,25 @@
+# exp3 run at 2026-10-29T14:56:27+00:00 on pi-factorio
+srwx------ 1 exedev exedev 0 Oct 29 14:56 gw/gw.sock
+gateway pid=294371 (host side, outside sandbox), fixture pid=294370 on 127.0.0.1:18999
+## sandbox launch: systemd-run --user --scope --unit=f05-proto-exp3-294364 -p MemoryMax=512M -p TasksMax=64 -- bwrap --unshare-all --die-with-parent --new-session --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/sbin /sbin --symlink usr/lib /lib --symlink usr/lib64 /lib64 --proc /proc --dev /dev --tmpfs /tmp --ro-bind /etc/resolv.conf /etc/resolv.conf --ro-bind /etc/hosts /etc/hosts --ro-bind /etc/nsswitch.conf /etc/nsswitch.conf --ro-bind /etc/ssl /etc/ssl --ro-bind /etc/alternatives /etc/alternatives --bind /home/exedev/f05-proto/gw/gw.sock /run/gw.sock --ro-bind /home/exedev/f05-proto/exp3b_inside.sh /probe.sh --clearenv --setenv PATH /usr/bin:/usr/sbin --setenv HOME /tmp /usr/bin/bash /probe.sh
+## sandbox: interfaces=lo gre0@NONE gretap0@NONE erspan0@NONE  routes=[]
+request: POST /openai/v1/responses {"model":"gpt-6.1-sol","input":"Reply with exactly: OK","max_output_tokens":16,"store":false}
+http=400
+body: {"detail": "Input must be a list"}
+FAIL model path end to end
+2026/10/29 14:56:28 fwd[3] W exiting on signal 15
+sandbox exit=0 (inside a user scope)
+## gateway stderr
+f05-gateway listening on /home/exedev/f05-proto/gw/gw.sock
+## fixture stderr
+## gateway log (JSONL, one line per request)
+{"client_header_names": ["accept", "content-length", "content-type", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/openai/v1/responses", "decision": "forward", "dropped_client_headers": ["host", "user-agent"], "id": 1, "method": "POST", "route": "openai", "status": 400, "ts": "2026-10-29T14:56:27", "upstream": {"cert_san": ["*.int.exe.xyz", "int.exe.xyz"], "connect_host": "llm.int.exe.xyz", "headers_sent": ["Host", "Accept", "Content-Type", "User-Agent", "Accept-Encoding", "Connection", "Content-Length"], "host_header_sent": "llm.int.exe.xyz", "location": null, "path_sent": "/openai/v1/responses", "peer": "169.254.169.254", "port": 443, "resp_bytes": 33, "scheme": "https", "sni_sent": "llm.int.exe.xyz", "status": 400, "tls": "TLSv1.3", "x_trace_id_count": 2}}
+## gateway log analysis
+requests=1 forwarded=1 denied=0 errors=0
+  upstream Host=llm.int.exe.xyz SNI=llm.int.exe.xyz peer=169.254.169.254: 1
+  every forwarded record has host_header_sent and sni_sent fields: True
+  any upstream Host/SNI naming github: False
+  denied records with an upstream: 0
+  3xx forwarded (status, Location, follow-up upstream requests from gateway): []
+## leftover processes from this run:
+none

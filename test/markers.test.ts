@@ -5,6 +5,7 @@ import {
 	CONTROLLER_LOGIN,
 	currentMarker,
 	formatMarker,
+	isTerminal,
 	type Marker,
 	MARKER_MAX_BYTES,
 	MARKER_PREFIX,
@@ -118,6 +119,24 @@ describe("marker format", () => {
 		assert.match(
 			body,
 			/\nFactory run `[0-9a-f]{12}` is claimed\. Stage specify, attempt 1\.\n$/,
+		);
+	});
+
+	it("says a passed stage stops the run, and a blocked one lacks its sandbox", () => {
+		const passed = formatMarker(marker({ status: "stage_passed" }));
+
+		assert.match(
+			passed,
+			/ is stopped: stage passed; later stages are not installed\. Stage specify, attempt 1\.\n$/,
+		);
+		assert.deepEqual(parseMarker(passed), {
+			kind: "marker",
+			marker: marker({ status: "stage_passed" }),
+		});
+		assert.ok(isTerminal("stage_passed"));
+		assert.match(
+			formatMarker(marker({ status: "blocked" })),
+			/ is blocked: the stage sandbox is unavailable\. /,
 		);
 	});
 

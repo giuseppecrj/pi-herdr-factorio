@@ -4,7 +4,7 @@
 
 ## Sub-features
 
-- `status-text` prints `pi-herdr-factorio <version>` and the stage table.
+- `status-text` prints `pi-herdr-factorio <version>` and the stage table. Its columns are `stage`, `runs in`, `model access` and `github access`. `admit` and `land` run in the `controller`. Every model stage runs in the `sandbox` with GitHub access `none`.
 - `status-usage` prints `Usage: /factory status | /factory run <issue>` for any other subcommand.
 
 ## How to get to it (user POV)

@@ -1,0 +1,33 @@
+# exp8 at 2026-10-29T15:21:10+00:00 on pi-factorio
+gateway[exp8] pid=295321 socket=/home/exedev/f05-proto2/gw-exp8/gw.sock args: --fake-openai-port 18998
+## scenario incomplete_content_filter
+  event order: response:get_state response:prompt
+  auto_retry events: []
+  agent_settled: [] notes: ["prompt rejected: Credential store read failed for openai: EROFS: read-only file system, open '/opt/agent/auth.json'"]
+  upstream (fake) requests for this scenario: 0
+## scenario failed_content_filter
+  event order: response:get_state response:prompt
+  auto_retry events: []
+  agent_settled: [] notes: ["prompt rejected: Credential store read failed for openai: EROFS: read-only file system, open '/opt/agent/auth.json'"]
+  upstream (fake) requests for this scenario: 0
+## scenario refusal_part
+  event order: response:get_state response:prompt
+  auto_retry events: []
+  agent_settled: [] notes: ["prompt rejected: Credential store read failed for openai: EROFS: read-only file system, open '/opt/agent/auth.json'"]
+  upstream (fake) requests for this scenario: 0
+## scenario http400_content_policy
+  event order: response:get_state response:prompt
+  auto_retry events: []
+  agent_settled: [] notes: ["prompt rejected: Credential store read failed for openai: EROFS: read-only file system, open '/opt/agent/auth.json'"]
+  upstream (fake) requests for this scenario: 0
+## scenario http500
+  event order: response:get_state response:prompt
+  auto_retry events: []
+  agent_settled: [] notes: ["prompt rejected: Credential store read failed for openai: EROFS: read-only file system, open '/opt/agent/auth.json'"]
+  upstream (fake) requests for this scenario: 0
+## gateway log summary
+requests=0 forwarded=0 gated=0 denied=0 errors=0
+upstream hosts: []
+REAL_MODEL_TOKENS_TOTAL=0
+## leftovers check
+no matching processes
