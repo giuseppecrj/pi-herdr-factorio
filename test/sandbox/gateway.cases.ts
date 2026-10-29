@@ -42,6 +42,10 @@ import { modelTable } from "./routes.cases.ts";
 
 const HOST = "127.0.0.1:18080";
 
+// Only root can listen below 1024, so unlike a freed ephemeral port no other
+// local process can take this one before the gateway dials it.
+const REFUSED_PORT = 1;
+
 type Reply = {
 	status: number;
 	code: string | null;
@@ -309,6 +313,29 @@ describe("upstream dial order", () => {
 				"2606:4700::6810:22",
 			],
 		);
+	});
+});
+
+describe("echo fixture", () => {
+	it("records only what the gateway sent, and answers any other local client 421", async () => {
+		const fixture = await startEchoFixture(0);
+
+		try {
+			const stray = await new Promise<number>((done, fail) => {
+				request({ host: "127.0.0.1", port: fixture.port, path: "/" }, (res) => {
+					res.resume();
+					done(res.statusCode ?? 0);
+				})
+					.on("error", fail)
+					.end();
+			});
+
+			assert.equal(stray, 421);
+			assert.deepEqual(fixture.received, []);
+			assert.equal(fixture.strays, 1);
+		} finally {
+			await fixture.close();
+		}
 	});
 });
 
@@ -720,7 +747,21 @@ describe("gateway admission gate and control", () => {
 		fixture = await startEchoFixture(0);
 	});
 
+	const open: Harness[] = [];
+
+	async function harness(
+		port: number,
+		options: { ceilingTokens?: number } = {},
+	): Promise<Harness> {
+		const started = await startHarness(dir, port, options);
+
+		open.push(started);
+
+		return started;
+	}
+
 	after(async () => {
+		await Promise.all(open.map((started) => started.gateway.close()));
 		await fixture.close();
 		rmSync(dir, { recursive: true, force: true });
 	});
@@ -729,7 +770,7 @@ describe("gateway admission gate and control", () => {
 	const json = { "Content-Type": "application/json" };
 
 	it("denies the next request after the gate closes while an in-flight stream completes", async () => {
-		const h = await startHarness(dir, fixture.port);
+		const h = await harness(fixture.port);
 		const arrived = fixture.arrivals("/openai/v1/slow") + 1;
 		const slow = call(h.socketPath, "POST", "/openai/v1/slow", json, model);
 
@@ -762,11 +803,10 @@ describe("gateway admission gate and control", () => {
 			(await call(h.socketPath, "GET", "/plain/api/echo")).code,
 			"budget-closed",
 		);
-		await h.gateway.close();
 	});
 
 	it("closes its own gate at the token ceiling", async () => {
-		const h = await startHarness(dir, fixture.port, { ceilingTokens: 10 });
+		const h = await harness(fixture.port, { ceilingTokens: 10 });
 
 		assert.equal(
 			(await call(h.socketPath, "POST", "/openai/v1/responses", json, model))
@@ -782,11 +822,10 @@ describe("gateway admission gate and control", () => {
 			h.events.find((event) => event.event === "gate_closed"),
 			{ event: "gate_closed", reason: "ceiling" },
 		);
-		await h.gateway.close();
 	});
 
 	it("opens the fallback route only on command", async () => {
-		const h = await startHarness(dir, fixture.port);
+		const h = await harness(fixture.port);
 		const xai = JSON.stringify({ model: "grok-4.6" });
 
 		assert.equal(
@@ -805,11 +844,10 @@ describe("gateway admission gate and control", () => {
 			"route-closed",
 		);
 		assert.equal(h.gateway.setRoute(asRouteId("nope"), true), false);
-		await h.gateway.close();
 	});
 
 	it("drain_abort destroys in-flight upstream streams", async () => {
-		const h = await startHarness(dir, fixture.port);
+		const h = await harness(fixture.port);
 		const arrived = fixture.arrivals("/openai/v1/slow") + 1;
 		const slow = call(h.socketPath, "POST", "/openai/v1/slow", json, model);
 
@@ -825,11 +863,10 @@ describe("gateway admission gate and control", () => {
 			true,
 		);
 		assert.ok(h.events.some((event) => event.event === "drained"));
-		await h.gateway.close();
 	});
 
 	it("closes the gate and denies with audit-unavailable once an audit line cannot be written", async () => {
-		const h = await startHarness(dir, fixture.port);
+		const h = await harness(fixture.port);
 		const before = fixture.received.length;
 
 		h.failAudit.on = true;
@@ -850,22 +887,15 @@ describe("gateway admission gate and control", () => {
 			"audit-unavailable",
 		);
 		assert.equal(fixture.received.length, before + 1);
-		await h.gateway.close();
 	});
 
 	it("reports an upstream that refuses connections as upstream-error", async () => {
-		const closed = await startEchoFixture(0);
-		const port = closed.port;
-
-		await closed.close();
-
-		const h = await startHarness(dir, port);
+		const h = await harness(REFUSED_PORT);
 
 		assert.equal(
 			(await call(h.socketPath, "GET", "/plain/api/echo")).code,
 			"upstream-error",
 		);
-		await h.gateway.close();
 	});
 
 	it("covers every deny code somewhere in this suite", () => {

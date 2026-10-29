@@ -4,6 +4,7 @@ import {
 	type ServerResponse,
 } from "node:http";
 import { gzipSync } from "node:zlib";
+import { GATEWAY_USER_AGENT } from "./credentials.ts";
 
 /** What the fixture saw: names and the injected credential, never a body. */
 export type Received = {
@@ -17,6 +18,7 @@ export type Received = {
 export type EchoFixture = {
 	readonly port: number;
 	readonly received: Received[];
+	readonly strays: number;
 	waitFor(path: string, count: number): Promise<void>;
 	arrivals(path: string): number;
 	close(): Promise<void>;
@@ -137,6 +139,10 @@ function respond(req: IncomingMessage, res: ServerResponse, path: string) {
  * A host-side stand-in upstream for credential tests and live lane 5b. It
  * records what arrived and can reflect the injected credential back, so the
  * gateway's scrubbing and fail-closed paths have something to catch.
+ *
+ * Its loopback port is open to every local process, so it records only
+ * requests carrying the gateway's own User-Agent. Any other client gets a
+ * 421 and is only counted in `strays`.
  */
 export async function startEchoFixture(port: number): Promise<EchoFixture> {
 	const received: Received[] = [];
@@ -145,8 +151,19 @@ export async function startEchoFixture(port: number): Promise<EchoFixture> {
 	const arrivals = (path: string) =>
 		received.filter((seen) => seen.path === path).length;
 
+	let strays = 0;
+
 	const server = createServer((req, res) => {
 		const path = (req.url ?? "/").split("?")[0] ?? "/";
+
+		if (headerOf(req, "user-agent") !== GATEWAY_USER_AGENT) {
+			strays += 1;
+			req.resume();
+			res.writeHead(421, { "Content-Type": "text/plain" });
+			res.end("not the gateway");
+
+			return;
+		}
 
 		received.push({
 			method: req.method ?? "",
@@ -177,6 +194,9 @@ export async function startEchoFixture(port: number): Promise<EchoFixture> {
 	return {
 		port: bound,
 		received,
+		get strays() {
+			return strays;
+		},
 		arrivals,
 		waitFor: (path, count) =>
 			arrivals(path) >= count
