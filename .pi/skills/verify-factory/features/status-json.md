@@ -5,7 +5,7 @@
 ## Sub-features
 
 - `status-settings` prints `workflowSha`, `workflowDigest`, `models` for the five model stages, and `limits` with the poll interval, concurrency, retry, usage and per-stage budgets.
-- `status-disabled` always prints `executionEnabled: false` and `controller.state: "unavailable"`. This release has no controller.
+- `status-disabled` always prints `executionEnabled: false`, because `status` runs no sandbox preflight. Without `--state-dir`, `controller.state` is `"unavailable"`. The controller's own value is `controller.lastTick.executionEnabled` with `--state-dir`.
 - `status-invalid` still exits 0 when the workflow is missing or invalid. Then `workflow` is `invalid`, `workflowError` carries the error, and `models`, `limits` and `checkpoints` are `null`.
 - `status-usage` exits 2 for a missing `--json` or `--repo`, an unknown flag, a bad branch name or `--reload-ref`.
 
