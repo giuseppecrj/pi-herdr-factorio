@@ -40,14 +40,33 @@ export const AUDIT_CAP_BYTES = 32 * 1024 * 1024;
 
 const PATH_MAX = 128;
 
+/** The whole logged path when a request carried a secret or its path cannot be kept. */
+export const REDACTED_PATH = "[redacted]";
+
+/** One logged path segment that held a loaded secret. */
+export const REDACTED_SEGMENT = "~redacted~";
+
 /**
- * The path as logged: the query becomes `?…`, the path is cut to 128 bytes,
- * and every byte outside `[A-Za-z0-9._~/%-]` becomes `_`.
+ * The path as logged: the query becomes `?…`, every segment `isSecret`
+ * flags becomes `~redacted~`, the path is cut to 128 bytes, and every byte
+ * outside `[A-Za-z0-9._~/%-]` becomes `_`. A secret that spans segments
+ * redacts the whole path.
  */
-export function redactPath(target: string): string {
+export function redactPath(
+	target: string,
+	isSecret: (text: string) => boolean = () => false,
+): string {
 	const question = target.indexOf("?");
 	const path = question === -1 ? target : target.slice(0, question);
-	const safe = path.replace(/[^A-Za-z0-9._~/%-]/g, "_").slice(0, PATH_MAX);
+
+	const kept = path
+		.split("/")
+		.map((segment) => (isSecret(segment) ? REDACTED_SEGMENT : segment))
+		.join("/");
+
+	if (isSecret(kept)) return REDACTED_PATH;
+
+	const safe = kept.replace(/[^A-Za-z0-9._~/%-]/g, "_").slice(0, PATH_MAX);
 
 	return question === -1 ? safe : `${safe}?…`;
 }

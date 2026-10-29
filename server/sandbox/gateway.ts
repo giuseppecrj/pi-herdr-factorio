@@ -14,7 +14,7 @@ import { networkInterfaces } from "node:os";
 import { TLSSocket } from "node:tls";
 import type { Duplex } from "node:stream";
 import type { AuditDecision, AuditLog, AuditUpstream } from "./audit.ts";
-import { redactMethod, redactPath } from "./audit.ts";
+import { REDACTED_PATH, redactMethod, redactPath } from "./audit.ts";
 import type {
 	CloseReason,
 	ControlEvent,
@@ -36,9 +36,10 @@ import {
 	type DenyCode,
 	decideHead,
 	denyBody,
+	pathMatches,
 	type ProxyCode,
 } from "./policy.ts";
-import type { Route, RouteId, RouteTable } from "./routes.ts";
+import type { PathRule, Route, RouteId, RouteTable } from "./routes.ts";
 
 export type GatewayOptions = {
 	readonly table: RouteTable;
@@ -182,6 +183,29 @@ function writeRaw(socket: Duplex, status: string, code: ProxyCode | null) {
 	socket.end(`${head.join("\r\n")}\r\n\r\n${body}`);
 }
 
+function ruleText(rule: PathRule): string {
+	if (rule.kind === "exact") return rule.path;
+
+	return rule.kind === "prefix" ? `${rule.prefix}/…` : rule.pattern;
+}
+
+/**
+ * What the audit records for a credentialed route: its prefix and the path
+ * rule the request matched, both from the route table, never the raw path.
+ */
+function pathTemplate(route: Route, target: string): string {
+	const question = target.indexOf("?");
+	const path = question === -1 ? target : target.slice(0, question);
+
+	const rule = path.startsWith(route.prefix)
+		? route.paths.find((candidate) =>
+				pathMatches(candidate, path.slice(route.prefix.length)),
+			)
+		: undefined;
+
+	return `${route.prefix}${rule === undefined ? "…" : ruleText(rule)}`;
+}
+
 /**
  * The egress gateway: a path-routed reverse proxy on a unix socket that
  * builds every upstream request itself. One instance serves one stage.
@@ -256,7 +280,14 @@ export class Gateway implements AdmissionState {
 			this.#rawDeny(req, socket, "forbidden-header");
 		});
 		this.#server.on("clientError", (_error, socket: Duplex) => {
-			writeRaw(socket, "400 Bad Request", null);
+			if (!socket.writable) {
+				socket.destroy();
+
+				return;
+			}
+
+			this.#record(this.#exchange("", ""), "deny", "bad-request", 403);
+			writeRaw(socket, "403 Forbidden", "bad-request");
 		});
 	}
 
@@ -430,7 +461,7 @@ export class Gateway implements AdmissionState {
 			req: exchange.req,
 			route: route?.id ?? null,
 			method: redactMethod(exchange.method),
-			path: redactPath(exchange.target),
+			path: this.#auditPath(exchange, route, reason),
 			upstream: exchange.upstream,
 			status,
 			bytesIn: exchange.bytesIn,
@@ -460,6 +491,25 @@ export class Gateway implements AdmissionState {
 			inputTokens: exchange.inputTokens,
 			outputTokens: exchange.outputTokens,
 		});
+	}
+
+	/**
+	 * A request that carried a secret logs no path at all, and a credentialed
+	 * route logs only its path template. Anything else logs the redacted path
+	 * with every segment that reveals a secret removed.
+	 */
+	#auditPath(
+		exchange: Exchange,
+		route: Route | null,
+		reason: ProxyCode | null,
+	): string {
+		if (reason === "secret-in-request") return REDACTED_PATH;
+
+		if (route !== null && this.#bound.has(route.id)) {
+			return pathTemplate(route, exchange.target);
+		}
+
+		return redactPath(exchange.target, (text) => this.#scanner.reveals(text));
 	}
 
 	#deny(
@@ -564,7 +614,7 @@ export class Gateway implements AdmissionState {
 			},
 			this.#table,
 			this,
-			(text) => this.#scanner.contains(text),
+			(text) => this.#scanner.reveals(text),
 		);
 
 		exchange.route = decision.route;
@@ -586,7 +636,7 @@ export class Gateway implements AdmissionState {
 
 		exchange.bytesIn = body.length;
 
-		const bodyCode = this.#scanner.contains(body)
+		const bodyCode = this.#scanner.reveals(body)
 			? "secret-in-request"
 			: checkBody(route, decision.contentType, body);
 

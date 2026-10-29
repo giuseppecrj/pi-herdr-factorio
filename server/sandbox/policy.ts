@@ -20,6 +20,7 @@ import {
 
 /** The closed set of reasons the gateway refuses a request. Adding one is a code change. */
 export const DENY_CODES = [
+	"bad-request",
 	"method-forbidden",
 	"bad-request-target",
 	"ambiguous-path",

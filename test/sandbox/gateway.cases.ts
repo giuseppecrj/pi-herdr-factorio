@@ -533,17 +533,37 @@ describe("gateway over a real unix socket", () => {
 			),
 			"forbidden-header",
 		);
-		assert.match(
-			await raw(h.socketPath, "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"),
-			/^HTTP\/1\.1 400/,
-		);
-		assert.match(
-			await raw(
-				h.socketPath,
-				`POST /plain/x HTTP/1.1\r\nHost: ${HOST}\r\nContent-Length: 1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n`,
-			),
-			/^HTTP\/1\.1 400/,
-		);
+	});
+
+	it("answers a request the HTTP parser rejects with a fixed 403 and one audit line", async () => {
+		const before = fixture.received.length;
+
+		const inputs = [
+			`TRACK /openai/v1/models HTTP/1.1\r\nHost: ${HOST}\r\n\r\n`,
+			"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n",
+			`POST /plain/x HTTP/1.1\r\nHost: ${HOST}\r\nContent-Length: 1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n`,
+			"GET /npm/x HTTP/1.1\r\nHost \u0000 bad\r\n\r\n",
+		];
+
+		for (const text of inputs) {
+			const lines = h.audit.length;
+			const reply = await raw(h.socketPath, text);
+
+			assert.match(reply, /^HTTP\/1\.1 403 /, text);
+			assert.equal(rawCode(reply), "bad-request", text);
+			assert.match(
+				reply,
+				/\r\n\r\nfactory-gateway: denied: bad-request\n$/,
+				text,
+			);
+			assert.equal(h.audit.length, lines + 1, text);
+			assert.equal(h.audit.at(-1)?.decision, "deny", text);
+			assert.equal(h.audit.at(-1)?.reason, "bad-request", text);
+			assert.equal(h.audit.at(-1)?.status, 403, text);
+			assert.equal(h.audit.at(-1)?.upstream, null, text);
+		}
+
+		assert.equal(fixture.received.length, before);
 	});
 
 	it("refuses an oversized body while it streams in", async () => {
@@ -678,6 +698,53 @@ describe("gateway credential engine against the echo fixture", () => {
 			(await call(h.socketPath, "GET", "/echo/api/gzip")).code,
 			"response-blocked",
 		);
+	});
+
+	it("never writes a loaded secret, or a credentialed route's raw path, into the audit", async () => {
+		const percent = [...Buffer.from(ECHO_SECRET)]
+			.map((byte) => `%${byte.toString(16).toUpperCase()}`)
+			.join("");
+
+		const mixed = `%${ECHO_SECRET.charCodeAt(0).toString(16)}${ECHO_SECRET.slice(1)}`;
+		const lines = h.audit.length;
+
+		for (const path of [
+			`/echo/api/${ECHO_SECRET}`,
+			`/echo/api/${percent}`,
+			`/plain/api/${ECHO_SECRET}/x`,
+			`/plain/api/x${mixed}`,
+		]) {
+			const reply = await call(h.socketPath, "GET", path);
+
+			assert.equal(reply.code, "secret-in-request", path);
+			assert.equal(h.audit.at(-1)?.path, "[redacted]", path);
+		}
+
+		assert.equal(
+			rawCode(
+				await raw(
+					h.socketPath,
+					`CONNECT ${ECHO_SECRET}:443 HTTP/1.1\r\nHost: ${HOST}\r\n\r\n`,
+				),
+			),
+			"method-forbidden",
+		);
+
+		const ok = await call(h.socketPath, "GET", "/echo/api/echo");
+
+		assert.equal(ok.status, 200);
+		assert.equal(h.audit.at(-1)?.route, "echo-read");
+		assert.equal(h.audit.at(-1)?.path, "/echo/api/…");
+
+		const written = JSON.stringify(h.audit.slice(lines));
+
+		assert.equal(written.includes(ECHO_SECRET.slice(1)), false);
+		assert.equal(written.includes(percent.slice(3)), false);
+		assert.equal(
+			written.includes(Buffer.from(ECHO_SECRET).toString("base64")),
+			false,
+		);
+		assert.equal(written.includes("/echo/api/echo"), false);
 	});
 
 	it("keeps the credential to its own route: the confused-deputy rule", async () => {

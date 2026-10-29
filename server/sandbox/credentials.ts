@@ -444,6 +444,83 @@ export function responseHeadersFor(
 	return headers;
 }
 
+const JSON_ESCAPES = new Map<string, number>([
+	['"', 0x22],
+	["\\", 0x5c],
+	["/", 0x2f],
+	["b", 0x08],
+	["f", 0x0c],
+	["n", 0x0a],
+	["r", 0x0d],
+	["t", 0x09],
+]);
+
+function hexAt(bytes: Buffer, at: number, length: number): number | null {
+	const text = bytes.toString("latin1", at, at + length);
+
+	return text.length === length && /^[0-9A-Fa-f]+$/.test(text)
+		? Number.parseInt(text, 16)
+		: null;
+}
+
+/** The bytes with JSON string escapes decoded. Anything that is not an escape is kept. */
+export function jsonUnescaped(bytes: Buffer): Buffer {
+	if (!bytes.includes(0x5c)) return bytes;
+
+	const out: Buffer[] = [];
+	let start = 0;
+	let at = bytes.indexOf(0x5c);
+
+	while (at !== -1 && at + 1 < bytes.length) {
+		const next = String.fromCharCode(bytes[at + 1] ?? 0);
+		const simple = JSON_ESCAPES.get(next);
+		const unit = next === "u" ? hexAt(bytes, at + 2, 4) : null;
+
+		if (simple !== undefined || unit !== null) {
+			out.push(bytes.subarray(start, at));
+			out.push(
+				simple !== undefined
+					? Buffer.from([simple])
+					: Buffer.from(String.fromCharCode(unit ?? 0), "utf8"),
+			);
+			start = at + (simple !== undefined ? 2 : 6);
+			at = bytes.indexOf(0x5c, start);
+		} else {
+			at = bytes.indexOf(0x5c, at + 1);
+		}
+	}
+
+	out.push(bytes.subarray(start));
+
+	return Buffer.concat(out);
+}
+
+/** The bytes with every `%XX` decoded. Anything else is kept. */
+export function percentDecoded(bytes: Buffer): Buffer {
+	if (!bytes.includes(0x25)) return bytes;
+
+	const out: number[] = [];
+
+	for (let at = 0; at < bytes.length; at += 1) {
+		const byte = bytes[at] ?? 0;
+		const value = byte === 0x25 ? hexAt(bytes, at + 1, 2) : null;
+
+		if (value === null) {
+			out.push(byte);
+		} else {
+			out.push(value);
+			at += 2;
+		}
+	}
+
+	return Buffer.from(out);
+}
+
+/** The views a secret is looked for in: raw, JSON-unescaped and percent-decoded. */
+export function decodedViews(bytes: Buffer): Buffer[] {
+	return [bytes, jsonUnescaped(bytes), percentDecoded(bytes)];
+}
+
 export class SecretScanner {
 	readonly #forms: readonly Buffer[];
 
@@ -459,6 +536,15 @@ export class SecretScanner {
 		const bytes = Buffer.isBuffer(input) ? input : Buffer.from(input, "latin1");
 
 		return this.#forms.some((form) => bytes.includes(form));
+	}
+
+	/** True when any decoded view of the input holds any form of a secret. */
+	reveals(input: string | Buffer): boolean {
+		if (this.empty) return false;
+
+		const bytes = Buffer.isBuffer(input) ? input : Buffer.from(input, "latin1");
+
+		return decodedViews(bytes).some((view) => this.contains(view));
 	}
 
 	get longest(): number {
