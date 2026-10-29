@@ -16,6 +16,7 @@ import {
 	GitHubTicketWriter,
 	type IssueRecord,
 	type Read,
+	type TimelineEntry,
 } from "./adapters/github.ts";
 import type { Exec } from "./gh.ts";
 import {
@@ -282,6 +283,28 @@ type Limits = {
 };
 
 type Eligibility = "confirmed" | "unverified" | "released" | "dropped";
+
+type ReleaseReason = "closed" | "unlabeled" | "new_event";
+
+/** Why a claim on an open issue is no longer eligible, or `null` while `eventId` is the latest ready event. */
+function replacedBy(
+	timeline: readonly TimelineEntry[],
+	eventId: string,
+): "unlabeled" | "new_event" | null {
+	const latest = latestReadyEntry(timeline);
+
+	if (
+		latest.kind === "found" &&
+		latest.entry.kind === "labeled" &&
+		latest.entry.id === eventId
+	) {
+		return null;
+	}
+
+	return latest.kind === "found" && latest.entry.kind === "unlabeled"
+		? "unlabeled"
+		: "new_event";
+}
 
 const SETTLE_MS = 1000;
 
@@ -747,17 +770,10 @@ export class Orchestrator {
 			this.#confirmEnd(run.issue, ledger.value);
 		}
 
-		const latest = latestReadyEntry(timeline.value);
+		const replaced = replacedBy(timeline.value, run.eventId);
 
-		if (
-			latest.kind !== "found" ||
-			latest.entry.kind !== "labeled" ||
-			latest.entry.id !== run.eventId
-		) {
-			const unlabeled =
-				latest.kind === "found" && latest.entry.kind === "unlabeled";
-
-			this.#release(run, unlabeled ? "unlabeled" : "new_event");
+		if (replaced !== null) {
+			this.#release(run, replaced);
 
 			return "released";
 		}
@@ -779,7 +795,7 @@ export class Orchestrator {
 		});
 	}
 
-	#release(run: ActiveRun, why: "closed" | "unlabeled" | "new_event"): void {
+	#release(run: ActiveRun, why: ReleaseReason): void {
 		if (run.phase.kind === "running") run.phase.abort.abort();
 
 		run.phase = { kind: "ending", status: "released" };
@@ -1153,6 +1169,7 @@ export class Orchestrator {
 		candidate: boolean,
 	): Promise<"held" | "resolved" | "undecided"> {
 		let settled: "held" | "resolved" = "resolved";
+		let timeline: Read<TimelineEntry[]> | null = null;
 
 		for (const claim of await this.#input.files.listClaims()) {
 			if (claim.issue !== record.number || this.#ended.has(claim.runId)) {
@@ -1163,9 +1180,32 @@ export class Orchestrator {
 
 			if (latest !== null && isTerminal(latest.status)) {
 				await this.#keepEnded(recordOf(latest), true);
+				continue;
+			}
+
+			let why: ReleaseReason | null = record.open ? "unlabeled" : "closed";
+
+			if (candidate && latest === null) {
+				timeline ??= await this.#adapter.readTimeline(record.number);
+
+				if (timeline.kind === "failed") return "undecided";
+
+				why = replacedBy(timeline.value, claim.eventId);
 			} else if (candidate) {
+				why = null;
+			}
+
+			if (why === null) {
 				settled = "held";
-			} else if (!(await this.#releaseClaim(claim, latest, ledger, record))) {
+			} else if (
+				!(await this.#releaseClaim({
+					claim,
+					marked: latest,
+					ledger,
+					record,
+					why,
+				}))
+			) {
 				return "undecided";
 			}
 		}
@@ -1173,12 +1213,15 @@ export class Orchestrator {
 		return settled;
 	}
 
-	async #releaseClaim(
-		claim: ClaimRecord,
-		marked: Marker | null,
-		ledger: CleanLedger,
-		record: IssueRecord,
-	): Promise<boolean> {
+	async #releaseClaim(input: {
+		claim: ClaimRecord;
+		marked: Marker | null;
+		ledger: CleanLedger;
+		record: IssueRecord;
+		why: ReleaseReason;
+	}): Promise<boolean> {
+		const { claim, marked, ledger } = input;
+
 		if (this.state.runs.has(claim.issue)) return false;
 
 		const base = marked ?? (await this.#admittedFields(claim));
@@ -1206,7 +1249,7 @@ export class Orchestrator {
 		};
 
 		this.state.runs.set(run.issue, run);
-		this.#release(run, record.open ? "unlabeled" : "closed");
+		this.#release(run, input.why);
 		await this.#sync(run);
 
 		return true;

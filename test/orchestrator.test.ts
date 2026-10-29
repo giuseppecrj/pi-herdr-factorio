@@ -3656,6 +3656,57 @@ describe("Orchestrator retry workspace preparation", () => {
 	});
 });
 
+describe("Orchestrator claims before their first marker whose event was replaced", () => {
+	it("releases the old claim at seq 1 before claiming the new event", async () => {
+		const { github, clock, files, logs, start } = world();
+		const issue = github.add(labeled(14));
+
+		github.posts = ["lost"];
+		await start().tick();
+
+		const next = relabel(github, issue);
+
+		clock.t += 40 * 60_000;
+
+		const report = await start().tick();
+
+		assert.equal(report.runs[0]?.runId, next);
+		assert.equal(files.claims.get(runOf(14))?.status, "released");
+		assert.deepEqual(statuses(github, 14), [
+			"1:released",
+			"2:claimed",
+			"3:blocked",
+		]);
+		assert.deepEqual(
+			logs
+				.filter((entry) => entry.event === "claim_released")
+				.map((entry) => [entry.fields.runId, entry.fields.why]),
+			[[runOf(14), "new_event"]],
+		);
+	});
+
+	it("gives the replaced claim no slot, so the healthy candidates fill the cap", async () => {
+		const { github, clock, files, start } = world();
+		const issue = github.add(labeled(15));
+
+		github.posts = ["lost"];
+		await start().tick();
+		relabel(github, issue);
+		github.issues.delete(15);
+		github.add(labeled(13));
+		github.add(labeled(14));
+		github.add(issue);
+		clock.t += 40 * 60_000;
+
+		const report = await start().tick();
+
+		assert.deepEqual(runIssues(report), [13, 14]);
+		assert.deepEqual(report.queued, [15]);
+		assert.deepEqual(statuses(github, 15), ["1:released"]);
+		assert.equal(files.claims.get(runOf(15))?.status, "released");
+	});
+});
+
 describe("Orchestrator workspace replay", () => {
 	it("keeps the replay of an adopted run whose workspace preparation failed, and replays it once preparation works", async () => {
 		const { github, clock, files, executor, start } = world();
