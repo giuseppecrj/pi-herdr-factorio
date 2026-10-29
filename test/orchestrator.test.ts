@@ -4616,7 +4616,7 @@ describe("Orchestrator usage reported after a stall", () => {
 		assert.equal(lastMarkerUsage(github, 14), 600_000);
 	});
 
-	it("posts the terminal marker once the cleanup reserve passes, if the stage never settles", async () => {
+	it("posts the terminal marker once the cleanup reserve and its grace pass, if the stage never settles", async () => {
 		const { github, clock, executor, start } = world();
 
 		github.add(labeled(14));
@@ -4630,12 +4630,189 @@ describe("Orchestrator usage reported after a stall", () => {
 		await controller.tick();
 		assert.equal(statuses(github, 14).at(-1), "2:running");
 
-		clock.t += 10_000;
+		clock.t += 15_000;
 
 		const report = await controller.tick();
 
 		assert.deepEqual(report.runs, []);
 		assert.equal(statuses(github, 14).at(-1), "3:budget_exhausted");
+	});
+});
+
+function claimUsage(files: ReturnType<typeof memoryFiles>, issue: number) {
+	return [...files.claims.values()].find((claim) => claim.issue === issue)
+		?.usage;
+}
+
+type Deferred = {
+	readonly behavior: Behavior;
+	readonly finish: (result: StageResult) => void;
+};
+
+function deferred(): Deferred {
+	let finish: (result: StageResult) => void = () => undefined;
+
+	const result = new Promise<StageResult>((done) => {
+		finish = done;
+	});
+
+	return { behavior: { kind: "later", result }, finish };
+}
+
+describe("Orchestrator late usage across a restart", () => {
+	it("rewrites the retry marker and claim record with late stall usage, so a restart restores the allowance the run has left", async () => {
+		const { github, clock, executor, files, start } = world();
+		const stage = deferred();
+
+		github.add(labeled(14));
+		executor.behaviors = [stage.behavior];
+
+		const first = start();
+
+		await first.tick();
+
+		const launch = executor.launches[0];
+
+		assert.ok(launch);
+		launch.progress(100);
+		clock.t += 300_001;
+		await first.tick();
+		assert.equal(lastMarkerUsage(github, 14), 100);
+
+		launch.progress(250);
+		stage.finish(resultOf(launch, { kind: "failed", exit: "aborted" }, 250));
+		await settle();
+
+		const counted = await first.tick();
+
+		assert.equal(counted.runs[0]?.usage, 250);
+		assert.equal(counted.runs[0]?.status, "retrying");
+		assert.equal(lastMarkerUsage(github, 14), 250);
+		assert.equal(claimUsage(files, 14), 250);
+
+		executor.spentBy.set("specify-1", 250);
+		executor.behaviors = [{ kind: "hang" }];
+
+		const second = start();
+
+		clock.t += 10_000;
+		await second.tick();
+		await second.tick();
+
+		assert.equal(executor.launches.length, 2);
+		assert.equal(executor.launches[1]?.remainingRunTokens, 499_750);
+	});
+
+	it("reconciles the previous attempt's records once when the controller stopped before it counted the late usage", async () => {
+		const { github, clock, executor, files, start } = world();
+
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "hang" }];
+
+		const first = start();
+
+		await first.tick();
+		executor.launches[0]?.progress(100);
+		clock.t += 300_001;
+		await first.tick();
+		assert.equal(lastMarkerUsage(github, 14), 100);
+
+		executor.spentBy.set("specify-1", 250);
+		executor.behaviors = [{ kind: "hang" }];
+
+		const second = start();
+		const adopted = await second.tick();
+
+		assert.equal(adopted.runs[0]?.usage, 250);
+		assert.equal(adopted.totals.usage, 150);
+		assert.equal(lastMarkerUsage(github, 14), 250);
+		assert.equal(claimUsage(files, 14), 250);
+
+		clock.t += 10_000;
+		await second.tick();
+		assert.equal(executor.launches[1]?.remainingRunTokens, 499_750);
+
+		const third = start();
+		const again = await third.tick();
+
+		assert.equal(again.runs[0]?.usage, 250);
+	});
+
+	it("refreshes an adopted attempt's spend once its scope is stopped, before the retry launches", async () => {
+		const { github, clock, executor, start } = world();
+
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "hang" }];
+		await start().tick();
+
+		executor.ready = false;
+		executor.spentBy.set("specify-1", 100);
+		executor.behaviors = [{ kind: "hang" }];
+
+		const controller = start();
+		const adopted = await controller.tick();
+
+		assert.equal(adopted.executionEnabled, false);
+		assert.equal(adopted.runs[0]?.usage, 100);
+
+		executor.spentBy.set("specify-1", 700);
+		executor.ready = true;
+		clock.t += 10_000;
+		await controller.tick();
+
+		assert.equal(executor.launches[1]?.remainingRunTokens, 499_300);
+	});
+
+	it("counts an interrupted attempt's spend when the restart releases the run", async () => {
+		const { github, executor, start } = world();
+		const issue = github.add(labeled(14));
+
+		executor.behaviors = [{ kind: "hang" }];
+		await start().tick();
+
+		executor.spentBy.set("specify-1", 700);
+		issue.state = "closed";
+
+		const report = await start().tick();
+
+		assert.deepEqual(report.runs, []);
+		assert.equal(report.totals.usage, 700);
+		assert.equal(statuses(github, 14).at(-1), "3:released");
+		assert.equal(lastMarkerUsage(github, 14), 700);
+	});
+
+	it("holds a terminal marker past the cleanup reserve until the runner's bounded cleanup can finish", async () => {
+		const { github, clock, executor, start } = world();
+		const stage = deferred();
+
+		github.add(labeled(14));
+		executor.behaviors = [stage.behavior];
+
+		const controller = start();
+
+		await controller.tick();
+
+		const launch = executor.launches[0];
+
+		assert.ok(launch);
+		launch.progress(500_000);
+		clock.t += 300_001;
+		await controller.tick();
+		clock.t += 10_000;
+		await controller.tick();
+		assert.equal(statuses(github, 14).at(-1), "2:running");
+
+		launch.progress(600_000);
+		stage.finish(
+			resultOf(launch, { kind: "failed", exit: "aborted" }, 600_000),
+		);
+		await settle();
+
+		const report = await controller.tick();
+
+		assert.equal(report.totals.usage, 600_000);
+		assert.equal(statuses(github, 14).at(-1), "3:budget_exhausted");
+		assert.equal(lastMarkerUsage(github, 14), 600_000);
 	});
 });
 

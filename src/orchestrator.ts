@@ -197,6 +197,16 @@ export type InflightMarker = {
 	readonly tick: number;
 };
 
+/**
+ * An attempt an earlier controller ran, whose records the run's usage may
+ * not fully count yet: `base` is the run's usage before that attempt began.
+ */
+type Unsettled = {
+	readonly stage: ModelStage;
+	readonly attempt: number;
+	readonly base: number;
+};
+
 /** One claimed run. The identity fields never change; the rest moves only inside a tick. */
 export type ActiveRun = {
 	readonly runId: Digest;
@@ -217,6 +227,8 @@ export type ActiveRun = {
 	workspaceMissing: boolean;
 	/** Set on a run adopted after a restart: its stage launches once more. */
 	replay: boolean;
+	/** Set on an adopted run until its next attempt starts, so that launch counts the latest records. */
+	unsettled: Unsettled | null;
 	phase: RunPhase;
 };
 
@@ -359,6 +371,13 @@ function replacedBy(
 }
 
 const SETTLE_MS = 1000;
+
+/**
+ * Time past the cleanup reserve that the controller still waits for an
+ * aborted stage. The runner ends its cleanup within the reserve of the
+ * abort; this covers the receipt write and the tick that reads the result.
+ */
+const CLEANUP_GRACE_MS = 5_000;
 
 const DRAIN_POLL_MS = 1000;
 
@@ -1023,8 +1042,8 @@ export class Orchestrator {
 
 	/**
 	 * True while an aborted stage of this run may still report usage: it has
-	 * not settled and its cleanup reserve has not passed. Its retry and its
-	 * terminal marker wait, so both carry that usage.
+	 * not settled and its cleanup reserve, plus a grace, has not passed. Its
+	 * retry and its terminal marker wait, so both carry that usage.
 	 */
 	#settling(run: ActiveRun): boolean {
 		const now = this.#input.clock.now();
@@ -1033,8 +1052,79 @@ export class Orchestrator {
 			(entry) =>
 				entry.run === run &&
 				entry.phase.result === null &&
-				now - entry.since < STAGE_CLEANUP_RESERVE_MS,
+				now - entry.since < STAGE_CLEANUP_RESERVE_MS + CLEANUP_GRACE_MS,
 		);
+	}
+
+	/**
+	 * Raises the run's usage to `base` plus what the unsettled attempt's
+	 * records hold, when that is more. The records hold the whole attempt, so
+	 * a share the run already counts is not counted again.
+	 */
+	async #reconcileSpent(run: ActiveRun): Promise<void> {
+		const unsettled = run.unsettled;
+
+		if (unsettled === null) return;
+
+		const spent = await this.#input.executor
+			.spent({
+				runId: run.runId,
+				stage: unsettled.stage,
+				attempt: unsettled.attempt,
+			})
+			.catch(() => null);
+
+		const late = spent === null ? 0 : unsettled.base + spent - run.usage;
+
+		if (late <= 0) return;
+
+		run.usage += late;
+		this.state.totals.usage += late;
+		this.#input.log("stage_late_usage", {
+			issue: run.issue,
+			runId: run.runId,
+			usage: late,
+			attempt: unsettled.attempt,
+		});
+	}
+
+	/**
+	 * Counts what an adopted run's attempts are known to have spent beyond its
+	 * marker: the attempt before the marker's, whose late usage the marker may
+	 * lack, and, when `interrupted`, the attempt the marker names as running.
+	 * Each is measured from the run's usage before that attempt began, read
+	 * from the ledger, so an amount the marker already counts is not counted
+	 * twice.
+	 */
+	async #accountAdopted(
+		run: ActiveRun,
+		marker: Marker,
+		ledger: CleanLedger,
+		interrupted: boolean,
+	): Promise<void> {
+		const stage = marker.stage;
+
+		if (!isModelStage(stage)) return;
+
+		const previous = marker.attempt - 1;
+
+		const base =
+			ledger.markers.findLast(
+				({ marker: entry }) =>
+					entry.runId === run.runId &&
+					entry.stage === stage &&
+					entry.attempt === previous,
+			)?.marker.usage ?? null;
+
+		if (base !== null) {
+			run.unsettled = { stage, attempt: previous, base };
+			await this.#reconcileSpent(run);
+		}
+
+		if (interrupted) {
+			run.unsettled = { stage, attempt: marker.attempt, base: run.usage };
+			await this.#reconcileSpent(run);
+		}
 	}
 
 	#finishStage(run: ActiveRun, result: StageEnd, limits: Limits): void {
@@ -1544,10 +1634,21 @@ export class Orchestrator {
 			claimUnwritten: false,
 			workspaceMissing: false,
 			replay: false,
+			unsettled: null,
 			phase: { kind: "claimed" },
 		};
 
 		this.state.runs.set(run.issue, run);
+
+		if (marked !== null) {
+			await this.#accountAdopted(
+				run,
+				marked,
+				ledger,
+				marked.status === "running",
+			);
+		}
+
 		this.#release(run, input.why);
 		await this.#sync(run);
 
@@ -1645,6 +1746,7 @@ export class Orchestrator {
 			claimUnwritten: false,
 			workspaceMissing: workspace === "missing",
 			replay: true,
+			unsettled: null,
 			phase:
 				marker.status === "blocked"
 					? { kind: "blocked", reason: "sandbox_unavailable" }
@@ -1664,22 +1766,25 @@ export class Orchestrator {
 		});
 
 		const limits = this.#limits();
+		const releasing = eligibility !== "current" && eligibility !== "unverified";
+
+		await this.#accountAdopted(
+			run,
+			marker,
+			ledger,
+			marker.status === "running" && (releasing || limits !== null),
+		);
 
 		if (eligibility !== "current" && eligibility !== "unverified") {
 			this.#release(run, eligibility);
 		} else if (limits !== null && marker.status === "running") {
-			const stage = marker.stage;
-
-			const spent = isModelStage(stage)
-				? await this.#input.executor
-						.spent({ runId: run.runId, stage, attempt: run.attempt })
-						.catch(() => null)
-				: null;
-
-			this.#endStage(run, "interrupted", spent ?? 0, limits);
+			this.#endStage(run, "interrupted", 0, limits);
 		} else if (limits !== null && marker.status === "retrying") {
 			const created = ledger.markers.find(
-				(entry) => entry.marker.seq === marker.seq,
+				({ marker: entry }) =>
+					entry.runId === marker.runId &&
+					entry.status === "retrying" &&
+					entry.attempt === marker.attempt,
 			)?.createdAt;
 
 			run.phase = {
@@ -2019,6 +2124,7 @@ export class Orchestrator {
 			claimUnwritten: false,
 			workspaceMissing: false,
 			replay: false,
+			unsettled: null,
 			phase: { kind: "claimed" },
 		};
 
@@ -2100,6 +2206,8 @@ export class Orchestrator {
 
 		if (config === null) return false;
 
+		await this.#reconcileSpent(run);
+
 		if (run.usage >= config.usage.maxTokensPerRun) {
 			run.phase = { kind: "ending", status: "budget_exhausted" };
 			this.#input.log("launch_refused", {
@@ -2162,6 +2270,7 @@ export class Orchestrator {
 			run.phase = { kind: "blocked", reason: launch.reason };
 		} else {
 			run.phase = phase;
+			run.unsettled = null;
 
 			const settled = launch.done.then(
 				(result) => {
@@ -2254,7 +2363,8 @@ export class Orchestrator {
 			marked === null ||
 			marked.status !== status ||
 			marked.stage !== run.stage ||
-			marked.attempt !== run.attempt
+			marked.attempt !== run.attempt ||
+			marked.usage !== run.usage
 		) {
 			const marker = markerOf(run, {
 				repo: this.#input.repo,
