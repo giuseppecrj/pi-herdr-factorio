@@ -609,6 +609,23 @@ function freshDir(base: string): string {
 }
 
 /**
+ * The stage's Pi. Its session lives in the writable agent dir:
+ * `pi-herdr-agents` refuses to launch a child from a parent with no
+ * session file, which `--no-session` caused on `pi-factorio`.
+ */
+export function piCommand(model: ModelId): string[] {
+	return [
+		`${BUNDLE.bin}/pi`,
+		"--mode",
+		"rpc",
+		"--session-dir",
+		`${PI_AGENT_DIR}/sessions`,
+		"--model",
+		model,
+	];
+}
+
+/**
  * Copies the bundle's agent template into a fresh private dir Pi can write:
  * `auth.json`, the settings lock and child sessions live there. The bundle
  * is installed read-only, so its modes are not kept. Only regular files are
@@ -770,14 +787,7 @@ export function sandboxHost(config: SandboxHostConfig): StageHost {
 					socketPath,
 					seccompFd: 10,
 					tools: config.tools,
-					command: [
-						`${BUNDLE.bin}/pi`,
-						"--mode",
-						"rpc",
-						"--no-session",
-						"--model",
-						model,
-					],
+					command: piCommand(model),
 				}),
 			);
 

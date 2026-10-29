@@ -158,11 +158,19 @@ export function parsePiRecord(line: string): PiRecord {
 
 		case "message_end":
 			return messageEnd(objectOf(fieldOf(record, "message")));
-		case "tool_execution_end":
+		case "tool_execution_end": {
+			const details = objectOf(
+				fieldOf(objectOf(fieldOf(record, "result")), "details"),
+			);
+
 			return textOf(fieldOf(record, "toolName")) === "subagent" &&
-				boolOf(fieldOf(record, "isError")) === false
+				boolOf(fieldOf(record, "isError")) === false &&
+				textOf(fieldOf(details, "id")) !== null &&
+				fieldOf(details, "error") === undefined
 				? { type: "subagent_launch" }
 				: { type: "other" };
+		}
+
 		case "queue_update": {
 			const steering = arrayOf(fieldOf(record, "steering"));
 			const followUp = arrayOf(fieldOf(record, "followUp"));

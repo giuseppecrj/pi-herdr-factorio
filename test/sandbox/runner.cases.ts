@@ -19,6 +19,7 @@ import {
 	agentDirFrom,
 	bareModel,
 	hostSessionPath,
+	piCommand,
 	runStage,
 	type StageHost,
 	type StageRunInput,
@@ -369,6 +370,24 @@ describe("Pi RPC framing and records", () => {
 		assert.deepEqual(
 			parsePiRecord('{"type":"queue_update","steering":["x"],"followUp":[]}'),
 			{ type: "queue", queued: 1 },
+		);
+		assert.deepEqual(
+			parsePiRecord(
+				'{"type":"tool_execution_end","toolName":"subagent","isError":false,"result":{"details":{"id":"db66","name":"c"}}}',
+			),
+			{ type: "subagent_launch" },
+		);
+		assert.deepEqual(
+			parsePiRecord(
+				'{"type":"tool_execution_end","toolName":"subagent","isError":false,"result":{"details":{"error":"no session file"}}}',
+			),
+			{ type: "other" },
+		);
+		assert.deepEqual(
+			parsePiRecord(
+				'{"type":"tool_execution_end","toolName":"subagent","isError":false,"result":{"content":[]}}',
+			),
+			{ type: "other" },
 		);
 		assert.deepEqual(parsePiRecord('{"type":"something_new","x":1}'), {
 			type: "other",
@@ -1181,6 +1200,20 @@ describe("runStage with a fake Pi process", () => {
 		const result = await runStage(input(), processHost(["crash"]));
 
 		assert.equal(result.kind === "failed" && result.exit, "crashed");
+	});
+});
+
+describe("stage Pi command", () => {
+	it("keeps a session under the writable agent dir, so subagents can launch", () => {
+		assert.deepEqual(piCommand(model("openai/gpt-6.1-sol")), [
+			"/opt/factory/bin/pi",
+			"--mode",
+			"rpc",
+			"--session-dir",
+			"/run/pi-agent/sessions",
+			"--model",
+			"openai/gpt-6.1-sol",
+		]);
 	});
 });
 
