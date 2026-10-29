@@ -1,0 +1,16 @@
+{
+	"name": "factory-sandbox-assets",
+	"version": "1.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Pinned Pi packages for the factory stage sandbox asset bundle. Install with npm ci --ignore-scripts.",
+	"license": "MIT",
+	"dependencies": {
+		"@earendil-works/pi-coding-agent": "1.4.0",
+		"pi-herdr-agents": "3.3.1",
+		"pi-herdr-pstack": "0.5.0"
+	},
+	"overrides": {
+		"undici": "8.12.3"
+	}
+}
