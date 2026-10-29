@@ -65,6 +65,20 @@ export interface TicketReader {
 	canAdmit(ref: TicketRef, actor: string): Promise<boolean>;
 }
 
+/**
+ * `posted` names the new comment. `rejected` means it was not created. A
+ * comment may exist after `unknown`, so read before posting again.
+ */
+export type CommentPost =
+	| { readonly kind: "posted"; readonly id: string }
+	| { readonly kind: "rejected" }
+	| { readonly kind: "unknown" };
+
+/** The controller's only write path. It is separate from `TicketReader`. */
+export interface TicketWriter {
+	postComment(issue: number, body: string): Promise<CommentPost>;
+}
+
 export interface TicketAdapter extends TicketReader {
 	report(ref: TicketRef, run: Run): Promise<void>;
 	ask(ref: TicketRef, questions: string[]): Promise<void>;

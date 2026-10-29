@@ -7,6 +7,7 @@ import {
 	open,
 	unlink,
 } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
 	type Actor,
@@ -17,6 +18,8 @@ import {
 	type GitHubFailure,
 	type GitHubPaging,
 	GitHubTicketAdapter,
+	isLogin,
+	isTimestamp,
 	issueUrl,
 	type TimelineEntry,
 } from "./adapters/github.ts";
@@ -24,20 +27,24 @@ import {
 	hasWriteAccess,
 	LOCAL_DISABLE_FILE,
 	type PermissionLevel,
+	parsePermissionLevel,
 	READY_LABEL,
 	REPO_SWITCH_LABEL,
 	type WritePermission,
 } from "./policy.ts";
-import { type Digest, digestOf, type NonEmpty } from "./run.ts";
+import { type Digest, digestOf, isDigest, type NonEmpty } from "./run.ts";
+import type { JsonValue } from "./tickets.ts";
 import {
 	type EnvLookup,
 	type Exec,
 	type GitSha,
+	isGitSha,
 	isRepoSlug,
 	loadWorkflow,
 	type RepoSlug,
 	TRUSTED_REF,
 	type WorkflowError,
+	type WorkflowLoad,
 } from "./workflow.ts";
 
 /** The repositories this controller admits tickets from. */
@@ -146,6 +153,18 @@ export type LocalSwitch = "enabled" | "disabled" | "unavailable";
 
 export type RecordOutcome = "recorded" | "duplicate" | "unwritable";
 
+/** The admission record for one label event, read back after a restart. */
+export type RecordRead =
+	| { readonly kind: "found"; readonly receipt: AdmittedReceipt }
+	| { readonly kind: "absent" }
+	| { readonly kind: "unreadable" };
+
+export type RecordKey = {
+	readonly repo: RepoSlug;
+	readonly issue: number;
+	readonly eventId: string;
+};
+
 export interface AdmissionStore {
 	localSwitch(): Promise<LocalSwitch>;
 	/** Records an admission once per label event. */
@@ -153,7 +172,19 @@ export interface AdmissionStore {
 		receipt: AdmittedReceipt,
 		snapshot: IssueSnapshot,
 	): Promise<RecordOutcome>;
+	read(key: RecordKey): Promise<RecordRead>;
 }
+
+/**
+ * The reads a polling tick makes once for every candidate: the repository
+ * switch and the trusted workflow on `main`.
+ */
+export type TickReads = {
+	readonly repoSwitch: RefusalReason | null;
+	readonly workflow: WorkflowLoad;
+};
+
+const EVENT_ID = /^[1-9][0-9]{0,19}$/;
 
 export function snapshotDigest(snapshot: IssueSnapshot): Digest {
 	return digestOf(JSON.stringify([snapshot.title, snapshot.body]));
@@ -226,6 +257,10 @@ export function labelTimeSnapshot(input: {
 		}
 
 		if (lastEditedAt === null) {
+			if (versions.some((version) => version.deleted)) {
+				return ambiguous("version_withheld");
+			}
+
 			if (versions.some((version) => version.text !== history.body)) {
 				return ambiguous("history_disagrees_with_body");
 			}
@@ -280,20 +315,104 @@ function versionInForce(
 	versions: readonly BodyVersion[],
 	at: string,
 ): BodyVersion | "none" | "withheld" {
-	let latestAt = "";
+	let latest: BodyVersion | null = null;
+	let tied = false;
 
-	for (const { editedAt } of versions) {
-		if (editedAt < at && editedAt > latestAt) latestAt = editedAt;
+	for (const version of versions) {
+		if (version.editedAt >= at) continue;
+
+		if (latest === null || version.editedAt > latest.editedAt) {
+			latest = version;
+			tied = false;
+		} else if (version.editedAt === latest.editedAt) {
+			tied = true;
+		}
 	}
 
-	if (latestAt === "") return "none";
+	if (latest === null) return "none";
 
-	const inForce = versions.filter((version) => version.editedAt === latestAt);
-	const [version] = inForce;
+	return tied || latest.deleted ? "withheld" : latest;
+}
 
-	return inForce.length !== 1 || version === undefined || version.deleted
-		? "withheld"
-		: version;
+function fieldOf(
+	value: JsonValue | undefined,
+	key: string,
+): JsonValue | undefined {
+	if (
+		value === undefined ||
+		value === null ||
+		Array.isArray(value) ||
+		!(value instanceof Object)
+	) {
+		return undefined;
+	}
+
+	return Object.hasOwn(value, key) ? value[key] : undefined;
+}
+
+function textField(value: JsonValue | undefined, key: string): string | null {
+	const field = fieldOf(value, key);
+	const text = String(field);
+
+	return field === text ? text : null;
+}
+
+/** Parses a stored record's receipt and checks that it names `key`. */
+export function parseRecord(
+	value: JsonValue | undefined,
+	key: RecordKey,
+): AdmittedReceipt | null {
+	const receipt = fieldOf(value, "receipt");
+	const reasons = fieldOf(receipt, "reasons");
+	const permission = textField(receipt, "actorPermission");
+	const level = permission === null ? null : parsePermissionLevel(permission);
+	const eventAt = textField(receipt, "eventAt");
+	const actor = textField(receipt, "actor");
+	const digest = textField(receipt, "snapshotDigest");
+	const source = textField(receipt, "snapshotSource");
+	const baseSha = textField(receipt, "baseSha");
+	const workflowDigest = textField(receipt, "workflowDigest");
+
+	if (
+		textField(receipt, "decision") !== "admitted" ||
+		!Array.isArray(reasons) ||
+		reasons.length !== 0 ||
+		textField(receipt, "repo") !== key.repo ||
+		fieldOf(receipt, "issue") !== key.issue ||
+		textField(receipt, "issueUrl") !== issueUrl(key.repo, key.issue) ||
+		textField(receipt, "eventId") !== key.eventId ||
+		eventAt === null ||
+		!isTimestamp(eventAt) ||
+		actor === null ||
+		!isLogin(actor) ||
+		level === null ||
+		!hasWriteAccess(level) ||
+		digest === null ||
+		!isDigest(digest) ||
+		(source !== "unedited" && source !== "edit_history") ||
+		baseSha === null ||
+		!isGitSha(baseSha) ||
+		workflowDigest === null ||
+		!isDigest(workflowDigest)
+	) {
+		return null;
+	}
+
+	return {
+		decision: "admitted",
+		repo: key.repo,
+		issue: key.issue,
+		issueUrl: issueUrl(key.repo, key.issue),
+		reasons: [],
+		eventId: key.eventId,
+		eventAt,
+		actor,
+		actorPermission: level,
+		snapshotDigest: digest,
+		snapshotSource: source,
+		baseSha,
+		workflowDigest,
+	};
 }
 
 function errorCode(error: Error): string | null {
@@ -338,6 +457,12 @@ async function isPrivateDirectory(path: string): Promise<boolean> {
 export function fileAdmissionStore(stateDir: string): AdmissionStore {
 	const root = resolve(stateDir);
 
+	const recordDir = (repo: RepoSlug, issue: number) => {
+		const [owner = "", name = ""] = repo.split("/");
+
+		return join(root, "admissions", "github", owner, name, String(issue));
+	};
+
 	return {
 		async localSwitch() {
 			if (!(await isPrivateDirectory(root))) return "unavailable";
@@ -349,17 +474,39 @@ export function fileAdmissionStore(stateDir: string): AdmissionStore {
 			return code === "ENOENT" ? "enabled" : "unavailable";
 		},
 
-		async record(receipt, snapshot) {
-			const [owner = "", name = ""] = receipt.repo.split("/");
+		async read(key) {
+			if (!EVENT_ID.test(key.eventId)) return { kind: "unreadable" };
 
-			const dir = join(
-				root,
-				"admissions",
-				"github",
-				owner,
-				name,
-				String(receipt.issue),
-			);
+			let text: string;
+
+			try {
+				text = await readFile(
+					join(recordDir(key.repo, key.issue), `${key.eventId}.json`),
+					"utf8",
+				);
+			} catch (error) {
+				const code = error instanceof Error ? errorCode(error) : null;
+
+				return code === "ENOENT" ? { kind: "absent" } : { kind: "unreadable" };
+			}
+
+			let parsed: JsonValue | undefined;
+
+			try {
+				parsed = JSON.parse(text);
+			} catch {
+				parsed = undefined;
+			}
+
+			const receipt = parseRecord(parsed, key);
+
+			return receipt === null
+				? { kind: "unreadable" }
+				: { kind: "found", receipt };
+		},
+
+		async record(receipt, snapshot) {
+			const dir = recordDir(receipt.repo, receipt.issue);
 
 			const text = `${JSON.stringify({ receipt, snapshot }, null, 2)}\n`;
 			const final = join(dir, `${receipt.eventId}.json`);
@@ -424,7 +571,7 @@ type Evaluation =
 	| { readonly kind: "bound"; readonly bound: Bound }
 	| { readonly kind: "refused"; readonly reason: RefusalReason };
 
-async function repoSwitchReason(
+export async function repoSwitchReason(
 	adapter: GitHubTicketAdapter,
 ): Promise<RefusalReason | null> {
 	const read = await adapter.readRepoSwitch();
@@ -440,12 +587,14 @@ async function repoSwitchReason(
 
 type ReadyEntry = Extract<TimelineEntry, { kind: "labeled" | "unlabeled" }>;
 
-type LatestReady =
+export type LatestReady =
 	| { readonly kind: "none" }
 	| { readonly kind: "tied" }
 	| { readonly kind: "found"; readonly entry: ReadyEntry };
 
-function latestReadyEntry(timeline: readonly TimelineEntry[]): LatestReady {
+export function latestReadyEntry(
+	timeline: readonly TimelineEntry[],
+): LatestReady {
 	const ready = timeline.filter(
 		(entry): entry is ReadyEntry =>
 			(entry.kind === "labeled" || entry.kind === "unlabeled") &&
@@ -468,24 +617,16 @@ function latestReadyEntry(timeline: readonly TimelineEntry[]): LatestReady {
 }
 
 async function evaluate(input: {
-	exec: Exec;
-	env: EnvLookup;
+	workflow: WorkflowLoad;
 	adapter: GitHubTicketAdapter;
 	issue: number;
 	evidence: Evidence;
 }): Promise<Evaluation> {
-	const { adapter, issue, evidence } = input;
+	const { adapter, issue, evidence, workflow } = input;
 
 	const refuse = (reason: RefusalReason): Evaluation => ({
 		kind: "refused",
 		reason,
-	});
-
-	const workflow = await loadWorkflow({
-		exec: input.exec,
-		repo: adapter.repo,
-		ref: TRUSTED_REF,
-		env: input.env,
 	});
 
 	if (workflow.kind === "failed") {
@@ -599,6 +740,24 @@ async function evaluate(input: {
 	};
 }
 
+/** Reads the repository switch and the trusted workflow once. */
+export async function readTickInputs(input: {
+	exec: Exec;
+	env: EnvLookup;
+	adapter: GitHubTicketAdapter;
+}): Promise<TickReads> {
+	const repoSwitch = await repoSwitchReason(input.adapter);
+
+	const workflow = await loadWorkflow({
+		exec: input.exec,
+		repo: input.adapter.repo,
+		ref: TRUSTED_REF,
+		env: input.env,
+	});
+
+	return { repoSwitch, workflow };
+}
+
 /**
  * Admits one issue when its latest `factory:ready` label event came from an
  * account with write access, both kill switches are on, and the label-time
@@ -607,7 +766,8 @@ async function evaluate(input: {
  * unreadable it still evaluates the issue, so the refusal receipt shows as
  * much of the event and snapshot as that evaluation reached. The evaluation
  * stops at its first refusal, such as a workflow that does not load, which
- * comes before any issue read.
+ * comes before any issue read. A polling tick passes `tick`, the reads it
+ * already made, so each candidate costs only its issue reads.
  */
 export async function admitTicket(input: {
 	exec: Exec;
@@ -617,6 +777,7 @@ export async function admitTicket(input: {
 	allowlist: readonly RepoSlug[];
 	store: AdmissionStore;
 	paging?: GitHubPaging;
+	tick?: TickReads;
 }): Promise<AdmissionReceipt> {
 	const { repo, issue, store } = input;
 	const header = { repo, issue, issueUrl: issueUrl(repo, issue) };
@@ -655,11 +816,14 @@ export async function admitTicket(input: {
 		paging: input.paging ?? DEFAULT_PAGING,
 	});
 
-	const switchReason = await repoSwitchReason(adapter);
+	const reads =
+		input.tick ??
+		(await readTickInputs({ exec: input.exec, env: input.env, adapter }));
+
+	const switchReason = reads.repoSwitch;
 
 	const evaluation = await evaluate({
-		exec: input.exec,
-		env: input.env,
+		workflow: reads.workflow,
 		adapter,
 		issue,
 		evidence,

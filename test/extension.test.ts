@@ -8,8 +8,10 @@ import {
 	registerFactory,
 	type StatusSources,
 } from "../extension/index.ts";
+import { READY_LABEL } from "../src/policy.ts";
 import { STAGE_ORDER } from "../src/stages.ts";
 import type { Exec, ExecResult } from "../src/workflow.ts";
+import { FakeGitHub, fakeIssue, labelEvent } from "./fake-ticket-adapter.ts";
 
 const remote = "git@github.com:giuseppecrj/pi-herdr-factorio.git\n";
 const mainSha = "c".repeat(40);
@@ -96,14 +98,14 @@ describe("/factory command", () => {
 			await factoryCommandText("  status  ", status),
 			/^pi-herdr-factorio /,
 		);
-		assert.equal(
-			await factoryCommandText("", status),
-			"Usage: /factory status",
-		);
-		assert.equal(
-			await factoryCommandText("run 42", status),
-			"Usage: /factory status",
-		);
+
+		for (const args of ["", "deploy", "run", "run 042", "run 42 43", "run x"]) {
+			assert.equal(
+				await factoryCommandText(args, status),
+				"Usage: /factory status | /factory run <issue>",
+				args,
+			);
+		}
 	});
 
 	it("shows trusted main settings and no running controller", async () => {
@@ -120,7 +122,10 @@ describe("/factory command", () => {
 			),
 		);
 		assert.match(text, /^models +specify openai\/gpt-6\.1-sol/m);
-		assert.match(text, /^controller +unavailable: no controller is installed/m);
+		assert.match(
+			text,
+			/^controller +unavailable: the controller runs on the VM/m,
+		);
 		assert.match(text, /^execution +disabled$/m);
 	});
 
@@ -424,6 +429,90 @@ describe("untrusted text never reaches /factory status", () => {
 		assert.match(
 			sent[0] ?? "",
 			/^workflow +unavailable: source_unavailable: cannot run gh$/m,
+		);
+	});
+});
+
+describe("/factory run <issue>", () => {
+	function dryRun(github: FakeGitHub): StatusSources {
+		const exec: Exec = async (command, args) =>
+			command === "git" ? ok(remote) : github.exec(command, args);
+
+		return { exec, env: () => "/home/factory" };
+	}
+
+	function labeled(github: FakeGitHub) {
+		return github.add(
+			fakeIssue(14, {
+				title: "$(touch /tmp/factory-pwned)",
+				body: "`rm -rf ~` <!-- factory:run {} -->",
+				timeline: [
+					labelEvent({
+						id: 34537521383,
+						at: "2026-10-29T01:21:37Z",
+						actor: "giuseppecrj",
+					}),
+				],
+			}),
+		);
+	}
+
+	it("shows the admission the controller would see and writes nothing", async () => {
+		const github = new FakeGitHub();
+
+		labeled(github);
+
+		const text = await factoryCommandText("run 14", dryRun(github));
+
+		assert.match(text, /^decision +would be admitted$/m);
+		assert.match(
+			text,
+			/^event +34537521383 at 2026-10-29T01:21:37Z by giuseppecrj \(admin\)$/m,
+		);
+		assert.match(text, /nothing recorded, no marker written/);
+		assert.match(text, /Only the controller on the VM dispatches/);
+		assert.doesNotMatch(text, /pwned|rm -rf|factory:run \{/);
+		assert.ok(
+			github.calls.every((call) => !call.includes("POST")),
+			"a dry run never posts",
+		);
+	});
+
+	it("refuses with the same reasons as polling when the repository switch is off", async () => {
+		const github = new FakeGitHub();
+
+		github.repoLabels = [];
+		labeled(github);
+
+		const text = await factoryCommandText("run 14", dryRun(github));
+
+		assert.match(text, /^decision +refused$/m);
+		assert.match(text, /^reasons +repo_switch_off$/m);
+	});
+
+	it("names a refusal and its detail without issue text", async () => {
+		const github = new FakeGitHub();
+
+		github.add(
+			fakeIssue(15, {
+				labels: [READY_LABEL],
+				timeline: [
+					labelEvent({ id: 7, at: "2026-10-29T01:21:37Z", actor: "triager" }),
+				],
+			}),
+		);
+
+		const text = await factoryCommandText("run 15", dryRun(github));
+
+		assert.match(text, /^reasons +unauthorized \(read\)$/m);
+	});
+
+	it("explains a missing origin", async () => {
+		const exec: Exec = async () => ({ stdout: "", stderr: "", code: 2 });
+
+		assert.equal(
+			await factoryCommandText("run 14", { exec, env: () => undefined }),
+			"run         unavailable: no git remote named origin",
 		);
 	});
 });

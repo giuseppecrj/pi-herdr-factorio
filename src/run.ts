@@ -33,6 +33,20 @@ export function digestOf(content: string | Uint8Array): Digest {
 	return hex;
 }
 
+/**
+ * One run per admitted label event. Every crash path, marker and state
+ * directory computes the same ID from the same event.
+ */
+export function runIdOf(input: {
+	repo: string;
+	issue: number;
+	eventId: string;
+}): Digest {
+	return digestOf(
+		JSON.stringify(["github", input.repo, input.issue, input.eventId]),
+	);
+}
+
 export type Outcome =
 	| { kind: "landed"; mergeSha: string }
 	| { kind: "needs_info"; questions: NonEmpty<string> }

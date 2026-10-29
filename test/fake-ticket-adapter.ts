@@ -127,8 +127,22 @@ export type FakeRename = {
 	currentTitle: string;
 };
 
+export type FakeComment = {
+	id: number;
+	nodeId: string;
+	login: string;
+	type: "Bot" | "User";
+	appSlug: string | null;
+	body: string;
+	createdAt: string;
+	lastEditedAt: string | null;
+	/** Overrides the issue the REST `issue_url` names. */
+	issueUrl?: string;
+};
+
 export type FakeIssue = {
 	number: number;
+	updatedAt: string;
 	state: "open" | "closed";
 	title: string;
 	body: string;
@@ -142,11 +156,13 @@ export type FakeIssue = {
 	totalVersions: number | null;
 	renames: FakeRename[];
 	totalRenames: number | null;
+	comments: FakeComment[];
 };
 
 export function fakeIssue(number: number, change: Partial<FakeIssue> = {}) {
 	const issue: FakeIssue = {
 		number,
+		updatedAt: "2026-10-29T01:00:00Z",
 		state: "open",
 		title: `Fixture ${number}`,
 		body: `Body of fixture ${number}.`,
@@ -160,6 +176,7 @@ export function fakeIssue(number: number, change: Partial<FakeIssue> = {}) {
 		totalVersions: null,
 		renames: [],
 		totalRenames: null,
+		comments: [],
 		...change,
 	};
 
@@ -224,8 +241,17 @@ export function networkError(): ExecResult {
 	};
 }
 
+export const BOT_LOGIN = "exe-dev-github-integration[bot]";
+
+/** What the next comment POSTs do: answer, fail with a status, or land and then time out. */
+export type PostBehavior = "ok" | "rejected" | "lost" | "landed_unanswered";
+
 export class FakeGitHub {
 	readonly calls: string[][] = [];
+	viewer = BOT_LOGIN;
+	posts: PostBehavior[] = [];
+	now = "2026-10-29T02:00:00Z";
+	#nextCommentId = 9000;
 	readonly issues = new Map<number, FakeIssue>();
 	readonly permissions = new Map<string, string>();
 	readonly failures = new Map<string, ExecResult>();
@@ -257,8 +283,67 @@ export class FakeGitHub {
 			if (path.startsWith(prefix)) return result;
 		}
 
+		if (args[1] === "--method" && args[2] === "POST") {
+			return this.#post(path, args);
+		}
+
 		return this.#answer(path, args);
 	};
+
+	/** Adds a comment as `login`, as another account or the bot would. */
+	comment(
+		issue: FakeIssue,
+		body: string,
+		change: Partial<FakeComment> = {},
+	): FakeComment {
+		const id = this.#nextCommentId++;
+
+		const comment: FakeComment = {
+			id,
+			nodeId: `IC_${id}`,
+			login: BOT_LOGIN,
+			type: "Bot",
+			appSlug: "exe-dev-github-integration",
+			body,
+			createdAt: this.now,
+			lastEditedAt: null,
+			...change,
+		};
+
+		issue.comments.push(comment);
+		issue.updatedAt = this.now;
+
+		return comment;
+	}
+
+	markers(issue: number): string[] {
+		return (this.issues.get(issue)?.comments ?? []).flatMap((comment) =>
+			comment.login === BOT_LOGIN ? [comment.body] : [],
+		);
+	}
+
+	#post(path: string, args: readonly string[]): ExecResult {
+		const match = /^repos\/[^/]+\/[^/]+\/issues\/(\d+)\/comments$/.exec(path);
+		const issue = this.issues.get(Number(match?.[1]));
+		const body = args.find((arg) => arg.startsWith("body="))?.slice(5);
+		const behavior = this.posts.shift() ?? "ok";
+
+		if (issue === undefined || body === undefined) {
+			return httpError(404, "Not Found");
+		}
+
+		if (behavior === "rejected") return httpError(422, "Invalid request");
+
+		if (behavior === "lost") return networkError();
+
+		const comment = this.comment(issue, body);
+
+		if (behavior === "landed_unanswered") {
+			return { stdout: "", stderr: "", code: 137 };
+		}
+
+		return ok({ id: comment.id, node_id: comment.nodeId });
+	}
 
 	#answer(path: string, args: readonly string[]): ExecResult {
 		const prefix = `repos/${FAKE_REPO}/`;
@@ -318,16 +403,69 @@ export class FakeGitHub {
 			);
 		}
 
-		const match = /^issues\/(\d+)(\/timeline)?$/.exec(route);
+		const match = /^issues\/(\d+)(\/timeline|\/comments)?$/.exec(route);
 		const issue = this.issues.get(Number(match?.[1]));
 
 		if (match === null || issue === undefined) {
 			return httpError(404, "Not Found");
 		}
 
+		if (match[2] === "/comments") {
+			return ok(
+				this.#page(
+					issue.comments.map((comment) => this.#restComment(issue, comment)),
+					url,
+				),
+			);
+		}
+
 		return match[2] === undefined
 			? ok(this.#rest(issue))
 			: ok(this.#page(issue.timeline, url));
+	}
+
+	#restComment(issue: FakeIssue, comment: FakeComment): JsonValue {
+		return {
+			id: comment.id,
+			node_id: comment.nodeId,
+			issue_url:
+				comment.issueUrl ??
+				`https://api.github.com/repos/${FAKE_REPO}/issues/${issue.number}`,
+			user: { login: comment.login, type: comment.type },
+			performed_via_github_app:
+				comment.appSlug === null ? null : { slug: comment.appSlug, id: 1 },
+			body: comment.body,
+			created_at: comment.createdAt,
+			updated_at: comment.lastEditedAt ?? comment.createdAt,
+		};
+	}
+
+	#commentNodes(args: readonly string[]): ExecResult {
+		const ids = args.flatMap((arg) =>
+			arg.startsWith("ids[]=") ? [arg.slice(6)] : [],
+		);
+
+		const nodes: JsonValue[] = ids.map((id) => {
+			for (const issue of this.issues.values()) {
+				const comment = issue.comments.find((item) => item.nodeId === id);
+
+				if (comment !== undefined) {
+					return {
+						__typename: "IssueComment",
+						databaseId: comment.id,
+						lastEditedAt: comment.lastEditedAt,
+						issue: {
+							number: issue.number,
+							repository: { nameWithOwner: FAKE_REPO },
+						},
+					};
+				}
+			}
+
+			return null;
+		});
+
+		return ok({ data: { nodes } });
 	}
 
 	#page(items: readonly JsonValue[], url: URL): JsonValue[] {
@@ -340,6 +478,7 @@ export class FakeGitHub {
 	#rest(issue: FakeIssue): JsonValue {
 		const fields = {
 			number: issue.number,
+			updated_at: issue.updatedAt,
 			state: issue.state,
 			title: issue.title,
 			body: issue.body === "" ? null : issue.body,
@@ -353,6 +492,14 @@ export class FakeGitHub {
 	}
 
 	#graphql(args: readonly string[]): ExecResult {
+		const query = args.find((arg) => arg.startsWith("query=")) ?? "";
+
+		if (query.includes("viewer")) {
+			return ok({ data: { viewer: { login: this.viewer } } });
+		}
+
+		if (query.includes("nodes(ids:")) return this.#commentNodes(args);
+
 		const number = Number(
 			args.find((arg) => arg.startsWith("number="))?.slice(7),
 		);
