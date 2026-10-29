@@ -509,8 +509,6 @@ export class Orchestrator {
 	/** Issues whose claim this tick confirmed eligible. Only these launch. */
 	readonly #confirmed = new Set<number>();
 	readonly #readOpen = new Set<number>();
-	/** Issues whose marker ledger this tick read clean. */
-	readonly #ledgerRead = new Set<number>();
 	readonly #local = new Map<number, ConfirmedRecord>();
 	readonly #ended = new Map<Digest, EndedRecord>();
 	readonly #behind = new Map<number, TickReport["ledgerBehind"][number]>();
@@ -563,7 +561,6 @@ export class Orchestrator {
 		this.#tickAt = now;
 		this.#confirmed.clear();
 		this.#readOpen.clear();
-		this.#ledgerRead.clear();
 		const refused: { issue: number; reasons: RefusalReason["kind"][] }[] = [];
 
 		if (!this.#claimsLoaded) await this.#loadClaims();
@@ -807,21 +804,19 @@ export class Orchestrator {
 
 		if (timeline.kind === "failed") return "unverified";
 
-		if (!this.#ledgerRead.has(run.issue)) {
-			const ledger = await this.#readLedger(run.issue);
+		const ledger = await this.#readLedger(run.issue);
 
-			if (ledger.kind === "failed") return "unverified";
+		if (ledger.kind === "failed") return "unverified";
 
-			if (ledger.value.kind === "corrupt") {
-				this.#markCorrupt(run.issue, ledger.value, updatedAt);
-				this.#drop(run);
+		if (ledger.value.kind === "corrupt") {
+			this.#markCorrupt(run.issue, ledger.value, updatedAt);
+			this.#drop(run);
 
-				return "dropped";
-			}
-
-			this.#localAhead(run.issue, ledger.value);
-			this.#confirmEnd(run.issue, ledger.value);
+			return "dropped";
 		}
+
+		this.#localAhead(run.issue, ledger.value);
+		this.#confirmEnd(run.issue, ledger.value);
 
 		const replaced = replacedBy(timeline.value, run);
 
@@ -1131,7 +1126,6 @@ export class Orchestrator {
 			}
 
 			this.state.corrupt.delete(issue);
-			this.#ledgerRead.add(issue);
 			this.#confirmEnd(issue, ledger.value);
 
 			const local = this.#localAhead(issue, ledger.value);
