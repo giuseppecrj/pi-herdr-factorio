@@ -590,7 +590,11 @@ describe("gateway credential engine against the echo fixture", () => {
 	});
 
 	it("refuses redirects and compressed bodies on a credentialed route", async () => {
+		const lines = h.audit.length;
 		const redirect = await call(h.socketPath, "GET", "/echo/api/redirect");
+
+		assert.equal(h.audit.length, lines + 1);
+		assert.equal(h.audit.at(-1)?.reason, "redirect-refused");
 
 		assert.equal(redirect.code, "redirect-refused");
 		assert.equal(redirect.headers.location, undefined);

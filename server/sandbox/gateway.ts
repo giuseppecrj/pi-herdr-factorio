@@ -668,6 +668,18 @@ export class Gateway implements AdmissionState {
 
 		this.#inflight.add(flight);
 
+		let released = false;
+
+		const release = () => {
+			if (released) return;
+
+			released = true;
+			clearTimeout(headersTimer);
+			clearTimeout(totalTimer);
+			this.#inflight.delete(flight);
+			state.active -= 1;
+		};
+
 		const done = (
 			decision: AuditDecision,
 			reason: ProxyCode | null,
@@ -675,25 +687,27 @@ export class Gateway implements AdmissionState {
 		) => {
 			if (exchange.finished) return;
 
-			clearTimeout(headersTimer);
-			clearTimeout(totalTimer);
-			this.#inflight.delete(flight);
-			state.active -= 1;
+			release();
 			this.#record(exchange, decision, reason, status);
 		};
 
+		const refuse = (code: ProxyCode) => {
+			if (exchange.finished) return;
+
+			release();
+			this.#deny(exchange, res, code);
+		};
+
 		const fail = (code: "upstream-error" | "upstream-timeout") => {
+			if (exchange.finished) return;
+
 			upstream.destroy();
 
 			if (responded) {
 				res.destroy();
 				done("error", code, res.statusCode);
 			} else {
-				clearTimeout(headersTimer);
-				clearTimeout(totalTimer);
-				this.#inflight.delete(flight);
-				state.active -= 1;
-				this.#deny(exchange, res, code);
+				refuse(code);
 			}
 		};
 
@@ -722,13 +736,20 @@ export class Gateway implements AdmissionState {
 			}
 		});
 		upstream.on("timeout", () => fail("upstream-timeout"));
-		upstream.on("error", () => {
-			if (!exchange.finished) fail("upstream-error");
-		});
+		upstream.on("error", () => fail("upstream-error"));
 		upstream.on("response", (incoming) => {
 			responded = true;
 			clearTimeout(headersTimer);
-			this.#respond(exchange, route, credential, incoming, res, upstream, done);
+			this.#respond(
+				exchange,
+				route,
+				credential,
+				incoming,
+				res,
+				upstream,
+				done,
+				refuse,
+			);
 		});
 		upstream.end(body);
 	}
@@ -745,15 +766,14 @@ export class Gateway implements AdmissionState {
 			reason: ProxyCode | null,
 			status: number,
 		) => void,
+		refuse: (code: ProxyCode) => void,
 	): void {
 		const status = incoming.statusCode ?? 502;
 
 		const blockedHead = (code: DenyCode) => {
 			incoming.destroy();
 			upstream.destroy();
-			done("deny", code, 403);
-			exchange.finished = false;
-			this.#deny(exchange, res, code);
+			refuse(code);
 		};
 
 		if (credential !== null) {

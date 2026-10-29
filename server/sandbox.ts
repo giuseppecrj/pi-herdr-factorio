@@ -136,13 +136,12 @@ class Ledger {
 	}
 }
 
-type Stage = {
+type StageRun = {
 	readonly input: StageRunInput;
 	readonly host: StageHost;
 	readonly gateway: GatewayHandle;
 	readonly ledger: Ledger;
 	readonly deadline: number;
-	readonly tokenCap: number;
 	gateReason: CloseReason | null;
 	alert: FailedExit | null;
 	listener: ((event: ControlEvent) => void) | null;
@@ -155,7 +154,7 @@ type SessionReport = {
 	readonly observed: string | null;
 };
 
-function capFor(stage: Stage): BudgetCap | null {
+function capFor(stage: StageRun): BudgetCap | null {
 	const { maxTokens } = stage.input.settings;
 	const total = stage.ledger.total;
 
@@ -179,7 +178,7 @@ const CAP_REASON: Record<BudgetCap, CloseReason> = {
 	wall: "wall",
 };
 
-async function closeGate(stage: Stage, reason: CloseReason): Promise<void> {
+async function closeGate(stage: StageRun, reason: CloseReason): Promise<void> {
 	if (stage.gateReason !== null) return;
 
 	stage.gateReason = reason;
@@ -210,7 +209,7 @@ function waitFor(promise: Promise<unknown>, ms: number): Promise<boolean> {
  * settlement closes the gateway gate before Pi is aborted.
  */
 async function runSession(
-	stage: Stage,
+	stage: StageRun,
 	model: ModelId,
 	session: number,
 ): Promise<SessionReport> {
@@ -493,13 +492,12 @@ export async function runStage(
 		);
 	}
 
-	const stage: Stage = {
+	const stage: StageRun = {
 		input,
 		host,
 		gateway,
 		ledger,
 		deadline: started + input.settings.budget.wallMs - host.cleanupReserveMs,
-		tokenCap,
 		gateReason: null,
 		alert: null,
 		listener: null,
