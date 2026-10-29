@@ -1,0 +1,512 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import {
+	countOf,
+	fieldOf,
+	hasOnlyKeys,
+	objectOf,
+	parseJson,
+	textOf,
+	textsOf,
+} from "./json.ts";
+import {
+	type CredentialId,
+	type CredentialPlacement,
+	credentialId,
+	isForbiddenUpstreamHost,
+	METHODS,
+	type Method,
+	type PathRule,
+	type Route,
+	type RouteId,
+	type RouteTable,
+	readPathRules,
+	readPlacement,
+	type TableMode,
+} from "./routes.ts";
+
+/** The widest scope the owner allows one secret. A declared route may only narrow it. */
+export type Ceiling = {
+	readonly scheme: "https" | "http";
+	readonly host: string;
+	readonly port: number;
+	readonly placement: CredentialPlacement;
+	readonly methods: readonly Method[];
+	readonly paths: readonly PathRule[];
+};
+
+export type Ceilings = ReadonlyMap<CredentialId, Ceiling>;
+
+export const CEILINGS_PATH = "/etc/factory/egress-credentials.json";
+
+const MAX_SECRET_BYTES = 8192;
+
+const CEILING_KEYS = [
+	"scheme",
+	"host",
+	"port",
+	"placement",
+	"methods",
+	"paths",
+] as const;
+
+export type CeilingParse =
+	| { readonly ok: true; readonly ceilings: Ceilings }
+	| { readonly ok: false };
+
+/**
+ * Reads the root-owned ceiling file. Production ceilings are https only, and
+ * no mode admits a ceiling that names a forbidden upstream.
+ */
+export function parseCeilings(text: string, mode: TableMode): CeilingParse {
+	const root = objectOf(parseJson(text));
+
+	if (root === null) return { ok: false };
+
+	const ceilings = new Map<CredentialId, Ceiling>();
+
+	for (const [key, value] of Object.entries(root)) {
+		const id = credentialId(key);
+		const entry = objectOf(value);
+
+		if (id === null || entry === null || !hasOnlyKeys(entry, CEILING_KEYS)) {
+			return { ok: false };
+		}
+
+		const scheme = textOf(fieldOf(entry, "scheme"));
+		const host = textOf(fieldOf(entry, "host"));
+		const port = countOf(fieldOf(entry, "port"));
+		const placement = readPlacement(fieldOf(entry, "placement"));
+		const methodTexts = textsOf(fieldOf(entry, "methods"));
+		const paths = readPathRules(fieldOf(entry, "paths"));
+
+		const methods = (methodTexts ?? []).flatMap((text) => {
+			const method = METHODS.find((known) => known === text);
+
+			return method === undefined ? [] : [method];
+		});
+
+		if (
+			(scheme !== "https" && !(scheme === "http" && mode === "test")) ||
+			host === null ||
+			isForbiddenUpstreamHost(host) ||
+			port === null ||
+			port < 1 ||
+			port > 65535 ||
+			placement === null ||
+			methodTexts === null ||
+			methods.length === 0 ||
+			methods.length !== methodTexts.length ||
+			paths === null
+		) {
+			return { ok: false };
+		}
+
+		ceilings.set(id, { scheme, host, port, placement, methods, paths });
+	}
+
+	return { ok: true, ceilings };
+}
+
+export function loadCeilings(path: string, mode: TableMode): CeilingParse {
+	try {
+		return parseCeilings(readFileSync(path, "utf8"), mode);
+	} catch {
+		return { ok: false };
+	}
+}
+
+export type SecretLoad =
+	| { readonly ok: true; readonly secrets: ReadonlyMap<CredentialId, Buffer> }
+	| { readonly ok: false };
+
+function validSecret(bytes: Buffer): boolean {
+	return (
+		bytes.length >= 1 &&
+		bytes.length <= MAX_SECRET_BYTES &&
+		!bytes.includes(0x0a) &&
+		!bytes.includes(0x0d)
+	);
+}
+
+/**
+ * Reads each referenced secret once from systemd's credentials directory.
+ * Any missing, empty, oversized or multi-line secret refuses the whole load.
+ */
+export function loadSecrets(
+	directory: string | undefined,
+	ids: readonly CredentialId[],
+): SecretLoad {
+	const secrets = new Map<CredentialId, Buffer>();
+
+	if (ids.length === 0) return { ok: true, secrets };
+
+	if (directory === undefined || directory === "") return { ok: false };
+
+	for (const id of ids) {
+		try {
+			const bytes = readFileSync(join(directory, id));
+
+			if (!validSecret(bytes)) return { ok: false };
+
+			secrets.set(id, bytes);
+		} catch {
+			return { ok: false };
+		}
+	}
+
+	return { ok: true, secrets };
+}
+
+type Segments = {
+	readonly parts: readonly string[];
+	readonly open: boolean;
+	readonly minExtra: number;
+};
+
+function segmentsOf(rule: PathRule): Segments {
+	if (rule.kind === "exact") {
+		return { parts: rule.path.split("/"), open: false, minExtra: 0 };
+	}
+
+	if (rule.kind === "prefix") {
+		return { parts: rule.prefix.split("/"), open: true, minExtra: 0 };
+	}
+
+	const parts = rule.pattern.split("/");
+
+	return parts[parts.length - 1] === "**"
+		? { parts: parts.slice(0, -1), open: true, minExtra: 1 }
+		: { parts, open: false, minExtra: 0 };
+}
+
+function segmentCovers(outer: string, inner: string): boolean {
+	return outer === "*" ? inner !== "" : outer === inner;
+}
+
+/** True when every path `inner` matches is also matched by `outer`. */
+export function pathRuleWithin(inner: PathRule, outer: PathRule): boolean {
+	const small = segmentsOf(inner);
+	const large = segmentsOf(outer);
+
+	if (small.open && !large.open) return false;
+
+	if (!large.open && small.parts.length !== large.parts.length) return false;
+
+	if (small.parts.length < large.parts.length) return false;
+
+	for (const [index, part] of large.parts.entries()) {
+		const candidate = small.parts[index];
+
+		if (candidate === undefined || !segmentCovers(part, candidate))
+			return false;
+	}
+
+	if (!large.open) return true;
+
+	const reachesBare =
+		small.parts.length === large.parts.length && small.minExtra === 0;
+
+	return !reachesBare || large.minExtra === 0;
+}
+
+export type BoundCredential = {
+	readonly id: CredentialId;
+	readonly header: readonly [string, string];
+	readonly forms: readonly Buffer[];
+};
+
+export type CredentialBinding =
+	| {
+			readonly ok: true;
+			readonly bound: ReadonlyMap<RouteId, BoundCredential>;
+			readonly forms: readonly Buffer[];
+	  }
+	| { readonly ok: false };
+
+function samePlacement(left: CredentialPlacement, right: CredentialPlacement) {
+	if (left.kind === "basic" || right.kind === "basic") {
+		return (
+			left.kind === "basic" &&
+			right.kind === "basic" &&
+			left.username === right.username
+		);
+	}
+
+	return (
+		left.name.toLowerCase() === right.name.toLowerCase() &&
+		left.scheme === right.scheme
+	);
+}
+
+function withinCeiling(route: Route, ceiling: Ceiling): boolean {
+	return (
+		route.upstream.scheme === ceiling.scheme &&
+		route.upstream.host === ceiling.host &&
+		route.upstream.port === ceiling.port &&
+		route.credential !== null &&
+		samePlacement(route.credential.placement, ceiling.placement) &&
+		route.methods.every((method) => ceiling.methods.includes(method)) &&
+		route.paths.every((rule) =>
+			ceiling.paths.some((outer) => pathRuleWithin(rule, outer)),
+		)
+	);
+}
+
+export function credentialHeader(
+	placement: CredentialPlacement,
+	secret: Buffer,
+): readonly [string, string] {
+	if (placement.kind === "basic") {
+		const pair = Buffer.concat([Buffer.from(`${placement.username}:`), secret]);
+
+		return ["Authorization", `Basic ${pair.toString("base64")}`];
+	}
+
+	const value = secret.toString("latin1");
+
+	return [
+		placement.name,
+		placement.scheme === null ? value : `${placement.scheme} ${value}`,
+	];
+}
+
+function percentEncoded(secret: Buffer, upper: boolean): Buffer {
+	const hex = [...secret]
+		.map((byte) => `%${byte.toString(16).padStart(2, "0")}`)
+		.join("");
+
+	return Buffer.from(upper ? hex.toUpperCase() : hex);
+}
+
+/** Every encoding of a secret the reflection scan looks for. */
+export function secretForms(
+	secret: Buffer,
+	placement: CredentialPlacement,
+): Buffer[] {
+	const forms = [
+		secret,
+		Buffer.from(secret.toString("base64")),
+		Buffer.from(secret.toString("base64").replace(/=+$/, "")),
+		Buffer.from(secret.toString("base64url")),
+		Buffer.from(encodeURIComponent(secret.toString("latin1"))),
+		percentEncoded(secret, true),
+		percentEncoded(secret, false),
+	];
+
+	if (placement.kind === "basic") {
+		forms.push(
+			Buffer.from(
+				Buffer.concat([Buffer.from(`${placement.username}:`), secret]).toString(
+					"base64",
+				),
+			),
+		);
+	}
+
+	const unique: Buffer[] = [];
+
+	for (const form of forms) {
+		if (form.length > 0 && !unique.some((seen) => seen.equals(form))) {
+			unique.push(form);
+		}
+	}
+
+	return unique;
+}
+
+/**
+ * Binds each credentialed route to its loaded secret after checking the
+ * route against its ceiling. One credential serves one route, and a route
+ * whose secret or ceiling is missing refuses the whole table.
+ */
+export function bindCredentials(
+	table: RouteTable,
+	ceilings: Ceilings,
+	secrets: ReadonlyMap<CredentialId, Buffer>,
+): CredentialBinding {
+	const bound = new Map<RouteId, BoundCredential>();
+	const forms: Buffer[] = [];
+	const used = new Set<CredentialId>();
+
+	for (const route of table.routes) {
+		if (route.credential === null) continue;
+
+		const { id, placement } = route.credential;
+		const ceiling = ceilings.get(id);
+		const secret = secrets.get(id);
+
+		if (
+			ceiling === undefined ||
+			secret === undefined ||
+			used.has(id) ||
+			!withinCeiling(route, ceiling)
+		) {
+			return { ok: false };
+		}
+
+		used.add(id);
+
+		const routeForms = secretForms(secret, placement);
+
+		bound.set(route.id, {
+			id,
+			header: credentialHeader(placement, secret),
+			forms: routeForms,
+		});
+		forms.push(...routeForms);
+	}
+
+	return { ok: true, bound, forms };
+}
+
+const CREDENTIAL_HEADER =
+	/^(authorization|proxy-authorization|cookie|cookie2|x-api-key|.*-api-key|.*-token|.*-auth-token)$/;
+
+export function isCredentialHeader(name: string): boolean {
+	return CREDENTIAL_HEADER.test(name.toLowerCase());
+}
+
+export const NEVER_COPIED_RESPONSE_HEADERS = [
+	"set-cookie",
+	"set-cookie2",
+	"authorization",
+	"proxy-authenticate",
+	"proxy-authorization",
+	"www-authenticate",
+	"authentication-info",
+] as const;
+
+export const GATEWAY_USER_AGENT = "factory-gateway/1";
+
+/**
+ * The upstream request headers, built from scratch: the route's Host, the
+ * client headers the route lists minus every credential-family header, the
+ * gateway's own headers, and the bound credential last.
+ */
+export function buildUpstreamHeaders(
+	route: Route,
+	rawHeaders: readonly string[],
+	contentLength: number,
+	credential: readonly [string, string] | null,
+): [string, string][] {
+	const headers: [string, string][] = [["Host", route.upstream.hostHeader]];
+
+	for (let index = 0; index + 1 < rawHeaders.length; index += 2) {
+		const name = rawHeaders[index]?.toLowerCase();
+		const value = rawHeaders[index + 1];
+
+		if (
+			name !== undefined &&
+			value !== undefined &&
+			route.requestHeaders.includes(name) &&
+			!isCredentialHeader(name) &&
+			!headers.some(([seen]) => seen === name)
+		) {
+			headers.push([name, value]);
+		}
+	}
+
+	headers.push(
+		["User-Agent", GATEWAY_USER_AGENT],
+		["Accept-Encoding", "identity"],
+		["Connection", "close"],
+		["Content-Length", String(contentLength)],
+	);
+
+	if (credential !== null) headers.push([credential[0], credential[1]]);
+
+	return headers;
+}
+
+/** Upstream response headers the route lists, never an auth or cookie header. */
+export function responseHeadersFor(
+	route: Route,
+	rawHeaders: readonly string[],
+): [string, string][] {
+	const headers: [string, string][] = [];
+	const banned: readonly string[] = NEVER_COPIED_RESPONSE_HEADERS;
+
+	for (let index = 0; index + 1 < rawHeaders.length; index += 2) {
+		const name = rawHeaders[index]?.toLowerCase();
+		const value = rawHeaders[index + 1];
+
+		if (
+			name !== undefined &&
+			value !== undefined &&
+			route.responseHeaders.includes(name) &&
+			!banned.includes(name)
+		) {
+			headers.push([name, value]);
+		}
+	}
+
+	return headers;
+}
+
+export class SecretScanner {
+	readonly #forms: readonly Buffer[];
+
+	constructor(forms: readonly Buffer[]) {
+		this.#forms = forms;
+	}
+
+	get empty(): boolean {
+		return this.#forms.length === 0;
+	}
+
+	contains(input: string | Buffer): boolean {
+		const bytes = Buffer.isBuffer(input) ? input : Buffer.from(input, "latin1");
+
+		return this.#forms.some((form) => bytes.includes(form));
+	}
+
+	get longest(): number {
+		return Math.max(0, ...this.#forms.map((form) => form.length));
+	}
+}
+
+export type FilterStep =
+	| { readonly kind: "pass"; readonly bytes: Buffer }
+	| { readonly kind: "blocked" };
+
+/**
+ * Streams a response body while holding back the last `longest − 1` bytes,
+ * so a secret split across chunks is found before any of its bytes leave.
+ */
+export class ReflectionFilter {
+	readonly #scanner: SecretScanner;
+	readonly #hold: number;
+	#held: Buffer = Buffer.alloc(0);
+
+	constructor(forms: readonly Buffer[]) {
+		this.#scanner = new SecretScanner(forms);
+		this.#hold = Math.max(0, this.#scanner.longest - 1);
+	}
+
+	push(chunk: Buffer): FilterStep {
+		const joined = Buffer.concat([this.#held, chunk]);
+
+		if (this.#scanner.contains(joined)) return { kind: "blocked" };
+
+		const emit = Math.max(0, joined.length - this.#hold);
+
+		this.#held = joined.subarray(emit);
+
+		return { kind: "pass", bytes: joined.subarray(0, emit) };
+	}
+
+	end(): Buffer {
+		const rest = this.#held;
+
+		this.#held = Buffer.alloc(0);
+
+		return rest;
+	}
+}
+
+export function credentialIdsOf(table: RouteTable): CredentialId[] {
+	return table.routes.flatMap((route) =>
+		route.credential === null ? [] : [route.credential.id],
+	);
+}
