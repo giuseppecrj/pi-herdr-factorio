@@ -4317,6 +4317,43 @@ describe("Orchestrator attempt limit at retry launch", () => {
 	});
 });
 
+describe("Orchestrator cap and claimed runs", () => {
+	it("starts a claimed run's first stage after the cap is lowered, without adding a slot holder", async () => {
+		const { github, clock, files, executor, start } = world();
+
+		github.add(labeled(14));
+		github.add(labeled(15));
+
+		const ensure = files.ensureWorkspace;
+
+		files.ensureWorkspace = async () => "unavailable";
+
+		const controller = start();
+		const waiting = await controller.tick();
+
+		assert.equal(executor.launches.length, 0);
+		assert.equal(waiting.active, 2);
+		assert.deepEqual(statuses(github, 14), ["1:claimed"]);
+
+		capAt(github, 1);
+		files.ensureWorkspace = ensure;
+		clock.t += 30_000;
+
+		const report = await controller.tick();
+
+		assert.equal(report.maxConcurrent, 1);
+		assert.equal(report.active, 2);
+		assert.equal(executor.launches.length, 2);
+		assert.deepEqual(
+			report.runs.map((run) => [run.issue, run.status]),
+			[
+				[14, "blocked"],
+				[15, "blocked"],
+			],
+		);
+	});
+});
+
 describe("acquireLock", () => {
 	const now = () => START;
 
