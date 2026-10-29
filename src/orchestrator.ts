@@ -101,6 +101,7 @@ type ConfirmedRecord = ClaimRecord & { readonly seq: number };
 type EndedRecord = {
 	readonly claim: ConfirmedRecord;
 	tick: number;
+	confirmed: boolean;
 	unwritten: boolean;
 };
 
@@ -354,16 +355,6 @@ type WorkspacePreparation =
 	| { readonly kind: "replayed_missing" }
 	| { readonly kind: "unavailable" };
 
-function claimStillHeld(
-	issueIsCandidate: boolean,
-	latestForRun: { readonly marker: Marker } | null,
-): boolean {
-	const runEnded =
-		latestForRun !== null && isTerminal(latestForRun.marker.status);
-
-	return issueIsCandidate && !runEnded;
-}
-
 function holdsSlot(run: ActiveRun): boolean {
 	return (
 		run.phase.kind === "claimed" ||
@@ -578,6 +569,7 @@ export class Orchestrator {
 				this.#ended.set(claim.runId, {
 					claim: { ...claim, seq },
 					tick: 0,
+					confirmed: false,
 					unwritten: false,
 				});
 			} else {
@@ -748,7 +740,7 @@ export class Orchestrator {
 			}
 
 			this.#localAhead(run.issue, ledger.value);
-			await this.#confirmEnd(run.issue, ledger.value);
+			this.#confirmEnd(run.issue, ledger.value);
 		}
 
 		const latest = latestReadyEntry(timeline.value);
@@ -831,25 +823,14 @@ export class Orchestrator {
 		});
 	}
 
-	async #confirmEnd(issue: number, ledger: CleanLedger): Promise<void> {
+	#confirmEnd(issue: number, ledger: CleanLedger): void {
 		const ledgerSeq = ledger.markers.at(-1)?.marker.seq ?? 0;
 
-		for (const [runId, ended] of this.#ended) {
+		for (const ended of this.#ended.values()) {
 			if (ended.claim.issue !== issue) continue;
 
-			if (ledgerSeq < ended.claim.seq) {
-				ended.tick = this.#ticks;
-				continue;
-			}
-
-			this.#ended.delete(runId);
-			await this.#input.files.removeClaim(runId);
-			this.#input.log("claim_removed", {
-				issue,
-				runId,
-				seq: ended.claim.seq,
-				status: ended.claim.status,
-			});
+			ended.tick = this.#ticks;
+			ended.confirmed ||= ledgerSeq >= ended.claim.seq;
 		}
 	}
 
@@ -859,7 +840,9 @@ export class Orchestrator {
 		for (const ended of this.#ended.values()) {
 			if (ended.unwritten) await this.#writeEnded(ended);
 
-			if (ended.tick < this.#ticks) issues.add(ended.claim.issue);
+			if (!ended.confirmed && ended.tick < this.#ticks) {
+				issues.add(ended.claim.issue);
+			}
 		}
 
 		for (const issue of issues) {
@@ -873,8 +856,25 @@ export class Orchestrator {
 			}
 
 			this.#localAhead(issue, ledger.value);
-			await this.#confirmEnd(issue, ledger.value);
+			this.#confirmEnd(issue, ledger.value);
 		}
+	}
+
+	async #keepEnded(claim: ConfirmedRecord, confirmed: boolean): Promise<void> {
+		const ended: EndedRecord = {
+			claim,
+			tick: this.#ticks,
+			confirmed,
+			unwritten: false,
+		};
+
+		this.#ended.set(claim.runId, ended);
+
+		if (claim.seq > (this.#local.get(claim.issue)?.seq ?? 0)) {
+			this.#local.set(claim.issue, claim);
+		}
+
+		await this.#writeEnded(ended);
 	}
 
 	async #writeEnded(ended: EndedRecord): Promise<void> {
@@ -1046,7 +1046,7 @@ export class Orchestrator {
 
 			this.state.corrupt.delete(issue);
 			this.#ledgerRead.add(issue);
-			await this.#confirmEnd(issue, ledger.value);
+			this.#confirmEnd(issue, ledger.value);
 
 			const local = this.#localAhead(issue, ledger.value);
 
@@ -1125,7 +1125,9 @@ export class Orchestrator {
 
 			const latest = latestFor(ledger, claim.runId);
 
-			if (!claimStillHeld(candidate, latest)) {
+			if (latest !== null && isTerminal(latest.marker.status)) {
+				await this.#keepEnded(recordOf(latest.marker), true);
+			} else if (!candidate) {
 				await this.#input.files.removeClaim(claim.runId);
 			}
 		}
@@ -1602,15 +1604,8 @@ export class Orchestrator {
 		await this.#publishMarker(run);
 
 		if (run.marked !== null && isTerminal(run.marked.status)) {
-			const ended: EndedRecord = {
-				claim: { ...claimOf(run), seq: run.seq },
-				tick: this.#ticks,
-				unwritten: false,
-			};
-
 			this.state.runs.delete(run.issue);
-			this.#ended.set(run.runId, ended);
-			await this.#writeEnded(ended);
+			await this.#keepEnded({ ...claimOf(run), seq: run.seq }, false);
 		} else if (run.seq !== before) {
 			await this.#writeClaim(run);
 		}
@@ -1769,6 +1764,19 @@ function claimOf(run: ActiveRun): ClaimRecord {
 		stage: run.marked?.stage ?? null,
 		attempt: run.marked?.attempt ?? null,
 		usage: run.marked?.usage ?? null,
+	};
+}
+
+function recordOf(marker: Marker): ConfirmedRecord {
+	return {
+		runId: marker.runId,
+		issue: marker.issue,
+		eventId: marker.eventId,
+		seq: marker.seq,
+		status: marker.status,
+		stage: marker.stage,
+		attempt: marker.attempt,
+		usage: marker.usage,
 	};
 }
 
