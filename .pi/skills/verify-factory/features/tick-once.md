@@ -58,6 +58,15 @@ Observed on 2026-10-29 at `b6acf4e`, on fixture #120 labeled by `giuseppecrj`:
 
 `marker_missing` was removed in F04c fix 5. The rows above are the behavior at `b6acf4e`.
 
+Observed on 2026-10-29 at `feb9173`, lane `F04c-fix5 1`, on fixtures #175, #176 and #177, each labeled by `giuseppecrj`:
+
+| Step | Exit | Result |
+| --- | --- | --- |
+| First tick | 0 | #175 and #176 `blocked`, seq 2 each; `queued=177`; claim records hold `seq: 2`, `status: blocked`, `stage: specify`, `attempt: 1` |
+| Fresh tick whose `gh` answers `[]` to #175's comments GET | 0 | `event=ledger_behind issue=175 ledgerSeq=0 localSeq=2`, `ledgerBehind=#175:0<2`; both runs `blocked` seq 2; `queued=177`; `corrupt=none`; `markersPosted=0`; no POST through the wrapper |
+| Normal fresh tick | 0 | the same runs and queue, `ledgerBehind=none`, `markersPosted=0` |
+| All three closed, then tick | 0 | `claim_released ... why=closed` and a `3:released` marker on #175 and #176, none on #177; no claim records left |
+
 ## Gotchas
 
 - Always pass `--issue`. Without it the tick reads every `factory:ready` issue in the repository and may claim one that another lane or the production controller owns.
