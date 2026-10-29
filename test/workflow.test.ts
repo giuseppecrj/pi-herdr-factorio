@@ -1487,6 +1487,33 @@ describe("YAML anchors and aliases", () => {
 	}
 });
 
+describe("anchor positions from YAML tokens", () => {
+	it("ignores an &p inside a comment", () => {
+		const error = errorOf(
+			frontMatter("polling: &p # see &p\n  interval_ms: 30000"),
+		);
+
+		assert.partialDeepStrictEqual(error, {
+			kind: "workflow_parse_error",
+			code: "ANCHOR_OR_ALIAS",
+			line: 3,
+			column: 10,
+		});
+		assert.match(error.message, /: anchor at line 3, column 10$/);
+	});
+
+	it("lists every anchor and alias at its own token", () => {
+		const error = errorOf(
+			frontMatter("# &a *a\na: &a [x] # &a\nb: *a # *a\nc: &c\n  d: 1"),
+		);
+
+		assert.equal(
+			error.message,
+			"anchors and aliases are not allowed: anchor at line 4, column 4; alias at line 5, column 4; anchor at line 6, column 4",
+		);
+	});
+});
+
 describe("valid reload onto a valid snapshot", () => {
 	it("replaces the snapshot and leaves the old one frozen and unchanged", async () => {
 		const nextText = `---

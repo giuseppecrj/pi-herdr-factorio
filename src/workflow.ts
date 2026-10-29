@@ -1,14 +1,13 @@
 import { isAbsolute, normalize } from "node:path/posix";
 import { getDefaults, Lexer } from "marked";
 import {
-	type Document,
-	isAlias,
+	CST,
 	isMap,
 	isScalar,
 	LineCounter,
 	type ParsedNode,
+	Parser,
 	parseDocument,
-	visit,
 	type YAMLError,
 } from "yaml";
 import { type Digest, digestOf, type Stage } from "./run.ts";
@@ -802,11 +801,7 @@ export function parseWorkflow(input: {
 
 	if (problem !== undefined) return invalid(yamlError(problem, lineCounter));
 
-	const references = anchorsAndAliases(
-		document,
-		split.frontMatter,
-		lineCounter,
-	);
+	const references = anchorsAndAliases(split.frontMatter, lineCounter);
 
 	const first = references[0];
 
@@ -876,34 +871,49 @@ type Reference = {
 	readonly column: number;
 };
 
+/** Finds anchors and aliases from CST token offsets, so comments never count. */
 function anchorsAndAliases(
-	document: Document.Parsed,
 	source: string,
 	lineCounter: LineCounter,
 ): Reference[] {
-	const found: Reference[] = [];
+	const offsets: { what: Reference["what"]; offset: number }[] = [];
 
-	const push = (what: Reference["what"], offset: number): void => {
-		const { line, col } = lineCounter.linePos(offset);
-
-		found.push({ what, line, column: col });
+	const anchors = (tokens: readonly CST.Token[] | undefined): void => {
+		for (const token of tokens ?? []) {
+			if (token.type === "anchor") {
+				offsets.push({ what: "anchor", offset: token.offset });
+			}
+		}
 	};
 
-	visit(document, {
-		Node: (_key, node) => {
-			const start = node.range?.[0] ?? 0;
+	const node = (token: CST.Token | null | undefined): void => {
+		if (token?.type === "alias") {
+			offsets.push({ what: "alias", offset: token.offset });
+		}
 
-			if (isAlias(node)) {
-				push("alias", start);
-			} else if (node.anchor !== undefined) {
-				const offset = source.lastIndexOf(`&${node.anchor}`, start);
+		if (token !== null && token !== undefined && "props" in token) {
+			anchors(token.props);
+		}
+	};
 
-				push("anchor", offset === -1 ? start : offset);
-			}
-		},
-	});
+	for (const token of new Parser().parse(source)) {
+		if (token.type !== "document") continue;
 
-	return found;
+		CST.visit(token, (item) => {
+			anchors(item.start);
+			anchors(item.sep);
+			node(item.key);
+			node(item.value);
+		});
+	}
+
+	return offsets
+		.toSorted((left, right) => left.offset - right.offset)
+		.map(({ what, offset }) => {
+			const { line, col } = lineCounter.linePos(offset);
+
+			return { what, line, column: col };
+		});
 }
 
 function redactError(error: WorkflowError): WorkflowError {
