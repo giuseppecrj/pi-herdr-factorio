@@ -445,7 +445,6 @@ export class Orchestrator {
 	#ticks = 0;
 	#tickAt = 0;
 	readonly #recover = new Set<number>();
-	/** Issues with an active claim record not yet adopted, released or dropped. Each holds a slot. */
 	readonly #reserved = new Set<number>();
 	/** Issues whose claim this tick confirmed eligible. Only these launch. */
 	readonly #confirmed = new Set<number>();
@@ -837,7 +836,6 @@ export class Orchestrator {
 		});
 	}
 
-	/** Removes the ended records of `issue` whose marker, or a later one, this ledger shows. */
 	async #confirmEnd(issue: number, ledger: CleanLedger): Promise<void> {
 		const ledgerSeq = ledger.markers.at(-1)?.marker.seq ?? 0;
 
@@ -860,10 +858,6 @@ export class Orchestrator {
 		}
 	}
 
-	/**
-	 * Retries unwritten ended records, then reads the ledger of every issue
-	 * whose ended record was neither posted nor read this tick.
-	 */
 	async #confirmEnds(): Promise<void> {
 		const issues = new Set<number>();
 
@@ -899,7 +893,6 @@ export class Orchestrator {
 		}
 	}
 
-	/** Whether the winning local state for `runId` is terminal: that event never runs again. */
 	#endedLocally(issue: number, runId: Digest): boolean {
 		const local = this.#local.get(issue);
 
@@ -1120,7 +1113,6 @@ export class Orchestrator {
 		return [...this.state.runs.values()].filter(holdsSlot).length;
 	}
 
-	/** Whether adopting a run at `status` keeps the active count within the cap. */
 	#fits(status: RunStatus): boolean {
 		return (
 			(status !== "claimed" && status !== "blocked") ||
