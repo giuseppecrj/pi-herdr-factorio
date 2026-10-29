@@ -792,6 +792,48 @@ describe("server/cli.ts as a process", () => {
 	});
 });
 
+describe("server/cli.ts spawn-failure classification", () => {
+	const entry = fileURLToPath(new URL("../server/cli.ts", import.meta.url));
+
+	it("keeps a gh that overflows maxBuffer an ordinary failure", () => {
+		const source = readFileSync(entry, "utf8");
+		const limit = /maxBuffer:\s*(\d+)\s*\*\s*1024\s*\*\s*1024/.exec(source);
+
+		assert.ok(limit?.[1], "maxBuffer not found in server/cli.ts");
+
+		const overflow = (Number(limit[1]) + 1) * 1024 * 1024;
+		const binPath = mkdtempSync(join(tmpdir(), "factory-gh-overflow-"));
+
+		try {
+			writeFileSync(
+				join(binPath, "gh"),
+				`#!/bin/sh\ncase "$*" in\n*--jq*) echo ${mainSha};;\n*) head -c ${overflow} /dev/zero | tr '\\0' x;;\nesac\n`,
+				{ mode: 0o755 },
+			);
+
+			const run = spawnSync(
+				process.execPath,
+				[entry, "status", "--json", "--repo", repo],
+				{ encoding: "utf8", env: { PATH: `${binPath}:/usr/bin:/bin` } },
+			);
+
+			assert.equal(run.status, EXIT.ok, run.stderr);
+
+			const report = JSON.parse(run.stdout);
+
+			assert.equal(report.workflowError.kind, "missing_workflow_file");
+			assert.equal(
+				report.workflowError.message,
+				"cannot fetch .github/factory/WORKFLOW.md: gh failed",
+			);
+			assert.notEqual(report.workflowError.message, "cannot run gh");
+			assert.equal(report.workflowSha, mainSha);
+		} finally {
+			rmSync(binPath, { recursive: true, force: true });
+		}
+	});
+});
+
 describe("server/cli.ts", () => {
 	const repoArgs = ["--json", "--repo", repo];
 	const trusted = new Map([["main", { sha: mainSha, text: valid }]]);
