@@ -2541,6 +2541,83 @@ describe("Orchestrator terminal claim records", () => {
 	});
 });
 
+describe("Orchestrator persisted claim slots", () => {
+	it("holds the slot of a claim whose recovery read failed, and adopts it later within the cap", async () => {
+		const { github, clock, start } = world();
+
+		github.add(labeled(14));
+		github.add(labeled(15));
+		github.add(labeled(16));
+		await start().tick();
+		clock.t += 30_000;
+		github.failures.set(
+			`repos/${FAKE_REPO}/issues/14/comments`,
+			networkError(),
+		);
+
+		const controller = start();
+		const failed = await controller.tick();
+
+		assert.deepEqual(runIssues(failed), [15]);
+		assert.deepEqual(failed.queued, [16]);
+		assert.deepEqual(statuses(github, 16), []);
+
+		github.failures.clear();
+		clock.t += 30_000;
+
+		const next = await controller.tick();
+
+		assert.deepEqual(runIssues(next), [14, 15]);
+		assert.deepEqual(next.queued, [16]);
+		assert.equal(next.maxConcurrent, 2);
+		assert.deepEqual(statuses(github, 16), []);
+	});
+
+	it("adopts a claim whose corrupt ledger heals only when a slot is free", async () => {
+		const { github, clock, start } = world();
+		const issue = github.add(labeled(14));
+		const other = github.add(labeled(15));
+
+		github.add(labeled(16));
+
+		const controller = start();
+
+		await controller.tick();
+		clock.t += 30_000;
+		await controller.tick();
+
+		const blocked = issue.comments[1];
+
+		assert.ok(blocked);
+		blocked.lastEditedAt = "2026-10-29T02:01:00Z";
+		issue.updatedAt = "2026-10-29T02:01:00Z";
+		clock.t += 60_000;
+
+		const dropped = await controller.tick();
+
+		assert.deepEqual(dropped.corrupt, [{ issue: 14, defect: "edited" }]);
+		assert.deepEqual(runIssues(dropped), [15, 16]);
+
+		issue.comments.pop();
+		issue.updatedAt = "2026-10-29T02:02:00Z";
+		clock.t += 60_000;
+
+		const healed = await controller.tick();
+
+		assert.deepEqual(healed.corrupt, []);
+		assert.deepEqual(runIssues(healed), [15, 16]);
+
+		other.state = "closed";
+		other.updatedAt = "2026-10-29T02:03:00Z";
+		clock.t += 60_000;
+
+		const freed = await controller.tick();
+
+		assert.deepEqual(runIssues(freed), [14, 16]);
+		assert.deepEqual(statuses(github, 14), ["1:claimed"]);
+	});
+});
+
 describe("Orchestrator claim record usage", () => {
 	it("keeps the recorded usage when the ledger is behind, so the run budget still ends the run", async () => {
 		const ctx = world();

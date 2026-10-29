@@ -445,6 +445,8 @@ export class Orchestrator {
 	#ticks = 0;
 	#tickAt = 0;
 	readonly #recover = new Set<number>();
+	/** Issues with an active claim record not yet adopted, released or dropped. Each holds a slot. */
+	readonly #reserved = new Set<number>();
 	/** Issues whose claim this tick confirmed eligible. Only these launch. */
 	readonly #confirmed = new Set<number>();
 	/** Issues whose marker ledger this tick read clean. */
@@ -584,6 +586,8 @@ export class Orchestrator {
 					tick: 0,
 					unwritten: false,
 				});
+			} else {
+				this.#reserved.add(claim.issue);
 			}
 		}
 
@@ -1021,10 +1025,12 @@ export class Orchestrator {
 		);
 
 		for (const issue of this.#recover) {
-			if (records.has(issue) || this.state.runs.has(issue)) {
-				this.#recover.delete(issue);
+			if (this.state.runs.has(issue)) {
+				this.#resolve(issue);
 				continue;
 			}
+
+			if (records.has(issue)) continue;
 
 			const read = await this.#adapter.readIssue(issue);
 
@@ -1044,9 +1050,8 @@ export class Orchestrator {
 
 			if (ledger.kind === "failed") continue;
 
-			this.#recover.delete(issue);
-
 			if (ledger.value.kind === "corrupt") {
+				this.#resolve(issue);
 				this.#markCorrupt(issue, ledger.value, record.updatedAt);
 				continue;
 			}
@@ -1064,7 +1069,15 @@ export class Orchestrator {
 
 			if (local !== null && current === null) continue;
 
+			const candidate = record.open && candidates.includes(record);
+
 			if (current !== null && !isTerminal(current.status)) {
+				if (candidate && !this.#fits(current.status)) {
+					this.#recover.add(issue);
+					this.#reserved.add(issue);
+					continue;
+				}
+
 				const adopted = await this.#adoptExistingRun({
 					marker: current,
 					ledger: ledger.value,
@@ -1072,10 +1085,17 @@ export class Orchestrator {
 					updatedAt: record.updatedAt,
 				});
 
-				if (adopted === null || this.state.runs.has(issue)) continue;
+				if (adopted === null) {
+					if (this.state.corrupt.has(issue)) this.#resolve(issue);
+					continue;
+				}
+
+				this.#resolve(issue);
+
+				if (this.state.runs.has(issue)) continue;
 			}
 
-			const candidate = record.open && candidates.includes(record);
+			this.#resolve(issue);
 
 			await this.#forgetClaims(ledger.value, issue, candidate);
 
@@ -1089,6 +1109,23 @@ export class Orchestrator {
 				ledger: ledger.value,
 			});
 		}
+	}
+
+	#resolve(issue: number): void {
+		this.#recover.delete(issue);
+		this.#reserved.delete(issue);
+	}
+
+	#active(): number {
+		return [...this.state.runs.values()].filter(holdsSlot).length;
+	}
+
+	/** Whether adopting a run at `status` keeps the active count within the cap. */
+	#fits(status: RunStatus): boolean {
+		return (
+			(status !== "claimed" && status !== "blocked") ||
+			this.#active() < limitsOf(this.#config).maxConcurrent
+		);
 	}
 
 	async #forgetClaims(
@@ -1214,10 +1251,11 @@ export class Orchestrator {
 		const { now, limits } = input;
 		const runs = [...this.state.runs.values()];
 
-		let slots = Math.max(
-			limits.maxConcurrent - runs.filter(holdsSlot).length,
-			0,
-		);
+		const reserved = [...this.#reserved].filter(
+			(issue) => !this.state.runs.has(issue),
+		).length;
+
+		let slots = Math.max(limits.maxConcurrent - this.#active() - reserved, 0);
 
 		for (const run of runs) {
 			if (
