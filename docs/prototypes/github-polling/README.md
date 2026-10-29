@@ -203,7 +203,7 @@ The lookup is case-insensitive. `GET repos/giuseppecrj/pi-herdr-factorio/labels/
 
 From these results, admission binds a `factory:ready` label event at time `L` to a body as follows:
 
-1. If `lastEditedAt` is `null` or earlier than `L`, the current body is the label-time body.
+1. If `lastEditedAt` is `null` or earlier than `L`, the current body is the label-time body, unless `userContentEdits` contradicts it: a node with `editedAt` at or after `L` or after `lastEditedAt`, or, with `lastEditedAt` `null`, any node other than the original.
 2. Otherwise, use `userContentEdits` only when all of these hold. `totalCount` equals the number of nodes returned, `includesCreatedEdit` is `true`, the newest node's `diff` equals the current body and its `editedAt` equals `lastEditedAt`, no node has `editedAt` equal to `L`, and exactly one node has the latest `editedAt` earlier than `L`, with a `diff` and no `deletedAt`. That node's `diff` is the label-time body.
 3. Any other case is `ambiguous_snapshot`, and admission refuses.
 

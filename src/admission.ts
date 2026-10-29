@@ -40,6 +40,7 @@ export type Ambiguity =
 	| "rename_history_incomplete"
 	| "title_changed_between_reads"
 	| "edited_at_label_time"
+	| "history_contradicts_last_edit"
 	| "history_incomplete"
 	| "history_without_original"
 	| "history_disagrees_with_body"
@@ -177,7 +178,25 @@ export function labelTimeSnapshot(input: {
 		return ambiguous("title_changed_between_reads");
 	}
 
-	if (history.lastEditedAt === null || history.lastEditedAt < labelAt) {
+	const { lastEditedAt } = history;
+
+	if (lastEditedAt === null || lastEditedAt < labelAt) {
+		const editedAt = history.versions.map((version) => version.editedAt);
+
+		if (editedAt.includes(labelAt)) return ambiguous("edited_at_label_time");
+
+		const originals = history.includesCreatedEdit ? 1 : 0;
+		const count = Math.max(history.totalVersions, editedAt.length);
+
+		if (
+			editedAt.some((at) => at > labelAt) ||
+			(lastEditedAt === null
+				? count > originals
+				: editedAt.some((at) => at > lastEditedAt))
+		) {
+			return ambiguous("history_contradicts_last_edit");
+		}
+
 		return {
 			kind: "proved",
 			source: "unedited",
@@ -196,10 +215,7 @@ export function labelTimeSnapshot(input: {
 
 	const [newest] = versions;
 
-	if (
-		newest?.text !== history.body ||
-		newest.editedAt !== history.lastEditedAt
-	) {
+	if (newest?.text !== history.body || newest.editedAt !== lastEditedAt) {
 		return ambiguous("history_disagrees_with_body");
 	}
 

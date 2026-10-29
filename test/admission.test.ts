@@ -489,13 +489,124 @@ describe("label-time snapshot", () => {
 			issueTitle,
 		});
 
-	it("uses the current body when it was last edited before the label", () => {
-		assert.deepEqual(bind(history({ lastEditedAt: "2026-10-29T01:21:31Z" })), {
+	const editedBeforeLabel = history({
+		body: "v2",
+		lastEditedAt: "2026-10-29T01:21:31Z",
+		totalVersions: 2,
+		versions: versions(
+			["2026-10-29T01:21:31Z", "v2"],
+			["2026-10-29T01:21:21Z", "v1"],
+		),
+	});
+
+	const neverEdited = history({
+		lastEditedAt: null,
+		includesCreatedEdit: false,
+		totalVersions: 0,
+		versions: [],
+	});
+
+	it("uses the current body when its history ends before the label", () => {
+		assert.deepEqual(bind(editedBeforeLabel), {
+			kind: "proved",
+			source: "unedited",
+			snapshot: { title: "T", body: "v2" },
+		});
+		assert.deepEqual(bind(neverEdited), {
 			kind: "proved",
 			source: "unedited",
 			snapshot: { title: "T", body: "v3" },
 		});
-		assert.equal(bind(history({ lastEditedAt: null })).kind, "proved");
+		assert.equal(
+			bind(
+				history({
+					lastEditedAt: null,
+					totalVersions: 1,
+					versions: versions(["2026-10-29T01:21:21Z", "v3"]),
+				}),
+			).kind,
+			"proved",
+		);
+	});
+
+	it("refuses the unedited shortcut when its history contradicts it", () => {
+		const cases: [BodyHistory, string][] = [
+			[
+				history({ lastEditedAt: "2026-10-29T01:21:31Z" }),
+				"history_contradicts_last_edit",
+			],
+			[
+				history({
+					lastEditedAt: "2026-10-29T01:21:31Z",
+					totalVersions: 2,
+					versions: versions(
+						["2026-10-29T01:21:31Z", "v3"],
+						["2026-10-29T01:21:35Z", "v1"],
+					),
+				}),
+				"history_contradicts_last_edit",
+			],
+			[
+				history({
+					lastEditedAt: "2026-10-29T01:21:31Z",
+					totalVersions: 2,
+					versions: versions(
+						["2026-10-29T01:21:38Z", "v3"],
+						["2026-10-29T01:21:21Z", "v1"],
+					),
+				}),
+				"edited_at_label_time",
+			],
+			[history({ lastEditedAt: null }), "history_contradicts_last_edit"],
+			[
+				history({
+					lastEditedAt: null,
+					includesCreatedEdit: false,
+					totalVersions: 1,
+					versions: versions(["2026-10-29T01:21:21Z", "v3"]),
+				}),
+				"history_contradicts_last_edit",
+			],
+			[
+				history({
+					lastEditedAt: null,
+					totalVersions: 2,
+					versions: versions(["2026-10-29T01:21:21Z", "v3"]),
+				}),
+				"history_contradicts_last_edit",
+			],
+			[
+				history({
+					lastEditedAt: null,
+					totalVersions: 1,
+					versions: versions(["2026-10-29T01:21:40Z", "v3"]),
+				}),
+				"history_contradicts_last_edit",
+			],
+		];
+
+		for (const [h, detail] of cases) {
+			assert.deepEqual(bind(h), { kind: "ambiguous", detail }, detail);
+		}
+	});
+
+	it("refuses a never-edited issue that reports body versions through the adapter", async () => {
+		const github = new FakeGitHub();
+
+		github.add(
+			labeledBy("writer", {
+				lastEditedAt: null,
+				includesCreatedEdit: true,
+				versions: [
+					{ editedAt: "2026-10-29T01:30:00Z", deletedAt: null, diff: "new" },
+					{ editedAt: "2026-10-29T01:00:00Z", deletedAt: null, diff: "old" },
+				],
+			}),
+		);
+
+		assert.deepEqual((await admit(github)).reasons, [
+			{ kind: "ambiguous_snapshot", detail: "history_contradicts_last_edit" },
+		]);
 	});
 
 	it("proves the label-time body from history when edited after the label", () => {
