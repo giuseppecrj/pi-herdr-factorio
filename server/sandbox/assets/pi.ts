@@ -11,10 +11,16 @@ export const PI_AGENT_DIR = "/run/pi-agent";
 export const PI_CLI =
 	"/opt/factory/pkg/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js";
 
+/**
+ * Always added. `--no-extensions` stops Pi loading anything from the
+ * writable agent dir's `extensions/`; an explicit `-e`, which the allowlist
+ * limits to the bundled child extension, still loads.
+ */
 export const FORCED_PI_FLAGS = [
 	"--no-mcp",
 	"--no-approve",
 	"--no-context-files",
+	"--no-extensions",
 ] as const;
 
 /**

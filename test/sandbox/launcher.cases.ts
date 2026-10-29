@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	realpathSync,
@@ -45,7 +47,8 @@ import {
 	scopeUnit,
 	stopScopeArgv,
 } from "../../server/sandbox/scope.ts";
-import { sandboxExecutor } from "../../server/sandbox.ts";
+import { sandboxExecutor, sandboxHost } from "../../server/sandbox.ts";
+import type { StageReceipt } from "../../server/sandbox/result.ts";
 import {
 	AUDIT_ARCH,
 	decodeProgram,
@@ -756,6 +759,75 @@ describe("seccomp filter", () => {
 
 describe("pi wrapper", () => {
 	const allowed = ["read", "bash", "subagent", "caller_ping"];
+	const F = FORCED_PI_FLAGS.length;
+
+	it("forces --no-extensions, so Pi loads nothing from the writable agent dir's extensions/", () => {
+		assert.deepEqual(
+			[...FORCED_PI_FLAGS],
+			["--no-mcp", "--no-approve", "--no-context-files", "--no-extensions"],
+		);
+
+		const wrapped = wrapPiArgv(["--mode", "rpc"], allowed);
+
+		assert.ok(wrapped.ok);
+		assert.ok(wrapped.argv.includes("--no-extensions"));
+	});
+
+	it("with the forced flags, a real Pi 1.4.0 skips <agentDir>/extensions/ and still loads an explicit -e", {
+		timeout: 60_000,
+	}, async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-pi-ext-"));
+
+		const cli = new URL(
+			"../../node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js",
+			import.meta.url,
+		).pathname;
+
+		const marker = (name: string) =>
+			`import { writeFileSync } from "node:fs";\nexport default function () { writeFileSync(${JSON.stringify(join(dir, name))}, "1"); }\n`;
+
+		try {
+			mkdirSync(join(dir, "agent", "extensions"), { recursive: true });
+			mkdirSync(join(dir, "work"));
+			writeFileSync(join(dir, "agent", "settings.json"), "{}\n");
+			writeFileSync(
+				join(dir, "agent", "extensions", "planted.js"),
+				marker("planted"),
+			);
+			writeFileSync(join(dir, "explicit.js"), marker("explicit"));
+
+			const wrapped = wrapPiArgv(["--mode", "rpc", "--offline"], []);
+
+			assert.ok(wrapped.ok);
+
+			const child = spawn(
+				process.execPath,
+				[cli, ...wrapped.argv, "-e", join(dir, "explicit.js")],
+				{
+					cwd: join(dir, "work"),
+					stdio: ["pipe", "ignore", "ignore"],
+					env: {
+						PATH: process.env.PATH ?? "/usr/bin:/bin",
+						HOME: dir,
+						PI_CODING_AGENT_DIR: join(dir, "agent"),
+						PI_OFFLINE: "1",
+					},
+				},
+			);
+
+			const exited = new Promise<number | null>((done) =>
+				child.on("exit", (code) => done(code)),
+			);
+
+			child.stdin.end();
+			await exited;
+
+			assert.equal(existsSync(join(dir, "explicit")), true, "explicit -e");
+			assert.equal(existsSync(join(dir, "planted")), false, "agent dir");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 
 	it("forces the hardening flags onto a child launched by name", () => {
 		const child = [
@@ -775,8 +847,8 @@ describe("pi wrapper", () => {
 		const wrapped = wrapPiArgv(child, allowed);
 
 		assert.ok(wrapped.ok);
-		assert.deepEqual(wrapped.argv.slice(0, 3), [...FORCED_PI_FLAGS]);
-		assert.deepEqual(wrapped.argv.slice(3), [
+		assert.deepEqual(wrapped.argv.slice(0, F), [...FORCED_PI_FLAGS]);
+		assert.deepEqual(wrapped.argv.slice(F), [
 			"--tools",
 			"read,caller_ping",
 			"--session",
@@ -798,10 +870,10 @@ describe("pi wrapper", () => {
 		const defaulted = wrapPiArgv(["--mode", "rpc"], allowed);
 
 		assert.ok(narrowed.ok && joined.ok && none.ok && defaulted.ok);
-		assert.deepEqual(narrowed.argv.slice(3, 5), ["--tools", "read"]);
-		assert.deepEqual(joined.argv.slice(3, 5), ["--tools", "bash"]);
-		assert.deepEqual(none.argv.slice(3, 4), ["--no-tools"]);
-		assert.deepEqual(defaulted.argv.slice(3, 5), [
+		assert.deepEqual(narrowed.argv.slice(F, F + 2), ["--tools", "read"]);
+		assert.deepEqual(joined.argv.slice(F, F + 2), ["--tools", "bash"]);
+		assert.deepEqual(none.argv.slice(F, F + 1), ["--no-tools"]);
+		assert.deepEqual(defaulted.argv.slice(F, F + 2), [
 			"--tools",
 			"read,bash,subagent,caller_ping",
 		]);
@@ -884,7 +956,7 @@ describe("pi wrapper", () => {
 		);
 
 		assert.ok(stage.ok && prompted.ok);
-		assert.deepEqual(stage.argv.slice(5), [
+		assert.deepEqual(stage.argv.slice(F + 2), [
 			"--mode",
 			"rpc",
 			"--session-dir",
@@ -892,7 +964,7 @@ describe("pi wrapper", () => {
 			"--model",
 			"openai/gpt-6.1-sol",
 		]);
-		assert.deepEqual(prompted.argv.slice(5), [
+		assert.deepEqual(prompted.argv.slice(F + 2), [
 			"--session",
 			"/run/pi-agent/sessions/x.jsonl",
 			"--extension",
@@ -1227,6 +1299,97 @@ describe("preflight", () => {
 			assert.equal(await spent("specify", 2), 427);
 			assert.equal(await spent("specify", 3), null);
 			assert.equal(await spent("build", 1), null);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("counts every execution dir of an attempt, a replay's included, once each", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-spent-replay-"));
+
+		try {
+			const receipt = (total: number): StageReceipt => ({
+				version: 1,
+				runId: runDigest(RUN),
+				stage: "specify",
+				attempt: 1,
+				outcome: { kind: "failed", exit: "aborted" },
+				settlement: { event: "none", aborted: null },
+				models: { requested: modelId("openai/gpt-6.1-sol"), observed: null },
+				fallback: null,
+				refusal: null,
+				wallMs: 1,
+				turns: 1,
+				usage: {
+					total,
+					parent: total,
+					children: 0,
+					byModel: {},
+					gateway: total,
+					unreadChildren: 0,
+				},
+				egress: null,
+				stderr: [],
+				assetsDigest: "e".repeat(64),
+				versions: {
+					pi: "1.4.0",
+					piHerdrAgents: "3.3.1",
+					piHerdrPstack: "0.5.0",
+				},
+				pricing: "unavailable",
+			});
+
+			const host = () =>
+				sandboxHost({
+					stateDir: dir,
+					bundleDir: join(dir, "bundle"),
+					workspace: dir,
+					runId: runDigest(RUN),
+					stage: "specify",
+					attempt: 1,
+					tools: [],
+					arch: "x86_64",
+					xdgRuntimeDir: "/run/user/1000",
+					assetsDigest: "e".repeat(64),
+					versions: {
+						pi: "1.4.0",
+						piHerdrAgents: "3.3.1",
+						piHerdrPstack: "0.5.0",
+					},
+					exec: async () => ({ stdout: "", stderr: "", code: 0 }),
+				});
+
+			assert.equal(await host().writeReceipt(receipt(50)), true);
+			assert.equal(await host().writeReceipt(receipt(700)), true);
+
+			const third = join(dir, "stages", RUN, "specify-1.3");
+
+			host();
+			writeFileSync(
+				join(third, "egress.jsonl"),
+				'{"inputTokens":20,"outputTokens":5}\n',
+			);
+			mkdirSync(join(dir, "stages", RUN, "specify-10"));
+			writeFileSync(
+				join(dir, "stages", RUN, "specify-10", "egress.jsonl"),
+				'{"inputTokens":9000,"outputTokens":0}\n',
+			);
+
+			const executor = sandboxExecutor({
+				stateDir: dir,
+				xdgRuntimeDir: "/run/user/1000",
+				log: () => {},
+				exec: async () => ({ stdout: "", stderr: "", code: 0 }),
+			});
+
+			assert.equal(
+				await executor.spent({
+					runId: runDigest(RUN),
+					stage: "specify",
+					attempt: 1,
+				}),
+				775,
+			);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

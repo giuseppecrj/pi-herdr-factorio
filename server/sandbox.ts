@@ -173,7 +173,7 @@ type StageRun = {
 	readonly gateway: GatewayHandle;
 	readonly ledger: Ledger;
 	readonly deadline: number;
-	readonly wallEnd: number;
+	readonly cleanup: CleanupWindow;
 	gateReason: CloseReason | null;
 	alert: FailedExit | null;
 	listener: ((event: ControlEvent) => void) | null;
@@ -244,25 +244,60 @@ function overCap(stage: StageRun): BudgetCap | null {
 	return total > stage.input.remainingRunTokens ? "run_tokens" : null;
 }
 
-type Bounded = (promise: Promise<unknown>, capMs?: number) => Promise<boolean>;
-
 /**
- * One absolute window for a run of cleanup waits: the cleanup reserve, cut
- * short by the stage's own wall end. Each wait ends when the window does,
- * whatever its own cap.
+ * The stage's one cleanup window. It opens at the first cleanup wait, or at
+ * the abort if that comes first, and ends one cleanup reserve later, cut
+ * short by the stage's wall end. Session cleanup, gateway shutdown and
+ * receipt preparation all wait inside it, so cleanup ends within the
+ * reserve of an abort. Only a fallback session, which starts after the
+ * primary's cleanup and before any abort, opens it again.
  */
-function cleanupWindow(stage: Pick<StageRun, "host" | "wallEnd">): Bounded {
-	const { host } = stage;
+class CleanupWindow {
+	readonly #host: StageHost;
+	readonly #wallEnd: number;
+	#until: number | null = null;
+	#aborted = false;
 
-	const ms = Math.max(
-		0,
-		Math.min(stage.wallEnd - host.now(), host.cleanupReserveMs),
-	);
+	constructor(host: StageHost, wallEnd: number, signal: AbortSignal) {
+		this.#host = host;
+		this.#wallEnd = wallEnd;
 
-	const until = Date.now() + ms;
+		const onAbort = () => {
+			this.#aborted = true;
+			this.#open();
+		};
 
-	return (promise, capMs = Number.POSITIVE_INFINITY) =>
-		waitFor(promise, Math.min(capMs, until - Date.now()));
+		if (signal.aborted) onAbort();
+		else signal.addEventListener("abort", onAbort, { once: true });
+	}
+
+	#open(): number {
+		if (this.#until === null) {
+			const ms = Math.max(
+				0,
+				Math.min(this.#wallEnd - this.#host.now(), this.#host.cleanupReserveMs),
+			);
+
+			this.#until = Date.now() + ms;
+		}
+
+		return this.#until;
+	}
+
+	/** Lets a fallback session's cleanup have its own reserve, unless the stage was aborted. */
+	reopen(): void {
+		if (!this.#aborted) this.#until = null;
+	}
+
+	/** Waits for `promise` until the window ends or `capMs` passes; true when it settled. */
+	wait(
+		promise: Promise<unknown>,
+		capMs = Number.POSITIVE_INFINITY,
+	): Promise<boolean> {
+		const until = this.#open();
+
+		return waitFor(promise, Math.min(capMs, until - Date.now()));
+	}
 }
 
 const NOT_STARTED: Settlement = { event: "none", aborted: null };
@@ -293,10 +328,21 @@ async function runSession(
 	const pi = await host.launchPi(model, session);
 
 	if (pi === null) {
-		await cleanupWindow(stage)(host.stopSandbox(session));
+		await stage.cleanup.wait(host.stopSandbox(session));
 
 		return plainReport(CRASHED);
 	}
+
+	let pipeBroken = false;
+
+	// A write to a Pi that closed its command pipe fails asynchronously.
+	// Without a listener that error would end the whole controller.
+	pi.stdin.on("error", () => {
+		pipeBroken = true;
+		brokenPipe();
+	});
+
+	let brokenPipe = () => {};
 
 	const tracker = new SessionTracker(
 		PROMPT_ID,
@@ -371,6 +417,8 @@ async function runSession(
 
 		const onAbort = () => end({ kind: "failed", exit: "aborted" });
 
+		brokenPipe = () => end(CRASHED);
+
 		const remaining = stage.deadline - host.now();
 		const deadline = setTimeout(() => capped("wall"), Math.max(0, remaining));
 		const splitter = new LineSplitter(64 * 1024 * 1024);
@@ -437,12 +485,15 @@ async function runSession(
 		pi.stdout.on("error", () => end(CRASHED));
 		pi.exited.then(() => end(CRASHED));
 
+		if (pipeBroken) end(CRASHED);
+
 		if (!finished) {
 			sendCommand(pi, { id: PROMPT_ID, type: "prompt", message: input.prompt });
 		}
 	});
 
-	const bounded = cleanupWindow(stage);
+	const bounded = (promise: Promise<unknown>, capMs?: number) =>
+		stage.cleanup.wait(promise, capMs);
 
 	if (report !== "settled") {
 		const reason =
@@ -520,7 +571,7 @@ async function guardedSession(
 	try {
 		return await runSession(stage, model, session);
 	} catch {
-		await cleanupWindow(stage)(
+		await stage.cleanup.wait(
 			Promise.resolve().then(() => stage.host.stopSandbox(session)),
 		);
 
@@ -566,18 +617,22 @@ export async function runStage(
 	const sessions: number[] = [];
 	let gatewayRan = false;
 
+	const cleanup = new CleanupWindow(
+		host,
+		started + budget.wallMs,
+		input.signal,
+	);
+
 	const receipt = async (
 		primary: SessionReport,
 		fallback: FallbackRecord | null,
 		egress: StageReceipt["egress"],
 	): Promise<StageResult> => {
-		const bounded = cleanupWindow({ host, wallEnd: started + budget.wallMs });
-
 		const stderr = await Promise.all(
 			sessions.map(async (session) => {
 				const log = host.stderrLog(session).catch(() => null);
 
-				return (await bounded(log)) ? log : null;
+				return (await cleanup.wait(log)) ? log : null;
 			}),
 		);
 
@@ -648,7 +703,7 @@ export async function runStage(
 		gateway,
 		ledger,
 		deadline: started + budget.wallMs - host.cleanupReserveMs,
-		wallEnd: started + budget.wallMs,
+		cleanup,
 		gateReason: null,
 		alert: null,
 		listener: null,
@@ -695,6 +750,8 @@ export async function runStage(
 
 		if (switched) sessions.push(1);
 
+		cleanup.reopen();
+
 		const second = switched
 			? await guardedSession(stage, input.settings.fallback, 1)
 			: plainReport(CRASHED);
@@ -712,7 +769,7 @@ export async function runStage(
 		.shutdown()
 		.catch(() => null);
 
-	const closed = await cleanupWindow(stage)(shutdown);
+	const closed = await cleanup.wait(shutdown);
 
 	if (!closed) gateway.kill();
 
@@ -1093,10 +1150,9 @@ async function boundedText(path: string, cap: number): Promise<string | null> {
 }
 
 /**
- * Tokens one stage attempt is known to have used, from host-side files
- * only: the receipt's `usage.total`, else the sum of the gateway's metered
- * tokens in `egress.jsonl`. A line cut short by a crash is skipped. `null`
- * when the attempt left neither file.
+ * Tokens one stage attempt is known to have used: the sum over each of its
+ * execution dirs, `<stage>-<attempt>` and any replay `<stage>-<attempt>.<n>`,
+ * each counted once. `null` when no dir left a receipt or an audit.
  */
 async function attemptSpent(
 	stateDir: string,
@@ -1104,8 +1160,39 @@ async function attemptSpent(
 	stage: ModelStage,
 	attempt: number,
 ): Promise<number | null> {
-	const dir = join(stateDir, "stages", runId, `${stage}-${attempt}`);
+	const base = `${stage}-${attempt}`;
+	const root = join(stateDir, "stages", runId);
+	let names: string[];
 
+	try {
+		names = readdirSync(root);
+	} catch {
+		return null;
+	}
+
+	let total: number | null = null;
+
+	for (const name of names) {
+		const replay =
+			name.startsWith(`${base}.`) && /^\d+$/.test(name.slice(base.length + 1));
+
+		if (name !== base && !replay) continue;
+
+		const spent = await executionSpent(join(root, name));
+
+		if (spent !== null) total = (total ?? 0) + spent;
+	}
+
+	return total;
+}
+
+/**
+ * Tokens one execution dir is known to have used, from host-side files
+ * only: the receipt's `usage.total`, else the sum of the gateway's metered
+ * tokens in `egress.jsonl`. A line cut short by a crash is skipped. `null`
+ * when the dir has neither file.
+ */
+async function executionSpent(dir: string): Promise<number | null> {
 	const receipt = await boundedText(
 		join(dir, "receipt.json"),
 		MAX_RECEIPT_BYTES,

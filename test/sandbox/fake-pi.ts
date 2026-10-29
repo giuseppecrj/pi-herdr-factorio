@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { closeSync, readFileSync } from "node:fs";
 import { LineSplitter } from "../../server/sandbox/lines.ts";
 import {
 	fieldOf,
@@ -11,9 +11,16 @@ import {
 /**
  * A stand-in Pi RPC process for runner tests. `replay <fixture>` answers the
  * prompt by replaying recorded Pi stdout records; `crash` exits mid-run;
- * `garbage` prints a line that is not JSON.
+ * `garbage` prints a line that is not JSON; `close-stdin` closes its
+ * command pipe and stays alive half a second, so a write to it fails.
  */
 const [scenario, fixture] = process.argv.slice(2);
+
+if (scenario === "close-stdin") {
+	closeSync(0);
+	process.send?.("ready");
+	setTimeout(() => process.exit(0), 500);
+}
 
 function emitLine(line: string): void {
 	process.stdout.write(`${line}\n`);
@@ -41,7 +48,7 @@ function replay(promptId: string): void {
 
 const splitter = new LineSplitter(1024 * 1024);
 
-process.stdin.on("data", (chunk: Buffer) => {
+function onCommands(chunk: Buffer): void {
 	for (const line of splitter.push(chunk) ?? []) {
 		const command = objectOf(parseJson(line));
 		const type = textOf(fieldOf(command, "type"));
@@ -74,6 +81,9 @@ process.stdin.on("data", (chunk: Buffer) => {
 
 		if (type === "abort") emit({ type: "agent_settled", aborted: true });
 	}
-});
+}
 
-process.stdin.on("end", () => process.exit(0));
+if (scenario !== "close-stdin") {
+	process.stdin.on("data", onCommands);
+	process.stdin.on("end", () => process.exit(0));
+}

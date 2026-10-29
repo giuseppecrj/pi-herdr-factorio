@@ -1243,6 +1243,80 @@ describe("runStage deadline and cleanup budget", () => {
 		assert.equal(elapsed < 300 + 250, true, String(elapsed));
 		assert.equal(h.receipts.length, 1);
 	});
+
+	it("carries one cleanup end from an early abort through session cleanup, gateway shutdown and the receipt", {
+		timeout: 10_000,
+	}, async () => {
+		const reserve = 100;
+		const abort = new AbortController();
+
+		class SlowGateway extends FakeGateway {
+			override async shutdown(): Promise<SummaryEvent | null> {
+				await new Promise((done) => setTimeout(done, 90));
+				this.send({
+					event: "usage",
+					route: null,
+					decision: "forward",
+					reason: null,
+					status: 200,
+					bytesIn: 0,
+					bytesOut: 0,
+					inputTokens: 100,
+					outputTokens: 0,
+				});
+
+				return super.shutdown();
+			}
+		}
+
+		const h = harness(
+			[
+				(command, pi) => {
+					const type = textOf(fieldOf(command, "type"));
+
+					if (type === "prompt") {
+						pi.emit(started(textOf(fieldOf(command, "id")) ?? ""), {
+							type: "agent_start",
+						});
+						setImmediate(() => abort.abort());
+					}
+
+					if (type === "abort") {
+						pi.emit({ type: "agent_settled", aborted: true });
+						pi.exit(0);
+					}
+				},
+			],
+			{
+				cleanupReserveMs: reserve,
+				gateway: (_table, timeline) => new SlowGateway(timeline),
+				stopSandbox: () => new Promise(() => {}),
+			},
+		);
+
+		const stderrLog = h.host.stderrLog;
+		let abortedAt = 0;
+
+		abort.signal.addEventListener("abort", () => {
+			abortedAt = Date.now();
+		});
+
+		const result = await runStage(input({ signal: abort.signal }), {
+			...h.host,
+			async stderrLog(session) {
+				await new Promise((done) => setTimeout(done, 90));
+
+				return stderrLog(session);
+			},
+		});
+
+		const elapsed = Date.now() - abortedAt;
+
+		assert.equal(result.kind === "failed" && result.exit, "aborted");
+		assert.ok(abortedAt > 0);
+		assert.equal(elapsed < reserve + 40, true, String(elapsed));
+		assert.equal(h.receipts.length, 1);
+	});
 });
 
 describe("sandbox stderr", () => {
@@ -1873,6 +1947,47 @@ describe("runStage with a fake Pi process", () => {
 
 		assert.equal(result.kind === "failed" && result.exit, "crashed");
 	});
+
+	it("ends crashed, with cleanup and a receipt, when Pi closes its command pipe", async () => {
+		const stops: number[] = [];
+		const receipts: StageReceipt[] = [];
+		const host = processHost([]);
+
+		const result = await runStage(input(), {
+			...host,
+			async launchPi() {
+				const child = spawn(process.execPath, [script, "close-stdin"], {
+					stdio: ["pipe", "pipe", "ignore", "ipc"],
+				});
+
+				await new Promise((done) => child.once("message", done));
+
+				const { stdin, stdout } = child;
+
+				assert.ok(stdin && stdout);
+
+				return {
+					stdin,
+					stdout,
+					exited: new Promise((done) => child.on("exit", (code) => done(code))),
+					kill: () => child.kill("SIGKILL"),
+				};
+			},
+			async stopSandbox(session) {
+				stops.push(session);
+			},
+			async writeReceipt(receipt) {
+				receipts.push(receipt);
+
+				return true;
+			},
+		});
+
+		assert.equal(result.kind === "failed" && result.exit, "crashed");
+		assert.deepEqual(stops, [0]);
+		assert.equal(receipts.length, 1);
+		assert.deepEqual(receipts[0]?.outcome, { kind: "failed", exit: "crashed" });
+	});
 });
 
 describe("stage Pi command", () => {
@@ -1910,6 +2025,27 @@ describe("per-stage agent dir", () => {
 			writeFileSync(join(dest, "auth.json"), "{}");
 		} finally {
 			chmodSync(template, 0o755);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("per-stage agent dir extensions", () => {
+	it("creates no extensions/ dir, even when the template holds one", () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-agent-ext-"));
+
+		try {
+			mkdirSync(join(dir, "pi-agent", "extensions"), { recursive: true });
+			writeFileSync(join(dir, "pi-agent", "extensions", "x.js"), "");
+			writeFileSync(join(dir, "pi-agent", "models.json"), "{}\n");
+
+			agentDirFrom(join(dir, "pi-agent"), join(dir, "agent-0"));
+
+			assert.deepEqual(readdirSync(join(dir, "agent-0")).sort(), [
+				"models.json",
+				"sessions",
+			]);
+		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
