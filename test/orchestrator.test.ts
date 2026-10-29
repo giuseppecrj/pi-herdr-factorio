@@ -20,10 +20,11 @@ import {
 	parseStartTime,
 } from "../server/controller.ts";
 import { GitHubTicketAdapter } from "../src/adapters/github.ts";
-import type {
-	AdmissionStore,
-	AdmittedReceipt,
-	LocalSwitch,
+import {
+	type AdmissionStore,
+	type AdmittedReceipt,
+	admitTicket,
+	type LocalSwitch,
 } from "../src/admission.ts";
 import type { Exec } from "../src/gh.ts";
 import { formatMarker, parseMarker } from "../src/markers.ts";
@@ -4395,7 +4396,7 @@ const UNPROVED: readonly Unproved[] = [
 		},
 	},
 	{
-		name: "an incomplete edit history",
+		name: "an edit count on a never-edited issue",
 		reason: "ambiguous_snapshot",
 		degrade(issue) {
 			issue.totalVersions = 1;
@@ -4704,6 +4705,336 @@ describe("Orchestrator terminal marker trust", () => {
 		assert.deepEqual(statuses(ctx.github, 14), ["3:released"]);
 		assert.deepEqual(ctx.files.claims.get(runOf(14)), blockedClaim(14, 2));
 	});
+});
+
+describe("Orchestrator terminal memory across events", () => {
+	it("keeps an older ended event ended when a newer event holds the highest record", async () => {
+		const { github, executor, start } = world();
+		const issue = github.add(labeled(14));
+		const first = [...issue.timeline];
+
+		await start().tick();
+		relabel(github, issue);
+		await start().tick();
+		issue.labels = [];
+		await start().tick();
+
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:blocked",
+			"3:released",
+			"4:claimed",
+			"5:blocked",
+			"6:released",
+		]);
+
+		const launches = executor.launches.length;
+
+		issue.labels = [READY_LABEL];
+		issue.timeline = first;
+		issue.comments = issue.comments.filter(
+			(comment) => !comment.body.includes(runOf(14)),
+		);
+		issue.updatedAt = "2026-10-29T02:40:00Z";
+
+		const report = await start().tick();
+
+		assert.deepEqual(report.runs, []);
+		assert.equal(executor.launches.length, launches);
+		assert.deepEqual(statuses(github, 14), [
+			"4:claimed",
+			"5:blocked",
+			"6:released",
+		]);
+	});
+});
+
+type Refusal = {
+	readonly expect: string;
+	readonly settles: boolean;
+	readonly degrade: (ctx: ReturnType<typeof world>, issue: FakeIssue) => void;
+};
+
+function failing(
+	github: FakeGitHub,
+	hit: (args: readonly string[]) => boolean,
+): Exec {
+	return async (command, args) =>
+		hit(args) ? networkError() : github.exec(command, args);
+}
+
+const ISSUE_14 = `repos/${FAKE_REPO}/issues/14`;
+const LABEL_AT = "2026-10-29T01:21:37Z";
+const BODY_14 = "Body of fixture 14.";
+
+function version(
+	editedAt: string,
+	diff: string | null,
+	deletedAt: string | null = null,
+) {
+	return { editedAt, deletedAt, diff };
+}
+
+/** Each reachable refusal from a fresh candidate, with its exact detail. */
+const REFUSALS: readonly Refusal[] = [
+	{
+		expect: "issue_closed",
+		settles: true,
+		degrade({ github, wire }, issue) {
+			issue.state = "closed";
+			wire.intercept = staleList(github, 14);
+		},
+	},
+	{
+		expect: "actor_withheld",
+		settles: true,
+		degrade(_, issue) {
+			issue.timeline = [
+				labelEvent({
+					id: EVENT_ID + 14,
+					at: LABEL_AT,
+					actor: "evil; rm -rf /",
+				}),
+			];
+		},
+	},
+	{
+		expect: "unauthorized",
+		settles: true,
+		degrade(_, issue) {
+			issue.timeline = [
+				labelEvent({ id: EVENT_ID + 14, at: LABEL_AT, actor: "triager" }),
+			];
+		},
+	},
+	{
+		expect: "ambiguous_snapshot:label_events_same_second",
+		settles: true,
+		degrade(_, issue) {
+			issue.timeline = [
+				labelEvent({ id: 5, at: LABEL_AT, actor: "giuseppecrj" }),
+				labelEvent({ id: 6, at: LABEL_AT, actor: "giuseppecrj" }),
+			];
+		},
+	},
+	{
+		expect: "ambiguous_snapshot:renamed_since_label",
+		settles: true,
+		degrade(_, issue) {
+			issue.timeline = [
+				...issue.timeline,
+				renamedEvent("2026-10-29T01:30:00Z"),
+			];
+		},
+	},
+	{
+		expect: "ambiguous_snapshot:edited_at_label_time",
+		settles: true,
+		degrade(_, issue) {
+			issue.versions = [version(LABEL_AT, BODY_14)];
+		},
+	},
+	{
+		expect: "ambiguous_snapshot:version_withheld",
+		settles: true,
+		degrade(_, issue) {
+			issue.includesCreatedEdit = true;
+			issue.versions = [
+				version("2026-10-29T01:00:00Z", null, "2026-10-29T01:10:00Z"),
+			];
+		},
+	},
+	{
+		expect: "not_labeled",
+		settles: false,
+		degrade(_, issue) {
+			issue.timeline = [
+				labelEvent({
+					id: 1234,
+					at: "2026-10-29T01:20:00Z",
+					actor: "giuseppecrj",
+					event: "unlabeled",
+				}),
+			];
+		},
+	},
+	{
+		expect: "no_label_event",
+		settles: false,
+		degrade(_, issue) {
+			issue.timeline = [];
+		},
+	},
+	{
+		expect: "issue_unavailable",
+		settles: false,
+		degrade({ github, wire }) {
+			wire.intercept = failing(github, (args) => args.includes(ISSUE_14));
+		},
+	},
+	{
+		expect: "timeline_unavailable",
+		settles: false,
+		degrade({ github, wire }) {
+			wire.intercept = failing(github, (args) =>
+				args.some((arg) => arg.startsWith(`${ISSUE_14}/timeline`)),
+			);
+		},
+	},
+	{
+		expect: "permission_unavailable",
+		settles: false,
+		degrade({ github, wire }) {
+			wire.intercept = failing(github, (args) =>
+				args.some((arg) => arg.startsWith(`repos/${FAKE_REPO}/collaborators/`)),
+			);
+		},
+	},
+	{
+		expect: "snapshot_unavailable",
+		settles: false,
+		degrade({ github, wire }) {
+			wire.intercept = failing(github, (args) => args.includes("number=14"));
+		},
+	},
+	{
+		expect: "state_unwritable",
+		settles: false,
+		degrade({ store }) {
+			store.record = async () => "unwritable";
+		},
+	},
+	{
+		expect: "ambiguous_snapshot:rename_history_incomplete",
+		settles: false,
+		degrade(_, issue) {
+			issue.totalRenames = 1;
+		},
+	},
+	{
+		expect: "ambiguous_snapshot:title_changed_between_reads",
+		settles: false,
+		degrade(_, issue) {
+			issue.renames = [
+				{
+					createdAt: "2026-10-29T01:00:00Z",
+					previousTitle: "Old",
+					currentTitle: "Other",
+				},
+			];
+		},
+	},
+	{
+		expect: "ambiguous_snapshot:body_changed_between_reads",
+		settles: false,
+		degrade({ github }) {
+			github.beforeGraphql = (read) => {
+				read.body =
+					read.body === BODY_14 ? "Changed after the issue read." : BODY_14;
+			};
+		},
+	},
+	{
+		expect: "ambiguous_snapshot:history_contradicts_last_edit",
+		settles: false,
+		degrade(_, issue) {
+			issue.totalVersions = 1;
+		},
+	},
+	{
+		expect: "ambiguous_snapshot:history_incomplete",
+		settles: false,
+		degrade(_, issue) {
+			issue.lastEditedAt = "2026-10-29T01:40:00Z";
+			issue.includesCreatedEdit = true;
+			issue.totalVersions = 1;
+		},
+	},
+	{
+		expect: "ambiguous_snapshot:history_without_original",
+		settles: false,
+		degrade(_, issue) {
+			issue.lastEditedAt = "2026-10-29T01:40:00Z";
+			issue.versions = [version("2026-10-29T01:40:00Z", BODY_14)];
+		},
+	},
+	{
+		expect: "ambiguous_snapshot:history_disagrees_with_body",
+		settles: false,
+		degrade(_, issue) {
+			issue.includesCreatedEdit = true;
+			issue.versions = [version("2026-10-29T01:00:00Z", "Other body.")];
+		},
+	},
+	{
+		expect: "ambiguous_snapshot:no_version_before_label",
+		settles: false,
+		degrade(_, issue) {
+			issue.lastEditedAt = "2026-10-29T01:40:00Z";
+			issue.includesCreatedEdit = true;
+			issue.versions = [version("2026-10-29T01:40:00Z", BODY_14)];
+		},
+	},
+];
+
+describe("Orchestrator refusal classification", () => {
+	for (const { expect, settles, degrade } of REFUSALS) {
+		const [kind] = expect.split(":");
+
+		it(`${settles ? "keeps" : "reads again"} a fresh candidate refused for ${expect} at the same updated_at`, async () => {
+			const ctx = world();
+			const { github, clock, store, wire } = ctx;
+			const issue = github.add(labeled(14));
+			const before = structuredClone(issue);
+			const record = store.record;
+
+			degrade(ctx, issue);
+
+			const proof = await admitTicket({
+				exec: (command, args) => (wire.intercept ?? github.exec)(command, args),
+				env: () => "/home/exedev",
+				repo,
+				issue: 14,
+				allowlist: [repo],
+				store,
+			});
+
+			assert.deepEqual(
+				proof.reasons.map((reason) =>
+					"detail" in reason ? `${reason.kind}:${reason.detail}` : reason.kind,
+				),
+				[expect],
+			);
+
+			const controller = ctx.start();
+			const first = await controller.tick();
+
+			assert.deepEqual(first.refused, [{ issue: 14, reasons: [kind] }]);
+			clock.t += 30_000;
+
+			if (settles) {
+				github.calls.length = 0;
+
+				const second = await controller.tick();
+
+				assert.deepEqual(second.refused, []);
+				assert.equal(github.calls.length, 4, JSON.stringify(github.calls));
+
+				return;
+			}
+
+			assert.equal(issue.updatedAt, before.updatedAt);
+			Object.assign(issue, before);
+			github.beforeGraphql = null;
+			wire.intercept = null;
+			store.record = record;
+
+			const second = await controller.tick();
+
+			assert.equal(second.refused.length, 0);
+			assert.deepEqual(runIssues(second), [14]);
+		});
+	}
 });
 
 describe("acquireLock", () => {
