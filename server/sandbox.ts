@@ -31,6 +31,8 @@ import {
 	STAGE_CLEANUP_RESERVE_MS,
 } from "../src/workflow.ts";
 import { PI_AGENT_DIR } from "./sandbox/assets/pi.ts";
+import { AUDIT_CAP_BYTES } from "./sandbox/audit.ts";
+import { countOf, fieldOf, objectOf, parseJson } from "./sandbox/json.ts";
 import { manifestDigest, PINNED_VERSIONS } from "./sandbox/manifest.ts";
 import { readUsernsLimit, runPreflight } from "./sandbox/preflight.ts";
 import { BUNDLE, bwrapArgv } from "./sandbox/bwrap.ts";
@@ -1081,6 +1083,65 @@ export function sandboxHost(config: SandboxHostConfig): StageHost {
 	};
 }
 
+const MAX_RECEIPT_BYTES = 1024 * 1024;
+
+async function boundedText(path: string, cap: number): Promise<string | null> {
+	try {
+		return statSync(path).size > cap ? null : await readFile(path, "utf8");
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Tokens one stage attempt is known to have used, from host-side files
+ * only: the receipt's `usage.total`, else the sum of the gateway's metered
+ * tokens in `egress.jsonl`. A line cut short by a crash is skipped. `null`
+ * when the attempt left neither file.
+ */
+async function attemptSpent(
+	stateDir: string,
+	runId: Digest,
+	stage: ModelStage,
+	attempt: number,
+): Promise<number | null> {
+	const dir = join(stateDir, "stages", runId, `${stage}-${attempt}`);
+
+	const receipt = await boundedText(
+		join(dir, "receipt.json"),
+		MAX_RECEIPT_BYTES,
+	);
+
+	const total =
+		receipt === null
+			? null
+			: countOf(
+					fieldOf(
+						objectOf(fieldOf(objectOf(parseJson(receipt)), "usage")),
+						"total",
+					),
+				);
+
+	if (total !== null) return total;
+
+	const audit = await boundedText(join(dir, "egress.jsonl"), AUDIT_CAP_BYTES);
+
+	if (audit === null) return null;
+
+	let sum = 0;
+
+	for (const line of audit.split("\n")) {
+		const record = objectOf(parseJson(line));
+
+		if (record === null) continue;
+
+		sum += countOf(fieldOf(record, "inputTokens")) ?? 0;
+		sum += countOf(fieldOf(record, "outputTokens")) ?? 0;
+	}
+
+	return sum;
+}
+
 /** Where `server/provision.sh` installs content-addressed asset bundles. */
 export const SANDBOX_ROOT = "/var/lib/factory-sandbox";
 
@@ -1189,6 +1250,10 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 	return {
 		async recover() {
 			await reconcile(true);
+		},
+
+		async spent({ runId, stage, attempt }) {
+			return attemptSpent(config.stateDir, runId, stage, attempt);
 		},
 
 		async preflight() {

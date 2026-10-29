@@ -1185,6 +1185,53 @@ describe("preflight", () => {
 		});
 	});
 
+	it("reads what an earlier attempt spent from its receipt, else the gateway's audit tally", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-spent-"));
+		const runs = join(dir, "stages", RUN);
+
+		try {
+			const executor = sandboxExecutor({
+				stateDir: dir,
+				xdgRuntimeDir: "/run/user/1000",
+				log: () => {},
+				exec: async () => ({ stdout: "", stderr: "", code: 0 }),
+			});
+
+			const spent = (stage: "specify" | "build", attempt: number) =>
+				executor.spent({ runId: runDigest(RUN), stage, attempt });
+
+			mkdirSync(join(runs, "specify-1"), { recursive: true });
+			writeFileSync(
+				join(runs, "specify-1", "receipt.json"),
+				JSON.stringify({ usage: { total: 900, gateway: 850 } }),
+			);
+			writeFileSync(
+				join(runs, "specify-1", "egress.jsonl"),
+				'{"inputTokens":5,"outputTokens":5}\n',
+			);
+
+			mkdirSync(join(runs, "specify-2"), { recursive: true });
+			writeFileSync(
+				join(runs, "specify-2", "egress.jsonl"),
+				[
+					'{"route":"model-openai","inputTokens":300,"outputTokens":20}',
+					'{"route":"npm","inputTokens":null,"outputTokens":null}',
+					'{"route":"model-openai","inputTokens":100,"outputTokens":7}',
+					'{"route":"model-openai","inputTok',
+				].join("\n"),
+			);
+
+			mkdirSync(join(runs, "specify-3"), { recursive: true });
+
+			assert.equal(await spent("specify", 1), 900);
+			assert.equal(await spent("specify", 2), 427);
+			assert.equal(await spent("specify", 3), null);
+			assert.equal(await spent("build", 1), null);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("stays unavailable while the startup scope reconcile has not succeeded", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "factory-pf-reconcile-"));
 		const stateDir = join(dir, "state");

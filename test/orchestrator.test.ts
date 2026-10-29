@@ -198,11 +198,20 @@ class FakeExecutor implements StageExecutor {
 	behaviors: Behavior[] = [];
 	fallback: Behavior = { kind: "unavailable" };
 	readonly launches: StageLaunchInput[] = [];
+	readonly spentBy = new Map<string, number>();
 	recovered = 0;
 	ready: boolean | null = null;
 
 	async recover(): Promise<void> {
 		this.recovered++;
+	}
+
+	async spent(input: {
+		runId: string;
+		stage: string;
+		attempt: number;
+	}): Promise<number | null> {
+		return this.spentBy.get(`${input.stage}-${input.attempt}`) ?? null;
 	}
 
 	async preflight(): Promise<boolean> {
@@ -778,6 +787,24 @@ describe("Orchestrator restart recovery", () => {
 			[...files.claims.values()],
 			[endedClaim(14, 3, { status: "released" })],
 		);
+	});
+
+	it("counts what an interrupted stage spent, from its receipt or gateway tally, when a restart adopts it", async () => {
+		const { github, executor, start } = world();
+
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "hang" }];
+		await start().tick();
+
+		executor.spentBy.set("specify-1", 700);
+
+		const report = await start().tick();
+
+		assert.deepEqual(
+			report.runs.map((run) => [run.status, run.attempt, run.usage]),
+			[["retrying", 2, 700]],
+		);
+		assert.equal(report.totals.usage, 700);
 	});
 
 	it("turns an interrupted running stage into a counted retry", async () => {

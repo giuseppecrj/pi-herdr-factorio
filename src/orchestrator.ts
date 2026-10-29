@@ -83,6 +83,15 @@ export interface StageExecutor {
 	/** Whether the stage sandbox can run. A `blocked` run replays only after this passes. */
 	preflight(): Promise<boolean>;
 	launch(input: StageLaunchInput): Promise<StageLaunch>;
+	/**
+	 * Tokens an attempt an earlier controller ran is known to have used: its
+	 * receipt's total, else the gateway's audit tally. `null` when neither exists.
+	 */
+	spent(input: {
+		readonly runId: Digest;
+		readonly stage: ModelStage;
+		readonly attempt: number;
+	}): Promise<number | null>;
 }
 
 /** An executor with no sandbox. Every launch is `sandbox_unavailable`, and no model runs. */
@@ -93,6 +102,9 @@ export const UNAVAILABLE_EXECUTOR: StageExecutor = {
 	},
 	async launch({ stage }) {
 		return { kind: "unavailable", stage, reason: "sandbox_unavailable" };
+	},
+	async spent() {
+		return null;
 	},
 };
 
@@ -1656,7 +1668,15 @@ export class Orchestrator {
 		if (eligibility !== "current" && eligibility !== "unverified") {
 			this.#release(run, eligibility);
 		} else if (limits !== null && marker.status === "running") {
-			this.#endStage(run, "interrupted", 0, limits);
+			const stage = marker.stage;
+
+			const spent = isModelStage(stage)
+				? await this.#input.executor
+						.spent({ runId: run.runId, stage, attempt: run.attempt })
+						.catch(() => null)
+				: null;
+
+			this.#endStage(run, "interrupted", spent ?? 0, limits);
 		} else if (limits !== null && marker.status === "retrying") {
 			const created = ledger.markers.find(
 				(entry) => entry.marker.seq === marker.seq,
