@@ -1127,6 +1127,22 @@ export class Orchestrator {
 		}
 	}
 
+	/**
+	 * What earlier executions of the run's current attempt spent, which its
+	 * usage does not count: a marker counts none of its own attempt until that
+	 * attempt ends. A replay of a `claimed`, `blocked` or `retrying` attempt
+	 * whose `running` marker never landed has such executions on disk. The
+	 * launch adds this to the new execution's usage, so the attempt is counted
+	 * once when it ends.
+	 */
+	async #attemptSpent(run: ActiveRun, stage: ModelStage): Promise<number> {
+		const spent = await this.#input.executor
+			.spent({ runId: run.runId, stage, attempt: run.attempt })
+			.catch(() => null);
+
+		return spent ?? 0;
+	}
+
 	#finishStage(run: ActiveRun, result: StageEnd, limits: Limits): void {
 		if (result.kind === "failed") {
 			this.#endStage(run, "stage_failed", result.usage, limits);
@@ -2208,7 +2224,15 @@ export class Orchestrator {
 
 		await this.#reconcileSpent(run);
 
-		if (run.usage >= config.usage.maxTokensPerRun) {
+		const stage = run.stage;
+
+		const prior = isModelStage(stage)
+			? await this.#attemptSpent(run, stage)
+			: 0;
+
+		if (run.usage + prior >= config.usage.maxTokensPerRun) {
+			run.usage += prior;
+			this.state.totals.usage += prior;
 			run.phase = { kind: "ending", status: "budget_exhausted" };
 			this.#input.log("launch_refused", {
 				issue: run.issue,
@@ -2225,8 +2249,6 @@ export class Orchestrator {
 
 		if (preparation.kind === "unavailable") return false;
 
-		const stage = run.stage;
-
 		if (!isModelStage(stage)) {
 			run.phase = { kind: "blocked", reason: "sandbox_unavailable" };
 			await this.#sync(run);
@@ -2240,7 +2262,7 @@ export class Orchestrator {
 		const phase: Extract<RunPhase, { kind: "running" }> = {
 			kind: "running",
 			lastProgressAt: now,
-			usage: 0,
+			usage: prior,
 			abort,
 			result: null,
 		};
@@ -2256,11 +2278,14 @@ export class Orchestrator {
 				budget: config.stages[stage].budget,
 				maxTokens: null,
 			},
-			remainingRunTokens: Math.max(0, config.usage.maxTokensPerRun - run.usage),
+			remainingRunTokens: Math.max(
+				0,
+				config.usage.maxTokensPerRun - run.usage - prior,
+			),
 			signal: abort.signal,
 			progress: (usage) => {
 				phase.lastProgressAt = clock.now();
-				phase.usage = Math.max(phase.usage, usage);
+				phase.usage = Math.max(phase.usage, prior + usage);
 			},
 		});
 
@@ -2274,7 +2299,7 @@ export class Orchestrator {
 
 			const settled = launch.done.then(
 				(result) => {
-					phase.result = { kind: result.kind, usage: result.usage };
+					phase.result = { kind: result.kind, usage: prior + result.usage };
 				},
 				() => {
 					phase.result = { kind: "failed", usage: phase.usage };

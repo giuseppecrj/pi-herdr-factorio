@@ -18,6 +18,7 @@ import {
 	HOLDER_FILE,
 	type ProcessTable,
 	parseStartTime,
+	serveLoop,
 } from "../server/controller.ts";
 import { GitHubTicketAdapter } from "../src/adapters/github.ts";
 import {
@@ -825,6 +826,95 @@ describe("Orchestrator restart recovery", () => {
 			"2:running",
 			"3:retrying",
 		]);
+	});
+
+	async function stopAfterUnmarkedSpend(
+		ctx: ReturnType<typeof world>,
+		spent: number,
+	): Promise<void> {
+		const { github, executor, start } = ctx;
+
+		github.add(labeled(14));
+		github.posts = ["ok", "rejected"];
+		executor.behaviors = [{ kind: "hang" }];
+
+		const stop = new AbortController();
+		const stateDir = mkdtempSync(join(tmpdir(), "factory-serve-stop-"));
+
+		try {
+			await serveLoop({
+				orchestrator: start(),
+				stateDir,
+				signal: stop.signal,
+				log: () => {},
+				sleep: async () => {
+					executor.launches[0]?.progress(spent);
+					executor.spentBy.set("specify-1", spent);
+					stop.abort();
+				},
+			});
+		} finally {
+			rmSync(stateDir, { recursive: true, force: true });
+		}
+
+		assert.deepEqual(statuses(github, 14), ["1:claimed"]);
+	}
+
+	function usageOf(github: FakeGitHub, issue: number): number[] {
+		return github.markers(issue).map((body) => {
+			const parsed = parseMarker(body);
+
+			return parsed.kind === "marker" ? parsed.marker.usage : -1;
+		});
+	}
+
+	it("gives a replay of a claimed attempt only what that attempt's earlier execution left of the run cap", async () => {
+		const ctx = world();
+		const { github, executor, start } = ctx;
+
+		await stopAfterUnmarkedSpend(ctx, 499_900);
+
+		executor.behaviors = [{ kind: "pass", usage: 200 }];
+
+		const second = start();
+
+		await second.tick();
+		assert.equal(executor.launches[1]?.attempt, 1);
+		assert.equal(executor.launches[1]?.remainingRunTokens, 100);
+
+		executor.spentBy.set("specify-1", 500_100);
+
+		const ended = await second.tick();
+
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:running",
+			"3:stage_passed",
+		]);
+		assert.equal(usageOf(github, 14).at(-1), 500_100);
+		assert.equal(ended.totals.usage, 500_100);
+	});
+
+	it("counts a replayed attempt's executions once when the replay is interrupted too", async () => {
+		const ctx = world();
+		const { github, executor, start } = ctx;
+
+		await stopAfterUnmarkedSpend(ctx, 300);
+
+		executor.behaviors = [{ kind: "hang" }];
+		await start().tick();
+		assert.equal(executor.launches[1]?.remainingRunTokens, 499_700);
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:running"]);
+
+		executor.spentBy.set("specify-1", 300 + 50);
+
+		const report = await start().tick();
+
+		assert.deepEqual(
+			report.runs.map((run) => [run.status, run.attempt, run.usage]),
+			[["retrying", 2, 350]],
+		);
+		assert.equal(usageOf(github, 14).at(-1), 350);
 	});
 });
 
