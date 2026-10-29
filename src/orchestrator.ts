@@ -344,14 +344,7 @@ function limitsOf(config: WorkflowConfig): Limits {
 	};
 }
 
-/**
- * Whether a candidate's refusal is a decision the watermark may keep until
- * the issue's `updated_at` changes. Every candidate read as open and ready, so
- * a refusal that finds the ready label's evidence missing, incomplete or
- * contradicting that read is retried on the next tick instead, as is one
- * caused by a failed read or a per-tick condition.
- */
-function settles(reason: RefusalReason): boolean {
+function refusalSettlesUntilEdited(reason: RefusalReason): boolean {
 	switch (reason.kind) {
 		case "pull_request":
 		case "issue_closed":
@@ -359,7 +352,7 @@ function settles(reason: RefusalReason): boolean {
 		case "unauthorized":
 			return true;
 		case "ambiguous_snapshot":
-			return provedAmbiguous(reason.detail);
+			return ambiguityRecursOnReread(reason.detail);
 		case "not_labeled":
 		case "no_label_event":
 		case "repo_not_allowed":
@@ -383,11 +376,7 @@ function settles(reason: RefusalReason): boolean {
 	}
 }
 
-/**
- * Whether an ambiguity is a fact of the issue that a later read returns
- * again, rather than a read that is incomplete or disagrees with another.
- */
-function provedAmbiguous(detail: Ambiguity): boolean {
+function ambiguityRecursOnReread(detail: Ambiguity): boolean {
 	switch (detail) {
 		case "label_events_same_second":
 		case "renamed_since_label":
@@ -1711,7 +1700,7 @@ export class Orchestrator {
 		const kinds = receipt.reasons.map((reason) => reason.kind);
 
 		if (!kinds.includes("duplicate_event") || receipt.eventId === null) {
-			const settled = receipt.reasons.every(settles);
+			const settled = receipt.reasons.every(refusalSettlesUntilEdited);
 
 			refused.push({ issue, reasons: kinds });
 			this.#input.log("admission_refused", {
