@@ -1,6 +1,13 @@
 import { spawnSync } from "node:child_process";
 import { parseArgs } from "node:util";
+import { resolve } from "node:path";
 import manifest from "../package.json" with { type: "json" };
+import {
+	type AdmissionReceipt,
+	admitTicket,
+	FACTORY_REPOSITORIES,
+	fileAdmissionStore,
+} from "../src/admission.ts";
 import type { JsonValue } from "../src/tickets.ts";
 import {
 	type CheckReport,
@@ -20,7 +27,8 @@ import {
 
 export const USAGE = `Usage:
   node server/cli.ts workflow-check --json --repo <owner/name> [--ref <branch>] [--reload-ref <branch>]
-  node server/cli.ts status --json --repo <owner/name> [--ref <branch>]`;
+  node server/cli.ts status --json --repo <owner/name> [--ref <branch>]
+  node server/cli.ts admit --json --repo <owner/name> --issue <number> --state-dir <dir>`;
 
 export const EXIT = { ok: 0, invalid: 1, usage: 2 } as const;
 
@@ -31,16 +39,19 @@ export type CliIo = {
 	stderr: (text: string) => void;
 };
 
-const FETCH_TIMEOUT_MS = 30_000;
+export const FETCH_TIMEOUT_MS = 30_000;
+
+const ISSUE_NUMBER = /^[1-9][0-9]{0,9}$/;
 
 type Parsed =
 	| {
-			kind: "ok";
+			kind: "workflow";
 			command: "workflow-check" | "status";
 			repo: RepoSlug;
 			ref: string;
 			reloadRef: string | null;
 	  }
+	| { kind: "admit"; repo: RepoSlug; issue: number; stateDir: string }
 	| { kind: "usage"; message: string };
 
 function parse(argv: readonly string[]): Parsed {
@@ -55,8 +66,15 @@ function parse(argv: readonly string[]): Parsed {
 	const { values, positionals } = parsed;
 	const [command, ...extra] = positionals;
 
-	if (command !== "workflow-check" && command !== "status") {
-		return { kind: "usage", message: "expected workflow-check or status" };
+	if (
+		command !== "workflow-check" &&
+		command !== "status" &&
+		command !== "admit"
+	) {
+		return {
+			kind: "usage",
+			message: "expected workflow-check, status or admit",
+		};
 	}
 
 	if (extra.length > 0) {
@@ -68,6 +86,37 @@ function parse(argv: readonly string[]): Parsed {
 
 	if (values.repo === undefined || !isRepoSlug(values.repo)) {
 		return { kind: "usage", message: "--repo <owner/name> is required" };
+	}
+
+	if (command === "admit") {
+		if (values.ref !== undefined || values["reload-ref"] !== undefined) {
+			return {
+				kind: "usage",
+				message: "admit always reads main and takes no --ref",
+			};
+		}
+
+		if (values.issue === undefined || !ISSUE_NUMBER.test(values.issue)) {
+			return { kind: "usage", message: "--issue <number> is required" };
+		}
+
+		if (values["state-dir"] === undefined || values["state-dir"] === "") {
+			return { kind: "usage", message: "--state-dir <dir> is required" };
+		}
+
+		return {
+			kind: "admit",
+			repo: values.repo,
+			issue: Number(values.issue),
+			stateDir: resolve(values["state-dir"]),
+		};
+	}
+
+	if (values.issue !== undefined || values["state-dir"] !== undefined) {
+		return {
+			kind: "usage",
+			message: "--issue and --state-dir apply only to admit",
+		};
 	}
 
 	const ref = values.ref ?? TRUSTED_REF;
@@ -89,7 +138,7 @@ function parse(argv: readonly string[]): Parsed {
 		}
 	}
 
-	return { kind: "ok", command, repo: values.repo, ref, reloadRef };
+	return { kind: "workflow", command, repo: values.repo, ref, reloadRef };
 }
 
 function parseCliArgs(argv: readonly string[]) {
@@ -102,6 +151,8 @@ function parseCliArgs(argv: readonly string[]) {
 			repo: { type: "string" },
 			ref: { type: "string" },
 			"reload-ref": { type: "string" },
+			issue: { type: "string" },
+			"state-dir": { type: "string" },
 		},
 	});
 }
@@ -112,7 +163,7 @@ function redactString(_key: string, item: JsonValue): JsonValue {
 	return item === text ? redactCredentials(text) : item;
 }
 
-function json(report: StatusReport | CheckReport): string {
+function json(report: StatusReport | CheckReport | AdmissionReceipt): string {
 	return `${JSON.stringify(report, redactString, 2)}\n`;
 }
 
@@ -131,6 +182,21 @@ export async function runCli(
 		io.stderr(`${parsed.message}\n${USAGE}\n`);
 
 		return EXIT.usage;
+	}
+
+	if (parsed.kind === "admit") {
+		const receipt = await admitTicket({
+			exec: io.exec,
+			env: io.env,
+			repo: parsed.repo,
+			issue: parsed.issue,
+			allowlist: FACTORY_REPOSITORIES,
+			store: fileAdmissionStore(parsed.stateDir),
+		});
+
+		io.stdout(json(receipt));
+
+		return receipt.decision === "admitted" ? EXIT.ok : EXIT.invalid;
 	}
 
 	const { repo, ref, reloadRef } = parsed;

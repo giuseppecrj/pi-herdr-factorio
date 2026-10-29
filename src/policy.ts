@@ -19,6 +19,19 @@ export type PermissionLevel =
 	| "read"
 	| "none";
 
+const PERMISSION_LEVELS: readonly PermissionLevel[] = [
+	"admin",
+	"maintain",
+	"write",
+	"triage",
+	"read",
+	"none",
+];
+
+export function parsePermissionLevel(text: string): PermissionLevel | null {
+	return PERMISSION_LEVELS.find((level) => level === text) ?? null;
+}
+
 export function hasWriteAccess(level: PermissionLevel): boolean {
 	return level === "admin" || level === "maintain" || level === "write";
 }
@@ -42,6 +55,11 @@ export function decideAdmission(input: {
 
 	return { kind: "admitted" };
 }
+
+export const REPO_SWITCH_VARIABLE = "FACTORY_ENABLED";
+
+/** Its presence in the controller state directory stops new admissions. */
+export const LOCAL_DISABLE_FILE = "disabled";
 
 export function isFactoryEnabled(variable: string | undefined): boolean {
 	return variable === "true";

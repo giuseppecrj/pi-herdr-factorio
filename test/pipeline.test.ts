@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { decideAdmission, checkChangedPaths } from "../src/policy.ts";
 import { outcomeOf, startRun, type Run } from "../src/run.ts";
 import { advance, type RunEvent } from "../src/stages.ts";
-import type { FactoryEvent, Ticket } from "../src/tickets.ts";
+import { type FactoryEvent, type Ticket, ticketKey } from "../src/tickets.ts";
 import { FakeTicketAdapter } from "./fake-ticket-adapter.ts";
 import {
 	acceptanceDigest,
@@ -36,7 +36,13 @@ async function admitFromLabel(
 	actor: string,
 ): Promise<Run | "refused" | "ignored"> {
 	const event = adapter.normalize(
-		adapter.rawEvent({ kind: "ready", ref: ticket, actor }),
+		adapter.rawEvent({
+			kind: "ready",
+			id: "34537521383",
+			at: "2026-10-29T01:21:37Z",
+			ref: ticket,
+			actor,
+		}),
 	);
 
 	if (event === null || event.kind !== "ready") return "ignored";
@@ -73,6 +79,8 @@ describe("controller driven through the fake adapter", () => {
 
 		const event: FactoryEvent = {
 			kind: "pr_feedback",
+			id: "6485238589",
+			at: "2026-10-29T01:21:48Z",
 			ref: ticket,
 			actor: "maintainer",
 			prUrl: "https://github.com/giuseppecrj/pi-herdr-factorio/pull/7",
@@ -80,6 +88,40 @@ describe("controller driven through the fake adapter", () => {
 		};
 
 		assert.deepEqual(adapter.normalize(adapter.rawEvent(event)), event);
+	});
+
+	it("lists open ready tickets and reads states keyed by provider and repository", async () => {
+		const adapter = fixture();
+
+		const sameNumberElsewhere: Ticket = {
+			...issue,
+			ref: {
+				provider: "github",
+				key: "giuseppecrj/other#42",
+				url: "https://github.com/giuseppecrj/other/issues/42",
+			},
+			labels: [],
+		};
+
+		adapter.addTicket(sameNumberElsewhere);
+
+		assert.deepEqual(
+			(await adapter.fetchCandidates()).map((each) => each.ref),
+			[ticket],
+		);
+
+		adapter.closeTicket(ticket);
+		assert.deepEqual(await adapter.fetchCandidates(), []);
+
+		const states = await adapter.fetchStates([ticket, sameNumberElsewhere.ref]);
+
+		assert.notEqual(ticketKey(ticket), ticketKey(sameNumberElsewhere.ref));
+		assert.equal(states.get(ticketKey(ticket))?.open, false);
+		assert.deepEqual(states.get(ticketKey(sameNumberElsewhere.ref)), {
+			ref: sameNumberElsewhere.ref,
+			open: true,
+			labels: [],
+		});
 	});
 
 	it("refuses the ready label from an account without write access", async () => {
