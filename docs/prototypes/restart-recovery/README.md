@@ -116,6 +116,10 @@ From these results, a marker comment is controller state only when all of these 
 
 A comment from any other author is ignored. Rule 5 applies to every comment by `exe-dev-github-integration[bot]`, whatever its text, so an owner who edits a marker and removes its prefix makes the issue corrupt instead of hiding the marker. A bot comment that starts with the marker prefix and fails any other rule is corrupt too, and the controller stops dispatching that issue.
 
+## Deleted bot comments
+
+Deleting a bot comment is not supported. Only a user with write access can do it, and the deletion moves the issue's `updated_at`, as measured on #119 above. The controller's confirmed floor detects a deletion on a best-effort basis. `docs/operations/factory-cli.md`, under The confirmed floor, says what it detects, what clears `marker_missing`, and the two known gaps: a stage end that posts before the deletion is observed, and a deleted `released` marker on a reopened issue, read by a controller started after the release.
+
 ## The controller lock
 
 The first lock was `controller.lock` created with `O_EXCL`, with a stale-lock takeover. Two processes that both found a stale file could both unlink and recreate it, and both ran: an audit saw that in 13 of 40 trials. The lock is now a Linux abstract Unix socket, `\0pi-herdr-factorio/<sha256 of the state directory's real path>`, bound with `net.createServer().listen({ path, exclusive: true })`.

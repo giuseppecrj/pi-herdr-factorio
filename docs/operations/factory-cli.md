@@ -445,6 +445,11 @@ Closing the issue does not clear `marker_missing`. It removes the issue's eligib
 
 Known limit: a POST with no answer, then a lagging read. A POST that times out after 30 s may still have landed. If the next read does not show it yet, the controller cannot tell it from a POST that never landed, so it posts the same `seq` again, and the issue fails closed as `duplicate_seq` on a later read. The floor does not cover this, because an unanswered POST is not confirmed. GitHub comments have no idempotency key, so exactly-once posting is not available.
 
+Deleted bot comments are not supported. Only a user with write access to the repository can delete one, so a deletion is owner or maintainer tampering. Detecting it is best effort: the floor catches a deletion that would make the controller act on a ledger that went backwards. Two known gaps:
+
+- A stage end posts its newer marker before the deletion is observed. When bot comments are deleted and a stage ends before any tick has read the issue again, the controller posts the next `seq` above the floor. The ledger then reaches the floor, and the deletion goes undetected.
+- The owner deletes a run's `released` marker, then reopens the issue. The claim record is removed at release, so a controller started after that has no floor for the issue. It adopts the run's previous marker and launches the old run once more. Closing this gap would need terminal claim records kept indefinitely.
+
 ### Restart
 
 The controller keeps no database. A restart rebuilds each claim from the markers, from local claim records and from the workspace.
