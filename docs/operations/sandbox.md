@@ -7,7 +7,7 @@ Status. Built in F05 and proven live on `pi-factorio` on 2026-10-29. The design 
 **Running it.**
 - `server/provision.sh` builds the asset bundle from pinned inputs and installs it root-owned and read-only at `/var/lib/factory-sandbox/assets-<sha256>/`, where the sha256 is the manifest digest from `server/sandbox/manifest.ts`. `/var/lib/factory-sandbox/current` names the bundle the controller uses. Run `bash server/provision.sh sandbox` from a checkout to build only the bundle. Rerunning it with the same inputs reproduces the same digest and changes nothing.
 - The bundle holds Node 26.12.1 (pinned by tarball sha256), the npm Pi packages from `server/sandbox/assets/package-lock.json` (`npm ci --ignore-scripts`), Herdr 0.9.5 (pinned by sha256), the `pi` wrapper (`bin/pi` runs `sandbox/pi.ts`), `sandbox/stage-init.ts`, synthetic `etc/` files and a `pi-agent/` template. The template's `models.json` points `openai` and `xai` at `http://127.0.0.1:18080/{openai,xai}/v1` with a placeholder key. Its `settings.json` loads `pi-herdr-agents` as a local package from `/opt/factory/pkg/node_modules/pi-herdr-agents`. `pi-herdr-pstack` is pinned in the bundle but not loaded, because F05's probe uses no skills.
-- The controller installs `sandboxExecutor` from `server/sandbox.ts`. On startup it stops every leftover `factory-stage-*` scope by name, before the first tick adopts a run. The preflight (arch, userns, bwrap, assets digest, a scope launch, a gateway that comes up ready) runs on every tick until it passes. Until then every launch is `blocked` with `sandbox_unavailable`, and `executionEnabled` is `false`.
+- The controller installs `sandboxExecutor` from `server/sandbox.ts`. Each stage scope is `factory-stage-<owner>-<run16>-<stage>-<attempt>-<nonce>`, where `<owner>` is the first 8 hex of the sha256 of the state dir's real path. On startup the controller stops every leftover `factory-stage-<owner>-*` scope of its own by name, before the first tick adopts a run. Another controller's scopes, for example a scoped verification lane with its own state dir, are left alone. The preflight (arch, userns, bwrap, assets digest, a scope launch, a gateway that comes up ready) runs on every tick until it passes. Until then every launch is `blocked` with `sandbox_unavailable`, and `executionEnabled` is `false`.
 - F05 runs one fixed probe prompt per stage with no tools. A pass ends the run `stage_passed`. The receipt is `<stateDir>/stages/<runId>/<stage>-<attempt>/receipt.json`, mode 0600, beside `egress.jsonl` and each session's `pi-stderr-<session>.log` (the last 64 KiB of sandbox stderr, untrusted, referenced from the receipt by name and byte count only).
 
 **Departures from this design, each recorded in the F05 trail.**
@@ -16,8 +16,13 @@ Status. Built in F05 and proven live on `pi-factorio` on 2026-10-29. The design 
 - **No `--disable-userns` and no `--unshare-user`.** The flags are those of brief call 2: `--unshare-all --die-with-parent --new-session --cap-drop ALL --clearenv`, a fresh `--proc` and `--dev`, under `env -i`. The seccomp filter's `clone`/`unshare` rule on `CLONE_NEWUSER|CLONE_NEWNS` covers nested namespaces.
 - **The stage Pi keeps a session** under the writable agent dir (`--session-dir /run/pi-agent/sessions`). `pi-herdr-agents` refuses to launch a child from a parent with `--no-session`. It answers "no session file" without an error flag, so the runner counts a launch only when the tool result names a child id.
 - **The agent dir is a fresh 0700 copy** of the bundle template, with 0600 files. The bundle is installed read-only, and a mode-preserving copy left Pi unable to create its sessions dir.
-- **Audit lines are written when a request finishes,** and admission first checks that the log is healthy. Path redaction is the audit module's own sanitiser, not `redactCredentials`, so the gateway imports nothing from `src/`.
-- **Routes.** `model-xai` allows `models` and `responses` with the `openai-responses-sse` meter, as Pi 1.4.0 declares `xai/grok-4.6` on the Responses API. The `npm` route takes no query at all. Credentialed routes allow only GET and HEAD (owner decision 3).
+- **Audit lines are written when a request finishes,** not before the response is forwarded, and admission first checks that the log is healthy. Path redaction is the audit module's own sanitiser, not `redactCredentials`, so the gateway imports nothing from `src/`. A request the HTTP parser rejects is answered `403 bad-request` and audited too. The `detailed` level is recorded in the route table but adds no fields yet: certificate SANs, header-name lists and the `x-trace-id` count are not written.
+- **The runner's budget is enforced before model work.** A stage with no run tokens left, or a zero stage token cap, ends `budget_exhausted` before any gateway, sandbox or prompt, and a gateway whose ceiling is already spent starts with its gate closed. The deadline is checked before launch and again before the prompt. Every cleanup wait (gate ack, abort settle, drain, Pi exit, scope stop, child-usage reads, stderr, gateway shutdown) shares one window: the cleanup reserve, cut short by the stage's `wall_ms`. A gateway that does not shut down in it is killed, and the receipt's `egress` is then `null`.
+- **Usage is counted after the outcome is chosen.** An aborted turn or a child result that arrives while a stage cleans up still adds its tokens, once, and the outcome stays as chosen. A session that settles on its own is checked against its token caps after every child-usage read, whatever its stop reason. A child-session read error is an unread child and ends the stage `failed`/`crashed`.
+- **The receipt is a success gate.** It is written to a temp file, fsynced and renamed into place. When it cannot be written the stage ends `failed`/`crashed`, so it retries rather than passing without evidence.
+- **Routes.** `model-xai` allows `models` and `responses` with the `openai-responses-sse` meter, as Pi 1.4.0 declares `xai/grok-4.6` on the Responses API. The `npm` route takes no query at all. Credentialed routes allow only GET and HEAD (owner decision 3). A stage's primary model must be `openai/*`, because only `model-openai` serves it, and a model stage's `wall_ms` must exceed the 10 s cleanup reserve.
+- **A JSON body that names a key twice at any depth is denied** `body-not-allowed`, comparing keys after their escapes decode, so every parser upstream sees the body the check saw.
+- **A ceiling or route may not place its secret in a routing or framing header:** `host`, `:authority`, `content-length`, `transfer-encoding`, `connection`, `upgrade`, `te`, `trailer`, `forwarded`, `x-forwarded-*`, `proxy-*` or `keep-alive`. The gateway exits `bad-credentials`.
 - **Address checks use one `BlockList` per family.** Node checks an IPv4 address against IPv6 rules in its `::ffff:` form, so a single list holding `::ffff:0:0/96` refused every IPv4 upstream. Resolved addresses are dialled IPv4 first, because `pi-factorio` has no IPv6 route.
 
 **How to read the tags.**
@@ -96,13 +101,13 @@ The gateway speaks HTTP/1.1 upstream only **[D]**. No `:authority` ever exists o
  │        │ stdin/stdout JSONL control            ▲ usage events       │
  │        ▼                                       │                    │
  │   gateway child process (node server/sandbox/gateway-main.ts)      │
- │     listens on <stageDir>/gw/gw.sock  (dir 0700, socket 0600)       │
+ │     listens on <stateDir>/gw/<nonce>/gw.sock (dir 0700, socket 0600)│
  │     route table frozen at start, admission gate, audit writer       │
  │     credentials (future) read from $CREDENTIALS_DIRECTORY           │
  └───────▲───────────────────────────────────────────┬────────────────┘
          │ unix socket, bind-mounted as /run/gw.sock  │ HTTPS, HTTP/1.1
          │                                            │ Host and SNI fixed per route
- user scope factory-stage-<runId>-<attempt>           ▼
+ user scope factory-stage-<owner>-<run>-…            ▼
  ┌──────────────────────────────────────┐   169.254.169.254 (edge) ─► llm backend
  │ bwrap --unshare-all, netns has lo    │   registry.npmjs.org      ─► npm
  │  relay 127.0.0.1:18080 ─► gw.sock    │   (future) api.linear.app ─► Linear
@@ -126,17 +131,17 @@ Prior art offers two bridges **[E `research/prior-art.md` §4.2 "Unix-socket bri
 - **The fd pair costs a lot.** One `socketpair` is one byte stream. Pi, npm and Herdr children open many concurrent HTTP connections. So the fd variant needs a multiplexing protocol, or per-connection fd passing over `SCM_RIGHTS`. `socat` can do neither, and Node exposes fd passing only through its IPC channel **[G]**. That is a custom in-sandbox forwarder and a custom frame format, which is new code on the trust boundary.
 
 **The lifecycle that removes the race [D].**
-1. The runner creates `<stageDir>/gw/` with `mkdir` mode 0700. It fails if the directory exists, and never reuses one.
-2. The runner spawns the gateway with `--socket <stageDir>/gw/gw.sock`. The gateway sets umask 077 and binds. It refuses to start if the path exists, and never unlinks.
+1. The runner creates a fresh `<stateDir>/gw/<nonce>/` with `mkdir` mode 0700, short enough for the 108-byte socket path limit. It fails if the directory exists, and never reuses one.
+2. The runner spawns the gateway with `--socket <stateDir>/gw/<nonce>/gw.sock`. The gateway sets umask 077 and binds. It refuses to start if the path exists, and never unlinks.
 3. The gateway writes `{"event":"ready","ino":<inode>}` on its control stdout.
 4. The runner checks with `lstat` that the path is a socket with that inode. It then makes one probe request itself, `GET /` over the socket, and expects `403 no-route`.
-5. Only then does the runner launch bwrap with `--bind <stageDir>/gw/gw.sock /run/gw.sock`. That is the proved form **[E `proto-r1/run_exp3.sh` line 29]**. A read-only bind of the socket would be stricter. Section 9 lists it as an open question.
+5. Only then does the runner launch bwrap with `--bind <stateDir>/gw/<nonce>/gw.sock /run/gw.sock`. That is the proved form **[E `proto-r1/run_exp3.sh` line 29]**. A read-only bind of the socket would be stricter. Section 9 lists it as an open question.
 6. If the gateway exits, the stage fails. Nothing restarts the gateway under a running sandbox.
 
 ### 2.3 Lifetimes
 
 - **The gateway dies with the controller [D].** It treats EOF on its control stdin as "close admission and exit". It is in `factory.service`'s cgroup, so `KillMode=mixed` reaps it on stop **[E `server/factory.service`]**. A sandbox that outlives its controller therefore loses all egress. It cannot spend unsupervised. Lane 9 must confirm this.
-- **The sandbox lives in a user scope** named `factory-stage-<runId>-<attempt>` **[E `walkthrough/explanation.md` gotcha 6]**. `bwrap --die-with-parent` also kills it when its parent dies. With `systemd-run --scope` the parent is the controller **[G]**, so the sandbox may die with the controller anyway. Section 9 records this against walkthrough gotcha 6.
+- **The sandbox lives in a user scope** named `factory-stage-<owner>-<run16>-<stage>-<attempt>-<nonce>` (section 0) **[E `walkthrough/explanation.md` gotcha 6]**. `bwrap --die-with-parent` also kills it when its parent dies. With `systemd-run --scope` the parent is the controller **[G]**, so the sandbox may die with the controller anyway. Section 9 records this against walkthrough gotcha 6.
 
 ## 3. Route registry and policy schema
 
@@ -414,16 +419,16 @@ On a credentialed route the gateway refuses these **[E `research/prior-art.md` r
 - **A plaintext upstream.** The route loader rejects `scheme: http` with a credential. There is no `allowPlaintextInject` opt-out.
 - **Redirects.** A 3xx from upstream becomes `403 redirect-refused`, and `Location` is dropped, because it may carry a signed URL. The gateway never follows redirects on any route.
 - **`TRACE`, `TRACK` and `CONNECT`.** These are refused globally, before routing, because a `TRACE` echo would return the injected header **[E `research/prior-art.md` §1.2]**.
-- **Compressed responses.** A response whose `Content-Encoding` is not `identity` becomes `403 response-blocked`, because the reflection scan cannot read it **[D]**. Codex fails closed on compressed bodies for the same reason **[E `research/prior-art.md` §2.3]**.
+- **Compressed responses.** The gateway sends `Accept-Encoding: identity`. A response with any `Content-Encoding` header, `identity` included, becomes `403 response-blocked`, and so does a body whose first bytes are a gzip, zlib, framed brotli or zstd magic number, because the reflection scan cannot read it **[D]**. Codex fails closed on compressed bodies for the same reason **[E `research/prior-art.md` §2.3]**.
 
 ### 4.5 Response handling
 
 - **Header scrub [E `research/prior-art.md` recommendation 6].** The auth and cookie headers in section 3.5 are never copied, and only `responseHeaders` pass.
-- **Reflection check [E `research/prior-art.md` recommendation 6, which marks it as new].** The gateway scans response headers and the streamed body for the secret's raw bytes and for its base64 and percent-encoded forms **[D]**.
+- **Reflection check [E `research/prior-art.md` recommendation 6, which marks it as new].** The gateway scans response headers and the streamed body in three views, raw, JSON-unescaped and percent-decoded, for the secret's raw bytes, its base64 and base64url at every offset, and its percent-encoded forms **[D]**.
   - A match in the headers sends `403 response-blocked`, and nothing upstream reaches the client.
-  - For the body, the gateway holds back the last `len(longest form) − 1` bytes of each chunk until the next chunk arrives, so a match is found before any matching byte is written.
+  - For the body, nothing passes until the first four bytes show no compression magic. After that the gateway holds back `6 × len(longest form) − 1` bytes until the next chunk arrives, so a match, even JSON-escaped, is found before any matching byte is written.
   - A match mid-body destroys the client connection with no further bytes. The status line has already gone, so a 403 is impossible. The audit records `decision: "blocked_mid_stream"`.
-- **Request-side tripwire [D].** A request that contains a loaded secret's bytes is denied as `secret-in-request`. The sandbox should never hold a secret, so a hit means a leak path exists. The runner fails the stage.
+- **Request-side tripwire [D].** A request whose target, headers or body reveals a loaded secret in any of the three views is denied as `secret-in-request`. The sandbox should never hold a secret, so a hit means a leak path exists. The runner fails the stage. The audit line for that deny has the path `[redacted]`.
 
 ### 4.6 The confused-deputy rule
 
@@ -435,7 +440,7 @@ Once the gateway holds a secret for route R, any code in the sandbox that reache
 
 ### 4.7 Worked example, a read-only Linear route
 
-The goal is to let `specify` read a linked Linear issue for context. This is hypothetical. Linear's endpoint and header shape are **[G]** from memory and must be checked against Linear's docs at the time.
+The goal is to let `specify` read a linked Linear issue for context. This is hypothetical. Linear's endpoint and header shape are **[G]** from memory and must be checked against Linear's docs at the time. **As built, this example cannot be configured:** credentialed routes allow only GET and HEAD (owner decision 3), and Linear's reads are GraphQL `POST`s. It stays as the design record of why a single-endpoint API needs a read-only token. The first integration must either use a GET API or bring an owner decision that widens the rule.
 
 1. **Owner VM change.** Create a read-only Linear API key, scoped to one team if Linear allows it. Write it to `/etc/factory/credentials/linear-read` (root, 0400). Add the ceiling.
    ```json
@@ -529,7 +534,8 @@ Upstream transport failures are not denies. They return `502 X-Proxy-Error: upst
 
 | Code | When |
 |---|---|
-| `method-forbidden` | `CONNECT`, `TRACE`, `TRACK`, or a method token outside `Method` |
+| `bad-request` | the HTTP parser rejected the request before it had a method and path: an unknown method token such as `TRACK`, an HTTP/2 preface, `Content-Length` with `Transfer-Encoding`, or a malformed header. One audit line with an empty method and path |
+| `method-forbidden` | `CONNECT`, `TRACE`, or another method outside `Method` that the parser accepts |
 | `bad-request-target` | absolute form, authority form, asterisk form |
 | `ambiguous-path` | any section 3.2 path-canonical failure |
 | `bad-host` | `Host` missing, duplicated, or not `forwarderHost` |
@@ -542,18 +548,18 @@ Upstream transport failures are not denies. They return `502 X-Proxy-Error: upst
 | `path-not-allowed` | no path rule matches |
 | `query-not-allowed` | query present on `none`, an unknown key, a repeated key or an oversized value |
 | `body-too-large` | over `maxRequestBytes` |
-| `body-not-allowed` | body on `none`, a wrong content type, unparsable JSON, or a failed constraint |
+| `body-not-allowed` | body on `none`, a wrong content type, unparsable JSON, a key named twice in one object, or a failed constraint |
 | `upstream-address-refused` | the resolved address is in a refused range |
 | `secret-in-request` | the request carries a loaded secret's bytes |
 | `redirect-refused` | a 3xx on a credentialed route |
-| `response-blocked` | reflection in the headers, or a compressed body on a credentialed route |
+| `response-blocked` | reflection in the headers, any `Content-Encoding`, or a body with compression magic, on a credentialed route |
 | `audit-unavailable` | the audit line could not be written, so nothing is forwarded |
 
 Every deny is decided before any upstream connection, except `redirect-refused` and `response-blocked`, which happen after the upstream answered. The prototype's guarantee that "no denied record has an upstream" **[E `proto-r1/summary.md` exp 3 log analysis]** therefore holds for every code except those two.
 
 ### 6.2 Audit line
 
-One JSON object per request, one line, written and flushed *before* the response is forwarded or the deny is sent. A failed write denies with `audit-unavailable` **[D]**.
+One JSON object per request, one line, written when the request finishes (section 0). A failed write closes the gate, and every later request is denied with `audit-unavailable` **[D]**.
 
 ```json
 {"v":1,"ts":"2026-10-29T14:56:59.812Z","stage":"build","runId":"<digest>","attempt":1,"req":17,
@@ -567,8 +573,10 @@ One JSON object per request, one line, written and flushed *before* the response
 - **Credential.** The credential id, never its value.
 - **Values.** `decision` is one of `forward`, `deny`, `error` or `blocked_mid_stream`. `reason` is a code from 6.1 or null.
 - **The upstream record.** For forwards, `upstream.host` and `upstream.sni` are the values actually sent. SNI is read back from the TLS socket after the handshake, as the prototype did **[E `proto-r1/gateway.py` line 194]**. For denies, `upstream` is null.
-- **Redacted path.** The query is replaced by `?…` when present **[E `research/prior-art.md` §1.4, `srt` redaction]**. The path is truncated to 128 bytes, and bytes outside `[A-Za-z0-9._~/%-]` become `_`. It is still attacker-chosen text, which is why it stays in this file.
-- **`detailed` level.** This adds the header names sent upstream, the dropped client header names (sanitised the same way), the certificate SANs (first 4) and the upstream `x-trace-id` count. These are the prototype's R1 proof fields **[E `proto-r1/gateway.py` lines 190-206]**.
+- **Redacted path.** The query is replaced by `?…` when present **[E `research/prior-art.md` §1.4, `srt` redaction]**. Every segment that reveals a loaded secret becomes `~redacted~`, and the whole path becomes `[redacted]` when a secret spans segments. The path is truncated to 128 bytes, and bytes outside `[A-Za-z0-9._~/%-]` become `_`. It is still attacker-chosen text, which is why it stays in this file.
+- **Credentialed routes and secret denies.** A `secret-in-request` deny logs the path `[redacted]`. A credentialed route never logs its raw path, only its prefix and the path rule the request matched, such as `/linear/graphql` or `/echo/api/…`.
+- **`upstream.sni` and `upstream.tls`** are read back from the TLS socket after the handshake; on plain-http test routes they are `null`.
+- **`detailed` level.** Not built: the level is kept in the route table, and these proposed fields are not written: the header names sent upstream, the dropped client header names, the certificate SANs (first 4) and the upstream `x-trace-id` count, the prototype's R1 proof fields **[E `proto-r1/gateway.py` lines 190-206]**.
 - **Never logged at any level.** Bodies, query values, header values or secret bytes.
 - **Sanitising [D].** Built as the audit module's own path sanitiser (section 0). It drops the query and replaces every byte outside `[A-Za-z0-9._~/%-]`, so userinfo and credential queries cannot survive.
 
@@ -591,24 +599,24 @@ F04 set the rule that errors, warnings and status carry only text the factory bu
 
 ### 7.1 bwrap flags
 
-These are the prototype's flags **[E `proto-r1/run_exp3.sh` lines 24-31]** plus additions from prior art **[E `research/prior-art.md` §4.2 "bwrap invocation", recommendation 11]**.
+These are the flags `server/sandbox/bwrap.ts` builds: the prototype's **[E `proto-r1/run_exp3.sh` lines 24-31]** plus additions from prior art **[E `research/prior-art.md` §4.2 "bwrap invocation", recommendation 11]**, as changed in section 0.
 
 ```text
-bwrap
-  --unshare-all --unshare-user --disable-userns   # all namespaces; no nested userns    [E proto] + [G] for --disable-userns
-  --die-with-parent --new-session                  # [E proto]
-  --cap-drop ALL                                   # [E prior-art §4.2]
-  --clearenv --setenv PATH /opt/factory/bin:/usr/bin --setenv HOME /home/agent
-             --setenv PI_CODING_AGENT_DIR /opt/factory/pi-agent
+env -i PATH=/usr/bin:/bin bwrap
+  --unshare-all --die-with-parent --new-session   # no --unshare-user, no --disable-userns (section 0)
+  --cap-drop ALL --clearenv
   --hostname factory-sandbox
-  --proc /proc --dev /dev --tmpfs /tmp --tmpfs /home/agent
-  --seccomp 10                                     # fd 10 carries the compiled filter (7.3)
+  --ro-bind /usr /usr  (+ /bin /sbin /lib /lib64 symlinks)
+  --proc /proc --dev /dev --tmpfs /tmp --tmpfs /run --tmpfs /home
   <binds from 7.2>
+  --seccomp 10                                     # fd 10 carries the compiled filter (7.3)
   --chdir /workspace
+  --setenv PATH /opt/factory/bin:/opt/factory/node/bin:/usr/bin:/bin --setenv HOME /home/agent
+  --setenv PI_CODING_AGENT_DIR /run/pi-agent  (+ XDG_*, PI_OFFLINE, npm_config_* settings)
   -- /opt/factory/node/bin/node /opt/factory/sandbox/stage-init.ts --port 18080 --socket /run/gw.sock --herdr /opt/factory/bin/herdr -- /opt/factory/bin/pi --mode rpc …
 ```
 
-- `--disable-userns` (bwrap 0.8 or later; the VM has 0.9.0 **[E `proto-r1/exp2-netns-bypass.log` line 1]**) stops the workload creating a user namespace to undo mounts. It needs an explicit `--unshare-user` **[G]**. If it fails, the seccomp `clone`/`unshare` rule in 7.3 covers it.
+- Nested user and mount namespaces are refused by the seccomp `clone`/`unshare` rule in 7.3, not by `--disable-userns`.
 - bwrap sets `PR_SET_NO_NEW_PRIVS` when loading `--seccomp` **[G]**. It also runs under the unit's `NoNewPrivileges` **[E `walkthrough/explanation.md` gotcha 3]**.
 
 ### 7.2 Filesystem binds
@@ -622,8 +630,8 @@ The design starts from an empty root and adds. It never starts from `--ro-bind /
 | `/etc/hosts`, `/etc/passwd`, `/etc/group` | ro | synthetic files from the assets bundle **[D]** |
 | `/opt/factory` | ro | the assets bundle `assets-<sha256>/` with Node, Pi, Herdr, packages and `pi-agent/` **[E `walkthrough/explanation.md` C8]** |
 | `/workspace` | rw | exactly `<stateDir>/workspaces/<runId>` **[E `server/controller.ts` lines 415-423]** |
-| `/run/pi-sessions` | rw | `<stateDir>/stages/<runId>/<stage>-<attempt>/sessions`, so the runner can read child usage **[E `walkthrough/explanation.md` C5]** |
-| `/run/gw.sock` | rw bind of one socket | `<stageDir>/gw/gw.sock` (section 2.2) |
+| `/run/pi-agent` | rw | a fresh 0700 copy of the bundle's `pi-agent/` template at `<stageDir>/agent-<session>`, with `models.json` and `settings.json` re-bound read-only. Child sessions live in its `sessions/`, so the runner can read child usage **[E `walkthrough/explanation.md` C5]** |
+| `/run/gw.sock` | rw bind of one socket | `<stateDir>/gw/<nonce>/gw.sock` (section 2.2) |
 
 `/etc/resolv.conf` is not bound. The prototype bound it only to prove DNS fails for lack of a route **[E `proto-r1/summary.md` exp 2]**.
 
@@ -659,16 +667,16 @@ The filter is a deny list over a default allow, returning `EPERM` **[D]**.
 ### 7.4 User scope
 
 ```text
-systemd-run --user --scope --quiet --unit=factory-stage-<runId>-<attempt>
-  -p MemoryMax=2G -p MemorySwapMax=0 -p TasksMax=512 -p TimeoutStopSec=5s
-  -- bwrap …
+systemd-run --user --scope --quiet --unit=factory-stage-<owner>-<run16>-<stage>-<attempt>-<nonce>
+  -p MemoryMax=2G -p TasksMax=512 -p CPUQuota=100% -p TimeoutStopSec=5
+  -- env -i … bwrap …
 ```
 
 - **The pattern is proved.** The prototype ran with `MemoryMax=512M` and `TasksMax=64` **[E `proto-r1/run_exp3.sh` lines 36-38]**. The unit needs `XDG_RUNTIME_DIR=/run/user/1000` **[E `walkthrough/explanation.md` gotcha 2]**.
 - **The values are guesses [G]** for a 2-vCPU, 8 GB VM running two stages at once **[E `docs/design.md` "VM"]**. Lane 10 measures them. The design's `socat` forwarder would have forked per connection against `TasksMax`. The built relay does not fork.
 - **Cleanup.**
-  - The runner closes the gate first. Then it closes Pi's stdin, waits, and runs `systemctl --user stop factory-stage-…` within the 10 s reserve **[E `docs/plans/factory-v1.md` line 291]**.
-  - At startup, before adopting `running` markers, the controller stops every leftover `factory-stage-*` scope **[E `walkthrough/explanation.md` gotcha 6]**.
+  - The runner closes the gate first. Then it closes Pi's stdin, waits, and runs `systemctl --user stop factory-stage-…`, every wait inside one window bounded by the 10 s reserve **[E `docs/plans/factory-v1.md` line 291]**.
+  - At startup, before adopting `running` markers, the controller stops every leftover `factory-stage-<owner>-*` scope it owns **[E `walkthrough/explanation.md` gotcha 6]**. Swap is not limited by the scope; `MemorySwapMax` is not set.
   - The gateway is not in the scope. It dies with the controller (section 2.3).
 
 ## 8. Implementation plan
