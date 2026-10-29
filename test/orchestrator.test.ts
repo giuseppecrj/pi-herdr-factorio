@@ -370,6 +370,13 @@ describe("Orchestrator claims and dispatch", () => {
 
 		assert.deepEqual(report.runs, []);
 		assert.equal(statuses(github, 14).at(-1), "3:released");
+		assert.deepEqual(
+			[...files.claims.values()],
+			[endedClaim(14, 3, { status: "released" })],
+		);
+
+		await controller.tick();
+
 		assert.equal(files.claims.size, 0);
 	});
 
@@ -700,7 +707,10 @@ describe("Orchestrator restart recovery", () => {
 
 		assert.deepEqual(report.runs, []);
 		assert.equal(statuses(github, 14).at(-1), "3:released");
-		assert.equal(files.claims.size, 0);
+		assert.deepEqual(
+			[...files.claims.values()],
+			[endedClaim(14, 3, { status: "released" })],
+		);
 	});
 
 	it("turns an interrupted running stage into a counted retry", async () => {
@@ -769,8 +779,11 @@ describe("Orchestrator retries and stalls", () => {
 		assert.deepEqual(last.runs, []);
 		assert.equal(last.totals.retries, 2);
 		assert.equal(last.totals.failures, 1);
-		assert.equal(statuses(github, 14).at(-1)?.endsWith(":failed"), true);
-		assert.equal(files.claims.size, 0);
+		assert.equal(statuses(github, 14).at(-1), "7:failed");
+		assert.deepEqual(
+			[...files.claims.values()],
+			[endedClaim(14, 7, { status: "failed", attempt: 3 })],
+		);
 	});
 
 	it("terminates a stalled stage and queues a retry", async () => {
@@ -1913,6 +1926,14 @@ describe("Orchestrator ledger behind the local claim record", () => {
 		assert.deepEqual(statuses(github, 14), ["3:released"]);
 		assert.deepEqual(report.runs, []);
 		assert.deepEqual(report.corrupt, []);
+		assert.deepEqual(
+			[...files.claims.values()],
+			[endedClaim(14, 3, { status: "released" })],
+		);
+
+		clock.t += 30_000;
+		await controller.tick();
+
 		assert.equal(files.claims.size, 0);
 	});
 
@@ -2255,6 +2276,37 @@ describe("Orchestrator claim record", () => {
 	});
 });
 
+function hideStatus(
+	ctx: { github: FakeGitHub; wire: Wire },
+	issue: FakeIssue,
+	status: string,
+) {
+	const toggle = { hidden: true };
+	const path = `repos/${FAKE_REPO}/issues/${issue.number}/comments?`;
+
+	ctx.wire.intercept = async (command, args) => {
+		if (!toggle.hidden || !args.some((arg) => arg.startsWith(path))) {
+			return ctx.github.exec(command, args);
+		}
+
+		const saved = issue.comments.splice(0);
+
+		issue.comments.push(
+			...saved.filter(
+				(comment) => !comment.body.includes(`"status":"${status}"`),
+			),
+		);
+
+		try {
+			return await ctx.github.exec(command, args);
+		} finally {
+			issue.comments.splice(0, issue.comments.length, ...saved);
+		}
+	};
+
+	return toggle;
+}
+
 function endedClaim(
 	issue: number,
 	seq: number,
@@ -2262,6 +2314,232 @@ function endedClaim(
 ): ClaimRecord {
 	return { ...blockedClaim(issue, seq), ...change };
 }
+
+describe("Orchestrator terminal claim records", () => {
+	it("keeps a failed run's record until a read shows the marker, so a restart whose read hides it posts nothing", async () => {
+		const ctx = world();
+		const { github, clock, files, executor, start } = ctx;
+		const issue = github.add(labeled(14));
+
+		executor.fallback = { kind: "fail", usage: 0 };
+
+		const controller = start();
+
+		await controller.tick();
+		await controller.tick();
+		clock.t += 10_000;
+		await controller.tick();
+		await controller.tick();
+		clock.t += 20_000;
+		await controller.tick();
+
+		const failed = await controller.tick();
+
+		const ended = [
+			"1:claimed",
+			"2:running",
+			"3:retrying",
+			"4:running",
+			"5:retrying",
+			"6:running",
+			"7:failed",
+		];
+
+		assert.deepEqual(failed.runs, []);
+		assert.deepEqual(statuses(github, 14), ended);
+		assert.deepEqual(
+			files.claims.get(runOf(14)),
+			endedClaim(14, 7, { status: "failed", attempt: 3 }),
+		);
+
+		const hidden = hideStatus(ctx, issue, "failed");
+
+		issue.updatedAt = "2026-10-29T03:00:00Z";
+		clock.t = Date.parse("2026-10-29T03:00:05Z");
+
+		const restarted = await start().tick();
+
+		assert.deepEqual(restarted.runs, []);
+		assert.deepEqual(restarted.corrupt, []);
+		assert.deepEqual(statuses(github, 14), ended);
+		assert.equal(executor.launches.length, 3);
+		assert.equal(files.claims.get(runOf(14))?.status, "failed");
+
+		hidden.hidden = false;
+		issue.updatedAt = "2026-10-29T03:10:00Z";
+		clock.t = Date.parse("2026-10-29T03:10:05Z");
+
+		const revealed = await start().tick();
+
+		assert.deepEqual(revealed.runs, []);
+		assert.deepEqual(revealed.corrupt, []);
+		assert.equal(files.claims.size, 0);
+
+		const next = relabel(github, issue);
+
+		executor.fallback = { kind: "unavailable" };
+		clock.t += 32 * 60_000;
+
+		const relabeled = await start().tick();
+
+		assert.deepEqual(
+			relabeled.runs.map((run) => [run.runId, run.status, run.seq]),
+			[[next, "blocked", 9]],
+		);
+		assert.deepEqual(relabeled.corrupt, []);
+		assert.deepEqual(statuses(github, 14), [
+			...ended,
+			"8:claimed",
+			"9:blocked",
+		]);
+	});
+
+	it("keeps a released run's record across a restart whose read hides the release, and the run takes no slot back", async () => {
+		const ctx = world();
+		const { github, clock, files, executor, start } = ctx;
+		const issue = github.add(labeled(14));
+
+		github.add(labeled(15));
+		github.add(labeled(16));
+		await start().tick();
+		issue.state = "closed";
+		issue.updatedAt = "2026-10-29T02:10:00Z";
+		clock.t = Date.parse("2026-10-29T02:10:05Z");
+
+		const closed = await start().tick();
+
+		assert.deepEqual(runIssues(closed), [15, 16]);
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:blocked",
+			"3:released",
+		]);
+		assert.deepEqual(
+			files.claims.get(runOf(14)),
+			endedClaim(14, 3, { status: "released" }),
+		);
+
+		issue.state = "open";
+		issue.updatedAt = "2026-10-29T02:20:00Z";
+		clock.t = Date.parse("2026-10-29T02:20:05Z");
+
+		const hidden = hideStatus(ctx, issue, "released");
+		const controller = start();
+		const restarted = await controller.tick();
+
+		assert.deepEqual(runIssues(restarted), [15, 16]);
+		assert.deepEqual(restarted.corrupt, []);
+		assert.equal(github.markers(14).length, 3);
+		assert.equal(files.claims.get(runOf(14))?.status, "released");
+
+		hidden.hidden = false;
+		issue.updatedAt = "2026-10-29T02:30:00Z";
+		clock.t = Date.parse("2026-10-29T02:30:05Z");
+
+		const visible = await controller.tick();
+
+		assert.deepEqual(runIssues(visible), [15, 16]);
+		assert.deepEqual(visible.corrupt, []);
+		assert.equal(files.claims.has(runOf(14)), false);
+		assert.equal(github.markers(14).length, 3);
+		assert.deepEqual(statuses(github, 16), ["1:claimed", "2:blocked"]);
+		assert.equal(executor.launches.length, 6);
+	});
+
+	it("does not revive a released event when its issue reopens and the comments read is empty", async () => {
+		const ctx = world();
+		const { github, clock, files, executor, start } = ctx;
+		const issue = github.add(labeled(14, { author: "triager" }));
+		const controller = start();
+
+		await controller.tick();
+		clock.t += 30_000;
+		await controller.tick();
+		issue.state = "closed";
+		issue.updatedAt = "2026-10-29T02:01:00Z";
+		github.now = issue.updatedAt;
+		clock.t += 30_000;
+
+		const closed = await controller.tick();
+
+		assert.deepEqual(closed.runs, []);
+		assert.deepEqual(
+			files.claims.get(runOf(14)),
+			endedClaim(14, 3, { status: "released" }),
+		);
+
+		issue.state = "open";
+		issue.updatedAt = "2026-10-29T02:02:00Z";
+		github.now = issue.updatedAt;
+		clock.t += 60_000;
+
+		const saved = issue.comments.splice(0);
+		const reopened = await controller.tick();
+
+		issue.comments.push(...saved);
+
+		assert.deepEqual(reopened.runs, []);
+		assert.deepEqual(reopened.corrupt, []);
+		assert.equal(executor.launches.length, 1);
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:blocked",
+			"3:released",
+		]);
+
+		issue.updatedAt = "2026-10-29T02:03:00Z";
+		clock.t += 60_000;
+
+		const revealed = await controller.tick();
+
+		assert.deepEqual(revealed.runs, []);
+		assert.deepEqual(revealed.corrupt, []);
+		assert.equal(files.claims.size, 0);
+
+		const next = relabel(github, issue);
+
+		clock.t += 32 * 60_000;
+
+		const relabeled = await controller.tick();
+
+		assert.deepEqual(
+			relabeled.runs.map((run) => [run.runId, run.status, run.seq]),
+			[[next, "blocked", 5]],
+		);
+		assert.deepEqual(relabeled.corrupt, []);
+		assert.equal(executor.launches.length, 2);
+	});
+
+	it("removes a terminal record once a later read shows its marker, then polls 4 requests", async () => {
+		const { github, clock, files, start } = world();
+		const issue = github.add(labeled(14));
+		const controller = start();
+
+		await controller.tick();
+		issue.state = "closed";
+		issue.updatedAt = "2026-10-29T02:01:00Z";
+		clock.t += 30_000;
+		await controller.tick();
+
+		assert.equal(files.claims.get(runOf(14))?.status, "released");
+
+		clock.t += 30_000;
+		await controller.tick();
+
+		assert.equal(files.claims.size, 0);
+
+		clock.t += 30_000;
+		github.calls.length = 0;
+		await controller.tick();
+
+		assert.equal(github.calls.length, 4, JSON.stringify(github.calls));
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:blocked",
+			"3:released",
+		]);
+	});
+});
 
 describe("Orchestrator claim record usage", () => {
 	it("keeps the recorded usage when the ledger is behind, so the run budget still ends the run", async () => {

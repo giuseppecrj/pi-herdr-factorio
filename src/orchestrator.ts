@@ -98,6 +98,17 @@ export type ClaimRecord = {
 
 type ConfirmedRecord = ClaimRecord & { readonly seq: number };
 
+/**
+ * A claim record whose run ended. It stays on disk until a ledger read shows
+ * its marker or a later one. `tick` is the last tick that posted it or read
+ * the ledger for it.
+ */
+type EndedRecord = {
+	readonly claim: ConfirmedRecord;
+	tick: number;
+	unwritten: boolean;
+};
+
 export type WorkspaceState = "present" | "missing" | "unavailable";
 
 /** Run files under the state directory: claim records and private workspaces. */
@@ -439,6 +450,7 @@ export class Orchestrator {
 	/** Issues whose marker ledger this tick read clean. */
 	readonly #ledgerRead = new Set<number>();
 	readonly #local = new Map<number, ConfirmedRecord>();
+	readonly #ended = new Map<Digest, EndedRecord>();
 	readonly #behind = new Map<number, TickReport["ledgerBehind"][number]>();
 
 	constructor(input: OrchestratorInput) {
@@ -513,6 +525,8 @@ export class Orchestrator {
 			await this.#discover(candidates.value);
 		}
 
+		await this.#confirmEnds();
+
 		const open = gate.kind === "open" && candidates.kind === "ok";
 
 		if (open) {
@@ -562,6 +576,14 @@ export class Orchestrator {
 
 			if (seq > (this.#local.get(claim.issue)?.seq ?? 0)) {
 				this.#local.set(claim.issue, { ...claim, seq });
+			}
+
+			if (claim.status !== null && isTerminal(claim.status)) {
+				this.#ended.set(claim.runId, {
+					claim: { ...claim, seq },
+					tick: 0,
+					unwritten: false,
+				});
 			}
 		}
 
@@ -728,6 +750,7 @@ export class Orchestrator {
 			}
 
 			this.#localAhead(run.issue, ledger.value);
+			await this.#confirmEnd(run.issue, ledger.value);
 		}
 
 		const latest = latestReadyEntry(timeline.value);
@@ -808,6 +831,80 @@ export class Orchestrator {
 			next: desiredStatus(run.phase),
 			attempt: run.attempt,
 		});
+	}
+
+	/** Removes the ended records of `issue` whose marker, or a later one, this ledger shows. */
+	async #confirmEnd(issue: number, ledger: CleanLedger): Promise<void> {
+		const ledgerSeq = ledger.markers.at(-1)?.marker.seq ?? 0;
+
+		for (const [runId, ended] of this.#ended) {
+			if (ended.claim.issue !== issue) continue;
+
+			if (ledgerSeq < ended.claim.seq) {
+				ended.tick = this.#ticks;
+				continue;
+			}
+
+			this.#ended.delete(runId);
+			await this.#input.files.removeClaim(runId);
+			this.#input.log("claim_removed", {
+				issue,
+				runId,
+				seq: ended.claim.seq,
+				status: ended.claim.status,
+			});
+		}
+	}
+
+	/**
+	 * Retries unwritten ended records, then reads the ledger of every issue
+	 * whose ended record was neither posted nor read this tick.
+	 */
+	async #confirmEnds(): Promise<void> {
+		const issues = new Set<number>();
+
+		for (const ended of this.#ended.values()) {
+			if (ended.unwritten) await this.#writeEnded(ended);
+
+			if (ended.tick < this.#ticks) issues.add(ended.claim.issue);
+		}
+
+		for (const issue of issues) {
+			const ledger = await this.#readLedger(issue);
+
+			if (ledger.kind === "failed") continue;
+
+			if (ledger.value.kind === "corrupt") {
+				this.#markCorrupt(issue, ledger.value, null);
+				continue;
+			}
+
+			this.#localAhead(issue, ledger.value);
+			await this.#confirmEnd(issue, ledger.value);
+		}
+	}
+
+	async #writeEnded(ended: EndedRecord): Promise<void> {
+		ended.unwritten = !(await this.#input.files.writeClaim(ended.claim));
+
+		if (ended.unwritten) {
+			this.#input.log("claim_unwritable", {
+				issue: ended.claim.issue,
+				runId: ended.claim.runId,
+			});
+		}
+	}
+
+	/** Whether the winning local state for `runId` is terminal: that event never runs again. */
+	#endedLocally(issue: number, runId: Digest): boolean {
+		const local = this.#local.get(issue);
+
+		return (
+			this.#ended.has(runId) ||
+			(local?.runId === runId &&
+				local.status !== null &&
+				isTerminal(local.status))
+		);
 	}
 
 	async #readLedger(issue: number): Promise<Read<MarkerLedger>> {
@@ -956,6 +1053,7 @@ export class Orchestrator {
 
 			this.state.corrupt.delete(issue);
 			this.#ledgerRead.add(issue);
+			await this.#confirmEnd(issue, ledger.value);
 
 			const local = this.#localAhead(issue, ledger.value);
 
@@ -999,7 +1097,7 @@ export class Orchestrator {
 		candidate: boolean,
 	): Promise<void> {
 		for (const claim of await this.#input.files.listClaims()) {
-			if (claim.issue !== issue) continue;
+			if (claim.issue !== issue || this.#ended.has(claim.runId)) continue;
 
 			const latest = latestFor(ledger, claim.runId);
 
@@ -1189,6 +1287,7 @@ export class Orchestrator {
 	): Promise<
 		| { readonly kind: "found"; readonly receipt: AdmittedReceipt }
 		| { readonly kind: "none" }
+		| { readonly kind: "ended" }
 		| { readonly kind: "defer" }
 	> {
 		const repo = this.#input.repo;
@@ -1216,6 +1315,15 @@ export class Orchestrator {
 			!unmarked.includes(latest.entry.id)
 		) {
 			return { kind: "none" };
+		}
+
+		if (
+			this.#endedLocally(
+				issue,
+				runIdOf({ repo, issue, eventId: latest.entry.id }),
+			)
+		) {
+			return { kind: "ended" };
 		}
 
 		const stored = await this.#input.store.read({
@@ -1314,6 +1422,12 @@ export class Orchestrator {
 
 		if (local.kind === "defer") return null;
 
+		if (local.kind === "ended") {
+			this.#see(issue, record.updatedAt, { kind: "decided" });
+
+			return null;
+		}
+
 		const admitted =
 			local.kind === "found"
 				? local.receipt
@@ -1322,9 +1436,8 @@ export class Orchestrator {
 		if (admitted === null) return null;
 
 		const runId = runIdOf({ repo, issue, eventId: admitted.eventId });
-		const latest = latestFor(ledger, runId);
 
-		if (latest !== null) {
+		if (latestFor(ledger, runId) !== null || this.#endedLocally(issue, runId)) {
 			this.#see(issue, record.updatedAt, { kind: "decided" });
 
 			return null;
@@ -1464,8 +1577,15 @@ export class Orchestrator {
 		await this.#publishMarker(run);
 
 		if (run.marked !== null && isTerminal(run.marked.status)) {
+			const ended: EndedRecord = {
+				claim: { ...claimOf(run), seq: run.seq },
+				tick: this.#ticks,
+				unwritten: false,
+			};
+
 			this.state.runs.delete(run.issue);
-			await this.#input.files.removeClaim(run.runId);
+			this.#ended.set(run.runId, ended);
+			await this.#writeEnded(ended);
 		} else if (run.seq !== before) {
 			await this.#writeClaim(run);
 		}
