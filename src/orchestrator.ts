@@ -22,7 +22,7 @@ import {
 	CONTROLLER_LOGIN,
 	currentMarker,
 	formatMarker,
-	isMarkerCandidate,
+	isControllerComment,
 	isTerminal,
 	latestFor,
 	type Marker,
@@ -678,10 +678,10 @@ export class Orchestrator {
 
 		if (comments.kind === "failed") return comments;
 
-		const candidates = comments.value.filter(isMarkerCandidate);
+		const controller = comments.value.filter(isControllerComment);
 
 		const edits = await this.#adapter.readCommentEdits(
-			candidates.map((comment) => comment.nodeId),
+			controller.map((comment) => comment.nodeId),
 		);
 
 		if (edits.kind === "failed") return edits;

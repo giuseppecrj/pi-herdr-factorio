@@ -341,12 +341,12 @@ export function parseMarker(body: string): MarkerParse {
 		: corrupt("run_id_mismatch");
 }
 
-/** A REST comment the trust rule must look at: written as the controller and shaped like a marker. */
-export function isMarkerCandidate(comment: IssueComment): boolean {
-	return (
-		comment.author?.login === CONTROLLER_LOGIN &&
-		comment.body.startsWith(MARKER_LEAD)
-	);
+/**
+ * A REST comment written as the controller. The trust rule checks the edit
+ * record of every one, so stripping the marker prefix from one is detected.
+ */
+export function isControllerComment(comment: IssueComment): boolean {
+	return comment.author?.login === CONTROLLER_LOGIN;
 }
 
 export type TrustedMarker = {
@@ -406,16 +406,9 @@ function trustCheck(input: {
 		return defect("wrong_issue");
 	}
 
-	if (
-		edit === undefined ||
-		edit.id !== comment.id ||
-		edit.issue !== issue ||
-		edit.repo !== repo
-	) {
-		return defect("edit_unverified");
-	}
+	const edited = editDefect(comment, edit, repo, issue);
 
-	if (edit.lastEditedAt !== null) return defect("edited");
+	if (edited !== null) return defect(edited);
 
 	const parsed = parseMarker(comment.body);
 
@@ -430,6 +423,24 @@ function trustCheck(input: {
 	}
 
 	return { marker, commentId: comment.id, createdAt: comment.createdAt };
+}
+
+function editDefect(
+	comment: IssueComment,
+	edit: CommentEdit | undefined,
+	repo: RepoSlug,
+	issue: number,
+): "edit_unverified" | "edited" | null {
+	if (
+		edit === undefined ||
+		edit.id !== comment.id ||
+		edit.issue !== issue ||
+		edit.repo !== repo
+	) {
+		return "edit_unverified";
+	}
+
+	return edit.lastEditedAt === null ? null : "edited";
 }
 
 function sameRun(left: Marker, right: Marker): boolean {
@@ -475,7 +486,8 @@ function conflictOf(markers: readonly TrustedMarker[]): MarkerLedger | null {
 
 /**
  * Applies the trust rule to every comment on `issue`. Comments from any other
- * author are ignored. A controller comment shaped like a marker that fails any
+ * author are ignored. A controller comment that was edited or whose edit read
+ * does not match it, a controller comment shaped like a marker that fails any
  * rule, or two trusted markers that disagree, make the issue corrupt.
  */
 export function markerLedger(input: {
@@ -488,14 +500,28 @@ export function markerLedger(input: {
 	let ignored = 0;
 
 	for (const comment of input.comments) {
-		if (!isMarkerCandidate(comment)) {
-			if (comment.body.startsWith(MARKER_LEAD)) ignored++;
+		const claimsMarker = comment.body.startsWith(MARKER_LEAD);
+
+		if (!isControllerComment(comment)) {
+			if (claimsMarker) ignored++;
+			continue;
+		}
+
+		const edit = input.edits.get(comment.nodeId);
+
+		if (!claimsMarker) {
+			const edited = editDefect(comment, edit, input.repo, input.issue);
+
+			if (edited !== null) {
+				return { kind: "corrupt", defect: edited, commentId: comment.id };
+			}
+
 			continue;
 		}
 
 		const result = trustOne({
 			comment,
-			edit: input.edits.get(comment.nodeId),
+			edit,
 			repo: input.repo,
 			issue: input.issue,
 		});

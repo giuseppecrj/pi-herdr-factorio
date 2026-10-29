@@ -385,6 +385,43 @@ describe("markerLedger trust rule", () => {
 		});
 	});
 
+	it("fails closed on a bot comment edited to drop the marker prefix", () => {
+		const item = comment("A plain note from the bot.");
+
+		const edits = new Map([
+			[
+				item.nodeId,
+				{ id: item.id, issue: 14, repo, lastEditedAt: "2026-10-29T03:00:00Z" },
+			],
+		]);
+
+		assert.deepEqual(ledgerOf([item], edits), {
+			kind: "corrupt",
+			defect: "edited",
+			commentId: item.id,
+		});
+	});
+
+	it("fails closed on a bot comment without the prefix whose edit read is missing or names another comment", () => {
+		const item = comment("A plain note from the bot.");
+
+		assert.deepEqual(ledgerOf([item], new Map()), {
+			kind: "corrupt",
+			defect: "edit_unverified",
+			commentId: item.id,
+		});
+
+		const wrong = new Map([
+			[item.nodeId, { id: "1", issue: 14, repo, lastEditedAt: null }],
+		]);
+
+		assert.deepEqual(ledgerOf([item], wrong), {
+			kind: "corrupt",
+			defect: "edit_unverified",
+			commentId: item.id,
+		});
+	});
+
 	it("fails closed when the edit read names another comment or is missing", () => {
 		const item = comment(formatMarker(marker()));
 

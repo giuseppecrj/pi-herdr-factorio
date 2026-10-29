@@ -1194,3 +1194,23 @@ describe("Orchestrator restart reads", () => {
 		assert.equal(statuses(github, 14).at(-1), "3:released");
 	});
 });
+
+describe("Orchestrator bot comment edits", () => {
+	it("fails closed after a restart when an owner strips the marker prefix from bot comments", async () => {
+		const { github, start } = world();
+		const issue = github.add(labeled(14));
+
+		await start().tick();
+
+		for (const comment of issue.comments) {
+			comment.body = comment.body.replace("<!-- factory:", "<!-- note:");
+			comment.lastEditedAt = "2026-10-29T03:00:00Z";
+		}
+
+		const report = await start().tick();
+
+		assert.deepEqual(report.runs, []);
+		assert.deepEqual(report.corrupt, [{ issue: 14, defect: "edited" }]);
+		assert.equal(issue.comments.length, 2);
+	});
+});
