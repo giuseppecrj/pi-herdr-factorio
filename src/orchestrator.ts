@@ -1003,7 +1003,6 @@ export class Orchestrator {
 		);
 	}
 
-	/** Returns the ready issues it read directly because the candidate list omitted them. */
 	async #discover(
 		candidates: readonly IssueRecord[],
 		queued: number[],
@@ -1133,11 +1132,6 @@ export class Orchestrator {
 		);
 	}
 
-	/**
-	 * Settles the issue's claims that no run holds. A claim on a ready issue is
-	 * held for dispatch, and one on a closed or unlabeled issue is released.
-	 * It is `undecided` when a release cannot be built or posted this tick.
-	 */
 	async #settleClaims(
 		ledger: CleanLedger,
 		record: IssueRecord,
@@ -1164,12 +1158,6 @@ export class Orchestrator {
 		return settled;
 	}
 
-	/**
-	 * Releases a claim no run holds, such as one recorded before its first
-	 * marker. Its marker fields come from its last marker, or else from its
-	 * admission record. It returns `false` when neither can be read, or when
-	 * another run on the issue is still being published.
-	 */
 	async #releaseClaim(
 		claim: ClaimRecord,
 		marked: Marker | null,
