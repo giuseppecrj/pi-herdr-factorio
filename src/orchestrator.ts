@@ -248,6 +248,8 @@ export type TickReport = {
 	};
 	readonly workflowSha: GitSha | null;
 	readonly maxConcurrent: number;
+	/** Runs holding a slot. Above `maxConcurrent` only after the cap was lowered while they ran. */
+	readonly active: number;
 	readonly runs: readonly RunView[];
 	readonly queued: readonly number[];
 	/** Scoped issues that are not open `factory:ready` issues and hold no claim. */
@@ -1936,6 +1938,7 @@ export class Orchestrator {
 			dispatch: { enabled: input.enabled, reasons: input.reasons },
 			workflowSha: this.#workflowSha,
 			maxConcurrent: input.limits?.maxConcurrent ?? 0,
+			active: this.#active(),
 			runs,
 			queued: input.queued,
 			absent: input.absent,

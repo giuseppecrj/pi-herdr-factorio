@@ -363,6 +363,8 @@ A tick runs these steps. Reconciliation always runs, before the per-tick reads, 
 
 A switch that is off stops new claims and new launches. It does not end or release runs that already exist.
 
+Lowering `agent.max_concurrent` while the controller runs governs new launches and adoptions only, as Symphony's reload applies only to future dispatch. Runs that already hold a slot keep it: a healthy run is never aborted or released because of the lower cap, and the excess drains as those runs end. Until the number of slot holders is below the new cap, no candidate is claimed, no `claimed` or `blocked` run is adopted, and no retry launches. The claim snapshot shows both numbers, `active` and `maxConcurrent`, so the excess is visible while it lasts. A controller started after the change adopts only up to the new cap.
+
 An issue whose `updated_at` has not changed since the controller last decided it is not read again: no comments, timeline or permission request. `updated_at` has whole seconds, so a change later in the second the controller read the issue would keep the same value. A decision is therefore trusted only when the tick that made it started at least 1 s after its `updated_at` second ended, by the controller's clock. An issue decided sooner is read once more on the next tick. The rule assumes the VM clock is within 1 s of GitHub's, as NTP keeps it. The held run's `eventId` and the decision itself are kept apart from this watermark. Once every decision has settled and every ended claim record is confirmed, an unchanged tick makes 4 requests: the repository switch, the two workflow reads and the candidate list. The cache lives in memory, so the first tick after a restart reads each scoped candidate once.
 
 ### Runs
@@ -478,6 +480,7 @@ The controller keeps no database. A restart rebuilds each claim from the markers
 | `dispatch` | object | `enabled`, and `reasons`: any of `state_unavailable`, `locally_disabled`, `repo_switch_off`, `repo_switch_unavailable`, `workflow_unavailable` and `candidates_unavailable`. |
 | `workflowSha` | string or `null` | The `main` SHA of the last valid workflow. |
 | `maxConcurrent` | number | The slot limit in force, `0` until the process has loaded a workflow. |
+| `active` | number | Runs holding a slot: `claimed`, `running` or `blocked`. It is above `maxConcurrent` only after `agent.max_concurrent` was lowered while those runs held their slots. |
 | `runs` | array | One entry per claim: `issue`, `runId`, `eventId`, `stage`, `status`, `attempt`, `seq`, `markerPending`, `workspace` (`present` or `missing_replayed`), `retryAt` and `usage`. |
 | `queued` | number array | Candidates that waited for a slot this tick, including a claimed run waiting for a slot before it is adopted or recovered. On a tick that skips dispatch, every claim record not yet adopted, released or dropped. |
 | `absent` | number array | Issues named with `--issue` that are not open `factory:ready` issues and hold no claim. |

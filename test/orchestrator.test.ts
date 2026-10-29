@@ -3707,6 +3707,46 @@ describe("Orchestrator claims before their first marker whose event was replaced
 	});
 });
 
+describe("Orchestrator cap reduction in a running process", () => {
+	it("keeps the runs that hold slots, and launches or adopts nothing while they are at or above the new cap", async () => {
+		const { github, clock, files, executor, wire, start } = world();
+
+		github.add(labeled(16));
+		await start().tick();
+		files.claims.delete(runOf(16));
+
+		github.add(labeled(14));
+		github.add(labeled(15));
+		wire.intercept = omitFromList(github, 16);
+		clock.t += 30_000;
+
+		const controller = start();
+		const before = await controller.tick();
+
+		assert.deepEqual(runIssues(before), [14, 15]);
+		assert.equal(executor.launches.length, 3);
+
+		wire.intercept = null;
+		capAt(github, 1);
+		github.add(labeled(17));
+
+		for (let n = 0; n < 2; n++) {
+			clock.t += 30_000;
+
+			const report = await controller.tick();
+
+			assert.equal(report.maxConcurrent, 1);
+			assert.equal(report.active, 2);
+			assert.deepEqual(runIssues(report), [14, 15]);
+			assert.deepEqual(report.queued, [16, 17]);
+		}
+
+		assert.equal(executor.launches.length, 3);
+		assert.deepEqual(statuses(github, 16), ["1:claimed", "2:blocked"]);
+		assert.deepEqual(statuses(github, 17), []);
+	});
+});
+
 describe("Orchestrator workspace replay", () => {
 	it("keeps the replay of an adopted run whose workspace preparation failed, and replays it once preparation works", async () => {
 		const { github, clock, files, executor, start } = world();
