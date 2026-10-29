@@ -288,7 +288,6 @@ type Eligibility = "confirmed" | "unverified" | "released" | "dropped";
 
 type ReleaseReason = "closed" | "unlabeled" | "new_event";
 
-/** Why a claim on an open issue is no longer eligible, or `null` while `eventId` is the latest ready event. */
 function replacedBy(
 	timeline: readonly TimelineEntry[],
 	eventId: string,
