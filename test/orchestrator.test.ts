@@ -187,6 +187,7 @@ function resultOf(
 			unreadChildren: 0,
 		},
 		egress: null,
+		stderr: [],
 		assetsDigest: "a".repeat(64),
 		versions: { pi: "1.4.0", piHerdrAgents: "3.3.1", piHerdrPstack: "0.5.0" },
 		pricing: "unavailable",

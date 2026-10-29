@@ -18,11 +18,13 @@ import { after, before, describe, it } from "node:test";
 import {
 	agentDirFrom,
 	bareModel,
+	captureStderr,
 	hostSessionPath,
 	piCommand,
 	runStage,
 	type StageHost,
 	type StageRunInput,
+	STDERR_CAP_BYTES,
 } from "../../server/sandbox.ts";
 import { AuditLog } from "../../server/sandbox/audit.ts";
 import type {
@@ -308,6 +310,11 @@ function harness(
 			receipts.push(receipt);
 
 			return true;
+		},
+		async stderrLog(session) {
+			return launches.length > session
+				? { session, file: `pi-stderr-${session}.log`, bytes: 7 }
+				: null;
 		},
 	};
 
@@ -829,6 +836,83 @@ describe("runStage", () => {
 		assert.equal(result.kind === "failed" && result.exit, "crashed");
 		assert.deepEqual(h.launches, []);
 		assert.equal(h.receipts.length, 1);
+		assert.deepEqual(result.receipt.stderr, []);
+	});
+});
+
+describe("sandbox stderr", () => {
+	it("keeps the last 64 KiB in a private host-side file and returns the total byte count", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-stderr-"));
+		const file = join(dir, "pi-stderr-0.log");
+
+		try {
+			const stream = new PassThrough();
+			const finish = captureStderr(stream, file);
+
+			stream.write("HEAD-MARKER\n");
+			stream.write(Buffer.alloc(100 * 1024, 0x78));
+			stream.end("TAIL-MARKER\n");
+
+			assert.equal(await finish(1_000), 12 + 100 * 1024 + 12);
+
+			const kept = readFileSync(file);
+
+			assert.equal(STDERR_CAP_BYTES, 64 * 1024);
+			assert.equal(kept.length, STDERR_CAP_BYTES);
+			assert.equal(
+				kept.toString().endsWith("x".repeat(100) + "TAIL-MARKER\n"),
+				true,
+			);
+			assert.equal(kept.includes("HEAD-MARKER"), false);
+			assert.equal(statSync(file).mode & 0o777, 0o600);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("writes what arrived by the wait limit when the stream stays open", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-stderr-"));
+		const file = join(dir, "pi-stderr-1.log");
+
+		try {
+			const stream = new PassThrough();
+			const finish = captureStderr(stream, file);
+
+			stream.write("bwrap: setting up uid map: Permission denied\n");
+
+			assert.equal(await finish(20), 45);
+			assert.equal(
+				readFileSync(file, "utf8"),
+				"bwrap: setting up uid map: Permission denied\n",
+			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("points the receipt at each session's stderr file by name and byte count only", async () => {
+		const refusal = fixture("exp8-incomplete_content_filter.jsonl");
+
+		const pass = [
+			started("x"),
+			{ type: "agent_start" },
+			{ type: "turn_start" },
+			assistant({ provider: "xai", model: "grok-4.6", tokens: 30 }),
+			{ type: "agent_settled", aborted: false },
+		];
+
+		const h = harness([replayer(refusal), replayer(pass)]);
+
+		const result = await runStage(
+			input({}, { fallback: model("xai/grok-4.6") }),
+			h.host,
+		);
+
+		assert.deepEqual(result.receipt.stderr, [
+			{ session: 0, file: "pi-stderr-0.log", bytes: 7 },
+			{ session: 1, file: "pi-stderr-1.log", bytes: 7 },
+		]);
+		assert.doesNotMatch(JSON.stringify(result.receipt), /stderr text/);
 	});
 });
 

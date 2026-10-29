@@ -56,9 +56,21 @@ export type StageUsage = {
 };
 
 /**
+ * Where one Pi session's sandbox stderr was kept: a file the factory named,
+ * beside the receipt, and the bytes the sandbox wrote in all. The file holds
+ * at most the last 64 KiB. Its text is untrusted and is never copied here.
+ */
+export type StderrRecord = {
+	readonly session: number;
+	readonly file: string;
+	readonly bytes: number;
+};
+
+/**
  * The host-side record of one stage attempt, written under the run's stage
  * directory and never into a marker. It holds only numbers, enums, model
- * ids and digests: no model text, provider error text or paths.
+ * ids, digests and the factory-built names of files beside it: no model
+ * text, provider error text, stderr text or other paths.
  */
 export type StageReceipt = {
 	readonly version: 1;
@@ -77,6 +89,7 @@ export type StageReceipt = {
 	readonly turns: number;
 	readonly usage: StageUsage;
 	readonly egress: readonly RouteSummary[] | null;
+	readonly stderr: readonly StderrRecord[];
 	readonly assetsDigest: string;
 	readonly versions: PinnedVersions;
 	readonly pricing: "unavailable";

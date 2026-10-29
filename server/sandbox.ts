@@ -42,6 +42,7 @@ import type {
 	StageResult,
 	StageRunSettings,
 	StageUsage,
+	StderrRecord,
 } from "./sandbox/result.ts";
 import { stageResult } from "./sandbox/result.ts";
 import {
@@ -78,6 +79,8 @@ export const CLEANUP_RESERVE_MS = 10_000;
 
 export const MODEL_REQUEST_CEILING = 2_000;
 
+export const STDERR_CAP_BYTES = 64 * 1024;
+
 const PROMPT_ID = "factory-prompt";
 
 const ABORT_WAIT_MS = 5_000;
@@ -109,6 +112,7 @@ export interface StageHost {
 		sessionFile: string,
 	): Promise<ChildUsage | null>;
 	writeReceipt(receipt: StageReceipt): Promise<boolean>;
+	stderrLog(session: number): Promise<StderrRecord | null>;
 }
 
 /** The model id as the request body names it, without its provider prefix. */
@@ -459,6 +463,7 @@ export async function runStage(
 	});
 
 	const gateway = await host.startGateway(table);
+	const sessions: number[] = [];
 
 	const receipt = async (
 		primary: SessionReport,
@@ -479,6 +484,9 @@ export async function runStage(
 			turns: ledger.turns,
 			usage: ledger.usage(gateway !== null),
 			egress,
+			stderr: (
+				await Promise.all(sessions.map((session) => host.stderrLog(session)))
+			).filter((record) => record !== null),
 			assetsDigest: host.assetsDigest,
 			versions: host.versions,
 			pricing: "unavailable",
@@ -533,6 +541,8 @@ export async function runStage(
 		stage.listener?.({ event: "drained" });
 	});
 
+	sessions.push(0);
+
 	const primary = await runSession(stage, input.settings.model, 0);
 	let fallback: FallbackRecord | null = null;
 
@@ -549,6 +559,8 @@ export async function runStage(
 			xai !== null &&
 			(await gateway.setRoute(openai, false)) &&
 			(await gateway.setRoute(xai, true));
+
+		if (switched) sessions.push(1);
 
 		const second: SessionReport = switched
 			? await runSession(stage, input.settings.fallback, 1)
@@ -690,6 +702,48 @@ export function hostSessionPath(
 	}
 }
 
+/**
+ * Keeps the last `STDERR_CAP_BYTES` a sandbox writes to stderr. The returned
+ * function waits up to `waitMs` for the stream to close, writes the kept
+ * bytes to `path` with mode 0600, and resolves to the total bytes written,
+ * or `null` when the file could not be written. The text is untrusted, so
+ * it goes only to that file.
+ */
+export function captureStderr(
+	stream: Readable,
+	path: string,
+): (waitMs: number) => Promise<number | null> {
+	let tail = Buffer.alloc(0);
+	let bytes = 0;
+
+	const closed = new Promise<void>((done) => {
+		stream.on("close", () => done());
+		stream.on("end", () => done());
+		stream.on("error", () => done());
+	});
+
+	stream.on("data", (chunk: Buffer) => {
+		bytes += chunk.length;
+		tail = Buffer.concat([tail, chunk]);
+
+		if (tail.length > STDERR_CAP_BYTES) {
+			tail = Buffer.from(tail.subarray(tail.length - STDERR_CAP_BYTES));
+		}
+	});
+
+	return async (waitMs) => {
+		await waitFor(closed, waitMs);
+
+		try {
+			writeFileSync(path, tail, { mode: 0o600, flag: "wx" });
+
+			return bytes;
+		} catch {
+			return null;
+		}
+	};
+}
+
 class ScopedPi implements PiProcess {
 	readonly stdin: Writable;
 	readonly stdout: Readable;
@@ -721,6 +775,9 @@ class ScopedPi implements PiProcess {
 export function sandboxHost(config: SandboxHostConfig): StageHost {
 	const units = new Map<number, string>();
 	const agentDirs = new Map<number, string>();
+
+	const stderr = new Map<number, (waitMs: number) => Promise<number | null>>();
+
 	let socketPath: string | null = null;
 
 	mkdirSync(join(config.stateDir, "stages", config.runId), {
@@ -801,14 +858,22 @@ export function sandboxHost(config: SandboxHostConfig): StageHost {
 				xdgRuntimeDir: config.xdgRuntimeDir,
 			});
 
+			if (child.stderr !== null) {
+				stderr.set(
+					session,
+					captureStderr(
+						child.stderr,
+						join(stageDir, `pi-stderr-${session}.log`),
+					),
+				);
+			}
+
 			if (child.stdin === null || child.stdout === null) return null;
 
 			const exited = new Promise<number | null>((done) => {
 				child.on("exit", (code) => done(code));
 				child.on("error", () => done(null));
 			});
-
-			child.stderr?.resume();
 
 			return new ScopedPi(child.stdin, child.stdout, exited, () =>
 				child.kill("SIGKILL"),
@@ -848,6 +913,14 @@ export function sandboxHost(config: SandboxHostConfig): StageHost {
 			} catch {
 				return false;
 			}
+		},
+		async stderrLog(session) {
+			const finish = stderr.get(session);
+			const bytes = finish === undefined ? null : await finish(EXIT_WAIT_MS);
+
+			return bytes === null
+				? null
+				: { session, file: `pi-stderr-${session}.log`, bytes };
 		},
 	};
 }
