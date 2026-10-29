@@ -166,6 +166,26 @@ describe("credential ceilings", () => {
 		);
 	});
 
+	it("refuses every header the client filter treats as retargeting, from one shared list", () => {
+		const authorization =
+			'{"kind":"header","name":"Authorization","scheme":"Bearer"}';
+
+		for (const name of [
+			"x-host",
+			"x-original-url",
+			"x-rewrite-url",
+			"x-http-method-override",
+			"x-forwarded",
+		]) {
+			const text = LINEAR_CEILING.replace(
+				authorization,
+				JSON.stringify({ kind: "header", name, scheme: null }),
+			);
+
+			assert.equal(parseCeilings(text, "test").ok, false, name);
+		}
+	});
+
 	it("refuses to bind a route that places its secret in a routing header", () => {
 		const placement = { kind: "header", name: "Host", scheme: null } as const;
 		const route = credentialedRoute(443);
@@ -554,6 +574,39 @@ describe("reflection scanning", () => {
 
 		short.push(Buffer.from([0x1f, 0x8b]));
 		assert.equal(short.end().kind, "blocked");
+	});
+
+	it("finds the secret as hex, UTF-16 and whitespace-wrapped base64, across 3-byte chunks", () => {
+		const leak = `leak ${ECHO_SECRET}`;
+		const utf16be = Buffer.from(leak, "utf16le").swap16();
+
+		const bodies: [string, Buffer][] = [
+			["hex", Buffer.from(Buffer.from(leak).toString("hex"))],
+			["HEX", Buffer.from(Buffer.from(leak).toString("hex").toUpperCase())],
+			["utf16le", Buffer.from(leak, "utf16le")],
+			["utf16be", utf16be],
+			[
+				"wrapped base64",
+				Buffer.from(
+					(
+						Buffer.from(leak)
+							.toString("base64")
+							.match(/.{1,4}/g) ?? []
+					).join("\n"),
+				),
+			],
+		];
+
+		for (const [name, body] of bodies) {
+			const filter = new ReflectionFilter(forms);
+			let blocked = false;
+
+			for (let at = 0; at < body.length && !blocked; at += 3) {
+				blocked = filter.push(body.subarray(at, at + 3)).kind === "blocked";
+			}
+
+			assert.equal(blocked || filter.end().kind === "blocked", true, name);
+		}
 	});
 
 	it("passes clean bytes through unchanged", () => {

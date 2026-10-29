@@ -24,6 +24,7 @@ import type {
 import {
 	type BoundCredential,
 	buildUpstreamHeaders,
+	credentialedTypeAllowed,
 	type CredentialBinding,
 	ReflectionFilter,
 	responseHeadersFor,
@@ -527,7 +528,8 @@ export class Gateway implements AdmissionState {
 	/**
 	 * A request that carried a secret logs no path at all, and a credentialed
 	 * route logs only its path template. Anything else logs the redacted path
-	 * with every segment that reveals a secret removed.
+	 * with every segment that reveals a secret removed, or its route's
+	 * template when the secret shows only once separators are removed.
 	 */
 	#auditPath(
 		exchange: Exchange,
@@ -540,7 +542,13 @@ export class Gateway implements AdmissionState {
 			return pathTemplate(route, exchange.target);
 		}
 
-		return redactPath(exchange.target, (text) => this.#scanner.reveals(text));
+		const path = redactPath(exchange.target, (text) =>
+			this.#scanner.reveals(text),
+		);
+
+		return path === REDACTED_PATH && route !== null
+			? pathTemplate(route, exchange.target)
+			: path;
 	}
 
 	#deny(
@@ -892,6 +900,10 @@ export class Gateway implements AdmissionState {
 
 			if (encoding !== undefined) return blockedHead("response-blocked");
 
+			if (!credentialedTypeAllowed(incoming.headers["content-type"])) {
+				return blockedHead("response-blocked");
+			}
+
 			if (incoming.rawHeaders.some((entry) => this.#scanner.reveals(entry))) {
 				return blockedHead("response-blocked");
 			}
@@ -899,10 +911,26 @@ export class Gateway implements AdmissionState {
 
 		const headers = responseHeadersFor(route, incoming.rawHeaders);
 
-		res.writeHead(status, [...headers.flat(), "Connection", "close"]);
+		// A credentialed response sends no header until its filter passes the
+		// first bytes, so a body blocked before then is a clean 403.
+		const head = () => {
+			if (!res.headersSent) {
+				res.writeHead(status, [...headers.flat(), "Connection", "close"]);
+			}
+		};
 
 		const filter =
 			credential === null ? null : new ReflectionFilter(credential.forms);
+
+		if (filter === null) head();
+
+		const blocked = () => {
+			if (!res.headersSent) return blockedHead("response-blocked");
+
+			upstream.destroy();
+			res.destroy();
+			done("blocked_mid_stream", "response-blocked", status);
+		};
 
 		const meter = route.meter === null ? null : new SseMeter();
 
@@ -927,15 +955,12 @@ export class Gateway implements AdmissionState {
 
 			const step = filter.push(chunk);
 
-			if (step.kind === "blocked") {
-				upstream.destroy();
-				res.destroy();
-				done("blocked_mid_stream", "response-blocked", status);
+			if (step.kind === "blocked") return blocked();
 
-				return;
+			if (step.bytes.length > 0) {
+				head();
+				res.write(step.bytes);
 			}
-
-			res.write(step.bytes);
 		});
 		incoming.on("end", () => {
 			if (exchange.finished) return;
@@ -943,14 +968,9 @@ export class Gateway implements AdmissionState {
 			if (filter !== null) {
 				const rest = filter.end();
 
-				if (rest.kind === "blocked") {
-					upstream.destroy();
-					res.destroy();
-					done("blocked_mid_stream", "response-blocked", status);
+				if (rest.kind === "blocked") return blocked();
 
-					return;
-				}
-
+				head();
 				res.write(rest.bytes);
 			}
 

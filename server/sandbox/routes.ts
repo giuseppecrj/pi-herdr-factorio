@@ -167,6 +167,16 @@ const ROUTE_ID = /^[a-z][a-z0-9-]{0,31}$/;
 
 const HEADER_NAME = /^[a-z0-9-]{1,64}$/;
 
+/** An HTTP/2 pseudo-header name. It parses as a placement only so the credential check refuses it. */
+const PSEUDO_HEADER = /^:[a-z]{1,32}$/;
+
+/**
+ * Request headers that retarget a request. The client may not send one,
+ * and no credential may be placed in one. Both checks use this one list.
+ */
+export const ROUTING_HEADER =
+	/^(x-forwarded(-.*)?|forwarded|x-original-.*|x-host|x-rewrite-url|x-http-method-override|proxy-.*|upgrade)$/;
+
 const HOST_NAME =
 	/^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/;
 
@@ -763,7 +773,7 @@ export function readPlacement(
 					: undefined;
 
 		return name !== null &&
-			HEADER_NAME.test(name.toLowerCase()) &&
+			(HEADER_NAME.test(name.toLowerCase()) || PSEUDO_HEADER.test(name)) &&
 			scheme !== undefined
 			? { kind, name, scheme }
 			: null;

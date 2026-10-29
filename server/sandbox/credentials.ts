@@ -22,6 +22,7 @@ import {
 	type RouteTable,
 	readPathRules,
 	readPlacement,
+	ROUTING_HEADER,
 	type TableMode,
 } from "./routes.ts";
 
@@ -50,19 +51,21 @@ const CEILING_KEYS = [
 	"paths",
 ] as const;
 
-const RESERVED_HEADER =
-	/^(host|:authority|content-length|transfer-encoding|connection|upgrade|te|trailer|forwarded|x-forwarded-.*|proxy-.*|keep-alive)$/;
+const FRAMING_HEADER =
+	/^(host|:.*|content-length|transfer-encoding|connection|te|trailer|keep-alive)$/;
 
 /**
  * True when a placement would put the secret in a header that routes or
- * frames the request. Node keeps the last of two `Host` values, so a
- * credential named `host` would replace the route's own.
+ * frames the request: a framing header, any pseudo-header, or a header the
+ * client filter refuses as retargeting. Node keeps the last of two `Host`
+ * values, so a credential named `host` would replace the route's own.
  */
 function reservedPlacement(placement: CredentialPlacement): boolean {
-	return (
-		placement.kind === "header" &&
-		RESERVED_HEADER.test(placement.name.toLowerCase())
-	);
+	if (placement.kind !== "header") return false;
+
+	const name = placement.name.toLowerCase();
+
+	return FRAMING_HEADER.test(name) || ROUTING_HEADER.test(name);
 }
 
 export type CeilingParse =
@@ -320,8 +323,14 @@ export function secretForms(
 	secret: Buffer,
 	placement: CredentialPlacement,
 ): Buffer[] {
+	const utf16 = Buffer.from(secret.toString("latin1"), "utf16le");
+
 	const forms = [
 		secret,
+		Buffer.from(secret.toString("hex")),
+		Buffer.from(secret.toString("hex").toUpperCase()),
+		utf16,
+		Buffer.from(utf16).swap16(),
 		Buffer.from(secret.toString("base64")),
 		Buffer.from(secret.toString("base64").replace(/=+$/, "")),
 		Buffer.from(secret.toString("base64url")),
@@ -555,9 +564,37 @@ export function percentDecoded(bytes: Buffer): Buffer {
 	return Buffer.from(out);
 }
 
-/** The views a secret is looked for in: raw, JSON-unescaped and percent-decoded. */
+/** The bytes with ASCII whitespace removed, so wrapped base64 reads whole. */
+function withoutWhitespace(bytes: Buffer): Buffer {
+	return Buffer.from(
+		bytes.filter((byte) => ![0x09, 0x0a, 0x0d, 0x20].includes(byte)),
+	);
+}
+
+/**
+ * The views a secret is looked for in: raw, JSON-unescaped,
+ * percent-decoded and whitespace-stripped. Hex and UTF-16 are forms of the
+ * secret, so the raw view finds them.
+ */
 export function decodedViews(bytes: Buffer): Buffer[] {
-	return [bytes, jsonUnescaped(bytes), percentDecoded(bytes)];
+	return [
+		bytes,
+		jsonUnescaped(bytes),
+		percentDecoded(bytes),
+		withoutWhitespace(bytes),
+	];
+}
+
+/**
+ * True for the only response types a credentialed route may return:
+ * `application/json` and `text/*`. A missing type is refused.
+ */
+export function credentialedTypeAllowed(
+	contentType: string | undefined,
+): boolean {
+	const type = (contentType ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
+
+	return type === "application/json" || /^text\/[a-z0-9.+-]+$/.test(type);
 }
 
 export class SecretScanner {
@@ -628,8 +665,14 @@ function compressedMagic(head: Buffer): boolean {
 /**
  * Streams a credentialed response body. Nothing passes until the first four
  * bytes show no compression magic. After that it holds back enough bytes
- * that a secret split across chunks, JSON-escaped or percent-encoded, is
- * found in some decoded view before any of its bytes leave.
+ * that a secret split across chunks, JSON-escaped, percent-encoded, hex,
+ * UTF-16 or whitespace-wrapped base64, is found before any of its bytes
+ * leave.
+ *
+ * This scan is defense in depth and cannot be complete: an upstream can
+ * always re-encode a secret in a way no scan reads, such as raw deflate.
+ * The primary control is that a secret binds only to a trusted upstream
+ * under the owner's ceiling, on a read-only route.
  */
 export class ReflectionFilter {
 	readonly #scanner: SecretScanner;

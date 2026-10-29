@@ -7,6 +7,10 @@ import {
 	redactMethod,
 	redactPath,
 } from "../../server/sandbox/audit.ts";
+import {
+	SecretScanner,
+	secretForms,
+} from "../../server/sandbox/credentials.ts";
 import { SseMeter } from "../../server/sandbox/meter.ts";
 
 function record(overrides: Partial<AuditRecord> = {}): AuditRecord {
@@ -47,6 +51,38 @@ describe("gateway audit", () => {
 		);
 		assert.equal(redactMethod("GET"), "GET");
 		assert.equal(redactMethod("G\u00e9T<x>"), "G_T___");
+	});
+
+	it("redacts a secret split by a slash, an encoded slash or written as hex", () => {
+		const secret = "fixture-secret-7Hq2-not-real";
+
+		const scanner = new SecretScanner(
+			secretForms(Buffer.from(secret), {
+				kind: "header",
+				name: "Authorization",
+				scheme: "Bearer",
+			}),
+		);
+
+		const reveals = (text: string) => scanner.reveals(text);
+
+		for (const path of [
+			"/plain/api/fixture-secret-7/Hq2-not-real",
+			"/plain/api/fixture-secret-7%2fHq2-not-real",
+			"/plain/api/fixture-secret-7%2FHq2-not-real",
+			`/plain/api/${Buffer.from(secret).toString("hex").slice(0, 20)}/${Buffer.from(secret).toString("hex").slice(20)}`,
+		]) {
+			assert.equal(redactPath(path, reveals), "[redacted]", path);
+		}
+
+		for (const segment of [secret, Buffer.from(secret).toString("hex")]) {
+			assert.equal(
+				redactPath(`/plain/api/${segment}`, reveals),
+				"/plain/api/~redacted~",
+			);
+		}
+
+		assert.equal(redactPath("/plain/api/x", reveals), "/plain/api/x");
 	});
 
 	it("writes one JSON line per request with fixed fields and no secrets", () => {

@@ -3,7 +3,7 @@ import {
 	type IncomingMessage,
 	type ServerResponse,
 } from "node:http";
-import { gzipSync } from "node:zlib";
+import { brotliCompressSync, deflateRawSync, gzipSync } from "node:zlib";
 import { GATEWAY_USER_AGENT } from "./credentials.ts";
 
 /** What the fixture saw: names and the injected credential, never a body. */
@@ -108,6 +108,37 @@ function respond(req: IncomingMessage, res: ServerResponse, path: string) {
 		case "/api/reflect-gzip-bare":
 			res.writeHead(200, { "Content-Type": "application/octet-stream" });
 			res.end(gzipSync(Buffer.from(`leak ${secret}`)));
+
+			return;
+		case "/api/reflect-gzip-text":
+			res.writeHead(200, { "Content-Type": "text/plain" });
+			res.end(gzipSync(Buffer.from(`leak ${secret}`)));
+
+			return;
+		case "/api/reflect-deflate-raw":
+			res.writeHead(200, { "Content-Type": "application/octet-stream" });
+			res.end(deflateRawSync(Buffer.from(`leak ${secret}`)));
+
+			return;
+		case "/api/reflect-brotli":
+			res.writeHead(200, { "Content-Type": "application/octet-stream" });
+			res.end(
+				brotliCompressSync(
+					Buffer.from(`${"A".repeat(64)}${secret}${"B".repeat(64)}`),
+				),
+			);
+
+			return;
+		case "/api/reflect-gzip-prefixed":
+			res.writeHead(200, { "Content-Type": "image/png" });
+			res.end(
+				Buffer.concat([Buffer.from("xxxx"), gzipSync(Buffer.from(secret))]),
+			);
+
+			return;
+		case "/api/untyped":
+			res.writeHead(200);
+			res.end("ok");
 
 			return;
 		case "/api/identity":

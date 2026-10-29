@@ -34,7 +34,7 @@ import {
 	Gateway,
 	refusedAddresses,
 } from "../../server/sandbox/gateway.ts";
-import { DENY_CODES } from "../../server/sandbox/policy.ts";
+import { DENY_CODES, denyBody } from "../../server/sandbox/policy.ts";
 import {
 	type Route,
 	type RouteId,
@@ -739,15 +739,80 @@ describe("gateway credential engine against the echo fixture", () => {
 		]) {
 			const body = await call(h.socketPath, "GET", path);
 
-			assert.equal(body.aborted, true, path);
+			assert.equal(body.status, 403, path);
+			assert.equal(body.code, "response-blocked", path);
 			assert.equal(body.body.includes(ECHO_SECRET), false, path);
 			assert.equal(
 				body.body.includes(Buffer.from(ECHO_SECRET).toString("base64")),
 				false,
 				path,
 			);
-			assert.equal(h.audit.at(-1)?.decision, "blocked_mid_stream", path);
+			assert.equal(h.audit.at(-1)?.decision, "deny", path);
+			assert.equal(h.audit.at(-1)?.reason, "response-blocked", path);
 		}
+	});
+
+	it("answers a clean 403 for compressed bytes under a text type, before any header is sent", async () => {
+		const reply = await call(
+			h.socketPath,
+			"GET",
+			"/echo/api/reflect-gzip-text",
+		);
+
+		assert.equal(reply.status, 403);
+		assert.equal(reply.code, "response-blocked");
+		assert.equal(reply.aborted, false);
+		assert.equal(h.audit.at(-1)?.status, 403);
+		assert.equal(h.audit.at(-1)?.reason, "response-blocked");
+	});
+
+	it("refuses every credentialed response type but application/json and text/*", async () => {
+		for (const path of [
+			"/echo/api/reflect-deflate-raw",
+			"/echo/api/reflect-brotli",
+			"/echo/api/reflect-gzip-prefixed",
+			"/echo/api/reflect-gzip-bare",
+			"/echo/api/untyped",
+		]) {
+			const reply = await call(h.socketPath, "GET", path);
+
+			assert.equal(reply.status, 403, path);
+			assert.equal(reply.code, "response-blocked", path);
+			assert.equal(h.audit.at(-1)?.reason, "response-blocked", path);
+		}
+
+		assert.equal(
+			(await call(h.socketPath, "GET", "/echo/api/echo")).status,
+			200,
+		);
+		assert.equal(
+			(await call(h.socketPath, "GET", "/echo/api/cookie")).status,
+			200,
+		);
+		assert.equal(
+			(await call(h.socketPath, "GET", "/plain/api/reflect-deflate-raw"))
+				.status,
+			200,
+		);
+	});
+
+	it("logs a template, not the path, when a secret is split by a slash or an encoded slash", async () => {
+		const lines = h.audit.length;
+
+		for (const path of [
+			`/plain/api/${ECHO_SECRET.slice(0, 16)}/${ECHO_SECRET.slice(16)}`,
+			`/plain/api/${ECHO_SECRET.slice(0, 16)}%2f${ECHO_SECRET.slice(16)}`,
+		]) {
+			await call(h.socketPath, "GET", path);
+
+			const logged = h.audit.at(-1)?.path ?? "";
+
+			assert.equal(logged.startsWith("/plain/"), true, logged);
+			assert.equal(logged.includes(ECHO_SECRET.slice(16)), false, logged);
+			assert.equal(logged.includes(ECHO_SECRET.slice(0, 16)), false, logged);
+		}
+
+		assert.equal(h.audit.length, lines + 2);
 	});
 
 	it("fails closed on an encoded reflection the sandbox could still decode", async () => {
@@ -758,14 +823,10 @@ describe("gateway credential engine against the echo fixture", () => {
 			"/echo/api/reflect-gzip-bare",
 		]) {
 			const reply = await call(h.socketPath, "GET", path);
-			const bytes = Buffer.from(reply.body, "latin1");
 
-			assert.equal(
-				reply.aborted || reply.code === "response-blocked",
-				true,
-				path,
-			);
-			assert.equal(bytes.length, 0, path);
+			assert.equal(reply.status, 403, path);
+			assert.equal(reply.code, "response-blocked", path);
+			assert.equal(reply.body, denyBody("response-blocked"), path);
 			assert.equal(h.audit.at(-1)?.reason, "response-blocked", path);
 		}
 
@@ -1202,11 +1263,17 @@ describe("gateway process and control pipe", () => {
 		}
 	});
 
-	it("exits bad-credentials when a ceiling places its secret in a routing header", async () => {
+	for (const name of ["host", ":authority"]) {
+		it(`exits bad-credentials when a table and ceiling place their secret in ${name}`, async () => {
+			await placedIn(name);
+		});
+	}
+
+	async function placedIn(name: string): Promise<void> {
 		const dir = mkdtempSync(join(tmpdir(), "factory-gw-main-"));
 
 		try {
-			const placement = { kind: "header", name: "host", scheme: null } as const;
+			const placement = { kind: "header", name, scheme: null } as const;
 			const route = credentialedRoute(18_081);
 
 			const table: RouteTable = {
@@ -1270,5 +1337,5 @@ describe("gateway process and control pipe", () => {
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
-	});
+	}
 });

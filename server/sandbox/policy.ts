@@ -16,6 +16,7 @@ import {
 	type QueryRule,
 	type Route,
 	type RouteId,
+	ROUTING_HEADER,
 	type RouteTable,
 } from "./routes.ts";
 
@@ -81,9 +82,6 @@ export type HeadDecision =
 			readonly upstreamPath: string;
 			readonly contentType: string | null;
 	  };
-
-const FORBIDDEN_HEADER =
-	/^(x-forwarded-.*|forwarded|x-original-.*|x-host|x-rewrite-url|x-http-method-override|proxy-.*|upgrade)$/;
 
 const PATH_CHARS = /^\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$/;
 
@@ -251,9 +249,7 @@ export function decideHead(
 		return deny("bad-host");
 	}
 
-	if (
-		headerNames(head.rawHeaders).some((name) => FORBIDDEN_HEADER.test(name))
-	) {
+	if (headerNames(head.rawHeaders).some((name) => ROUTING_HEADER.test(name))) {
 		return deny("forbidden-header");
 	}
 
