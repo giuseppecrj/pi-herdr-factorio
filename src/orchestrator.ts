@@ -157,9 +157,15 @@ export type ActiveRun = {
 	phase: RunPhase;
 };
 
-/** What the controller last decided for an issue at one `updated_at`. */
+/**
+ * What the controller last decided for an issue at one `updated_at`. The
+ * watermark is `updatedAt` with `observedAt`; the verdict, and a held run's
+ * `eventId`, are the decision it guards.
+ */
 export type SeenIssue = {
 	readonly updatedAt: string;
+	/** The controller clock at the start of the tick whose reads made the verdict. */
+	readonly observedAt: number;
 	readonly verdict:
 		| {
 				readonly kind: "open";
@@ -272,6 +278,18 @@ type Eligibility =
 
 function mayPublish(eligibility: Eligibility): boolean {
 	return eligibility !== "dropped" && eligibility !== "stale";
+}
+
+/** How long after its `updated_at` second ends a watermark must be observed before it is trusted. */
+const SETTLE_MS = 1000;
+
+/**
+ * `updated_at` has whole seconds, so a change later in the second the issue
+ * was read keeps the same value. A watermark observed before that second, plus
+ * `SETTLE_MS`, has passed is read again on the next tick.
+ */
+function settled(seen: SeenIssue): boolean {
+	return seen.observedAt >= Date.parse(seen.updatedAt) + 1000 + SETTLE_MS;
 }
 
 type Gate =
@@ -413,6 +431,7 @@ export class Orchestrator {
 	#workflowSha: GitSha | null = null;
 	#claimsLoaded = false;
 	#ticks = 0;
+	#tickAt = 0;
 	readonly #recover = new Set<number>();
 	/** Issues whose claim this tick confirmed eligible. Only these launch. */
 	readonly #confirmed = new Set<number>();
@@ -450,6 +469,21 @@ export class Orchestrator {
 		return this.#config?.polling.intervalMs ?? DEFAULTS.pollIntervalMs;
 	}
 
+	#see(issue: number, updatedAt: string, verdict: SeenIssue["verdict"]): void {
+		this.state.seen.set(issue, {
+			updatedAt,
+			observedAt: this.#tickAt,
+			verdict,
+		});
+	}
+
+	/** True when the issue's watermark is settled and its `updated_at` has not moved. */
+	#unchanged(issue: number, updatedAt: string): boolean {
+		const seen = this.state.seen.get(issue);
+
+		return seen?.updatedAt === updatedAt && settled(seen);
+	}
+
 	#inScope(issue: number): boolean {
 		const { scope } = this.#input;
 
@@ -461,6 +495,7 @@ export class Orchestrator {
 		const queued: number[] = [];
 
 		this.#ticks++;
+		this.#tickAt = now;
 		this.#confirmed.clear();
 		this.#ledgerRead.clear();
 		const refused: { issue: number; reasons: RefusalReason["kind"][] }[] = [];
@@ -650,7 +685,7 @@ export class Orchestrator {
 			record = issue;
 		}
 
-		if (this.state.seen.get(run.issue)?.updatedAt !== record.updatedAt) {
+		if (!this.#unchanged(run.issue, record.updatedAt)) {
 			const changed = await this.#recheckChanged(run, record.updatedAt);
 
 			if (changed !== "confirmed") return changed;
@@ -709,7 +744,7 @@ export class Orchestrator {
 			}
 		}
 
-		this.state.seen.set(run.issue, { updatedAt, verdict: { kind: "claimed" } });
+		this.#see(run.issue, updatedAt, { kind: "claimed" });
 
 		return "confirmed";
 	}
@@ -811,7 +846,7 @@ export class Orchestrator {
 		});
 
 		if (updatedAt !== null) {
-			this.state.seen.set(issue, { updatedAt, verdict: { kind: "corrupt" } });
+			this.#see(issue, updatedAt, { kind: "corrupt" });
 		}
 
 		this.#input.log("marker_corrupt", {
@@ -879,7 +914,7 @@ export class Orchestrator {
 
 			if (this.state.runs.has(issue)) continue;
 
-			if (this.state.seen.get(issue)?.updatedAt === record.updatedAt) {
+			if (this.#unchanged(issue, record.updatedAt)) {
 				continue;
 			}
 
@@ -933,16 +968,14 @@ export class Orchestrator {
 			await this.#forgetClaims(ledger.value, issue, candidate);
 
 			if (!candidate) {
-				this.state.seen.set(issue, {
-					updatedAt: record.updatedAt,
-					verdict: { kind: "decided" },
-				});
+				this.#see(issue, record.updatedAt, { kind: "decided" });
 				continue;
 			}
 
-			this.state.seen.set(issue, {
-				updatedAt: record.updatedAt,
-				verdict: { kind: "open", ledger: ledger.value, seq },
+			this.#see(issue, record.updatedAt, {
+				kind: "open",
+				ledger: ledger.value,
+				seq,
 			});
 		}
 	}
@@ -1229,10 +1262,7 @@ export class Orchestrator {
 			refused.push({ issue, reasons: kinds });
 
 			if (kinds.every((kind) => SETTLED_REFUSALS.has(kind))) {
-				this.state.seen.set(issue, {
-					updatedAt: record.updatedAt,
-					verdict: { kind: "decided" },
-				});
+				this.#see(issue, record.updatedAt, { kind: "decided" });
 			}
 
 			return null;
@@ -1285,10 +1315,7 @@ export class Orchestrator {
 		const latest = latestFor(ledger, runId);
 
 		if (latest !== null) {
-			this.state.seen.set(issue, {
-				updatedAt: record.updatedAt,
-				verdict: { kind: "decided" },
-			});
+			this.#see(issue, record.updatedAt, { kind: "decided" });
 
 			return null;
 		}
@@ -1327,10 +1354,7 @@ export class Orchestrator {
 
 		this.state.runs.set(issue, run);
 		this.state.totals.claims++;
-		this.state.seen.set(issue, {
-			updatedAt: record.updatedAt,
-			verdict: { kind: "claimed" },
-		});
+		this.#see(issue, record.updatedAt, { kind: "claimed" });
 		this.#input.log("claim_taken", {
 			issue,
 			runId,

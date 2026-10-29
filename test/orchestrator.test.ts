@@ -298,7 +298,7 @@ describe("Orchestrator claims and dispatch", () => {
 	});
 
 	it("makes no per-issue reads and posts nothing on unchanged polls", async () => {
-		const { github, start } = world();
+		const { github, clock, start } = world();
 
 		for (const number of [14, 15, 16, 17, 18, 19, 20, 21, 22, 23]) {
 			github.add(labeled(number));
@@ -307,7 +307,9 @@ describe("Orchestrator claims and dispatch", () => {
 		const controller = start();
 
 		await controller.tick();
+		clock.t += 30_000;
 		await controller.tick();
+		clock.t += 30_000;
 
 		const markers = github.calls.filter((call) => call.includes("POST")).length;
 
@@ -1835,6 +1837,72 @@ describe("Orchestrator retry marker confirmation", () => {
 			"3:retrying",
 			"4:blocked",
 		]);
+	});
+});
+
+describe("Orchestrator same-second cache", () => {
+	it("reads the timeline before a due retry when the label was replaced in the cached second", async () => {
+		const { github, clock, executor, start } = world();
+		const issue = github.add(labeled(14));
+
+		executor.behaviors = [{ kind: "fail", usage: 0 }];
+
+		const controller = start();
+
+		await controller.tick();
+		clock.t += 30_000;
+		github.now = "2026-10-29T02:00:30Z";
+		await controller.tick();
+		issue.timeline.push(
+			labelEvent({
+				id: 98,
+				at: github.now,
+				actor: "giuseppecrj",
+				event: "unlabeled",
+			}),
+			labelEvent({ id: 99, at: github.now, actor: "giuseppecrj" }),
+		);
+		issue.updatedAt = github.now;
+		clock.t += 30_000;
+		github.now = "2026-10-29T02:01:00Z";
+
+		const report = await controller.tick();
+
+		assert.equal(executor.launches.length, 1);
+		assert.equal(statuses(github, 14).at(-1), "4:released");
+		assert.ok(report.runs.every((run) => run.runId !== runOf(14)));
+	});
+
+	it("drops a held issue whose bot comments were stripped in the cached second", async () => {
+		const { github, clock, executor, start } = world();
+		const issue = github.add(labeled(14));
+
+		executor.behaviors = [{ kind: "fail", usage: 0 }];
+
+		const controller = start();
+
+		await controller.tick();
+		clock.t += 1;
+
+		const queued = await controller.tick();
+
+		assert.equal(queued.runs[0]?.status, "retrying");
+
+		const frozen = issue.updatedAt;
+
+		for (const comment of issue.comments) {
+			comment.body = "edited away by owner";
+			comment.lastEditedAt = "2026-10-29T03:00:00Z";
+		}
+
+		clock.t += 10_000;
+
+		const report = await controller.tick();
+
+		assert.equal(issue.updatedAt, frozen);
+		assert.equal(executor.launches.length, 1);
+		assert.deepEqual(report.corrupt, [{ issue: 14, defect: "edited" }]);
+		assert.deepEqual(report.runs, []);
 	});
 });
 
