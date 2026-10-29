@@ -241,6 +241,10 @@ describe("parseWorkflow", () => {
 		);
 
 		assert.deepEqual([...MODEL_STAGES], withModels);
+		assert.deepEqual(
+			[...MODEL_STAGES],
+			STAGE_ORDER.filter((stage) => STAGE_PROFILES[stage].runsIn === "sandbox"),
+		);
 	});
 
 	it("freezes the parsed config", () => {

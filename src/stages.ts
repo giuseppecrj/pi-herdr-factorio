@@ -22,21 +22,31 @@ export const STAGE_ORDER = [
 	"land",
 ] as const satisfies readonly Stage[];
 
+/**
+ * Where a stage runs and what it can reach. Only the controller uses the
+ * GitHub integration; a sandboxed model stage has no GitHub access at all.
+ */
 export type StageProfile = {
 	modelAccess: "none" | "judge" | "full";
-	githubToken: string;
+	runsIn: "controller" | "sandbox";
+	githubAccess: string;
 };
 
 export const STAGE_PROFILES: Record<Stage, StageProfile> = {
-	admit: { modelAccess: "none", githubToken: "issues: write" },
-	specify: { modelAccess: "full", githubToken: "read" },
-	accept: { modelAccess: "full", githubToken: "read" },
-	build: { modelAccess: "full", githubToken: "read" },
-	validate: { modelAccess: "judge", githubToken: "read" },
-	review: { modelAccess: "full", githubToken: "read" },
+	admit: {
+		modelAccess: "none",
+		runsIn: "controller",
+		githubAccess: "issues: write",
+	},
+	specify: { modelAccess: "full", runsIn: "sandbox", githubAccess: "none" },
+	accept: { modelAccess: "full", runsIn: "sandbox", githubAccess: "none" },
+	build: { modelAccess: "full", runsIn: "sandbox", githubAccess: "none" },
+	validate: { modelAccess: "judge", runsIn: "sandbox", githubAccess: "none" },
+	review: { modelAccess: "full", runsIn: "sandbox", githubAccess: "none" },
 	land: {
 		modelAccess: "none",
-		githubToken: "contents: write, pull-requests: write, issues: write",
+		runsIn: "controller",
+		githubAccess: "contents: write, pull-requests: write, issues: write",
 	},
 };
 
@@ -48,12 +58,15 @@ export function formatStageTable(): string {
 	const rows = STAGE_ORDER.map((stage) => {
 		const profile = STAGE_PROFILES[stage];
 
-		return [stage, profile.modelAccess, profile.githubToken];
+		return [stage, profile.runsIn, profile.modelAccess, profile.githubAccess];
 	});
 
-	const table = [["stage", "model access", "github token"], ...rows];
+	const table = [
+		["stage", "runs in", "model access", "github access"],
+		...rows,
+	];
 
-	const widths = [0, 1, 2].map((column) =>
+	const widths = [0, 1, 2, 3].map((column) =>
 		Math.max(...table.map((row) => row[column]?.length ?? 0)),
 	);
 
