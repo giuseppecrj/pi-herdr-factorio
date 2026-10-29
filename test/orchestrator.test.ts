@@ -1827,6 +1827,35 @@ describe("Orchestrator deferred ledger publication", () => {
 		assert.equal(github.markers(14).length, 0);
 		assert.equal(executor.launches.length, 1);
 	});
+
+	it("posts no release for a deferred issue that closes, and reads its ledger again so the run is not stranded", async () => {
+		const { github, clock, start } = world();
+		const issue = github.add(labeled(14));
+		const controller = start();
+
+		await controller.tick();
+		issue.comments.length = 0;
+		issue.updatedAt = "2026-10-29T02:00:01Z";
+		clock.t += 30_000;
+		await controller.tick();
+		issue.state = "closed";
+		issue.updatedAt = "2026-10-29T02:01:00Z";
+		clock.t += 30_000;
+
+		const closing = await controller.tick();
+
+		assert.equal(closing.runs[0]?.status, "released");
+		assert.deepEqual(closing.corrupt, []);
+		clock.t += 30_000;
+
+		const missing = await controller.tick();
+
+		assert.deepEqual(missing.corrupt, [
+			{ issue: 14, defect: "marker_missing" },
+		]);
+		assert.deepEqual(missing.runs, []);
+		assert.equal(github.markers(14).length, 0);
+	});
 });
 
 describe("Orchestrator claim record retry", () => {
