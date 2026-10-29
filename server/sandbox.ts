@@ -865,7 +865,9 @@ export function publishFile(
 			if (fd !== null) closeSync(fd);
 
 			rmSync(temp, { force: true });
-		} catch {}
+		} catch {
+			// Best effort: the publish already failed and returns false below.
+		}
 
 		return false;
 	}
@@ -878,7 +880,9 @@ export function publishFile(
 		} finally {
 			closeSync(dir);
 		}
-	} catch {}
+	} catch {
+		// Best effort: the file is renamed into place; a directory fsync is extra durability.
+	}
 
 	return true;
 }
