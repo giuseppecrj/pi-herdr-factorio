@@ -276,7 +276,6 @@ export function labelTimeSnapshot(input: {
 	};
 }
 
-/** The one readable version saved last before `at`. */
 function versionInForce(
 	versions: readonly BodyVersion[],
 	at: string,

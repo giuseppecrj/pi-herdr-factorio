@@ -203,15 +203,15 @@ The lookup is case-insensitive. `GET repos/giuseppecrj/pi-herdr-factorio/labels/
 
 From these results, admission binds a `factory:ready` label event at time `L` to a body as follows:
 
-1. If `lastEditedAt` is `null` or earlier than `L`, the current body is the label-time body, unless `userContentEdits` contradicts it: a node with `editedAt` at or after `L` or after `lastEditedAt`, or, with `lastEditedAt` `null`, any node other than the original.
+1. If `lastEditedAt` is `null` or earlier than `L`, the current body is the label-time body only when the history agrees with it. `totalCount` must equal the number of nodes returned. No node may have `editedAt` at or after `L` or after `lastEditedAt`. With `lastEditedAt` set, the newest node's `diff` must equal the body. With `lastEditedAt` `null`, every node's `diff` must equal the body, and zero nodes is a valid unedited issue.
 2. Otherwise, use `userContentEdits` only when all of these hold. `totalCount` equals the number of nodes returned, `includesCreatedEdit` is `true`, the newest node's `diff` equals the current body and its `editedAt` equals `lastEditedAt`, no node has `editedAt` equal to `L`, and exactly one node has the latest `editedAt` earlier than `L`, with no `deletedAt`. That node's `diff` is the label-time body. A `null` `body` or `diff` is an empty body, as in REST.
 3. Any other case is `ambiguous_snapshot`, and admission refuses.
 
-Timestamps have one-second precision, so an edit in the same second as the label is ambiguous. The title is part of the snapshot. A `renamed` event at or after `L`, on the timeline or in the GraphQL `renames`, also gives `ambiguous_snapshot`, as does a GraphQL title that differs from the REST title or a `renames.totalCount` above the returned nodes.
+Timestamps have one-second precision, so an edit in the same second as the label is ambiguous. The title is part of the snapshot. A `renamed` event at or after `L`, on the timeline or in the GraphQL `renames`, also gives `ambiguous_snapshot`, as does a GraphQL title that differs from the REST title, a newest rename whose `currentTitle` differs from the GraphQL title, or a `renames.totalCount` above the returned nodes. A GraphQL body that differs from the REST body is `ambiguous_snapshot` with `body_changed_between_reads`.
 
 ## What this does not prove
 
 - That the integration can read `FACTORY_ENABLED`. It cannot, so the repository switch is the `factory:enabled` label instead.
-- Behavior for a label actor with triage but no write access. No such identity was available. Plan lane 2 stays blocked until one is granted.
+- Behavior for a label actor with triage but no write access. This repository is owned by a user, so no such identity can exist: collaborators on a personal repository can push. The swarm checks the live permission lookup instead, with a read-only outside account and the integration bot.
 - Behavior on a private repository, where `--paginate` would fail rather than leave the integration.
 - GraphQL behavior for repositories outside the installation. `issue(number: 1)` on `octocat/Hello-World` returned `NOT_FOUND`.

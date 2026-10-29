@@ -48,4 +48,4 @@ Earlier, under the variable switch at `ed6e61d`: #15, edited twice after the lab
 - A refusal is exit 1, not a script failure. Exit 2 is a usage error.
 - Never print an issue title or body in evidence. The receipt carries only a digest. The snapshot text is in the admission record under the state directory, with mode 0600, only after an admission.
 - A label applied by the integration bot is always refused: the bot's permission reads as `none`.
-- Lane 2 of the plan needs a real account with triage but no write access. Without one, report it BLOCKED.
+- Lane 2 of the plan asks for a label from an account with triage but no write access. This repository is owned by a user, where every collaborator can push, so no such account can exist. Check the live permission lookup instead (`read` for an outside account, `none` for the bot), and say so in the lane report rather than reporting BLOCKED.
