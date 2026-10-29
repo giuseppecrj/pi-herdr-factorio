@@ -11,6 +11,7 @@
 - `tick-relabel`: after `factory:ready` is removed and added again, the next tick posts `released` for the old run and `claimed`, then `blocked`, for a new `runId`, in that one tick.
 - `tick-forged`: a marker comment from any account but the bot is ignored.
 - `tick-corrupt`: an edited or malformed bot marker, or any edited bot comment, lists the issue in `corrupt` and nothing dispatches for it.
+- `tick-deleted-marker`: after the owner deletes a blocked run's bot comments, the next tick, a fresh process, lists the issue in `corrupt` as `marker_missing` and posts nothing.
 - `tick-workspace`: a deleted workspace is reported as `missing_replayed` and recreated, with no new marker.
 - `tick-switches`: with either switch off, `dispatch.enabled` is `false` and existing runs stay as they were.
 - `run-issue`: `run --issue` exits 0 when the issue holds a run and 1 otherwise.
@@ -33,6 +34,7 @@ Preconditions:
 - **Restart.** Run the tick a second time. Expect `claim_adopted` in the log, the same run IDs and `markersPosted=0`.
 - **Forged marker.** As the owner, post a comment whose body is a well-formed `<!-- factory:run {...} -->` marker for the run. The next tick ignores it and the bot markers are unchanged.
 - **Missing workspace.** Delete `<lane>/state/workspaces/<runId>` in a script sent with `vm.sh`, then tick. Expect `workspace_missing` in the log, `missing_replayed` in the summary and no new marker.
+- **Deleted marker.** Tick until the run is `blocked`. As the owner, without `GH_HOST`, delete each bot comment with `gh api -X DELETE repos/giuseppecrj/pi-herdr-factorio/issues/comments/<id>`, then tick. Expect `corrupt=#<issue>:marker_missing`, `markersPosted=0` and `event=marker_corrupt ... defect=marker_missing` in the log. The claim record under `<lane>/state/claims/` keeps its `seq`.
 - **Local switch.** `touch <lane>/state/disabled`, then `run`. Expect `reasons=locally_disabled`; an existing run is still listed, and nothing new is claimed.
 
 Results observed on 2026-10-29 at `add4f6b`, on fixtures #66, #67 and #68, each labeled by `giuseppecrj`:
@@ -45,6 +47,14 @@ Results observed on 2026-10-29 at `add4f6b`, on fixtures #66, #67 and #68, each 
 | Owner-forged `released` marker with seq 99 on #67, and its workspace deleted, then tick | 0 | the forged marker ignored; #67 `missing_replayed`, still `blocked`, no new marker |
 | `run --issue 67` with `<state>/disabled` | 0 | `reasons=locally_disabled`; #67 still `blocked` |
 | #67 and #68 closed, then tick | 0 | each got a `released` marker, seq 3; `absent=66+67+68` |
+
+Observed on 2026-10-29 at `b6acf4e`, on fixture #120 labeled by `giuseppecrj`:
+
+| Step | Exit | Result |
+| --- | --- | --- |
+| First tick | 0 | `blocked`, markers `1:claimed,2:blocked`; claim record `seq: 2` |
+| Owner deleted both bot comments, then a tick | 0 | `corrupt=#120:marker_missing`, `markersPosted=0`, no run |
+| Another tick | 0 | the same; the claim record still `seq: 2` |
 
 ## Gotchas
 
