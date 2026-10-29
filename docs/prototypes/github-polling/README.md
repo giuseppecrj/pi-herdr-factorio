@@ -28,6 +28,7 @@ All four were created by the integration bot, so their author has no write acces
 | Permission of the label actor | `GET repos/{owner}/{repo}/collaborators/{login}/permission` | Supported |
 | Body edit time and history | `gh api graphql`, `Issue.lastEditedAt` and `Issue.userContentEdits` | Supported. REST has no body edit history. |
 | Repository variable `FACTORY_ENABLED` | `GET repos/{owner}/{repo}/actions/variables/FACTORY_ENABLED` | Not supported: HTTP 403 |
+| Repository label `factory:enabled` | `GET repos/{owner}/{repo}/labels/factory%3Aenabled` | Supported. HTTP 404 when absent. |
 | Bot-authored comments | `GET repos/{owner}/{repo}/issues/{n}/comments` | Supported |
 | Global endpoints | `GET user` | Not supported: HTTP 403 from the proxy |
 
@@ -136,7 +137,21 @@ X-Accepted-Github-Permissions: actions_variables=read
 {"message":"Resource not accessible by integration", ...}
 ```
 
-The list endpoint and `gh variable get` fail the same way. The integration's GitHub App lacks the `actions_variables=read` permission. `gh variable list` from the owner's workstation also shows that the variable is not set.
+The list endpoint and `gh variable get` fail the same way. The integration's GitHub App lacks the `actions_variables=read` permission. `gh variable list` from the owner's workstation also shows that the variable is not set. A re-probe on 2026-10-29 still returned 403.
+
+### Repository label
+
+Because the variable is unreadable, the owner made the repository switch the existence of a label named exactly `factory:enabled` on 2026-10-29. The integration can read labels:
+
+```text
+GET repos/giuseppecrj/pi-herdr-factorio/labels/factory%3Aenabled
+{"message":"Not Found","documentation_url":"https://docs.github.com/rest/issues/labels#get-a-label","status":"404"}
+gh: Not Found (HTTP 404)
+```
+
+That is the shape when the label is absent. A raw `:` in the path works the same as `%3A`. When the label exists, the call returns the label object with `id`, `name`, `color`, `default` and `description`.
+
+The lookup is case-insensitive. `GET repos/giuseppecrj/pi-herdr-factorio/labels/FACTORY:READY` returns `"name":"factory:ready"`, the stored name. So the adapter compares the returned `name` with `factory:enabled` exactly, and a label stored with another case counts as off.
 
 ### Comments
 
@@ -174,7 +189,7 @@ Timestamps have one-second precision, so an edit in the same second as the label
 
 ## What this does not prove
 
-- That the integration can read `FACTORY_ENABLED`. It cannot. Admission through the integration refuses every issue with `repo_switch_unavailable` until the owner grants `actions_variables=read` or approves another switch source.
+- That the integration can read `FACTORY_ENABLED`. It cannot, so the repository switch is the `factory:enabled` label instead.
 - Behavior for a label actor with triage but no write access. No such identity was available. Plan lane 2 stays blocked until one is granted.
 - Behavior on a private repository, where `--paginate` would fail rather than leave the integration.
 - GraphQL behavior for repositories outside the installation. `issue(number: 1)` on `octocat/Hello-World` returned `NOT_FOUND`.

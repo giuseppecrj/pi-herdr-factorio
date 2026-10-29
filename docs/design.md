@@ -130,7 +130,7 @@ interface TicketAdapter {
 ### Rules enforced in code
 
 - **Admission.** Only a `factory:ready` label applied by an account with write access counts. The issue body is snapshotted at that moment. Later edits are data for a new run, not permission for this one.
-- **Kill switch.** Repo variable `FACTORY_ENABLED` plus a local flag file on the VM. Either one off stops new dispatch. Land re-checks both right before merging.
+- **Kill switch.** A repository label named exactly `factory:enabled`, which must exist, plus a local flag file on the VM. Either one off stops new dispatch. Land re-checks both right before merging.
 - **One run per ticket.** Symphony's claim rule in the controller, with the issue marker as the record that survives restarts.
 - **The builder never sees the oracle.** The acceptance suite stays on the VM until build has finished. The controller then pushes it as its own commit on the PR branch under `test/acceptance/<ticket>/`. A builder patch that touches that path is rejected. In a repair round, the builder gets the names of failing scenarios, not their code.
 - **Gates come from `main`, not the patch.** CI checks out `main`'s gate script, test files and check config and runs them against the candidate, then runs the candidate's own new tests and the held-out suite. A patch that edits `package.json` scripts or deletes tests cannot weaken the gate that judges it.

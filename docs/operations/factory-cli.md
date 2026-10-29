@@ -183,7 +183,7 @@ node server/cli.ts admit --json --repo <owner/name> --issue <number> --state-dir
 
 - `--repo` is on the controller's allowlist. Today the allowlist is `giuseppecrj/pi-herdr-factorio`, in `FACTORY_REPOSITORIES` in `src/admission.ts`.
 - `<state-dir>/disabled` does not exist. This is the local kill switch. Create the file to stop admission. Its content is ignored.
-- The repository variable `FACTORY_ENABLED` is exactly `true`. This is the repository kill switch.
+- The repository has a label named exactly `factory:enabled`. This is the repository kill switch, described below.
 - `.github/factory/WORKFLOW.md` on `main` is valid. `baseSha` is the `main` SHA it was loaded from.
 - The issue is open, is not a pull request, and has the `factory:ready` label.
 - The latest `factory:ready` entry on the issue timeline is a `labeled` event, not `unlabeled`. This is the admitted event.
@@ -191,7 +191,18 @@ node server/cli.ts admit --json --repo <owner/name> --issue <number> --state-dir
 - The title and body at the time of the event are proved, as described under snapshot.
 - No admission was recorded before for the same event ID.
 
-It checks the allowlist and the local switch first and stops there, before any `gh` call. When the repository switch is off, missing or unreadable, it still reads the issue, so the receipt shows the event, actor and snapshot it would have bound. It then refuses without recording anything.
+It checks the allowlist and the local switch first and stops there, before any `gh` call. When the repository switch is off or unavailable, it still reads the issue, so the receipt shows the event, actor and snapshot it would have bound. It then refuses without recording anything.
+
+### Repository switch
+
+The repository switch is the existence of a repository label named exactly `factory:enabled`. The label does not need to be on any issue. `admit` reads it with `gh api repos/<repo>/labels/factory%3Aenabled` and has three states:
+
+| State | When | Result |
+| On | The call succeeds and the returned `name` is exactly `factory:enabled`. | Admission continues. |
+| Off | The call returns HTTP 404, or the returned `name` differs in case, such as `Factory:Enabled`. GitHub looks labels up case-insensitively, so the name is compared exactly. | Refused with `repo_switch_off`. |
+| Unavailable | Any other failure, such as HTTP 401 or 403, or a network error. | Refused with `repo_switch_unavailable`. |
+
+To turn the factory off for the repository, delete the `factory:enabled` label on the repository's labels page, `https://github.com/<repo>/labels`. Deleting it also removes it from any issue that carries it. To turn it back on, create a label named exactly `factory:enabled`, for example with `gh label create factory:enabled --repo <repo>`. Changing the label needs triage access or higher.
 
 ### Requests
 
@@ -199,7 +210,7 @@ Every request is an argument array, never a shell string, and names `repos/<owne
 
 | Step | Request |
 | --- | --- |
-| Repository switch | `gh api repos/<repo>/actions/variables/FACTORY_ENABLED` |
+| Repository switch | `gh api repos/<repo>/labels/factory%3Aenabled` |
 | Trusted workflow | the two `workflow-check` requests for `main` |
 | Issue | `gh api repos/<repo>/issues/<n>` |
 | Timeline | `gh api repos/<repo>/issues/<n>/timeline?per_page=100&page=<p>`, from page 1 until a page has fewer than 100 entries, at most 10 pages |
@@ -254,9 +265,8 @@ Each reason has `kind`. Some have more fields.
 | `repo_not_allowed` | `--repo` is not on the allowlist. | |
 | `state_unavailable` | `--state-dir` does not exist, is not a directory, or the disable file cannot be checked. | |
 | `locally_disabled` | `<state-dir>/disabled` exists. | |
-| `repo_switch_off` | `FACTORY_ENABLED` is set to anything other than `true`. | |
-| `repo_switch_missing` | `FACTORY_ENABLED` is not set: HTTP 404. | |
-| `repo_switch_unavailable` | Reading `FACTORY_ENABLED` failed. Through the exe.dev integration this is HTTP 403 today, because the integration lacks `actions_variables=read`. | `failure` |
+| `repo_switch_off` | The `factory:enabled` label does not exist (HTTP 404), or its name differs in case. | |
+| `repo_switch_unavailable` | Reading the `factory:enabled` label failed for any other reason. | `failure` |
 | `workflow_unavailable` | `WORKFLOW.md` on `main` did not load. | `error`, the `workflow-check` error kind |
 | `issue_unavailable` | Reading the issue failed. | `failure` |
 | `pull_request` | The number is a pull request. | |
