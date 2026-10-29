@@ -1,0 +1,162 @@
+# exp3 run at 2026-10-29T14:55:06+00:00 on pi-factorio
+srwx------ 1 exedev exedev 0 Oct 29 14:55 gw/gw.sock
+gateway pid=292894 (host side, outside sandbox), fixture pid=292893 on 127.0.0.1:18999
+## sandbox launch: systemd-run --user --scope --unit=f05-proto-exp3-292888 -p MemoryMax=512M -p TasksMax=64 -- bwrap --unshare-all --die-with-parent --new-session --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/sbin /sbin --symlink usr/lib /lib --symlink usr/lib64 /lib64 --proc /proc --dev /dev --tmpfs /tmp --ro-bind /etc/resolv.conf /etc/resolv.conf --ro-bind /etc/hosts /etc/hosts --ro-bind /etc/nsswitch.conf /etc/nsswitch.conf --ro-bind /etc/ssl /etc/ssl --ro-bind /etc/alternatives /etc/alternatives --bind /home/exedev/f05-proto/gw/gw.sock /run/gw.sock --ro-bind /home/exedev/f05-proto/exp3_inside.sh /probe.sh --clearenv --setenv PATH /usr/bin:/usr/sbin --setenv HOME /tmp /usr/bin/bash /probe.sh
+## sandbox: interfaces=lo gre0@NONE gretap0@NONE erspan0@NONE  routes=[] gw.sock=srwx------
+## forwarder: socat pid 13, 127.0.0.1:18080 -> /run/gw.sock
+## allowed
+PASS want=200 got=200||0 | GET /openai/v1/models | {"object":"list","data":[{"id":"openai/gpt-6-astra","object":"model","owned_by":"chatgpt"},{"id":"gpt-6-astra"
+PASS want=200 got=200||0 | GET /xai/v1/models | {"object":"list","data":[{"aliases":[],"cached_prompt_text_token_price":5000,"cached_prompt_text_token_price_l
+PASS want=200 got=200||0 | GET /npm/is-number/7.0.0 (packument version) | {"bugs":{"url":"https://github.com/jonschlinkert/is-number/issues"},"dist":{"shasum":"7535345b896734d5f80c4d06
+PASS want=200 got=200||0 | HEAD /npm/is-number | HTTP/1.1 200 OK Server: f05-gateway  Date: Thu, 29 Oct 2026 14:55:07 GMT Date: Thu, 29 Oct 2026 14:55:07 GM
+PASS want=404 got=404||0 | GET /npm/<missing pkg> (upstream 404 passed through) | {"error":"Not found"}
+## tarball integrity through the gateway
+packument dist: sha512-41Cifkg6e8TylSpdtTpeLVMqvSBEVzTttHvERD741+pnZ8ANv0004MRL43QKPDlK9cGvNp6NZWZUBlbGXYxxng== https://registry.npmjs.org/is-number/-/is-number-7.0.0.tgz 
+PASS tarball sha512 matches packument integrity (sha512-41Cifkg6e8TylSpdtTpeLVMqvSBEVzTttHvERD741+pnZ8ANv0004MRL43QKPDlK9cGvNp6NZWZUBlbGXYxxng==)
+## denied paths (expect 403, no upstream)
+PASS want=403 got=403||0 | /anthropic/v1/models | f05-gateway: denied: no route 
+PASS want=403 got=403||0 | POST /anthropic/v1/messages | f05-gateway: denied: no route 
+PASS want=403 got=403||0 | /zen | f05-gateway: denied: no route 
+PASS want=403 got=403||0 | / | f05-gateway: denied: no route 
+PASS want=403 got=403||0 | /github/zen | f05-gateway: denied: no route 
+PASS want=403 got=403||0 | /openai/v2/models | f05-gateway: denied: no route 
+PASS want=403 got=403||0 | /openai/models (no v1) | f05-gateway: denied: no route 
+PASS want=403 got=403||0 | /openai/v1/../../zen (path-as-is) | f05-gateway: denied: dot segment 
+PASS want=403 got=403||0 | /openai/v1/%2e%2e/%2e%2e/zen | f05-gateway: denied: dot segment 
+PASS want=403 got=403||0 | /openai/v1/%2E%2E%2F%2E%2E%2Fzen | f05-gateway: denied: dot segment 
+PASS want=403 got=403||0 | /npm/../zen (path-as-is) | f05-gateway: denied: dot segment 
+PASS want=403 got=403||0 | /npm/%252e%252e/zen (double-encoded) | f05-gateway: denied: double percent-encoding 
+PASS want=403 got=403||0 | //github.int.exe.xyz/zen (network-path) | f05-gateway: denied: no route 
+PASS want=403 got=403||0 | /openai/v1//github.int.exe.xyz/zen | f05-gateway: denied: illegal sequence in decoded path 
+PASS want=403 got=403||0 | /openai/v1/models\..\zen backslash | f05-gateway: denied: illegal sequence in decoded path 
+## forged Host / forwarding headers (expect 403)
+PASS want=403 got=403||0 | Host: github.int.exe.xyz on /openai/v1/models | f05-gateway: denied: client Host is not the local forwarder 
+PASS want=403 got=403||0 | Host: github.int.exe.xyz on /zen | f05-gateway: denied: client Host is not the local forwarder 
+PASS want=403 got=403||0 | Host: llm.int.exe.xyz on /openai/v1/models | f05-gateway: denied: client Host is not the local forwarder 
+PASS want=403 got=403||0 | X-Forwarded-Host: github.int.exe.xyz | f05-gateway: denied: forwarding/proxy header present: x-forwarded-host 
+PASS want=403 got=403||0 | Forwarded: host=github.int.exe.xyz | f05-gateway: denied: forwarding/proxy header present: forwarded 
+PASS want=403 got=403||0 | X-Original-URL: https://github.int.exe.xyz/zen | f05-gateway: denied: forwarding/proxy header present: x-original-url 
+## absolute URL / proxy use (expect 403)
+PASS want=403 got=403||0 | request-target https://github.int.exe.xyz/zen | f05-gateway: denied: non-origin-form request target 
+PASS want=403 got=403||0 | request-target https://github.int.exe.xyz/openai/v1/models | f05-gateway: denied: non-origin-form request target 
+PASS want=403 got=403||0 | proxy GET http://github.int.exe.xyz/zen (absolute-form) | f05-gateway: denied: non-origin-form request target 
+2026/10/29 14:55:07 socat[268] E read(6, 0x55c433634000, 8192): Connection reset by peer
+FAIL want=403 got=curl: (56) CONNECT tunnel failed, response 403
+000||0 | proxy CONNECT github.int.exe.xyz:443 | 
+2026/10/29 14:55:07 socat[276] E read(6, 0x55c433634000, 8192): Connection reset by peer
+FAIL want=403 got=curl: (56) CONNECT tunnel failed, response 403
+000||0 | HTTPS_PROXY env CONNECT api.github.com | 
+## methods (expect 403)
+PASS want=403 got=403||0 | POST /npm/is-number | f05-gateway: denied: method POST not allowed on route 
+PASS want=403 got=403||0 | DELETE /openai/v1/models | f05-gateway: denied: method DELETE not allowed on route 
+## upstream 3xx (fixture)
+PASS want=302 got=302|https://github.int.exe.xyz/zen|0 | 302 to github.int passed back, not followed | redirect to https://github.int.exe.xyz/zen 
+PASS want=302 got=302|https://api.github.com/zen|0 | 302 to api.github.com passed back, not followed | redirect to https://api.github.com/zen 
+FAIL want=000 got=curl: (6) Could not resolve host: github.int.exe.xyz
+302||1 | client -L follows 302 to github.int: fails in sandbox (no DNS/route) | 
+PASS want=200 got=200||1 | client -L follows relative 302 back through gateway | {"object":"list","data":[{"id":"openai/gpt-6-astra","object":"model","owned_by":"chatgpt"},{"id":"gpt-6-astra"
+## direct egress still impossible
+FAIL want=000 got=curl: (6) Could not resolve host: github.int.exe.xyz
+000||0 | direct https://github.int.exe.xyz/zen | 
+FAIL want=000 got=curl: (7) Failed to connect to 169.254.169.254 port 443 after 0 ms: Couldn't connect to server
+000||0 | direct https://169.254.169.254/zen | 
+## tiny completion: gpt-6.1-sol, max 16 tokens
+completion http=400
+non-json: Model "gpt-6.1-sol" is not in this exe.dev integration's model list. List available models with `curl https://llm.int.exe.xyz/models.json`.
+
+
+FAIL completion via gateway
+## inside summary: pass=35 fail=6
+2026/10/29 14:55:08 socat[13] W exiting on signal 15
+sandbox exit=0 (inside a user scope)
+## gateway stderr
+f05-gateway listening on /home/exedev/f05-proto/gw/gw.sock
+## fixture stderr
+fixture: "GET /__fixture/redir-github HTTP/1.1" 302 -
+fixture: "GET /__fixture/redir-api HTTP/1.1" 302 -
+fixture: "GET /__fixture/redir-github HTTP/1.1" 302 -
+fixture: "GET /__fixture/redir-local HTTP/1.1" 302 -
+## gateway log (JSONL, one line per request)
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/openai/v1/models", "decision": "forward", "dropped_client_headers": ["host", "user-agent"], "id": 1, "method": "GET", "route": "openai", "status": 200, "ts": "2026-10-29T14:55:06", "upstream": {"cert_san": ["*.int.exe.xyz", "int.exe.xyz"], "connect_host": "llm.int.exe.xyz", "headers_sent": ["Host", "Accept", "User-Agent", "Accept-Encoding", "Connection"], "host_header_sent": "llm.int.exe.xyz", "location": null, "path_sent": "/openai/v1/models", "peer": "169.254.169.254", "port": 443, "resp_bytes": 4274, "scheme": "https", "sni_sent": "llm.int.exe.xyz", "status": 200, "tls": "TLSv1.3", "x_trace_id_count": 2}}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/xai/v1/models", "decision": "forward", "dropped_client_headers": ["host", "user-agent"], "id": 2, "method": "GET", "route": "xai", "status": 200, "ts": "2026-10-29T14:55:06", "upstream": {"cert_san": ["*.int.exe.xyz", "int.exe.xyz"], "connect_host": "llm.int.exe.xyz", "headers_sent": ["Host", "Accept", "User-Agent", "Accept-Encoding", "Connection"], "host_header_sent": "llm.int.exe.xyz", "location": null, "path_sent": "/xai/v1/models", "peer": "169.254.169.254", "port": 443, "resp_bytes": 1131, "scheme": "https", "sni_sent": "llm.int.exe.xyz", "status": 200, "tls": "TLSv1.3", "x_trace_id_count": 2}}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/npm/is-number/7.0.0", "decision": "forward", "dropped_client_headers": ["host", "user-agent"], "id": 3, "method": "GET", "route": "npm", "status": 200, "ts": "2026-10-29T14:55:07", "upstream": {"cert_san": ["npmjs.org", "*.npmjs.org"], "connect_host": "registry.npmjs.org", "headers_sent": ["Host", "Accept", "User-Agent", "Accept-Encoding", "Connection"], "host_header_sent": "registry.npmjs.org", "location": null, "path_sent": "/is-number/7.0.0", "peer": "104.16.10.34", "port": 443, "resp_bytes": 3199, "scheme": "https", "sni_sent": "registry.npmjs.org", "status": 200, "tls": "TLSv1.2", "x_trace_id_count": 0}}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/npm/is-number", "decision": "forward", "dropped_client_headers": ["host", "user-agent"], "id": 4, "method": "HEAD", "route": "npm", "status": 200, "ts": "2026-10-29T14:55:07", "upstream": {"cert_san": ["npmjs.org", "*.npmjs.org"], "connect_host": "registry.npmjs.org", "headers_sent": ["Host", "Accept", "User-Agent", "Accept-Encoding", "Connection"], "host_header_sent": "registry.npmjs.org", "location": null, "path_sent": "/is-number", "peer": "104.16.8.34", "port": 443, "resp_bytes": 0, "scheme": "https", "sni_sent": "registry.npmjs.org", "status": 200, "tls": "TLSv1.2", "x_trace_id_count": 0}}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/npm/f05-r1-this-package-does-not-exist-zz", "decision": "forward", "dropped_client_headers": ["host", "user-agent"], "id": 5, "method": "GET", "route": "npm", "status": 404, "ts": "2026-10-29T14:55:07", "upstream": {"cert_san": ["npmjs.org", "*.npmjs.org"], "connect_host": "registry.npmjs.org", "headers_sent": ["Host", "Accept", "User-Agent", "Accept-Encoding", "Connection"], "host_header_sent": "registry.npmjs.org", "location": null, "path_sent": "/f05-r1-this-package-does-not-exist-zz", "peer": "104.16.9.34", "port": 443, "resp_bytes": 21, "scheme": "https", "sni_sent": "registry.npmjs.org", "status": 404, "tls": "TLSv1.2", "x_trace_id_count": 0}}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/npm/is-number/7.0.0", "decision": "forward", "dropped_client_headers": ["host", "user-agent"], "id": 6, "method": "GET", "route": "npm", "status": 200, "ts": "2026-10-29T14:55:07", "upstream": {"cert_san": ["npmjs.org", "*.npmjs.org"], "connect_host": "registry.npmjs.org", "headers_sent": ["Host", "Accept", "User-Agent", "Accept-Encoding", "Connection"], "host_header_sent": "registry.npmjs.org", "location": null, "path_sent": "/is-number/7.0.0", "peer": "104.16.8.34", "port": 443, "resp_bytes": 3199, "scheme": "https", "sni_sent": "registry.npmjs.org", "status": 200, "tls": "TLSv1.2", "x_trace_id_count": 0}}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/npm/is-number/-/is-number-7.0.0.tgz", "decision": "forward", "dropped_client_headers": ["host", "user-agent"], "id": 7, "method": "GET", "route": "npm", "status": 200, "ts": "2026-10-29T14:55:07", "upstream": {"cert_san": ["npmjs.org", "*.npmjs.org"], "connect_host": "registry.npmjs.org", "headers_sent": ["Host", "Accept", "User-Agent", "Accept-Encoding", "Connection"], "host_header_sent": "registry.npmjs.org", "location": null, "path_sent": "/is-number/-/is-number-7.0.0.tgz", "peer": "104.16.0.34", "port": 443, "resp_bytes": 3730, "scheme": "https", "sni_sent": "registry.npmjs.org", "status": 200, "tls": "TLSv1.2", "x_trace_id_count": 0}}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/anthropic/v1/models", "decision": "deny", "id": 8, "method": "GET", "reason": "no route", "status": 403, "ts": "2026-10-29T14:55:07", "upstream": null}
+{"client_header_names": ["accept", "content-length", "content-type", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/anthropic/v1/messages", "decision": "deny", "id": 9, "method": "POST", "reason": "no route", "status": 403, "ts": "2026-10-29T14:55:07", "upstream": null}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/zen", "decision": "deny", "id": 10, "method": "GET", "reason": "no route", "status": 403, "ts": "2026-10-29T14:55:07", "upstream": null}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/", "decision": "deny", "id": 11, "method": "GET", "reason": "no route", "status": 403, "ts": "2026-10-29T14:55:07", "upstream": null}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/github/zen", "decision": "deny", "id": 12, "method": "GET", "reason": "no route", "status": 403, "ts": "2026-10-29T14:55:07", "upstream": null}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/openai/v2/models", "decision": "deny", "id": 13, "method": "GET", "reason": "no route", "status": 403, "ts": "2026-10-29T14:55:07", "upstream": null}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/openai/models", "decision": "deny", "id": 14, "method": "GET", "reason": "no route", "status": 403, "ts": "2026-10-29T14:55:07", "upstream": null}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/openai/v1/../../zen", "decision": "deny", "id": 15, "method": "GET", "reason": "dot segment", "status": 403, "ts": "2026-10-29T14:55:07", "upstream": null}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/openai/v1/%2e%2e/%2e%2e/zen", "decision": "deny", "id": 16, "method": "GET", "reason": "dot segment", "status": 403, "ts": "2026-10-29T14:55:07", "upstream": null}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/openai/v1/%2E%2E%2F%2E%2E%2Fzen", "decision": "deny", "id": 17, "method": "GET", "reason": "dot segment", "status": 403, "ts": "2026-10-29T14:55:07", "upstream": null}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/npm/../zen", "decision": "deny", "id": 18, "method": "GET", "reason": "dot segment", "status": 403, "ts": "2026-10-29T14:55:07", "upstream": null}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/npm/%252e%252e/zen", "decision": "deny", "id": 19, "method": "GET", "reason": "double percent-encoding", "status": 403, "ts": "2026-10-29T14:55:07", "upstream": null}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/github.int.exe.xyz/zen", "decision": "deny", "id": 20, "method": "GET", "reason": "no route", "status": 403, "ts": "2026-10-29T14:55:07", "upstream": null}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/openai/v1//github.int.exe.xyz/zen", "decision": "deny", "id": 21, "method": "GET", "reason": "illegal sequence in decoded path", "status": 403, "ts": "2026-10-29T14:55:07", "upstream": null}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/openai/v1/models%5c..%5czen", "decision": "deny", "id": 22, "method": "GET", "reason": "illegal sequence in decoded path", "status": 403, "ts": "2026-10-29T14:55:07", "upstream": null}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["github.int.exe.xyz"], "client_target": "/openai/v1/models", "decision": "deny", "id": 23, "method": "GET", "reason": "client Host is not the local forwarder", "status": 403, "ts": "2026-10-29T14:55:07", "upstream": null}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["github.int.exe.xyz"], "client_target": "/zen", "decision": "deny", "id": 24, "method": "GET", "reason": "client Host is not the local forwarder", "status": 403, "ts": "2026-10-29T14:55:07", "upstream": null}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["llm.int.exe.xyz"], "client_target": "/openai/v1/models", "decision": "deny", "id": 25, "method": "GET", "reason": "client Host is not the local forwarder", "status": 403, "ts": "2026-10-29T14:55:07", "upstream": null}
+{"client_header_names": ["accept", "host", "user-agent", "x-forwarded-host"], "client_host": ["127.0.0.1:18080"], "client_target": "/openai/v1/models", "decision": "deny", "id": 26, "method": "GET", "reason": "forwarding/proxy header present: x-forwarded-host", "status": 403, "ts": "2026-10-29T14:55:07", "upstream": null}
+{"client_header_names": ["accept", "forwarded", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/openai/v1/models", "decision": "deny", "id": 27, "method": "GET", "reason": "forwarding/proxy header present: forwarded", "status": 403, "ts": "2026-10-29T14:55:07", "upstream": null}
+{"client_header_names": ["accept", "host", "user-agent", "x-original-url"], "client_host": ["127.0.0.1:18080"], "client_target": "/openai/v1/models", "decision": "deny", "id": 28, "method": "GET", "reason": "forwarding/proxy header present: x-original-url", "status": 403, "ts": "2026-10-29T14:55:07", "upstream": null}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "https://github.int.exe.xyz/zen", "decision": "deny", "id": 29, "method": "GET", "reason": "non-origin-form request target", "status": 403, "ts": "2026-10-29T14:55:07", "upstream": null}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "https://github.int.exe.xyz/openai/v1/models", "decision": "deny", "id": 30, "method": "GET", "reason": "non-origin-form request target", "status": 403, "ts": "2026-10-29T14:55:07", "upstream": null}
+{"client_header_names": ["accept", "host", "proxy-connection", "user-agent"], "client_host": ["github.int.exe.xyz"], "client_target": "http://github.int.exe.xyz/zen", "decision": "deny", "id": 31, "method": "GET", "reason": "non-origin-form request target", "status": 403, "ts": "2026-10-29T14:55:07", "upstream": null}
+{"client_header_names": ["host", "proxy-connection", "user-agent"], "client_host": ["github.int.exe.xyz:443"], "client_target": "github.int.exe.xyz:443", "decision": "deny", "id": 32, "method": "CONNECT", "reason": "CONNECT not supported", "status": 403, "ts": "2026-10-29T14:55:07", "upstream": null}
+{"client_header_names": ["host", "proxy-connection", "user-agent"], "client_host": ["api.github.com:443"], "client_target": "api.github.com:443", "decision": "deny", "id": 33, "method": "CONNECT", "reason": "CONNECT not supported", "status": 403, "ts": "2026-10-29T14:55:07", "upstream": null}
+{"client_header_names": ["accept", "content-length", "content-type", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/npm/is-number", "decision": "deny", "id": 34, "method": "POST", "reason": "method POST not allowed on route", "status": 403, "ts": "2026-10-29T14:55:07", "upstream": null}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/openai/v1/models", "decision": "deny", "id": 35, "method": "DELETE", "reason": "method DELETE not allowed on route", "status": 403, "ts": "2026-10-29T14:55:07", "upstream": null}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/__fixture/redir-github", "decision": "forward", "dropped_client_headers": ["host", "user-agent"], "id": 36, "method": "GET", "route": "__fixture", "status": 302, "ts": "2026-10-29T14:55:07", "upstream": {"connect_host": "127.0.0.1", "headers_sent": ["Host", "Accept", "User-Agent", "Accept-Encoding", "Connection"], "host_header_sent": "fixture.local", "location": "https://github.int.exe.xyz/zen", "path_sent": "/__fixture/redir-github", "peer": "127.0.0.1", "port": 18999, "resp_bytes": 43, "scheme": "http", "sni_sent": null, "status": 302, "x_trace_id_count": 0}}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/__fixture/redir-api", "decision": "forward", "dropped_client_headers": ["host", "user-agent"], "id": 37, "method": "GET", "route": "__fixture", "status": 302, "ts": "2026-10-29T14:55:07", "upstream": {"connect_host": "127.0.0.1", "headers_sent": ["Host", "Accept", "User-Agent", "Accept-Encoding", "Connection"], "host_header_sent": "fixture.local", "location": "https://api.github.com/zen", "path_sent": "/__fixture/redir-api", "peer": "127.0.0.1", "port": 18999, "resp_bytes": 39, "scheme": "http", "sni_sent": null, "status": 302, "x_trace_id_count": 0}}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/__fixture/redir-github", "decision": "forward", "dropped_client_headers": ["host", "user-agent"], "id": 38, "method": "GET", "route": "__fixture", "status": 302, "ts": "2026-10-29T14:55:07", "upstream": {"connect_host": "127.0.0.1", "headers_sent": ["Host", "Accept", "User-Agent", "Accept-Encoding", "Connection"], "host_header_sent": "fixture.local", "location": "https://github.int.exe.xyz/zen", "path_sent": "/__fixture/redir-github", "peer": "127.0.0.1", "port": 18999, "resp_bytes": 43, "scheme": "http", "sni_sent": null, "status": 302, "x_trace_id_count": 0}}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/__fixture/redir-local", "decision": "forward", "dropped_client_headers": ["host", "user-agent"], "id": 39, "method": "GET", "route": "__fixture", "status": 302, "ts": "2026-10-29T14:55:07", "upstream": {"connect_host": "127.0.0.1", "headers_sent": ["Host", "Accept", "User-Agent", "Accept-Encoding", "Connection"], "host_header_sent": "fixture.local", "location": "/openai/v1/models", "path_sent": "/__fixture/redir-local", "peer": "127.0.0.1", "port": 18999, "resp_bytes": 30, "scheme": "http", "sni_sent": null, "status": 302, "x_trace_id_count": 0}}
+{"client_header_names": ["accept", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/openai/v1/models", "decision": "forward", "dropped_client_headers": ["host", "user-agent"], "id": 40, "method": "GET", "route": "openai", "status": 200, "ts": "2026-10-29T14:55:07", "upstream": {"cert_san": ["*.int.exe.xyz", "int.exe.xyz"], "connect_host": "llm.int.exe.xyz", "headers_sent": ["Host", "Accept", "User-Agent", "Accept-Encoding", "Connection"], "host_header_sent": "llm.int.exe.xyz", "location": null, "path_sent": "/openai/v1/models", "peer": "169.254.169.254", "port": 443, "resp_bytes": 4274, "scheme": "https", "sni_sent": "llm.int.exe.xyz", "status": 200, "tls": "TLSv1.3", "x_trace_id_count": 2}}
+{"client_header_names": ["accept", "content-length", "content-type", "host", "user-agent"], "client_host": ["127.0.0.1:18080"], "client_target": "/openai/v1/chat/completions", "decision": "forward", "dropped_client_headers": ["host", "user-agent"], "id": 41, "method": "POST", "route": "openai", "status": 400, "ts": "2026-10-29T14:55:07", "upstream": {"cert_san": ["*.int.exe.xyz", "int.exe.xyz"], "connect_host": "llm.int.exe.xyz", "headers_sent": ["Host", "Accept", "Content-Type", "User-Agent", "Accept-Encoding", "Connection", "Content-Length"], "host_header_sent": "llm.int.exe.xyz", "location": null, "path_sent": "/openai/v1/chat/completions", "peer": "169.254.169.254", "port": 443, "resp_bytes": 140, "scheme": "https", "sni_sent": "llm.int.exe.xyz", "status": 400, "tls": "TLSv1.3", "x_trace_id_count": 2}}
+## gateway log analysis
+requests=41 forwarded=13 denied=28 errors=0
+  upstream Host=fixture.local SNI=None peer=127.0.0.1: 4
+  upstream Host=llm.int.exe.xyz SNI=llm.int.exe.xyz peer=169.254.169.254: 4
+  upstream Host=registry.npmjs.org SNI=registry.npmjs.org peer=104.16.0.34: 1
+  upstream Host=registry.npmjs.org SNI=registry.npmjs.org peer=104.16.10.34: 1
+  upstream Host=registry.npmjs.org SNI=registry.npmjs.org peer=104.16.8.34: 2
+  upstream Host=registry.npmjs.org SNI=registry.npmjs.org peer=104.16.9.34: 1
+  every forwarded record has host_header_sent and sni_sent fields: True
+  any upstream Host/SNI naming github: False
+  denied records with an upstream: 0
+  3xx forwarded (status, Location, follow-up upstream requests from gateway): [(302, 'https://github.int.exe.xyz/zen'), (302, 'https://api.github.com/zen'), (302, 'https://github.int.exe.xyz/zen'), (302, '/openai/v1/models')]
+  deny #8 GET /anthropic/v1/models host=['127.0.0.1:18080'] -> no route
+  deny #9 POST /anthropic/v1/messages host=['127.0.0.1:18080'] -> no route
+  deny #10 GET /zen host=['127.0.0.1:18080'] -> no route
+  deny #11 GET / host=['127.0.0.1:18080'] -> no route
+  deny #12 GET /github/zen host=['127.0.0.1:18080'] -> no route
+  deny #13 GET /openai/v2/models host=['127.0.0.1:18080'] -> no route
+  deny #14 GET /openai/models host=['127.0.0.1:18080'] -> no route
+  deny #15 GET /openai/v1/../../zen host=['127.0.0.1:18080'] -> dot segment
+  deny #16 GET /openai/v1/%2e%2e/%2e%2e/zen host=['127.0.0.1:18080'] -> dot segment
+  deny #17 GET /openai/v1/%2E%2E%2F%2E%2E%2Fzen host=['127.0.0.1:18080'] -> dot segment
+  deny #18 GET /npm/../zen host=['127.0.0.1:18080'] -> dot segment
+  deny #19 GET /npm/%252e%252e/zen host=['127.0.0.1:18080'] -> double percent-encoding
+  deny #20 GET /github.int.exe.xyz/zen host=['127.0.0.1:18080'] -> no route
+  deny #21 GET /openai/v1//github.int.exe.xyz/zen host=['127.0.0.1:18080'] -> illegal sequence in decoded path
+  deny #22 GET /openai/v1/models%5c..%5czen host=['127.0.0.1:18080'] -> illegal sequence in decoded path
+  deny #23 GET /openai/v1/models host=['github.int.exe.xyz'] -> client Host is not the local forwarder
+  deny #24 GET /zen host=['github.int.exe.xyz'] -> client Host is not the local forwarder
+  deny #25 GET /openai/v1/models host=['llm.int.exe.xyz'] -> client Host is not the local forwarder
+  deny #26 GET /openai/v1/models host=['127.0.0.1:18080'] -> forwarding/proxy header present: x-forwarded-host
+  deny #27 GET /openai/v1/models host=['127.0.0.1:18080'] -> forwarding/proxy header present: forwarded
+  deny #28 GET /openai/v1/models host=['127.0.0.1:18080'] -> forwarding/proxy header present: x-original-url
+  deny #29 GET https://github.int.exe.xyz/zen host=['127.0.0.1:18080'] -> non-origin-form request target
+  deny #30 GET https://github.int.exe.xyz/openai/v1/models host=['127.0.0.1:18080'] -> non-origin-form request target
+  deny #31 GET http://github.int.exe.xyz/zen host=['github.int.exe.xyz'] -> non-origin-form request target
+  deny #32 CONNECT github.int.exe.xyz:443 host=['github.int.exe.xyz:443'] -> CONNECT not supported
+  deny #33 CONNECT api.github.com:443 host=['api.github.com:443'] -> CONNECT not supported
+  deny #34 POST /npm/is-number host=['127.0.0.1:18080'] -> method POST not allowed on route
+  deny #35 DELETE /openai/v1/models host=['127.0.0.1:18080'] -> method DELETE not allowed on route
+## leftover processes from this run:
+none

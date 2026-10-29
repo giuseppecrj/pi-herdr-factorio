@@ -1,0 +1,135 @@
+# exp5 at 2026-10-29T15:36:24+00:00 on pi-factorio
+gateway[exp5] pid=296759 socket=/home/exedev/f05-proto2/gw-exp5/gw.sock args: --gate-file /home/exedev/f05-proto2/gw-exp5-gate.json --auto-gate-tokens 11000 --mark herdr-parent-received
+## sandbox: uid=1000 ifaces=lo gre0@NONE gretap0@NONE erspan0@NONE  routes=[]
+## /dev/pts: ptmx  ptmx=lrwxrwxrwx
+versions: pi=1.4.0 herdr=herdr 0.9.5 node=v26.12.1
+herdr server ready after 0.32s (pid 33, socket /tmp/home/.config/herdr/sessions/f05/herdr.sock)
+workspace ready after 0.38s pane=w1:p1
+parent finished after 10.94s (wait rc=0)
+## herdr pane list before stop
+{"id":"cli:pane:list","result":{"panes":[{"agent_status":"idle","cwd":"/work/proj","focused":true,"foreground_cwd":"/work/proj","pane_id":"w1:p1","revision":0,"scroll":{"max_offset_from_bottom":0,"offset_from_bottom":0,"viewport_rows":40},"tab_id":"w1:t1","terminal_id":"term_65efc7144699a1","workspace_id":"w1"}],"type":"pane_list"}}
+
+## processes in sandbox before stop
+    PID    PPID ELAPSED COMMAND         COMMAND
+      1       0      10 bwrap           bwrap --unshare-all --die-with-parent --new-session --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/sbin /sbin 
+      2       1      10 bash            /bin/bash /opt/scripts/exp5_inside.sh
+     18       2      10 socat           socat TCP-LISTEN:18080,bind=127.0.0.1,fork,reuseaddr UNIX-CONNECT:/run/gw.sock
+     33       2      10 herdr           herdr --session f05 server
+     48      33      10 bash            /bin/bash
+    142       2       0 ps              ps -eo pid,ppid,etimes,comm,args --sort=pid
+    143       2       0 cut             cut -c1-160
+herdr stop took 0.26s
+## processes in sandbox after herdr stop
+    PID    PPID COMMAND
+      1       0 bwrap
+      2       1 bash
+     18       2 socat
+    160       2 ps
+sandbox exit=0 total_seconds=11.3
+scope after: inactive
+## parent summary
+{
+ "env": {
+  "HERDR_ENV": "1",
+  "HERDR_PANE_ID": "w1:p1",
+  "HERDR_SOCKET_PATH": "/tmp/home/.config/herdr/sessions/f05/herdr.sock",
+  "PI_CODING_AGENT_DIR": "/work/agent"
+ },
+ "parent_stats": {
+  "sessionFile": "/work/parent-sessions/2026-10-29T15-36-25-612Z_01a1884e-270b-71ff-aea1-b80ffe56af42.jsonl",
+  "sessionId": "01a1884e-270b-71ff-aea1-b80ffe56af42",
+  "userMessages": 1,
+  "assistantMessages": 3,
+  "toolCalls": 1,
+  "toolResults": 1,
+  "totalMessages": 6,
+  "tokens": {
+   "input": 7497,
+   "output": 83,
+   "cacheRead": 0,
+   "cacheWrite": 0,
+   "total": 7580
+  },
+  "cost": 0.015823999999999998,
+  "contextUsage": {
+   "tokens": 2701,
+   "contextWindow": 272000,
+   "percent": 0.993014705882353
+  }
+ },
+ "done": true,
+ "got_result": true,
+ "parent_exit_after_stdin_close_s": 0.033,
+ "parent_exit_code": 0
+}
+## parent stderr (head)
+
+## herdr server log (head)
+herdr server running; you can use any herdr CLI command in another terminal.
+api socket: /tmp/home/.config/herdr/sessions/f05/herdr.sock
+client socket: /tmp/home/.config/herdr/sessions/f05/herdr-client.sock
+logs: /tmp/home/.config/herdr/sessions/f05/herdr-server.log
+did you mean to open the Herdr TUI? run `herdr`; you do not need `herdr server`.
+
+## gateway log summary
+#1 t=1793288186.799 POST /openai/v1/responses -> forward route=openai status=200 upstream=('https', 'llm.int.exe.xyz', 'llm.int.exe.xyz', '169.254.169.254') | req model=gpt-6.1-sol tools=[] input_items=4 instr_chars=0 reasoning={'effort': 'medium', 'summary': 'auto'} | resp terminal=completed usage={"attribution": {"items": {"at_049fe5e4c205abac016ae367fb565c819b9d5a3502156d666e": {"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 1073, "output_tokens": 0}, "cnfu_049fe5e4c205abac016ae367fb5660819b829d7d954471899c": {"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 0, "output_tokens": 0}, "fc_049fe5e4c205abac016ae367fc7ac0819b883a09bffa0d5370": {"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 2, "output_tokens": 70}, "msg_049fe5e4c205abac016ae367fb5660819b8d02f18c53cffad7": {"cache_write_tokens": 0, "cached_tokens": 0, "content": [{"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 122, "output_tokens": 0}], "input_tokens": 122, "output_tokens": 0}, "msg_049fe5e4c205abac016ae367fb5660819bae0c8544f558dd6d": {"cache_write_tokens": 0, "cached_tokens": 0, "content": [{"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 1130, "output_tokens": 0}], "input_tokens": 1130, "output_tokens": 0}}}, "input_tokens": 2327, "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0}, "output_tokens": 70, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 2397}
+#2 t=1793288189.521 POST /openai/v1/responses -> forward route=openai status=200 upstream=('https', 'llm.int.exe.xyz', 'llm.int.exe.xyz', '169.254.169.254') | req model=gpt-6.1-sol tools=[] input_items=7 instr_chars=0 reasoning={'effort': 'medium', 'summary': 'auto'} | resp terminal=completed usage={"attribution": {"items": {"at_049fe5e4c205abac016ae367fe1fec819ba8c48c2b572d3c3d": {"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 1073, "output_tokens": 0}, "cnfu_049fe5e4c205abac016ae367fe1fec819ba0397a0423732dd5": {"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 0, "output_tokens": 0}, "cnfu_049fe5e4c205abac016ae367fe1fec819ba604e2d46f44b7d4": {"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 0, "output_tokens": 0}, "fc_049fe5e4c205abac016ae367fc7ac0819b883a09bffa0d5370": {"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 72, "output_tokens": 0}, "fc_049fe5e4c205abac016ae367fe1fec819b90a4425ab6b04517": {"cache_write_tokens": 0, "cached_tokens": 0, "content": [{"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 79, "output_tokens": 0}], "input_tokens": 79, "output_tokens": 0}, "msg_049fe5e4c205abac016ae367fe1fec819b982ad80258eb858f": {"cache_write_tokens": 0, "cached_tokens": 0, "content": [{"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 1130, "output_tokens": 0}], "input_tokens": 1130, "output_tokens": 0}, "msg_049fe5e4c205abac016ae367fe1fec819bbaaa1e6a549c407c": {"cache_write_tokens": 0, "cached_tokens": 0, "content": [{"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 122, "output_tokens": 0}], "input_tokens": 122, "output_tokens": 0}, "msg_049fe5e4c205abac016ae368003d30819b8d6145593da67ca9": {"cache_write_tokens": 0, "cached_tokens": 0, "content": [{"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 2, "output_tokens": 4}], "input_tokens": 2, "output_tokens": 4}}}, "input_tokens": 2478, "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0}, "output_tokens": 4, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 2482}
+#3 t=1793288190.18 POST /openai/v1/responses -> forward route=openai status=200 upstream=('https', 'llm.int.exe.xyz', 'llm.int.exe.xyz', '169.254.169.254') | req model=gpt-6.1-sol tools=[] input_items=4 instr_chars=0 reasoning={'effort': 'medium', 'summary': 'auto'} | resp terminal=completed usage={"attribution": {"items": {"at_0d3ac4e91ea85b98016ae367fe978c819aae81e487af574af4": {"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 300, "output_tokens": 0}, "cnfu_0d3ac4e91ea85b98016ae367fe978c819a883e8cd37249609d": {"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 0, "output_tokens": 0}, "msg_0d3ac4e91ea85b98016ae367fe978c819aa44d9a2b0e75a85b": {"cache_write_tokens": 0, "cached_tokens": 0, "content": [{"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 639, "output_tokens": 0}], "input_tokens": 639, "output_tokens": 0}, "msg_0d3ac4e91ea85b98016ae367fe978c819abda56ffaeee2e3a7": {"cache_write_tokens": 0, "cached_tokens": 0, "content": [{"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 91, "output_tokens": 0}], "input_tokens": 91, "output_tokens": 0}, "msg_0d3ac4e91ea85b98016ae368010ccc819aa526a0066d246af1": {"cache_write_tokens": 0, "cached_tokens": 0, "content": [{"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 0, "output_tokens": 10}], "input_tokens": 0, "output_tokens": 10}, "rs_0d3ac4e91ea85b98016ae36800c7d4819a87c9b075c2d20f19": {"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 2, "output_tokens": 10}}}, "input_tokens": 1032, "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0}, "output_tokens": 20, "output_tokens_details": {"reasoning_tokens": 10}, "total_tokens": 1052}
+#4 t=1793288193.412 POST /openai/v1/responses -> forward route=openai status=200 upstream=('https', 'llm.int.exe.xyz', 'llm.int.exe.xyz', '169.254.169.254') | req model=gpt-6.1-sol tools=[] input_items=10 instr_chars=0 reasoning={'effort': 'medium', 'summary': 'auto'} | resp terminal=completed usage={"attribution": {"items": {"at_049fe5e4c205abac016ae368020388819b8532b527b8605116": {"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 1073, "output_tokens": 0}, "cnfu_049fe5e4c205abac016ae368020388819b9571a559f2389a84": {"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 0, "output_tokens": 0}, "cnfu_049fe5e4c205abac016ae368020388819bb47ddfb87e57c05d": {"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 0, "output_tokens": 0}, "cnfu_049fe5e4c205abac016ae36802038c819ba0ee030669bdf210": {"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 0, "output_tokens": 0}, "fc_049fe5e4c205abac016ae367fc7ac0819b883a09bffa0d5370": {"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 72, "output_tokens": 0}, "fc_049fe5e4c205abac016ae368020388819ba620dae83e264d08": {"cache_write_tokens": 0, "cached_tokens": 0, "content": [{"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 79, "output_tokens": 0}], "input_tokens": 79, "output_tokens": 0}, "msg_049fe5e4c205abac016ae368003d30819b8d6145593da67ca9": {"cache_write_tokens": 0, "cached_tokens": 0, "content": [{"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 6, "output_tokens": 0}], "input_tokens": 6, "output_tokens": 0}, "msg_049fe5e4c205abac016ae368020388819b839af8e2f0ede2af": {"cache_write_tokens": 0, "cached_tokens": 0, "content": [{"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 1130, "output_tokens": 0}], "input_tokens": 1130, "output_tokens": 0}, "msg_049fe5e4c205abac016ae368020388819b9276c9a894a27d52": {"cache_write_tokens": 0, "cached_tokens": 0, "content": [{"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 122, "output_tokens": 0}], "input_tokens": 122, "output_tokens": 0}, "msg_049fe5e4c205abac016ae368020388819ba8c18d92d0f5e1c5": {"cache_write_tokens": 0, "cached_tokens": 0, "content": [{"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 208, "output_tokens": 0}], "input_tokens": 208, "output_tokens": 0}, "msg_049fe5e4c205abac016ae368038bf4819b910c41c1f7b03790": {"cache_write_tokens": 0, "cached_tokens": 0, "content": [{"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 2, "output_tokens": 9}], "input_tokens": 2, "output_tokens": 9}}}, "input_tokens": 2692, "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0}, "output_tokens": 9, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 2701}
+requests=4 forwarded=4 gated=0 denied=0 errors=0
+upstream hosts: [('llm.int.exe.xyz', 'llm.int.exe.xyz')]
+REAL_MODEL_TOKENS_TOTAL=8632
+## analysis
+parent event order (t = s since parent start; ×n = repeats):
+     0.000 prompt
+     1.362 response:prompt
+     1.362 agent_start
+     1.362 turn_start
+     1.362 message_start(system)
+     1.363 message_end(system)
+     1.363 message_start(user)
+     1.363 message_end(user)
+     3.921 message_start(assistant)
+     3.942 message_update ×59
+     3.956 message_end(assistant)
+     3.957 tool_execution_start(subagent)
+     4.104 tool_execution_end(subagent)
+     4.105 message_start(toolResult)
+     4.108 message_end(toolResult)
+     4.108 turn_end
+     4.108 turn_start
+     7.071 message_start(assistant)
+     7.071 message_update ×2
+     7.071 message_end(assistant)
+     7.071 turn_end
+     7.071 agent_end
+     7.072 agent_settled
+     7.914 extension_ui_request
+     8.002 agent_start
+     8.002 turn_start
+     8.002 message_start(subagent_result)
+     8.002 message_end(subagent_result)
+    10.388 message_start(assistant)
+    10.390 message_update ×7
+    10.391 message_end(assistant)
+    10.391 turn_end
+    10.391 agent_end
+    10.392 agent_settled
+    10.392 get_session_stats
+agent_settled: [(7.072, {'type': 'agent_settled', 'aborted': False}), (10.392, {'type': 'agent_settled', 'aborted': False})]
+first agent_settled t= 7.072  subagent_result t= 8.002  ORDER: settled-before-result
+parent silent period while child ran: 0.088s (last parent record before result at t=7.914)
+subagent_result details keys: ['elapsed', 'exitCode', 'fallbackAttempts', 'fallbackFailures', 'name', 'resultContent', 'runtimePlan', 'sessionFile', 'task']
+details: {"name": "exp5-child", "exitCode": 0, "error": null, "elapsed": 3, "sessionFile": "/work/agent/sessions/--work-proj--/2026-10-29T15-36-29-383Z_db662822-681b-4f2b-b819-f396f0bb6f36-3df64f2b-17f8b154-aaf2.jsonl", "model": null, "usage": null}
+child session assistant messages: 1 provider/model: [('openai', 'gpt-6.1-sol')]
+child usage per message: [{"input": 1032, "output": 20, "cacheRead": 0, "cacheWrite": 0, "reasoning": 10, "totalTokens": 1052, "cost": {"input": 0.002064, "output": 0.0002, "cacheRead": 0, "cacheWrite": 0, "total": 0.002264}}]
+child final text: ['herdr-child-ok']
+child total tokens (session file): 1052
+parent usage per assistant message: [{"input": 2327, "output": 70, "cacheRead": 0, "cacheWrite": 0, "reasoning": 0, "totalTokens": 2397, "cost": {"input": 0.004654, "output": 0.0007000000000000001, "cacheRead": 0, "cacheWrite": 0, "total": 0.005354}}, {"input": 2478, "output": 4, "cacheRead": 0, "cacheWrite": 0, "reasoning": 0, "totalTokens": 2482, "cost": {"input": 0.0049559999999999995, "output": 4e-05, "cacheRead": 0, "cacheWrite": 0, "total": 0.004996}}, {"input": 2692, "output": 9, "cacheRead": 0, "cacheWrite": 0, "reasoning": 0, "totalTokens": 2701, "cost": {"input": 0.005384, "output": 9e-05, "cacheRead": 0, "cacheWrite": 0, "total": 0.005474}}]
+parent total tokens: 7580
+  gw #1 t=1793288186.799 /openai/v1/responses forward who=parent tools=[] keys=['include', 'input', 'max_output_tokens', 'model', 'prompt_cache_key', 'reasoning', 'store', 'stream'] usage_total=2397 upstream_host=llm.int.exe.xyz
+  gw #2 t=1793288189.521 /openai/v1/responses forward who=parent tools=[] keys=['include', 'input', 'max_output_tokens', 'model', 'prompt_cache_key', 'reasoning', 'store', 'stream'] usage_total=2482 upstream_host=llm.int.exe.xyz
+  gw #3 t=1793288190.18 /openai/v1/responses forward who=child tools=[] keys=['include', 'input', 'max_output_tokens', 'model', 'prompt_cache_key', 'reasoning', 'store', 'stream'] usage_total=1052 upstream_host=llm.int.exe.xyz
+  gw #4 t=1793288193.412 /openai/v1/responses forward who=parent tools=[] keys=['include', 'input', 'max_output_tokens', 'model', 'prompt_cache_key', 'reasoning', 'store', 'stream'] usage_total=2701 upstream_host=llm.int.exe.xyz
+## leftovers check
+no matching processes

@@ -176,7 +176,7 @@ The `reload` object has these fields:
 | `workflowDigest` | string or `null` | Same as `digest` in `workflow-check`. |
 | `workflowError` | object or `null` | Same as `error` in `workflow-check`. |
 | `warnings` | string array | Same as in `workflow-check`. |
-| `executionEnabled` | boolean | Always `false`. No stage runner is installed in this release. |
+| `executionEnabled` | boolean | Always `false`, because `status` runs no preflight. The controller's own value is in `controller.lastTick.executionEnabled`. |
 | `controller` | object | Without `--state-dir`, `state` is `unavailable` and `reason` is `pass --state-dir to read the controller lock`. With it, see below. |
 | `models` | object or `null` | The model for each of `specify`, `accept`, `build`, `validate` and `review`. |
 | `limits` | object or `null` | `pollIntervalMs`, `maxConcurrent`, `retry`, `usage` and `stages`, where `stages` maps each stage to `maxTurns`, `wallMs` and `stallMs`. |
@@ -394,13 +394,31 @@ A run is one admitted `factory:ready` label event. Its `runId` is the sha256 hex
 | --- | --- | --- |
 | `claimed` | The claim is recorded and the stage has not launched. | yes |
 | `running` | A stage runner is working on the stage. | yes |
-| `blocked` | The stage cannot run: no stage runner is installed in this release. | yes |
+| `blocked` | The stage cannot run: the sandbox preflight has not passed (`sandbox_unavailable`). It never falls back to an unsandboxed run. | yes |
 | `retrying` | A stage failed or stalled, and a retry is due at `retryAt`. | no |
 | `released` | The issue closed, lost `factory:ready`, or got a newer ready event. Terminal. | no |
 | `failed` | The attempt cap was reached. Terminal. | no |
-| `budget_exhausted` | The run used `usage.max_tokens_per_run` across all attempts. Terminal. | no |
+| `budget_exhausted` | The run used `usage.max_tokens_per_run` across all attempts, or a stage hit a turn, token, wall or run-token cap. Terminal. | no |
+| `stage_passed` | The stage passed. Later stages are not installed in this release, so the run stops here. Terminal. | no |
 
-Until F05 installs the stage runner, every launch returns `stage_runner_not_installed`. That result is not a failure and is not retried, and no model runs. The run stays `blocked` at `specify` and keeps its slot, so a third issue waits in `queued` while two are blocked. `executionEnabled` stays `false`.
+Each stage runs in the sandbox described in `docs/operations/sandbox.md`. On startup, before the first tick adopts a run, the controller stops every leftover `factory-stage-*` user scope by name and logs `sandbox_reconciled` with `stopped` and `failed` counts. Each tick then runs the sandbox preflight until it passes: a known CPU architecture, unprivileged user namespaces, bwrap at least 0.9.0, the asset bundle at `/var/lib/factory-sandbox/current` matching the digest in its name, a user scope that launches, and a gateway that comes up ready. A change in the result is logged as `sandbox_preflight` with `ok`, the `failed` checks joined by `+`, and the first 12 characters of the assets digest. Once the preflight passes, `executionEnabled` is `true` for the rest of the process.
+
+While the preflight fails, a launch returns `sandbox_unavailable`. That result is not a failure and is not retried, and no model runs. The run stays `blocked` at `specify` and keeps its slot, so a third issue waits in `queued` while two are blocked. A `blocked` run launches again on the first tick whose preflight passes.
+
+A launched stage gets the stage's model and budget from the loaded workflow, the attempt, and the run's remaining tokens, which are `usage.max_tokens_per_run` minus what the run has used. In this release it runs one fixed probe prompt with no tools. Its result ends the stage:
+
+| Result | Run |
+| --- | --- |
+| `passed` | `stage_passed`, terminal. |
+| `failed` (an error, malformed output, a crash or an abort) | a retry, or `failed` at the attempt cap, as below. |
+| `refused` (a structured content-policy refusal, with no fallback model or a fallback that refused too) | `failed`, terminal, with no scheduler retry. |
+| `budget_exhausted` (a turn, token, wall or run-token cap) | `budget_exhausted`, terminal. |
+
+The stage's tokens are added to the run's `usage` whatever the result. A stage that stalls keeps the tokens it had reported when it stalled.
+
+Every stage attempt writes a receipt on the host, `<state-dir>/stages/<runId>/<stage>-<attempt>/receipt.json`, mode 0600, beside the gateway's `egress.jsonl`. A replay of the same attempt writes to `<stage>-<attempt>.2`, and so on. The receipt holds only numbers, enums, model IDs and digests: the outcome, the settlement event and whether it was aborted, the requested and observed models, any fallback record, a refusal code, `wallMs`, `turns`, usage for the parent, the children, by model and as metered by the gateway, the per-route egress summary, `assetsDigest`, the pinned Pi package versions, and `pricing: "unavailable"`. It never goes into a marker.
+
+`tick` and `run` wait for every stage they launched to end before they exit, ending each one as step 1 of the next tick would: a stage that stalls is aborted, and each end posts its marker. So a one-shot command never leaves a sandbox running, and its printed snapshot shows the run's terminal status.
 
 A stage that fails, or makes no progress for its stage's `stall_ms`, is aborted. If `attempt` is below `retry.max_attempts`, the next attempt is due after `min(10000 * 2^(attempt - 1), retry.max_backoff_ms)` milliseconds, where `attempt` is the one that failed. When it is due, the controller relaunches it only if the issue is still eligible and a slot is free. A due retry whose attempt is above the `retry.max_attempts` in force, because the workflow was reloaded with a lower value, ends as `failed` without launching, and needs no slot. Stages are reconciled before the issue is read again, as in step 1 of One tick, so a stage that fails or stalls on its last attempt while its issue is already closed ends `failed`, not `released`. These scheduler retries are separate from `MAX_REPAIR_ROUNDS` in `src/stages.ts`, which counts build rounds after a failed validation or review.
 
@@ -495,7 +513,7 @@ The controller keeps no database. A restart rebuilds each claim from the markers
 | --- | --- | --- |
 | `repo` | string | The `--repo` value. |
 | `at` | string | The tick time, ISO 8601. |
-| `executionEnabled` | boolean | Always `false` in this release. |
+| `executionEnabled` | boolean | `true` once the sandbox preflight has passed in this process, as described under Runs. |
 | `dispatch` | object | `enabled`, and `reasons`: any of `state_unavailable`, `locally_disabled`, `repo_switch_off`, `repo_switch_unavailable`, `workflow_unavailable` and `candidates_unavailable`. |
 | `workflowSha` | string or `null` | The `main` SHA of the last valid workflow. |
 | `maxConcurrent` | number | The slot limit in force, `0` until the process has loaded a workflow. |
@@ -523,7 +541,7 @@ With `--state-dir`, `controller` has `state`, `pid`, `since` and `lastTick`:
 
 ### Logs
 
-The controller logs one line per event to stderr, as `at=<ISO time> event=<name> key=value ...`. A value outside letters, digits and `:._@/[]+-` is printed as `(withheld)`. The events are `controller_ready`, `controller_running`, `controller_refused`, `controller_stopping`, `lock_stale_replaced`, `tick`, `claim_taken`, `claim_adopted`, `claim_released`, `claim_dropped`, `claim_unwritable`, `admission_refused`, `admission_recovered`, `ledger_behind`, `stage_launched`, `stage_stalled`, `stage_ended`, `marker_posted`, `marker_unconfirmed`, `marker_corrupt`, `workspace_missing`, `workspace_unavailable` and `status_unwritable`.
+The controller logs one line per event to stderr, as `at=<ISO time> event=<name> key=value ...`. A value outside letters, digits and `:._@/[]+-` is printed as `(withheld)`. The events are `controller_ready`, `controller_running`, `controller_refused`, `controller_stopping`, `lock_stale_replaced`, `tick`, `claim_taken`, `claim_adopted`, `claim_released`, `claim_dropped`, `claim_unwritable`, `admission_refused`, `admission_recovered`, `ledger_behind`, `stage_launched`, `stage_stalled`, `stage_ended`, `marker_posted`, `marker_unconfirmed`, `marker_corrupt`, `workspace_missing`, `workspace_unavailable`, `status_unwritable`, `sandbox_reconciled` and `sandbox_preflight`.
 
 ### Stop
 
@@ -539,7 +557,7 @@ SIGTERM or SIGINT lets the current tick finish, then `serve` logs `controller_st
 4. Start it: `sudo systemctl enable --now factory.service`.
 5. Wait for readiness: `journalctl -u factory.service -f` until it shows `event=controller_ready`.
 
-The unit sets `GH_HOST=github.int.exe.xyz` and passes `--state-dir` explicitly. `systemctl stop factory.service` sends SIGTERM and waits up to 300 seconds for the tick to finish. The unit restarts on failure after 30 seconds, except after exit 2, when another controller holds the lock. To stop dispatch without stopping the service, create `/home/exedev/factory-state/disabled`.
+The unit sets `GH_HOST=github.int.exe.xyz` and `XDG_RUNTIME_DIR=/run/user/1000`, which the stage scopes need, and passes `--state-dir` explicitly. It holds no secret in its environment. Run `bash server/provision.sh` from the checkout first, so the sandbox bundle exists. Without it every run stays `blocked`. `systemctl stop factory.service` sends SIGTERM and waits up to 300 seconds for the tick to finish. The unit restarts on failure after 30 seconds, except after exit 2, when another controller holds the lock. To stop dispatch without stopping the service, create `/home/exedev/factory-state/disabled`.
 
 ## `/factory status`
 

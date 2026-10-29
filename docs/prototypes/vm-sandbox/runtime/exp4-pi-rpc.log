@@ -1,0 +1,502 @@
+# exp4 at 2026-10-29T15:20:41+00:00 on pi-factorio
+gateway[exp4] pid=295214 socket=/home/exedev/f05-proto2/gw-exp4/gw.sock args: --gate-file /home/exedev/f05-proto2/gw-exp4-gate.json --auto-gate-tokens 6000
+## variant npm: /opt/pi/node_modules/.bin/pi --mode rpc --no-session --no-mcp --no-approve --no-context-files --no-skills --tools subagent --model openai/gpt-6.1-sol --thinking low
+## launch: systemd-run --user --scope --quiet --unit=f05-proto-exp4-npm -p MemoryMax=512M -p TasksMax=256 -p TimeoutStopSec=5 -- bwrap(...) /opt/scripts/sbx-entry.sh /opt/pi/node_modules/.bin/pi ...
+{
+ "timings": {
+  "spawn_to_get_state_response": 0.516,
+  "prompt_sent": 0.516,
+  "settled_or_timeout": 2.764,
+  "stdin_closed": 3.267,
+  "exit_after_stdin_close": 0.031
+ },
+ "seq": [
+  "response:get_state",
+  "response:prompt",
+  "agent_start",
+  "turn_start",
+  "message_start",
+  "message_end",
+  "message_start",
+  "message_end",
+  "message_start",
+  "message_update\u00d73",
+  "message_end",
+  "turn_end",
+  "agent_end",
+  "agent_settled",
+  "response:get_session_stats"
+ ],
+ "settled": [
+  {
+   "t": 2.764,
+   "payload": {
+    "type": "agent_settled",
+    "aborted": false
+   }
+  }
+ ],
+ "assistant": [
+  {
+   "t": 2.758,
+   "stopReason": "stop",
+   "rawStopReason": "completed",
+   "errorMessage": null,
+   "usage": {
+    "input": 410,
+    "output": 5,
+    "cacheRead": 0,
+    "cacheWrite": 0,
+    "reasoning": 0,
+    "totalTokens": 415,
+    "cost": {
+     "input": 0.00082,
+     "output": 5e-05,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "total": 0.00087
+    }
+   },
+   "provider": "openai",
+   "model": "gpt-6.1-sol",
+   "api": "openai-responses",
+   "content": [
+    {
+     "type": "text",
+     "text": "OK"
+    }
+   ],
+   "keys": [
+    "api",
+    "content",
+    "durationMs",
+    "model",
+    "provider",
+    "providerThinkingLevel",
+    "rawStopReason",
+    "responseId",
+    "role",
+    "stopReason",
+    "thinkingLevel",
+    "timestamp",
+    "usage"
+   ]
+  }
+ ],
+ "retries": [],
+ "responses": {
+  "st": {
+   "t": 0.516,
+   "command": "get_state",
+   "success": true,
+   "error": null,
+   "data": {
+    "model": {
+     "id": "gpt-6.1-sol",
+     "name": "GPT-6.1 Sol",
+     "api": "openai-responses",
+     "provider": "openai",
+     "baseUrl": "http://127.0.0.1:18080/openai/v1",
+     "reasoning": true,
+     "input": [
+      "text",
+      "image"
+     ],
+     "cost": {
+      "input": 2,
+      "output": 10,
+      "cacheRead": 0.1,
+      "cacheWrite": 2.5,
+      "tiers": [
+       {
+        "inputTokensAbove": 272000,
+        "input": 4,
+        "output": 15,
+        "cacheRead": 0.2,
+        "cacheWrite": 5
+       }
+      ]
+     },
+     "contextWindow": 272000,
+     "maxTokens": 128000,
+     "thinkingLevelMap": {
+      "off": null,
+      "minimal": null,
+      "low": "low",
+      "medium": "medium",
+      "high": "high",
+      "xhigh": "xhigh",
+      "max": "max"
+     },
+     "compat": {
+      "supportsStrictMode": true,
+      "supportsOpenAIGrammarTools": true,
+      "supportsAdditionalTools": true,
+      "supportsToolSearch": true,
+      "supportsMidConvoSystemMessages": true,
+      "supportsExplicitPromptCacheMode": true,
+      "supportsMidConvoEffort": true
+     },
+     "inputLimits": {
+      "maxRequestBytes": 536870912,
+      "images": {
+       "maxPerRequest": 1500,
+       "resize": {
+        "maxWidth": 2000,
+        "maxHeight": 2000,
+        "maxBytes": 4718592,
+        "jpegQuality": 80
+       }
+      }
+     },
+     "type": "chat"
+    },
+    "thinkingLevel": "low",
+    "isStreaming": false,
+    "isCompacting": false,
+    "steeringMode": "one-at-a-time",
+    "followUpMode": "one-at-a-time",
+    "sessionId": "01a1883f-c015-758c-b526-1d638ecdc17a",
+    "autoCompactionEnabled": true,
+    "messageCount": 0,
+    "pendingMessageCount": 0
+   }
+  },
+  "p1": {
+   "t": 0.519,
+   "command": "prompt",
+   "success": true,
+   "error": null,
+   "data": {
+    "disposition": "started"
+   }
+  },
+  "stats": {
+   "t": 2.766,
+   "command": "get_session_stats",
+   "success": true,
+   "error": null,
+   "data": {
+    "sessionId": "01a1883f-c015-758c-b526-1d638ecdc17a",
+    "userMessages": 1,
+    "assistantMessages": 1,
+    "toolCalls": 0,
+    "toolResults": 0,
+    "totalMessages": 3,
+    "tokens": {
+     "input": 410,
+     "output": 5,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "total": 415
+    },
+    "cost": 0.00087,
+    "contextUsage": {
+     "tokens": 415,
+     "contextWindow": 272000,
+     "percent": 0.1525735294117647
+    }
+   }
+  }
+ },
+ "eof": false,
+ "notes": [],
+ "state": {
+  "thinkingLevel": "low",
+  "isStreaming": false,
+  "sessionFile": null,
+  "sessionId": "01a1883f-c015-758c-b526-1d638ecdc17a",
+  "autoRetryEnabled": null,
+  "autoCompactionEnabled": true,
+  "messageCount": 0,
+  "model": {
+   "provider": "openai",
+   "id": "gpt-6.1-sol",
+   "api": "openai-responses",
+   "baseUrl": "http://127.0.0.1:18080/openai/v1",
+   "reasoning": true
+  }
+ },
+ "stats": {
+  "sessionId": "01a1883f-c015-758c-b526-1d638ecdc17a",
+  "userMessages": 1,
+  "assistantMessages": 1,
+  "toolCalls": 0,
+  "toolResults": 0,
+  "totalMessages": 3,
+  "tokens": {
+   "input": 410,
+   "output": 5,
+   "cacheRead": 0,
+   "cacheWrite": 0,
+   "total": 415
+  },
+  "cost": 0.00087,
+  "contextUsage": {
+   "tokens": 415,
+   "contextWindow": 272000,
+   "percent": 0.1525735294117647
+  }
+ },
+ "exit_code": 0,
+ "scope_after_exit": "inactive"
+}
+## npm stderr (Pi diagnostics)
+
+## npm: files Pi wrote into its agent dir copy:
+./models-store.json 2 bytes
+./auth.json 2 bytes
+## variant standalone: /opt/pi-standalone/pi --mode rpc --no-session --no-mcp --no-approve --no-context-files --no-skills --tools subagent --model openai/gpt-6.1-sol --thinking low
+## launch: systemd-run --user --scope --quiet --unit=f05-proto-exp4-standalone -p MemoryMax=512M -p TasksMax=256 -p TimeoutStopSec=5 -- bwrap(...) /opt/scripts/sbx-entry.sh /opt/pi-standalone/pi ...
+{
+ "timings": {
+  "spawn_to_get_state_response": 0.451,
+  "prompt_sent": 0.451,
+  "settled_or_timeout": 3.899,
+  "stdin_closed": 4.4,
+  "exit_after_stdin_close": 0.016
+ },
+ "seq": [
+  "response:get_state",
+  "response:prompt",
+  "agent_start",
+  "turn_start",
+  "message_start",
+  "message_end",
+  "message_start",
+  "message_end",
+  "message_start",
+  "message_update\u00d73",
+  "message_end",
+  "turn_end",
+  "agent_end",
+  "agent_settled",
+  "response:get_session_stats"
+ ],
+ "settled": [
+  {
+   "t": 3.899,
+   "payload": {
+    "type": "agent_settled",
+    "aborted": false
+   }
+  }
+ ],
+ "assistant": [
+  {
+   "t": 3.895,
+   "stopReason": "stop",
+   "rawStopReason": "completed",
+   "errorMessage": null,
+   "usage": {
+    "input": 383,
+    "output": 5,
+    "cacheRead": 0,
+    "cacheWrite": 0,
+    "reasoning": 0,
+    "totalTokens": 388,
+    "cost": {
+     "input": 0.000766,
+     "output": 5e-05,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "total": 0.000816
+    }
+   },
+   "provider": "openai",
+   "model": "gpt-6.1-sol",
+   "api": "openai-responses",
+   "content": [
+    {
+     "type": "text",
+     "text": "OK"
+    }
+   ],
+   "keys": [
+    "api",
+    "content",
+    "durationMs",
+    "model",
+    "provider",
+    "providerThinkingLevel",
+    "rawStopReason",
+    "responseId",
+    "role",
+    "stopReason",
+    "thinkingLevel",
+    "timestamp",
+    "usage"
+   ]
+  }
+ ],
+ "retries": [],
+ "responses": {
+  "st": {
+   "t": 0.451,
+   "command": "get_state",
+   "success": true,
+   "error": null,
+   "data": {
+    "model": {
+     "id": "gpt-6.1-sol",
+     "name": "GPT-6.1 Sol",
+     "api": "openai-responses",
+     "provider": "openai",
+     "baseUrl": "http://127.0.0.1:18080/openai/v1",
+     "reasoning": true,
+     "input": [
+      "text",
+      "image"
+     ],
+     "cost": {
+      "input": 2,
+      "output": 10,
+      "cacheRead": 0.1,
+      "cacheWrite": 2.5,
+      "tiers": [
+       {
+        "inputTokensAbove": 272000,
+        "input": 4,
+        "output": 15,
+        "cacheRead": 0.2,
+        "cacheWrite": 5
+       }
+      ]
+     },
+     "contextWindow": 272000,
+     "maxTokens": 128000,
+     "thinkingLevelMap": {
+      "off": null,
+      "minimal": null,
+      "low": "low",
+      "medium": "medium",
+      "high": "high",
+      "xhigh": "xhigh",
+      "max": "max"
+     },
+     "compat": {
+      "supportsStrictMode": true,
+      "supportsOpenAIGrammarTools": true,
+      "supportsAdditionalTools": true,
+      "supportsToolSearch": true,
+      "supportsMidConvoSystemMessages": true,
+      "supportsExplicitPromptCacheMode": true,
+      "supportsMidConvoEffort": true
+     },
+     "inputLimits": {
+      "maxRequestBytes": 536870912,
+      "images": {
+       "maxPerRequest": 1500,
+       "resize": {
+        "maxWidth": 2000,
+        "maxHeight": 2000,
+        "maxBytes": 4718592,
+        "jpegQuality": 80
+       }
+      }
+     },
+     "type": "chat"
+    },
+    "thinkingLevel": "low",
+    "isStreaming": false,
+    "isCompacting": false,
+    "steeringMode": "one-at-a-time",
+    "followUpMode": "one-at-a-time",
+    "sessionId": "01a1883f-ccee-7623-97d2-8a82ef017de5",
+    "autoCompactionEnabled": true,
+    "messageCount": 0,
+    "pendingMessageCount": 0
+   }
+  },
+  "p1": {
+   "t": 0.454,
+   "command": "prompt",
+   "success": true,
+   "error": null,
+   "data": {
+    "disposition": "started"
+   }
+  },
+  "stats": {
+   "t": 3.9,
+   "command": "get_session_stats",
+   "success": true,
+   "error": null,
+   "data": {
+    "sessionId": "01a1883f-ccee-7623-97d2-8a82ef017de5",
+    "userMessages": 1,
+    "assistantMessages": 1,
+    "toolCalls": 0,
+    "toolResults": 0,
+    "totalMessages": 3,
+    "tokens": {
+     "input": 383,
+     "output": 5,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "total": 388
+    },
+    "cost": 0.000816,
+    "contextUsage": {
+     "tokens": 388,
+     "contextWindow": 272000,
+     "percent": 0.1426470588235294
+    }
+   }
+  }
+ },
+ "eof": false,
+ "notes": [],
+ "state": {
+  "thinkingLevel": "low",
+  "isStreaming": false,
+  "sessionFile": null,
+  "sessionId": "01a1883f-ccee-7623-97d2-8a82ef017de5",
+  "autoRetryEnabled": null,
+  "autoCompactionEnabled": true,
+  "messageCount": 0,
+  "model": {
+   "provider": "openai",
+   "id": "gpt-6.1-sol",
+   "api": "openai-responses",
+   "baseUrl": "http://127.0.0.1:18080/openai/v1",
+   "reasoning": true
+  }
+ },
+ "stats": {
+  "sessionId": "01a1883f-ccee-7623-97d2-8a82ef017de5",
+  "userMessages": 1,
+  "assistantMessages": 1,
+  "toolCalls": 0,
+  "toolResults": 0,
+  "totalMessages": 3,
+  "tokens": {
+   "input": 383,
+   "output": 5,
+   "cacheRead": 0,
+   "cacheWrite": 0,
+   "total": 388
+  },
+  "cost": 0.000816,
+  "contextUsage": {
+   "tokens": 388,
+   "contextWindow": 272000,
+   "percent": 0.1426470588235294
+  }
+ },
+ "exit_code": 0,
+ "scope_after_exit": "inactive"
+}
+## standalone stderr (Pi diagnostics)
+
+## standalone: files Pi wrote into its agent dir copy:
+./models-store.json 2 bytes
+./auth.json 2 bytes
+## gateway log summary
+#1 t=1793287241.852 POST /openai/v1/responses -> forward route=openai status=200 upstream=('https', 'llm.int.exe.xyz', 'llm.int.exe.xyz', '169.254.169.254') | req model=gpt-6.1-sol tools=[] input_items=3 instr_chars=0 reasoning={'effort': 'medium', 'summary': 'auto'} | resp terminal=completed usage={"attribution": {"items": {"cnfu_0661080dfe1ea854016ae3644a9758819aa9555648f1862ea0": {"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 0, "output_tokens": 0}, "msg_0661080dfe1ea854016ae3644a9758819aa2a3f197ed927f33": {"cache_write_tokens": 0, "cached_tokens": 0, "content": [{"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 9, "output_tokens": 0}], "input_tokens": 9, "output_tokens": 0}, "msg_0661080dfe1ea854016ae3644a9758819ab0f1a80fd1388e72": {"cache_write_tokens": 0, "cached_tokens": 0, "content": [{"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 399, "output_tokens": 0}], "input_tokens": 399, "output_tokens": 0}, "msg_0661080dfe1ea854016ae3644bd04c819aa7197b4ea75e5834": {"cache_write_tokens": 0, "cached_tokens": 0, "content": [{"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 2, "output_tokens": 5}], "input_tokens": 2, "output_tokens": 5}}}, "input_tokens": 410, "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 415}
+#2 t=1793287245.13 POST /openai/v1/responses -> forward route=openai status=200 upstream=('https', 'llm.int.exe.xyz', 'llm.int.exe.xyz', '169.254.169.254') | req model=gpt-6.1-sol tools=[] input_items=3 instr_chars=0 reasoning={'effort': 'medium', 'summary': 'auto'} | resp terminal=completed usage={"attribution": {"items": {"cnfu_094734dc9e10e18a016ae3644d93d4819bbf35d506f78cdf62": {"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 0, "output_tokens": 0}, "msg_094734dc9e10e18a016ae3644d93d4819b8e744a7bbadcf8dd": {"cache_write_tokens": 0, "cached_tokens": 0, "content": [{"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 9, "output_tokens": 0}], "input_tokens": 9, "output_tokens": 0}, "msg_094734dc9e10e18a016ae3644d93d4819b925e4fb8cce31b96": {"cache_write_tokens": 0, "cached_tokens": 0, "content": [{"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 372, "output_tokens": 0}], "input_tokens": 372, "output_tokens": 0}, "msg_094734dc9e10e18a016ae3645051f8819bb815579c91b9bc19": {"cache_write_tokens": 0, "cached_tokens": 0, "content": [{"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 2, "output_tokens": 5}], "input_tokens": 2, "output_tokens": 5}}}, "input_tokens": 383, "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 388}
+requests=2 forwarded=2 gated=0 denied=0 errors=0
+upstream hosts: [('llm.int.exe.xyz', 'llm.int.exe.xyz')]
+REAL_MODEL_TOKENS_TOTAL=803
+## leftovers check
+no matching processes

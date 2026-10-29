@@ -1,0 +1,280 @@
+# exp2 run at 2026-10-29T14:51:15+00:00 on pi-factorio, bwrap bubblewrap 0.9.0
+## CONTROL (host, outside sandbox): proves the probes would succeed without the netns
+control tcp 169.254.169.254:443      CONNECTED
+control tcp 2852039166:443           CONNECTED
+control tcp 0xa9fea9fe:443           CONNECTED
+control tcp 140.82.114.5:443         CONNECTED
+control tcp 10.42.0.1:53             TimeoutError: timed out
+control getent api.github.com: 140.82.114.5    api.github.com
+control curl https://github.int.exe.xyz/zen: 403
+control curl https://api.github.com/zen: 200
+control curl https://llm.int.exe.xyz/openai/v1/models: 200
+control curl http://127.0.0.1:9999/ (host loopback listener): 200
+## SANDBOX: bwrap --unshare-all
+argv: bwrap --unshare-all --die-with-parent --new-session --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/sbin /sbin --symlink usr/lib /lib --symlink usr/lib64 /lib64 --proc /proc --dev /dev --tmpfs /tmp --ro-bind /etc/resolv.conf /etc/resolv.conf --ro-bind /etc/hosts /etc/hosts --ro-bind /etc/nsswitch.conf /etc/nsswitch.conf --ro-bind /etc/ssl /etc/ssl --ro-bind /home/exedev/f05-proto/exp2_inside.sh /probe.sh --clearenv --setenv PATH /usr/bin:/usr/sbin --setenv HOME /tmp /usr/bin/bash /probe.sh
+## sandbox identity
+uid=1000 gid=1000 groups=1000,65534(nogroup)
+hostname=pi-factorio
+## interfaces / routes
+lo               UNKNOWN        127.0.0.1/8 ::1/128 
+gre0@NONE        DOWN           
+gretap0@NONE     DOWN           
+erspan0@NONE     DOWN           
+routes v4:
+routes v6:
+/proc/net/dev:
+/probe.sh: line 8: awk: command not found
+resolv.conf: nameserver 169.254.169.254 
+## curl, no proxy env
+probe-pass rc=7 | curl -k https://169.254.169.254/zen | curl: (7) Failed to connect to 169.254.169.254 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | curl -k https://2852039166/zen | curl: (7) Failed to connect to 169.254.169.254 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | curl -k https://0xa9fea9fe/zen | curl: (7) Failed to connect to 169.254.169.254 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | curl -k https://0251.0376.0251.0376/zen | curl: (7) Failed to connect to 169.254.169.254 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | curl -k https://169.254.43518/zen | curl: (7) Failed to connect to 169.254.169.254 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | curl -k https://[::ffff:169.254.169.254]/zen | curl: (7) Failed to connect to ::ffff:169.254.169.254 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | curl -k https://[::ffff:a9fe:a9fe]/zen | curl: (7) Failed to connect to ::ffff:a9fe:a9fe port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | curl -k http://169.254.169.254/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | curl -k http://2852039166/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | curl -k http://0xa9fea9fe/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | curl -k http://0251.0376.0251.0376/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | curl -k http://[::ffff:169.254.169.254]/zen | curl: (7) Failed to connect to ::ffff:169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=6 | curl -k https://api.github.com/zen | curl: (6) Could not resolve host: api.github.com 000
+probe-pass rc=7 | curl -k https://140.82.114.5/zen | curl: (7) Failed to connect to 140.82.114.5 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=6 | curl -k https://github.int.exe.xyz/zen | curl: (6) Could not resolve host: github.int.exe.xyz 000
+probe-pass rc=6 | curl -k https://llm.int.exe.xyz/openai/v1/models | curl: (6) Could not resolve host: llm.int.exe.xyz 000
+probe-pass rc=6 | curl -k https://registry.npmjs.org/ | curl: (6) Could not resolve host: registry.npmjs.org 000
+probe-pass rc=7 | curl -k https://104.16.0.34/ | curl: (7) Failed to connect to 104.16.0.34 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | curl -k https://[2606:4700::6810:122]/ | curl: (7) Failed to connect to 2606:4700::6810:122 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | curl -k http://10.42.0.1/ | curl: (7) Failed to connect to 10.42.0.1 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | curl -k https://10.42.0.1/ | curl: (7) Failed to connect to 10.42.0.1 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | curl -k http://10.42.0.42/ | curl: (7) Failed to connect to 10.42.0.42 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | curl -k http://172.17.0.1/ | curl: (7) Failed to connect to 172.17.0.1 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | curl -k http://127.0.0.1:9999/ | curl: (7) Failed to connect to 127.0.0.1 port 9999 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | curl -k http://127.0.0.1:32849/ | curl: (7) Failed to connect to 127.0.0.1 port 32849 after 0 ms: Couldn't connect to server 000
+## curl --resolve name→IP (SNI/Host = name, dial IP)
+probe-pass rc=7 | curl api.github.com via --resolve 140.82.114.5 | curl: (7) Failed to connect to api.github.com port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | curl github.int via --resolve 169.254.169.254 | curl: (7) Failed to connect to github.int.exe.xyz port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | curl llm.int via --resolve 2852039166 | curl: (7) Failed to connect to llm.int.exe.xyz port 443 after 0 ms: Couldn't connect to server 000
+## curl with HTTPS_PROXY=http://169.254.169.254:80
+probe-pass rc=7 | [HTTPS_PROXY=http://169.254.169.254:80] curl -k https://169.254.169.254/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://169.254.169.254:80] curl -k https://2852039166/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://169.254.169.254:80] curl -k https://0xa9fea9fe/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://169.254.169.254:80] curl -k https://0251.0376.0251.0376/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://169.254.169.254:80] curl -k https://169.254.43518/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://169.254.169.254:80] curl -k https://[::ffff:169.254.169.254]/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://169.254.169.254:80] curl -k https://[::ffff:a9fe:a9fe]/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://169.254.169.254:80] curl -k http://169.254.169.254/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://169.254.169.254:80] curl -k http://2852039166/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://169.254.169.254:80] curl -k http://0xa9fea9fe/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://169.254.169.254:80] curl -k http://0251.0376.0251.0376/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://169.254.169.254:80] curl -k http://[::ffff:169.254.169.254]/zen | curl: (7) Failed to connect to ::ffff:169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://169.254.169.254:80] curl -k https://api.github.com/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://169.254.169.254:80] curl -k https://140.82.114.5/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://169.254.169.254:80] curl -k https://github.int.exe.xyz/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://169.254.169.254:80] curl -k https://llm.int.exe.xyz/openai/v1/models | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://169.254.169.254:80] curl -k https://registry.npmjs.org/ | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://169.254.169.254:80] curl -k https://104.16.0.34/ | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://169.254.169.254:80] curl -k https://[2606:4700::6810:122]/ | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://169.254.169.254:80] curl -k http://10.42.0.1/ | curl: (7) Failed to connect to 10.42.0.1 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://169.254.169.254:80] curl -k https://10.42.0.1/ | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://169.254.169.254:80] curl -k http://10.42.0.42/ | curl: (7) Failed to connect to 10.42.0.42 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://169.254.169.254:80] curl -k http://172.17.0.1/ | curl: (7) Failed to connect to 172.17.0.1 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://169.254.169.254:80] curl -k http://127.0.0.1:9999/ | curl: (7) Failed to connect to 127.0.0.1 port 9999 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://169.254.169.254:80] curl -k http://127.0.0.1:32849/ | curl: (7) Failed to connect to 127.0.0.1 port 32849 after 0 ms: Couldn't connect to server 000
+## curl with HTTPS_PROXY=http://10.42.0.1:3128
+probe-pass rc=7 | [HTTPS_PROXY=http://10.42.0.1:3128] curl -k https://169.254.169.254/zen | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://10.42.0.1:3128] curl -k https://2852039166/zen | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://10.42.0.1:3128] curl -k https://0xa9fea9fe/zen | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://10.42.0.1:3128] curl -k https://0251.0376.0251.0376/zen | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://10.42.0.1:3128] curl -k https://169.254.43518/zen | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://10.42.0.1:3128] curl -k https://[::ffff:169.254.169.254]/zen | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://10.42.0.1:3128] curl -k https://[::ffff:a9fe:a9fe]/zen | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://10.42.0.1:3128] curl -k http://169.254.169.254/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://10.42.0.1:3128] curl -k http://2852039166/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://10.42.0.1:3128] curl -k http://0xa9fea9fe/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://10.42.0.1:3128] curl -k http://0251.0376.0251.0376/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://10.42.0.1:3128] curl -k http://[::ffff:169.254.169.254]/zen | curl: (7) Failed to connect to ::ffff:169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://10.42.0.1:3128] curl -k https://api.github.com/zen | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://10.42.0.1:3128] curl -k https://140.82.114.5/zen | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://10.42.0.1:3128] curl -k https://github.int.exe.xyz/zen | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://10.42.0.1:3128] curl -k https://llm.int.exe.xyz/openai/v1/models | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://10.42.0.1:3128] curl -k https://registry.npmjs.org/ | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://10.42.0.1:3128] curl -k https://104.16.0.34/ | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://10.42.0.1:3128] curl -k https://[2606:4700::6810:122]/ | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://10.42.0.1:3128] curl -k http://10.42.0.1/ | curl: (7) Failed to connect to 10.42.0.1 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://10.42.0.1:3128] curl -k https://10.42.0.1/ | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://10.42.0.1:3128] curl -k http://10.42.0.42/ | curl: (7) Failed to connect to 10.42.0.42 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://10.42.0.1:3128] curl -k http://172.17.0.1/ | curl: (7) Failed to connect to 172.17.0.1 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://10.42.0.1:3128] curl -k http://127.0.0.1:9999/ | curl: (7) Failed to connect to 127.0.0.1 port 9999 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [HTTPS_PROXY=http://10.42.0.1:3128] curl -k http://127.0.0.1:32849/ | curl: (7) Failed to connect to 127.0.0.1 port 32849 after 0 ms: Couldn't connect to server 000
+## curl with ALL_PROXY=socks5h://169.254.169.254:1080
+probe-pass rc=7 | [ALL_PROXY=socks5h://169.254.169.254:1080] curl -k https://169.254.169.254/zen | curl: (7) Failed to connect to 169.254.169.254 port 1080 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=socks5h://169.254.169.254:1080] curl -k https://2852039166/zen | curl: (7) Failed to connect to 169.254.169.254 port 1080 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=socks5h://169.254.169.254:1080] curl -k https://0xa9fea9fe/zen | curl: (7) Failed to connect to 169.254.169.254 port 1080 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=socks5h://169.254.169.254:1080] curl -k https://0251.0376.0251.0376/zen | curl: (7) Failed to connect to 169.254.169.254 port 1080 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=socks5h://169.254.169.254:1080] curl -k https://169.254.43518/zen | curl: (7) Failed to connect to 169.254.169.254 port 1080 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=socks5h://169.254.169.254:1080] curl -k https://[::ffff:169.254.169.254]/zen | curl: (7) Failed to connect to 169.254.169.254 port 1080 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=socks5h://169.254.169.254:1080] curl -k https://[::ffff:a9fe:a9fe]/zen | curl: (7) Failed to connect to 169.254.169.254 port 1080 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=socks5h://169.254.169.254:1080] curl -k http://169.254.169.254/zen | curl: (7) Failed to connect to 169.254.169.254 port 1080 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=socks5h://169.254.169.254:1080] curl -k http://2852039166/zen | curl: (7) Failed to connect to 169.254.169.254 port 1080 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=socks5h://169.254.169.254:1080] curl -k http://0xa9fea9fe/zen | curl: (7) Failed to connect to 169.254.169.254 port 1080 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=socks5h://169.254.169.254:1080] curl -k http://0251.0376.0251.0376/zen | curl: (7) Failed to connect to 169.254.169.254 port 1080 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=socks5h://169.254.169.254:1080] curl -k http://[::ffff:169.254.169.254]/zen | curl: (7) Failed to connect to 169.254.169.254 port 1080 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=socks5h://169.254.169.254:1080] curl -k https://api.github.com/zen | curl: (7) Failed to connect to 169.254.169.254 port 1080 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=socks5h://169.254.169.254:1080] curl -k https://140.82.114.5/zen | curl: (7) Failed to connect to 169.254.169.254 port 1080 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=socks5h://169.254.169.254:1080] curl -k https://github.int.exe.xyz/zen | curl: (7) Failed to connect to 169.254.169.254 port 1080 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=socks5h://169.254.169.254:1080] curl -k https://llm.int.exe.xyz/openai/v1/models | curl: (7) Failed to connect to 169.254.169.254 port 1080 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=socks5h://169.254.169.254:1080] curl -k https://registry.npmjs.org/ | curl: (7) Failed to connect to 169.254.169.254 port 1080 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=socks5h://169.254.169.254:1080] curl -k https://104.16.0.34/ | curl: (7) Failed to connect to 169.254.169.254 port 1080 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=socks5h://169.254.169.254:1080] curl -k https://[2606:4700::6810:122]/ | curl: (7) Failed to connect to 169.254.169.254 port 1080 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=socks5h://169.254.169.254:1080] curl -k http://10.42.0.1/ | curl: (7) Failed to connect to 169.254.169.254 port 1080 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=socks5h://169.254.169.254:1080] curl -k https://10.42.0.1/ | curl: (7) Failed to connect to 169.254.169.254 port 1080 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=socks5h://169.254.169.254:1080] curl -k http://10.42.0.42/ | curl: (7) Failed to connect to 169.254.169.254 port 1080 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=socks5h://169.254.169.254:1080] curl -k http://172.17.0.1/ | curl: (7) Failed to connect to 169.254.169.254 port 1080 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=socks5h://169.254.169.254:1080] curl -k http://127.0.0.1:9999/ | curl: (7) Failed to connect to 169.254.169.254 port 1080 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=socks5h://169.254.169.254:1080] curl -k http://127.0.0.1:32849/ | curl: (7) Failed to connect to 169.254.169.254 port 1080 after 0 ms: Couldn't connect to server 000
+## curl with ALL_PROXY=http://10.42.0.1:3128
+probe-pass rc=7 | [ALL_PROXY=http://10.42.0.1:3128] curl -k https://169.254.169.254/zen | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=http://10.42.0.1:3128] curl -k https://2852039166/zen | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=http://10.42.0.1:3128] curl -k https://0xa9fea9fe/zen | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=http://10.42.0.1:3128] curl -k https://0251.0376.0251.0376/zen | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=http://10.42.0.1:3128] curl -k https://169.254.43518/zen | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=http://10.42.0.1:3128] curl -k https://[::ffff:169.254.169.254]/zen | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=http://10.42.0.1:3128] curl -k https://[::ffff:a9fe:a9fe]/zen | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=http://10.42.0.1:3128] curl -k http://169.254.169.254/zen | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=http://10.42.0.1:3128] curl -k http://2852039166/zen | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=http://10.42.0.1:3128] curl -k http://0xa9fea9fe/zen | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=http://10.42.0.1:3128] curl -k http://0251.0376.0251.0376/zen | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=http://10.42.0.1:3128] curl -k http://[::ffff:169.254.169.254]/zen | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=http://10.42.0.1:3128] curl -k https://api.github.com/zen | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=http://10.42.0.1:3128] curl -k https://140.82.114.5/zen | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=http://10.42.0.1:3128] curl -k https://github.int.exe.xyz/zen | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=http://10.42.0.1:3128] curl -k https://llm.int.exe.xyz/openai/v1/models | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=http://10.42.0.1:3128] curl -k https://registry.npmjs.org/ | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=http://10.42.0.1:3128] curl -k https://104.16.0.34/ | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=http://10.42.0.1:3128] curl -k https://[2606:4700::6810:122]/ | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=http://10.42.0.1:3128] curl -k http://10.42.0.1/ | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=http://10.42.0.1:3128] curl -k https://10.42.0.1/ | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=http://10.42.0.1:3128] curl -k http://10.42.0.42/ | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=http://10.42.0.1:3128] curl -k http://172.17.0.1/ | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=http://10.42.0.1:3128] curl -k http://127.0.0.1:9999/ | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [ALL_PROXY=http://10.42.0.1:3128] curl -k http://127.0.0.1:32849/ | curl: (7) Failed to connect to 10.42.0.1 port 3128 after 0 ms: Couldn't connect to server 000
+## curl with http_proxy=http://169.254.169.254:80
+probe-pass rc=7 | [http_proxy=http://169.254.169.254:80] curl -k https://169.254.169.254/zen | curl: (7) Failed to connect to 169.254.169.254 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://169.254.169.254:80] curl -k https://2852039166/zen | curl: (7) Failed to connect to 169.254.169.254 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://169.254.169.254:80] curl -k https://0xa9fea9fe/zen | curl: (7) Failed to connect to 169.254.169.254 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://169.254.169.254:80] curl -k https://0251.0376.0251.0376/zen | curl: (7) Failed to connect to 169.254.169.254 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://169.254.169.254:80] curl -k https://169.254.43518/zen | curl: (7) Failed to connect to 169.254.169.254 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://169.254.169.254:80] curl -k https://[::ffff:169.254.169.254]/zen | curl: (7) Failed to connect to ::ffff:169.254.169.254 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://169.254.169.254:80] curl -k https://[::ffff:a9fe:a9fe]/zen | curl: (7) Failed to connect to ::ffff:a9fe:a9fe port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://169.254.169.254:80] curl -k http://169.254.169.254/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://169.254.169.254:80] curl -k http://2852039166/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://169.254.169.254:80] curl -k http://0xa9fea9fe/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://169.254.169.254:80] curl -k http://0251.0376.0251.0376/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://169.254.169.254:80] curl -k http://[::ffff:169.254.169.254]/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=6 | [http_proxy=http://169.254.169.254:80] curl -k https://api.github.com/zen | curl: (6) Could not resolve host: api.github.com 000
+probe-pass rc=7 | [http_proxy=http://169.254.169.254:80] curl -k https://140.82.114.5/zen | curl: (7) Failed to connect to 140.82.114.5 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=6 | [http_proxy=http://169.254.169.254:80] curl -k https://github.int.exe.xyz/zen | curl: (6) Could not resolve host: github.int.exe.xyz 000
+probe-pass rc=6 | [http_proxy=http://169.254.169.254:80] curl -k https://llm.int.exe.xyz/openai/v1/models | curl: (6) Could not resolve host: llm.int.exe.xyz 000
+probe-pass rc=6 | [http_proxy=http://169.254.169.254:80] curl -k https://registry.npmjs.org/ | curl: (6) Could not resolve host: registry.npmjs.org 000
+probe-pass rc=7 | [http_proxy=http://169.254.169.254:80] curl -k https://104.16.0.34/ | curl: (7) Failed to connect to 104.16.0.34 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://169.254.169.254:80] curl -k https://[2606:4700::6810:122]/ | curl: (7) Failed to connect to 2606:4700::6810:122 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://169.254.169.254:80] curl -k http://10.42.0.1/ | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://169.254.169.254:80] curl -k https://10.42.0.1/ | curl: (7) Failed to connect to 10.42.0.1 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://169.254.169.254:80] curl -k http://10.42.0.42/ | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://169.254.169.254:80] curl -k http://172.17.0.1/ | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://169.254.169.254:80] curl -k http://127.0.0.1:9999/ | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://169.254.169.254:80] curl -k http://127.0.0.1:32849/ | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+## curl with http_proxy=http://127.0.0.1:9999
+probe-pass rc=7 | [http_proxy=http://127.0.0.1:9999] curl -k https://169.254.169.254/zen | curl: (7) Failed to connect to 169.254.169.254 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://127.0.0.1:9999] curl -k https://2852039166/zen | curl: (7) Failed to connect to 169.254.169.254 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://127.0.0.1:9999] curl -k https://0xa9fea9fe/zen | curl: (7) Failed to connect to 169.254.169.254 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://127.0.0.1:9999] curl -k https://0251.0376.0251.0376/zen | curl: (7) Failed to connect to 169.254.169.254 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://127.0.0.1:9999] curl -k https://169.254.43518/zen | curl: (7) Failed to connect to 169.254.169.254 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://127.0.0.1:9999] curl -k https://[::ffff:169.254.169.254]/zen | curl: (7) Failed to connect to ::ffff:169.254.169.254 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://127.0.0.1:9999] curl -k https://[::ffff:a9fe:a9fe]/zen | curl: (7) Failed to connect to ::ffff:a9fe:a9fe port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://127.0.0.1:9999] curl -k http://169.254.169.254/zen | curl: (7) Failed to connect to 127.0.0.1 port 9999 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://127.0.0.1:9999] curl -k http://2852039166/zen | curl: (7) Failed to connect to 127.0.0.1 port 9999 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://127.0.0.1:9999] curl -k http://0xa9fea9fe/zen | curl: (7) Failed to connect to 127.0.0.1 port 9999 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://127.0.0.1:9999] curl -k http://0251.0376.0251.0376/zen | curl: (7) Failed to connect to 127.0.0.1 port 9999 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://127.0.0.1:9999] curl -k http://[::ffff:169.254.169.254]/zen | curl: (7) Failed to connect to 127.0.0.1 port 9999 after 0 ms: Couldn't connect to server 000
+probe-pass rc=6 | [http_proxy=http://127.0.0.1:9999] curl -k https://api.github.com/zen | curl: (6) Could not resolve host: api.github.com 000
+probe-pass rc=7 | [http_proxy=http://127.0.0.1:9999] curl -k https://140.82.114.5/zen | curl: (7) Failed to connect to 140.82.114.5 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=6 | [http_proxy=http://127.0.0.1:9999] curl -k https://github.int.exe.xyz/zen | curl: (6) Could not resolve host: github.int.exe.xyz 000
+probe-pass rc=6 | [http_proxy=http://127.0.0.1:9999] curl -k https://llm.int.exe.xyz/openai/v1/models | curl: (6) Could not resolve host: llm.int.exe.xyz 000
+probe-pass rc=6 | [http_proxy=http://127.0.0.1:9999] curl -k https://registry.npmjs.org/ | curl: (6) Could not resolve host: registry.npmjs.org 000
+probe-pass rc=7 | [http_proxy=http://127.0.0.1:9999] curl -k https://104.16.0.34/ | curl: (7) Failed to connect to 104.16.0.34 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://127.0.0.1:9999] curl -k https://[2606:4700::6810:122]/ | curl: (7) Failed to connect to 2606:4700::6810:122 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://127.0.0.1:9999] curl -k http://10.42.0.1/ | curl: (7) Failed to connect to 127.0.0.1 port 9999 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://127.0.0.1:9999] curl -k https://10.42.0.1/ | curl: (7) Failed to connect to 10.42.0.1 port 443 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://127.0.0.1:9999] curl -k http://10.42.0.42/ | curl: (7) Failed to connect to 127.0.0.1 port 9999 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://127.0.0.1:9999] curl -k http://172.17.0.1/ | curl: (7) Failed to connect to 127.0.0.1 port 9999 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://127.0.0.1:9999] curl -k http://127.0.0.1:9999/ | curl: (7) Failed to connect to 127.0.0.1 port 9999 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [http_proxy=http://127.0.0.1:9999] curl -k http://127.0.0.1:32849/ | curl: (7) Failed to connect to 127.0.0.1 port 9999 after 0 ms: Couldn't connect to server 000
+## curl with HTTPS_PROXY+ALL_PROXY+http_proxy+HTTP_PROXY all set to the edge
+probe-pass rc=7 | [all-proxies=edge] curl -k https://169.254.169.254/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [all-proxies=edge] curl -k https://2852039166/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [all-proxies=edge] curl -k https://0xa9fea9fe/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [all-proxies=edge] curl -k https://0251.0376.0251.0376/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [all-proxies=edge] curl -k https://169.254.43518/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [all-proxies=edge] curl -k https://[::ffff:169.254.169.254]/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [all-proxies=edge] curl -k https://[::ffff:a9fe:a9fe]/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [all-proxies=edge] curl -k http://169.254.169.254/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [all-proxies=edge] curl -k http://2852039166/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [all-proxies=edge] curl -k http://0xa9fea9fe/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [all-proxies=edge] curl -k http://0251.0376.0251.0376/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [all-proxies=edge] curl -k http://[::ffff:169.254.169.254]/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [all-proxies=edge] curl -k https://api.github.com/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [all-proxies=edge] curl -k https://140.82.114.5/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [all-proxies=edge] curl -k https://github.int.exe.xyz/zen | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [all-proxies=edge] curl -k https://llm.int.exe.xyz/openai/v1/models | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [all-proxies=edge] curl -k https://registry.npmjs.org/ | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [all-proxies=edge] curl -k https://104.16.0.34/ | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [all-proxies=edge] curl -k https://[2606:4700::6810:122]/ | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [all-proxies=edge] curl -k http://10.42.0.1/ | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [all-proxies=edge] curl -k https://10.42.0.1/ | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [all-proxies=edge] curl -k http://10.42.0.42/ | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [all-proxies=edge] curl -k http://172.17.0.1/ | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [all-proxies=edge] curl -k http://127.0.0.1:9999/ | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+probe-pass rc=7 | [all-proxies=edge] curl -k http://127.0.0.1:32849/ | curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server 000
+## python raw TCP connects (getaddrinfo accepts inet_aton spellings)
+probe-pass rc=1 | py tcp 169.254.169.254:443 |      raise exceptions[0]   File "/usr/lib/python3.12/socket.py", line 837, in create_connection     sock.connect(sa) OSError: [Errno 101] Network is unreachable
+probe-pass rc=1 | py tcp 2852039166:443 |      raise exceptions[0]   File "/usr/lib/python3.12/socket.py", line 837, in create_connection     sock.connect(sa) OSError: [Errno 101] Network is unreachable
+probe-pass rc=1 | py tcp 0xa9fea9fe:443 |      raise exceptions[0]   File "/usr/lib/python3.12/socket.py", line 837, in create_connection     sock.connect(sa) OSError: [Errno 101] Network is unreachable
+probe-pass rc=1 | py tcp 0251.0376.0251.0376:443 |      raise exceptions[0]   File "/usr/lib/python3.12/socket.py", line 837, in create_connection     sock.connect(sa) OSError: [Errno 101] Network is unreachable
+probe-pass rc=1 | py tcp ::ffff:169.254.169.254:443 |      raise exceptions[0]   File "/usr/lib/python3.12/socket.py", line 837, in create_connection     sock.connect(sa) OSError: [Errno 101] Network is unreachable
+probe-pass rc=1 | py tcp 140.82.114.5:443 |      raise exceptions[0]   File "/usr/lib/python3.12/socket.py", line 837, in create_connection     sock.connect(sa) OSError: [Errno 101] Network is unreachable
+probe-pass rc=1 | py tcp api.github.com:443 | type, proto, flags):                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ socket.gaierror: [Errno -3] Temporary failure in name resolution
+probe-pass rc=1 | py tcp github.int.exe.xyz:443 | type, proto, flags):                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ socket.gaierror: [Errno -3] Temporary failure in name resolution
+probe-pass rc=1 | py tcp llm.int.exe.xyz:443 | type, proto, flags):                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ socket.gaierror: [Errno -3] Temporary failure in name resolution
+probe-pass rc=1 | py tcp 10.42.0.1:53 |      raise exceptions[0]   File "/usr/lib/python3.12/socket.py", line 837, in create_connection     sock.connect(sa) OSError: [Errno 101] Network is unreachable
+probe-pass rc=1 | py tcp 10.42.0.1:443 |      raise exceptions[0]   File "/usr/lib/python3.12/socket.py", line 837, in create_connection     sock.connect(sa) OSError: [Errno 101] Network is unreachable
+probe-pass rc=1 | py tcp 104.16.0.34:443 |      raise exceptions[0]   File "/usr/lib/python3.12/socket.py", line 837, in create_connection     sock.connect(sa) OSError: [Errno 101] Network is unreachable
+probe-pass rc=1 | py tcp 127.0.0.1:9999 | exceptions[0]   File "/usr/lib/python3.12/socket.py", line 837, in create_connection     sock.connect(sa) ConnectionRefusedError: [Errno 111] Connection refused
+## python UDP sendto DNS servers
+probe-pass rc=1 | py udp sendto 169.254.169.254:53 | Traceback (most recent call last):   File "<string>", line 1, in <module> OSError: [Errno 101] Network is unreachable
+probe-pass rc=1 | py udp sendto 10.42.0.1:53 | Traceback (most recent call last):   File "<string>", line 1, in <module> OSError: [Errno 101] Network is unreachable
+probe-pass rc=1 | py udp sendto 8.8.8.8:53 | Traceback (most recent call last):   File "<string>", line 1, in <module> OSError: [Errno 101] Network is unreachable
+## DNS lookups
+probe-pass rc=2 | getent hosts api.github.com | 
+probe-pass rc=1 | python getaddrinfo api.github.com | type, proto, flags):                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ socket.gaierror: [Errno -3] Temporary failure in name resolution
+probe-pass rc=2 | getent hosts github.int.exe.xyz | 
+probe-pass rc=1 | python getaddrinfo github.int.exe.xyz | type, proto, flags):                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ socket.gaierror: [Errno -3] Temporary failure in name resolution
+probe-pass rc=2 | getent hosts llm.int.exe.xyz | 
+probe-pass rc=1 | python getaddrinfo llm.int.exe.xyz | type, proto, flags):                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ socket.gaierror: [Errno -3] Temporary failure in name resolution
+probe-pass rc=2 | getent hosts registry.npmjs.org | 
+probe-pass rc=1 | python getaddrinfo registry.npmjs.org | type, proto, flags):                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ socket.gaierror: [Errno -3] Temporary failure in name resolution
+probe-pass rc=9 | dig (resolv.conf) api.github.com | ;; UDP setup with 169.254.169.254#53(169.254.169.254) for api.github.com failed: network unreachable. ;; no servers could be reached
+probe-pass rc=9 | dig @169.254.169.254 api.github.com | ;; UDP setup with 169.254.169.254#53(169.254.169.254) for api.github.com failed: network unreachable. ;; no servers could be reached
+probe-pass rc=9 | dig +tcp @169.254.169.254 api.github.com | ;; Connection to 169.254.169.254#53(169.254.169.254) for api.github.com failed: network unreachable. ;; no servers could be reached
+probe-pass rc=9 | dig @10.42.0.1 api.github.com | ;; UDP setup with 10.42.0.1#53(10.42.0.1) for api.github.com failed: network unreachable. ;; no servers could be reached
+probe-pass rc=9 | dig +tcp @10.42.0.1 api.github.com | ;; Connection to 10.42.0.1#53(10.42.0.1) for api.github.com failed: network unreachable. ;; no servers could be reached
+probe-pass rc=9 | dig @8.8.8.8 api.github.com | ;; UDP setup with 8.8.8.8#53(8.8.8.8) for api.github.com failed: network unreachable. ;; no servers could be reached
+probe-pass rc=9 | dig +tcp @8.8.8.8 api.github.com | ;; Connection to 8.8.8.8#53(8.8.8.8) for api.github.com failed: network unreachable. ;; no servers could be reached
+probe-pass rc=9 | dig @1.1.1.1 api.github.com | ;; UDP setup with 1.1.1.1#53(1.1.1.1) for api.github.com failed: network unreachable. ;; no servers could be reached
+probe-pass rc=9 | dig +tcp @1.1.1.1 api.github.com | ;; Connection to 1.1.1.1#53(1.1.1.1) for api.github.com failed: network unreachable. ;; no servers could be reached
+## ICMP
+probe-pass rc=2 | ping 169.254.169.254 | ping: socktype: SOCK_RAW ping: socket: Operation not permitted ping: => missing cap_net_raw+p capability or setuid?
+probe-pass rc=2 | ping 10.42.0.1 | ping: socktype: SOCK_RAW ping: socket: Operation not permitted ping: => missing cap_net_raw+p capability or setuid?
+## summary: probes_failed_as_expected=238 probes_that_reached=0
+bwrap exit=0

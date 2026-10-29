@@ -1,0 +1,184 @@
+{
+ "timings": {
+  "spawn_to_get_state_response": 0.384,
+  "prompt_sent": 0.384,
+  "settled_or_timeout": 0.442,
+  "stdin_closed": 0.942,
+  "exit_after_stdin_close": 0.016
+ },
+ "seq": [
+  "response:get_state",
+  "response:prompt",
+  "agent_start",
+  "turn_start",
+  "message_start",
+  "message_end",
+  "message_start",
+  "message_end",
+  "message_start",
+  "message_end",
+  "turn_end",
+  "agent_end",
+  "agent_settled"
+ ],
+ "settled": [
+  {
+   "t": 0.442,
+   "payload": {
+    "type": "agent_settled",
+    "aborted": false
+   }
+  }
+ ],
+ "assistant": [
+  {
+   "t": 0.438,
+   "stopReason": "error",
+   "rawStopReason": "failed",
+   "errorMessage": "content_filter: The response was filtered due to the prompt triggering content management policy.",
+   "usage": {
+    "input": 0,
+    "output": 0,
+    "cacheRead": 0,
+    "cacheWrite": 0,
+    "totalTokens": 0,
+    "cost": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "total": 0
+    }
+   },
+   "provider": "openai",
+   "model": "gpt-6.1-sol",
+   "api": "openai-responses",
+   "content": [],
+   "keys": [
+    "api",
+    "content",
+    "durationMs",
+    "errorMessage",
+    "model",
+    "provider",
+    "providerThinkingLevel",
+    "rawStopReason",
+    "responseId",
+    "role",
+    "stopReason",
+    "thinkingLevel",
+    "timestamp",
+    "usage"
+   ]
+  }
+ ],
+ "retries": [],
+ "responses": {
+  "st": {
+   "t": 0.384,
+   "command": "get_state",
+   "success": true,
+   "error": null,
+   "data": {
+    "model": {
+     "id": "gpt-6.1-sol",
+     "name": "GPT-6.1 Sol",
+     "api": "openai-responses",
+     "provider": "openai",
+     "baseUrl": "http://127.0.0.1:18080/openai/v1",
+     "reasoning": true,
+     "input": [
+      "text",
+      "image"
+     ],
+     "cost": {
+      "input": 2,
+      "output": 10,
+      "cacheRead": 0.1,
+      "cacheWrite": 2.5,
+      "tiers": [
+       {
+        "inputTokensAbove": 272000,
+        "input": 4,
+        "output": 15,
+        "cacheRead": 0.2,
+        "cacheWrite": 5
+       }
+      ]
+     },
+     "contextWindow": 272000,
+     "maxTokens": 128000,
+     "thinkingLevelMap": {
+      "off": null,
+      "minimal": null,
+      "low": "low",
+      "medium": "medium",
+      "high": "high",
+      "xhigh": "xhigh",
+      "max": "max"
+     },
+     "compat": {
+      "supportsStrictMode": true,
+      "supportsOpenAIGrammarTools": true,
+      "supportsAdditionalTools": true,
+      "supportsToolSearch": true,
+      "supportsMidConvoSystemMessages": true,
+      "supportsExplicitPromptCacheMode": true,
+      "supportsMidConvoEffort": true
+     },
+     "inputLimits": {
+      "maxRequestBytes": 536870912,
+      "images": {
+       "maxPerRequest": 1500,
+       "resize": {
+        "maxWidth": 2000,
+        "maxHeight": 2000,
+        "maxBytes": 4718592,
+        "jpegQuality": 80
+       }
+      }
+     },
+     "type": "chat"
+    },
+    "thinkingLevel": "low",
+    "isStreaming": false,
+    "isCompacting": false,
+    "steeringMode": "one-at-a-time",
+    "followUpMode": "one-at-a-time",
+    "sessionId": "01a18841-b9b6-77d3-95c2-a6bcc660ec47",
+    "autoCompactionEnabled": true,
+    "messageCount": 0,
+    "pendingMessageCount": 0
+   }
+  },
+  "p1": {
+   "t": 0.386,
+   "command": "prompt",
+   "success": true,
+   "error": null,
+   "data": {
+    "disposition": "started"
+   }
+  }
+ },
+ "eof": false,
+ "notes": [],
+ "state": {
+  "thinkingLevel": "low",
+  "isStreaming": false,
+  "sessionFile": null,
+  "sessionId": "01a18841-b9b6-77d3-95c2-a6bcc660ec47",
+  "autoRetryEnabled": null,
+  "autoCompactionEnabled": true,
+  "messageCount": 0,
+  "model": {
+   "provider": "openai",
+   "id": "gpt-6.1-sol",
+   "api": "openai-responses",
+   "baseUrl": "http://127.0.0.1:18080/openai/v1",
+   "reasoning": true
+  }
+ },
+ "exit_code": 0,
+ "scope_after_exit": "inactive"
+}

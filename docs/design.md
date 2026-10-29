@@ -51,7 +51,7 @@ Symphony's spec (`openai/symphony` `SPEC.md`, pinned at `be10a1b`) is the templa
 | One authoritative state; `claimed` and `running` checked before dispatch (§7.4) | same, plus a `waiting` state for human checkpoints | extended |
 | Retry with backoff `min(10000·2^(n−1), max)`, stall timeout, bounded concurrency (§8.3, §8.4) | same formulas and defaults, concurrency starts at 2 | same |
 | Restart recovery from the tracker and filesystem, no database (§7.4) | from the issue's run marker comment, the PR and the workspace | same idea |
-| Per-issue workspace, sanitized key, cwd and root invariants (§9.5) | same invariants, plus a rootless container per stage | stricter |
+| Per-issue workspace, sanitized key, cwd and root invariants (§9.5) | same invariants, plus a bwrap sandbox in its own user scope per stage | stricter |
 | Repo-owned `WORKFLOW.md`, front matter config, hot reload (§5, §6.2) | `.github/factory/WORKFLOW.md` with the same loader rules | same, but placed under `.github/` so the factory cannot edit it |
 | Tracker adapter normalizing issues (§11) | `TicketAdapter`, GitHub first, Linear second | same |
 | One agent session that loops turns until the issue leaves an active state (§7.1) | fixed stages, each a fresh Pi session running one skill | **different** |
@@ -120,11 +120,11 @@ interface TicketAdapter {
 | Stage | Runs where | Skill source | Credentials inside the sandbox | Output |
 | --- | --- | --- | --- | --- |
 | admit | controller | none, deterministic | none | issue snapshot at label time, or `rejected` |
-| specify | sandbox | audit-ticket (clean-room), grill-me + grilling (Pocock, MIT), deep-research (Pocock, MIT) when needed | proxy key | `contract.md`, or `needs_info` |
-| accept | sandbox, separate from build | new skill, from StrongDM's scenario holdout idea | proxy key, a different model family from build | held-out acceptance tests, kept on the VM |
-| build | sandbox | pstack Feature or Bug fix playbook, tdd | proxy key | a patch plus visible tests |
-| validate | controller + CI | main's gates and the held-out suite in CI; an LLM judge on the VM only for criteria a test cannot express | judge: proxy key | `verdict.json` bound to the PR head SHA |
-| review | sandbox | code-review (Anthropic, Apache-2.0), security-review (Anthropic, MIT), simplify (own), ultrareview (own, via pstack interrogate) on high-risk patches | proxy key | findings; blocking findings send the run back to build |
+| specify | sandbox | audit-ticket (clean-room), grill-me + grilling (Pocock, MIT), deep-research (Pocock, MIT) when needed | none; the model gateway route | `contract.md`, or `needs_info` |
+| accept | sandbox, separate from build | new skill, from StrongDM's scenario holdout idea | none; the model gateway route, a different model family from build | held-out acceptance tests, kept on the VM |
+| build | sandbox | pstack Feature or Bug fix playbook, tdd | none; the model gateway route | a patch plus visible tests |
+| validate | controller + CI | main's gates and the held-out suite in CI; an LLM judge on the VM only for criteria a test cannot express | judge: none; the model gateway route | `verdict.json` bound to the PR head SHA |
+| review | sandbox | code-review (Anthropic, Apache-2.0), security-review (Anthropic, MIT), simplify (own), ultrareview (own, via pstack interrogate) on high-risk patches | none; the model gateway route | findings; blocking findings send the run back to build |
 | handoff | controller | none, deterministic | none in a sandbox; the controller uses `gh` | PR marked ready, labeled `factory:review`, owner requested, evidence comment on the issue |
 
 ### Rules enforced in code
@@ -143,15 +143,15 @@ interface TicketAdapter {
 
 ## Sandbox
 
-Each stage runs Pi in RPC mode inside a rootless container on the VM. The controller waits for `agent_settled`, not `agent_end`.
+Each stage runs Pi in RPC mode inside a bwrap sandbox on the VM, in its own `systemd-run --user` scope with memory, task and CPU limits. The user namespace is unprivileged, but the host uid is still `exedev`: the boundary is the namespaces, the cgroup and seccomp, not the identity. The controller waits for `agent_settled`, not `agent_end`. `docs/operations/sandbox.md` describes it.
 
-- **Mounts.** Only the issue workspace is mounted. No host home and no controller state.
-- **Network.** Egress is limited to the model proxy and the package registries the repo needs.
-- **Credentials.** None. The model integration injects its key at exe.dev's edge.
-- **GitHub stays out of reach.** exe.dev integrations answer any process on the VM, so the container's network must block `github.int.exe.xyz` and allow only the model integration and package registries. Otherwise an agent could use `gh` itself.
-- **Fan-out.** Herdr runs headless inside the container for pstack's fan-out skills. That was verified on a GitHub runner in `docs/prototypes/herdr-on-runner.md`. The VM is the same pattern with more room.
+- **Mounts.** The issue workspace and a per-stage agent dir are writable. The pinned asset bundle is read-only. No host home and no controller state.
+- **Network.** The sandbox has no network. Its only egress is a host-side gateway that rebuilds every request for a fixed route: the model integration and `registry.npmjs.org`.
+- **Credentials.** None. The model integration injects its key at exe.dev's edge, and the gateway strips any credential header the sandbox sends.
+- **GitHub stays out of reach.** exe.dev integrations answer any process on the VM, so the sandbox has no route of its own, and the gateway never builds a request for a GitHub host. It allows only the model integration and the npm registry. Otherwise an agent could use `gh` itself.
+- **Fan-out.** Herdr runs headless inside the sandbox for pstack's fan-out skills. That was verified on a GitHub runner in `docs/prototypes/herdr-on-runner.md`. The VM is the same pattern with more room.
 
-A per-issue directory is not a security boundary on its own. Symphony says so too, and leaves it to the host. The container is our boundary.
+A per-issue directory is not a security boundary on its own. Symphony says so too, and leaves it to the host. The sandbox is our boundary.
 
 ## Human checkpoints
 
@@ -212,7 +212,7 @@ Riskiest unknowns first. Each unit ends in a check before the next starts.
 | 2 | Package skeleton and pure controller core | VERIFIED: `npm run check` 60/60, commit `db91d1a` |
 | 3 | VM bring-up: Pi, Herdr, `gh` and models through exe.dev integrations | VERIFIED: `gh` reads and writes (labels created); `pi -p` passes on anthropic/claude-sonnet-5-5, anthropic/claude-haiku-4-5, openai/gpt-5.6-luna, openai/gpt-6-astra |
 | 4 | Orchestrator: Symphony claims, reconcile tick, retries, stall; GitHub adapter; admit; kill switch; marker recovery | tests 3, 4 and 8 of the definition of done |
-| 5 | Sandbox runner: Pi RPC in a rootless container with egress limits | an agent inside cannot reach `github.int.exe.xyz` or GitHub's API |
+| 5 | Sandbox runner: Pi RPC in a bwrap sandbox behind an egress gateway | an agent inside cannot reach `github.int.exe.xyz` or GitHub's API |
 | 6 | specify + accept | a vague issue ends `needs_info`; a clear one yields a contract and a held-out suite |
 | 7 | build + CI gates from `main` + held-out suite in CI | the seeded bad patch fails CI; a good one passes |
 | 8 | review + bounded repair | a planted vulnerability produces a blocking finding and a repair round |

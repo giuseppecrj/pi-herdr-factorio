@@ -1,0 +1,68 @@
+# exp10 at 2026-10-29T15:15:37+00:00 on pi-factorio
+## host-side controls (outside the sandbox): these exist on the host
+drwxr-x--- 12 exedev exedev 4096 Oct 29 15:14 /home/exedev
+drwxr-xr-x  3 exedev exedev 4096 Oct 27 17:24 /home/exedev/.pi
+srw-rw-rw-  1 exedev exedev    0 Oct 28 21:13 /run/user/1000/bus
+srw-rw----  1 root   docker    0 Oct 28 21:13 /var/run/docker.sock
+gateway[exp10] pid=294876 socket=/home/exedev/f05-proto2/gw-exp10/gw.sock args: 
+## identity: uid=1000 gid=1000 groups=1000 65534 user=sandbox
+## mounts (mountinfo targets)
+/ /newroot;/dev /;/dev/full /full;/dev/null /null;/dev/pts /;/dev/random /random;/dev/tty /tty;/dev/urandom /urandom;/dev/zero /zero;/etc/alternatives /etc/alternatives;/etc/group /home/exedev/f05-proto2/etc/group;/etc/hosts /home/exedev/f05-proto2/etc/hosts;/etc/ld.so.cache /etc/ld.so.cache;/etc/nsswitch.conf /etc/nsswitch.conf;/etc/passwd /home/exedev/f05-proto2/etc/passwd;/etc/resolv.conf /home/exedev/f05-proto2/etc/resolv.conf;/etc/ssl /etc/ssl;/opt/agent /home/exedev/f05-proto2/agent-bare;/opt/bin/herdr /home/exedev/.local/bin/herdr;/opt/node /home/exedev/.local/share/mise/installs/node/26.12.1;/opt/pi /home/exedev/f05-proto2/rt;/opt/pi-standalone /home/exedev/.local/pi;/opt/scripts /home/exedev/f05-proto2/scripts;/proc /;/run /;/run/gw.sock /home/exedev/f05-proto2/gw-exp10/gw.sock;/tmp /;/usr /usr;/work /home/exedev/f05-proto2/ws-exp10;
+## host paths
+PASS /home: absent
+PASS /home/exedev: absent
+PASS /home/exedev/.pi: absent
+PASS /home/exedev/.pi/agent/models.json: absent
+PASS /home/exedev/.config/gh: absent
+PASS /home/exedev/.ssh: absent
+PASS /home/exedev/.local/share/mise: absent
+PASS /home/exedev/f05-proto2: absent
+PASS /home/exedev/factory-state: absent
+PASS /home/exedev/factory-workspaces: absent
+PASS /home/exedev/f05-proto2/ws-exp4-npm: absent
+PASS /home/exedev/f05-proto2/agent-herdr: absent
+PASS /var/run/docker.sock: absent
+PASS /run/docker.sock: absent
+PASS /var/run: absent
+PASS /run/user/1000: absent
+PASS /run/user/1000/bus: absent
+PASS /run/systemd: absent
+PASS /tmp/ssh-agent: absent
+PASS /root: absent
+PASS /etc/shadow: absent
+PASS /etc/sudoers: absent
+PASS /etc/passwd-: absent
+PASS /var/lib: absent
+PASS /var/log: absent
+## SSH agent: env SSH_AUTH_SOCK=<unset>; sockets in /tmp: 
+PASS SSH_AUTH_SOCK unset in sandbox env
+## every unix socket visible in the sandbox:  (plus /run/gw.sock bind: srwx------)
+## environment (names only): HOME LANG PATH PI_CODING_AGENT_DIR PI_OFFLINE PI_SKIP_VERSION_CHECK PI_TELEMETRY PWD SHELL SHLVL TERM USER XDG_CACHE_HOME XDG_CONFIG_HOME XDG_DATA_HOME XDG_RUNTIME_DIR XDG_STATE_HOME _ 
+## pid namespace: visible pids=5; /proc/1 cmdline=bwrap --unshare-all --die-with-parent --new-session --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/sbin /sbin --symlink usr/lib /lib --symlink usr/lib64 /lib64 --proc /proc --dev /dev --tmpfs /tmp --tmpfs /run --dir /tmp/home --dir /tmp/run --ro-bind /home/exedev/f05-proto2/etc/passwd /etc/passwd --ro-bind /home/exedev/f05-proto2/etc/group /etc/group --ro-bind /home/exedev/f05-proto2/etc/hosts /etc/hosts --ro-bind /home/exedev/f05-proto2/etc/resolv.conf /etc/resolv.conf --ro-bind /etc/nsswitch.conf /etc/nsswitch.conf --ro-bind /etc/alternatives /etc/alternatives --ro-bind /etc/ssl /etc/ssl --ro-bind /etc/ld.so.cache /etc/ld.so.cache --ro-bind /home/exedev/.local/share/mise/installs/node/26.12.1 /opt/node --ro-bind /home/exedev/f05-proto2/rt /opt/pi --ro-bind /home/exedev/.local/bin/herdr /opt/bin/herdr --ro-bind /home/exedev/.local/pi /opt/pi-standalone --ro-bind /home/exedev/f05-proto2/scripts /opt/scripts --bind /home/exedev/f05-proto2/gw-exp10/gw.sock /run/gw.sock --bind /home/exedev/f05-proto2/ws-exp10 /work --chdir /work --clearenv --setenv PATH /opt/pi/node_modules/.bin:/opt/node/bin:/opt/bin:/usr/bin:/usr/sbin --setenv HOME /tmp/home --setenv USER sandbox --setenv SHELL /bin/bash --setenv TERM xterm-256color --setenv LANG C.UTF-8 --setenv XDG_CONFIG_HOME /tmp/home/.config --setenv XDG_CACHE_HOME /tmp/home/.cache --setenv XDG_STATE_HOME /tmp/home/.local/state --setenv XDG_DATA_HOME /tmp/home/.local/share --setenv XDG_RUNTIME_DIR /tmp/run --setenv PI_SKIP_VERSION_CHECK 1 --setenv PI_TELEMETRY 0 --setenv PI_OFFLINE 1 --ro-bind /home/exedev/f05-proto2/agent-bare /opt/agent --setenv PI_CODING_AGENT_DIR /opt/agent /bin/bash /opt/scripts/exp10_inside.sh 
+## /proc/1/environ readable=yes variable names: [PATH ]
+PASS /proc/1/environ holds only PATH (bwrap was started under env -i)
+## host pid 1 not visible: /proc/1 is bwrap
+PASS no host processes (systemd, sshd, gateway) visible: bash bwrap ps sort tr 
+## /proc/sys/kernel/hostname=pi-factorio
+## /etc/hosts:
+127.0.0.1 localhost
+::1 localhost
+## /etc/resolv.conf:
+# f05 sandbox: no nameservers
+PASS getent ahosts api.github.com: no answer (rc=2)
+PASS getent ahosts github.com: no answer (rc=2)
+PASS getent ahosts github.int.exe.xyz: no answer (rc=2)
+PASS getent ahosts llm.int.exe.xyz: no answer (rc=2)
+PASS getent ahosts registry.npmjs.org: no answer (rc=2)
+PASS getent ahosts pi-factorio: no answer (rc=2)
+PASS getent ahosts pi-factorio.exe.xyz: no answer (rc=2)
+PASS getent ahosts metadata.google.internal: no answer (rc=2)
+PASS python getaddrinfo api.github.com -> [Errno -3] Temporary failure in name resolution
+PASS python getaddrinfo llm.int.exe.xyz -> [Errno -3] Temporary failure in name resolution
+## localhost resolves only to loopback: 127.0.0.1 
+## inside summary: pass=36 fail=0
+sandbox exit=0
+## sandbox bwrap argv (what is bound):
+env -i PATH=/usr/bin:/bin bwrap --unshare-all --die-with-parent --new-session --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/sbin /sbin --symlink usr/lib /lib --symlink usr/lib64 /lib64 --proc /proc --dev /dev --tmpfs /tmp --tmpfs /run --dir /tmp/home --dir /tmp/run --ro-bind /home/exedev/f05-proto2/etc/passwd /etc/passwd --ro-bind /home/exedev/f05-proto2/etc/group /etc/group --ro-bind /home/exedev/f05-proto2/etc/hosts /etc/hosts --ro-bind /home/exedev/f05-proto2/etc/resolv.conf /etc/resolv.conf --ro-bind /etc/nsswitch.conf /etc/nsswitch.conf --ro-bind /etc/alternatives /etc/alternatives --ro-bind /etc/ssl /etc/ssl --ro-bind /etc/ld.so.cache /etc/ld.so.cache --ro-bind /home/exedev/.local/share/mise/installs/node/26.12.1 /opt/node --ro-bind /home/exedev/f05-proto2/rt /opt/pi --ro-bind /home/exedev/.local/bin/herdr /opt/bin/herdr --ro-bind /home/exedev/.local/pi /opt/pi-standalone --ro-bind /home/exedev/f05-proto2/scripts /opt/scripts --bind /home/exedev/f05-proto2/gw-exp10/gw.sock /run/gw.sock --bind /home/exedev/f05-proto2/ws-exp10 /work --chdir /work --clearenv --setenv PATH /opt/pi/node_modules/.bin:/opt/node/bin:/opt/bin:/usr/bin:/usr/sbin --setenv HOME /tmp/home --setenv USER sandbox --setenv SHELL /bin/bash --setenv TERM xterm-256color --setenv LANG C.UTF-8 --setenv XDG_CONFIG_HOME /tmp/home/.config --setenv XDG_CACHE_HOME /tmp/home/.cache --setenv XDG_STATE_HOME /tmp/home/.local/state --setenv XDG_DATA_HOME /tmp/home/.local/share --setenv XDG_RUNTIME_DIR /tmp/run --setenv PI_SKIP_VERSION_CHECK 1 --setenv PI_TELEMETRY 0 --setenv PI_OFFLINE 1 --ro-bind /home/exedev/f05-proto2/agent-bare /opt/agent --setenv PI_CODING_AGENT_DIR /opt/agent 
+## leftovers check
+no matching processes

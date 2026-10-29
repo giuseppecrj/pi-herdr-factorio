@@ -1,0 +1,68 @@
+# exp6 at 2026-10-29T15:34:51+00:00 on pi-factorio
+## launcher context: cgroup=0::/init.scope sessions=0 XDG_SESSION_ID=<unset> DBUS_SESSION_BUS_ADDRESS=<unset>
+## user manager: running delegated controllers: cpu memory pids
+gateway[exp6] pid=296284 socket=/home/exedev/f05-proto2/gw-exp6/gw.sock args: 
+
+## 6a: two concurrent scopes, MemoryMax=512M TasksMax=64; A allocates 1 GiB, B holds 100 MiB and forks 100 sleeps
+B scope: active memory.max=536870912 pids.max=64 pids.current=64
+Terminated
+A exit=143 (OOM killer SIGKILLs python; systemd then stops the failed scope, so the launcher sees bwrap's SIGTERM)
+allocated 384 MiB
+allocated 448 MiB
+A scope after: failed
+f05-proto-exp6-a.scope: Failed with result 'oom-kill'.
+f05-proto-exp6-a.scope: A process of this unit has been killed by the OOM killer.
+f05-proto-exp6-a.scope: Failed with result 'oom-kill'.
+[66090.051953] oom-kill:constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=user.slice,mems_allowed=0,oom_memcg=/user.slice/user-1000.slice/user@1000.service/app.slice/f05-proto-exp6-a.scope,task_memcg=/user.slice/user-1000.slice/user@1000.service/app.slice/f05-proto-exp6-a.scope,task=python3,pid=296374,uid=1000
+[66090.051963] Memory cgroup out of memory: Killed process 296374 (python3) total-vm:539676kB, anon-rss:522496kB, file-rss:6620kB, shmem-rss:0kB, UID:1000 pgtables:1088kB oom_score_adj:0
+B scope while A died: active memory.events: low 0 high 0 max 0 oom 0 oom_kill 0 oom_group_kill 0 
+B pids.events (fork attempts refused at TasksMax): max 2  pids.peak=64
+B exit=254
+B holds 100 MiB
+
+## 6b: named scope stop kills Pi, Herdr and pane children (TimeoutStopSec=5)
+scope cgroup: /sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/f05-proto-exp6-stop.scope; tasks: 12
+processes in scope before stop:
+  296404 bwrap --unshare-all --die-with-parent --new-session --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/sbin /sbin 
+  296407 bwrap --unshare-all --die-with-parent --new-session --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/sbin /sbin 
+  296408 /bin/bash /work/stop_inside.sh 
+  296409 socat TCP-LISTEN:18080,bind=127.0.0.1,fork,reuseaddr UNIX-CONNECT:/run/gw.sock 
+  296411 herdr --session s6 server 
+  296425 /bin/bash 
+  296426 curl -sfL --retry 3 --connect-timeout 10 --max-time 20 https://herdr.dev/latest.json 
+  296435 sleep 1000 
+  296436 pi                                                                                                                      
+  296440 /bin/bash 
+  296453 sleep 1000 
+  296454 sleep 1000 
+pi processes=1 herdr servers=1 (a TERM-ignoring pane child is included on purpose)
+systemctl --user stop returned after 24 ms
+scope processes still alive after stop: 0 of 12; scope state: inactive; cgroup dir exists: no
+launcher saw sandbox exit=143
+
+## 6c: scope survives the death of its launcher; found and stopped by name
+[no-die-with-parent] launcher pid=296556 scope=active procs=3
+./run_exp6.sh: line 84: 296556 Killed                  setsid bash -c 'systemd-run --user --scope --quiet --unit=f05-proto-exp6-surv-'$variant' -p MemoryMax=512M -p TasksMax=64 -- "$@" /bin/sleep 600 & echo $$ > '$WS'/launcher.pid; wait' _ "${BWV[@]}" > /dev/null 2>&1
+[no-die-with-parent] after SIGKILL of launcher: launcher alive=no scope=active
+[no-die-with-parent] found by name: f05-proto-exp6-surv-no-die-with-parent.scope active running;
+[no-die-with-parent] stop by name: 23 ms -> inactive
+[die-with-parent] launcher pid=296581 scope=active procs=3
+./run_exp6.sh: line 84: 296581 Killed                  setsid bash -c 'systemd-run --user --scope --quiet --unit=f05-proto-exp6-surv-'$variant' -p MemoryMax=512M -p TasksMax=64 -- "$@" /bin/sleep 600 & echo $$ > '$WS'/launcher.pid; wait' _ "${BWV[@]}" > /dev/null 2>&1
+[die-with-parent] after SIGKILL of launcher: launcher alive=no scope=inactive
+[die-with-parent] found by name: 
+[die-with-parent] stop by name: 19 ms -> inactive
+
+## 6d: launcher mimicking factory.service: env -i, NNP, XDG_RUNTIME_DIR set, no DBUS/session vars
+launcher NoNewPrivs=1 cgroup=0::/init.scope env=PWD SHLVL XDG_RUNTIME_DIR PATH _ 
+in scope: NoNewPrivs=1 cgroup=0::/ memory.max(seen from host below)
+nnp scope: active memory.max=536870912 pids.max=64
+nnp scope run exit=0 total 2043 ms
+-- same launcher WITHOUT XDG_RUNTIME_DIR:
+Failed to connect to bus: No medium found
+exit=1
+-- NNP launcher can stop a scope by name (controller-side reconcile):
+nnp stop exit=0 state=inactive
+## gateway log (must be empty: no model calls in exp6)
+0
+## leftovers check
+no matching processes

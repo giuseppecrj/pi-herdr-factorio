@@ -716,8 +716,7 @@ class ScopedPi implements PiProcess {
 /**
  * The real effects for one stage attempt: a fresh stage directory under
  * the state dir, one gateway process, and one scoped bwrap sandbox per Pi
- * session. Round 2 wires this into the orchestrator; it is not yet proven
- * on the VM.
+ * session.
  */
 export function sandboxHost(config: SandboxHostConfig): StageHost {
 	const units = new Map<number, string>();

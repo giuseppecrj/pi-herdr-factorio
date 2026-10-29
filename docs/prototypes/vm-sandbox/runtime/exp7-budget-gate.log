@@ -1,0 +1,531 @@
+# exp7 at 2026-10-29T15:35:26+00:00 on pi-factorio
+gateway[exp7] pid=296668 socket=/home/exedev/f05-proto2/gw-exp7/gw.sock args: --gate-file /home/exedev/f05-proto2/gw-exp7-gate.json --auto-gate-tokens 6000
+## A: retryable gate body, closed after the first assistant message_end with usage
+{
+ "timings": {
+  "spawn_to_get_state_response": 0.406,
+  "prompt_sent": 0.407,
+  "gate_closed": 3.459,
+  "gate_closed_epoch": 1793288130.563,
+  "abort_sent": 5.49,
+  "abort_sent_epoch": 1793288132.595,
+  "settled_or_timeout": 5.492,
+  "stdin_closed": 5.992,
+  "exit_after_stdin_close": 0.032
+ },
+ "seq": [
+  "response:get_state",
+  "response:prompt",
+  "agent_start",
+  "turn_start",
+  "message_start",
+  "message_end",
+  "message_start",
+  "message_end",
+  "message_start",
+  "message_update\u00d719",
+  "message_end",
+  "tool_execution_start",
+  "tool_execution_end",
+  "message_start",
+  "message_end",
+  "turn_end",
+  "turn_start",
+  "message_start",
+  "message_end",
+  "turn_end",
+  "agent_end",
+  "auto_retry_start",
+  "entry_appended",
+  "agent_start",
+  "turn_start",
+  "message_start",
+  "message_end",
+  "turn_end",
+  "agent_end",
+  "auto_retry_start",
+  "entry_appended",
+  "auto_retry_end",
+  "agent_settled",
+  "response:abort"
+ ],
+ "settled": [
+  {
+   "t": 5.492,
+   "payload": {
+    "type": "agent_settled",
+    "aborted": true
+   }
+  }
+ ],
+ "assistant": [
+  {
+   "t": 3.458,
+   "stopReason": "toolUse",
+   "rawStopReason": "completed",
+   "errorMessage": null,
+   "usage": {
+    "input": 671,
+    "output": 29,
+    "cacheRead": 0,
+    "cacheWrite": 0,
+    "reasoning": 0,
+    "totalTokens": 700,
+    "cost": {
+     "input": 0.0013419999999999999,
+     "output": 0.00029,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "total": 0.0016319999999999998
+    }
+   },
+   "provider": "openai",
+   "model": "gpt-6.1-sol",
+   "api": "openai-responses",
+   "content": [
+    {
+     "type": "toolCall",
+     "name": "read"
+    }
+   ],
+   "keys": [
+    "api",
+    "content",
+    "durationMs",
+    "model",
+    "provider",
+    "providerThinkingLevel",
+    "rawStopReason",
+    "responseId",
+    "role",
+    "stopReason",
+    "thinkingLevel",
+    "timestamp",
+    "usage"
+   ]
+  },
+  {
+   "t": 3.471,
+   "stopReason": "error",
+   "rawStopReason": null,
+   "errorMessage": "OpenAI API error (429): {\"message\":\"f05 budget gate closed: admission denied\",\"type\":\"budget_gate\",\"code\":\"budget_gate_closed\"}",
+   "usage": {
+    "input": 0,
+    "output": 0,
+    "cacheRead": 0,
+    "cacheWrite": 0,
+    "totalTokens": 0,
+    "cost": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "total": 0
+    }
+   },
+   "provider": "openai",
+   "model": "gpt-6.1-sol",
+   "api": "openai-responses",
+   "content": [],
+   "keys": [
+    "api",
+    "content",
+    "durationMs",
+    "errorMessage",
+    "model",
+    "provider",
+    "providerThinkingLevel",
+    "role",
+    "stopReason",
+    "thinkingLevel",
+    "timestamp",
+    "usage"
+   ]
+  },
+  {
+   "t": 5.489,
+   "stopReason": "error",
+   "rawStopReason": null,
+   "errorMessage": "OpenAI API error (429): {\"message\":\"f05 budget gate closed: admission denied\",\"type\":\"budget_gate\",\"code\":\"budget_gate_closed\"}",
+   "usage": {
+    "input": 0,
+    "output": 0,
+    "cacheRead": 0,
+    "cacheWrite": 0,
+    "totalTokens": 0,
+    "cost": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "total": 0
+    }
+   },
+   "provider": "openai",
+   "model": "gpt-6.1-sol",
+   "api": "openai-responses",
+   "content": [],
+   "keys": [
+    "api",
+    "content",
+    "durationMs",
+    "errorMessage",
+    "model",
+    "provider",
+    "providerThinkingLevel",
+    "role",
+    "stopReason",
+    "thinkingLevel",
+    "timestamp",
+    "usage"
+   ]
+  }
+ ],
+ "retries": [
+  {
+   "t": 3.473,
+   "payload": {
+    "type": "auto_retry_start",
+    "attempt": 1,
+    "maxAttempts": 3,
+    "delayMs": 2000,
+    "errorMessage": "OpenAI API error (429): {\"message\":\"f05 budget gate closed: admission denied\",\"type\":\"budget_gate\",\"code\":\"budget_gate_closed\"}"
+   }
+  },
+  {
+   "t": 5.49,
+   "payload": {
+    "type": "auto_retry_start",
+    "attempt": 2,
+    "maxAttempts": 3,
+    "delayMs": 4000,
+    "errorMessage": "OpenAI API error (429): {\"message\":\"f05 budget gate closed: admission denied\",\"type\":\"budget_gate\",\"code\":\"budget_gate_closed\"}"
+   }
+  },
+  {
+   "t": 5.492,
+   "payload": {
+    "type": "auto_retry_end",
+    "success": false,
+    "attempt": 2,
+    "finalError": "Retry cancelled"
+   }
+  }
+ ],
+ "responses": {
+  "st": {
+   "t": 0.406,
+   "command": "get_state",
+   "success": true,
+   "error": null,
+   "data": {
+    "model": {
+     "id": "gpt-6.1-sol",
+     "name": "GPT-6.1 Sol",
+     "api": "openai-responses",
+     "provider": "openai",
+     "baseUrl": "http://127.0.0.1:18080/openai/v1",
+     "reasoning": true,
+     "input": [
+      "text",
+      "image"
+     ],
+     "cost": {
+      "input": 2,
+      "output": 10,
+      "cacheRead": 0.1,
+      "cacheWrite": 2.5,
+      "tiers": [
+       {
+        "inputTokensAbove": 272000,
+        "input": 4,
+        "output": 15,
+        "cacheRead": 0.2,
+        "cacheWrite": 5
+       }
+      ]
+     },
+     "contextWindow": 272000,
+     "maxTokens": 128000,
+     "thinkingLevelMap": {
+      "off": null,
+      "minimal": null,
+      "low": "low",
+      "medium": "medium",
+      "high": "high",
+      "xhigh": "xhigh",
+      "max": "max"
+     },
+     "compat": {
+      "supportsStrictMode": true,
+      "supportsOpenAIGrammarTools": true,
+      "supportsAdditionalTools": true,
+      "supportsToolSearch": true,
+      "supportsMidConvoSystemMessages": true,
+      "supportsExplicitPromptCacheMode": true,
+      "supportsMidConvoEffort": true
+     },
+     "inputLimits": {
+      "maxRequestBytes": 536870912,
+      "images": {
+       "maxPerRequest": 1500,
+       "resize": {
+        "maxWidth": 2000,
+        "maxHeight": 2000,
+        "maxBytes": 4718592,
+        "jpegQuality": 80
+       }
+      }
+     },
+     "type": "chat"
+    },
+    "thinkingLevel": "low",
+    "isStreaming": false,
+    "isCompacting": false,
+    "steeringMode": "one-at-a-time",
+    "followUpMode": "one-at-a-time",
+    "sessionId": "01a1884d-43d9-71e7-a046-f9938d571872",
+    "autoCompactionEnabled": true,
+    "messageCount": 0,
+    "pendingMessageCount": 0
+   }
+  },
+  "p1": {
+   "t": 0.409,
+   "command": "prompt",
+   "success": true,
+   "error": null,
+   "data": {
+    "disposition": "started"
+   }
+  },
+  "ab": {
+   "t": 5.492,
+   "command": "abort",
+   "success": true,
+   "error": null,
+   "data": null
+  }
+ },
+ "eof": false,
+ "notes": [],
+ "state": {
+  "thinkingLevel": "low",
+  "isStreaming": false,
+  "sessionFile": null,
+  "sessionId": "01a1884d-43d9-71e7-a046-f9938d571872",
+  "autoRetryEnabled": null,
+  "autoCompactionEnabled": true,
+  "messageCount": 0,
+  "model": {
+   "provider": "openai",
+   "id": "gpt-6.1-sol",
+   "api": "openai-responses",
+   "baseUrl": "http://127.0.0.1:18080/openai/v1",
+   "reasoning": true
+  }
+ },
+ "exit_code": 0,
+ "scope_after_exit": "inactive"
+}
+## A gateway log
+#1 t=1793288127.545 POST /openai/v1/responses -> forward route=openai status=200 upstream=('https', 'llm.int.exe.xyz', 'llm.int.exe.xyz', '169.254.169.254') | req model=gpt-6.1-sol tools=[] input_items=4 instr_chars=0 reasoning={'effort': 'medium', 'summary': 'auto'} | resp terminal=completed usage={"attribution": {"items": {"at_021658084f0c5837016ae367c116a481989cbce9a18e38f88a": {"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 233, "output_tokens": 0}, "cnfu_021658084f0c5837016ae367c116a48198bf84c37b9e392186": {"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 0, "output_tokens": 0}, "fc_021658084f0c5837016ae367c22a2081989400c533704116f0": {"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 2, "output_tokens": 29}, "msg_021658084f0c5837016ae367c116a4819889873725df8e622d": {"cache_write_tokens": 0, "cached_tokens": 0, "content": [{"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 415, "output_tokens": 0}], "input_tokens": 415, "output_tokens": 0}, "msg_021658084f0c5837016ae367c116a48198ae4d4e14896cc032": {"cache_write_tokens": 0, "cached_tokens": 0, "content": [{"cache_write_tokens": 0, "cached_tokens": 0, "input_tokens": 21, "output_tokens": 0}], "input_tokens": 21, "output_tokens": 0}}}, "input_tokens": 671, "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0}, "output_tokens": 29, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 700}
+#2 t=1793288130.573 POST /openai/v1/responses -> gated route=None status=429 upstream=None | req model=gpt-6.1-sol tools=[] input_items=7 instr_chars=0 reasoning={'effort': 'medium', 'summary': 'auto'} | gate_body={"error": {"code": "budget_gate_closed", "message": "f05 budget gate closed: admission denied", "type": "budget_gate"}}
+#3 t=1793288132.587 POST /openai/v1/responses -> gated route=None status=429 upstream=None | req model=gpt-6.1-sol tools=[] input_items=7 instr_chars=0 reasoning={'effort': 'medium', 'summary': 'auto'} | gate_body={"error": {"code": "budget_gate_closed", "message": "f05 budget gate closed: admission denied", "type": "budget_gate"}}
+requests=3 forwarded=1 gated=2 denied=0 errors=0
+upstream hosts: [('llm.int.exe.xyz', 'llm.int.exe.xyz')]
+REAL_MODEL_TOKENS_TOTAL=700
+forwarded (upstream) requests: [(1, 1793288127.545)]
+gated requests (no upstream): [(2, 1793288130.573), (3, 1793288132.587)]
+any forward AFTER first gated record: False
+auto_retry events: [[3.473, {"type": "auto_retry_start", "attempt": 1, "maxAttempts": 3, "delayMs": 2000, "errorMessage": "OpenAI API error (429): {\"message\":\"f05 budget gate closed: admission denied\",\"type\":\"budget_gate\",\"code\":\"budget_gate_closed\"}"}], [5.49, {"type": "auto_retry_start", "attempt": 2, "maxAttempts": 3, "delayMs": 4000, "errorMessage": "OpenAI API error (429): {\"message\":\"f05 budget gate closed: admission denied\",\"type\":\"budget_gate\",\"code\":\"budget_gate_closed\"}"}], [5.491, {"type": "auto_retry_end", "success": false, "attempt": 2, "finalError": "Retry cancelled"}]]
+## B: non-retryable gate body, gate closed before the stage
+{
+ "timings": {
+  "spawn_to_get_state_response": 0.417,
+  "prompt_sent": 0.417,
+  "settled_or_timeout": 0.463,
+  "stdin_closed": 0.963,
+  "exit_after_stdin_close": 0.032
+ },
+ "seq": [
+  "response:get_state",
+  "response:prompt",
+  "agent_start",
+  "turn_start",
+  "message_start",
+  "message_end",
+  "message_start",
+  "message_end",
+  "message_start",
+  "message_end",
+  "turn_end",
+  "agent_end",
+  "agent_settled"
+ ],
+ "settled": [
+  {
+   "t": 0.463,
+   "payload": {
+    "type": "agent_settled",
+    "aborted": false
+   }
+  }
+ ],
+ "assistant": [
+  {
+   "t": 0.461,
+   "stopReason": "error",
+   "rawStopReason": null,
+   "errorMessage": "OpenAI API error (429): {\"message\":\"f05 budget gate closed: out of budget\",\"type\":\"budget_gate\",\"code\":\"budget_gate_closed\"}",
+   "usage": {
+    "input": 0,
+    "output": 0,
+    "cacheRead": 0,
+    "cacheWrite": 0,
+    "totalTokens": 0,
+    "cost": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "total": 0
+    }
+   },
+   "provider": "openai",
+   "model": "gpt-6.1-sol",
+   "api": "openai-responses",
+   "content": [],
+   "keys": [
+    "api",
+    "content",
+    "durationMs",
+    "errorMessage",
+    "model",
+    "provider",
+    "providerThinkingLevel",
+    "role",
+    "stopReason",
+    "thinkingLevel",
+    "timestamp",
+    "usage"
+   ]
+  }
+ ],
+ "retries": [],
+ "responses": {
+  "st": {
+   "t": 0.417,
+   "command": "get_state",
+   "success": true,
+   "error": null,
+   "data": {
+    "model": {
+     "id": "gpt-6.1-sol",
+     "name": "GPT-6.1 Sol",
+     "api": "openai-responses",
+     "provider": "openai",
+     "baseUrl": "http://127.0.0.1:18080/openai/v1",
+     "reasoning": true,
+     "input": [
+      "text",
+      "image"
+     ],
+     "cost": {
+      "input": 2,
+      "output": 10,
+      "cacheRead": 0.1,
+      "cacheWrite": 2.5,
+      "tiers": [
+       {
+        "inputTokensAbove": 272000,
+        "input": 4,
+        "output": 15,
+        "cacheRead": 0.2,
+        "cacheWrite": 5
+       }
+      ]
+     },
+     "contextWindow": 272000,
+     "maxTokens": 128000,
+     "thinkingLevelMap": {
+      "off": null,
+      "minimal": null,
+      "low": "low",
+      "medium": "medium",
+      "high": "high",
+      "xhigh": "xhigh",
+      "max": "max"
+     },
+     "compat": {
+      "supportsStrictMode": true,
+      "supportsOpenAIGrammarTools": true,
+      "supportsAdditionalTools": true,
+      "supportsToolSearch": true,
+      "supportsMidConvoSystemMessages": true,
+      "supportsExplicitPromptCacheMode": true,
+      "supportsMidConvoEffort": true
+     },
+     "inputLimits": {
+      "maxRequestBytes": 536870912,
+      "images": {
+       "maxPerRequest": 1500,
+       "resize": {
+        "maxWidth": 2000,
+        "maxHeight": 2000,
+        "maxBytes": 4718592,
+        "jpegQuality": 80
+       }
+      }
+     },
+     "type": "chat"
+    },
+    "thinkingLevel": "low",
+    "isStreaming": false,
+    "isCompacting": false,
+    "steeringMode": "one-at-a-time",
+    "followUpMode": "one-at-a-time",
+    "sessionId": "01a1884d-5bc7-75c7-b9af-046908d9c259",
+    "autoCompactionEnabled": true,
+    "messageCount": 0,
+    "pendingMessageCount": 0
+   }
+  },
+  "p1": {
+   "t": 0.419,
+   "command": "prompt",
+   "success": true,
+   "error": null,
+   "data": {
+    "disposition": "started"
+   }
+  }
+ },
+ "eof": false,
+ "notes": [],
+ "state": {
+  "thinkingLevel": "low",
+  "isStreaming": false,
+  "sessionFile": null,
+  "sessionId": "01a1884d-5bc7-75c7-b9af-046908d9c259",
+  "autoRetryEnabled": null,
+  "autoCompactionEnabled": true,
+  "messageCount": 0,
+  "model": {
+   "provider": "openai",
+   "id": "gpt-6.1-sol",
+   "api": "openai-responses",
+   "baseUrl": "http://127.0.0.1:18080/openai/v1",
+   "reasoning": true
+  }
+ },
+ "exit_code": 0,
+ "scope_after_exit": "inactive"
+}
+## B gateway log
+#4 t=1793288133.666 POST /openai/v1/responses -> gated route=None status=429 upstream=None | req model=gpt-6.1-sol tools=[] input_items=4 instr_chars=0 reasoning={'effort': 'medium', 'summary': 'auto'} | gate_body={"error": {"code": "budget_gate_closed", "message": "f05 budget gate closed: out of budget", "type": "budget_gate"}}
+requests=1 forwarded=0 gated=1 denied=0 errors=0
+upstream hosts: []
+REAL_MODEL_TOKENS_TOTAL=0
+## leftovers check
+no matching processes

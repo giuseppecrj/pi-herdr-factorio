@@ -1,0 +1,33 @@
+# cleanup at 2026-10-29T15:37:21+00:00 on pi-factorio
+## sha256 of the scripts the VM ran
+be3663c07b7048364a8d6fa1a2a2747e09182580aad693231c57195022dd09c6  common.sh
+55fed5c4c59e54a19aaee5b2e4f2e5958ac91303216fbd81685b6ec2c9603dac  exp10_inside.sh
+2e153eba43e1b04d0abb20fba28cc72addfa074f9d12473e8b06b0b5a79d7101  exp5_inside.sh
+c5c314075c9d826adec3e227d8b00534c47abecc1f90d563422a7aa4140c5cb0  exp9_inside.sh
+96fff0c3688142ecbea5b7e091654456ad4a10b3065a50a41aa632fca8db31b3  run_exp10.sh
+0184dc206e59f9c7bb5e1a7775f6353f3895822a2eb9fb807be2207b4ec7e568  run_exp4.sh
+ca5ffa79ad29d2dfb8b923d0218d81319142a77deb50394d7e4c816331f0048d  run_exp5.sh
+fffd0a1eef1a8a79b4b1ffb688c723fc1686cbccdc772c77598a046ee7e6cf39  run_exp6.sh
+c6560b775c27d29ae594535745b7ec261359f017cf5ec2ad4b265af8b87f33b9  run_exp7.sh
+b302e72d55fbd4ac08cf73121d9ba3f96c3492ab88b68b9cd98e4974a69fa556  run_exp8.sh
+2b7ae3c35b663880c5f39fee9883f35f074129c09cf488945a4642b7f36391d7  run_exp9.sh
+02a8d57731dc9d1739d3f34dcf9549e888fc88d38a06302037354dc3679f8629  sbx-entry.sh
+0bef3b3b16eda661591ac51cd5396845a602206b33f42c21cf77950a83c01c1d  setup.sh
+41a76295184fe9b705673b48126095e9e90d5704f6809e158b1f44139691279f  vm_cleanup.sh
+531b2c3ec369d3ef018093433e4a506402fe402e5df01613a016acd75277d7f1  exp5_parent.py
+ec29224413ece295aa3e2ab93d84f394311215c2206fe373578a23181317d393  fakeup.py
+a05caac58d83fb38ede0de7c00b2924b2d02f1c6bff87d07abacb699aa541abb  gateway.py
+f96fe5e9a5e0f08692d2b1e1f8fe57ae66c6da8e56675ef508ed959349a3ea2b  gwsummary.py
+00d6f7484e52cb24dd475f6c2e2f6f5208d69dfb51db987301292a302a1c8971  rpcdrive.py
+## stopping any f05-proto units
+## after cleanup
+ls: cannot access '/home/exedev/f05-proto2': No such file or directory
+processes matching gateway/fakeup/socat/bwrap/herdr/pi rpc/f05:
+none
+user units matching f05:
+(end)
+listeners on 18080/18998:
+none
+~/.pi untouched (mtimes):
+-rw-r--r-- 1 exedev exedev 225 2026-10-28 22:28:10.957153666 +0000 /home/exedev/.pi/agent/models.json
+-rw-r--r-- 1 exedev exedev 141 2026-10-28 22:28:10.961153603 +0000 /home/exedev/.pi/agent/settings.json
