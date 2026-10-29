@@ -17,7 +17,56 @@ export const FORCED_PI_FLAGS = [
 	"--no-context-files",
 ] as const;
 
-const REFUSED_FLAGS = ["--approve", "-a", "--api-key"];
+/**
+ * Flags that take a value and load no code or tools. `--tools`, `-t`,
+ * `--extension` and `-e` are handled apart. Every other flag is refused.
+ */
+const VALUE_FLAGS = [
+	"--mode",
+	"--model",
+	"--thinking",
+	"--session",
+	"--session-id",
+	"--session-dir",
+	"--name",
+	"-n",
+	"--system-prompt",
+	"--append-system-prompt",
+	"--exclude-tools",
+	"-xt",
+];
+
+const SWITCH_FLAGS = [
+	"--print",
+	"-p",
+	"--no-session",
+	"--no-tools",
+	"-nt",
+	"--no-extensions",
+	"-ne",
+	"--no-skills",
+	"-ns",
+	"--no-prompt-templates",
+	"-np",
+	"--no-themes",
+	"--no-context-files",
+	"-nc",
+	"--no-mcp",
+	"--no-approve",
+	"-na",
+	"--offline",
+	"--verbose",
+];
+
+/**
+ * The only extension a Pi in the sandbox may load by flag: the one
+ * `pi-herdr-agents` passes to every child it starts. It is in the read-only
+ * bundle. The match is exact, so no other path, `builtin:` name or `..`
+ * spelling passes.
+ */
+export const CHILD_EXTENSIONS = [
+	"/opt/factory/pkg/node_modules/pi-herdr-agents/maestro/adapters/pi/child/subagent-done.ts",
+];
 
 const REFUSED_SUBCOMMANDS = [
 	"install",
@@ -43,8 +92,10 @@ function narrowTools(requested: string, allowed: readonly string[]): string[] {
 
 /**
  * Prepends the forced flags, narrows any `--tools` to the allowlist (or
- * supplies the allowlist when none is given), and refuses flags and
- * subcommands that would trust project files, take a key or change installs.
+ * supplies the allowlist when none is given), and refuses the subcommands
+ * that change installs or read keys. Options are an allowlist: a flag
+ * outside it, a missing value, or an extension other than the child one
+ * refuses the whole command line. Arguments after `--` are messages.
  */
 export function wrapPiArgv(
 	args: readonly string[],
@@ -65,17 +116,35 @@ export function wrapPiArgv(
 	for (let index = 0; index < options.length; index += 1) {
 		const arg = options[index] ?? "";
 
-		if (REFUSED_FLAGS.includes(arg) || arg.startsWith("--api-key=")) {
-			return { ok: false };
+		if (!arg.startsWith("-")) {
+			kept.push(arg);
+			continue;
 		}
 
-		if (arg === "--tools" || arg === "-t") {
-			requested = options[index + 1] ?? "";
-			index += 1;
-		} else if (arg.startsWith("--tools=")) {
-			requested = arg.slice("--tools=".length);
-		} else {
+		if (SWITCH_FLAGS.includes(arg)) {
 			kept.push(arg);
+			continue;
+		}
+
+		const equals = arg.startsWith("--") ? arg.indexOf("=") : -1;
+		const flag = equals === -1 ? arg : arg.slice(0, equals);
+		const inline = equals === -1 ? undefined : arg.slice(equals + 1);
+		const value = inline ?? options[index + 1];
+
+		if (value === undefined) return { ok: false };
+
+		if (inline === undefined) index += 1;
+
+		if (flag === "--tools" || flag === "-t") {
+			requested = value;
+		} else if (flag === "--extension" || flag === "-e") {
+			if (!CHILD_EXTENSIONS.includes(value)) return { ok: false };
+
+			kept.push(flag, value);
+		} else if (VALUE_FLAGS.includes(flag)) {
+			kept.push(flag, value);
+		} else {
+			return { ok: false };
 		}
 	}
 

@@ -627,7 +627,7 @@ describe("pi wrapper", () => {
 			"--session",
 			"/run/pi-agent/sessions/x.jsonl",
 			"-e",
-			"/opt/factory/pkg/node_modules/pi-herdr-agents/subagent-done.ts",
+			"/opt/factory/pkg/node_modules/pi-herdr-agents/maestro/adapters/pi/child/subagent-done.ts",
 			"--model",
 			"openai/gpt-6.1-sol",
 			"--thinking",
@@ -647,7 +647,7 @@ describe("pi wrapper", () => {
 			"--session",
 			"/run/pi-agent/sessions/x.jsonl",
 			"-e",
-			"/opt/factory/pkg/node_modules/pi-herdr-agents/subagent-done.ts",
+			"/opt/factory/pkg/node_modules/pi-herdr-agents/maestro/adapters/pi/child/subagent-done.ts",
 			"--model",
 			"openai/gpt-6.1-sol",
 			"--thinking",
@@ -692,6 +692,81 @@ describe("pi wrapper", () => {
 
 		assert.ok(messages.ok);
 		assert.deepEqual(messages.argv.slice(-3), ["--", "install", "--approve"]);
+	});
+
+	it("refuses every flag outside its allowlist, including those that load code or tools", () => {
+		for (const args of [
+			["--extension", "/workspace/evil.js"],
+			["-e", "/workspace/evil.js"],
+			["--extension=/workspace/evil.js"],
+			["-e", "builtin:mcp"],
+			[
+				"-e",
+				"/opt/factory/pkg/node_modules/pi-herdr-agents/maestro/adapters/pi/child/../../../../../../../workspace/evil.ts",
+			],
+			["--mode", "rpc", "-e", "/workspace/evil.js"],
+			["--mcp-server", "https://evil.example"],
+			["--skill", "/workspace/skill"],
+			["--prompt-template", "/workspace/t.md"],
+			["--theme", "/workspace/theme"],
+			["--plan"],
+			["--no-builtin-tools"],
+			["--fork", "x"],
+			["--export", "/workspace/out.html"],
+			["--provider", "anthropic"],
+			["--approve=1"],
+			["--model"],
+			["-x"],
+		]) {
+			assert.equal(wrapPiArgv(args, allowed).ok, false, args.join(" "));
+		}
+	});
+
+	it("keeps the flags the stage Pi and pi-herdr-agents children use", () => {
+		const stage = wrapPiArgv(
+			[
+				"--mode",
+				"rpc",
+				"--session-dir",
+				"/run/pi-agent/sessions",
+				"--model",
+				"openai/gpt-6.1-sol",
+			],
+			allowed,
+		);
+
+		const prompted = wrapPiArgv(
+			[
+				"--session",
+				"/run/pi-agent/sessions/x.jsonl",
+				"--extension=/opt/factory/pkg/node_modules/pi-herdr-agents/maestro/adapters/pi/child/subagent-done.ts",
+				"--append-system-prompt",
+				"/run/pi-agent/sessions/artifacts/a/context/c-sysprompt.md",
+				"--no-session",
+				"hello",
+			],
+			allowed,
+		);
+
+		assert.ok(stage.ok && prompted.ok);
+		assert.deepEqual(stage.argv.slice(5), [
+			"--mode",
+			"rpc",
+			"--session-dir",
+			"/run/pi-agent/sessions",
+			"--model",
+			"openai/gpt-6.1-sol",
+		]);
+		assert.deepEqual(prompted.argv.slice(5), [
+			"--session",
+			"/run/pi-agent/sessions/x.jsonl",
+			"--extension",
+			"/opt/factory/pkg/node_modules/pi-herdr-agents/maestro/adapters/pi/child/subagent-done.ts",
+			"--append-system-prompt",
+			"/run/pi-agent/sessions/artifacts/a/context/c-sysprompt.md",
+			"--no-session",
+			"hello",
+		]);
 	});
 });
 
