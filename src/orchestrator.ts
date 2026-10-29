@@ -616,13 +616,20 @@ export class Orchestrator {
 		};
 	}
 
-	/** Ends finished and stalled stages. It makes no reads, so nothing delays a stall. */
+	/**
+	 * Ends finished and stalled stages. Every stall is aborted and every ended
+	 * stage moves to its next phase in memory first; only then are their markers
+	 * published, so no marker request delays an abort.
+	 */
 	async #reconcileStages(now: number, limits: Limits): Promise<void> {
+		const ended: ActiveRun[] = [];
+
 		for (const run of this.state.runs.values()) {
 			const { phase } = run;
 
 			if (phase.kind === "running" && phase.result !== null) {
-				await this.#failed(run, "stage_failed", phase.result.usage, limits);
+				this.#endStage(run, "stage_failed", phase.result.usage, limits);
+				ended.push(run);
 			} else if (
 				phase.kind === "running" &&
 				now - phase.lastProgressAt > limits.stallMs(run.stage)
@@ -634,9 +641,12 @@ export class Orchestrator {
 					runId: run.runId,
 					stage: run.stage,
 				});
-				await this.#failed(run, "stalled", 0, limits);
+				this.#endStage(run, "stalled", 0, limits);
+				ended.push(run);
 			}
 		}
+
+		for (const run of ended) await this.#sync(run);
 	}
 
 	/** Refreshes every claim against GitHub, before the per-tick reads that gate dispatch. */
@@ -775,12 +785,13 @@ export class Orchestrator {
 		});
 	}
 
-	async #failed(
+	/** Moves a run whose stage ended to a retry or a terminal status, in memory. */
+	#endStage(
 		run: ActiveRun,
 		cause: RetryCause,
 		usage: number,
 		limits: Limits,
-	): Promise<void> {
+	): void {
 		run.usage += usage;
 		this.state.totals.usage += usage;
 
@@ -808,7 +819,6 @@ export class Orchestrator {
 			next: desiredStatus(run.phase),
 			attempt: run.attempt,
 		});
-		await this.#sync(run);
 	}
 
 	async #readLedger(issue: number): Promise<Read<MarkerLedger>> {
@@ -1073,7 +1083,8 @@ export class Orchestrator {
 		const limits = limitsOf(this.#config);
 
 		if (marker.status === "running") {
-			await this.#failed(run, "interrupted", 0, limits);
+			this.#endStage(run, "interrupted", 0, limits);
+			await this.#sync(run);
 		} else if (marker.status === "retrying") {
 			const created = ledger.markers.at(-1)?.createdAt ?? "";
 

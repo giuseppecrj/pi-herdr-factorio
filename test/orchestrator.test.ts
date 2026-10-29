@@ -1906,6 +1906,56 @@ describe("Orchestrator same-second cache", () => {
 	});
 });
 
+describe("Orchestrator stall aborts", () => {
+	it("aborts every stalled stage before it posts any marker", async () => {
+		const { github, clock, executor, wire, start } = world();
+
+		github.add(labeled(14));
+		github.add(labeled(15));
+		executor.fallback = { kind: "hang" };
+
+		const controller = start();
+
+		await controller.tick();
+		assert.equal(executor.launches.length, 2);
+		clock.t += 300_001;
+
+		let unhold: () => void = () => undefined;
+
+		const held = new Promise<void>((done) => {
+			unhold = () => done();
+		});
+
+		let posted: (aborted: boolean[]) => void = () => undefined;
+
+		const posting = new Promise<boolean[]>((done) => {
+			posted = (aborted) => done(aborted);
+		});
+
+		wire.intercept = async (command, args) => {
+			if (args.includes("POST")) {
+				posted(executor.launches.map((launch) => launch.signal.aborted));
+				await held;
+			}
+
+			return github.exec(command, args);
+		};
+
+		const ticking = controller.tick();
+
+		assert.deepEqual(await posting, [true, true]);
+		unhold();
+
+		const report = await ticking;
+
+		assert.deepEqual(
+			report.runs.map((run) => run.status),
+			["retrying", "retrying"],
+		);
+		assert.equal(report.totals.stalls, 2);
+	});
+});
+
 describe("acquireLock", () => {
 	const now = () => START;
 
