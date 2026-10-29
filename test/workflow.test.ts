@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import { EXIT, runCli } from "../server/cli.ts";
 import { digestOf } from "../src/run.ts";
@@ -723,6 +727,70 @@ async function cli(
 
 	return { code, json, stderr };
 }
+
+describe("server/cli.ts as a process", () => {
+	const entry = fileURLToPath(new URL("../server/cli.ts", import.meta.url));
+
+	it("reports cannot run gh when gh is not on PATH", () => {
+		const emptyPath = mkdtempSync(join(tmpdir(), "factory-no-gh-"));
+
+		const error = {
+			kind: "source_unavailable",
+			cause: "other",
+			status: null,
+			message: "cannot run gh",
+		};
+
+		try {
+			const run = (command: string) =>
+				spawnSync(
+					process.execPath,
+					[entry, command, "--json", "--repo", repo],
+					{ encoding: "utf8", env: { PATH: emptyPath } },
+				);
+
+			const status = run("status");
+
+			assert.equal(status.status, EXIT.ok, status.stderr);
+			assert.deepEqual(JSON.parse(status.stdout).workflowError, error);
+
+			const check = run("workflow-check");
+
+			assert.equal(check.status, EXIT.invalid, check.stderr);
+			assert.deepEqual(JSON.parse(check.stdout).error, error);
+		} finally {
+			rmSync(emptyPath, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps a gh that exits non-zero an ordinary failure", () => {
+		const binPath = mkdtempSync(join(tmpdir(), "factory-gh-exits-"));
+
+		try {
+			writeFileSync(
+				join(binPath, "gh"),
+				"#!/bin/sh\necho 'gh: Not Found (HTTP 404)' >&2\nexit 1\n",
+				{ mode: 0o755 },
+			);
+
+			const run = spawnSync(
+				process.execPath,
+				[entry, "status", "--json", "--repo", repo],
+				{ encoding: "utf8", env: { PATH: binPath } },
+			);
+
+			assert.equal(run.status, EXIT.ok, run.stderr);
+			assert.deepEqual(JSON.parse(run.stdout).workflowError, {
+				kind: "source_unavailable",
+				cause: "not_found",
+				status: 404,
+				message: "cannot resolve the branch: not found (HTTP 404)",
+			});
+		} finally {
+			rmSync(binPath, { recursive: true, force: true });
+		}
+	});
+});
 
 describe("server/cli.ts", () => {
 	const repoArgs = ["--json", "--repo", repo];

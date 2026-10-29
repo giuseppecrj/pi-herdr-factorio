@@ -172,6 +172,8 @@ async function execFile(
 		maxBuffer: 4 * 1024 * 1024,
 	});
 
+	if (result.error !== undefined && result.pid === 0) throw result.error;
+
 	return {
 		stdout: result.stdout ?? "",
 		stderr:
