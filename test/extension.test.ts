@@ -21,11 +21,11 @@ repository: giuseppecrj/pi-herdr-factorio
 Write the test first.
 `;
 
-const token = "ghp_TOKEN0123456789";
-const credentialedOrigin = `https://x-access-token:${token}@github.com/giuseppecrj/pi-herdr-factorio.git`;
+const secret = `ghp_${"aB3dE6gH9k".repeat(4).slice(0, 36)}`;
+const credentialedOrigin = `https://x-access-token:${secret}@github.com/giuseppecrj/pi-herdr-factorio.git`;
 
 function assertNoCredential(text: string): void {
-	assert.doesNotMatch(text, new RegExp(token));
+	assert.doesNotMatch(text, new RegExp(secret));
 	assert.doesNotMatch(text, /x-access-token/);
 }
 
@@ -132,7 +132,7 @@ describe("/factory command", () => {
 
 		assert.match(
 			text,
-			/^workflow +unavailable: source_unavailable: .*error connecting/m,
+			/^workflow +unavailable: source_unavailable: cannot resolve the branch: network error$/m,
 		);
 		assert.match(text, /^controller +unavailable/m);
 		assert.match(text, /^execution +disabled$/m);
@@ -174,45 +174,6 @@ describe("/factory command", () => {
 			/^workflow +unavailable: origin is not a GitHub repository$/m,
 		);
 		assert.doesNotMatch(text, /hunter2|deploy|gitlab|team\/repo/);
-	});
-
-	it("redacts credentials in gh stderr and failing exec messages", async () => {
-		const leak = `fatal: unable to access '${credentialedOrigin}/': Could not resolve host`;
-
-		const stderrText = await factoryCommandText(
-			"status",
-			sources(ok(remote), () => ({ stdout: "", stderr: leak, code: 1 })),
-		);
-
-		assert.match(stderrText, /^workflow +unavailable: source_unavailable: /m);
-		assertNoCredential(stderrText);
-
-		const sent: string[] = [];
-		let handler: ((args: string) => Promise<void>) | undefined;
-
-		registerFactory({
-			registerCommand: (_name, options) => {
-				// SAFETY: the factory handler reads only `cwd` from its context.
-				const ctx = { cwd: "/work/checkout" } as Parameters<
-					typeof options.handler
-				>[1];
-
-				handler = (args) => options.handler(args, ctx);
-			},
-			sendMessage: (message) => {
-				sent.push(String(message.content));
-			},
-			exec: async (command) => {
-				if (command === "git") return { ...ok(remote), killed: false };
-
-				throw new Error(`spawn failed: ${leak}`);
-			},
-		});
-
-		await handler?.("status");
-
-		assert.match(sent[0] ?? "", /spawn failed/);
-		assertNoCredential(sent[0] ?? "");
 	});
 
 	it("reads main, never another branch", async () => {
@@ -264,5 +225,182 @@ describe("/factory command", () => {
 		assert.match(sent[0] ?? "", /^pi-herdr-factorio /);
 		assert.ok(cwds.length > 0);
 		assert.ok(cwds.every((cwd) => cwd === "/work/checkout"));
+	});
+});
+
+function serving(text: string): (args: readonly string[]) => ExecResult {
+	return (args) => (args.includes("--jq") ? ok(`${mainSha}\n`) : ok(text));
+}
+
+function frontMatter(lines: string): string {
+	return `---\nrepository: giuseppecrj/pi-herdr-factorio\n${lines}\n---\nbody\n`;
+}
+
+type Scenario = {
+	origin: string;
+	gh: (args: readonly string[]) => Promise<ExecResult>;
+};
+
+function file(text: string): Scenario {
+	return { origin: remote, gh: async (args) => serving(text)(args) };
+}
+
+function failing(result: () => Promise<ExecResult>, step: "resolve" | "fetch") {
+	return {
+		origin: remote,
+		gh: async (args: readonly string[]) =>
+			step === "fetch" && args.includes("--jq") ? ok(`${mainSha}\n`) : result(),
+	};
+}
+
+const scenarios: [string, Scenario][] = [
+	[
+		"a YAML error excerpt with an unclosed [",
+		file(`---\nrepository: [${secret}\n---\n`),
+	],
+	[
+		"an anchor name",
+		file(frontMatter(`polling: &${secret}\n  interval_ms: 1`)),
+	],
+	["an integer value", file(frontMatter(`polling:\n  interval_ms: ${secret}`))],
+	[
+		"a model value",
+		file(frontMatter(`stages:\n  build:\n    model: ${secret}`)),
+	],
+	[
+		"a checkpoint mode",
+		file(frontMatter(`checkpoints:\n  approve_merge:\n    mode: ${secret}`)),
+	],
+	[
+		"an environment reference",
+		file(frontMatter(`workspace:\n  root: $${secret}`)),
+	],
+	["a repository value", file(`---\nrepository: owner/${secret}\n---\n`)],
+	["a stage heading", file(`${frontMatter("")}\n## ${secret}\n`)],
+	[
+		"an unknown section key",
+		file(frontMatter(`polling:\n  "token ${secret}": 1`)),
+	],
+	[
+		"gh stderr when resolving",
+		failing(
+			async () => ({ stdout: "", stderr: `gh: ${secret} (HTTP 401)`, code: 1 }),
+			"resolve",
+		),
+	],
+	[
+		"gh stderr when fetching",
+		failing(
+			async () => ({
+				stdout: "",
+				stderr: `fatal: '${credentialedOrigin}' (HTTP 403)`,
+				code: 1,
+			}),
+			"fetch",
+		),
+	],
+	[
+		"a query string in gh stderr",
+		failing(
+			async () => ({
+				stdout: "",
+				stderr: `Get "https://api.github.com/x?access_token=${secret}": no such host`,
+				code: 1,
+			}),
+			"resolve",
+		),
+	],
+	[
+		"a rejected exec when resolving",
+		failing(
+			async () => Promise.reject(new Error(`spawn gh ${credentialedOrigin}`)),
+			"resolve",
+		),
+	],
+	[
+		"a rejected exec when fetching",
+		failing(
+			async () => Promise.reject(new Error(`spawn gh ?token=${secret}`)),
+			"fetch",
+		),
+	],
+	[
+		"a query string in origin",
+		{
+			origin: `https://github.com/giuseppecrj/pi-herdr-factorio.git?token=${secret}\n`,
+			gh: async (args) => online(args),
+		},
+	],
+	[
+		"an origin that hides its host before ?@",
+		{
+			origin: `https://evil.io?token=${secret}@github.com/giuseppecrj/pi-herdr-factorio.git\n`,
+			gh: async (args) => online(args),
+		},
+	],
+];
+
+async function sentFor(scenario: Scenario): Promise<string[]> {
+	const sent: string[] = [];
+	let handler: ((args: string) => Promise<void>) | undefined;
+
+	registerFactory({
+		registerCommand: (_name, options) => {
+			// SAFETY: the factory handler reads only `cwd` from its context.
+			const ctx = { cwd: "/work/checkout" } as Parameters<
+				typeof options.handler
+			>[1];
+
+			handler = (args) => options.handler(args, ctx);
+		},
+		sendMessage: (message) => {
+			sent.push(String(message.content));
+		},
+		exec: async (command, args) =>
+			command === "git"
+				? { ...ok(scenario.origin), killed: false }
+				: { ...(await scenario.gh(args)), killed: false },
+	});
+
+	await handler?.("status");
+
+	return sent;
+}
+
+describe("untrusted text never reaches /factory status", () => {
+	it("uses a realistic 40-character token", () => {
+		assert.match(secret, /^ghp_[A-Za-z0-9]{36}$/);
+	});
+
+	for (const [name, scenario] of scenarios) {
+		it(`withholds ${name}`, async () => {
+			const exec: Exec = async (command, args) =>
+				command === "git" ? ok(scenario.origin) : scenario.gh(args);
+
+			const text = await factoryCommandText("status", {
+				exec,
+				env: (key) => (key === "HOME" ? "/home/factory" : undefined),
+			});
+
+			assert.match(text, /^workflow +unavailable: /m);
+			assertNoCredential(text);
+
+			const sent = await sentFor(scenario);
+
+			assert.equal(sent.length, 1);
+			assert.match(sent[0] ?? "", /^workflow +unavailable: /m);
+			assertNoCredential(sent[0] ?? "");
+		});
+	}
+
+	it("reports a rejected gh exec as other", async () => {
+		const sent = await sentFor(
+			failing(async () => Promise.reject(new Error("spawn failed")), "fetch"),
+		);
+
+		assert.match(
+			sent[0] ?? "",
+			/^workflow +unavailable: source_unavailable: cannot run gh$/m,
+		);
 	});
 });

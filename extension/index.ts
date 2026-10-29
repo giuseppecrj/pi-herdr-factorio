@@ -4,6 +4,7 @@ import { formatStageTable } from "../src/stages.ts";
 import {
 	type EnvLookup,
 	type Exec,
+	type ExecResult,
 	githubRepoFromRemote,
 	loadWorkflow,
 	MODEL_STAGES,
@@ -67,7 +68,13 @@ export function formatStatus(version: string, workflow: WorkflowState): string {
 export async function readWorkflowState(
 	sources: StatusSources,
 ): Promise<WorkflowState> {
-	const remote = await sources.exec("git", ["remote", "get-url", "origin"]);
+	let remote: ExecResult;
+
+	try {
+		remote = await sources.exec("git", ["remote", "get-url", "origin"]);
+	} catch {
+		return { kind: "no_repository", reason: "cannot run git" };
+	}
 
 	if (remote.code !== 0) {
 		return { kind: "no_repository", reason: "no git remote named origin" };
@@ -109,18 +116,11 @@ export function registerFactory(
 	pi.registerCommand("factory", {
 		description: "Software factory: /factory status",
 		handler: async (args, ctx) => {
-			const exec: Exec = async (command, commandArgs) => {
-				try {
-					return await pi.exec(command, [...commandArgs], {
-						cwd: ctx.cwd,
-						timeout: FETCH_TIMEOUT_MS,
-					});
-				} catch (error) {
-					const message = error instanceof Error ? error.message : "failed";
-
-					return { stdout: "", stderr: `${command}: ${message}`, code: 127 };
-				}
-			};
+			const exec: Exec = (command, commandArgs) =>
+				pi.exec(command, [...commandArgs], {
+					cwd: ctx.cwd,
+					timeout: FETCH_TIMEOUT_MS,
+				});
 
 			pi.sendMessage({
 				customType: STATUS_MESSAGE_TYPE,

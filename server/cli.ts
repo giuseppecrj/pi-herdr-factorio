@@ -46,11 +46,8 @@ function parse(argv: readonly string[]): Parsed {
 
 	try {
 		parsed = parseCliArgs(argv);
-	} catch (error) {
-		return {
-			kind: "usage",
-			message: error instanceof Error ? error.message : "bad arguments",
-		};
+	} catch {
+		return { kind: "usage", message: "unrecognized or incomplete options" };
 	}
 
 	const { values, positionals } = parsed;
@@ -61,7 +58,7 @@ function parse(argv: readonly string[]): Parsed {
 	}
 
 	if (extra.length > 0) {
-		return { kind: "usage", message: `unexpected ${extra.join(" ")}` };
+		return { kind: "usage", message: "unexpected extra arguments" };
 	}
 
 	if (values.json !== true)
@@ -83,7 +80,10 @@ function parse(argv: readonly string[]): Parsed {
 
 	for (const branch of [ref, reloadRef]) {
 		if (branch !== null && !isBranchName(branch)) {
-			return { kind: "usage", message: `${branch} is not a branch name` };
+			return {
+				kind: "usage",
+				message: "--ref and --reload-ref must be branch names",
+			};
 		}
 	}
 

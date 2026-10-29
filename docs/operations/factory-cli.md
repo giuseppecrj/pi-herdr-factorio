@@ -10,7 +10,7 @@ Every command reads `.github/factory/WORKFLOW.md` from GitHub through `gh`, neve
 
 No command starts a controller, calls a model or writes to GitHub.
 
-Output never contains URL credentials. Anything shaped like `scheme://user:secret@` in stdout, stderr or `/factory status` text, including `gh` errors and text quoted from `WORKFLOW.md`, is printed as `scheme://<redacted>@`.
+Errors and warnings carry only text the factory builds itself. They never quote `gh` output, an exec failure, a YAML error message, a value from `WORKFLOW.md` or a command-line argument. A second layer still redacts URL credentials: anything shaped like `scheme://user:secret@` in stdout, stderr or `/factory status` text is printed as `scheme://<redacted>@`.
 
 ## Commands
 
@@ -45,13 +45,19 @@ A branch name contains only letters, digits, `.`, `_`, `-` and `/`. It does not 
 | `kind` | Cause |
 | --- | --- |
 | `source_unavailable` | The branch did not resolve to a SHA: it does not exist, the name is invalid, or `gh` failed. `sha` is `null`. It is also reported when `gh` could not be run at all, at either step. In that case `sha` is set if the branch had already resolved. |
-| `missing_workflow_file` | The branch resolved, but fetching `WORKFLOW.md` at that SHA failed. The message says `not found` for HTTP 404 and gives `gh`'s first stderr line otherwise. |
+| `missing_workflow_file` | The branch resolved, but fetching `WORKFLOW.md` at that SHA failed. |
 | `workflow_parse_error` | The front matter has no closing `---`, its YAML has an error or a warning, such as a duplicate key or an unresolved tag, or it uses an anchor or alias. Line numbers count from the first line of `WORKFLOW.md`. |
 | `workflow_front_matter_missing` | The file does not start with a `---` line. Front matter is required. |
 | `workflow_front_matter_not_a_map` | The front matter is empty or is not a YAML map. |
 | `workflow_validation_error` | A field failed validation. `field` holds its dotted YAML path, such as `stages.build.max_turns`, `guidance` or `hooks`. |
 
-Each error has `kind` and `message`. Only `workflow_validation_error` has `field`. Validation stops at the first failing field.
+Each error has `kind` and `message`. The other fields depend on the kind:
+
+- `source_unavailable` and `missing_workflow_file` have `cause` and `status`. `cause` is `not_found` for HTTP 404, `auth` for HTTP 401 or 403, `network` when `gh` could not reach GitHub, and `other` for anything else, including a `gh` that could not be run. `status` is the HTTP status when `gh` printed one as `HTTP <code>`, and `null` otherwise. The message is `cannot resolve the branch: <cause>` or `cannot fetch .github/factory/WORKFLOW.md: <cause>`, followed by ` (HTTP <code>)` when `status` is set. A `gh` that could not be run gives `cannot run gh`.
+- `workflow_parse_error` has `code`, `line` and `column`. For a YAML error, `code` is the `yaml` library's error code, such as `BAD_INDENT` or `DUPLICATE_KEY`, and the message is `YAML <code> at line <line>, column <column>`. The factory adds two codes: `FRONT_MATTER_UNCLOSED` at line 1, column 1, and `ANCHOR_OR_ALIAS` at the first anchor or alias.
+- `workflow_validation_error` has `field`. The message is the field followed by the rule it broke, such as `polling.interval_ms must be an integer of at least 10000`. It never repeats the offending value.
+
+Validation stops at the first failing field. A key from `WORKFLOW.md` appears in `field` or in a warning only when it matches `^[A-Za-z0-9_.-]{1,64}$`. Any other key is shown as `(name withheld)`, so an unknown top-level key of that kind gives the warning `unknown key (name withheld)`.
 
 ## `workflow-check` output
 
@@ -64,7 +70,7 @@ Each error has `kind` and `message`. Only `workflow_validation_error` has `field
 | `verification` | boolean | `true` when `ref` is not `main`. |
 | `valid` | boolean | `true` when the file loaded and passed validation. |
 | `error` | object or `null` | The error, described under error kinds. |
-| `warnings` | string array | One entry per ignored unknown top-level key. |
+| `warnings` | string array | One entry per ignored unknown top-level key: `unknown key <key> ignored`, or `unknown key (name withheld)`. |
 | `config` | object or `null` | The validated configuration, described under configuration. |
 | `guidance` | object or `null` | `general`, the text before the first stage heading, and `stages`, a map from stage name to its section text. |
 | `reload` | object or `null` | Present only with `--reload-ref`. |
@@ -100,7 +106,12 @@ The `reload` object has these fields:
 
 ## `/factory status`
 
-The Pi extension command shows the same workflow state as text. It finds the repository from `git remote get-url origin` in the session's working directory and always loads `main`. An `https` origin with credentials in it still resolves to its repository. When `origin` is missing or is not a `github.com` remote, or when `gh` fails, it prints `workflow    unavailable:` with the reason. For a remote that is not on GitHub, the reason is only `origin is not a GitHub repository`, and the URL is never printed. It always prints `controller  unavailable` and `execution   disabled`, followed by the stage table.
+The Pi extension command shows the same workflow state as text. It finds the repository from `git remote get-url origin` in the session's working directory and always loads `main`. It accepts exactly two origin forms:
+
+- `https://github.com/<owner>/<repo>`, with an optional `.git`. The host must be exactly `github.com`, with no port, query or fragment, and the path must have exactly two segments. Credentials in the URL are allowed and ignored.
+- `git@github.com:<owner>/<repo>`, with an optional `.git`.
+
+Any other origin, including `ssh://` URLs, is not a GitHub repository. When `origin` is missing or is not accepted, or when `gh` fails, it prints `workflow    unavailable:` with the reason. For a remote that is not accepted, the reason is only `origin is not a GitHub repository`, and the URL is never printed. It always prints `controller  unavailable` and `execution   disabled`, followed by the stage table.
 
 ## Configuration
 

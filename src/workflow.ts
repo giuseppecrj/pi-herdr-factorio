@@ -8,6 +8,7 @@ import {
 	type ParsedNode,
 	parseDocument,
 	visit,
+	type YAMLError,
 } from "yaml";
 import { type Digest, digestOf, type Stage } from "./run.ts";
 import { STAGE_ORDER } from "./stages.ts";
@@ -76,10 +77,28 @@ export type WorkflowSnapshot = {
 	readonly warnings: readonly string[];
 };
 
+export type GhCause = "not_found" | "auth" | "network" | "other";
+
 export type WorkflowError =
-	| { readonly kind: "source_unavailable"; readonly message: string }
-	| { readonly kind: "missing_workflow_file"; readonly message: string }
-	| { readonly kind: "workflow_parse_error"; readonly message: string }
+	| {
+			readonly kind: "source_unavailable";
+			readonly cause: GhCause;
+			readonly status: number | null;
+			readonly message: string;
+	  }
+	| {
+			readonly kind: "missing_workflow_file";
+			readonly cause: GhCause;
+			readonly status: number | null;
+			readonly message: string;
+	  }
+	| {
+			readonly kind: "workflow_parse_error";
+			readonly code: string;
+			readonly line: number;
+			readonly column: number;
+			readonly message: string;
+	  }
 	| { readonly kind: "workflow_front_matter_missing"; readonly message: string }
 	| {
 			readonly kind: "workflow_front_matter_not_a_map";
@@ -148,10 +167,10 @@ const BRANCH_NAME = /^(?!-)(?!.*\.\.)(?!.*\/\/)(?!\/)[A-Za-z0-9._/-]+(?<!\/)$/;
 const MODEL_ID = /^([a-z0-9][a-z0-9-]*)\/([A-Za-z0-9][A-Za-z0-9._:-]*)$/;
 const ENV_REFERENCE = /^\$([A-Za-z_][A-Za-z0-9_]*)$/;
 
-const GITHUB_REMOTE =
-	/^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/;
-
-const HTTPS_USERINFO = /^(https:\/\/)[^/]*@/;
+const SCP_REMOTE = /^git@github\.com:([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/;
+const HTTPS_GITHUB_PREFIX = /^https:\/\/(?:[^\s/?#\\@]*@)?github\.com\//;
+const SAFE_KEY = /^[A-Za-z0-9_.-]{1,64}$/;
+const WITHHELD_NAME = "(name withheld)";
 
 const URL_USERINFO = /([a-z][a-z0-9+.-]*:\/\/)[^\s/?#]*@/gi;
 
@@ -180,11 +199,54 @@ function isStage(input: string): input is Stage {
 	return STAGE_ORDER.some((stage) => stage === input);
 }
 
-export function githubRepoFromRemote(url: string): RepoSlug | null {
-	const bare = url.trim().replace(HTTPS_USERINFO, "$1");
-	const slug = GITHUB_REMOTE.exec(bare)?.[1];
+function repoSlugOf(owner: string, name: string): RepoSlug | null {
+	const slug = `${owner}/${name.endsWith(".git") ? name.slice(0, -4) : name}`;
 
-	return slug !== undefined && isRepoSlug(slug) ? slug : null;
+	return isRepoSlug(slug) ? slug : null;
+}
+
+/**
+ * Accepts `https://github.com/<owner>/<repo>[.git]`, with optional userinfo,
+ * and `git@github.com:<owner>/<repo>[.git]`. Everything else is null.
+ */
+export function githubRepoFromRemote(remote: string): RepoSlug | null {
+	const text = remote.trim();
+
+	if (/\s/.test(text)) return null;
+
+	const scp = SCP_REMOTE.exec(text);
+
+	if (scp !== null) return repoSlugOf(scp[1] ?? "", scp[2] ?? "");
+
+	if (!HTTPS_GITHUB_PREFIX.test(text) || /[?#]/.test(text)) return null;
+
+	let url: URL;
+
+	try {
+		url = new URL(text);
+	} catch {
+		return null;
+	}
+
+	if (
+		url.protocol !== "https:" ||
+		url.hostname !== "github.com" ||
+		url.port !== "" ||
+		url.search !== "" ||
+		url.hash !== ""
+	) {
+		return null;
+	}
+
+	const segments = url.pathname.split("/").slice(1);
+
+	if (segments.length !== 2) return null;
+
+	return repoSlugOf(segments[0] ?? "", segments[1] ?? "");
+}
+
+function keyName(name: string): string {
+	return SAFE_KEY.test(name) ? name : WITHHELD_NAME;
 }
 
 class InvalidWorkflow extends Error {
@@ -227,9 +289,10 @@ function optionalEntries(
 	const entries = entriesOf(parent.get(key) ?? null, field);
 
 	for (const name of entries.keys()) {
-		rejectCommandKey(name, `${field}.${name}`);
+		rejectCommandKey(name, `${field}.${keyName(name)}`);
 
-		if (!allowed.includes(name)) fail(`${field}.${name}`, "unknown key");
+		if (!allowed.includes(name))
+			fail(`${field}.${keyName(name)}`, "unknown key");
 	}
 
 	return entries;
@@ -254,32 +317,35 @@ function readString(node: YamlNode, field: string): string {
 	return text;
 }
 
+type IntegerRange = { min: number; max?: number };
+
+function integerRule(range: IntegerRange): string {
+	if (range.max !== undefined) {
+		return `must be an integer from ${range.min} to ${range.max}`;
+	}
+
+	return range.min === 1
+		? "must be a positive integer"
+		: `must be an integer of at least ${range.min}`;
+}
+
 function readInteger(
 	node: YamlNode,
 	field: string,
-	range: { min: number; max?: number },
+	range: IntegerRange,
 ): number {
 	const text = readString(node, field);
 
-	if (!/^[+-]?[0-9]+$/.test(text)) {
-		fail(field, `must be an integer, got ${text}`);
-	}
+	if (!/^[+-]?[0-9]+$/.test(text)) fail(field, integerRule(range));
 
 	const value = Number(text);
 
-	if (!Number.isSafeInteger(value)) fail(field, `is too large: ${text}`);
-
-	if (value < range.min) {
-		fail(
-			field,
-			range.min === 1
-				? `must be a positive integer, got ${value}`
-				: `must be at least ${range.min}, got ${value}`,
-		);
+	if (!Number.isSafeInteger(value)) {
+		fail(field, `must be an integer no larger than ${Number.MAX_SAFE_INTEGER}`);
 	}
 
-	if (range.max !== undefined && value > range.max) {
-		fail(field, `must be at most ${range.max}, got ${value}`);
+	if (value < range.min || (range.max !== undefined && value > range.max)) {
+		fail(field, integerRule(range));
 	}
 
 	return value;
@@ -299,9 +365,7 @@ function integerOr(
 function readModel(node: YamlNode, field: string): ModelId {
 	const text = readString(node, field);
 
-	if (!isModelId(text)) {
-		fail(field, `must be <provider>/<model>, got ${text}`);
-	}
+	if (!isModelId(text)) fail(field, "must be <provider>/<model>");
 
 	if (text.startsWith("anthropic/")) {
 		fail(
@@ -335,7 +399,7 @@ function readWorkspaceRoot(
 		const value = env(name);
 
 		if (value === undefined || value === "") {
-			fail(field, `${source} is not set`);
+			fail(field, "names an environment variable that is not set");
 		}
 
 		path = value;
@@ -373,7 +437,7 @@ function stageEntries(
 		: new Map<string, YamlNode>();
 
 	for (const name of entries.keys()) {
-		rejectCommandKey(name, `${field}.${name}`);
+		rejectCommandKey(name, `${field}.${keyName(name)}`);
 
 		if (name === "model" && !allowed.includes(name)) {
 			fail(
@@ -382,7 +446,8 @@ function stageEntries(
 			);
 		}
 
-		if (!allowed.includes(name)) fail(`${field}.${name}`, "unknown key");
+		if (!allowed.includes(name))
+			fail(`${field}.${keyName(name)}`, "unknown key");
 	}
 
 	return entries;
@@ -477,7 +542,7 @@ function readCheckpoints(
 	}
 
 	if (mode !== "always") {
-		fail(field, `unknown checkpoint mode ${mode}: use always`);
+		fail(field, "is an unknown checkpoint mode: use always");
 	}
 
 	return Object.freeze({ approveMerge: Object.freeze({ mode }) });
@@ -529,9 +594,15 @@ function readConfig(
 	const warnings: string[] = [];
 
 	for (const key of root.keys()) {
-		rejectCommandKey(key, key);
+		rejectCommandKey(key, keyName(key));
 
-		if (!ROOT_KEYS.includes(key)) warnings.push(`unknown key ${key} ignored`);
+		if (!ROOT_KEYS.includes(key)) {
+			warnings.push(
+				SAFE_KEY.test(key)
+					? `unknown key ${key} ignored`
+					: `unknown key ${WITHHELD_NAME}`,
+			);
+		}
 	}
 
 	if (!root.has("repository")) fail("repository", "is required");
@@ -539,7 +610,7 @@ function readConfig(
 	const repository = readString(root.get("repository") ?? null, "repository");
 
 	if (repository !== repo) {
-		fail("repository", `names ${repository}, but the caller loaded ${repo}`);
+		fail("repository", "must equal the repository the caller loaded");
 	}
 
 	const polling = optionalEntries(root, "polling", "polling", ["interval_ms"]);
@@ -652,7 +723,7 @@ function readGuidance(body: string): Guidance {
 		if (!isStage(heading)) {
 			fail(
 				"guidance",
-				`unknown stage heading "## ${heading}": use one of ${STAGE_ORDER.join(", ")}`,
+				`has a level-2 heading that names no stage: use one of ${STAGE_ORDER.join(", ")}`,
 			);
 		}
 
@@ -732,6 +803,9 @@ export function parseWorkflow(input: {
 	if (split.kind === "unclosed") {
 		return invalid({
 			kind: "workflow_parse_error",
+			code: "FRONT_MATTER_UNCLOSED",
+			line: 1,
+			column: 1,
 			message: "front matter has no closing ---",
 		});
 	}
@@ -745,9 +819,7 @@ export function parseWorkflow(input: {
 
 	const problem = document.errors[0] ?? document.warnings[0];
 
-	if (problem !== undefined) {
-		return invalid({ kind: "workflow_parse_error", message: problem.message });
-	}
+	if (problem !== undefined) return invalid(yamlError(problem, lineCounter));
 
 	const references = anchorsAndAliases(
 		document,
@@ -755,10 +827,20 @@ export function parseWorkflow(input: {
 		lineCounter,
 	);
 
-	if (references !== null) {
+	const first = references[0];
+
+	if (first !== undefined) {
 		return invalid({
 			kind: "workflow_parse_error",
-			message: `anchors and aliases are not allowed: ${references}`,
+			code: "ANCHOR_OR_ALIAS",
+			line: first.line,
+			column: first.column,
+			message: `anchors and aliases are not allowed: ${references
+				.map(
+					(found) =>
+						`${found.what} at line ${found.line}, column ${found.column}`,
+				)
+				.join("; ")}`,
 		});
 	}
 
@@ -791,17 +873,39 @@ export function parseWorkflow(input: {
 	}
 }
 
+function yamlError(
+	problem: YAMLError,
+	lineCounter: LineCounter,
+): WorkflowError {
+	const { line, col } =
+		problem.linePos?.[0] ?? lineCounter.linePos(problem.pos[0]);
+
+	return {
+		kind: "workflow_parse_error",
+		code: problem.code,
+		line,
+		column: col,
+		message: `YAML ${problem.code} at line ${line}, column ${col}`,
+	};
+}
+
+type Reference = {
+	readonly what: "anchor" | "alias";
+	readonly line: number;
+	readonly column: number;
+};
+
 function anchorsAndAliases(
 	document: Document.Parsed,
 	source: string,
 	lineCounter: LineCounter,
-): string | null {
-	const found: string[] = [];
+): Reference[] {
+	const found: Reference[] = [];
 
-	const at = (offset: number): string => {
+	const push = (what: Reference["what"], offset: number): void => {
 		const { line, col } = lineCounter.linePos(offset);
 
-		return `at line ${line}, column ${col}`;
+		found.push({ what, line, column: col });
 	};
 
 	visit(document, {
@@ -809,18 +913,16 @@ function anchorsAndAliases(
 			const start = node.range?.[0] ?? 0;
 
 			if (isAlias(node)) {
-				found.push(`alias *${node.source} ${at(start)}`);
+				push("alias", start);
 			} else if (node.anchor !== undefined) {
 				const offset = source.lastIndexOf(`&${node.anchor}`, start);
 
-				found.push(
-					`anchor &${node.anchor} ${at(offset === -1 ? start : offset)}`,
-				);
+				push("anchor", offset === -1 ? start : offset);
 			}
 		},
 	});
 
-	return found.length === 0 ? null : found.join("; ");
+	return found;
 }
 
 function redactError(error: WorkflowError): WorkflowError {
@@ -835,21 +937,55 @@ function invalid(error: WorkflowError): ParsedWorkflow {
 	return { kind: "invalid", error: redactError(error) };
 }
 
-function firstLine(text: string): string {
-	return text.trim().split("\n")[0] ?? "";
+type GhFailure = { readonly cause: GhCause; readonly status: number | null };
+
+const NETWORK_FAILURE =
+	/error connecting|could not resolve host|no such host|dial tcp|connection (?:refused|reset)|timed? ?out|ETIMEDOUT|ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|TLS handshake/i;
+
+const CAUSE_TEXT: Readonly<Record<GhCause, string>> = {
+	not_found: "not found",
+	auth: "not authorized",
+	network: "network error",
+	other: "gh failed",
+};
+
+/** Classifies a failed `gh` call. Its output is read here and never kept. */
+function ghFailure(result: ExecResult): GhFailure {
+	const code = /\bHTTP (\d{3})\b/.exec(result.stderr)?.[1];
+	const status = code === undefined ? null : Number(code);
+
+	if (status === 404) return { cause: "not_found", status };
+
+	if (status === 401 || status === 403) return { cause: "auth", status };
+
+	if (status !== null) return { cause: "other", status };
+
+	return {
+		cause: NETWORK_FAILURE.test(result.stderr) ? "network" : "other",
+		status: null,
+	};
 }
 
-type GhResult = ExecResult | { readonly rejected: string };
+function ghMessage(prefix: string, failure: GhFailure): string {
+	const status = failure.status === null ? "" : ` (HTTP ${failure.status})`;
+
+	return `${prefix}: ${CAUSE_TEXT[failure.cause]}${status}`;
+}
+
+const GH_REJECTED = {
+	kind: "source_unavailable",
+	cause: "other",
+	status: null,
+	message: "cannot run gh",
+} as const satisfies WorkflowError;
+
+type GhResult = ExecResult | { readonly rejected: true };
 
 async function runGh(exec: Exec, args: readonly string[]): Promise<GhResult> {
 	try {
 		return await exec("gh", args);
-	} catch (error) {
-		return {
-			rejected: firstLine(
-				error instanceof Error ? error.message : String(error),
-			),
-		};
+	} catch {
+		return { rejected: true };
 	}
 }
 
@@ -882,7 +1018,9 @@ export async function loadWorkflow(input: {
 	if (!isBranchName(ref)) {
 		return failed(null, null, {
 			kind: "source_unavailable",
-			message: `${ref} is not a branch name`,
+			cause: "other",
+			status: null,
+			message: "the ref is not a branch name",
 		});
 	}
 
@@ -893,19 +1031,26 @@ export async function loadWorkflow(input: {
 		".object.sha",
 	]);
 
-	if ("rejected" in resolved) {
+	if ("rejected" in resolved) return failed(null, null, GH_REJECTED);
+
+	if (resolved.code !== 0) {
+		const failure = ghFailure(resolved);
+
 		return failed(null, null, {
 			kind: "source_unavailable",
-			message: `cannot resolve ${repo} ${ref}: ${resolved.rejected}`,
+			...failure,
+			message: ghMessage("cannot resolve the branch", failure),
 		});
 	}
 
 	const sha = resolved.stdout.trim();
 
-	if (resolved.code !== 0 || !isGitSha(sha)) {
+	if (!isGitSha(sha)) {
 		return failed(null, null, {
 			kind: "source_unavailable",
-			message: `cannot resolve ${repo} ${ref}: ${firstLine(resolved.stderr) || "no SHA returned"}`,
+			cause: "other",
+			status: null,
+			message: "cannot resolve the branch: gh returned no SHA",
 		});
 	}
 
@@ -916,21 +1061,15 @@ export async function loadWorkflow(input: {
 		`repos/${repo}/contents/${WORKFLOW_PATH}?ref=${sha}`,
 	]);
 
-	if ("rejected" in fetched) {
-		return failed(sha, null, {
-			kind: "source_unavailable",
-			message: `cannot fetch ${WORKFLOW_PATH} at ${sha}: ${fetched.rejected}`,
-		});
-	}
+	if ("rejected" in fetched) return failed(sha, null, GH_REJECTED);
 
 	if (fetched.code !== 0) {
-		const reason = /HTTP 404/.test(fetched.stderr)
-			? "not found"
-			: firstLine(fetched.stderr) || `gh exited ${fetched.code}`;
+		const failure = ghFailure(fetched);
 
 		return failed(sha, null, {
 			kind: "missing_workflow_file",
-			message: `${WORKFLOW_PATH} at ${sha}: ${reason}`,
+			...failure,
+			message: ghMessage(`cannot fetch ${WORKFLOW_PATH}`, failure),
 		});
 	}
 

@@ -10,6 +10,7 @@ import {
 	DEFAULT_MODEL,
 	type EnvLookup,
 	type Exec,
+	type ExecResult,
 	githubRepoFromRemote,
 	isRepoSlug,
 	loadWorkflow,
@@ -243,7 +244,10 @@ describe("parseWorkflow", () => {
 		const other = validation("---\nrepository: someone/else\n---\n");
 
 		assert.equal(other.field, "repository");
-		assert.match(other.message, /someone\/else/);
+		assert.equal(
+			other.message,
+			"repository must equal the repository the caller loaded",
+		);
 	});
 
 	it("rejects zero and negative budgets", () => {
@@ -373,7 +377,8 @@ describe("parseWorkflow", () => {
 		);
 
 		assert.equal(auto.field, "checkpoints.approve_merge.mode");
-		assert.match(auto.message, /unknown checkpoint mode auto/);
+		assert.match(auto.message, /unknown checkpoint mode: use always/);
+		assert.doesNotMatch(auto.message, /auto/);
 
 		const never = validation(
 			frontMatter("checkpoints:\n  approve_merge:\n    mode: never"),
@@ -437,7 +442,8 @@ describe("parseWorkflow", () => {
 		const error = validation(`${frontMatter("")}\n## deploy\nship it\n`);
 
 		assert.equal(error.field, "guidance");
-		assert.match(error.message, /## deploy/);
+		assert.match(error.message, /names no stage/);
+		assert.doesNotMatch(error.message, /deploy/);
 	});
 });
 
@@ -500,9 +506,13 @@ describe("loadWorkflow", () => {
 
 		if (loaded.kind !== "failed") return;
 
-		assert.equal(loaded.error.kind, "missing_workflow_file");
+		assert.partialDeepStrictEqual(loaded.error, {
+			kind: "missing_workflow_file",
+			cause: "not_found",
+			status: 404,
+		});
 		assert.equal(loaded.sha, mainSha);
-		assert.match(loaded.error.message, /not found/);
+		assert.match(loaded.error.message, /not found \(HTTP 404\)/);
 	});
 
 	it("reports an unresolvable ref as source_unavailable", async () => {
@@ -664,7 +674,7 @@ describe("githubRepoFromRemote", () => {
 			githubRepoFromRemote(
 				"ssh://git@github.com/giuseppecrj/pi-herdr-factorio.git",
 			),
-			repo,
+			null,
 		);
 		assert.equal(
 			githubRepoFromRemote(
@@ -676,17 +686,14 @@ describe("githubRepoFromRemote", () => {
 	});
 });
 
-type CliRun = { code: number; json: JsonValue; stderr: string };
+type RawRun = { code: number; stdout: string; stderr: string };
 
-async function cli(
-	argv: string[],
-	branches: Map<string, Branch>,
-): Promise<CliRun> {
+async function runRaw(argv: string[], exec: Exec): Promise<RawRun> {
 	let stdout = "";
 	let stderr = "";
 
 	const code = await runCli(argv, {
-		exec: fakeGh(branches).exec,
+		exec,
 		env,
 		stdout: (text) => {
 			stdout += text;
@@ -696,6 +703,16 @@ async function cli(
 		},
 	});
 
+	return { code, stdout, stderr };
+}
+
+type CliRun = { code: number; json: JsonValue; stderr: string };
+
+async function cli(
+	argv: string[],
+	branches: Map<string, Branch>,
+): Promise<CliRun> {
+	const { code, stdout, stderr } = await runRaw(argv, fakeGh(branches).exec);
 	const json: JsonValue = stdout === "" ? null : JSON.parse(stdout);
 
 	return { code, json, stderr };
@@ -826,100 +843,442 @@ describe("server/cli.ts", () => {
 	});
 });
 
-const token = "ghp_TOKEN0123456789";
-const credentialedOrigin = `https://x-access-token:${token}@github.com/giuseppecrj/pi-herdr-factorio.git`;
-const leakyStderr = `fatal: unable to access '${credentialedOrigin}/': Could not resolve host`;
+const secret = `ghp_${"aB3dE6gH9k".repeat(4).slice(0, 36)}`;
+const credentialedOrigin = `https://x-access-token:${secret}@github.com/giuseppecrj/pi-herdr-factorio.git`;
 
-function assertNoCredential(printed: string): void {
-	assert.doesNotMatch(printed, new RegExp(token));
+function assertNoSecret(printed: string): void {
+	assert.doesNotMatch(printed, new RegExp(secret));
 	assert.doesNotMatch(printed, /x-access-token/);
 	assert.doesNotMatch(printed, /hunter2/);
 }
 
-describe("credential redaction", () => {
-	it("resolves a credentialed GitHub remote to its repository", () => {
-		assert.equal(githubRepoFromRemote(`${credentialedOrigin}\n`), repo);
-		assert.equal(
-			githubRepoFromRemote(
-				`https://${token}@github.com/giuseppecrj/pi-herdr-factorio`,
-			),
+function serving(text: string): Exec {
+	return fakeGh(new Map([["main", { sha: mainSha, text }]])).exec;
+}
+
+function resolvingThen(fetch: () => Promise<ExecResult>): Exec {
+	return async (_command, args) =>
+		args.includes("--jq")
+			? { stdout: `${mainSha}\n`, stderr: "", code: 0 }
+			: fetch();
+}
+
+const leakyFiles: [string, string][] = [
+	[
+		"a YAML error excerpt with an unclosed [",
+		`---\nrepository: [${secret}\n---\n`,
+	],
+	[
+		"a YAML error on a later line",
+		frontMatter(`polling: {interval_ms: [${secret}`),
+	],
+	["a duplicate key", frontMatter(`"${secret}": 1\n"${secret}": 2`)],
+	["an anchor name", frontMatter(`polling: &${secret}\n  interval_ms: 30000`)],
+	["an alias name", frontMatter(`x: *${secret}`)],
+	["an integer value", frontMatter(`polling:\n  interval_ms: ${secret}`)],
+	[
+		"a bounded integer value",
+		frontMatter(`agent:\n  max_concurrent: ${secret}`),
+	],
+	[
+		"a budget value",
+		frontMatter(`stages:\n  build:\n    max_turns: ${secret}`),
+	],
+	["a model value", frontMatter(`stages:\n  build:\n    model: ${secret}`)],
+	[
+		"a checkpoint mode",
+		frontMatter(`checkpoints:\n  approve_merge:\n    mode: ${secret}`),
+	],
+	["an environment reference", frontMatter(`workspace:\n  root: $${secret}`)],
+	["a repository value", `---\nrepository: owner/${secret}\n---\n`],
+	[
+		"a repository URL",
+		`---\nrepository: https://x:${secret}@github.com/a/b\n---\n`,
+	],
+	["a stage heading", `${frontMatter("")}\n## ${secret}\n`],
+	[
+		"an unknown top-level key",
+		frontMatter(`"Authorization: Bearer ${secret}": x`),
+	],
+	[
+		"an unknown key holding a URL",
+		frontMatter(`"https://x:${secret}@example.com": x`),
+	],
+	["an unknown section key", frontMatter(`polling:\n  "token ${secret}": 1`)],
+	["an unknown stage", frontMatter(`stages:\n  "${secret} x": {}`)],
+	[
+		"an unknown stage setting",
+		frontMatter(`stages:\n  build:\n    "x ${secret}": 1`),
+	],
+	[
+		"a query string in a value",
+		frontMatter(`polling:\n  interval_ms: "https://h/x?token=${secret}"`),
+	],
+];
+
+const leakyExecs: [string, Exec][] = [
+	[
+		"gh stderr when resolving",
+		async () => ({
+			stdout: "",
+			stderr: `gh: Bad credentials ${secret} (HTTP 401)`,
+			code: 1,
+		}),
+	],
+	[
+		"gh stdout when resolving",
+		async () => ({ stdout: `${secret}\n`, stderr: "", code: 0 }),
+	],
+	[
+		"gh stderr when fetching",
+		resolvingThen(async () => ({
+			stdout: "",
+			stderr: `fatal: '${credentialedOrigin}' (HTTP 403)`,
+			code: 1,
+		})),
+	],
+	[
+		"gh stdout when fetching",
+		resolvingThen(async () => ({ stdout: secret, stderr: "", code: 1 })),
+	],
+	[
+		"a query string in gh stderr",
+		async () => ({
+			stdout: "",
+			stderr: `Get "https://api.github.com/repos/a/b?access_token=${secret}": dial tcp: lookup api.github.com: no such host`,
+			code: 1,
+		}),
+	],
+	[
+		"a rejected exec when resolving",
+		async () => Promise.reject(new Error(`spawn gh ${credentialedOrigin}`)),
+	],
+	[
+		"a rejected exec when fetching",
+		resolvingThen(async () =>
+			Promise.reject(new Error(`spawn gh ?token=${secret}`)),
+		),
+	],
+];
+
+const leakyArgs: [string, string[]][] = [
+	[
+		"a query string in --ref",
+		["status", "--json", "--repo", repo, "--ref", `main?token=${secret}`],
+	],
+	[
+		"a query string in --reload-ref",
+		[
+			"workflow-check",
+			"--json",
+			"--repo",
 			repo,
-		);
-		assert.equal(
-			githubRepoFromRemote(
-				"https://user:hunter2@gitlab.com/giuseppecrj/pi-herdr-factorio.git",
-			),
-			null,
+			"--reload-ref",
+			`x?token=${secret}`,
+		],
+	],
+	[
+		"a query string in --repo",
+		["status", "--json", "--repo", `a/b?token=${secret}`],
+	],
+	["an unknown option", ["status", "--json", "--repo", repo, `--${secret}`]],
+	["an extra positional", ["status", "--json", "--repo", repo, secret]],
+	["an unknown command", [secret, "--json", "--repo", repo]],
+];
+
+describe("untrusted text never reaches CLI output", () => {
+	it("uses a realistic 40-character token", () => {
+		assert.match(secret, /^ghp_[A-Za-z0-9]{36}$/);
+	});
+
+	for (const [name, text] of leakyFiles) {
+		it(`withholds ${name}`, async () => {
+			for (const command of ["workflow-check", "status"]) {
+				const run = await runRaw(
+					[command, "--json", "--repo", repo],
+					serving(text),
+				);
+
+				assert.notEqual(run.stdout, "");
+				assertNoSecret(run.stdout + run.stderr);
+			}
+		});
+	}
+
+	for (const [name, exec] of leakyExecs) {
+		it(`withholds ${name}`, async () => {
+			for (const command of ["workflow-check", "status"]) {
+				const run = await runRaw([command, "--json", "--repo", repo], exec);
+
+				assert.notEqual(run.stdout, "");
+				assertNoSecret(run.stdout + run.stderr);
+			}
+		});
+	}
+
+	for (const [name, argv] of leakyArgs) {
+		it(`withholds ${name}`, async () => {
+			const run = await runRaw(argv, serving(valid));
+
+			assert.equal(run.code, EXIT.usage);
+			assert.equal(run.stdout, "");
+			assert.match(run.stderr, /Usage:/);
+			assertNoSecret(run.stderr);
+		});
+	}
+
+	it("still redacts URL credentials in valid guidance", async () => {
+		const url = "https://user:hunter2@example.com/x";
+		const text = `${frontMatter("")}\nSee ${url}.\n`;
+
+		for (const command of ["workflow-check", "status"]) {
+			const run = await runRaw(
+				[command, "--json", "--repo", repo],
+				serving(text),
+			);
+
+			assert.equal(run.code, EXIT.ok);
+			assertNoSecret(run.stdout);
+		}
+	});
+});
+
+describe("errors built from factory text", () => {
+	it("reports a YAML error by code and position", () => {
+		assert.deepEqual(errorOf(`---\nrepository: [${secret}\n---\n`), {
+			kind: "workflow_parse_error",
+			code: "BAD_INDENT",
+			line: 2,
+			column: 54,
+			message: "YAML BAD_INDENT at line 2, column 54",
+		});
+
+		assert.partialDeepStrictEqual(
+			errorOf(frontMatter(`"${secret}": 1\n"${secret}": 2`)),
+			{ kind: "workflow_parse_error", code: "DUPLICATE_KEY", line: 4 },
 		);
 	});
 
-	it("redacts credentials in gh stderr at both fetch steps", async () => {
-		const failResolve: Exec = async () => ({
-			stdout: "",
-			stderr: leakyStderr,
-			code: 1,
+	const ghFailures: [string, ExecResult, string, number | null][] = [
+		[
+			"a 404",
+			{ stdout: "", stderr: "gh: Not Found (HTTP 404)", code: 1 },
+			"not_found",
+			404,
+		],
+		[
+			"a 401",
+			{ stdout: "", stderr: "gh: Bad credentials (HTTP 401)", code: 1 },
+			"auth",
+			401,
+		],
+		[
+			"a 403",
+			{ stdout: "", stderr: "gh: Forbidden (HTTP 403)", code: 1 },
+			"auth",
+			403,
+		],
+		[
+			"a 502",
+			{ stdout: "", stderr: "gh: Bad Gateway (HTTP 502)", code: 1 },
+			"other",
+			502,
+		],
+		[
+			"no connection",
+			{ stdout: "", stderr: "error connecting to api.github.com", code: 1 },
+			"network",
+			null,
+		],
+		[
+			"a DNS failure",
+			{
+				stdout: "",
+				stderr: "dial tcp: lookup api.github.com: no such host",
+				code: 1,
+			},
+			"network",
+			null,
+		],
+		["silence", { stdout: "", stderr: "", code: 1 }, "other", null],
+	];
+
+	for (const [name, result, cause, status] of ghFailures) {
+		it(`maps ${name} from gh to cause ${cause} at both steps`, async () => {
+			const resolve = await loadWorkflow({
+				exec: async () => result,
+				repo,
+				ref: "main",
+				env,
+			});
+
+			const fetch = await loadWorkflow({
+				exec: resolvingThen(async () => result),
+				repo,
+				ref: "main",
+				env,
+			});
+
+			assert.equal(resolve.kind, "failed");
+			assert.equal(fetch.kind, "failed");
+
+			if (resolve.kind !== "failed" || fetch.kind !== "failed") return;
+
+			assert.partialDeepStrictEqual(resolve.error, {
+				kind: "source_unavailable",
+				cause,
+				status,
+			});
+			assert.partialDeepStrictEqual(fetch.error, {
+				kind: "missing_workflow_file",
+				cause,
+				status,
+			});
+			assert.match(resolve.error.message, /^cannot resolve the branch: /);
+			assert.match(
+				fetch.error.message,
+				/^cannot fetch \.github\/factory\/WORKFLOW\.md: /,
+			);
 		});
+	}
 
-		const failFetch: Exec = async (_command, args) =>
-			args.includes("--jq")
-				? { stdout: `${mainSha}\n`, stderr: "", code: 0 }
-				: { stdout: "", stderr: leakyStderr, code: 1 };
+	it("reports a rejected exec at either step as other", async () => {
+		const reject = async () => Promise.reject(new Error("spawn gh ENOENT"));
 
-		for (const exec of [failResolve, failFetch]) {
+		for (const exec of [reject, resolvingThen(reject)]) {
 			const loaded = await loadWorkflow({ exec, repo, ref: "main", env });
 
 			assert.equal(loaded.kind, "failed");
 
 			if (loaded.kind !== "failed") continue;
 
-			assert.match(loaded.error.message, /github\.com\/giuseppecrj/);
-			assertNoCredential(
-				JSON.stringify([
-					loaded,
-					checkReport(loaded, null),
-					statusReport(loaded, "0.1.0"),
-				]),
-			);
+			assert.deepEqual(loaded.error, {
+				kind: "source_unavailable",
+				cause: "other",
+				status: null,
+				message: "cannot run gh",
+			});
 		}
 	});
 
-	it("redacts credentials quoted from the workflow file and arguments", async () => {
-		const url = "https://user:hunter2@example.com/x";
+	const rules: [string, string, string][] = [
+		[
+			"polling:\n  interval_ms: abc",
+			"polling.interval_ms",
+			"must be an integer of at least 10000",
+		],
+		[
+			"polling:\n  interval_ms: 9999",
+			"polling.interval_ms",
+			"must be an integer of at least 10000",
+		],
+		[
+			"agent:\n  max_concurrent: 5",
+			"agent.max_concurrent",
+			"must be an integer from 1 to 4",
+		],
+		[
+			"stages:\n  build:\n    wall_ms: 0",
+			"stages.build.wall_ms",
+			"must be a positive integer",
+		],
+		[
+			"retry:\n  max_attempts: 99999999999999999999",
+			"retry.max_attempts",
+			"must be an integer no larger than 9007199254740991",
+		],
+		[
+			"stages:\n  build:\n    model: gpt",
+			"stages.build.model",
+			"must be <provider>/<model>",
+		],
+		[
+			"workspace:\n  root: $UNSET_VARIABLE",
+			"workspace.root",
+			"names an environment variable that is not set",
+		],
+	];
 
-		const files = [
-			frontMatter(`source: ${url}: y`),
-			"---\nrepository: https://user:hunter2@example.com/x\n---\n",
-			frontMatter(`stages:\n  build:\n    model: ${url}`),
-			frontMatter(`"${url}": 1`),
-			`${frontMatter("")}\nSee ${url}.\n`,
-		];
+	for (const [lines, field, rule] of rules) {
+		it(`names the rule for ${field} without its value`, () => {
+			assert.deepEqual(validation(frontMatter(lines)), {
+				kind: "workflow_validation_error",
+				field,
+				message: `${field} ${rule}`,
+			});
+		});
+	}
 
-		for (const text of files) {
-			const branches = new Map([["main", { sha: mainSha, text }]]);
+	it("names an unknown key only when it is a plain identifier", () => {
+		const warnings = (lines: string) => {
+			const parsed = parse(frontMatter(lines));
 
-			for (const command of ["workflow-check", "status"]) {
-				const run = await cli([command, "--json", "--repo", repo], branches);
+			assert.equal(parsed.kind, "valid");
 
-				assertNoCredential(JSON.stringify(run.json));
-			}
+			return parsed.kind === "valid" ? parsed.warnings : [];
+		};
 
-			const parsed = parse(text);
-
-			assertNoCredential(
-				JSON.stringify(
-					parsed.kind === "valid" ? parsed.warnings : parsed.error,
-				),
-			);
-		}
-
-		const usage = await cli(
-			["status", "--json", "--repo", repo, "--ref", url],
-			new Map(),
+		assert.deepEqual(warnings("tracker.v2-x_y: 1"), [
+			"unknown key tracker.v2-x_y ignored",
+		]);
+		assert.deepEqual(warnings('"has space": 1'), [
+			"unknown key (name withheld)",
+		]);
+		assert.deepEqual(warnings(`${"k".repeat(65)}: 1`), [
+			"unknown key (name withheld)",
+		]);
+		assert.equal(
+			validation(frontMatter('polling:\n  "a b": 1')).field,
+			"polling.(name withheld)",
 		);
-
-		assert.equal(usage.code, EXIT.usage);
-		assertNoCredential(usage.stderr);
 	});
+});
+
+describe("origin parsing", () => {
+	const path = "giuseppecrj/pi-herdr-factorio";
+
+	const accepted = [
+		`https://github.com/${path}`,
+		`https://github.com/${path}.git`,
+		`https://github.com/${path}.git\n`,
+		`https://x-access-token:${secret}@github.com/${path}.git`,
+		`https://${secret}@github.com/${path}`,
+		`git@github.com:${path}.git`,
+		`git@github.com:${path}`,
+	];
+
+	for (const remote of accepted) {
+		it(`accepts ${JSON.stringify(remote)}`, () => {
+			assert.equal(githubRepoFromRemote(remote), repo);
+		});
+	}
+
+	const rejected = [
+		`https://evil.io?@github.com/${path}.git`,
+		`https://evil.io#@github.com/${path}.git`,
+		`https://github.com/${path}.git?token=${secret}`,
+		`https://github.com/${path}?`,
+		`https://github.com/${path}#readme`,
+		`https://github.com:443/${path}`,
+		`https://github.com:8443/${path}`,
+		`https://github.com/${path}/`,
+		`https://github.com/${path}/extra`,
+		"https://github.com/giuseppecrj",
+		`https://github.com.evil.io/${path}`,
+		`https://github.com\\@evil.io/${path}`,
+		`http://github.com/${path}`,
+		`ssh://git@github.com/${path}.git`,
+		`git@github.com:${path}.git?x`,
+		`git@evil.io:${path}.git`,
+		`https://user:hunter2@gitlab.com/${path}.git`,
+		"/srv/git/repo.git",
+	];
+
+	for (const remote of rejected) {
+		it(`rejects ${JSON.stringify(remote)}`, () => {
+			assert.equal(githubRepoFromRemote(remote), null);
+		});
+	}
 });
 
 describe("reload verification", () => {
@@ -1041,13 +1400,13 @@ describe("YAML anchors and aliases", () => {
 		[
 			"a valid alias",
 			"common: &common\n  max_turns: 3\nstages:\n  review: *common",
-			/alias \*common at line 6/,
+			/alias at line 6/,
 		],
-		["an unresolved alias", "future: *missing", /alias \*missing at line 3/],
+		["an unresolved alias", "future: *missing", /alias at line 3/],
 		[
 			"an anchor without an alias",
 			"polling: &p\n  interval_ms: 30000",
-			/anchor &p at line 3/,
+			/anchor at line 3/,
 		],
 	] as const;
 
@@ -1133,7 +1492,7 @@ describe("shell-command keys", () => {
 		it(`rejects the top-level key ${key}`, () => {
 			const error = validation(frontMatter(`${key}: x`));
 
-			assert.equal(error.field, key.replaceAll('"', ""));
+			assert.equal(error.field, key.startsWith('"') ? "(name withheld)" : key);
 			assert.match(error.message, /shell commands/);
 		});
 	}
@@ -1163,35 +1522,6 @@ describe("shell-command keys", () => {
 	}
 });
 
-describe("rejecting exec", () => {
-	const reason = new Error(`spawn gh ENOENT ${credentialedOrigin}`);
-
-	const steps: [string, Exec][] = [
-		["resolve", async () => Promise.reject(reason)],
-		[
-			"fetch",
-			async (_command, args) =>
-				args.includes("--jq")
-					? { stdout: `${mainSha}\n`, stderr: "", code: 0 }
-					: Promise.reject(reason),
-		],
-	];
-
-	for (const [step, exec] of steps) {
-		it(`reports a rejected ${step} step as source_unavailable`, async () => {
-			const loaded = await loadWorkflow({ exec, repo, ref: "main", env });
-
-			assert.equal(loaded.kind, "failed");
-
-			if (loaded.kind !== "failed") return;
-
-			assert.equal(loaded.error.kind, "source_unavailable");
-			assert.match(loaded.error.message, /ENOENT/);
-			assertNoCredential(loaded.error.message);
-		});
-	}
-});
-
 describe("workflow file shapes", () => {
 	it("rejects duplicate stage headings", () => {
 		const error = validation(
@@ -1206,7 +1536,8 @@ describe("workflow file shapes", () => {
 		const error = validation(`${frontMatter("")}\n## ship\nnow\n`);
 
 		assert.equal(error.field, "guidance");
-		assert.match(error.message, /unknown stage heading "## ship"/);
+		assert.match(error.message, /names no stage: use one of admit, /);
+		assert.doesNotMatch(error.message, /ship/);
 	});
 
 	it("reads CRLF line endings", () => {
