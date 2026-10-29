@@ -35,7 +35,15 @@ export function parsePermissionLevel(text: string): PermissionLevel | null {
 	return PERMISSION_LEVELS.find((level) => level === text) ?? null;
 }
 
-export function hasWriteAccess(level: PermissionLevel): boolean {
+/** `maintain` counts as write access. `triage` does not. */
+export type WritePermission = Extract<
+	PermissionLevel,
+	"admin" | "maintain" | "write"
+>;
+
+export function hasWriteAccess(
+	level: PermissionLevel,
+): level is WritePermission {
 	return level === "admin" || level === "maintain" || level === "write";
 }
 

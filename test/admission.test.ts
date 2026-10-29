@@ -16,6 +16,7 @@ import { afterEach, describe, it } from "node:test";
 import { EXIT, runCli } from "../server/cli.ts";
 import {
 	type AdmissionReceipt,
+	type AdmittedReceipt,
 	admitTicket,
 	FACTORY_REPOSITORIES,
 	fileAdmissionStore,
@@ -187,6 +188,37 @@ describe("admitTicket", () => {
 		assert.deepEqual(receipt.reasons, [
 			{ kind: "unauthorized", permission: "read" },
 		]);
+	});
+
+	it("admits maintain as write and refuses triage", async () => {
+		const cases: [string, string, object[]][] = [
+			["maintain", "admitted", []],
+			["triage", "refused", [{ kind: "unauthorized", permission: "triage" }]],
+		];
+
+		for (const [level, decision, reasons] of cases) {
+			const github = new FakeGitHub();
+
+			github.permissions.set(`${level}-user`, level);
+			github.add(labeledBy(`${level}-user`));
+
+			const receipt = await admit(github);
+
+			assert.equal(receipt.decision, decision, level);
+			assert.deepEqual(receipt.reasons, reasons, level);
+			assert.equal(receipt.actorPermission, level);
+		}
+
+		const admitted: AdmittedReceipt["actorPermission"][] = [
+			"admin",
+			"maintain",
+			"write",
+		];
+
+		// @ts-expect-error An admitted receipt cannot carry read permission.
+		const read: AdmittedReceipt["actorPermission"] = "read";
+
+		assert.ok(!admitted.includes(read));
 	});
 
 	it("chooses the ready event by time, not by array position", async () => {

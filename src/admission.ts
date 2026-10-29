@@ -20,11 +20,12 @@ import {
 	type TimelineEntry,
 } from "./adapters/github.ts";
 import {
-	decideAdmission,
+	hasWriteAccess,
 	LOCAL_DISABLE_FILE,
 	type PermissionLevel,
 	READY_LABEL,
 	REPO_SWITCH_LABEL,
+	type WritePermission,
 } from "./policy.ts";
 import { type Digest, digestOf, type NonEmpty } from "./run.ts";
 import {
@@ -79,7 +80,10 @@ export type RefusalReason =
 	| { readonly kind: "not_labeled" }
 	| { readonly kind: "no_label_event" }
 	| { readonly kind: "actor_withheld" }
-	| { readonly kind: "unauthorized"; readonly permission: PermissionLevel }
+	| {
+			readonly kind: "unauthorized";
+			readonly permission: Exclude<PermissionLevel, WritePermission>;
+	  }
 	| { readonly kind: "ambiguous_snapshot"; readonly detail: Ambiguity }
 	| { readonly kind: "duplicate_event" }
 	| { readonly kind: "state_unwritable" };
@@ -109,7 +113,7 @@ export type AdmittedReceipt = ReceiptHeader & {
 	readonly eventId: string;
 	readonly eventAt: string;
 	readonly actor: string;
-	readonly actorPermission: PermissionLevel;
+	readonly actorPermission: WritePermission;
 	readonly snapshotDigest: Digest;
 	readonly snapshotSource: SnapshotSource;
 	readonly baseSha: GitSha;
@@ -370,7 +374,7 @@ type Bound = {
 	readonly eventId: string;
 	readonly eventAt: string;
 	readonly actor: string;
-	readonly actorPermission: PermissionLevel;
+	readonly actorPermission: WritePermission;
 	readonly snapshot: IssueSnapshot;
 	readonly snapshotDigest: Digest;
 	readonly snapshotSource: SnapshotSource;
@@ -509,19 +513,12 @@ async function evaluate(input: {
 		});
 	}
 
-	evidence.actorPermission = permission.value;
+	const actorPermission = permission.value;
 
-	const decision = decideAdmission({
-		label: event.label,
-		actorPermission: permission.value,
-	});
+	evidence.actorPermission = actorPermission;
 
-	if (decision.kind === "refused") {
-		return refuse(
-			decision.reason === "unauthorized"
-				? { kind: "unauthorized", permission: permission.value }
-				: { kind: "not_labeled" },
-		);
+	if (!hasWriteAccess(actorPermission)) {
+		return refuse({ kind: "unauthorized", permission: actorPermission });
 	}
 
 	const history = await adapter.readBodyHistory(issue);
@@ -554,7 +551,7 @@ async function evaluate(input: {
 			eventId: event.id,
 			eventAt: event.at,
 			actor: actor.login,
-			actorPermission: permission.value,
+			actorPermission,
 			snapshot: proof.snapshot,
 			snapshotDigest: digest,
 			snapshotSource: proof.source,
@@ -569,8 +566,10 @@ async function evaluate(input: {
  * account with write access, both kill switches are on, and the label-time
  * title and body are proved. It only reads GitHub, writes the admission
  * record, and never starts a model. With the repository switch off or
- * unreadable it still reads the issue, so the refusal receipt shows the
- * event and snapshot it would have bound.
+ * unreadable it still evaluates the issue, so the refusal receipt shows as
+ * much of the event and snapshot as that evaluation reached. The evaluation
+ * stops at its first refusal, such as a workflow that does not load, which
+ * comes before any issue read.
  */
 export async function admitTicket(input: {
 	exec: Exec;

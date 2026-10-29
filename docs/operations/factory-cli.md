@@ -187,11 +187,11 @@ node server/cli.ts admit --json --repo <owner/name> --issue <number> --state-dir
 - `.github/factory/WORKFLOW.md` on `main` is valid. `baseSha` is the `main` SHA it was loaded from.
 - The issue is open, is not a pull request, and has the `factory:ready` label.
 - The latest `factory:ready` entry on the issue timeline is a `labeled` event, not `unlabeled`. This is the admitted event. Latest means the greatest `created_at`, whatever order the timeline returns. When two `factory:ready` entries share that second, admission refuses with `ambiguous_snapshot` and `label_events_same_second`.
-- That event's actor has `admin` or `write` permission on the repository. The issue author does not matter.
+- That event's actor has `admin`, `maintain` or `write` permission on the repository. `maintain` counts as write. `triage`, `read` and `none` are refused. The issue author does not matter.
 - The title and body at the time of the event are proved, as described under snapshot.
 - No admission was recorded before for the same event ID.
 
-It checks the allowlist and the local switch first and stops there, before any `gh` call. When the repository switch is off or unavailable, it still reads the issue, so the receipt shows the event, actor and snapshot it would have bound. It then refuses without recording anything.
+It checks the allowlist and the local switch first and stops there, before any `gh` call. When the repository switch is off or unavailable, it still evaluates the issue in the order of the requests below and stops at the first refusal, so the receipt shows the event, actor and snapshot only as far as that evaluation reached. For example, when `WORKFLOW.md` does not load, the issue is never read, and the reasons are the switch reason followed by `workflow_unavailable`, with the event and snapshot fields `null`. It then refuses without recording anything.
 
 ### Repository switch
 
@@ -249,7 +249,7 @@ An admission writes `<state-dir>/admissions/github/<owner>/<name>/<issue>/<event
 | `eventId` | string or `null` | The admitted or examined label event's ID. |
 | `eventAt` | string or `null` | That event's `created_at`. |
 | `actor` | string or `null` | That event's actor login. A login that does not match GitHub's login grammar is printed as `(withheld)`. |
-| `actorPermission` | string or `null` | `admin`, `write`, `read` or `none`, as GitHub reports it for the actor. |
+| `actorPermission` | string or `null` | The `permission` GitHub reports for the actor: `admin`, `maintain`, `write`, `triage`, `read` or `none`. An admitted receipt has only `admin`, `maintain` or `write`. GitHub folds `maintain` into `write` and `triage` into `read` in this field, so in practice it is `admin`, `write`, `read` or `none`. |
 | `snapshotDigest` | string or `null` | Described under snapshot. |
 | `snapshotSource` | string or `null` | `unedited` or `edit_history`. |
 | `baseSha` | string or `null` | The `main` SHA the trusted workflow was loaded from. |
@@ -279,9 +279,9 @@ Each reason has `kind`. Some have more fields.
 | `timeline_unavailable` | Reading the timeline failed. | `failure` |
 | `actor_withheld` | The event's actor login does not match GitHub's login grammar. Its permission is not looked up. | |
 | `permission_unavailable` | Reading the actor's permission failed. A login that is not a user gives HTTP 404. | `failure` |
-| `unauthorized` | The actor has `read` or `none`. | `permission` |
+| `unauthorized` | The actor has `triage`, `read` or `none`. | `permission` |
 | `snapshot_unavailable` | The GraphQL edit-history read failed. | `failure` |
-| `ambiguous_snapshot` | The label-time title and body cannot be proved. | `detail` |
+| `ambiguous_snapshot` | The admitted label event, or the title and body at its time, cannot be proved. | `detail` |
 | `duplicate_event` | This event was already admitted into this state directory. | |
 | `state_unwritable` | The admission record could not be written, or a directory on its path could not be created. | |
 
