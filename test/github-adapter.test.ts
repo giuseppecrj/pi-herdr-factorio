@@ -47,7 +47,9 @@ function events(count: number) {
 	return Array.from({ length: count }, (_, i) =>
 		labelEvent({
 			id: 1000 + i,
-			at: `2026-10-29T01:00:${String(i).padStart(2, "0")}Z`,
+			at: new Date(Date.UTC(2026, 9, 29, 1, 0, i))
+				.toISOString()
+				.replace(".000Z", "Z"),
 			actor: "writer",
 			label: "documentation",
 			event: i % 2 === 0 ? "labeled" : "unlabeled",
@@ -114,7 +116,60 @@ describe("GitHubTicketAdapter timeline paging", () => {
 			kind: "failed",
 			failure: { kind: "pagination_limit" },
 		});
+		assert.equal(github.calls.length, 4);
+	});
+
+	it("accepts exactly maxPages full pages after an empty confirmation page", async () => {
+		const cases: [number, number, number, number, number | null][] = [
+			[4, 2, 2, 3, 4],
+			[3, 2, 2, 2, 3],
+			[5, 2, 2, 3, null],
+			[1000, 100, 10, 11, 1000],
+			[1001, 100, 10, 11, null],
+		];
+
+		for (const [count, pageSize, maxPages, calls, length] of cases) {
+			const github = new FakeGitHub();
+			const label = `${count} items, ${pageSize} x ${maxPages}`;
+
+			github.add(fakeIssue(14, { timeline: events(count) }));
+
+			const read = await adapterFor(github, pageSize, maxPages).readTimeline(
+				14,
+			);
+
+			assert.deepEqual(
+				read.kind === "ok" ? read.value.length : read.failure,
+				length ?? { kind: "pagination_limit" },
+				label,
+			);
+			assert.equal(github.calls.length, calls, label);
+			assert.equal(
+				github.calls.at(-1)?.[2],
+				`repos/${FAKE_REPO}/issues/14/timeline?per_page=${pageSize}&page=${calls}`,
+				label,
+			);
+		}
+	});
+
+	it("lists exactly maxPages full pages of candidates", async () => {
+		const github = new FakeGitHub();
+
+		for (const number of [14, 15, 16, 17]) github.add(fakeIssue(number));
+
+		const tickets = await adapterFor(github, 2, 2).fetchCandidates();
+
+		assert.equal(tickets.length, 4);
 		assert.equal(github.calls.length, 3);
+
+		github.add(fakeIssue(18));
+
+		await assert.rejects(
+			adapterFor(github, 2, 2).fetchCandidates(),
+			(error) =>
+				error instanceof GitHubReadError &&
+				error.failure.kind === "pagination_limit",
+		);
 	});
 
 	it("keeps label events, renames and other entries apart", async () => {

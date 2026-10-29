@@ -457,27 +457,43 @@ export class GitHubTicketAdapter implements TicketReader {
 		return parsed === undefined ? MALFORMED : { kind: "ok", value: parsed };
 	}
 
+	async #page(path: string, page: number): Promise<Read<readonly JsonValue[]>> {
+		const read = await this.#gh([
+			"api",
+			`repos/${this.repo}/${path}${path.includes("?") ? "&" : "?"}per_page=${this.#paging.pageSize}&page=${page}`,
+		]);
+
+		if (read.kind === "failed") return read;
+
+		const items = arrayOf(read.value);
+
+		return items === null ? MALFORMED : { kind: "ok", value: items };
+	}
+
+	/**
+	 * Reads up to `maxPages` pages. When all of them are full, one more page
+	 * must be empty to prove the list ended; its items are never kept.
+	 */
 	async #pages(path: string): Promise<Read<JsonValue[]>> {
 		const { pageSize, maxPages } = this.#paging;
 		const entries: JsonValue[] = [];
 
 		for (let page = 1; page <= maxPages; page++) {
-			const read = await this.#gh([
-				"api",
-				`repos/${this.repo}/${path}${path.includes("?") ? "&" : "?"}per_page=${pageSize}&page=${page}`,
-			]);
+			const read = await this.#page(path, page);
 
 			if (read.kind === "failed") return read;
+			entries.push(...read.value);
 
-			const items = arrayOf(read.value);
-
-			if (items === null) return MALFORMED;
-			entries.push(...items);
-
-			if (items.length < pageSize) return { kind: "ok", value: entries };
+			if (read.value.length < pageSize) return { kind: "ok", value: entries };
 		}
 
-		return failed({ kind: "pagination_limit" });
+		const confirmation = await this.#page(path, maxPages + 1);
+
+		if (confirmation.kind === "failed") return confirmation;
+
+		return confirmation.value.length === 0
+			? { kind: "ok", value: entries }
+			: failed({ kind: "pagination_limit" });
 	}
 
 	async readIssue(issue: number): Promise<Read<IssueRecord>> {

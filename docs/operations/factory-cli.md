@@ -214,7 +214,7 @@ Every request is an argument array, never a shell string, and names `repos/<owne
 | Repository switch | `gh api repos/<repo>/labels/factory%3Aenabled` |
 | Trusted workflow | the two `workflow-check` requests for `main` |
 | Issue | `gh api repos/<repo>/issues/<n>` |
-| Timeline | `gh api repos/<repo>/issues/<n>/timeline?per_page=100&page=<p>`, from page 1 until a page has fewer than 100 entries, at most 10 pages |
+| Timeline | `gh api repos/<repo>/issues/<n>/timeline?per_page=100&page=<p>`, from page 1 until a page has fewer than 100 entries. When pages 1 to 10 are all full, page 11 is read only to confirm the end: empty means the 1000 entries are the whole timeline, and any entry means `pagination_limit`. |
 | Permission | `gh api repos/<repo>/collaborators/<login>/permission`, with `[` and `]` in a bot login URL-encoded |
 | Snapshot | `gh api graphql -f query=<query> -F owner=<owner> -F name=<name> -F number=<n>` |
 
@@ -292,7 +292,7 @@ The repository switch reason comes first. When the issue also fails a check, tha
 | `gh_failed` | `gh` exited non-zero. | `cause` and `status`, as in the `workflow-check` error kinds |
 | `cannot_run_gh` | `gh` could not be started. | |
 | `malformed_response` | `gh` printed something that is not the expected JSON, such as a proxy error page, a field of the wrong type, or a permission answer for another user. | |
-| `pagination_limit` | The timeline has more than 10 full pages. | |
+| `pagination_limit` | The timeline has more than 1000 entries: 10 full pages and a non-empty 11th. | |
 
 `detail` is one of these:
 
