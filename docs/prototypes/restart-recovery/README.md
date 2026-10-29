@@ -118,7 +118,7 @@ A comment from any other author is ignored. Rule 5 applies to every comment by `
 
 ## Deleted bot comments
 
-Deleting a bot comment is not supported. Only a user with write access can do it, and the deletion moves the issue's `updated_at`, as measured on #119 above. The controller's confirmed floor detects a deletion on a best-effort basis. `docs/operations/factory-cli.md`, under The confirmed floor, says what it detects, what clears `marker_missing`, and the two known gaps: a stage end that posts before the deletion is observed, and a deleted `released` marker on a reopened issue, read by a controller started after the release.
+Only a user with write access can delete a bot comment, and the deletion moves the issue's `updated_at`, as measured on #119 above. The controller tolerates a deletion and reports it as `ledger_behind`: its local claim record mirrors the last marker that landed, and the higher `seq` of that record and the ledger is the run's state. `docs/operations/factory-cli.md`, under The local record and the ledger, gives the rule, the known `duplicate_seq` limit when both are behind, and how to discard a run.
 
 ## Candidate list lag
 
