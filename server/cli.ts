@@ -13,7 +13,6 @@ import {
 	loadWorkflow,
 	type RepoSlug,
 	redactCredentials,
-	reloadWorkflow,
 	type StatusReport,
 	statusReport,
 	TRUSTED_REF,
@@ -107,7 +106,6 @@ function parseCliArgs(argv: readonly string[]) {
 	});
 }
 
-/** Redacts a JSON string value. Every other value passes through. */
 function redactString(_key: string, item: JsonValue): JsonValue {
 	const text = String(item);
 
@@ -157,10 +155,7 @@ export async function runCli(
 		env: io.env,
 	});
 
-	const current = load.kind === "loaded" ? load.snapshot : null;
-	const result = reloadWorkflow(current, next);
-
-	io.stdout(json(checkReport(load, { next, result })));
+	io.stdout(json(checkReport(load, next)));
 
 	return load.kind === "loaded" && next.kind === "loaded"
 		? EXIT.ok

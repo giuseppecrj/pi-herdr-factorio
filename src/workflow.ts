@@ -680,10 +680,6 @@ function readConfig(
 
 const ATX_HEADING = /^ {0,3}#/;
 
-/**
- * Splits guidance on top-level `## <stage>` headings as marked tokenizes
- * them. The lexer only tokenizes; guidance is never rendered.
- */
 function readGuidance(body: string): Guidance {
 	const sections = new Map<Stage, string[]>();
 	const general: string[] = [];
@@ -871,7 +867,6 @@ type Reference = {
 	readonly column: number;
 };
 
-/** Finds anchors and aliases from CST token offsets, so comments never count. */
 function anchorsAndAliases(
 	source: string,
 	lineCounter: LineCounter,
@@ -940,7 +935,6 @@ const CAUSE_TEXT: Readonly<Record<GhCause, string>> = {
 	other: "gh failed",
 };
 
-/** Classifies a failed `gh` call. Its output is read here and never kept. */
 function ghFailure(result: ExecResult): GhFailure {
 	const code = /\bHTTP (\d{3})\b/.exec(result.stderr)?.[1];
 	const status = code === undefined ? null : Number(code);
@@ -1266,8 +1260,12 @@ function inForceOf(snapshot: WorkflowSnapshot): InForce {
 	return { ref: snapshot.ref, sha: snapshot.sha, digest: snapshot.digest };
 }
 
-/** `reload` is `reloadWorkflow(current, next)`. */
-function reloadView(next: WorkflowLoad, reload: Reload): ReloadView {
+function reloadView(current: WorkflowLoad, next: WorkflowLoad): ReloadView {
+	const reload = reloadWorkflow(
+		current.kind === "loaded" ? current.snapshot : null,
+		next,
+	);
+
 	if (next.kind === "loaded") {
 		const { warnings: _warnings, ...view } = loadedView(next.snapshot);
 
@@ -1292,10 +1290,9 @@ function reloadView(next: WorkflowLoad, reload: Reload): ReloadView {
 
 export function checkReport(
 	load: WorkflowLoad,
-	reload: { next: WorkflowLoad; result: Reload } | null,
+	reloadNext: WorkflowLoad | null,
 ): CheckReport {
-	const reloaded =
-		reload === null ? null : reloadView(reload.next, reload.result);
+	const reloaded = reloadNext === null ? null : reloadView(load, reloadNext);
 
 	if (load.kind === "failed") {
 		return {

@@ -583,7 +583,7 @@ describe("reloadWorkflow", () => {
 		assert.equal(reload.snapshot.digest, digestOf(valid));
 		assert.equal(reload.error.kind, "workflow_validation_error");
 
-		const report = checkReport(second, { next: second, result: reload });
+		const report = checkReport(first, second);
 
 		assert.equal(report.reload?.outcome, "kept");
 		assert.equal(report.reload?.inForce?.digest, digestOf(valid));
@@ -1774,10 +1774,7 @@ describe("report types", () => {
 		const check = checkReport(loaded, null);
 		const status = statusReport(loaded, "0.1.0");
 
-		const reload = checkReport(loaded, {
-			next,
-			result: reloadWorkflow(null, next),
-		}).reload;
+		const reload = checkReport(loaded, next).reload;
 
 		if (
 			!view.valid ||
