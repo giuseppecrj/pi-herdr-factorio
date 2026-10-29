@@ -389,10 +389,7 @@ function realRuntime(): ControllerRuntime {
 		},
 		signal: new AbortController().signal,
 		executor: (context) =>
-			sandboxExecutor({
-				...context,
-				xdgRuntimeDir: process.env.XDG_RUNTIME_DIR ?? XDG_RUNTIME_DIR,
-			}),
+			sandboxExecutor({ ...context, xdgRuntimeDir: XDG_RUNTIME_DIR }),
 	};
 }
 
@@ -644,6 +641,8 @@ export async function execFile(
 }
 
 if (import.meta.main) {
+	process.env.XDG_RUNTIME_DIR ??= XDG_RUNTIME_DIR;
+
 	const stop = new AbortController();
 
 	for (const name of ["SIGTERM", "SIGINT"] as const) {

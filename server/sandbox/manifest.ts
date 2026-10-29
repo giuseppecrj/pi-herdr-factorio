@@ -78,3 +78,14 @@ export async function manifestDigest(root: string): Promise<string | null> {
 				.update(`${lines.join("\n")}\n`)
 				.digest("hex");
 }
+
+if (import.meta.main) {
+	const digest = await manifestDigest(process.argv[2] ?? "");
+
+	if (digest === null) {
+		process.stderr.write("manifest: the bundle cannot be read\n");
+		process.exitCode = 1;
+	} else {
+		process.stdout.write(`${digest}\n`);
+	}
+}
