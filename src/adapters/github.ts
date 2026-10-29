@@ -544,7 +544,7 @@ export class GitHubTicketAdapter implements TicketReader {
 			!Number.isSafeInteger(issue) ||
 			issue < 1
 		) {
-			throw new GitHubReadError({ kind: "malformed_response" });
+			throw new Error(`the ref is not an issue of ${this.repo}`);
 		}
 
 		return issue;
@@ -563,7 +563,7 @@ export class GitHubTicketAdapter implements TicketReader {
 	/** Reads a repository issue event, as `repos/<repo>/issues/events` lists it. */
 	normalize(event: JsonValue): FactoryEvent | null {
 		const issue = countOf(pathOf(event, ["issue", "number"]));
-		const entry = objectOf(event) === null ? null : parseTimelineEntry(event);
+		const entry = parseTimelineEntry(event);
 
 		if (
 			issue === null ||

@@ -167,7 +167,7 @@ The list endpoint and `gh variable get` fail the same way. The integration's Git
 From these results, admission binds a `factory:ready` label event at time `L` to a body as follows:
 
 1. If `lastEditedAt` is `null` or earlier than `L`, the current body is the label-time body.
-2. Otherwise, use `userContentEdits` only when all of these hold. `totalCount` equals the number of nodes returned, `includesCreatedEdit` is `true`, the newest `diff` equals the current body, no node has `editedAt` equal to `L`, and the newest node with `editedAt` earlier than `L` has a `diff` and no `deletedAt`. That node's `diff` is the label-time body.
+2. Otherwise, use `userContentEdits` only when all of these hold. `totalCount` equals the number of nodes returned, `includesCreatedEdit` is `true`, the newest node's `diff` equals the current body and its `editedAt` equals `lastEditedAt`, no node has `editedAt` equal to `L`, and exactly one node has the latest `editedAt` earlier than `L`, with a `diff` and no `deletedAt`. That node's `diff` is the label-time body.
 3. Any other case is `ambiguous_snapshot`, and admission refuses.
 
 Timestamps have one-second precision, so an edit in the same second as the label is ambiguous. The title is part of the snapshot. A `renamed` event at or after `L` also gives `ambiguous_snapshot`.

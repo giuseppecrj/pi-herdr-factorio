@@ -191,26 +191,30 @@ export function labelTimeSnapshot(input: {
 		return ambiguous("edited_at_label_time");
 	}
 
-	const before = versions.filter((version) => version.editedAt < labelAt);
+	let latestAt = "";
 
-	const latest = before.reduce((a, b) => (b.editedAt > a.editedAt ? b : a), {
-		editedAt: "",
-		deleted: true,
-		text: null,
-	});
+	for (const { editedAt } of versions) {
+		if (editedAt < labelAt && editedAt > latestAt) latestAt = editedAt;
+	}
 
-	if (latest.editedAt === "") return ambiguous("no_version_before_label");
+	if (latestAt === "") return ambiguous("no_version_before_label");
 
-	const tied = before.filter((version) => version.editedAt === latest.editedAt);
+	const inForce = versions.filter((version) => version.editedAt === latestAt);
+	const [version] = inForce;
 
-	if (tied.length > 1 || latest.deleted || latest.text === null) {
+	if (
+		inForce.length !== 1 ||
+		version === undefined ||
+		version.deleted ||
+		version.text === null
+	) {
 		return ambiguous("version_withheld");
 	}
 
 	return {
 		kind: "proved",
 		source: "edit_history",
-		snapshot: { title: history.title, body: latest.text },
+		snapshot: { title: history.title, body: version.text },
 	};
 }
 

@@ -476,7 +476,7 @@ describe("GitHubTicketAdapter as a TicketReader", () => {
 
 		const foreign = { ...ref, key: "giuseppecrj/other#14" };
 
-		await assert.rejects(adapter.fetchStates([foreign]), GitHubReadError);
+		await assert.rejects(adapter.fetchStates([foreign]), /not an issue of/);
 		await assert.rejects(adapter.fetch(adapter.ref(99)), GitHubReadError);
 	});
 
