@@ -307,14 +307,13 @@ export function backoffMs(retry: number, maxBackoffMs: number): number {
 	return Math.min(10_000 * 2 ** (retry - 1), maxBackoffMs);
 }
 
-function limitsOf(config: WorkflowConfig | null): Limits {
+function limitsOf(config: WorkflowConfig): Limits {
 	return {
-		maxConcurrent: config?.agent.maxConcurrent ?? 0,
-		maxAttempts: config?.retry.maxAttempts ?? DEFAULTS.maxAttempts,
-		maxBackoffMs: config?.retry.maxBackoffMs ?? DEFAULTS.maxBackoffMs,
-		maxTokensPerRun: config?.usage.maxTokensPerRun ?? DEFAULTS.maxTokensPerRun,
-		stallMs: (stage) =>
-			config?.stages[stage].budget.stallMs ?? DEFAULTS.stallMs,
+		maxConcurrent: config.agent.maxConcurrent,
+		maxAttempts: config.retry.maxAttempts,
+		maxBackoffMs: config.retry.maxBackoffMs,
+		maxTokensPerRun: config.usage.maxTokensPerRun,
+		stallMs: (stage) => config.stages[stage].budget.stallMs,
 	};
 }
 
@@ -490,14 +489,16 @@ export class Orchestrator {
 
 		if (!this.#claimsLoaded) await this.#loadClaims();
 
-		await this.#reconcileStages(now, limitsOf(this.#config));
+		const held = this.#limits();
+
+		if (held !== null) await this.#reconcileStages(now, held);
 
 		const candidates = await this.#candidates();
 
 		await this.#reconcileClaims(candidates);
 
 		const gate = await this.#gate();
-		const limits = limitsOf(this.#config);
+		const limits = this.#limits();
 		const reasons = gate.kind === "closed" ? [...gate.reasons] : [];
 
 		if (candidates.kind === "failed") reasons.push("candidates_unavailable");
@@ -509,7 +510,8 @@ export class Orchestrator {
 
 		await this.#confirmEnds();
 
-		const open = gate.kind === "open" && candidates.kind === "ok";
+		const open =
+			gate.kind === "open" && candidates.kind === "ok" && limits !== null;
 
 		if (open) {
 			await this.#dispatch({
@@ -521,6 +523,12 @@ export class Orchestrator {
 				queued,
 				refused,
 			});
+		} else {
+			for (const issue of this.#reserved) {
+				if (!this.state.runs.has(issue) && !queued.includes(issue)) {
+					queued.push(issue);
+				}
+			}
 		}
 
 		this.#input.log("tick", {
@@ -1124,10 +1132,18 @@ export class Orchestrator {
 		return [...this.state.runs.values()].filter(holdsSlot).length;
 	}
 
+	#limits(): Limits | null {
+		return this.#config === null ? null : limitsOf(this.#config);
+	}
+
 	#fits(status: RunStatus): boolean {
+		const limits = this.#limits();
+
+		if (limits === null) return false;
+
 		return (
 			(status !== "claimed" && status !== "blocked") ||
-			this.#active() < limitsOf(this.#config).maxConcurrent
+			this.#active() < limits.maxConcurrent
 		);
 	}
 
@@ -1297,12 +1313,12 @@ export class Orchestrator {
 			workspace,
 		});
 
-		const limits = limitsOf(this.#config);
+		const limits = this.#limits();
 
-		if (marker.status === "running") {
+		if (limits !== null && marker.status === "running") {
 			this.#endStage(run, "interrupted", 0, limits);
 			await this.#sync(run);
-		} else if (marker.status === "retrying") {
+		} else if (limits !== null && marker.status === "retrying") {
 			const created = ledger.markers.find(
 				(entry) => entry.marker.seq === marker.seq,
 			)?.createdAt;
@@ -1843,7 +1859,7 @@ export class Orchestrator {
 		now: number;
 		enabled: boolean;
 		reasons: readonly GateReason[];
-		limits: Limits;
+		limits: Limits | null;
 		queued: readonly number[];
 		absent: readonly number[];
 		refused: TickReport["refused"];
@@ -1875,7 +1891,7 @@ export class Orchestrator {
 			executionEnabled: false,
 			dispatch: { enabled: input.enabled, reasons: input.reasons },
 			workflowSha: this.#workflowSha,
-			maxConcurrent: input.limits.maxConcurrent,
+			maxConcurrent: input.limits?.maxConcurrent ?? 0,
 			runs,
 			queued: input.queued,
 			absent: input.absent,

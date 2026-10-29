@@ -3103,6 +3103,10 @@ function capAt(github: FakeGitHub, limit: number): void {
 	);
 }
 
+function setWorkflow(github: FakeGitHub, from: string, to: string): void {
+	github.workflow = (github.workflow ?? "").replace(from, to);
+}
+
 function omitFromList(github: FakeGitHub, issue: number): Exec {
 	return async (command, args) => {
 		const path = args.find((arg) => arg.startsWith("repos/")) ?? "";
@@ -3318,6 +3322,251 @@ describe("Orchestrator before the first workflow load", () => {
 			"2:blocked",
 			"3:released",
 		]);
+	});
+
+	it("cannot launch an attempt past max_attempts: 1 after a restart whose first workflow read failed", async () => {
+		const { github, clock, executor, start } = world();
+
+		setWorkflow(github, "max_attempts: 3", "max_attempts: 1");
+		github.add(labeled(14));
+		executor.fallback = { kind: "hang" };
+		await start().tick();
+
+		const workflow = github.workflow;
+
+		github.workflow = null;
+		clock.t += 30_000;
+
+		const controller = start();
+		const unloaded = await controller.tick();
+
+		assert.deepEqual(unloaded.runs, []);
+		assert.deepEqual(unloaded.queued, [14]);
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:running"]);
+
+		github.workflow = workflow;
+		clock.t += 30_000;
+
+		const loaded = await controller.tick();
+
+		assert.equal(executor.launches.length, 1);
+		assert.deepEqual(loaded.runs, []);
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:running",
+			"3:failed",
+		]);
+	});
+
+	it("does not fail an interrupted attempt under max_attempts: 5 before the first workflow load", async () => {
+		const { github, clock, executor, start } = world();
+
+		setWorkflow(github, "max_attempts: 3", "max_attempts: 5");
+		github.add(labeled(14));
+		executor.behaviors = [
+			{ kind: "fail", usage: 0 },
+			{ kind: "fail", usage: 0 },
+			{ kind: "hang" },
+		];
+
+		const first = start();
+
+		for (const offset of [0, 1, 10_001, 10_002, 30_002]) {
+			clock.t = START + offset;
+			await first.tick();
+		}
+
+		assert.equal(statuses(github, 14).at(-1), "6:running");
+
+		const workflow = github.workflow;
+
+		github.workflow = null;
+		clock.t = START + 30_003;
+
+		const controller = start();
+		const unloaded = await controller.tick();
+
+		assert.deepEqual(unloaded.runs, []);
+		assert.deepEqual(unloaded.queued, [14]);
+		assert.equal(statuses(github, 14).length, 6);
+
+		github.workflow = workflow;
+		clock.t = START + 60_003;
+
+		const loaded = await controller.tick();
+
+		assert.deepEqual(
+			loaded.runs.map((run) => [run.issue, run.status, run.attempt]),
+			[[14, "retrying", 4]],
+		);
+		assert.equal(statuses(github, 14).at(-1), "7:retrying");
+	});
+
+	it("does not end an interrupted run on the default token budget before the first workflow load", async () => {
+		const { github, clock, executor, start } = world();
+
+		setWorkflow(
+			github,
+			"max_tokens_per_run: 500000",
+			"max_tokens_per_run: 2000000",
+		);
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "fail", usage: 600_000 }, { kind: "hang" }];
+
+		const first = start();
+
+		for (const offset of [0, 1, 10_001]) {
+			clock.t = START + offset;
+			await first.tick();
+		}
+
+		assert.equal(statuses(github, 14).at(-1), "4:running");
+
+		const workflow = github.workflow;
+
+		github.workflow = null;
+		clock.t += 1;
+
+		const controller = start();
+
+		await controller.tick();
+
+		assert.equal(statuses(github, 14).length, 4);
+
+		github.workflow = workflow;
+		clock.t += 30_000;
+
+		const loaded = await controller.tick();
+
+		assert.deepEqual(
+			loaded.runs.map((run) => [run.status, run.attempt, run.usage]),
+			[["retrying", 3, 600_000]],
+		);
+		assert.equal(statuses(github, 14).at(-1), "5:retrying");
+	});
+
+	it("computes an adopted retry's due time from the loaded max_backoff_ms, not the default", async () => {
+		const { github, clock, executor, start } = world();
+
+		setWorkflow(github, "max_backoff_ms: 300000", "max_backoff_ms: 1000");
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "fail", usage: 0 }];
+
+		const first = start();
+
+		await first.tick();
+		clock.t += 1;
+		await first.tick();
+
+		assert.equal(statuses(github, 14).at(-1), "3:retrying");
+
+		const workflow = github.workflow;
+
+		github.workflow = null;
+		clock.t = START + 2_000;
+
+		const controller = start();
+		const unloaded = await controller.tick();
+
+		assert.deepEqual(unloaded.runs, []);
+		assert.deepEqual(unloaded.queued, [14]);
+
+		github.workflow = workflow;
+		clock.t = START + 3_001;
+
+		const loaded = await controller.tick();
+
+		assert.equal(executor.launches.length, 2);
+		assert.deepEqual(
+			loaded.runs.map((run) => [run.status, run.attempt]),
+			[["blocked", 2]],
+		);
+	});
+
+	it("releases a closed issue's running marker without deciding the interruption before the first workflow load", async () => {
+		const { github, clock, executor, start } = world();
+		const issue = github.add(labeled(14));
+
+		executor.fallback = { kind: "hang" };
+		await start().tick();
+		issue.state = "closed";
+		issue.updatedAt = "2026-10-29T02:00:20Z";
+		github.workflow = null;
+		clock.t += 30_000;
+
+		const report = await start().tick();
+
+		assert.deepEqual(report.runs, []);
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:running",
+			"3:released",
+		]);
+	});
+
+	it("lists a claim recorded before its first marker in queued while the workflow is unavailable", async () => {
+		const { github, clock, files, start } = world();
+
+		github.add(labeled(14));
+		github.posts = ["lost"];
+		await start().tick();
+
+		assert.equal(files.claims.get(runOf(14))?.seq, null);
+
+		const workflow = github.workflow;
+
+		github.workflow = null;
+		clock.t += 30_000;
+
+		const controller = start();
+		const unloaded = await controller.tick();
+
+		assert.deepEqual(unloaded.runs, []);
+		assert.deepEqual(unloaded.queued, [14]);
+		assert.deepEqual(statuses(github, 14), []);
+
+		github.workflow = workflow;
+		clock.t += 30_000;
+
+		const loaded = await controller.tick();
+
+		assert.deepEqual(runIssues(loaded), [14]);
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+	});
+
+	it("adopts running and retrying markers while the loaded cap is full, because neither holds a slot once adopted", async () => {
+		const { github, clock, executor, start } = world();
+
+		for (const number of [14, 15, 16]) github.add(labeled(number));
+
+		executor.behaviors = [{ kind: "unavailable" }, { kind: "fail", usage: 0 }];
+		executor.fallback = { kind: "hang" };
+
+		const first = start();
+
+		await first.tick();
+		clock.t += 1;
+		await first.tick();
+
+		assert.equal(statuses(github, 15).at(-1), "3:retrying");
+		assert.equal(statuses(github, 16).at(-1), "2:running");
+
+		executor.fallback = { kind: "unavailable" };
+		capAt(github, 1);
+		clock.t += 1;
+
+		const report = await start().tick();
+
+		assert.deepEqual(
+			report.runs.map((run) => [run.issue, run.status]),
+			[
+				[14, "blocked"],
+				[15, "retrying"],
+				[16, "retrying"],
+			],
+		);
+		assert.deepEqual(report.queued, []);
+		assert.equal(statuses(github, 16).at(-1), "3:retrying");
 	});
 });
 
