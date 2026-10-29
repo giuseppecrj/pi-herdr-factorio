@@ -1408,8 +1408,7 @@ export class Orchestrator {
 
 			if (slots === 0) break;
 
-			slots--;
-			await this.#launch(run);
+			if (await this.#launch(run)) slots--;
 		}
 
 		for (const record of input.candidates) {
@@ -1695,11 +1694,11 @@ export class Orchestrator {
 		return { kind: "fresh" };
 	}
 
-	async #launch(run: ActiveRun): Promise<void> {
+	async #launch(run: ActiveRun): Promise<boolean> {
 		const { files, executor, clock } = this.#input;
 		const preparation = await this.#prepareWorkspace(run);
 
-		if (preparation.kind === "unavailable") return;
+		if (preparation.kind === "unavailable") return false;
 
 		const abort = new AbortController();
 		const now = clock.now();
@@ -1745,6 +1744,8 @@ export class Orchestrator {
 			result: launch.kind,
 		});
 		await this.#sync(run);
+
+		return true;
 	}
 
 	async #sync(run: ActiveRun): Promise<void> {

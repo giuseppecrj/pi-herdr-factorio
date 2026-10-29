@@ -3570,6 +3570,92 @@ describe("Orchestrator before the first workflow load", () => {
 	});
 });
 
+describe("Orchestrator retry workspace preparation", () => {
+	it("does not spend the free slot on a due retry whose workspace is unavailable", async () => {
+		const { github, clock, files, executor, start } = world();
+
+		capAt(github, 1);
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "fail", usage: 0 }];
+
+		const controller = start();
+
+		await controller.tick();
+		clock.t += 1;
+		await controller.tick();
+
+		const ensure = files.ensureWorkspace;
+		let failing = true;
+
+		files.ensureWorkspace = async (runId) =>
+			failing && runId === runOf(14) ? "unavailable" : ensure(runId);
+		github.add(labeled(15));
+		clock.t += 30_000;
+
+		const report = await controller.tick();
+
+		assert.deepEqual(
+			report.runs.map((run) => [run.issue, run.status]),
+			[
+				[14, "retrying"],
+				[15, "blocked"],
+			],
+		);
+		assert.deepEqual(report.queued, []);
+		assert.equal(executor.launches.length, 2);
+
+		failing = false;
+		clock.t += 30_000;
+		await controller.tick();
+
+		assert.equal(executor.launches.length, 2);
+	});
+
+	it("does not spend the free slot when a real workspace path is obstructed", async () => {
+		const { github, clock, store, executor, logs } = world();
+		const state = stateDir();
+		const files = fileRunFiles(state);
+
+		const controller = new Orchestrator({
+			exec: github.exec,
+			env: () => "/home/exedev",
+			repo,
+			store,
+			files,
+			executor,
+			clock,
+			scope: null,
+			log: (event, fields) => logs.push({ event, fields }),
+		});
+
+		capAt(github, 1);
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "fail", usage: 0 }];
+		await controller.tick();
+		clock.t += 1;
+		await controller.tick();
+
+		const workspace = files.workspacePath(runOf(14));
+
+		rmSync(workspace, { recursive: true });
+		writeFileSync(workspace, "");
+		github.add(labeled(15));
+		clock.t += 30_000;
+
+		const report = await controller.tick();
+
+		assert.deepEqual(
+			report.runs.map((run) => [run.issue, run.status]),
+			[
+				[14, "retrying"],
+				[15, "blocked"],
+			],
+		);
+		assert.equal(executor.launches.length, 2);
+		assert.ok(events(logs).includes("workspace_unavailable"));
+	});
+});
+
 describe("Orchestrator workspace replay", () => {
 	it("keeps the replay of an adopted run whose workspace preparation failed, and replays it once preparation works", async () => {
 		const { github, clock, files, executor, start } = world();
