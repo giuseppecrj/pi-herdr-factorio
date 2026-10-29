@@ -2290,6 +2290,39 @@ describe("Orchestrator claim record", () => {
 		assert.deepEqual(files.claims.get(runOf(14)), blockedClaim(14, 2));
 		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
 	});
+
+	it("retries a failed rewrite on every tick while the comments read stays behind", async () => {
+		const ctx = world();
+		const { github, clock, files, start } = ctx;
+		const issue = github.add(labeled(14));
+		const writes = failClaimWrite(files, 2);
+		const controller = start();
+		const behind = [{ issue: 14, ledgerSeq: 1, localSeq: 2 }];
+
+		await controller.tick();
+
+		assert.equal(files.claims.get(runOf(14))?.seq, 1);
+
+		hideMarker(ctx, issue, 2);
+		clock.t += 30_000;
+
+		const lagging = await controller.tick();
+
+		assert.deepEqual(lagging.ledgerBehind, behind);
+
+		clock.t += 30_000;
+		await controller.tick();
+
+		assert.equal(files.claims.get(runOf(14))?.seq, 1);
+
+		writes.failing = false;
+		clock.t += 30_000;
+
+		const healed = await controller.tick();
+
+		assert.deepEqual(healed.ledgerBehind, behind);
+		assert.deepEqual(files.claims.get(runOf(14)), blockedClaim(14, 2));
+	});
 });
 
 function hideStatus(
@@ -2707,6 +2740,64 @@ describe("Orchestrator terminal claim records", () => {
 		assert.deepEqual(restarted.runs, []);
 		assert.deepEqual(restarted.corrupt, []);
 		assert.deepEqual(statuses(github, 14), ended);
+	});
+
+	it("retries a failed terminal rewrite on every tick after its marker is read, then stops", async () => {
+		const { github, clock, files, start } = world();
+		const issue = github.add(labeled(14));
+		const write = files.writeClaim;
+		const control = { failing: true, attempts: 0 };
+
+		files.writeClaim = async (claim) => {
+			if (claim.status === "released") {
+				control.attempts++;
+
+				if (control.failing) return false;
+			}
+
+			return write(claim);
+		};
+
+		const controller = start();
+
+		await controller.tick();
+		clock.t += 30_000;
+		await controller.tick();
+		issue.state = "closed";
+		issue.updatedAt = "2026-10-29T02:01:00Z";
+		clock.t += 60_000;
+		await controller.tick();
+
+		assert.deepEqual(files.claims.get(runOf(14)), blockedClaim(14, 2));
+
+		const failed = control.attempts;
+
+		clock.t += 30_000;
+		await controller.tick();
+
+		assert.equal(control.attempts, failed + 1);
+		assert.deepEqual(files.claims.get(runOf(14)), blockedClaim(14, 2));
+
+		control.failing = false;
+		clock.t += 30_000;
+		await controller.tick();
+
+		assert.deepEqual(
+			files.claims.get(runOf(14)),
+			endedClaim(14, 3, { status: "released" }),
+		);
+
+		const landed = control.attempts;
+
+		clock.t += 30_000;
+		await controller.tick();
+
+		assert.equal(control.attempts, landed);
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:blocked",
+			"3:released",
+		]);
 	});
 });
 
