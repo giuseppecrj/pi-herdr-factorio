@@ -1,5 +1,13 @@
-import { mkdir, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { randomBytes } from "node:crypto";
+import {
+	type FileHandle,
+	link,
+	lstat,
+	mkdir,
+	open,
+	unlink,
+} from "node:fs/promises";
+import { join, resolve } from "node:path";
 import {
 	type Actor,
 	actorText,
@@ -257,51 +265,58 @@ function errorCode(error: Error): string | null {
 		: null;
 }
 
-function codeOf(error: Error | null): string | null {
-	return error === null ? null : errorCode(error);
-}
-
-async function statError(path: string): Promise<Error | null> {
+async function lstatCode(path: string): Promise<string | null> {
 	try {
-		await stat(path);
+		await lstat(path);
 
 		return null;
 	} catch (error) {
-		return error instanceof Error ? error : new Error("stat failed");
+		return (error instanceof Error ? errorCode(error) : null) ?? "unknown";
+	}
+}
+
+async function isPrivateDirectory(path: string): Promise<boolean> {
+	try {
+		const info = await lstat(path);
+
+		return (
+			info.isDirectory() &&
+			info.uid === process.geteuid?.() &&
+			(info.mode & 0o022) === 0
+		);
+	} catch {
+		return false;
 	}
 }
 
 /**
  * Keeps the local kill switch and admission records under `stateDir`, which
- * must already exist. `<stateDir>/disabled` stops admission. Each admission
- * is written once to `<stateDir>/admissions/github/<owner>/<name>/<issue>/<event-id>.json`
- * with mode 0600, together with the snapshot text.
+ * must already exist as a real directory owned by this user and writable by
+ * no one else. Any entry named `<stateDir>/disabled`, even a dangling
+ * symlink, stops admission. Each admission is written once to
+ * `<stateDir>/admissions/github/<owner>/<name>/<issue>/<event-id>.json` with
+ * mode 0600, together with the snapshot text. The record is written to a
+ * temporary file and linked into place, so it is never seen half-written.
  */
 export function fileAdmissionStore(stateDir: string): AdmissionStore {
+	const root = resolve(stateDir);
+
 	return {
 		async localSwitch() {
-			let isDirectory: boolean;
+			if (!(await isPrivateDirectory(root))) return "unavailable";
 
-			try {
-				isDirectory = (await stat(stateDir)).isDirectory();
-			} catch {
-				return "unavailable";
-			}
+			const code = await lstatCode(join(root, LOCAL_DISABLE_FILE));
 
-			if (!isDirectory) return "unavailable";
+			if (code === null) return "disabled";
 
-			const flag = await statError(join(stateDir, LOCAL_DISABLE_FILE));
-
-			if (flag === null) return "disabled";
-
-			return codeOf(flag) === "ENOENT" ? "enabled" : "unavailable";
+			return code === "ENOENT" ? "enabled" : "unavailable";
 		},
 
 		async record(receipt, snapshot) {
 			const [owner = "", name = ""] = receipt.repo.split("/");
 
 			const dir = join(
-				stateDir,
+				root,
 				"admissions",
 				"github",
 				owner,
@@ -310,23 +325,50 @@ export function fileAdmissionStore(stateDir: string): AdmissionStore {
 			);
 
 			const text = `${JSON.stringify({ receipt, snapshot }, null, 2)}\n`;
+			const final = join(dir, `${receipt.eventId}.json`);
+
+			const temp = join(
+				dir,
+				`.${receipt.eventId}.${randomBytes(8).toString("hex")}.tmp`,
+			);
+
+			let handle: FileHandle;
 
 			try {
 				await mkdir(dir, { recursive: true, mode: 0o700 });
+				handle = await open(temp, "wx", 0o600);
+			} catch {
+				return "unwritable";
+			}
 
-				await writeFile(join(dir, `${receipt.eventId}.json`), text, {
-					flag: "wx",
-					mode: 0o600,
-				});
+			try {
+				try {
+					await handle.writeFile(text);
+					await handle.sync();
+				} finally {
+					await handle.close();
+				}
 
-				return "recorded";
-			} catch (error) {
-				const code = error instanceof Error ? errorCode(error) : null;
-
-				return code === "EEXIST" ? "duplicate" : "unwritable";
+				return await linkRecord(temp, final);
+			} catch {
+				return "unwritable";
+			} finally {
+				await unlink(temp).catch(() => undefined);
 			}
 		},
 	};
+}
+
+async function linkRecord(temp: string, final: string): Promise<RecordOutcome> {
+	try {
+		await link(temp, final);
+
+		return "recorded";
+	} catch (error) {
+		const code = error instanceof Error ? errorCode(error) : null;
+
+		return code === "EEXIST" ? "duplicate" : "unwritable";
+	}
 }
 
 type Bound = {

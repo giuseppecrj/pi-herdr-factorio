@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import {
+	chmodSync,
+	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
 	rmSync,
 	statSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -443,6 +447,71 @@ describe("admission kill switches", () => {
 		assert.deepEqual(github.calls, []);
 	});
 
+	it("treats any disabled entry, even a dangling symlink, as locally disabled", async () => {
+		const entries: [string, (path: string) => void][] = [
+			[
+				"dangling symlink",
+				(path) => symlinkSync(join(path, "..", "gone"), path),
+			],
+			["directory", (path) => mkdirSync(path)],
+		];
+
+		for (const [name, create] of entries) {
+			const github = new FakeGitHub();
+			const state = stateDir();
+
+			github.add(labeledBy("writer"));
+			create(join(state, "disabled"));
+
+			assert.deepEqual(
+				reasonKinds(await admit(github, state)),
+				["locally_disabled"],
+				name,
+			);
+			assert.deepEqual(github.calls, [], name);
+		}
+	});
+
+	it("refuses a symlinked, shared or foreign state directory before any gh call", async () => {
+		const target = stateDir();
+		const link = join(stateDir(), "state-link");
+
+		symlinkSync(target, link);
+
+		const groupWritable = stateDir();
+		const worldWritable = stateDir();
+
+		chmodSync(groupWritable, 0o770);
+		chmodSync(worldWritable, 0o707);
+
+		for (const state of [link, `${link}/`, groupWritable, worldWritable]) {
+			const github = new FakeGitHub();
+
+			github.add(labeledBy("writer"));
+
+			assert.deepEqual(
+				reasonKinds(await admit(github, state)),
+				["state_unavailable"],
+				state,
+			);
+			assert.deepEqual(github.calls, [], state);
+		}
+
+		const github = new FakeGitHub();
+		const geteuid = process.geteuid;
+
+		github.add(labeledBy("writer"));
+		process.geteuid = () => (geteuid?.() ?? 0) + 1;
+
+		try {
+			assert.deepEqual(reasonKinds(await admit(github)), ["state_unavailable"]);
+		} finally {
+			process.geteuid = geteuid;
+		}
+
+		assert.deepEqual(github.calls, []);
+	});
+
 	it("refuses a missing state directory before any gh call", async () => {
 		const github = new FakeGitHub();
 		const state = join(stateDir(), "absent");
@@ -533,6 +602,92 @@ describe("admission kill switches", () => {
 			"repo_switch_off",
 			"unauthorized",
 		]);
+	});
+});
+
+describe("admission records", () => {
+	const issueDir = (state: string) =>
+		join(state, "admissions/github/giuseppecrj/pi-herdr-factorio/14");
+
+	it("refuses a file where a record directory belongs as unwritable, not duplicate", async () => {
+		const cases: [string, (state: string) => void][] = [
+			[
+				"issue directory",
+				(state) => {
+					mkdirSync(join(issueDir(state), ".."), { recursive: true });
+					writeFileSync(issueDir(state), "");
+				},
+			],
+			[
+				"admissions directory",
+				(state) => writeFileSync(join(state, "admissions"), ""),
+			],
+		];
+
+		for (const [name, arrange] of cases) {
+			const github = new FakeGitHub();
+			const state = stateDir();
+
+			github.add(labeledBy("writer"));
+			arrange(state);
+
+			assert.deepEqual(
+				reasonKinds(await admit(github, state)),
+				["state_unwritable"],
+				name,
+			);
+		}
+	});
+
+	it("records past a stale partial temp file and leaves no temp file of its own", async () => {
+		const github = new FakeGitHub();
+		const state = stateDir();
+		const stale = ".34537521383.0123456789abcdef.tmp";
+
+		github.add(labeledBy("writer"));
+		mkdirSync(issueDir(state), { recursive: true, mode: 0o700 });
+		writeFileSync(join(issueDir(state), stale), '{"receipt": {"dec');
+
+		assert.equal((await admit(github, state)).decision, "admitted");
+
+		const record = join(issueDir(state), "34537521383.json");
+
+		assert.equal(statSync(record).mode & 0o777, 0o600);
+		assert.equal(statSync(record).nlink, 1);
+		assert.equal(
+			JSON.parse(readFileSync(record, "utf8")).receipt.eventId,
+			"34537521383",
+		);
+		assert.deepEqual(
+			readdirSync(issueDir(state)).sort(),
+			[stale, "34537521383.json"].sort(),
+		);
+
+		assert.deepEqual(reasonKinds(await admit(github, state)), [
+			"duplicate_event",
+		]);
+		assert.deepEqual(
+			readdirSync(issueDir(state)).sort(),
+			[stale, "34537521383.json"].sort(),
+		);
+	});
+
+	it("leaves nothing behind when the record directory is not writable", async () => {
+		const github = new FakeGitHub();
+		const state = stateDir();
+
+		github.add(labeledBy("writer"));
+		mkdirSync(issueDir(state), { recursive: true, mode: 0o700 });
+		chmodSync(issueDir(state), 0o500);
+
+		try {
+			assert.deepEqual(reasonKinds(await admit(github, state)), [
+				"state_unwritable",
+			]);
+			assert.deepEqual(readdirSync(issueDir(state)), []);
+		} finally {
+			chmodSync(issueDir(state), 0o700);
+		}
 	});
 });
 

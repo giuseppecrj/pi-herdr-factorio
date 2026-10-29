@@ -29,7 +29,7 @@ Errors and warnings carry only text the factory builds itself. They never quote 
 | `--ref <branch>` | `workflow-check`, `status` | no | `main` | The branch to load. Any branch other than `main` sets `verification: true`. |
 | `--reload-ref <branch>` | `workflow-check` | no | none | Load a second branch as a reload on top of `--ref` and report which snapshot stays in force. |
 | `--issue <number>` | `admit` | yes | none | The issue number, from 1 to 9999999999, with no leading zero. |
-| `--state-dir <dir>` | `admit` | yes | none | The controller state directory. It must already exist. A relative path is resolved against the working directory. |
+| `--state-dir <dir>` | `admit` | yes | none | The controller state directory. It must already exist as a directory, not a symlink, owned by the effective user and not writable by group or others. A relative path is resolved against the working directory. |
 
 `--ref` and `--reload-ref` exist so verification lanes can load fixture branches. The controller that arrives in F04c always loads `main` and has no such flag.
 
@@ -182,7 +182,7 @@ node server/cli.ts admit --json --repo <owner/name> --issue <number> --state-dir
 `admit` admits an issue when all of these hold:
 
 - `--repo` is on the controller's allowlist. Today the allowlist is `giuseppecrj/pi-herdr-factorio`, in `FACTORY_REPOSITORIES` in `src/admission.ts`.
-- `<state-dir>/disabled` does not exist. This is the local kill switch. Create the file to stop admission. Its content is ignored.
+- Nothing named `<state-dir>/disabled` exists. This is the local kill switch. Create a file there to stop admission. Its content is ignored. Any entry with that name counts, including a directory or a dangling symlink.
 - The repository has a label named exactly `factory:enabled`. This is the repository kill switch, described below.
 - `.github/factory/WORKFLOW.md` on `main` is valid. `baseSha` is the `main` SHA it was loaded from.
 - The issue is open, is not a pull request, and has the `factory:ready` label.
@@ -233,7 +233,7 @@ The snapshot is the title and body when the label was applied. Let `L` be the ev
 
 ### State
 
-An admission writes `<state-dir>/admissions/github/<owner>/<name>/<issue>/<event-id>.json` with mode 0600, in directories created with mode 0700. It holds the receipt and the snapshot title and body. The file is created exclusively, so a second admission of the same event finds it and is refused as `duplicate_event`. A refusal writes nothing.
+An admission writes `<state-dir>/admissions/github/<owner>/<name>/<issue>/<event-id>.json` with mode 0600, in directories created with mode 0700. It holds the receipt and the snapshot title and body. The record is first written to a temporary file, `.<event-id>.<random>.tmp`, in the same directory, and then hard-linked to its final name, so a record is never seen half-written. The temporary file is removed whatever the outcome. The link fails when the final name exists, so a second admission of the same event is refused as `duplicate_event`. When a directory cannot be created, including when a file sits where a directory belongs, or the temporary file cannot be written, the refusal is `state_unwritable`. A refusal writes nothing.
 
 ### Receipt
 
@@ -264,8 +264,8 @@ Each reason has `kind`. Some have more fields.
 | `kind` | Cause | Extra fields |
 | --- | --- | --- |
 | `repo_not_allowed` | `--repo` is not on the allowlist. | |
-| `state_unavailable` | `--state-dir` does not exist, is not a directory, or the disable file cannot be checked. | |
-| `locally_disabled` | `<state-dir>/disabled` exists. | |
+| `state_unavailable` | `--state-dir` does not exist, is a symlink or not a directory, is not owned by the effective user, is writable by group or others, or the disable entry cannot be checked. | |
+| `locally_disabled` | An entry named `<state-dir>/disabled` exists, including a dangling symlink. | |
 | `repo_switch_off` | The `factory:enabled` label does not exist (HTTP 404), or its name differs in case. | |
 | `repo_switch_unavailable` | Reading the `factory:enabled` label failed for any other reason. | `failure` |
 | `workflow_unavailable` | `WORKFLOW.md` on `main` did not load. | `error`, the `workflow-check` error kind |
@@ -281,7 +281,7 @@ Each reason has `kind`. Some have more fields.
 | `snapshot_unavailable` | The GraphQL edit-history read failed. | `failure` |
 | `ambiguous_snapshot` | The label-time title and body cannot be proved. | `detail` |
 | `duplicate_event` | This event was already admitted into this state directory. | |
-| `state_unwritable` | The admission record could not be written. | |
+| `state_unwritable` | The admission record could not be written, or a directory on its path could not be created. | |
 
 The repository switch reason comes first. When the issue also fails a check, that reason follows it, so `reasons` has at most two entries.
 

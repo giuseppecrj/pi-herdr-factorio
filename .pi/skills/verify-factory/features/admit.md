@@ -43,7 +43,8 @@ Earlier, under the variable switch at `ed6e61d`: #15, edited twice after the lab
 ## Gotchas
 
 - `admit` takes no `--ref`. It always loads `WORKFLOW.md` from `main`, and `baseSha` is `main`'s SHA at that moment.
-- The state directory must exist. `lane-setup.sh` creates `<lane>/state`. A missing directory is refused as `state_unavailable` before any `gh` call.
+- The state directory must exist as a real directory owned by `exedev` and not writable by group or others. `lane-setup.sh` creates `<lane>/state` with `mkdir -p`, which gives mode 0755 under the default umask. A missing, symlinked, foreign-owned or group- or world-writable directory is refused as `state_unavailable` before any `gh` call.
+- Any entry named `<state>/disabled`, even a dangling symlink, is the local switch. Remove it with `rm -f`, not by fixing its target.
 - A refusal is exit 1, not a script failure. Exit 2 is a usage error.
 - Never print an issue title or body in evidence. The receipt carries only a digest. The snapshot text is in the admission record under the state directory, with mode 0600, only after an admission.
 - A label applied by the integration bot is always refused: the bot's permission reads as `none`.
