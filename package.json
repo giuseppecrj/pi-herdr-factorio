@@ -61,6 +61,7 @@
     "url": "https://github.com/giuseppecrj/pi-herdr-factorio/issues"
   },
   "dependencies": {
+    "marked": "^18.1.2",
     "yaml": "^2.9.0"
   }
 }

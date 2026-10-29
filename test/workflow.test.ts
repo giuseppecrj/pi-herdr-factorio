@@ -1396,6 +1396,71 @@ describe("guidance code fences", () => {
 	});
 });
 
+describe("guidance sections from the Markdown lexer", () => {
+	function guidance(body: string) {
+		const parsed = parse(`${frontMatter("")}\n${body}`);
+
+		assert.equal(parsed.kind, "valid", JSON.stringify(parsed));
+
+		return parsed.kind === "valid" ? parsed.guidance : null;
+	}
+
+	it("ends a fence left open in a list item with the item", () => {
+		const read = guidance(
+			"## build\n- step\n  ```\n  ## unknown\n- next\n\n## review\nRead it.\n",
+		);
+
+		assert.match(read?.stages.build ?? "", /## unknown/);
+		assert.equal(read?.stages.review, "Read it.");
+	});
+
+	it("keeps a fenced block inside a list item", () => {
+		const read = guidance(
+			"## build\n1. step\n   ```\n   ## unknown\n   ```\n\n## review\nRead it.\n",
+		);
+
+		assert.match(read?.stages.build ?? "", /## unknown/);
+		assert.equal(read?.stages.review, "Read it.");
+	});
+
+	it("does not split on a heading inside a blockquote", () => {
+		const read = guidance("## review\n> ## build\n> quoted\n\nafter\n");
+
+		assert.equal(read?.stages.review, "> ## build\n> quoted\n\nafter");
+		assert.equal(read?.stages.build, undefined);
+	});
+
+	it("does not split on a setext heading", () => {
+		const read = guidance("## review\nbuild\n---\nmore\n");
+
+		assert.equal(read?.stages.review, "build\n---\nmore");
+		assert.equal(read?.stages.build, undefined);
+	});
+
+	it("keeps section text byte for byte", () => {
+		const read = guidance(
+			"intro\n\n## build ##\n[x]: https://example.com\n\tindented code\n\n| a | b |\n| - | - |\n| 1 | 2 |\n",
+		);
+
+		assert.equal(read?.general, "body\n\nintro");
+		assert.equal(
+			read?.stages.build,
+			"[x]: https://example.com\n\tindented code\n\n| a | b |\n| - | - |\n| 1 | 2 |",
+		);
+	});
+
+	it("still rejects an unknown or duplicate stage heading", () => {
+		assert.equal(
+			validation(`${frontMatter("")}\n## deploy\n`).field,
+			"guidance",
+		);
+		assert.equal(
+			validation(`${frontMatter("")}\n## build\na\n\n   ## build\nb\n`).field,
+			"guidance",
+		);
+	});
+});
+
 describe("YAML anchors and aliases", () => {
 	const cases = [
 		[

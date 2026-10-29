@@ -1,4 +1,5 @@
 import { isAbsolute, normalize } from "node:path/posix";
+import { getDefaults, Lexer } from "marked";
 import {
 	type Document,
 	isAlias,
@@ -678,81 +679,53 @@ function readConfig(
 	return { config, warnings };
 }
 
-type Fence = { readonly char: string; readonly length: number };
+const ATX_HEADING = /^ {0,3}#/;
 
-function fenceOpening(line: string): Fence | null {
-	const match = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-	const marker = match?.[1];
-
-	if (marker === undefined) return null;
-
-	const char = marker.charAt(0);
-
-	// CommonMark: a backtick fence's info string cannot contain a backtick.
-	if (char === "`" && (match?.[2] ?? "").includes("`")) return null;
-
-	return { char, length: marker.length };
-}
-
-function closesFence(line: string, fence: Fence): boolean {
-	const marker = /^ {0,3}(`+|~+)[ \t]*$/.exec(line)?.[1];
-
-	return (
-		marker !== undefined &&
-		marker.charAt(0) === fence.char &&
-		marker.length >= fence.length
-	);
-}
-
+/**
+ * Splits guidance on top-level `## <stage>` headings as marked tokenizes
+ * them. The lexer only tokenizes; guidance is never rendered.
+ */
 function readGuidance(body: string): Guidance {
-	const sections = new Map<string, string[]>();
+	const sections = new Map<Stage, string[]>();
 	const general: string[] = [];
 	let current = general;
-	let fence: Fence | null = null;
 
-	for (const line of body.split("\n")) {
-		if (fence !== null) {
-			if (closesFence(line, fence)) fence = null;
+	for (const token of Lexer.lex(body, getDefaults())) {
+		const splits =
+			token.type === "heading" &&
+			token.depth === 2 &&
+			ATX_HEADING.test(token.raw);
 
-			current.push(line);
+		if (!splits) {
+			current.push(token.raw);
 			continue;
 		}
 
-		fence = fenceOpening(line);
+		const name = token.text.trim();
 
-		const heading =
-			fence === null ? /^## +(.+?)\s*$/.exec(line)?.[1] : undefined;
-
-		if (heading === undefined) {
-			current.push(line);
-			continue;
-		}
-
-		if (!isStage(heading)) {
+		if (!isStage(name)) {
 			fail(
 				"guidance",
 				`has a level-2 heading that names no stage: use one of ${STAGE_ORDER.join(", ")}`,
 			);
 		}
 
-		if (sections.has(heading)) {
-			fail("guidance", `duplicate heading "## ${heading}"`);
-		}
+		if (sections.has(name)) fail("guidance", `duplicate heading "## ${name}"`);
 
 		current = [];
-		sections.set(heading, current);
+		sections.set(name, current);
 	}
 
 	const stages: Partial<Record<Stage, string>> = {};
 
 	for (const stage of STAGE_ORDER) {
-		const lines = sections.get(stage);
+		const raws = sections.get(stage);
 
-		if (lines !== undefined) stages[stage] = lines.join("\n").trim();
+		if (raws !== undefined) stages[stage] = raws.join("").trim();
 	}
 
 	return Object.freeze({
-		general: general.join("\n").trim(),
+		general: general.join("").trim(),
 		stages: Object.freeze(stages),
 	});
 }
