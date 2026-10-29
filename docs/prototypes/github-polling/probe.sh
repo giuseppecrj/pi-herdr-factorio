@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Read-only. Run on the VM with:
-#   .pi/skills/verify-factory/scripts/vm.sh docs/prototypes/github-polling/probe.sh
 set -uo pipefail
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
 export GH_HOST=github.int.exe.xyz

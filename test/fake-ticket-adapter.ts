@@ -224,10 +224,6 @@ export function networkError(): ExecResult {
 	};
 }
 
-/**
- * Answers the `gh api` requests the GitHub adapter makes, from in-memory
- * issues. `failures` maps a request path prefix to the result it gets.
- */
 export class FakeGitHub {
 	readonly calls: string[][] = [];
 	readonly issues = new Map<number, FakeIssue>();
@@ -235,7 +231,6 @@ export class FakeGitHub {
 	readonly failures = new Map<string, ExecResult>();
 	workflow: string | null = TRUSTED_WORKFLOW;
 	repoLabels: string[] = ["factory:enabled"];
-	/** Runs just before a GraphQL answer, to change an issue between reads. */
 	beforeGraphql: ((issue: FakeIssue) => void) | null = null;
 
 	constructor() {

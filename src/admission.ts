@@ -407,7 +407,6 @@ type LatestReady =
 	| { readonly kind: "tied" }
 	| { readonly kind: "found"; readonly entry: ReadyEntry };
 
-/** The `factory:ready` entry with the latest time, whatever the array order. */
 function latestReadyEntry(timeline: readonly TimelineEntry[]): LatestReady {
 	const ready = timeline.filter(
 		(entry): entry is ReadyEntry =>
