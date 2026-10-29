@@ -307,7 +307,6 @@ export function backoffMs(retry: number, maxBackoffMs: number): number {
 	return Math.min(10_000 * 2 ** (retry - 1), maxBackoffMs);
 }
 
-/** No slot exists until a workflow has loaded, so nothing is adopted into one before. */
 function limitsOf(config: WorkflowConfig | null): Limits {
 	return {
 		maxConcurrent: config?.agent.maxConcurrent ?? 0,
