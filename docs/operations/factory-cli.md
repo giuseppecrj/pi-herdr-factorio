@@ -8,7 +8,7 @@ node server/cli.ts <command> --json --repo <owner/name> [options]
 
 Every command reads `.github/factory/WORKFLOW.md` from GitHub through `gh`, never from the local checkout. It first resolves the branch to a SHA with `gh api repos/<repo>/git/ref/heads/<branch> --jq .object.sha`, then fetches the file at that SHA with `gh api -H 'Accept: application/vnd.github.raw' repos/<repo>/contents/.github/factory/WORKFLOW.md?ref=<sha>`. Each `gh` call has a 30-second timeout. `gh` inherits the environment, including `GH_HOST`. On the VM, set `GH_HOST=github.int.exe.xyz`.
 
-No command starts a controller, calls a model or writes to GitHub.
+`admit` makes more `gh` reads, described in its section below. No command starts a controller, calls a model or writes to GitHub. Only `admit` writes local files, and only under `--state-dir`.
 
 Errors and warnings carry only text the factory builds itself. They never quote `gh` output, an exec failure, a YAML error message, a key or value from `WORKFLOW.md` or a command-line argument. A second layer still redacts credentials in stdout, stderr and `/factory status` text. Anything shaped like `scheme://user:secret@` is printed as `scheme://<redacted>@`, and the value of a query parameter named `token`, `access_token`, `auth`, `key`, `password`, `secret`, `sig`, `signature` or `code`, in any case, is printed as `<redacted>`. In JSON output this applies to each string value before it is encoded, so it never spans two lines of one value.
 
@@ -18,27 +18,32 @@ Errors and warnings carry only text the factory builds itself. They never quote 
 | --- | --- |
 | `workflow-check` | Load and validate the workflow. Print the snapshot or the error. |
 | `status` | Print the factory status: package, workflow, models, limits and execution state. |
+| `admit` | Decide whether one issue's latest `factory:ready` label event is admitted. Print the receipt. |
 
 ## Flags
 
 | Flag | Commands | Required | Default | Meaning |
 | --- | --- | --- | --- | --- |
-| `--json` | both | yes | none | Print JSON on stdout. JSON is the only output format. |
-| `--repo <owner/name>` | both | yes | none | The GitHub repository. The workflow's `repository` field must equal it. |
-| `--ref <branch>` | both | no | `main` | The branch to load. Any branch other than `main` sets `verification: true`. |
+| `--json` | all | yes | none | Print JSON on stdout. JSON is the only output format. |
+| `--repo <owner/name>` | all | yes | none | The GitHub repository. The workflow's `repository` field must equal it. |
+| `--ref <branch>` | `workflow-check`, `status` | no | `main` | The branch to load. Any branch other than `main` sets `verification: true`. |
 | `--reload-ref <branch>` | `workflow-check` | no | none | Load a second branch as a reload on top of `--ref` and report which snapshot stays in force. |
+| `--issue <number>` | `admit` | yes | none | The issue number, from 1 to 9999999999, with no leading zero. |
+| `--state-dir <dir>` | `admit` | yes | none | The controller state directory. It must already exist as a directory, not a symlink, owned by the effective user and not writable by group or others. A relative path is resolved against the working directory. |
 
 `--ref` and `--reload-ref` exist so verification lanes can load fixture branches. The controller that arrives in F04c always loads `main` and has no such flag.
+
+An `<owner>` or `<name>` contains only letters, digits, `.`, `_` and `-`, and is not `.` or `..`.
 
 A branch name contains only letters, digits, `.`, `_`, `-` and `/`. It does not start with `-` or `/`, end with `/`, or contain `..` or `//`.
 
 ## Exit codes
 
-| Code | `workflow-check` | `status` |
-| --- | --- | --- |
-| 0 | The workflow is valid. With `--reload-ref`, both loads are valid. | A report was printed, whatever the workflow state. |
-| 1 | A load failed: the branch did not resolve, the file is missing or unreadable, or the file is invalid. The report is still printed. | Not used. |
-| 2 | Usage error. Usage goes to stderr, and stdout is empty. | Usage error. Usage goes to stderr, and stdout is empty. |
+| Code | `workflow-check` | `status` | `admit` |
+| --- | --- | --- | --- |
+| 0 | The workflow is valid. With `--reload-ref`, both loads are valid. | A report was printed, whatever the workflow state. | Admitted. The receipt was printed and recorded. |
+| 1 | A load failed: the branch did not resolve, the file is missing or unreadable, or the file is invalid. The report is still printed. | Not used. | Refused. The receipt was printed. |
+| 2 | Usage error. Usage goes to stderr, and stdout is empty. | Usage error. Usage goes to stderr, and stdout is empty. | Usage error. Usage goes to stderr, stdout is empty, and `gh` is not run. |
 
 ## Error kinds
 
@@ -117,7 +122,7 @@ Other errors:
 
 The only warning is `(unknown key) ignored`. The controller `reason` is always `no controller is installed in this release`.
 
-A usage error prints one of these lines to stderr, followed by the usage text: `unrecognized or incomplete options`, `expected workflow-check or status`, `unexpected extra arguments`, `--json is required`, `--repo <owner/name> is required`, `--reload-ref applies only to workflow-check` or `--ref and --reload-ref must be branch names`.
+A usage error prints one of these lines to stderr, followed by the usage text: `unrecognized or incomplete options`, `expected workflow-check, status or admit`, `unexpected extra arguments`, `--json is required`, `--repo <owner/name> is required`, `--reload-ref applies only to workflow-check`, `--ref and --reload-ref must be branch names`, `admit always reads main and takes no --ref`, `--issue <number> is required`, `--state-dir <dir> is required` or `--issue and --state-dir apply only to admit`.
 
 `/factory status` prints `Usage: /factory status` when the first word of its argument is not `status`. When it cannot find a repository, the reason is `cannot run git`, `no git remote named origin` or `origin is not a GitHub repository`.
 
@@ -167,6 +172,146 @@ The `reload` object has these fields:
 | `checkpoints` | object or `null` | `approveMerge.mode`, which is always `always`. |
 
 When `workflow` is `valid`, `workflowSha` and `workflowDigest` are set, `workflowError` is `null`, and `models`, `limits` and `checkpoints` are set. When it is `invalid`, `workflowError` is set and `models`, `limits` and `checkpoints` are `null`.
+
+## `admit`
+
+```bash
+node server/cli.ts admit --json --repo <owner/name> --issue <number> --state-dir <dir>
+```
+
+`admit` admits an issue when all of these hold:
+
+- `--repo` is on the controller's allowlist. Today the allowlist is `giuseppecrj/pi-herdr-factorio`, in `FACTORY_REPOSITORIES` in `src/admission.ts`.
+- Nothing named `<state-dir>/disabled` exists. This is the local kill switch. Create a file there to stop admission. Its content is ignored. Any entry with that name counts, including a directory or a dangling symlink.
+- The repository has a label named exactly `factory:enabled`. This is the repository kill switch, described below.
+- `.github/factory/WORKFLOW.md` on `main` is valid. `baseSha` is the `main` SHA it was loaded from.
+- The issue is open, is not a pull request, and has the `factory:ready` label.
+- The latest `factory:ready` entry on the issue timeline is a `labeled` event, not `unlabeled`. This is the admitted event. Latest means the greatest `created_at`, whatever order the timeline returns. When two `factory:ready` entries share that second, admission refuses with `ambiguous_snapshot` and `label_events_same_second`.
+- That event's actor has `admin`, `maintain` or `write` permission on the repository. `maintain` counts as write. `triage`, `read` and `none` are refused. The issue author does not matter.
+- The title and body at the time of the event are proved, as described under snapshot.
+- No admission was recorded before for the same event ID.
+
+It checks the allowlist and the local switch first and stops there, before any `gh` call. When the repository switch is off or unavailable, it still evaluates the issue in the order of the requests below and stops at the first refusal, so the receipt shows the event, actor and snapshot only as far as that evaluation reached. For example, when `WORKFLOW.md` does not load, the issue is never read, and the reasons are the switch reason followed by `workflow_unavailable`, with the event and snapshot fields `null`. It then refuses without recording anything.
+
+### Repository switch
+
+The repository switch is the existence of a repository label named exactly `factory:enabled`. The label does not need to be on any issue. `admit` reads it with `gh api repos/<repo>/labels/factory%3Aenabled` and has three states:
+
+| State | When | Result |
+| --- | --- | --- |
+| On | The call succeeds and the returned `name` is exactly `factory:enabled`. | Admission continues. |
+| Off | The call returns HTTP 404, or the returned `name` differs in case, such as `Factory:Enabled`. GitHub looks labels up case-insensitively, so the name is compared exactly. | Refused with `repo_switch_off`. |
+| Unavailable | Any other failure, such as HTTP 401 or 403, or a network error. | Refused with `repo_switch_unavailable`. |
+
+To turn the factory off for the repository, delete the `factory:enabled` label on the repository's labels page, `https://github.com/<repo>/labels`. Deleting it also removes it from any issue that carries it. To turn it back on, create a label named exactly `factory:enabled`, for example with `gh label create factory:enabled --repo <repo>`. Changing the label needs triage access or higher.
+
+### Requests
+
+Every request is an argument array, never a shell string, and names `repos/<owner>/<name>/...` or GraphQL. One admission makes these `gh` calls, each with the 30-second timeout:
+
+| Step | Request |
+| --- | --- |
+| Repository switch | `gh api repos/<repo>/labels/factory%3Aenabled` |
+| Trusted workflow | the two `workflow-check` requests for `main` |
+| Issue | `gh api repos/<repo>/issues/<n>` |
+| Timeline | `gh api repos/<repo>/issues/<n>/timeline?per_page=100&page=<p>`, from page 1 until a page has fewer than 100 entries. When pages 1 to 10 are all full, page 11 is read only to confirm the end: empty means the 1000 entries are the whole timeline, and any entry means `pagination_limit`. |
+| Permission | `gh api repos/<repo>/collaborators/<login>/permission`, with `[` and `]` in a bot login URL-encoded |
+| Snapshot | `gh api graphql -f query=<query> -F owner=<owner> -F name=<name> -F number=<n>` |
+
+So an admission makes 7 requests, plus one per extra timeline page. A refusal can stop earlier. `admit` never passes `--paginate`: `gh` would follow GitHub's `Link` headers to `api.github.com` and leave the integration. See `docs/prototypes/github-polling/README.md`.
+
+### Snapshot
+
+The snapshot is the title and body when the label was applied. Let `L` be the event's `created_at`.
+
+1. The title comes from the GraphQL read, which also returns the issue's title renames, at most 100. The snapshot is ambiguous when a `renamed` timeline event or a rename in that read is at or after `L`, when that read's rename count differs from the number it returned, or when its title differs from the title the issue read returned or from the title after its newest returned rename. So a rename between the reads is refused. The GraphQL body must also equal the body the issue read returned.
+2. When the body's `lastEditedAt` is `null` or earlier than `L`, the current title and body are the snapshot, and `snapshotSource` is `unedited`, but only when the edit history agrees with the body. It contradicts the body when a version was saved at or after `L`, when a version is newer than `lastEditedAt`, or when `lastEditedAt` is `null` and the history has any version other than the original. Every version must have been returned. When `lastEditedAt` is `null`, every returned version must equal the body. A never-edited issue has no versions at all, and that is proof enough. When `lastEditedAt` is set, exactly one version must be the latest, it must not be deleted, and it must equal the body. GitHub records the original only on the first edit, so an edited body with no versions is refused.
+3. Otherwise the body comes from the GraphQL edit history. It is proved when all of these hold: every version was returned, the history includes the original, the newest version equals the current body and was saved at `lastEditedAt`, no version was saved in the same second as `L`, and exactly one version is the latest saved before `L` and it is not deleted. That version is the snapshot body. `snapshotSource` is `edit_history`.
+4. Anything else is `ambiguous_snapshot`.
+
+GitHub sends an empty body as `null`, in REST and in GraphQL, for the current body and for each version's `diff`. `admit` reads every such `null` as the empty string.
+
+`snapshotDigest` is the sha256 hex digest of `JSON.stringify([title, body])` in UTF-8. The current body at poll time is never used as the snapshot unless rule 2 applies.
+
+### State
+
+An admission writes `<state-dir>/admissions/github/<owner>/<name>/<issue>/<event-id>.json` with mode 0600, in directories created with mode 0700. It holds the receipt and the snapshot title and body. The record is first written to a temporary file, `.<event-id>.<random>.tmp`, in the same directory, and then hard-linked to its final name, so a record is never seen half-written. The temporary file is removed whatever the outcome. The link fails when the final name exists, so a second admission of the same event is refused as `duplicate_event`. When a directory cannot be created, including when a file sits where a directory belongs, or the temporary file cannot be written, the refusal is `state_unwritable`. A refusal writes nothing.
+
+### Receipt
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `decision` | string | `admitted` or `refused`. |
+| `repo` | string | The `--repo` value. |
+| `issue` | number | The `--issue` value. |
+| `issueUrl` | string | `https://github.com/<repo>/issues/<issue>`, built by the factory. |
+| `reasons` | array | Empty when admitted. Otherwise every refusal reason found, described below. |
+| `eventId` | string or `null` | The admitted or examined label event's ID. |
+| `eventAt` | string or `null` | That event's `created_at`. |
+| `actor` | string or `null` | That event's actor login. A login that does not match GitHub's login grammar is printed as `(withheld)`. |
+| `actorPermission` | string or `null` | The `permission` GitHub reports for the actor: `admin`, `maintain`, `write`, `triage`, `read` or `none`. An admitted receipt has only `admin`, `maintain` or `write`. GitHub folds `maintain` into `write` and `triage` into `read` in this field, so in practice it is `admin`, `write`, `read` or `none`. |
+| `snapshotDigest` | string or `null` | Described under snapshot. |
+| `snapshotSource` | string or `null` | `unedited` or `edit_history`. |
+| `baseSha` | string or `null` | The `main` SHA the trusted workflow was loaded from. |
+| `workflowDigest` | string or `null` | The sha256 digest of that `WORKFLOW.md`. |
+
+When `decision` is `admitted`, every field is set. When it is `refused`, a field is `null` when admission stopped before reaching it. The receipt never contains an issue title, body, comment, label name or `gh` output. Credentials are redacted from every string as for the other commands.
+
+GitHub's login grammar here is 1 to 39 letters, digits and single hyphens, not starting or ending with a hyphen, optionally followed by `[bot]`.
+
+### Refusal reasons
+
+Each reason has `kind`. Some have more fields.
+
+| `kind` | Cause | Extra fields |
+| --- | --- | --- |
+| `repo_not_allowed` | `--repo` is not on the allowlist. | |
+| `state_unavailable` | `--state-dir` does not exist, is a symlink or not a directory, is not owned by the effective user, is writable by group or others, or the disable entry cannot be checked. | |
+| `locally_disabled` | An entry named `<state-dir>/disabled` exists, including a dangling symlink. | |
+| `repo_switch_off` | The `factory:enabled` label does not exist (HTTP 404), or its name differs in case. | |
+| `repo_switch_unavailable` | Reading the `factory:enabled` label failed for any other reason. | `failure` |
+| `workflow_unavailable` | `WORKFLOW.md` on `main` did not load. | `error`, the `workflow-check` error kind |
+| `issue_unavailable` | Reading the issue failed. | `failure` |
+| `pull_request` | The number is a pull request. | |
+| `issue_closed` | The issue is closed. | |
+| `not_labeled` | The issue does not have `factory:ready`, or its latest `factory:ready` timeline entry is `unlabeled`. | |
+| `no_label_event` | The issue has the label but its timeline has no `factory:ready` event. | |
+| `timeline_unavailable` | Reading the timeline failed. | `failure` |
+| `actor_withheld` | The event's actor login does not match GitHub's login grammar. Its permission is not looked up. | |
+| `permission_unavailable` | Reading the actor's permission failed. A login that is not a user gives HTTP 404. | `failure` |
+| `unauthorized` | The actor has `triage`, `read` or `none`. | `permission` |
+| `snapshot_unavailable` | The GraphQL edit-history read failed. | `failure` |
+| `ambiguous_snapshot` | The admitted label event, or the title and body at its time, cannot be proved. | `detail` |
+| `duplicate_event` | This event was already admitted into this state directory. | |
+| `state_unwritable` | The admission record could not be written, or a directory on its path could not be created. | |
+
+The repository switch reason comes first. When the issue also fails a check, that reason follows it, so `reasons` has at most two entries.
+
+`failure` has `kind`:
+
+| `failure.kind` | Meaning | Extra fields |
+| --- | --- | --- |
+| `gh_failed` | `gh` exited non-zero. | `cause` and `status`, as in the `workflow-check` error kinds |
+| `cannot_run_gh` | `gh` could not be started. | |
+| `malformed_response` | `gh` printed something that is not the expected JSON, such as a proxy error page, a field of the wrong type, or a permission answer for another user. | |
+| `pagination_limit` | The timeline has more than 1000 entries: 10 full pages and a non-empty 11th. | |
+
+`detail` is one of these:
+
+| `detail` | Meaning |
+| --- | --- |
+| `label_events_same_second` | Two `factory:ready` timeline entries, `labeled` or `unlabeled`, share the latest `created_at`, so the admitted event is unknown. `eventId` and the later fields are `null`. |
+| `renamed_since_label` | The title changed at or after the label, by the timeline or by the GraphQL read. |
+| `rename_history_incomplete` | The number of renames the GraphQL read returned differs from its `totalCount`. At most 100 are read. |
+| `title_changed_between_reads` | The GraphQL title differs from the title the issue read returned, or from the `currentTitle` of the newest rename in the same GraphQL read. |
+| `body_changed_between_reads` | The GraphQL body differs from the body the issue read returned. |
+| `edited_at_label_time` | A body version was saved in the same second as the label. |
+| `history_contradicts_last_edit` | `lastEditedAt` is `null` or earlier than the label, but a body version was saved after the label or after `lastEditedAt`, or `lastEditedAt` is `null` and the history has a version other than the original. |
+| `history_incomplete` | GitHub returned a different number of versions than its `totalCount`. At most 100 are read. |
+| `history_without_original` | The history does not include the original body. |
+| `history_disagrees_with_body` | The newest version is not the current body, or was not saved at `lastEditedAt`. For an `unedited` snapshot: `lastEditedAt` is set and the latest version differs from the body or no version was returned, or `lastEditedAt` is `null` and a returned version differs from the body. |
+| `no_version_before_label` | No version was saved before the label. |
+| `version_withheld` | The version in force at label time is deleted, or two versions share its time. For an `unedited` snapshot this applies to the latest version. |
 
 ## `/factory status`
 

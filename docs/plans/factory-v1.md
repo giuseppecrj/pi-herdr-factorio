@@ -149,7 +149,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [ ] Prototype label-event identity, permission lookup, pagination, issue edits, and bot-authored comment reads through repository-scoped `gh` on the VM. Record accepted and unsupported proxy endpoints. Stop on risk R2 if the adapter cannot bind a ticket snapshot to the authorized label event.
 - [ ] Extend `TicketAdapter` with `fetchCandidates` and `fetchStates`, while retaining `fetch`. Add event IDs and timestamps to normalized events. Keep repository/provider identity in keys. Migrate the fake and every caller together.
 - [ ] Implement `GitHubTicketAdapter` with argument-array `gh` execution and explicit JSON validation. Poll issue timeline events, not only current labels. Require `decideAdmission` and actual write access for the label actor, regardless of issue author.
-- [ ] Implement `admitTicket` with repository allowlisting, both kill switches, immutable input snapshot, and event deduplication. Treat missing variables, local disable file, failed permission reads, and ambiguous snapshots as no dispatch. Add `admit --issue` for verification without executing model stages.
+- [ ] Implement `admitTicket` with repository allowlisting, both kill switches, immutable input snapshot, and event deduplication. Treat an absent or unreadable `factory:enabled` repository label, local disable file, failed permission reads, and ambiguous snapshots as no dispatch. Add `admit --issue` for verification without executing model stages.
 - [ ] Use only `GH_HOST=github.int.exe.xyz` and the repo-scoped integration. Preserve its bot identity. Store no GitHub token and create no App or webhook.
 
 **You see.**

@@ -8,6 +8,9 @@ import {
 
 export const READY_LABEL = "factory:ready";
 
+/** The repository kill switch is on only while a label with this exact name exists. */
+export const REPO_SWITCH_LABEL = "factory:enabled";
+
 export const CONTROL_PLANE_DIR = ".github";
 export const ACCEPTANCE_SUITE_DIR = "test/acceptance";
 
@@ -19,7 +22,28 @@ export type PermissionLevel =
 	| "read"
 	| "none";
 
-export function hasWriteAccess(level: PermissionLevel): boolean {
+const PERMISSION_LEVELS: readonly PermissionLevel[] = [
+	"admin",
+	"maintain",
+	"write",
+	"triage",
+	"read",
+	"none",
+];
+
+export function parsePermissionLevel(text: string): PermissionLevel | null {
+	return PERMISSION_LEVELS.find((level) => level === text) ?? null;
+}
+
+/** `maintain` counts as write access. `triage` does not. */
+export type WritePermission = Extract<
+	PermissionLevel,
+	"admin" | "maintain" | "write"
+>;
+
+export function hasWriteAccess(
+	level: PermissionLevel,
+): level is WritePermission {
 	return level === "admin" || level === "maintain" || level === "write";
 }
 
@@ -43,9 +67,8 @@ export function decideAdmission(input: {
 	return { kind: "admitted" };
 }
 
-export function isFactoryEnabled(variable: string | undefined): boolean {
-	return variable === "true";
-}
+/** Its presence in the controller state directory stops new admissions. */
+export const LOCAL_DISABLE_FILE = "disabled";
 
 export type PathCheck =
 	| { kind: "clean" }

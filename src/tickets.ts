@@ -8,17 +8,35 @@ export type Ticket = {
 	author: string;
 };
 
+/**
+ * Every event names the provider's event ID and its ISO 8601 UTC time, so a
+ * poller can drop an event it has already seen.
+ */
 export type FactoryEvent =
-	| { kind: "ready"; ref: TicketRef; actor: string }
-	| { kind: "answered"; ref: TicketRef; actor: string }
-	| { kind: "cancelled"; ref: TicketRef; actor: string }
+	| { kind: "ready"; id: string; at: string; ref: TicketRef; actor: string }
+	| { kind: "answered"; id: string; at: string; ref: TicketRef; actor: string }
+	| {
+			kind: "cancelled";
+			id: string;
+			at: string;
+			ref: TicketRef;
+			actor: string;
+	  }
 	| {
 			kind: "pr_feedback";
+			id: string;
+			at: string;
 			ref: TicketRef;
 			actor: string;
 			prUrl: string;
 			comment: string;
 	  };
+
+export type TicketState = {
+	readonly ref: TicketRef;
+	readonly open: boolean;
+	readonly labels: readonly string[];
+};
 
 /** A JSON value as `gh` prints it: an event before `normalize` parses it. */
 export type JsonValue =
@@ -29,10 +47,25 @@ export type JsonValue =
 	| JsonValue[]
 	| { [key: string]: JsonValue };
 
-export interface TicketAdapter {
+/**
+ * The map key for a ticket. A ref's `key` already names its repository, such
+ * as `owner/name#42`, and this adds the provider.
+ */
+export function ticketKey(ref: TicketRef): string {
+	return `${ref.provider}:${ref.key}`;
+}
+
+export interface TicketReader {
 	normalize(event: JsonValue): FactoryEvent | null;
 	fetch(ref: TicketRef): Promise<Ticket>;
+	/** Open tickets that carry the ready label now. */
+	fetchCandidates(): Promise<Ticket[]>;
+	/** Keyed by `ticketKey`. */
+	fetchStates(refs: readonly TicketRef[]): Promise<Map<string, TicketState>>;
 	canAdmit(ref: TicketRef, actor: string): Promise<boolean>;
+}
+
+export interface TicketAdapter extends TicketReader {
 	report(ref: TicketRef, run: Run): Promise<void>;
 	ask(ref: TicketRef, questions: string[]): Promise<void>;
 	close(ref: TicketRef, run: Run): Promise<void>;
