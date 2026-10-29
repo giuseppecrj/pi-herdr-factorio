@@ -98,11 +98,6 @@ export type ClaimRecord = {
 
 type ConfirmedRecord = ClaimRecord & { readonly seq: number };
 
-/**
- * A claim record whose run ended. It stays on disk until a ledger read shows
- * its marker or a later one. `tick` is the last tick that posted it or read
- * the ledger for it.
- */
 type EndedRecord = {
 	readonly claim: ConfirmedRecord;
 	tick: number;
