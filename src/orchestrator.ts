@@ -151,7 +151,6 @@ export type ActiveRun = {
 	seq: number;
 	marked: Marker | null;
 	inflight: InflightMarker | null;
-	/** The claim record does not hold `seq` yet, because its write failed. */
 	claimUnwritten: boolean;
 	workspaceMissing: boolean;
 	/** Set on a run adopted after a restart: its stage launches once more. */
@@ -440,7 +439,6 @@ export class Orchestrator {
 	readonly #confirmedSeq = new Map<number, number>();
 	readonly #persistedSeq = new Map<number, number>();
 	readonly #staleSinceTick = new Map<number, number>();
-	/** Issues reported `marker_missing` this tick. Their ledger is read again next tick. */
 	readonly #missing = new Set<number>();
 
 	constructor(input: OrchestratorInput) {
@@ -745,7 +743,6 @@ export class Orchestrator {
 		return "confirmed";
 	}
 
-	/** Reads a held run's ledger, unless this tick already read it clean, and drops or defers the run when it is not current. */
 	async #recheckLedger(
 		run: ActiveRun,
 		updatedAt: string | null,
@@ -772,7 +769,7 @@ export class Orchestrator {
 		}
 
 		if (behind === "missing") {
-			this.#markMissing(run.issue);
+			this.#markMissingUncached(run.issue);
 			this.#drop(run);
 
 			return "dropped";
@@ -887,8 +884,7 @@ export class Orchestrator {
 		});
 	}
 
-	/** Unlike other defects, `marker_missing` is not cached against `updated_at`, so a later read that reaches the floor clears it. */
-	#markMissing(issue: number): void {
+	#markMissingUncached(issue: number): void {
 		this.#markCorrupt(
 			issue,
 			{ kind: "corrupt", defect: "marker_missing", commentId: "" },
@@ -972,7 +968,7 @@ export class Orchestrator {
 			this.#recover.delete(issue);
 
 			if (behind === "missing") {
-				this.#markMissing(issue);
+				this.#markMissingUncached(issue);
 				continue;
 			}
 
@@ -1539,7 +1535,7 @@ export class Orchestrator {
 
 			const behind = this.#ledgerFreshness(run.issue, ledger.value);
 
-			if (behind === "missing") this.#markMissing(run.issue);
+			if (behind === "missing") this.#markMissingUncached(run.issue);
 
 			if (behind !== "current") return "stop";
 
