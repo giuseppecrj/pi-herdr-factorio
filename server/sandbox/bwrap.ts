@@ -8,6 +8,7 @@ export const BUNDLE = {
 	nodeBin: "/opt/factory/node/bin",
 	node: "/opt/factory/node/bin/node",
 	stageInit: "/opt/factory/sandbox/stage-init.ts",
+	herdr: "/opt/factory/bin/herdr",
 	etc: "/opt/factory/etc",
 } as const;
 
@@ -154,6 +155,8 @@ export function bwrapArgv(layout: SandboxLayout): string[] {
 		String(FORWARDER_PORT),
 		"--socket",
 		SANDBOX.socket,
+		"--herdr",
+		BUNDLE.herdr,
 		"--",
 		...layout.command,
 	];

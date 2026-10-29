@@ -10,6 +10,7 @@ import {
 	wrapPiArgv,
 } from "../../server/sandbox/assets/pi.ts";
 import {
+	herdrEnvOf,
 	parseStageInitArgs,
 	startForwarder,
 } from "../../server/sandbox/assets/stage-init.ts";
@@ -293,6 +294,8 @@ describe("bwrap argv", () => {
 			"18080",
 			"--socket",
 			SANDBOX.socket,
+			"--herdr",
+			BUNDLE.herdr,
 			"--",
 			"/opt/factory/bin/pi",
 			"--mode",
@@ -612,6 +615,36 @@ describe("pi wrapper", () => {
 	});
 });
 
+describe("in-sandbox Herdr", () => {
+	it("reads the root pane ids from workspace create output and refuses odd ones", () => {
+		const out = JSON.stringify({
+			result: {
+				root_pane: { pane_id: "w1:p1", tab_id: "w1:t1", workspace_id: "w1" },
+			},
+		});
+
+		assert.deepEqual(herdrEnvOf(out, "/h/herdr.sock"), {
+			HERDR_ENV: "1",
+			HERDR_SOCKET_PATH: "/h/herdr.sock",
+			HERDR_PANE_ID: "w1:p1",
+			HERDR_TAB_ID: "w1:t1",
+			HERDR_WORKSPACE_ID: "w1",
+		});
+		assert.equal(herdrEnvOf("not json", "/h"), null);
+		assert.equal(
+			herdrEnvOf(
+				JSON.stringify({
+					result: {
+						root_pane: { pane_id: "$(x)", tab_id: "t", workspace_id: "w" },
+					},
+				}),
+				"/h",
+			),
+			null,
+		);
+	});
+});
+
 describe("in-sandbox forwarder", () => {
 	it("parses its argv strictly", () => {
 		assert.deepEqual(
@@ -625,7 +658,43 @@ describe("in-sandbox forwarder", () => {
 				"--mode",
 				"rpc",
 			]),
-			{ port: 18080, socket: "/run/gw.sock", command: ["pi", "--mode", "rpc"] },
+			{
+				port: 18080,
+				socket: "/run/gw.sock",
+				herdr: null,
+				command: ["pi", "--mode", "rpc"],
+			},
+		);
+		assert.deepEqual(
+			parseStageInitArgs([
+				"--port",
+				"18080",
+				"--socket",
+				"/run/gw.sock",
+				"--herdr",
+				"/opt/factory/bin/herdr",
+				"--",
+				"pi",
+			]),
+			{
+				port: 18080,
+				socket: "/run/gw.sock",
+				herdr: "/opt/factory/bin/herdr",
+				command: ["pi"],
+			},
+		);
+		assert.equal(
+			parseStageInitArgs([
+				"--port",
+				"18080",
+				"--socket",
+				"/run/gw.sock",
+				"--herdr",
+				"herdr",
+				"--",
+				"pi",
+			]),
+			null,
 		);
 		assert.equal(
 			parseStageInitArgs([
