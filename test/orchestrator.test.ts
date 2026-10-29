@@ -1229,6 +1229,90 @@ describe("Orchestrator restart reads", () => {
 	});
 });
 
+describe("Orchestrator eligibility before launch", () => {
+	async function queuedRetry() {
+		const ctx = world();
+		const issue = ctx.github.add(labeled(14));
+
+		ctx.executor.behaviors = [{ kind: "fail", usage: 0 }];
+
+		const controller = ctx.start();
+
+		await controller.tick();
+
+		const queued = await controller.tick();
+
+		assert.equal(queued.runs[0]?.status, "retrying");
+
+		return { ...ctx, issue, controller };
+	}
+
+	it("defers a due retry whose issue read failed and releases it once the read works", async () => {
+		const { github, clock, executor, issue, controller } = await queuedRetry();
+
+		issue.state = "closed";
+		github.failures.set(`repos/${FAKE_REPO}/issues/14`, networkError());
+		clock.t += 10_000;
+
+		const deferred = await controller.tick();
+
+		assert.equal(executor.launches.length, 1);
+		assert.equal(deferred.runs[0]?.status, "retrying");
+
+		github.failures.clear();
+
+		const released = await controller.tick();
+
+		assert.deepEqual(released.runs, []);
+		assert.equal(executor.launches.length, 1);
+		assert.equal(statuses(github, 14).at(-1)?.endsWith(":released"), true);
+	});
+
+	it("defers a due retry whose changed issue has an unreadable timeline", async () => {
+		const { github, clock, executor, issue, controller } = await queuedRetry();
+
+		issue.updatedAt = "2026-10-29T03:00:00Z";
+		github.failures.set(
+			`repos/${FAKE_REPO}/issues/14/timeline`,
+			networkError(),
+		);
+		clock.t += 10_000;
+
+		const deferred = await controller.tick();
+
+		assert.equal(executor.launches.length, 1);
+		assert.equal(deferred.runs[0]?.status, "retrying");
+
+		github.failures.clear();
+		await controller.tick();
+
+		assert.equal(executor.launches.length, 2);
+	});
+
+	it("does not replay an adopted run until its eligibility is read", async () => {
+		const { github, executor, start } = world();
+
+		github.add(labeled(14));
+		await start().tick();
+		github.failures.set(
+			`repos/${FAKE_REPO}/issues/14/timeline`,
+			networkError(),
+		);
+
+		const controller = start();
+		const deferred = await controller.tick();
+
+		assert.equal(executor.launches.length, 1);
+		assert.equal(deferred.runs[0]?.status, "blocked");
+
+		github.failures.clear();
+		await controller.tick();
+
+		assert.equal(executor.launches.length, 2);
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+	});
+});
+
 describe("Orchestrator bot comment edits", () => {
 	it("fails closed after a restart when an owner strips the marker prefix from bot comments", async () => {
 		const { github, start } = world();
@@ -1246,6 +1330,39 @@ describe("Orchestrator bot comment edits", () => {
 		assert.deepEqual(report.runs, []);
 		assert.deepEqual(report.corrupt, [{ issue: 14, defect: "edited" }]);
 		assert.equal(issue.comments.length, 2);
+	});
+});
+
+describe("Orchestrator live marker validation", () => {
+	it("drops a held issue from dispatch when a live controller sees its marker edited", async () => {
+		const { github, clock, executor, start } = world();
+		const issue = github.add(labeled(14));
+
+		executor.behaviors = [{ kind: "fail", usage: 0 }];
+
+		const controller = start();
+
+		await controller.tick();
+		await controller.tick();
+
+		const first = issue.comments[0];
+
+		assert.ok(first);
+		first.lastEditedAt = "2026-10-29T03:00:00Z";
+		issue.updatedAt = "2026-10-29T03:00:00Z";
+		clock.t += 10_000;
+
+		const report = await controller.tick();
+
+		assert.equal(executor.launches.length, 1);
+		assert.deepEqual(report.runs, []);
+		assert.deepEqual(report.corrupt, [{ issue: 14, defect: "edited" }]);
+		assert.equal(github.markers(14).length, 3);
+
+		const again = await controller.tick();
+
+		assert.deepEqual(again.runs, []);
+		assert.equal(github.markers(14).length, 3);
 	});
 });
 

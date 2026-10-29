@@ -255,6 +255,8 @@ type Limits = {
 	stallMs(stage: Stage): number;
 };
 
+type Eligibility = "confirmed" | "unverified" | "released" | "dropped";
+
 type Gate =
 	| { readonly kind: "open"; readonly reads: TickReads }
 	| { readonly kind: "closed"; readonly reasons: readonly GateReason[] };
@@ -395,6 +397,10 @@ export class Orchestrator {
 	#claimsLoaded = false;
 	#ticks = 0;
 	readonly #recover = new Set<number>();
+	/** Issues whose claim this tick confirmed eligible. Only these launch. */
+	readonly #confirmed = new Set<number>();
+	/** Issues whose marker ledger this tick read clean. */
+	readonly #ledgerRead = new Set<number>();
 
 	constructor(input: OrchestratorInput) {
 		this.#input = input;
@@ -431,6 +437,8 @@ export class Orchestrator {
 		const queued: number[] = [];
 
 		this.#ticks++;
+		this.#confirmed.clear();
+		this.#ledgerRead.clear();
 		const refused: { issue: number; reasons: RefusalReason["kind"][] }[] = [];
 
 		if (!this.#claimsLoaded) await this.#loadClaims();
@@ -571,26 +579,33 @@ export class Orchestrator {
 	/** Refreshes every claim against GitHub, before the per-tick reads that gate dispatch. */
 	async #reconcileClaims(candidates: Read<IssueRecord[]>): Promise<void> {
 		for (const run of this.state.runs.values()) {
-			if (candidates.kind === "ok") {
-				await this.#checkEligible(run, candidates.value);
-			}
+			const eligibility =
+				candidates.kind === "ok"
+					? await this.#checkEligible(run, candidates.value)
+					: "unverified";
 
-			await this.#sync(run);
+			if (eligibility !== "dropped") await this.#sync(run);
 		}
 	}
 
+	/**
+	 * Confirms a claim against GitHub. An issue that changed since the last
+	 * confirmation has its ready event and its marker ledger read again. A read
+	 * that fails leaves the claim `unverified`, and an unverified claim does not
+	 * launch this tick. A corrupt ledger drops the run from dispatch.
+	 */
 	async #checkEligible(
 		run: ActiveRun,
 		candidates: readonly IssueRecord[],
-	): Promise<void> {
-		if (run.phase.kind === "ending") return;
+	): Promise<Eligibility> {
+		if (run.phase.kind === "ending") return "unverified";
 
-		const record = candidates.find((item) => item.number === run.issue);
+		let record = candidates.find((item) => item.number === run.issue);
 
 		if (record === undefined) {
 			const read = await this.#adapter.readIssue(run.issue);
 
-			if (read.kind === "failed") return;
+			if (read.kind === "failed") return "unverified";
 
 			const issue = read.value;
 
@@ -600,16 +615,31 @@ export class Orchestrator {
 				!issue.labels.includes(READY_LABEL)
 			) {
 				this.#release(run, issue.open ? "unlabeled" : "closed");
+
+				return "released";
 			}
 
-			return;
+			record = issue;
 		}
 
-		if (this.state.seen.get(run.issue)?.updatedAt === record.updatedAt) return;
+		if (this.state.seen.get(run.issue)?.updatedAt !== record.updatedAt) {
+			const changed = await this.#recheckChanged(run, record.updatedAt);
 
+			if (changed !== "confirmed") return changed;
+		}
+
+		this.#confirmed.add(run.issue);
+
+		return "confirmed";
+	}
+
+	async #recheckChanged(
+		run: ActiveRun,
+		updatedAt: string,
+	): Promise<Eligibility> {
 		const timeline = await this.#adapter.readTimeline(run.issue);
 
-		if (timeline.kind === "failed") return;
+		if (timeline.kind === "failed") return "unverified";
 
 		const latest = latestReadyEntry(timeline.value);
 
@@ -620,12 +650,36 @@ export class Orchestrator {
 		) {
 			this.#release(run, "new_event");
 
-			return;
+			return "released";
 		}
 
-		this.state.seen.set(run.issue, {
-			updatedAt: record.updatedAt,
-			verdict: { kind: "claimed" },
+		if (!this.#ledgerRead.has(run.issue)) {
+			const ledger = await this.#readLedger(run.issue);
+
+			if (ledger.kind === "failed") return "unverified";
+
+			if (ledger.value.kind === "corrupt") {
+				this.#markCorrupt(run.issue, ledger.value, updatedAt);
+				this.#drop(run);
+
+				return "dropped";
+			}
+		}
+
+		this.state.seen.set(run.issue, { updatedAt, verdict: { kind: "claimed" } });
+
+		return "confirmed";
+	}
+
+	/** Stops tracking a run whose ledger turned corrupt. Its claim record stays as evidence. */
+	#drop(run: ActiveRun): void {
+		if (run.phase.kind === "running") run.phase.abort.abort();
+
+		this.state.runs.delete(run.issue);
+		this.#input.log("claim_dropped", {
+			issue: run.issue,
+			runId: run.runId,
+			why: "marker_corrupt",
 		});
 	}
 
@@ -760,6 +814,7 @@ export class Orchestrator {
 			}
 
 			this.state.corrupt.delete(issue);
+			this.#ledgerRead.add(issue);
 
 			const current = currentMarker(ledger.value);
 
@@ -890,8 +945,9 @@ export class Orchestrator {
 			};
 		}
 
-		await this.#checkEligible(run, candidates);
-		await this.#sync(run);
+		if ((await this.#checkEligible(run, candidates)) !== "dropped") {
+			await this.#sync(run);
+		}
 	}
 
 	async #dispatch(input: {
@@ -913,6 +969,7 @@ export class Orchestrator {
 		for (const run of runs) {
 			if (
 				run.inflight === null &&
+				this.#confirmed.has(run.issue) &&
 				(run.phase.kind === "claimed" ||
 					(run.phase.kind === "blocked" && run.replay))
 			) {
@@ -921,7 +978,13 @@ export class Orchestrator {
 		}
 
 		for (const run of runs) {
-			if (run.phase.kind !== "retry_queued" || run.phase.dueAt > now) continue;
+			if (
+				run.phase.kind !== "retry_queued" ||
+				run.phase.dueAt > now ||
+				!this.#confirmed.has(run.issue)
+			) {
+				continue;
+			}
 
 			if (slots === 0) break;
 
