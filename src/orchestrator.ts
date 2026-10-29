@@ -1078,14 +1078,18 @@ export class Orchestrator {
 					continue;
 				}
 
-				this.#resolve(issue);
-
-				if (this.state.runs.has(issue)) continue;
+				if (this.state.runs.has(issue)) {
+					this.#resolve(issue);
+					continue;
+				}
 			}
 
-			this.#resolve(issue);
-
-			await this.#forgetClaims(ledger.value, issue, candidate);
+			if (await this.#settleClaims(ledger.value, issue, candidate)) {
+				this.#recover.add(issue);
+				this.#reserved.add(issue);
+			} else {
+				this.#resolve(issue);
+			}
 
 			if (!candidate) {
 				this.#see(issue, record.updatedAt, { kind: "decided" });
@@ -1115,11 +1119,13 @@ export class Orchestrator {
 		);
 	}
 
-	async #forgetClaims(
+	async #settleClaims(
 		ledger: CleanLedger,
 		issue: number,
 		candidate: boolean,
-	): Promise<void> {
+	): Promise<boolean> {
+		let held = false;
+
 		for (const claim of await this.#input.files.listClaims()) {
 			if (claim.issue !== issue || this.#ended.has(claim.runId)) continue;
 
@@ -1127,10 +1133,14 @@ export class Orchestrator {
 
 			if (latest !== null && isTerminal(latest.marker.status)) {
 				await this.#keepEnded(recordOf(latest.marker), true);
-			} else if (!candidate) {
+			} else if (candidate) {
+				held = true;
+			} else {
 				await this.#input.files.removeClaim(claim.runId);
 			}
 		}
+
+		return held;
 	}
 
 	/**
@@ -1240,6 +1250,33 @@ export class Orchestrator {
 		const { now, limits } = input;
 		const runs = [...this.state.runs.values()];
 
+		for (const record of input.candidates) {
+			const issue = record.number;
+			const seen = this.state.seen.get(issue);
+
+			if (
+				!this.#reserved.has(issue) ||
+				this.state.runs.has(issue) ||
+				seen?.verdict.kind !== "open"
+			) {
+				continue;
+			}
+
+			if (this.#active() >= limits.maxConcurrent) {
+				input.queued.push(issue);
+				continue;
+			}
+
+			await this.#claim(record, seen.verdict.ledger, input);
+
+			if (
+				this.state.runs.has(issue) ||
+				this.state.seen.get(issue)?.verdict.kind !== "open"
+			) {
+				this.#resolve(issue);
+			}
+		}
+
 		const reserved = [...this.#reserved].filter(
 			(issue) => !this.state.runs.has(issue),
 		).length;
@@ -1277,7 +1314,11 @@ export class Orchestrator {
 			const issue = record.number;
 			const seen = this.state.seen.get(issue);
 
-			if (this.state.runs.has(issue) || seen?.verdict.kind !== "open") {
+			if (
+				this.state.runs.has(issue) ||
+				this.#reserved.has(issue) ||
+				seen?.verdict.kind !== "open"
+			) {
 				continue;
 			}
 
@@ -1286,19 +1327,30 @@ export class Orchestrator {
 				continue;
 			}
 
-			const claimed = await this.#admit({
-				record,
-				ledger: seen.verdict.ledger,
-				reads: input.reads,
-				refused: input.refused,
-			});
-
-			if (claimed !== null) {
-				slots--;
-
-				if (claimed.inflight === null) await this.#launch(claimed);
-			}
+			if (await this.#claim(record, seen.verdict.ledger, input)) slots--;
 		}
+	}
+
+	async #claim(
+		record: IssueRecord,
+		ledger: CleanLedger,
+		input: {
+			reads: TickReads;
+			refused: { issue: number; reasons: RefusalReason["kind"][] }[];
+		},
+	): Promise<boolean> {
+		const claimed = await this.#admit({
+			record,
+			ledger,
+			reads: input.reads,
+			refused: input.refused,
+		});
+
+		if (claimed === null) return false;
+
+		if (claimed.inflight === null) await this.#launch(claimed);
+
+		return true;
 	}
 
 	/**

@@ -2785,6 +2785,75 @@ describe("Orchestrator persisted claim slots", () => {
 		assert.deepEqual(runIssues(freed), [14, 16]);
 		assert.deepEqual(statuses(github, 14), ["1:claimed"]);
 	});
+
+	it("recovers a claim recorded before its first marker with its own slot before admitting fresh candidates", async () => {
+		const { github, clock, files, start } = world();
+		const first = github.add(labeled(14, { state: "closed" }));
+
+		github.add(labeled(16));
+		github.posts = ["lost"];
+
+		const seed = await start().tick();
+
+		assert.deepEqual(
+			seed.runs.map((run) => [run.issue, run.markerPending]),
+			[[16, true]],
+		);
+		assert.equal(files.claims.get(runOf(16))?.seq, null);
+		assert.deepEqual(statuses(github, 16), []);
+
+		first.state = "open";
+		github.add(labeled(15));
+		clock.t += 30_000;
+
+		const recovered = await start().tick();
+
+		assert.deepEqual(runIssues(recovered), [14, 16]);
+		assert.deepEqual(recovered.queued, [15]);
+		assert.deepEqual(statuses(github, 16), ["1:claimed", "2:blocked"]);
+		assert.deepEqual(statuses(github, 15), []);
+		assert.deepEqual(
+			[...files.claims.keys()].sort(),
+			[runOf(14), runOf(16)].sort(),
+		);
+	});
+
+	it("recovers claims recorded before their first marker only while a slot is free, and lists the rest in queued", async () => {
+		const { github, clock, files, start } = world();
+
+		github.add(labeled(14));
+		github.add(labeled(15));
+		github.add(labeled(16));
+		github.workflow = (github.workflow ?? "").replace(
+			"max_concurrent: 2",
+			"max_concurrent: 3",
+		);
+		github.posts = ["lost", "lost", "lost"];
+		await start().tick();
+
+		assert.equal(files.claims.size, 3);
+
+		github.workflow = github.workflow.replace(
+			"max_concurrent: 3",
+			"max_concurrent: 2",
+		);
+		clock.t += 30_000;
+
+		const controller = start();
+		const recovered = await controller.tick();
+
+		assert.deepEqual(runIssues(recovered), [14, 15]);
+		assert.deepEqual(recovered.queued, [16]);
+		assert.deepEqual(statuses(github, 16), []);
+
+		clock.t += 30_000;
+
+		const again = await controller.tick();
+
+		assert.deepEqual(runIssues(again), [14, 15]);
+		assert.deepEqual(again.queued, [16]);
+		assert.equal(files.claims.size, 3);
+	});
 });
 
 describe("Orchestrator claim record usage", () => {
