@@ -162,13 +162,14 @@ export async function runCli(
 		: EXIT.invalid;
 }
 
-async function execFile(
+export async function execFile(
 	command: string,
 	args: readonly string[],
+	timeoutMs: number,
 ): Promise<ExecResult> {
 	const result = spawnSync(command, [...args], {
 		encoding: "utf8",
-		timeout: FETCH_TIMEOUT_MS,
+		timeout: timeoutMs,
 		maxBuffer: 4 * 1024 * 1024,
 	});
 
@@ -184,7 +185,7 @@ async function execFile(
 
 if (import.meta.main) {
 	process.exitCode = await runCli(process.argv.slice(2), {
-		exec: execFile,
+		exec: (command, args) => execFile(command, args, FETCH_TIMEOUT_MS),
 		env: (name) => process.env[name],
 		stdout: (text) => process.stdout.write(text),
 		stderr: (text) => process.stderr.write(text),

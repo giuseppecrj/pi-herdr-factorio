@@ -190,7 +190,10 @@ export function redactCredentials(text: string): string {
 }
 
 export function isRepoSlug(input: string): input is RepoSlug {
-	return REPO_SLUG.test(input);
+	return (
+		REPO_SLUG.test(input) &&
+		input.split("/").every((segment) => segment !== "." && segment !== "..")
+	);
 }
 
 export function isGitSha(input: string): input is GitSha {

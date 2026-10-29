@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
-import { EXIT, runCli } from "../server/cli.ts";
+import { EXIT, execFile, runCli } from "../server/cli.ts";
 import { digestOf } from "../src/run.ts";
 import { STAGE_ORDER, STAGE_PROFILES } from "../src/stages.ts";
 import type { JsonValue } from "../src/tickets.ts";
@@ -956,6 +956,49 @@ describe("server/cli.ts", () => {
 			assert.equal(run.json, null);
 			assert.match(run.stderr, /Usage:/);
 		}
+	});
+
+	it("refuses . and .. repository segments before running gh", async () => {
+		for (const bad of ["../x", "./x", "x/..", "x/.", "../.."]) {
+			assert.equal(isRepoSlug(bad), false, bad);
+
+			const calls: string[][] = [];
+
+			const exec: Exec = async (_command, args) => {
+				calls.push([...args]);
+
+				return { stdout: "", stderr: "", code: 1 };
+			};
+
+			for (const command of ["status", "workflow-check"]) {
+				const run = await runRaw([command, "--json", "--repo", bad], exec);
+
+				assert.equal(run.code, EXIT.usage, `${command} ${bad}`);
+				assert.equal(run.stdout, "");
+			}
+
+			assert.deepEqual(calls, []);
+		}
+
+		assert.equal(isRepoSlug("a.b/c..d"), true);
+		assert.equal(isRepoSlug("x/.github"), true);
+	});
+
+	it("reports a gh that times out as a network error, not cannot run gh", async () => {
+		const hang = ["-e", "setTimeout(() => {}, 10000)"];
+
+		const run = await runRaw(["status", "--json", "--repo", repo], () =>
+			execFile(process.execPath, hang, 200),
+		);
+
+		assert.equal(run.code, EXIT.ok);
+
+		assert.deepEqual(JSON.parse(run.stdout).workflowError, {
+			kind: "source_unavailable",
+			cause: "network",
+			status: null,
+			message: "cannot resolve the branch: network error",
+		});
 	});
 });
 
