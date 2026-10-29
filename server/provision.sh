@@ -147,8 +147,7 @@ JSON
 cat >"$b/pi-agent/settings.json" <<JSON
 {
   "defaultProvider": "$DEFAULT_PROVIDER",
-  "defaultModel": "$DEFAULT_MODEL",
-  "packages": ["/opt/factory/pkg/node_modules/pi-herdr-agents"]
+  "defaultModel": "$DEFAULT_MODEL"
 }
 JSON
 chmod 0644 "$b/etc/"* "$b/pi-agent/"*

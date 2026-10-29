@@ -30,7 +30,7 @@ import {
 	type ModelStage,
 	STAGE_CLEANUP_RESERVE_MS,
 } from "../src/workflow.ts";
-import { PI_AGENT_DIR } from "./sandbox/assets/pi.ts";
+import { HERDR_AGENTS, PI_AGENT_DIR } from "./sandbox/assets/pi.ts";
 import { AUDIT_CAP_BYTES } from "./sandbox/audit.ts";
 import { countOf, fieldOf, objectOf, parseJson } from "./sandbox/json.ts";
 import { manifestDigest, PINNED_VERSIONS } from "./sandbox/manifest.ts";
@@ -815,7 +815,9 @@ function freshDir(base: string): string {
 /**
  * The stage's Pi. Its session lives in the writable agent dir:
  * `pi-herdr-agents` refuses to launch a child from a parent with no
- * session file, which `--no-session` caused on `pi-factorio`.
+ * session file, which `--no-session` caused on `pi-factorio`. The wrapper
+ * forces `--no-extensions`, which skips configured packages, so
+ * `pi-herdr-agents` and its `subagent` tool load by `-e`.
  */
 export function piCommand(model: ModelId): string[] {
 	return [
@@ -826,6 +828,8 @@ export function piCommand(model: ModelId): string[] {
 		`${PI_AGENT_DIR}/sessions`,
 		"--model",
 		model,
+		"-e",
+		HERDR_AGENTS,
 	];
 }
 

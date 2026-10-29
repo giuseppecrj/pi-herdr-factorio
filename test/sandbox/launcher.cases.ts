@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readFileSync,
 	realpathSync,
 	renameSync,
 	rmSync,
@@ -32,6 +33,13 @@ import {
 	type SandboxLayout,
 } from "../../server/sandbox/bwrap.ts";
 import { startGatewayProcess } from "../../server/sandbox/gateway-client.ts";
+import {
+	arrayOf,
+	fieldOf,
+	objectOf,
+	parseJson,
+	textOf,
+} from "../../server/sandbox/json.ts";
 import { manifestDigest } from "../../server/sandbox/manifest.ts";
 import {
 	type PreflightDeps,
@@ -47,7 +55,11 @@ import {
 	scopeUnit,
 	stopScopeArgv,
 } from "../../server/sandbox/scope.ts";
-import { sandboxExecutor, sandboxHost } from "../../server/sandbox.ts";
+import {
+	piCommand,
+	sandboxExecutor,
+	sandboxHost,
+} from "../../server/sandbox.ts";
 import type { StageReceipt } from "../../server/sandbox/result.ts";
 import {
 	AUDIT_ARCH,
@@ -829,6 +841,132 @@ describe("pi wrapper", () => {
 		}
 	});
 
+	it("with the forced flags, a real Pi 1.4.0 started as the stage Pi declares the subagent tool", {
+		timeout: 60_000,
+	}, async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-pi-parent-"));
+		const agent = join(dir, "pi-agent");
+		const modules = new URL("../../node_modules", import.meta.url).pathname;
+		const cli = `${modules}/@earendil-works/pi-coding-agent/dist/bundle/cli.js`;
+		const bodies: string[] = [];
+		let child: ChildProcess | undefined;
+
+		const server = createHttpServer((req, res) => {
+			let body = "";
+
+			req.on("data", (chunk: Buffer) => {
+				body += chunk.toString();
+			});
+			req.on("end", () => {
+				bodies.push(body);
+				res.writeHead(500).end("{}");
+			});
+		});
+
+		try {
+			await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+
+			const address = server.address();
+
+			const port =
+				address !== null && address instanceof Object ? address.port : 0;
+
+			const script = readFileSync(
+				new URL("../../server/provision.sh", import.meta.url),
+				"utf8",
+			).split("\n");
+
+			const first = script.indexOf('cat >"$b/pi-agent/models.json" <<JSON');
+
+			const settings = script.indexOf(
+				'cat >"$b/pi-agent/settings.json" <<JSON',
+			);
+
+			const last = script.indexOf("JSON", settings);
+
+			assert.ok(first !== -1 && settings > first && last > settings);
+			mkdirSync(join(agent, "sessions"), { recursive: true });
+			mkdirSync(join(dir, "work"));
+
+			const templated = spawnSync(
+				"bash",
+				[
+					"-c",
+					`set -eu\nb=$1\n${script.slice(first, last + 1).join("\n")}`,
+					"provision",
+					dir,
+				],
+				{
+					env: {
+						PATH: "/usr/bin:/bin",
+						DEFAULT_PROVIDER: "openai",
+						DEFAULT_MODEL: "gpt-6.1-sol",
+						FORWARDER: `http://127.0.0.1:${port}`,
+					},
+				},
+			);
+
+			assert.equal(templated.status, 0, templated.stderr.toString());
+
+			const wrapped = wrapPiArgv(
+				piCommand(modelId("openai/gpt-6.1-sol")).slice(1),
+				["read", "subagent"],
+			);
+
+			assert.ok(wrapped.ok);
+
+			const local = wrapped.argv.map((arg) =>
+				arg
+					.replace(PI_AGENT_DIR, agent)
+					.replace("/opt/factory/pkg/node_modules", modules),
+			);
+
+			const pi = spawn(process.execPath, [cli, ...local], {
+				cwd: join(dir, "work"),
+				stdio: ["pipe", "ignore", "ignore"],
+				env: {
+					PATH: process.env.PATH ?? "/usr/bin:/bin",
+					HOME: dir,
+					PI_CODING_AGENT_DIR: agent,
+					PI_OFFLINE: "1",
+				},
+			});
+
+			child = pi;
+
+			const exited = new Promise<void>((done) => pi.on("exit", () => done()));
+
+			pi.stdin.write(
+				`${JSON.stringify({ id: "p", type: "prompt", message: "hi" })}\n`,
+			);
+
+			while (bodies.length === 0 && pi.exitCode === null) {
+				await new Promise((done) => setTimeout(done, 50));
+			}
+
+			pi.kill();
+			await exited;
+
+			const body = objectOf(parseJson(bodies[0] ?? "{}"));
+
+			const holders = [
+				body,
+				...(arrayOf(fieldOf(body, "input")) ?? []).map(objectOf),
+			];
+
+			const declared = holders
+				.flatMap((holder) => arrayOf(fieldOf(holder, "tools")) ?? [])
+				.map((tool) => textOf(fieldOf(objectOf(tool), "name")))
+				.sort();
+
+			assert.deepEqual(declared, ["read", "subagent"]);
+		} finally {
+			child?.kill();
+			server.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("forces the hardening flags onto a child launched by name", () => {
 		const child = [
 			"--session",
@@ -907,6 +1045,12 @@ describe("pi wrapper", () => {
 			["-e", "/workspace/evil.js"],
 			["--extension=/workspace/evil.js"],
 			["-e", "builtin:mcp"],
+			["-e", "/opt/factory/pkg/node_modules/pi-herdr-agents/"],
+			["-e", "/opt/factory/pkg/node_modules/pi-herdr-pstack"],
+			[
+				"-e",
+				"/opt/factory/pkg/node_modules/pi-herdr-agents/pi-extension/subagents/index.ts",
+			],
 			[
 				"-e",
 				"/opt/factory/pkg/node_modules/pi-herdr-agents/maestro/adapters/pi/child/../../../../../../../workspace/evil.ts",
@@ -938,6 +1082,8 @@ describe("pi wrapper", () => {
 				"/run/pi-agent/sessions",
 				"--model",
 				"openai/gpt-6.1-sol",
+				"-e",
+				"/opt/factory/pkg/node_modules/pi-herdr-agents",
 			],
 			allowed,
 		);
@@ -963,6 +1109,8 @@ describe("pi wrapper", () => {
 			"/run/pi-agent/sessions",
 			"--model",
 			"openai/gpt-6.1-sol",
+			"-e",
+			"/opt/factory/pkg/node_modules/pi-herdr-agents",
 		]);
 		assert.deepEqual(prompted.argv.slice(F + 2), [
 			"--session",

@@ -13,8 +13,8 @@ export const PI_CLI =
 
 /**
  * Always added. `--no-extensions` stops Pi loading anything from the
- * writable agent dir's `extensions/`; an explicit `-e`, which the allowlist
- * limits to the bundled child extension, still loads.
+ * writable agent dir's `extensions/` or its settings' packages; an explicit
+ * `-e`, which the allowlist limits to the bundled `EXTENSIONS`, still loads.
  */
 export const FORCED_PI_FLAGS = [
 	"--no-mcp",
@@ -65,13 +65,20 @@ const SWITCH_FLAGS = [
 ];
 
 /**
- * The only extension a Pi in the sandbox may load by flag: the one
- * `pi-herdr-agents` passes to every child it starts. It is in the read-only
- * bundle. The match is exact, so no other path, `builtin:` name or `..`
- * spelling passes.
+ * The `pi-herdr-agents` package in the read-only bundle. The stage Pi loads
+ * it by `-e`, which gives it the `subagent` tool.
  */
-export const CHILD_EXTENSIONS = [
-	"/opt/factory/pkg/node_modules/pi-herdr-agents/maestro/adapters/pi/child/subagent-done.ts",
+export const HERDR_AGENTS = "/opt/factory/pkg/node_modules/pi-herdr-agents";
+
+/**
+ * The only extensions a Pi in the sandbox may load by flag: `HERDR_AGENTS`
+ * for the stage Pi, and the one `pi-herdr-agents` passes to every child it
+ * starts. Both are in the read-only bundle. The match is exact, so no other
+ * path, `builtin:` name or `..` spelling passes.
+ */
+const EXTENSIONS = [
+	HERDR_AGENTS,
+	`${HERDR_AGENTS}/maestro/adapters/pi/child/subagent-done.ts`,
 ];
 
 const REFUSED_SUBCOMMANDS = [
@@ -144,7 +151,7 @@ export function wrapPiArgv(
 		if (flag === "--tools" || flag === "-t") {
 			requested = value;
 		} else if (flag === "--extension" || flag === "-e") {
-			if (!CHILD_EXTENSIONS.includes(value)) return { ok: false };
+			if (!EXTENSIONS.includes(value)) return { ok: false };
 
 			kept.push(flag, value);
 		} else if (VALUE_FLAGS.includes(flag)) {

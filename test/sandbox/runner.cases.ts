@@ -1991,7 +1991,7 @@ describe("runStage with a fake Pi process", () => {
 });
 
 describe("stage Pi command", () => {
-	it("keeps a session under the writable agent dir, so subagents can launch", () => {
+	it("keeps a session under the writable agent dir and loads pi-herdr-agents by -e, so subagents can launch", () => {
 		assert.deepEqual(piCommand(model("openai/gpt-6.1-sol")), [
 			"/opt/factory/bin/pi",
 			"--mode",
@@ -2000,6 +2000,8 @@ describe("stage Pi command", () => {
 			"/run/pi-agent/sessions",
 			"--model",
 			"openai/gpt-6.1-sol",
+			"-e",
+			"/opt/factory/pkg/node_modules/pi-herdr-agents",
 		]);
 	});
 });
