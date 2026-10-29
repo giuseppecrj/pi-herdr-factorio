@@ -75,6 +75,8 @@ Validation stops at the first failing field. A key from `WORKFLOW.md` appears in
 | `guidance` | object or `null` | `general`, the text before the first stage heading, and `stages`, a map from stage name to its section text. |
 | `reload` | object or `null` | Present only with `--reload-ref`. |
 
+When `valid` is `true`, `sha` and `digest` are set, `error` is `null`, and `config` and `guidance` are set. When `valid` is `false`, `error` is set, `warnings` is empty, and `config` and `guidance` are `null`.
+
 The `reload` object has these fields:
 
 | Field | Type | Meaning |
@@ -82,7 +84,7 @@ The `reload` object has these fields:
 | `repo`, `ref`, `sha`, `digest`, `valid`, `error` | as above | The result of loading `--reload-ref`. |
 | `verification` | boolean | `true` when the ref of the snapshot in force is not `main`. When no snapshot is in force, it uses the `--reload-ref` value. |
 | `outcome` | string | `applied` when the reload is valid, `kept` when it is invalid and the `--ref` snapshot stays, and `unavailable` when neither load is valid. |
-| `inForce` | object or `null` | `ref`, `sha` and `digest` of the snapshot in force after the reload. |
+| `inForce` | object or `null` | `ref`, `sha` and `digest` of the snapshot in force after the reload. `null` only when `outcome` is `unavailable`. |
 
 ## `status` output
 
@@ -102,7 +104,7 @@ The `reload` object has these fields:
 | `limits` | object or `null` | `pollIntervalMs`, `maxConcurrent`, `retry`, `usage` and `stages`, where `stages` maps each stage to `maxTurns`, `wallMs` and `stallMs`. |
 | `checkpoints` | object or `null` | `approveMerge.mode`, which is always `always`. |
 
-`models`, `limits` and `checkpoints` are `null` when the workflow is invalid.
+When `workflow` is `valid`, `workflowSha` and `workflowDigest` are set, `workflowError` is `null`, and `models`, `limits` and `checkpoints` are set. When it is `invalid`, `workflowError` is set and `models`, `limits` and `checkpoints` are `null`.
 
 ## `/factory status`
 

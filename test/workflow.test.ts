@@ -6,6 +6,7 @@ import { digestOf } from "../src/run.ts";
 import { STAGE_ORDER, STAGE_PROFILES } from "../src/stages.ts";
 import type { JsonValue } from "../src/tickets.ts";
 import {
+	type CheckReport,
 	checkReport,
 	DEFAULT_MODEL,
 	type EnvLookup,
@@ -13,13 +14,17 @@ import {
 	type ExecResult,
 	githubRepoFromRemote,
 	isRepoSlug,
+	type LoadView,
+	loadView,
 	loadWorkflow,
 	MODEL_STAGES,
 	modelsOf,
 	parseWorkflow,
 	type RepoSlug,
+	type ReloadView,
 	redactCredentials,
 	reloadWorkflow,
+	type StatusReport,
 	statusReport,
 	WORKFLOW_PATH,
 	type WorkflowError,
@@ -1746,5 +1751,64 @@ describe("second-layer redaction", () => {
 		assert.partialDeepStrictEqual(JSON.parse(run.stdout), {
 			guidance: { general: "body\n\nfetch https://h/x?token=<redacted>" },
 		});
+	});
+});
+
+describe("report types", () => {
+	it("tie valid to its error, config and settings", async () => {
+		const error: WorkflowError = {
+			kind: "workflow_front_matter_missing",
+			message: "m",
+		};
+
+		const loaded = await load(
+			new Map([["main", { sha: mainSha, text: valid }]]),
+		);
+
+		const next = await load(
+			new Map([["fixture", { sha: candidateSha, text: valid }]]),
+			"fixture",
+		);
+
+		const view = loadView(loaded);
+		const check = checkReport(loaded, null);
+		const status = statusReport(loaded, "0.1.0");
+
+		const reload = checkReport(loaded, {
+			next,
+			result: reloadWorkflow(null, next),
+		}).reload;
+
+		if (
+			!view.valid ||
+			!check.valid ||
+			status.workflow !== "valid" ||
+			reload?.outcome !== "applied"
+		) {
+			throw new Error("expected valid reports");
+		}
+
+		const views: LoadView[] = [];
+		const checks: CheckReport[] = [];
+		const statuses: StatusReport[] = [];
+		const reloads: ReloadView[] = [];
+
+		// @ts-expect-error a valid view carries no error
+		views.push({ ...view, error });
+		// @ts-expect-error a valid check report has a config
+		checks.push({ ...check, config: null });
+		// @ts-expect-error a valid check report carries no error
+		checks.push({ ...check, error });
+		// @ts-expect-error a valid status carries no error
+		statuses.push({ ...status, workflowError: error });
+		// @ts-expect-error a valid status has models
+		statuses.push({ ...status, models: null });
+		// @ts-expect-error an applied reload is valid
+		reloads.push({ ...reload, valid: false, error });
+		// @ts-expect-error an applied reload has a snapshot in force
+		reloads.push({ ...reload, inForce: null });
+
+		assert.equal(views.length + checks.length + statuses.length, 5);
+		assert.equal(reloads.length, 2);
 	});
 });

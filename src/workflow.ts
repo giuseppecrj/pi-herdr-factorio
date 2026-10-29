@@ -1100,77 +1100,109 @@ export type ConfigView = Omit<WorkflowConfig, "workspace"> & {
 	readonly workspace: { readonly root: string };
 };
 
-export type LoadView = {
-	readonly repo: RepoSlug;
-	readonly ref: string;
+type LoadedFields = {
+	readonly sha: GitSha;
+	readonly digest: Digest;
+	readonly valid: true;
+	readonly error: null;
+};
+
+type FailedFields = {
 	readonly sha: GitSha | null;
 	readonly digest: Digest | null;
+	readonly valid: false;
+	readonly error: WorkflowError;
+};
+
+type ViewOf<Fields> = {
+	readonly repo: RepoSlug;
+	readonly ref: string;
 	readonly verification: boolean;
-	readonly valid: boolean;
-	readonly error: WorkflowError | null;
 	readonly warnings: readonly string[];
+} & Fields;
+
+export type LoadView = ViewOf<LoadedFields> | ViewOf<FailedFields>;
+
+type InForce = {
+	readonly ref: string;
+	readonly sha: GitSha;
+	readonly digest: Digest;
 };
 
-export type ReloadView = Omit<LoadView, "warnings"> & {
-	readonly outcome: Reload["kind"];
-	readonly inForce: {
-		readonly ref: string;
-		readonly sha: GitSha;
-		readonly digest: Digest;
-	} | null;
+export type ReloadView =
+	| (Omit<ViewOf<LoadedFields>, "warnings"> & {
+			readonly outcome: "applied";
+			readonly inForce: InForce;
+	  })
+	| (Omit<ViewOf<FailedFields>, "warnings"> & {
+			readonly outcome: "kept";
+			readonly inForce: InForce;
+	  })
+	| (Omit<ViewOf<FailedFields>, "warnings"> & {
+			readonly outcome: "unavailable";
+			readonly inForce: null;
+	  });
+
+export type CheckReport =
+	| (ViewOf<LoadedFields> & {
+			readonly config: ConfigView;
+			readonly guidance: Guidance;
+			readonly reload: ReloadView | null;
+	  })
+	| (ViewOf<FailedFields> & {
+			readonly config: null;
+			readonly guidance: null;
+			readonly reload: ReloadView | null;
+	  });
+
+type StatusLimits = {
+	readonly pollIntervalMs: number;
+	readonly maxConcurrent: number;
+	readonly retry: WorkflowConfig["retry"];
+	readonly usage: WorkflowConfig["usage"];
+	readonly stages: Readonly<Record<Stage, StageBudget>>;
 };
 
-export type CheckReport = LoadView & {
-	readonly config: ConfigView | null;
-	readonly guidance: Guidance | null;
-	readonly reload: ReloadView | null;
-};
-
-export type StatusReport = {
+type StatusOf<Fields> = {
 	readonly package: string;
 	readonly version: string;
 	readonly repo: RepoSlug;
 	readonly ref: string;
 	readonly verification: boolean;
-	readonly workflow: "valid" | "invalid";
-	readonly workflowSha: GitSha | null;
-	readonly workflowDigest: Digest | null;
-	readonly workflowError: WorkflowError | null;
-	readonly warnings: readonly string[];
-	readonly executionEnabled: false;
-	readonly controller: {
-		readonly state: "unavailable";
-		readonly reason: string;
+} & Fields & {
+		readonly warnings: readonly string[];
+		readonly executionEnabled: false;
+		readonly controller: {
+			readonly state: "unavailable";
+			readonly reason: string;
+		};
 	};
-	readonly models: Readonly<Record<ModelStage, ModelId>> | null;
-	readonly limits: {
-		readonly pollIntervalMs: number;
-		readonly maxConcurrent: number;
-		readonly retry: WorkflowConfig["retry"];
-		readonly usage: WorkflowConfig["usage"];
-		readonly stages: Readonly<Record<Stage, StageBudget>>;
-	} | null;
-	readonly checkpoints: WorkflowConfig["checkpoints"] | null;
-};
+
+export type StatusReport =
+	| StatusOf<{
+			readonly workflow: "valid";
+			readonly workflowSha: GitSha;
+			readonly workflowDigest: Digest;
+			readonly workflowError: null;
+			readonly models: Readonly<Record<ModelStage, ModelId>>;
+			readonly limits: StatusLimits;
+			readonly checkpoints: WorkflowConfig["checkpoints"];
+	  }>
+	| StatusOf<{
+			readonly workflow: "invalid";
+			readonly workflowSha: GitSha | null;
+			readonly workflowDigest: Digest | null;
+			readonly workflowError: WorkflowError;
+			readonly models: null;
+			readonly limits: null;
+			readonly checkpoints: null;
+	  }>;
 
 export const NO_CONTROLLER = "no controller is installed in this release";
 
-export function loadView(load: WorkflowLoad): LoadView {
-	if (load.kind === "failed") {
-		return {
-			repo: load.repo,
-			ref: load.ref,
-			sha: load.sha,
-			digest: load.digest,
-			verification: load.ref !== TRUSTED_REF,
-			valid: false,
-			error: load.error,
-			warnings: [],
-		};
-	}
+type FailedLoad = Extract<WorkflowLoad, { kind: "failed" }>;
 
-	const { snapshot } = load;
-
+function loadedView(snapshot: WorkflowSnapshot): ViewOf<LoadedFields> {
 	return {
 		repo: snapshot.repo,
 		ref: snapshot.ref,
@@ -1181,6 +1213,23 @@ export function loadView(load: WorkflowLoad): LoadView {
 		error: null,
 		warnings: snapshot.warnings,
 	};
+}
+
+function failedView(load: FailedLoad): ViewOf<FailedFields> {
+	return {
+		repo: load.repo,
+		ref: load.ref,
+		sha: load.sha,
+		digest: load.digest,
+		verification: load.ref !== TRUSTED_REF,
+		valid: false,
+		error: load.error,
+		warnings: [],
+	};
+}
+
+export function loadView(load: WorkflowLoad): LoadView {
+	return load.kind === "loaded" ? loadedView(load.snapshot) : failedView(load);
 }
 
 export function configView(config: WorkflowConfig): ConfigView {
@@ -1213,22 +1262,30 @@ function budgetsOf(config: WorkflowConfig): Record<Stage, StageBudget> {
 	};
 }
 
-function reloadView(next: WorkflowLoad, reload: Reload): ReloadView {
-	const { warnings: _warnings, ...view } = loadView(next);
+function inForceOf(snapshot: WorkflowSnapshot): InForce {
+	return { ref: snapshot.ref, sha: snapshot.sha, digest: snapshot.digest };
+}
 
-	const inForce =
-		reload.kind === "unavailable"
-			? null
-			: {
-					ref: reload.snapshot.ref,
-					sha: reload.snapshot.sha,
-					digest: reload.snapshot.digest,
-				};
+/** `reload` is `reloadWorkflow(current, next)`. */
+function reloadView(next: WorkflowLoad, reload: Reload): ReloadView {
+	if (next.kind === "loaded") {
+		const { warnings: _warnings, ...view } = loadedView(next.snapshot);
+
+		return { ...view, outcome: "applied", inForce: inForceOf(next.snapshot) };
+	}
+
+	const { warnings: _warnings, ...view } = failedView(next);
+
+	if (reload.kind === "unavailable") {
+		return { ...view, outcome: "unavailable", inForce: null };
+	}
+
+	const inForce = inForceOf(reload.snapshot);
 
 	return {
 		...view,
-		verification: (inForce?.ref ?? view.ref) !== TRUSTED_REF,
-		outcome: reload.kind,
+		verification: inForce.ref !== TRUSTED_REF,
+		outcome: "kept",
 		inForce,
 	};
 }
@@ -1237,13 +1294,25 @@ export function checkReport(
 	load: WorkflowLoad,
 	reload: { next: WorkflowLoad; result: Reload } | null,
 ): CheckReport {
-	const snapshot = load.kind === "loaded" ? load.snapshot : null;
+	const reloaded =
+		reload === null ? null : reloadView(reload.next, reload.result);
+
+	if (load.kind === "failed") {
+		return {
+			...failedView(load),
+			config: null,
+			guidance: null,
+			reload: reloaded,
+		};
+	}
+
+	const { snapshot } = load;
 
 	return {
-		...loadView(load),
-		config: snapshot === null ? null : configView(snapshot.config),
-		guidance: snapshot === null ? null : snapshot.guidance,
-		reload: reload === null ? null : reloadView(reload.next, reload.result),
+		...loadedView(snapshot),
+		config: configView(snapshot.config),
+		guidance: snapshot.guidance,
+		reload: reloaded,
 	};
 }
 
@@ -1251,33 +1320,54 @@ export function statusReport(
 	load: WorkflowLoad,
 	version: string,
 ): StatusReport {
-	const view = loadView(load);
-	const config = load.kind === "loaded" ? load.snapshot.config : null;
-
-	return {
+	const identity = {
 		package: "pi-herdr-factorio",
 		version,
-		repo: view.repo,
-		ref: view.ref,
-		verification: view.verification,
-		workflow: view.valid ? "valid" : "invalid",
-		workflowSha: view.sha,
-		workflowDigest: view.digest,
-		workflowError: view.error,
-		warnings: view.warnings,
+		repo: load.kind === "loaded" ? load.snapshot.repo : load.repo,
+		ref: load.kind === "loaded" ? load.snapshot.ref : load.ref,
+	};
+
+	const runtime = {
 		executionEnabled: false,
 		controller: { state: "unavailable", reason: NO_CONTROLLER },
-		models: config === null ? null : modelsOf(config),
-		limits:
-			config === null
-				? null
-				: {
-						pollIntervalMs: config.polling.intervalMs,
-						maxConcurrent: config.agent.maxConcurrent,
-						retry: config.retry,
-						usage: config.usage,
-						stages: budgetsOf(config),
-					},
-		checkpoints: config === null ? null : config.checkpoints,
+	} as const;
+
+	if (load.kind === "failed") {
+		return {
+			...identity,
+			verification: load.ref !== TRUSTED_REF,
+			workflow: "invalid",
+			workflowSha: load.sha,
+			workflowDigest: load.digest,
+			workflowError: load.error,
+			warnings: [],
+			...runtime,
+			models: null,
+			limits: null,
+			checkpoints: null,
+		};
+	}
+
+	const { snapshot } = load;
+	const { config } = snapshot;
+
+	return {
+		...identity,
+		verification: snapshot.ref !== TRUSTED_REF,
+		workflow: "valid",
+		workflowSha: snapshot.sha,
+		workflowDigest: snapshot.digest,
+		workflowError: null,
+		warnings: snapshot.warnings,
+		...runtime,
+		models: modelsOf(config),
+		limits: {
+			pollIntervalMs: config.polling.intervalMs,
+			maxConcurrent: config.agent.maxConcurrent,
+			retry: config.retry,
+			usage: config.usage,
+			stages: budgetsOf(config),
+		},
+		checkpoints: config.checkpoints,
 	};
 }
