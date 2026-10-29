@@ -120,6 +120,10 @@ A comment from any other author is ignored. Rule 5 applies to every comment by `
 
 Deleting a bot comment is not supported. Only a user with write access can do it, and the deletion moves the issue's `updated_at`, as measured on #119 above. The controller's confirmed floor detects a deletion on a best-effort basis. `docs/operations/factory-cli.md`, under The confirmed floor, says what it detects, what clears `marker_missing`, and the two known gaps: a stage end that posts before the deletion is observed, and a deleted `released` marker on a reopened issue, read by a controller started after the release.
 
+## Candidate list lag
+
+Measured on 2026-10-29 on #147: after `factory:ready` was added, the label-filtered issue list first showed the issue after 6.37 s, 6.00 s and 5.91 s in 3 trials, polled about once a second. A direct read of the issue showed the label on every poll. The controller claims a newly labeled issue on the first tick after the list shows it, and reads a held issue missing from the list directly before it releases it.
+
 ## The controller lock
 
 The first lock was `controller.lock` created with `O_EXCL`, with a stale-lock takeover. Two processes that both found a stale file could both unlink and recreate it, and both ran: an audit saw that in 13 of 40 trials. The lock is now a Linux abstract Unix socket, `\0pi-herdr-factorio/<sha256 of the state directory's real path>`, bound with `net.createServer().listen({ path, exclusive: true })`.
