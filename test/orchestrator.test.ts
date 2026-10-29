@@ -1829,6 +1829,70 @@ describe("Orchestrator deferred ledger publication", () => {
 	});
 });
 
+describe("Orchestrator claim record retry", () => {
+	it("writes a failed claim record rewrite on a later tick, so markers deleted after it end as marker_missing", async () => {
+		const { github, clock, files, executor, logs, start } = world();
+		const issue = github.add(labeled(14));
+		const write = files.writeClaim;
+		let failing = true;
+
+		files.writeClaim = async (claim) =>
+			failing && claim.seq === 2 ? false : write(claim);
+
+		const controller = start();
+
+		await controller.tick();
+
+		assert.equal(files.claims.get(runOf(14))?.seq, 1);
+		assert.ok(events(logs).includes("claim_unwritable"));
+		failing = false;
+		clock.t += 30_000;
+		await controller.tick();
+
+		assert.equal(files.claims.get(runOf(14))?.seq, 2);
+		issue.comments.pop();
+		issue.updatedAt = "2026-10-29T02:01:00Z";
+		github.now = "2026-10-29T02:01:00Z";
+
+		const report = await start().tick();
+
+		assert.deepEqual(report.corrupt, [{ issue: 14, defect: "marker_missing" }]);
+		assert.deepEqual(report.runs, []);
+		assert.deepEqual(statuses(github, 14), ["1:claimed"]);
+		assert.equal(executor.launches.length, 1);
+	});
+
+	it("writes the record upgrade on a later tick when adoption cannot write it", async () => {
+		const { github, clock, files, start } = world();
+
+		github.add(labeled(14));
+		await start().tick();
+		files.claims.set(runOf(14), {
+			runId: runOf(14),
+			issue: 14,
+			eventId: String(EVENT_ID + 14),
+			seq: null,
+		});
+
+		const write = files.writeClaim;
+		let failing = true;
+
+		files.writeClaim = async (claim) => (failing ? false : write(claim));
+
+		const controller = start();
+
+		await controller.tick();
+
+		assert.equal(files.claims.get(runOf(14))?.seq, null);
+		failing = false;
+		clock.t += 30_000;
+		await controller.tick();
+
+		assert.equal(files.claims.get(runOf(14))?.seq, 2);
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+	});
+});
+
 describe("Orchestrator retry marker confirmation", () => {
 	async function lostRetryMarker() {
 		const ctx = world();

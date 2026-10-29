@@ -151,6 +151,8 @@ export type ActiveRun = {
 	seq: number;
 	marked: Marker | null;
 	inflight: InflightMarker | null;
+	/** The claim record does not hold `seq` yet, because its write failed. */
+	claimUnwritten: boolean;
 	workspaceMissing: boolean;
 	/** Set on a run adopted after a restart: its stage launches once more. */
 	replay: boolean;
@@ -1074,6 +1076,7 @@ export class Orchestrator {
 			seq,
 			marked: marker,
 			inflight: null,
+			claimUnwritten: false,
 			workspaceMissing: workspace === "missing",
 			replay: true,
 			phase:
@@ -1084,12 +1087,7 @@ export class Orchestrator {
 
 		this.state.runs.set(run.issue, run);
 		this.#confirmSeq(run.issue, seq);
-		await this.#input.files.writeClaim({
-			runId: run.runId,
-			issue: run.issue,
-			eventId: run.eventId,
-			seq,
-		});
+		await this.#writeClaim(run);
 
 		this.#input.log("claim_adopted", {
 			issue: run.issue,
@@ -1364,6 +1362,7 @@ export class Orchestrator {
 			seq: Math.max(input.seq, this.#confirmedSeq.get(issue) ?? 0),
 			marked: null,
 			inflight: null,
+			claimUnwritten: false,
 			workspaceMissing: false,
 			replay: false,
 			phase: { kind: "claimed" },
@@ -1494,20 +1493,29 @@ export class Orchestrator {
 		if (run.marked !== null && isTerminal(run.marked.status)) {
 			this.state.runs.delete(run.issue);
 			await this.#input.files.removeClaim(run.runId);
-		} else if (run.marked !== null && run.seq !== before) {
-			const written = await this.#input.files.writeClaim({
-				runId: run.runId,
-				issue: run.issue,
-				eventId: run.eventId,
-				seq: run.marked.seq,
-			});
+		} else if (
+			run.marked !== null &&
+			(run.seq !== before || run.claimUnwritten)
+		) {
+			await this.#writeClaim(run);
+		}
+	}
 
-			if (!written) {
-				this.#input.log("claim_unwritable", {
-					issue: run.issue,
-					runId: run.runId,
-				});
-			}
+	async #writeClaim(run: ActiveRun): Promise<void> {
+		const written = await this.#input.files.writeClaim({
+			runId: run.runId,
+			issue: run.issue,
+			eventId: run.eventId,
+			seq: run.seq,
+		});
+
+		run.claimUnwritten = !written;
+
+		if (!written) {
+			this.#input.log("claim_unwritable", {
+				issue: run.issue,
+				runId: run.runId,
+			});
 		}
 	}
 
