@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import {
 	chmodSync,
 	existsSync,
@@ -12,6 +13,7 @@ import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { EXIT, runCli } from "../server/cli.ts";
 import {
+	acquireLock,
 	fileRunFiles,
 	LOCK_FILE,
 	type ProcessTable,
@@ -866,17 +868,31 @@ function stateDir(): string {
 	return dir;
 }
 
-function procs(alive: Map<number, string>): ProcessTable {
-	return {
-		self: { pid: 4242, startTime: "100" },
-		startTimeOf: (pid) => (pid === 4242 ? "100" : (alive.get(pid) ?? null)),
-	};
+function table(pid: number, startTime = "1"): ProcessTable {
+	return { self: { pid, startTime } };
+}
+
+const STALE_HOLDER = JSON.stringify({
+	pid: 5000,
+	startTime: "7",
+	acquiredAt: "2026-10-29T01:00:00.000Z",
+});
+
+async function holdLock(state: string, pid = 5000) {
+	const held = await acquireLock({
+		stateDir: state,
+		procs: table(pid, "7"),
+		now: () => START,
+	});
+
+	assert.equal(held.kind, "acquired");
+
+	return held;
 }
 
 async function cli(
 	argv: readonly string[],
 	github: FakeGitHub,
-	alive = new Map<number, string>(),
 	signal = new AbortController(),
 ) {
 	let stdout = "";
@@ -893,7 +909,7 @@ async function cli(
 		},
 		runtime: {
 			clock: new FakeClock(),
-			procs: procs(alive),
+			procs: table(4242, "100"),
 			sleep: async () => {
 				signal.abort();
 			},
@@ -962,21 +978,23 @@ describe("server/cli.ts controller commands", () => {
 	it("refuses a second controller before any gh call", async () => {
 		const github = new FakeGitHub();
 		const state = stateDir();
-
-		writeFileSync(
-			join(state, LOCK_FILE),
-			JSON.stringify({
-				pid: 5000,
-				startTime: "7",
-				acquiredAt: "2026-10-29T01:00:00.000Z",
-			}),
-		);
+		const held = await holdLock(state);
 
 		const run = await cli(
 			["tick", "--once", "--json", ...base, "--state-dir", state],
 			github,
-			new Map([[5000, "7"]]),
 		);
+
+		assert.ok(existsSync(join(state, LOCK_FILE)));
+
+		rmSync(join(state, LOCK_FILE));
+
+		const unnamed = await cli(
+			["run", "--json", ...base, "--issue", "14", "--state-dir", state],
+			github,
+		);
+
+		if (held.kind === "acquired") await held.lock.release();
 
 		assert.equal(run.code, EXIT.usage);
 		assert.deepEqual(JSON.parse(run.stdout), {
@@ -984,31 +1002,28 @@ describe("server/cli.ts controller commands", () => {
 			pid: 5000,
 		});
 		assert.match(run.stderr, /event=controller_running pid=5000/);
+		assert.equal(unnamed.code, EXIT.usage);
+		assert.deepEqual(JSON.parse(unnamed.stdout), {
+			error: "controller_running",
+			pid: null,
+		});
 		assert.equal(github.calls.length, 0);
-		assert.ok(existsSync(join(state, LOCK_FILE)));
 	});
 
-	it("reports and replaces a stale lock whose pid now has another start time", async () => {
+	it("reports and replaces a lock file left by a controller that is gone", async () => {
 		const github = new FakeGitHub();
 		const state = stateDir();
 
-		writeFileSync(
-			join(state, LOCK_FILE),
-			JSON.stringify({
-				pid: 5000,
-				startTime: "7",
-				acquiredAt: "2026-10-29T01:00:00.000Z",
-			}),
-		);
+		writeFileSync(join(state, LOCK_FILE), STALE_HOLDER);
 
 		const run = await cli(
 			["tick", "--once", "--json", ...base, "--state-dir", state],
 			github,
-			new Map([[5000, "8"]]),
 		);
 
 		assert.equal(run.code, EXIT.ok, run.stderr);
 		assert.match(run.stderr, /event=lock_stale_replaced pid=5000/);
+		assert.equal(existsSync(join(state, LOCK_FILE)), false);
 	});
 
 	it("refuses to start as any identity but the integration bot", async () => {
@@ -1063,29 +1078,48 @@ describe("server/cli.ts controller commands", () => {
 			["tick", "--once", "--json", ...base, "--state-dir", state],
 			github,
 		);
-		writeFileSync(
-			join(state, LOCK_FILE),
-			JSON.stringify({
-				pid: 5000,
-				startTime: "7",
-				acquiredAt: "2026-10-29T01:00:00.000Z",
-			}),
+
+		const status = async () => {
+			const run = await cli(
+				["status", "--json", ...base, "--state-dir", state],
+				github,
+			);
+
+			assert.equal(run.code, EXIT.ok);
+
+			return JSON.parse(run.stdout);
+		};
+
+		const held = await holdLock(state);
+		const running = await status();
+
+		const second = await acquireLock({
+			stateDir: state,
+			procs: table(6001),
+			now: () => START,
+		});
+
+		if (held.kind === "acquired") await held.lock.release();
+
+		const stopped = await status();
+
+		writeFileSync(join(state, LOCK_FILE), STALE_HOLDER);
+
+		const stale = await status();
+
+		assert.equal(running.controller.state, "running");
+		assert.equal(running.controller.pid, 5000);
+		assert.equal(running.controller.lastTick.runs[0].issue, 14);
+		assert.equal(running.executionEnabled, false);
+		assert.equal(second.kind, "held");
+		assert.deepEqual(
+			[stopped.controller.state, stopped.controller.pid],
+			["stopped", null],
 		);
-
-		const run = await cli(
-			["status", "--json", ...base, "--state-dir", state],
-			github,
-			new Map([[5000, "7"]]),
+		assert.deepEqual(
+			[stale.controller.state, stale.controller.pid],
+			["stale_lock", 5000],
 		);
-
-		const report = JSON.parse(run.stdout);
-
-		assert.equal(run.code, EXIT.ok);
-		assert.equal(report.controller.state, "running");
-		assert.equal(report.controller.pid, 5000);
-		assert.equal(report.controller.lastTick.runs[0].issue, 14);
-		assert.equal(report.executionEnabled, false);
-		assert.ok(existsSync(join(state, LOCK_FILE)));
 	});
 
 	it("rejects a state directory others can write", async () => {
@@ -1212,5 +1246,123 @@ describe("Orchestrator bot comment edits", () => {
 		assert.deepEqual(report.runs, []);
 		assert.deepEqual(report.corrupt, [{ issue: 14, defect: "edited" }]);
 		assert.equal(issue.comments.length, 2);
+	});
+});
+
+describe("acquireLock", () => {
+	const now = () => START;
+
+	it("lets exactly one of many simultaneous controllers take a stale lock", async () => {
+		const state = stateDir();
+
+		writeFileSync(
+			join(state, LOCK_FILE),
+			JSON.stringify({
+				pid: 5000,
+				startTime: "7",
+				acquiredAt: "2026-10-29T01:00:00.000Z",
+			}),
+		);
+
+		const results = await Promise.all(
+			[1, 2, 3, 4, 5, 6, 7, 8].map((n) =>
+				acquireLock({ stateDir: state, procs: table(6000 + n), now }),
+			),
+		);
+
+		const kinds = results.map((result) => result.kind).sort();
+
+		for (const result of results) {
+			if (result.kind === "acquired") await result.lock.release();
+		}
+
+		assert.deepEqual(kinds, [
+			"acquired",
+			"held",
+			"held",
+			"held",
+			"held",
+			"held",
+			"held",
+			"held",
+		]);
+	});
+
+	it("lets exactly one of two controller processes started together win, across 10 trials", async () => {
+		const controller = new URL("../server/controller.ts", import.meta.url).href;
+
+		const script = `
+			const { acquireLock, procTable } = await import(${JSON.stringify(controller)});
+			const result = await acquireLock({ stateDir: process.argv[1], procs: procTable(), now: Date.now });
+			process.stdout.write(result.kind);
+			if (result.kind === "acquired") {
+				await new Promise((done) => setTimeout(done, 300));
+				await result.lock.release();
+			}
+		`;
+
+		const child = (state: string) =>
+			new Promise<string>((done, fail) => {
+				execFile(
+					process.execPath,
+					[
+						"--experimental-strip-types",
+						"--input-type=module",
+						"-e",
+						script,
+						state,
+					],
+					(error, stdout) => (error === null ? done(stdout) : fail(error)),
+				);
+			});
+
+		const trials: string[] = [];
+
+		for (let trial = 0; trial < 10; trial++) {
+			const state = stateDir();
+
+			writeFileSync(
+				join(state, LOCK_FILE),
+				JSON.stringify({
+					pid: 999_999_999,
+					startTime: "7",
+					acquiredAt: "2026-10-29T01:00:00.000Z",
+				}),
+			);
+
+			const kinds = await Promise.all([child(state), child(state)]);
+
+			trials.push(kinds.sort().join("+"));
+		}
+
+		assert.deepEqual(
+			trials.filter((kinds) => kinds !== "acquired+held"),
+			[],
+		);
+	});
+
+	it("stays held after the lock file is deleted", async () => {
+		const state = stateDir();
+
+		const first = await acquireLock({
+			stateDir: state,
+			procs: table(6001),
+			now,
+		});
+
+		assert.equal(first.kind, "acquired");
+		rmSync(join(state, LOCK_FILE), { force: true });
+
+		const second = await acquireLock({
+			stateDir: state,
+			procs: table(6002),
+			now,
+		});
+
+		if (first.kind === "acquired") await first.lock.release();
+
+		if (second.kind === "acquired") await second.lock.release();
+
+		assert.equal(second.kind, "held");
 	});
 });

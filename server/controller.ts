@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
 	lstat,
@@ -6,9 +6,11 @@ import {
 	open,
 	readdir,
 	readFile,
+	realpath,
 	rename,
 	unlink,
 } from "node:fs/promises";
+import { createConnection, createServer, type Server } from "node:net";
 import { join, resolve } from "node:path";
 import { isDigest } from "../src/run.ts";
 import type {
@@ -21,19 +23,25 @@ import type {
 } from "../src/orchestrator.ts";
 import type { JsonValue } from "../src/tickets.ts";
 
+/** Names the lock holder for `status`. The bound socket, not this file, is the lock. */
 export const LOCK_FILE = "controller.lock";
 export const STATUS_FILE = "status.json";
 
-/** Who holds the controller lock: a pid and that process's start time, so a reused pid is not mistaken for the holder. */
+/** Who holds the controller lock: a pid and that process's start time from `/proc/<pid>/stat`. */
 export type LockHolder = {
 	readonly pid: number;
 	readonly startTime: string;
 	readonly acquiredAt: string;
 };
 
+/**
+ * What `status` sees. `live` means a controller has the socket bound; its
+ * holder is `null` when the lock file is missing or unreadable. `stale` is a
+ * lock file left by a controller that is gone.
+ */
 export type LockState =
 	| { readonly kind: "none" }
-	| { readonly kind: "live"; readonly holder: LockHolder }
+	| { readonly kind: "live"; readonly holder: LockHolder | null }
 	| { readonly kind: "stale"; readonly holder: LockHolder }
 	| { readonly kind: "unreadable" };
 
@@ -43,13 +51,12 @@ export type LockAcquire =
 			readonly lock: ControllerLock;
 			readonly replaced: LockHolder | null;
 	  }
-	| { readonly kind: "held"; readonly holder: LockHolder }
+	| { readonly kind: "held"; readonly holder: LockHolder | null }
 	| { readonly kind: "unavailable" };
 
-/** Reads process start times. The real one reads `/proc/<pid>/stat`. */
+/** This process's pid and start time. The real one reads `/proc/self/stat`. */
 export type ProcessTable = {
 	readonly self: { readonly pid: number; readonly startTime: string };
-	startTimeOf(pid: number): string | null;
 };
 
 /** Field 22 of `/proc/<pid>/stat`, counted after the parenthesized command name. */
@@ -64,19 +71,25 @@ export function parseStartTime(stat: string): string | null {
 	return start !== undefined && /^\d+$/.test(start) ? start : null;
 }
 
-function readStartTime(pid: number | "self"): string | null {
+function readStartTime(): string | null {
 	try {
-		return parseStartTime(readFileSync(`/proc/${pid}/stat`, "utf8"));
+		return parseStartTime(readFileSync("/proc/self/stat", "utf8"));
 	} catch {
 		return null;
 	}
 }
 
 export function procTable(): ProcessTable {
-	return {
-		self: { pid: process.pid, startTime: readStartTime("self") ?? "" },
-		startTimeOf: (pid) => readStartTime(pid),
-	};
+	return { self: { pid: process.pid, startTime: readStartTime() ?? "" } };
+}
+
+/**
+ * The Linux abstract Unix socket name for one state directory: a NUL byte,
+ * then `pi-herdr-factorio/` and the SHA-256 of the directory's real path. The
+ * kernel lets one socket bind a name and frees it when the process dies.
+ */
+export function lockName(realDir: string): string {
+	return `\0pi-herdr-factorio/${createHash("sha256").update(realDir).digest("hex")}`;
 }
 
 function errorCode(error: Error): string | null {
@@ -132,89 +145,151 @@ function parseHolder(text: string): LockHolder | null {
 	};
 }
 
-/** Reads the lock without taking it. `status --json` uses this. */
-export async function readLock(
-	stateDir: string,
-	procs: ProcessTable,
-): Promise<LockState> {
+type HolderFile =
+	| { readonly kind: "absent" }
+	| { readonly kind: "holder"; readonly holder: LockHolder }
+	| { readonly kind: "unreadable" };
+
+async function readHolderFile(path: string): Promise<HolderFile> {
 	let text: string;
 
 	try {
-		text = await readFile(join(resolve(stateDir), LOCK_FILE), "utf8");
+		text = await readFile(path, "utf8");
 	} catch (error) {
 		return (error instanceof Error ? errorCode(error) : null) === "ENOENT"
-			? { kind: "none" }
+			? { kind: "absent" }
 			: { kind: "unreadable" };
 	}
 
 	const holder = parseHolder(text);
 
-	if (holder === null) return { kind: "unreadable" };
-
-	return procs.startTimeOf(holder.pid) === holder.startTime
-		? { kind: "live", holder }
-		: { kind: "stale", holder };
+	return holder === null ? { kind: "unreadable" } : { kind: "holder", holder };
 }
 
-/** The held lock. `release` removes the file only while it still names this process. */
+function holderOf(file: HolderFile): LockHolder | null {
+	return file.kind === "holder" ? file.holder : null;
+}
+
+/** Whether a controller has the name bound, by connecting to it. Connecting never takes the lock. */
+async function probeName(name: string): Promise<"bound" | "free" | "unknown"> {
+	return new Promise((done) => {
+		const socket = createConnection({ path: name });
+
+		socket.once("connect", () => {
+			socket.destroy();
+			done("bound");
+		});
+
+		socket.once("error", (error) => {
+			const code = errorCode(error);
+
+			done(code === "ECONNREFUSED" || code === "ENOENT" ? "free" : "unknown");
+		});
+	});
+}
+
+/** Reads the lock without taking it. `status --json` uses this. */
+export async function readLock(stateDir: string): Promise<LockState> {
+	let real: string;
+
+	try {
+		real = await realpath(stateDir);
+	} catch {
+		return { kind: "unreadable" };
+	}
+
+	const probe = await probeName(lockName(real));
+	const file = await readHolderFile(join(real, LOCK_FILE));
+
+	if (probe === "unknown") return { kind: "unreadable" };
+
+	if (probe === "bound") return { kind: "live", holder: holderOf(file) };
+
+	if (file.kind === "absent") return { kind: "none" };
+
+	return file.kind === "holder"
+		? { kind: "stale", holder: file.holder }
+		: { kind: "unreadable" };
+}
+
+/** The held lock: the bound socket. `release` removes the lock file only while it still names this process. */
 export class ControllerLock {
 	readonly path: string;
 	readonly holder: LockHolder;
+	readonly #server: Server;
 
-	constructor(path: string, holder: LockHolder) {
+	constructor(path: string, holder: LockHolder, server: Server) {
 		this.path = path;
 		this.holder = holder;
+		this.#server = server;
 	}
 
 	async release(): Promise<void> {
-		const text = await readFile(this.path, "utf8").catch(() => "");
-		const holder = parseHolder(text);
+		const file = await readHolderFile(this.path);
 
 		if (
-			holder?.pid === this.holder.pid &&
-			holder.startTime === this.holder.startTime
+			file.kind === "holder" &&
+			file.holder.pid === this.holder.pid &&
+			file.holder.startTime === this.holder.startTime
 		) {
 			await unlink(this.path).catch(() => undefined);
 		}
+
+		await new Promise<void>((done) => {
+			this.#server.close(() => done());
+		});
 	}
 }
 
-async function createLock(
-	path: string,
-	holder: LockHolder,
-): Promise<"created" | "exists" | "failed"> {
-	try {
-		const handle = await open(path, "wx", 0o600);
-
-		try {
-			await handle.writeFile(`${JSON.stringify(holder)}\n`);
-			await handle.sync();
-		} finally {
-			await handle.close();
-		}
-
-		return "created";
-	} catch (error) {
-		return (error instanceof Error ? errorCode(error) : null) === "EEXIST"
-			? "exists"
-			: "failed";
-	}
+async function bind(
+	server: Server,
+	name: string,
+): Promise<"bound" | "busy" | "failed"> {
+	return new Promise((done) => {
+		server.once("error", (error) => {
+			done(errorCode(error) === "EADDRINUSE" ? "busy" : "failed");
+		});
+		server.listen({ path: name, exclusive: true }, () => done("bound"));
+	});
 }
 
 /**
- * Takes `<stateDir>/controller.lock` with `O_EXCL`. A lock whose pid is gone,
- * or now names a process with another start time, is stale: it is reported
- * and replaced. A live lock is never broken.
+ * Binds the state directory's abstract socket name. Only one process can, so
+ * two controllers started together never both run. A second one gets `held`.
+ * The kernel frees the name when the holder dies, even by `kill -9`. Then
+ * writes `<stateDir>/controller.lock` naming this process, and reports a lock
+ * file a dead controller left behind as `replaced`.
  */
 export async function acquireLock(input: {
 	stateDir: string;
 	procs: ProcessTable;
 	now: () => number;
 }): Promise<LockAcquire> {
-	const path = join(resolve(input.stateDir), LOCK_FILE);
 	const { self } = input.procs;
 
 	if (self.startTime === "") return { kind: "unavailable" };
+
+	let real: string;
+
+	try {
+		real = await realpath(input.stateDir);
+	} catch {
+		return { kind: "unavailable" };
+	}
+
+	const path = join(real, LOCK_FILE);
+	const server = createServer((socket) => socket.destroy());
+	const bound = await bind(server, lockName(real));
+
+	if (bound === "busy") {
+		return { kind: "held", holder: holderOf(await readHolderFile(path)) };
+	}
+
+	if (bound === "failed") return { kind: "unavailable" };
+
+	server.unref();
+
+	const left = await readHolderFile(path);
 
 	const holder: LockHolder = {
 		pid: self.pid,
@@ -222,42 +297,19 @@ export async function acquireLock(input: {
 		acquiredAt: new Date(input.now()).toISOString(),
 	};
 
-	const first = await createLock(path, holder);
+	if (!(await writeAtomic(path, `${JSON.stringify(holder)}\n`))) {
+		await new Promise<void>((done) => {
+			server.close(() => done());
+		});
 
-	if (first === "created") {
-		return {
-			kind: "acquired",
-			lock: new ControllerLock(path, holder),
-			replaced: null,
-		};
+		return { kind: "unavailable" };
 	}
 
-	if (first === "failed") return { kind: "unavailable" };
-
-	const existing = await readLock(input.stateDir, input.procs);
-
-	if (existing.kind === "live")
-		return { kind: "held", holder: existing.holder };
-
-	if (existing.kind !== "stale") return { kind: "unavailable" };
-
-	await unlink(path).catch(() => undefined);
-
-	const second = await createLock(path, holder);
-
-	if (second === "created") {
-		return {
-			kind: "acquired",
-			lock: new ControllerLock(path, holder),
-			replaced: existing.holder,
-		};
-	}
-
-	const winner = await readLock(input.stateDir, input.procs);
-
-	return winner.kind === "live"
-		? { kind: "held", holder: winner.holder }
-		: { kind: "unavailable" };
+	return {
+		kind: "acquired",
+		lock: new ControllerLock(path, holder, server),
+		replaced: holderOf(left),
+	};
 }
 
 function parseClaim(text: string): ClaimRecord | null {

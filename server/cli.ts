@@ -326,7 +326,7 @@ type Printable =
 	| CheckReport
 	| AdmissionReceipt
 	| TickReport
-	| { readonly error: "controller_running"; readonly pid: number };
+	| { readonly error: "controller_running"; readonly pid: number | null };
 
 function json(report: Printable): string {
 	return `${JSON.stringify(report, redactString, 2)}\n`;
@@ -407,12 +407,12 @@ async function runController(
 	});
 
 	if (acquired.kind === "held") {
-		log("controller_running", { pid: acquired.holder.pid });
+		const pid = acquired.holder?.pid ?? null;
+
+		log("controller_running", { pid });
 
 		if (parsed.command !== "serve") {
-			io.stdout(
-				json({ error: "controller_running", pid: acquired.holder.pid }),
-			);
+			io.stdout(json({ error: "controller_running", pid }));
 		}
 
 		return EXIT.usage;
@@ -536,7 +536,6 @@ export async function runCli(
 
 	if (parsed.command === "status") {
 		const report = statusReport(load, manifest.version);
-		const procs = io.runtime?.procs ?? procTable();
 
 		const controller: ControllerView =
 			parsed.stateDir === null
@@ -545,7 +544,7 @@ export async function runCli(
 						reason: "pass --state-dir to read the controller lock",
 					}
 				: controllerView(
-						await readLock(parsed.stateDir, procs),
+						await readLock(parsed.stateDir),
 						await readStatus(parsed.stateDir),
 					);
 
