@@ -49,6 +49,7 @@ import {
 	type FakeIssue,
 	fakeIssue,
 	labelEvent,
+	networkError,
 } from "./fake-ticket-adapter.ts";
 
 function slug(text: string): RepoSlug {
@@ -1169,5 +1170,27 @@ describe("fileRunFiles", () => {
 
 		await files.removeClaim(runId);
 		assert.deepEqual(await files.listClaims(), []);
+	});
+});
+
+describe("Orchestrator restart reads", () => {
+	it("retries a recorded claim whose issue read failed on the first tick", async () => {
+		const { github, start } = world();
+		const issue = github.add(labeled(14));
+
+		await start().tick();
+		issue.state = "closed";
+		github.failures.set(`repos/${FAKE_REPO}/issues/14`, networkError());
+
+		const controller = start();
+		const first = await controller.tick();
+
+		assert.deepEqual(first.runs, []);
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+
+		github.failures.clear();
+		await controller.tick();
+
+		assert.equal(statuses(github, 14).at(-1), "3:released");
 	});
 });

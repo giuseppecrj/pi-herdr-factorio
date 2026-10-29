@@ -4,11 +4,12 @@
 
 ```bash
 node server/cli.ts <command> --json --repo <owner/name> [options]
+node server/cli.ts serve --repo <owner/name> --state-dir <dir> [--issue <number>]...
 ```
 
 Every command reads `.github/factory/WORKFLOW.md` from GitHub through `gh`, never from the local checkout. It first resolves the branch to a SHA with `gh api repos/<repo>/git/ref/heads/<branch> --jq .object.sha`, then fetches the file at that SHA with `gh api -H 'Accept: application/vnd.github.raw' repos/<repo>/contents/.github/factory/WORKFLOW.md?ref=<sha>`. Each `gh` call has a 30-second timeout. `gh` inherits the environment, including `GH_HOST`. On the VM, set `GH_HOST=github.int.exe.xyz`.
 
-`admit` makes more `gh` reads, described in its section below. No command starts a controller, calls a model or writes to GitHub. Only `admit` writes local files, and only under `--state-dir`.
+`admit` makes more `gh` reads, described in its section below. `tick`, `run` and `serve` are the controller, described under "Controller". They are the only commands that write to GitHub, and the only thing they write is run marker comments. No command calls a model. Only `admit` and the controller write local files, and only under `--state-dir`.
 
 Errors and warnings carry only text the factory builds itself. They never quote `gh` output, an exec failure, a YAML error message, a key or value from `WORKFLOW.md` or a command-line argument. A second layer still redacts credentials in stdout, stderr and `/factory status` text. Anything shaped like `scheme://user:secret@` is printed as `scheme://<redacted>@`, and the value of a query parameter named `token`, `access_token`, `auth`, `key`, `password`, `secret`, `sig`, `signature` or `code`, in any case, is printed as `<redacted>`. In JSON output this applies to each string value before it is encoded, so it never spans two lines of one value.
 
@@ -19,19 +20,23 @@ Errors and warnings carry only text the factory builds itself. They never quote 
 | `workflow-check` | Load and validate the workflow. Print the snapshot or the error. |
 | `status` | Print the factory status: package, workflow, models, limits and execution state. |
 | `admit` | Decide whether one issue's latest `factory:ready` label event is admitted. Print the receipt. |
+| `tick` | Run one controller tick and print the claim snapshot. Requires `--once`. |
+| `run` | Run one controller tick for one issue, through the same admission as polling, and print the claim snapshot. |
+| `serve` | Run the controller: a tick, then one every `polling.interval_ms`, until SIGTERM or SIGINT. |
 
 ## Flags
 
 | Flag | Commands | Required | Default | Meaning |
 | --- | --- | --- | --- | --- |
-| `--json` | all | yes | none | Print JSON on stdout. JSON is the only output format. |
+| `--json` | all except `serve` | yes | none | Print JSON on stdout. JSON is the only output format. `serve` takes no `--json` and prints nothing on stdout. |
+| `--once` | `tick` | yes | none | Run exactly one tick. |
 | `--repo <owner/name>` | all | yes | none | The GitHub repository. The workflow's `repository` field must equal it. |
 | `--ref <branch>` | `workflow-check`, `status` | no | `main` | The branch to load. Any branch other than `main` sets `verification: true`. |
 | `--reload-ref <branch>` | `workflow-check` | no | none | Load a second branch as a reload on top of `--ref` and report which snapshot stays in force. |
-| `--issue <number>` | `admit` | yes | none | The issue number, from 1 to 9999999999, with no leading zero. |
-| `--state-dir <dir>` | `admit` | yes | none | The controller state directory. It must already exist as a directory, not a symlink, owned by the effective user and not writable by group or others. A relative path is resolved against the working directory. |
+| `--issue <number>` | `admit`, `run`, `tick`, `serve` | `admit` and `run`: exactly one. `tick` and `serve`: no | every candidate | The issue number, from 1 to 9999999999, with no leading zero. `tick` and `serve` take it any number of times and then touch only those issues. |
+| `--state-dir <dir>` | `admit`, `tick`, `run`, `serve`; optional for `status` | yes, except for `status` | none | The controller state directory. It must already exist as a directory, not a symlink, owned by the effective user and not writable by group or others. A relative path is resolved against the working directory. |
 
-`--ref` and `--reload-ref` exist so verification lanes can load fixture branches. The controller that arrives in F04c always loads `main` and has no such flag.
+`--ref` and `--reload-ref` exist so verification lanes can load fixture branches. The controller always loads `main` and takes no such flag.
 
 An `<owner>` or `<name>` contains only letters, digits, `.`, `_` and `-`, and is not `.` or `..`.
 
@@ -44,6 +49,12 @@ A branch name contains only letters, digits, `.`, `_`, `-` and `/`. It does not 
 | 0 | The workflow is valid. With `--reload-ref`, both loads are valid. | A report was printed, whatever the workflow state. | Admitted. The receipt was printed and recorded. |
 | 1 | A load failed: the branch did not resolve, the file is missing or unreadable, or the file is invalid. The report is still printed. | Not used. | Refused. The receipt was printed. |
 | 2 | Usage error. Usage goes to stderr, and stdout is empty. | Usage error. Usage goes to stderr, and stdout is empty. | Usage error. Usage goes to stderr, stdout is empty, and `gh` is not run. |
+
+| Code | `tick` | `run` | `serve` |
+| --- | --- | --- | --- |
+| 0 | The tick ran. The snapshot was printed. | The issue holds a run after the tick. | Stopped by SIGTERM or SIGINT after finishing its tick. |
+| 1 | The controller refused to start. See `controller_refused`. | The issue holds no run: it was refused, queued, absent or corrupt, or the controller refused to start. | The controller refused to start. |
+| 2 | Usage error, or `controller_running`: another controller holds the lock. | Same as `tick`. | Same as `tick`. |
 
 ## Error kinds
 
@@ -120,9 +131,9 @@ Other errors:
 | `workflow_front_matter_missing` | `WORKFLOW.md must start with --- front matter naming the repository`. |
 | `workflow_front_matter_not_a_map` | `front matter must be a YAML map`. |
 
-The only warning is `(unknown key) ignored`. The controller `reason` is always `no controller is installed in this release`.
+The only warning is `(unknown key) ignored`.
 
-A usage error prints one of these lines to stderr, followed by the usage text: `unrecognized or incomplete options`, `expected workflow-check, status or admit`, `unexpected extra arguments`, `--json is required`, `--repo <owner/name> is required`, `--reload-ref applies only to workflow-check`, `--ref and --reload-ref must be branch names`, `admit always reads main and takes no --ref`, `--issue <number> is required`, `--state-dir <dir> is required` or `--issue and --state-dir apply only to admit`.
+A usage error prints one of these lines to stderr, followed by the usage text: `unrecognized or incomplete options`, `expected workflow-check, status, admit, tick, run or serve`, `unexpected extra arguments`, `--json is required`, `--json is required, except for serve, which logs lines`, `--once applies only to tick, and tick requires it`, `--repo <owner/name> is required`, `--reload-ref applies only to workflow-check`, `--ref and --reload-ref must be branch names`, `admit always reads main and takes no --ref`, `tick always reads main and takes no --ref` (also for `run` and `serve`), `--issue <number> is required`, `--issue must be a number`, `--state-dir <dir> is required` or `--issue applies only to admit, tick, run and serve`.
 
 `/factory status` prints `Usage: /factory status` when the first word of its argument is not `status`. When it cannot find a repository, the reason is `cannot run git`, `no git remote named origin` or `origin is not a GitHub repository`.
 
@@ -165,8 +176,8 @@ The `reload` object has these fields:
 | `workflowDigest` | string or `null` | Same as `digest` in `workflow-check`. |
 | `workflowError` | object or `null` | Same as `error` in `workflow-check`. |
 | `warnings` | string array | Same as in `workflow-check`. |
-| `executionEnabled` | boolean | Always `false`. This release has no controller. |
-| `controller` | object | `state` is always `unavailable`. `reason` says why. |
+| `executionEnabled` | boolean | Always `false`. No stage runner is installed in this release. |
+| `controller` | object | Without `--state-dir`, `state` is `unavailable` and `reason` is `pass --state-dir to read the controller lock`. With it, see below. |
 | `models` | object or `null` | The model for each of `specify`, `accept`, `build`, `validate` and `review`. |
 | `limits` | object or `null` | `pollIntervalMs`, `maxConcurrent`, `retry`, `usage` and `stages`, where `stages` maps each stage to `maxTurns`, `wallMs` and `stallMs`. |
 | `checkpoints` | object or `null` | `approveMerge.mode`, which is always `always`. |
@@ -313,6 +324,167 @@ The repository switch reason comes first. When the issue also fails a check, tha
 | `no_version_before_label` | No version was saved before the label. |
 | `version_withheld` | The version in force at label time is deleted, or two versions share its time. For an `unedited` snapshot this applies to the latest version. |
 
+## Controller
+
+```bash
+node server/cli.ts tick --once --json --repo <owner/name> --state-dir <dir> [--issue <number>]...
+node server/cli.ts run --json --repo <owner/name> --issue <number> --state-dir <dir>
+node server/cli.ts serve --repo <owner/name> --state-dir <dir> [--issue <number>]...
+```
+
+The three controller commands share one implementation, `Orchestrator` in `src/orchestrator.ts`. `run --issue <n>` is a tick limited to issue `n`, so a manual run passes the same switches and the same admission as polling. With `--issue`, `tick` and `serve` read, claim and write markers only for the named issues. Verification lanes use that to keep clear of the production controller.
+
+### Start
+
+Each command does these steps in order and stops at the first that fails:
+
+1. The repository must be on the allowlist and the state directory must pass the `admit` rule: it exists as a directory, not a symlink, owned by the effective user and not writable by group or others. Otherwise it logs `controller_refused` with `repo_not_allowed` or `state_unavailable` and exits 1.
+2. It takes the lock, described below. If another controller holds it, it logs `controller_running` with that controller's pid and exits 2. `tick` and `run` also print `{"error": "controller_running", "pid": <pid>}`. No `gh` call has run yet.
+3. It checks that `gh` acts as the integration bot. It reads `gh api graphql -f query='query { viewer { login } }'` and requires exactly `exe-dev-github-integration[bot]`. Without `GH_HOST`, `gh` on the VM has no credentials and the read fails, and on a workstation it answers as the owner. Either way it logs `controller_refused` with `identity_unavailable` or `identity_mismatch`, releases the lock and exits 1. See `docs/prototypes/restart-recovery/README.md`.
+
+`serve` then logs `controller_ready` with its pid, repository and scope. That line means the service is ready.
+
+### The lock
+
+The lock is `<state-dir>/controller.lock`, created with `O_EXCL` and mode 0600. It holds the controller's pid, its start time from field 22 of `/proc/<pid>/stat`, and when it took the lock. A lock is stale only when that pid no longer exists or now has a different start time. A stale lock is replaced and logged as `lock_stale_replaced` with the old pid. A live lock is never broken. The controller removes the lock on exit, only while the file still names it. `status --json` reads the lock and never takes it.
+
+### One tick
+
+A tick runs these steps. Reconciliation always runs, and dispatch runs only when every per-tick read succeeds.
+
+1. Per-tick reads, once each: the local switch, the repository switch, and `WORKFLOW.md` on `main` (2 requests). If any fails or is off, dispatch is skipped for this tick and `dispatch.reasons` names why. The last valid workflow's limits stay in force.
+2. Candidates: open issues with `factory:ready`, from `gh api repos/<repo>/issues?state=open&labels=factory%3Aready&sort=created&direction=asc&per_page=100&page=<p>`, paged as the timeline is. A failed read adds `candidates_unavailable` and skips dispatch.
+3. Reconcile every claim. A finished stage or a stall becomes a retry or a terminal status. A claim whose issue is closed, lost `factory:ready`, or has a newer `factory:ready` event is released. A marker whose POST did not answer is read back.
+4. Discover. For each candidate the controller has not seen at its current `updated_at`, and for each claim recorded locally before a restart, it reads the issue's markers. A live marker is adopted as the existing run, never admitted again. A corrupt one stops dispatch for that issue.
+5. Dispatch, while slots remain. Slots are `agent.max_concurrent` minus the claims that are `claimed`, `running` or `blocked`. A due retry launches first. Then each new candidate, lowest issue number first, goes through `admitTicket` with the per-tick reads, so it costs only the 4 issue reads. A candidate without a slot is listed in `queued` and is not admitted.
+
+A switch that is off stops new claims and new launches. It does not end or release runs that already exist.
+
+An issue whose `updated_at` has not changed since the controller last decided it is not read again: no comments, timeline or permission request. An unchanged tick makes 4 requests: the repository switch, the two workflow reads and the candidate list. The cache lives in memory, so the first tick after a restart reads each scoped candidate once.
+
+### Runs
+
+A run is one admitted `factory:ready` label event. Its `runId` is the sha256 hex digest of `JSON.stringify(["github", <repo>, <issue>, <eventId>])`. A new label event on the same issue is a new run with a new `runId`.
+
+| Status | Meaning | Holds a slot |
+| --- | --- | --- |
+| `claimed` | The claim is recorded and the stage has not launched. | yes |
+| `running` | A stage runner is working on the stage. | yes |
+| `blocked` | The stage cannot run: no stage runner is installed in this release. | yes |
+| `retrying` | A stage failed or stalled, and a retry is due at `retryAt`. | no |
+| `released` | The issue closed, lost `factory:ready`, or got a newer ready event. Terminal. | no |
+| `failed` | The attempt cap was reached. Terminal. | no |
+| `budget_exhausted` | The run used `usage.max_tokens_per_run` across all attempts. Terminal. | no |
+
+Until F05 installs the stage runner, every launch returns `stage_runner_not_installed`. That result is not a failure and is not retried, and no model runs. The run stays `blocked` at `specify` and keeps its slot, so a third issue waits in `queued` while two are blocked. `executionEnabled` stays `false`.
+
+A stage that fails, or makes no progress for its stage's `stall_ms`, is aborted. If `attempt` is below `retry.max_attempts`, the next attempt is due after `min(10000 * 2^(attempt - 1), retry.max_backoff_ms)` milliseconds, where `attempt` is the one that failed. When it is due, the controller relaunches it only if the issue is still eligible and a slot is free. These scheduler retries are separate from `MAX_REPAIR_ROUNDS` in `src/stages.ts`, which counts build rounds after a failed validation or review.
+
+A terminal run never restarts. To run the issue again, remove and re-add `factory:ready`, which makes a new event.
+
+### Markers
+
+Each change of a run's status, stage or attempt posts one new issue comment through `gh api --method POST repos/<repo>/issues/<n>/comments -f body=<marker>`. A marker is never edited. Its first line is `<!-- factory:run <json> -->`, and its second line says the status in words. The JSON has exactly these keys:
+
+| Key | Value |
+| --- | --- |
+| `v` | `1` |
+| `runId` | 64 hex characters |
+| `repo`, `issue` | the repository and issue number |
+| `eventId`, `eventAt` | the admitted label event |
+| `snapshotDigest` | the admission's snapshot digest |
+| `workflowSha`, `workflowDigest` | the admission's `baseSha` and `workflowDigest` |
+| `stage`, `status`, `attempt` | the run's stage, status and 1-based attempt |
+| `seq` | 1 more than the highest `seq` on the issue, across all runs |
+| `branch`, `pr` | always `null` in this release |
+| `usage` | tokens used by the run, across attempts |
+| `cursor` | the issue's `updated_at` the controller had seen, or `null` |
+
+`<` and `>` in the JSON are written as `\u003c` and `\u003e`, and a whole marker comment is at most 4096 bytes. It never holds a title, body, comment text, label name, `gh` output or path.
+
+A marker counts only when all of these hold. Anything else from another author is ignored.
+
+- It came from `gh api repos/<repo>/issues/<n>/comments`.
+- `user.login` is `exe-dev-github-integration[bot]` and `user.type` is `Bot`.
+- `performed_via_github_app.slug` is `exe-dev-github-integration` when it is present.
+- `issue_url` names the same repository and issue.
+- GraphQL `lastEditedAt` for the comment is `null`. One request reads it for every candidate: `gh api graphql -f query=<nodes query> -f ids[]=<node_id>...`, at most 100 IDs per request.
+- The JSON parses with exactly the keys above, `v` is `1`, every value matches its pattern, and `runId` is the digest of its own `repo`, `issue` and `eventId`.
+- When the state directory has an admission record for the event, the marker's `eventAt`, `snapshotDigest`, `workflowSha` and `workflowDigest` match it.
+
+The current marker is the trusted one with the highest `seq`. A bot comment that starts with `<!-- factory:` and fails a rule, two markers with the same `seq`, two markers of one run that disagree on the admission fields, or a marker after its run's terminal one, make the issue corrupt. A corrupt issue is listed in `corrupt` with its `defect`, and nothing is dispatched for it until its `updated_at` changes and a fresh read is clean.
+
+| `defect` | Cause |
+| --- | --- |
+| `too_large`, `malformed`, `unknown_version`, `unknown_key`, `missing_key`, `bad_value`, `run_id_mismatch` | The marker text fails the format. |
+| `not_bot_type`, `wrong_app`, `wrong_issue` | The author type, app or issue does not match. |
+| `edited`, `edit_unverified` | `lastEditedAt` is set, or the GraphQL read did not name the same comment, issue and repository. |
+| `duplicate_seq`, `conflicting_run`, `after_terminal` | Two trusted markers disagree. |
+| `record_mismatch` | The marker or a duplicate admission disagrees with the local admission record. |
+
+A POST that answers HTTP 4xx did not create the comment. Any other failure, such as a timeout, a network error, an HTTP 5xx or an answer that is not JSON, may have created it. The controller then reads the issue's comments back on the next tick before it posts anything else for that issue. The run shows `markerPending: true` until then.
+
+### Restart
+
+The controller keeps no database. A restart rebuilds each claim from the markers, from local claim records and from the workspace.
+
+- `<state-dir>/claims/<runId>.json`, mode 0600, names each claimed run's issue and event. It is written before the first marker and removed when the run ends. On start, the controller reads the markers of every issue it names, even one that is no longer a candidate, so a claim on an issue closed while the controller was down is released.
+- A live current marker is adopted with its `runId`, `seq`, stage and attempt. A `blocked` or `claimed` run launches its stage once more. When that ends in the same status, stage and attempt, nothing is posted. A `running` run was interrupted, and counts as a failed attempt. A `retrying` run is due at the marker's `created_at` plus its backoff.
+- An admission recorded locally whose marker never landed is claimed again under the same `runId`: the duplicate admission reads the record back with `AdmissionStore.read`.
+- `<state-dir>/workspaces/<runId>/` is created empty with mode 0700 when the run is claimed. If it is missing on restart, the controller logs `workspace_missing`, creates it again, replays the stage and reports `workspace: "missing_replayed"`. It never marks a stage done without evidence.
+
+### Claim snapshot
+
+`tick` and `run` print this JSON, and every tick writes it to `<state-dir>/status.json`. It never contains issue text.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `repo` | string | The `--repo` value. |
+| `at` | string | The tick time, ISO 8601. |
+| `executionEnabled` | boolean | Always `false` in this release. |
+| `dispatch` | object | `enabled`, and `reasons`: any of `state_unavailable`, `locally_disabled`, `repo_switch_off`, `repo_switch_unavailable`, `workflow_unavailable` and `candidates_unavailable`. |
+| `workflowSha` | string or `null` | The `main` SHA of the last valid workflow. |
+| `maxConcurrent` | number | The slot limit in force. |
+| `runs` | array | One entry per claim: `issue`, `runId`, `eventId`, `stage`, `status`, `attempt`, `seq`, `markerPending`, `workspace` (`present` or `missing_replayed`), `retryAt` and `usage`. |
+| `queued` | number array | Candidates that waited for a slot this tick. |
+| `absent` | number array | Issues named with `--issue` that are not open `factory:ready` issues and hold no claim. |
+| `refused` | array | `issue` and the refusal `reasons` kinds from admission this tick. A refusal that stays true until the issue changes, such as `unauthorized`, is not re-read until the issue's `updated_at` changes. |
+| `corrupt` | array | `issue` and `defect` for each issue with corrupt markers. |
+| `totals` | object | Counts since the process started: `claims`, `launches`, `retries`, `stalls`, `releases`, `failures`, `markersPosted` and `usage`. |
+
+### `status --json --state-dir`
+
+With `--state-dir`, `controller` has `state`, `pid`, `since` and `lastTick`:
+
+| `state` | Meaning |
+| --- | --- |
+| `running` | A live process holds the lock. `pid` and `since` name it. |
+| `stopped` | No lock file exists. |
+| `stale_lock` | The lock names a process that has exited. The next controller replaces it. |
+| `unreadable_lock` | The lock file exists but cannot be read or parsed. |
+
+`lastTick` is the content of `<state-dir>/status.json`, or `null`.
+
+### Logs
+
+The controller logs one line per event to stderr, as `at=<ISO time> event=<name> key=value ...`. A value outside letters, digits and `:._@/[]+-` is printed as `(withheld)`. The events are `controller_ready`, `controller_running`, `controller_refused`, `controller_stopping`, `lock_stale_replaced`, `tick`, `claim_taken`, `claim_adopted`, `claim_released`, `claim_unwritable`, `stage_launched`, `stage_stalled`, `stage_ended`, `marker_posted`, `marker_unconfirmed`, `marker_corrupt`, `workspace_missing`, `workspace_unavailable` and `status_unwritable`.
+
+### Stop
+
+SIGTERM or SIGINT lets the current tick finish, then `serve` logs `controller_stopping`, removes the lock and exits 0.
+
+### Install the service
+
+`server/factory.service` runs `serve` under systemd. `server/provision.sh` does not install it. To install it on `pi-factorio`:
+
+1. Clone the repository to `/home/exedev/pi-herdr-factorio` at the `main` commit to run, and run `npm ci --ignore-scripts` there.
+2. Create the state directory: `install -d -m 0700 /home/exedev/factory-state`.
+3. Copy the unit: `sudo install -m 0644 server/factory.service /etc/systemd/system/factory.service`, then `sudo systemctl daemon-reload`.
+4. Start it: `sudo systemctl enable --now factory.service`.
+5. Wait for readiness: `journalctl -u factory.service -f` until it shows `event=controller_ready`.
+
+The unit sets `GH_HOST=github.int.exe.xyz` and passes `--state-dir` explicitly. `systemctl stop factory.service` sends SIGTERM and waits up to 300 seconds for the tick to finish. The unit restarts on failure after 30 seconds, except after exit 2, when another controller holds the lock. To stop dispatch without stopping the service, create `/home/exedev/factory-state/disabled`.
+
 ## `/factory status`
 
 The Pi extension command shows the same workflow state as text. It finds the repository from `git remote get-url origin` in the session's working directory and always loads `main`. It accepts exactly two origin forms:
@@ -322,7 +494,17 @@ The Pi extension command shows the same workflow state as text. It finds the rep
 
 The path is checked as written, before any URL normalization. `<owner>` and `<repo>` each contain only letters, digits, `.`, `_` and `-`, and neither may be `.` or `..`, also after removing `.git`. So a path with `%`, a backslash, an empty segment, a `.` or `..` segment, or more than two segments is not accepted.
 
-Any other origin, including `ssh://` URLs, is not a GitHub repository. When `origin` is missing or is not accepted, or when `gh` fails, it prints `workflow    unavailable:` with the reason. For a remote that is not accepted, the reason is only `origin is not a GitHub repository`, and the URL is never printed. It always prints `controller  unavailable` and `execution   disabled`, followed by the stage table.
+Any other origin, including `ssh://` URLs, is not a GitHub repository. When `origin` is missing or is not accepted, or when `gh` fails, it prints `workflow    unavailable:` with the reason. For a remote that is not accepted, the reason is only `origin is not a GitHub repository`, and the URL is never printed. It always prints `controller  unavailable: the controller runs on the VM; read it there with status --json --state-dir` and `execution   disabled`, followed by the stage table.
+
+## `/factory run <issue>`
+
+The extension runs on the owner's workstation, as the owner, with no state directory. So `/factory run <issue>` is a read-only admission dry run. It finds the repository as `/factory status` does, then runs the same `admitTicket` as `run --issue`, with a store that records nothing. It never posts a marker or claims the issue. It prints:
+
+- `decision`: `would be admitted` or `refused`;
+- `reasons`: each refusal kind, with its `failure`, `detail`, `permission` or `error` in parentheses;
+- `event`, `snapshot` and `base`, as far as the evaluation reached.
+
+It always ends by saying that only the controller on the VM dispatches, and that the VM's local switch is not visible from the workstation, so the dry run treats it as on. The repository switch, the workflow and every issue check are the real ones. Any other argument, a missing issue number, or more than one prints `Usage: /factory status | /factory run <issue>`.
 
 ## Configuration
 
@@ -335,7 +517,7 @@ Anchors (`&name`) and aliases (`*name`) are not allowed anywhere in the front ma
 | `repository` | `owner/name` | none | Required. Must equal `--repo`. |
 | `polling.interval_ms` | integer | `30000` | At least `10000`. |
 | `agent.max_concurrent` | integer | `2` | From `1` to `4`. |
-| `workspace.root` | path | `~/factory-workspaces` | `~` expands from `HOME`. A value of exactly `$VAR_NAME` reads that environment variable. The result must be an absolute path. Output shows the value as written, never the expanded path. |
+| `workspace.root` | path | `~/factory-workspaces` | `~` expands from `HOME`. A value of exactly `$VAR_NAME` reads that environment variable. The result must be an absolute path. Output shows the value as written, never the expanded path. The controller in this release keeps workspaces under `<state-dir>/workspaces/` instead. |
 | `retry.max_attempts` | integer | `3` | Positive. |
 | `retry.max_backoff_ms` | integer | `300000` | Positive. |
 | `usage.max_tokens_per_run` | integer | `500000` | Positive. |

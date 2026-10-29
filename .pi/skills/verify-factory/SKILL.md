@@ -1,6 +1,6 @@
 ---
 name: verify-factory
-description: Verify pi-herdr-factorio on its real surfaces. Use to prove a change on the pi-factorio exe.dev VM, through repository-scoped gh reads, the /factory status command and the factory CLI (workflow-check, status --json, admit --json), and when a PR needs live evidence.
+description: Verify pi-herdr-factorio on its real surfaces. Use to prove a change on the pi-factorio exe.dev VM, through repository-scoped gh reads, the /factory status and /factory run commands and the factory CLI (workflow-check, status --json, admit --json, tick --once, run --issue, serve), and when a PR needs live evidence.
 ---
 
 # Verify pi-herdr-factorio
@@ -9,7 +9,7 @@ The factory is a Pi package plus a controller that runs on the exe.dev VM `pi-fa
 
 - the VM, over ssh as `exedev`;
 - GitHub, through `gh` with `GH_HOST=github.int.exe.xyz`, scoped to `giuseppecrj/pi-herdr-factorio`;
-- the `/factory status` extension command;
+- the `/factory status` and `/factory run <issue>` extension commands;
 - the factory CLI, `node server/cli.ts`, documented in `docs/operations/factory-cli.md`.
 
 Run every command from the repository root of the checkout under test. Helpers live in `.pi/skills/verify-factory/scripts/`. Below, `S` means that directory.
@@ -29,7 +29,7 @@ This ships `git archive HEAD` of your checkout to `/home/exedev/factory-verifica
 
 Live lanes always use a per-lane workspace and state directory under `/home/exedev/factory-verification/`. Never share one between lanes.
 
-A later PR that adds `serve` starts it here with `--state-dir <lane>/state`. Until then there is no controller to start, and you must not start one.
+Start a controller only with `drive-serve.sh`, which scopes it to the lane's fixture issues with `--issue` and records its PID. Never start `serve` without `--issue` from a lane.
 
 ## Doctor
 
@@ -54,6 +54,10 @@ $S/vm.sh $S/drive-status.sh <pr-id> <worker-n>   # /factory status
 $S/vm.sh $S/drive-gh.sh <pr-id> <worker-n>       # gh repo, label and issue reads
 $S/vm.sh $S/drive-workflow.sh <pr-id> <worker-n> [branch...]  # workflow-check and status --json
 $S/vm.sh $S/drive-admit.sh <pr-id> <worker-n> <issue>...       # admit --json
+$S/vm.sh $S/drive-tick.sh <pr-id> <worker-n> tick <issue>...   # tick --once, scoped
+$S/vm.sh $S/drive-tick.sh <pr-id> <worker-n> run <issue>       # run --issue
+$S/vm.sh $S/drive-serve.sh <pr-id> <worker-n> start <issue>... # serve, scoped, until stop
+$S/vm.sh $S/drive-serve.sh <pr-id> <worker-n> stop             # SIGTERM the recorded PID
 ```
 
 Every drive script exports `GH_HOST=github.int.exe.xyz`.
@@ -62,7 +66,7 @@ Feature recipes are in `.pi/skills/verify-factory/features/`. Each lists the com
 
 Pi's print mode (`pi -p "/factory status"`) sends the text to the model instead of running the command, and spends credits. `status-driver.ts` registers the real extension on a stub Pi and calls the registered `factory` handler. That is the same handler Pi runs.
 
-Mutations (creating fixture issues, labels, comments, restarts) need the fixture grant from the task. Use one fixture issue per lane, named with the PR ID and worker number. A step that needs the owner to review or merge stays unchecked until the owner acts.
+Mutations (creating fixture issues, labels, comments, restarts, and every `tick`, `run` or `serve`, which post marker comments) need the fixture grant from the task. Use one fixture issue per lane, named with the PR ID and worker number. A step that needs the owner to review or merge stays unchecked until the owner acts.
 
 ## Snapshot
 
@@ -104,7 +108,7 @@ Copy evidence into `docs/plans/media/<pr-id>/` only when the task authorizes it.
 $S/vm.sh $S/cleanup.sh <pr-id> <worker-n>
 ```
 
-This removes that lane's workspace and state under `/home/exedev/factory-verification/` and nothing else. It never kills processes by name. If you started a process, stop it by the PID you recorded. Evidence in `/tmp/swarm-<pr-id>/worker-<n>/` survives cleanup. Confirm with the `ls` the script prints.
+Stop any `serve` the lane started with `drive-serve.sh ... stop` first. Cleanup removes that lane's workspace and state under `/home/exedev/factory-verification/` and nothing else. It never kills processes by name. If you started a process, stop it by the PID you recorded. Evidence in `/tmp/swarm-<pr-id>/worker-<n>/` survives cleanup. Confirm with the `ls` the script prints.
 
 Run cleanup after a failed attempt too.
 
@@ -119,6 +123,8 @@ Run cleanup after a failed attempt too.
 | `drive-gh.sh` | VM | `vm.sh drive-gh.sh <pr-id> <n>` |
 | `drive-workflow.sh` | VM | `vm.sh drive-workflow.sh <pr-id> <n> [branch...]` |
 | `drive-admit.sh` | VM | `vm.sh drive-admit.sh <pr-id> <n> <issue>...` |
+| `drive-tick.sh` | VM | `vm.sh drive-tick.sh <pr-id> <n> tick\|run <issue>...` |
+| `drive-serve.sh` | VM | `vm.sh drive-serve.sh <pr-id> <n> start <issue>...` or `stop` |
 | `vm-snapshot.sh` | VM | `vm.sh vm-snapshot.sh <pr-id> <n> <minutes> <glob>` |
 | `cleanup.sh` | VM | `vm.sh cleanup.sh <pr-id> <n>` |
 | `status-driver.ts` | VM, copied by `drive-status.sh` | not run directly |

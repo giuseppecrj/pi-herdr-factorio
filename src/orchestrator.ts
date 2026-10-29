@@ -716,7 +716,10 @@ export class Orchestrator {
 		);
 
 		for (const issue of this.#recover) {
-			if (records.has(issue) || this.state.runs.has(issue)) continue;
+			if (records.has(issue) || this.state.runs.has(issue)) {
+				this.#recover.delete(issue);
+				continue;
+			}
 
 			const read = await this.#adapter.readIssue(issue);
 
@@ -735,6 +738,8 @@ export class Orchestrator {
 			const ledger = await this.#readLedger(issue);
 
 			if (ledger.kind === "failed") continue;
+
+			this.#recover.delete(issue);
 
 			if (ledger.value.kind === "corrupt") {
 				this.#markCorrupt(issue, ledger.value, record.updatedAt);
@@ -772,8 +777,6 @@ export class Orchestrator {
 				verdict: { kind: "open", ledger: ledger.value },
 			});
 		}
-
-		this.#recover.clear();
 	}
 
 	/**

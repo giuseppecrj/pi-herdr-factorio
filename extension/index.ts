@@ -26,14 +26,14 @@ const USAGE = "Usage: /factory status | /factory run <issue>";
 const FETCH_TIMEOUT_MS = 30_000;
 const ISSUE_NUMBER = /^[1-9][0-9]{0,9}$/;
 
-export const CONTROLLER_ON_VM =
+const CONTROLLER_ON_VM =
 	"the controller runs on the VM; read it there with status --json --state-dir";
 
 /**
  * The admission store for a dry run. It records nothing, and it cannot see
  * the VM's local switch, so it reports the switch as on and the text says so.
  */
-export const DRY_RUN_STORE: AdmissionStore = {
+const DRY_RUN_STORE: AdmissionStore = {
 	async localSwitch() {
 		return "enabled";
 	},
@@ -145,7 +145,7 @@ function reasonText(reason: RefusalReason): string {
 	return reason.kind;
 }
 
-export function formatDryRun(receipt: AdmissionReceipt): string {
+function formatDryRun(receipt: AdmissionReceipt): string {
 	const lines = [
 		`pi-herdr-factorio ${readPackageVersion()}`,
 		"",
