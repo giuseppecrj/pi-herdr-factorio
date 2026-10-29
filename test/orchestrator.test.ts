@@ -3255,6 +3255,72 @@ describe("Orchestrator claims recorded before their first marker", () => {
 	});
 });
 
+describe("Orchestrator before the first workflow load", () => {
+	it("adopts no run into a slot until the process has loaded a workflow", async () => {
+		const { github, clock, files, start } = world();
+
+		github.add(labeled(14));
+		github.add(labeled(15));
+		await start().tick();
+
+		assert.equal(files.claims.size, 2);
+
+		capAt(github, 1);
+		clock.t += 30_000;
+
+		const fresh = await start().tick();
+
+		assert.deepEqual(runIssues(fresh), [14]);
+		assert.deepEqual(fresh.queued, [15]);
+		assert.equal(fresh.maxConcurrent, 1);
+
+		const workflow = github.workflow;
+
+		github.workflow = null;
+		clock.t += 30_000;
+
+		const controller = start();
+		const unloaded = await controller.tick();
+
+		assert.deepEqual(unloaded.dispatch.reasons, ["workflow_unavailable"]);
+		assert.deepEqual(runIssues(unloaded), []);
+		assert.deepEqual(unloaded.queued, [14, 15]);
+		assert.equal(unloaded.maxConcurrent, 0);
+
+		github.workflow = workflow;
+		clock.t += 60_000;
+
+		const loaded = await controller.tick();
+
+		assert.equal(loaded.dispatch.enabled, true);
+		assert.deepEqual(runIssues(loaded), [14]);
+		assert.deepEqual(loaded.queued, [15]);
+		assert.equal(loaded.maxConcurrent, 1);
+		assert.deepEqual(statuses(github, 15), ["1:claimed", "2:blocked"]);
+	});
+
+	it("still releases a closed claim before the first workflow load", async () => {
+		const { github, clock, start } = world();
+		const issue = github.add(labeled(14));
+
+		await start().tick();
+		issue.state = "closed";
+		issue.updatedAt = "2026-10-29T02:00:20Z";
+		github.workflow = null;
+		clock.t += 30_000;
+
+		const report = await start().tick();
+
+		assert.deepEqual(report.dispatch.reasons, ["workflow_unavailable"]);
+		assert.deepEqual(report.runs, []);
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:blocked",
+			"3:released",
+		]);
+	});
+});
+
 describe("Orchestrator claim record usage", () => {
 	it("keeps the recorded usage when the ledger is behind, so the run budget still ends the run", async () => {
 		const ctx = world();
