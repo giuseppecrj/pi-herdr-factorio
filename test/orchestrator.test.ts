@@ -1211,6 +1211,7 @@ describe("fileRunFiles", () => {
 			status: null,
 			stage: null,
 			attempt: null,
+			usage: null,
 		};
 
 		assert.equal(await files.workspaceState(runId), "missing");
@@ -1243,11 +1244,29 @@ describe("fileRunFiles", () => {
 		};
 
 		const base = { runId, issue: 14, eventId: "5" };
-		const unknown = { status: null, stage: null, attempt: null };
+		const unknown = { status: null, stage: null, attempt: null, usage: null };
+		const mirrored = { status: "blocked", stage: "specify", attempt: 1 };
 
 		assert.deepEqual(await load({ ...base, seq: 3 }), [
 			{ ...base, seq: 3, ...unknown },
 		]);
+		assert.deepEqual(await load({ ...base, seq: 3, ...mirrored }), [
+			{ ...base, seq: 3, ...mirrored, usage: null },
+		]);
+		assert.deepEqual(
+			await load({ ...base, seq: 3, ...mirrored, usage: 300_000 }),
+			[{ ...base, seq: 3, ...mirrored, usage: 300_000 }],
+		);
+		assert.deepEqual(
+			await load({ ...base, seq: 3, ...mirrored, usage: -1 }),
+			[],
+		);
+		assert.deepEqual(
+			await load({ ...base, seq: 3, ...mirrored, usage: 1.5 }),
+			[],
+		);
+		assert.deepEqual(await load({ ...base, seq: 3, usage: 5 }), []);
+		assert.deepEqual(await load({ ...base, seq: null, usage: 0 }), []);
 		assert.deepEqual(await load(base), [{ ...base, seq: null, ...unknown }]);
 		assert.deepEqual(await load({ ...base, seq: 0 }), []);
 		assert.deepEqual(await load({ ...base, seq: 3, status: "blocked" }), []);
@@ -1681,6 +1700,7 @@ function blockedClaim(issue: number, seq: number): ClaimRecord {
 		status: "blocked",
 		stage: "specify",
 		attempt: 1,
+		usage: 0,
 	};
 }
 
@@ -1975,6 +1995,7 @@ describe("Orchestrator claim record", () => {
 			status: null,
 			stage: null,
 			attempt: null,
+			usage: null,
 		});
 
 		await start().tick();
@@ -1996,6 +2017,7 @@ describe("Orchestrator claim record", () => {
 			status: null,
 			stage: null,
 			attempt: null,
+			usage: null,
 		});
 		issue.comments.length = 0;
 		issue.updatedAt = "2026-10-29T03:00:00Z";
@@ -2039,6 +2061,7 @@ describe("Orchestrator claim record", () => {
 			status: null,
 			stage: null,
 			attempt: null,
+			usage: null,
 		});
 
 		const report = await start().tick();
@@ -2062,6 +2085,7 @@ describe("Orchestrator claim record", () => {
 			status: null,
 			stage: null,
 			attempt: null,
+			usage: null,
 		});
 
 		const hidden = hideMarker(ctx, issue, 2);
@@ -2209,6 +2233,7 @@ describe("Orchestrator claim record", () => {
 			status: null,
 			stage: null,
 			attempt: null,
+			usage: null,
 		});
 
 		const write = files.writeClaim;
@@ -2227,6 +2252,62 @@ describe("Orchestrator claim record", () => {
 
 		assert.deepEqual(files.claims.get(runOf(14)), blockedClaim(14, 2));
 		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+	});
+});
+
+function endedClaim(
+	issue: number,
+	seq: number,
+	change: Partial<ClaimRecord>,
+): ClaimRecord {
+	return { ...blockedClaim(issue, seq), ...change };
+}
+
+describe("Orchestrator claim record usage", () => {
+	it("keeps the recorded usage when the ledger is behind, so the run budget still ends the run", async () => {
+		const ctx = world();
+		const { github, clock, files, start } = ctx;
+		const issue = github.add(labeled(14));
+
+		ctx.executor.fallback = { kind: "fail", usage: 300_000 };
+
+		const controller = start();
+
+		await controller.tick();
+		clock.t += 30_000;
+		github.now = "2026-10-29T02:00:30Z";
+
+		const failed = await controller.tick();
+
+		assert.equal(failed.runs[0]?.usage, 300_000);
+		assert.deepEqual(
+			files.claims.get(runOf(14)),
+			endedClaim(14, 3, { status: "retrying", attempt: 2, usage: 300_000 }),
+		);
+
+		const hidden = hideMarker(ctx, issue, 3);
+
+		clock.t += 30_000;
+
+		const restarted = start();
+		const adopted = await restarted.tick();
+
+		assert.deepEqual(
+			adopted.runs.map((run) => [run.status, run.attempt, run.usage]),
+			[["retrying", 2, 300_000]],
+		);
+
+		hidden.hidden = false;
+		clock.t += 30_000;
+		github.now = "2026-10-29T02:01:30Z";
+		await restarted.tick();
+		clock.t += 30_000;
+		github.now = "2026-10-29T02:02:00Z";
+
+		const ended = await restarted.tick();
+
+		assert.deepEqual(ended.runs, []);
+		assert.equal(statuses(github, 14).at(-1), "5:budget_exhausted");
 	});
 });
 

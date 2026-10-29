@@ -315,6 +315,14 @@ function claimSeq(value: JsonValue | undefined): number | null | undefined {
 		: undefined;
 }
 
+function claimUsage(value: JsonValue | undefined): number | null | undefined {
+	if (value === undefined || value === null) return null;
+
+	return value === Number(value) && Number.isSafeInteger(value) && value >= 0
+		? value
+		: undefined;
+}
+
 type ClaimState = Pick<ClaimRecord, "status" | "stage" | "attempt">;
 
 function claimState(value: JsonValue | undefined): ClaimState | undefined {
@@ -347,11 +355,14 @@ function parseClaim(text: string): ClaimRecord | null {
 	const eventId = fieldOf(value, "eventId");
 	const seq = claimSeq(fieldOf(value, "seq"));
 	const state = claimState(value);
+	const usage = claimUsage(fieldOf(value, "usage"));
 
 	if (
 		seq === undefined ||
 		state === undefined ||
+		usage === undefined ||
 		(seq === null && state.status !== null) ||
+		(state.status === null && usage !== null) ||
 		runId !== String(runId) ||
 		!isDigest(String(runId)) ||
 		issue !== Number(issue) ||
@@ -372,6 +383,7 @@ function parseClaim(text: string): ClaimRecord | null {
 				eventId: String(eventId),
 				seq,
 				...state,
+				usage,
 			}
 		: null;
 }

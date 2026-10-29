@@ -81,8 +81,9 @@ export const UNAVAILABLE_EXECUTOR: StageExecutor = {
 /**
  * A local record that a run holds a claim, so a restart finds it even after
  * the issue leaves the candidates. It mirrors the run's last marker known to
- * have landed: all `null` before the first, and `status`, `stage` and
- * `attempt` `null` in a record written before they existed.
+ * have landed: all `null` before the first, `status`, `stage`, `attempt` and
+ * `usage` `null` in a record written before they existed, and `usage` alone
+ * `null` in a record written before it existed.
  */
 export type ClaimRecord = {
 	readonly runId: Digest;
@@ -92,6 +93,7 @@ export type ClaimRecord = {
 	readonly status: RunStatus | null;
 	readonly stage: Stage | null;
 	readonly attempt: number | null;
+	readonly usage: number | null;
 };
 
 type ConfirmedRecord = ClaimRecord & { readonly seq: number };
@@ -905,7 +907,7 @@ export class Orchestrator {
 				workflowDigest: receipt.workflowDigest,
 				stage: local.stage ?? read?.stage ?? FIRST_STAGE,
 				attempt: local.attempt ?? read?.attempt ?? 1,
-				usage: read?.usage ?? 0,
+				usage: local.usage ?? read?.usage ?? 0,
 			},
 			{
 				repo: this.#input.repo,
@@ -1621,6 +1623,7 @@ function claimOf(run: ActiveRun): ClaimRecord {
 		status: run.marked?.status ?? null,
 		stage: run.marked?.stage ?? null,
 		attempt: run.marked?.attempt ?? null,
+		usage: run.marked?.usage ?? null,
 	};
 }
 
