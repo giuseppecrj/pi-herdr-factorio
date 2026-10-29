@@ -1,7 +1,8 @@
 /**
  * Splits a byte stream into JSONL records on LF only, never on U+2028 or
  * U+2029 the way `readline` does. A trailing CR is stripped and empty lines
- * are skipped. A line longer than the cap makes `push` return `null`.
+ * are skipped. A line longer than the cap makes `push` return `null`,
+ * whether or not its LF arrived in the same chunk.
  */
 export class LineSplitter {
 	readonly #maxBytes: number;
@@ -20,6 +21,8 @@ export class LineSplitter {
 		while (newline !== -1) {
 			const end =
 				newline > start && joined[newline - 1] === 0x0d ? newline - 1 : newline;
+
+			if (end - start > this.#maxBytes) return null;
 
 			if (end > start) lines.push(joined.subarray(start, end).toString("utf8"));
 

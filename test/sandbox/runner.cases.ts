@@ -361,6 +361,22 @@ describe("Pi RPC framing and records", () => {
 		assert.equal(new LineSplitter(4).push(Buffer.from("123456")), null);
 	});
 
+	it("refuses an over-long line whatever the chunk boundaries", () => {
+		assert.equal(new LineSplitter(4).push(Buffer.from("123456789\n")), null);
+		assert.equal(
+			new LineSplitter(4).push(Buffer.from("ok\n123456789\n")),
+			null,
+		);
+
+		const split = new LineSplitter(4);
+
+		assert.deepEqual(split.push(Buffer.from("123")), []);
+		assert.equal(split.push(Buffer.from("456\n")), null);
+		assert.deepEqual(new LineSplitter(4).push(Buffer.from("1234\r\n")), [
+			"1234",
+		]);
+	});
+
 	it("parses the records the runner acts on and flags malformed ones", () => {
 		assert.deepEqual(
 			parsePiRecord('{"type":"agent_settled","aborted":false}'),
