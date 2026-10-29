@@ -4,8 +4,10 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	realpathSync,
+	renameSync,
 	rmSync,
 	symlinkSync,
+	writeFileSync,
 } from "node:fs";
 import { createServer as createHttpServer, request } from "node:http";
 import { tmpdir } from "node:os";
@@ -28,6 +30,7 @@ import {
 	type SandboxLayout,
 } from "../../server/sandbox/bwrap.ts";
 import { startGatewayProcess } from "../../server/sandbox/gateway-client.ts";
+import { manifestDigest } from "../../server/sandbox/manifest.ts";
 import {
 	type PreflightDeps,
 	runPreflight,
@@ -54,10 +57,26 @@ import {
 } from "../../server/sandbox/seccomp.ts";
 import type { ExecResult } from "../../src/gh.ts";
 import type { LogFields } from "../../src/orchestrator.ts";
+import type { Digest } from "../../src/run.ts";
+import type { ModelId } from "../../src/workflow.ts";
 import { modelTable } from "./routes.cases.ts";
 
 const STATE = "/home/exedev/factory-state";
 const RUN = "a".repeat(64);
+
+function runDigest(text: string): Digest {
+	assert.match(text, /^[0-9a-f]{64}$/);
+
+	// SAFETY: the assertion above checks the Digest pattern.
+	return text as Digest;
+}
+
+function modelId(text: string): ModelId {
+	assert.match(text, /^[a-z0-9-]+\/[A-Za-z0-9._:-]+$/);
+
+	// SAFETY: the assertion above checks the ModelId pattern.
+	return text as ModelId;
+}
 
 function layout(overrides: Partial<SandboxLayout> = {}): SandboxLayout {
 	return {
@@ -1089,6 +1108,7 @@ describe("preflight", () => {
 
 	function deps(overrides: Partial<PreflightDeps> = {}): PreflightDeps {
 		return {
+			reconciled: async () => true,
 			arch: "x64",
 			usernsLimit: async () => "15000",
 			exec: async (command, args): Promise<ExecResult> => {
@@ -1129,12 +1149,21 @@ describe("preflight", () => {
 				gatewayReady: async () => {
 					throw new Error("boom");
 				},
+				reconciled: async () => false,
 			}),
 		);
 
 		assert.deepEqual(result, {
 			ok: false,
-			failed: ["arch", "userns", "bwrap", "assets", "scope", "gateway"],
+			failed: [
+				"reconcile",
+				"arch",
+				"userns",
+				"bwrap",
+				"assets",
+				"scope",
+				"gateway",
+			],
 		});
 	});
 
@@ -1154,5 +1183,74 @@ describe("preflight", () => {
 			ok: false,
 			failed: ["bwrap"],
 		});
+	});
+
+	it("stays unavailable while the startup scope reconcile has not succeeded", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-pf-reconcile-"));
+		const stateDir = join(dir, "state");
+		const root = join(dir, "root");
+		const logs: [string, LogFields][] = [];
+		let listing = 1;
+
+		try {
+			mkdirSync(stateDir);
+			mkdirSync(join(root, "staging"), { recursive: true });
+			writeFileSync(join(root, "staging", "marker"), "bundle\n");
+
+			const digest = await manifestDigest(join(root, "staging"));
+
+			assert.ok(digest);
+			renameSync(join(root, "staging"), join(root, `assets-${digest}`));
+			symlinkSync(`assets-${digest}`, join(root, "current"));
+
+			const executor = sandboxExecutor({
+				stateDir,
+				root,
+				arch: "x64",
+				usernsLimit: async () => "15000",
+				xdgRuntimeDir: "/run/user/1000",
+				log: (event, fields) => logs.push([event, fields]),
+				exec: async (command, args): Promise<ExecResult> => {
+					if (args.includes("list-units"))
+						return { stdout: "", stderr: "bus", code: listing };
+
+					if (command === "bwrap")
+						return { stdout: "bubblewrap 0.9.0\n", stderr: "", code: 0 };
+
+					return { stdout: "", stderr: "", code: 0 };
+				},
+			});
+
+			await executor.recover();
+
+			assert.equal(await executor.preflight(), false);
+			assert.deepEqual(
+				logs.find(([event]) => event === "sandbox_preflight")?.[1].failed,
+				"reconcile",
+			);
+
+			const launch = await executor.launch({
+				runId: runDigest(RUN),
+				stage: "specify",
+				attempt: 1,
+				workspace: dir,
+				settings: {
+					model: modelId("openai/gpt-6.1-sol"),
+					fallback: null,
+					budget: { maxTurns: 1, wallMs: 60_000, stallMs: 60_000 },
+					maxTokens: null,
+				},
+				remainingRunTokens: 1,
+				signal: new AbortController().signal,
+				progress: () => {},
+			});
+
+			assert.equal(launch.kind, "unavailable");
+
+			listing = 0;
+			assert.equal(await executor.preflight(), true);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });

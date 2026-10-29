@@ -1111,6 +1111,7 @@ export type SandboxExecutorConfig = {
 	readonly xdgRuntimeDir: string;
 	readonly root?: string;
 	readonly arch?: string;
+	readonly usernsLimit?: () => Promise<string>;
 };
 
 const PREFLIGHT_RUN =
@@ -1118,9 +1119,11 @@ const PREFLIGHT_RUN =
 
 /**
  * The stage executor the controller installs. It stops leftover stage
- * scopes once at startup, runs the preflight until it passes, and launches
- * each stage as one `runStage` in a fresh sandbox. Until the preflight has
- * passed, every launch is `sandbox_unavailable` and no model runs.
+ * scopes at startup, runs the preflight until it passes, and launches each
+ * stage as one `runStage` in a fresh sandbox. Until the preflight has
+ * passed, every launch is `sandbox_unavailable` and no model runs. A
+ * reconcile that failed fails the preflight, which retries it: no stage of
+ * this process can be running yet, so a retry stops only leftovers.
  */
 export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 	const root = config.root ?? SANDBOX_ROOT;
@@ -1129,6 +1132,25 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 		null;
 
 	let reported: string | null = null;
+	let reconciled = false;
+
+	const reconcile = async (always: boolean): Promise<boolean> => {
+		const result = await reconcileScopes(config.stateDir, config.exec);
+
+		reconciled = result.failed.length === 0;
+
+		if (!always && !reconciled) return false;
+
+		for (const unit of result.unowned) config.log("scope_unowned", { unit });
+
+		config.log("sandbox_reconciled", {
+			stopped: result.stopped.length,
+			failed: result.failed.length,
+			unowned: result.unowned.length,
+		});
+
+		return reconciled;
+	};
 
 	const gatewayReady = async (): Promise<boolean> => {
 		const nonce = randomBytes(4).toString("hex");
@@ -1162,15 +1184,7 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 
 	return {
 		async recover() {
-			const result = await reconcileScopes(config.stateDir, config.exec);
-
-			for (const unit of result.unowned) config.log("scope_unowned", { unit });
-
-			config.log("sandbox_reconciled", {
-				stopped: result.stopped.length,
-				failed: result.failed.length,
-				unowned: result.unowned.length,
-			});
+			await reconcile(true);
 		},
 
 		async preflight() {
@@ -1179,8 +1193,9 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 			const bundle = await locateBundle(root);
 
 			const result = await runPreflight({
+				reconciled: async () => reconciled || reconcile(false),
 				arch: config.arch ?? process.arch,
-				usernsLimit: readUsernsLimit,
+				usernsLimit: config.usernsLimit ?? readUsernsLimit,
 				exec: config.exec,
 				assetsDigest: async () =>
 					bundle === null ? null : manifestDigest(bundle.dir),

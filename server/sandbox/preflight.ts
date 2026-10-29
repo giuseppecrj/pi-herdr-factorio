@@ -4,6 +4,7 @@ import type { Exec } from "../../src/gh.ts";
 import { detectArch, type SeccompArch } from "./seccomp.ts";
 
 export const PREFLIGHT_CHECKS = [
+	"reconcile",
 	"arch",
 	"userns",
 	"bwrap",
@@ -23,6 +24,8 @@ export type PreflightResult =
 	| { readonly ok: false; readonly failed: readonly PreflightCheck[] };
 
 export type PreflightDeps = {
+	/** True once leftover stage scopes were listed and every one of ours stopped. */
+	readonly reconciled: () => Promise<boolean>;
 	readonly arch: string;
 	readonly usernsLimit: () => Promise<string>;
 	readonly exec: Exec;
@@ -80,15 +83,19 @@ async function safely<T>(work: () => Promise<T>, fallback: T): Promise<T> {
 }
 
 /**
- * The runner's preflight: a known CPU architecture, unprivileged user
- * namespaces, bwrap at least 0.9.0, the expected asset digest, a user scope
- * that launches, and a gateway that comes up ready. Every check runs, so a
- * failure names each cause. `executionEnabled` follows `ok`.
+ * The runner's preflight: leftover stage scopes stopped, a known CPU
+ * architecture, unprivileged user namespaces, bwrap at least 0.9.0, the
+ * expected asset digest, a user scope that launches, and a gateway that
+ * comes up ready. Every check runs, so a failure names each cause.
+ * `executionEnabled` follows `ok`.
  */
 export async function runPreflight(
 	deps: PreflightDeps,
 ): Promise<PreflightResult> {
 	const failed: PreflightCheck[] = [];
+
+	if (!(await safely(deps.reconciled, false))) failed.push("reconcile");
+
 	const arch = detectArch(deps.arch);
 
 	if (arch === null) failed.push("arch");
