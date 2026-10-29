@@ -442,6 +442,8 @@ export class Orchestrator {
 	 * own landed POSTs, adopted markers and claim records. It outlives the run.
 	 */
 	readonly #floor = new Map<number, number>();
+	/** The part of the floor an earlier process confirmed, from claim records read at start. */
+	readonly #recorded = new Map<number, number>();
 	/** The tick in which each issue's ledger first read behind its floor. */
 	readonly #stale = new Map<number, number>();
 
@@ -563,7 +565,13 @@ export class Orchestrator {
 
 			this.#recover.add(claim.issue);
 
-			if (claim.seq !== null) this.#raiseFloor(claim.issue, claim.seq);
+			if (claim.seq === null) continue;
+
+			this.#raiseFloor(claim.issue, claim.seq);
+			this.#recorded.set(
+				claim.issue,
+				Math.max(this.#recorded.get(claim.issue) ?? 0, claim.seq),
+			);
 		}
 
 		this.#claimsLoaded = true;
@@ -881,7 +889,8 @@ export class Orchestrator {
 	/**
 	 * Checks a clean ledger against the issue's floor. A ledger whose highest
 	 * `seq` is below it lags a confirmed POST or lost comments. The first such
-	 * read defers the issue; one in a later tick is `missing`.
+	 * read defers the issue; one in a later tick is `missing`. A ledger below a
+	 * seq an earlier process recorded is `missing` at once.
 	 */
 	#behind(issue: number, ledger: CleanLedger): "current" | "stale" | "missing" {
 		const floor = this.#floor.get(issue) ?? 0;
@@ -892,6 +901,8 @@ export class Orchestrator {
 
 			return "current";
 		}
+
+		if (seq < (this.#recorded.get(issue) ?? 0)) return "missing";
 
 		const since = this.#stale.get(issue);
 

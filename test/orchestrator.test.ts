@@ -1694,21 +1694,15 @@ describe("Orchestrator acknowledged marker floor", () => {
 		assert.equal(executor.launches.length, 1);
 	});
 
-	it("reports marker_missing after a restart when the claim record has a confirmed seq and the bot comments are gone", async () => {
-		const { github, files, executor, start } = world();
+	it("reports marker_missing in the first tick after a restart when the claim record has a confirmed seq and the bot comments are gone", async () => {
+		const { github, files, executor, logs, start } = world();
 		const issue = github.add(labeled(14));
 
 		await start().tick();
 		issue.comments.length = 0;
 		issue.updatedAt = "2026-10-29T03:00:00Z";
 
-		const controller = start();
-		const deferred = await controller.tick();
-
-		assert.deepEqual(deferred.runs, []);
-		assert.deepEqual(deferred.corrupt, []);
-
-		const missing = await controller.tick();
+		const missing = await start().tick();
 
 		assert.deepEqual(missing.corrupt, [
 			{ issue: 14, defect: "marker_missing" },
@@ -1716,6 +1710,7 @@ describe("Orchestrator acknowledged marker floor", () => {
 		assert.deepEqual(missing.runs, []);
 		assert.equal(github.markers(14).length, 0);
 		assert.equal(executor.launches.length, 1);
+		assert.ok(!events(logs).includes("ledger_stale"));
 		assert.deepEqual(
 			[...files.claims.values()].map((claim) => claim.seq),
 			[2],
