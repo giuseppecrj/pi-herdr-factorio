@@ -21,7 +21,12 @@ import {
 	type EchoFixture,
 	startEchoFixture,
 } from "../../server/sandbox/echo-fixture.ts";
-import { dialOrder, Gateway } from "../../server/sandbox/gateway.ts";
+import {
+	addressAllowed,
+	dialOrder,
+	Gateway,
+	refusedAddresses,
+} from "../../server/sandbox/gateway.ts";
 import { DENY_CODES } from "../../server/sandbox/policy.ts";
 import {
 	type Route,
@@ -262,6 +267,31 @@ async function startHarness(
 
 	return { gateway, socketPath, events, audit, failAudit };
 }
+
+describe("upstream address checks", () => {
+	it("allows public IPv4 and IPv6 and refuses private, mapped and NAT64 forms", () => {
+		const refused = refusedAddresses();
+
+		for (const address of ["104.16.2.34", "2606:4700::6810:b22"]) {
+			assert.equal(addressAllowed(address, refused), true, address);
+		}
+
+		for (const address of [
+			"127.0.0.1",
+			"10.1.2.3",
+			"100.100.1.1",
+			"169.254.169.254",
+			"::1",
+			"::ffff:104.16.2.34",
+			"::ffff:169.254.169.254",
+			"64:ff9b::a9fe:a9fe",
+			"fd00::1",
+			"not-an-ip",
+		]) {
+			assert.equal(addressAllowed(address, refused), false, address);
+		}
+	});
+});
 
 describe("upstream dial order", () => {
 	it("tries every IPv4 address before any IPv6 one, keeping resolver order within each", () => {

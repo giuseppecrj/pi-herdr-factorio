@@ -102,37 +102,51 @@ const REFUSED_V6 = [
 	["ff00::", 8],
 ] as const;
 
-function refusedAddresses(): BlockList {
-	const list = new BlockList();
+/**
+ * One list per family. Node's `BlockList` checks an IPv4 address against
+ * IPv6 rules in its `::ffff:` form too, so a single list holding
+ * `::ffff:0:0/96` refused every IPv4 upstream.
+ */
+export type RefusedAddresses = {
+	readonly v4: BlockList;
+	readonly v6: BlockList;
+};
+
+export function refusedAddresses(): RefusedAddresses {
+	const v4 = new BlockList();
+	const v6 = new BlockList();
 
 	for (const [network, prefix] of REFUSED_V4)
-		list.addSubnet(network, prefix, "ipv4");
+		v4.addSubnet(network, prefix, "ipv4");
 
 	for (const [network, prefix] of REFUSED_V6)
-		list.addSubnet(network, prefix, "ipv6");
+		v6.addSubnet(network, prefix, "ipv6");
 
 	for (const entries of Object.values(networkInterfaces())) {
 		for (const entry of entries ?? []) {
-			list.addAddress(entry.address, entry.family === "IPv6" ? "ipv6" : "ipv4");
+			if (entry.family === "IPv6") v6.addAddress(entry.address, "ipv6");
+			else v4.addAddress(entry.address, "ipv4");
 		}
 	}
 
-	return list;
+	return { v4, v6 };
 }
 
 /** True when a resolved address may be dialled: public unicast only. */
-export function addressAllowed(address: string, refused: BlockList): boolean {
+export function addressAllowed(
+	address: string,
+	refused: RefusedAddresses,
+): boolean {
 	const family = isIP(address);
 
-	if (family === 0) return false;
+	if (family === 4) return !refused.v4.check(address, "ipv4");
 
-	return !refused.check(address, family === 6 ? "ipv6" : "ipv4");
+	return family === 6 && !refused.v6.check(address, "ipv6");
 }
 
 /**
- * IPv4 addresses first, each family in resolver order. The VM has no IPv6
- * route, so dialling the first AAAA record that `registry.npmjs.org`
- * returns failed every npm request on `pi-factorio`.
+ * IPv4 addresses first, each family in resolver order. `pi-factorio` has
+ * no IPv6 route, so an AAAA record is only a last resort.
  */
 export function dialOrder(addresses: readonly string[]): string[] {
 	return [
