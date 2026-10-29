@@ -3321,6 +3321,44 @@ describe("Orchestrator before the first workflow load", () => {
 	});
 });
 
+describe("Orchestrator workspace replay", () => {
+	it("keeps the replay of an adopted run whose workspace preparation failed, and replays it once preparation works", async () => {
+		const { github, clock, files, executor, start } = world();
+
+		github.add(labeled(14));
+		await start().tick();
+		files.workspaces.delete(runOf(14));
+
+		const ensure = files.ensureWorkspace;
+		let failing = true;
+
+		files.ensureWorkspace = async (runId) =>
+			failing ? "unavailable" : ensure(runId);
+		clock.t += 30_000;
+
+		const controller = start();
+
+		await controller.tick();
+
+		assert.equal(executor.launches.length, 1);
+
+		failing = false;
+		clock.t += 30_000;
+
+		const replayed = await controller.tick();
+
+		assert.equal(executor.launches.length, 2);
+		assert.ok(files.workspaces.has(runOf(14)));
+		assert.equal(replayed.runs[0]?.workspace, "missing_replayed");
+
+		clock.t += 30_000;
+		await controller.tick();
+
+		assert.equal(executor.launches.length, 2);
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+	});
+});
+
 describe("Orchestrator claim record usage", () => {
 	it("keeps the recorded usage when the ledger is behind, so the run budget still ends the run", async () => {
 		const ctx = world();

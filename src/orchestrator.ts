@@ -1673,8 +1673,6 @@ export class Orchestrator {
 	async #prepareWorkspace(run: ActiveRun): Promise<WorkspacePreparation> {
 		const workspace = await this.#input.files.ensureWorkspace(run.runId);
 
-		run.replay = false;
-
 		if (workspace === "unavailable") {
 			this.#input.log("workspace_unavailable", {
 				issue: run.issue,
@@ -1683,6 +1681,8 @@ export class Orchestrator {
 
 			return { kind: "unavailable" };
 		}
+
+		run.replay = false;
 
 		if (workspace === "created") {
 			run.workspaceMissing = true;
