@@ -103,6 +103,28 @@ const REFUSED_V6 = [
 	["ff00::", 8],
 ] as const;
 
+/** An IPv4 address as its two 16-bit hex groups. */
+function v4Groups(address: string): [string, string] {
+	const [a = 0, b = 0, c = 0, d = 0] = address.split(".").map(Number);
+
+	return [((a << 8) | b).toString(16), ((c << 8) | d).toString(16)];
+}
+
+/**
+ * The IPv6 spellings of an IPv4 network: IPv4-mapped (`::ffff:a.b.c.d`),
+ * IPv4-compatible (`::a.b.c.d`) and 6to4 (`2002:aabb:ccdd::/48`). A refused
+ * IPv4 range is refused in each of them.
+ */
+function v6Spellings(network: string, prefix: number): [string, number][] {
+	const [high, low] = v4Groups(network);
+
+	return [
+		[`::ffff:${high}:${low}`, 96 + prefix],
+		[`::${high}:${low}`, 96 + prefix],
+		[`2002:${high}:${low}::`, 16 + prefix],
+	];
+}
+
 /**
  * One list per family. Node's `BlockList` checks an IPv4 address against
  * IPv6 rules in its `::ffff:` form too, so a single list holding
@@ -117,8 +139,14 @@ export function refusedAddresses(): RefusedAddresses {
 	const v4 = new BlockList();
 	const v6 = new BlockList();
 
-	for (const [network, prefix] of REFUSED_V4)
+	const refuseV4 = (network: string, prefix: number) => {
 		v4.addSubnet(network, prefix, "ipv4");
+
+		for (const [spelled, bits] of v6Spellings(network, prefix))
+			v6.addSubnet(spelled, bits, "ipv6");
+	};
+
+	for (const [network, prefix] of REFUSED_V4) refuseV4(network, prefix);
 
 	for (const [network, prefix] of REFUSED_V6)
 		v6.addSubnet(network, prefix, "ipv6");
@@ -126,7 +154,7 @@ export function refusedAddresses(): RefusedAddresses {
 	for (const entries of Object.values(networkInterfaces())) {
 		for (const entry of entries ?? []) {
 			if (entry.family === "IPv6") v6.addAddress(entry.address, "ipv6");
-			else v4.addAddress(entry.address, "ipv4");
+			else refuseV4(entry.address, 32);
 		}
 	}
 

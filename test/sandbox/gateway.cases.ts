@@ -302,6 +302,43 @@ describe("upstream address checks", () => {
 			assert.equal(addressAllowed(address, refused), false, address);
 		}
 	});
+
+	it("refuses the metadata address and every refused IPv4 range in their 6to4, IPv4-compatible and IPv4-mapped spellings", () => {
+		const refused = refusedAddresses();
+
+		for (const address of [
+			"2002:a9fe:a9fe::",
+			"2002:a9fe:a9fe::1",
+			"2002:a9fe:1::",
+			"::a9fe:a9fe",
+			"::169.254.169.254",
+			"::ffff:a9fe:a9fe",
+			"2002:a01:203::",
+			"::a01:203",
+			"2002:7f00:1::",
+			"::7f00:1",
+			"2002:c0a8:101::",
+			"::c0a8:101",
+			"2002:6440:101::",
+			"::6440:101",
+			"::ffff:6440:101",
+			"2002:ac10:1::",
+			"::ac10:1",
+			"2002:c612:1::",
+			"2002:e000:1::",
+			"::e000:1",
+			"2002:f000:1::",
+			"2002:c000:1::",
+			"2002::1",
+			"::2",
+		]) {
+			assert.equal(addressAllowed(address, refused), false, address);
+		}
+
+		for (const address of ["2002:6810:222::1", "2606:4700::6810:b22"]) {
+			assert.equal(addressAllowed(address, refused), true, address);
+		}
+	});
 });
 
 describe("upstream dial order", () => {
