@@ -1,16 +1,22 @@
 import { randomBytes } from "node:crypto";
 import {
+	closeSync,
+	existsSync,
+	fsyncSync,
 	lstatSync,
 	mkdirSync,
+	openSync,
 	readdirSync,
 	readFileSync,
 	realpathSync,
+	renameSync,
+	rmSync,
 	statSync,
 	writeFileSync,
 } from "node:fs";
 import { readFile, readlink, rm } from "node:fs/promises";
-import { join } from "node:path";
-import type { Readable, Writable } from "node:stream";
+import { dirname, join } from "node:path";
+import type { Readable } from "node:stream";
 import type { Exec } from "../src/gh.ts";
 import type {
 	Log,
@@ -24,7 +30,11 @@ import { PI_AGENT_DIR } from "./sandbox/assets/pi.ts";
 import { manifestDigest, PINNED_VERSIONS } from "./sandbox/manifest.ts";
 import { readUsernsLimit, runPreflight } from "./sandbox/preflight.ts";
 import { BUNDLE, bwrapArgv } from "./sandbox/bwrap.ts";
-import type { CloseReason, ControlEvent } from "./sandbox/control.ts";
+import type {
+	CloseReason,
+	ControlEvent,
+	SummaryEvent,
+} from "./sandbox/control.ts";
 import {
 	type GatewayHandle,
 	startGatewayProcess,
@@ -156,6 +166,7 @@ type StageRun = {
 	readonly gateway: GatewayHandle;
 	readonly ledger: Ledger;
 	readonly deadline: number;
+	readonly wallEnd: number;
 	gateReason: CloseReason | null;
 	alert: FailedExit | null;
 	listener: ((event: ControlEvent) => void) | null;
@@ -216,6 +227,45 @@ function waitFor(promise: Promise<unknown>, ms: number): Promise<boolean> {
 	});
 }
 
+/** A cap the usage went past. A session that settled on its own is checked with this. */
+function overCap(stage: StageRun): BudgetCap | null {
+	const { maxTokens } = stage.input.settings;
+	const total = stage.ledger.total;
+
+	if (maxTokens !== null && total > maxTokens) return "tokens";
+
+	return total > stage.input.remainingRunTokens ? "run_tokens" : null;
+}
+
+type Bounded = (promise: Promise<unknown>, capMs?: number) => Promise<boolean>;
+
+/**
+ * One absolute window for a run of cleanup waits: the cleanup reserve, cut
+ * short by the stage's own wall end. Each wait ends when the window does,
+ * whatever its own cap.
+ */
+function cleanupWindow(stage: Pick<StageRun, "host" | "wallEnd">): Bounded {
+	const { host } = stage;
+
+	const ms = Math.max(
+		0,
+		Math.min(stage.wallEnd - host.now(), host.cleanupReserveMs),
+	);
+
+	const until = Date.now() + ms;
+
+	return (promise, capMs = Number.POSITIVE_INFINITY) =>
+		waitFor(promise, Math.min(capMs, until - Date.now()));
+}
+
+const NOT_STARTED: Settlement = { event: "none", aborted: null };
+
+function plainReport(outcome: SessionOutcome): SessionReport {
+	return { outcome, refusal: null, settlement: NOT_STARTED, observed: null };
+}
+
+const CRASHED: SessionOutcome = { kind: "failed", exit: "crashed" };
+
 /**
  * One Pi session in the sandbox: send the prompt, read records, answer
  * dialogs, count turns and tokens, and end on settlement, a cap, the
@@ -228,17 +278,17 @@ async function runSession(
 	session: number,
 ): Promise<SessionReport> {
 	const { host, input, ledger } = stage;
+
+	if (host.now() >= stage.deadline) {
+		return plainReport({ kind: "budget_exhausted", cap: "wall" });
+	}
+
 	const pi = await host.launchPi(model, session);
 
 	if (pi === null) {
-		await host.stopSandbox(session);
+		await cleanupWindow(stage)(host.stopSandbox(session));
 
-		return {
-			outcome: { kind: "failed", exit: "crashed" },
-			refusal: null,
-			settlement: { event: "none", aborted: null },
-			observed: null,
-		};
+		return plainReport(CRASHED);
 	}
 
 	const tracker = new SessionTracker(
@@ -248,8 +298,46 @@ async function runSession(
 	);
 
 	const reads: Promise<void>[] = [];
+	let pendingReads = 0;
+	let readFailed = false;
+	let readsClosed = false;
 	let abortSent = false;
 	let settledAfterAbort: (() => void) | null = null;
+	let recheck = () => {};
+
+	const readChild = (sessionFile: string | null): Promise<void> => {
+		pendingReads += 1;
+
+		const read =
+			sessionFile === null
+				? Promise.resolve(null)
+				: host.readChildUsage(session, sessionFile);
+
+		return read.then(
+			(usage) => {
+				if (readsClosed) return;
+
+				pendingReads -= 1;
+
+				if (usage === null) {
+					ledger.unreadChildren += 1;
+
+					return;
+				}
+
+				ledger.children += usage.total;
+				ledger.add(usage.byModel);
+				recheck();
+			},
+			() => {
+				if (readsClosed) return;
+
+				pendingReads -= 1;
+				ledger.unreadChildren += 1;
+				readFailed = true;
+			},
+		);
+	};
 
 	const report = await new Promise<SessionOutcome | "settled">((finish) => {
 		let finished = false;
@@ -272,14 +360,15 @@ async function runSession(
 			if (cap !== null) capped(cap);
 		};
 
+		recheck = checkTokens;
+
 		const onAbort = () => end({ kind: "failed", exit: "aborted" });
 
-		const deadline = setTimeout(
-			() => capped("wall"),
-			stage.deadline - host.now(),
-		);
-
+		const remaining = stage.deadline - host.now();
+		const deadline = setTimeout(() => capped("wall"), Math.max(0, remaining));
 		const splitter = new LineSplitter(64 * 1024 * 1024);
+
+		if (remaining <= 0) capped("wall");
 
 		if (input.signal.aborted) onAbort();
 
@@ -309,20 +398,22 @@ async function runSession(
 
 				if (record.type === "agent_settled" && abortSent) settledAfterAbort?.();
 
-				if (finished) continue;
-
 				if (record.type === "assistant_end") {
-					ledger.parent += record.message.usage?.totalTokens ?? 0;
+					const tokens = record.message.usage?.totalTokens ?? 0;
+
+					ledger.parent += tokens;
 					ledger.add(
 						new Map([
-							[
-								modelKey(record.message.provider, record.message.model),
-								record.message.usage?.totalTokens ?? 0,
-							],
+							[modelKey(record.message.provider, record.message.model), tokens],
 						]),
 					);
-					checkTokens();
 				}
+
+				if (signal.kind === "child") reads.push(readChild(signal.sessionFile));
+
+				if (finished) continue;
+
+				if (record.type === "assistant_end") checkTokens();
 
 				if (signal.kind === "failed") end(signal);
 				else if (signal.kind === "cap") capped(signal.cap);
@@ -335,36 +426,24 @@ async function runSession(
 					});
 				} else if (signal.kind === "arm_turn_cap") {
 					void closeGate(stage, "turns");
-				} else if (signal.kind === "child") {
-					reads.push(
-						(signal.sessionFile === null
-							? Promise.resolve(null)
-							: host.readChildUsage(session, signal.sessionFile)
-						).then((usage) => {
-							if (usage === null) {
-								ledger.unreadChildren += 1;
-
-								return;
-							}
-
-							ledger.children += usage.total;
-							ledger.add(usage.byModel);
-							checkTokens();
-						}),
-					);
 				}
 			}
 		});
-		pi.stdout.on("error", () => end({ kind: "failed", exit: "crashed" }));
-		pi.exited.then(() => end({ kind: "failed", exit: "crashed" }));
-		sendCommand(pi, { id: PROMPT_ID, type: "prompt", message: input.prompt });
+		pi.stdout.on("error", () => end(CRASHED));
+		pi.exited.then(() => end(CRASHED));
+
+		if (!finished) {
+			sendCommand(pi, { id: PROMPT_ID, type: "prompt", message: input.prompt });
+		}
 	});
+
+	const bounded = cleanupWindow(stage);
 
 	if (report !== "settled") {
 		const reason =
 			report.kind === "budget_exhausted" ? CAP_REASON[report.cap] : "abort";
 
-		await closeGate(stage, reason);
+		await bounded(closeGate(stage, reason));
 
 		const settled = new Promise<void>((done) => {
 			settledAfterAbort = done;
@@ -372,21 +451,30 @@ async function runSession(
 
 		abortSent = true;
 		sendCommand(pi, { id: "factory-abort", type: "abort" });
-		await waitFor(settled, Math.min(ABORT_WAIT_MS, host.cleanupReserveMs));
-		await stage.gateway.drainAbort();
+		await bounded(settled, ABORT_WAIT_MS);
+		await bounded(stage.gateway.drainAbort());
 	}
 
 	pi.stdin.end();
-	await waitFor(pi.exited, EXIT_WAIT_MS);
-	await host.stopSandbox(session);
-	await Promise.all(reads);
+
+	if (!(await bounded(pi.exited, EXIT_WAIT_MS))) pi.kill();
+
+	await bounded(host.stopSandbox(session));
+	await bounded(Promise.all(reads));
+
+	readsClosed = true;
+
+	if (pendingReads > 0) {
+		ledger.unreadChildren += pendingReads;
+		readFailed = true;
+	}
 
 	const last = tracker.lastAssistant;
 	const observed = last === null ? null : modelKey(last.provider, last.model);
 
 	const settlement: Settlement =
 		tracker.aborted === null
-			? { event: "none", aborted: null }
+			? NOT_STARTED
 			: { event: "agent_settled", aborted: tracker.aborted };
 
 	if (report !== "settled") {
@@ -394,9 +482,9 @@ async function runSession(
 	}
 
 	const cap =
-		last?.stopReason === "error" && stage.gateReason !== null
+		(last?.stopReason === "error" && stage.gateReason !== null
 			? capFor(stage)
-			: null;
+			: null) ?? overCap(stage);
 
 	if (
 		cap !== null ||
@@ -410,9 +498,29 @@ async function runSession(
 		};
 	}
 
+	if (readFailed)
+		return { outcome: CRASHED, refusal: null, settlement, observed };
+
 	const settled = settledOutcome(last);
 
 	return { ...settled, settlement, observed };
+}
+
+/** A session whose effects threw ends crashed, after a bounded stop of its sandbox. */
+async function guardedSession(
+	stage: StageRun,
+	model: ModelId,
+	session: number,
+): Promise<SessionReport> {
+	try {
+		return await runSession(stage, model, session);
+	} catch {
+		await cleanupWindow(stage)(
+			Promise.resolve().then(() => stage.host.stopSandbox(session)),
+		);
+
+		return plainReport(CRASHED);
+	}
 }
 
 function finalOutcome(
@@ -443,33 +551,31 @@ export async function runStage(
 ): Promise<StageResult> {
 	const started = host.now();
 	const ledger = new Ledger();
+	const { maxTokens, budget } = input.settings;
 
 	const tokenCap = Math.min(
-		input.settings.maxTokens ?? Number.MAX_SAFE_INTEGER,
+		maxTokens ?? Number.MAX_SAFE_INTEGER,
 		input.remainingRunTokens,
 	);
 
-	const table = builtinTable({
-		stage: input.stage,
-		runId: input.runId,
-		attempt: input.attempt,
-		model: bareModel(input.settings.model),
-		fallback:
-			input.settings.fallback === null
-				? null
-				: bareModel(input.settings.fallback),
-		modelTokens: Math.max(0, tokenCap),
-		modelRequests: MODEL_REQUEST_CEILING,
-	});
-
-	const gateway = await host.startGateway(table);
 	const sessions: number[] = [];
+	let gatewayRan = false;
 
 	const receipt = async (
 		primary: SessionReport,
 		fallback: FallbackRecord | null,
 		egress: StageReceipt["egress"],
 	): Promise<StageResult> => {
+		const bounded = cleanupWindow({ host, wallEnd: started + budget.wallMs });
+
+		const stderr = await Promise.all(
+			sessions.map(async (session) => {
+				const log = host.stderrLog(session).catch(() => null);
+
+				return (await bounded(log)) ? log : null;
+			}),
+		);
+
 		const record: StageReceipt = {
 			version: 1,
 			runId: input.runId,
@@ -482,40 +588,62 @@ export async function runStage(
 			refusal: primary.refusal,
 			wallMs: Math.max(0, host.now() - started),
 			turns: ledger.turns,
-			usage: ledger.usage(gateway !== null),
+			usage: ledger.usage(gatewayRan),
 			egress,
-			stderr: (
-				await Promise.all(sessions.map((session) => host.stderrLog(session)))
-			).filter((record) => record !== null),
+			stderr: stderr.filter((entry) => entry !== null),
 			assetsDigest: host.assetsDigest,
 			versions: host.versions,
 			pricing: "unavailable",
 		};
 
-		await host.writeReceipt(record);
+		const written = await host.writeReceipt(record).catch(() => false);
 
-		return stageResult(record);
+		return stageResult(written ? record : { ...record, outcome: CRASHED });
 	};
 
-	if (gateway === null) {
+	const early: BudgetCap | null =
+		maxTokens !== null && maxTokens <= 0
+			? "tokens"
+			: input.remainingRunTokens <= 0
+				? "run_tokens"
+				: budget.wallMs <= host.cleanupReserveMs
+					? "wall"
+					: null;
+
+	if (early !== null) {
 		return receipt(
-			{
-				outcome: { kind: "failed", exit: "crashed" },
-				refusal: null,
-				settlement: { event: "none", aborted: null },
-				observed: null,
-			},
+			plainReport({ kind: "budget_exhausted", cap: early }),
 			null,
 			null,
 		);
 	}
+
+	const table = builtinTable({
+		stage: input.stage,
+		runId: input.runId,
+		attempt: input.attempt,
+		model: bareModel(input.settings.model),
+		fallback:
+			input.settings.fallback === null
+				? null
+				: bareModel(input.settings.fallback),
+		modelTokens: tokenCap,
+		modelRequests: MODEL_REQUEST_CEILING,
+	});
+
+	const gateway = await host.startGateway(table).catch(() => null);
+
+	if (gateway === null) return receipt(plainReport(CRASHED), null, null);
+
+	gatewayRan = true;
 
 	const stage: StageRun = {
 		input,
 		host,
 		gateway,
 		ledger,
-		deadline: started + input.settings.budget.wallMs - host.cleanupReserveMs,
+		deadline: started + budget.wallMs - host.cleanupReserveMs,
+		wallEnd: started + budget.wallMs,
 		gateReason: null,
 		alert: null,
 		listener: null,
@@ -543,7 +671,7 @@ export async function runStage(
 
 	sessions.push(0);
 
-	const primary = await runSession(stage, input.settings.model, 0);
+	const primary = await guardedSession(stage, input.settings.model, 0);
 	let fallback: FallbackRecord | null = null;
 
 	if (
@@ -557,19 +685,14 @@ export async function runStage(
 		const switched =
 			openai !== null &&
 			xai !== null &&
-			(await gateway.setRoute(openai, false)) &&
-			(await gateway.setRoute(xai, true));
+			(await gateway.setRoute(openai, false).catch(() => false)) &&
+			(await gateway.setRoute(xai, true).catch(() => false));
 
 		if (switched) sessions.push(1);
 
-		const second: SessionReport = switched
-			? await runSession(stage, input.settings.fallback, 1)
-			: {
-					outcome: { kind: "failed", exit: "crashed" },
-					refusal: null,
-					settlement: { event: "none", aborted: null },
-					observed: null,
-				};
+		const second = switched
+			? await guardedSession(stage, input.settings.fallback, 1)
+			: plainReport(CRASHED);
 
 		fallback = {
 			requested: input.settings.fallback,
@@ -580,7 +703,15 @@ export async function runStage(
 		};
 	}
 
-	const summary = await gateway.shutdown();
+	const shutdown: Promise<SummaryEvent | null> = gateway
+		.shutdown()
+		.catch(() => null);
+
+	const closed = await cleanupWindow(stage)(shutdown);
+
+	if (!closed) gateway.kill();
+
+	const summary = closed ? await shutdown : null;
 
 	return receipt(primary, fallback, summary?.routes ?? null);
 }
@@ -702,6 +833,53 @@ export function hostSessionPath(
 }
 
 /**
+ * Publishes `text` at `path` whole or not at all: it is written to a fresh
+ * 0600 temp file beside it, fsynced, then renamed into place, and the
+ * directory is fsynced. An existing `path` is never replaced. Any failure
+ * removes the temp file and returns `false`.
+ */
+export function publishFile(
+	path: string,
+	text: string,
+	write: (fd: number, text: string) => void = (fd, data) =>
+		writeFileSync(fd, data),
+): boolean {
+	if (existsSync(path)) return false;
+
+	const temp = `${path}.tmp-${randomBytes(4).toString("hex")}`;
+	let fd: number | null = null;
+
+	try {
+		fd = openSync(temp, "wx", 0o600);
+		write(fd, text);
+		fsyncSync(fd);
+		closeSync(fd);
+		fd = null;
+		renameSync(temp, path);
+	} catch {
+		try {
+			if (fd !== null) closeSync(fd);
+
+			rmSync(temp, { force: true });
+		} catch {}
+
+		return false;
+	}
+
+	try {
+		const dir = openSync(dirname(path), "r");
+
+		try {
+			fsyncSync(dir);
+		} finally {
+			closeSync(dir);
+		}
+	} catch {}
+
+	return true;
+}
+
+/**
  * Keeps the last `STDERR_CAP_BYTES` a sandbox writes to stderr. The returned
  * function waits up to `waitMs` for the stream to close, writes the kept
  * bytes to `path` with mode 0600, and resolves to the total bytes written,
@@ -741,29 +919,6 @@ export function captureStderr(
 			return null;
 		}
 	};
-}
-
-class ScopedPi implements PiProcess {
-	readonly stdin: Writable;
-	readonly stdout: Readable;
-	readonly exited: Promise<number | null>;
-	readonly #kill: () => void;
-
-	constructor(
-		stdin: Writable,
-		stdout: Readable,
-		exited: Promise<number | null>,
-		kill: () => void,
-	) {
-		this.stdin = stdin;
-		this.stdout = stdout;
-		this.exited = exited;
-		this.#kill = kill;
-	}
-
-	kill(): void {
-		this.#kill();
-	}
 }
 
 /**
@@ -874,9 +1029,12 @@ export function sandboxHost(config: SandboxHostConfig): StageHost {
 				child.on("error", () => done(null));
 			});
 
-			return new ScopedPi(child.stdin, child.stdout, exited, () =>
-				child.kill("SIGKILL"),
-			);
+			return {
+				stdin: child.stdin,
+				stdout: child.stdout,
+				exited,
+				kill: () => child.kill("SIGKILL"),
+			};
 		},
 		async stopSandbox(session) {
 			const unit = units.get(session);
@@ -898,20 +1056,10 @@ export function sandboxHost(config: SandboxHostConfig): StageHost {
 			return childUsageOf(await readFile(path, "utf8"));
 		},
 		async writeReceipt(receipt) {
-			try {
-				writeFileSync(
-					join(stageDir, "receipt.json"),
-					`${JSON.stringify(receipt, null, "\t")}\n`,
-					{
-						mode: 0o600,
-						flag: "wx",
-					},
-				);
-
-				return true;
-			} catch {
-				return false;
-			}
+			return publishFile(
+				join(stageDir, "receipt.json"),
+				`${JSON.stringify(receipt, null, "\t")}\n`,
+			);
 		},
 		async stderrLog(session) {
 			const finish = stderr.get(session);

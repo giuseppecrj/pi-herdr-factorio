@@ -4,11 +4,13 @@ import {
 	chmodSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	statSync,
 	readFileSync,
 	rmSync,
 	symlinkSync,
 	writeFileSync,
+	writeSync,
 } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
@@ -21,7 +23,9 @@ import {
 	captureStderr,
 	hostSessionPath,
 	piCommand,
+	publishFile,
 	runStage,
+	sandboxHost,
 	type StageHost,
 	type StageRunInput,
 	STDERR_CAP_BYTES,
@@ -266,6 +270,10 @@ function harness(
 			timeline: string[],
 		) => GatewayHandle | null | Promise<GatewayHandle>;
 		childUsage?: (file: string) => ReturnType<StageHost["readChildUsage"]>;
+		writeReceipt?: (receipt: StageReceipt) => Promise<boolean>;
+		now?: () => number;
+		cleanupReserveMs?: number;
+		stopSandbox?: (session: number) => Promise<void>;
 	} = {},
 ): Harness {
 	const timeline: string[] = [];
@@ -276,10 +284,10 @@ function harness(
 	const tables: RouteTable[] = [];
 
 	const host: StageHost = {
-		cleanupReserveMs: 50,
+		cleanupReserveMs: options.cleanupReserveMs ?? 50,
 		assetsDigest: "e".repeat(64),
 		versions: { pi: "1.4.0", piHerdrAgents: "3.3.1", piHerdrPstack: "0.5.0" },
-		now: Date.now,
+		now: options.now ?? Date.now,
 		async startGateway(table) {
 			tables.push(table);
 
@@ -302,11 +310,17 @@ function harness(
 		},
 		async stopSandbox(session) {
 			stops.push(session);
+			timeline.push(`stop:${session}`);
+			await options.stopSandbox?.(session);
 		},
 		async readChildUsage(_session, file) {
 			return options.childUsage === undefined ? null : options.childUsage(file);
 		},
 		async writeReceipt(receipt) {
+			if (options.writeReceipt !== undefined) {
+				return options.writeReceipt(receipt);
+			}
+
 			receipts.push(receipt);
 
 			return true;
@@ -855,6 +869,134 @@ describe("runStage", () => {
 	});
 });
 
+function settledChild(tokens: number) {
+	return replayer([
+		started("x"),
+		{ type: "agent_start" },
+		{ type: "turn_start" },
+		{
+			type: "tool_execution_end",
+			toolName: "subagent",
+			isError: false,
+			result: { details: { id: "child-1" } },
+		},
+		assistant({ tokens }),
+		{
+			type: "message_end",
+			message: {
+				role: "custom",
+				customType: "subagent_result",
+				details: {
+					status: "completed",
+					sessionFile: "/run/pi-agent/sessions/--w--/child.jsonl",
+				},
+			},
+		},
+		{ type: "agent_settled", aborted: false },
+	]);
+}
+
+describe("runStage budget before model work", () => {
+	it("refuses with no model work when the run allowance is already spent", async () => {
+		for (const remainingRunTokens of [0, -5]) {
+			const h = harness([replayer([started("x")])]);
+			const result = await runStage(input({ remainingRunTokens }), h.host);
+
+			assert.equal(
+				result.kind === "budget_exhausted" && result.cap,
+				"run_tokens",
+			);
+			assert.equal(result.usage, 0);
+			assert.deepEqual(h.tables, []);
+			assert.deepEqual(h.launches, []);
+			assert.deepEqual(h.receipts, [result.receipt]);
+		}
+	});
+
+	it("refuses with no model work when the stage token cap is already zero", async () => {
+		const h = harness([replayer([started("x")])]);
+		const result = await runStage(input({}, { maxTokens: 0 }), h.host);
+
+		assert.equal(result.kind === "budget_exhausted" && result.cap, "tokens");
+		assert.deepEqual(h.launches, []);
+	});
+});
+
+describe("runStage accounting after the outcome is chosen", () => {
+	it("keeps counting usage Pi reports while an abort drains, without changing the outcome", async () => {
+		const abort = new AbortController();
+
+		const h = harness([
+			(command, pi) => {
+				const type = textOf(fieldOf(command, "type"));
+
+				if (type === "prompt") {
+					pi.emit(
+						started(textOf(fieldOf(command, "id")) ?? ""),
+						{ type: "agent_start" },
+						{ type: "turn_start" },
+						assistant({ stopReason: "toolUse", tokens: 70 }),
+					);
+					setTimeout(() => abort.abort(), 10);
+				}
+
+				if (type === "abort") {
+					pi.emit(assistant({ stopReason: "aborted", tokens: 40 }), {
+						type: "agent_settled",
+						aborted: true,
+					});
+				}
+			},
+		]);
+
+		const result = await runStage(input({ signal: abort.signal }), h.host);
+
+		assert.equal(result.kind === "failed" && result.exit, "aborted");
+		assert.equal(result.usage, 110);
+		assert.equal(result.receipt.usage.parent, 110);
+	});
+
+	it("waits for child usage before the outcome and checks the cap on a normal stop", async () => {
+		const h = harness([settledChild(10)], {
+			childUsage: () =>
+				new Promise((done) =>
+					setTimeout(
+						() =>
+							done({
+								total: 120,
+								byModel: new Map([["openai/gpt-6.1-sol", 120]]),
+							}),
+						20,
+					),
+				),
+		});
+
+		const result = await runStage(input({ remainingRunTokens: 100 }), h.host);
+
+		assert.equal(
+			result.kind === "budget_exhausted" && result.cap,
+			"run_tokens",
+		);
+		assert.equal(result.usage, 130);
+		assert.equal(result.receipt.usage.children, 120);
+	});
+
+	it("turns a child-session read error into unread-child evidence and a typed failure, and still cleans up", async () => {
+		const h = harness([settledChild(10)], {
+			childUsage: async () => {
+				throw new Error("EIO: fixture read error");
+			},
+		});
+
+		const result = await runStage(input(), h.host);
+
+		assert.equal(result.kind === "failed" && result.exit, "crashed");
+		assert.equal(result.receipt.usage.unreadChildren, 1);
+		assert.equal(h.timeline.includes("shutdown"), true);
+		assert.deepEqual(h.receipts, [result.receipt]);
+	});
+});
+
 describe("runStage settlement on a queue update", () => {
 	it("finishes when clearing the queue is what satisfies settlement", async () => {
 		const h = harness([
@@ -873,6 +1015,230 @@ describe("runStage settlement on a queue update", () => {
 
 		assert.equal(result.kind, "passed");
 		assert.equal(result.usage, 12);
+	});
+});
+
+describe("runStage receipt persistence", () => {
+	it("fails the stage as crashed when the receipt cannot be written", async () => {
+		const h = harness(
+			[
+				replayer([
+					started("x"),
+					{ type: "agent_start" },
+					{ type: "turn_start" },
+					assistant({ tokens: 5 }),
+					{ type: "agent_settled", aborted: false },
+				]),
+			],
+			{ writeReceipt: async () => false },
+		);
+
+		const result = await runStage(input(), h.host);
+
+		assert.equal(result.kind === "failed" && result.exit, "crashed");
+		assert.equal(result.usage, 5);
+		assert.deepEqual(result.receipt.outcome, {
+			kind: "failed",
+			exit: "crashed",
+		});
+	});
+
+	function realHost(stateDir: string) {
+		return sandboxHost({
+			stateDir,
+			bundleDir: join(stateDir, "bundle"),
+			workspace: join(stateDir, "ws"),
+			runId: digest(RUN),
+			stage: "specify",
+			attempt: 1,
+			tools: [],
+			arch: "x86_64",
+			xdgRuntimeDir: "/run/user/1000",
+			assetsDigest: "e".repeat(64),
+			versions: { pi: "1.4.0", piHerdrAgents: "3.3.1", piHerdrPstack: "0.5.0" },
+			exec: async () => ({ stdout: "", stderr: "", code: 0 }),
+		});
+	}
+
+	it("publishes the real receipt whole, mode 0600, with no temp file left", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-receipt-"));
+
+		try {
+			const h = harness([
+				replayer([
+					started("x"),
+					{ type: "agent_start" },
+					{ type: "turn_start" },
+					assistant({ tokens: 5 }),
+					{ type: "agent_settled", aborted: false },
+				]),
+			]);
+
+			const result = await runStage(input(), h.host);
+			const host = realHost(dir);
+
+			assert.equal(await host.writeReceipt(result.receipt), true);
+
+			const stage = join(dir, "stages", RUN, "specify-1");
+			const path = join(stage, "receipt.json");
+
+			assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), result.receipt);
+			assert.equal(statSync(path).mode & 0o777, 0o600);
+			assert.deepEqual(readdirSync(stage), ["receipt.json"]);
+			assert.equal(await host.writeReceipt(result.receipt), false);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("never leaves a partial receipt in place when a write fails part way", () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-receipt-"));
+		const path = join(dir, "receipt.json");
+
+		try {
+			const text = `${JSON.stringify({ a: "x".repeat(4096) })}\n`;
+
+			assert.equal(
+				publishFile(path, text, (fd, data) => {
+					writeSync(fd, data.slice(0, 100));
+					throw new Error("ENOSPC: fixture");
+				}),
+				false,
+			);
+			assert.deepEqual(readdirSync(dir), []);
+
+			writeFileSync(path, '{"version":1,"outc');
+			assert.equal(publishFile(path, text), false);
+			assert.equal(readFileSync(path, "utf8"), '{"version":1,"outc');
+			assert.deepEqual(readdirSync(dir), ["receipt.json"]);
+
+			rmSync(path);
+			assert.equal(publishFile(path, text), true);
+			assert.equal(readFileSync(path, "utf8"), text);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("runStage deadline and cleanup budget", () => {
+	function clocked(at: { t: number }, startAt: number, settle = true) {
+		return harness(
+			[
+				(command, pi) => {
+					if (textOf(fieldOf(command, "type")) === "prompt") {
+						pi.emit(
+							started(textOf(fieldOf(command, "id")) ?? ""),
+							{ type: "agent_start" },
+							{ type: "turn_start" },
+							assistant({ tokens: 3 }),
+						);
+
+						if (settle) pi.emit({ type: "agent_settled", aborted: false });
+					}
+
+					if (textOf(fieldOf(command, "type")) === "abort")
+						pi.emit({ type: "agent_settled", aborted: true });
+				},
+			],
+			{
+				now: () => at.t,
+				cleanupReserveMs: 100,
+				gateway: (_table, timeline) => {
+					at.t = startAt;
+
+					return new FakeGateway(timeline);
+				},
+			},
+		);
+	}
+
+	const budget = { maxTurns: 10, wallMs: 1000, stallMs: 300_000 };
+
+	it("sends the prompt one millisecond before wall_ms minus the reserve", async () => {
+		const h = clocked({ t: 0 }, 899);
+		const result = await runStage(input({}, { budget }), h.host);
+
+		assert.equal(result.kind, "passed");
+		assert.deepEqual(
+			h.pis[0]?.received.map((command) => fieldOf(command, "type")),
+			["prompt"],
+		);
+	});
+
+	it("never prompts once startup has used wall_ms minus the reserve", async () => {
+		for (const startAt of [900, 5000]) {
+			const h = clocked({ t: 0 }, startAt);
+			const result = await runStage(input({}, { budget }), h.host);
+
+			assert.equal(result.kind === "budget_exhausted" && result.cap, "wall");
+			assert.equal(result.usage, 0);
+			assert.equal(
+				h.pis.some((pi) =>
+					pi.received.some((command) => fieldOf(command, "type") === "prompt"),
+				),
+				false,
+				String(startAt),
+			);
+			assert.equal(h.timeline.includes("shutdown"), true);
+		}
+	});
+
+	it("bounds every cleanup wait by the reserve", {
+		timeout: 10_000,
+	}, async () => {
+		const stuck = new Promise<void>(() => {});
+
+		class StuckGateway extends FakeGateway {
+			override async closeGate(reason: CloseReason): Promise<boolean> {
+				await super.closeGate(reason);
+				await stuck;
+
+				return true;
+			}
+
+			override async drainAbort(): Promise<boolean> {
+				await stuck;
+
+				return true;
+			}
+
+			override async shutdown(): Promise<SummaryEvent | null> {
+				await stuck;
+
+				return null;
+			}
+		}
+
+		const h = harness(
+			[
+				(command, pi) => {
+					if (textOf(fieldOf(command, "type")) === "prompt")
+						pi.emit(started(textOf(fieldOf(command, "id")) ?? ""), {
+							type: "agent_start",
+						});
+				},
+			],
+			{
+				cleanupReserveMs: 200,
+				gateway: (_table, timeline) => new StuckGateway(timeline),
+				stopSandbox: () => stuck,
+			},
+		);
+
+		const begin = Date.now();
+
+		const result = await runStage(
+			input({}, { budget: { maxTurns: 10, wallMs: 300, stallMs: 300_000 } }),
+			h.host,
+		);
+
+		const elapsed = Date.now() - begin;
+
+		assert.equal(result.kind === "budget_exhausted" && result.cap, "wall");
+		assert.equal(elapsed >= 100, true, String(elapsed));
+		assert.equal(elapsed < 300 + 250, true, String(elapsed));
+		assert.equal(h.receipts.length, 1);
 	});
 });
 
