@@ -26,7 +26,7 @@ import {
 import type { BodyHistory } from "../src/adapters/github.ts";
 import { digestOf } from "../src/run.ts";
 import type { JsonValue } from "../src/tickets.ts";
-import { isRepoSlug, type RepoSlug } from "../src/workflow.ts";
+import { isRepoSlug, loadWorkflow, type RepoSlug } from "../src/workflow.ts";
 import {
 	FAKE_REPO,
 	FakeGitHub,
@@ -1401,5 +1401,107 @@ describe("server/cli.ts admit", () => {
 		}
 
 		assert.deepEqual(github.calls, []);
+	});
+});
+
+describe("F04c admission carry-overs", () => {
+	it("withholds a deleted version when the body was never edited", () => {
+		const proof = labelTimeSnapshot({
+			history: {
+				title: "T",
+				body: "v1",
+				lastEditedAt: null,
+				includesCreatedEdit: true,
+				totalVersions: 1,
+				versions: [
+					{ editedAt: "2026-10-29T01:21:21Z", text: "v1", deleted: true },
+				],
+				totalRenames: 0,
+				renamedAt: [],
+				renamedTo: null,
+			},
+			labelAt: "2026-10-29T01:21:38Z",
+			renamedSinceLabel: false,
+			issueTitle: "T",
+			issueBody: "v1",
+		});
+
+		assert.deepEqual(proof, { kind: "ambiguous", detail: "version_withheld" });
+	});
+
+	it("reads an admission record back by event", async () => {
+		const github = new FakeGitHub();
+		const state = stateDir();
+
+		github.add(labeledBy("giuseppecrj"));
+
+		const receipt = await admit(github, state);
+		const store = fileAdmissionStore(state);
+
+		assert.equal(receipt.decision, "admitted");
+		assert.deepEqual(
+			await store.read({ repo, issue: 14, eventId: "34537521383" }),
+			{ kind: "found", receipt },
+		);
+		assert.deepEqual(await store.read({ repo, issue: 14, eventId: "1" }), {
+			kind: "absent",
+		});
+		assert.deepEqual(
+			await store.read({ repo, issue: 14, eventId: "../../x" }),
+			{ kind: "unreadable" },
+		);
+
+		const path = join(
+			state,
+			"admissions/github/giuseppecrj/pi-herdr-factorio/14/34537521383.json",
+		);
+
+		writeFileSync(
+			path,
+			readFileSync(path, "utf8").replace('"admin"', '"read"'),
+		);
+
+		assert.deepEqual(
+			await store.read({ repo, issue: 14, eventId: "34537521383" }),
+			{ kind: "unreadable" },
+		);
+	});
+
+	it("makes only the four issue reads when a tick passes its reads", async () => {
+		const github = new FakeGitHub();
+		const state = stateDir();
+
+		github.add(labeledBy("giuseppecrj"));
+
+		const workflow = await loadWorkflow({
+			exec: github.exec,
+			repo,
+			ref: "main",
+			env: () => "/home/exedev",
+		});
+
+		github.calls.length = 0;
+
+		const receipt = await admitTicket({
+			exec: github.exec,
+			env: () => "/home/exedev",
+			repo,
+			issue: 14,
+			allowlist: FACTORY_REPOSITORIES,
+			store: fileAdmissionStore(state),
+			tick: { repoSwitch: null, workflow },
+		});
+
+		assert.equal(receipt.decision, "admitted");
+		assert.equal(github.calls.length, 4);
+		assert.ok(
+			github.calls.every(
+				(call) =>
+					!call.some(
+						(arg) =>
+							arg.includes("WORKFLOW.md") || arg.includes("factory%3Aenabled"),
+					),
+			),
+		);
 	});
 });
