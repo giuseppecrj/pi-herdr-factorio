@@ -69,6 +69,7 @@ import {
 	DEFAULT_SCOPE_LIMITS,
 	reconcileScopes,
 	scopeArgv,
+	scopeOwner,
 	scopeUnit,
 	spawnScoped,
 	stopScopeArgv,
@@ -984,6 +985,7 @@ export function sandboxHost(config: SandboxHostConfig): StageHost {
 			agentDirs.set(session, agentDir);
 
 			const unit = scopeUnit(
+				scopeOwner(config.stateDir),
 				config.runId,
 				config.stage,
 				config.attempt,
@@ -1161,7 +1163,10 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 
 	return {
 		async recover() {
-			const result = await reconcileScopes(config.exec);
+			const result = await reconcileScopes(
+				scopeOwner(config.stateDir),
+				config.exec,
+			);
 
 			config.log("sandbox_reconciled", {
 				stopped: result.stopped.length,

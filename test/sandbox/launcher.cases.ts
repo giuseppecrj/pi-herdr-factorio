@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+	mkdirSync,
+	mkdtempSync,
+	realpathSync,
+	rmSync,
+	symlinkSync,
+} from "node:fs";
 import { createServer as createHttpServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,9 +37,11 @@ import {
 	parseScopeList,
 	reconcileScopes,
 	scopeArgv,
+	scopeOwner,
 	scopeUnit,
 	stopScopeArgv,
 } from "../../server/sandbox/scope.ts";
+import { sandboxExecutor } from "../../server/sandbox.ts";
 import {
 	AUDIT_ARCH,
 	decodeProgram,
@@ -304,12 +313,42 @@ describe("bwrap argv", () => {
 	});
 });
 
-describe("user scope", () => {
-	it("names each scope uniquely per run, stage, attempt and nonce", () => {
-		const unit = scopeUnit(RUN, "specify", 2, "0f1e2d3c");
+const OWNER = "c0ffee42";
 
-		assert.equal(unit, `factory-stage-${RUN.slice(0, 16)}-specify-2-0f1e2d3c`);
-		assert.throws(() => scopeUnit(RUN, "specify", 2, "../x"));
+describe("user scope", () => {
+	it("names each scope uniquely per controller, run, stage, attempt and nonce", () => {
+		const unit = scopeUnit(OWNER, RUN, "specify", 2, "0f1e2d3c");
+
+		assert.equal(
+			unit,
+			`factory-stage-${OWNER}-${RUN.slice(0, 16)}-specify-2-0f1e2d3c`,
+		);
+		assert.throws(() => scopeUnit(OWNER, RUN, "specify", 2, "../x"));
+		assert.throws(() => scopeUnit("nothex!!", RUN, "specify", 2, "0f1e2d3c"));
+	});
+
+	it("derives the controller's scope owner from the state dir's real path", () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-owner-"));
+
+		try {
+			mkdirSync(join(dir, "state"));
+			symlinkSync(join(dir, "state"), join(dir, "link"));
+
+			const owner = scopeOwner(join(dir, "state"));
+
+			assert.match(owner, /^[0-9a-f]{8}$/);
+			assert.equal(scopeOwner(join(dir, "link")), owner);
+			assert.equal(
+				owner,
+				createHash("sha256")
+					.update(realpathSync(join(dir, "state")))
+					.digest("hex")
+					.slice(0, 8),
+			);
+			assert.notEqual(scopeOwner(join(dir, "other")), owner);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	it("wraps the sandbox with memory, task and CPU limits", () => {
@@ -342,21 +381,24 @@ describe("user scope", () => {
 		]);
 	});
 
-	it("finds leftover stage scopes by name and stops each one", async () => {
+	it("finds this controller's leftover stage scopes by name and stops only those", async () => {
+		const own = `factory-stage-${OWNER}-${RUN.slice(0, 16)}-build-1-aaaa0000`;
+
 		const listing = [
-			`factory-stage-${RUN.slice(0, 16)}-build-1-aaaa0000.scope loaded active running factory-stage`,
+			`${own}.scope loaded active running factory-stage`,
+			`factory-stage-0badf00d-${RUN.slice(0, 16)}-build-1-bbbb0000.scope loaded active running x`,
+			`factory-stage-${RUN.slice(0, 16)}-build-1-cccc0000.scope loaded active running x`,
 			"factory-stage-evil;rm.scope loaded active running x",
 			"user@1000.service loaded active running",
 			"",
 		].join("\n");
 
-		assert.deepEqual(parseScopeList(listing), [
-			`factory-stage-${RUN.slice(0, 16)}-build-1-aaaa0000`,
-		]);
+		assert.deepEqual(parseScopeList(listing, OWNER), [own]);
 
 		const calls: string[][] = [];
 
 		const result = await reconcileScopes(
+			OWNER,
 			async (command, args): Promise<ExecResult> => {
 				calls.push([command, ...args]);
 
@@ -371,16 +413,54 @@ describe("user scope", () => {
 			},
 		);
 
-		assert.deepEqual(result, {
-			stopped: [`factory-stage-${RUN.slice(0, 16)}-build-1-aaaa0000`],
-			failed: [],
-		});
-		assert.deepEqual(calls.at(-1), [
-			"systemctl",
-			"--user",
-			"stop",
-			`factory-stage-${RUN.slice(0, 16)}-build-1-aaaa0000.scope`,
+		assert.deepEqual(result, { stopped: [own], failed: [] });
+		assert.deepEqual(calls, [
+			[
+				"systemctl",
+				"--user",
+				"list-units",
+				"--all",
+				"--plain",
+				"--no-legend",
+				"--type=scope",
+				`factory-stage-${OWNER}-*`,
+			],
+			["systemctl", "--user", "stop", `${own}.scope`],
 		]);
+	});
+
+	it("leaves another controller's live stage scope alone at startup", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-recover-"));
+		const calls: string[][] = [];
+
+		try {
+			const executor = sandboxExecutor({
+				stateDir: join(dir, "different-state"),
+				xdgRuntimeDir: "/run/user/1000",
+				log: () => {},
+				exec: async (command, args): Promise<ExecResult> => {
+					calls.push([command, ...args]);
+
+					return {
+						stdout: args.includes("list-units")
+							? "factory-stage-bbbbbbbbbbbbbbbb-specify-1-12345678.scope loaded active running\n"
+							: "",
+						stderr: "",
+						code: 0,
+					};
+				},
+			});
+
+			await executor.recover();
+
+			assert.equal(
+				calls.some((call) => call.includes("stop")),
+				false,
+				JSON.stringify(calls),
+			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });
 

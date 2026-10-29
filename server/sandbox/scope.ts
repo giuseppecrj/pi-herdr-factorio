@@ -1,4 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
 import type { Exec } from "../../src/gh.ts";
 
 export type ScopeLimits = {
@@ -18,18 +21,41 @@ export const DEFAULT_SCOPE_LIMITS: ScopeLimits = {
 
 export const SCOPE_PREFIX = "factory-stage-";
 
-const UNIT = /^factory-stage-[0-9a-f]{16}-[a-z]{1,16}-[0-9]{1,6}-[0-9a-f]{8}$/;
+const UNIT =
+	/^factory-stage-([0-9a-f]{8})-[0-9a-f]{16}-[a-z]{1,16}-[0-9]{1,6}-[0-9a-f]{8}$/;
 
-/** A unit name that is unique per launch, so a retry never meets a leftover scope. */
+/**
+ * The controller a stage scope belongs to: the first 8 hex of the sha256 of
+ * its state dir's real path. Controllers with different state dirs, such
+ * as scoped verification lanes, never claim each other's scopes. A state
+ * dir that does not resolve yet hashes its absolute path.
+ */
+export function scopeOwner(stateDir: string): string {
+	let path: string;
+
+	try {
+		path = realpathSync(stateDir);
+	} catch {
+		path = resolve(stateDir);
+	}
+
+	return createHash("sha256").update(path).digest("hex").slice(0, 8);
+}
+
+/**
+ * A unit name that is unique per launch, so a retry never meets a leftover
+ * scope, and that names the controller that owns it.
+ */
 export function scopeUnit(
+	owner: string,
 	runId: string,
 	stage: string,
 	attempt: number,
 	nonce: string,
 ): string {
-	const unit = `${SCOPE_PREFIX}${runId.slice(0, 16)}-${stage}-${attempt}-${nonce}`;
+	const unit = `${SCOPE_PREFIX}${owner}-${runId.slice(0, 16)}-${stage}-${attempt}-${nonce}`;
 
-	if (!/^[0-9a-f]{64}$/.test(runId) || !UNIT.test(unit)) {
+	if (!/^[0-9a-f]{64}$/.test(runId) || UNIT.exec(unit)?.[1] !== owner) {
 		throw new Error("scope unit parts are malformed");
 	}
 
@@ -64,24 +90,29 @@ export function stopScopeArgv(unit: string): string[] {
 	return ["systemctl", "--user", "stop", `${unit}.scope`];
 }
 
-export const LIST_SCOPES_ARGV = [
-	"systemctl",
-	"--user",
-	"list-units",
-	"--all",
-	"--plain",
-	"--no-legend",
-	"--type=scope",
-	`${SCOPE_PREFIX}*`,
-] as const;
+export function listScopesArgv(owner: string): string[] {
+	return [
+		"systemctl",
+		"--user",
+		"list-units",
+		"--all",
+		"--plain",
+		"--no-legend",
+		"--type=scope",
+		`${SCOPE_PREFIX}${owner}-*`,
+	];
+}
 
-/** Stage scope names from `systemctl list-units`. Anything not shaped like ours is ignored. */
-export function parseScopeList(stdout: string): string[] {
+/**
+ * This controller's stage scope names from `systemctl list-units`.
+ * Anything not shaped like ours, or owned by another controller, is ignored.
+ */
+export function parseScopeList(stdout: string, owner: string): string[] {
 	return stdout.split("\n").flatMap((line) => {
 		const name = line.trim().split(/\s+/)[0] ?? "";
 		const unit = name.endsWith(".scope") ? name.slice(0, -".scope".length) : "";
 
-		return UNIT.test(unit) ? [unit] : [];
+		return UNIT.exec(unit)?.[1] === owner ? [unit] : [];
 	});
 }
 
@@ -91,19 +122,25 @@ export type Reconciled = {
 };
 
 /**
- * Stops every leftover stage scope by name. The controller runs this at
- * startup before it adopts `running` markers, so no orphan keeps spending.
+ * Stops every leftover stage scope this controller owns, by name. The
+ * controller runs this at startup before it adopts `running` markers, so
+ * no orphan keeps spending. Scopes another controller owns are left alone.
  */
-export async function reconcileScopes(exec: Exec): Promise<Reconciled> {
-	const [command, ...args] = LIST_SCOPES_ARGV;
+export async function reconcileScopes(
+	owner: string,
+	exec: Exec,
+): Promise<Reconciled> {
+	const [command = "systemctl", ...args] = listScopesArgv(owner);
 	const listed = await exec(command, args);
 
-	if (listed.code !== 0) return { stopped: [], failed: [`${SCOPE_PREFIX}*`] };
+	if (listed.code !== 0) {
+		return { stopped: [], failed: [`${SCOPE_PREFIX}${owner}-*`] };
+	}
 
 	const stopped: string[] = [];
 	const failed: string[] = [];
 
-	for (const unit of parseScopeList(listed.stdout)) {
+	for (const unit of parseScopeList(listed.stdout, owner)) {
 		const [stop, ...stopArgs] = stopScopeArgv(unit);
 		const result = await exec(stop ?? "systemctl", stopArgs);
 
