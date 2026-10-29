@@ -126,7 +126,6 @@ export type RunPhase =
 	| { readonly kind: "claimed" }
 	| {
 			readonly kind: "running";
-			readonly startedAt: number;
 			lastProgressAt: number;
 			readonly abort: AbortController;
 			result: StageResult | null;
@@ -457,10 +456,6 @@ export class Orchestrator {
 			exec: input.exec,
 			repo: input.repo,
 		});
-	}
-
-	get adapter(): GitHubTicketAdapter {
-		return this.#adapter;
 	}
 
 	/** The poll interval of the last valid workflow, or the default. */
@@ -1614,7 +1609,6 @@ export class Orchestrator {
 
 		const phase: RunPhase = {
 			kind: "running",
-			startedAt: now,
 			lastProgressAt: now,
 			abort,
 			result: null,

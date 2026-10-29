@@ -19,6 +19,7 @@ import {
 	type ProcessTable,
 	parseStartTime,
 } from "../server/controller.ts";
+import { GitHubTicketAdapter } from "../src/adapters/github.ts";
 import type {
 	AdmissionStore,
 	AdmittedReceipt,
@@ -861,8 +862,8 @@ describe("Orchestrator retries and stalls", () => {
 
 describe("checkIdentity", () => {
 	it("accepts only the integration bot", async () => {
-		const { github, start } = world();
-		const { adapter } = start();
+		const { github } = world();
+		const adapter = new GitHubTicketAdapter({ exec: github.exec, repo });
 
 		assert.deepEqual(await checkIdentity(adapter), { kind: "ok" });
 
