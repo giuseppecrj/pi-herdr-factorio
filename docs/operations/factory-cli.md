@@ -436,7 +436,12 @@ A clean ledger whose highest `seq` is below the floor is stale. Either the comme
 
 `marker_missing` is not cached against `updated_at`. While the issue is an open `factory:ready` candidate, every tick reads its markers again, which costs the comments request and, when bot comments are present, the edit request. Only an issue currently reported missing makes these reads, so an unchanged healthy tick still makes 4 requests. When a read reaches the floor, the run is adopted again from its markers, as after a restart, and the defect clears. So one comments read that lagged or came back empty, at startup or in a live process, heals on a later tick.
 
-Deleted comments cannot come back, so a later read stays behind the floor for the life of the process. To clear `marker_missing`, close the issue, or stop the controller, remove the run's `<state-dir>/claims/<runId>.json` and start it again. The next controller then has no floor for the issue, and claims it as if its first marker had never landed.
+Two things clear `marker_missing`:
+
+- The markers read back. A later read that reaches the floor adopts the run again, as above.
+- The owner removes the floor. Deleted comments cannot come back, so after a real deletion every later read stays behind the floor. Stop the controller, remove the run's claim record `<state-dir>/claims/<runId>.json`, the one whose `issue` is the issue's number, and start the controller again. For the service that is `sudo systemctl stop factory.service`, then the record in `/home/exedev/factory-state/claims/`, then `sudo systemctl start factory.service`. The next controller has no floor for the issue, and claims it as if its first marker had never landed. Removing the record while the controller runs changes nothing, because the running controller holds the floor in memory.
+
+Closing the issue does not clear `marker_missing`. It removes the issue's eligibility, so nothing is dispatched for it, but the issue stays in `corrupt` and its claim record stays as evidence. A controller started later reads that record and reports `marker_missing` again, for the closed issue too.
 
 Known limit: a POST with no answer, then a lagging read. A POST that times out after 30 s may still have landed. If the next read does not show it yet, the controller cannot tell it from a POST that never landed, so it posts the same `seq` again, and the issue fails closed as `duplicate_seq` on a later read. The floor does not cover this, because an unanswered POST is not confirmed. GitHub comments have no idempotency key, so exactly-once posting is not available.
 

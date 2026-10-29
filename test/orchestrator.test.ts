@@ -2004,6 +2004,33 @@ describe("Orchestrator marker_missing recovery", () => {
 		assert.deepEqual([await later(), await later()], [missing, missing]);
 		assert.equal(github.markers(14).length, 0);
 	});
+
+	it("keeps marker_missing and the claim record as evidence when the issue closes, also after a restart", async () => {
+		const { github, files, start } = world();
+		const issue = github.add(labeled(14));
+		const controller = start();
+
+		await controller.tick();
+		issue.comments.length = 0;
+		issue.updatedAt = "2026-10-29T02:00:01Z";
+		await controller.tick();
+		await controller.tick();
+		issue.state = "closed";
+		issue.updatedAt = "2026-10-29T02:01:00Z";
+
+		const closed = await controller.tick();
+		const restarted = await start().tick();
+		const missing = [{ issue: 14, defect: "marker_missing" }];
+
+		assert.deepEqual(closed.corrupt, missing);
+		assert.deepEqual(restarted.corrupt, missing);
+		assert.deepEqual(restarted.runs, []);
+		assert.deepEqual(
+			[...files.claims.values()].map((claim) => claim.seq),
+			[2],
+		);
+		assert.equal(github.markers(14).length, 0);
+	});
 });
 
 describe("Orchestrator retry marker confirmation", () => {
