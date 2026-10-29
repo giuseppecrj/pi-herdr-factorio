@@ -50,6 +50,21 @@ const CEILING_KEYS = [
 	"paths",
 ] as const;
 
+const RESERVED_HEADER =
+	/^(host|:authority|content-length|transfer-encoding|connection|upgrade|te|trailer|forwarded|x-forwarded-.*|proxy-.*|keep-alive)$/;
+
+/**
+ * True when a placement would put the secret in a header that routes or
+ * frames the request. Node keeps the last of two `Host` values, so a
+ * credential named `host` would replace the route's own.
+ */
+function reservedPlacement(placement: CredentialPlacement): boolean {
+	return (
+		placement.kind === "header" &&
+		RESERVED_HEADER.test(placement.name.toLowerCase())
+	);
+}
+
 export type CeilingParse =
 	| { readonly ok: true; readonly ceilings: Ceilings }
 	| { readonly ok: false };
@@ -94,6 +109,7 @@ export function parseCeilings(text: string, mode: TableMode): CeilingParse {
 			port < 1 ||
 			port > 65535 ||
 			placement === null ||
+			reservedPlacement(placement) ||
 			methodTexts === null ||
 			methods.length === 0 ||
 			methods.length !== methodTexts.length ||
@@ -362,6 +378,7 @@ export function bindCredentials(
 			ceiling === undefined ||
 			secret === undefined ||
 			used.has(id) ||
+			reservedPlacement(placement) ||
 			!withinCeiling(route, ceiling)
 		) {
 			return { ok: false };

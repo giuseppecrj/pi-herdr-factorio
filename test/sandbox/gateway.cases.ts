@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { lstatSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+	lstatSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { request } from "node:http";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
@@ -1120,6 +1127,76 @@ describe("gateway process and control pipe", () => {
 			assert.deepEqual(parseEvent(out.trim()), {
 				event: "fatal",
 				code: "bad-table",
+			});
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("exits bad-credentials when a ceiling places its secret in a routing header", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-gw-main-"));
+
+		try {
+			const placement = { kind: "header", name: "host", scheme: null } as const;
+			const route = credentialedRoute(18_081);
+
+			const table: RouteTable = {
+				...modelTable(),
+				routes: [
+					{
+						...route,
+						credential: {
+							id: route.credential?.id ?? asCredential(),
+							placement,
+						},
+					},
+				],
+			};
+
+			mkdirSync(join(dir, "creds"));
+			writeFileSync(join(dir, "creds", "echo-read"), "github.int.exe.xyz");
+			writeFileSync(
+				join(dir, "ceilings.json"),
+				LINEAR_CEILING.replace("443", "18081").replace(
+					'{"kind":"header","name":"Authorization","scheme":"Bearer"}',
+					JSON.stringify(placement),
+				),
+			);
+
+			const child = spawn(
+				process.execPath,
+				[
+					new URL("../../server/sandbox/gateway-main.ts", import.meta.url)
+						.pathname,
+					"--test-mode",
+					"--socket",
+					join(dir, "gw.sock"),
+					"--audit",
+					join(dir, "egress.jsonl"),
+					"--ceilings",
+					join(dir, "ceilings.json"),
+				],
+				{
+					stdio: ["pipe", "pipe", "ignore"],
+					env: { CREDENTIALS_DIRECTORY: join(dir, "creds") },
+				},
+			);
+
+			let out = "";
+
+			child.stdout.on("data", (chunk: Buffer) => {
+				out += chunk.toString();
+			});
+
+			const exited = new Promise<number | null>((done) =>
+				child.on("exit", (code) => done(code)),
+			);
+
+			child.stdin.end(`${JSON.stringify(table)}\n`);
+			assert.equal(await exited, 2);
+			assert.deepEqual(parseEvent(out.trim().split("\n")[0] ?? ""), {
+				event: "fatal",
+				code: "bad-credentials",
 			});
 		} finally {
 			rmSync(dir, { recursive: true, force: true });

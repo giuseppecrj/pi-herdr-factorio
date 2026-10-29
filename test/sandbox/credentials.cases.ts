@@ -123,6 +123,81 @@ describe("credential ceilings", () => {
 		);
 	});
 
+	it("refuses a ceiling that places its secret in a routing or framing header", () => {
+		const authorization =
+			'{"kind":"header","name":"Authorization","scheme":"Bearer"}';
+
+		assert.ok(LINEAR_CEILING.includes(authorization));
+
+		for (const name of [
+			"host",
+			"Host",
+			":authority",
+			"content-length",
+			"transfer-encoding",
+			"connection",
+			"upgrade",
+			"te",
+			"trailer",
+			"forwarded",
+			"x-forwarded-for",
+			"X-Forwarded-Host",
+			"proxy-authorization",
+			"proxy-connection",
+			"keep-alive",
+		]) {
+			const text = LINEAR_CEILING.replace(
+				authorization,
+				JSON.stringify({ kind: "header", name, scheme: null }),
+			);
+
+			assert.equal(parseCeilings(text, "test").ok, false, name);
+		}
+
+		assert.equal(
+			parseCeilings(
+				LINEAR_CEILING.replace(
+					authorization,
+					'{"kind":"header","name":"X-Api-Key","scheme":null}',
+				),
+				"test",
+			).ok,
+			true,
+		);
+	});
+
+	it("refuses to bind a route that places its secret in a routing header", () => {
+		const placement = { kind: "header", name: "Host", scheme: null } as const;
+		const route = credentialedRoute(443);
+
+		const parsed = parseCeilings(
+			LINEAR_CEILING.replace(
+				'{"kind":"header","name":"Authorization","scheme":"Bearer"}',
+				'{"kind":"header","name":"X-Api-Key","scheme":null}',
+			),
+			"test",
+		);
+
+		assert.ok(parsed.ok);
+
+		const ceiling = parsed.ceilings.get(id("echo-read"));
+
+		assert.ok(ceiling);
+
+		const bound = bindCredentials(
+			tableWith([
+				{
+					...route,
+					credential: { id: id("echo-read"), placement },
+				},
+			]),
+			new Map([[id("echo-read"), { ...ceiling, placement }]]),
+			new Map([[id("echo-read"), Buffer.from(ECHO_SECRET)]]),
+		);
+
+		assert.equal(bound.ok, false);
+	});
+
 	it("refuses ceilings that point at exe.dev, GitHub, npm or an IP literal", () => {
 		for (const host of [
 			"github.int.exe.xyz",
