@@ -930,6 +930,24 @@ describe("gateway admission gate and control", () => {
 		);
 	});
 
+	it("starts with admission closed when its token ceiling is already spent", async () => {
+		const h = await harness(fixture.port, { ceilingTokens: 0 });
+		const before = fixture.arrivals("/openai/v1/responses");
+
+		const reply = await call(
+			h.socketPath,
+			"POST",
+			"/openai/v1/responses",
+			json,
+			model,
+		);
+
+		assert.equal(reply.code, "budget-closed");
+		assert.equal(fixture.arrivals("/openai/v1/responses"), before);
+		assert.equal(h.gateway.summary().gate, "closed");
+		assert.equal(h.gateway.summary().modelRequests, 0);
+	});
+
 	it("opens the fallback route only on command", async () => {
 		const h = await harness(fixture.port);
 		const xai = JSON.stringify({ model: "grok-4.6" });

@@ -242,6 +242,13 @@ export class Gateway implements AdmissionState {
 		this.#lookup = options.lookup ?? systemLookup;
 		this.#now = options.now ?? Date.now;
 
+		if (
+			options.table.ceiling.modelTokens <= 0 ||
+			options.table.ceiling.modelRequests <= 0
+		) {
+			this.#gate = "ceiling";
+		}
+
 		for (const route of options.table.routes) {
 			this.#routes.set(route.id, {
 				open: route.initially === "open",
