@@ -104,8 +104,7 @@ export type MarkerDefect =
 	| "duplicate_seq"
 	| "conflicting_run"
 	| "after_terminal"
-	| "record_mismatch"
-	| "marker_missing";
+	| "record_mismatch";
 
 export type MarkerParse =
 	| { readonly kind: "none" }
@@ -116,11 +115,11 @@ const EVENT_ID = /^[1-9][0-9]{0,19}$/;
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 const CURSOR = /^[A-Za-z0-9:._-]{1,64}$/;
 
-function isStage(value: string): value is Stage {
+export function isStage(value: string): value is Stage {
 	return STAGE_ORDER.some((stage) => stage === value);
 }
 
-function isRunStatus(value: string): value is RunStatus {
+export function isRunStatus(value: string): value is RunStatus {
 	return RUN_STATUSES.some((status) => status === value);
 }
 

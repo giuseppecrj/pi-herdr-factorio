@@ -12,6 +12,7 @@ import {
 } from "node:fs/promises";
 import { createConnection, createServer, type Server } from "node:net";
 import { join, resolve } from "node:path";
+import { isRunStatus, isStage } from "../src/markers.ts";
 import { isDigest } from "../src/run.ts";
 import type {
 	ClaimRecord,
@@ -314,15 +315,44 @@ function claimSeq(value: JsonValue | undefined): number | null | undefined {
 		: undefined;
 }
 
+type ClaimState = Pick<ClaimRecord, "status" | "stage" | "attempt">;
+
+/** All three mirrored fields, or none of them, as in a record written before they existed. */
+function claimState(value: JsonValue | undefined): ClaimState | undefined {
+	const status = fieldOf(value, "status") ?? null;
+	const stage = fieldOf(value, "stage") ?? null;
+	const attempt = fieldOf(value, "attempt") ?? null;
+
+	if (status === null && stage === null && attempt === null) {
+		return { status, stage, attempt };
+	}
+
+	const statusText = String(status);
+	const stageText = String(stage);
+
+	return status === statusText &&
+		isRunStatus(statusText) &&
+		stage === stageText &&
+		isStage(stageText) &&
+		attempt === Number(attempt) &&
+		Number.isSafeInteger(attempt) &&
+		attempt >= 1
+		? { status: statusText, stage: stageText, attempt }
+		: undefined;
+}
+
 function parseClaim(text: string): ClaimRecord | null {
 	const value = parseJson(text);
 	const runId = fieldOf(value, "runId");
 	const issue = fieldOf(value, "issue");
 	const eventId = fieldOf(value, "eventId");
 	const seq = claimSeq(fieldOf(value, "seq"));
+	const state = claimState(value);
 
 	if (
 		seq === undefined ||
+		state === undefined ||
+		(seq === null && state.status !== null) ||
 		runId !== String(runId) ||
 		!isDigest(String(runId)) ||
 		issue !== Number(issue) ||
@@ -337,7 +367,13 @@ function parseClaim(text: string): ClaimRecord | null {
 	const id = String(runId);
 
 	return isDigest(id)
-		? { runId: id, issue: Number(issue), eventId: String(eventId), seq }
+		? {
+				runId: id,
+				issue: Number(issue),
+				eventId: String(eventId),
+				seq,
+				...state,
+			}
 		: null;
 }
 

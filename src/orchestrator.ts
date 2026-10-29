@@ -78,14 +78,23 @@ export const UNAVAILABLE_EXECUTOR: StageExecutor = {
 	},
 };
 
-/** A local record that a run holds a claim, so a restart finds it even after the issue leaves the candidates. */
+/**
+ * A local record that a run holds a claim, so a restart finds it even after
+ * the issue leaves the candidates. It mirrors the run's last marker known to
+ * have landed: all `null` before the first, and `status`, `stage` and
+ * `attempt` `null` in a record written before they existed.
+ */
 export type ClaimRecord = {
 	readonly runId: Digest;
 	readonly issue: number;
 	readonly eventId: string;
-	/** The `seq` of this run's last marker known to have landed, or `null` before the first is confirmed. */
 	readonly seq: number | null;
+	readonly status: RunStatus | null;
+	readonly stage: Stage | null;
+	readonly attempt: number | null;
 };
+
+type ConfirmedRecord = ClaimRecord & { readonly seq: number };
 
 export type WorkspaceState = "present" | "missing" | "unavailable";
 
@@ -168,12 +177,7 @@ export type SeenIssue = {
 	/** The controller clock at the start of the tick whose reads made the verdict. */
 	readonly observedAt: number;
 	readonly verdict:
-		| {
-				readonly kind: "open";
-				readonly ledger: CleanLedger;
-				/** The highest marker `seq` known to have landed on the issue. */
-				readonly seq: number;
-		  }
+		| { readonly kind: "open"; readonly ledger: CleanLedger }
 		| { readonly kind: "claimed" }
 		| { readonly kind: "decided" }
 		| { readonly kind: "corrupt" };
@@ -252,6 +256,12 @@ export type TickReport = {
 		readonly issue: number;
 		readonly defect: MarkerDefect;
 	}[];
+	/** Issues whose last ledger read was behind the local claim record. The local record carries the run. */
+	readonly ledgerBehind: readonly {
+		readonly issue: number;
+		readonly ledgerSeq: number;
+		readonly localSeq: number;
+	}[];
 	readonly totals: Readonly<Totals>;
 };
 
@@ -269,16 +279,7 @@ type Limits = {
 	stallMs(stage: Stage): number;
 };
 
-type Eligibility =
-	| "confirmed"
-	| "unverified"
-	| "stale"
-	| "released"
-	| "dropped";
-
-function mayPublish(eligibility: Eligibility): boolean {
-	return eligibility !== "dropped" && eligibility !== "stale";
-}
+type Eligibility = "confirmed" | "unverified" | "released" | "dropped";
 
 const SETTLE_MS = 1000;
 
@@ -436,10 +437,9 @@ export class Orchestrator {
 	readonly #confirmed = new Set<number>();
 	/** Issues whose marker ledger this tick read clean. */
 	readonly #ledgerRead = new Set<number>();
-	readonly #confirmedSeq = new Map<number, number>();
-	readonly #persistedSeq = new Map<number, number>();
-	readonly #staleSinceTick = new Map<number, number>();
-	readonly #missing = new Set<number>();
+	/** Per issue, the last marker this controller knows landed: from claim records, then from its own posts. */
+	readonly #local = new Map<number, ConfirmedRecord>();
+	readonly #behind = new Map<number, TickReport["ledgerBehind"][number]>();
 
 	constructor(input: OrchestratorInput) {
 		this.#input = input;
@@ -493,7 +493,6 @@ export class Orchestrator {
 		this.#tickAt = now;
 		this.#confirmed.clear();
 		this.#ledgerRead.clear();
-		this.#missing.clear();
 		const refused: { issue: number; reasons: RefusalReason["kind"][] }[] = [];
 
 		if (!this.#claimsLoaded) await this.#loadClaims();
@@ -559,13 +558,11 @@ export class Orchestrator {
 
 			this.#recover.add(claim.issue);
 
-			if (claim.seq === null) continue;
+			const seq = claim.seq ?? 0;
 
-			this.#confirmSeq(claim.issue, claim.seq);
-			this.#persistedSeq.set(
-				claim.issue,
-				Math.max(this.#persistedSeq.get(claim.issue) ?? 0, claim.seq),
-			);
+			if (seq > (this.#local.get(claim.issue)?.seq ?? 0)) {
+				this.#local.set(claim.issue, { ...claim, seq });
+			}
 		}
 
 		this.#claimsLoaded = true;
@@ -654,12 +651,14 @@ export class Orchestrator {
 	/** Refreshes every claim against GitHub, before the per-tick reads that gate dispatch. */
 	async #reconcileClaims(candidates: Read<IssueRecord[]>): Promise<void> {
 		for (const run of this.state.runs.values()) {
+			if (run.claimUnwritten) await this.#writeClaim(run);
+
 			const eligibility =
 				candidates.kind === "ok"
 					? await this.#checkEligible(run, candidates.value)
 					: "unverified";
 
-			if (mayPublish(eligibility)) await this.#sync(run);
+			if (eligibility !== "dropped") await this.#sync(run);
 		}
 	}
 
@@ -673,13 +672,7 @@ export class Orchestrator {
 		run: ActiveRun,
 		candidates: readonly IssueRecord[],
 	): Promise<Eligibility> {
-		if (run.phase.kind === "ending") {
-			if (!this.#staleSinceTick.has(run.issue)) return "unverified";
-
-			const ledger = await this.#recheckLedger(run, null);
-
-			return ledger === "confirmed" ? "unverified" : ledger;
-		}
+		if (run.phase.kind === "ending") return "unverified";
 
 		let record = candidates.find((item) => item.number === run.issue);
 
@@ -722,9 +715,20 @@ export class Orchestrator {
 
 		if (timeline.kind === "failed") return "unverified";
 
-		const ledger = await this.#recheckLedger(run, updatedAt);
+		if (!this.#ledgerRead.has(run.issue)) {
+			const ledger = await this.#readLedger(run.issue);
 
-		if (ledger !== "confirmed") return ledger;
+			if (ledger.kind === "failed") return "unverified";
+
+			if (ledger.value.kind === "corrupt") {
+				this.#markCorrupt(run.issue, ledger.value, updatedAt);
+				this.#drop(run);
+
+				return "dropped";
+			}
+
+			this.#localAhead(run.issue, ledger.value);
+		}
 
 		const latest = latestReadyEntry(timeline.value);
 
@@ -743,47 +747,11 @@ export class Orchestrator {
 		return "confirmed";
 	}
 
-	async #recheckLedger(
-		run: ActiveRun,
-		updatedAt: string | null,
-	): Promise<Eligibility> {
-		if (this.#ledgerRead.has(run.issue)) return "confirmed";
-
-		const ledger = await this.#readLedger(run.issue);
-
-		if (ledger.kind === "failed") return "unverified";
-
-		if (ledger.value.kind === "corrupt") {
-			this.#markCorrupt(run.issue, ledger.value, updatedAt);
-			this.#drop(run);
-
-			return "dropped";
-		}
-
-		const behind = this.#ledgerFreshness(run.issue, ledger.value);
-
-		if (behind === "stale") {
-			this.state.seen.delete(run.issue);
-
-			return "stale";
-		}
-
-		if (behind === "missing") {
-			this.#markMissingUncached(run.issue);
-			this.#drop(run);
-
-			return "dropped";
-		}
-
-		return "confirmed";
-	}
-
 	/** Stops tracking a run whose ledger turned corrupt. Its claim record stays as evidence. */
 	#drop(run: ActiveRun): void {
 		if (run.phase.kind === "running") run.phase.abort.abort();
 
 		this.state.runs.delete(run.issue);
-		this.#confirmed.delete(run.issue);
 		this.#input.log("claim_dropped", {
 			issue: run.issue,
 			runId: run.runId,
@@ -884,46 +852,70 @@ export class Orchestrator {
 		});
 	}
 
-	#markMissingUncached(issue: number): void {
-		this.#markCorrupt(
-			issue,
-			{ kind: "corrupt", defect: "marker_missing", commentId: "" },
-			null,
-		);
-		this.state.seen.delete(issue);
-		this.#missing.add(issue);
-	}
+	/** The local record when its `seq` is above the ledger's, so it is the run's state. That is logged once as `ledger_behind` and reported until a read or a new marker reaches it. */
+	#localAhead(issue: number, ledger: CleanLedger): ConfirmedRecord | null {
+		const local = this.#local.get(issue);
+		const ledgerSeq = ledger.markers.at(-1)?.marker.seq ?? 0;
 
-	#confirmSeq(issue: number, seq: number): void {
-		this.#confirmedSeq.set(
-			issue,
-			Math.max(this.#confirmedSeq.get(issue) ?? 0, seq),
-		);
-	}
+		if (local === undefined || local.seq <= ledgerSeq) {
+			this.#behind.delete(issue);
 
-	#ledgerFreshness(
-		issue: number,
-		ledger: CleanLedger,
-	): "current" | "stale" | "missing" {
-		const floor = this.#confirmedSeq.get(issue) ?? 0;
-		const seq = ledger.markers.at(-1)?.marker.seq ?? 0;
-
-		if (seq >= floor) {
-			this.#staleSinceTick.delete(issue);
-
-			return "current";
+			return null;
 		}
 
-		if (seq < (this.#persistedSeq.get(issue) ?? 0)) return "missing";
+		const behind = { issue, ledgerSeq, localSeq: local.seq };
+		const known = this.#behind.get(issue);
 
-		const since = this.#staleSinceTick.get(issue);
+		if (known?.ledgerSeq !== ledgerSeq || known.localSeq !== local.seq) {
+			this.#behind.set(issue, behind);
+			this.#input.log("ledger_behind", behind);
+		}
 
-		if (since !== undefined) return since < this.#ticks ? "missing" : "stale";
+		return local;
+	}
 
-		this.#staleSinceTick.set(issue, this.#ticks);
-		this.#input.log("ledger_stale", { issue, seq, floor });
+	/** The highest `seq` known on the issue. The next marker is one above it. */
+	#seqFloor(issue: number, ledger: CleanLedger): number {
+		return Math.max(
+			ledger.markers.at(-1)?.marker.seq ?? 0,
+			this.#local.get(issue)?.seq ?? 0,
+		);
+	}
 
-		return "stale";
+	/** The marker a local record ahead of the ledger stands for, on the run's admission record, or `null` when that is unreadable. A record without a status takes the run's newest readable marker's, else `claimed` at the first stage. */
+	async #localMarker(
+		local: ConfirmedRecord,
+		ledger: CleanLedger,
+	): Promise<Marker | null> {
+		const stored = await this.#input.store.read({
+			repo: this.#input.repo,
+			issue: local.issue,
+			eventId: local.eventId,
+		});
+
+		if (stored.kind !== "found") return null;
+
+		const { receipt } = stored;
+		const read = latestFor(ledger, local.runId)?.marker;
+
+		return markerOf(
+			{
+				...local,
+				eventAt: receipt.eventAt,
+				snapshotDigest: receipt.snapshotDigest,
+				workflowSha: receipt.baseSha,
+				workflowDigest: receipt.workflowDigest,
+				stage: local.stage ?? read?.stage ?? FIRST_STAGE,
+				attempt: local.attempt ?? read?.attempt ?? 1,
+				usage: read?.usage ?? 0,
+			},
+			{
+				repo: this.#input.repo,
+				status: local.status ?? read?.status ?? "claimed",
+				seq: local.seq,
+				cursor: null,
+			},
+		);
 	}
 
 	async #discover(candidates: readonly IssueRecord[]): Promise<void> {
@@ -945,7 +937,7 @@ export class Orchestrator {
 		for (const record of records.values()) {
 			const issue = record.number;
 
-			if (this.state.runs.has(issue) || this.#missing.has(issue)) continue;
+			if (this.state.runs.has(issue)) continue;
 
 			if (this.#unchanged(issue, record.updatedAt)) {
 				continue;
@@ -955,22 +947,7 @@ export class Orchestrator {
 
 			if (ledger.kind === "failed") continue;
 
-			const behind =
-				ledger.value.kind === "clean"
-					? this.#ledgerFreshness(issue, ledger.value)
-					: "current";
-
-			if (behind === "stale") {
-				this.state.seen.delete(issue);
-				continue;
-			}
-
 			this.#recover.delete(issue);
-
-			if (behind === "missing") {
-				this.#markMissingUncached(issue);
-				continue;
-			}
 
 			if (ledger.value.kind === "corrupt") {
 				this.#markCorrupt(issue, ledger.value, record.updatedAt);
@@ -980,8 +957,14 @@ export class Orchestrator {
 			this.state.corrupt.delete(issue);
 			this.#ledgerRead.add(issue);
 
-			const current = currentMarker(ledger.value);
-			let seq = ledger.value.markers.at(-1)?.marker.seq ?? 0;
+			const local = this.#localAhead(issue, ledger.value);
+
+			const current =
+				local === null
+					? currentMarker(ledger.value)
+					: await this.#localMarker(local, ledger.value);
+
+			if (local !== null && current === null) continue;
 
 			if (current !== null && !isTerminal(current.status)) {
 				const adopted = await this.#adoptExistingRun({
@@ -992,8 +975,6 @@ export class Orchestrator {
 				});
 
 				if (adopted === null || this.state.runs.has(issue)) continue;
-
-				seq = adopted.seq;
 			}
 
 			const candidate = record.open && candidates.includes(record);
@@ -1008,7 +989,6 @@ export class Orchestrator {
 			this.#see(issue, record.updatedAt, {
 				kind: "open",
 				ledger: ledger.value,
-				seq,
 			});
 		}
 	}
@@ -1062,7 +1042,7 @@ export class Orchestrator {
 		}
 
 		const workspace = await this.#input.files.workspaceState(marker.runId);
-		const seq = ledger.markers.at(-1)?.marker.seq ?? marker.seq;
+		const seq = this.#seqFloor(marker.issue, ledger);
 
 		const run: ActiveRun = {
 			runId: marker.runId,
@@ -1088,7 +1068,7 @@ export class Orchestrator {
 		};
 
 		this.state.runs.set(run.issue, run);
-		this.#confirmSeq(run.issue, seq);
+		this.#local.set(run.issue, { ...claimOf(run), seq });
 		await this.#writeClaim(run);
 
 		this.#input.log("claim_adopted", {
@@ -1105,18 +1085,20 @@ export class Orchestrator {
 			this.#endStage(run, "interrupted", 0, limits);
 			await this.#sync(run);
 		} else if (marker.status === "retrying") {
-			const created = ledger.markers.at(-1)?.createdAt ?? "";
+			const created = ledger.markers.find(
+				(entry) => entry.marker.seq === marker.seq,
+			)?.createdAt;
 
 			run.phase = {
 				kind: "retry_queued",
 				dueAt:
-					Date.parse(created) +
+					(created === undefined ? this.#tickAt : Date.parse(created)) +
 					backoffMs(Math.max(run.attempt - 1, 1), limits.maxBackoffMs),
 				cause: "interrupted",
 			};
 		}
 
-		if (mayPublish(await this.#checkEligible(run, candidates))) {
+		if ((await this.#checkEligible(run, candidates)) !== "dropped") {
 			await this.#sync(run);
 		}
 
@@ -1182,7 +1164,6 @@ export class Orchestrator {
 			const claimed = await this.#admit({
 				record,
 				ledger: seen.verdict.ledger,
-				seq: seen.verdict.seq,
 				reads: input.reads,
 				refused: input.refused,
 			});
@@ -1322,7 +1303,6 @@ export class Orchestrator {
 	async #admit(input: {
 		record: IssueRecord;
 		ledger: CleanLedger;
-		seq: number;
 		reads: TickReads;
 		refused: { issue: number; reasons: RefusalReason["kind"][] }[];
 	}): Promise<ActiveRun | null> {
@@ -1361,7 +1341,7 @@ export class Orchestrator {
 			stage: FIRST_STAGE,
 			attempt: 1,
 			usage: 0,
-			seq: Math.max(input.seq, this.#confirmedSeq.get(issue) ?? 0),
+			seq: this.#seqFloor(issue, ledger),
 			marked: null,
 			inflight: null,
 			claimUnwritten: false,
@@ -1370,14 +1350,7 @@ export class Orchestrator {
 			phase: { kind: "claimed" },
 		};
 
-		if (
-			!(await this.#input.files.writeClaim({
-				runId,
-				issue,
-				eventId: run.eventId,
-				seq: null,
-			}))
-		) {
+		if (!(await this.#input.files.writeClaim(claimOf(run)))) {
 			this.#input.log("claim_unwritable", { issue, runId });
 
 			return null;
@@ -1488,28 +1461,18 @@ export class Orchestrator {
 
 		if ((await this.#recoverUncertainPost(run)) === "stop") return;
 
-		if (this.#staleSinceTick.has(run.issue)) return;
-
 		await this.#publishMarker(run);
 
 		if (run.marked !== null && isTerminal(run.marked.status)) {
 			this.state.runs.delete(run.issue);
 			await this.#input.files.removeClaim(run.runId);
-		} else if (
-			run.marked !== null &&
-			(run.seq !== before || run.claimUnwritten)
-		) {
+		} else if (run.seq !== before) {
 			await this.#writeClaim(run);
 		}
 	}
 
 	async #writeClaim(run: ActiveRun): Promise<void> {
-		const written = await this.#input.files.writeClaim({
-			runId: run.runId,
-			issue: run.issue,
-			eventId: run.eventId,
-			seq: run.seq,
-		});
+		const written = await this.#input.files.writeClaim(claimOf(run));
 
 		run.claimUnwritten = !written;
 
@@ -1533,11 +1496,7 @@ export class Orchestrator {
 				return "stop";
 			}
 
-			const behind = this.#ledgerFreshness(run.issue, ledger.value);
-
-			if (behind === "missing") this.#markMissingUncached(run.issue);
-
-			if (behind !== "current") return "stop";
+			if (this.#localAhead(run.issue, ledger.value) !== null) return "stop";
 
 			const sent = run.inflight.marker;
 			const latest = latestFor(ledger.value, run.runId);
@@ -1561,25 +1520,12 @@ export class Orchestrator {
 			marked.stage !== run.stage ||
 			marked.attempt !== run.attempt
 		) {
-			const marker: Marker = {
-				v: 1,
-				runId: run.runId,
+			const marker = markerOf(run, {
 				repo: this.#input.repo,
-				issue: run.issue,
-				eventId: run.eventId,
-				eventAt: run.eventAt,
-				snapshotDigest: run.snapshotDigest,
-				workflowSha: run.workflowSha,
-				workflowDigest: run.workflowDigest,
-				stage: run.stage,
 				status,
-				attempt: run.attempt,
 				seq: run.seq + 1,
-				branch: null,
-				pr: null,
-				usage: run.usage,
 				cursor: this.state.seen.get(run.issue)?.updatedAt ?? null,
-			};
+			});
 
 			const post = await this.#writer.postComment(
 				run.issue,
@@ -1605,7 +1551,8 @@ export class Orchestrator {
 		run.marked = marker;
 		run.seq = marker.seq;
 		run.inflight = null;
-		this.#confirmSeq(run.issue, marker.seq);
+		this.#local.set(run.issue, { ...claimOf(run), seq: run.seq });
+		this.#behind.delete(run.issue);
 		this.#input.log("marker_posted", {
 			issue: run.issue,
 			runId: run.runId,
@@ -1659,9 +1606,52 @@ export class Orchestrator {
 			corrupt: [...this.state.corrupt.entries()]
 				.sort(([left], [right]) => left - right)
 				.map(([issue, entry]) => ({ issue, defect: entry.defect })),
+			ledgerBehind: [...this.#behind.values()].sort(
+				(left, right) => left.issue - right.issue,
+			),
 			totals: { ...this.state.totals },
 		};
 	}
+}
+
+function claimOf(run: ActiveRun): ClaimRecord {
+	return {
+		runId: run.runId,
+		issue: run.issue,
+		eventId: run.eventId,
+		seq: run.marked === null ? null : run.seq,
+		status: run.marked?.status ?? null,
+		stage: run.marked?.stage ?? null,
+		attempt: run.marked?.attempt ?? null,
+	};
+}
+
+function markerOf(
+	run: Omit<
+		Marker,
+		"v" | "repo" | "status" | "seq" | "branch" | "pr" | "cursor"
+	>,
+	next: Pick<Marker, "repo" | "status" | "seq" | "cursor">,
+): Marker {
+	return {
+		v: 1,
+		runId: run.runId,
+		repo: next.repo,
+		issue: run.issue,
+		eventId: run.eventId,
+		eventAt: run.eventAt,
+		snapshotDigest: run.snapshotDigest,
+		workflowSha: run.workflowSha,
+		workflowDigest: run.workflowDigest,
+		stage: run.stage,
+		status: next.status,
+		attempt: run.attempt,
+		seq: next.seq,
+		branch: null,
+		pr: null,
+		usage: run.usage,
+		cursor: next.cursor,
+	};
 }
 
 function matchesRecord(marker: Marker, receipt: AdmittedReceipt): boolean {

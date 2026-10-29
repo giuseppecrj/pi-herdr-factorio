@@ -1203,15 +1203,21 @@ describe("fileRunFiles", () => {
 		const files = fileRunFiles(state);
 		const runId = runOf(14);
 
+		const unconfirmed: ClaimRecord = {
+			runId,
+			issue: 14,
+			eventId: "5",
+			seq: null,
+			status: null,
+			stage: null,
+			attempt: null,
+		};
+
 		assert.equal(await files.workspaceState(runId), "missing");
 		assert.equal(await files.ensureWorkspace(runId), "created");
 		assert.equal(await files.ensureWorkspace(runId), "present");
-		assert.ok(
-			await files.writeClaim({ runId, issue: 14, eventId: "5", seq: null }),
-		);
-		assert.deepEqual(await files.listClaims(), [
-			{ runId, issue: 14, eventId: "5", seq: null },
-		]);
+		assert.ok(await files.writeClaim(unconfirmed));
+		assert.deepEqual(await files.listClaims(), [unconfirmed]);
 
 		writeFileSync(join(state, "claims", "junk.json"), "{}");
 		assert.equal((await files.listClaims()).length, 1);
@@ -1220,31 +1226,51 @@ describe("fileRunFiles", () => {
 		assert.deepEqual(await files.listClaims(), []);
 	});
 
-	it("loads a claim record written without a seq as unconfirmed", async () => {
+	it("loads a record without a status as unknown, and rejects a partial or invalid one", async () => {
 		const state = stateDir();
 		const files = fileRunFiles(state);
 		const runId = runOf(14);
+		const path = join(state, "claims", `${runId}.json`);
+		const confirmed = { ...blockedClaim(14, 3), eventId: "5" };
 
-		assert.ok(
-			await files.writeClaim({ runId, issue: 14, eventId: "5", seq: 3 }),
-		);
-		assert.deepEqual(await files.listClaims(), [
-			{ runId, issue: 14, eventId: "5", seq: 3 },
+		assert.ok(await files.writeClaim(confirmed));
+		assert.deepEqual(await files.listClaims(), [confirmed]);
+
+		const load = async (record: Record<string, string | number | null>) => {
+			writeFileSync(path, `${JSON.stringify(record)}\n`);
+
+			return files.listClaims();
+		};
+
+		const base = { runId, issue: 14, eventId: "5" };
+		const unknown = { status: null, stage: null, attempt: null };
+
+		assert.deepEqual(await load({ ...base, seq: 3 }), [
+			{ ...base, seq: 3, ...unknown },
 		]);
-
-		writeFileSync(
-			join(state, "claims", `${runId}.json`),
-			`${JSON.stringify({ runId, issue: 14, eventId: "5" })}\n`,
+		assert.deepEqual(await load(base), [{ ...base, seq: null, ...unknown }]);
+		assert.deepEqual(await load({ ...base, seq: 0 }), []);
+		assert.deepEqual(await load({ ...base, seq: 3, status: "blocked" }), []);
+		assert.deepEqual(
+			await load({
+				...base,
+				seq: 3,
+				status: "paused",
+				stage: "specify",
+				attempt: 1,
+			}),
+			[],
 		);
-		assert.deepEqual(await files.listClaims(), [
-			{ runId, issue: 14, eventId: "5", seq: null },
-		]);
-
-		writeFileSync(
-			join(state, "claims", `${runId}.json`),
-			`${JSON.stringify({ runId, issue: 14, eventId: "5", seq: 0 })}\n`,
+		assert.deepEqual(
+			await load({
+				...base,
+				seq: null,
+				status: "blocked",
+				stage: "specify",
+				attempt: 1,
+			}),
+			[],
 		);
-		assert.deepEqual(await files.listClaims(), []);
 	});
 });
 
@@ -1595,10 +1621,73 @@ function lagComments(
 	};
 }
 
-describe("Orchestrator acknowledged marker floor", () => {
-	it("defers an issue whose comments read after its release lags, then claims the new event", async () => {
+function hideMarker(
+	ctx: { github: FakeGitHub; wire: Wire },
+	issue: FakeIssue,
+	seq: number,
+) {
+	const toggle = { hidden: true };
+	const path = `repos/${FAKE_REPO}/issues/${issue.number}/comments?`;
+
+	ctx.wire.intercept = async (command, args) => {
+		if (!toggle.hidden || !args.some((arg) => arg.startsWith(path))) {
+			return ctx.github.exec(command, args);
+		}
+
+		const saved = issue.comments.splice(0);
+
+		issue.comments.push(
+			...saved.filter((comment) => !comment.body.includes(`"seq":${seq},`)),
+		);
+
+		try {
+			return await ctx.github.exec(command, args);
+		} finally {
+			issue.comments.splice(0, issue.comments.length, ...saved);
+		}
+	};
+
+	return toggle;
+}
+
+function failClaimWrite(files: ReturnType<typeof memoryFiles>, seq: number) {
+	const write = files.writeClaim;
+	const control = { failing: true };
+
+	files.writeClaim = async (claim) =>
+		control.failing && claim.seq === seq ? false : write(claim);
+
+	return control;
+}
+
+function bySeq(github: FakeGitHub, issue: number): string[] {
+	return statuses(github, issue).sort(
+		(left, right) => Number.parseInt(left, 10) - Number.parseInt(right, 10),
+	);
+}
+
+function behindLogs(logs: { event: string; fields: LogFields }[]) {
+	return logs.flatMap((entry) =>
+		entry.event === "ledger_behind" ? [entry.fields] : [],
+	);
+}
+
+function blockedClaim(issue: number, seq: number): ClaimRecord {
+	return {
+		runId: runOf(issue),
+		issue,
+		eventId: String(EVENT_ID + issue),
+		seq,
+		status: "blocked",
+		stage: "specify",
+		attempt: 1,
+	};
+}
+
+describe("Orchestrator ledger behind the local claim record", () => {
+	it("claims the new event in the tick whose comments read lags its own release", async () => {
 		const ctx = world();
-		const { github, executor, start } = ctx;
+		const { github, executor, logs, start } = ctx;
 		const issue = github.add(labeled(14));
 		const controller = start();
 
@@ -1608,18 +1697,7 @@ describe("Orchestrator acknowledged marker floor", () => {
 
 		lagComments(ctx, issue, 1);
 
-		const lagging = await controller.tick();
-
-		assert.deepEqual(statuses(github, 14), [
-			"1:claimed",
-			"2:blocked",
-			"3:released",
-		]);
-		assert.deepEqual(lagging.runs, []);
-		assert.deepEqual(lagging.corrupt, []);
-		assert.equal(executor.launches.length, 1);
-
-		const resumed = await controller.tick();
+		const report = await controller.tick();
 
 		assert.deepEqual(statuses(github, 14), [
 			"1:claimed",
@@ -1629,45 +1707,145 @@ describe("Orchestrator acknowledged marker floor", () => {
 			"5:blocked",
 		]);
 		assert.deepEqual(
-			resumed.runs.map((run) => [run.runId, run.status, run.seq]),
+			report.runs.map((run) => [run.runId, run.status, run.seq]),
 			[[next, "blocked", 5]],
 		);
-		assert.deepEqual(resumed.corrupt, []);
+		assert.deepEqual(report.corrupt, []);
+		assert.deepEqual(behindLogs(logs), [
+			{ issue: 14, ledgerSeq: 2, localSeq: 3 },
+		]);
 		assert.equal(executor.launches.length, 2);
 	});
 
-	it("reports marker_missing when the comments read stays behind the release on the next tick", async () => {
-		const ctx = world();
-		const { github, executor, logs, start } = ctx;
+	it("keeps a fresh process's run and its slot when the first comments read is empty", async () => {
+		const { github, clock, files, logs, start } = world();
 		const issue = github.add(labeled(14));
+
+		github.add(labeled(15));
+		github.add(labeled(16));
+
+		const first = start();
+
+		await first.tick();
+		clock.t += 30_000;
+		await first.tick();
+
+		const kept = issue.comments.splice(0);
+		const controller = start();
+
+		clock.t += 5000;
+
+		const behind = await controller.tick();
+
+		assert.deepEqual(
+			behind.runs.map((run) => [run.issue, run.status, run.seq]),
+			[
+				[14, "blocked", 2],
+				[15, "blocked", 2],
+			],
+		);
+		assert.deepEqual(behind.queued, [16]);
+		assert.deepEqual(behind.corrupt, []);
+		assert.deepEqual(behind.ledgerBehind, [
+			{ issue: 14, ledgerSeq: 0, localSeq: 2 },
+		]);
+		assert.deepEqual(behindLogs(logs), [
+			{ issue: 14, ledgerSeq: 0, localSeq: 2 },
+		]);
+		assert.equal(github.markers(14).length, 0);
+		assert.deepEqual(files.claims.get(runOf(14)), blockedClaim(14, 2));
+
+		issue.comments.push(...kept);
+		clock.t += 35_000;
+
+		const back = await controller.tick();
+
+		assert.deepEqual(runIssues(back), [14, 15]);
+		assert.deepEqual(back.queued, [16]);
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+		assert.deepEqual(statuses(github, 16), []);
+	});
+
+	it("keeps a live run and its slot when its bot comments are deleted, and polls 4 requests after", async () => {
+		const { github, clock, executor, logs, start } = world();
+		const issue = github.add(labeled(14));
+
+		github.add(labeled(15));
+		github.add(labeled(16));
+
 		const controller = start();
 
 		await controller.tick();
-		relabel(github, issue);
-		lagComments(ctx, issue, 2);
+		clock.t += 30_000;
 		await controller.tick();
 
-		const missing = await controller.tick();
+		const kept = issue.comments.splice(0);
 
-		assert.deepEqual(missing.corrupt, [
-			{ issue: 14, defect: "marker_missing" },
-		]);
-		assert.deepEqual(missing.runs, []);
-		assert.deepEqual(statuses(github, 14), [
-			"1:claimed",
-			"2:blocked",
-			"3:released",
-		]);
-		assert.equal(executor.launches.length, 1);
+		issue.updatedAt = "2026-10-29T02:01:00Z";
+		clock.t += 30_000;
+
+		const behind = await controller.tick();
+
 		assert.deepEqual(
-			logs.flatMap((entry) =>
-				entry.event === "ledger_stale" ? [entry.fields] : [],
-			),
-			[{ issue: 14, seq: 2, floor: 3 }],
+			behind.runs.map((run) => [run.issue, run.status, run.seq]),
+			[
+				[14, "blocked", 2],
+				[15, "blocked", 2],
+			],
 		);
+		assert.deepEqual(behind.queued, [16]);
+		assert.deepEqual(behind.corrupt, []);
+		assert.deepEqual(behind.ledgerBehind, [
+			{ issue: 14, ledgerSeq: 0, localSeq: 2 },
+		]);
+		assert.equal(github.markers(14).length, 0);
+
+		issue.comments.push(...kept);
+		clock.t += 30_000;
+
+		const back = await controller.tick();
+
+		assert.deepEqual(runIssues(back), [14, 15]);
+		assert.deepEqual(back.queued, [16]);
+		assert.deepEqual(back.ledgerBehind, []);
+		assert.deepEqual(statuses(github, 16), []);
+		assert.equal(behindLogs(logs).length, 1);
+		assert.equal(executor.launches.length, 2);
+
+		clock.t += 30_000;
+		github.calls.length = 0;
+		await controller.tick();
+
+		assert.equal(github.calls.length, 4, JSON.stringify(github.calls));
 	});
 
-	it("reports marker_missing when a live controller's bot comments are deleted", async () => {
+	it("posts the next marker after the local seq when a stage ends while the bot comments are gone", async () => {
+		const { github, clock, executor, start } = world();
+		const issue = github.add(labeled(14));
+
+		executor.behaviors = [{ kind: "hang" }];
+
+		const controller = start();
+
+		await controller.tick();
+		issue.comments.length = 0;
+		issue.updatedAt = "2026-10-29T02:00:01Z";
+		clock.t += 30_000;
+		await controller.tick();
+		clock.t += 300_001;
+
+		const report = await controller.tick();
+
+		assert.equal(executor.launches[0]?.signal.aborted, true);
+		assert.deepEqual(
+			report.runs.map((run) => [run.status, run.attempt, run.seq]),
+			[["retrying", 2, 3]],
+		);
+		assert.deepEqual(report.corrupt, []);
+		assert.deepEqual(statuses(github, 14), ["3:retrying"]);
+	});
+
+	it("releases at the next seq and claims the new event when the bot comments are deleted before a relabel", async () => {
 		const { github, clock, executor, start } = world();
 		const issue = github.add(labeled(14));
 		const controller = start();
@@ -1676,71 +1854,133 @@ describe("Orchestrator acknowledged marker floor", () => {
 		clock.t += 30_000;
 		await controller.tick();
 		issue.comments.length = 0;
-		issue.updatedAt = "2026-10-29T03:00:00Z";
-		clock.t += 30_000;
 
-		const deferred = await controller.tick();
+		const next = relabel(github, issue);
 
-		assert.deepEqual(deferred.corrupt, []);
-		assert.equal(deferred.runs[0]?.status, "blocked");
+		clock.t += 32 * 60_000;
 
-		clock.t += 30_000;
+		const report = await controller.tick();
 
-		const missing = await controller.tick();
-
-		assert.deepEqual(missing.corrupt, [
-			{ issue: 14, defect: "marker_missing" },
+		assert.deepEqual(statuses(github, 14), [
+			"3:released",
+			"4:claimed",
+			"5:blocked",
 		]);
-		assert.deepEqual(missing.runs, []);
-		assert.equal(github.markers(14).length, 0);
-		assert.equal(executor.launches.length, 1);
-	});
-
-	it("reports marker_missing in the first tick after a restart when the claim record has a confirmed seq and the bot comments are gone", async () => {
-		const { github, files, executor, logs, start } = world();
-		const issue = github.add(labeled(14));
-
-		await start().tick();
-		issue.comments.length = 0;
-		issue.updatedAt = "2026-10-29T03:00:00Z";
-
-		const missing = await start().tick();
-
-		assert.deepEqual(missing.corrupt, [
-			{ issue: 14, defect: "marker_missing" },
-		]);
-		assert.deepEqual(missing.runs, []);
-		assert.equal(github.markers(14).length, 0);
-		assert.equal(executor.launches.length, 1);
-		assert.ok(!events(logs).includes("ledger_stale"));
 		assert.deepEqual(
-			[...files.claims.values()].map((claim) => claim.seq),
-			[2],
+			report.runs.map((run) => [run.runId, run.status, run.seq]),
+			[[next, "blocked", 5]],
 		);
+		assert.deepEqual(report.corrupt, []);
+		assert.equal(executor.launches.length, 2);
 	});
 
-	it("records each confirmed seq in the claim record and upgrades a record without one on adoption", async () => {
+	it("releases at the next seq when the issue closes in the tick its bot comments are deleted", async () => {
+		const { github, clock, files, start } = world();
+		const issue = github.add(labeled(14));
+		const controller = start();
+
+		await controller.tick();
+		clock.t += 30_000;
+		await controller.tick();
+		issue.comments.length = 0;
+		issue.state = "closed";
+		issue.updatedAt = "2026-10-29T02:03:00Z";
+		github.now = "2026-10-29T02:03:00Z";
+		clock.t += 30_000;
+
+		const report = await controller.tick();
+
+		assert.deepEqual(statuses(github, 14), ["3:released"]);
+		assert.deepEqual(report.runs, []);
+		assert.deepEqual(report.corrupt, []);
+		assert.equal(files.claims.size, 0);
+	});
+
+	it("handles a close and reopen of an issue whose bot comments were deleted the same as one whose comments stayed", async () => {
+		async function closeAndReopen(deleted: boolean) {
+			const { github, clock, executor, start } = world();
+			const issue = github.add(labeled(14));
+			const controller = start();
+
+			await controller.tick();
+
+			const kept = deleted ? issue.comments.splice(0) : [];
+
+			issue.updatedAt = "2026-10-29T02:00:01Z";
+			clock.t += 30_000;
+			await controller.tick();
+			issue.state = "closed";
+			issue.updatedAt = "2026-10-29T02:01:00Z";
+			clock.t += 30_000;
+
+			const closing = await controller.tick();
+
+			issue.state = "open";
+			issue.comments.push(...kept);
+			issue.updatedAt = "2026-10-29T02:02:00Z";
+			github.now = "2026-10-29T02:02:30Z";
+			clock.t += 30_000;
+
+			const reopened = await controller.tick();
+
+			clock.t += 30_000;
+
+			const later = await controller.tick();
+			const next = relabel(github, issue);
+
+			clock.t += 32 * 60_000;
+
+			const relabeled = await controller.tick();
+
+			return {
+				closing: closing.runs,
+				reopened: [reopened.runs, reopened.corrupt],
+				later: [later.runs, later.corrupt],
+				relabeled: relabeled.runs.map((run) => [run.runId, run.status]),
+				next,
+				markers: bySeq(github, 14),
+				launches: executor.launches.length,
+			};
+		}
+
+		const deleted = await closeAndReopen(true);
+
+		assert.deepEqual(deleted, await closeAndReopen(false));
+		assert.deepEqual(deleted.closing, []);
+		assert.deepEqual(deleted.relabeled, [[deleted.next, "blocked"]]);
+		assert.deepEqual(deleted.markers, [
+			"1:claimed",
+			"2:blocked",
+			"3:released",
+			"4:claimed",
+			"5:blocked",
+		]);
+	});
+});
+
+describe("Orchestrator claim record", () => {
+	it("mirrors each confirmed marker and upgrades a record without a seq on adoption", async () => {
 		const { github, files, start } = world();
 
 		github.add(labeled(14));
 		await start().tick();
 
-		assert.deepEqual(
-			[...files.claims.values()],
-			[{ runId: runOf(14), issue: 14, eventId: String(EVENT_ID + 14), seq: 2 }],
-		);
+		assert.deepEqual([...files.claims.values()], [blockedClaim(14, 2)]);
 
 		files.claims.set(runOf(14), {
 			runId: runOf(14),
 			issue: 14,
 			eventId: String(EVENT_ID + 14),
 			seq: null,
+			status: null,
+			stage: null,
+			attempt: null,
 		});
 
 		await start().tick();
 
 		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
-		assert.equal(files.claims.get(runOf(14))?.seq, 2);
+		assert.deepEqual(files.claims.get(runOf(14)), blockedClaim(14, 2));
 	});
 
 	it("treats a claim record without a seq as unconfirmed, so deleted markers are written again", async () => {
@@ -1753,6 +1993,9 @@ describe("Orchestrator acknowledged marker floor", () => {
 			issue: 14,
 			eventId: String(EVENT_ID + 14),
 			seq: null,
+			status: null,
+			stage: null,
+			attempt: null,
 		});
 		issue.comments.length = 0;
 		issue.updatedAt = "2026-10-29T03:00:00Z";
@@ -1763,132 +2006,194 @@ describe("Orchestrator acknowledged marker floor", () => {
 		assert.equal(report.runs[0]?.runId, runOf(14));
 		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
 	});
-});
 
-describe("Orchestrator deferred ledger publication", () => {
-	it("posts no marker for a stage that stalls while its issue is deferred, then reports marker_missing", async () => {
-		const { github, clock, executor, start } = world();
-		const issue = github.add(labeled(14));
+	it("adopts the ledger's marker and rewrites the record when the ledger is ahead of it", async () => {
+		const { github, files, logs, start } = world();
 
-		executor.behaviors = [{ kind: "hang" }];
+		github.add(labeled(14));
+		await start().tick();
+		files.claims.set(runOf(14), {
+			...blockedClaim(14, 1),
+			status: "claimed",
+		});
 
-		const controller = start();
+		const report = await start().tick();
 
-		await controller.tick();
-		issue.comments.length = 0;
-		issue.updatedAt = "2026-10-29T02:00:01Z";
-		clock.t += 30_000;
-
-		const deferred = await controller.tick();
-
-		assert.equal(deferred.runs[0]?.status, "running");
-		assert.deepEqual(deferred.corrupt, []);
-		clock.t += 300_001;
-		github.now = "2026-10-29T02:05:30Z";
-
-		const missing = await controller.tick();
-
-		assert.equal(executor.launches[0]?.signal.aborted, true);
-		assert.deepEqual(missing.corrupt, [
-			{ issue: 14, defect: "marker_missing" },
-		]);
-		assert.deepEqual(missing.runs, []);
-		assert.equal(github.markers(14).length, 0);
-		assert.equal(executor.launches.length, 1);
+		assert.deepEqual(
+			report.runs.map((run) => [run.status, run.seq]),
+			[["blocked", 2]],
+		);
+		assert.deepEqual(report.ledgerBehind, []);
+		assert.deepEqual(behindLogs(logs), []);
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+		assert.deepEqual(files.claims.get(runOf(14)), blockedClaim(14, 2));
 	});
 
-	it("reads the ledger before it releases for a new ready event, so deleted markers end as marker_missing with no POST or launch", async () => {
-		const { github, clock, executor, start } = world();
-		const issue = github.add(labeled(14));
-		const controller = start();
+	it("takes the status from the ledger for a record written before it carried one", async () => {
+		const { github, files, start } = world();
 
-		await controller.tick();
-		clock.t += 30_000;
-		await controller.tick();
-		issue.comments.length = 0;
-		relabel(github, issue);
-		clock.t += 32 * 60_000;
+		github.add(labeled(14));
+		await start().tick();
+		files.claims.set(runOf(14), {
+			...blockedClaim(14, 2),
+			status: null,
+			stage: null,
+			attempt: null,
+		});
 
-		const deferred = await controller.tick();
+		const report = await start().tick();
 
-		assert.deepEqual(deferred.corrupt, []);
-		assert.equal(deferred.runs[0]?.status, "blocked");
-
-		const missing = await controller.tick();
-
-		assert.deepEqual(missing.corrupt, [
-			{ issue: 14, defect: "marker_missing" },
-		]);
-		assert.deepEqual(missing.runs, []);
-
-		const later = await controller.tick();
-
-		assert.deepEqual(later.runs, []);
-		assert.equal(github.markers(14).length, 0);
-		assert.equal(executor.launches.length, 1);
+		assert.deepEqual(
+			report.runs.map((run) => [run.status, run.seq]),
+			[["blocked", 2]],
+		);
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+		assert.deepEqual(files.claims.get(runOf(14)), blockedClaim(14, 2));
 	});
 
-	it("posts no release for a deferred issue that closes, and reads its ledger again so the run is not stranded", async () => {
-		const { github, clock, start } = world();
+	it("adopts a record without a status from the newest readable marker when the ledger is behind it too, and posts after its seq", async () => {
+		const ctx = world();
+		const { github, clock, files, logs, start } = ctx;
 		const issue = github.add(labeled(14));
+
+		await start().tick();
+		files.claims.set(runOf(14), {
+			...blockedClaim(14, 2),
+			status: null,
+			stage: null,
+			attempt: null,
+		});
+
+		const hidden = hideMarker(ctx, issue, 2);
 		const controller = start();
+		const report = await controller.tick();
 
-		await controller.tick();
-		issue.comments.length = 0;
-		issue.updatedAt = "2026-10-29T02:00:01Z";
-		clock.t += 30_000;
-		await controller.tick();
-		issue.state = "closed";
-		issue.updatedAt = "2026-10-29T02:01:00Z";
-		clock.t += 30_000;
-
-		const closing = await controller.tick();
-
-		assert.equal(closing.runs[0]?.status, "released");
-		assert.deepEqual(closing.corrupt, []);
-		clock.t += 30_000;
-
-		const missing = await controller.tick();
-
-		assert.deepEqual(missing.corrupt, [
-			{ issue: 14, defect: "marker_missing" },
+		assert.deepEqual(
+			report.runs.map((run) => [run.status, run.seq]),
+			[["blocked", 3]],
+		);
+		assert.deepEqual(behindLogs(logs), [
+			{ issue: 14, ledgerSeq: 1, localSeq: 2 },
 		]);
-		assert.deepEqual(missing.runs, []);
-		assert.equal(github.markers(14).length, 0);
+		assert.deepEqual(report.ledgerBehind, []);
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:blocked",
+			"3:blocked",
+		]);
+
+		hidden.hidden = false;
+		issue.updatedAt = "2026-10-29T03:00:00Z";
+		clock.t = Date.parse("2026-10-29T03:00:05Z");
+
+		const revealed = await controller.tick();
+
+		assert.deepEqual(revealed.corrupt, []);
+		assert.deepEqual(revealed.ledgerBehind, []);
+		assert.equal(github.markers(14).length, 3);
 	});
-});
 
-describe("Orchestrator claim record retry", () => {
-	it("writes a failed claim record rewrite on a later tick, so markers deleted after it end as marker_missing", async () => {
-		const { github, clock, files, executor, logs, start } = world();
+	it("retries a failed rewrite on a tick whose comments read lags, so a restart keeps the run without a second post", async () => {
+		const ctx = world();
+		const { github, clock, files, executor, logs, start } = ctx;
 		const issue = github.add(labeled(14));
-		const write = files.writeClaim;
-		let failing = true;
-
-		files.writeClaim = async (claim) =>
-			failing && claim.seq === 2 ? false : write(claim);
-
+		const writes = failClaimWrite(files, 2);
 		const controller = start();
 
 		await controller.tick();
 
 		assert.equal(files.claims.get(runOf(14))?.seq, 1);
 		assert.ok(events(logs).includes("claim_unwritable"));
-		failing = false;
-		clock.t += 30_000;
+		writes.failing = false;
+
+		const hidden = hideMarker(ctx, issue, 2);
+
+		issue.updatedAt = "2026-10-29T02:01:00Z";
+		clock.t = Date.parse("2026-10-29T02:01:05Z");
 		await controller.tick();
 
-		assert.equal(files.claims.get(runOf(14))?.seq, 2);
+		assert.deepEqual(files.claims.get(runOf(14)), blockedClaim(14, 2));
+
+		clock.t += 30_000;
+
+		const restarted = start();
+		const report = await restarted.tick();
+
+		assert.deepEqual(
+			report.runs.map((run) => [run.status, run.seq]),
+			[["blocked", 2]],
+		);
+		assert.deepEqual(report.ledgerBehind, [
+			{ issue: 14, ledgerSeq: 1, localSeq: 2 },
+		]);
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+
+		hidden.hidden = false;
+		issue.updatedAt = "2026-10-29T02:03:00Z";
+		clock.t = Date.parse("2026-10-29T02:03:05Z");
+
+		const revealed = await restarted.tick();
+
+		assert.deepEqual(revealed.corrupt, []);
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+		assert.equal(executor.launches.length, 2);
+	});
+
+	it("retries a failed rewrite after its marker is deleted, so a restart keeps the run without a second post", async () => {
+		const { github, clock, files, executor, start } = world();
+		const issue = github.add(labeled(14));
+		const writes = failClaimWrite(files, 2);
+		const controller = start();
+
+		await controller.tick();
+		writes.failing = false;
 		issue.comments.pop();
 		issue.updatedAt = "2026-10-29T02:01:00Z";
 		github.now = "2026-10-29T02:01:00Z";
+		clock.t += 30_000;
+
+		const observed = await controller.tick();
+
+		assert.equal(observed.runs[0]?.status, "blocked");
+		assert.deepEqual(files.claims.get(runOf(14)), blockedClaim(14, 2));
 
 		const report = await start().tick();
 
-		assert.deepEqual(report.corrupt, [{ issue: 14, defect: "marker_missing" }]);
-		assert.deepEqual(report.runs, []);
+		assert.deepEqual(
+			report.runs.map((run) => [run.status, run.seq]),
+			[["blocked", 2]],
+		);
+		assert.deepEqual(report.corrupt, []);
 		assert.deepEqual(statuses(github, 14), ["1:claimed"]);
-		assert.equal(executor.launches.length, 1);
+		assert.equal(executor.launches.length, 2);
+	});
+
+	it("ends as duplicate_seq when the claim record and the comments read are both behind across a restart", async () => {
+		const ctx = world();
+		const { github, clock, files, start } = ctx;
+		const issue = github.add(labeled(14));
+
+		failClaimWrite(files, 2);
+		await start().tick();
+
+		const hidden = hideMarker(ctx, issue, 2);
+
+		await start().tick();
+
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:blocked",
+			"2:blocked",
+		]);
+
+		hidden.hidden = false;
+		issue.updatedAt = "2026-10-29T03:00:00Z";
+		clock.t = Date.parse("2026-10-29T03:00:05Z");
+
+		const report = await start().tick();
+
+		assert.deepEqual(report.corrupt, [{ issue: 14, defect: "duplicate_seq" }]);
+		assert.deepEqual(report.runs, []);
 	});
 
 	it("writes the record upgrade on a later tick when adoption cannot write it", async () => {
@@ -1901,6 +2206,9 @@ describe("Orchestrator claim record retry", () => {
 			issue: 14,
 			eventId: String(EVENT_ID + 14),
 			seq: null,
+			status: null,
+			stage: null,
+			attempt: null,
 		});
 
 		const write = files.writeClaim;
@@ -1917,148 +2225,8 @@ describe("Orchestrator claim record retry", () => {
 		clock.t += 30_000;
 		await controller.tick();
 
-		assert.equal(files.claims.get(runOf(14))?.seq, 2);
+		assert.deepEqual(files.claims.get(runOf(14)), blockedClaim(14, 2));
 		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
-	});
-});
-
-describe("Orchestrator marker_missing recovery", () => {
-	it("adopts the run again once a live controller's missing markers read back, with updated_at unchanged", async () => {
-		const { github, clock, start } = world();
-		const issue = github.add(labeled(14));
-		const controller = start();
-
-		await controller.tick();
-		clock.t += 30_000;
-		await controller.tick();
-
-		const kept = issue.comments.splice(0);
-
-		issue.updatedAt = "2026-10-29T03:00:00Z";
-		clock.t = Date.parse("2026-10-29T03:00:03Z");
-
-		const deferred = await controller.tick();
-
-		assert.deepEqual(deferred.corrupt, []);
-		clock.t += 1000;
-
-		const missing = await controller.tick();
-
-		assert.deepEqual(missing.corrupt, [
-			{ issue: 14, defect: "marker_missing" },
-		]);
-		issue.comments.push(...kept);
-		clock.t = Date.parse("2026-10-29T03:00:35Z");
-
-		const healed = await controller.tick();
-
-		assert.equal(issue.updatedAt, "2026-10-29T03:00:00Z");
-		assert.deepEqual(healed.corrupt, []);
-		assert.deepEqual(
-			healed.runs.map((run) => [run.runId, run.status, run.seq]),
-			[[runOf(14), "blocked", 2]],
-		);
-		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
-		clock.t += 30_000;
-		github.calls.length = 0;
-		await controller.tick();
-
-		assert.equal(github.calls.length, 4, JSON.stringify(github.calls));
-	});
-
-	it("adopts the run again on the next tick when a fresh process's first comments read is empty", async () => {
-		const { github, clock, files, start } = world();
-		const issue = github.add(labeled(14));
-
-		await start().tick();
-
-		const kept = issue.comments.splice(0);
-		const controller = start();
-
-		clock.t += 5000;
-
-		const missing = await controller.tick();
-
-		assert.deepEqual(missing.corrupt, [
-			{ issue: 14, defect: "marker_missing" },
-		]);
-		assert.deepEqual(missing.runs, []);
-		issue.comments.push(...kept);
-		clock.t += 35_000;
-
-		const healed = await controller.tick();
-
-		assert.deepEqual(healed.corrupt, []);
-		assert.deepEqual(
-			healed.runs.map((run) => [run.runId, run.status, run.seq]),
-			[[runOf(14), "blocked", 2]],
-		);
-		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
-		assert.equal(files.claims.get(runOf(14))?.seq, 2);
-	});
-
-	it("reads a missing issue's ledger on every tick while it stays missing", async () => {
-		const { github, clock, start } = world();
-		const issue = github.add(labeled(14));
-
-		await start().tick();
-		issue.comments.length = 0;
-
-		const controller = start();
-
-		clock.t += 5000;
-		await controller.tick();
-
-		const comments = `repos/${FAKE_REPO}/issues/14/comments?`;
-
-		const later = async () => {
-			clock.t += 30_000;
-			github.calls.length = 0;
-
-			const report = await controller.tick();
-
-			return {
-				corrupt: report.corrupt,
-				reads: github.calls.filter((call) =>
-					call.some((arg) => arg.startsWith(comments)),
-				).length,
-			};
-		};
-
-		const missing = {
-			corrupt: [{ issue: 14, defect: "marker_missing" }],
-			reads: 1,
-		};
-
-		assert.deepEqual([await later(), await later()], [missing, missing]);
-		assert.equal(github.markers(14).length, 0);
-	});
-
-	it("keeps marker_missing and the claim record as evidence when the issue closes, also after a restart", async () => {
-		const { github, files, start } = world();
-		const issue = github.add(labeled(14));
-		const controller = start();
-
-		await controller.tick();
-		issue.comments.length = 0;
-		issue.updatedAt = "2026-10-29T02:00:01Z";
-		await controller.tick();
-		await controller.tick();
-		issue.state = "closed";
-		issue.updatedAt = "2026-10-29T02:01:00Z";
-
-		const closed = await controller.tick();
-		const restarted = await start().tick();
-		const missing = [{ issue: 14, defect: "marker_missing" }];
-
-		assert.deepEqual(closed.corrupt, missing);
-		assert.deepEqual(restarted.corrupt, missing);
-		assert.deepEqual(restarted.runs, []);
-		assert.deepEqual(
-			[...files.claims.values()].map((claim) => claim.seq),
-			[2],
-		);
-		assert.equal(github.markers(14).length, 0);
 	});
 });
 
