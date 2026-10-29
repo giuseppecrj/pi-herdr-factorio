@@ -1296,6 +1296,15 @@ describe("origin parsing", () => {
 		`git@evil.io:${path}.git`,
 		`https://user:hunter2@gitlab.com/${path}.git`,
 		"/srv/git/repo.git",
+		"https://github.com/giuseppecrj/%2e",
+		"https://github.com/%2e/giuseppecrj/pi-herdr-factorio",
+		"https://github.com/giuseppecrj/%2e%2e/other/repo",
+		"https://github.com/giuseppecrj\\pi-herdr-factorio",
+		"https://github.com/giuseppecrj/./pi-herdr-factorio",
+		"https://github.com/giuseppecrj/../pi-herdr-factorio",
+		"https://github.com//giuseppecrj/pi-herdr-factorio",
+		"https://github.com/giuseppecrj/..git",
+		"git@github.com:giuseppecrj/..git",
 	];
 
 	for (const remote of rejected) {

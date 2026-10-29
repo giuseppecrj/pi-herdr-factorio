@@ -168,7 +168,10 @@ const MODEL_ID = /^([a-z0-9][a-z0-9-]*)\/([A-Za-z0-9][A-Za-z0-9._:-]*)$/;
 const ENV_REFERENCE = /^\$([A-Za-z_][A-Za-z0-9_]*)$/;
 
 const SCP_REMOTE = /^git@github\.com:([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/;
-const HTTPS_GITHUB_PREFIX = /^https:\/\/(?:[^\s/?#\\@]*@)?github\.com\//;
+
+const HTTPS_REMOTE =
+	/^https:\/\/(?:[^\s/?#\\@]*@)?github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/;
+
 const UNKNOWN_KEY = "(unknown key)";
 
 const URL_USERINFO = /([a-z][a-z0-9+.-]*:\/\/)[^\s/?#]*@/gi;
@@ -207,7 +210,13 @@ function isStage(input: string): input is Stage {
 }
 
 function repoSlugOf(owner: string, name: string): RepoSlug | null {
-	const slug = `${owner}/${name.endsWith(".git") ? name.slice(0, -4) : name}`;
+	const repo = name.endsWith(".git") ? name.slice(0, -4) : name;
+
+	if ([owner, repo].some((segment) => segment === "." || segment === "..")) {
+		return null;
+	}
+
+	const slug = `${owner}/${repo}`;
 
 	return isRepoSlug(slug) ? slug : null;
 }
@@ -218,14 +227,13 @@ function repoSlugOf(owner: string, name: string): RepoSlug | null {
  */
 export function githubRepoFromRemote(remote: string): RepoSlug | null {
 	const text = remote.trim();
-
-	if (/\s/.test(text)) return null;
-
 	const scp = SCP_REMOTE.exec(text);
 
 	if (scp !== null) return repoSlugOf(scp[1] ?? "", scp[2] ?? "");
 
-	if (!HTTPS_GITHUB_PREFIX.test(text) || /[?#]/.test(text)) return null;
+	const https = HTTPS_REMOTE.exec(text);
+
+	if (https === null) return null;
 
 	let url: URL;
 
@@ -245,11 +253,7 @@ export function githubRepoFromRemote(remote: string): RepoSlug | null {
 		return null;
 	}
 
-	const segments = url.pathname.split("/").slice(1);
-
-	if (segments.length !== 2) return null;
-
-	return repoSlugOf(segments[0] ?? "", segments[1] ?? "");
+	return repoSlugOf(https[1] ?? "", https[2] ?? "");
 }
 
 class InvalidWorkflow extends Error {
