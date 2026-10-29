@@ -61,7 +61,7 @@ export type TimelineEntry =
 export type BodyVersion = {
 	readonly editedAt: string;
 	readonly deleted: boolean;
-	readonly text: string | null;
+	readonly text: string;
 };
 
 export type BodyHistory = {
@@ -159,6 +159,11 @@ function stringOf(value: JsonValue | undefined): string | null {
 	const text = String(value);
 
 	return value === text ? text : null;
+}
+
+/** GitHub sends an empty body as `null`, in REST and in GraphQL. */
+function bodyTextOf(value: JsonValue | undefined): string | null {
+	return value === null ? "" : stringOf(value);
 }
 
 function booleanOf(value: JsonValue | undefined): boolean | null {
@@ -271,8 +276,7 @@ function parseIssue(value: JsonValue | undefined): IssueRecord | null {
 	const state = stringOf(fieldOf(issue, "state"));
 	const labels = labelNamesOf(fieldOf(issue, "labels"));
 	const title = stringOf(fieldOf(issue, "title"));
-	const body = fieldOf(issue, "body");
-	const bodyText = body === null ? "" : stringOf(body);
+	const bodyText = bodyTextOf(fieldOf(issue, "body"));
 
 	if (
 		number === null ||
@@ -332,15 +336,12 @@ function parseBodyVersion(value: JsonValue): BodyVersion | null {
 
 	const editedAt = timestampOf(fieldOf(version, "editedAt"));
 	const deletedAt = fieldOf(version, "deletedAt");
-	const diff = fieldOf(version, "diff");
 
-	if (editedAt === null || deletedAt === undefined || diff === undefined) {
+	const text = bodyTextOf(fieldOf(version, "diff"));
+
+	if (editedAt === null || deletedAt === undefined || text === null) {
 		return null;
 	}
-
-	const text = diff === null ? null : stringOf(diff);
-
-	if (diff !== null && text === null) return null;
 
 	return { editedAt, deleted: deletedAt !== null, text };
 }
@@ -363,7 +364,7 @@ function parseBodyHistory(value: JsonValue | undefined): BodyHistory | null {
 	if (issue === null) return null;
 
 	const title = stringOf(fieldOf(issue, "title"));
-	const body = stringOf(fieldOf(issue, "body"));
+	const body = bodyTextOf(fieldOf(issue, "body"));
 	const edited = fieldOf(issue, "lastEditedAt");
 	const lastEditedAt = edited === null ? null : timestampOf(edited);
 	const includesCreatedEdit = booleanOf(fieldOf(issue, "includesCreatedEdit"));

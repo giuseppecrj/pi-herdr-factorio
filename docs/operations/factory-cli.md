@@ -229,6 +229,8 @@ The snapshot is the title and body when the label was applied. Let `L` be the ev
 3. Otherwise the body comes from the GraphQL edit history. It is proved when all of these hold: every version was returned, the history includes the original, the newest version equals the current body and was saved at `lastEditedAt`, no version was saved in the same second as `L`, and exactly one version is the latest saved before `L` and it is not deleted. That version is the snapshot body. `snapshotSource` is `edit_history`.
 4. Anything else is `ambiguous_snapshot`.
 
+GitHub sends an empty body as `null`, in REST and in GraphQL, for the current body and for each version's `diff`. `admit` reads every such `null` as the empty string.
+
 `snapshotDigest` is the sha256 hex digest of `JSON.stringify([title, body])` in UTF-8. The current body at poll time is never used as the snapshot unless rule 2 applies.
 
 ### State
@@ -308,7 +310,7 @@ The repository switch reason comes first. When the issue also fails a check, tha
 | `history_without_original` | The history does not include the original body. |
 | `history_disagrees_with_body` | The newest version is not the current body, or was not saved at `lastEditedAt`. |
 | `no_version_before_label` | No version was saved before the label. |
-| `version_withheld` | The version in force at label time is deleted or has no text, or two versions share its time. |
+| `version_withheld` | The version in force at label time is deleted, or two versions share its time. |
 
 ## `/factory status`
 

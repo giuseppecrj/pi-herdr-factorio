@@ -243,12 +243,7 @@ export function labelTimeSnapshot(input: {
 	const inForce = versions.filter((version) => version.editedAt === latestAt);
 	const [version] = inForce;
 
-	if (
-		inForce.length !== 1 ||
-		version === undefined ||
-		version.deleted ||
-		version.text === null
-	) {
+	if (inForce.length !== 1 || version === undefined || version.deleted) {
 		return ambiguous("version_withheld");
 	}
 

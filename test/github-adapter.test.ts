@@ -394,6 +394,31 @@ describe("GitHubTicketAdapter reads", () => {
 		assert.ok(call?.includes("owner=giuseppecrj"));
 	});
 
+	it("reads a null GraphQL body and a null version diff as empty", async () => {
+		const github = new FakeGitHub();
+
+		github.add(
+			fakeIssue(15, {
+				body: "",
+				lastEditedAt: "2026-10-29T01:21:47Z",
+				includesCreatedEdit: true,
+				versions: [
+					{ editedAt: "2026-10-29T01:21:47Z", deletedAt: null, diff: null },
+					{ editedAt: "2026-10-29T01:21:21Z", deletedAt: null, diff: "v1" },
+				],
+			}),
+		);
+
+		const read = await adapterFor(github).readBodyHistory(15);
+
+		assert.ok(read.kind === "ok", JSON.stringify(read));
+		assert.equal(read.value.body, "");
+		assert.deepEqual(read.value.versions, [
+			{ editedAt: "2026-10-29T01:21:47Z", deleted: false, text: "" },
+			{ editedAt: "2026-10-29T01:21:21Z", deleted: false, text: "v1" },
+		]);
+	});
+
 	it("reads title renames from the same GraphQL response", async () => {
 		const github = new FakeGitHub();
 

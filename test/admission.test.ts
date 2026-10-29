@@ -692,7 +692,7 @@ describe("admission records", () => {
 });
 
 describe("label-time snapshot", () => {
-	const versions = (...pairs: [string, string | null, boolean?][]) =>
+	const versions = (...pairs: [string, string, boolean?][]) =>
 		pairs.map(([editedAt, text, deleted]) => ({
 			editedAt,
 			text,
@@ -905,7 +905,7 @@ describe("label-time snapshot", () => {
 					versions: versions(
 						["2026-10-29T01:21:47Z", "v3"],
 						["2026-10-29T01:21:44Z", "v2"],
-						["2026-10-29T01:21:21Z", null, true],
+						["2026-10-29T01:21:21Z", "", true],
 					),
 				}),
 				"2026-10-29T01:21:38Z",
@@ -1053,6 +1053,50 @@ describe("label-time snapshot", () => {
 		assert.equal(receipt.snapshotSource, "edit_history");
 		assert.equal(receipt.snapshotDigest, unedited("Fixture 14", "v1"));
 		assert.notEqual(receipt.snapshotDigest, unedited("Fixture 14", "v2"));
+	});
+
+	it("reads a null GraphQL body or version as empty, as REST does", async () => {
+		const cases: [Partial<FakeIssue>, string, string][] = [
+			[{ body: "" }, "", "unedited"],
+			[
+				{
+					body: "v2",
+					lastEditedAt: "2026-10-29T01:21:47Z",
+					includesCreatedEdit: true,
+					versions: [
+						{ editedAt: "2026-10-29T01:21:47Z", deletedAt: null, diff: "v2" },
+						{ editedAt: "2026-10-29T01:21:21Z", deletedAt: null, diff: null },
+					],
+				},
+				"",
+				"edit_history",
+			],
+			[
+				{
+					body: "",
+					lastEditedAt: "2026-10-29T01:21:47Z",
+					includesCreatedEdit: true,
+					versions: [
+						{ editedAt: "2026-10-29T01:21:47Z", deletedAt: null, diff: null },
+						{ editedAt: "2026-10-29T01:21:21Z", deletedAt: null, diff: "v1" },
+					],
+				},
+				"v1",
+				"edit_history",
+			],
+		];
+
+		for (const [change, body, source] of cases) {
+			const github = new FakeGitHub();
+
+			github.add(labeledBy("writer", change));
+
+			const receipt = await admit(github);
+
+			assert.deepEqual(receipt.reasons, [], `${source} ${body}`);
+			assert.equal(receipt.snapshotSource, source);
+			assert.equal(receipt.snapshotDigest, unedited("Fixture 14", body));
+		}
 	});
 
 	it("refuses a rename after the label through the adapter", async () => {

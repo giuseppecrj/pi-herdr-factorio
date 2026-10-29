@@ -204,7 +204,7 @@ The lookup is case-insensitive. `GET repos/giuseppecrj/pi-herdr-factorio/labels/
 From these results, admission binds a `factory:ready` label event at time `L` to a body as follows:
 
 1. If `lastEditedAt` is `null` or earlier than `L`, the current body is the label-time body, unless `userContentEdits` contradicts it: a node with `editedAt` at or after `L` or after `lastEditedAt`, or, with `lastEditedAt` `null`, any node other than the original.
-2. Otherwise, use `userContentEdits` only when all of these hold. `totalCount` equals the number of nodes returned, `includesCreatedEdit` is `true`, the newest node's `diff` equals the current body and its `editedAt` equals `lastEditedAt`, no node has `editedAt` equal to `L`, and exactly one node has the latest `editedAt` earlier than `L`, with a `diff` and no `deletedAt`. That node's `diff` is the label-time body.
+2. Otherwise, use `userContentEdits` only when all of these hold. `totalCount` equals the number of nodes returned, `includesCreatedEdit` is `true`, the newest node's `diff` equals the current body and its `editedAt` equals `lastEditedAt`, no node has `editedAt` equal to `L`, and exactly one node has the latest `editedAt` earlier than `L`, with no `deletedAt`. That node's `diff` is the label-time body. A `null` `body` or `diff` is an empty body, as in REST.
 3. Any other case is `ambiguous_snapshot`, and admission refuses.
 
 Timestamps have one-second precision, so an edit in the same second as the label is ambiguous. The title is part of the snapshot. A `renamed` event at or after `L`, on the timeline or in the GraphQL `renames`, also gives `ambiguous_snapshot`, as does a GraphQL title that differs from the REST title or a `renames.totalCount` above the returned nodes.

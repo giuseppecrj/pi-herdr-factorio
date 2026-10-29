@@ -347,7 +347,7 @@ export class FakeGitHub {
 			number: issue.number,
 			state: issue.state,
 			title: issue.title,
-			body: issue.body,
+			body: issue.body === "" ? null : issue.body,
 			user: { login: issue.author },
 			labels: issue.labels.map((name) => ({ name })),
 		};
@@ -379,7 +379,7 @@ export class FakeGitHub {
 				repository: {
 					issue: {
 						title: issue.title,
-						body: issue.body,
+						body: issue.body === "" ? null : issue.body,
 						lastEditedAt: issue.lastEditedAt,
 						includesCreatedEdit: issue.includesCreatedEdit,
 						userContentEdits: {
