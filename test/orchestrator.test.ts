@@ -3359,6 +3359,32 @@ describe("Orchestrator workspace replay", () => {
 	});
 });
 
+describe("Orchestrator loaded terminal records", () => {
+	it("does not count a loaded terminal record as a reservation when its issue cannot be read", async () => {
+		const { github, clock, files, start } = world();
+		const issue = github.add(labeled(14));
+		const controller = start();
+
+		await controller.tick();
+		issue.state = "closed";
+		issue.updatedAt = "2026-10-29T02:00:20Z";
+		clock.t += 30_000;
+		await controller.tick();
+
+		assert.equal(files.claims.get(runOf(14))?.status, "released");
+
+		github.failures.set(`repos/${FAKE_REPO}/issues/14`, networkError());
+		github.add(labeled(15));
+		github.add(labeled(16));
+		clock.t += 30_000;
+
+		const report = await start().tick();
+
+		assert.deepEqual(runIssues(report), [15, 16]);
+		assert.deepEqual(report.queued, []);
+	});
+});
+
 describe("Orchestrator claim record usage", () => {
 	it("keeps the recorded usage when the ledger is behind, so the run budget still ends the run", async () => {
 		const ctx = world();
