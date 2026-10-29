@@ -37,6 +37,8 @@ export const FACTORY_REPOSITORIES: readonly RepoSlug[] = [
 
 export type Ambiguity =
 	| "renamed_since_label"
+	| "rename_history_incomplete"
+	| "title_changed_between_reads"
 	| "edited_at_label_time"
 	| "history_incomplete"
 	| "history_without_original"
@@ -144,12 +146,15 @@ export function snapshotDigest(snapshot: IssueSnapshot): Digest {
 /**
  * Binds a label applied at `labelAt` to the title and body of that moment.
  * GitHub times have one-second precision, so an edit or rename in the same
- * second as the label is ambiguous.
+ * second as the label is ambiguous. The title and its renames come from the
+ * same response as the body history; `issueTitle` is the title of the earlier
+ * issue read, which must still match.
  */
 export function labelTimeSnapshot(input: {
 	history: BodyHistory;
 	labelAt: string;
 	renamedSinceLabel: boolean;
+	issueTitle: string;
 }): SnapshotProof {
 	const { history, labelAt } = input;
 
@@ -159,6 +164,18 @@ export function labelTimeSnapshot(input: {
 	});
 
 	if (input.renamedSinceLabel) return ambiguous("renamed_since_label");
+
+	if (history.totalRenames !== history.renamedAt.length) {
+		return ambiguous("rename_history_incomplete");
+	}
+
+	if (history.renamedAt.some((at) => at >= labelAt)) {
+		return ambiguous("renamed_since_label");
+	}
+
+	if (history.title !== input.issueTitle) {
+		return ambiguous("title_changed_between_reads");
+	}
 
 	if (history.lastEditedAt === null || history.lastEditedAt < labelAt) {
 		return {
@@ -443,6 +460,7 @@ async function evaluate(input: {
 		renamedSinceLabel: timeline.value.some(
 			(entry) => entry.kind === "renamed" && entry.at >= event.at,
 		),
+		issueTitle: record.value.title,
 	});
 
 	if (proof.kind === "ambiguous") {

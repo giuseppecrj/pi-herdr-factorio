@@ -128,6 +128,28 @@ For #16, edited before the label at `01:21:39Z`, `lastEditedAt` is `01:21:31Z`. 
 
 Title changes are not in `userContentEdits`. They appear on the timeline as `renamed` events with `rename.from` and `rename.to`.
 
+The adapter reads title renames in the same GraphQL response as the title and body, so a rename between two reads cannot pass unseen. It adds this field to the issue in the query above:
+
+```graphql
+renames: timelineItems(itemTypes: [RENAMED_TITLE_EVENT], last: 100) {
+  totalCount
+  nodes { ... on RenamedTitleEvent { createdAt previousTitle currentTitle } }
+}
+```
+
+Re-probed on 2026-10-29 through the integration with the extended query. #14 and #15 return `renames` with `totalCount: 0` and no nodes. #26, renamed once, returns:
+
+```json
+{
+  "totalCount": 1,
+  "nodes": [
+    { "createdAt": "2026-10-29T02:14:58Z", "previousTitle": "<24 characters>", "currentTitle": "<32 characters>" }
+  ]
+}
+```
+
+`currentTitle` is the title after that rename. `createdAt` has one-second precision.
+
 ### Repository variable
 
 ```text
@@ -185,7 +207,7 @@ From these results, admission binds a `factory:ready` label event at time `L` to
 2. Otherwise, use `userContentEdits` only when all of these hold. `totalCount` equals the number of nodes returned, `includesCreatedEdit` is `true`, the newest node's `diff` equals the current body and its `editedAt` equals `lastEditedAt`, no node has `editedAt` equal to `L`, and exactly one node has the latest `editedAt` earlier than `L`, with a `diff` and no `deletedAt`. That node's `diff` is the label-time body.
 3. Any other case is `ambiguous_snapshot`, and admission refuses.
 
-Timestamps have one-second precision, so an edit in the same second as the label is ambiguous. The title is part of the snapshot. A `renamed` event at or after `L` also gives `ambiguous_snapshot`.
+Timestamps have one-second precision, so an edit in the same second as the label is ambiguous. The title is part of the snapshot. A `renamed` event at or after `L`, on the timeline or in the GraphQL `renames`, also gives `ambiguous_snapshot`, as does a GraphQL title that differs from the REST title or a `renames.totalCount` above the returned nodes.
 
 ## What this does not prove
 

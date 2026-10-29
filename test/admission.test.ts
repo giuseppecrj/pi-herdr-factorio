@@ -469,6 +469,8 @@ describe("label-time snapshot", () => {
 				["2026-10-29T01:21:44Z", "v2"],
 				["2026-10-29T01:21:21Z", "v1"],
 			),
+			totalRenames: 0,
+			renamedAt: [],
 		};
 
 		return { ...base, ...change };
@@ -478,7 +480,14 @@ describe("label-time snapshot", () => {
 		h: BodyHistory,
 		labelAt = "2026-10-29T01:21:38Z",
 		renamed = false,
-	) => labelTimeSnapshot({ history: h, labelAt, renamedSinceLabel: renamed });
+		issueTitle = "T",
+	) =>
+		labelTimeSnapshot({
+			history: h,
+			labelAt,
+			renamedSinceLabel: renamed,
+			issueTitle,
+		});
 
 	it("uses the current body when it was last edited before the label", () => {
 		assert.deepEqual(bind(history({ lastEditedAt: "2026-10-29T01:21:31Z" })), {
@@ -573,6 +582,101 @@ describe("label-time snapshot", () => {
 				detail,
 			);
 		}
+	});
+
+	it("takes title evidence from the snapshot read", () => {
+		const cases: [BodyHistory, string, string][] = [
+			[
+				history({ totalRenames: 1, renamedAt: ["2026-10-29T01:21:38Z"] }),
+				"T",
+				"renamed_since_label",
+			],
+			[
+				history({ totalRenames: 1, renamedAt: ["2026-10-29T01:30:00Z"] }),
+				"T",
+				"renamed_since_label",
+			],
+			[
+				history({ totalRenames: 2, renamedAt: ["2026-10-29T01:00:00Z"] }),
+				"T",
+				"rename_history_incomplete",
+			],
+			[history({}), "Old title", "title_changed_between_reads"],
+		];
+
+		for (const [h, issueTitle, detail] of cases) {
+			assert.deepEqual(
+				bind(h, "2026-10-29T01:21:38Z", false, issueTitle),
+				{ kind: "ambiguous", detail },
+				detail,
+			);
+		}
+
+		assert.equal(
+			bind(history({ totalRenames: 1, renamedAt: ["2026-10-29T01:00:00Z"] }))
+				.kind,
+			"proved",
+		);
+	});
+
+	it("refuses a rename between the timeline read and the snapshot read", async () => {
+		const renamed = (issue: FakeIssue, at: string) => {
+			issue.renames.push({
+				createdAt: at,
+				previousTitle: issue.title,
+				currentTitle: "Renamed",
+			});
+			issue.title = "Renamed";
+		};
+
+		const cases: [(issue: FakeIssue) => void, string][] = [
+			[
+				(issue) => renamed(issue, "2026-10-29T01:30:00Z"),
+				"renamed_since_label",
+			],
+			[(issue) => renamed(issue, LABEL_AT), "renamed_since_label"],
+			[
+				(issue) => {
+					issue.title = "Renamed";
+				},
+				"title_changed_between_reads",
+			],
+			[
+				(issue) => {
+					issue.totalRenames = 101;
+				},
+				"rename_history_incomplete",
+			],
+		];
+
+		for (const [change, detail] of cases) {
+			const github = new FakeGitHub();
+
+			github.add(labeledBy("writer"));
+			github.beforeGraphql = change;
+
+			assert.deepEqual(
+				(await admit(github)).reasons,
+				[{ kind: "ambiguous_snapshot", detail }],
+				detail,
+			);
+		}
+
+		const before = new FakeGitHub();
+
+		before.add(
+			labeledBy("writer", {
+				renames: [
+					{
+						createdAt: "2026-10-29T01:00:00Z",
+						previousTitle: "Old",
+						currentTitle: "Fixture 14",
+					},
+				],
+			}),
+		);
+
+		assert.equal((await admit(before)).decision, "admitted");
 	});
 
 	it("binds an issue edited after its label through the adapter", async () => {

@@ -72,6 +72,9 @@ export type BodyHistory = {
 	readonly totalVersions: number;
 	/** Newest first, as GitHub returns them. */
 	readonly versions: readonly BodyVersion[];
+	readonly totalRenames: number;
+	/** When each returned title rename happened, from the same response as `title`. */
+	readonly renamedAt: readonly string[];
 };
 
 /** GitHub looks labels up case-insensitively, so `name` is the stored name. */
@@ -88,6 +91,8 @@ export const DEFAULT_PAGING: GitHubPaging = { pageSize: 100, maxPages: 10 };
 
 export const MAX_BODY_VERSIONS = 100;
 
+export const MAX_TITLE_RENAMES = 100;
+
 const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}(?:\[bot\])?$/;
 
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
@@ -102,6 +107,10 @@ const BODY_HISTORY_QUERY = `query($owner: String!, $name: String!, $number: Int!
       userContentEdits(first: ${MAX_BODY_VERSIONS}) {
         totalCount
         nodes { editedAt deletedAt diff }
+      }
+      renames: timelineItems(itemTypes: [RENAMED_TITLE_EVENT], last: ${MAX_TITLE_RENAMES}) {
+        totalCount
+        nodes { ... on RenamedTitleEvent { createdAt previousTitle currentTitle } }
       }
     }
   }
@@ -336,6 +345,18 @@ function parseBodyVersion(value: JsonValue): BodyVersion | null {
 	return { editedAt, deleted: deletedAt !== null, text };
 }
 
+function renameTimeOf(value: JsonValue): string | null {
+	const rename = objectOf(value);
+
+	if (rename === null) return null;
+
+	const at = timestampOf(fieldOf(rename, "createdAt"));
+	const previous = stringOf(fieldOf(rename, "previousTitle"));
+	const current = stringOf(fieldOf(rename, "currentTitle"));
+
+	return previous === null || current === null ? null : at;
+}
+
 function parseBodyHistory(value: JsonValue | undefined): BodyHistory | null {
 	const issue = objectOf(pathOf(value, ["data", "repository", "issue"]));
 
@@ -349,6 +370,9 @@ function parseBodyHistory(value: JsonValue | undefined): BodyHistory | null {
 	const edits = objectOf(fieldOf(issue, "userContentEdits")) ?? {};
 	const totalVersions = countOf(fieldOf(edits, "totalCount"));
 	const nodes = arrayOf(fieldOf(edits, "nodes"));
+	const renames = objectOf(fieldOf(issue, "renames")) ?? {};
+	const totalRenames = countOf(fieldOf(renames, "totalCount"));
+	const renameNodes = arrayOf(fieldOf(renames, "nodes"));
 
 	if (
 		title === null ||
@@ -356,7 +380,9 @@ function parseBodyHistory(value: JsonValue | undefined): BodyHistory | null {
 		(edited !== null && lastEditedAt === null) ||
 		includesCreatedEdit === null ||
 		totalVersions === null ||
-		nodes === null
+		nodes === null ||
+		totalRenames === null ||
+		renameNodes === null
 	) {
 		return null;
 	}
@@ -370,6 +396,15 @@ function parseBodyHistory(value: JsonValue | undefined): BodyHistory | null {
 		versions.push(version);
 	}
 
+	const renamedAt: string[] = [];
+
+	for (const node of renameNodes) {
+		const at = renameTimeOf(node);
+
+		if (at === null) return null;
+		renamedAt.push(at);
+	}
+
 	return {
 		title,
 		body,
@@ -377,6 +412,8 @@ function parseBodyHistory(value: JsonValue | undefined): BodyHistory | null {
 		includesCreatedEdit,
 		totalVersions,
 		versions,
+		totalRenames,
+		renamedAt,
 	};
 }
 

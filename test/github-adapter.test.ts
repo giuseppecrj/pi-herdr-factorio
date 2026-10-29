@@ -319,16 +319,82 @@ describe("GitHubTicketAdapter reads", () => {
 					{ editedAt: "2026-10-29T01:21:47Z", deleted: false, text: "v2" },
 					{ editedAt: "2026-10-29T01:21:21Z", deleted: false, text: "v1" },
 				],
+				totalRenames: 0,
+				renamedAt: [],
 			},
 		});
 
 		const [call] = github.calls;
 		const query = call?.find((arg) => arg.startsWith("query=")) ?? "";
 
+		assert.ok(
+			query.includes(
+				"timelineItems(itemTypes: [RENAMED_TITLE_EVENT], last: 100)",
+			),
+		);
+
 		assert.ok(!query.includes("giuseppecrj"));
 		assert.ok(!query.includes("15"));
 		assert.ok(call?.includes("number=15"));
 		assert.ok(call?.includes("owner=giuseppecrj"));
+	});
+
+	it("reads title renames from the same GraphQL response", async () => {
+		const github = new FakeGitHub();
+
+		github.add(
+			fakeIssue(26, {
+				totalRenames: 3,
+				renames: [
+					{
+						createdAt: "2026-10-29T02:14:58Z",
+						previousTitle: "Old",
+						currentTitle: "Fixture 26",
+					},
+				],
+			}),
+		);
+
+		const read = await adapterFor(github).readBodyHistory(26);
+
+		assert.ok(read.kind === "ok");
+		assert.equal(read.value.totalRenames, 3);
+		assert.deepEqual(read.value.renamedAt, ["2026-10-29T02:14:58Z"]);
+
+		for (const node of [
+			{ previousTitle: "a", currentTitle: "b" },
+			{ createdAt: "yesterday", previousTitle: "a", currentTitle: "b" },
+			{ createdAt: "2026-10-29T02:14:58Z", currentTitle: "b" },
+			{},
+		]) {
+			const adapter = new GitHubTicketAdapter({
+				exec: async () => ({
+					stdout: JSON.stringify({
+						data: {
+							repository: {
+								issue: {
+									title: "t",
+									body: "b",
+									lastEditedAt: null,
+									includesCreatedEdit: false,
+									userContentEdits: { totalCount: 0, nodes: [] },
+									renames: { totalCount: 1, nodes: [node] },
+								},
+							},
+						},
+					}),
+					stderr: "",
+					code: 0,
+				}),
+				repo,
+			});
+
+			assert.deepEqual(
+				await adapter.readBodyHistory(1),
+				{ kind: "failed", failure: { kind: "malformed_response" } },
+				JSON.stringify(node),
+			);
+		}
 	});
 
 	it("fails body history for a missing issue and a version without diff", async () => {

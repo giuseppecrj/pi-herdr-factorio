@@ -121,6 +121,12 @@ export type FakeVersion = {
 	diff: string | null;
 };
 
+export type FakeRename = {
+	createdAt: string;
+	previousTitle: string;
+	currentTitle: string;
+};
+
 export type FakeIssue = {
 	number: number;
 	state: "open" | "closed";
@@ -134,6 +140,8 @@ export type FakeIssue = {
 	includesCreatedEdit: boolean;
 	versions: FakeVersion[];
 	totalVersions: number | null;
+	renames: FakeRename[];
+	totalRenames: number | null;
 };
 
 export function fakeIssue(number: number, change: Partial<FakeIssue> = {}) {
@@ -150,6 +158,8 @@ export function fakeIssue(number: number, change: Partial<FakeIssue> = {}) {
 		includesCreatedEdit: false,
 		versions: [],
 		totalVersions: null,
+		renames: [],
+		totalRenames: null,
 		...change,
 	};
 
@@ -225,6 +235,8 @@ export class FakeGitHub {
 	readonly failures = new Map<string, ExecResult>();
 	workflow: string | null = TRUSTED_WORKFLOW;
 	repoLabels: string[] = ["factory:enabled"];
+	/** Runs just before a GraphQL answer, to change an issue between reads. */
+	beforeGraphql: ((issue: FakeIssue) => void) | null = null;
 
 	constructor() {
 		this.permissions.set("giuseppecrj", "admin");
@@ -360,6 +372,8 @@ export class FakeGitHub {
 			};
 		}
 
+		this.beforeGraphql?.(issue);
+
 		return ok({
 			data: {
 				repository: {
@@ -371,6 +385,10 @@ export class FakeGitHub {
 						userContentEdits: {
 							totalCount: issue.totalVersions ?? issue.versions.length,
 							nodes: issue.versions,
+						},
+						renames: {
+							totalCount: issue.totalRenames ?? issue.renames.length,
+							nodes: issue.renames,
 						},
 					},
 				},
