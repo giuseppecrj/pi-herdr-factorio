@@ -504,7 +504,7 @@ function readModelStage(
 	const entries = stageEntries(stages, stage, [...MODEL_KEYS, ...BUDGET_KEYS]);
 
 	const model = entries.has("model")
-		? readModel(entries.get("model") ?? null, `stages.${stage}.model`)
+		? readPrimaryModel(entries.get("model") ?? null, `stages.${stage}.model`)
 		: defaultModel();
 
 	const fallbackModel = entries.has("fallback_model")
@@ -514,11 +514,29 @@ function readModelStage(
 			)
 		: null;
 
-	return Object.freeze({
-		model,
-		fallbackModel,
-		budget: readBudget(entries, stage),
-	});
+	const budget = readBudget(entries, stage);
+
+	if (budget.wallMs <= STAGE_CLEANUP_RESERVE_MS) {
+		fail(
+			`stages.${stage}.wall_ms`,
+			`must be larger than the ${STAGE_CLEANUP_RESERVE_MS} ms cleanup reserve: the sandbox stops a stage at wall_ms minus the reserve`,
+		);
+	}
+
+	return Object.freeze({ model, fallbackModel, budget });
+}
+
+function readPrimaryModel(node: YamlNode, field: string): ModelId {
+	const model = readModel(node, field);
+
+	if (!model.startsWith("openai/")) {
+		fail(
+			field,
+			"must be an openai model: the sandbox serves a stage's model only on its openai route",
+		);
+	}
+
+	return model;
 }
 
 function readFallbackModel(node: YamlNode, field: string): ModelId {

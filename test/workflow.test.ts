@@ -356,6 +356,47 @@ describe("parseWorkflow", () => {
 		assert.match(error.message, /exe\.dev credits/);
 	});
 
+	it("rejects a primary model whose provider the sandbox cannot route", () => {
+		for (const model of [
+			"xai/grok-4.6",
+			"google/gemini-3-pro",
+			"local/llama",
+		]) {
+			const error = validation(
+				frontMatter(`stages:\n  specify:\n    model: ${model}`),
+			);
+
+			assert.equal(error.field, "stages.specify.model", model);
+			assert.match(error.message, /openai route/, model);
+		}
+
+		assert.equal(
+			parse(frontMatter("stages:\n  specify:\n    model: openai/gpt-6.1-terra"))
+				.kind,
+			"valid",
+		);
+	});
+
+	it("needs a model stage's wall_ms to exceed the 10 s cleanup reserve", () => {
+		for (const value of ["1", "9999", "10000"]) {
+			const error = validation(
+				frontMatter(`stages:\n  specify:\n    wall_ms: ${value}`),
+			);
+
+			assert.equal(error.field, "stages.specify.wall_ms", value);
+			assert.match(error.message, /cleanup reserve/, value);
+		}
+
+		assert.equal(
+			parse(frontMatter("stages:\n  specify:\n    wall_ms: 10001")).kind,
+			"valid",
+		);
+		assert.equal(
+			parse(frontMatter("stages:\n  land:\n    wall_ms: 5000")).kind,
+			"valid",
+		);
+	});
+
 	it("rejects malformed model IDs and a model key on a no-model stage", () => {
 		assert.equal(
 			validation(frontMatter("stages:\n  build:\n    model: gpt")).field,

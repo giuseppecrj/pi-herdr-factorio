@@ -597,9 +597,9 @@ Anchors (`&name`) and aliases (`*name`) are not allowed anywhere in the front ma
 | `retry.max_backoff_ms` | integer | `300000` | Positive. |
 | `usage.max_tokens_per_run` | integer | `500000` | Positive. |
 | `stages.<stage>.max_turns` | integer | `20` | Positive. |
-| `stages.<stage>.wall_ms` | integer | `1800000` | Positive. |
+| `stages.<stage>.wall_ms` | integer | `1800000` | Positive. For `specify`, `accept`, `build`, `validate` and `review` it must be larger than 10000, the sandbox's cleanup reserve: the stage's hard deadline is `wall_ms` minus that reserve. |
 | `stages.<stage>.stall_ms` | integer | `300000` | Positive. |
-| `stages.<stage>.model` | `provider/model` | `openai/gpt-6.1-sol` | Only for `specify`, `accept`, `build`, `validate` and `review`. Provider `anthropic` is rejected: on the VM it spends exe.dev credits until the owner's proxy exists. |
+| `stages.<stage>.model` | `provider/model` | `openai/gpt-6.1-sol` | Only for `specify`, `accept`, `build`, `validate` and `review`. Provider `anthropic` is rejected: on the VM it spends exe.dev credits until the owner's proxy exists. Any other provider but `openai` is rejected too, because the sandbox serves a stage's model only on its `openai` route. |
 | `stages.<stage>.fallback_model` | `xai/model` | none | Optional, and only for the model stages. The model rules above apply, and the provider must be `xai`. After a structured content-policy refusal on `model`, the stage runs once more on this model. `workflow-check` prints it as `config.stages.<stage>.fallbackModel`, `null` when unset. |
 | `checkpoints.approve_merge.mode` | string | `always` | `always` is the only accepted mode. `never` is rejected because v1 stops every run at Human Review. Any other mode is unknown and rejected. |
 
