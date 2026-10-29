@@ -965,6 +965,22 @@ describe("Orchestrator stage results", () => {
 		);
 	});
 
+	it("passes the stage's fallback_model to the launch", async () => {
+		const { github, executor, start } = world();
+
+		github.add(labeled(14));
+		setWorkflow(
+			github,
+			"  specify:\n    model: openai/gpt-6.1-sol\n",
+			"  specify:\n    model: openai/gpt-6.1-sol\n    fallback_model: xai/grok-4.6\n",
+		);
+		executor.behaviors = [{ kind: "pass", usage: 1 }];
+
+		await start().tick();
+
+		assert.equal(executor.launches[0]?.settings.fallback, "xai/grok-4.6");
+	});
+
 	it("passes the run's remaining tokens and the next attempt to a retry", async () => {
 		const { github, clock, executor, start } = world();
 

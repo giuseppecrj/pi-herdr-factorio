@@ -111,7 +111,8 @@ This is every message the factory prints. `<field>` is a dotted path as describe
 | `must be an integer no larger than 9007199254740991` | An integer is too large. |
 | `must be <provider>/<model>` | A model ID has the wrong form. |
 | `provider anthropic is not allowed: on the VM it spends exe.dev credits until the owner's proxy exists` | A model ID uses provider `anthropic`. |
-| `<stage> runs no model, so it takes no model key` | `stages.admit.model` or `stages.land.model`. |
+| `<stage> runs no model, so it takes no model key` | `model` or `fallback_model` under `stages.admit` or `stages.land`. |
+| `must be an xai model: the sandbox serves a fallback only on its xai route` | A `fallback_model` names a provider other than `xai`. |
 | `must be exactly $VAR_NAME to use the environment` | `workspace.root` starts with `$` but is not a plain variable name. |
 | `names an environment variable that is not set` | `workspace.root` names an unset or empty variable. |
 | `uses ~ but HOME is not set` | `workspace.root` starts with `~` and `HOME` is unset or empty. |
@@ -405,7 +406,7 @@ Each stage runs in the sandbox described in `docs/operations/sandbox.md`. On sta
 
 While the preflight fails, a launch returns `sandbox_unavailable`. That result is not a failure and is not retried, and no model runs. The run stays `blocked` at `specify` and keeps its slot, so a third issue waits in `queued` while two are blocked. A `blocked` run launches again on the first tick whose preflight passes.
 
-A launched stage gets the stage's model and budget from the loaded workflow, the attempt, and the run's remaining tokens, which are `usage.max_tokens_per_run` minus what the run has used. In this release it runs one fixed probe prompt with no tools. Its result ends the stage:
+A launched stage gets the stage's model, fallback model and budget from the loaded workflow, the attempt, and the run's remaining tokens, which are `usage.max_tokens_per_run` minus what the run has used. In this release it runs one fixed probe prompt with no tools. Its result ends the stage:
 
 | Result | Run |
 | --- | --- |
@@ -599,6 +600,7 @@ Anchors (`&name`) and aliases (`*name`) are not allowed anywhere in the front ma
 | `stages.<stage>.wall_ms` | integer | `1800000` | Positive. |
 | `stages.<stage>.stall_ms` | integer | `300000` | Positive. |
 | `stages.<stage>.model` | `provider/model` | `openai/gpt-6.1-sol` | Only for `specify`, `accept`, `build`, `validate` and `review`. Provider `anthropic` is rejected: on the VM it spends exe.dev credits until the owner's proxy exists. |
+| `stages.<stage>.fallback_model` | `xai/model` | none | Optional, and only for the model stages. The model rules above apply, and the provider must be `xai`. After a structured content-policy refusal on `model`, the stage runs once more on this model. `workflow-check` prints it as `config.stages.<stage>.fallbackModel`, `null` when unset. |
 | `checkpoints.approve_merge.mode` | string | `always` | `always` is the only accepted mode. `never` is rejected because v1 stops every run at Human Review. Any other mode is unknown and rejected. |
 
 `<stage>` is one of `admit`, `specify`, `accept`, `build`, `validate`, `review` and `land`.

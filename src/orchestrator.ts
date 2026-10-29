@@ -2029,7 +2029,7 @@ export class Orchestrator {
 			workspace: files.workspacePath(run.runId),
 			settings: {
 				model: config.stages[stage].model,
-				fallback: null,
+				fallback: config.stages[stage].fallbackModel,
 				budget: config.stages[stage].budget,
 				maxTokens: null,
 			},

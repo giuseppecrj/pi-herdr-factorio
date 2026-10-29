@@ -60,7 +60,7 @@ import {
 	SessionTracker,
 } from "../../server/sandbox/settle.ts";
 import type { Digest } from "../../src/run.ts";
-import type { ModelId } from "../../src/workflow.ts";
+import { isRepoSlug, type ModelId, parseWorkflow } from "../../src/workflow.ts";
 
 const FIXTURES = new URL("./fixtures/", import.meta.url).pathname;
 const RUN = "a".repeat(64);
@@ -900,6 +900,47 @@ describe("runStage refusal fallback", () => {
 		assert.equal(alone.kind, "refused");
 		assert.equal(alone.receipt.fallback, null);
 		assert.deepEqual(single.launches, ["openai/gpt-6.1-sol"]);
+	});
+
+	it("runs the fallback_model the workflow configures for the stage", async () => {
+		const repo = "giuseppecrj/pi-herdr-factorio";
+
+		assert.ok(isRepoSlug(repo));
+
+		const parsed = parseWorkflow({
+			text: `---\nrepository: ${repo}\nstages:\n  specify:\n    fallback_model: xai/grok-4.7-test\n---\n`,
+			repo,
+			env: (name) => (name === "HOME" ? "/home/factory" : undefined),
+		});
+
+		assert.equal(parsed.kind, "valid");
+
+		if (parsed.kind !== "valid") return;
+
+		const { specify } = parsed.config.stages;
+		const h = harness([replayer(refusal), replayer(pass)]);
+
+		const result = await runStage(
+			input(
+				{},
+				{
+					model: specify.model,
+					fallback: specify.fallbackModel,
+					budget: specify.budget,
+				},
+			),
+			h.host,
+		);
+
+		assert.deepEqual(h.launches, ["openai/gpt-6.1-sol", "xai/grok-4.7-test"]);
+		assert.equal(result.receipt.fallback?.requested, "xai/grok-4.7-test");
+
+		const xai = h.tables[0]?.routes.find((route) => route.id === "model-xai");
+
+		assert.deepEqual(
+			xai?.body.kind === "json" ? xai.body.constraints[0] : null,
+			{ kind: "one_of", pointer: "/model", values: ["grok-4.7-test"] },
+		);
 	});
 
 	it("does not fall back on a refusal text part, which passes and fails later output checks", async () => {

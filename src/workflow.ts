@@ -48,7 +48,11 @@ export type StageBudget = {
 
 export type StageSettings = {
 	readonly [S in Stage]: S extends ModelStage
-		? { readonly model: ModelId; readonly budget: StageBudget }
+		? {
+				readonly model: ModelId;
+				readonly fallbackModel: ModelId | null;
+				readonly budget: StageBudget;
+			}
 		: { readonly budget: StageBudget };
 };
 
@@ -429,6 +433,8 @@ function readWorkspaceRoot(
 
 const BUDGET_KEYS = ["max_turns", "wall_ms", "stall_ms"];
 
+const MODEL_KEYS = ["model", "fallback_model"];
+
 function stageEntries(
 	stages: Map<string, YamlNode>,
 	stage: Stage,
@@ -443,9 +449,9 @@ function stageEntries(
 	for (const name of entries.keys()) {
 		rejectCommandKey(name, `${field}.${UNKNOWN_KEY}`);
 
-		if (name === "model" && !allowed.includes(name)) {
+		if (MODEL_KEYS.includes(name) && !allowed.includes(name)) {
 			fail(
-				`${field}.model`,
+				`${field}.${name}`,
 				`${stage} runs no model, so it takes no model key`,
 			);
 		}
@@ -488,13 +494,37 @@ function readModelStage(
 	stages: Map<string, YamlNode>,
 	stage: ModelStage,
 ): StageSettings[typeof stage] {
-	const entries = stageEntries(stages, stage, ["model", ...BUDGET_KEYS]);
+	const entries = stageEntries(stages, stage, [...MODEL_KEYS, ...BUDGET_KEYS]);
 
 	const model = entries.has("model")
 		? readModel(entries.get("model") ?? null, `stages.${stage}.model`)
 		: defaultModel();
 
-	return Object.freeze({ model, budget: readBudget(entries, stage) });
+	const fallbackModel = entries.has("fallback_model")
+		? readFallbackModel(
+				entries.get("fallback_model") ?? null,
+				`stages.${stage}.fallback_model`,
+			)
+		: null;
+
+	return Object.freeze({
+		model,
+		fallbackModel,
+		budget: readBudget(entries, stage),
+	});
+}
+
+function readFallbackModel(node: YamlNode, field: string): ModelId {
+	const model = readModel(node, field);
+
+	if (!model.startsWith("xai/")) {
+		fail(
+			field,
+			"must be an xai model: the sandbox serves a fallback only on its xai route",
+		);
+	}
+
+	return model;
 }
 
 function defaultModel(): ModelId {
