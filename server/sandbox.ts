@@ -1,8 +1,9 @@
 import { randomBytes } from "node:crypto";
 import {
-	cpSync,
 	lstatSync,
 	mkdirSync,
+	readdirSync,
+	readFileSync,
 	realpathSync,
 	statSync,
 	writeFileSync,
@@ -607,6 +608,27 @@ function freshDir(base: string): string {
 	}
 }
 
+/**
+ * Copies the bundle's agent template into a fresh private dir Pi can write:
+ * `auth.json`, the settings lock and child sessions live there. The bundle
+ * is installed read-only, so its modes are not kept. Only regular files are
+ * copied.
+ */
+export function agentDirFrom(template: string, dest: string): void {
+	mkdirSync(dest, { mode: 0o700 });
+
+	for (const name of readdirSync(template)) {
+		if (lstatSync(join(template, name)).isFile()) {
+			writeFileSync(join(dest, name), readFileSync(join(template, name)), {
+				mode: 0o600,
+				flag: "wx",
+			});
+		}
+	}
+
+	mkdirSync(join(dest, "sessions"), { mode: 0o700 });
+}
+
 /** Where the workspace's `.git` stands. A symlink or other file is unsafe to bind. */
 export function gitState(workspace: string): "dir" | "absent" | "unsafe" {
 	try {
@@ -727,11 +749,7 @@ export function sandboxHost(config: SandboxHostConfig): StageHost {
 
 			const agentDir = join(stageDir, `agent-${session}`);
 
-			cpSync(join(config.bundleDir, "pi-agent"), agentDir, {
-				recursive: true,
-				verbatimSymlinks: true,
-			});
-			mkdirSync(join(agentDir, "sessions"), { recursive: true, mode: 0o700 });
+			agentDirFrom(join(config.bundleDir, "pi-agent"), agentDir);
 			agentDirs.set(session, agentDir);
 
 			const unit = scopeUnit(

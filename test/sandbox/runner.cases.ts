@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import {
+	chmodSync,
 	mkdirSync,
 	mkdtempSync,
+	statSync,
 	readFileSync,
 	rmSync,
 	symlinkSync,
@@ -14,6 +16,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { after, before, describe, it } from "node:test";
 import {
+	agentDirFrom,
 	bareModel,
 	hostSessionPath,
 	runStage,
@@ -1178,6 +1181,32 @@ describe("runStage with a fake Pi process", () => {
 		const result = await runStage(input(), processHost(["crash"]));
 
 		assert.equal(result.kind === "failed" && result.exit, "crashed");
+	});
+});
+
+describe("per-stage agent dir", () => {
+	it("copies a read-only bundle template into a private writable dir with a sessions dir", () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-agent-template-"));
+		const template = join(dir, "pi-agent");
+		const dest = join(dir, "agent-0");
+
+		try {
+			mkdirSync(template);
+			writeFileSync(join(template, "models.json"), "{}\n");
+			chmodSync(join(template, "models.json"), 0o444);
+			chmodSync(template, 0o555);
+
+			agentDirFrom(template, dest);
+
+			assert.equal(statSync(dest).mode & 0o777, 0o700);
+			assert.equal(statSync(join(dest, "sessions")).mode & 0o777, 0o700);
+			assert.equal(statSync(join(dest, "models.json")).mode & 0o777, 0o600);
+			assert.equal(readFileSync(join(dest, "models.json"), "utf8"), "{}\n");
+			writeFileSync(join(dest, "auth.json"), "{}");
+		} finally {
+			chmodSync(template, 0o755);
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });
 
