@@ -457,7 +457,6 @@ describe("settlement predicate", () => {
 		]);
 		assert.equal(tracker.launches, 1);
 		assert.equal(tracker.results, 1);
-		assert.equal(tracker.parentTokens, 7580);
 	});
 
 	it("does not settle while a steer or follow-up is queued", () => {
@@ -853,6 +852,27 @@ describe("runStage", () => {
 		assert.deepEqual(h.launches, []);
 		assert.equal(h.receipts.length, 1);
 		assert.deepEqual(result.receipt.stderr, []);
+	});
+});
+
+describe("runStage settlement on a queue update", () => {
+	it("finishes when clearing the queue is what satisfies settlement", async () => {
+		const h = harness([
+			replayer([
+				started("x"),
+				{ type: "agent_start" },
+				{ type: "turn_start" },
+				assistant({ tokens: 12 }),
+				{ type: "queue_update", steering: ["later"], followUp: [] },
+				{ type: "agent_settled", aborted: false },
+				{ type: "queue_update", steering: [], followUp: [] },
+			]),
+		]);
+
+		const result = await runStage(input(), h.host);
+
+		assert.equal(result.kind, "passed");
+		assert.equal(result.usage, 12);
 	});
 });
 

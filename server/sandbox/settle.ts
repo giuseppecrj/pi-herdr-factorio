@@ -111,8 +111,6 @@ export class SessionTracker {
 	settledAfterLast = false;
 	aborted: boolean | null = null;
 	lastAssistant: AssistantEnd | null = null;
-	parentTokens = 0;
-	readonly byModel = new Map<string, number>();
 
 	constructor(promptId: string, maxTurns: number, turnsSoFar: number) {
 		this.#promptId = promptId;
@@ -136,18 +134,12 @@ export class SessionTracker {
 				return this.turns > this.#maxTurns
 					? { kind: "cap", cap: "turns" }
 					: { kind: "none" };
-			case "assistant_end": {
-				const tokens = record.message.usage?.totalTokens ?? 0;
-				const key = modelKey(record.message.provider, record.message.model);
-
+			case "assistant_end":
 				this.lastAssistant = record.message;
-				this.parentTokens += tokens;
-				this.byModel.set(key, (this.byModel.get(key) ?? 0) + tokens);
 
 				return this.turns >= this.#maxTurns
 					? { kind: "arm_turn_cap" }
 					: { kind: "none" };
-			}
 
 			case "subagent_launch":
 				this.launches += 1;
@@ -161,7 +153,7 @@ export class SessionTracker {
 			case "queue":
 				this.queued = record.queued;
 
-				return { kind: "none" };
+				return this.settled() ? { kind: "settled" } : { kind: "none" };
 			case "ui_request":
 				return DIALOG_METHODS.some((method) => method === record.method)
 					? { kind: "answer_ui", id: record.id }
