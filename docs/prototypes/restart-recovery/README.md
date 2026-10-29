@@ -118,7 +118,7 @@ A comment from any other author is ignored. Rule 5 applies to every comment by `
 
 ## Deleted bot comments
 
-Only a user with write access can delete a bot comment, and the deletion moves the issue's `updated_at`, as measured on #119 above. The controller tolerates a deletion and reports it as `ledger_behind`: its local claim record mirrors the last marker that landed, and the higher `seq` of that record and the ledger is the run's state. `docs/operations/factory-cli.md`, under The local record and the ledger, gives the rule, the known `duplicate_seq` limit when both are behind, and how to discard a run.
+Only a user with write access can delete a bot comment, and the deletion moves the issue's `updated_at`, as measured on #119 above. The controller tolerates a deletion and reports it as `ledger_behind`: its local claim record mirrors the last marker that landed, including the run's cumulative `usage`, and the higher `seq` of that record and the ledger is the run's state. A run that ends keeps its record with the terminal status until a ledger read shows that marker or a later one, so a restart whose read omits the terminal marker neither posts it again nor runs the event again. A record whose run has not ended holds a slot until it is adopted, released or dropped, even while its recovery read fails. `docs/operations/factory-cli.md`, under The local record and the ledger, gives the rule, the known `duplicate_seq` limit when both are behind, the gaps that remain after deleted comments, and how to discard a run.
 
 ## Candidate list lag
 
