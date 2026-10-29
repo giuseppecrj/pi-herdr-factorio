@@ -2775,6 +2775,14 @@ describe("Orchestrator persisted claim slots", () => {
 
 		assert.deepEqual(healed.corrupt, []);
 		assert.deepEqual(runIssues(healed), [15, 16]);
+		assert.deepEqual(healed.queued, [14]);
+
+		clock.t += 60_000;
+
+		const waiting = await controller.tick();
+
+		assert.deepEqual(runIssues(waiting), [15, 16]);
+		assert.deepEqual(waiting.queued, [14]);
 
 		other.state = "closed";
 		other.updatedAt = "2026-10-29T02:03:00Z";
@@ -2783,6 +2791,7 @@ describe("Orchestrator persisted claim slots", () => {
 		const freed = await controller.tick();
 
 		assert.deepEqual(runIssues(freed), [14, 16]);
+		assert.deepEqual(freed.queued, []);
 		assert.deepEqual(statuses(github, 14), ["1:claimed"]);
 	});
 
@@ -2853,6 +2862,45 @@ describe("Orchestrator persisted claim slots", () => {
 		assert.deepEqual(runIssues(again), [14, 15]);
 		assert.deepEqual(again.queued, [16]);
 		assert.equal(files.claims.size, 3);
+	});
+
+	it("lists a claimed run that waits for a slot after the cap is lowered in queued", async () => {
+		const { github, clock, files, start } = world();
+
+		const cap = (limit: number) => {
+			github.workflow = (github.workflow ?? "").replace(
+				/max_concurrent: \d/,
+				`max_concurrent: ${limit}`,
+			);
+		};
+
+		github.add(labeled(14));
+		github.add(labeled(15));
+		github.add(labeled(16));
+		cap(3);
+		await start().tick();
+
+		assert.equal(files.claims.size, 3);
+
+		cap(2);
+		clock.t += 30_000;
+
+		const controller = start();
+		const waiting = await controller.tick();
+
+		assert.deepEqual(runIssues(waiting), [14, 15]);
+		assert.deepEqual(waiting.queued, [16]);
+		assert.deepEqual(waiting.corrupt, []);
+		assert.deepEqual(waiting.ledgerBehind, []);
+
+		clock.t += 30_000;
+
+		const again = await controller.tick();
+
+		assert.deepEqual(runIssues(again), [14, 15]);
+		assert.deepEqual(again.queued, [16]);
+		assert.equal(files.claims.size, 3);
+		assert.deepEqual(statuses(github, 16), ["1:claimed", "2:blocked"]);
 	});
 });
 

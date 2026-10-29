@@ -509,7 +509,7 @@ export class Orchestrator {
 		if (candidates.kind === "failed") reasons.push("candidates_unavailable");
 
 		if (candidates.kind === "ok") {
-			await this.#discover(candidates.value);
+			await this.#discover(candidates.value, queued);
 		}
 
 		await this.#confirmEnds();
@@ -1007,7 +1007,10 @@ export class Orchestrator {
 		);
 	}
 
-	async #discover(candidates: readonly IssueRecord[]): Promise<void> {
+	async #discover(
+		candidates: readonly IssueRecord[],
+		queued: number[],
+	): Promise<void> {
 		const records = new Map(
 			candidates.map((record) => [record.number, record]),
 		);
@@ -1063,6 +1066,7 @@ export class Orchestrator {
 				if (candidate && !this.#fits(current.status)) {
 					this.#recover.add(issue);
 					this.#reserved.add(issue);
+					queued.push(issue);
 					continue;
 				}
 
