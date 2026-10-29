@@ -670,7 +670,13 @@ export class Orchestrator {
 		run: ActiveRun,
 		candidates: readonly IssueRecord[],
 	): Promise<Eligibility> {
-		if (run.phase.kind === "ending") return "unverified";
+		if (run.phase.kind === "ending") {
+			if (!this.#staleSinceTick.has(run.issue)) return "unverified";
+
+			const ledger = await this.#recheckLedger(run, null);
+
+			return ledger === "confirmed" ? "unverified" : ledger;
+		}
 
 		let record = candidates.find((item) => item.number === run.issue);
 
@@ -713,6 +719,10 @@ export class Orchestrator {
 
 		if (timeline.kind === "failed") return "unverified";
 
+		const ledger = await this.#recheckLedger(run, updatedAt);
+
+		if (ledger !== "confirmed") return ledger;
+
 		const latest = latestReadyEntry(timeline.value);
 
 		if (
@@ -725,35 +735,43 @@ export class Orchestrator {
 			return "released";
 		}
 
-		if (!this.#ledgerRead.has(run.issue)) {
-			const ledger = await this.#readLedger(run.issue);
+		this.#see(run.issue, updatedAt, { kind: "claimed" });
 
-			if (ledger.kind === "failed") return "unverified";
+		return "confirmed";
+	}
 
-			if (ledger.value.kind === "corrupt") {
-				this.#markCorrupt(run.issue, ledger.value, updatedAt);
-				this.#drop(run);
+	/** Reads a held run's ledger, unless this tick already read it clean, and drops or defers the run when it is not current. */
+	async #recheckLedger(
+		run: ActiveRun,
+		updatedAt: string | null,
+	): Promise<Eligibility> {
+		if (this.#ledgerRead.has(run.issue)) return "confirmed";
 
-				return "dropped";
-			}
+		const ledger = await this.#readLedger(run.issue);
 
-			const behind = this.#ledgerFreshness(run.issue, ledger.value);
+		if (ledger.kind === "failed") return "unverified";
 
-			if (behind === "stale") {
-				this.state.seen.delete(run.issue);
+		if (ledger.value.kind === "corrupt") {
+			this.#markCorrupt(run.issue, ledger.value, updatedAt);
+			this.#drop(run);
 
-				return "stale";
-			}
-
-			if (behind === "missing") {
-				this.#markMissing(run.issue, updatedAt);
-				this.#drop(run);
-
-				return "dropped";
-			}
+			return "dropped";
 		}
 
-		this.#see(run.issue, updatedAt, { kind: "claimed" });
+		const behind = this.#ledgerFreshness(run.issue, ledger.value);
+
+		if (behind === "stale") {
+			this.state.seen.delete(run.issue);
+
+			return "stale";
+		}
+
+		if (behind === "missing") {
+			this.#markMissing(run.issue, updatedAt);
+			this.#drop(run);
+
+			return "dropped";
+		}
 
 		return "confirmed";
 	}
@@ -1468,6 +1486,8 @@ export class Orchestrator {
 		const before = run.seq;
 
 		if ((await this.#recoverUncertainPost(run)) === "stop") return;
+
+		if (this.#staleSinceTick.has(run.issue)) return;
 
 		await this.#publishMarker(run);
 

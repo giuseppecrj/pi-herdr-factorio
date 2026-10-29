@@ -1575,7 +1575,11 @@ function lagComments(
 	let left = reads;
 
 	ctx.wire.intercept = async (command, args) => {
-		if (left === 0 || !args.some((arg) => arg.startsWith(path))) {
+		if (
+			left === 0 ||
+			issue.comments.length === visible ||
+			!args.some((arg) => arg.startsWith(path))
+		) {
 			return ctx.github.exec(command, args);
 		}
 
@@ -1758,6 +1762,70 @@ describe("Orchestrator acknowledged marker floor", () => {
 		assert.deepEqual(report.corrupt, []);
 		assert.equal(report.runs[0]?.runId, runOf(14));
 		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+	});
+});
+
+describe("Orchestrator deferred ledger publication", () => {
+	it("posts no marker for a stage that stalls while its issue is deferred, then reports marker_missing", async () => {
+		const { github, clock, executor, start } = world();
+		const issue = github.add(labeled(14));
+
+		executor.behaviors = [{ kind: "hang" }];
+
+		const controller = start();
+
+		await controller.tick();
+		issue.comments.length = 0;
+		issue.updatedAt = "2026-10-29T02:00:01Z";
+		clock.t += 30_000;
+
+		const deferred = await controller.tick();
+
+		assert.equal(deferred.runs[0]?.status, "running");
+		assert.deepEqual(deferred.corrupt, []);
+		clock.t += 300_001;
+		github.now = "2026-10-29T02:05:30Z";
+
+		const missing = await controller.tick();
+
+		assert.equal(executor.launches[0]?.signal.aborted, true);
+		assert.deepEqual(missing.corrupt, [
+			{ issue: 14, defect: "marker_missing" },
+		]);
+		assert.deepEqual(missing.runs, []);
+		assert.equal(github.markers(14).length, 0);
+		assert.equal(executor.launches.length, 1);
+	});
+
+	it("reads the ledger before it releases for a new ready event, so deleted markers end as marker_missing with no POST or launch", async () => {
+		const { github, clock, executor, start } = world();
+		const issue = github.add(labeled(14));
+		const controller = start();
+
+		await controller.tick();
+		clock.t += 30_000;
+		await controller.tick();
+		issue.comments.length = 0;
+		relabel(github, issue);
+		clock.t += 32 * 60_000;
+
+		const deferred = await controller.tick();
+
+		assert.deepEqual(deferred.corrupt, []);
+		assert.equal(deferred.runs[0]?.status, "blocked");
+
+		const missing = await controller.tick();
+
+		assert.deepEqual(missing.corrupt, [
+			{ issue: 14, defect: "marker_missing" },
+		]);
+		assert.deepEqual(missing.runs, []);
+
+		const later = await controller.tick();
+
+		assert.deepEqual(later.runs, []);
+		assert.equal(github.markers(14).length, 0);
+		assert.equal(executor.launches.length, 1);
 	});
 });
 
