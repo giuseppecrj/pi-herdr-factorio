@@ -133,11 +133,7 @@ export type RunPhase =
 			readonly kind: "blocked";
 			readonly reason: "stage_runner_not_installed";
 	  }
-	| {
-			readonly kind: "retry_queued";
-			readonly dueAt: number;
-			readonly cause: RetryCause;
-	  }
+	| { readonly kind: "retry_queued"; readonly dueAt: number }
 	| { readonly kind: "ending"; readonly status: TerminalStatus };
 
 /**
@@ -811,7 +807,6 @@ export class Orchestrator {
 				dueAt:
 					this.#input.clock.now() +
 					backoffMs(run.attempt - 1, limits.maxBackoffMs),
-				cause,
 			};
 		}
 
@@ -1330,7 +1325,6 @@ export class Orchestrator {
 				dueAt:
 					(created === undefined ? this.#tickAt : Date.parse(created)) +
 					backoffMs(Math.max(run.attempt - 1, 1), limits.maxBackoffMs),
-				cause: "interrupted",
 			};
 		}
 
