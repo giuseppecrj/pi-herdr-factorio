@@ -10,7 +10,7 @@ Every command reads `.github/factory/WORKFLOW.md` from GitHub through `gh`, neve
 
 No command starts a controller, calls a model or writes to GitHub.
 
-Errors and warnings carry only text the factory builds itself. They never quote `gh` output, an exec failure, a YAML error message, a value from `WORKFLOW.md` or a command-line argument. A second layer still redacts URL credentials: anything shaped like `scheme://user:secret@` in stdout, stderr or `/factory status` text is printed as `scheme://<redacted>@`.
+Errors and warnings carry only text the factory builds itself. They never quote `gh` output, an exec failure, a YAML error message, a value from `WORKFLOW.md` or a command-line argument. A second layer still redacts credentials in stdout, stderr and `/factory status` text. Anything shaped like `scheme://user:secret@` is printed as `scheme://<redacted>@`, and the value of a query parameter named `token`, `access_token`, `auth`, `key`, `password`, `secret`, `sig`, `signature` or `code`, in any case, is printed as `<redacted>`. In JSON output this applies to each string value before it is encoded, so it never spans two lines of one value.
 
 ## Commands
 

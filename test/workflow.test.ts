@@ -18,6 +18,7 @@ import {
 	modelsOf,
 	parseWorkflow,
 	type RepoSlug,
+	redactCredentials,
 	reloadWorkflow,
 	statusReport,
 	WORKFLOW_PATH,
@@ -1587,5 +1588,71 @@ describe("workflow file shapes", () => {
 		for (const stage of MODEL_STAGES.filter((name) => name !== "review")) {
 			assert.equal(parsed.config.stages[stage].model, DEFAULT_MODEL);
 		}
+	});
+});
+
+describe("second-layer redaction", () => {
+	it("redacts credential query parameters, case-insensitively", () => {
+		const names = [
+			"token",
+			"access_token",
+			"auth",
+			"key",
+			"password",
+			"secret",
+			"sig",
+			"signature",
+			"code",
+		];
+
+		for (const name of names) {
+			for (const spelled of [name, name.toUpperCase()]) {
+				assert.equal(
+					redactCredentials(
+						`https://h/x?page=2&${spelled}=${secret}&next=3#top`,
+					),
+					`https://h/x?page=2&${spelled}=<redacted>&next=3#top`,
+				);
+				assert.equal(
+					redactCredentials(`see https://h/x?${spelled}=${secret} now`),
+					`see https://h/x?${spelled}=<redacted> now`,
+				);
+			}
+		}
+
+		assert.equal(
+			redactCredentials("https://h/x?monkey=1&tokens=2"),
+			"https://h/x?monkey=1&tokens=2",
+		);
+	});
+
+	it("keeps unrelated text in a multiline value with ECONNREFUSED@proxy", async () => {
+		const general = [
+			"connect https://api.github.com",
+			"ECONNREFUSED@proxy:8080",
+		].join("\n");
+
+		const run = await runRaw(
+			["workflow-check", "--json", "--repo", repo],
+			serving(`${frontMatter("")}\n${general}\n`),
+		);
+
+		assert.equal(run.code, EXIT.ok);
+		assert.partialDeepStrictEqual(JSON.parse(run.stdout), {
+			guidance: { general: `body\n\n${general}` },
+		});
+	});
+
+	it("redacts a query credential inside a JSON string value", async () => {
+		const run = await runRaw(
+			["workflow-check", "--json", "--repo", repo],
+			serving(`${frontMatter("")}\nfetch https://h/x?token=${secret}\n`),
+		);
+
+		assert.equal(run.code, EXIT.ok);
+		assertNoSecret(run.stdout);
+		assert.partialDeepStrictEqual(JSON.parse(run.stdout), {
+			guidance: { general: "body\n\nfetch https://h/x?token=<redacted>" },
+		});
 	});
 });

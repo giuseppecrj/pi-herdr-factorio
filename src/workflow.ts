@@ -174,9 +174,17 @@ const WITHHELD_NAME = "(name withheld)";
 
 const URL_USERINFO = /([a-z][a-z0-9+.-]*:\/\/)[^\s/?#]*@/gi;
 
-/** Replaces the userinfo of every `scheme://user:secret@host` in `text`. */
+const CREDENTIAL_QUERY =
+	/([?&](?:access_token|token|auth|key|password|secret|signature|sig|code)=)[^&#\s]*/gi;
+
+/**
+ * Replaces the userinfo of every `scheme://user:secret@host` in `text` and
+ * the value of every credential-named query parameter.
+ */
 export function redactCredentials(text: string): string {
-	return text.replace(URL_USERINFO, "$1<redacted>@");
+	return text
+		.replace(URL_USERINFO, "$1<redacted>@")
+		.replace(CREDENTIAL_QUERY, "$1<redacted>");
 }
 
 export function isRepoSlug(input: string): input is RepoSlug {

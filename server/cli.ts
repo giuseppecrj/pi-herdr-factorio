@@ -1,7 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { parseArgs } from "node:util";
 import manifest from "../package.json" with { type: "json" };
+import type { JsonValue } from "../src/tickets.ts";
 import {
+	type CheckReport,
 	checkReport,
 	type EnvLookup,
 	type Exec,
@@ -12,6 +14,7 @@ import {
 	type RepoSlug,
 	redactCredentials,
 	reloadWorkflow,
+	type StatusReport,
 	statusReport,
 	TRUSTED_REF,
 } from "../src/workflow.ts";
@@ -104,13 +107,23 @@ function parseCliArgs(argv: readonly string[]) {
 	});
 }
 
+/** Redacts a JSON string value. Every other value passes through. */
+function redactString(_key: string, item: JsonValue): JsonValue {
+	const text = String(item);
+
+	return item === text ? redactCredentials(text) : item;
+}
+
+function json(report: StatusReport | CheckReport): string {
+	return `${JSON.stringify(report, redactString, 2)}\n`;
+}
+
 export async function runCli(
 	argv: readonly string[],
 	caller: CliIo,
 ): Promise<number> {
 	const io: CliIo = {
 		...caller,
-		stdout: (text) => caller.stdout(redactCredentials(text)),
 		stderr: (text) => caller.stderr(redactCredentials(text)),
 	};
 
@@ -126,15 +139,13 @@ export async function runCli(
 	const load = await loadWorkflow({ exec: io.exec, repo, ref, env: io.env });
 
 	if (parsed.command === "status") {
-		io.stdout(
-			`${JSON.stringify(statusReport(load, manifest.version), null, 2)}\n`,
-		);
+		io.stdout(json(statusReport(load, manifest.version)));
 
 		return EXIT.ok;
 	}
 
 	if (reloadRef === null) {
-		io.stdout(`${JSON.stringify(checkReport(load, null), null, 2)}\n`);
+		io.stdout(json(checkReport(load, null)));
 
 		return load.kind === "loaded" ? EXIT.ok : EXIT.invalid;
 	}
@@ -149,9 +160,7 @@ export async function runCli(
 	const current = load.kind === "loaded" ? load.snapshot : null;
 	const result = reloadWorkflow(current, next);
 
-	io.stdout(
-		`${JSON.stringify(checkReport(load, { next, result }), null, 2)}\n`,
-	);
+	io.stdout(json(checkReport(load, { next, result })));
 
 	return load.kind === "loaded" && next.kind === "loaded"
 		? EXIT.ok
