@@ -268,7 +268,6 @@ type Limits = {
 	stallMs(stage: Stage): number;
 };
 
-/** `stale`: the marker ledger read behind the confirmed floor, so nothing is posted this tick. */
 type Eligibility =
 	| "confirmed"
 	| "unverified"
@@ -280,7 +279,6 @@ function mayPublish(eligibility: Eligibility): boolean {
 	return eligibility !== "dropped" && eligibility !== "stale";
 }
 
-/** How long after its `updated_at` second ends a watermark must be observed before it is trusted. */
 const SETTLE_MS = 1000;
 
 /**
@@ -437,15 +435,9 @@ export class Orchestrator {
 	readonly #confirmed = new Set<number>();
 	/** Issues whose marker ledger this tick read clean. */
 	readonly #ledgerRead = new Set<number>();
-	/**
-	 * The highest marker `seq` this controller confirmed on each issue, from its
-	 * own landed POSTs, adopted markers and claim records. It outlives the run.
-	 */
-	readonly #floor = new Map<number, number>();
-	/** The part of the floor an earlier process confirmed, from claim records read at start. */
-	readonly #recorded = new Map<number, number>();
-	/** The tick in which each issue's ledger first read behind its floor. */
-	readonly #stale = new Map<number, number>();
+	readonly #confirmedSeq = new Map<number, number>();
+	readonly #persistedSeq = new Map<number, number>();
+	readonly #staleSinceTick = new Map<number, number>();
 
 	constructor(input: OrchestratorInput) {
 		this.#input = input;
@@ -479,7 +471,6 @@ export class Orchestrator {
 		});
 	}
 
-	/** True when the issue's watermark is settled and its `updated_at` has not moved. */
 	#unchanged(issue: number, updatedAt: string): boolean {
 		const seen = this.state.seen.get(issue);
 
@@ -567,10 +558,10 @@ export class Orchestrator {
 
 			if (claim.seq === null) continue;
 
-			this.#raiseFloor(claim.issue, claim.seq);
-			this.#recorded.set(
+			this.#confirmSeq(claim.issue, claim.seq);
+			this.#persistedSeq.set(
 				claim.issue,
-				Math.max(this.#recorded.get(claim.issue) ?? 0, claim.seq),
+				Math.max(this.#persistedSeq.get(claim.issue) ?? 0, claim.seq),
 			);
 		}
 
@@ -624,12 +615,12 @@ export class Orchestrator {
 		};
 	}
 
-	/**
-	 * Ends finished and stalled stages. Every stall is aborted and every ended
-	 * stage moves to its next phase in memory first; only then are their markers
-	 * published, so no marker request delays an abort.
-	 */
 	async #reconcileStages(now: number, limits: Limits): Promise<void> {
+		for (const run of this.#endExpiredStages(now, limits))
+			await this.#sync(run);
+	}
+
+	#endExpiredStages(now: number, limits: Limits): ActiveRun[] {
 		const ended: ActiveRun[] = [];
 
 		for (const run of this.state.runs.values()) {
@@ -654,7 +645,7 @@ export class Orchestrator {
 			}
 		}
 
-		for (const run of ended) await this.#sync(run);
+		return ended;
 	}
 
 	/** Refreshes every claim against GitHub, before the per-tick reads that gate dispatch. */
@@ -746,7 +737,7 @@ export class Orchestrator {
 				return "dropped";
 			}
 
-			const behind = this.#behind(run.issue, ledger.value);
+			const behind = this.#ledgerFreshness(run.issue, ledger.value);
 
 			if (behind === "stale") {
 				this.state.seen.delete(run.issue);
@@ -793,7 +784,6 @@ export class Orchestrator {
 		});
 	}
 
-	/** Moves a run whose stage ended to a retry or a terminal status, in memory. */
 	#endStage(
 		run: ActiveRun,
 		cause: RetryCause,
@@ -882,33 +872,33 @@ export class Orchestrator {
 		);
 	}
 
-	#raiseFloor(issue: number, seq: number): void {
-		this.#floor.set(issue, Math.max(this.#floor.get(issue) ?? 0, seq));
+	#confirmSeq(issue: number, seq: number): void {
+		this.#confirmedSeq.set(
+			issue,
+			Math.max(this.#confirmedSeq.get(issue) ?? 0, seq),
+		);
 	}
 
-	/**
-	 * Checks a clean ledger against the issue's floor. A ledger whose highest
-	 * `seq` is below it lags a confirmed POST or lost comments. The first such
-	 * read defers the issue; one in a later tick is `missing`. A ledger below a
-	 * seq an earlier process recorded is `missing` at once.
-	 */
-	#behind(issue: number, ledger: CleanLedger): "current" | "stale" | "missing" {
-		const floor = this.#floor.get(issue) ?? 0;
+	#ledgerFreshness(
+		issue: number,
+		ledger: CleanLedger,
+	): "current" | "stale" | "missing" {
+		const floor = this.#confirmedSeq.get(issue) ?? 0;
 		const seq = ledger.markers.at(-1)?.marker.seq ?? 0;
 
 		if (seq >= floor) {
-			this.#stale.delete(issue);
+			this.#staleSinceTick.delete(issue);
 
 			return "current";
 		}
 
-		if (seq < (this.#recorded.get(issue) ?? 0)) return "missing";
+		if (seq < (this.#persistedSeq.get(issue) ?? 0)) return "missing";
 
-		const since = this.#stale.get(issue);
+		const since = this.#staleSinceTick.get(issue);
 
 		if (since !== undefined) return since < this.#ticks ? "missing" : "stale";
 
-		this.#stale.set(issue, this.#ticks);
+		this.#staleSinceTick.set(issue, this.#ticks);
 		this.#input.log("ledger_stale", { issue, seq, floor });
 
 		return "stale";
@@ -945,7 +935,7 @@ export class Orchestrator {
 
 			const behind =
 				ledger.value.kind === "clean"
-					? this.#behind(issue, ledger.value)
+					? this.#ledgerFreshness(issue, ledger.value)
 					: "current";
 
 			if (behind === "stale") {
@@ -1075,7 +1065,7 @@ export class Orchestrator {
 		};
 
 		this.state.runs.set(run.issue, run);
-		this.#raiseFloor(run.issue, seq);
+		this.#confirmSeq(run.issue, seq);
 		await this.#input.files.writeClaim({
 			runId: run.runId,
 			issue: run.issue,
@@ -1353,7 +1343,7 @@ export class Orchestrator {
 			stage: FIRST_STAGE,
 			attempt: 1,
 			usage: 0,
-			seq: Math.max(input.seq, this.#floor.get(issue) ?? 0),
+			seq: Math.max(input.seq, this.#confirmedSeq.get(issue) ?? 0),
 			marked: null,
 			inflight: null,
 			workspaceMissing: false,
@@ -1513,7 +1503,7 @@ export class Orchestrator {
 				return "stop";
 			}
 
-			const behind = this.#behind(run.issue, ledger.value);
+			const behind = this.#ledgerFreshness(run.issue, ledger.value);
 
 			if (behind === "missing") this.#markMissing(run.issue, null);
 
@@ -1585,7 +1575,7 @@ export class Orchestrator {
 		run.marked = marker;
 		run.seq = marker.seq;
 		run.inflight = null;
-		this.#raiseFloor(run.issue, marker.seq);
+		this.#confirmSeq(run.issue, marker.seq);
 		this.#input.log("marker_posted", {
 			issue: run.issue,
 			runId: run.runId,

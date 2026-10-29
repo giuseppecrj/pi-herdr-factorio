@@ -306,7 +306,6 @@ export async function acquireLock(input: {
 	};
 }
 
-/** A record written before claims carried a `seq` has none, and loads with `seq: null`. */
 function claimSeq(value: JsonValue | undefined): number | null | undefined {
 	if (value === undefined || value === null) return null;
 

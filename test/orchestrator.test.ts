@@ -211,7 +211,6 @@ function runOf(issue: number): Digest {
 	return runIdOf({ repo, issue, eventId: String(EVENT_ID + issue) });
 }
 
-/** Replaces `github.exec` for the controller while `intercept` is set. */
 type Wire = { intercept: Exec | null };
 
 function world(scope: readonly number[] | null = null) {
@@ -1566,7 +1565,6 @@ describe("Orchestrator reconcile order", () => {
 	});
 });
 
-/** Serves the next `reads` comment pages of `issue` as they were now, without the comments added later. */
 function lagComments(
 	ctx: { github: FakeGitHub; wire: Wire },
 	issue: FakeIssue,
