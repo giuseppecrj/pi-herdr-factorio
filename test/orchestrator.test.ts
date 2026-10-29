@@ -1766,6 +1766,78 @@ describe("Orchestrator acknowledged marker floor", () => {
 	});
 });
 
+describe("Orchestrator retry marker confirmation", () => {
+	async function lostRetryMarker() {
+		const ctx = world();
+
+		ctx.github.add(labeled(14));
+		ctx.executor.behaviors = [{ kind: "fail", usage: 0 }];
+
+		const controller = ctx.start();
+
+		await controller.tick();
+		ctx.clock.t += 30_000;
+		ctx.github.posts = ["lost"];
+
+		const queued = await controller.tick();
+
+		assert.equal(queued.runs[0]?.status, "retrying");
+		assert.equal(queued.runs[0]?.markerPending, true);
+		ctx.clock.t += 30_000;
+
+		return { ...ctx, controller };
+	}
+
+	it("keeps a due retry queued while the read-back of its marker fails", async () => {
+		const { github, executor, controller } = await lostRetryMarker();
+
+		github.failures.set(
+			`repos/${FAKE_REPO}/issues/14/comments`,
+			networkError(),
+		);
+
+		const deferred = await controller.tick();
+
+		assert.equal(executor.launches.length, 1);
+		assert.equal(deferred.runs[0]?.status, "retrying");
+		assert.equal(deferred.runs[0]?.markerPending, true);
+
+		github.failures.clear();
+		await controller.tick();
+
+		assert.equal(executor.launches.length, 2);
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:running",
+			"3:retrying",
+			"4:blocked",
+		]);
+	});
+
+	it("keeps a due retry queued while the replacement for a lost marker is unconfirmed too", async () => {
+		const { github, executor, controller } = await lostRetryMarker();
+
+		github.posts = ["lost"];
+
+		const deferred = await controller.tick();
+
+		assert.equal(executor.launches.length, 1);
+		assert.equal(deferred.runs[0]?.status, "retrying");
+		assert.equal(deferred.runs[0]?.markerPending, true);
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:running"]);
+
+		await controller.tick();
+
+		assert.equal(executor.launches.length, 2);
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:running",
+			"3:retrying",
+			"4:blocked",
+		]);
+	});
+});
+
 describe("acquireLock", () => {
 	const now = () => START;
 

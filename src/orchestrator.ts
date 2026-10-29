@@ -1091,6 +1091,7 @@ export class Orchestrator {
 			if (
 				run.phase.kind !== "retry_queued" ||
 				run.phase.dueAt > now ||
+				run.inflight !== null ||
 				!this.#confirmed.has(run.issue)
 			) {
 				continue;
