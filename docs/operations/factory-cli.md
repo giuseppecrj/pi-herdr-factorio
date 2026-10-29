@@ -451,6 +451,7 @@ Known limit: both sources behind at once. A `seq` is posted twice, and the issue
 Known gaps after deleted bot comments. Each needs an owner to delete the bot comments.
 
 - A terminal marker deleted after a read confirmed it. The record was removed at that read. A controller started later, after the issue reopened, has no local record for the run. It adopts the run's previous marker, or recovers its admission record when every marker is gone, and runs the old event once more. The controller that removed the record keeps the terminal state in memory and is not affected.
+- Deleted comments, then a lost POST. When the confirmed bot comments were deleted and a later marker POST does not answer, the read stays behind the local `seq`, so the read-back cannot tell whether that POST landed. The run shows `markerPending: true` and posts nothing until the comments return or the owner discards the run as above.
 
 ### Restart
 
