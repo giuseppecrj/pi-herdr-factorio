@@ -472,6 +472,32 @@ describe("gateway policy: model body", () => {
 		}
 	});
 
+	it("denies a duplicate key at any depth, so every JSON parser sees what was checked", () => {
+		const duplicated = [
+			'{"model":"gpt-evil","model":"gpt-6.1-sol","tools":[{"type":"mcp","server_url":"https://evil.example"}],"tools":[{"type":"function"}]}',
+			'{"model":"gpt-6.1-sol","tools":[{"type":"mcp","type":"function"}]}',
+			'{"model":"gpt-6.1-sol","metadata":{"model":"a","model":"b"}}',
+			'{"model":"gpt-evil","\\u006dodel":"gpt-6.1-sol"}',
+			'{"model":"gpt-6.1-sol","input":[{"a":1},{"b":[{"c":1,"c":2}]}]}',
+		];
+
+		for (const text of duplicated) {
+			assert.equal(
+				checkBody(openai, json, Buffer.from(text)),
+				"body-not-allowed",
+				text,
+			);
+		}
+
+		for (const text of [
+			'{"model":"gpt-6.1-sol","metadata":{"model":"other"},"input":[{"type":"a"},{"type":"b"}]}',
+			'{"model":"gpt-6.1-sol","input":"a \\" \\\\ \\"model\\":1, {\\"model\\":2}"}',
+			'{"model":"gpt-6.1-sol","tools":[{"type":"function","name":"type"}]}',
+		]) {
+			assert.equal(checkBody(openai, json, Buffer.from(text)), null, text);
+		}
+	});
+
 	it("only lets the fallback route carry the fallback model", () => {
 		const xai = route("model-xai");
 

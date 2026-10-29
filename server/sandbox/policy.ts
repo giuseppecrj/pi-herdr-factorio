@@ -1,6 +1,7 @@
 import {
 	arrayOf,
 	fieldOf,
+	hasDuplicateKey,
 	type JsonValue,
 	numberOf,
 	objectOf,
@@ -386,9 +387,12 @@ function bodyHolds(
 
 	if (rule.kind === "opaque") return true;
 
-	const parsed = parseJson(body.toString("utf8"));
+	const text = body.toString("utf8");
+	const parsed = parseJson(text);
 
 	if (parsed === undefined || objectOf(parsed) === null) return false;
+
+	if (hasDuplicateKey(text)) return false;
 
 	return rule.constraints.every((constraint) =>
 		constraintHolds(parsed, constraint),

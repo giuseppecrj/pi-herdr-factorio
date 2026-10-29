@@ -15,6 +15,61 @@ export function parseJson(text: string): JsonValue | undefined {
 	}
 }
 
+/**
+ * True when some object in already-valid JSON text names one key twice,
+ * comparing keys after their escapes are decoded. `JSON.parse` keeps the
+ * last duplicate, and other parsers may not, so a checked body must have
+ * none.
+ */
+export function hasDuplicateKey(text: string): boolean {
+	const scopes: (Set<string> | null)[] = [];
+	let expectKey = false;
+	let at = 0;
+
+	while (at < text.length) {
+		const char = text[at];
+
+		if (char === '"') {
+			let end = at + 1;
+
+			while (end < text.length && text[end] !== '"') {
+				end += text[end] === "\\" ? 2 : 1;
+			}
+
+			const keys = scopes.at(-1);
+
+			if (expectKey && keys instanceof Set) {
+				const key = textOf(parseJson(text.slice(at, end + 1))) ?? "";
+
+				if (keys.has(key)) return true;
+
+				keys.add(key);
+				expectKey = false;
+			}
+
+			at = end + 1;
+			continue;
+		}
+
+		if (char === "{") {
+			scopes.push(new Set());
+			expectKey = true;
+		} else if (char === "[") {
+			scopes.push(null);
+			expectKey = false;
+		} else if (char === "}" || char === "]") {
+			scopes.pop();
+			expectKey = false;
+		} else if (char === ",") {
+			expectKey = scopes.at(-1) instanceof Set;
+		}
+
+		at += 1;
+	}
+
+	return false;
+}
+
 export function objectOf(value: JsonValue | undefined): JsonObject | null {
 	if (
 		value === undefined ||
