@@ -12,6 +12,7 @@ import {
 	type Actor,
 	actorText,
 	type BodyHistory,
+	type BodyVersion,
 	DEFAULT_PAGING,
 	type GitHubFailure,
 	type GitHubPaging,
@@ -49,6 +50,7 @@ export type Ambiguity =
 	| "renamed_since_label"
 	| "rename_history_incomplete"
 	| "title_changed_between_reads"
+	| "body_changed_between_reads"
 	| "edited_at_label_time"
 	| "history_contradicts_last_edit"
 	| "history_incomplete"
@@ -161,14 +163,16 @@ export function snapshotDigest(snapshot: IssueSnapshot): Digest {
  * Binds a label applied at `labelAt` to the title and body of that moment.
  * GitHub times have one-second precision, so an edit or rename in the same
  * second as the label is ambiguous. The title and its renames come from the
- * same response as the body history; `issueTitle` is the title of the earlier
- * issue read, which must still match.
+ * same response as the body history; `issueTitle` and `issueBody` come from
+ * the earlier issue read, and must still match. The current body is used as
+ * the label-time body only when the history agrees with it.
  */
 export function labelTimeSnapshot(input: {
 	history: BodyHistory;
 	labelAt: string;
 	renamedSinceLabel: boolean;
 	issueTitle: string;
+	issueBody: string;
 }): SnapshotProof {
 	const { history, labelAt } = input;
 
@@ -191,10 +195,14 @@ export function labelTimeSnapshot(input: {
 		return ambiguous("title_changed_between_reads");
 	}
 
-	const { lastEditedAt } = history;
+	if (history.body !== input.issueBody) {
+		return ambiguous("body_changed_between_reads");
+	}
+
+	const { lastEditedAt, versions } = history;
 
 	if (lastEditedAt === null || lastEditedAt < labelAt) {
-		const editedAt = history.versions.map((version) => version.editedAt);
+		const editedAt = versions.map((version) => version.editedAt);
 
 		if (editedAt.includes(labelAt)) return ambiguous("edited_at_label_time");
 
@@ -210,14 +218,30 @@ export function labelTimeSnapshot(input: {
 			return ambiguous("history_contradicts_last_edit");
 		}
 
+		if (history.totalVersions !== versions.length) {
+			return ambiguous("history_incomplete");
+		}
+
+		if (lastEditedAt === null) {
+			if (versions.some((version) => version.text !== history.body)) {
+				return ambiguous("history_disagrees_with_body");
+			}
+		} else {
+			const latest = versionInForce(versions, labelAt);
+
+			if (latest === "withheld") return ambiguous("version_withheld");
+
+			if (latest === "none" || latest.text !== history.body) {
+				return ambiguous("history_disagrees_with_body");
+			}
+		}
+
 		return {
 			kind: "proved",
 			source: "unedited",
 			snapshot: { title: history.title, body: history.body },
 		};
 	}
-
-	const { versions } = history;
 
 	if (history.totalVersions !== versions.length) {
 		return ambiguous("history_incomplete");
@@ -236,26 +260,38 @@ export function labelTimeSnapshot(input: {
 		return ambiguous("edited_at_label_time");
 	}
 
-	let latestAt = "";
+	const version = versionInForce(versions, labelAt);
 
-	for (const { editedAt } of versions) {
-		if (editedAt < labelAt && editedAt > latestAt) latestAt = editedAt;
-	}
+	if (version === "none") return ambiguous("no_version_before_label");
 
-	if (latestAt === "") return ambiguous("no_version_before_label");
-
-	const inForce = versions.filter((version) => version.editedAt === latestAt);
-	const [version] = inForce;
-
-	if (inForce.length !== 1 || version === undefined || version.deleted) {
-		return ambiguous("version_withheld");
-	}
+	if (version === "withheld") return ambiguous("version_withheld");
 
 	return {
 		kind: "proved",
 		source: "edit_history",
 		snapshot: { title: history.title, body: version.text },
 	};
+}
+
+/** The one readable version saved last before `at`. */
+function versionInForce(
+	versions: readonly BodyVersion[],
+	at: string,
+): BodyVersion | "none" | "withheld" {
+	let latestAt = "";
+
+	for (const { editedAt } of versions) {
+		if (editedAt < at && editedAt > latestAt) latestAt = editedAt;
+	}
+
+	if (latestAt === "") return "none";
+
+	const inForce = versions.filter((version) => version.editedAt === latestAt);
+	const [version] = inForce;
+
+	return inForce.length !== 1 || version === undefined || version.deleted
+		? "withheld"
+		: version;
 }
 
 function errorCode(error: Error): string | null {
@@ -533,6 +569,7 @@ async function evaluate(input: {
 			(entry) => entry.kind === "renamed" && entry.at >= event.at,
 		),
 		issueTitle: record.value.title,
+		issueBody: record.value.body,
 	});
 
 	if (proof.kind === "ambiguous") {

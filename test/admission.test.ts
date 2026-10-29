@@ -755,12 +755,14 @@ describe("label-time snapshot", () => {
 		labelAt = "2026-10-29T01:21:38Z",
 		renamed = false,
 		issueTitle = "T",
+		issueBody = h.body,
 	) =>
 		labelTimeSnapshot({
 			history: h,
 			labelAt,
 			renamedSinceLabel: renamed,
 			issueTitle,
+			issueBody,
 		});
 
 	const editedBeforeLabel = history({
@@ -862,6 +864,90 @@ describe("label-time snapshot", () => {
 		for (const [h, detail] of cases) {
 			assert.deepEqual(bind(h), { kind: "ambiguous", detail }, detail);
 		}
+	});
+
+	it("proves the unedited body against its history text", () => {
+		assert.equal(
+			bind(
+				history({
+					body: "v2",
+					lastEditedAt: "2026-10-29T01:21:31Z",
+					totalVersions: 2,
+					versions: versions(
+						["2026-10-29T01:21:25Z", "v2"],
+						["2026-10-29T01:21:21Z", "v1"],
+					),
+				}),
+			).kind,
+			"proved",
+		);
+
+		const cases: [BodyHistory, string][] = [
+			[{ ...editedBeforeLabel, totalVersions: 3 }, "history_incomplete"],
+			[
+				{ ...neverEdited, includesCreatedEdit: true, totalVersions: 2 },
+				"history_contradicts_last_edit",
+			],
+			[{ ...editedBeforeLabel, body: "v9" }, "history_disagrees_with_body"],
+			[
+				{ ...editedBeforeLabel, totalVersions: 0, versions: [] },
+				"history_disagrees_with_body",
+			],
+			[
+				{
+					...editedBeforeLabel,
+					versions: versions(
+						["2026-10-29T01:21:31Z", "v2", true],
+						["2026-10-29T01:21:21Z", "v1"],
+					),
+				},
+				"version_withheld",
+			],
+			[
+				{
+					...editedBeforeLabel,
+					totalVersions: 3,
+					versions: versions(
+						["2026-10-29T01:21:31Z", "v2"],
+						["2026-10-29T01:21:31Z", "v9"],
+						["2026-10-29T01:21:21Z", "v1"],
+					),
+				},
+				"version_withheld",
+			],
+			[
+				history({
+					lastEditedAt: null,
+					totalVersions: 1,
+					versions: versions(["2026-10-29T01:21:21Z", "v1"]),
+				}),
+				"history_disagrees_with_body",
+			],
+		];
+
+		for (const [h, detail] of cases) {
+			assert.deepEqual(bind(h), { kind: "ambiguous", detail }, detail);
+		}
+	});
+
+	it("refuses a body that differs between the issue read and the snapshot read", async () => {
+		for (const h of [editedBeforeLabel, neverEdited, history({})]) {
+			assert.deepEqual(bind(h, "2026-10-29T01:21:38Z", false, "T", "other"), {
+				kind: "ambiguous",
+				detail: "body_changed_between_reads",
+			});
+		}
+
+		const github = new FakeGitHub();
+
+		github.add(labeledBy("writer"));
+		github.beforeGraphql = (issue) => {
+			issue.body = "Changed after the issue read.";
+		};
+
+		assert.deepEqual((await admit(github)).reasons, [
+			{ kind: "ambiguous_snapshot", detail: "body_changed_between_reads" },
+		]);
 	});
 
 	it("refuses a never-edited issue that reports body versions through the adapter", async () => {

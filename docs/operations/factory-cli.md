@@ -224,8 +224,8 @@ So an admission makes 7 requests, plus one per extra timeline page. A refusal ca
 
 The snapshot is the title and body when the label was applied. Let `L` be the event's `created_at`.
 
-1. The title comes from the GraphQL read, which also returns the issue's title renames, at most 100. The snapshot is ambiguous when a `renamed` timeline event or a rename in that read is at or after `L`, when that read reports more renames than it returned, or when its title differs from the title the issue read returned. So a rename between the reads is refused.
-2. When the body's `lastEditedAt` is `null` or earlier than `L`, the current title and body are the snapshot, and `snapshotSource` is `unedited`, unless the edit history contradicts it. It does when a version was saved at or after `L`, when a version is newer than `lastEditedAt`, or when `lastEditedAt` is `null` and the history has any version other than the original.
+1. The title comes from the GraphQL read, which also returns the issue's title renames, at most 100. The snapshot is ambiguous when a `renamed` timeline event or a rename in that read is at or after `L`, when that read reports more renames than it returned, or when its title differs from the title the issue read returned. So a rename between the reads is refused. The GraphQL body must also equal the body the issue read returned.
+2. When the body's `lastEditedAt` is `null` or earlier than `L`, the current title and body are the snapshot, and `snapshotSource` is `unedited`, but only when the edit history agrees with the body. It contradicts the body when a version was saved at or after `L`, when a version is newer than `lastEditedAt`, or when `lastEditedAt` is `null` and the history has any version other than the original. Every version must have been returned. When `lastEditedAt` is `null`, every returned version must equal the body. A never-edited issue has no versions at all, and that is proof enough. When `lastEditedAt` is set, exactly one version must be the latest, it must not be deleted, and it must equal the body. GitHub records the original only on the first edit, so an edited body with no versions is refused.
 3. Otherwise the body comes from the GraphQL edit history. It is proved when all of these hold: every version was returned, the history includes the original, the newest version equals the current body and was saved at `lastEditedAt`, no version was saved in the same second as `L`, and exactly one version is the latest saved before `L` and it is not deleted. That version is the snapshot body. `snapshotSource` is `edit_history`.
 4. Anything else is `ambiguous_snapshot`.
 
@@ -304,13 +304,14 @@ The repository switch reason comes first. When the issue also fails a check, tha
 | `renamed_since_label` | The title changed at or after the label, by the timeline or by the GraphQL read. |
 | `rename_history_incomplete` | The GraphQL read returned fewer renames than its `totalCount`. At most 100 are read. |
 | `title_changed_between_reads` | The GraphQL title differs from the title the issue read returned. |
+| `body_changed_between_reads` | The GraphQL body differs from the body the issue read returned. |
 | `edited_at_label_time` | A body version was saved in the same second as the label. |
 | `history_contradicts_last_edit` | `lastEditedAt` is `null` or earlier than the label, but a body version was saved after the label or after `lastEditedAt`, or `lastEditedAt` is `null` and the history has a version other than the original. |
-| `history_incomplete` | GitHub returned fewer versions than its `totalCount`. At most 100 are read. |
+| `history_incomplete` | GitHub returned a different number of versions than its `totalCount`. At most 100 are read. |
 | `history_without_original` | The history does not include the original body. |
-| `history_disagrees_with_body` | The newest version is not the current body, or was not saved at `lastEditedAt`. |
+| `history_disagrees_with_body` | The newest version is not the current body, or was not saved at `lastEditedAt`. For an `unedited` snapshot: `lastEditedAt` is set and the latest version differs from the body or no version was returned, or `lastEditedAt` is `null` and a returned version differs from the body. |
 | `no_version_before_label` | No version was saved before the label. |
-| `version_withheld` | The version in force at label time is deleted, or two versions share its time. |
+| `version_withheld` | The version in force at label time is deleted, or two versions share its time. For an `unedited` snapshot this applies to the latest version. |
 
 ## `/factory status`
 
