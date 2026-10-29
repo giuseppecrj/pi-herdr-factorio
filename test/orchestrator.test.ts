@@ -1893,6 +1893,119 @@ describe("Orchestrator claim record retry", () => {
 	});
 });
 
+describe("Orchestrator marker_missing recovery", () => {
+	it("adopts the run again once a live controller's missing markers read back, with updated_at unchanged", async () => {
+		const { github, clock, start } = world();
+		const issue = github.add(labeled(14));
+		const controller = start();
+
+		await controller.tick();
+		clock.t += 30_000;
+		await controller.tick();
+
+		const kept = issue.comments.splice(0);
+
+		issue.updatedAt = "2026-10-29T03:00:00Z";
+		clock.t = Date.parse("2026-10-29T03:00:03Z");
+
+		const deferred = await controller.tick();
+
+		assert.deepEqual(deferred.corrupt, []);
+		clock.t += 1000;
+
+		const missing = await controller.tick();
+
+		assert.deepEqual(missing.corrupt, [
+			{ issue: 14, defect: "marker_missing" },
+		]);
+		issue.comments.push(...kept);
+		clock.t = Date.parse("2026-10-29T03:00:35Z");
+
+		const healed = await controller.tick();
+
+		assert.equal(issue.updatedAt, "2026-10-29T03:00:00Z");
+		assert.deepEqual(healed.corrupt, []);
+		assert.deepEqual(
+			healed.runs.map((run) => [run.runId, run.status, run.seq]),
+			[[runOf(14), "blocked", 2]],
+		);
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+		clock.t += 30_000;
+		github.calls.length = 0;
+		await controller.tick();
+
+		assert.equal(github.calls.length, 4, JSON.stringify(github.calls));
+	});
+
+	it("adopts the run again on the next tick when a fresh process's first comments read is empty", async () => {
+		const { github, clock, files, start } = world();
+		const issue = github.add(labeled(14));
+
+		await start().tick();
+
+		const kept = issue.comments.splice(0);
+		const controller = start();
+
+		clock.t += 5000;
+
+		const missing = await controller.tick();
+
+		assert.deepEqual(missing.corrupt, [
+			{ issue: 14, defect: "marker_missing" },
+		]);
+		assert.deepEqual(missing.runs, []);
+		issue.comments.push(...kept);
+		clock.t += 35_000;
+
+		const healed = await controller.tick();
+
+		assert.deepEqual(healed.corrupt, []);
+		assert.deepEqual(
+			healed.runs.map((run) => [run.runId, run.status, run.seq]),
+			[[runOf(14), "blocked", 2]],
+		);
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+		assert.equal(files.claims.get(runOf(14))?.seq, 2);
+	});
+
+	it("reads a missing issue's ledger on every tick while it stays missing", async () => {
+		const { github, clock, start } = world();
+		const issue = github.add(labeled(14));
+
+		await start().tick();
+		issue.comments.length = 0;
+
+		const controller = start();
+
+		clock.t += 5000;
+		await controller.tick();
+
+		const comments = `repos/${FAKE_REPO}/issues/14/comments?`;
+
+		const later = async () => {
+			clock.t += 30_000;
+			github.calls.length = 0;
+
+			const report = await controller.tick();
+
+			return {
+				corrupt: report.corrupt,
+				reads: github.calls.filter((call) =>
+					call.some((arg) => arg.startsWith(comments)),
+				).length,
+			};
+		};
+
+		const missing = {
+			corrupt: [{ issue: 14, defect: "marker_missing" }],
+			reads: 1,
+		};
+
+		assert.deepEqual([await later(), await later()], [missing, missing]);
+		assert.equal(github.markers(14).length, 0);
+	});
+});
+
 describe("Orchestrator retry marker confirmation", () => {
 	async function lostRetryMarker() {
 		const ctx = world();

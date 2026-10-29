@@ -440,6 +440,8 @@ export class Orchestrator {
 	readonly #confirmedSeq = new Map<number, number>();
 	readonly #persistedSeq = new Map<number, number>();
 	readonly #staleSinceTick = new Map<number, number>();
+	/** Issues reported `marker_missing` this tick. Their ledger is read again next tick. */
+	readonly #missing = new Set<number>();
 
 	constructor(input: OrchestratorInput) {
 		this.#input = input;
@@ -493,6 +495,7 @@ export class Orchestrator {
 		this.#tickAt = now;
 		this.#confirmed.clear();
 		this.#ledgerRead.clear();
+		this.#missing.clear();
 		const refused: { issue: number; reasons: RefusalReason["kind"][] }[] = [];
 
 		if (!this.#claimsLoaded) await this.#loadClaims();
@@ -769,7 +772,7 @@ export class Orchestrator {
 		}
 
 		if (behind === "missing") {
-			this.#markMissing(run.issue, updatedAt);
+			this.#markMissing(run.issue);
 			this.#drop(run);
 
 			return "dropped";
@@ -884,12 +887,15 @@ export class Orchestrator {
 		});
 	}
 
-	#markMissing(issue: number, updatedAt: string | null): void {
+	/** Unlike other defects, `marker_missing` is not cached against `updated_at`, so a later read that reaches the floor clears it. */
+	#markMissing(issue: number): void {
 		this.#markCorrupt(
 			issue,
 			{ kind: "corrupt", defect: "marker_missing", commentId: "" },
-			updatedAt,
+			null,
 		);
+		this.state.seen.delete(issue);
+		this.#missing.add(issue);
 	}
 
 	#confirmSeq(issue: number, seq: number): void {
@@ -943,7 +949,7 @@ export class Orchestrator {
 		for (const record of records.values()) {
 			const issue = record.number;
 
-			if (this.state.runs.has(issue)) continue;
+			if (this.state.runs.has(issue) || this.#missing.has(issue)) continue;
 
 			if (this.#unchanged(issue, record.updatedAt)) {
 				continue;
@@ -966,7 +972,7 @@ export class Orchestrator {
 			this.#recover.delete(issue);
 
 			if (behind === "missing") {
-				this.#markMissing(issue, record.updatedAt);
+				this.#markMissing(issue);
 				continue;
 			}
 
@@ -1533,7 +1539,7 @@ export class Orchestrator {
 
 			const behind = this.#ledgerFreshness(run.issue, ledger.value);
 
-			if (behind === "missing") this.#markMissing(run.issue, null);
+			if (behind === "missing") this.#markMissing(run.issue);
 
 			if (behind !== "current") return "stop";
 
