@@ -1014,7 +1014,8 @@ export class Orchestrator {
 
 			if (claimed !== null) {
 				slots--;
-				await this.#launch(claimed);
+
+				if (claimed.inflight === null) await this.#launch(claimed);
 			}
 		}
 	}
@@ -1141,7 +1142,7 @@ export class Orchestrator {
 			this.#input.log("workspace_unavailable", { issue, runId });
 		}
 
-		return run.inflight === null ? run : null;
+		return run;
 	}
 
 	async #prepareWorkspace(run: ActiveRun): Promise<WorkspacePreparation> {

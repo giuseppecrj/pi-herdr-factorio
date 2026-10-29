@@ -1229,6 +1229,30 @@ describe("Orchestrator restart reads", () => {
 	});
 });
 
+describe("Orchestrator slot accounting", () => {
+	for (const behavior of ["landed_unanswered", "rejected", "lost"] as const) {
+		it(`counts a claim whose first marker POST is ${behavior} against the limit`, async () => {
+			const { github, start } = world();
+
+			for (const number of [14, 15, 16]) github.add(labeled(number));
+
+			github.posts = [behavior];
+
+			const controller = start();
+			const first = await controller.tick();
+
+			assert.deepEqual(runIssues(first), [14, 15]);
+			assert.deepEqual(first.queued, [16]);
+
+			const second = await controller.tick();
+
+			assert.deepEqual(runIssues(second), [14, 15]);
+			assert.deepEqual(second.queued, [16]);
+			assert.deepEqual(statuses(github, 16), []);
+		});
+	}
+});
+
 describe("Orchestrator eligibility before launch", () => {
 	async function queuedRetry() {
 		const ctx = world();
