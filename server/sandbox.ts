@@ -25,7 +25,11 @@ import type {
 	StageLaunchInput,
 } from "../src/orchestrator.ts";
 import type { Digest } from "../src/run.ts";
-import type { ModelId, ModelStage } from "../src/workflow.ts";
+import {
+	type ModelId,
+	type ModelStage,
+	STAGE_CLEANUP_RESERVE_MS,
+} from "../src/workflow.ts";
 import { PI_AGENT_DIR } from "./sandbox/assets/pi.ts";
 import { manifestDigest, PINNED_VERSIONS } from "./sandbox/manifest.ts";
 import { readUsernsLimit, runPreflight } from "./sandbox/preflight.ts";
@@ -85,7 +89,7 @@ export type {
 } from "./sandbox/result.ts";
 
 /** Time kept back from `wall_ms` for cleanup. The hard deadline is `wall_ms` minus this. */
-export const CLEANUP_RESERVE_MS = 10_000;
+export const CLEANUP_RESERVE_MS = STAGE_CLEANUP_RESERVE_MS;
 
 export const MODEL_REQUEST_CEILING = 2_000;
 

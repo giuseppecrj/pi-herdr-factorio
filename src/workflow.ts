@@ -155,6 +155,13 @@ export const DEFAULTS = {
 	maxTokensPerRun: 500_000,
 } as const;
 
+/**
+ * Time a sandboxed stage keeps back from `wall_ms` for cleanup. Its hard
+ * deadline is `wall_ms` minus this, so a model stage's `wall_ms` must be
+ * larger.
+ */
+export const STAGE_CLEANUP_RESERVE_MS = 10_000;
+
 export const LIMITS = {
 	minPollIntervalMs: 10_000,
 	maxConcurrent: 4,

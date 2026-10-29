@@ -3390,7 +3390,7 @@ describe("Orchestrator persisted claim slots", () => {
 		wire.intercept = async (command, args) => {
 			const path = args.find((arg) => arg.startsWith("repos/")) ?? "";
 
-			if (!args.includes("--method") && /\/issues\/14$/.test(path)) {
+			if (!args.includes("--method") && path.endsWith("/issues/14")) {
 				gets += 1;
 
 				if (gets >= 2) return networkError();
@@ -4406,6 +4406,237 @@ describe("Orchestrator stall aborts", () => {
 			["retrying", "retrying"],
 		);
 		assert.equal(report.totals.stalls, 2);
+	});
+});
+
+function lastMarkerUsage(github: FakeGitHub, issue: number): number | null {
+	const body = github.markers(issue).at(-1) ?? "";
+	const parsed = parseMarker(body);
+
+	return parsed.kind === "marker" ? parsed.marker.usage : null;
+}
+
+function settle(): Promise<void> {
+	return new Promise((done) => setImmediate(done));
+}
+
+describe("Orchestrator run allowance at launch", () => {
+	it("launches no retry once a lowered workflow cap leaves the run no allowance", async () => {
+		const { github, clock, executor, start } = world();
+
+		github.add(labeled(14));
+		executor.behaviors = [
+			{ kind: "fail", usage: 300_000 },
+			{ kind: "pass", usage: 1 },
+		];
+
+		const controller = start();
+
+		await controller.tick();
+
+		const queued = await controller.tick();
+
+		assert.equal(queued.runs[0]?.status, "retrying");
+
+		setWorkflow(
+			github,
+			"max_tokens_per_run: 500000",
+			"max_tokens_per_run: 100000",
+		);
+		clock.t += 10_000;
+
+		const report = await controller.tick();
+
+		assert.equal(executor.launches.length, 1);
+		assert.deepEqual(report.runs, []);
+		assert.equal(
+			statuses(github, 14).at(-1)?.endsWith(":budget_exhausted"),
+			true,
+		);
+		assert.equal(lastMarkerUsage(github, 14), 300_000);
+	});
+});
+
+describe("Orchestrator usage reported after a stall", () => {
+	it("counts usage a stalled stage reports while it cleans up, once, before its retry launches", async () => {
+		const { github, clock, executor, start } = world();
+		let finish: (result: StageResult) => void = () => undefined;
+
+		github.add(labeled(14));
+		executor.behaviors = [
+			{
+				kind: "later",
+				result: new Promise((done) => {
+					finish = done;
+				}),
+			},
+			{ kind: "pass", usage: 1 },
+		];
+
+		const controller = start();
+
+		await controller.tick();
+
+		const launch = executor.launches[0];
+
+		assert.ok(launch);
+		launch.progress(100);
+		clock.t += 300_001;
+
+		const stalled = await controller.tick();
+
+		assert.equal(launch.signal.aborted, true);
+		assert.equal(stalled.runs[0]?.status, "retrying");
+		assert.equal(stalled.totals.usage, 100);
+
+		launch.progress(250);
+		finish(resultOf(launch, { kind: "failed", exit: "aborted" }, 250));
+		await settle();
+
+		const next = await controller.tick();
+
+		assert.equal(next.runs[0]?.usage, 250);
+		assert.equal(next.totals.usage, 250);
+		assert.equal(next.runs[0]?.status, "retrying");
+
+		clock.t += 10_000;
+		await controller.tick();
+
+		assert.equal(executor.launches[1]?.remainingRunTokens, 499_750);
+
+		const after = await controller.tick();
+
+		assert.equal(after.totals.usage, 251);
+	});
+
+	it("holds a retry until the stalled stage settles or its cleanup reserve has passed", async () => {
+		const { github, clock, executor, start } = world();
+		let finish: (result: StageResult) => void = () => undefined;
+
+		setWorkflow(github, "max_backoff_ms: 300000", "max_backoff_ms: 1000");
+		github.add(labeled(14));
+		executor.behaviors = [
+			{
+				kind: "later",
+				result: new Promise((done) => {
+					finish = done;
+				}),
+			},
+			{ kind: "hang" },
+		];
+
+		const controller = start();
+
+		await controller.tick();
+
+		const launch = executor.launches[0];
+
+		assert.ok(launch);
+		clock.t += 300_001;
+		await controller.tick();
+
+		clock.t += 1_000;
+
+		const held = await controller.tick();
+
+		assert.equal(executor.launches.length, 1);
+		assert.equal(held.runs[0]?.status, "retrying");
+
+		launch.progress(40);
+		finish(resultOf(launch, { kind: "failed", exit: "aborted" }, 40));
+		await settle();
+		await controller.tick();
+		assert.equal(executor.launches.length, 2);
+		assert.equal(executor.launches[1]?.remainingRunTokens, 499_960);
+	});
+
+	it("puts late usage in the terminal marker when the stall ends the run", async () => {
+		const { github, clock, executor, start } = world();
+		let finish: (result: StageResult) => void = () => undefined;
+
+		github.add(labeled(14));
+		executor.behaviors = [
+			{
+				kind: "later",
+				result: new Promise((done) => {
+					finish = done;
+				}),
+			},
+		];
+
+		const controller = start();
+
+		await controller.tick();
+
+		const launch = executor.launches[0];
+
+		assert.ok(launch);
+		launch.progress(500_000);
+		clock.t += 300_001;
+		await controller.tick();
+
+		assert.equal(statuses(github, 14).at(-1), "2:running");
+
+		launch.progress(600_000);
+		finish(resultOf(launch, { kind: "failed", exit: "aborted" }, 600_000));
+		await settle();
+
+		const report = await controller.tick();
+
+		assert.deepEqual(report.runs, []);
+		assert.equal(report.totals.usage, 600_000);
+		assert.equal(statuses(github, 14).at(-1), "3:budget_exhausted");
+		assert.equal(lastMarkerUsage(github, 14), 600_000);
+	});
+
+	it("posts the terminal marker once the cleanup reserve passes, if the stage never settles", async () => {
+		const { github, clock, executor, start } = world();
+
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "hang" }];
+
+		const controller = start();
+
+		await controller.tick();
+		executor.launches[0]?.progress(500_000);
+		clock.t += 300_001;
+		await controller.tick();
+		assert.equal(statuses(github, 14).at(-1), "2:running");
+
+		clock.t += 10_000;
+
+		const report = await controller.tick();
+
+		assert.deepEqual(report.runs, []);
+		assert.equal(statuses(github, 14).at(-1), "3:budget_exhausted");
+	});
+});
+
+describe("Orchestrator tick order", () => {
+	it("reconciles a finished stage before it waits on a slow preflight", async () => {
+		const { github, executor, start } = world();
+
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 5 }];
+
+		const controller = start();
+
+		await controller.tick();
+
+		const seen: string[][] = [];
+		const ready = executor.preflight.bind(executor);
+
+		executor.preflight = async () => {
+			seen.push(statuses(github, 14));
+			await new Promise((done) => setTimeout(done, 20));
+
+			return ready();
+		};
+
+		const report = await controller.tick();
+
+		assert.deepEqual(seen, [["1:claimed", "2:running", "3:stage_passed"]]);
+		assert.deepEqual(report.runs, []);
 	});
 });
 

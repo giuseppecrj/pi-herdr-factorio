@@ -47,6 +47,7 @@ import {
 	MODEL_STAGES,
 	type ModelStage,
 	type RepoSlug,
+	STAGE_CLEANUP_RESERVE_MS,
 	type WorkflowConfig,
 } from "./workflow.ts";
 
@@ -159,6 +160,19 @@ export type RunPhase =
 	  }
 	| { readonly kind: "retry_queued"; readonly dueAt: number }
 	| { readonly kind: "ending"; readonly status: TerminalStatus };
+
+type RunningPhase = Extract<RunPhase, { kind: "running" }>;
+
+/**
+ * A stage that was aborted after its outcome was chosen, still cleaning up.
+ * Usage it reports later is added to its run once, as `counted` grows.
+ */
+type Draining = {
+	readonly run: ActiveRun;
+	readonly phase: RunningPhase;
+	readonly since: number;
+	counted: number;
+};
 
 /**
  * A marker whose POST did not return a comment. `unknown` may have landed,
@@ -555,6 +569,7 @@ export class Orchestrator {
 	readonly #ended = new Map<Digest, EndedRecord>();
 	readonly #behind = new Map<number, TickReport["ledgerBehind"][number]>();
 	readonly #stages = new Set<Promise<void>>();
+	readonly #draining = new Set<Draining>();
 	#enabled = false;
 	#last: ReportInput | null = null;
 
@@ -613,11 +628,13 @@ export class Orchestrator {
 			await this.#loadClaims();
 		}
 
-		this.#enabled = await this.#input.executor.preflight();
+		this.#countLateUsage();
 
 		const held = this.#limits();
 
 		if (held !== null) await this.#reconcileStages(now, held);
+
+		this.#enabled = await this.#input.executor.preflight();
 
 		const candidates = await this.#candidates();
 
@@ -704,12 +721,18 @@ export class Orchestrator {
 		if (!running()) return null;
 
 		while (running()) {
+			this.#countLateUsage();
 			await this.#reconcileStages(this.#input.clock.now(), limits);
 
 			if (running()) await wait(DRAIN_POLL_MS);
 		}
 
 		await Promise.all(this.#stages);
+		this.#countLateUsage();
+
+		for (const run of this.state.runs.values()) {
+			if (run.phase.kind === "ending") await this.#sync(run);
+		}
 
 		return this.#report(last);
 	}
@@ -814,6 +837,7 @@ export class Orchestrator {
 					stage: run.stage,
 				});
 				this.#endStage(run, "stalled", phase.usage, limits);
+				this.#detach(run, phase);
 				ended.push(run);
 			}
 		}
@@ -916,7 +940,7 @@ export class Orchestrator {
 
 	/** Stops tracking a run whose ledger turned corrupt. Its claim record stays as evidence. */
 	#drop(run: ActiveRun): void {
-		if (run.phase.kind === "running") run.phase.abort.abort();
+		this.#abortRunning(run);
 
 		this.state.runs.delete(run.issue);
 		this.#input.log("claim_dropped", {
@@ -927,7 +951,7 @@ export class Orchestrator {
 	}
 
 	#release(run: ActiveRun, why: ReleaseReason): void {
-		if (run.phase.kind === "running") run.phase.abort.abort();
+		this.#abortRunning(run);
 
 		run.phase = { kind: "ending", status: "released" };
 		this.state.totals.releases++;
@@ -937,6 +961,68 @@ export class Orchestrator {
 			runId: run.runId,
 			why,
 		});
+	}
+
+	/** Aborts a running stage the run is leaving, keeping its usage so far and any it reports later. */
+	#abortRunning(run: ActiveRun): void {
+		const { phase } = run;
+
+		if (phase.kind !== "running") return;
+
+		phase.abort.abort();
+		run.usage += phase.usage;
+		this.state.totals.usage += phase.usage;
+		this.#detach(run, phase);
+	}
+
+	#detach(run: ActiveRun, phase: RunningPhase): void {
+		this.#draining.add({
+			run,
+			phase,
+			since: this.#input.clock.now(),
+			counted: phase.usage,
+		});
+	}
+
+	/**
+	 * Adds usage an aborted stage reported after its outcome was chosen, once.
+	 * The outcome stays as chosen. An entry ends when the stage settles.
+	 */
+	#countLateUsage(): void {
+		for (const entry of this.#draining) {
+			const { phase } = entry;
+			const latest = Math.max(phase.usage, phase.result?.usage ?? 0);
+			const late = latest - entry.counted;
+
+			if (late > 0) {
+				entry.counted = latest;
+				entry.run.usage += late;
+				this.state.totals.usage += late;
+				this.#input.log("stage_late_usage", {
+					issue: entry.run.issue,
+					runId: entry.run.runId,
+					usage: late,
+				});
+			}
+
+			if (phase.result !== null) this.#draining.delete(entry);
+		}
+	}
+
+	/**
+	 * True while an aborted stage of this run may still report usage: it has
+	 * not settled and its cleanup reserve has not passed. Its retry and its
+	 * terminal marker wait, so both carry that usage.
+	 */
+	#settling(run: ActiveRun): boolean {
+		const now = this.#input.clock.now();
+
+		return [...this.#draining].some(
+			(entry) =>
+				entry.run === run &&
+				entry.phase.result === null &&
+				now - entry.since < STAGE_CLEANUP_RESERVE_MS,
+		);
 	}
 
 	#finishStage(run: ActiveRun, result: StageEnd, limits: Limits): void {
@@ -1655,7 +1741,8 @@ export class Orchestrator {
 				run.phase.kind !== "retry_queued" ||
 				run.phase.dueAt > now ||
 				run.inflight !== null ||
-				!this.#confirmed.has(run.issue)
+				!this.#confirmed.has(run.issue) ||
+				this.#settling(run)
 			) {
 				continue;
 			}
@@ -1993,6 +2080,19 @@ export class Orchestrator {
 
 		if (config === null) return false;
 
+		if (run.usage >= config.usage.maxTokensPerRun) {
+			run.phase = { kind: "ending", status: "budget_exhausted" };
+			this.#input.log("launch_refused", {
+				issue: run.issue,
+				runId: run.runId,
+				stage: run.stage,
+				why: "run_tokens",
+			});
+			await this.#sync(run);
+
+			return false;
+		}
+
 		const preparation = await this.#prepareWorkspace(run);
 
 		if (preparation.kind === "unavailable") return false;
@@ -2070,6 +2170,8 @@ export class Orchestrator {
 
 	async #sync(run: ActiveRun): Promise<void> {
 		if (run.inflight?.tick === this.#ticks) return;
+
+		if (isTerminal(desiredStatus(run.phase)) && this.#settling(run)) return;
 
 		const before = run.seq;
 
