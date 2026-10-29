@@ -13,7 +13,11 @@ import {
 import { DENY_CODES, type ProxyCode } from "./policy.ts";
 import type { RouteId } from "./routes.ts";
 
-/** Why the admission gate closed. The runner sends the first six; the gateway adds the rest. */
+/**
+ * Why the admission gate closed. The runner sends the first six; the
+ * gateway adds the rest. `ceiling` is the token ceiling and `requests` the
+ * model-request ceiling, which the runner sets to the stage's turn cap.
+ */
 export const CLOSE_REASONS = [
 	"turns",
 	"tokens",
@@ -22,6 +26,7 @@ export const CLOSE_REASONS = [
 	"stall",
 	"abort",
 	"ceiling",
+	"requests",
 	"audit_full",
 	"audit_failed",
 	"control_closed",

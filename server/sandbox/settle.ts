@@ -89,7 +89,6 @@ export type TrackerSignal =
 	| { readonly kind: "none" }
 	| { readonly kind: "answer_ui"; readonly id: string }
 	| { readonly kind: "settled" }
-	| { readonly kind: "arm_turn_cap" }
 	| { readonly kind: "cap"; readonly cap: BudgetCap }
 	| { readonly kind: "child"; readonly sessionFile: string | null }
 	| { readonly kind: "failed"; readonly exit: "error" | "malformed" };
@@ -137,9 +136,7 @@ export class SessionTracker {
 			case "assistant_end":
 				this.lastAssistant = record.message;
 
-				return this.turns >= this.#maxTurns
-					? { kind: "arm_turn_cap" }
-					: { kind: "none" };
+				return { kind: "none" };
 
 			case "subagent_launch":
 				this.launches += 1;

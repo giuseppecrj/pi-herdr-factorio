@@ -42,7 +42,10 @@ import {
 	startEchoFixture,
 } from "../../server/sandbox/echo-fixture.ts";
 import { Gateway } from "../../server/sandbox/gateway.ts";
-import type { GatewayHandle } from "../../server/sandbox/gateway-client.ts";
+import {
+	type GatewayHandle,
+	startGatewayProcess,
+} from "../../server/sandbox/gateway-client.ts";
 import {
 	fieldOf,
 	type JsonObject,
@@ -1654,7 +1657,7 @@ describe("budget stops before the next request, through the gate", () => {
 		assert.equal(result.usage, 32);
 		assert.deepEqual(
 			events.find((event) => event.event === "gate_closed"),
-			{ event: "gate_closed", reason: "turns" },
+			{ event: "gate_closed", reason: "requests" },
 		);
 		assert.equal(
 			result.receipt.egress?.find((route) => route.route === "model-openai")
@@ -1680,6 +1683,148 @@ describe("budget stops before the next request, through the gate", () => {
 			"run_tokens",
 		);
 		assert.equal(forwarded, 2);
+	});
+});
+
+/**
+ * A Pi whose stdout lags its requests: it fires the next model request the
+ * moment the last one ends, before the runner has read that turn's records.
+ */
+function eagerAgent(socketPath: () => string, statuses: number[]) {
+	return (command: JsonObject, pi: FakePi) => {
+		const type = textOf(fieldOf(command, "type"));
+
+		if (type === "abort") {
+			pi.emit({ type: "agent_settled", aborted: true });
+
+			return;
+		}
+
+		if (type !== "prompt") return;
+
+		pi.emit(started(textOf(fieldOf(command, "id")) ?? ""), {
+			type: "agent_start",
+		});
+		pi.emit({ type: "turn_start" });
+
+		void (async () => {
+			const first = await post(socketPath());
+			const second = await post(socketPath());
+
+			statuses.push(first.status, second.status);
+			pi.emit(
+				assistant({ stopReason: "toolUse", tokens: first.usage ?? 0 }),
+				{ type: "turn_end" },
+				{ type: "turn_start" },
+				second.status === 200
+					? assistant({ tokens: second.usage ?? 0 })
+					: assistant({
+							stopReason: "error",
+							rawStopReason: null,
+							errorMessage:
+								"OpenAI API error (403): factory-gateway: denied: budget-closed: out of budget",
+							tokens: 0,
+						}),
+				{ type: "turn_end" },
+				{ type: "agent_end" },
+				{ type: "agent_settled", aborted: false },
+			);
+		})();
+	};
+}
+
+describe("the turn cap holds in a real gateway process", () => {
+	let upstream: EchoFixture;
+
+	before(async () => {
+		upstream = await startEchoFixture(0);
+	});
+
+	after(async () => {
+		await upstream.close();
+	});
+
+	it("denies the request after the last allowed turn even before the runner reads that turn", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-turncap-"));
+		const statuses: number[] = [];
+		const events: ControlEvent[] = [];
+		let handle: GatewayHandle | null = null;
+
+		try {
+			const h = harness(
+				[eagerAgent(() => handle?.socketPath ?? "", statuses)],
+				{
+					gateway: async (table) => {
+						const started = await startGatewayProcess({
+							gatewayDir: join(dir, "gw"),
+							auditPath: join(dir, "egress.jsonl"),
+							table: {
+								...table,
+								routes: table.routes.map((route) =>
+									route.meter === null
+										? route
+										: {
+												...route,
+												upstream: {
+													scheme: "http",
+													host: "llm.test",
+													port: upstream.port,
+													basePath: route.prefix,
+													hostHeader: "llm.test",
+													sni: "llm.test",
+													address: { kind: "pinned", ip: "127.0.0.1" },
+												},
+											},
+								),
+							},
+							readyTimeoutMs: 10_000,
+							testMode: true,
+						});
+
+						assert.ok(started.ok, started.ok ? "" : started.reason);
+						handle = started.handle;
+						handle.subscribe((event) => events.push(event));
+
+						return handle;
+					},
+				},
+			);
+
+			const before = upstream.arrivals("/openai/v1/responses");
+
+			const result = await runStage(
+				input(
+					{},
+					{ budget: { maxTurns: 1, wallMs: 60_000, stallMs: 300_000 } },
+				),
+				h.host,
+			);
+
+			assert.deepEqual(statuses, [200, 403]);
+			assert.equal(upstream.arrivals("/openai/v1/responses") - before, 1);
+			assert.equal(h.tables[0]?.ceiling.modelRequests, 1);
+			assert.equal(result.kind === "budget_exhausted" && result.cap, "turns");
+			assert.deepEqual(
+				events.find((event) => event.event === "gate_closed"),
+				{ event: "gate_closed", reason: "requests" },
+			);
+
+			const denied = readFileSync(join(dir, "egress.jsonl"), "utf8")
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line))
+				.filter((line) => line.route === "model-openai");
+
+			assert.deepEqual(
+				denied.map((line) => [line.decision, line.reason]),
+				[
+					["forward", null],
+					["deny", "budget-closed"],
+				],
+			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });
 

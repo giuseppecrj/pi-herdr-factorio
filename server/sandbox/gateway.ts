@@ -242,12 +242,8 @@ export class Gateway implements AdmissionState {
 		this.#lookup = options.lookup ?? systemLookup;
 		this.#now = options.now ?? Date.now;
 
-		if (
-			options.table.ceiling.modelTokens <= 0 ||
-			options.table.ceiling.modelRequests <= 0
-		) {
-			this.#gate = "ceiling";
-		}
+		if (options.table.ceiling.modelTokens <= 0) this.#gate = "ceiling";
+		else if (options.table.ceiling.modelRequests <= 0) this.#gate = "requests";
 
 		for (const route of options.table.routes) {
 			this.#routes.set(route.id, {
@@ -704,8 +700,10 @@ export class Gateway implements AdmissionState {
 		if (route.meter !== null) {
 			this.#modelRequests += 1;
 
+			// Counted and closed in the same step as admission, so the request
+			// after the last allowed one is denied however fast Pi sends it.
 			if (this.#modelRequests >= this.#table.ceiling.modelRequests) {
-				this.closeGate("ceiling");
+				this.closeGate("requests");
 			}
 		}
 

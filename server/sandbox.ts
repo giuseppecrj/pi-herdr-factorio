@@ -429,8 +429,6 @@ async function runSession(
 						id: signal.id,
 						cancelled: true,
 					});
-				} else if (signal.kind === "arm_turn_cap") {
-					void closeGate(stage, "turns");
 				}
 			}
 		});
@@ -493,7 +491,7 @@ async function runSession(
 
 	if (
 		cap !== null ||
-		(last?.stopReason === "error" && stage.gateReason === "turns")
+		(last?.stopReason === "error" && stage.gateReason === "requests")
 	) {
 		return {
 			outcome: { kind: "budget_exhausted", cap: cap ?? "turns" },
@@ -633,7 +631,8 @@ export async function runStage(
 				? null
 				: bareModel(input.settings.fallback),
 		modelTokens: tokenCap,
-		modelRequests: MODEL_REQUEST_CEILING,
+		// The gateway enforces the turn cap itself: one model request per turn.
+		modelRequests: Math.min(MODEL_REQUEST_CEILING, budget.maxTurns),
 	});
 
 	const gateway = await host.startGateway(table).catch(() => null);

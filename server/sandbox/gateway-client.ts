@@ -54,6 +54,8 @@ export type GatewaySpec = {
 	readonly readyTimeoutMs: number;
 	readonly ceilingsPath?: string;
 	readonly credentialsDirectory?: string;
+	/** Tests only: lets the table point a route at a loopback fixture. */
+	readonly testMode?: boolean;
 };
 
 function probeNoRoute(socketPath: string, host: string): Promise<boolean> {
@@ -270,6 +272,7 @@ export async function startGatewayProcess(
 
 	const args = [
 		GATEWAY_MAIN,
+		...(spec.testMode === true ? ["--test-mode"] : []),
 		"--socket",
 		socketPath,
 		"--audit",
