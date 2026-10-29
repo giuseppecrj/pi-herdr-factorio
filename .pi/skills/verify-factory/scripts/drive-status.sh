@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
+export GH_HOST=github.int.exe.xyz
 pr="$1"; n="$2"
 require_lane_ids "$pr" "$n" || exit 2
 lane="/home/exedev/factory-verification/$pr-w$n"
@@ -18,6 +19,7 @@ end="$(date -u +%FT%TZ)"
 {
   echo "feature=factory-status"
   echo "command=node --experimental-strip-types .status-driver.ts status (in $lane/ws)"
+  echo "GH_HOST=$GH_HOST origin=$(git -C "$lane/ws" remote get-url origin 2>/dev/null || echo none)"
   echo "head_sha=$(cat "$lane/head-sha")"
   echo "started=$start"
   echo "ended=$end"
