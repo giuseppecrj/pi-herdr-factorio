@@ -215,11 +215,12 @@ Riskiest unknowns first. Each unit ends in a check before the next starts.
 | 5 | Sandbox runner: Pi RPC in a rootless container with egress limits | an agent inside cannot reach `github.int.exe.xyz` or GitHub's API |
 | 6 | specify + accept | a vague issue ends `needs_info`; a clear one yields a contract and a held-out suite |
 | 7 | build + CI gates from `main` + held-out suite in CI | the seeded bad patch fails CI; a good one passes |
+| 7d | Read-only run viewer on loopback (owner decision 2026-10-29, after comparing Warp Factories) | one finished run shows its timeline, per-model usage for parent and children, a children tab and gateway decisions, with untrusted text escaped and no writes |
 | 8 | review + bounded repair | a planted vulnerability produces a blocking finding and a repair round |
-| 9 | handoff + branch protection + ledger | tests 1, 2 and 7 end to end |
+| 9 | handoff + branch protection + ledger + attention view in `/factory status` | tests 1, 2 and 7 end to end; runs needing the owner are grouped by kind |
 | 10 | PR feedback | a write-access review comment on an open factory PR produces a new round |
 | 11 | cadence jobs | one scheduled run files `factory:proposed` issues |
-| 12 | self-improvement loop | the metric computed from the ledger; reflect files one proposal |
+| 12 | self-improvement loop, scorers and benchmarks | the metric computed from the ledger; reflect files one proposal; a scorer labels a run and a benchmark compares two variants |
 | 13 | Linear adapter, polled like GitHub | the same tests driven from a Linear issue |
 
 ## VM
@@ -237,4 +238,5 @@ Riskiest unknowns first. Each unit ends in a check before the next starts.
 - **Review is context-isolated, not cross-family, until then.** Reviewer and acceptance seats run the same family as the builder in fresh sessions, and every evidence comment says so. The cross-family requirement in the definition of done stays unmet until Anthropic is available through the proxy.
 - **One VM is a single point of failure.** If it is down, nothing runs, and nothing lands anyway without a human merge. The reconcile tick and issue markers let it resume after a restart.
 - **Correlated blind spots.** The acceptance writer, the judge and the builder are all models. Different families reduce this but do not remove it. The seeded-defect fixtures measure it, and that is the most we can claim.
+- **Computer use is deferred.** Owner decision 2026-10-29, after comparing Warp Factories. This repo has no UI, so v1 verifies with text evidence. When the factory targets a UI repo, follow Warp's pattern. Run Xvfb and Chromium inside the stage sandbox. Attach annotated recordings and a bounded number of screenshots to the PR. Give the verifier comment rights only, never approval or merge. Open extra gateway routes only for the app under test.
 - **Merged means done for now.** This repo has no deployment. Publishing to npm stays manual until a deploy contract with a smoke check and a rollback exists.
