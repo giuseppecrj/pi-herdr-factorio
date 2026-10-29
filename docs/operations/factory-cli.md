@@ -198,6 +198,7 @@ It checks the allowlist and the local switch first and stops there, before any `
 The repository switch is the existence of a repository label named exactly `factory:enabled`. The label does not need to be on any issue. `admit` reads it with `gh api repos/<repo>/labels/factory%3Aenabled` and has three states:
 
 | State | When | Result |
+| --- | --- | --- |
 | On | The call succeeds and the returned `name` is exactly `factory:enabled`. | Admission continues. |
 | Off | The call returns HTTP 404, or the returned `name` differs in case, such as `Factory:Enabled`. GitHub looks labels up case-insensitively, so the name is compared exactly. | Refused with `repo_switch_off`. |
 | Unavailable | Any other failure, such as HTTP 401 or 403, or a network error. | Refused with `repo_switch_unavailable`. |
