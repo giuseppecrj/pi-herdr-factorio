@@ -1,0 +1,27 @@
+# The factory controller on pi-factorio. Installed by hand, never by
+# server/provision.sh. See "Install the service" in docs/operations/factory-cli.md.
+[Unit]
+Description=pi-herdr-factorio controller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=exedev
+Group=exedev
+WorkingDirectory=/home/exedev/pi-herdr-factorio
+Environment=GH_HOST=github.int.exe.xyz
+Environment=PATH=/home/exedev/.local/bin:/home/exedev/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/exedev/.local/share/mise/shims/node server/cli.ts serve --repo giuseppecrj/pi-herdr-factorio --state-dir /home/exedev/factory-state
+# SIGTERM lets the current tick finish, then the controller releases its lock and exits 0.
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=300
+Restart=on-failure
+RestartSec=30
+# Exit 2 means another controller holds the lock. Restarting would only collide again.
+RestartPreventExitStatus=2
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
