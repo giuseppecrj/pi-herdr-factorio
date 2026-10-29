@@ -633,7 +633,6 @@ export async function runStage(
 				? null
 				: bareModel(input.settings.fallback),
 		modelTokens: tokenCap,
-		// The gateway enforces the turn cap itself: one model request per turn.
 		modelRequests: Math.min(MODEL_REQUEST_CEILING, budget.maxTurns),
 	});
 
