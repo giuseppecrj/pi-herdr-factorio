@@ -2230,6 +2230,35 @@ describe("Orchestrator claim record", () => {
 	});
 });
 
+describe("Orchestrator release reasons", () => {
+	it("names an unlabel seen only through the timeline as unlabeled", async () => {
+		const { github, clock, logs, start } = world();
+		const issue = github.add(labeled(14));
+		const controller = start();
+
+		await controller.tick();
+		issue.timeline.push(
+			labelEvent({
+				id: 1,
+				at: "2026-10-29T02:00:30Z",
+				actor: "giuseppecrj",
+				event: "unlabeled",
+			}),
+		);
+		issue.updatedAt = "2026-10-29T02:00:30Z";
+		clock.t += 60_000;
+		await controller.tick();
+
+		assert.deepEqual(
+			logs.flatMap((entry) =>
+				entry.event === "claim_released" ? [entry.fields.why] : [],
+			),
+			["unlabeled"],
+		);
+		assert.equal(statuses(github, 14).at(-1), "3:released");
+	});
+});
+
 describe("Orchestrator retry marker confirmation", () => {
 	async function lostRetryMarker() {
 		const ctx = world();

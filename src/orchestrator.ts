@@ -737,7 +737,10 @@ export class Orchestrator {
 			latest.entry.kind !== "labeled" ||
 			latest.entry.id !== run.eventId
 		) {
-			this.#release(run, "new_event");
+			const unlabeled =
+				latest.kind === "found" && latest.entry.kind === "unlabeled";
+
+			this.#release(run, unlabeled ? "unlabeled" : "new_event");
 
 			return "released";
 		}
