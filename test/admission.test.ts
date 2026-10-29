@@ -29,6 +29,7 @@ import {
 	httpError,
 	labelEvent,
 	MAIN_SHA,
+	networkError,
 	renamedEvent,
 	TRUSTED_WORKFLOW,
 } from "./fake-ticket-adapter.ts";
@@ -383,20 +384,30 @@ describe("admission kill switches", () => {
 		assert.deepEqual(github.calls, []);
 	});
 
-	it("refuses when the repository variable is off, missing or unreadable, and records nothing", async () => {
+	it("refuses when the switch label is absent, differs in case or is unreadable, and records nothing", async () => {
 		const cases: [(github: FakeGitHub) => void, object][] = [
-			[(github) => (github.variable = "false"), { kind: "repo_switch_off" }],
-			[(github) => (github.variable = "TRUE"), { kind: "repo_switch_off" }],
-			[(github) => (github.variable = null), { kind: "repo_switch_missing" }],
+			[(github) => (github.repoLabels = []), { kind: "repo_switch_off" }],
+			[
+				(github) => (github.repoLabels = ["FACTORY:ENABLED"]),
+				{ kind: "repo_switch_off" },
+			],
 			[
 				(github) =>
 					github.failures.set(
-						`repos/${FAKE_REPO}/actions/variables`,
+						`repos/${FAKE_REPO}/labels`,
 						httpError(403, "Resource not accessible by integration"),
 					),
 				{
 					kind: "repo_switch_unavailable",
 					failure: { kind: "gh_failed", cause: "auth", status: 403 },
+				},
+			],
+			[
+				(github) =>
+					github.failures.set(`repos/${FAKE_REPO}/labels`, networkError()),
+				{
+					kind: "repo_switch_unavailable",
+					failure: { kind: "gh_failed", cause: "network", status: null },
 				},
 			],
 		];
@@ -418,7 +429,7 @@ describe("admission kill switches", () => {
 				unedited("Fixture 14", "Body of fixture 14."),
 			);
 
-			github.variable = "true";
+			github.repoLabels = ["factory:enabled"];
 			github.failures.clear();
 
 			assert.equal((await admit(github, state)).decision, "admitted");
@@ -429,10 +440,10 @@ describe("admission kill switches", () => {
 		const github = new FakeGitHub();
 
 		github.add(labeledBy("triager"));
-		github.variable = null;
+		github.repoLabels = [];
 
 		assert.deepEqual(reasonKinds(await admit(github)), [
-			"repo_switch_missing",
+			"repo_switch_off",
 			"unauthorized",
 		]);
 	});

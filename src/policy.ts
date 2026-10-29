@@ -8,6 +8,9 @@ import {
 
 export const READY_LABEL = "factory:ready";
 
+/** The repository kill switch is on only while a label with this exact name exists. */
+export const REPO_SWITCH_LABEL = "factory:enabled";
+
 export const CONTROL_PLANE_DIR = ".github";
 export const ACCEPTANCE_SUITE_DIR = "test/acceptance";
 
@@ -56,14 +59,8 @@ export function decideAdmission(input: {
 	return { kind: "admitted" };
 }
 
-export const REPO_SWITCH_VARIABLE = "FACTORY_ENABLED";
-
 /** Its presence in the controller state directory stops new admissions. */
 export const LOCAL_DISABLE_FILE = "disabled";
-
-export function isFactoryEnabled(variable: string | undefined): boolean {
-	return variable === "true";
-}
 
 export type PathCheck =
 	| { kind: "clean" }

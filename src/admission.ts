@@ -13,10 +13,10 @@ import {
 } from "./adapters/github.ts";
 import {
 	decideAdmission,
-	isFactoryEnabled,
 	LOCAL_DISABLE_FILE,
 	type PermissionLevel,
 	READY_LABEL,
+	REPO_SWITCH_LABEL,
 } from "./policy.ts";
 import { type Digest, digestOf, type NonEmpty } from "./run.ts";
 import {
@@ -49,7 +49,6 @@ export type RefusalReason =
 	| { readonly kind: "state_unavailable" }
 	| { readonly kind: "locally_disabled" }
 	| { readonly kind: "repo_switch_off" }
-	| { readonly kind: "repo_switch_missing" }
 	| {
 			readonly kind:
 				| "repo_switch_unavailable"
@@ -321,9 +320,7 @@ async function repoSwitchReason(
 		return { kind: "repo_switch_unavailable", failure: read.failure };
 	}
 
-	if (read.value.kind === "missing") return { kind: "repo_switch_missing" };
-
-	return isFactoryEnabled(read.value.value)
+	return read.value.kind === "present" && read.value.name === REPO_SWITCH_LABEL
 		? null
 		: { kind: "repo_switch_off" };
 }

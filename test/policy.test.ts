@@ -6,9 +6,9 @@ import {
 	checkLandPrecondition,
 	decideAdmission,
 	hasWriteAccess,
-	isFactoryEnabled,
 	type PermissionLevel,
 	READY_LABEL,
+	REPO_SWITCH_LABEL,
 } from "../src/policy.ts";
 import { failingVerdict, passingVerdict, patch } from "./helpers.ts";
 
@@ -64,12 +64,9 @@ describe("admission", () => {
 });
 
 describe("kill switch", () => {
-	it("is on only for the exact string true", () => {
-		assert.equal(isFactoryEnabled("true"), true);
-
-		for (const value of [undefined, "", "false", "TRUE", "1", " true"]) {
-			assert.equal(isFactoryEnabled(value), false, String(value));
-		}
+	it("is the repository label factory:enabled, apart from the ready label", () => {
+		assert.equal(REPO_SWITCH_LABEL, "factory:enabled");
+		assert.notEqual(REPO_SWITCH_LABEL, READY_LABEL);
 	});
 });
 

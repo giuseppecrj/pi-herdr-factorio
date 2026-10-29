@@ -3,7 +3,7 @@ import {
 	type PermissionLevel,
 	parsePermissionLevel,
 	READY_LABEL,
-	REPO_SWITCH_VARIABLE,
+	REPO_SWITCH_LABEL,
 } from "../policy.ts";
 import type { TicketRef } from "../run.ts";
 import {
@@ -74,9 +74,10 @@ export type BodyHistory = {
 	readonly versions: readonly BodyVersion[];
 };
 
+/** GitHub looks labels up case-insensitively, so `name` is the stored name. */
 export type RepoSwitch =
-	| { readonly kind: "set"; readonly value: string }
-	| { readonly kind: "missing" };
+	| { readonly kind: "present"; readonly name: string }
+	| { readonly kind: "absent" };
 
 export type GitHubPaging = {
 	readonly pageSize: number;
@@ -516,22 +517,22 @@ export class GitHubTicketAdapter implements TicketReader {
 	async readRepoSwitch(): Promise<Read<RepoSwitch>> {
 		const read = await this.#gh([
 			"api",
-			`repos/${this.repo}/actions/variables/${REPO_SWITCH_VARIABLE}`,
+			`repos/${this.repo}/labels/${encodeURIComponent(REPO_SWITCH_LABEL)}`,
 		]);
 
 		if (read.kind === "failed") {
 			const { failure } = read;
 
 			return failure.kind === "gh_failed" && failure.cause === "not_found"
-				? { kind: "ok", value: { kind: "missing" } }
+				? { kind: "ok", value: { kind: "absent" } }
 				: read;
 		}
 
-		const value = stringOf(pathOf(read.value, ["value"]));
+		const name = stringOf(pathOf(read.value, ["name"]));
 
-		return value === null
+		return name === null
 			? MALFORMED
-			: { kind: "ok", value: { kind: "set", value } };
+			: { kind: "ok", value: { kind: "present", name } };
 	}
 
 	#issueOf(ref: TicketRef): number {

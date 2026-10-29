@@ -206,6 +206,14 @@ export function httpError(status: number, message = "Failed"): ExecResult {
 	};
 }
 
+export function networkError(): ExecResult {
+	return {
+		stdout: "",
+		stderr: "error connecting to api.github.com\n",
+		code: 1,
+	};
+}
+
 /**
  * Answers the `gh api` requests the GitHub adapter makes, from in-memory
  * issues. `failures` maps a request path prefix to the result it gets.
@@ -216,7 +224,7 @@ export class FakeGitHub {
 	readonly permissions = new Map<string, string>();
 	readonly failures = new Map<string, ExecResult>();
 	workflow: string | null = TRUSTED_WORKFLOW;
-	variable: string | null = "true";
+	repoLabels: string[] = ["factory:enabled"];
 
 	constructor() {
 		this.permissions.set("giuseppecrj", "admin");
@@ -263,10 +271,18 @@ export class FakeGitHub {
 				: ok(this.workflow);
 		}
 
-		if (route === "actions/variables/FACTORY_ENABLED") {
-			return this.variable === null
+		const label = /^labels\/([^/]+)$/.exec(route);
+
+		if (label !== null) {
+			const wanted = decodeURIComponent(label[1] ?? "").toLowerCase();
+
+			const name = this.repoLabels.find(
+				(stored) => stored.toLowerCase() === wanted,
+			);
+
+			return name === undefined
 				? httpError(404, "Not Found")
-				: ok({ name: "FACTORY_ENABLED", value: this.variable });
+				: ok({ id: 1, name, color: "0E8A16", default: false });
 		}
 
 		const permission = /^collaborators\/([^/]+)\/permission$/.exec(route);

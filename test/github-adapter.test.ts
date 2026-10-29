@@ -17,6 +17,7 @@ import {
 	fakeIssue,
 	httpError,
 	labelEvent,
+	networkError,
 	renamedEvent,
 } from "./fake-ticket-adapter.ts";
 
@@ -367,31 +368,60 @@ describe("GitHubTicketAdapter reads", () => {
 		});
 	});
 
-	it("reads the repository switch, a missing variable and a refusal", async () => {
+	it("reads the repository switch label by its encoded name", async () => {
 		const github = new FakeGitHub();
 		const adapter = adapterFor(github);
 
 		assert.deepEqual(await adapter.readRepoSwitch(), {
 			kind: "ok",
-			value: { kind: "set", value: "true" },
+			value: { kind: "present", name: "factory:enabled" },
 		});
+		assert.deepEqual(github.calls, [
+			["gh", "api", `repos/${FAKE_REPO}/labels/factory%3Aenabled`],
+		]);
+	});
 
-		github.variable = null;
+	it("returns the stored name of a label that differs in case", async () => {
+		const github = new FakeGitHub();
 
-		assert.deepEqual(await adapter.readRepoSwitch(), {
+		github.repoLabels = ["Factory:Enabled"];
+
+		assert.deepEqual(await adapterFor(github).readRepoSwitch(), {
 			kind: "ok",
-			value: { kind: "missing" },
+			value: { kind: "present", name: "Factory:Enabled" },
 		});
+	});
 
-		github.failures.set(
-			`repos/${FAKE_REPO}/actions/variables`,
-			httpError(403, "Resource not accessible by integration"),
-		);
+	it("reads an absent switch label from HTTP 404", async () => {
+		const github = new FakeGitHub();
 
-		assert.deepEqual(await adapter.readRepoSwitch(), {
-			kind: "failed",
-			failure: { kind: "gh_failed", cause: "auth", status: 403 },
+		github.repoLabels = [];
+
+		assert.deepEqual(await adapterFor(github).readRepoSwitch(), {
+			kind: "ok",
+			value: { kind: "absent" },
 		});
+	});
+
+	it("fails the switch read on auth and network errors", async () => {
+		const cases = [
+			[
+				httpError(403, "Resource not accessible by integration"),
+				{ kind: "gh_failed", cause: "auth", status: 403 },
+			],
+			[networkError(), { kind: "gh_failed", cause: "network", status: null }],
+		] as const;
+
+		for (const [result, failure] of cases) {
+			const github = new FakeGitHub();
+
+			github.failures.set(`repos/${FAKE_REPO}/labels`, result);
+
+			assert.deepEqual(await adapterFor(github).readRepoSwitch(), {
+				kind: "failed",
+				failure,
+			});
+		}
 	});
 });
 
