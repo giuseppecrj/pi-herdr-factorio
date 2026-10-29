@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	chmodSync,
@@ -154,12 +155,87 @@ describe("pinned asset inputs", () => {
 		for (const [path, value] of entries) {
 			const entry = objectOf(value);
 
-			assert.match(textOf(fieldOf(entry, "integrity")) ?? "", /^sha512-/, path);
+			const integrity = textOf(fieldOf(entry, "integrity")) ?? "";
+			const hash = integrity.slice("sha512-".length);
+
+			assert.match(integrity, /^sha512-[A-Za-z0-9+/]{86}==$/, path);
+			assert.equal(Buffer.from(hash, "base64").length, 64, path);
+			assert.equal(Buffer.from(hash, "base64").toString("base64"), hash, path);
 			assert.match(
 				textOf(fieldOf(entry, "resolved")) ?? "",
 				/^https:\/\/registry\.npmjs\.org\//,
 				path,
 			);
 		}
+	});
+});
+
+describe("asset bundle install in server/provision.sh", () => {
+	const script = readFileSync(
+		new URL("../../server/provision.sh", import.meta.url),
+		"utf8",
+	);
+
+	it("runs the bundle's npm ci with lifecycle scripts off, in a clean environment", () => {
+		const lines = script.split("\n");
+		const first = lines.findIndex((line) => line.includes('(cd "$b/pkg"'));
+
+		const last = lines.findIndex(
+			(line, index) => index >= first && line.endsWith(">/dev/null)"),
+		);
+
+		assert.ok(first !== -1 && last >= first);
+
+		const dir = mkdtempSync(join(tmpdir(), "factory-provision-"));
+
+		try {
+			const bundle = join(dir, "bundle");
+			const record = join(dir, "npm-call");
+
+			mkdirSync(join(bundle, "pkg"), { recursive: true });
+			mkdirSync(join(bundle, "node", "bin"), { recursive: true });
+			writeFileSync(
+				join(bundle, "node", "bin", "npm"),
+				`#!/bin/sh\n{ printf '%s\\n' "$@"; printf 'cwd=%s\\n' "$PWD"; env | sort; } >${JSON.stringify(record)}\n`,
+			);
+			chmodSync(join(bundle, "node", "bin", "npm"), 0o755);
+
+			const snippet = lines.slice(first, last + 1).join("\n");
+
+			const run = spawnSync(
+				"bash",
+				["-c", `set -eu\nb=$1\nbuild=$2\n${snippet}`, "provision", bundle, dir],
+				{ env: { PATH: "/usr/bin:/bin", SECRET_TOKEN: "must-not-leak" } },
+			);
+
+			assert.equal(run.status, 0, run.stderr.toString());
+
+			const seen = readFileSync(record, "utf8").trim().split("\n");
+			const cwd = seen.findIndex((line) => line.startsWith("cwd="));
+
+			assert.deepEqual(seen.slice(0, cwd), [
+				"ci",
+				"--ignore-scripts",
+				"--no-audit",
+				"--no-fund",
+			]);
+			assert.equal(seen[cwd], `cwd=${join(bundle, "pkg")}`);
+			assert.equal(
+				seen.some((line) => line.includes("must-not-leak")),
+				false,
+			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("passes --ignore-scripts to every npm install and ci it runs", () => {
+		const calls = script
+			.split("\n")
+			.filter((line) => /\bnpm (ci|install|i)\b/.test(line));
+
+		assert.ok(calls.length >= 2);
+
+		for (const line of calls) assert.match(line, /--ignore-scripts\b/, line);
 	});
 });
