@@ -1,6 +1,6 @@
 ---
 name: verify-factory
-description: Verify pi-herdr-factorio on its real surfaces. Use to prove a change on the pi-factorio exe.dev VM, through repository-scoped gh reads, the /factory status command and the factory CLI (workflow-check, status --json), and when a PR needs live evidence.
+description: Verify pi-herdr-factorio on its real surfaces. Use to prove a change on the pi-factorio exe.dev VM, through repository-scoped gh reads, the /factory status command and the factory CLI (workflow-check, status --json, admit --json), and when a PR needs live evidence.
 ---
 
 # Verify pi-herdr-factorio
@@ -25,7 +25,7 @@ S=.pi/skills/verify-factory/scripts
 $S/lane-setup.sh <pr-id> <worker-n>
 ```
 
-This ships `git archive HEAD` of your checkout to `/home/exedev/factory-verification/<pr-id>-w<n>/ws` and runs `npm ci` there. State goes in `.../state`. It never touches the controller's production checkout. Commit first: uncommitted changes are not shipped. Ready means the script prints `lane=<dir> sha=<sha>`.
+This ships `git archive HEAD` of your checkout to `/home/exedev/factory-verification/<pr-id>-w<n>/ws`, makes it a Git repository whose `origin` is `https://github.com/giuseppecrj/pi-herdr-factorio.git` so `/factory status` finds the repository, and runs `npm ci` there. State goes in `.../state`. It never touches the controller's production checkout. Commit first: uncommitted changes are not shipped. Ready means the script prints `lane=<dir> sha=<sha>`.
 
 Live lanes always use a per-lane workspace and state directory under `/home/exedev/factory-verification/`. Never share one between lanes.
 
@@ -53,7 +53,10 @@ Send multi-line scripts with `ssh host bash -s < script`. `vm.sh <script> [args]
 $S/vm.sh $S/drive-status.sh <pr-id> <worker-n>   # /factory status
 $S/vm.sh $S/drive-gh.sh <pr-id> <worker-n>       # gh repo, label and issue reads
 $S/vm.sh $S/drive-workflow.sh <pr-id> <worker-n> [branch...]  # workflow-check and status --json
+$S/vm.sh $S/drive-admit.sh <pr-id> <worker-n> <issue>...       # admit --json
 ```
+
+Every drive script exports `GH_HOST=github.int.exe.xyz`.
 
 Feature recipes are in `.pi/skills/verify-factory/features/`. Each lists the command and the observable result that proves it.
 
@@ -61,11 +64,28 @@ Pi's print mode (`pi -p "/factory status"`) sends the text to the model instead 
 
 Mutations (creating fixture issues, labels, comments, restarts) need the fixture grant from the task. Use one fixture issue per lane, named with the PR ID and worker number. A step that needs the owner to review or merge stays unchecked until the owner acts.
 
+## Snapshot
+
+Run this before every swarm and again after it:
+
+```bash
+$S/vm.sh $S/vm-snapshot.sh <pr-id> 0 <minutes> '<glob>'
+```
+
+It prints, and saves to `/tmp/swarm-<pr-id>/worker-0/vm-snapshot-<UTC time>.txt`:
+
+- the lane directories under `/home/exedev/factory-verification`;
+- the PID, parent PID and name of every `node`, `gh` and `pi` process owned by `exedev`;
+- files under `~` changed in the last `<minutes>` minutes, except under `factory-verification`, `.npm` and `.cache`;
+- entries directly under `/tmp` that match `<glob>`, such as `factory-pwned*` for a sentinel a hostile-text lane would create.
+
+`<minutes>` is a whole number. `<glob>` may contain only letters, digits, `.`, `_`, `-`, `*` and `?`. Set `<minutes>` to cover the swarm. Then diff the two files with `diff`. After a clean swarm, the only differences are the snapshot time, lanes the swarm still has to clean up, and files the lanes were expected to change. A leftover process, an unexpected file or a sentinel is a finding.
+
 ## Evidence
 
 Save each lane's evidence under `/tmp/swarm-<pr-id>/worker-<n>/` on the VM and return that absolute path. The drive scripts write it. Each lane directory has:
 
-- the raw output (`status.txt`, `repo.json`, `labels.txt`, `issues.json`, `workflow-check-<ref>.json`, `status-<ref>.json`);
+- the raw output (`status.txt`, `repo.json`, `labels.txt`, `issues.json`, `workflow-check-<ref>.json`, `status-<ref>.json`, `admission-<issue>.json`);
 - an evidence file with the command, start and end timestamps, head SHA, expected result, actual result and exit status.
 
 Proof standards:
@@ -98,6 +118,8 @@ Run cleanup after a failed attempt too.
 | `drive-status.sh` | VM | `vm.sh drive-status.sh <pr-id> <n>` |
 | `drive-gh.sh` | VM | `vm.sh drive-gh.sh <pr-id> <n>` |
 | `drive-workflow.sh` | VM | `vm.sh drive-workflow.sh <pr-id> <n> [branch...]` |
+| `drive-admit.sh` | VM | `vm.sh drive-admit.sh <pr-id> <n> <issue>...` |
+| `vm-snapshot.sh` | VM | `vm.sh vm-snapshot.sh <pr-id> <n> <minutes> <glob>` |
 | `cleanup.sh` | VM | `vm.sh cleanup.sh <pr-id> <n>` |
 | `status-driver.ts` | VM, copied by `drive-status.sh` | not run directly |
 
