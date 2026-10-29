@@ -1467,6 +1467,30 @@ describe("F04c admission carry-overs", () => {
 		);
 	});
 
+	it("lists the recorded events of one issue and skips other files", async () => {
+		const github = new FakeGitHub();
+		const state = stateDir();
+		const store = fileAdmissionStore(state);
+
+		assert.deepEqual(await store.listEvents({ repo, issue: 14 }), []);
+
+		github.add(labeledBy("giuseppecrj"));
+		await admit(github, state);
+
+		const dir = join(
+			state,
+			"admissions/github/giuseppecrj/pi-herdr-factorio/14",
+		);
+
+		writeFileSync(join(dir, ".34537521384.ab.tmp"), "{}");
+		writeFileSync(join(dir, "notes.json"), "{}");
+
+		assert.deepEqual(await store.listEvents({ repo, issue: 14 }), [
+			"34537521383",
+		]);
+		assert.deepEqual(await store.listEvents({ repo, issue: 15 }), []);
+	});
+
 	it("makes only the four issue reads when a tick passes its reads", async () => {
 		const github = new FakeGitHub();
 		const state = stateDir();

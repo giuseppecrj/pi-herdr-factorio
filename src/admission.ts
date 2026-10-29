@@ -5,6 +5,7 @@ import {
 	lstat,
 	mkdir,
 	open,
+	readdir,
 	unlink,
 } from "node:fs/promises";
 import { readFile } from "node:fs/promises";
@@ -173,6 +174,10 @@ export interface AdmissionStore {
 		snapshot: IssueSnapshot,
 	): Promise<RecordOutcome>;
 	read(key: RecordKey): Promise<RecordRead>;
+	/** The label event IDs that have a record for one issue, or `null` when they cannot be listed. */
+	listEvents(
+		key: Omit<RecordKey, "eventId">,
+	): Promise<readonly string[] | null>;
 }
 
 /**
@@ -503,6 +508,26 @@ export function fileAdmissionStore(stateDir: string): AdmissionStore {
 			return receipt === null
 				? { kind: "unreadable" }
 				: { kind: "found", receipt };
+		},
+
+		async listEvents(key) {
+			let names: string[];
+
+			try {
+				names = await readdir(recordDir(key.repo, key.issue));
+			} catch (error) {
+				const code = error instanceof Error ? errorCode(error) : null;
+
+				return code === "ENOENT" ? [] : null;
+			}
+
+			return names.flatMap((name) => {
+				const eventId = name.slice(0, -".json".length);
+
+				return name.endsWith(".json") && EVENT_ID.test(eventId)
+					? [eventId]
+					: [];
+			});
 		},
 
 		async record(receipt, snapshot) {

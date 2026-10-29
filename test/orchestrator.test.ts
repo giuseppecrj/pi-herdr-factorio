@@ -52,6 +52,7 @@ import {
 	fakeIssue,
 	labelEvent,
 	networkError,
+	renamedEvent,
 } from "./fake-ticket-adapter.ts";
 
 function slug(text: string): RepoSlug {
@@ -104,6 +105,11 @@ function memoryStore(): AdmissionStore & {
 			return receipt === undefined
 				? { kind: "absent" as const }
 				: { kind: "found" as const, receipt };
+		},
+		async listEvents(key: { issue: number }) {
+			return [...records.values()].flatMap((receipt) =>
+				receipt.issue === key.issue ? [receipt.eventId] : [],
+			);
 		},
 	};
 
@@ -1459,6 +1465,32 @@ describe("Orchestrator live marker validation", () => {
 		assert.deepEqual(again.runs, []);
 		assert.equal(github.markers(14).length, 3);
 	});
+});
+
+describe("Orchestrator local admission recovery", () => {
+	for (const lost of ["the first marker", "the marker and the claim record"]) {
+		it(`adopts the recorded admission after losing ${lost} and a later rename`, async () => {
+			const { github, files, store, start } = world();
+			const issue = github.add(labeled(14));
+
+			github.posts = ["lost"];
+			await start().tick();
+
+			assert.equal(store.records.size, 1);
+
+			if (lost.includes("claim")) files.claims.clear();
+
+			issue.title = "A new title";
+			issue.timeline.push(renamedEvent("2026-10-29T01:30:00Z"));
+			issue.updatedAt = "2026-10-29T01:30:00Z";
+
+			const report = await start().tick();
+
+			assert.deepEqual(report.refused, []);
+			assert.equal(report.runs[0]?.runId, runOf(14));
+			assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+		});
+	}
 });
 
 describe("Orchestrator reconcile order", () => {

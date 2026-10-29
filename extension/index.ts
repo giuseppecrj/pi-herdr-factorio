@@ -39,6 +39,9 @@ const DRY_RUN_STORE_SWITCH_ASSUMED_ON: AdmissionStore = {
 	async read() {
 		return { kind: "absent" };
 	},
+	async listEvents() {
+		return [];
+	},
 };
 
 export type WorkflowState =

@@ -1038,14 +1038,81 @@ export class Orchestrator {
 		}
 	}
 
-	async #admit(input: {
-		record: IssueRecord;
-		ledger: CleanLedger;
-		seq: number;
-		reads: TickReads;
-		refused: { issue: number; reasons: RefusalReason["kind"][] }[];
-	}): Promise<ActiveRun | null> {
-		const { record, ledger } = input;
+	/**
+	 * Finds an admission this controller recorded for the issue's current ready
+	 * event but never marked, such as after a crash before the first marker. It
+	 * is adopted with its original snapshot and workflow binding, so a later
+	 * edit to the issue cannot strand it. The timeline is read only when such a
+	 * record exists.
+	 */
+	async #recordedAdmission(
+		record: IssueRecord,
+		ledger: CleanLedger,
+	): Promise<
+		| { readonly kind: "found"; readonly receipt: AdmittedReceipt }
+		| { readonly kind: "none" }
+		| { readonly kind: "defer" }
+	> {
+		const repo = this.#input.repo;
+		const issue = record.number;
+		const events = await this.#input.store.listEvents({ repo, issue });
+
+		if (events === null) return { kind: "defer" };
+
+		const unmarked = events.filter(
+			(eventId) =>
+				latestFor(ledger, runIdOf({ repo, issue, eventId })) === null,
+		);
+
+		if (unmarked.length === 0) return { kind: "none" };
+
+		const timeline = await this.#adapter.readTimeline(issue);
+
+		if (timeline.kind === "failed") return { kind: "defer" };
+
+		const latest = latestReadyEntry(timeline.value);
+
+		if (
+			latest.kind !== "found" ||
+			latest.entry.kind !== "labeled" ||
+			!unmarked.includes(latest.entry.id)
+		) {
+			return { kind: "none" };
+		}
+
+		const stored = await this.#input.store.read({
+			repo,
+			issue,
+			eventId: latest.entry.id,
+		});
+
+		if (stored.kind === "unreadable") return { kind: "defer" };
+
+		if (stored.kind === "absent") return { kind: "none" };
+
+		if (stored.receipt.eventAt !== latest.entry.at) {
+			this.#markCorrupt(
+				issue,
+				{ kind: "corrupt", defect: "record_mismatch", commentId: "" },
+				record.updatedAt,
+			);
+
+			return { kind: "defer" };
+		}
+
+		this.#input.log("admission_recovered", {
+			issue,
+			eventId: stored.receipt.eventId,
+		});
+
+		return { kind: "found", receipt: stored.receipt };
+	}
+
+	async #freshAdmission(
+		record: IssueRecord,
+		reads: TickReads,
+		refused: { issue: number; reasons: RefusalReason["kind"][] }[],
+	): Promise<AdmittedReceipt | null> {
 		const issue = record.number;
 		const repo = this.#input.repo;
 
@@ -1057,49 +1124,68 @@ export class Orchestrator {
 			allowlist: FACTORY_REPOSITORIES,
 			store: this.#input.store,
 			paging: this.#input.paging,
-			tick: input.reads,
+			tick: reads,
 		});
 
-		let admitted: AdmittedReceipt;
+		if (receipt.decision === "admitted") return receipt;
 
-		if (receipt.decision === "admitted") {
-			admitted = receipt;
-		} else {
-			const kinds = receipt.reasons.map((reason) => reason.kind);
+		const kinds = receipt.reasons.map((reason) => reason.kind);
 
-			if (!kinds.includes("duplicate_event") || receipt.eventId === null) {
-				input.refused.push({ issue, reasons: kinds });
+		if (!kinds.includes("duplicate_event") || receipt.eventId === null) {
+			refused.push({ issue, reasons: kinds });
 
-				if (kinds.every((kind) => SETTLED_REFUSALS.has(kind))) {
-					this.state.seen.set(issue, {
-						updatedAt: record.updatedAt,
-						verdict: { kind: "decided" },
-					});
-				}
-
-				return null;
+			if (kinds.every((kind) => SETTLED_REFUSALS.has(kind))) {
+				this.state.seen.set(issue, {
+					updatedAt: record.updatedAt,
+					verdict: { kind: "decided" },
+				});
 			}
 
-			const stored = await this.#input.store.read({
-				repo,
-				issue,
-				eventId: receipt.eventId,
-			});
-
-			if (stored.kind !== "found") return null;
-
-			if (stored.receipt.snapshotDigest !== receipt.snapshotDigest) {
-				this.#markCorrupt(
-					issue,
-					{ kind: "corrupt", defect: "record_mismatch", commentId: "" },
-					record.updatedAt,
-				);
-
-				return null;
-			}
-
-			admitted = stored.receipt;
+			return null;
 		}
+
+		const stored = await this.#input.store.read({
+			repo,
+			issue,
+			eventId: receipt.eventId,
+		});
+
+		if (stored.kind !== "found") return null;
+
+		if (stored.receipt.snapshotDigest !== receipt.snapshotDigest) {
+			this.#markCorrupt(
+				issue,
+				{ kind: "corrupt", defect: "record_mismatch", commentId: "" },
+				record.updatedAt,
+			);
+
+			return null;
+		}
+
+		return stored.receipt;
+	}
+
+	async #admit(input: {
+		record: IssueRecord;
+		ledger: CleanLedger;
+		seq: number;
+		reads: TickReads;
+		refused: { issue: number; reasons: RefusalReason["kind"][] }[];
+	}): Promise<ActiveRun | null> {
+		const { record, ledger } = input;
+		const issue = record.number;
+		const repo = this.#input.repo;
+
+		const local = await this.#recordedAdmission(record, ledger);
+
+		if (local.kind === "defer") return null;
+
+		const admitted =
+			local.kind === "found"
+				? local.receipt
+				: await this.#freshAdmission(record, input.reads, input.refused);
+
+		if (admitted === null) return null;
 
 		const runId = runIdOf({ repo, issue, eventId: admitted.eventId });
 		const latest = latestFor(ledger, runId);
