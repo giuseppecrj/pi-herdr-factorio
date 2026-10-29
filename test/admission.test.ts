@@ -20,6 +20,7 @@ import {
 } from "../src/admission.ts";
 import type { BodyHistory } from "../src/adapters/github.ts";
 import { digestOf } from "../src/run.ts";
+import type { JsonValue } from "../src/tickets.ts";
 import { isRepoSlug, type RepoSlug } from "../src/workflow.ts";
 import {
 	FAKE_REPO,
@@ -182,6 +183,92 @@ describe("admitTicket", () => {
 		assert.deepEqual(receipt.reasons, [
 			{ kind: "unauthorized", permission: "read" },
 		]);
+	});
+
+	it("chooses the ready event by time, not by array position", async () => {
+		const newestFirst = new FakeGitHub();
+
+		newestFirst.add(
+			fakeIssue(14, {
+				timeline: [
+					labelEvent({ id: 3, at: "2026-10-29T01:00:10Z", actor: "triager" }),
+					labelEvent({
+						id: 2,
+						at: "2026-10-29T01:00:05Z",
+						actor: "giuseppecrj",
+						event: "unlabeled",
+					}),
+					labelEvent({
+						id: 1,
+						at: "2026-10-29T01:00:00Z",
+						actor: "giuseppecrj",
+					}),
+				],
+			}),
+		);
+
+		const receipt = await admit(newestFirst);
+
+		assert.equal(receipt.eventId, "3");
+		assert.deepEqual(receipt.reasons, [
+			{ kind: "unauthorized", permission: "read" },
+		]);
+
+		const removed = new FakeGitHub();
+
+		removed.add(
+			fakeIssue(14, {
+				timeline: [
+					labelEvent({
+						id: 2,
+						at: "2026-10-29T01:30:00Z",
+						actor: "writer",
+						event: "unlabeled",
+					}),
+					labelEvent({ id: 1, at: LABEL_AT, actor: "writer" }),
+				],
+			}),
+		);
+
+		assert.deepEqual(reasonKinds(await admit(removed)), ["not_labeled"]);
+	});
+
+	it("refuses ready events that share the latest second", async () => {
+		const pairs: [JsonValue, JsonValue][] = [
+			[
+				labelEvent({ id: 1, at: LABEL_AT, actor: "triager" }),
+				labelEvent({ id: 2, at: LABEL_AT, actor: "giuseppecrj" }),
+			],
+			[
+				labelEvent({
+					id: 1,
+					at: LABEL_AT,
+					actor: "writer",
+					event: "unlabeled",
+				}),
+				labelEvent({ id: 2, at: LABEL_AT, actor: "writer" }),
+			],
+		];
+
+		for (const pair of pairs) {
+			const github = new FakeGitHub();
+
+			github.add(
+				fakeIssue(14, {
+					timeline: [
+						labelEvent({ id: 9, at: "2026-10-29T01:00:00Z", actor: "writer" }),
+						...pair,
+					],
+				}),
+			);
+
+			const receipt = await admit(github);
+
+			assert.deepEqual(receipt.reasons, [
+				{ kind: "ambiguous_snapshot", detail: "label_events_same_second" },
+			]);
+			assert.equal(receipt.eventId, null);
+		}
 	});
 
 	it("refuses a denied or unreadable permission and a withheld actor", async () => {

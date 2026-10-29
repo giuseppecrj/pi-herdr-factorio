@@ -36,6 +36,7 @@ export const FACTORY_REPOSITORIES: readonly RepoSlug[] = [
 ].filter(isRepoSlug);
 
 export type Ambiguity =
+	| "label_events_same_second"
 	| "renamed_since_label"
 	| "rename_history_incomplete"
 	| "title_changed_between_reads"
@@ -360,19 +361,32 @@ async function repoSwitchReason(
 
 type ReadyEntry = Extract<TimelineEntry, { kind: "labeled" | "unlabeled" }>;
 
-function lastReadyEntry(timeline: readonly TimelineEntry[]): ReadyEntry | null {
-	let last: ReadyEntry | null = null;
+type LatestReady =
+	| { readonly kind: "none" }
+	| { readonly kind: "tied" }
+	| { readonly kind: "found"; readonly entry: ReadyEntry };
 
-	for (const entry of timeline) {
-		if (
+/** The `factory:ready` entry with the latest time, whatever the array order. */
+function latestReadyEntry(timeline: readonly TimelineEntry[]): LatestReady {
+	const ready = timeline.filter(
+		(entry): entry is ReadyEntry =>
 			(entry.kind === "labeled" || entry.kind === "unlabeled") &&
-			entry.label === READY_LABEL
-		) {
-			last = entry;
-		}
+			entry.label === READY_LABEL,
+	);
+
+	let latest: ReadyEntry | null = null;
+
+	for (const entry of ready) {
+		if (latest === null || entry.at > latest.at) latest = entry;
 	}
 
-	return last;
+	if (latest === null) return { kind: "none" };
+
+	const latestAt = latest.at;
+
+	return ready.filter((entry) => entry.at === latestAt).length > 1
+		? { kind: "tied" }
+		: { kind: "found", entry: latest };
 }
 
 async function evaluate(input: {
@@ -426,9 +440,18 @@ async function evaluate(input: {
 		return refuse({ kind: "timeline_unavailable", failure: timeline.failure });
 	}
 
-	const event = lastReadyEntry(timeline.value);
+	const latest = latestReadyEntry(timeline.value);
 
-	if (event === null) return refuse({ kind: "no_label_event" });
+	if (latest.kind === "none") return refuse({ kind: "no_label_event" });
+
+	if (latest.kind === "tied") {
+		return refuse({
+			kind: "ambiguous_snapshot",
+			detail: "label_events_same_second",
+		});
+	}
+
+	const event = latest.entry;
 
 	if (event.kind === "unlabeled") return refuse({ kind: "not_labeled" });
 

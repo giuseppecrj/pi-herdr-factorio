@@ -186,7 +186,7 @@ node server/cli.ts admit --json --repo <owner/name> --issue <number> --state-dir
 - The repository has a label named exactly `factory:enabled`. This is the repository kill switch, described below.
 - `.github/factory/WORKFLOW.md` on `main` is valid. `baseSha` is the `main` SHA it was loaded from.
 - The issue is open, is not a pull request, and has the `factory:ready` label.
-- The latest `factory:ready` entry on the issue timeline is a `labeled` event, not `unlabeled`. This is the admitted event.
+- The latest `factory:ready` entry on the issue timeline is a `labeled` event, not `unlabeled`. This is the admitted event. Latest means the greatest `created_at`, whatever order the timeline returns. When two `factory:ready` entries share that second, admission refuses with `ambiguous_snapshot` and `label_events_same_second`.
 - That event's actor has `admin` or `write` permission on the repository. The issue author does not matter.
 - The title and body at the time of the event are proved, as described under snapshot.
 - No admission was recorded before for the same event ID.
@@ -298,6 +298,7 @@ The repository switch reason comes first. When the issue also fails a check, tha
 
 | `detail` | Meaning |
 | --- | --- |
+| `label_events_same_second` | Two `factory:ready` timeline entries, `labeled` or `unlabeled`, share the latest `created_at`, so the admitted event is unknown. `eventId` and the later fields are `null`. |
 | `renamed_since_label` | The title changed at or after the label, by the timeline or by the GraphQL read. |
 | `rename_history_incomplete` | The GraphQL read returned fewer renames than its `totalCount`. At most 100 are read. |
 | `title_changed_between_reads` | The GraphQL title differs from the title the issue read returned. |
