@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { deflateSync, gzipSync } from "node:zlib";
 import {
 	bindCredentials,
 	buildUpstreamHeaders,
@@ -429,6 +430,57 @@ describe("reflection scanning", () => {
 		assert.equal(filter.push(Buffer.from(text.slice(cut))).kind, "blocked");
 	});
 
+	it("finds the secret JSON-escaped, percent-encoded in part or base64 at any offset, across chunks", () => {
+		const escaped = [...ECHO_SECRET]
+			.map((char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`)
+			.join("");
+
+		const bodies = [
+			`{"echo":"${escaped}"}`,
+			`{"echo":"${ECHO_SECRET.slice(0, 4)}\\u00${ECHO_SECRET.charCodeAt(4).toString(16)}${ECHO_SECRET.slice(5)}"}`,
+			`q=%${ECHO_SECRET.charCodeAt(0).toString(16)}${ECHO_SECRET.slice(1)}`,
+			Buffer.from(`x${ECHO_SECRET}tail`).toString("base64"),
+			Buffer.from(`xy${ECHO_SECRET}tail`).toString("base64url"),
+			`prefix ${Buffer.from(`${ECHO_SECRET}tail`).toString("base64")}`,
+		];
+
+		for (const text of bodies) {
+			for (const cut of [1, Math.floor(text.length / 2), text.length - 1]) {
+				const filter = new ReflectionFilter(forms);
+				const first = filter.push(Buffer.from(text.slice(0, cut)));
+
+				const second =
+					first.kind === "blocked"
+						? first
+						: filter.push(Buffer.from(text.slice(cut)));
+
+				const last = second.kind === "blocked" ? second : filter.end();
+
+				assert.equal(last.kind, "blocked", `${text} @${cut}`);
+			}
+		}
+	});
+
+	it("refuses a body that starts with a gzip, zlib, brotli or zstd magic number", () => {
+		for (const head of [
+			gzipSync(Buffer.from("hello")),
+			deflateSync(Buffer.from("hello")),
+			Buffer.from([0xce, 0xb2, 0xcf, 0x81, 0x00]),
+			Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x00]),
+		]) {
+			const filter = new ReflectionFilter(forms);
+			const first = filter.push(head.subarray(0, 1));
+
+			assert.equal(first.kind === "pass" && first.bytes.length, 0);
+			assert.equal(filter.push(head.subarray(1)).kind, "blocked");
+		}
+
+		const short = new ReflectionFilter(forms);
+
+		short.push(Buffer.from([0x1f, 0x8b]));
+		assert.equal(short.end().kind, "blocked");
+	});
+
 	it("passes clean bytes through unchanged", () => {
 		const filter = new ReflectionFilter(forms);
 		const parts = ["hello ", "world, ", "nothing secret ", "in this body"];
@@ -442,7 +494,12 @@ describe("reflection scanning", () => {
 			if (result.kind === "pass") out.push(result.bytes);
 		}
 
-		out.push(filter.end());
+		const rest = filter.end();
+
+		assert.equal(rest.kind, "pass");
+
+		if (rest.kind === "pass") out.push(rest.bytes);
+
 		assert.equal(Buffer.concat(out).toString(), parts.join(""));
 	});
 });

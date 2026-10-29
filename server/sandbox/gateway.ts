@@ -857,11 +857,9 @@ export class Gateway implements AdmissionState {
 
 			if (status >= 300 && status < 400) return blockedHead("redirect-refused");
 
-			if (encoding !== undefined && encoding.toLowerCase() !== "identity") {
-				return blockedHead("response-blocked");
-			}
+			if (encoding !== undefined) return blockedHead("response-blocked");
 
-			if (incoming.rawHeaders.some((entry) => this.#scanner.contains(entry))) {
+			if (incoming.rawHeaders.some((entry) => this.#scanner.reveals(entry))) {
 				return blockedHead("response-blocked");
 			}
 		}
@@ -909,7 +907,19 @@ export class Gateway implements AdmissionState {
 		incoming.on("end", () => {
 			if (exchange.finished) return;
 
-			if (filter !== null) res.write(filter.end());
+			if (filter !== null) {
+				const rest = filter.end();
+
+				if (rest.kind === "blocked") {
+					upstream.destroy();
+					res.destroy();
+					done("blocked_mid_stream", "response-blocked", status);
+
+					return;
+				}
+
+				res.write(rest.bytes);
+			}
 
 			meter?.end();
 			this.#meter(exchange, route, meter);

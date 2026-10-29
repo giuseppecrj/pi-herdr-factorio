@@ -86,6 +86,38 @@ function respond(req: IncomingMessage, res: ServerResponse, path: string) {
 			res.end(`b64 ${Buffer.from(secret).toString("base64")}`);
 
 			return;
+		case "/api/reflect-json-escape":
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end(
+				`{"echo":"${[...secret].map((char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`).join("")}"}`,
+			);
+
+			return;
+		case "/api/reflect-percent-mixed":
+			res.writeHead(200, { "Content-Type": "text/plain" });
+			res.end(
+				`q=%${secret.charCodeAt(0).toString(16)}${encodeURIComponent(secret.slice(1))}`,
+			);
+
+			return;
+		case "/api/reflect-base64-shifted":
+			res.writeHead(200, { "Content-Type": "text/plain" });
+			res.end(Buffer.from(`x${secret} and more`).toString("base64"));
+
+			return;
+		case "/api/reflect-gzip-bare":
+			res.writeHead(200, { "Content-Type": "application/octet-stream" });
+			res.end(gzipSync(Buffer.from(`leak ${secret}`)));
+
+			return;
+		case "/api/identity":
+			res.writeHead(200, {
+				"Content-Type": "text/plain",
+				"Content-Encoding": "identity",
+			});
+			res.end("ok");
+
+			return;
 		case "/api/reflect-split": {
 			const half = Math.floor(secret.length / 2);
 

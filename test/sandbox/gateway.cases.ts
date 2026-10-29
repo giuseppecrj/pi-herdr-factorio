@@ -692,6 +692,31 @@ describe("gateway credential engine against the echo fixture", () => {
 		}
 	});
 
+	it("fails closed on an encoded reflection the sandbox could still decode", async () => {
+		for (const path of [
+			"/echo/api/reflect-json-escape",
+			"/echo/api/reflect-percent-mixed",
+			"/echo/api/reflect-base64-shifted",
+			"/echo/api/reflect-gzip-bare",
+		]) {
+			const reply = await call(h.socketPath, "GET", path);
+			const bytes = Buffer.from(reply.body, "latin1");
+
+			assert.equal(
+				reply.aborted || reply.code === "response-blocked",
+				true,
+				path,
+			);
+			assert.equal(bytes.length, 0, path);
+			assert.equal(h.audit.at(-1)?.reason, "response-blocked", path);
+		}
+
+		assert.equal(
+			(await call(h.socketPath, "GET", "/echo/api/identity")).code,
+			"response-blocked",
+		);
+	});
+
 	it("refuses redirects and compressed bodies on a credentialed route", async () => {
 		const lines = h.audit.length;
 		const redirect = await call(h.socketPath, "GET", "/echo/api/redirect");

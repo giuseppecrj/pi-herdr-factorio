@@ -279,6 +279,26 @@ function percentEncoded(secret: Buffer, upper: boolean): Buffer {
 	return Buffer.from(upper ? hex.toUpperCase() : hex);
 }
 
+const MIN_STABLE_BASE64 = 8;
+
+/**
+ * The part of a secret's base64 that does not depend on the bytes around
+ * it, for each of the three offsets the secret can start at inside a larger
+ * base64 blob.
+ */
+function alignedBase64(secret: Buffer, encoding: "base64" | "base64url") {
+	return [0, 1, 2].flatMap((shift) => {
+		const text = Buffer.concat([Buffer.alloc(shift), secret]).toString(
+			encoding,
+		);
+
+		const whole = Math.floor((shift + secret.length) / 3) * 4;
+		const stable = text.slice(shift === 0 ? 0 : 4, whole);
+
+		return stable.length >= MIN_STABLE_BASE64 ? [Buffer.from(stable)] : [];
+	});
+}
+
 /** Every encoding of a secret the reflection scan looks for. */
 export function secretForms(
 	secret: Buffer,
@@ -292,6 +312,8 @@ export function secretForms(
 		Buffer.from(encodeURIComponent(secret.toString("latin1"))),
 		percentEncoded(secret, true),
 		percentEncoded(secret, false),
+		...alignedBase64(secret, "base64"),
+		...alignedBase64(secret, "base64url"),
 	];
 
 	if (placement.kind === "basic") {
@@ -556,24 +578,69 @@ export type FilterStep =
 	| { readonly kind: "pass"; readonly bytes: Buffer }
 	| { readonly kind: "blocked" };
 
+const MAGIC_PROBE_BYTES = 4;
+
 /**
- * Streams a response body while holding back the last `longest − 1` bytes,
- * so a secret split across chunks is found before any of its bytes leave.
+ * True when a body starts like gzip, zlib, framed brotli or zstd data, which
+ * the reflection scan cannot read whatever `Content-Encoding` says.
+ */
+function compressedMagic(head: Buffer): boolean {
+	const [first = -1, second = -1] = head;
+
+	if (first === 0x1f && second === 0x8b) return true;
+
+	if (
+		(first & 0x0f) === 8 &&
+		first >> 4 <= 7 &&
+		second !== -1 &&
+		((first << 8) | second) % 31 === 0
+	) {
+		return true;
+	}
+
+	return [
+		[0xce, 0xb2, 0xcf, 0x81],
+		[0x28, 0xb5, 0x2f, 0xfd],
+	].some(
+		(magic) =>
+			head.length >= magic.length &&
+			magic.every((byte, index) => head[index] === byte),
+	);
+}
+
+/**
+ * Streams a credentialed response body. Nothing passes until the first four
+ * bytes show no compression magic. After that it holds back enough bytes
+ * that a secret split across chunks, JSON-escaped or percent-encoded, is
+ * found in some decoded view before any of its bytes leave.
  */
 export class ReflectionFilter {
 	readonly #scanner: SecretScanner;
 	readonly #hold: number;
 	#held: Buffer = Buffer.alloc(0);
+	#probed = false;
 
 	constructor(forms: readonly Buffer[]) {
 		this.#scanner = new SecretScanner(forms);
-		this.#hold = Math.max(0, this.#scanner.longest - 1);
+		this.#hold = Math.max(MAGIC_PROBE_BYTES - 1, this.#scanner.longest * 6 - 1);
 	}
 
 	push(chunk: Buffer): FilterStep {
 		const joined = Buffer.concat([this.#held, chunk]);
 
-		if (this.#scanner.contains(joined)) return { kind: "blocked" };
+		if (!this.#probed) {
+			if (joined.length < MAGIC_PROBE_BYTES) {
+				this.#held = joined;
+
+				return { kind: "pass", bytes: Buffer.alloc(0) };
+			}
+
+			if (compressedMagic(joined)) return { kind: "blocked" };
+
+			this.#probed = true;
+		}
+
+		if (this.#scanner.reveals(joined)) return { kind: "blocked" };
 
 		const emit = Math.max(0, joined.length - this.#hold);
 
@@ -582,12 +649,19 @@ export class ReflectionFilter {
 		return { kind: "pass", bytes: joined.subarray(0, emit) };
 	}
 
-	end(): Buffer {
+	end(): FilterStep {
 		const rest = this.#held;
 
 		this.#held = Buffer.alloc(0);
 
-		return rest;
+		if (
+			(!this.#probed && compressedMagic(rest)) ||
+			this.#scanner.reveals(rest)
+		) {
+			return { kind: "blocked" };
+		}
+
+		return { kind: "pass", bytes: rest };
 	}
 }
 
