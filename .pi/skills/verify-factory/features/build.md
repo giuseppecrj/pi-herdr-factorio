@@ -1,6 +1,6 @@
 # Private build patches (F07a)
 
-A passing accept stores its held-out suite and claims build on the same run. Build produces a private patch, not a branch, PR, CI verdict or publication. Check the task's cumulative token cap before starting. Build's 200,000-token attempt ceiling is also constrained by the remaining run allowance. Use only the model authorized by the task.
+A passing accept stores its held-out suite and claims build on the same run. Build produces a private patch, not a branch, PR, CI verdict or publication. Reserve specify + accept + the 200,000-token build allowance before starting each model run (265,000 tokens total), against the task's remaining cap. Do not narrow stage allowances to fit a lane. Use only the model authorized by the task.
 
 ## Sub-features
 
