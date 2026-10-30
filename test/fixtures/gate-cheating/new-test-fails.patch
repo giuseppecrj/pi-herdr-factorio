@@ -1,8 +1,8 @@
-diff --git a/test/gate-new.test.ts b/test/gate-new.test.ts
+diff --git a/test/gate-new.cases.ts b/test/gate-new.cases.ts
 new file mode 100644
 index 0000000..3aa3c7c
 --- /dev/null
-+++ b/test/gate-new.test.ts
++++ b/test/gate-new.cases.ts
 @@ -0,0 +1,4 @@
 +import assert from "node:assert/strict";
 +import { test } from "node:test";

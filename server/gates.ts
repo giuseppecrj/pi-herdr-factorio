@@ -335,7 +335,7 @@ export async function materializeCandidate(input: {
 
 				if (
 					additional &&
-					/\.test\.[cm]?[jt]s$/.test(path) &&
+					/\.(?:test|cases)\.[cm]?[jt]s$/.test(path) &&
 					!path.startsWith("test/acceptance/")
 				)
 					newTests.push(path);

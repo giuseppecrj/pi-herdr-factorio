@@ -53,7 +53,7 @@ if (mode === "generate") {
 		{ name: "git-dependency", expected: "incomplete", files: { "package.json": JSON.stringify({ ...manifest, dependencies: { ...manifest.dependencies, "f07b-git": "git+https://github.com/example/repo.git" } }, null, 2) + "\n" } },
 		{ name: "named-replacement", expected: "passed", replacements: replaced, files: { "src/specify.ts": behavior, "test/specify.test.ts": changedTest, "test/orchestrator.test.ts": changedOrchestrator } },
 		{ name: "unnamed-replacement", expected: "failed", files: { "src/specify.ts": behavior, "test/specify.test.ts": changedTest, "test/orchestrator.test.ts": changedOrchestrator } },
-		{ name: "new-test-fails", expected: "failed", files: { "test/gate-new.test.ts": `${testHead}\ntest("failing new test", () => assert.fail("new failure"));\n` } },
+		{ name: "new-test-fails", expected: "failed", files: { "test/gate-new.cases.ts": `${testHead}\ntest("failing new test", () => assert.fail("new failure"));\n` } },
 	];
 
 	const temp = mkdtempSync(join(tmpdir(), "gate-dep-fixture-"));
@@ -129,8 +129,19 @@ if (mode === "generate") {
 } else if (mode === "scratch") {
 	const allCases=json(readFileSync(join(trail,"fixtures.json"),"utf8"));
 	const perf=flags.includes("--perf");
-	const cases=perf ? allCases.filter(f=>f.name==="known-good") : allCases;
-	const branch=`proto/f07b-${perf ? "perf" : "fixtures"}-${gateSha.slice(0,7)}`;
+	const selected=flags.find(flag=>flag.startsWith("--case="))?.slice(7).split(",");
+	let cases=allCases;
+	let kind="fixtures";
+
+	if (perf) {
+		cases=allCases.filter(f=>f.name==="known-good");
+		kind="perf";
+	} else if (selected) {
+		cases=allCases.filter(f=>selected.includes(f.name));
+		kind="delta";
+	}
+
+	const branch=`proto/f07b-${kind}-${gateSha.slice(0,7)}`;
 	const workflow=parse(readFileSync(".github/workflows/ci.yml","utf8"));
 	workflow.name="F07b fixture proof";
 	workflow["run-name"]=`F07b fixtures ${gateSha}`;
@@ -138,10 +149,16 @@ if (mode === "generate") {
 	const job=workflow.jobs.gates;
 	job.if="${{ github.ref == 'refs/heads/"+branch+"' }}";
 	job.name="gates (${{ matrix.case }})";
-	job.strategy={"fail-fast":false,"max-parallel":8,matrix:{include:cases.map(f=>({case:f.name,candidate_sha:f.candidateSha,gate_sha:gateSha,nonce:`hosted-${f.name}`,replacements:JSON.stringify(f.replacements),replacements_digest:f.replacementsDigest}))}};
+	job.strategy={"fail-fast":false,"max-parallel":8,matrix:{include:cases.map(f=>({case:f.name,expected:f.expected,candidate_sha:f.candidateSha,gate_sha:gateSha,nonce:`hosted-${f.name}`,replacements:JSON.stringify(f.replacements),replacements_digest:f.replacementsDigest}))}};
 	const convert=value=>Array.isArray(value)?value.map(convert):value instanceof Object?Object.fromEntries(Object.entries(value).map(([key,v])=>[key,convert(v)])):String(value).replaceAll("inputs.","matrix.").replaceAll("github.sha","matrix.gate_sha");
 	job.steps=job.steps.map(convert);
 	job.steps.at(-1).with.name="gate-receipt-${{ matrix.case }}";
+
+	if (flags.includes("--expect")) {
+		const step=job.steps.find(s=>s.name==="Run trusted gates");
+		step.env.EXPECTED="${{ matrix.expected }}";
+		step.run='set +e\n'+step.run+'\ncode=$?\nRESULT_EXIT="$code" node --input-type=module <<\'NODE\'\nimport assert from "node:assert/strict";\nimport {readFileSync} from "node:fs";\nconst r=JSON.parse(readFileSync(process.env.RUNNER_TEMP+"/gate-results/receipt.json","utf8"));\nassert.equal(r.status,process.env.EXPECTED);\nassert.equal(r.gateSha,process.env.GATE_SHA);\nassert.equal(r.candidateSha,process.env.CANDIDATE_SHA);\nassert.equal(r.modelCalls,0);\nassert.equal(process.env.RESULT_EXIT,r.status==="passed"?"0":"1");\nassert.deepEqual(r.checks.map(c=>c.name),["install","baseline_tests","typecheck","lint","format","main_tests","candidate_tests"]);\nassert.ok(r.checks.every(c=>c.exitCode===(c.name==="candidate_tests" && r.status==="failed" ? 1 : 0)));\nconsole.log(JSON.stringify({asserted:true,status:r.status,gateSha:r.gateSha,candidateSha:r.candidateSha,checks:r.checks}));\nNODE\n';
+	}
 
 	if (perf) {
 		const step=job.steps.find(s=>s.name==="Run trusted gates");

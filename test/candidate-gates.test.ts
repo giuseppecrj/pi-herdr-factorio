@@ -193,7 +193,7 @@ test("contract replacement is exact, digest checked, and new tests still veto", 
 	assert.equal(receipt.status, "passed");
 	assert.deepEqual(receipt.replacedTests, replacements);
 	f.put(
-		"test/new.test.ts",
+		"test/new.cases.ts",
 		'import {test} from "node:test"; test("new failure",()=>{throw new Error("FAIL");});\n',
 	);
 
