@@ -52,8 +52,9 @@ import {
 	contractKey,
 	type InlinedFile,
 	type Link,
+	inlined,
 	MAX_ANSWERS,
-	NAMED_FILE_BYTES,
+	NAMED_FILE_READ_BYTES,
 	NEEDS_INFO_LABEL,
 	namedFiles,
 	parseSpecifyOutput,
@@ -2932,12 +2933,12 @@ export class Orchestrator {
 			),
 		];
 
-		const inlined: InlinedFile[] = [];
+		const shown: InlinedFile[] = [];
 
 		for (const path of new Set(wanted)) {
-			const text = await checkout.read(path, NAMED_FILE_BYTES);
+			const text = await checkout.read(path, NAMED_FILE_READ_BYTES);
 
-			if (text !== null) inlined.push({ path, text });
+			if (text !== null) shown.push(inlined(path, text));
 		}
 
 		return {
@@ -2948,7 +2949,7 @@ export class Orchestrator {
 				baseSha: run.workflowSha,
 				guidance: parsed.guidance,
 				files: checkout.files,
-				inlined,
+				inlined: shown,
 				title,
 				body,
 				answers,
