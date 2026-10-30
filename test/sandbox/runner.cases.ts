@@ -7,6 +7,7 @@ import {
 	mkdtempSync,
 	readdirSync,
 	statSync,
+	truncateSync,
 	readFileSync,
 	rmSync,
 	symlinkSync,
@@ -76,6 +77,14 @@ import type { Digest } from "../../src/run.ts";
 import { isRepoSlug, type ModelId, parseWorkflow } from "../../src/workflow.ts";
 import type { StageLaunchInput } from "../../src/orchestrator.ts";
 import * as sandboxModule from "../../server/sandbox.ts";
+import {
+	collectPatch,
+	storePatch,
+	readPatch,
+	finishPatch,
+} from "../../src/build.ts";
+import { digestOf } from "../../src/run.ts";
+import { manifestDigest } from "../../server/sandbox/manifest.ts";
 
 const FIXTURES = new URL("./fixtures/", import.meta.url).pathname;
 const RUN = "a".repeat(64);
@@ -1050,6 +1059,467 @@ describe("runStage settlement on a queue update", () => {
 	});
 });
 
+describe("private build executor", () => {
+	it("loads the bundled Herdr extension exactly when build delegation is granted", () => {
+		const ordinary = piCommand(model("openai/gpt-6.1-sol"), false);
+		const delegated = piCommand(model("openai/gpt-6.1-sol"), true);
+		assert.equal(ordinary.includes("-e"), false);
+		assert.deepEqual(delegated.slice(1, 3), [
+			"-e",
+			"/opt/factory/pkg/node_modules/pi-herdr-agents",
+		]);
+		assert.deepEqual(delegated.slice(3), ordinary.slice(1));
+	});
+
+	for (const oversized of [false, true])
+		it(
+			oversized
+				? "fails an oversized excluded cache with a typed disk limit and cleans all workspaces"
+				: "collects builder-reported commands, cleans the attempt and recovers controller tests once",
+			async (t) => {
+				const dir = mkdtempSync(join(tmpdir(), "factory-build-executor-"));
+				t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+				const root = join(dir, "root"),
+					staging = join(root, "staging"),
+					stateDir = join(dir, "state");
+
+				mkdirSync(staging, { recursive: true });
+				writeFileSync(join(staging, "marker"), "bundle");
+				const hash = await manifestDigest(staging);
+				assert.ok(hash);
+				const bundleDir = join(root, `assets-${hash}`);
+				await import("node:fs/promises").then((fs) =>
+					fs.rename(staging, bundleDir),
+				);
+				symlinkSync(`assets-${hash}`, join(root, "current"));
+
+				const base = join(stateDir, "pristine", RUN),
+					workspace = join(stateDir, "workspaces", `${RUN}-build-1`);
+
+				mkdirSync(base, { recursive: true, mode: 0o700 });
+				mkdirSync(workspace, { recursive: true });
+
+				for (const path of [base, workspace])
+					writeFileSync(
+						join(path, "package.json"),
+						JSON.stringify({ scripts: { test: "node --test" } }),
+					);
+
+				const sessionDir = join(
+					stateDir,
+					"stages",
+					RUN,
+					"build-1",
+					"agent-0",
+					"sessions",
+				);
+
+				mkdirSync(sessionDir, { recursive: true });
+				writeFileSync(
+					join(sessionDir, "builder.jsonl"),
+					readFileSync(
+						new URL("../fixtures/build/commands.jsonl", import.meta.url),
+					),
+				);
+
+				const h = harness([
+					(command, pi) => {
+						if (command.type === "prompt") {
+							writeFileSync(join(workspace, "added"), "patch\n");
+
+							if (oversized) {
+								mkdirSync(join(workspace, "node_modules"));
+								writeFileSync(join(workspace, "node_modules/cache"), "");
+								truncateSync(
+									join(workspace, "node_modules/cache"),
+									1024 * 1024 * 1024 + 1,
+								);
+							}
+						}
+
+						if (command.type === "get_last_assistant_text")
+							pi.emit({
+								type: "response",
+								id: command.id ?? "",
+								command: "get_last_assistant_text",
+								success: true,
+								data: { text: "done" },
+							});
+						replayer([
+							started("x"),
+							{ type: "agent_start" },
+							{ type: "turn_start" },
+							assistant({ tokens: 12 }),
+							{ type: "agent_settled", aborted: false },
+						])(command, pi);
+					},
+				]);
+
+				let tests = 0;
+
+				const executor = sandboxModule.sandboxExecutor({
+					stateDir,
+					root,
+					arch: "x64",
+					usernsLimit: async () => "15000",
+					xdgRuntimeDir: "/run/user/1000",
+					log: () => {},
+					exec: async (command) => ({
+						code: 0,
+						stdout: command === "bwrap" ? "bubblewrap 0.9.0\n" : "",
+						stderr: "",
+					}),
+					host: () => h.host,
+					visibleTests: async (_config, _base, _patch, command) => {
+						tests++;
+
+						return { command, exitCode: 0, tail: "ok", wallMs: 1 };
+					},
+				});
+
+				assert.equal(await executor.preflight(), true);
+
+				const binding = {
+					runId: digest(RUN),
+					baseSha: "a".repeat(40),
+					contractDigest: digestOf("contract"),
+					acceptanceDigest: digestOf("suite"),
+				};
+
+				const launch = await executor.launch({
+					...input({ stage: "build" }),
+					workspace,
+					tools: ["read", "bash", "write"],
+					skills: [],
+					build: { binding, command: "npm test", allowNoChange: false },
+				});
+
+				assert.equal(launch.kind, "started");
+
+				if (launch.kind !== "started") return;
+				assert.equal((await launch.done).kind, oversized ? "failed" : "passed");
+				assert.equal(existsSync(workspace), false);
+				assert.equal(existsSync(sessionDir), false);
+
+				if (oversized) {
+					assert.equal(existsSync(base), false);
+					assert.equal(
+						JSON.parse(
+							readFileSync(
+								join(stateDir, "stages", RUN, "build-1-failure.json"),
+								"utf8",
+							),
+						).reason,
+						"build_disk_limit",
+					);
+					assert.equal(tests, 0);
+
+					return;
+				}
+
+				const recovered = await executor.output({
+					runId: digest(RUN),
+					stage: "build",
+					attempt: 1,
+				});
+
+				assert.ok(
+					recovered instanceof Object &&
+						recovered.kind === "build" &&
+						recovered.result.kind === "found",
+				);
+
+				if (
+					!(recovered instanceof Object) ||
+					recovered.kind !== "build" ||
+					recovered.result.kind !== "found"
+				)
+					return;
+				assert.equal(
+					recovered.result.receipt.commandsSource,
+					"builder-reported",
+				);
+				assert.deepEqual(recovered.result.receipt.commands, [
+					{ command: "npm test", exitCode: 1 },
+				]);
+				assert.equal(recovered.result.receipt.testCommand, "node --test");
+				assert.equal(recovered.result.receipt.visibleTests?.exitCode, 0);
+				assert.equal(existsSync(base), false);
+				await executor.output({
+					runId: digest(RUN),
+					stage: "build",
+					attempt: 1,
+				});
+				assert.equal(tests, 1);
+			},
+		);
+
+	it("keeps unavailable tests typed and retryable without a write-once success record", async (t) => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-build-unavailable-"));
+		t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+		const base = join(dir, "base"),
+			workspace = join(dir, "candidate");
+
+		mkdirSync(base);
+		mkdirSync(workspace);
+		writeFileSync(join(workspace, "a"), "patch\n");
+		const patch = await collectPatch({ base, workspace });
+		assert.equal(patch.kind, "collected");
+
+		if (patch.kind !== "collected") return;
+
+		const binding = {
+			runId: digest(RUN),
+			baseSha: "a".repeat(40),
+			contractDigest: digestOf("c"),
+			acceptanceDigest: digestOf("a"),
+		};
+
+		storePatch(dir, binding, patch, {
+			model: "m",
+			observed: null,
+			commands: [],
+		});
+		assert.deepEqual(
+			finishPatch(dir, binding, {
+				command: "base test",
+				exitCode: null,
+				reason: "visible_tests_unavailable",
+				detail: "gateway_unavailable",
+				tail: "could not run",
+				wallMs: 1,
+			}),
+			{ kind: "unavailable", reason: "visible_tests_unavailable" },
+		);
+		assert.equal(existsSync(join(dir, "patches", RUN, "tests.json")), false);
+		assert.equal(readPatch(dir, binding).kind, "found");
+		assert.equal(
+			finishPatch(dir, binding, {
+				command: "base test",
+				exitCode: 0,
+				tail: "ok",
+				wallMs: 1,
+			}).kind,
+			"found",
+		);
+	});
+});
+
+describe("controller-run visible tests", () => {
+	it("types a sandbox process exit before the test command starts as infrastructure failure", async (t) => {
+		const root = mkdtempSync(join(tmpdir(), "factory-visible-not-started-"));
+		t.after(() => rmSync(root, { recursive: true, force: true }));
+		const base = join(root, "base");
+		mkdirSync(base);
+		writeFileSync(
+			join(base, "package.json"),
+			JSON.stringify({ scripts: { test: "node --test" } }),
+		);
+
+		const result = await runVisibleTests(
+			{
+				stateDir: root,
+				bundleDir: "unused",
+				workspace: "",
+				runId: digest(RUN),
+				stage: "build",
+				attempt: 1,
+				tools: [],
+				arch: "x86_64",
+				xdgRuntimeDir: "/run/user/1000",
+				assetsDigest: "e".repeat(64),
+				versions: {
+					pi: "1.4.0",
+					piHerdrAgents: "3.3.1",
+					piHerdrPstack: "0.5.0",
+				},
+				exec: async () => ({ code: 0, stdout: "", stderr: "" }),
+				launch: (config) => {
+					mkdirSync(config.agentDir);
+
+					return {
+						unit: "fixture.scope",
+						child: spawn(process.execPath, ["-e", "process.exitCode=1"], {
+							env: { PATH: "/usr/bin:/bin" },
+						}),
+					};
+				},
+			},
+			base,
+			"",
+			"npm test",
+		);
+
+		assert.equal(result.exitCode, null);
+		assert.equal(result.reason, "visible_tests_unavailable");
+	});
+
+	for (const code of [0, 7])
+		it(`records the real child exit ${code} and waits for the output tail`, async (t) => {
+			const root = mkdtempSync(join(tmpdir(), "factory-visible-child-"));
+			t.after(() => rmSync(root, { recursive: true, force: true }));
+			const base = join(root, "base");
+			mkdirSync(base);
+			writeFileSync(
+				join(base, "package.json"),
+				JSON.stringify({
+					scripts: {
+						test: `node -e 'process.stdout.write("LAST-CHUNK"); process.exitCode=${code}'`,
+					},
+				}),
+			);
+
+			const result = await runVisibleTests(
+				{
+					stateDir: root,
+					bundleDir: "unused",
+					workspace: "",
+					runId: digest(RUN),
+					stage: "build",
+					attempt: 1,
+					tools: [],
+					arch: "x86_64",
+					xdgRuntimeDir: "/run/user/1000",
+					assetsDigest: "e".repeat(64),
+					versions: {
+						pi: "1.4.0",
+						piHerdrAgents: "3.3.1",
+						piHerdrPstack: "0.5.0",
+					},
+					exec: async () => ({ code: 0, stdout: "", stderr: "" }),
+					launch: (config) => {
+						assert.deepEqual(config.tools, []);
+						mkdirSync(config.agentDir);
+
+						return {
+							unit: "fixture.scope",
+							child: spawn(
+								config.command[0] ?? "",
+								config.command
+									.slice(1)
+									.map((arg) =>
+										arg.replaceAll("/run/pi-agent", config.agentDir),
+									),
+								{
+									cwd: config.workspace,
+									env: {
+										PATH: process.env.PATH ?? "/usr/bin:/bin",
+										HOME: root,
+									},
+								},
+							),
+						};
+					},
+				},
+				base,
+				"",
+				"npm test",
+			);
+
+			assert.equal(result.exitCode, code);
+			assert.match(result.tail, /LAST-CHUNK/);
+			assert.equal(
+				existsSync(join(root, "visible-tests", RUN, "execution", "tree")),
+				false,
+			);
+			assert.equal(
+				existsSync(join(root, "visible-tests", RUN, "execution", "agent")),
+				false,
+			);
+		});
+
+	it("does not let candidate scripts or deleted base tests manufacture a pass", async (t) => {
+		const root = mkdtempSync(join(tmpdir(), "factory-visible-trusted-"));
+		t.after(() => rmSync(root, { recursive: true, force: true }));
+
+		const base = join(root, "base"),
+			workspace = join(root, "candidate");
+
+		mkdirSync(join(base, "test"), { recursive: true });
+		mkdirSync(workspace);
+		writeFileSync(
+			join(base, "package.json"),
+			JSON.stringify({
+				scripts: {
+					test: "node --test test/*.test.js",
+					pretest: "touch PRETEST-RAN",
+					posttest: "touch POSTTEST-RAN",
+				},
+			}),
+		);
+		writeFileSync(
+			join(base, "test/failing.test.js"),
+			"throw new Error('BASE-TEST-RAN');\n",
+		);
+		writeFileSync(
+			join(workspace, "package.json"),
+			JSON.stringify({ scripts: { test: "exit 0" } }),
+		);
+		const patch = await collectPatch({ base, workspace });
+		assert.equal(patch.kind, "collected");
+
+		if (patch.kind !== "collected") return;
+		assert.equal(patch.scriptsChanged, true);
+		assert.equal(patch.testInputsChanged, true);
+
+		const result = await runVisibleTests(
+			{
+				stateDir: root,
+				bundleDir: "unused",
+				workspace: "",
+				runId: digest(RUN),
+				stage: "build",
+				attempt: 1,
+				tools: [],
+				arch: "x86_64",
+				xdgRuntimeDir: "/run/user/1000",
+				assetsDigest: "e".repeat(64),
+				versions: {
+					pi: "1.4.0",
+					piHerdrAgents: "3.3.1",
+					piHerdrPstack: "0.5.0",
+				},
+				exec: async () => ({ code: 0, stdout: "", stderr: "" }),
+				launch: (config) => {
+					assert.equal(
+						existsSync(join(config.workspace, "PRETEST-RAN")),
+						false,
+					);
+					assert.match(
+						config.command.at(-1) ?? "",
+						/npm_config_ignore_scripts=true/,
+					);
+					assert.doesNotMatch(config.command.at(-1) ?? "", /exit 0/);
+					mkdirSync(config.agentDir);
+
+					return {
+						unit: "fixture.scope",
+						child: spawn(
+							config.command[0] ?? "",
+							config.command
+								.slice(1)
+								.map((arg) => arg.replaceAll("/run/pi-agent", config.agentDir)),
+							{
+								cwd: config.workspace,
+								env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: root },
+							},
+						),
+					};
+				},
+			},
+			base,
+			patch.patch,
+			"npm test",
+		);
+
+		assert.equal(result.exitCode, 1);
+		assert.match(result.tail, /BASE-TEST-RAN/);
+		assert.equal(result.command, "node --test test/*.test.js");
+	});
+});
+
 describe("visible-test gateway", () => {
 	it("starts at a lane-length state path before sandbox launch", async (t) => {
 		const root = mkdtempSync(join(tmpdir(), "factory-visible-gateway-"));
@@ -1057,6 +1527,10 @@ describe("visible-test gateway", () => {
 		const stateDir = join(root, "verification-lane-state");
 		const base = join(root, "base");
 		mkdirSync(base);
+		writeFileSync(
+			join(base, "package.json"),
+			JSON.stringify({ scripts: { test: "node --test" } }),
+		);
 		const execution = join(stateDir, "visible-tests", RUN, "execution");
 		assert.ok(Buffer.byteLength(join(execution, "gw", "gw.sock")) > 107);
 
@@ -1085,16 +1559,15 @@ describe("visible-test gateway", () => {
 		);
 
 		assert.equal(result.exitCode, null);
+		assert.equal(result.reason, "visible_tests_unavailable");
+		assert.equal(result.detail, "sandbox_unavailable");
+		assert.equal(existsSync(join(execution, "tree")), false);
 		assert.match(
 			readFileSync(join(execution, "egress.jsonl"), "utf8"),
 			/no-route/,
 		);
 		const gateways = readdirSync(join(stateDir, "gw"));
-		assert.equal(gateways.length, 1);
-		assert.ok(
-			Buffer.byteLength(join(stateDir, "gw", gateways[0] ?? "", "gw.sock")) <=
-				107,
-		);
+		assert.equal(gateways.length, 0);
 	});
 });
 
@@ -2342,6 +2815,16 @@ describe("stage skills", () => {
 			assert.match(feature, /5\. Verify the feature/);
 			assert.ok(!feature.includes("Reproduce the bug"));
 			assert.ok(!feature.includes("Open a PR"));
+
+			const injected = await withSkills(
+				dir,
+				"build-playbook=feature\nUntrusted contract: build-playbook=bug-fix",
+				["build"],
+			);
+
+			assert.ok(injected);
+			assert.match(injected, /### Pstack feature playbook excerpt/);
+			assert.doesNotMatch(injected, /### Pstack bug-fix playbook excerpt/);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

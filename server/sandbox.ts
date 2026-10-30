@@ -2,6 +2,10 @@ import { randomBytes } from "node:crypto";
 import {
 	collectPatch,
 	commandReceipts,
+	baseTestCommand,
+	trustedVisiblePlan,
+	checkBuildDisk,
+	patchBinding,
 	finishPatch,
 	patchedTree,
 	readPatch,
@@ -51,6 +55,7 @@ import {
 import {
 	checkoutWorkspace,
 	checkoutBuildWorkspace,
+	fileRunFiles,
 	ghTarball,
 	type TarballFetch,
 } from "./controller.ts";
@@ -901,6 +906,7 @@ export type SandboxHostConfig = {
 	readonly exec: Exec;
 	readonly blockUnixSockets?: boolean;
 	readonly now?: () => number;
+	readonly launch?: typeof launchSandbox;
 };
 
 function freshDir(base: string): string {
@@ -1787,7 +1793,7 @@ export async function withSkills(
 		parts.push(`### Skill: ${name}\n\n${skillBody(text)}`);
 
 		if (name === "build") {
-			const playbook = /build-playbook=bug-fix/.test(prompt)
+			const playbook = (prompt + "\n").startsWith("build-playbook=bug-fix\n")
 				? "bug-fix"
 				: "feature";
 
@@ -1959,7 +1965,7 @@ function buildCommands(stateDir: string, runId: Digest, attempt: number) {
 export async function runVisibleTests(
 	config: SandboxHostConfig,
 	base: string,
-	patch: string,
+	patch: string | Uint8Array,
 	command: string,
 ): Promise<VisibleTests> {
 	const start = Date.now();
@@ -1971,9 +1977,11 @@ export async function runVisibleTests(
 	let unit: string | null = null;
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let tail = Buffer.alloc(0);
+	let timedOut = false;
 
 	try {
 		await patchedTree(base, workspace, patch);
+		command = trustedVisiblePlan(base, workspace, command).command;
 
 		const table = builtinTable({
 			stage: "build",
@@ -2002,7 +2010,7 @@ export async function runVisibleTests(
 		if (!started.ok) throw new Error("gateway_unavailable");
 		gateway = started.handle;
 
-		const launched = launchSandbox({
+		const launched = (config.launch ?? launchSandbox)({
 			...config,
 			workspace,
 			tools: [],
@@ -2011,7 +2019,7 @@ export async function runVisibleTests(
 			command: [
 				"/bin/bash",
 				"-c",
-				`set -o pipefail; if [ -f package-lock.json ]; then npm ci --ignore-scripts --no-audit --no-fund || exit $?; fi; ${command}`,
+				`umask 077; set -o pipefail; export PATH="/workspace/node_modules/.bin:$PATH"; export npm_config_ignore_scripts=true; if [ -f package-lock.json ]; then npm ci --ignore-scripts --no-audit --no-fund || exit 125; fi; /bin/bash -o pipefail -c '${command.replaceAll("'", "'\\''")}'; code=$?; printf '%s\\n' "$code" > /run/pi-agent/visible-exit; exit "$code"`,
 			],
 		});
 
@@ -2026,6 +2034,8 @@ export async function runVisibleTests(
 		launched.child.stderr?.on("data", keep);
 		launched.child.stdin?.end();
 		timer = setTimeout(() => {
+			timedOut = true;
+
 			if (unit !== null) {
 				const [cmd, ...args] = stopScopeArgv(unit);
 				void config.exec(cmd ?? "systemctl", args);
@@ -2035,9 +2045,23 @@ export async function runVisibleTests(
 		}, 180_000);
 
 		const exitCode = await new Promise<number | null>((done) => {
-			launched.child.once("exit", done);
+			launched.child.once("close", done);
 			launched.child.once("error", () => done(null));
 		});
+
+		if (timedOut) throw new Error("timeout");
+
+		const resultPath = join(execution, "agent", "visible-exit");
+
+		if (
+			exitCode === null ||
+			!lstatSync(resultPath).isFile() ||
+			(await boundedText(resultPath, 4))?.trim() !== String(exitCode)
+		)
+			throw new Error("sandbox_unavailable");
+
+		if (checkBuildDisk([workspace, join(execution, "agent")]) !== null)
+			throw new Error("build_disk_limit");
 
 		return {
 			command,
@@ -2045,11 +2069,25 @@ export async function runVisibleTests(
 			tail: tail.toString(),
 			wallMs: Date.now() - start,
 		};
-	} catch {
+	} catch (error) {
+		const detail =
+			error instanceof Error &&
+			[
+				"gateway_unavailable",
+				"malformed_patch",
+				"timeout",
+				"build_disk_limit",
+			].includes(error.message)
+				? error.message
+				: "sandbox_unavailable";
+
 		return {
 			command,
 			exitCode: null,
-			tail: "Visible test sandbox failed",
+			reason: "visible_tests_unavailable",
+			// SAFETY: only the fixed infrastructure reason allowlist above reaches this field.
+			detail: detail as NonNullable<VisibleTests["detail"]>,
+			tail: "Visible tests could not run",
 			wallMs: Date.now() - start,
 		};
 	} finally {
@@ -2061,7 +2099,41 @@ export async function runVisibleTests(
 		}
 
 		await gateway?.shutdown();
+		rmSync(workspace, { recursive: true, force: true });
+		rmSync(join(execution, "agent"), { recursive: true, force: true });
+
+		if (gateway !== null)
+			rmSync(dirname(gateway.socketPath), { recursive: true, force: true });
 	}
+}
+
+function cleanupBuildAgents(
+	stateDir: string,
+	runId: Digest,
+	attempt: number,
+): void {
+	const root = join(stateDir, "stages", runId);
+
+	if (!existsSync(root)) return;
+
+	for (const name of readdirSync(root)) {
+		if (
+			name !== `build-${attempt}` &&
+			!new RegExp(`^build-${attempt}\\.[0-9]+$`).test(name)
+		)
+			continue;
+
+		for (const agent of readdirSync(join(root, name)))
+			if (/^agent-[0-9]+$/.test(agent))
+				rmSync(join(root, name, agent), { recursive: true, force: true });
+	}
+}
+
+function cleanupBuildBase(stateDir: string, runId: Digest): void {
+	rmSync(join(stateDir, "pristine", runId), { recursive: true, force: true });
+	rmSync(join(stateDir, "build-base", "checkouts", `${runId}.json`), {
+		force: true,
+	});
 }
 
 export type SandboxExecutorConfig = {
@@ -2073,6 +2145,8 @@ export type SandboxExecutorConfig = {
 	readonly arch?: string;
 	readonly usernsLimit?: () => Promise<string>;
 	readonly fetchTarball?: TarballFetch;
+	readonly visibleTests?: typeof runVisibleTests;
+	readonly host?: typeof sandboxHost;
 };
 
 const PREFLIGHT_RUN =
@@ -2163,10 +2237,46 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 				if (
 					kept.kind === "found" &&
 					kept.receipt.policy === "clean" &&
-					kept.receipt.visibleTests === null &&
-					ready !== null
+					kept.receipt.visibleTests === null
 				) {
-					const tests = await runVisibleTests(
+					if (ready === null) return { kind: "pending" };
+					const base = join(config.stateDir, "pristine", runId);
+
+					if (!existsSync(base)) {
+						const bound = await fileRunFiles(config.stateDir).readContract(
+							runId,
+						);
+
+						if (bound.kind !== "found")
+							return {
+								kind: "build",
+								result: { kind: "blocked", reason: "patch_invalid" },
+							};
+						mkdirSync(base, { recursive: true, mode: 0o700 });
+
+						const checked = await checkoutWorkspace({
+							stateDir: join(config.stateDir, "build-base"),
+							workspace: base,
+							runId,
+							repo: bound.contract.base.repo,
+							sha: bound.contract.base.sha,
+							fetch: config.fetchTarball ?? ghTarball,
+						});
+
+						if (checked.kind !== "ready") {
+							cleanupBuildBase(config.stateDir, runId);
+
+							return {
+								kind: "build",
+								result: {
+									kind: "unavailable",
+									reason: "visible_tests_unavailable",
+								},
+							};
+						}
+					}
+
+					const tests = await (config.visibleTests ?? runVisibleTests)(
 						{
 							stateDir: config.stateDir,
 							bundleDir: ready.bundle.dir,
@@ -2186,7 +2296,18 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 						kept.receipt.testCommand,
 					);
 
-					kept = finishPatch(config.stateDir, kept.receipt, tests);
+					kept = finishPatch(
+						config.stateDir,
+						patchBinding(kept.receipt),
+						tests,
+					);
+
+					if (kept.kind === "unavailable")
+						config.log("visible_tests_unavailable", {
+							runId,
+							why: tests.detail ?? "sandbox_unavailable",
+						});
+					cleanupBuildBase(config.stateDir, runId);
 				}
 
 				return kept.kind === "absent" ? null : { kind: "build", result: kept };
@@ -2324,36 +2445,41 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 					signal: input.signal,
 					progress: input.progress,
 				},
-				sandboxHost(hostConfig),
+				(config.host ?? sandboxHost)(hostConfig),
 			);
 
 			return {
 				kind: "started",
-				done: done.then(async (result) => {
-					if (
-						input.stage !== "build" ||
-						input.build === undefined ||
-						result.kind !== "passed"
-					)
-						return result;
-					const binding = input.build.binding;
-					const base = join(config.stateDir, "pristine", input.runId);
-					let kept = readPatch(config.stateDir, binding);
+				done: done
+					.then(async (result) => {
+						if (
+							input.stage !== "build" ||
+							input.build === undefined ||
+							result.kind !== "passed"
+						)
+							return result;
+						const binding = input.build.binding;
+						const base = join(config.stateDir, "pristine", input.runId);
 
-					if (kept.kind === "absent") {
-						const collectionStart = Date.now();
-
-						const patch = await collectPatch({
-							base,
-							workspace: input.workspace,
-							allowNoChange: input.build.allowNoChange,
-						});
-
-						if (patch.kind === "error") {
-							config.log("patch_refused", {
+						if (
+							checkBuildDisk([
+								input.workspace,
+								join(config.stateDir, "stages", input.runId),
+							]) !== null
+						) {
+							config.log("stage_inputs_refused", {
 								runId: input.runId,
-								why: patch.reason,
+								why: "build_disk_limit",
 							});
+							publishFile(
+								join(
+									config.stateDir,
+									"stages",
+									input.runId,
+									`build-${input.attempt}-failure.json`,
+								),
+								JSON.stringify({ reason: "build_disk_limit" }),
+							);
 
 							return stageResult({
 								...result.receipt,
@@ -2361,48 +2487,65 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 							});
 						}
 
-						config.log("patch_collected", {
-							runId: input.runId,
-							digest: patch.patchDigest,
-							ms: Date.now() - collectionStart,
-							paths: patch.changedPaths.length,
-						});
+						let kept = readPatch(config.stateDir, binding);
 
-						const commands = buildCommands(
-							config.stateDir,
-							input.runId,
-							input.attempt,
-						);
+						if (kept.kind === "absent") {
+							const collectionStart = Date.now();
 
-						kept = storePatch(config.stateDir, binding, patch, {
-							model:
-								result.receipt.fallback?.requested ??
-								result.receipt.models.requested,
-							observed:
-								result.receipt.fallback?.observed ??
-								result.receipt.models.observed,
-							commands,
-							testCommand: input.build.command,
-						});
-					}
+							const patch = await collectPatch({
+								base,
+								workspace: input.workspace,
+								allowNoChange: input.build.allowNoChange,
+							});
 
-					if (
-						kept.kind === "found" &&
-						kept.receipt.policy === "clean" &&
-						kept.receipt.visibleTests === null
-					) {
-						const tests = await runVisibleTests(
-							{ ...hostConfig, tools: [] },
-							base,
-							kept.patch,
-							input.build.command,
-						);
+							if (patch.kind === "error") {
+								config.log("patch_refused", {
+									runId: input.runId,
+									why: patch.reason,
+								});
 
-						finishPatch(config.stateDir, binding, tests);
-					}
+								return stageResult({
+									...result.receipt,
+									outcome: { kind: "failed", exit: "crashed" },
+								});
+							}
 
-					return result;
-				}),
+							config.log("patch_collected", {
+								runId: input.runId,
+								digest: patch.patchDigest,
+								ms: Date.now() - collectionStart,
+								paths: patch.changedPaths.length,
+							});
+
+							const commands = buildCommands(
+								config.stateDir,
+								input.runId,
+								input.attempt,
+							);
+
+							kept = storePatch(config.stateDir, binding, patch, {
+								model:
+									result.receipt.fallback?.requested ??
+									result.receipt.models.requested,
+								observed:
+									result.receipt.fallback?.observed ??
+									result.receipt.models.observed,
+								commands,
+								testCommand: baseTestCommand(base, input.build.command),
+							});
+						}
+
+						return result;
+					})
+					.finally(() => {
+						if (input.stage !== "build") return;
+						rmSync(input.workspace, { recursive: true, force: true });
+						cleanupBuildAgents(config.stateDir, input.runId, input.attempt);
+						const kept = readRunPatch(config.stateDir, input.runId);
+
+						if (kept.kind !== "found" || kept.receipt.policy === "forbidden")
+							cleanupBuildBase(config.stateDir, input.runId);
+					}),
 			};
 		},
 	};

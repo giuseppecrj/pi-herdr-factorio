@@ -1,10 +1,27 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { lstatSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import {
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	readFileSync,
+	readdirSync,
+	rmSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
-import { fileRunFiles } from "../../../server/controller.ts";
-import { gitState, launchSandbox, locateBundle, SANDBOX_ROOT } from "../../../server/sandbox.ts";
+import {
+	fileRunFiles,
+	checkoutBuildWorkspace,
+	ghTarball,
+} from "../../../server/controller.ts";
+import { patchedTree, readPatch } from "../../../src/build.ts";
+import {
+	gitState,
+	launchSandbox,
+	locateBundle,
+	SANDBOX_ROOT,
+} from "../../../server/sandbox.ts";
 import { startGatewayProcess } from "../../../server/sandbox/gateway-client.ts";
 import { builtinTable } from "../../../server/sandbox/routes.ts";
 import { stopScopeArgv } from "../../../server/sandbox/scope.ts";
@@ -13,13 +30,17 @@ import { isDigest } from "../../../src/run.ts";
 
 const [stateArg, runId, attempt = "1"] = process.argv.slice(2);
 
-assert.ok(stateArg && runId && isDigest(runId), "usage: probe.ts <lane-state-dir> <run-id>");
+assert.ok(
+	stateArg && runId && isDigest(runId),
+	"usage: probe.ts <lane-state-dir> <run-id>",
+);
 
 const stateDir = resolve(stateArg);
+
 assert.match(attempt, /^[1-9][0-9]*$/);
+
 const files = fileRunFiles(stateDir);
 const workspace = `${files.workspacePath(runId)}-build-${attempt}`;
-assert.ok(lstatSync(workspace).isDirectory(), "build workspace missing");
 const bound = await files.readContract(runId);
 
 if (bound.kind !== "found") throw new Error(`contract ${bound.reason}`);
@@ -28,7 +49,37 @@ const suite = await files.artifacts.read(runId, bound.contract, bound.digest);
 
 if (suite.kind !== "found") throw new Error(`suite ${suite.kind}`);
 
-const canary = readFileSync(join(stateDir, "acceptance", runId, "canary.txt"), "utf8").trim();
+const reconstructed = !existsSync(workspace);
+
+if (reconstructed) {
+	const checked = await checkoutBuildWorkspace({
+		stateDir,
+		runId,
+		workspace,
+		repo: bound.contract.base.repo,
+		sha: bound.contract.base.sha,
+		fetch: ghTarball,
+	});
+	assert.equal(checked.kind, "ready", "cannot reconstruct base");
+	const kept = readPatch(stateDir, {
+		runId,
+		baseSha: bound.contract.base.sha,
+		contractDigest: bound.digest,
+		acceptanceDigest: suite.receipt.acceptanceDigest,
+	});
+	assert.equal(kept.kind, "found", "cannot reconstruct stored patch");
+
+	if (kept.kind !== "found") throw new Error("patch unavailable");
+	rmSync(workspace, { recursive: true, force: true });
+	await patchedTree(join(stateDir, "pristine", runId), workspace, kept.patch);
+}
+
+assert.ok(lstatSync(workspace).isDirectory(), "build workspace missing");
+
+const canary = readFileSync(
+	join(stateDir, "acceptance", runId, "canary.txt"),
+	"utf8",
+).trim();
 const bundle = await locateBundle(SANDBOX_ROOT);
 const arch = detectArch(process.arch);
 
@@ -36,9 +87,21 @@ assert.ok(bundle && arch);
 
 const tools = ["read", "grep", "ls", "bash", "write", "edit"];
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
-const privatePaths = [`acceptance/${runId}`, `acceptance/${runId}.json`, `contracts/${runId}`];
-const privateTexts = suite.suite.files.flatMap((file) => [file.content, file.path]);
-const fingerprints = new Set(suite.suite.files.flatMap((file) => [hash(file.content), hash(`${file.content}\n`)]));
+const privatePaths = [
+	`acceptance/${runId}`,
+	`acceptance/${runId}.json`,
+	`contracts/${runId}`,
+];
+const privateTexts = suite.suite.files.flatMap((file) => [
+	file.content,
+	file.path,
+]);
+const fingerprints = new Set(
+	suite.suite.files.flatMap((file) => [
+		hash(file.content),
+		hash(`${file.content}\n`),
+	]),
+);
 let rawOutputs = 0;
 
 const inventory = (relative: string, accept: boolean) => {
@@ -47,7 +110,8 @@ const inventory = (relative: string, accept: boolean) => {
 	const stat = lstatSync(path);
 
 	if (stat.isDirectory()) {
-		for (const name of readdirSync(path)) inventory(`${relative}/${name}`, accept);
+		for (const name of readdirSync(path))
+			inventory(`${relative}/${name}`, accept);
 	} else if (stat.isFile()) {
 		if (accept && relative.endsWith("/output.txt")) {
 			const raw = readFileSync(path, "utf8");
@@ -70,10 +134,18 @@ const input = {
 	runId,
 	gitLayout: gitState(workspace) === "dir" ? "trusted-bind" : "tmpfs",
 	privatePaths,
-	fingerprints: { files: [...fingerprints], paths: suite.suite.files.map((file) => hash(file.path)) },
+	fingerprints: {
+		files: [...fingerprints],
+		paths: suite.suite.files.map((file) => hash(file.path)),
+	},
 };
 
-const stageDir = join(stateDir, "stages", runId, `build-probe-${randomBytes(4).toString("hex")}`);
+const stageDir = join(
+	stateDir,
+	"stages",
+	runId,
+	`build-probe-${randomBytes(4).toString("hex")}`,
+);
 const gatewayDir = join(stateDir, "gw", randomBytes(4).toString("hex"));
 
 mkdirSync(stageDir, { recursive: true, mode: 0o700 });
@@ -84,7 +156,15 @@ const gateway = await startGatewayProcess({
 	gatewayDir,
 	auditPath: join(stageDir, "egress.jsonl"),
 	readyTimeoutMs: 10_000,
-	table: builtinTable({ stage: "build", runId, attempt: 1, model: "openai/gpt-6.1-sol", fallback: null, modelTokens: 0, modelRequests: 0 }),
+	table: builtinTable({
+		stage: "build",
+		runId,
+		attempt: Number(attempt),
+		model: "openai/gpt-6.1-sol",
+		fallback: null,
+		modelTokens: 0,
+		modelRequests: 0,
+	}),
 });
 
 if (!gateway.ok) throw new Error(`gateway ${gateway.reason}`);
@@ -169,25 +249,42 @@ out.githubDirect = await fetch('https://api.github.com', { signal: AbortSignal.t
 console.log('PROBE ' + JSON.stringify(out));
 `;
 
-const runtime = process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.()}`;
+const runtime =
+	process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.()}`;
 let unit: string | null = null;
 let stdout = "";
 let stderr = "";
 
 try {
 	const launched = launchSandbox({
-		stateDir, runId, stage: "build", attempt: 1,
-		bundleDir: bundle.dir, workspace,
-		agentDir: join(stageDir, "agent-0"), socketPath: gateway.handle.socketPath,
-		arch, xdgRuntimeDir: runtime, tools,
-		command: ["/opt/factory/node/bin/node", "--input-type=module", "--eval", source],
+		stateDir,
+		runId,
+		stage: "build",
+		attempt: Number(attempt),
+		bundleDir: bundle.dir,
+		workspace,
+		agentDir: join(stageDir, "agent-0"),
+		socketPath: gateway.handle.socketPath,
+		arch,
+		xdgRuntimeDir: runtime,
+		tools,
+		command: [
+			"/opt/factory/node/bin/node",
+			"--input-type=module",
+			"--eval",
+			source,
+		],
 	});
 
 	assert.ok(launched, "unsafe workspace");
 	unit = launched.unit;
 	const child = launched.child;
-	child.stdout?.on("data", (chunk) => { stdout += chunk; });
-	child.stderr?.on("data", (chunk) => { stderr += chunk; });
+	child.stdout?.on("data", (chunk) => {
+		stdout += chunk;
+	});
+	child.stderr?.on("data", (chunk) => {
+		stderr += chunk;
+	});
 
 	const ended = new Promise<number | null>((done, reject) => {
 		child.on("close", done);
@@ -199,9 +296,14 @@ try {
 	const code = await ended;
 	const line = stdout.split("\n").find((l) => l.startsWith("PROBE "));
 
-	if (!line) throw new Error(`inconclusive: no probe output, exit ${code}, stderr ${stderr.length} bytes`);
+	if (!line)
+		throw new Error(
+			`inconclusive: no probe output, exit ${code}, stderr ${stderr.length} bytes`,
+		);
 	const seen = JSON.parse(line.slice(6));
-	const privateOutputLeak = privateTexts.some((text) => stdout.includes(text) || stderr.includes(text));
+	const privateOutputLeak = privateTexts.some(
+		(text) => stdout.includes(text) || stderr.includes(text),
+	);
 
 	const pass =
 		code === 0 &&
@@ -223,14 +325,35 @@ try {
 		!stdout.includes(canary) &&
 		!stderr.includes(canary);
 
-	console.log(JSON.stringify({ ...seen, bundle: bundle.digest, runId, acceptanceDigest: suite.receipt.acceptanceDigest, modelRequests: 0, exit: code, result: pass ? "PASS" : seen.complete && code === 0 ? "FAIL" : "INCONCLUSIVE" }, null, 2));
+	console.log(
+		JSON.stringify(
+			{
+				...seen,
+				bundle: bundle.digest,
+				runId,
+				acceptanceDigest: suite.receipt.acceptanceDigest,
+				modelRequests: 0,
+				exit: code,
+				result: pass
+					? "PASS"
+					: seen.complete && code === 0
+						? "FAIL"
+						: "INCONCLUSIVE",
+			},
+			null,
+			2,
+		),
+	);
 	process.exitCode = pass ? 0 : 1;
 } finally {
 	if (unit !== null) {
 		const [command, ...args] = stopScopeArgv(unit);
 
 		try {
-			execFileSync(command ?? "systemctl", args, { env: { ...process.env, XDG_RUNTIME_DIR: runtime }, stdio: "ignore" });
+			execFileSync(command ?? "systemctl", args, {
+				env: { ...process.env, XDG_RUNTIME_DIR: runtime },
+				stdio: "ignore",
+			});
 		} catch {
 			console.error("scope stop returned nonzero; verify no scope remains");
 		}
@@ -239,4 +362,12 @@ try {
 	await gateway.handle.shutdown();
 	rmSync(stageDir, { recursive: true, force: true });
 	rmSync(gatewayDir, { recursive: true, force: true });
+
+	if (reconstructed) {
+		rmSync(workspace, { recursive: true, force: true });
+		rmSync(join(stateDir, "pristine", runId), { recursive: true, force: true });
+		rmSync(join(stateDir, "build-base", "checkouts", `${runId}.json`), {
+			force: true,
+		});
+	}
 }

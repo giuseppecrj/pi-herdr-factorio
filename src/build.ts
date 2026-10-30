@@ -20,6 +20,7 @@ import {
 	present,
 	privateDir,
 	regularText,
+	regularBytes,
 } from "./artifacts.ts";
 import { checkChangedPaths } from "./policy.ts";
 import { digestOf, isDigest, type Digest } from "./run.ts";
@@ -45,6 +46,9 @@ export const BUILD_TOOLS = [
 export const BUILD_MAX_TOKENS = 200_000;
 export const PATCH_MAX_BYTES = 64 * 1024 * 1024;
 export const TEST_TAIL_BYTES = 16 * 1024;
+export const PATCH_RECEIPT_MAX_BYTES = 8 * 1024 * 1024;
+export const COMMAND_MAX_BYTES = 128 * 1024;
+export const BUILD_DISK_MAX_BYTES = 1024 * 1024 * 1024;
 
 export type CommandReceipt = {
 	readonly command: string;
@@ -56,6 +60,13 @@ export type VisibleTests = {
 	readonly exitCode: number | null;
 	readonly tail: string;
 	readonly wallMs: number;
+	readonly reason?: "visible_tests_unavailable";
+	readonly detail?:
+		| "gateway_unavailable"
+		| "sandbox_unavailable"
+		| "malformed_patch"
+		| "timeout"
+		| "build_disk_limit";
 };
 
 export type PatchBinding = {
@@ -66,8 +77,11 @@ export type PatchBinding = {
 };
 
 export type CollectedPatch = {
+	readonly scriptsChanged?: boolean;
+	readonly testScriptChanged?: boolean;
+	readonly testInputsChanged?: boolean;
 	readonly kind: "collected";
-	readonly patch: string;
+	readonly patch: string | Uint8Array;
 	readonly patchDigest: Digest;
 	readonly changedPaths: readonly string[];
 	readonly policy: "clean" | "forbidden";
@@ -82,19 +96,32 @@ export type PatchReceipt = PatchBinding & {
 	readonly model: string;
 	readonly observed: string | null;
 	readonly commands: readonly CommandReceipt[];
+	readonly commandsSource: "builder-reported";
+	readonly commandsOmitted: number;
+	readonly scriptsChanged: boolean;
+	readonly testScriptChanged: boolean;
+	readonly testInputsChanged: boolean;
 	readonly visibleTests: VisibleTests | null;
 };
 
 export type PatchRead =
 	| { readonly kind: "absent" }
 	| {
+			readonly kind: "unavailable";
+			readonly reason: "visible_tests_unavailable" | "build_disk_limit";
+	  }
+	| {
 			readonly kind: "blocked";
-			readonly reason: "patch_missing" | "patch_changed" | "patch_invalid";
+			readonly reason:
+				| "patch_missing"
+				| "patch_changed"
+				| "patch_invalid"
+				| "patch_too_large";
 	  }
 	| {
 			readonly kind: "found";
 			readonly receipt: PatchReceipt;
-			readonly patch: string;
+			readonly patch: string | Uint8Array;
 	  };
 
 type Entry = {
@@ -128,9 +155,16 @@ function tree(root: string): Map<string, Entry> {
 		for (const name of readdirSync(join(root, dir)).sort()) {
 			const path = dir === "" ? name : `${dir}/${name}`;
 
-			if (name === "node_modules") continue;
 			const full = join(root, path);
 			const stat = lstatSync(full);
+
+			if (name === "node_modules") {
+				if (!stat.isDirectory()) throw new Error("unsafe_symlink");
+				continue;
+			}
+
+			if (stat.isSymbolicLink() && ["test", ".github"].includes(path))
+				throw new Error("unsafe_symlink");
 
 			if (
 				path === ".git" &&
@@ -193,6 +227,7 @@ function tree(root: string): Map<string, Entry> {
 				continue;
 			}
 
+			if (part === "node_modules") throw new Error("unsafe_symlink");
 			resolved.push(part);
 			const target = entries.get(resolved.join("/"));
 
@@ -226,8 +261,8 @@ function materialize(root: string, entries: ReadonlyMap<string, Entry>): void {
 export function gitCommand(
 	args: readonly string[],
 	cwd: string,
-	input?: string,
-): Promise<{ code: number; stdout: string }> {
+	input?: string | Uint8Array,
+): Promise<{ code: number; stdout: Buffer }> {
 	return new Promise((done, reject) => {
 		const child = execFile(
 			"git",
@@ -245,8 +280,10 @@ export function gitCommand(
 					HOME: "/nonexistent",
 					GIT_CONFIG_NOSYSTEM: "1",
 					GIT_CONFIG_GLOBAL: "/dev/null",
+					GIT_CEILING_DIRECTORIES: dirname(cwd),
 					LC_ALL: "C",
 				},
+				encoding: "buffer",
 				maxBuffer: PATCH_MAX_BYTES,
 				timeout: 30_000,
 			},
@@ -272,6 +309,14 @@ export async function collectPatch(input: {
 	try {
 		const base = tree(input.base),
 			candidate = tree(input.workspace);
+
+		for (const [path, entry] of candidate)
+			if (
+				entry.link &&
+				!path.includes("/") &&
+				[...base.keys()].some((p) => p.startsWith(`${path}/`))
+			)
+				throw new Error("unsafe_symlink");
 
 		const changedPaths = [...new Set([...base.keys(), ...candidate.keys()])]
 			.sort()
@@ -324,12 +369,27 @@ export async function collectPatch(input: {
 			temp,
 		);
 
-		if (result.code !== 1 || !result.stdout.startsWith("diff --git "))
+		if (
+			result.code !== 1 ||
+			!result.stdout.subarray(0, 11).equals(Buffer.from("diff --git "))
+		)
 			return { kind: "error", reason: "malformed_patch" };
 
 		return {
 			kind: "collected",
 			patch: result.stdout,
+			testScriptChanged:
+				textOf(fieldOf(scriptsOf(base), "test")) !==
+				textOf(fieldOf(scriptsOf(candidate), "test")),
+			scriptsChanged:
+				JSON.stringify(scriptsOf(base)) !==
+				JSON.stringify(scriptsOf(candidate)),
+			testInputsChanged: [...base].some(
+				([path, entry]) =>
+					isTestInput(path) &&
+					(candidate.get(path)?.mode !== entry.mode ||
+						!candidate.get(path)?.data.equals(entry.data)),
+			),
 			patchDigest: digestOf(result.stdout),
 			changedPaths,
 			policy,
@@ -355,6 +415,150 @@ export async function collectPatch(input: {
 	}
 }
 
+export function patchBinding(value: PatchBinding): PatchBinding {
+	return {
+		runId: value.runId,
+		baseSha: value.baseSha,
+		contractDigest: value.contractDigest,
+		acceptanceDigest: value.acceptanceDigest,
+	};
+}
+
+function sameBinding(left: PatchBinding, right: PatchBinding): boolean {
+	return (
+		left.runId === right.runId &&
+		left.baseSha === right.baseSha &&
+		left.contractDigest === right.contractDigest &&
+		left.acceptanceDigest === right.acceptanceDigest
+	);
+}
+
+function boundedCommands(input: readonly CommandReceipt[]) {
+	const commands: CommandReceipt[] = [];
+	let bytes = 2;
+
+	for (const command of input) {
+		const size = Buffer.byteLength(JSON.stringify(command)) + 1;
+
+		if (bytes + size > COMMAND_MAX_BYTES) break;
+		commands.push(command);
+		bytes += size;
+	}
+
+	return { commands, commandsOmitted: input.length - commands.length };
+}
+
+export function checkBuildDisk(
+	roots: readonly string[],
+	maxBytes = BUILD_DISK_MAX_BYTES,
+	maxEntries = 100_000,
+): "build_disk_limit" | null {
+	let bytes = 0,
+		entries = 0;
+
+	const walk = (path: string) => {
+		const stat = lstatSync(path);
+		bytes += stat.size;
+
+		if (++entries > maxEntries || bytes > maxBytes)
+			throw new Error("build_disk_limit");
+
+		if (stat.isDirectory())
+			for (const name of readdirSync(path)) walk(join(path, name));
+	};
+
+	try {
+		for (const root of roots) walk(root);
+
+		return null;
+	} catch {
+		return "build_disk_limit";
+	}
+}
+
+function isTestInput(path: string): boolean {
+	return (
+		path.startsWith("test/") ||
+		path.startsWith("tests/") ||
+		/\.test\.[^/]+$/.test(path)
+	);
+}
+
+function scriptsOf(entries: ReadonlyMap<string, Entry>) {
+	return objectOf(
+		fieldOf(
+			objectOf(parseJson(entries.get("package.json")?.data.toString() ?? "")),
+			"scripts",
+		),
+	);
+}
+
+export function baseTestCommand(base: string, requested: string): string {
+	const scripts = scriptsOf(tree(base));
+	const exact = /^npm (?:test|run ([A-Za-z0-9:_-]+))$/.exec(requested);
+
+	const command =
+		exact === null
+			? requested
+			: (textOf(fieldOf(scripts, exact[1] ?? "test")) ?? "");
+
+	if (!command.trim()) throw new Error("malformed_patch");
+
+	return command;
+}
+
+export function trustedVisiblePlan(
+	base: string,
+	workspace: string,
+	requested: string,
+) {
+	const entries = tree(base),
+		candidate = tree(workspace);
+
+	let testInputsChanged = false;
+
+	const baseManifest = objectOf(
+		parseJson(entries.get("package.json")?.data.toString() ?? ""),
+	);
+
+	const candidateManifest = objectOf(
+		parseJson(candidate.get("package.json")?.data.toString() ?? ""),
+	);
+
+	if (baseManifest !== null) {
+		const path = join(workspace, "package.json");
+		rmSync(path, { force: true });
+		writeFileSync(
+			path,
+			JSON.stringify({
+				...(candidateManifest ?? baseManifest),
+				scripts: scriptsOf(entries) ?? {},
+			}),
+			{ mode: 0o600 },
+		);
+	}
+
+	for (const [path, entry] of entries) {
+		if (!isTestInput(path)) continue;
+		const changed = candidate.get(path);
+
+		if (changed?.mode === entry.mode && changed.data.equals(entry.data))
+			continue;
+		testInputsChanged = true;
+		const dest = join(workspace, path);
+		rmSync(dest, { force: true });
+		materialize(workspace, new Map([[path, entry]]));
+	}
+
+	return {
+		command: baseTestCommand(base, requested),
+		scriptsChanged:
+			JSON.stringify(scriptsOf(entries)) !==
+			JSON.stringify(scriptsOf(candidate)),
+		testInputsChanged,
+	};
+}
+
 export function patchDir(stateDir: string, runId: Digest): string {
 	return join(stateDir, "patches", runId);
 }
@@ -372,8 +576,12 @@ export function readPatch(stateDir: string, binding: PatchBinding): PatchRead {
 				? { kind: "blocked", reason: "patch_invalid" }
 				: { kind: "absent" };
 		checkPrivateDir(dir);
-		const anchorText = regularText(anchor, 1024 * 1024);
-		const text = regularText(join(dir, "collected.json"), 1024 * 1024);
+		const anchorText = regularText(anchor, PATCH_RECEIPT_MAX_BYTES);
+
+		const text = regularText(
+			join(dir, "collected.json"),
+			PATCH_RECEIPT_MAX_BYTES,
+		);
 
 		if (text !== anchorText)
 			return { kind: "blocked", reason: "patch_changed" };
@@ -382,16 +590,14 @@ export function readPatch(stateDir: string, binding: PatchBinding): PatchRead {
 
 		if (
 			receipt.version !== 1 ||
-			Object.entries(binding).some(
-				([key, value]) => fieldOf(objectOf(parseJson(text)), key) !== value,
-			) ||
+			!sameBinding(receipt, binding) ||
 			!isDigest(receipt.patchDigest) ||
 			!Array.isArray(receipt.changedPaths) ||
 			!receipt.changedPaths.every(isBuildPath) ||
 			!["clean", "forbidden"].includes(receipt.policy)
 		)
 			return { kind: "blocked", reason: "patch_invalid" };
-		const patch = regularText(join(dir, "patch.diff"), PATCH_MAX_BYTES);
+		const patch = regularBytes(join(dir, "patch.diff"), PATCH_MAX_BYTES);
 
 		if (digestOf(patch) !== receipt.patchDigest)
 			return { kind: "blocked", reason: "patch_changed" };
@@ -400,9 +606,13 @@ export function readPatch(stateDir: string, binding: PatchBinding): PatchRead {
 			// SAFETY: host-authored test record; a failed result is write-once and never overwritten.
 			const tests = JSON.parse(
 				regularText(join(dir, "tests.json")),
-			) as VisibleTests;
+			) as VisibleTests & PatchBinding & { patchDigest: Digest };
 
-			if (!Number.isSafeInteger(tests.exitCode) && tests.exitCode !== null)
+			if (
+				!sameBinding(tests, binding) ||
+				tests.patchDigest !== receipt.patchDigest ||
+				!Number.isSafeInteger(tests.exitCode)
+			)
 				return { kind: "blocked", reason: "patch_invalid" };
 
 			return {
@@ -433,6 +643,8 @@ export function storePatch(
 		readonly model: string;
 		readonly observed: string | null;
 		readonly commands: readonly CommandReceipt[];
+		readonly scriptsChanged?: boolean;
+		readonly testInputsChanged?: boolean;
 	},
 ): PatchRead {
 	const prior = readPatch(stateDir, binding);
@@ -443,18 +655,31 @@ export function storePatch(
 		return { kind: "blocked", reason: "patch_changed" };
 
 	const receipt: PatchReceipt = {
-		...binding,
+		...patchBinding(binding),
 		version: 1,
 		patchDigest: patch.patchDigest,
 		changedPaths: patch.changedPaths,
 		policy: patch.policy,
-		...session,
+		model: session.model,
+		observed: session.observed,
+		...boundedCommands(session.commands),
+		commandsSource: "builder-reported",
+		scriptsChanged: patch.scriptsChanged ?? session.scriptsChanged ?? false,
+		testScriptChanged: patch.testScriptChanged ?? false,
+		testInputsChanged:
+			patch.testInputsChanged ?? session.testInputsChanged ?? false,
 		testCommand: session.testCommand ?? "npm test",
 		visibleTests: null,
 	};
 
 	const dir = patchDir(stateDir, binding.runId),
 		text = `${JSON.stringify(receipt)}\n`;
+
+	if (
+		Buffer.byteLength(text) > PATCH_RECEIPT_MAX_BYTES ||
+		Buffer.byteLength(patch.patch) > PATCH_MAX_BYTES
+	)
+		return { kind: "blocked", reason: "patch_too_large" };
 
 	try {
 		privateDir(join(stateDir, "patches"));
@@ -480,10 +705,28 @@ export function finishPatch(
 		return prior;
 
 	try {
+		const unavailable = tests.exitCode === null;
+
+		const record = {
+			...tests,
+			...patchBinding(binding),
+			patchDigest: prior.receipt.patchDigest,
+			tail: Buffer.from(tests.tail).subarray(-TEST_TAIL_BYTES).toString(),
+		};
+
+		if (unavailable) record.reason = "visible_tests_unavailable";
 		exclusive(
-			join(patchDir(stateDir, binding.runId), "tests.json"),
-			`${JSON.stringify({ ...tests, tail: Buffer.from(tests.tail).subarray(-TEST_TAIL_BYTES).toString() })}\n`,
+			join(
+				patchDir(stateDir, binding.runId),
+				unavailable
+					? `unavailable-${randomBytes(4).toString("hex")}.json`
+					: "tests.json",
+			),
+			`${JSON.stringify(record)}\n`,
 		);
+
+		if (unavailable)
+			return { kind: "unavailable", reason: "visible_tests_unavailable" };
 	} catch {
 		return { kind: "blocked", reason: "patch_invalid" };
 	}
@@ -494,11 +737,11 @@ export function finishPatch(
 export async function patchedTree(
 	base: string,
 	dest: string,
-	patch: string,
+	patch: string | Uint8Array,
 ): Promise<void> {
 	materialize(dest, tree(base));
 
-	if (patch === "") return;
+	if (patch.length === 0) return;
 
 	const applied = await gitCommand(
 		["apply", "--binary", "--whitespace=nowarn", "-"],
@@ -507,7 +750,10 @@ export async function patchedTree(
 	);
 
 	if (applied.code !== 0) throw new Error("malformed_patch");
-	tree(dest);
+	const verified = await collectPatch({ base, workspace: dest });
+
+	if (verified.kind !== "collected" || verified.patchDigest !== digestOf(patch))
+		throw new Error("malformed_patch");
 }
 
 export function commandReceipts(session: string): CommandReceipt[] {

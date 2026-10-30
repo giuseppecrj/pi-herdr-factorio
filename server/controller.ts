@@ -1028,10 +1028,9 @@ export async function checkoutBuildWorkspace(
 	try {
 		const existing = await lstat(input.workspace).catch(() => null);
 
-		if (existing !== null)
-			return existing.isDirectory()
-				? result
-				: { kind: "refused", reason: "unsafe_workspace" };
+		if (existing !== null && !existing.isDirectory())
+			return { kind: "refused", reason: "unsafe_workspace" };
+		await rm(input.workspace, { recursive: true, force: true });
 		await cp(base, input.workspace, {
 			recursive: true,
 			force: false,

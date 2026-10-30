@@ -713,17 +713,46 @@ export function renderBuildSummary(input: {
 		readonly changedPaths: readonly string[];
 		readonly policy: "clean" | "forbidden";
 		readonly visibleTests: { readonly exitCode: number | null } | null;
+		readonly scriptsChanged?: boolean;
+		readonly testScriptChanged?: boolean;
+		readonly testInputsChanged?: boolean;
+		readonly testCommand?: string;
 	};
 }): string | null {
 	const { receipt } = input;
+	const paths: string[] = [];
+	let bytes = 0;
+
+	for (const path of receipt.changedPaths) {
+		const line = `- ${inert(path)}`;
+
+		if (bytes + Buffer.byteLength(line) > 4096) break;
+		paths.push(line);
+		bytes += Buffer.byteLength(line) + 1;
+	}
+
+	if (paths.length < receipt.changedPaths.length)
+		paths.push(
+			`- and ${receipt.changedPaths.length - paths.length} more paths (private receipt has the full list)`,
+		);
 
 	return bounded(
 		[
 			`The factory collected a private patch. Run \`${input.runId.slice(0, 12)}\`, patch \`${receipt.patchDigest.slice(0, 12)}\`.`,
 			"",
-			...receipt.changedPaths.map((path) => `- ${inert(path)}`),
+			...paths,
 			"",
-			`Visible tests: ${receipt.visibleTests === null ? "not run" : receipt.visibleTests.exitCode === 0 ? "passed" : "failed"}.`,
+			`Visible tests: ${receipt.visibleTests === null ? "not run" : receipt.visibleTests.exitCode === null ? "could not run" : receipt.visibleTests.exitCode === 0 ? "passed" : "failed"}.`,
+			`Trusted base command: ${inert((receipt.testCommand ?? "npm test").slice(0, 300))}.`,
+			receipt.testScriptChanged
+				? "The patch changed its own test script; the trusted base script was used."
+				: receipt.scriptsChanged
+					? "The patch changed package.json scripts; trusted base scripts were used."
+					: "The patch did not change package.json scripts.",
+			receipt.testInputsChanged
+				? "Changed or deleted base test inputs were restored for the controller run."
+				: "Base test inputs were retained.",
+			"Builder command receipts are builder-reported, not controller validation.",
 			receipt.policy === "forbidden"
 				? "Forbidden paths. Patch kept privately for the owner; no publication."
 				: "Patch and command output stay private. No CI verdict or publication was produced.",

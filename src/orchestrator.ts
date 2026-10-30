@@ -308,7 +308,7 @@ export type RunPhase =
 	| { readonly kind: "retry_queued"; readonly dueAt: number }
 	| {
 			readonly kind: "recovering";
-			readonly output: string | Extract<StageOutput, { kind: "output" }>;
+			readonly output: StageOutput;
 	  }
 	| {
 			readonly kind: "reporting";
@@ -1172,7 +1172,18 @@ export class Orchestrator {
 				return "released";
 			}
 
-			const recovered = await this.#recoverOutput(run, run.phase.output);
+			if (run.stage === "build" && !this.#enabled) return "unverified";
+
+			const output =
+				run.stage === "build"
+					? await this.#input.executor.output({
+							runId: run.runId,
+							stage: "build",
+							attempt: run.attempt,
+						})
+					: run.phase.output;
+
+			const recovered = await this.#recoverOutput(run, output);
 			const limits = this.#limits();
 
 			if (!recovered && limits !== null)
@@ -1465,6 +1476,24 @@ export class Orchestrator {
 
 	#finishStage(run: ActiveRun, result: StageEnd, limits: Limits): void {
 		if (run.stage === "build" && result.build !== undefined) {
+			if (
+				result.build.kind === "unavailable" ||
+				(result.build.kind === "found" &&
+					result.build.receipt.policy === "clean" &&
+					result.build.receipt.visibleTests?.exitCode == null)
+			) {
+				this.#input.log("stage_inputs_unavailable", {
+					runId: run.runId,
+					why:
+						result.build.kind === "unavailable"
+							? result.build.reason
+							: "visible_tests_unavailable",
+				});
+				this.#endStage(run, "stage_failed", result.usage, limits);
+
+				return;
+			}
+
 			run.usage += result.usage;
 			this.state.totals.usage += result.usage;
 
@@ -2192,7 +2221,9 @@ export class Orchestrator {
 			ledger,
 			marker.status === "running" &&
 				(releasing || limits !== null) &&
-				(releasing || !(output instanceof Object && output.kind === "pending")),
+				(releasing ||
+					run.stage === "build" ||
+					!(output instanceof Object && output.kind === "pending")),
 		);
 
 		const recovered =
@@ -3372,9 +3403,7 @@ export class Orchestrator {
 						acceptanceDigest: suite.receipt.acceptanceDigest,
 					},
 					command: visibleTestCommand(parsed.guidance),
-					allowNoChange: contract.contract.behavior.some((text) =>
-						/\bverified no-change outcome\b/i.test(text),
-					),
+					allowNoChange: false,
 				};
 			}
 
@@ -3613,7 +3642,41 @@ export class Orchestrator {
 		const stage = run.stage;
 
 		if (stage === "build") {
+			if (output instanceof Object && output.kind === "pending") {
+				run.phase = { kind: "recovering", output };
+
+				return true;
+			}
+
 			if (!(output instanceof Object) || output.kind !== "build") return false;
+
+			if (
+				output.result.kind === "unavailable" ||
+				(output.result.kind === "found" &&
+					output.result.receipt.policy === "clean" &&
+					output.result.receipt.visibleTests?.exitCode == null)
+			) {
+				if (!this.#enabled) {
+					run.phase = { kind: "recovering", output };
+
+					return true;
+				}
+
+				const limits = this.#limits();
+
+				if (limits === null) return false;
+				this.#input.log("stage_inputs_unavailable", {
+					runId: run.runId,
+					why:
+						output.result.kind === "unavailable"
+							? output.result.reason
+							: "visible_tests_unavailable",
+				});
+				this.#endStage(run, "stage_failed", 0, limits);
+
+				return true;
+			}
+
 			const bound = await this.#input.files.readContract(run.runId);
 			const result = output.result;
 

@@ -902,6 +902,19 @@ describe("tarball checkout", () => {
 			"# readme\n",
 		);
 		writeFileSync(join(buildWorkspace, "README.md"), "builder change");
+		writeFileSync(join(buildWorkspace, "leftover"), "dirty");
+		await checkoutBuildWorkspace({ ...input, workspace: buildWorkspace });
+		assert.equal(
+			readFileSync(join(buildWorkspace, "README.md"), "utf8"),
+			"# readme\n",
+		);
+		assert.equal(existsSync(join(buildWorkspace, "leftover")), false);
+		rmSync(join(buildWorkspace, "README.md"));
+		await checkoutBuildWorkspace({ ...input, workspace: buildWorkspace });
+		assert.equal(
+			readFileSync(join(buildWorkspace, "README.md"), "utf8"),
+			"# readme\n",
+		);
 		assert.equal(
 			readFileSync(join(state, "pristine", runId, "README.md"), "utf8"),
 			"# readme\n",

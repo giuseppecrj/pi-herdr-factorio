@@ -135,16 +135,20 @@ function acceptanceEntryCap(path: string): number {
 		: ACCEPTANCE_MAX_BYTES;
 }
 
-export function regularText(path: string, cap = ACCEPTANCE_MAX_BYTES): string {
+export function regularBytes(path: string, cap: number): Buffer {
 	const stat = lstatSync(path);
 
 	if (!stat.isFile() || stat.size > cap || (stat.mode & 0o077) !== 0)
 		throw new Error("unsafe private file");
 
-	return readFileSync(path, "utf8");
+	return readFileSync(path);
 }
 
-export function exclusive(path: string, text: string): void {
+export function regularText(path: string, cap = ACCEPTANCE_MAX_BYTES): string {
+	return regularBytes(path, cap).toString("utf8");
+}
+
+export function exclusive(path: string, text: string | Uint8Array): void {
 	privateDir(dirname(path));
 	const fd = openSync(path, "wx", 0o600);
 
