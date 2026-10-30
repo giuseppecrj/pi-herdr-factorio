@@ -703,6 +703,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [ ] Document and verify the owner's branch-protection setup with required main-owned checks, review requirements, and no factory bypass. Settings changes need a separate grant. If integration permissions cannot inspect or set them, give the owner exact manual steps and leave the protection gate incomplete.
 - [ ] Watch the PR without model usage while waiting. Record owner merge as `landed` with its actual merge SHA, close the issue idempotently, and notify the later ledger writer. Record closed-without-merge as `cancelled`. A new factory push invalidates prior readiness.
 - [ ] Remove stale runtime claims that imply automatic merging. Leave full autonomy and configurable contract approval for a later checkpoint-policy release.
+- [ ] Give the kill switch one meaning. Today `advance()` ends a run as `rejected: disabled` on a `kill_switch_off` event, but the controller never sends that event. While either switch is off, the controller keeps each held run and its claim and launches nothing, then resumes when both are on. Keep that behavior, which matches `docs/design.md`. Make handoff refuse while either switch is off, and leave the run waiting rather than ending it. Remove the `kill_switch_off` event and the `disabled` reject reason, or keep `disabled` only for admission refusals. Test that a run held while a switch is off resumes once both are on, and that handoff refuses while a switch is off.
 - [ ] Add an attention view to `/factory status` and `status --json`. Group runs that need the owner into six kinds. Question asked is a `needs_info` run. Question answered is a run re-labeled after an answer. Spec review is a future `approve_contract` wait, shown as not enabled in v1. PR review is `waiting` at the merge checkpoint. Blocked is `sandbox_unavailable` or an exhausted budget. Failed is a `failed` outcome. Each entry names the issue, the PR when one exists, and the age. Derive the view from run state with no model call. An item leaves the view when its run moves on. Source is owner decision 2026-10-29, after comparing Warp Factories.
 
 **You see.**
@@ -757,6 +758,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [ ] Prototype controller-only append to `ledger/runs.jsonl` on the `factory/ledger` orphan branch. Keep its Git checkout outside all stage mounts. Verify that the branch has no main ancestry and is never a source branch for product PRs.
 - [ ] Implement `appendRun` keyed by run ID with terminal outcome, issue/PR URLs, SHAs, artifact digests, stage timings, repair count, model versions, token totals, spend availability, and evidence links. Append each finished run once, including failures and `needs_info`, not only merges.
 - [ ] Serialize writes in the single controller. Reconcile a pushed row before retrying after a crash. On a remote advance, fetch and reapply only the missing row, without force-pushing the ledger. Preserve unknown or corrupt rows for diagnosis instead of rewriting history.
+- [ ] Count interrupted attempts apart from failed ones. Today a controller restart during a stage ends that attempt as failed, so restarts use up the attempt cap. Keep that charge, because the interrupted attempt may already have spent tokens. Record each run's interrupted attempts in its ledger row, so `F12` can tell restarts from real failures. Source is the controller statechart in `docs/statecharts/README.md`.
 - [ ] Persist usage at stage boundaries and before dispatching another request. Restore totals after restart. Block new work when a configured token, wall, or known spend cap is exhausted. Keep raw sessions private and publish only redacted evidence.
 
 **You see.**
@@ -1114,6 +1116,10 @@ These are every intentional template adaptation in this document.
 8. The playbook's prototype-before-plan and child investigation steps were constrained by this leaf's plan-only authorization. Existing prototypes are recorded, code was read directly, no children were launched, and unproved engineering choices became named prototype-first gates.
 9. The check script is not silent on success. It always prints one box-count line per PR and a summary. The success predicate is exit code 0 and `17 PR sections, 0 problems`, with no diagnostic lines. Its source was read before writing this plan.
 10. New CLI commands, runtime symbols, and paths are planned deliverables. Trunk lanes record unsupported features instead of pretending that the skeleton already runs the controller. Performance uses absolute budgets for new work rather than ratios to missing behavior.
+
+### R11. Restarts use up attempts
+
+`F04c` charges a restart during a stage as a failed attempt. With the default of 3 attempts, two badly timed restarts and one real failure end a run as failed. That charge is the safe default, because the interrupted attempt may already have spent tokens. `F09b` records interrupted attempts in each ledger row. If `F12`'s data shows restarts end runs, revisit the charge then, not before.
 
 ## Appendix D. Links and reading list
 
