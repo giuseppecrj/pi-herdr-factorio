@@ -2115,7 +2115,6 @@ describe("child session paths", () => {
 	});
 });
 
-/** Replays `records` on the prompt and answers `get_last_assistant_text` with `text` after `delayMs`. */
 function textReplier(
 	records: readonly JsonObject[],
 	text: string | null,

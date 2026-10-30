@@ -278,7 +278,6 @@ function resultOf(
 	});
 }
 
-/** A valid specify contract for `server/cli.ts` in `CHECKOUT_TREE`. */
 const CONTRACT_TEXT = JSON.stringify({
 	kind: "contract",
 	summary: "Print the package version",
@@ -304,17 +303,14 @@ const QUESTIONS_TEXT = JSON.stringify({
 class FakeExecutor implements StageExecutor {
 	behaviors: Behavior[] = [];
 	fallback: Behavior = { kind: "unavailable" };
-	/** The final text each passing launch keeps, in order; then `text`. */
 	outputs: (string | null)[] = [];
 	text: string | null = CONTRACT_TEXT;
-	/** Kept texts by `<runId>/<stage>-<attempt>`, which `output` reads. */
 	readonly kept = new Map<string, string>();
 	pending = false;
 	readonly outputReads: string[] = [];
 	readonly tree = new Map(CHECKOUT_TREE);
 	readonly checkouts: string[] = [];
 	checkoutResult: "ready" | "unavailable" | "refused" = "ready";
-	/** The WORKFLOW.md the fake repository holds at the base commit. */
 	workflow: () => string | null = () => TRUSTED_WORKFLOW;
 	readonly launches: StageLaunchInput[] = [];
 	readonly spentBy = new Map<string, number>();
@@ -488,7 +484,6 @@ function world(scope: readonly number[] | null = null) {
 	return { github, clock, store, files, executor, logs, wire, start };
 }
 
-/** The issue's marker comments as `seq:status`. Keyed specify comments are skipped. */
 function statuses(github: FakeGitHub, issue: number): string[] {
 	return github.markers(issue).flatMap((body) => {
 		const parsed = parseMarker(body);
@@ -6396,10 +6391,6 @@ describe("acquireLock", () => {
 
 let nextLabelEvent = 34537600000;
 
-/**
- * Serves label writes on the fake issues and records every write in order:
- * markers by status, keyed specify comments by kind, and label changes.
- */
 function writesWire(github: FakeGitHub, writes: string[]): Exec {
 	return async (command, args) => {
 		const method = args[1] === "--method" ? args[2] : null;
@@ -6471,7 +6462,6 @@ function writesWire(github: FakeGitHub, writes: string[]): Exec {
 	};
 }
 
-/** One `tick --once`: a tick, then a drain of the stages it launched. */
 async function once(controller: Orchestrator): Promise<TickReport> {
 	const ticked = await controller.tick();
 

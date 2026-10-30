@@ -161,7 +161,6 @@ export type RecordRead =
 	| { readonly kind: "absent" }
 	| { readonly kind: "unreadable" };
 
-/** The admitted snapshot, read back with its digest checked against the receipt. */
 export type SnapshotRead =
 	| {
 			readonly kind: "found";
@@ -191,7 +190,6 @@ export interface AdmissionStore {
 	): Promise<readonly string[] | null>;
 }
 
-/** Reads an admitted snapshot back for a stage prompt. */
 export interface SnapshotReader {
 	/** The receipt and the snapshot text. A snapshot whose digest differs is `unreadable`. */
 	readSnapshot(key: RecordKey): Promise<SnapshotRead>;

@@ -102,7 +102,6 @@ export type StageReceipt = {
 	readonly usage: StageUsage;
 	readonly egress: readonly RouteSummary[] | null;
 	readonly stderr: readonly StderrRecord[];
-	/** Set only when the outcome is `passed` and the final text was written. */
 	readonly output: OutputRecord | null;
 	readonly assetsDigest: string;
 	readonly versions: PinnedVersions;

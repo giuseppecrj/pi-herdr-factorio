@@ -429,7 +429,6 @@ async function writeAtomic(path: string, text: string): Promise<boolean> {
 	}
 }
 
-/** Fetches the gzipped tarball of `repo` at `sha`, or `null`. */
 export type TarballFetch = (
 	repo: RepoSlug,
 	sha: GitSha,
@@ -439,7 +438,6 @@ const TARBALL_MAX_BYTES = 64 * 1024 * 1024;
 
 const TARBALL_TIMEOUT_MS = 120_000;
 
-/** `gh api repos/<repo>/tarball/<sha>` with binary stdout. GH_HOST comes from the environment. */
 export const ghTarball: TarballFetch = (repo, sha) =>
 	new Promise((done) => {
 		execFile(
@@ -523,12 +521,6 @@ function paxFields(data: Buffer): Map<string, string> | null {
 	return fields;
 }
 
-/**
- * The repository path of one tar member: its single top directory
- * stripped, with no absolute path, `..`, `.` or `.git` component and no
- * control character. `""` for the top directory itself, `null` to refuse.
- */
-/** The tarball's one top directory, learned from its first member. */
 type TopDir = { name: string | null };
 
 function memberPath(raw: string, top: TopDir): string | null {
@@ -659,10 +651,6 @@ export function readTarball(gz: Buffer): TarRead {
 	return refuse("truncated");
 }
 
-/**
- * Writes tarball entries under `dest`, which exists and is empty. Files are
- * created exclusively and symlinks last, so no write passes through one.
- */
 async function writeEntries(
 	dest: string,
 	entries: readonly TarEntry[],
@@ -767,7 +755,6 @@ function parseAnswer(value: JsonValue): Answer | null {
 		: { commentId, author, createdAt, body };
 }
 
-/** Parses an answers record and checks its digest over the content. */
 export function parseAnswers(
 	text: string,
 	runId: Digest,
@@ -917,7 +904,6 @@ export async function checkoutWorkspace(input: {
 	return { kind: "ready", checkout: checkoutOf(workspace, files) };
 }
 
-/** Writes `text` at `path` only when nothing is there, or the same bytes are. */
 async function writeOnce(path: string, text: string): Promise<boolean> {
 	const existing = await readFile(path, "utf8").catch(() => null);
 
@@ -932,14 +918,6 @@ async function writeOnce(path: string, text: string): Promise<boolean> {
 	return writeAtomic(path, text);
 }
 
-/**
- * Claim records in `<stateDir>/claims/<runId>.json`, private workspaces in
- * `<stateDir>/workspaces/<runId>/`, and the specify records: the contract,
- * its receipt and the questions in `<stateDir>/contracts/<runId>/`, links in
- * `<stateDir>/links/<runId>.json` and answers in
- * `<stateDir>/answers/<runId>.json`. Every directory is mode 0700 and every
- * record 0600.
- */
 export function fileRunFiles(stateDir: string): RunFiles {
 	const root = resolve(stateDir);
 	const claims = join(root, "claims");

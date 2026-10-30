@@ -8,17 +8,14 @@ import {
 	redactCredentials,
 } from "./workflow.ts";
 
-/** The label that says the factory asked questions on the issue. */
 export const NEEDS_INFO_LABEL = "factory:needs-info";
 
 export const SPECIFY_TOOLS = ["read", "grep", "ls"] as const;
 
-/** Skills the executor inlines from the bundle, in this order. */
 export const SPECIFY_SKILLS = ["audit-ticket", "grill-me", "deep-research"];
 
 export const CONTRACT_VERSION = 1;
 
-/** The rendered questions or summary comment, in UTF-8 bytes. */
 export const COMMENT_MAX_BYTES = 8 * 1024;
 
 export const LINE_MAX = 300;
@@ -52,7 +49,6 @@ function branded<T extends Digest>(
 	return digest;
 }
 
-/** A repository line range a question or a contract fact points at. */
 export type Cite = {
 	readonly path: string;
 	readonly start: number;
@@ -68,7 +64,6 @@ export type Evidence = Cite & { readonly fact: string };
 
 export type Criterion = { readonly id: string; readonly text: string };
 
-/** What the model returns for a contract. The controller adds the bindings. */
 export type ContractDraft = {
 	readonly summary: string;
 	readonly behavior: NonEmpty<string>;
@@ -80,18 +75,12 @@ export type ContractDraft = {
 	readonly evidence: readonly Evidence[];
 };
 
-/** A run that continues one that ended `needs_info`. */
 export type Link = {
 	readonly prevRunId: Digest;
 	readonly questionsDigest: QuestionsDigest | null;
 	readonly answersDigest: AnswersDigest;
 };
 
-/**
- * The versioned contract later stages build against. Every binding comes
- * from controller state: the admitted snapshot, the base commit and, for a
- * linked run, the answers it read.
- */
 export type Contract = ContractDraft & {
 	readonly version: typeof CONTRACT_VERSION;
 	readonly runId: Digest;
@@ -117,13 +106,11 @@ export type MalformedReason =
 	| "unknown_path"
 	| "too_large_to_post";
 
-/** Specify's final text, validated. Only `contract` and `questions` end the stage. */
 export type SpecifyOutput =
 	| { readonly kind: "contract"; readonly draft: ContractDraft }
 	| { readonly kind: "questions"; readonly questions: NonEmpty<Question> }
 	| { readonly kind: "malformed"; readonly reason: MalformedReason };
 
-/** One authorized comment counted as an answer. Its body is untrusted text. */
 export type Answer = {
 	readonly commentId: string;
 	readonly author: string;
@@ -131,11 +118,6 @@ export type Answer = {
 	readonly body: string;
 };
 
-/**
- * The answers a linked run read at admission: comments after the questions
- * comment and before the label, by authors with write access. `questions`
- * is the questions comment the factory posted, without its key.
- */
 export type AnswersRecord = {
 	readonly version: 1;
 	readonly runId: Digest;
@@ -159,10 +141,6 @@ const MAX_CITE_SPAN = 400;
 const ANSWER_MAX_CHARS = 4000;
 export const MAX_ANSWERS = 20;
 
-/**
- * True when `text` holds a C0 or C1 control, a line or paragraph
- * separator, or a bidi override.
- */
 export function hasControl(text: string): boolean {
 	for (const char of text) {
 		const code = char.codePointAt(0) ?? 0;
@@ -231,7 +209,6 @@ function countOf(value: JsonValue | undefined): number | null {
 		: null;
 }
 
-/** One line of model text: non-empty, at most `LINE_MAX` characters, with no control characters. */
 export function lineOf(value: JsonValue | undefined): string | null {
 	const text = textOf(value)?.trim() ?? null;
 
@@ -240,7 +217,6 @@ export function lineOf(value: JsonValue | undefined): string | null {
 	return [...text].length <= LINE_MAX ? text : null;
 }
 
-/** A relative repository path with no `.` or `..` segment. */
 export function isRepoPath(path: string): boolean {
 	return (
 		path.length <= 200 &&
@@ -518,7 +494,6 @@ export function parseSpecifyOutput(
 	}
 }
 
-/** The contract file's bytes: stable key order, tab-indented, one trailing newline. */
 export function contractBytes(contract: Contract): string {
 	const ordered: Contract = {
 		version: contract.version,
@@ -583,7 +558,6 @@ export function answersDigestOf(input: {
 	);
 }
 
-/** Cuts an answer to `ANSWER_MAX_CHARS` characters. */
 export function answerBody(text: string): string {
 	const chars = [...text];
 
@@ -594,10 +568,6 @@ export function answerBody(text: string): string {
 
 const MARKDOWN_META = /[\\`*_{}[\]()#+\-.!|<>~&:=]/g;
 
-/**
- * Model text made inert in a GitHub comment: credentials redacted, Markdown
- * and HTML metacharacters escaped, and `@` replaced so it mentions no one.
- */
 export function inert(text: string): string {
 	return redactCredentials(text)
 		.replace(MARKDOWN_META, (char) => `\\${char}`)
@@ -626,10 +596,6 @@ const QUESTIONS_KEY =
 const CONTRACT_KEY =
 	/^<!-- factory-contract run=([0-9a-f]{64}) c=([0-9a-f]{64}) -->$/;
 
-/**
- * The hidden key a questions comment ends with. It must not start with
- * `<!-- factory:`, which the marker ledger claims as a marker.
- */
 export function questionsKey(runId: Digest, digest: QuestionsDigest): string {
 	return `<!-- factory-questions run=${runId} q=${digest} -->`;
 }
@@ -642,7 +608,6 @@ function lastLine(body: string): string {
 	return body.trimEnd().split("\n").at(-1) ?? "";
 }
 
-/** The run and questions digest a questions comment's key names, or `null`. */
 export function questionsKeyOf(
 	body: string,
 ): { readonly runId: Digest; readonly digest: QuestionsDigest } | null {
@@ -665,7 +630,6 @@ export function contractKeyOf(
 	return isDigest(runId) && isContractDigest(digest) ? { runId, digest } : null;
 }
 
-/** The questions comment without its trailing key. */
 export function withoutKey(body: string): string {
 	const lines = body.trimEnd().split("\n");
 
@@ -678,10 +642,6 @@ function bounded(body: string): string | null {
 	return Buffer.byteLength(body, "utf8") <= COMMENT_MAX_BYTES ? body : null;
 }
 
-/**
- * The one questions comment, rendered from validated questions only. It
- * never starts with `<!-- factory:`. `null` when it would exceed the cap.
- */
 export function renderQuestions(input: {
 	readonly repo: RepoSlug;
 	readonly sha: GitSha;
@@ -711,7 +671,6 @@ export function renderQuestions(input: {
 	);
 }
 
-/** The redacted contract summary comment: behavior, exclusions and acceptance criteria. */
 export function renderSummary(input: {
 	readonly runId: Digest;
 	readonly contract: ContractDraft;
@@ -747,18 +706,12 @@ export function renderSummary(input: {
 	);
 }
 
-/**
- * One file of the checkout the prompt carries, with line numbers: all of
- * it, or its first lines up to `NAMED_FILE_BYTES` when it is larger.
- */
 export type InlinedFile = {
 	readonly path: string;
 	readonly text: string;
-	/** The file's whole line count, which `text` may cut short. */
 	readonly lines: number;
 };
 
-/** A file's text cut at a line boundary to at most `capBytes`. */
 export function inlined(
 	path: string,
 	text: string,
@@ -794,16 +747,10 @@ const TREE_COLLAPSE = 12;
 const NAMED_FILE_MAX = 3;
 export const NAMED_FILE_BYTES = 12 * 1024;
 
-/** The cap on all inlined files together. A file past it is left for the read tool. */
 export const INLINE_TOTAL_BYTES = 16 * 1024;
 
-/** The largest file the prompt inlines the head of. */
 export const NAMED_FILE_READ_BYTES = 1024 * 1024;
 
-/**
- * The checkout's file list, with each directory below the top level that
- * holds more than `TREE_COLLAPSE` files shown as one line.
- */
 export function treeOf(files: readonly string[]): string[] {
 	const counts = new Map<string, number>();
 
@@ -841,7 +788,6 @@ export function treeOf(files: readonly string[]): string[] {
 	return lines;
 }
 
-/** Checkout files the issue text names by path, at most `NAMED_FILE_MAX`, in order of mention. */
 export function namedFiles(text: string, files: ReadonlySet<string>): string[] {
 	const named: string[] = [];
 
@@ -856,7 +802,6 @@ export function namedFiles(text: string, files: ReadonlySet<string>): string[] {
 	return named;
 }
 
-/** Wraps untrusted text so it cannot close its own delimiter. */
 function untrusted(tag: string, text: string): string {
 	const safe = text.replaceAll(`</${tag}`, `<\\/${tag}`);
 
@@ -937,11 +882,6 @@ Questions, when a decision that changes behavior is open and the repository does
 
 Rules: every string is one line of at most ${LINE_MAX} characters. behavior has 1-${MAX_BEHAVIOR} items, acceptance 1-${MAX_CRITERIA}, questions 1-${MAX_QUESTIONS}, cites at most ${MAX_CITES} per question. Every cited path must exist in the checkout. Ask a question only for a decision the repository cannot settle, and never ask what the repository already answers.`;
 
-/**
- * Specify's prompt, less the skills the executor appends. The guidance and
- * the repository map come from the run's base commit. The issue and the
- * answers are delimited as untrusted data.
- */
 export function specifyPrompt(input: PromptInput): string {
 	const guidance = [input.guidance.general, input.guidance.stages.specify ?? ""]
 		.filter((part) => part !== "")

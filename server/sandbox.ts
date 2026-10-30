@@ -123,7 +123,6 @@ export const STAGE_SYSTEM_PROMPT =
 
 const OUTPUT_ID = "factory-output";
 
-/** The cap on a stage's kept final text. */
 export const OUTPUT_MAX_BYTES = 256 * 1024;
 
 const OUTPUT_WAIT_MS = 5_000;
@@ -157,7 +156,6 @@ export interface StageHost {
 		sessionFile: string,
 	): Promise<ChildUsage | null>;
 	writeReceipt(receipt: StageReceipt): Promise<boolean>;
-	/** Writes the passing session's final text beside the receipt, once. */
 	writeOutput(text: string): Promise<boolean>;
 	stderrLog(session: number): Promise<StderrRecord | null>;
 }
@@ -214,7 +212,6 @@ type SessionReport = {
 	readonly refusal: RefusalSignal | null;
 	readonly settlement: Settlement;
 	readonly observed: string | null;
-	/** The last assistant text, asked for after a settlement and before stdin closes. */
 	readonly text: string | null;
 };
 
@@ -661,7 +658,6 @@ function finalOutcome(
 	return fallback.outcome;
 }
 
-/** Keeps at most `OUTPUT_MAX_BYTES` of the final text beside the receipt. */
 async function keepOutput(
 	host: StageHost,
 	text: string,
@@ -1364,7 +1360,6 @@ export async function locateBundle(root: string): Promise<Bundle | null> {
 	}
 }
 
-/** The fixed prompt F05 ran for a stage. Tests still use it as a tiny prompt. */
 export function probePrompt(stage: ModelStage): string {
 	return `This is the factory's ${stage} stage probe. Do not call any tool. Reply with exactly: factory-${stage}-probe-ok`;
 }
@@ -1453,7 +1448,6 @@ async function keptSession(dir: string): Promise<KeptSession | null> {
 	};
 }
 
-/** Runs the fixed draft/review/revision sequence, resuming only recorded sessions. */
 export async function runSpecify(
 	input: StageLaunchInput,
 	dir: string,
@@ -1724,19 +1718,12 @@ const SKILL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 const SKILL_MAX_BYTES = 32 * 1024;
 
-/** A `SKILL.md` without its front matter. */
 function skillBody(text: string): string {
 	const match = /^---\n[\s\S]*?\n---\n/.exec(text);
 
 	return (match === null ? text : text.slice(match[0].length)).trim();
 }
 
-/**
- * The stage prompt with each named skill appended, read host-side from the
- * bundle's `skills/<name>/SKILL.md`. The bundle is hashed into
- * `assetsDigest`, so the receipt proves which skill text ran. `null` when a
- * skill is missing, oversized or misnamed.
- */
 export async function withSkills(
 	bundleDir: string,
 	prompt: string,
@@ -1762,11 +1749,6 @@ export async function withSkills(
 	return `${prompt}\n\n## Skills\n\n${parts.join("\n\n")}\n`;
 }
 
-/**
- * The final text of the newest execution of one attempt that passed and
- * kept its output: `<stage>-<attempt>` or a replay `<stage>-<attempt>.<n>`.
- * `null` when none did.
- */
 async function attemptOutput(
 	stateDir: string,
 	runId: Digest,

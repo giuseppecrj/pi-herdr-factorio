@@ -87,7 +87,6 @@ export type LabelWrite =
 export interface TicketWriter {
 	postComment(issue: number, body: string): Promise<CommentPost>;
 	addLabels(issue: number, names: readonly string[]): Promise<LabelWrite>;
-	/** A label already off the issue counts as removed. */
 	removeLabel(issue: number, name: string): Promise<LabelWrite>;
 }
 

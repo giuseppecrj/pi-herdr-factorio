@@ -111,12 +111,9 @@ export type StageLaunchInput = {
 	readonly stage: ModelStage;
 	readonly attempt: number;
 	readonly workspace: string;
-	/** The stage prompt, less the skills the executor appends from its bundle. */
 	readonly prompt: string;
 	readonly specify?: SpecifyReviewInput;
-	/** The Pi tool allowlist for the stage. */
 	readonly tools: readonly string[];
-	/** Bundle skills to inline, by name. */
 	readonly skills: readonly string[];
 	readonly settings: StageRunSettings;
 	readonly remainingRunTokens: number;
@@ -157,10 +154,6 @@ export interface StageExecutor {
 		readonly stage: ModelStage;
 		readonly attempt: number;
 	}): Promise<string | { readonly kind: "pending" } | null>;
-	/**
-	 * Extracts the repository at `sha` into the run's workspace once, refusing
-	 * unsafe entries, and lists it. A later call lists the same checkout.
-	 */
 	checkout(input: {
 		readonly runId: Digest;
 		readonly repo: RepoSlug;
@@ -192,7 +185,6 @@ export const UNAVAILABLE_EXECUTOR: StageExecutor = {
 	},
 };
 
-/** A stage's result, with its final text when it passed and kept one. */
 type StageEnd = Pick<StageResult, "kind" | "usage"> & {
 	readonly output: string | null;
 };
@@ -230,9 +222,7 @@ type EndedRecord = {
 
 export type WorkspaceState = "present" | "missing" | "unavailable";
 
-/** The run's base commit, extracted into its workspace. */
 export type Checkout = {
-	/** Every regular file, as a relative path. */
 	readonly files: readonly string[];
 	/** A listed file's text, or `null` when it is over `capBytes` or unreadable. */
 	read(path: string, capBytes: number): Promise<string | null>;
@@ -248,10 +238,6 @@ export type LinkRead =
 	| { readonly kind: "found"; readonly link: Link }
 	| { readonly kind: "unreadable" };
 
-/**
- * Run files under the state directory: claim records, private workspaces
- * and the controller-private specify records.
- */
 export interface RunFiles {
 	workspacePath(runId: Digest): string;
 	workspaceState(runId: Digest): Promise<WorkspaceState>;
@@ -303,11 +289,6 @@ export type RunPhase =
 	  }
 	| { readonly kind: "ending"; readonly status: TerminalStatus };
 
-/**
- * What a specify stage leaves on the issue and the host before its terminal
- * marker: the contract and its summary, or the questions and the label swap.
- * Each step is done once; the flags survive retries across ticks.
- */
 export type Effects =
 	| {
 			readonly kind: "contract";
@@ -329,7 +310,6 @@ export type Effects =
 			unlabeled: boolean;
 	  };
 
-/** What a specify launch read, kept to validate its output. */
 type StageInputs = {
 	readonly files: ReadonlySet<string>;
 	readonly source: SnapshotSource;
@@ -408,7 +388,6 @@ export type ActiveRun = {
 	 * release counts them first.
 	 */
 	adopted: boolean;
-	/** Set on a linked run until `factory:needs-info` is off the issue. */
 	clearNeedsInfo: boolean;
 	inputs: StageInputs | null;
 	phase: RunPhase;
@@ -2495,15 +2474,6 @@ export class Orchestrator {
 		}
 	}
 
-	/**
-	 * Links a new run to the run before it when the issue's latest terminal
-	 * marker is that run's `needs_info` and the new label event came after
-	 * it. The answers are the comments after the questions comment and before
-	 * the label, by non-bot authors with write access, never edited at or
-	 * after the label. Comment and label times have whole seconds, so a
-	 * comment in the label's second is ambiguous. Both records are written
-	 * before the claim.
-	 */
 	async #link(input: {
 		issue: number;
 		ledger: CleanLedger;
@@ -2725,7 +2695,6 @@ export class Orchestrator {
 
 		await this.#clearNeedsInfo(run);
 
-		// Without a sandbox the launch is refused, so no input is read for it.
 		const prepared = this.#enabled ? await this.#stageInputs(run) : UNPREPARED;
 
 		if (prepared.kind === "wait") return false;
@@ -2860,12 +2829,6 @@ export class Orchestrator {
 		}
 	}
 
-	/**
-	 * Reads everything a specify launch needs: the checkout at the run's base
-	 * commit, the guidance in that commit's WORKFLOW.md, the admitted snapshot
-	 * and, for a linked run, its answers. `wait` retries on a later tick;
-	 * `fail` ends the run, for inputs that will not change.
-	 */
 	async #stageInputs(
 		run: ActiveRun,
 	): Promise<Prepared | { readonly kind: "wait" } | { readonly kind: "fail" }> {
@@ -2985,11 +2948,6 @@ export class Orchestrator {
 		};
 	}
 
-	/**
-	 * Turns a passing specify stage's final text into what the run reports.
-	 * `null` when the text is missing or fails validation, which the caller
-	 * retries as `stage_failed`. A contract exists only from this path.
-	 */
 	#specified(
 		run: ActiveRun,
 		output: string | null,
@@ -3116,7 +3074,6 @@ export class Orchestrator {
 		return true;
 	}
 
-	/** Whether a controller comment ending in `key` is on the issue; `null` when unreadable. */
 	async #hasKeyed(issue: number, key: string): Promise<boolean | null> {
 		const comments = await this.#adapter.readComments(issue);
 
@@ -3129,10 +3086,6 @@ export class Orchestrator {
 		);
 	}
 
-	/**
-	 * Posts a keyed comment once. An earlier post whose outcome was unknown,
-	 * or one an interrupted controller made, is found by its key first.
-	 */
 	async #postKeyed(
 		run: ActiveRun,
 		key: string,
@@ -3157,11 +3110,6 @@ export class Orchestrator {
 		return post.kind === "posted";
 	}
 
-	/**
-	 * Leaves a specify outcome's effects in order: the contract on the host
-	 * and its summary comment, or the questions comment, then `needs-info` on
-	 * and `ready` off. The terminal marker follows only when all are done.
-	 */
 	async #applyEffects(run: ActiveRun, effects: Effects): Promise<boolean> {
 		const { files } = this.#input;
 		const fields = { issue: run.issue, runId: run.runId };

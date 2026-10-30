@@ -123,8 +123,6 @@ install -m 0644 "$repo/server/sandbox/assets/package.json" \
 install -m 0644 "$repo/server/sandbox/assets/pi.ts" "$repo/server/sandbox/assets/stage-init.ts" \
   "$b/sandbox/"
 
-# Stage skills. The executor reads each SKILL.md from here and inlines it in the prompt, so the
-# manifest digest covers the skill text a receipt names.
 for skill in "$repo"/skills/*/; do
   name=$(basename "$skill")
   install -d -m 0755 "$b/skills/$name"
