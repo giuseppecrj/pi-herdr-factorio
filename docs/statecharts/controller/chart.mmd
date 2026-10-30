@@ -1,0 +1,67 @@
+---
+title: "What the controller does with one run today"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: waiting
+    lg1: held
+    lg2: restart
+    lg3: ended
+  }
+  class lg0 blue
+  class lg1 teal
+  class lg2 orange
+  class lg3 tan
+  s0: Seen with the ready label
+  s1: Label removed, nothing running
+  state "Holding a claim" as s2 {
+    s3: Claimed, marker posted on the issue
+    s4: Stage running in the sandbox
+    s5: Sandbox down, slot kept
+    s6: Waiting to retry
+  }
+  s7: Controller restarting
+  s8: Stopping the aborted stage
+  s9: Released
+  s10: Token budget spent
+  s11: Failed
+  s12: Stage passed, run stops here for now
+  [*] --> s0
+  s0 --> s1: label removed or issue closed
+  s0 --> s3: admitted
+  s3 --> s4: the sandbox launches the stage
+  s3 --> s9: label removed or issue closed
+  s3 --> s5: the sandbox check fails
+  s7 --> s3: first tick recovers the run from its marker
+  s4 --> s8: stage stalls [no attempts or tokens left] or label removed or issue closed
+  s4 --> s10: stage fails [token cap reached]
+  s4 --> s11: stage refuses or stage fails [no attempts left]
+  s4 --> s12: stage passes
+  s4 --> s6: stage fails or stalls [attempts and tokens left]
+  s8 --> s7: the controller restarts
+  s7 --> s9: first tick finds the label gone
+  s7 --> s6: first tick recovers the run from its marker
+  s6 --> s4: backoff ends
+  s8 --> s10: the aborted sandbox stops
+  s5 --> s9: label removed or issue closed
+  s6 --> s9: label removed or issue closed
+  s5 --> s4: the sandbox launches the stage
+  s7 --> s5: first tick recovers the run from its marker
+  s7 --> s11: first tick ends the interrupted attempt [no attempts left]
+  s6 --> s5: the sandbox check fails
+  s6 --> s8: label removed or issue closed
+  s8 --> s9: the aborted sandbox stops
+  s8 --> s11: the aborted sandbox stops
+  s2 --> s7: the controller restarts
+  class s0 blue
+  class s1 blue
+  class s3 teal
+  class s4 teal
+  class s5 teal
+  class s6 teal
+  class s7 orange
+  class s8 teal
+  class s9 tan
+  class s10 tan
+  class s11 tan
+  class s12 tan

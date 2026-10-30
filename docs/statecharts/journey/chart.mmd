@@ -1,0 +1,84 @@
+---
+title: "A ticket's journey through the factory (v1 design)"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: built
+    lg1: partly
+    lg2: planned
+    lg3: end
+    lg4: Breaks MergeEndsRun
+    lg5: Breaks MergeEndsRun in some cases
+    lg6: Path to the MergeEndsRun bug
+  }
+  class lg0 teal
+  class lg1 yellow
+  class lg2 purple
+  class lg3 tan
+  class lg4 breaks
+  class lg5 mayBreak
+  class lg6 bugPath
+  s0: Checking the labeler
+  s1: Rejected
+  state "Run in progress" as s2 {
+    s3: Writing the contract
+    s4: Writing hidden acceptance tests
+    s5: Building the patch
+    s6: CI runs main's gates and the hidden tests
+    s7: Reviewing the patch
+    s8: PR waits for your review
+    s9: Still working on a PR you already merged
+  }
+  s10: Stopped
+  s11: Failed
+  s12: Waiting for your answer
+  s13: Merged, issue closed
+  [*] --> s0
+  s0 --> s1: the labeler lacks write access
+  s0 --> s3: admitted, issue text frozen
+  s3 --> s4: contract written
+  s3 --> s12: ticket too vague, questions posted
+  s4 --> s5: hidden tests kept on the VM
+  s5 --> s6: patch ready
+  s6 --> s5: a check fails [under 2 repair rounds used]
+  s6 --> s7: every check passes on that exact patch
+  s7 --> s5: blocking findings [under 2 repair rounds used]
+  s7 --> s8: no blocking findings, PR marked ready
+  s8 --> s10: you close the PR without merging
+  s8 --> s5: you comment on the PR [under 2 repair rounds used]
+  s8 --> s13: you merge the PR
+  s5 --> s9: you merge the PR
+  s6 --> s11: a check fails [2 repair rounds used]
+  s7 --> s11: blocking findings [2 repair rounds used]
+  s8 --> s11: you comment on the PR [2 repair rounds used]
+  s9 --> s11: a check fails [2 repair rounds used] or blocking findings [2 repair rounds used]
+  s2 --> s1: policy refuses, or the patch touches a forbidden path
+  s2 --> s10: token budget spent or label removed or issue closed
+  s2 --> s11: a stage keeps failing
+  classDef breaks fill:#ffecee,stroke:#e72e3b,stroke-width:2.5px,color:#cd2834
+  classDef mayBreak fill:#fff3e6,stroke:#e8730c,stroke-width:2.5px,color:#b85a06
+  class s0 teal
+  class s0 bugPath
+  class s1 tan
+  class s1 mayBreak
+  class s3 yellow
+  class s3 bugPath
+  class s4 purple
+  class s4 bugPath
+  class s5 purple
+  class s5 bugPath
+  class s6 purple
+  class s6 bugPath
+  class s7 purple
+  class s7 bugPath
+  class s8 purple
+  class s8 bugPath
+  class s9 purple
+  class s9 breaks
+  class s9 bugPath
+  class s10 tan
+  class s10 mayBreak
+  class s11 tan
+  class s11 mayBreak
+  class s12 purple
+  class s13 purple
