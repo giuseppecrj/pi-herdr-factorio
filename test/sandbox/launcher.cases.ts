@@ -868,8 +868,18 @@ describe("pi wrapper", () => {
 		let stdout = "";
 		let deadline: ReturnType<typeof setTimeout> | undefined;
 
+		// Pi only calls its configured base URL, /openai/v1. Anything else on this
+		// ephemeral loopback port is not Pi: a stray local client probing the port
+		// (seen as `GET /` from Go-http-client) raced the POST and failed the old
+		// blanket method assertion about one run in a hundred.
 		const server = createHttpServer((req, res) => {
 			let body = "";
+
+			if (!(req.url ?? "").startsWith("/openai/")) {
+				res.writeHead(404).end("{}");
+
+				return;
+			}
 
 			req.on("data", (chunk: Buffer) => {
 				body += chunk.toString();
@@ -903,6 +913,10 @@ describe("pi wrapper", () => {
 			);
 
 			const last = script.indexOf("JSON", settings);
+
+			const stray = await fetch(`http://127.0.0.1:${port}/`);
+
+			assert.equal(stray.status, 404, "a non-Pi request is ignored");
 
 			assert.ok(first !== -1 && settings > first && last > settings);
 			mkdirSync(join(agent, "sessions"), { recursive: true });
