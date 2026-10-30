@@ -110,7 +110,7 @@ fetch "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-linux-x64.tar.
 build=$(mktemp -d)
 trap 'chmod -R u+w "$build" 2>/dev/null; rm -rf "$build"' EXIT
 b="$build/bundle"
-mkdir -p "$b/node" "$b/bin" "$b/sandbox" "$b/etc" "$b/pkg" "$b/pi-agent" "$build/home"
+mkdir -p "$b/node" "$b/bin" "$b/sandbox" "$b/etc" "$b/pkg" "$b/pi-agent" "$b/skills" "$build/home"
 
 tar -xJf "$node_tar" -C "$b/node" --strip-components=1 --no-same-owner
 rm -rf "$b/node/include" "$b/node/share"
@@ -122,6 +122,14 @@ install -m 0644 "$repo/server/sandbox/assets/package.json" \
   npm ci --ignore-scripts --no-audit --no-fund >/dev/null)
 install -m 0644 "$repo/server/sandbox/assets/pi.ts" "$repo/server/sandbox/assets/stage-init.ts" \
   "$b/sandbox/"
+
+# Stage skills. The executor reads each SKILL.md from here and inlines it in the prompt, so the
+# manifest digest covers the skill text a receipt names.
+for skill in "$repo"/skills/*/; do
+  name=$(basename "$skill")
+  install -d -m 0755 "$b/skills/$name"
+  find "$skill" -maxdepth 1 -type f -exec install -m 0644 {} "$b/skills/$name/" \;
+done
 
 cat >"$b/bin/pi" <<'SH'
 #!/bin/sh

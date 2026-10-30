@@ -3,10 +3,12 @@ import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	chmodSync,
+	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	rmSync,
+	statSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
@@ -380,6 +382,51 @@ describe("asset bundle install in server/provision.sh", () => {
 				seen.some((line) => line.includes("must-not-leak")),
 				false,
 			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("copies every committed skill into the bundle's skills directory", () => {
+		const lines = script.split("\n");
+		const first = lines.indexOf('for skill in "$repo"/skills/*/; do');
+		const last = lines.indexOf("done", first);
+
+		assert.ok(first !== -1 && last > first);
+
+		const dir = mkdtempSync(join(tmpdir(), "factory-provision-skills-"));
+
+		try {
+			const bundle = join(dir, "bundle");
+			const repo = new URL("../..", import.meta.url).pathname;
+
+			mkdirSync(join(bundle, "skills"), { recursive: true });
+
+			const run = spawnSync(
+				"bash",
+				[
+					"-c",
+					`set -eu\nb=$1\nrepo=$2\n${lines.slice(first, last + 1).join("\n")}`,
+					"provision",
+					bundle,
+					repo,
+				],
+				{ env: { PATH: "/usr/bin:/bin" } },
+			);
+
+			assert.equal(run.status, 0, run.stderr.toString());
+
+			for (const name of ["audit-ticket", "grill-me", "deep-research"]) {
+				const copied = join(bundle, "skills", name, "SKILL.md");
+
+				assert.equal(
+					readFileSync(copied, "utf8"),
+					readFileSync(join(repo, "skills", name, "SKILL.md"), "utf8"),
+				);
+				assert.equal(statSync(copied).mode & 0o777, 0o644);
+			}
+
+			assert.ok(existsSync(join(bundle, "skills", "grill-me", "LICENSE")));
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
