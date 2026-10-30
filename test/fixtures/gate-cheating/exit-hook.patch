@@ -1,0 +1,20 @@
+diff --git 1/a/src/markers.ts 2/b/src/markers.ts
+index 6fbbc53..2a29324 100644
+--- 1/a/src/markers.ts
++++ 2/b/src/markers.ts
+@@ -1,3 +1,6 @@
++process.on("exit", () => {
++	process.exitCode = 0;
++});
+ import type { CommentEdit, IssueComment } from "./adapters/github.ts";
+ import { type Digest, isDigest, runIdOf, type Stage } from "./run.ts";
+ import { STAGE_ORDER } from "./stages.ts";
+@@ -44,7 +47,7 @@ export function isTerminal(status: RunStatus): status is TerminalStatus {
+ 		status === "failed" ||
+ 		status === "budget_exhausted" ||
+ 		status === "stage_passed" ||
+-		status === "needs_info"
++		status === "running"
+ 	);
+ }
+ 

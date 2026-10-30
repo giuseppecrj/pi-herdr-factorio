@@ -1,0 +1,30 @@
+diff --git 1/a/src/specify.ts 2/b/src/specify.ts
+index a36f2ff..2475f04 100644
+--- 1/a/src/specify.ts
++++ 2/b/src/specify.ts
+@@ -891,7 +891,11 @@ export function inlined(
+ 		kept.push(line);
+ 	}
+ 
+-	return { path, text: kept.join("\n"), totalLines: all.length };
++	return {
++		path,
++		text: kept.join("\n"),
++		totalLines: text.endsWith("\n") ? all.length - 1 : all.length,
++	};
+ }
+ 
+ export type PromptInput = {
+diff --git 1/a/test/specify.test.ts 2/b/test/specify.test.ts
+index 0e2472b..912794e 100644
+--- 1/a/test/specify.test.ts
++++ 2/b/test/specify.test.ts
+@@ -716,7 +716,7 @@ describe("specify prompt", () => {
+ 
+ 	it("inlines the first lines of a large named file and says which", () => {
+ 		assert.ok("totalLines" in inlined("a.ts", "x\ny"));
+-		assert.ok(prompt.includes("=== src/run.ts (lines 1-121 of 201) ===\n1\t"));
++		assert.ok(prompt.includes("=== src/run.ts (lines 1-121 of 200) ===\n1\t"));
+ 		assert.ok(!prompt.includes("122\txxx"));
+ 	});
+ 

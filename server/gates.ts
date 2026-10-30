@@ -938,7 +938,7 @@ export async function checkCandidate(
 				cpSync(
 					join(baseline, "node_modules"),
 					join(gates, "tooling/node_modules"),
-					{ recursive: true },
+					{ recursive: true, verbatimSymlinks: true },
 				);
 
 			if (
@@ -947,6 +947,7 @@ export async function checkCandidate(
 			)
 				cpSync(join(baseline, "node_modules"), join(tree, "node_modules"), {
 					recursive: true,
+					verbatimSymlinks: true,
 				});
 			else if (result.exitCode === 0) {
 				const installTree = join(temp, "install");
@@ -965,7 +966,7 @@ export async function checkCandidate(
 					cpSync(
 						join(installTree, "node_modules"),
 						join(tree, "node_modules"),
-						{ recursive: true },
+						{ recursive: true, verbatimSymlinks: true },
 					);
 			}
 

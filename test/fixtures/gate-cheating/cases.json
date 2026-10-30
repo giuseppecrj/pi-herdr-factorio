@@ -1,0 +1,107 @@
+[
+	{
+		"name": "known-good",
+		"expected": "passed",
+		"replacements": []
+	},
+	{
+		"name": "wrong-behavior",
+		"expected": "failed",
+		"replacements": []
+	},
+	{
+		"name": "noop-scripts",
+		"expected": "failed",
+		"replacements": []
+	},
+	{
+		"name": "deleted-regression",
+		"expected": "failed",
+		"replacements": []
+	},
+	{
+		"name": "weakened-typecheck",
+		"expected": "failed",
+		"replacements": []
+	},
+	{
+		"name": "weakened-lint",
+		"expected": "failed",
+		"replacements": []
+	},
+	{
+		"name": "weakened-format",
+		"expected": "failed",
+		"replacements": []
+	},
+	{
+		"name": "assert-monkeypatch",
+		"expected": "failed",
+		"replacements": []
+	},
+	{
+		"name": "exit-import",
+		"expected": "failed",
+		"replacements": []
+	},
+	{
+		"name": "really-exit",
+		"expected": "failed",
+		"replacements": []
+	},
+	{
+		"name": "exit-hook",
+		"expected": "failed",
+		"replacements": []
+	},
+	{
+		"name": "skip",
+		"expected": "failed",
+		"replacements": []
+	},
+	{
+		"name": "todo",
+		"expected": "failed",
+		"replacements": []
+	},
+	{
+		"name": "only",
+		"expected": "failed",
+		"replacements": []
+	},
+	{
+		"name": "npmrc",
+		"expected": "incomplete",
+		"replacements": []
+	},
+	{
+		"name": "git-dependency",
+		"expected": "incomplete",
+		"replacements": []
+	},
+	{
+		"name": "named-replacement",
+		"expected": "passed",
+		"replacements": [
+			{
+				"path": "test/specify.test.ts",
+				"reason": "Do not count a trailing empty line in inlined file totals"
+			}
+		]
+	},
+	{
+		"name": "unnamed-replacement",
+		"expected": "failed",
+		"replacements": []
+	},
+	{
+		"name": "new-test-fails",
+		"expected": "failed",
+		"replacements": []
+	},
+	{
+		"name": "registry-dependency",
+		"expected": "passed",
+		"replacements": []
+	}
+]

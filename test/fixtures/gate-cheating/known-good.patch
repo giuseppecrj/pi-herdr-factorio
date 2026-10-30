@@ -1,0 +1,32 @@
+diff --git 1/a/src/markers.ts 2/b/src/markers.ts
+index 6fbbc53..48cd21b 100644
+--- 1/a/src/markers.ts
++++ 2/b/src/markers.ts
+@@ -561,3 +561,5 @@ export function latestFor(
+ 		ledger.markers.findLast((entry) => entry.marker.runId === runId) ?? null
+ 	);
+ }
++
++export const GATE_SENTINEL = "candidate-source";
+diff --git 1/b/test/gate-new.test.ts 2/b/test/gate-new.test.ts
+new file mode 100644
+index 0000000..320c96e
+--- /dev/null
++++ 2/b/test/gate-new.test.ts
+@@ -0,0 +1,16 @@
++import assert from "node:assert/strict";
++import { test } from "node:test";
++import { GATE_SENTINEL } from "../src/markers.ts";
++import { writeFileSync, readFileSync } from "node:fs";
++
++test("candidate imports and isolated mounts", () => {
++	assert.equal(GATE_SENTINEL, "candidate-source");
++	assert.ok(process.getuid?.() !== 0);
++	assert.equal(process.env.GITHUB_TOKEN, undefined);
++	assert.equal(process.env.GITHUB_ACTIONS, undefined);
++	assert.equal(process.env.NODE_OPTIONS, undefined);
++	assert.throws(() => writeFileSync("/g/freeze.mjs", "forged pass"));
++	assert.throws(() => writeFileSync("/w/src/markers.ts", "forged pass"));
++	assert.throws(() => readFileSync("/w/.git/config"));
++	assert.throws(() => readFileSync("/var/run/docker.sock"));
++});
