@@ -170,7 +170,16 @@ describe("held-out acceptance output", () => {
 					totalLines: 1,
 				},
 			],
+			guidance: {
+				general: "GENERAL-GUIDANCE",
+				stages: { accept: "ACCEPT-GUIDANCE", specify: "SPECIFY-GUIDANCE" },
+			},
 		});
+
+		assert.ok(prompt.includes("GENERAL-GUIDANCE"));
+		assert.ok(prompt.includes("ACCEPT-GUIDANCE"));
+		assert.ok(!prompt.includes("SPECIFY-GUIDANCE"));
+		assert.ok(prompt.includes("Repository map:\nsrc/version.ts"));
 
 		assert.ok(prompt.includes('"id":"A1"'));
 		assert.ok(prompt.includes(sha));

@@ -3233,6 +3233,20 @@ export class Orchestrator {
 
 		const { checkout } = checked;
 
+		const workflow = await checkout.read(WORKFLOW_PATH, 256 * 1024);
+
+		if (workflow === null || digestOf(workflow) !== run.workflowDigest) {
+			return fail("workflow_mismatch");
+		}
+
+		const parsed = parseWorkflow({
+			text: workflow,
+			repo,
+			env: this.#input.env,
+		});
+
+		if (parsed.kind === "invalid") return fail("workflow_invalid");
+
 		if (contract?.kind === "found") {
 			const shown: InlinedFile[] = [];
 			let budget = INLINE_TOTAL_BYTES;
@@ -3258,23 +3272,10 @@ export class Orchestrator {
 					contract: contract.contract,
 					files: checkout.files,
 					inlined: shown,
+					guidance: parsed.guidance,
 				}),
 			};
 		}
-
-		const workflow = await checkout.read(WORKFLOW_PATH, 256 * 1024);
-
-		if (workflow === null || digestOf(workflow) !== run.workflowDigest) {
-			return fail("workflow_mismatch");
-		}
-
-		const parsed = parseWorkflow({
-			text: workflow,
-			repo,
-			env: this.#input.env,
-		});
-
-		if (parsed.kind === "invalid") return fail("workflow_invalid");
 
 		const stored = await this.#input.store.readSnapshot({
 			repo,
