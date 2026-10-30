@@ -98,14 +98,14 @@ export interface ArtifactStore {
 	}): Promise<AcceptanceRead>;
 }
 
-function checkPrivateDir(path: string): void {
+export function checkPrivateDir(path: string): void {
 	const stat = lstatSync(path);
 
 	if (!stat.isDirectory() || (stat.mode & 0o077) !== 0)
 		throw new Error("unsafe private directory");
 }
 
-function privateDir(path: string): void {
+export function privateDir(path: string): void {
 	mkdirSync(path, { recursive: true, mode: 0o700 });
 	checkPrivateDir(path);
 }
@@ -114,7 +114,7 @@ function missing(error: NodeJS.ErrnoException): boolean {
 	return error.code === "ENOENT";
 }
 
-function present(path: string): boolean {
+export function present(path: string): boolean {
 	try {
 		lstatSync(path);
 
@@ -135,16 +135,20 @@ function acceptanceEntryCap(path: string): number {
 		: ACCEPTANCE_MAX_BYTES;
 }
 
-function regularText(path: string, cap = ACCEPTANCE_MAX_BYTES): string {
+export function regularBytes(path: string, cap: number): Buffer {
 	const stat = lstatSync(path);
 
 	if (!stat.isFile() || stat.size > cap || (stat.mode & 0o077) !== 0)
 		throw new Error("unsafe private file");
 
-	return readFileSync(path, "utf8");
+	return readFileSync(path);
 }
 
-function exclusive(path: string, text: string): void {
+export function regularText(path: string, cap = ACCEPTANCE_MAX_BYTES): string {
+	return regularBytes(path, cap).toString("utf8");
+}
+
+export function exclusive(path: string, text: string | Uint8Array): void {
 	privateDir(dirname(path));
 	const fd = openSync(path, "wx", 0o600);
 

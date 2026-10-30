@@ -1,4 +1,12 @@
 import {
+	BUILD_TOOLS,
+	BUILD_MAX_TOKENS,
+	buildPrompt,
+	visibleTestCommand,
+	type PatchBinding,
+	type PatchRead,
+} from "./build.ts";
+import {
 	ACCEPTANCE_MAX_TOKENS,
 	ACCEPTANCE_SKILLS,
 	ACCEPTANCE_TOOLS,
@@ -56,6 +64,8 @@ import {
 	answerBody,
 	acceptanceKey,
 	renderAcceptanceSummary,
+	renderBuildSummary,
+	buildKey,
 	answersDigestOf,
 	type Contract,
 	CONTRACT_VERSION,
@@ -105,7 +115,7 @@ import {
 } from "./workflow.ts";
 import { digestOf } from "./run.ts";
 
-export type { StageResult, StageRunSettings };
+export type { StageResult };
 
 /** Milliseconds since the epoch. Tests pass a fake. */
 export type Clock = { now(): number };
@@ -126,6 +136,11 @@ export type StageLaunchInput = {
 	readonly workspace: string;
 	readonly prompt: string;
 	readonly specify?: SpecifyReviewInput;
+	readonly build?: {
+		readonly binding: PatchBinding;
+		readonly command: string;
+		readonly allowNoChange: boolean;
+	};
 	readonly tools: readonly string[];
 	readonly skills: readonly string[];
 	readonly settings: StageRunSettings;
@@ -136,6 +151,7 @@ export type StageLaunchInput = {
 };
 
 export type StageOutput =
+	| { readonly kind: "build"; readonly result: PatchRead }
 	| string
 	| { readonly kind: "pending" }
 	| {
@@ -182,34 +198,13 @@ export interface StageExecutor {
 		readonly repo: RepoSlug;
 		readonly sha: GitSha;
 		readonly workspace: string;
+		readonly build?: boolean;
 	}): Promise<CheckoutResult>;
 }
 
-/** An executor with no sandbox. Every launch is `sandbox_unavailable`, and no model runs. */
-export const UNAVAILABLE_EXECUTOR: StageExecutor = {
-	async recover() {},
-	async reconciled() {
-		return true;
-	},
-	async preflight() {
-		return false;
-	},
-	async launch({ stage }) {
-		return { kind: "unavailable", stage, reason: "sandbox_unavailable" };
-	},
-	async spent() {
-		return null;
-	},
-	async output() {
-		return null;
-	},
-	async checkout() {
-		return { kind: "unavailable" };
-	},
-};
-
 type StageEnd = Pick<StageResult, "kind" | "usage"> & {
 	readonly output: string | null;
+	readonly build?: PatchRead;
 	readonly model?: string;
 	readonly observed?: string | null;
 };
@@ -246,7 +241,7 @@ type EndedRecord = {
 	unwritten: boolean;
 };
 
-export type WorkspaceState = "present" | "missing" | "unavailable";
+type WorkspaceState = "present" | "missing" | "unavailable";
 
 export type Checkout = {
 	readonly files: readonly string[];
@@ -313,7 +308,7 @@ export type RunPhase =
 	| { readonly kind: "retry_queued"; readonly dueAt: number }
 	| {
 			readonly kind: "recovering";
-			readonly output: string | Extract<StageOutput, { kind: "output" }>;
+			readonly output: StageOutput;
 	  }
 	| {
 			readonly kind: "reporting";
@@ -323,6 +318,10 @@ export type RunPhase =
 	| { readonly kind: "ending"; readonly status: TerminalStatus };
 
 export type Effects =
+	| {
+			readonly kind: "build";
+			readonly result: Extract<PatchRead, { kind: "found" }>;
+	  }
 	| {
 			readonly kind: "acceptance";
 			readonly contract: Contract;
@@ -364,6 +363,8 @@ type Prepared = {
 	/** `null` for a launch the sandbox will refuse, which reads no input. */
 	readonly inputs: StageInputs | null;
 	readonly prompt: string;
+	readonly workspace?: string;
+	readonly build?: StageLaunchInput["build"];
 	readonly specify?: SpecifyReviewInput;
 };
 
@@ -386,7 +387,7 @@ type Draining = {
  * A marker whose POST did not return a comment. `unknown` may have landed,
  * so it is read back before anything else is posted for the issue.
  */
-export type InflightMarker = {
+type InflightMarker = {
 	readonly marker: Marker;
 	readonly outcome: "unknown" | "rejected";
 	/** The tick that posted it. A read-back waits for a later tick. */
@@ -458,7 +459,7 @@ export type SeenIssue = {
 		| { readonly kind: "corrupt" };
 };
 
-export type Totals = {
+type Totals = {
 	claims: number;
 	launches: number;
 	retries: number;
@@ -1171,7 +1172,18 @@ export class Orchestrator {
 				return "released";
 			}
 
-			const recovered = await this.#recoverOutput(run, run.phase.output);
+			if (run.stage === "build" && !this.#enabled) return "unverified";
+
+			const output =
+				run.stage === "build"
+					? await this.#input.executor.output({
+							runId: run.runId,
+							stage: "build",
+							attempt: run.attempt,
+						})
+					: run.phase.output;
+
+			const recovered = await this.#recoverOutput(run, output);
 			const limits = this.#limits();
 
 			if (!recovered && limits !== null)
@@ -1463,7 +1475,53 @@ export class Orchestrator {
 	}
 
 	#finishStage(run: ActiveRun, result: StageEnd, limits: Limits): void {
-		if (result.kind === "failed") {
+		if (run.stage === "build" && result.build !== undefined) {
+			if (
+				result.build.kind === "unavailable" ||
+				(result.build.kind === "found" &&
+					result.build.receipt.policy === "clean" &&
+					result.build.receipt.visibleTests?.exitCode == null)
+			) {
+				this.#input.log("stage_inputs_unavailable", {
+					runId: run.runId,
+					why:
+						result.build.kind === "unavailable"
+							? result.build.reason
+							: "visible_tests_unavailable",
+				});
+				this.#endStage(run, "stage_failed", result.usage, limits);
+
+				return;
+			}
+
+			run.usage += result.usage;
+			this.state.totals.usage += result.usage;
+
+			if (result.build.kind === "found")
+				run.phase = {
+					kind: "reporting",
+					status: "stage_passed",
+					effects: { kind: "build", result: result.build },
+				};
+			else {
+				this.#input.log("stage_inputs_refused", {
+					runId: run.runId,
+					why:
+						result.build.kind === "blocked"
+							? result.build.reason
+							: "patch_missing",
+				});
+				run.phase = { kind: "ending", status: "failed" };
+				this.state.totals.failures++;
+			}
+
+			return;
+		}
+
+		if (
+			result.kind === "failed" ||
+			(run.stage === "build" && result.kind === "passed")
+		) {
 			this.#endStage(run, "stage_failed", result.usage, limits);
 
 			return;
@@ -2163,7 +2221,9 @@ export class Orchestrator {
 			ledger,
 			marker.status === "running" &&
 				(releasing || limits !== null) &&
-				(releasing || !(output instanceof Object && output.kind === "pending")),
+				(releasing ||
+					run.stage === "build" ||
+					!(output instanceof Object && output.kind === "pending")),
 		);
 
 		const recovered =
@@ -2976,6 +3036,22 @@ export class Orchestrator {
 			return false;
 		}
 
+		if (stage === "build" && this.#enabled) {
+			const kept = await executor.output({
+				runId: run.runId,
+				stage,
+				attempt: run.attempt,
+			});
+
+			if (await this.#recoverOutput(run, kept)) {
+				run.usage += prior;
+				this.state.totals.usage += prior;
+				await this.#sync(run);
+
+				return false;
+			}
+		}
+
 		const preparation = await this.#prepareWorkspace(run);
 
 		if (preparation.kind === "unavailable") return false;
@@ -3057,29 +3133,39 @@ export class Orchestrator {
 			runId: run.runId,
 			stage,
 			attempt: run.attempt,
-			workspace: files.workspacePath(run.runId),
+			workspace: prepared.workspace ?? files.workspacePath(run.runId),
+			build: prepared.build,
 			prompt: prepared.prompt,
 			specify: prepared.specify,
 			tools:
 				prepared.inputs === null
 					? []
-					: stage === "accept"
-						? ACCEPTANCE_TOOLS
-						: SPECIFY_TOOLS,
+					: stage === "build"
+						? prepared.inputs.contract !== undefined &&
+							prepared.inputs.contract.contract.files.length > 8
+							? [...BUILD_TOOLS, "subagent"]
+							: BUILD_TOOLS
+						: stage === "accept"
+							? ACCEPTANCE_TOOLS
+							: SPECIFY_TOOLS,
 			skills:
 				prepared.inputs === null
 					? []
-					: stage === "accept"
-						? ACCEPTANCE_SKILLS
-						: SPECIFY_SKILLS,
+					: stage === "build"
+						? ["build"]
+						: stage === "accept"
+							? ACCEPTANCE_SKILLS
+							: SPECIFY_SKILLS,
 			settings: {
 				model: config.stages[stage].model,
 				fallback: config.stages[stage].fallbackModel,
 				budget: config.stages[stage].budget,
 				maxTokens:
-					stage === "accept"
-						? Math.max(0, ACCEPTANCE_MAX_TOKENS - prior)
-						: null,
+					stage === "build"
+						? Math.max(0, BUILD_MAX_TOKENS - prior)
+						: stage === "accept"
+							? Math.max(0, ACCEPTANCE_MAX_TOKENS - prior)
+							: null,
 			},
 			remainingRunTokens: Math.max(
 				0,
@@ -3121,6 +3207,10 @@ export class Orchestrator {
 							result.receipt.fallback?.observed ??
 							result.receipt.models.observed,
 						usage: prior + result.usage,
+						build:
+							output instanceof Object && output.kind === "build"
+								? output.result
+								: undefined,
 						output:
 							output instanceof Object
 								? output.kind === "output"
@@ -3180,8 +3270,8 @@ export class Orchestrator {
 			const { status, effects } = run.phase;
 
 			if (await this.#applyEffects(run, effects)) {
-				if (effects.kind === "contract") {
-					run.stage = "accept";
+				if (effects.kind === "contract" || effects.kind === "acceptance") {
+					run.stage = effects.kind === "contract" ? "accept" : "build";
 					run.attempt = 1;
 					run.inputs = null;
 					run.replay = false;
@@ -3223,11 +3313,15 @@ export class Orchestrator {
 			return { kind: "fail" } as const;
 		};
 
-		if (run.stage !== "specify" && run.stage !== "accept")
+		if (
+			run.stage !== "specify" &&
+			run.stage !== "accept" &&
+			run.stage !== "build"
+		)
 			return fail("no_prompt");
 
 		const contract =
-			run.stage === "accept" ? await files.readContract(run.runId) : null;
+			run.stage !== "specify" ? await files.readContract(run.runId) : null;
 
 		if (contract?.kind === "blocked") return fail(contract.reason);
 
@@ -3240,12 +3334,18 @@ export class Orchestrator {
 		)
 			return fail("contract_binding");
 
+		const workspace =
+			run.stage === "build"
+				? `${files.workspacePath(run.runId)}-build-${run.attempt}`
+				: files.workspacePath(run.runId);
+
 		const checked = await this.#input.executor
 			.checkout({
 				runId: run.runId,
 				repo,
 				sha: run.workflowSha,
-				workspace: files.workspacePath(run.runId),
+				workspace,
+				build: run.stage === "build",
 			})
 			.catch((): CheckoutResult => ({ kind: "unavailable" }));
 
@@ -3282,20 +3382,54 @@ export class Orchestrator {
 				shown.push(file);
 			}
 
+			let build: Prepared["build"];
+
+			if (run.stage === "build") {
+				const suite = await files.artifacts.read(
+					run.runId,
+					contract.contract,
+					contract.digest,
+				);
+
+				if (suite.kind !== "found")
+					return fail(
+						suite.kind === "blocked" ? suite.reason : "acceptance_missing",
+					);
+				build = {
+					binding: {
+						runId: run.runId,
+						baseSha: contract.contract.base.sha,
+						contractDigest: contract.digest,
+						acceptanceDigest: suite.receipt.acceptanceDigest,
+					},
+					command: visibleTestCommand(parsed.guidance),
+					allowNoChange: false,
+				};
+			}
+
 			return {
 				kind: "ready",
+				workspace,
+				build,
 				inputs: {
 					contract,
 					files: new Set(checkout.files),
 					source: contract.contract.snapshot.source,
 					link: null,
 				},
-				prompt: acceptancePrompt({
-					contract: contract.contract,
-					files: checkout.files,
-					inlined: shown,
-					guidance: parsed.guidance,
-				}),
+				prompt:
+					run.stage === "build"
+						? buildPrompt({
+								contract: contract.contract,
+								guidance: parsed.guidance,
+								inlined: shown,
+							})
+						: acceptancePrompt({
+								contract: contract.contract,
+								files: checkout.files,
+								inlined: shown,
+								guidance: parsed.guidance,
+							}),
 			};
 		}
 
@@ -3507,6 +3641,70 @@ export class Orchestrator {
 	): Promise<boolean> {
 		const stage = run.stage;
 
+		if (stage === "build") {
+			if (output instanceof Object && output.kind === "pending") {
+				run.phase = { kind: "recovering", output };
+
+				return true;
+			}
+
+			if (!(output instanceof Object) || output.kind !== "build") return false;
+
+			if (
+				output.result.kind === "unavailable" ||
+				(output.result.kind === "found" &&
+					output.result.receipt.policy === "clean" &&
+					output.result.receipt.visibleTests?.exitCode == null)
+			) {
+				if (!this.#enabled) {
+					run.phase = { kind: "recovering", output };
+
+					return true;
+				}
+
+				const limits = this.#limits();
+
+				if (limits === null) return false;
+				this.#input.log("stage_inputs_unavailable", {
+					runId: run.runId,
+					why:
+						output.result.kind === "unavailable"
+							? output.result.reason
+							: "visible_tests_unavailable",
+				});
+				this.#endStage(run, "stage_failed", 0, limits);
+
+				return true;
+			}
+
+			const bound = await this.#input.files.readContract(run.runId);
+			const result = output.result;
+
+			if (
+				bound.kind === "blocked" ||
+				result.kind !== "found" ||
+				result.receipt.baseSha !== run.workflowSha ||
+				result.receipt.contractDigest !== bound.digest
+			) {
+				this.#input.log("stage_inputs_refused", {
+					runId: run.runId,
+					why: result.kind === "blocked" ? result.reason : "patch_binding",
+				});
+				run.phase = { kind: "ending", status: "failed" };
+				this.state.totals.failures++;
+
+				return true;
+			}
+
+			run.phase = {
+				kind: "reporting",
+				status: "stage_passed",
+				effects: { kind: "build", result },
+			};
+
+			return true;
+		}
+
 		if (stage !== "specify" && stage !== "accept") return false;
 
 		if (stage === "accept") {
@@ -3558,7 +3756,11 @@ export class Orchestrator {
 			}
 		}
 
-		if (output === null) return false;
+		if (
+			output === null ||
+			(output instanceof Object && output.kind === "build")
+		)
+			return false;
 
 		if (output instanceof Object && output.kind === "pending") {
 			run.phase = { kind: "claimed" };
@@ -3643,6 +3845,68 @@ export class Orchestrator {
 	async #applyEffects(run: ActiveRun, effects: Effects): Promise<boolean> {
 		const { files } = this.#input;
 		const fields = { issue: run.issue, runId: run.runId };
+
+		if (effects.kind === "build") {
+			const receipt = effects.result.receipt;
+			const contract = await files.readContract(run.runId);
+
+			const suite =
+				contract.kind === "found"
+					? await files.artifacts.read(
+							run.runId,
+							contract.contract,
+							contract.digest,
+						)
+					: null;
+
+			if (
+				contract.kind !== "found" ||
+				suite?.kind !== "found" ||
+				receipt.contractDigest !== contract.digest ||
+				receipt.acceptanceDigest !== suite.receipt.acceptanceDigest ||
+				receipt.baseSha !== run.workflowSha
+			) {
+				this.#input.log("stage_inputs_refused", {
+					...fields,
+					why: "patch_binding",
+				});
+				run.phase = { kind: "ending", status: "failed" };
+				this.state.totals.failures++;
+
+				return false;
+			}
+
+			const body = renderBuildSummary({ runId: run.runId, receipt });
+
+			if (body === null) {
+				run.phase = { kind: "ending", status: "failed" };
+				this.state.totals.failures++;
+				this.#input.log("stage_inputs_refused", {
+					...fields,
+					why: "summary_too_large",
+				});
+
+				return false;
+			}
+
+			const posted = await this.#postKeyed(
+				run,
+				buildKey(run.runId, receipt.patchDigest),
+				body,
+			);
+
+			if (
+				posted &&
+				(receipt.policy === "forbidden" || receipt.visibleTests?.exitCode !== 0)
+			) {
+				run.phase = { kind: "ending", status: "failed" };
+				this.state.totals.failures++;
+
+				return false;
+			}
+
+			return posted;
+		}
 
 		if (effects.kind === "acceptance") {
 			const stored = await files.artifacts.store(effects);

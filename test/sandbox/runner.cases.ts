@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import {
+import { execFileSync, spawn } from "node:child_process";
+import fs, {
 	chmodSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readdirSync,
 	statSync,
+	truncateSync,
 	readFileSync,
 	rmSync,
 	symlinkSync,
@@ -14,6 +15,13 @@ import {
 	writeSync,
 } from "node:fs";
 import { request } from "node:http";
+import { syncBuiltinESMExports } from "node:module";
+import { fileRunFiles } from "../../server/controller.ts";
+import {
+	type Contract,
+	contractBytes,
+	contractDigestOf,
+} from "../../src/specify.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -26,6 +34,7 @@ import {
 	piCommand,
 	publishFile,
 	runStage,
+	runVisibleTests,
 	sandboxHost,
 	type StageHost,
 	type StageRunInput,
@@ -72,9 +81,22 @@ import {
 	SessionTracker,
 } from "../../server/sandbox/settle.ts";
 import type { Digest } from "../../src/run.ts";
-import { isRepoSlug, type ModelId, parseWorkflow } from "../../src/workflow.ts";
+import {
+	isGitSha,
+	isRepoSlug,
+	type ModelId,
+	parseWorkflow,
+} from "../../src/workflow.ts";
 import type { StageLaunchInput } from "../../src/orchestrator.ts";
 import * as sandboxModule from "../../server/sandbox.ts";
+import {
+	collectPatch,
+	storePatch,
+	readPatch,
+	finishPatch,
+} from "../../src/build.ts";
+import { digestOf } from "../../src/run.ts";
+import { manifestDigest } from "../../server/sandbox/manifest.ts";
 
 const FIXTURES = new URL("./fixtures/", import.meta.url).pathname;
 const RUN = "a".repeat(64);
@@ -1046,6 +1068,732 @@ describe("runStage settlement on a queue update", () => {
 
 		assert.equal(result.kind, "passed");
 		assert.equal(result.usage, 12);
+	});
+});
+
+describe("private build executor", () => {
+	it("loads the bundled Herdr extension exactly when build delegation is granted", () => {
+		const ordinary = piCommand(model("openai/gpt-6.1-sol"), false);
+		const delegated = piCommand(model("openai/gpt-6.1-sol"), true);
+		assert.equal(ordinary.includes("-e"), false);
+		assert.deepEqual(delegated.slice(1, 3), [
+			"-e",
+			"/opt/factory/pkg/node_modules/pi-herdr-agents",
+		]);
+		assert.deepEqual(delegated.slice(3), ordinary.slice(1));
+	});
+
+	for (const scenario of ["clean", "oversized", "refused"])
+		it(
+			scenario === "oversized"
+				? "fails an oversized excluded cache with a typed disk limit and cleans all workspaces"
+				: scenario === "refused"
+					? "logs a typed reason when the patch store refuses collection"
+					: "collects builder-reported commands, cleans the attempt and recovers controller tests once",
+			async (t) => {
+				const dir = mkdtempSync(join(tmpdir(), "factory-build-executor-"));
+				t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+				const root = join(dir, "root"),
+					staging = join(root, "staging"),
+					stateDir = join(dir, "state");
+
+				mkdirSync(staging, { recursive: true });
+				writeFileSync(join(staging, "marker"), "bundle");
+				const hash = await manifestDigest(staging);
+				assert.ok(hash);
+				const bundleDir = join(root, `assets-${hash}`);
+				await import("node:fs/promises").then((fs) =>
+					fs.rename(staging, bundleDir),
+				);
+				symlinkSync(`assets-${hash}`, join(root, "current"));
+
+				const base = join(stateDir, "pristine", RUN),
+					workspace = join(stateDir, "workspaces", `${RUN}-build-1`);
+
+				mkdirSync(base, { recursive: true, mode: 0o700 });
+				mkdirSync(workspace, { recursive: true });
+
+				for (const path of [base, workspace])
+					writeFileSync(
+						join(path, "package.json"),
+						JSON.stringify({ scripts: { test: "node --test" } }),
+					);
+
+				const sessionDir = join(
+					stateDir,
+					"stages",
+					RUN,
+					"build-1",
+					"agent-0",
+					"sessions",
+				);
+
+				mkdirSync(sessionDir, { recursive: true });
+				writeFileSync(
+					join(sessionDir, "builder.jsonl"),
+					readFileSync(
+						new URL("../fixtures/build/commands.jsonl", import.meta.url),
+					),
+				);
+
+				const h = harness([
+					(command, pi) => {
+						if (command.type === "prompt") {
+							writeFileSync(join(workspace, "added"), "patch\n");
+
+							if (scenario === "oversized") {
+								mkdirSync(join(workspace, "node_modules"));
+								writeFileSync(join(workspace, "node_modules/cache"), "");
+								truncateSync(
+									join(workspace, "node_modules/cache"),
+									1024 * 1024 * 1024 + 1,
+								);
+							}
+						}
+
+						if (command.type === "get_last_assistant_text")
+							pi.emit({
+								type: "response",
+								id: command.id ?? "",
+								command: "get_last_assistant_text",
+								success: true,
+								data: { text: "done" },
+							});
+						replayer([
+							started("x"),
+							{ type: "agent_start" },
+							{ type: "turn_start" },
+							assistant({ tokens: 12 }),
+							{ type: "agent_settled", aborted: false },
+						])(command, pi);
+					},
+				]);
+
+				let tests = 0;
+				const refusals: string[] = [];
+
+				const executor = sandboxModule.sandboxExecutor({
+					stateDir,
+					root,
+					arch: "x64",
+					usernsLimit: async () => "15000",
+					xdgRuntimeDir: "/run/user/1000",
+					log: (event, fields) => {
+						if (event === "patch_collected" && scenario === "refused")
+							mkdirSync(join(stateDir, "patches", RUN), {
+								recursive: true,
+								mode: 0o700,
+							});
+
+						if (event === "patch_refused") refusals.push(String(fields.why));
+					},
+					exec: async (command) => ({
+						code: 0,
+						stdout: command === "bwrap" ? "bubblewrap 0.9.0\n" : "",
+						stderr: "",
+					}),
+					host: () => h.host,
+					visibleTests: async (_config, _base, _patch, command) => {
+						tests++;
+
+						return { command, exitCode: 0, tail: "ok", wallMs: 1 };
+					},
+				});
+
+				assert.equal(await executor.preflight(), true);
+
+				const binding = {
+					runId: digest(RUN),
+					baseSha: "a".repeat(40),
+					contractDigest: digestOf("contract"),
+					acceptanceDigest: digestOf("suite"),
+				};
+
+				mkdirSync(join(stateDir, "build-base", "checkouts"), {
+					recursive: true,
+				});
+				writeFileSync(
+					join(stateDir, "build-base", "checkouts", `${RUN}.json`),
+					JSON.stringify({ sha: binding.baseSha, files: ["package.json"] }),
+				);
+
+				const launch = await executor.launch({
+					...input({ stage: "build" }),
+					workspace,
+					tools: ["read", "bash", "write"],
+					skills: [],
+					build: { binding, command: "npm test", allowNoChange: false },
+				});
+
+				assert.equal(launch.kind, "started");
+
+				if (launch.kind !== "started") return;
+				assert.equal(
+					(await launch.done).kind,
+					scenario === "oversized" ? "failed" : "passed",
+				);
+				assert.equal(existsSync(workspace), false);
+				assert.equal(existsSync(sessionDir), false);
+
+				if (scenario === "refused") {
+					assert.deepEqual(readPatch(stateDir, binding), {
+						kind: "blocked",
+						reason: "patch_invalid",
+					});
+					assert.deepEqual(refusals, ["patch_invalid"]);
+					assert.equal(tests, 0);
+
+					return;
+				}
+
+				if (scenario === "oversized") {
+					assert.equal(existsSync(base), false);
+					assert.equal(
+						JSON.parse(
+							readFileSync(
+								join(stateDir, "stages", RUN, "build-1-failure.json"),
+								"utf8",
+							),
+						).reason,
+						"build_disk_limit",
+					);
+					assert.equal(tests, 0);
+
+					return;
+				}
+
+				const recovered = await executor.output({
+					runId: digest(RUN),
+					stage: "build",
+					attempt: 1,
+				});
+
+				assert.ok(
+					recovered instanceof Object &&
+						recovered.kind === "build" &&
+						recovered.result.kind === "found",
+				);
+
+				if (
+					!(recovered instanceof Object) ||
+					recovered.kind !== "build" ||
+					recovered.result.kind !== "found"
+				)
+					return;
+				assert.equal(
+					recovered.result.receipt.commandsSource,
+					"builder-reported",
+				);
+				assert.deepEqual(recovered.result.receipt.commands, [
+					{ command: "npm test", exitCode: 1 },
+				]);
+				assert.equal(recovered.result.receipt.testCommand, "node --test");
+				assert.equal(recovered.result.receipt.visibleTests?.exitCode, 0);
+				assert.equal(existsSync(base), false);
+				await executor.output({
+					runId: digest(RUN),
+					stage: "build",
+					attempt: 1,
+				});
+				assert.equal(tests, 1);
+			},
+		);
+
+	it("re-extracts a partial base on visible-test recovery after a kill during cleanup", async (t) => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-build-cleanup-kill-"));
+		t.after(() => rmSync(dir, { recursive: true, force: true }));
+		const seed = join(dir, "seed");
+		mkdirSync(seed);
+		writeFileSync(join(seed, "package.json"), "{}\n");
+		writeFileSync(join(seed, "value"), "base\n");
+
+		const archive = execFileSync(
+			"tar",
+			["-czf", "-", "--transform=s,^,repo/,", "package.json", "value"],
+			{ cwd: seed },
+		);
+
+		const stateDir = join(dir, "state");
+		const workspace = join(stateDir, "workspaces", `${RUN}-build-1`);
+		const base = join(stateDir, "pristine", RUN);
+
+		const root = join(dir, "root"),
+			staging = join(root, "staging");
+
+		mkdirSync(staging, { recursive: true });
+		writeFileSync(join(staging, "marker"), "bundle");
+		const hash = await manifestDigest(staging);
+		assert.ok(hash);
+		fs.renameSync(staging, join(root, `assets-${hash}`));
+		symlinkSync(`assets-${hash}`, join(root, "current"));
+
+		const repo = "owner/repo",
+			sha = "a".repeat(40);
+
+		assert.ok(isRepoSlug(repo) && isGitSha(sha));
+
+		const contract: Contract = {
+			version: 1,
+			runId: digest(RUN),
+			issue: 1,
+			base: { repo, sha },
+			snapshot: {
+				digest: digestOf("snapshot"),
+				source: "unedited",
+				eventId: "1",
+				eventAt: "2026-10-30T00:00:00Z",
+			},
+			link: null,
+			summary: "Change value",
+			behavior: ["Change value"],
+			acceptance: [{ id: "A1", text: "Value changes" }],
+			exclusions: [],
+			compatibility: [],
+			limits: [],
+			files: ["value"],
+			evidence: [],
+		};
+
+		const bytes = contractBytes(contract),
+			contractDigest = contractDigestOf(bytes);
+
+		assert.equal(
+			await fileRunFiles(stateDir).writeContract({
+				contract,
+				bytes,
+				digest: contractDigest,
+			}),
+			true,
+		);
+
+		let fetches = 0,
+			tests = 0;
+
+		const config: sandboxModule.SandboxExecutorConfig = {
+			stateDir,
+			root,
+			arch: "x64",
+			usernsLimit: async () => "15000",
+			xdgRuntimeDir: "/run/user/1000",
+			exec: async (command) => ({
+				code: 0,
+				stdout: command === "bwrap" ? "bubblewrap 0.9.0\n" : "",
+				stderr: "",
+			}),
+			log: () => {},
+			fetchTarball: async () => {
+				fetches++;
+
+				return archive;
+			},
+			visibleTests: async (_config, pristine, _patch, command) => {
+				assert.equal(readFileSync(join(pristine, "value"), "utf8"), "base\n");
+				tests++;
+
+				return {
+					command,
+					exitCode: tests === 1 ? null : 0,
+					tail: "",
+					wallMs: 1,
+				};
+			},
+		};
+
+		const executor = sandboxModule.sandboxExecutor(config);
+		assert.equal(await executor.preflight(), true);
+
+		const checkout = { runId: digest(RUN), workspace, repo, sha, build: true };
+		assert.equal((await executor.checkout(checkout)).kind, "ready");
+		writeFileSync(join(workspace, "value"), "patched\n");
+		const patch = await collectPatch({ base, workspace });
+		assert.equal(patch.kind, "collected");
+
+		if (patch.kind !== "collected") return;
+
+		const binding = {
+			runId: digest(RUN),
+			baseSha: sha,
+			contractDigest,
+			acceptanceDigest: digestOf("suite"),
+		};
+
+		assert.equal(
+			storePatch(stateDir, binding, patch, {
+				model: "m",
+				observed: null,
+				commands: [],
+			}).kind,
+			"found",
+		);
+		const remove = fs.rmSync;
+
+		const killed = t.mock.method(
+			fs,
+			"rmSync",
+			(...args: Parameters<typeof rmSync>) => {
+				if (args[0] === base) {
+					remove(join(base, "value"));
+					throw new Error("simulated kill during tree removal");
+				}
+
+				return remove(...args);
+			},
+		);
+
+		syncBuiltinESMExports();
+
+		try {
+			await assert.rejects(
+				executor.output({
+					runId: digest(RUN),
+					stage: "build",
+					attempt: 1,
+				}),
+				/simulated kill/,
+			);
+		} finally {
+			killed.mock.restore();
+			syncBuiltinESMExports();
+		}
+
+		assert.equal(existsSync(join(base, "value")), false);
+		assert.equal(
+			existsSync(join(stateDir, "build-base", "checkouts", `${RUN}.json`)),
+			false,
+		);
+		const restarted = sandboxModule.sandboxExecutor(config);
+		assert.equal(await restarted.preflight(), true);
+
+		const output = await restarted.output({
+			runId: digest(RUN),
+			stage: "build",
+			attempt: 2,
+		});
+
+		assert.ok(
+			output instanceof Object &&
+				output.kind === "build" &&
+				output.result.kind === "found",
+		);
+		assert.equal(fetches, 2);
+		assert.equal(tests, 2);
+		assert.equal(existsSync(base), false);
+	});
+
+	it("keeps unavailable tests typed and retryable without a write-once success record", async (t) => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-build-unavailable-"));
+		t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+		const base = join(dir, "base"),
+			workspace = join(dir, "candidate");
+
+		mkdirSync(base);
+		mkdirSync(workspace);
+		writeFileSync(join(workspace, "a"), "patch\n");
+		const patch = await collectPatch({ base, workspace });
+		assert.equal(patch.kind, "collected");
+
+		if (patch.kind !== "collected") return;
+
+		const binding = {
+			runId: digest(RUN),
+			baseSha: "a".repeat(40),
+			contractDigest: digestOf("c"),
+			acceptanceDigest: digestOf("a"),
+		};
+
+		storePatch(dir, binding, patch, {
+			model: "m",
+			observed: null,
+			commands: [],
+		});
+		assert.deepEqual(
+			finishPatch(dir, binding, {
+				command: "base test",
+				exitCode: null,
+				reason: "visible_tests_unavailable",
+				detail: "gateway_unavailable",
+				tail: "could not run",
+				wallMs: 1,
+			}),
+			{ kind: "unavailable", reason: "visible_tests_unavailable" },
+		);
+		assert.equal(existsSync(join(dir, "patches", RUN, "tests.json")), false);
+		assert.equal(readPatch(dir, binding).kind, "found");
+		assert.equal(
+			finishPatch(dir, binding, {
+				command: "base test",
+				exitCode: 0,
+				tail: "ok",
+				wallMs: 1,
+			}).kind,
+			"found",
+		);
+	});
+});
+
+describe("controller-run visible tests", () => {
+	it("types a sandbox process exit before the test command starts as infrastructure failure", async (t) => {
+		const root = mkdtempSync(join(tmpdir(), "factory-visible-not-started-"));
+		t.after(() => rmSync(root, { recursive: true, force: true }));
+		const base = join(root, "base");
+		mkdirSync(base);
+		writeFileSync(
+			join(base, "package.json"),
+			JSON.stringify({ scripts: { test: "node --test" } }),
+		);
+
+		const result = await runVisibleTests(
+			{
+				stateDir: root,
+				bundleDir: "unused",
+				workspace: "",
+				runId: digest(RUN),
+				stage: "build",
+				attempt: 1,
+				tools: [],
+				arch: "x86_64",
+				xdgRuntimeDir: "/run/user/1000",
+				assetsDigest: "e".repeat(64),
+				versions: {
+					pi: "1.4.0",
+					piHerdrAgents: "3.3.1",
+					piHerdrPstack: "0.5.0",
+				},
+				exec: async () => ({ code: 0, stdout: "", stderr: "" }),
+				launch: (config) => {
+					mkdirSync(config.agentDir);
+
+					return {
+						unit: "fixture.scope",
+						child: spawn(process.execPath, ["-e", "process.exitCode=1"], {
+							env: { PATH: "/usr/bin:/bin" },
+						}),
+					};
+				},
+			},
+			base,
+			"",
+			"npm test",
+		);
+
+		assert.equal(result.exitCode, null);
+		assert.equal(result.reason, "visible_tests_unavailable");
+	});
+
+	for (const code of [0, 7])
+		it(`records the real child exit ${code} and waits for the output tail`, async (t) => {
+			const root = mkdtempSync(join(tmpdir(), "factory-visible-child-"));
+			t.after(() => rmSync(root, { recursive: true, force: true }));
+			const base = join(root, "base");
+			mkdirSync(base);
+			writeFileSync(
+				join(base, "package.json"),
+				JSON.stringify({
+					scripts: {
+						test: `node -e 'const fs=require("node:fs"); fs.writeFileSync("exec-file","",{mode:0o755}); process.stdout.write("LAST-CHUNK"); process.exitCode=(fs.statSync("exec-file").mode&0o777)===0o755?${code}:99'`,
+					},
+				}),
+			);
+
+			const result = await runVisibleTests(
+				{
+					stateDir: root,
+					bundleDir: "unused",
+					workspace: "",
+					runId: digest(RUN),
+					stage: "build",
+					attempt: 1,
+					tools: [],
+					arch: "x86_64",
+					xdgRuntimeDir: "/run/user/1000",
+					assetsDigest: "e".repeat(64),
+					versions: {
+						pi: "1.4.0",
+						piHerdrAgents: "3.3.1",
+						piHerdrPstack: "0.5.0",
+					},
+					exec: async () => ({ code: 0, stdout: "", stderr: "" }),
+					launch: (config) => {
+						assert.deepEqual(config.tools, []);
+						mkdirSync(config.agentDir);
+
+						return {
+							unit: "fixture.scope",
+							child: spawn(
+								config.command[0] ?? "",
+								config.command
+									.slice(1)
+									.map((arg) =>
+										arg.replaceAll("/run/pi-agent", config.agentDir),
+									),
+								{
+									cwd: config.workspace,
+									env: {
+										PATH: process.env.PATH ?? "/usr/bin:/bin",
+										HOME: root,
+									},
+								},
+							),
+						};
+					},
+				},
+				base,
+				"",
+				"npm test",
+			);
+
+			assert.equal(result.exitCode, code);
+			assert.match(result.tail, /LAST-CHUNK/);
+			assert.equal(
+				existsSync(join(root, "visible-tests", RUN, "execution", "tree")),
+				false,
+			);
+			assert.equal(
+				existsSync(join(root, "visible-tests", RUN, "execution", "agent")),
+				false,
+			);
+		});
+
+	it("does not let candidate scripts or deleted base tests manufacture a pass", async (t) => {
+		const root = mkdtempSync(join(tmpdir(), "factory-visible-trusted-"));
+		t.after(() => rmSync(root, { recursive: true, force: true }));
+
+		const base = join(root, "base"),
+			workspace = join(root, "candidate");
+
+		mkdirSync(join(base, "test"), { recursive: true });
+		mkdirSync(workspace);
+		writeFileSync(
+			join(base, "package.json"),
+			JSON.stringify({
+				scripts: {
+					test: "node --test test/*.test.js",
+					pretest: "touch PRETEST-RAN",
+					posttest: "touch POSTTEST-RAN",
+				},
+			}),
+		);
+		writeFileSync(
+			join(base, "test/failing.test.js"),
+			"throw new Error('BASE-TEST-RAN');\n",
+		);
+		writeFileSync(
+			join(workspace, "package.json"),
+			JSON.stringify({ scripts: { test: "exit 0" } }),
+		);
+		const patch = await collectPatch({ base, workspace });
+		assert.equal(patch.kind, "collected");
+
+		if (patch.kind !== "collected") return;
+		assert.equal(patch.scriptsChanged, true);
+		assert.equal(patch.testInputsChanged, true);
+
+		const result = await runVisibleTests(
+			{
+				stateDir: root,
+				bundleDir: "unused",
+				workspace: "",
+				runId: digest(RUN),
+				stage: "build",
+				attempt: 1,
+				tools: [],
+				arch: "x86_64",
+				xdgRuntimeDir: "/run/user/1000",
+				assetsDigest: "e".repeat(64),
+				versions: {
+					pi: "1.4.0",
+					piHerdrAgents: "3.3.1",
+					piHerdrPstack: "0.5.0",
+				},
+				exec: async () => ({ code: 0, stdout: "", stderr: "" }),
+				launch: (config) => {
+					assert.equal(
+						existsSync(join(config.workspace, "PRETEST-RAN")),
+						false,
+					);
+					assert.match(
+						config.command.at(-1) ?? "",
+						/npm_config_ignore_scripts=true/,
+					);
+					assert.doesNotMatch(config.command.at(-1) ?? "", /exit 0/);
+					mkdirSync(config.agentDir);
+
+					return {
+						unit: "fixture.scope",
+						child: spawn(
+							config.command[0] ?? "",
+							config.command
+								.slice(1)
+								.map((arg) => arg.replaceAll("/run/pi-agent", config.agentDir)),
+							{
+								cwd: config.workspace,
+								env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: root },
+							},
+						),
+					};
+				},
+			},
+			base,
+			patch.patch,
+			"npm test",
+		);
+
+		assert.equal(result.exitCode, 1);
+		assert.match(result.tail, /BASE-TEST-RAN/);
+		assert.equal(result.command, "node --test test/*.test.js");
+	});
+});
+
+describe("visible-test gateway", () => {
+	it("starts at a lane-length state path before sandbox launch", async (t) => {
+		const root = mkdtempSync(join(tmpdir(), "factory-visible-gateway-"));
+		t.after(() => rmSync(root, { recursive: true, force: true }));
+		const stateDir = join(root, "verification-lane-state");
+		const base = join(root, "base");
+		mkdirSync(base);
+		writeFileSync(
+			join(base, "package.json"),
+			JSON.stringify({ scripts: { test: "node --test" } }),
+		);
+		const execution = join(stateDir, "visible-tests", RUN, "execution");
+		assert.ok(Buffer.byteLength(join(execution, "gw", "gw.sock")) > 107);
+
+		const result = await runVisibleTests(
+			{
+				stateDir,
+				bundleDir: join(root, "missing-bundle"),
+				workspace: "",
+				runId: digest(RUN),
+				stage: "build",
+				attempt: 1,
+				tools: [],
+				arch: "x86_64",
+				xdgRuntimeDir: "/run/user/1000",
+				assetsDigest: "e".repeat(64),
+				versions: {
+					pi: "1.4.0",
+					piHerdrAgents: "3.3.1",
+					piHerdrPstack: "0.5.0",
+				},
+				exec: async () => ({ stdout: "", stderr: "", code: 0 }),
+			},
+			base,
+			"",
+			"npm test",
+		);
+
+		assert.equal(result.exitCode, null);
+		assert.equal(result.reason, "visible_tests_unavailable");
+		assert.equal(result.detail, "sandbox_unavailable");
+		assert.equal(existsSync(join(execution, "tree")), false);
+		assert.match(
+			readFileSync(join(execution, "egress.jsonl"), "utf8"),
+			/no-route/,
+		);
+		const gateways = readdirSync(join(stateDir, "gw"));
+		assert.equal(gateways.length, 0);
 	});
 });
 
@@ -2258,6 +3006,55 @@ describe("stage output capture", () => {
 });
 
 describe("stage skills", () => {
+	it("inlines only the applicable build playbook excerpt", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-build-skills-"));
+
+		try {
+			mkdirSync(join(dir, "skills/build"), { recursive: true });
+			writeFileSync(join(dir, "skills/build/SKILL.md"), "Focused tests only.");
+
+			const books = join(
+				dir,
+				"pkg/node_modules/pi-herdr-pstack/skills/poteto-mode/playbooks",
+			);
+
+			mkdirSync(books, { recursive: true });
+
+			for (const book of ["bug-fix", "feature"])
+				writeFileSync(
+					join(books, `${book}.md`),
+					`### ${book}\n\nUNRELATED orchestration\n\n1. Reproduce the bug.\n4. Verify on the same surface.\n5. Verify the feature.\n6. Open a PR.\n`,
+				);
+			const bug = await withSkills(dir, "build-playbook=bug-fix", ["build"]);
+			assert.ok(bug);
+			assert.match(bug, /1\. Reproduce the bug/);
+			assert.match(bug, /4\. Verify on the same surface/);
+			assert.ok(!bug.includes("UNRELATED"));
+			assert.ok(!bug.includes("Open a PR"));
+			assert.ok(!bug.includes("Verify the feature"));
+
+			const feature = await withSkills(dir, "build-playbook=feature", [
+				"build",
+			]);
+
+			assert.ok(feature);
+			assert.match(feature, /5\. Verify the feature/);
+			assert.ok(!feature.includes("Reproduce the bug"));
+			assert.ok(!feature.includes("Open a PR"));
+
+			const injected = await withSkills(
+				dir,
+				"build-playbook=feature\nUntrusted contract: build-playbook=bug-fix",
+				["build"],
+			);
+
+			assert.ok(injected);
+			assert.match(injected, /### Pstack feature playbook excerpt/);
+			assert.doesNotMatch(injected, /### Pstack bug-fix playbook excerpt/);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 	it("appends each named skill's SKILL.md body, without front matter, in order", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "factory-skills-"));
 

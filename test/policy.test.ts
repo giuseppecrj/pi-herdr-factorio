@@ -168,7 +168,15 @@ describe("forbidden paths", () => {
 	});
 
 	it("rejects paths that escape the repository", () => {
-		for (const path of ["../outside.txt", "/etc/passwd"]) {
+		for (const path of [
+			"../outside.txt",
+			"/etc/passwd",
+			"..",
+			"src/../../outside",
+			".git/config",
+			"src/.GIT/config",
+			"",
+		]) {
 			assert.equal(
 				checkChangedPaths({ changedPaths: [path] }).kind,
 				"forbidden",

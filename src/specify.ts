@@ -702,6 +702,67 @@ export function renderAcceptanceSummary(input: {
 	);
 }
 
+export function buildKey(runId: Digest, digest: Digest): string {
+	return `${COMMENT_KEY_PREFIX}build run=${runId} p=${digest} -->`;
+}
+
+export function renderBuildSummary(input: {
+	readonly runId: Digest;
+	readonly receipt: {
+		readonly patchDigest: Digest;
+		readonly changedPaths: readonly string[];
+		readonly policy: "clean" | "forbidden";
+		readonly visibleTests: { readonly exitCode: number | null } | null;
+		readonly scriptsChanged?: boolean;
+		readonly testScriptChanged?: boolean;
+		readonly testInputsChanged?: boolean;
+		readonly testCommand?: string;
+	};
+}): string | null {
+	const { receipt } = input;
+	const paths: string[] = [];
+	let bytes = 0;
+
+	for (const path of receipt.changedPaths) {
+		const line = `- ${inert(path)}`;
+
+		if (bytes + Buffer.byteLength(line) > 4096) break;
+		paths.push(line);
+		bytes += Buffer.byteLength(line) + 1;
+	}
+
+	if (paths.length < receipt.changedPaths.length)
+		paths.push(
+			`- and ${receipt.changedPaths.length - paths.length} more paths (private receipt has the full list)`,
+		);
+
+	return bounded(
+		[
+			`The factory collected a private patch. Run \`${input.runId.slice(0, 12)}\`, patch \`${receipt.patchDigest.slice(0, 12)}\`.`,
+			"",
+			...paths,
+			"",
+			`Visible tests: ${receipt.visibleTests === null ? "not run" : receipt.visibleTests.exitCode === null ? "could not run" : receipt.visibleTests.exitCode === 0 ? "passed" : "failed"}.`,
+			`Trusted base command: ${inert((receipt.testCommand ?? "npm test").slice(0, 300))}.`,
+			receipt.testScriptChanged
+				? "The patch changed its own test script; the trusted base script was used."
+				: receipt.scriptsChanged
+					? "The patch changed package.json scripts; trusted base scripts were used."
+					: "The patch did not change package.json scripts.",
+			receipt.testInputsChanged
+				? "The patch changed test inputs. Deleted base test files were restored; modified and added tests are candidate input."
+				: "Base test inputs were retained.",
+			"Builder command receipts are builder-reported, not controller validation.",
+			receipt.policy === "forbidden"
+				? "Forbidden paths. Patch kept privately for the owner; no publication."
+				: "Patch and command output stay private. No CI verdict or publication was produced.",
+			"",
+			buildKey(input.runId, receipt.patchDigest),
+			"",
+		].join("\n"),
+	);
+}
+
 function bounded(body: string): string | null {
 	return Buffer.byteLength(body, "utf8") <= COMMENT_MAX_BYTES ? body : null;
 }

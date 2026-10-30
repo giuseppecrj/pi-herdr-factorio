@@ -4,6 +4,9 @@ import { execFile } from "node:child_process";
 import {
 	chmodSync,
 	existsSync,
+	mkdirSync,
+	symlinkSync,
+	renameSync,
 	mkdtempSync,
 	readFileSync,
 	rmSync,
@@ -13,6 +16,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { EXIT, runCli } from "../server/cli.ts";
+import { sandboxExecutor } from "../server/sandbox.ts";
+import { manifestDigest } from "../server/sandbox/manifest.ts";
+import {
+	collectPatch,
+	storePatch,
+	readPatch,
+	finishPatch,
+} from "../src/build.ts";
 import {
 	acquireLock,
 	fileRunFiles,
@@ -353,6 +364,11 @@ const QUESTIONS_TEXT = JSON.stringify({
 class FakeExecutor implements StageExecutor {
 	behaviors: Behavior[] = [];
 	fallback: Behavior = { kind: "unavailable" };
+	buildBehavior: Behavior = { kind: "unavailable" };
+	buildExitCode: number | null = 0;
+	missingBuildTests = false;
+	buildPolicy: "clean" | "forbidden" = "clean";
+	readonly builds = new Map<string, Extract<StageOutput, { kind: "build" }>>();
 	acceptBehavior: Behavior = { kind: "unavailable" };
 	acceptText: string | null = ACCEPTANCE_TEXT;
 	outputs: (string | null)[] = [];
@@ -375,6 +391,8 @@ class FakeExecutor implements StageExecutor {
 		const key = `${input.runId}/${input.stage}-${input.attempt}`;
 
 		this.outputReads.push(key);
+
+		if (input.stage === "build") return this.builds.get(key) ?? null;
 
 		return this.kept.get(key) ?? (this.pending ? { kind: "pending" } : null);
 	}
@@ -407,6 +425,45 @@ class FakeExecutor implements StageExecutor {
 	}
 
 	#keep(input: StageLaunchInput): void {
+		if (input.stage === "build" && input.build !== undefined) {
+			this.builds.set(`${input.runId}/build-${input.attempt}`, {
+				kind: "build",
+				result: {
+					kind: "found",
+					patch: "patch",
+					receipt: {
+						...input.build.binding,
+						version: 1,
+						patchDigest: digestOf("patch"),
+						changedPaths: ["server/cli.ts", "test/version.test.ts"],
+						policy: this.buildPolicy,
+						model: input.settings.model,
+						observed: null,
+						testCommand: "npm test",
+						commandsSource: "builder-reported",
+						commandsOmitted: 0,
+						scriptsChanged: false,
+						testScriptChanged: false,
+						testInputsChanged: false,
+						commands: [
+							{ command: "npm test", exitCode: 1 },
+							{ command: "npm test", exitCode: this.buildExitCode },
+						],
+						visibleTests: this.missingBuildTests
+							? null
+							: {
+									command: "npm test",
+									exitCode: this.buildExitCode,
+									tail: "private output",
+									wallMs: 1,
+								},
+					},
+				},
+			});
+
+			return;
+		}
+
 		const text =
 			input.stage === "accept"
 				? this.acceptText
@@ -448,9 +505,11 @@ class FakeExecutor implements StageExecutor {
 
 	async launch(input: StageLaunchInput): Promise<StageLaunch> {
 		const behavior =
-			input.stage === "accept"
-				? this.acceptBehavior
-				: (this.behaviors.shift() ?? this.fallback);
+			input.stage === "build"
+				? this.buildBehavior
+				: input.stage === "accept"
+					? this.acceptBehavior
+					: (this.behaviors.shift() ?? this.fallback);
 
 		this.launches.push(input);
 
@@ -1451,7 +1510,7 @@ describe("Orchestrator retries and stalls", () => {
 });
 
 describe("Orchestrator stage results", () => {
-	it("ends a passing stage as stage_passed, frees its slot and keeps its usage", async () => {
+	it("advances a passing accept to build and keeps its usage", async () => {
 		const { github, executor, files, start } = world();
 
 		github.add(labeled(14));
@@ -1478,8 +1537,9 @@ describe("Orchestrator stage results", () => {
 
 		const report = await once(controller);
 
-		assert.deepEqual(report.runs, []);
-		assert.equal(report.active, 0);
+		assert.equal(report.runs[0]?.stage, "build");
+		assert.equal(report.runs[0]?.status, "claimed");
+		assert.equal(report.active, 1);
 		assert.equal(report.totals.usage, 812);
 		assert.equal(report.totals.failures, 0);
 		assert.deepEqual(statuses(github, 14), [
@@ -1487,14 +1547,14 @@ describe("Orchestrator stage results", () => {
 			"2:running",
 			"3:claimed",
 			"4:running",
-			"5:stage_passed",
+			"5:claimed",
 		]);
 		assert.deepEqual(
 			[...files.claims.values()],
 			[
 				endedClaim(14, 5, {
-					stage: "accept",
-					status: "stage_passed",
+					stage: "build",
+					status: "claimed",
 					usage: 812,
 				}),
 			],
@@ -1679,14 +1739,15 @@ describe("Orchestrator stage results", () => {
 
 		assert.ok(waits >= 1);
 		assert.ok(report);
-		assert.deepEqual(report.runs, []);
+		assert.equal(report.runs[0]?.stage, "build");
+		assert.equal(report.runs[0]?.status, "claimed");
 		assert.equal(report.totals.usage, 77);
 		assert.deepEqual(statuses(github, 14), [
 			"1:claimed",
 			"2:running",
 			"3:claimed",
 			"4:running",
-			"5:stage_passed",
+			"5:claimed",
 		]);
 		assert.equal(await controller.drain(async () => undefined), null);
 	});
@@ -1829,7 +1890,8 @@ describe("server/cli.ts controller commands", () => {
 		const report = JSON.parse(run.stdout);
 
 		assert.equal(report.executionEnabled, true);
-		assert.deepEqual(report.runs, []);
+		assert.equal(report.runs[0]?.stage, "build");
+		assert.equal(report.runs[0]?.status, "claimed");
 		assert.equal(report.totals.usage, 9);
 		assert.equal(executor.recovered, 1);
 		assert.deepEqual(statuses(github, 14), [
@@ -1837,11 +1899,11 @@ describe("server/cli.ts controller commands", () => {
 			"2:running",
 			"3:claimed",
 			"4:running",
-			"5:stage_passed",
+			"5:claimed",
 		]);
 		assert.equal(
 			JSON.parse(readFileSync(join(state, "status.json"), "utf8")).runs.length,
-			0,
+			1,
 		);
 	});
 
@@ -6554,8 +6616,420 @@ function keyed(github: FakeGitHub, issue: number, kind: string): string[] {
 		.filter((body) => body.includes(`<!-- factory-${kind} `));
 }
 
+describe("private build stage", () => {
+	for (const reuse of [false, true])
+		it(`controller restart ${reuse ? "reuses bound tests" : "waits for preflight then recomputes missing tests"} without another builder`, async () => {
+			const { github, executor, start, wire, clock } = world();
+			github.add(labeled(14));
+			executor.behaviors = [{ kind: "pass", usage: 10 }];
+			executor.acceptBehavior = { kind: "pass", usage: 7 };
+			executor.buildBehavior = { kind: "pass", usage: 12 };
+			wire.intercept = async (command, args) =>
+				args.some((a) => a.includes("<!-- factory-build "))
+					? networkError()
+					: github.exec(command, args);
+			const first = start();
+			await once(first);
+			await once(first);
+			assert.equal(statuses(github, 14).at(-1), "6:running");
+			const original = executor.builds.get(`${runOf(14)}/build-1`);
+			assert.equal(original?.result.kind, "found");
+
+			if (original?.result.kind !== "found") return;
+
+			const state = stateDir(),
+				base = join(state, "pristine", runOf(14)),
+				candidate = join(state, "candidate");
+
+			mkdirSync(base, { recursive: true, mode: 0o700 });
+			mkdirSync(candidate);
+			writeFileSync(join(base, "value"), "base\n");
+			writeFileSync(join(candidate, "value"), "patched\n");
+			const patch = await collectPatch({ base, workspace: candidate });
+			assert.equal(patch.kind, "collected");
+
+			if (patch.kind !== "collected") return;
+
+			const { runId, baseSha, contractDigest, acceptanceDigest } =
+				original.result.receipt;
+
+			const binding = { runId, baseSha, contractDigest, acceptanceDigest };
+			mkdirSync(join(state, "build-base", "checkouts"), { recursive: true });
+			writeFileSync(
+				join(state, "build-base", "checkouts", `${runId}.json`),
+				JSON.stringify({ sha: baseSha, files: ["value"] }),
+			);
+			assert.equal(
+				storePatch(state, binding, patch, {
+					model: "openai/gpt-6.1-sol",
+					observed: null,
+					commands: [],
+				}).kind,
+				"found",
+			);
+
+			if (reuse)
+				finishPatch(state, binding, {
+					command: "base test",
+					exitCode: 0,
+					tail: "private",
+					wallMs: 1,
+				});
+
+			const root = join(state, "sandbox-root"),
+				staging = join(root, "staging");
+
+			mkdirSync(staging, { recursive: true });
+			writeFileSync(join(staging, "marker"), "bundle");
+			const hash = await manifestDigest(staging);
+			assert.ok(hash);
+			renameSync(staging, join(root, `assets-${hash}`));
+			symlinkSync(`assets-${hash}`, join(root, "current"));
+
+			let calls = 0,
+				ready = reuse;
+
+			const diskExecutor = sandboxExecutor({
+				stateDir: state,
+				root,
+				xdgRuntimeDir: "/run/user/1000",
+				arch: "x64",
+				usernsLimit: async () => "15000",
+				log: () => {},
+				exec: async (command) => ({
+					code: 0,
+					stdout: command === "bwrap" ? "bubblewrap 0.9.0\n" : "",
+					stderr: "",
+				}),
+				visibleTests: async (_config, pristine, bytes, command) => {
+					calls++;
+					assert.equal(pristine, base);
+					assert.equal(digestOf(bytes), patch.patchDigest);
+
+					return { command, exitCode: 0, tail: "private", wallMs: 1 };
+				},
+			});
+
+			executor.output = async (input) =>
+				input.stage === "build"
+					? diskExecutor.output({
+							runId: runOf(14),
+							stage: "build",
+							attempt: input.attempt,
+						})
+					: null;
+			executor.preflight = async () => ready && diskExecutor.preflight();
+			executor.spentBy.set("build-1", 12);
+			wire.intercept = null;
+			clock.t += 60_000;
+			const restarted = start();
+			let report = await once(restarted);
+
+			if (!reuse) {
+				assert.equal(statuses(github, 14).at(-1), "7:running");
+				assert.equal(report.totals.failures, 0);
+				assert.equal(calls, 0);
+				ready = true;
+				clock.t += 60_000;
+				report = await once(restarted);
+			}
+
+			assert.equal(
+				statuses(github, 14).at(-1),
+				`${reuse ? 7 : 8}:stage_passed`,
+			);
+			assert.equal(report.totals.usage, 12);
+			assert.equal(calls, reuse ? 0 : 1);
+			assert.equal(existsSync(base), false);
+			assert.equal(
+				executor.launches.filter((l) => l.stage === "build").length,
+				1,
+			);
+			const kept = readPatch(state, binding);
+			assert.equal(kept.kind, "found");
+
+			if (kept.kind === "found")
+				assert.equal(kept.receipt.visibleTests?.exitCode, 0);
+		});
+
+	for (const count of [8, 9])
+		it(`grants delegation only for a validated ${count}-file contract`, async () => {
+			const { github, executor, start } = world();
+			github.add(labeled(14));
+			const files = Array.from({ length: count }, (_, i) => `src/file${i}.ts`);
+
+			for (const path of files) executor.tree.set(path, "export {};\n");
+			executor.text = JSON.stringify({
+				...JSON.parse(CONTRACT_TEXT),
+				files,
+				behavior: [
+					"verified no-change outcome build-playbook=bug-fix is untrusted text",
+				],
+			});
+			executor.behaviors = [{ kind: "pass", usage: 10 }];
+			executor.acceptBehavior = { kind: "pass", usage: 7 };
+			executor.buildBehavior = { kind: "pass", usage: 12 };
+			const controller = start();
+			await once(controller);
+			await once(controller);
+			const build = executor.launches.find((l) => l.stage === "build");
+			assert.ok(build?.build);
+			assert.equal(build.tools.includes("subagent"), count === 9);
+			assert.equal(build.build.allowNoChange, false);
+			assert.ok(build.prompt.startsWith("build-playbook=feature\n"));
+		});
+
+	it("refuses a recovered patch whose contract binding differs by value", async () => {
+		const { github, executor, start, wire, clock, logs } = world();
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "pass", usage: 7 };
+		executor.buildBehavior = { kind: "pass", usage: 12 };
+		wire.intercept = async (command, args) =>
+			args.some((a) => a.includes("<!-- factory-build "))
+				? networkError()
+				: github.exec(command, args);
+		const first = start();
+		await once(first);
+		await once(first);
+		const kept = executor.builds.get(`${runOf(14)}/build-1`);
+		assert.equal(kept?.result.kind, "found");
+
+		if (kept?.result.kind !== "found") return;
+		executor.builds.set(`${runOf(14)}/build-1`, {
+			kind: "build",
+			result: {
+				...kept.result,
+				receipt: { ...kept.result.receipt, contractDigest: digestOf("other") },
+			},
+		});
+		wire.intercept = null;
+		clock.t += 60_000;
+		await once(start());
+		assert.equal(statuses(github, 14).at(-1), "7:failed");
+		assert.ok(
+			logs.some(
+				(l) =>
+					l.event === "stage_inputs_refused" &&
+					l.fields.why === "patch_binding",
+			),
+		);
+		assert.equal(
+			logs.findLast((l) => l.event === "stage_recovered")?.fields.next,
+			"failed",
+		);
+	});
+
+	it("reuses a collected build when its running marker never landed", async () => {
+		const { github, executor, start, wire, clock, files } = world();
+		const issue = github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "pass", usage: 7 };
+		executor.buildBehavior = { kind: "pass", usage: 12 };
+		wire.intercept = async (command, args) =>
+			args.some((a) => a.includes("<!-- factory-build "))
+				? networkError()
+				: github.exec(command, args);
+		const first = start();
+		await once(first);
+		await once(first);
+		issue.comments = issue.comments.filter((c) => {
+			const parsed = parseMarker(c.body);
+
+			return parsed.kind !== "marker" || parsed.marker.seq !== 6;
+		});
+		const claim = files.claims.get(runOf(14));
+		assert.ok(claim);
+		files.claims.set(runOf(14), {
+			...claim,
+			seq: 5,
+			status: "claimed",
+			usage: 17,
+		});
+		executor.spentBy.set("build-1", 12);
+		wire.intercept = null;
+		clock.t += 60_000;
+		const report = await once(start());
+		assert.equal(
+			executor.launches.filter((l) => l.stage === "build").length,
+			1,
+		);
+		assert.equal(report.totals.usage, 12);
+		assert.equal(statuses(github, 14).at(-1), "6:stage_passed");
+	});
+
+	it("advances the same run to build, grants coding tools without the suite, and documents its marker log", async () => {
+		const { github, executor, start, logs } = world();
+		github.add(labeled(14, { body: "PRIVATE-ISSUE server/cli.ts" }));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "pass", usage: 7 };
+		executor.buildBehavior = { kind: "pass", usage: 12 };
+		const controller = start();
+		await once(controller);
+		const beforeBuild = logs.length;
+		const report = await once(controller);
+		assert.deepEqual(
+			executor.launches.map((l) => [l.stage, l.attempt]),
+			[
+				["specify", 1],
+				["accept", 1],
+				["build", 1],
+			],
+		);
+		const build = executor.launches[2];
+		assert.ok(build?.build);
+		assert.deepEqual(build.tools, [
+			"read",
+			"grep",
+			"ls",
+			"bash",
+			"edit",
+			"write",
+		]);
+		assert.equal(build.settings.maxTokens, 200_000);
+		assert.equal(build.remainingRunTokens, 499_983);
+		assert.ok(build.workspace.endsWith("-build-1"));
+		assert.match(build.prompt, /only the focused test file/);
+		assert.match(build.prompt, /tail -n 40/);
+		assert.match(build.prompt, /Never run the full suite/);
+		assert.ok(!build.prompt.includes("Visible test command:"));
+		assert.ok(!build.prompt.includes("`npm run check` runs typecheck"));
+
+		for (const secret of [
+			"PRIVATE-ISSUE",
+			"version.test.ts",
+			"import assert",
+			"canary",
+			"S1",
+		])
+			assert.ok(!build.prompt.includes(secret));
+		assert.equal(statuses(github, 14).at(-1), "7:stage_passed");
+		assert.ok(
+			logs.some(
+				({ event, fields }) =>
+					event === "marker_posted" &&
+					fields.status === "stage_passed" &&
+					fields.stage === "build",
+			),
+		);
+		assert.ok(
+			!logs
+				.slice(beforeBuild)
+				.some(
+					({ event, fields }) =>
+						event === "stage_ended" && fields.next === "stage_passed",
+				),
+		);
+
+		const stageDoc =
+			readFileSync(
+				new URL(
+					"../.pi/skills/verify-factory/features/sandbox-stage.md",
+					import.meta.url,
+				),
+				"utf8",
+			)
+				.split("\n")
+				.find((line) => line.startsWith("- `stage-passed`:")) ?? "";
+
+		assert.match(stageDoc, /marker_posted .*status=stage_passed stage=build/);
+		assert.doesNotMatch(
+			stageDoc,
+			/stage_ended \.\.\. cause=passed next=stage_passed/,
+		);
+		assert.equal(report.totals.usage, 29);
+		assert.equal(report.active, 0);
+		const summary = keyed(github, 14, "build");
+		assert.equal(summary.length, 1);
+		assert.match(summary[0] ?? "", /Visible tests: passed/);
+		assert.ok(!JSON.stringify(report).includes("private output"));
+		assert.ok(!summary[0]?.includes("private output"));
+	});
+
+	for (const forbidden of [false, true])
+		it(`keeps ${forbidden ? "forbidden work" : "failed visible tests"} private and never passes`, async () => {
+			const { github, executor, start } = world();
+			github.add(labeled(14));
+			executor.behaviors = [{ kind: "pass", usage: 10 }];
+			executor.acceptBehavior = { kind: "pass", usage: 7 };
+			executor.buildBehavior = { kind: "pass", usage: 12 };
+
+			if (forbidden) executor.buildPolicy = "forbidden";
+			else executor.buildExitCode = 1;
+			const controller = start();
+			await once(controller);
+			const report = await once(controller);
+			assert.equal(statuses(github, 14).at(-1), "7:failed");
+			assert.equal(report.totals.failures, 1);
+			assert.match(
+				keyed(github, 14, "build")[0] ?? "",
+				forbidden ? /no publication/ : /Visible tests: failed/,
+			);
+			assert.equal((await controller.tick()).totals.failures, 1);
+		});
+
+	for (const missing of [false, true])
+		it(`retries ${missing ? "missing" : "infrastructure-failed"} visible tests under the attempt cap without saying tests failed`, async () => {
+			const { github, executor, start, clock } = world();
+			github.add(labeled(14));
+			executor.behaviors = [{ kind: "pass", usage: 10 }];
+			executor.acceptBehavior = { kind: "pass", usage: 7 };
+			executor.buildBehavior = { kind: "pass", usage: 12 };
+			executor.buildExitCode = null;
+			executor.missingBuildTests = missing;
+			const controller = start();
+			await once(controller);
+			let report = await once(controller);
+			assert.equal(report.totals.retries, 1);
+			assert.equal(report.totals.failures, 0);
+			assert.equal(keyed(github, 14, "build").length, 0);
+			clock.t += 60_000;
+			report = await once(controller);
+			clock.t += 60_000;
+			report = await once(controller);
+			assert.equal(report.totals.failures, 1);
+			assert.equal(keyed(github, 14, "build").length, 0);
+		});
+
+	for (const corrupt of [false, true])
+		it(`recovers a collected patch without a second builder${corrupt ? " and types changed bytes" : ""}`, async () => {
+			const { github, executor, start, wire, clock } = world();
+			github.add(labeled(14));
+			executor.behaviors = [{ kind: "pass", usage: 10 }];
+			executor.acceptBehavior = { kind: "pass", usage: 7 };
+			executor.buildBehavior = { kind: "pass", usage: 12 };
+			wire.intercept = async (command, args) =>
+				args.some((a) => a.includes("<!-- factory-build "))
+					? networkError()
+					: github.exec(command, args);
+			const first = start();
+			await once(first);
+			await once(first);
+			assert.equal(statuses(github, 14).at(-1), "6:running");
+			executor.spentBy.set("build-1", 12);
+
+			if (corrupt)
+				executor.builds.set(`${runOf(14)}/build-1`, {
+					kind: "build",
+					result: { kind: "blocked", reason: "patch_changed" },
+				});
+			wire.intercept = null;
+			clock.t += 60_000;
+			const report = await once(start());
+			assert.equal(
+				executor.launches.filter((l) => l.stage === "build").length,
+				1,
+			);
+			assert.equal(
+				statuses(github, 14).at(-1),
+				corrupt ? "7:failed" : "7:stage_passed",
+			);
+			assert.equal(report.totals.usage, 12);
+		});
+});
+
 describe("held-out acceptance stage", () => {
-	it("runs specify then a fresh accept, stores the suite, and posts one redacted summary before stopping", async () => {
+	it("runs specify then a fresh accept, stores the suite, and claims build after one redacted summary", async () => {
 		const { github, executor, files, start } = world();
 		github.add(labeled(14, { body: "PRIVATE-ISSUE-TRANSCRIPT server/cli.ts" }));
 		executor.behaviors = [{ kind: "pass", usage: 100 }];
@@ -6566,7 +7040,7 @@ describe("held-out acceptance stage", () => {
 			"2:running",
 			"3:claimed",
 			"4:running",
-			"5:stage_passed",
+			"5:claimed",
 		]);
 		assert.deepEqual(
 			executor.launches.map((l) => [l.stage, l.attempt]),
@@ -6618,7 +7092,8 @@ describe("held-out acceptance stage", () => {
 			assert.ok(!summary?.includes(value));
 		assert.equal(keyed(github, 14, "acceptance").length, 1);
 		assert.equal(report.totals.usage, 120);
-		assert.equal(report.active, 0);
+		assert.equal(report.active, 1);
+		assert.equal(report.runs[0]?.stage, "build");
 		assert.deepEqual(report.corrupt, []);
 	});
 
@@ -6684,12 +7159,15 @@ describe("held-out acceptance stage", () => {
 			assert.equal(terminal.kind, "marker");
 
 			if (terminal.kind !== "marker") throw new Error("no marker");
-			assert.equal(terminal.marker.status, corrupt ? "failed" : "stage_passed");
+			assert.equal(terminal.marker.status, corrupt ? "failed" : "claimed");
 			assert.equal(terminal.marker.usage, 17);
 			assert.equal(report.totals.usage, 7);
 			assert.equal(report.totals.failures, corrupt ? 1 : 0);
 			assert.equal((await controller.tick()).totals.usage, 7);
-			assert.equal(executor.launches.length, 2);
+			assert.equal(
+				executor.launches.filter((l) => l.stage !== "build").length,
+				2,
+			);
 		});
 	}
 
@@ -6732,7 +7210,10 @@ describe("held-out acceptance stage", () => {
 		assert.equal(stored.receipt.model, "openai/recorded-model");
 		assert.equal(stored.receipt.observed, "recorded-observation");
 		assert.equal(report.totals.usage, 7);
-		assert.equal(executor.launches.length, 2);
+		assert.equal(
+			executor.launches.filter((l) => l.stage !== "build").length,
+			2,
+		);
 	});
 
 	for (const output of [
@@ -6824,10 +7305,13 @@ describe("held-out acceptance stage", () => {
 			wire.intercept = null;
 			clock.t += 60_000;
 			const report = await once(ctx.start());
-			assert.equal(executor.launches.length, 2);
+			assert.equal(
+				executor.launches.filter((l) => l.stage !== "build").length,
+				2,
+			);
 			assert.equal(
 				statuses(github, 14).at(-1),
-				corrupt ? "5:failed" : "5:stage_passed",
+				corrupt ? "5:failed" : "6:blocked",
 			);
 			assert.equal(keyed(github, 14, "acceptance").length, corrupt ? 0 : 1);
 			assert.deepEqual(report.corrupt, []);

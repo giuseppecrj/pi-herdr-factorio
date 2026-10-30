@@ -421,8 +421,9 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Files.**
 
-- [ ] Create `src/build.ts`, `test/build.test.ts`, `skills/build/`, and `test/fixtures/build/`.
-- [ ] Edit `src/policy.ts`, `test/policy.test.ts`, `server/controller.ts`, `server/sandbox.ts`, and `skills/README.md` for patch collection and stage wiring.
+- [ ] Create `src/build.ts`, `test/build.test.ts`, `skills/build/`, `test/fixtures/build/`, and `docs/prototypes/build-isolation/`.
+- [ ] Edit `src/policy.ts`, `test/policy.test.ts`, `server/controller.ts`, `server/sandbox.ts`, `skills/README.md`, `src/orchestrator.ts`, `src/specify.ts`, `src/artifacts.ts`, `test/orchestrator.test.ts`, `test/sandbox/runner.cases.ts`, and `test/specify.test.ts` for patch collection, private records, summaries and stage wiring.
+- [ ] Edit `docs/operations/sandbox.md`, `docs/operations/factory-cli.md` and `.pi/skills/verify-factory/**` for the build boundary, two-tick verification and recovery protocol.
 
 **Build.**
 
@@ -457,7 +458,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [ ] Metric. Measure build wall time, patch collection time, and total stage and child tokens/spend on both revisions. Measure time to a local test-bearing patch.
 - [ ] Probe. Interleave three runs of one fixed tiny bug issue. On trunk record the suite-ready stop. On head isolate build and collection. Save `perf.json`.
 - [ ] Baseline. Record trunk specify/accept time and usage first, without presenting its missing build as a successful patch.
-- [ ] Rule. Fail if the tiny build exceeds 10 minutes or 50,000 tokens, patch collection exceeds 2 seconds for a 1 MB diff, or the fixture takes over 20 minutes to reach validate. Enforce the configured run spend cap across all earlier stages.
+- [ ] Rule. Fail if the tiny build exceeds 10 minutes or 200,000 tokens, patch collection exceeds 2 seconds for a 1 MB diff, or the fixture takes over 20 minutes to reach validate. Enforce the configured run spend cap across all earlier stages. The owner raised the token limit on 2026-10-30 after two lean live builds used 70,351 and 55,495 tokens.
 
 **Review gate.** The operator reviews before merge.
 
