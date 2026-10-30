@@ -195,18 +195,22 @@ export function writeAcceptance(
 
 export const CANARY = /^factory-holdout-[0-9a-f]{64}$/;
 
+function byCodeUnit(a: string, b: string): number {
+	return a < b ? -1 : a > b ? 1 : 0;
+}
+
 function ordered(suite: AcceptanceSuite): AcceptanceSuite {
 	return {
 		version: 1,
 		scenarios: [...suite.scenarios]
-			.sort((a, b) => a.id.localeCompare(b.id))
+			.sort((a, b) => byCodeUnit(a.id, b.id))
 			.map((s) => ({
 				id: s.id,
-				criteria: [...s.criteria].sort(),
-				checks: [...s.checks].sort(),
+				criteria: [...s.criteria].sort(byCodeUnit),
+				checks: [...s.checks].sort(byCodeUnit),
 				judge: s.judge,
 			})),
-		files: [...suite.files].sort((a, b) => a.path.localeCompare(b.path)),
+		files: [...suite.files].sort((a, b) => byCodeUnit(a.path, b.path)),
 	};
 }
 

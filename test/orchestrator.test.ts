@@ -6729,6 +6729,33 @@ describe("held-out acceptance stage", () => {
 	}
 });
 
+describe("held-out acceptance stage: needs_info", () => {
+	it("ends a questions result at specify and never launches accept", async () => {
+		const { github, executor, files, clock, wire, start } = world();
+
+		wire.intercept = writesWire(github, []);
+		github.add(labeled(14));
+		executor.outputs = [QUESTIONS_TEXT];
+		executor.behaviors = [{ kind: "pass", usage: 3 }];
+		executor.acceptBehavior = { kind: "pass", usage: 7 };
+
+		const controller = start();
+
+		for (let tick = 0; tick < 3; tick++) {
+			await once(controller);
+			clock.t += 60_000;
+		}
+
+		assert.equal(statuses(github, 14).at(-1), "3:needs_info");
+		assert.deepEqual(
+			executor.launches.map((l) => l.stage),
+			["specify"],
+		);
+		assert.equal(keyed(github, 14, "acceptance").length, 0);
+		assert.equal((await files.readContract(runOf(14))).kind, "blocked");
+	});
+});
+
 describe("specify: contract", () => {
 	it("stores a validated contract and posts its summary before claiming accept", async () => {
 		const { github, files, executor, wire, start } = world();
