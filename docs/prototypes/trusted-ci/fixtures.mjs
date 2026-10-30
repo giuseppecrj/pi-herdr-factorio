@@ -26,6 +26,8 @@ if (mode === "generate") {
 	const original = path => git(["show", `${gateSha}:${path}`]) + "\n";
 	const bad = original("src/markers.ts").replace('status === "needs_info"', 'status === "running"');
 	const manifest = json(original("package.json"));
+	const gates = json(original(".github/factory/gates/gates.json"));
+	const withNewTest = JSON.stringify({ ...gates, tests: [...gates.tests, "test/gate-new.test.ts"].sort() }, null, 2) + "\n";
 	const noop = { ...manifest, scripts: Object.fromEntries(Object.keys(manifest.scripts).map(key => [key, "true"])) };
 	const testHead = 'import assert from "node:assert/strict";\nimport { test } from "node:test";\n';
 	const goodSource = '\nexport const GATE_SENTINEL = "candidate-source";\n';
@@ -36,7 +38,7 @@ if (mode === "generate") {
 	const changedOrchestrator = original("test/orchestrator.test.ts").replace("of 101\\)", "of 100\\)");
 
 	const cases = [
-		{ name: "known-good", expected: "passed", files: { "src/markers.ts": original("src/markers.ts") + goodSource, "test/gate-new.test.ts": goodTest } },
+		{ name: "known-good", expected: "passed", files: { "src/markers.ts": original("src/markers.ts") + goodSource, "test/gate-new.test.ts": goodTest, ".github/factory/gates/gates.json": withNewTest } },
 		{ name: "wrong-behavior", expected: "failed", files: { "src/markers.ts": bad } },
 		{ name: "noop-scripts", expected: "failed", files: { "src/markers.ts": bad, "package.json": JSON.stringify(noop, null, 2) + "\n" } },
 		{ name: "deleted-regression", expected: "failed", files: { "src/markers.ts": bad, "test/markers.test.ts": null } },

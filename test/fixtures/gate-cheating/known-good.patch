@@ -1,3 +1,53 @@
+diff --git a/.github/factory/gates/gates.json b/.github/factory/gates/gates.json
+index 30f4565..263a85e 100644
+--- a/.github/factory/gates/gates.json
++++ b/.github/factory/gates/gates.json
+@@ -4,3 +4,40 @@
+-    { "name": "typecheck", "argv": ["node", "/g/tooling/node_modules/typescript/bin/tsc", "--noEmit", "-p", "/w/tsconfig.json"] },
+-    { "name": "lint", "argv": ["/g/tooling/node_modules/.bin/oxlint", "--disable-nested-config", "--ignore-path", "/dev/null", "--ignore-pattern", "test/acceptance/**", "-c", "/g/lint.json", "src", "extension", "server", "test"] },
+-    { "name": "format", "argv": ["/g/tooling/node_modules/.bin/biome", "format", "--config-path", "/w/biome.json", "src", "extension", "server", "test"] }
++    {
++      "name": "typecheck",
++      "argv": [
++        "node",
++        "/g/tooling/node_modules/typescript/bin/tsc",
++        "--noEmit",
++        "-p",
++        "/w/tsconfig.json"
++      ]
++    },
++    {
++      "name": "lint",
++      "argv": [
++        "/g/tooling/node_modules/.bin/oxlint",
++        "--disable-nested-config",
++        "--ignore-path",
++        "/dev/null",
++        "--ignore-pattern",
++        "test/acceptance/**",
++        "-c",
++        "/g/lint.json",
++        "src",
++        "extension",
++        "server",
++        "test"
++      ]
++    },
++    {
++      "name": "format",
++      "argv": [
++        "/g/tooling/node_modules/.bin/biome",
++        "format",
++        "--config-path",
++        "/w/biome.json",
++        "src",
++        "extension",
++        "server",
++        "test"
++      ]
++    }
+@@ -14,0 +52 @@
++    "test/gate-new.test.ts",
 diff --git a/src/markers.ts b/src/markers.ts
 index 6fbbc53..48cd21b 100644
 --- a/src/markers.ts
