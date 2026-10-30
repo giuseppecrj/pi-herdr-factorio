@@ -19,6 +19,7 @@ import { describe, it } from "node:test";
 import {
 	FORCED_PI_FLAGS,
 	PI_AGENT_DIR,
+	piChildEnv,
 	wrapPiArgv,
 } from "../../server/sandbox/assets/pi.ts";
 import {
@@ -963,6 +964,48 @@ describe("pi wrapper", () => {
 		} finally {
 			child?.kill();
 			server.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("starts the Pi child without NODE_OPTIONS or another Node loader variable", () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-pi-env-"));
+		const planted = join(dir, "planted.cjs");
+		const ran = join(dir, "ran");
+
+		try {
+			writeFileSync(
+				planted,
+				`require("node:fs").writeFileSync(${JSON.stringify(ran)}, "1");\n`,
+			);
+
+			const sandbox = {
+				PATH: "/usr/bin:/bin",
+				HOME: "/workspace",
+				FACTORY_PI_TOOLS: "read",
+				NODE_OPTIONS: `--require ${planted}`,
+				NODE_PATH: "/workspace/modules",
+				NODE_REPL_EXTERNAL_MODULE: planted,
+				NODE_PRESERVE_SYMLINKS: "1",
+				NODE_PRESERVE_SYMLINKS_MAIN: "1",
+			};
+
+			const env = piChildEnv(sandbox);
+
+			assert.deepEqual(env, {
+				PATH: "/usr/bin:/bin",
+				HOME: "/workspace",
+				FACTORY_PI_TOOLS: "read",
+				PI_CODING_AGENT_DIR: PI_AGENT_DIR,
+			});
+
+			spawnSync(process.execPath, ["-e", ""], { env: sandbox });
+			assert.equal(existsSync(ran), true, "the planted loader runs unfiltered");
+			rmSync(ran);
+
+			spawnSync(process.execPath, ["-e", ""], { env });
+			assert.equal(existsSync(ran), false, "the Pi child's environment");
+		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
