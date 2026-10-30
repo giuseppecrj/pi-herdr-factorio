@@ -52,8 +52,10 @@ import {
 	contractKey,
 	type InlinedFile,
 	type Link,
+	INLINE_TOTAL_BYTES,
 	inlined,
 	MAX_ANSWERS,
+	NAMED_FILE_BYTES,
 	NAMED_FILE_READ_BYTES,
 	NEEDS_INFO_LABEL,
 	namedFiles,
@@ -2934,11 +2936,17 @@ export class Orchestrator {
 		];
 
 		const shown: InlinedFile[] = [];
+		let budget = INLINE_TOTAL_BYTES;
 
 		for (const path of new Set(wanted)) {
 			const text = await checkout.read(path, NAMED_FILE_READ_BYTES);
 
-			if (text !== null) shown.push(inlined(path, text));
+			if (text === null || budget < 1024) continue;
+
+			const file = inlined(path, text, Math.min(NAMED_FILE_BYTES, budget));
+
+			budget -= Buffer.byteLength(file.text, "utf8");
+			shown.push(file);
 		}
 
 		return {

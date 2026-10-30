@@ -762,8 +762,12 @@ export type InlinedFile = {
 	readonly lines: number;
 };
 
-/** A file's text cut at a line boundary to at most `NAMED_FILE_BYTES`. */
-export function inlined(path: string, text: string): InlinedFile {
+/** A file's text cut at a line boundary to at most `capBytes`. */
+export function inlined(
+	path: string,
+	text: string,
+	capBytes: number = NAMED_FILE_BYTES,
+): InlinedFile {
 	const all = text.split("\n");
 	const kept: string[] = [];
 	let bytes = 0;
@@ -771,7 +775,7 @@ export function inlined(path: string, text: string): InlinedFile {
 	for (const line of all) {
 		bytes += Buffer.byteLength(line, "utf8") + 1;
 
-		if (bytes > NAMED_FILE_BYTES) break;
+		if (bytes > capBytes) break;
 
 		kept.push(line);
 	}
@@ -793,6 +797,9 @@ export type PromptInput = {
 const TREE_COLLAPSE = 12;
 const NAMED_FILE_MAX = 3;
 export const NAMED_FILE_BYTES = 12 * 1024;
+
+/** The cap on all inlined files together. A file past it is left for the read tool. */
+export const INLINE_TOTAL_BYTES = 16 * 1024;
 
 /** The largest file the prompt inlines the head of. */
 export const NAMED_FILE_READ_BYTES = 1024 * 1024;
@@ -922,13 +929,13 @@ export function specifyPrompt(input: PromptInput): string {
 		`You are the factory's specify stage for ${input.repo} at commit ${input.baseSha}. The repository is checked out read-only at /workspace. You have the read, grep and ls tools, and subagent for one reviewer.`,
 		"",
 		"Procedure:",
-		"1. Read the issue. Settle every fact you can from the repository map below first, then with at most a few read, grep or ls calls. Never ask the owner what the repository answers.",
+		"1. Read the issue. Settle every fact you can from the repository map and the inlined files below first. Then use at most three read, grep or ls calls, only under /workspace, with offset and limit on large files. Never ask the owner what the repository answers.",
 		"2. If a decision that changes behavior is still open, reply with questions and stop. Do not start a reviewer.",
 		`3. Otherwise draft the contract. Then call subagent exactly once with {"name":"specify-reviewer","model":"openai/gpt-6.1-sol","thinking":"low","fork":false,"tools":"none","cwd":"/workspace","task":"<the issue title and body, then your draft contract JSON, then: ${REVIEWER_TASK}>"}. Omit agent and systemPrompt. After the launch acknowledgement, end your turn with exactly: reviewing. The result arrives in a later turn.`,
 		"4. When the reviewer's result arrives, keep your contract unless it names a concrete ambiguity that would change an acceptance test. Then fix that criterion from repository facts, or reply with questions instead.",
 		"5. Your final reply is the JSON object only.",
 		"",
-		"Follow the skills in the Skills section at the end.",
+		"Follow the skills in the Skills section at the end. They are complete: never read a SKILL.md file, and never read outside /workspace.",
 		"",
 		"Repository guidance, from WORKFLOW.md at this commit:",
 		guidance,

@@ -28,6 +28,7 @@ import {
 	sandboxHost,
 	type StageHost,
 	type StageRunInput,
+	STAGE_SYSTEM_PROMPT,
 	STDERR_CAP_BYTES,
 	withSkills,
 } from "../../server/sandbox.ts";
@@ -2021,6 +2022,8 @@ describe("stage Pi command", () => {
 			"--mode",
 			"rpc",
 			"--no-skills",
+			"--system-prompt",
+			STAGE_SYSTEM_PROMPT,
 			"--session-dir",
 			"/run/pi-agent/sessions",
 			"--model",

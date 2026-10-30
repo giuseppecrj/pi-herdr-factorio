@@ -6585,6 +6585,27 @@ describe("specify: contract", () => {
 		assert.deepEqual(executor.checkouts, [runOf(14)]);
 	});
 
+	it("inlines the files the issue names within a 16 KiB budget and leaves the rest to the read tool", async () => {
+		const { github, executor, start } = world();
+		const line = `${"x".repeat(99)}\n`;
+
+		for (const name of ["a.ts", "b.ts", "c.ts"]) {
+			executor.tree.set(`src/${name}`, line.repeat(100));
+		}
+
+		github.add(labeled(14, { body: "Touch src/a.ts, src/b.ts and src/c.ts." }));
+		executor.behaviors = [{ kind: "pass", usage: 1 }];
+
+		await once(start());
+
+		const prompt = executor.launches[0]?.prompt ?? "";
+
+		assert.ok(prompt.includes("=== src/a.ts ===\n"));
+		assert.match(prompt, /=== src\/b\.ts \(lines 1-\d+ of 101\) ===\n/);
+		assert.ok(!prompt.includes("=== src/c.ts"));
+		assert.ok(prompt.includes("src/c.ts\n"));
+	});
+
 	it("takes the guidance from the run's base commit, not from a later main", async () => {
 		const { github, executor, start } = world();
 

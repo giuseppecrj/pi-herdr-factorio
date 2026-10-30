@@ -112,6 +112,9 @@ export const STDERR_CAP_BYTES = 64 * 1024;
 
 const PROMPT_ID = "factory-prompt";
 
+export const STAGE_SYSTEM_PROMPT =
+	"You are one stage of a software factory, running in a sandbox. Follow the user message exactly, and use only the tools it allows.";
+
 const OUTPUT_ID = "factory-output";
 
 /** The cap on a stage's kept final text. */
@@ -908,7 +911,9 @@ function freshDir(base: string): string {
  * forces `--no-extensions`, which skips configured packages, so
  * `pi-herdr-agents` and its `subagent` tool load by `-e`. Skills arrive
  * inlined in the prompt, so `--no-skills` stops discovery from the
- * writable agent dir.
+ * writable agent dir. The short system prompt replaces Pi's default, whose
+ * coding-assistant rules, docs pointers and orchestration guidelines a
+ * stage does not use and every model request would resend.
  */
 export function piCommand(model: ModelId): string[] {
 	return [
@@ -916,6 +921,8 @@ export function piCommand(model: ModelId): string[] {
 		"--mode",
 		"rpc",
 		"--no-skills",
+		"--system-prompt",
+		STAGE_SYSTEM_PROMPT,
 		"--session-dir",
 		`${PI_AGENT_DIR}/sessions`,
 		"--model",
