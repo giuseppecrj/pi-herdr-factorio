@@ -868,10 +868,7 @@ describe("pi wrapper", () => {
 		let stdout = "";
 		let deadline: ReturnType<typeof setTimeout> | undefined;
 
-		// Pi only calls its configured base URL, /openai/v1. Anything else on this
-		// ephemeral loopback port is not Pi: a stray local client probing the port
-		// (seen as `GET /` from Go-http-client) raced the POST and failed the old
-		// blanket method assertion about one run in a hundred.
+		// Other local clients can probe any loopback port; only Pi's base path is answered.
 		const server = createHttpServer((req, res) => {
 			let body = "";
 
