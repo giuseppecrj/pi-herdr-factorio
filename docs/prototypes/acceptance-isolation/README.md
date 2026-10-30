@@ -44,6 +44,10 @@ A clean result records the observed **initial pre-build** boundary for this sand
 
 This is not proof against every oracle-copy channel. Exact-file hashes do not detect arbitrary transformed or partial bodies; path matching is token-based and may conservatively flag a public file with the same name. The scan does not cover `/usr`, arbitrary kernel/device streams, process memory or every possible proc alias. Git objects are excluded by requiring the empty read-only Git root, not by exhaustively searching an exposed repository. The known host-path disclosure is not fixed. F07a must rerun the probe on its actual tool/network layout; post-publication repair isolation remains F07c.
 
+## Fixed-probe observation
+
+[Fix round 1 verification](./fix-1.md) records fixture #472: 18/18 detector controls on the VM, clean PASS before/after four deliberate live leak injections, and FAIL for each injection. The clean scan read 23,108 files and tried 43 private paths, with no leak hits or unexpected scan errors. Its empty Git root was a read-only trusted bind; one denied OS directory and two dangling links were counted explicitly. Total fixture model usage was 15,440 tokens; probes spent none.
+
 ## Earlier observations
 
 The old canary-only detector passed on 2026-10-30 on fixtures #460 (`1611c7b`) and #461 (`fff4922`), bundle `0e2b7ea8faceb746…`, scanning 22,891 files with no canary hits. Those observations did **not** rule out uncanaried copies or readable session directories; round-1 audit negative controls exposed those gaps. They are not evidence for the stronger detector above.

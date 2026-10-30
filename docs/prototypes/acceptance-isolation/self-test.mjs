@@ -131,8 +131,8 @@ for (const missing of ["/workspace/.git", "/workspace", "/run/pi-agent/sessions"
 	});
 }
 
-test("rejects a non-tmpfs Git root", async () => {
-	assert.equal((await fixture(({ write }) => write("/proc/self/mountinfo", ["/home", "/tmp", "/run"].map((p, i) => `${i + 1} 0 0:1 / ${p} rw - tmpfs tmpfs rw`).join("\n")))).pass, false);
+test("rejects a non-tmpfs Git root when the launch requires tmpfs", async () => {
+	assert.equal((await fixture(({ write }) => write("/proc/self/mountinfo", ["/home", "/tmp", "/run"].map((p, i) => `${i + 1} 0 0:1 / ${p} rw - tmpfs tmpfs rw`).join("\n") + "\n4 0 0:2 / /workspace rw - ext4 disk rw\n5 4 0:2 / /workspace/.git ro - ext4 disk rw"))).pass, false);
 });
 
 test("rejects a writable Git root even when it is empty tmpfs", async () => {
