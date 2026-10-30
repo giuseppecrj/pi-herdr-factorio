@@ -448,7 +448,7 @@ The prompt holds:
 - the issue and any answers, delimited as untrusted data;
 - the output schema.
 
-Inlined files share a 16 KiB budget. Each is cut at 12 KiB, at a line boundary, with its line range in its header. The executor appends the `audit-ticket`, `grill-me` and `deep-research` skills from the bundle. The stage gets the `read`, `grep`, `ls` and `subagent` tools. The prompt asks for at most one reviewer child, with `"tools": "none"`. The reviewer critiques a draft contract and flags only ambiguity that would change an acceptance test.
+Inlined files share a 16 KiB budget. Each is cut at 12 KiB, at a line boundary, with its line range in its header. The executor appends the `audit-ticket`, `grill-me` and `deep-research` skills from the bundle. The draft session gets only `read`, `grep` and `ls`. After a valid contract draft, the controller runs exactly one reviewer session with no tools. Its prompt carries only the draft, ticket snapshot and answers as untrusted data, and asks for JSON containing no finding or 1 to 3 concrete ambiguities that change acceptance tests. A finding starts at most one tool-less revision session, which returns a contract or questions. Questions skip review. All sessions stay inside one specify attempt; their tokens, turns and wall time share the stage and run budgets. A failed, refused, exhausted or malformed review or revision fails the attempt through the normal outcome mapping.
 
 Only a `passed` stage's output is read: its final assistant text, from `output.txt` beside the receipt. It must be one JSON object, optionally in one fenced block, in one of two shapes:
 
@@ -470,7 +470,9 @@ The controller renders both comments from validated fields only:
 
 Each comment ends with a hidden key: `<!-- factory-questions run=<runId> q=<digest> -->` or `<!-- factory-contract run=<runId> c=<contractDigest> -->`. Before posting, the controller looks for a controller comment that ends with that key. So a post whose outcome was unknown, or one an interrupted controller made, is never posted twice. A comment that starts with `<!-- factory:` would be read as a marker, so neither comment does. Never edit either comment. Like an edited marker, an edited controller comment makes the issue `edited` and stops dispatch for it. A write that does not land logs `comment_unconfirmed` or `label_unconfirmed`, and is tried again on the next tick, before the terminal marker.
 
-A restart that adopts a `running` specify marker first asks the executor for that attempt's kept output. When a passing execution kept valid output, the stage is finished from it and `stage_recovered` is logged. This holds even when `factory:ready` is already off because this controller removed it. The stage is not run again, and its usage is counted once.
+A restart that adopts a `running` specify marker first asks the executor for that attempt's kept output. When a passing execution kept valid output, the stage is finished from it and `stage_recovered` is logged. This holds even when `factory:ready` is already off because this controller removed it. A partially completed specify execution returns `pending`: it resumes the same attempt, reuses every recorded session and launches only the remaining session. A session directory with no receipt fails the attempt instead of repeating a possibly launched reviewer. Usage is counted once.
+
+The attempt directory contains `specify.json`, an aggregate `receipt.json` and the final `output.txt`. Each session has its own `draft/`, `review/` or `revision/` directory, with its receipt, output, agent files, stderr and `egress.jsonl`. The aggregate receipt sums usage, turns and wall time. Model observations, fallback details and egress evidence are in the session receipts. Before the aggregate receipt exists, recovery sums the session receipts or their audit tallies. Recorded outputs never cause another model request.
 
 #### Linked runs
 

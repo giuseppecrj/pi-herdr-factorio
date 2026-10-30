@@ -70,6 +70,7 @@ import {
 	SPECIFY_SKILLS,
 	SPECIFY_TOOLS,
 	specifyPrompt,
+	type SpecifyReviewInput,
 	withoutKey,
 } from "./specify.ts";
 import { isLogin } from "./adapters/github.ts";
@@ -112,6 +113,7 @@ export type StageLaunchInput = {
 	readonly workspace: string;
 	/** The stage prompt, less the skills the executor appends from its bundle. */
 	readonly prompt: string;
+	readonly specify?: SpecifyReviewInput;
 	/** The Pi tool allowlist for the stage. */
 	readonly tools: readonly string[];
 	/** Bundle skills to inline, by name. */
@@ -152,7 +154,7 @@ export interface StageExecutor {
 		readonly runId: Digest;
 		readonly stage: ModelStage;
 		readonly attempt: number;
-	}): Promise<string | null>;
+	}): Promise<string | { readonly kind: "pending" } | null>;
 	/**
 	 * Extracts the repository at `sha` into the run's workspace once, refusing
 	 * unsafe entries, and lists it. A later call lists the same checkout.
@@ -337,6 +339,7 @@ type Prepared = {
 	/** `null` for a launch the sandbox will refuse, which reads no input. */
 	readonly inputs: StageInputs | null;
 	readonly prompt: string;
+	readonly specify?: SpecifyReviewInput;
 };
 
 const UNPREPARED: Prepared = { kind: "ready", inputs: null, prompt: "" };
@@ -2033,11 +2036,24 @@ export class Orchestrator {
 		const limits = this.#limits();
 		const releasing = eligibility !== "current" && eligibility !== "unverified";
 
+		const output =
+			marker.status === "running" && isModelStage(run.stage)
+				? await this.#input.executor
+						.output({
+							runId: run.runId,
+							stage: run.stage,
+							attempt: run.attempt,
+						})
+						.catch(() => null)
+				: null;
+
 		await this.#accountAdopted(
 			run,
 			marker,
 			ledger,
-			marker.status === "running" && (releasing || limits !== null),
+			marker.status === "running" &&
+				(releasing || limits !== null) &&
+				(releasing || !(output instanceof Object)),
 		);
 
 		const recovered =
@@ -2045,7 +2061,7 @@ export class Orchestrator {
 			marker.status === "running" &&
 			eligibility !== "closed" &&
 			eligibility !== "new_event" &&
-			(await this.#recoverOutput(run));
+			(await this.#recoverOutput(run, output));
 
 		if (recovered) {
 			this.#input.log("stage_recovered", {
@@ -2739,6 +2755,7 @@ export class Orchestrator {
 			attempt: run.attempt,
 			workspace: files.workspacePath(run.runId),
 			prompt: prepared.prompt,
+			specify: prepared.specify,
 			tools: prepared.inputs === null ? [] : SPECIFY_TOOLS,
 			skills: prepared.inputs === null ? [] : SPECIFY_SKILLS,
 			settings: {
@@ -2781,7 +2798,7 @@ export class Orchestrator {
 					phase.result = {
 						kind: result.kind,
 						usage: prior + result.usage,
-						output,
+						output: output instanceof Object ? null : output,
 					};
 				},
 				() => {
@@ -2952,6 +2969,7 @@ export class Orchestrator {
 		return {
 			kind: "ready",
 			inputs: { files: set, source: stored.receipt.snapshotSource, link },
+			specify: { title, body, answers, files: checkout.files },
 			prompt: specifyPrompt({
 				repo,
 				baseSha: run.workflowSha,
@@ -3070,16 +3088,21 @@ export class Orchestrator {
 	 * earlier controller's execution kept, instead of running it again. Its
 	 * usage is already counted by `#accountAdopted`.
 	 */
-	async #recoverOutput(run: ActiveRun): Promise<boolean> {
+	async #recoverOutput(
+		run: ActiveRun,
+		output: string | { readonly kind: "pending" } | null,
+	): Promise<boolean> {
 		const stage = run.stage;
 
 		if (stage !== "specify") return false;
 
-		const output = await this.#input.executor
-			.output({ runId: run.runId, stage, attempt: run.attempt })
-			.catch(() => null);
-
 		if (output === null) return false;
+
+		if (output instanceof Object) {
+			run.phase = { kind: "claimed" };
+
+			return true;
+		}
 
 		const prepared = await this.#stageInputs(run);
 

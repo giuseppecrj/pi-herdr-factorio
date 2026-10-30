@@ -842,7 +842,7 @@ describe("pi wrapper", () => {
 		}
 	});
 
-	it("with the forced flags, a real Pi 1.4.0 started as the stage Pi declares the subagent tool", {
+	it("with the forced flags, a real Pi 1.4.0 declares only the specify read tools and no extension", {
 		timeout: 60_000,
 	}, async () => {
 		const dir = mkdtempSync(join(tmpdir(), "factory-pi-parent-"));
@@ -911,7 +911,7 @@ describe("pi wrapper", () => {
 
 			const wrapped = wrapPiArgv(
 				piCommand(modelId("openai/gpt-6.1-sol")).slice(1),
-				["read", "subagent"],
+				["read", "grep", "ls"],
 			);
 
 			assert.ok(wrapped.ok);
@@ -960,7 +960,8 @@ describe("pi wrapper", () => {
 				.map((tool) => textOf(fieldOf(objectOf(tool), "name")))
 				.sort();
 
-			assert.deepEqual(declared, ["read", "subagent"]);
+			assert.deepEqual(declared, ["grep", "ls", "read"]);
+			assert.ok(!bodies[0]?.includes("pi-herdr-agents"));
 		} finally {
 			child?.kill();
 			server.close();

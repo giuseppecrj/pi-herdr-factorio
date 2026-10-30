@@ -9,6 +9,6 @@
 ## Changes
 
 - Kept the design tree, the frontier, "finding facts is your job" and "the decisions are the user's".
-- Replaced "dispatch a sub-agent" with reading the checkout: the stage reads with `read`, `grep` and `ls`, and its one child is a reviewer with no tools.
+- Replaced "dispatch a sub-agent" with reading the checkout: the draft session reads with `read`, `grep` and `ls`; the controller runs a separate reviewer session with no tools.
 - Replaced "wait for the user's answers" and the interactive round format with the structured `questions` output. The answers arrive in a later linked run.
 - Renamed it `grill-me` and set `disable-model-invocation`, because it is a stage prompt and not a user skill.

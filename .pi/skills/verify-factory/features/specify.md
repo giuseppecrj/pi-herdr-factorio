@@ -36,6 +36,8 @@ That run read the bundled `pi-herdr-agents` `SKILL.md` and two test files before
 
 ## Gotchas
 
-- The `subagent` tool is asynchronous. A contract with a reviewer costs at least three parent requests: the draft and the launch, the end of that turn, and the final reply after the child's result. Each request resends the whole context.
+- The controller now runs the reviewer separately, with no tools and only the draft, snapshot and answers. No delegation extension loads. A clear draft with no tool calls and no finding takes two requests, not three parent requests plus a child.
+- Specify's root receipt aggregates `draft/`, `review/` and optional `revision/` session receipts. Count root totals once. Read nested `egress.jsonl` files for the per-request breakdown.
+- A restart with recorded session output resumes the same attempt without repeating that session. An unrecorded interrupted reviewer fails the attempt rather than launching it twice.
 - Do not edit the questions or summary comment. An edited controller comment makes the issue corrupt with `edited`.
 - `factory:ready` comes off the issue at `needs_info`, so `issues?labels=factory:ready` may still list it for a few seconds (F06a prototype E5). The controller rereads the issue before it launches.

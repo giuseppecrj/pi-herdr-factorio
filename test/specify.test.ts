@@ -492,19 +492,10 @@ describe("specify prompt", () => {
 		);
 	});
 
-	it("asks for one tool-less reviewer that flags only ambiguity changing acceptance tests", () => {
-		assert.ok(prompt.includes('"tools":"none"'));
-		assert.ok(prompt.includes("call subagent exactly once"));
-		assert.ok(
-			prompt.includes(
-				"Flag only an ambiguity that would change an acceptance test",
-			),
-		);
-		assert.ok(
-			prompt.includes(
-				"keep your contract unless it names a concrete ambiguity",
-			),
-		);
+	it("returns the draft for controller review without a delegation tool", () => {
+		assert.ok(prompt.includes("The controller reviews it separately"));
+		assert.ok(!prompt.includes("subagent"));
+		assert.ok(!prompt.includes('"tools":"none"'));
 	});
 
 	it("collapses deep directories in the map and finds files the issue names", () => {

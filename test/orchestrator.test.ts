@@ -309,6 +309,7 @@ class FakeExecutor implements StageExecutor {
 	text: string | null = CONTRACT_TEXT;
 	/** Kept texts by `<runId>/<stage>-<attempt>`, which `output` reads. */
 	readonly kept = new Map<string, string>();
+	pending = false;
 	readonly outputReads: string[] = [];
 	readonly tree = new Map(CHECKOUT_TREE);
 	readonly checkouts: string[] = [];
@@ -322,12 +323,12 @@ class FakeExecutor implements StageExecutor {
 		runId: string;
 		stage: string;
 		attempt: number;
-	}): Promise<string | null> {
+	}): Promise<string | { readonly kind: "pending" } | null> {
 		const key = `${input.runId}/${input.stage}-${input.attempt}`;
 
 		this.outputReads.push(key);
 
-		return this.kept.get(key) ?? null;
+		return this.kept.get(key) ?? (this.pending ? { kind: "pending" } : null);
 	}
 
 	async checkout(input: { runId: string }): Promise<CheckoutResult> {
@@ -6562,7 +6563,13 @@ describe("specify: contract", () => {
 		const launch = executor.launches[0];
 
 		assert.ok(launch);
-		assert.deepEqual(launch.tools, ["read", "grep", "ls", "subagent"]);
+		assert.deepEqual(launch.tools, ["read", "grep", "ls"]);
+		assert.deepEqual(launch.specify, {
+			title: "Add --version",
+			body: "Print the version from server/cli.ts.",
+			answers: null,
+			files: [...executor.tree.keys()],
+		});
 		assert.deepEqual(launch.skills, [
 			"audit-ticket",
 			"grill-me",
@@ -6581,7 +6588,7 @@ describe("specify: contract", () => {
 			),
 		);
 		assert.ok(launch.prompt.includes("=== README.md ==="));
-		assert.ok(launch.prompt.includes('"tools":"none"'));
+		assert.ok(!launch.prompt.includes("subagent"));
 		assert.deepEqual(executor.checkouts, [runOf(14)]);
 	});
 
@@ -6853,6 +6860,34 @@ describe("specify: questions", () => {
 			"1:claimed",
 			"2:running",
 			"3:needs_info",
+		]);
+	});
+
+	it("resumes an interrupted specify review in the same attempt and counts recorded sessions once", async () => {
+		const ctx = world();
+		const { github, executor, clock } = ctx;
+
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "hang" }];
+		await ctx.start().tick();
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:running"]);
+
+		executor.pending = true;
+		executor.spentBy.set("specify-1", 300);
+		executor.behaviors = [{ kind: "pass", usage: 20 }];
+		clock.t += 60_000;
+		const report = await once(ctx.start());
+
+		assert.equal(executor.launches.length, 2);
+		assert.equal(executor.launches[1]?.attempt, 1);
+		assert.equal(executor.launches[1]?.remainingRunTokens, 500_000 - 300);
+		assert.equal(report.totals.usage, 320);
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:running",
+			"3:claimed",
+			"4:running",
+			"5:stage_passed",
 		]);
 	});
 
