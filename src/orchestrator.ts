@@ -7,6 +7,8 @@ import {
 	latestReadyEntry,
 	type RefusalReason,
 	readTickInputs,
+	type SnapshotReader,
+	type SnapshotSource,
 	type TickReads,
 } from "./admission.ts";
 import {
@@ -16,6 +18,8 @@ import {
 	GitHubTicketAdapter,
 	GitHubTicketWriter,
 	type IssueRecord,
+	type IssueComment,
+	type CommentEdit,
 	type Read,
 	type TimelineEntry,
 } from "./adapters/github.ts";
@@ -27,6 +31,7 @@ import {
 	isControllerComment,
 	isTerminal,
 	latestFor,
+	type TrustedMarker,
 	type Marker,
 	type MarkerDefect,
 	type MarkerLedger,
@@ -34,8 +39,43 @@ import {
 	type RunStatus,
 	type TerminalStatus,
 } from "./markers.ts";
-import { READY_LABEL } from "./policy.ts";
-import { type Digest, runIdOf, type Stage } from "./run.ts";
+import { hasWriteAccess, READY_LABEL } from "./policy.ts";
+import { type Digest, type NonEmpty, runIdOf, type Stage } from "./run.ts";
+import {
+	type Answer,
+	type AnswersRecord,
+	answerBody,
+	answersDigestOf,
+	type Contract,
+	CONTRACT_VERSION,
+	contractBytes,
+	type ContractDigest,
+	contractDigestOf,
+	contractKey,
+	type InlinedFile,
+	type Link,
+	INLINE_TOTAL_BYTES,
+	inlined,
+	MAX_ANSWERS,
+	NAMED_FILE_BYTES,
+	NAMED_FILE_READ_BYTES,
+	NEEDS_INFO_LABEL,
+	namedFiles,
+	parseSpecifyOutput,
+	type Question,
+	type QuestionsDigest,
+	questionsDigestOf,
+	questionsKey,
+	questionsKeyOf,
+	renderQuestions,
+	renderSummary,
+	SPECIFY_SKILLS,
+	SPECIFY_TOOLS,
+	specifyPrompt,
+	type SpecifyReviewInput,
+	withoutKey,
+} from "./specify.ts";
+import { isLogin } from "./adapters/github.ts";
 import type {
 	StageResult,
 	StageRunSettings,
@@ -49,7 +89,10 @@ import {
 	type RepoSlug,
 	STAGE_CLEANUP_RESERVE_MS,
 	type WorkflowConfig,
+	parseWorkflow,
+	WORKFLOW_PATH,
 } from "./workflow.ts";
+import { digestOf } from "./run.ts";
 
 export type { StageResult, StageRunSettings };
 
@@ -70,6 +113,10 @@ export type StageLaunchInput = {
 	readonly stage: ModelStage;
 	readonly attempt: number;
 	readonly workspace: string;
+	readonly prompt: string;
+	readonly specify?: SpecifyReviewInput;
+	readonly tools: readonly string[];
+	readonly skills: readonly string[];
 	readonly settings: StageRunSettings;
 	readonly remainingRunTokens: number;
 	readonly signal: AbortSignal;
@@ -88,16 +135,33 @@ export interface StageExecutor {
 	reconciled(): Promise<boolean>;
 	/** Whether the stage sandbox can run. A `blocked` run replays only after this passes. */
 	preflight(): Promise<boolean>;
+	/** Result usage is new spend; a resumed attempt's receipt also includes its recorded sessions. */
 	launch(input: StageLaunchInput): Promise<StageLaunch>;
 	/**
 	 * Tokens an attempt an earlier controller ran is known to have used: its
-	 * receipt's total, else the gateway's audit tally. `null` when neither exists.
+	 * receipt's total, else its session receipts or gateway audit tallies. `null` when none exists.
 	 */
 	spent(input: {
 		readonly runId: Digest;
 		readonly stage: ModelStage;
 		readonly attempt: number;
 	}): Promise<number | null>;
+	/**
+	 * The final text of an execution of the attempt that passed and kept it,
+	 * so a restart can finish a stage without running it again. Untrusted.
+	 * `pending` resumes a recorded session sequence in the same attempt.
+	 */
+	output(input: {
+		readonly runId: Digest;
+		readonly stage: ModelStage;
+		readonly attempt: number;
+	}): Promise<string | { readonly kind: "pending" } | null>;
+	checkout(input: {
+		readonly runId: Digest;
+		readonly repo: RepoSlug;
+		readonly sha: GitSha;
+		readonly workspace: string;
+	}): Promise<CheckoutResult>;
 }
 
 /** An executor with no sandbox. Every launch is `sandbox_unavailable`, and no model runs. */
@@ -115,9 +179,17 @@ export const UNAVAILABLE_EXECUTOR: StageExecutor = {
 	async spent() {
 		return null;
 	},
+	async output() {
+		return null;
+	},
+	async checkout() {
+		return { kind: "unavailable" };
+	},
 };
 
-type StageEnd = Pick<StageResult, "kind" | "usage">;
+type StageEnd = Pick<StageResult, "kind" | "usage"> & {
+	readonly output: string | null;
+};
 
 function isModelStage(stage: Stage): stage is ModelStage {
 	return MODEL_STAGES.some((known) => known === stage);
@@ -139,6 +211,7 @@ export type ClaimRecord = {
 	readonly stage: Stage | null;
 	readonly attempt: number | null;
 	readonly usage: number | null;
+	readonly labelFailures?: number;
 };
 
 type ConfirmedRecord = ClaimRecord & { readonly seq: number };
@@ -152,7 +225,23 @@ type EndedRecord = {
 
 export type WorkspaceState = "present" | "missing" | "unavailable";
 
-/** Run files under the state directory: claim records and private workspaces. */
+export type Checkout = {
+	readonly files: readonly string[];
+	/** A listed file's text, or `null` when it is over `capBytes` or unreadable. */
+	read(path: string, capBytes: number): Promise<string | null>;
+};
+
+export type CheckoutResult =
+	| { readonly kind: "ready"; readonly checkout: Checkout }
+	| { readonly kind: "refused"; readonly reason: string }
+	| { readonly kind: "unavailable" };
+
+export type LinkRead =
+	| { readonly kind: "unlinked" }
+	| { readonly kind: "none" }
+	| { readonly kind: "found"; readonly link: Link }
+	| { readonly kind: "unreadable" };
+
 export interface RunFiles {
 	workspacePath(runId: Digest): string;
 	workspaceState(runId: Digest): Promise<WorkspaceState>;
@@ -162,6 +251,23 @@ export interface RunFiles {
 	): Promise<"present" | "created" | "unavailable">;
 	listClaims(): Promise<ClaimRecord[]>;
 	writeClaim(claim: ClaimRecord): Promise<boolean>;
+	/** Writes the contract and its receipt once. The same bytes again succeed. */
+	writeContract(input: {
+		readonly contract: Contract;
+		readonly bytes: string;
+		readonly digest: ContractDigest;
+	}): Promise<boolean>;
+	writeQuestions(input: {
+		readonly runId: Digest;
+		readonly questions: readonly Question[];
+		readonly digest: QuestionsDigest;
+	}): Promise<boolean>;
+	/** The link and answers are written before the claim, so they may be replaced until then. */
+	writeLink(runId: Digest, link: Link | null): Promise<boolean>;
+	readLink(runId: Digest): Promise<LinkRead>;
+	writeAnswers(record: AnswersRecord): Promise<boolean>;
+	/** The answers record, or `null` when it is missing or its digest does not match. */
+	readAnswers(runId: Digest): Promise<AnswersRecord | null>;
 }
 
 export type RetryCause = "stage_failed" | "stalled" | "interrupted";
@@ -180,7 +286,51 @@ export type RunPhase =
 			readonly reason: "sandbox_unavailable";
 	  }
 	| { readonly kind: "retry_queued"; readonly dueAt: number }
+	| { readonly kind: "recovering"; readonly output: string }
+	| {
+			readonly kind: "reporting";
+			readonly status: "stage_passed" | "needs_info";
+			readonly effects: Effects;
+	  }
 	| { readonly kind: "ending"; readonly status: TerminalStatus };
+
+export type Effects =
+	| {
+			readonly kind: "contract";
+			readonly contract: Contract;
+			readonly bytes: string;
+			readonly digest: ContractDigest;
+			readonly body: string;
+			stored: boolean;
+			posted: boolean;
+	  }
+	| {
+			readonly kind: "questions";
+			readonly questions: NonEmpty<Question>;
+			readonly digest: QuestionsDigest;
+			readonly body: string;
+			stored: boolean;
+			posted: boolean;
+			labeled: boolean;
+			unlabeled: boolean;
+			labelTick: number;
+	  };
+
+type StageInputs = {
+	readonly files: ReadonlySet<string>;
+	readonly source: SnapshotSource;
+	readonly link: Link | null;
+};
+
+type Prepared = {
+	readonly kind: "ready";
+	/** `null` for a launch the sandbox will refuse, which reads no input. */
+	readonly inputs: StageInputs | null;
+	readonly prompt: string;
+	readonly specify?: SpecifyReviewInput;
+};
+
+const UNPREPARED: Prepared = { kind: "ready", inputs: null, prompt: "" };
 
 type RunningPhase = Extract<RunPhase, { kind: "running" }>;
 
@@ -244,6 +394,10 @@ export type ActiveRun = {
 	 * release counts them first.
 	 */
 	adopted: boolean;
+	clearNeedsInfo: boolean;
+	labelFailures: number;
+	labelTick: number;
+	inputs: StageInputs | null;
 	phase: RunPhase;
 };
 
@@ -260,6 +414,10 @@ export type SeenIssue = {
 		| { readonly kind: "open"; readonly ledger: CleanLedger }
 		| { readonly kind: "claimed" }
 		| { readonly kind: "decided" }
+		| {
+				readonly kind: "refused";
+				readonly reason: "answers_record_invalid" | "link_record_invalid";
+		  }
 		| { readonly kind: "corrupt" };
 };
 
@@ -423,6 +581,36 @@ function settled(seen: SeenIssue): boolean {
 	return seen.observedAt >= Date.parse(seen.updatedAt) + 1000 + SETTLE_MS;
 }
 
+function isClarificationPredecessor(
+	prev: TrustedMarker,
+	admitted: AdmittedReceipt,
+	runId: Digest,
+): boolean {
+	return (
+		prev.marker.status === "needs_info" &&
+		prev.marker.runId !== runId &&
+		admitted.eventAt > prev.marker.eventAt
+	);
+}
+
+function isAnswerCandidate(
+	comment: IssueComment,
+	floor: bigint,
+	labelAt: string,
+): boolean {
+	return (
+		BigInt(comment.id) > floor &&
+		comment.author !== null &&
+		comment.author.type !== "Bot" &&
+		!isControllerComment(comment) &&
+		comment.createdAt <= labelAt
+	);
+}
+
+function answerEditPrecedesLabel(edit: CommentEdit, labelAt: string): boolean {
+	return edit.lastEditedAt === null || edit.lastEditedAt < labelAt;
+}
+
 function isReady(issue: IssueRecord): boolean {
 	return issue.open && !issue.pullRequest && issue.labels.includes(READY_LABEL);
 }
@@ -452,6 +640,8 @@ function refusalSettlesUntilEdited(reason: RefusalReason): boolean {
 		case "issue_closed":
 		case "actor_withheld":
 		case "unauthorized":
+		case "answers_record_invalid":
+		case "link_record_invalid":
 			return true;
 		case "ambiguous_snapshot":
 			return ambiguityRecursOnReread(reason.detail);
@@ -484,6 +674,7 @@ function ambiguityRecursOnReread(detail: Ambiguity): boolean {
 		case "renamed_since_label":
 		case "edited_at_label_time":
 		case "version_withheld":
+		case "answer_at_label_time":
 			return true;
 		case "rename_history_incomplete":
 		case "title_changed_between_reads":
@@ -512,6 +703,9 @@ function desiredStatus(phase: RunPhase): RunStatus {
 			return "blocked";
 		case "retry_queued":
 			return "retrying";
+		case "recovering":
+			return "running";
+		case "reporting":
 		case "ending":
 			return phase.status;
 		default: {
@@ -567,7 +761,7 @@ export type OrchestratorInput = {
 	exec: Exec;
 	env: EnvLookup;
 	repo: RepoSlug;
-	store: AdmissionStore;
+	store: AdmissionStore & SnapshotReader;
 	files: RunFiles;
 	executor: StageExecutor;
 	clock: Clock;
@@ -650,7 +844,10 @@ export class Orchestrator {
 	#unchanged(issue: number, updatedAt: string): boolean {
 		const seen = this.state.seen.get(issue);
 
-		return seen?.updatedAt === updatedAt && settled(seen);
+		return (
+			seen?.updatedAt === updatedAt &&
+			(seen.verdict.kind === "refused" || settled(seen))
+		);
 	}
 
 	#inScope(issue: number): boolean {
@@ -777,7 +974,9 @@ export class Orchestrator {
 		this.#countLateUsage();
 
 		for (const run of this.state.runs.values()) {
-			if (run.phase.kind === "ending") await this.#sync(run);
+			if (run.phase.kind === "ending" || run.phase.kind === "reporting") {
+				await this.#sync(run);
+			}
 		}
 
 		return this.#report(last);
@@ -915,7 +1114,29 @@ export class Orchestrator {
 		run: ActiveRun,
 		candidates: readonly IssueRecord[],
 	): Promise<Eligibility> {
-		if (run.phase.kind === "ending") return "unverified";
+		if (run.phase.kind === "recovering") {
+			const issue = await this.#adapter.readIssue(run.issue);
+
+			if (issue.kind === "failed") return "unverified";
+
+			if (!issue.value.open) {
+				this.#release(run, "closed");
+
+				return "released";
+			}
+
+			const recovered = await this.#recoverOutput(run, run.phase.output);
+			const limits = this.#limits();
+
+			if (!recovered && limits !== null)
+				this.#endStage(run, "interrupted", 0, limits);
+
+			return "unverified";
+		}
+
+		if (run.phase.kind === "ending" || run.phase.kind === "reporting") {
+			return "unverified";
+		}
 
 		let record = candidates.find((item) => item.number === run.issue);
 
@@ -1198,6 +1419,29 @@ export class Orchestrator {
 	#finishStage(run: ActiveRun, result: StageEnd, limits: Limits): void {
 		if (result.kind === "failed") {
 			this.#endStage(run, "stage_failed", result.usage, limits);
+
+			return;
+		}
+
+		if (result.kind === "passed" && run.stage === "specify") {
+			const reporting = this.#specified(run, result.output);
+
+			if (reporting === null) {
+				this.#endStage(run, "stage_failed", result.usage, limits);
+
+				return;
+			}
+
+			run.usage += result.usage;
+			this.state.totals.usage += result.usage;
+			run.phase = reporting;
+			this.#input.log("stage_ended", {
+				issue: run.issue,
+				runId: run.runId,
+				cause: result.kind,
+				next: reporting.status,
+				attempt: run.attempt,
+			});
 
 			return;
 		}
@@ -1704,6 +1948,10 @@ export class Orchestrator {
 			replay: false,
 			unsettled: null,
 			adopted: true,
+			clearNeedsInfo: false,
+			labelFailures: 0,
+			labelTick: 0,
+			inputs: null,
 			phase: { kind: "claimed" },
 		};
 
@@ -1797,6 +2045,7 @@ export class Orchestrator {
 
 		const workspace = await this.#input.files.workspaceState(marker.runId);
 		const seq = this.#seqFloor(marker.issue, ledger);
+		const local = this.#local.get(marker.issue);
 
 		const run: ActiveRun = {
 			runId: marker.runId,
@@ -1817,6 +2066,13 @@ export class Orchestrator {
 			replay: true,
 			unsettled: null,
 			adopted: true,
+			clearNeedsInfo:
+				input.issue.labels.includes(NEEDS_INFO_LABEL) &&
+				(await this.#input.files.readLink(marker.runId)).kind === "found",
+			labelFailures:
+				local?.runId === marker.runId ? (local.labelFailures ?? 0) : 0,
+			labelTick: 0,
+			inputs: null,
 			phase:
 				marker.status === "blocked"
 					? { kind: "blocked", reason: "sandbox_unavailable" }
@@ -1838,14 +2094,46 @@ export class Orchestrator {
 		const limits = this.#limits();
 		const releasing = eligibility !== "current" && eligibility !== "unverified";
 
+		const output =
+			marker.status === "running" && isModelStage(run.stage)
+				? await this.#input.executor
+						.output({
+							runId: run.runId,
+							stage: run.stage,
+							attempt: run.attempt,
+						})
+						.catch(() => null)
+				: null;
+
 		await this.#accountAdopted(
 			run,
 			marker,
 			ledger,
-			marker.status === "running" && (releasing || limits !== null),
+			marker.status === "running" &&
+				(releasing || limits !== null) &&
+				(releasing || !(output instanceof Object)),
 		);
 
-		if (eligibility !== "current" && eligibility !== "unverified") {
+		const recovered =
+			limits !== null &&
+			marker.status === "running" &&
+			eligibility !== "closed" &&
+			eligibility !== "new_event" &&
+			(await this.#recoverOutput(run, output));
+
+		if (recovered) {
+			this.#input.log(
+				run.phase.kind === "recovering"
+					? "stage_recovery_wait"
+					: "stage_recovered",
+				{
+					issue: run.issue,
+					runId: run.runId,
+					attempt: run.attempt,
+					next: desiredStatus(run.phase),
+				},
+			);
+		} else if (eligibility !== "current" && eligibility !== "unverified") {
 			this.#release(run, eligibility);
 		} else if (limits !== null && marker.status === "running") {
 			this.#endStage(run, "interrupted", 0, limits);
@@ -2177,6 +2465,48 @@ export class Orchestrator {
 			return null;
 		}
 
+		const link = await this.#link({ issue, ledger, admitted, runId });
+
+		if (link.kind === "defer") return null;
+
+		if (link.kind === "invalid") {
+			input.refused.push({ issue, reasons: [link.reason] });
+			this.#input.log("admission_refused", {
+				issue,
+				reasons: link.reason,
+				detail: link.detail,
+				retry: false,
+			});
+			this.#see(issue, record.updatedAt, {
+				kind: "refused",
+				reason: link.reason,
+			});
+
+			return null;
+		}
+
+		if (link.kind === "ambiguous") {
+			input.refused.push({ issue, reasons: ["ambiguous_snapshot"] });
+			this.#input.log("admission_refused", {
+				issue,
+				reasons: "ambiguous_snapshot",
+				detail: "answer_at_label_time",
+				retry: false,
+			});
+			this.#see(issue, record.updatedAt, { kind: "decided" });
+
+			return null;
+		}
+
+		if (
+			link.kind === "none" &&
+			!(await this.#input.files.writeLink(runId, null))
+		) {
+			this.#input.log("link_unwritable", { issue, runId });
+
+			return null;
+		}
+
 		const run: ActiveRun = {
 			runId,
 			issue,
@@ -2196,6 +2526,10 @@ export class Orchestrator {
 			replay: false,
 			unsettled: null,
 			adopted: false,
+			clearNeedsInfo: link.kind === "linked",
+			labelFailures: 0,
+			labelTick: 0,
+			inputs: null,
 			phase: { kind: "claimed" },
 		};
 
@@ -2215,11 +2549,301 @@ export class Orchestrator {
 		});
 		await this.#sync(run);
 
+		if (link.kind === "linked") {
+			this.#input.log("run_linked", {
+				issue,
+				runId,
+				prevRunId: link.link.prevRunId,
+				answers: link.answers,
+			});
+			await this.#clearNeedsInfo(run);
+		}
+
 		if ((await this.#input.files.ensureWorkspace(runId)) === "unavailable") {
 			this.#input.log("workspace_unavailable", { issue, runId });
 		}
 
 		return run;
+	}
+
+	async #labelOutcome(
+		run: ActiveRun,
+		label: string,
+		outcome: "posted" | "rejected" | "unknown",
+		critical = true,
+	): Promise<boolean> {
+		const fields = { issue: run.issue, runId: run.runId, label, outcome };
+
+		this.#input.log("label_write", fields);
+
+		if (critical) {
+			run.labelFailures = outcome === "posted" ? 0 : run.labelFailures + 1;
+			await this.#writeClaim(run);
+		}
+
+		if (outcome !== "posted") this.#input.log("label_unconfirmed", fields);
+
+		return outcome === "posted";
+	}
+
+	#labelsExhausted(run: ActiveRun): boolean {
+		if (
+			run.labelFailures < (this.#limits()?.maxAttempts ?? DEFAULTS.maxAttempts)
+		)
+			return false;
+
+		run.phase = { kind: "ending", status: "failed" };
+		this.state.totals.failures++;
+		this.#input.log("label_retries_exhausted", {
+			issue: run.issue,
+			runId: run.runId,
+			failures: run.labelFailures,
+		});
+
+		return true;
+	}
+
+	async #clearNeedsInfo(run: ActiveRun): Promise<boolean> {
+		if (!run.clearNeedsInfo) return true;
+
+		if (run.labelTick === this.#ticks) return false;
+
+		run.labelTick = this.#ticks;
+
+		const removed = await this.#writer.removeLabel(run.issue, NEEDS_INFO_LABEL);
+
+		run.clearNeedsInfo = !(await this.#labelOutcome(
+			run,
+			NEEDS_INFO_LABEL,
+			removed.kind,
+			false,
+		));
+
+		return !run.clearNeedsInfo;
+	}
+
+	async #answerHistory(
+		runId: Digest,
+		ledger: CleanLedger,
+	): Promise<readonly AnswersRecord[] | "previous_link" | "previous_answers"> {
+		const records: AnswersRecord[] = [];
+		const visited = new Set<Digest>();
+		let current = runId;
+
+		for (;;) {
+			if (visited.has(current)) return "previous_link";
+
+			visited.add(current);
+
+			const first = ledger.markers.find(
+				({ marker }) => marker.runId === current,
+			);
+
+			const earlier = ledger.markers.findLast(
+				({ marker }) =>
+					marker.seq < (first?.marker.seq ?? 0) && isTerminal(marker.status),
+			);
+
+			const linked = await this.#input.files.readLink(current);
+
+			if (linked.kind === "unreadable") return "previous_link";
+
+			if (linked.kind === "unlinked") return records.reverse();
+
+			if (linked.kind === "none") {
+				return (await this.#input.files.readAnswers(current)) === null
+					? records.reverse()
+					: "previous_link";
+			}
+
+			if (
+				earlier?.marker.status === "needs_info" &&
+				earlier.marker.runId !== linked.link.prevRunId
+			)
+				return "previous_link";
+
+			const answers = await this.#input.files.readAnswers(current);
+
+			if (
+				answers === null ||
+				answers.runId !== current ||
+				answers.prevRunId !== linked.link.prevRunId ||
+				answers.digest !== linked.link.answersDigest ||
+				answersDigestOf(answers) !== answers.digest
+			)
+				return "previous_answers";
+
+			records.push(answers);
+			current = linked.link.prevRunId;
+		}
+	}
+
+	async #link(input: {
+		issue: number;
+		ledger: CleanLedger;
+		admitted: AdmittedReceipt;
+		runId: Digest;
+	}): Promise<
+		| { readonly kind: "none" }
+		| { readonly kind: "defer" }
+		| { readonly kind: "ambiguous" }
+		| {
+				readonly kind: "invalid";
+				readonly reason: "answers_record_invalid" | "link_record_invalid";
+				readonly detail: "previous_answers" | "previous_link";
+		  }
+		| { readonly kind: "linked"; readonly link: Link; readonly answers: number }
+	> {
+		const { issue, admitted, runId } = input;
+
+		const prev: TrustedMarker | undefined = input.ledger.markers.findLast(
+			({ marker }) => isTerminal(marker.status),
+		);
+
+		if (
+			prev === undefined ||
+			!isClarificationPredecessor(prev, admitted, runId)
+		) {
+			return { kind: "none" };
+		}
+
+		if (admitted.eventAt === prev.createdAt) return { kind: "ambiguous" };
+
+		const comments = await this.#adapter.readComments(issue);
+
+		if (comments.kind === "failed") return { kind: "defer" };
+
+		const prevRunId = prev.marker.runId;
+
+		const asked = comments.value.find(
+			(comment) =>
+				isControllerComment(comment) &&
+				questionsKeyOf(comment.body)?.runId === prevRunId,
+		);
+
+		if (
+			admitted.eventAt < prev.createdAt &&
+			(asked === undefined || admitted.eventAt <= asked.createdAt)
+		) {
+			return { kind: "none" };
+		}
+
+		const floor = BigInt(asked?.id ?? prev.commentId);
+
+		const candidates = comments.value
+			.filter((comment) => isAnswerCandidate(comment, floor, admitted.eventAt))
+			.sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
+
+		if (candidates.some((comment) => comment.createdAt === admitted.eventAt)) {
+			return { kind: "ambiguous" };
+		}
+
+		const edits = await this.#adapter.readCommentEdits(
+			candidates.map((comment) => comment.nodeId),
+		);
+
+		if (edits.kind === "failed") return { kind: "defer" };
+
+		const history = await this.#answerHistory(prevRunId, input.ledger);
+
+		if (history === "previous_link" || history === "previous_answers") {
+			return {
+				kind: "invalid",
+				reason:
+					history === "previous_link"
+						? "link_record_invalid"
+						: "answers_record_invalid",
+				detail: history,
+			};
+		}
+
+		const previousAnswers = history.at(-1);
+		const answers: Answer[] = [...(previousAnswers?.answers ?? [])];
+		const permissions = new Map<string, boolean>();
+
+		for (const comment of candidates) {
+			if (answers.length >= MAX_ANSWERS) break;
+			const edit = edits.value.get(comment.nodeId);
+			const login = comment.author?.login ?? "";
+
+			if (edit === undefined || edit.id !== comment.id) {
+				return { kind: "defer" };
+			}
+
+			if (!answerEditPrecedesLabel(edit, admitted.eventAt) || !isLogin(login)) {
+				continue;
+			}
+
+			let authorized = permissions.get(login.toLowerCase());
+
+			if (authorized === undefined) {
+				const permission = await this.#adapter.readPermission(login);
+
+				if (permission.kind === "failed") return { kind: "defer" };
+
+				authorized = hasWriteAccess(permission.value);
+				permissions.set(login.toLowerCase(), authorized);
+			}
+
+			if (!authorized) continue;
+
+			answers.push({
+				commentId: comment.id,
+				author: login,
+				createdAt: comment.createdAt,
+				body: answerBody(comment.body),
+			});
+
+			if (answers.length === MAX_ANSWERS) break;
+		}
+
+		const questions = asked === undefined ? "" : withoutKey(asked.body);
+
+		const rounds = [
+			...history.map((record, index) => ({
+				questions: record.questions,
+				answers: record.answers.slice(history[index - 1]?.answers.length ?? 0),
+			})),
+			{
+				questions,
+				answers: answers.slice(previousAnswers?.answers.length ?? 0),
+			},
+		];
+
+		const digest = answersDigestOf({ prevRunId, questions, answers, rounds });
+
+		const record: AnswersRecord = {
+			version: 1,
+			runId,
+			prevRunId,
+			questionsCommentId: asked?.id ?? null,
+			questions,
+			answers,
+			rounds,
+			digest,
+		};
+
+		const link: Link = {
+			prevRunId,
+			questionsDigest:
+				asked === undefined
+					? null
+					: (questionsKeyOf(asked.body)?.digest ?? null),
+			answersDigest: digest,
+		};
+
+		const { files } = this.#input;
+
+		if (
+			!(await files.writeAnswers(record)) ||
+			!(await files.writeLink(runId, link))
+		) {
+			this.#input.log("link_unwritable", { issue, runId });
+
+			return { kind: "defer" };
+		}
+
+		return { kind: "linked", link, answers: answers.length };
 	}
 
 	async #prepareWorkspace(run: ActiveRun): Promise<WorkspacePreparation> {
@@ -2311,6 +2935,22 @@ export class Orchestrator {
 			return true;
 		}
 
+		await this.#clearNeedsInfo(run);
+
+		const prepared = this.#enabled ? await this.#stageInputs(run) : UNPREPARED;
+
+		if (prepared.kind === "wait") return false;
+
+		if (prepared.kind === "fail") {
+			run.phase = { kind: "ending", status: "failed" };
+			this.state.totals.failures++;
+			await this.#sync(run);
+
+			return false;
+		}
+
+		run.inputs = prepared.inputs;
+
 		const abort = new AbortController();
 		const now = clock.now();
 
@@ -2327,6 +2967,10 @@ export class Orchestrator {
 			stage,
 			attempt: run.attempt,
 			workspace: files.workspacePath(run.runId),
+			prompt: prepared.prompt,
+			specify: prepared.specify,
+			tools: prepared.inputs === null ? [] : SPECIFY_TOOLS,
+			skills: prepared.inputs === null ? [] : SPECIFY_SKILLS,
 			settings: {
 				model: config.stages[stage].model,
 				fallback: config.stages[stage].fallbackModel,
@@ -2353,12 +2997,25 @@ export class Orchestrator {
 			run.unsettled = null;
 			run.adopted = false;
 
+			const attempt = run.attempt;
+
 			const settled = launch.done.then(
-				(result) => {
-					phase.result = { kind: result.kind, usage: prior + result.usage };
+				async (result) => {
+					const output =
+						result.kind === "passed"
+							? await executor
+									.output({ runId: run.runId, stage, attempt })
+									.catch(() => null)
+							: null;
+
+					phase.result = {
+						kind: result.kind,
+						usage: prior + result.usage,
+						output: output instanceof Object ? null : output,
+					};
 				},
 				() => {
-					phase.result = { kind: "failed", usage: phase.usage };
+					phase.result = { kind: "failed", usage: phase.usage, output: null };
 				},
 			);
 
@@ -2396,6 +3053,24 @@ export class Orchestrator {
 
 		if ((await this.#recoverUncertainPost(run)) === "stop") return;
 
+		if (
+			run.marked !== null &&
+			run.phase.kind !== "ending" &&
+			run.phase.kind !== "recovering"
+		) {
+			await this.#clearNeedsInfo(run);
+		}
+
+		if (run.phase.kind === "reporting" && !this.#labelsExhausted(run)) {
+			const { status, effects } = run.phase;
+
+			if (await this.#applyEffects(run, effects)) {
+				run.phase = { kind: "ending", status };
+			} else if (!this.#labelsExhausted(run)) {
+				return;
+			}
+		}
+
 		await this.#publishMarker(run);
 
 		if (run.marked !== null && isTerminal(run.marked.status)) {
@@ -2404,6 +3079,409 @@ export class Orchestrator {
 		} else if (run.seq !== before) {
 			await this.#writeClaim(run);
 		}
+	}
+
+	async #stageInputs(
+		run: ActiveRun,
+	): Promise<Prepared | { readonly kind: "wait" } | { readonly kind: "fail" }> {
+		const { files, repo } = this.#input;
+		const fields = { issue: run.issue, runId: run.runId };
+
+		const wait = (why: string) => {
+			this.#input.log("stage_inputs_unavailable", { ...fields, why });
+
+			return { kind: "wait" } as const;
+		};
+
+		const fail = (why: string) => {
+			this.#input.log("stage_inputs_refused", { ...fields, why });
+
+			return { kind: "fail" } as const;
+		};
+
+		if (run.stage !== "specify") return fail("no_prompt");
+
+		const checked = await this.#input.executor
+			.checkout({
+				runId: run.runId,
+				repo,
+				sha: run.workflowSha,
+				workspace: files.workspacePath(run.runId),
+			})
+			.catch((): CheckoutResult => ({ kind: "unavailable" }));
+
+		if (checked.kind === "unavailable") return wait("checkout");
+
+		if (checked.kind === "refused") return fail(`checkout_${checked.reason}`);
+
+		const { checkout } = checked;
+		const workflow = await checkout.read(WORKFLOW_PATH, 256 * 1024);
+
+		if (workflow === null || digestOf(workflow) !== run.workflowDigest) {
+			return fail("workflow_mismatch");
+		}
+
+		const parsed = parseWorkflow({
+			text: workflow,
+			repo,
+			env: this.#input.env,
+		});
+
+		if (parsed.kind === "invalid") return fail("workflow_invalid");
+
+		const stored = await this.#input.store.readSnapshot({
+			repo,
+			issue: run.issue,
+			eventId: run.eventId,
+		});
+
+		if (stored.kind !== "found") return wait("snapshot");
+
+		if (stored.receipt.snapshotDigest !== run.snapshotDigest) {
+			return fail("snapshot_mismatch");
+		}
+
+		const linked = await files.readLink(run.runId);
+
+		if (linked.kind === "unreadable") return wait("link");
+
+		const link = linked.kind === "found" ? linked.link : null;
+		const answers = link === null ? null : await files.readAnswers(run.runId);
+
+		if (
+			link !== null &&
+			(answers === null || answers.digest !== link.answersDigest)
+		) {
+			return wait("answers");
+		}
+
+		const set = new Set(checkout.files);
+		const { title, body } = stored.snapshot;
+		const readme = checkout.files.find((path) => /^readme\.md$/i.test(path));
+
+		const wanted = [
+			...(readme === undefined ? [] : [readme]),
+			...namedFiles(
+				[title, body, ...(answers?.answers ?? []).map((a) => a.body)].join(
+					"\n",
+				),
+				set,
+			),
+		];
+
+		const shown: InlinedFile[] = [];
+		let budget = INLINE_TOTAL_BYTES;
+
+		for (const path of new Set(wanted)) {
+			const text = await checkout.read(path, NAMED_FILE_READ_BYTES);
+
+			if (text === null || budget < 1024) continue;
+
+			const file = inlined(path, text, Math.min(NAMED_FILE_BYTES, budget));
+
+			budget -= Buffer.byteLength(file.text, "utf8");
+			shown.push(file);
+		}
+
+		return {
+			kind: "ready",
+			inputs: { files: set, source: stored.receipt.snapshotSource, link },
+			specify: { title, body, answers, files: checkout.files },
+			prompt: specifyPrompt({
+				repo,
+				baseSha: run.workflowSha,
+				guidance: parsed.guidance,
+				files: checkout.files,
+				inlined: shown,
+				title,
+				body,
+				answers,
+			}),
+		};
+	}
+
+	#specified(
+		run: ActiveRun,
+		output: string | null,
+	): Extract<RunPhase, { kind: "reporting" }> | null {
+		const inputs = run.inputs;
+		const fields = { issue: run.issue, runId: run.runId, attempt: run.attempt };
+
+		if (output === null || inputs === null) {
+			this.#input.log("specify_malformed", { ...fields, reason: "no_output" });
+
+			return null;
+		}
+
+		const parsed = parseSpecifyOutput(output, inputs.files);
+		const repo = this.#input.repo;
+
+		if (parsed.kind === "questions") {
+			run.clearNeedsInfo = false;
+			const digest = questionsDigestOf(parsed.questions);
+
+			const body = renderQuestions({
+				repo,
+				sha: run.workflowSha,
+				runId: run.runId,
+				questions: parsed.questions,
+				digest,
+			});
+
+			if (body !== null) {
+				return {
+					kind: "reporting",
+					status: "needs_info",
+					effects: {
+						kind: "questions",
+						questions: parsed.questions,
+						digest,
+						body,
+						stored: false,
+						posted: false,
+						labeled: false,
+						unlabeled: false,
+						labelTick: 0,
+					},
+				};
+			}
+		}
+
+		if (parsed.kind === "contract") {
+			const contract: Contract = {
+				version: CONTRACT_VERSION,
+				runId: run.runId,
+				issue: run.issue,
+				base: { repo, sha: run.workflowSha },
+				snapshot: {
+					digest: run.snapshotDigest,
+					source: inputs.source,
+					eventId: run.eventId,
+					eventAt: run.eventAt,
+				},
+				link: inputs.link,
+				...parsed.draft,
+			};
+
+			const bytes = contractBytes(contract);
+			const digest = contractDigestOf(bytes);
+
+			const body = renderSummary({
+				runId: run.runId,
+				contract: parsed.draft,
+				digest,
+			});
+
+			if (body !== null) {
+				return {
+					kind: "reporting",
+					status: "stage_passed",
+					effects: {
+						kind: "contract",
+						contract,
+						bytes,
+						digest,
+						body,
+						stored: false,
+						posted: false,
+					},
+				};
+			}
+		}
+
+		this.#input.log("specify_malformed", {
+			...fields,
+			reason: parsed.kind === "malformed" ? parsed.reason : "too_large_to_post",
+		});
+
+		return null;
+	}
+
+	async #recoverOutput(
+		run: ActiveRun,
+		output: string | { readonly kind: "pending" } | null,
+	): Promise<boolean> {
+		const stage = run.stage;
+
+		if (stage !== "specify") return false;
+
+		if (output === null) return false;
+
+		if (output instanceof Object) {
+			run.phase = { kind: "claimed" };
+
+			return true;
+		}
+
+		const prepared = await this.#stageInputs(run);
+
+		if (prepared.kind === "wait") {
+			run.phase = { kind: "recovering", output };
+
+			return true;
+		}
+
+		if (prepared.kind === "fail") {
+			run.phase = { kind: "ending", status: "failed" };
+			this.state.totals.failures++;
+
+			return true;
+		}
+
+		if (prepared.inputs === null) return false;
+
+		run.inputs = prepared.inputs;
+
+		const reporting = this.#specified(run, output);
+
+		if (reporting === null) return false;
+
+		run.phase = reporting;
+
+		return true;
+	}
+
+	async #hasKeyed(issue: number, key: string): Promise<boolean | null> {
+		const comments = await this.#adapter.readComments(issue);
+
+		if (comments.kind === "failed") return null;
+
+		return comments.value.some(
+			(comment) =>
+				isControllerComment(comment) &&
+				comment.body.trimEnd().split("\n").at(-1) === key,
+		);
+	}
+
+	async #postKeyed(
+		run: ActiveRun,
+		key: string,
+		body: string,
+	): Promise<boolean> {
+		const found = await this.#hasKeyed(run.issue, key);
+
+		if (found === null) return false;
+
+		if (found) return true;
+
+		const post = await this.#writer.postComment(run.issue, body);
+
+		if (post.kind !== "posted") {
+			this.#input.log("comment_unconfirmed", {
+				issue: run.issue,
+				runId: run.runId,
+				outcome: post.kind,
+			});
+		}
+
+		return post.kind === "posted";
+	}
+
+	async #applyEffects(run: ActiveRun, effects: Effects): Promise<boolean> {
+		const { files } = this.#input;
+		const fields = { issue: run.issue, runId: run.runId };
+
+		if (effects.kind === "contract") {
+			effects.stored ||= await files.writeContract(effects);
+
+			if (!effects.stored) {
+				this.#input.log("contract_unwritable", fields);
+
+				return false;
+			}
+
+			this.#input.log("contract_stored", { ...fields, digest: effects.digest });
+
+			effects.posted ||= await this.#postKeyed(
+				run,
+				contractKey(run.runId, effects.digest),
+				effects.body,
+			);
+
+			return effects.posted;
+		}
+
+		effects.stored ||= await files.writeQuestions({
+			runId: run.runId,
+			questions: effects.questions,
+			digest: effects.digest,
+		});
+
+		if (!effects.stored) {
+			this.#input.log("questions_unwritable", fields);
+
+			return false;
+		}
+
+		effects.posted ||= await this.#postKeyed(
+			run,
+			questionsKey(run.runId, effects.digest),
+			effects.body,
+		);
+
+		if (!effects.posted) return false;
+
+		if (effects.unlabeled) return true;
+
+		if (effects.labelTick === this.#ticks) return false;
+
+		effects.labelTick = this.#ticks;
+
+		if (!effects.labeled) {
+			const issue = await this.#adapter.readIssue(run.issue);
+
+			if (issue.kind === "failed") return false;
+
+			effects.labeled = issue.value.labels.includes(NEEDS_INFO_LABEL);
+		}
+
+		if (!effects.labeled) {
+			const added = await this.#writer.addLabels(run.issue, [NEEDS_INFO_LABEL]);
+
+			effects.labeled = await this.#labelOutcome(
+				run,
+				NEEDS_INFO_LABEL,
+				added.kind,
+			);
+		}
+
+		if (!effects.labeled) return false;
+
+		const timeline = await this.#adapter.readTimeline(run.issue);
+
+		if (timeline.kind === "failed") return false;
+
+		const latest = latestReadyEntry(timeline.value);
+
+		if (latest.kind !== "found") {
+			effects.unlabeled = true;
+			this.#input.log("ready_label_preserved", { ...fields, why: latest.kind });
+
+			return true;
+		}
+
+		if (latest.entry.kind === "unlabeled" || latest.entry.id !== run.eventId) {
+			effects.unlabeled = true;
+			this.#input.log(
+				latest.entry.kind === "unlabeled"
+					? "ready_label_already_removed"
+					: "ready_label_preserved",
+				{
+					...fields,
+					eventId: latest.entry.id,
+				},
+			);
+		} else {
+			const removed = await this.#writer.removeLabel(run.issue, READY_LABEL);
+
+			effects.unlabeled = await this.#labelOutcome(
+				run,
+				READY_LABEL,
+				removed.kind,
+			);
+		}
+
+		return effects.unlabeled;
 	}
 
 	async #writeClaim(run: ActiveRun): Promise<void> {
@@ -2531,7 +3609,15 @@ export class Orchestrator {
 			runs,
 			queued: input.queued,
 			absent: input.absent,
-			refused: input.refused,
+			refused: [
+				...input.refused,
+				...[...this.state.seen.entries()].flatMap(([issue, seen]) =>
+					seen.verdict.kind === "refused" &&
+					!input.refused.some((entry) => entry.issue === issue)
+						? [{ issue, reasons: [seen.verdict.reason] }]
+						: [],
+				),
+			],
 			corrupt: [...this.state.corrupt.entries()]
 				.sort(([left], [right]) => left - right)
 				.map(([issue, entry]) => ({ issue, defect: entry.defect })),
@@ -2544,7 +3630,7 @@ export class Orchestrator {
 }
 
 function claimOf(run: ActiveRun): ClaimRecord {
-	return {
+	const claim: ClaimRecord = {
 		runId: run.runId,
 		issue: run.issue,
 		eventId: run.eventId,
@@ -2554,6 +3640,10 @@ function claimOf(run: ActiveRun): ClaimRecord {
 		attempt: run.marked?.attempt ?? null,
 		usage: run.marked?.usage ?? null,
 	};
+
+	return run.labelFailures === 0
+		? claim
+		: { ...claim, labelFailures: run.labelFailures };
 }
 
 function recordOf(marker: Marker): ConfirmedRecord {

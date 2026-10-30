@@ -28,13 +28,14 @@ export const RUN_STATUSES = [
 	"failed",
 	"budget_exhausted",
 	"stage_passed",
+	"needs_info",
 ] as const;
 
 export type RunStatus = (typeof RUN_STATUSES)[number];
 
 export type TerminalStatus = Extract<
 	RunStatus,
-	"released" | "failed" | "budget_exhausted" | "stage_passed"
+	"released" | "failed" | "budget_exhausted" | "stage_passed" | "needs_info"
 >;
 
 export function isTerminal(status: RunStatus): status is TerminalStatus {
@@ -42,7 +43,8 @@ export function isTerminal(status: RunStatus): status is TerminalStatus {
 		status === "released" ||
 		status === "failed" ||
 		status === "budget_exhausted" ||
-		status === "stage_passed"
+		status === "stage_passed" ||
+		status === "needs_info"
 	);
 }
 
@@ -178,7 +180,9 @@ const STATUS_TEXT: Readonly<Record<RunStatus, string>> = {
 	released: "released: the issue is no longer eligible",
 	failed: "failed: retries are exhausted",
 	budget_exhausted: "stopped: the run budget is spent",
-	stage_passed: "stopped: stage passed; later stages are not installed",
+	stage_passed: "stopped: stage passed; the next stage is not installed",
+	needs_info:
+		"stopped: questions are on the issue; answer them and add factory:ready again",
 };
 
 /** The full comment body: the marker line, then one line a person can read. */

@@ -11,6 +11,7 @@ import {
 	type CommentPost,
 	type FactoryEvent,
 	type JsonValue,
+	type LabelWrite,
 	type Ticket,
 	type TicketReader,
 	type TicketState,
@@ -949,5 +950,57 @@ export class GitHubTicketWriter implements TicketWriter {
 		const id = idOf(pathOf(parseJson(result.stdout), ["id"]));
 
 		return id === null ? { kind: "unknown" } : { kind: "posted", id };
+	}
+
+	async #write(
+		args: readonly string[],
+		absentIsDone: boolean,
+	): Promise<LabelWrite> {
+		let result: ExecResult;
+
+		try {
+			result = await this.#exec("gh", args);
+		} catch {
+			return { kind: "rejected" };
+		}
+
+		if (result.code === 0) return { kind: "posted" };
+
+		const { status } = ghFailure(result);
+
+		if (status === 404 && absentIsDone) return { kind: "posted" };
+
+		return status !== null && status >= 400 && status < 500
+			? { kind: "rejected" }
+			: { kind: "unknown" };
+	}
+
+	async addLabels(
+		issue: number,
+		names: readonly string[],
+	): Promise<LabelWrite> {
+		return this.#write(
+			[
+				"api",
+				"--method",
+				"POST",
+				`repos/${this.repo}/issues/${issue}/labels`,
+				...names.flatMap((name) => ["-f", `labels[]=${name}`]),
+			],
+			false,
+		);
+	}
+
+	/** GitHub answers 404 for a label that is not on the issue: already removed. */
+	async removeLabel(issue: number, name: string): Promise<LabelWrite> {
+		return this.#write(
+			[
+				"api",
+				"--method",
+				"DELETE",
+				`repos/${this.repo}/issues/${issue}/labels/${encodeURIComponent(name)}`,
+			],
+			true,
+		);
 	}
 }

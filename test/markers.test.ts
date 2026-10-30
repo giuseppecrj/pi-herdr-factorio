@@ -11,6 +11,7 @@ import {
 	MARKER_PREFIX,
 	markerLedger,
 	parseMarker,
+	RUN_STATUSES,
 } from "../src/markers.ts";
 import { digestOf, runIdOf } from "../src/run.ts";
 import type { JsonValue } from "../src/tickets.ts";
@@ -103,6 +104,87 @@ function ledgerOf(
 	return markerLedger({ repo, issue: 14, comments, edits });
 }
 
+describe("needs_info status", () => {
+	it("is a terminal status that round-trips and tells the owner how to resume", () => {
+		const body = formatMarker(marker({ status: "needs_info", seq: 3 }));
+
+		assert.ok(RUN_STATUSES.includes("needs_info"));
+		assert.ok(isTerminal("needs_info"));
+		assert.deepEqual(parseMarker(body), {
+			kind: "marker",
+			marker: marker({ status: "needs_info", seq: 3 }),
+		});
+		assert.match(
+			body,
+			/ is stopped: questions are on the issue; answer them and add factory:ready again\. /,
+		);
+	});
+
+	it("keeps every earlier status, so markers already on issues still parse", () => {
+		assert.deepEqual(
+			[...RUN_STATUSES],
+			[
+				"claimed",
+				"running",
+				"blocked",
+				"retrying",
+				"released",
+				"failed",
+				"budget_exhausted",
+				"stage_passed",
+				"needs_info",
+			],
+		);
+	});
+
+	it("rejects a marker after a run's needs_info as after_terminal", () => {
+		const ledger = ledgerOf([
+			comment(formatMarker(marker({ status: "needs_info", seq: 1 }))),
+			comment(formatMarker(marker({ status: "running", seq: 2 }))),
+		]);
+
+		assert.equal(ledger.kind === "corrupt" && ledger.defect, "after_terminal");
+	});
+});
+
+describe("keyed specify comments in the ledger", () => {
+	const key = `<!-- factory-questions run=${runId} q=${"d".repeat(64)} -->`;
+
+	it("ignores a controller comment whose hidden key trails the body", () => {
+		const ledger = ledgerOf([
+			comment(formatMarker(marker())),
+			comment(`The factory needs answers.\n\n1. Which one?\n\n${key}\n`),
+		]);
+
+		assert.equal(ledger.kind, "clean");
+		assert.equal(ledger.kind === "clean" && ledger.markers.length, 1);
+	});
+
+	it("marks the issue corrupt when a controller comment starts with <!-- factory:", () => {
+		const ledger = ledgerOf([
+			comment(`<!-- factory:questions run=${runId} -->\n1. Which one?\n`),
+		]);
+
+		assert.equal(ledger.kind === "corrupt" && ledger.defect, "malformed");
+	});
+
+	it("marks the issue corrupt when someone edits the questions comment", () => {
+		const asked = comment(`1. Which one?\n\n${key}\n`);
+		const edits = unedited([asked]);
+
+		edits.set(asked.nodeId, {
+			id: asked.id,
+			issue: 14,
+			repo,
+			lastEditedAt: "2026-10-29T03:00:00Z",
+		});
+
+		const ledger = ledgerOf([asked], edits);
+
+		assert.equal(ledger.kind === "corrupt" && ledger.defect, "edited");
+	});
+});
+
 describe("marker format", () => {
 	it("round-trips every field", () => {
 		const written = marker({ status: "blocked", seq: 4, attempt: 2, usage: 7 });
@@ -127,7 +209,7 @@ describe("marker format", () => {
 
 		assert.match(
 			passed,
-			/ is stopped: stage passed; later stages are not installed\. Stage specify, attempt 1\.\n$/,
+			/ is stopped: stage passed; the next stage is not installed\. Stage specify, attempt 1\.\n$/,
 		);
 		assert.deepEqual(parseMarker(passed), {
 			kind: "marker",

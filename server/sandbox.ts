@@ -26,13 +26,30 @@ import type {
 } from "../src/orchestrator.ts";
 import type { Digest } from "../src/run.ts";
 import {
+	parseSpecifyOutput,
+	parseReviewOutput,
+	reviewPrompt,
+	revisionPrompt,
+} from "../src/specify.ts";
+import {
 	type ModelId,
 	type ModelStage,
 	STAGE_CLEANUP_RESERVE_MS,
 } from "../src/workflow.ts";
-import { HERDR_AGENTS, PI_AGENT_DIR } from "./sandbox/assets/pi.ts";
+import {
+	checkoutWorkspace,
+	ghTarball,
+	type TarballFetch,
+} from "./controller.ts";
+import { PI_AGENT_DIR } from "./sandbox/assets/pi.ts";
 import { AUDIT_CAP_BYTES } from "./sandbox/audit.ts";
-import { countOf, fieldOf, objectOf, parseJson } from "./sandbox/json.ts";
+import {
+	countOf,
+	fieldOf,
+	objectOf,
+	parseJson,
+	textOf,
+} from "./sandbox/json.ts";
 import { manifestDigest, PINNED_VERSIONS } from "./sandbox/manifest.ts";
 import { readUsernsLimit, runPreflight } from "./sandbox/preflight.ts";
 import { BUNDLE, bwrapArgv } from "./sandbox/bwrap.ts";
@@ -50,6 +67,7 @@ import type {
 	BudgetCap,
 	FailedExit,
 	FallbackRecord,
+	OutputRecord,
 	PinnedVersions,
 	RefusalSignal,
 	SessionOutcome,
@@ -100,6 +118,15 @@ export const STDERR_CAP_BYTES = 64 * 1024;
 
 const PROMPT_ID = "factory-prompt";
 
+export const STAGE_SYSTEM_PROMPT =
+	"You are one stage of a software factory, running in a sandbox. Follow the user message exactly, and use only the tools it allows.";
+
+const OUTPUT_ID = "factory-output";
+
+export const OUTPUT_MAX_BYTES = 256 * 1024;
+
+const OUTPUT_WAIT_MS = 5_000;
+
 const ABORT_WAIT_MS = 5_000;
 
 const EXIT_WAIT_MS = 2_000;
@@ -129,6 +156,7 @@ export interface StageHost {
 		sessionFile: string,
 	): Promise<ChildUsage | null>;
 	writeReceipt(receipt: StageReceipt): Promise<boolean>;
+	writeOutput(text: string): Promise<boolean>;
 	stderrLog(session: number): Promise<StderrRecord | null>;
 }
 
@@ -184,6 +212,7 @@ type SessionReport = {
 	readonly refusal: RefusalSignal | null;
 	readonly settlement: Settlement;
 	readonly observed: string | null;
+	readonly text: string | null;
 };
 
 function capFor(stage: StageRun): BudgetCap | null {
@@ -303,7 +332,13 @@ class CleanupWindow {
 const NOT_STARTED: Settlement = { event: "none", aborted: null };
 
 function plainReport(outcome: SessionOutcome): SessionReport {
-	return { outcome, refusal: null, settlement: NOT_STARTED, observed: null };
+	return {
+		outcome,
+		refusal: null,
+		settlement: NOT_STARTED,
+		observed: null,
+		text: null,
+	};
 }
 
 const CRASHED: SessionOutcome = { kind: "failed", exit: "crashed" };
@@ -356,6 +391,7 @@ async function runSession(
 	let readsClosed = false;
 	let abortSent = false;
 	let settledAfterAbort: (() => void) | null = null;
+	let textReply: ((text: string | null) => void) | null = null;
 	let recheck = () => {};
 
 	const readChild = (sessionFile: string | null): Promise<void> => {
@@ -453,6 +489,10 @@ async function runSession(
 
 				if (record.type === "agent_settled" && abortSent) settledAfterAbort?.();
 
+				if (record.type === "response" && record.id === OUTPUT_ID) {
+					textReply?.(record.success ? record.text : null);
+				}
+
 				if (record.type === "assistant_end") {
 					const tokens = record.message.usage?.totalTokens ?? 0;
 
@@ -511,6 +551,23 @@ async function runSession(
 		await bounded(stage.gateway.drainAbort());
 	}
 
+	let text: string | null = null;
+
+	if (report === "settled") {
+		// Pi can exit before it answers a command sent after stdin ends, so the
+		// reply is awaited first.
+		const reply = new Promise<void>((done) => {
+			textReply = (value) => {
+				text = value;
+				done();
+			};
+		});
+
+		sendCommand(pi, { id: OUTPUT_ID, type: "get_last_assistant_text" });
+		await bounded(reply, OUTPUT_WAIT_MS);
+		textReply = null;
+	}
+
 	pi.stdin.end();
 
 	if (!(await bounded(pi.exited, EXIT_WAIT_MS))) pi.kill();
@@ -534,7 +591,7 @@ async function runSession(
 			: { event: "agent_settled", aborted: tracker.aborted };
 
 	if (report !== "settled") {
-		return { outcome: report, refusal: null, settlement, observed };
+		return { outcome: report, refusal: null, settlement, observed, text: null };
 	}
 
 	const cap =
@@ -551,15 +608,27 @@ async function runSession(
 			refusal: null,
 			settlement,
 			observed,
+			text: null,
 		};
 	}
 
 	if (readFailed)
-		return { outcome: CRASHED, refusal: null, settlement, observed };
+		return {
+			outcome: CRASHED,
+			refusal: null,
+			settlement,
+			observed,
+			text: null,
+		};
 
 	const settled = settledOutcome(last);
 
-	return { ...settled, settlement, observed };
+	return {
+		...settled,
+		settlement,
+		observed,
+		text: settled.outcome.kind === "passed" ? text : null,
+	};
 }
 
 /** A session whose effects threw ends crashed, after a bounded stop of its sandbox. */
@@ -587,6 +656,20 @@ function finalOutcome(
 		return primary.outcome;
 
 	return fallback.outcome;
+}
+
+async function keepOutput(
+	host: StageHost,
+	text: string,
+	cleanup: CleanupWindow,
+): Promise<OutputRecord | null> {
+	const full = Buffer.from(text, "utf8");
+	const kept = full.subarray(0, OUTPUT_MAX_BYTES);
+	const write = host.writeOutput(kept.toString("utf8")).catch(() => false);
+
+	if (!(await cleanup.wait(write)) || !(await write)) return null;
+
+	return { file: "output.txt", bytes: full.length, kept: kept.length };
 }
 
 function routeId(
@@ -627,7 +710,15 @@ export async function runStage(
 		primary: SessionReport,
 		fallback: FallbackRecord | null,
 		egress: StageReceipt["egress"],
+		text: string | null = null,
 	): Promise<StageResult> => {
+		const outcome = finalOutcome(primary, fallback);
+
+		const output =
+			outcome.kind === "passed" && text !== null
+				? await keepOutput(host, text, cleanup)
+				: null;
+
 		const stderr = await Promise.all(
 			sessions.map(async (session) => {
 				const log = host.stderrLog(session).catch(() => null);
@@ -641,7 +732,7 @@ export async function runStage(
 			runId: input.runId,
 			stage: input.stage,
 			attempt: input.attempt,
-			outcome: finalOutcome(primary, fallback),
+			outcome,
 			settlement: fallback?.settlement ?? primary.settlement,
 			models: { requested: input.settings.model, observed: primary.observed },
 			fallback,
@@ -651,6 +742,7 @@ export async function runStage(
 			usage: ledger.usage(gatewayRan),
 			egress,
 			stderr: stderr.filter((entry) => entry !== null),
+			output,
 			assetsDigest: host.assetsDigest,
 			versions: host.versions,
 			pricing: "unavailable",
@@ -733,6 +825,7 @@ export async function runStage(
 
 	const primary = await guardedSession(stage, input.settings.model, 0);
 	let fallback: FallbackRecord | null = null;
+	let text = primary.text;
 
 	if (
 		primary.outcome.kind === "refused" &&
@@ -756,6 +849,7 @@ export async function runStage(
 			? await guardedSession(stage, input.settings.fallback, 1)
 			: plainReport(CRASHED);
 
+		text = second.text;
 		fallback = {
 			requested: input.settings.fallback,
 			observed: second.observed,
@@ -775,13 +869,14 @@ export async function runStage(
 
 	const summary = closed ? await shutdown : null;
 
-	return receipt(primary, fallback, summary?.routes ?? null);
+	return receipt(primary, fallback, summary?.routes ?? null, text);
 }
 
 export type SandboxHostConfig = {
 	readonly stateDir: string;
 	readonly bundleDir: string;
 	readonly workspace: string;
+	readonly stageDir?: string;
 	readonly runId: Digest;
 	readonly stage: ModelStage;
 	readonly attempt: number;
@@ -812,30 +907,24 @@ function freshDir(base: string): string {
 	}
 }
 
-/**
- * The stage's Pi. Its session lives in the writable agent dir:
- * `pi-herdr-agents` refuses to launch a child from a parent with no
- * session file, which `--no-session` caused on `pi-factorio`. The wrapper
- * forces `--no-extensions`, which skips configured packages, so
- * `pi-herdr-agents` and its `subagent` tool load by `-e`.
- */
 export function piCommand(model: ModelId): string[] {
 	return [
 		`${BUNDLE.bin}/pi`,
 		"--mode",
 		"rpc",
+		"--no-skills",
+		"--system-prompt",
+		STAGE_SYSTEM_PROMPT,
 		"--session-dir",
 		`${PI_AGENT_DIR}/sessions`,
 		"--model",
 		model,
-		"-e",
-		HERDR_AGENTS,
 	];
 }
 
 /**
  * Copies the bundle's agent template into a fresh private dir Pi can write:
- * `auth.json`, the settings lock and child sessions live there. The bundle
+ * `auth.json`, the settings lock and sessions live there. The bundle
  * is installed read-only, so its modes are not kept. Only regular files are
  * copied.
  */
@@ -1009,14 +1098,18 @@ export function sandboxHost(config: SandboxHostConfig): StageHost {
 		mode: 0o700,
 	});
 
-	const stageDir = freshDir(
-		join(
-			config.stateDir,
-			"stages",
-			config.runId,
-			`${config.stage}-${config.attempt}`,
-		),
-	);
+	const stageDir =
+		config.stageDir ??
+		freshDir(
+			join(
+				config.stateDir,
+				"stages",
+				config.runId,
+				`${config.stage}-${config.attempt}`,
+			),
+		);
+
+	mkdirSync(stageDir, { recursive: true, mode: 0o700 });
 
 	return {
 		cleanupReserveMs: CLEANUP_RESERVE_MS,
@@ -1132,6 +1225,9 @@ export function sandboxHost(config: SandboxHostConfig): StageHost {
 				`${JSON.stringify(receipt, null, "\t")}\n`,
 			);
 		},
+		async writeOutput(text) {
+			return publishFile(join(stageDir, "output.txt"), text);
+		},
 		async stderrLog(session) {
 			const finish = stderr.get(session);
 			const bytes = finish === undefined ? null : await finish(EXIT_WAIT_MS);
@@ -1214,6 +1310,16 @@ async function executionSpent(dir: string): Promise<number | null> {
 
 	if (total !== null) return total;
 
+	if (existsSync(join(dir, "specify.json"))) {
+		const totals = await Promise.all(
+			SPECIFY_SESSIONS.map((name) => executionSpent(join(dir, name))),
+		);
+
+		return totals.some((value) => value !== null)
+			? totals.reduce<number>((sum, value) => sum + (value ?? 0), 0)
+			: null;
+	}
+
 	const audit = await boundedText(join(dir, "egress.jsonl"), AUDIT_CAP_BYTES);
 
 	if (audit === null) return null;
@@ -1254,9 +1360,445 @@ export async function locateBundle(root: string): Promise<Bundle | null> {
 	}
 }
 
-/** The fixed prompt F05 runs for a stage. F06a replaces it with the stage skills. */
-export function probePrompt(stage: ModelStage): string {
-	return `This is the factory's ${stage} stage probe. Do not call any tool. Reply with exactly: factory-${stage}-probe-ok`;
+const SPECIFY_SESSIONS = ["draft", "review", "revision"] as const;
+
+type KeptSession = {
+	readonly outcome: SessionOutcome;
+	readonly usage: StageUsage;
+	readonly turns: number;
+	readonly wallMs: number;
+	readonly text: string | null;
+};
+
+async function keptSession(dir: string): Promise<KeptSession | null> {
+	const raw = await boundedText(join(dir, "receipt.json"), MAX_RECEIPT_BYTES);
+	const record = objectOf(parseJson(raw ?? ""));
+	const result = objectOf(fieldOf(record, "outcome"));
+	const kind = textOf(fieldOf(result, "kind"));
+	let outcome: SessionOutcome;
+
+	if (kind === "passed" || kind === "refused") outcome = { kind };
+	else if (kind === "failed") {
+		const exit = textOf(fieldOf(result, "exit"));
+
+		if (
+			exit !== "error" &&
+			exit !== "malformed" &&
+			exit !== "crashed" &&
+			exit !== "aborted"
+		)
+			return null;
+
+		outcome = { kind, exit };
+	} else if (kind === "budget_exhausted") {
+		const cap = textOf(fieldOf(result, "cap"));
+
+		if (
+			cap !== "tokens" &&
+			cap !== "run_tokens" &&
+			cap !== "turns" &&
+			cap !== "wall"
+		)
+			return null;
+
+		outcome = { kind, cap };
+	} else return null;
+
+	const usage = objectOf(fieldOf(record, "usage"));
+	const byModel: Record<string, number> = {};
+
+	for (const [key, value] of Object.entries(
+		objectOf(fieldOf(usage, "byModel")) ?? {},
+	)) {
+		const count = countOf(value);
+
+		if (count === null) return null;
+
+		byModel[key] = count;
+	}
+
+	const total = countOf(fieldOf(usage, "total"));
+	const turns = countOf(fieldOf(record, "turns"));
+	const wallMs = countOf(fieldOf(record, "wallMs"));
+
+	if (total === null || turns === null || wallMs === null) return null;
+
+	const file = textOf(fieldOf(objectOf(fieldOf(record, "output")), "file"));
+
+	return {
+		outcome,
+		turns,
+		wallMs,
+		usage: {
+			total,
+			byModel,
+			parent: countOf(fieldOf(usage, "parent")) ?? 0,
+			children: countOf(fieldOf(usage, "children")) ?? 0,
+			gateway: countOf(fieldOf(usage, "gateway")),
+			unreadChildren: countOf(fieldOf(usage, "unreadChildren")) ?? 0,
+		},
+		text:
+			outcome.kind === "passed" && file === "output.txt"
+				? await boundedText(join(dir, file), OUTPUT_MAX_BYTES)
+				: null,
+	};
+}
+
+export async function runSpecify(
+	input: StageLaunchInput,
+	dir: string,
+	createHost: (dir: string, tools: readonly string[]) => StageHost,
+): Promise<StageResult> {
+	const review = input.specify;
+
+	if (review === undefined) throw new Error("specify inputs missing");
+
+	mkdirSync(dir, { recursive: true, mode: 0o700 });
+
+	if (
+		!existsSync(join(dir, "specify.json")) &&
+		!publishFile(join(dir, "specify.json"), '{"version":1}\n')
+	)
+		throw new Error("specify checkpoint unavailable");
+
+	const previous = (await executionSpent(dir)) ?? 0;
+	const records: KeptSession[] = [];
+	let metadata: Pick<StageReceipt, "assetsDigest" | "versions"> | null = null;
+
+	const usage = (): StageUsage => {
+		const ledger = new Ledger();
+		let gatewayRan = false;
+
+		for (const record of records) {
+			ledger.parent += record.usage.parent;
+			ledger.children += record.usage.children;
+			ledger.gateway += record.usage.gateway ?? 0;
+			ledger.unreadChildren += record.usage.unreadChildren;
+			ledger.add(new Map(Object.entries(record.usage.byModel)));
+			gatewayRan ||= record.usage.gateway !== null;
+		}
+
+		return {
+			...ledger.usage(gatewayRan),
+			total: records.reduce((sum, record) => sum + record.usage.total, 0),
+		};
+	};
+
+	const turns = () => records.reduce((sum, record) => sum + record.turns, 0);
+	const wallMs = () => records.reduce((sum, record) => sum + record.wallMs, 0);
+
+	const session = async (
+		name: (typeof SPECIFY_SESSIONS)[number],
+		prompt: string,
+		tools: readonly string[],
+	): Promise<KeptSession> => {
+		const sessionDir = join(dir, name);
+		const kept = await keptSession(sessionDir);
+
+		if (kept !== null) {
+			records.push(kept);
+
+			return kept;
+		}
+
+		const used = usage().total;
+
+		const maxTokens =
+			input.settings.maxTokens === null
+				? null
+				: Math.max(0, input.settings.maxTokens - used);
+
+		const remainingRunTokens = Math.max(
+			0,
+			input.remainingRunTokens - (used - previous),
+		);
+
+		const remainingTurns = Math.max(
+			0,
+			input.settings.budget.maxTurns - turns(),
+		);
+
+		const remainingWall = Math.max(0, input.settings.budget.wallMs - wallMs());
+
+		const cap: BudgetCap | null =
+			maxTokens !== null && maxTokens <= 0
+				? "tokens"
+				: remainingRunTokens <= 0
+					? "run_tokens"
+					: remainingTurns <= 0
+						? "turns"
+						: remainingWall <= 0
+							? "wall"
+							: null;
+
+		if (cap !== null || existsSync(sessionDir)) {
+			const partial = (await executionSpent(sessionDir)) ?? 0;
+
+			const record: KeptSession = {
+				outcome: cap === null ? CRASHED : { kind: "budget_exhausted", cap },
+				usage: {
+					total: partial,
+					parent: 0,
+					children: 0,
+					gateway: partial,
+					unreadChildren: 0,
+					byModel: {},
+				},
+				turns: 0,
+				wallMs: 0,
+				text: null,
+			};
+
+			records.push(record);
+
+			return record;
+		}
+
+		const host = createHost(sessionDir, tools);
+		metadata = host;
+
+		const result = await runStage(
+			{
+				...input,
+				prompt,
+				settings: {
+					...input.settings,
+					fallback: name === "draft" ? input.settings.fallback : null,
+					maxTokens,
+					budget: {
+						...input.settings.budget,
+						maxTurns: remainingTurns,
+						wallMs: remainingWall,
+					},
+				},
+				remainingRunTokens,
+				progress: (value) =>
+					input.progress(Math.max(0, used - previous) + value),
+			},
+			host,
+		);
+
+		const record: KeptSession = {
+			...result.receipt,
+			text:
+				result.kind === "passed"
+					? await boundedText(join(sessionDir, "output.txt"), OUTPUT_MAX_BYTES)
+					: null,
+		};
+
+		records.push(record);
+
+		return record;
+	};
+
+	const finish = async (
+		outcome: SessionOutcome,
+		text: string | null,
+	): Promise<StageResult> => {
+		const last = records.at(-1);
+
+		const raw = objectOf(
+			parseJson(
+				(await boundedText(
+					join(dir, "draft", "receipt.json"),
+					MAX_RECEIPT_BYTES,
+				)) ?? "",
+			),
+		);
+
+		const assetsDigest =
+			metadata?.assetsDigest ?? textOf(fieldOf(raw, "assetsDigest")) ?? "";
+
+		const versions = objectOf(fieldOf(raw, "versions"));
+		const kept = outcome.kind === "passed" && text !== null;
+		const bytes = text === null ? 0 : Buffer.byteLength(text);
+
+		const outputWritten =
+			!kept ||
+			existsSync(join(dir, "output.txt")) ||
+			publishFile(join(dir, "output.txt"), text ?? "");
+
+		const receipt: StageReceipt = {
+			version: 1,
+			runId: input.runId,
+			stage: input.stage,
+			attempt: input.attempt,
+			outcome: outputWritten ? outcome : CRASHED,
+			settlement: {
+				event: last === undefined ? "none" : "agent_settled",
+				aborted: null,
+			},
+			models: { requested: input.settings.model, observed: null },
+			fallback: null,
+			refusal: null,
+			usage: usage(),
+			turns: turns(),
+			wallMs: wallMs(),
+			egress: null,
+			stderr: [],
+			output:
+				kept && outputWritten
+					? { file: "output.txt", bytes, kept: bytes }
+					: null,
+			assetsDigest,
+			versions: metadata?.versions ?? {
+				pi: textOf(fieldOf(versions, "pi")) ?? PINNED_VERSIONS.pi,
+				piHerdrAgents:
+					textOf(fieldOf(versions, "piHerdrAgents")) ??
+					PINNED_VERSIONS.piHerdrAgents,
+				piHerdrPstack:
+					textOf(fieldOf(versions, "piHerdrPstack")) ??
+					PINNED_VERSIONS.piHerdrPstack,
+			},
+			pricing: "unavailable",
+		};
+
+		const written =
+			existsSync(join(dir, "receipt.json")) ||
+			publishFile(
+				join(dir, "receipt.json"),
+				JSON.stringify(receipt, null, "\t"),
+			);
+
+		return {
+			...stageResult(written ? receipt : { ...receipt, outcome: CRASHED }),
+			usage: Math.max(0, receipt.usage.total - previous),
+		};
+	};
+
+	const draft = await session("draft", input.prompt, input.tools);
+
+	if (draft.outcome.kind !== "passed") return finish(draft.outcome, null);
+
+	const parsed = parseSpecifyOutput(draft.text ?? "", new Set(review.files));
+
+	if (parsed.kind === "malformed")
+		return finish({ kind: "failed", exit: "malformed" }, null);
+
+	if (parsed.kind === "questions")
+		return finish({ kind: "passed" }, draft.text);
+
+	const critique = await session(
+		"review",
+		reviewPrompt(review, draft.text ?? ""),
+		[],
+	);
+
+	if (critique.outcome.kind !== "passed") return finish(critique.outcome, null);
+
+	const ambiguities = parseReviewOutput(critique.text ?? "");
+
+	if (ambiguities === null)
+		return finish({ kind: "failed", exit: "malformed" }, null);
+
+	if (ambiguities.length === 0) return finish({ kind: "passed" }, draft.text);
+
+	const revision = await session(
+		"revision",
+		revisionPrompt(review, draft.text ?? "", ambiguities),
+		[],
+	);
+
+	if (revision.outcome.kind !== "passed") return finish(revision.outcome, null);
+
+	if (
+		parseSpecifyOutput(revision.text ?? "", new Set(review.files)).kind ===
+		"malformed"
+	)
+		return finish({ kind: "failed", exit: "malformed" }, null);
+
+	return finish({ kind: "passed" }, revision.text);
+}
+
+const SKILL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+const SKILL_MAX_BYTES = 32 * 1024;
+
+function skillBody(text: string): string {
+	const match = /^---\n[\s\S]*?\n---\n/.exec(text);
+
+	return (match === null ? text : text.slice(match[0].length)).trim();
+}
+
+export async function withSkills(
+	bundleDir: string,
+	prompt: string,
+	skills: readonly string[],
+): Promise<string | null> {
+	if (skills.length === 0) return prompt;
+
+	const parts: string[] = [];
+
+	for (const name of skills) {
+		if (!SKILL_NAME.test(name)) return null;
+
+		const text = await boundedText(
+			join(bundleDir, "skills", name, "SKILL.md"),
+			SKILL_MAX_BYTES,
+		);
+
+		if (text === null) return null;
+
+		parts.push(`### Skill: ${name}\n\n${skillBody(text)}`);
+	}
+
+	return `${prompt}\n\n## Skills\n\n${parts.join("\n\n")}\n`;
+}
+
+async function attemptOutput(
+	stateDir: string,
+	runId: Digest,
+	stage: ModelStage,
+	attempt: number,
+): Promise<string | { readonly kind: "pending" } | null> {
+	const base = `${stage}-${attempt}`;
+	const root = join(stateDir, "stages", runId);
+	let names: string[];
+
+	try {
+		names = readdirSync(root);
+	} catch {
+		return null;
+	}
+
+	const replays = names
+		.flatMap((name) => {
+			if (name === base) return [{ name, n: 1 }];
+
+			const suffix = name.slice(base.length + 1);
+
+			return name.startsWith(`${base}.`) && /^\d+$/.test(suffix)
+				? [{ name, n: Number(suffix) }]
+				: [];
+		})
+		.sort((left, right) => right.n - left.n);
+
+	for (const { name } of replays) {
+		const dir = join(root, name);
+
+		const receipt = objectOf(
+			parseJson(
+				(await boundedText(join(dir, "receipt.json"), MAX_RECEIPT_BYTES)) ?? "",
+			),
+		);
+
+		const outcome = textOf(
+			fieldOf(objectOf(fieldOf(receipt, "outcome")), "kind"),
+		);
+
+		const file = textOf(fieldOf(objectOf(fieldOf(receipt, "output")), "file"));
+
+		if (outcome === null && existsSync(join(dir, "specify.json")))
+			return { kind: "pending" };
+
+		if (outcome !== "passed" || file !== "output.txt") continue;
+
+		const text = await boundedText(join(dir, file), OUTPUT_MAX_BYTES);
+
+		if (text !== null) return text;
+	}
+
+	return null;
 }
 
 export type SandboxExecutorConfig = {
@@ -1267,6 +1809,7 @@ export type SandboxExecutorConfig = {
 	readonly root?: string;
 	readonly arch?: string;
 	readonly usernsLimit?: () => Promise<string>;
+	readonly fetchTarball?: TarballFetch;
 };
 
 const PREFLIGHT_RUN =
@@ -1275,7 +1818,7 @@ const PREFLIGHT_RUN =
 /**
  * The stage executor the controller installs. It stops leftover stage
  * scopes at startup, runs the preflight until it passes, and launches each
- * stage as one `runStage` in a fresh sandbox. Until the preflight has
+ * stage in a fresh sandbox, or specify's bounded session sequence. Until the preflight has
  * passed, every launch is `sandbox_unavailable` and no model runs. A
  * reconcile that failed fails the preflight, which retries it: no stage of
  * this process can be running yet, so a retry stops only leftovers.
@@ -1350,6 +1893,22 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 			return attemptSpent(config.stateDir, runId, stage, attempt);
 		},
 
+		async output({ runId, stage, attempt }) {
+			return attemptOutput(config.stateDir, runId, stage, attempt);
+		},
+
+		async checkout({ runId, repo, sha, workspace }) {
+			return checkoutWorkspace({
+				stateDir: config.stateDir,
+				runId,
+				workspace,
+				repo,
+				sha,
+				fetch: config.fetchTarball ?? ghTarball,
+				log: config.log,
+			});
+		},
+
 		async preflight() {
 			if (ready !== null) return true;
 
@@ -1393,20 +1952,68 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 
 			const { bundle, arch } = ready;
 
-			const host = sandboxHost({
+			const prompt = await withSkills(bundle.dir, input.prompt, input.skills);
+
+			if (prompt === null) {
+				config.log("skills_unavailable", {
+					runId: input.runId,
+					stage: input.stage,
+				});
+
+				return {
+					kind: "unavailable",
+					stage: input.stage,
+					reason: "sandbox_unavailable",
+				};
+			}
+
+			const hostConfig: SandboxHostConfig = {
 				stateDir: config.stateDir,
 				bundleDir: bundle.dir,
 				workspace: input.workspace,
 				runId: input.runId,
 				stage: input.stage,
 				attempt: input.attempt,
-				tools: [],
+				tools: input.tools,
 				arch,
 				xdgRuntimeDir: config.xdgRuntimeDir,
 				assetsDigest: bundle.digest,
 				versions: PINNED_VERSIONS,
 				exec: config.exec,
-			});
+			};
+
+			if (input.stage === "specify" && input.specify !== undefined) {
+				const stages = join(config.stateDir, "stages", input.runId);
+				const base = `${input.stage}-${input.attempt}`;
+
+				mkdirSync(stages, { recursive: true, mode: 0o700 });
+
+				const saved = readdirSync(stages)
+					.filter(
+						(name) =>
+							(name === base ||
+								(name.startsWith(`${base}.`) &&
+									/^\d+$/.test(name.slice(base.length + 1)))) &&
+							existsSync(join(stages, name, "specify.json")),
+					)
+					.sort(
+						(a, b) =>
+							Number(b.slice(base.length + 1) || "1") -
+							Number(a.slice(base.length + 1) || "1"),
+					)[0];
+
+				const dir =
+					saved === undefined
+						? freshDir(join(stages, base))
+						: join(stages, saved);
+
+				return {
+					kind: "started",
+					done: runSpecify({ ...input, prompt }, dir, (stageDir, tools) =>
+						sandboxHost({ ...hostConfig, stageDir, tools }),
+					),
+				};
+			}
 
 			return {
 				kind: "started",
@@ -1415,13 +2022,13 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 						runId: input.runId,
 						stage: input.stage,
 						attempt: input.attempt,
-						prompt: probePrompt(input.stage),
+						prompt,
 						settings: input.settings,
 						remainingRunTokens: input.remainingRunTokens,
 						signal: input.signal,
 						progress: input.progress,
 					},
-					host,
+					sandboxHost(hostConfig),
 				),
 			};
 		},

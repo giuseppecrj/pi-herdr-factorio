@@ -74,9 +74,20 @@ export type CommentPost =
 	| { readonly kind: "rejected" }
 	| { readonly kind: "unknown" };
 
+/**
+ * A label write, with the same meaning as `CommentPost`: `unknown` may
+ * have changed the labels, so read before relying on them.
+ */
+export type LabelWrite =
+	| { readonly kind: "posted" }
+	| { readonly kind: "rejected" }
+	| { readonly kind: "unknown" };
+
 /** The controller's only write path. It is separate from `TicketReader`. */
 export interface TicketWriter {
 	postComment(issue: number, body: string): Promise<CommentPost>;
+	addLabels(issue: number, names: readonly string[]): Promise<LabelWrite>;
+	removeLabel(issue: number, name: string): Promise<LabelWrite>;
 }
 
 export interface TicketAdapter extends TicketReader {

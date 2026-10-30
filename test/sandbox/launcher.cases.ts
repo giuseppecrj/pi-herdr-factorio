@@ -842,7 +842,7 @@ describe("pi wrapper", () => {
 		}
 	});
 
-	it("with the forced flags, a real Pi 1.4.0 started as the stage Pi declares the subagent tool", {
+	it("with the forced flags, a real Pi 1.4.0 declares only the specify read tools and no extension", {
 		timeout: 60_000,
 	}, async () => {
 		const dir = mkdtempSync(join(tmpdir(), "factory-pi-parent-"));
@@ -850,7 +850,23 @@ describe("pi wrapper", () => {
 		const modules = new URL("../../node_modules", import.meta.url).pathname;
 		const cli = `${modules}/@earendil-works/pi-coding-agent/dist/bundle/cli.js`;
 		const bodies: string[] = [];
+		let notifyRequest: () => void = () => undefined;
+		let notifyReady: () => void = () => undefined;
+		let rejectReady: (error: Error) => void = () => undefined;
+
+		const received = new Promise<void>((done) => {
+			notifyRequest = done;
+		});
+
+		const ready = new Promise<void>((done, reject) => {
+			notifyReady = done;
+			rejectReady = reject;
+		});
+
 		let child: ChildProcess | undefined;
+		let stderr = "";
+		let stdout = "";
+		let deadline: ReturnType<typeof setTimeout> | undefined;
 
 		const server = createHttpServer((req, res) => {
 			let body = "";
@@ -859,8 +875,11 @@ describe("pi wrapper", () => {
 				body += chunk.toString();
 			});
 			req.on("end", () => {
+				assert.equal(req.method, "POST");
+				assert.equal(req.url, "/openai/v1/responses");
 				bodies.push(body);
 				res.writeHead(500).end("{}");
+				notifyRequest();
 			});
 		});
 
@@ -911,7 +930,7 @@ describe("pi wrapper", () => {
 
 			const wrapped = wrapPiArgv(
 				piCommand(modelId("openai/gpt-6.1-sol")).slice(1),
-				["read", "subagent"],
+				["read", "grep", "ls"],
 			);
 
 			assert.ok(wrapped.ok);
@@ -924,7 +943,7 @@ describe("pi wrapper", () => {
 
 			const pi = spawn(process.execPath, [cli, ...local], {
 				cwd: join(dir, "work"),
-				stdio: ["pipe", "ignore", "ignore"],
+				stdio: ["pipe", "pipe", "pipe"],
 				env: {
 					PATH: process.env.PATH ?? "/usr/bin:/bin",
 					HOME: dir,
@@ -935,16 +954,53 @@ describe("pi wrapper", () => {
 
 			child = pi;
 
-			const exited = new Promise<void>((done) => pi.on("exit", () => done()));
+			const exited = new Promise<void>((done) => pi.on("close", () => done()));
 
+			const failure = () =>
+				`Pi exit=${pi.exitCode} signal=${pi.signalCode}\nstderr: ${stderr}\nstdout: ${stdout}`;
+
+			const stopped = exited.then(() => {
+				throw new Error(failure());
+			});
+
+			const timedOut = new Promise<never>((_, reject) => {
+				deadline = setTimeout(
+					() => reject(new Error(`request deadline: ${failure()}`)),
+					30_000,
+				);
+			});
+
+			let pending = "";
+
+			pi.stderr.on("data", (chunk: Buffer) => {
+				stderr += chunk.toString();
+			});
+			pi.stdout.on("data", (chunk: Buffer) => {
+				stdout += chunk.toString();
+				pending += chunk.toString();
+				const lines = pending.split("\n");
+				pending = lines.pop() ?? "";
+
+				for (const line of lines) {
+					const record = objectOf(parseJson(line));
+
+					if (fieldOf(record, "type") !== "response") continue;
+
+					if (fieldOf(record, "success") !== true) {
+						rejectReady(new Error(failure()));
+						continue;
+					}
+
+					if (fieldOf(record, "id") === "ready") notifyReady();
+				}
+			});
+			pi.stdin.write(`${JSON.stringify({ id: "ready", type: "get_state" })}\n`);
+			await Promise.race([ready, stopped, timedOut]);
 			pi.stdin.write(
 				`${JSON.stringify({ id: "p", type: "prompt", message: "hi" })}\n`,
 			);
-
-			while (bodies.length === 0 && pi.exitCode === null) {
-				await new Promise((done) => setTimeout(done, 50));
-			}
-
+			await Promise.race([received, stopped, timedOut]);
+			clearTimeout(deadline);
 			pi.kill();
 			await exited;
 
@@ -960,10 +1016,13 @@ describe("pi wrapper", () => {
 				.map((tool) => textOf(fieldOf(objectOf(tool), "name")))
 				.sort();
 
-			assert.deepEqual(declared, ["read", "subagent"]);
+			assert.deepEqual(declared, ["grep", "ls", "read"]);
+			assert.ok(!bodies[0]?.includes("pi-herdr-agents"));
 		} finally {
+			clearTimeout(deadline);
 			child?.kill();
-			server.close();
+			server.closeAllConnections();
+			await new Promise<void>((done) => server.close(() => done()));
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
@@ -1531,6 +1590,110 @@ describe("preflight", () => {
 		}
 	});
 
+	it("returns the newest kept output of an attempt that passed, and none for one that did not", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-output-replay-"));
+
+		try {
+			const receipt = (passed: boolean, kept: boolean): StageReceipt => ({
+				version: 1,
+				runId: runDigest(RUN),
+				stage: "specify",
+				attempt: 1,
+				outcome: passed
+					? { kind: "passed" }
+					: { kind: "budget_exhausted", cap: "tokens" },
+				settlement: { event: "agent_settled", aborted: false },
+				models: { requested: modelId("openai/gpt-6.1-sol"), observed: null },
+				fallback: null,
+				refusal: null,
+				wallMs: 1,
+				turns: 1,
+				usage: {
+					total: 1,
+					parent: 1,
+					children: 0,
+					byModel: {},
+					gateway: 1,
+					unreadChildren: 0,
+				},
+				egress: null,
+				stderr: [],
+				output: kept ? { file: "output.txt", bytes: 3, kept: 3 } : null,
+				assetsDigest: "e".repeat(64),
+				versions: {
+					pi: "1.4.0",
+					piHerdrAgents: "3.3.1",
+					piHerdrPstack: "0.5.0",
+				},
+				pricing: "unavailable",
+			});
+
+			const host = () =>
+				sandboxHost({
+					stateDir: dir,
+					bundleDir: join(dir, "bundle"),
+					workspace: dir,
+					runId: runDigest(RUN),
+					stage: "specify",
+					attempt: 1,
+					tools: [],
+					arch: "x86_64",
+					xdgRuntimeDir: "/run/user/1000",
+					assetsDigest: "e".repeat(64),
+					versions: {
+						pi: "1.4.0",
+						piHerdrAgents: "3.3.1",
+						piHerdrPstack: "0.5.0",
+					},
+					exec: async () => ({ stdout: "", stderr: "", code: 0 }),
+				});
+
+			const executor = sandboxExecutor({
+				stateDir: dir,
+				xdgRuntimeDir: "/run/user/1000",
+				log: () => {},
+				exec: async () => ({ stdout: "", stderr: "", code: 0 }),
+			});
+
+			const read = () =>
+				executor.output({
+					runId: runDigest(RUN),
+					stage: "specify",
+					attempt: 1,
+				});
+
+			assert.equal(await read(), null);
+
+			const first = host();
+
+			assert.equal(await first.writeOutput("one"), true);
+			assert.equal(await first.writeReceipt(receipt(true, true)), true);
+			assert.equal(await read(), "one");
+
+			const second = host();
+
+			assert.equal(await second.writeOutput("two"), true);
+			assert.equal(await second.writeReceipt(receipt(true, true)), true);
+			assert.equal(await read(), "two");
+
+			const third = host();
+
+			assert.equal(await third.writeOutput("not"), true);
+			assert.equal(await third.writeReceipt(receipt(false, true)), true);
+			assert.equal(await read(), "two");
+			assert.equal(
+				await executor.output({
+					runId: runDigest(RUN),
+					stage: "specify",
+					attempt: 2,
+				}),
+				null,
+			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("counts every execution dir of an attempt, a replay's included, once each", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "factory-spent-replay-"));
 
@@ -1557,6 +1720,7 @@ describe("preflight", () => {
 				},
 				egress: null,
 				stderr: [],
+				output: null,
 				assetsDigest: "e".repeat(64),
 				versions: {
 					pi: "1.4.0",
@@ -1672,6 +1836,9 @@ describe("preflight", () => {
 				stage: "specify",
 				attempt: 1,
 				workspace: dir,
+				prompt: "probe",
+				tools: [],
+				skills: [],
 				settings: {
 					model: modelId("openai/gpt-6.1-sol"),
 					fallback: null,

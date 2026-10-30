@@ -65,7 +65,8 @@ export type Ambiguity =
 	| "history_without_original"
 	| "history_disagrees_with_body"
 	| "no_version_before_label"
-	| "version_withheld";
+	| "version_withheld"
+	| "answer_at_label_time";
 
 export type RefusalReason =
 	| { readonly kind: "repo_not_allowed" }
@@ -96,7 +97,9 @@ export type RefusalReason =
 	  }
 	| { readonly kind: "ambiguous_snapshot"; readonly detail: Ambiguity }
 	| { readonly kind: "duplicate_event" }
-	| { readonly kind: "state_unwritable" };
+	| { readonly kind: "state_unwritable" }
+	| { readonly kind: "answers_record_invalid" }
+	| { readonly kind: "link_record_invalid" };
 
 export type SnapshotSource = "unedited" | "edit_history";
 
@@ -160,6 +163,15 @@ export type RecordRead =
 	| { readonly kind: "absent" }
 	| { readonly kind: "unreadable" };
 
+export type SnapshotRead =
+	| {
+			readonly kind: "found";
+			readonly receipt: AdmittedReceipt;
+			readonly snapshot: IssueSnapshot;
+	  }
+	| { readonly kind: "absent" }
+	| { readonly kind: "unreadable" };
+
 export type RecordKey = {
 	readonly repo: RepoSlug;
 	readonly issue: number;
@@ -178,6 +190,11 @@ export interface AdmissionStore {
 	listEvents(
 		key: Omit<RecordKey, "eventId">,
 	): Promise<readonly string[] | null>;
+}
+
+export interface SnapshotReader {
+	/** The receipt and the snapshot text. A snapshot whose digest differs is `unreadable`. */
+	readSnapshot(key: RecordKey): Promise<SnapshotRead>;
 }
 
 /**
@@ -459,13 +476,48 @@ async function isPrivateDirectory(path: string): Promise<boolean> {
  * mode 0600, together with the snapshot text. The record is written to a
  * temporary file and linked into place, so it is never seen half-written.
  */
-export function fileAdmissionStore(stateDir: string): AdmissionStore {
+export function fileAdmissionStore(
+	stateDir: string,
+): AdmissionStore & SnapshotReader {
 	const root = resolve(stateDir);
 
 	const recordDir = (repo: RepoSlug, issue: number) => {
 		const [owner = "", name = ""] = repo.split("/");
 
 		return join(root, "admissions", "github", owner, name, String(issue));
+	};
+
+	const readStored = async (
+		key: RecordKey,
+	): Promise<
+		| { readonly kind: "found"; readonly value: JsonValue | undefined }
+		| { readonly kind: "absent" }
+		| { readonly kind: "unreadable" }
+	> => {
+		if (!EVENT_ID.test(key.eventId)) return { kind: "unreadable" };
+
+		let text: string;
+
+		try {
+			text = await readFile(
+				join(recordDir(key.repo, key.issue), `${key.eventId}.json`),
+				"utf8",
+			);
+		} catch (error) {
+			const code = error instanceof Error ? errorCode(error) : null;
+
+			return code === "ENOENT" ? { kind: "absent" } : { kind: "unreadable" };
+		}
+
+		let parsed: JsonValue | undefined;
+
+		try {
+			parsed = JSON.parse(text);
+		} catch {
+			parsed = undefined;
+		}
+
+		return { kind: "found", value: parsed };
 	};
 
 	return {
@@ -480,34 +532,34 @@ export function fileAdmissionStore(stateDir: string): AdmissionStore {
 		},
 
 		async read(key) {
-			if (!EVENT_ID.test(key.eventId)) return { kind: "unreadable" };
+			const stored = await readStored(key);
 
-			let text: string;
+			if (stored.kind !== "found") return stored;
 
-			try {
-				text = await readFile(
-					join(recordDir(key.repo, key.issue), `${key.eventId}.json`),
-					"utf8",
-				);
-			} catch (error) {
-				const code = error instanceof Error ? errorCode(error) : null;
-
-				return code === "ENOENT" ? { kind: "absent" } : { kind: "unreadable" };
-			}
-
-			let parsed: JsonValue | undefined;
-
-			try {
-				parsed = JSON.parse(text);
-			} catch {
-				parsed = undefined;
-			}
-
-			const receipt = parseRecord(parsed, key);
+			const receipt = parseRecord(stored.value, key);
 
 			return receipt === null
 				? { kind: "unreadable" }
 				: { kind: "found", receipt };
+		},
+
+		async readSnapshot(key) {
+			const stored = await readStored(key);
+
+			if (stored.kind !== "found") return stored;
+
+			const receipt = parseRecord(stored.value, key);
+			const snapshot = fieldOf(stored.value, "snapshot");
+			const title = textField(snapshot, "title");
+			const body = textField(snapshot, "body");
+
+			if (receipt === null || title === null || body === null) {
+				return { kind: "unreadable" };
+			}
+
+			return snapshotDigest({ title, body }) === receipt.snapshotDigest
+				? { kind: "found", receipt, snapshot: { title, body } }
+				: { kind: "unreadable" };
 		},
 
 		async listEvents(key) {

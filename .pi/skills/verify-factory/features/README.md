@@ -33,5 +33,6 @@
 - **status --json** (`.pi/skills/verify-factory/features/status-json.md`): trusted settings and disabled execution as JSON, without a controller.
 - **admit** (`.pi/skills/verify-factory/features/admit.md`): admission receipts for `factory:ready` label events, both kill switches, snapshot binding and deduplication.
 - **tick --once and run --issue** (`.pi/skills/verify-factory/features/tick-once.md`): one controller tick, claims, markers, capacity, restart recovery, forged and corrupt markers, missing workspaces and the switches.
-- **Sandboxed stage** (`.pi/skills/verify-factory/features/sandbox-stage.md`): the sandbox preflight, a sandboxed `specify` probe ending `stage_passed`, `blocked` for `sandbox_unavailable`, the host-side receipt, the bundle digest, the egress log and the stderr file.
+- **Sandboxed stage** (`.pi/skills/verify-factory/features/sandbox-stage.md`): the sandbox preflight, a sandboxed `specify` stage, `blocked` for `sandbox_unavailable`, the host-side receipt, the bundle digest, the egress log and the stderr file.
+- **Specify** (`.pi/skills/verify-factory/features/specify.md`): a contract and its summary for a clear issue, questions with the label swap and `needs_info` for a vague one, and a linked run after an answer and a fresh label.
 - **serve** (`.pi/skills/verify-factory/features/serve.md`): the controller daemon, `controller_ready`, the single-controller lock, reconcile before dispatch and SIGTERM stop.
