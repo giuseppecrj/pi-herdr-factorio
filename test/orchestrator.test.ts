@@ -916,6 +916,133 @@ describe("Orchestrator restart recovery", () => {
 		);
 		assert.equal(usageOf(github, 14).at(-1), 350);
 	});
+
+	/**
+	 * Leaves attempt 1 with 300 tokens on disk that no marker counts, and its
+	 * last marker `claimed`, or `blocked` after a restart whose launch was
+	 * refused.
+	 */
+	async function seedReplay(
+		ctx: ReturnType<typeof world>,
+		origin: "claimed" | "blocked",
+	): Promise<number> {
+		await stopAfterUnmarkedSpend(ctx, 300);
+
+		if (origin === "blocked") {
+			await ctx.start().tick();
+			assert.deepEqual(statuses(ctx.github, 14), ["1:claimed", "2:blocked"]);
+		}
+
+		return statuses(ctx.github, 14).length;
+	}
+
+	for (const origin of ["claimed", "blocked"] as const) {
+		it(`keeps a ${origin} replay's earlier spend when it stalls with no progress and reports nothing late`, async () => {
+			const ctx = world();
+			const { github, clock, executor, start } = ctx;
+
+			await seedReplay(ctx, origin);
+			executor.behaviors = [{ kind: "hang" }];
+
+			const controller = start();
+
+			await controller.tick();
+			assert.equal(executor.launches.at(-1)?.remainingRunTokens, 499_700);
+
+			clock.t += 300_001;
+
+			const stalled = await controller.tick();
+
+			assert.deepEqual(
+				stalled.runs.map((run) => [run.status, run.attempt, run.usage]),
+				[["retrying", 2, 300]],
+			);
+			assert.equal(usageOf(github, 14).at(-1), 300);
+
+			executor.behaviors = [{ kind: "hang" }];
+			clock.t += 15_000;
+			await controller.tick();
+
+			assert.equal(executor.launches.at(-1)?.attempt, 2);
+			assert.equal(executor.launches.at(-1)?.remainingRunTokens, 499_700);
+		});
+
+		it(`counts a ${origin} replay's progress on top of its earlier spend at a stall, and late usage once`, async () => {
+			const ctx = world();
+			const { github, clock, executor, start } = ctx;
+			const stage = deferred();
+
+			await seedReplay(ctx, origin);
+			executor.behaviors = [stage.behavior];
+
+			const controller = start();
+
+			await controller.tick();
+
+			const launch = executor.launches.at(-1);
+
+			assert.ok(launch);
+			launch.progress(50);
+			clock.t += 300_001;
+
+			const stalled = await controller.tick();
+
+			assert.equal(launch.signal.aborted, true);
+			assert.deepEqual(
+				stalled.runs.map((run) => [run.status, run.usage]),
+				[["retrying", 350]],
+			);
+			assert.equal(usageOf(github, 14).at(-1), 350);
+
+			stage.finish(resultOf(launch, { kind: "failed", exit: "aborted" }, 80));
+			await settle();
+
+			const counted = await controller.tick();
+
+			assert.equal(counted.runs[0]?.usage, 380);
+			assert.equal(usageOf(github, 14).at(-1), 380);
+
+			const again = await start().tick();
+
+			assert.equal(again.runs[0]?.usage, 380);
+		});
+
+		it(`releases an aborted ${origin} replay with its earlier spend and its progress`, async () => {
+			const ctx = world();
+			const { github, clock, executor, start } = ctx;
+
+			const seq = await seedReplay(ctx, origin);
+
+			executor.behaviors = [{ kind: "hang" }];
+
+			const controller = start();
+
+			await controller.tick();
+
+			const launch = executor.launches.at(-1);
+
+			assert.ok(launch);
+			launch.progress(50);
+
+			const issue = github.issues.get(14);
+
+			assert.ok(issue);
+			issue.state = "closed";
+			issue.updatedAt = "2026-10-29T03:00:00Z";
+			await controller.tick();
+
+			assert.equal(launch.signal.aborted, true);
+			assert.equal(statuses(github, 14).at(-1), `${seq + 1}:running`);
+
+			clock.t += 15_000;
+
+			const ended = await controller.tick();
+
+			assert.deepEqual(ended.runs, []);
+			assert.equal(statuses(github, 14).at(-1), `${seq + 2}:released`);
+			assert.equal(usageOf(github, 14).at(-1), 350);
+		});
+	}
 });
 
 describe("Orchestrator retries and stalls", () => {
