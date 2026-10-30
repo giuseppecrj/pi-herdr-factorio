@@ -363,15 +363,19 @@ createCipheriv("aes-256-gcm",Buffer.alloc(32),Buffer.alloc(12)).update("works");
 });
 
 test("manifest covers every main test and sandbox case", () => {
+	const root = existsSync("/g/tooling/.github/factory/gates/gates.json")
+		? "/g/tooling"
+		: ".";
+
 	const manifest = JSON.parse(
-		readFileSync(".github/factory/gates/gates.json", "utf8"),
+		readFileSync(join(root, ".github/factory/gates/gates.json"), "utf8"),
 	);
 
 	const expected = [
-		...readdirSync("test")
+		...readdirSync(join(root, "test"))
 			.filter((p) => p.endsWith(".test.ts"))
 			.map((p) => `test/${p}`),
-		...readdirSync("test/sandbox")
+		...readdirSync(join(root, "test/sandbox"))
 			.filter((p) => p.endsWith(".cases.ts"))
 			.map((p) => `test/sandbox/${p}`),
 	].sort();
