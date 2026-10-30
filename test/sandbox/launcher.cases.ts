@@ -850,7 +850,23 @@ describe("pi wrapper", () => {
 		const modules = new URL("../../node_modules", import.meta.url).pathname;
 		const cli = `${modules}/@earendil-works/pi-coding-agent/dist/bundle/cli.js`;
 		const bodies: string[] = [];
+		let notifyRequest: () => void = () => undefined;
+		let notifyReady: () => void = () => undefined;
+		let rejectReady: (error: Error) => void = () => undefined;
+
+		const received = new Promise<void>((done) => {
+			notifyRequest = done;
+		});
+
+		const ready = new Promise<void>((done, reject) => {
+			notifyReady = done;
+			rejectReady = reject;
+		});
+
 		let child: ChildProcess | undefined;
+		let stderr = "";
+		let stdout = "";
+		let deadline: ReturnType<typeof setTimeout> | undefined;
 
 		const server = createHttpServer((req, res) => {
 			let body = "";
@@ -859,8 +875,11 @@ describe("pi wrapper", () => {
 				body += chunk.toString();
 			});
 			req.on("end", () => {
+				assert.equal(req.method, "POST");
+				assert.equal(req.url, "/openai/v1/responses");
 				bodies.push(body);
 				res.writeHead(500).end("{}");
+				notifyRequest();
 			});
 		});
 
@@ -924,7 +943,7 @@ describe("pi wrapper", () => {
 
 			const pi = spawn(process.execPath, [cli, ...local], {
 				cwd: join(dir, "work"),
-				stdio: ["pipe", "ignore", "ignore"],
+				stdio: ["pipe", "pipe", "pipe"],
 				env: {
 					PATH: process.env.PATH ?? "/usr/bin:/bin",
 					HOME: dir,
@@ -935,16 +954,53 @@ describe("pi wrapper", () => {
 
 			child = pi;
 
-			const exited = new Promise<void>((done) => pi.on("exit", () => done()));
+			const exited = new Promise<void>((done) => pi.on("close", () => done()));
 
+			const failure = () =>
+				`Pi exit=${pi.exitCode} signal=${pi.signalCode}\nstderr: ${stderr}\nstdout: ${stdout}`;
+
+			const stopped = exited.then(() => {
+				throw new Error(failure());
+			});
+
+			const timedOut = new Promise<never>((_, reject) => {
+				deadline = setTimeout(
+					() => reject(new Error(`request deadline: ${failure()}`)),
+					30_000,
+				);
+			});
+
+			let pending = "";
+
+			pi.stderr.on("data", (chunk: Buffer) => {
+				stderr += chunk.toString();
+			});
+			pi.stdout.on("data", (chunk: Buffer) => {
+				stdout += chunk.toString();
+				pending += chunk.toString();
+				const lines = pending.split("\n");
+				pending = lines.pop() ?? "";
+
+				for (const line of lines) {
+					const record = objectOf(parseJson(line));
+
+					if (fieldOf(record, "type") !== "response") continue;
+
+					if (fieldOf(record, "success") !== true) {
+						rejectReady(new Error(failure()));
+						continue;
+					}
+
+					if (fieldOf(record, "id") === "ready") notifyReady();
+				}
+			});
+			pi.stdin.write(`${JSON.stringify({ id: "ready", type: "get_state" })}\n`);
+			await Promise.race([ready, stopped, timedOut]);
 			pi.stdin.write(
 				`${JSON.stringify({ id: "p", type: "prompt", message: "hi" })}\n`,
 			);
-
-			while (bodies.length === 0 && pi.exitCode === null) {
-				await new Promise((done) => setTimeout(done, 50));
-			}
-
+			await Promise.race([received, stopped, timedOut]);
+			clearTimeout(deadline);
 			pi.kill();
 			await exited;
 
@@ -963,8 +1019,10 @@ describe("pi wrapper", () => {
 			assert.deepEqual(declared, ["grep", "ls", "read"]);
 			assert.ok(!bodies[0]?.includes("pi-herdr-agents"));
 		} finally {
+			clearTimeout(deadline);
 			child?.kill();
-			server.close();
+			server.closeAllConnections();
+			await new Promise<void>((done) => server.close(() => done()));
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});

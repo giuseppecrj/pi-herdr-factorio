@@ -18,6 +18,8 @@ import {
 	GitHubTicketAdapter,
 	GitHubTicketWriter,
 	type IssueRecord,
+	type IssueComment,
+	type CommentEdit,
 	type Read,
 	type TimelineEntry,
 } from "./adapters/github.ts";
@@ -282,6 +284,7 @@ export type RunPhase =
 			readonly reason: "sandbox_unavailable";
 	  }
 	| { readonly kind: "retry_queued"; readonly dueAt: number }
+	| { readonly kind: "recovering"; readonly output: string }
 	| {
 			readonly kind: "reporting";
 			readonly status: "stage_passed" | "needs_info";
@@ -308,6 +311,7 @@ export type Effects =
 			posted: boolean;
 			labeled: boolean;
 			unlabeled: boolean;
+			labelTick: number;
 	  };
 
 type StageInputs = {
@@ -389,6 +393,8 @@ export type ActiveRun = {
 	 */
 	adopted: boolean;
 	clearNeedsInfo: boolean;
+	labelFailures: number;
+	labelTick: number;
 	inputs: StageInputs | null;
 	phase: RunPhase;
 };
@@ -569,6 +575,36 @@ function settled(seen: SeenIssue): boolean {
 	return seen.observedAt >= Date.parse(seen.updatedAt) + 1000 + SETTLE_MS;
 }
 
+function isClarificationPredecessor(
+	prev: TrustedMarker,
+	admitted: AdmittedReceipt,
+	runId: Digest,
+): boolean {
+	return (
+		prev.marker.status === "needs_info" &&
+		prev.marker.runId !== runId &&
+		admitted.eventAt >= prev.createdAt
+	);
+}
+
+function isAnswerCandidate(
+	comment: IssueComment,
+	floor: bigint,
+	labelAt: string,
+): boolean {
+	return (
+		BigInt(comment.id) > floor &&
+		comment.author !== null &&
+		comment.author.type !== "Bot" &&
+		!isControllerComment(comment) &&
+		comment.createdAt <= labelAt
+	);
+}
+
+function answerEditPrecedesLabel(edit: CommentEdit, labelAt: string): boolean {
+	return edit.lastEditedAt === null || edit.lastEditedAt < labelAt;
+}
+
 function isReady(issue: IssueRecord): boolean {
 	return issue.open && !issue.pullRequest && issue.labels.includes(READY_LABEL);
 }
@@ -659,6 +695,8 @@ function desiredStatus(phase: RunPhase): RunStatus {
 			return "blocked";
 		case "retry_queued":
 			return "retrying";
+		case "recovering":
+			return "running";
 		case "reporting":
 		case "ending":
 			return phase.status;
@@ -1065,6 +1103,16 @@ export class Orchestrator {
 		run: ActiveRun,
 		candidates: readonly IssueRecord[],
 	): Promise<Eligibility> {
+		if (run.phase.kind === "recovering") {
+			const recovered = await this.#recoverOutput(run, run.phase.output);
+			const limits = this.#limits();
+
+			if (!recovered && limits !== null)
+				this.#endStage(run, "interrupted", 0, limits);
+
+			return "unverified";
+		}
+
 		if (run.phase.kind === "ending" || run.phase.kind === "reporting") {
 			return "unverified";
 		}
@@ -1880,6 +1928,8 @@ export class Orchestrator {
 			unsettled: null,
 			adopted: true,
 			clearNeedsInfo: false,
+			labelFailures: 0,
+			labelTick: 0,
 			inputs: null,
 			phase: { kind: "claimed" },
 		};
@@ -1994,7 +2044,11 @@ export class Orchestrator {
 			replay: true,
 			unsettled: null,
 			adopted: true,
-			clearNeedsInfo: false,
+			clearNeedsInfo:
+				input.issue.labels.includes(NEEDS_INFO_LABEL) &&
+				(await this.#input.files.readLink(marker.runId)).kind === "found",
+			labelFailures: 0,
+			labelTick: 0,
 			inputs: null,
 			phase:
 				marker.status === "blocked"
@@ -2045,12 +2099,17 @@ export class Orchestrator {
 			(await this.#recoverOutput(run, output));
 
 		if (recovered) {
-			this.#input.log("stage_recovered", {
-				issue: run.issue,
-				runId: run.runId,
-				attempt: run.attempt,
-				next: desiredStatus(run.phase),
-			});
+			this.#input.log(
+				run.phase.kind === "recovering"
+					? "stage_recovery_wait"
+					: "stage_recovered",
+				{
+					issue: run.issue,
+					runId: run.runId,
+					attempt: run.attempt,
+					next: desiredStatus(run.phase),
+				},
+			);
 		} else if (eligibility !== "current" && eligibility !== "unverified") {
 			this.#release(run, eligibility);
 		} else if (limits !== null && marker.status === "running") {
@@ -2420,6 +2479,8 @@ export class Orchestrator {
 			unsettled: null,
 			adopted: false,
 			clearNeedsInfo: link.kind === "linked",
+			labelFailures: 0,
+			labelTick: 0,
 			inputs: null,
 			phase: { kind: "claimed" },
 		};
@@ -2457,21 +2518,54 @@ export class Orchestrator {
 		return run;
 	}
 
-	async #clearNeedsInfo(run: ActiveRun): Promise<void> {
-		if (!run.clearNeedsInfo) return;
+	#labelOutcome(
+		run: ActiveRun,
+		label: string,
+		outcome: "posted" | "rejected" | "unknown",
+	): boolean {
+		const fields = { issue: run.issue, runId: run.runId, label, outcome };
+
+		this.#input.log("label_write", fields);
+		run.labelFailures = outcome === "posted" ? 0 : run.labelFailures + 1;
+
+		if (outcome !== "posted") this.#input.log("label_unconfirmed", fields);
+
+		return outcome === "posted";
+	}
+
+	#labelsExhausted(run: ActiveRun): boolean {
+		if (
+			run.labelFailures < (this.#limits()?.maxAttempts ?? DEFAULTS.maxAttempts)
+		)
+			return false;
+
+		run.phase = { kind: "ending", status: "failed" };
+		this.state.totals.failures++;
+		this.#input.log("label_retries_exhausted", {
+			issue: run.issue,
+			runId: run.runId,
+			failures: run.labelFailures,
+		});
+
+		return true;
+	}
+
+	async #clearNeedsInfo(run: ActiveRun): Promise<boolean> {
+		if (!run.clearNeedsInfo) return true;
+
+		if (run.labelTick === this.#ticks) return false;
+
+		run.labelTick = this.#ticks;
 
 		const removed = await this.#writer.removeLabel(run.issue, NEEDS_INFO_LABEL);
 
-		run.clearNeedsInfo = removed.kind !== "posted";
+		run.clearNeedsInfo = !this.#labelOutcome(
+			run,
+			NEEDS_INFO_LABEL,
+			removed.kind,
+		);
 
-		if (run.clearNeedsInfo) {
-			this.#input.log("label_unconfirmed", {
-				issue: run.issue,
-				runId: run.runId,
-				label: NEEDS_INFO_LABEL,
-				outcome: removed.kind,
-			});
-		}
+		return !run.clearNeedsInfo;
 	}
 
 	async #link(input: {
@@ -2493,9 +2587,7 @@ export class Orchestrator {
 
 		if (
 			prev === undefined ||
-			prev.marker.status !== "needs_info" ||
-			prev.marker.runId === runId ||
-			admitted.eventAt < prev.createdAt
+			!isClarificationPredecessor(prev, admitted, runId)
 		) {
 			return { kind: "none" };
 		}
@@ -2516,14 +2608,9 @@ export class Orchestrator {
 
 		const floor = BigInt(asked?.id ?? prev.commentId);
 
-		const candidates = comments.value.filter(
-			(comment) =>
-				BigInt(comment.id) > floor &&
-				comment.author !== null &&
-				comment.author.type !== "Bot" &&
-				!isControllerComment(comment) &&
-				comment.createdAt <= admitted.eventAt,
-		);
+		const candidates = comments.value
+			.filter((comment) => isAnswerCandidate(comment, floor, admitted.eventAt))
+			.sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
 
 		if (candidates.some((comment) => comment.createdAt === admitted.eventAt)) {
 			return { kind: "ambiguous" };
@@ -2535,9 +2622,27 @@ export class Orchestrator {
 
 		if (edits.kind === "failed") return { kind: "defer" };
 
-		const answers: Answer[] = [];
+		const previousLink = await this.#input.files.readLink(prevRunId);
+
+		if (previousLink.kind === "unreadable") return { kind: "defer" };
+
+		const previousAnswers =
+			previousLink.kind === "found"
+				? await this.#input.files.readAnswers(prevRunId)
+				: null;
+
+		if (
+			previousLink.kind === "found" &&
+			(previousAnswers === null ||
+				previousAnswers.digest !== previousLink.link.answersDigest)
+		)
+			return { kind: "defer" };
+
+		const answers: Answer[] = [...(previousAnswers?.answers ?? [])];
+		const permissions = new Map<string, boolean>();
 
 		for (const comment of candidates) {
+			if (answers.length >= MAX_ANSWERS) break;
 			const edit = edits.value.get(comment.nodeId);
 			const login = comment.author?.login ?? "";
 
@@ -2545,18 +2650,22 @@ export class Orchestrator {
 				return { kind: "defer" };
 			}
 
-			if (
-				(edit.lastEditedAt !== null && edit.lastEditedAt >= admitted.eventAt) ||
-				!isLogin(login)
-			) {
+			if (!answerEditPrecedesLabel(edit, admitted.eventAt) || !isLogin(login)) {
 				continue;
 			}
 
-			const permission = await this.#adapter.readPermission(login);
+			let authorized = permissions.get(login.toLowerCase());
 
-			if (permission.kind === "failed") return { kind: "defer" };
+			if (authorized === undefined) {
+				const permission = await this.#adapter.readPermission(login);
 
-			if (!hasWriteAccess(permission.value)) continue;
+				if (permission.kind === "failed") return { kind: "defer" };
+
+				authorized = hasWriteAccess(permission.value);
+				permissions.set(login.toLowerCase(), authorized);
+			}
+
+			if (!authorized) continue;
 
 			answers.push({
 				commentId: comment.id,
@@ -2693,7 +2802,11 @@ export class Orchestrator {
 			return true;
 		}
 
-		await this.#clearNeedsInfo(run);
+		if (!(await this.#clearNeedsInfo(run))) {
+			if (this.#labelsExhausted(run)) await this.#sync(run);
+
+			return false;
+		}
 
 		const prepared = this.#enabled ? await this.#stageInputs(run) : UNPREPARED;
 
@@ -2811,12 +2924,23 @@ export class Orchestrator {
 
 		if ((await this.#recoverUncertainPost(run)) === "stop") return;
 
+		if (
+			run.marked !== null &&
+			run.clearNeedsInfo &&
+			run.phase.kind !== "ending" &&
+			!(await this.#clearNeedsInfo(run))
+		) {
+			if (!this.#labelsExhausted(run)) return;
+		}
+
 		if (run.phase.kind === "reporting") {
 			const { status, effects } = run.phase;
 
-			if (!(await this.#applyEffects(run, effects))) return;
-
-			run.phase = { kind: "ending", status };
+			if (await this.#applyEffects(run, effects)) {
+				run.phase = { kind: "ending", status };
+			} else if (!this.#labelsExhausted(run)) {
+				return;
+			}
 		}
 
 		await this.#publishMarker(run);
@@ -2988,6 +3112,7 @@ export class Orchestrator {
 						posted: false,
 						labeled: false,
 						unlabeled: false,
+						labelTick: 0,
 					},
 				};
 			}
@@ -3061,7 +3186,20 @@ export class Orchestrator {
 
 		const prepared = await this.#stageInputs(run);
 
-		if (prepared.kind !== "ready" || prepared.inputs === null) return false;
+		if (prepared.kind === "wait") {
+			run.phase = { kind: "recovering", output };
+
+			return true;
+		}
+
+		if (prepared.kind === "fail") {
+			run.phase = { kind: "ending", status: "failed" };
+			this.state.totals.failures++;
+
+			return true;
+		}
+
+		if (prepared.inputs === null) return false;
 
 		run.inputs = prepared.inputs;
 
@@ -3154,23 +3292,38 @@ export class Orchestrator {
 
 		if (!effects.posted) return false;
 
+		if (effects.unlabeled) return true;
+
+		if (effects.labelTick === this.#ticks) return false;
+
+		effects.labelTick = this.#ticks;
+
 		if (!effects.labeled) {
 			const added = await this.#writer.addLabels(run.issue, [NEEDS_INFO_LABEL]);
 
-			effects.labeled = added.kind === "posted";
+			effects.labeled = this.#labelOutcome(run, NEEDS_INFO_LABEL, added.kind);
 		}
 
-		if (effects.labeled && !effects.unlabeled) {
+		if (!effects.labeled) return false;
+
+		const timeline = await this.#adapter.readTimeline(run.issue);
+
+		if (timeline.kind === "failed") return false;
+
+		const latest = latestReadyEntry(timeline.value);
+
+		if (latest.kind !== "found") return false;
+
+		if (latest.entry.kind === "unlabeled" || latest.entry.id !== run.eventId) {
+			effects.unlabeled = true;
+			this.#input.log("ready_label_preserved", {
+				...fields,
+				eventId: latest.entry.id,
+			});
+		} else {
 			const removed = await this.#writer.removeLabel(run.issue, READY_LABEL);
 
-			effects.unlabeled = removed.kind === "posted";
-		}
-
-		if (!effects.unlabeled) {
-			this.#input.log("label_unconfirmed", {
-				...fields,
-				label: effects.labeled ? READY_LABEL : NEEDS_INFO_LABEL,
-			});
+			effects.unlabeled = this.#labelOutcome(run, READY_LABEL, removed.kind);
 		}
 
 		return effects.unlabeled;

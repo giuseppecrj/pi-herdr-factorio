@@ -29,7 +29,11 @@ import {
 	type LocalSwitch,
 	type SnapshotReader,
 } from "../src/admission.ts";
-import type { AnswersRecord, Link } from "../src/specify.ts";
+import {
+	answersDigestOf,
+	type AnswersRecord,
+	type Link,
+} from "../src/specify.ts";
 import type { Exec } from "../src/gh.ts";
 import { formatMarker, parseMarker } from "../src/markers.ts";
 import {
@@ -6566,10 +6570,9 @@ describe("specify: contract", () => {
 			"deep-research",
 		]);
 		assert.ok(launch.prompt.includes(`at commit ${MAIN_SHA}`));
-		assert.ok(
-			launch.prompt.includes(
-				"<issue>\nAdd --version\n\nPrint the version from server/cli.ts.\n</issue>",
-			),
+		assert.match(
+			launch.prompt,
+			/<issue-([0-9a-f]{32})>\nAdd --version\n\nPrint the version from server\/cli.ts\.\n<\/issue-\1>/,
 		);
 		assert.ok(launch.prompt.includes("Turn the issue into a short contract"));
 		assert.ok(
@@ -6768,6 +6771,148 @@ describe("specify: no contract without a passing, valid output", () => {
 });
 
 describe("specify: questions", () => {
+	for (const outcome of ["rejected", "unknown"] as const) {
+		it(`waits for a confirmed label swap after a ${outcome} write`, async () => {
+			const ctx = world();
+			const write = writesWire(ctx.github, []);
+			let removals = 0;
+			ctx.github.add(labeled(14));
+			ctx.executor.outputs = [QUESTIONS_TEXT];
+			ctx.executor.behaviors = [{ kind: "pass", usage: 3 }];
+			ctx.wire.intercept = async (command, args) => {
+				if (
+					args.includes("DELETE") &&
+					args.some((arg) => arg.endsWith("labels/factory%3Aready"))
+				) {
+					removals++;
+
+					if (removals === 1)
+						return outcome === "rejected"
+							? httpError(422, "denied")
+							: networkError();
+				}
+
+				return write(command, args);
+			};
+
+			const controller = ctx.start();
+			await once(controller);
+			assert.deepEqual(statuses(ctx.github, 14), ["1:claimed", "2:running"]);
+			assert.ok(
+				ctx.logs.some(
+					({ event, fields }) =>
+						event === "label_unconfirmed" && fields.outcome === outcome,
+				),
+			);
+			ctx.clock.t += 60_000;
+			await once(controller);
+			assert.equal(statuses(ctx.github, 14).at(-1), "3:needs_info");
+			assert.equal(removals, 2);
+		});
+	}
+
+	it("caps persistently rejected label writes and logs each outcome without rerunning specify", async () => {
+		const ctx = world();
+		const write = writesWire(ctx.github, []);
+		let additions = 0;
+		ctx.github.add(labeled(14));
+		ctx.executor.outputs = [QUESTIONS_TEXT];
+		ctx.executor.behaviors = [{ kind: "pass", usage: 3 }];
+		ctx.wire.intercept = async (command, args) => {
+			if (
+				args.includes("POST") &&
+				args.some((arg) => arg.endsWith("/labels"))
+			) {
+				additions++;
+
+				return httpError(422, "denied");
+			}
+
+			return write(command, args);
+		};
+
+		const controller = ctx.start();
+		await once(controller);
+
+		for (let n = 0; n < 5; n++) {
+			ctx.clock.t += 60_000;
+			await once(controller);
+		}
+
+		assert.equal(additions, 3);
+		assert.equal(statuses(ctx.github, 14).at(-1), "3:failed");
+		assert.equal(ctx.executor.launches.length, 1);
+		assert.equal(
+			ctx.logs.filter(
+				({ event, fields }) =>
+					event === "label_unconfirmed" && fields.outcome === "rejected",
+			).length,
+			3,
+		);
+	});
+
+	it("preserves an owner's fresh ready event during a delayed label swap", async () => {
+		const ctx = world();
+		const write = writesWire(ctx.github, []);
+		const issue = ctx.github.add(labeled(14));
+		let removals = 0;
+		ctx.executor.outputs = [QUESTIONS_TEXT];
+		ctx.executor.behaviors = [{ kind: "pass", usage: 3 }];
+		ctx.wire.intercept = async (command, args) => {
+			if (
+				args.includes("DELETE") &&
+				args.some((arg) => arg.endsWith("labels/factory%3Aready"))
+			) {
+				removals++;
+
+				return networkError();
+			}
+
+			return write(command, args);
+		};
+
+		const controller = ctx.start();
+		await once(controller);
+		ctx.github.now = "2026-10-29T02:10:00Z";
+		issue.timeline.push(
+			labelEvent({
+				id: EVENT_ID + 50,
+				at: ctx.github.now,
+				actor: "giuseppecrj",
+			}),
+		);
+		issue.updatedAt = ctx.github.now;
+		ctx.clock.t += 60_000;
+		await once(controller);
+		assert.equal(removals, 1);
+		assert.ok(issue.labels.includes(READY_LABEL));
+		assert.equal(statuses(ctx.github, 14).at(-1), "3:needs_info");
+	});
+
+	it("waits through transient recovery reads after ready was removed, then finishes needs_info", async () => {
+		const ctx = world();
+		ctx.wire.intercept = writesWire(ctx.github, []);
+		ctx.github.add(labeled(14));
+		ctx.github.posts = ["ok", "ok", "ok", "lost"];
+		ctx.executor.outputs = [QUESTIONS_TEXT];
+		ctx.executor.behaviors = [{ kind: "pass", usage: 3 }];
+		await once(ctx.start());
+		assert.deepEqual(statuses(ctx.github, 14), ["1:claimed", "2:running"]);
+		ctx.executor.checkoutResult = "unavailable";
+		ctx.clock.t += 60_000;
+		const restarted = ctx.start();
+		await once(restarted);
+		assert.deepEqual(statuses(ctx.github, 14), ["1:claimed", "2:running"]);
+		ctx.clock.t += 60_000;
+		await once(restarted);
+		assert.deepEqual(statuses(ctx.github, 14), ["1:claimed", "2:running"]);
+		ctx.executor.checkoutResult = "ready";
+		ctx.clock.t += 60_000;
+		await once(restarted);
+		assert.equal(statuses(ctx.github, 14).at(-1), "3:needs_info");
+		assert.equal(ctx.executor.launches.length, 1);
+	});
+
 	it("posts one questions comment, swaps the labels, then ends needs_info and spends nothing more", async () => {
 		const { github, clock, files, executor, wire, start } = world();
 		const writes: string[] = [];
@@ -6918,11 +7063,7 @@ describe("specify: questions", () => {
 			"3:needs_info",
 		]);
 		assert.ok(logs.some((entry) => entry.event === "stage_recovered"));
-		assert.deepEqual(writes, [
-			"label+factory:needs-info",
-			"label-factory:ready",
-			"marker:needs_info",
-		]);
+		assert.deepEqual(writes, ["label+factory:needs-info", "marker:needs_info"]);
 	});
 });
 
@@ -6933,6 +7074,7 @@ describe("specify: linked runs and answers", () => {
 	async function askedThenRelabeled(
 		answers: (github: FakeGitHub, issue: FakeIssue) => void,
 		labelAt = "2026-10-29T02:20:00Z",
+		configure: (ctx: ReturnType<typeof world>) => void = () => undefined,
 	) {
 		const ctx = world();
 		const writes: string[] = [];
@@ -6962,6 +7104,7 @@ describe("specify: linked runs and answers", () => {
 		ctx.github.now = "2026-10-29T02:31:00Z";
 		ctx.clock.t += 31 * 60_000;
 		writes.length = 0;
+		configure(ctx);
 
 		const report = await once(controller);
 
@@ -7024,10 +7167,12 @@ describe("specify: linked runs and answers", () => {
 
 		const prompt = executor.launches[1]?.prompt ?? "";
 
-		assert.ok(prompt.includes("--- giuseppecrj ---\nUse package.json."));
+		assert.ok(
+			prompt.includes('"author":"giuseppecrj","body":"Use package.json."'),
+		);
 		assert.ok(!prompt.includes("Use a constant."));
 		assert.ok(!prompt.includes("Bot echo."));
-		assert.ok(prompt.includes("<previous-questions>"));
+		assert.match(prompt, /<previous-questions-[0-9a-f]{32}>/);
 
 		const contract = JSON.parse(files.contracts.get(nextRun)?.bytes ?? "{}");
 
@@ -7043,6 +7188,201 @@ describe("specify: linked runs and answers", () => {
 			),
 		);
 		assert.deepEqual(github.issues.get(14)?.labels, [READY_LABEL]);
+	});
+
+	it("carries both clarification rounds in order with authors and a digest of the whole set", async () => {
+		const ctx = await askedThenRelabeled(
+			(github, issue) => {
+				github.comment(issue, "ROUND-ONE-ANSWER", user("writer"));
+			},
+			undefined,
+			({ executor }) => {
+				executor.outputs = [QUESTIONS_TEXT];
+			},
+		);
+
+		assert.equal(statuses(ctx.github, 14).at(-1), "6:needs_info");
+		ctx.github.now = "2026-10-29T02:40:00Z";
+		ctx.github.comment(ctx.issue, "ROUND-TWO-ANSWER", user("giuseppecrj"));
+		ctx.github.now = "2026-10-29T02:50:00Z";
+		ctx.issue.labels.push(READY_LABEL);
+		ctx.issue.timeline.push(
+			labelEvent({
+				id: NEXT_EVENT + 1,
+				at: ctx.github.now,
+				actor: "giuseppecrj",
+			}),
+		);
+		ctx.issue.updatedAt = ctx.github.now;
+		ctx.clock.t = Date.parse("2026-10-29T03:00:00Z");
+		ctx.github.now = "2026-10-29T03:00:00Z";
+		ctx.executor.behaviors = [{ kind: "pass", usage: 5 }];
+		await once(ctx.controller);
+
+		const finalRun = runIdOf({
+			repo,
+			issue: 14,
+			eventId: String(NEXT_EVENT + 1),
+		});
+
+		const record = ctx.files.answers.get(finalRun);
+		assert.ok(record);
+		assert.deepEqual(
+			record.answers.map(({ author, body }) => [author, body]),
+			[
+				["writer", "ROUND-ONE-ANSWER"],
+				["giuseppecrj", "ROUND-TWO-ANSWER"],
+			],
+		);
+		assert.equal(record.digest, answersDigestOf(record));
+		assert.notEqual(
+			record.digest,
+			answersDigestOf({ ...record, answers: record.answers.slice(1) }),
+		);
+		const prompt = ctx.executor.launches[2]?.prompt ?? "";
+		assert.ok(
+			prompt.indexOf("ROUND-ONE-ANSWER") < prompt.indexOf("ROUND-TWO-ANSWER"),
+		);
+		assert.match(prompt, /ROUND-ONE-ANSWER/);
+		assert.match(prompt, /ROUND-TWO-ANSWER/);
+	});
+
+	it("excludes a pre-question id, a post-label comment and an edit in the label second", async () => {
+		const { files } = await askedThenRelabeled((github, issue) => {
+			const asked = issue.comments.find((comment) =>
+				comment.body.includes("<!-- factory-questions "),
+			);
+
+			assert.ok(asked);
+			github.comment(issue, "PRE-QUESTION", {
+				...user("writer"),
+				id: 1,
+				createdAt: "2026-10-29T01:59:00Z",
+			});
+			github.comment(issue, "SAME-SECOND-EDIT", {
+				...user("writer"),
+				lastEditedAt: "2026-10-29T02:20:00Z",
+			});
+			github.comment(issue, "VALID", user("writer"));
+			github.now = "2026-10-29T02:21:00Z";
+			github.comment(issue, "POST-LABEL", user("writer"));
+		});
+
+		assert.deepEqual(
+			files.answers.get(nextRun)?.answers.map(({ body }) => body),
+			["VALID"],
+		);
+	});
+
+	it("refuses a label in the needs_info marker's second", async () => {
+		const { report, executor, files, logs } = await askedThenRelabeled(
+			(_github, issue) => {
+				const marker = issue.comments.findLast(
+					(comment) => parseMarker(comment.body).kind === "marker",
+				);
+
+				assert.ok(marker);
+				marker.createdAt = "2026-10-29T02:01:00Z";
+			},
+			"2026-10-29T02:01:00Z",
+		);
+
+		assert.deepEqual(report.refused, [
+			{ issue: 14, reasons: ["ambiguous_snapshot"] },
+		]);
+		assert.equal(executor.launches.length, 1);
+		assert.equal(files.links.size, 0);
+		assert.ok(
+			logs.some(
+				({ event, fields }) =>
+					event === "admission_refused" &&
+					fields.detail === "answer_at_label_time",
+			),
+		);
+	});
+
+	it("persists the link and answers on disk before a rejected writeClaim and reuses their digest", async () => {
+		let keptDigest = "";
+
+		const ctx = await askedThenRelabeled(
+			(github, issue) => {
+				github.comment(issue, "Use package.json.", user("writer"));
+			},
+			undefined,
+			({ files }) => {
+				const disk = fileRunFiles(stateDir());
+				const write = files.writeClaim.bind(files);
+				files.writeAnswers = disk.writeAnswers;
+				files.writeLink = disk.writeLink;
+				files.readAnswers = disk.readAnswers;
+				files.readLink = disk.readLink;
+				files.writeClaim = async (claim) => {
+					if (claim.runId !== nextRun) return write(claim);
+					const link = await disk.readLink(nextRun);
+					const answers = await disk.readAnswers(nextRun);
+					assert.equal(link.kind, "found");
+					assert.ok(answers);
+					keptDigest = answers.digest;
+
+					return false;
+				};
+			},
+		);
+
+		assert.ok(keptDigest);
+		assert.equal(ctx.executor.launches.length, 1);
+		ctx.files.writeClaim = async (claim) => {
+			ctx.files.claims.set(claim.runId, claim);
+
+			return true;
+		};
+
+		ctx.clock.t += 60_000;
+		await once(ctx.controller);
+		assert.equal((await ctx.files.readAnswers(nextRun))?.digest, keptDigest);
+		assert.equal(ctx.executor.launches.length, 2);
+	});
+
+	it("caches answer permissions once per author within admission", async () => {
+		let permissionCalls = 0;
+		await askedThenRelabeled(
+			(github, issue) => {
+				for (const body of ["first", "second", "third"])
+					github.comment(issue, body, user("writer"));
+			},
+			undefined,
+			({ github }) => {
+				github.beforeCall = (args) => {
+					if (
+						args.some((arg) => arg.includes("collaborators/writer/permission"))
+					)
+						permissionCalls++;
+				};
+			},
+		);
+		assert.equal(permissionCalls, 1);
+	});
+
+	it("retries stale needs-info removal after adopting the linked claim", async () => {
+		const ctx = await askedThenRelabeled(
+			() => undefined,
+			undefined,
+			({ wire, github, executor }) => {
+				const write = writesWire(github, []);
+				wire.intercept = async (command, args) =>
+					args.some((arg) => arg.endsWith("labels/factory%3Aneeds-info"))
+						? httpError(422, "denied")
+						: write(command, args);
+				executor.behaviors = [{ kind: "unavailable" }];
+			},
+		);
+
+		assert.ok(ctx.issue.labels.includes("factory:needs-info"));
+		ctx.wire.intercept = writesWire(ctx.github, []);
+		ctx.executor.behaviors = [{ kind: "pass", usage: 1 }];
+		ctx.clock.t += 60_000;
+		await once(ctx.start());
+		assert.ok(!ctx.issue.labels.includes("factory:needs-info"));
 	});
 
 	it("still links a relabel with no answers, for an owner who edited the body", async () => {
