@@ -6,7 +6,7 @@ A passing stage spends real model tokens. The F05 probe spent 446 `openai/gpt-6.
 
 ## Sub-features
 
-- `stage-passed`: the markers are `claimed`, `running`, then `stage_passed` at stage `specify`. The last marker's text is `stopped: stage passed; the next stage is not installed`. The run frees its slot. The tick logs `sandbox_preflight ok=true`, `stage_launched ... result=started` and `stage_ended ... cause=passed next=stage_passed`, and prints `executionEnabled=true`.
+- `stage-passed`: the markers are `claimed`, `running`, then `stage_passed` at stage `specify`. From F06b a specify contract continues to `accept` on the same run and `stage_passed` lands at stage `accept`; see `acceptance.md`. The last marker's text is `stopped: stage passed; the next stage is not installed`. The run frees its slot. The tick logs `sandbox_preflight ok=true`, `stage_launched ... result=started` and `stage_ended ... cause=passed next=stage_passed`, and prints `executionEnabled=true`.
 - `stage-receipt`: `<state>/stages/<runId>/specify-<attempt>/receipt.json`, mode 0600, holds `outcome`, `settlement` (`agent_settled`, `aborted: false`), the requested and observed models, `fallback`, `refusal`, `wallMs`, `turns`, `usage` (parent, children and gateway), `egress`, `stderr`, `assetsDigest`, `versions` and `pricing: "unavailable"`. It never appears in a marker.
 - `stage-bundle-digest`: the receipt's `assetsDigest` equals the sha256 in the name `/var/lib/factory-sandbox/current` points to, `assets-<sha256>`. The tick's `sandbox_preflight` line shows its first 12 characters.
 - `stage-egress`: `egress.jsonl` beside the receipt has one line per gateway request. A probe shows `model-openai:POST:200:forward`, and the receipt's gateway usage equals the parent's.
