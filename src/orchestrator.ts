@@ -1,4 +1,13 @@
 import {
+	ACCEPTANCE_MAX_TOKENS,
+	ACCEPTANCE_SKILLS,
+	ACCEPTANCE_TOOLS,
+	acceptancePrompt,
+	writeAcceptance,
+	type AcceptanceSuite,
+} from "./accept.ts";
+import type { ArtifactStore, ContractRead } from "./artifacts.ts";
+import {
 	type AdmissionStore,
 	type Ambiguity,
 	admitTicket,
@@ -45,6 +54,8 @@ import {
 	type Answer,
 	type AnswersRecord,
 	answerBody,
+	acceptanceKey,
+	renderAcceptanceSummary,
 	answersDigestOf,
 	type Contract,
 	CONTRACT_VERSION,
@@ -189,6 +200,8 @@ export const UNAVAILABLE_EXECUTOR: StageExecutor = {
 
 type StageEnd = Pick<StageResult, "kind" | "usage"> & {
 	readonly output: string | null;
+	readonly model?: string;
+	readonly observed?: string | null;
 };
 
 function isModelStage(stage: Stage): stage is ModelStage {
@@ -243,6 +256,8 @@ export type LinkRead =
 	| { readonly kind: "unreadable" };
 
 export interface RunFiles {
+	readonly artifacts: ArtifactStore;
+	readContract(runId: Digest): Promise<ContractRead>;
 	workspacePath(runId: Digest): string;
 	workspaceState(runId: Digest): Promise<WorkspaceState>;
 	/** Creates the workspace empty, mode 0700, when it is missing. */
@@ -296,6 +311,14 @@ export type RunPhase =
 
 export type Effects =
 	| {
+			readonly kind: "acceptance";
+			readonly contract: Contract;
+			readonly contractDigest: ContractDigest;
+			readonly suite: AcceptanceSuite;
+			readonly model: string;
+			readonly observed: string | null;
+	  }
+	| {
 			readonly kind: "contract";
 			readonly contract: Contract;
 			readonly bytes: string;
@@ -317,6 +340,7 @@ export type Effects =
 	  };
 
 type StageInputs = {
+	readonly contract?: Extract<ContractRead, { kind: "found" }>;
 	readonly files: ReadonlySet<string>;
 	readonly source: SnapshotSource;
 	readonly link: Link | null;
@@ -967,6 +991,15 @@ export class Orchestrator {
 			this.#countLateUsage();
 			await this.#reconcileStages(this.#input.clock.now(), limits);
 
+			for (const run of this.state.runs.values()) {
+				if (
+					run.stage === "accept" &&
+					run.phase.kind === "claimed" &&
+					run.inflight === null
+				)
+					await this.#launch(run);
+			}
+
 			if (running()) await wait(DRAIN_POLL_MS);
 		}
 
@@ -1423,8 +1456,14 @@ export class Orchestrator {
 			return;
 		}
 
-		if (result.kind === "passed" && run.stage === "specify") {
-			const reporting = this.#specified(run, result.output);
+		if (
+			result.kind === "passed" &&
+			(run.stage === "specify" || run.stage === "accept")
+		) {
+			const reporting =
+				run.stage === "specify"
+					? this.#specified(run, result.output)
+					: this.#accepted(run, result.output, result.model, result.observed);
 
 			if (reporting === null) {
 				this.#endStage(run, "stage_failed", result.usage, limits);
@@ -2951,6 +2990,41 @@ export class Orchestrator {
 
 		run.inputs = prepared.inputs;
 
+		if (stage === "accept" && prepared.inputs?.contract !== undefined) {
+			const bound = prepared.inputs.contract;
+
+			const kept = await files.artifacts.read(
+				run.runId,
+				bound.contract,
+				bound.digest,
+			);
+
+			if (kept.kind !== "absent") {
+				if (kept.kind === "blocked") {
+					this.#input.log("stage_inputs_refused", {
+						runId: run.runId,
+						why: kept.reason,
+					});
+					run.phase = { kind: "ending", status: "failed" };
+				} else
+					run.phase = {
+						kind: "reporting",
+						status: "stage_passed",
+						effects: {
+							kind: "acceptance",
+							contract: bound.contract,
+							contractDigest: bound.digest,
+							suite: kept.suite,
+							model: kept.receipt.model,
+							observed: kept.receipt.observed,
+						},
+					};
+				await this.#sync(run);
+
+				return false;
+			}
+		}
+
 		const abort = new AbortController();
 		const now = clock.now();
 
@@ -2969,13 +3043,26 @@ export class Orchestrator {
 			workspace: files.workspacePath(run.runId),
 			prompt: prepared.prompt,
 			specify: prepared.specify,
-			tools: prepared.inputs === null ? [] : SPECIFY_TOOLS,
-			skills: prepared.inputs === null ? [] : SPECIFY_SKILLS,
+			tools:
+				prepared.inputs === null
+					? []
+					: stage === "accept"
+						? ACCEPTANCE_TOOLS
+						: SPECIFY_TOOLS,
+			skills:
+				prepared.inputs === null
+					? []
+					: stage === "accept"
+						? ACCEPTANCE_SKILLS
+						: SPECIFY_SKILLS,
 			settings: {
 				model: config.stages[stage].model,
 				fallback: config.stages[stage].fallbackModel,
 				budget: config.stages[stage].budget,
-				maxTokens: null,
+				maxTokens:
+					stage === "accept"
+						? Math.max(0, ACCEPTANCE_MAX_TOKENS - prior)
+						: null,
 			},
 			remainingRunTokens: Math.max(
 				0,
@@ -3010,6 +3097,12 @@ export class Orchestrator {
 
 					phase.result = {
 						kind: result.kind,
+						model:
+							result.receipt.fallback?.requested ??
+							result.receipt.models.requested,
+						observed:
+							result.receipt.fallback?.observed ??
+							result.receipt.models.observed,
 						usage: prior + result.usage,
 						output: output instanceof Object ? null : output,
 					};
@@ -3065,8 +3158,17 @@ export class Orchestrator {
 			const { status, effects } = run.phase;
 
 			if (await this.#applyEffects(run, effects)) {
-				run.phase = { kind: "ending", status };
-			} else if (!this.#labelsExhausted(run)) {
+				if (effects.kind === "contract") {
+					run.stage = "accept";
+					run.attempt = 1;
+					run.inputs = null;
+					run.replay = false;
+					run.phase = { kind: "claimed" };
+				} else run.phase = { kind: "ending", status };
+			} else if (
+				run.phase.kind === "reporting" &&
+				!this.#labelsExhausted(run)
+			) {
 				return;
 			}
 		}
@@ -3099,7 +3201,22 @@ export class Orchestrator {
 			return { kind: "fail" } as const;
 		};
 
-		if (run.stage !== "specify") return fail("no_prompt");
+		if (run.stage !== "specify" && run.stage !== "accept")
+			return fail("no_prompt");
+
+		const contract =
+			run.stage === "accept" ? await files.readContract(run.runId) : null;
+
+		if (contract?.kind === "blocked") return fail(contract.reason);
+
+		if (
+			contract?.kind === "found" &&
+			(contract.contract.base.sha !== run.workflowSha ||
+				contract.contract.base.repo !== repo ||
+				contract.contract.issue !== run.issue ||
+				contract.contract.snapshot.digest !== run.snapshotDigest)
+		)
+			return fail("contract_binding");
 
 		const checked = await this.#input.executor
 			.checkout({
@@ -3115,6 +3232,36 @@ export class Orchestrator {
 		if (checked.kind === "refused") return fail(`checkout_${checked.reason}`);
 
 		const { checkout } = checked;
+
+		if (contract?.kind === "found") {
+			const shown: InlinedFile[] = [];
+			let budget = INLINE_TOTAL_BYTES;
+
+			for (const path of contract.contract.files) {
+				const text = await checkout.read(path, NAMED_FILE_READ_BYTES);
+
+				if (text === null || budget < 1024) continue;
+				const file = inlined(path, text, Math.min(NAMED_FILE_BYTES, budget));
+				budget -= Buffer.byteLength(file.text);
+				shown.push(file);
+			}
+
+			return {
+				kind: "ready",
+				inputs: {
+					contract,
+					files: new Set(checkout.files),
+					source: contract.contract.snapshot.source,
+					link: null,
+				},
+				prompt: acceptancePrompt({
+					contract: contract.contract,
+					files: checkout.files,
+					inlined: shown,
+				}),
+			};
+		}
+
 		const workflow = await checkout.read(WORKFLOW_PATH, 256 * 1024);
 
 		if (workflow === null || digestOf(workflow) !== run.workflowDigest) {
@@ -3297,13 +3444,94 @@ export class Orchestrator {
 		return null;
 	}
 
+	#accepted(
+		run: ActiveRun,
+		output: string | null,
+		model?: string,
+		observed?: string | null,
+	): Extract<RunPhase, { kind: "reporting" }> | null {
+		const bound = run.inputs?.contract;
+
+		if (bound === undefined || output === null) return null;
+		const parsed = writeAcceptance(output, bound.contract);
+
+		if (parsed.kind === "malformed") {
+			this.#input.log("acceptance_malformed", {
+				runId: run.runId,
+				reason: parsed.reason,
+			});
+
+			return null;
+		}
+
+		return {
+			kind: "reporting",
+			status: "stage_passed",
+			effects: {
+				kind: "acceptance",
+				contract: bound.contract,
+				contractDigest: bound.digest,
+				suite: parsed.suite,
+				model: model ?? this.#config?.stages.accept.model ?? "openai/unknown",
+				observed: observed ?? null,
+			},
+		};
+	}
+
 	async #recoverOutput(
 		run: ActiveRun,
 		output: string | { readonly kind: "pending" } | null,
 	): Promise<boolean> {
 		const stage = run.stage;
 
-		if (stage !== "specify") return false;
+		if (stage !== "specify" && stage !== "accept") return false;
+
+		if (stage === "accept") {
+			const bound = await this.#input.files.readContract(run.runId);
+
+			if (bound.kind === "blocked") {
+				this.#input.log("stage_inputs_refused", {
+					runId: run.runId,
+					why: bound.reason,
+				});
+				run.phase = { kind: "ending", status: "failed" };
+
+				return true;
+			}
+
+			const kept = await this.#input.files.artifacts.read(
+				run.runId,
+				bound.contract,
+				bound.digest,
+			);
+
+			if (kept.kind === "blocked") {
+				this.#input.log("stage_inputs_refused", {
+					runId: run.runId,
+					why: kept.reason,
+				});
+				run.phase = { kind: "ending", status: "failed" };
+
+				return true;
+			}
+
+			if (kept.kind === "found") {
+				run.phase = {
+					kind: "reporting",
+					status: "stage_passed",
+					effects: {
+						kind: "acceptance",
+						contract: bound.contract,
+						contractDigest: bound.digest,
+						suite: kept.suite,
+						model: kept.receipt.model,
+						observed: kept.receipt.observed,
+					},
+				};
+
+				return true;
+			}
+		}
 
 		if (output === null) return false;
 
@@ -3332,7 +3560,10 @@ export class Orchestrator {
 
 		run.inputs = prepared.inputs;
 
-		const reporting = this.#specified(run, output);
+		const reporting =
+			stage === "specify"
+				? this.#specified(run, output)
+				: this.#accepted(run, output);
 
 		if (reporting === null) return false;
 
@@ -3380,6 +3611,41 @@ export class Orchestrator {
 	async #applyEffects(run: ActiveRun, effects: Effects): Promise<boolean> {
 		const { files } = this.#input;
 		const fields = { issue: run.issue, runId: run.runId };
+
+		if (effects.kind === "acceptance") {
+			const stored = await files.artifacts.store(effects);
+
+			if (stored.kind !== "found") {
+				this.#input.log("stage_inputs_refused", {
+					...fields,
+					why: stored.kind === "blocked" ? stored.reason : "acceptance_missing",
+				});
+				run.phase = { kind: "ending", status: "failed" };
+
+				return false;
+			}
+
+			const digest = stored.receipt.acceptanceDigest;
+			this.#input.log("acceptance_stored", { ...fields, digest });
+
+			const body = renderAcceptanceSummary({
+				runId: run.runId,
+				digest,
+				scenarios: stored.suite.scenarios,
+			});
+
+			if (body === null) {
+				this.#input.log("stage_inputs_refused", {
+					...fields,
+					why: "summary_too_large",
+				});
+				run.phase = { kind: "ending", status: "failed" };
+
+				return false;
+			}
+
+			return this.#postKeyed(run, acceptanceKey(run.runId, digest), body);
+		}
 
 		if (effects.kind === "contract") {
 			effects.stored ||= await files.writeContract(effects);

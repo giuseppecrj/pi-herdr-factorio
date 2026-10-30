@@ -1,3 +1,4 @@
+import { fileArtifacts, readStoredContract } from "../src/artifacts.ts";
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -1044,6 +1045,10 @@ export function fileRunFiles(stateDir: string): RunFiles {
 
 	return {
 		workspacePath,
+		artifacts: fileArtifacts(root),
+		async readContract(runId) {
+			return readStoredContract(root, runId);
+		},
 
 		async writeContract({ contract, bytes, digest }) {
 			const dir = join(contracts, contract.runId);

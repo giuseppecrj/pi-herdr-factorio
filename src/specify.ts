@@ -673,6 +673,35 @@ export function withoutKey(body: string): string {
 		: body.trimEnd();
 }
 
+export function acceptanceKey(runId: Digest, digest: Digest): string {
+	return `${COMMENT_KEY_PREFIX}acceptance run=${runId} a=${digest} -->`;
+}
+
+export function renderAcceptanceSummary(input: {
+	readonly runId: Digest;
+	readonly digest: Digest;
+	readonly scenarios: readonly {
+		readonly id: string;
+		readonly criteria: readonly string[];
+	}[];
+}): string | null {
+	return bounded(
+		[
+			`The factory stored held-out acceptance scenarios. Run \`${input.runId.slice(0, 12)}\`, suite \`${input.digest.slice(0, 12)}\`.`,
+			"",
+			...input.scenarios.map(
+				(s) => `- ${inert(s.id)}: ${s.criteria.map(inert).join(", ")}`,
+			),
+			"",
+			"Isolation: context-isolated, same family, not cross-family. The design's cross-family requirement remains unmet.",
+			"Test code stays private on the factory host. Do not edit this comment.",
+			"",
+			acceptanceKey(input.runId, input.digest),
+			"",
+		].join("\n"),
+	);
+}
+
 function bounded(body: string): string | null {
 	return Buffer.byteLength(body, "utf8") <= COMMENT_MAX_BYTES ? body : null;
 }
