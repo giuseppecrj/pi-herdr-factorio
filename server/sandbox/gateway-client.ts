@@ -228,10 +228,16 @@ class ProcessHandle implements GatewayHandle {
 
 		const result = await summary;
 
+		let timer: NodeJS.Timeout | undefined;
+
 		const exited = await Promise.race([
 			this.exited.then(() => true),
-			new Promise<boolean>((done) => setTimeout(() => done(false), 5_000)),
+			new Promise<boolean>((done) => {
+				timer = setTimeout(() => done(false), 5_000);
+			}),
 		]);
+
+		clearTimeout(timer);
 
 		if (!exited) this.kill();
 

@@ -1302,6 +1302,42 @@ describe("gateway lifecycle from the runner", () => {
 		}
 	});
 
+	it("lets the host process exit promptly once the stage receipt is published", {
+		timeout: 30_000,
+	}, async () => {
+		const script = new URL("./receipt-exit.ts", import.meta.url).pathname;
+
+		const child = spawn(
+			process.execPath,
+			["--experimental-strip-types", script],
+			{ stdio: ["ignore", "pipe", "inherit"] },
+		);
+
+		let output = "";
+		let published: number | null = null;
+
+		child.stdout.on("data", (chunk: Buffer) => {
+			output += chunk.toString();
+
+			if (published === null && output.includes("receipt\n"))
+				published = performance.now();
+		});
+
+		const code = await new Promise<number | null>((done) =>
+			child.on("exit", (exit) => done(exit)),
+		);
+
+		const exitedAt = performance.now();
+
+		assert.equal(code, 0);
+		assert.equal(output, "receipt\nresult passed\n");
+		assert.ok(published !== null);
+		assert.ok(
+			exitedAt - published < 1_500,
+			`exited ${Math.round(exitedAt - published)} ms after the receipt`,
+		);
+	});
+
 	it("refuses a socket path the kernel cannot bind", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "factory-gwc-"));
 		const deep = join(dir, "x".repeat(120));
