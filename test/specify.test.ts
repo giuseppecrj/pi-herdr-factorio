@@ -316,10 +316,75 @@ describe("fix round 2: public comment safety", () => {
 		assert.ok(safe.includes("＃1"));
 		assert.ok(safe.includes("GH－3"));
 		assert.ok(safe.includes("https\\:"));
-		assert.ok(
-			!safe.includes("/"),
-			"GitHub resolves full issue URLs even after Markdown escaping",
+		assert.ok(!safe.includes("github\\.com/"));
+	});
+
+	it("preserves slashes in paths while neutralizing GitHub URLs and issue references", () => {
+		assert.equal(
+			inert("src/specify.ts /usr/local/bin"),
+			"src/specify\\.ts /usr/local/bin",
 		);
+
+		for (const text of [
+			"owner/repo#1",
+			"#2",
+			"GH-3",
+			"gh-4",
+			"https://github.com/owner/repo/issues/5",
+			"http://github.com/owner/repo/pull/6",
+			"github.com/owner/repo/issues/7",
+			"www.github.com/owner/repo/pull/8",
+			"octocat/Hello-World/issues/1",
+			"octocat/Hello-World/pull/1",
+			"https://github.com/octocat/Hello-World/discussions/1",
+		]) {
+			assert.doesNotMatch(
+				inert(text).replaceAll("\\", ""),
+				/#\d|\bGH-\d|github\.com\/|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/(?:issues|pull|discussions)\/\d/i,
+			);
+		}
+	});
+
+	it("keeps ordinary hyphenated words and paths readable while redacting real credential shapes", () => {
+		for (const text of [
+			"sk-learn-compatible-wrapper-module-name",
+			"task-sk-learn-compatible-wrapper",
+			"task-sk-0123456789abcdefghij",
+			"src/specify.ts",
+			"test/sandbox/runner.cases.ts",
+			"/usr/local/bin",
+			"owner/repo",
+		]) {
+			assert.equal(inert(text).replaceAll("\\", ""), text);
+		}
+
+		for (const text of [
+			"sk-0123456789abcdefghij",
+			"sk-proj-0123456789abcdefghij_abcdefgh",
+			"xai-0123456789abcdefghij",
+			`token_ghp_${"a".repeat(36)}`,
+			`AKIA${"A".repeat(16)}`,
+		]) {
+			assert.match(inert(text), /REDACTED/);
+		}
+	});
+
+	it("rejects and strips every Unicode format character", () => {
+		for (let code = 0; code <= 0x10ffff; code++) {
+			const char = String.fromCodePoint(code);
+
+			if (!/\p{Cf}/u.test(char)) continue;
+			const text = `a${char}b`;
+			assert.deepEqual(
+				parseSpecifyOutput(
+					output({ kind: "questions", questions: [{ text }] }),
+					files,
+				),
+				{ kind: "malformed", reason: "bad_field" },
+				code.toString(16),
+			);
+			assert.equal(inert(text), "ab", code.toString(16));
+		}
 	});
 
 	it("redacts bare credential shapes in both questions and summaries", () => {
@@ -370,8 +435,9 @@ describe("fix round 2: public comment safety", () => {
 
 	it("rejects invisible and bidi characters and strips them from direct renders", () => {
 		for (const code of [
-			0x061c, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c,
-			0x202d, 0x202e, 0x2060, 0x2064, 0x2066, 0x2067, 0x2068, 0x2069, 0xfeff,
+			0x00ad, 0x180e, 0x034f, 0x2800, 0x3164, 0x115f, 0x061c, 0x200b, 0x200c,
+			0x200d, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2060,
+			0x2064, 0x2066, 0x2067, 0x2068, 0x2069, 0xfeff,
 		]) {
 			const text = `a${String.fromCodePoint(code)}b`;
 			assert.deepEqual(
@@ -763,21 +829,38 @@ describe("tarball checkout", () => {
 		);
 	});
 
-	it("refuses traversal, absolute paths, escaping symlinks, hardlinks, specials and .git", () => {
+	it("skips outside symlinks and still extracts the regular files through the public checkout", async () => {
+		const state = fresh("outside-symlinks");
+		const workspace = fresh("outside-symlinks-workspace");
+
+		const checked = await checkoutWorkspace({
+			stateDir: state,
+			workspace,
+			runId,
+			repo,
+			sha: base,
+			fetch: async () =>
+				tarball([
+					...GOOD,
+					{ name: `${TOP}/outside`, type: "2", link: "../../etc/passwd" },
+					{ name: `${TOP}/absolute`, type: "2", link: "/etc/passwd" },
+					{ name: `${TOP}/after.txt`, type: "0", data: "after" },
+				]),
+		});
+
+		assert.ok(checked.kind === "ready");
+		assert.equal(await checked.checkout.read("after.txt", 100), "after");
+		assert.ok(!existsSync(join(workspace, "outside")));
+		assert.ok(!existsSync(join(workspace, "absolute")));
+	});
+
+	it("refuses traversal, absolute paths, hardlinks, specials and .git", () => {
 		const cases: [Member, string][] = [
 			[{ name: `${TOP}/../evil.txt`, type: "0" }, "unsafe_path"],
 			[{ name: `${TOP}/a/../../evil.txt`, type: "0" }, "unsafe_path"],
 			[{ name: "/etc/passwd", type: "0" }, "unsafe_path"],
 			[{ name: "other-top/x.txt", type: "0" }, "unsafe_path"],
 			[{ name: `${TOP}/.git/config`, type: "0" }, "unsafe_path"],
-			[
-				{ name: `${TOP}/esc`, type: "2", link: "../../etc" },
-				"escaping_symlink",
-			],
-			[
-				{ name: `${TOP}/abs`, type: "2", link: "/etc/passwd" },
-				"escaping_symlink",
-			],
 			[
 				{ name: `${TOP}/hard`, type: "1", link: `${TOP}/README.md` },
 				"hardlink",
@@ -1018,6 +1101,81 @@ describe("specify records on the host", () => {
 		link: null,
 		...parsed.draft,
 	};
+
+	it("round-trips digest-bound clarification rounds and carries their questions into review and revision", async () => {
+		const host = fileRunFiles(fresh("round-records"));
+
+		const rounds = [
+			{
+				questions: "FIRST-QUESTION",
+				answers: [
+					{
+						commentId: "1",
+						author: "writer",
+						createdAt: "x",
+						body: "FIRST-ANSWER",
+					},
+				],
+			},
+			{
+				questions: "SECOND-QUESTION",
+				answers: [
+					{
+						commentId: "2",
+						author: "writer",
+						createdAt: "y",
+						body: "SECOND-ANSWER",
+					},
+				],
+			},
+		];
+
+		const record = {
+			version: 1 as const,
+			runId,
+			prevRunId: runId,
+			questionsCommentId: "3",
+			questions: "SECOND-QUESTION",
+			answers: rounds.flatMap((round) => round.answers),
+			rounds,
+			digest: answersDigestOf({
+				prevRunId: runId,
+				questions: "SECOND-QUESTION",
+				answers: rounds.flatMap((round) => round.answers),
+				rounds,
+			}),
+		};
+
+		assert.equal(await host.writeAnswers(record), true);
+		assert.deepEqual(await host.readAnswers(runId), record);
+		const input = { title: "ticket", body: "body", files: [], answers: record };
+
+		for (const prompt of [
+			reviewPrompt(input, "draft"),
+			revisionPrompt(input, "draft", ["critique"]),
+		]) {
+			const parts = [
+				"FIRST-QUESTION",
+				"FIRST-ANSWER",
+				"SECOND-QUESTION",
+				"SECOND-ANSWER",
+			].map((part) => prompt.indexOf(part));
+
+			assert.ok(
+				parts.every(
+					(at, index) =>
+						at >= 0 && (index === 0 || at > (parts[index - 1] ?? -1)),
+				),
+			);
+		}
+
+		const path = join(scratch, "round-records", "answers", `${runId}.json`);
+		writeFileSync(
+			path,
+			readFileSync(path, "utf8").replace("FIRST-QUESTION", "TAMPERED"),
+		);
+		assert.equal(await host.readAnswers(runId), null);
+	});
 
 	it("writes the contract and its receipt once, mode 0600, and refuses different bytes", async () => {
 		const state = fresh("records");

@@ -14,7 +14,7 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { createConnection, createServer, type Server } from "node:net";
-import { dirname, join, posix, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { isRunStatus, isStage } from "../src/markers.ts";
 import { type Digest, isDigest } from "../src/run.ts";
@@ -32,6 +32,7 @@ import type {
 import {
 	type Answer,
 	type AnswersRecord,
+	type ClarificationRound,
 	answersDigestOf,
 	hasControl,
 	isAnswersDigest,
@@ -372,8 +373,10 @@ function parseClaim(text: string): ClaimRecord | null {
 	const seq = claimSeq(fieldOf(value, "seq"));
 	const state = claimState(value);
 	const usage = claimUsage(fieldOf(value, "usage"));
+	const labelFailures = claimUsage(fieldOf(value, "labelFailures"));
 
 	if (
+		labelFailures === undefined ||
 		seq === undefined ||
 		state === undefined ||
 		usage === undefined ||
@@ -392,16 +395,18 @@ function parseClaim(text: string): ClaimRecord | null {
 
 	const id = String(runId);
 
-	return isDigest(id)
-		? {
-				runId: id,
-				issue: Number(issue),
-				eventId: String(eventId),
-				seq,
-				...state,
-				usage,
-			}
-		: null;
+	if (!isDigest(id)) return null;
+
+	const claim: ClaimRecord = {
+		runId: id,
+		issue: Number(issue),
+		eventId: String(eventId),
+		seq,
+		...state,
+		usage,
+	};
+
+	return labelFailures === null ? claim : { ...claim, labelFailures };
 }
 
 async function writeAtomic(path: string, text: string): Promise<boolean> {
@@ -657,17 +662,6 @@ export function readTarball(gz: Buffer): TarRead {
 			entries.push({ kind: "dir", path });
 		} else if (type === "2") {
 			if (target === "" || hasControl(target)) return refuse("unsafe_symlink");
-
-			const resolved = posix.normalize(posix.join(posix.dirname(path), target));
-
-			if (
-				target.startsWith("/") ||
-				resolved === ".." ||
-				resolved.startsWith("../") ||
-				resolved.split("/").includes(".git")
-			) {
-				return refuse("escaping_symlink");
-			}
 		} else {
 			return refuse(type === "1" ? "hardlink" : "special_file");
 		}
@@ -771,6 +765,37 @@ function parseAnswer(value: JsonValue): Answer | null {
 		: { commentId, author, createdAt, body };
 }
 
+function parseRounds(
+	value: JsonValue | undefined,
+): readonly ClarificationRound[] | null | undefined {
+	if (value === undefined) return undefined;
+
+	if (!Array.isArray(value)) return null;
+
+	const rounds: ClarificationRound[] = [];
+
+	for (const item of value) {
+		const questions = textList(fieldOf(item, "questions"));
+		const items = fieldOf(item, "answers");
+
+		if (questions === null || !Array.isArray(items)) return null;
+
+		const answers: Answer[] = [];
+
+		for (const value of items) {
+			const answer = parseAnswer(value);
+
+			if (answer === null) return null;
+
+			answers.push(answer);
+		}
+
+		rounds.push({ questions, answers });
+	}
+
+	return rounds;
+}
+
 export function parseAnswers(
 	text: string,
 	runId: Digest,
@@ -782,8 +807,10 @@ export function parseAnswers(
 	const questionsCommentId = commentId === null ? null : textList(commentId);
 	const items = fieldOf(value, "answers");
 	const digest = textList(fieldOf(value, "digest"));
+	const rounds = parseRounds(fieldOf(value, "rounds"));
 
 	if (
+		rounds === null ||
 		fieldOf(value, "version") !== 1 ||
 		fieldOf(value, "runId") !== runId ||
 		prevRunId === null ||
@@ -807,17 +834,20 @@ export function parseAnswers(
 		answers.push(answer);
 	}
 
-	return answersDigestOf({ prevRunId, questions, answers }) === digest
-		? {
-				version: 1,
-				runId,
-				prevRunId,
-				questionsCommentId,
-				questions,
-				answers,
-				digest,
-			}
-		: null;
+	if (answersDigestOf({ prevRunId, questions, answers, rounds }) !== digest)
+		return null;
+
+	const record: AnswersRecord = {
+		version: 1,
+		runId,
+		prevRunId,
+		questionsCommentId,
+		questions,
+		answers,
+		digest,
+	};
+
+	return rounds === undefined ? record : { ...record, rounds };
 }
 
 function parseLink(text: string): LinkRead {

@@ -211,6 +211,7 @@ export type ClaimRecord = {
 	readonly stage: Stage | null;
 	readonly attempt: number | null;
 	readonly usage: number | null;
+	readonly labelFailures?: number;
 };
 
 type ConfirmedRecord = ClaimRecord & { readonly seq: number };
@@ -412,6 +413,10 @@ export type SeenIssue = {
 		| { readonly kind: "open"; readonly ledger: CleanLedger }
 		| { readonly kind: "claimed" }
 		| { readonly kind: "decided" }
+		| {
+				readonly kind: "refused";
+				readonly reason: "answers_record_invalid" | "link_record_invalid";
+		  }
 		| { readonly kind: "corrupt" };
 };
 
@@ -583,7 +588,7 @@ function isClarificationPredecessor(
 	return (
 		prev.marker.status === "needs_info" &&
 		prev.marker.runId !== runId &&
-		admitted.eventAt >= prev.createdAt
+		admitted.eventAt > prev.marker.eventAt
 	);
 }
 
@@ -634,6 +639,8 @@ function refusalSettlesUntilEdited(reason: RefusalReason): boolean {
 		case "issue_closed":
 		case "actor_withheld":
 		case "unauthorized":
+		case "answers_record_invalid":
+		case "link_record_invalid":
 			return true;
 		case "ambiguous_snapshot":
 			return ambiguityRecursOnReread(reason.detail);
@@ -836,7 +843,10 @@ export class Orchestrator {
 	#unchanged(issue: number, updatedAt: string): boolean {
 		const seen = this.state.seen.get(issue);
 
-		return seen?.updatedAt === updatedAt && settled(seen);
+		return (
+			seen?.updatedAt === updatedAt &&
+			(seen.verdict.kind === "refused" || settled(seen))
+		);
 	}
 
 	#inScope(issue: number): boolean {
@@ -1104,6 +1114,16 @@ export class Orchestrator {
 		candidates: readonly IssueRecord[],
 	): Promise<Eligibility> {
 		if (run.phase.kind === "recovering") {
+			const issue = await this.#adapter.readIssue(run.issue);
+
+			if (issue.kind === "failed") return "unverified";
+
+			if (!issue.value.open) {
+				this.#release(run, "closed");
+
+				return "released";
+			}
+
 			const recovered = await this.#recoverOutput(run, run.phase.output);
 			const limits = this.#limits();
 
@@ -2047,7 +2067,7 @@ export class Orchestrator {
 			clearNeedsInfo:
 				input.issue.labels.includes(NEEDS_INFO_LABEL) &&
 				(await this.#input.files.readLink(marker.runId)).kind === "found",
-			labelFailures: 0,
+			labelFailures: this.#local.get(marker.issue)?.labelFailures ?? 0,
 			labelTick: 0,
 			inputs: null,
 			phase:
@@ -2446,6 +2466,22 @@ export class Orchestrator {
 
 		if (link.kind === "defer") return null;
 
+		if (link.kind === "invalid") {
+			input.refused.push({ issue, reasons: [link.reason] });
+			this.#input.log("admission_refused", {
+				issue,
+				reasons: link.reason,
+				detail: link.detail,
+				retry: false,
+			});
+			this.#see(issue, record.updatedAt, {
+				kind: "refused",
+				reason: link.reason,
+			});
+
+			return null;
+		}
+
 		if (link.kind === "ambiguous") {
 			input.refused.push({ issue, reasons: ["ambiguous_snapshot"] });
 			this.#input.log("admission_refused", {
@@ -2518,15 +2554,20 @@ export class Orchestrator {
 		return run;
 	}
 
-	#labelOutcome(
+	async #labelOutcome(
 		run: ActiveRun,
 		label: string,
 		outcome: "posted" | "rejected" | "unknown",
-	): boolean {
+		critical = true,
+	): Promise<boolean> {
 		const fields = { issue: run.issue, runId: run.runId, label, outcome };
 
 		this.#input.log("label_write", fields);
-		run.labelFailures = outcome === "posted" ? 0 : run.labelFailures + 1;
+
+		if (critical) {
+			run.labelFailures = outcome === "posted" ? 0 : run.labelFailures + 1;
+			await this.#writeClaim(run);
+		}
 
 		if (outcome !== "posted") this.#input.log("label_unconfirmed", fields);
 
@@ -2559,13 +2600,68 @@ export class Orchestrator {
 
 		const removed = await this.#writer.removeLabel(run.issue, NEEDS_INFO_LABEL);
 
-		run.clearNeedsInfo = !this.#labelOutcome(
+		run.clearNeedsInfo = !(await this.#labelOutcome(
 			run,
 			NEEDS_INFO_LABEL,
 			removed.kind,
-		);
+			false,
+		));
 
 		return !run.clearNeedsInfo;
+	}
+
+	async #answerHistory(
+		runId: Digest,
+		ledger: CleanLedger,
+	): Promise<readonly AnswersRecord[] | "previous_link" | "previous_answers"> {
+		const records: AnswersRecord[] = [];
+		const visited = new Set<Digest>();
+		let current = runId;
+
+		for (;;) {
+			if (visited.has(current)) return "previous_link";
+
+			visited.add(current);
+
+			const first = ledger.markers.find(
+				({ marker }) => marker.runId === current,
+			);
+
+			const earlier = ledger.markers.findLast(
+				({ marker }) =>
+					marker.seq < (first?.marker.seq ?? 0) && isTerminal(marker.status),
+			);
+
+			const linked = await this.#input.files.readLink(current);
+
+			if (linked.kind === "unreadable") return "previous_link";
+
+			if (linked.kind === "none") {
+				return earlier?.marker.status === "needs_info"
+					? "previous_link"
+					: records.reverse();
+			}
+
+			if (
+				earlier?.marker.status === "needs_info" &&
+				earlier.marker.runId !== linked.link.prevRunId
+			)
+				return "previous_link";
+
+			const answers = await this.#input.files.readAnswers(current);
+
+			if (
+				answers === null ||
+				answers.runId !== current ||
+				answers.prevRunId !== linked.link.prevRunId ||
+				answers.digest !== linked.link.answersDigest ||
+				answersDigestOf(answers) !== answers.digest
+			)
+				return "previous_answers";
+
+			records.push(answers);
+			current = linked.link.prevRunId;
+		}
 	}
 
 	async #link(input: {
@@ -2577,6 +2673,11 @@ export class Orchestrator {
 		| { readonly kind: "none" }
 		| { readonly kind: "defer" }
 		| { readonly kind: "ambiguous" }
+		| {
+				readonly kind: "invalid";
+				readonly reason: "answers_record_invalid" | "link_record_invalid";
+				readonly detail: "previous_answers" | "previous_link";
+		  }
 		| { readonly kind: "linked"; readonly link: Link; readonly answers: number }
 	> {
 		const { issue, admitted, runId } = input;
@@ -2606,6 +2707,13 @@ export class Orchestrator {
 				questionsKeyOf(comment.body)?.runId === prevRunId,
 		);
 
+		if (
+			admitted.eventAt < prev.createdAt &&
+			(asked === undefined || admitted.eventAt <= asked.createdAt)
+		) {
+			return { kind: "none" };
+		}
+
 		const floor = BigInt(asked?.id ?? prev.commentId);
 
 		const candidates = comments.value
@@ -2622,22 +2730,20 @@ export class Orchestrator {
 
 		if (edits.kind === "failed") return { kind: "defer" };
 
-		const previousLink = await this.#input.files.readLink(prevRunId);
+		const history = await this.#answerHistory(prevRunId, input.ledger);
 
-		if (previousLink.kind === "unreadable") return { kind: "defer" };
+		if (history === "previous_link" || history === "previous_answers") {
+			return {
+				kind: "invalid",
+				reason:
+					history === "previous_link"
+						? "link_record_invalid"
+						: "answers_record_invalid",
+				detail: history,
+			};
+		}
 
-		const previousAnswers =
-			previousLink.kind === "found"
-				? await this.#input.files.readAnswers(prevRunId)
-				: null;
-
-		if (
-			previousLink.kind === "found" &&
-			(previousAnswers === null ||
-				previousAnswers.digest !== previousLink.link.answersDigest)
-		)
-			return { kind: "defer" };
-
+		const previousAnswers = history.at(-1);
 		const answers: Answer[] = [...(previousAnswers?.answers ?? [])];
 		const permissions = new Map<string, boolean>();
 
@@ -2678,7 +2784,19 @@ export class Orchestrator {
 		}
 
 		const questions = asked === undefined ? "" : withoutKey(asked.body);
-		const digest = answersDigestOf({ prevRunId, questions, answers });
+
+		const rounds = [
+			...history.map((record, index) => ({
+				questions: record.questions,
+				answers: record.answers.slice(history[index - 1]?.answers.length ?? 0),
+			})),
+			{
+				questions,
+				answers: answers.slice(previousAnswers?.answers.length ?? 0),
+			},
+		];
+
+		const digest = answersDigestOf({ prevRunId, questions, answers, rounds });
 
 		const record: AnswersRecord = {
 			version: 1,
@@ -2687,6 +2805,7 @@ export class Orchestrator {
 			questionsCommentId: asked?.id ?? null,
 			questions,
 			answers,
+			rounds,
 			digest,
 		};
 
@@ -2802,11 +2921,7 @@ export class Orchestrator {
 			return true;
 		}
 
-		if (!(await this.#clearNeedsInfo(run))) {
-			if (this.#labelsExhausted(run)) await this.#sync(run);
-
-			return false;
-		}
+		await this.#clearNeedsInfo(run);
 
 		const prepared = this.#enabled ? await this.#stageInputs(run) : UNPREPARED;
 
@@ -2926,14 +3041,13 @@ export class Orchestrator {
 
 		if (
 			run.marked !== null &&
-			run.clearNeedsInfo &&
 			run.phase.kind !== "ending" &&
-			!(await this.#clearNeedsInfo(run))
+			run.phase.kind !== "recovering"
 		) {
-			if (!this.#labelsExhausted(run)) return;
+			await this.#clearNeedsInfo(run);
 		}
 
-		if (run.phase.kind === "reporting") {
+		if (run.phase.kind === "reporting" && !this.#labelsExhausted(run)) {
 			const { status, effects } = run.phase;
 
 			if (await this.#applyEffects(run, effects)) {
@@ -3089,6 +3203,7 @@ export class Orchestrator {
 		const repo = this.#input.repo;
 
 		if (parsed.kind === "questions") {
+			run.clearNeedsInfo = false;
 			const digest = questionsDigestOf(parsed.questions);
 
 			const body = renderQuestions({
@@ -3299,9 +3414,21 @@ export class Orchestrator {
 		effects.labelTick = this.#ticks;
 
 		if (!effects.labeled) {
+			const issue = await this.#adapter.readIssue(run.issue);
+
+			if (issue.kind === "failed") return false;
+
+			effects.labeled = issue.value.labels.includes(NEEDS_INFO_LABEL);
+		}
+
+		if (!effects.labeled) {
 			const added = await this.#writer.addLabels(run.issue, [NEEDS_INFO_LABEL]);
 
-			effects.labeled = this.#labelOutcome(run, NEEDS_INFO_LABEL, added.kind);
+			effects.labeled = await this.#labelOutcome(
+				run,
+				NEEDS_INFO_LABEL,
+				added.kind,
+			);
 		}
 
 		if (!effects.labeled) return false;
@@ -3312,18 +3439,32 @@ export class Orchestrator {
 
 		const latest = latestReadyEntry(timeline.value);
 
-		if (latest.kind !== "found") return false;
+		if (latest.kind !== "found") {
+			effects.unlabeled = true;
+			this.#input.log("ready_label_preserved", { ...fields, why: latest.kind });
+
+			return true;
+		}
 
 		if (latest.entry.kind === "unlabeled" || latest.entry.id !== run.eventId) {
 			effects.unlabeled = true;
-			this.#input.log("ready_label_preserved", {
-				...fields,
-				eventId: latest.entry.id,
-			});
+			this.#input.log(
+				latest.entry.kind === "unlabeled"
+					? "ready_label_already_removed"
+					: "ready_label_preserved",
+				{
+					...fields,
+					eventId: latest.entry.id,
+				},
+			);
 		} else {
 			const removed = await this.#writer.removeLabel(run.issue, READY_LABEL);
 
-			effects.unlabeled = this.#labelOutcome(run, READY_LABEL, removed.kind);
+			effects.unlabeled = await this.#labelOutcome(
+				run,
+				READY_LABEL,
+				removed.kind,
+			);
 		}
 
 		return effects.unlabeled;
@@ -3454,7 +3595,15 @@ export class Orchestrator {
 			runs,
 			queued: input.queued,
 			absent: input.absent,
-			refused: input.refused,
+			refused: [
+				...input.refused,
+				...[...this.state.seen.entries()].flatMap(([issue, seen]) =>
+					seen.verdict.kind === "refused" &&
+					!input.refused.some((entry) => entry.issue === issue)
+						? [{ issue, reasons: [seen.verdict.reason] }]
+						: [],
+				),
+			],
 			corrupt: [...this.state.corrupt.entries()]
 				.sort(([left], [right]) => left - right)
 				.map(([issue, entry]) => ({ issue, defect: entry.defect })),
@@ -3467,7 +3616,7 @@ export class Orchestrator {
 }
 
 function claimOf(run: ActiveRun): ClaimRecord {
-	return {
+	const claim: ClaimRecord = {
 		runId: run.runId,
 		issue: run.issue,
 		eventId: run.eventId,
@@ -3477,6 +3626,10 @@ function claimOf(run: ActiveRun): ClaimRecord {
 		attempt: run.marked?.attempt ?? null,
 		usage: run.marked?.usage ?? null,
 	};
+
+	return run.labelFailures === 0
+		? claim
+		: { ...claim, labelFailures: run.labelFailures };
 }
 
 function recordOf(marker: Marker): ConfirmedRecord {

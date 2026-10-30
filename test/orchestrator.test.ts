@@ -19,6 +19,7 @@ import {
 	type ProcessTable,
 	parseStartTime,
 	serveLoop,
+	writeStatus,
 } from "../server/controller.ts";
 import { GitHubTicketAdapter } from "../src/adapters/github.ts";
 import {
@@ -6811,10 +6812,13 @@ describe("specify: questions", () => {
 		});
 	}
 
-	it("caps persistently rejected label writes and logs each outcome without rerunning specify", async () => {
+	it("caps persistently rejected label writes across separate controllers and disk claims without rerunning specify", async () => {
 		const ctx = world();
 		const write = writesWire(ctx.github, []);
 		let additions = 0;
+		const disk = fileRunFiles(stateDir());
+		ctx.files.writeClaim = disk.writeClaim;
+		ctx.files.listClaims = disk.listClaims;
 		ctx.github.add(labeled(14));
 		ctx.executor.outputs = [QUESTIONS_TEXT];
 		ctx.executor.behaviors = [{ kind: "pass", usage: 3 }];
@@ -6831,12 +6835,11 @@ describe("specify: questions", () => {
 			return write(command, args);
 		};
 
-		const controller = ctx.start();
-		await once(controller);
+		await once(ctx.start());
 
 		for (let n = 0; n < 5; n++) {
 			ctx.clock.t += 60_000;
-			await once(controller);
+			await once(ctx.start());
 		}
 
 		assert.equal(additions, 3);
@@ -6851,19 +6854,86 @@ describe("specify: questions", () => {
 		);
 	});
 
-	it("preserves an owner's fresh ready event during a delayed label swap", async () => {
+	it("links a preserved owner relabel to the questions posted before a delayed terminal marker", async () => {
 		const ctx = world();
 		const write = writesWire(ctx.github, []);
 		const issue = ctx.github.add(labeled(14));
 		let removals = 0;
-		ctx.executor.outputs = [QUESTIONS_TEXT];
-		ctx.executor.behaviors = [{ kind: "pass", usage: 3 }];
+		ctx.executor.outputs = [QUESTIONS_TEXT, CONTRACT_TEXT];
+		ctx.executor.behaviors = [
+			{ kind: "pass", usage: 3 },
+			{ kind: "pass", usage: 5 },
+		];
 		ctx.wire.intercept = async (command, args) => {
 			if (
 				args.includes("DELETE") &&
 				args.some((arg) => arg.endsWith("labels/factory%3Aready"))
 			) {
 				removals++;
+				await write(command, args);
+
+				return networkError();
+			}
+
+			return write(command, args);
+		};
+
+		const controller = ctx.start();
+		await once(controller);
+		ctx.github.now = "2026-10-29T02:00:20Z";
+		ctx.github.comment(issue, "PRESERVED-OWNER-ANSWER", {
+			login: "writer",
+			type: "User",
+			appSlug: null,
+		});
+		ctx.github.now = "2026-10-29T02:00:40Z";
+		issue.labels.push(READY_LABEL);
+		issue.timeline.push(
+			labelEvent({
+				id: EVENT_ID + 50,
+				at: ctx.github.now,
+				actor: "giuseppecrj",
+			}),
+		);
+		issue.updatedAt = ctx.github.now;
+		ctx.github.now = "2026-10-29T02:01:00Z";
+		ctx.clock.t += 60_000;
+		await once(controller);
+		ctx.clock.t += 60_000;
+		await once(controller);
+		assert.equal(removals, 1);
+		assert.ok(issue.labels.includes(READY_LABEL));
+		assert.equal(statuses(ctx.github, 14).at(-1), "6:stage_passed");
+		const linked = runIdOf({ repo, issue: 14, eventId: String(EVENT_ID + 50) });
+		assert.equal(ctx.files.links.get(linked)?.prevRunId, runOf(14));
+		assert.match(
+			ctx.executor.launches[1]?.prompt ?? "",
+			/PRESERVED-OWNER-ANSWER/,
+		);
+	});
+
+	it("settles a same-second owner relabel during a lost label removal without stalling reporting", async () => {
+		const ctx = world();
+		const write = writesWire(ctx.github, []);
+		const issue = ctx.github.add(labeled(14));
+		ctx.executor.outputs = [QUESTIONS_TEXT];
+		ctx.executor.behaviors = [{ kind: "pass", usage: 3 }];
+		let removals = 0;
+		ctx.wire.intercept = async (command, args) => {
+			if (
+				args.includes("DELETE") &&
+				args.some((arg) => arg.endsWith("labels/factory%3Aready"))
+			) {
+				removals++;
+				await write(command, args);
+				issue.labels.push(READY_LABEL);
+				issue.timeline.push(
+					labelEvent({
+						id: EVENT_ID + 60,
+						at: ctx.github.now,
+						actor: "giuseppecrj",
+					}),
+				);
 
 				return networkError();
 			}
@@ -6874,19 +6944,48 @@ describe("specify: questions", () => {
 		const controller = ctx.start();
 		await once(controller);
 		ctx.github.now = "2026-10-29T02:10:00Z";
-		issue.timeline.push(
-			labelEvent({
-				id: EVENT_ID + 50,
-				at: ctx.github.now,
-				actor: "giuseppecrj",
-			}),
-		);
-		issue.updatedAt = ctx.github.now;
-		ctx.clock.t += 60_000;
-		await once(controller);
-		assert.equal(removals, 1);
-		assert.ok(issue.labels.includes(READY_LABEL));
+		ctx.clock.t += 600_000;
+		const report = await once(controller);
 		assert.equal(statuses(ctx.github, 14).at(-1), "3:needs_info");
+		assert.equal(report.runs.length, 0);
+		assert.equal(removals, 1);
+		assert.ok(
+			ctx.logs.some(
+				({ event, fields }) =>
+					event === "ready_label_preserved" && fields.why === "tied",
+			),
+		);
+		assert.deepEqual(report.refused, [
+			{ issue: 14, reasons: ["ambiguous_snapshot"] },
+		]);
+	});
+
+	it("releases a recovering run when its issue closes without posting questions or labels again", async () => {
+		const ctx = world();
+		const writes: string[] = [];
+		ctx.wire.intercept = writesWire(ctx.github, writes);
+		const issue = ctx.github.add(labeled(14));
+		ctx.github.posts = ["ok", "ok", "ok", "lost"];
+		ctx.executor.outputs = [QUESTIONS_TEXT];
+		ctx.executor.behaviors = [{ kind: "pass", usage: 3 }];
+		await once(ctx.start());
+		ctx.executor.checkoutResult = "unavailable";
+		ctx.clock.t += 60_000;
+		const restarted = ctx.start();
+		await once(restarted);
+		assert.equal(restarted.state.runs.get(14)?.phase.kind, "recovering");
+		issue.state = "closed";
+		issue.updatedAt = "2026-10-29T02:30:00Z";
+		ctx.github.now = issue.updatedAt;
+		writes.length = 0;
+		ctx.clock.t += 31 * 60_000;
+		await once(restarted);
+		ctx.executor.checkoutResult = "ready";
+		ctx.clock.t += 60_000;
+		await once(restarted);
+		assert.equal(statuses(ctx.github, 14).at(-1), "3:released");
+		assert.deepEqual(writes, ["marker:released"]);
+		assert.equal(ctx.executor.launches.length, 1);
 	});
 
 	it("waits through transient recovery reads after ready was removed, then finishes needs_info", async () => {
@@ -6914,7 +7013,7 @@ describe("specify: questions", () => {
 	});
 
 	it("posts one questions comment, swaps the labels, then ends needs_info and spends nothing more", async () => {
-		const { github, clock, files, executor, wire, start } = world();
+		const { github, clock, files, executor, wire, logs, start } = world();
 		const writes: string[] = [];
 
 		wire.intercept = writesWire(github, writes);
@@ -6939,6 +7038,12 @@ describe("specify: questions", () => {
 			"3:needs_info",
 		]);
 		assert.deepEqual(github.issues.get(14)?.labels, ["factory:needs-info"]);
+		assert.deepEqual(
+			logs
+				.filter(({ event }) => event === "label_write")
+				.map(({ fields }) => fields.outcome),
+			["posted", "posted"],
+		);
 		assert.equal(first.totals.usage, 300);
 		assert.equal(files.contracts.size, 0);
 		assert.ok(files.questions.has(runOf(14)));
@@ -7063,7 +7168,7 @@ describe("specify: questions", () => {
 			"3:needs_info",
 		]);
 		assert.ok(logs.some((entry) => entry.event === "stage_recovered"));
-		assert.deepEqual(writes, ["label+factory:needs-info", "marker:needs_info"]);
+		assert.deepEqual(writes, ["marker:needs_info"]);
 	});
 });
 
@@ -7190,14 +7295,277 @@ describe("specify: linked runs and answers", () => {
 		assert.deepEqual(github.issues.get(14)?.labels, [READY_LABEL]);
 	});
 
-	it("carries both clarification rounds in order with authors and a digest of the whole set", async () => {
+	async function thirdRound(
+		ctx: Awaited<ReturnType<typeof askedThenRelabeled>>,
+	) {
+		ctx.github.now = "2026-10-29T02:40:00Z";
+		ctx.github.comment(ctx.issue, "ROUND-TWO-ANSWER", user("giuseppecrj"));
+		ctx.github.now = "2026-10-29T02:50:00Z";
+		ctx.issue.labels.push(READY_LABEL);
+		ctx.issue.timeline.push(
+			labelEvent({
+				id: NEXT_EVENT + 1,
+				at: ctx.github.now,
+				actor: "giuseppecrj",
+			}),
+		);
+		ctx.issue.updatedAt = ctx.github.now;
+		ctx.clock.t = Date.parse("2026-10-29T03:00:00Z");
+		ctx.github.now = "2026-10-29T03:00:00Z";
+
+		return once(ctx.controller);
+	}
+
+	for (const defect of [
+		"answers_digest",
+		"answers_missing",
+		"answers_corrupt",
+		"link_unreadable",
+		"link_missing",
+	] as const) {
+		it(`refuses ${defect} in earlier clarification records once per issue change and keeps the reason in status JSON`, async () => {
+			const ctx = await askedThenRelabeled(
+				(github, issue) => {
+					github.comment(issue, "ROUND-ONE-ANSWER", user("writer"));
+				},
+				undefined,
+				({ executor }) => {
+					executor.outputs = [QUESTIONS_TEXT];
+				},
+			);
+
+			const kept = ctx.files.answers.get(nextRun);
+			assert.ok(kept);
+
+			if (defect === "answers_digest") {
+				const altered = { ...kept, questions: "TAMPERED" };
+				ctx.files.answers.set(nextRun, {
+					...altered,
+					digest: answersDigestOf(altered),
+				});
+			} else if (defect === "answers_missing") {
+				ctx.files.answers.delete(nextRun);
+			} else if (defect === "answers_corrupt") {
+				ctx.files.answers.set(nextRun, { ...kept, questions: "TAMPERED" });
+			} else if (defect === "link_unreadable") {
+				const read = ctx.files.readLink.bind(ctx.files);
+				ctx.files.readLink = async (id) =>
+					id === nextRun ? { kind: "unreadable" } : read(id);
+			} else {
+				ctx.files.links.delete(nextRun);
+			}
+
+			const before = ctx.logs.length;
+
+			const reason = defect.startsWith("link")
+				? "link_record_invalid"
+				: "answers_record_invalid";
+
+			const expected = [{ issue: 14, reasons: [reason] }];
+			assert.deepEqual((await thirdRound(ctx)).refused, expected);
+			const state = stateDir();
+
+			for (let n = 0; n < 3; n++) {
+				ctx.clock.t += 60_000;
+				const report = await once(ctx.controller);
+				assert.equal(await writeStatus(state, report), true);
+
+				const status = await cli(
+					["status", "--json", "--repo", repo, "--state-dir", state],
+					ctx.github,
+				);
+
+				assert.equal(status.code, EXIT.ok);
+				assert.deepEqual(
+					JSON.parse(status.stdout).controller.lastTick.refused,
+					expected,
+				);
+			}
+
+			assert.equal(ctx.executor.launches.length, 2);
+
+			const refusals = () =>
+				ctx.logs
+					.slice(before)
+					.filter(({ event }) => event === "admission_refused");
+
+			assert.equal(refusals().length, 1);
+			assert.equal(refusals()[0]?.fields.retry, false);
+			assert.equal(
+				refusals()[0]?.fields.detail,
+				defect.startsWith("link") ? "previous_link" : "previous_answers",
+			);
+			ctx.issue.updatedAt = "2026-10-29T03:05:00Z";
+			ctx.clock.t += 600_000;
+			await once(ctx.controller);
+			assert.equal(refusals().length, 2);
+		});
+	}
+
+	for (const outcome of ["unknown", "rejected"] as const) {
+		it(`never gates or fails a linked run on ${outcome} cosmetic label removals and logs every retry`, async () => {
+			const ctx = await askedThenRelabeled(
+				(github, issue) => {
+					github.comment(issue, "Use package.json.", user("writer"));
+				},
+				undefined,
+				({ wire, github, executor }) => {
+					const write = writesWire(github, []);
+					wire.intercept = async (command, args) =>
+						args.includes("DELETE") &&
+						args.some((arg) => arg.endsWith("labels/factory%3Aneeds-info"))
+							? outcome === "unknown"
+								? networkError()
+								: httpError(422, "denied")
+							: write(command, args);
+					executor.fallback = { kind: "unavailable" };
+					executor.behaviors = [];
+				},
+			);
+
+			assert.equal(ctx.executor.launches.length, 2);
+
+			for (let n = 0; n < 4; n++) {
+				ctx.clock.t += 60_000;
+				await once(ctx.controller);
+			}
+
+			assert.ok(
+				ctx.logs.filter(
+					({ event, fields }) =>
+						event === "label_write" &&
+						fields.label === "factory:needs-info" &&
+						fields.outcome === outcome,
+				).length >= 4,
+			);
+			ctx.executor.behaviors = [{ kind: "pass", usage: 1 }];
+			ctx.clock.t += 60_000;
+			await once(ctx.controller);
+			assert.equal(
+				statuses(ctx.github, 14).at(-1)?.endsWith(":stage_passed"),
+				true,
+			);
+			assert.ok(ctx.files.contracts.has(nextRun));
+			assert.ok(
+				!ctx.logs.some(({ event }) => event === "label_retries_exhausted"),
+			);
+		});
+	}
+
+	it("does not remove and re-add a linked run's own needs-info after a crash before its marker", async () => {
+		const writes: string[] = [];
+
+		const ctx = await askedThenRelabeled(
+			(github, issue) => {
+				github.comment(issue, "ROUND-ONE-ANSWER", user("writer"));
+			},
+			undefined,
+			({ executor, github, wire }) => {
+				executor.outputs = [QUESTIONS_TEXT];
+				github.posts = ["ok", "ok", "ok", "lost"];
+				wire.intercept = writesWire(github, writes);
+			},
+		);
+
+		writes.length = 0;
+		ctx.clock.t += 60_000;
+		await once(ctx.start());
+		assert.equal(statuses(ctx.github, 14).at(-1), "6:needs_info");
+		assert.ok(!writes.includes("label-factory:needs-info"));
+		assert.ok(
+			ctx.logs.some(({ event }) => event === "ready_label_already_removed"),
+		);
+	});
+
+	it("reconstructs every earlier question round from legacy accumulated records after a restart", async () => {
 		const ctx = await askedThenRelabeled(
 			(github, issue) => {
 				github.comment(issue, "ROUND-ONE-ANSWER", user("writer"));
 			},
 			undefined,
 			({ executor }) => {
-				executor.outputs = [QUESTIONS_TEXT];
+				executor.outputs = [
+					JSON.stringify({
+						kind: "questions",
+						questions: [{ text: "SECOND-QUESTION?" }],
+					}),
+				];
+			},
+		);
+
+		ctx.executor.outputs = [
+			JSON.stringify({
+				kind: "questions",
+				questions: [{ text: "THIRD-QUESTION?" }],
+			}),
+		];
+		ctx.executor.behaviors = [{ kind: "pass", usage: 1 }];
+		await thirdRound(ctx);
+
+		const thirdRun = runIdOf({
+			repo,
+			issue: 14,
+			eventId: String(NEXT_EVENT + 1),
+		});
+
+		for (const id of [nextRun, thirdRun]) {
+			const record = ctx.files.answers.get(id);
+			const link = ctx.files.links.get(id);
+			assert.ok(record && link);
+			const { rounds: _rounds, ...legacy } = record;
+			const digest = answersDigestOf(legacy);
+			ctx.files.answers.set(id, { ...legacy, digest });
+			ctx.files.links.set(id, { ...link, answersDigest: digest });
+		}
+
+		ctx.github.now = "2026-10-29T03:10:00Z";
+		ctx.github.comment(ctx.issue, "ROUND-THREE-ANSWER", user("writer"));
+		ctx.github.now = "2026-10-29T03:20:00Z";
+		ctx.issue.labels.push(READY_LABEL);
+		ctx.issue.timeline.push(
+			labelEvent({
+				id: NEXT_EVENT + 2,
+				at: ctx.github.now,
+				actor: "giuseppecrj",
+			}),
+		);
+		ctx.issue.updatedAt = ctx.github.now;
+		ctx.clock.t = Date.parse("2026-10-29T03:30:00Z");
+		ctx.github.now = "2026-10-29T03:30:00Z";
+		ctx.executor.behaviors = [{ kind: "pass", usage: 1 }];
+		await once(ctx.start());
+		const prompt = ctx.executor.launches[3]?.prompt.replaceAll("\\", "") ?? "";
+
+		const positions = [
+			"package.json or a constant",
+			"ROUND-ONE-ANSWER",
+			"SECOND-QUESTION",
+			"ROUND-TWO-ANSWER",
+			"THIRD-QUESTION",
+			"ROUND-THREE-ANSWER",
+		].map((text) => prompt.indexOf(text));
+
+		assert.ok(
+			positions.every(
+				(at, index) =>
+					at >= 0 && (index === 0 || at > (positions[index - 1] ?? -1)),
+			),
+		);
+	});
+
+	it("carries both clarification rounds in order with authors, distinct questions and a digest of the whole set", async () => {
+		const ctx = await askedThenRelabeled(
+			(github, issue) => {
+				github.comment(issue, "ROUND-ONE-ANSWER", user("writer"));
+			},
+			undefined,
+			({ executor }) => {
+				executor.outputs = [
+					JSON.stringify({
+						kind: "questions",
+						questions: [{ text: "ROUND-TWO-QUESTION?" }],
+					}),
+				];
 			},
 		);
 
@@ -7245,6 +7613,19 @@ describe("specify: linked runs and answers", () => {
 		);
 		assert.match(prompt, /ROUND-ONE-ANSWER/);
 		assert.match(prompt, /ROUND-TWO-ANSWER/);
+		const readable = prompt.replaceAll("\\", "");
+		assert.ok(readable.includes("package.json or a constant"));
+		assert.match(readable, /ROUND-TWO-QUESTION/);
+		const firstQuestion = readable.indexOf("package");
+		assert.ok(firstQuestion < readable.indexOf("ROUND-ONE-ANSWER"));
+		assert.ok(
+			readable.indexOf("ROUND-ONE-ANSWER") <
+				readable.indexOf("ROUND-TWO-QUESTION"),
+		);
+		assert.ok(
+			readable.indexOf("ROUND-TWO-QUESTION") <
+				readable.indexOf("ROUND-TWO-ANSWER"),
+		);
 	});
 
 	it("excludes a pre-question id, a post-label comment and an edit in the label second", async () => {

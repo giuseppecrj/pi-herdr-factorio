@@ -97,7 +97,9 @@ export type RefusalReason =
 	  }
 	| { readonly kind: "ambiguous_snapshot"; readonly detail: Ambiguity }
 	| { readonly kind: "duplicate_event" }
-	| { readonly kind: "state_unwritable" };
+	| { readonly kind: "state_unwritable" }
+	| { readonly kind: "answers_record_invalid" }
+	| { readonly kind: "link_record_invalid" };
 
 export type SnapshotSource = "unedited" | "edit_history";
 
