@@ -45,7 +45,7 @@ The verified gate revision is `4b3fcfd0a2b03995bffe7ba3be632a67ce8f30e8`. [fix1-
 | registry-dependency | passed | passed | `is-number@7.0.0`, `newDependency: true` |
 | glob-dependency | passed | passed | `glob@10.4.5`, transitive npm aliases, `newDependency: true` |
 
-The stream and serializer fixtures retain audit B's source blobs `2d0edfd` and `45d9c50`. Both now fail before installation. Their shared control contains the same terminal-state defect without the forged reporting code. A separate preload unit test proves that the reporting methods cannot be reassigned and that Node crypto still works.
+The stream and serializer fixtures retain audit B's source blobs `2d0edfd` and `45d9c50`. Both now fail before installation. Their shared control contains the same terminal-state defect without the forged reporting code. A separate preload unit test proves that the reporting methods cannot be reassigned and that Node crypto still works. The final audit patches use zero context to avoid patch-context whitespace warnings. Reapplying all 34 patches reconstructs exactly the verified candidate trees.
 
 The replacement fixture changes how `inlined` counts a trailing empty line. Both specify and orchestrator tests pin that behavior. The named case authorizes both files. The unnamed case supplies the same patch without authorization.
 
