@@ -4,6 +4,8 @@ import test from "node:test";
 import * as tests from "node:test";
 import { syncBuiltinESMExports } from "node:module";
 import { writeSync } from "node:fs";
+import { Readable } from "node:stream";
+import { Serializer, DefaultSerializer } from "node:v8";
 
 function freeze(value, seen = new Set()) {
 	if (!(value instanceof Object) || seen.has(value)) return;
@@ -19,6 +21,13 @@ function freeze(value, seen = new Set()) {
 }
 
 for (const value of [assert, strict, test, ...Object.values(tests)]) freeze(value);
+
+for (const [target, keys] of [
+	[Readable.prototype, ["push"]],
+	[Serializer.prototype, ["writeHeader", "writeValue", "writeRawBytes", "releaseBuffer"]],
+	[DefaultSerializer.prototype, ["writeHeader", "writeValue", "writeRawBytes", "releaseBuffer"]],
+	[process.stdout, ["write", "_write"]],
+]) for (const key of keys) Object.defineProperty(target, key, { value: target[key], writable: false, configurable: false });
 
 syncBuiltinESMExports();
 

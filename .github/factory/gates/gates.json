@@ -2,7 +2,7 @@
   "version": 1,
   "checks": [
     { "name": "typecheck", "argv": ["node", "/g/tooling/node_modules/typescript/bin/tsc", "--noEmit", "-p", "/w/tsconfig.json"] },
-    { "name": "lint", "argv": ["/g/tooling/node_modules/.bin/oxlint", "--disable-nested-config", "-c", "/g/lint.json", "src", "extension", "server", "test"] },
+    { "name": "lint", "argv": ["/g/tooling/node_modules/.bin/oxlint", "--disable-nested-config", "--ignore-path", "/dev/null", "--ignore-pattern", "test/acceptance/**", "-c", "/g/lint.json", "src", "extension", "server", "test"] },
     { "name": "format", "argv": ["/g/tooling/node_modules/.bin/biome", "format", "--config-path", "/g/biome.json", "src", "extension", "server", "test"] }
   ],
   "tests": [
@@ -18,6 +18,14 @@
     "test/pipeline.test.ts",
     "test/policy.test.ts",
     "test/sandbox.test.ts",
+    "test/sandbox/assets.cases.ts",
+    "test/sandbox/audit.cases.ts",
+    "test/sandbox/credentials.cases.ts",
+    "test/sandbox/gateway.cases.ts",
+    "test/sandbox/launcher.cases.ts",
+    "test/sandbox/policy.cases.ts",
+    "test/sandbox/routes.cases.ts",
+    "test/sandbox/runner.cases.ts",
     "test/specify.test.ts",
     "test/stages.test.ts",
     "test/workflow.test.ts"

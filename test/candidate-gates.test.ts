@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
+	existsSync,
+	readdirSync,
 	mkdtempSync,
 	mkdirSync,
 	readFileSync,
@@ -15,6 +17,8 @@ import {
 	materializeCandidate,
 	validateDependencies,
 	replacementDigest,
+	heldoutDigest,
+	receiptPasses,
 	type GateRunner,
 } from "../server/gates.ts";
 
@@ -65,6 +69,10 @@ function repo(t: { after(fn: () => void): void }) {
 		readFileSync(".github/factory/gates/reporter.mjs", "utf8"),
 	);
 	put(".github/factory/gates/biome.json", "{}");
+	put(
+		".github/factory/gates/scan-rules.json",
+		readFileSync(".github/factory/gates/scan-rules.json", "utf8"),
+	);
 	put(".oxlintrc.json", "{}");
 	git("add", ".");
 	git("commit", "-qm", "main");
@@ -138,6 +146,7 @@ test("merged tree routes imports to candidate source and preserves every unnamed
 	);
 	assert.equal(readFileSync(join(dest, "test/new.test.ts"), "utf8"), "new\n");
 	assert.ok(result.ignoredChanges.includes("src/biome.json"));
+	assert.equal(existsSync(join(dest, "src/biome.json")), false);
 });
 
 test("a candidate defect cannot pass preserved regression tests; receipts bind both SHAs", async (t) => {
@@ -191,7 +200,10 @@ test("contract replacement is exact, digest checked, and new tests still veto", 
 	});
 
 	assert.equal(receipt.status, "passed");
-	assert.deepEqual(receipt.replacedTests, replacements);
+	assert.deepEqual(
+		receipt.replacedTests.map(({ path, reason }) => ({ path, reason })),
+		replacements,
+	);
 	f.put(
 		"test/new.cases.ts",
 		'import {test} from "node:test"; test("new failure",()=>{throw new Error("FAIL");});\n',
@@ -244,6 +256,7 @@ test("dependency validation rejects non-registry locations, missing integrity an
 		"git+https://github.com/evil/x",
 		"file:../x",
 		"https://evil.invalid/x",
+		"https://evil.invalid/pkg/-/pkg-1.0.0.tgz",
 		"https://registry.npmjs.org@evil.invalid/x",
 	]) {
 		assert.throws(
@@ -308,12 +321,413 @@ for (const cheat of [
 		});
 
 		assert.equal(receipt.status, "failed");
-		assert.equal(
-			receipt.checks.find((c) => c.name === "candidate_tests")?.exitCode,
-			1,
-		);
+
+		if (receipt.reason !== "runtime_patching")
+			assert.equal(
+				receipt.checks.find((c) => c.name === "candidate_tests")?.exitCode,
+				1,
+			);
 	});
 }
+
+function gateInput(f: ReturnType<typeof repo>, candidateSha: string) {
+	return {
+		repository: f.root,
+		gateSha: f.gateSha,
+		candidateSha,
+		nonce: "unit",
+		output: join(f.root, "result"),
+		runner: miniRunner,
+		install: false,
+	};
+}
+
+test("preload pins the reporting methods without freezing crypto internals", () => {
+	const program = `import assert from "node:assert/strict";
+import {Readable} from "node:stream";
+import {Serializer,DefaultSerializer} from "node:v8";
+import {createCipheriv} from "node:crypto";
+for (const [target,keys] of [[Readable.prototype,["push"]],[Serializer.prototype,["writeHeader","writeValue","writeRawBytes","releaseBuffer"]],[DefaultSerializer.prototype,["writeHeader","writeValue","writeRawBytes","releaseBuffer"]],[process.stdout,["write","_write"]]]) for (const key of keys) {
+const d=Object.getOwnPropertyDescriptor(target,key); assert.equal(d.writable,false); assert.equal(d.configurable,false);
+assert.throws(()=>{target[key]=()=>{};});
+}
+createCipheriv("aes-256-gcm",Buffer.alloc(32),Buffer.alloc(12)).update("works");`;
+
+	execFileSync(process.execPath, [
+		"--import",
+		new URL("../.github/factory/gates/freeze.mjs", import.meta.url).pathname,
+		"--input-type=module",
+		"-e",
+		program,
+	]);
+});
+
+test("manifest covers every main test and sandbox case", () => {
+	const manifest = JSON.parse(
+		readFileSync(".github/factory/gates/gates.json", "utf8"),
+	);
+
+	const expected = [
+		...readdirSync("test")
+			.filter((p) => p.endsWith(".test.ts"))
+			.map((p) => `test/${p}`),
+		...readdirSync("test/sandbox")
+			.filter((p) => p.endsWith(".cases.ts"))
+			.map((p) => `test/sandbox/${p}`),
+	].sort();
+
+	assert.deepEqual(manifest.tests.toSorted(), expected);
+});
+
+test("removes nested ignore files and candidate-deleted source", async (t) => {
+	const f = repo(t);
+	f.git("rm", "src/value.ts");
+
+	for (const name of [".gitignore", ".eslintignore", ".prettierignore"])
+		f.put(`src/${name}`, "bad.ts\n");
+	const dest = join(f.root, "out");
+	await materializeCandidate({
+		...gateInput(f, f.commit()),
+		dest,
+		replacements: [],
+	});
+
+	for (const name of [
+		"value.ts",
+		".gitignore",
+		".eslintignore",
+		".prettierignore",
+	])
+		assert.equal(existsSync(join(dest, "src", name)), false);
+});
+
+test("npmrc edits are policy failures", async (t) => {
+	const f = repo(t);
+	f.put("src/.npmrc", "registry=https://evil.invalid\n");
+	const r = await checkCandidate(gateInput(f, f.commit()));
+	assert.equal(r.status, "failed");
+	assert.equal(r.reason, "npmrc_changed");
+});
+
+test("per-file counts reject extra registrations, except named replacements", async (t) => {
+	const f = repo(t);
+	f.put(
+		"src/value.ts",
+		'import {test} from "node:test"; test("extra",()=>{}); export const value = "main";\n',
+	);
+	const r = await checkCandidate(gateInput(f, f.commit()));
+	assert.equal(r.status, "failed");
+	f.put("src/value.ts", 'export const value = "main";\n');
+	f.put(
+		"test/value.test.ts",
+		'import {test} from "node:test"; test("one",()=>{}); test("two",()=>{});\n',
+	);
+	const replacements = [{ path: "test/value.test.ts", reason: "change count" }];
+
+	const replaced = await checkCandidate({
+		...gateInput(f, f.commit()),
+		replacements,
+		replacementsDigest: replacementDigest(replacements),
+	});
+
+	assert.equal(replaced.status, "passed");
+	assert.match(JSON.stringify(replaced.replacedTests), /beforeDigest/);
+	assert.match(JSON.stringify(replaced.replacedTests), /afterDigest/);
+});
+
+test("a named replacement cannot silently delete a test", async (t) => {
+	const f = repo(t);
+	f.git("rm", "test/value.test.ts");
+
+	const replacements = [
+		{ path: "test/value.test.ts", reason: "change behavior" },
+	];
+
+	const r = await checkCandidate({
+		...gateInput(f, f.commit()),
+		replacements,
+		replacementsDigest: replacementDigest(replacements),
+	});
+
+	assert.equal(r.status, "failed");
+	assert.equal(r.reason, "replacement_deleted");
+});
+
+for (const source of [
+	'import {Readable as R} from "node:stream"; R.prototype.push = () => true;',
+	'import {DefaultSerializer} from "node:v8"; Object.defineProperty(DefaultSerializer.prototype,"writeValue",{value:()=>true});',
+	'import * as a from "node:assert"; Reflect.set(a,"equal",()=>{});',
+	'import Module from "node:module"; Module._load = () => {};',
+	'import {register} from "node:module"; register("x");',
+	'require.extensions[".ts"] = () => {};',
+	'process.on("uncaughtException",()=>{});',
+	'process.once("beforeExit",()=>{});',
+	"process.exitCode = 0;",
+	'module.register("x");',
+	"Object.assign(process,{exitCode:0});",
+	'const {Readable}=await import("node:stream"); Readable.prototype.push=()=>true;',
+])
+	test(`runtime patching rejected: ${source}`, async (t) => {
+		const f = repo(t);
+		f.put("src/patch.ts", source);
+		const r = await checkCandidate(gateInput(f, f.commit()));
+		assert.equal(r.status, "failed");
+		assert.equal(r.reason, "runtime_patching");
+		assert.match(JSON.stringify(r), /src\/patch.ts/);
+	});
+
+for (const directive of [
+	"@ts-nocheck",
+	"@ts-ignore",
+	"@ts-expect-error",
+	"oxlint-disable",
+	"eslint-disable-next-line",
+	"biome-ignore format: reason",
+])
+	test(`added suppression rejected: ${directive}`, async (t) => {
+		const f = repo(t);
+		f.put("src/new.ts", `// ${directive}\nexport const n = 1;\n`);
+		const r = await checkCandidate(gateInput(f, f.commit()));
+		assert.equal(r.status, "failed");
+		assert.equal(r.reason, "suppression_added");
+	});
+
+test("unchanged main suppressions are not new candidate directives", async (t) => {
+	const f = repo(t);
+	f.put(
+		"src/value.ts",
+		'// @ts-expect-error existing main directive\nexport const value = "main";\n',
+	);
+	const gateSha = f.commit();
+	f.put(
+		"src/value.ts",
+		'// @ts-expect-error existing main directive\nexport const value = "main";\nexport const another = true;\n',
+	);
+	assert.equal(
+		(await checkCandidate({ ...gateInput(f, f.commit()), gateSha })).status,
+		"passed",
+	);
+});
+
+test("lockfile aliases pin their real package, and swaps are refused", () => {
+	const manifest = { dependencies: { alias: "npm:real@^1" } };
+
+	const entry = {
+		name: "real",
+		version: "1.0.0",
+		resolved: "https://registry.npmjs.org/real/-/real-1.0.0.tgz",
+		integrity: `sha512-${Buffer.alloc(64).toString("base64")}`,
+	};
+
+	const lock = {
+		lockfileVersion: 3,
+		packages: { "": manifest, "node_modules/alias": entry },
+	};
+
+	assert.equal(
+		validateDependencies(JSON.stringify(manifest), JSON.stringify(lock)).length,
+		1,
+	);
+	assert.throws(
+		() =>
+			validateDependencies(
+				JSON.stringify(manifest),
+				JSON.stringify({
+					...lock,
+					packages: {
+						"": manifest,
+						"node_modules/alias": {
+							...entry,
+							resolved: "https://registry.npmjs.org/wrong/-/wrong-1.0.0.tgz",
+						},
+					},
+				}),
+			),
+		/package_swap/,
+	);
+});
+
+test("gate fails closed on manifest drift", async (t) => {
+	const f = repo(t);
+	f.put(
+		"test/unlisted.test.ts",
+		'import {test} from "node:test"; test("new",()=>{});',
+	);
+	const sha = f.commit();
+	const r = await checkCandidate({ ...gateInput(f, sha), gateSha: sha });
+	assert.equal(r.status, "incomplete");
+	assert.equal(r.reason, "manifest_drift");
+});
+
+test("Docker and runner infrastructure exits never blame a candidate", async (t) => {
+	const f = repo(t);
+
+	for (const code of [125, 126, 127]) {
+		let calls = 0;
+
+		const runner: GateRunner = {
+			kind: "docker",
+			run: async (input) =>
+				++calls === 1
+					? miniRunner.run(input)
+					: { exitCode: code, stdout: "", stderr: "runner failed" },
+		};
+
+		const r = await checkCandidate({ ...gateInput(f, f.gateSha), runner });
+		assert.equal(r.status, "incomplete");
+		assert.equal(r.reason, "runner_error");
+	}
+});
+
+test("heldout requires exact bytes, real tests, and a result without public logs", async (t) => {
+	const f = repo(t);
+	const path = "test/acceptance/123/checks/held.test.ts";
+
+	const text =
+		'import {test} from "node:test"; test("PRIVATE-TITLE",()=>{});\n';
+
+	f.put(path, text);
+	const digest = heldoutDigest([{ path, bytes: Buffer.from(text) }]);
+
+	const input = {
+		...gateInput(f, f.commit()),
+		heldoutDir: "test/acceptance/123",
+		heldoutDigest: digest,
+	};
+
+	const pass = await checkCandidate(input);
+	assert.equal(pass.version, 2);
+	assert.equal(pass.status, "passed");
+	assert.ok(pass.requiredChecks.includes("heldout"));
+	assert.equal(existsSync(join(input.output, "heldout.log")), false);
+	assert.equal(JSON.stringify(pass).includes("PRIVATE-TITLE"), false);
+	assert.equal(
+		receiptPasses({
+			...pass,
+			checks: pass.checks.filter((c) => c.name !== "heldout"),
+		}),
+		false,
+	);
+	assert.equal(
+		(await checkCandidate({ ...input, heldoutDigest: "0".repeat(64) })).reason,
+		"heldout_digest_mismatch",
+	);
+
+	for (const body of [
+		'test("PRIVATE-TITLE",()=>{throw new Error("PRIVATE-ASSERTION");});',
+		'test.skip("PRIVATE-TITLE",()=>{});',
+		'test.todo("PRIVATE-TITLE");',
+		"export const empty = true;",
+	]) {
+		const bytes = Buffer.from('import {test} from "node:test"; ' + body + "\n");
+		f.put(path, bytes.toString());
+
+		const r = await checkCandidate({
+			...input,
+			candidateSha: f.commit(),
+			heldoutDigest: heldoutDigest([{ path, bytes }]),
+		});
+
+		assert.equal(r.status, "failed");
+		assert.deepEqual(r.heldoutFailures, [path]);
+		assert.equal(/PRIVATE-(?:TITLE|ASSERTION)/.test(JSON.stringify(r)), false);
+	}
+});
+
+test("dependency receipts retain added, removed, changed and newDependency", async (t) => {
+	const f = repo(t);
+
+	const entry = (name: string, version: string) => ({
+		version,
+		resolved: `https://registry.npmjs.org/${name}/-/${name}-${version}.tgz`,
+		integrity: `sha512-${Buffer.alloc(64).toString("base64")}`,
+	});
+
+	const lock = (packages: Record<string, ReturnType<typeof entry>>) =>
+		JSON.stringify({
+			lockfileVersion: 3,
+			packages: { "": { name: "mini", version: "1.0.0" }, ...packages },
+		});
+
+	f.put(
+		"package-lock.json",
+		lock({
+			"node_modules/old": entry("old", "1.0.0"),
+			"node_modules/changed": entry("changed", "1.0.0"),
+		}),
+	);
+	const gateSha = f.commit();
+	f.put(
+		"package-lock.json",
+		lock({
+			"node_modules/new": entry("new", "1.0.0"),
+			"node_modules/changed": entry("changed", "2.0.0"),
+		}),
+	);
+	const r = await checkCandidate({ ...gateInput(f, f.commit()), gateSha });
+	assert.equal(r.status, "passed");
+	assert.deepEqual(r.dependencies, {
+		added: ["node_modules/new"],
+		removed: ["node_modules/old"],
+		changed: ["node_modules/changed"],
+	});
+	assert.equal(r.newDependency, true);
+});
+
+test("baseline timeout is incomplete; candidate deadlines have measured headroom", async (t) => {
+	const f = repo(t);
+
+	const timed: GateRunner = {
+		kind: "timeout",
+		run: async () => ({
+			exitCode: 1,
+			stdout: "",
+			stderr: "",
+			signal: "SIGKILL",
+			timedOut: true,
+		}),
+	};
+
+	const r = await checkCandidate({ ...gateInput(f, f.gateSha), runner: timed });
+	assert.equal(r.status, "incomplete");
+	assert.equal(r.reason, "baseline_failed");
+
+	const runner: GateRunner = {
+		kind: "timing",
+		run: async (input) => {
+			assert.ok((input.deadlineMs ?? 0) >= 90000);
+
+			return input.tree.endsWith("/baseline")
+				? miniRunner.run(input)
+				: {
+						exitCode: 1,
+						stdout: "",
+						stderr: "",
+						signal: "SIGKILL",
+						timedOut: true,
+					};
+		},
+	};
+
+	const failed = await checkCandidate({ ...gateInput(f, f.gateSha), runner });
+	assert.equal(failed.status, "failed");
+	assert.ok(failed.checks.some((c) => c.timedOut));
+	assert.ok(failed.requiredChecks.includes("main_tests_deadline_control"));
+	let calls = 0;
+
+	const slowMain: GateRunner = {
+		kind: "slow-main",
+		run: (input) => (++calls === 1 ? miniRunner.run(input) : timed.run(input)),
+	};
+
+	const incomplete = await checkCandidate({
+		...gateInput(f, f.gateSha),
+		runner: slowMain,
+	});
+
+	assert.equal(incomplete.status, "incomplete");
+	assert.equal(incomplete.reason, "baseline_deadline");
+});
 
 test("bad manifests, stale bases, missing checks and tampered replacement digests fail incomplete", async (t) => {
 	const f = repo(t);

@@ -13,12 +13,20 @@ on:
         required: true
         type: string
       replacements:
-        description: Digest-checked private contract replacement list (no contract text)
+        description: Trusted replacement list (digest checks transport, not authorization)
         default: '[]'
         type: string
       replacements_digest:
         description: SHA-256 of canonical replacement list JSON
         default: 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+        type: string
+      heldout_dir:
+        description: Controller-published test/acceptance directory
+        required: false
+        type: string
+      heldout_digest:
+        description: SHA-256 of published check paths and exact-byte digests
+        required: false
         type: string
 permissions:
   contents: read
@@ -53,11 +61,14 @@ jobs:
           NONCE: ${{ inputs.nonce }}
           REPLACEMENTS: ${{ inputs.replacements }}
           REPLACEMENTS_DIGEST: ${{ inputs.replacements_digest }}
+          HELDOUT_DIR: ${{ inputs.heldout_dir }}
+          HELDOUT_DIGEST: ${{ inputs.heldout_digest }}
         run: |
           node --experimental-strip-types server/cli.ts gates \
             --repository "$PWD" --gate-sha "$GATE_SHA" --candidate-sha "$CANDIDATE_SHA" \
             --nonce "$NONCE" --output "$RUNNER_TEMP/gate-results" \
-            --replacements "$REPLACEMENTS" --replacements-digest "$REPLACEMENTS_DIGEST"
+            --replacements "$REPLACEMENTS" --replacements-digest "$REPLACEMENTS_DIGEST" \
+            --heldout-dir "$HELDOUT_DIR" --heldout-digest "$HELDOUT_DIGEST"
       - name: Upload trusted receipt
         if: ${{ always() && !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9

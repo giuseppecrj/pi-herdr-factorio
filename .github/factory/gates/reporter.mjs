@@ -12,6 +12,8 @@ export default async function* reporter(events) {
 		if (event.type === "test:pass" || event.type === "test:fail") {
 			if (d.skip || d.todo || event.type === "test:fail") bad = true;
 
+			if ((d.name === d.file || d.file?.endsWith(`/${d.name}`)) && d.line === 1 && d.column === 1) { bad = true; continue; }
+
 			if (d.details?.type === "suite") continue;
 			const file = d.file?.replace(/^.*?\/(?:w|tree|baseline)\//, "") ?? "missing-file";
 			counts.set(file, (counts.get(file) ?? 0) + 1);

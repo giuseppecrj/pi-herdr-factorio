@@ -475,7 +475,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Files.**
 
-- [ ] Create `.github/workflows/ci.yml`, `.github/factory/gates/`, `server/gates.ts`, `test/candidate-gates.test.ts`, `test/fixtures/gate-cheating/`, `docs/prototypes/trusted-ci/`, and `biome.json`.
+- [ ] Create `.github/workflows/ci.yml`, `.github/factory/gates/` including `scan.ts` and `scan-rules.json`, `server/gates.ts`, `test/candidate-gates.test.ts`, `test/fixtures/gate-cheating/`, `docs/prototypes/trusted-ci/`, and `biome.json`. Edit `tsconfig.json` and `.oxlintrc.json` for the exact `test/acceptance/**` exclusion.
 - [ ] Edit `server/cli.ts`, `docs/operations/factory-cli.md`, and `docs/operations/sandbox.md` for the trusted-gates command and operator invocation. Edit `package.json` and `package-lock.json` only for required gate dependencies. Edit `.pi/skills/verify-factory/**` for verification instructions.
 - [ ] Edit `src/specify.ts`, `src/artifacts.ts`, `src/build.ts`, `server/sandbox.ts`, and their tests (`test/specify.test.ts`, `test/artifacts.test.ts`, `test/build.test.ts`, `test/sandbox/**`) for exact contract-authorized test replacement, persistence, build input and visible-test exemptions. Edit this Files block to record the owner's F07b scope amendment.
 

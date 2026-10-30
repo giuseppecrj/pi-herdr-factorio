@@ -6,12 +6,14 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	readdirSync,
 	rmSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { scanSource, type Signal } from "../.github/factory/gates/scan.ts";
 import { readStoredContract } from "../src/artifacts.ts";
 import { isDigest } from "../src/run.ts";
 import { hasControl, type ReplacedTest } from "../src/specify.ts";
@@ -33,7 +35,15 @@ const GATE_IMAGE =
 const SOURCE = ["src", "extension", "server", "skills"];
 const CHECK_NAMES = ["typecheck", "lint", "format"];
 const SHA = /^[a-f0-9]{40}$/;
-const CONFIG = new Set(["biome.json", "biome.jsonc", ".editorconfig"]);
+
+const CONFIG = new Set([
+	"biome.json",
+	"biome.jsonc",
+	".editorconfig",
+	".gitignore",
+	".eslintignore",
+	".prettierignore",
+]);
 
 const CLEAN_ENV = {
 	PATH: "/usr/local/bin:/usr/bin:/bin",
@@ -44,6 +54,9 @@ const CLEAN_ENV = {
 };
 
 type Result = {
+	readonly timedOut?: boolean;
+	readonly signal?: string | null;
+	readonly runnerError?: boolean;
 	readonly exitCode: number;
 	readonly stdout: string;
 	readonly stderr: string;
@@ -53,6 +66,7 @@ type RunInput = {
 	readonly tree: string;
 	readonly gates: string;
 	readonly argv: readonly string[];
+	readonly deadlineMs?: number;
 	readonly install?: boolean;
 	readonly cache?: string;
 	readonly archives?: string;
@@ -67,10 +81,18 @@ type GateCheck = {
 	readonly name: string;
 	readonly exitCode: number;
 	readonly durationMs: number;
+	readonly deadlineMs?: number;
+	readonly timedOut?: boolean;
+	readonly signal?: string | null;
 };
 
 export type GateReceipt = {
-	readonly version: 1;
+	readonly version: 2;
+	readonly requiredChecks: string[];
+	tamperSignals: readonly Signal[];
+	heldoutDigest: string | null;
+	heldoutCounts: Readonly<Record<string, number>>;
+	heldoutFailures: readonly string[];
 	readonly gateSha: string;
 	readonly candidateSha: string;
 	readonly nonce: string;
@@ -79,7 +101,10 @@ export type GateReceipt = {
 	reason: string | null;
 	readonly checks: GateCheck[];
 	ignoredChanges: readonly string[];
-	replacedTests: readonly ReplacedTest[];
+	replacedTests: readonly (ReplacedTest & {
+		beforeDigest: string;
+		afterDigest: string;
+	})[];
 	replacementsDigest: string;
 	dependencies: { added: string[]; removed: string[]; changed: string[] };
 	newDependency: boolean;
@@ -113,6 +138,8 @@ export type CandidateInput = {
 	readonly install?: boolean;
 	readonly replacements?: readonly ReplacedTest[];
 	readonly replacementsDigest?: string;
+	readonly heldoutDir?: string;
+	readonly heldoutDigest?: string;
 };
 
 function command(
@@ -120,6 +147,7 @@ function command(
 	args: readonly string[],
 	cwd: string,
 	env: NodeJS.ProcessEnv = CLEAN_ENV,
+	deadlineMs = 90000,
 ): Promise<Result> {
 	return new Promise((done) => {
 		execFile(
@@ -129,7 +157,7 @@ function command(
 				cwd,
 				env,
 				encoding: "utf8",
-				timeout: 90000,
+				timeout: deadlineMs,
 				maxBuffer: 32 * 1024 * 1024,
 				killSignal: "SIGKILL",
 			},
@@ -141,6 +169,13 @@ function command(
 							: Number.isSafeInteger(error.code)
 								? Number(error.code) || 1
 								: 1,
+					timedOut: error?.killed === true,
+					signal: error?.signal ?? null,
+					runnerError:
+						error !== null &&
+						!error.killed &&
+						error.code !== undefined &&
+						!Number.isSafeInteger(error.code),
 					stdout,
 					stderr,
 				});
@@ -299,8 +334,12 @@ export async function materializeCandidate(input: {
 	const candidate = await entries(input.repository, input.candidateSha);
 	const replacements = replacementsOf(JSON.stringify(input.replacements));
 
-	for (const item of replacements)
+	for (const item of replacements) {
 		if (!base.has(item.path)) throw new Error("invalid_replacements");
+
+		if (!candidate.has(item.path)) throw new Error("replacement_deleted");
+	}
+
 	await exportTree(input.repository, input.gateSha, input.dest);
 	const temp = mkdtempSync(join(dirname(input.dest), "candidate-"));
 	const ignoredChanges: string[] = [];
@@ -308,6 +347,10 @@ export async function materializeCandidate(input: {
 
 	try {
 		await exportTree(input.repository, input.candidateSha, join(temp, "tree"));
+		rmSync(join(input.dest, "test/acceptance"), {
+			recursive: true,
+			force: true,
+		});
 
 		for (const dir of SOURCE) {
 			rmSync(join(input.dest, dir), { recursive: true, force: true });
@@ -321,7 +364,10 @@ export async function materializeCandidate(input: {
 		for (const [path, item] of candidate) {
 			const fromSource = SOURCE.some((dir) => path.startsWith(`${dir}/`));
 			const replacement = replacements.some((r) => r.path === path);
-			const additional = path.startsWith("test/") && !base.has(path);
+
+			const additional =
+				path.startsWith("test/") &&
+				(!base.has(path) || path.startsWith("test/acceptance/"));
 
 			if (
 				path.split("/").at(-1) === ".npmrc" &&
@@ -361,10 +407,6 @@ export async function materializeCandidate(input: {
 		for (const path of base.keys())
 			if (path.split("/").at(-1) === ".npmrc" && !candidate.has(path))
 				throw new Error("npmrc_changed");
-
-		for (const item of replacements)
-			if (!candidate.has(item.path))
-				rmSync(join(input.dest, item.path), { force: true });
 	} finally {
 		rmSync(temp, { recursive: true, force: true });
 	}
@@ -389,7 +431,9 @@ function specs(value: JsonObject | null): void {
 		if (deps === null) throw new Error("invalid_dependency_manifest");
 
 		for (const [name, version] of Object.entries(deps)) {
-			const spec = textOf(version) ?? "";
+			const raw = textOf(version) ?? "";
+			const alias = /^npm:((?:@[a-z0-9._-]+\/)?[a-z0-9._-]+)@(.+)$/i.exec(raw);
+			const spec = alias?.[2] ?? raw;
 
 			if (
 				!/^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/i.test(name) ||
@@ -419,6 +463,46 @@ export function validateDependencies(
 		throw new Error("invalid_dependency_lock");
 	specs(objectOf(fieldOf(packages, "")));
 	const result: Dependency[] = [];
+	const aliasNames = new Map<string, string>();
+
+	for (const [owner, item] of Object.entries(packages)) {
+		const value = objectOf(item);
+
+		for (const group of [
+			"dependencies",
+			"devDependencies",
+			"optionalDependencies",
+			"peerDependencies",
+		]) {
+			const deps = objectOf(fieldOf(value, group));
+
+			for (const [name, raw] of Object.entries(deps ?? {})) {
+				const match = /^npm:((?:@[a-z0-9._-]+\/)?[a-z0-9._-]+)@(.+)$/i.exec(
+					textOf(raw) ?? "",
+				);
+
+				if (!match?.[1]) continue;
+				let parent = owner;
+
+				for (;;) {
+					const path = parent
+						? `${parent}/node_modules/${name}`
+						: `node_modules/${name}`;
+
+					if (fieldOf(packages, path) !== undefined) {
+						aliasNames.set(path, match[1]);
+						break;
+					}
+
+					if (!parent) break;
+					parent =
+						parent.split("/node_modules/")[0] === parent
+							? ""
+							: parent.slice(0, parent.lastIndexOf("/node_modules/"));
+				}
+			}
+		}
+	}
 
 	for (const [path, item] of Object.entries(packages)) {
 		if (!path) continue;
@@ -451,6 +535,18 @@ export function validateDependencies(
 			fieldOf(value, "link") === true
 		)
 			throw new Error("invalid_dependency_lock");
+
+		const pathName = path.split("node_modules/").at(-1) ?? "";
+		const name = aliasNames.get(path) ?? pathName;
+
+		if (fieldOf(value, "name") !== undefined && fieldOf(value, "name") !== name)
+			throw new Error("package_swap");
+
+		if (
+			!/^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/i.test(name) ||
+			url.pathname !== `/${name}/-/${name.split("/").at(-1)}-${version}.tgz`
+		)
+			throw new Error("package_swap");
 		specs(value);
 		result.push({
 			path,
@@ -490,7 +586,9 @@ function manifestOf(tree: string): GateManifest {
 			(p) =>
 				!safePath(p) ||
 				!p.startsWith("test/") ||
-				!/\.test\.[cm]?[jt]s$/.test(p) ||
+				!(
+					p.endsWith(".test.ts") || /^test\/sandbox\/[^/]+\.cases\.ts$/.test(p)
+				) ||
 				!existsSync(join(tree, p)),
 		)
 	)
@@ -518,7 +616,21 @@ function manifestOf(tree: string): GateManifest {
 	)
 		throw new Error("missing_checks");
 
-	return { checks, tests };
+	const discovered = [
+		...readdirSync(join(tree, "test"))
+			.filter((p) => p.endsWith(".test.ts"))
+			.map((p) => `test/${p}`),
+		...(existsSync(join(tree, "test/sandbox"))
+			? readdirSync(join(tree, "test/sandbox"))
+					.filter((p) => p.endsWith(".cases.ts"))
+					.map((p) => `test/sandbox/${p}`)
+			: []),
+	].sort();
+
+	if (JSON.stringify(tests.toSorted()) !== JSON.stringify(discovered))
+		throw new Error("manifest_drift");
+
+	return { checks, tests: tests.filter((p) => !p.endsWith(".cases.ts")) };
 }
 
 const dockerRunner: GateRunner = {
@@ -574,6 +686,8 @@ const dockerRunner: GateRunner = {
 					...input.argv,
 				],
 				input.tree,
+				CLEAN_ENV,
+				input.deadlineMs,
 			);
 		} finally {
 			await command("docker", ["rm", "-f", id], input.tree);
@@ -603,8 +717,8 @@ const localRunner: GateRunner = {
 			"bwrap",
 			[
 				"--die-with-parent",
-				"--unshare-net",
-				"--unshare-pid",
+				"--new-session",
+				"--unshare-all",
 				"--ro-bind",
 				"/usr",
 				"/usr",
@@ -640,6 +754,8 @@ const localRunner: GateRunner = {
 				...input.argv,
 			],
 			input.tree,
+			CLEAN_ENV,
+			input.deadlineMs,
 		);
 	},
 };
@@ -775,13 +891,173 @@ function sameCounts(
 	return true;
 }
 
+export function receiptPasses(receipt: GateReceipt): boolean {
+	const required = [
+		"baseline_tests",
+		...CHECK_NAMES,
+		"main_tests",
+		"candidate_tests",
+		...(receipt.heldoutDigest ? ["heldout"] : []),
+	];
+
+	return (
+		receipt.version === 2 &&
+		required.every((name) => receipt.requiredChecks.includes(name)) &&
+		new Set(receipt.requiredChecks).size === receipt.requiredChecks.length &&
+		receipt.requiredChecks.every(
+			(name) => receipt.checks.filter((c) => c.name === name).length === 1,
+		) &&
+		receipt.checks.every((c) => c.exitCode === 0) &&
+		receipt.checks.length === receipt.requiredChecks.length
+	);
+}
+
+export function heldoutDigest(
+	files: readonly { path: string; bytes: Buffer }[],
+): string {
+	return createHash("sha256")
+		.update(
+			JSON.stringify(
+				files
+					.toSorted((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+					.map((f) => [
+						f.path,
+						createHash("sha256").update(f.bytes).digest("hex"),
+					]),
+			),
+		)
+		.digest("hex");
+}
+
+function heldoutOf(
+	tree: string,
+	directory?: string,
+	digest?: string,
+): string[] {
+	if (!directory && !digest) return [];
+
+	if (
+		!directory ||
+		!digest ||
+		!isDigest(digest) ||
+		!/^test\/acceptance\/[a-zA-Z0-9_-]+$/.test(directory) ||
+		!existsSync(join(tree, directory, "checks"))
+	)
+		throw new Error("heldout_digest_mismatch");
+
+	const files = readdirSync(join(tree, directory, "checks"), {
+		withFileTypes: true,
+	});
+
+	if (
+		!files.length ||
+		files.some(
+			(f) =>
+				!f.isFile() ||
+				!/^[a-zA-Z0-9_.-]+\.(?:test|cases)\.[cm]?[jt]s$/.test(f.name),
+		)
+	)
+		throw new Error("heldout_digest_mismatch");
+	const paths = files.map((f) => `${directory}/checks/${f.name}`).sort();
+
+	if (
+		heldoutDigest(
+			paths.map((path) => ({ path, bytes: readFileSync(join(tree, path)) })),
+		) !== digest
+	)
+		throw new Error("heldout_digest_mismatch");
+
+	return paths;
+}
+
+async function scanCandidate(
+	input: CandidateInput,
+	baseline: string,
+	tree: string,
+	replacements: readonly ReplacedTest[],
+	heldout: readonly string[],
+): Promise<Signal[]> {
+	const base = await entries(input.repository, input.gateSha);
+	const candidate = await entries(input.repository, input.candidateSha);
+	const result: Signal[] = [];
+
+	for (const [path, entry] of candidate) {
+		if (
+			!/\.[cm]?[jt]sx?$/.test(path) ||
+			!existsSync(join(tree, path)) ||
+			(!SOURCE.some((dir) => path.startsWith(`${dir}/`)) &&
+				!(
+					path.startsWith("test/") &&
+					(!base.has(path) ||
+						replacements.some((r) => r.path === path) ||
+						heldout.includes(path))
+				))
+		)
+			continue;
+
+		if (base.get(path)?.blob === entry.blob && !heldout.includes(path))
+			continue;
+		const text = readFileSync(join(tree, path), "utf8");
+		const changed = new Set<number>();
+
+		if (!base.has(path) || heldout.includes(path))
+			text.split("\n").forEach((_, i) => {
+				changed.add(i + 1);
+			});
+		else {
+			const diff = await git(input.repository, [
+				"diff",
+				"--no-ext-diff",
+				"--no-textconv",
+				"--unified=0",
+				input.gateSha,
+				input.candidateSha,
+				"--",
+				path,
+			]);
+
+			for (const match of diff.matchAll(
+				/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm,
+			)) {
+				const first = Number(match[1]),
+					count = Number(match[2] ?? "1");
+
+				for (let line = first; line < first + count; line++) changed.add(line);
+			}
+		}
+
+		result.push(
+			...scanSource(
+				path,
+				text,
+				changed,
+				join(baseline, ".github/factory/gates/scan-rules.json"),
+			),
+		);
+	}
+
+	return result;
+}
+
 export async function checkCandidate(
 	input: CandidateInput,
 ): Promise<GateReceipt> {
 	const start = Date.now();
 
 	const receipt: GateReceipt = {
-		version: 1,
+		version: 2,
+		requiredChecks: [
+			...(input.install === false ? [] : ["install"]),
+			"baseline_tests",
+			...CHECK_NAMES,
+			"main_tests",
+			"candidate_tests",
+			...(input.heldoutDir || input.heldoutDigest ? ["heldout"] : []),
+		],
+		tamperSignals: [],
+		heldoutDigest: input.heldoutDigest ?? null,
+		heldoutCounts: {},
+		heldoutFailures: [],
 		gateSha: input.gateSha,
 		candidateSha: input.candidateSha,
 		nonce: input.nonce,
@@ -808,18 +1084,42 @@ export async function checkCandidate(
 		tree = join(temp, "tree"),
 		gates = join(temp, "gates");
 
+	let deadlineMs = 90000;
+
 	const run = async (name: string, source: string, argv: readonly string[]) => {
 		const began = Date.now();
-		const result = await input.runner.run({ tree: source, gates, argv });
-		writeFileSync(
-			join(input.output, `${name}.log`),
-			result.stdout + result.stderr,
-		);
+
+		const result = await input.runner
+			.run({
+				tree: source,
+				gates,
+				argv,
+				deadlineMs,
+			})
+			.catch(() => {
+				throw new Error("runner_error");
+			});
+
+		if (name !== "heldout")
+			writeFileSync(
+				join(input.output, `${name}.log`),
+				result.stdout + result.stderr,
+			);
+
+		if (
+			result.runnerError ||
+			(input.runner.kind === "docker" &&
+				[125, 126, 127].includes(result.exitCode))
+		)
+			throw new Error("runner_error");
 
 		const check = {
 			name,
 			exitCode: result.exitCode,
 			durationMs: Date.now() - began,
+			deadlineMs,
+			timedOut: result.timedOut ?? false,
+			signal: result.signal ?? null,
 		};
 
 		receipt.checks.push(check);
@@ -858,7 +1158,6 @@ export async function checkCandidate(
 
 		if ((input.replacementsDigest ?? replacementDigest([])) !== digest)
 			throw new Error("replacement_digest_mismatch");
-		receipt.replacedTests = replacements;
 		receipt.replacementsDigest = digest;
 		await exportTree(input.repository, input.gateSha, baseline);
 		const manifest = manifestOf(baseline);
@@ -870,6 +1169,30 @@ export async function checkCandidate(
 		});
 
 		receipt.ignoredChanges = material.ignoredChanges;
+		receipt.replacedTests = replacements.map((r) => ({
+			...r,
+			beforeDigest: createHash("sha256")
+				.update(readFileSync(join(baseline, r.path)))
+				.digest("hex"),
+			afterDigest: createHash("sha256")
+				.update(readFileSync(join(tree, r.path)))
+				.digest("hex"),
+		}));
+		const heldoutFiles = heldoutOf(tree, input.heldoutDir, input.heldoutDigest);
+		receipt.tamperSignals = await scanCandidate(
+			input,
+			baseline,
+			tree,
+			replacements,
+			heldoutFiles,
+		);
+
+		if (receipt.tamperSignals.length)
+			throw new Error(
+				receipt.tamperSignals.some((s) => s.rule === "runtime_patching")
+					? "runtime_patching"
+					: "suppression_added",
+			);
 		mkdirSync(gates, { mode: 0o755 });
 		cpSync(join(baseline, ".github/factory/gates"), gates, { recursive: true });
 		cpSync(baseline, join(gates, "tooling"), { recursive: true });
@@ -1003,6 +1326,14 @@ export async function checkCandidate(
 				result.stdout + result.stderr,
 			);
 
+			if (
+				result.runnerError ||
+				result.timedOut ||
+				(input.runner.kind === "docker" &&
+					[125, 126, 127].includes(result.exitCode))
+			)
+				throw new Error("runner_error");
+
 			if (result.exitCode !== 0) throw new Error("install_failed");
 		}
 
@@ -1020,6 +1351,7 @@ export async function checkCandidate(
 		}
 
 		receipt.baselineCounts = baseCounts;
+		deadlineMs = Math.max(90000, baselineRun.check.durationMs * 3 + 30000);
 
 		for (const check of manifest.checks)
 			await run(check.name, tree, check.argv);
@@ -1050,12 +1382,59 @@ export async function checkCandidate(
 				exitCode: 0,
 				durationMs: 0,
 			});
-		receipt.status = receipt.checks.every((c) => c.exitCode === 0)
-			? "passed"
-			: "failed";
+
+		if (heldoutFiles.length) {
+			const heldout = await run("heldout", tree, testArgv(heldoutFiles));
+			const summary = objectOf(parseJson(heldout.result.stdout.trim()));
+			const counts = objectOf(fieldOf(summary, "counts"));
+			receipt.heldoutCounts = Object.fromEntries(
+				heldoutFiles.map((p) => [p, countOf(fieldOf(counts, p)) ?? 0]),
+			);
+			const failures = arrayOf(fieldOf(summary, "failures")) ?? [];
+			receipt.heldoutFailures = [
+				...new Set(
+					failures
+						.map((f) => textOf(fieldOf(objectOf(f), "file")) ?? "")
+						.filter((p) => heldoutFiles.includes(p)),
+				),
+			];
+
+			if (
+				countsOf(heldout.result) === null ||
+				heldoutFiles.some((p) => !receipt.heldoutCounts[p])
+			) {
+				heldout.check.exitCode = 1;
+
+				if (!receipt.heldoutFailures.length)
+					receipt.heldoutFailures = heldoutFiles;
+			}
+		}
+
+		for (const timed of receipt.checks.filter((c) => c.timedOut)) {
+			const name = `${timed.name}_deadline_control`;
+			receipt.requiredChecks.push(name);
+
+			const control = await run(
+				name,
+				baseline,
+				manifest.checks.find((c) => c.name === timed.name)?.argv ??
+					testArgv(manifest.tests),
+			);
+
+			if (control.result.timedOut) throw new Error("baseline_deadline");
+
+			if (control.result.exitCode !== 0) throw new Error("baseline_failed");
+		}
+
+		receipt.status = receiptPasses(receipt) ? "passed" : "failed";
 	} catch (error) {
 		receipt.reason = error instanceof Error ? error.message : "gate_error";
-		receipt.status = "incomplete";
+		receipt.status =
+			/^(?:npmrc_changed|runtime_patching|suppression_added|package_swap|replacement_deleted|invalid_dependency_|dependency_integrity|install_failed|unsafe_tree|heldout_digest_mismatch)/.test(
+				receipt.reason,
+			)
+				? "failed"
+				: "incomplete";
 	} finally {
 		receipt.wallMs = Date.now() - start;
 		writeFileSync(
@@ -1088,6 +1467,8 @@ export async function runGatesCli(
 				"state-dir": { type: "string" },
 				"run-id": { type: "string" },
 				"contract-digest": { type: "string" },
+				"heldout-dir": { type: "string" },
+				"heldout-digest": { type: "string" },
 			},
 		});
 
@@ -1144,6 +1525,8 @@ export async function runGatesCli(
 			runner: values.runner === "local" ? localRunner : dockerRunner,
 			replacements,
 			replacementsDigest: digest,
+			heldoutDir: values["heldout-dir"],
+			heldoutDigest: values["heldout-digest"],
 		});
 
 		io.stdout(`${JSON.stringify(receipt, null, 2)}\n`);

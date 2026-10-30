@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { buildPrompt } from "../src/build.ts";
 import {
 	existsSync,
 	lstatSync,
@@ -322,6 +323,21 @@ describe("contract bytes and digest", () => {
 		link: null,
 		...parsed.draft,
 	};
+
+	it("build prompt carries exact contract replacement authorization", () => {
+		const replacesTests = [
+			{ path: "test/old.test.ts", reason: "intentional behavior change" },
+		];
+
+		const prompt = buildPrompt({
+			contract: { ...contract, replacesTests },
+			guidance: { general: "", stages: {} },
+			inlined: [],
+		});
+
+		assert.ok(prompt.includes(JSON.stringify(replacesTests)));
+		assert.match(prompt, /replacesTests/);
+	});
 
 	it("binds the base commit, the snapshot and the run, with a stable digest", () => {
 		const bytes = contractBytes(contract);
