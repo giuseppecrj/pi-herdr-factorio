@@ -103,6 +103,10 @@ Proof standards:
 
 Copy evidence into `docs/plans/media/<pr-id>/` only when the task authorizes it.
 
+## Dependency gate
+
+A gates lane reports every changed dependency manifest and lockfile. When the brief limits dependency changes to the sandbox assets, two files may change: the asset manifest `server/sandbox/assets/package.json` and its lockfile `server/sandbox/assets/package-lock.json`. A change to either passes. A change to any other manifest or lockfile fails, including the root `package.json` and `package-lock.json`.
+
 ## Cleanup
 
 ```bash
