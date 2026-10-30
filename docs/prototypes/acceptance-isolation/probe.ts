@@ -4,7 +4,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileRunFiles } from "../../../server/controller.ts";
-import { launchSandbox, locateBundle, SANDBOX_ROOT } from "../../../server/sandbox.ts";
+import { gitState, launchSandbox, locateBundle, SANDBOX_ROOT } from "../../../server/sandbox.ts";
 import { startGatewayProcess } from "../../../server/sandbox/gateway-client.ts";
 import { builtinTable } from "../../../server/sandbox/routes.ts";
 import { stopScopeArgv } from "../../../server/sandbox/scope.ts";
@@ -65,6 +65,7 @@ assert.ok(rawOutputs > 0, "no private accept output to fingerprint");
 
 const input = {
 	runId,
+	gitLayout: gitState(files.workspacePath(runId)) === "dir" ? "trusted-bind" : "tmpfs",
 	privatePaths,
 	fingerprints: { files: [...fingerprints], paths: suite.suite.files.map((file) => hash(file.path)) },
 };
@@ -101,7 +102,7 @@ out.hostWorkspaceVisibleInCmdline = hostWorkspace !== null;
 const [state, id] = hostWorkspace === null ? [null, null] : hostWorkspace.split('/workspaces/');
 out.discovery = state !== null && id === input.runId;
 const mountsText = readText('/proc/self/mountinfo');
-const mounts = mountsText.split('\n').map(l => l.split(' ')).filter(f => f.length > 8).map(f => ({ at: f[4], type: f[f.indexOf('-') + 1] }));
+const mounts = mountsText.split('\n').map(l => l.split(' ')).filter(f => f.length > 8).map(f => ({ at: f[4], type: f[f.indexOf('-') + 1], options: f[5].split(',') }));
 out.acceptanceMounted = mountsText.includes('/acceptance') || (out.discovery && input.privatePaths.filter(p => p.startsWith('stages/')).some(p => mountsText.includes('/'+p)));
 let privateReads = 0;
 const privateVisited = new Set();
@@ -118,10 +119,12 @@ if (out.discovery) for (const path of input.privatePaths) reach(state+'/'+path);
 out.privatePathsReadable = privateReads;
 out.privatePathsTried = input.privatePaths.length;
 const roots = ['/workspace', '/run', '/home', '/tmp', '/opt/factory', '/etc'];
-out.requiredRoots = [...roots, '/workspace/.git', '/run/pi-agent/sessions'].every(directory);
+out.requiredRoots = [...roots, '/workspace/.git', '/run/pi-agent/sessions'].every(p => directory(p) && entries(p) !== null);
 out.gitEntries = entries('/workspace/.git')?.length ?? null;
 out.ownSessions = entries('/run/pi-agent/sessions')?.length ?? null;
-out.gitTmpfs = mounts.some(m => m.at === '/workspace/.git' && m.type === 'tmpfs');
+const gitMount = mounts.find(m => m.at === '/workspace/.git');
+out.gitTmpfs = gitMount?.type === 'tmpfs';
+out.gitRootIsolated = gitMount?.options.includes('ro') === true && (input.gitLayout === 'tmpfs' ? out.gitTmpfs : gitMount.type === mounts.find(m => m.at === '/workspace')?.type);
 out.freshTmpfs = ['/home', '/tmp', '/run'].every(at => mounts.some(m => m.at === at && m.type === 'tmpfs'));
 out.cachePaths = ['/home/agent/.cache', '/home/agent/.npm', '/home/agent/.pi', '/run/credentials', '/run/user', '/root'].filter(p => existsSync(p));
 out.envLeaks = ['SSH_AUTH_SOCK', 'GH_TOKEN', 'GITHUB_TOKEN', 'OPENAI_API_KEY', 'NODE_OPTIONS', 'XDG_RUNTIME_DIR_HOST'].filter(k => process.env[k] !== undefined);
@@ -129,7 +132,7 @@ out.tools = process.env.FACTORY_PI_TOOLS;
 const pattern = /factory-holdout-[0-9a-f]{64}/;
 const fileHashes = new Set(input.fingerprints.files);
 const pathHashes = new Set(input.fingerprints.paths);
-let scanned = 0; let canaryHits = 0; let fingerprintHits = 0; let pathHits = 0; let scanErrors = 0;
+let scanned = 0; let canaryHits = 0; let fingerprintHits = 0; let pathHits = 0; let scanErrors = 0; let scanDenied = 0; let danglingLinks = 0;
 const visited = new Set();
 const scan = path => {
  try {
@@ -148,11 +151,16 @@ const scan = path => {
     if (parts.some((_, i) => pathHashes.has(hash(parts.slice(i).join('/'))))) pathHits++;
    }
   }
- } catch { scanErrors++; }
+ } catch (error) {
+  if (error.code === 'EACCES' || error.code === 'EPERM') scanDenied++;
+  else if (error.code === 'ENOENT') {
+   try { if (lstatSync(path).isSymbolicLink()) danglingLinks++; else scanErrors++; } catch { scanErrors++; }
+  } else scanErrors++;
+ }
 };
 for (const root of roots) scan(root);
-out.filesScanned = scanned; out.canaryHits = canaryHits; out.fingerprintHits = fingerprintHits; out.pathHits = pathHits; out.scanErrors = scanErrors;
-out.complete = out.discovery && out.requiredRoots && out.gitTmpfs && scanErrors === 0 && scanned > 0;
+out.filesScanned = scanned; out.canaryHits = canaryHits; out.fingerprintHits = fingerprintHits; out.pathHits = pathHits; out.scanErrors = scanErrors; out.scanDenied = scanDenied; out.danglingLinks = danglingLinks;
+out.complete = out.discovery && out.requiredRoots && out.gitRootIsolated && scanErrors === 0 && scanned > 0;
 out.githubGateway = await new Promise(done => { const req = http.get('http://127.0.0.1:18080/github/repos/giuseppecrj/pi-herdr-factorio', r => { r.resume(); r.on('end', () => done(r.statusCode)); }); req.on('error', () => done(null)); req.setTimeout?.(3000, () => { req.destroy(); done(null); }); });
 out.githubDirect = await fetch('https://api.github.com', { signal: AbortSignal.timeout(1500) }).then(() => 'reachable', () => 'denied');
 console.log('PROBE ' + JSON.stringify(out));

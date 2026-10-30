@@ -19,6 +19,7 @@ const hash = (s) => createHash("sha256").update(s).digest("hex");
 
 const input = {
 	runId: id,
+	gitLayout: "tmpfs",
 	privatePaths: [`acceptance/${id}`, `acceptance/${id}.json`, `contracts/${id}`, `stages/${id}/accept-1`, `stages/${id}/accept-2.2`],
 	fingerprints: { files: [hash(raw), hash(body)], paths: [hash(path)] },
 };
@@ -28,6 +29,7 @@ const passes = (seen, stdout, code) => vm.runInNewContext(`(${predicate})`, { se
 async function fixture(change = () => {}, code = 0) {
 	const root = fs.mkdtempSync(join(tmpdir(), "acceptance-detector-"));
 	const mapped = (p) => join(root, p);
+	const config = structuredClone(input);
 
 	const write = (p, data) => {
 		fs.mkdirSync(join(mapped(p), ".."), { recursive: true });
@@ -39,14 +41,14 @@ async function fixture(change = () => {}, code = 0) {
 			fs.mkdirSync(mapped(p), { recursive: true });
 		write("/workspace/README.md", "public checkout\n");
 		write("/proc/1/cmdline", `bwrap\0--bind\0/state/workspaces/${id}\0/workspace\0`);
-		write("/proc/self/mountinfo", ["/home", "/tmp", "/run", "/workspace/.git"].map((p, i) => `${i + 1} 0 0:1 / ${p} rw - tmpfs tmpfs rw`).join("\n"));
-		change({ write, mapped });
+		write("/proc/self/mountinfo", ["/home", "/tmp", "/run", "/workspace/.git"].map((p, i) => `${i + 1} 0 0:1 / ${p} ${p === "/workspace/.git" ? "ro" : "rw"} - tmpfs tmpfs rw`).join("\n"));
+		change({ write, mapped, config });
 		let stdout = "";
 
 		const ctx = {
 			Buffer, createHash,
 			existsSync: (p) => fs.existsSync(mapped(p)),
-			readFileSync: (p, ...args) => p === 0 ? JSON.stringify(input) : fs.readFileSync(mapped(p), ...args),
+			readFileSync: (p, ...args) => p === 0 ? JSON.stringify(config) : fs.readFileSync(mapped(p), ...args),
 			readdirSync: (p, ...args) => fs.readdirSync(mapped(p), ...args),
 			lstatSync: (p) => fs.lstatSync(mapped(p)),
 			statSync: (p) => fs.statSync(mapped(p)),
@@ -63,12 +65,30 @@ async function fixture(change = () => {}, code = 0) {
 
 		return { seen, pass: passes(seen, stdout, code) };
 	} finally {
+		if (fs.existsSync(mapped("/etc/ssl"))) fs.chmodSync(mapped("/etc/ssl"), 0o700);
+
+		if (fs.existsSync(mapped("/etc/ssl/private"))) fs.chmodSync(mapped("/etc/ssl/private"), 0o700);
 		fs.rmSync(root, { recursive: true, force: true });
 	}
 }
 
 test("clean positive control completes the detector", async () => {
 	assert.equal((await fixture()).pass, true);
+});
+
+test("accepts the production empty read-only trusted Git bind", async () => {
+	assert.equal((await fixture(({ write, config }) => {
+		config.gitLayout = "trusted-bind";
+		write("/proc/self/mountinfo", ["/home", "/tmp", "/run"].map((p, i) => `${i + 1} 0 0:1 / ${p} rw - tmpfs tmpfs rw`).join("\n") + "\n4 0 0:2 / /workspace rw - ext4 disk rw\n5 4 0:2 / /workspace/.git ro - ext4 disk rw");
+	})).pass, true);
+});
+
+test("does not count dangling OS links or permission-denied non-roots as readable files", async () => {
+	assert.equal((await fixture(({ mapped }) => {
+		fs.symlinkSync("absent-target", mapped("/etc/broken-link"));
+		fs.mkdirSync(mapped("/etc/ssl/private"), { recursive: true, mode: 0o700 });
+		fs.chmodSync(mapped("/etc/ssl/private"), 0o000);
+	})).pass, true);
 });
 
 test("rejects a copied raw accept output without a canary", async () => {
@@ -113,6 +133,10 @@ for (const missing of ["/workspace/.git", "/workspace", "/run/pi-agent/sessions"
 
 test("rejects a non-tmpfs Git root", async () => {
 	assert.equal((await fixture(({ write }) => write("/proc/self/mountinfo", ["/home", "/tmp", "/run"].map((p, i) => `${i + 1} 0 0:1 / ${p} rw - tmpfs tmpfs rw`).join("\n")))).pass, false);
+});
+
+test("rejects a writable Git root even when it is empty tmpfs", async () => {
+	assert.equal((await fixture(({ write }) => write("/proc/self/mountinfo", ["/home", "/tmp", "/run", "/workspace/.git"].map((p, i) => `${i + 1} 0 0:1 / ${p} rw - tmpfs tmpfs rw`).join("\n")))).pass, false);
 });
 
 test("positive leak control detects a canaried check", async () => {
