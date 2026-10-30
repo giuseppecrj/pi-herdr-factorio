@@ -542,8 +542,12 @@ export function trustedVisiblePlan(
 		if (!isTestInput(path)) continue;
 		const changed = candidate.get(path);
 
-		if (changed?.mode === entry.mode && changed.data.equals(entry.data))
+		if (changed !== undefined) {
+			testInputsChanged ||=
+				changed.mode !== entry.mode || !changed.data.equals(entry.data);
 			continue;
+		}
+
 		testInputsChanged = true;
 		const dest = join(workspace, path);
 		rmSync(dest, { force: true });

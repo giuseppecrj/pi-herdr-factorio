@@ -339,6 +339,31 @@ test("base scripts and base test inputs defeat candidate script rewrites and del
 	);
 });
 
+test("retains candidate regressions added to existing visible test files", (t) => {
+	const f = fixture(t);
+	mkdirSync(join(f.base, "test"));
+	mkdirSync(join(f.workspace, "test"));
+	writeFileSync(
+		join(f.base, "package.json"),
+		JSON.stringify({ scripts: { test: "node --test test/*.test.js" } }),
+	);
+	writeFileSync(
+		join(f.workspace, "package.json"),
+		JSON.stringify({ scripts: { test: "node --test test/*.test.js" } }),
+	);
+	writeFileSync(join(f.base, "test/existing.test.js"), "base test\n");
+	writeFileSync(
+		join(f.workspace, "test/existing.test.js"),
+		"base test\nnew regression\n",
+	);
+	const plan = trustedVisiblePlan(f.base, f.workspace, "npm test");
+	assert.equal(plan.testInputsChanged, true);
+	assert.equal(
+		readFileSync(join(f.workspace, "test/existing.test.js"), "utf8"),
+		"base test\nnew regression\n",
+	);
+});
+
 test("preserves literal base script bytes and freezes nested npm script lookups", (t) => {
 	const f = fixture(t);
 

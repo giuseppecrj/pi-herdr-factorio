@@ -1366,7 +1366,7 @@ describe("controller-run visible tests", () => {
 				join(base, "package.json"),
 				JSON.stringify({
 					scripts: {
-						test: `node -e 'process.stdout.write("LAST-CHUNK"); process.exitCode=${code}'`,
+						test: `node -e 'const fs=require("node:fs"); fs.writeFileSync("exec-file","",{mode:0o755}); process.stdout.write("LAST-CHUNK"); process.exitCode=(fs.statSync("exec-file").mode&0o777)===0o755?${code}:99'`,
 					},
 				}),
 			);

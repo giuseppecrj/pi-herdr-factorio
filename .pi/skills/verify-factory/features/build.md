@@ -1,6 +1,6 @@
 # Private build patches (F07a)
 
-A passing accept stores its held-out suite and claims build on the same run. Build produces a private patch, not a branch, PR, CI verdict or publication. Reserve specify + accept + the 200,000-token build allowance before starting. Use only the model authorized by the task.
+A passing accept stores its held-out suite and claims build on the same run. Build produces a private patch, not a branch, PR, CI verdict or publication. Check the task's cumulative token cap before starting. Build's 200,000-token attempt ceiling is also constrained by the remaining run allowance. Use only the model authorized by the task.
 
 ## Sub-features
 
@@ -8,7 +8,7 @@ A passing accept stores its held-out suite and claims build on the same run. Bui
 - `build-workspace`: an independent pinned pristine base and a fresh attempt workspace, including on replay. Neither the acceptance store nor prior sessions are mounted. The build workspace/agent trees and visible-test tree are removed after use; private stores and receipts remain.
 - `build-tools`: coding tools only, with `subagent` and the bundled Herdr extension added exactly when the validated contract names more than eight files. Tiny contracts do not fan out. No GitHub route exists.
 - `build-collection`: deterministic raw-byte patch digest, sorted changed paths, modes, deletions, binaries and safe links. Forbidden paths stay private. Symlinked dependency caches and top-level directory replacements are refused. Empty patches fail; untrusted prose cannot enable a no-change outcome.
-- `build-visible`: a separate model-free sandbox applies the exact patch and rechecks its digest. npm script references come from the base manifest, with lifecycle scripts suppressed. Base test inputs are preserved alongside candidate-added tests. The receipt records the actual command and script/test-input changes. A measured nonzero test exit never passes.
+- `build-visible`: a separate model-free sandbox applies the exact patch and rechecks its digest. npm script references come from the base manifest, with lifecycle scripts suppressed. Deleted base test files are restored; modified and added tests remain candidate input. The receipt records the actual command and script/test-input changes. A measured nonzero test exit never passes.
 - `build-receipt`: mode 0600 under 0700 `patches/<runId>/`; the receipt binds run, base SHA, contract digest, acceptance digest and patch digest. Command records are `builder-reported`, capped with an omitted count, never controller validation. Test output is private and bounded.
 - `build-summary`: one `factory-build` key, patch prefix, bounded path list with omitted count, controller test result and script-change disclosures. No code, suite digest, commands or output.
 - `build-recovery`: stored patch digests are checked, matching bound `tests.json` is reused and missing tests rerun without a builder. Preflight failure waits. Infrastructure failures are typed `visible_tests_unavailable` and retry under the attempt cap without claiming tests failed.

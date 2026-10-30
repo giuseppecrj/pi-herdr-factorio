@@ -750,7 +750,7 @@ export function renderBuildSummary(input: {
 					? "The patch changed package.json scripts; trusted base scripts were used."
 					: "The patch did not change package.json scripts.",
 			receipt.testInputsChanged
-				? "Changed or deleted base test inputs were restored for the controller run."
+				? "The patch changed test inputs. Deleted base test files were restored; modified and added tests are candidate input."
 				: "Base test inputs were retained.",
 			"Builder command receipts are builder-reported, not controller validation.",
 			receipt.policy === "forbidden"
