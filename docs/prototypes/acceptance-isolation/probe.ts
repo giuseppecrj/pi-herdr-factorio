@@ -77,7 +77,11 @@ out.privatePathsReadable = hostPaths.filter(readable).length;
 out.acceptanceMounted = readFileSync('/proc/self/mountinfo', 'utf8').split('\n').some(l => l.includes('/acceptance') || l.includes('/stages/'+id+'/accept') || l.includes('/stages/'+id+'/specify'));
 out.gitEntries = existsSync('/workspace/.git') ? readdirSync('/workspace/.git').length : 0;
 out.ownSessions = readdirSync('/run/pi-agent/sessions').length;
-out.cachePaths = ['/home/agent/.cache', '/home/agent/.npm', '/home/agent/.pi', '/home/agent/.config', '/run/credentials', '/run/user'].filter(p => existsSync(p));
+const mounts = readFileSync('/proc/self/mountinfo', 'utf8').split('\n').map(l => l.split(' ')).filter(f => f.length > 8).map(f => ({ at: f[4], type: f[f.indexOf('-') + 1] }));
+out.freshTmpfs = ['/home', '/tmp', '/run'].every(at => mounts.some(m => m.at === at && m.type === 'tmpfs'));
+const walk = (path, acc) => { let names; try { names = readdirSync(path); } catch { return acc; } for (const name of names) { const file = path + '/' + name; acc.push(file); try { if (lstatSync(file).isDirectory()) walk(file, acc); } catch {} } return acc; };
+out.homeEntries = walk('/home/agent', []);
+out.cachePaths = ['/home/agent/.cache', '/home/agent/.npm', '/home/agent/.pi', '/run/credentials', '/run/user', '/root'].filter(p => existsSync(p));
 out.envLeaks = ['SSH_AUTH_SOCK', 'GH_TOKEN', 'GITHUB_TOKEN', 'OPENAI_API_KEY', 'NODE_OPTIONS', 'XDG_RUNTIME_DIR_HOST'].filter(k => process.env[k] !== undefined);
 out.tools = process.env.FACTORY_PI_TOOLS;
 const pattern = /factory-holdout-[0-9a-f]{64}/;
@@ -124,6 +128,7 @@ try {
 		seen.gitEntries === 0 &&
 		seen.ownSessions === 0 &&
 		seen.cachePaths.length === 0 &&
+		seen.freshTmpfs === true &&
 		seen.envLeaks.length === 0 &&
 		seen.tools === tools.join(",") &&
 		seen.canaryHits.length === 0 &&
