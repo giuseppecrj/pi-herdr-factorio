@@ -32,7 +32,16 @@ On 2026-10-30 at `bdc54da`, lane `f06a-w1`, bundle `assets-336f926556f1…`, fix
 | `drive-stage.sh f06a 1 434` | exit 0, 61.8 s; markers `1:claimed`, `2:running`, `3:stage_passed`; `contract_stored digest=5a6524c654e3…`; one summary comment before `stage_passed`; no scope or sandbox process left |
 | Receipt | `passed`, `agent_settled` with `aborted: false`, 7 turns, 51.8 s, 128,068 tokens (parent 126,795, one reviewer child 1,273), every model request `model-openai`, no xAI |
 
-That run read the bundled `pi-herdr-agents` `SKILL.md` and two test files before it drafted. Commit `e378547` cut the first request's body from 58,655 to 39,514 bytes and forbids those reads. Its live cost is not yet measured. The vague and linked steps have not been run live.
+That first build read the bundled `pi-herdr-agents` `SKILL.md` and two test files before drafting. Fix round 1 removes the extension from stage argv and runs review in the controller. At `4fedafb`, with bundle `assets-116f6d3af325…`, lane `f06a-fix1-w1` proved:
+
+| Step | Result | Tokens | Requests | Wall |
+| --- | --- | ---: | ---: | --- |
+| Clear #437 | Contract and summary, then `stage_passed` | 38,283 | 5 | 35.9 s stage, 45.4 s through terminal marker |
+| Vague #438 | One concrete question, label swap, then `needs_info` | 8,045 | 1 | 8.0 s stage, 19.4 s tick |
+| Answer without relabel | No launch or new marker | 0 | 0 | 4.1 s tick |
+| Answer and relabel #438 | Linked contract says `Hello, factory!`, then `stage_passed` | 38,752 | 5 | 33.6 s stage, 45.5 s tick |
+
+All 85,080 tokens went to `openai/gpt-6.1-sol`. Each contract had one reviewer and no revision. Both fixtures are closed; the lane was removed with no processes or scopes left. The clear SSH caller timed out at 30 seconds, but the controller completed. Its wall figure is from the controller log through the terminal marker, not a completed shell timer. Evidence is in `pi-herdr-factorio-trails/F06a/fix-1/live/` and `/tmp/swarm-f06a-fix1/worker-1/` on the VM.
 
 ## Gotchas
 

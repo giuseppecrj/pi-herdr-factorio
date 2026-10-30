@@ -928,7 +928,7 @@ export function piCommand(model: ModelId): string[] {
 
 /**
  * Copies the bundle's agent template into a fresh private dir Pi can write:
- * `auth.json`, the settings lock and child sessions live there. The bundle
+ * `auth.json`, the settings lock and sessions live there. The bundle
  * is installed read-only, so its modes are not kept. Only regular files are
  * copied.
  */
@@ -1840,7 +1840,7 @@ const PREFLIGHT_RUN =
 /**
  * The stage executor the controller installs. It stops leftover stage
  * scopes at startup, runs the preflight until it passes, and launches each
- * stage as one `runStage` in a fresh sandbox. Until the preflight has
+ * stage in a fresh sandbox, or specify's bounded session sequence. Until the preflight has
  * passed, every launch is `sandbox_unavailable` and no model runs. A
  * reconcile that failed fails the preflight, which retries it: no stage of
  * this process can be running yet, so a retry stops only leftovers.

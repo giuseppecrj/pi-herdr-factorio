@@ -2555,6 +2555,45 @@ describe("controller-run specify review", () => {
 		}
 	}
 
+	for (const phase of ["review", "revision"]) {
+		it(`fails the attempt when ${phase} itself exceeds the shared token cap`, async () => {
+			const h = setup([DRAFT, CRITIQUE, QUESTIONS]);
+
+			try {
+				const result = await sandboxModule.runSpecify(
+					{
+						...h.run,
+						settings: {
+							...h.run.settings,
+							maxTokens: phase === "review" ? 15 : 25,
+						},
+					},
+					h.dir,
+					h.create,
+				);
+
+				assert.equal(result.kind, "budget_exhausted");
+				assert.equal(result.usage, phase === "review" ? 20 : 30);
+				assert.equal(h.calls.length, phase === "review" ? 2 : 3);
+				assert.equal(existsSync(join(h.dir, "output.txt")), false);
+			} finally {
+				h.close();
+			}
+		});
+	}
+
+	it("fails malformed revision output without publishing the draft as a final contract", async () => {
+		const h = setup([DRAFT, CRITIQUE, "not JSON"]);
+
+		try {
+			assert.equal((await h.execute()).kind, "failed");
+			assert.equal(h.calls.length, 3);
+			assert.equal(existsSync(join(h.dir, "output.txt")), false);
+		} finally {
+			h.close();
+		}
+	});
+
 	it("executor.output exposes a pending review, then final output, and spent counts sessions once", async () => {
 		const h = setup([DRAFT, CRITIQUE, QUESTIONS]);
 		const dir = join(h.dir, "stages", RUN, "specify-1");

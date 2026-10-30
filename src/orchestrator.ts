@@ -136,10 +136,11 @@ export interface StageExecutor {
 	reconciled(): Promise<boolean>;
 	/** Whether the stage sandbox can run. A `blocked` run replays only after this passes. */
 	preflight(): Promise<boolean>;
+	/** Result usage is new spend; a resumed attempt's receipt also includes its recorded sessions. */
 	launch(input: StageLaunchInput): Promise<StageLaunch>;
 	/**
 	 * Tokens an attempt an earlier controller ran is known to have used: its
-	 * receipt's total, else the gateway's audit tally. `null` when neither exists.
+	 * receipt's total, else its session receipts or gateway audit tallies. `null` when none exists.
 	 */
 	spent(input: {
 		readonly runId: Digest;
@@ -149,6 +150,7 @@ export interface StageExecutor {
 	/**
 	 * The final text of an execution of the attempt that passed and kept it,
 	 * so a restart can finish a stage without running it again. Untrusted.
+	 * `pending` resumes a recorded session sequence in the same attempt.
 	 */
 	output(input: {
 		readonly runId: Digest;
@@ -3083,11 +3085,6 @@ export class Orchestrator {
 		return null;
 	}
 
-	/**
-	 * Finishes an adopted `running` specify attempt from the output an
-	 * earlier controller's execution kept, instead of running it again. Its
-	 * usage is already counted by `#accountAdopted`.
-	 */
 	async #recoverOutput(
 		run: ActiveRun,
 		output: string | { readonly kind: "pending" } | null,
