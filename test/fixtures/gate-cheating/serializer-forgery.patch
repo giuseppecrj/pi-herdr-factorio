@@ -44,7 +44,7 @@ index 6fbbc53..8b848ca 100644
  import type { CommentEdit, IssueComment } from "./adapters/github.ts";
  import { type Digest, isDigest, runIdOf, type Stage } from "./run.ts";
  import { STAGE_ORDER } from "./stages.ts";
-@@ -44,7 +45,7 @@ export function isTerminal(status: RunStatus): status is TerminalStatus {
+@@ -44,6 +45,6 @@ export function isTerminal(status: RunStatus): status is TerminalStatus {
  		status === "failed" ||
  		status === "budget_exhausted" ||
  		status === "stage_passed" ||
