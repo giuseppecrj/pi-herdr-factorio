@@ -1,7 +1,7 @@
-diff --git 1/a/src/markers.ts 2/b/src/markers.ts
+diff --git a/src/markers.ts b/src/markers.ts
 index 6fbbc53..ccc9b14 100644
---- 1/a/src/markers.ts
-+++ 2/b/src/markers.ts
+--- a/src/markers.ts
++++ b/src/markers.ts
 @@ -44,7 +44,7 @@ export function isTerminal(status: RunStatus): status is TerminalStatus {
  		status === "failed" ||
  		status === "budget_exhausted" ||
@@ -11,10 +11,10 @@ index 6fbbc53..ccc9b14 100644
  	);
  }
  
-diff --git 1/a/test/markers.test.ts 2/a/test/markers.test.ts
+diff --git a/test/markers.test.ts b/test/markers.test.ts
 deleted file mode 100644
 index cdc0442..0000000
---- 1/a/test/markers.test.ts
+--- a/test/markers.test.ts
 +++ /dev/null
 @@ -1,596 +0,0 @@
 -import assert from "node:assert/strict";

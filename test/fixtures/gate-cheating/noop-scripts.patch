@@ -1,7 +1,7 @@
-diff --git 1/a/package.json 2/b/package.json
+diff --git a/package.json b/package.json
 index b3e79b0..5f1712f 100644
---- 1/a/package.json
-+++ 2/b/package.json
+--- a/package.json
++++ b/package.json
 @@ -22,12 +22,12 @@
      "LICENSE"
    ],
@@ -21,10 +21,10 @@ index b3e79b0..5f1712f 100644
    },
    "engines": {
      "node": ">=26.12.1"
-diff --git 1/a/src/markers.ts 2/b/src/markers.ts
+diff --git a/src/markers.ts b/src/markers.ts
 index 6fbbc53..ccc9b14 100644
---- 1/a/src/markers.ts
-+++ 2/b/src/markers.ts
+--- a/src/markers.ts
++++ b/src/markers.ts
 @@ -44,7 +44,7 @@ export function isTerminal(status: RunStatus): status is TerminalStatus {
  		status === "failed" ||
  		status === "budget_exhausted" ||

@@ -78,7 +78,7 @@ if (mode === "generate") {
 				for (const [side,text] of [["a",before],["b",content]]) if (text !== null) {mkdirSync(dirname(join(temp,side,path)),{recursive:true});writeFileSync(join(temp,side,path),text);}
 			}
 
-			const result=spawnSync("git",["diff","--no-index","--","a","b"],{cwd:temp,encoding:"utf8"});
+			const result=spawnSync("git",["diff","--no-index","--src-prefix=a/","--dst-prefix=b/","--","a","b"],{cwd:temp,encoding:"utf8"});
 
 			if (result.status!==1) throw new Error("empty patch");
 			const patch=result.stdout.replaceAll("a/a/","a/").replaceAll("b/b/","b/").replaceAll("a/b/","a/").replaceAll("b/a/","b/");

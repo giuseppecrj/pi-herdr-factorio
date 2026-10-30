@@ -1,7 +1,7 @@
-diff --git 1/a/package.json 2/b/package.json
+diff --git a/package.json b/package.json
 index b3e79b0..fe8f97d 100644
---- 1/a/package.json
-+++ 2/b/package.json
+--- a/package.json
++++ b/package.json
 @@ -62,7 +62,8 @@
    },
    "dependencies": {

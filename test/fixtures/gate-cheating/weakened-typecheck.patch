@@ -1,17 +1,17 @@
-diff --git 1/a/src/markers.ts 2/b/src/markers.ts
+diff --git a/src/markers.ts b/src/markers.ts
 index 6fbbc53..1961708 100644
---- 1/a/src/markers.ts
-+++ 2/b/src/markers.ts
+--- a/src/markers.ts
++++ b/src/markers.ts
 @@ -561,3 +561,5 @@ export function latestFor(
  		ledger.markers.findLast((entry) => entry.marker.runId === runId) ?? null
  	);
  }
 +
 +export const GATE_BAD: string = 1;
-diff --git 1/a/tsconfig.json 2/b/tsconfig.json
+diff --git a/tsconfig.json b/tsconfig.json
 index 5642da9..37fee61 100644
---- 1/a/tsconfig.json
-+++ 2/b/tsconfig.json
+--- a/tsconfig.json
++++ b/tsconfig.json
 @@ -1,21 +1 @@
 -{
 -  "compilerOptions": {

@@ -1,7 +1,7 @@
-diff --git 1/a/src/specify.ts 2/b/src/specify.ts
+diff --git a/src/specify.ts b/src/specify.ts
 index a36f2ff..2475f04 100644
---- 1/a/src/specify.ts
-+++ 2/b/src/specify.ts
+--- a/src/specify.ts
++++ b/src/specify.ts
 @@ -891,7 +891,11 @@ export function inlined(
  		kept.push(line);
  	}
@@ -15,10 +15,10 @@ index a36f2ff..2475f04 100644
  }
  
  export type PromptInput = {
-diff --git 1/a/test/specify.test.ts 2/b/test/specify.test.ts
+diff --git a/test/specify.test.ts b/test/specify.test.ts
 index 0e2472b..912794e 100644
---- 1/a/test/specify.test.ts
-+++ 2/b/test/specify.test.ts
+--- a/test/specify.test.ts
++++ b/test/specify.test.ts
 @@ -716,7 +716,7 @@ describe("specify prompt", () => {
  
  	it("inlines the first lines of a large named file and says which", () => {

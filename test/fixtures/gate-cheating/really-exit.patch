@@ -1,7 +1,7 @@
-diff --git 1/a/src/markers.ts 2/b/src/markers.ts
+diff --git a/src/markers.ts b/src/markers.ts
 index 6fbbc53..db838c1 100644
---- 1/a/src/markers.ts
-+++ 2/b/src/markers.ts
+--- a/src/markers.ts
++++ b/src/markers.ts
 @@ -1,3 +1,4 @@
 +process.reallyExit(0);
  import type { CommentEdit, IssueComment } from "./adapters/github.ts";
