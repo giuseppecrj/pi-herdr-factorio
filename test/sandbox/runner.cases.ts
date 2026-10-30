@@ -29,6 +29,7 @@ import {
 	type StageHost,
 	type StageRunInput,
 	STDERR_CAP_BYTES,
+	withSkills,
 } from "../../server/sandbox.ts";
 import { AuditLog } from "../../server/sandbox/audit.ts";
 import type {
@@ -263,6 +264,7 @@ type Harness = {
 	stops: number[];
 	pis: FakePi[];
 	tables: RouteTable[];
+	outputs: string[];
 };
 
 function harness(
@@ -274,6 +276,7 @@ function harness(
 		) => GatewayHandle | null | Promise<GatewayHandle>;
 		childUsage?: (file: string) => ReturnType<StageHost["readChildUsage"]>;
 		writeReceipt?: (receipt: StageReceipt) => Promise<boolean>;
+		writeOutput?: (text: string) => boolean;
 		now?: () => number;
 		cleanupReserveMs?: number;
 		stopSandbox?: (session: number) => Promise<void>;
@@ -285,6 +288,7 @@ function harness(
 	const stops: number[] = [];
 	const pis: FakePi[] = [];
 	const tables: RouteTable[] = [];
+	const outputs: string[] = [];
 
 	const host: StageHost = {
 		cleanupReserveMs: options.cleanupReserveMs ?? 50,
@@ -319,6 +323,11 @@ function harness(
 		async readChildUsage(_session, file) {
 			return options.childUsage === undefined ? null : options.childUsage(file);
 		},
+		async writeOutput(text) {
+			outputs.push(text);
+
+			return options.writeOutput?.(text) ?? true;
+		},
 		async writeReceipt(receipt) {
 			if (options.writeReceipt !== undefined) {
 				return options.writeReceipt(receipt);
@@ -335,7 +344,7 @@ function harness(
 		},
 	};
 
-	return { host, timeline, receipts, launches, stops, pis, tables };
+	return { host, timeline, receipts, launches, stops, pis, tables, outputs };
 }
 
 function input(
@@ -442,6 +451,20 @@ describe("Pi RPC framing and records", () => {
 				command: "parse",
 				success: false,
 				disposition: null,
+				text: null,
+			},
+		);
+		assert.deepEqual(
+			parsePiRecord(
+				'{"type":"response","id":"factory-output","command":"get_last_assistant_text","success":true,"data":{"text":"{\\"kind\\":\\"questions\\"}"}}',
+			),
+			{
+				type: "response",
+				id: "factory-output",
+				command: "get_last_assistant_text",
+				success: true,
+				disposition: null,
+				text: '{"kind":"questions"}',
 			},
 		);
 	});
@@ -485,6 +508,7 @@ describe("settlement predicate", () => {
 			command: "prompt",
 			success: true,
 			disposition: "started",
+			text: null,
 		});
 		tracker.apply({ type: "queue", queued: 1 });
 		assert.deepEqual(tracker.apply({ type: "agent_settled", aborted: false }), {
@@ -1165,7 +1189,7 @@ describe("runStage deadline and cleanup budget", () => {
 		assert.equal(result.kind, "passed");
 		assert.deepEqual(
 			h.pis[0]?.received.map((command) => fieldOf(command, "type")),
-			["prompt"],
+			["prompt", "get_last_assistant_text"],
 		);
 	});
 
@@ -1996,6 +2020,7 @@ describe("stage Pi command", () => {
 			"/opt/factory/bin/pi",
 			"--mode",
 			"rpc",
+			"--no-skills",
 			"--session-dir",
 			"/run/pi-agent/sessions",
 			"--model",
@@ -2080,6 +2105,183 @@ describe("child session paths", () => {
 				hostSessionPath(dir, "/home/exedev/.pi/agent/sessions/x.jsonl"),
 				null,
 			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+/** Replays `records` on the prompt and answers `get_last_assistant_text` with `text` after `delayMs`. */
+function textReplier(
+	records: readonly JsonObject[],
+	text: string | null,
+	delayMs = 0,
+) {
+	const replay = replayer(records);
+
+	return (command: JsonObject, pi: FakePi) => {
+		replay(command, pi);
+
+		if (textOf(fieldOf(command, "type")) === "get_last_assistant_text") {
+			const id = textOf(fieldOf(command, "id")) ?? "";
+
+			setTimeout(() => {
+				pi.emit({
+					id,
+					type: "response",
+					command: "get_last_assistant_text",
+					success: true,
+					data: text === null ? {} : { text },
+				});
+			}, delayMs);
+		}
+	};
+}
+
+const SETTLED_TURN: JsonObject[] = [
+	started("x"),
+	{ type: "agent_start" },
+	{ type: "turn_start" },
+	assistant({ tokens: 40 }),
+	{ type: "agent_settled", aborted: false },
+];
+
+describe("stage output capture", () => {
+	const text = '{"kind":"questions","questions":[{"text":"Which?"}]}';
+
+	it("asks for the final text after settlement, waits for it before closing stdin, and keeps it beside the receipt", async () => {
+		const h = harness([textReplier(SETTLED_TURN, text, 20)], {
+			cleanupReserveMs: 2_000,
+		});
+
+		const result = await runStage(input(), h.host);
+
+		assert.equal(result.kind, "passed");
+		assert.deepEqual(
+			h.pis[0]?.received.map((command) => fieldOf(command, "type")),
+			["prompt", "get_last_assistant_text"],
+		);
+		assert.deepEqual(h.outputs, [text]);
+		assert.deepEqual(result.receipt.output, {
+			file: "output.txt",
+			bytes: Buffer.byteLength(text),
+			kept: Buffer.byteLength(text),
+		});
+		assert.equal(JSON.stringify(result.receipt).includes("Which?"), false);
+	});
+
+	it("keeps no output when the stage did not pass, even when Pi returns complete-looking text", async () => {
+		const h = harness([textReplier(SETTLED_TURN, text)]);
+		const result = await runStage(input({}, { maxTokens: 10 }), h.host);
+
+		assert.equal(result.kind, "budget_exhausted");
+		assert.deepEqual(h.outputs, []);
+		assert.equal(result.receipt.output, null);
+	});
+
+	it("caps the kept text at 256 KiB and records the full size", async () => {
+		const big = "x".repeat(300 * 1024);
+		const h = harness([textReplier(SETTLED_TURN, big)]);
+		const result = await runStage(input(), h.host);
+
+		assert.equal(result.kind, "passed");
+		assert.equal(h.outputs[0]?.length, 256 * 1024);
+		assert.deepEqual(result.receipt.output, {
+			file: "output.txt",
+			bytes: 300 * 1024,
+			kept: 256 * 1024,
+		});
+	});
+
+	it("still passes with no output when Pi never answers or answers with no text", async () => {
+		for (const script of [
+			replayer(SETTLED_TURN),
+			textReplier(SETTLED_TURN, null),
+		]) {
+			const h = harness([script]);
+			const result = await runStage(input(), h.host);
+
+			assert.equal(result.kind, "passed");
+			assert.equal(result.receipt.output, null);
+			assert.deepEqual(h.outputs, []);
+		}
+	});
+
+	it("records no output when the file cannot be written", async () => {
+		const h = harness([textReplier(SETTLED_TURN, text)], {
+			writeOutput: () => false,
+		});
+
+		const result = await runStage(input(), h.host);
+
+		assert.equal(result.kind, "passed");
+		assert.equal(result.receipt.output, null);
+	});
+
+	it("writes output.txt once, mode 0600, beside the receipt", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-output-"));
+
+		try {
+			const host = sandboxHost({
+				stateDir: dir,
+				bundleDir: join(dir, "bundle"),
+				workspace: join(dir, "ws"),
+				runId: digest(RUN),
+				stage: "specify",
+				attempt: 1,
+				tools: [],
+				arch: "x86_64",
+				xdgRuntimeDir: "/run/user/1000",
+				assetsDigest: "e".repeat(64),
+				versions: {
+					pi: "1.4.0",
+					piHerdrAgents: "3.3.1",
+					piHerdrPstack: "0.5.0",
+				},
+				exec: async () => ({ stdout: "", stderr: "", code: 0 }),
+			});
+
+			assert.equal(await host.writeOutput(text), true);
+			assert.equal(await host.writeOutput("again"), false);
+
+			const path = join(dir, "stages", RUN, "specify-1", "output.txt");
+
+			assert.equal(readFileSync(path, "utf8"), text);
+			assert.equal(statSync(path).mode & 0o777, 0o600);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("stage skills", () => {
+	it("appends each named skill's SKILL.md body, without front matter, in order", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-skills-"));
+
+		try {
+			for (const [name, body] of [
+				[
+					"grill-me",
+					"---\nname: grill-me\n---\n\nAsk one question at a time.\n",
+				],
+				["audit-ticket", "Check the ticket.\n"],
+			]) {
+				mkdirSync(join(dir, "skills", name ?? ""), { recursive: true });
+				writeFileSync(join(dir, "skills", name ?? "", "SKILL.md"), body ?? "");
+			}
+
+			const prompt = await withSkills(dir, "Stage prompt.", [
+				"audit-ticket",
+				"grill-me",
+			]);
+
+			assert.equal(
+				prompt,
+				"Stage prompt.\n\n## Skills\n\n### Skill: audit-ticket\n\nCheck the ticket.\n\n### Skill: grill-me\n\nAsk one question at a time.\n",
+			);
+			assert.equal(await withSkills(dir, "p", []), "p");
+			assert.equal(await withSkills(dir, "p", ["deep-research"]), null);
+			assert.equal(await withSkills(dir, "p", ["../grill-me"]), null);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

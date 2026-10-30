@@ -30,6 +30,8 @@ export type PiRecord =
 			readonly command: string;
 			readonly success: boolean;
 			readonly disposition: string | null;
+			/** `data.text`, which only `get_last_assistant_text` answers with. */
+			readonly text: string | null;
 	  }
 	| { readonly type: "agent_start" }
 	| { readonly type: "agent_settled"; readonly aborted: boolean }
@@ -49,6 +51,7 @@ export type PiRecord =
 export type PiCommand =
 	| { readonly id: string; readonly type: "prompt"; readonly message: string }
 	| { readonly id: string; readonly type: "abort" }
+	| { readonly id: string; readonly type: "get_last_assistant_text" }
 	| {
 			readonly type: "extension_ui_response";
 			readonly id: string;
@@ -136,14 +139,15 @@ export function parsePiRecord(line: string): PiRecord {
 			if (command === null || success === null || id === undefined)
 				return MALFORMED;
 
+			const data = objectOf(fieldOf(record, "data"));
+
 			return {
 				type,
 				id,
 				command,
 				success,
-				disposition: textOf(
-					fieldOf(objectOf(fieldOf(record, "data")), "disposition"),
-				),
+				disposition: textOf(fieldOf(data, "disposition")),
+				text: textOf(fieldOf(data, "text")),
 			};
 		}
 

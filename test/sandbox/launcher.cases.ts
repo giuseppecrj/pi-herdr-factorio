@@ -1531,6 +1531,110 @@ describe("preflight", () => {
 		}
 	});
 
+	it("returns the newest kept output of an attempt that passed, and none for one that did not", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-output-replay-"));
+
+		try {
+			const receipt = (passed: boolean, kept: boolean): StageReceipt => ({
+				version: 1,
+				runId: runDigest(RUN),
+				stage: "specify",
+				attempt: 1,
+				outcome: passed
+					? { kind: "passed" }
+					: { kind: "budget_exhausted", cap: "tokens" },
+				settlement: { event: "agent_settled", aborted: false },
+				models: { requested: modelId("openai/gpt-6.1-sol"), observed: null },
+				fallback: null,
+				refusal: null,
+				wallMs: 1,
+				turns: 1,
+				usage: {
+					total: 1,
+					parent: 1,
+					children: 0,
+					byModel: {},
+					gateway: 1,
+					unreadChildren: 0,
+				},
+				egress: null,
+				stderr: [],
+				output: kept ? { file: "output.txt", bytes: 3, kept: 3 } : null,
+				assetsDigest: "e".repeat(64),
+				versions: {
+					pi: "1.4.0",
+					piHerdrAgents: "3.3.1",
+					piHerdrPstack: "0.5.0",
+				},
+				pricing: "unavailable",
+			});
+
+			const host = () =>
+				sandboxHost({
+					stateDir: dir,
+					bundleDir: join(dir, "bundle"),
+					workspace: dir,
+					runId: runDigest(RUN),
+					stage: "specify",
+					attempt: 1,
+					tools: [],
+					arch: "x86_64",
+					xdgRuntimeDir: "/run/user/1000",
+					assetsDigest: "e".repeat(64),
+					versions: {
+						pi: "1.4.0",
+						piHerdrAgents: "3.3.1",
+						piHerdrPstack: "0.5.0",
+					},
+					exec: async () => ({ stdout: "", stderr: "", code: 0 }),
+				});
+
+			const executor = sandboxExecutor({
+				stateDir: dir,
+				xdgRuntimeDir: "/run/user/1000",
+				log: () => {},
+				exec: async () => ({ stdout: "", stderr: "", code: 0 }),
+			});
+
+			const read = () =>
+				executor.output({
+					runId: runDigest(RUN),
+					stage: "specify",
+					attempt: 1,
+				});
+
+			assert.equal(await read(), null);
+
+			const first = host();
+
+			assert.equal(await first.writeOutput("one"), true);
+			assert.equal(await first.writeReceipt(receipt(true, true)), true);
+			assert.equal(await read(), "one");
+
+			const second = host();
+
+			assert.equal(await second.writeOutput("two"), true);
+			assert.equal(await second.writeReceipt(receipt(true, true)), true);
+			assert.equal(await read(), "two");
+
+			const third = host();
+
+			assert.equal(await third.writeOutput("not"), true);
+			assert.equal(await third.writeReceipt(receipt(false, true)), true);
+			assert.equal(await read(), "two");
+			assert.equal(
+				await executor.output({
+					runId: runDigest(RUN),
+					stage: "specify",
+					attempt: 2,
+				}),
+				null,
+			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("counts every execution dir of an attempt, a replay's included, once each", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "factory-spent-replay-"));
 
@@ -1557,6 +1661,7 @@ describe("preflight", () => {
 				},
 				egress: null,
 				stderr: [],
+				output: null,
 				assetsDigest: "e".repeat(64),
 				versions: {
 					pi: "1.4.0",
@@ -1672,6 +1777,9 @@ describe("preflight", () => {
 				stage: "specify",
 				attempt: 1,
 				workspace: dir,
+				prompt: "probe",
+				tools: [],
+				skills: [],
 				settings: {
 					model: modelId("openai/gpt-6.1-sol"),
 					fallback: null,

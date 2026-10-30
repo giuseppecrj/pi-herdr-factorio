@@ -67,6 +67,18 @@ export type StderrRecord = {
 };
 
 /**
+ * Where a passing session's final assistant text was kept: `output.txt`
+ * beside the receipt, mode 0600. `bytes` is the text's full UTF-8 size and
+ * `kept` what the file holds, at most `OUTPUT_MAX_BYTES`. The text is
+ * untrusted and is never copied into the receipt.
+ */
+export type OutputRecord = {
+	readonly file: "output.txt";
+	readonly bytes: number;
+	readonly kept: number;
+};
+
+/**
  * The host-side record of one stage attempt, written under the run's stage
  * directory and never into a marker. It holds only numbers, enums, model
  * ids, digests and the factory-built names of files beside it: no model
@@ -90,6 +102,8 @@ export type StageReceipt = {
 	readonly usage: StageUsage;
 	readonly egress: readonly RouteSummary[] | null;
 	readonly stderr: readonly StderrRecord[];
+	/** Set only when the outcome is `passed` and the final text was written. */
+	readonly output: OutputRecord | null;
 	readonly assetsDigest: string;
 	readonly versions: PinnedVersions;
 	readonly pricing: "unavailable";

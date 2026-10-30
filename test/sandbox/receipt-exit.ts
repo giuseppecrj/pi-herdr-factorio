@@ -97,6 +97,9 @@ const host: StageHost = {
 
 		return true;
 	},
+	async writeOutput() {
+		return true;
+	},
 	async stderrLog() {
 		return null;
 	},

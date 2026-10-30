@@ -30,9 +30,20 @@ import {
 	type ModelStage,
 	STAGE_CLEANUP_RESERVE_MS,
 } from "../src/workflow.ts";
+import {
+	checkoutWorkspace,
+	ghTarball,
+	type TarballFetch,
+} from "./controller.ts";
 import { HERDR_AGENTS, PI_AGENT_DIR } from "./sandbox/assets/pi.ts";
 import { AUDIT_CAP_BYTES } from "./sandbox/audit.ts";
-import { countOf, fieldOf, objectOf, parseJson } from "./sandbox/json.ts";
+import {
+	countOf,
+	fieldOf,
+	objectOf,
+	parseJson,
+	textOf,
+} from "./sandbox/json.ts";
 import { manifestDigest, PINNED_VERSIONS } from "./sandbox/manifest.ts";
 import { readUsernsLimit, runPreflight } from "./sandbox/preflight.ts";
 import { BUNDLE, bwrapArgv } from "./sandbox/bwrap.ts";
@@ -50,6 +61,7 @@ import type {
 	BudgetCap,
 	FailedExit,
 	FallbackRecord,
+	OutputRecord,
 	PinnedVersions,
 	RefusalSignal,
 	SessionOutcome,
@@ -100,6 +112,13 @@ export const STDERR_CAP_BYTES = 64 * 1024;
 
 const PROMPT_ID = "factory-prompt";
 
+const OUTPUT_ID = "factory-output";
+
+/** The cap on a stage's kept final text. */
+export const OUTPUT_MAX_BYTES = 256 * 1024;
+
+const OUTPUT_WAIT_MS = 5_000;
+
 const ABORT_WAIT_MS = 5_000;
 
 const EXIT_WAIT_MS = 2_000;
@@ -129,6 +148,8 @@ export interface StageHost {
 		sessionFile: string,
 	): Promise<ChildUsage | null>;
 	writeReceipt(receipt: StageReceipt): Promise<boolean>;
+	/** Writes the passing session's final text beside the receipt, once. */
+	writeOutput(text: string): Promise<boolean>;
 	stderrLog(session: number): Promise<StderrRecord | null>;
 }
 
@@ -184,6 +205,8 @@ type SessionReport = {
 	readonly refusal: RefusalSignal | null;
 	readonly settlement: Settlement;
 	readonly observed: string | null;
+	/** The last assistant text, asked for after a settlement and before stdin closes. */
+	readonly text: string | null;
 };
 
 function capFor(stage: StageRun): BudgetCap | null {
@@ -303,7 +326,13 @@ class CleanupWindow {
 const NOT_STARTED: Settlement = { event: "none", aborted: null };
 
 function plainReport(outcome: SessionOutcome): SessionReport {
-	return { outcome, refusal: null, settlement: NOT_STARTED, observed: null };
+	return {
+		outcome,
+		refusal: null,
+		settlement: NOT_STARTED,
+		observed: null,
+		text: null,
+	};
 }
 
 const CRASHED: SessionOutcome = { kind: "failed", exit: "crashed" };
@@ -356,6 +385,7 @@ async function runSession(
 	let readsClosed = false;
 	let abortSent = false;
 	let settledAfterAbort: (() => void) | null = null;
+	let textReply: ((text: string | null) => void) | null = null;
 	let recheck = () => {};
 
 	const readChild = (sessionFile: string | null): Promise<void> => {
@@ -453,6 +483,10 @@ async function runSession(
 
 				if (record.type === "agent_settled" && abortSent) settledAfterAbort?.();
 
+				if (record.type === "response" && record.id === OUTPUT_ID) {
+					textReply?.(record.success ? record.text : null);
+				}
+
 				if (record.type === "assistant_end") {
 					const tokens = record.message.usage?.totalTokens ?? 0;
 
@@ -511,6 +545,23 @@ async function runSession(
 		await bounded(stage.gateway.drainAbort());
 	}
 
+	let text: string | null = null;
+
+	if (report === "settled") {
+		// Pi can exit before it answers a command sent after stdin ends, so the
+		// reply is awaited first.
+		const reply = new Promise<void>((done) => {
+			textReply = (value) => {
+				text = value;
+				done();
+			};
+		});
+
+		sendCommand(pi, { id: OUTPUT_ID, type: "get_last_assistant_text" });
+		await bounded(reply, OUTPUT_WAIT_MS);
+		textReply = null;
+	}
+
 	pi.stdin.end();
 
 	if (!(await bounded(pi.exited, EXIT_WAIT_MS))) pi.kill();
@@ -534,7 +585,7 @@ async function runSession(
 			: { event: "agent_settled", aborted: tracker.aborted };
 
 	if (report !== "settled") {
-		return { outcome: report, refusal: null, settlement, observed };
+		return { outcome: report, refusal: null, settlement, observed, text: null };
 	}
 
 	const cap =
@@ -551,15 +602,27 @@ async function runSession(
 			refusal: null,
 			settlement,
 			observed,
+			text: null,
 		};
 	}
 
 	if (readFailed)
-		return { outcome: CRASHED, refusal: null, settlement, observed };
+		return {
+			outcome: CRASHED,
+			refusal: null,
+			settlement,
+			observed,
+			text: null,
+		};
 
 	const settled = settledOutcome(last);
 
-	return { ...settled, settlement, observed };
+	return {
+		...settled,
+		settlement,
+		observed,
+		text: settled.outcome.kind === "passed" ? text : null,
+	};
 }
 
 /** A session whose effects threw ends crashed, after a bounded stop of its sandbox. */
@@ -587,6 +650,21 @@ function finalOutcome(
 		return primary.outcome;
 
 	return fallback.outcome;
+}
+
+/** Keeps at most `OUTPUT_MAX_BYTES` of the final text beside the receipt. */
+async function keepOutput(
+	host: StageHost,
+	text: string,
+	cleanup: CleanupWindow,
+): Promise<OutputRecord | null> {
+	const full = Buffer.from(text, "utf8");
+	const kept = full.subarray(0, OUTPUT_MAX_BYTES);
+	const write = host.writeOutput(kept.toString("utf8")).catch(() => false);
+
+	if (!(await cleanup.wait(write)) || !(await write)) return null;
+
+	return { file: "output.txt", bytes: full.length, kept: kept.length };
 }
 
 function routeId(
@@ -627,7 +705,15 @@ export async function runStage(
 		primary: SessionReport,
 		fallback: FallbackRecord | null,
 		egress: StageReceipt["egress"],
+		text: string | null = null,
 	): Promise<StageResult> => {
+		const outcome = finalOutcome(primary, fallback);
+
+		const output =
+			outcome.kind === "passed" && text !== null
+				? await keepOutput(host, text, cleanup)
+				: null;
+
 		const stderr = await Promise.all(
 			sessions.map(async (session) => {
 				const log = host.stderrLog(session).catch(() => null);
@@ -641,7 +727,7 @@ export async function runStage(
 			runId: input.runId,
 			stage: input.stage,
 			attempt: input.attempt,
-			outcome: finalOutcome(primary, fallback),
+			outcome,
 			settlement: fallback?.settlement ?? primary.settlement,
 			models: { requested: input.settings.model, observed: primary.observed },
 			fallback,
@@ -651,6 +737,7 @@ export async function runStage(
 			usage: ledger.usage(gatewayRan),
 			egress,
 			stderr: stderr.filter((entry) => entry !== null),
+			output,
 			assetsDigest: host.assetsDigest,
 			versions: host.versions,
 			pricing: "unavailable",
@@ -733,6 +820,7 @@ export async function runStage(
 
 	const primary = await guardedSession(stage, input.settings.model, 0);
 	let fallback: FallbackRecord | null = null;
+	let text = primary.text;
 
 	if (
 		primary.outcome.kind === "refused" &&
@@ -756,6 +844,7 @@ export async function runStage(
 			? await guardedSession(stage, input.settings.fallback, 1)
 			: plainReport(CRASHED);
 
+		text = second.text;
 		fallback = {
 			requested: input.settings.fallback,
 			observed: second.observed,
@@ -775,7 +864,7 @@ export async function runStage(
 
 	const summary = closed ? await shutdown : null;
 
-	return receipt(primary, fallback, summary?.routes ?? null);
+	return receipt(primary, fallback, summary?.routes ?? null, text);
 }
 
 export type SandboxHostConfig = {
@@ -817,13 +906,16 @@ function freshDir(base: string): string {
  * `pi-herdr-agents` refuses to launch a child from a parent with no
  * session file, which `--no-session` caused on `pi-factorio`. The wrapper
  * forces `--no-extensions`, which skips configured packages, so
- * `pi-herdr-agents` and its `subagent` tool load by `-e`.
+ * `pi-herdr-agents` and its `subagent` tool load by `-e`. Skills arrive
+ * inlined in the prompt, so `--no-skills` stops discovery from the
+ * writable agent dir.
  */
 export function piCommand(model: ModelId): string[] {
 	return [
 		`${BUNDLE.bin}/pi`,
 		"--mode",
 		"rpc",
+		"--no-skills",
 		"--session-dir",
 		`${PI_AGENT_DIR}/sessions`,
 		"--model",
@@ -1132,6 +1224,9 @@ export function sandboxHost(config: SandboxHostConfig): StageHost {
 				`${JSON.stringify(receipt, null, "\t")}\n`,
 			);
 		},
+		async writeOutput(text) {
+			return publishFile(join(stageDir, "output.txt"), text);
+		},
 		async stderrLog(session) {
 			const finish = stderr.get(session);
 			const bytes = finish === undefined ? null : await finish(EXIT_WAIT_MS);
@@ -1254,9 +1349,109 @@ export async function locateBundle(root: string): Promise<Bundle | null> {
 	}
 }
 
-/** The fixed prompt F05 runs for a stage. F06a replaces it with the stage skills. */
+/** The fixed prompt F05 ran for a stage. Tests still use it as a tiny prompt. */
 export function probePrompt(stage: ModelStage): string {
 	return `This is the factory's ${stage} stage probe. Do not call any tool. Reply with exactly: factory-${stage}-probe-ok`;
+}
+
+const SKILL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+const SKILL_MAX_BYTES = 32 * 1024;
+
+/** A `SKILL.md` without its front matter. */
+function skillBody(text: string): string {
+	const match = /^---\n[\s\S]*?\n---\n/.exec(text);
+
+	return (match === null ? text : text.slice(match[0].length)).trim();
+}
+
+/**
+ * The stage prompt with each named skill appended, read host-side from the
+ * bundle's `skills/<name>/SKILL.md`. The bundle is hashed into
+ * `assetsDigest`, so the receipt proves which skill text ran. `null` when a
+ * skill is missing, oversized or misnamed.
+ */
+export async function withSkills(
+	bundleDir: string,
+	prompt: string,
+	skills: readonly string[],
+): Promise<string | null> {
+	if (skills.length === 0) return prompt;
+
+	const parts: string[] = [];
+
+	for (const name of skills) {
+		if (!SKILL_NAME.test(name)) return null;
+
+		const text = await boundedText(
+			join(bundleDir, "skills", name, "SKILL.md"),
+			SKILL_MAX_BYTES,
+		);
+
+		if (text === null) return null;
+
+		parts.push(`### Skill: ${name}\n\n${skillBody(text)}`);
+	}
+
+	return `${prompt}\n\n## Skills\n\n${parts.join("\n\n")}\n`;
+}
+
+/**
+ * The final text of the newest execution of one attempt that passed and
+ * kept its output: `<stage>-<attempt>` or a replay `<stage>-<attempt>.<n>`.
+ * `null` when none did.
+ */
+async function attemptOutput(
+	stateDir: string,
+	runId: Digest,
+	stage: ModelStage,
+	attempt: number,
+): Promise<string | null> {
+	const base = `${stage}-${attempt}`;
+	const root = join(stateDir, "stages", runId);
+	let names: string[];
+
+	try {
+		names = readdirSync(root);
+	} catch {
+		return null;
+	}
+
+	const replays = names
+		.flatMap((name) => {
+			if (name === base) return [{ name, n: 1 }];
+
+			const suffix = name.slice(base.length + 1);
+
+			return name.startsWith(`${base}.`) && /^\d+$/.test(suffix)
+				? [{ name, n: Number(suffix) }]
+				: [];
+		})
+		.sort((left, right) => right.n - left.n);
+
+	for (const { name } of replays) {
+		const dir = join(root, name);
+
+		const receipt = objectOf(
+			parseJson(
+				(await boundedText(join(dir, "receipt.json"), MAX_RECEIPT_BYTES)) ?? "",
+			),
+		);
+
+		const outcome = textOf(
+			fieldOf(objectOf(fieldOf(receipt, "outcome")), "kind"),
+		);
+
+		const file = textOf(fieldOf(objectOf(fieldOf(receipt, "output")), "file"));
+
+		if (outcome !== "passed" || file !== "output.txt") continue;
+
+		const text = await boundedText(join(dir, file), OUTPUT_MAX_BYTES);
+
+		if (text !== null) return text;
+	}
+
+	return null;
 }
 
 export type SandboxExecutorConfig = {
@@ -1267,6 +1462,7 @@ export type SandboxExecutorConfig = {
 	readonly root?: string;
 	readonly arch?: string;
 	readonly usernsLimit?: () => Promise<string>;
+	readonly fetchTarball?: TarballFetch;
 };
 
 const PREFLIGHT_RUN =
@@ -1350,6 +1546,21 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 			return attemptSpent(config.stateDir, runId, stage, attempt);
 		},
 
+		async output({ runId, stage, attempt }) {
+			return attemptOutput(config.stateDir, runId, stage, attempt);
+		},
+
+		async checkout({ runId, repo, sha, workspace }) {
+			return checkoutWorkspace({
+				stateDir: config.stateDir,
+				runId,
+				workspace,
+				repo,
+				sha,
+				fetch: config.fetchTarball ?? ghTarball,
+			});
+		},
+
 		async preflight() {
 			if (ready !== null) return true;
 
@@ -1393,6 +1604,21 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 
 			const { bundle, arch } = ready;
 
+			const prompt = await withSkills(bundle.dir, input.prompt, input.skills);
+
+			if (prompt === null) {
+				config.log("skills_unavailable", {
+					runId: input.runId,
+					stage: input.stage,
+				});
+
+				return {
+					kind: "unavailable",
+					stage: input.stage,
+					reason: "sandbox_unavailable",
+				};
+			}
+
 			const host = sandboxHost({
 				stateDir: config.stateDir,
 				bundleDir: bundle.dir,
@@ -1400,7 +1626,7 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 				runId: input.runId,
 				stage: input.stage,
 				attempt: input.attempt,
-				tools: [],
+				tools: input.tools,
 				arch,
 				xdgRuntimeDir: config.xdgRuntimeDir,
 				assetsDigest: bundle.digest,
@@ -1415,7 +1641,7 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 						runId: input.runId,
 						stage: input.stage,
 						attempt: input.attempt,
-						prompt: probePrompt(input.stage),
+						prompt,
 						settings: input.settings,
 						remainingRunTokens: input.remainingRunTokens,
 						signal: input.signal,

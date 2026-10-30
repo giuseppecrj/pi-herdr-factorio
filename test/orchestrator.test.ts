@@ -25,12 +25,16 @@ import {
 	type AdmissionStore,
 	type AdmittedReceipt,
 	admitTicket,
+	type IssueSnapshot,
 	type LocalSwitch,
+	type SnapshotReader,
 } from "../src/admission.ts";
+import type { AnswersRecord, Link } from "../src/specify.ts";
 import type { Exec } from "../src/gh.ts";
 import { formatMarker, parseMarker } from "../src/markers.ts";
 import {
 	backoffMs,
+	type CheckoutResult,
 	type ClaimRecord,
 	checkIdentity,
 	type LogFields,
@@ -57,8 +61,12 @@ import {
 	type FakeIssue,
 	fakeIssue,
 	labelEvent,
+	BOT_LOGIN,
+	httpError,
+	MAIN_SHA,
 	networkError,
 	renamedEvent,
+	TRUSTED_WORKFLOW,
 } from "./fake-ticket-adapter.ts";
 
 function slug(text: string): RepoSlug {
@@ -84,26 +92,43 @@ class FakeClock {
 	}
 }
 
-function memoryStore(): AdmissionStore & {
-	records: Map<string, AdmittedReceipt>;
-	local: LocalSwitch;
-} {
+function memoryStore(): AdmissionStore &
+	SnapshotReader & {
+		records: Map<string, AdmittedReceipt>;
+		snapshots: Map<string, IssueSnapshot>;
+		local: LocalSwitch;
+	} {
 	const records = new Map<string, AdmittedReceipt>();
+	const snapshots = new Map<string, IssueSnapshot>();
 	const local: LocalSwitch = "enabled";
 
 	const store = {
 		records,
+		snapshots,
 		local,
 		async localSwitch() {
 			return store.local;
 		},
-		async record(receipt: AdmittedReceipt) {
+		async record(receipt: AdmittedReceipt, snapshot: IssueSnapshot) {
 			const key = `${receipt.issue}/${receipt.eventId}`;
 
 			if (records.has(key)) return "duplicate" as const;
 			records.set(key, receipt);
+			snapshots.set(key, snapshot);
 
 			return "recorded" as const;
+		},
+		async readSnapshot(key: { issue: number; eventId: string }) {
+			const id = `${key.issue}/${key.eventId}`;
+			const receipt = records.get(id);
+
+			return receipt === undefined
+				? { kind: "absent" as const }
+				: {
+						kind: "found" as const,
+						receipt,
+						snapshot: snapshots.get(id) ?? { title: "seeded", body: "" },
+					};
 		},
 		async read(key: { issue: number; eventId: string }) {
 			const receipt = records.get(`${key.issue}/${key.eventId}`);
@@ -122,16 +147,73 @@ function memoryStore(): AdmissionStore & {
 	return store;
 }
 
+const CHECKOUT_TREE: ReadonlyMap<string, string> = new Map([
+	[".github/factory/WORKFLOW.md", TRUSTED_WORKFLOW],
+	["README.md", "# pi-herdr-factorio\n"],
+	["server/cli.ts", "export const VERSION = 1;\n"],
+]);
+
 function memoryFiles(): RunFiles & {
 	claims: Map<string, ClaimRecord>;
 	workspaces: Set<string>;
+	contracts: Map<string, { bytes: string; digest: string }>;
+	questions: Map<string, string>;
+	links: Map<string, Link>;
+	answers: Map<string, AnswersRecord>;
+	unavailable: Set<"contract" | "link">;
 } {
 	const claims = new Map<string, ClaimRecord>();
 	const workspaces = new Set<string>();
+	const contracts = new Map<string, { bytes: string; digest: string }>();
+	const questions = new Map<string, string>();
+	const links = new Map<string, Link>();
+	const answers = new Map<string, AnswersRecord>();
+	const unavailable = new Set<"contract" | "link">();
 
 	return {
 		claims,
 		workspaces,
+		contracts,
+		questions,
+		links,
+		answers,
+		unavailable,
+		async writeContract({ contract, bytes, digest }) {
+			if (unavailable.has("contract")) return false;
+
+			const known = contracts.get(contract.runId);
+
+			if (known !== undefined) return known.bytes === bytes;
+
+			contracts.set(contract.runId, { bytes, digest });
+
+			return true;
+		},
+		async writeQuestions({ runId, digest }) {
+			questions.set(runId, digest);
+
+			return true;
+		},
+		async writeLink(runId, link) {
+			if (unavailable.has("link")) return false;
+
+			links.set(runId, link);
+
+			return true;
+		},
+		async readLink(runId) {
+			const link = links.get(runId);
+
+			return link === undefined ? { kind: "none" } : { kind: "found", link };
+		},
+		async writeAnswers(record) {
+			answers.set(record.runId, record);
+
+			return true;
+		},
+		async readAnswers(runId) {
+			return answers.get(runId) ?? null;
+		},
 		workspacePath: (runId) => `/state/workspaces/${runId}`,
 		async workspaceState(runId) {
 			return workspaces.has(runId) ? "present" : "missing";
@@ -189,17 +271,99 @@ function resultOf(
 		},
 		egress: null,
 		stderr: [],
+		output: null,
 		assetsDigest: "a".repeat(64),
 		versions: { pi: "1.4.0", piHerdrAgents: "3.3.1", piHerdrPstack: "0.5.0" },
 		pricing: "unavailable",
 	});
 }
 
+/** A valid specify contract for `server/cli.ts` in `CHECKOUT_TREE`. */
+const CONTRACT_TEXT = JSON.stringify({
+	kind: "contract",
+	summary: "Print the package version",
+	behavior: ["The CLI prints the version"],
+	exclusions: ["No other command changes"],
+	acceptance: ["--version prints 0.1.0"],
+	compatibility: [],
+	limits: [],
+	files: ["server/cli.ts"],
+	evidence: [{ path: "server/cli.ts", start: 1, end: 1, fact: "VERSION" }],
+});
+
+const QUESTIONS_TEXT = JSON.stringify({
+	kind: "questions",
+	questions: [
+		{
+			text: "Should the version come from package.json or a constant?",
+			cites: [{ path: "server/cli.ts", start: 1, end: 1 }],
+		},
+	],
+});
+
 class FakeExecutor implements StageExecutor {
 	behaviors: Behavior[] = [];
 	fallback: Behavior = { kind: "unavailable" };
+	/** The final text each passing launch keeps, in order; then `text`. */
+	outputs: (string | null)[] = [];
+	text: string | null = CONTRACT_TEXT;
+	/** Kept texts by `<runId>/<stage>-<attempt>`, which `output` reads. */
+	readonly kept = new Map<string, string>();
+	readonly outputReads: string[] = [];
+	readonly tree = new Map(CHECKOUT_TREE);
+	readonly checkouts: string[] = [];
+	checkoutResult: "ready" | "unavailable" | "refused" = "ready";
+	/** The WORKFLOW.md the fake repository holds at the base commit. */
+	workflow: () => string | null = () => TRUSTED_WORKFLOW;
 	readonly launches: StageLaunchInput[] = [];
 	readonly spentBy = new Map<string, number>();
+
+	async output(input: {
+		runId: string;
+		stage: string;
+		attempt: number;
+	}): Promise<string | null> {
+		const key = `${input.runId}/${input.stage}-${input.attempt}`;
+
+		this.outputReads.push(key);
+
+		return this.kept.get(key) ?? null;
+	}
+
+	async checkout(input: { runId: string }): Promise<CheckoutResult> {
+		this.checkouts.push(input.runId);
+
+		if (this.checkoutResult === "unavailable") return { kind: "unavailable" };
+
+		if (this.checkoutResult === "refused") {
+			return { kind: "refused", reason: "hardlink" };
+		}
+
+		const tree = new Map(this.tree);
+		const workflow = this.workflow();
+
+		if (workflow !== null) tree.set(".github/factory/WORKFLOW.md", workflow);
+
+		return {
+			kind: "ready",
+			checkout: {
+				files: [...tree.keys()].sort(),
+				async read(path, cap) {
+					const text = tree.get(path);
+
+					return text === undefined || text.length > cap ? null : text;
+				},
+			},
+		};
+	}
+
+	#keep(input: StageLaunchInput): void {
+		const text = this.outputs.length > 0 ? this.outputs.shift() : this.text;
+
+		if (text !== null && text !== undefined) {
+			this.kept.set(`${input.runId}/${input.stage}-${input.attempt}`, text);
+		}
+	}
 	recovered = 0;
 	ready: boolean | null = null;
 	stopped = true;
@@ -241,12 +405,16 @@ class FakeExecutor implements StageExecutor {
 			case "hang":
 				return { kind: "started", done: new Promise(() => undefined) };
 			case "later":
+				this.#keep(input);
+
 				return { kind: "started", done: behavior.result };
 			case "fail":
 				return started(
 					resultOf(input, { kind: "failed", exit: "error" }, behavior.usage),
 				);
 			case "pass":
+				this.#keep(input);
+
 				return started(resultOf(input, { kind: "passed" }, behavior.usage));
 			case "refuse":
 				return started(resultOf(input, { kind: "refused" }, behavior.usage));
@@ -301,6 +469,8 @@ function world(scope: readonly number[] | null = null) {
 	const logs: { event: string; fields: LogFields }[] = [];
 	const wire: Wire = { intercept: null };
 
+	executor.workflow = () => github.workflow;
+
 	const start = () =>
 		new Orchestrator({
 			exec: (command, args) => (wire.intercept ?? github.exec)(command, args),
@@ -317,13 +487,18 @@ function world(scope: readonly number[] | null = null) {
 	return { github, clock, store, files, executor, logs, wire, start };
 }
 
+/** The issue's marker comments as `seq:status`. Keyed specify comments are skipped. */
 function statuses(github: FakeGitHub, issue: number): string[] {
-	return github.markers(issue).map((body) => {
+	return github.markers(issue).flatMap((body) => {
 		const parsed = parseMarker(body);
 
-		return parsed.kind === "marker"
-			? `${parsed.marker.seq}:${parsed.marker.status}`
-			: parsed.kind;
+		if (parsed.kind === "none" && body.includes("<!-- factory-")) return [];
+
+		return [
+			parsed.kind === "marker"
+				? `${parsed.marker.seq}:${parsed.marker.status}`
+				: parsed.kind,
+		];
 	});
 }
 
@@ -6215,5 +6390,664 @@ describe("acquireLock", () => {
 		if (second.kind === "acquired") await second.lock.release();
 
 		assert.equal(second.kind, "held");
+	});
+});
+
+let nextLabelEvent = 34537600000;
+
+/**
+ * Serves label writes on the fake issues and records every write in order:
+ * markers by status, keyed specify comments by kind, and label changes.
+ */
+function writesWire(github: FakeGitHub, writes: string[]): Exec {
+	return async (command, args) => {
+		const method = args[1] === "--method" ? args[2] : null;
+		const path = args.find((arg) => arg.startsWith("repos/")) ?? "";
+
+		const route =
+			/^repos\/[^/]+\/[^/]+\/issues\/(\d+)\/labels(?:\/(.+))?$/.exec(path);
+
+		if (method !== null && route !== null) {
+			const issue = github.issues.get(Number(route[1]));
+
+			if (issue === undefined) return httpError(404, "Not Found");
+
+			if (method === "POST") {
+				const names = args.flatMap((arg) =>
+					arg.startsWith("labels[]=") ? [arg.slice(9)] : [],
+				);
+
+				writes.push(`label+${names.join(",")}`);
+
+				for (const name of names) {
+					if (!issue.labels.includes(name)) issue.labels.push(name);
+				}
+
+				issue.updatedAt = github.now;
+
+				return { stdout: "[]", stderr: "", code: 0 };
+			}
+
+			const name = decodeURIComponent(route[2] ?? "");
+
+			writes.push(`label-${name}`);
+
+			if (!issue.labels.includes(name)) {
+				return httpError(404, "Label does not exist");
+			}
+
+			issue.labels = issue.labels.filter((label) => label !== name);
+			issue.timeline.push(
+				labelEvent({
+					id: nextLabelEvent++,
+					at: github.now,
+					actor: BOT_LOGIN,
+					label: name,
+					event: "unlabeled",
+				}),
+			);
+			issue.updatedAt = github.now;
+
+			return { stdout: "[]", stderr: "", code: 0 };
+		}
+
+		if (method === "POST") {
+			const body = args.find((arg) => arg.startsWith("body="))?.slice(5) ?? "";
+			const parsed = parseMarker(body);
+
+			writes.push(
+				parsed.kind === "marker"
+					? `marker:${parsed.marker.status}`
+					: body.includes("<!-- factory-questions ")
+						? "questions"
+						: body.includes("<!-- factory-contract ")
+							? "summary"
+							: "comment",
+			);
+		}
+
+		return github.exec(command, args);
+	};
+}
+
+/** One `tick --once`: a tick, then a drain of the stages it launched. */
+async function once(controller: Orchestrator): Promise<TickReport> {
+	const ticked = await controller.tick();
+
+	await settle();
+
+	return (await controller.drain(async () => settle())) ?? ticked;
+}
+
+function keyed(github: FakeGitHub, issue: number, kind: string): string[] {
+	return github
+		.markers(issue)
+		.filter((body) => body.includes(`<!-- factory-${kind} `));
+}
+
+describe("specify: contract", () => {
+	it("stores a validated contract and posts its summary before the stage_passed marker", async () => {
+		const { github, files, executor, wire, start } = world();
+		const writes: string[] = [];
+
+		wire.intercept = writesWire(github, writes);
+		github.add(
+			labeled(14, {
+				title: "Add --version",
+				body: "Print the version from server/cli.ts.",
+			}),
+		);
+		executor.behaviors = [{ kind: "pass", usage: 900 }];
+
+		const report = await once(start());
+
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:running",
+			"3:stage_passed",
+		]);
+		assert.deepEqual(writes, [
+			"marker:claimed",
+			"marker:running",
+			"summary",
+			"marker:stage_passed",
+		]);
+		assert.equal(report.totals.usage, 900);
+
+		const stored = files.contracts.get(runOf(14));
+
+		assert.ok(stored);
+		assert.equal(stored.digest, digestOf(stored.bytes));
+
+		const contract = JSON.parse(stored.bytes);
+
+		assert.equal(contract.version, 1);
+		assert.deepEqual(contract.base, { repo, sha: MAIN_SHA });
+		assert.equal(contract.runId, runOf(14));
+		assert.equal(
+			contract.snapshot.digest,
+			digestOf(
+				JSON.stringify([
+					"Add --version",
+					"Print the version from server/cli.ts.",
+				]),
+			),
+		);
+		assert.equal(contract.link, null);
+		assert.deepEqual(contract.acceptance, [
+			{ id: "A1", text: "--version prints 0.1.0" },
+		]);
+
+		const [summary] = keyed(github, 14, "contract");
+
+		assert.ok(summary?.includes(stored.digest.slice(0, 12)));
+		assert.ok(summary?.endsWith(`c=${stored.digest} -->\n`));
+		assert.ok(!summary?.includes("VERSION"));
+		assert.deepEqual(github.issues.get(14)?.labels, [READY_LABEL]);
+	});
+
+	it("launches specify with the snapshot, the base commit's guidance, the repository map, read tools and the skills", async () => {
+		const { github, executor, start } = world();
+
+		github.add(
+			labeled(14, {
+				title: "Add --version",
+				body: "Print the version from server/cli.ts.",
+			}),
+		);
+		executor.behaviors = [{ kind: "pass", usage: 1 }];
+
+		await once(start());
+
+		const launch = executor.launches[0];
+
+		assert.ok(launch);
+		assert.deepEqual(launch.tools, ["read", "grep", "ls", "subagent"]);
+		assert.deepEqual(launch.skills, [
+			"audit-ticket",
+			"grill-me",
+			"deep-research",
+		]);
+		assert.ok(launch.prompt.includes(`at commit ${MAIN_SHA}`));
+		assert.ok(
+			launch.prompt.includes(
+				"<issue>\nAdd --version\n\nPrint the version from server/cli.ts.\n</issue>",
+			),
+		);
+		assert.ok(launch.prompt.includes("Turn the issue into a short contract"));
+		assert.ok(
+			launch.prompt.includes(
+				"=== server/cli.ts ===\n1\texport const VERSION = 1;",
+			),
+		);
+		assert.ok(launch.prompt.includes("=== README.md ==="));
+		assert.ok(launch.prompt.includes('"tools":"none"'));
+		assert.deepEqual(executor.checkouts, [runOf(14)]);
+	});
+
+	it("takes the guidance from the run's base commit, not from a later main", async () => {
+		const { github, executor, start } = world();
+
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "unavailable" }, { kind: "pass", usage: 1 }];
+		executor.workflow = () => TRUSTED_WORKFLOW;
+
+		const controller = start();
+
+		await once(controller);
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+		assert.deepEqual(executor.checkouts, []);
+
+		setWorkflow(
+			github,
+			"Turn the issue into a short contract",
+			"Write a haiku about the issue",
+		);
+		github.issues.get(14)?.timeline.push();
+		await once(controller);
+
+		const launch = executor.launches[1];
+
+		assert.ok(launch);
+		assert.ok(launch.prompt.includes("Turn the issue into a short contract"));
+		assert.ok(!launch.prompt.includes("haiku"));
+	});
+
+	it("fails the run when the checkout's WORKFLOW.md is not the admitted one", async () => {
+		const { github, executor, logs, start } = world();
+
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 1 }];
+		executor.workflow = () => `${TRUSTED_WORKFLOW}\nextra\n`;
+
+		await once(start());
+
+		assert.equal(executor.launches.length, 0);
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:failed"]);
+		assert.ok(
+			logs.some(
+				(entry) =>
+					entry.event === "stage_inputs_refused" &&
+					entry.fields.why === "workflow_mismatch",
+			),
+		);
+	});
+
+	it("waits without a launch while the checkout is unavailable, and fails a refused tarball", async () => {
+		const { github, executor, logs, start } = world();
+
+		github.add(labeled(14));
+		github.add(labeled(15));
+		executor.fallback = { kind: "pass", usage: 1 };
+		executor.checkoutResult = "unavailable";
+
+		const controller = start();
+		const report = await once(controller);
+
+		assert.equal(executor.launches.length, 0);
+		assert.deepEqual(
+			report.runs.map((run) => run.status),
+			["claimed", "claimed"],
+		);
+		assert.ok(
+			logs.some(
+				(entry) =>
+					entry.event === "stage_inputs_unavailable" &&
+					entry.fields.why === "checkout",
+			),
+		);
+
+		executor.checkoutResult = "refused";
+		await once(controller);
+
+		assert.equal(executor.launches.length, 0);
+		assert.equal(statuses(github, 14).at(-1), "2:failed");
+	});
+});
+
+describe("specify: no contract without a passing, valid output", () => {
+	it("retries malformed output as stage_failed and ends failed with no contract or comment", async () => {
+		const { github, clock, files, executor, logs, start } = world();
+
+		github.add(labeled(14));
+		executor.outputs = ["Here is the contract: {}", '{"kind":"plan"}', null];
+		executor.behaviors = [
+			{ kind: "pass", usage: 10 },
+			{ kind: "pass", usage: 10 },
+			{ kind: "pass", usage: 10 },
+		];
+
+		const controller = start();
+
+		await once(controller);
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:running",
+			"3:retrying",
+		]);
+		clock.t += 11_000;
+		await once(controller);
+		clock.t += 21_000;
+		await once(controller);
+
+		assert.equal(executor.launches.length, 3);
+		assert.equal(statuses(github, 14).at(-1)?.endsWith(":failed"), true);
+		assert.deepEqual(
+			logs.flatMap((entry) =>
+				entry.event === "specify_malformed" ? [entry.fields.reason] : [],
+			),
+			["not_json", "bad_kind", "no_output"],
+		);
+		assert.equal(files.contracts.size, 0);
+		assert.equal(files.questions.size, 0);
+		assert.deepEqual(keyed(github, 14, "contract"), []);
+	});
+
+	it("never reads the output of a budget_exhausted or refused stage", async () => {
+		for (const behavior of [
+			{ kind: "budget", usage: 50 },
+			{ kind: "refuse", usage: 50 },
+		] as const) {
+			const { github, files, executor, start } = world();
+
+			github.add(labeled(14));
+			executor.behaviors = [behavior];
+			executor.kept.set(`${runOf(14)}/specify-1`, CONTRACT_TEXT);
+
+			await once(start());
+
+			assert.deepEqual(executor.outputReads, [], behavior.kind);
+			assert.equal(files.contracts.size, 0, behavior.kind);
+			assert.deepEqual(keyed(github, 14, "contract"), [], behavior.kind);
+			assert.equal(
+				statuses(github, 14).at(-1),
+				behavior.kind === "budget" ? "3:budget_exhausted" : "3:failed",
+			);
+		}
+	});
+
+	it("ends a stage whose summary is not storable without a terminal marker until it is", async () => {
+		const { github, clock, files, executor, start } = world();
+
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 5 }];
+		files.unavailable.add("contract");
+
+		const controller = start();
+
+		await once(controller);
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:running"]);
+		assert.deepEqual(keyed(github, 14, "contract"), []);
+
+		files.unavailable.delete("contract");
+		clock.t += 1_000;
+		await once(controller);
+
+		assert.equal(statuses(github, 14).at(-1), "3:stage_passed");
+		assert.equal(keyed(github, 14, "contract").length, 1);
+		assert.equal(executor.launches.length, 1);
+	});
+});
+
+describe("specify: questions", () => {
+	it("posts one questions comment, swaps the labels, then ends needs_info and spends nothing more", async () => {
+		const { github, clock, files, executor, wire, start } = world();
+		const writes: string[] = [];
+
+		wire.intercept = writesWire(github, writes);
+		github.add(labeled(14));
+		executor.outputs = [QUESTIONS_TEXT];
+		executor.behaviors = [{ kind: "pass", usage: 300 }];
+
+		const controller = start();
+		const first = await once(controller);
+
+		assert.deepEqual(writes, [
+			"marker:claimed",
+			"marker:running",
+			"questions",
+			"label+factory:needs-info",
+			"label-factory:ready",
+			"marker:needs_info",
+		]);
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:running",
+			"3:needs_info",
+		]);
+		assert.deepEqual(github.issues.get(14)?.labels, ["factory:needs-info"]);
+		assert.equal(first.totals.usage, 300);
+		assert.equal(files.contracts.size, 0);
+		assert.ok(files.questions.has(runOf(14)));
+
+		const [asked] = keyed(github, 14, "questions");
+
+		assert.ok(
+			asked?.includes(
+				"Should the version come from package\\.json or a constant?",
+			),
+		);
+		assert.ok(
+			asked?.includes(
+				`(https://github.com/${FAKE_REPO}/blob/${MAIN_SHA}/server/cli.ts#L1)`,
+			),
+		);
+
+		writes.length = 0;
+
+		for (let n = 0; n < 3; n++) {
+			clock.t += 60_000;
+
+			const report = await once(controller);
+
+			assert.equal(report.totals.usage, 300);
+		}
+
+		assert.equal(executor.launches.length, 1);
+		assert.deepEqual(writes, []);
+	});
+
+	it("posts the questions once when the first POST's outcome is unknown", async () => {
+		const { github, clock, executor, wire, start } = world();
+
+		wire.intercept = writesWire(github, []);
+		github.add(labeled(14));
+		github.posts = ["ok", "ok", "landed_unanswered"];
+		executor.outputs = [QUESTIONS_TEXT];
+		executor.behaviors = [{ kind: "pass", usage: 300 }];
+
+		const controller = start();
+
+		await controller.tick();
+		await settle();
+		await controller.drain(async () => settle());
+
+		assert.equal(keyed(github, 14, "questions").length, 1);
+
+		clock.t += 1_000;
+		await once(controller);
+
+		assert.equal(keyed(github, 14, "questions").length, 1);
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:running",
+			"3:needs_info",
+		]);
+	});
+
+	it("recovers an interrupted specify attempt from its kept output without a second comment or launch", async () => {
+		const ctx = world();
+		const { github, executor, logs, wire } = ctx;
+		const writes: string[] = [];
+
+		wire.intercept = writesWire(github, writes);
+		github.add(labeled(14));
+		github.posts = ["ok", "ok", "ok", "lost"];
+		executor.outputs = [QUESTIONS_TEXT];
+		executor.behaviors = [{ kind: "pass", usage: 300 }];
+
+		await once(ctx.start());
+
+		assert.deepEqual(writes, [
+			"marker:claimed",
+			"marker:running",
+			"questions",
+			"label+factory:needs-info",
+			"label-factory:ready",
+			"marker:needs_info",
+		]);
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:running"]);
+
+		writes.length = 0;
+		github.now = "2026-10-29T02:05:00Z";
+		ctx.clock.t += 60_000;
+
+		await once(ctx.start());
+
+		assert.equal(executor.launches.length, 1);
+		assert.equal(keyed(github, 14, "questions").length, 1);
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:running",
+			"3:needs_info",
+		]);
+		assert.ok(logs.some((entry) => entry.event === "stage_recovered"));
+		assert.deepEqual(writes, [
+			"label+factory:needs-info",
+			"label-factory:ready",
+			"marker:needs_info",
+		]);
+	});
+});
+
+describe("specify: linked runs and answers", () => {
+	const NEXT_EVENT = 34537529999;
+	const nextRun = runIdOf({ repo, issue: 14, eventId: String(NEXT_EVENT) });
+
+	async function askedThenRelabeled(
+		answers: (github: FakeGitHub, issue: FakeIssue) => void,
+		labelAt = "2026-10-29T02:20:00Z",
+	) {
+		const ctx = world();
+		const writes: string[] = [];
+
+		ctx.wire.intercept = writesWire(ctx.github, writes);
+
+		const issue = ctx.github.add(labeled(14));
+
+		ctx.executor.outputs = [QUESTIONS_TEXT, CONTRACT_TEXT];
+		ctx.executor.behaviors = [
+			{ kind: "pass", usage: 300 },
+			{ kind: "pass", usage: 900 },
+		];
+
+		const controller = ctx.start();
+
+		await once(controller);
+
+		ctx.github.now = "2026-10-29T02:10:00Z";
+		answers(ctx.github, issue);
+		ctx.github.now = labelAt;
+		issue.labels.push(READY_LABEL);
+		issue.timeline.push(
+			labelEvent({ id: NEXT_EVENT, at: labelAt, actor: "giuseppecrj" }),
+		);
+		issue.updatedAt = labelAt;
+		ctx.github.now = "2026-10-29T02:31:00Z";
+		ctx.clock.t += 31 * 60_000;
+		writes.length = 0;
+
+		const report = await once(controller);
+
+		return { ...ctx, controller, report, writes, issue };
+	}
+
+	const user = (login: string) => ({
+		login,
+		type: "User" as const,
+		appSlug: null,
+	});
+
+	it("links a relabel after needs_info to the earlier run and feeds it only authorized answers", async () => {
+		const { github, files, executor, logs, writes, report } =
+			await askedThenRelabeled((github, issue) => {
+				github.comment(issue, "Use package.json.", user("giuseppecrj"));
+				github.comment(issue, "Use a constant.", user("triager"));
+				github.comment(issue, "Bot echo.", {
+					login: "dependabot[bot]",
+					type: "Bot",
+					appSlug: "dependabot",
+				});
+				github.comment(issue, "Edited after the label.", {
+					...user("writer"),
+					lastEditedAt: "2026-10-29T02:25:00Z",
+				});
+				github.comment(issue, "Writer agrees: package.json.", user("writer"));
+			});
+
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:running",
+			"3:needs_info",
+			"4:claimed",
+			"5:running",
+			"6:stage_passed",
+		]);
+		assert.deepEqual(writes, [
+			"marker:claimed",
+			"label-factory:needs-info",
+			"marker:running",
+			"summary",
+			"marker:stage_passed",
+		]);
+		assert.deepEqual(report.corrupt, []);
+
+		const link = files.links.get(nextRun);
+		const answers = files.answers.get(nextRun);
+
+		assert.equal(link?.prevRunId, runOf(14));
+		assert.equal(link?.answersDigest, answers?.digest);
+		assert.deepEqual(
+			answers?.answers.map((answer) => [answer.author, answer.body]),
+			[
+				["giuseppecrj", "Use package.json."],
+				["writer", "Writer agrees: package.json."],
+			],
+		);
+		assert.ok(answers?.questions.includes("package\\.json or a constant"));
+
+		const prompt = executor.launches[1]?.prompt ?? "";
+
+		assert.ok(prompt.includes("--- giuseppecrj ---\nUse package.json."));
+		assert.ok(!prompt.includes("Use a constant."));
+		assert.ok(!prompt.includes("Bot echo."));
+		assert.ok(prompt.includes("<previous-questions>"));
+
+		const contract = JSON.parse(files.contracts.get(nextRun)?.bytes ?? "{}");
+
+		assert.deepEqual(contract.link, {
+			prevRunId: runOf(14),
+			questionsDigest: link?.questionsDigest,
+			answersDigest: answers?.digest,
+		});
+		assert.ok(link?.questionsDigest);
+		assert.ok(
+			logs.some(
+				(entry) => entry.event === "run_linked" && entry.fields.answers === 2,
+			),
+		);
+		assert.deepEqual(github.issues.get(14)?.labels, [READY_LABEL]);
+	});
+
+	it("still links a relabel with no answers, for an owner who edited the body", async () => {
+		const { github, files } = await askedThenRelabeled(() => undefined);
+
+		assert.equal(statuses(github, 14).at(-1), "6:stage_passed");
+		assert.equal(files.links.get(nextRun)?.prevRunId, runOf(14));
+		assert.deepEqual(files.answers.get(nextRun)?.answers, []);
+	});
+
+	it("refuses a relabel in the same second as an answer, as ambiguous", async () => {
+		const { github, files, executor, logs, report } = await askedThenRelabeled(
+			(github, issue) => {
+				github.now = "2026-10-29T02:20:00Z";
+				github.comment(issue, "Use package.json.", user("giuseppecrj"));
+			},
+		);
+
+		assert.deepEqual(report.refused, [
+			{ issue: 14, reasons: ["ambiguous_snapshot"] },
+		]);
+		assert.equal(executor.launches.length, 1);
+		assert.equal(statuses(github, 14).length, 3);
+		assert.equal(files.links.size, 0);
+		assert.ok(
+			logs.some(
+				(entry) =>
+					entry.event === "admission_refused" &&
+					entry.fields.detail === "answer_at_label_time",
+			),
+		);
+	});
+
+	it("starts nothing on an answer without a fresh ready label", async () => {
+		const { github, clock, executor, wire, start } = world();
+		const issue = github.add(labeled(14));
+
+		wire.intercept = writesWire(github, []);
+		executor.outputs = [QUESTIONS_TEXT];
+		executor.behaviors = [{ kind: "pass", usage: 300 }];
+
+		const controller = start();
+
+		await once(controller);
+		assert.deepEqual(issue.labels, ["factory:needs-info"]);
+		github.now = "2026-10-29T02:10:00Z";
+		github.comment(issue, "Use package.json.", user("giuseppecrj"));
+		clock.t += 60_000;
+		await once(controller);
+
+		assert.equal(executor.launches.length, 1);
+		assert.equal(statuses(github, 14).length, 3);
 	});
 });

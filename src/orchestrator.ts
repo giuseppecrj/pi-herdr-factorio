@@ -7,6 +7,8 @@ import {
 	latestReadyEntry,
 	type RefusalReason,
 	readTickInputs,
+	type SnapshotReader,
+	type SnapshotSource,
 	type TickReads,
 } from "./admission.ts";
 import {
@@ -27,6 +29,7 @@ import {
 	isControllerComment,
 	isTerminal,
 	latestFor,
+	type TrustedMarker,
 	type Marker,
 	type MarkerDefect,
 	type MarkerLedger,
@@ -34,8 +37,39 @@ import {
 	type RunStatus,
 	type TerminalStatus,
 } from "./markers.ts";
-import { READY_LABEL } from "./policy.ts";
-import { type Digest, runIdOf, type Stage } from "./run.ts";
+import { hasWriteAccess, READY_LABEL } from "./policy.ts";
+import { type Digest, type NonEmpty, runIdOf, type Stage } from "./run.ts";
+import {
+	type Answer,
+	type AnswersRecord,
+	answerBody,
+	answersDigestOf,
+	type Contract,
+	CONTRACT_VERSION,
+	contractBytes,
+	type ContractDigest,
+	contractDigestOf,
+	contractKey,
+	type InlinedFile,
+	type Link,
+	MAX_ANSWERS,
+	NAMED_FILE_BYTES,
+	NEEDS_INFO_LABEL,
+	namedFiles,
+	parseSpecifyOutput,
+	type Question,
+	type QuestionsDigest,
+	questionsDigestOf,
+	questionsKey,
+	questionsKeyOf,
+	renderQuestions,
+	renderSummary,
+	SPECIFY_SKILLS,
+	SPECIFY_TOOLS,
+	specifyPrompt,
+	withoutKey,
+} from "./specify.ts";
+import { isLogin } from "./adapters/github.ts";
 import type {
 	StageResult,
 	StageRunSettings,
@@ -49,7 +83,10 @@ import {
 	type RepoSlug,
 	STAGE_CLEANUP_RESERVE_MS,
 	type WorkflowConfig,
+	parseWorkflow,
+	WORKFLOW_PATH,
 } from "./workflow.ts";
+import { digestOf } from "./run.ts";
 
 export type { StageResult, StageRunSettings };
 
@@ -70,6 +107,12 @@ export type StageLaunchInput = {
 	readonly stage: ModelStage;
 	readonly attempt: number;
 	readonly workspace: string;
+	/** The stage prompt, less the skills the executor appends from its bundle. */
+	readonly prompt: string;
+	/** The Pi tool allowlist for the stage. */
+	readonly tools: readonly string[];
+	/** Bundle skills to inline, by name. */
+	readonly skills: readonly string[];
 	readonly settings: StageRunSettings;
 	readonly remainingRunTokens: number;
 	readonly signal: AbortSignal;
@@ -98,6 +141,25 @@ export interface StageExecutor {
 		readonly stage: ModelStage;
 		readonly attempt: number;
 	}): Promise<number | null>;
+	/**
+	 * The final text of an execution of the attempt that passed and kept it,
+	 * so a restart can finish a stage without running it again. Untrusted.
+	 */
+	output(input: {
+		readonly runId: Digest;
+		readonly stage: ModelStage;
+		readonly attempt: number;
+	}): Promise<string | null>;
+	/**
+	 * Extracts the repository at `sha` into the run's workspace once, refusing
+	 * unsafe entries, and lists it. A later call lists the same checkout.
+	 */
+	checkout(input: {
+		readonly runId: Digest;
+		readonly repo: RepoSlug;
+		readonly sha: GitSha;
+		readonly workspace: string;
+	}): Promise<CheckoutResult>;
 }
 
 /** An executor with no sandbox. Every launch is `sandbox_unavailable`, and no model runs. */
@@ -115,9 +177,18 @@ export const UNAVAILABLE_EXECUTOR: StageExecutor = {
 	async spent() {
 		return null;
 	},
+	async output() {
+		return null;
+	},
+	async checkout() {
+		return { kind: "unavailable" };
+	},
 };
 
-type StageEnd = Pick<StageResult, "kind" | "usage">;
+/** A stage's result, with its final text when it passed and kept one. */
+type StageEnd = Pick<StageResult, "kind" | "usage"> & {
+	readonly output: string | null;
+};
 
 function isModelStage(stage: Stage): stage is ModelStage {
 	return MODEL_STAGES.some((known) => known === stage);
@@ -152,7 +223,28 @@ type EndedRecord = {
 
 export type WorkspaceState = "present" | "missing" | "unavailable";
 
-/** Run files under the state directory: claim records and private workspaces. */
+/** The run's base commit, extracted into its workspace. */
+export type Checkout = {
+	/** Every regular file, as a relative path. */
+	readonly files: readonly string[];
+	/** A listed file's text, or `null` when it is over `capBytes` or unreadable. */
+	read(path: string, capBytes: number): Promise<string | null>;
+};
+
+export type CheckoutResult =
+	| { readonly kind: "ready"; readonly checkout: Checkout }
+	| { readonly kind: "refused"; readonly reason: string }
+	| { readonly kind: "unavailable" };
+
+export type LinkRead =
+	| { readonly kind: "none" }
+	| { readonly kind: "found"; readonly link: Link }
+	| { readonly kind: "unreadable" };
+
+/**
+ * Run files under the state directory: claim records, private workspaces
+ * and the controller-private specify records.
+ */
 export interface RunFiles {
 	workspacePath(runId: Digest): string;
 	workspaceState(runId: Digest): Promise<WorkspaceState>;
@@ -162,6 +254,23 @@ export interface RunFiles {
 	): Promise<"present" | "created" | "unavailable">;
 	listClaims(): Promise<ClaimRecord[]>;
 	writeClaim(claim: ClaimRecord): Promise<boolean>;
+	/** Writes the contract and its receipt once. The same bytes again succeed. */
+	writeContract(input: {
+		readonly contract: Contract;
+		readonly bytes: string;
+		readonly digest: ContractDigest;
+	}): Promise<boolean>;
+	writeQuestions(input: {
+		readonly runId: Digest;
+		readonly questions: readonly Question[];
+		readonly digest: QuestionsDigest;
+	}): Promise<boolean>;
+	/** The link and answers are written before the claim, so they may be replaced until then. */
+	writeLink(runId: Digest, link: Link): Promise<boolean>;
+	readLink(runId: Digest): Promise<LinkRead>;
+	writeAnswers(record: AnswersRecord): Promise<boolean>;
+	/** The answers record, or `null` when it is missing or its digest does not match. */
+	readAnswers(runId: Digest): Promise<AnswersRecord | null>;
 }
 
 export type RetryCause = "stage_failed" | "stalled" | "interrupted";
@@ -180,7 +289,54 @@ export type RunPhase =
 			readonly reason: "sandbox_unavailable";
 	  }
 	| { readonly kind: "retry_queued"; readonly dueAt: number }
+	| {
+			readonly kind: "reporting";
+			readonly status: "stage_passed" | "needs_info";
+			readonly effects: Effects;
+	  }
 	| { readonly kind: "ending"; readonly status: TerminalStatus };
+
+/**
+ * What a specify stage leaves on the issue and the host before its terminal
+ * marker: the contract and its summary, or the questions and the label swap.
+ * Each step is done once; the flags survive retries across ticks.
+ */
+export type Effects =
+	| {
+			readonly kind: "contract";
+			readonly contract: Contract;
+			readonly bytes: string;
+			readonly digest: ContractDigest;
+			readonly body: string;
+			stored: boolean;
+			posted: boolean;
+	  }
+	| {
+			readonly kind: "questions";
+			readonly questions: NonEmpty<Question>;
+			readonly digest: QuestionsDigest;
+			readonly body: string;
+			stored: boolean;
+			posted: boolean;
+			labeled: boolean;
+			unlabeled: boolean;
+	  };
+
+/** What a specify launch read, kept to validate its output. */
+type StageInputs = {
+	readonly files: ReadonlySet<string>;
+	readonly source: SnapshotSource;
+	readonly link: Link | null;
+};
+
+type Prepared = {
+	readonly kind: "ready";
+	/** `null` for a launch the sandbox will refuse, which reads no input. */
+	readonly inputs: StageInputs | null;
+	readonly prompt: string;
+};
+
+const UNPREPARED: Prepared = { kind: "ready", inputs: null, prompt: "" };
 
 type RunningPhase = Extract<RunPhase, { kind: "running" }>;
 
@@ -244,6 +400,9 @@ export type ActiveRun = {
 	 * release counts them first.
 	 */
 	adopted: boolean;
+	/** Set on a linked run until `factory:needs-info` is off the issue. */
+	clearNeedsInfo: boolean;
+	inputs: StageInputs | null;
 	phase: RunPhase;
 };
 
@@ -484,6 +643,7 @@ function ambiguityRecursOnReread(detail: Ambiguity): boolean {
 		case "renamed_since_label":
 		case "edited_at_label_time":
 		case "version_withheld":
+		case "answer_at_label_time":
 			return true;
 		case "rename_history_incomplete":
 		case "title_changed_between_reads":
@@ -512,6 +672,7 @@ function desiredStatus(phase: RunPhase): RunStatus {
 			return "blocked";
 		case "retry_queued":
 			return "retrying";
+		case "reporting":
 		case "ending":
 			return phase.status;
 		default: {
@@ -567,7 +728,7 @@ export type OrchestratorInput = {
 	exec: Exec;
 	env: EnvLookup;
 	repo: RepoSlug;
-	store: AdmissionStore;
+	store: AdmissionStore & SnapshotReader;
 	files: RunFiles;
 	executor: StageExecutor;
 	clock: Clock;
@@ -777,7 +938,9 @@ export class Orchestrator {
 		this.#countLateUsage();
 
 		for (const run of this.state.runs.values()) {
-			if (run.phase.kind === "ending") await this.#sync(run);
+			if (run.phase.kind === "ending" || run.phase.kind === "reporting") {
+				await this.#sync(run);
+			}
 		}
 
 		return this.#report(last);
@@ -915,7 +1078,9 @@ export class Orchestrator {
 		run: ActiveRun,
 		candidates: readonly IssueRecord[],
 	): Promise<Eligibility> {
-		if (run.phase.kind === "ending") return "unverified";
+		if (run.phase.kind === "ending" || run.phase.kind === "reporting") {
+			return "unverified";
+		}
 
 		let record = candidates.find((item) => item.number === run.issue);
 
@@ -1198,6 +1363,29 @@ export class Orchestrator {
 	#finishStage(run: ActiveRun, result: StageEnd, limits: Limits): void {
 		if (result.kind === "failed") {
 			this.#endStage(run, "stage_failed", result.usage, limits);
+
+			return;
+		}
+
+		if (result.kind === "passed" && run.stage === "specify") {
+			const reporting = this.#specified(run, result.output);
+
+			if (reporting === null) {
+				this.#endStage(run, "stage_failed", result.usage, limits);
+
+				return;
+			}
+
+			run.usage += result.usage;
+			this.state.totals.usage += result.usage;
+			run.phase = reporting;
+			this.#input.log("stage_ended", {
+				issue: run.issue,
+				runId: run.runId,
+				cause: result.kind,
+				next: reporting.status,
+				attempt: run.attempt,
+			});
 
 			return;
 		}
@@ -1704,6 +1892,8 @@ export class Orchestrator {
 			replay: false,
 			unsettled: null,
 			adopted: true,
+			clearNeedsInfo: false,
+			inputs: null,
 			phase: { kind: "claimed" },
 		};
 
@@ -1817,6 +2007,8 @@ export class Orchestrator {
 			replay: true,
 			unsettled: null,
 			adopted: true,
+			clearNeedsInfo: false,
+			inputs: null,
 			phase:
 				marker.status === "blocked"
 					? { kind: "blocked", reason: "sandbox_unavailable" }
@@ -1845,7 +2037,21 @@ export class Orchestrator {
 			marker.status === "running" && (releasing || limits !== null),
 		);
 
-		if (eligibility !== "current" && eligibility !== "unverified") {
+		const recovered =
+			limits !== null &&
+			marker.status === "running" &&
+			eligibility !== "closed" &&
+			eligibility !== "new_event" &&
+			(await this.#recoverOutput(run));
+
+		if (recovered) {
+			this.#input.log("stage_recovered", {
+				issue: run.issue,
+				runId: run.runId,
+				attempt: run.attempt,
+				next: desiredStatus(run.phase),
+			});
+		} else if (eligibility !== "current" && eligibility !== "unverified") {
 			this.#release(run, eligibility);
 		} else if (limits !== null && marker.status === "running") {
 			this.#endStage(run, "interrupted", 0, limits);
@@ -2177,6 +2383,23 @@ export class Orchestrator {
 			return null;
 		}
 
+		const link = await this.#link({ issue, ledger, admitted, runId });
+
+		if (link.kind === "defer") return null;
+
+		if (link.kind === "ambiguous") {
+			input.refused.push({ issue, reasons: ["ambiguous_snapshot"] });
+			this.#input.log("admission_refused", {
+				issue,
+				reasons: "ambiguous_snapshot",
+				detail: "answer_at_label_time",
+				retry: false,
+			});
+			this.#see(issue, record.updatedAt, { kind: "decided" });
+
+			return null;
+		}
+
 		const run: ActiveRun = {
 			runId,
 			issue,
@@ -2196,6 +2419,8 @@ export class Orchestrator {
 			replay: false,
 			unsettled: null,
 			adopted: false,
+			clearNeedsInfo: link.kind === "linked",
+			inputs: null,
 			phase: { kind: "claimed" },
 		};
 
@@ -2215,11 +2440,177 @@ export class Orchestrator {
 		});
 		await this.#sync(run);
 
+		if (link.kind === "linked") {
+			this.#input.log("run_linked", {
+				issue,
+				runId,
+				prevRunId: link.link.prevRunId,
+				answers: link.answers,
+			});
+			await this.#clearNeedsInfo(run);
+		}
+
 		if ((await this.#input.files.ensureWorkspace(runId)) === "unavailable") {
 			this.#input.log("workspace_unavailable", { issue, runId });
 		}
 
 		return run;
+	}
+
+	async #clearNeedsInfo(run: ActiveRun): Promise<void> {
+		if (!run.clearNeedsInfo) return;
+
+		const removed = await this.#writer.removeLabel(run.issue, NEEDS_INFO_LABEL);
+
+		run.clearNeedsInfo = removed.kind !== "posted";
+
+		if (run.clearNeedsInfo) {
+			this.#input.log("label_unconfirmed", {
+				issue: run.issue,
+				runId: run.runId,
+				label: NEEDS_INFO_LABEL,
+				outcome: removed.kind,
+			});
+		}
+	}
+
+	/**
+	 * Links a new run to the run before it when the issue's latest terminal
+	 * marker is that run's `needs_info` and the new label event came after
+	 * it. The answers are the comments after the questions comment and before
+	 * the label, by non-bot authors with write access, never edited at or
+	 * after the label. Comment and label times have whole seconds, so a
+	 * comment in the label's second is ambiguous. Both records are written
+	 * before the claim.
+	 */
+	async #link(input: {
+		issue: number;
+		ledger: CleanLedger;
+		admitted: AdmittedReceipt;
+		runId: Digest;
+	}): Promise<
+		| { readonly kind: "none" }
+		| { readonly kind: "defer" }
+		| { readonly kind: "ambiguous" }
+		| { readonly kind: "linked"; readonly link: Link; readonly answers: number }
+	> {
+		const { issue, admitted, runId } = input;
+
+		const prev: TrustedMarker | undefined = input.ledger.markers.findLast(
+			({ marker }) => isTerminal(marker.status),
+		);
+
+		if (
+			prev === undefined ||
+			prev.marker.status !== "needs_info" ||
+			prev.marker.runId === runId ||
+			admitted.eventAt < prev.createdAt
+		) {
+			return { kind: "none" };
+		}
+
+		if (admitted.eventAt === prev.createdAt) return { kind: "ambiguous" };
+
+		const comments = await this.#adapter.readComments(issue);
+
+		if (comments.kind === "failed") return { kind: "defer" };
+
+		const prevRunId = prev.marker.runId;
+
+		const asked = comments.value.find(
+			(comment) =>
+				isControllerComment(comment) &&
+				questionsKeyOf(comment.body)?.runId === prevRunId,
+		);
+
+		const floor = BigInt(asked?.id ?? prev.commentId);
+
+		const candidates = comments.value.filter(
+			(comment) =>
+				BigInt(comment.id) > floor &&
+				comment.author !== null &&
+				comment.author.type !== "Bot" &&
+				!isControllerComment(comment) &&
+				comment.createdAt <= admitted.eventAt,
+		);
+
+		if (candidates.some((comment) => comment.createdAt === admitted.eventAt)) {
+			return { kind: "ambiguous" };
+		}
+
+		const edits = await this.#adapter.readCommentEdits(
+			candidates.map((comment) => comment.nodeId),
+		);
+
+		if (edits.kind === "failed") return { kind: "defer" };
+
+		const answers: Answer[] = [];
+
+		for (const comment of candidates) {
+			const edit = edits.value.get(comment.nodeId);
+			const login = comment.author?.login ?? "";
+
+			if (edit === undefined || edit.id !== comment.id) {
+				return { kind: "defer" };
+			}
+
+			if (
+				(edit.lastEditedAt !== null && edit.lastEditedAt >= admitted.eventAt) ||
+				!isLogin(login)
+			) {
+				continue;
+			}
+
+			const permission = await this.#adapter.readPermission(login);
+
+			if (permission.kind === "failed") return { kind: "defer" };
+
+			if (!hasWriteAccess(permission.value)) continue;
+
+			answers.push({
+				commentId: comment.id,
+				author: login,
+				createdAt: comment.createdAt,
+				body: answerBody(comment.body),
+			});
+
+			if (answers.length === MAX_ANSWERS) break;
+		}
+
+		const questions = asked === undefined ? "" : withoutKey(asked.body);
+		const digest = answersDigestOf({ prevRunId, questions, answers });
+
+		const record: AnswersRecord = {
+			version: 1,
+			runId,
+			prevRunId,
+			questionsCommentId: asked?.id ?? null,
+			questions,
+			answers,
+			digest,
+		};
+
+		const link: Link = {
+			prevRunId,
+			questionsDigest:
+				asked === undefined
+					? null
+					: (questionsKeyOf(asked.body)?.digest ?? null),
+			answersDigest: digest,
+		};
+
+		const { files } = this.#input;
+
+		if (
+			!(await files.writeAnswers(record)) ||
+			!(await files.writeLink(runId, link))
+		) {
+			this.#input.log("link_unwritable", { issue, runId });
+
+			return { kind: "defer" };
+		}
+
+		return { kind: "linked", link, answers: answers.length };
 	}
 
 	async #prepareWorkspace(run: ActiveRun): Promise<WorkspacePreparation> {
@@ -2311,6 +2702,23 @@ export class Orchestrator {
 			return true;
 		}
 
+		await this.#clearNeedsInfo(run);
+
+		// Without a sandbox the launch is refused, so no input is read for it.
+		const prepared = this.#enabled ? await this.#stageInputs(run) : UNPREPARED;
+
+		if (prepared.kind === "wait") return false;
+
+		if (prepared.kind === "fail") {
+			run.phase = { kind: "ending", status: "failed" };
+			this.state.totals.failures++;
+			await this.#sync(run);
+
+			return false;
+		}
+
+		run.inputs = prepared.inputs;
+
 		const abort = new AbortController();
 		const now = clock.now();
 
@@ -2327,6 +2735,9 @@ export class Orchestrator {
 			stage,
 			attempt: run.attempt,
 			workspace: files.workspacePath(run.runId),
+			prompt: prepared.prompt,
+			tools: prepared.inputs === null ? [] : SPECIFY_TOOLS,
+			skills: prepared.inputs === null ? [] : SPECIFY_SKILLS,
 			settings: {
 				model: config.stages[stage].model,
 				fallback: config.stages[stage].fallbackModel,
@@ -2353,12 +2764,25 @@ export class Orchestrator {
 			run.unsettled = null;
 			run.adopted = false;
 
+			const attempt = run.attempt;
+
 			const settled = launch.done.then(
-				(result) => {
-					phase.result = { kind: result.kind, usage: prior + result.usage };
+				async (result) => {
+					const output =
+						result.kind === "passed"
+							? await executor
+									.output({ runId: run.runId, stage, attempt })
+									.catch(() => null)
+							: null;
+
+					phase.result = {
+						kind: result.kind,
+						usage: prior + result.usage,
+						output,
+					};
 				},
 				() => {
-					phase.result = { kind: "failed", usage: phase.usage };
+					phase.result = { kind: "failed", usage: phase.usage, output: null };
 				},
 			);
 
@@ -2396,6 +2820,14 @@ export class Orchestrator {
 
 		if ((await this.#recoverUncertainPost(run)) === "stop") return;
 
+		if (run.phase.kind === "reporting") {
+			const { status, effects } = run.phase;
+
+			if (!(await this.#applyEffects(run, effects))) return;
+
+			run.phase = { kind: "ending", status };
+		}
+
 		await this.#publishMarker(run);
 
 		if (run.marked !== null && isTerminal(run.marked.status)) {
@@ -2404,6 +2836,364 @@ export class Orchestrator {
 		} else if (run.seq !== before) {
 			await this.#writeClaim(run);
 		}
+	}
+
+	/**
+	 * Reads everything a specify launch needs: the checkout at the run's base
+	 * commit, the guidance in that commit's WORKFLOW.md, the admitted snapshot
+	 * and, for a linked run, its answers. `wait` retries on a later tick;
+	 * `fail` ends the run, for inputs that will not change.
+	 */
+	async #stageInputs(
+		run: ActiveRun,
+	): Promise<Prepared | { readonly kind: "wait" } | { readonly kind: "fail" }> {
+		const { files, repo } = this.#input;
+		const fields = { issue: run.issue, runId: run.runId };
+
+		const wait = (why: string) => {
+			this.#input.log("stage_inputs_unavailable", { ...fields, why });
+
+			return { kind: "wait" } as const;
+		};
+
+		const fail = (why: string) => {
+			this.#input.log("stage_inputs_refused", { ...fields, why });
+
+			return { kind: "fail" } as const;
+		};
+
+		if (run.stage !== "specify") return fail("no_prompt");
+
+		const checked = await this.#input.executor
+			.checkout({
+				runId: run.runId,
+				repo,
+				sha: run.workflowSha,
+				workspace: files.workspacePath(run.runId),
+			})
+			.catch((): CheckoutResult => ({ kind: "unavailable" }));
+
+		if (checked.kind === "unavailable") return wait("checkout");
+
+		if (checked.kind === "refused") return fail(`checkout_${checked.reason}`);
+
+		const { checkout } = checked;
+		const workflow = await checkout.read(WORKFLOW_PATH, 256 * 1024);
+
+		if (workflow === null || digestOf(workflow) !== run.workflowDigest) {
+			return fail("workflow_mismatch");
+		}
+
+		const parsed = parseWorkflow({
+			text: workflow,
+			repo,
+			env: this.#input.env,
+		});
+
+		if (parsed.kind === "invalid") return fail("workflow_invalid");
+
+		const stored = await this.#input.store.readSnapshot({
+			repo,
+			issue: run.issue,
+			eventId: run.eventId,
+		});
+
+		if (stored.kind !== "found") return wait("snapshot");
+
+		if (stored.receipt.snapshotDigest !== run.snapshotDigest) {
+			return fail("snapshot_mismatch");
+		}
+
+		const linked = await files.readLink(run.runId);
+
+		if (linked.kind === "unreadable") return wait("link");
+
+		const link = linked.kind === "found" ? linked.link : null;
+		const answers = link === null ? null : await files.readAnswers(run.runId);
+
+		if (
+			link !== null &&
+			(answers === null || answers.digest !== link.answersDigest)
+		) {
+			return wait("answers");
+		}
+
+		const set = new Set(checkout.files);
+		const { title, body } = stored.snapshot;
+		const readme = checkout.files.find((path) => /^readme\.md$/i.test(path));
+
+		const wanted = [
+			...(readme === undefined ? [] : [readme]),
+			...namedFiles(
+				[title, body, ...(answers?.answers ?? []).map((a) => a.body)].join(
+					"\n",
+				),
+				set,
+			),
+		];
+
+		const inlined: InlinedFile[] = [];
+
+		for (const path of new Set(wanted)) {
+			const text = await checkout.read(path, NAMED_FILE_BYTES);
+
+			if (text !== null) inlined.push({ path, text });
+		}
+
+		return {
+			kind: "ready",
+			inputs: { files: set, source: stored.receipt.snapshotSource, link },
+			prompt: specifyPrompt({
+				repo,
+				baseSha: run.workflowSha,
+				guidance: parsed.guidance,
+				files: checkout.files,
+				inlined,
+				title,
+				body,
+				answers,
+			}),
+		};
+	}
+
+	/**
+	 * Turns a passing specify stage's final text into what the run reports.
+	 * `null` when the text is missing or fails validation, which the caller
+	 * retries as `stage_failed`. A contract exists only from this path.
+	 */
+	#specified(
+		run: ActiveRun,
+		output: string | null,
+	): Extract<RunPhase, { kind: "reporting" }> | null {
+		const inputs = run.inputs;
+		const fields = { issue: run.issue, runId: run.runId, attempt: run.attempt };
+
+		if (output === null || inputs === null) {
+			this.#input.log("specify_malformed", { ...fields, reason: "no_output" });
+
+			return null;
+		}
+
+		const parsed = parseSpecifyOutput(output, inputs.files);
+		const repo = this.#input.repo;
+
+		if (parsed.kind === "questions") {
+			const digest = questionsDigestOf(parsed.questions);
+
+			const body = renderQuestions({
+				repo,
+				sha: run.workflowSha,
+				runId: run.runId,
+				questions: parsed.questions,
+				digest,
+			});
+
+			if (body !== null) {
+				return {
+					kind: "reporting",
+					status: "needs_info",
+					effects: {
+						kind: "questions",
+						questions: parsed.questions,
+						digest,
+						body,
+						stored: false,
+						posted: false,
+						labeled: false,
+						unlabeled: false,
+					},
+				};
+			}
+		}
+
+		if (parsed.kind === "contract") {
+			const contract: Contract = {
+				version: CONTRACT_VERSION,
+				runId: run.runId,
+				issue: run.issue,
+				base: { repo, sha: run.workflowSha },
+				snapshot: {
+					digest: run.snapshotDigest,
+					source: inputs.source,
+					eventId: run.eventId,
+					eventAt: run.eventAt,
+				},
+				link: inputs.link,
+				...parsed.draft,
+			};
+
+			const bytes = contractBytes(contract);
+			const digest = contractDigestOf(bytes);
+
+			const body = renderSummary({
+				runId: run.runId,
+				contract: parsed.draft,
+				digest,
+			});
+
+			if (body !== null) {
+				return {
+					kind: "reporting",
+					status: "stage_passed",
+					effects: {
+						kind: "contract",
+						contract,
+						bytes,
+						digest,
+						body,
+						stored: false,
+						posted: false,
+					},
+				};
+			}
+		}
+
+		this.#input.log("specify_malformed", {
+			...fields,
+			reason: parsed.kind === "malformed" ? parsed.reason : "too_large_to_post",
+		});
+
+		return null;
+	}
+
+	/**
+	 * Finishes an adopted `running` specify attempt from the output an
+	 * earlier controller's execution kept, instead of running it again. Its
+	 * usage is already counted by `#accountAdopted`.
+	 */
+	async #recoverOutput(run: ActiveRun): Promise<boolean> {
+		const stage = run.stage;
+
+		if (stage !== "specify") return false;
+
+		const output = await this.#input.executor
+			.output({ runId: run.runId, stage, attempt: run.attempt })
+			.catch(() => null);
+
+		if (output === null) return false;
+
+		const prepared = await this.#stageInputs(run);
+
+		if (prepared.kind !== "ready" || prepared.inputs === null) return false;
+
+		run.inputs = prepared.inputs;
+
+		const reporting = this.#specified(run, output);
+
+		if (reporting === null) return false;
+
+		run.phase = reporting;
+
+		return true;
+	}
+
+	/** Whether a controller comment ending in `key` is on the issue; `null` when unreadable. */
+	async #hasKeyed(issue: number, key: string): Promise<boolean | null> {
+		const comments = await this.#adapter.readComments(issue);
+
+		if (comments.kind === "failed") return null;
+
+		return comments.value.some(
+			(comment) =>
+				isControllerComment(comment) &&
+				comment.body.trimEnd().split("\n").at(-1) === key,
+		);
+	}
+
+	/**
+	 * Posts a keyed comment once. An earlier post whose outcome was unknown,
+	 * or one an interrupted controller made, is found by its key first.
+	 */
+	async #postKeyed(
+		run: ActiveRun,
+		key: string,
+		body: string,
+	): Promise<boolean> {
+		const found = await this.#hasKeyed(run.issue, key);
+
+		if (found === null) return false;
+
+		if (found) return true;
+
+		const post = await this.#writer.postComment(run.issue, body);
+
+		if (post.kind !== "posted") {
+			this.#input.log("comment_unconfirmed", {
+				issue: run.issue,
+				runId: run.runId,
+				outcome: post.kind,
+			});
+		}
+
+		return post.kind === "posted";
+	}
+
+	/**
+	 * Leaves a specify outcome's effects in order: the contract on the host
+	 * and its summary comment, or the questions comment, then `needs-info` on
+	 * and `ready` off. The terminal marker follows only when all are done.
+	 */
+	async #applyEffects(run: ActiveRun, effects: Effects): Promise<boolean> {
+		const { files } = this.#input;
+		const fields = { issue: run.issue, runId: run.runId };
+
+		if (effects.kind === "contract") {
+			effects.stored ||= await files.writeContract(effects);
+
+			if (!effects.stored) {
+				this.#input.log("contract_unwritable", fields);
+
+				return false;
+			}
+
+			this.#input.log("contract_stored", { ...fields, digest: effects.digest });
+
+			effects.posted ||= await this.#postKeyed(
+				run,
+				contractKey(run.runId, effects.digest),
+				effects.body,
+			);
+
+			return effects.posted;
+		}
+
+		effects.stored ||= await files.writeQuestions({
+			runId: run.runId,
+			questions: effects.questions,
+			digest: effects.digest,
+		});
+
+		if (!effects.stored) {
+			this.#input.log("questions_unwritable", fields);
+
+			return false;
+		}
+
+		effects.posted ||= await this.#postKeyed(
+			run,
+			questionsKey(run.runId, effects.digest),
+			effects.body,
+		);
+
+		if (!effects.posted) return false;
+
+		if (!effects.labeled) {
+			const added = await this.#writer.addLabels(run.issue, [NEEDS_INFO_LABEL]);
+
+			effects.labeled = added.kind === "posted";
+		}
+
+		if (effects.labeled && !effects.unlabeled) {
+			const removed = await this.#writer.removeLabel(run.issue, READY_LABEL);
+
+			effects.unlabeled = removed.kind === "posted";
+		}
+
+		if (!effects.unlabeled) {
+			this.#input.log("label_unconfirmed", { ...fields, label: READY_LABEL });
+		}
+
+		return effects.unlabeled;
 	}
 
 	async #writeClaim(run: ActiveRun): Promise<void> {
