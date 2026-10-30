@@ -19,6 +19,7 @@ import { describe, it } from "node:test";
 import {
 	FORCED_PI_FLAGS,
 	PI_AGENT_DIR,
+	piChildEnv,
 	wrapPiArgv,
 } from "../../server/sandbox/assets/pi.ts";
 import {
@@ -967,6 +968,48 @@ describe("pi wrapper", () => {
 		}
 	});
 
+	it("starts the Pi child without NODE_OPTIONS or another Node loader variable", () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-pi-env-"));
+		const planted = join(dir, "planted.cjs");
+		const ran = join(dir, "ran");
+
+		try {
+			writeFileSync(
+				planted,
+				`require("node:fs").writeFileSync(${JSON.stringify(ran)}, "1");\n`,
+			);
+
+			const sandbox = {
+				PATH: "/usr/bin:/bin",
+				HOME: "/workspace",
+				FACTORY_PI_TOOLS: "read",
+				NODE_OPTIONS: `--require ${planted}`,
+				NODE_PATH: "/workspace/modules",
+				NODE_REPL_EXTERNAL_MODULE: planted,
+				NODE_PRESERVE_SYMLINKS: "1",
+				NODE_PRESERVE_SYMLINKS_MAIN: "1",
+			};
+
+			const env = piChildEnv(sandbox);
+
+			assert.deepEqual(env, {
+				PATH: "/usr/bin:/bin",
+				HOME: "/workspace",
+				FACTORY_PI_TOOLS: "read",
+				PI_CODING_AGENT_DIR: PI_AGENT_DIR,
+			});
+
+			spawnSync(process.execPath, ["-e", ""], { env: sandbox });
+			assert.equal(existsSync(ran), true, "the planted loader runs unfiltered");
+			rmSync(ran);
+
+			spawnSync(process.execPath, ["-e", ""], { env });
+			assert.equal(existsSync(ran), false, "the Pi child's environment");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("forces the hardening flags onto a child launched by name", () => {
 		const child = [
 			"--session",
@@ -1302,6 +1345,42 @@ describe("gateway lifecycle from the runner", () => {
 		}
 	});
 
+	it("lets the host process exit promptly once the stage receipt is published", {
+		timeout: 30_000,
+	}, async () => {
+		const script = new URL("./receipt-exit.ts", import.meta.url).pathname;
+
+		const child = spawn(
+			process.execPath,
+			["--experimental-strip-types", script],
+			{ stdio: ["ignore", "pipe", "inherit"] },
+		);
+
+		let output = "";
+		let published: number | null = null;
+
+		child.stdout.on("data", (chunk: Buffer) => {
+			output += chunk.toString();
+
+			if (published === null && output.includes("receipt\n"))
+				published = performance.now();
+		});
+
+		const code = await new Promise<number | null>((done) =>
+			child.on("exit", (exit) => done(exit)),
+		);
+
+		const exitedAt = performance.now();
+
+		assert.equal(code, 0);
+		assert.equal(output, "receipt\nresult passed\n");
+		assert.ok(published !== null);
+		assert.ok(
+			exitedAt - published < 1_500,
+			`exited ${Math.round(exitedAt - published)} ms after the receipt`,
+		);
+	});
+
 	it("refuses a socket path the kernel cannot bind", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "factory-gwc-"));
 		const deep = join(dir, "x".repeat(120));
@@ -1581,6 +1660,7 @@ describe("preflight", () => {
 
 			await executor.recover();
 
+			assert.equal(await executor.reconciled(), false);
 			assert.equal(await executor.preflight(), false);
 			assert.deepEqual(
 				logs.find(([event]) => event === "sandbox_preflight")?.[1].failed,
@@ -1606,6 +1686,7 @@ describe("preflight", () => {
 			assert.equal(launch.kind, "unavailable");
 
 			listing = 0;
+			assert.equal(await executor.reconciled(), true);
 			assert.equal(await executor.preflight(), true);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });

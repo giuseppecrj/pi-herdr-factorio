@@ -107,7 +107,7 @@ function narrowTools(requested: string, allowed: readonly string[]): string[] {
  * Prepends the forced flags, narrows any `--tools` to the allowlist (or
  * supplies the allowlist when none is given), and refuses the subcommands
  * that change installs or read keys. Options are an allowlist: a flag
- * outside it, a missing value, or an extension other than the child one
+ * outside it, a missing value, or an extension outside `EXTENSIONS`
  * refuses the whole command line. Arguments after `--` are messages.
  */
 export function wrapPiArgv(
@@ -173,6 +173,30 @@ export function wrapPiArgv(
 	};
 }
 
+/**
+ * Node variables that load code or change how modules resolve. The
+ * sandbox can set them, so the Pi child never inherits them.
+ */
+const NODE_LOADER_VARS = [
+	"NODE_OPTIONS",
+	"NODE_PATH",
+	"NODE_REPL_EXTERNAL_MODULE",
+	"NODE_PRESERVE_SYMLINKS",
+	"NODE_PRESERVE_SYMLINKS_MAIN",
+];
+
+/** The Pi child's environment: the wrapper's, less the Node loader variables, with the agent dir fixed. */
+export function piChildEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+	const child: NodeJS.ProcessEnv = {
+		...env,
+		PI_CODING_AGENT_DIR: PI_AGENT_DIR,
+	};
+
+	for (const name of NODE_LOADER_VARS) delete child[name];
+
+	return child;
+}
+
 function main(): void {
 	const allowed = (process.env.FACTORY_PI_TOOLS ?? "")
 		.split(",")
@@ -189,7 +213,7 @@ function main(): void {
 
 	const child = spawn(process.execPath, [PI_CLI, ...wrapped.argv], {
 		stdio: "inherit",
-		env: { ...process.env, PI_CODING_AGENT_DIR: PI_AGENT_DIR },
+		env: piChildEnv(process.env),
 	});
 
 	for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
