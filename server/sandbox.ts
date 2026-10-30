@@ -1342,6 +1342,10 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 			await reconcile(true);
 		},
 
+		async reconciled() {
+			return reconciled || reconcile(false);
+		},
+
 		async spent({ runId, stage, attempt }) {
 			return attemptSpent(config.stateDir, runId, stage, attempt);
 		},

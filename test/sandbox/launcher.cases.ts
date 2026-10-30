@@ -1660,6 +1660,7 @@ describe("preflight", () => {
 
 			await executor.recover();
 
+			assert.equal(await executor.reconciled(), false);
 			assert.equal(await executor.preflight(), false);
 			assert.deepEqual(
 				logs.find(([event]) => event === "sandbox_preflight")?.[1].failed,
@@ -1685,6 +1686,7 @@ describe("preflight", () => {
 			assert.equal(launch.kind, "unavailable");
 
 			listing = 0;
+			assert.equal(await executor.reconciled(), true);
 			assert.equal(await executor.preflight(), true);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });

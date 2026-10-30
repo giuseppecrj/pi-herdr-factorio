@@ -80,6 +80,12 @@ export type StageLaunchInput = {
 export interface StageExecutor {
 	/** Stops whatever a previous controller left running. Called once, before the first tick adopts a run. */
 	recover(): Promise<void>;
+	/**
+	 * Whether nothing a previous controller left can still be running, so
+	 * `spent` no longer grows for its attempts. A reconcile that failed is
+	 * tried again.
+	 */
+	reconciled(): Promise<boolean>;
 	/** Whether the stage sandbox can run. A `blocked` run replays only after this passes. */
 	preflight(): Promise<boolean>;
 	launch(input: StageLaunchInput): Promise<StageLaunch>;
@@ -97,6 +103,9 @@ export interface StageExecutor {
 /** An executor with no sandbox. Every launch is `sandbox_unavailable`, and no model runs. */
 export const UNAVAILABLE_EXECUTOR: StageExecutor = {
 	async recover() {},
+	async reconciled() {
+		return true;
+	},
 	async preflight() {
 		return false;
 	},
@@ -229,6 +238,12 @@ export type ActiveRun = {
 	replay: boolean;
 	/** Set on an adopted run until its next attempt starts, so that launch counts the latest records. */
 	unsettled: Unsettled | null;
+	/**
+	 * Set on an adopted run until a stage of it starts here. Earlier
+	 * executions of its attempt may hold spend its usage lacks, so its
+	 * release counts them first.
+	 */
+	adopted: boolean;
 	phase: RunPhase;
 };
 
@@ -1128,6 +1143,43 @@ export class Orchestrator {
 	}
 
 	/**
+	 * Counts what a released adopted run's attempts spent beyond its usage,
+	 * once nothing a previous controller left can still add to it: the
+	 * unsettled attempt's records again, and the current attempt's earlier
+	 * executions unless that attempt is the unsettled one. False while a
+	 * leftover may still be running, so the release waits.
+	 */
+	async #countReleased(run: ActiveRun): Promise<boolean> {
+		if (!(await this.#input.executor.reconciled().catch(() => false))) {
+			return false;
+		}
+
+		await this.#reconcileSpent(run);
+
+		const stage = run.stage;
+
+		if (isModelStage(stage) && run.unsettled?.attempt !== run.attempt) {
+			const prior = await this.#attemptSpent(run, stage);
+
+			if (prior > 0) {
+				run.usage += prior;
+				this.state.totals.usage += prior;
+				this.#input.log("stage_late_usage", {
+					issue: run.issue,
+					runId: run.runId,
+					usage: prior,
+					attempt: run.attempt,
+				});
+			}
+		}
+
+		run.unsettled = null;
+		run.adopted = false;
+
+		return true;
+	}
+
+	/**
 	 * What earlier executions of the run's current attempt spent, which its
 	 * usage does not count: a marker counts none of its own attempt until that
 	 * attempt ends. A replay of a `claimed`, `blocked` or `retrying` attempt
@@ -1651,6 +1703,7 @@ export class Orchestrator {
 			workspaceMissing: false,
 			replay: false,
 			unsettled: null,
+			adopted: true,
 			phase: { kind: "claimed" },
 		};
 
@@ -1763,6 +1816,7 @@ export class Orchestrator {
 			workspaceMissing: workspace === "missing",
 			replay: true,
 			unsettled: null,
+			adopted: true,
 			phase:
 				marker.status === "blocked"
 					? { kind: "blocked", reason: "sandbox_unavailable" }
@@ -2141,6 +2195,7 @@ export class Orchestrator {
 			workspaceMissing: false,
 			replay: false,
 			unsettled: null,
+			adopted: false,
 			phase: { kind: "claimed" },
 		};
 
@@ -2296,6 +2351,7 @@ export class Orchestrator {
 		} else {
 			run.phase = phase;
 			run.unsettled = null;
+			run.adopted = false;
 
 			const settled = launch.done.then(
 				(result) => {
@@ -2326,6 +2382,15 @@ export class Orchestrator {
 		if (run.inflight?.tick === this.#ticks) return;
 
 		if (isTerminal(desiredStatus(run.phase)) && this.#settling(run)) return;
+
+		if (
+			run.adopted &&
+			run.phase.kind === "ending" &&
+			run.phase.status === "released" &&
+			!(await this.#countReleased(run))
+		) {
+			return;
+		}
 
 		const before = run.seq;
 

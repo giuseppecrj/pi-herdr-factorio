@@ -202,9 +202,14 @@ class FakeExecutor implements StageExecutor {
 	readonly spentBy = new Map<string, number>();
 	recovered = 0;
 	ready: boolean | null = null;
+	stopped = true;
 
 	async recover(): Promise<void> {
 		this.recovered++;
+	}
+
+	async reconciled(): Promise<boolean> {
+		return this.stopped;
 	}
 
 	async spent(input: {
@@ -1042,7 +1047,51 @@ describe("Orchestrator restart recovery", () => {
 			assert.equal(statuses(github, 14).at(-1), `${seq + 2}:released`);
 			assert.equal(usageOf(github, 14).at(-1), 350);
 		});
+
+		it(`counts a ${origin} attempt's earlier executions when a restart releases it`, async () => {
+			const ctx = world();
+			const { github, start } = ctx;
+
+			const seq = await seedReplay(ctx, origin);
+			const issue = github.issues.get(14);
+
+			assert.ok(issue);
+			issue.state = "closed";
+
+			const report = await start().tick();
+
+			assert.deepEqual(report.runs, []);
+			assert.equal(statuses(github, 14).at(-1), `${seq + 1}:released`);
+			assert.equal(usageOf(github, 14).at(-1), 300);
+			assert.equal(report.totals.usage, 300);
+		});
 	}
+
+	it("counts an adopted attempt's earlier executions when its issue closes after a refused launch", async () => {
+		const ctx = world();
+		const { github, executor, start } = ctx;
+
+		await stopAfterUnmarkedSpend(ctx, 300);
+
+		const controller = start();
+
+		await controller.tick();
+		assert.equal(executor.launches.length, 2);
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+
+		const issue = github.issues.get(14);
+
+		assert.ok(issue);
+		issue.state = "closed";
+		issue.updatedAt = "2026-10-29T03:00:00Z";
+
+		const report = await controller.tick();
+
+		assert.deepEqual(report.runs, []);
+		assert.equal(statuses(github, 14).at(-1), "3:released");
+		assert.equal(usageOf(github, 14).at(-1), 300);
+		assert.equal(report.totals.usage, 300);
+	});
 });
 
 describe("Orchestrator retries and stalls", () => {
@@ -4978,6 +5027,36 @@ describe("Orchestrator late usage across a restart", () => {
 		await controller.tick();
 
 		assert.equal(executor.launches[1]?.remainingRunTokens, 499_300);
+	});
+
+	it("releases an adopted run only once its scopes are stopped, with what its attempt spent until then", async () => {
+		const { github, executor, start } = world();
+		const issue = github.add(labeled(14));
+
+		executor.behaviors = [{ kind: "hang" }];
+		await start().tick();
+
+		executor.ready = false;
+		executor.stopped = false;
+		executor.spentBy.set("specify-1", 100);
+		issue.state = "closed";
+
+		const controller = start();
+
+		await controller.tick();
+		await controller.tick();
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:running"]);
+
+		executor.spentBy.set("specify-1", 700);
+		executor.stopped = true;
+		executor.ready = null;
+
+		const report = await controller.tick();
+
+		assert.deepEqual(report.runs, []);
+		assert.equal(statuses(github, 14).at(-1), "3:released");
+		assert.equal(lastMarkerUsage(github, 14), 700);
+		assert.equal(report.totals.usage, 700);
 	});
 
 	it("counts an interrupted attempt's spend when the restart releases the run", async () => {
