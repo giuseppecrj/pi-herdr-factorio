@@ -109,7 +109,7 @@ Rules checked (`journey/Journey.cfg`):
 | `ReviewOnlyVerified` | Review and human review only see a patch whose checks passed. | holds |
 | `MergeEndsRun` | Once you merge the PR, the run ends as landed. | **breaks** |
 
-`MergeEndsRun` breaks on this path: the PR waits for your review, you comment, the run goes back to build, and you merge the PR on GitHub while the repair is building. `advance()` accepts `landed` only during `land`, so it returns `invalid`, and the run keeps building on a PR that is already merged. `journey/replay-merge-mid-repair.ts` replays this against the real `advance()`. It uses a blocking review in place of the owner comment, because F10 is not built and both take the same repair path. F10 has to decide what a merge during a repair round does.
+`MergeEndsRun` breaks on this path: the PR waits for your review, you comment, the run goes back to build, and you merge the PR on GitHub while the repair is building. `advance()` accepts `landed` only during `land`, so it returns `invalid`, and the run keeps building on a PR that is already merged. `journey/replay-merge-mid-repair.ts` replays this against the real `advance()`. It uses a blocking review in place of the owner comment, because F10 is not built and both take the same repair path. The F10 plan now turns the PR into a draft during a repair, so GitHub refuses the merge. It also ends the run as landed if a merge lands anyway.
 
 The chart hides some arrows to stay readable. "You merge the PR" is drawn only from "PR waits for your review" and "Building the patch". "You close the PR without merging" is drawn only from "PR waits for your review". The model allows both from every stage after the PR opens.
 
