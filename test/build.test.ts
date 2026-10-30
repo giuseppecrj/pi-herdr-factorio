@@ -339,6 +339,25 @@ test("base scripts and base test inputs defeat candidate script rewrites and del
 	);
 });
 
+test("does not restore an authorized replacement, but restores every other deleted test", (t) => {
+	const f = fixture(t);
+	mkdirSync(join(f.base, "test"));
+	writeFileSync(
+		join(f.base, "package.json"),
+		JSON.stringify({ scripts: { test: "node --test" } }),
+	);
+	writeFileSync(join(f.base, "test/replaced.test.js"), "old behavior\n");
+	writeFileSync(join(f.base, "test/retained.test.js"), "regression\n");
+	trustedVisiblePlan(f.base, f.workspace, "npm test", [
+		{ path: "test/replaced.test.js" },
+	]);
+	assert.throws(() => readFileSync(join(f.workspace, "test/replaced.test.js")));
+	assert.equal(
+		readFileSync(join(f.workspace, "test/retained.test.js"), "utf8"),
+		"regression\n",
+	);
+});
+
 test("retains candidate regressions added to existing visible test files", (t) => {
 	const f = fixture(t);
 	mkdirSync(join(f.base, "test"));

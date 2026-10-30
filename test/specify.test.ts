@@ -120,6 +120,47 @@ describe("specify output: contract schema", () => {
 		]);
 	});
 
+	it("permits only exact existing tests as intentional replacements", () => {
+		const path = "test/old.test.ts";
+
+		const replacements = [{ path, reason: "Ticket changes the old behavior" }];
+
+		const parsed = parseSpecifyOutput(
+			output({ ...CONTRACT, replacesTests: replacements }),
+			new Set([...files, path]),
+		);
+
+		assert.ok(parsed.kind === "contract");
+		assert.deepEqual(parsed.draft.replacesTests, replacements);
+
+		for (const path of [
+			"../test/old.test.ts",
+			"test/acceptance/a.test.ts",
+			"test",
+			"src/run.ts",
+			"test/missing.test.ts",
+		]) {
+			assert.equal(
+				parseSpecifyOutput(
+					output({ ...CONTRACT, replacesTests: [{ path, reason: "Change" }] }),
+					new Set([...files, "test/old.test.ts"]),
+				).kind,
+				"malformed",
+			);
+		}
+
+		assert.equal(
+			parseSpecifyOutput(
+				output({
+					...CONTRACT,
+					replacesTests: [...replacements, ...replacements],
+				}),
+				new Set([...files, path]),
+			).kind,
+			"malformed",
+		);
+	});
+
 	it("accepts one fenced JSON block", () => {
 		const parsed = parseSpecifyOutput(
 			`\`\`\`json\n${output(CONTRACT)}\n\`\`\``,

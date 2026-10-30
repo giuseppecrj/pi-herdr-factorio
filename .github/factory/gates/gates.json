@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "checks": [
+    { "name": "typecheck", "argv": ["node", "/g/tooling/node_modules/typescript/bin/tsc", "--noEmit", "-p", "/w/tsconfig.json"] },
+    { "name": "lint", "argv": ["/g/tooling/node_modules/.bin/oxlint", "--disable-nested-config", "-c", "/g/lint.json", "src", "extension", "server", "test"] },
+    { "name": "format", "argv": ["/g/tooling/node_modules/.bin/biome", "format", "--config-path", "/g/biome.json", "src", "extension", "server", "test"] }
+  ],
+  "tests": [
+    "test/accept.test.ts",
+    "test/admission.test.ts",
+    "test/artifacts.test.ts",
+    "test/build.test.ts",
+    "test/candidate-gates.test.ts",
+    "test/extension.test.ts",
+    "test/github-adapter.test.ts",
+    "test/markers.test.ts",
+    "test/orchestrator.test.ts",
+    "test/pipeline.test.ts",
+    "test/policy.test.ts",
+    "test/sandbox.test.ts",
+    "test/specify.test.ts",
+    "test/stages.test.ts",
+    "test/workflow.test.ts"
+  ]
+}

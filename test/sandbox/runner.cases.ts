@@ -1194,7 +1194,16 @@ describe("private build executor", () => {
 						stderr: "",
 					}),
 					host: () => h.host,
-					visibleTests: async (_config, _base, _patch, command) => {
+					visibleTests: async (
+						_config,
+						_base,
+						_patch,
+						command,
+						replacements,
+					) => {
+						assert.deepEqual(replacements, [
+							{ path: "test/old.test.ts", reason: "Changed behavior" },
+						]);
 						tests++;
 
 						return { command, exitCode: 0, tail: "ok", wallMs: 1 };
@@ -1203,10 +1212,52 @@ describe("private build executor", () => {
 
 				assert.equal(await executor.preflight(), true);
 
+				const repo = "owner/repo",
+					sha = "a".repeat(40);
+
+				assert.ok(isRepoSlug(repo) && isGitSha(sha));
+
+				const contract: Contract = {
+					version: 1,
+					runId: digest(RUN),
+					issue: 1,
+					base: { repo, sha },
+					snapshot: {
+						digest: digestOf("snapshot"),
+						source: "unedited",
+						eventId: "1",
+						eventAt: "2026-10-30T00:00:00Z",
+					},
+					link: null,
+					summary: "Change behavior",
+					behavior: ["Change behavior"],
+					exclusions: [],
+					acceptance: [{ id: "A1", text: "New behavior" }],
+					compatibility: [],
+					limits: [],
+					files: [],
+					evidence: [],
+					replacesTests: [
+						{ path: "test/old.test.ts", reason: "Changed behavior" },
+					],
+				};
+
+				const bytes = contractBytes(contract),
+					contractDigest = contractDigestOf(bytes);
+
+				assert.equal(
+					await fileRunFiles(stateDir).writeContract({
+						contract,
+						bytes,
+						digest: contractDigest,
+					}),
+					true,
+				);
+
 				const binding = {
 					runId: digest(RUN),
-					baseSha: "a".repeat(40),
-					contractDigest: digestOf("contract"),
+					baseSha: sha,
+					contractDigest,
 					acceptanceDigest: digestOf("suite"),
 				};
 
