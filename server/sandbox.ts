@@ -2236,6 +2236,13 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 
 				if (
 					kept.kind === "found" &&
+					(kept.receipt.visibleTests !== null ||
+						kept.receipt.policy === "forbidden")
+				)
+					cleanupBuildBase(config.stateDir, runId);
+
+				if (
+					kept.kind === "found" &&
 					kept.receipt.policy === "clean" &&
 					kept.receipt.visibleTests === null
 				) {

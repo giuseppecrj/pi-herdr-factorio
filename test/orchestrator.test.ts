@@ -6735,6 +6735,7 @@ describe("private build stage", () => {
 			);
 			assert.equal(report.totals.usage, 12);
 			assert.equal(calls, reuse ? 0 : 1);
+			assert.equal(existsSync(base), false);
 			assert.equal(
 				executor.launches.filter((l) => l.stage === "build").length,
 				1,
