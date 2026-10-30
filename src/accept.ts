@@ -218,11 +218,6 @@ function planted(content: string, canary: string): string {
 	return `${content}${content.endsWith("\n") ? "" : "\n"}// ${canary}\n`;
 }
 
-/**
- * The stored files in digest order: suite.json, manifest.json, each check
- * by path, then canary.txt. Every file that holds test code also holds the
- * canary, so any later exposure of suite bytes is detectable by the canary.
- */
 export function acceptanceEntries(
 	suite: AcceptanceSuite,
 	canary: string,

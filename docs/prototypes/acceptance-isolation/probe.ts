@@ -12,11 +12,6 @@ import { DEFAULT_SCOPE_LIMITS, scopeArgv, scopeOwner, scopeUnit, spawnScoped, st
 import { detectArch, seccompProgram } from "../../../server/sandbox/seccomp.ts";
 import { isDigest } from "../../../src/run.ts";
 
-// Launches one build-profile sandbox the way sandboxHost launches a stage
-// (scope, seccomp, gateway, fresh agent dir, the run's workspace, the build
-// tool list), but runs a fixed Node script instead of Pi, so it spends no
-// model tokens. The script hunts for the stored suite and its canary.
-
 const [stateDir, runId] = process.argv.slice(2);
 
 assert.ok(stateDir && runId && isDigest(runId), "usage: probe.ts <lane-state-dir> <run-id>");

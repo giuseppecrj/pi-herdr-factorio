@@ -406,7 +406,6 @@ export function fileArtifacts(stateDir: string): ArtifactStore {
 
 			try {
 				privateDir(root);
-				// The anchor survives a lost suite directory and forbids silent regeneration.
 				const receiptText = `${JSON.stringify(receipt, null, "\t")}\n`;
 				exclusive(join(root, `${contract.runId}.json`), receiptText);
 				mkdirSync(dir, { mode: 0o700 });
