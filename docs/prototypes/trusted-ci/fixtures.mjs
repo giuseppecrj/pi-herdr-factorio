@@ -146,7 +146,7 @@ if (mode === "generate") {
 	if (perf) {
 		const step=job.steps.find(s=>s.name==="Run trusted gates");
 		const gates=step.run.replaceAll('$RUNNER_TEMP/gate-results', '$RUNNER_TEMP/gate-results/perf-$n').replace('--nonce "$NONCE"', '--nonce "$NONCE-$n"');
-		step.run='for n in 1 2 3; do\nstart=$(date +%s%3N)\nnpm run check > "$RUNNER_TEMP/trunk-check-$n.log" 2>&1\nend=$(date +%s%3N)\n'+gates+'\nprintf \'%s\\n\' "$((end-start))" > "$RUNNER_TEMP/gate-results/perf-$n/baseline-ms"\ndone\n';
+		step.run='baseline="$RUNNER_TEMP/benchmark-candidate"\nmkdir -p "$baseline"\ngit archive "$CANDIDATE_SHA" | tar -xf - -C "$baseline"\ncp -a node_modules "$baseline/node_modules"\nfor n in 1 2 3; do\nstart=$(date +%s%3N)\ndocker run --rm --network none --read-only --tmpfs /tmp:exec,size=1g --user 1001 --cap-drop ALL --security-opt no-new-privileges --mount "type=bind,src=$baseline,dst=/w,readonly" --workdir /w node@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617 env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp TMPDIR=/tmp CI=true LANG=C.UTF-8 npm run check > "$RUNNER_TEMP/trunk-check-$n.log" 2>&1\nend=$(date +%s%3N)\n'+gates+'\nprintf \'%s\\n\' "$((end-start))" > "$RUNNER_TEMP/gate-results/perf-$n/baseline-ms"\ndone\n';
 	} else {
 		job.steps.splice(3,0,{name:"Measure trunk check",run:"start=$(date +%s%3N)\nnpm run check > \"$RUNNER_TEMP/trunk-check.log\" 2>&1\nend=$(date +%s%3N)\nprintf '%s\\n' \"$((end-start))\" > \"$RUNNER_TEMP/baseline-ms\""});
 		job.steps.splice(-1,0,{name:"Save baseline timing",if:"${{ always() && !cancelled() }}",run:'test ! -d "$RUNNER_TEMP/gate-results" || cp "$RUNNER_TEMP/baseline-ms" "$RUNNER_TEMP/gate-results/baseline-ms"'});
