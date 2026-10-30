@@ -1,79 +1,111 @@
 # Trusted candidate gate evidence
 
-F07b runs main's checks against a candidate without using the candidate's workflow, scripts, test deletions, or check configuration. The dispatcher supplies an exact candidate SHA. The host writes the receipt from process results outside the candidate mounts.
+F07b runs main's checks against exact candidate code without trusting candidate scripts, configuration, or test deletions. The host writes the receipt outside candidate mounts.
 
-## Fixture proof
+## Fix round 1 proof
 
-All 20 fixtures matched their expected result locally and on GitHub's Docker runner. [The hosted run](https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41104183215) is red because its bad-candidate jobs must fail. The known-good, registry-dependency, and contract-named replacement jobs are green. Each job uploaded its receipt, including failing jobs.
+All **34 fixture expectations** matched locally through bubblewrap and on the [hosted Docker runner](https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41131601940). The hosted run is red because negative candidate jobs must fail. The six positive jobs are green, including the held-out missing-result probe described below.
 
-The fixture gate revision is `b82ea6584676611334544f05c34457d36223c208`. [proof.json](proof.json) records every candidate SHA, local and hosted exit codes, durations, replacement authorization, dependency changes, and job URL. `collect.mjs` checked those identities against the prepared fixture list and the actual hosted conclusions. The later production main-ref guard does not change the gate implementation or fixture patches.
+The verified gate revision is `4b3fcfd0a2b03995bffe7ba3be632a67ce8f30e8`. [fix1-proof.json](fix1-proof.json) records each candidate SHA, receipt version, named results, typed refusal, replacement digest, duration, and job URL. `collect.mjs` checks those records against the fixture manifest and actual hosted conclusions. Later evidence and prototype-driver edits do not change this gate code or its tests.
 
-| Fixture | Local | Hosted | Rejecting result or positive proof |
+| Fixture | Local | Hosted | Result |
 |---|---|---|---|
-| known-good | passed | passed | Main tests, new sentinel test, read-only mounts, absent credentials |
-| wrong-behavior | failed | failed | `main_tests` |
-| noop-scripts | failed | failed | `main_tests` despite candidate scripts that return success |
-| deleted-regression | failed | failed | Preserved `main_tests` |
-| weakened-typecheck | failed | failed | Trusted `typecheck` |
-| weakened-lint | failed | failed | Trusted `lint` and `format` |
-| weakened-format | failed | failed | Trusted `format` after nested configuration removal |
-| assert-monkeypatch | failed | failed | Frozen assert exports, `main_tests` |
-| exit-import | failed | failed | Guarded process exit, `main_tests` |
-| really-exit | failed | failed | Guarded process exit, `main_tests` |
-| exit-hook | failed | failed | `main_tests` despite an exit hook that clears the exit code |
-| skip | failed | failed | `candidate_tests` rejects skipped work |
-| todo | failed | failed | `candidate_tests` rejects todo work |
-| only | failed | failed | `candidate_tests` rejects the only diagnostic |
-| npmrc | incomplete | incomplete | Refused before dependency installation |
-| git-dependency | incomplete | incomplete | Refused before dependency installation |
-| named-replacement | passed | passed | Both exact contract-named tests replaced |
-| unnamed-replacement | failed | failed | Unnamed main tests preserved |
-| new-test-fails | failed | failed | New test failure vetoes passing main tests |
-| registry-dependency | passed | passed | `is-number@7.0.0` installed, `newDependency: true` |
+| known-good | passed | passed | Candidate-only import, new test, read-only mounts, absent credentials |
+| wrong-behavior | failed | failed | Preserved main tests |
+| noop-scripts | failed | failed | Preserved main tests despite no-op candidate scripts |
+| deleted-regression | failed | failed | Deleted main regression remains mandatory |
+| weakened-typecheck | failed | failed | Main's typecheck rejects the error |
+| weakened-lint | failed | failed | Main's lint rejects the error |
+| weakened-format | failed | failed | Main's formatter rejects the error |
+| assert-monkeypatch | failed | failed | `runtime_patching` |
+| exit-import | failed | failed | Guarded early exit |
+| really-exit | failed | failed | Guarded early exit |
+| exit-hook | failed | failed | `runtime_patching` |
+| skip | failed | failed | Skipped candidate test |
+| todo | failed | failed | Todo candidate test |
+| only | failed | failed | Exclusive-test diagnostic |
+| npmrc | failed | failed | `npmrc_changed` |
+| git-dependency | failed | failed | `invalid_dependency_spec` |
+| named-replacement | passed | passed | Exact authorized files and before/after digests |
+| unnamed-replacement | failed | failed | Main's original behavior tests remain mandatory |
+| new-test-fails | failed | failed | A new `.cases.ts` failure vetoes passing main tests |
+| lint-ignore | failed | failed | Nested ignore file cannot hide the lint error |
+| stream-forgery | failed | failed | `runtime_patching`, with file and line |
+| serializer-forgery | failed | failed | `runtime_patching`, with file and line |
+| forgery-control | failed | failed | The shared behavior defect without either cheat |
+| suppression-types | failed | failed | `suppression_added` |
+| suppression-lint | failed | failed | `suppression_added` |
+| suppression-format | failed | failed | `suppression_added` |
+| deleted-replacement | failed | failed | `replacement_deleted` |
+| heldout-pass | passed | passed | Exact-byte digest and one passing held-out test |
+| heldout-fail | failed | failed | Held-out assertion failure, with no assertion text in artifacts |
+| heldout-digest | failed | failed | `heldout_digest_mismatch` |
+| heldout-missing-result | passed | passed | Real passing suite, followed by rejection of a copied partial receipt |
+| package-swap | failed | failed | `package_swap` |
+| registry-dependency | passed | passed | `is-number@7.0.0`, `newDependency: true` |
+| glob-dependency | passed | passed | `glob@10.4.5`, transitive npm aliases, `newDependency: true` |
 
-The replacement fixture changes the treatment of a trailing empty line in `inlined`. Both `test/specify.test.ts` and `test/orchestrator.test.ts` pin that behavior. The named fixture authorizes both files. The unnamed fixture contains the same patch with no authorization.
+The stream and serializer fixtures retain audit B's source blobs `2d0edfd` and `45d9c50`. Both now fail before installation. Their shared control contains the same terminal-state defect without the forged reporting code. A separate preload unit test proves that the reporting methods cannot be reassigned and that Node crypto still works.
 
-The known-good fixture adds a candidate-only export and a new test that imports it. It also verifies that writes to `/g/freeze.mjs` and the candidate source fail, that checkout credentials and the Docker socket are absent, and that the candidate process has no GitHub token or inherited Actions environment. Local receipts identify `local-bwrap`; hosted receipts identify `docker`. Local proof is not Docker proof.
+The replacement fixture changes how `inlined` counts a trailing empty line. Both specify and orchestrator tests pin that behavior. The named case authorizes both files. The unnamed case supplies the same patch without authorization.
 
-## Final discovery regression
+The known-good fixture adds a candidate-only export and a test that imports it. The fixture also updates its candidate manifest for the ordinary root check's manifest-consistency assertion. The trusted gate ignores that candidate manifest and uses main's unchanged manifest. Inside gate execution, the consistency unit reads `/g/tooling`, not the merged candidate test directory. Maintainer changes that add main tests must update main's manifest too.
 
-A final focused regression found that new `.cases.ts` files were copied but not executed. This repository uses that convention under `test/sandbox`. Candidate discovery now runs both `.test` and `.cases` additions. The regression was red before the one-expression fix and green afterward.
+## Held-out checks and exclusions
 
-[The final two-case hosted check](https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41111873838) verifies gate revision `b50b4cf05506f38fcc49f0a4edb821f842a28891`. The known-good patch still passes. A new failing `.cases.ts` file fails `candidate_tests` while every preserved check passes, both locally and in Docker. [delta-proof.json](delta-proof.json) records the exact identities and named results. This temporary workflow asserts the expected receipt after running the production CLI, so its green job attests an expected rejection rather than approving the bad candidate. The other fixture scenarios are unchanged.
+The four held-out fixtures publish synthetic files with deliberate type and formatting violations. The style checks pass, and the separately named `heldout` check executes the files under the same preload. The failing suite fails only `heldout`. No held-out log is written. Artifact checks found neither the synthetic private title nor assertion message in any of these final fixture artifacts.
+
+The receipt is version 2 and lists `requiredChecks`. The missing-result fixture first runs a real passing suite, then removes `heldout` from a copied receipt. The exported `receiptPasses` predicate refuses that copy even though its remaining checks and claimed status are green. This is producer-side proof, not F07c controller-ingestion proof.
+
+Root TypeScript, oxlint, and Biome exclude exactly `test/acceptance/**`. The gate's oxlint argv needs the same explicit exclusion because `/g/lint.json` resolves config patterns elsewhere. Biome uses main's preserved root configuration at `/w/biome.json`, so its exclusion resolves against the checked tree. Both Biome configs retain the exact pattern. Nested candidate configurations and ignore files are removed.
+
+The isolated root-command probe passes with a synthetic published suite. All three tools still reject the four nearby controls at `test/planted.test.ts`, `test/acceptance.test.ts`, `test/acceptance-other/y.test.ts`, and `src/acceptance/z.ts`.
 
 ## Runtime boundary
 
-The Docker image is pinned to `node@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617`. Checks run as UID 1001 with no network or capabilities, a read-only root and repository, and an executable 1 GiB temporary filesystem. The gate tool installation and reporter are read-only. The receipt directory is not mounted. Checkout uses GitHub's ephemeral read-only token with `persist-credentials: false`; that token never enters candidate execution.
+The Docker image is pinned to `node@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617`. Checks run as UID 1001 without network access or capabilities. The root filesystem, candidate tree, and gate tools are read-only. `/tmp` is an executable 1 GiB tmpfs. The receipt directory is not mounted. Checkout uses GitHub's ephemeral read-only token with `persist-credentials: false`. Candidate execution never receives that token.
 
-The host accepts registry tarball dependencies only, rejects redirects, and verifies SHA-512 before populating an offline npm cache. Installation runs unprivileged with `--ignore-scripts` and no network. Main's compiler, lint plugin, and formatter dependencies remain separate from candidate dependencies. The recorded install-script packages are `@google/genai` and `protobufjs`; neither script runs.
+The Docker runner requires host UID 1001. Operators with another UID use `--runner local`, which creates a new bubblewrap session with unshared namespaces. Local receipts say `local-bwrap`, not Docker.
 
-Tree export reads exact Git blobs, not `git archive`, so candidate export attributes cannot omit or rewrite files. The unit test with `src/value.ts export-ignore` failed before that change and passes afterward. The exporter refuses symlinks, submodules, and unsafe paths rather than dereferencing them on the host.
+The host accepts registry tarballs only, rejects redirects, binds each tarball path to its real package name and version, and verifies SHA-512 integrity. Offline installation disables lifecycle scripts. Main's compiler, lint plugin, and formatter use a separate main-owned installation. The listed install-script packages are `@google/genai` and `protobufjs`. Neither script runs.
 
-Per-file counts come from a fresh main-on-main run. The fixture baseline contains 1,020 leaf tests across 22 reporting files. A main test can import candidate modules, so freezing built-ins and checking counts are detection guards, not a proof against every possible in-process attack. F08 review and F07c's held-out checks remain necessary.
+Tree export reads exact Git blobs. Candidate export attributes cannot omit or rewrite files. Symlinks, submodules, unsafe paths, `.npmrc` changes, added suppression directives, and runtime-patching signals fail policy checks.
 
-## Corrections during the build
+The preload freezes `node:assert` and `node:test` exports. It pins `Readable.prototype.push`, serializer `writeHeader`, `writeValue`, `writeRawBytes`, and `releaseBuffer`, stdout's `write` and `_write`, and guarded `process.exit` and `process.reallyExit`. It does not freeze whole stream prototypes, which breaks Node crypto. A main-owned host scan records matched paths and lines in `tamperSignals`.
 
-The first local smoke found that `cpSync` rewrote dependency bin links to host paths. Copies now preserve the original relative symlink bytes. The first hosted fixture round exposed an incomplete replacement fixture, not a replacement-runner defect. It named only one of the two tests that pinned the changed behavior.
+These in-process gates are strong against accidental and lazy cheating, not a model that deliberately subverts Node's test runner. Candidate code produces the reporter events. Held-out tests share that exposure. The owner's v1 review and F08 review are further defenses.
 
-Seeded terminal-state defects left some existing tests waiting. Each invocation now has a 60-second test timeout and a 90-second process deadline. The corrected fixture run rejects those patches in under three minutes, rather than waiting about ten minutes for the outer process timeout.
+Each invocation has a 60-second Node test timeout. The first baseline process has a 90-second deadline. Candidate checks get the greater of 90 seconds or three times measured baseline test time plus 30 seconds. After a candidate process timeout, a main-on-main control runs with the same deadline. If main also times out, the result is incomplete rather than a candidate failure. Docker exits 125 through 127 and runner errors are incomplete. Units cover those infrastructure classifications. They were not induced on the hosted runner.
+
+## Corrections found by the full batch
+
+The first fix-round batch was not a pass. [Run 41127174790](https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41127174790) reproduced two positive-case failures. The manifest unit counted candidate additions as main's files, and Biome's `/g` configuration still formatted the held-out suite. The corrected trusted-tree paths pass the complete local and hosted rerun above. [The initial perf attempt](https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41127178399) stopped at the ordinary check before producing a gate receipt. It is not a performance sample.
+
+The previous rounds remain historical evidence in [proof.json](proof.json), [delta-proof.json](delta-proof.json), and [perf.json](perf.json). They do not establish fix-round behavior.
 
 ## Performance proof
 
-[The three-pair hosted benchmark](https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41109240907) passed. Both commands used the same fixed known-good candidate in the pinned, read-only Docker profile on one runner. [perf.json](perf.json) contains exact identities and raw samples.
+[The revised three-pair hosted benchmark](https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41131604785) passes. Both commands use the same fixed known-good candidate and pinned Docker profile on one runner. The existing `npm run check` command runs first in each pair. Its log records 1,053 passing tests, including the new candidate-only test. [fix1-perf.json](fix1-perf.json) contains exact identities and raw timings.
 
-The existing command's median was 35.048 seconds. The trusted gate median was 115.404 seconds, including a 47.551-second median dependency installation. Gate time without installation was 66.615 seconds at the median. Every pair stayed below twice its baseline plus 60 seconds, and every gate stayed below ten minutes. Queue time was three seconds. The full three-pair job took 526 seconds. No model call or token was used.
+| Pair | Existing check | Trusted gate | Install | Gate budget |
+|---|---|---|---|---|
+| 1 | 55.588 s | 136.033 s | 35.336 s | 171.176 s |
+| 2 | 52.685 s | 130.786 s | 31.823 s | 165.370 s |
+| 3 | 52.764 s | 136.896 s | 36.797 s | 165.528 s |
 
-The benchmark gate revision is `c736bb52ac66eca55a25d1a9856252e96ec92b32`. The later `.cases.ts` discovery fix does not change this known-good candidate's test set or execution path.
+The existing-command median is 52.764 seconds. The gate median is 136.033 seconds, including a 35.336-second median install and 46.841-second median main-on-main test run. Every gate stays below twice its paired baseline plus 60 seconds and below ten minutes. Queue time is three seconds. The full benchmark job takes 610 seconds. Image pull and queue time are outside gate receipts. No model call or token is used.
 
 ## Bootstrap boundary
 
-This proof uses a temporary push-triggered copy of the workflow body. The production workflow remains dispatch-only, restricted to `main`, with one read-only `gates` job. The existing required `check` and its workflow are unchanged. No stored secret, model route, write token, privileged cache, or `pull_request_target` is introduced.
+Hosted proof uses temporary push-triggered copies of the production workflow. Each scratch commit changes only the workflow interface, not the gate implementation. The production workflow remains dispatch-only on `main`, with one read-only `gates` job and one artifact named `gate-receipt`. Only fixture matrices use artifact-name suffixes. The existing required `check` and its workflow are unchanged.
 
-Dispatch from protected `main` remains pending until the coordinator merges the bootstrap. F07c must then prove exact-head verdict collection and held-out execution before publication proceeds. F07b does not publish runtime branches, label PRs, or report a required check on the candidate SHA. No independent review or complete program verdict is claimed here. All fixture and prototype branches created for these checks were deleted after their runs finished. Action runs, downloaded receipts, and the canonical PR branch were retained.
+All scratch and fixture branches from this fix round were deleted after their runs completed. Receipts and runs remain available. No VM change, model spend, Docker installation, merge, settings change, PR comment, or new PR occurred.
 
-## Reproduction commands
+Protected-main dispatch remains pending until the bootstrap merge. F07c must prove publication, bot-side collection, private-suite binding, and rejection of partial receipts through its actual controller. This leaf does not claim independent review or a complete program verdict.
 
-The fixture driver runs from the repository root. `generate` creates zero-context patch files for the current gate revision. `prepare` applies them in a private Git index and records immutable candidate SHAs without changing the working tree. `local` invokes the real `server/cli.ts gates` command for every fixture. `scratch` pushes the temporary workflow. Publication and deletion require the operator's grant.
+## Reproduction
+
+Run the fixture driver from the repository root. `generate` writes fixture patches. `prepare` uses a private Git index without changing the checkout. `local` invokes `server/cli.ts gates` for every case. Publication and deletion require the operator's grant.
 
 ```bash
 node docs/prototypes/trusted-ci/fixtures.mjs generate "$GATE_SHA" "$TRAIL"
@@ -82,4 +114,6 @@ node docs/prototypes/trusted-ci/fixtures.mjs local "$GATE_SHA" "$TRAIL"
 node docs/prototypes/trusted-ci/fixtures.mjs scratch "$GATE_SHA" "$TRAIL"
 ```
 
-`scratch --perf` uses only the known-good fixture and runs three baseline and gate pairs on one hosted runner. Both commands test the same exact candidate in the pinned Docker profile. The baseline is the existing `npm run check`; the new command also measures dependency installation and its preserved-test baseline. Image pull and hosted queue time are outside the receipt's elapsed time.
+After the run completes, save `gh run view <id> --json headSha,status,conclusion,url,jobs` as `$TRAIL/hosted-run.json`. Download artifacts to `$TRAIL/hosted-artifacts`, then run `node docs/prototypes/trusted-ci/collect.mjs "$TRAIL" <id>`.
+
+`scratch --perf` runs three interleaved existing-check and gate pairs for the known-good fixture. It preserves command logs and receipts. Use a separate trail directory with the same `fixtures.json`, because each scratch invocation writes its own `scratch.json`.

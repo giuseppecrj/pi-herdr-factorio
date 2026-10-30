@@ -1,0 +1,56 @@
+{
+  "gateSha": "4b3fcfd0a2b03995bffe7ba3be632a67ce8f30e8",
+  "candidateSha": "1283464925644080daf324cde2def68dcf6500b9",
+  "runUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41131604785",
+  "workflowHeadSha": "50de4880c70609ccdbb65b5e9b65dba6c6618329",
+  "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41131604785/job/124323636776",
+  "profile": "digest-pinned Docker, network none, read-only tree, UID 1001",
+  "order": "baseline npm run check then trusted gates, interleaved three times on one hosted runner with one fixed candidate",
+  "samples": [
+    {
+      "pair": 1,
+      "baselineMs": 55588,
+      "gateMs": 136033,
+      "installMs": 35336,
+      "baselineTestsMs": 47152,
+      "gateWithoutInstallMs": 100697,
+      "budgetMs": 171176,
+      "baselineTests": 1053,
+      "passed": true
+    },
+    {
+      "pair": 2,
+      "baselineMs": 52685,
+      "gateMs": 130786,
+      "installMs": 31823,
+      "baselineTestsMs": 46528,
+      "gateWithoutInstallMs": 98963,
+      "budgetMs": 165370,
+      "baselineTests": 1053,
+      "passed": true
+    },
+    {
+      "pair": 3,
+      "baselineMs": 52764,
+      "gateMs": 136896,
+      "installMs": 36797,
+      "baselineTestsMs": 46841,
+      "gateWithoutInstallMs": 100099,
+      "budgetMs": 165528,
+      "baselineTests": 1053,
+      "passed": true
+    }
+  ],
+  "medianBaselineMs": 52764,
+  "medianGateMs": 136033,
+  "medianInstallMs": 35336,
+  "medianBaselineTestsMs": 46841,
+  "medianGateWithoutInstallMs": 100099,
+  "queueMs": 3000,
+  "jobWallMs": 610000,
+  "createdToCheckCompleteMs": 613000,
+  "modelCalls": 0,
+  "modelTokens": 0,
+  "providerSpend": "not applicable; no model calls",
+  "passed": true
+}
