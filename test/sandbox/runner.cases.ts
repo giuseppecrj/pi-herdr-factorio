@@ -2258,6 +2258,41 @@ describe("stage output capture", () => {
 });
 
 describe("stage skills", () => {
+	it("inlines only the applicable build playbook excerpt", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-build-skills-"));
+
+		try {
+			mkdirSync(join(dir, "skills/build"), { recursive: true });
+			writeFileSync(join(dir, "skills/build/SKILL.md"), "Focused tests only.");
+			const books = join(
+				dir,
+				"pkg/node_modules/pi-herdr-pstack/skills/poteto-mode/playbooks",
+			);
+			mkdirSync(books, { recursive: true });
+
+			for (const book of ["bug-fix", "feature"])
+				writeFileSync(
+					join(books, `${book}.md`),
+					`### ${book}\n\nUNRELATED orchestration\n\n1. Reproduce the bug.\n4. Verify on the same surface.\n5. Verify the feature.\n6. Open a PR.\n`,
+				);
+			const bug = await withSkills(dir, "build-playbook=bug-fix", ["build"]);
+			assert.ok(bug);
+			assert.match(bug, /1\. Reproduce the bug/);
+			assert.match(bug, /4\. Verify on the same surface/);
+			assert.ok(!bug.includes("UNRELATED"));
+			assert.ok(!bug.includes("Open a PR"));
+			assert.ok(!bug.includes("Verify the feature"));
+			const feature = await withSkills(dir, "build-playbook=feature", [
+				"build",
+			]);
+			assert.ok(feature);
+			assert.match(feature, /5\. Verify the feature/);
+			assert.ok(!feature.includes("Reproduce the bug"));
+			assert.ok(!feature.includes("Open a PR"));
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 	it("appends each named skill's SKILL.md body, without front matter, in order", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "factory-skills-"));
 
