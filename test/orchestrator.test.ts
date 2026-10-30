@@ -353,6 +353,10 @@ const QUESTIONS_TEXT = JSON.stringify({
 class FakeExecutor implements StageExecutor {
 	behaviors: Behavior[] = [];
 	fallback: Behavior = { kind: "unavailable" };
+	buildBehavior: Behavior = { kind: "unavailable" };
+	buildExitCode = 0;
+	buildPolicy: "clean" | "forbidden" = "clean";
+	readonly builds = new Map<string, Extract<StageOutput, { kind: "build" }>>();
 	acceptBehavior: Behavior = { kind: "unavailable" };
 	acceptText: string | null = ACCEPTANCE_TEXT;
 	outputs: (string | null)[] = [];
@@ -375,6 +379,8 @@ class FakeExecutor implements StageExecutor {
 		const key = `${input.runId}/${input.stage}-${input.attempt}`;
 
 		this.outputReads.push(key);
+
+		if (input.stage === "build") return this.builds.get(key) ?? null;
 
 		return this.kept.get(key) ?? (this.pending ? { kind: "pending" } : null);
 	}
@@ -407,6 +413,38 @@ class FakeExecutor implements StageExecutor {
 	}
 
 	#keep(input: StageLaunchInput): void {
+		if (input.stage === "build" && input.build !== undefined) {
+			this.builds.set(`${input.runId}/build-${input.attempt}`, {
+				kind: "build",
+				result: {
+					kind: "found",
+					patch: "patch",
+					receipt: {
+						...input.build.binding,
+						version: 1,
+						patchDigest: digestOf("patch"),
+						changedPaths: ["server/cli.ts", "test/version.test.ts"],
+						policy: this.buildPolicy,
+						model: input.settings.model,
+						observed: null,
+						testCommand: "npm test",
+						commands: [
+							{ command: "npm test", exitCode: 1 },
+							{ command: "npm test", exitCode: this.buildExitCode },
+						],
+						visibleTests: {
+							command: "npm test",
+							exitCode: this.buildExitCode,
+							tail: "private output",
+							wallMs: 1,
+						},
+					},
+				},
+			});
+
+			return;
+		}
+
 		const text =
 			input.stage === "accept"
 				? this.acceptText
@@ -448,9 +486,11 @@ class FakeExecutor implements StageExecutor {
 
 	async launch(input: StageLaunchInput): Promise<StageLaunch> {
 		const behavior =
-			input.stage === "accept"
-				? this.acceptBehavior
-				: (this.behaviors.shift() ?? this.fallback);
+			input.stage === "build"
+				? this.buildBehavior
+				: input.stage === "accept"
+					? this.acceptBehavior
+					: (this.behaviors.shift() ?? this.fallback);
 
 		this.launches.push(input);
 
@@ -1451,7 +1491,7 @@ describe("Orchestrator retries and stalls", () => {
 });
 
 describe("Orchestrator stage results", () => {
-	it("ends a passing stage as stage_passed, frees its slot and keeps its usage", async () => {
+	it("advances a passing accept to build and keeps its usage", async () => {
 		const { github, executor, files, start } = world();
 
 		github.add(labeled(14));
@@ -1478,8 +1518,9 @@ describe("Orchestrator stage results", () => {
 
 		const report = await once(controller);
 
-		assert.deepEqual(report.runs, []);
-		assert.equal(report.active, 0);
+		assert.equal(report.runs[0]?.stage, "build");
+		assert.equal(report.runs[0]?.status, "claimed");
+		assert.equal(report.active, 1);
 		assert.equal(report.totals.usage, 812);
 		assert.equal(report.totals.failures, 0);
 		assert.deepEqual(statuses(github, 14), [
@@ -1487,14 +1528,14 @@ describe("Orchestrator stage results", () => {
 			"2:running",
 			"3:claimed",
 			"4:running",
-			"5:stage_passed",
+			"5:claimed",
 		]);
 		assert.deepEqual(
 			[...files.claims.values()],
 			[
 				endedClaim(14, 5, {
-					stage: "accept",
-					status: "stage_passed",
+					stage: "build",
+					status: "claimed",
 					usage: 812,
 				}),
 			],
@@ -1679,14 +1720,15 @@ describe("Orchestrator stage results", () => {
 
 		assert.ok(waits >= 1);
 		assert.ok(report);
-		assert.deepEqual(report.runs, []);
+		assert.equal(report.runs[0]?.stage, "build");
+		assert.equal(report.runs[0]?.status, "claimed");
 		assert.equal(report.totals.usage, 77);
 		assert.deepEqual(statuses(github, 14), [
 			"1:claimed",
 			"2:running",
 			"3:claimed",
 			"4:running",
-			"5:stage_passed",
+			"5:claimed",
 		]);
 		assert.equal(await controller.drain(async () => undefined), null);
 	});
@@ -1829,7 +1871,8 @@ describe("server/cli.ts controller commands", () => {
 		const report = JSON.parse(run.stdout);
 
 		assert.equal(report.executionEnabled, true);
-		assert.deepEqual(report.runs, []);
+		assert.equal(report.runs[0]?.stage, "build");
+		assert.equal(report.runs[0]?.status, "claimed");
 		assert.equal(report.totals.usage, 9);
 		assert.equal(executor.recovered, 1);
 		assert.deepEqual(statuses(github, 14), [
@@ -1837,11 +1880,11 @@ describe("server/cli.ts controller commands", () => {
 			"2:running",
 			"3:claimed",
 			"4:running",
-			"5:stage_passed",
+			"5:claimed",
 		]);
 		assert.equal(
 			JSON.parse(readFileSync(join(state, "status.json"), "utf8")).runs.length,
-			0,
+			1,
 		);
 	});
 
@@ -6554,8 +6597,117 @@ function keyed(github: FakeGitHub, issue: number, kind: string): string[] {
 		.filter((body) => body.includes(`<!-- factory-${kind} `));
 }
 
+describe("private build stage", () => {
+	it("advances the same run to build, grants coding tools without the suite, and stops before validate", async () => {
+		const { github, executor, start } = world();
+		github.add(labeled(14, { body: "PRIVATE-ISSUE server/cli.ts" }));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "pass", usage: 7 };
+		executor.buildBehavior = { kind: "pass", usage: 12 };
+		const controller = start();
+		await once(controller);
+		const report = await once(controller);
+		assert.deepEqual(
+			executor.launches.map((l) => [l.stage, l.attempt]),
+			[
+				["specify", 1],
+				["accept", 1],
+				["build", 1],
+			],
+		);
+		const build = executor.launches[2];
+		assert.ok(build?.build);
+		assert.deepEqual(build.tools, [
+			"read",
+			"grep",
+			"ls",
+			"bash",
+			"edit",
+			"write",
+		]);
+		assert.equal(build.settings.maxTokens, 50_000);
+		assert.equal(build.remainingRunTokens, 499_983);
+		assert.ok(build.workspace.endsWith("-build-1"));
+
+		for (const secret of [
+			"PRIVATE-ISSUE",
+			"version.test.ts",
+			"import assert",
+			"canary",
+			"S1",
+		])
+			assert.ok(!build.prompt.includes(secret));
+		assert.equal(statuses(github, 14).at(-1), "7:stage_passed");
+		assert.equal(report.totals.usage, 29);
+		assert.equal(report.active, 0);
+		const summary = keyed(github, 14, "build");
+		assert.equal(summary.length, 1);
+		assert.match(summary[0] ?? "", /Visible tests: passed/);
+		assert.ok(!JSON.stringify(report).includes("private output"));
+		assert.ok(!summary[0]?.includes("private output"));
+	});
+
+	for (const forbidden of [false, true])
+		it(`keeps ${forbidden ? "forbidden work" : "failed visible tests"} private and never passes`, async () => {
+			const { github, executor, start } = world();
+			github.add(labeled(14));
+			executor.behaviors = [{ kind: "pass", usage: 10 }];
+			executor.acceptBehavior = { kind: "pass", usage: 7 };
+			executor.buildBehavior = { kind: "pass", usage: 12 };
+
+			if (forbidden) executor.buildPolicy = "forbidden";
+			else executor.buildExitCode = 1;
+			const controller = start();
+			await once(controller);
+			const report = await once(controller);
+			assert.equal(statuses(github, 14).at(-1), "7:failed");
+			assert.equal(report.totals.failures, 1);
+			assert.match(
+				keyed(github, 14, "build")[0] ?? "",
+				forbidden ? /no publication/ : /Visible tests: failed/,
+			);
+			assert.equal((await controller.tick()).totals.failures, 1);
+		});
+
+	for (const corrupt of [false, true])
+		it(`recovers a collected patch without a second builder${corrupt ? " and types changed bytes" : ""}`, async () => {
+			const { github, executor, start, wire, clock } = world();
+			github.add(labeled(14));
+			executor.behaviors = [{ kind: "pass", usage: 10 }];
+			executor.acceptBehavior = { kind: "pass", usage: 7 };
+			executor.buildBehavior = { kind: "pass", usage: 12 };
+			wire.intercept = async (command, args) =>
+				args.some((a) => a.includes("<!-- factory-build "))
+					? networkError()
+					: github.exec(command, args);
+			const first = start();
+			await once(first);
+			await once(first);
+			assert.equal(statuses(github, 14).at(-1), "6:running");
+			executor.spentBy.set("build-1", 12);
+
+			if (corrupt)
+				executor.builds.set(`${runOf(14)}/build-1`, {
+					kind: "build",
+					result: { kind: "blocked", reason: "patch_changed" },
+				});
+			wire.intercept = null;
+			clock.t += 60_000;
+			const report = await once(start());
+			assert.equal(
+				executor.launches.filter((l) => l.stage === "build").length,
+				1,
+			);
+			assert.equal(
+				statuses(github, 14).at(-1),
+				corrupt ? "7:failed" : "7:stage_passed",
+			);
+			assert.equal(report.totals.usage, 12);
+		});
+});
+
 describe("held-out acceptance stage", () => {
-	it("runs specify then a fresh accept, stores the suite, and posts one redacted summary before stopping", async () => {
+	it("runs specify then a fresh accept, stores the suite, and claims build after one redacted summary", async () => {
 		const { github, executor, files, start } = world();
 		github.add(labeled(14, { body: "PRIVATE-ISSUE-TRANSCRIPT server/cli.ts" }));
 		executor.behaviors = [{ kind: "pass", usage: 100 }];
@@ -6566,7 +6718,7 @@ describe("held-out acceptance stage", () => {
 			"2:running",
 			"3:claimed",
 			"4:running",
-			"5:stage_passed",
+			"5:claimed",
 		]);
 		assert.deepEqual(
 			executor.launches.map((l) => [l.stage, l.attempt]),
@@ -6618,7 +6770,8 @@ describe("held-out acceptance stage", () => {
 			assert.ok(!summary?.includes(value));
 		assert.equal(keyed(github, 14, "acceptance").length, 1);
 		assert.equal(report.totals.usage, 120);
-		assert.equal(report.active, 0);
+		assert.equal(report.active, 1);
+		assert.equal(report.runs[0]?.stage, "build");
 		assert.deepEqual(report.corrupt, []);
 	});
 
@@ -6684,12 +6837,15 @@ describe("held-out acceptance stage", () => {
 			assert.equal(terminal.kind, "marker");
 
 			if (terminal.kind !== "marker") throw new Error("no marker");
-			assert.equal(terminal.marker.status, corrupt ? "failed" : "stage_passed");
+			assert.equal(terminal.marker.status, corrupt ? "failed" : "claimed");
 			assert.equal(terminal.marker.usage, 17);
 			assert.equal(report.totals.usage, 7);
 			assert.equal(report.totals.failures, corrupt ? 1 : 0);
 			assert.equal((await controller.tick()).totals.usage, 7);
-			assert.equal(executor.launches.length, 2);
+			assert.equal(
+				executor.launches.filter((l) => l.stage !== "build").length,
+				2,
+			);
 		});
 	}
 
@@ -6732,7 +6888,10 @@ describe("held-out acceptance stage", () => {
 		assert.equal(stored.receipt.model, "openai/recorded-model");
 		assert.equal(stored.receipt.observed, "recorded-observation");
 		assert.equal(report.totals.usage, 7);
-		assert.equal(executor.launches.length, 2);
+		assert.equal(
+			executor.launches.filter((l) => l.stage !== "build").length,
+			2,
+		);
 	});
 
 	for (const output of [
@@ -6824,10 +6983,13 @@ describe("held-out acceptance stage", () => {
 			wire.intercept = null;
 			clock.t += 60_000;
 			const report = await once(ctx.start());
-			assert.equal(executor.launches.length, 2);
+			assert.equal(
+				executor.launches.filter((l) => l.stage !== "build").length,
+				2,
+			);
 			assert.equal(
 				statuses(github, 14).at(-1),
-				corrupt ? "5:failed" : "5:stage_passed",
+				corrupt ? "5:failed" : "6:blocked",
 			);
 			assert.equal(keyed(github, 14, "acceptance").length, corrupt ? 0 : 1);
 			assert.deepEqual(report.corrupt, []);

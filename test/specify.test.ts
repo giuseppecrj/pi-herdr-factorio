@@ -15,6 +15,7 @@ import { gzipSync } from "node:zlib";
 import { after, describe, it } from "node:test";
 import {
 	checkoutWorkspace,
+	checkoutBuildWorkspace,
 	fileRunFiles,
 	ghTarball,
 	readTarball,
@@ -868,6 +869,51 @@ const GOOD: Member[] = [
 ];
 
 describe("tarball checkout", () => {
+	it("build gets an independent pinned base and a fresh attempt workspace, never the prior checkout", async () => {
+		const state = fresh("build-base");
+		const runId = digestOf("build-base");
+		const workspace = join(state, "old");
+		mkdirSync(workspace);
+
+		const input = {
+			stateDir: state,
+			runId,
+			repo,
+			sha: base,
+			workspace,
+			fetch: async () => tarball(GOOD),
+		};
+
+		assert.equal((await checkoutWorkspace(input)).kind, "ready");
+		writeFileSync(join(workspace, "README.md"), "prior stage changed this");
+		const buildWorkspace = join(state, "build-1");
+
+		const built = await checkoutBuildWorkspace({
+			...input,
+			workspace: buildWorkspace,
+		});
+
+		assert.equal(built.kind, "ready");
+
+		if (built.kind !== "ready") return;
+		assert.equal(await built.checkout.read("README.md", 100), "# readme\n");
+		assert.equal(
+			readFileSync(join(buildWorkspace, "README.md"), "utf8"),
+			"# readme\n",
+		);
+		writeFileSync(join(buildWorkspace, "README.md"), "builder change");
+		assert.equal(
+			readFileSync(join(state, "pristine", runId, "README.md"), "utf8"),
+			"# readme\n",
+		);
+		const second = join(state, "build-2");
+		await checkoutBuildWorkspace({
+			...input,
+			workspace: second,
+			fetch: async () => null,
+		});
+		assert.equal(readFileSync(join(second, "README.md"), "utf8"), "# readme\n");
+	});
 	it("strips the top directory and keeps files, modes and pax paths but omits symlinks", () => {
 		const read = readTarball(tarball(GOOD));
 
@@ -923,7 +969,11 @@ describe("tarball checkout", () => {
 		assert.deepEqual(logs, [
 			{
 				event: "checkout_paths_omitted",
-				fields: { runId, count: omitted.length, why: "unicode_format" },
+				fields: {
+					runId,
+					count: omitted.length + 1,
+					why: "symlink_or_unicode_format",
+				},
 			},
 		]);
 

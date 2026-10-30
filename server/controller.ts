@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
+	cp,
 	lstat,
 	mkdir,
 	open,
@@ -687,6 +688,7 @@ export function readTarball(gz: Buffer): TarRead {
 		} else if (type === "2") {
 			if (target === "" || hasArchiveControl(target))
 				return refuse("unsafe_symlink");
+			omitted++;
 		} else {
 			return refuse(type === "1" ? "hardlink" : "special_file");
 		}
@@ -1002,11 +1004,48 @@ export async function checkoutWorkspace(input: {
 		input.log?.("checkout_paths_omitted", {
 			runId,
 			count: read.omitted,
-			why: "unicode_format",
+			why: "symlink_or_unicode_format",
 		});
 	}
 
 	return { kind: "ready", checkout: checkoutOf(workspace, files) };
+}
+
+export async function checkoutBuildWorkspace(
+	input: Parameters<typeof checkoutWorkspace>[0],
+): Promise<CheckoutResult> {
+	const base = join(input.stateDir, "pristine", input.runId);
+	await mkdir(base, { recursive: true, mode: 0o700 });
+
+	const result = await checkoutWorkspace({
+		...input,
+		stateDir: join(input.stateDir, "build-base"),
+		workspace: base,
+	});
+
+	if (result.kind !== "ready") return result;
+
+	try {
+		const existing = await lstat(input.workspace).catch(() => null);
+
+		if (existing !== null)
+			return existing.isDirectory()
+				? result
+				: { kind: "refused", reason: "unsafe_workspace" };
+		await cp(base, input.workspace, {
+			recursive: true,
+			force: false,
+			errorOnExist: true,
+		});
+	} catch {
+		await rm(input.workspace, { recursive: true, force: true }).catch(
+			() => undefined,
+		);
+
+		return { kind: "unavailable" };
+	}
+
+	return result;
 }
 
 async function writeOnce(path: string, text: string): Promise<boolean> {

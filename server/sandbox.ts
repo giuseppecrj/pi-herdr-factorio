@@ -1,5 +1,16 @@
 import { randomBytes } from "node:crypto";
 import {
+	collectPatch,
+	commandReceipts,
+	finishPatch,
+	patchedTree,
+	readPatch,
+	storePatch,
+	TEST_TAIL_BYTES,
+	type PatchRead,
+	type VisibleTests,
+} from "../src/build.ts";
+import {
 	closeSync,
 	existsSync,
 	fsyncSync,
@@ -25,7 +36,7 @@ import type {
 	StageLaunchInput,
 	StageOutput,
 } from "../src/orchestrator.ts";
-import type { Digest } from "../src/run.ts";
+import { isDigest, type Digest } from "../src/run.ts";
 import {
 	parseSpecifyOutput,
 	parseReviewOutput,
@@ -39,10 +50,11 @@ import {
 } from "../src/workflow.ts";
 import {
 	checkoutWorkspace,
+	checkoutBuildWorkspace,
 	ghTarball,
 	type TarballFetch,
 } from "./controller.ts";
-import { PI_AGENT_DIR } from "./sandbox/assets/pi.ts";
+import { HERDR_AGENTS, PI_AGENT_DIR } from "./sandbox/assets/pi.ts";
 import { AUDIT_CAP_BYTES } from "./sandbox/audit.ts";
 import {
 	countOf,
@@ -908,9 +920,10 @@ function freshDir(base: string): string {
 	}
 }
 
-export function piCommand(model: ModelId): string[] {
+export function piCommand(model: ModelId, children = false): string[] {
 	return [
 		`${BUNDLE.bin}/pi`,
+		...(children ? ["-e", HERDR_AGENTS] : []),
 		"--mode",
 		"rpc",
 		"--no-skills",
@@ -1200,7 +1213,7 @@ export function sandboxHost(config: SandboxHostConfig): StageHost {
 				...config,
 				agentDir,
 				socketPath,
-				command: piCommand(model),
+				command: piCommand(model, config.tools.includes("subagent")),
 			});
 
 			if (launched === null) return null;
@@ -1772,6 +1785,24 @@ export async function withSkills(
 		if (text === null) return null;
 
 		parts.push(`### Skill: ${name}\n\n${skillBody(text)}`);
+
+		if (name === "build") {
+			const playbook = /build-playbook=bug-fix/.test(prompt)
+				? "bug-fix"
+				: "feature";
+
+			const source = await boundedText(
+				join(
+					bundleDir,
+					"pkg/node_modules/pi-herdr-pstack/skills/poteto-mode/playbooks",
+					`${playbook}.md`,
+				),
+				SKILL_MAX_BYTES,
+			);
+
+			if (source === null) return null;
+			parts.push(`### Pstack ${playbook} playbook\n\n${source}`);
+		}
 	}
 
 	return `${prompt}\n\n## Skills\n\n${parts.join("\n\n")}\n`;
@@ -1850,6 +1881,174 @@ async function attemptOutput(
 	}
 
 	return null;
+}
+
+function readRunPatch(stateDir: string, runId: Digest): PatchRead {
+	try {
+		const record = objectOf(
+			parseJson(
+				readFileSync(join(stateDir, "patches", `${runId}.json`), "utf8"),
+			),
+		);
+
+		const baseSha = textOf(fieldOf(record, "baseSha"));
+		const contractDigest = textOf(fieldOf(record, "contractDigest"));
+		const acceptanceDigest = textOf(fieldOf(record, "acceptanceDigest"));
+
+		if (
+			baseSha === null ||
+			contractDigest === null ||
+			acceptanceDigest === null ||
+			!isDigest(acceptanceDigest)
+		)
+			return { kind: "blocked", reason: "patch_invalid" };
+
+		return readPatch(stateDir, {
+			runId,
+			baseSha,
+			contractDigest,
+			acceptanceDigest,
+		});
+	} catch (error) {
+		return error instanceof Error && "code" in error && error.code === "ENOENT"
+			? existsSync(join(stateDir, "patches", runId))
+				? { kind: "blocked", reason: "patch_missing" }
+				: { kind: "absent" }
+			: { kind: "blocked", reason: "patch_invalid" };
+	}
+}
+
+function buildCommands(stateDir: string, runId: Digest, attempt: number) {
+	const root = join(stateDir, "stages", runId);
+	const commands: ReturnType<typeof commandReceipts> = [];
+
+	const walk = (dir: string) => {
+		for (const name of readdirSync(dir).sort()) {
+			const path = join(dir, name);
+			const stat = lstatSync(path);
+
+			if (stat.isDirectory()) walk(path);
+			else if (
+				stat.isFile() &&
+				name.endsWith(".jsonl") &&
+				stat.size <= MAX_SESSION_BYTES &&
+				path.includes("/sessions/")
+			)
+				commands.push(...commandReceipts(readFileSync(path, "utf8")));
+		}
+	};
+
+	for (const name of readdirSync(root).sort())
+		if (name === `build-${attempt}` || name.startsWith(`build-${attempt}.`))
+			walk(join(root, name));
+
+	return commands;
+}
+
+export async function runVisibleTests(
+	config: SandboxHostConfig,
+	base: string,
+	patch: string,
+	command: string,
+): Promise<VisibleTests> {
+	const start = Date.now();
+	const dir = join(config.stateDir, "visible-tests", config.runId);
+	mkdirSync(dir, { recursive: true, mode: 0o700 });
+	const execution = freshDir(join(dir, "execution"));
+	const workspace = join(execution, "tree");
+	let gateway: GatewayHandle | null = null;
+	let unit: string | null = null;
+	let timer: ReturnType<typeof setTimeout> | null = null;
+	let tail = Buffer.alloc(0);
+
+	try {
+		await patchedTree(base, workspace, patch);
+
+		const table = builtinTable({
+			stage: "build",
+			runId: config.runId,
+			attempt: config.attempt,
+			model: "disabled",
+			fallback: null,
+			modelTokens: 0,
+			modelRequests: 0,
+		});
+
+		const started = await startGatewayProcess({
+			gatewayDir: join(execution, "gw"),
+			auditPath: join(execution, "egress.jsonl"),
+			table: {
+				...table,
+				routes: table.routes
+					.filter((route) => route.id === "npm")
+					.map((route) => ({ ...route, budget: false })),
+			},
+			readyTimeoutMs: 10_000,
+		});
+
+		if (!started.ok) throw new Error("gateway_unavailable");
+		gateway = started.handle;
+
+		const launched = launchSandbox({
+			...config,
+			workspace,
+			tools: [],
+			agentDir: join(execution, "agent"),
+			socketPath: gateway.socketPath,
+			command: [
+				"/bin/bash",
+				"-c",
+				`set -o pipefail; if [ -f package-lock.json ]; then npm ci --ignore-scripts --no-audit --no-fund || exit $?; fi; ${command}`,
+			],
+		});
+
+		if (launched === null) throw new Error("sandbox_unavailable");
+		unit = launched.unit;
+
+		const keep = (chunk: Buffer) => {
+			tail = Buffer.concat([tail, chunk]).subarray(-TEST_TAIL_BYTES);
+		};
+
+		launched.child.stdout?.on("data", keep);
+		launched.child.stderr?.on("data", keep);
+		launched.child.stdin?.end();
+		timer = setTimeout(() => {
+			if (unit !== null) {
+				const [cmd, ...args] = stopScopeArgv(unit);
+				void config.exec(cmd ?? "systemctl", args);
+			}
+
+			launched.child.kill("SIGKILL");
+		}, 180_000);
+
+		const exitCode = await new Promise<number | null>((done) => {
+			launched.child.once("exit", done);
+			launched.child.once("error", () => done(null));
+		});
+
+		return {
+			command,
+			exitCode,
+			tail: tail.toString(),
+			wallMs: Date.now() - start,
+		};
+	} catch {
+		return {
+			command,
+			exitCode: null,
+			tail: "Visible test sandbox failed",
+			wallMs: Date.now() - start,
+		};
+	} finally {
+		if (timer !== null) clearTimeout(timer);
+
+		if (unit !== null) {
+			const [cmd, ...args] = stopScopeArgv(unit);
+			await config.exec(cmd ?? "systemctl", args);
+		}
+
+		await gateway?.shutdown();
+	}
 }
 
 export type SandboxExecutorConfig = {
@@ -1945,11 +2144,46 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 		},
 
 		async output({ runId, stage, attempt }) {
+			if (stage === "build") {
+				let kept = readRunPatch(config.stateDir, runId);
+
+				if (
+					kept.kind === "found" &&
+					kept.receipt.policy === "clean" &&
+					kept.receipt.visibleTests === null &&
+					ready !== null
+				) {
+					const tests = await runVisibleTests(
+						{
+							stateDir: config.stateDir,
+							bundleDir: ready.bundle.dir,
+							workspace: "",
+							runId,
+							stage: "build",
+							attempt,
+							tools: [],
+							arch: ready.arch,
+							xdgRuntimeDir: config.xdgRuntimeDir,
+							assetsDigest: ready.bundle.digest,
+							versions: PINNED_VERSIONS,
+							exec: config.exec,
+						},
+						join(config.stateDir, "pristine", runId),
+						kept.patch,
+						kept.receipt.testCommand,
+					);
+
+					kept = finishPatch(config.stateDir, kept.receipt, tests);
+				}
+
+				return kept.kind === "absent" ? null : { kind: "build", result: kept };
+			}
+
 			return attemptOutput(config.stateDir, runId, stage, attempt);
 		},
 
-		async checkout({ runId, repo, sha, workspace }) {
-			return checkoutWorkspace({
+		async checkout({ runId, repo, sha, workspace, build }) {
+			return (build ? checkoutBuildWorkspace : checkoutWorkspace)({
 				stateDir: config.stateDir,
 				runId,
 				workspace,
@@ -2066,21 +2300,96 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 				};
 			}
 
+			const done = runStage(
+				{
+					runId: input.runId,
+					stage: input.stage,
+					attempt: input.attempt,
+					prompt,
+					settings: input.settings,
+					remainingRunTokens: input.remainingRunTokens,
+					signal: input.signal,
+					progress: input.progress,
+				},
+				sandboxHost(hostConfig),
+			);
+
 			return {
 				kind: "started",
-				done: runStage(
-					{
-						runId: input.runId,
-						stage: input.stage,
-						attempt: input.attempt,
-						prompt,
-						settings: input.settings,
-						remainingRunTokens: input.remainingRunTokens,
-						signal: input.signal,
-						progress: input.progress,
-					},
-					sandboxHost(hostConfig),
-				),
+				done: done.then(async (result) => {
+					if (
+						input.stage !== "build" ||
+						input.build === undefined ||
+						result.kind !== "passed"
+					)
+						return result;
+					const binding = input.build.binding;
+					const base = join(config.stateDir, "pristine", input.runId);
+					let kept = readPatch(config.stateDir, binding);
+
+					if (kept.kind === "absent") {
+						const collectionStart = Date.now();
+
+						const patch = await collectPatch({
+							base,
+							workspace: input.workspace,
+							allowNoChange: input.build.allowNoChange,
+						});
+
+						if (patch.kind === "error") {
+							config.log("patch_refused", {
+								runId: input.runId,
+								why: patch.reason,
+							});
+
+							return stageResult({
+								...result.receipt,
+								outcome: { kind: "failed", exit: "crashed" },
+							});
+						}
+
+						config.log("patch_collected", {
+							runId: input.runId,
+							digest: patch.patchDigest,
+							ms: Date.now() - collectionStart,
+							paths: patch.changedPaths.length,
+						});
+
+						const commands = buildCommands(
+							config.stateDir,
+							input.runId,
+							input.attempt,
+						);
+
+						kept = storePatch(config.stateDir, binding, patch, {
+							model:
+								result.receipt.fallback?.requested ??
+								result.receipt.models.requested,
+							observed:
+								result.receipt.fallback?.observed ??
+								result.receipt.models.observed,
+							commands,
+							testCommand: input.build.command,
+						});
+					}
+
+					if (
+						kept.kind === "found" &&
+						kept.receipt.policy === "clean" &&
+						kept.receipt.visibleTests === null
+					) {
+						const tests = await runVisibleTests(
+							{ ...hostConfig, tools: [] },
+							base,
+							kept.patch,
+							input.build.command,
+						);
+
+						finishPatch(config.stateDir, binding, tests);
+					}
+
+					return result;
+				}),
 			};
 		},
 	};

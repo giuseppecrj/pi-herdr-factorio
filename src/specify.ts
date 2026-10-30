@@ -702,6 +702,38 @@ export function renderAcceptanceSummary(input: {
 	);
 }
 
+export function buildKey(runId: Digest, digest: Digest): string {
+	return `${COMMENT_KEY_PREFIX}build run=${runId} p=${digest} -->`;
+}
+
+export function renderBuildSummary(input: {
+	readonly runId: Digest;
+	readonly receipt: {
+		readonly patchDigest: Digest;
+		readonly changedPaths: readonly string[];
+		readonly policy: "clean" | "forbidden";
+		readonly visibleTests: { readonly exitCode: number | null } | null;
+	};
+}): string | null {
+	const { receipt } = input;
+
+	return bounded(
+		[
+			`The factory collected a private patch. Run \`${input.runId.slice(0, 12)}\`, patch \`${receipt.patchDigest.slice(0, 12)}\`.`,
+			"",
+			...receipt.changedPaths.map((path) => `- ${inert(path)}`),
+			"",
+			`Visible tests: ${receipt.visibleTests === null ? "not run" : receipt.visibleTests.exitCode === 0 ? "passed" : "failed"}.`,
+			receipt.policy === "forbidden"
+				? "Forbidden paths. Patch kept privately for the owner; no publication."
+				: "Patch and command output stay private. No CI verdict or publication was produced.",
+			"",
+			buildKey(input.runId, receipt.patchDigest),
+			"",
+		].join("\n"),
+	);
+}
+
 function bounded(body: string): string | null {
 	return Buffer.byteLength(body, "utf8") <= COMMENT_MAX_BYTES ? body : null;
 }

@@ -84,6 +84,10 @@ function isForbidden(changed: string, acceptanceDir: string): boolean {
 	const path = posix.normalize(changed.replaceAll("\\", "/")).toLowerCase();
 
 	return (
+		changed === "" ||
+		changed
+			.split(/[\\/\\\\]/)
+			.some((part) => part === ".." || part.toLowerCase() === ".git") ||
 		path.startsWith("../") ||
 		path.startsWith("/") ||
 		isAtOrUnder(path, CONTROL_PLANE_DIR) ||
