@@ -1360,10 +1360,6 @@ export async function locateBundle(root: string): Promise<Bundle | null> {
 	}
 }
 
-export function probePrompt(stage: ModelStage): string {
-	return `This is the factory's ${stage} stage probe. Do not call any tool. Reply with exactly: factory-${stage}-probe-ok`;
-}
-
 const SPECIFY_SESSIONS = ["draft", "review", "revision"] as const;
 
 type KeptSession = {

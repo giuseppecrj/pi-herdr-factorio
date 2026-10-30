@@ -10,7 +10,6 @@ import {
 	realpath,
 	rename,
 	rm,
-	symlink,
 	unlink,
 	writeFile,
 } from "node:fs/promises";
@@ -37,7 +36,6 @@ import {
 	hasControl,
 	isAnswersDigest,
 	isQuestionsDigest,
-	isRepoPath,
 } from "../src/specify.ts";
 import type { JsonValue } from "../src/tickets.ts";
 import type { GitSha, RepoSlug } from "../src/workflow.ts";
@@ -432,7 +430,9 @@ async function writeAtomic(path: string, text: string): Promise<boolean> {
 export type TarballFetch = (
 	repo: RepoSlug,
 	sha: GitSha,
-) => Promise<Buffer | null>;
+) => Promise<
+	Buffer | { readonly kind: "refused"; readonly reason: string } | null
+>;
 
 const TARBALL_MAX_BYTES = 64 * 1024 * 1024;
 
@@ -449,7 +449,14 @@ export const ghTarball: TarballFetch = (repo, sha) =>
 				timeout: TARBALL_TIMEOUT_MS,
 				killSignal: "SIGKILL",
 			},
-			(error, stdout) => done(error === null ? stdout : null),
+			(error, stdout) =>
+				done(
+					error === null
+						? stdout
+						: error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
+							? { kind: "refused", reason: "too_large" }
+							: null,
+				),
 		);
 	});
 
@@ -466,12 +473,7 @@ export type TarEntry =
 			readonly mode: number;
 			readonly data: Buffer;
 	  }
-	| { readonly kind: "dir"; readonly path: string }
-	| {
-			readonly kind: "symlink";
-			readonly path: string;
-			readonly target: string;
-	  };
+	| { readonly kind: "dir"; readonly path: string };
 
 export type TarRead =
 	| { readonly kind: "ok"; readonly entries: readonly TarEntry[] }
@@ -523,6 +525,20 @@ function paxFields(data: Buffer): Map<string, string> | null {
 
 type TopDir = { name: string | null };
 
+function isCheckoutPath(path: string): boolean {
+	return (
+		path.length <= 4096 &&
+		!hasControl(path) &&
+		!path.includes("\\") &&
+		path
+			.split("/")
+			.every(
+				(part) =>
+					part !== "" && part !== "." && part !== ".." && part !== ".git",
+			)
+	);
+}
+
 function memberPath(raw: string, top: TopDir): string | null {
 	const parts = raw.replace(/\/+$/, "").split("/");
 	const [first, ...rest] = parts;
@@ -544,24 +560,33 @@ function memberPath(raw: string, top: TopDir): string | null {
 
 	const path = rest.join("/");
 
-	return rest.every((part) => part !== ".git") && isRepoPath(path)
-		? path
-		: null;
+	return isCheckoutPath(path) ? path : null;
 }
 
 /**
  * Reads a gzipped ustar or pax tarball like `gh api .../tarball` returns.
- * Only regular files, directories and symlinks that stay inside the tree
- * pass. Hardlinks, devices, FIFOs, traversal, a second top directory,
+ * Only regular files and directories are extracted; symlinks are omitted.
+ * Hardlinks, devices, FIFOs, traversal, a second top directory,
  * duplicate paths and oversize archives refuse the whole tarball.
  */
 export function readTarball(gz: Buffer): TarRead {
+	if (gz.length > TARBALL_MAX_BYTES)
+		return { kind: "refused", reason: "too_large" };
+
 	let tar: Buffer;
 
 	try {
 		tar = gunzipSync(gz, { maxOutputLength: UNPACKED_MAX_BYTES });
-	} catch {
-		return { kind: "refused", reason: "not_gzip" };
+	} catch (error) {
+		return {
+			kind: "refused",
+			reason:
+				error instanceof Error &&
+				"code" in error &&
+				error.code === "ERR_BUFFER_TOO_LARGE"
+					? "too_large"
+					: "not_gzip",
+		};
 	}
 
 	const refuse = (reason: string): TarRead => ({ kind: "refused", reason });
@@ -617,7 +642,7 @@ export function readTarball(gz: Buffer): TarRead {
 
 		seen.add(path);
 
-		if (entries.length >= MAX_ENTRIES) return refuse("too_many_entries");
+		if (seen.size > MAX_ENTRIES) return refuse("too_many_entries");
 
 		if (type === "0" || type === "\0") {
 			const mode = octal(header, 100, 8) ?? 0o644;
@@ -631,6 +656,8 @@ export function readTarball(gz: Buffer): TarRead {
 		} else if (type === "5") {
 			entries.push({ kind: "dir", path });
 		} else if (type === "2") {
+			if (target === "" || hasControl(target)) return refuse("unsafe_symlink");
+
 			const resolved = posix.normalize(posix.join(posix.dirname(path), target));
 
 			if (
@@ -641,8 +668,6 @@ export function readTarball(gz: Buffer): TarRead {
 			) {
 				return refuse("escaping_symlink");
 			}
-
-			entries.push({ kind: "symlink", path, target });
 		} else {
 			return refuse(type === "1" ? "hardlink" : "special_file");
 		}
@@ -667,15 +692,6 @@ async function writeEntries(
 			}
 		}
 
-		for (const entry of entries) {
-			if (entry.kind !== "symlink") continue;
-
-			const full = join(dest, entry.path);
-
-			await mkdir(dirname(full), { recursive: true, mode: 0o755 });
-			await symlink(entry.target, full);
-		}
-
 		return true;
 	} catch {
 		return false;
@@ -698,7 +714,7 @@ function parseCheckoutRecord(
 	for (const file of files) {
 		const path = String(file);
 
-		if (file !== path || !isRepoPath(path)) return null;
+		if (file !== path || !isCheckoutPath(path)) return null;
 
 		paths.push(path);
 	}
@@ -855,10 +871,15 @@ export async function checkoutWorkspace(input: {
 	const checkouts = join(resolve(input.stateDir), "checkouts");
 	const record = join(checkouts, `${runId}.json`);
 
-	const listed = parseCheckoutRecord(
-		await readFile(record, "utf8").catch(() => null),
-		sha,
-	);
+	const kept = await readFile(record, "utf8").catch(() => null);
+	const value = parseJson(kept ?? "");
+	const refusal = textList(fieldOf(value, "refused"));
+
+	if (fieldOf(value, "sha") === sha && refusal !== null) {
+		return { kind: "refused", reason: refusal };
+	}
+
+	const listed = parseCheckoutRecord(kept, sha);
 
 	if (listed !== null)
 		return { kind: "ready", checkout: checkoutOf(workspace, listed) };
@@ -867,9 +888,19 @@ export async function checkoutWorkspace(input: {
 
 	if (gz === null) return { kind: "unavailable" };
 
-	const read = readTarball(gz);
+	const read = Buffer.isBuffer(gz) ? readTarball(gz) : gz;
 
-	if (read.kind === "refused") return read;
+	if (read.kind === "refused") {
+		await mkdir(checkouts, { recursive: true, mode: 0o700 }).catch(
+			() => undefined,
+		);
+		await writeAtomic(
+			record,
+			`${JSON.stringify({ sha, refused: read.reason })}\n`,
+		);
+
+		return read;
+	}
 
 	try {
 		const info = await lstat(workspace);

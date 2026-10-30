@@ -2451,7 +2451,7 @@ describe("controller-run specify review", () => {
 			assert.equal(result.usage, 30);
 			assert.equal(h.calls.length, 3);
 			assert.deepEqual(h.calls[2]?.tools, []);
-			assert.ok(h.calls[2]?.prompt.includes("<critique>"));
+			assert.match(h.calls[2]?.prompt ?? "", /<critique-[0-9a-f]{32}>/);
 			assert.equal(readFileSync(join(h.dir, "output.txt"), "utf8"), QUESTIONS);
 		} finally {
 			h.close();
