@@ -2264,10 +2264,12 @@ describe("stage skills", () => {
 		try {
 			mkdirSync(join(dir, "skills/build"), { recursive: true });
 			writeFileSync(join(dir, "skills/build/SKILL.md"), "Focused tests only.");
+
 			const books = join(
 				dir,
 				"pkg/node_modules/pi-herdr-pstack/skills/poteto-mode/playbooks",
 			);
+
 			mkdirSync(books, { recursive: true });
 
 			for (const book of ["bug-fix", "feature"])
@@ -2282,9 +2284,11 @@ describe("stage skills", () => {
 			assert.ok(!bug.includes("UNRELATED"));
 			assert.ok(!bug.includes("Open a PR"));
 			assert.ok(!bug.includes("Verify the feature"));
+
 			const feature = await withSkills(dir, "build-playbook=feature", [
 				"build",
 			]);
+
 			assert.ok(feature);
 			assert.match(feature, /5\. Verify the feature/);
 			assert.ok(!feature.includes("Reproduce the bug"));

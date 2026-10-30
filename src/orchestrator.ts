@@ -115,7 +115,7 @@ import {
 } from "./workflow.ts";
 import { digestOf } from "./run.ts";
 
-export type { StageResult, StageRunSettings };
+export type { StageResult };
 
 /** Milliseconds since the epoch. Tests pass a fake. */
 export type Clock = { now(): number };
@@ -202,29 +202,6 @@ export interface StageExecutor {
 	}): Promise<CheckoutResult>;
 }
 
-/** An executor with no sandbox. Every launch is `sandbox_unavailable`, and no model runs. */
-export const UNAVAILABLE_EXECUTOR: StageExecutor = {
-	async recover() {},
-	async reconciled() {
-		return true;
-	},
-	async preflight() {
-		return false;
-	},
-	async launch({ stage }) {
-		return { kind: "unavailable", stage, reason: "sandbox_unavailable" };
-	},
-	async spent() {
-		return null;
-	},
-	async output() {
-		return null;
-	},
-	async checkout() {
-		return { kind: "unavailable" };
-	},
-};
-
 type StageEnd = Pick<StageResult, "kind" | "usage"> & {
 	readonly output: string | null;
 	readonly build?: PatchRead;
@@ -264,7 +241,7 @@ type EndedRecord = {
 	unwritten: boolean;
 };
 
-export type WorkspaceState = "present" | "missing" | "unavailable";
+type WorkspaceState = "present" | "missing" | "unavailable";
 
 export type Checkout = {
 	readonly files: readonly string[];
@@ -410,7 +387,7 @@ type Draining = {
  * A marker whose POST did not return a comment. `unknown` may have landed,
  * so it is read back before anything else is posted for the issue.
  */
-export type InflightMarker = {
+type InflightMarker = {
 	readonly marker: Marker;
 	readonly outcome: "unknown" | "rejected";
 	/** The tick that posted it. A read-back waits for a later tick. */
@@ -482,7 +459,7 @@ export type SeenIssue = {
 		| { readonly kind: "corrupt" };
 };
 
-export type Totals = {
+type Totals = {
 	claims: number;
 	launches: number;
 	retries: number;

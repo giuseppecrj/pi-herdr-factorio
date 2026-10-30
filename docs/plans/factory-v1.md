@@ -422,7 +422,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Files.**
 
 - [ ] Create `src/build.ts`, `test/build.test.ts`, `skills/build/`, `test/fixtures/build/`, and `docs/prototypes/build-isolation/`.
-- [ ] Edit `src/policy.ts`, `test/policy.test.ts`, `server/controller.ts`, `server/sandbox.ts`, `skills/README.md`, `src/orchestrator.ts`, `src/specify.ts`, `src/artifacts.ts`, `test/orchestrator.test.ts`, and `test/specify.test.ts` for patch collection, private records, summaries and stage wiring.
+- [ ] Edit `src/policy.ts`, `test/policy.test.ts`, `server/controller.ts`, `server/sandbox.ts`, `skills/README.md`, `src/orchestrator.ts`, `src/specify.ts`, `src/artifacts.ts`, `test/orchestrator.test.ts`, `test/sandbox/runner.cases.ts`, and `test/specify.test.ts` for patch collection, private records, summaries and stage wiring.
 - [ ] Edit `docs/operations/sandbox.md` and `docs/operations/factory-cli.md` for the build boundary and recovery protocol.
 
 **Build.**

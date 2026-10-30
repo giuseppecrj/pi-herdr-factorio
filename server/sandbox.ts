@@ -1801,7 +1801,18 @@ export async function withSkills(
 			);
 
 			if (source === null) return null;
-			parts.push(`### Pstack ${playbook} playbook\n\n${source}`);
+
+			const excerpt = source
+				.split("\n")
+				.filter((line) =>
+					playbook === "bug-fix"
+						? /^(Be scientific\.|1\. |4\. )/.test(line)
+						: line.startsWith("5. "),
+				)
+				.join("\n\n");
+
+			if (!excerpt) return null;
+			parts.push(`### Pstack ${playbook} playbook excerpt\n\n${excerpt}`);
 		}
 	}
 
