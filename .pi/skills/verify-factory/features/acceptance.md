@@ -34,8 +34,9 @@ On 2026-10-30, lane `f06b-w1`, bundle `assets-0e2b7ea8faceb746…`, the fixed th
 | --- | --- | --- | --- | ---: | --- | --- |
 | #459 | `37ccf2f` | 11,356 / 4 (3 draft, 1 review) / 43.3 s | 11,932 / 3 / 76.6 s | 23,288 | 134.4 s | S1–S8 over A1–A8 |
 | #460 | `1611c7b` | 11,376 / 4 (3 draft, 1 review) / 38.3 s | 8,200 / 2 / 44.7 s | 19,576 | 97.1 s | S1–S7 over A1–A7 |
+| #461 | `fff4922` | 11,473 / 4 (3 draft, 1 review) / 29.7 s | 8,054 / 2 / 65.1 s | 19,527 | 111.2 s | S1–S8 over A1–A8 |
 
-Specify turned the issue's three criteria into seven or eight finer ones. Every model request was `openai/gpt-6.1-sol`. The isolation probe passed on #460's run. Both fixtures are closed, and the lane was removed with no scope or process left.
+Specify turned the issue's three criteria into seven or eight finer ones. All 62,391 tokens went to `openai/gpt-6.1-sol`. The isolation probe passed on #460's and #461's runs; on #461 the canary was in `suite.json`, `canary.txt` and both check files, not in the manifest, receipt or anchor, and nowhere else in the lane state. All three fixtures are closed, and the lane was removed with no scope or process left. A live restart after storage was not driven; the unit tests cover it.
 
 ## Gotchas
 

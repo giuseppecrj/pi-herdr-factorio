@@ -41,6 +41,8 @@ The host side then checks the probe's stdout and stderr for this suite's canary,
 
 Result: PASS. Leftover scopes and sandbox processes afterwards: 0.
 
+The same probe passed again at `fff4922`, after the last code change, on run `37378d4ce8a9…` from fixture #461 (acceptance digest `8e42ef8ce039…`), with the same figures. There the canary was in `suite.json`, `canary.txt` and both check files, and in no other file of the lane state.
+
 ## The boundary this records
 
 Before any build exists, the build-profile sandbox gets the run's workspace (the trusted base checkout), its own fresh agent dir, a gateway with no GitHub route, and the bundle. It does not get `<state-dir>/acceptance/`, `<state-dir>/contracts/`, or any other stage's directory. A future build stage must keep that layout: pass the contract and scenario IDs in its prompt, as `ARTIFACT_ACCESS.build` in `src/artifacts.ts` records, and never bind the acceptance store.
