@@ -6625,7 +6625,7 @@ describe("private build stage", () => {
 			"edit",
 			"write",
 		]);
-		assert.equal(build.settings.maxTokens, 50_000);
+		assert.equal(build.settings.maxTokens, 200_000);
 		assert.equal(build.remainingRunTokens, 499_983);
 		assert.ok(build.workspace.endsWith("-build-1"));
 		assert.match(build.prompt, /only the focused test file/);
