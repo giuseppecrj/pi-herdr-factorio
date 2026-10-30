@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import {
+import { execFileSync, spawn } from "node:child_process";
+import fs, {
 	chmodSync,
 	existsSync,
 	mkdirSync,
@@ -15,6 +15,13 @@ import {
 	writeSync,
 } from "node:fs";
 import { request } from "node:http";
+import { syncBuiltinESMExports } from "node:module";
+import { fileRunFiles } from "../../server/controller.ts";
+import {
+	type Contract,
+	contractBytes,
+	contractDigestOf,
+} from "../../src/specify.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -74,7 +81,12 @@ import {
 	SessionTracker,
 } from "../../server/sandbox/settle.ts";
 import type { Digest } from "../../src/run.ts";
-import { isRepoSlug, type ModelId, parseWorkflow } from "../../src/workflow.ts";
+import {
+	isGitSha,
+	isRepoSlug,
+	type ModelId,
+	parseWorkflow,
+} from "../../src/workflow.ts";
 import type { StageLaunchInput } from "../../src/orchestrator.ts";
 import * as sandboxModule from "../../server/sandbox.ts";
 import {
@@ -1071,11 +1083,13 @@ describe("private build executor", () => {
 		assert.deepEqual(delegated.slice(3), ordinary.slice(1));
 	});
 
-	for (const oversized of [false, true])
+	for (const scenario of ["clean", "oversized", "refused"])
 		it(
-			oversized
+			scenario === "oversized"
 				? "fails an oversized excluded cache with a typed disk limit and cleans all workspaces"
-				: "collects builder-reported commands, cleans the attempt and recovers controller tests once",
+				: scenario === "refused"
+					? "logs a typed reason when the patch store refuses collection"
+					: "collects builder-reported commands, cleans the attempt and recovers controller tests once",
 			async (t) => {
 				const dir = mkdtempSync(join(tmpdir(), "factory-build-executor-"));
 				t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -1128,7 +1142,7 @@ describe("private build executor", () => {
 						if (command.type === "prompt") {
 							writeFileSync(join(workspace, "added"), "patch\n");
 
-							if (oversized) {
+							if (scenario === "oversized") {
 								mkdirSync(join(workspace, "node_modules"));
 								writeFileSync(join(workspace, "node_modules/cache"), "");
 								truncateSync(
@@ -1157,6 +1171,7 @@ describe("private build executor", () => {
 				]);
 
 				let tests = 0;
+				const refusals: string[] = [];
 
 				const executor = sandboxModule.sandboxExecutor({
 					stateDir,
@@ -1164,7 +1179,15 @@ describe("private build executor", () => {
 					arch: "x64",
 					usernsLimit: async () => "15000",
 					xdgRuntimeDir: "/run/user/1000",
-					log: () => {},
+					log: (event, fields) => {
+						if (event === "patch_collected" && scenario === "refused")
+							mkdirSync(join(stateDir, "patches", RUN), {
+								recursive: true,
+								mode: 0o700,
+							});
+
+						if (event === "patch_refused") refusals.push(String(fields.why));
+					},
 					exec: async (command) => ({
 						code: 0,
 						stdout: command === "bwrap" ? "bubblewrap 0.9.0\n" : "",
@@ -1187,6 +1210,14 @@ describe("private build executor", () => {
 					acceptanceDigest: digestOf("suite"),
 				};
 
+				mkdirSync(join(stateDir, "build-base", "checkouts"), {
+					recursive: true,
+				});
+				writeFileSync(
+					join(stateDir, "build-base", "checkouts", `${RUN}.json`),
+					JSON.stringify({ sha: binding.baseSha, files: ["package.json"] }),
+				);
+
 				const launch = await executor.launch({
 					...input({ stage: "build" }),
 					workspace,
@@ -1198,11 +1229,25 @@ describe("private build executor", () => {
 				assert.equal(launch.kind, "started");
 
 				if (launch.kind !== "started") return;
-				assert.equal((await launch.done).kind, oversized ? "failed" : "passed");
+				assert.equal(
+					(await launch.done).kind,
+					scenario === "oversized" ? "failed" : "passed",
+				);
 				assert.equal(existsSync(workspace), false);
 				assert.equal(existsSync(sessionDir), false);
 
-				if (oversized) {
+				if (scenario === "refused") {
+					assert.deepEqual(readPatch(stateDir, binding), {
+						kind: "blocked",
+						reason: "patch_invalid",
+					});
+					assert.deepEqual(refusals, ["patch_invalid"]);
+					assert.equal(tests, 0);
+
+					return;
+				}
+
+				if (scenario === "oversized") {
 					assert.equal(existsSync(base), false);
 					assert.equal(
 						JSON.parse(
@@ -1254,6 +1299,187 @@ describe("private build executor", () => {
 				assert.equal(tests, 1);
 			},
 		);
+
+	it("re-extracts a partial base on visible-test recovery after a kill during cleanup", async (t) => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-build-cleanup-kill-"));
+		t.after(() => rmSync(dir, { recursive: true, force: true }));
+		const seed = join(dir, "seed");
+		mkdirSync(seed);
+		writeFileSync(join(seed, "package.json"), "{}\n");
+		writeFileSync(join(seed, "value"), "base\n");
+
+		const archive = execFileSync(
+			"tar",
+			["-czf", "-", "--transform=s,^,repo/,", "package.json", "value"],
+			{ cwd: seed },
+		);
+
+		const stateDir = join(dir, "state");
+		const workspace = join(stateDir, "workspaces", `${RUN}-build-1`);
+		const base = join(stateDir, "pristine", RUN);
+
+		const root = join(dir, "root"),
+			staging = join(root, "staging");
+
+		mkdirSync(staging, { recursive: true });
+		writeFileSync(join(staging, "marker"), "bundle");
+		const hash = await manifestDigest(staging);
+		assert.ok(hash);
+		fs.renameSync(staging, join(root, `assets-${hash}`));
+		symlinkSync(`assets-${hash}`, join(root, "current"));
+
+		const repo = "owner/repo",
+			sha = "a".repeat(40);
+
+		assert.ok(isRepoSlug(repo) && isGitSha(sha));
+
+		const contract: Contract = {
+			version: 1,
+			runId: digest(RUN),
+			issue: 1,
+			base: { repo, sha },
+			snapshot: {
+				digest: digestOf("snapshot"),
+				source: "unedited",
+				eventId: "1",
+				eventAt: "2026-10-30T00:00:00Z",
+			},
+			link: null,
+			summary: "Change value",
+			behavior: ["Change value"],
+			acceptance: [{ id: "A1", text: "Value changes" }],
+			exclusions: [],
+			compatibility: [],
+			limits: [],
+			files: ["value"],
+			evidence: [],
+		};
+
+		const bytes = contractBytes(contract),
+			contractDigest = contractDigestOf(bytes);
+
+		assert.equal(
+			await fileRunFiles(stateDir).writeContract({
+				contract,
+				bytes,
+				digest: contractDigest,
+			}),
+			true,
+		);
+
+		let fetches = 0,
+			tests = 0;
+
+		const config: sandboxModule.SandboxExecutorConfig = {
+			stateDir,
+			root,
+			arch: "x64",
+			usernsLimit: async () => "15000",
+			xdgRuntimeDir: "/run/user/1000",
+			exec: async (command) => ({
+				code: 0,
+				stdout: command === "bwrap" ? "bubblewrap 0.9.0\n" : "",
+				stderr: "",
+			}),
+			log: () => {},
+			fetchTarball: async () => {
+				fetches++;
+
+				return archive;
+			},
+			visibleTests: async (_config, pristine, _patch, command) => {
+				assert.equal(readFileSync(join(pristine, "value"), "utf8"), "base\n");
+				tests++;
+
+				return {
+					command,
+					exitCode: tests === 1 ? null : 0,
+					tail: "",
+					wallMs: 1,
+				};
+			},
+		};
+
+		const executor = sandboxModule.sandboxExecutor(config);
+		assert.equal(await executor.preflight(), true);
+
+		const checkout = { runId: digest(RUN), workspace, repo, sha, build: true };
+		assert.equal((await executor.checkout(checkout)).kind, "ready");
+		writeFileSync(join(workspace, "value"), "patched\n");
+		const patch = await collectPatch({ base, workspace });
+		assert.equal(patch.kind, "collected");
+
+		if (patch.kind !== "collected") return;
+
+		const binding = {
+			runId: digest(RUN),
+			baseSha: sha,
+			contractDigest,
+			acceptanceDigest: digestOf("suite"),
+		};
+
+		assert.equal(
+			storePatch(stateDir, binding, patch, {
+				model: "m",
+				observed: null,
+				commands: [],
+			}).kind,
+			"found",
+		);
+		const remove = fs.rmSync;
+
+		const killed = t.mock.method(
+			fs,
+			"rmSync",
+			(...args: Parameters<typeof rmSync>) => {
+				if (args[0] === base) {
+					remove(join(base, "value"));
+					throw new Error("simulated kill during tree removal");
+				}
+
+				return remove(...args);
+			},
+		);
+
+		syncBuiltinESMExports();
+
+		try {
+			await assert.rejects(
+				executor.output({
+					runId: digest(RUN),
+					stage: "build",
+					attempt: 1,
+				}),
+				/simulated kill/,
+			);
+		} finally {
+			killed.mock.restore();
+			syncBuiltinESMExports();
+		}
+
+		assert.equal(existsSync(join(base, "value")), false);
+		assert.equal(
+			existsSync(join(stateDir, "build-base", "checkouts", `${RUN}.json`)),
+			false,
+		);
+		const restarted = sandboxModule.sandboxExecutor(config);
+		assert.equal(await restarted.preflight(), true);
+
+		const output = await restarted.output({
+			runId: digest(RUN),
+			stage: "build",
+			attempt: 2,
+		});
+
+		assert.ok(
+			output instanceof Object &&
+				output.kind === "build" &&
+				output.result.kind === "found",
+		);
+		assert.equal(fetches, 2);
+		assert.equal(tests, 2);
+		assert.equal(existsSync(base), false);
+	});
 
 	it("keeps unavailable tests typed and retryable without a write-once success record", async (t) => {
 		const dir = mkdtempSync(join(tmpdir(), "factory-build-unavailable-"));

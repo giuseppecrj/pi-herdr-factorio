@@ -6654,6 +6654,11 @@ describe("private build stage", () => {
 				original.result.receipt;
 
 			const binding = { runId, baseSha, contractDigest, acceptanceDigest };
+			mkdirSync(join(state, "build-base", "checkouts"), { recursive: true });
+			writeFileSync(
+				join(state, "build-base", "checkouts", `${runId}.json`),
+				JSON.stringify({ sha: baseSha, files: ["value"] }),
+			);
 			assert.equal(
 				storePatch(state, binding, patch, {
 					model: "openai/gpt-6.1-sol",
@@ -6853,14 +6858,15 @@ describe("private build stage", () => {
 		assert.equal(statuses(github, 14).at(-1), "6:stage_passed");
 	});
 
-	it("advances the same run to build, grants coding tools without the suite, and stops before validate", async () => {
-		const { github, executor, start } = world();
+	it("advances the same run to build, grants coding tools without the suite, and documents its marker log", async () => {
+		const { github, executor, start, logs } = world();
 		github.add(labeled(14, { body: "PRIVATE-ISSUE server/cli.ts" }));
 		executor.behaviors = [{ kind: "pass", usage: 10 }];
 		executor.acceptBehavior = { kind: "pass", usage: 7 };
 		executor.buildBehavior = { kind: "pass", usage: 12 };
 		const controller = start();
 		await once(controller);
+		const beforeBuild = logs.length;
 		const report = await once(controller);
 		assert.deepEqual(
 			executor.launches.map((l) => [l.stage, l.attempt]),
@@ -6898,6 +6904,39 @@ describe("private build stage", () => {
 		])
 			assert.ok(!build.prompt.includes(secret));
 		assert.equal(statuses(github, 14).at(-1), "7:stage_passed");
+		assert.ok(
+			logs.some(
+				({ event, fields }) =>
+					event === "marker_posted" &&
+					fields.status === "stage_passed" &&
+					fields.stage === "build",
+			),
+		);
+		assert.ok(
+			!logs
+				.slice(beforeBuild)
+				.some(
+					({ event, fields }) =>
+						event === "stage_ended" && fields.next === "stage_passed",
+				),
+		);
+
+		const stageDoc =
+			readFileSync(
+				new URL(
+					"../.pi/skills/verify-factory/features/sandbox-stage.md",
+					import.meta.url,
+				),
+				"utf8",
+			)
+				.split("\n")
+				.find((line) => line.startsWith("- `stage-passed`:")) ?? "";
+
+		assert.match(stageDoc, /marker_posted .*status=stage_passed stage=build/);
+		assert.doesNotMatch(
+			stageDoc,
+			/stage_ended \.\.\. cause=passed next=stage_passed/,
+		);
 		assert.equal(report.totals.usage, 29);
 		assert.equal(report.active, 0);
 		const summary = keyed(github, 14, "build");

@@ -13,6 +13,7 @@ import { join, resolve } from "node:path";
 import {
 	fileRunFiles,
 	checkoutBuildWorkspace,
+	checkoutWorkspace,
 	ghTarball,
 } from "../../../server/controller.ts";
 import { patchedTree, readPatch } from "../../../src/build.ts";
@@ -50,6 +51,22 @@ const suite = await files.artifacts.read(runId, bound.contract, bound.digest);
 if (suite.kind !== "found") throw new Error(`suite ${suite.kind}`);
 
 const reconstructed = !existsSync(workspace);
+const base = join(stateDir, "pristine", runId);
+
+mkdirSync(base, { recursive: true, mode: 0o700 });
+
+const checked = await checkoutWorkspace({
+	stateDir: join(stateDir, "build-base"),
+	runId,
+	workspace: base,
+	repo: bound.contract.base.repo,
+	sha: bound.contract.base.sha,
+	fetch: ghTarball,
+});
+
+assert.equal(checked.kind, "ready", "cannot inventory base paths");
+
+if (checked.kind !== "ready") throw new Error("base unavailable");
 
 if (reconstructed) {
 	const checked = await checkoutBuildWorkspace({
@@ -136,7 +153,13 @@ const input = {
 	privatePaths,
 	fingerprints: {
 		files: [...fingerprints],
-		paths: suite.suite.files.map((file) => hash(file.path)),
+		paths: suite.suite.files
+			.filter(
+				(file) =>
+					!JSON.stringify(bound.contract).includes(file.path) &&
+					!checked.checkout.files.includes(file.path),
+			)
+			.map((file) => hash(file.path)),
 	},
 };
 
@@ -365,9 +388,9 @@ try {
 
 	if (reconstructed) {
 		rmSync(workspace, { recursive: true, force: true });
-		rmSync(join(stateDir, "pristine", runId), { recursive: true, force: true });
 		rmSync(join(stateDir, "build-base", "checkouts", `${runId}.json`), {
 			force: true,
 		});
+		rmSync(join(stateDir, "pristine", runId), { recursive: true, force: true });
 	}
 }

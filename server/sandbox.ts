@@ -2130,10 +2130,10 @@ function cleanupBuildAgents(
 }
 
 function cleanupBuildBase(stateDir: string, runId: Digest): void {
-	rmSync(join(stateDir, "pristine", runId), { recursive: true, force: true });
 	rmSync(join(stateDir, "build-base", "checkouts", `${runId}.json`), {
 		force: true,
 	});
+	rmSync(join(stateDir, "pristine", runId), { recursive: true, force: true });
 }
 
 export type SandboxExecutorConfig = {
@@ -2249,7 +2249,12 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 					if (ready === null) return { kind: "pending" };
 					const base = join(config.stateDir, "pristine", runId);
 
-					if (!existsSync(base)) {
+					if (
+						!existsSync(base) ||
+						!existsSync(
+							join(config.stateDir, "build-base", "checkouts", `${runId}.json`),
+						)
+					) {
 						const bound = await fileRunFiles(config.stateDir).readContract(
 							runId,
 						);
@@ -2540,6 +2545,12 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 								commands,
 								testCommand: baseTestCommand(base, input.build.command),
 							});
+
+							if (kept.kind === "blocked")
+								config.log("patch_refused", {
+									runId: input.runId,
+									why: kept.reason,
+								});
 						}
 
 						return result;

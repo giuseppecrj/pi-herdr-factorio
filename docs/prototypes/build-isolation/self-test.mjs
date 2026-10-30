@@ -11,6 +11,9 @@ const source = text
 	.match(/const source = String.raw`([\s\S]*?)`;/)[1]
 	.replace(/^import .*;$/gm, "");
 const predicate = text.match(/const pass =([\s\S]*?);\n\n\tconsole.log/)[1];
+const inputSource = text.match(
+	/const input = ([\s\S]*?);\n\nconst stageDir/,
+)[1];
 const tools = ["read", "grep", "ls", "bash", "write", "edit"];
 const canary = `factory-holdout-${"b".repeat(64)}`;
 const id = "a".repeat(64);
@@ -23,19 +26,25 @@ const raw = JSON.stringify({
 });
 const hash = (s) => createHash("sha256").update(s).digest("hex");
 
-const input = {
-	__build: true,
-	runId: id,
-	gitLayout: "tmpfs",
-	privatePaths: [
-		`acceptance/${id}`,
-		`acceptance/${id}.json`,
-		`contracts/${id}`,
-		`stages/${id}/accept-1`,
-		`stages/${id}/accept-2.2`,
-	],
-	fingerprints: { files: [hash(raw), hash(body)], paths: [hash(path)] },
-};
+function probeInput({ contract = { files: [] }, base = [] } = {}) {
+	return vm.runInNewContext(`(${inputSource})`, {
+		runId: id,
+		gitState: () => "absent",
+		workspace: "/workspace",
+		privatePaths: [
+			`acceptance/${id}`,
+			`acceptance/${id}.json`,
+			`contracts/${id}`,
+			`stages/${id}/accept-1`,
+			`stages/${id}/accept-2.2`,
+		],
+		fingerprints: new Set([hash(raw), hash(body)]),
+		suite: { suite: { files: [{ path, content: body }] } },
+		bound: { contract },
+		checked: { checkout: { files: base } },
+		hash,
+	});
+}
 
 const passes = (seen, stdout, code) =>
 	vm.runInNewContext(`(${predicate})`, {
@@ -48,10 +57,10 @@ const passes = (seen, stdout, code) =>
 		privateOutputLeak: false,
 	});
 
-async function fixture(change = () => {}, code = 0) {
+async function fixture(change = () => {}, code = 0, publicInputs = {}) {
 	const root = fs.mkdtempSync(join(tmpdir(), "acceptance-detector-"));
 	const mapped = (p) => join(root, p);
-	const config = structuredClone(input);
+	const config = probeInput(publicInputs);
 
 	const write = (p, data) => {
 		fs.mkdirSync(join(mapped(p), ".."), { recursive: true });
@@ -137,6 +146,49 @@ async function fixture(change = () => {}, code = 0) {
 test("clean positive control completes the detector", async () => {
 	const r = await fixture();
 	assert.equal(r.pass, true);
+});
+
+test("does not count a contract-named test path as a private leak", async () => {
+	const r = await fixture(
+		({ write }) => write("/workspace/README.md", `Edit ${path}\n`),
+		0,
+		{ contract: { files: [], behavior: [`Edit ${path}`] } },
+	);
+
+	assert.equal(r.seen.pathHits, 0);
+	assert.equal(r.pass, true);
+});
+
+test("does not count a test path already present in the base tree as a leak", async () => {
+	const r = await fixture(
+		({ write }) => write("/workspace/README.md", `Run ${path}\n`),
+		0,
+		{ base: [path] },
+	);
+
+	assert.equal(r.seen.pathHits, 0);
+	assert.equal(r.pass, true);
+});
+
+test("rejects a private test path absent from the contract and base", async () => {
+	const r = await fixture(({ write }) =>
+		write("/workspace/README.md", `/workspace/${path}\n`),
+	);
+
+	assert.equal(r.seen.pathHits, 1);
+	assert.equal(r.pass, false);
+});
+
+test("public path collisions do not hide exact body fingerprints or canaries", async () => {
+	for (const content of [raw, body, canary]) {
+		const r = await fixture(
+			({ write }) => write("/workspace/copied.txt", content),
+			0,
+			{ contract: { files: [path] }, base: [path] },
+		);
+
+		assert.equal(r.pass, false);
+	}
 });
 
 test("rejects a copied raw accept output in the build workspace", async () => {
