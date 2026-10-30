@@ -810,7 +810,8 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [ ] Poll PR conversation comments, submitted reviews, and inline review comments. Normalize stable IDs, actor permissions, PR identity, and referenced head. Deduplicate bot messages and already-processed feedback.
 - [ ] Implement `applyFeedback` only for an open factory PR and a write-access actor. Treat comments as requested work within the original contract, not permission to edit forbidden files or broaden scope. Route incompatible requests to a question or proposal.
 - [ ] Adapt the MIT address-pr-comments skill without its direct pushes or replies. Use a fresh sanitized build session, the same branch and PR, and cumulative repair and cost budgets. Persist the feedback cursor before retries can redispatch it.
-- [ ] Remove readiness while a factory repair is active. Re-run validate and review at the new head before restoring `factory:review`. Have only the controller push and reply. Do not rewrite unexpected owner commits without explicit reconciliation and scope confirmation.
+- [ ] Remove readiness while a factory repair is active. Convert the PR to a draft with `gh pr ready --undo` and remove `factory:review`, because a missing label does not block a merge but GitHub refuses to merge a draft. Re-run validate and review at the new head before marking the PR ready and restoring `factory:review`. Have only the controller push and reply. Do not rewrite unexpected owner commits without explicit reconciliation and scope confirmation.
+- [ ] Handle a merge that lands during a repair anyway, such as after the owner marks the draft ready. Today `advance()` accepts `landed` only during `land` and returns `invalid` in any other stage, so the run keeps building on a merged PR. Keep the PR's published head and its verdict apart from the repair in progress, because a repair round clears the working patch and verdict. Once a PR exists, a merge ends the run as landed from any stage, aborts the repair stage, and records the merged SHA. Record whether that SHA carries a passing factory verdict and review. A head without one, such as a head the owner marked ready during a repair, is recorded as an owner override, never as a factory-verified landing. `docs/statecharts/README.md` shows the current gap as the `MergeEndsRun` break.
 - [ ] For feedback on a merged PR, file a deduplicated `factory:proposed` issue instead of modifying the merged branch. Keep it ineligible for automatic admission.
 
 **You see.**
@@ -819,12 +820,12 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Cover all comment sources, permission checks, stale heads, cursor recovery, owner commits, scope expansion, and shared repair caps in `test/feedback.test.ts`. Run `npm run check`.
+- [ ] Cover all comment sources, permission checks, stale heads, cursor recovery, owner commits, scope expansion, shared repair caps, and a merge during a repair round in `test/feedback.test.ts`. Run `npm run check`. Give `docs/statecharts/journey/Journey.tla` the same published-head split, and rerun it until `MergeEndsRun` holds and every merge without an owner override names a head whose checks and review passed.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, per the boot recipe.
 
 - [ ] Lane 1. Regression lane against trunk. Post the same authorized fixture feedback to each revision's open PR. Save `feedback-round.json`. Pass when head updates its existing PR and trunk's missing feedback behavior is recorded.
-- [ ] Lane 2. Submit an owner review with requested changes. Save `review-feedback.json`. Pass when one repair starts and readiness is withheld until fresh evidence passes.
+- [ ] Lane 2. Submit an owner review with requested changes. Save `review-feedback.json`. Pass when one repair starts, the PR is a draft that GitHub refuses to merge, and readiness is withheld until fresh evidence passes.
 - [ ] Lane 3. Add an inline review comment. Save `inline-feedback.json`. Pass when the adapter associates it with the correct PR and head.
 - [ ] Lane 4. Post a non-writer comment to a real fixture PR under the identity grant. Save `unauthorized-feedback.json`. Pass when it starts no run.
 - [ ] Lane 5. Poll a processed comment twice. Save `feedback-dedup.log`. Pass when only one repair and one reply occur.
