@@ -1705,6 +1705,64 @@ describe("preflight", () => {
 		}
 	});
 
+	it("returns the recorded primary or fallback identity with recovered acceptance output", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-accept-output-"));
+
+		try {
+			const executor = sandboxExecutor({
+				stateDir: dir,
+				xdgRuntimeDir: "/run/user/1000",
+				log: () => {},
+				exec: async () => ({ stdout: "", stderr: "", code: 0 }),
+			});
+
+			for (const fallback of [
+				null,
+				{
+					requested: "openai/recorded-fallback",
+					observed: "observed-fallback",
+				},
+			]) {
+				const path = join(
+					dir,
+					"stages",
+					RUN,
+					fallback === null ? "accept-1" : "accept-1.2",
+				);
+
+				mkdirSync(path, { recursive: true });
+				writeFileSync(join(path, "output.txt"), "private acceptance output");
+				writeFileSync(
+					join(path, "receipt.json"),
+					JSON.stringify({
+						outcome: { kind: "passed" },
+						output: { file: "output.txt" },
+						models: {
+							requested: "openai/recorded-primary",
+							observed: "observed-primary",
+						},
+						fallback,
+					}),
+				);
+				assert.deepEqual(
+					await executor.output({
+						runId: runDigest(RUN),
+						stage: "accept",
+						attempt: 1,
+					}),
+					{
+						kind: "output",
+						text: "private acceptance output",
+						model: fallback?.requested ?? "openai/recorded-primary",
+						observed: fallback?.observed ?? "observed-primary",
+					},
+				);
+			}
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("counts every execution dir of an attempt, a replay's included, once each", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "factory-spent-replay-"));
 

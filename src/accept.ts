@@ -28,6 +28,11 @@ export const ACCEPTANCE_TOOLS = ["read", "grep", "ls"] as const;
 export const ACCEPTANCE_SKILLS = ["acceptance"];
 export const ACCEPTANCE_OUTPUT_DIR = "checks";
 export const ACCEPTANCE_MAX_BYTES = 256 * 1024;
+
+export const ACCEPTANCE_STORED_MAX_BYTES =
+	ACCEPTANCE_MAX_BYTES +
+	Buffer.byteLength(`,"canary":"factory-holdout-${"0".repeat(64)}"\n`);
+
 export const ACCEPTANCE_MAX_TOKENS = 25_000;
 const FILE_MAX_BYTES = 64 * 1024;
 
@@ -214,7 +219,7 @@ function ordered(suite: AcceptanceSuite): AcceptanceSuite {
 	};
 }
 
-function planted(content: string, canary: string): string {
+function plantCanaryInEveryCheck(content: string, canary: string): string {
 	return `${content}${content.endsWith("\n") ? "" : "\n"}// ${canary}\n`;
 }
 
@@ -228,7 +233,7 @@ export function acceptanceEntries(
 		(f) =>
 			[
 				`${ACCEPTANCE_OUTPUT_DIR}/${f.path}`,
-				planted(f.content, canary),
+				plantCanaryInEveryCheck(f.content, canary),
 			] as const,
 	);
 

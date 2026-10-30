@@ -139,6 +139,21 @@ describe("held-out acceptance output", () => {
 				"malformed",
 			);
 	});
+	it("rejects an unreferenced check file with coverage even when all criteria are covered", () => {
+		assert.deepEqual(
+			writeAcceptance(
+				JSON.stringify({
+					...suite,
+					files: [
+						...suite.files,
+						{ ...suite.files[0], path: "orphan.test.ts" },
+					],
+				}),
+				contract,
+			),
+			{ kind: "malformed", reason: "coverage" },
+		);
+	});
 	it("allows an explicit judge for non-executable criteria, never an uncovered criterion", () => {
 		assert.equal(
 			writeAcceptance(

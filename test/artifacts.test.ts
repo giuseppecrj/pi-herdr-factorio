@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import {
 	mkdtempSync,
+	chmodSync,
 	readFileSync,
 	writeFileSync,
 	lstatSync,
@@ -13,6 +15,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import {
+	ACCEPTANCE_MAX_BYTES,
+	writeAcceptance,
 	acceptanceDigestOf,
 	acceptanceEntries,
 	type AcceptanceSuite,
@@ -178,6 +182,87 @@ describe("private acceptance artifacts", () => {
 		assert.equal(stored.receipt.provider, "openai");
 	});
 
+	it("stores an exact-limit model payload and reuses it after restart", async () => {
+		const paths = ["a.test.ts", "b.test.ts", "c.test.ts", "d.test.ts"];
+
+		const boundary: AcceptanceSuite = {
+			version: 1,
+			scenarios: [{ id: "S1", criteria: ["A1"], checks: paths, judge: null }],
+			files: paths.map((path) => ({ path, type: "node:test", content: "x" })),
+		};
+
+		let spare =
+			ACCEPTANCE_MAX_BYTES - Buffer.byteLength(JSON.stringify(boundary));
+
+		const files = boundary.files.map((file) => {
+			const extra = Math.min(spare, 65535);
+			spare -= extra;
+
+			return { ...file, content: file.content + " ".repeat(extra) };
+		});
+
+		assert.equal(spare, 0);
+		const legal = { ...boundary, files };
+		assert.equal(
+			Buffer.byteLength(JSON.stringify(legal)),
+			ACCEPTANCE_MAX_BYTES,
+		);
+		assert.equal(
+			writeAcceptance(JSON.stringify(legal), contract).kind,
+			"suite",
+		);
+		const root = fresh();
+		const stored = await fileArtifacts(root).store({ ...input, suite: legal });
+		assert.equal(stored.kind, "found");
+		assert.deepEqual(
+			await fileArtifacts(root).read(contract.runId, contract, digest),
+			stored,
+		);
+		assert.deepEqual(
+			await fileArtifacts(root).store({ ...input, suite: legal }),
+			stored,
+		);
+		assert.deepEqual(writeAcceptance(`${JSON.stringify(legal)} `, contract), {
+			kind: "malformed",
+			reason: "too_large",
+		});
+	});
+
+	it("rejects an oversized suite before creating the regeneration guard", async () => {
+		const root = fresh();
+		assert.deepEqual(
+			await fileArtifacts(root).store({
+				...input,
+				suite: {
+					...suite,
+					files: suite.files.map((f) => ({
+						...f,
+						content: "x".repeat(262144),
+					})),
+				},
+			}),
+			{ kind: "blocked", reason: "acceptance_invalid" },
+		);
+		assert.deepEqual(
+			await fileArtifacts(root).read(contract.runId, contract, digest),
+			{ kind: "absent" },
+		);
+		assert.equal((await fileArtifacts(root).store(input)).kind, "found");
+	});
+
+	it("runs the isolation detector's negative and positive controls", () => {
+		const env = { ...process.env };
+		delete env.NODE_TEST_CONTEXT;
+
+		const result = spawnSync(
+			process.execPath,
+			["--test", "docs/prototypes/acceptance-isolation/self-test.mjs"],
+			{ encoding: "utf8", env },
+		);
+
+		assert.equal(result.status, 0, result.stdout + result.stderr);
+	});
+
 	for (const mutation of [
 		"changed",
 		"missing",
@@ -186,6 +271,10 @@ describe("private acceptance artifacts", () => {
 		"extra",
 		"symlink",
 		"directory",
+		"mode",
+		"directory-mode",
+		"root-mode",
+		"oversize",
 	] as const) {
 		it(`blocks ${mutation} bytes without regenerating`, async () => {
 			const root = fresh();
@@ -214,13 +303,35 @@ describe("private acceptance artifacts", () => {
 
 			if (mutation === "directory") rmSync(dir, { recursive: true });
 
+			if (mutation === "mode") chmodSync(file, 0o644);
+
+			if (mutation === "directory-mode") chmodSync(join(dir, "checks"), 0o755);
+
+			if (mutation === "root-mode") chmodSync(join(root, "acceptance"), 0o755);
+
+			if (mutation === "oversize") writeFileSync(file, "x".repeat(300000));
+
 			const result = await fileArtifacts(root).read(
 				contract.runId,
 				contract,
 				digest,
 			);
 
-			assert.equal(result.kind, "blocked");
+			assert.deepEqual(result, {
+				kind: "blocked",
+				reason:
+					mutation === "missing" || mutation === "directory"
+						? "acceptance_missing"
+						: [
+									"symlink",
+									"mode",
+									"directory-mode",
+									"root-mode",
+									"oversize",
+								].includes(mutation)
+							? "acceptance_invalid"
+							: "acceptance_changed",
+			});
 			assert.deepEqual(await store.store(input), result);
 		});
 	}

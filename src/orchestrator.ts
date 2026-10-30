@@ -135,6 +135,16 @@ export type StageLaunchInput = {
 	readonly progress: (usage: number) => void;
 };
 
+export type StageOutput =
+	| string
+	| { readonly kind: "pending" }
+	| {
+			readonly kind: "output";
+			readonly text: string;
+			readonly model: string;
+			readonly observed: string | null;
+	  };
+
 export interface StageExecutor {
 	/** Stops whatever a previous controller left running. Called once, before the first tick adopts a run. */
 	recover(): Promise<void>;
@@ -166,7 +176,7 @@ export interface StageExecutor {
 		readonly runId: Digest;
 		readonly stage: ModelStage;
 		readonly attempt: number;
-	}): Promise<string | { readonly kind: "pending" } | null>;
+	}): Promise<StageOutput | null>;
 	checkout(input: {
 		readonly runId: Digest;
 		readonly repo: RepoSlug;
@@ -301,7 +311,10 @@ export type RunPhase =
 			readonly reason: "sandbox_unavailable";
 	  }
 	| { readonly kind: "retry_queued"; readonly dueAt: number }
-	| { readonly kind: "recovering"; readonly output: string }
+	| {
+			readonly kind: "recovering";
+			readonly output: string | Extract<StageOutput, { kind: "output" }>;
+	  }
 	| {
 			readonly kind: "reporting";
 			readonly status: "stage_passed" | "needs_info";
@@ -2150,7 +2163,7 @@ export class Orchestrator {
 			ledger,
 			marker.status === "running" &&
 				(releasing || limits !== null) &&
-				(releasing || !(output instanceof Object)),
+				(releasing || !(output instanceof Object && output.kind === "pending")),
 		);
 
 		const recovered =
@@ -3000,12 +3013,16 @@ export class Orchestrator {
 			);
 
 			if (kept.kind !== "absent") {
+				run.usage += prior;
+				this.state.totals.usage += prior;
+
 				if (kept.kind === "blocked") {
 					this.#input.log("stage_inputs_refused", {
 						runId: run.runId,
 						why: kept.reason,
 					});
 					run.phase = { kind: "ending", status: "failed" };
+					this.state.totals.failures++;
 				} else
 					run.phase = {
 						kind: "reporting",
@@ -3104,7 +3121,12 @@ export class Orchestrator {
 							result.receipt.fallback?.observed ??
 							result.receipt.models.observed,
 						usage: prior + result.usage,
-						output: output instanceof Object ? null : output,
+						output:
+							output instanceof Object
+								? output.kind === "output"
+									? output.text
+									: null
+								: output,
 					};
 				},
 				() => {
@@ -3481,7 +3503,7 @@ export class Orchestrator {
 
 	async #recoverOutput(
 		run: ActiveRun,
-		output: string | { readonly kind: "pending" } | null,
+		output: StageOutput | null,
 	): Promise<boolean> {
 		const stage = run.stage;
 
@@ -3496,6 +3518,7 @@ export class Orchestrator {
 					why: bound.reason,
 				});
 				run.phase = { kind: "ending", status: "failed" };
+				this.state.totals.failures++;
 
 				return true;
 			}
@@ -3512,6 +3535,7 @@ export class Orchestrator {
 					why: kept.reason,
 				});
 				run.phase = { kind: "ending", status: "failed" };
+				this.state.totals.failures++;
 
 				return true;
 			}
@@ -3536,7 +3560,7 @@ export class Orchestrator {
 
 		if (output === null) return false;
 
-		if (output instanceof Object) {
+		if (output instanceof Object && output.kind === "pending") {
 			run.phase = { kind: "claimed" };
 
 			return true;
@@ -3561,10 +3585,17 @@ export class Orchestrator {
 
 		run.inputs = prepared.inputs;
 
+		const text = output instanceof Object ? output.text : output;
+
 		const reporting =
 			stage === "specify"
-				? this.#specified(run, output)
-				: this.#accepted(run, output);
+				? this.#specified(run, text)
+				: this.#accepted(
+						run,
+						text,
+						output instanceof Object ? output.model : undefined,
+						output instanceof Object ? output.observed : null,
+					);
 
 		if (reporting === null) return false;
 
@@ -3622,6 +3653,7 @@ export class Orchestrator {
 					why: stored.kind === "blocked" ? stored.reason : "acceptance_missing",
 				});
 				run.phase = { kind: "ending", status: "failed" };
+				this.state.totals.failures++;
 
 				return false;
 			}
@@ -3641,6 +3673,7 @@ export class Orchestrator {
 					why: "summary_too_large",
 				});
 				run.phase = { kind: "ending", status: "failed" };
+				this.state.totals.failures++;
 
 				return false;
 			}

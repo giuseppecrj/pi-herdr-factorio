@@ -49,6 +49,7 @@ import {
 	type StageExecutor,
 	type StageLaunch,
 	type StageLaunchInput,
+	type StageOutput,
 	type StageResult,
 	type TickReport,
 } from "../src/orchestrator.ts";
@@ -370,7 +371,7 @@ class FakeExecutor implements StageExecutor {
 		runId: string;
 		stage: string;
 		attempt: number;
-	}): Promise<string | { readonly kind: "pending" } | null> {
+	}): Promise<StageOutput | null> {
 		const key = `${input.runId}/${input.stage}-${input.attempt}`;
 
 		this.outputReads.push(key);
@@ -6621,6 +6622,119 @@ describe("held-out acceptance stage", () => {
 		assert.deepEqual(report.corrupt, []);
 	});
 
+	it("counts an acceptance store failure once", async () => {
+		const { github, executor, files, start } = world();
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "pass", usage: 7 };
+		files.artifacts.store = async () => ({
+			kind: "blocked",
+			reason: "acceptance_invalid",
+		});
+		const controller = start();
+		const report = await once(controller);
+		assert.equal(statuses(github, 14).at(-1), "5:failed");
+		assert.equal(report.totals.failures, 1);
+		assert.equal((await controller.tick()).totals.failures, 1);
+	});
+
+	for (const corrupt of [false, true]) {
+		it(`counts unmarked accept spend on claimed-marker reuse${corrupt ? " with an integrity failure" : ""}`, async () => {
+			const ctx = world();
+			const { github, executor, files, wire, clock } = ctx;
+			github.add(labeled(14));
+			executor.behaviors = [{ kind: "pass", usage: 10 }];
+			executor.acceptBehavior = { kind: "pass", usage: 7 };
+			wire.intercept = async (command, args) => {
+				const body = args.find((a) => a.startsWith("body="))?.slice(5) ?? "";
+				const parsed = parseMarker(body);
+
+				return (parsed.kind === "marker" &&
+					parsed.marker.stage === "accept" &&
+					parsed.marker.status === "running") ||
+					body.includes("<!-- factory-acceptance ")
+					? httpError(403)
+					: github.exec(command, args);
+			};
+
+			const first = ctx.start();
+			await once(first);
+			await first.tick();
+			assert.equal(statuses(github, 14).at(-1), "3:claimed");
+			const bound = await files.readContract(runOf(14));
+
+			if (bound.kind !== "found") throw new Error("no contract");
+			assert.equal(
+				(await files.artifacts.read(runOf(14), bound.contract, bound.digest))
+					.kind,
+				"found",
+			);
+			executor.spentBy.set("accept-1", 7);
+
+			if (corrupt)
+				files.artifacts.read = async () => ({
+					kind: "blocked",
+					reason: "acceptance_changed",
+				});
+			wire.intercept = null;
+			clock.t += 60_000;
+			const controller = ctx.start();
+			const report = await once(controller);
+			const terminal = parseMarker(github.markers(14).at(-1) ?? "");
+			assert.equal(terminal.kind, "marker");
+
+			if (terminal.kind !== "marker") throw new Error("no marker");
+			assert.equal(terminal.marker.status, corrupt ? "failed" : "stage_passed");
+			assert.equal(terminal.marker.usage, 17);
+			assert.equal(report.totals.usage, 7);
+			assert.equal(report.totals.failures, corrupt ? 1 : 0);
+			assert.equal((await controller.tick()).totals.usage, 7);
+			assert.equal(executor.launches.length, 2);
+		});
+	}
+
+	it("recovers model identity from passed output before storing the suite", async () => {
+		const ctx = world();
+		const { github, executor, files, clock } = ctx;
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "pass", usage: 7 };
+		const store = files.artifacts.store;
+		files.artifacts.store = async () => {
+			throw new Error("crash before store");
+		};
+
+		await assert.rejects(once(ctx.start()), /crash before store/);
+		files.artifacts.store = store;
+		assert.equal(statuses(github, 14).at(-1), "4:running");
+		executor.spentBy.set("accept-1", 7);
+		executor.output = async () => ({
+			kind: "output",
+			text: ACCEPTANCE_TEXT,
+			model: "openai/recorded-model",
+			observed: "recorded-observation",
+		});
+		clock.t += 60_000;
+		const report = await ctx.start().tick();
+		const bound = await files.readContract(runOf(14));
+
+		if (bound.kind !== "found") throw new Error("no contract");
+
+		const stored = await files.artifacts.read(
+			runOf(14),
+			bound.contract,
+			bound.digest,
+		);
+
+		assert.equal(stored.kind, "found");
+
+		if (stored.kind !== "found") throw new Error("no suite");
+		assert.equal(stored.receipt.model, "openai/recorded-model");
+		assert.equal(stored.receipt.observed, "recorded-observation");
+		assert.equal(report.totals.usage, 7);
+		assert.equal(executor.launches.length, 2);
+	});
+
 	for (const output of [
 		"",
 		"{}",
@@ -6717,6 +6831,8 @@ describe("held-out acceptance stage", () => {
 			);
 			assert.equal(keyed(github, 14, "acceptance").length, corrupt ? 0 : 1);
 			assert.deepEqual(report.corrupt, []);
+
+			assert.equal(report.totals.failures, corrupt ? 1 : 0);
 
 			if (corrupt)
 				assert.ok(ctx.logs.some((e) => e.fields.why === "acceptance_changed"));

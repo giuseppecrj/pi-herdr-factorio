@@ -1,21 +1,21 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { createHash, randomBytes } from "node:crypto";
+import { lstatSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { fileRunFiles } from "../../../server/controller.ts";
-import { agentDirFrom, gitState, locateBundle, SANDBOX_ROOT } from "../../../server/sandbox.ts";
-import { bwrapArgv } from "../../../server/sandbox/bwrap.ts";
+import { launchSandbox, locateBundle, SANDBOX_ROOT } from "../../../server/sandbox.ts";
 import { startGatewayProcess } from "../../../server/sandbox/gateway-client.ts";
 import { builtinTable } from "../../../server/sandbox/routes.ts";
-import { DEFAULT_SCOPE_LIMITS, scopeArgv, scopeOwner, scopeUnit, spawnScoped, stopScopeArgv } from "../../../server/sandbox/scope.ts";
-import { detectArch, seccompProgram } from "../../../server/sandbox/seccomp.ts";
+import { stopScopeArgv } from "../../../server/sandbox/scope.ts";
+import { detectArch } from "../../../server/sandbox/seccomp.ts";
 import { isDigest } from "../../../src/run.ts";
 
-const [stateDir, runId] = process.argv.slice(2);
+const [stateArg, runId] = process.argv.slice(2);
 
-assert.ok(stateDir && runId && isDigest(runId), "usage: probe.ts <lane-state-dir> <run-id>");
+assert.ok(stateArg && runId && isDigest(runId), "usage: probe.ts <lane-state-dir> <run-id>");
 
+const stateDir = resolve(stateArg);
 const files = fileRunFiles(stateDir);
 const bound = await files.readContract(runId);
 
@@ -31,21 +31,50 @@ const arch = detectArch(process.arch);
 
 assert.ok(bundle && arch);
 
-const workspace = files.workspacePath(runId);
-const git = gitState(workspace);
+const tools = ["read", "grep", "ls", "bash", "write", "edit"];
+const hash = (text: string) => createHash("sha256").update(text).digest("hex");
+const privatePaths = [`acceptance/${runId}`, `acceptance/${runId}.json`, `contracts/${runId}`];
+const privateTexts = suite.suite.files.flatMap((file) => [file.content, file.path]);
+const fingerprints = new Set(suite.suite.files.flatMap((file) => [hash(file.content), hash(`${file.content}\n`)]));
+let rawOutputs = 0;
 
-assert.notEqual(git, "unsafe");
+const inventory = (relative: string, accept: boolean) => {
+	privatePaths.push(relative);
+	const path = join(stateDir, relative);
+	const stat = lstatSync(path);
 
-const stageDir = join(stateDir, "stages", runId, "build-probe");
+	if (stat.isDirectory()) {
+		for (const name of readdirSync(path)) inventory(`${relative}/${name}`, accept);
+	} else if (stat.isFile()) {
+		if (accept && relative.endsWith("/output.txt")) {
+			const raw = readFileSync(path, "utf8");
+			assert.ok(raw.length > 0, "empty private output");
+			fingerprints.add(hash(raw));
+			privateTexts.push(raw);
+			rawOutputs++;
+		}
+	} else throw new Error("non-regular private stage record");
+};
+
+for (const name of readdirSync(join(stateDir, "stages", runId))) {
+	if (/^(?:accept|specify)-[0-9]+(?:\.[0-9]+)?$/.test(name))
+		inventory(`stages/${runId}/${name}`, name.startsWith("accept-"));
+}
+
+assert.ok(rawOutputs > 0, "no private accept output to fingerprint");
+
+const input = {
+	runId,
+	privatePaths,
+	fingerprints: { files: [...fingerprints], paths: suite.suite.files.map((file) => hash(file.path)) },
+};
+
+const stageDir = join(stateDir, "stages", runId, `build-probe-${randomBytes(4).toString("hex")}`);
 const gatewayDir = join(stateDir, "gw", randomBytes(4).toString("hex"));
 
 mkdirSync(stageDir, { recursive: true, mode: 0o700 });
 
 mkdirSync(join(stateDir, "gw"), { recursive: true, mode: 0o700 });
-
-const agentDir = join(stageDir, "agent-0");
-
-agentDirFrom(join(bundle.dir, "pi-agent"), agentDir);
 
 const gateway = await startGatewayProcess({
 	gatewayDir,
@@ -56,68 +85,116 @@ const gateway = await startGatewayProcess({
 
 if (!gateway.ok) throw new Error(`gateway ${gateway.reason}`);
 
-const tools = ["read", "grep", "ls", "bash", "write", "edit"];
-
 const source = String.raw`
-import { existsSync, readFileSync, readdirSync, lstatSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, lstatSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import http from 'node:http';
+const input = JSON.parse(readFileSync(0, 'utf8'));
 const out = {};
-const readable = path => { try { readFileSync(path); return true; } catch { return false; } };
-const cmd = readFileSync('/proc/1/cmdline', 'utf8').split('\0');
+const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+const readText = path => { try { return readFileSync(path, 'utf8'); } catch { return ''; } };
+const directory = path => { try { return lstatSync(path).isDirectory(); } catch { return false; } };
+const entries = path => { try { return readdirSync(path); } catch { return null; } };
+const cmd = readText('/proc/1/cmdline').split('\0');
 const hostWorkspace = cmd.find(p => /\/workspaces\/[a-f0-9]{64}$/.test(p)) ?? null;
 out.hostWorkspaceVisibleInCmdline = hostWorkspace !== null;
-const [state, id] = hostWorkspace === null ? ['/nonexistent', 'x'] : hostWorkspace.split('/workspaces/');
-const hostPaths = [state+'/acceptance/'+id+'/canary.txt', state+'/acceptance/'+id+'/suite.json', state+'/acceptance/'+id+'.json', state+'/stages/'+id+'/accept-1/output.txt', state+'/stages/'+id+'/accept-1/agent-0/sessions', state+'/stages/'+id+'/specify-1/draft/output.txt', state+'/contracts/'+id+'/contract.json', '/workspace/../acceptance/'+id+'/canary.txt'];
-out.privatePathsReadable = hostPaths.filter(readable).length;
-out.acceptanceMounted = readFileSync('/proc/self/mountinfo', 'utf8').split('\n').some(l => l.includes('/acceptance') || l.includes('/stages/'+id+'/accept') || l.includes('/stages/'+id+'/specify'));
-out.gitEntries = existsSync('/workspace/.git') ? readdirSync('/workspace/.git').length : 0;
-out.ownSessions = readdirSync('/run/pi-agent/sessions').length;
-const mounts = readFileSync('/proc/self/mountinfo', 'utf8').split('\n').map(l => l.split(' ')).filter(f => f.length > 8).map(f => ({ at: f[4], type: f[f.indexOf('-') + 1] }));
+const [state, id] = hostWorkspace === null ? [null, null] : hostWorkspace.split('/workspaces/');
+out.discovery = state !== null && id === input.runId;
+const mountsText = readText('/proc/self/mountinfo');
+const mounts = mountsText.split('\n').map(l => l.split(' ')).filter(f => f.length > 8).map(f => ({ at: f[4], type: f[f.indexOf('-') + 1] }));
+out.acceptanceMounted = mountsText.includes('/acceptance') || (out.discovery && input.privatePaths.filter(p => p.startsWith('stages/')).some(p => mountsText.includes('/'+p)));
+let privateReads = 0;
+const privateVisited = new Set();
+const reach = path => {
+ try {
+  const stat = statSync(path);
+  const key = stat.dev+':'+stat.ino;
+  if (privateVisited.has(key)) return;
+  if (stat.isDirectory()) { const names = readdirSync(path); privateVisited.add(key); privateReads++; for (const name of names) reach(path+'/'+name); }
+  else if (stat.isFile()) { readFileSync(path); privateVisited.add(key); privateReads++; }
+ } catch {}
+};
+if (out.discovery) for (const path of input.privatePaths) reach(state+'/'+path);
+out.privatePathsReadable = privateReads;
+out.privatePathsTried = input.privatePaths.length;
+const roots = ['/workspace', '/run', '/home', '/tmp', '/opt/factory', '/etc'];
+out.requiredRoots = [...roots, '/workspace/.git', '/run/pi-agent/sessions'].every(directory);
+out.gitEntries = entries('/workspace/.git')?.length ?? null;
+out.ownSessions = entries('/run/pi-agent/sessions')?.length ?? null;
+out.gitTmpfs = mounts.some(m => m.at === '/workspace/.git' && m.type === 'tmpfs');
 out.freshTmpfs = ['/home', '/tmp', '/run'].every(at => mounts.some(m => m.at === at && m.type === 'tmpfs'));
-const walk = (path, acc) => { let names; try { names = readdirSync(path); } catch { return acc; } for (const name of names) { const file = path + '/' + name; acc.push(file); try { if (lstatSync(file).isDirectory()) walk(file, acc); } catch {} } return acc; };
-out.homeEntries = walk('/home/agent', []);
 out.cachePaths = ['/home/agent/.cache', '/home/agent/.npm', '/home/agent/.pi', '/run/credentials', '/run/user', '/root'].filter(p => existsSync(p));
 out.envLeaks = ['SSH_AUTH_SOCK', 'GH_TOKEN', 'GITHUB_TOKEN', 'OPENAI_API_KEY', 'NODE_OPTIONS', 'XDG_RUNTIME_DIR_HOST'].filter(k => process.env[k] !== undefined);
 out.tools = process.env.FACTORY_PI_TOOLS;
 const pattern = /factory-holdout-[0-9a-f]{64}/;
-let scanned = 0; let hits = [];
-const scan = path => { let names; try { names = readdirSync(path); } catch { return; } for (const name of names) { const file = path === '/' ? '/'+name : path+'/'+name; let stat; try { stat = lstatSync(file); } catch { continue; } if (stat.isDirectory()) scan(file); else if (stat.isFile() && stat.size < 4*1024*1024) { scanned++; try { if (pattern.test(readFileSync(file, 'latin1'))) hits.push(file); } catch {} } } };
-for (const root of ['/workspace', '/run', '/home', '/tmp', '/opt/factory', '/etc']) scan(root);
-out.filesScanned = scanned; out.canaryHits = hits;
-out.githubGateway = await new Promise(done => { const req = http.get('http://127.0.0.1:18080/github/repos/giuseppecrj/pi-herdr-factorio', r => { r.resume(); r.on('end', () => done(r.statusCode)); }); req.on('error', e => done('error:'+e.code)); });
-out.githubDirect = await fetch('https://api.github.com', { signal: AbortSignal.timeout(1500) }).then(() => 'reachable', e => 'denied');
+const fileHashes = new Set(input.fingerprints.files);
+const pathHashes = new Set(input.fingerprints.paths);
+let scanned = 0; let canaryHits = 0; let fingerprintHits = 0; let pathHits = 0; let scanErrors = 0;
+const visited = new Set();
+const scan = path => {
+ try {
+  const stat = statSync(path);
+  const key = stat.dev+':'+stat.ino;
+  if (visited.has(key)) return;
+  visited.add(key);
+  if (stat.isDirectory()) { for (const name of readdirSync(path)) scan(path+'/'+name); }
+  else if (stat.isFile()) {
+   const bytes = readFileSync(path); scanned++;
+   const text = bytes.toString('utf8');
+   if (pattern.test(text)) canaryHits++;
+   if (fileHashes.has(hash(bytes))) fingerprintHits++;
+   for (const token of text.match(/[A-Za-z0-9_./-]+\.test\.(?:ts|js|mjs)/g) ?? []) {
+    const parts = token.split('/');
+    if (parts.some((_, i) => pathHashes.has(hash(parts.slice(i).join('/'))))) pathHits++;
+   }
+  }
+ } catch { scanErrors++; }
+};
+for (const root of roots) scan(root);
+out.filesScanned = scanned; out.canaryHits = canaryHits; out.fingerprintHits = fingerprintHits; out.pathHits = pathHits; out.scanErrors = scanErrors;
+out.complete = out.discovery && out.requiredRoots && out.gitTmpfs && scanErrors === 0 && scanned > 0;
+out.githubGateway = await new Promise(done => { const req = http.get('http://127.0.0.1:18080/github/repos/giuseppecrj/pi-herdr-factorio', r => { r.resume(); r.on('end', () => done(r.statusCode)); }); req.on('error', () => done(null)); req.setTimeout?.(3000, () => { req.destroy(); done(null); }); });
+out.githubDirect = await fetch('https://api.github.com', { signal: AbortSignal.timeout(1500) }).then(() => 'reachable', () => 'denied');
 console.log('PROBE ' + JSON.stringify(out));
 `;
 
-const unit = scopeUnit(scopeOwner(stateDir), runId, "build", 1, randomBytes(4).toString("hex"));
 const runtime = process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.()}`;
-const argv = scopeArgv(unit, DEFAULT_SCOPE_LIMITS, bwrapArgv({ bundleDir: bundle.dir, workspaceDir: workspace, workspaceHasGit: git === "dir", agentDir, socketPath: gateway.handle.socketPath, seccompFd: 10, tools, command: ["/opt/factory/node/bin/node", "--input-type=module", "--eval", source] }));
+let unit: string | null = null;
 let stdout = "";
 let stderr = "";
 
 try {
-	const child = spawnScoped({ argv, seccomp: seccompProgram(arch, { blockUnixSockets: false }), seccompFd: 10, xdgRuntimeDir: runtime });
-
-	child.stdout?.on("data", (chunk) => {
-		stdout += chunk;
+	const launched = launchSandbox({
+		stateDir, runId, stage: "build", attempt: 1,
+		bundleDir: bundle.dir, workspace: files.workspacePath(runId),
+		agentDir: join(stageDir, "agent-0"), socketPath: gateway.handle.socketPath,
+		arch, xdgRuntimeDir: runtime, tools,
+		command: ["/opt/factory/node/bin/node", "--input-type=module", "--eval", source],
 	});
-	child.stderr?.on("data", (chunk) => {
-		stderr += chunk;
-	});
-	child.stdin?.end();
 
-	const code = await new Promise<number | null>((done, reject) => {
-		child.on("exit", done);
+	assert.ok(launched, "unsafe workspace");
+	unit = launched.unit;
+	const child = launched.child;
+	child.stdout?.on("data", (chunk) => { stdout += chunk; });
+	child.stderr?.on("data", (chunk) => { stderr += chunk; });
+
+	const ended = new Promise<number | null>((done, reject) => {
+		child.on("close", done);
 		child.on("error", reject);
 	});
 
+	child.stdin?.on("error", () => {});
+	child.stdin?.end(JSON.stringify(input));
+	const code = await ended;
 	const line = stdout.split("\n").find((l) => l.startsWith("PROBE "));
 
-	assert.ok(line, `no probe output, exit ${code}, stderr ${stderr.length} bytes`);
-
+	if (!line) throw new Error(`inconclusive: no probe output, exit ${code}, stderr ${stderr.length} bytes`);
 	const seen = JSON.parse(line.slice(6));
+	const privateOutputLeak = privateTexts.some((text) => stdout.includes(text) || stderr.includes(text));
 
 	const pass =
+		code === 0 &&
+		seen.complete === true &&
 		seen.privatePathsReadable === 0 &&
 		seen.acceptanceMounted === false &&
 		seen.gitEntries === 0 &&
@@ -126,21 +203,26 @@ try {
 		seen.freshTmpfs === true &&
 		seen.envLeaks.length === 0 &&
 		seen.tools === tools.join(",") &&
-		seen.canaryHits.length === 0 &&
+		seen.canaryHits === 0 &&
+		seen.fingerprintHits === 0 &&
+		seen.pathHits === 0 &&
 		seen.githubGateway === 403 &&
 		seen.githubDirect === "denied" &&
+		!privateOutputLeak &&
 		!stdout.includes(canary) &&
 		!stderr.includes(canary);
 
-	console.log(JSON.stringify({ ...seen, bundle: bundle.digest, runId, acceptanceDigest: suite.receipt.acceptanceDigest, modelRequests: 0, exit: code, result: pass ? "PASS" : "FAIL" }, null, 2));
+	console.log(JSON.stringify({ ...seen, bundle: bundle.digest, runId, acceptanceDigest: suite.receipt.acceptanceDigest, modelRequests: 0, exit: code, result: pass ? "PASS" : seen.complete && code === 0 ? "FAIL" : "INCONCLUSIVE" }, null, 2));
 	process.exitCode = pass ? 0 : 1;
 } finally {
-	const [command, ...args] = stopScopeArgv(unit);
+	if (unit !== null) {
+		const [command, ...args] = stopScopeArgv(unit);
 
-	try {
-		execFileSync(command ?? "systemctl", args, { env: { ...process.env, XDG_RUNTIME_DIR: runtime }, stdio: "ignore" });
-	} catch (error) {
-		console.error(`scope stop: ${error instanceof Error ? error.message : String(error)}`);
+		try {
+			execFileSync(command ?? "systemctl", args, { env: { ...process.env, XDG_RUNTIME_DIR: runtime }, stdio: "ignore" });
+		} catch {
+			console.error("scope stop returned nonzero; verify no scope remains");
+		}
 	}
 
 	await gateway.handle.shutdown();

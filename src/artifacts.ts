@@ -1,6 +1,5 @@
 import { randomBytes } from "node:crypto";
 import {
-	existsSync,
 	lstatSync,
 	mkdirSync,
 	readFileSync,
@@ -14,6 +13,7 @@ import { dirname, join, resolve } from "node:path";
 import {
 	ACCEPTANCE_ISOLATION,
 	ACCEPTANCE_MAX_BYTES,
+	ACCEPTANCE_STORED_MAX_BYTES,
 	CANARY,
 	acceptanceDigestOf,
 	acceptanceEntries,
@@ -98,11 +98,41 @@ export interface ArtifactStore {
 	}): Promise<AcceptanceRead>;
 }
 
+function checkPrivateDir(path: string): void {
+	const stat = lstatSync(path);
+
+	if (!stat.isDirectory() || (stat.mode & 0o077) !== 0)
+		throw new Error("unsafe private directory");
+}
+
 function privateDir(path: string): void {
 	mkdirSync(path, { recursive: true, mode: 0o700 });
+	checkPrivateDir(path);
+}
 
-	if (!lstatSync(path).isDirectory() || (lstatSync(path).mode & 0o077) !== 0)
-		throw new Error("unsafe private directory");
+function missing(error: NodeJS.ErrnoException): boolean {
+	return error.code === "ENOENT";
+}
+
+function present(path: string): boolean {
+	try {
+		lstatSync(path);
+
+		return true;
+	} catch (error) {
+		if (error instanceof Error && missing(error)) return false;
+		throw error;
+	}
+}
+
+function regenerationGuard(root: string, runId: Digest): string {
+	return join(root, `${runId}.json`);
+}
+
+function acceptanceEntryCap(path: string): number {
+	return path === "suite.json"
+		? ACCEPTANCE_STORED_MAX_BYTES
+		: ACCEPTANCE_MAX_BYTES;
 }
 
 function regularText(path: string, cap = ACCEPTANCE_MAX_BYTES): string {
@@ -269,13 +299,22 @@ export function readStoredContract(
 	const root = join(stateDir, "contracts", runId);
 
 	try {
+		checkPrivateDir(join(stateDir, "contracts"));
+		checkPrivateDir(root);
+
 		return parseStoredContract(
 			regularText(join(root, "contract.json")),
 			regularText(join(root, "receipt.json")),
 			runId,
 		);
-	} catch {
-		return { kind: "blocked", reason: "contract_missing" };
+	} catch (error) {
+		return {
+			kind: "blocked",
+			reason:
+				error instanceof Error && missing(error)
+					? "contract_missing"
+					: "contract_invalid",
+		};
 	}
 }
 
@@ -285,15 +324,22 @@ export function fileArtifacts(stateDir: string): ArtifactStore {
 	const read: ArtifactStore["read"] = async (runId, contract, digest) => {
 		const dir = join(root, runId);
 
-		if (!existsSync(dir))
-			return existsSync(join(root, `${runId}.json`))
-				? { kind: "blocked", reason: "acceptance_missing" }
-				: { kind: "absent" };
-
 		try {
+			if (present(root)) checkPrivateDir(root);
+
+			if (!present(dir)) {
+				const guard = regenerationGuard(root, runId);
+
+				if (!present(guard)) return { kind: "absent" };
+				regularText(guard);
+
+				return { kind: "blocked", reason: "acceptance_missing" };
+			}
+
+			checkPrivateDir(dir);
 			const receiptText = regularText(join(dir, "receipt.json"));
 
-			if (regularText(join(root, `${runId}.json`)) !== receiptText)
+			if (regularText(regenerationGuard(root, runId)) !== receiptText)
 				return { kind: "blocked", reason: "acceptance_changed" };
 			const record = objectOf(parseJson(receiptText));
 
@@ -317,7 +363,12 @@ export function fileArtifacts(stateDir: string): ArtifactStore {
 			)
 				return { kind: "blocked", reason: "acceptance_invalid" };
 			const canary = regularText(join(dir, "canary.txt")).trimEnd();
-			const stored = objectOf(parseJson(regularText(join(dir, "suite.json"))));
+
+			const stored = objectOf(
+				parseJson(
+					regularText(join(dir, "suite.json"), ACCEPTANCE_STORED_MAX_BYTES),
+				),
+			);
 
 			if (
 				!CANARY.test(canary) ||
@@ -333,7 +384,7 @@ export function fileArtifacts(stateDir: string): ArtifactStore {
 			const entries = acceptanceEntries(parsed.suite, canary);
 
 			for (const [path, bytes] of entries) {
-				if (regularText(join(dir, path)) !== bytes)
+				if (regularText(join(dir, path), acceptanceEntryCap(path)) !== bytes)
 					return { kind: "blocked", reason: "acceptance_changed" };
 			}
 
@@ -343,14 +394,20 @@ export function fileArtifacts(stateDir: string): ArtifactStore {
 				...entries.map(([path]) => path),
 			]);
 
-			const walk = (base: string): boolean =>
-				readdirSync(join(dir, base), { withFileTypes: true }).every((entry) => {
-					const path = base === "" ? entry.name : `${base}/${entry.name}`;
+			const walk = (base: string): boolean => {
+				checkPrivateDir(join(dir, base));
 
-					return entry.isDirectory()
-						? [...expected].some((p) => p.startsWith(`${path}/`)) && walk(path)
-						: entry.isFile() && expected.has(path);
-				});
+				return readdirSync(join(dir, base), { withFileTypes: true }).every(
+					(entry) => {
+						const path = base === "" ? entry.name : `${base}/${entry.name}`;
+
+						return entry.isDirectory()
+							? [...expected].some((p) => p.startsWith(`${path}/`)) &&
+									walk(path)
+							: entry.isFile() && expected.has(path);
+					},
+				);
+			};
 
 			if (
 				!walk("") ||
@@ -373,8 +430,14 @@ export function fileArtifacts(stateDir: string): ArtifactStore {
 					isolation: ACCEPTANCE_ISOLATION,
 				},
 			};
-		} catch {
-			return { kind: "blocked", reason: "acceptance_missing" };
+		} catch (error) {
+			return {
+				kind: "blocked",
+				reason:
+					error instanceof Error && missing(error)
+						? "acceptance_missing"
+						: "acceptance_invalid",
+			};
 		}
 	};
 
@@ -391,11 +454,20 @@ export function fileArtifacts(stateDir: string): ArtifactStore {
 				return { kind: "blocked", reason: "acceptance_invalid" };
 			const dir = join(root, contract.runId);
 			const canary = `factory-holdout-${randomBytes(32).toString("hex")}`;
+			const entries = acceptanceEntries(validated.suite, canary);
+
+			if (
+				entries.some(
+					([path, bytes]) =>
+						Buffer.byteLength(bytes) > acceptanceEntryCap(path),
+				)
+			)
+				return { kind: "blocked", reason: "acceptance_invalid" };
 
 			const receipt: AcceptanceReceipt = {
 				version: 1,
 				runId: contract.runId,
-				acceptanceDigest: acceptanceDigestOf(suite, canary),
+				acceptanceDigest: acceptanceDigestOf(validated.suite, canary),
 				contractDigest,
 				baseSha: contract.base.sha,
 				model,
@@ -407,14 +479,19 @@ export function fileArtifacts(stateDir: string): ArtifactStore {
 			try {
 				privateDir(root);
 				const receiptText = `${JSON.stringify(receipt, null, "\t")}\n`;
-				exclusive(join(root, `${contract.runId}.json`), receiptText);
+				exclusive(regenerationGuard(root, contract.runId), receiptText);
 				mkdirSync(dir, { mode: 0o700 });
 				exclusive(join(dir, "receipt.json"), receiptText);
 
-				for (const [path, bytes] of acceptanceEntries(suite, canary))
-					exclusive(join(dir, path), bytes);
-			} catch {
-				return { kind: "blocked", reason: "acceptance_missing" };
+				for (const [path, bytes] of entries) exclusive(join(dir, path), bytes);
+			} catch (error) {
+				return {
+					kind: "blocked",
+					reason:
+						error instanceof Error && missing(error)
+							? "acceptance_missing"
+							: "acceptance_invalid",
+				};
 			}
 
 			return read(contract.runId, contract, contractDigest);
