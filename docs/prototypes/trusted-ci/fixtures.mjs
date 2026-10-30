@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parse, stringify } from "yaml";
+import { receiptPasses } from "../../../server/gates.ts";
 
 const repository = process.cwd();
 const [mode, gateSha, trailArg, ...flags] = process.argv.slice(2);
@@ -49,12 +50,34 @@ if (mode === "generate") {
 		{ name: "skip", expected: "failed", files: { "test/gate-new.test.ts": `${testHead}\ntest.skip("skip", () => {});\n` } },
 		{ name: "todo", expected: "failed", files: { "test/gate-new.test.ts": `${testHead}\ntest.todo("todo");\n` } },
 		{ name: "only", expected: "failed", files: { "test/gate-new.test.ts": `${testHead}\ntest.only("only", () => {});\n` } },
-		{ name: "npmrc", expected: "incomplete", files: { ".npmrc": "registry=https://evil.invalid\n" } },
-		{ name: "git-dependency", expected: "incomplete", files: { "package.json": JSON.stringify({ ...manifest, dependencies: { ...manifest.dependencies, "f07b-git": "git+https://github.com/example/repo.git" } }, null, 2) + "\n" } },
+		{ name: "npmrc", expected: "failed", files: { ".npmrc": "registry=https://evil.invalid\n" } },
+		{ name: "git-dependency", expected: "failed", files: { "package.json": JSON.stringify({ ...manifest, dependencies: { ...manifest.dependencies, "f07b-git": "git+https://github.com/example/repo.git" } }, null, 2) + "\n" } },
 		{ name: "named-replacement", expected: "passed", replacements: replaced, files: { "src/specify.ts": behavior, "test/specify.test.ts": changedTest, "test/orchestrator.test.ts": changedOrchestrator } },
 		{ name: "unnamed-replacement", expected: "failed", files: { "src/specify.ts": behavior, "test/specify.test.ts": changedTest, "test/orchestrator.test.ts": changedOrchestrator } },
 		{ name: "new-test-fails", expected: "failed", files: { "test/gate-new.cases.ts": `${testHead}\ntest("failing new test", () => assert.fail("new failure"));\n` } },
 	];
+
+	cases.push(
+		{name:"lint-ignore",expected:"failed",files:{"src/gate-lint.ts":'export const gateBad = (value: string | null) => value as string;\n',"src/.gitignore":"gate-lint.ts\n"}},
+		{name:"stream-forgery",expected:"failed",seed:true},
+		{name:"serializer-forgery",expected:"failed",seed:true},
+		{name:"forgery-control",expected:"failed",files:{"src/markers.ts":bad}},
+		{name:"suppression-types",expected:"failed",files:{"src/gate-types.ts":"// @ts-nocheck\nexport const bad: string = 1;\n"}},
+		{name:"suppression-lint",expected:"failed",files:{"src/gate-lint.ts":"/* oxlint-disable */\nexport const gateBad = (value: string | null) => value as string;\n"}},
+		{name:"suppression-format",expected:"failed",files:{"src/gate-format.ts":"// biome-ignore-all format: fixture\nexport function gateValue() {\n  return 1;\n}\n"}},
+		{name:"deleted-replacement",expected:"failed",replacements:[{path:"test/specify.test.ts",reason:"behavior change"}],files:{"test/specify.test.ts":null}},
+	);
+	const heldoutPath="test/acceptance/123/checks/scenario.test.ts";
+
+	for (const [name,body] of [["heldout-pass",'assert.equal(1, 1);'],["heldout-fail",'assert.equal(1, 2, "PRIVATE-ASSERTION");'],["heldout-digest",'assert.equal(1, 1);'],["heldout-missing-result",'assert.equal(1, 1);']]) {
+		const text=`import assert from 'node:assert/strict';\nimport {test} from 'node:test';\nconst n: number = 'not a number';\ntest('PRIVATE-TITLE', () => {\n  ${body}\n});\n`;
+		const heldout_digest=name==="heldout-digest" ? "0".repeat(64) : digest([[heldoutPath,createHash("sha256").update(text).digest("hex")]]);
+		cases.push({name,expected:name==="heldout-fail" || name==="heldout-digest" ? "failed":"passed",heldout_dir:"test/acceptance/123",heldout_digest,files:{[heldoutPath]:text}});
+	}
+
+	const swapped=json(original("package-lock.json"));
+	swapped.packages["node_modules/@types/retry"].resolved="https://registry.npmjs.org/is-odd/-/is-odd-3.0.1.tgz";
+	cases.push({name:"package-swap",expected:"failed",files:{"package-lock.json":JSON.stringify(swapped,null,2)+"\n"}});
 
 	const temp = mkdtempSync(join(tmpdir(), "gate-dep-fixture-"));
 
@@ -63,9 +86,14 @@ if (mode === "generate") {
 		writeFileSync(join(temp,"package-lock.json"), original("package-lock.json"));
 		execFileSync("npm", ["install","--package-lock-only","--ignore-scripts","--no-audit","--no-fund","--save-exact","is-number@7.0.0"], {cwd:temp,stdio:"pipe"});
 		cases.push({name:"registry-dependency",expected:"passed",files:{"package.json":readFileSync(join(temp,"package.json"),"utf8"),"package-lock.json":readFileSync(join(temp,"package-lock.json"),"utf8")}});
+		writeFileSync(join(temp,"package.json"),original("package.json"));
+		writeFileSync(join(temp,"package-lock.json"),original("package-lock.json"));
+		execFileSync("npm", ["install","--package-lock-only","--ignore-scripts","--no-audit","--no-fund","--save-exact","glob@10.4.5"], {cwd:temp,stdio:"pipe"});
+		cases.push({name:"glob-dependency",expected:"passed",files:{"package.json":readFileSync(join(temp,"package.json"),"utf8"),"package-lock.json":readFileSync(join(temp,"package-lock.json"),"utf8")}});
 	} finally { rmSync(temp,{recursive:true,force:true}); }
 
 	for (const fixture of cases) {
+		if(fixture.seed) continue;
 		const temp = mkdtempSync(join(tmpdir(), "gate-patch-"));
 
 		try {
@@ -87,7 +115,7 @@ if (mode === "generate") {
 		} finally {rmSync(temp,{recursive:true,force:true});}
 	}
 
-	writeFileSync(join(fixtures,"cases.json"),JSON.stringify(cases.map(({name,expected,replacements=[]})=>({name,expected,replacements})),null,2)+"\n");
+	writeFileSync(join(fixtures,"cases.json"),JSON.stringify(cases.map(({name,expected,replacements=[],heldout_dir="",heldout_digest=""})=>({name,expected,replacements,heldout_dir,heldout_digest})),null,"\t")+"\n");
 } else if (mode === "prepare") {
 	const cases=json(readFileSync(join(fixtures,"cases.json"),"utf8"));
 	const output=[];
@@ -101,7 +129,7 @@ if (mode === "generate") {
 			git(["apply","--cached","--unidiff-zero",join(fixtures,`${fixture.name}.patch`)],{env});
 			const tree=git(["write-tree"],{env});
 			const sha=git(["commit-tree",tree,"-p",gateSha,"-m",`F07b fixture ${fixture.name}`]);
-			const branch=`fixture/f07b-${fixture.name}-${gateSha.slice(0,7)}`;
+			const branch=`fixture/f07b-fix1-${fixture.name}-${gateSha.slice(0,7)}`;
 
 			if(flags.includes("--publish")) git(["push","origin",`${sha}:refs/heads/${branch}`]);
 			output.push({...fixture,gateSha,candidateSha:sha,branch,replacementsDigest:digest(fixture.replacements)});
@@ -115,10 +143,18 @@ if (mode === "generate") {
 
 	for(const fixture of cases) {
 		const output=join(trail,"local",fixture.name);mkdirSync(output,{recursive:true});
-		const result=spawnSync(process.execPath,["--experimental-strip-types","server/cli.ts","gates","--repository",repository,"--gate-sha",fixture.gateSha,"--candidate-sha",fixture.candidateSha,"--nonce",`local-${fixture.name}`,"--output",output,"--runner","local","--replacements",JSON.stringify(fixture.replacements),"--replacements-digest",fixture.replacementsDigest],{cwd:repository,encoding:"utf8",timeout:1200000,maxBuffer:16*1024*1024});
+		const result=spawnSync(process.execPath,["--experimental-strip-types","server/cli.ts","gates","--repository",repository,"--gate-sha",fixture.gateSha,"--candidate-sha",fixture.candidateSha,"--nonce",`local-${fixture.name}`,"--output",output,"--runner","local","--replacements",JSON.stringify(fixture.replacements),"--replacements-digest",fixture.replacementsDigest,"--heldout-dir",fixture.heldout_dir ?? "","--heldout-digest",fixture.heldout_digest ?? ""],{cwd:repository,encoding:"utf8",timeout:1200000,maxBuffer:16*1024*1024});
 		writeFileSync(join(output,"cli.log"),result.stdout+result.stderr);
 		const receipt=json(readFileSync(join(output,"receipt.json"),"utf8"));
-		const pass=receipt.status===fixture.expected && (fixture.name!=="registry-dependency" || receipt.newDependency===true);
+
+		if(fixture.name==="heldout-missing-result") {
+			const partial={...receipt,checks:receipt.checks.filter(c=>c.name!=="heldout")};
+
+			if(receiptPasses(partial)) throw new Error("Missing heldout accepted");
+			writeFileSync(join(output,"missing-result.json"),JSON.stringify(partial,null,2)+"\n");
+		}
+
+		const pass=receipt.status===fixture.expected && (!['registry-dependency','glob-dependency'].includes(fixture.name) || receipt.newDependency===true);
 		console.log(fixture.name, receipt.status, pass?"PASS":"FAIL",receipt.wallMs);
 		summary.push({name:fixture.name,expected:fixture.expected,status:receipt.status,pass,wallMs:receipt.wallMs});
 	}
@@ -141,7 +177,7 @@ if (mode === "generate") {
 		kind="delta";
 	}
 
-	const branch=`proto/f07b-${kind}-${gateSha.slice(0,7)}`;
+	const branch=`proto/f07b-fix1-${kind}-${gateSha.slice(0,7)}`;
 	const workflow=parse(readFileSync(".github/workflows/ci.yml","utf8"));
 	workflow.name="F07b fixture proof";
 	workflow["run-name"]=`F07b fixtures ${gateSha}`;
@@ -149,7 +185,7 @@ if (mode === "generate") {
 	const job=workflow.jobs.gates;
 	job.if="${{ github.ref == 'refs/heads/"+branch+"' }}";
 	job.name="gates (${{ matrix.case }})";
-	job.strategy={"fail-fast":false,"max-parallel":8,matrix:{include:cases.map(f=>({case:f.name,expected:f.expected,candidate_sha:f.candidateSha,gate_sha:gateSha,nonce:`hosted-${f.name}`,replacements:JSON.stringify(f.replacements),replacements_digest:f.replacementsDigest}))}};
+	job.strategy={"fail-fast":false,"max-parallel":8,matrix:{include:cases.map(f=>({case:f.name,expected:f.expected,candidate_sha:f.candidateSha,gate_sha:gateSha,nonce:`hosted-${f.name}`,replacements:JSON.stringify(f.replacements),replacements_digest:f.replacementsDigest,heldout_dir:f.heldout_dir ?? "",heldout_digest:f.heldout_digest ?? ""}))}};
 	const convert=value=>Array.isArray(value)?value.map(convert):value instanceof Object?Object.fromEntries(Object.entries(value).map(([key,v])=>[key,convert(v)])):String(value).replaceAll("inputs.","matrix.").replaceAll("github.sha","matrix.gate_sha");
 	job.steps=job.steps.map(convert);
 	job.steps.at(-1).with.name="gate-receipt-${{ matrix.case }}";
@@ -157,7 +193,7 @@ if (mode === "generate") {
 	if (flags.includes("--expect")) {
 		const step=job.steps.find(s=>s.name==="Run trusted gates");
 		step.env.EXPECTED="${{ matrix.expected }}";
-		step.run='set +e\n'+step.run+'\ncode=$?\nRESULT_EXIT="$code" node --input-type=module <<\'NODE\'\nimport assert from "node:assert/strict";\nimport {readFileSync} from "node:fs";\nconst r=JSON.parse(readFileSync(process.env.RUNNER_TEMP+"/gate-results/receipt.json","utf8"));\nassert.equal(r.status,process.env.EXPECTED);\nassert.equal(r.gateSha,process.env.GATE_SHA);\nassert.equal(r.candidateSha,process.env.CANDIDATE_SHA);\nassert.equal(r.modelCalls,0);\nassert.equal(process.env.RESULT_EXIT,r.status==="passed"?"0":"1");\nassert.deepEqual(r.checks.map(c=>c.name),["install","baseline_tests","typecheck","lint","format","main_tests","candidate_tests"]);\nassert.ok(r.checks.every(c=>c.exitCode===(c.name==="candidate_tests" && r.status==="failed" ? 1 : 0)));\nconsole.log(JSON.stringify({asserted:true,status:r.status,gateSha:r.gateSha,candidateSha:r.candidateSha,checks:r.checks}));\nNODE\n';
+		step.run='set +e\n'+step.run+'\ncode=$?\nRESULT_EXIT="$code" node --input-type=module <<\'NODE\'\nimport assert from "node:assert/strict";\nimport {readFileSync} from "node:fs";\nconst r=JSON.parse(readFileSync(process.env.RUNNER_TEMP+"/gate-results/receipt.json","utf8"));\nassert.equal(r.status,process.env.EXPECTED);\nassert.equal(r.gateSha,process.env.GATE_SHA);\nassert.equal(r.candidateSha,process.env.CANDIDATE_SHA);\nassert.equal(r.modelCalls,0);\nassert.equal(process.env.RESULT_EXIT,r.status==="passed"?"0":"1");\nassert.equal(r.version,2);\nif(r.status==="passed") {\nassert.deepEqual(r.checks.map(c=>c.name),r.requiredChecks);\nassert.ok(r.checks.every(c=>c.exitCode===0));\n}\nconsole.log(JSON.stringify({asserted:true,status:r.status,gateSha:r.gateSha,candidateSha:r.candidateSha,checks:r.checks}));\nNODE\n';
 	}
 
 	if (perf) {
@@ -166,6 +202,19 @@ if (mode === "generate") {
 		step.run='baseline="$RUNNER_TEMP/benchmark-candidate"\nmkdir -p "$baseline"\ngit archive "$CANDIDATE_SHA" | tar -xf - -C "$baseline"\ncp -a node_modules "$baseline/node_modules"\nfor n in 1 2 3; do\nstart=$(date +%s%3N)\ndocker run --rm --network none --read-only --tmpfs /tmp:exec,size=1g --user 1001 --cap-drop ALL --security-opt no-new-privileges --mount "type=bind,src=$baseline,dst=/w,readonly" --workdir /w node@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617 env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp TMPDIR=/tmp CI=true LANG=C.UTF-8 npm run check > "$RUNNER_TEMP/trunk-check-$n.log" 2>&1\nend=$(date +%s%3N)\n'+gates+'\nprintf \'%s\\n\' "$((end-start))" > "$RUNNER_TEMP/gate-results/perf-$n/baseline-ms"\ndone\n';
 	} else {
 		job.steps.splice(3,0,{name:"Measure trunk check",run:"start=$(date +%s%3N)\nnpm run check > \"$RUNNER_TEMP/trunk-check.log\" 2>&1\nend=$(date +%s%3N)\nprintf '%s\\n' \"$((end-start))\" > \"$RUNNER_TEMP/baseline-ms\""});
+		job.steps.splice(-1,0,{name:"Reject a missing mandatory heldout result",if:"${{ always() && matrix.case == 'heldout-missing-result' }}",run:`node --experimental-strip-types --input-type=module <<'NODE'
+import assert from "node:assert/strict";
+import {readFileSync,writeFileSync} from "node:fs";
+import {receiptPasses} from "./server/gates.ts";
+const path=process.env.RUNNER_TEMP+"/gate-results/";
+const full=JSON.parse(readFileSync(path+"receipt.json","utf8"));
+assert.equal(full.status,"passed");
+assert.ok(full.requiredChecks.includes("heldout"));
+const partial={...full,checks:full.checks.filter(c=>c.name!=="heldout")};
+assert.equal(receiptPasses(partial),false);
+writeFileSync(path+"missing-result.json",JSON.stringify(partial,null,2)+"\\n");
+console.log("A receipt claiming passed but missing heldout is refused");
+NODE`});
 		job.steps.splice(-1,0,{name:"Save baseline timing",if:"${{ always() && !cancelled() }}",run:'test ! -d "$RUNNER_TEMP/gate-results" || cp "$RUNNER_TEMP/baseline-ms" "$RUNNER_TEMP/gate-results/baseline-ms"'});
 	}
 
@@ -186,7 +235,7 @@ if (mode === "generate") {
 	const scratch=json(readFileSync(join(trail,"scratch.json"),"utf8"));
 
 	for(const branch of [...cases.map(f=>f.branch),scratch.branch]) {
-		if(!/^(?:fixture|proto)\/f07b-/.test(branch)) throw new Error("unsafe cleanup");
+		if(!/^(?:fixture|proto)\/f07b-fix1-/.test(branch)) throw new Error("unsafe cleanup");
 		git(["push","origin",`:refs/heads/${branch}`]);
 	}
 } else throw new Error("Expected generate, prepare, local, scratch or cleanup");

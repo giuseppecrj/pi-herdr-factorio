@@ -17,9 +17,9 @@ index f9db317..0a1ff53 100644
 -		assert.match(prompt, /=== src\/b\.ts \(lines 1-\d+ of 101\) ===\n/);
 +		assert.match(prompt, /=== src\/b\.ts \(lines 1-\d+ of 100\) ===\n/);
 diff --git a/test/specify.test.ts b/test/specify.test.ts
-index 0e2472b..912794e 100644
+index 865df02..ba570e4 100644
 --- a/test/specify.test.ts
 +++ b/test/specify.test.ts
-@@ -719 +719 @@ describe("specify prompt", () => {
+@@ -735 +735 @@ describe("specify prompt", () => {
 -		assert.ok(prompt.includes("=== src/run.ts (lines 1-121 of 201) ===\n1\t"));
 +		assert.ok(prompt.includes("=== src/run.ts (lines 1-121 of 200) ===\n1\t"));

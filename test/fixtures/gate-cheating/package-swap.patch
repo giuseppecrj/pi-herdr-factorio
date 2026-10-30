@@ -1,0 +1,7 @@
+diff --git a/package-lock.json b/package-lock.json
+index 0935f19..e428c65 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1307 +1307 @@
+-      "resolved": "https://registry.npmjs.org/@types/retry/-/retry-0.12.0.tgz",
++      "resolved": "https://registry.npmjs.org/is-odd/-/is-odd-3.0.1.tgz",

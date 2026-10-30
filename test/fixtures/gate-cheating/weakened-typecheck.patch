@@ -6,10 +6,10 @@ index 6fbbc53..1961708 100644
 +
 +export const GATE_BAD: string = 1;
 diff --git a/tsconfig.json b/tsconfig.json
-index 5642da9..37fee61 100644
+index 5d96b69..37fee61 100644
 --- a/tsconfig.json
 +++ b/tsconfig.json
-@@ -1,21 +1 @@
+@@ -1,22 +1 @@
 -{
 -  "compilerOptions": {
 -    "target": "ES2023",
@@ -29,6 +29,7 @@ index 5642da9..37fee61 100644
 -    "noEmit": true,
 -    "skipLibCheck": true
 -  },
--  "include": ["src", "extension", "server", "test"]
+-  "include": ["src", "extension", "server", "test"],
+-  "exclude": ["test/acceptance/**"]
 -}
 +{"compilerOptions":{"noCheck":true},"include":[]}

@@ -1,0 +1,7 @@
+diff --git a/src/markers.ts b/src/markers.ts
+index 6fbbc53..ccc9b14 100644
+--- a/src/markers.ts
++++ b/src/markers.ts
+@@ -47 +47 @@ export function isTerminal(status: RunStatus): status is TerminalStatus {
+-		status === "needs_info"
++		status === "running"

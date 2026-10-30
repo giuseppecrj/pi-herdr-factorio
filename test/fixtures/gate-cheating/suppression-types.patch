@@ -1,0 +1,8 @@
+diff --git a/src/gate-types.ts b/src/gate-types.ts
+new file mode 100644
+index 0000000..303aec8
+--- /dev/null
++++ b/src/gate-types.ts
+@@ -0,0 +1,2 @@
++// @ts-nocheck
++export const bad: string = 1;
