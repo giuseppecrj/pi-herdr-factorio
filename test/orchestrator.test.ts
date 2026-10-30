@@ -172,6 +172,7 @@ function memoryFiles(): RunFiles & {
 	const contracts = new Map<string, { bytes: string; digest: string }>();
 	const questions = new Map<string, string>();
 	const links = new Map<string, Link>();
+	const unlinked = new Set<string>();
 	const answers = new Map<string, AnswersRecord>();
 	const unavailable = new Set<"contract" | "link">();
 
@@ -202,11 +203,19 @@ function memoryFiles(): RunFiles & {
 		async writeLink(runId, link) {
 			if (unavailable.has("link")) return false;
 
-			links.set(runId, link);
+			if (link === null) {
+				links.delete(runId);
+				unlinked.add(runId);
+			} else {
+				unlinked.delete(runId);
+				links.set(runId, link);
+			}
 
 			return true;
 		},
 		async readLink(runId) {
+			if (unlinked.has(runId)) return { kind: "unlinked" };
+
 			const link = links.get(runId);
 
 			return link === undefined ? { kind: "none" } : { kind: "found", link };
@@ -6812,6 +6821,122 @@ describe("specify: questions", () => {
 		});
 	}
 
+	it("starts a restarted new run at zero after the previous run exhausted label retries (T-CARRY)", async () => {
+		const ctx = world();
+		const write = writesWire(ctx.github, []);
+		const disk = fileRunFiles(stateDir());
+		ctx.files.writeClaim = disk.writeClaim;
+		ctx.files.listClaims = disk.listClaims;
+		const issue = ctx.github.add(labeled(14));
+		ctx.executor.outputs = [QUESTIONS_TEXT, CONTRACT_TEXT];
+		ctx.executor.behaviors = [
+			{ kind: "pass", usage: 3 },
+			{ kind: "pass", usage: 3 },
+		];
+		let rejectAdds = true;
+		ctx.wire.intercept = async (command, args) =>
+			rejectAdds &&
+			args.includes("POST") &&
+			args.some((arg) => arg.endsWith("/labels"))
+				? httpError(422, "denied")
+				: write(command, args);
+
+		await once(ctx.start());
+
+		for (let n = 0; n < 4; n++) {
+			ctx.clock.t += 60_000;
+			await once(ctx.start());
+		}
+
+		assert.equal(statuses(ctx.github, 14).at(-1), "3:failed");
+		assert.equal((await disk.listClaims())[0]?.labelFailures, 3);
+
+		rejectAdds = false;
+		ctx.github.now = "2026-10-29T03:00:00Z";
+		issue.timeline.push(
+			labelEvent({
+				id: EVENT_ID + 80,
+				at: "2026-10-29T02:59:59Z",
+				actor: "giuseppecrj",
+				event: "unlabeled",
+			}),
+			labelEvent({
+				id: EVENT_ID + 81,
+				at: ctx.github.now,
+				actor: "giuseppecrj",
+			}),
+		);
+		issue.updatedAt = ctx.github.now;
+		ctx.github.now = "2026-10-29T03:01:00Z";
+		ctx.clock.t += 31 * 60_000;
+		ctx.github.posts = ["landed_unanswered"];
+		ctx.executor.fallback = { kind: "unavailable" };
+		const behaviors = ctx.executor.behaviors;
+		ctx.executor.behaviors = [];
+		await once(ctx.start());
+		assert.equal(statuses(ctx.github, 14).at(-1), "4:claimed");
+
+		ctx.executor.behaviors = behaviors;
+		ctx.clock.t += 60_000;
+		const restarted = ctx.start();
+		await once(restarted);
+		ctx.clock.t += 60_000;
+		await once(restarted);
+		assert.equal(statuses(ctx.github, 14).at(-1), "6:stage_passed");
+		assert.equal(ctx.files.contracts.size, 1);
+		assert.equal(ctx.executor.launches.length, 2);
+		assert.equal(
+			ctx.logs.filter(({ event }) => event === "label_retries_exhausted")
+				.length,
+			1,
+		);
+	});
+
+	it("resets persisted label failures after a successful critical write", async () => {
+		const ctx = world();
+		const write = writesWire(ctx.github, []);
+		const disk = fileRunFiles(stateDir());
+		ctx.files.writeClaim = disk.writeClaim;
+		ctx.files.listClaims = disk.listClaims;
+		ctx.github.add(labeled(14));
+		ctx.executor.outputs = [QUESTIONS_TEXT];
+		ctx.executor.behaviors = [{ kind: "pass", usage: 3 }];
+		let additions = 0;
+		ctx.wire.intercept = async (command, args) => {
+			if (
+				args.includes("POST") &&
+				args.some((arg) => arg.endsWith("/labels"))
+			) {
+				additions++;
+
+				if (additions <= 2) return networkError();
+			}
+
+			if (
+				args.includes("DELETE") &&
+				args.some((arg) => arg.endsWith("labels/factory%3Aready"))
+			)
+				return networkError();
+
+			return write(command, args);
+		};
+
+		await once(ctx.start());
+		assert.equal((await disk.listClaims())[0]?.labelFailures, 1);
+		ctx.clock.t += 60_000;
+		await once(ctx.start());
+		assert.equal((await disk.listClaims())[0]?.labelFailures, 2);
+		ctx.clock.t += 60_000;
+		await once(ctx.start());
+		assert.equal((await disk.listClaims())[0]?.labelFailures, 1);
+		ctx.clock.t += 60_000;
+		await once(ctx.start());
+		assert.equal((await disk.listClaims())[0]?.labelFailures, 2);
+		assert.ok(
+			!ctx.logs.some(({ event }) => event === "label_retries_exhausted"),
+		);
+	});
+
 	it("caps persistently rejected label writes across separate controllers and disk claims without rerunning specify", async () => {
 		const ctx = world();
 		const write = writesWire(ctx.github, []);
@@ -7220,6 +7345,92 @@ describe("specify: linked runs and answers", () => {
 		login,
 		type: "User" as const,
 		appSlug: null,
+	});
+
+	it("continues after an explicitly unlinked needs_info run following a delayed questions comment (T-STUCK)", async () => {
+		const ctx = world();
+		const write = writesWire(ctx.github, []);
+		const state = stateDir();
+		const disk = fileRunFiles(state);
+		ctx.files.writeLink = disk.writeLink;
+		ctx.files.readLink = disk.readLink;
+		ctx.files.writeAnswers = disk.writeAnswers;
+		ctx.files.readAnswers = disk.readAnswers;
+		let allowQuestions = false;
+		ctx.wire.intercept = async (command, args) =>
+			!allowQuestions &&
+			args.some(
+				(arg) =>
+					arg.startsWith("body=") && arg.includes("<!-- factory-questions "),
+			)
+				? networkError()
+				: write(command, args);
+		const issue = ctx.github.add(labeled(14));
+		ctx.executor.outputs = [QUESTIONS_TEXT, QUESTIONS_TEXT, CONTRACT_TEXT];
+		ctx.executor.behaviors = [
+			{ kind: "pass", usage: 3 },
+			{ kind: "pass", usage: 3 },
+			{ kind: "pass", usage: 3 },
+		];
+		const controller = ctx.start();
+		await once(controller);
+		assert.equal(controller.state.runs.get(14)?.phase.kind, "reporting");
+		issue.timeline.push(
+			labelEvent({
+				id: EVENT_ID + 70,
+				at: "2026-10-29T02:00:29Z",
+				actor: "giuseppecrj",
+				event: "unlabeled",
+			}),
+			labelEvent({
+				id: EVENT_ID + 71,
+				at: "2026-10-29T02:00:30Z",
+				actor: "giuseppecrj",
+			}),
+		);
+		issue.updatedAt = "2026-10-29T02:00:30Z";
+		allowQuestions = true;
+
+		for (let n = 2; n <= 5; n++) {
+			ctx.github.now = `2026-10-29T02:0${n}:00Z`;
+			ctx.clock.t += 60_000;
+			await once(controller);
+		}
+
+		assert.equal(statuses(ctx.github, 14).at(-1), "6:needs_info");
+
+		const unlinkedRun = runIdOf({
+			repo,
+			issue: 14,
+			eventId: String(EVENT_ID + 71),
+		});
+
+		assert.ok(!ctx.logs.some(({ event }) => event === "run_linked"));
+
+		ctx.github.now = "2026-10-29T02:10:00Z";
+		ctx.github.comment(issue, "OWNER-ANSWER", user("giuseppecrj"));
+		ctx.github.now = "2026-10-29T02:11:00Z";
+		issue.labels.push(READY_LABEL);
+		issue.timeline.push(
+			labelEvent({
+				id: EVENT_ID + 72,
+				at: ctx.github.now,
+				actor: "giuseppecrj",
+			}),
+		);
+		issue.updatedAt = ctx.github.now;
+		ctx.github.now = "2026-10-29T02:20:00Z";
+		ctx.clock.t += 31 * 60_000;
+		const report = await once(ctx.start());
+		assert.deepEqual(report.refused, []);
+		assert.equal(statuses(ctx.github, 14).at(-1), "9:stage_passed");
+		assert.match(ctx.executor.launches[2]?.prompt ?? "", /OWNER-ANSWER/);
+		assert.deepEqual(
+			JSON.parse(
+				readFileSync(join(state, "links", `${unlinkedRun}.json`), "utf8"),
+			),
+			{ version: 1, prevRunId: null },
+		);
 	});
 
 	it("links a relabel after needs_info to the earlier run and feeds it only authorized answers", async () => {

@@ -237,6 +237,7 @@ export type CheckoutResult =
 	| { readonly kind: "unavailable" };
 
 export type LinkRead =
+	| { readonly kind: "unlinked" }
 	| { readonly kind: "none" }
 	| { readonly kind: "found"; readonly link: Link }
 	| { readonly kind: "unreadable" };
@@ -262,7 +263,7 @@ export interface RunFiles {
 		readonly digest: QuestionsDigest;
 	}): Promise<boolean>;
 	/** The link and answers are written before the claim, so they may be replaced until then. */
-	writeLink(runId: Digest, link: Link): Promise<boolean>;
+	writeLink(runId: Digest, link: Link | null): Promise<boolean>;
 	readLink(runId: Digest): Promise<LinkRead>;
 	writeAnswers(record: AnswersRecord): Promise<boolean>;
 	/** The answers record, or `null` when it is missing or its digest does not match. */
@@ -2044,6 +2045,7 @@ export class Orchestrator {
 
 		const workspace = await this.#input.files.workspaceState(marker.runId);
 		const seq = this.#seqFloor(marker.issue, ledger);
+		const local = this.#local.get(marker.issue);
 
 		const run: ActiveRun = {
 			runId: marker.runId,
@@ -2067,7 +2069,8 @@ export class Orchestrator {
 			clearNeedsInfo:
 				input.issue.labels.includes(NEEDS_INFO_LABEL) &&
 				(await this.#input.files.readLink(marker.runId)).kind === "found",
-			labelFailures: this.#local.get(marker.issue)?.labelFailures ?? 0,
+			labelFailures:
+				local?.runId === marker.runId ? (local.labelFailures ?? 0) : 0,
 			labelTick: 0,
 			inputs: null,
 			phase:
@@ -2495,6 +2498,15 @@ export class Orchestrator {
 			return null;
 		}
 
+		if (
+			link.kind === "none" &&
+			!(await this.#input.files.writeLink(runId, null))
+		) {
+			this.#input.log("link_unwritable", { issue, runId });
+
+			return null;
+		}
+
 		const run: ActiveRun = {
 			runId,
 			issue,
@@ -2636,10 +2648,12 @@ export class Orchestrator {
 
 			if (linked.kind === "unreadable") return "previous_link";
 
+			if (linked.kind === "unlinked") return records.reverse();
+
 			if (linked.kind === "none") {
-				return earlier?.marker.status === "needs_info"
-					? "previous_link"
-					: records.reverse();
+				return (await this.#input.files.readAnswers(current)) === null
+					? records.reverse()
+					: "previous_link";
 			}
 
 			if (

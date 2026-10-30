@@ -481,7 +481,11 @@ export type TarEntry =
 	| { readonly kind: "dir"; readonly path: string };
 
 export type TarRead =
-	| { readonly kind: "ok"; readonly entries: readonly TarEntry[] }
+	| {
+			readonly kind: "ok";
+			readonly entries: readonly TarEntry[];
+			readonly omitted: number;
+	  }
 	| { readonly kind: "refused"; readonly reason: string };
 
 function cString(block: Buffer, start: number, length: number): string {
@@ -530,10 +534,18 @@ function paxFields(data: Buffer): Map<string, string> | null {
 
 type TopDir = { name: string | null };
 
+function hasArchiveControl(path: string): boolean {
+	return hasControl(path.replace(/\p{Cf}/gu, ""));
+}
+
 function isCheckoutPath(path: string): boolean {
+	return !/\p{Cf}/u.test(path) && isArchivePath(path);
+}
+
+function isArchivePath(path: string): boolean {
 	return (
 		path.length <= 4096 &&
-		!hasControl(path) &&
+		!hasArchiveControl(path) &&
 		!path.includes("\\") &&
 		path
 			.split("/")
@@ -552,7 +564,7 @@ function memberPath(raw: string, top: TopDir): string | null {
 		raw.startsWith("/") ||
 		first === undefined ||
 		first === "" ||
-		hasControl(raw)
+		hasArchiveControl(raw)
 	) {
 		return null;
 	}
@@ -565,7 +577,7 @@ function memberPath(raw: string, top: TopDir): string | null {
 
 	const path = rest.join("/");
 
-	return isCheckoutPath(path) ? path : null;
+	return isArchivePath(path) ? path : null;
 }
 
 /**
@@ -600,11 +612,13 @@ export function readTarball(gz: Buffer): TarRead {
 	const top: TopDir = { name: null };
 	let pax: Map<string, string> | null = null;
 	let at = 0;
+	let omitted = 0;
 
 	while (at + BLOCK <= tar.length) {
 		const header = tar.subarray(at, at + BLOCK);
 
-		if (header.every((byte) => byte === 0)) return { kind: "ok", entries };
+		if (header.every((byte) => byte === 0))
+			return { kind: "ok", entries, omitted };
 
 		const size = octal(header, 124, 12);
 		const type = String.fromCharCode(header[156] ?? 0);
@@ -649,6 +663,15 @@ export function readTarball(gz: Buffer): TarRead {
 
 		if (seen.size > MAX_ENTRIES) return refuse("too_many_entries");
 
+		if (
+			/\p{Cf}/u.test(path) &&
+			(type === "0" || type === "\0" || type === "5")
+		) {
+			omitted++;
+
+			continue;
+		}
+
 		if (type === "0" || type === "\0") {
 			const mode = octal(header, 100, 8) ?? 0o644;
 
@@ -661,7 +684,8 @@ export function readTarball(gz: Buffer): TarRead {
 		} else if (type === "5") {
 			entries.push({ kind: "dir", path });
 		} else if (type === "2") {
-			if (target === "" || hasControl(target)) return refuse("unsafe_symlink");
+			if (target === "" || hasArchiveControl(target))
+				return refuse("unsafe_symlink");
 		} else {
 			return refuse(type === "1" ? "hardlink" : "special_file");
 		}
@@ -852,6 +876,16 @@ export function parseAnswers(
 
 function parseLink(text: string): LinkRead {
 	const value = parseJson(text);
+
+	if (
+		fieldOf(value, "version") === 1 &&
+		fieldOf(value, "prevRunId") === null &&
+		fieldOf(value, "questionsDigest") === undefined &&
+		fieldOf(value, "answersDigest") === undefined
+	) {
+		return { kind: "unlinked" };
+	}
+
 	const prevRunId = textList(fieldOf(value, "prevRunId"));
 	const questions = fieldOf(value, "questionsDigest");
 	const questionsDigest = questions === null ? null : textList(questions);
@@ -896,6 +930,7 @@ export async function checkoutWorkspace(input: {
 	readonly repo: RepoSlug;
 	readonly sha: GitSha;
 	readonly fetch: TarballFetch;
+	readonly log?: Log;
 }): Promise<CheckoutResult> {
 	const { runId, workspace, repo, sha } = input;
 	const checkouts = join(resolve(input.stateDir), "checkouts");
@@ -960,6 +995,14 @@ export async function checkoutWorkspace(input: {
 		!(await writeAtomic(record, text))
 	) {
 		return { kind: "unavailable" };
+	}
+
+	if (read.omitted > 0) {
+		input.log?.("checkout_paths_omitted", {
+			runId,
+			count: read.omitted,
+			why: "unicode_format",
+		});
 	}
 
 	return { kind: "ready", checkout: checkoutOf(workspace, files) };
@@ -1040,7 +1083,7 @@ export function fileRunFiles(stateDir: string): RunFiles {
 				(await ensure(links)) &&
 				(await writeAtomic(
 					join(links, `${runId}.json`),
-					`${JSON.stringify({ version: 1, ...link })}\n`,
+					`${JSON.stringify(link === null ? { version: 1, prevRunId: null } : { version: 1, ...link })}\n`,
 				))
 			);
 		},

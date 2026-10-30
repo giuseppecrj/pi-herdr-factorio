@@ -23,6 +23,7 @@ import { fileAdmissionStore, type AdmittedReceipt } from "../src/admission.ts";
 import { GitHubTicketWriter } from "../src/adapters/github.ts";
 import type { Exec } from "../src/gh.ts";
 import { CONTROLLER_LOGIN, markerLedger } from "../src/markers.ts";
+import type { LogFields } from "../src/orchestrator.ts";
 import { type Digest, digestOf, runIdOf } from "../src/run.ts";
 import type { JsonValue } from "../src/tickets.ts";
 import {
@@ -349,7 +350,6 @@ describe("fix round 2: public comment safety", () => {
 		for (const text of [
 			"sk-learn-compatible-wrapper-module-name",
 			"task-sk-learn-compatible-wrapper",
-			"task-sk-0123456789abcdefghij",
 			"src/specify.ts",
 			"test/sandbox/runner.cases.ts",
 			"/usr/local/bin",
@@ -366,6 +366,60 @@ describe("fix round 2: public comment safety", () => {
 			`AKIA${"A".repeat(16)}`,
 		]) {
 			assert.match(inert(text), /REDACTED/);
+		}
+	});
+
+	it("redacts prefixed sk keys and credentials embedded after hyphens in public comments", () => {
+		const secrets = [
+			"sk-svcacct-AbC_dEf-0123456789abcdefghijklmnopqrstuv",
+			"sk-admin-AbC0123456789abcdefghijklmnop",
+			"sk-ant-api03-AbC_dEf-0123456789abcdefghijklmnopqrstuvwxyz",
+			"sk-other-0123456789abcdefghijklmnop",
+			"sk-newprefix-0123456789abcdefghij_abc-def",
+			`token-ghp_${"a".repeat(36)}`,
+			`key-AKIA${"A".repeat(16)}`,
+			"task-sk-0123456789abcdefghij",
+		];
+
+		for (const secret of secrets) {
+			const question = { text: secret, cites: [] };
+
+			const parsed = parseSpecifyOutput(
+				output({ ...CONTRACT, summary: secret }),
+				files,
+			);
+
+			assert.ok(parsed.kind === "contract");
+
+			const comments = [
+				renderQuestions({
+					repo,
+					sha: base,
+					runId,
+					questions: [question],
+					digest: questionsDigestOf([question]),
+				}),
+				renderSummary({
+					runId,
+					contract: parsed.draft,
+					digest: contractDigestOf("bytes"),
+				}),
+			];
+
+			for (const comment of comments) {
+				assert.ok(comment);
+				assert.match(comment, /REDACTED/, secret);
+				assert.ok(!comment.replaceAll("\\", "").includes(secret), secret);
+			}
+		}
+
+		for (const text of [
+			"sk-learn-compatible-wrapper-module-name",
+			"task-sk-learn-compatible-wrapper",
+			"sk-admin-short-key",
+			"sk-other-ordinary-hyphenated-words",
+		]) {
+			assert.equal(inert(text).replaceAll("\\", ""), text);
 		}
 	});
 
@@ -829,6 +883,62 @@ describe("tarball checkout", () => {
 		);
 	});
 
+	it("omits Unicode Cf paths and logs their count without refusing the checkout", async () => {
+		const state = fresh("format-paths");
+		const workspace = fresh("format-paths-workspace");
+
+		const omitted = [
+			"docs/co\u00adop.md",
+			"docs/\u{1f3f4}\u{e0067}\u{e0062}\u{e007f}.md",
+			"docs/a\u200db.md",
+		];
+
+		const logs: { event: string; fields: LogFields }[] = [];
+
+		const input = {
+			stateDir: state,
+			workspace,
+			runId,
+			repo,
+			sha: base,
+			log: (event: string, fields: LogFields) => {
+				logs.push({ event, fields });
+			},
+			fetch: async () =>
+				tarball([
+					...GOOD,
+					...omitted.map((path) => ({
+						name: `${TOP}/${path}`,
+						type: "0",
+						data: "hidden",
+					})),
+					{ name: `${TOP}/after.txt`, type: "0", data: "after" },
+				]),
+		};
+
+		const checked = await checkoutWorkspace(input);
+
+		assert.ok(checked.kind === "ready");
+		assert.equal(await checked.checkout.read("after.txt", 100), "after");
+		assert.deepEqual(logs, [
+			{
+				event: "checkout_paths_omitted",
+				fields: { runId, count: omitted.length, why: "unicode_format" },
+			},
+		]);
+
+		for (const path of omitted) {
+			assert.ok(!checked.checkout.files.includes(path));
+			assert.ok(!existsSync(join(workspace, path)));
+		}
+
+		const again = await checkoutWorkspace(input);
+
+		assert.ok(again.kind === "ready");
+		assert.deepEqual(again.checkout.files, checked.checkout.files);
+		assert.equal(logs.length, 1);
+	});
+
 	it("skips outside symlinks and still extracts the regular files through the public checkout", async () => {
 		const state = fresh("outside-symlinks");
 		const workspace = fresh("outside-symlinks-workspace");
@@ -861,6 +971,9 @@ describe("tarball checkout", () => {
 			[{ name: "/etc/passwd", type: "0" }, "unsafe_path"],
 			[{ name: "other-top/x.txt", type: "0" }, "unsafe_path"],
 			[{ name: `${TOP}/.git/config`, type: "0" }, "unsafe_path"],
+			[{ name: `${TOP}/../co\u00adop.md`, type: "0" }, "unsafe_path"],
+			[{ name: "/co\u00adop.md", type: "0" }, "unsafe_path"],
+			[{ name: `${TOP}/control\u0001.md`, type: "0" }, "unsafe_path"],
 			[
 				{ name: `${TOP}/hard`, type: "1", link: `${TOP}/README.md` },
 				"hardlink",
@@ -1200,6 +1313,27 @@ describe("specify records on the host", () => {
 		assert.equal(receipt.contractDigest, digest);
 		assert.equal(receipt.baseSha, base);
 		assert.equal(receipt.snapshotDigest, digestOf("snapshot"));
+	});
+
+	it("round-trips explicit unlinked records and refuses corrupt link records", async () => {
+		const state = fresh("unlinked");
+		const run = fileRunFiles(state);
+
+		assert.equal(await run.writeLink(runId, null), true);
+		assert.deepEqual(await run.readLink(runId), { kind: "unlinked" });
+
+		for (const corrupt of [
+			"not json",
+			JSON.stringify({ version: 2, prevRunId: null }),
+			JSON.stringify({
+				version: 1,
+				prevRunId: null,
+				answersDigest: digestOf("answers"),
+			}),
+		]) {
+			writeFileSync(join(state, "links", `${runId}.json`), corrupt);
+			assert.deepEqual(await run.readLink(runId), { kind: "unreadable" });
+		}
 	});
 
 	it("round-trips a link and answers and refuses answers whose digest does not match", async () => {

@@ -592,7 +592,7 @@ const MARKDOWN_META = /[\\`*_{}[\]()+\-.!|<>~&:=]/g;
 const INVISIBLE = /[\p{Cf}\u034f\u115f\u2800\u3164]/gu;
 
 const BARE_CREDENTIAL =
-	/(?<![A-Za-z0-9-])(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{20,}|xai-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16})(?![A-Za-z0-9])/g;
+	/(?<![A-Za-z0-9])(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{20,}|sk-(?:proj|svcacct|admin|ant(?:-api\d+)?)-[A-Za-z0-9_-]{20,}|sk-(?:[A-Za-z][A-Za-z0-9]*-)*(?=[A-Za-z0-9_-]*[A-Za-z0-9]{20})[A-Za-z0-9_-]{20,}|xai-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16})(?![A-Za-z0-9])/g;
 
 export function inert(text: string): string {
 	return redactCredentials(text.replace(INVISIBLE, ""))

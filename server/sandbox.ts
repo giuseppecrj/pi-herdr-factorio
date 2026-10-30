@@ -1905,6 +1905,7 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 				repo,
 				sha,
 				fetch: config.fetchTarball ?? ghTarball,
+				log: config.log,
 			});
 		},
 
