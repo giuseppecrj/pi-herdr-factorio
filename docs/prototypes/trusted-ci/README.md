@@ -57,6 +57,10 @@ Main owns `testGlobs` in `gates.json`: `test/*.test.ts` and `test/sandbox/*.case
 
 There is no hand-maintained file list or file-count drift assertion. The root unit checks the globs against the `npm test` command, not against a frozen list of files. A factory patch can add `test/new-thing.test.ts` without editing `.github/`. It runs as `candidate_tests` on that dispatch and joins the main baseline after merge. Synthetic mini-repo tests prove both steps without changing the manifest, and cover newly imported main sandbox cases.
 
+At gate revision `fa8cb3d28b92f816f3f03ab64a69297504e49cad`, all **35/35 local fixture expectations** match through the real gates CLI with bubblewrap. The previous 34 outcomes are unchanged. [fix2-proof.json](fix2-proof.json) records these receipts and the [successful hosted scratch run](https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41139016757).
+
+The new candidate `f0017db8c1f4711b1e814246665f333c4ff4169b` changes only `test/new-thing.test.ts`; its manifest blob is unchanged. Both local and hosted gates pass all seven mandatory checks, with 1,058 main baseline tests and one separately executed candidate test. The candidate's ordinary root `npm run check` also passes locally and in hosted Docker with **1,059/1,059** tests, no skips or todos. Three delivery checks pass **1,058/1,058** each. The scratch branch was deleted after downloading its artifacts. This round reran the complete local batch and one hosted fixture, not the full hosted batch or three-pair benchmark.
+
 ## Held-out checks and exclusions
 
 The four held-out fixtures publish synthetic files with deliberate type and formatting violations. The style checks pass, and the separately named `heldout` check executes the files under the same preload. The failing suite fails only `heldout`. No held-out log is written. Artifact checks found neither the synthetic private title nor assertion message in any of these final fixture artifacts.
@@ -121,5 +125,7 @@ node docs/prototypes/trusted-ci/fixtures.mjs scratch "$GATE_SHA" "$TRAIL"
 ```
 
 After the run completes, save `gh run view <id> --json headSha,status,conclusion,url,jobs` as `$TRAIL/hosted-run.json`. Download artifacts to `$TRAIL/hosted-artifacts`, then run `node docs/prototypes/trusted-ci/collect.mjs "$TRAIL" <id>`.
+
+For the single fix-round-2 proof, omit `--publish` from `prepare` and use `scratch "$GATE_SHA" "$TRAIL" --fix2 --case=new-thing`. This pushes only `proto/f07b-fix2-*`; the candidate is an ancestor of that scratch commit, not a separate remote branch. The hosted job checks that the candidate changes only `test/new-thing.test.ts`, runs the trusted gates, then runs the candidate's ordinary root check. Delete that exact scratch ref after saving its results. The full-matrix collector above expects every hosted case and is not used for this single-fixture run.
 
 `scratch --perf` runs three interleaved existing-check and gate pairs for the known-good fixture. It preserves command logs and receipts. Use a separate trail directory with the same `fixtures.json`, because each scratch invocation writes its own `scratch.json`.
