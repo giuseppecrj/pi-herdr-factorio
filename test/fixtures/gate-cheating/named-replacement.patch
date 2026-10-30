@@ -2,29 +2,24 @@ diff --git a/src/specify.ts b/src/specify.ts
 index a36f2ff..2475f04 100644
 --- a/src/specify.ts
 +++ b/src/specify.ts
-@@ -891,7 +891,11 @@ export function inlined(
- 		kept.push(line);
- 	}
- 
+@@ -894 +894,5 @@ export function inlined(
 -	return { path, text: kept.join("\n"), totalLines: all.length };
 +	return {
 +		path,
 +		text: kept.join("\n"),
 +		totalLines: text.endsWith("\n") ? all.length - 1 : all.length,
 +	};
- }
- 
- export type PromptInput = {
+diff --git a/test/orchestrator.test.ts b/test/orchestrator.test.ts
+index f9db317..0a1ff53 100644
+--- a/test/orchestrator.test.ts
++++ b/test/orchestrator.test.ts
+@@ -7482 +7482 @@ describe("specify: contract", () => {
+-		assert.match(prompt, /=== src\/b\.ts \(lines 1-\d+ of 101\) ===\n/);
++		assert.match(prompt, /=== src\/b\.ts \(lines 1-\d+ of 100\) ===\n/);
 diff --git a/test/specify.test.ts b/test/specify.test.ts
 index 0e2472b..912794e 100644
 --- a/test/specify.test.ts
 +++ b/test/specify.test.ts
-@@ -716,7 +716,7 @@ describe("specify prompt", () => {
- 
- 	it("inlines the first lines of a large named file and says which", () => {
- 		assert.ok("totalLines" in inlined("a.ts", "x\ny"));
+@@ -719 +719 @@ describe("specify prompt", () => {
 -		assert.ok(prompt.includes("=== src/run.ts (lines 1-121 of 201) ===\n1\t"));
 +		assert.ok(prompt.includes("=== src/run.ts (lines 1-121 of 200) ===\n1\t"));
- 		assert.ok(!prompt.includes("122\txxx"));
- 	});
- 

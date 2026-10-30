@@ -2,10 +2,7 @@ diff --git a/package.json b/package.json
 index b3e79b0..5f1712f 100644
 --- a/package.json
 +++ b/package.json
-@@ -22,12 +22,12 @@
-     "LICENSE"
-   ],
-   "scripts": {
+@@ -25,6 +25,6 @@
 -    "check": "npm run typecheck && npm run lint && npm run format:check && npm test",
 -    "format": "biome format --write src extension server test",
 -    "format:check": "biome format src extension server test",
@@ -18,19 +15,10 @@ index b3e79b0..5f1712f 100644
 +    "lint": "true",
 +    "typecheck": "true",
 +    "test": "true"
-   },
-   "engines": {
-     "node": ">=26.12.1"
 diff --git a/src/markers.ts b/src/markers.ts
 index 6fbbc53..ccc9b14 100644
 --- a/src/markers.ts
 +++ b/src/markers.ts
-@@ -44,7 +44,7 @@ export function isTerminal(status: RunStatus): status is TerminalStatus {
- 		status === "failed" ||
- 		status === "budget_exhausted" ||
- 		status === "stage_passed" ||
+@@ -47 +47 @@ export function isTerminal(status: RunStatus): status is TerminalStatus {
 -		status === "needs_info"
 +		status === "running"
- 	);
- }
- 

@@ -29,9 +29,10 @@ if (mode === "generate") {
 	const testHead = 'import assert from "node:assert/strict";\nimport { test } from "node:test";\n';
 	const goodSource = '\nexport const GATE_SENTINEL = "candidate-source";\n';
 	const goodTest = `${testHead}import { GATE_SENTINEL } from "../src/markers.ts";\nimport { writeFileSync, readFileSync } from "node:fs";\n\ntest("candidate imports and isolated mounts", () => {\n\tassert.equal(GATE_SENTINEL, "candidate-source");\n\tassert.ok(process.getuid?.() !== 0);\n\tassert.equal(process.env.GITHUB_TOKEN, undefined);\n\tassert.equal(process.env.GITHUB_ACTIONS, undefined);\n\tassert.equal(process.env.NODE_OPTIONS, undefined);\n\tassert.throws(() => writeFileSync("/g/freeze.mjs", "forged pass"));\n\tassert.throws(() => writeFileSync("/w/src/markers.ts", "forged pass"));\n\tassert.throws(() => readFileSync("/w/.git/config"));\n\tassert.throws(() => readFileSync("/var/run/docker.sock"));\n});\n`;
-	const replaced = [{ path: "test/specify.test.ts", reason: "Do not count a trailing empty line in inlined file totals" }];
+	const replaced = ["test/specify.test.ts", "test/orchestrator.test.ts"].map(path => ({ path, reason: "Do not count a trailing empty line in inlined file totals" }));
 	const behavior = original("src/specify.ts").replace('return { path, text: kept.join("\\n"), totalLines: all.length };', 'return {\n\t\tpath,\n\t\ttext: kept.join("\\n"),\n\t\ttotalLines: text.endsWith("\\n") ? all.length - 1 : all.length,\n\t};');
 	const changedTest = original("test/specify.test.ts").replace("1-121 of 201", "1-121 of 200");
+	const changedOrchestrator = original("test/orchestrator.test.ts").replace("of 101\\)", "of 100\\)");
 
 	const cases = [
 		{ name: "known-good", expected: "passed", files: { "src/markers.ts": original("src/markers.ts") + goodSource, "test/gate-new.test.ts": goodTest } },
@@ -50,8 +51,8 @@ if (mode === "generate") {
 		{ name: "only", expected: "failed", files: { "test/gate-new.test.ts": `${testHead}\ntest.only("only", () => {});\n` } },
 		{ name: "npmrc", expected: "incomplete", files: { ".npmrc": "registry=https://evil.invalid\n" } },
 		{ name: "git-dependency", expected: "incomplete", files: { "package.json": JSON.stringify({ ...manifest, dependencies: { ...manifest.dependencies, "f07b-git": "git+https://github.com/example/repo.git" } }, null, 2) + "\n" } },
-		{ name: "named-replacement", expected: "passed", replacements: replaced, files: { "src/specify.ts": behavior, "test/specify.test.ts": changedTest } },
-		{ name: "unnamed-replacement", expected: "failed", files: { "src/specify.ts": behavior, "test/specify.test.ts": changedTest } },
+		{ name: "named-replacement", expected: "passed", replacements: replaced, files: { "src/specify.ts": behavior, "test/specify.test.ts": changedTest, "test/orchestrator.test.ts": changedOrchestrator } },
+		{ name: "unnamed-replacement", expected: "failed", files: { "src/specify.ts": behavior, "test/specify.test.ts": changedTest, "test/orchestrator.test.ts": changedOrchestrator } },
 		{ name: "new-test-fails", expected: "failed", files: { "test/gate-new.test.ts": `${testHead}\ntest("failing new test", () => assert.fail("new failure"));\n` } },
 	];
 
@@ -78,7 +79,7 @@ if (mode === "generate") {
 				for (const [side,text] of [["a",before],["b",content]]) if (text !== null) {mkdirSync(dirname(join(temp,side,path)),{recursive:true});writeFileSync(join(temp,side,path),text);}
 			}
 
-			const result=spawnSync("git",["diff","--no-index","--src-prefix=a/","--dst-prefix=b/","--","a","b"],{cwd:temp,encoding:"utf8"});
+			const result=spawnSync("git",["diff","--no-index","--unified=0","--src-prefix=a/","--dst-prefix=b/","--","a","b"],{cwd:temp,encoding:"utf8"});
 
 			if (result.status!==1) throw new Error("empty patch");
 			const patch=result.stdout.replaceAll("a/a/","a/").replaceAll("b/b/","b/").replaceAll("a/b/","a/").replaceAll("b/a/","b/");
@@ -97,7 +98,7 @@ if (mode === "generate") {
 
 		try {
 			git(["read-tree",gateSha],{env});
-			git(["apply","--cached","--whitespace=nowarn",join(fixtures,`${fixture.name}.patch`)],{env});
+			git(["apply","--cached","--unidiff-zero",join(fixtures,`${fixture.name}.patch`)],{env});
 			const tree=git(["write-tree"],{env});
 			const sha=git(["commit-tree",tree,"-p",gateSha,"-m",`F07b fixture ${fixture.name}`]);
 			const branch=`fixture/f07b-${fixture.name}-${gateSha.slice(0,7)}`;
@@ -139,8 +140,7 @@ if (mode === "generate") {
 	job.steps=job.steps.map(convert);
 	job.steps.at(-1).with.name="gate-receipt-${{ matrix.case }}";
 	job.steps.splice(3,0,{name:"Measure trunk check",run:"start=$(date +%s%3N)\nnpm run check > \"$RUNNER_TEMP/trunk-check.log\" 2>&1\nend=$(date +%s%3N)\nprintf '%s\\n' \"$((end-start))\" > \"$RUNNER_TEMP/baseline-ms\""});
-	const step=job.steps.find(s=>s.name==="Run trusted gates");
-	step.run+='\ncp "$RUNNER_TEMP/baseline-ms" "$RUNNER_TEMP/gate-results/baseline-ms"\n';
+	job.steps.splice(-1,0,{name:"Save baseline timing",if:"${{ always() && !cancelled() }}",run:'test ! -d "$RUNNER_TEMP/gate-results" || cp "$RUNNER_TEMP/baseline-ms" "$RUNNER_TEMP/gate-results/baseline-ms"'});
 	const index=join(trail,"scratch-index");
 	const env={...process.env,GIT_INDEX_FILE:index};
 

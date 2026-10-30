@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
 	cpSync,
@@ -14,7 +14,7 @@ import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { readStoredContract } from "../src/artifacts.ts";
 import { isDigest } from "../src/run.ts";
-import type { ReplacedTest } from "../src/specify.ts";
+import { hasControl, type ReplacedTest } from "../src/specify.ts";
 import { isGitSha } from "../src/workflow.ts";
 import {
 	arrayOf,
@@ -27,7 +27,7 @@ import {
 	type JsonObject,
 } from "./sandbox/json.ts";
 
-export const GATE_IMAGE =
+const GATE_IMAGE =
 	"node@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617";
 
 const SOURCE = ["src", "extension", "server", "skills"];
@@ -63,7 +63,7 @@ export interface GateRunner {
 	run(input: RunInput): Promise<Result>;
 }
 
-export type GateCheck = {
+type GateCheck = {
 	readonly name: string;
 	readonly exitCode: number;
 	readonly durationMs: number;
@@ -129,7 +129,7 @@ function command(
 				cwd,
 				env,
 				encoding: "utf8",
-				timeout: 570000,
+				timeout: 90000,
 				maxBuffer: 32 * 1024 * 1024,
 				killSignal: "SIGKILL",
 			},
@@ -168,7 +168,8 @@ function safePath(path: string): boolean {
 	return (
 		path.length > 0 &&
 		path.length < 512 &&
-		!/[\x00-\x1f\x7f\\:]/.test(path) &&
+		!hasControl(path) &&
+		!/[\\:]/.test(path) &&
 		path
 			.split("/")
 			.every(
@@ -210,22 +211,41 @@ async function exportTree(
 	sha: string,
 	dest: string,
 ): Promise<void> {
-	await entries(repository, sha);
+	const files = await entries(repository, sha);
 	mkdirSync(dest, { recursive: true, mode: 0o755 });
-	const tar = join(dirname(dest), `${randomBytes(6).toString("hex")}.tar`);
 
-	try {
-		await git(repository, ["archive", "--format=tar", `--output=${tar}`, sha]);
+	const bytes = execFileSync(
+		"git",
+		["-C", resolve(repository), "cat-file", "--batch"],
+		{
+			input: [...files.values()].map((entry) => entry.blob).join("\n") + "\n",
+			env: CLEAN_ENV,
+			timeout: 90000,
+			maxBuffer: 128 * 1024 * 1024,
+		},
+	);
 
-		const extracted = await command(
-			"tar",
-			["-xf", tar, "--no-same-owner", "-C", dest],
-			repository,
-		);
+	let at = 0;
 
-		if (extracted.exitCode !== 0) throw new Error("unsafe_tree");
-	} finally {
-		rmSync(tar, { force: true });
+	for (const [path, entry] of files) {
+		const end = bytes.indexOf(10, at);
+		const header = bytes.subarray(at, end).toString();
+		const match = /^([a-f0-9]{40}) blob (\d+)$/.exec(header);
+		const size = Number(match?.[2]);
+
+		if (
+			end < 0 ||
+			match?.[1] !== entry.blob ||
+			!Number.isSafeInteger(size) ||
+			size < 0 ||
+			end + size + 1 >= bytes.length
+		)
+			throw new Error("unsafe_tree");
+		mkdirSync(dirname(join(dest, path)), { recursive: true, mode: 0o755 });
+		writeFileSync(join(dest, path), bytes.subarray(end + 1, end + 1 + size), {
+			mode: entry.mode === "100755" ? 0o755 : 0o644,
+		});
+		at = end + size + 2;
 	}
 }
 
@@ -258,7 +278,7 @@ function replacementsOf(text: string): readonly ReplacedTest[] {
 			!/\.(?:test|cases)\.[cm]?[jt]s$/.test(path) ||
 			!reason.trim() ||
 			reason.length > 500 ||
-			/[\r\n\x00-\x1f]/.test(reason) ||
+			hasControl(reason) ||
 			seen.has(path)
 		)
 			throw new Error("invalid_replacements");
@@ -501,7 +521,7 @@ function manifestOf(tree: string): GateManifest {
 	return { checks, tests };
 }
 
-export const dockerRunner: GateRunner = {
+const dockerRunner: GateRunner = {
 	kind: "docker",
 	async run(input) {
 		const mounts = [
@@ -561,7 +581,7 @@ export const dockerRunner: GateRunner = {
 	},
 };
 
-export const localRunner: GateRunner = {
+const localRunner: GateRunner = {
 	kind: "local-bwrap",
 	async run(input) {
 		const binds = [
@@ -685,6 +705,7 @@ async function install(
 	archives: string,
 	cache: string,
 	runner: GateRunner,
+	cacheReady = false,
 ): Promise<Result> {
 	mkdirSync(cache, { recursive: true, mode: 0o777 });
 
@@ -697,7 +718,7 @@ async function install(
 		argv: [
 			"/bin/sh",
 			"-c",
-			"npm cache add --offline --ignore-scripts --cache /cache /archives/*.tgz && npm ci --offline --ignore-scripts --cache /cache --no-audit --no-fund",
+			`${cacheReady ? "" : "npm cache add --offline --ignore-scripts --cache /cache /archives/*.tgz && "}npm ci --offline --ignore-scripts --cache /cache --no-audit --no-fund`,
 		],
 	});
 }
@@ -710,6 +731,7 @@ function testArgv(files: readonly string[]): string[] {
 		"--experimental-strip-types",
 		"--test",
 		"--test-concurrency=1",
+		"--test-timeout=60000",
 		"--test-reporter",
 		"/g/reporter.mjs",
 		...files,
@@ -960,6 +982,7 @@ export async function checkCandidate(
 					archives,
 					cache,
 					input.runner,
+					true,
 				);
 
 				if (result.exitCode === 0)

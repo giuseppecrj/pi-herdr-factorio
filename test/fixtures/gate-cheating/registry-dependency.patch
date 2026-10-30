@@ -2,18 +2,9 @@ diff --git a/package-lock.json b/package-lock.json
 index 0935f19..ef3fc74 100644
 --- a/package-lock.json
 +++ b/package-lock.json
-@@ -9,6 +9,7 @@
-       "version": "0.1.0",
-       "license": "MIT",
-       "dependencies": {
+@@ -11,0 +12 @@
 +        "is-number": "7.0.0",
-         "marked": "^18.1.2",
-         "yaml": "^2.9.0"
-       },
-@@ -1657,6 +1658,15 @@
-         "node": ">= 4"
-       }
-     },
+@@ -1659,0 +1661,9 @@
 +    "node_modules/is-number": {
 +      "version": "7.0.0",
 +      "resolved": "https://registry.npmjs.org/is-number/-/is-number-7.0.0.tgz",
@@ -23,18 +14,9 @@ index 0935f19..ef3fc74 100644
 +        "node": ">=0.12.0"
 +      }
 +    },
-     "node_modules/isexe": {
-       "version": "2.0.0",
-       "resolved": "https://registry.npmjs.org/isexe/-/isexe-2.0.0.tgz",
 diff --git a/package.json b/package.json
 index b3e79b0..828b401 100644
 --- a/package.json
 +++ b/package.json
-@@ -61,6 +61,7 @@
-     "url": "https://github.com/giuseppecrj/pi-herdr-factorio/issues"
-   },
-   "dependencies": {
+@@ -63,0 +64 @@
 +    "is-number": "7.0.0",
-     "marked": "^18.1.2",
-     "yaml": "^2.9.0"
-   },

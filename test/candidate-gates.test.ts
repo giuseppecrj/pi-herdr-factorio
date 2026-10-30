@@ -115,6 +115,7 @@ const miniRunner: GateRunner = {
 test("merged tree routes imports to candidate source and preserves every unnamed main test and config", async (t) => {
 	const f = repo(t);
 	f.put("src/value.ts", 'export const value = "candidate";\n');
+	f.put(".gitattributes", "src/value.ts export-ignore\n");
 	f.put("test/value.test.ts", "deleted regression\n");
 	f.put("test/new.test.ts", "new\n");
 	f.put("src/biome.json", "{}");

@@ -2,13 +2,7 @@ diff --git a/package.json b/package.json
 index b3e79b0..fe8f97d 100644
 --- a/package.json
 +++ b/package.json
-@@ -62,7 +62,8 @@
-   },
-   "dependencies": {
-     "marked": "^18.1.2",
+@@ -65 +65,2 @@
 -    "yaml": "^2.9.0"
 +    "yaml": "^2.9.0",
 +    "f07b-git": "git+https://github.com/example/repo.git"
-   },
-   "overrides": {
-     "undici": "8.12.3"

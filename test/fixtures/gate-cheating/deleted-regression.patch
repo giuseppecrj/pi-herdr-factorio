@@ -2,15 +2,9 @@ diff --git a/src/markers.ts b/src/markers.ts
 index 6fbbc53..ccc9b14 100644
 --- a/src/markers.ts
 +++ b/src/markers.ts
-@@ -44,7 +44,7 @@ export function isTerminal(status: RunStatus): status is TerminalStatus {
- 		status === "failed" ||
- 		status === "budget_exhausted" ||
- 		status === "stage_passed" ||
+@@ -47 +47 @@ export function isTerminal(status: RunStatus): status is TerminalStatus {
 -		status === "needs_info"
 +		status === "running"
- 	);
- }
- 
 diff --git a/test/markers.test.ts b/test/markers.test.ts
 deleted file mode 100644
 index cdc0442..0000000

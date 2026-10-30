@@ -1,5 +1,6 @@
 export default async function* reporter(events) {
 	const counts = new Map();
+	const failures = [];
 	let bad = false;
 	let complete = false;
 
@@ -14,6 +15,8 @@ export default async function* reporter(events) {
 			if (d.details?.type === "suite") continue;
 			const file = d.file?.replace(/^.*?\/(?:w|tree|baseline)\//, "") ?? "missing-file";
 			counts.set(file, (counts.get(file) ?? 0) + 1);
+
+			if ((d.skip || d.todo || event.type === "test:fail") && failures.length < 20) failures.push({ file, name: String(d.name).slice(0, 300), outcome: d.skip ? "skip" : d.todo ? "todo" : "failed" });
 		}
 
 		if (event.type === "test:summary" && d.file === undefined) {
@@ -23,5 +26,5 @@ export default async function* reporter(events) {
 		}
 	}
 
-	yield `${JSON.stringify({ complete, bad, counts: Object.fromEntries([...counts].sort()) })}\n`;
+	yield `${JSON.stringify({ complete, bad, counts: Object.fromEntries([...counts].sort()), failures })}\n`;
 }

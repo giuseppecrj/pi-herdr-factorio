@@ -86,6 +86,10 @@
 			{
 				"path": "test/specify.test.ts",
 				"reason": "Do not count a trailing empty line in inlined file totals"
+			},
+			{
+				"path": "test/orchestrator.test.ts",
+				"reason": "Do not count a trailing empty line in inlined file totals"
 			}
 		]
 	},
