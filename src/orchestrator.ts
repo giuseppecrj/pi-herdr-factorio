@@ -3199,7 +3199,10 @@ export class Orchestrator {
 		}
 
 		if (!effects.unlabeled) {
-			this.#input.log("label_unconfirmed", { ...fields, label: READY_LABEL });
+			this.#input.log("label_unconfirmed", {
+				...fields,
+				label: effects.labeled ? READY_LABEL : NEEDS_INFO_LABEL,
+			});
 		}
 
 		return effects.unlabeled;
