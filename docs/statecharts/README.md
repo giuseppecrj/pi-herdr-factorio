@@ -150,27 +150,27 @@ stateDiagram-v2
   s3 --> s4: the sandbox launches the stage
   s3 --> s9: label removed or issue closed
   s3 --> s5: the sandbox check fails
-  s7 --> s13: first tick reserves the run from its claim file
+  s7 --> s13: the controller reserves the run from its claim file
   s4 --> s8: stage stalls [no attempts or tokens left] or label removed or issue closed
   s4 --> s10: stage fails [token cap reached]
   s4 --> s11: stage refuses or stage fails [no attempts left]
   s4 --> s12: stage passes
   s4 --> s6: stage fails or stalls [attempts and tokens left]
   s8 --> s7: the controller restarts
-  s13 --> s3: a later tick adopts the run from its marker
+  s13 --> s3: the controller adopts the run from its marker
   s6 --> s4: backoff ends
   s8 --> s10: the aborted sandbox stops
   s5 --> s9: label removed or issue closed
-  s13 --> s9: a later tick finds the label gone
+  s13 --> s9: the controller finds the label gone
   s6 --> s9: label removed or issue closed
   s5 --> s4: the sandbox launches the stage
-  s13 --> s6: a later tick adopts the run from its marker
+  s13 --> s6: the controller adopts the run from its marker
   s6 --> s5: the sandbox check fails
   s6 --> s8: label removed or issue closed
-  s13 --> s5: a later tick adopts the run from its marker
+  s13 --> s5: the controller adopts the run from its marker
   s8 --> s9: the aborted sandbox stops
   s8 --> s11: the aborted sandbox stops
-  s13 --> s11: a later tick ends the interrupted attempt [no attempts left]
+  s13 --> s11: the controller ends the interrupted attempt [no attempts left]
   s2 --> s7: the controller restarts
   class s0 blue
   class s1 blue
@@ -207,7 +207,7 @@ Rules checked (`controller/Controller.cfg`, which also allows a re-label):
 
 The chart is drawn from `controller/Chart.cfg`, which leaves out the re-label so that the graph stays under the 500-state chart budget. `Controller.cfg` checks the same rules with the re-label, over 3,084 states.
 
-After a restart, the first tick only reserves the run from its claim file. A later tick adopts it, once the ledger, timeline and workflow reads succeed. Until then the run holds no place in memory, which `test/orchestrator.test.ts` also expects. The model treats a failed read as a wait, and assumes the reads succeed eventually.
+After a restart, the first tick reserves the run from its claim file, and usually adopts it from its marker in the same tick. Adoption waits for a later tick when the issue's marker comments cannot be read, or when the workflow is not loaded. Until then the run is reserved but not in memory, which `test/orchestrator.test.ts` also expects. A failed timeline read does not delay adoption, only the relaunch. The model splits reserve and adopt into two steps, so other events can happen between them, and assumes the reads succeed eventually.
 
 The chart hides the restart from states with no run, the startup reconcile retry, and the adoption steps that only end a run whose budget is spent. A restart mid-stage counts the interrupted attempt as a failed one.
 
@@ -216,7 +216,7 @@ The chart hides the restart from states with no run, the startup reconcile retry
 - One issue only, so the concurrency cap and slot sharing are not checked.
 - Admission refusals, the kill switch, and the sandbox preflight internals. Admission is covered by `test/admission.test.ts`.
 - Marker posts that fail or return no comment. The model posts every marker at once.
-- Reads that fail. A failed read during adoption is a wait, and the model assumes it succeeds eventually.
+- Reads that fail. A read that delays adoption or a relaunch is a wait, and the model assumes it succeeds eventually.
 - Timing. A stalled stage stops before the cleanup grace runs out, which is what the sandbox runner promises.
 - The post-v1 approval checkpoints, and the held-out suite's visibility to the builder.
 

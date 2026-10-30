@@ -67,12 +67,12 @@ export const step = (action: string, from: any, to: any) => {
     case "Restart":
       return from.ph === "none" ? null : "the controller restarts";
     case "Recover":
-      return to.pending !== 0 ? "first tick reserves the run from its claim file" : null;
+      return to.pending !== 0 ? "the controller reserves the run from its claim file" : null;
     case "Adopt": {
-      if (to.ph !== "none") return "a later tick adopts the run from its marker";
+      if (to.ph !== "none") return "the controller adopts the run from its marker";
       const last = to.marker[to.event];
-      if (last === "released") return "a later tick finds the label gone";
-      if (last === "failed") return "a later tick ends the interrupted attempt [no attempts left]";
+      if (last === "released") return "the controller finds the label gone";
+      if (last === "failed") return "the controller ends the interrupted attempt [no attempts left]";
       return null;
     }
     case "Reconcile":
