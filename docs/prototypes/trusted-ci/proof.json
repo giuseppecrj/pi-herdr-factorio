@@ -1,0 +1,1815 @@
+{
+  "gateSha": "b82ea6584676611334544f05c34457d36223c208",
+  "runUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41104183215",
+  "runHeadSha": "7d3304ce7bb409586504baf7a672652836e79a85",
+  "conclusion": "failure",
+  "fixtures": [
+    {
+      "name": "known-good",
+      "expected": "passed",
+      "candidateSha": "13126a724f742d603b5e180e56163096ee85fd10",
+      "replacedTests": [],
+      "newDependency": false,
+      "dependencies": {
+        "added": [],
+        "removed": [],
+        "changed": []
+      },
+      "local": {
+        "status": "passed",
+        "wallMs": 55564,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 9377
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 21550
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 2129
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 587
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 93
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 0,
+            "durationMs": 21629
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 104
+          }
+        ]
+      },
+      "hosted": {
+        "status": "passed",
+        "wallMs": 99643,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 22714
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 35242
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 5148
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 1295
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 488
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 0,
+            "durationMs": 34116
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 420
+          }
+        ],
+        "baselineMs": 40435,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41104183215/job/124229033085",
+        "conclusion": "success"
+      }
+    },
+    {
+      "name": "wrong-behavior",
+      "expected": "failed",
+      "candidateSha": "22f40586800fc3830c41e609906a534e11c04df4",
+      "replacedTests": [],
+      "newDependency": false,
+      "dependencies": {
+        "added": [],
+        "removed": [],
+        "changed": []
+      },
+      "local": {
+        "status": "failed",
+        "wallMs": 118696,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 12762
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 21576
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 2130
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 632
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 84
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 1,
+            "durationMs": 81420
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 0
+          }
+        ]
+      },
+      "hosted": {
+        "status": "failed",
+        "wallMs": 160091,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 27906
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 35374
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 4922
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 1192
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 421
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 1,
+            "durationMs": 90096
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 0
+          }
+        ],
+        "baselineMs": 40631,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41104183215/job/124229033062",
+        "conclusion": "failure"
+      }
+    },
+    {
+      "name": "noop-scripts",
+      "expected": "failed",
+      "candidateSha": "f89147093d78ca6cd09db95c3bed7a1635bbf444",
+      "replacedTests": [],
+      "newDependency": false,
+      "dependencies": {
+        "added": [],
+        "removed": [],
+        "changed": []
+      },
+      "local": {
+        "status": "failed",
+        "wallMs": 116374,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 10457
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 21611
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 2125
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 603
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 91
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 1,
+            "durationMs": 81394
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 0
+          }
+        ]
+      },
+      "hosted": {
+        "status": "failed",
+        "wallMs": 155660,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 23199
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 35423
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 5058
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 1193
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 441
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 1,
+            "durationMs": 90125
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 0
+          }
+        ],
+        "baselineMs": 42191,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41104183215/job/124229033516",
+        "conclusion": "failure"
+      }
+    },
+    {
+      "name": "deleted-regression",
+      "expected": "failed",
+      "candidateSha": "2521ef05c2382a88d14f3f3ee10602881bee48a3",
+      "replacedTests": [],
+      "newDependency": false,
+      "dependencies": {
+        "added": [],
+        "removed": [],
+        "changed": []
+      },
+      "local": {
+        "status": "failed",
+        "wallMs": 116095,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 9816
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 21680
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 2153
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 609
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 101
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 1,
+            "durationMs": 81641
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 0
+          }
+        ]
+      },
+      "hosted": {
+        "status": "failed",
+        "wallMs": 154166,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 21788
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 35519
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 4909
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 1172
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 431
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 1,
+            "durationMs": 90119
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 0
+          }
+        ],
+        "baselineMs": 41960,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41104183215/job/124229032985",
+        "conclusion": "failure"
+      }
+    },
+    {
+      "name": "weakened-typecheck",
+      "expected": "failed",
+      "candidateSha": "3b59a56bda26169ae985e03ee70902b7bb15f63f",
+      "replacedTests": [],
+      "newDependency": false,
+      "dependencies": {
+        "added": [],
+        "removed": [],
+        "changed": []
+      },
+      "local": {
+        "status": "failed",
+        "wallMs": 55898,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 9491
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 21766
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 2,
+            "durationMs": 2024
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 589
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 87
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 0,
+            "durationMs": 21848
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 0
+          }
+        ]
+      },
+      "hosted": {
+        "status": "failed",
+        "wallMs": 123307,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 44494
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 36214
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 2,
+            "durationMs": 5427
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 1228
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 460
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 0,
+            "durationMs": 35250
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 0
+          }
+        ],
+        "baselineMs": 42761,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41104183215/job/124229033037",
+        "conclusion": "failure"
+      }
+    },
+    {
+      "name": "weakened-lint",
+      "expected": "failed",
+      "candidateSha": "c4511aafb4c721bcbb946a6215f5c9b4a694d569",
+      "replacedTests": [],
+      "newDependency": false,
+      "dependencies": {
+        "added": [],
+        "removed": [],
+        "changed": []
+      },
+      "local": {
+        "status": "failed",
+        "wallMs": 58768,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 12290
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 21760
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 2094
+          },
+          {
+            "name": "lint",
+            "exitCode": 1,
+            "durationMs": 594
+          },
+          {
+            "name": "format",
+            "exitCode": 1,
+            "durationMs": 86
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 0,
+            "durationMs": 21848
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 0
+          }
+        ]
+      },
+      "hosted": {
+        "status": "failed",
+        "wallMs": 100434,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 22908
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 35967
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 5127
+          },
+          {
+            "name": "lint",
+            "exitCode": 1,
+            "durationMs": 1208
+          },
+          {
+            "name": "format",
+            "exitCode": 1,
+            "durationMs": 440
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 0,
+            "durationMs": 34553
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 0
+          }
+        ],
+        "baselineMs": 41418,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41104183215/job/124229032639",
+        "conclusion": "failure"
+      }
+    },
+    {
+      "name": "weakened-format",
+      "expected": "failed",
+      "candidateSha": "2c5849db67bf4fd28d7bfb665e26fa07c18a18f3",
+      "replacedTests": [],
+      "newDependency": false,
+      "dependencies": {
+        "added": [],
+        "removed": [],
+        "changed": []
+      },
+      "local": {
+        "status": "failed",
+        "wallMs": 59162,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 12769
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 21738
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 2089
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 573
+          },
+          {
+            "name": "format",
+            "exitCode": 1,
+            "durationMs": 88
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 0,
+            "durationMs": 21811
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 0
+          }
+        ]
+      },
+      "hosted": {
+        "status": "failed",
+        "wallMs": 119432,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 41408
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 36004
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 5164
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 1218
+          },
+          {
+            "name": "format",
+            "exitCode": 1,
+            "durationMs": 441
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 0,
+            "durationMs": 34969
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 0
+          }
+        ],
+        "baselineMs": 42698,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41104183215/job/124229033005",
+        "conclusion": "failure"
+      }
+    },
+    {
+      "name": "assert-monkeypatch",
+      "expected": "failed",
+      "candidateSha": "c0c1f03526059d8d71bc2b4936b77218c20e0000",
+      "replacedTests": [],
+      "newDependency": false,
+      "dependencies": {
+        "added": [],
+        "removed": [],
+        "changed": []
+      },
+      "local": {
+        "status": "failed",
+        "wallMs": 40026,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 10949
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 21794
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 2071
+          },
+          {
+            "name": "lint",
+            "exitCode": 1,
+            "durationMs": 565
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 87
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 1,
+            "durationMs": 4466
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 0
+          }
+        ]
+      },
+      "hosted": {
+        "status": "failed",
+        "wallMs": 94948,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 42946
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 35399
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 5104
+          },
+          {
+            "name": "lint",
+            "exitCode": 1,
+            "durationMs": 1179
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 427
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 1,
+            "durationMs": 9669
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 0
+          }
+        ],
+        "baselineMs": 41067,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41104183215/job/124229033505",
+        "conclusion": "failure"
+      }
+    },
+    {
+      "name": "exit-import",
+      "expected": "failed",
+      "candidateSha": "9c4c8bd166588c0c4f0894e8a10b40e8f240149a",
+      "replacedTests": [],
+      "newDependency": false,
+      "dependencies": {
+        "added": [],
+        "removed": [],
+        "changed": []
+      },
+      "local": {
+        "status": "failed",
+        "wallMs": 38531,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 9406
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 21813
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 2023
+          },
+          {
+            "name": "lint",
+            "exitCode": 1,
+            "durationMs": 563
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 91
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 1,
+            "durationMs": 4542
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 0
+          }
+        ]
+      },
+      "hosted": {
+        "status": "failed",
+        "wallMs": 77823,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 28772
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 33800
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 4712
+          },
+          {
+            "name": "lint",
+            "exitCode": 1,
+            "durationMs": 1118
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 386
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 1,
+            "durationMs": 8857
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 0
+          }
+        ],
+        "baselineMs": 39523,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41104183215/job/124229033435",
+        "conclusion": "failure"
+      }
+    },
+    {
+      "name": "really-exit",
+      "expected": "failed",
+      "candidateSha": "c868c6657e631a712ff3055824d29a9f7acb875b",
+      "replacedTests": [],
+      "newDependency": false,
+      "dependencies": {
+        "added": [],
+        "removed": [],
+        "changed": []
+      },
+      "local": {
+        "status": "failed",
+        "wallMs": 39113,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 9965
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 21796
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 2,
+            "durationMs": 2065
+          },
+          {
+            "name": "lint",
+            "exitCode": 1,
+            "durationMs": 599
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 89
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 1,
+            "durationMs": 4503
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 0
+          }
+        ]
+      },
+      "hosted": {
+        "status": "failed",
+        "wallMs": 77268,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 25680
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 35012
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 2,
+            "durationMs": 5051
+          },
+          {
+            "name": "lint",
+            "exitCode": 1,
+            "durationMs": 1197
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 437
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 1,
+            "durationMs": 9677
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 0
+          }
+        ],
+        "baselineMs": 41001,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41104183215/job/124229033257",
+        "conclusion": "failure"
+      }
+    },
+    {
+      "name": "exit-hook",
+      "expected": "failed",
+      "candidateSha": "f8b1a9aa784d22c12616b6fc607ea3b18ed45927",
+      "replacedTests": [],
+      "newDependency": false,
+      "dependencies": {
+        "added": [],
+        "removed": [],
+        "changed": []
+      },
+      "local": {
+        "status": "failed",
+        "wallMs": 116514,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 10302
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 21841
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 2056
+          },
+          {
+            "name": "lint",
+            "exitCode": 1,
+            "durationMs": 557
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 91
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 1,
+            "durationMs": 81573
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 0
+          }
+        ]
+      },
+      "hosted": {
+        "status": "failed",
+        "wallMs": 161225,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 27001
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 36874
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 5309
+          },
+          {
+            "name": "lint",
+            "exitCode": 1,
+            "durationMs": 1252
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 453
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 1,
+            "durationMs": 90111
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 0
+          }
+        ],
+        "baselineMs": 42318,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41104183215/job/124229033153",
+        "conclusion": "failure"
+      }
+    },
+    {
+      "name": "skip",
+      "expected": "failed",
+      "candidateSha": "a3ccc291204e9bcaa08b93da1bae7f760e02ec15",
+      "replacedTests": [],
+      "newDependency": false,
+      "dependencies": {
+        "added": [],
+        "removed": [],
+        "changed": []
+      },
+      "local": {
+        "status": "failed",
+        "wallMs": 55973,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 9540
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 21735
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 2,
+            "durationMs": 2034
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 592
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 88
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 0,
+            "durationMs": 21808
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 1,
+            "durationMs": 80
+          }
+        ]
+      },
+      "hosted": {
+        "status": "failed",
+        "wallMs": 98031,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 21813
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 35298
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 2,
+            "durationMs": 4838
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 1212
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 422
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 0,
+            "durationMs": 33888
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 1,
+            "durationMs": 338
+          }
+        ],
+        "baselineMs": 41365,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41104183215/job/124229033152",
+        "conclusion": "failure"
+      }
+    },
+    {
+      "name": "todo",
+      "expected": "failed",
+      "candidateSha": "7f12c764c2efbe766785ab0d4c3d1883aa501593",
+      "replacedTests": [],
+      "newDependency": false,
+      "dependencies": {
+        "added": [],
+        "removed": [],
+        "changed": []
+      },
+      "local": {
+        "status": "failed",
+        "wallMs": 56645,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 10249
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 21720
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 2,
+            "durationMs": 2093
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 614
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 87
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 0,
+            "durationMs": 21704
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 1,
+            "durationMs": 82
+          }
+        ]
+      },
+      "hosted": {
+        "status": "failed",
+        "wallMs": 98005,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 22127
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 34942
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 2,
+            "durationMs": 4946
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 1189
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 423
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 0,
+            "durationMs": 33820
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 1,
+            "durationMs": 331
+          }
+        ],
+        "baselineMs": 40565,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41104183215/job/124229033082",
+        "conclusion": "failure"
+      }
+    },
+    {
+      "name": "only",
+      "expected": "failed",
+      "candidateSha": "450a97c68db01145ca8e718c652b840535c83744",
+      "replacedTests": [],
+      "newDependency": false,
+      "dependencies": {
+        "added": [],
+        "removed": [],
+        "changed": []
+      },
+      "local": {
+        "status": "failed",
+        "wallMs": 56297,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 9812
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 21813
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 2,
+            "durationMs": 2009
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 608
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 93
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 0,
+            "durationMs": 21789
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 1,
+            "durationMs": 77
+          }
+        ]
+      },
+      "hosted": {
+        "status": "failed",
+        "wallMs": 103117,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 25523
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 35896
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 2,
+            "durationMs": 5120
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 1216
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 454
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 0,
+            "durationMs": 34344
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 1,
+            "durationMs": 335
+          }
+        ],
+        "baselineMs": 42770,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41104183215/job/124229033407",
+        "conclusion": "failure"
+      }
+    },
+    {
+      "name": "npmrc",
+      "expected": "incomplete",
+      "candidateSha": "18eb87c3d296b0041265bfae2aceb34fc1b6f2ae",
+      "replacedTests": [],
+      "newDependency": false,
+      "dependencies": {
+        "added": [],
+        "removed": [],
+        "changed": []
+      },
+      "local": {
+        "status": "incomplete",
+        "wallMs": 82,
+        "checks": []
+      },
+      "hosted": {
+        "status": "incomplete",
+        "wallMs": 194,
+        "checks": [],
+        "baselineMs": 41939,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41104183215/job/124229033285",
+        "conclusion": "failure"
+      }
+    },
+    {
+      "name": "git-dependency",
+      "expected": "incomplete",
+      "candidateSha": "9d627ed89c80453fb290cc119316b917228e7190",
+      "replacedTests": [],
+      "newDependency": false,
+      "dependencies": {
+        "added": [],
+        "removed": [],
+        "changed": []
+      },
+      "local": {
+        "status": "incomplete",
+        "wallMs": 96,
+        "checks": []
+      },
+      "hosted": {
+        "status": "incomplete",
+        "wallMs": 179,
+        "checks": [],
+        "baselineMs": 40251,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41104183215/job/124229033227",
+        "conclusion": "failure"
+      }
+    },
+    {
+      "name": "named-replacement",
+      "expected": "passed",
+      "candidateSha": "8bae3fa801278d964cb84ef27b18bc7190c1bc7a",
+      "replacedTests": [
+        {
+          "path": "test/specify.test.ts",
+          "reason": "Do not count a trailing empty line in inlined file totals"
+        },
+        {
+          "path": "test/orchestrator.test.ts",
+          "reason": "Do not count a trailing empty line in inlined file totals"
+        }
+      ],
+      "newDependency": false,
+      "dependencies": {
+        "added": [],
+        "removed": [],
+        "changed": []
+      },
+      "local": {
+        "status": "passed",
+        "wallMs": 56005,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 9619
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 21787
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 2070
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 565
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 86
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 0,
+            "durationMs": 21782
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 0
+          }
+        ]
+      },
+      "hosted": {
+        "status": "passed",
+        "wallMs": 107282,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 28954
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 36159
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 5324
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 1232
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 449
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 0,
+            "durationMs": 34938
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 0
+          }
+        ],
+        "baselineMs": 42966,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41104183215/job/124229033195",
+        "conclusion": "success"
+      }
+    },
+    {
+      "name": "unnamed-replacement",
+      "expected": "failed",
+      "candidateSha": "dc259edbc49a59a5be46f9e6e86e67cd65b257d2",
+      "replacedTests": [],
+      "newDependency": false,
+      "dependencies": {
+        "added": [],
+        "removed": [],
+        "changed": []
+      },
+      "local": {
+        "status": "failed",
+        "wallMs": 56256,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 9759
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 21862
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 2037
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 577
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 91
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 1,
+            "durationMs": 21834
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 0
+          }
+        ]
+      },
+      "hosted": {
+        "status": "failed",
+        "wallMs": 101967,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 23688
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 36169
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 5217
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 1242
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 447
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 1,
+            "durationMs": 34970
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 0
+          }
+        ],
+        "baselineMs": 42768,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41104183215/job/124229033264",
+        "conclusion": "failure"
+      }
+    },
+    {
+      "name": "new-test-fails",
+      "expected": "failed",
+      "candidateSha": "3e42717a04a429dbabfa9154536fbad7c2fa5ed0",
+      "replacedTests": [],
+      "newDependency": false,
+      "dependencies": {
+        "added": [],
+        "removed": [],
+        "changed": []
+      },
+      "local": {
+        "status": "failed",
+        "wallMs": 56451,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 9927
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 21765
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 2088
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 582
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 97
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 0,
+            "durationMs": 21817
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 1,
+            "durationMs": 80
+          }
+        ]
+      },
+      "hosted": {
+        "status": "failed",
+        "wallMs": 90692,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 21677
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 32945
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 4261
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 1215
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 553
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 0,
+            "durationMs": 29575
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 1,
+            "durationMs": 277
+          }
+        ],
+        "baselineMs": 36478,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41104183215/job/124229037094",
+        "conclusion": "failure"
+      }
+    },
+    {
+      "name": "registry-dependency",
+      "expected": "passed",
+      "candidateSha": "8b2bd63ff0ac62861de594c99b78a903d6b09347",
+      "replacedTests": [],
+      "newDependency": true,
+      "dependencies": {
+        "added": [
+          "node_modules/is-number"
+        ],
+        "removed": [],
+        "changed": []
+      },
+      "local": {
+        "status": "passed",
+        "wallMs": 60024,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 13760
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 21737
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 2057
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 587
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 93
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 0,
+            "durationMs": 21692
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 0
+          }
+        ]
+      },
+      "hosted": {
+        "status": "passed",
+        "wallMs": 110728,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 33093
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 35525
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 5278
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 1262
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 445
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 0,
+            "durationMs": 34848
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 0
+          }
+        ],
+        "baselineMs": 42390,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41104183215/job/124229036287",
+        "conclusion": "success"
+      }
+    }
+  ]
+}

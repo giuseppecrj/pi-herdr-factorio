@@ -1,0 +1,458 @@
+{
+  "gateSha": "b50b4cf05506f38fcc49f0a4edb821f842a28891",
+  "runUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41111873838",
+  "workflowHeadSha": "c8df82a82645154a3319b0971be13086d4f8e565",
+  "note": "Temporary push workflow asserts expected results after the production CLI; its successful jobs attest the expected candidate failure, not candidate approval.",
+  "fixtures": [
+    {
+      "name": "known-good",
+      "candidateSha": "46ce4d722cba91e48f5672cbb94d844a3003d330",
+      "local": {
+        "version": 1,
+        "gateSha": "b50b4cf05506f38fcc49f0a4edb821f842a28891",
+        "candidateSha": "46ce4d722cba91e48f5672cbb94d844a3003d330",
+        "nonce": "local-delta-known-good",
+        "runner": "local-bwrap",
+        "status": "passed",
+        "reason": null,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 9204
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 21828
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 2053
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 576
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 89
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 0,
+            "durationMs": 21775
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 109
+          }
+        ],
+        "ignoredChanges": [],
+        "replacedTests": [],
+        "replacementsDigest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "dependencies": {
+          "added": [],
+          "removed": [],
+          "changed": []
+        },
+        "newDependency": false,
+        "installScripts": [
+          "node_modules/@google/genai@2.21.0",
+          "node_modules/protobufjs@7.6.6"
+        ],
+        "baselineCounts": {
+          "test/accept.test.ts": 7,
+          "test/admission.test.ts": 41,
+          "test/artifacts.test.ts": 20,
+          "test/build.test.ts": 23,
+          "test/candidate-gates.test.ts": 12,
+          "test/extension.test.ts": 35,
+          "test/github-adapter.test.ts": 33,
+          "test/markers.test.ts": 51,
+          "test/orchestrator.test.ts": 267,
+          "test/pipeline.test.ts": 7,
+          "test/policy.test.ts": 18,
+          "test/sandbox/assets.cases.ts": 10,
+          "test/sandbox/audit.cases.ts": 8,
+          "test/sandbox/credentials.cases.ts": 18,
+          "test/sandbox/gateway.cases.ts": 36,
+          "test/sandbox/launcher.cases.ts": 43,
+          "test/sandbox/policy.cases.ts": 19,
+          "test/sandbox/routes.cases.ts": 8,
+          "test/sandbox/runner.cases.ts": 90,
+          "test/specify.test.ts": 50,
+          "test/stages.test.ts": 34,
+          "test/workflow.test.ts": 190
+        },
+        "candidateCounts": {
+          "test/accept.test.ts": 7,
+          "test/admission.test.ts": 41,
+          "test/artifacts.test.ts": 20,
+          "test/build.test.ts": 23,
+          "test/candidate-gates.test.ts": 12,
+          "test/extension.test.ts": 35,
+          "test/github-adapter.test.ts": 33,
+          "test/markers.test.ts": 51,
+          "test/orchestrator.test.ts": 267,
+          "test/pipeline.test.ts": 7,
+          "test/policy.test.ts": 18,
+          "test/sandbox/assets.cases.ts": 10,
+          "test/sandbox/audit.cases.ts": 8,
+          "test/sandbox/credentials.cases.ts": 18,
+          "test/sandbox/gateway.cases.ts": 36,
+          "test/sandbox/launcher.cases.ts": 43,
+          "test/sandbox/policy.cases.ts": 19,
+          "test/sandbox/routes.cases.ts": 8,
+          "test/sandbox/runner.cases.ts": 90,
+          "test/specify.test.ts": 50,
+          "test/stages.test.ts": 34,
+          "test/workflow.test.ts": 190
+        },
+        "wallMs": 55728,
+        "modelCalls": 0
+      },
+      "hosted": {
+        "version": 1,
+        "gateSha": "b50b4cf05506f38fcc49f0a4edb821f842a28891",
+        "candidateSha": "46ce4d722cba91e48f5672cbb94d844a3003d330",
+        "nonce": "hosted-known-good",
+        "runner": "docker",
+        "status": "passed",
+        "reason": null,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 41809
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 36124
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 4613
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 1113
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 408
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 0,
+            "durationMs": 32607
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 0,
+            "durationMs": 380
+          }
+        ],
+        "ignoredChanges": [],
+        "replacedTests": [],
+        "replacementsDigest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "dependencies": {
+          "added": [],
+          "removed": [],
+          "changed": []
+        },
+        "newDependency": false,
+        "installScripts": [
+          "node_modules/@google/genai@2.21.0",
+          "node_modules/protobufjs@7.6.6"
+        ],
+        "baselineCounts": {
+          "test/accept.test.ts": 7,
+          "test/admission.test.ts": 41,
+          "test/artifacts.test.ts": 20,
+          "test/build.test.ts": 23,
+          "test/candidate-gates.test.ts": 12,
+          "test/extension.test.ts": 35,
+          "test/github-adapter.test.ts": 33,
+          "test/markers.test.ts": 51,
+          "test/orchestrator.test.ts": 267,
+          "test/pipeline.test.ts": 7,
+          "test/policy.test.ts": 18,
+          "test/sandbox/assets.cases.ts": 10,
+          "test/sandbox/audit.cases.ts": 8,
+          "test/sandbox/credentials.cases.ts": 18,
+          "test/sandbox/gateway.cases.ts": 36,
+          "test/sandbox/launcher.cases.ts": 43,
+          "test/sandbox/policy.cases.ts": 19,
+          "test/sandbox/routes.cases.ts": 8,
+          "test/sandbox/runner.cases.ts": 90,
+          "test/specify.test.ts": 50,
+          "test/stages.test.ts": 34,
+          "test/workflow.test.ts": 190
+        },
+        "candidateCounts": {
+          "test/accept.test.ts": 7,
+          "test/admission.test.ts": 41,
+          "test/artifacts.test.ts": 20,
+          "test/build.test.ts": 23,
+          "test/candidate-gates.test.ts": 12,
+          "test/extension.test.ts": 35,
+          "test/github-adapter.test.ts": 33,
+          "test/markers.test.ts": 51,
+          "test/orchestrator.test.ts": 267,
+          "test/pipeline.test.ts": 7,
+          "test/policy.test.ts": 18,
+          "test/sandbox/assets.cases.ts": 10,
+          "test/sandbox/audit.cases.ts": 8,
+          "test/sandbox/credentials.cases.ts": 18,
+          "test/sandbox/gateway.cases.ts": 36,
+          "test/sandbox/launcher.cases.ts": 43,
+          "test/sandbox/policy.cases.ts": 19,
+          "test/sandbox/routes.cases.ts": 8,
+          "test/sandbox/runner.cases.ts": 90,
+          "test/specify.test.ts": 50,
+          "test/stages.test.ts": 34,
+          "test/workflow.test.ts": 190
+        },
+        "wallMs": 117230,
+        "modelCalls": 0,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41111873838/job/124255691942",
+        "jobConclusion": "success",
+        "expectedResultAssertion": true
+      }
+    },
+    {
+      "name": "new-test-fails",
+      "candidateSha": "491be188d62c2626bb60f466d5da843fa4426a4d",
+      "local": {
+        "version": 1,
+        "gateSha": "b50b4cf05506f38fcc49f0a4edb821f842a28891",
+        "candidateSha": "491be188d62c2626bb60f466d5da843fa4426a4d",
+        "nonce": "local-delta-new-test-fails",
+        "runner": "local-bwrap",
+        "status": "failed",
+        "reason": null,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 12612
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 21799
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 2052
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 586
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 88
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 0,
+            "durationMs": 21684
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 1,
+            "durationMs": 79
+          }
+        ],
+        "ignoredChanges": [],
+        "replacedTests": [],
+        "replacementsDigest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "dependencies": {
+          "added": [],
+          "removed": [],
+          "changed": []
+        },
+        "newDependency": false,
+        "installScripts": [
+          "node_modules/@google/genai@2.21.0",
+          "node_modules/protobufjs@7.6.6"
+        ],
+        "baselineCounts": {
+          "test/accept.test.ts": 7,
+          "test/admission.test.ts": 41,
+          "test/artifacts.test.ts": 20,
+          "test/build.test.ts": 23,
+          "test/candidate-gates.test.ts": 12,
+          "test/extension.test.ts": 35,
+          "test/github-adapter.test.ts": 33,
+          "test/markers.test.ts": 51,
+          "test/orchestrator.test.ts": 267,
+          "test/pipeline.test.ts": 7,
+          "test/policy.test.ts": 18,
+          "test/sandbox/assets.cases.ts": 10,
+          "test/sandbox/audit.cases.ts": 8,
+          "test/sandbox/credentials.cases.ts": 18,
+          "test/sandbox/gateway.cases.ts": 36,
+          "test/sandbox/launcher.cases.ts": 43,
+          "test/sandbox/policy.cases.ts": 19,
+          "test/sandbox/routes.cases.ts": 8,
+          "test/sandbox/runner.cases.ts": 90,
+          "test/specify.test.ts": 50,
+          "test/stages.test.ts": 34,
+          "test/workflow.test.ts": 190
+        },
+        "candidateCounts": {
+          "test/accept.test.ts": 7,
+          "test/admission.test.ts": 41,
+          "test/artifacts.test.ts": 20,
+          "test/build.test.ts": 23,
+          "test/candidate-gates.test.ts": 12,
+          "test/extension.test.ts": 35,
+          "test/github-adapter.test.ts": 33,
+          "test/markers.test.ts": 51,
+          "test/orchestrator.test.ts": 267,
+          "test/pipeline.test.ts": 7,
+          "test/policy.test.ts": 18,
+          "test/sandbox/assets.cases.ts": 10,
+          "test/sandbox/audit.cases.ts": 8,
+          "test/sandbox/credentials.cases.ts": 18,
+          "test/sandbox/gateway.cases.ts": 36,
+          "test/sandbox/launcher.cases.ts": 43,
+          "test/sandbox/policy.cases.ts": 19,
+          "test/sandbox/routes.cases.ts": 8,
+          "test/sandbox/runner.cases.ts": 90,
+          "test/specify.test.ts": 50,
+          "test/stages.test.ts": 34,
+          "test/workflow.test.ts": 190
+        },
+        "wallMs": 58994,
+        "modelCalls": 0
+      },
+      "hosted": {
+        "version": 1,
+        "gateSha": "b50b4cf05506f38fcc49f0a4edb821f842a28891",
+        "candidateSha": "491be188d62c2626bb60f466d5da843fa4426a4d",
+        "nonce": "hosted-new-test-fails",
+        "runner": "docker",
+        "status": "failed",
+        "reason": null,
+        "checks": [
+          {
+            "name": "install",
+            "exitCode": 0,
+            "durationMs": 23220
+          },
+          {
+            "name": "baseline_tests",
+            "exitCode": 0,
+            "durationMs": 36123
+          },
+          {
+            "name": "typecheck",
+            "exitCode": 0,
+            "durationMs": 5256
+          },
+          {
+            "name": "lint",
+            "exitCode": 0,
+            "durationMs": 1239
+          },
+          {
+            "name": "format",
+            "exitCode": 0,
+            "durationMs": 443
+          },
+          {
+            "name": "main_tests",
+            "exitCode": 0,
+            "durationMs": 34859
+          },
+          {
+            "name": "candidate_tests",
+            "exitCode": 1,
+            "durationMs": 363
+          }
+        ],
+        "ignoredChanges": [],
+        "replacedTests": [],
+        "replacementsDigest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "dependencies": {
+          "added": [],
+          "removed": [],
+          "changed": []
+        },
+        "newDependency": false,
+        "installScripts": [
+          "node_modules/@google/genai@2.21.0",
+          "node_modules/protobufjs@7.6.6"
+        ],
+        "baselineCounts": {
+          "test/accept.test.ts": 7,
+          "test/admission.test.ts": 41,
+          "test/artifacts.test.ts": 20,
+          "test/build.test.ts": 23,
+          "test/candidate-gates.test.ts": 12,
+          "test/extension.test.ts": 35,
+          "test/github-adapter.test.ts": 33,
+          "test/markers.test.ts": 51,
+          "test/orchestrator.test.ts": 267,
+          "test/pipeline.test.ts": 7,
+          "test/policy.test.ts": 18,
+          "test/sandbox/assets.cases.ts": 10,
+          "test/sandbox/audit.cases.ts": 8,
+          "test/sandbox/credentials.cases.ts": 18,
+          "test/sandbox/gateway.cases.ts": 36,
+          "test/sandbox/launcher.cases.ts": 43,
+          "test/sandbox/policy.cases.ts": 19,
+          "test/sandbox/routes.cases.ts": 8,
+          "test/sandbox/runner.cases.ts": 90,
+          "test/specify.test.ts": 50,
+          "test/stages.test.ts": 34,
+          "test/workflow.test.ts": 190
+        },
+        "candidateCounts": {
+          "test/accept.test.ts": 7,
+          "test/admission.test.ts": 41,
+          "test/artifacts.test.ts": 20,
+          "test/build.test.ts": 23,
+          "test/candidate-gates.test.ts": 12,
+          "test/extension.test.ts": 35,
+          "test/github-adapter.test.ts": 33,
+          "test/markers.test.ts": 51,
+          "test/orchestrator.test.ts": 267,
+          "test/pipeline.test.ts": 7,
+          "test/policy.test.ts": 18,
+          "test/sandbox/assets.cases.ts": 10,
+          "test/sandbox/audit.cases.ts": 8,
+          "test/sandbox/credentials.cases.ts": 18,
+          "test/sandbox/gateway.cases.ts": 36,
+          "test/sandbox/launcher.cases.ts": 43,
+          "test/sandbox/policy.cases.ts": 19,
+          "test/sandbox/routes.cases.ts": 8,
+          "test/sandbox/runner.cases.ts": 90,
+          "test/specify.test.ts": 50,
+          "test/stages.test.ts": 34,
+          "test/workflow.test.ts": 190
+        },
+        "wallMs": 101737,
+        "modelCalls": 0,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41111873838/job/124255692473",
+        "jobConclusion": "success",
+        "expectedResultAssertion": true
+      }
+    }
+  ]
+}
