@@ -120,7 +120,7 @@ interface TicketAdapter {
 | Stage | Runs where | Skill source | Credentials inside the sandbox | Output |
 | --- | --- | --- | --- | --- |
 | admit | controller | none, deterministic | none | issue snapshot at label time, or `rejected` |
-| specify | sandbox | audit-ticket (clean-room), grill-me + grilling (Pocock, MIT), deep-research (Pocock, MIT) when needed | none; the model gateway route | `contract.md`, or `needs_info` |
+| specify | sandbox | audit-ticket (clean-room), grill-me + grilling (Pocock, MIT), deep-research (Pocock, MIT) when needed | none; the model gateway route | `contract.json` with a posted summary, or `needs_info` with one questions comment |
 | accept | sandbox, separate from build | new skill, from StrongDM's scenario holdout idea | none; the model gateway route, a different model family from build | held-out acceptance tests, kept on the VM |
 | build | sandbox | pstack Feature or Bug fix playbook, tdd | none; the model gateway route | a patch plus visible tests |
 | validate | controller + CI | main's gates and the held-out suite in CI; an LLM judge on the VM only for criteria a test cannot express | judge: none; the model gateway route | `verdict.json` bound to the PR head SHA |

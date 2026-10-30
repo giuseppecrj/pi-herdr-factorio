@@ -307,14 +307,21 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Files.**
 
 - [ ] Create `src/specify.ts`, `test/specify.test.ts`, and `skills/audit-ticket/`, `skills/grill-me/`, `skills/deep-research/` with provenance files.
-- [ ] Edit `server/controller.ts`, `src/adapters/github.ts`, `test/pipeline.test.ts`, and `skills/README.md` for stage invocation and clarification reporting.
+- [ ] Edit `src/orchestrator.ts`, `src/markers.ts`, `src/admission.ts`, `src/tickets.ts`, `src/adapters/github.ts`, and `server/controller.ts` for stage inputs, outcomes, linked runs, and clarification reporting.
+- [ ] Edit `server/sandbox.ts`, `server/sandbox/rpc.ts`, `server/sandbox/result.ts`, and `server/provision.sh` for the stage prompt, tools, output capture, and bundled skills.
+- [ ] Edit `test/orchestrator.test.ts`, `test/markers.test.ts`, `test/sandbox/**`, `skills/README.md`, `docs/operations/sandbox.md`, `docs/operations/factory-cli.md`, and `.pi/skills/verify-factory/**`.
 
 **Build.**
 
-- [ ] Implement `specifyTicket` to produce a versioned contract with ticket snapshot, repository/base SHA, intended behavior, exclusions, acceptance criteria, compatibility, and non-functional limits. Validate output and compute `contractDigest` in controller code.
+- [ ] Implement `specifyTicket` to produce a versioned `contract.json` with ticket snapshot, repository/base SHA, intended behavior, exclusions, acceptance criteria, compatibility, and non-functional limits. Validate output and compute `contractDigest` in controller code. The base SHA is the admission's `baseSha`.
+- [ ] Give specify a checkout of the repository at `baseSha`, extracted from the tarball with unsafe entries refused. Grant `read`, `grep`, and `ls` only. Put a repository map, the trusted guidance at `baseSha`, and the files the ticket names in the prompt, so the tools read only what is missing.
+- [ ] Let specify spawn one bare reviewer child with no tools that critiques the draft contract. The reviewer flags only ambiguity that would change acceptance tests. Owner decision 2026-10-30.
+- [ ] Capture the stage's final text through RPC after settlement. Read it only when the stage passed. Keep model text out of receipts.
 - [ ] Write audit-ticket clean-room. Adapt only the MIT sources selected in `research/SYNTHESIS.md` for grilling and optional research. Carry `SOURCE.md` and LICENSE or NOTICE as required. Replace interactive questions with a structured `needs_info` result.
-- [ ] Resolve repository facts before asking the owner. Keep consequential uncertainty as questions, not guessed requirements. Post redacted questions once, label the issue `factory:needs-info`, and spend no model budget while inactive.
-- [ ] On an authorized answer followed by a fresh ready-label event, create a linked new attempt with a new snapshot and contract. Preserve the terminal `needs_info` record rather than mutating a finished `Run`. Ignore bot echoes and unauthorized answers as authorization signals.
+- [ ] Resolve repository facts before asking the owner. Keep consequential uncertainty as questions, not guessed requirements. Post redacted questions once as one issue comment that cites repository lines. Remove `factory:ready`, add `factory:needs-info`, end the run with a terminal `needs_info` marker, and spend no model budget while inactive.
+- [ ] Post a redacted contract summary on the issue when specify passes. It lists the behavior, exclusions, and acceptance criteria. The full contract stays on the VM.
+- [ ] On a fresh ready-label event after `needs_info`, start a linked new run with a new snapshot and contract. Answers come from issue body edits and from comments posted after the questions comment by authors with write access. Bots and the factory account never count. A comment in the same second as the label is ambiguous. Preserve the terminal `needs_info` record rather than mutating a finished `Run`.
+- [ ] Keep these out of F06a. Line-level questions on a spec PR belong to the `approve_contract` checkpoint. Web search behind a `factory:research` label ships in its own PR after F06a.
 
 **You see.**
 
@@ -328,21 +335,21 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 - [ ] Lane 1. Regression lane against trunk. Run one clear fixture issue through the installed stages on trunk and head. Save `contract.json`. Pass when head produces a contract bound to the admitted snapshot and stops before unimplemented acceptance.
 - [ ] Lane 2. Submit a vague fixture issue with an unresolved product choice. Save `needs-info.json`. Pass when questions appear on the issue and no build starts.
-- [ ] Lane 3. Answer those questions and apply a fresh authorized ready label. Save `clarification-resume.json`. Pass when a linked attempt uses the new snapshot and preserves the old terminal result.
+- [ ] Lane 3. Answer those questions and apply a fresh authorized ready label. Save `clarification-resume.json`. Pass when a linked run uses the new snapshot and the answers, and preserves the old terminal result.
 - [ ] Lane 4. Post an answer without a new readiness event. Save `answer-only.log`. Pass when no new attempt starts.
 - [ ] Lane 5. Ask for behavior already documented in the repository. Save `repo-facts.log`. Pass when specify cites repository evidence instead of asking a redundant question.
 - [ ] Lane 6. Embed instructions to change workflow permissions in the issue. Save `scope-injection.log`. Pass when the contract does not grant that authority.
 - [ ] Lane 7. Interrupt after the clarification comment write. Save `clarification-restart.log`. Pass when recovery reuses the existing questions rather than posting duplicates.
 - [ ] Lane 8. Use a verification budget too small to finish specification. Save `specify-budget.json`. Pass when the outcome records exhaustion and no fabricated contract.
-- [ ] Lane 9. Run optional research for a fixture requiring a cited external fact, under the approved network policy. Save `research-boundary.log`. Pass when allowed evidence is cited or missing access becomes an explicit question, not broader egress.
+- [ ] Lane 9. Run specify on a fixture requiring a cited external fact. Save `research-boundary.log`. Pass when missing access becomes an explicit question, the stage audit shows only model requests, and a hosted search tool request is denied.
 - [ ] Lane 10. Inspect public contract evidence and private session paths. Save `redaction.json`. Pass when public output contains no raw session, provider configuration, or unapproved issue content.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Metric. Measure specify wall time and total tokens/spend per clear and vague issue on both revisions, plus time to a visible contract or questions.
+- [ ] Metric. Measure specify wall time and total tokens per clear and vague issue on both revisions, plus time to a visible contract or questions. Receipts record no prices, so no money figure is claimed.
 - [ ] Probe. Interleave three bounded runs of each fixed ticket class on trunk and head. Record trunk's unsupported specify result when absent. Save `perf.json`.
 - [ ] Baseline. Record trunk executor overhead and available usage before the new stage trials.
-- [ ] Rule. Fail if the small clear fixture takes over 5 minutes or 20,000 tokens, or the vague fixture takes over 3 minutes or 12,000 tokens. Fail if any model usage accrues while awaiting an answer. Enforce the configured spend cap independently.
+- [ ] Rule. Fail if the small clear fixture takes over 5 minutes or 40,000 tokens, or the vague fixture takes over 3 minutes or 25,000 tokens. Fail if any model usage accrues while awaiting an answer. Enforce the configured token cap independently. The owner raised the token limits on 2026-10-30 to pay for read tools and the reviewer child.
 
 **Review gate.** The operator reviews before merge.
 
