@@ -127,20 +127,31 @@ if (mode === "generate") {
 
 	if(summary.some(s=>!s.pass)) process.exitCode=1;
 } else if (mode === "scratch") {
-	const cases=json(readFileSync(join(trail,"fixtures.json"),"utf8"));
-	const branch=`proto/f07b-fixtures-${gateSha.slice(0,7)}`;
+	const allCases=json(readFileSync(join(trail,"fixtures.json"),"utf8"));
+	const perf=flags.includes("--perf");
+	const cases=perf ? allCases.filter(f=>f.name==="known-good") : allCases;
+	const branch=`proto/f07b-${perf ? "perf" : "fixtures"}-${gateSha.slice(0,7)}`;
 	const workflow=parse(readFileSync(".github/workflows/ci.yml","utf8"));
 	workflow.name="F07b fixture proof";
 	workflow["run-name"]=`F07b fixtures ${gateSha}`;
 	workflow.on={push:{branches:[branch]}};
 	const job=workflow.jobs.gates;
+	job.if="${{ github.ref == 'refs/heads/"+branch+"' }}";
 	job.name="gates (${{ matrix.case }})";
 	job.strategy={"fail-fast":false,"max-parallel":8,matrix:{include:cases.map(f=>({case:f.name,candidate_sha:f.candidateSha,gate_sha:gateSha,nonce:`hosted-${f.name}`,replacements:JSON.stringify(f.replacements),replacements_digest:f.replacementsDigest}))}};
 	const convert=value=>Array.isArray(value)?value.map(convert):value instanceof Object?Object.fromEntries(Object.entries(value).map(([key,v])=>[key,convert(v)])):String(value).replaceAll("inputs.","matrix.").replaceAll("github.sha","matrix.gate_sha");
 	job.steps=job.steps.map(convert);
 	job.steps.at(-1).with.name="gate-receipt-${{ matrix.case }}";
-	job.steps.splice(3,0,{name:"Measure trunk check",run:"start=$(date +%s%3N)\nnpm run check > \"$RUNNER_TEMP/trunk-check.log\" 2>&1\nend=$(date +%s%3N)\nprintf '%s\\n' \"$((end-start))\" > \"$RUNNER_TEMP/baseline-ms\""});
-	job.steps.splice(-1,0,{name:"Save baseline timing",if:"${{ always() && !cancelled() }}",run:'test ! -d "$RUNNER_TEMP/gate-results" || cp "$RUNNER_TEMP/baseline-ms" "$RUNNER_TEMP/gate-results/baseline-ms"'});
+
+	if (perf) {
+		const step=job.steps.find(s=>s.name==="Run trusted gates");
+		const gates=step.run.replaceAll('$RUNNER_TEMP/gate-results', '$RUNNER_TEMP/gate-results/perf-$n').replace('--nonce "$NONCE"', '--nonce "$NONCE-$n"');
+		step.run='for n in 1 2 3; do\nstart=$(date +%s%3N)\nnpm run check > "$RUNNER_TEMP/trunk-check-$n.log" 2>&1\nend=$(date +%s%3N)\n'+gates+'\nprintf \'%s\\n\' "$((end-start))" > "$RUNNER_TEMP/gate-results/perf-$n/baseline-ms"\ndone\n';
+	} else {
+		job.steps.splice(3,0,{name:"Measure trunk check",run:"start=$(date +%s%3N)\nnpm run check > \"$RUNNER_TEMP/trunk-check.log\" 2>&1\nend=$(date +%s%3N)\nprintf '%s\\n' \"$((end-start))\" > \"$RUNNER_TEMP/baseline-ms\""});
+		job.steps.splice(-1,0,{name:"Save baseline timing",if:"${{ always() && !cancelled() }}",run:'test ! -d "$RUNNER_TEMP/gate-results" || cp "$RUNNER_TEMP/baseline-ms" "$RUNNER_TEMP/gate-results/baseline-ms"'});
+	}
+
 	const index=join(trail,"scratch-index");
 	const env={...process.env,GIT_INDEX_FILE:index};
 
