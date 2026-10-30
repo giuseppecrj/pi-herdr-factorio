@@ -26,8 +26,6 @@ if (mode === "generate") {
 	const original = path => git(["show", `${gateSha}:${path}`]) + "\n";
 	const bad = original("src/markers.ts").replace('status === "needs_info"', 'status === "running"');
 	const manifest = json(original("package.json"));
-	const gates = json(original(".github/factory/gates/gates.json"));
-	const withNewTest = JSON.stringify({ ...gates, tests: [...gates.tests, "test/gate-new.test.ts"].sort() }, null, 2) + "\n";
 	const noop = { ...manifest, scripts: Object.fromEntries(Object.keys(manifest.scripts).map(key => [key, "true"])) };
 	const testHead = 'import assert from "node:assert/strict";\nimport { test } from "node:test";\n';
 	const goodSource = '\nexport const GATE_SENTINEL = "candidate-source";\n';
@@ -38,7 +36,8 @@ if (mode === "generate") {
 	const changedOrchestrator = original("test/orchestrator.test.ts").replace("of 101\\)", "of 100\\)");
 
 	const cases = [
-		{ name: "known-good", expected: "passed", files: { "src/markers.ts": original("src/markers.ts") + goodSource, "test/gate-new.test.ts": goodTest, ".github/factory/gates/gates.json": withNewTest } },
+		{ name: "new-thing", expected: "passed", files: { "test/new-thing.test.ts": `${testHead}\ntest("new visible test", () => {\n\tassert.equal(1 + 1, 2);\n});\n` } },
+		{ name: "known-good", expected: "passed", files: { "src/markers.ts": original("src/markers.ts") + goodSource, "test/gate-new.test.ts": goodTest } },
 		{ name: "wrong-behavior", expected: "failed", files: { "src/markers.ts": bad } },
 		{ name: "noop-scripts", expected: "failed", files: { "src/markers.ts": bad, "package.json": JSON.stringify(noop, null, 2) + "\n" } },
 		{ name: "deleted-regression", expected: "failed", files: { "src/markers.ts": bad, "test/markers.test.ts": null } },
@@ -179,7 +178,10 @@ if (mode === "generate") {
 		kind="delta";
 	}
 
-	const branch=`proto/f07b-fix1-${kind}-${gateSha.slice(0,7)}`;
+	const fix2=flags.includes("--fix2");
+
+	if(fix2 && (cases.length!==1 || cases[0].name!=="new-thing")) throw new Error("Fix 2 scratch expects only new-thing");
+	const branch=`proto/f07b-${fix2?"fix2":"fix1"}-${kind}-${gateSha.slice(0,7)}`;
 	const workflow=parse(readFileSync(".github/workflows/ci.yml","utf8"));
 	workflow.name="F07b fixture proof";
 	workflow["run-name"]=`F07b fixtures ${gateSha}`;
@@ -221,6 +223,21 @@ NODE`});
 		job.steps.splice(-1,0,{name:"Save baseline timing",if:"${{ always() && !cancelled() }}",run:'test ! -d "$RUNNER_TEMP/gate-results" || cp "$RUNNER_TEMP/baseline-ms" "$RUNNER_TEMP/gate-results/baseline-ms"'});
 	}
 
+	if (fix2) {
+		job.steps.splice(-1,0,{
+			name:"Check candidate without a manifest edit",
+			env:{CANDIDATE_SHA:"${{ matrix.candidate_sha }}",GATE_SHA:"${{ matrix.gate_sha }}"},
+			run:`test "$(git diff --name-only "$GATE_SHA" "$CANDIDATE_SHA")" = test/new-thing.test.ts
+git diff --exit-code "$GATE_SHA" "$CANDIDATE_SHA" -- .github/factory/gates/gates.json
+candidate="$RUNNER_TEMP/root-candidate"
+mkdir -p "$candidate"
+git archive "$CANDIDATE_SHA" | tar -xf - -C "$candidate"
+cp -a node_modules "$candidate/node_modules"
+docker run --rm --network none --read-only --tmpfs /tmp:exec,size=1g --user 1001 --cap-drop ALL --security-opt no-new-privileges --mount "type=bind,src=$candidate,dst=/w,readonly" --workdir /w node@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617 env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp TMPDIR=/tmp CI=true LANG=C.UTF-8 npm run check > "$RUNNER_TEMP/gate-results/candidate-check.log" 2>&1
+grep -E '^ℹ (tests|pass|fail|skipped|todo) ' "$RUNNER_TEMP/gate-results/candidate-check.log"`
+		});
+	}
+
 	const index=join(trail,"scratch-index");
 	const env={...process.env,GIT_INDEX_FILE:index};
 
@@ -229,7 +246,7 @@ NODE`});
 		const blob=git(["hash-object","-w","--stdin"],{input:stringify(workflow)});
 		git(["update-index","--add","--cacheinfo",`100644,${blob},.github/workflows/ci.yml`],{env});
 		const tree=git(["write-tree"],{env});
-		const sha=git(["commit-tree",tree,"-p",gateSha,"-m","F07b temporary push-triggered fixture proof"]);
+		const sha=git(["commit-tree",tree,"-p",fix2?cases[0].candidateSha:gateSha,"-m","F07b temporary push-triggered fixture proof"]);
 		git(["push","origin",`${sha}:refs/heads/${branch}`]);
 		writeFileSync(join(trail,"scratch.json"),JSON.stringify({branch,sha,gateSha},null,2)+"\n");
 	} finally {rmSync(index,{force:true});}

@@ -3,6 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import {
 	cpSync,
 	existsSync,
+	globSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -575,24 +576,29 @@ function manifestOf(tree: string): GateManifest {
 	);
 
 	const rawChecks = arrayOf(fieldOf(value, "checks"));
-	const tests = textsOf(fieldOf(value, "tests"));
+	const testGlobs = textsOf(fieldOf(value, "testGlobs"));
 
 	if (
 		fieldOf(value, "version") !== 1 ||
 		rawChecks === null ||
-		tests === null ||
-		tests.length === 0 ||
-		tests.some(
-			(p) =>
-				!safePath(p) ||
-				!p.startsWith("test/") ||
-				!(
-					p.endsWith(".test.ts") || /^test\/sandbox\/[^/]+\.cases\.ts$/.test(p)
-				) ||
-				!existsSync(join(tree, p)),
+		testGlobs === null ||
+		testGlobs.length === 0 ||
+		new Set(testGlobs).size !== testGlobs.length ||
+		testGlobs.some(
+			(p) => !/^test\/(?:\*\.test\.ts|sandbox\/\*\.cases\.ts)$/.test(p),
 		)
 	)
 		throw new Error("invalid_gate_manifest");
+
+	const tests = testGlobs
+		.flatMap((pattern) => {
+			const files = globSync(pattern, { cwd: tree });
+
+			if (files.length === 0) throw new Error("missing_tests");
+
+			return files;
+		})
+		.sort();
 
 	const checks = rawChecks.map((item) => {
 		const obj = objectOf(item);
@@ -615,20 +621,6 @@ function manifestOf(tree: string): GateManifest {
 		new Set(checks.map((c) => c.name)).size !== CHECK_NAMES.length
 	)
 		throw new Error("missing_checks");
-
-	const discovered = [
-		...readdirSync(join(tree, "test"))
-			.filter((p) => p.endsWith(".test.ts"))
-			.map((p) => `test/${p}`),
-		...(existsSync(join(tree, "test/sandbox"))
-			? readdirSync(join(tree, "test/sandbox"))
-					.filter((p) => p.endsWith(".cases.ts"))
-					.map((p) => `test/sandbox/${p}`)
-			: []),
-	].sort();
-
-	if (JSON.stringify(tests.toSorted()) !== JSON.stringify(discovered))
-		throw new Error("manifest_drift");
 
 	return { checks, tests: tests.filter((p) => !p.endsWith(".cases.ts")) };
 }

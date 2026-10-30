@@ -1,5 +1,12 @@
 [
 	{
+		"name": "new-thing",
+		"expected": "passed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
 		"name": "known-good",
 		"expected": "passed",
 		"replacements": [],

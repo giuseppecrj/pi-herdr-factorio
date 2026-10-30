@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
 	existsSync,
-	readdirSync,
+	globSync,
 	mkdtempSync,
 	mkdirSync,
 	readFileSync,
@@ -57,7 +57,7 @@ function repo(t: { after(fn: () => void): void }) {
 				{ name: "lint", argv: ["node", "-e", "0"] },
 				{ name: "format", argv: ["node", "-e", "0"] },
 			],
-			tests: ["test/value.test.ts"],
+			testGlobs: ["test/*.test.ts"],
 		}),
 	);
 	put(
@@ -362,7 +362,7 @@ createCipheriv("aes-256-gcm",Buffer.alloc(32),Buffer.alloc(12)).update("works");
 	]);
 });
 
-test("manifest covers every main test and sandbox case", () => {
+test("main-owned test globs match npm test and include sandbox cases", () => {
 	const root = existsSync("/g/tooling/.github/factory/gates/gates.json")
 		? "/g/tooling"
 		: ".";
@@ -371,16 +371,18 @@ test("manifest covers every main test and sandbox case", () => {
 		readFileSync(join(root, ".github/factory/gates/gates.json"), "utf8"),
 	);
 
-	const expected = [
-		...readdirSync(join(root, "test"))
-			.filter((p) => p.endsWith(".test.ts"))
-			.map((p) => `test/${p}`),
-		...readdirSync(join(root, "test/sandbox"))
-			.filter((p) => p.endsWith(".cases.ts"))
-			.map((p) => `test/sandbox/${p}`),
-	].sort();
+	assert.deepEqual(manifest.testGlobs, [
+		"test/*.test.ts",
+		"test/sandbox/*.cases.ts",
+	]);
+	const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+	assert.equal(
+		pkg.scripts.test,
+		`node --experimental-strip-types --test --test-concurrency=1 ${manifest.testGlobs[0]}`,
+	);
 
-	assert.deepEqual(manifest.tests.toSorted(), expected);
+	for (const pattern of manifest.testGlobs)
+		assert.ok(globSync(pattern, { cwd: root }).length > 0);
 });
 
 test("removes nested ignore files and candidate-deleted source", async (t) => {
@@ -551,17 +553,93 @@ test("lockfile aliases pin their real package, and swaps are refused", () => {
 	);
 });
 
-test("gate fails closed on manifest drift", async (t) => {
+test("candidate-added tests pass without a manifest edit and join the next main baseline", async (t) => {
 	const f = repo(t);
+
+	const manifest = f.git(
+		"show",
+		`${f.gateSha}:.github/factory/gates/gates.json`,
+	);
+
 	f.put(
-		"test/unlisted.test.ts",
+		"test/new-thing.test.ts",
 		'import {test} from "node:test"; test("new",()=>{});',
 	);
+
 	const sha = f.commit();
-	const r = await checkCandidate({ ...gateInput(f, sha), gateSha: sha });
-	assert.equal(r.status, "incomplete");
-	assert.equal(r.reason, "manifest_drift");
+	assert.equal(
+		f.git("show", `${sha}:.github/factory/gates/gates.json`),
+		manifest,
+	);
+	const invocations: (readonly string[])[] = [];
+
+	const runner: GateRunner = {
+		kind: miniRunner.kind,
+		run: (input) => {
+			invocations.push(input.argv);
+
+			return miniRunner.run(input);
+		},
+	};
+
+	const candidate = await checkCandidate({ ...gateInput(f, sha), runner });
+	assert.equal(candidate.status, "passed");
+	assert.ok(
+		invocations.some((argv) => argv.includes("test/new-thing.test.ts")),
+	);
+	assert.deepEqual(Object.keys(candidate.baselineCounts), [
+		"test/value.test.ts",
+	]);
+	assert.equal(
+		candidate.checks.find((c) => c.name === "candidate_tests")?.exitCode,
+		0,
+	);
+	const main = await checkCandidate({ ...gateInput(f, sha), gateSha: sha });
+	assert.equal(main.status, "passed");
+	assert.equal(main.baselineCounts["test/new-thing.test.ts"], 1);
+	assert.equal(main.candidateCounts["test/new-thing.test.ts"], 1);
 });
+
+test("new main sandbox cases are discovered through the main aggregator", async (t) => {
+	const f = repo(t);
+	const path = ".github/factory/gates/gates.json";
+	const manifest = JSON.parse(readFileSync(join(f.root, path), "utf8"));
+	f.put(
+		path,
+		JSON.stringify({
+			...manifest,
+			testGlobs: ["test/*.test.ts", "test/sandbox/*.cases.ts"],
+		}),
+	);
+	f.put(
+		"test/sandbox/new.cases.ts",
+		'import {test} from "node:test"; test("new main case",()=>{});',
+	);
+	f.put("test/sandbox.test.ts", 'import "./sandbox/new.cases.ts";');
+	const gateSha = f.commit();
+	const r = await checkCandidate({ ...gateInput(f, gateSha), gateSha });
+	assert.equal(r.status, "passed");
+	assert.equal(r.baselineCounts["test/sandbox/new.cases.ts"], 1);
+});
+
+for (const [testGlobs, reason] of [
+	[[], "invalid_gate_manifest"],
+	[["test/value.test.ts"], "invalid_gate_manifest"],
+	[["../*.test.ts"], "invalid_gate_manifest"],
+	[["test/*.test.ts", "test/*.test.ts"], "invalid_gate_manifest"],
+	[["test/sandbox/*.cases.ts"], "missing_tests"],
+] as const) {
+	test(`invalid or empty main test globs fail closed: ${JSON.stringify(testGlobs)}`, async (t) => {
+		const f = repo(t);
+		const path = ".github/factory/gates/gates.json";
+		const manifest = JSON.parse(readFileSync(join(f.root, path), "utf8"));
+		f.put(path, JSON.stringify({ ...manifest, testGlobs }));
+		const gateSha = f.commit();
+		const r = await checkCandidate({ ...gateInput(f, gateSha), gateSha });
+		assert.equal(r.status, "incomplete");
+		assert.equal(r.reason, reason);
+	});
+}
 
 test("Docker and runner infrastructure exits never blame a candidate", async (t) => {
 	const f = repo(t);
@@ -780,7 +858,7 @@ test("bad manifests, stale bases, missing checks and tampered replacement digest
 	);
 	f.put(
 		".github/factory/gates/gates.json",
-		JSON.stringify({ version: 1, checks: [], tests: ["test/value.test.ts"] }),
+		JSON.stringify({ version: 1, checks: [], testGlobs: ["test/*.test.ts"] }),
 	);
 	const bad = f.commit();
 	assert.equal(

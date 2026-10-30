@@ -49,7 +49,13 @@ The stream and serializer fixtures retain audit B's source blobs `2d0edfd` and `
 
 The replacement fixture changes how `inlined` counts a trailing empty line. Both specify and orchestrator tests pin that behavior. The named case authorizes both files. The unnamed case supplies the same patch without authorization.
 
-The known-good fixture adds a candidate-only export and a test that imports it. The fixture also updates its candidate manifest for the ordinary root check's manifest-consistency assertion. The trusted gate ignores that candidate manifest and uses main's unchanged manifest. Inside gate execution, the consistency unit reads `/g/tooling`, not the merged candidate test directory. Maintainer changes that add main tests must update main's manifest too.
+The known-good fixture adds a candidate-only export and a test that imports it. The recorded fix-round-1 candidate also updated its manifest for the ordinary root check. Fix round 2 removes that workaround: neither this fixture nor `new-thing` edits `.github/`.
+
+## Test discovery (fix round 2)
+
+Main owns `testGlobs` in `gates.json`: `test/*.test.ts` and `test/sandbox/*.cases.ts`. The gate expands these against main's exported Git tree at `gateSha`, before overlaying the candidate. Each glob must match at least one file. Top-level tests run directly; `test/sandbox.test.ts` imports the sandbox cases, whose per-file counts remain in the baseline.
+
+There is no hand-maintained file list or file-count drift assertion. The root unit checks the globs against the `npm test` command, not against a frozen list of files. A factory patch can add `test/new-thing.test.ts` without editing `.github/`. It runs as `candidate_tests` on that dispatch and joins the main baseline after merge. Synthetic mini-repo tests prove both steps without changing the manifest, and cover newly imported main sandbox cases.
 
 ## Held-out checks and exclusions
 

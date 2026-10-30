@@ -5,29 +5,5 @@
     { "name": "lint", "argv": ["/g/tooling/node_modules/.bin/oxlint", "--disable-nested-config", "--ignore-path", "/dev/null", "--ignore-pattern", "test/acceptance/**", "-c", "/g/lint.json", "src", "extension", "server", "test"] },
     { "name": "format", "argv": ["/g/tooling/node_modules/.bin/biome", "format", "--config-path", "/w/biome.json", "src", "extension", "server", "test"] }
   ],
-  "tests": [
-    "test/accept.test.ts",
-    "test/admission.test.ts",
-    "test/artifacts.test.ts",
-    "test/build.test.ts",
-    "test/candidate-gates.test.ts",
-    "test/extension.test.ts",
-    "test/github-adapter.test.ts",
-    "test/markers.test.ts",
-    "test/orchestrator.test.ts",
-    "test/pipeline.test.ts",
-    "test/policy.test.ts",
-    "test/sandbox.test.ts",
-    "test/sandbox/assets.cases.ts",
-    "test/sandbox/audit.cases.ts",
-    "test/sandbox/credentials.cases.ts",
-    "test/sandbox/gateway.cases.ts",
-    "test/sandbox/launcher.cases.ts",
-    "test/sandbox/policy.cases.ts",
-    "test/sandbox/routes.cases.ts",
-    "test/sandbox/runner.cases.ts",
-    "test/specify.test.ts",
-    "test/stages.test.ts",
-    "test/workflow.test.ts"
-  ]
+  "testGlobs": ["test/*.test.ts", "test/sandbox/*.cases.ts"]
 }
