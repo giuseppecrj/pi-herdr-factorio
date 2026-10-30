@@ -16,6 +16,7 @@ export const title = "What the controller does with one run today";
 
 export const state = (v: any) => {
   if (!v.loaded) return ["Controller restarting"];
+  if (v.pending !== 0) return ["Run reserved, waiting to be adopted"];
   if (v.ph in HELD) return ["Holding a claim", HELD[v.ph]];
   if (v.ph === "ending") return ["Stopping the aborted stage"];
   const last = v.marker[v.event];
@@ -25,7 +26,7 @@ export const state = (v: any) => {
 };
 
 export const group = (v: any) => {
-  if (!v.loaded) return "restart";
+  if (!v.loaded || v.pending !== 0) return "restart";
   if (v.ph in HELD) return "held";
   if (v.ph === "ending") return "held";
   return v.marker[v.event] in ENDED ? "ended" : "waiting";
@@ -65,11 +66,13 @@ export const step = (action: string, from: any, to: any) => {
       return "the aborted sandbox stops";
     case "Restart":
       return from.ph === "none" ? null : "the controller restarts";
-    case "Recover": {
-      if (to.ph !== "none") return "first tick recovers the run from its marker";
+    case "Recover":
+      return to.pending !== 0 ? "first tick reserves the run from its claim file" : null;
+    case "Adopt": {
+      if (to.ph !== "none") return "a later tick adopts the run from its marker";
       const last = to.marker[to.event];
-      if (last === "released") return "first tick finds the label gone";
-      if (last === "failed") return "first tick ends the interrupted attempt [no attempts left]";
+      if (last === "released") return "a later tick finds the label gone";
+      if (last === "failed") return "a later tick ends the interrupted attempt [no attempts left]";
       return null;
     }
     case "Reconcile":

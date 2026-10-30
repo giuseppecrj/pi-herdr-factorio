@@ -19,11 +19,12 @@ VARIABLES
     loaded,      \* FALSE after a restart until the first tick has recovered claims
     reconciled,  \* the executor has stopped every leftover sandbox
     sandboxOk,   \* the rest of the sandbox preflight passes
+    pending,     \* event of a live run reserved after a restart but not yet adopted, 0 for none
     restarts,
     launchedEnded \* a stage launched for a run whose marker was already terminal
 
 vars == <<ticket, event, run, ph, endAs, attempt, tokens, marker, cur, orphan,
-          loaded, reconciled, sandboxOk, restarts, launchedEnded>>
+          loaded, reconciled, sandboxOk, pending, restarts, launchedEnded>>
 
 Events == {1, 2}
 Terminal == {"released", "failed", "budget_exhausted", "stage_passed"}
@@ -42,7 +43,7 @@ Init ==
     /\ marker = [e \in Events |-> "none"]
     /\ cur = "none" /\ orphan = FALSE
     /\ loaded = TRUE /\ reconciled = TRUE /\ sandboxOk = TRUE
-    /\ restarts = 0 /\ launchedEnded = FALSE
+    /\ pending = 0 /\ restarts = 0 /\ launchedEnded = FALSE
 
 \* Moves the run to a live phase and posts its marker.
 Go(p) == ph' = p /\ marker' = [marker EXCEPT ![run] = StatusOf(p)]
@@ -67,10 +68,12 @@ EndStage(c) ==
                 ELSE /\ attempt' = attempt + 1 /\ cur' = c
                      /\ Go("retry") /\ UNCHANGED <<run, endAs>>
 
-Fixed == <<ticket, event, orphan, loaded, reconciled, sandboxOk, restarts>>
+Fixed == <<ticket, event, orphan, loaded, reconciled, sandboxOk, pending, restarts>>
 
+\* Dispatch claims only after the tick's ledger read, which adopts or
+\* releases a reserved run first.
 Admit ==
-    /\ loaded /\ ticket = "ready" /\ run = 0 /\ ph = "none"
+    /\ loaded /\ pending = 0 /\ ticket = "ready" /\ run = 0 /\ ph = "none"
     /\ marker[event] = "none"
     /\ run' = event /\ attempt' = 1 /\ tokens' = TRUE
     /\ ph' = "claimed" /\ marker' = [marker EXCEPT ![event] = "claimed"]
@@ -124,84 +127,91 @@ PostEnd ==
 SandboxStops ==
     /\ cur = "stopping" /\ cur' = "none"
     /\ UNCHANGED <<ticket, event, run, ph, endAs, attempt, tokens, marker,
-                   orphan, loaded, reconciled, sandboxOk, restarts, launchedEnded>>
+                   orphan, loaded, reconciled, sandboxOk, pending, restarts, launchedEnded>>
 
 Restart ==
     /\ restarts < 1 /\ restarts' = restarts + 1
     /\ run' = 0 /\ ph' = "none" /\ endAs' = "none"
     /\ orphan' = (orphan \/ cur # "none") /\ cur' = "none"
     /\ loaded' = FALSE /\ reconciled' = FALSE
-    /\ UNCHANGED <<ticket, event, attempt, tokens, marker, sandboxOk, launchedEnded>>
+    /\ UNCHANGED <<ticket, event, attempt, tokens, marker, sandboxOk, pending, launchedEnded>>
 
 LiveEvent == {e \in Events : marker[e] \in Live}
 
-\* First tick after a restart: executor.recover() stops leftovers, then
-\* #loadClaims and #adoptExistingRun rebuild the run from its marker.
+\* First tick after a restart: executor.recover() stops leftovers, and
+\* #loadClaims reserves the run its claim file names. Adoption waits for
+\* a later step whose ledger, timeline and workflow reads succeed.
 Recover ==
     /\ ~loaded /\ loaded' = TRUE
     /\ \E ok \in BOOLEAN :
         /\ reconciled' = ok /\ orphan' = (orphan /\ ~ok)
-    /\ IF LiveEvent = {}
-       THEN UNCHANGED <<run, ph, endAs, attempt, tokens, marker>>
-       ELSE LET e == CHOOSE x \in LiveEvent : TRUE
-                m == marker[e]
-            IN IF ticket = "gone" \/ e # event
-               THEN /\ marker' = [marker EXCEPT ![e] = "released"]
-                    /\ UNCHANGED <<run, ph, endAs, attempt, tokens>>
-               ELSE IF m = "running"
-                    THEN \* the interrupted attempt ends as a failed one
-                         IF ~tokens
-                         THEN /\ marker' = [marker EXCEPT ![e] = "budget_exhausted"]
-                              /\ UNCHANGED <<run, ph, endAs, attempt, tokens>>
-                         ELSE IF attempt >= MaxAttempts
-                         THEN /\ marker' = [marker EXCEPT ![e] = "failed"]
-                              /\ UNCHANGED <<run, ph, endAs, attempt, tokens>>
-                         ELSE /\ run' = e /\ attempt' = attempt + 1 /\ ph' = "retry"
-                              /\ marker' = [marker EXCEPT ![e] = "retrying"]
-                              /\ UNCHANGED <<endAs, tokens>>
-                    ELSE /\ run' = e /\ marker' = marker /\ UNCHANGED <<endAs, attempt, tokens>>
-                         /\ ph' = CASE m = "claimed" -> "claimed"
-                                    [] m = "blocked" -> "blocked"
-                                    [] m = "retrying" -> "retry"
-    /\ UNCHANGED <<ticket, event, cur, sandboxOk, restarts, launchedEnded>>
+    /\ pending' = IF LiveEvent = {} THEN 0 ELSE CHOOSE x \in LiveEvent : TRUE
+    /\ UNCHANGED <<ticket, event, run, ph, endAs, attempt, tokens, marker, cur,
+                   sandboxOk, restarts, launchedEnded>>
+
+\* #discover, #settleClaims and #adoptExistingRun rebuild the run from its marker.
+Adopt ==
+    /\ loaded /\ pending # 0 /\ pending' = 0
+    /\ LET e == pending
+            m == marker[pending]
+       IN IF ticket = "gone" \/ e # event
+          THEN /\ marker' = [marker EXCEPT ![e] = "released"]
+               /\ UNCHANGED <<run, ph, endAs, attempt, tokens>>
+          ELSE IF m = "running"
+               THEN \* the interrupted attempt ends as a failed one
+                    IF ~tokens
+                    THEN /\ marker' = [marker EXCEPT ![e] = "budget_exhausted"]
+                         /\ UNCHANGED <<run, ph, endAs, attempt, tokens>>
+                    ELSE IF attempt >= MaxAttempts
+                    THEN /\ marker' = [marker EXCEPT ![e] = "failed"]
+                         /\ UNCHANGED <<run, ph, endAs, attempt, tokens>>
+                    ELSE /\ run' = e /\ attempt' = attempt + 1 /\ ph' = "retry"
+                         /\ marker' = [marker EXCEPT ![e] = "retrying"]
+                         /\ UNCHANGED <<endAs, tokens>>
+               ELSE /\ run' = e /\ marker' = marker /\ UNCHANGED <<endAs, attempt, tokens>>
+                    /\ ph' = CASE m = "claimed" -> "claimed"
+                               [] m = "blocked" -> "blocked"
+                               [] m = "retrying" -> "retry"
+    /\ UNCHANGED <<ticket, event, cur, orphan, loaded, reconciled, sandboxOk, restarts, launchedEnded>>
 
 \* The preflight retries the reconcile until every leftover is stopped.
 Reconcile ==
     /\ loaded /\ ~reconciled /\ reconciled' = TRUE /\ orphan' = FALSE
     /\ UNCHANGED <<ticket, event, run, ph, endAs, attempt, tokens, marker, cur,
-                   loaded, sandboxOk, restarts, launchedEnded>>
+                   loaded, sandboxOk, pending, restarts, launchedEnded>>
 
 YouRemoveLabel ==
     /\ ticket = "ready" /\ ticket' = "gone"
     /\ UNCHANGED <<event, run, ph, endAs, attempt, tokens, marker, cur, orphan,
-                   loaded, reconciled, sandboxOk, restarts, launchedEnded>>
+                   loaded, reconciled, sandboxOk, pending, restarts, launchedEnded>>
 
 YouRelabel ==
     /\ AllowRelabel /\ event = 1 /\ event' = 2 /\ ticket' = "ready"
     /\ UNCHANGED <<run, ph, endAs, attempt, tokens, marker, cur, orphan,
-                   loaded, reconciled, sandboxOk, restarts, launchedEnded>>
+                   loaded, reconciled, sandboxOk, pending, restarts, launchedEnded>>
 
 SandboxBreaks ==
     /\ sandboxOk /\ sandboxOk' = FALSE
     /\ UNCHANGED <<ticket, event, run, ph, endAs, attempt, tokens, marker, cur,
-                   orphan, loaded, reconciled, restarts, launchedEnded>>
+                   orphan, loaded, reconciled, pending, restarts, launchedEnded>>
 
 SandboxHeals ==
     /\ ~sandboxOk /\ sandboxOk' = TRUE
     /\ UNCHANGED <<ticket, event, run, ph, endAs, attempt, tokens, marker, cur,
-                   orphan, loaded, reconciled, restarts, launchedEnded>>
+                   orphan, loaded, reconciled, pending, restarts, launchedEnded>>
 
 Idle ==
-    /\ loaded /\ run = 0 /\ cur = "none"
+    /\ loaded /\ run = 0 /\ cur = "none" /\ pending = 0
     /\ (ticket = "gone" \/ marker[event] \in Terminal)
     /\ UNCHANGED vars
 
 Next ==
     \/ Admit \/ Launch \/ StagePasses \/ StageRefuses \/ StageFails \/ StageStalls
-    \/ Release \/ PostEnd \/ SandboxStops \/ Restart \/ Recover \/ Reconcile
+    \/ Release \/ PostEnd \/ SandboxStops \/ Restart \/ Recover \/ Adopt \/ Reconcile
     \/ YouRemoveLabel \/ YouRelabel \/ SandboxBreaks \/ SandboxHeals \/ Idle
 
-Spec == Init /\ [][Next]_vars
+\* Adoption's reads succeed eventually.
+Spec == Init /\ [][Next]_vars /\ WF_vars(Adopt)
 
 \* Never two sandboxes running a stage for one issue.
 OneSandboxPerIssue == ~(orphan /\ cur # "none")
@@ -211,6 +221,8 @@ EndedStaysEnded == ~launchedEnded
 AttemptCap == attempt <= MaxAttempts
 \* At most one live run per issue on GitHub.
 OneLiveRun == \A a, b \in Events : (marker[a] \in Live /\ marker[b] \in Live) => a = b
-\* After the controller is up, a live run on GitHub is held in memory: a restart never loses it.
-NotLost == loaded => \A e \in Events : marker[e] \in Live => run = e
+\* After the first tick, a live run on GitHub is held in memory or reserved for adoption.
+NotLost == loaded => \A e \in Events : marker[e] \in Live => (run = e \/ pending = e)
+\* A reserved run is adopted or ended: a restart never loses it.
+Adopted == pending # 0 ~> pending = 0
 ====
