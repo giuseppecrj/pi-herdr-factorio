@@ -26,6 +26,7 @@ import {
 	piCommand,
 	publishFile,
 	runStage,
+	runVisibleTests,
 	sandboxHost,
 	type StageHost,
 	type StageRunInput,
@@ -1046,6 +1047,54 @@ describe("runStage settlement on a queue update", () => {
 
 		assert.equal(result.kind, "passed");
 		assert.equal(result.usage, 12);
+	});
+});
+
+describe("visible-test gateway", () => {
+	it("starts at a lane-length state path before sandbox launch", async (t) => {
+		const root = mkdtempSync(join(tmpdir(), "factory-visible-gateway-"));
+		t.after(() => rmSync(root, { recursive: true, force: true }));
+		const stateDir = join(root, "verification-lane-state");
+		const base = join(root, "base");
+		mkdirSync(base);
+		const execution = join(stateDir, "visible-tests", RUN, "execution");
+		assert.ok(Buffer.byteLength(join(execution, "gw", "gw.sock")) > 107);
+
+		const result = await runVisibleTests(
+			{
+				stateDir,
+				bundleDir: join(root, "missing-bundle"),
+				workspace: "",
+				runId: digest(RUN),
+				stage: "build",
+				attempt: 1,
+				tools: [],
+				arch: "x86_64",
+				xdgRuntimeDir: "/run/user/1000",
+				assetsDigest: "e".repeat(64),
+				versions: {
+					pi: "1.4.0",
+					piHerdrAgents: "3.3.1",
+					piHerdrPstack: "0.5.0",
+				},
+				exec: async () => ({ stdout: "", stderr: "", code: 0 }),
+			},
+			base,
+			"",
+			"npm test",
+		);
+
+		assert.equal(result.exitCode, null);
+		assert.match(
+			readFileSync(join(execution, "egress.jsonl"), "utf8"),
+			/no-route/,
+		);
+		const gateways = readdirSync(join(stateDir, "gw"));
+		assert.equal(gateways.length, 1);
+		assert.ok(
+			Buffer.byteLength(join(stateDir, "gw", gateways[0] ?? "", "gw.sock")) <=
+				107,
+		);
 	});
 });
 

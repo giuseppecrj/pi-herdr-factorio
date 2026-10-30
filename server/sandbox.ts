@@ -1985,8 +1985,10 @@ export async function runVisibleTests(
 			modelRequests: 0,
 		});
 
+		mkdirSync(join(config.stateDir, "gw"), { recursive: true, mode: 0o700 });
+
 		const started = await startGatewayProcess({
-			gatewayDir: join(execution, "gw"),
+			gatewayDir: join(config.stateDir, "gw", randomBytes(4).toString("hex")),
 			auditPath: join(execution, "egress.jsonl"),
 			table: {
 				...table,
