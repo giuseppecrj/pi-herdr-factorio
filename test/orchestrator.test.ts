@@ -1,3 +1,4 @@
+import { parseStoredContract } from "../src/artifacts.ts";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import {
@@ -48,6 +49,7 @@ import {
 	type StageExecutor,
 	type StageLaunch,
 	type StageLaunchInput,
+	type StageOutput,
 	type StageResult,
 	type TickReport,
 } from "../src/orchestrator.ts";
@@ -177,6 +179,25 @@ function memoryFiles(): RunFiles & {
 	const unavailable = new Set<"contract" | "link">();
 
 	return {
+		artifacts: fileRunFiles(stateDir()).artifacts,
+		async readContract(runId) {
+			const stored = contracts.get(runId);
+
+			if (stored === undefined)
+				return { kind: "blocked", reason: "contract_missing" };
+
+			return parseStoredContract(
+				stored.bytes,
+				JSON.stringify({
+					runId,
+					contractDigest: stored.digest,
+					bytes: Buffer.byteLength(stored.bytes),
+					baseSha: MAIN_SHA,
+					snapshotDigest: JSON.parse(stored.bytes).snapshot.digest,
+				}),
+				runId,
+			);
+		},
 		claims,
 		workspaces,
 		contracts,
@@ -304,6 +325,21 @@ const CONTRACT_TEXT = JSON.stringify({
 	evidence: [{ path: "server/cli.ts", start: 1, end: 1, fact: "VERSION" }],
 });
 
+const ACCEPTANCE_TEXT = JSON.stringify({
+	version: 1,
+	scenarios: [
+		{ id: "S1", criteria: ["A1"], checks: ["version.test.ts"], judge: null },
+	],
+	files: [
+		{
+			path: "version.test.ts",
+			type: "node:test",
+			content:
+				"import assert from 'node:assert/strict';\nimport { test } from 'node:test';\ntest('version', () => assert.equal(1, 1));\n",
+		},
+	],
+});
+
 const QUESTIONS_TEXT = JSON.stringify({
 	kind: "questions",
 	questions: [
@@ -317,6 +353,8 @@ const QUESTIONS_TEXT = JSON.stringify({
 class FakeExecutor implements StageExecutor {
 	behaviors: Behavior[] = [];
 	fallback: Behavior = { kind: "unavailable" };
+	acceptBehavior: Behavior = { kind: "unavailable" };
+	acceptText: string | null = ACCEPTANCE_TEXT;
 	outputs: (string | null)[] = [];
 	text: string | null = CONTRACT_TEXT;
 	readonly kept = new Map<string, string>();
@@ -333,7 +371,7 @@ class FakeExecutor implements StageExecutor {
 		runId: string;
 		stage: string;
 		attempt: number;
-	}): Promise<string | { readonly kind: "pending" } | null> {
+	}): Promise<StageOutput | null> {
 		const key = `${input.runId}/${input.stage}-${input.attempt}`;
 
 		this.outputReads.push(key);
@@ -369,7 +407,12 @@ class FakeExecutor implements StageExecutor {
 	}
 
 	#keep(input: StageLaunchInput): void {
-		const text = this.outputs.length > 0 ? this.outputs.shift() : this.text;
+		const text =
+			input.stage === "accept"
+				? this.acceptText
+				: this.outputs.length > 0
+					? this.outputs.shift()
+					: this.text;
 
 		if (text !== null && text !== undefined) {
 			this.kept.set(`${input.runId}/${input.stage}-${input.attempt}`, text);
@@ -397,12 +440,17 @@ class FakeExecutor implements StageExecutor {
 
 	async preflight(): Promise<boolean> {
 		return (
-			this.ready ?? (this.behaviors[0] ?? this.fallback).kind !== "unavailable"
+			this.ready ??
+			((this.behaviors[0] ?? this.fallback).kind !== "unavailable" ||
+				this.acceptBehavior.kind !== "unavailable")
 		);
 	}
 
 	async launch(input: StageLaunchInput): Promise<StageLaunch> {
-		const behavior = this.behaviors.shift() ?? this.fallback;
+		const behavior =
+			input.stage === "accept"
+				? this.acceptBehavior
+				: (this.behaviors.shift() ?? this.fallback);
 
 		this.launches.push(input);
 
@@ -410,7 +458,7 @@ class FakeExecutor implements StageExecutor {
 			case "unavailable":
 				return {
 					kind: "unavailable",
-					stage: "specify",
+					stage: input.stage,
 					reason: "sandbox_unavailable",
 				};
 			case "hang":
@@ -1079,7 +1127,8 @@ describe("Orchestrator restart recovery", () => {
 		assert.deepEqual(statuses(github, 14), [
 			"1:claimed",
 			"2:running",
-			"3:stage_passed",
+			"3:claimed",
+			"4:budget_exhausted",
 		]);
 		assert.equal(usageOf(github, 14).at(-1), 500_100);
 		assert.equal(ended.totals.usage, 500_100);
@@ -1407,6 +1456,7 @@ describe("Orchestrator stage results", () => {
 
 		github.add(labeled(14));
 		executor.behaviors = [{ kind: "pass", usage: 812 }];
+		executor.acceptBehavior = { kind: "pass", usage: 0 };
 
 		const controller = start();
 		const first = await controller.tick();
@@ -1426,7 +1476,7 @@ describe("Orchestrator stage results", () => {
 			maxTokens: null,
 		});
 
-		const report = await controller.tick();
+		const report = await once(controller);
 
 		assert.deepEqual(report.runs, []);
 		assert.equal(report.active, 0);
@@ -1435,11 +1485,19 @@ describe("Orchestrator stage results", () => {
 		assert.deepEqual(statuses(github, 14), [
 			"1:claimed",
 			"2:running",
-			"3:stage_passed",
+			"3:claimed",
+			"4:running",
+			"5:stage_passed",
 		]);
 		assert.deepEqual(
 			[...files.claims.values()],
-			[endedClaim(14, 3, { status: "stage_passed", usage: 812 })],
+			[
+				endedClaim(14, 5, {
+					stage: "accept",
+					status: "stage_passed",
+					usage: 812,
+				}),
+			],
 		);
 	});
 
@@ -1612,6 +1670,7 @@ describe("Orchestrator stage results", () => {
 		assert.ok(launch);
 
 		let waits = 0;
+		executor.acceptBehavior = { kind: "pass", usage: 0 };
 
 		const report = await controller.drain(async () => {
 			waits++;
@@ -1625,7 +1684,9 @@ describe("Orchestrator stage results", () => {
 		assert.deepEqual(statuses(github, 14), [
 			"1:claimed",
 			"2:running",
-			"3:stage_passed",
+			"3:claimed",
+			"4:running",
+			"5:stage_passed",
 		]);
 		assert.equal(await controller.drain(async () => undefined), null);
 	});
@@ -1754,6 +1815,7 @@ describe("server/cli.ts controller commands", () => {
 
 		github.add(labeled(14));
 		executor.behaviors = [{ kind: "pass", usage: 9 }];
+		executor.acceptBehavior = { kind: "pass", usage: 0 };
 
 		const run = await cli(
 			["tick", "--once", "--json", ...base, "--state-dir", state],
@@ -1773,7 +1835,9 @@ describe("server/cli.ts controller commands", () => {
 		assert.deepEqual(statuses(github, 14), [
 			"1:claimed",
 			"2:running",
-			"3:stage_passed",
+			"3:claimed",
+			"4:running",
+			"5:stage_passed",
 		]);
 		assert.equal(
 			JSON.parse(readFileSync(join(state, "status.json"), "utf8")).runs.length,
@@ -5320,8 +5384,8 @@ describe("Orchestrator tick order", () => {
 
 		const report = await controller.tick();
 
-		assert.deepEqual(seen, [["1:claimed", "2:running", "3:stage_passed"]]);
-		assert.deepEqual(report.runs, []);
+		assert.deepEqual(seen, [["1:claimed", "2:running", "3:claimed"]]);
+		assert.equal(report.runs[0]?.stage, "accept");
 	});
 });
 
@@ -6490,8 +6554,326 @@ function keyed(github: FakeGitHub, issue: number, kind: string): string[] {
 		.filter((body) => body.includes(`<!-- factory-${kind} `));
 }
 
+describe("held-out acceptance stage", () => {
+	it("runs specify then a fresh accept, stores the suite, and posts one redacted summary before stopping", async () => {
+		const { github, executor, files, start } = world();
+		github.add(labeled(14, { body: "PRIVATE-ISSUE-TRANSCRIPT server/cli.ts" }));
+		executor.behaviors = [{ kind: "pass", usage: 100 }];
+		executor.acceptBehavior = { kind: "pass", usage: 20 };
+		const report = await once(start());
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:running",
+			"3:claimed",
+			"4:running",
+			"5:stage_passed",
+		]);
+		assert.deepEqual(
+			executor.launches.map((l) => [l.stage, l.attempt]),
+			[
+				["specify", 1],
+				["accept", 1],
+			],
+		);
+		const accept = executor.launches[1];
+		assert.ok(accept);
+		assert.equal(accept.specify, undefined);
+		assert.deepEqual(accept.tools, ["read", "grep", "ls"]);
+		assert.deepEqual(accept.skills, ["acceptance"]);
+		assert.equal(accept.settings.maxTokens, 25_000);
+		assert.equal(accept.remainingRunTokens, 499_900);
+		assert.ok(!accept.prompt.includes("PRIVATE-ISSUE-TRANSCRIPT"));
+		assert.ok(!accept.prompt.includes("snapshot"));
+		assert.ok(accept.prompt.includes(MAIN_SHA));
+		assert.ok(accept.prompt.includes('"id":"A1"'));
+		assert.ok(accept.prompt.includes("export const VERSION"));
+		const bound = await files.readContract(runOf(14));
+		assert.equal(bound.kind, "found");
+
+		if (bound.kind !== "found") throw new Error("contract missing");
+
+		const suite = await files.artifacts.read(
+			runOf(14),
+			bound.contract,
+			bound.digest,
+		);
+
+		assert.equal(suite.kind, "found");
+
+		if (suite.kind !== "found") throw new Error("suite missing");
+		assert.equal(suite.receipt.contractDigest, bound.digest);
+		assert.equal(suite.receipt.model, "openai/gpt-6.1-sol");
+		const [summary] = keyed(github, 14, "acceptance");
+		assert.ok(summary?.includes("S1: A1"));
+		assert.ok(
+			summary?.includes("context-isolated, same family, not cross-family"),
+		);
+
+		for (const value of [
+			"canary",
+			"version.test.ts",
+			"import assert",
+			"/acceptance/",
+		])
+			assert.ok(!summary?.includes(value));
+		assert.equal(keyed(github, 14, "acceptance").length, 1);
+		assert.equal(report.totals.usage, 120);
+		assert.equal(report.active, 0);
+		assert.deepEqual(report.corrupt, []);
+	});
+
+	it("counts an acceptance store failure once", async () => {
+		const { github, executor, files, start } = world();
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "pass", usage: 7 };
+		files.artifacts.store = async () => ({
+			kind: "blocked",
+			reason: "acceptance_invalid",
+		});
+		const controller = start();
+		const report = await once(controller);
+		assert.equal(statuses(github, 14).at(-1), "5:failed");
+		assert.equal(report.totals.failures, 1);
+		assert.equal((await controller.tick()).totals.failures, 1);
+	});
+
+	for (const corrupt of [false, true]) {
+		it(`counts unmarked accept spend on claimed-marker reuse${corrupt ? " with an integrity failure" : ""}`, async () => {
+			const ctx = world();
+			const { github, executor, files, wire, clock } = ctx;
+			github.add(labeled(14));
+			executor.behaviors = [{ kind: "pass", usage: 10 }];
+			executor.acceptBehavior = { kind: "pass", usage: 7 };
+			wire.intercept = async (command, args) => {
+				const body = args.find((a) => a.startsWith("body="))?.slice(5) ?? "";
+				const parsed = parseMarker(body);
+
+				return (parsed.kind === "marker" &&
+					parsed.marker.stage === "accept" &&
+					parsed.marker.status === "running") ||
+					body.includes("<!-- factory-acceptance ")
+					? httpError(403)
+					: github.exec(command, args);
+			};
+
+			const first = ctx.start();
+			await once(first);
+			await first.tick();
+			assert.equal(statuses(github, 14).at(-1), "3:claimed");
+			const bound = await files.readContract(runOf(14));
+
+			if (bound.kind !== "found") throw new Error("no contract");
+			assert.equal(
+				(await files.artifacts.read(runOf(14), bound.contract, bound.digest))
+					.kind,
+				"found",
+			);
+			executor.spentBy.set("accept-1", 7);
+
+			if (corrupt)
+				files.artifacts.read = async () => ({
+					kind: "blocked",
+					reason: "acceptance_changed",
+				});
+			wire.intercept = null;
+			clock.t += 60_000;
+			const controller = ctx.start();
+			const report = await once(controller);
+			const terminal = parseMarker(github.markers(14).at(-1) ?? "");
+			assert.equal(terminal.kind, "marker");
+
+			if (terminal.kind !== "marker") throw new Error("no marker");
+			assert.equal(terminal.marker.status, corrupt ? "failed" : "stage_passed");
+			assert.equal(terminal.marker.usage, 17);
+			assert.equal(report.totals.usage, 7);
+			assert.equal(report.totals.failures, corrupt ? 1 : 0);
+			assert.equal((await controller.tick()).totals.usage, 7);
+			assert.equal(executor.launches.length, 2);
+		});
+	}
+
+	it("recovers model identity from passed output before storing the suite", async () => {
+		const ctx = world();
+		const { github, executor, files, clock } = ctx;
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "pass", usage: 7 };
+		const store = files.artifacts.store;
+		files.artifacts.store = async () => {
+			throw new Error("crash before store");
+		};
+
+		await assert.rejects(once(ctx.start()), /crash before store/);
+		files.artifacts.store = store;
+		assert.equal(statuses(github, 14).at(-1), "4:running");
+		executor.spentBy.set("accept-1", 7);
+		executor.output = async () => ({
+			kind: "output",
+			text: ACCEPTANCE_TEXT,
+			model: "openai/recorded-model",
+			observed: "recorded-observation",
+		});
+		clock.t += 60_000;
+		const report = await ctx.start().tick();
+		const bound = await files.readContract(runOf(14));
+
+		if (bound.kind !== "found") throw new Error("no contract");
+
+		const stored = await files.artifacts.read(
+			runOf(14),
+			bound.contract,
+			bound.digest,
+		);
+
+		assert.equal(stored.kind, "found");
+
+		if (stored.kind !== "found") throw new Error("no suite");
+		assert.equal(stored.receipt.model, "openai/recorded-model");
+		assert.equal(stored.receipt.observed, "recorded-observation");
+		assert.equal(report.totals.usage, 7);
+		assert.equal(executor.launches.length, 2);
+	});
+
+	for (const output of [
+		"",
+		"{}",
+		JSON.stringify({ version: 1, scenarios: [], files: [] }),
+		ACCEPTANCE_TEXT.replace("version.test.ts", "../escape.test.ts"),
+	]) {
+		it(`fails invalid accept output without storing or advancing: ${output.slice(0, 40)}`, async () => {
+			const { github, executor, files, start, clock } = world();
+			github.add(labeled(14));
+			executor.behaviors = [{ kind: "pass", usage: 10 }];
+			executor.acceptBehavior = { kind: "pass", usage: 7 };
+			executor.acceptText = output;
+			const controller = start();
+			await once(controller);
+			assert.equal(controller.state.runs.get(14)?.stage, "accept");
+			assert.equal(controller.state.runs.get(14)?.attempt, 2);
+			clock.t += 10_000;
+			await once(controller);
+			clock.t += 20_000;
+			const report = await once(controller);
+			assert.equal(statuses(github, 14).at(-1), "9:failed");
+			assert.equal(report.totals.usage, 31);
+			assert.equal(keyed(github, 14, "acceptance").length, 0);
+			const bound = await files.readContract(runOf(14));
+
+			if (bound.kind !== "found") throw new Error("contract missing");
+			assert.deepEqual(
+				await files.artifacts.read(runOf(14), bound.contract, bound.digest),
+				{ kind: "absent" },
+			);
+		});
+	}
+
+	it("drops exhausted accept output while retaining its usage", async () => {
+		const { github, executor, files, start } = world();
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "budget", usage: 7 };
+		const report = await once(start());
+		assert.equal(statuses(github, 14).at(-1), "5:budget_exhausted");
+		assert.equal(report.totals.usage, 17);
+		assert.equal(keyed(github, 14, "acceptance").length, 0);
+		const bound = await files.readContract(runOf(14));
+
+		if (bound.kind !== "found") throw new Error("contract missing");
+		assert.deepEqual(
+			await files.artifacts.read(runOf(14), bound.contract, bound.digest),
+			{ kind: "absent" },
+		);
+	});
+
+	for (const corrupt of [false, true]) {
+		it(`recovers after suite storage without regenerating${corrupt ? ", blocking changed bytes" : ""}`, async () => {
+			const ctx = world();
+			const { github, executor, files, wire, clock } = ctx;
+			github.add(labeled(14));
+			executor.behaviors = [{ kind: "pass", usage: 10 }];
+			executor.acceptBehavior = { kind: "pass", usage: 7 };
+			wire.intercept = async (command, args) =>
+				args.some(
+					(a) =>
+						a.startsWith("body=") && a.includes("<!-- factory-acceptance "),
+				)
+					? networkError()
+					: github.exec(command, args);
+			await once(ctx.start());
+			assert.equal(statuses(github, 14).at(-1), "4:running");
+			const bound = await files.readContract(runOf(14));
+
+			if (bound.kind !== "found") throw new Error("contract missing");
+
+			const kept = await files.artifacts.read(
+				runOf(14),
+				bound.contract,
+				bound.digest,
+			);
+
+			assert.equal(kept.kind, "found");
+
+			if (corrupt)
+				files.artifacts.read = async () => ({
+					kind: "blocked",
+					reason: "acceptance_changed",
+				});
+			executor.kept.delete(`${runOf(14)}/accept-1`);
+			executor.spentBy.set("accept-1", 7);
+			wire.intercept = null;
+			clock.t += 60_000;
+			const report = await once(ctx.start());
+			assert.equal(executor.launches.length, 2);
+			assert.equal(
+				statuses(github, 14).at(-1),
+				corrupt ? "5:failed" : "5:stage_passed",
+			);
+			assert.equal(keyed(github, 14, "acceptance").length, corrupt ? 0 : 1);
+			assert.deepEqual(report.corrupt, []);
+
+			assert.equal(report.totals.failures, corrupt ? 1 : 0);
+
+			if (corrupt)
+				assert.ok(ctx.logs.some((e) => e.fields.why === "acceptance_changed"));
+			else
+				assert.deepEqual(
+					await files.artifacts.read(runOf(14), bound.contract, bound.digest),
+					kept,
+				);
+		});
+	}
+});
+
+describe("held-out acceptance stage: needs_info", () => {
+	it("ends a questions result at specify and never launches accept", async () => {
+		const { github, executor, files, clock, wire, start } = world();
+
+		wire.intercept = writesWire(github, []);
+		github.add(labeled(14));
+		executor.outputs = [QUESTIONS_TEXT];
+		executor.behaviors = [{ kind: "pass", usage: 3 }];
+		executor.acceptBehavior = { kind: "pass", usage: 7 };
+
+		const controller = start();
+
+		for (let tick = 0; tick < 3; tick++) {
+			await once(controller);
+			clock.t += 60_000;
+		}
+
+		assert.equal(statuses(github, 14).at(-1), "3:needs_info");
+		assert.deepEqual(
+			executor.launches.map((l) => l.stage),
+			["specify"],
+		);
+		assert.equal(keyed(github, 14, "acceptance").length, 0);
+		assert.equal((await files.readContract(runOf(14))).kind, "blocked");
+	});
+});
+
 describe("specify: contract", () => {
-	it("stores a validated contract and posts its summary before the stage_passed marker", async () => {
+	it("stores a validated contract and posts its summary before claiming accept", async () => {
 		const { github, files, executor, wire, start } = world();
 		const writes: string[] = [];
 
@@ -6509,13 +6891,15 @@ describe("specify: contract", () => {
 		assert.deepEqual(statuses(github, 14), [
 			"1:claimed",
 			"2:running",
-			"3:stage_passed",
+			"3:claimed",
+			"4:blocked",
 		]);
 		assert.deepEqual(writes, [
 			"marker:claimed",
 			"marker:running",
 			"summary",
-			"marker:stage_passed",
+			"marker:claimed",
+			"marker:blocked",
 		]);
 		assert.equal(report.totals.usage, 900);
 
@@ -6592,7 +6976,7 @@ describe("specify: contract", () => {
 		);
 		assert.ok(launch.prompt.includes("=== README.md ==="));
 		assert.ok(!launch.prompt.includes("subagent"));
-		assert.deepEqual(executor.checkouts, [runOf(14)]);
+		assert.deepEqual(executor.checkouts, [runOf(14), runOf(14)]);
 	});
 
 	it("inlines the files the issue names within a 16 KiB budget and leaves the rest to the read tool", async () => {
@@ -6774,7 +7158,7 @@ describe("specify: no contract without a passing, valid output", () => {
 		clock.t += 1_000;
 		await once(controller);
 
-		assert.equal(statuses(github, 14).at(-1), "3:stage_passed");
+		assert.equal(statuses(github, 14).at(-1), "3:claimed");
 		assert.equal(keyed(github, 14, "contract").length, 1);
 		assert.equal(executor.launches.length, 1);
 	});
@@ -6882,9 +7266,12 @@ describe("specify: questions", () => {
 		await once(restarted);
 		ctx.clock.t += 60_000;
 		await once(restarted);
-		assert.equal(statuses(ctx.github, 14).at(-1), "6:stage_passed");
+		assert.equal(statuses(ctx.github, 14).at(-1), "7:blocked");
 		assert.equal(ctx.files.contracts.size, 1);
-		assert.equal(ctx.executor.launches.length, 2);
+		assert.equal(
+			ctx.executor.launches.filter((l) => l.stage === "specify").length,
+			2,
+		);
 		assert.equal(
 			ctx.logs.filter(({ event }) => event === "label_retries_exhausted")
 				.length,
@@ -7028,7 +7415,7 @@ describe("specify: questions", () => {
 		await once(controller);
 		assert.equal(removals, 1);
 		assert.ok(issue.labels.includes(READY_LABEL));
-		assert.equal(statuses(ctx.github, 14).at(-1), "6:stage_passed");
+		assert.equal(statuses(ctx.github, 14).at(-1), "7:blocked");
 		const linked = runIdOf({ repo, issue: 14, eventId: String(EVENT_ID + 50) });
 		assert.equal(ctx.files.links.get(linked)?.prevRunId, runOf(14));
 		assert.match(
@@ -7243,7 +7630,10 @@ describe("specify: questions", () => {
 		clock.t += 60_000;
 		const report = await once(ctx.start());
 
-		assert.equal(executor.launches.length, 2);
+		assert.equal(
+			executor.launches.filter((l) => l.stage === "specify").length,
+			2,
+		);
 		assert.equal(executor.launches[1]?.attempt, 1);
 		assert.equal(executor.launches[1]?.remainingRunTokens, 500_000 - 300);
 		assert.equal(report.totals.usage, 320);
@@ -7252,7 +7642,8 @@ describe("specify: questions", () => {
 			"2:running",
 			"3:claimed",
 			"4:running",
-			"5:stage_passed",
+			"5:claimed",
+			"6:blocked",
 		]);
 	});
 
@@ -7423,7 +7814,7 @@ describe("specify: linked runs and answers", () => {
 		ctx.clock.t += 31 * 60_000;
 		const report = await once(ctx.start());
 		assert.deepEqual(report.refused, []);
-		assert.equal(statuses(ctx.github, 14).at(-1), "9:stage_passed");
+		assert.equal(statuses(ctx.github, 14).at(-1), "10:blocked");
 		assert.match(ctx.executor.launches[2]?.prompt ?? "", /OWNER-ANSWER/);
 		assert.deepEqual(
 			JSON.parse(
@@ -7456,14 +7847,16 @@ describe("specify: linked runs and answers", () => {
 			"3:needs_info",
 			"4:claimed",
 			"5:running",
-			"6:stage_passed",
+			"6:claimed",
+			"7:blocked",
 		]);
 		assert.deepEqual(writes, [
 			"marker:claimed",
 			"label-factory:needs-info",
 			"marker:running",
 			"summary",
-			"marker:stage_passed",
+			"marker:claimed",
+			"marker:blocked",
 		]);
 		assert.deepEqual(report.corrupt, []);
 
@@ -7652,10 +8045,7 @@ describe("specify: linked runs and answers", () => {
 			ctx.executor.behaviors = [{ kind: "pass", usage: 1 }];
 			ctx.clock.t += 60_000;
 			await once(ctx.controller);
-			assert.equal(
-				statuses(ctx.github, 14).at(-1)?.endsWith(":stage_passed"),
-				true,
-			);
+			assert.equal(statuses(ctx.github, 14).at(-1)?.endsWith(":blocked"), true);
 			assert.ok(ctx.files.contracts.has(nextRun));
 			assert.ok(
 				!ctx.logs.some(({ event }) => event === "label_retries_exhausted"),
@@ -7932,7 +8322,10 @@ describe("specify: linked runs and answers", () => {
 		ctx.clock.t += 60_000;
 		await once(ctx.controller);
 		assert.equal((await ctx.files.readAnswers(nextRun))?.digest, keptDigest);
-		assert.equal(ctx.executor.launches.length, 2);
+		assert.equal(
+			ctx.executor.launches.filter((l) => l.stage === "specify").length,
+			2,
+		);
 	});
 
 	it("caches answer permissions once per author within admission", async () => {
@@ -7980,7 +8373,7 @@ describe("specify: linked runs and answers", () => {
 	it("still links a relabel with no answers, for an owner who edited the body", async () => {
 		const { github, files } = await askedThenRelabeled(() => undefined);
 
-		assert.equal(statuses(github, 14).at(-1), "6:stage_passed");
+		assert.equal(statuses(github, 14).at(-1), "7:blocked");
 		assert.equal(files.links.get(nextRun)?.prevRunId, runOf(14));
 		assert.deepEqual(files.answers.get(nextRun)?.answers, []);
 	});

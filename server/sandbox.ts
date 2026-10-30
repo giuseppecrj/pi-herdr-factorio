@@ -23,6 +23,7 @@ import type {
 	StageExecutor,
 	StageLaunch,
 	StageLaunchInput,
+	StageOutput,
 } from "../src/orchestrator.ts";
 import type { Digest } from "../src/run.ts";
 import {
@@ -954,6 +955,65 @@ export function gitState(workspace: string): "dir" | "absent" | "unsafe" {
 	}
 }
 
+export function launchSandbox(
+	config: Pick<
+		SandboxHostConfig,
+		| "stateDir"
+		| "bundleDir"
+		| "workspace"
+		| "runId"
+		| "stage"
+		| "attempt"
+		| "tools"
+		| "arch"
+		| "xdgRuntimeDir"
+		| "blockUnixSockets"
+	> & {
+		readonly agentDir: string;
+		readonly socketPath: string;
+		readonly command: readonly string[];
+	},
+) {
+	const git = gitState(config.workspace);
+
+	if (git === "unsafe") return null;
+	agentDirFrom(join(config.bundleDir, "pi-agent"), config.agentDir);
+
+	const unit = scopeUnit(
+		scopeOwner(config.stateDir),
+		config.runId,
+		config.stage,
+		config.attempt,
+		randomBytes(4).toString("hex"),
+	);
+
+	const argv = scopeArgv(
+		unit,
+		DEFAULT_SCOPE_LIMITS,
+		bwrapArgv({
+			bundleDir: config.bundleDir,
+			workspaceDir: config.workspace,
+			workspaceHasGit: git === "dir",
+			agentDir: config.agentDir,
+			socketPath: config.socketPath,
+			seccompFd: 10,
+			tools: config.tools,
+			command: config.command,
+		}),
+	);
+
+	const child = spawnScoped({
+		argv,
+		seccomp: seccompProgram(config.arch, {
+			blockUnixSockets: config.blockUnixSockets ?? false,
+		}),
+		seccompFd: 10,
+		xdgRuntimeDir: config.xdgRuntimeDir,
+	});
+
+	return { unit, child };
+}
+
 const MAX_SESSION_BYTES = 64 * 1024 * 1024;
 
 /**
@@ -1133,48 +1193,20 @@ export function sandboxHost(config: SandboxHostConfig): StageHost {
 			return started.handle;
 		},
 		async launchPi(model, session) {
-			const git = gitState(config.workspace);
-
-			if (git === "unsafe" || socketPath === null) return null;
-
+			if (socketPath === null) return null;
 			const agentDir = join(stageDir, `agent-${session}`);
 
-			agentDirFrom(join(config.bundleDir, "pi-agent"), agentDir);
-			agentDirs.set(session, agentDir);
-
-			const unit = scopeUnit(
-				scopeOwner(config.stateDir),
-				config.runId,
-				config.stage,
-				config.attempt,
-				randomBytes(4).toString("hex"),
-			);
-
-			const argv = scopeArgv(
-				unit,
-				DEFAULT_SCOPE_LIMITS,
-				bwrapArgv({
-					bundleDir: config.bundleDir,
-					workspaceDir: config.workspace,
-					workspaceHasGit: git === "dir",
-					agentDir,
-					socketPath,
-					seccompFd: 10,
-					tools: config.tools,
-					command: piCommand(model),
-				}),
-			);
-
-			units.set(session, unit);
-
-			const child = spawnScoped({
-				argv,
-				seccomp: seccompProgram(config.arch, {
-					blockUnixSockets: config.blockUnixSockets ?? false,
-				}),
-				seccompFd: 10,
-				xdgRuntimeDir: config.xdgRuntimeDir,
+			const launched = launchSandbox({
+				...config,
+				agentDir,
+				socketPath,
+				command: piCommand(model),
 			});
+
+			if (launched === null) return null;
+			const { unit, child } = launched;
+			agentDirs.set(session, agentDir);
+			units.set(session, unit);
 
 			if (child.stderr !== null) {
 				stderr.set(
@@ -1750,7 +1782,7 @@ async function attemptOutput(
 	runId: Digest,
 	stage: ModelStage,
 	attempt: number,
-): Promise<string | { readonly kind: "pending" } | null> {
+): Promise<StageOutput | null> {
 	const base = `${stage}-${attempt}`;
 	const root = join(stateDir, "stages", runId);
 	let names: string[];
@@ -1795,7 +1827,26 @@ async function attemptOutput(
 
 		const text = await boundedText(join(dir, file), OUTPUT_MAX_BYTES);
 
-		if (text !== null) return text;
+		if (text !== null) {
+			if (stage !== "accept") return text;
+			const models = objectOf(fieldOf(receipt, "models"));
+			const fallback = objectOf(fieldOf(receipt, "fallback"));
+
+			const model =
+				textOf(fieldOf(fallback, "requested")) ??
+				textOf(fieldOf(models, "requested"));
+
+			return model === null
+				? null
+				: {
+						kind: "output",
+						text,
+						model,
+						observed:
+							textOf(fieldOf(fallback, "observed")) ??
+							textOf(fieldOf(models, "observed")),
+					};
+		}
 	}
 
 	return null;
