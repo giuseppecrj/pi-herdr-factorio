@@ -367,7 +367,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Files.**
 
 - [ ] Create `src/accept.ts`, `src/artifacts.ts`, `test/accept.test.ts`, `test/artifacts.test.ts`, `skills/acceptance/`, and `docs/prototypes/acceptance-isolation/`.
-- [ ] Edit `server/controller.ts` and `skills/README.md` for acceptance-only artifact access. Edit `server/sandbox.ts` for the shared sandbox launch helper and recovery of acceptance's recorded model identity, with tests in `test/sandbox/**`. `server/provision.sh` needs no change: the existing `skills/*/` loop bundles the new skill.
+- [ ] Edit `server/controller.ts` and `skills/README.md` for acceptance-only artifact access. Edit `server/sandbox.ts` for the shared sandbox launch helper and recovery of acceptance's recorded model identity, with tests in `test/sandbox/**`. `server/provision.sh` needs no change, because the existing `skills/*/` loop bundles the new skill.
 - [ ] Edit `src/orchestrator.ts` for the specify-to-accept transition, accept inputs, storage, recovery and the summary, and `src/specify.ts` for the shared acceptance summary renderer and comment key. The owner's F06b brief widened the list to these.
 - [ ] Edit `test/orchestrator.test.ts`, `docs/operations/sandbox.md`, `docs/operations/factory-cli.md`, `.pi/skills/verify-factory/**`, and this Files block in `docs/plans/factory-v1.md`.
 
