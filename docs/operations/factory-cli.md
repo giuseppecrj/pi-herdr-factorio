@@ -352,7 +352,7 @@ Dispatch uses main's `ci.yml`, the exact candidate SHA, digests and nonce `<runI
 
 The controller downloads `gate-receipt` using the repository-scoped artifact API, not `gh run download`, whose absolute API URLs fail on the VM proxy. The gates job log is a fallback. Neither logs nor artifacts are mounted in a repair workspace. Collection requires receipt v2, zero model calls, the exact candidate, nonce, held-out digest and run `head_sha` gate revision. Every mandatory and receipt-required check must appear exactly once and pass. Missing receipts, empty check sets, cancelled, skipped, stale and incomplete results never pass.
 
-Private evidence lives in `<state>/validation/<runId>/`: `receipt.json`, `verdict.json` and approved `feedback.json`, all mode 0600 in 0700 directories. The verdict binds patch, acceptance, held-out bytes, candidate, gate and CI run, and lists judge-only scenario IDs as `unjudged`. A failure before collection records `failure.json` instead of inventing a gate identity. The branch is deleted only after terminal evidence is stored. A successful verdict ends `stage_passed` at validate; a failed verdict ends failed. No user-facing PR opens.
+Private evidence lives in `<state>/validation/<runId>/`: `receipt.json`, `verdict.json` and approved `feedback.json`, all mode 0600 in 0700 directories. The verdict binds patch, acceptance, held-out bytes, candidate, gate and CI run, and lists judge-only scenario IDs as `unjudged`. A failure before collection records `failure.json` instead of inventing a gate identity. The branch is deleted only after terminal evidence is stored. A sweep handles this controller's terminal claims if the issue was closed during the wait. It waits for existing CI runs to finish or for the deadline, never redispatches released work, and touches only derived `factory/run/*` refs. `cleanup.json` prevents repeat cleanup reads. A successful verdict ends `stage_passed` at validate; a failed verdict ends failed. No user-facing PR opens.
 
 ### Deploy marker v2
 
@@ -457,28 +457,29 @@ A run is one admitted `factory:ready` label event. Its `runId` is the sha256 hex
 | Status | Meaning | Holds a slot |
 | --- | --- | --- |
 | `claimed` | The claim is recorded and the stage has not launched. | yes |
-| `running` | A stage runner is working on the stage. | yes |
+| `running` | A model stage is running, or validate is publishing or waiting for CI. | no at validate; otherwise yes |
 | `blocked` | The stage cannot run: the sandbox preflight has not passed (`sandbox_unavailable`). It never falls back to an unsandboxed run. | yes |
 | `retrying` | A stage failed or stalled, and a retry is due at `retryAt`. | no |
 | `released` | The issue closed, lost `factory:ready`, or got a newer ready event. Terminal. | no |
-| `failed` | The attempt cap was reached. Terminal. | no |
+| `failed` | A stage failed, including a refused or stale CI verdict, or exhausted its attempts. Terminal. | no |
 | `budget_exhausted` | The run used `usage.max_tokens_per_run` across all attempts, or a stage hit a turn, token, wall or run-token cap. Terminal. | no |
-| `stage_passed` | Build collected a permitted patch and its controller-run visible tests passed. Specify and accept advance the same run internally. Validate is not installed, so the run stops before it. No CI verdict or publication is claimed. Terminal. | no |
+| `stage_passed` | Validate stored a passing bound CI verdict. The run stops before F08 review. Earlier v1 runs stopped at their last installed stage. Terminal. | no |
 | `needs_info` | Specify asked the owner questions. The questions comment is on the issue, `factory:needs-info` is on and `factory:ready` is off. No model runs until the owner adds `factory:ready` again, which starts a linked run. Terminal. | no |
 
 A status is never removed, because markers that name it are already on issues. A controller older than this release reads a `needs_info` marker as corrupt, so deploy forward only.
 
-Each stage runs in the sandbox described in `docs/operations/sandbox.md`. Each stage scope is named `factory-stage-<owner>-<run>-<stage>-<attempt>-<nonce>`, where `<owner>` is the first 8 hex characters of the sha256 of the state directory's real path. On startup, before the first tick adopts a run, the controller stops every leftover `factory-stage-<owner>-*` user scope of its own by name and logs `sandbox_reconciled` with `stopped`, `failed` and `unowned` counts. Scopes of a controller with another state directory, such as a scoped verification controller, are left alone. An old-format scope, `factory-stage-<run>-<stage>-<attempt>-<nonce>` from a build before the owner segment, is stopped only when its description (the command `systemd-run` ran) binds a path under this state directory's `stages/` or `gw/`. Any other old-format scope, or one whose description cannot be read, is logged as `scope_unowned` with its `unit` and left running. Each tick reconciles its running stages first, then runs the sandbox preflight until it passes: a startup scope reconcile that succeeded (a failed one fails the check `reconcile` and is retried by each preflight, so the run stays `blocked` with `sandbox_unavailable` until it succeeds), a known CPU architecture, unprivileged user namespaces, bwrap at least 0.9.0, the asset bundle at `/var/lib/factory-sandbox/current` matching the digest in its name, a user scope that launches, and a gateway that comes up ready. A change in the result is logged as `sandbox_preflight` with `ok`, the `failed` checks joined by `+`, and the first 12 characters of the assets digest. Once the preflight passes, `executionEnabled` is `true` for the rest of the process.
+Each model stage runs in the sandbox described in `docs/operations/sandbox.md`. Each stage scope is named `factory-stage-<owner>-<run>-<stage>-<attempt>-<nonce>`, where `<owner>` is the first 8 hex characters of the sha256 of the state directory's real path. On startup, before the first tick adopts a run, the controller stops every leftover `factory-stage-<owner>-*` user scope of its own by name and logs `sandbox_reconciled` with `stopped`, `failed` and `unowned` counts. Scopes of a controller with another state directory, such as a scoped verification controller, are left alone. An old-format scope, `factory-stage-<run>-<stage>-<attempt>-<nonce>` from a build before the owner segment, is stopped only when its description (the command `systemd-run` ran) binds a path under this state directory's `stages/` or `gw/`. Any other old-format scope, or one whose description cannot be read, is logged as `scope_unowned` with its `unit` and left running. Each tick reconciles its running stages first, then runs the sandbox preflight until it passes: a startup scope reconcile that succeeded (a failed one fails the check `reconcile` and is retried by each preflight, so the run stays `blocked` with `sandbox_unavailable` until it succeeds), a known CPU architecture, unprivileged user namespaces, bwrap at least 0.9.0, the asset bundle at `/var/lib/factory-sandbox/current` matching the digest in its name, a user scope that launches, and a gateway that comes up ready. A change in the result is logged as `sandbox_preflight` with `ok`, the `failed` checks joined by `+`, and the first 12 characters of the assets digest. Once the preflight passes, `executionEnabled` is `true` for the rest of the process.
 
 While the preflight fails, a launch returns `sandbox_unavailable`. That result is not a failure and is not retried, and no model runs. The run stays `blocked` at `specify` and keeps its slot, so a third issue waits in `queued` while two are blocked. A `blocked` run launches again on the first tick whose preflight passes.
 
-A launched stage gets the stage's model, fallback model and budget from the loaded workflow, the attempt, and the run's remaining tokens, which are `usage.max_tokens_per_run` minus what the run has used. A run with no remaining tokens, for example a queued retry after the workflow lowered `usage.max_tokens_per_run`, is not launched: it ends `budget_exhausted` and logs `launch_refused` with `why=run_tokens`. This release installs `specify` and `accept`, described below. Its result ends the stage:
+A launched model stage gets the stage's model, fallback model and budget from the loaded workflow, the attempt, and the run's remaining tokens, which are `usage.max_tokens_per_run` minus what the run has used. A run with no remaining tokens, for example a queued retry after the workflow lowered `usage.max_tokens_per_run`, is not launched: it ends `budget_exhausted` and logs `launch_refused` with `why=run_tokens`. This release installs `specify`, `accept`, `build` and controller-only `validate`. Its result ends the stage:
 
 | Result | Run |
 | --- | --- |
 | `specify` passed with a valid contract | Store the contract and post its summary, then claim `accept` on the same run, attempt 1. No terminal specify marker. |
 | `accept` passed with a valid suite | Store the suite and post its redacted summary, then claim `build` with attempt 1. |
-| `build` passed with a collected patch | Run visible tests in a fresh sandbox and post one redacted summary. End `stage_passed` only for a clean policy check and exit 0; forbidden work or failed tests end `failed`. |
+| `build` passed with a collected patch | Run visible tests in a fresh sandbox and post one redacted summary. A clean policy check and exit 0 advance to slot-free validate; forbidden work or failed tests end `failed`. |
+| validate collected CI | Store the bound verdict and delete the candidate ref, then end `stage_passed` or `failed`. |
 | `passed` with valid questions | `needs_info`, terminal, after the questions comment and the label swap. |
 | `passed` with missing or invalid output | a retry, or `failed` at the attempt cap, as for `failed`. Logged as `specify_malformed` or `acceptance_malformed` with `reason`. |
 | `failed` (an error, malformed output, a crash or an abort) | a retry, or `failed` at the attempt cap, as below. |
@@ -487,7 +488,7 @@ A launched stage gets the stage's model, fallback model and budget from the load
 
 The stage's tokens are added to the run's `usage` whatever the result. A stage that stalls, or whose run is released or dropped while it runs, keeps the tokens it had reported by then. It is aborted, and tokens it reports while it cleans up are added once more, logged as `stage_late_usage`, without changing the outcome already chosen. Whenever a run's usage changes, its marker is posted again with the new `usage`, and the claim record follows it, so a restart starts from the corrected total. Its retry does not launch, and a terminal marker the stall chose is not posted, until the stage has ended or 15 seconds have passed since the abort: the 10 s cleanup reserve, within which the sandbox ends its cleanup, plus a 5 s grace. So both carry those tokens.
 
-Every stage attempt writes a receipt on the host, `<state-dir>/stages/<runId>/<stage>-<attempt>/receipt.json`, mode 0600, beside the gateway's `egress.jsonl`. A replay of the same attempt writes to `<stage>-<attempt>.2`, and so on. The receipt holds only numbers, enums, model IDs and digests: the outcome, the settlement event and whether it was aborted, the requested and observed models, any fallback record, a refusal code, `wallMs`, `turns`, usage for the parent, the children, by model and as metered by the gateway, the per-route egress summary, `assetsDigest`, the pinned Pi package versions, `pricing: "unavailable"`, and one `stderr` entry per Pi session. It never goes into a marker. It is written to a temp file, fsynced and renamed into place, so it is complete or absent, and an existing receipt is never replaced. When it cannot be written the stage ends `failed` as a crash and retries like any other failure. Each sandbox's stderr goes to `pi-stderr-<session>.log` beside the receipt, mode 0600, holding at most the last 64 KiB. The receipt's `stderr` entry gives only that file name and the total bytes the sandbox wrote. The text is untrusted, so the factory never logs it, prints it or copies it into a receipt or marker.
+Every model-stage attempt writes a receipt on the host, `<state-dir>/stages/<runId>/<stage>-<attempt>/receipt.json`, mode 0600, beside the gateway's `egress.jsonl`. A replay of the same attempt writes to `<stage>-<attempt>.2`, and so on. The receipt holds only numbers, enums, model IDs and digests: the outcome, the settlement event and whether it was aborted, the requested and observed models, any fallback record, a refusal code, `wallMs`, `turns`, usage for the parent, the children, by model and as metered by the gateway, the per-route egress summary, `assetsDigest`, the pinned Pi package versions, `pricing: "unavailable"`, and one `stderr` entry per Pi session. It never goes into a marker. It is written to a temp file, fsynced and renamed into place, so it is complete or absent, and an existing receipt is never replaced. When it cannot be written the stage ends `failed` as a crash and retries like any other failure. Each sandbox's stderr goes to `pi-stderr-<session>.log` beside the receipt, mode 0600, holding at most the last 64 KiB. The receipt's `stderr` entry gives only that file name and the total bytes the sandbox wrote. The text is untrusted, so the factory never logs it, prints it or copies it into a receipt or marker.
 
 `tick` and `run` wait for every stage they launched to end before they exit, ending each one as step 1 of the next tick would: a stage that stalls is aborted, and each end posts its marker. So a one-shot command never leaves a sandbox running, and its printed snapshot shows the run's terminal status.
 
@@ -553,7 +554,7 @@ The issue receives one keyed summary (`<!-- factory-acceptance run=<runId> a=<di
 
 #### Linked runs
 
-A run links to the run before it when, at admission, the issue's latest terminal marker is another run's `needs_info`, and the new label event came after that marker. If a delayed label swap preserved the owner's newer label before the terminal marker landed, a label after that run's questions comment also links to it. The link is derived from the ledger. It is written to `<state-dir>/links/<runId>.json` as `{version, prevRunId, questionsDigest, answersDigest}` before the claim. An admission without a link writes `{version: 1, prevRunId: null}` there instead, including when an owner's preserved relabel predates the preceding run's questions comment. That explicit unlinked record ends later history walks normally. For older runs without a link file, an existing answers record identifies a missing linked-run record; otherwise the run starts the chain. Markers stay at `v: 1`. The earlier run's terminal marker never changes.
+A run links to the run before it when, at admission, the issue's latest terminal marker is another run's `needs_info`, and the new label event came after that marker. If a delayed label swap preserved the owner's newer label before the terminal marker landed, a label after that run's questions comment also links to it. The link is derived from the ledger. It is written to `<state-dir>/links/<runId>.json` as `{version, prevRunId, questionsDigest, answersDigest}` before the claim. An admission without a link writes `{version: 1, prevRunId: null}` there instead, including when an owner's preserved relabel predates the preceding run's questions comment. That explicit unlinked record ends later history walks normally. For older runs without a link file, an existing answers record identifies a missing linked-run record; otherwise the run starts the chain. New markers use v2; older v1 markers remain readable. The earlier run's terminal marker never changes.
 
 The answers are the issue body as it was at the new label, which the new snapshot holds, and the comments that meet all of these:
 
@@ -565,11 +566,11 @@ Each linked run verifies the earlier link/answers chain and prepends the previou
 
 ### Markers
 
-Each change of a run's status, stage or attempt posts one new issue comment through `gh api --method POST repos/<repo>/issues/<n>/comments -f body=<marker>`. A marker is never edited. Its first line is `<!-- factory:run <json> -->`, and its second line says the status in words. The JSON has exactly these keys:
+Each change of a run's status, stage, attempt, usage or publication fields posts one new issue comment through `gh api --method POST repos/<repo>/issues/<n>/comments -f body=<marker>`. A marker is never edited. Its first line is `<!-- factory:run <json> -->`, and its second line says the status in words. The JSON has exactly these keys:
 
 | Key | Value |
 | --- | --- |
-| `v` | `1` |
+| `v` | `2` for new markers; `1` is accepted on read |
 | `runId` | 64 hex characters |
 | `repo`, `issue` | the repository and issue number |
 | `eventId`, `eventAt` | the admitted label event |
@@ -577,11 +578,13 @@ Each change of a run's status, stage or attempt posts one new issue comment thro
 | `workflowSha`, `workflowDigest` | the admission's `baseSha` and `workflowDigest` |
 | `stage`, `status`, `attempt` | the run's stage, status and 1-based attempt |
 | `seq` | 1 more than the higher of the issue's highest trusted `seq` and the local record's `seq` |
-| `branch`, `pr` | always `null` in this release |
+| `branch` | typed `factory/run/<issue>-<runId12>-r<round>` branch, or `null`; v1 requires `null` |
+| `candidate`, `round`, `ciRun` | v2 only; candidate SHA or `null`, repair round 0 to 2, CI run ID or `null` |
+| `pr` | always `null` until F09a |
 | `usage` | tokens used by the run, across attempts |
 | `cursor` | the issue's `updated_at` the controller had seen, or `null` |
 
-`<` and `>` in the JSON are written as `\u003c` and `\u003e`, and a whole marker comment is at most 4096 bytes. It never holds a title, body, comment text, label name, `gh` output or path.
+`<` and `>` in the JSON are written as `\u003c` and `\u003e`, and a whole marker comment is at most 4096 bytes. It never holds a title, body, comment text, label name, `gh` output or private filesystem path.
 
 A marker counts only when all of these hold. Anything else from another author is ignored.
 
@@ -590,7 +593,7 @@ A marker counts only when all of these hold. Anything else from another author i
 - `performed_via_github_app.slug` is `exe-dev-github-integration` when it is present.
 - `issue_url` names the same repository and issue.
 - GraphQL `lastEditedAt` for the comment is `null`. One request reads it for every comment by `exe-dev-github-integration[bot]`, marker or not: `gh api graphql -f query=<nodes query> -f ids[]=<node_id>...`, at most 100 IDs per request.
-- The JSON parses with exactly the keys above, `v` is `1`, every value matches its pattern, and `runId` is the digest of its own `repo`, `issue` and `eventId`.
+- The JSON parses with exactly the keys above, `v` is `1` or `2`, every value matches its pattern, and `runId` is the digest of its own `repo`, `issue` and `eventId`.
 - When the state directory has an admission record for the event, the marker's `eventAt`, `snapshotDigest`, `workflowSha` and `workflowDigest` match it. This holds for a terminal marker as for a live one: a terminal marker that disagrees is `record_mismatch`, and the controller does not rewrite its claim record from it.
 
 The current marker is the trusted one with the highest `seq`. A bot comment that was edited, or whose GraphQL node does not name the same comment, issue and repository, whatever its text, a bot comment that starts with `<!-- factory:` and fails a rule, two markers with the same `seq`, two markers of one run that disagree on the admission fields, or a marker after its run's terminal one, make the issue corrupt. A corrupt issue is listed in `corrupt` with its `defect`, and nothing is dispatched for it until its `updated_at` changes and a fresh read is clean.

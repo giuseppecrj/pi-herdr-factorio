@@ -1,0 +1,236 @@
+{
+  "controllerHead": "c3cba00889c350d7968235a219b014956e713d45",
+  "fixture": "https://github.com/giuseppecrj/pi-herdr-factorio/issues/510",
+  "run": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41158101470",
+  "verdict": {
+    "patchDigest": "008e08aa869408cab71b5944f868b35b918ac66c06f9d053da1650177d8498d6",
+    "acceptanceDigest": "350cd28227d94cc040eb36c00025a33d73418b3982be563705259ce2f9acb7ad",
+    "heldoutDigest": "122884853e5d299528eee666b8768eef815d26d50cc8c5d635be0a04cc515155",
+    "candidateSha": "1e3b761caa27c370afe5b447bfca925c6703e7c1",
+    "gateSha": "37dce5f4da727a5a47cd017c0c8c9d74c7272257",
+    "ciRunId": 41158101470,
+    "originalBase": "37dce5f4da727a5a47cd017c0c8c9d74c7272257",
+    "baseSha": "37dce5f4da727a5a47cd017c0c8c9d74c7272257",
+    "pass": true,
+    "checks": [
+      {
+        "name": "install",
+        "passed": true
+      },
+      {
+        "name": "baseline_tests",
+        "passed": true
+      },
+      {
+        "name": "typecheck",
+        "passed": true
+      },
+      {
+        "name": "lint",
+        "passed": true
+      },
+      {
+        "name": "format",
+        "passed": true
+      },
+      {
+        "name": "main_tests",
+        "passed": true
+      },
+      {
+        "name": "candidate_tests",
+        "passed": true
+      },
+      {
+        "name": "heldout",
+        "passed": true
+      }
+    ],
+    "requiredChecks": [
+      "install",
+      "baseline_tests",
+      "typecheck",
+      "lint",
+      "format",
+      "main_tests",
+      "candidate_tests",
+      "heldout"
+    ],
+    "unjudged": [
+      "S5"
+    ]
+  },
+  "publication": {
+    "branch": "factory/run/510-1f15c077df80-r0",
+    "patch": {
+      "sha": "89684dc029f55188eb3af38f28804e07e835ebc9",
+      "parent": [
+        "37dce5f4da727a5a47cd017c0c8c9d74c7272257"
+      ],
+      "author": {
+        "name": "exe-dev-github-integration[bot]",
+        "email": "267204973+exe-dev-github-integration[bot]@users.noreply.github.com",
+        "date": "2026-10-31T01:58:26Z"
+      },
+      "message": "factory: builder patch\n\nFactory-Run: 1f15c077df80bee0ab52309e7694eaddaa2493465a064c7dc9c4116d9c2fbe50\nFactory-Round: 0\nPatch-Digest: 008e08aa869408cab71b5944f868b35b918ac66c06f9d053da1650177d8498d6\nAcceptance-Digest: 350cd28227d94cc040eb36c00025a33d73418b3982be563705259ce2f9acb7ad\nFactory-Role: patch"
+    },
+    "candidate": {
+      "sha": "1e3b761caa27c370afe5b447bfca925c6703e7c1",
+      "parent": [
+        "89684dc029f55188eb3af38f28804e07e835ebc9"
+      ],
+      "author": {
+        "name": "exe-dev-github-integration[bot]",
+        "email": "267204973+exe-dev-github-integration[bot]@users.noreply.github.com",
+        "date": "2026-10-31T01:58:26Z"
+      },
+      "message": "factory: held-out checks\n\nFactory-Run: 1f15c077df80bee0ab52309e7694eaddaa2493465a064c7dc9c4116d9c2fbe50\nFactory-Round: 0\nPatch-Digest: 008e08aa869408cab71b5944f868b35b918ac66c06f9d053da1650177d8498d6\nAcceptance-Digest: 350cd28227d94cc040eb36c00025a33d73418b3982be563705259ce2f9acb7ad\nHeldout-Digest: 122884853e5d299528eee666b8768eef815d26d50cc8c5d635be0a04cc515155\nFactory-Role: suite"
+    },
+    "publishedFiles": [
+      [
+        "test/acceptance/510/checks/nul-paths.test.ts",
+        "cf9e0da1962f9a2f97931f4aee77d570fa55ee0a48149854425fa475c038fa10"
+      ],
+      [
+        "test/acceptance/510/checks/path-compatibility.test.ts",
+        "f12c84859b0a08b916dcbb27879add5baf6ad52388752ca545ba4754a4787e1e"
+      ]
+    ],
+    "verifiedHeldoutDigest": "122884853e5d299528eee666b8768eef815d26d50cc8c5d635be0a04cc515155",
+    "commandMsIncludingPreflight": 11233
+  },
+  "receipt": {
+    "version": 2,
+    "status": "passed",
+    "checks": [
+      {
+        "name": "install",
+        "exitCode": 0,
+        "durationMs": 31279
+      },
+      {
+        "name": "baseline_tests",
+        "exitCode": 0,
+        "durationMs": 43126,
+        "deadlineMs": 90000,
+        "timedOut": false,
+        "signal": null
+      },
+      {
+        "name": "typecheck",
+        "exitCode": 0,
+        "durationMs": 3376,
+        "deadlineMs": 159378,
+        "timedOut": false,
+        "signal": null
+      },
+      {
+        "name": "lint",
+        "exitCode": 0,
+        "durationMs": 861,
+        "deadlineMs": 159378,
+        "timedOut": false,
+        "signal": null
+      },
+      {
+        "name": "format",
+        "exitCode": 0,
+        "durationMs": 330,
+        "deadlineMs": 159378,
+        "timedOut": false,
+        "signal": null
+      },
+      {
+        "name": "main_tests",
+        "exitCode": 0,
+        "durationMs": 38432,
+        "deadlineMs": 159378,
+        "timedOut": false,
+        "signal": null
+      },
+      {
+        "name": "candidate_tests",
+        "exitCode": 0,
+        "durationMs": 0
+      },
+      {
+        "name": "heldout",
+        "exitCode": 0,
+        "durationMs": 317,
+        "deadlineMs": 159378,
+        "timedOut": false,
+        "signal": null
+      }
+    ],
+    "heldoutCounts": {
+      "test/acceptance/510/checks/nul-paths.test.ts": 4,
+      "test/acceptance/510/checks/path-compatibility.test.ts": 3
+    },
+    "heldoutFailures": [],
+    "modelCalls": 0,
+    "wallMs": 117976
+  },
+  "usage": [
+    {
+      "stage": "accept-1",
+      "tokens": 7557,
+      "wallMs": 29483,
+      "model": "openai/gpt-6.1-sol"
+    },
+    {
+      "stage": "build-1",
+      "tokens": 42294,
+      "wallMs": 27330,
+      "model": "openai/gpt-6.1-sol"
+    },
+    {
+      "stage": "specify-1",
+      "tokens": 8000,
+      "wallMs": 18734,
+      "model": "openai/gpt-6.1-sol"
+    }
+  ],
+  "totalTokens": 57851,
+  "restart": {
+    "previousMarker": 8,
+    "adoptedMarker": 8,
+    "resumedMarker": 9,
+    "attempt": 1,
+    "usage": 57851,
+    "dispatchTry": 1,
+    "activeSlots": 0,
+    "modelTokens": 0
+  },
+  "collectionMsAfterAdoption": 2151,
+  "repair": {
+    "freshInstall": 0,
+    "npmControl": 0,
+    "files": 21731,
+    "canaryHits": 0,
+    "bodyHits": 0,
+    "gitEntries": 0,
+    "acceptancePresent": false,
+    "feedbackMatches": true,
+    "npmGithub": [
+      1,
+      1,
+      1
+    ],
+    "direct": "denied",
+    "gateway": 403,
+    "hostedTools": 403,
+    "bundle": "6f13f4c51a8ff5f701d45794afab7d1cb8b065adf1c3c6e54bed30d343e8f661",
+    "runId": "1f15c077df80bee0ab52309e7694eaddaa2493465a064c7dc9c4116d9c2fbe50",
+    "candidateSha": "1e3b761caa27c370afe5b447bfca925c6703e7c1",
+    "acceptanceDigest": "350cd28227d94cc040eb36c00025a33d73418b3982be563705259ce2f9acb7ad",
+    "modelRequests": 0,
+    "exit": 0,
+    "result": "PASS"
+  },
+  "pricing": "unavailable",
+  "limits": [
+    "One complete real-model run, not a three-pair performance benchmark.",
+    "The controller was driven by one-shot ticks; manual gaps are not controller latency.",
+    "Cross-family acceptance and independent review are not claimed."
+  ]
+}

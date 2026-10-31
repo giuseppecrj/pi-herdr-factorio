@@ -237,6 +237,43 @@ describe("land precondition", () => {
 		);
 	});
 
+	it("does not certify a different candidate, gate or acceptance suite with the same patch", () => {
+		const bound = {
+			...ciBinding,
+			patchDigest: patch("a"),
+			verdict: passingVerdict(patch("a")),
+		};
+
+		assert.deepEqual(
+			checkLandPrecondition(bound, {
+				...currentHead,
+				currentTip: "d".repeat(40),
+			}),
+			{ kind: "blocked", reason: "stale_candidate" },
+		);
+		assert.deepEqual(
+			checkLandPrecondition(bound, {
+				...currentHead,
+				currentGate: "d".repeat(40),
+			}),
+			{ kind: "blocked", reason: "stale_gate" },
+		);
+		assert.deepEqual(
+			checkLandPrecondition(
+				{ ...bound, candidateSha: "d".repeat(40) },
+				currentHead,
+			),
+			{ kind: "blocked", reason: "stale_candidate" },
+		);
+		assert.deepEqual(
+			checkLandPrecondition(
+				{ ...bound, acceptanceDigest: patch("other suite") },
+				currentHead,
+			),
+			{ kind: "blocked", reason: "acceptance_mismatch" },
+		);
+	});
+
 	it("is blocked without a patch or without a verdict", () => {
 		assert.deepEqual(
 			checkLandPrecondition({ verdict: passingVerdict(patch("a")) }),

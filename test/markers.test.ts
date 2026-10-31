@@ -427,6 +427,23 @@ describe("marker v2", () => {
 	});
 });
 
+it("refuses non-text branch and candidate values in marker v2", () => {
+	for (const key of ["branch", "candidate"]) {
+		const body = rawBody((fields) => {
+			fields.set("v", 2);
+			fields.set("candidate", null);
+			fields.set("round", 0);
+			fields.set("ciRun", null);
+			fields.set(key, false);
+		});
+
+		assert.deepEqual(parseMarker(body), {
+			kind: "corrupt",
+			defect: "bad_value",
+		});
+	}
+});
+
 describe("markerLedger trust rule", () => {
 	it("trusts an unedited bot marker on its own issue", () => {
 		const ledger = ledgerOf([comment(formatMarker(marker()))]);

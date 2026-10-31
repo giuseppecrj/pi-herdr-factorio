@@ -188,6 +188,22 @@ describe("bound validation verdicts", () => {
 	});
 });
 
+it("collection itself refuses a receipt from the wrong run actor or workflow", () => {
+	for (const change of [
+		{ actor: "human" },
+		{ event: "push" },
+		{ path: ".github/workflows/check.yml" },
+	])
+		assert.equal(
+			collectVerdict({
+				...binding,
+				run: { ...run, ...change },
+				text: JSON.stringify(receipt),
+			}).pass,
+			false,
+		);
+});
+
 describe("published held-out bytes and repair feedback", () => {
 	it("publishes checks only and binds exact private bytes", () => {
 		const result = publishedSuite({

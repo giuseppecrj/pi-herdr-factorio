@@ -101,6 +101,10 @@ export function verdictPasses(verdict: Verdict): boolean {
 		/^[a-f0-9]{40}$/.test(verdict.gateSha) &&
 		Number.isSafeInteger(verdict.ciRunId) &&
 		verdict.ciRunId > 0 &&
+		Array.isArray(verdict.requiredChecks) &&
+		Array.isArray(verdict.checks) &&
+		/^[a-f0-9]{40}$/.test(verdict.originalBase) &&
+		/^[a-f0-9]{40}$/.test(verdict.baseSha) &&
 		REQUIRED_CI_CHECKS.every((name) => verdict.requiredChecks.includes(name)) &&
 		new Set(verdict.requiredChecks).size === verdict.requiredChecks.length &&
 		verdict.checks.length === verdict.requiredChecks.length &&

@@ -7049,6 +7049,53 @@ describe("private build stage", () => {
 });
 
 describe("controller-only validate", () => {
+	it("retains publication identities when a waiting run is released across restart", async () => {
+		const { github, executor, files, start } = world();
+		const issue = github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "pass", usage: 7 };
+		executor.buildBehavior = { kind: "pass", usage: 12 };
+		executor.validate = async (input) => {
+			const state = {
+				version: 1,
+				startedAt: input.now,
+				deadline: input.now + input.wallMs,
+				round: 0,
+				originalBase: input.baseSha,
+				baseSha: input.baseSha,
+				baseResolved: true,
+				publication: {
+					branch: `factory/run/14-${input.runId.slice(0, 12)}-r0`,
+					patchSha: sha("b".repeat(40)),
+					candidateSha: sha("c".repeat(40)),
+				},
+				dispatchTry: 1,
+				dispatchedAt: input.now,
+				ciRunId: 123,
+				counters: {},
+			} as const;
+
+			await input.save(state);
+
+			return { kind: "waiting", state };
+		};
+
+		const first = start();
+		await once(first);
+		await once(first);
+		await first.tick();
+		const publication = files.claims.get(runOf(14))?.validation?.publication;
+		assert.ok(publication);
+		issue.labels = [];
+		issue.updatedAt = "2026-10-29T03:00:00Z";
+		const report = await start().tick();
+		assert.deepEqual(report.runs, []);
+		assert.equal(files.claims.get(runOf(14))?.status, "released");
+		assert.deepEqual(
+			files.claims.get(runOf(14))?.validation?.publication,
+			publication,
+		);
+	});
 	it("adopts a v1 validate marker on the old workflow without a model interruption or slot", async () => {
 		const { github, executor, start, clock } = world();
 		const issue = github.add(labeled(14));

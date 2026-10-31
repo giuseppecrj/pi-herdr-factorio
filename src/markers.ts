@@ -192,7 +192,7 @@ const STATUS_TEXT: Readonly<Record<RunStatus, string>> = {
 	blocked: "blocked: the stage sandbox is unavailable",
 	retrying: "waiting to retry",
 	released: "released: the issue is no longer eligible",
-	failed: "failed: retries are exhausted",
+	failed: "failed: the stage did not pass",
 	budget_exhausted: "stopped: the run budget is spent",
 	stage_passed: "stopped: stage passed; the next stage is not installed",
 	needs_info:
@@ -282,8 +282,10 @@ function readMarker(fields: Map<string, JsonValue>): Marker | null {
 
 	if (
 		v2 &&
-		((branch !== null &&
-			!/^factory\/run\/[1-9][0-9]*-[a-f0-9]{12}-r[0-2]$/.test(branch)) ||
+		((fields.get("branch") !== null && branch === null) ||
+			(fields.get("candidate") !== null && candidate === null) ||
+			(branch !== null &&
+				!/^factory\/run\/[1-9][0-9]*-[a-f0-9]{12}-r[0-2]$/.test(branch)) ||
 			(candidate !== null && !isGitSha(candidate)) ||
 			round === null ||
 			round > 2 ||

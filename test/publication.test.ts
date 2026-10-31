@@ -45,7 +45,11 @@ import {
 	finishPatch,
 	prepareRepairTree,
 } from "../src/build.ts";
-import { controllerValidator, fileRunFiles } from "../server/controller.ts";
+import {
+	controllerValidator,
+	sweepValidation,
+	fileRunFiles,
+} from "../server/controller.ts";
 import { type ValidationState } from "../src/validation.ts";
 import { CONTROLLER_LOGIN } from "../src/markers.ts";
 
@@ -84,6 +88,7 @@ class GitData {
 	crashAfterDispatch = false;
 	failure: number | null = null;
 	input: Record<string, string> = {};
+	readonly dispatchInputs: Record<string, string>[] = [];
 	readonly exec: Exec = async (_command, args): Promise<ExecResult> => {
 		const path =
 			args
@@ -186,6 +191,7 @@ class GitData {
 			this.dispatches++;
 			// SAFETY: fixed synthetic inputs authored by the controller under test.
 			this.input = fieldOf(body, "inputs") as Record<string, string>;
+			this.dispatchInputs.push({ ...this.input });
 
 			if (this.crashAfterDispatch) {
 				this.crashAfterDispatch = false;
@@ -197,7 +203,13 @@ class GitData {
 
 		if (path.startsWith("actions/workflows/ci.yml/runs"))
 			return ok({
-				workflow_runs: this.dispatches > 0 && this.visible ? [this.run()] : [],
+				workflow_runs: this.visible
+					? this.dispatchInputs.map((input, index) => ({
+							...this.run(),
+							id: 123 + index,
+							display_title: `gates ${input.candidate_sha} ${input.nonce}`,
+						}))
+					: [],
 			});
 
 		if (path === "actions/runs/123") return ok(this.run());
@@ -489,6 +501,51 @@ describe("controller publication and waiting recovery", () => {
 			assert.equal((await f.step()).kind, "finished");
 			assert.equal(f.fake.dispatches, 1);
 		});
+	it("sweeps only its released candidate after CI finishes, without redispatch", async () => {
+		const f = await validationFixture();
+		await f.step();
+		const validation = f.state();
+		assert.ok(validation);
+		await fileRunFiles(f.root).writeClaim({
+			runId,
+			issue: 1,
+			eventId: "1",
+			seq: 1,
+			status: "released",
+			stage: "validate",
+			attempt: 1,
+			usage: 0,
+			validation,
+		});
+
+		const config = {
+			stateDir: f.root,
+			exec: f.fake.exec,
+			receipt: async () => f.fake.receipt(),
+			now: () => Date.parse("2026-10-31T00:00:01Z"),
+		};
+
+		f.fake.refs.set("factory/ledger", "f".repeat(40));
+		await sweepValidation(config);
+		assert.equal(f.fake.refs.size, 2);
+		f.fake.completed = true;
+		await sweepValidation(config);
+		assert.equal(f.fake.refs.size, 1);
+		assert.equal(f.fake.refs.has("factory/ledger"), true);
+		assert.equal(f.fake.dispatches, 1);
+		assert.equal(
+			existsSync(join(f.root, "validation", runId, "verdict.json")),
+			true,
+		);
+		assert.equal(
+			existsSync(join(f.root, "validation", runId, "cleanup.json")),
+			true,
+		);
+		const calls = f.fake.requests.length;
+		await sweepValidation(config);
+		assert.equal(f.fake.requests.length, calls);
+	});
+
 	it("settles an absent dispatch before retrying, with no third try", async () => {
 		const f = await validationFixture();
 		f.fake.visible = false;
@@ -505,6 +562,26 @@ describe("controller publication and waiting recovery", () => {
 
 		if (timeout.kind === "failed") assert.equal(timeout.reason, "ci_timeout");
 	});
+	it("rejects two late-visible dispatch tries instead of taking a passing one", async () => {
+		const f = await validationFixture();
+		const start = Date.parse("2026-10-31T00:00:00Z");
+		f.fake.visible = false;
+		await f.step(start);
+		await f.step(start + 120_000);
+		assert.equal(f.fake.dispatches, 2);
+		f.fake.visible = true;
+		const waiting = await f.step(start + 121_000);
+		assert.equal(waiting.kind, "waiting");
+		assert.equal(f.fake.refs.size, 1);
+		f.fake.completed = true;
+		const result = await f.step(start + 122_000);
+		assert.equal(result.kind, "failed");
+
+		if (result.kind === "failed")
+			assert.equal(result.reason, "duplicate_dispatch");
+		assert.equal(f.fake.refs.size, 0);
+	});
+
 	it("reapplies on moved main without a model or repair round", async () => {
 		const f = await validationFixture();
 		f.fake.main = "e".repeat(40);
@@ -562,6 +639,12 @@ describe("controller publication and waiting recovery", () => {
 			join(f.base, "test/acceptance/1/checks/canary.test.ts"),
 			"secret",
 		);
+
+		for (const path of ["Test/Acceptance", "TEST/ACCEPTANCE"]) {
+			mkdirSync(join(f.base, path), { recursive: true });
+			writeFileSync(join(f.base, path, "canary.test.ts"), "secret");
+		}
+
 		const repair = join(f.root, "repair");
 		await prepareRepairTree(
 			f.base,
@@ -572,7 +655,13 @@ describe("controller publication and waiting recovery", () => {
 				{ scenario: "S1", criteria: [{ id: "A1", text: "Return 2" }] },
 			]),
 		);
-		assert.equal(existsSync(join(repair, "test/acceptance")), false);
+
+		for (const path of [
+			"test/acceptance",
+			"Test/Acceptance",
+			"TEST/ACCEPTANCE",
+		])
+			assert.equal(existsSync(join(repair, path)), false);
 		assert.equal(existsSync(join(repair, ".git")), false);
 		assert.equal(existsSync(join(repair, "node_modules")), false);
 		assert.match(readFileSync(join(repair, "src/a.ts"), "utf8"), /2/);

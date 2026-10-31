@@ -200,6 +200,21 @@ describe("advance: validate failure and bounded repair", () => {
 		assert.equal(run.verdict, undefined);
 		assert.equal(run.contractDigest, contractDigest);
 		assert.equal(run.acceptanceDigest, acceptanceDigest);
+		assert.equal(run.candidateSha, undefined);
+		assert.equal(run.ciRunId, undefined);
+		assert.equal(run.heldoutDigest, undefined);
+	});
+
+	it("rejects a passing verdict for another head with the same patch", () => {
+		const verdict = {
+			...passingVerdict(patch("first")),
+			candidateSha: "d".repeat(40),
+		};
+
+		assert.deepEqual(
+			advance(reachValidate("first"), { kind: "validated", verdict }),
+			{ kind: "invalid", reason: "verdict is bound to different CI inputs" },
+		);
 	});
 
 	it("lets a repaired patch pass validate and continue", () => {

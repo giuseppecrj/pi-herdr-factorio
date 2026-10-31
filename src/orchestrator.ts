@@ -165,6 +165,7 @@ export type StageOutput =
 
 export interface StageExecutor {
 	readonly validate?: Validator;
+	cleanupValidation?(): Promise<void>;
 	/** Stops whatever a previous controller left running. Called once, before the first tick adopts a run. */
 	recover(): Promise<void>;
 	/**
@@ -945,6 +946,9 @@ export class Orchestrator {
 				: [];
 
 		await this.#confirmEnds();
+		await this.#input.executor
+			.cleanupValidation?.()
+			.catch(() => this.#input.log("validation_cleanup_unavailable", {}));
 
 		const open =
 			gate.kind === "open" && candidates.kind === "ok" && limits !== null;
@@ -1991,7 +1995,7 @@ export class Orchestrator {
 						: "undecided";
 				}
 
-				await this.#keepEnded(recordOf(latest), true);
+				await this.#keepEnded({ ...claim, ...recordOf(latest) }, true);
 				continue;
 			}
 
@@ -2069,6 +2073,7 @@ export class Orchestrator {
 			workspaceMissing: false,
 			replay: false,
 			unsettled: null,
+			validation: claim.validation,
 			adopted: true,
 			clearNeedsInfo: false,
 			labelFailures: 0,

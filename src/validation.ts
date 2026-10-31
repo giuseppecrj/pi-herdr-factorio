@@ -58,6 +58,7 @@ export type ValidationInput = {
 	readonly wallMs: number;
 	readonly state: ValidationState | null;
 	readonly save: (state: ValidationState) => Promise<boolean>;
+	readonly dispatchAllowed?: boolean;
 };
 
 export type ValidationResult =
@@ -233,6 +234,7 @@ export function collectVerdict(input: {
 		originalBase: input.originalBase,
 		baseSha: input.baseSha,
 		pass:
+			matchesCiRun(input.run, input.candidateSha, input.nonce, 0) &&
 			input.run.status === "completed" &&
 			input.run.conclusion === "success" &&
 			fieldOf(value, "version") === 2 &&

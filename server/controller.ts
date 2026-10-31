@@ -11,6 +11,7 @@ import {
 	GitHubPublicationApi,
 	PublicationError,
 	publishCandidate,
+	candidateBranch,
 } from "../src/publication.ts";
 import {
 	type Validator,
@@ -1577,7 +1578,7 @@ export function controllerValidator(config: {
 							await api.request("GET", `actions/runs/${state.ciRunId}`),
 						);
 
-			if (run === null && state.dispatchTry > 0) {
+			if ((run === null || state.dispatchTry > 1) && state.dispatchTry > 0) {
 				const listed = objectOf(
 					await api.request(
 						"GET",
@@ -1591,21 +1592,33 @@ export function controllerValidator(config: {
 					const found = parseCiRun(value);
 
 					return found !== null &&
-						matchesCiRun(
-							found,
-							publication.candidateSha,
-							dispatchNonce(input.runId, state.round, state.dispatchTry),
-							state.startedAt,
+						Array.from({ length: state.dispatchTry }, (_, index) =>
+							dispatchNonce(input.runId, state.round, index + 1),
+						).some((nonce) =>
+							matchesCiRun(
+								found,
+								publication.candidateSha,
+								nonce,
+								state.startedAt,
+							),
 						)
 						? [found]
 						: [];
 				});
 
-				if (matches.length > 1) return failed("duplicate_dispatch");
-				run = matches[0] ?? null;
+				if (matches.length > 1) {
+					if (matches.some((match) => match.status !== "completed"))
+						return { kind: "waiting", state };
+
+					return failed("duplicate_dispatch");
+				}
+
+				run = matches[0] ?? run;
 			}
 
 			if (run === null) {
+				if (input.dispatchAllowed === false) return failed("ci_missing");
+
 				if (
 					state.dispatchedAt !== null &&
 					input.now - state.dispatchedAt < DISPATCH_SETTLE_MS
@@ -1658,7 +1671,12 @@ export function controllerValidator(config: {
 				return { kind: "waiting", state };
 			}
 
-			const nonce = dispatchNonce(input.runId, state.round, state.dispatchTry);
+			const nonce =
+				Array.from({ length: state.dispatchTry }, (_, index) =>
+					dispatchNonce(input.runId, state.round, index + 1),
+				).find(
+					(nonce) => run.title === `gates ${publication.candidateSha} ${nonce}`,
+				) ?? "missing";
 
 			if (!matchesCiRun(run, publication.candidateSha, nonce, state.startedAt))
 				return failed("ci_identity");
@@ -1712,6 +1730,109 @@ export function controllerValidator(config: {
 			);
 		}
 	};
+}
+
+export async function sweepValidation(config: {
+	readonly stateDir: string;
+	readonly exec: Exec;
+	readonly fetch?: TarballFetch;
+	readonly receipt?: (repo: RepoSlug, id: number) => Promise<string | null>;
+	readonly now?: () => number;
+}): Promise<void> {
+	const files = fileRunFiles(config.stateDir);
+
+	for (const claim of await files.listClaims()) {
+		const state = claim.validation;
+		const publication = state?.publication;
+
+		if (
+			claim.status === null ||
+			!["released", "failed", "budget_exhausted", "stage_passed"].includes(
+				claim.status,
+			) ||
+			state === undefined ||
+			publication == null
+		)
+			continue;
+
+		if (
+			publication.branch !==
+			candidateBranch(claim.issue, claim.runId, state.round)
+		)
+			continue;
+		const dir = join(config.stateDir, "validation", claim.runId);
+
+		if (present(join(dir, "cleanup.json"))) continue;
+		const contract = await files.readContract(claim.runId);
+
+		if (contract.kind !== "found") continue;
+
+		const api = new GitHubPublicationApi(
+			config.exec,
+			contract.contract.base.repo,
+		);
+
+		if (
+			!present(join(dir, "verdict.json")) &&
+			!present(join(dir, "failure.json"))
+		) {
+			const listed = objectOf(
+				await api.request(
+					"GET",
+					"actions/workflows/ci.yml/runs?event=workflow_dispatch&per_page=100",
+				),
+			);
+
+			const runs = (arrayOf(jsonField(listed, "workflow_runs")) ?? []).flatMap(
+				(value) => {
+					const run = parseCiRun(value);
+
+					return run !== null &&
+						Array.from({ length: state.dispatchTry }, (_, index) =>
+							dispatchNonce(claim.runId, state.round, index + 1),
+						).some((nonce) =>
+							matchesCiRun(
+								run,
+								publication.candidateSha,
+								nonce,
+								state.startedAt,
+							),
+						)
+						? [run]
+						: [];
+				},
+			);
+
+			if (runs.some((run) => run.status !== "completed")) continue;
+
+			if (runs.length === 0 && (config.now?.() ?? Date.now()) < state.deadline)
+				continue;
+
+			if (runs.length === 1) state.ciRunId = runs[0]?.id ?? null;
+			await controllerValidator(config)({
+				runId: claim.runId,
+				issue: claim.issue,
+				eventAt: contract.contract.snapshot.eventAt,
+				baseSha: contract.contract.base.sha,
+				now: config.now?.() ?? Date.now(),
+				wallMs: CI_DEADLINE_MS,
+				state,
+				dispatchAllowed: false,
+				save: async (validation) => files.writeClaim({ ...claim, validation }),
+			});
+		}
+
+		if (
+			!present(join(dir, "verdict.json")) &&
+			!present(join(dir, "failure.json"))
+		)
+			continue;
+		await api.remove(publication.branch);
+		keepValidationFile(
+			join(dir, "cleanup.json"),
+			`${JSON.stringify({ branch: publication.branch, candidateSha: publication.candidateSha })}\n`,
+		);
+	}
 }
 
 export async function downloadGateReceipt(

@@ -827,9 +827,9 @@ export async function prepareRepairTree(
 			rmSync(join(dest, name), { recursive: true, force: true });
 	}
 
-	const tests = readdirSync(dest).find((name) => name.toLowerCase() === "test");
+	for (const tests of readdirSync(dest)) {
+		if (tests.toLowerCase() !== "test") continue;
 
-	if (tests !== undefined) {
 		for (const name of readdirSync(join(dest, tests))) {
 			if (name.toLowerCase() === "acceptance")
 				rmSync(join(dest, tests, name), { recursive: true, force: true });
