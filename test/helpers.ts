@@ -9,6 +9,9 @@ import {
 	REQUIRED_CI_CHECKS,
 } from "../src/run.ts";
 import { advance, type RunEvent } from "../src/stages.ts";
+import type { AdmissionPin } from "../src/handoff.ts";
+import type { PatchReceipt } from "../src/build.ts";
+import { isGitSha, isRepoSlug } from "../src/workflow.ts";
 
 export const ticket: TicketRef = {
 	provider: "github",
@@ -18,48 +21,46 @@ export const ticket: TicketRef = {
 
 export const contractDigest = digestOf("contract");
 export const acceptanceDigest = digestOf("acceptance");
+const repo = "giuseppecrj/pi-herdr-factorio";
+const base = "a".repeat(40);
+
+if (!isRepoSlug(repo) || !isGitSha(base)) throw new Error("fixture");
+
+export const admissionPin: AdmissionPin = {
+	runId: digestOf("run"),
+	repo,
+	issue: 42,
+	originalBase: base,
+	workflowSha: base,
+	workflowDigest: digestOf("workflow"),
+	contractDigest,
+	acceptanceDigest,
+	maxTokens: 500_000,
+	maxReviewAttempts: 3,
+};
 
 export function patch(name: string): Digest {
 	return digestOf(`patch:${name}`);
 }
 
 export function newRun(): Run {
-	return startRun({
-		id: "run-1",
-		ticket,
-		repo: "giuseppecrj/pi-herdr-factorio",
-		baseSha: "a".repeat(40),
-	});
+	return startRun({ id: admissionPin.runId, ticket, repo, baseSha: base });
 }
 
-export const candidateEvent = {
-	kind: "candidate",
+export const ciCandidate = {
 	candidateSha: "c".repeat(40),
 	heldoutDigest: digestOf("heldout"),
 	ciRunId: 123,
-} as const;
-
-export const currentHead = {
-	currentTip: "c".repeat(40),
-	currentGate: "a".repeat(40),
-};
-
-export const ciBinding = {
-	...candidateEvent,
-	acceptanceDigest,
-	gateSha: currentHead.currentGate,
 };
 
 export function passingVerdict(patchDigest: Digest): Verdict {
 	return {
 		patchDigest,
 		acceptanceDigest,
-		heldoutDigest: candidateEvent.heldoutDigest,
-		candidateSha: candidateEvent.candidateSha,
-		ciRunId: candidateEvent.ciRunId,
-		gateSha: currentHead.currentGate,
-		originalBase: "a".repeat(40),
-		baseSha: "a".repeat(40),
+		...ciCandidate,
+		gateSha: base,
+		originalBase: base,
+		baseSha: base,
 		unjudged: [],
 		pass: true,
 		requiredChecks: [...REQUIRED_CI_CHECKS],
@@ -78,6 +79,41 @@ export function failingVerdict(patchDigest: Digest): Verdict {
 				? { ...check, passed: false, detail: "1 failing" }
 				: check,
 		),
+	};
+}
+
+export function patchReceipt(name = "first"): PatchReceipt {
+	return {
+		version: 1,
+		runId: admissionPin.runId,
+		round: 0,
+		baseSha: base,
+		contractDigest,
+		acceptanceDigest,
+		patchDigest: patch(name),
+		changedPaths: ["src/example.ts"],
+		policy: "clean",
+		testCommand: "npm test",
+		model: "openai/gpt-6.1-sol",
+		observed: null,
+		commands: [],
+		commandsSource: "builder-reported",
+		commandsOmitted: 0,
+		scriptsChanged: false,
+		testScriptChanged: false,
+		testInputsChanged: false,
+		visibleTests: { command: "npm test", exitCode: 0, tail: "", wallMs: 1 },
+	};
+}
+
+export function builtEvent(
+	name = "first",
+): Extract<RunEvent, { kind: "built" }> {
+	return {
+		kind: "built",
+		pin: admissionPin,
+		patch: patchReceipt(name),
+		priorTokens: 1234,
 	};
 }
 
@@ -106,38 +142,8 @@ export function reachBuild(): Run {
 	);
 }
 
-export function reachValidate(name = "first"): Run {
-	return apply(
-		reachBuild(),
-		{ kind: "built", patchDigest: patch(name) },
-		candidateEvent,
-	);
-}
-
-export function reachReview(name = "first"): Run {
-	return apply(reachValidate(name), {
-		kind: "validated",
-		verdict: passingVerdict(patch(name)),
-	});
-}
-
-export function reviewedEvent(
-	name = "first",
-	blockingFindings: string[] = [],
-): Extract<RunEvent, { kind: "reviewed" }> {
-	return {
-		kind: "reviewed",
-		candidateSha: candidateEvent.candidateSha,
-		patchDigest: patch(name),
-		blockingFindings,
-		judgments: [],
-	};
-}
-
-export function reachLand(name = "first"): Run {
-	return apply(reachReview(name), reviewedEvent(name));
-}
-
 export function stageOf(run: Run): string {
-	return run.progress.kind === "active" ? run.progress.stage : "finished";
+	return run.progress.kind === "active"
+		? run.progress.stage
+		: run.progress.kind;
 }

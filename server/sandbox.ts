@@ -9,6 +9,7 @@ import {
 	reviewFeedback,
 	reviewIdentityLabel,
 	reviewSeats,
+	reviewDir,
 	seatPrompt,
 	type SeatReceipt,
 } from "../src/review.ts";
@@ -76,6 +77,7 @@ import {
 	checkoutWorkspace,
 	checkoutBuildWorkspace,
 	controllerValidator,
+	controllerCandidatePort,
 	sweepValidation,
 	fileRunFiles,
 	readStoredVerdict,
@@ -2300,7 +2302,9 @@ async function prepareCandidateReview(
 	config: SandboxExecutorConfig,
 	input: Parameters<NonNullable<StageExecutor["prepareReview"]>>[0],
 ): Promise<ReviewPreparation> {
-	const { runId, round, workspace, workflowSha, workflowDigest } = input;
+	const { runId, round, workspace, workflowSha, workflowDigest, execution } =
+		input;
+
 	const files = fileRunFiles(config.stateDir);
 	const bound = await files.readContract(runId);
 
@@ -2316,7 +2320,14 @@ async function prepareCandidateReview(
 
 	if (suite.kind !== "found" || patch.kind !== "found")
 		throw new Error("review_inputs_missing");
-	const dir = validationDir(config.stateDir, runId, round);
+
+	const dir = validationDir(
+		config.stateDir,
+		runId,
+		round,
+		execution?.generation.generation,
+	);
+
 	const verdict = readStoredVerdict(join(dir, "verdict.json"));
 
 	if (
@@ -2326,7 +2337,16 @@ async function prepareCandidateReview(
 		verdict.patchDigest !== patch.receipt.patchDigest ||
 		patch.receipt.contractDigest !== bound.digest ||
 		patch.receipt.acceptanceDigest !== suite.receipt.acceptanceDigest ||
-		verdict.acceptanceDigest !== suite.receipt.acceptanceDigest
+		verdict.acceptanceDigest !== suite.receipt.acceptanceDigest ||
+		(execution !== undefined &&
+			(execution.runId !== runId ||
+				execution.round !== round ||
+				execution.workflowSha !== workflowSha ||
+				execution.workflowDigest !== workflowDigest ||
+				execution.binding.candidateSha !== verdict.candidateSha ||
+				execution.binding.baseSha !== verdict.baseSha ||
+				execution.binding.ciRunId !== verdict.ciRunId ||
+				execution.binding.patchDigest !== verdict.patchDigest))
 	)
 		throw new Error("review_binding");
 
@@ -2429,7 +2449,7 @@ async function prepareCandidateReview(
 		verdict,
 		builder: patch.receipt.model,
 		input: {
-			binding: {
+			binding: execution?.binding ?? {
 				runId,
 				round,
 				candidateSha: verdict.candidateSha,
@@ -2467,11 +2487,29 @@ export async function runReview(
 	if (prepared === undefined) throw new Error("review_missing");
 	mkdirSync(dir, { recursive: true, mode: 0o700 });
 
-	if (!existsSync(join(dir, "review.json")))
-		publishFile(
-			join(dir, "review.json"),
-			JSON.stringify({ seats: prepared.input.seats }),
-		);
+	const manifest = JSON.stringify({
+		version: 2,
+		execution: input.execution ?? null,
+		binding: prepared.input.binding,
+		seats: prepared.input.seats,
+		inputDigest: digestOf(
+			JSON.stringify({
+				binding: prepared.input.binding,
+				seats: prepared.input.seats,
+				files: [...prepared.input.files],
+				scenarios: prepared.input.scenarios,
+				prompt: prepared.input.prompt,
+			}),
+		),
+	});
+
+	const manifestPath = join(dir, "review.json");
+
+	if (existsSync(manifestPath)) {
+		if (regularText(manifestPath) !== manifest)
+			throw new Error("review_execution_binding");
+	} else if (!publishFile(manifestPath, manifest))
+		throw new Error("review_manifest_unwritable");
 	const previous = (await executionSpent(dir)) ?? 0;
 	const receipts: SeatReceipt[] = [];
 	const records: Awaited<ReturnType<typeof readStageReceipt>>[] = [];
@@ -2736,6 +2774,10 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 	};
 
 	return {
+		candidate: controllerCandidatePort({
+			stateDir: config.stateDir,
+			exec: config.exec,
+		}),
 		validate: controllerValidator({
 			stateDir: config.stateDir,
 			exec: config.exec,
@@ -2755,7 +2797,25 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 			return reconciled || reconcile(false);
 		},
 
-		async spent({ runId, stage, attempt, round }) {
+		async spent({ runId, stage, attempt, round, execution }) {
+			if (execution !== undefined) {
+				try {
+					const intent = regularText(
+						join(
+							config.stateDir,
+							"stages",
+							runId,
+							stageName(stage, attempt, round),
+							"execution.json",
+						),
+					);
+
+					if (intent !== `${JSON.stringify(execution)}\n`) return null;
+				} catch {
+					return null;
+				}
+			}
+
 			return attemptSpent(config.stateDir, runId, stage, attempt, round);
 		},
 
@@ -2880,6 +2940,40 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 			}
 
 			if (stage === "review") {
+				const execution = input.execution;
+
+				if (execution !== undefined && execution.stage !== "review")
+					return null;
+
+				const dir = join(
+					config.stateDir,
+					"stages",
+					runId,
+					stageName(stage, attempt, round),
+				);
+
+				if (execution !== undefined) {
+					try {
+						if (
+							regularText(join(dir, "execution.json")) !==
+							`${JSON.stringify(execution)}\n`
+						)
+							return null;
+
+						const manifest = objectOf(
+							parseJson(regularText(join(dir, "review.json"))),
+						);
+
+						if (
+							JSON.stringify(fieldOf(manifest, "execution")) !==
+							JSON.stringify(execution)
+						)
+							return null;
+					} catch {
+						return null;
+					}
+				}
+
 				const output = await attemptOutput(
 					config.stateDir,
 					runId,
@@ -2898,12 +2992,13 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 					const prepared = await prepareCandidateReview(config, {
 						runId,
 						round,
+						execution,
 						workflowSha: input.workflowSha,
 						workflowDigest: input.workflowDigest,
 						workspace: join(
 							config.stateDir,
 							"review-tree",
-							roundKey(runId, round),
+							`${roundKey(runId, round)}-a${attempt}`,
 						),
 					});
 
@@ -2934,7 +3029,15 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 			return attemptOutput(config.stateDir, runId, stage, attempt, round);
 		},
 
-		async checkout({ runId, repo, sha, workspace, build, round = 0 }) {
+		async checkout({
+			runId,
+			repo,
+			sha,
+			workspace,
+			build,
+			round = 0,
+			feedbackFrom,
+		}) {
 			const checked = await (build
 				? checkoutBuildWorkspace
 				: checkoutWorkspace)({
@@ -2953,16 +3056,24 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 
 					if (previous.kind !== "found")
 						return { kind: "refused", reason: "repair_patch_missing" };
-					const dir = validationDir(config.stateDir, runId, round - 1);
+
+					const dir = validationDir(
+						config.stateDir,
+						runId,
+						feedbackFrom?.round ?? round - 1,
+						feedbackFrom?.generation,
+					);
 
 					const validation =
 						parseJson(regularText(join(dir, "feedback.json"))) ?? [];
 
 					const reviewPath = join(
-						config.stateDir,
-						"review",
-						runId,
-						`r${round - 1}`,
+						reviewDir(
+							config.stateDir,
+							runId,
+							feedbackFrom?.round ?? round - 1,
+							feedbackFrom?.generation,
+						),
 						"receipt.json",
 					);
 

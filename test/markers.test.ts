@@ -61,7 +61,9 @@ function marker(change: Partial<Marker> = {}): Marker {
 }
 
 function rawBody(edit: (fields: Map<string, JsonValue>) => void): string {
-	const fields = new Map<string, JsonValue>(Object.entries(marker()));
+	const encoded: JsonValue = JSON.parse(JSON.stringify(marker()));
+	assert.ok(encoded instanceof Object && !Array.isArray(encoded));
+	const fields = new Map<string, JsonValue>(Object.entries(encoded));
 
 	edit(fields);
 
@@ -133,6 +135,9 @@ describe("needs_info status", () => {
 				"budget_exhausted",
 				"stage_passed",
 				"needs_info",
+				"waiting",
+				"landed",
+				"cancelled",
 			],
 		);
 	});
@@ -259,7 +264,7 @@ describe("parseMarker", () => {
 		[
 			"an unknown version",
 			rawBody((f) => {
-				f.set("v", 3);
+				f.set("v", 4);
 			}),
 			"unknown_version",
 		],

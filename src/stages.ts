@@ -1,4 +1,12 @@
-import { checkLandPrecondition } from "./policy.ts";
+import {
+	beginCandidate,
+	candidateProjection,
+	handoffCandidate,
+	type AdmissionPin,
+	type CandidateEvent,
+	type CandidateEffect,
+} from "./handoff.ts";
+import type { PatchReceipt } from "./build.ts";
 import {
 	type Digest,
 	type NonEmpty,
@@ -6,11 +14,9 @@ import {
 	type RejectReason,
 	type Run,
 	type Stage,
-	type Verdict,
-	verdictPasses,
 } from "./run.ts";
 
-export const MAX_REPAIR_ROUNDS = 2;
+export { MAX_REPAIR_ROUNDS } from "./handoff.ts";
 
 export const STAGE_ORDER = [
 	"admit",
@@ -22,10 +28,7 @@ export const STAGE_ORDER = [
 	"land",
 ] as const satisfies readonly Stage[];
 
-/**
- * Where a stage runs and what it can reach. Only the controller uses the
- * GitHub integration; a sandboxed model stage has no GitHub access at all.
- */
+/** Only the controller uses GitHub; model stages run in the sandbox. */
 export type StageProfile = {
 	modelAccess: "none" | "judge" | "full";
 	runsIn: "controller" | "sandbox";
@@ -89,33 +92,24 @@ export type RunEvent =
 	| { kind: "specified"; contractDigest: Digest }
 	| { kind: "needs_info"; questions: NonEmpty<string> }
 	| { kind: "accepted"; acceptanceDigest: Digest }
-	| { kind: "built"; patchDigest: Digest }
 	| {
-			kind: "candidate";
-			candidateSha: string;
-			heldoutDigest: Digest;
-			ciRunId: number;
+			kind: "built";
+			pin: AdmissionPin;
+			patch: PatchReceipt;
+			priorTokens: number;
 	  }
-	| { kind: "validated"; verdict: Verdict }
-	| ({ kind: "reviewed" } & import("./run.ts").ReviewEvidence)
-	| {
-			kind: "landed";
-			mergeSha: string;
-			currentTip?: string;
-			currentGate?: string;
-	  }
+	| { kind: "candidate"; event: CandidateEvent }
 	| { kind: "stage_failed"; evidence: string }
 	| { kind: "budget_exhausted" }
 	| { kind: "rejected"; reason: Exclude<RejectReason, "disabled"> }
-	| { kind: "kill_switch_off" }
 	| { kind: "cancelled" };
 
 export type Transition =
-	| { kind: "advanced"; run: Run }
+	| { kind: "advanced"; run: Run; effect: CandidateEffect | null }
 	| { kind: "invalid"; reason: string };
 
-function advanced(run: Run): Transition {
-	return { kind: "advanced", run };
+function advanced(run: Run, effect: CandidateEffect | null = null): Transition {
+	return { kind: "advanced", run, effect };
 }
 
 function invalid(reason: string): Transition {
@@ -130,60 +124,35 @@ function moveTo(run: Run, stage: Stage, patch: Partial<Run> = {}): Transition {
 	return advanced({ ...run, ...patch, progress: { kind: "active", stage } });
 }
 
-const STALE_ON_REBUILD: Pick<
-	Run,
-	| "review"
-	| "patchDigest"
-	| "verdict"
-	| "candidateSha"
-	| "gateSha"
-	| "ciRunId"
-	| "heldoutDigest"
-> = {
-	review: undefined,
-	patchDigest: undefined,
-	verdict: undefined,
-	candidateSha: undefined,
-	gateSha: undefined,
-	ciRunId: undefined,
-	heldoutDigest: undefined,
-};
-
-function repairOrFail(run: Run, stage: Stage, evidence: string): Transition {
-	if (run.repairRounds >= MAX_REPAIR_ROUNDS) {
-		return finish(run, { kind: "failed", stage, evidence });
-	}
-
-	return moveTo(run, "build", {
-		repairRounds: run.repairRounds + 1,
-		...STALE_ON_REBUILD,
-	});
-}
-
-function failureEvidence(verdict: Verdict): string {
-	const failed = verdict.checks.filter((check) => !check.passed);
-
-	if (failed.length === 0) return "verdict did not pass";
-
-	return `failed checks: ${failed.map((check) => check.name).join(", ")}`;
-}
-
-function wrongStage(event: RunEvent, stage: Stage): Transition {
-	return invalid(`${event.kind} is not valid during ${stage}`);
-}
-
 export function advance(run: Run, event: RunEvent): Transition {
-	const { progress } = run;
+	if (run.handoff !== undefined) {
+		if (event.kind !== "candidate")
+			return invalid(
+				"candidate lifecycle requires a controller observation or captured execution result",
+			);
+		const step = handoffCandidate(run.handoff, event.event);
 
-	if (progress.kind === "finished") {
-		return invalid(`run already finished: ${progress.outcome.kind}`);
+		return advanced(
+			{
+				...run,
+				handoff: step.state,
+				progress: candidateProjection(step.state).progress,
+			},
+			step.effect,
+		);
 	}
 
-	const { stage } = progress;
+	if (run.progress.kind === "finished")
+		return invalid(`run already finished: ${run.progress.outcome.kind}`);
+
+	if (run.progress.kind !== "active")
+		return invalid("waiting requires candidate evidence");
+	const stage = run.progress.stage;
+
+	const wrongStage = () =>
+		invalid(`${event.kind} is not valid during ${stage}`);
 
 	switch (event.kind) {
-		case "kill_switch_off":
-			return finish(run, { kind: "rejected", reason: "disabled" });
 		case "cancelled":
 			return finish(run, { kind: "cancelled" });
 		case "rejected":
@@ -193,112 +162,45 @@ export function advance(run: Run, event: RunEvent): Transition {
 		case "budget_exhausted":
 			return finish(run, { kind: "budget_exhausted", stage });
 		case "admitted":
-			return stage === "admit"
-				? moveTo(run, "specify")
-				: wrongStage(event, stage);
+			return stage === "admit" ? moveTo(run, "specify") : wrongStage();
 		case "specified":
 			return stage === "specify"
 				? moveTo(run, "accept", { contractDigest: event.contractDigest })
-				: wrongStage(event, stage);
+				: wrongStage();
 		case "needs_info":
 			return stage === "specify"
 				? finish(run, { kind: "needs_info", questions: event.questions })
-				: wrongStage(event, stage);
+				: wrongStage();
 		case "accepted":
 			return stage === "accept"
 				? moveTo(run, "build", { acceptanceDigest: event.acceptanceDigest })
-				: wrongStage(event, stage);
-		case "built":
-			return stage === "build"
-				? moveTo(run, "validate", { patchDigest: event.patchDigest })
-				: wrongStage(event, stage);
+				: wrongStage();
+		case "built": {
+			if (stage !== "build") return wrongStage();
+
+			if (
+				event.pin.runId !== run.id ||
+				event.pin.repo !== run.repo ||
+				event.pin.originalBase !== run.baseSha ||
+				event.pin.contractDigest !== run.contractDigest ||
+				event.pin.acceptanceDigest !== run.acceptanceDigest
+			)
+				return invalid("candidate admission binding mismatch");
+			const state = beginCandidate(event.pin, event.patch, event.priorTokens);
+
+			return advanced({
+				...run,
+				handoff: state,
+				progress: candidateProjection(state).progress,
+			});
+		}
+
 		case "candidate":
-			return stage === "validate"
-				? moveTo(run, "validate", {
-						candidateSha: event.candidateSha,
-						heldoutDigest: event.heldoutDigest,
-						ciRunId: event.ciRunId,
-					})
-				: wrongStage(event, stage);
-		case "validated": {
-			if (stage !== "validate") return wrongStage(event, stage);
-
-			if (event.verdict.patchDigest !== run.patchDigest) {
-				return invalid("verdict is bound to a different patch");
-			}
-
-			if (
-				event.verdict.candidateSha !== run.candidateSha ||
-				event.verdict.acceptanceDigest !== run.acceptanceDigest ||
-				event.verdict.heldoutDigest !== run.heldoutDigest ||
-				event.verdict.ciRunId !== run.ciRunId
-			)
-				return invalid("verdict is bound to different CI inputs");
-
-			if (!verdictPasses(event.verdict)) {
-				return repairOrFail(run, stage, failureEvidence(event.verdict));
-			}
-
-			return moveTo(run, "review", {
-				verdict: event.verdict,
-				gateSha: event.verdict.gateSha,
-			});
-		}
-
-		case "reviewed": {
-			if (stage !== "review") return wrongStage(event, stage);
-
-			if (
-				event.candidateSha !== run.candidateSha ||
-				event.patchDigest !== run.patchDigest
-			)
-				return invalid("review is bound to a different candidate or patch");
-
-			if (run.verdict === undefined || !verdictPasses(run.verdict))
-				return invalid("review requires passing hard checks");
-			const unjudged = run.verdict.unjudged;
-
-			if (
-				event.judgments.length !== unjudged.length ||
-				unjudged.some(
-					(id) => event.judgments.filter((j) => j.scenario === id).length !== 1,
-				)
-			)
-				return invalid("review is missing criterion judgments");
-
-			if (
-				event.blockingFindings.length > 0 ||
-				event.judgments.some((j) => !j.pass)
-			) {
-				return repairOrFail(
-					run,
-					stage,
-					`blocking findings: ${event.blockingFindings.join("; ")}`,
-				);
-			}
-
-			return moveTo(run, "land", { review: event });
-		}
-
-		case "landed": {
-			if (stage !== "land") return wrongStage(event, stage);
-
-			const check = checkLandPrecondition(run, {
-				currentTip: event.currentTip,
-				currentGate: event.currentGate,
-			});
-
-			if (check.kind === "blocked") {
-				return invalid(`land precondition not met: ${check.reason}`);
-			}
-
-			return finish(run, { kind: "landed", mergeSha: event.mergeSha });
-		}
-
+			return invalid("candidate event requires a candidate book");
 		default: {
-			const _exhaustive: never = event;
+			const exhaustive: never = event;
 
-			return _exhaustive;
+			return invalid(`unsupported execution event: ${String(exhaustive)}`);
 		}
 	}
 }

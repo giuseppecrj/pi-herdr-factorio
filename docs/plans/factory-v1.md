@@ -702,8 +702,12 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Files.**
 
-- [ ] Create `src/handoff.ts`, `test/handoff.test.ts`, and `docs/operations/human-review.md`.
-- [ ] Edit `src/run.ts`, `src/stages.ts`, `src/policy.ts`, `src/publication.ts`, `src/adapters/github.ts`, `server/controller.ts`, `test/helpers.ts`, `test/pipeline.test.ts`, `test/stages.test.ts`, `test/policy.test.ts`, and `.github/workflows/ci.yml` for waiting state and exact-head required-check reporting. Edit `extension/index.ts`, `server/cli.ts`, `test/extension.test.ts`, and `docs/operations/factory-cli.md` for the attention view.
+- [ ] Create `src/handoff.ts`, `src/attention.ts`, `test/handoff.test.ts`, `test/attention.test.ts`, and `docs/operations/human-review.md`.
+- [ ] Edit `src/run.ts`, `src/stages.ts`, `src/policy.ts`, `src/orchestrator.ts`, `src/validation.ts`, `src/publication.ts`, `src/review.ts`, `src/markers.ts`, `src/tickets.ts`, and `src/adapters/github.ts` for the candidate book, immutable generations, cumulative accounting, trusted reports and owner handoff.
+- [ ] Edit `server/controller.ts`, `server/sandbox.ts`, `server/cli.ts`, `server/viewer/claim.ts`, `server/viewer/evidence.ts`, `server/viewer/render.ts`, and `extension/index.ts` for the single controller interpreter, captured executions and shared local attention view.
+- [ ] Edit `test/helpers.ts`, `test/fake-ticket-adapter.ts`, `test/pipeline.test.ts`, `test/stages.test.ts`, `test/policy.test.ts`, `test/orchestrator.test.ts`, `test/validation.test.ts`, `test/publication.test.ts`, `test/review.test.ts`, `test/markers.test.ts`, `test/github-adapter.test.ts`, `test/extension.test.ts`, `test/viewer.test.ts`, and `test/sandbox/runner.cases.ts` for these contracts.
+- [ ] Edit `.github/workflows/ci.yml` and `.github/workflows/check.yml` under the owner's explicit workflow-authoring grant. Keep candidate execution read-only and the checks-write reporter separate.
+- [ ] Edit `docs/operations/factory-cli.md`, `docs/operations/sandbox.md`, `docs/operations/viewer.md`, `docs/design.md`, this plan, `docs/statecharts/**`, and `.pi/skills/verify-factory/**` only for F09a contracts and verification recipes. No live pass is implied.
 
 **Build.**
 
@@ -747,12 +751,12 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Review gate.** The operator reviews before merge.
 
-- [ ] Post the real PR URL, required-check proof, and owner-action receipts to the operator. Use text artifacts instead of a screenshot or video. Merge this build PR on a clean verdict. Never perform the owner's test merge of a factory-opened fixture PR yourself.
+- [ ] Post the real PR URL, available required-check proof, and owner-action receipts to the operator. Use text artifacts instead of a screenshot or video. Stop this build PR at merge-ready for the owner. The owner merges its R3 reporter bootstrap after local gates and independent review, with main-only P4, live and perf proof explicitly pending. Never perform the owner's test merge of a factory-opened fixture PR yourself.
 
 **Merge.**
 
 - [ ] Record the exact-head verdict and Bugbot triage. Leave branch-protection or owner-action boxes unchecked when their evidence is missing.
-- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Squash-merge `F09a` on a clean verdict and a passing `check`, then branch the next PR from the new `main`. No agent gains merge authority from this PR.
+- [ ] Apply the patch-id rule in `playbooks/shipping.md`. The owner alone squash-merges `F09a` on the reviewed exact head with a passing `check`. Complete main-backed reporter and protection proof after bootstrap before enabling runtime handoff. From F09a onward every build PR stops at merge-ready for the owner; no agent gains merge authority.
 
 ## Record finished runs on the ledger branch (F09b)
 

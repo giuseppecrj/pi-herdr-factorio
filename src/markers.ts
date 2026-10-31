@@ -29,13 +29,22 @@ export const RUN_STATUSES = [
 	"budget_exhausted",
 	"stage_passed",
 	"needs_info",
+	"waiting",
+	"landed",
+	"cancelled",
 ] as const;
 
 export type RunStatus = (typeof RUN_STATUSES)[number];
 
 export type TerminalStatus = Extract<
 	RunStatus,
-	"released" | "failed" | "budget_exhausted" | "stage_passed" | "needs_info"
+	| "released"
+	| "failed"
+	| "budget_exhausted"
+	| "stage_passed"
+	| "needs_info"
+	| "landed"
+	| "cancelled"
 >;
 
 export function isTerminal(status: RunStatus): status is TerminalStatus {
@@ -44,7 +53,9 @@ export function isTerminal(status: RunStatus): status is TerminalStatus {
 		status === "failed" ||
 		status === "budget_exhausted" ||
 		status === "stage_passed" ||
-		status === "needs_info"
+		status === "needs_info" ||
+		status === "landed" ||
+		status === "cancelled"
 	);
 }
 
@@ -53,7 +64,7 @@ export function isTerminal(status: RunStatus): status is TerminalStatus {
  * no title, body, comment text, label name, `gh` output or path.
  */
 export type Marker = {
-	readonly v: 1 | 2;
+	readonly v: 1 | 2 | 3;
 	readonly runId: Digest;
 	readonly repo: RepoSlug;
 	readonly issue: number;
@@ -70,7 +81,14 @@ export type Marker = {
 	readonly candidate?: GitSha | null;
 	readonly round?: number;
 	readonly ciRun?: number | null;
-	readonly pr: null;
+	readonly pr: number | null;
+	readonly handoff?: {
+		readonly generation: number;
+		readonly intentDigest: Digest;
+		readonly refreshes: number;
+		readonly reviewAttempts: readonly number[];
+		readonly promoted: Digest | null;
+	};
 	readonly usage: number;
 	readonly cursor: string | null;
 };
@@ -96,6 +114,7 @@ const MARKER_KEYS = [
 ] as const satisfies readonly (keyof Marker)[];
 
 const MARKER_V2_KEYS = [...MARKER_KEYS, "candidate", "round", "ciRun"] as const;
+const MARKER_V3_KEYS = [...MARKER_V2_KEYS, "handoff"] as const;
 
 export type MarkerDefect =
 	| "too_large"
@@ -172,21 +191,27 @@ function markerJson(marker: Marker): string {
 		cursor: marker.cursor,
 	};
 
+	const extended = {
+		...ordered,
+		candidate: marker.candidate ?? null,
+		round: marker.round ?? 0,
+		ciRun: marker.ciRun ?? null,
+	};
+
+	const withHandoff = { ...extended, handoff: marker.handoff ?? null };
+
 	return JSON.stringify(
-		marker.v === 1
-			? ordered
-			: {
-					...ordered,
-					candidate: marker.candidate ?? null,
-					round: marker.round ?? 0,
-					ciRun: marker.ciRun ?? null,
-				},
+		marker.v === 1 ? ordered : marker.v === 2 ? extended : withHandoff,
 	)
 		.replaceAll("<", "\\u003c")
 		.replaceAll(">", "\\u003e");
 }
 
 const STATUS_TEXT: Readonly<Record<RunStatus, string>> = {
+	waiting: "waiting for the owner's merge",
+	landed: "landed: an external merge was observed",
+	cancelled:
+		"cancelled: the PR closed without a merge or authorization was withdrawn",
 	claimed: "claimed",
 	running: "running",
 	blocked: "blocked: the stage sandbox is unavailable",
@@ -236,8 +261,15 @@ function markerFields(
 
 	if (!fields.has("v")) return "missing_key";
 
-	if (fields.get("v") !== 1 && fields.get("v") !== 2) return "unknown_version";
-	const keys = fields.get("v") === 1 ? MARKER_KEYS : MARKER_V2_KEYS;
+	if (fields.get("v") !== 1 && fields.get("v") !== 2 && fields.get("v") !== 3)
+		return "unknown_version";
+
+	const keys =
+		fields.get("v") === 1
+			? MARKER_KEYS
+			: fields.get("v") === 2
+				? MARKER_V2_KEYS
+				: MARKER_V3_KEYS;
 
 	for (const key of fields.keys()) {
 		if (!keys.some((known) => known === key)) return "unknown_key";
@@ -248,6 +280,45 @@ function markerFields(
 	}
 
 	return fields;
+}
+
+function readHandoffMarker(
+	value: JsonValue | undefined,
+): Marker["handoff"] | null {
+	if (
+		value === null ||
+		value === undefined ||
+		Array.isArray(value) ||
+		!(value instanceof Object)
+	)
+		return null;
+	const generation = countOf(value.generation, 0);
+	const intentDigest = textOf(value.intentDigest);
+	const refreshes = countOf(value.refreshes, 0);
+	const attempts = value.reviewAttempts;
+	const promoted = value.promoted === null ? null : textOf(value.promoted);
+
+	if (
+		generation === null ||
+		generation > 3 ||
+		intentDigest === null ||
+		!isDigest(intentDigest) ||
+		refreshes === null ||
+		refreshes > 3 ||
+		!Array.isArray(attempts) ||
+		attempts.length !== 3 ||
+		!attempts.every((a) => countOf(a, 0) !== null && Number(a) <= 3) ||
+		(value.promoted !== null && (promoted === null || !isDigest(promoted)))
+	)
+		return null;
+
+	return {
+		generation,
+		intentDigest,
+		refreshes,
+		reviewAttempts: attempts.map(Number),
+		promoted: promoted !== null && isDigest(promoted) ? promoted : null,
+	};
 }
 
 function readMarker(fields: Map<string, JsonValue>): Marker | null {
@@ -278,14 +349,23 @@ function readMarker(fields: Map<string, JsonValue>): Marker | null {
 	const ciRun =
 		fields.get("ciRun") === null ? null : countOf(fields.get("ciRun"), 1);
 
-	const v2 = fields.get("v") === 2;
+	const v3 = fields.get("v") === 3;
+	const v2 = fields.get("v") === 2 || v3;
+	const pr = fields.get("pr") === null ? null : countOf(fields.get("pr"), 1);
+	const rawHandoff = fields.get("handoff");
+	const handoff = v3 ? readHandoffMarker(rawHandoff) : undefined;
+
+	if (v3 && (handoff === null || (fields.get("pr") !== null && pr === null)))
+		return null;
 
 	if (
 		v2 &&
 		((fields.get("branch") !== null && branch === null) ||
 			(fields.get("candidate") !== null && candidate === null) ||
 			(branch !== null &&
-				!/^factory\/run\/[1-9][0-9]*-[a-f0-9]{12}-r[0-2]$/.test(branch)) ||
+				!/^factory\/run\/[1-9][0-9]*-[a-f0-9]{12}-r[0-2](?:-g[1-3])?$/.test(
+					branch,
+				)) ||
 			(candidate !== null && !isGitSha(candidate)) ||
 			round === null ||
 			round > 2 ||
@@ -317,7 +397,7 @@ function readMarker(fields: Map<string, JsonValue>): Marker | null {
 		seq === null ||
 		usage === null ||
 		(!v2 && fields.get("branch") !== null) ||
-		fields.get("pr") !== null ||
+		(!v3 && fields.get("pr") !== null) ||
 		(cursor !== null && (cursorText === null || !CURSOR.test(cursorText)))
 	) {
 		return null;
@@ -327,7 +407,8 @@ function readMarker(fields: Map<string, JsonValue>): Marker | null {
 		v2 &&
 		((branch === null) !== (candidate === null) ||
 			(branch !== null &&
-				branch !== `factory/run/${issue}-${runId.slice(0, 12)}-r${round}`) ||
+				branch !==
+					`factory/run/${issue}-${runId.slice(0, 12)}-r${round}${v3 && (handoff?.generation ?? 0) > 0 ? `-g${handoff?.generation}` : ""}`) ||
 			(ciRun !== null && candidate === null))
 	)
 		return null;
@@ -340,8 +421,8 @@ function readMarker(fields: Map<string, JsonValue>): Marker | null {
 			}
 		: {};
 
-	return {
-		v: v2 ? 2 : 1,
+	const parsed: Marker = {
+		v: v3 ? 3 : v2 ? 2 : 1,
 		...extensions,
 		runId,
 		repo,
@@ -356,10 +437,12 @@ function readMarker(fields: Map<string, JsonValue>): Marker | null {
 		attempt,
 		seq,
 		branch,
-		pr: null,
+		pr: v3 ? pr : null,
 		usage,
 		cursor: cursorText,
 	};
+
+	return v3 && handoff !== null ? { ...parsed, handoff } : parsed;
 }
 
 /**

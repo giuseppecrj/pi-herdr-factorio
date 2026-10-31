@@ -2,7 +2,19 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { exclusive, present, privateDir, regularText } from "./artifacts.ts";
 import { checkChangedPaths } from "./policy.ts";
-import { type Digest, type Verdict, verdictPasses } from "./run.ts";
+import {
+	blocksReview,
+	type Digest,
+	type Verdict,
+	verdictPasses,
+} from "./run.ts";
+
+export {
+	REVIEW_MAX_TOKENS,
+	REPAIR_BUILD_MAX_TOKENS,
+	blocksReview,
+} from "./run.ts";
+
 import type { Contract } from "./specify.ts";
 import {
 	arrayOf,
@@ -14,8 +26,6 @@ import {
 	type JsonValue,
 } from "../server/sandbox/json.ts";
 
-export const REVIEW_MAX_TOKENS = 30_000;
-export const REPAIR_BUILD_MAX_TOKENS = 50_000;
 export const REVIEW_DIFF_MAX_BYTES = 12 * 1024;
 export const REVIEW_TOOLS = ["read", "grep", "ls"] as const;
 
@@ -60,6 +70,13 @@ export type ReviewBinding = {
 	readonly ciRunId: number;
 	readonly originalBase: string;
 	readonly baseSha: string;
+	readonly execution?: {
+		readonly generation: number;
+		readonly intentDigest: Digest;
+		readonly attempt: number;
+		readonly workflowSha: string;
+		readonly workflowDigest: Digest;
+	};
 };
 
 export type ReviewInput = {
@@ -240,16 +257,6 @@ export function reviewSeats(
 	return [...REVIEW_SEATS, ...(risk ? ["ultrareview" as const] : [])];
 }
 
-export function blocksReview(seats: readonly SeatResult[]): boolean {
-	return seats.some(
-		(seat) =>
-			seat.judgments.some((j) => !j.pass) ||
-			seat.findings.some(
-				(f) => f.severity === "blocking" && f.category !== "simplify",
-			),
-	);
-}
-
 export function reviewCandidate(
 	input: ReviewInput,
 	verdict: Verdict,
@@ -302,12 +309,21 @@ export function reviewDir(
 	stateDir: string,
 	runId: Digest,
 	round: number,
+	generation = 0,
 ): string {
-	return join(stateDir, "review", runId, `r${round}`);
+	const dir = join(stateDir, "review", runId, `r${round}`);
+
+	return generation === 0 ? dir : join(dir, `g${generation}`);
 }
 
 export function keepReview(stateDir: string, receipt: ReviewReceipt): void {
-	const dir = reviewDir(stateDir, receipt.runId, receipt.round);
+	const dir = reviewDir(
+		stateDir,
+		receipt.runId,
+		receipt.round,
+		receipt.execution?.generation,
+	);
+
 	privateDir(dir);
 	const path = join(dir, "receipt.json");
 	const text = `${JSON.stringify(receipt)}\n`;

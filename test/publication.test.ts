@@ -80,7 +80,7 @@ class GitData {
 	refs = new Map<string, string>();
 	commits = new Map<
 		string,
-		{ parent: string; message: string; tree: string }
+		{ parent: string; parents: string[]; message: string; tree: string }
 	>();
 	requests: string[] = [];
 	dispatches = 0;
@@ -150,7 +150,12 @@ class GitData {
 
 		if (path === "git/commits") {
 			const tree = textOf(fieldOf(body, "tree")) ?? "";
-			const parent = textOf(arrayOf(fieldOf(body, "parents"))?.[0]) ?? "";
+
+			const parents = (arrayOf(fieldOf(body, "parents")) ?? []).map(
+				(p) => textOf(p) ?? "",
+			);
+
+			const parent = parents[0] ?? "";
 			const message = textOf(fieldOf(body, "message")) ?? "";
 			const actor = objectOf(fieldOf(body, "author"));
 			const date = textOf(fieldOf(actor, "date")) ?? "";
@@ -160,11 +165,11 @@ class GitData {
 			const sha = gitObjectSha(
 				"commit",
 				Buffer.from(
-					`tree ${tree}\nparent ${parent}\nauthor ${identity}\ncommitter ${identity}\n\n${message}`,
+					`tree ${tree}\n${parents.map((p) => `parent ${p}\n`).join("")}author ${identity}\ncommitter ${identity}\n\n${message}`,
 				),
 			);
 
-			this.commits.set(sha, { parent, tree, message });
+			this.commits.set(sha, { parent, parents, tree, message });
 
 			return ok({ sha });
 		}
@@ -281,6 +286,48 @@ const publicationInput = {
 } as const;
 
 describe("deterministic Git Data publication", () => {
+	it("keeps g0 bytes and builds the final ordered-parent SHA before certification", async () => {
+		const fake = new GitData();
+		const api = new GitHubPublicationApi(fake.exec, repo);
+		const initial = await publishCandidate(api, publicationInput);
+		assert.doesNotMatch(
+			fake.commits.get(initial.candidateSha)?.message ?? "",
+			/Factory-Generation/,
+		);
+
+		const explicitZero = await publishCandidate(api, {
+			...publicationInput,
+			generation: 0,
+		});
+
+		assert.deepEqual(explicitZero, initial);
+
+		const next = await publishCandidate(api, {
+			...publicationInput,
+			generation: 1,
+			ancestry: { kind: "successor", previousHead: initial.candidateSha },
+		});
+
+		assert.equal(next.branch, `${initial.branch}-g1`);
+		const candidate = fake.commits.get(next.candidateSha);
+		assert.ok(candidate);
+		assert.deepEqual(candidate.parents, [next.patchSha, initial.candidateSha]);
+		assert.match(candidate.message, /Factory-Generation: 1/);
+		const actor = `${CONTROLLER_LOGIN} <${BOT_EMAIL}> ${Date.parse(publicationInput.eventAt) / 1000} +0000`;
+		const bytes = `tree ${candidate.tree}\n${candidate.parents.map((p) => `parent ${p}\n`).join("")}author ${actor}\ncommitter ${actor}\n\n${candidate.message}`;
+
+		const native = execFileSync(
+			"git",
+			["hash-object", "-t", "commit", "--stdin"],
+			{ input: bytes, encoding: "utf8" },
+		).trim();
+
+		assert.equal(next.candidateSha, native);
+		assert.equal(
+			fake.requests.some((p) => p.startsWith("PATCH")),
+			false,
+		);
+	});
 	it("publishes patch then suite, and adopts the same branch without moving it", async () => {
 		const fake = new GitData();
 

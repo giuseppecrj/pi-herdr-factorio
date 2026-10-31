@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import { verdictPasses, digestOf, REQUIRED_CI_CHECKS } from "../src/run.ts";
 import {
 	collectVerdict,
+	collectTrustedReport,
 	publishedSuite,
 	matchesCiRun,
 	parseCiRun,
@@ -57,6 +58,122 @@ const binding = {
 	baseSha: gateSha,
 	unjudged: ["S2"],
 };
+
+describe("reporter-owned candidate checks (unit transport)", () => {
+	const verdict = collectVerdict({ ...binding, text: JSON.stringify(receipt) });
+	const externalId = `factory-gates:${run.id}:nonce`;
+
+	const record = {
+		version: 1,
+		status: "passed",
+		checkId: 456,
+		candidateSha,
+		gateSha,
+		runId: run.id,
+		nonce: "nonce",
+		workflow: ".github/workflows/ci.yml",
+		event: "workflow_dispatch",
+		ref: "refs/heads/main",
+		actor: CONTROLLER_LOGIN,
+		triggeringActor: CONTROLLER_LOGIN,
+		externalId,
+		heldoutDigest: receipt.heldoutDigest,
+	};
+
+	const check = {
+		id: 456,
+		name: "factory-gates",
+		head_sha: candidateSha,
+		app: { id: 15368 },
+		external_id: externalId,
+		status: "completed",
+		conclusion: "success",
+	};
+
+	const input = {
+		record,
+		checks: { total_count: 1, check_runs: [check] },
+		run,
+		nonce: "nonce",
+		verdict,
+	};
+
+	it("binds the reporter's own check ID and explicit external ID independently of nonce", () => {
+		const report = collectTrustedReport(input);
+		assert.ok(report);
+		assert.equal(report.reportId, check.id);
+		assert.notEqual(report.externalId, report.nonce);
+	});
+
+	for (const field of [
+		"status",
+		"candidateSha",
+		"gateSha",
+		"runId",
+		"nonce",
+		"workflow",
+		"event",
+		"ref",
+		"actor",
+		"triggeringActor",
+		"externalId",
+		"heldoutDigest",
+		"checkId",
+	])
+		it(`refuses changed reporter identity ${field}`, () => {
+			assert.equal(
+				collectTrustedReport({
+					...input,
+					record: { ...record, [field]: "wrong" },
+				}),
+				null,
+			);
+		});
+
+	for (const conclusion of ["skipped", "cancelled", "failure", null])
+		it(`refuses check ${conclusion}`, () => {
+			assert.equal(
+				collectTrustedReport({
+					...input,
+					checks: { total_count: 1, check_runs: [{ ...check, conclusion }] },
+				}),
+				null,
+			);
+		});
+	it("rejects default Actions GUIDs, wrong app, incomplete results and duplicate same-named checks", () => {
+		for (const changed of [
+			{ ...check, id: 457 },
+			{ ...check, app: { id: 7 } },
+			{ ...check, external_id: "actions-guid" },
+			{ ...check, head_sha: gateSha },
+		])
+			assert.equal(
+				collectTrustedReport({
+					...input,
+					checks: { total_count: 1, check_runs: [changed] },
+				}),
+				null,
+			);
+		assert.equal(
+			collectTrustedReport({
+				...input,
+				checks: { total_count: 2, check_runs: [check] },
+			}),
+			null,
+		);
+		assert.equal(
+			collectTrustedReport({
+				...input,
+				checks: { total_count: 2, check_runs: [check, { ...check, id: 457 }] },
+			}),
+			null,
+		);
+		assert.equal(
+			collectTrustedReport({ ...input, verdict: { ...verdict, pass: false } }),
+			null,
+		);
+	});
+});
 
 const suite: AcceptanceSuite = {
 	version: 1,

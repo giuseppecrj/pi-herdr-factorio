@@ -1,5 +1,21 @@
 import { createHash } from "node:crypto";
 
+export const REVIEW_MAX_TOKENS = 30_000;
+export const REPAIR_BUILD_MAX_TOKENS = 50_000;
+
+export function blocksReview(
+	seats: readonly import("./review.ts").SeatResult[],
+): boolean {
+	return seats.some(
+		(seat) =>
+			seat.judgments.some((judgment) => !judgment.pass) ||
+			seat.findings.some(
+				(finding) =>
+					finding.severity === "blocking" && finding.category !== "simplify",
+			),
+	);
+}
+
 export type NonEmpty<T> = [T, ...T[]];
 
 export type TicketRef = {
@@ -117,19 +133,12 @@ export function verdictPasses(verdict: Verdict): boolean {
 }
 
 export type Progress =
-	| { kind: "active"; stage: Stage }
-	| { kind: "finished"; outcome: Outcome };
-
-export type ReviewEvidence = {
-	readonly candidateSha: string;
-	readonly patchDigest: Digest;
-	readonly blockingFindings: readonly string[];
-	readonly judgments: readonly {
-		scenario: string;
-		pass: boolean;
-		reason: string;
-	}[];
-};
+	| { readonly kind: "active"; readonly stage: Stage }
+	| {
+			readonly kind: "waiting";
+			readonly checkpoint: "merge" | "approve_contract";
+	  }
+	| { readonly kind: "finished"; readonly outcome: Outcome };
 
 export interface Run {
 	id: string;
@@ -138,15 +147,8 @@ export interface Run {
 	baseSha: string;
 	contractDigest?: Digest;
 	acceptanceDigest?: Digest;
-	patchDigest?: Digest;
-	heldoutDigest?: Digest;
-	candidateSha?: string;
-	gateSha?: string;
-	ciRunId?: number;
-	verdict?: Verdict;
-	review?: ReviewEvidence;
-	repairRounds: number;
-	progress: Progress;
+	readonly handoff?: import("./handoff.ts").CandidateState;
+	readonly progress: Progress;
 }
 
 export function startRun(input: {
@@ -160,7 +162,6 @@ export function startRun(input: {
 		ticket: input.ticket,
 		repo: input.repo,
 		baseSha: input.baseSha,
-		repairRounds: 0,
 		progress: { kind: "active", stage: "admit" },
 	};
 }

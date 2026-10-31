@@ -66,15 +66,10 @@ import {
 } from "../src/orchestrator.ts";
 import { type SessionOutcome, stageResult } from "../server/sandbox/result.ts";
 import { READY_LABEL } from "../src/policy.ts";
-import {
-	passingVerdict,
-	failingVerdict,
-	reachValidate,
-	apply,
-	reviewedEvent,
-	patch as namedPatch,
-	candidateEvent,
-} from "./helpers.ts";
+import { passingVerdict, failingVerdict } from "./helpers.ts";
+import { advance } from "../src/stages.ts";
+import { candidateProjection, type CandidateState } from "../src/handoff.ts";
+import type { Run } from "../src/run.ts";
 import type { ReviewReceipt } from "../src/review.ts";
 import { type Digest, digestOf, runIdOf } from "../src/run.ts";
 import {
@@ -372,6 +367,8 @@ const QUESTIONS_TEXT = JSON.stringify({
 });
 
 class FakeExecutor implements StageExecutor {
+	candidate?: StageExecutor["candidate"];
+	readonly candidateSpent = new Map<string, number>();
 	prepareReview?: StageExecutor["prepareReview"];
 	readonly validations: import("../src/validation.ts").ValidationInput[] = [];
 	validate: import("../src/validation.ts").Validator = async (input) => {
@@ -464,7 +461,7 @@ class FakeExecutor implements StageExecutor {
 					kind: "build",
 					result: {
 						kind: "found",
-						patch: "patch",
+						patch: input.round ? `patch-r${input.round}` : "patch",
 						receipt: {
 							...input.build.binding,
 							version: 1,
@@ -529,7 +526,15 @@ class FakeExecutor implements StageExecutor {
 		stage: string;
 		attempt: number;
 		round?: number;
+		execution?: import("../src/handoff.ts").CandidateExecution;
 	}): Promise<number | null> {
+		if (input.execution !== undefined)
+			return (
+				this.candidateSpent.get(input.execution.id) ??
+				this.spentBy.get(`${input.stage}-${input.attempt}`) ??
+				null
+			);
+
 		return this.spentBy.get(`${input.stage}-${input.attempt}`) ?? null;
 	}
 
@@ -542,6 +547,25 @@ class FakeExecutor implements StageExecutor {
 	}
 
 	async launch(input: StageLaunchInput): Promise<StageLaunch> {
+		const launch = await this.launchAttempt(input);
+		const execution = input.execution;
+
+		if (launch.kind !== "started" || execution === undefined) return launch;
+
+		return {
+			...launch,
+			done: launch.done.then((result) => {
+				this.candidateSpent.set(
+					execution.id,
+					(this.candidateSpent.get(execution.id) ?? 0) + result.usage,
+				);
+
+				return result;
+			}),
+		};
+	}
+
+	async launchAttempt(input: StageLaunchInput): Promise<StageLaunch> {
 		const behavior =
 			input.stage === "build"
 				? this.buildBehavior
@@ -626,6 +650,90 @@ function world(scope: readonly number[] | null = null) {
 	const wire: Wire = { intercept: null };
 
 	executor.workflow = () => github.workflow;
+	const published = new Map<Digest, { number: number; head: GitSha }>();
+	executor.candidate = {
+		async observe(state, now) {
+			const issue = await new GitHubTicketAdapter({
+				exec: wire.intercept ?? github.exec,
+				repo,
+			}).readIssue(state.pin.issue);
+
+			const pr = published.get(state.pin.runId);
+
+			const report =
+				state.kind === "selected" ? state.current.certification?.report : null;
+
+			return {
+				kind: "observed",
+				now,
+				main: sha(MAIN_SHA),
+				pr:
+					pr === undefined
+						? { kind: "none" }
+						: {
+								kind: "open",
+								number: pr.number,
+								head: pr.head,
+								refHead: pr.head,
+							},
+				eligibility:
+					issue.kind === "failed"
+						? "unverified"
+						: issue.value.open && issue.value.labels.includes(READY_LABEL)
+							? "ready"
+							: "withdrawn",
+				readiness:
+					report == null
+						? { kind: "unavailable" }
+						: { kind: "current", head: report.candidateSha, report },
+			};
+		},
+		async patch(state, round) {
+			const output = [...executor.builds.values()].find(
+				(entry) =>
+					entry.result.kind === "found" &&
+					entry.result.receipt.runId === state.pin.runId &&
+					(entry.result.receipt.round ?? 0) === round,
+			);
+
+			return output?.result.kind === "found" ? output.result : null;
+		},
+		async execute(state, request) {
+			if (request.kind === "open_pr") {
+				published.set(state.pin.runId, { number: 99, head: request.head });
+
+				return {
+					kind: "open_pr",
+					request,
+					number: 99,
+					head: request.head,
+					refHead: request.head,
+				};
+			}
+
+			if (request.kind === "promote_pr") {
+				published.set(state.pin.runId, {
+					number: request.number,
+					head: request.head,
+				});
+
+				return {
+					kind: "promote_pr",
+					request,
+					head: request.head,
+					refHead: request.head,
+				};
+			}
+
+			if (request.kind === "complete_handoff")
+				return { kind: "complete_handoff", request, now: clock.now() };
+
+			if (request.kind === "void_readiness")
+				return { kind: "void_readiness", request };
+
+			return { kind: "finish_pr", request };
+		},
+	};
 
 	const start = () =>
 		new Orchestrator({
@@ -6884,7 +6992,9 @@ describe("private build stage", () => {
 		executor.spentBy.set("build-1", 12);
 		wire.intercept = null;
 		clock.t += 60_000;
-		const report = await once(start());
+		const restored = start();
+		const report = await once(restored);
+		await restored.tick();
 		assert.equal(
 			executor.launches.filter((l) => l.stage === "build").length,
 			1,
@@ -6938,6 +7048,7 @@ describe("private build stage", () => {
 			"S1",
 		])
 			assert.ok(!build.prompt.includes(secret));
+		await controller.tick();
 		assert.equal(statuses(github, 14).at(-1), "7:running");
 		assert.ok(
 			logs.some(
@@ -7063,6 +7174,27 @@ describe("private build stage", () => {
 		});
 });
 
+function validationOf(claim: ClaimRecord | undefined) {
+	return claim?.handoff?.kind === "selected"
+		? (claim.handoff.current.validation ?? undefined)
+		: claim?.validation;
+}
+
+function reportOf(verdict: import("../src/run.ts").Verdict) {
+	if (!isGitSha(verdict.candidateSha) || !isGitSha(verdict.gateSha))
+		throw new Error("report fixture");
+
+	return {
+		candidateSha: verdict.candidateSha,
+		gateSha: verdict.gateSha,
+		ciRunId: verdict.ciRunId,
+		reportId: 456,
+		nonce: `${runOf(14).slice(0, 16)}-r0-d1`,
+		heldoutDigest: verdict.heldoutDigest,
+		externalId: `factory-gates:${verdict.ciRunId}:${runOf(14).slice(0, 16)}-r0-d1`,
+	};
+}
+
 describe("controller-only validate", () => {
 	async function waitingRun() {
 		const f = world();
@@ -7099,7 +7231,7 @@ describe("controller-only validate", () => {
 		await once(controller);
 		await once(controller);
 		await controller.tick();
-		assert.ok(f.files.claims.get(runOf(14))?.validation?.publication);
+		assert.ok(validationOf(f.files.claims.get(runOf(14)))?.publication);
 
 		return { ...f, controller };
 	}
@@ -7131,6 +7263,7 @@ describe("controller-only validate", () => {
 			kind: "finished",
 			state: input.state!,
 			verdict,
+			report: reportOf(verdict),
 		});
 
 		const receipt: ReviewReceipt = {
@@ -7145,16 +7278,25 @@ describe("controller-only validate", () => {
 			ciRunId: verdict.ciRunId,
 			originalBase: MAIN_SHA,
 			baseSha: MAIN_SHA,
-			seats: [],
+			seats: ["code-review", "security-review", "simplify"].map((seat) => ({
+				seat,
+				findings: [],
+				judgments: [],
+				requested: "openai/gpt-6.1-sol",
+				observed: null,
+				label: "context-isolated, same model, same family, not cross-family",
+				fallback: false,
+				tokens: 1,
+			})),
 			blocking: false,
 		};
 
-		f.executor.prepareReview = async ({ workspace }) => ({
+		f.executor.prepareReview = async ({ workspace, execution }) => ({
 			workspace,
 			verdict,
 			builder: "openai/gpt-6.1-sol",
 			input: {
-				binding: receipt,
+				binding: execution?.binding ?? receipt,
 				seats: ["code-review", "security-review", "simplify"],
 				files: new Map(),
 				scenarios: [],
@@ -7163,15 +7305,19 @@ describe("controller-only validate", () => {
 		});
 		const output = f.executor.output.bind(f.executor);
 		f.executor.output = async (input) =>
-			input.stage === "review" ? { kind: "review", receipt } : output(input);
-		const launch = f.executor.launch;
-		f.executor.launch = async (input) => ({
-			kind: "unavailable",
-			stage: input.stage,
-			reason: "sandbox_unavailable",
-		});
+			input.stage === "review"
+				? {
+						kind: "review",
+						receipt: {
+							...receipt,
+							...(input.execution?.stage === "review"
+								? input.execution.binding
+								: receipt),
+						},
+					}
+				: output(input);
+		f.executor.ready = false;
 		await f.controller.tick();
-		f.executor.launch = launch;
 		f.executor.ready = true;
 		assert.equal(f.controller.state.runs.get(14)?.stage, "review");
 
@@ -7206,11 +7352,17 @@ describe("controller-only validate", () => {
 			f.github.workflow = `${TRUSTED_WORKFLOW}\nChanged after admission.\n`;
 			f.executor.behaviors = [{ kind: restart ? "hang" : "pass", usage: 11 }];
 
+			let active = f.controller;
+
 			if (restart) {
 				await f.controller.tick();
 				assert.equal(f.files.claims.get(runOf(14))?.status, "running");
-				await once(f.start());
-			} else await once(f.controller);
+				f.executor.spentBy.set("review-1", 0);
+				active = f.start();
+				await once(active);
+			} else await once(active);
+			await active.tick();
+			await active.tick();
 			assert.equal(preparations.length, 1);
 			assert.ok(outputs.length > 0);
 
@@ -7221,11 +7373,11 @@ describe("controller-only validate", () => {
 				assert.notEqual(input.workflowDigest, digestOf(f.github.workflow));
 			}
 
-			assert.equal(f.files.claims.get(runOf(14))?.status, "stage_passed");
-			assert.equal(f.files.claims.get(runOf(14))?.stage, "review");
+			assert.equal(f.files.claims.get(runOf(14))?.status, "waiting");
+			assert.equal(f.files.claims.get(runOf(14))?.stage, "land");
 		});
 
-	it("hops from CI to isolated review and ends clean at review with charged usage", async () => {
+	it("hops from CI to isolated review and waits for the owner with charged usage", async () => {
 		const f = await reviewingRun();
 		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
 		await once(f.controller);
@@ -7236,9 +7388,51 @@ describe("controller-only validate", () => {
 
 		assert.deepEqual(review?.tools, ["read", "grep", "ls"]);
 		assert.equal(review?.settings.maxTokens, 30_000);
-		assert.equal(f.files.claims.get(runOf(14))?.status, "stage_passed");
-		assert.equal(f.files.claims.get(runOf(14))?.stage, "review");
+		await f.controller.tick();
+		await f.controller.tick();
+		assert.equal(f.files.claims.get(runOf(14))?.status, "waiting");
+		assert.equal(f.files.claims.get(runOf(14))?.stage, "land");
 		assert.equal(f.files.claims.get(runOf(14))?.usage, 40);
+	});
+
+	it("holds certified handoff while disabled and resumes the same book without new model spend", async () => {
+		const f = await reviewingRun();
+		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+		await f.controller.tick();
+		assert.equal(f.executor.launches.at(-1)?.stage, "review");
+		f.store.local = "disabled";
+		await once(f.controller);
+		const held = f.files.claims.get(runOf(14))?.handoff;
+		assert.ok(held?.kind === "selected");
+		assert.equal(held.published, null);
+		assert.ok(held.current.certification);
+		const launches = f.executor.launches.length;
+		await f.controller.tick();
+		assert.deepEqual(f.files.claims.get(runOf(14))?.handoff, held);
+		f.store.local = "enabled";
+		await f.controller.tick();
+		await f.controller.tick();
+		assert.equal(f.files.claims.get(runOf(14))?.status, "waiting");
+		assert.equal(f.files.claims.get(runOf(14))?.usage, 40);
+		assert.equal(f.executor.launches.length, launches);
+	});
+
+	it("waiting uses no slot while two other issues enter execution", async () => {
+		const f = await reviewingRun();
+		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+		await once(f.controller);
+		await f.controller.tick();
+		await f.controller.tick();
+		assert.equal(f.files.claims.get(runOf(14))?.status, "waiting");
+		const launches = f.executor.launches.length;
+		f.github.add(labeled(15));
+		f.github.add(labeled(16));
+		const report = await f.controller.tick();
+		assert.equal(report.active, 2);
+		assert.equal(f.controller.state.runs.size, 3);
+		assert.equal(f.executor.launches.length, launches + 2);
+		assert.equal(f.files.claims.get(runOf(14))?.usage, 40);
+		assert.equal(f.files.claims.get(runOf(14))?.status, "waiting");
 	});
 
 	async function cappedRun(stage: "build" | "review") {
@@ -7296,6 +7490,16 @@ describe("controller-only validate", () => {
 			);
 
 		f.executor.launch = async (input) => {
+			if (input.execution !== undefined) {
+				const dir = executionDir(input);
+				mkdirSync(dir, { recursive: true, mode: 0o700 });
+				writeFileSync(
+					join(dir, "execution.json"),
+					`${JSON.stringify(input.execution)}\n`,
+					{ mode: 0o600 },
+				);
+			}
+
 			const previous = (await disk.spent(input)) ?? 0;
 			const result = await launch(input);
 
@@ -7358,11 +7562,17 @@ describe("controller-only validate", () => {
 					[cap, cap - spent],
 				);
 				assert.equal(f.files.claims.get(runOf(14))?.usage, 29 + spent + 11);
+
+				if (stage === "review") {
+					await controller.tick();
+					await controller.tick();
+				}
+
 				assert.equal(
 					stage === "review"
 						? f.files.claims.get(runOf(14))?.status
 						: f.files.claims.get(runOf(14))?.stage,
-					stage === "review" ? "stage_passed" : "validate",
+					stage === "review" ? "waiting" : "validate",
 				);
 			});
 
@@ -7423,11 +7633,33 @@ describe("controller-only validate", () => {
 		const f = await cappedRun("review");
 		f.executor.behaviors = [{ kind: "fail", usage: 12_000 }];
 		await once(f.controller);
+		f.executor.behaviors = [{ kind: "hang" }];
+		f.clock.t += 60_000;
+		await f.controller.tick();
+		const issued = f.executor.launches.at(-1);
+		assert.ok(
+			issued?.execution?.stage === "review" && issued.review !== undefined,
+		);
 		const dir = join(f.state, "stages", runOf(14), "review-r0-2");
 		mkdirSync(join(dir, "code-review"), { recursive: true, mode: 0o700 });
 		writeFileSync(
 			join(dir, "review.json"),
-			JSON.stringify({ seats: ["code-review", "security-review", "simplify"] }),
+			JSON.stringify({
+				version: 2,
+				execution: issued.execution,
+				binding: issued.review.input.binding,
+				seats: issued.review.input.seats,
+				inputDigest: digestOf(
+					JSON.stringify({
+						binding: issued.review.input.binding,
+						seats: issued.review.input.seats,
+						files: [...issued.review.input.files],
+						scenarios: issued.review.input.scenarios,
+						prompt: issued.review.input.prompt,
+					}),
+				),
+			}),
+			{ mode: 0o600 },
 		);
 		writeFileSync(
 			join(dir, "code-review/receipt.json"),
@@ -7454,7 +7686,9 @@ describe("controller-only validate", () => {
 			f.files.claims.get(runOf(14))?.usage,
 			29 + 12_000 + 4_000 + 11,
 		);
-		assert.equal(f.files.claims.get(runOf(14))?.status, "stage_passed");
+		await restarted.tick();
+		await restarted.tick();
+		assert.equal(f.files.claims.get(runOf(14))?.status, "waiting");
 		assert.equal(
 			await f.executor.spent({
 				runId: runOf(14),
@@ -7529,7 +7763,7 @@ describe("controller-only validate", () => {
 
 	it("shares the pure machine's two-round cap and resumes a repair without round-zero output", async () => {
 		const f = await waitingRun();
-		let pure = reachValidate("p0");
+		let expected: CandidateState | undefined;
 		f.executor.validate = async (input) => {
 			const round = input.round ?? 0;
 
@@ -7554,19 +7788,57 @@ describe("controller-only validate", () => {
 
 			await input.save(state);
 
-			return {
-				kind: "finished",
-				state,
-				verdict: failingVerdict(digestOf(round ? `patch-r${round}` : "patch")),
+			const verdict = failingVerdict(
+				digestOf(round ? `patch-r${round}` : "patch"),
+			);
+
+			const book = f.files.claims.get(runOf(14))?.handoff;
+			assert.ok(
+				book?.kind === "selected" &&
+					book.work.kind === "effect" &&
+					book.work.request.kind === "validate",
+			);
+
+			const pure: Run = {
+				id: book.pin.runId,
+				repo: book.pin.repo,
+				baseSha: book.pin.originalBase,
+				ticket: {
+					provider: "github",
+					key: `${book.pin.repo}#14`,
+					url: `https://github.com/${book.pin.repo}/issues/14`,
+				},
+				handoff: book,
+				progress: candidateProjection(book).progress,
 			};
+
+			const decision = advance(pure, {
+				kind: "candidate",
+				event: {
+					kind: "effect_completed",
+					completion: {
+						kind: "validate",
+						request: book.work.request,
+						result: {
+							kind: "finished",
+							validation: state,
+							verdict,
+							report: null,
+							seats: ["code-review", "security-review", "simplify"],
+						},
+					},
+				},
+			});
+
+			assert.equal(decision.kind, "advanced");
+			expected = decision.run.handoff;
+
+			return { kind: "finished", state, verdict };
 		};
 
 		await f.controller.tick();
-		pure = apply(pure, {
-			kind: "validated",
-			verdict: failingVerdict(namedPatch("p0")),
-		});
-		assert.equal(f.files.claims.get(runOf(14))?.round, pure.repairRounds);
+		assert.deepEqual(f.files.claims.get(runOf(14))?.handoff, expected);
+		assert.equal(f.files.claims.get(runOf(14))?.round, 1);
 		assert.equal(f.files.claims.get(runOf(14))?.validation, undefined);
 		const restarted = f.start();
 		await once(restarted);
@@ -7583,26 +7855,12 @@ describe("controller-only validate", () => {
 			).length,
 			1,
 		);
-		pure = apply(
-			pure,
-			{ kind: "built", patchDigest: namedPatch("p1") },
-			candidateEvent,
-			{ kind: "validated", verdict: failingVerdict(namedPatch("p1")) },
-		);
 		await once(restarted);
-		assert.equal(f.files.claims.get(runOf(14))?.round, pure.repairRounds);
-		pure = apply(
-			pure,
-			{ kind: "built", patchDigest: namedPatch("p2") },
-			candidateEvent,
-			{ kind: "validated", verdict: passingVerdict(namedPatch("p2")) },
-			reviewedEvent("p2", ["still bad"]),
-		);
+		assert.equal(f.files.claims.get(runOf(14))?.round, 2);
 		await once(restarted);
 		await restarted.tick();
 		assert.equal(f.files.claims.get(runOf(14))?.status, "failed");
-		assert.equal(pure.progress.kind, "finished");
-		assert.equal(f.files.claims.get(runOf(14))?.round, pure.repairRounds);
+		assert.equal(f.files.claims.get(runOf(14))?.round, 2);
 		assert.equal(
 			f.executor.launches.filter((entry) => entry.stage === "build").length,
 			3,
@@ -7648,6 +7906,7 @@ describe("controller-only validate", () => {
 		if (claim === undefined) throw new Error("fixture");
 		const missing = { ...claim };
 		delete missing.validation;
+		delete missing.handoff;
 		f.files.claims.set(runOf(14), missing);
 		let calls = 0;
 		f.executor.validate = async (input) => {
@@ -7684,8 +7943,8 @@ describe("controller-only validate", () => {
 		);
 		await f.start().tick();
 		assert.deepEqual(
-			f.files.claims.get(runOf(14))?.validation,
-			claim?.validation,
+			validationOf(f.files.claims.get(runOf(14))),
+			validationOf(claim),
 		);
 		assert.equal(f.files.claims.get(runOf(14))?.status, "failed");
 	});
@@ -7740,7 +7999,7 @@ describe("controller-only validate", () => {
 		await once(first);
 		await once(first);
 		await first.tick();
-		const publication = files.claims.get(runOf(14))?.validation?.publication;
+		const publication = validationOf(files.claims.get(runOf(14)))?.publication;
 		assert.ok(publication);
 		issue.labels = [];
 		issue.updatedAt = "2026-10-29T03:00:00Z";
@@ -7748,7 +8007,7 @@ describe("controller-only validate", () => {
 		assert.deepEqual(report.runs, []);
 		assert.equal(files.claims.get(runOf(14))?.status, "released");
 		assert.deepEqual(
-			files.claims.get(runOf(14))?.validation?.publication,
+			validationOf(files.claims.get(runOf(14)))?.publication,
 			publication,
 		);
 	});
@@ -7770,6 +8029,7 @@ describe("controller-only validate", () => {
 		await once(first);
 		const built = await once(first);
 		assert.equal(built.active, 0);
+		await first.tick();
 		const last = issue.comments.at(-1);
 		assert.ok(last);
 		const parsed = parseMarker(last.body);
@@ -7783,9 +8043,13 @@ describe("controller-only validate", () => {
 		const report = await restored.tick();
 		assert.equal(report.active, 0);
 		assert.equal(report.totals.retries, 0);
-		assert.equal(restored.state.runs.get(14)?.phase.kind, "awaiting_ci");
+		assert.equal(restored.state.runs.get(14)?.phase.kind, "candidate");
 		assert.equal(restored.state.runs.get(14)?.attempt, 1);
-		assert.equal(executor.validations.length, 1);
+		assert.equal(executor.validations.length, 2);
+		assert.equal(
+			executor.validations[0]?.generation?.digest,
+			executor.validations[1]?.generation?.digest,
+		);
 		assert.equal(
 			executor.launches.filter((launch) => launch.stage === "build").length,
 			1,

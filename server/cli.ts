@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import manifest from "../package.json" with { type: "json" };
+import { readAttention, type AttentionRead } from "../src/attention.ts";
 import {
 	type AdmissionReceipt,
 	admitTicket,
@@ -332,6 +333,7 @@ type ControllerView =
 
 type StatusOutput = Omit<StatusReport, "controller"> & {
 	readonly controller: ControllerView;
+	readonly attention: AttentionRead;
 };
 
 type Printable =
@@ -577,7 +579,13 @@ export async function runCli(
 						await readStatus(parsed.stateDir),
 					);
 
-		io.stdout(json({ ...report, controller }));
+		const attention = await readAttention({
+			stateDir: parsed.stateDir,
+			repo,
+			now: Date.now(),
+		});
+
+		io.stdout(json({ ...report, controller, attention }));
 
 		return EXIT.ok;
 	}
