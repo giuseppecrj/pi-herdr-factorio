@@ -35,7 +35,19 @@ The final probes exposed two cleanup details. A completed transient systemd scop
 
 The initial empty-check and missing-check regressions failed before implementation. Later marker-type and collector-identity regressions failed on `c3cba00` before the closure fixes. Red and green output is retained in the coordinator's F07c build trail.
 
-TLC checked the full controller model over 4,428 states. The journey model still reports the known `MergeEndsRun` counterexample, which F10 owns; its other invariants and deadlock check hold. The typed replay still reproduces that path against `advance()`.
+The original implementation's TLC run checked the full controller model over 4,428 states. The journey model still reports the known `MergeEndsRun` counterexample, which F10 owns; its other invariants and deadlock check hold. The typed replay still reproduces that path against `advance()`.
+
+## Fix round 1
+
+`fix1-proof.json` records verification of code head `c77ccbcd0d21a982373e49e590ffb4de0a4b54af` on pi-factorio. The replay reused fixture [512](https://github.com/giuseppecrj/pi-herdr-factorio/issues/512), its private published state and [successful hosted run 41162880105](https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41162880105). It used no new model tokens or dispatches.
+
+- A real SIGKILL after verdict storage was followed by a real child commit restoring the unfixed policy. Restart ended `failed` with `branch_moved` and preserved that advanced head. Ref movement used only granted fixture deletion and creation operations.
+- A fault wrapper injected three ref-read failures and three DELETE failures against a copied run whose original deadline had expired. The first real tick ended `ci_timeout` with pending deletion; the next tick's terminal sweep deleted the branch. Cleanup did not keep the run running.
+- The repaired isolation probe passed a clean sandbox and rejected canaried and canary-stripped leak controls. Both controls had a suite-body hit; the stripped control had no canary hit.
+- Regression tests fail on `38c3938` and pass at this head. Of the audit's 26 surviving one-line mutations, 24 now fail tests. Two are behaviorally redundant: exact check multiplicity follows from the other cardinality guards, and the API also saves the dispatch try before POST. Removing both pre-POST saves fails the public dispatch-order regression.
+- TLC checks transport-unavailable states and `CIEnds`: the 84-state chart renders, and all eight controller rules hold across 8,052 full-model states. Journey remains 135 states with only the known F10 counterexample.
+
+The copied runs kept their original stage-file inventories and 85,715-token historical usage. Deadlines and sequence numbers in crash replay setup were adjusted as recorded in the private trail; these were not new admissions. The fixture is closed, `git ls-remote origin 'factory/*'` is empty, and the disposable lane and its scopes are gone. The original archive and a separate fix-round archive remain private on the VM for coordinator verification. No suite source or session is exported here.
 
 ## Repeat the model-free probes
 
