@@ -2,6 +2,24 @@
 
 F07b runs main's checks against exact candidate code without trusting candidate scripts, configuration, or test deletions. The host writes the receipt outside candidate mounts.
 
+## Fix round 3 proof
+
+At gate revision `2eda087f9716f12144b2c00e6d18de3df2c18d8b`, all **42/42 local fixture expectations** match. The previous 35 outcomes are unchanged. The [hosted Docker run](https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41148423052) matches all nine selected expectations: the seven review candidates below and both original reporting forgeries. [fix3-proof.json](fix3-proof.json) records the exact SHAs and check results.
+
+| Review candidate | Fixture | Local and hosted result |
+|---|---|---|
+| C1 | helper-read-forgery | Failed `main_tests` under the new `read` pin |
+| C2 | nul-direct-read-forgery | Failed `invalid_source_encoding` |
+| C3 | nul-ts-nocheck | Failed `invalid_source_encoding` |
+| C5 | alias-swap | Failed `package_swap` |
+| C6 | acceptance-stash-lint | Failed `unauthorized_acceptance` |
+| C7 | gutted-named-replacement | Failed `main_tests` because both named files ran no tests |
+| H2 | heldout-expect-error | Passed, including one separately counted held-out test |
+
+On `080a60f`, the first six candidates passed and H2 failed. New unit tests also fail there for source encoding, acceptance authorization, empty named replacements, held-out suppression handling, alias binding, and the `read` pin. The focused suite now passes **59/59**. Tests cover changed lines in existing files, retained runtime scanning of held-out files, and direct and streaming Node crypto with the pin. Three `npm run check` runs each pass **1,068/1,068**, with no failures, skips, or todos. The plan checker reports **17 PR sections, 0 problems**.
+
+The temporary scratch branch was deleted after preserving its artifacts. No full hosted matrix or performance benchmark was rerun in round 3. The earlier benchmark below remains historical evidence, not a timing claim for this head.
+
 ## Fix round 1 proof
 
 All **34 fixture expectations** matched locally through bubblewrap and on the [hosted Docker runner](https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41131601940). The hosted run is red because negative candidate jobs must fail. The six positive jobs are green, including the held-out missing-result probe described below.

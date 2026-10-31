@@ -1,0 +1,897 @@
+{
+  "gateSha": "2eda087f9716f12144b2c00e6d18de3df2c18d8b",
+  "baseSha": "080a60f9977f1bb4add97967b420fcd30d8bc5eb",
+  "checks": [
+    {
+      "run": 1,
+      "tests": 1068,
+      "pass": 1068,
+      "fail": 0,
+      "skipped": 0,
+      "todo": 0
+    },
+    {
+      "run": 2,
+      "tests": 1068,
+      "pass": 1068,
+      "fail": 0,
+      "skipped": 0,
+      "todo": 0
+    },
+    {
+      "run": 3,
+      "tests": 1068,
+      "pass": 1068,
+      "fail": 0,
+      "skipped": 0,
+      "todo": 0
+    }
+  ],
+  "red": {
+    "unit": {
+      "tests": 59,
+      "pass": 50,
+      "fail": 9
+    },
+    "fixtures": [
+      {
+        "name": "helper-read-forgery",
+        "status": "passed",
+        "expected": "failed"
+      },
+      {
+        "name": "nul-direct-read-forgery",
+        "status": "passed",
+        "expected": "failed"
+      },
+      {
+        "name": "nul-ts-nocheck",
+        "status": "passed",
+        "expected": "failed"
+      },
+      {
+        "name": "alias-swap",
+        "status": "passed",
+        "expected": "failed"
+      },
+      {
+        "name": "acceptance-stash-lint",
+        "status": "passed",
+        "expected": "failed"
+      },
+      {
+        "name": "gutted-named-replacement",
+        "status": "passed",
+        "expected": "failed"
+      },
+      {
+        "name": "heldout-expect-error",
+        "status": "failed",
+        "expected": "passed"
+      }
+    ]
+  },
+  "local": {
+    "matched": 42,
+    "priorOutcomesUnchanged": 35,
+    "fixtures": [
+      {
+        "name": "new-thing",
+        "candidateSha": "8d76cb11ef6dfad06dc9d5b52a7225d95b2a6108",
+        "status": "passed",
+        "reason": null,
+        "checks": {
+          "install": 0,
+          "baseline_tests": 0,
+          "typecheck": 0,
+          "lint": 0,
+          "format": 0,
+          "main_tests": 0,
+          "candidate_tests": 0
+        },
+        "tamperSignals": [],
+        "wallMs": 71267
+      },
+      {
+        "name": "known-good",
+        "candidateSha": "fbdf6d885d506b9719a547d086173138c8bb340e",
+        "status": "passed",
+        "reason": null,
+        "checks": {
+          "install": 0,
+          "baseline_tests": 0,
+          "typecheck": 0,
+          "lint": 0,
+          "format": 0,
+          "main_tests": 0,
+          "candidate_tests": 0
+        },
+        "tamperSignals": [],
+        "wallMs": 71454
+      },
+      {
+        "name": "wrong-behavior",
+        "candidateSha": "845309bf0283183e00a38d9284d62289887a31fd",
+        "status": "failed",
+        "reason": null,
+        "checks": {
+          "install": 0,
+          "baseline_tests": 0,
+          "typecheck": 0,
+          "lint": 0,
+          "format": 0,
+          "main_tests": 1,
+          "candidate_tests": 0
+        },
+        "tamperSignals": [],
+        "wallMs": 133280
+      },
+      {
+        "name": "noop-scripts",
+        "candidateSha": "330c7078d11f4fcebe03bb32e70fae9d0293be80",
+        "status": "failed",
+        "reason": null,
+        "checks": {
+          "install": 0,
+          "baseline_tests": 0,
+          "typecheck": 0,
+          "lint": 0,
+          "format": 0,
+          "main_tests": 1,
+          "candidate_tests": 0
+        },
+        "tamperSignals": [],
+        "wallMs": 130530
+      },
+      {
+        "name": "deleted-regression",
+        "candidateSha": "c936f808b267c8624e042a6e4801af2baf1dbd83",
+        "status": "failed",
+        "reason": null,
+        "checks": {
+          "install": 0,
+          "baseline_tests": 0,
+          "typecheck": 0,
+          "lint": 0,
+          "format": 0,
+          "main_tests": 1,
+          "candidate_tests": 0
+        },
+        "tamperSignals": [],
+        "wallMs": 128626
+      },
+      {
+        "name": "weakened-typecheck",
+        "candidateSha": "3202c46f66ab37e041fb19851c435edee631b553",
+        "status": "failed",
+        "reason": null,
+        "checks": {
+          "install": 0,
+          "baseline_tests": 0,
+          "typecheck": 2,
+          "lint": 0,
+          "format": 0,
+          "main_tests": 0,
+          "candidate_tests": 0
+        },
+        "tamperSignals": [],
+        "wallMs": 68947
+      },
+      {
+        "name": "weakened-lint",
+        "candidateSha": "5c376f5829d27816103c5d341bc2e646ebcb19f6",
+        "status": "failed",
+        "reason": null,
+        "checks": {
+          "install": 0,
+          "baseline_tests": 0,
+          "typecheck": 0,
+          "lint": 1,
+          "format": 1,
+          "main_tests": 0,
+          "candidate_tests": 0
+        },
+        "tamperSignals": [],
+        "wallMs": 69735
+      },
+      {
+        "name": "weakened-format",
+        "candidateSha": "59cc8bde7b7d0f64434f436f117d5df0323fec55",
+        "status": "failed",
+        "reason": null,
+        "checks": {
+          "install": 0,
+          "baseline_tests": 0,
+          "typecheck": 0,
+          "lint": 0,
+          "format": 1,
+          "main_tests": 0,
+          "candidate_tests": 0
+        },
+        "tamperSignals": [],
+        "wallMs": 69263
+      },
+      {
+        "name": "assert-monkeypatch",
+        "candidateSha": "a72e287927670fbf81d8b8f22b36052845afbf31",
+        "status": "failed",
+        "reason": "runtime_patching",
+        "checks": {},
+        "tamperSignals": [
+          {
+            "path": "src/gate-cheat.ts",
+            "line": 2,
+            "rule": "runtime_patching"
+          }
+        ],
+        "wallMs": 136
+      },
+      {
+        "name": "exit-import",
+        "candidateSha": "b6bbce90fbe719c7652bc6f8b79a1a6d3e20800e",
+        "status": "failed",
+        "reason": null,
+        "checks": {
+          "install": 0,
+          "baseline_tests": 0,
+          "typecheck": 0,
+          "lint": 1,
+          "format": 0,
+          "main_tests": 1,
+          "candidate_tests": 0
+        },
+        "tamperSignals": [],
+        "wallMs": 51159
+      },
+      {
+        "name": "really-exit",
+        "candidateSha": "350bc57849987f1701277801f87e593e3ffd6b83",
+        "status": "failed",
+        "reason": null,
+        "checks": {
+          "install": 0,
+          "baseline_tests": 0,
+          "typecheck": 2,
+          "lint": 1,
+          "format": 0,
+          "main_tests": 1,
+          "candidate_tests": 0
+        },
+        "tamperSignals": [],
+        "wallMs": 52772
+      },
+      {
+        "name": "exit-hook",
+        "candidateSha": "402f6fb1116a6578b1b5fd36a66822429057b86c",
+        "status": "failed",
+        "reason": "runtime_patching",
+        "checks": {},
+        "tamperSignals": [
+          {
+            "path": "src/markers.ts",
+            "line": 1,
+            "rule": "runtime_patching"
+          },
+          {
+            "path": "src/markers.ts",
+            "line": 2,
+            "rule": "runtime_patching"
+          }
+        ],
+        "wallMs": 132
+      },
+      {
+        "name": "skip",
+        "candidateSha": "1f5cd63b3efd169b361ec12cd3d5d85518514258",
+        "status": "failed",
+        "reason": null,
+        "checks": {
+          "install": 0,
+          "baseline_tests": 0,
+          "typecheck": 2,
+          "lint": 0,
+          "format": 0,
+          "main_tests": 0,
+          "candidate_tests": 1
+        },
+        "tamperSignals": [],
+        "wallMs": 70791
+      },
+      {
+        "name": "todo",
+        "candidateSha": "b0be0b1d223041643893adb56392a073adab9f23",
+        "status": "failed",
+        "reason": null,
+        "checks": {
+          "install": 0,
+          "baseline_tests": 0,
+          "typecheck": 2,
+          "lint": 0,
+          "format": 0,
+          "main_tests": 0,
+          "candidate_tests": 1
+        },
+        "tamperSignals": [],
+        "wallMs": 69518
+      },
+      {
+        "name": "only",
+        "candidateSha": "cb9c06c28c6b5ffcc51cd18cee1b419d07b3543b",
+        "status": "failed",
+        "reason": null,
+        "checks": {
+          "install": 0,
+          "baseline_tests": 0,
+          "typecheck": 2,
+          "lint": 0,
+          "format": 0,
+          "main_tests": 0,
+          "candidate_tests": 1
+        },
+        "tamperSignals": [],
+        "wallMs": 69341
+      },
+      {
+        "name": "npmrc",
+        "candidateSha": "bcec1dcc06e85ec8d67f18a1e8786c8db2e9c091",
+        "status": "failed",
+        "reason": "npmrc_changed",
+        "checks": {},
+        "tamperSignals": [],
+        "wallMs": 110
+      },
+      {
+        "name": "git-dependency",
+        "candidateSha": "b36749b407587f63fa012ae4c516ac8cb306e1cc",
+        "status": "failed",
+        "reason": "invalid_dependency_spec",
+        "checks": {},
+        "tamperSignals": [],
+        "wallMs": 124
+      },
+      {
+        "name": "named-replacement",
+        "candidateSha": "dae31457d7099c29a2f74dad436c87b1aef57254",
+        "status": "passed",
+        "reason": null,
+        "checks": {
+          "install": 0,
+          "baseline_tests": 0,
+          "typecheck": 0,
+          "lint": 0,
+          "format": 0,
+          "main_tests": 0,
+          "candidate_tests": 0
+        },
+        "tamperSignals": [],
+        "wallMs": 70019
+      },
+      {
+        "name": "unnamed-replacement",
+        "candidateSha": "9a950fd9dc8f350ba2ef74843acc1b42e7413625",
+        "status": "failed",
+        "reason": null,
+        "checks": {
+          "install": 0,
+          "baseline_tests": 0,
+          "typecheck": 0,
+          "lint": 0,
+          "format": 0,
+          "main_tests": 1,
+          "candidate_tests": 0
+        },
+        "tamperSignals": [],
+        "wallMs": 69465
+      },
+      {
+        "name": "new-test-fails",
+        "candidateSha": "4d13d8238eaa245e9dd8f83b206ae940d1968d6a",
+        "status": "failed",
+        "reason": null,
+        "checks": {
+          "install": 0,
+          "baseline_tests": 0,
+          "typecheck": 0,
+          "lint": 0,
+          "format": 0,
+          "main_tests": 0,
+          "candidate_tests": 1
+        },
+        "tamperSignals": [],
+        "wallMs": 73685
+      },
+      {
+        "name": "lint-ignore",
+        "candidateSha": "ed94b438768d0e15982abd07036613d4a43ff089",
+        "status": "failed",
+        "reason": null,
+        "checks": {
+          "install": 0,
+          "baseline_tests": 0,
+          "typecheck": 0,
+          "lint": 1,
+          "format": 0,
+          "main_tests": 0,
+          "candidate_tests": 0
+        },
+        "tamperSignals": [],
+        "wallMs": 69613
+      },
+      {
+        "name": "stream-forgery",
+        "candidateSha": "a3e461b1dc1347b6447e8f1a65d755b641c2f962",
+        "status": "failed",
+        "reason": "runtime_patching",
+        "checks": {},
+        "tamperSignals": [
+          {
+            "path": "src/gate-stream.ts",
+            "line": 14,
+            "rule": "runtime_patching"
+          },
+          {
+            "path": "src/gate-stream.ts",
+            "line": 32,
+            "rule": "runtime_patching"
+          },
+          {
+            "path": "src/gate-stream.ts",
+            "line": 33,
+            "rule": "runtime_patching"
+          }
+        ],
+        "wallMs": 136
+      },
+      {
+        "name": "serializer-forgery",
+        "candidateSha": "b7f2b4598d5fc01cde16440e4c531c93ec8879ee",
+        "status": "failed",
+        "reason": "runtime_patching",
+        "checks": {},
+        "tamperSignals": [
+          {
+            "path": "src/gate-stream.ts",
+            "line": 14,
+            "rule": "runtime_patching"
+          },
+          {
+            "path": "src/gate-stream.ts",
+            "line": 29,
+            "rule": "runtime_patching"
+          },
+          {
+            "path": "src/gate-stream.ts",
+            "line": 30,
+            "rule": "runtime_patching"
+          }
+        ],
+        "wallMs": 134
+      },
+      {
+        "name": "forgery-control",
+        "candidateSha": "603f3e94f880d54f72aaa6e1b390789c82acf160",
+        "status": "failed",
+        "reason": null,
+        "checks": {
+          "install": 0,
+          "baseline_tests": 0,
+          "typecheck": 0,
+          "lint": 0,
+          "format": 0,
+          "main_tests": 1,
+          "candidate_tests": 0
+        },
+        "tamperSignals": [],
+        "wallMs": 129088
+      },
+      {
+        "name": "suppression-types",
+        "candidateSha": "4ad72b929771e95e72e7adeaf582a790e8f786f6",
+        "status": "failed",
+        "reason": "suppression_added",
+        "checks": {},
+        "tamperSignals": [
+          {
+            "path": "src/gate-types.ts",
+            "line": 1,
+            "rule": "suppression_added"
+          }
+        ],
+        "wallMs": 115
+      },
+      {
+        "name": "suppression-lint",
+        "candidateSha": "c0cd436067694e9e6a19af0036507cdec9f9ce0e",
+        "status": "failed",
+        "reason": "suppression_added",
+        "checks": {},
+        "tamperSignals": [
+          {
+            "path": "src/gate-lint.ts",
+            "line": 1,
+            "rule": "suppression_added"
+          }
+        ],
+        "wallMs": 118
+      },
+      {
+        "name": "suppression-format",
+        "candidateSha": "4397df2b7e1ffb2547644fdab99fffca25c151c4",
+        "status": "failed",
+        "reason": "suppression_added",
+        "checks": {},
+        "tamperSignals": [
+          {
+            "path": "src/gate-format.ts",
+            "line": 1,
+            "rule": "suppression_added"
+          }
+        ],
+        "wallMs": 120
+      },
+      {
+        "name": "deleted-replacement",
+        "candidateSha": "166e8cdf8ae7f0d238c9d963c7e0d8e4f3b29475",
+        "status": "failed",
+        "reason": "replacement_deleted",
+        "checks": {},
+        "tamperSignals": [],
+        "wallMs": 47
+      },
+      {
+        "name": "heldout-pass",
+        "candidateSha": "692315744a4f8e4268286f1ee079b8ce0cde2eeb",
+        "status": "passed",
+        "reason": null,
+        "checks": {
+          "install": 0,
+          "baseline_tests": 0,
+          "typecheck": 0,
+          "lint": 0,
+          "format": 0,
+          "main_tests": 0,
+          "candidate_tests": 0,
+          "heldout": 0
+        },
+        "tamperSignals": [],
+        "wallMs": 69637
+      },
+      {
+        "name": "heldout-fail",
+        "candidateSha": "13d8f0ec0753a2eebd89ddb6acfc3c32087503de",
+        "status": "failed",
+        "reason": null,
+        "checks": {
+          "install": 0,
+          "baseline_tests": 0,
+          "typecheck": 0,
+          "lint": 0,
+          "format": 0,
+          "main_tests": 0,
+          "candidate_tests": 0,
+          "heldout": 1
+        },
+        "tamperSignals": [],
+        "wallMs": 69154
+      },
+      {
+        "name": "heldout-digest",
+        "candidateSha": "cff9c34af0afe8eeaada209ebc051dacdc87a77d",
+        "status": "failed",
+        "reason": "heldout_digest_mismatch",
+        "checks": {},
+        "tamperSignals": [],
+        "wallMs": 101
+      },
+      {
+        "name": "heldout-missing-result",
+        "candidateSha": "74a2ec638332136260a1b704786c2ebed6ceab9a",
+        "status": "passed",
+        "reason": null,
+        "checks": {
+          "install": 0,
+          "baseline_tests": 0,
+          "typecheck": 0,
+          "lint": 0,
+          "format": 0,
+          "main_tests": 0,
+          "candidate_tests": 0,
+          "heldout": 0
+        },
+        "tamperSignals": [],
+        "wallMs": 73254
+      },
+      {
+        "name": "package-swap",
+        "candidateSha": "79c3ab1782d3bef0e317f2c2e7a0d2cf035e09b7",
+        "status": "failed",
+        "reason": "package_swap",
+        "checks": {},
+        "tamperSignals": [],
+        "wallMs": 132
+      },
+      {
+        "name": "registry-dependency",
+        "candidateSha": "e809d25f9d6591f8c3ad7c361bf57dfa9ee15e49",
+        "status": "passed",
+        "reason": null,
+        "checks": {
+          "install": 0,
+          "baseline_tests": 0,
+          "typecheck": 0,
+          "lint": 0,
+          "format": 0,
+          "main_tests": 0,
+          "candidate_tests": 0
+        },
+        "tamperSignals": [],
+        "wallMs": 74304
+      },
+      {
+        "name": "glob-dependency",
+        "candidateSha": "7788284d8fbeb5648c8ffa33ae9a045e60254900",
+        "status": "passed",
+        "reason": null,
+        "checks": {
+          "install": 0,
+          "baseline_tests": 0,
+          "typecheck": 0,
+          "lint": 0,
+          "format": 0,
+          "main_tests": 0,
+          "candidate_tests": 0
+        },
+        "tamperSignals": [],
+        "wallMs": 71614
+      },
+      {
+        "name": "helper-read-forgery",
+        "candidateSha": "ae6479ba5f7b74cc81264a26b19a351f495d487c",
+        "status": "failed",
+        "reason": null,
+        "checks": {
+          "install": 0,
+          "baseline_tests": 0,
+          "typecheck": 0,
+          "lint": 0,
+          "format": 0,
+          "main_tests": 1,
+          "candidate_tests": 0
+        },
+        "tamperSignals": [],
+        "wallMs": 42448
+      },
+      {
+        "name": "nul-direct-read-forgery",
+        "candidateSha": "9cd434ce11353e4aae972054791a3f22273e2145",
+        "status": "failed",
+        "reason": "invalid_source_encoding",
+        "checks": {},
+        "tamperSignals": [],
+        "wallMs": 122
+      },
+      {
+        "name": "nul-ts-nocheck",
+        "candidateSha": "6dc6154ccf1c0505459079fda9cc88596be3e9ad",
+        "status": "failed",
+        "reason": "invalid_source_encoding",
+        "checks": {},
+        "tamperSignals": [],
+        "wallMs": 110
+      },
+      {
+        "name": "alias-swap",
+        "candidateSha": "fa32e51772837f9d8f5800854ce5799f5a27309e",
+        "status": "failed",
+        "reason": "package_swap",
+        "checks": {},
+        "tamperSignals": [],
+        "wallMs": 128
+      },
+      {
+        "name": "acceptance-stash-lint",
+        "candidateSha": "fa91a216bc0f93fcf3ca9cfaa0c62daff7e92368",
+        "status": "failed",
+        "reason": "unauthorized_acceptance",
+        "checks": {},
+        "tamperSignals": [],
+        "wallMs": 100
+      },
+      {
+        "name": "gutted-named-replacement",
+        "candidateSha": "3c4889d5591b86430df0d7ef7f11975d3a480e9a",
+        "status": "failed",
+        "reason": null,
+        "checks": {
+          "install": 0,
+          "baseline_tests": 0,
+          "typecheck": 0,
+          "lint": 0,
+          "format": 0,
+          "main_tests": 1,
+          "candidate_tests": 0
+        },
+        "tamperSignals": [],
+        "wallMs": 63273
+      },
+      {
+        "name": "heldout-expect-error",
+        "candidateSha": "1a91164a64b4b243fb7ede4fa995f16242908949",
+        "status": "passed",
+        "reason": null,
+        "checks": {
+          "install": 0,
+          "baseline_tests": 0,
+          "typecheck": 0,
+          "lint": 0,
+          "format": 0,
+          "main_tests": 0,
+          "candidate_tests": 0,
+          "heldout": 0
+        },
+        "tamperSignals": [],
+        "wallMs": 70071
+      }
+    ]
+  },
+  "hosted": {
+    "url": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41148423052",
+    "headSha": "b8bf9eafcf23f8451fbbaacd972649e0aa8981c2",
+    "matched": 9,
+    "fixtures": [
+      {
+        "name": "stream-forgery",
+        "candidateSha": "a3e461b1dc1347b6447e8f1a65d755b641c2f962",
+        "status": "failed",
+        "reason": "runtime_patching",
+        "checks": {},
+        "tamperSignals": [
+          {
+            "path": "src/gate-stream.ts",
+            "line": 14,
+            "rule": "runtime_patching"
+          },
+          {
+            "path": "src/gate-stream.ts",
+            "line": 32,
+            "rule": "runtime_patching"
+          },
+          {
+            "path": "src/gate-stream.ts",
+            "line": 33,
+            "rule": "runtime_patching"
+          }
+        ],
+        "wallMs": 314,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41148423052/job/124378893074"
+      },
+      {
+        "name": "serializer-forgery",
+        "candidateSha": "b7f2b4598d5fc01cde16440e4c531c93ec8879ee",
+        "status": "failed",
+        "reason": "runtime_patching",
+        "checks": {},
+        "tamperSignals": [
+          {
+            "path": "src/gate-stream.ts",
+            "line": 14,
+            "rule": "runtime_patching"
+          },
+          {
+            "path": "src/gate-stream.ts",
+            "line": 29,
+            "rule": "runtime_patching"
+          },
+          {
+            "path": "src/gate-stream.ts",
+            "line": 30,
+            "rule": "runtime_patching"
+          }
+        ],
+        "wallMs": 303,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41148423052/job/124378892989"
+      },
+      {
+        "name": "helper-read-forgery",
+        "candidateSha": "ae6479ba5f7b74cc81264a26b19a351f495d487c",
+        "status": "failed",
+        "reason": null,
+        "checks": {
+          "install": 0,
+          "baseline_tests": 0,
+          "typecheck": 0,
+          "lint": 0,
+          "format": 0,
+          "main_tests": 1,
+          "candidate_tests": 0
+        },
+        "tamperSignals": [],
+        "wallMs": 82980,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41148423052/job/124378893018"
+      },
+      {
+        "name": "nul-direct-read-forgery",
+        "candidateSha": "9cd434ce11353e4aae972054791a3f22273e2145",
+        "status": "failed",
+        "reason": "invalid_source_encoding",
+        "checks": {},
+        "tamperSignals": [],
+        "wallMs": 238,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41148423052/job/124378893027"
+      },
+      {
+        "name": "nul-ts-nocheck",
+        "candidateSha": "6dc6154ccf1c0505459079fda9cc88596be3e9ad",
+        "status": "failed",
+        "reason": "invalid_source_encoding",
+        "checks": {},
+        "tamperSignals": [],
+        "wallMs": 231,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41148423052/job/124378892984"
+      },
+      {
+        "name": "alias-swap",
+        "candidateSha": "fa32e51772837f9d8f5800854ce5799f5a27309e",
+        "status": "failed",
+        "reason": "package_swap",
+        "checks": {},
+        "tamperSignals": [],
+        "wallMs": 311,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41148423052/job/124378892979"
+      },
+      {
+        "name": "acceptance-stash-lint",
+        "candidateSha": "fa91a216bc0f93fcf3ca9cfaa0c62daff7e92368",
+        "status": "failed",
+        "reason": "unauthorized_acceptance",
+        "checks": {},
+        "tamperSignals": [],
+        "wallMs": 225,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41148423052/job/124378892800"
+      },
+      {
+        "name": "gutted-named-replacement",
+        "candidateSha": "3c4889d5591b86430df0d7ef7f11975d3a480e9a",
+        "status": "failed",
+        "reason": null,
+        "checks": {
+          "install": 0,
+          "baseline_tests": 0,
+          "typecheck": 0,
+          "lint": 0,
+          "format": 0,
+          "main_tests": 1,
+          "candidate_tests": 0
+        },
+        "tamperSignals": [],
+        "wallMs": 123279,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41148423052/job/124378892962"
+      },
+      {
+        "name": "heldout-expect-error",
+        "candidateSha": "1a91164a64b4b243fb7ede4fa995f16242908949",
+        "status": "passed",
+        "reason": null,
+        "checks": {
+          "install": 0,
+          "baseline_tests": 0,
+          "typecheck": 0,
+          "lint": 0,
+          "format": 0,
+          "main_tests": 0,
+          "candidate_tests": 0,
+          "heldout": 0
+        },
+        "tamperSignals": [],
+        "wallMs": 124217,
+        "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41148423052/job/124378892996"
+      }
+    ]
+  },
+  "limitations": [
+    "No full hosted matrix or new performance benchmark in fix round 3.",
+    "Protected-main dispatch and F07c controller collection remain pending.",
+    "No independent review in this leaf."
+  ],
+  "modelCalls": 0
+}

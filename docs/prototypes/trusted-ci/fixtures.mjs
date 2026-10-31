@@ -93,6 +93,16 @@ if (mode === "generate") {
 		cases.push({name:"glob-dependency",expected:"passed",files:{"package.json":readFileSync(join(temp,"package.json"),"utf8"),"package-lock.json":readFileSync(join(temp,"package-lock.json"),"utf8")}});
 	} finally { rmSync(temp,{recursive:true,force:true}); }
 
+	cases.push(
+		{name:"helper-read-forgery",expected:"failed",seed:true},
+		{name:"nul-direct-read-forgery",expected:"failed",seed:true},
+		{name:"nul-ts-nocheck",expected:"failed",seed:true},
+		{name:"alias-swap",expected:"failed",seed:true},
+		{name:"acceptance-stash-lint",expected:"failed",seed:true},
+		{name:"gutted-named-replacement",expected:"failed",replacements:replaced,seed:true},
+		{name:"heldout-expect-error",expected:"passed",heldout_dir:"test/acceptance/124",heldout_digest:"4dc163886e616056ac8e059faadd93e9ca87e1d683cba785fe9612acbe93eac0",seed:true},
+	);
+
 	for (const fixture of cases) {
 		if(fixture.seed) continue;
 		const temp = mkdtempSync(join(tmpdir(), "gate-patch-"));
