@@ -173,6 +173,7 @@ export async function startViewer(options: ViewerOptions) {
 
 	return {
 		port,
+		address: address.address,
 		close: () =>
 			new Promise<void>((done, reject) => {
 				server.close((error) => (error ? reject(error) : done()));
@@ -207,7 +208,9 @@ export async function runViewerCli(
 			!Number.isInteger(port) ||
 			port < 1 ||
 			port > 65535 ||
-			(values.run !== undefined && !isDigest(values.run))
+			(values.run !== undefined && !isDigest(values.run)) ||
+			(values["allowed-host"] !== undefined &&
+				!/^[a-z0-9-]+(?:\.[a-z0-9-]+)+\.ts\.net$/.test(values["allowed-host"]))
 		)
 			throw new Error("usage");
 		options = { stateDir, port };

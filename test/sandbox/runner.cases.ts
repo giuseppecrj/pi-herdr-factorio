@@ -13,6 +13,7 @@ import fs, {
 	symlinkSync,
 	writeFileSync,
 	writeSync,
+	utimesSync,
 } from "node:fs";
 import { request } from "node:http";
 import { syncBuiltinESMExports } from "node:module";
@@ -1083,13 +1084,15 @@ describe("private build executor", () => {
 		assert.deepEqual(delegated.slice(3), ordinary.slice(1));
 	});
 
-	for (const scenario of ["clean", "oversized", "refused"])
+	for (const scenario of ["clean", "oversized", "refused", "truncated"])
 		it(
 			scenario === "oversized"
 				? "fails an oversized excluded cache with a typed disk limit and cleans all workspaces"
 				: scenario === "refused"
 					? "logs a typed reason when the patch store refuses collection"
-					: "collects builder-reported commands, cleans the attempt and recovers controller tests once",
+					: scenario === "truncated"
+						? "session retention keeps newest whole JSONL files under 8 MiB and records session_truncated"
+						: "collects builder-reported commands, retains private parent and child sessions and recovers controller tests once",
 			async (t) => {
 				const dir = mkdtempSync(join(tmpdir(), "factory-build-executor-"));
 				t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -1169,6 +1172,42 @@ describe("private build executor", () => {
 						])(command, pi);
 					},
 				]);
+
+				const parentBytes = readFileSync(join(sessionDir, "builder.jsonl"));
+				mkdirSync(join(sessionDir, "nested"));
+				writeFileSync(
+					join(sessionDir, "nested", "child.jsonl"),
+					'{"type":"session","id":"child"}\n',
+				);
+				symlinkSync("/etc/passwd", join(sessionDir, "link.jsonl"));
+				writeFileSync(join(sessionDir, "not-a-session.txt"), "private config");
+
+				if (scenario === "truncated") {
+					for (const [name, size, time] of [
+						["too-large.jsonl", 8 * 1024 * 1024 + 1, 4],
+						["new.jsonl", 5 * 1024 * 1024, 3],
+						["old.jsonl", 4 * 1024 * 1024, 2],
+					] as const) {
+						const path = join(sessionDir, name);
+						writeFileSync(path, "");
+						truncateSync(path, size);
+						utimesSync(path, time, time);
+					}
+
+					utimesSync(join(sessionDir, "builder.jsonl"), 1, 1);
+					utimesSync(join(sessionDir, "nested", "child.jsonl"), 1, 1);
+				}
+
+				const write = h.host.writeReceipt;
+				h.host.writeReceipt = async (receipt) => {
+					writeFileSync(
+						join(sessionDir, "..", "..", "receipt.json"),
+						JSON.stringify(receipt),
+						{ mode: 0o600 },
+					);
+
+					return write(receipt);
+				};
 
 				let tests = 0;
 				const refusals: string[] = [];
@@ -1286,6 +1325,38 @@ describe("private build executor", () => {
 				);
 				assert.equal(existsSync(workspace), false);
 				assert.equal(existsSync(sessionDir), false);
+				const retained = join(sessionDir, "..", "..", "sessions", "agent-0");
+				assert.deepEqual(
+					readFileSync(join(retained, "builder.jsonl")),
+					parentBytes,
+				);
+				assert.equal(
+					readFileSync(join(retained, "nested", "child.jsonl"), "utf8"),
+					'{"type":"session","id":"child"}\n',
+				);
+				assert.equal(
+					statSync(join(retained, "builder.jsonl")).mode & 0o777,
+					0o600,
+				);
+				assert.equal(statSync(retained).mode & 0o777, 0o700);
+				assert.equal(statSync(join(retained, "nested")).mode & 0o777, 0o700);
+				assert.equal(existsSync(join(retained, "link.jsonl")), false);
+				assert.equal(existsSync(join(retained, "not-a-session.txt")), false);
+
+				if (scenario === "truncated") {
+					assert.equal(
+						statSync(join(retained, "new.jsonl")).size,
+						5 * 1024 * 1024,
+					);
+					assert.equal(existsSync(join(retained, "old.jsonl")), false);
+					assert.equal(existsSync(join(retained, "too-large.jsonl")), false);
+					assert.deepEqual(
+						JSON.parse(
+							readFileSync(join(retained, "..", "..", "receipt.json"), "utf8"),
+						).session_truncated,
+						["agent-0/sessions/too-large.jsonl", "agent-0/sessions/old.jsonl"],
+					);
+				}
 
 				if (scenario === "refused") {
 					assert.deepEqual(readPatch(stateDir, binding), {

@@ -14,21 +14,23 @@ Omit `--run` to select a run from the index. The ID is the full 64-character run
 
 Select **Timeline**, **Usage**, **Children**, or **Gateway**. Each view also has a JSON link at `/run/<id>/<view>.json`. JSON responses contain `runId`, `status`, `complete`, `gaps`, and `data`.
 
-The timeline combines stage receipts, observed settlement, the latest claim, recorded marker comments, parent session events, publication, and CI evidence. Receipts have no start timestamp. Entries without timestamps show their source and use stage and attempt order instead. Repair rounds come from recorded markers and validation claims, not guesses from directory names.
+The timeline combines stage receipts, observed settlement, the latest claim, recorded marker comments, parent session events, publication, and CI evidence. Receipts have no start timestamp. Timestamped events use parsed times, with stable source order for ties. Entries without timestamps follow them, showing their source in stage and attempt order. Repair rounds come from recorded markers and validation claims, not guesses from directory names.
 
 Usage shows receipt totals per model, then per-session parent and child tokens. Specify's combined receipt counts once, not again for each draft, review, or revision receipt. Session totals that differ from receipts produce a gap. Cost is **unavailable** because stage receipts record no monetary prices. A zero token count is not a zero-cost claim.
 
-Children come from retained Pi session JSONL files. The parent's `subagent_result.details.sessionFile` connects each child to its parent without opening that supplied path. Each child has its own event timeline. Gateway rows show the recorded decision, destination when forwarded, stage, method, path, and reason. A denied request with no upstream says **not forwarded**, rather than inventing a destination.
+Children come from retained Pi session JSONL files. The parent's top-level `custom_message` record with `customType: "subagent_result"` and `details.sessionFile` connects each child to its parent without opening that supplied path. Each child has its own event timeline. Gateway rows show the recorded decision, destination when forwarded, stage, method, path, and reason. A denied request with no upstream says **not forwarded**, rather than inventing a destination.
 
 ## Account for missing evidence
 
 A missing, corrupt, unsafe, or oversized source appears under **evidence gaps**. A run with any gap is never complete, even when the last claim says `stage_passed`. This describes evidence completeness, not approval to merge.
 
-The existing build runner deletes its `agent-*` directories after settlement. A normal finished build therefore lacks its parent and child session timelines. The viewer reports that gap and preserves receipt totals. It does not reconstruct child identities or individual usage from a combined total. To inspect already archived sessions, use a private copy of state that preserves the original `stages/<runId>/.../agent-*/sessions/` layout. Archiving and changes to the runner's retention policy are outside the viewer.
+Before deleting build `agent-*` directories, the runner moves parent and child session JSONL into the execution's private `sessions/` directory. It keeps the newest whole files within 8 MiB and records dropped paths as `session_truncated` in the receipt. These sessions stay on the VM, mode 0600 under 0700 directories. Older runs may lack sessions. The viewer reports missing linked children as `missing_child_session` and truncation as gaps, preserving receipt totals rather than reconstructing individual usage. Private archived state in the original `agent-*/sessions/` layout also remains readable.
+
+The latest claim and recorded markers determine which model stages the run reached. A missing receipt for any reached stage is a `missing_stage_receipt` gap, including when that stage's directory is gone. Admission lookup uses the run's repository identity, not a default repository.
 
 The controller retains the latest claim, not a complete local history of GitHub marker comments. If a private evidence export contains `markers/<runId>.jsonl`, the viewer reads each object's `body` with the existing marker parser. Optional `timestamp` fields order those records. Without that export, the viewer names the missing history. It never fetches comments itself. Recorded comments are local evidence, not newly authenticated GitHub observations.
 
-Source files are read-only. Symlinks are refused. Individual reads stop at 8 MiB, stage receipt reads at 1 MiB, stderr at 64 KiB, and total source reads at 48 MiB per request. Directory traversal stops at 10,000 entries. Limits appear as gaps. Session text, issue content, and stderr are untrusted. The viewer renders no Markdown or model HTML and runs no scripts.
+Source files are read-only. Symlinks are refused. Individual reads stop at 8 MiB, stage receipt reads at 1 MiB, stderr at 64 KiB, and total source reads at 48 MiB per request. Directory traversal stops at 10,000 entries. Limits appear as gaps. Claim reads use the same guarded reader; sibling claims are not opened. FIFOs and devices are refused without blocking. Session text, issue content, and stderr are untrusted. HTML renders bidi control characters as visible Unicode escapes. The viewer renders no Markdown or model HTML and runs no scripts.
 
 ## Keep the viewer private
 

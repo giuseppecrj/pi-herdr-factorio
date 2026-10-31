@@ -1,7 +1,8 @@
 import { constants } from "node:fs";
 import { lstat, open, readdir, realpath } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
-import { fileRunFiles, readStatus, readStoredVerdict } from "../controller.ts";
+import { readStoredVerdict } from "../controller.ts";
+import { viewerClaim } from "./claim.ts";
 import { readStageReceipt } from "../sandbox.ts";
 import {
 	arrayOf,
@@ -14,7 +15,8 @@ import {
 	type JsonValue,
 } from "../sandbox/json.ts";
 import { childUsageOf } from "../sandbox/settle.ts";
-import { isDigest } from "../../src/run.ts";
+import { isDigest, runIdOf } from "../../src/run.ts";
+import { isRepoSlug } from "../../src/workflow.ts";
 import { parseMarker } from "../../src/markers.ts";
 
 export type Gap = { source: string; reason: string };
@@ -248,15 +250,11 @@ export async function readViewerRun(
 	const claimPath = join(root, "claims", `${runId}.json`);
 	const claimText = await io.text(claimPath);
 
-	const claims =
-		claimText === null ? [] : await fileRunFiles(root).listClaims();
+	const claim = claimText === null ? null : viewerClaim(claimText, runId);
 
-	const claim = claims.find((item) => item.runId === runId);
+	if (claimText !== null && claim === null) io.gap(claimPath, "corrupt claim");
 
-	if (claimText !== null && claim === undefined)
-		io.gap(claimPath, "corrupt claim");
-
-	if (claim !== undefined)
+	if (claim !== null)
 		timeline.push(
 			event(
 				relative(root, claimPath),
@@ -270,29 +268,33 @@ export async function readViewerRun(
 		);
 	const statusPath = join(root, "status.json");
 
-	if (
-		(await io.text(statusPath)) !== null &&
-		objectOf(await readStatus(root)) === null
-	)
-		io.gap(statusPath, "corrupt status");
+	await io.json(statusPath);
 	let issue: JsonValue | null = null;
 
-	if (claim !== undefined) {
-		const path = join(
-			root,
-			"admissions",
-			"github",
-			"giuseppecrj",
-			"pi-herdr-factorio",
-			String(claim.issue),
-			`${claim.eventId}.json`,
-		);
+	if (claim !== null) {
+		const base = join(root, "admissions", "github");
 
-		const admission = await io.json(path);
-		issue = fieldOf(admission, "snapshot") ?? null;
+		const candidates = (await io.files(base)).filter((path) => {
+			const parts = relative(base, path).split(sep);
+			const repo = `${parts[0]}/${parts[1]}`;
+
+			return (
+				parts.length === 4 &&
+				parts[2] === String(claim.issue) &&
+				parts[3] === `${claim.eventId}.json` &&
+				isRepoSlug(repo) &&
+				runIdOf({ repo, issue: claim.issue, eventId: claim.eventId }) === runId
+			);
+		});
+
+		if (candidates.length === 1) {
+			const path = candidates[0];
+			const admission = path === undefined ? null : await io.json(path);
+			issue = fieldOf(admission, "snapshot") ?? null;
+		}
 
 		if (objectOf(issue) === null)
-			io.gap(path, "issue snapshot missing or corrupt");
+			io.gap(base, "issue snapshot missing or corrupt");
 	}
 
 	let total = 0;
@@ -305,6 +307,8 @@ export async function readViewerRun(
 	);
 
 	try {
+		if (!(await io.safe(stageRoot))) throw new Error("unsafe source");
+
 		for (const entry of await readdir(stageRoot, { withFileTypes: true })) {
 			if (
 				!entry.isDirectory() ||
@@ -323,6 +327,8 @@ export async function readViewerRun(
 
 	if (receiptPaths.length === 0) io.gap(stageRoot, "no stage receipts");
 
+	const received = new Set<string>();
+
 	for (const path of receiptPaths) {
 		if ((await io.text(path)) === null) continue;
 		const receipt = await readStageReceipt(path);
@@ -339,6 +345,15 @@ export async function readViewerRun(
 		const source = relative(root, path);
 		const stage = field(receipt.record, "stage") ?? "unknown";
 		const attempt = countOf(fieldOf(receipt.record, "attempt"));
+		received.add(`${stage}-${attempt}`);
+
+		for (const dropped of arrayOf(
+			fieldOf(receipt.record, "session_truncated"),
+		) ?? [])
+			io.gap(
+				path,
+				`session_truncated: ${textOf(dropped) ?? "unknown session"}`,
+			);
 
 		if (attempt === null || stage === "unknown")
 			io.gap(path, "missing stage identity");
@@ -418,11 +433,8 @@ export async function readViewerRun(
 	);
 
 	if (sessionPaths.length === 0)
-		io.gap(
-			stageRoot,
-			"Pi session JSONL files missing (build cleanup removes agent trees)",
-		);
-	const childLinks = new Map<string, string>();
+		io.gap(stageRoot, "Pi session JSONL files missing");
+	const childLinks = new Map<string, { parent: string; source: string }>();
 
 	for (const path of sessionPaths) {
 		const records = await io.lines(path);
@@ -432,7 +444,12 @@ export async function readViewerRun(
 			(record) => field(record, "type") === "session",
 		);
 
-		const id = field(header ?? null, "id") ?? source;
+		if (header === undefined) {
+			io.gap(path, "session header missing");
+			continue;
+		}
+
+		const id = field(header, "id") ?? source;
 
 		const stage =
 			/\/(specify|accept|build|review)-\d+/.exec(path)?.[1] ?? "unknown";
@@ -448,22 +465,28 @@ export async function readViewerRun(
 					source,
 					stage,
 					type === "message" ? (role ?? type) : type,
-					field(message, "customType") ?? field(message, "stopReason") ?? "",
+					field(record, "customType") ??
+						field(message, "customType") ??
+						field(message, "stopReason") ??
+						"",
 					atOf(record),
 				),
 			);
 
-			if (field(message, "customType") === "subagent_result") {
-				const details = objectOf(fieldOf(message, "details"));
+			const custom = type === "custom_message" ? record : message;
+
+			if (field(custom, "customType") === "subagent_result") {
+				const details = objectOf(fieldOf(custom, "details"));
 				const child = field(details, "sessionFile");
 
 				if (child !== null)
-					childLinks.set(child.split("/").at(-1) ?? child, id);
+					childLinks.set(child.split("/").at(-1) ?? child, {
+						parent: id,
+						source,
+					});
 				else io.gap(path, "child result has no session file");
 			}
 		}
-
-		if (header === undefined) io.gap(path, "session header missing");
 
 		const usage = childUsageOf(
 			records.map((record) => JSON.stringify(record)).join("\n"),
@@ -487,14 +510,17 @@ export async function readViewerRun(
 
 	for (const session of sessions) {
 		const name = session.source.split("/").at(-1) ?? "";
-		session.parent = childLinks.get(name) ?? session.parent;
+		session.parent = childLinks.get(name)?.parent ?? session.parent;
 
 		if (session.parent === null) timeline.push(...session.timeline);
 	}
 
-	for (const [file, id] of childLinks) {
+	for (const [file, link] of childLinks) {
 		if (!sessions.some((session) => session.source.endsWith(`/${file}`)))
-			io.gap(stageRoot, `child session missing for parent ${id}`);
+			io.gap(
+				join(root, link.source),
+				`missing_child_session: ${file} (parent ${link.parent})`,
+			);
 	}
 
 	const childSessions = sessions.filter((session) => session.parent !== null);
@@ -515,7 +541,18 @@ export async function readViewerRun(
 
 	if (
 		sessionTotal !== total ||
-		childSessions.reduce((sum, session) => sum + session.tokens, 0) !== children
+		childSessions.reduce((sum, session) => sum + session.tokens, 0) !==
+			children ||
+		[...new Set([...modelTotals.keys(), ...sessionModels.keys()])].some(
+			(model) => {
+				const split = sessionModels.get(model);
+
+				return (
+					(split?.parent ?? 0) + (split?.children ?? 0) !==
+					(modelTotals.get(model) ?? 0)
+				);
+			},
+		)
 	)
 		io.gap(stageRoot, "session usage does not reconcile with receipt totals");
 
@@ -570,7 +607,7 @@ export async function readViewerRun(
 		}
 	}
 
-	gateway.sort((a, b) => a.at.localeCompare(b.at));
+	gateway.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
 
 	if (claim?.validation !== undefined) {
 		const state = claim.validation;
@@ -628,6 +665,35 @@ export async function readViewerRun(
 		}
 	}
 
+	const required = new Set<string>();
+
+	const stageOrder = [
+		"admit",
+		"specify",
+		"accept",
+		"build",
+		"validate",
+		"review",
+		"land",
+	];
+
+	const modelStages = ["specify", "accept", "build", "review"];
+
+	const reached = (stage: string, attempt: number | null) => {
+		for (const earlier of modelStages)
+			if (
+				stageOrder.indexOf(earlier) < stageOrder.indexOf(stage) &&
+				![...received].some((key) => key.startsWith(`${earlier}-`))
+			)
+				required.add(`${earlier}-1`);
+
+		if (modelStages.includes(stage) && attempt !== null)
+			required.add(`${stage}-${attempt}`);
+	};
+
+	if (claim?.stage !== undefined && claim?.stage !== null)
+		reached(claim.stage, claim.attempt);
+
 	const markerPath = join(root, "markers", `${runId}.jsonl`);
 
 	try {
@@ -642,6 +708,7 @@ export async function readViewerRun(
 			}
 
 			const marker = parsed.marker;
+			reached(marker.stage, marker.attempt);
 			timeline.push(
 				event(
 					relative(root, markerPath),
@@ -661,23 +728,23 @@ export async function readViewerRun(
 		);
 	}
 
-	const stageOrder = [
-		"admit",
-		"specify",
-		"accept",
-		"build",
-		"validate",
-		"review",
-		"land",
-	];
+	for (const key of required)
+		if (!received.has(key))
+			io.gap(join(stageRoot, key, "receipt.json"), "missing_stage_receipt");
 
-	timeline.sort((a, b) =>
-		a.at !== null && b.at !== null
-			? a.at.localeCompare(b.at)
-			: stageOrder.indexOf(a.stage) - stageOrder.indexOf(b.stage) ||
-				(a.attempt ?? 0) - (b.attempt ?? 0) ||
-				a.source.localeCompare(b.source),
-	);
+	timeline.sort((a, b) => {
+		if (a.at !== null && b.at !== null)
+			return Date.parse(a.at) - Date.parse(b.at);
+
+		if (a.at !== null) return -1;
+
+		if (b.at !== null) return 1;
+
+		return (
+			stageOrder.indexOf(a.stage) - stageOrder.indexOf(b.stage) ||
+			(a.attempt ?? 0) - (b.attempt ?? 0)
+		);
+	});
 
 	const terminal =
 		claim?.status !== undefined &&

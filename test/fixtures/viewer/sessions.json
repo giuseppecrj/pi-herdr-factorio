@@ -13,22 +13,20 @@
 			}
 		},
 		{
-			"type": "message",
+			"type": "custom_message",
 			"timestamp": "2026-10-31T00:00:04Z",
-			"message": {
-				"role": "custom",
-				"customType": "subagent_result",
-				"details": { "sessionFile": "/run/pi-agent/sessions/child-one.jsonl" }
-			}
+			"customType": "subagent_result",
+			"content": "[redacted]",
+			"display": true,
+			"details": { "sessionFile": "/run/pi-agent/sessions/child-one.jsonl" }
 		},
 		{
-			"type": "message",
+			"type": "custom_message",
 			"timestamp": "2026-10-31T00:00:05Z",
-			"message": {
-				"role": "custom",
-				"customType": "subagent_result",
-				"details": { "sessionFile": "/run/pi-agent/sessions/child-two.jsonl" }
-			}
+			"customType": "subagent_result",
+			"content": "[redacted]",
+			"display": true,
+			"details": { "sessionFile": "/run/pi-agent/sessions/child-two.jsonl" }
 		}
 	],
 	"children": [

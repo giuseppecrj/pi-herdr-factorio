@@ -10,8 +10,13 @@ import {
 	symlink,
 } from "node:fs/promises";
 import { request } from "node:http";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs/promises";
+import fsSync, { constants } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+import { escapeHtml } from "../server/viewer/render.ts";
 import { runCli } from "../server/cli.ts";
-import { readStageReceipt } from "../server/sandbox.ts";
+import { readStageReceipt, sandboxExecutor } from "../server/sandbox.ts";
 import { readStoredVerdict } from "../server/controller.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -28,7 +33,8 @@ const runId = runIdOf({
 	eventId: "1",
 });
 
-async function fixtureState() {
+async function fixtureState(repo = "giuseppecrj/pi-herdr-factorio") {
+	const runId = runIdOf({ repo, issue: 1, eventId: "1" });
 	const root = await mkdtemp(join(tmpdir(), "factory-viewer-"));
 	const stage = join(root, "stages", runId, "build-1");
 	const sessions = join(stage, "agent-0", "sessions");
@@ -52,10 +58,7 @@ async function fixtureState() {
 		JSON.stringify({ runs: [{ runId }] }),
 	);
 
-	const admission = join(
-		root,
-		"admissions/github/giuseppecrj/pi-herdr-factorio/1",
-	);
+	const admission = join(root, `admissions/github/${repo}/1`);
 
 	await mkdir(admission, { recursive: true });
 	await writeFile(
@@ -118,7 +121,28 @@ async function fixtureState() {
 		}),
 	);
 	await mkdir(join(root, "markers"));
-	const repo = "giuseppecrj/pi-herdr-factorio";
+
+	for (const name of ["specify", "accept"]) {
+		const earlier = join(root, "stages", runId, `${name}-1`);
+		await mkdir(earlier);
+		await writeFile(
+			join(earlier, "receipt.json"),
+			JSON.stringify({
+				...receipt,
+				stage: name,
+				usage: {
+					total: 0,
+					parent: 0,
+					children: 0,
+					byModel: {},
+					gateway: 0,
+					unreadChildren: 0,
+				},
+				stderr: [],
+			}),
+		);
+	}
+
 	const sha = "a".repeat(40);
 	assert.ok(isRepoSlug(repo));
 	assert.ok(isGitSha(sha));
@@ -148,7 +172,7 @@ async function fixtureState() {
 		JSON.stringify({ timestamp: "2026-10-31T00:00:06Z", body }),
 	);
 
-	return { root, stage, sessions };
+	return { root, stage, sessions, runId };
 }
 
 async function inventory(root: string): Promise<string[]> {
@@ -177,6 +201,9 @@ test("receipt and verdict reader extractions preserve their existing parse contr
 			mode: 0o600,
 		});
 		assert.deepEqual(readStoredVerdict(join(root, "verdict.json")), verdict);
+		await fs.chmod(join(root, "verdict.json"), 0o644);
+		assert.throws(() => readStoredVerdict(join(root, "verdict.json")));
+		await fs.chmod(join(root, "verdict.json"), 0o600);
 		await writeFile(join(root, "verdict.json"), "{");
 		assert.throws(() => readStoredVerdict(join(root, "verdict.json")));
 	} finally {
@@ -228,7 +255,7 @@ test("an execution missing its receipt is a gap even when other stages have rece
 
 	try {
 		const other = join(root, "stages", runId, "accept-1");
-		await mkdir(other);
+		await mkdir(other, { recursive: true });
 		await cp(join(stage, "receipt.json"), join(other, "receipt.json"));
 		await rm(join(stage, "receipt.json"));
 		const run = await readViewerRun(root, runId);
@@ -251,7 +278,7 @@ test("corrupt receipts, sessions and unsafe sources stay visible gaps", async ()
 		const run = await readViewerRun(root, runId);
 		assert.equal(run.complete, false);
 		assert.ok(
-			run.gaps.some((gap) => gap.reason.includes("child session missing")),
+			run.gaps.some((gap) => gap.reason.includes("missing_child_session")),
 		);
 		assert.ok(run.gaps.some((gap) => gap.reason.includes("corrupt JSONL")));
 		assert.ok(run.gaps.some((gap) => gap.reason.includes("stage receipt")));
@@ -374,6 +401,400 @@ test("viewer is loopback-only, rejects foreign authorities and has no writes", a
 		assert.equal(response.headers.get("access-control-allow-origin"), null);
 	} finally {
 		await viewer.close();
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("missing earlier stage receipts are gaps even when the entire directory is gone", async () => {
+	const { root } = await fixtureState();
+
+	try {
+		await rm(join(root, "stages", runId, "specify-1"), { recursive: true });
+		const run = await readViewerRun(root, runId);
+		assert.equal(run.complete, false);
+		assert.ok(
+			run.gaps.some((g) => g.source.endsWith("specify-1/receipt.json")),
+		);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("timeline uses parsed mixed-precision timestamps and stable source order on ties", async () => {
+	const { root, sessions } = await fixtureState();
+
+	try {
+		const path = join(sessions, "parent.jsonl");
+		const text = await readFile(path, "utf8");
+		await writeFile(
+			path,
+			text
+				.replaceAll("2026-10-31T00:00:00Z", "2026-10-31T06:31:54.863Z")
+				.replaceAll("2026-10-31T00:00:01Z", "2026-10-31T06:31:54.863Z"),
+		);
+		const marker = join(root, "markers", `${runId}.jsonl`);
+		await writeFile(
+			marker,
+			(await readFile(marker, "utf8")).replace(
+				"2026-10-31T00:00:06Z",
+				"2026-10-31T06:31:54Z",
+			),
+		);
+		const run = await readViewerRun(root, runId);
+		const timed = run.timeline.filter((e) => e.at !== null);
+		assert.deepEqual(
+			timed.map((e) => Date.parse(e.at ?? "")),
+			timed.map((e) => Date.parse(e.at ?? "")).sort((a, b) => a - b),
+		);
+		assert.deepEqual(
+			timed
+				.filter((e) => e.at === "2026-10-31T06:31:54.863Z")
+				.map((e) => e.event),
+			["session", "assistant"],
+		);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("admission repository comes from the run identity, not the default repository", async () => {
+	const { root, runId: id } = await fixtureState("different/project");
+
+	try {
+		const run = await readViewerRun(root, id);
+		assert.equal(run.complete, true, JSON.stringify(run.gaps));
+		assert.ok(run.issue !== null);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("claims are guarded regular bounded reads and sibling FIFOs cannot hang a view", async () => {
+	const { root } = await fixtureState();
+	const outside = await mkdtemp(join(tmpdir(), "viewer-outside-"));
+
+	try {
+		const sibling = join(root, "claims", `${"d".repeat(64)}.json`);
+		execFileSync("mkfifo", [sibling]);
+		const script = `import { readViewerRun } from ${JSON.stringify(new URL("../server/viewer.ts", import.meta.url).href)}; await readViewerRun(${JSON.stringify(root)}, ${JSON.stringify(runId)});`;
+		execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+			timeout: 5000,
+		});
+		const path = join(root, "claims", `${runId}.json`);
+		await rm(path);
+		await writeFile(join(outside, "claim"), "{}");
+		await symlink(join(outside, "claim"), path);
+		assert.ok(
+			(await readViewerRun(root, runId)).gaps.some(
+				(g) => g.source === `claims/${runId}.json`,
+			),
+		);
+		await rm(path);
+		execFileSync("mkfifo", [path]);
+		execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+			timeout: 5000,
+		});
+		await rm(path);
+		await writeFile(path, " ".repeat(8 * 1024 * 1024 + 1));
+		assert.ok(
+			(await readViewerRun(root, runId)).gaps.some(
+				(g) =>
+					g.source === `claims/${runId}.json` && g.reason.includes("limit"),
+			),
+		);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+		await rm(outside, { recursive: true, force: true });
+	}
+});
+
+test("invalid allowed-host is a usage error, exit 2", async () => {
+	for (const host of ["evil.com", "Box.Tail.ts.net", "box.tail.ts.net:443"]) {
+		assert.equal(
+			await runCli(["viewer", "--state-dir", "/tmp", "--allowed-host", host], {
+				exec: async () => {
+					throw new Error("unexpected command");
+				},
+				env: () => undefined,
+				stdout: () => {},
+				stderr: () => {},
+			}),
+			2,
+		);
+	}
+});
+
+test("escaping quotes and every bidi control leaves visible escapes", () => {
+	assert.equal(escapeHtml('"'), "&quot;");
+
+	for (const n of [
+		0x061c, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066,
+		0x2067, 0x2068, 0x2069,
+	])
+		assert.equal(
+			escapeHtml(String.fromCodePoint(n)),
+			`\\u${n.toString(16).padStart(4, "0")}`,
+		);
+});
+
+test("run pin, unknown runs, listener and security headers are enforced", async () => {
+	const { root } = await fixtureState();
+	const other = "e".repeat(64);
+	await mkdir(join(root, "stages", other));
+	const viewer = await startViewer({ stateDir: root, port: 0, runId });
+	const unpinned = await startViewer({ stateDir: root, port: 0 });
+
+	try {
+		assert.equal(viewer.address, "127.0.0.1");
+		assert.equal(
+			(await fetch(`http://127.0.0.1:${viewer.port}/run/${other}/timeline`))
+				.status,
+			404,
+		);
+		assert.equal(
+			(
+				await fetch(
+					`http://127.0.0.1:${unpinned.port}/run/${"f".repeat(64)}/timeline`,
+				)
+			).status,
+			404,
+		);
+
+		for (const path of [
+			"/",
+			`/run/${runId}/timeline`,
+			`/run/${runId}/usage.json`,
+			"/absent",
+		]) {
+			const response = await fetch(`http://127.0.0.1:${viewer.port}${path}`);
+			assert.match(
+				response.headers.get("content-security-policy") ?? "",
+				/frame-ancestors 'none'/,
+			);
+			assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+			assert.equal(response.headers.get("cache-control"), "no-store");
+		}
+	} finally {
+		await viewer.close();
+		await unpinned.close();
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("guarded reader refuses symlinked run directories and nofollow closes a final-path swap", async () => {
+	const { root } = await fixtureState();
+	const dir = join(root, "stages", runId);
+	await fs.rename(dir, `${dir}-outside`);
+	await symlink(`${dir}-outside`, dir);
+
+	try {
+		assert.ok(
+			(await readViewerRun(root, runId)).gaps.some(
+				(g) => g.source === `stages/${runId}`,
+			),
+		);
+		assert.ok(
+			!(await readViewerRun(root, runId)).timeline.some(
+				(e) => e.event === "stage receipt",
+			),
+		);
+		const original = fs.open;
+		const claimPath = join(root, "claims", `${runId}.json`);
+		fs.open = async (path, flags, mode) => {
+			if (path === claimPath) {
+				await fs.rename(claimPath, `${claimPath}.saved`);
+				await symlink(`${claimPath}.saved`, claimPath);
+				assert.equal(
+					Number(flags) & constants.O_NOFOLLOW,
+					constants.O_NOFOLLOW,
+				);
+			}
+
+			return original(path, flags, mode);
+		};
+
+		syncBuiltinESMExports();
+
+		try {
+			assert.ok(
+				(await readViewerRun(root, runId)).gaps.some(
+					(g) => g.source === `claims/${runId}.json`,
+				),
+			);
+		} finally {
+			fs.open = original;
+			syncBuiltinESMExports();
+		}
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("file, aggregate byte and directory entry caps yield gaps", async () => {
+	const { root, sessions, stage } = await fixtureState();
+
+	try {
+		const large = join(sessions, "large.jsonl");
+		await writeFile(large, " ".repeat(8 * 1024 * 1024 + 1));
+		assert.ok(
+			(await readViewerRun(root, runId)).gaps.some(
+				(g) => g.source.endsWith("large.jsonl") && g.reason.includes("limit"),
+			),
+		);
+		await rm(large);
+
+		for (let i = 0; i < 7; i++)
+			await writeFile(
+				join(sessions, `large-${i}.jsonl`),
+				" ".repeat(8 * 1024 * 1024),
+			);
+		assert.ok(
+			(await readViewerRun(root, runId)).gaps.some(
+				(g) => g.source.includes("large-") && g.reason.includes("limit"),
+			),
+		);
+
+		for (let i = 0; i < 7; i++) await rm(join(sessions, `large-${i}.jsonl`));
+		const many = join(stage, "many");
+		await mkdir(many);
+
+		for (let i = 0; i < 10001; i++)
+			fsSync.writeFileSync(join(many, String(i)), "");
+		assert.ok(
+			(await readViewerRun(root, runId)).gaps.some(
+				(g) => g.reason === "entry limit",
+			),
+		);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+for (const scenario of [
+	"session",
+	"reconcile",
+	"gateway",
+	"markers",
+	"settlement",
+	"receipt binding",
+	"audit binding",
+	"truncated",
+])
+	test(`named evidence gap: ${scenario}`, async () => {
+		const { root, sessions, stage } = await fixtureState();
+
+		try {
+			let reason = "";
+
+			if (scenario === "session") {
+				await rm(sessions, { recursive: true });
+				reason = "Pi session JSONL";
+			}
+
+			if (scenario === "reconcile") {
+				await writeFile(
+					join(sessions, "parent.jsonl"),
+					(await readFile(join(sessions, "parent.jsonl"), "utf8")).replace(
+						'"totalTokens":10',
+						'"totalTokens":11',
+					),
+				);
+				reason = "reconcile";
+			}
+
+			if (scenario === "gateway") {
+				await rm(join(stage, "egress.jsonl"));
+				reason = "gateway audit missing";
+			}
+
+			if (scenario === "markers") {
+				await rm(join(root, "markers", `${runId}.jsonl`));
+				reason = "marker comment history";
+			}
+
+			if (["settlement", "receipt binding", "truncated"].includes(scenario)) {
+				const path = join(stage, "receipt.json");
+				const receipt = JSON.parse(await readFile(path, "utf8"));
+
+				if (scenario === "settlement") {
+					receipt.settlement.event = null;
+					reason = "settlement not observed";
+				}
+
+				if (scenario === "receipt binding") {
+					receipt.runId = "a".repeat(64);
+					reason = "mismatched stage receipt";
+				}
+
+				if (scenario === "truncated") {
+					receipt.session_truncated = ["old.jsonl"];
+					reason = "session_truncated";
+				}
+
+				await writeFile(path, JSON.stringify(receipt));
+			}
+
+			if (scenario === "audit binding") {
+				const path = join(stage, "egress.jsonl");
+				await writeFile(
+					path,
+					(await readFile(path, "utf8")).replace(runId, "b".repeat(64)),
+				);
+				reason = "mismatched audit";
+			}
+
+			const run = await readViewerRun(root, runId);
+			assert.equal(run.complete, false);
+			assert.ok(
+				run.gaps.some((g) => g.reason.includes(reason)),
+				JSON.stringify(run.gaps),
+			);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+test("receipt recovery only reads the designated output file", async () => {
+	const { root, stage } = await fixtureState();
+
+	try {
+		const receipt = JSON.parse(
+			await readFile(join(stage, "receipt.json"), "utf8"),
+		);
+
+		receipt.output = { file: "other.txt", kept: true, bytes: 6 };
+		receipt.stage = "accept";
+		const target = join(root, "stages", runId, "accept-1");
+		await writeFile(join(target, "receipt.json"), JSON.stringify(receipt));
+		await writeFile(join(target, "output.txt"), "canary");
+
+		const executor = sandboxExecutor({
+			stateDir: root,
+			exec: async () => {
+				throw new Error("unexpected exec");
+			},
+			log: () => {},
+			xdgRuntimeDir: "/tmp",
+		});
+
+		assert.equal(
+			await executor.output?.({ runId, stage: "accept", attempt: 1 }),
+			null,
+		);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("denied gateway requests never invent an upstream", async () => {
+	const { root } = await fixtureState();
+
+	try {
+		assert.equal(
+			(await readViewerRun(root, runId)).gateway[0]?.destination,
+			"not forwarded (no upstream)",
+		);
+	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
 });

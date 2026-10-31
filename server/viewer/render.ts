@@ -2,11 +2,11 @@ import type { TimelineEvent, ViewerRun } from "./evidence.ts";
 
 export function escapeHtml(value: string): string {
 	return value.replace(
-		/[&<>"']/g,
+		/[&<>"'\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,
 		(char) =>
 			({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
 				char
-			] ?? char,
+			] ?? `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
 	);
 }
 
@@ -105,7 +105,7 @@ export function renderRun(run: ViewerRun, view: string): string {
 			]),
 		)}`;
 	else
-		content = `<h2>Timeline</h2><p class="muted">Stage order and attempt order are shown where timestamps were not retained. Receipt settlement is not a fabricated session event.</p>${timeline(run.timeline)}<h2>Issue snapshot (untrusted text)</h2><pre>${escapeHtml(JSON.stringify(run.issue, null, 2))}</pre>`;
+		content = `<h2>Timeline</h2><p class="muted">Timestamped events are chronological. Events without timestamps follow in stage and attempt order. Receipt settlement is not a fabricated session event.</p>${timeline(run.timeline)}<h2>Issue snapshot (untrusted text)</h2><pre>${escapeHtml(JSON.stringify(run.issue, null, 2))}</pre>`;
 
 	return page(
 		"Run",
