@@ -16,6 +16,7 @@ import {
 } from "../src/build.ts";
 import {
 	closeSync,
+	chmodSync,
 	existsSync,
 	fsyncSync,
 	lstatSync,
@@ -1423,8 +1424,8 @@ type KeptSession = {
 	readonly text: string | null;
 };
 
-async function keptSession(dir: string): Promise<KeptSession | null> {
-	const raw = await boundedText(join(dir, "receipt.json"), MAX_RECEIPT_BYTES);
+export async function readStageReceipt(path: string) {
+	const raw = await boundedText(path, MAX_RECEIPT_BYTES);
 	const record = objectOf(parseJson(raw ?? ""));
 	const result = objectOf(fieldOf(record, "outcome"));
 	const kind = textOf(fieldOf(result, "kind"));
@@ -1476,9 +1477,8 @@ async function keptSession(dir: string): Promise<KeptSession | null> {
 
 	if (total === null || turns === null || wallMs === null) return null;
 
-	const file = textOf(fieldOf(objectOf(fieldOf(record, "output")), "file"));
-
 	return {
+		record,
 		outcome,
 		turns,
 		wallMs,
@@ -1490,8 +1490,25 @@ async function keptSession(dir: string): Promise<KeptSession | null> {
 			gateway: countOf(fieldOf(usage, "gateway")),
 			unreadChildren: countOf(fieldOf(usage, "unreadChildren")) ?? 0,
 		},
+	};
+}
+
+async function keptSession(dir: string): Promise<KeptSession | null> {
+	const parsed = await readStageReceipt(join(dir, "receipt.json"));
+
+	if (parsed === null) return null;
+
+	const file = textOf(
+		fieldOf(objectOf(fieldOf(parsed.record, "output")), "file"),
+	);
+
+	return {
+		outcome: parsed.outcome,
+		usage: parsed.usage,
+		turns: parsed.turns,
+		wallMs: parsed.wallMs,
 		text:
-			outcome.kind === "passed" && file === "output.txt"
+			parsed.outcome.kind === "passed" && file === "output.txt"
 				? await boundedText(join(dir, file), OUTPUT_MAX_BYTES)
 				: null,
 	};
@@ -2131,9 +2148,79 @@ function cleanupBuildAgents(
 		)
 			continue;
 
-		for (const agent of readdirSync(join(root, name)))
-			if (/^agent-[0-9]+$/.test(agent))
-				rmSync(join(root, name, agent), { recursive: true, force: true });
+		const stage = join(root, name);
+
+		const agents = readdirSync(stage).filter((agent) =>
+			/^agent-[0-9]+$/.test(agent),
+		);
+
+		const sessions: {
+			source: string;
+			dest: string;
+			size: number;
+			mtime: number;
+		}[] = [];
+
+		const walk = (source: string, dest: string) => {
+			const info = lstatSync(source);
+
+			if (info.isSymbolicLink()) return;
+
+			if (info.isDirectory()) {
+				for (const entry of readdirSync(source))
+					walk(join(source, entry), join(dest, entry));
+			} else if (info.isFile() && source.endsWith(".jsonl"))
+				sessions.push({ source, dest, size: info.size, mtime: info.mtimeMs });
+		};
+
+		for (const agent of agents) {
+			const source = join(stage, agent, "sessions");
+
+			if (!lstatSync(join(stage, agent)).isSymbolicLink() && existsSync(source))
+				walk(source, join(stage, "sessions", agent));
+		}
+
+		sessions.sort(
+			(a, b) => b.mtime - a.mtime || a.source.localeCompare(b.source),
+		);
+		let bytes = 0;
+		const dropped: string[] = [];
+		chmodSync(stage, 0o700);
+
+		for (const session of sessions) {
+			if (bytes + session.size > 8 * 1024 * 1024) {
+				dropped.push(session.source.slice(stage.length + 1));
+				continue;
+			}
+
+			mkdirSync(dirname(session.dest), { recursive: true, mode: 0o700 });
+			renameSync(session.source, session.dest);
+			chmodSync(session.dest, 0o600);
+			bytes += session.size;
+		}
+
+		if (dropped.length > 0) {
+			const path = join(stage, "receipt.json");
+			const receipt = objectOf(parseJson(readFileSync(path, "utf8")));
+
+			const updated = `${path}.sessions-${randomBytes(4).toString("hex")}`;
+
+			if (
+				receipt !== null &&
+				publishFile(
+					updated,
+					JSON.stringify(
+						{ ...receipt, session_truncated: dropped },
+						null,
+						"\t",
+					),
+				)
+			)
+				renameSync(updated, path);
+		}
+
+		for (const agent of agents)
+			rmSync(join(stage, agent), { recursive: true, force: true });
 	}
 }
 

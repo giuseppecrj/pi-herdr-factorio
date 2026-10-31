@@ -1,0 +1,70 @@
+{
+	"parent": [
+		{ "type": "session", "id": "parent", "timestamp": "2026-10-31T00:00:00Z" },
+		{
+			"type": "message",
+			"timestamp": "2026-10-31T00:00:01Z",
+			"message": {
+				"role": "assistant",
+				"provider": "openai",
+				"model": "gpt-6.1-sol",
+				"stopReason": "toolUse",
+				"usage": { "totalTokens": 10 }
+			}
+		},
+		{
+			"type": "custom_message",
+			"timestamp": "2026-10-31T00:00:04Z",
+			"customType": "subagent_result",
+			"content": "[redacted]",
+			"display": true,
+			"details": { "sessionFile": "/run/pi-agent/sessions/child-one.jsonl" }
+		},
+		{
+			"type": "custom_message",
+			"timestamp": "2026-10-31T00:00:05Z",
+			"customType": "subagent_result",
+			"content": "[redacted]",
+			"display": true,
+			"details": { "sessionFile": "/run/pi-agent/sessions/child-two.jsonl" }
+		}
+	],
+	"children": [
+		[
+			{
+				"type": "session",
+				"id": "child-one",
+				"timestamp": "2026-10-31T00:00:02Z"
+			},
+			{
+				"type": "message",
+				"timestamp": "2026-10-31T00:00:03Z",
+				"message": {
+					"role": "assistant",
+					"provider": "openai",
+					"model": "gpt-6.1-sol",
+					"stopReason": "stop",
+					"usage": { "totalTokens": 3 }
+				}
+			}
+		],
+		[
+			{
+				"type": "session",
+				"id": "child-two",
+				"timestamp": "2026-10-31T00:00:02Z"
+			},
+			{
+				"type": "message",
+				"timestamp": "2026-10-31T00:00:03Z",
+				"message": {
+					"role": "assistant",
+					"provider": "openai",
+					"model": "gpt-6.1-terra",
+					"stopReason": "stop",
+					"usage": { "totalTokens": 7 }
+				}
+			}
+		]
+	]
+}

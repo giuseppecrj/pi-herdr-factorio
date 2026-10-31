@@ -50,8 +50,10 @@ import {
 } from "./controller.ts";
 import { sandboxExecutor } from "./sandbox.ts";
 import { runGatesCli } from "./gates.ts";
+import { runViewerCli } from "./viewer.ts";
 
 export const USAGE = `Usage:
+  node server/cli.ts viewer --state-dir <dir> [--run <id>] [--port <n>] [--allowed-host <authorized.ts.net>]
   node server/cli.ts gates --repository <dir> --gate-sha <sha> --candidate-sha <sha> --nonce <id> --output <dir> [--runner docker|local]
   node server/cli.ts workflow-check --json --repo <owner/name> [--ref <branch>] [--reload-ref <branch>]
   node server/cli.ts status --json --repo <owner/name> [--ref <branch>] [--state-dir <dir>]
@@ -528,6 +530,8 @@ export async function runCli(
 		...caller,
 		stderr: (text) => caller.stderr(redactCredentials(text)),
 	};
+
+	if (argv[0] === "viewer") return runViewerCli(argv.slice(1), io);
 
 	if (argv[0] === "gates") return runGatesCli(argv.slice(1), io);
 
