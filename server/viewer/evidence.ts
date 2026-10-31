@@ -83,7 +83,7 @@ export type ViewerRun = {
 const FILE_CAP = 8 * 1024 * 1024;
 const RUN_CAP = 48 * 1024 * 1024;
 
-class Evidence {
+export class Evidence {
 	readonly gaps: Gap[] = [];
 	bytes = 0;
 	entries = 0;

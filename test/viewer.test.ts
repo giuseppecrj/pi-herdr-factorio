@@ -12,11 +12,11 @@ import {
 import { request } from "node:http";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
-import fsSync, { constants } from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
+import fsSync from "node:fs";
+import { Evidence } from "../server/viewer/evidence.ts";
 import { escapeHtml } from "../server/viewer/render.ts";
 import { runCli } from "../server/cli.ts";
-import { readStageReceipt, sandboxExecutor } from "../server/sandbox.ts";
+import { readStageReceipt, runSpecify } from "../server/sandbox.ts";
 import { readStoredVerdict } from "../server/controller.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,7 +24,7 @@ import { test } from "node:test";
 import { readViewerRun, startViewer } from "../server/viewer.ts";
 import { runIdOf, digestOf } from "../src/run.ts";
 import { formatMarker } from "../src/markers.ts";
-import { isRepoSlug, isGitSha } from "../src/workflow.ts";
+import { isRepoSlug, isGitSha, parseWorkflow } from "../src/workflow.ts";
 import fixture from "./fixtures/viewer/sessions.json" with { type: "json" };
 
 const runId = runIdOf({
@@ -598,33 +598,13 @@ test("guarded reader refuses symlinked run directories and nofollow closes a fin
 				(e) => e.event === "stage receipt",
 			),
 		);
-		const original = fs.open;
 		const claimPath = join(root, "claims", `${runId}.json`);
-		fs.open = async (path, flags, mode) => {
-			if (path === claimPath) {
-				await fs.rename(claimPath, `${claimPath}.saved`);
-				await symlink(`${claimPath}.saved`, claimPath);
-				assert.equal(
-					Number(flags) & constants.O_NOFOLLOW,
-					constants.O_NOFOLLOW,
-				);
-			}
-
-			return original(path, flags, mode);
-		};
-
-		syncBuiltinESMExports();
-
-		try {
-			assert.ok(
-				(await readViewerRun(root, runId)).gaps.some(
-					(g) => g.source === `claims/${runId}.json`,
-				),
-			);
-		} finally {
-			fs.open = original;
-			syncBuiltinESMExports();
-		}
+		await fs.rename(claimPath, `${claimPath}.saved`);
+		await symlink(`${claimPath}.saved`, claimPath);
+		const reader = new Evidence(root);
+		reader.safe = async () => true;
+		assert.equal(await reader.text(claimPath), null);
+		assert.ok(reader.gaps.some((g) => g.source === `claims/${runId}.json`));
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
@@ -673,6 +653,7 @@ test("file, aggregate byte and directory entry caps yield gaps", async () => {
 for (const scenario of [
 	"session",
 	"reconcile",
+	"receipt total reconcile",
 	"gateway",
 	"markers",
 	"settlement",
@@ -699,6 +680,14 @@ for (const scenario of [
 						'"totalTokens":11',
 					),
 				);
+				reason = "reconcile";
+			}
+
+			if (scenario === "receipt total reconcile") {
+				const path = join(stage, "receipt.json");
+				const receipt = JSON.parse(await readFile(path, "utf8"));
+				receipt.usage.total++;
+				await writeFile(path, JSON.stringify(receipt));
 				reason = "reconcile";
 			}
 
@@ -763,24 +752,58 @@ test("receipt recovery only reads the designated output file", async () => {
 		);
 
 		receipt.output = { file: "other.txt", kept: true, bytes: 6 };
-		receipt.stage = "accept";
-		const target = join(root, "stages", runId, "accept-1");
+		receipt.stage = "specify";
+		const target = join(root, "stages", runId, "specify-1", "draft");
+		await mkdir(target);
 		await writeFile(join(target, "receipt.json"), JSON.stringify(receipt));
-		await writeFile(join(target, "output.txt"), "canary");
+		await writeFile(
+			join(target, "other.txt"),
+			JSON.stringify({
+				kind: "questions",
+				questions: [{ text: "Which format?", cites: [] }],
+			}),
+		);
+		const repo = "giuseppecrj/pi-herdr-factorio";
+		assert.ok(isRepoSlug(repo));
 
-		const executor = sandboxExecutor({
-			stateDir: root,
-			exec: async () => {
-				throw new Error("unexpected exec");
-			},
-			log: () => {},
-			xdgRuntimeDir: "/tmp",
+		const parsed = parseWorkflow({
+			text: `---\nrepository: ${repo}\n---\n`,
+			repo,
+			env: (name) => (name === "HOME" ? "/home/factory" : undefined),
 		});
 
-		assert.equal(
-			await executor.output?.({ runId, stage: "accept", attempt: 1 }),
-			null,
+		assert.equal(parsed.kind, "valid");
+
+		if (parsed.kind !== "valid") return;
+		const settings = parsed.config.stages.specify;
+
+		const result = await runSpecify(
+			{
+				runId,
+				stage: "specify",
+				attempt: 1,
+				workspace: root,
+				prompt: "unused",
+				tools: [],
+				skills: [],
+				settings: {
+					model: settings.model,
+					fallback: null,
+					maxTokens: 40000,
+					budget: { maxTurns: 10, wallMs: 60000, stallMs: 60000 },
+				},
+				remainingRunTokens: 40000,
+				signal: new AbortController().signal,
+				progress: () => {},
+				specify: { title: "Title", body: "Body", answers: null, files: [] },
+			},
+			join(target, ".."),
+			() => {
+				throw new Error("unexpected model");
+			},
 		);
+
+		assert.equal(result.kind, "failed");
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
