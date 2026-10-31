@@ -519,6 +519,8 @@ test("unchanged main suppressions are not new candidate directives", async (t) =
 
 for (const [addition, reason] of [
 	["// @ts-nocheck\n", "suppression_added"],
+	["// @TS-NOCHECK\n", "suppression_added"],
+	["// @Ts-NoCheck\n", "suppression_added"],
 	[
 		'import {Readable} from "node:stream"; Readable.prototype.push = () => true;\n',
 		"runtime_patching",
@@ -553,6 +555,45 @@ for (const bytes of [
 		assert.equal(r.status, "failed");
 		assert.equal(r.reason, "invalid_source_encoding");
 	});
+
+for (const separator of ["\u2028", "\u2029", "\r"])
+	test(`source encoding refuses line separator ${JSON.stringify(separator)}`, async (t) => {
+		const f = repo(t);
+		f.put(
+			"src/value.ts",
+			`export const sep = "${separator.repeat(3)}";\nprocess.on("exit", () => {});\nexport const value = "main";\n`,
+		);
+		const r = await checkCandidate(gateInput(f, f.commit()));
+		assert.equal(r.status, "failed");
+		assert.equal(r.reason, "invalid_source_encoding");
+	});
+
+test("source encoding permits CRLF line endings", async (t) => {
+	const f = repo(t);
+	f.put("src/value.ts", 'export const value = "main";\r\n');
+	assert.equal(
+		(await checkCandidate(gateInput(f, f.commit()))).status,
+		"passed",
+	);
+});
+
+test("unchanged acceptance files on main need no dispatch but modifications do", async (t) => {
+	const f = repo(t);
+	const path = "test/acceptance/123/checks/scenario.test.ts";
+	const text = 'import {test} from "node:test"; test("published",()=>{});\n';
+	f.put(path, text);
+	const gateSha = f.commit();
+	f.put(
+		"src/value.ts",
+		'export const value = "main";\nexport const extra = 1;\n',
+	);
+	const input = { ...gateInput(f, f.commit()), gateSha };
+	assert.equal((await checkCandidate(input)).status, "passed");
+	f.put(path, text + "// candidate edit\n");
+	const changed = await checkCandidate({ ...input, candidateSha: f.commit() });
+	assert.equal(changed.status, "failed");
+	assert.equal(changed.reason, "unauthorized_acceptance");
+});
 
 for (const path of [
 	"test/acceptance/stash/lint.ts",

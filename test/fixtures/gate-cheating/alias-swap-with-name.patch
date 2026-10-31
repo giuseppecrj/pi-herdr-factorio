@@ -1,0 +1,17 @@
+diff --git c/package-lock.json i/package-lock.json
+index 0935f19..9ad2372 100644
+--- c/package-lock.json
++++ i/package-lock.json
+@@ -1306,4 +1306,5 @@
+-      "version": "0.12.0",
+-      "resolved": "https://registry.npmjs.org/@types/retry/-/retry-0.12.0.tgz",
+-      "integrity": "sha512-wWKOClTTiizcZhXnPY4wikVAwmdYHp8q6DmC+EJUzAMsycb7HB32Kh9RN4+0gExjmPmZSAQjgURXIGATPegAvA==",
+-      "license": "MIT"
++      "version": "3.0.1",
++      "resolved": "https://registry.npmjs.org/is-odd/-/is-odd-3.0.1.tgz",
++      "integrity": "sha512-CQpnWPrDwmP1+SMHXZhtLtJv90yiyVfluGsX5iNCVkrhQtU3TQHsUWPG9wkdk9Lgd5yNpAg9jQEo90CBaXgWMA==",
++      "license": "MIT",
++      "name": "is-odd"
+@@ -1908 +1909 @@
+-        "@types/retry": "0.12.0",
++        "@types/retry": "npm:is-odd@3.0.1",

@@ -19,7 +19,7 @@ export function scanSource(path: string, text: string, changed: ReadonlySet<numb
 	const pattern = textOf(fieldOf(rules, "suppression"));
 
 	if (!pattern || fieldOf(rules, "version") !== 1) throw new Error("invalid_scan_rules");
-	const suppression = new RegExp(pattern);
+	const suppression = new RegExp(pattern, "i");
 	const signals: Signal[] = [];
 	text.split("\n").forEach((line, index) => {
 		if (changed.has(index + 1) && suppression.test(line)) signals.push({ path, line: index + 1, rule: "suppression_added" });

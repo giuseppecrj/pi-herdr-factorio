@@ -358,8 +358,13 @@ export async function materializeCandidate(input: {
 			input.heldoutDigest,
 		);
 
-		for (const path of candidate.keys())
-			if (path.startsWith("test/acceptance/") && !heldout.includes(path))
+		for (const [path, entry] of candidate)
+			if (
+				path.startsWith("test/acceptance/") &&
+				(entry.blob !== base.get(path)?.blob ||
+					entry.mode !== base.get(path)?.mode) &&
+				!heldout.includes(path)
+			)
 				throw new Error("unauthorized_acceptance");
 		rmSync(join(input.dest, "test/acceptance"), {
 			recursive: true,
@@ -1023,10 +1028,13 @@ async function scanCandidate(
 
 		if (!isUtf8(bytes) || bytes.includes(0))
 			throw new Error("invalid_source_encoding");
+		const text = bytes.toString("utf8");
+
+		if (/[\u2028\u2029]|\r(?!\n)/.test(text))
+			throw new Error("invalid_source_encoding");
 
 		if (base.get(path)?.blob === entry.blob && !heldout.includes(path))
 			continue;
-		const text = bytes.toString("utf8");
 		const changed = new Set<number>();
 
 		if (!base.has(path) || heldout.includes(path))

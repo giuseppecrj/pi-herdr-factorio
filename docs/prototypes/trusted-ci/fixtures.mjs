@@ -94,6 +94,9 @@ if (mode === "generate") {
 	} finally { rmSync(temp,{recursive:true,force:true}); }
 
 	cases.push(
+		{name:"uppercase-ts-nocheck",expected:"failed",seed:true},
+		{name:"line-separator-runtime",expected:"failed",seed:true},
+		{name:"alias-swap-with-name",expected:"failed",seed:true},
 		{name:"helper-read-forgery",expected:"failed",seed:true},
 		{name:"nul-direct-read-forgery",expected:"failed",seed:true},
 		{name:"nul-ts-nocheck",expected:"failed",seed:true},
