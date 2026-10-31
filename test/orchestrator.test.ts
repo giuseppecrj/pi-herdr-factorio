@@ -362,6 +362,29 @@ const QUESTIONS_TEXT = JSON.stringify({
 });
 
 class FakeExecutor implements StageExecutor {
+	readonly validations: import("../src/validation.ts").ValidationInput[] = [];
+	validate: import("../src/validation.ts").Validator = async (input) => {
+		this.validations.push(input);
+
+		const state = input.state ?? {
+			version: 1,
+			startedAt: input.now,
+			deadline: input.now + input.wallMs,
+			round: 0,
+			originalBase: input.baseSha,
+			baseSha: input.baseSha,
+			baseResolved: true,
+			publication: null,
+			dispatchTry: 0,
+			dispatchedAt: null,
+			ciRunId: null,
+			counters: {},
+		};
+
+		await input.save(state);
+
+		return { kind: "waiting", state };
+	};
 	behaviors: Behavior[] = [];
 	fallback: Behavior = { kind: "unavailable" };
 	buildBehavior: Behavior = { kind: "unavailable" };
@@ -6734,10 +6757,7 @@ describe("private build stage", () => {
 				report = await once(restarted);
 			}
 
-			assert.equal(
-				statuses(github, 14).at(-1),
-				`${reuse ? 7 : 8}:stage_passed`,
-			);
+			assert.equal(statuses(github, 14).at(-1), `${reuse ? 7 : 8}:running`);
 			assert.equal(report.totals.usage, 12);
 			assert.equal(calls, reuse ? 0 : 1);
 			assert.equal(existsSync(base), false);
@@ -6855,7 +6875,7 @@ describe("private build stage", () => {
 			1,
 		);
 		assert.equal(report.totals.usage, 12);
-		assert.equal(statuses(github, 14).at(-1), "6:stage_passed");
+		assert.equal(statuses(github, 14).at(-1), "6:running");
 	});
 
 	it("advances the same run to build, grants coding tools without the suite, and documents its marker log", async () => {
@@ -6903,13 +6923,13 @@ describe("private build stage", () => {
 			"S1",
 		])
 			assert.ok(!build.prompt.includes(secret));
-		assert.equal(statuses(github, 14).at(-1), "7:stage_passed");
+		assert.equal(statuses(github, 14).at(-1), "7:running");
 		assert.ok(
 			logs.some(
 				({ event, fields }) =>
 					event === "marker_posted" &&
-					fields.status === "stage_passed" &&
-					fields.stage === "build",
+					fields.status === "running" &&
+					fields.stage === "validate",
 			),
 		);
 		assert.ok(
@@ -6932,7 +6952,7 @@ describe("private build stage", () => {
 				.split("\n")
 				.find((line) => line.startsWith("- `stage-passed`:")) ?? "";
 
-		assert.match(stageDoc, /marker_posted .*status=stage_passed stage=build/);
+		assert.match(stageDoc, /marker_posted .*status=running stage=validate/);
 		assert.doesNotMatch(
 			stageDoc,
 			/stage_ended \.\.\. cause=passed next=stage_passed/,
@@ -7022,10 +7042,236 @@ describe("private build stage", () => {
 			);
 			assert.equal(
 				statuses(github, 14).at(-1),
-				corrupt ? "7:failed" : "7:stage_passed",
+				corrupt ? "7:failed" : "7:running",
 			);
 			assert.equal(report.totals.usage, 12);
 		});
+});
+
+describe("controller-only validate", () => {
+	async function waitingRun() {
+		const f = world();
+		f.github.add(labeled(14));
+		f.executor.behaviors = [{ kind: "pass", usage: 10 }];
+		f.executor.acceptBehavior = { kind: "pass", usage: 7 };
+		f.executor.buildBehavior = { kind: "pass", usage: 12 };
+		f.executor.validate = async (input) => {
+			const state = input.state ?? {
+				version: 1,
+				startedAt: input.now,
+				deadline: input.now + input.wallMs,
+				round: 0,
+				originalBase: input.baseSha,
+				baseSha: input.baseSha,
+				baseResolved: true,
+				publication: {
+					branch: `factory/run/14-${input.runId.slice(0, 12)}-r0`,
+					patchSha: sha("b".repeat(40)),
+					candidateSha: sha("c".repeat(40)),
+				},
+				dispatchTry: 1,
+				dispatchedAt: input.now,
+				ciRunId: 123,
+				counters: {},
+			};
+
+			await input.save(state);
+
+			return { kind: "waiting", state };
+		};
+
+		const controller = f.start();
+		await once(controller);
+		await once(controller);
+		await controller.tick();
+		assert.ok(f.files.claims.get(runOf(14))?.validation?.publication);
+
+		return { ...f, controller };
+	}
+
+	for (const field of ["candidate", "ciRun"] as const)
+		it(`posts another marker when only ${field} changes`, async () => {
+			const f = await waitingRun();
+			const before = f.github.markers(14).length;
+			f.executor.validate = async (input) => {
+				const state = input.state;
+
+				if (state?.publication == null) throw new Error("fixture");
+
+				if (field === "candidate")
+					state.publication = {
+						...state.publication,
+						candidateSha: sha("d".repeat(40)),
+					};
+				else state.ciRunId = 124;
+				await input.save(state);
+
+				return { kind: "waiting", state };
+			};
+
+			await f.controller.tick();
+			assert.equal(f.github.markers(14).length, before + 1);
+			const last = parseMarker(f.github.markers(14).at(-1) ?? "");
+			assert.equal(last.kind, "marker");
+
+			if (last.kind === "marker")
+				assert.equal(
+					last.marker[field],
+					field === "candidate" ? "d".repeat(40) : 124,
+				);
+		});
+
+	it("fails closed when a published marker loses its private validation state", async () => {
+		const f = await waitingRun();
+		const claim = f.files.claims.get(runOf(14));
+
+		if (claim === undefined) throw new Error("fixture");
+		const missing = { ...claim };
+		delete missing.validation;
+		f.files.claims.set(runOf(14), missing);
+		let calls = 0;
+		f.executor.validate = async (input) => {
+			calls++;
+
+			return { kind: "waiting", state: input.state ?? claim.validation! };
+		};
+
+		const result = await f.start().tick();
+		assert.equal(calls, 0);
+		assert.equal(result.totals.failures, 1);
+		assert.ok(
+			f.logs.some(
+				(entry) =>
+					entry.event === "validation_failed" &&
+					entry.fields.why === "validation_state_missing",
+			),
+		);
+	});
+
+	it("keeps cleanup identities when adopting a remotely ended marker", async () => {
+		const f = await waitingRun();
+		const claim = f.files.claims.get(runOf(14));
+		const last = parseMarker(f.github.markers(14).at(-1) ?? "");
+
+		if (last.kind !== "marker") throw new Error("fixture");
+		f.github.comment(
+			f.github.issues.get(14)!,
+			formatMarker({
+				...last.marker,
+				status: "failed",
+				seq: last.marker.seq + 1,
+			}),
+		);
+		await f.start().tick();
+		assert.deepEqual(
+			f.files.claims.get(runOf(14))?.validation,
+			claim?.validation,
+		);
+		assert.equal(f.files.claims.get(runOf(14))?.status, "failed");
+	});
+
+	it("does not progress an awaiting run on an unconfirmed issue read", async () => {
+		const f = await waitingRun();
+		let calls = 0;
+		const validate = f.executor.validate;
+		f.executor.validate = async (input) => {
+			calls++;
+
+			return validate(input);
+		};
+
+		f.github.failures.set(`repos/${FAKE_REPO}/issues/14`, networkError());
+		await f.controller.tick();
+		assert.equal(calls, 0);
+	});
+
+	it("retains publication identities when a waiting run is released across restart", async () => {
+		const { github, executor, files, start } = world();
+		const issue = github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "pass", usage: 7 };
+		executor.buildBehavior = { kind: "pass", usage: 12 };
+		executor.validate = async (input) => {
+			const state = {
+				version: 1,
+				startedAt: input.now,
+				deadline: input.now + input.wallMs,
+				round: 0,
+				originalBase: input.baseSha,
+				baseSha: input.baseSha,
+				baseResolved: true,
+				publication: {
+					branch: `factory/run/14-${input.runId.slice(0, 12)}-r0`,
+					patchSha: sha("b".repeat(40)),
+					candidateSha: sha("c".repeat(40)),
+				},
+				dispatchTry: 1,
+				dispatchedAt: input.now,
+				ciRunId: 123,
+				counters: {},
+			} as const;
+
+			await input.save(state);
+
+			return { kind: "waiting", state };
+		};
+
+		const first = start();
+		await once(first);
+		await once(first);
+		await first.tick();
+		const publication = files.claims.get(runOf(14))?.validation?.publication;
+		assert.ok(publication);
+		issue.labels = [];
+		issue.updatedAt = "2026-10-29T03:00:00Z";
+		const report = await start().tick();
+		assert.deepEqual(report.runs, []);
+		assert.equal(files.claims.get(runOf(14))?.status, "released");
+		assert.deepEqual(
+			files.claims.get(runOf(14))?.validation?.publication,
+			publication,
+		);
+	});
+	it("adopts a v1 validate marker on the old workflow without a model interruption or slot", async () => {
+		const { github, executor, start, clock } = world();
+		const issue = github.add(labeled(14));
+
+		const legacy = TRUSTED_WORKFLOW.replace(
+			"  validate:\n",
+			"  validate:\n    model: openai/gpt-6.1-sol\n",
+		);
+
+		github.workflow = legacy;
+		executor.workflow = () => legacy;
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "pass", usage: 7 };
+		executor.buildBehavior = { kind: "pass", usage: 12 };
+		const first = start();
+		await once(first);
+		const built = await once(first);
+		assert.equal(built.active, 0);
+		const last = issue.comments.at(-1);
+		assert.ok(last);
+		const parsed = parseMarker(last.body);
+		assert.equal(parsed.kind, "marker");
+
+		if (parsed.kind !== "marker") return;
+		assert.equal(parsed.marker.stage, "validate");
+		last.body = formatMarker({ ...parsed.marker, v: 1 });
+		clock.t += 60_000;
+		const restored = start();
+		const report = await restored.tick();
+		assert.equal(report.active, 0);
+		assert.equal(report.totals.retries, 0);
+		assert.equal(restored.state.runs.get(14)?.phase.kind, "awaiting_ci");
+		assert.equal(restored.state.runs.get(14)?.attempt, 1);
+		assert.equal(executor.validations.length, 1);
+		assert.equal(
+			executor.launches.filter((launch) => launch.stage === "build").length,
+			1,
+		);
+		assert.equal(executor.launches.length, 3);
+	});
 });
 
 describe("held-out acceptance stage", () => {

@@ -90,6 +90,7 @@ function isForbidden(changed: string, acceptanceDir: string): boolean {
 			.some((part) => part === ".." || part.toLowerCase() === ".git") ||
 		path.startsWith("../") ||
 		path.startsWith("/") ||
+		path === ".factory-feedback.json" ||
 		isAtOrUnder(path, CONTROL_PLANE_DIR) ||
 		isAtOrUnder(path, posix.normalize(acceptanceDir).toLowerCase())
 	);
@@ -114,11 +115,28 @@ export type LandCheck =
 	| { kind: "ready" }
 	| {
 			kind: "blocked";
-			reason: "no_patch" | "no_verdict" | "digest_mismatch" | "verdict_failed";
+			reason:
+				| "no_patch"
+				| "no_verdict"
+				| "digest_mismatch"
+				| "verdict_failed"
+				| "stale_candidate"
+				| "stale_gate"
+				| "acceptance_mismatch";
 	  };
 
 export function checkLandPrecondition(
-	run: Pick<Run, "patchDigest" | "verdict">,
+	run: Pick<
+		Run,
+		| "patchDigest"
+		| "verdict"
+		| "candidateSha"
+		| "gateSha"
+		| "acceptanceDigest"
+		| "heldoutDigest"
+		| "ciRunId"
+	>,
+	current: { currentTip?: string; currentGate?: string } = {},
 ): LandCheck {
 	const { patchDigest, verdict } = run;
 
@@ -133,6 +151,25 @@ export function checkLandPrecondition(
 	if (!verdictPasses(verdict)) {
 		return { kind: "blocked", reason: "verdict_failed" };
 	}
+
+	if (
+		verdict.acceptanceDigest !== run.acceptanceDigest ||
+		verdict.heldoutDigest !== run.heldoutDigest
+	)
+		return { kind: "blocked", reason: "acceptance_mismatch" };
+
+	if (
+		verdict.candidateSha !== run.candidateSha ||
+		verdict.ciRunId !== run.ciRunId ||
+		current.currentTip !== verdict.candidateSha
+	)
+		return { kind: "blocked", reason: "stale_candidate" };
+
+	if (
+		verdict.gateSha !== run.gateSha ||
+		current.currentGate !== verdict.gateSha
+	)
+		return { kind: "blocked", reason: "stale_gate" };
 
 	return { kind: "ready" };
 }

@@ -1,0 +1,108 @@
+{
+  "head": "43c2f8d792f68eaafbdf2eab34ab245ea54d61bc",
+  "collection": {
+    "result": "PASS",
+    "modelRequests": 0,
+    "verdict": {
+      "patchDigest": "008e08aa869408cab71b5944f868b35b918ac66c06f9d053da1650177d8498d6",
+      "acceptanceDigest": "350cd28227d94cc040eb36c00025a33d73418b3982be563705259ce2f9acb7ad",
+      "heldoutDigest": "122884853e5d299528eee666b8768eef815d26d50cc8c5d635be0a04cc515155",
+      "candidateSha": "1e3b761caa27c370afe5b447bfca925c6703e7c1",
+      "gateSha": "37dce5f4da727a5a47cd017c0c8c9d74c7272257",
+      "ciRunId": 41158101470,
+      "originalBase": "37dce5f4da727a5a47cd017c0c8c9d74c7272257",
+      "baseSha": "37dce5f4da727a5a47cd017c0c8c9d74c7272257",
+      "pass": true,
+      "checks": [
+        {
+          "name": "install",
+          "passed": true
+        },
+        {
+          "name": "baseline_tests",
+          "passed": true
+        },
+        {
+          "name": "typecheck",
+          "passed": true
+        },
+        {
+          "name": "lint",
+          "passed": true
+        },
+        {
+          "name": "format",
+          "passed": true
+        },
+        {
+          "name": "main_tests",
+          "passed": true
+        },
+        {
+          "name": "candidate_tests",
+          "passed": true
+        },
+        {
+          "name": "heldout",
+          "passed": true
+        }
+      ],
+      "requiredChecks": [
+        "install",
+        "baseline_tests",
+        "typecheck",
+        "lint",
+        "format",
+        "main_tests",
+        "candidate_tests",
+        "heldout"
+      ],
+      "unjudged": [
+        "S5"
+      ]
+    }
+  },
+  "repair": {
+    "freshInstall": 0,
+    "npmControl": 0,
+    "files": 21731,
+    "canaryHits": 0,
+    "bodyHits": 0,
+    "gitEntries": 0,
+    "acceptancePresent": false,
+    "feedbackMatches": true,
+    "npmGithub": [
+      1,
+      1,
+      1
+    ],
+    "direct": "denied",
+    "gateway": 403,
+    "hostedTools": 403,
+    "bundle": "6f13f4c51a8ff5f701d45794afab7d1cb8b065adf1c3c6e54bed30d343e8f661",
+    "runId": "1f15c077df80bee0ab52309e7694eaddaa2493465a064c7dc9c4116d9c2fbe50",
+    "candidateSha": "1e3b761caa27c370afe5b447bfca925c6703e7c1",
+    "acceptanceDigest": "350cd28227d94cc040eb36c00025a33d73418b3982be563705259ce2f9acb7ad",
+    "modelRequests": 0,
+    "exit": 0,
+    "result": "PASS"
+  },
+  "terminalTick": {
+    "active": 0,
+    "runs": [],
+    "totals": {
+      "claims": 0,
+      "launches": 0,
+      "retries": 0,
+      "stalls": 0,
+      "releases": 0,
+      "failures": 0,
+      "markersPosted": 0,
+      "usage": 0
+    }
+  },
+  "cleanup": {
+    "branch": "factory/run/510-1f15c077df80-r0",
+    "candidateSha": "1e3b761caa27c370afe5b447bfca925c6703e7c1"
+  }
+}

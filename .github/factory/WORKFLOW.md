@@ -41,9 +41,8 @@ stages:
     wall_ms: 1800000
     stall_ms: 300000
   validate:
-    model: openai/gpt-6.1-sol
-    max_turns: 10
-    wall_ms: 1800000
+    max_turns: 1
+    wall_ms: 1200000
     stall_ms: 300000
   review:
     model: openai/gpt-6.1-sol
@@ -83,7 +82,7 @@ Follow `.oxlintrc.json`: no `typeof` narrowing, no `unknown` parameters or retur
 
 ## validate
 
-Judge only the criteria a test cannot express, and quote the contract line for each verdict.
+The controller publishes the patch and held-out checks, dispatches main's gates for the exact candidate SHA, and waits without model access or a concurrency slot. Missing, stale or incomplete results fail closed. Judge-only criteria remain unjudged until review.
 
 ## review
 

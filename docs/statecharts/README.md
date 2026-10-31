@@ -33,7 +33,9 @@ stateDiagram-v2
     s3: Writing the contract
     s4: Writing hidden acceptance tests
     s5: Building the patch
+    s14: Publishing patch and held-out checks
     s6: CI runs main's gates and the hidden tests
+    s15: Storing the bound CI verdict
     s7: Reviewing the patch
     s8: PR waits for your review
     s9: Still working on a PR you already merged
@@ -48,9 +50,11 @@ stateDiagram-v2
   s3 --> s4: contract written
   s3 --> s12: ticket too vague, questions posted
   s4 --> s5: hidden tests kept on the VM
-  s5 --> s6: patch ready
+  s5 --> s14: patch ready
+  s14 --> s6: two commits published, CI dispatched
   s6 --> s5: a check fails [under 2 repair rounds used]
-  s6 --> s7: every check passes on that exact patch
+  s6 --> s15: every check passes on that exact patch
+  s15 --> s7: verdict stored
   s7 --> s5: blocking findings [under 2 repair rounds used]
   s7 --> s8: no blocking findings, PR marked ready
   s8 --> s10: you close the PR without merging
@@ -115,84 +119,7 @@ The chart hides some arrows to stay readable. "You merge the PR" is drawn only f
 
 ## What the controller does with one run today
 
-Blue is waiting for admission, teal holds a claim, orange is a controller restart and recovery, and tan has ended.
-
-```mermaid
-stateDiagram-v2
-  state "Legend" as legend {
-    lg0: waiting
-    lg1: held
-    lg2: restart
-    lg3: ended
-  }
-  class lg0 blue
-  class lg1 teal
-  class lg2 orange
-  class lg3 tan
-  s0: Seen with the ready label
-  s1: Label removed, nothing running
-  state "Holding a claim" as s2 {
-    s3: Claimed, marker posted on the issue
-    s4: Stage running in the sandbox
-    s5: Sandbox down, slot kept
-    s6: Waiting to retry
-  }
-  s7: Controller restarting
-  s8: Stopping the aborted stage
-  s9: Released
-  s10: Token budget spent
-  s11: Failed
-  s12: Stage passed, run stops here for now
-  s13: Run reserved, waiting to be adopted
-  [*] --> s0
-  s0 --> s1: label removed or issue closed
-  s0 --> s3: admitted
-  s3 --> s4: the sandbox launches the stage
-  s3 --> s9: label removed or issue closed
-  s3 --> s5: the sandbox check fails
-  s7 --> s13: the controller reserves the run from its claim file
-  s4 --> s8: stage stalls [no attempts or tokens left] or label removed or issue closed
-  s4 --> s10: stage fails [token cap reached]
-  s4 --> s11: stage refuses or stage fails [no attempts left]
-  s4 --> s12: stage passes
-  s4 --> s6: stage fails or stalls [attempts and tokens left]
-  s8 --> s7: the controller restarts
-  s13 --> s3: the controller adopts the run from its marker
-  s6 --> s4: backoff ends
-  s8 --> s10: the aborted sandbox stops
-  s5 --> s9: label removed or issue closed
-  s13 --> s9: the controller finds the label gone
-  s6 --> s9: label removed or issue closed
-  s5 --> s4: the sandbox launches the stage
-  s13 --> s6: the controller adopts the run from its marker
-  s6 --> s5: the sandbox check fails
-  s6 --> s8: label removed or issue closed
-  s13 --> s5: the controller adopts the run from its marker
-  s8 --> s9: the aborted sandbox stops
-  s8 --> s11: the aborted sandbox stops
-  s13 --> s11: the controller ends the interrupted attempt [no attempts left]
-  s2 --> s7: the controller restarts
-  class s0 blue
-  class s1 blue
-  class s3 teal
-  class s4 teal
-  class s5 teal
-  class s6 teal
-  class s7 orange
-  class s8 teal
-  class s9 tan
-  class s10 tan
-  class s11 tan
-  class s12 tan
-  class s13 orange
-  classDef blue fill:#c3e0ff
-  classDef teal fill:#bfe3df
-  classDef orange fill:#ffd8b0
-  classDef tan fill:#eadfcb
-  classDef yellow fill:#fff0a8
-  classDef purple fill:#e2d4f5
-  classDef bugPath stroke:#e72e3b,stroke-width:2px
-```
+The generated Mermaid diagram is [`controller/chart.mmd`](controller/chart.mmd). Blue is waiting for admission, teal holds a claim and tan has ended. Terminal states distinguish a pending branch deletion from an absent branch.
 
 Rules checked (`controller/Controller.cfg`, which also allows a re-label):
 
@@ -204,19 +131,20 @@ Rules checked (`controller/Controller.cfg`, which also allows a re-label):
 | `OneLiveRun` | GitHub never shows two live runs for one issue. | holds |
 | `NotLost` | After the first tick, a live run on GitHub is held in memory or reserved for adoption. | holds |
 | `Adopted` | A reserved run is always adopted or ended later. A restart never loses it. | holds, if the reads adoption needs succeed eventually |
+| `CIEnds` | A published CI wait eventually ends and its branch is removed, even after transport failures. | holds under fair deadline, recovery and cleanup steps |
 
-The chart is drawn from `controller/Chart.cfg`, which leaves out the re-label so that the graph stays under the 500-state chart budget. `Controller.cfg` checks the same rules with the re-label, over 3,084 states.
+`controller/Chart.cfg` uses one attempt, no re-label and no restart. Its 84 states fit the renderer's 500-state budget. `Controller.cfg` checks two attempts, a re-label and one restart over 8,052 states; all eight rules hold. Publication, CI transport failures, deadlines and verdicts are represented in both. Public marker v2 reports the live CI phases as `running` at validate. Cleanup may remain pending after a terminal marker. `CIEnds` requires eventual deletion under fair successful cleanup, not deletion during a permanent GitHub outage. The model assumes the branch remains controller-owned; a moved head is deliberately preserved by the implementation.
 
 After a restart, the first tick reserves the run from its claim file, and usually adopts it from its marker in the same tick. Adoption waits for a later tick when the issue's marker comments cannot be read, or when the workflow is not loaded. It also waits when the timeline read fails for a run whose marker says running or retrying, and when no slot is free for a claimed or blocked run. Until then the run is reserved but not in memory, which `test/orchestrator.test.ts` also expects. A claimed or blocked run whose timeline read fails is adopted, but it does not relaunch until the read succeeds. The model splits reserve and adopt into two steps, so other events can happen between them, and assumes the reads succeed eventually.
 
-The chart hides the restart from states with no run, the startup reconcile retry, and the adoption steps that only end a run whose budget is spent. A restart mid-stage counts the interrupted attempt as a failed one.
+The small chart omits retries and restarts; the full model checks both. The view hides the startup reconcile retry and adoption steps that only end a run whose budget is spent. A restart mid-model-stage counts the interrupted attempt as a failed one. A restart during publication or CI waiting restores that phase without a sandbox or interrupted attempt.
 
 ## What the models leave out
 
 - One issue only, so the concurrency cap and slot sharing are not checked.
 - Admission refusals, the kill switch, and the sandbox preflight internals. Admission is covered by `test/admission.test.ts`.
 - Marker posts that fail or return no comment. The model posts every marker at once.
-- Reads that fail. A read that delays adoption or a relaunch is a wait, and the model assumes it succeeds eventually.
+- Adoption reads that fail indefinitely. CI transport failures are modeled explicitly; adoption still assumes eventual successful reads.
 - Timing. A stalled stage stops before the cleanup grace runs out, which is what the sandbox runner promises.
 - The post-v1 approval checkpoints, and the held-out suite's visibility to the builder.
 

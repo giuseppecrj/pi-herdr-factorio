@@ -55,6 +55,8 @@ import {
 import {
 	checkoutWorkspace,
 	checkoutBuildWorkspace,
+	controllerValidator,
+	sweepValidation,
 	fileRunFiles,
 	ghTarball,
 	type TarballFetch,
@@ -2224,6 +2226,17 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 	};
 
 	return {
+		validate: controllerValidator({
+			stateDir: config.stateDir,
+			exec: config.exec,
+			fetch: config.fetchTarball,
+		}),
+		cleanupValidation: () =>
+			sweepValidation({
+				stateDir: config.stateDir,
+				exec: config.exec,
+				fetch: config.fetchTarball,
+			}),
 		async recover() {
 			await reconcile(true);
 		},

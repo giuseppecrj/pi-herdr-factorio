@@ -53,7 +53,7 @@ export function isTerminal(status: RunStatus): status is TerminalStatus {
  * no title, body, comment text, label name, `gh` output or path.
  */
 export type Marker = {
-	readonly v: 1;
+	readonly v: 1 | 2;
 	readonly runId: Digest;
 	readonly repo: RepoSlug;
 	readonly issue: number;
@@ -66,7 +66,10 @@ export type Marker = {
 	readonly status: RunStatus;
 	readonly attempt: number;
 	readonly seq: number;
-	readonly branch: null;
+	readonly branch: string | null;
+	readonly candidate?: GitSha | null;
+	readonly round?: number;
+	readonly ciRun?: number | null;
 	readonly pr: null;
 	readonly usage: number;
 	readonly cursor: string | null;
@@ -91,6 +94,8 @@ const MARKER_KEYS = [
 	"usage",
 	"cursor",
 ] as const satisfies readonly (keyof Marker)[];
+
+const MARKER_V2_KEYS = [...MARKER_KEYS, "candidate", "round", "ciRun"] as const;
 
 export type MarkerDefect =
 	| "too_large"
@@ -167,7 +172,16 @@ function markerJson(marker: Marker): string {
 		cursor: marker.cursor,
 	};
 
-	return JSON.stringify(ordered)
+	return JSON.stringify(
+		marker.v === 1
+			? ordered
+			: {
+					...ordered,
+					candidate: marker.candidate ?? null,
+					round: marker.round ?? 0,
+					ciRun: marker.ciRun ?? null,
+				},
+	)
 		.replaceAll("<", "\\u003c")
 		.replaceAll(">", "\\u003e");
 }
@@ -178,7 +192,7 @@ const STATUS_TEXT: Readonly<Record<RunStatus, string>> = {
 	blocked: "blocked: the stage sandbox is unavailable",
 	retrying: "waiting to retry",
 	released: "released: the issue is no longer eligible",
-	failed: "failed: retries are exhausted",
+	failed: "failed: the stage did not pass",
 	budget_exhausted: "stopped: the run budget is spent",
 	stage_passed: "stopped: stage passed; the next stage is not installed",
 	needs_info:
@@ -222,13 +236,14 @@ function markerFields(
 
 	if (!fields.has("v")) return "missing_key";
 
-	if (fields.get("v") !== 1) return "unknown_version";
+	if (fields.get("v") !== 1 && fields.get("v") !== 2) return "unknown_version";
+	const keys = fields.get("v") === 1 ? MARKER_KEYS : MARKER_V2_KEYS;
 
 	for (const key of fields.keys()) {
-		if (!MARKER_KEYS.some((known) => known === key)) return "unknown_key";
+		if (!keys.some((known) => known === key)) return "unknown_key";
 	}
 
-	for (const key of MARKER_KEYS) {
+	for (const key of keys) {
 		if (!fields.has(key)) return "missing_key";
 	}
 
@@ -251,6 +266,32 @@ function readMarker(fields: Map<string, JsonValue>): Marker | null {
 	const usage = countOf(fields.get("usage"), 0);
 	const cursor = fields.get("cursor");
 	const cursorText = cursor === null ? null : textOf(cursor);
+
+	const branch =
+		fields.get("branch") === null ? null : textOf(fields.get("branch"));
+
+	const candidate =
+		fields.get("candidate") === null ? null : textOf(fields.get("candidate"));
+
+	const round = countOf(fields.get("round"), 0);
+
+	const ciRun =
+		fields.get("ciRun") === null ? null : countOf(fields.get("ciRun"), 1);
+
+	const v2 = fields.get("v") === 2;
+
+	if (
+		v2 &&
+		((fields.get("branch") !== null && branch === null) ||
+			(fields.get("candidate") !== null && candidate === null) ||
+			(branch !== null &&
+				!/^factory\/run\/[1-9][0-9]*-[a-f0-9]{12}-r[0-2]$/.test(branch)) ||
+			(candidate !== null && !isGitSha(candidate)) ||
+			round === null ||
+			round > 2 ||
+			(fields.get("ciRun") !== null && ciRun === null))
+	)
+		return null;
 
 	if (
 		runId === null ||
@@ -275,15 +316,33 @@ function readMarker(fields: Map<string, JsonValue>): Marker | null {
 		attempt === null ||
 		seq === null ||
 		usage === null ||
-		fields.get("branch") !== null ||
+		(!v2 && fields.get("branch") !== null) ||
 		fields.get("pr") !== null ||
 		(cursor !== null && (cursorText === null || !CURSOR.test(cursorText)))
 	) {
 		return null;
 	}
 
+	if (
+		v2 &&
+		((branch === null) !== (candidate === null) ||
+			(branch !== null &&
+				branch !== `factory/run/${issue}-${runId.slice(0, 12)}-r${round}`) ||
+			(ciRun !== null && candidate === null))
+	)
+		return null;
+
+	const extensions = v2
+		? {
+				candidate: candidate !== null && isGitSha(candidate) ? candidate : null,
+				round: round ?? 0,
+				ciRun,
+			}
+		: {};
+
 	return {
-		v: 1,
+		v: v2 ? 2 : 1,
+		...extensions,
 		runId,
 		repo,
 		issue,
@@ -296,7 +355,7 @@ function readMarker(fields: Map<string, JsonValue>): Marker | null {
 		status,
 		attempt,
 		seq,
-		branch: null,
+		branch,
 		pr: null,
 		usage,
 		cursor: cursorText,

@@ -1,0 +1,87 @@
+{
+  "codeHead": "c77ccbcd0d21a982373e49e590ffb4de0a4b54af",
+  "verifiedAt": "2026-10-31T04:34:47Z",
+  "repository": "giuseppecrj/pi-herdr-factorio",
+  "fixture": "https://github.com/giuseppecrj/pi-herdr-factorio/issues/512",
+  "fixtureState": "CLOSED",
+  "ciRun": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41162880105",
+  "copiedStateReplay": true,
+  "staleCrash": {
+    "crashExit": 137,
+    "verdictWrittenByRealCollector": true,
+    "certifiedCandidate": "ba08aa829d12e8b757e78b2bea761c7757853f22",
+    "movedHead": "ac2f5421ae3c0b06c4c88aaa863915e6f0a42d69",
+    "moveOperations": ["delete fixture ref", "recreate fixture ref at real child commit"],
+    "restartStatus": "failed",
+    "reason": "branch_moved",
+    "movedHeadPreserved": true,
+    "usageUnchanged": 85715
+  },
+  "transport": {
+    "surface": "real CLI tick --once with a PATH gh fault wrapper",
+    "originalDeadlineAlreadyExpired": true,
+    "injectedRefReadFailures": 3,
+    "injectedDeleteFailures": 3,
+    "firstTickStatus": "failed",
+    "reason": "ci_timeout",
+    "firstTickPendingDeletion": true,
+    "nextTickSweepDeletedBranch": true,
+    "finalRefStatus": 404
+  },
+  "repairProbe": {
+    "result": "PASS",
+    "filesScanned": 21731,
+    "canaryHits": 0,
+    "bodyHits": 0,
+    "gitEntries": 0,
+    "acceptancePresent": false,
+    "freshInstallExit": 0,
+    "npmControlExit": 0,
+    "npmGitHubExits": [1, 1, 1],
+    "directGitHub": "denied",
+    "gatewayGitHubStatus": 403,
+    "hostedToolStatus": 403,
+    "controls": [
+      {"name": "canaried file", "exit": 1, "bodyHits": 1, "canaryHits": 1},
+      {"name": "canary-stripped file", "exit": 1, "bodyHits": 1, "canaryHits": 0}
+    ]
+  },
+  "modelUse": {
+    "newTokens": 0,
+    "newStageSessions": 0,
+    "copiedStageInventoriesUnchanged": true,
+    "probeModelRequests": 0,
+    "freshDispatches": 0
+  },
+  "regressions": {
+    "baseline": "38c39385c9e3d84321a09fbbe3884e7ef92a6dfb",
+    "baselineTests": 465,
+    "baselinePassed": 439,
+    "baselineFailed": 26,
+    "headCheckTests": 1170,
+    "headCheckFailed": 0,
+    "survivingAuditMutationsKilled": 24,
+    "redundantAuditMutations": ["verdict-exactly-once", "save-before-post"],
+    "combinedMissingPrePostSavesKilled": true
+  },
+  "statecharts": {
+    "controllerChartStates": 84,
+    "controllerFullStates": 8052,
+    "controllerRulesHeld": ["OneSandboxPerIssue", "EndedStaysEnded", "AttemptCap", "OneLiveRun", "NotLost", "NoDeadlock", "Adopted", "CIEnds"],
+    "journeyStates": 135,
+    "journeyKnownF10Failure": "MergeEndsRun"
+  },
+  "cleanup": {
+    "factoryRefs": [],
+    "disposableLaneRemoved": true,
+    "ownedProcessesRemaining": 0,
+    "originalPrivateArchivePreserved": true,
+    "fixRoundPrivateArchiveRetainedOnVm": true
+  },
+  "limitations": [
+    "Copied-state replays, not fresh admissions; crash replay sequence and deadline were adjusted.",
+    "Two single-line mutations are redundant with other guards; combined save removal is detected.",
+    "CIEnds assumes eventual successful guarded cleanup and does not delete an externally moved head.",
+    "Independent review, convergence verdict and merge remain coordinator work."
+  ]
+}

@@ -9,7 +9,7 @@ VARIABLES phase, repairs, builds, patch, verdictFor, verdictPass, prOpen, merged
 
 vars == <<phase, repairs, builds, patch, verdictFor, verdictPass, prOpen, merged>>
 
-Active == {"admit", "specify", "accept", "build", "validate", "review", "land"}
+Active == {"admit", "specify", "accept", "build", "publishing", "awaiting_ci", "verdict", "review", "land"}
 Finished == {"landed", "needs_info", "rejected", "failed", "budget", "cancelled"}
 
 Init ==
@@ -54,17 +54,25 @@ Accepted ==
     /\ UNCHANGED <<repairs, builds, patch, verdictFor, verdictPass, prOpen, merged>>
 
 Built ==
-    /\ phase = "build" /\ phase' = "validate"
+    /\ phase = "build" /\ phase' = "publishing"
     /\ builds' = builds + 1
     /\ patch' = builds + 1
     /\ UNCHANGED <<repairs, verdictFor, verdictPass, prOpen, merged>>
 
+Published ==
+    /\ phase = "publishing" /\ phase' = "awaiting_ci"
+    /\ UNCHANGED <<repairs, builds, patch, verdictFor, verdictPass, prOpen, merged>>
+
 ChecksPass ==
-    /\ phase = "validate" /\ phase' = "review"
+    /\ phase = "awaiting_ci" /\ phase' = "verdict"
     /\ verdictFor' = patch /\ verdictPass' = TRUE
     /\ UNCHANGED <<repairs, builds, patch, prOpen, merged>>
 
-ChecksFail == phase = "validate" /\ RepairOrFail
+VerdictStored ==
+    /\ phase = "verdict" /\ LandOK /\ phase' = "review"
+    /\ UNCHANGED <<repairs, builds, patch, verdictFor, verdictPass, prOpen, merged>>
+
+ChecksFail == phase = "awaiting_ci" /\ RepairOrFail
 
 ReviewClean ==
     /\ phase = "review" /\ phase' = "land"
@@ -103,7 +111,7 @@ Done == phase \in Finished /\ UNCHANGED vars
 
 Next ==
     \/ Admitted \/ AdmitRefuses \/ Specified \/ TooVague \/ Accepted \/ Built
-    \/ ChecksPass \/ ChecksFail \/ ReviewClean \/ ReviewBlocks
+    \/ Published \/ ChecksPass \/ ChecksFail \/ VerdictStored \/ ReviewClean \/ ReviewBlocks
     \/ YouComment \/ YouMerge \/ YouClosePR
     \/ StageFails \/ BudgetSpent \/ PolicyStops \/ LabelRemoved
     \/ Done

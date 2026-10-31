@@ -765,6 +765,86 @@ export async function patchedTree(
 		throw new Error("malformed_patch");
 }
 
+export async function publicationTree(
+	base: string,
+	dest: string,
+	patch: string | Uint8Array,
+	changedPaths: readonly string[],
+) {
+	if (checkChangedPaths({ changedPaths }).kind !== "clean")
+		throw new Error("forbidden_paths");
+	materialize(dest, tree(base));
+
+	if (patch.length > 0) {
+		const applied = await gitCommand(
+			["apply", "--binary", "--whitespace=nowarn", "-"],
+			dest,
+			patch,
+		);
+
+		if (applied.code !== 0) throw new Error("stale_base");
+	}
+
+	const collected = await collectPatch({
+		base,
+		workspace: dest,
+		allowNoChange: true,
+	});
+
+	if (
+		collected.kind !== "collected" ||
+		collected.policy !== "clean" ||
+		collected.changedPaths.some((path) => !changedPaths.includes(path))
+	)
+		throw new Error("patch_invalid");
+	const entries = tree(dest);
+
+	if ([...entries.values()].some((entry) => entry.mode === 0o120000))
+		throw new Error("unsafe_symlink");
+
+	return changedPaths.map((path) => {
+		const entry = entries.get(path);
+
+		const mode =
+			entry?.mode === 0o120000
+				? "120000"
+				: entry?.mode === 0o100755
+					? "100755"
+					: "100644";
+
+		return { path, mode, bytes: entry?.data ?? null } as const;
+	});
+}
+
+export async function prepareRepairTree(
+	base: string,
+	dest: string,
+	patch: string | Uint8Array,
+	changedPaths: readonly string[],
+	feedback: string,
+): Promise<void> {
+	await publicationTree(base, dest, patch, changedPaths);
+
+	for (const name of readdirSync(dest)) {
+		if (name.toLowerCase() === ".git" || name.toLowerCase() === "node_modules")
+			rmSync(join(dest, name), { recursive: true, force: true });
+	}
+
+	for (const tests of readdirSync(dest)) {
+		if (tests.toLowerCase() !== "test") continue;
+
+		for (const name of readdirSync(join(dest, tests))) {
+			if (name.toLowerCase() === "acceptance")
+				rmSync(join(dest, tests, name), { recursive: true, force: true });
+		}
+	}
+
+	writeFileSync(join(dest, ".factory-feedback.json"), feedback, {
+		flag: "wx",
+		mode: 0o600,
+	});
+}
+
 export function commandReceipts(session: string): CommandReceipt[] {
 	const calls = new Map<string, string>();
 	const results: CommandReceipt[] = [];

@@ -78,7 +78,7 @@ leftover=$(pgrep -u exedev -f 'bwrap|gateway-main|herdr --session factory' | wc 
   if [ "$mode" = unavailable ]; then
     echo "expected=exit 0; a bwrap that exits 1 fails the preflight: sandbox_preflight ok=false failed=bwrap, executionEnabled=false, the run blocked at specify, no receipt, no model call"
   else
-    echo "expected=exit 0; with the preflight passing, markers claimed, running, then stage_passed with a contract summary or needs_info with a questions comment in this one tick, one receipt with outcome=passed, settlement agent_settled aborted=false, assets equal to the bundle digest, model egress forwarded, stderr byte counts only; no stage scope or sandbox process left"
+    echo "expected=exit 0; model ticks leave build claimed, validate running, needs_info, or a typed failure; validate ticks publish and wait without model usage, then store a bound verdict and end stage_passed or failed; model receipts match bundle and usage; no stage scope or sandbox process left"
   fi
   echo "command=${cmd[*]} exit=$rc ms=$ms"
   echo "$runs"

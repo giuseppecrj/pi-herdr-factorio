@@ -10,7 +10,13 @@ import {
 	READY_LABEL,
 	REPO_SWITCH_LABEL,
 } from "../src/policy.ts";
-import { failingVerdict, passingVerdict, patch } from "./helpers.ts";
+import {
+	failingVerdict,
+	passingVerdict,
+	patch,
+	ciBinding,
+	currentHead,
+} from "./helpers.ts";
 
 describe("admission", () => {
 	it("admits the ready label from admin, maintain and write", () => {
@@ -186,13 +192,30 @@ describe("forbidden paths", () => {
 	});
 });
 
+it("reserves the controller-owned repair feedback filename", () => {
+	for (const path of [
+		".factory-feedback.json",
+		"./.factory-feedback.json",
+		".FACTORY-FEEDBACK.JSON",
+	])
+		assert.equal(checkChangedPaths({ changedPaths: [path] }).kind, "forbidden");
+	assert.equal(
+		checkChangedPaths({ changedPaths: ["src/feedback.json"] }).kind,
+		"clean",
+	);
+});
+
 describe("land precondition", () => {
 	it("is ready when the passing verdict is bound to the run's patch", () => {
 		assert.deepEqual(
-			checkLandPrecondition({
-				patchDigest: patch("a"),
-				verdict: passingVerdict(patch("a")),
-			}),
+			checkLandPrecondition(
+				{
+					...ciBinding,
+					patchDigest: patch("a"),
+					verdict: passingVerdict(patch("a")),
+				},
+				currentHead,
+			),
 			{ kind: "ready" },
 		);
 	});
@@ -224,6 +247,63 @@ describe("land precondition", () => {
 				verdict: { ...failingVerdict(patch("a")), pass: true },
 			}),
 			{ kind: "blocked", reason: "verdict_failed" },
+		);
+	});
+
+	it("does not certify a different candidate, gate or acceptance suite with the same patch", () => {
+		const bound = {
+			...ciBinding,
+			patchDigest: patch("a"),
+			verdict: passingVerdict(patch("a")),
+		};
+
+		assert.deepEqual(
+			checkLandPrecondition(bound, {
+				...currentHead,
+				currentTip: "d".repeat(40),
+			}),
+			{ kind: "blocked", reason: "stale_candidate" },
+		);
+		assert.deepEqual(
+			checkLandPrecondition(bound, {
+				...currentHead,
+				currentGate: "d".repeat(40),
+			}),
+			{ kind: "blocked", reason: "stale_gate" },
+		);
+		assert.deepEqual(
+			checkLandPrecondition(
+				{ ...bound, candidateSha: "d".repeat(40) },
+				currentHead,
+			),
+			{ kind: "blocked", reason: "stale_candidate" },
+		);
+		assert.deepEqual(
+			checkLandPrecondition(
+				{ ...bound, acceptanceDigest: patch("other suite") },
+				currentHead,
+			),
+			{ kind: "blocked", reason: "acceptance_mismatch" },
+		);
+	});
+
+	it("binds held-out digest and CI run independently of the candidate", () => {
+		const bound = {
+			...ciBinding,
+			patchDigest: patch("a"),
+			verdict: passingVerdict(patch("a")),
+		};
+
+		assert.deepEqual(
+			checkLandPrecondition(
+				{ ...bound, heldoutDigest: patch("other") },
+				currentHead,
+			),
+			{ kind: "blocked", reason: "acceptance_mismatch" },
+		);
+		assert.deepEqual(
+			checkLandPrecondition({ ...bound, ciRunId: 124 }, currentHead),
+			{ kind: "blocked", reason: "stale_candidate" },
 		);
 	});
 

@@ -11,6 +11,8 @@ import {
 } from "../src/stages.ts";
 import {
 	acceptanceDigest,
+	candidateEvent,
+	currentHead,
 	apply,
 	contractDigest,
 	failingVerdict,
@@ -95,7 +97,13 @@ describe("advance: forward path", () => {
 		const build = apply(accept, { kind: "accepted", acceptanceDigest });
 		assert.equal(stageOf(build), "build");
 		assert.equal(build.acceptanceDigest, acceptanceDigest);
-		const validate = apply(build, { kind: "built", patchDigest: patch("a") });
+
+		const validate = apply(
+			build,
+			{ kind: "built", patchDigest: patch("a") },
+			candidateEvent,
+		);
+
 		assert.equal(stageOf(validate), "validate");
 		assert.equal(validate.patchDigest, patch("a"));
 
@@ -108,7 +116,13 @@ describe("advance: forward path", () => {
 		assert.equal(review.verdict?.pass, true);
 		const land = apply(review, { kind: "reviewed", blockingFindings: [] });
 		assert.equal(stageOf(land), "land");
-		const done = apply(land, { kind: "landed", mergeSha: "b".repeat(40) });
+
+		const done = apply(land, {
+			kind: "landed",
+			mergeSha: "b".repeat(40),
+			...currentHead,
+		});
+
 		assert.deepEqual(done.progress, {
 			kind: "finished",
 			outcome: { kind: "landed", mergeSha: "b".repeat(40) },
@@ -186,13 +200,57 @@ describe("advance: validate failure and bounded repair", () => {
 		assert.equal(run.verdict, undefined);
 		assert.equal(run.contractDigest, contractDigest);
 		assert.equal(run.acceptanceDigest, acceptanceDigest);
+		assert.equal(run.candidateSha, undefined);
+		assert.equal(run.gateSha, undefined);
+		assert.equal(run.ciRunId, undefined);
+		assert.equal(run.heldoutDigest, undefined);
 	});
+
+	it("clears the previously validated gate on review repair", () => {
+		const reviewed = reachReview("first");
+
+		assert.equal(reviewed.gateSha, currentHead.currentGate);
+
+		const repaired = apply(reviewed, {
+			kind: "reviewed",
+			blockingFindings: ["repair"],
+		});
+
+		assert.equal(repaired.gateSha, undefined);
+	});
+
+	it("rejects a passing verdict for another head with the same patch", () => {
+		const verdict = {
+			...passingVerdict(patch("first")),
+			candidateSha: "d".repeat(40),
+		};
+
+		assert.deepEqual(
+			advance(reachValidate("first"), { kind: "validated", verdict }),
+			{ kind: "invalid", reason: "verdict is bound to different CI inputs" },
+		);
+	});
+
+	for (const change of [
+		{ ciRunId: 124 },
+		{ acceptanceDigest: patch("other suite") },
+	])
+		it(`rejects independently mismatched validate input ${JSON.stringify(change)}`, () => {
+			assert.deepEqual(
+				advance(reachValidate("first"), {
+					kind: "validated",
+					verdict: { ...passingVerdict(patch("first")), ...change },
+				}),
+				{ kind: "invalid", reason: "verdict is bound to different CI inputs" },
+			);
+		});
 
 	it("lets a repaired patch pass validate and continue", () => {
 		const repaired = apply(
 			reachValidate("first"),
 			{ kind: "validated", verdict: failingVerdict(patch("first")) },
 			{ kind: "built", patchDigest: patch("second") },
+			candidateEvent,
 			{ kind: "validated", verdict: passingVerdict(patch("second")) },
 		);
 
@@ -210,6 +268,7 @@ describe("advance: validate failure and bounded repair", () => {
 				run,
 				{ kind: "validated", verdict: failingVerdict(patch(`p${round - 1}`)) },
 				{ kind: "built", patchDigest: patch(`p${round}`) },
+				candidateEvent,
 			);
 			assert.equal(run.repairRounds, round);
 			assert.equal(stageOf(run), "validate");
@@ -225,7 +284,7 @@ describe("advance: validate failure and bounded repair", () => {
 			outcome: {
 				kind: "failed",
 				stage: "validate",
-				evidence: "failed checks: acceptance",
+				evidence: "failed checks: heldout",
 			},
 		});
 		assert.equal(done.repairRounds, MAX_REPAIR_ROUNDS);
@@ -273,9 +332,11 @@ describe("advance: review", () => {
 			run,
 			{ kind: "validated", verdict: failingVerdict(patch("p0")) },
 			{ kind: "built", patchDigest: patch("p1") },
+			candidateEvent,
 			{ kind: "validated", verdict: passingVerdict(patch("p1")) },
 			{ kind: "reviewed", blockingFindings: ["a"] },
 			{ kind: "built", patchDigest: patch("p2") },
+			candidateEvent,
 			{ kind: "validated", verdict: passingVerdict(patch("p2")) },
 		);
 		assert.equal(run.repairRounds, 2);
@@ -313,6 +374,7 @@ describe("advance: land", () => {
 		const done = apply(reachLand(), {
 			kind: "landed",
 			mergeSha: "c".repeat(40),
+			...currentHead,
 		});
 
 		assert.equal(done.progress.kind, "finished");
@@ -329,6 +391,7 @@ describe("advance: land", () => {
 		const result = advance(tampered, {
 			kind: "landed",
 			mergeSha: "d".repeat(40),
+			...currentHead,
 		});
 
 		assert.deepEqual(result, {
