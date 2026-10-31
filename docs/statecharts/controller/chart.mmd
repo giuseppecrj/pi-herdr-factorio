@@ -13,66 +13,90 @@ stateDiagram-v2
   s0: Seen with the ready label
   s1: Label removed, nothing running
   state "Holding a claim" as s2 {
-    s3: Claimed, marker posted on the issue
-    s4: Stage running in the sandbox
-    s5: Sandbox down, slot kept
-    s6: Publishing patch and held-out checks
-    s7: Waiting for CI without a slot or model
-    s8: CI deadline expired
-    s9: CI transport unavailable, deadline still runs
-    s10: Storing a failed verdict
-    s11: Storing a passing bound verdict
+    s3: Build and CI: Claimed, marker posted on the issue
+    s4: Build and CI: Stage running in the sandbox
+    s5: Build and CI: Sandbox down, slot kept
+    s6: Build and CI: Publishing patch and held-out checks
+    s7: Build and CI: Waiting for CI without a slot or model
+    s8: Build and CI: CI deadline expired
+    s9: Build and CI: CI transport unavailable, deadline still runs
+    s10: Build and CI: Storing a failed verdict
+    s11: Build and CI: Storing a passing bound verdict
+    s12: Review: Claimed, marker posted on the issue
+    s13: Review: Stage running in the sandbox
+    s14: Review: Sandbox down, slot kept
   }
-  s12: Stopping the aborted stage
-  state "Released" as s13 {
-    s14: Branch absent
-    s15: Branch deletion pending
-  }
-  state "Token budget spent" as s16 {
+  s15: Stopping the aborted stage
+  state "Released" as s16 {
     s17: Branch absent
+    s18: Branch deletion pending
   }
-  state "Failed" as s18 {
-    s19: Branch absent
-    s20: Branch deletion pending
+  state "Token budget spent" as s19 {
+    s20: Branch absent
+    s21: Branch deletion pending
   }
-  state "Stage passed, run stops here for now" as s21 {
-    s22: Branch deletion pending
+  state "Failed" as s22 {
     s23: Branch absent
+    s24: Branch deletion pending
+  }
+  state "Review clean, run stops before handoff" as s25 {
+    s26: Branch deletion pending
+    s27: Branch absent
   }
   [*] --> s0
   s0 --> s1: label removed or issue closed
   s0 --> s3: admitted
   s3 --> s4: the sandbox launches the stage
-  s3 --> s14: label removed or issue closed
+  s3 --> s17: label removed or issue closed
   s3 --> s5: the sandbox check fails
-  s4 --> s12: stage stalls [no attempts or tokens left] or label removed or issue closed
-  s4 --> s17: stage fails [token cap reached]
-  s4 --> s19: stage fails [no attempts left] or stage refuses
+  s4 --> s15: stage stalls [no attempts or tokens left] or label removed or issue closed
+  s4 --> s20: stage fails [token cap reached]
+  s4 --> s23: stage fails [no attempts left] or stage refuses
   s4 --> s6: build passes, sandbox stops
   s6 --> s7: two commits published, CI dispatched
   s7 --> s8: 20-minute deadline expires
   s7 --> s9: transport retries exhausted this tick
   s7 --> s10: CI completes
   s7 --> s11: CI completes
-  s12 --> s17: the aborted sandbox stops
-  s12 --> s19: the aborted sandbox stops
-  s5 --> s14: label removed or issue closed
-  s6 --> s14: label removed or issue closed
+  s15 --> s20: the aborted sandbox stops
+  s15 --> s23: the aborted sandbox stops
+  s5 --> s17: label removed or issue closed
+  s6 --> s17: label removed or issue closed
   s5 --> s4: the sandbox launches the stage
-  s7 --> s15: label removed or issue closed
-  s8 --> s20: terminal evidence stored, run ends
+  s7 --> s18: label removed or issue closed
+  s8 --> s24: CI ends failed
   s9 --> s7: next tick retries transport afresh
   s9 --> s8: 20-minute deadline expires
-  s10 --> s20: terminal evidence stored, run ends
-  s11 --> s22: terminal evidence stored, run ends
-  s12 --> s14: the aborted sandbox stops
-  s8 --> s15: label removed or issue closed
-  s9 --> s15: label removed or issue closed
-  s15 --> s14: guarded branch deletion succeeds
-  s10 --> s15: label removed or issue closed
-  s11 --> s15: label removed or issue closed
-  s20 --> s19: guarded branch deletion succeeds
-  s22 --> s23: guarded branch deletion succeeds
+  s10 --> s3: failed CI starts a repair [rounds left]
+  s11 --> s12: passing CI claims review
+  s15 --> s17: the aborted sandbox stops
+  s8 --> s18: label removed or issue closed
+  s9 --> s18: label removed or issue closed
+  s18 --> s17: guarded branch deletion succeeds
+  s10 --> s18: label removed or issue closed
+  s11 --> s18: label removed or issue closed
+  s24 --> s23: guarded branch deletion succeeds
+  s12 --> s13: the sandbox launches the stage
+  s3 --> s18: label removed or issue closed
+  s12 --> s18: label removed or issue closed
+  s12 --> s14: the sandbox check fails
+  s4 --> s21: stage fails [token cap reached]
+  s4 --> s24: stage fails [no attempts left] or stage refuses
+  s13 --> s3: blocking review starts a repair [rounds left]
+  s13 --> s15: stage stalls [no attempts or tokens left] or label removed or issue closed
+  s13 --> s21: stage fails [token cap reached]
+  s13 --> s24: stage fails [no attempts left] or stage refuses or blocking review [two repairs used]
+  s13 --> s26: clean review, stop before handoff
+  s21 --> s20: guarded branch deletion succeeds
+  s26 --> s27: guarded branch deletion succeeds
+  s15 --> s21: the aborted sandbox stops
+  s15 --> s24: the aborted sandbox stops
+  s5 --> s18: label removed or issue closed
+  s6 --> s18: label removed or issue closed
+  s14 --> s18: label removed or issue closed
+  s14 --> s13: the sandbox launches the stage
+  s15 --> s18: the aborted sandbox stops
+  s10 --> s24: CI ends failed
   class s0 blue
   class s1 blue
   class s3 teal
@@ -85,10 +109,14 @@ stateDiagram-v2
   class s10 teal
   class s11 teal
   class s12 teal
-  class s14 tan
-  class s15 tan
+  class s13 teal
+  class s14 teal
+  class s15 teal
   class s17 tan
-  class s19 tan
+  class s18 tan
   class s20 tan
-  class s22 tan
+  class s21 tan
   class s23 tan
+  class s24 tan
+  class s26 tan
+  class s27 tan

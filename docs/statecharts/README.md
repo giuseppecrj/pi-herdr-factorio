@@ -82,7 +82,7 @@ stateDiagram-v2
   class s5 bugPath
   class s6 purple
   class s6 bugPath
-  class s7 purple
+  class s7 yellow
   class s7 bugPath
   class s8 purple
   class s8 bugPath
@@ -119,7 +119,7 @@ The chart hides some arrows to stay readable. "You merge the PR" is drawn only f
 
 ## What the controller does with one run today
 
-The generated Mermaid diagram is [`controller/chart.mmd`](controller/chart.mmd). Blue is waiting for admission, teal holds a claim and tan has ended. Terminal states distinguish a pending branch deletion from an absent branch.
+The generated Mermaid diagram is [`controller/chart.mmd`](controller/chart.mmd). Blue is waiting for admission, teal holds a claim and tan has ended. Build and review are distinct states. Passing CI claims review; complete failed CI and blocking review share two repair rounds. Clean review stops before F09a handoff. Terminal states distinguish pending branch deletion from an absent branch.
 
 Rules checked (`controller/Controller.cfg`, which also allows a re-label):
 
@@ -127,13 +127,13 @@ Rules checked (`controller/Controller.cfg`, which also allows a re-label):
 | --- | --- | --- |
 | `OneSandboxPerIssue` | Two sandboxes never run a stage for one issue at the same time, even across a restart. | holds |
 | `EndedStaysEnded` | A run that ended never launches a stage again. | holds |
-| `AttemptCap` | A run never gets more attempts at a stage than the workflow allows. | holds |
+| `AttemptCap` | Stage attempts obey the workflow cap and the shared repair counter never exceeds two. | holds |
 | `OneLiveRun` | GitHub never shows two live runs for one issue. | holds |
 | `NotLost` | After the first tick, a live run on GitHub is held in memory or reserved for adoption. | holds |
 | `Adopted` | A reserved run is always adopted or ended later. A restart never loses it. | holds, if the reads adoption needs succeed eventually |
 | `CIEnds` | A published CI wait eventually ends and its branch is removed, even after transport failures. | holds under fair deadline, recovery and cleanup steps |
 
-`controller/Chart.cfg` uses one attempt, no re-label and no restart. Its 84 states fit the renderer's 500-state budget. `Controller.cfg` checks two attempts, a re-label and one restart over 8,052 states; all eight rules hold. Publication, CI transport failures, deadlines and verdicts are represented in both. Public marker v2 reports the live CI phases as `running` at validate. Cleanup may remain pending after a terminal marker. `CIEnds` requires eventual deletion under fair successful cleanup, not deletion during a permanent GitHub outage. The model assumes the branch remains controller-owned; a moved head is deliberately preserved by the implementation.
+`controller/Chart.cfg` uses one attempt, no re-label and no restart. Its 408 states fit the renderer's 500-state budget. `Controller.cfg` checks two attempts, a re-label and one restart over 44,572 states; all configured rules hold. Publication, CI transport failures, deadlines and verdicts are represented in both. Public marker v2 reports the live CI phases as `running` at validate. Cleanup may remain pending after a terminal marker. `CIEnds` requires eventual deletion under fair successful cleanup, sandbox recovery, launch, settlement and terminal posting. Without eventual sandbox recovery a post-CI review can remain blocked, so this is not a permanent-outage progress guarantee. The model assumes the branch remains controller-owned; a moved head is deliberately preserved by the implementation.
 
 After a restart, the first tick reserves the run from its claim file, and usually adopts it from its marker in the same tick. Adoption waits for a later tick when the issue's marker comments cannot be read, or when the workflow is not loaded. It also waits when the timeline read fails for a run whose marker says running or retrying, and when no slot is free for a claimed or blocked run. Until then the run is reserved but not in memory, which `test/orchestrator.test.ts` also expects. A claimed or blocked run whose timeline read fails is adopted, but it does not relaunch until the read succeeds. The model splits reserve and adopt into two steps, so other events can happen between them, and assumes the reads succeed eventually.
 

@@ -66,6 +66,16 @@ import {
 } from "../src/orchestrator.ts";
 import { type SessionOutcome, stageResult } from "../server/sandbox/result.ts";
 import { READY_LABEL } from "../src/policy.ts";
+import {
+	passingVerdict,
+	failingVerdict,
+	reachValidate,
+	apply,
+	reviewedEvent,
+	patch as namedPatch,
+	candidateEvent,
+} from "./helpers.ts";
+import type { ReviewReceipt } from "../src/review.ts";
 import { type Digest, digestOf, runIdOf } from "../src/run.ts";
 import {
 	type GitSha,
@@ -362,6 +372,7 @@ const QUESTIONS_TEXT = JSON.stringify({
 });
 
 class FakeExecutor implements StageExecutor {
+	prepareReview?: StageExecutor["prepareReview"];
 	readonly validations: import("../src/validation.ts").ValidationInput[] = [];
 	validate: import("../src/validation.ts").Validator = async (input) => {
 		this.validations.push(input);
@@ -410,8 +421,9 @@ class FakeExecutor implements StageExecutor {
 		runId: string;
 		stage: string;
 		attempt: number;
+		round?: number;
 	}): Promise<StageOutput | null> {
-		const key = `${input.runId}/${input.stage}-${input.attempt}`;
+		const key = `${input.runId}/${input.stage}${input.round ? `-r${input.round}` : ""}-${input.attempt}`;
 
 		this.outputReads.push(key);
 
@@ -449,40 +461,45 @@ class FakeExecutor implements StageExecutor {
 
 	#keep(input: StageLaunchInput): void {
 		if (input.stage === "build" && input.build !== undefined) {
-			this.builds.set(`${input.runId}/build-${input.attempt}`, {
-				kind: "build",
-				result: {
-					kind: "found",
-					patch: "patch",
-					receipt: {
-						...input.build.binding,
-						version: 1,
-						patchDigest: digestOf("patch"),
-						changedPaths: ["server/cli.ts", "test/version.test.ts"],
-						policy: this.buildPolicy,
-						model: input.settings.model,
-						observed: null,
-						testCommand: "npm test",
-						commandsSource: "builder-reported",
-						commandsOmitted: 0,
-						scriptsChanged: false,
-						testScriptChanged: false,
-						testInputsChanged: false,
-						commands: [
-							{ command: "npm test", exitCode: 1 },
-							{ command: "npm test", exitCode: this.buildExitCode },
-						],
-						visibleTests: this.missingBuildTests
-							? null
-							: {
-									command: "npm test",
-									exitCode: this.buildExitCode,
-									tail: "private output",
-									wallMs: 1,
-								},
+			this.builds.set(
+				`${input.runId}/build${input.round ? `-r${input.round}` : ""}-${input.attempt}`,
+				{
+					kind: "build",
+					result: {
+						kind: "found",
+						patch: "patch",
+						receipt: {
+							...input.build.binding,
+							version: 1,
+							patchDigest: digestOf(
+								input.round ? `patch-r${input.round}` : "patch",
+							),
+							changedPaths: ["server/cli.ts", "test/version.test.ts"],
+							policy: this.buildPolicy,
+							model: input.settings.model,
+							observed: null,
+							testCommand: "npm test",
+							commandsSource: "builder-reported",
+							commandsOmitted: 0,
+							scriptsChanged: false,
+							testScriptChanged: false,
+							testInputsChanged: false,
+							commands: [
+								{ command: "npm test", exitCode: 1 },
+								{ command: "npm test", exitCode: this.buildExitCode },
+							],
+							visibleTests: this.missingBuildTests
+								? null
+								: {
+										command: "npm test",
+										exitCode: this.buildExitCode,
+										tail: "private output",
+										wallMs: 1,
+									},
+						},
 					},
 				},
-			});
+			);
 
 			return;
 		}
@@ -6908,7 +6925,7 @@ describe("private build stage", () => {
 		]);
 		assert.equal(build.settings.maxTokens, 200_000);
 		assert.equal(build.remainingRunTokens, 499_983);
-		assert.ok(build.workspace.endsWith("-build-1"));
+		assert.ok(build.workspace.endsWith("-build-r0-1"));
 		assert.match(build.prompt, /only the focused test file/);
 		assert.match(build.prompt, /tail -n 40/);
 		assert.match(build.prompt, /Never run the full suite/);
@@ -7088,6 +7105,164 @@ describe("controller-only validate", () => {
 
 		return { ...f, controller };
 	}
+
+	it("hops from CI to isolated review and ends clean at review with charged usage", async () => {
+		const f = await waitingRun();
+		const contract = await f.files.readContract(runOf(14));
+		assert.equal(contract.kind, "found");
+
+		if (contract.kind !== "found") return;
+
+		const suite = await f.files.artifacts.read(
+			runOf(14),
+			contract.contract,
+			contract.digest,
+		);
+
+		if (suite.kind !== "found") throw new Error("suite");
+
+		const verdict = {
+			...passingVerdict(digestOf("patch")),
+			acceptanceDigest: suite.receipt.acceptanceDigest,
+			originalBase: MAIN_SHA,
+			baseSha: MAIN_SHA,
+			gateSha: MAIN_SHA,
+		};
+
+		f.executor.validate = async (input) => ({
+			kind: "finished",
+			state: input.state!,
+			verdict,
+		});
+
+		const receipt: ReviewReceipt = {
+			version: 1,
+			r8: "incomplete",
+			runId: runOf(14),
+			round: 0,
+			candidateSha: verdict.candidateSha,
+			patchDigest: verdict.patchDigest,
+			contractDigest: contract.digest,
+			acceptanceDigest: verdict.acceptanceDigest,
+			ciRunId: verdict.ciRunId,
+			originalBase: MAIN_SHA,
+			baseSha: MAIN_SHA,
+			seats: [],
+			blocking: false,
+		};
+
+		f.executor.prepareReview = async ({ workspace }) => ({
+			workspace,
+			verdict,
+			builder: "openai/gpt-6.1-sol",
+			input: {
+				binding: receipt,
+				seats: ["code-review", "security-review", "simplify"],
+				files: new Map(),
+				scenarios: [],
+				prompt: "review",
+			},
+		});
+		const output = f.executor.output.bind(f.executor);
+		f.executor.output = async (input) =>
+			input.stage === "review" ? { kind: "review", receipt } : output(input);
+		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+		await f.controller.tick();
+		assert.equal(f.controller.state.runs.get(14)?.stage, "review");
+		await once(f.controller);
+
+		const review = f.executor.launches.find(
+			(entry) => entry.stage === "review",
+		);
+
+		assert.deepEqual(review?.tools, ["read", "grep", "ls"]);
+		assert.equal(review?.settings.maxTokens, 30_000);
+		assert.equal(f.files.claims.get(runOf(14))?.status, "stage_passed");
+		assert.equal(f.files.claims.get(runOf(14))?.stage, "review");
+		assert.equal(f.files.claims.get(runOf(14))?.usage, 40);
+	});
+
+	it("shares the pure machine's two-round cap and resumes a repair without round-zero output", async () => {
+		const f = await waitingRun();
+		let pure = reachValidate("p0");
+		f.executor.validate = async (input) => {
+			const round = input.round ?? 0;
+
+			const state = input.state ?? {
+				version: 1,
+				startedAt: input.now,
+				deadline: input.now + input.wallMs,
+				round,
+				originalBase: input.baseSha,
+				baseSha: input.baseSha,
+				baseResolved: true,
+				publication: {
+					branch: `factory/run/14-${input.runId.slice(0, 12)}-r${round}`,
+					patchSha: sha("b".repeat(40)),
+					candidateSha: sha("c".repeat(40)),
+				},
+				dispatchTry: 1,
+				dispatchedAt: input.now,
+				ciRunId: 123,
+				counters: {},
+			};
+
+			await input.save(state);
+
+			return {
+				kind: "finished",
+				state,
+				verdict: failingVerdict(digestOf(round ? `patch-r${round}` : "patch")),
+			};
+		};
+
+		await f.controller.tick();
+		pure = apply(pure, {
+			kind: "validated",
+			verdict: failingVerdict(namedPatch("p0")),
+		});
+		assert.equal(f.files.claims.get(runOf(14))?.round, pure.repairRounds);
+		assert.equal(f.files.claims.get(runOf(14))?.validation, undefined);
+		const restarted = f.start();
+		await once(restarted);
+
+		const repair = f.executor.launches.find(
+			(entry) => entry.stage === "build" && entry.round === 1,
+		);
+
+		assert.equal(repair?.build?.binding.round, 1);
+		assert.equal(repair?.settings.maxTokens, 50_000);
+		assert.equal(
+			f.executor.launches.filter(
+				(entry) => entry.stage === "build" && entry.round === 1,
+			).length,
+			1,
+		);
+		pure = apply(
+			pure,
+			{ kind: "built", patchDigest: namedPatch("p1") },
+			candidateEvent,
+			{ kind: "validated", verdict: failingVerdict(namedPatch("p1")) },
+		);
+		await once(restarted);
+		assert.equal(f.files.claims.get(runOf(14))?.round, pure.repairRounds);
+		pure = apply(
+			pure,
+			{ kind: "built", patchDigest: namedPatch("p2") },
+			candidateEvent,
+			{ kind: "validated", verdict: passingVerdict(namedPatch("p2")) },
+			reviewedEvent("p2", ["still bad"]),
+		);
+		await once(restarted);
+		await restarted.tick();
+		assert.equal(f.files.claims.get(runOf(14))?.status, "failed");
+		assert.equal(pure.progress.kind, "finished");
+		assert.equal(f.files.claims.get(runOf(14))?.round, pure.repairRounds);
+		assert.equal(
+			f.executor.launches.filter((entry) => entry.stage === "build").length,
+			3,
+		);
+	});
 
 	for (const field of ["candidate", "ciRun"] as const)
 		it(`posts another marker when only ${field} changes`, async () => {

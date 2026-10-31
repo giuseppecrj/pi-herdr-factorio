@@ -1,5 +1,5 @@
 const ENDED: Record<string, string> = {
-  stage_passed: "Stage passed, run stops here for now",
+  stage_passed: "Review clean, run stops before handoff",
   failed: "Failed",
   budget_exhausted: "Token budget spent",
   released: "Released",
@@ -23,7 +23,8 @@ export const title = "What the controller does with one run today";
 export const state = (v: any) => {
   if (!v.loaded) return ["Controller restarting"];
   if (v.pending !== 0) return ["Run reserved, waiting to be adopted"];
-  if (v.ph in HELD) return ["Holding a claim", HELD[v.ph]];
+
+  if (v.ph in HELD) return ["Holding a claim", `${v.stage === "review" ? "Review" : "Build and CI"}: ${HELD[v.ph]}`];
   if (v.ph === "ending") return ["Stopping the aborted stage"];
   const last = v.marker[v.event];
 
@@ -68,7 +69,11 @@ export const step = (action: string, from: any, to: any) => {
     case "CIDeadline":
       return "20-minute deadline expires";
     case "StoreVerdict":
-      return "terminal evidence stored, run ends";
+      return to.stage === "review" ? "passing CI claims review" : to.ph === "claimed" ? "failed CI starts a repair [rounds left]" : "CI ends failed";
+    case "ReviewPasses":
+      return "clean review, stop before handoff";
+    case "ReviewBlocks":
+      return to.ph === "claimed" ? "blocking review starts a repair [rounds left]" : "blocking review [two repairs used]";
     case "Cleanup":
       return "guarded branch deletion succeeds";
     case "StageRefuses":

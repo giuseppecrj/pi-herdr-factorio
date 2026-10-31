@@ -46,6 +46,7 @@ stages:
     stall_ms: 300000
   review:
     model: openai/gpt-6.1-sol
+    fallback_model: openai/gpt-6.1-terra
     max_turns: 20
     wall_ms: 900000
     stall_ms: 300000
@@ -86,4 +87,4 @@ The controller publishes the patch and held-out checks, dispatches main's gates 
 
 ## review
 
-Read the full diff against the contract. Report a finding as blocking only when it is a bug, a security problem or a broken contract line.
+Review the full diff read-only against the contract in fresh code-review, security-review and simplify sessions, plus ultrareview for deterministic high-risk changes. Judge every supplied judge-only scenario. Only concrete bugs, security defects, broken contract lines and failed judgments block. Simplify is advisory and never edits. The security seat alone retries a recorded refusal once on the configured fallback. Both models are OpenAI, so every seat is context-isolated, same family, not cross-family. Blocking results share two repair rounds with failed CI; every repair is rebuilt, revalidated and reviewed on its new SHA.

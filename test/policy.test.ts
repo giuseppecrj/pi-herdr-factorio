@@ -212,6 +212,12 @@ describe("land precondition", () => {
 				{
 					...ciBinding,
 					patchDigest: patch("a"),
+					review: {
+						candidateSha: currentHead.currentTip,
+						patchDigest: patch("a"),
+						blockingFindings: [],
+						judgments: [],
+					},
 					verdict: passingVerdict(patch("a")),
 				},
 				currentHead,

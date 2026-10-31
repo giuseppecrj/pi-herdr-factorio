@@ -51,11 +51,13 @@ step({
 		unjudged: [],
 	},
 });
-step({ kind: "reviewed", blockingFindings: [] });
+
+step({ kind: "reviewed", candidateSha, patchDigest, blockingFindings: [], judgments: [] });
 assert.deepEqual(run.progress, { kind: "active", stage: "land" });
 console.log("Owner feedback uses a blocking review as an F10 stand-in.");
 run = { ...run, progress: { kind: "active", stage: "review" } };
-step({ kind: "reviewed", blockingFindings: ["owner comment"] });
+
+step({ kind: "reviewed", candidateSha, patchDigest, blockingFindings: ["owner comment"], judgments: [] });
 console.log("The owner merges on GitHub while the repair builds.");
 const result = step({ kind: "landed", mergeSha: "b".repeat(40) });
 assert.equal(result.kind, "invalid");

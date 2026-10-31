@@ -117,6 +117,8 @@ export type LandCheck =
 			kind: "blocked";
 			reason:
 				| "no_patch"
+				| "no_review"
+				| "review_failed"
 				| "no_verdict"
 				| "digest_mismatch"
 				| "verdict_failed"
@@ -135,6 +137,7 @@ export function checkLandPrecondition(
 		| "acceptanceDigest"
 		| "heldoutDigest"
 		| "ciRunId"
+		| "review"
 	>,
 	current: { currentTip?: string; currentGate?: string } = {},
 ): LandCheck {
@@ -170,6 +173,22 @@ export function checkLandPrecondition(
 		current.currentGate !== verdict.gateSha
 	)
 		return { kind: "blocked", reason: "stale_gate" };
+
+	const review = run.review;
+
+	if (review === undefined) return { kind: "blocked", reason: "no_review" };
+
+	if (
+		review.candidateSha !== run.candidateSha ||
+		review.patchDigest !== patchDigest ||
+		review.blockingFindings.length > 0 ||
+		review.judgments.some((j) => !j.pass) ||
+		review.judgments.length !== verdict.unjudged.length ||
+		verdict.unjudged.some(
+			(id) => review.judgments.filter((j) => j.scenario === id).length !== 1,
+		)
+	)
+		return { kind: "blocked", reason: "review_failed" };
 
 	return { kind: "ready" };
 }

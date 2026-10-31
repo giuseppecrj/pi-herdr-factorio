@@ -38,4 +38,5 @@
 - **Acceptance** (`.pi/skills/verify-factory/features/acceptance.md`): a fresh contract-only session, private digest-bound suite, redacted mappings and a pre-build canary denial.
 - **Build** (`.pi/skills/verify-factory/features/build.md`): the second tick, fresh builder workspace, exact private patch, base-owned visible command, typed retries, recovery, cleanup and the builder canary probe.
 - **Validation** (`.pi/skills/verify-factory/features/validation.md`): deterministic patch and held-out commits, bot dispatch, identity-bound receipts, slot-free restart recovery and the real sanitized repair probe.
+- **Review** (`.pi/skills/verify-factory/features/review.md`): fresh seats, exact bindings, shared repair cap, sanitized rebuilds and round-aware viewer evidence.
 - **serve** (`.pi/skills/verify-factory/features/serve.md`): the controller daemon, `controller_ready`, the single-controller lock, reconcile before dispatch and SIGTERM stop.

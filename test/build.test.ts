@@ -43,6 +43,47 @@ function fixture(t: { after(fn: () => void): void }) {
 	};
 }
 
+test("keeps immutable patch and visible-test stores separate for rounds zero to two", async (t) => {
+	const f = fixture(t);
+
+	const binding = {
+		runId: digestOf("rounds"),
+		baseSha: "a".repeat(40),
+		contractDigest: digestOf("contract"),
+		acceptanceDigest: digestOf("acceptance"),
+	};
+
+	const session = { model: "openai/gpt-6.1-sol", observed: null, commands: [] };
+
+	for (const round of [0, 1, 2]) {
+		writeFileSync(join(f.workspace, "value"), `round ${round}\n`);
+		const collected = await collectPatch(f);
+
+		if (collected.kind !== "collected") throw new Error("fixture");
+		assert.equal(
+			storePatch(f.stateDir, { ...binding, round }, collected, session).kind,
+			"found",
+		);
+		finishPatch(
+			f.stateDir,
+			{ ...binding, round },
+			{ command: "test", exitCode: round, tail: "", wallMs: 1 },
+		);
+	}
+
+	for (const round of [0, 1, 2]) {
+		const kept = readPatch(f.stateDir, { ...binding, round });
+		assert.equal(kept.kind, "found");
+
+		if (kept.kind !== "found") continue;
+		assert.match(
+			Buffer.from(kept.patch).toString(),
+			new RegExp(`round ${round}`),
+		);
+		assert.equal(kept.receipt.visibleTests?.exitCode, round);
+	}
+});
+
 test("collects deterministic exact bytes, deletions, binary files and executable modes", async (t) => {
 	const f = fixture(t);
 

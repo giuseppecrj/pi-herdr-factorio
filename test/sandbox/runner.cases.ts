@@ -97,6 +97,7 @@ import {
 	finishPatch,
 } from "../../src/build.ts";
 import { digestOf } from "../../src/run.ts";
+import { passingVerdict } from "../helpers.ts";
 import { manifestDigest } from "../../server/sandbox/manifest.ts";
 
 const FIXTURES = new URL("./fixtures/", import.meta.url).pathname;
@@ -3234,6 +3235,259 @@ const CRITIQUE = JSON.stringify({
 	ambiguities: [
 		"Does --version alone or combined with a command print the version? This changes A1.",
 	],
+});
+
+describe("multi-seat candidate review", () => {
+	function setup(
+		security: "clean" | "fallback" | "refused" | "malformed" = "clean",
+	) {
+		const dir = mkdtempSync(join(tmpdir(), "factory-candidate-review-"));
+		const verdict = passingVerdict(digestOf("patch"));
+		const calls: string[] = [];
+		const hosts: Harness[] = [];
+
+		const run: StageLaunchInput = {
+			...input(
+				{ stage: "review" },
+				{ fallback: model("openai/gpt-6.1-terra"), maxTokens: 30_000 },
+			),
+			workspace: dir,
+			tools: ["read", "grep", "ls"],
+			skills: [],
+			round: 1,
+			review: {
+				workspace: dir,
+				verdict,
+				builder: "openai/gpt-6.1-sol",
+				input: {
+					binding: {
+						runId: digest(RUN),
+						round: 1,
+						candidateSha: verdict.candidateSha,
+						patchDigest: verdict.patchDigest,
+						contractDigest: digestOf("contract"),
+						acceptanceDigest: verdict.acceptanceDigest,
+						ciRunId: verdict.ciRunId,
+						originalBase: verdict.originalBase,
+						baseSha: verdict.baseSha,
+					},
+					seats: ["code-review", "security-review", "simplify"],
+					scenarios: ["J1"],
+					files: new Map([["src/a.ts", 1]]),
+					prompt: "Private contract and diff",
+				},
+			},
+		};
+
+		const create = (sessionDir: string, tools: readonly string[]) => {
+			const seat = sessionDir.split("/").at(-1) ?? "";
+			assert.deepEqual(tools, ["read", "grep", "ls"]);
+
+			const answer = JSON.stringify({
+				seat,
+				findings: [],
+				judgments:
+					seat === "code-review"
+						? [{ scenario: "J1", pass: true, reason: "implemented" }]
+						: [],
+			});
+
+			const script =
+				(refused: boolean) => (command: JsonObject, pi: FakePi) => {
+					if (command.type === "prompt") {
+						calls.push(`${seat}:${String(command.message)}`);
+						pi.emit(
+							started(String(command.id)),
+							{ type: "turn_start" },
+							assistant(
+								refused
+									? {
+											tokens: 10,
+											stopReason: "error",
+											rawStopReason: "refusal",
+										}
+									: {
+											tokens: 10,
+											model:
+												seat === "security-review" && security === "fallback"
+													? "gpt-6.1-terra"
+													: "gpt-6.1-sol",
+										},
+							),
+							{ type: "agent_settled", aborted: false },
+						);
+					}
+
+					if (command.type === "get_last_assistant_text")
+						pi.emit({
+							type: "response",
+							id: command.id ?? "",
+							command: command.type,
+							success: true,
+							data: {
+								text:
+									seat === "security-review" && security === "malformed"
+										? "bad"
+										: answer,
+							},
+						});
+				};
+
+			const fallback =
+				seat === "security-review" &&
+				["fallback", "refused"].includes(security);
+
+			const h = harness(
+				fallback
+					? [script(true), script(security === "refused")]
+					: [script(false)],
+				{ cleanupReserveMs: 1 },
+			);
+
+			hosts.push(h);
+			mkdirSync(sessionDir, { recursive: true });
+
+			return {
+				...h.host,
+				async writeReceipt(receipt: StageReceipt) {
+					return publishFile(
+						join(sessionDir, "receipt.json"),
+						JSON.stringify(receipt),
+					);
+				},
+				async writeOutput(text: string) {
+					return publishFile(join(sessionDir, "output.txt"), text);
+				},
+			};
+		};
+
+		return {
+			dir,
+			run,
+			create,
+			calls,
+			hosts,
+			close() {
+				rmSync(dir, { recursive: true, force: true });
+			},
+		};
+	}
+
+	it("uses three fresh read-only sessions and sums per-seat usage", async () => {
+		const h = setup();
+
+		try {
+			const result = await sandboxModule.runReview(h.run, h.dir, h.create);
+			assert.equal(result.kind, "passed");
+			assert.equal(result.usage, 30);
+			assert.equal(result.receipt.turns, 3);
+			assert.equal(h.hosts.length, 3);
+			const seats = JSON.parse(readFileSync(join(h.dir, "output.txt"), "utf8"));
+			assert.deepEqual(
+				seats.map((s: { seat: string }) => s.seat),
+				["code-review", "security-review", "simplify"],
+			);
+			assert.ok(
+				seats.every(
+					(s: { label: string }) =>
+						s.label ===
+						"context-isolated, same model, same family, not cross-family",
+				),
+			);
+		} finally {
+			h.close();
+		}
+	});
+
+	it("proves terra fallback by injected refusal only, without switching OpenAI routes", async () => {
+		const h = setup("fallback");
+
+		try {
+			const result = await sandboxModule.runReview(h.run, h.dir, h.create);
+			assert.equal(result.kind, "passed");
+			assert.equal(result.usage, 40);
+
+			const security = JSON.parse(
+				readFileSync(join(h.dir, "output.txt"), "utf8"),
+			)[1];
+
+			assert.equal(security.requested, "openai/gpt-6.1-terra");
+			assert.equal(security.fallback, true);
+			assert.equal(
+				security.label,
+				"context-isolated, different model, same family, not cross-family",
+			);
+			assert.deepEqual(h.hosts[1]?.launches, [
+				"openai/gpt-6.1-sol",
+				"openai/gpt-6.1-terra",
+			]);
+			assert.ok(
+				!h.hosts[1]?.timeline.some((entry) => entry.startsWith("route:")),
+			);
+		} finally {
+			h.close();
+		}
+	});
+
+	for (const bad of ["refused", "malformed"] as const)
+		it(`never approves ${bad} security output`, async () => {
+			const h = setup(bad);
+
+			try {
+				const result = await sandboxModule.runReview(h.run, h.dir, h.create);
+				assert.equal(result.kind, bad === "refused" ? "refused" : "failed");
+				assert.equal(h.hosts.length, 2);
+				assert.ok(!existsSync(join(h.dir, "output.txt")));
+			} finally {
+				h.close();
+			}
+		});
+
+	it("keeps completed seats across a restart, without double charging", async () => {
+		const h = setup();
+
+		try {
+			await sandboxModule.runReview(h.run, h.dir, h.create);
+			rmSync(join(h.dir, "receipt.json"));
+			rmSync(join(h.dir, "output.txt"));
+			rmSync(join(h.dir, "simplify"), { recursive: true });
+
+			const result = await sandboxModule.runReview(
+				{
+					...h.run,
+					settings: { ...h.run.settings, maxTokens: 29_980 },
+					remainingRunTokens: 999_980,
+				},
+				h.dir,
+				h.create,
+			);
+
+			assert.equal(result.kind, "passed");
+			assert.equal(result.usage, 10);
+			assert.equal(result.receipt.usage.total, 30);
+			assert.equal(h.hosts.length, 4);
+		} finally {
+			h.close();
+		}
+	});
+
+	it("charges exhaustion and never accepts the seats that did not run", async () => {
+		const h = setup();
+
+		try {
+			const result = await sandboxModule.runReview(
+				{ ...h.run, settings: { ...h.run.settings, maxTokens: 10 } },
+				h.dir,
+				h.create,
+			);
+
+			assert.equal(result.kind, "budget_exhausted");
+			assert.equal(result.receipt.usage.total, 10);
+			assert.equal(h.calls.length, 1);
+		} finally {
+			h.close();
+		}
+	});
 });
 
 describe("controller-run specify review", () => {

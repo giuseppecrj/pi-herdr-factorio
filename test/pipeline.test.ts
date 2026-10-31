@@ -12,6 +12,7 @@ import {
 	apply,
 	contractDigest,
 	passingVerdict,
+	reviewedEvent,
 	patch,
 	ticket,
 } from "./helpers.ts";
@@ -149,7 +150,7 @@ describe("controller driven through the fake adapter", () => {
 			{ kind: "built", patchDigest: patch("a") },
 			candidateEvent,
 			{ kind: "validated", verdict: passingVerdict(patch("a")) },
-			{ kind: "reviewed", blockingFindings: [] },
+			reviewedEvent("a"),
 			{ kind: "landed", mergeSha: "e".repeat(40), ...currentHead },
 		];
 

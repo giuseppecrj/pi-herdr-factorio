@@ -517,5 +517,5 @@ export const ARTIFACT_ACCESS = {
 	accept: ["contract", "trusted-base"],
 	build: ["contract", "scenario-ids"],
 	validate: ["contract", "acceptance"],
-	review: ["contract"],
+	review: ["contract", "judge-lines"],
 } as const;

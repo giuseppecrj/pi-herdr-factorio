@@ -120,6 +120,17 @@ export type Progress =
 	| { kind: "active"; stage: Stage }
 	| { kind: "finished"; outcome: Outcome };
 
+export type ReviewEvidence = {
+	readonly candidateSha: string;
+	readonly patchDigest: Digest;
+	readonly blockingFindings: readonly string[];
+	readonly judgments: readonly {
+		scenario: string;
+		pass: boolean;
+		reason: string;
+	}[];
+};
+
 export interface Run {
 	id: string;
 	ticket: TicketRef;
@@ -133,6 +144,7 @@ export interface Run {
 	gateSha?: string;
 	ciRunId?: number;
 	verdict?: Verdict;
+	review?: ReviewEvidence;
 	repairRounds: number;
 	progress: Progress;
 }

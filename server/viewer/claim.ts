@@ -71,7 +71,12 @@ export function viewerClaim(text: string, runId: string): ClaimRecord | null {
 		usage,
 	};
 
+	const round = countOf(fieldOf(value, "round")) ?? validation?.round ?? 0;
+
+	if (round > 2 || (validation !== undefined && round !== validation.round))
+		return null;
+
 	return validation === undefined
-		? claim
-		: { ...claim, validation, round: validation.round };
+		? { ...claim, round }
+		: { ...claim, validation, round };
 }

@@ -70,6 +70,7 @@ export type VisibleTests = {
 };
 
 export type PatchBinding = {
+	readonly round?: number;
 	readonly runId: Digest;
 	readonly baseSha: string;
 	readonly contractDigest: string;
@@ -113,6 +114,7 @@ export type PatchRead =
 	| {
 			readonly kind: "blocked";
 			readonly reason:
+				| "repair_no_change"
 				| "patch_missing"
 				| "patch_changed"
 				| "patch_invalid"
@@ -418,6 +420,7 @@ export async function collectPatch(input: {
 export function patchBinding(value: PatchBinding): PatchBinding {
 	return {
 		runId: value.runId,
+		round: value.round,
 		baseSha: value.baseSha,
 		contractDigest: value.contractDigest,
 		acceptanceDigest: value.acceptanceDigest,
@@ -426,6 +429,7 @@ export function patchBinding(value: PatchBinding): PatchBinding {
 
 function sameBinding(left: PatchBinding, right: PatchBinding): boolean {
 	return (
+		(left.round ?? 0) === (right.round ?? 0) &&
 		left.runId === right.runId &&
 		left.baseSha === right.baseSha &&
 		left.contractDigest === right.contractDigest &&
@@ -568,14 +572,21 @@ export function trustedVisiblePlan(
 	};
 }
 
-export function patchDir(stateDir: string, runId: Digest): string {
-	return join(stateDir, "patches", runId);
+export function roundKey(runId: string, round = 0): string {
+	if (!Number.isSafeInteger(round) || round < 0 || round > 2)
+		throw new Error("invalid_round");
+
+	return `${runId}${round === 0 ? "" : `.r${round}`}`;
+}
+
+export function patchDir(stateDir: string, runId: Digest, round = 0): string {
+	return join(stateDir, "patches", roundKey(runId, round));
 }
 
 export function readPatch(stateDir: string, binding: PatchBinding): PatchRead {
 	const root = join(stateDir, "patches"),
-		dir = patchDir(stateDir, binding.runId),
-		anchor = join(root, `${binding.runId}.json`);
+		dir = patchDir(stateDir, binding.runId, binding.round),
+		anchor = join(root, `${roundKey(binding.runId, binding.round)}.json`);
 
 	try {
 		if (present(root)) checkPrivateDir(root);
@@ -681,7 +692,7 @@ export function storePatch(
 		visibleTests: null,
 	};
 
-	const dir = patchDir(stateDir, binding.runId),
+	const dir = patchDir(stateDir, binding.runId, binding.round),
 		text = `${JSON.stringify(receipt)}\n`;
 
 	if (
@@ -692,7 +703,14 @@ export function storePatch(
 
 	try {
 		privateDir(join(stateDir, "patches"));
-		exclusive(join(stateDir, "patches", `${binding.runId}.json`), text);
+		exclusive(
+			join(
+				stateDir,
+				"patches",
+				`${roundKey(binding.runId, binding.round)}.json`,
+			),
+			text,
+		);
 		privateDir(dir);
 		exclusive(join(dir, "patch.diff"), patch.patch);
 		exclusive(join(dir, "collected.json"), text);
@@ -726,7 +744,7 @@ export function finishPatch(
 		if (unavailable) record.reason = "visible_tests_unavailable";
 		exclusive(
 			join(
-				patchDir(stateDir, binding.runId),
+				patchDir(stateDir, binding.runId, binding.round),
 				unavailable
 					? `unavailable-${randomBytes(4).toString("hex")}.json`
 					: "tests.json",

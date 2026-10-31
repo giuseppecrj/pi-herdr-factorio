@@ -97,7 +97,7 @@ export type RunEvent =
 			ciRunId: number;
 	  }
 	| { kind: "validated"; verdict: Verdict }
-	| { kind: "reviewed"; blockingFindings: string[] }
+	| ({ kind: "reviewed" } & import("./run.ts").ReviewEvidence)
 	| {
 			kind: "landed";
 			mergeSha: string;
@@ -132,6 +132,7 @@ function moveTo(run: Run, stage: Stage, patch: Partial<Run> = {}): Transition {
 
 const STALE_ON_REBUILD: Pick<
 	Run,
+	| "review"
 	| "patchDigest"
 	| "verdict"
 	| "candidateSha"
@@ -139,6 +140,7 @@ const STALE_ON_REBUILD: Pick<
 	| "ciRunId"
 	| "heldoutDigest"
 > = {
+	review: undefined,
 	patchDigest: undefined,
 	verdict: undefined,
 	candidateSha: undefined,
@@ -246,7 +248,28 @@ export function advance(run: Run, event: RunEvent): Transition {
 		case "reviewed": {
 			if (stage !== "review") return wrongStage(event, stage);
 
-			if (event.blockingFindings.length > 0) {
+			if (
+				event.candidateSha !== run.candidateSha ||
+				event.patchDigest !== run.patchDigest
+			)
+				return invalid("review is bound to a different candidate or patch");
+
+			if (run.verdict === undefined || !verdictPasses(run.verdict))
+				return invalid("review requires passing hard checks");
+			const unjudged = run.verdict.unjudged;
+
+			if (
+				event.judgments.length !== unjudged.length ||
+				unjudged.some(
+					(id) => event.judgments.filter((j) => j.scenario === id).length !== 1,
+				)
+			)
+				return invalid("review is missing criterion judgments");
+
+			if (
+				event.blockingFindings.length > 0 ||
+				event.judgments.some((j) => !j.pass)
+			) {
 				return repairOrFail(
 					run,
 					stage,
@@ -254,7 +277,7 @@ export function advance(run: Run, event: RunEvent): Transition {
 				);
 			}
 
-			return moveTo(run, "land");
+			return moveTo(run, "land", { review: event });
 		}
 
 		case "landed": {

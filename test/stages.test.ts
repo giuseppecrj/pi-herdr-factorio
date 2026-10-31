@@ -20,6 +20,7 @@ import {
 	passingVerdict,
 	patch,
 	reachBuild,
+	reviewedEvent,
 	reachLand,
 	reachReview,
 	reachValidate,
@@ -114,7 +115,7 @@ describe("advance: forward path", () => {
 
 		assert.equal(stageOf(review), "review");
 		assert.equal(review.verdict?.pass, true);
-		const land = apply(review, { kind: "reviewed", blockingFindings: [] });
+		const land = apply(review, reviewedEvent("a"));
 		assert.equal(stageOf(land), "land");
 
 		const done = apply(land, {
@@ -211,10 +212,7 @@ describe("advance: validate failure and bounded repair", () => {
 
 		assert.equal(reviewed.gateSha, currentHead.currentGate);
 
-		const repaired = apply(reviewed, {
-			kind: "reviewed",
-			blockingFindings: ["repair"],
-		});
+		const repaired = apply(reviewed, reviewedEvent("first", ["repair"]));
 
 		assert.equal(repaired.gateSha, undefined);
 	});
@@ -315,10 +313,10 @@ describe("advance: validate failure and bounded repair", () => {
 
 describe("advance: review", () => {
 	it("sends blocking findings back to build as a repair round", () => {
-		const run = apply(reachReview(), {
-			kind: "reviewed",
-			blockingFindings: ["SQL injection in query builder"],
-		});
+		const run = apply(
+			reachReview(),
+			reviewedEvent("first", ["SQL injection in query builder"]),
+		);
 
 		assert.equal(stageOf(run), "build");
 		assert.equal(run.repairRounds, 1);
@@ -334,17 +332,14 @@ describe("advance: review", () => {
 			{ kind: "built", patchDigest: patch("p1") },
 			candidateEvent,
 			{ kind: "validated", verdict: passingVerdict(patch("p1")) },
-			{ kind: "reviewed", blockingFindings: ["a"] },
+			reviewedEvent("p1", ["a"]),
 			{ kind: "built", patchDigest: patch("p2") },
 			candidateEvent,
 			{ kind: "validated", verdict: passingVerdict(patch("p2")) },
 		);
 		assert.equal(run.repairRounds, 2);
 
-		const done = apply(run, {
-			kind: "reviewed",
-			blockingFindings: ["still bad", "also bad"],
-		});
+		const done = apply(run, reviewedEvent("p2", ["still bad", "also bad"]));
 
 		assert.deepEqual(done.progress, {
 			kind: "finished",
@@ -357,14 +352,13 @@ describe("advance: review", () => {
 	});
 
 	it("re-runs validate on the repaired patch before review again", () => {
-		const run = apply(
-			reachReview("first"),
-			{ kind: "reviewed", blockingFindings: ["x"] },
-			{ kind: "built", patchDigest: patch("second") },
-		);
+		const run = apply(reachReview("first"), reviewedEvent("first", ["x"]), {
+			kind: "built",
+			patchDigest: patch("second"),
+		});
 
 		assert.equal(stageOf(run), "validate");
-		const result = advance(run, { kind: "reviewed", blockingFindings: [] });
+		const result = advance(run, reviewedEvent("second"));
 		assert.equal(result.kind, "invalid");
 	});
 });

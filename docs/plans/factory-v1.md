@@ -18,7 +18,7 @@ Use the **Factory CLI control procedure** below as the control skill. It combine
 
 Treat every new path, symbol, command, log field, and numerical budget below as a proposed implementation contract, not an existing capability. At the planning base `04b69c3`, only the pure state machine, policy helpers, fake adapter, provisioning script, and `/factory status` exist. Do not check future boxes with those prototypes alone.
 
-Use `openai/gpt-6.1-sol` through exe.dev's `llm` integration for every runtime stage. When it refuses a security-review or other security-flavored request on a content-policy flag, retry that request once on `xai/grok-4.6` through the same integration. The owner chose this fallback on 2026-10-28. exe.dev lists per-token prices for its xAI models, so the fallback spends exe.dev credits. Use it only after a recorded refusal, and count its tokens in the run total. Use fresh sessions for acceptance and review. Label their evidence `context-isolated, same family, not cross-family`. The cross-family part of design definition-of-done item 2 remains incomplete until the owner's Anthropic proxy is available. Do not spend exe.dev Anthropic credits as a fallback.
+Use OpenAI models through exe.dev's ChatGPT subscription only. The owner's 2026-10-30 decision supersedes the earlier xAI fallback. F08 configures `openai/gpt-6.1-sol` for review and `openai/gpt-6.1-terra` for one retry after a recorded security-seat refusal. Count both models' usage. Use fresh acceptance and review sessions. Label each review seat `context-isolated, <same|different> model, same family, not cross-family`, comparing its answering model with the builder. R8 remains incomplete. Spend no exe.dev Anthropic or xAI credits.
 
 Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
@@ -645,14 +645,17 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Files.**
 
 - [ ] Create `src/review.ts`, `test/review.test.ts`, `test/fixtures/review/`, and `skills/code-review/`, `skills/security-review/`, `skills/simplify/`, `skills/ultrareview/` with provenance.
-- [ ] Edit `src/stages.ts`, `src/run.ts`, `server/controller.ts`, `test/stages.test.ts`, `test/pipeline.test.ts`, `skills/README.md`, and `.github/factory/WORKFLOW.md` for review orchestration, repair receipts, and the security-review fallback model.
+- [ ] Edit `src/stages.ts`, `src/run.ts`, `src/orchestrator.ts`, `src/build.ts`, `src/validation.ts`, `src/workflow.ts`, `src/artifacts.ts`, `src/policy.ts`, `server/controller.ts`, `server/sandbox.ts`, and `server/sandbox/routes.ts` for review, round storage, repair and OpenAI fallback.
+- [ ] Edit `test/stages.test.ts`, `test/pipeline.test.ts`, `test/orchestrator.test.ts`, `test/build.test.ts`, `test/review.test.ts`, `test/workflow.test.ts`, `test/policy.test.ts`, `test/helpers.ts`, and `test/sandbox/runner.cases.ts` for bindings, shared caps, recovery and refusal tests.
+- [ ] Edit `server/viewer/claim.ts`, `server/viewer/evidence.ts`, `test/viewer.test.ts`, and `docs/operations/viewer.md` for round-aware evidence without compatibility aliases.
+- [ ] Edit `skills/README.md`, `.github/factory/WORKFLOW.md` (review only), `docs/statecharts/**`, `docs/operations/sandbox.md`, `docs/operations/factory-cli.md`, `.pi/skills/verify-factory/**`, and this Files block for the shipped contracts.
 
 **Build.**
 
 - [ ] Implement `reviewCandidate` using fresh sessions over the validated candidate and contract. Adapt the selected licensed code-review and security-review sources. Write simplify and ultrareview from permitted documentation and pstack patterns, not unlicensed prompt copies.
 - [ ] Bind findings to candidate SHA and patch digest. Use deterministic risk selection for extra review on policy, security, dependency, and factory-skill changes. Label every same-family seat honestly. Leave cross-family enforcement incomplete under R8.
-- [ ] Set the security-review seat to `openai/gpt-6.1-sol` with `fallback_model: xai/grok-4.6`. Prove the fallback on a seeded vulnerability whose review prompt the primary refuses. If no such prompt can be found, record that the fallback path was tested only by an injected refusal. A security review that both models refuse blocks handoff.
-- [ ] Label a review answered by the xAI fallback as cross-family for that seat only. It does not settle R8 for acceptance. Save `review-receipt.json` with the seat, the model that answered, its family label, and R8 still marked incomplete.
+- [ ] Set the security-review seat to `openai/gpt-6.1-sol` with `fallback_model: openai/gpt-6.1-terra`. Prove the fallback on a seeded vulnerability whose review prompt the primary refuses. If no such prompt can be found, record that the fallback path was tested only by an injected refusal. A security review that both models refuse blocks handoff.
+- [ ] Label every review seat `context-isolated, <same|different> model, same family, not cross-family`. Save the round's `receipt.json` with the seat, requested and observed model, fallback evidence, usage and R8 still marked incomplete. An OpenAI fallback is not cross-family.
 - [ ] Preserve `MAX_REPAIR_ROUNDS = 2` across validation and review. Send blocking findings to a fresh sanitized builder session. Clear stale candidate, verdict, and review evidence. Run CI and review again for the new head.
 - [ ] Keep simplify changes inside build before validation or treat them as a new patch requiring full revalidation. Treat malformed reviews, missing expected seats, and budget exhaustion as failure, never approval. Let no model judge override a failing hard check.
 
@@ -671,7 +674,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [ ] Lane 3. Repair that defect. Save `repair-round.json`. Pass when the controller returns to build, reruns CI, and reviews the new SHA.
 - [ ] Lane 4. Keep a fixture failing across validation and review attempts. Save `repair-cap.json`. Pass when the shared count stops at two repair rounds.
 - [ ] Lane 5. Force a deterministic CI failure while reviewers approve. Save `hard-veto.json`. Pass when the factory refuses handoff.
-- [ ] Lane 6. Apply a simplify edit after prior checks. Save `simplify-invalidates.json`. Pass when old checks cannot certify the changed bytes.
+- [ ] Lane 6. Make a repair edit or change stored patch bytes after prior checks. Save `simplify-invalidates.json`. Pass when old checks cannot certify the changed bytes. Simplify itself stays advisory and read-only.
 - [ ] Lane 7. Exhaust a reviewer budget. Save `review-budget.json`. Pass when the missing review cannot become a passing verdict and usage stays charged to the run.
 - [ ] Lane 8. Inspect review input and model identity. Save `review-context.json`. Pass when the session is fresh and the receipt says context-isolated rather than cross-family.
 - [ ] Lane 9. Change a policy or dependency path in a fixture candidate. Save `risk-review.json`. Pass when the deterministic risk selector adds the required extra review.
