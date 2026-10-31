@@ -223,6 +223,23 @@ test("viewer aggregates parent and two child models without double counting", as
 	}
 });
 
+test("an execution missing its receipt is a gap even when other stages have receipts", async () => {
+	const { root, stage } = await fixtureState();
+
+	try {
+		const other = join(root, "stages", runId, "accept-1");
+		await mkdir(other);
+		await cp(join(stage, "receipt.json"), join(other, "receipt.json"));
+		await rm(join(stage, "receipt.json"));
+		const run = await readViewerRun(root, runId);
+		assert.ok(
+			run.gaps.some((gap) => gap.source.endsWith("build-1/receipt.json")),
+		);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
 test("corrupt receipts, sessions and unsafe sources stay visible gaps", async () => {
 	const { root, stage, sessions } = await fixtureState();
 

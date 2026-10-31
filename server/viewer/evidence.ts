@@ -304,6 +304,23 @@ export async function readViewerRun(
 		path.endsWith(`${sep}receipt.json`),
 	);
 
+	try {
+		for (const entry of await readdir(stageRoot, { withFileTypes: true })) {
+			if (
+				!entry.isDirectory() ||
+				!/^(specify|accept|build|review)-[1-9][0-9]*(?:\.[0-9]+)?$/.test(
+					entry.name,
+				)
+			)
+				continue;
+			const path = join(stageRoot, entry.name, "receipt.json");
+
+			if (!receiptPaths.includes(path)) receiptPaths.push(path);
+		}
+	} catch {
+		io.gap(stageRoot, "stage directory unavailable");
+	}
+
 	if (receiptPaths.length === 0) io.gap(stageRoot, "no stage receipts");
 
 	for (const path of receiptPaths) {
