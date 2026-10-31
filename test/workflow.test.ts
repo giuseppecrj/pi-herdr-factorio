@@ -210,12 +210,12 @@ describe("parseWorkflow", () => {
 		assert.equal(parsed.config.stages.build.fallbackModel, null);
 	});
 
-	it("checks fallback_model with the model rules and the xai route", () => {
+	it("checks fallback_model with the model rules and accepts a different OpenAI model", () => {
 		const cases: [string, RegExp][] = [
 			["anthropic/claude-sonnet-5-5", /exe\.dev credits/],
 			["grok", /<provider>\/<model>/],
 			["$MODEL", /only in workspace\.root/],
-			["openai/gpt-6.1-terra", /xai route/],
+			["openai/gpt-6.1-sol", /differ/],
 		];
 
 		for (const [value, message] of cases) {
@@ -226,6 +226,14 @@ describe("parseWorkflow", () => {
 			assert.equal(error.field, "stages.review.fallback_model");
 			assert.match(error.message, message);
 		}
+
+		const openai = parse(
+			frontMatter(
+				"stages:\n  review:\n    fallback_model: openai/gpt-6.1-terra",
+			),
+		);
+
+		assert.equal(openai.kind, "valid");
 
 		const land = validation(
 			frontMatter("stages:\n  land:\n    fallback_model: xai/grok-4.6"),

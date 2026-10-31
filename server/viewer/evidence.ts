@@ -2,6 +2,7 @@ import { constants } from "node:fs";
 import { lstat, open, readdir, realpath } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { readStoredVerdict } from "../controller.ts";
+import { validationDir } from "../../src/validation.ts";
 import { viewerClaim } from "./claim.ts";
 import { readStageReceipt } from "../sandbox.ts";
 import {
@@ -312,7 +313,7 @@ export async function readViewerRun(
 		for (const entry of await readdir(stageRoot, { withFileTypes: true })) {
 			if (
 				!entry.isDirectory() ||
-				!/^(specify|accept|build|review)-[1-9][0-9]*(?:\.[0-9]+)?$/.test(
+				!/^(specify|accept|build|review)(?:-r[0-2])?-[1-9][0-9]*(?:\.[0-9]+)?$/.test(
 					entry.name,
 				)
 			)
@@ -345,7 +346,10 @@ export async function readViewerRun(
 		const source = relative(root, path);
 		const stage = field(receipt.record, "stage") ?? "unknown";
 		const attempt = countOf(fieldOf(receipt.record, "attempt"));
-		received.add(`${stage}-${attempt}`);
+		const round = Number(/(?:build|review)-r([0-2])-/.exec(source)?.[1] ?? 0);
+		received.add(
+			`${stage}${round > 0 || stage === "review" ? `-r${round}` : ""}-${attempt}`,
+		);
 
 		for (const dropped of arrayOf(
 			fieldOf(receipt.record, "session_truncated"),
@@ -365,6 +369,7 @@ export async function readViewerRun(
 				receipt.outcome.kind,
 				null,
 				attempt,
+				round,
 			),
 		);
 		const settlement = objectOf(fieldOf(receipt.record, "settlement"));
@@ -376,6 +381,7 @@ export async function readViewerRun(
 				field(settlement, "event") ?? "unavailable",
 				null,
 				attempt,
+				round,
 			),
 		);
 
@@ -451,8 +457,12 @@ export async function readViewerRun(
 
 		const id = field(header, "id") ?? source;
 
-		const stage =
-			/\/(specify|accept|build|review)-\d+/.exec(path)?.[1] ?? "unknown";
+		const identity = /\/(specify|accept|build|review)(?:-r([0-2]))?-\d+/.exec(
+			path,
+		);
+
+		const stage = identity?.[1] ?? "unknown";
+		const round = identity?.[2] === undefined ? null : Number(identity[2]);
 
 		const sessionTimeline: TimelineEvent[] = [];
 
@@ -470,6 +480,8 @@ export async function readViewerRun(
 						field(message, "stopReason") ??
 						"",
 					atOf(record),
+					null,
+					round,
 				),
 			);
 
@@ -637,7 +649,7 @@ export async function readViewerRun(
 					state.round,
 				),
 			);
-		const path = join(root, "validation", runId, "verdict.json");
+		const path = join(validationDir(root, runId, state.round), "verdict.json");
 
 		if ((await io.text(path)) !== null) {
 			try {
@@ -665,6 +677,57 @@ export async function readViewerRun(
 		}
 	}
 
+	if (claim?.stage === "review" || (claim?.round ?? 0) > 0) {
+		for (let round = 0; round <= (claim?.round ?? 0); round++) {
+			if (round === (claim?.round ?? 0) && claim?.stage !== "review") continue;
+
+			if (round < (claim?.round ?? 0)) {
+				const prior = objectOf(
+					await io.json(
+						join(validationDir(root, runId, round), "verdict.json"),
+					),
+				);
+
+				const attempted = receiptPaths.some((path) =>
+					relative(stageRoot, path)
+						.split(sep)[0]
+						?.startsWith(`review-r${round}-`),
+				);
+
+				if (fieldOf(prior, "pass") !== true && !attempted) continue;
+			}
+
+			const path = join(root, "review", runId, `r${round}`, "receipt.json");
+			const receipt = objectOf(await io.json(path));
+			const seats = arrayOf(fieldOf(receipt, "seats"));
+
+			if (
+				receipt === null ||
+				seats === null ||
+				fieldOf(receipt, "runId") !== runId ||
+				fieldOf(receipt, "round") !== round
+			) {
+				io.gap(path, "missing_or_corrupt_round_review");
+				continue;
+			}
+
+			for (const raw of seats) {
+				const seat = objectOf(raw);
+				timeline.push(
+					event(
+						relative(root, path),
+						"review",
+						field(seat, "seat") ?? "unknown seat",
+						`${field(seat, "requested") ?? "unknown model"}; ${field(seat, "label") ?? "isolation unavailable"}; tokens ${countOf(fieldOf(seat, "tokens")) ?? "unavailable"}; ${fieldOf(receipt, "blocking") === true ? "blocking" : "clean"}`,
+						null,
+						null,
+						round,
+					),
+				);
+			}
+		}
+	}
+
 	const required = new Set<string>();
 
 	const stageOrder = [
@@ -679,20 +742,25 @@ export async function readViewerRun(
 
 	const modelStages = ["specify", "accept", "build", "review"];
 
-	const reached = (stage: string, attempt: number | null) => {
+	const reached = (stage: string, attempt: number | null, round = 0) => {
+		const keyOf = (name: string, n: number) =>
+			`${name}${(name === "build" && round > 0) || name === "review" ? `-r${round}` : ""}-${n}`;
+
 		for (const earlier of modelStages)
 			if (
 				stageOrder.indexOf(earlier) < stageOrder.indexOf(stage) &&
-				![...received].some((key) => key.startsWith(`${earlier}-`))
+				![...received].some((key) =>
+					key.startsWith(keyOf(earlier, 1).slice(0, -1)),
+				)
 			)
-				required.add(`${earlier}-1`);
+				required.add(keyOf(earlier, 1));
 
 		if (modelStages.includes(stage) && attempt !== null)
-			required.add(`${stage}-${attempt}`);
+			required.add(keyOf(stage, attempt));
 	};
 
 	if (claim?.stage !== undefined && claim?.stage !== null)
-		reached(claim.stage, claim.attempt);
+		reached(claim.stage, claim.attempt, claim.round);
 
 	const markerPath = join(root, "markers", `${runId}.jsonl`);
 
@@ -708,7 +776,7 @@ export async function readViewerRun(
 			}
 
 			const marker = parsed.marker;
-			reached(marker.stage, marker.attempt);
+			reached(marker.stage, marker.attempt, marker.round);
 			timeline.push(
 				event(
 					relative(root, markerPath),
@@ -741,6 +809,7 @@ export async function readViewerRun(
 		if (b.at !== null) return 1;
 
 		return (
+			(a.round ?? 0) - (b.round ?? 0) ||
 			stageOrder.indexOf(a.stage) - stageOrder.indexOf(b.stage) ||
 			(a.attempt ?? 0) - (b.attempt ?? 0)
 		);

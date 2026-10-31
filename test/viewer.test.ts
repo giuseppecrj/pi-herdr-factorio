@@ -18,6 +18,7 @@ import { escapeHtml } from "../server/viewer/render.ts";
 import { runCli } from "../server/cli.ts";
 import { readStageReceipt, runSpecify } from "../server/sandbox.ts";
 import { readStoredVerdict } from "../server/controller.ts";
+import { viewerClaim } from "../server/viewer/claim.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -31,6 +32,104 @@ const runId = runIdOf({
 	repo: "giuseppecrj/pi-herdr-factorio",
 	issue: 1,
 	eventId: "1",
+});
+
+test("repair claims preserve their counter without validation and display only the current round verdict", async () => {
+	const f = await fixtureState();
+
+	try {
+		const claim = JSON.parse(
+			await readFile(join(f.root, "claims", `${runId}.json`), "utf8"),
+		);
+
+		assert.equal(
+			viewerClaim(JSON.stringify({ ...claim, round: 1 }), runId)?.round,
+			1,
+		);
+
+		const validation = {
+			version: 1,
+			startedAt: 1,
+			deadline: 2,
+			round: 1,
+			originalBase: "a".repeat(40),
+			baseSha: "a".repeat(40),
+			baseResolved: true,
+			publication: null,
+			dispatchTry: 1,
+			dispatchedAt: 1,
+			ciRunId: 1,
+			counters: {},
+		};
+
+		await writeFile(
+			join(f.root, "claims", `${runId}.json`),
+			JSON.stringify({ ...claim, stage: "review", round: 1, validation }),
+		);
+		const dir = join(f.root, "validation", runId);
+		await mkdir(join(dir, "r1"), { recursive: true });
+		await writeFile(
+			join(dir, "verdict.json"),
+			JSON.stringify({ pass: false, checks: [] }),
+			{ mode: 0o600 },
+		);
+		await writeFile(
+			join(dir, "r1", "verdict.json"),
+			JSON.stringify({ pass: true, checks: [] }),
+			{ mode: 0o600 },
+		);
+		await mkdir(join(f.root, "stages", runId, "review-r1-1"));
+		const viewed = await readViewerRun(f.root, runId);
+		assert.deepEqual(
+			viewed.timeline
+				.filter((entry) => entry.event === "CI verdict")
+				.map((entry) => [entry.round, entry.detail]),
+			[[1, "passed"]],
+		);
+		assert.ok(
+			viewed.gaps.some((entry) =>
+				entry.source.includes("review-r1-1/receipt.json"),
+			),
+		);
+		assert.ok(
+			!viewed.gaps.some(
+				(entry) =>
+					entry.source.includes("review/") &&
+					entry.source.includes("r0/receipt.json"),
+			),
+			"failed CI never reached review in round zero",
+		);
+		assert.ok(
+			viewed.gaps.some(
+				(entry) =>
+					entry.source.includes("review/") &&
+					entry.source.includes("r1/receipt.json"),
+			),
+		);
+	} finally {
+		await rm(f.root, { recursive: true, force: true });
+	}
+});
+
+test("round-qualified sessions keep their stage and round in usage and timelines", async () => {
+	const f = await fixtureState();
+
+	try {
+		await fs.rename(f.stage, join(f.root, "stages", runId, "build-r1-1"));
+		const viewed = await readViewerRun(f.root, runId);
+
+		assert.ok(viewed.usage.sessions.length > 0);
+		assert.ok(
+			viewed.usage.sessions.every((session) => session.stage === "build"),
+		);
+		assert.ok(
+			viewed.usage.sessions
+				.flatMap((session) => session.timeline)
+				.every((entry) => entry.round === 1),
+		);
+	} finally {
+		await rm(f.root, { recursive: true, force: true });
+	}
 });
 
 async function fixtureState(repo = "giuseppecrj/pi-herdr-factorio") {

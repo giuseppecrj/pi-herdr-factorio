@@ -252,6 +252,7 @@ function modelRoute(input: {
 	id: RouteId;
 	prefix: string;
 	model: string;
+	fallback?: string;
 	initially: "open" | "closed";
 }): Route {
 	return {
@@ -268,7 +269,14 @@ function modelRoute(input: {
 			kind: "json",
 			contentTypes: ["application/json"],
 			constraints: [
-				{ kind: "one_of", pointer: "/model", values: [input.model] },
+				{
+					kind: "one_of",
+					pointer: "/model",
+					values:
+						input.fallback === undefined
+							? [input.model]
+							: [input.model, input.fallback],
+				},
 				{
 					kind: "each_one_of",
 					pointer: "/tools",
@@ -313,11 +321,6 @@ const NPM_ROUTE: Route = {
 	meter: null,
 };
 
-/**
- * The v1 table: the stage model on `model-openai`, the fallback model on a
- * closed `model-xai` when one is set, and read-only npm. Model ids are bare,
- * without the provider prefix, because that is what the request body names.
- */
 export function builtinTable(input: {
 	stage: string;
 	runId: string;
@@ -332,11 +335,14 @@ export function builtinTable(input: {
 			id: builtinRouteId("model-openai"),
 			prefix: "/openai/v1/",
 			model: input.model,
+			fallback: input.fallback?.startsWith("openai/")
+				? input.fallback.slice(7)
+				: undefined,
 			initially: "open",
 		}),
 	];
 
-	if (input.fallback !== null) {
+	if (input.fallback !== null && !input.fallback.startsWith("openai/")) {
 		routes.push(
 			modelRoute({
 				id: builtinRouteId("model-xai"),

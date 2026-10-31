@@ -192,26 +192,73 @@ describe("forbidden paths", () => {
 	});
 });
 
-it("reserves the controller-owned repair feedback filename", () => {
+it("reserves the controller-owned repair feedback path and descendants", () => {
 	for (const path of [
 		".factory-feedback.json",
 		"./.factory-feedback.json",
 		".FACTORY-FEEDBACK.JSON",
+		".factory-feedback.json/x.ts",
+		"./.FACTORY-FEEDBACK.JSON/deep/x.ts",
+		".factory-feedback.json\\x.ts",
 	])
 		assert.equal(checkChangedPaths({ changedPaths: [path] }).kind, "forbidden");
-	assert.equal(
-		checkChangedPaths({ changedPaths: ["src/feedback.json"] }).kind,
-		"clean",
-	);
+
+	for (const path of [
+		"src/feedback.json",
+		".factory-feedback.json.ts",
+		".factory-feedback.json-backup/x.ts",
+		"src/.factory-feedback.json",
+	])
+		assert.equal(checkChangedPaths({ changedPaths: [path] }).kind, "clean");
 });
 
 describe("land precondition", () => {
+	it("requires exact review evidence and every judge-only scenario passing", () => {
+		const bound = {
+			...ciBinding,
+			patchDigest: patch("a"),
+			verdict: passingVerdict(patch("a")),
+		};
+
+		assert.deepEqual(checkLandPrecondition(bound, currentHead), {
+			kind: "blocked",
+			reason: "no_review",
+		});
+
+		const review = {
+			candidateSha: currentHead.currentTip,
+			patchDigest: patch("a"),
+			blockingFindings: [],
+			judgments: [],
+		};
+
+		assert.deepEqual(
+			checkLandPrecondition(
+				{ ...bound, review, verdict: { ...bound.verdict, unjudged: ["J1"] } },
+				currentHead,
+			),
+			{ kind: "blocked", reason: "review_failed" },
+		);
+		assert.deepEqual(
+			checkLandPrecondition(
+				{ ...bound, review: { ...review, candidateSha: "d".repeat(40) } },
+				currentHead,
+			),
+			{ kind: "blocked", reason: "review_failed" },
+		);
+	});
 	it("is ready when the passing verdict is bound to the run's patch", () => {
 		assert.deepEqual(
 			checkLandPrecondition(
 				{
 					...ciBinding,
 					patchDigest: patch("a"),
+					review: {
+						candidateSha: currentHead.currentTip,
+						patchDigest: patch("a"),
+						blockingFindings: [],
+						judgments: [],
+					},
 					verdict: passingVerdict(patch("a")),
 				},
 				currentHead,

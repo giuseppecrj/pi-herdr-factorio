@@ -121,8 +121,21 @@ export function reachReview(name = "first"): Run {
 	});
 }
 
+export function reviewedEvent(
+	name = "first",
+	blockingFindings: string[] = [],
+): Extract<RunEvent, { kind: "reviewed" }> {
+	return {
+		kind: "reviewed",
+		candidateSha: candidateEvent.candidateSha,
+		patchDigest: patch(name),
+		blockingFindings,
+		judgments: [],
+	};
+}
+
 export function reachLand(name = "first"): Run {
-	return apply(reachReview(name), { kind: "reviewed", blockingFindings: [] });
+	return apply(reachReview(name), reviewedEvent(name));
 }
 
 export function stageOf(run: Run): string {

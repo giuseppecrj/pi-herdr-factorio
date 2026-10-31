@@ -1,4 +1,13 @@
 import type { Validator, ValidationState } from "./validation.ts";
+import { MAX_REPAIR_ROUNDS } from "./stages.ts";
+import {
+	REVIEW_MAX_TOKENS,
+	REPAIR_BUILD_MAX_TOKENS,
+	REVIEW_TOOLS,
+	type ReviewInput,
+	type ReviewReceipt,
+} from "./review.ts";
+import { verdictPasses, type Verdict } from "./run.ts";
 
 import {
 	BUILD_TOOLS,
@@ -138,6 +147,8 @@ export type StageLaunchInput = {
 	readonly workspace: string;
 	readonly prompt: string;
 	readonly specify?: SpecifyReviewInput;
+	readonly round?: number;
+	readonly review?: ReviewPreparation;
 	readonly build?: {
 		readonly binding: PatchBinding;
 		readonly command: string;
@@ -152,7 +163,15 @@ export type StageLaunchInput = {
 	readonly progress: (usage: number) => void;
 };
 
+export type ReviewPreparation = {
+	readonly input: ReviewInput;
+	readonly verdict: Verdict;
+	readonly builder: string;
+	readonly workspace: string;
+};
+
 export type StageOutput =
+	| { readonly kind: "review"; readonly receipt: ReviewReceipt }
 	| { readonly kind: "build"; readonly result: PatchRead }
 	| string
 	| { readonly kind: "pending" }
@@ -163,7 +182,16 @@ export type StageOutput =
 			readonly observed: string | null;
 	  };
 
+type WorkflowPin = Pick<ActiveRun, "workflowSha" | "workflowDigest">;
+
 export interface StageExecutor {
+	prepareReview?(
+		input: WorkflowPin & {
+			runId: Digest;
+			round: number;
+			workspace: string;
+		},
+	): Promise<ReviewPreparation>;
 	readonly validate?: Validator;
 	cleanupValidation?(): Promise<void>;
 	/** Stops whatever a previous controller left running. Called once, before the first tick adopts a run. */
@@ -186,29 +214,37 @@ export interface StageExecutor {
 		readonly runId: Digest;
 		readonly stage: ModelStage;
 		readonly attempt: number;
+		readonly round?: number;
 	}): Promise<number | null>;
 	/**
 	 * The final text of an execution of the attempt that passed and kept it,
 	 * so a restart can finish a stage without running it again. Untrusted.
 	 * `pending` resumes a recorded session sequence in the same attempt.
 	 */
-	output(input: {
-		readonly runId: Digest;
-		readonly stage: ModelStage;
-		readonly attempt: number;
-	}): Promise<StageOutput | null>;
+	output(
+		input: {
+			readonly runId: Digest;
+			readonly attempt: number;
+			readonly round?: number;
+		} & (
+			| { readonly stage: Exclude<ModelStage, "review"> }
+			| ({ readonly stage: "review" } & WorkflowPin)
+		),
+	): Promise<StageOutput | null>;
 	checkout(input: {
 		readonly runId: Digest;
 		readonly repo: RepoSlug;
 		readonly sha: GitSha;
 		readonly workspace: string;
 		readonly build?: boolean;
+		readonly round?: number;
 	}): Promise<CheckoutResult>;
 }
 
 type StageEnd = Pick<StageResult, "kind" | "usage"> & {
 	readonly output: string | null;
 	readonly build?: PatchRead;
+	readonly review?: ReviewReceipt;
 	readonly model?: string;
 	readonly observed?: string | null;
 };
@@ -332,6 +368,7 @@ export type Effects =
 			readonly kind: "build";
 			readonly result: Extract<PatchRead, { kind: "found" }>;
 	  }
+	| { readonly kind: "review"; readonly receipt: ReviewReceipt }
 	| {
 			readonly kind: "acceptance";
 			readonly contract: Contract;
@@ -376,6 +413,7 @@ type Prepared = {
 	readonly workspace?: string;
 	readonly build?: StageLaunchInput["build"];
 	readonly specify?: SpecifyReviewInput;
+	readonly review?: ReviewPreparation;
 };
 
 const UNPREPARED: Prepared = { kind: "ready", inputs: null, prompt: "" };
@@ -448,6 +486,7 @@ export type ActiveRun = {
 	inputs: StageInputs | null;
 	phase: RunPhase;
 	validation?: ValidationState;
+	round?: number;
 };
 
 /**
@@ -1196,6 +1235,7 @@ export class Orchestrator {
 							runId: run.runId,
 							stage: "build",
 							attempt: run.attempt,
+							round: run.round ?? 0,
 						})
 					: run.phase.output;
 
@@ -1381,6 +1421,7 @@ export class Orchestrator {
 				runId: run.runId,
 				stage: unsettled.stage,
 				attempt: unsettled.attempt,
+				round: run.round ?? 0,
 			})
 			.catch(() => null);
 
@@ -1414,7 +1455,8 @@ export class Orchestrator {
 	): Promise<void> {
 		const stage = marker.stage;
 
-		if (!isModelStage(stage)) return;
+		if (!isModelStage(stage) || (run.round ?? 0) !== (marker.round ?? 0))
+			return;
 
 		const previous = marker.attempt - 1;
 
@@ -1423,6 +1465,7 @@ export class Orchestrator {
 				({ marker: entry }) =>
 					entry.runId === run.runId &&
 					entry.stage === stage &&
+					(entry.round ?? 0) === (run.round ?? 0) &&
 					entry.attempt === previous,
 			)?.marker.usage ?? null;
 
@@ -1484,13 +1527,55 @@ export class Orchestrator {
 	 */
 	async #attemptSpent(run: ActiveRun, stage: ModelStage): Promise<number> {
 		const spent = await this.#input.executor
-			.spent({ runId: run.runId, stage, attempt: run.attempt })
+			.spent({
+				runId: run.runId,
+				stage,
+				attempt: run.attempt,
+				round: run.round ?? 0,
+			})
 			.catch(() => null);
 
 		return spent ?? 0;
 	}
 
+	async #roundSpent(
+		run: ActiveRun,
+		stage: ModelStage,
+		prior: number,
+	): Promise<number> {
+		let total = prior;
+
+		for (let attempt = 1; attempt < run.attempt; attempt++)
+			total +=
+				(await this.#input.executor.spent({
+					runId: run.runId,
+					stage,
+					attempt,
+					round: run.round ?? 0,
+				})) ?? 0;
+
+		return total;
+	}
+
 	#finishStage(run: ActiveRun, result: StageEnd, limits: Limits): void {
+		if (run.stage === "review" && result.review !== undefined) {
+			run.usage += result.usage;
+			this.state.totals.usage += result.usage;
+			run.phase = {
+				kind: "reporting",
+				status: "stage_passed",
+				effects: { kind: "review", receipt: result.review },
+			};
+
+			return;
+		}
+
+		if (run.stage === "review" && result.kind === "passed") {
+			this.#endStage(run, "stage_failed", result.usage, limits);
+
+			return;
+		}
+
 		if (run.stage === "build" && result.build !== undefined) {
 			if (
 				result.build.kind === "unavailable" ||
@@ -2074,6 +2159,7 @@ export class Orchestrator {
 			replay: false,
 			unsettled: null,
 			validation: claim.validation,
+			round: claim.round ?? 0,
 			adopted: true,
 			clearNeedsInfo: false,
 			labelFailures: 0,
@@ -2201,11 +2287,23 @@ export class Orchestrator {
 			labelTick: 0,
 			inputs: null,
 			validation: local?.runId === marker.runId ? local.validation : undefined,
+			round: Math.max(
+				marker.round ?? 0,
+				local?.runId === marker.runId ? (local.round ?? 0) : 0,
+			),
 			phase:
 				marker.status === "blocked"
 					? { kind: "blocked", reason: "sandbox_unavailable" }
 					: { kind: "claimed" },
 		};
+
+		if ((run.round ?? 0) > (marker.round ?? 0)) {
+			run.stage = "build";
+			run.attempt = 1;
+			run.validation = undefined;
+			run.usage = Math.max(run.usage, local?.usage ?? 0);
+			run.phase = { kind: "claimed" };
+		}
 
 		this.state.runs.set(run.issue, run);
 		this.#local.set(run.issue, { ...claimOf(run), seq });
@@ -2223,12 +2321,17 @@ export class Orchestrator {
 		const releasing = eligibility !== "current" && eligibility !== "unverified";
 
 		const output =
-			marker.status === "running" && isModelStage(run.stage)
+			(run.round ?? 0) === (marker.round ?? 0) &&
+			marker.status === "running" &&
+			isModelStage(run.stage)
 				? await this.#input.executor
 						.output({
 							runId: run.runId,
 							stage: run.stage,
 							attempt: run.attempt,
+							round: run.round ?? 0,
+							workflowSha: run.workflowSha,
+							workflowDigest: run.workflowDigest,
 						})
 						.catch(() => null)
 				: null;
@@ -2279,7 +2382,11 @@ export class Orchestrator {
 			);
 		} else if (eligibility !== "current" && eligibility !== "unverified") {
 			this.#release(run, eligibility);
-		} else if (limits !== null && marker.status === "running") {
+		} else if (
+			limits !== null &&
+			marker.status === "running" &&
+			(run.round ?? 0) === (marker.round ?? 0)
+		) {
 			this.#endStage(run, "interrupted", 0, limits);
 		} else if (limits !== null && marker.status === "retrying") {
 			const created = ledger.markers.find(
@@ -3047,6 +3154,8 @@ export class Orchestrator {
 	}
 
 	async #launch(run: ActiveRun): Promise<boolean> {
+		if (run.claimUnwritten) return false;
+
 		if (!(await this.#stillReady(run))) return false;
 
 		if (run.stage === "validate") {
@@ -3068,7 +3177,21 @@ export class Orchestrator {
 			? await this.#attemptSpent(run, stage)
 			: 0;
 
-		if (run.usage + prior >= config.usage.maxTokensPerRun) {
+		const roundLimit =
+			stage === "review"
+				? REVIEW_MAX_TOKENS
+				: stage === "build" && (run.round ?? 0) > 0
+					? REPAIR_BUILD_MAX_TOKENS
+					: null;
+
+		const roundSpent =
+			roundLimit !== null && isModelStage(stage)
+				? await this.#roundSpent(run, stage, prior)
+				: prior;
+
+		const runExhausted = run.usage + prior >= config.usage.maxTokensPerRun;
+
+		if (runExhausted || (roundLimit !== null && roundSpent >= roundLimit)) {
 			run.usage += prior;
 			this.state.totals.usage += prior;
 			run.phase = { kind: "ending", status: "budget_exhausted" };
@@ -3076,7 +3199,7 @@ export class Orchestrator {
 				issue: run.issue,
 				runId: run.runId,
 				stage: run.stage,
-				why: "run_tokens",
+				why: runExhausted ? "run_tokens" : "round_tokens",
 			});
 			await this.#sync(run);
 
@@ -3088,6 +3211,7 @@ export class Orchestrator {
 				runId: run.runId,
 				stage,
 				attempt: run.attempt,
+				round: run.round ?? 0,
 			});
 
 			if (await this.#recoverOutput(run, kept)) {
@@ -3180,6 +3304,8 @@ export class Orchestrator {
 			runId: run.runId,
 			stage,
 			attempt: run.attempt,
+			round: run.round ?? 0,
+			review: prepared.review,
 			workspace: prepared.workspace ?? files.workspacePath(run.runId),
 			build: prepared.build,
 			prompt: prepared.prompt,
@@ -3192,27 +3318,38 @@ export class Orchestrator {
 							prepared.inputs.contract.contract.files.length > 8
 							? [...BUILD_TOOLS, "subagent"]
 							: BUILD_TOOLS
-						: stage === "accept"
-							? ACCEPTANCE_TOOLS
-							: SPECIFY_TOOLS,
+						: stage === "review"
+							? REVIEW_TOOLS
+							: stage === "accept"
+								? ACCEPTANCE_TOOLS
+								: SPECIFY_TOOLS,
 			skills:
 				prepared.inputs === null
 					? []
 					: stage === "build"
 						? ["build"]
-						: stage === "accept"
-							? ACCEPTANCE_SKILLS
-							: SPECIFY_SKILLS,
+						: stage === "review"
+							? []
+							: stage === "accept"
+								? ACCEPTANCE_SKILLS
+								: SPECIFY_SKILLS,
 			settings: {
 				model: config.stages[stage].model,
 				fallback: config.stages[stage].fallbackModel,
 				budget: config.stages[stage].budget,
 				maxTokens:
 					stage === "build"
-						? Math.max(0, BUILD_MAX_TOKENS - prior)
-						: stage === "accept"
-							? Math.max(0, ACCEPTANCE_MAX_TOKENS - prior)
-							: null,
+						? Math.max(
+								0,
+								((run.round ?? 0) > 0
+									? REPAIR_BUILD_MAX_TOKENS
+									: BUILD_MAX_TOKENS) - roundSpent,
+							)
+						: stage === "review"
+							? Math.max(0, REVIEW_MAX_TOKENS - roundSpent)
+							: stage === "accept"
+								? Math.max(0, ACCEPTANCE_MAX_TOKENS - prior)
+								: null,
 			},
 			remainingRunTokens: Math.max(
 				0,
@@ -3241,7 +3378,14 @@ export class Orchestrator {
 					const output =
 						result.kind === "passed"
 							? await executor
-									.output({ runId: run.runId, stage, attempt })
+									.output({
+										runId: run.runId,
+										stage,
+										attempt,
+										round: run.round ?? 0,
+										workflowSha: run.workflowSha,
+										workflowDigest: run.workflowDigest,
+									})
 									.catch(() => null)
 							: null;
 
@@ -3254,6 +3398,10 @@ export class Orchestrator {
 							result.receipt.fallback?.observed ??
 							result.receipt.models.observed,
 						usage: prior + result.usage,
+						review:
+							output instanceof Object && output.kind === "review"
+								? output.receipt
+								: undefined,
 						build:
 							output instanceof Object && output.kind === "build"
 								? output.result
@@ -3287,6 +3435,34 @@ export class Orchestrator {
 		return true;
 	}
 
+	async #repairOrFail(run: ActiveRun, why: string): Promise<void> {
+		if ((run.round ?? 0) >= MAX_REPAIR_ROUNDS) {
+			run.phase = { kind: "ending", status: "failed" };
+			this.state.totals.failures++;
+			this.#input.log("repair_cap", {
+				runId: run.runId,
+				round: run.round ?? 0,
+				why,
+			});
+
+			return;
+		}
+
+		run.round = (run.round ?? 0) + 1;
+		run.validation = undefined;
+		run.stage = "build";
+		run.attempt = 1;
+		run.inputs = null;
+		run.replay = false;
+		run.phase = { kind: "claimed" };
+		await this.#writeClaim(run);
+		this.#input.log("repair_started", {
+			runId: run.runId,
+			round: run.round,
+			why,
+		});
+	}
+
 	async #validate(run: ActiveRun): Promise<void> {
 		if (run.marked?.candidate != null && run.validation === undefined) {
 			run.phase = { kind: "ending", status: "failed" };
@@ -3317,6 +3493,7 @@ export class Orchestrator {
 			issue: run.issue,
 			eventAt: run.eventAt,
 			baseSha: run.workflowSha,
+			round: run.round ?? 0,
 			now: this.#input.clock.now(),
 			wallMs: this.#config?.stages.validate.budget.wallMs ?? 1_200_000,
 			state: run.validation ?? null,
@@ -3331,10 +3508,12 @@ export class Orchestrator {
 		if (result.state !== null) run.validation = result.state;
 
 		if (result.kind === "finished") {
-			run.phase = {
-				kind: "ending",
-				status: result.verdict.pass ? "stage_passed" : "failed",
-			};
+			if (verdictPasses(result.verdict)) {
+				run.stage = "review";
+				run.attempt = 1;
+				run.inputs = null;
+				run.phase = { kind: "claimed" };
+			} else await this.#repairOrFail(run, "validation_failed");
 			this.#input.log("validation_verdict", {
 				issue: run.issue,
 				runId: run.runId,
@@ -3441,6 +3620,38 @@ export class Orchestrator {
 			return { kind: "fail" } as const;
 		};
 
+		if (run.stage === "review") {
+			const prepare = this.#input.executor.prepareReview;
+
+			if (prepare === undefined) return fail("review_unavailable");
+
+			try {
+				const review = await prepare({
+					runId: run.runId,
+					round: run.round ?? 0,
+					workspace: `${files.workspacePath(run.runId)}-review-r${run.round ?? 0}`,
+					workflowSha: run.workflowSha,
+					workflowDigest: run.workflowDigest,
+				});
+
+				return {
+					kind: "ready",
+					workspace: review.workspace,
+					review,
+					inputs: {
+						files: new Set(review.input.files.keys()),
+						source: "unedited",
+						link: null,
+					},
+					prompt: "",
+				};
+			} catch (error) {
+				return fail(
+					error instanceof Error ? error.message : "review_unavailable",
+				);
+			}
+		}
+
 		if (
 			run.stage !== "specify" &&
 			run.stage !== "accept" &&
@@ -3464,7 +3675,7 @@ export class Orchestrator {
 
 		const workspace =
 			run.stage === "build"
-				? `${files.workspacePath(run.runId)}-build-${run.attempt}`
+				? `${files.workspacePath(run.runId)}-build-r${run.round ?? 0}-${run.attempt}`
 				: files.workspacePath(run.runId);
 
 		const checked = await this.#input.executor
@@ -3474,6 +3685,7 @@ export class Orchestrator {
 				sha: run.workflowSha,
 				workspace,
 				build: run.stage === "build",
+				round: run.round ?? 0,
 			})
 			.catch((): CheckoutResult => ({ kind: "unavailable" }));
 
@@ -3526,6 +3738,7 @@ export class Orchestrator {
 				build = {
 					binding: {
 						runId: run.runId,
+						round: run.round ?? 0,
 						baseSha: contract.contract.base.sha,
 						contractDigest: contract.digest,
 						acceptanceDigest: suite.receipt.acceptanceDigest,
@@ -3811,6 +4024,7 @@ export class Orchestrator {
 			if (
 				bound.kind === "blocked" ||
 				result.kind !== "found" ||
+				(result.receipt.round ?? 0) !== (run.round ?? 0) ||
 				result.receipt.baseSha !== run.workflowSha ||
 				result.receipt.contractDigest !== bound.digest
 			) {
@@ -3831,6 +4045,26 @@ export class Orchestrator {
 			};
 
 			return true;
+		}
+
+		if (stage === "review") {
+			if (output instanceof Object && output.kind === "pending") {
+				run.phase = { kind: "claimed" };
+
+				return true;
+			}
+
+			if (output instanceof Object && output.kind === "review") {
+				run.phase = {
+					kind: "reporting",
+					status: "stage_passed",
+					effects: output,
+				};
+
+				return true;
+			}
+
+			return false;
 		}
 
 		if (stage !== "specify" && stage !== "accept") return false;
@@ -3886,7 +4120,8 @@ export class Orchestrator {
 
 		if (
 			output === null ||
-			(output instanceof Object && output.kind === "build")
+			(output instanceof Object &&
+				(output.kind === "build" || output.kind === "review"))
 		)
 			return false;
 
@@ -3992,7 +4227,8 @@ export class Orchestrator {
 				suite?.kind !== "found" ||
 				receipt.contractDigest !== contract.digest ||
 				receipt.acceptanceDigest !== suite.receipt.acceptanceDigest ||
-				receipt.baseSha !== run.workflowSha
+				receipt.baseSha !== run.workflowSha ||
+				(receipt.round ?? 0) !== (run.round ?? 0)
 			) {
 				this.#input.log("stage_inputs_refused", {
 					...fields,
@@ -4034,6 +4270,30 @@ export class Orchestrator {
 			}
 
 			return posted;
+		}
+
+		if (effects.kind === "review") {
+			const receipt = effects.receipt;
+
+			if (
+				receipt.runId !== run.runId ||
+				receipt.round !== (run.round ?? 0) ||
+				receipt.candidateSha !== run.validation?.publication?.candidateSha ||
+				receipt.ciRunId !== run.validation?.ciRunId
+			) {
+				run.phase = { kind: "ending", status: "failed" };
+				this.state.totals.failures++;
+
+				return false;
+			}
+
+			if (receipt.blocking) {
+				await this.#repairOrFail(run, "blocking_review");
+
+				return false;
+			}
+
+			return true;
 		}
 
 		if (effects.kind === "acceptance") {
@@ -4228,7 +4488,7 @@ export class Orchestrator {
 			marked.branch !== (run.validation?.publication?.branch ?? null) ||
 			(marked.candidate ?? null) !==
 				(run.validation?.publication?.candidateSha ?? null) ||
-			(marked.round ?? 0) !== (run.validation?.round ?? 0) ||
+			(marked.round ?? 0) !== (run.round ?? 0) ||
 			(marked.ciRun ?? null) !== (run.validation?.ciRunId ?? null)
 		) {
 			const marker = markerOf(run, {
@@ -4338,12 +4598,18 @@ function claimOf(run: ActiveRun): ClaimRecord {
 		usage: run.marked?.usage ?? null,
 	};
 
+	const saved =
+		(run.round ?? 0) > (run.marked?.round ?? 0)
+			? { ...claim, stage: run.stage, attempt: run.attempt, usage: run.usage }
+			: claim;
+
 	const labels =
 		run.labelFailures === 0
-			? claim
-			: { ...claim, labelFailures: run.labelFailures };
+			? saved
+			: { ...saved, labelFailures: run.labelFailures };
 
-	if (run.validation === undefined) return labels;
+	if (run.validation === undefined)
+		return (run.round ?? 0) > 0 ? { ...labels, round: run.round } : labels;
 
 	return {
 		...labels,
@@ -4372,7 +4638,7 @@ function markerOf(
 	run: Omit<
 		Marker,
 		"v" | "repo" | "status" | "seq" | "branch" | "pr" | "cursor"
-	> & { readonly validation?: ValidationState },
+	> & { readonly validation?: ValidationState; readonly round?: number },
 
 	next: Pick<Marker, "repo" | "status" | "seq" | "cursor">,
 ): Marker {
@@ -4392,7 +4658,7 @@ function markerOf(
 		seq: next.seq,
 		branch: run.validation?.publication?.branch ?? null,
 		candidate: run.validation?.publication?.candidateSha ?? null,
-		round: run.validation?.round ?? 0,
+		round: run.round ?? 0,
 		ciRun: run.validation?.ciRunId ?? null,
 		pr: null,
 		usage: run.usage,

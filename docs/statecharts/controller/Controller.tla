@@ -22,10 +22,12 @@ VARIABLES
     pending,     \* event of a live run reserved after a restart but not yet adopted, 0 for none
     restarts,
     launchedEnded, \* a stage launched for a run whose marker was already terminal
-    branches      \* events with a published branch, including pending terminal cleanup
+    branches,     \* events with published refs, abstracted across rounds
+    stage,
+    round
 
 vars == <<ticket, event, run, ph, endAs, attempt, tokens, marker, cur, orphan,
-          loaded, reconciled, sandboxOk, pending, restarts, launchedEnded, branches>>
+          loaded, reconciled, sandboxOk, pending, restarts, launchedEnded, branches, stage, round>>
 
 Events == {1, 2}
 Terminal == {"released", "failed", "budget_exhausted", "stage_passed"}
@@ -47,6 +49,7 @@ Init ==
     /\ cur = "none" /\ orphan = FALSE
     /\ loaded = TRUE /\ reconciled = TRUE /\ sandboxOk = TRUE
     /\ pending = 0 /\ restarts = 0 /\ launchedEnded = FALSE /\ branches = {}
+    /\ stage = "build" /\ round = 0
 
 \* Moves the run to a live phase and posts its marker.
 Go(p) == ph' = p /\ marker' = [marker EXCEPT ![run] = StatusOf(p)]
@@ -72,7 +75,7 @@ EndStage(c) ==
                      /\ Go("retry") /\ UNCHANGED <<run, endAs>>
 
 Environment == <<ticket, event, orphan, loaded, reconciled, sandboxOk, pending, restarts>>
-Fixed == <<Environment, branches>>
+Fixed == <<Environment, branches, stage, round>>
 
 \* Dispatch claims only after the tick's ledger read, which adopts or
 \* releases a reserved run first.
@@ -81,7 +84,8 @@ Admit ==
     /\ marker[event] = "none"
     /\ run' = event /\ attempt' = 1 /\ tokens' = TRUE
     /\ ph' = "claimed" /\ marker' = [marker EXCEPT ![event] = "claimed"]
-    /\ UNCHANGED <<endAs, cur, launchedEnded>> /\ UNCHANGED Fixed
+    /\ stage' = "build" /\ round' = 0
+    /\ UNCHANGED <<endAs, cur, launchedEnded, Environment, branches>>
 
 Ready == loaded /\ ticket = "ready" /\ run = event
 
@@ -101,10 +105,11 @@ Launch ==
 Running == ph = "running" /\ cur = "running"
 
 StagePasses ==
-    /\ Running /\ cur' = "none" /\ Go("publishing")
+    /\ Running /\ stage = "build" /\ cur' = "none" /\ Go("publishing")
     /\ UNCHANGED <<run, endAs, attempt, tokens, launchedEnded>> /\ UNCHANGED Fixed
 
 Published ==
+    /\ UNCHANGED <<stage, round>>
     /\ ph = "publishing" /\ Go("awaiting_ci")
     /\ branches' = branches \cup {run}
     /\ UNCHANGED <<run, endAs, attempt, tokens, cur, launchedEnded>> /\ UNCHANGED Environment
@@ -127,16 +132,39 @@ CIDeadline ==
     /\ UNCHANGED <<run, endAs, attempt, tokens, cur, launchedEnded>> /\ UNCHANGED Fixed
 
 Cleanup ==
+    /\ UNCHANGED <<stage, round>>
     /\ \E e \in Events :
         /\ e \in branches /\ marker[e] \in Terminal
         /\ branches' = branches \ {e}
     /\ UNCHANGED <<ticket, event, run, ph, endAs, attempt, tokens, marker, cur,
                    orphan, loaded, reconciled, sandboxOk, pending, restarts, launchedEnded>>
 
+RepairOrFail ==
+    IF round < 2
+    THEN /\ round' = round + 1 /\ stage' = "build" /\ attempt' = 1
+         /\ Go("claimed") /\ UNCHANGED <<run, endAs, cur>>
+    ELSE /\ Finish("failed", "none") /\ UNCHANGED <<attempt, stage, round>>
+
 StoreVerdict ==
     /\ ph \in {"verdict_pass", "verdict_fail", "ci_timeout"}
-    /\ Finish(IF ph = "verdict_pass" THEN "stage_passed" ELSE "failed", "none")
+    /\ CASE ph = "verdict_pass" ->
+                /\ stage' = "review" /\ attempt' = 1 /\ Go("claimed")
+                /\ UNCHANGED <<run, endAs, cur, round>>
+         [] ph = "verdict_fail" -> RepairOrFail
+         [] OTHER -> /\ Finish("failed", "none") /\ UNCHANGED <<attempt, stage, round>>
+    /\ UNCHANGED <<tokens, launchedEnded, Environment, branches>>
+
+ReviewPasses ==
+    /\ Running /\ stage = "review" /\ Finish("stage_passed", "none")
     /\ UNCHANGED <<attempt, tokens, launchedEnded>> /\ UNCHANGED Fixed
+
+ReviewBlocks ==
+    /\ Running /\ stage = "review"
+    /\ IF round < 2
+       THEN /\ round' = round + 1 /\ stage' = "build" /\ attempt' = 1
+            /\ cur' = "none" /\ Go("claimed") /\ UNCHANGED <<run, endAs>>
+       ELSE /\ Finish("failed", "none") /\ UNCHANGED <<attempt, stage, round>>
+    /\ UNCHANGED <<tokens, launchedEnded, Environment, branches>>
 
 StageRefuses ==
     /\ Running /\ Finish("failed", "none")
@@ -163,11 +191,13 @@ PostEnd ==
     /\ UNCHANGED <<attempt, tokens, cur, launchedEnded>> /\ UNCHANGED Fixed
 
 SandboxStops ==
+    /\ UNCHANGED <<stage, round>>
     /\ cur = "stopping" /\ cur' = "none"
     /\ UNCHANGED <<ticket, event, run, ph, endAs, attempt, tokens, marker,
                    orphan, loaded, reconciled, sandboxOk, pending, restarts, launchedEnded, branches>>
 
 Restart ==
+    /\ UNCHANGED <<stage, round>>
     /\ restarts < MaxRestarts /\ restarts' = restarts + 1
     /\ run' = 0 /\ ph' = "none" /\ endAs' = "none"
     /\ orphan' = (orphan \/ cur # "none") /\ cur' = "none"
@@ -180,6 +210,7 @@ LiveEvent == {e \in Events : marker[e] \in Live}
 \* #loadClaims reserves the run its claim file names. Adoption waits for
 \* a later step whose ledger, timeline and workflow reads succeed.
 Recover ==
+    /\ UNCHANGED <<stage, round>>
     /\ ~loaded /\ loaded' = TRUE
     /\ \E ok \in BOOLEAN :
         /\ reconciled' = ok /\ orphan' = (orphan /\ ~ok)
@@ -189,6 +220,7 @@ Recover ==
 
 \* #discover, #settleClaims and #adoptExistingRun rebuild the run from its marker.
 Adopt ==
+    /\ UNCHANGED <<stage, round>>
     /\ loaded /\ pending # 0 /\ pending' = 0
     /\ LET e == pending
             m == marker[pending]
@@ -215,26 +247,31 @@ Adopt ==
 
 \* The preflight retries the reconcile until every leftover is stopped.
 Reconcile ==
+    /\ UNCHANGED <<stage, round>>
     /\ loaded /\ ~reconciled /\ reconciled' = TRUE /\ orphan' = FALSE
     /\ UNCHANGED <<ticket, event, run, ph, endAs, attempt, tokens, marker, cur,
                    loaded, sandboxOk, pending, restarts, launchedEnded, branches>>
 
 YouRemoveLabel ==
+    /\ UNCHANGED <<stage, round>>
     /\ ticket = "ready" /\ ticket' = "gone"
     /\ UNCHANGED <<event, run, ph, endAs, attempt, tokens, marker, cur, orphan,
                    loaded, reconciled, sandboxOk, pending, restarts, launchedEnded, branches>>
 
 YouRelabel ==
+    /\ UNCHANGED <<stage, round>>
     /\ AllowRelabel /\ event = 1 /\ event' = 2 /\ ticket' = "ready"
     /\ UNCHANGED <<run, ph, endAs, attempt, tokens, marker, cur, orphan,
                    loaded, reconciled, sandboxOk, pending, restarts, launchedEnded, branches>>
 
 SandboxBreaks ==
+    /\ UNCHANGED <<stage, round>>
     /\ sandboxOk /\ sandboxOk' = FALSE
     /\ UNCHANGED <<ticket, event, run, ph, endAs, attempt, tokens, marker, cur,
                    orphan, loaded, reconciled, pending, restarts, launchedEnded, branches>>
 
 SandboxHeals ==
+    /\ UNCHANGED <<stage, round>>
     /\ ~sandboxOk /\ sandboxOk' = TRUE
     /\ UNCHANGED <<ticket, event, run, ph, endAs, attempt, tokens, marker, cur,
                    orphan, loaded, reconciled, pending, restarts, launchedEnded, branches>>
@@ -246,7 +283,7 @@ Idle ==
 
 Next ==
     \/ Admit \/ Launch \/ StagePasses \/ Published \/ CollectCI \/ StoreVerdict
-    \/ CIUnavailable \/ RetryCI \/ CIDeadline \/ Cleanup
+    \/ CIUnavailable \/ RetryCI \/ CIDeadline \/ Cleanup \/ ReviewPasses \/ ReviewBlocks
     \/ StageRefuses \/ StageFails \/ StageStalls
     \/ Release \/ PostEnd \/ SandboxStops \/ Restart \/ Recover \/ Adopt \/ Reconcile
     \/ YouRemoveLabel \/ YouRelabel \/ SandboxBreaks \/ SandboxHeals \/ Idle
@@ -254,7 +291,9 @@ Next ==
 \* Adoption's reads succeed eventually.
 Spec == Init /\ [][Next]_vars /\ WF_vars(Adopt) /\ WF_vars(Recover)
         /\ WF_vars(Published) /\ WF_vars(CIDeadline) /\ WF_vars(StoreVerdict)
-        /\ WF_vars(Release) /\ WF_vars(Cleanup)
+        /\ WF_vars(Release) /\ WF_vars(Cleanup) /\ WF_vars(ReviewPasses)
+        /\ WF_vars(StagePasses) /\ WF_vars(SandboxHeals) /\ WF_vars(Reconcile)
+        /\ SF_vars(Launch) /\ WF_vars(SandboxStops) /\ WF_vars(PostEnd)
 
 CIEnds == \A e \in Events : marker[e] \in CI ~> (marker[e] \in Terminal /\ e \notin branches)
 
@@ -263,7 +302,7 @@ OneSandboxPerIssue == ~(orphan /\ cur # "none") /\ (ph \in CI => cur = "none")
 \* A run that ended never launches a stage again.
 EndedStaysEnded == ~launchedEnded
 \* A run never gets more than MaxAttempts attempts at a stage.
-AttemptCap == attempt <= MaxAttempts
+AttemptCap == attempt <= MaxAttempts /\ round <= 2
 \* At most one live run per issue on GitHub.
 OneLiveRun == \A a, b \in Events : (marker[a] \in Live /\ marker[b] \in Live) => a = b
 \* After the first tick, a live run on GitHub is held in memory or reserved for adoption.

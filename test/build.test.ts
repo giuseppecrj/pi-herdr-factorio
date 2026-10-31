@@ -43,6 +43,47 @@ function fixture(t: { after(fn: () => void): void }) {
 	};
 }
 
+test("keeps immutable patch and visible-test stores separate for rounds zero to two", async (t) => {
+	const f = fixture(t);
+
+	const binding = {
+		runId: digestOf("rounds"),
+		baseSha: "a".repeat(40),
+		contractDigest: digestOf("contract"),
+		acceptanceDigest: digestOf("acceptance"),
+	};
+
+	const session = { model: "openai/gpt-6.1-sol", observed: null, commands: [] };
+
+	for (const round of [0, 1, 2]) {
+		writeFileSync(join(f.workspace, "value"), `round ${round}\n`);
+		const collected = await collectPatch(f);
+
+		if (collected.kind !== "collected") throw new Error("fixture");
+		assert.equal(
+			storePatch(f.stateDir, { ...binding, round }, collected, session).kind,
+			"found",
+		);
+		finishPatch(
+			f.stateDir,
+			{ ...binding, round },
+			{ command: "test", exitCode: round, tail: "", wallMs: 1 },
+		);
+	}
+
+	for (const round of [0, 1, 2]) {
+		const kept = readPatch(f.stateDir, { ...binding, round });
+		assert.equal(kept.kind, "found");
+
+		if (kept.kind !== "found") continue;
+		assert.match(
+			Buffer.from(kept.patch).toString(),
+			new RegExp(`round ${round}`),
+		);
+		assert.equal(kept.receipt.visibleTests?.exitCode, round);
+	}
+});
+
 test("collects deterministic exact bytes, deletions, binary files and executable modes", async (t) => {
 	const f = fixture(t);
 
@@ -79,6 +120,31 @@ test("rejects empty patches and records both sides of forbidden renames", async 
 	assert.equal(result.policy, "forbidden");
 	assert.deepEqual(result.changedPaths, ["original", "test/acceptance/moved"]);
 	assert.ok(result.patch.length > 0);
+});
+
+test("collection forbids files below the reserved feedback path but permits neighbors", async (t) => {
+	const f = fixture(t);
+	mkdirSync(join(f.workspace, ".factory-feedback.json"));
+	writeFileSync(
+		join(f.workspace, ".factory-feedback.json/x.ts"),
+		"export {};\n",
+	);
+	writeFileSync(join(f.workspace, ".factory-feedback.json.ts"), "export {};\n");
+	const result = await collectPatch(f);
+	assert.equal(result.kind, "collected");
+
+	if (result.kind !== "collected") throw new Error("collection");
+	assert.equal(result.policy, "forbidden");
+	assert.deepEqual(result.changedPaths, [
+		".factory-feedback.json.ts",
+		".factory-feedback.json/x.ts",
+	]);
+	rmSync(join(f.workspace, ".factory-feedback.json"), { recursive: true });
+	const neighbor = await collectPatch(f);
+	assert.equal(neighbor.kind, "collected");
+
+	if (neighbor.kind !== "collected") throw new Error("collection");
+	assert.equal(neighbor.policy, "clean");
 });
 
 test("rejects escaping symlinks including physical dot-component chains", async (t) => {

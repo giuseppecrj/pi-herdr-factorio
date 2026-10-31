@@ -25,6 +25,7 @@ import {
 	collectVerdict,
 	repairFeedback,
 	parseValidationState,
+	validationDir,
 } from "../src/validation.ts";
 import {
 	arrayOf,
@@ -458,7 +459,15 @@ function parseClaim(text: string): ClaimRecord | null {
 		usage,
 	};
 
-	const labels = labelFailures === null ? claim : { ...claim, labelFailures };
+	const round =
+		countOf(fieldOf(objectOf(value), "round")) ?? validation?.round ?? 0;
+
+	if (round > 2 || (validation !== undefined && validation.round !== round))
+		return null;
+	let labels = labelFailures === null ? claim : { ...claim, labelFailures };
+
+	if (fieldOf(objectOf(value), "round") !== undefined)
+		labels = { ...labels, round };
 
 	if (validation === undefined) return labels;
 
@@ -1299,8 +1308,12 @@ export async function writeStatus(
 }
 
 export function readStoredVerdict(path: string): Verdict {
-	// SAFETY: controller-private write-once verdict; callers verify artifact bindings before reuse.
-	return JSON.parse(regularText(path, 1024 * 1024)) as Verdict;
+	try {
+		// SAFETY: controller-private write-once verdict; callers verify artifact bindings before reuse.
+		return JSON.parse(regularText(path, 1024 * 1024)) as Verdict;
+	} catch {
+		throw new Error("stored_verdict_invalid");
+	}
 }
 
 export async function readStatus(stateDir: string): Promise<JsonValue | null> {
@@ -1381,7 +1394,7 @@ export function controllerValidator(config: {
 			version: 1,
 			startedAt: input.now,
 			deadline: input.now + Math.min(input.wallMs, CI_DEADLINE_MS),
-			round: 0,
+			round: input.round ?? 0,
 			originalBase: input.baseSha,
 			baseSha: input.baseSha,
 			baseResolved: false,
@@ -1405,7 +1418,7 @@ export function controllerValidator(config: {
 			const publication = state.publication;
 
 			if (publication !== null && repository !== null) {
-				const dir = join(config.stateDir, "validation", input.runId);
+				const dir = validationDir(config.stateDir, input.runId, state.round);
 				privateDir(dir);
 				const path = join(dir, "failure.json");
 
@@ -1430,7 +1443,10 @@ export function controllerValidator(config: {
 		};
 
 		try {
-			if (state.originalBase !== input.baseSha || state.round !== 0)
+			if (
+				state.originalBase !== input.baseSha ||
+				state.round !== (input.round ?? 0)
+			)
 				return failed("validation_binding");
 
 			if (!(await save())) return failed("claim_unwritable");
@@ -1457,6 +1473,7 @@ export function controllerValidator(config: {
 				);
 
 			const patch = readPatch(config.stateDir, {
+				round: state.round,
 				runId: input.runId,
 				baseSha: input.baseSha,
 				contractDigest: contract.digest,
@@ -1498,7 +1515,7 @@ export function controllerValidator(config: {
 				save,
 			);
 
-			const dir = join(config.stateDir, "validation", input.runId);
+			const dir = validationDir(config.stateDir, input.runId, state.round);
 			privateDir(dir);
 			const verdictPath = join(dir, "verdict.json");
 			const failurePath = join(dir, "failure.json");
@@ -1879,7 +1896,7 @@ export async function sweepValidation(config: {
 			candidateBranch(claim.issue, claim.runId, state.round)
 		)
 			continue;
-		const dir = join(config.stateDir, "validation", claim.runId);
+		const dir = validationDir(config.stateDir, claim.runId, state.round);
 
 		if (present(join(dir, "cleanup.json"))) continue;
 		const contract = await files.readContract(claim.runId);
@@ -1941,6 +1958,7 @@ export async function sweepValidation(config: {
 				baseSha: contract.contract.base.sha,
 				now: config.now?.() ?? Date.now(),
 				wallMs: CI_DEADLINE_MS,
+				round: state.round,
 				state,
 				dispatchAllowed: false,
 				save: async (validation) => files.writeClaim({ ...claim, validation }),

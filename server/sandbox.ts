@@ -1,4 +1,19 @@
 import { randomBytes } from "node:crypto";
+import { fileArtifacts, regularText } from "../src/artifacts.ts";
+import {
+	candidateReviewPrompt,
+	feedbackPrompt,
+	keepReview,
+	parseSeat,
+	reviewCandidate,
+	reviewFeedback,
+	reviewIdentityLabel,
+	reviewSeats,
+	seatPrompt,
+	type SeatReceipt,
+} from "../src/review.ts";
+import { validationDir } from "../src/validation.ts";
+import { isGitSha, parseWorkflow, WORKFLOW_PATH } from "../src/workflow.ts";
 import {
 	collectPatch,
 	commandReceipts,
@@ -6,6 +21,9 @@ import {
 	trustedVisiblePlan,
 	checkBuildDisk,
 	patchBinding,
+	patchDir,
+	roundKey,
+	prepareRepairTree,
 	finishPatch,
 	patchedTree,
 	readPatch,
@@ -40,8 +58,9 @@ import type {
 	StageLaunch,
 	StageLaunchInput,
 	StageOutput,
+	ReviewPreparation,
 } from "../src/orchestrator.ts";
-import { isDigest, type Digest } from "../src/run.ts";
+import { digestOf, isDigest, verdictPasses, type Digest } from "../src/run.ts";
 import {
 	parseSpecifyOutput,
 	parseReviewOutput,
@@ -59,6 +78,7 @@ import {
 	controllerValidator,
 	sweepValidation,
 	fileRunFiles,
+	readStoredVerdict,
 	ghTarball,
 	type TarballFetch,
 } from "./controller.ts";
@@ -66,6 +86,7 @@ import { HERDR_AGENTS, PI_AGENT_DIR } from "./sandbox/assets/pi.ts";
 import { AUDIT_CAP_BYTES } from "./sandbox/audit.ts";
 import {
 	countOf,
+	arrayOf,
 	fieldOf,
 	objectOf,
 	parseJson,
@@ -799,7 +820,9 @@ export async function runStage(
 		fallback:
 			input.settings.fallback === null
 				? null
-				: bareModel(input.settings.fallback),
+				: input.settings.fallback.startsWith("openai/")
+					? input.settings.fallback
+					: bareModel(input.settings.fallback),
 		modelTokens: tokenCap,
 		modelRequests: Math.min(MODEL_REQUEST_CEILING, budget.maxTurns),
 	});
@@ -857,10 +880,11 @@ export async function runStage(
 		const xai = routeId("model-xai", table);
 
 		const switched =
-			openai !== null &&
-			xai !== null &&
-			(await gateway.setRoute(openai, false).catch(() => false)) &&
-			(await gateway.setRoute(xai, true).catch(() => false));
+			input.settings.fallback.startsWith("openai/") ||
+			(openai !== null &&
+				xai !== null &&
+				(await gateway.setRoute(openai, false).catch(() => false)) &&
+				(await gateway.setRoute(xai, true).catch(() => false)));
 
 		if (switched) sessions.push(1);
 
@@ -1313,8 +1337,9 @@ async function attemptSpent(
 	runId: Digest,
 	stage: ModelStage,
 	attempt: number,
+	round = 0,
 ): Promise<number | null> {
-	const base = `${stage}-${attempt}`;
+	const base = stageName(stage, attempt, round);
 	const root = join(stateDir, "stages", runId);
 	let names: string[];
 
@@ -1367,6 +1392,22 @@ async function executionSpent(dir: string): Promise<number | null> {
 	if (existsSync(join(dir, "specify.json"))) {
 		const totals = await Promise.all(
 			SPECIFY_SESSIONS.map((name) => executionSpent(join(dir, name))),
+		);
+
+		return totals.some((value) => value !== null)
+			? totals.reduce<number>((sum, value) => sum + (value ?? 0), 0)
+			: null;
+	}
+
+	if (existsSync(join(dir, "review.json"))) {
+		const names = readdirSync(dir).filter((name) =>
+			["code-review", "security-review", "simplify", "ultrareview"].includes(
+				name,
+			),
+		);
+
+		const totals = await Promise.all(
+			names.map((name) => executionSpent(join(dir, name))),
 		);
 
 		return totals.some((value) => value !== null)
@@ -1849,8 +1890,9 @@ async function attemptOutput(
 	runId: Digest,
 	stage: ModelStage,
 	attempt: number,
+	round = 0,
 ): Promise<StageOutput | null> {
-	const base = `${stage}-${attempt}`;
+	const base = stageName(stage, attempt, round);
 	const root = join(stateDir, "stages", runId);
 	let names: string[];
 
@@ -1887,7 +1929,11 @@ async function attemptOutput(
 
 		const file = textOf(fieldOf(objectOf(fieldOf(receipt, "output")), "file"));
 
-		if (outcome === null && existsSync(join(dir, "specify.json")))
+		if (
+			outcome === null &&
+			(existsSync(join(dir, "specify.json")) ||
+				existsSync(join(dir, "review.json")))
+		)
 			return { kind: "pending" };
 
 		if (outcome !== "passed" || file !== "output.txt") continue;
@@ -1919,11 +1965,20 @@ async function attemptOutput(
 	return null;
 }
 
-function readRunPatch(stateDir: string, runId: Digest): PatchRead {
+function stageName(stage: ModelStage, attempt: number, round = 0): string {
+	return round > 0 || stage === "review"
+		? `${stage}-r${round}-${attempt}`
+		: `${stage}-${attempt}`;
+}
+
+function readRunPatch(stateDir: string, runId: Digest, round = 0): PatchRead {
 	try {
 		const record = objectOf(
 			parseJson(
-				readFileSync(join(stateDir, "patches", `${runId}.json`), "utf8"),
+				readFileSync(
+					join(stateDir, "patches", `${roundKey(runId, round)}.json`),
+					"utf8",
+				),
 			),
 		);
 
@@ -1940,6 +1995,7 @@ function readRunPatch(stateDir: string, runId: Digest): PatchRead {
 			return { kind: "blocked", reason: "patch_invalid" };
 
 		return readPatch(stateDir, {
+			round,
 			runId,
 			baseSha,
 			contractDigest,
@@ -1947,14 +2003,19 @@ function readRunPatch(stateDir: string, runId: Digest): PatchRead {
 		});
 	} catch (error) {
 		return error instanceof Error && "code" in error && error.code === "ENOENT"
-			? existsSync(join(stateDir, "patches", runId))
+			? existsSync(patchDir(stateDir, runId, round))
 				? { kind: "blocked", reason: "patch_missing" }
 				: { kind: "absent" }
 			: { kind: "blocked", reason: "patch_invalid" };
 	}
 }
 
-function buildCommands(stateDir: string, runId: Digest, attempt: number) {
+function buildCommands(
+	stateDir: string,
+	runId: Digest,
+	attempt: number,
+	round = 0,
+) {
 	const root = join(stateDir, "stages", runId);
 	const commands: ReturnType<typeof commandReceipts> = [];
 
@@ -1975,7 +2036,10 @@ function buildCommands(stateDir: string, runId: Digest, attempt: number) {
 	};
 
 	for (const name of readdirSync(root).sort())
-		if (name === `build-${attempt}` || name.startsWith(`build-${attempt}.`))
+		if (
+			name === stageName("build", attempt, round) ||
+			name.startsWith(`${stageName("build", attempt, round)}.`)
+		)
 			walk(join(root, name));
 
 	return commands;
@@ -2136,6 +2200,7 @@ function cleanupBuildAgents(
 	stateDir: string,
 	runId: Digest,
 	attempt: number,
+	round = 0,
 ): void {
 	const root = join(stateDir, "stages", runId);
 
@@ -2143,8 +2208,8 @@ function cleanupBuildAgents(
 
 	for (const name of readdirSync(root)) {
 		if (
-			name !== `build-${attempt}` &&
-			!new RegExp(`^build-${attempt}\\.[0-9]+$`).test(name)
+			name !== stageName("build", attempt, round) &&
+			!new RegExp(`^${stageName("build", attempt, round)}\\.[0-9]+$`).test(name)
 		)
 			continue;
 
@@ -2229,6 +2294,364 @@ function cleanupBuildBase(stateDir: string, runId: Digest): void {
 		force: true,
 	});
 	rmSync(join(stateDir, "pristine", runId), { recursive: true, force: true });
+}
+
+async function prepareCandidateReview(
+	config: SandboxExecutorConfig,
+	input: Parameters<NonNullable<StageExecutor["prepareReview"]>>[0],
+): Promise<ReviewPreparation> {
+	const { runId, round, workspace, workflowSha, workflowDigest } = input;
+	const files = fileRunFiles(config.stateDir);
+	const bound = await files.readContract(runId);
+
+	if (bound.kind !== "found") throw new Error("contract_missing");
+
+	const suite = await fileArtifacts(config.stateDir).read(
+		runId,
+		bound.contract,
+		bound.digest,
+	);
+
+	const patch = readRunPatch(config.stateDir, runId, round);
+
+	if (suite.kind !== "found" || patch.kind !== "found")
+		throw new Error("review_inputs_missing");
+	const dir = validationDir(config.stateDir, runId, round);
+	const verdict = readStoredVerdict(join(dir, "verdict.json"));
+
+	if (
+		!verdictPasses(verdict) ||
+		!isGitSha(verdict.baseSha) ||
+		verdict.originalBase !== bound.contract.base.sha ||
+		verdict.patchDigest !== patch.receipt.patchDigest ||
+		patch.receipt.contractDigest !== bound.digest ||
+		patch.receipt.acceptanceDigest !== suite.receipt.acceptanceDigest ||
+		verdict.acceptanceDigest !== suite.receipt.acceptanceDigest
+	)
+		throw new Error("review_binding");
+
+	const gate = objectOf(parseJson(regularText(join(dir, "receipt.json"))));
+
+	if (
+		countOf(fieldOf(gate, "modelCalls")) !== 0 ||
+		fieldOf(gate, "candidateSha") !== verdict.candidateSha
+	)
+		throw new Error("review_gate_binding");
+
+	if (workflowSha !== bound.contract.base.sha)
+		throw new Error("workflow_mismatch");
+
+	const workflowWorkspace = files.workspacePath(runId);
+	mkdirSync(workflowWorkspace, { recursive: true, mode: 0o700 });
+
+	const pinned = await checkoutWorkspace({
+		stateDir: config.stateDir,
+		workspace: workflowWorkspace,
+		runId,
+		repo: bound.contract.base.repo,
+		sha: workflowSha,
+		fetch: config.fetchTarball ?? ghTarball,
+	});
+
+	if (pinned.kind !== "ready") throw new Error("workflow_checkout");
+
+	const text = await pinned.checkout.read(WORKFLOW_PATH, 256 * 1024);
+
+	if (text === null || digestOf(text) !== workflowDigest)
+		throw new Error("workflow_mismatch");
+
+	const workflow = parseWorkflow({
+		text,
+		repo: bound.contract.base.repo,
+		env: (name) => process.env[name],
+	});
+
+	if (workflow.kind !== "valid") throw new Error("workflow_invalid");
+
+	const reviewBase = join(config.stateDir, "review-base", verdict.baseSha);
+	const base = join(reviewBase, "trees", runId);
+	mkdirSync(base, { recursive: true, mode: 0o700 });
+
+	const checked = await checkoutWorkspace({
+		stateDir: reviewBase,
+		workspace: base,
+		runId,
+		repo: bound.contract.base.repo,
+		sha: verdict.baseSha,
+		fetch: config.fetchTarball ?? ghTarball,
+	});
+
+	if (checked.kind !== "ready") throw new Error("review_checkout");
+
+	rmSync(workspace, { recursive: true, force: true });
+	await prepareRepairTree(
+		base,
+		workspace,
+		patch.patch,
+		patch.receipt.changedPaths,
+		"{}",
+	);
+	rmSync(join(workspace, ".factory-feedback.json"));
+	const reviewedFiles = new Map<string, number>();
+
+	const walk = (root: string, prefix = "") => {
+		for (const entry of readdirSync(root, { withFileTypes: true })) {
+			const path = prefix + entry.name;
+
+			if (
+				path === ".github" ||
+				path === "test/acceptance" ||
+				entry.name === "node_modules" ||
+				entry.name === ".git"
+			)
+				continue;
+
+			if (entry.isDirectory()) walk(join(root, entry.name), `${path}/`);
+			else if (entry.isFile())
+				reviewedFiles.set(
+					path,
+					readFileSync(join(root, entry.name), "utf8").split("\n").length,
+				);
+		}
+	};
+
+	walk(workspace);
+
+	const risks = {
+		newDependency: fieldOf(gate, "newDependency") === true,
+		scriptsChanged: fieldOf(gate, "scriptsChanged") === true,
+		dependencies: objectOf(fieldOf(gate, "dependencies")) ?? {},
+		installScripts: arrayOf(fieldOf(gate, "installScripts")) ?? [],
+	};
+
+	return {
+		workspace,
+		verdict,
+		builder: patch.receipt.model,
+		input: {
+			binding: {
+				runId,
+				round,
+				candidateSha: verdict.candidateSha,
+				patchDigest: patch.receipt.patchDigest,
+				contractDigest: bound.digest,
+				acceptanceDigest: suite.receipt.acceptanceDigest,
+				ciRunId: verdict.ciRunId,
+				originalBase: bound.contract.base.sha,
+				baseSha: verdict.baseSha,
+			},
+			files: reviewedFiles,
+			scenarios: verdict.unjudged,
+			seats: reviewSeats(patch.receipt.changedPaths, risks),
+			prompt: candidateReviewPrompt(
+				bound.contract,
+				patch.patch,
+				patch.receipt.changedPaths,
+				suite.suite.scenarios.filter((s) => verdict.unjudged.includes(s.id)),
+				workflow.guidance.stages.review ?? "",
+			),
+		},
+	};
+}
+
+export async function runReview(
+	input: StageLaunchInput,
+	dir: string,
+	createHost: (dir: string, tools: readonly string[]) => StageHost,
+	decorate: (prompt: string, seat: string) => Promise<string | null> = async (
+		prompt,
+	) => prompt,
+): Promise<StageResult> {
+	const prepared = input.review;
+
+	if (prepared === undefined) throw new Error("review_missing");
+	mkdirSync(dir, { recursive: true, mode: 0o700 });
+
+	if (!existsSync(join(dir, "review.json")))
+		publishFile(
+			join(dir, "review.json"),
+			JSON.stringify({ seats: prepared.input.seats }),
+		);
+	const previous = (await executionSpent(dir)) ?? 0;
+	const receipts: SeatReceipt[] = [];
+	const records: Awaited<ReturnType<typeof readStageReceipt>>[] = [];
+
+	let total = 0,
+		turns = 0,
+		wallMs = 0;
+
+	const byModel: Record<string, number> = {};
+
+	let parent = 0,
+		children = 0;
+
+	let lastHost: StageHost | null = null;
+
+	const finish = async (outcome: SessionOutcome): Promise<StageResult> => {
+		const text = JSON.stringify(receipts);
+
+		const kept =
+			outcome.kind === "passed" &&
+			(existsSync(join(dir, "output.txt")) ||
+				publishFile(join(dir, "output.txt"), text));
+
+		const first = records.find((r) => r !== null);
+
+		const receipt: StageReceipt = {
+			version: 1,
+			runId: input.runId,
+			stage: "review",
+			attempt: input.attempt,
+			outcome: outcome.kind === "passed" && !kept ? CRASHED : outcome,
+			settlement: { event: "agent_settled", aborted: null },
+			models: { requested: input.settings.model, observed: null },
+			fallback: null,
+			refusal: null,
+			usage: {
+				total,
+				parent,
+				children,
+				byModel,
+				gateway: total,
+				unreadChildren: 0,
+			},
+			turns,
+			wallMs,
+			egress: null,
+			stderr: [],
+			output: kept
+				? {
+						file: "output.txt",
+						bytes: Buffer.byteLength(text),
+						kept: Buffer.byteLength(text),
+					}
+				: null,
+			assetsDigest:
+				lastHost?.assetsDigest ??
+				textOf(fieldOf(first?.record ?? null, "assetsDigest")) ??
+				"",
+			versions: lastHost?.versions ?? PINNED_VERSIONS,
+			pricing: "unavailable",
+		};
+
+		const written = publishFile(
+			join(dir, "receipt.json"),
+			JSON.stringify(receipt),
+		);
+
+		return {
+			...stageResult(written ? receipt : { ...receipt, outcome: CRASHED }),
+			usage: Math.max(0, total - previous),
+		};
+	};
+
+	for (const seat of prepared.input.seats) {
+		const sessionDir = join(dir, seat);
+		let record = await readStageReceipt(join(sessionDir, "receipt.json"));
+
+		if (record === null) {
+			if (existsSync(sessionDir)) {
+				total += (await executionSpent(sessionDir)) ?? 0;
+
+				return finish(CRASHED);
+			}
+
+			const host = createHost(sessionDir, input.tools);
+			lastHost = host;
+
+			const prompt = await decorate(seatPrompt(prepared.input, seat), seat);
+
+			if (prompt === null) return finish(CRASHED);
+
+			const maxTokens =
+				input.settings.maxTokens === null
+					? null
+					: Math.max(0, input.settings.maxTokens + previous - total);
+
+			const result = await runStage(
+				{
+					...input,
+					prompt,
+					settings: {
+						...input.settings,
+						fallback:
+							seat === "security-review" ? input.settings.fallback : null,
+						maxTokens,
+						budget: {
+							...input.settings.budget,
+							maxTurns: Math.max(0, input.settings.budget.maxTurns - turns),
+							wallMs: Math.max(0, input.settings.budget.wallMs - wallMs),
+						},
+					},
+					remainingRunTokens: Math.max(
+						0,
+						input.remainingRunTokens - (total - previous),
+					),
+					progress: (value) =>
+						input.progress(Math.max(0, total - previous) + value),
+				},
+				host,
+			);
+
+			record = await readStageReceipt(join(sessionDir, "receipt.json"));
+
+			if (record === null) {
+				total += result.usage;
+
+				return finish(CRASHED);
+			}
+		}
+
+		records.push(record);
+		total += record.usage.total;
+		parent += record.usage.parent;
+		children += record.usage.children;
+		turns += record.turns;
+		wallMs += record.wallMs;
+
+		for (const [model, tokens] of Object.entries(record.usage.byModel))
+			byModel[model] = (byModel[model] ?? 0) + tokens;
+
+		if (record.outcome.kind !== "passed") return finish(record.outcome);
+
+		const parsed = parseSeat(
+			(await boundedText(join(sessionDir, "output.txt"), OUTPUT_MAX_BYTES)) ??
+				"",
+			seat,
+			prepared.input.files,
+			prepared.input.scenarios,
+		);
+
+		if (parsed === null) return finish({ kind: "failed", exit: "malformed" });
+		const models = objectOf(fieldOf(record.record, "models"));
+		const fallback = objectOf(fieldOf(record.record, "fallback"));
+
+		const requested =
+			textOf(fieldOf(fallback, "requested")) ??
+			textOf(fieldOf(models, "requested")) ??
+			input.settings.model;
+
+		receipts.push({
+			...parsed,
+			requested,
+			observed:
+				textOf(fieldOf(fallback, "observed")) ??
+				textOf(fieldOf(models, "observed")),
+			label: reviewIdentityLabel(
+				textOf(fieldOf(fallback, "observed")) ??
+					textOf(fieldOf(models, "observed")) ??
+					requested,
+				prepared.builder,
+			),
+			primary: textOf(fieldOf(models, "requested")) ?? input.settings.model,
+			refusal: textOf(fieldOf(record.record, "refusal")),
+			fallbackRecord: fallback,
+			fallback: fallback !== null,
+			tokens: record.usage.total,
+		});
+	}
+
+	return finish({ kind: "passed" });
 }
 
 export type SandboxExecutorConfig = {
@@ -2332,13 +2755,30 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 			return reconciled || reconcile(false);
 		},
 
-		async spent({ runId, stage, attempt }) {
-			return attemptSpent(config.stateDir, runId, stage, attempt);
+		async spent({ runId, stage, attempt, round }) {
+			return attemptSpent(config.stateDir, runId, stage, attempt, round);
 		},
 
-		async output({ runId, stage, attempt }) {
+		prepareReview: (input) => prepareCandidateReview(config, input),
+
+		async output(input) {
+			const { runId, stage, attempt, round = 0 } = input;
+
 			if (stage === "build") {
-				let kept = readRunPatch(config.stateDir, runId);
+				let kept = readRunPatch(config.stateDir, runId, round);
+
+				if (round > 0 && kept.kind === "found") {
+					const previous = readRunPatch(config.stateDir, runId, round - 1);
+
+					if (
+						previous.kind !== "found" ||
+						kept.receipt.patchDigest === previous.receipt.patchDigest
+					)
+						return {
+							kind: "build",
+							result: { kind: "blocked", reason: "repair_no_change" },
+						};
+				}
 
 				if (
 					kept.kind === "found" &&
@@ -2439,11 +2879,65 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 				return kept.kind === "absent" ? null : { kind: "build", result: kept };
 			}
 
-			return attemptOutput(config.stateDir, runId, stage, attempt);
+			if (stage === "review") {
+				const output = await attemptOutput(
+					config.stateDir,
+					runId,
+					stage,
+					attempt,
+					round,
+				);
+
+				if (
+					output === null ||
+					(output instanceof Object && output.kind === "pending")
+				)
+					return output;
+
+				try {
+					const prepared = await prepareCandidateReview(config, {
+						runId,
+						round,
+						workflowSha: input.workflowSha,
+						workflowDigest: input.workflowDigest,
+						workspace: join(
+							config.stateDir,
+							"review-tree",
+							roundKey(runId, round),
+						),
+					});
+
+					const text =
+						output instanceof Object
+							? output.kind === "output"
+								? output.text
+								: ""
+							: output;
+
+					// SAFETY: output is the host-authored aggregate; reviewCandidate revalidates each seat's schema and exact binding.
+					const seats = JSON.parse(text) as SeatReceipt[];
+
+					const receipt = reviewCandidate(
+						prepared.input,
+						prepared.verdict,
+						seats,
+					);
+
+					keepReview(config.stateDir, receipt);
+
+					return { kind: "review", receipt };
+				} catch {
+					return null;
+				}
+			}
+
+			return attemptOutput(config.stateDir, runId, stage, attempt, round);
 		},
 
-		async checkout({ runId, repo, sha, workspace, build }) {
-			return (build ? checkoutBuildWorkspace : checkoutWorkspace)({
+		async checkout({ runId, repo, sha, workspace, build, round = 0 }) {
+			const checked = await (build
+				? checkoutBuildWorkspace
+				: checkoutWorkspace)({
 				stateDir: config.stateDir,
 				runId,
 				workspace,
@@ -2452,6 +2946,51 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 				fetch: config.fetchTarball ?? ghTarball,
 				log: config.log,
 			});
+
+			if (build && round > 0 && checked.kind === "ready") {
+				try {
+					const previous = readRunPatch(config.stateDir, runId, round - 1);
+
+					if (previous.kind !== "found")
+						return { kind: "refused", reason: "repair_patch_missing" };
+					const dir = validationDir(config.stateDir, runId, round - 1);
+
+					const validation =
+						parseJson(regularText(join(dir, "feedback.json"))) ?? [];
+
+					const reviewPath = join(
+						config.stateDir,
+						"review",
+						runId,
+						`r${round - 1}`,
+						"receipt.json",
+					);
+
+					const review = existsSync(reviewPath)
+						? reviewFeedback(JSON.parse(regularText(reviewPath)))
+						: [];
+
+					const feedback = JSON.stringify({
+						version: 1,
+						round,
+						validation,
+						review,
+					});
+
+					rmSync(workspace, { recursive: true, force: true });
+					await prepareRepairTree(
+						join(config.stateDir, "pristine", runId),
+						workspace,
+						previous.patch,
+						previous.receipt.changedPaths,
+						feedback,
+					);
+				} catch {
+					return { kind: "refused", reason: "repair_inputs_invalid" };
+				}
+			}
+
+			return checked;
 		},
 
 		async preflight() {
@@ -2497,7 +3036,18 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 
 			const { bundle, arch } = ready;
 
-			const prompt = await withSkills(bundle.dir, input.prompt, input.skills);
+			const repair =
+				input.stage === "build" && (input.round ?? 0) > 0
+					? feedbackPrompt(
+							regularText(join(input.workspace, ".factory-feedback.json")),
+						)
+					: "";
+
+			const prompt = await withSkills(
+				bundle.dir,
+				`${input.prompt}\n${repair}`,
+				input.skills,
+			);
 
 			if (prompt === null) {
 				config.log("skills_unavailable", {
@@ -2560,6 +3110,26 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 				};
 			}
 
+			if (input.stage === "review" && input.review !== undefined) {
+				const stages = join(config.stateDir, "stages", input.runId);
+
+				const dir = join(
+					stages,
+					stageName(input.stage, input.attempt, input.round),
+				);
+
+				return {
+					kind: "started",
+					done: runReview(
+						input,
+						dir,
+						(stageDir, tools) =>
+							(config.host ?? sandboxHost)({ ...hostConfig, stageDir, tools }),
+						(prompt, seat) => withSkills(bundle.dir, prompt, [seat]),
+					),
+				};
+			}
+
 			const done = runStage(
 				{
 					runId: input.runId,
@@ -2571,7 +3141,17 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 					signal: input.signal,
 					progress: input.progress,
 				},
-				(config.host ?? sandboxHost)(hostConfig),
+				(config.host ?? sandboxHost)({
+					...hostConfig,
+					stageDir: freshDir(
+						join(
+							config.stateDir,
+							"stages",
+							input.runId,
+							stageName(input.stage, input.attempt, input.round),
+						),
+					),
+				}),
 			);
 
 			return {
@@ -2618,6 +3198,11 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 						if (kept.kind === "absent") {
 							const collectionStart = Date.now();
 
+							if ((input.round ?? 0) > 0)
+								rmSync(join(input.workspace, ".factory-feedback.json"), {
+									force: true,
+								});
+
 							const patch = await collectPatch({
 								base,
 								workspace: input.workspace,
@@ -2647,6 +3232,7 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 								config.stateDir,
 								input.runId,
 								input.attempt,
+								input.round,
 							);
 
 							kept = storePatch(config.stateDir, binding, patch, {
@@ -2672,8 +3258,18 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 					.finally(() => {
 						if (input.stage !== "build") return;
 						rmSync(input.workspace, { recursive: true, force: true });
-						cleanupBuildAgents(config.stateDir, input.runId, input.attempt);
-						const kept = readRunPatch(config.stateDir, input.runId);
+						cleanupBuildAgents(
+							config.stateDir,
+							input.runId,
+							input.attempt,
+							input.round,
+						);
+
+						const kept = readRunPatch(
+							config.stateDir,
+							input.runId,
+							input.round,
+						);
 
 						if (kept.kind !== "found" || kept.receipt.policy === "forbidden")
 							cleanupBuildBase(config.stateDir, input.runId);

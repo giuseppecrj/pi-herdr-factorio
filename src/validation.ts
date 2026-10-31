@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import {
 	acceptanceDigestOf,
 	acceptanceEntries,
@@ -57,6 +58,7 @@ export type ValidationInput = {
 	readonly baseSha: GitSha;
 	readonly now: number;
 	readonly wallMs: number;
+	readonly round?: number;
 	readonly state: ValidationState | null;
 	readonly save: (state: ValidationState) => Promise<boolean>;
 	readonly dispatchAllowed?: boolean;
@@ -76,6 +78,16 @@ export type ValidationResult =
 	  };
 
 export type Validator = (input: ValidationInput) => Promise<ValidationResult>;
+
+export function validationDir(
+	stateDir: string,
+	runId: string,
+	round = 0,
+): string {
+	return round === 0
+		? join(stateDir, "validation", runId)
+		: join(stateDir, "validation", runId, `r${round}`);
+}
 
 export function dispatchNonce(
 	runId: Digest,

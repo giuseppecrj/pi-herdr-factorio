@@ -513,6 +513,12 @@ function readModelStage(
 			)
 		: null;
 
+	if (fallbackModel === model)
+		fail(
+			`stages.${stage}.fallback_model`,
+			"must differ from the primary model",
+		);
+
 	const budget = readBudget(entries, stage);
 
 	if (budget.wallMs <= STAGE_CLEANUP_RESERVE_MS) {
@@ -541,11 +547,8 @@ function readPrimaryModel(node: YamlNode, field: string): ModelId {
 function readFallbackModel(node: YamlNode, field: string): ModelId {
 	const model = readModel(node, field);
 
-	if (!model.startsWith("xai/")) {
-		fail(
-			field,
-			"must be an xai model: the sandbox serves a fallback only on its xai route",
-		);
+	if (!model.startsWith("xai/") && !model.startsWith("openai/")) {
+		fail(field, "must be an openai or xai model");
 	}
 
 	return model;
