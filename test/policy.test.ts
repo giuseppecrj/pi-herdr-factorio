@@ -206,6 +206,40 @@ it("reserves the controller-owned repair feedback filename", () => {
 });
 
 describe("land precondition", () => {
+	it("requires exact review evidence and every judge-only scenario passing", () => {
+		const bound = {
+			...ciBinding,
+			patchDigest: patch("a"),
+			verdict: passingVerdict(patch("a")),
+		};
+
+		assert.deepEqual(checkLandPrecondition(bound, currentHead), {
+			kind: "blocked",
+			reason: "no_review",
+		});
+
+		const review = {
+			candidateSha: currentHead.currentTip,
+			patchDigest: patch("a"),
+			blockingFindings: [],
+			judgments: [],
+		};
+
+		assert.deepEqual(
+			checkLandPrecondition(
+				{ ...bound, review, verdict: { ...bound.verdict, unjudged: ["J1"] } },
+				currentHead,
+			),
+			{ kind: "blocked", reason: "review_failed" },
+		);
+		assert.deepEqual(
+			checkLandPrecondition(
+				{ ...bound, review: { ...review, candidateSha: "d".repeat(40) } },
+				currentHead,
+			),
+			{ kind: "blocked", reason: "review_failed" },
+		);
+	});
 	it("is ready when the passing verdict is bound to the run's patch", () => {
 		assert.deepEqual(
 			checkLandPrecondition(

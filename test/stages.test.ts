@@ -312,6 +312,28 @@ describe("advance: validate failure and bounded repair", () => {
 });
 
 describe("advance: review", () => {
+	it("rejects stale SHA, stale digest and missing criterion judgments", () => {
+		const run = reachReview("first");
+
+		for (const changed of [
+			{ candidateSha: "d".repeat(40) },
+			{ patchDigest: patch("other") },
+		])
+			assert.equal(
+				advance(run, { ...reviewedEvent("first"), ...changed }).kind,
+				"invalid",
+			);
+		assert.equal(
+			advance(
+				{
+					...run,
+					verdict: { ...passingVerdict(patch("first")), unjudged: ["J1"] },
+				},
+				reviewedEvent("first"),
+			).kind,
+			"invalid",
+		);
+	});
 	it("sends blocking findings back to build as a repair round", () => {
 		const run = apply(
 			reachReview(),
