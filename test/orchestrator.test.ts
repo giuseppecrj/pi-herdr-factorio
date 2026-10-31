@@ -362,6 +362,29 @@ const QUESTIONS_TEXT = JSON.stringify({
 });
 
 class FakeExecutor implements StageExecutor {
+	readonly validations: import("../src/validation.ts").ValidationInput[] = [];
+	validate: import("../src/validation.ts").Validator = async (input) => {
+		this.validations.push(input);
+
+		const state = input.state ?? {
+			version: 1,
+			startedAt: input.now,
+			deadline: input.now + input.wallMs,
+			round: 0,
+			originalBase: input.baseSha,
+			baseSha: input.baseSha,
+			baseResolved: true,
+			publication: null,
+			dispatchTry: 0,
+			dispatchedAt: null,
+			ciRunId: null,
+			counters: {},
+		};
+
+		await input.save(state);
+
+		return { kind: "waiting", state };
+	};
 	behaviors: Behavior[] = [];
 	fallback: Behavior = { kind: "unavailable" };
 	buildBehavior: Behavior = { kind: "unavailable" };
@@ -6734,10 +6757,7 @@ describe("private build stage", () => {
 				report = await once(restarted);
 			}
 
-			assert.equal(
-				statuses(github, 14).at(-1),
-				`${reuse ? 7 : 8}:stage_passed`,
-			);
+			assert.equal(statuses(github, 14).at(-1), `${reuse ? 7 : 8}:running`);
 			assert.equal(report.totals.usage, 12);
 			assert.equal(calls, reuse ? 0 : 1);
 			assert.equal(existsSync(base), false);
@@ -6855,7 +6875,7 @@ describe("private build stage", () => {
 			1,
 		);
 		assert.equal(report.totals.usage, 12);
-		assert.equal(statuses(github, 14).at(-1), "6:stage_passed");
+		assert.equal(statuses(github, 14).at(-1), "6:running");
 	});
 
 	it("advances the same run to build, grants coding tools without the suite, and documents its marker log", async () => {
@@ -6903,13 +6923,13 @@ describe("private build stage", () => {
 			"S1",
 		])
 			assert.ok(!build.prompt.includes(secret));
-		assert.equal(statuses(github, 14).at(-1), "7:stage_passed");
+		assert.equal(statuses(github, 14).at(-1), "7:running");
 		assert.ok(
 			logs.some(
 				({ event, fields }) =>
 					event === "marker_posted" &&
-					fields.status === "stage_passed" &&
-					fields.stage === "build",
+					fields.status === "running" &&
+					fields.stage === "validate",
 			),
 		);
 		assert.ok(
@@ -6932,7 +6952,7 @@ describe("private build stage", () => {
 				.split("\n")
 				.find((line) => line.startsWith("- `stage-passed`:")) ?? "";
 
-		assert.match(stageDoc, /marker_posted .*status=stage_passed stage=build/);
+		assert.match(stageDoc, /marker_posted .*status=running stage=validate/);
 		assert.doesNotMatch(
 			stageDoc,
 			/stage_ended \.\.\. cause=passed next=stage_passed/,
@@ -7022,10 +7042,53 @@ describe("private build stage", () => {
 			);
 			assert.equal(
 				statuses(github, 14).at(-1),
-				corrupt ? "7:failed" : "7:stage_passed",
+				corrupt ? "7:failed" : "7:running",
 			);
 			assert.equal(report.totals.usage, 12);
 		});
+});
+
+describe("controller-only validate", () => {
+	it("adopts a v1 validate marker on the old workflow without a model interruption or slot", async () => {
+		const { github, executor, start, clock } = world();
+		const issue = github.add(labeled(14));
+
+		const legacy = TRUSTED_WORKFLOW.replace(
+			"  validate:\n",
+			"  validate:\n    model: openai/gpt-6.1-sol\n",
+		);
+
+		github.workflow = legacy;
+		executor.workflow = () => legacy;
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "pass", usage: 7 };
+		executor.buildBehavior = { kind: "pass", usage: 12 };
+		const first = start();
+		await once(first);
+		const built = await once(first);
+		assert.equal(built.active, 0);
+		const last = issue.comments.at(-1);
+		assert.ok(last);
+		const parsed = parseMarker(last.body);
+		assert.equal(parsed.kind, "marker");
+
+		if (parsed.kind !== "marker") return;
+		assert.equal(parsed.marker.stage, "validate");
+		last.body = formatMarker({ ...parsed.marker, v: 1 });
+		clock.t += 60_000;
+		const restored = start();
+		const report = await restored.tick();
+		assert.equal(report.active, 0);
+		assert.equal(report.totals.retries, 0);
+		assert.equal(restored.state.runs.get(14)?.phase.kind, "awaiting_ci");
+		assert.equal(restored.state.runs.get(14)?.attempt, 1);
+		assert.equal(executor.validations.length, 1);
+		assert.equal(
+			executor.launches.filter((launch) => launch.stage === "build").length,
+			1,
+		);
+		assert.equal(executor.launches.length, 3);
+	});
 });
 
 describe("held-out acceptance stage", () => {

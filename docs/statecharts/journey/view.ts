@@ -3,7 +3,9 @@ const STAGE: Record<string, string> = {
   specify: "Writing the contract",
   accept: "Writing hidden acceptance tests",
   build: "Building the patch",
-  validate: "CI runs main's gates and the hidden tests",
+  publishing: "Publishing patch and held-out checks",
+  awaiting_ci: "CI runs main's gates and the hidden tests",
+  verdict: "Storing the bound CI verdict",
   review: "Reviewing the patch",
   land: "PR waits for your review",
 };
@@ -59,6 +61,10 @@ export const step = (action: string, from: any, _to: any) => {
       return "hidden tests kept on the VM";
     case "Built":
       return "patch ready";
+    case "Published":
+      return "two commits published, CI dispatched";
+    case "VerdictStored":
+      return "verdict stored for the exact CI head";
     case "ChecksPass":
       return "every check passes on that exact patch";
     case "ChecksFail":

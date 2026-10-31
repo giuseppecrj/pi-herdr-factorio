@@ -10,7 +10,13 @@ import {
 	READY_LABEL,
 	REPO_SWITCH_LABEL,
 } from "../src/policy.ts";
-import { failingVerdict, passingVerdict, patch } from "./helpers.ts";
+import {
+	failingVerdict,
+	passingVerdict,
+	patch,
+	ciBinding,
+	currentHead,
+} from "./helpers.ts";
 
 describe("admission", () => {
 	it("admits the ready label from admin, maintain and write", () => {
@@ -189,10 +195,14 @@ describe("forbidden paths", () => {
 describe("land precondition", () => {
 	it("is ready when the passing verdict is bound to the run's patch", () => {
 		assert.deepEqual(
-			checkLandPrecondition({
-				patchDigest: patch("a"),
-				verdict: passingVerdict(patch("a")),
-			}),
+			checkLandPrecondition(
+				{
+					...ciBinding,
+					patchDigest: patch("a"),
+					verdict: passingVerdict(patch("a")),
+				},
+				currentHead,
+			),
 			{ kind: "ready" },
 		);
 	});

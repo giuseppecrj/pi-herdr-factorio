@@ -532,7 +532,8 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Files.**
 
 - [ ] Create `src/validation.ts`, `src/publication.ts`, `test/validation.test.ts`, `test/publication.test.ts`, and `docs/prototypes/heldout-ci/`.
-- [ ] Edit `src/run.ts`, `src/stages.ts`, `src/policy.ts`, `server/controller.ts`, `server/sandbox.ts`, `test/helpers.ts`, `test/pipeline.test.ts`, `test/stages.test.ts`, `test/policy.test.ts`, and `.github/factory/gates/` for exact-head CI evidence and separate holdout execution.
+- [ ] Edit `src/run.ts`, `src/stages.ts`, `src/policy.ts`, `src/orchestrator.ts`, `src/markers.ts`, `src/workflow.ts`, `src/build.ts`, `server/controller.ts`, `server/sandbox.ts`, and their tests for publication, recovery and exact-head CI evidence. Edit `test/helpers.ts`, `test/pipeline.test.ts`, `test/stages.test.ts`, and `test/policy.test.ts` for the bound pipeline.
+- [ ] Edit `.github/factory/WORKFLOW.md` only for controller-only validate. Edit `docs/statecharts/**`, `docs/operations/sandbox.md`, `docs/operations/factory-cli.md`, `.pi/skills/verify-factory/**`, and this Files block for the F07c contracts. The held-out gate and static exclusions already landed in F07b.
 
 **Build.**
 

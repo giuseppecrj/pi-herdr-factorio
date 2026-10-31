@@ -33,7 +33,9 @@ stateDiagram-v2
     s3: Writing the contract
     s4: Writing hidden acceptance tests
     s5: Building the patch
+    s14: Publishing patch and held-out checks
     s6: CI runs main's gates and the hidden tests
+    s15: Storing the bound CI verdict
     s7: Reviewing the patch
     s8: PR waits for your review
     s9: Still working on a PR you already merged
@@ -48,9 +50,11 @@ stateDiagram-v2
   s3 --> s4: contract written
   s3 --> s12: ticket too vague, questions posted
   s4 --> s5: hidden tests kept on the VM
-  s5 --> s6: patch ready
+  s5 --> s14: patch ready
+  s14 --> s6: two commits published, CI dispatched
   s6 --> s5: a check fails [under 2 repair rounds used]
-  s6 --> s7: every check passes on that exact patch
+  s6 --> s15: every check passes on that exact patch
+  s15 --> s7: verdict stored
   s7 --> s5: blocking findings [under 2 repair rounds used]
   s7 --> s8: no blocking findings, PR marked ready
   s8 --> s10: you close the PR without merging
@@ -136,6 +140,10 @@ stateDiagram-v2
     s4: Stage running in the sandbox
     s5: Sandbox down, slot kept
     s6: Waiting to retry
+    s14: Publishing patch and held-out checks
+    s15: Waiting for CI without a slot or model
+    s16: Storing a passing bound verdict
+    s17: Storing a failed verdict
   }
   s7: Controller restarting
   s8: Stopping the aborted stage
@@ -154,7 +162,14 @@ stateDiagram-v2
   s4 --> s8: stage stalls [no attempts or tokens left] or label removed or issue closed
   s4 --> s10: stage fails [token cap reached]
   s4 --> s11: stage refuses or stage fails [no attempts left]
-  s4 --> s12: stage passes
+  s4 --> s14: build passes, sandbox stops
+  s14 --> s15: two commits published, CI dispatched
+  s15 --> s16: complete passing receipt
+  s15 --> s17: failed, missing, stale or expired result
+  s16 --> s12: verdict stored, branch deleted
+  s17 --> s11: verdict stored, branch deleted
+  s14 --> s9: label removed or issue closed
+  s15 --> s9: label removed or issue closed
   s4 --> s6: stage fails or stalls [attempts and tokens left]
   s8 --> s7: the controller restarts
   s13 --> s3: the controller adopts the run from its marker
@@ -205,11 +220,11 @@ Rules checked (`controller/Controller.cfg`, which also allows a re-label):
 | `NotLost` | After the first tick, a live run on GitHub is held in memory or reserved for adoption. | holds |
 | `Adopted` | A reserved run is always adopted or ended later. A restart never loses it. | holds, if the reads adoption needs succeed eventually |
 
-The chart is drawn from `controller/Chart.cfg`, which leaves out the re-label so that the graph stays under the 500-state chart budget. `Controller.cfg` checks the same rules with the re-label, over 3,084 states.
+The chart is drawn from `controller/Chart.cfg`, which leaves out the re-label so that the graph stays under the 500-state chart budget. `Controller.cfg` checks the same rules with the re-label, over 4,428 states after F07c. The larger chart config now exceeds the renderer's 500-state budget; the diagram above is a summary of the checked transitions. `publishing`, `awaiting_ci` and verdict states are stored claim phases represented in the model's marker field. Public marker v2 reports them as `running` at validate.
 
 After a restart, the first tick reserves the run from its claim file, and usually adopts it from its marker in the same tick. Adoption waits for a later tick when the issue's marker comments cannot be read, or when the workflow is not loaded. It also waits when the timeline read fails for a run whose marker says running or retrying, and when no slot is free for a claimed or blocked run. Until then the run is reserved but not in memory, which `test/orchestrator.test.ts` also expects. A claimed or blocked run whose timeline read fails is adopted, but it does not relaunch until the read succeeds. The model splits reserve and adopt into two steps, so other events can happen between them, and assumes the reads succeed eventually.
 
-The chart hides the restart from states with no run, the startup reconcile retry, and the adoption steps that only end a run whose budget is spent. A restart mid-stage counts the interrupted attempt as a failed one.
+The chart hides the restart from states with no run, the startup reconcile retry, and the adoption steps that only end a run whose budget is spent. A restart mid-model-stage counts the interrupted attempt as a failed one. A restart during publication or CI waiting restores that phase without a sandbox or interrupted attempt.
 
 ## What the models leave out
 

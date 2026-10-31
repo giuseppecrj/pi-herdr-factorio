@@ -28,13 +28,15 @@ vars == <<ticket, event, run, ph, endAs, attempt, tokens, marker, cur, orphan,
 
 Events == {1, 2}
 Terminal == {"released", "failed", "budget_exhausted", "stage_passed"}
-Live == {"claimed", "running", "blocked", "retrying"}
+CI == {"publishing", "awaiting_ci", "verdict_pass", "verdict_fail"}
+Live == {"claimed", "running", "blocked", "retrying"} \cup CI
 
 StatusOf(p) ==
     CASE p = "claimed" -> "claimed"
       [] p = "running" -> "running"
       [] p = "blocked" -> "blocked"
       [] p = "retry"   -> "retrying"
+      [] p \in CI -> p
 
 Init ==
     /\ ticket = "ready" /\ event = 1
@@ -97,7 +99,21 @@ Launch ==
 Running == ph = "running" /\ cur = "running"
 
 StagePasses ==
-    /\ Running /\ Finish("stage_passed", "none")
+    /\ Running /\ cur' = "none" /\ Go("publishing")
+    /\ UNCHANGED <<run, endAs, attempt, tokens, launchedEnded>> /\ UNCHANGED Fixed
+
+Published ==
+    /\ ph = "publishing" /\ Go("awaiting_ci")
+    /\ UNCHANGED <<run, endAs, attempt, tokens, cur, launchedEnded>> /\ UNCHANGED Fixed
+
+CollectCI ==
+    /\ ph = "awaiting_ci"
+    /\ \E result \in {"verdict_pass", "verdict_fail"} : Go(result)
+    /\ UNCHANGED <<run, endAs, attempt, tokens, cur, launchedEnded>> /\ UNCHANGED Fixed
+
+StoreVerdict ==
+    /\ ph \in {"verdict_pass", "verdict_fail"}
+    /\ Finish(IF ph = "verdict_pass" THEN "stage_passed" ELSE "failed", "none")
     /\ UNCHANGED <<attempt, tokens, launchedEnded>> /\ UNCHANGED Fixed
 
 StageRefuses ==
@@ -113,7 +129,7 @@ StageStalls ==
     /\ UNCHANGED launchedEnded /\ UNCHANGED Fixed
 
 Release ==
-    /\ loaded /\ run # 0 /\ ph \in {"claimed", "running", "blocked", "retry"}
+    /\ loaded /\ run # 0 /\ ph \in ({"claimed", "running", "blocked", "retry"} \cup CI)
     /\ (ticket = "gone" \/ event # run)
     /\ Finish("released", IF cur = "running" THEN "stopping" ELSE cur)
     /\ UNCHANGED <<attempt, tokens, launchedEnded>> /\ UNCHANGED Fixed
@@ -172,6 +188,7 @@ Adopt ==
                     /\ ph' = CASE m = "claimed" -> "claimed"
                                [] m = "blocked" -> "blocked"
                                [] m = "retrying" -> "retry"
+                               [] m \in CI -> m
     /\ UNCHANGED <<ticket, event, cur, orphan, loaded, reconciled, sandboxOk, restarts, launchedEnded>>
 
 \* The preflight retries the reconcile until every leftover is stopped.
@@ -206,7 +223,8 @@ Idle ==
     /\ UNCHANGED vars
 
 Next ==
-    \/ Admit \/ Launch \/ StagePasses \/ StageRefuses \/ StageFails \/ StageStalls
+    \/ Admit \/ Launch \/ StagePasses \/ Published \/ CollectCI \/ StoreVerdict
+    \/ StageRefuses \/ StageFails \/ StageStalls
     \/ Release \/ PostEnd \/ SandboxStops \/ Restart \/ Recover \/ Adopt \/ Reconcile
     \/ YouRemoveLabel \/ YouRelabel \/ SandboxBreaks \/ SandboxHeals \/ Idle
 
@@ -214,7 +232,7 @@ Next ==
 Spec == Init /\ [][Next]_vars /\ WF_vars(Adopt)
 
 \* Never two sandboxes running a stage for one issue.
-OneSandboxPerIssue == ~(orphan /\ cur # "none")
+OneSandboxPerIssue == ~(orphan /\ cur # "none") /\ (ph \in CI => cur = "none")
 \* A run that ended never launches a stage again.
 EndedStaysEnded == ~launchedEnded
 \* A run never gets more than MaxAttempts attempts at a stage.

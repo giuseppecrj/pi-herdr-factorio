@@ -34,7 +34,6 @@ export const MODEL_STAGES = [
 	"specify",
 	"accept",
 	"build",
-	"validate",
 	"review",
 ] as const satisfies readonly Stage[];
 
@@ -558,7 +557,33 @@ function defaultModel(): ModelId {
 	return DEFAULT_MODEL;
 }
 
-function readStages(root: Map<string, YamlNode>): StageSettings {
+function readValidateStage(
+	stages: Map<string, YamlNode>,
+	warnings: string[],
+): StageSettings["validate"] {
+	const entries = stageEntries(stages, "validate", [...BUDGET_KEYS, "model"]);
+
+	if (entries.has("model")) {
+		readPrimaryModel(entries.get("model") ?? null, "stages.validate.model");
+		warnings.push(
+			"stages.validate.model is ignored; validate runs in the controller",
+		);
+	}
+
+	const budget = readBudget(entries, "validate");
+
+	return Object.freeze({
+		budget: Object.freeze({
+			...budget,
+			wallMs: entries.has("wall_ms") ? budget.wallMs : 1_200_000,
+		}),
+	});
+}
+
+function readStages(
+	root: Map<string, YamlNode>,
+	warnings: string[],
+): StageSettings {
 	const stages = optionalEntries(root, "stages", "stages", STAGE_ORDER);
 
 	return Object.freeze({
@@ -566,7 +591,7 @@ function readStages(root: Map<string, YamlNode>): StageSettings {
 		specify: readModelStage(stages, "specify"),
 		accept: readModelStage(stages, "accept"),
 		build: readModelStage(stages, "build"),
-		validate: readModelStage(stages, "validate"),
+		validate: readValidateStage(stages, warnings),
 		review: readModelStage(stages, "review"),
 		land: readControllerStage(stages, "land"),
 	});
@@ -715,7 +740,7 @@ function readConfig(
 				{ min: 1, fallback: DEFAULTS.maxTokensPerRun },
 			),
 		}),
-		stages: readStages(root),
+		stages: readStages(root, warnings),
 		checkpoints: readCheckpoints(root),
 	});
 
@@ -1260,7 +1285,6 @@ export function modelsOf(config: WorkflowConfig): Record<ModelStage, ModelId> {
 		specify: stages.specify.model,
 		accept: stages.accept.model,
 		build: stages.build.model,
-		validate: stages.validate.model,
 		review: stages.review.model,
 	};
 }

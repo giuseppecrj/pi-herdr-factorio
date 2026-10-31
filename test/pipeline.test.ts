@@ -7,6 +7,8 @@ import { type FactoryEvent, type Ticket, ticketKey } from "../src/tickets.ts";
 import { FakeTicketAdapter } from "./fake-ticket-adapter.ts";
 import {
 	acceptanceDigest,
+	candidateEvent,
+	currentHead,
 	apply,
 	contractDigest,
 	passingVerdict,
@@ -145,9 +147,10 @@ describe("controller driven through the fake adapter", () => {
 			{ kind: "specified", contractDigest },
 			{ kind: "accepted", acceptanceDigest },
 			{ kind: "built", patchDigest: patch("a") },
+			candidateEvent,
 			{ kind: "validated", verdict: passingVerdict(patch("a")) },
 			{ kind: "reviewed", blockingFindings: [] },
-			{ kind: "landed", mergeSha: "e".repeat(40) },
+			{ kind: "landed", mergeSha: "e".repeat(40), ...currentHead },
 		];
 
 		const done = apply(admitted, ...events);

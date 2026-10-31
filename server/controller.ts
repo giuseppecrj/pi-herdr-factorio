@@ -1,4 +1,41 @@
-import { fileArtifacts, readStoredContract } from "../src/artifacts.ts";
+import {
+	fileArtifacts,
+	readStoredContract,
+	regularText,
+	exclusive,
+	privateDir,
+	present,
+} from "../src/artifacts.ts";
+import { readPatch, publicationTree } from "../src/build.ts";
+import {
+	GitHubPublicationApi,
+	PublicationError,
+	publishCandidate,
+} from "../src/publication.ts";
+import {
+	type Validator,
+	type ValidationState,
+	CI_DEADLINE_MS,
+	DISPATCH_SETTLE_MS,
+	publishedSuite,
+	dispatchNonce,
+	parseCiRun,
+	matchesCiRun,
+	collectVerdict,
+	repairFeedback,
+	parseValidationState,
+} from "../src/validation.ts";
+import {
+	arrayOf,
+	objectOf,
+	fieldOf as jsonField,
+	textOf,
+	textsOf,
+	countOf,
+} from "./sandbox/json.ts";
+import { type Exec } from "../src/gh.ts";
+import { digestOf, type Verdict } from "../src/run.ts";
+import { isGitSha } from "../src/workflow.ts";
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -6,6 +43,7 @@ import {
 	cp,
 	lstat,
 	mkdir,
+	mkdtemp,
 	open,
 	readdir,
 	readFile,
@@ -17,6 +55,8 @@ import {
 } from "node:fs/promises";
 import { createConnection, createServer, type Server } from "node:net";
 import { dirname, join, resolve } from "node:path";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { gunzipSync } from "node:zlib";
 import { isRunStatus, isStage } from "../src/markers.ts";
 import { type Digest, isDigest } from "../src/run.ts";
@@ -399,6 +439,15 @@ function parseClaim(text: string): ClaimRecord | null {
 
 	if (!isDigest(id)) return null;
 
+	const validationValue = fieldOf(value, "validation");
+
+	const validation =
+		validationValue === undefined
+			? undefined
+			: parseValidationState(validationValue);
+
+	if (validation === null) return null;
+
 	const claim: ClaimRecord = {
 		runId: id,
 		issue: Number(issue),
@@ -408,7 +457,18 @@ function parseClaim(text: string): ClaimRecord | null {
 		usage,
 	};
 
-	return labelFailures === null ? claim : { ...claim, labelFailures };
+	const labels = labelFailures === null ? claim : { ...claim, labelFailures };
+
+	if (validation === undefined) return labels;
+
+	return {
+		...labels,
+		validation,
+		branch: validation.publication?.branch ?? null,
+		candidate: validation.publication?.candidateSha ?? null,
+		round: validation.round,
+		ciRun: validation.ciRunId,
+	};
 }
 
 async function writeAtomic(path: string, text: string): Promise<boolean> {
@@ -1268,10 +1328,482 @@ export function lineLog(write: (text: string) => void, now: () => number): Log {
 /** Resolves after `ms`, or as soon as `signal` aborts. */
 export type Sleep = (ms: number, signal: AbortSignal) => Promise<void>;
 
-/**
- * Runs ticks until `signal` aborts. A stop request lets the current tick
- * finish, so the caller releases the lock only between ticks.
- */
+function keepValidationFile(path: string, text: string): void {
+	if (present(path)) {
+		if (regularText(path, 1024 * 1024) !== text)
+			throw new Error("validation_changed");
+	} else exclusive(path, text);
+}
+
+export function controllerValidator(config: {
+	readonly stateDir: string;
+	readonly exec: Exec;
+	readonly fetch?: TarballFetch;
+	readonly receipt?: (repo: RepoSlug, id: number) => Promise<string | null>;
+}): Validator {
+	return async (input) => {
+		const state: ValidationState = input.state ?? {
+			version: 1,
+			startedAt: input.now,
+			deadline: input.now + Math.min(input.wallMs, CI_DEADLINE_MS),
+			round: 0,
+			originalBase: input.baseSha,
+			baseSha: input.baseSha,
+			baseResolved: false,
+			publication: null,
+			dispatchTry: 0,
+			dispatchedAt: null,
+			ciRunId: null,
+			counters: {},
+		};
+
+		const save = () => input.save(state);
+		let repository: RepoSlug | null = null;
+
+		let identities: {
+			patchDigest: Digest;
+			acceptanceDigest: Digest;
+			heldoutDigest: Digest;
+		} | null = null;
+
+		const failed = async (reason: string) => {
+			const publication = state.publication;
+
+			if (publication !== null && repository !== null && identities !== null) {
+				const dir = join(config.stateDir, "validation", input.runId);
+				privateDir(dir);
+				const path = join(dir, "failure.json");
+
+				if (!present(path))
+					exclusive(
+						path,
+						`${JSON.stringify({ ...identities, candidateSha: publication.candidateSha, gateSha: null, ciRunId: state.ciRunId, originalBase: state.originalBase, baseSha: state.baseSha, pass: false, checks: [], reason })}\n`,
+					);
+
+				try {
+					await new GitHubPublicationApi(
+						config.exec,
+						repository,
+						state.counters,
+						save,
+					).remove(publication.branch);
+				} catch {
+					return { kind: "waiting", state } as const;
+				}
+			}
+
+			return { kind: "failed", state, reason } as const;
+		};
+
+		try {
+			if (state.originalBase !== input.baseSha || state.round !== 0)
+				return failed("validation_binding");
+
+			if (!(await save())) return failed("claim_unwritable");
+			const contract = await readStoredContract(config.stateDir, input.runId);
+
+			if (
+				contract.kind !== "found" ||
+				contract.contract.base.sha !== input.baseSha ||
+				contract.contract.issue !== input.issue
+			)
+				return failed("contract_binding");
+			const repo = contract.contract.base.repo;
+			repository = repo;
+
+			const suite = await fileArtifacts(config.stateDir).read(
+				input.runId,
+				contract.contract,
+				contract.digest,
+			);
+
+			if (suite.kind !== "found")
+				return failed(
+					suite.kind === "blocked" ? suite.reason : "acceptance_missing",
+				);
+
+			const patch = readPatch(config.stateDir, {
+				runId: input.runId,
+				baseSha: input.baseSha,
+				contractDigest: contract.digest,
+				acceptanceDigest: suite.receipt.acceptanceDigest,
+			});
+
+			if (patch.kind !== "found")
+				return failed(
+					patch.kind === "blocked" ? patch.reason : "patch_missing",
+				);
+
+			if (
+				patch.receipt.policy !== "clean" ||
+				patch.receipt.visibleTests?.exitCode !== 0
+			)
+				return failed("patch_failed");
+
+			const canary = regularText(
+				join(config.stateDir, "acceptance", input.runId, "canary.txt"),
+			).trimEnd();
+
+			const heldout = publishedSuite({
+				issue: input.issue,
+				suite: suite.suite,
+				canary,
+				acceptanceDigest: suite.receipt.acceptanceDigest,
+			});
+
+			identities = {
+				patchDigest: patch.receipt.patchDigest,
+				acceptanceDigest: suite.receipt.acceptanceDigest,
+				heldoutDigest: heldout.digest,
+			};
+
+			const api = new GitHubPublicationApi(
+				config.exec,
+				repo,
+				state.counters,
+				save,
+			);
+
+			const dir = join(config.stateDir, "validation", input.runId);
+			privateDir(dir);
+			const verdictPath = join(dir, "verdict.json");
+			const failurePath = join(dir, "failure.json");
+
+			if (present(failurePath))
+				return failed(
+					textOf(
+						jsonField(objectOf(parseJson(regularText(failurePath))), "reason"),
+					) ?? "validation_failed",
+				);
+
+			if (present(verdictPath)) {
+				// SAFETY: controller-private write-once verdict; all live artifact identities are checked before reuse.
+				const verdict = JSON.parse(
+					regularText(verdictPath, 1024 * 1024),
+				) as Verdict;
+
+				if (
+					verdict.patchDigest !== patch.receipt.patchDigest ||
+					verdict.acceptanceDigest !== suite.receipt.acceptanceDigest ||
+					verdict.heldoutDigest !== heldout.digest ||
+					verdict.candidateSha !== state.publication?.candidateSha
+				)
+					return failed("verdict_binding");
+				await api.remove(state.publication.branch);
+
+				return { kind: "finished", state, verdict };
+			}
+
+			if (input.now >= state.deadline) return failed("ci_timeout");
+
+			if (state.publication === null) {
+				if (!state.baseResolved) {
+					const main = objectOf(await api.request("GET", "git/ref/heads/main"));
+
+					const sha = textOf(
+						jsonField(objectOf(jsonField(main, "object")), "sha"),
+					);
+
+					if (sha === null || !isGitSha(sha)) return failed("main_unavailable");
+					state.baseSha = sha;
+					state.baseResolved = true;
+
+					if (!(await save())) return failed("claim_unwritable");
+				}
+
+				const scratch = await mkdtemp(join(dir, "tree-"));
+
+				try {
+					const base = join(scratch, "base");
+					await mkdir(base);
+
+					const checked = await checkoutWorkspace({
+						stateDir: scratch,
+						runId: input.runId,
+						workspace: base,
+						repo,
+						sha: state.baseSha,
+						fetch: config.fetch ?? ghTarball,
+					});
+
+					if (checked.kind !== "ready") return failed("base_unavailable");
+
+					if (
+						checked.checkout.files.some(
+							(path) =>
+								path === heldout.directory ||
+								path.startsWith(`${heldout.directory}/`),
+						)
+					)
+						return failed("stale_base");
+
+					const files = await publicationTree(
+						base,
+						join(scratch, "patched"),
+						patch.patch,
+						patch.receipt.changedPaths,
+					);
+
+					state.publication = await publishCandidate(api, {
+						issue: input.issue,
+						runId: input.runId,
+						round: state.round,
+						eventAt: input.eventAt,
+						baseSha: state.baseSha,
+						patchDigest: patch.receipt.patchDigest,
+						acceptanceDigest: suite.receipt.acceptanceDigest,
+						heldoutDigest: heldout.digest,
+						patch: files,
+						suite: heldout.files,
+					});
+				} finally {
+					await rm(scratch, { recursive: true, force: true });
+				}
+
+				if (!(await save())) return failed("claim_unwritable");
+			}
+
+			const publication = state.publication;
+
+			if (publication === null) return failed("publication_missing");
+
+			if ((await api.ref(publication.branch)) !== publication.candidateSha)
+				return failed("branch_moved");
+
+			let run =
+				state.ciRunId === null
+					? null
+					: parseCiRun(
+							await api.request("GET", `actions/runs/${state.ciRunId}`),
+						);
+
+			if (run === null && state.dispatchTry > 0) {
+				const listed = objectOf(
+					await api.request(
+						"GET",
+						"actions/workflows/ci.yml/runs?event=workflow_dispatch&per_page=100",
+					),
+				);
+
+				const matches = (
+					arrayOf(jsonField(listed, "workflow_runs")) ?? []
+				).flatMap((value) => {
+					const found = parseCiRun(value);
+
+					return found !== null &&
+						matchesCiRun(
+							found,
+							publication.candidateSha,
+							dispatchNonce(input.runId, state.round, state.dispatchTry),
+							state.startedAt,
+						)
+						? [found]
+						: [];
+				});
+
+				if (matches.length > 1) return failed("duplicate_dispatch");
+				run = matches[0] ?? null;
+			}
+
+			if (run === null) {
+				if (
+					state.dispatchedAt !== null &&
+					input.now - state.dispatchedAt < DISPATCH_SETTLE_MS
+				)
+					return { kind: "waiting", state };
+
+				if (state.dispatchTry >= 2) return { kind: "waiting", state };
+				state.dispatchTry++;
+				state.dispatchedAt = input.now;
+
+				if (!(await save())) return failed("claim_unwritable");
+
+				const nonce = dispatchNonce(
+					input.runId,
+					state.round,
+					state.dispatchTry,
+				);
+
+				const replacements = JSON.stringify(
+					contract.contract.replacesTests ?? [],
+				);
+
+				try {
+					const response = objectOf(
+						await api.request(
+							"POST",
+							"actions/workflows/ci.yml/dispatches",
+							{
+								ref: "main",
+								inputs: {
+									candidate_sha: publication.candidateSha,
+									nonce,
+									replacements,
+									replacements_digest: digestOf(replacements),
+									heldout_dir: heldout.directory,
+									heldout_digest: heldout.digest,
+								},
+							},
+							true,
+						),
+					);
+
+					state.ciRunId = countOf(jsonField(response, "workflow_run_id"));
+				} catch (error) {
+					if (!(error instanceof PublicationError)) throw error;
+				}
+
+				await save();
+
+				return { kind: "waiting", state };
+			}
+
+			const nonce = dispatchNonce(input.runId, state.round, state.dispatchTry);
+
+			if (!matchesCiRun(run, publication.candidateSha, nonce, state.startedAt))
+				return failed("ci_identity");
+			state.ciRunId = run.id;
+
+			if (!(await save())) return failed("claim_unwritable");
+
+			if (run.status !== "completed") return { kind: "waiting", state };
+
+			const text = await (
+				config.receipt ??
+				((repo, id) => downloadGateReceipt(config.exec, repo, id))
+			)(repo, run.id);
+
+			const verdict = collectVerdict({
+				text,
+				run,
+				nonce,
+				patchDigest: patch.receipt.patchDigest,
+				acceptanceDigest: suite.receipt.acceptanceDigest,
+				heldoutDigest: heldout.digest,
+				candidateSha: publication.candidateSha,
+				originalBase: state.originalBase,
+				baseSha: state.baseSha,
+				unjudged: suite.suite.scenarios.flatMap((s) =>
+					s.judge === null ? [] : [s.id],
+				),
+			});
+
+			const raw = objectOf(parseJson(text ?? ""));
+
+			const feedback = repairFeedback(
+				suite.suite,
+				contract.contract,
+				textsOf(jsonField(raw, "heldoutFailures")) ?? [],
+				heldout.directory,
+			);
+
+			keepValidationFile(
+				join(dir, "feedback.json"),
+				`${JSON.stringify(feedback)}\n`,
+			);
+			keepValidationFile(join(dir, "receipt.json"), text ?? "null\n");
+			keepValidationFile(verdictPath, `${JSON.stringify(verdict)}\n`);
+			await api.remove(publication.branch);
+
+			return { kind: "finished", state, verdict };
+		} catch (error) {
+			return failed(
+				error instanceof Error ? error.message : "validation_unavailable",
+			);
+		}
+	};
+}
+
+export async function downloadGateReceipt(
+	exec: Exec,
+	repo: RepoSlug,
+	id: number,
+): Promise<string | null> {
+	const dir = mkdtempSync(join(tmpdir(), "factory-ci-"));
+
+	try {
+		const api = new GitHubPublicationApi(exec, repo);
+
+		const listed = objectOf(
+			await api.request("GET", `actions/runs/${id}/artifacts`),
+		);
+
+		const artifacts = (arrayOf(jsonField(listed, "artifacts")) ?? []).filter(
+			(value) =>
+				jsonField(objectOf(value), "name") === "gate-receipt" &&
+				jsonField(objectOf(value), "expired") === false,
+		);
+
+		if (artifacts.length === 1) {
+			const artifactId = countOf(jsonField(objectOf(artifacts[0]), "id"));
+
+			if (artifactId !== null) {
+				for (let attempt = 0; attempt < 3; attempt++) {
+					const zip = await new Promise<Buffer | null>((done) => {
+						execFile(
+							"gh",
+							["api", `repos/${repo}/actions/artifacts/${artifactId}/zip`],
+							{
+								encoding: "buffer",
+								maxBuffer: 8 * 1024 * 1024,
+								timeout: 30_000,
+							},
+							(error, stdout) => done(error === null ? stdout : null),
+						);
+					});
+
+					if (zip !== null) {
+						const path = join(dir, "artifact.zip");
+						await writeFile(path, zip, { mode: 0o600 });
+						const receipt = await exec("unzip", ["-p", path, "receipt.json"]);
+
+						if (
+							receipt.code === 0 &&
+							Buffer.byteLength(receipt.stdout) < 1024 * 1024
+						)
+							return receipt.stdout;
+					}
+
+					if (attempt < 2)
+						await new Promise((done) => setTimeout(done, 1000 * 2 ** attempt));
+				}
+			}
+		}
+
+		const jobs = objectOf(await api.request("GET", `actions/runs/${id}/jobs`));
+
+		const gates = (arrayOf(jsonField(jobs, "jobs")) ?? []).filter(
+			(value) => jsonField(objectOf(value), "name") === "gates",
+		);
+
+		if (gates.length !== 1) return null;
+		const jobId = countOf(jsonField(objectOf(gates[0]), "id"));
+
+		if (jobId === null) return null;
+
+		const logs = await exec("gh", [
+			"api",
+			"--allow-escape-sequences",
+			`repos/${repo}/actions/jobs/${jobId}/logs`,
+		]);
+
+		const lines = logs.stdout
+			.split("\n")
+			.map((line) => line.replace(/^\S+\s/, ""));
+
+		const start = lines.findIndex((line) => line === "{");
+		const end = lines.findIndex((line, index) => index > start && line === "}");
+
+		return logs.code === 0 && start >= 0 && end > start
+			? lines.slice(start, end + 1).join("\n")
+			: null;
+	} catch {
+		return null;
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+}
+
 export async function serveLoop(input: {
 	orchestrator: Orchestrator;
 	stateDir: string;

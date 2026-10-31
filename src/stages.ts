@@ -41,7 +41,11 @@ export const STAGE_PROFILES: Record<Stage, StageProfile> = {
 	specify: { modelAccess: "full", runsIn: "sandbox", githubAccess: "none" },
 	accept: { modelAccess: "full", runsIn: "sandbox", githubAccess: "none" },
 	build: { modelAccess: "full", runsIn: "sandbox", githubAccess: "none" },
-	validate: { modelAccess: "judge", runsIn: "sandbox", githubAccess: "none" },
+	validate: {
+		modelAccess: "none",
+		runsIn: "controller",
+		githubAccess: "contents: write, actions: write",
+	},
 	review: { modelAccess: "full", runsIn: "sandbox", githubAccess: "none" },
 	land: {
 		modelAccess: "none",
@@ -86,9 +90,20 @@ export type RunEvent =
 	| { kind: "needs_info"; questions: NonEmpty<string> }
 	| { kind: "accepted"; acceptanceDigest: Digest }
 	| { kind: "built"; patchDigest: Digest }
+	| {
+			kind: "candidate";
+			candidateSha: string;
+			heldoutDigest: Digest;
+			ciRunId: number;
+	  }
 	| { kind: "validated"; verdict: Verdict }
 	| { kind: "reviewed"; blockingFindings: string[] }
-	| { kind: "landed"; mergeSha: string }
+	| {
+			kind: "landed";
+			mergeSha: string;
+			currentTip?: string;
+			currentGate?: string;
+	  }
 	| { kind: "stage_failed"; evidence: string }
 	| { kind: "budget_exhausted" }
 	| { kind: "rejected"; reason: Exclude<RejectReason, "disabled"> }
@@ -115,9 +130,21 @@ function moveTo(run: Run, stage: Stage, patch: Partial<Run> = {}): Transition {
 	return advanced({ ...run, ...patch, progress: { kind: "active", stage } });
 }
 
-const STALE_ON_REBUILD: Pick<Run, "patchDigest" | "verdict"> = {
+const STALE_ON_REBUILD: Pick<
+	Run,
+	| "patchDigest"
+	| "verdict"
+	| "candidateSha"
+	| "gateSha"
+	| "ciRunId"
+	| "heldoutDigest"
+> = {
 	patchDigest: undefined,
 	verdict: undefined,
+	candidateSha: undefined,
+	gateSha: undefined,
+	ciRunId: undefined,
+	heldoutDigest: undefined,
 };
 
 function repairOrFail(run: Run, stage: Stage, evidence: string): Transition {
@@ -183,6 +210,14 @@ export function advance(run: Run, event: RunEvent): Transition {
 			return stage === "build"
 				? moveTo(run, "validate", { patchDigest: event.patchDigest })
 				: wrongStage(event, stage);
+		case "candidate":
+			return stage === "validate"
+				? moveTo(run, "validate", {
+						candidateSha: event.candidateSha,
+						heldoutDigest: event.heldoutDigest,
+						ciRunId: event.ciRunId,
+					})
+				: wrongStage(event, stage);
 		case "validated": {
 			if (stage !== "validate") return wrongStage(event, stage);
 
@@ -190,11 +225,22 @@ export function advance(run: Run, event: RunEvent): Transition {
 				return invalid("verdict is bound to a different patch");
 			}
 
+			if (
+				event.verdict.candidateSha !== run.candidateSha ||
+				event.verdict.acceptanceDigest !== run.acceptanceDigest ||
+				event.verdict.heldoutDigest !== run.heldoutDigest ||
+				event.verdict.ciRunId !== run.ciRunId
+			)
+				return invalid("verdict is bound to different CI inputs");
+
 			if (!verdictPasses(event.verdict)) {
 				return repairOrFail(run, stage, failureEvidence(event.verdict));
 			}
 
-			return moveTo(run, "review", { verdict: event.verdict });
+			return moveTo(run, "review", {
+				verdict: event.verdict,
+				gateSha: event.verdict.gateSha,
+			});
 		}
 
 		case "reviewed": {
@@ -213,7 +259,11 @@ export function advance(run: Run, event: RunEvent): Transition {
 
 		case "landed": {
 			if (stage !== "land") return wrongStage(event, stage);
-			const check = checkLandPrecondition(run);
+
+			const check = checkLandPrecondition(run, {
+				currentTip: event.currentTip,
+				currentGate: event.currentGate,
+			});
 
 			if (check.kind === "blocked") {
 				return invalid(`land precondition not met: ${check.reason}`);

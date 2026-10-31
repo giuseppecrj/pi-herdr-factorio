@@ -1,3 +1,5 @@
+import type { Validator, ValidationState } from "./validation.ts";
+
 import {
 	BUILD_TOOLS,
 	BUILD_MAX_TOKENS,
@@ -162,6 +164,7 @@ export type StageOutput =
 	  };
 
 export interface StageExecutor {
+	readonly validate?: Validator;
 	/** Stops whatever a previous controller left running. Called once, before the first tick adopts a run. */
 	recover(): Promise<void>;
 	/**
@@ -230,6 +233,11 @@ export type ClaimRecord = {
 	readonly attempt: number | null;
 	readonly usage: number | null;
 	readonly labelFailures?: number;
+	readonly validation?: ValidationState;
+	readonly branch?: string | null;
+	readonly candidate?: GitSha | null;
+	readonly round?: number;
+	readonly ciRun?: number | null;
 };
 
 type ConfirmedRecord = ClaimRecord & { readonly seq: number };
@@ -293,6 +301,7 @@ export interface RunFiles {
 export type RetryCause = "stage_failed" | "stalled" | "interrupted";
 
 export type RunPhase =
+	| { readonly kind: "awaiting_ci" }
 	| { readonly kind: "claimed" }
 	| {
 			readonly kind: "running";
@@ -437,6 +446,7 @@ export type ActiveRun = {
 	labelTick: number;
 	inputs: StageInputs | null;
 	phase: RunPhase;
+	validation?: ValidationState;
 };
 
 /**
@@ -736,6 +746,7 @@ function desiredStatus(phase: RunPhase): RunStatus {
 		case "claimed":
 			return "claimed";
 		case "running":
+		case "awaiting_ci":
 			return "running";
 		case "blocked":
 			return "blocked";
@@ -761,9 +772,10 @@ type WorkspacePreparation =
 
 function holdsSlot(run: ActiveRun): boolean {
 	return (
-		run.phase.kind === "claimed" ||
-		run.phase.kind === "running" ||
-		run.phase.kind === "blocked"
+		run.stage !== "validate" &&
+		(run.phase.kind === "claimed" ||
+			run.phase.kind === "running" ||
+			run.phase.kind === "blocked")
 	);
 }
 
@@ -2183,6 +2195,7 @@ export class Orchestrator {
 				local?.runId === marker.runId ? (local.labelFailures ?? 0) : 0,
 			labelTick: 0,
 			inputs: null,
+			validation: local?.runId === marker.runId ? local.validation : undefined,
 			phase:
 				marker.status === "blocked"
 					? { kind: "blocked", reason: "sandbox_unavailable" }
@@ -2226,12 +2239,18 @@ export class Orchestrator {
 					!(output instanceof Object && output.kind === "pending")),
 		);
 
+		const resumeCi =
+			run.stage === "validate" && marker.status === "running" && !releasing;
+
+		if (resumeCi) run.phase = { kind: "awaiting_ci" };
+
 		const recovered =
-			limits !== null &&
-			marker.status === "running" &&
-			eligibility !== "closed" &&
-			eligibility !== "new_event" &&
-			(await this.#recoverOutput(run, output));
+			resumeCi ||
+			(limits !== null &&
+				marker.status === "running" &&
+				eligibility !== "closed" &&
+				eligibility !== "new_event" &&
+				(await this.#recoverOutput(run, output)));
 
 		if (recovered) {
 			this.#input.log(
@@ -2286,6 +2305,15 @@ export class Orchestrator {
 	}): Promise<void> {
 		const { now, limits } = input;
 		const runs = [...this.state.runs.values()];
+
+		for (const run of runs) {
+			if (
+				run.phase.kind === "awaiting_ci" &&
+				this.#confirmed.has(run.issue) &&
+				run.inflight === null
+			)
+				await this.#validate(run);
+		}
 
 		for (const record of [...input.candidates, ...input.direct]) {
 			const issue = record.number;
@@ -3008,6 +3036,12 @@ export class Orchestrator {
 	async #launch(run: ActiveRun): Promise<boolean> {
 		if (!(await this.#stillReady(run))) return false;
 
+		if (run.stage === "validate") {
+			await this.#validate(run);
+
+			return false;
+		}
+
 		const { files, executor, clock } = this.#input;
 		const config = this.#config;
 
@@ -3240,6 +3274,75 @@ export class Orchestrator {
 		return true;
 	}
 
+	async #validate(run: ActiveRun): Promise<void> {
+		if (run.marked?.candidate != null && run.validation === undefined) {
+			run.phase = { kind: "ending", status: "failed" };
+			this.state.totals.failures++;
+			this.#input.log("validation_failed", {
+				issue: run.issue,
+				runId: run.runId,
+				why: "validation_state_missing",
+			});
+			await this.#sync(run);
+
+			return;
+		}
+
+		const validate = this.#input.executor.validate;
+
+		if (validate === undefined) {
+			run.phase = { kind: "blocked", reason: "sandbox_unavailable" };
+			await this.#sync(run);
+
+			return;
+		}
+
+		run.phase = { kind: "awaiting_ci" };
+
+		const result = await validate({
+			runId: run.runId,
+			issue: run.issue,
+			eventAt: run.eventAt,
+			baseSha: run.workflowSha,
+			now: this.#input.clock.now(),
+			wallMs: this.#config?.stages.validate.budget.wallMs ?? 1_200_000,
+			state: run.validation ?? null,
+			save: async (state) => {
+				run.validation = state;
+				await this.#writeClaim(run);
+
+				return !run.claimUnwritten;
+			},
+		});
+
+		if (result.state !== null) run.validation = result.state;
+
+		if (result.kind === "finished") {
+			run.phase = {
+				kind: "ending",
+				status: result.verdict.pass ? "stage_passed" : "failed",
+			};
+			this.#input.log("validation_verdict", {
+				issue: run.issue,
+				runId: run.runId,
+				candidate: result.verdict.candidateSha,
+				gate: result.verdict.gateSha,
+				ciRun: result.verdict.ciRunId,
+				pass: result.verdict.pass,
+			});
+		} else if (result.kind === "failed") {
+			run.phase = { kind: "ending", status: "failed" };
+			this.state.totals.failures++;
+			this.#input.log("validation_failed", {
+				issue: run.issue,
+				runId: run.runId,
+				why: result.reason,
+			});
+		}
+
+		await this.#sync(run);
+	}
+
 	async #sync(run: ActiveRun): Promise<void> {
 		if (run.inflight?.tick === this.#ticks) return;
 
@@ -3270,12 +3373,24 @@ export class Orchestrator {
 			const { status, effects } = run.phase;
 
 			if (await this.#applyEffects(run, effects)) {
-				if (effects.kind === "contract" || effects.kind === "acceptance") {
-					run.stage = effects.kind === "contract" ? "accept" : "build";
+				if (
+					effects.kind === "contract" ||
+					effects.kind === "acceptance" ||
+					effects.kind === "build"
+				) {
+					run.stage =
+						effects.kind === "contract"
+							? "accept"
+							: effects.kind === "acceptance"
+								? "build"
+								: "validate";
 					run.attempt = 1;
 					run.inputs = null;
 					run.replay = false;
-					run.phase = { kind: "claimed" };
+					run.phase =
+						run.stage === "validate"
+							? { kind: "awaiting_ci" }
+							: { kind: "claimed" };
 				} else run.phase = { kind: "ending", status };
 			} else if (
 				run.phase.kind === "reporting" &&
@@ -4096,7 +4211,12 @@ export class Orchestrator {
 			marked.status !== status ||
 			marked.stage !== run.stage ||
 			marked.attempt !== run.attempt ||
-			marked.usage !== run.usage
+			marked.usage !== run.usage ||
+			marked.branch !== (run.validation?.publication?.branch ?? null) ||
+			(marked.candidate ?? null) !==
+				(run.validation?.publication?.candidateSha ?? null) ||
+			(marked.round ?? 0) !== (run.validation?.round ?? 0) ||
+			(marked.ciRun ?? null) !== (run.validation?.ciRunId ?? null)
 		) {
 			const marker = markerOf(run, {
 				repo: this.#input.repo,
@@ -4205,9 +4325,21 @@ function claimOf(run: ActiveRun): ClaimRecord {
 		usage: run.marked?.usage ?? null,
 	};
 
-	return run.labelFailures === 0
-		? claim
-		: { ...claim, labelFailures: run.labelFailures };
+	const labels =
+		run.labelFailures === 0
+			? claim
+			: { ...claim, labelFailures: run.labelFailures };
+
+	if (run.validation === undefined) return labels;
+
+	return {
+		...labels,
+		validation: run.validation,
+		branch: run.validation.publication?.branch ?? null,
+		candidate: run.validation.publication?.candidateSha ?? null,
+		round: run.validation.round,
+		ciRun: run.validation.ciRunId,
+	};
 }
 
 function recordOf(marker: Marker): ConfirmedRecord {
@@ -4227,11 +4359,12 @@ function markerOf(
 	run: Omit<
 		Marker,
 		"v" | "repo" | "status" | "seq" | "branch" | "pr" | "cursor"
-	>,
+	> & { readonly validation?: ValidationState },
+
 	next: Pick<Marker, "repo" | "status" | "seq" | "cursor">,
 ): Marker {
 	return {
-		v: 1,
+		v: 2,
 		runId: run.runId,
 		repo: next.repo,
 		issue: run.issue,
@@ -4244,7 +4377,10 @@ function markerOf(
 		status: next.status,
 		attempt: run.attempt,
 		seq: next.seq,
-		branch: null,
+		branch: run.validation?.publication?.branch ?? null,
+		candidate: run.validation?.publication?.candidateSha ?? null,
+		round: run.validation?.round ?? 0,
+		ciRun: run.validation?.ciRunId ?? null,
 		pr: null,
 		usage: run.usage,
 		cursor: next.cursor,

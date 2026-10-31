@@ -10,6 +10,10 @@ const HELD: Record<string, string> = {
   running: "Stage running in the sandbox",
   blocked: "Sandbox down, slot kept",
   retry: "Waiting to retry",
+  publishing: "Publishing patch and held-out checks",
+  awaiting_ci: "Waiting for CI without a slot or model",
+  verdict_pass: "Storing a passing bound verdict",
+  verdict_fail: "Storing a failed verdict",
 };
 
 export const title = "What the controller does with one run today";
@@ -49,7 +53,13 @@ export const step = (action: string, from: any, to: any) => {
         return from.ph === "retry" ? "backoff ends" : "the sandbox launches the stage";
       return "launch refused, token cap reached";
     case "StagePasses":
-      return "stage passes";
+      return "build passes, sandbox stops";
+    case "Published":
+      return "two commits published, CI dispatched";
+    case "CollectCI":
+      return "CI completes or the deadline expires";
+    case "StoreVerdict":
+      return "verdict stored, branch deleted";
     case "StageRefuses":
       return "stage refuses";
     case "StageFails":

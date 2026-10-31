@@ -66,14 +66,50 @@ export type CheckResult = {
 	detail?: string;
 };
 
+export const REQUIRED_CI_CHECKS = [
+	"baseline_tests",
+	"typecheck",
+	"lint",
+	"format",
+	"main_tests",
+	"candidate_tests",
+	"heldout",
+] as const;
+
 export type Verdict = {
 	patchDigest: Digest;
+	acceptanceDigest: Digest;
+	heldoutDigest: Digest;
+	candidateSha: string;
+	gateSha: string;
+	ciRunId: number;
+	originalBase: string;
+	baseSha: string;
 	pass: boolean;
 	checks: CheckResult[];
+	requiredChecks: string[];
+	unjudged: string[];
 };
 
 export function verdictPasses(verdict: Verdict): boolean {
-	return verdict.pass && verdict.checks.every((check) => check.passed);
+	return (
+		verdict.pass &&
+		isDigest(verdict.patchDigest) &&
+		isDigest(verdict.acceptanceDigest) &&
+		isDigest(verdict.heldoutDigest) &&
+		/^[a-f0-9]{40}$/.test(verdict.candidateSha) &&
+		/^[a-f0-9]{40}$/.test(verdict.gateSha) &&
+		Number.isSafeInteger(verdict.ciRunId) &&
+		verdict.ciRunId > 0 &&
+		REQUIRED_CI_CHECKS.every((name) => verdict.requiredChecks.includes(name)) &&
+		new Set(verdict.requiredChecks).size === verdict.requiredChecks.length &&
+		verdict.checks.length === verdict.requiredChecks.length &&
+		verdict.requiredChecks.every(
+			(name) =>
+				verdict.checks.filter((check) => check.name === name).length === 1,
+		) &&
+		verdict.checks.every((check) => check.passed)
+	);
 }
 
 export type Progress =
@@ -88,6 +124,10 @@ export interface Run {
 	contractDigest?: Digest;
 	acceptanceDigest?: Digest;
 	patchDigest?: Digest;
+	heldoutDigest?: Digest;
+	candidateSha?: string;
+	gateSha?: string;
+	ciRunId?: number;
 	verdict?: Verdict;
 	repairRounds: number;
 	progress: Progress;

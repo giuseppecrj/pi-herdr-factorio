@@ -259,7 +259,7 @@ describe("parseMarker", () => {
 		[
 			"an unknown version",
 			rawBody((f) => {
-				f.set("v", 2);
+				f.set("v", 3);
 			}),
 			"unknown_version",
 		],
@@ -378,6 +378,53 @@ describe("parseMarker", () => {
 			assert.deepEqual(parseMarker(body), { kind: "corrupt", defect });
 		});
 	}
+});
+
+describe("marker v2", () => {
+	it("round-trips publication and CI identities, while v1 still parses", () => {
+		const value = marker({
+			v: 2,
+			branch: `factory/run/14-${runId.slice(0, 12)}-r2`,
+			candidate: sha("d".repeat(40)),
+			round: 2,
+			ciRun: 41153584933,
+		});
+
+		assert.deepEqual(parseMarker(formatMarker(value)), {
+			kind: "marker",
+			marker: value,
+		});
+		assert.deepEqual(parseMarker(formatMarker(marker())), {
+			kind: "marker",
+			marker: marker(),
+		});
+	});
+	it("keeps a fully populated v2 marker below the 4096-byte cap", () => {
+		const value = marker({
+			v: 2,
+			branch: `factory/run/9007199254740991-${runId.slice(0, 12)}-r2`,
+			candidate: sha("d".repeat(40)),
+			round: 2,
+			ciRun: Number.MAX_SAFE_INTEGER,
+			attempt: Number.MAX_SAFE_INTEGER,
+			seq: Number.MAX_SAFE_INTEGER,
+			usage: Number.MAX_SAFE_INTEGER,
+			cursor: "x".repeat(64),
+		});
+
+		assert.ok(Buffer.byteLength(formatMarker(value)) < MARKER_MAX_BYTES);
+	});
+	it("rejects unrelated branches and malformed v2 identities", () => {
+		for (const change of [
+			{ branch: "factory/ledger" },
+			{ round: 3 },
+			{ ciRun: 0 },
+		])
+			assert.equal(
+				parseMarker(formatMarker(marker({ v: 2, ...change }))).kind,
+				"corrupt",
+			);
+	});
 });
 
 describe("markerLedger trust rule", () => {

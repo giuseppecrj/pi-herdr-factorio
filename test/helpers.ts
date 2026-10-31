@@ -6,6 +6,7 @@ import {
 	startRun,
 	type TicketRef,
 	type Verdict,
+	REQUIRED_CI_CHECKS,
 } from "../src/run.ts";
 import { advance, type RunEvent } from "../src/stages.ts";
 
@@ -31,22 +32,52 @@ export function newRun(): Run {
 	});
 }
 
+export const candidateEvent = {
+	kind: "candidate",
+	candidateSha: "c".repeat(40),
+	heldoutDigest: digestOf("heldout"),
+	ciRunId: 123,
+} as const;
+
+export const currentHead = {
+	currentTip: "c".repeat(40),
+	currentGate: "a".repeat(40),
+};
+
+export const ciBinding = {
+	...candidateEvent,
+	acceptanceDigest,
+	gateSha: currentHead.currentGate,
+};
+
 export function passingVerdict(patchDigest: Digest): Verdict {
 	return {
 		patchDigest,
+		acceptanceDigest,
+		heldoutDigest: candidateEvent.heldoutDigest,
+		candidateSha: candidateEvent.candidateSha,
+		ciRunId: candidateEvent.ciRunId,
+		gateSha: currentHead.currentGate,
+		originalBase: "a".repeat(40),
+		baseSha: "a".repeat(40),
+		unjudged: [],
 		pass: true,
-		checks: [{ name: "check", passed: true }],
+		requiredChecks: [...REQUIRED_CI_CHECKS],
+		checks: REQUIRED_CI_CHECKS.map((name) => ({ name, passed: true })),
 	};
 }
 
 export function failingVerdict(patchDigest: Digest): Verdict {
+	const verdict = passingVerdict(patchDigest);
+
 	return {
-		patchDigest,
+		...verdict,
 		pass: false,
-		checks: [
-			{ name: "typecheck", passed: true },
-			{ name: "acceptance", passed: false, detail: "1 failing" },
-		],
+		checks: verdict.checks.map((check) =>
+			check.name === "heldout"
+				? { ...check, passed: false, detail: "1 failing" }
+				: check,
+		),
 	};
 }
 
@@ -76,7 +107,11 @@ export function reachBuild(): Run {
 }
 
 export function reachValidate(name = "first"): Run {
-	return apply(reachBuild(), { kind: "built", patchDigest: patch(name) });
+	return apply(
+		reachBuild(),
+		{ kind: "built", patchDigest: patch(name) },
+		candidateEvent,
+	);
 }
 
 export function reachReview(name = "first"): Run {
