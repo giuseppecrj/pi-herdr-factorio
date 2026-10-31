@@ -94,9 +94,6 @@ if (mode === "generate") {
 	} finally { rmSync(temp,{recursive:true,force:true}); }
 
 	cases.push(
-		{name:"uppercase-ts-nocheck",expected:"failed",seed:true},
-		{name:"line-separator-runtime",expected:"failed",seed:true},
-		{name:"alias-swap-with-name",expected:"failed",seed:true},
 		{name:"helper-read-forgery",expected:"failed",seed:true},
 		{name:"nul-direct-read-forgery",expected:"failed",seed:true},
 		{name:"nul-ts-nocheck",expected:"failed",seed:true},
@@ -104,6 +101,9 @@ if (mode === "generate") {
 		{name:"acceptance-stash-lint",expected:"failed",seed:true},
 		{name:"gutted-named-replacement",expected:"failed",replacements:replaced,seed:true},
 		{name:"heldout-expect-error",expected:"passed",heldout_dir:"test/acceptance/124",heldout_digest:"4dc163886e616056ac8e059faadd93e9ca87e1d683cba785fe9612acbe93eac0",seed:true},
+		{name:"uppercase-ts-nocheck",expected:"failed",seed:true},
+		{name:"line-separator-runtime",expected:"failed",seed:true},
+		{name:"alias-swap-with-name",expected:"failed",seed:true},
 	);
 
 	for (const fixture of cases) {

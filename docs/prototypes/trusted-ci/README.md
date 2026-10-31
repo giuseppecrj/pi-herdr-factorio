@@ -2,6 +2,14 @@
 
 F07b runs main's checks against exact candidate code without trusting candidate scripts, configuration, or test deletions. The host writes the receipt outside candidate mounts.
 
+## Fix round 4 proof
+
+At gate revision `df50989e408edf2de7232897b71e8e9bc1409e1d`, all three new fixture expectations match locally and in the [hosted Docker run](https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41153584933). `uppercase-ts-nocheck` fails with `suppression_added`, `line-separator-runtime` with `invalid_source_encoding`, and `alias-swap-with-name` with `package_swap`. The receipts bind the gate and candidate SHAs and record zero model calls. The scratch branch was deleted after preserving its artifacts.
+
+On `0c55569`, both scan-bypass candidates passed and six unit regressions failed. The alias fixture already failed there, but passes if the trusted-lock argument is removed from `checkCandidate`, so it detects mutation M13. TypeScript 5.9.3 honors mixed-case `@ts-nocheck`, but uppercase `@ts-ignore` and `@ts-expect-error` do not suppress type errors.
+
+The focused suite passes **66/66**. It covers all three refused line terminators, permitted CRLF, and a simulated main with a published acceptance suite. Unchanged acceptance files pass without dispatch, while edits remain refused. Two `npm run check` runs each pass **1,075/1,075**, with no failures, skips, or todos. The plan checker reports **17 PR sections, 0 problems**. This round reran only the three new fixtures, not the full matrix or performance benchmark.
+
 ## Fix round 3 proof
 
 At gate revision `2eda087f9716f12144b2c00e6d18de3df2c18d8b`, all **42/42 local fixture expectations** match. The previous 35 outcomes are unchanged. The [hosted Docker run](https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41148423052) matches all nine selected expectations: the seven review candidates below and both original reporting forgeries. [fix3-proof.json](fix3-proof.json) records the exact SHAs and check results.
