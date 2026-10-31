@@ -233,8 +233,18 @@ try {
 				stdio: "ignore",
 			});
 		} catch {
-			console.error("scope stop failed; verify the owned scope is gone");
-			process.exitCode = 1;
+			const remaining = execFileSync(
+				"systemctl",
+				["--user", "list-units", "--all", "--no-legend", unit],
+				{
+					env: { ...process.env, XDG_RUNTIME_DIR: "/run/user/1000" },
+					encoding: "utf8",
+				},
+			);
+			if (remaining.trim() !== "") {
+				console.error("the owned repair scope remains after stop");
+				process.exitCode = 1;
+			}
 		}
 	}
 	await gateway.handle.shutdown();
