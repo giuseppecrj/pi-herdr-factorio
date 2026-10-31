@@ -587,7 +587,8 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Files.**
 
 - [ ] Create `server/viewer.ts`, `server/viewer/`, `test/viewer.test.ts`, `test/fixtures/viewer/`, and `docs/operations/viewer.md`.
-- [ ] Edit `server/cli.ts` and `docs/operations/factory-cli.md` only for the `viewer` subcommand and its documentation.
+- [ ] Edit `server/cli.ts` and `docs/operations/factory-cli.md` only for the `viewer` subcommand and its documentation. Edit `.pi/skills/verify-factory/**` for its viewer feature recipe and this F07d Files block.
+- [ ] Edit `server/sandbox.ts`, `server/controller.ts`, and their tests only to extract pure stage receipt and stored-verdict readers. Keep every existing caller's behavior identical. The coordinator granted this extraction after the first build's reader-scope report.
 
 **Build.**
 

@@ -1298,6 +1298,11 @@ export async function writeStatus(
 	);
 }
 
+export function readStoredVerdict(path: string): Verdict {
+	// SAFETY: controller-private write-once verdict; callers verify artifact bindings before reuse.
+	return JSON.parse(regularText(path, 1024 * 1024)) as Verdict;
+}
+
 export async function readStatus(stateDir: string): Promise<JsonValue | null> {
 	const text = await readFile(
 		join(resolve(stateDir), STATUS_FILE),
@@ -1514,10 +1519,7 @@ export function controllerValidator(config: {
 			}
 
 			if (present(verdictPath)) {
-				// SAFETY: controller-private write-once verdict; all live artifact identities are checked before reuse.
-				const verdict = JSON.parse(
-					regularText(verdictPath, 1024 * 1024),
-				) as Verdict;
+				const verdict = readStoredVerdict(verdictPath);
 
 				if (
 					verdict.patchDigest !== patch.receipt.patchDigest ||

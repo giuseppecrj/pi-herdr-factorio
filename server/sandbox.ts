@@ -1423,8 +1423,8 @@ type KeptSession = {
 	readonly text: string | null;
 };
 
-async function keptSession(dir: string): Promise<KeptSession | null> {
-	const raw = await boundedText(join(dir, "receipt.json"), MAX_RECEIPT_BYTES);
+export async function readStageReceipt(path: string) {
+	const raw = await boundedText(path, MAX_RECEIPT_BYTES);
 	const record = objectOf(parseJson(raw ?? ""));
 	const result = objectOf(fieldOf(record, "outcome"));
 	const kind = textOf(fieldOf(result, "kind"));
@@ -1476,9 +1476,8 @@ async function keptSession(dir: string): Promise<KeptSession | null> {
 
 	if (total === null || turns === null || wallMs === null) return null;
 
-	const file = textOf(fieldOf(objectOf(fieldOf(record, "output")), "file"));
-
 	return {
+		record,
 		outcome,
 		turns,
 		wallMs,
@@ -1490,8 +1489,25 @@ async function keptSession(dir: string): Promise<KeptSession | null> {
 			gateway: countOf(fieldOf(usage, "gateway")),
 			unreadChildren: countOf(fieldOf(usage, "unreadChildren")) ?? 0,
 		},
+	};
+}
+
+async function keptSession(dir: string): Promise<KeptSession | null> {
+	const parsed = await readStageReceipt(join(dir, "receipt.json"));
+
+	if (parsed === null) return null;
+
+	const file = textOf(
+		fieldOf(objectOf(fieldOf(parsed.record, "output")), "file"),
+	);
+
+	return {
+		outcome: parsed.outcome,
+		usage: parsed.usage,
+		turns: parsed.turns,
+		wallMs: parsed.wallMs,
 		text:
-			outcome.kind === "passed" && file === "output.txt"
+			parsed.outcome.kind === "passed" && file === "output.txt"
 				? await boundedText(join(dir, file), OUTPUT_MAX_BYTES)
 				: null,
 	};

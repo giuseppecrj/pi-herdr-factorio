@@ -7,11 +7,21 @@ node server/cli.ts <command> --json --repo <owner/name> [options]
 node server/cli.ts serve --repo <owner/name> --state-dir <dir> [--issue <number>]...
 ```
 
-Every command reads `.github/factory/WORKFLOW.md` from GitHub through `gh`, never from the local checkout. It first resolves the branch to a SHA with `gh api repos/<repo>/git/ref/heads/<branch> --jq .object.sha`, then fetches the file at that SHA with `gh api -H 'Accept: application/vnd.github.raw' repos/<repo>/contents/.github/factory/WORKFLOW.md?ref=<sha>`. Each `gh` call has a 30-second timeout. `gh` inherits the environment, including `GH_HOST`. On the VM, set `GH_HOST=github.int.exe.xyz`.
+Except for `gates` and `viewer`, every command reads `.github/factory/WORKFLOW.md` from GitHub through `gh`, never from the local checkout. It first resolves the branch to a SHA with `gh api repos/<repo>/git/ref/heads/<branch> --jq .object.sha`, then fetches the file at that SHA with `gh api -H 'Accept: application/vnd.github.raw' repos/<repo>/contents/.github/factory/WORKFLOW.md?ref=<sha>`. Each `gh` call has a 30-second timeout. `gh` inherits the environment, including `GH_HOST`. On the VM, set `GH_HOST=github.int.exe.xyz`.
 
 `admit` makes more `gh` reads, described in its section below. `tick`, `run` and `serve` are the controller, described under "Controller". They are the only commands that write to GitHub, and the only thing they write is run marker comments. They are also the only commands that run a model, and only inside the stage sandbox, as described under "Runs". Only `admit` and the controller write local files, and only under `--state-dir`.
 
 Errors and warnings carry only text the factory builds itself. They never quote `gh` output, an exec failure, a YAML error message, a key or value from `WORKFLOW.md` or a command-line argument. A second layer still redacts credentials in stdout, stderr and `/factory status` text. Anything shaped like `scheme://user:secret@` is printed as `scheme://<redacted>@`, and the value of a query parameter named `token`, `access_token`, `auth`, `key`, `password`, `secret`, `sig`, `signature` or `code`, in any case, is printed as `<redacted>`. In JSON output this applies to each string value before it is encoded, so it never spans two lines of one value.
+
+## Local run viewer
+
+```bash
+node server/cli.ts viewer --state-dir "$STATE" [--run <64-character-id>] [--port <n>]
+```
+
+`viewer` serves local evidence on `127.0.0.1` with no GitHub or model calls. It needs neither `--repo` nor `--json`. The default port is 8080. All four views have HTML and JSON routes. Missing sources are visible gaps, never a complete run. A missing state directory or occupied port exits 1. Invalid options exit 2. Ctrl+C or SIGTERM stops it with exit 0.
+
+See [Inspect one run's local evidence](viewer.md) for the routes, source limits, session-retention gaps, and owner-authorized Tailscale exposure. `--allowed-host` permits an explicitly authorized Tailscale hostname without changing the loopback bind. No exposure is enabled by default.
 
 ## Commands
 
@@ -23,8 +33,11 @@ Errors and warnings carry only text the factory builds itself. They never quote 
 | `tick` | Run one controller tick and print the claim snapshot. Requires `--once`. |
 | `run` | Run one controller tick for one issue, through the same admission as polling, and print the claim snapshot. |
 | `serve` | Run the controller: a tick, then one every `polling.interval_ms`, until SIGTERM or SIGINT. |
+| `viewer` | Inspect one run's local timeline, usage, children, and gateway decisions. |
 
 ## Flags
+
+The flags below describe the workflow and controller commands. `viewer` has its own flags in [Local run viewer](#local-run-viewer).
 
 | Flag | Commands | Required | Default | Meaning |
 | --- | --- | --- | --- | --- |
