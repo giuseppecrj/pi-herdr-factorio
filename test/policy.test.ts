@@ -192,17 +192,24 @@ describe("forbidden paths", () => {
 	});
 });
 
-it("reserves the controller-owned repair feedback filename", () => {
+it("reserves the controller-owned repair feedback path and descendants", () => {
 	for (const path of [
 		".factory-feedback.json",
 		"./.factory-feedback.json",
 		".FACTORY-FEEDBACK.JSON",
+		".factory-feedback.json/x.ts",
+		"./.FACTORY-FEEDBACK.JSON/deep/x.ts",
+		".factory-feedback.json\\x.ts",
 	])
 		assert.equal(checkChangedPaths({ changedPaths: [path] }).kind, "forbidden");
-	assert.equal(
-		checkChangedPaths({ changedPaths: ["src/feedback.json"] }).kind,
-		"clean",
-	);
+
+	for (const path of [
+		"src/feedback.json",
+		".factory-feedback.json.ts",
+		".factory-feedback.json-backup/x.ts",
+		"src/.factory-feedback.json",
+	])
+		assert.equal(checkChangedPaths({ changedPaths: [path] }).kind, "clean");
 });
 
 describe("land precondition", () => {

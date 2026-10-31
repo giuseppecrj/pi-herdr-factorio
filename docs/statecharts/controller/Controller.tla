@@ -23,8 +23,8 @@ VARIABLES
     restarts,
     launchedEnded, \* a stage launched for a run whose marker was already terminal
     branches,     \* events with published refs, abstracted across rounds
-    stage,        \* build or review; persisted across restart
-    round         \* shared validation/review repair counter
+    stage,
+    round
 
 vars == <<ticket, event, run, ph, endAs, attempt, tokens, marker, cur, orphan,
           loaded, reconciled, sandboxOk, pending, restarts, launchedEnded, branches, stage, round>>

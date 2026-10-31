@@ -644,7 +644,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Files.**
 
-- [ ] Create `src/review.ts`, `test/review.test.ts`, `test/fixtures/review/`, and `skills/code-review/`, `skills/security-review/`, `skills/simplify/`, `skills/ultrareview/` with provenance.
+- [ ] Create `src/review.ts`, `test/review.test.ts` with inline fixtures, and `skills/code-review/`, `skills/security-review/`, `skills/simplify/`, `skills/ultrareview/` with provenance.
 - [ ] Edit `src/stages.ts`, `src/run.ts`, `src/orchestrator.ts`, `src/build.ts`, `src/validation.ts`, `src/workflow.ts`, `src/artifacts.ts`, `src/policy.ts`, `server/controller.ts`, `server/sandbox.ts`, and `server/sandbox/routes.ts` for review, round storage, repair and OpenAI fallback.
 - [ ] Edit `test/stages.test.ts`, `test/pipeline.test.ts`, `test/orchestrator.test.ts`, `test/build.test.ts`, `test/review.test.ts`, `test/workflow.test.ts`, `test/policy.test.ts`, `test/helpers.ts`, and `test/sandbox/runner.cases.ts` for bindings, shared caps, recovery and refusal tests.
 - [ ] Edit `server/viewer/claim.ts`, `server/viewer/evidence.ts`, `test/viewer.test.ts`, and `docs/operations/viewer.md` for round-aware evidence without compatibility aliases.

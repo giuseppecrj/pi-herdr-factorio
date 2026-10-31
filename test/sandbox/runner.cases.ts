@@ -3471,6 +3471,65 @@ describe("multi-seat candidate review", () => {
 		}
 	});
 
+	it("charges a failed review seat and enforces the remaining round share on retry", async () => {
+		const first = setup("malformed"),
+			retry = setup();
+
+		try {
+			const failed = await sandboxModule.runReview(
+				first.run,
+				first.dir,
+				first.create,
+			);
+
+			assert.equal(failed.kind, "failed");
+			assert.equal(failed.usage, 20);
+			assert.equal(first.hosts.length, 2);
+
+			const passed = await sandboxModule.runReview(
+				{
+					...retry.run,
+					attempt: 2,
+					settings: { ...retry.run.settings, maxTokens: 30_000 - failed.usage },
+					remainingRunTokens: retry.run.remainingRunTokens - failed.usage,
+				},
+				retry.dir,
+				retry.create,
+			);
+
+			assert.equal(passed.kind, "passed");
+			assert.equal(passed.usage, 30);
+			assert.deepEqual(
+				retry.hosts.map((h) => h.tables[0]?.ceiling.modelTokens),
+				[29_980, 29_970, 29_960],
+			);
+		} finally {
+			first.close();
+			retry.close();
+		}
+	});
+
+	for (const maxTokens of [0, 1])
+		it(`never approves a review at ${maxTokens} remaining tokens and charges actual overshoot`, async () => {
+			const h = setup();
+
+			try {
+				const result = await sandboxModule.runReview(
+					{ ...h.run, settings: { ...h.run.settings, maxTokens } },
+					h.dir,
+					h.create,
+				);
+
+				assert.equal(result.kind, "budget_exhausted");
+				assert.equal(result.usage, maxTokens === 0 ? 0 : 10);
+				assert.equal(result.receipt.usage.total, result.usage);
+				assert.equal(h.calls.length, maxTokens === 0 ? 0 : 1);
+				assert.equal(existsSync(join(h.dir, "output.txt")), false);
+			} finally {
+				h.close();
+			}
+		});
+
 	it("charges exhaustion and never accepts the seats that did not run", async () => {
 		const h = setup();
 

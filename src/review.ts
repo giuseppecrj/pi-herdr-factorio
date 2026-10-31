@@ -235,8 +235,7 @@ export function reviewSeats(
 		gate.newDependency === true ||
 		gate.scriptsChanged === true ||
 		(gate.dependencies?.added?.length ?? 0) > 0 ||
-		(gate.dependencies?.changed?.length ?? 0) > 0 ||
-		(gate.installScripts?.length ?? 0) > 0;
+		(gate.dependencies?.changed?.length ?? 0) > 0;
 
 	return [...REVIEW_SEATS, ...(risk ? ["ultrareview" as const] : [])];
 }

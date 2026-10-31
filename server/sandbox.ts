@@ -13,7 +13,7 @@ import {
 	type SeatReceipt,
 } from "../src/review.ts";
 import { validationDir } from "../src/validation.ts";
-import { parseWorkflow } from "../src/workflow.ts";
+import { isGitSha, parseWorkflow } from "../src/workflow.ts";
 import {
 	collectPatch,
 	commandReceipts,
@@ -2321,6 +2321,8 @@ async function prepareCandidateReview(
 
 	if (
 		!verdictPasses(verdict) ||
+		!isGitSha(verdict.baseSha) ||
+		verdict.originalBase !== bound.contract.base.sha ||
 		verdict.patchDigest !== patch.receipt.patchDigest ||
 		patch.receipt.contractDigest !== bound.digest ||
 		patch.receipt.acceptanceDigest !== suite.receipt.acceptanceDigest ||
@@ -2336,17 +2338,20 @@ async function prepareCandidateReview(
 	)
 		throw new Error("review_gate_binding");
 
-	const checked = await checkoutBuildWorkspace({
-		stateDir: config.stateDir,
-		workspace,
+	const reviewBase = join(config.stateDir, "review-base", verdict.baseSha);
+	const base = join(reviewBase, "trees", runId);
+	mkdirSync(base, { recursive: true, mode: 0o700 });
+
+	const checked = await checkoutWorkspace({
+		stateDir: reviewBase,
+		workspace: base,
 		runId,
 		repo: bound.contract.base.repo,
-		sha: bound.contract.base.sha,
+		sha: verdict.baseSha,
 		fetch: config.fetchTarball ?? ghTarball,
 	});
 
 	if (checked.kind !== "ready") throw new Error("review_checkout");
-	const base = join(config.stateDir, "pristine", runId);
 
 	const workflow = parseWorkflow({
 		text: readFileSync(join(base, ".github/factory/WORKFLOW.md"), "utf8"),
@@ -2934,7 +2939,6 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 						"receipt.json",
 					);
 
-					// SAFETY: private, controller-bound receipt from the prior completed round, never supplied by a builder.
 					const review = existsSync(reviewPath)
 						? reviewFeedback(JSON.parse(regularText(reviewPath)))
 						: [];

@@ -122,6 +122,31 @@ test("rejects empty patches and records both sides of forbidden renames", async 
 	assert.ok(result.patch.length > 0);
 });
 
+test("collection forbids files below the reserved feedback path but permits neighbors", async (t) => {
+	const f = fixture(t);
+	mkdirSync(join(f.workspace, ".factory-feedback.json"));
+	writeFileSync(
+		join(f.workspace, ".factory-feedback.json/x.ts"),
+		"export {};\n",
+	);
+	writeFileSync(join(f.workspace, ".factory-feedback.json.ts"), "export {};\n");
+	const result = await collectPatch(f);
+	assert.equal(result.kind, "collected");
+
+	if (result.kind !== "collected") throw new Error("collection");
+	assert.equal(result.policy, "forbidden");
+	assert.deepEqual(result.changedPaths, [
+		".factory-feedback.json.ts",
+		".factory-feedback.json/x.ts",
+	]);
+	rmSync(join(f.workspace, ".factory-feedback.json"), { recursive: true });
+	const neighbor = await collectPatch(f);
+	assert.equal(neighbor.kind, "collected");
+
+	if (neighbor.kind !== "collected") throw new Error("collection");
+	assert.equal(neighbor.policy, "clean");
+});
+
 test("rejects escaping symlinks including physical dot-component chains", async (t) => {
 	const f = fixture(t);
 	symlinkSync(".", join(f.workspace, "d"));

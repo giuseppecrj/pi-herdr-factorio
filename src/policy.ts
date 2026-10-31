@@ -90,7 +90,7 @@ function isForbidden(changed: string, acceptanceDir: string): boolean {
 			.some((part) => part === ".." || part.toLowerCase() === ".git") ||
 		path.startsWith("../") ||
 		path.startsWith("/") ||
-		path === ".factory-feedback.json" ||
+		isAtOrUnder(path, ".factory-feedback.json") ||
 		isAtOrUnder(path, CONTROL_PLANE_DIR) ||
 		isAtOrUnder(path, posix.normalize(acceptanceDir).toLowerCase())
 	);

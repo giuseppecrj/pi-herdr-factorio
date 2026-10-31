@@ -1530,6 +1530,25 @@ export class Orchestrator {
 		return spent ?? 0;
 	}
 
+	async #roundSpent(
+		run: ActiveRun,
+		stage: ModelStage,
+		prior: number,
+	): Promise<number> {
+		let total = prior;
+
+		for (let attempt = 1; attempt < run.attempt; attempt++)
+			total +=
+				(await this.#input.executor.spent({
+					runId: run.runId,
+					stage,
+					attempt,
+					round: run.round ?? 0,
+				})) ?? 0;
+
+		return total;
+	}
+
 	#finishStage(run: ActiveRun, result: StageEnd, limits: Limits): void {
 		if (run.stage === "review" && result.review !== undefined) {
 			run.usage += result.usage;
@@ -3148,7 +3167,21 @@ export class Orchestrator {
 			? await this.#attemptSpent(run, stage)
 			: 0;
 
-		if (run.usage + prior >= config.usage.maxTokensPerRun) {
+		const roundLimit =
+			stage === "review"
+				? REVIEW_MAX_TOKENS
+				: stage === "build" && (run.round ?? 0) > 0
+					? REPAIR_BUILD_MAX_TOKENS
+					: null;
+
+		const roundSpent =
+			roundLimit !== null && isModelStage(stage)
+				? await this.#roundSpent(run, stage, prior)
+				: prior;
+
+		const runExhausted = run.usage + prior >= config.usage.maxTokensPerRun;
+
+		if (runExhausted || (roundLimit !== null && roundSpent >= roundLimit)) {
 			run.usage += prior;
 			this.state.totals.usage += prior;
 			run.phase = { kind: "ending", status: "budget_exhausted" };
@@ -3156,7 +3189,7 @@ export class Orchestrator {
 				issue: run.issue,
 				runId: run.runId,
 				stage: run.stage,
-				why: "run_tokens",
+				why: runExhausted ? "run_tokens" : "round_tokens",
 			});
 			await this.#sync(run);
 
@@ -3300,10 +3333,10 @@ export class Orchestrator {
 								0,
 								((run.round ?? 0) > 0
 									? REPAIR_BUILD_MAX_TOKENS
-									: BUILD_MAX_TOKENS) - prior,
+									: BUILD_MAX_TOKENS) - roundSpent,
 							)
 						: stage === "review"
-							? Math.max(0, REVIEW_MAX_TOKENS - prior)
+							? Math.max(0, REVIEW_MAX_TOKENS - roundSpent)
 							: stage === "accept"
 								? Math.max(0, ACCEPTANCE_MAX_TOKENS - prior)
 								: null,

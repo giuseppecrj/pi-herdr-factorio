@@ -27,7 +27,12 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileRunFiles } from "../server/controller.ts";
 import { sandboxExecutor } from "../server/sandbox.ts";
-import { collectPatch, storePatch, finishPatch } from "../src/build.ts";
+import {
+	collectPatch,
+	storePatch,
+	finishPatch,
+	publicationTree,
+} from "../src/build.ts";
 import {
 	contractBytes,
 	contractDigestOf,
@@ -36,7 +41,7 @@ import {
 import { writeAcceptance } from "../src/accept.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
 
-it("prepares real review input from a public-mode tarball without exposing private suite bytes", async () => {
+async function checkReviewTree(mode: string) {
 	const root = mkdtempSync(join(tmpdir(), "factory-review-input-"));
 
 	try {
@@ -45,9 +50,11 @@ it("prepares real review input from a public-mode tarball without exposing priva
 			state = join(root, "state");
 
 		const repo = "giuseppecrj/pi-herdr-factorio",
-			sha = "a".repeat(40);
+			sha = "a".repeat(40),
+			certifiedSha = mode === "unchanged" ? sha : "e".repeat(40);
 
-		if (!isRepoSlug(repo) || !isGitSha(sha)) throw new Error("fixture");
+		if (!isRepoSlug(repo) || !isGitSha(sha) || !isGitSha(certifiedSha))
+			throw new Error("fixture");
 
 		for (const dir of [base, work, state]) mkdirSync(dir, { mode: 0o700 });
 		mkdirSync(join(base, ".github/factory"), { recursive: true });
@@ -56,8 +63,20 @@ it("prepares real review input from a public-mode tarball without exposing priva
 			`---\nrepository: ${repo}\n---\n## review\nReview the contract.\n`,
 			{ mode: 0o644 },
 		);
-		cpSync(join(base, ".github"), join(work, ".github"), { recursive: true });
-		writeFileSync(join(work, "value.ts"), "export const value = 1;\n");
+
+		const original =
+			"export const first = 1;\nexport const second = 2;\nexport const third = 3;\nexport const fourth = 4;\nexport const value = 0;\n";
+
+		writeFileSync(join(base, "value.ts"), original);
+		writeFileSync(
+			join(base, "dependency.ts"),
+			"export const dependency = 'original';\n",
+		);
+		cpSync(base, work, { recursive: true });
+		writeFileSync(
+			join(work, "value.ts"),
+			original.replace("value = 0", "value = 1"),
+		);
 		const runId = digestOf("review fixture");
 
 		const contract: Contract = {
@@ -147,7 +166,7 @@ it("prepares real review input from a public-mode tarball without exposing priva
 		const verdict = {
 			...passingVerdict(patch.patchDigest),
 			originalBase: sha,
-			baseSha: sha,
+			baseSha: certifiedSha,
 			acceptanceDigest: stored.receipt.acceptanceDigest,
 		};
 
@@ -158,25 +177,101 @@ it("prepares real review input from a public-mode tarball without exposing priva
 		});
 		writeFileSync(
 			join(dir, "receipt.json"),
-			JSON.stringify({ modelCalls: 0, candidateSha: verdict.candidateSha }),
+			JSON.stringify({
+				modelCalls: 0,
+				candidateSha: verdict.candidateSha,
+				newDependency: false,
+				dependencies: { added: [], changed: [] },
+				installScripts: [
+					"node_modules/@google/genai@2.21.0",
+					"node_modules/protobufjs@7.6.6",
+				],
+			}),
 			{ mode: 0o600 },
 		);
 
-		const archive = execFileSync(
-			"tar",
-			["-czf", "-", "--transform=s,^,repo/,", ".github"],
-			{ cwd: base },
-		);
+		const archiveOf = (path: string) =>
+			execFileSync(
+				"tar",
+				[
+					"-czf",
+					"-",
+					"--transform=s,^,repo/,",
+					".github",
+					"value.ts",
+					"dependency.ts",
+				],
+				{ cwd: path },
+			);
+
+		const originalArchive = archiveOf(base);
+		const moved = join(root, "moved");
+		cpSync(base, moved, { recursive: true });
+
+		if (mode !== "unchanged") {
+			writeFileSync(
+				join(moved, "value.ts"),
+				mode === "conflict"
+					? "incompatible\n"
+					: `export const inserted = true;\n${original}`,
+			);
+			writeFileSync(
+				join(moved, "dependency.ts"),
+				"export const dependency = 'certified';\n",
+			);
+		}
+
+		const certifiedArchive = archiveOf(moved);
+		const fetched: string[] = [];
 
 		const executor = sandboxExecutor({
 			stateDir: state,
 			exec: async () => ({ code: 0, stdout: "", stderr: "" }),
 			log: () => {},
 			xdgRuntimeDir: "/run/user/1000",
-			fetchTarball: async () => archive,
+			fetchTarball: async (_repo, ref) => {
+				fetched.push(ref);
+
+				return ref === sha
+					? originalArchive
+					: mode === "missing"
+						? null
+						: certifiedArchive;
+			},
 		});
 
 		const workspace = join(root, "review");
+
+		const build = await executor.checkout({
+			runId,
+			repo,
+			sha,
+			workspace: join(root, "build"),
+			build: true,
+		});
+
+		assert.equal(build.kind, "ready");
+		const pristine = join(state, "pristine", runId);
+		const pristineBefore = readFileSync(join(pristine, "value.ts"), "utf8");
+
+		const baseRecord = readFileSync(
+			join(state, "build-base/checkouts", `${runId}.json`),
+			"utf8",
+		);
+
+		fetched.length = 0;
+
+		if (mode === "missing" || mode === "conflict") {
+			await assert.rejects(
+				executor.prepareReview!({ runId, round: 0, workspace }),
+			);
+			assert.equal(
+				readFileSync(join(pristine, "value.ts"), "utf8"),
+				pristineBefore,
+			);
+
+			return;
+		}
 
 		const prepared = await executor.prepareReview!({
 			runId,
@@ -184,11 +279,79 @@ it("prepares real review input from a public-mode tarball without exposing priva
 			workspace,
 		});
 
+		const certified = join(root, "certified");
+		await publicationTree(moved, certified, patch.patch, patch.changedPaths);
+
+		for (const path of ["value.ts", "dependency.ts"])
+			assert.equal(
+				readFileSync(join(workspace, path), "utf8"),
+				readFileSync(join(certified, path), "utf8"),
+			);
+		assert.deepEqual(fetched, [certifiedSha]);
 		assert.deepEqual(prepared.input.seats, [
 			"code-review",
 			"security-review",
 			"simplify",
 		]);
+		assert.equal(prepared.input.binding.originalBase, sha);
+		assert.equal(prepared.input.binding.baseSha, certifiedSha);
+		assert.equal(
+			prepared.input.files.get("value.ts"),
+			readFileSync(join(certified, "value.ts"), "utf8").split("\n").length,
+		);
+		assert.equal(
+			readFileSync(join(pristine, "value.ts"), "utf8"),
+			pristineBefore,
+		);
+		assert.equal(
+			readFileSync(
+				join(state, "build-base/checkouts", `${runId}.json`),
+				"utf8",
+			),
+			baseRecord,
+		);
+		await executor.prepareReview!({ runId, round: 0, workspace });
+		assert.deepEqual(fetched, [certifiedSha]);
+		writeFileSync(join(dir, "feedback.json"), "[]", { mode: 0o600 });
+		const repairWorkspace = join(root, "repair");
+
+		const repaired = await executor.checkout({
+			runId,
+			repo,
+			sha,
+			workspace: repairWorkspace,
+			build: true,
+			round: 1,
+		});
+
+		assert.equal(repaired.kind, "ready");
+		assert.equal(
+			readFileSync(join(repairWorkspace, "value.ts"), "utf8"),
+			original.replace("value = 0", "value = 1"),
+		);
+		assert.equal(
+			readFileSync(join(repairWorkspace, "dependency.ts"), "utf8"),
+			readFileSync(join(base, "dependency.ts"), "utf8"),
+		);
+		rmSync(join(repairWorkspace, ".factory-feedback.json"));
+		writeFileSync(
+			join(repairWorkspace, "value.ts"),
+			original.replace("value = 0", "value = 2"),
+		);
+
+		const repairedPatch = await collectPatch({
+			base: pristine,
+			workspace: repairWorkspace,
+		});
+
+		assert.equal(repairedPatch.kind, "collected");
+
+		if (repairedPatch.kind !== "collected") throw new Error("repair patch");
+		assert.equal(repairedPatch.changedPaths.includes("dependency.ts"), false);
+		assert.match(
+			Buffer.from(repairedPatch.patch).toString(),
+			/-export const value = 0/,
+		);
 		assert.ok(prepared.input.files.has("value.ts"));
 		assert.match(
 			readFileSync(join(workspace, "value.ts"), "utf8"),
@@ -200,7 +363,11 @@ it("prepares real review input from a public-mode tarball without exposing priva
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
-});
+}
+
+for (const mode of ["unchanged", "moved", "missing", "conflict"])
+	it(`prepares review from the certified base (${mode}) while preserving the repair base`, () =>
+		checkReviewTree(mode));
 
 describe("candidate review", () => {
 	const files = new Map([["src/a.ts", 10]]);
@@ -385,6 +552,37 @@ describe("candidate review", () => {
 			assert.equal(reviewSeats([path]).length, 4);
 		assert.equal(reviewSeats([], { scriptsChanged: true }).length, 4);
 	});
+	it("ignores baseline install scripts and retains candidate dependency risks", () => {
+		const baseline = {
+			installScripts: [
+				"node_modules/@google/genai@2.21.0",
+				"node_modules/protobufjs@7.6.6",
+			],
+			newDependency: false,
+			dependencies: { added: [], changed: [] },
+		};
+
+		assert.deepEqual(reviewSeats(["value.ts"], baseline), [
+			"code-review",
+			"security-review",
+			"simplify",
+		]);
+
+		for (const gate of [
+			{ ...baseline, newDependency: true },
+			{ ...baseline, scriptsChanged: true },
+			{
+				...baseline,
+				dependencies: { added: ["node_modules/new@1"], changed: [] },
+			},
+			{
+				...baseline,
+				dependencies: { added: [], changed: ["node_modules/protobufjs@8"] },
+			},
+		])
+			assert.equal(reviewSeats(["value.ts"], gate).length, 4);
+	});
+
 	it("simplify and advisory findings never block", () => {
 		assert.equal(
 			blocksReview([

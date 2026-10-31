@@ -531,6 +531,7 @@ class FakeExecutor implements StageExecutor {
 		runId: string;
 		stage: string;
 		attempt: number;
+		round?: number;
 	}): Promise<number | null> {
 		return this.spentBy.get(`${input.stage}-${input.attempt}`) ?? null;
 	}
@@ -7106,12 +7107,12 @@ describe("controller-only validate", () => {
 		return { ...f, controller };
 	}
 
-	it("hops from CI to isolated review and ends clean at review with charged usage", async () => {
+	async function reviewingRun() {
 		const f = await waitingRun();
 		const contract = await f.files.readContract(runOf(14));
 		assert.equal(contract.kind, "found");
 
-		if (contract.kind !== "found") return;
+		if (contract.kind !== "found") throw new Error("contract");
 
 		const suite = await f.files.artifacts.read(
 			runOf(14),
@@ -7166,9 +7167,23 @@ describe("controller-only validate", () => {
 		const output = f.executor.output.bind(f.executor);
 		f.executor.output = async (input) =>
 			input.stage === "review" ? { kind: "review", receipt } : output(input);
-		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+		const launch = f.executor.launch;
+		f.executor.launch = async (input) => ({
+			kind: "unavailable",
+			stage: input.stage,
+			reason: "sandbox_unavailable",
+		});
 		await f.controller.tick();
+		f.executor.launch = launch;
+		f.executor.ready = true;
 		assert.equal(f.controller.state.runs.get(14)?.stage, "review");
+
+		return f;
+	}
+
+	it("hops from CI to isolated review and ends clean at review with charged usage", async () => {
+		const f = await reviewingRun();
+		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
 		await once(f.controller);
 
 		const review = f.executor.launches.find(
@@ -7180,6 +7195,292 @@ describe("controller-only validate", () => {
 		assert.equal(f.files.claims.get(runOf(14))?.status, "stage_passed");
 		assert.equal(f.files.claims.get(runOf(14))?.stage, "review");
 		assert.equal(f.files.claims.get(runOf(14))?.usage, 40);
+	});
+
+	async function cappedRun(stage: "build" | "review") {
+		const f = stage === "review" ? await reviewingRun() : await waitingRun();
+
+		f.executor.ready = true;
+
+		if (stage === "build") {
+			const validate = f.executor.validate;
+			f.executor.validate = async (input) => {
+				const result = await validate(input);
+
+				if (result.state === null) throw new Error("validation state");
+
+				return {
+					kind: "finished",
+					state: result.state,
+					verdict: failingVerdict(digestOf("patch")),
+				};
+			};
+
+			const launch = f.executor.launch;
+			f.executor.launch = async (input) => ({
+				kind: "unavailable",
+				stage: input.stage,
+				reason: "sandbox_unavailable",
+			});
+			await f.controller.tick();
+			f.executor.launch = launch;
+			assert.equal(f.files.claims.get(runOf(14))?.round, 1);
+		}
+
+		const state = stateDir();
+
+		const disk = sandboxExecutor({
+			stateDir: state,
+			exec: async () => ({ code: 0, stdout: "", stderr: "" }),
+			log: () => {},
+			xdgRuntimeDir: "/run/user/1000",
+		});
+
+		f.executor.spent = disk.spent;
+		const output = f.executor.output.bind(f.executor);
+		let reviewPassed = false;
+		f.executor.output = async (input) =>
+			input.stage === "review" && !reviewPassed ? null : output(input);
+		const launch = f.executor.launch.bind(f.executor);
+
+		const executionDir = (input: StageLaunchInput) =>
+			join(
+				state,
+				"stages",
+				input.runId,
+				`${input.stage}${input.stage === "review" || input.round ? `-r${input.round ?? 0}` : ""}-${input.attempt}`,
+			);
+
+		f.executor.launch = async (input) => {
+			const previous = (await disk.spent(input)) ?? 0;
+			const result = await launch(input);
+
+			if (result.kind !== "started") return result;
+
+			return {
+				...result,
+				done: result.done.then((finished) => {
+					reviewPassed = input.stage === "review" && finished.kind === "passed";
+					const dir = executionDir(input);
+					mkdirSync(dir, { recursive: true, mode: 0o700 });
+					writeFileSync(
+						join(dir, "receipt.json"),
+						JSON.stringify({
+							...finished.receipt,
+							usage: {
+								...finished.receipt.usage,
+								total: previous + finished.usage,
+							},
+						}),
+						{ mode: 0o600 },
+					);
+
+					return finished;
+				}),
+			};
+		};
+
+		return { ...f, state, executionDir };
+	}
+
+	for (const stage of ["build", "review"] as const) {
+		for (const restart of [false, true])
+			it(`keeps ${stage} retries within one round${restart ? " after process recovery" : ""}`, async () => {
+				const f = await cappedRun(stage);
+				const spent = stage === "build" ? 25_169 : 12_000;
+				const cap = stage === "build" ? 50_000 : 30_000;
+
+				if (stage === "build")
+					f.executor.buildBehavior = { kind: "fail", usage: spent };
+				else f.executor.behaviors = [{ kind: "fail", usage: spent }];
+				await once(f.controller);
+				assert.equal(f.files.claims.get(runOf(14))?.attempt, 2);
+
+				if (stage === "build")
+					f.executor.buildBehavior = { kind: "pass", usage: 11 };
+				else f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+				f.clock.t += 60_000;
+				const controller = restart ? f.start() : f.controller;
+				await once(controller);
+
+				const attempts = f.executor.launches.filter(
+					(entry) =>
+						entry.stage === stage &&
+						entry.round === (stage === "build" ? 1 : 0),
+				);
+
+				assert.deepEqual(
+					attempts.map((entry) => entry.settings.maxTokens),
+					[cap, cap - spent],
+				);
+				assert.equal(f.files.claims.get(runOf(14))?.usage, 29 + spent + 11);
+				assert.equal(
+					stage === "review"
+						? f.files.claims.get(runOf(14))?.status
+						: f.files.claims.get(runOf(14))?.stage,
+					stage === "review" ? "stage_passed" : "validate",
+				);
+			});
+
+		it(`counts interrupted ${stage} gateway usage before a retry in the same round`, async () => {
+			const f = await cappedRun(stage);
+
+			if (stage === "build") f.executor.buildBehavior = { kind: "hang" };
+			else f.executor.behaviors = [{ kind: "hang" }];
+			await f.controller.tick();
+			const first = f.executor.launches.at(-1);
+			assert.ok(first);
+			const dir = f.executionDir(first);
+			mkdirSync(dir, { recursive: true, mode: 0o700 });
+			writeFileSync(
+				join(dir, "egress.jsonl"),
+				JSON.stringify({ inputTokens: 25_000, outputTokens: 169 }) + "\n",
+			);
+
+			if (stage === "build")
+				f.executor.buildBehavior = { kind: "pass", usage: 11 };
+			else f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+			const restarted = f.start();
+			await once(restarted);
+			f.clock.t += 60_000;
+			await once(restarted);
+			assert.equal(f.executor.launches.at(-1)?.attempt, 2);
+			assert.equal(
+				f.executor.launches.at(-1)?.settings.maxTokens,
+				(stage === "build" ? 50_000 : 30_000) - 25_169,
+			);
+			assert.equal(f.files.claims.get(runOf(14))?.usage, 29 + 25_169 + 11);
+		});
+
+		it(`does not launch or approve ${stage} after cumulative round exhaustion`, async () => {
+			const f = await cappedRun(stage);
+			const cap = stage === "build" ? 50_000 : 30_000;
+
+			if (stage === "build")
+				f.executor.buildBehavior = { kind: "fail", usage: cap / 2 };
+			else f.executor.behaviors = [{ kind: "fail", usage: cap / 2 }];
+			await once(f.controller);
+			f.clock.t += 60_000;
+
+			if (stage === "review")
+				f.executor.behaviors = [{ kind: "fail", usage: cap / 2 }];
+			await once(f.controller);
+			assert.equal(f.executor.launches.at(-1)?.settings.maxTokens, cap / 2);
+			const launches = f.executor.launches.length;
+			f.clock.t += 60_000;
+			await once(f.start());
+			assert.equal(f.executor.launches.length, launches);
+			assert.equal(f.files.claims.get(runOf(14))?.status, "budget_exhausted");
+			assert.equal(f.files.claims.get(runOf(14))?.usage, 29 + cap);
+		});
+	}
+
+	it("subtracts failed attempts and retained review seats once on process recovery", async () => {
+		const f = await cappedRun("review");
+		f.executor.behaviors = [{ kind: "fail", usage: 12_000 }];
+		await once(f.controller);
+		const dir = join(f.state, "stages", runOf(14), "review-r0-2");
+		mkdirSync(join(dir, "code-review"), { recursive: true, mode: 0o700 });
+		writeFileSync(
+			join(dir, "review.json"),
+			JSON.stringify({ seats: ["code-review", "security-review", "simplify"] }),
+		);
+		writeFileSync(
+			join(dir, "code-review/receipt.json"),
+			JSON.stringify({ usage: { total: 4_000 } }),
+		);
+		const output = f.executor.output.bind(f.executor);
+		f.executor.output = async (input) =>
+			input.stage === "review" &&
+			input.attempt === 2 &&
+			!existsSync(join(dir, "receipt.json"))
+				? { kind: "pending" }
+				: output(input);
+		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+		f.clock.t += 60_000;
+		const restarted = f.start();
+		await once(restarted);
+		assert.equal(f.executor.launches.at(-1)?.attempt, 2);
+		assert.equal(f.executor.launches.at(-1)?.settings.maxTokens, 14_000);
+		assert.equal(
+			f.executor.launches.at(-1)?.remainingRunTokens,
+			500_000 - 29 - 12_000 - 4_000,
+		);
+		assert.equal(
+			f.files.claims.get(runOf(14))?.usage,
+			29 + 12_000 + 4_000 + 11,
+		);
+		assert.equal(f.files.claims.get(runOf(14))?.status, "stage_passed");
+		assert.equal(
+			await f.executor.spent({
+				runId: runOf(14),
+				stage: "review",
+				attempt: 2,
+				round: 0,
+			}),
+			4_011,
+		);
+		assert.equal(restarted.state.totals.usage, 4_011);
+	});
+
+	for (const stage of ["specify", "accept", "build"] as const)
+		it(`keeps ${stage}'s original attempt accounting outside repair rounds`, async () => {
+			const f = world();
+			f.github.add(labeled(14));
+			f.executor.ready = true;
+			f.executor.behaviors = [
+				{
+					kind: stage === "specify" ? "fail" : "pass",
+					usage: stage === "specify" ? 200 : 10,
+				},
+			];
+			f.executor.acceptBehavior = {
+				kind: stage === "accept" ? "fail" : "pass",
+				usage: stage === "accept" ? 200 : 7,
+			};
+			f.executor.buildBehavior = { kind: "fail", usage: 200 };
+			const controller = f.start();
+			await once(controller);
+
+			if (stage === "build") await once(controller);
+			f.executor.spentBy.set(`${stage}-1`, 200);
+			f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+			f.executor.acceptBehavior = { kind: "pass", usage: 11 };
+			f.executor.buildBehavior = { kind: "pass", usage: 11 };
+			f.clock.t += 60_000;
+			await once(controller);
+
+			const attempts = f.executor.launches.filter(
+				(entry) => entry.stage === stage,
+			);
+
+			const cap =
+				stage === "specify" ? null : stage === "accept" ? 25_000 : 200_000;
+
+			assert.deepEqual(
+				attempts.map((entry) => entry.settings.maxTokens),
+				[cap, cap],
+			);
+			assert.equal(
+				attempts[1]?.remainingRunTokens,
+				500_000 -
+					200 -
+					(stage === "specify" ? 0 : stage === "accept" ? 10 : 17),
+			);
+		});
+
+	it("gives a fresh repair round its own allowance without refreshing the run budget", async () => {
+		const f = await cappedRun("build");
+		f.executor.buildBehavior = { kind: "pass", usage: 25_169 };
+		await once(f.controller);
+		await f.controller.tick();
+		assert.equal(f.files.claims.get(runOf(14))?.round, 2);
+		await once(f.controller);
+		assert.equal(f.executor.launches.at(-1)?.settings.maxTokens, 50_000);
+		assert.equal(
+			f.executor.launches.at(-1)?.remainingRunTokens,
+			500_000 - 29 - 25_169,
+		);
 	});
 
 	it("shares the pure machine's two-round cap and resumes a repair without round-zero output", async () => {
