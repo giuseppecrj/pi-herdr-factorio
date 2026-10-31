@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ghFailure, type Exec } from "./gh.ts";
+import { ghFailure, type Exec, type ExecResult } from "./gh.ts";
 import { CONTROLLER_LOGIN } from "./markers.ts";
 import { digestOf, type Digest } from "./run.ts";
 import { isGitSha, type GitSha, type RepoSlug } from "./workflow.ts";
@@ -112,7 +112,7 @@ export class GitHubPublicationApi {
 			if (!(await this.persist()))
 				throw new PublicationError("claim_unwritable");
 			const dir = mkdtempSync(join(tmpdir(), "factory-api-"));
-			let result;
+			let result: ExecResult;
 
 			try {
 				const args = ["api", "--method", method, `repos/${this.repo}/${path}`];
@@ -189,7 +189,18 @@ export class GitHubPublicationApi {
 	async remove(branch: string): Promise<void> {
 		if (!isCandidateBranch(branch))
 			throw new PublicationError("invalid_branch");
-		await this.request("DELETE", `git/refs/heads/${branch}`);
+
+		try {
+			await this.request("DELETE", `git/refs/heads/${branch}`);
+		} catch (error) {
+			if (
+				error instanceof PublicationError &&
+				error.reason === "conflict" &&
+				(await this.ref(branch)) === null
+			)
+				return;
+			throw error;
+		}
 	}
 }
 

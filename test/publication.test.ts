@@ -182,7 +182,10 @@ class GitData {
 		}
 
 		if (method === "DELETE") {
-			this.refs.delete(path.slice("git/refs/heads/".length));
+			const branch = path.slice("git/refs/heads/".length);
+
+			if (!this.refs.has(branch)) return no(422);
+			this.refs.delete(branch);
 
 			return ok();
 		}
