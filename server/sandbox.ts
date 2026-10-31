@@ -13,7 +13,7 @@ import {
 	type SeatReceipt,
 } from "../src/review.ts";
 import { validationDir } from "../src/validation.ts";
-import { isGitSha, parseWorkflow } from "../src/workflow.ts";
+import { isGitSha, parseWorkflow, WORKFLOW_PATH } from "../src/workflow.ts";
 import {
 	collectPatch,
 	commandReceipts,
@@ -60,7 +60,7 @@ import type {
 	StageOutput,
 	ReviewPreparation,
 } from "../src/orchestrator.ts";
-import { isDigest, verdictPasses, type Digest } from "../src/run.ts";
+import { digestOf, isDigest, verdictPasses, type Digest } from "../src/run.ts";
 import {
 	parseSpecifyOutput,
 	parseReviewOutput,
@@ -2298,9 +2298,9 @@ function cleanupBuildBase(stateDir: string, runId: Digest): void {
 
 async function prepareCandidateReview(
 	config: SandboxExecutorConfig,
-	input: { runId: Digest; round: number; workspace: string },
+	input: Parameters<NonNullable<StageExecutor["prepareReview"]>>[0],
 ): Promise<ReviewPreparation> {
-	const { runId, round, workspace } = input;
+	const { runId, round, workspace, workflowSha, workflowDigest } = input;
 	const files = fileRunFiles(config.stateDir);
 	const bound = await files.readContract(runId);
 
@@ -2338,6 +2338,36 @@ async function prepareCandidateReview(
 	)
 		throw new Error("review_gate_binding");
 
+	if (workflowSha !== bound.contract.base.sha)
+		throw new Error("workflow_mismatch");
+
+	const workflowWorkspace = files.workspacePath(runId);
+	mkdirSync(workflowWorkspace, { recursive: true, mode: 0o700 });
+
+	const pinned = await checkoutWorkspace({
+		stateDir: config.stateDir,
+		workspace: workflowWorkspace,
+		runId,
+		repo: bound.contract.base.repo,
+		sha: workflowSha,
+		fetch: config.fetchTarball ?? ghTarball,
+	});
+
+	if (pinned.kind !== "ready") throw new Error("workflow_checkout");
+
+	const text = await pinned.checkout.read(WORKFLOW_PATH, 256 * 1024);
+
+	if (text === null || digestOf(text) !== workflowDigest)
+		throw new Error("workflow_mismatch");
+
+	const workflow = parseWorkflow({
+		text,
+		repo: bound.contract.base.repo,
+		env: (name) => process.env[name],
+	});
+
+	if (workflow.kind !== "valid") throw new Error("workflow_invalid");
+
 	const reviewBase = join(config.stateDir, "review-base", verdict.baseSha);
 	const base = join(reviewBase, "trees", runId);
 	mkdirSync(base, { recursive: true, mode: 0o700 });
@@ -2353,13 +2383,6 @@ async function prepareCandidateReview(
 
 	if (checked.kind !== "ready") throw new Error("review_checkout");
 
-	const workflow = parseWorkflow({
-		text: readFileSync(join(base, ".github/factory/WORKFLOW.md"), "utf8"),
-		repo: bound.contract.base.repo,
-		env: (name) => process.env[name],
-	});
-
-	if (workflow.kind !== "valid") throw new Error("workflow_invalid");
 	rmSync(workspace, { recursive: true, force: true });
 	await prepareRepairTree(
 		base,
@@ -2738,7 +2761,9 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 
 		prepareReview: (input) => prepareCandidateReview(config, input),
 
-		async output({ runId, stage, attempt, round = 0 }) {
+		async output(input) {
+			const { runId, stage, attempt, round = 0 } = input;
+
 			if (stage === "build") {
 				let kept = readRunPatch(config.stateDir, runId, round);
 
@@ -2873,6 +2898,8 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 					const prepared = await prepareCandidateReview(config, {
 						runId,
 						round,
+						workflowSha: input.workflowSha,
+						workflowDigest: input.workflowDigest,
 						workspace: join(
 							config.stateDir,
 							"review-tree",

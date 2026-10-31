@@ -417,12 +417,9 @@ class FakeExecutor implements StageExecutor {
 	readonly launches: StageLaunchInput[] = [];
 	readonly spentBy = new Map<string, number>();
 
-	async output(input: {
-		runId: string;
-		stage: string;
-		attempt: number;
-		round?: number;
-	}): Promise<StageOutput | null> {
+	async output(
+		input: Parameters<StageExecutor["output"]>[0],
+	): Promise<StageOutput | null> {
 		const key = `${input.runId}/${input.stage}${input.round ? `-r${input.round}` : ""}-${input.attempt}`;
 
 		this.outputReads.push(key);
@@ -7180,6 +7177,53 @@ describe("controller-only validate", () => {
 
 		return f;
 	}
+
+	for (const restart of [false, true])
+		it(`passes the admitted workflow pin to review preparation and output (restart=${restart})`, async () => {
+			const f = await reviewingRun();
+
+			const preparations: Parameters<
+				NonNullable<StageExecutor["prepareReview"]>
+			>[0][] = [];
+
+			const outputs: Parameters<StageExecutor["output"]>[0][] = [];
+			const prepare = f.executor.prepareReview;
+
+			if (prepare === undefined) throw new Error("review preparation");
+			f.executor.prepareReview = async (input) => {
+				preparations.push(input);
+
+				return prepare(input);
+			};
+
+			const output = f.executor.output.bind(f.executor);
+			f.executor.output = async (input) => {
+				if (input.stage === "review") outputs.push(input);
+
+				return output(input);
+			};
+
+			f.github.workflow = `${TRUSTED_WORKFLOW}\nChanged after admission.\n`;
+			f.executor.behaviors = [{ kind: restart ? "hang" : "pass", usage: 11 }];
+
+			if (restart) {
+				await f.controller.tick();
+				assert.equal(f.files.claims.get(runOf(14))?.status, "running");
+				await once(f.start());
+			} else await once(f.controller);
+			assert.equal(preparations.length, 1);
+			assert.ok(outputs.length > 0);
+
+			for (const input of [...preparations, ...outputs]) {
+				assert.ok("workflowSha" in input && "workflowDigest" in input);
+				assert.equal(input.workflowSha, MAIN_SHA);
+				assert.equal(input.workflowDigest, digestOf(TRUSTED_WORKFLOW));
+				assert.notEqual(input.workflowDigest, digestOf(f.github.workflow));
+			}
+
+			assert.equal(f.files.claims.get(runOf(14))?.status, "stage_passed");
+			assert.equal(f.files.claims.get(runOf(14))?.stage, "review");
+		});
 
 	it("hops from CI to isolated review and ends clean at review with charged usage", async () => {
 		const f = await reviewingRun();

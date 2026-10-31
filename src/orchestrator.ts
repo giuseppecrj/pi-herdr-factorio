@@ -182,12 +182,16 @@ export type StageOutput =
 			readonly observed: string | null;
 	  };
 
+type WorkflowPin = Pick<ActiveRun, "workflowSha" | "workflowDigest">;
+
 export interface StageExecutor {
-	prepareReview?(input: {
-		runId: Digest;
-		round: number;
-		workspace: string;
-	}): Promise<ReviewPreparation>;
+	prepareReview?(
+		input: WorkflowPin & {
+			runId: Digest;
+			round: number;
+			workspace: string;
+		},
+	): Promise<ReviewPreparation>;
 	readonly validate?: Validator;
 	cleanupValidation?(): Promise<void>;
 	/** Stops whatever a previous controller left running. Called once, before the first tick adopts a run. */
@@ -217,12 +221,16 @@ export interface StageExecutor {
 	 * so a restart can finish a stage without running it again. Untrusted.
 	 * `pending` resumes a recorded session sequence in the same attempt.
 	 */
-	output(input: {
-		readonly runId: Digest;
-		readonly stage: ModelStage;
-		readonly attempt: number;
-		readonly round?: number;
-	}): Promise<StageOutput | null>;
+	output(
+		input: {
+			readonly runId: Digest;
+			readonly attempt: number;
+			readonly round?: number;
+		} & (
+			| { readonly stage: Exclude<ModelStage, "review"> }
+			| ({ readonly stage: "review" } & WorkflowPin)
+		),
+	): Promise<StageOutput | null>;
 	checkout(input: {
 		readonly runId: Digest;
 		readonly repo: RepoSlug;
@@ -2322,6 +2330,8 @@ export class Orchestrator {
 							stage: run.stage,
 							attempt: run.attempt,
 							round: run.round ?? 0,
+							workflowSha: run.workflowSha,
+							workflowDigest: run.workflowDigest,
 						})
 						.catch(() => null)
 				: null;
@@ -3373,6 +3383,8 @@ export class Orchestrator {
 										stage,
 										attempt,
 										round: run.round ?? 0,
+										workflowSha: run.workflowSha,
+										workflowDigest: run.workflowDigest,
 									})
 									.catch(() => null)
 							: null;
@@ -3618,6 +3630,8 @@ export class Orchestrator {
 					runId: run.runId,
 					round: run.round ?? 0,
 					workspace: `${files.workspacePath(run.runId)}-review-r${run.round ?? 0}`,
+					workflowSha: run.workflowSha,
+					workflowDigest: run.workflowDigest,
 				});
 
 				return {

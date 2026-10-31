@@ -58,11 +58,19 @@ async function checkReviewTree(mode: string) {
 
 		for (const dir of [base, work, state]) mkdirSync(dir, { mode: 0o700 });
 		mkdirSync(join(base, ".github/factory"), { recursive: true });
-		writeFileSync(
-			join(base, ".github/factory/WORKFLOW.md"),
-			`---\nrepository: ${repo}\n---\n## review\nReview the contract.\n`,
-			{ mode: 0o644 },
-		);
+		const workflow = `---\nrepository: ${repo}\n---\n## review\nPINNED_ADMISSION_GUIDANCE\n`;
+
+		const pin = {
+			workflowSha: mode === "workflow-sha-mismatch" ? certifiedSha : sha,
+			workflowDigest:
+				mode === "workflow-digest-mismatch"
+					? digestOf("different workflow")
+					: digestOf(workflow),
+		};
+
+		writeFileSync(join(base, ".github/factory/WORKFLOW.md"), workflow, {
+			mode: 0o644,
+		});
 
 		const original =
 			"export const first = 1;\nexport const second = 2;\nexport const third = 3;\nexport const fourth = 4;\nexport const value = 0;\n";
@@ -221,15 +229,23 @@ async function checkReviewTree(mode: string) {
 			);
 		}
 
+		if (mode === "workflow-removed")
+			rmSync(join(moved, ".github/factory/WORKFLOW.md"));
+		else if (mode !== "unchanged")
+			writeFileSync(
+				join(moved, ".github/factory/WORKFLOW.md"),
+				workflow.replace("PINNED_ADMISSION_GUIDANCE", "MOVED_MAIN_GUIDANCE"),
+			);
+
 		const certifiedArchive = archiveOf(moved);
 		const fetched: string[] = [];
 
-		const executor = sandboxExecutor({
+		const config = {
 			stateDir: state,
 			exec: async () => ({ code: 0, stdout: "", stderr: "" }),
 			log: () => {},
 			xdgRuntimeDir: "/run/user/1000",
-			fetchTarball: async (_repo, ref) => {
+			fetchTarball: async (_repo: string, ref: string) => {
 				fetched.push(ref);
 
 				return ref === sha
@@ -238,7 +254,9 @@ async function checkReviewTree(mode: string) {
 						? null
 						: certifiedArchive;
 			},
-		});
+		};
+
+		const executor = sandboxExecutor(config);
 
 		const workspace = join(root, "review");
 
@@ -259,11 +277,74 @@ async function checkReviewTree(mode: string) {
 			"utf8",
 		);
 
+		mkdirSync(files.workspacePath(runId), { recursive: true, mode: 0o700 });
+
+		const admitted = await executor.checkout({
+			runId,
+			repo,
+			sha,
+			workspace: files.workspacePath(runId),
+		});
+
+		assert.equal(admitted.kind, "ready");
+
+		const pinnedPath = join(
+			files.workspacePath(runId),
+			".github/factory/WORKFLOW.md",
+		);
+
+		if (mode === "workflow-missing") rmSync(pinnedPath);
+
+		if (mode === "workflow-modified")
+			writeFileSync(pinnedPath, `${workflow}\n`);
+
+		if (mode === "workflow-invalid") {
+			writeFileSync(pinnedPath, "not a workflow");
+			pin.workflowDigest = digestOf("not a workflow");
+		}
+
+		if (mode === "uncached") {
+			rmSync(join(state, "checkouts", `${runId}.json`));
+			rmSync(files.workspacePath(runId), { recursive: true });
+		}
+
+		if (mode === "workflow-unavailable") {
+			rmSync(join(state, "checkouts", `${runId}.json`));
+			config.fetchTarball = async (_repo, ref) =>
+				ref === sha ? null : certifiedArchive;
+		}
+
 		fetched.length = 0;
+
+		if (mode.startsWith("workflow-") && mode !== "workflow-removed") {
+			await assert.rejects(
+				executor.prepareReview!({ runId, round: 0, workspace, ...pin }),
+				new RegExp(
+					mode === "workflow-unavailable"
+						? "^Error: workflow_checkout$"
+						: mode === "workflow-invalid"
+							? "^Error: workflow_invalid$"
+							: "^Error: workflow_mismatch$",
+				),
+			);
+			assert.equal(
+				readFileSync(join(pristine, "value.ts"), "utf8"),
+				pristineBefore,
+			);
+			assert.equal(
+				readFileSync(
+					join(state, "build-base/checkouts", `${runId}.json`),
+					"utf8",
+				),
+				baseRecord,
+			);
+
+			return;
+		}
 
 		if (mode === "missing" || mode === "conflict") {
 			await assert.rejects(
-				executor.prepareReview!({ runId, round: 0, workspace }),
+				executor.prepareReview!({ runId, round: 0, workspace, ...pin }),
 			);
 			assert.equal(
 				readFileSync(join(pristine, "value.ts"), "utf8"),
@@ -277,7 +358,11 @@ async function checkReviewTree(mode: string) {
 			runId,
 			round: 0,
 			workspace,
+			...pin,
 		});
+
+		assert.ok(prepared.input.prompt.includes("PINNED_ADMISSION_GUIDANCE"));
+		assert.equal(prepared.input.prompt.includes("MOVED_MAIN_GUIDANCE"), false);
 
 		const certified = join(root, "certified");
 		await publicationTree(moved, certified, patch.patch, patch.changedPaths);
@@ -287,7 +372,11 @@ async function checkReviewTree(mode: string) {
 				readFileSync(join(workspace, path), "utf8"),
 				readFileSync(join(certified, path), "utf8"),
 			);
-		assert.deepEqual(fetched, [certifiedSha]);
+
+		const expectedFetches =
+			mode === "uncached" ? [sha, certifiedSha] : [certifiedSha];
+
+		assert.deepEqual(fetched, expectedFetches);
 		assert.deepEqual(prepared.input.seats, [
 			"code-review",
 			"security-review",
@@ -310,8 +399,116 @@ async function checkReviewTree(mode: string) {
 			),
 			baseRecord,
 		);
-		await executor.prepareReview!({ runId, round: 0, workspace });
-		assert.deepEqual(fetched, [certifiedSha]);
+		const restarted = sandboxExecutor(config);
+
+		const recoveredPreparation = await restarted.prepareReview!({
+			runId,
+			round: 0,
+			workspace,
+			...pin,
+		});
+
+		assert.deepEqual(
+			{
+				...recoveredPreparation,
+				input: {
+					...recoveredPreparation.input,
+					prompt: recoveredPreparation.input.prompt.replace(
+						/candidate-[a-f0-9]+/g,
+						"candidate-NONCE",
+					),
+				},
+			},
+			{
+				...prepared,
+				input: {
+					...prepared.input,
+					prompt: prepared.input.prompt.replace(
+						/candidate-[a-f0-9]+/g,
+						"candidate-NONCE",
+					),
+				},
+			},
+		);
+
+		const stage = join(state, "stages", runId, "review-r0-1");
+		mkdirSync(stage, { recursive: true, mode: 0o700 });
+		writeFileSync(
+			join(stage, "receipt.json"),
+			JSON.stringify({
+				outcome: { kind: "passed" },
+				output: { file: "output.txt" },
+			}),
+			{ mode: 0o600 },
+		);
+		writeFileSync(
+			join(stage, "output.txt"),
+			JSON.stringify(
+				prepared.input.seats.map((seat) => ({
+					seat,
+					findings: [],
+					judgments: [],
+					requested: "openai/gpt-6.1-sol",
+					observed: null,
+					label: "context-isolated, same model, same family, not cross-family",
+					fallback: false,
+					tokens: 1,
+				})),
+			),
+			{ mode: 0o600 },
+		);
+
+		const recovered = await restarted.output({
+			runId,
+			stage: "review",
+			attempt: 1,
+			round: 0,
+			...pin,
+		});
+
+		assert.ok(recovered instanceof Object && recovered.kind === "review");
+		assert.deepEqual(recovered.receipt, {
+			...prepared.input.binding,
+			version: 1,
+			r8: "incomplete",
+			seats: JSON.parse(readFileSync(join(stage, "output.txt"), "utf8")),
+			blocking: false,
+		});
+		assert.equal(
+			await restarted.output({
+				runId,
+				stage: "review",
+				attempt: 1,
+				round: 0,
+				...pin,
+				workflowDigest: digestOf("wrong"),
+			}),
+			null,
+		);
+		writeFileSync(pinnedPath, `${workflow}\n`);
+		assert.equal(
+			await restarted.output({
+				runId,
+				stage: "review",
+				attempt: 1,
+				round: 0,
+				...pin,
+			}),
+			null,
+		);
+		rmSync(pinnedPath);
+		assert.equal(
+			await restarted.output({
+				runId,
+				stage: "review",
+				attempt: 1,
+				round: 0,
+				...pin,
+			}),
+			null,
+		);
+		writeFileSync(pinnedPath, workflow);
+		assert.deepEqual(fetched, expectedFetches);
 		writeFileSync(join(dir, "feedback.json"), "[]", { mode: 0o600 });
 		const repairWorkspace = join(root, "repair");
 
@@ -365,7 +562,20 @@ async function checkReviewTree(mode: string) {
 	}
 }
 
-for (const mode of ["unchanged", "moved", "missing", "conflict"])
+for (const mode of [
+	"unchanged",
+	"moved",
+	"uncached",
+	"missing",
+	"conflict",
+	"workflow-removed",
+	"workflow-missing",
+	"workflow-modified",
+	"workflow-invalid",
+	"workflow-unavailable",
+	"workflow-sha-mismatch",
+	"workflow-digest-mismatch",
+])
 	it(`prepares review from the certified base (${mode}) while preserving the repair base`, () =>
 		checkReviewTree(mode));
 
