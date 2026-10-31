@@ -257,5 +257,63 @@
 		"replacements": [],
 		"heldout_dir": "",
 		"heldout_digest": ""
+	},
+	{
+		"name": "helper-read-forgery",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "nul-direct-read-forgery",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "nul-ts-nocheck",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "alias-swap",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "acceptance-stash-lint",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "gutted-named-replacement",
+		"expected": "failed",
+		"replacements": [
+			{
+				"path": "test/specify.test.ts",
+				"reason": "Do not count a trailing empty line in inlined file totals"
+			},
+			{
+				"path": "test/orchestrator.test.ts",
+				"reason": "Do not count a trailing empty line in inlined file totals"
+			}
+		],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "heldout-expect-error",
+		"expected": "passed",
+		"replacements": [],
+		"heldout_dir": "test/acceptance/124",
+		"heldout_digest": "4dc163886e616056ac8e059faadd93e9ca87e1d683cba785fe9612acbe93eac0"
 	}
 ]

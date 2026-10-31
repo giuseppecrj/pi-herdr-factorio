@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import { execFile, execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
@@ -330,6 +331,8 @@ export async function materializeCandidate(input: {
 	readonly candidateSha: string;
 	readonly dest: string;
 	readonly replacements: readonly ReplacedTest[];
+	readonly heldoutDir?: string;
+	readonly heldoutDigest?: string;
 }) {
 	const base = await entries(input.repository, input.gateSha);
 	const candidate = await entries(input.repository, input.candidateSha);
@@ -348,6 +351,16 @@ export async function materializeCandidate(input: {
 
 	try {
 		await exportTree(input.repository, input.candidateSha, join(temp, "tree"));
+
+		const heldout = heldoutOf(
+			join(temp, "tree"),
+			input.heldoutDir,
+			input.heldoutDigest,
+		);
+
+		for (const path of candidate.keys())
+			if (path.startsWith("test/acceptance/") && !heldout.includes(path))
+				throw new Error("unauthorized_acceptance");
 		rmSync(join(input.dest, "test/acceptance"), {
 			recursive: true,
 			force: true,
@@ -450,6 +463,7 @@ function specs(value: JsonObject | null): void {
 export function validateDependencies(
 	manifestText: string,
 	lockText: string,
+	trustedLockText?: string,
 ): readonly Dependency[] {
 	const manifest = objectOf(parseJson(manifestText));
 	const lock = objectOf(parseJson(lockText));
@@ -465,6 +479,10 @@ export function validateDependencies(
 	specs(objectOf(fieldOf(packages, "")));
 	const result: Dependency[] = [];
 	const aliasNames = new Map<string, string>();
+
+	const trustedPackages = trustedLockText
+		? objectOf(fieldOf(objectOf(parseJson(trustedLockText)), "packages"))
+		: null;
 
 	for (const [owner, item] of Object.entries(packages)) {
 		const value = objectOf(item);
@@ -483,6 +501,17 @@ export function validateDependencies(
 				);
 
 				if (!match?.[1]) continue;
+				const trustedParent = objectOf(fieldOf(trustedPackages, owner));
+
+				if (
+					owner &&
+					trustedParent !== null &&
+					["version", "resolved", "integrity"].every(
+						(key) => fieldOf(value, key) === fieldOf(trustedParent, key),
+					) &&
+					fieldOf(objectOf(fieldOf(trustedParent, group)), name) !== raw
+				)
+					throw new Error("package_swap");
 				let parent = owner;
 
 				for (;;) {
@@ -540,7 +569,10 @@ export function validateDependencies(
 		const pathName = path.split("node_modules/").at(-1) ?? "";
 		const name = aliasNames.get(path) ?? pathName;
 
-		if (fieldOf(value, "name") !== undefined && fieldOf(value, "name") !== name)
+		if (
+			(aliasNames.has(path) || fieldOf(value, "name") !== undefined) &&
+			fieldOf(value, "name") !== name
+		)
 			throw new Error("package_swap");
 
 		if (
@@ -880,7 +912,7 @@ function sameCounts(
 	for (const path of new Set([...Object.keys(base), ...Object.keys(candidate)]))
 		if (!except.has(path) && base[path] !== candidate[path]) return false;
 
-	return true;
+	return replacements.every((r) => (candidate[r.path] ?? 0) >= 1);
 }
 
 export function receiptPasses(receipt: GateReceipt): boolean {
@@ -987,9 +1019,14 @@ async function scanCandidate(
 		)
 			continue;
 
+		const bytes = readFileSync(join(tree, path));
+
+		if (!isUtf8(bytes) || bytes.includes(0))
+			throw new Error("invalid_source_encoding");
+
 		if (base.get(path)?.blob === entry.blob && !heldout.includes(path))
 			continue;
-		const text = readFileSync(join(tree, path), "utf8");
+		const text = bytes.toString("utf8");
 		const changed = new Set<number>();
 
 		if (!base.has(path) || heldout.includes(path))
@@ -1001,6 +1038,7 @@ async function scanCandidate(
 				"diff",
 				"--no-ext-diff",
 				"--no-textconv",
+				"--text",
 				"--unified=0",
 				input.gateSha,
 				input.candidateSha,
@@ -1024,6 +1062,8 @@ async function scanCandidate(
 				text,
 				changed,
 				join(baseline, ".github/factory/gates/scan-rules.json"),
+			).filter(
+				(s) => !heldout.includes(path) || s.rule !== "suppression_added",
 			),
 		);
 	}
@@ -1229,7 +1269,11 @@ export async function checkCandidate(
 				"utf8",
 			);
 
-		const deps = validateDependencies(manifestText, lockText);
+		const deps = validateDependencies(
+			manifestText,
+			lockText,
+			readFileSync(join(baseline, "package-lock.json"), "utf8"),
+		);
 
 		const old = new Map(baseDeps.map((d) => [d.path, d])),
 			current = new Map(deps.map((d) => [d.path, d]));
@@ -1422,7 +1466,7 @@ export async function checkCandidate(
 	} catch (error) {
 		receipt.reason = error instanceof Error ? error.message : "gate_error";
 		receipt.status =
-			/^(?:npmrc_changed|runtime_patching|suppression_added|package_swap|replacement_deleted|invalid_dependency_|dependency_integrity|install_failed|unsafe_tree|heldout_digest_mismatch)/.test(
+			/^(?:npmrc_changed|runtime_patching|suppression_added|invalid_source_encoding|unauthorized_acceptance|package_swap|replacement_deleted|invalid_dependency_|dependency_integrity|install_failed|unsafe_tree|heldout_digest_mismatch)/.test(
 				receipt.reason,
 			)
 				? "failed"

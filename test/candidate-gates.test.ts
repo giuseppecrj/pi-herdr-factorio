@@ -346,12 +346,14 @@ test("preload pins the reporting methods without freezing crypto internals", () 
 	const program = `import assert from "node:assert/strict";
 import {Readable} from "node:stream";
 import {Serializer,DefaultSerializer} from "node:v8";
-import {createCipheriv} from "node:crypto";
-for (const [target,keys] of [[Readable.prototype,["push"]],[Serializer.prototype,["writeHeader","writeValue","writeRawBytes","releaseBuffer"]],[DefaultSerializer.prototype,["writeHeader","writeValue","writeRawBytes","releaseBuffer"]],[process.stdout,["write","_write"]]]) for (const key of keys) {
+import {createCipheriv,createHash} from "node:crypto";
+for (const [target,keys] of [[Readable.prototype,["push","read"]],[Serializer.prototype,["writeHeader","writeValue","writeRawBytes","releaseBuffer"]],[DefaultSerializer.prototype,["writeHeader","writeValue","writeRawBytes","releaseBuffer"]],[process.stdout,["write","_write"]]]) for (const key of keys) {
 const d=Object.getOwnPropertyDescriptor(target,key); assert.equal(d.writable,false); assert.equal(d.configurable,false);
 assert.throws(()=>{target[key]=()=>{};});
 }
-createCipheriv("aes-256-gcm",Buffer.alloc(32),Buffer.alloc(12)).update("works");`;
+createCipheriv("aes-256-gcm",Buffer.alloc(32),Buffer.alloc(12)).update("works");
+const hash=createHash("sha256"); hash.end("works"); assert.equal(hash.read().toString("hex"),"93f6e11d9ce3e407e0eef9c87aacabf3f31235a92403845bb5093b4c6f01f2e5");
+const cipher=createCipheriv("aes-256-gcm",Buffer.alloc(32),Buffer.alloc(12)); cipher.end("works"); assert.equal(cipher.read().length,5);`;
 
 	execFileSync(process.execPath, [
 		"--import",
@@ -515,6 +517,122 @@ test("unchanged main suppressions are not new candidate directives", async (t) =
 	);
 });
 
+for (const [addition, reason] of [
+	["// @ts-nocheck\n", "suppression_added"],
+	[
+		'import {Readable} from "node:stream"; Readable.prototype.push = () => true;\n',
+		"runtime_patching",
+	],
+] as const)
+	test(`changed lines in an existing file are scanned: ${reason}`, async (t) => {
+		const f = repo(t);
+		f.put("src/value.ts", addition + 'export const value = "main";\n');
+		const r = await checkCandidate(gateInput(f, f.commit()));
+		assert.equal(r.status, "failed");
+		assert.equal(r.reason, reason);
+		assert.deepEqual(r.tamperSignals, [
+			{ path: "src/value.ts", line: 1, rule: reason },
+		]);
+	});
+
+for (const bytes of [
+	Buffer.from("// \0\n"),
+	Buffer.from([47, 47, 32, 255, 10]),
+])
+	test(`source encoding refuses ${bytes.includes(0) ? "NUL" : "non-UTF-8"} bytes`, async (t) => {
+		const f = repo(t);
+		writeFileSync(
+			join(f.root, "src/value.ts"),
+			Buffer.concat([
+				Buffer.from("// @ts-nocheck\n"),
+				bytes,
+				Buffer.from('export const value = "main";\n'),
+			]),
+		);
+		const r = await checkCandidate(gateInput(f, f.commit()));
+		assert.equal(r.status, "failed");
+		assert.equal(r.reason, "invalid_source_encoding");
+	});
+
+for (const path of [
+	"test/acceptance/stash/lint.ts",
+	"test/acceptance/123/manifest.json",
+	"test/acceptance/other/checks/suite.test.ts",
+])
+	test(`candidate acceptance files require dispatch authorization: ${path}`, async (t) => {
+		const f = repo(t);
+		f.put(path, "export const value = true;\n");
+		const r = await checkCandidate(gateInput(f, f.commit()));
+		assert.equal(r.status, "failed");
+		assert.equal(r.reason, "unauthorized_acceptance");
+	});
+
+test("an empty describe cannot replace a contract-named test even when other files run", async (t) => {
+	const f = repo(t);
+	f.put(
+		"test/other.test.ts",
+		'import {test} from "node:test"; test("other",()=>{});\n',
+	);
+	const gateSha = f.commit();
+	f.put(
+		"test/value.test.ts",
+		'import {describe} from "node:test"; describe("empty",()=>{});\n',
+	);
+
+	const replacements = [
+		{ path: "test/value.test.ts", reason: "change behavior" },
+	];
+
+	const r = await checkCandidate({
+		...gateInput(f, f.commit()),
+		gateSha,
+		replacements,
+		replacementsDigest: replacementDigest(replacements),
+	});
+
+	assert.equal(r.status, "failed");
+	assert.equal(r.candidateCounts["test/value.test.ts"], undefined);
+	assert.equal(r.candidateCounts["test/other.test.ts"], 1);
+	assert.equal(r.checks.find((c) => c.name === "main_tests")?.exitCode, 1);
+});
+
+test("dispatched held-out suppressions are exempt but runtime patching is not", async (t) => {
+	const f = repo(t);
+	const path = "test/acceptance/123/checks/scenario.test.ts";
+
+	for (const patch of [false, true]) {
+		const text =
+			'import {test} from "node:test";\n// @ts-expect-error controller-authored suite\ntest("held",()=>{});\n' +
+			(patch ? 'process.on("exit",()=>{});\n' : "");
+
+		f.put(path, text);
+
+		const input = {
+			...gateInput(f, f.commit()),
+			heldoutDir: "test/acceptance/123",
+			heldoutDigest: heldoutDigest([{ path, bytes: Buffer.from(text) }]),
+		};
+
+		const r = await checkCandidate(input);
+		assert.equal(r.status, patch ? "failed" : "passed");
+		assert.equal(r.reason, patch ? "runtime_patching" : null);
+		assert.ok(r.tamperSignals.every((s) => s.rule !== "suppression_added"));
+
+		if (!patch) {
+			f.put("test/acceptance/123/helper.ts", "export const n = 1;\n");
+
+			const extra = await checkCandidate({
+				...input,
+				candidateSha: f.commit(),
+			});
+
+			assert.equal(extra.status, "failed");
+			assert.equal(extra.reason, "unauthorized_acceptance");
+			f.git("rm", "test/acceptance/123/helper.ts");
+		}
+	}
+});
+
 test("lockfile aliases pin their real package, and swaps are refused", () => {
 	const manifest = { dependencies: { alias: "npm:real@^1" } };
 
@@ -551,6 +669,75 @@ test("lockfile aliases pin their real package, and swaps are refused", () => {
 			),
 		/package_swap/,
 	);
+});
+
+test("an alias binds its entry name and declaring parent's dependency spec", () => {
+	const entry = (name: string) => ({
+		version: "1.0.0",
+		resolved: `https://registry.npmjs.org/${name}/-/${name}-1.0.0.tgz`,
+		integrity: `sha512-${Buffer.alloc(64).toString("base64")}`,
+	});
+
+	const parent = { ...entry("parent"), dependencies: { alias: "npm:real@^1" } };
+	const alias = { ...entry("real"), name: "real" };
+	const manifest = { dependencies: { parent: "1.0.0" } };
+
+	const lock = {
+		lockfileVersion: 3,
+		packages: {
+			"": manifest,
+			"node_modules/parent": parent,
+			"node_modules/alias": alias,
+		},
+	};
+
+	type Packages = Record<
+		string,
+		| (ReturnType<typeof entry> & { name?: string })
+		| typeof parent
+		| typeof manifest
+	>;
+
+	const validate = (packages: Packages, trusted?: string) =>
+		validateDependencies(
+			JSON.stringify(manifest),
+			JSON.stringify({ ...lock, packages }),
+			trusted,
+		);
+
+	assert.equal(validate(lock.packages).length, 2);
+	assert.throws(
+		() =>
+			validate({
+				...lock.packages,
+				"node_modules/alias": { ...alias, name: undefined },
+			}),
+		/package_swap/,
+	);
+	assert.throws(
+		() =>
+			validate({ ...lock.packages, "node_modules/parent": entry("parent") }),
+		/package_swap/,
+	);
+	assert.equal(
+		validate({
+			"": manifest,
+			"node_modules/parent": parent,
+			"node_modules/parent/node_modules/alias": alias,
+		}).length,
+		2,
+	);
+
+	const trusted = JSON.stringify({
+		...lock,
+		packages: {
+			...lock.packages,
+			"node_modules/parent": { ...parent, dependencies: { alias: "1.0.0" } },
+			"node_modules/alias": entry("alias"),
+		},
+	});
+
+	assert.throws(() => validate(lock.packages, trusted), /package_swap/);
 });
 
 test("candidate-added tests pass without a manifest edit and join the next main baseline", async (t) => {

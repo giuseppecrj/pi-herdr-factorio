@@ -1,0 +1,23 @@
+diff --git c/src/gate-lint.ts i/src/gate-lint.ts
+new file mode 100644
+index 0000000..43c0b9d
+--- /dev/null
++++ i/src/gate-lint.ts
+@@ -0,0 +1 @@
++export { gateBad } from "../test/acceptance/stash/lint.ts";
+diff --git c/src/markers.ts i/src/markers.ts
+index 6fbbc53..2632fe9 100644
+--- c/src/markers.ts
++++ i/src/markers.ts
+@@ -0,0 +1 @@
++import { gateBad } from "./gate-lint.ts";
+@@ -563,0 +565,2 @@ export function latestFor(
++
++export const gateValue = gateBad("x");
+diff --git c/test/acceptance/stash/lint.ts i/test/acceptance/stash/lint.ts
+new file mode 100644
+index 0000000..0f03a2a
+--- /dev/null
++++ i/test/acceptance/stash/lint.ts
+@@ -0,0 +1 @@
++export const gateBad = (value: string | null) => value as string;

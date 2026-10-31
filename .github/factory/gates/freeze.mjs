@@ -23,7 +23,7 @@ function freeze(value, seen = new Set()) {
 for (const value of [assert, strict, test, ...Object.values(tests)]) freeze(value);
 
 for (const [target, keys] of [
-	[Readable.prototype, ["push"]],
+	[Readable.prototype, ["push", "read"]],
 	[Serializer.prototype, ["writeHeader", "writeValue", "writeRawBytes", "releaseBuffer"]],
 	[DefaultSerializer.prototype, ["writeHeader", "writeValue", "writeRawBytes", "releaseBuffer"]],
 	[process.stdout, ["write", "_write"]],
