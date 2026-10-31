@@ -23,6 +23,12 @@ All VM model calls used `openai/gpt-6.1-sol`. Total usage was 57,851 tokens agai
 
 These are one-shot controller commands, so manual gaps between ticks are not controller latency. This is one full live run and a repair probe, not the plan's later three-pair performance benchmark or ten-lane swarm.
 
+## Final model-free verification
+
+At `43c2f8d792f68eaafbdf2eab34ab245ea54d61bc`, `npm run check` passed 1,122 tests with no failures, skips or todos. `closure-proof.json` records a fresh download and collection of the same real CI receipt, another fresh-install repair sandbox, and a terminal controller tick with zero launches, tokens or occupied slots. The sweep stored `cleanup.json` and left no fixture branch.
+
+The final probes exposed two cleanup details. A completed transient systemd scope may already be gone when stop runs, so the probe now verifies absence. GitHub returns 422, not 404, when deleting an already-missing ref. Publication now reads the ref back and accepts only confirmed absence. The repeated-delete regression failed before that fix. Neither correction spent model tokens.
+
 ## Recovery and fail-closed tests
 
 `test/publication.test.ts`, `test/validation.test.ts`, `test/markers.test.ts`, `test/orchestrator.test.ts`, `test/stages.test.ts` and `test/policy.test.ts` cover missing and empty check sets, stale identities, suite-digest mismatches, deterministic commit order, crash-after-ref, lost dispatch responses, bounded redispatch, two late-visible dispatch tries, clean and conflicting stale-base reapply, slot-free v1 adoption on a legacy workflow, marker-v2 size and types, sanitized repair trees and approved feedback. A released candidate is swept only after existing CI finishes or the deadline, without redispatching or touching `factory/ledger`.
@@ -44,5 +50,7 @@ node docs/prototypes/heldout-ci/repair-probe.ts <state-dir> <run-id>
 The collection probe downloads the real receipt again through the repository-scoped artifact API and checks fresh GitHub run metadata against the private patch and suite. It does not dispatch or rewrite the run. The repair probe seeds the prior suite in a disposable base, sanitizes base plus prior patch, launches the real build-profile sandbox and removes its owned files and scope. Neither probe calls a model.
 
 Drain the controller before deploying marker v2. Deployment is roll-forward only; legacy controllers reject v2. The parser still adopts old workflow digests and ignores legacy `validate.model` with a warning. New workflow settings omit that key.
+
+Main's existing gate requires flat test files directly under `checks/`. F07c does not broaden that layout; a suite outside it fails closed. No nested-layout success is claimed.
 
 Independent review, Comment Sicko, the program swarm and merging remain coordinator work. No user-facing factory PR, merge, settings change, GitHub Actions workflow or gate-script edit, non-fixture ref mutation or subagent launch was performed by this builder.
