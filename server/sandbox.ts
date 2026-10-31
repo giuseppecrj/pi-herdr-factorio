@@ -2349,7 +2349,7 @@ async function prepareCandidateReview(
 	const base = join(config.stateDir, "pristine", runId);
 
 	const workflow = parseWorkflow({
-		text: regularText(join(base, ".github/factory/WORKFLOW.md")),
+		text: readFileSync(join(base, ".github/factory/WORKFLOW.md"), "utf8"),
 		repo: bound.contract.base.repo,
 		env: (name) => process.env[name],
 	});
