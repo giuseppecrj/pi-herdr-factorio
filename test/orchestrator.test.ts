@@ -7049,6 +7049,142 @@ describe("private build stage", () => {
 });
 
 describe("controller-only validate", () => {
+	async function waitingRun() {
+		const f = world();
+		f.github.add(labeled(14));
+		f.executor.behaviors = [{ kind: "pass", usage: 10 }];
+		f.executor.acceptBehavior = { kind: "pass", usage: 7 };
+		f.executor.buildBehavior = { kind: "pass", usage: 12 };
+		f.executor.validate = async (input) => {
+			const state = input.state ?? {
+				version: 1,
+				startedAt: input.now,
+				deadline: input.now + input.wallMs,
+				round: 0,
+				originalBase: input.baseSha,
+				baseSha: input.baseSha,
+				baseResolved: true,
+				publication: {
+					branch: `factory/run/14-${input.runId.slice(0, 12)}-r0`,
+					patchSha: sha("b".repeat(40)),
+					candidateSha: sha("c".repeat(40)),
+				},
+				dispatchTry: 1,
+				dispatchedAt: input.now,
+				ciRunId: 123,
+				counters: {},
+			};
+
+			await input.save(state);
+
+			return { kind: "waiting", state };
+		};
+
+		const controller = f.start();
+		await once(controller);
+		await once(controller);
+		await controller.tick();
+		assert.ok(f.files.claims.get(runOf(14))?.validation?.publication);
+
+		return { ...f, controller };
+	}
+
+	for (const field of ["candidate", "ciRun"] as const)
+		it(`posts another marker when only ${field} changes`, async () => {
+			const f = await waitingRun();
+			const before = f.github.markers(14).length;
+			f.executor.validate = async (input) => {
+				const state = input.state;
+
+				if (state?.publication == null) throw new Error("fixture");
+
+				if (field === "candidate")
+					state.publication = {
+						...state.publication,
+						candidateSha: sha("d".repeat(40)),
+					};
+				else state.ciRunId = 124;
+				await input.save(state);
+
+				return { kind: "waiting", state };
+			};
+
+			await f.controller.tick();
+			assert.equal(f.github.markers(14).length, before + 1);
+			const last = parseMarker(f.github.markers(14).at(-1) ?? "");
+			assert.equal(last.kind, "marker");
+
+			if (last.kind === "marker")
+				assert.equal(
+					last.marker[field],
+					field === "candidate" ? "d".repeat(40) : 124,
+				);
+		});
+
+	it("fails closed when a published marker loses its private validation state", async () => {
+		const f = await waitingRun();
+		const claim = f.files.claims.get(runOf(14));
+
+		if (claim === undefined) throw new Error("fixture");
+		const missing = { ...claim };
+		delete missing.validation;
+		f.files.claims.set(runOf(14), missing);
+		let calls = 0;
+		f.executor.validate = async (input) => {
+			calls++;
+
+			return { kind: "waiting", state: input.state ?? claim.validation! };
+		};
+
+		const result = await f.start().tick();
+		assert.equal(calls, 0);
+		assert.equal(result.totals.failures, 1);
+		assert.ok(
+			f.logs.some(
+				(entry) =>
+					entry.event === "validation_failed" &&
+					entry.fields.why === "validation_state_missing",
+			),
+		);
+	});
+
+	it("keeps cleanup identities when adopting a remotely ended marker", async () => {
+		const f = await waitingRun();
+		const claim = f.files.claims.get(runOf(14));
+		const last = parseMarker(f.github.markers(14).at(-1) ?? "");
+
+		if (last.kind !== "marker") throw new Error("fixture");
+		f.github.comment(
+			f.github.issues.get(14)!,
+			formatMarker({
+				...last.marker,
+				status: "failed",
+				seq: last.marker.seq + 1,
+			}),
+		);
+		await f.start().tick();
+		assert.deepEqual(
+			f.files.claims.get(runOf(14))?.validation,
+			claim?.validation,
+		);
+		assert.equal(f.files.claims.get(runOf(14))?.status, "failed");
+	});
+
+	it("does not progress an awaiting run on an unconfirmed issue read", async () => {
+		const f = await waitingRun();
+		let calls = 0;
+		const validate = f.executor.validate;
+		f.executor.validate = async (input) => {
+			calls++;
+
+			return validate(input);
+		};
+
+		f.github.failures.set(`repos/${FAKE_REPO}/issues/14`, networkError());
+		await f.controller.tick();
+		assert.equal(calls, 0);
+	});
+
 	it("retains publication identities when a waiting run is released across restart", async () => {
 		const { github, executor, files, start } = world();
 		const issue = github.add(labeled(14));

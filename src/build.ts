@@ -799,6 +799,9 @@ export async function publicationTree(
 		throw new Error("patch_invalid");
 	const entries = tree(dest);
 
+	if ([...entries.values()].some((entry) => entry.mode === 0o120000))
+		throw new Error("unsafe_symlink");
+
 	return changedPaths.map((path) => {
 		const entry = entries.get(path);
 

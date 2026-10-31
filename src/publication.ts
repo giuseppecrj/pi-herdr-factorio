@@ -105,9 +105,7 @@ export class GitHubPublicationApi {
 		const max = once ? 1 : 3;
 
 		for (let attempt = 0; attempt < max; attempt++) {
-			if ((this.counters[key] ?? 0) >= max)
-				throw new PublicationError("transport_exhausted");
-			this.counters[key] = (this.counters[key] ?? 0) + 1;
+			this.counters[key] = attempt + 1;
 
 			if (!(await this.persist()))
 				throw new PublicationError("claim_unwritable");
@@ -186,9 +184,12 @@ export class GitHubPublicationApi {
 		return shaOf(fieldOf(objectOf(fieldOf(objectOf(value), "object")), "sha"));
 	}
 
-	async remove(branch: string): Promise<void> {
-		if (!isCandidateBranch(branch))
-			throw new PublicationError("invalid_branch");
+	async remove(branch: string, candidateSha: GitSha): Promise<void> {
+		const tip = await this.ref(branch);
+
+		if (tip === null) return;
+
+		if (tip !== candidateSha) throw new PublicationError("branch_moved");
 
 		try {
 			await this.request("DELETE", `git/refs/heads/${branch}`);

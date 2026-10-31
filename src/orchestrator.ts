@@ -2247,7 +2247,15 @@ export class Orchestrator {
 		const resumeCi =
 			run.stage === "validate" && marker.status === "running" && !releasing;
 
-		if (resumeCi) run.phase = { kind: "awaiting_ci" };
+		if (resumeCi) {
+			if (marker.candidate != null && run.validation === undefined) {
+				await this.#validate(run);
+
+				return run;
+			}
+
+			run.phase = { kind: "awaiting_ci" };
+		}
 
 		const recovered =
 			resumeCi ||

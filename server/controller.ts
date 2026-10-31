@@ -1336,6 +1336,35 @@ function keepValidationFile(path: string, text: string): void {
 	} else exclusive(path, text);
 }
 
+async function cleanupPublication(
+	api: GitHubPublicationApi,
+	dir: string,
+	publication: { readonly branch: string; readonly candidateSha: GitSha },
+): Promise<"done" | "pending" | "branch_moved"> {
+	privateDir(dir);
+
+	try {
+		await api.remove(publication.branch, publication.candidateSha);
+		keepValidationFile(
+			join(dir, "cleanup.json"),
+			`${JSON.stringify({ branch: publication.branch, candidateSha: publication.candidateSha })}\n`,
+		);
+		await rm(join(dir, "pending-deletion.json"), { force: true });
+
+		return "done";
+	} catch (error) {
+		const reason =
+			error instanceof Error ? error.message : "cleanup_unavailable";
+
+		await writeAtomic(
+			join(dir, "pending-deletion.json"),
+			`${JSON.stringify({ ...publication, reason })}\n`,
+		);
+
+		return reason === "branch_moved" ? "branch_moved" : "pending";
+	}
+}
+
 export function controllerValidator(config: {
 	readonly stateDir: string;
 	readonly exec: Exec;
@@ -1370,26 +1399,25 @@ export function controllerValidator(config: {
 		const failed = async (reason: string) => {
 			const publication = state.publication;
 
-			if (publication !== null && repository !== null && identities !== null) {
+			if (publication !== null && repository !== null) {
 				const dir = join(config.stateDir, "validation", input.runId);
 				privateDir(dir);
 				const path = join(dir, "failure.json");
 
-				if (!present(path))
+				if (!present(path) && !present(join(dir, "verdict.json")))
 					exclusive(
 						path,
 						`${JSON.stringify({ ...identities, candidateSha: publication.candidateSha, gateSha: null, ciRunId: state.ciRunId, originalBase: state.originalBase, baseSha: state.baseSha, pass: false, checks: [], reason })}\n`,
 					);
 
-				try {
-					await new GitHubPublicationApi(
-						config.exec,
-						repository,
-						state.counters,
-						save,
-					).remove(publication.branch);
-				} catch {
-					return { kind: "waiting", state } as const;
+				if (reason !== "branch_moved") {
+					const cleanup = await cleanupPublication(
+						new GitHubPublicationApi(config.exec, repository),
+						dir,
+						publication,
+					);
+
+					if (cleanup === "branch_moved") reason = "branch_moved";
 				}
 			}
 
@@ -1470,12 +1498,20 @@ export function controllerValidator(config: {
 			const verdictPath = join(dir, "verdict.json");
 			const failurePath = join(dir, "failure.json");
 
-			if (present(failurePath))
-				return failed(
-					textOf(
-						jsonField(objectOf(parseJson(regularText(failurePath))), "reason"),
-					) ?? "validation_failed",
-				);
+			if (state.publication !== null) {
+				const tip = await api.ref(state.publication.branch);
+
+				if (tip !== null && tip !== state.publication.candidateSha)
+					return failed("branch_moved");
+
+				if (
+					tip === null &&
+					state.rebaseSha === undefined &&
+					!present(verdictPath) &&
+					!present(failurePath)
+				)
+					return failed("branch_moved");
+			}
 
 			if (present(verdictPath)) {
 				// SAFETY: controller-private write-once verdict; all live artifact identities are checked before reuse.
@@ -1487,15 +1523,43 @@ export function controllerValidator(config: {
 					verdict.patchDigest !== patch.receipt.patchDigest ||
 					verdict.acceptanceDigest !== suite.receipt.acceptanceDigest ||
 					verdict.heldoutDigest !== heldout.digest ||
-					verdict.candidateSha !== state.publication?.candidateSha
+					verdict.candidateSha !== state.publication?.candidateSha ||
+					verdict.gateSha !== state.baseSha ||
+					verdict.baseSha !== state.baseSha ||
+					verdict.originalBase !== state.originalBase ||
+					verdict.ciRunId !== state.ciRunId
 				)
 					return failed("verdict_binding");
-				await api.remove(state.publication.branch);
+				const cleanup = await cleanupPublication(api, dir, state.publication);
+
+				if (cleanup === "branch_moved") return failed("branch_moved");
 
 				return { kind: "finished", state, verdict };
 			}
 
-			if (input.now >= state.deadline) return failed("ci_timeout");
+			if (present(failurePath))
+				return failed(
+					textOf(
+						jsonField(objectOf(parseJson(regularText(failurePath))), "reason"),
+					) ?? "validation_failed",
+				);
+
+			if (state.rebaseSha !== undefined) {
+				if (state.publication !== null)
+					await api.remove(
+						state.publication.branch,
+						state.publication.candidateSha,
+					);
+				state.baseSha = state.rebaseSha;
+				delete state.rebaseSha;
+				state.publication = null;
+				state.ciRunId = null;
+
+				if (!(await save())) return failed("claim_unwritable");
+			}
+
+			if (state.publication === null && input.now >= state.deadline)
+				return failed("ci_timeout");
 
 			if (state.publication === null) {
 				if (!state.baseResolved) {
@@ -1608,7 +1672,9 @@ export function controllerValidator(config: {
 
 				if (matches.length > 1) {
 					if (matches.some((match) => match.status !== "completed"))
-						return { kind: "waiting", state };
+						return input.now >= state.deadline
+							? failed("ci_timeout")
+							: { kind: "waiting", state };
 
 					return failed("duplicate_dispatch");
 				}
@@ -1617,6 +1683,8 @@ export function controllerValidator(config: {
 			}
 
 			if (run === null) {
+				if (input.now >= state.deadline) return failed("ci_timeout");
+
 				if (input.dispatchAllowed === false) return failed("ci_missing");
 
 				if (
@@ -1626,6 +1694,22 @@ export function controllerValidator(config: {
 					return { kind: "waiting", state };
 
 				if (state.dispatchTry >= 2) return { kind: "waiting", state };
+				const main = objectOf(await api.request("GET", "git/ref/heads/main"));
+
+				const tip = textOf(
+					jsonField(objectOf(jsonField(main, "object")), "sha"),
+				);
+
+				if (tip === null || !isGitSha(tip)) return failed("main_unavailable");
+
+				if (tip !== state.baseSha) {
+					state.rebaseSha = tip;
+
+					if (!(await save())) return failed("claim_unwritable");
+
+					return { kind: "waiting", state };
+				}
+
 				state.dispatchTry++;
 				state.dispatchedAt = input.now;
 
@@ -1684,12 +1768,37 @@ export function controllerValidator(config: {
 
 			if (!(await save())) return failed("claim_unwritable");
 
-			if (run.status !== "completed") return { kind: "waiting", state };
+			if (run.status !== "completed")
+				return input.now >= state.deadline
+					? failed("ci_timeout")
+					: { kind: "waiting", state };
+
+			if (
+				input.now >= state.deadline &&
+				(run.completedAt === null ||
+					Date.parse(run.completedAt) > state.deadline)
+			)
+				return failed("ci_timeout");
+
+			if (run.headSha !== state.baseSha) return failed("stale_base");
 
 			const text = await (
 				config.receipt ??
 				((repo, id) => downloadGateReceipt(config.exec, repo, id))
-			)(repo, run.id);
+			)(repo, run.id).catch(() => null);
+
+			if (text === null && run.conclusion === "success")
+				return input.now >= state.deadline
+					? failed("ci_timeout")
+					: { kind: "waiting", state };
+
+			const raw = objectOf(parseJson(text ?? ""));
+
+			if (
+				jsonField(raw, "reason") === "stale_base" ||
+				(text !== null && jsonField(raw, "gateSha") !== state.baseSha)
+			)
+				return failed("stale_base");
 
 			const verdict = collectVerdict({
 				text,
@@ -1706,8 +1815,6 @@ export function controllerValidator(config: {
 				),
 			});
 
-			const raw = objectOf(parseJson(text ?? ""));
-
 			const feedback = repairFeedback(
 				suite.suite,
 				contract.contract,
@@ -1721,10 +1828,20 @@ export function controllerValidator(config: {
 			);
 			keepValidationFile(join(dir, "receipt.json"), text ?? "null\n");
 			keepValidationFile(verdictPath, `${JSON.stringify(verdict)}\n`);
-			await api.remove(publication.branch);
+			const cleanup = await cleanupPublication(api, dir, publication);
+
+			if (cleanup === "branch_moved") return failed("branch_moved");
 
 			return { kind: "finished", state, verdict };
 		} catch (error) {
+			if (
+				error instanceof PublicationError &&
+				error.reason === "transport_exhausted"
+			)
+				return input.now >= state.deadline
+					? failed("ci_timeout")
+					: { kind: "waiting", state };
+
 			return failed(
 				error instanceof Error ? error.message : "validation_unavailable",
 			);
@@ -1777,10 +1894,12 @@ export async function sweepValidation(config: {
 			!present(join(dir, "failure.json"))
 		) {
 			const listed = objectOf(
-				await api.request(
-					"GET",
-					"actions/workflows/ci.yml/runs?event=workflow_dispatch&per_page=100",
-				),
+				await api
+					.request(
+						"GET",
+						"actions/workflows/ci.yml/runs?event=workflow_dispatch&per_page=100",
+					)
+					.catch(() => undefined),
 			);
 
 			const runs = (arrayOf(jsonField(listed, "workflow_runs")) ?? []).flatMap(
@@ -1803,7 +1922,11 @@ export async function sweepValidation(config: {
 				},
 			);
 
-			if (runs.some((run) => run.status !== "completed")) continue;
+			if (
+				runs.some((run) => run.status !== "completed") &&
+				(config.now?.() ?? Date.now()) < state.deadline
+			)
+				continue;
 
 			if (runs.length === 0 && (config.now?.() ?? Date.now()) < state.deadline)
 				continue;
@@ -1827,11 +1950,7 @@ export async function sweepValidation(config: {
 			!present(join(dir, "failure.json"))
 		)
 			continue;
-		await api.remove(publication.branch);
-		keepValidationFile(
-			join(dir, "cleanup.json"),
-			`${JSON.stringify({ branch: publication.branch, candidateSha: publication.candidateSha })}\n`,
-		);
+		await cleanupPublication(api, dir, publication);
 	}
 }
 
@@ -1846,7 +1965,9 @@ export async function downloadGateReceipt(
 		const api = new GitHubPublicationApi(exec, repo);
 
 		const listed = objectOf(
-			await api.request("GET", `actions/runs/${id}/artifacts`),
+			await api
+				.request("GET", `actions/runs/${id}/artifacts`)
+				.catch(() => undefined),
 		);
 
 		const artifacts = (arrayOf(jsonField(listed, "artifacts")) ?? []).filter(
@@ -1908,6 +2029,8 @@ export async function downloadGateReceipt(
 			`repos/${repo}/actions/jobs/${jobId}/logs`,
 		]);
 
+		if (logs.code !== 0) throw new PublicationError("transport_exhausted");
+
 		const lines = logs.stdout
 			.split("\n")
 			.map((line) => line.replace(/^\S+\s/, ""));
@@ -1918,8 +2041,6 @@ export async function downloadGateReceipt(
 		return logs.code === 0 && start >= 0 && end > start
 			? lines.slice(start, end + 1).join("\n")
 			: null;
-	} catch {
-		return null;
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

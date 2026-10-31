@@ -323,6 +323,15 @@ function readMarker(fields: Map<string, JsonValue>): Marker | null {
 		return null;
 	}
 
+	if (
+		v2 &&
+		((branch === null) !== (candidate === null) ||
+			(branch !== null &&
+				branch !== `factory/run/${issue}-${runId.slice(0, 12)}-r${round}`) ||
+			(ciRun !== null && candidate === null))
+	)
+		return null;
+
 	const extensions = v2
 		? {
 				candidate: candidate !== null && isGitSha(candidate) ? candidate : null,

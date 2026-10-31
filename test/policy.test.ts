@@ -192,6 +192,19 @@ describe("forbidden paths", () => {
 	});
 });
 
+it("reserves the controller-owned repair feedback filename", () => {
+	for (const path of [
+		".factory-feedback.json",
+		"./.factory-feedback.json",
+		".FACTORY-FEEDBACK.JSON",
+	])
+		assert.equal(checkChangedPaths({ changedPaths: [path] }).kind, "forbidden");
+	assert.equal(
+		checkChangedPaths({ changedPaths: ["src/feedback.json"] }).kind,
+		"clean",
+	);
+});
+
 describe("land precondition", () => {
 	it("is ready when the passing verdict is bound to the run's patch", () => {
 		assert.deepEqual(
@@ -271,6 +284,26 @@ describe("land precondition", () => {
 				currentHead,
 			),
 			{ kind: "blocked", reason: "acceptance_mismatch" },
+		);
+	});
+
+	it("binds held-out digest and CI run independently of the candidate", () => {
+		const bound = {
+			...ciBinding,
+			patchDigest: patch("a"),
+			verdict: passingVerdict(patch("a")),
+		};
+
+		assert.deepEqual(
+			checkLandPrecondition(
+				{ ...bound, heldoutDigest: patch("other") },
+				currentHead,
+			),
+			{ kind: "blocked", reason: "acceptance_mismatch" },
+		);
+		assert.deepEqual(
+			checkLandPrecondition({ ...bound, ciRunId: 124 }, currentHead),
+			{ kind: "blocked", reason: "stale_candidate" },
 		);
 	});
 

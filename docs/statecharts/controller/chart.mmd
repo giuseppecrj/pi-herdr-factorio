@@ -5,66 +5,90 @@ stateDiagram-v2
   state "Legend" as legend {
     lg0: waiting
     lg1: held
-    lg2: restart
-    lg3: ended
+    lg2: ended
   }
   class lg0 blue
   class lg1 teal
-  class lg2 orange
-  class lg3 tan
+  class lg2 tan
   s0: Seen with the ready label
   s1: Label removed, nothing running
   state "Holding a claim" as s2 {
     s3: Claimed, marker posted on the issue
     s4: Stage running in the sandbox
     s5: Sandbox down, slot kept
-    s6: Waiting to retry
+    s6: Publishing patch and held-out checks
+    s7: Waiting for CI without a slot or model
+    s8: CI deadline expired
+    s9: CI transport unavailable, deadline still runs
+    s10: Storing a failed verdict
+    s11: Storing a passing bound verdict
   }
-  s7: Controller restarting
-  s8: Stopping the aborted stage
-  s9: Released
-  s10: Token budget spent
-  s11: Failed
-  s12: Stage passed, run stops here for now
-  s13: Run reserved, waiting to be adopted
+  s12: Stopping the aborted stage
+  state "Released" as s13 {
+    s14: Branch absent
+    s15: Branch deletion pending
+  }
+  state "Token budget spent" as s16 {
+    s17: Branch absent
+  }
+  state "Failed" as s18 {
+    s19: Branch absent
+    s20: Branch deletion pending
+  }
+  state "Stage passed, run stops here for now" as s21 {
+    s22: Branch deletion pending
+    s23: Branch absent
+  }
   [*] --> s0
   s0 --> s1: label removed or issue closed
   s0 --> s3: admitted
   s3 --> s4: the sandbox launches the stage
-  s3 --> s9: label removed or issue closed
+  s3 --> s14: label removed or issue closed
   s3 --> s5: the sandbox check fails
-  s7 --> s13: the controller reserves the run from its claim file
-  s4 --> s8: stage stalls [no attempts or tokens left] or label removed or issue closed
-  s4 --> s10: stage fails [token cap reached]
-  s4 --> s11: stage refuses or stage fails [no attempts left]
-  s4 --> s12: stage passes
-  s4 --> s6: stage fails or stalls [attempts and tokens left]
-  s8 --> s7: the controller restarts
-  s13 --> s3: the controller adopts the run from its marker
-  s6 --> s4: backoff ends
-  s8 --> s10: the aborted sandbox stops
-  s5 --> s9: label removed or issue closed
-  s13 --> s9: the controller finds the label gone
-  s6 --> s9: label removed or issue closed
+  s4 --> s12: stage stalls [no attempts or tokens left] or label removed or issue closed
+  s4 --> s17: stage fails [token cap reached]
+  s4 --> s19: stage fails [no attempts left] or stage refuses
+  s4 --> s6: build passes, sandbox stops
+  s6 --> s7: two commits published, CI dispatched
+  s7 --> s8: 20-minute deadline expires
+  s7 --> s9: transport retries exhausted this tick
+  s7 --> s10: CI completes
+  s7 --> s11: CI completes
+  s12 --> s17: the aborted sandbox stops
+  s12 --> s19: the aborted sandbox stops
+  s5 --> s14: label removed or issue closed
+  s6 --> s14: label removed or issue closed
   s5 --> s4: the sandbox launches the stage
-  s13 --> s6: the controller adopts the run from its marker
-  s6 --> s5: the sandbox check fails
-  s6 --> s8: label removed or issue closed
-  s13 --> s5: the controller adopts the run from its marker
-  s8 --> s9: the aborted sandbox stops
-  s8 --> s11: the aborted sandbox stops
-  s13 --> s11: the controller ends the interrupted attempt [no attempts left]
-  s2 --> s7: the controller restarts
+  s7 --> s15: label removed or issue closed
+  s8 --> s20: terminal evidence stored, run ends
+  s9 --> s7: next tick retries transport afresh
+  s9 --> s8: 20-minute deadline expires
+  s10 --> s20: terminal evidence stored, run ends
+  s11 --> s22: terminal evidence stored, run ends
+  s12 --> s14: the aborted sandbox stops
+  s8 --> s15: label removed or issue closed
+  s9 --> s15: label removed or issue closed
+  s15 --> s14: guarded branch deletion succeeds
+  s10 --> s15: label removed or issue closed
+  s11 --> s15: label removed or issue closed
+  s20 --> s19: guarded branch deletion succeeds
+  s22 --> s23: guarded branch deletion succeeds
   class s0 blue
   class s1 blue
   class s3 teal
   class s4 teal
   class s5 teal
   class s6 teal
-  class s7 orange
+  class s7 teal
   class s8 teal
-  class s9 tan
-  class s10 tan
-  class s11 tan
-  class s12 tan
-  class s13 orange
+  class s9 teal
+  class s10 teal
+  class s11 teal
+  class s12 teal
+  class s14 tan
+  class s15 tan
+  class s17 tan
+  class s19 tan
+  class s20 tan
+  class s22 tan
+  class s23 tan

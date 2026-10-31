@@ -12,6 +12,8 @@ const HELD: Record<string, string> = {
   retry: "Waiting to retry",
   publishing: "Publishing patch and held-out checks",
   awaiting_ci: "Waiting for CI without a slot or model",
+  ci_unavailable: "CI transport unavailable, deadline still runs",
+  ci_timeout: "CI deadline expired",
   verdict_pass: "Storing a passing bound verdict",
   verdict_fail: "Storing a failed verdict",
 };
@@ -24,7 +26,8 @@ export const state = (v: any) => {
   if (v.ph in HELD) return ["Holding a claim", HELD[v.ph]];
   if (v.ph === "ending") return ["Stopping the aborted stage"];
   const last = v.marker[v.event];
-  if (last in ENDED) return [ENDED[last]];
+
+  if (last in ENDED) return [ENDED[last], v.branches.includes(v.event) ? "Branch deletion pending" : "Branch absent"];
   if (v.ticket === "gone") return ["Label removed, nothing running"];
   return ["Seen with the ready label"];
 };
@@ -57,9 +60,17 @@ export const step = (action: string, from: any, to: any) => {
     case "Published":
       return "two commits published, CI dispatched";
     case "CollectCI":
-      return "CI completes or the deadline expires";
+      return "CI completes";
+    case "CIUnavailable":
+      return "transport retries exhausted this tick";
+    case "RetryCI":
+      return "next tick retries transport afresh";
+    case "CIDeadline":
+      return "20-minute deadline expires";
     case "StoreVerdict":
-      return "verdict stored, branch deleted";
+      return "terminal evidence stored, run ends";
+    case "Cleanup":
+      return "guarded branch deletion succeeds";
     case "StageRefuses":
       return "stage refuses";
     case "StageFails":

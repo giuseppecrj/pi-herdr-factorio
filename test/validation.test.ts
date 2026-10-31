@@ -22,6 +22,8 @@ if (!isGitSha(candidateSha) || !isGitSha(gateSha)) throw new Error("fixture");
 const run: CiRun = {
 	id: 1,
 	headSha: gateSha,
+	headBranch: "main",
+	completedAt: "2026-10-31T00:01:00Z",
 	title: `gates ${candidateSha} nonce`,
 	event: "workflow_dispatch",
 	path: ".github/workflows/ci.yml",
@@ -102,6 +104,13 @@ describe("bound validation verdicts", () => {
 	});
 
 	for (const altered of [
+		{
+			requiredChecks: receipt.requiredChecks.filter(
+				(name) => name !== "heldout",
+			),
+			checks: receipt.checks.filter((check) => check.name !== "heldout"),
+		},
+		{ checks: [...receipt.checks, { name: "extra", exitCode: 0 }] },
 		{ checks: [] },
 		{ requiredChecks: [] },
 		{ checks: receipt.checks.slice(1) },
@@ -147,6 +156,26 @@ describe("bound validation verdicts", () => {
 				false,
 			);
 		});
+	it("requires a completed run even with a success conclusion", () => {
+		assert.equal(
+			collectVerdict({
+				...binding,
+				run: { ...run, status: "in_progress" },
+				text: JSON.stringify(receipt),
+			}).pass,
+			false,
+		);
+	});
+	it("refuses a gate revision different from the candidate base", () => {
+		assert.equal(
+			collectVerdict({
+				...binding,
+				baseSha: candidateSha,
+				text: JSON.stringify(receipt),
+			}).pass,
+			false,
+		);
+	});
 	it("refuses a missing or malformed receipt", () => {
 		for (const text of [
 			null,
@@ -168,6 +197,7 @@ describe("bound validation verdicts", () => {
 		);
 
 		for (const altered of [
+			{ headBranch: "other" },
 			{ event: "push" },
 			{ path: ".github/workflows/check.yml" },
 			{ actor: "human" },
@@ -191,6 +221,7 @@ describe("bound validation verdicts", () => {
 it("collection itself refuses a receipt from the wrong run actor or workflow", () => {
 	for (const change of [
 		{ actor: "human" },
+		{ headBranch: "other" },
 		{ event: "push" },
 		{ path: ".github/workflows/check.yml" },
 	])

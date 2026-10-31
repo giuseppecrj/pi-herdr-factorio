@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
 	mkdtempSync,
 	mkdirSync,
@@ -44,11 +44,13 @@ import {
 	storePatch,
 	finishPatch,
 	prepareRepairTree,
+	publicationTree,
 } from "../src/build.ts";
 import {
 	controllerValidator,
 	sweepValidation,
 	fileRunFiles,
+	downloadGateReceipt,
 } from "../server/controller.ts";
 import { type ValidationState } from "../src/validation.ts";
 import { CONTROLLER_LOGIN } from "../src/markers.ts";
@@ -87,6 +89,10 @@ class GitData {
 	crashAfterRef = false;
 	crashAfterDispatch = false;
 	failure: number | null = null;
+	hook?: (args: readonly string[]) => ExecResult | null;
+	receiptMissing = false;
+	beforeDispatch?: () => void;
+	onSave?: (state: ValidationState) => void;
 	input: Record<string, string> = {};
 	readonly dispatchInputs: Record<string, string>[] = [];
 	readonly exec: Exec = async (_command, args): Promise<ExecResult> => {
@@ -116,6 +122,10 @@ class GitData {
 			stdout: "",
 			stderr: `HTTP ${status}`,
 		});
+
+		const intercepted = this.hook?.(args);
+
+		if (intercepted != null) return intercepted;
 
 		if (this.failure !== null) return no(this.failure);
 
@@ -191,6 +201,7 @@ class GitData {
 		}
 
 		if (path.endsWith("/dispatches")) {
+			this.beforeDispatch?.();
 			this.dispatches++;
 			// SAFETY: fixed synthetic inputs authored by the controller under test.
 			this.input = fieldOf(body, "inputs") as Record<string, string>;
@@ -222,6 +233,8 @@ class GitData {
 		return {
 			id: 123,
 			head_sha: this.main,
+			head_branch: "main",
+			updated_at: "2026-10-31T00:01:00Z",
 			display_title: `gates ${this.input.candidate_sha} ${this.input.nonce}`,
 			status: this.completed ? "completed" : "in_progress",
 			conclusion: this.completed ? "success" : null,
@@ -318,6 +331,74 @@ describe("deterministic Git Data publication", () => {
 			),
 			/branch_moved/,
 		);
+	});
+	it("retries afresh after old persisted counters and persists before every attempt", async () => {
+		const fake = new GitData();
+		const key = digestOf(JSON.stringify(["GET", "git/ref/heads/main", null]));
+		const counters = { [key]: 3 };
+		const snapshots: number[] = [];
+
+		const api = new GitHubPublicationApi(
+			fake.exec,
+			repo,
+			counters,
+			async () => {
+				snapshots.push(counters[key] ?? 0);
+
+				return true;
+			},
+			async () => {},
+		);
+
+		fake.failure = 502;
+		await assert.rejects(
+			api.request("GET", "git/ref/heads/main"),
+			/transport_exhausted/,
+		);
+		assert.deepEqual(snapshots, [1, 2, 3]);
+		fake.failure = null;
+		await api.request("GET", "git/ref/heads/main");
+		assert.deepEqual(snapshots, [1, 2, 3, 1, 0]);
+	});
+	it("checks the deterministic commit SHA returned by GitHub", async () => {
+		const fake = new GitData();
+		fake.hook = (args) =>
+			args.includes(`repos/${repo}/git/commits`)
+				? {
+						code: 0,
+						stdout: JSON.stringify({ sha: "f".repeat(40) }),
+						stderr: "",
+					}
+				: null;
+		await assert.rejects(
+			publishCandidate(
+				new GitHubPublicationApi(fake.exec, repo),
+				publicationInput,
+			),
+			/commit_mismatch/,
+		);
+		assert.equal(fake.refs.size, 0);
+	});
+	it("does not accept DELETE 422 while the owned ref still exists", async () => {
+		const fake = new GitData();
+
+		const publication = await publishCandidate(
+			new GitHubPublicationApi(fake.exec, repo),
+			publicationInput,
+		);
+
+		fake.hook = (args) =>
+			args.includes("DELETE")
+				? { code: 1, stdout: "", stderr: "HTTP 422" }
+				: null;
+		await assert.rejects(
+			new GitHubPublicationApi(fake.exec, repo).remove(
+				publication.branch,
+				publication.candidateSha,
+			),
+			/conflict/,
+		);
+		assert.equal(fake.refs.get(publication.branch), publication.candidateSha);
 	});
 	it("bounds transport retries, and does not retry authorization failures", async () => {
 		for (const status of [500, 429, 403]) {
@@ -462,7 +543,7 @@ async function validationFixture() {
 			stateDir: root,
 			exec: fake.exec,
 			fetch: async () => fetch,
-			receipt: async () => fake.receipt(),
+			receipt: async () => (fake.receiptMissing ? null : fake.receipt()),
 		})({
 			runId,
 			issue: 1,
@@ -473,13 +554,371 @@ async function validationFixture() {
 			state,
 			save: async (value) => {
 				state = structuredClone(value);
+				fake.onSave?.(state);
 
 				return true;
 			},
 		});
 
-	return { root, base, patch, fake, step, state: () => state, archive };
+	return {
+		root,
+		base,
+		workspace,
+		patch,
+		fake,
+		step,
+		state: () => state,
+		archive,
+	};
 }
+
+describe("fix round 1 recovery regressions", () => {
+	const start = Date.parse("2026-10-31T00:00:00Z");
+	const unavailable = { code: 1, stdout: "", stderr: "HTTP 502" };
+
+	it("B1 refuses a moved branch after a real post-verdict process crash", async () => {
+		const f = await validationFixture();
+		await f.step(start);
+		await f.step(start + 30_000);
+		f.fake.completed = true;
+		const state = f.state();
+		const candidate = state?.publication?.candidateSha;
+		assert.ok(candidate);
+
+		const crash = spawnSync(process.execPath, [
+			"--experimental-strip-types",
+			"--input-type=module",
+			"-e",
+			`
+			import {controllerValidator} from './server/controller.ts';
+			const input = JSON.parse(process.argv[1]);
+			const exec = async (_, args) => {
+				if (args.includes('DELETE')) process.kill(process.pid, 'SIGKILL');
+				const path = args.find(a => a.startsWith('repos/'));
+				const value = path.includes('/git/ref/') ? {object:{sha:input.state.publication.candidateSha}} : input.run;
+				return {code:0,stdout:JSON.stringify(value),stderr:''};
+			};
+			await controllerValidator({stateDir:input.root,exec,receipt:async()=>input.receipt})({
+				...input, save:async()=>true
+			});
+		`,
+			JSON.stringify({
+				root: f.root,
+				state,
+				run: f.fake.run(),
+				receipt: f.fake.receipt(),
+				runId,
+				issue: 1,
+				eventAt: publicationInput.eventAt,
+				baseSha,
+				now: start + 60_000,
+				wallMs: 1_200_000,
+			}),
+		]);
+
+		assert.equal(crash.signal, "SIGKILL", crash.stderr.toString());
+		assert.equal(
+			JSON.parse(
+				readFileSync(join(f.root, "validation", runId, "verdict.json"), "utf8"),
+			).pass,
+			true,
+		);
+		const branch = candidateBranch(1, runId, 0);
+		f.fake.refs.set(branch, "d".repeat(40));
+		const result = await f.step(start + 90_000);
+		assert.equal(result.kind, "failed");
+
+		if (result.kind === "failed") assert.equal(result.reason, "branch_moved");
+		assert.equal(f.fake.refs.get(branch), "d".repeat(40));
+	});
+
+	for (const expired of [false, true])
+		it(`P1/P1b retries after persisted transport exhaustion (expired=${expired})`, async () => {
+			const f = await validationFixture();
+			await f.step(start);
+			f.fake.failure = 502;
+			assert.equal((await f.step(start + 30_000)).kind, "waiting");
+			assert.equal(
+				existsSync(join(f.root, "validation", runId, "failure.json")),
+				false,
+			);
+			f.fake.failure = null;
+			f.fake.completed = !expired;
+			const before = f.fake.requests.length;
+			const result = await f.step(start + (expired ? 1_200_000 : 60_000));
+			assert.ok(f.fake.requests.length > before);
+			assert.equal(result.kind, expired ? "failed" : "finished");
+
+			if (result.kind === "failed") assert.equal(result.reason, "ci_timeout");
+
+			if (result.kind === "finished") assert.equal(result.verdict.pass, true);
+			assert.equal(f.fake.refs.size, 0);
+		});
+
+	for (const legacyFailure of [false, true])
+		it(`P5/P5b cleanup failure never shadows a stored pass (legacy failure=${legacyFailure})`, async () => {
+			const f = await validationFixture();
+			await f.step(start);
+			f.fake.completed = true;
+			let deletes = 0;
+			f.fake.hook = (args) =>
+				args.includes("DELETE") && deletes++ < 3 ? unavailable : null;
+			const result = await f.step(start + 60_000);
+			assert.equal(result.kind, "finished");
+
+			if (result.kind === "finished") assert.equal(result.verdict.pass, true);
+			const dir = join(f.root, "validation", runId);
+			assert.equal(existsSync(join(dir, "failure.json")), false);
+			assert.equal(existsSync(join(dir, "pending-deletion.json")), true);
+
+			if (legacyFailure)
+				writeFileSync(
+					join(dir, "failure.json"),
+					JSON.stringify({ reason: "transport_exhausted" }),
+					{ mode: 0o600 },
+				);
+			assert.equal((await f.step(start + 90_000)).kind, "finished");
+			assert.equal(f.fake.refs.size, 0);
+		});
+
+	it("P2 collects CI concluded by the deadline on a late tick", async () => {
+		const f = await validationFixture();
+		await f.step(start);
+		f.fake.completed = true;
+		const result = await f.step(start + 1_230_000);
+		assert.equal(result.kind, "finished");
+
+		if (result.kind === "finished") assert.equal(result.verdict.pass, true);
+	});
+
+	it("P6 waits for an unavailable receipt without storing a verdict", async () => {
+		const f = await validationFixture();
+		await f.step(start);
+		f.fake.completed = true;
+		f.fake.receiptMissing = true;
+		assert.equal((await f.step(start + 60_000)).kind, "waiting");
+		assert.equal(
+			existsSync(join(f.root, "validation", runId, "verdict.json")),
+			false,
+		);
+		f.fake.receiptMissing = false;
+		assert.equal((await f.step(start + 90_000)).kind, "finished");
+	});
+
+	it("writes the dispatch try durably before the dispatch POST", async () => {
+		const f = await validationFixture();
+		let saved = false;
+		f.fake.beforeDispatch = () => {
+			saved = f.state()?.dispatchTry === 1 && f.state()?.dispatchedAt === start;
+		};
+
+		await f.step(start);
+		assert.equal(saved, true);
+	});
+
+	it("ends on persistent transport failure at the deadline and sweeps pending cleanup", async () => {
+		const f = await validationFixture();
+		await f.step(start);
+		f.fake.failure = 502;
+		const result = await f.step(start + 1_200_000);
+		assert.equal(result.kind, "failed");
+
+		if (result.kind === "failed") assert.equal(result.reason, "ci_timeout");
+		const validation = f.state();
+
+		if (validation === null) throw new Error("fixture");
+		assert.equal(
+			existsSync(join(f.root, "validation", runId, "pending-deletion.json")),
+			true,
+		);
+		await fileRunFiles(f.root).writeClaim({
+			runId,
+			issue: 1,
+			eventId: "1",
+			seq: 1,
+			status: "failed",
+			stage: "validate",
+			attempt: 1,
+			usage: 0,
+			validation,
+		});
+		f.fake.failure = null;
+		await sweepValidation({ stateDir: f.root, exec: f.fake.exec });
+		assert.equal(f.fake.refs.size, 0);
+		assert.equal(
+			existsSync(join(f.root, "validation", runId, "cleanup.json")),
+			true,
+		);
+	});
+
+	it("rechecks a just-published branch before the first dispatch", async () => {
+		const f = await validationFixture();
+		f.fake.onSave = (state) => {
+			if (state.publication !== null)
+				f.fake.refs.set(state.publication.branch, "d".repeat(40));
+		};
+
+		const result = await f.step(start);
+		assert.equal(result.kind, "failed");
+
+		if (result.kind === "failed") assert.equal(result.reason, "branch_moved");
+		assert.equal(f.fake.dispatches, 0);
+		assert.equal(f.fake.refs.get(candidateBranch(1, runId, 0)), "d".repeat(40));
+	});
+
+	it("checks live identity on every wait tick and preserves a moved ref", async () => {
+		const f = await validationFixture();
+		await f.step(start);
+		const branch = candidateBranch(1, runId, 0);
+		f.fake.refs.set(branch, "d".repeat(40));
+		const result = await f.step(start + 30_000);
+		assert.equal(result.kind, "failed");
+
+		if (result.kind === "failed") assert.equal(result.reason, "branch_moved");
+		assert.equal(f.fake.refs.get(branch), "d".repeat(40));
+	});
+
+	it("rejects a bound CI run whose authenticated identity changed", async () => {
+		const f = await validationFixture();
+		await f.step(start);
+		await f.step(start + 30_000);
+		f.fake.completed = true;
+		f.fake.hook = (args) =>
+			args.includes(`repos/${repo}/actions/runs/123`)
+				? {
+						code: 0,
+						stdout: JSON.stringify({
+							...f.fake.run(),
+							head_branch: "not-main",
+						}),
+						stderr: "",
+					}
+				: null;
+		const result = await f.step(start + 60_000);
+		assert.equal(result.kind, "failed");
+
+		if (result.kind === "failed") assert.equal(result.reason, "ci_identity");
+	});
+
+	it("refuses a concluded run on a gate different from its base", async () => {
+		const f = await validationFixture();
+		await f.step(start);
+		f.fake.main = "e".repeat(40);
+		f.fake.completed = true;
+		const result = await f.step(start + 60_000);
+		assert.equal(result.kind, "failed");
+
+		if (result.kind === "failed") assert.equal(result.reason, "stale_base");
+	});
+
+	it("reapplies after publication when main moves before the second dispatch", async () => {
+		const f = await validationFixture();
+		f.fake.visible = false;
+		await f.step(start);
+		const old = f.state()?.publication?.candidateSha;
+		f.fake.main = "e".repeat(40);
+		await f.step(start + 120_000);
+		await f.step(start + 121_000);
+		assert.equal(f.state()?.baseSha, f.fake.main);
+		assert.notEqual(f.state()?.publication?.candidateSha, old);
+		assert.equal(f.state()?.round, 0);
+		assert.equal(
+			f.fake.commits.get(f.state()?.publication?.patchSha ?? "")?.parent,
+			f.fake.main,
+		);
+		assert.equal(f.fake.dispatches, 2);
+	});
+
+	for (const field of [
+		"candidateSha",
+		"acceptanceDigest",
+		"patchDigest",
+		"heldoutDigest",
+		"gateSha",
+		"baseSha",
+		"originalBase",
+		"ciRunId",
+	])
+		it(`refuses stored-verdict reuse with changed ${field}`, async () => {
+			const f = await validationFixture();
+			await f.step(start);
+			f.fake.completed = true;
+			await f.step(start + 60_000);
+			const path = join(f.root, "validation", runId, "verdict.json");
+			const verdict = JSON.parse(readFileSync(path, "utf8"));
+			writeFileSync(
+				path,
+				JSON.stringify({
+					...verdict,
+					[field]: field === "ciRunId" ? 124 : digestOf("other"),
+				}),
+				{ mode: 0o600 },
+			);
+			const result = await f.step(start + 90_000);
+			assert.equal(result.kind, "failed");
+
+			if (result.kind === "failed")
+				assert.equal(result.reason, "verdict_binding");
+		});
+
+	it("refuses symlinks before publication", async () => {
+		const f = await validationFixture();
+		symlinkSync("a.ts", join(f.workspace, "src/link.ts"));
+		const patch = await collectPatch({ base: f.base, workspace: f.workspace });
+		assert.equal(patch.kind, "collected");
+
+		if (patch.kind !== "collected") throw new Error("fixture");
+		await assert.rejects(
+			publicationTree(
+				f.base,
+				join(f.root, "publish"),
+				patch.patch,
+				patch.changedPaths,
+			),
+			/unsafe_symlink/,
+		);
+	});
+});
+
+describe("receipt download transport", () => {
+	it("does not turn a transport failure into an absent receipt", async () => {
+		let failures = true;
+
+		const exec: Exec = async (_, args) => {
+			const path = args.find((arg) => arg.startsWith("repos/")) ?? "";
+
+			if (path.endsWith("/artifacts"))
+				return {
+					code: 0,
+					stdout: JSON.stringify({ artifacts: [] }),
+					stderr: "",
+				};
+
+			if (path.endsWith("/jobs"))
+				return {
+					code: 0,
+					stdout: JSON.stringify({ jobs: [{ id: 7, name: "gates" }] }),
+					stderr: "",
+				};
+
+			return failures
+				? { code: 1, stdout: "", stderr: "HTTP 502" }
+				: {
+						code: 0,
+						stdout:
+							'2026-10-31T00:00:00Z {\n2026-10-31T00:00:00Z "version":2\n2026-10-31T00:00:00Z }',
+						stderr: "",
+					};
+		};
+
+		await assert.rejects(downloadGateReceipt(exec, repo, 123));
+		failures = false;
+		assert.equal(
+			await downloadGateReceipt(exec, repo, 123),
+			'{\n"version":2\n}',
+		);
+	});
+});
 
 describe("controller publication and waiting recovery", () => {
 	for (const crash of [false, true])
@@ -508,7 +947,8 @@ describe("controller publication and waiting recovery", () => {
 		const f = await validationFixture();
 		await f.step();
 		const validation = f.state();
-		assert.ok(validation);
+
+		if (validation === null) throw new Error("fixture");
 		await fileRunFiles(f.root).writeClaim({
 			runId,
 			issue: 1,
@@ -548,6 +988,105 @@ describe("controller publication and waiting recovery", () => {
 		await sweepValidation(config);
 		assert.equal(f.fake.requests.length, calls);
 	});
+
+	for (const status of ["running", "released"] as const)
+		it(`sweep preserves a ${status} claim with a non-derived branch`, async () => {
+			const f = await validationFixture();
+			await f.step();
+			const validation = f.state();
+
+			if (validation?.publication == null) throw new Error("fixture");
+			validation.publication = {
+				...validation.publication,
+				branch: candidateBranch(999, runId, 0),
+			};
+			f.fake.refs.set(
+				validation.publication.branch,
+				validation.publication.candidateSha,
+			);
+			f.fake.completed = true;
+			await fileRunFiles(f.root).writeClaim({
+				runId,
+				issue: 1,
+				eventId: "1",
+				seq: 1,
+				status,
+				stage: "validate",
+				attempt: 1,
+				usage: 0,
+				validation,
+			});
+			await sweepValidation({
+				stateDir: f.root,
+				exec: f.fake.exec,
+				receipt: async () => f.fake.receipt(),
+			});
+			assert.equal(f.fake.refs.size, 2);
+		});
+
+	it("sweep never collects or removes a running claim", async () => {
+		const f = await validationFixture();
+		await f.step();
+		const validation = f.state();
+
+		if (validation === null) throw new Error("fixture");
+		await fileRunFiles(f.root).writeClaim({
+			runId,
+			issue: 1,
+			eventId: "1",
+			seq: 1,
+			status: "running",
+			stage: "validate",
+			attempt: 1,
+			usage: 0,
+			validation,
+		});
+		f.fake.completed = true;
+		const calls = f.fake.requests.length;
+		await sweepValidation({
+			stateDir: f.root,
+			exec: f.fake.exec,
+			receipt: async () => f.fake.receipt(),
+		});
+		assert.equal(f.fake.requests.length, calls);
+		assert.equal(f.fake.refs.size, 1);
+	});
+
+	for (const visible of [false, true])
+		it(`sweep waits before deadline, then ends released CI (visible=${visible})`, async () => {
+			const f = await validationFixture();
+			const start = Date.parse("2026-10-31T00:00:00Z");
+			await f.step(start);
+			const validation = f.state();
+
+			if (validation === null) throw new Error("fixture");
+			await fileRunFiles(f.root).writeClaim({
+				runId,
+				issue: 1,
+				eventId: "1",
+				seq: 1,
+				status: "released",
+				stage: "validate",
+				attempt: 1,
+				usage: 0,
+				validation,
+			});
+			f.fake.visible = visible;
+			const calls = f.fake.requests.length;
+			await sweepValidation({
+				stateDir: f.root,
+				exec: f.fake.exec,
+				now: () => start + 30_000,
+			});
+			assert.equal(f.fake.requests.length, calls + 1);
+			assert.equal(f.fake.refs.size, 1);
+			await sweepValidation({
+				stateDir: f.root,
+				exec: f.fake.exec,
+				now: () => start + 1_200_000,
+			});
+			assert.equal(f.fake.refs.size, 0);
+		});
 
 	it("settles an absent dispatch before retrying, with no third try", async () => {
 		const f = await validationFixture();
@@ -601,6 +1140,45 @@ describe("controller publication and waiting recovery", () => {
 			assert.equal(result.verdict.originalBase, baseSha);
 		}
 	});
+	it("refuses an existing held-out directory on a moved base", async () => {
+		const f = await validationFixture();
+		f.fake.main = "e".repeat(40);
+		mkdirSync(join(f.base, "test/acceptance/1/checks"), { recursive: true });
+		writeFileSync(
+			join(f.base, "test/acceptance/1/checks/prior.test.ts"),
+			"prior",
+		);
+		execFileSync("git", ["init", "-q", f.base]);
+		execFileSync("git", ["-C", f.base, "add", "."]);
+		execFileSync("git", [
+			"-C",
+			f.base,
+			"-c",
+			"user.name=fixture",
+			"-c",
+			"user.email=fixture@example.com",
+			"commit",
+			"-qm",
+			"suite",
+		]);
+
+		const archive = execFileSync("git", [
+			"-C",
+			f.base,
+			"archive",
+			"--format=tar.gz",
+			"--prefix=root/",
+			"HEAD",
+		]);
+
+		const result = await f.step(undefined, archive);
+		assert.equal(result.kind, "failed");
+
+		if (result.kind === "failed") assert.equal(result.reason, "stale_base");
+		assert.equal(f.fake.dispatches, 0);
+		assert.equal(f.fake.refs.size, 0);
+	});
+
 	it("fails stale_base on a conflicting reapply, publishing nothing", async () => {
 		const f = await validationFixture();
 		f.fake.main = "e".repeat(40);

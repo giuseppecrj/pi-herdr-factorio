@@ -3,7 +3,7 @@
 \* claim, launch in the sandbox, retry with a cap, release, restart recovery.
 EXTENDS Naturals
 
-CONSTANTS MaxAttempts, AllowRelabel
+CONSTANTS MaxAttempts, AllowRelabel, MaxRestarts
 
 VARIABLES
     ticket,      \* "ready" or "gone" (label removed or issue closed)
@@ -21,14 +21,15 @@ VARIABLES
     sandboxOk,   \* the rest of the sandbox preflight passes
     pending,     \* event of a live run reserved after a restart but not yet adopted, 0 for none
     restarts,
-    launchedEnded \* a stage launched for a run whose marker was already terminal
+    launchedEnded, \* a stage launched for a run whose marker was already terminal
+    branches      \* events with a published branch, including pending terminal cleanup
 
 vars == <<ticket, event, run, ph, endAs, attempt, tokens, marker, cur, orphan,
-          loaded, reconciled, sandboxOk, pending, restarts, launchedEnded>>
+          loaded, reconciled, sandboxOk, pending, restarts, launchedEnded, branches>>
 
 Events == {1, 2}
 Terminal == {"released", "failed", "budget_exhausted", "stage_passed"}
-CI == {"publishing", "awaiting_ci", "verdict_pass", "verdict_fail"}
+CI == {"publishing", "awaiting_ci", "ci_unavailable", "verdict_pass", "verdict_fail", "ci_timeout"}
 Live == {"claimed", "running", "blocked", "retrying"} \cup CI
 
 StatusOf(p) ==
@@ -45,7 +46,7 @@ Init ==
     /\ marker = [e \in Events |-> "none"]
     /\ cur = "none" /\ orphan = FALSE
     /\ loaded = TRUE /\ reconciled = TRUE /\ sandboxOk = TRUE
-    /\ pending = 0 /\ restarts = 0 /\ launchedEnded = FALSE
+    /\ pending = 0 /\ restarts = 0 /\ launchedEnded = FALSE /\ branches = {}
 
 \* Moves the run to a live phase and posts its marker.
 Go(p) == ph' = p /\ marker' = [marker EXCEPT ![run] = StatusOf(p)]
@@ -70,7 +71,8 @@ EndStage(c) ==
                 ELSE /\ attempt' = attempt + 1 /\ cur' = c
                      /\ Go("retry") /\ UNCHANGED <<run, endAs>>
 
-Fixed == <<ticket, event, orphan, loaded, reconciled, sandboxOk, pending, restarts>>
+Environment == <<ticket, event, orphan, loaded, reconciled, sandboxOk, pending, restarts>>
+Fixed == <<Environment, branches>>
 
 \* Dispatch claims only after the tick's ledger read, which adopts or
 \* releases a reserved run first.
@@ -104,15 +106,35 @@ StagePasses ==
 
 Published ==
     /\ ph = "publishing" /\ Go("awaiting_ci")
-    /\ UNCHANGED <<run, endAs, attempt, tokens, cur, launchedEnded>> /\ UNCHANGED Fixed
+    /\ branches' = branches \cup {run}
+    /\ UNCHANGED <<run, endAs, attempt, tokens, cur, launchedEnded>> /\ UNCHANGED Environment
 
 CollectCI ==
     /\ ph = "awaiting_ci"
     /\ \E result \in {"verdict_pass", "verdict_fail"} : Go(result)
     /\ UNCHANGED <<run, endAs, attempt, tokens, cur, launchedEnded>> /\ UNCHANGED Fixed
 
+CIUnavailable ==
+    /\ ph = "awaiting_ci" /\ Go("ci_unavailable")
+    /\ UNCHANGED <<run, endAs, attempt, tokens, cur, launchedEnded>> /\ UNCHANGED Fixed
+
+RetryCI ==
+    /\ ph = "ci_unavailable" /\ Go("awaiting_ci")
+    /\ UNCHANGED <<run, endAs, attempt, tokens, cur, launchedEnded>> /\ UNCHANGED Fixed
+
+CIDeadline ==
+    /\ ph \in {"awaiting_ci", "ci_unavailable"} /\ Go("ci_timeout")
+    /\ UNCHANGED <<run, endAs, attempt, tokens, cur, launchedEnded>> /\ UNCHANGED Fixed
+
+Cleanup ==
+    /\ \E e \in Events :
+        /\ e \in branches /\ marker[e] \in Terminal
+        /\ branches' = branches \ {e}
+    /\ UNCHANGED <<ticket, event, run, ph, endAs, attempt, tokens, marker, cur,
+                   orphan, loaded, reconciled, sandboxOk, pending, restarts, launchedEnded>>
+
 StoreVerdict ==
-    /\ ph \in {"verdict_pass", "verdict_fail"}
+    /\ ph \in {"verdict_pass", "verdict_fail", "ci_timeout"}
     /\ Finish(IF ph = "verdict_pass" THEN "stage_passed" ELSE "failed", "none")
     /\ UNCHANGED <<attempt, tokens, launchedEnded>> /\ UNCHANGED Fixed
 
@@ -143,14 +165,14 @@ PostEnd ==
 SandboxStops ==
     /\ cur = "stopping" /\ cur' = "none"
     /\ UNCHANGED <<ticket, event, run, ph, endAs, attempt, tokens, marker,
-                   orphan, loaded, reconciled, sandboxOk, pending, restarts, launchedEnded>>
+                   orphan, loaded, reconciled, sandboxOk, pending, restarts, launchedEnded, branches>>
 
 Restart ==
-    /\ restarts < 1 /\ restarts' = restarts + 1
+    /\ restarts < MaxRestarts /\ restarts' = restarts + 1
     /\ run' = 0 /\ ph' = "none" /\ endAs' = "none"
     /\ orphan' = (orphan \/ cur # "none") /\ cur' = "none"
     /\ loaded' = FALSE /\ reconciled' = FALSE
-    /\ UNCHANGED <<ticket, event, attempt, tokens, marker, sandboxOk, pending, launchedEnded>>
+    /\ UNCHANGED <<ticket, event, attempt, tokens, marker, sandboxOk, pending, launchedEnded, branches>>
 
 LiveEvent == {e \in Events : marker[e] \in Live}
 
@@ -163,7 +185,7 @@ Recover ==
         /\ reconciled' = ok /\ orphan' = (orphan /\ ~ok)
     /\ pending' = IF LiveEvent = {} THEN 0 ELSE CHOOSE x \in LiveEvent : TRUE
     /\ UNCHANGED <<ticket, event, run, ph, endAs, attempt, tokens, marker, cur,
-                   sandboxOk, restarts, launchedEnded>>
+                   sandboxOk, restarts, launchedEnded, branches>>
 
 \* #discover, #settleClaims and #adoptExistingRun rebuild the run from its marker.
 Adopt ==
@@ -189,33 +211,33 @@ Adopt ==
                                [] m = "blocked" -> "blocked"
                                [] m = "retrying" -> "retry"
                                [] m \in CI -> m
-    /\ UNCHANGED <<ticket, event, cur, orphan, loaded, reconciled, sandboxOk, restarts, launchedEnded>>
+    /\ UNCHANGED <<ticket, event, cur, orphan, loaded, reconciled, sandboxOk, restarts, launchedEnded, branches>>
 
 \* The preflight retries the reconcile until every leftover is stopped.
 Reconcile ==
     /\ loaded /\ ~reconciled /\ reconciled' = TRUE /\ orphan' = FALSE
     /\ UNCHANGED <<ticket, event, run, ph, endAs, attempt, tokens, marker, cur,
-                   loaded, sandboxOk, pending, restarts, launchedEnded>>
+                   loaded, sandboxOk, pending, restarts, launchedEnded, branches>>
 
 YouRemoveLabel ==
     /\ ticket = "ready" /\ ticket' = "gone"
     /\ UNCHANGED <<event, run, ph, endAs, attempt, tokens, marker, cur, orphan,
-                   loaded, reconciled, sandboxOk, pending, restarts, launchedEnded>>
+                   loaded, reconciled, sandboxOk, pending, restarts, launchedEnded, branches>>
 
 YouRelabel ==
     /\ AllowRelabel /\ event = 1 /\ event' = 2 /\ ticket' = "ready"
     /\ UNCHANGED <<run, ph, endAs, attempt, tokens, marker, cur, orphan,
-                   loaded, reconciled, sandboxOk, pending, restarts, launchedEnded>>
+                   loaded, reconciled, sandboxOk, pending, restarts, launchedEnded, branches>>
 
 SandboxBreaks ==
     /\ sandboxOk /\ sandboxOk' = FALSE
     /\ UNCHANGED <<ticket, event, run, ph, endAs, attempt, tokens, marker, cur,
-                   orphan, loaded, reconciled, pending, restarts, launchedEnded>>
+                   orphan, loaded, reconciled, pending, restarts, launchedEnded, branches>>
 
 SandboxHeals ==
     /\ ~sandboxOk /\ sandboxOk' = TRUE
     /\ UNCHANGED <<ticket, event, run, ph, endAs, attempt, tokens, marker, cur,
-                   orphan, loaded, reconciled, pending, restarts, launchedEnded>>
+                   orphan, loaded, reconciled, pending, restarts, launchedEnded, branches>>
 
 Idle ==
     /\ loaded /\ run = 0 /\ cur = "none" /\ pending = 0
@@ -224,12 +246,17 @@ Idle ==
 
 Next ==
     \/ Admit \/ Launch \/ StagePasses \/ Published \/ CollectCI \/ StoreVerdict
+    \/ CIUnavailable \/ RetryCI \/ CIDeadline \/ Cleanup
     \/ StageRefuses \/ StageFails \/ StageStalls
     \/ Release \/ PostEnd \/ SandboxStops \/ Restart \/ Recover \/ Adopt \/ Reconcile
     \/ YouRemoveLabel \/ YouRelabel \/ SandboxBreaks \/ SandboxHeals \/ Idle
 
 \* Adoption's reads succeed eventually.
-Spec == Init /\ [][Next]_vars /\ WF_vars(Adopt)
+Spec == Init /\ [][Next]_vars /\ WF_vars(Adopt) /\ WF_vars(Recover)
+        /\ WF_vars(Published) /\ WF_vars(CIDeadline) /\ WF_vars(StoreVerdict)
+        /\ WF_vars(Release) /\ WF_vars(Cleanup)
+
+CIEnds == \A e \in Events : marker[e] \in CI ~> (marker[e] \in Terminal /\ e \notin branches)
 
 \* Never two sandboxes running a stage for one issue.
 OneSandboxPerIssue == ~(orphan /\ cur # "none") /\ (ph \in CI => cur = "none")

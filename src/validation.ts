@@ -41,6 +41,7 @@ export type ValidationState = {
 	readonly round: number;
 	readonly originalBase: GitSha;
 	baseSha: GitSha;
+	rebaseSha?: GitSha;
 	baseResolved: boolean;
 	publication: Publication | null;
 	dispatchTry: number;
@@ -121,6 +122,8 @@ export function publishedSuite(input: {
 export type CiRun = {
 	readonly id: number;
 	readonly headSha: GitSha;
+	readonly headBranch: string;
+	readonly completedAt: string | null;
 	readonly title: string;
 	readonly status: string;
 	readonly conclusion: string | null;
@@ -135,6 +138,8 @@ export function parseCiRun(value: JsonValue | undefined): CiRun | null {
 	const object = objectOf(value);
 	const id = countOf(fieldOf(object, "id"));
 	const headSha = textOf(fieldOf(object, "head_sha"));
+	const headBranch = textOf(fieldOf(object, "head_branch"));
+	const completedAt = textOf(fieldOf(object, "updated_at"));
 	const title = textOf(fieldOf(object, "display_title"));
 	const status = textOf(fieldOf(object, "status"));
 	const rawConclusion = fieldOf(object, "conclusion");
@@ -154,6 +159,8 @@ export function parseCiRun(value: JsonValue | undefined): CiRun | null {
 		id < 1 ||
 		headSha === null ||
 		!isGitSha(headSha) ||
+		headBranch === null ||
+		(completedAt !== null && !Number.isFinite(Date.parse(completedAt))) ||
 		title === null ||
 		status === null ||
 		(rawConclusion !== null && conclusion === null) ||
@@ -169,6 +176,8 @@ export function parseCiRun(value: JsonValue | undefined): CiRun | null {
 	return {
 		id,
 		headSha,
+		headBranch,
+		completedAt,
 		title,
 		status,
 		conclusion,
@@ -188,6 +197,7 @@ export function matchesCiRun(
 ): boolean {
 	return (
 		run.title === `gates ${candidate} ${nonce}` &&
+		run.headBranch === "main" &&
 		run.event === "workflow_dispatch" &&
 		run.path === ".github/workflows/ci.yml" &&
 		run.actor === CONTROLLER_LOGIN &&
@@ -235,6 +245,7 @@ export function collectVerdict(input: {
 		baseSha: input.baseSha,
 		pass:
 			matchesCiRun(input.run, input.candidateSha, input.nonce, 0) &&
+			input.run.headSha === input.baseSha &&
 			input.run.status === "completed" &&
 			input.run.conclusion === "success" &&
 			fieldOf(value, "version") === 2 &&
@@ -289,6 +300,8 @@ export function parseValidationState(
 	const round = countOf(fieldOf(object, "round"));
 	const originalBase = textOf(fieldOf(object, "originalBase"));
 	const baseSha = textOf(fieldOf(object, "baseSha"));
+	const rawRebase = fieldOf(object, "rebaseSha");
+	const rebaseSha = textOf(rawRebase);
 	const dispatchTry = countOf(fieldOf(object, "dispatchTry"));
 	const rawAt = fieldOf(object, "dispatchedAt");
 	const dispatchedAt = rawAt === null ? null : countOf(rawAt);
@@ -314,6 +327,7 @@ export function parseValidationState(
 		!isGitSha(originalBase) ||
 		baseSha === null ||
 		!isGitSha(baseSha) ||
+		(rawRebase !== undefined && (rebaseSha === null || !isGitSha(rebaseSha))) ||
 		dispatchTry === null ||
 		dispatchTry > 2 ||
 		(rawAt !== null && dispatchedAt === null) ||
@@ -349,7 +363,7 @@ export function parseValidationState(
 		counts[key] = Number(value);
 	}
 
-	return {
+	const state: ValidationState = {
 		version: 1,
 		startedAt,
 		deadline,
@@ -363,4 +377,8 @@ export function parseValidationState(
 		baseResolved: fieldOf(object, "baseResolved") === true,
 		counters: counts,
 	};
+
+	if (rebaseSha !== null && isGitSha(rebaseSha)) state.rebaseSha = rebaseSha;
+
+	return state;
 }

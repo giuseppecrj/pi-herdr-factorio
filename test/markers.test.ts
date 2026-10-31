@@ -399,6 +399,34 @@ describe("marker v2", () => {
 			marker: marker(),
 		});
 	});
+	it("binds v2 branch, candidate and CI fields to issue, run and round", () => {
+		for (const change of [
+			{ branch: `factory/run/999-${runId.slice(0, 12)}-r2` },
+			{ branch: `factory/run/14-${"f".repeat(12)}-r2` },
+			{ branch: `factory/run/14-${runId.slice(0, 12)}-r1` },
+			{ branch: null },
+			{ candidate: null },
+		])
+			assert.equal(
+				parseMarker(
+					formatMarker(
+						marker({
+							v: 2,
+							branch: `factory/run/14-${runId.slice(0, 12)}-r2`,
+							candidate: sha("d".repeat(40)),
+							round: 2,
+							ciRun: 123,
+							...change,
+						}),
+					),
+				).kind,
+				"corrupt",
+			);
+		assert.equal(
+			parseMarker(formatMarker(marker({ v: 2, ciRun: 123 }))).kind,
+			"corrupt",
+		);
+	});
 	it("keeps a fully populated v2 marker below the 4096-byte cap", () => {
 		const value = marker({
 			v: 2,

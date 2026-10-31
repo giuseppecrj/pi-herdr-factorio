@@ -17,6 +17,8 @@ import {
 import { prepareRepairTree, readPatch } from "../../../src/build.ts";
 import { acceptanceEntries } from "../../../src/accept.ts";
 import { digestOf, isDigest } from "../../../src/run.ts";
+import { fieldOf, objectOf, parseJson, textOf } from "../../../server/sandbox/json.ts";
+import { isGitSha } from "../../../src/workflow.ts";
 import {
 	launchSandbox,
 	locateBundle,
@@ -89,9 +91,14 @@ await prepareRepairTree(
 assert.equal(existsSync(join(workspace, "test/acceptance")), false);
 assert.equal(existsSync(join(workspace, ".git")), false);
 assert.equal(existsSync(join(workspace, "node_modules")), false);
-const verdict = JSON.parse(
+
+const verdict = objectOf(parseJson(
 	readFileSync(join(stateDir, "validation", id, "verdict.json"), "utf8"),
-);
+));
+
+const candidateSha = textOf(fieldOf(verdict, "candidateSha"));
+
+assert.ok(candidateSha !== null && isGitSha(candidateSha));
 const bundle = await locateBundle(SANDBOX_ROOT);
 const arch = detectArch(process.arch);
 assert.ok(bundle && arch);
@@ -171,12 +178,15 @@ try {
 	launched.child.stdin?.end(
 		JSON.stringify({
 			repo: contract.contract.base.repo,
-			candidate: verdict.candidateSha,
+			candidate: candidateSha,
 			issue: contract.contract.issue,
 			check: acceptance.suite.files[0]?.path,
-			fingerprints: acceptance.suite.files.map((file) =>
-				digestOf(file.content),
-			),
+			fingerprints: [
+				...acceptance.suite.files.map((file) => digestOf(file.content)),
+				...acceptanceEntries(acceptance.suite, canary)
+					.filter(([path]) => path.startsWith("checks/"))
+					.map(([, bytes]) => digestOf(bytes)),
+			],
 			feedback,
 		}),
 	);
@@ -200,7 +210,7 @@ try {
 		seen.gitEntries === 0 &&
 		seen.acceptancePresent === false &&
 		seen.feedbackMatches &&
-		seen.npmGithub.every((code) => code !== 0) &&
+		seen.npmGithub.every((code: number | null) => code !== 0) &&
 		seen.direct === "denied" &&
 		seen.gateway === 403 &&
 		seen.hostedTools === 403 &&
@@ -213,7 +223,7 @@ try {
 				...seen,
 				bundle: bundle.digest,
 				runId: id,
-				candidateSha: verdict.candidateSha,
+				candidateSha,
 				acceptanceDigest: acceptance.receipt.acceptanceDigest,
 				modelRequests: models.length,
 				exit,

@@ -201,8 +201,22 @@ describe("advance: validate failure and bounded repair", () => {
 		assert.equal(run.contractDigest, contractDigest);
 		assert.equal(run.acceptanceDigest, acceptanceDigest);
 		assert.equal(run.candidateSha, undefined);
+		assert.equal(run.gateSha, undefined);
 		assert.equal(run.ciRunId, undefined);
 		assert.equal(run.heldoutDigest, undefined);
+	});
+
+	it("clears the previously validated gate on review repair", () => {
+		const reviewed = reachReview("first");
+
+		assert.equal(reviewed.gateSha, currentHead.currentGate);
+
+		const repaired = apply(reviewed, {
+			kind: "reviewed",
+			blockingFindings: ["repair"],
+		});
+
+		assert.equal(repaired.gateSha, undefined);
 	});
 
 	it("rejects a passing verdict for another head with the same patch", () => {
@@ -216,6 +230,20 @@ describe("advance: validate failure and bounded repair", () => {
 			{ kind: "invalid", reason: "verdict is bound to different CI inputs" },
 		);
 	});
+
+	for (const change of [
+		{ ciRunId: 124 },
+		{ acceptanceDigest: patch("other suite") },
+	])
+		it(`rejects independently mismatched validate input ${JSON.stringify(change)}`, () => {
+			assert.deepEqual(
+				advance(reachValidate("first"), {
+					kind: "validated",
+					verdict: { ...passingVerdict(patch("first")), ...change },
+				}),
+				{ kind: "invalid", reason: "verdict is bound to different CI inputs" },
+			);
+		});
 
 	it("lets a repaired patch pass validate and continue", () => {
 		const repaired = apply(
