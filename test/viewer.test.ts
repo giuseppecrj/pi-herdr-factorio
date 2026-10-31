@@ -92,11 +92,40 @@ test("repair claims preserve their counter without validation and display only t
 			),
 		);
 		assert.ok(
+			!viewed.gaps.some(
+				(entry) =>
+					entry.source.includes("review/") &&
+					entry.source.includes("r0/receipt.json"),
+			),
+			"failed CI never reached review in round zero",
+		);
+		assert.ok(
 			viewed.gaps.some(
 				(entry) =>
 					entry.source.includes("review/") &&
 					entry.source.includes("r1/receipt.json"),
 			),
+		);
+	} finally {
+		await rm(f.root, { recursive: true, force: true });
+	}
+});
+
+test("round-qualified sessions keep their stage and round in usage and timelines", async () => {
+	const f = await fixtureState();
+
+	try {
+		await fs.rename(f.stage, join(f.root, "stages", runId, "build-r1-1"));
+		const viewed = await readViewerRun(f.root, runId);
+
+		assert.ok(viewed.usage.sessions.length > 0);
+		assert.ok(
+			viewed.usage.sessions.every((session) => session.stage === "build"),
+		);
+		assert.ok(
+			viewed.usage.sessions
+				.flatMap((session) => session.timeline)
+				.every((entry) => entry.round === 1),
 		);
 	} finally {
 		await rm(f.root, { recursive: true, force: true });

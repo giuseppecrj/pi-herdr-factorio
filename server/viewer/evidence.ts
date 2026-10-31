@@ -457,8 +457,12 @@ export async function readViewerRun(
 
 		const id = field(header, "id") ?? source;
 
-		const stage =
-			/\/(specify|accept|build|review)-\d+/.exec(path)?.[1] ?? "unknown";
+		const identity = /\/(specify|accept|build|review)(?:-r([0-2]))?-\d+/.exec(
+			path,
+		);
+
+		const stage = identity?.[1] ?? "unknown";
+		const round = identity?.[2] === undefined ? null : Number(identity[2]);
 
 		const sessionTimeline: TimelineEvent[] = [];
 
@@ -476,6 +480,8 @@ export async function readViewerRun(
 						field(message, "stopReason") ??
 						"",
 					atOf(record),
+					null,
+					round,
 				),
 			);
 
@@ -674,6 +680,23 @@ export async function readViewerRun(
 	if (claim?.stage === "review" || (claim?.round ?? 0) > 0) {
 		for (let round = 0; round <= (claim?.round ?? 0); round++) {
 			if (round === (claim?.round ?? 0) && claim?.stage !== "review") continue;
+
+			if (round < (claim?.round ?? 0)) {
+				const prior = objectOf(
+					await io.json(
+						join(validationDir(root, runId, round), "verdict.json"),
+					),
+				);
+
+				const attempted = receiptPaths.some((path) =>
+					relative(stageRoot, path)
+						.split(sep)[0]
+						?.startsWith(`review-r${round}-`),
+				);
+
+				if (fieldOf(prior, "pass") !== true && !attempted) continue;
+			}
+
 			const path = join(root, "review", runId, `r${round}`, "receipt.json");
 			const receipt = objectOf(await io.json(path));
 			const seats = arrayOf(fieldOf(receipt, "seats"));

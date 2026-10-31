@@ -321,11 +321,6 @@ const NPM_ROUTE: Route = {
 	meter: null,
 };
 
-/**
- * The v1 table: the stage model on `model-openai`, the fallback model on a
- * closed `model-xai` when one is set, and read-only npm. Model ids are bare,
- * without the provider prefix, because that is what the request body names.
- */
 export function builtinTable(input: {
 	stage: string;
 	runId: string;
