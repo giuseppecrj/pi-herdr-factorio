@@ -49,8 +49,10 @@ import {
 	writeStatus,
 } from "./controller.ts";
 import { sandboxExecutor } from "./sandbox.ts";
+import { runGatesCli } from "./gates.ts";
 
 export const USAGE = `Usage:
+  node server/cli.ts gates --repository <dir> --gate-sha <sha> --candidate-sha <sha> --nonce <id> --output <dir> [--runner docker|local]
   node server/cli.ts workflow-check --json --repo <owner/name> [--ref <branch>] [--reload-ref <branch>]
   node server/cli.ts status --json --repo <owner/name> [--ref <branch>] [--state-dir <dir>]
   node server/cli.ts admit --json --repo <owner/name> --issue <number> --state-dir <dir>
@@ -526,6 +528,8 @@ export async function runCli(
 		...caller,
 		stderr: (text) => caller.stderr(redactCredentials(text)),
 	};
+
+	if (argv[0] === "gates") return runGatesCli(argv.slice(1), io);
 
 	const parsed = parse(argv);
 

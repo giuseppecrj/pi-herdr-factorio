@@ -1,0 +1,12 @@
+diff --git a/test/acceptance/123/checks/scenario.test.ts b/test/acceptance/123/checks/scenario.test.ts
+new file mode 100644
+index 0000000..7e5fd4f
+--- /dev/null
++++ b/test/acceptance/123/checks/scenario.test.ts
+@@ -0,0 +1,6 @@
++import assert from 'node:assert/strict';
++import {test} from 'node:test';
++const n: number = 'not a number';
++test('PRIVATE-TITLE', () => {
++  assert.equal(1, 2, "PRIVATE-ASSERTION");
++});

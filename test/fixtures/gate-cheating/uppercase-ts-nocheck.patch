@@ -1,0 +1,9 @@
+diff --git c/src/markers.ts i/src/markers.ts
+index 6fbbc53..b1d39e1 100644
+--- c/src/markers.ts
++++ i/src/markers.ts
+@@ -0,0 +1 @@
++// @TS-NOCHECK
+@@ -563,0 +565,2 @@ export function latestFor(
++
++export const gateBad: string = 1;

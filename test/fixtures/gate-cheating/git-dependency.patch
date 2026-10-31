@@ -1,0 +1,8 @@
+diff --git a/package.json b/package.json
+index b3e79b0..fe8f97d 100644
+--- a/package.json
++++ b/package.json
+@@ -65 +65,2 @@
+-    "yaml": "^2.9.0"
++    "yaml": "^2.9.0",
++    "f07b-git": "git+https://github.com/example/repo.git"

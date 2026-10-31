@@ -1967,6 +1967,7 @@ export async function runVisibleTests(
 	base: string,
 	patch: string | Uint8Array,
 	command: string,
+	replacesTests: readonly { readonly path: string }[] = [],
 ): Promise<VisibleTests> {
 	const start = Date.now();
 	const dir = join(config.stateDir, "visible-tests", config.runId);
@@ -1981,7 +1982,12 @@ export async function runVisibleTests(
 
 	try {
 		await patchedTree(base, workspace, patch);
-		command = trustedVisiblePlan(base, workspace, command).command;
+		command = trustedVisiblePlan(
+			base,
+			workspace,
+			command,
+			replacesTests,
+		).command;
 
 		const table = builtinTable({
 			stage: "build",
@@ -2288,6 +2294,10 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 						}
 					}
 
+					const contract = await fileRunFiles(config.stateDir).readContract(
+						runId,
+					);
+
 					const tests = await (config.visibleTests ?? runVisibleTests)(
 						{
 							stateDir: config.stateDir,
@@ -2306,6 +2316,10 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 						join(config.stateDir, "pristine", runId),
 						kept.patch,
 						kept.receipt.testCommand,
+						contract.kind === "found" &&
+							contract.digest === kept.receipt.contractDigest
+							? (contract.contract.replacesTests ?? [])
+							: [],
 					);
 
 					kept = finishPatch(

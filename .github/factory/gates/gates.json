@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "checks": [
+    { "name": "typecheck", "argv": ["node", "/g/tooling/node_modules/typescript/bin/tsc", "--noEmit", "-p", "/w/tsconfig.json"] },
+    { "name": "lint", "argv": ["/g/tooling/node_modules/.bin/oxlint", "--disable-nested-config", "--ignore-path", "/dev/null", "--ignore-pattern", "test/acceptance/**", "-c", "/g/lint.json", "src", "extension", "server", "test"] },
+    { "name": "format", "argv": ["/g/tooling/node_modules/.bin/biome", "format", "--config-path", "/w/biome.json", "src", "extension", "server", "test"] }
+  ],
+  "testGlobs": ["test/*.test.ts", "test/sandbox/*.cases.ts"]
+}

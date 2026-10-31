@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { buildPrompt } from "../src/build.ts";
 import {
 	existsSync,
 	lstatSync,
@@ -118,6 +119,47 @@ describe("specify output: contract schema", () => {
 		assert.deepEqual(parsed.draft.evidence, [
 			{ path: "server/cli.ts", start: 10, end: 20, fact: "parse() reads argv" },
 		]);
+	});
+
+	it("permits only exact existing tests as intentional replacements", () => {
+		const path = "test/old.test.ts";
+
+		const replacements = [{ path, reason: "Ticket changes the old behavior" }];
+
+		const parsed = parseSpecifyOutput(
+			output({ ...CONTRACT, replacesTests: replacements }),
+			new Set([...files, path]),
+		);
+
+		assert.ok(parsed.kind === "contract");
+		assert.deepEqual(parsed.draft.replacesTests, replacements);
+
+		for (const path of [
+			"../test/old.test.ts",
+			"test/acceptance/a.test.ts",
+			"test",
+			"src/run.ts",
+			"test/missing.test.ts",
+		]) {
+			assert.equal(
+				parseSpecifyOutput(
+					output({ ...CONTRACT, replacesTests: [{ path, reason: "Change" }] }),
+					new Set([...files, "test/old.test.ts"]),
+				).kind,
+				"malformed",
+			);
+		}
+
+		assert.equal(
+			parseSpecifyOutput(
+				output({
+					...CONTRACT,
+					replacesTests: [...replacements, ...replacements],
+				}),
+				new Set([...files, path]),
+			).kind,
+			"malformed",
+		);
 	});
 
 	it("accepts one fenced JSON block", () => {
@@ -281,6 +323,21 @@ describe("contract bytes and digest", () => {
 		link: null,
 		...parsed.draft,
 	};
+
+	it("build prompt carries exact contract replacement authorization", () => {
+		const replacesTests = [
+			{ path: "test/old.test.ts", reason: "intentional behavior change" },
+		];
+
+		const prompt = buildPrompt({
+			contract: { ...contract, replacesTests },
+			guidance: { general: "", stages: {} },
+			inlined: [],
+		});
+
+		assert.ok(prompt.includes(JSON.stringify(replacesTests)));
+		assert.match(prompt, /replacesTests/);
+	});
 
 	it("binds the base commit, the snapshot and the run, with a stable digest", () => {
 		const bytes = contractBytes(contract);

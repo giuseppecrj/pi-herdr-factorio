@@ -65,6 +65,8 @@ export type Evidence = Cite & { readonly fact: string };
 
 export type Criterion = { readonly id: string; readonly text: string };
 
+export type ReplacedTest = { readonly path: string; readonly reason: string };
+
 export type ContractDraft = {
 	readonly summary: string;
 	readonly behavior: NonEmpty<string>;
@@ -74,6 +76,7 @@ export type ContractDraft = {
 	readonly limits: readonly string[];
 	readonly files: readonly string[];
 	readonly evidence: readonly Evidence[];
+	readonly replacesTests?: readonly ReplacedTest[];
 };
 
 export type Link = {
@@ -331,13 +334,44 @@ function contractOf(
 		"limits",
 		"files",
 		"evidence",
+		"replacesTests",
 	]);
+
+	const replacements = fieldOf(value, "replacesTests");
+
+	const replacesTests = listOf(replacements, 0, MAX_FILES).map((item) => {
+		const entry = only(objectOf(item) ?? reject("bad_field"), [
+			"path",
+			"reason",
+		]);
+
+		const path = lineOf(fieldOf(entry, "path")) ?? reject("bad_field");
+		const reason = lineOf(fieldOf(entry, "reason")) ?? reject("bad_field");
+
+		if (
+			!isRepoPath(path) ||
+			!path.startsWith("test/") ||
+			path.startsWith("test/acceptance/") ||
+			!/\.(?:test|cases)\.[cm]?[jt]s$/.test(path)
+		)
+			reject("bad_field");
+
+		if (!files.has(path)) reject("unknown_path");
+
+		return { path, reason };
+	});
+
+	if (
+		new Set(replacesTests.map((entry) => entry.path)).size !==
+		replacesTests.length
+	)
+		reject("bad_field");
 
 	const paths = linesOf(fieldOf(value, "files"), 0, MAX_FILES);
 
 	if (!paths.every(isRepoPath)) reject("bad_field");
 
-	return {
+	const draft: ContractDraft = {
 		summary: lineOf(fieldOf(value, "summary")) ?? reject("bad_field"),
 		behavior: nonEmpty(linesOf(fieldOf(value, "behavior"), 1, MAX_BEHAVIOR)),
 		exclusions: linesOf(fieldOf(value, "exclusions"), 0, MAX_LIST),
@@ -353,6 +387,8 @@ function contractOf(
 			evidenceOf(item, files),
 		),
 	};
+
+	return replacements === undefined ? draft : { ...draft, replacesTests };
 }
 
 function questionsOf(
@@ -522,6 +558,7 @@ export function contractBytes(contract: Contract): string {
 		limits: contract.limits,
 		files: contract.files,
 		evidence: contract.evidence,
+		replacesTests: contract.replacesTests,
 	};
 
 	return `${JSON.stringify(ordered, null, "\t")}\n`;
@@ -1038,6 +1075,8 @@ A contract, when the issue and the repository settle every decision that changes
 
 Questions, when a decision that changes behavior is open and the repository does not answer it:
 {"kind":"questions","questions":[{"text":"<one specific question>","cites":[{"path":"<repo path>","start":<line>,"end":<line>}]}]}
+
+Optional contract field: "replacesTests":[{"path":"test/existing.test.ts","reason":"One-line behavior change"}]. Include it only when the ticket explicitly changes behavior pinned by these existing tests. Name exact existing test files, never a directory or acceptance files. All unnamed main tests remain mandatory.
 
 Rules: every string is one line of at most ${LINE_MAX} characters. behavior has 1-${MAX_BEHAVIOR} items, acceptance 1-${MAX_CRITERIA}, questions 1-${MAX_QUESTIONS}, cites at most ${MAX_CITES} per question. Every cited path must exist in the checkout. Ask a question only for a decision the repository cannot settle, and never ask what the repository already answers.`;
 

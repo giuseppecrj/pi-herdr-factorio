@@ -1,0 +1,14 @@
+diff --git c/test/acceptance/124/checks/scenario.test.ts i/test/acceptance/124/checks/scenario.test.ts
+new file mode 100644
+index 0000000..8edc7ba
+--- /dev/null
++++ i/test/acceptance/124/checks/scenario.test.ts
+@@ -0,0 +1,8 @@
++import assert from "node:assert/strict";
++import { test } from "node:test";
++import { isDigest } from "../../../../src/run.ts";
++
++test("rejects a number", () => {
++	// @ts-expect-error a number is not a digest string
++	assert.equal(isDigest(1), false);
++});

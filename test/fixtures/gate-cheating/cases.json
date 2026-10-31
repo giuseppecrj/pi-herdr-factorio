@@ -1,0 +1,340 @@
+[
+	{
+		"name": "new-thing",
+		"expected": "passed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "known-good",
+		"expected": "passed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "wrong-behavior",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "noop-scripts",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "deleted-regression",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "weakened-typecheck",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "weakened-lint",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "weakened-format",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "assert-monkeypatch",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "exit-import",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "really-exit",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "exit-hook",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "skip",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "todo",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "only",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "npmrc",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "git-dependency",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "named-replacement",
+		"expected": "passed",
+		"replacements": [
+			{
+				"path": "test/specify.test.ts",
+				"reason": "Do not count a trailing empty line in inlined file totals"
+			},
+			{
+				"path": "test/orchestrator.test.ts",
+				"reason": "Do not count a trailing empty line in inlined file totals"
+			}
+		],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "unnamed-replacement",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "new-test-fails",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "lint-ignore",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "stream-forgery",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "serializer-forgery",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "forgery-control",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "suppression-types",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "suppression-lint",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "suppression-format",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "deleted-replacement",
+		"expected": "failed",
+		"replacements": [
+			{
+				"path": "test/specify.test.ts",
+				"reason": "behavior change"
+			}
+		],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "heldout-pass",
+		"expected": "passed",
+		"replacements": [],
+		"heldout_dir": "test/acceptance/123",
+		"heldout_digest": "fef0d8926c2784831d47ed48f29bc8cfb7bcab0d73fc9fad213fbc0e8a70cc65"
+	},
+	{
+		"name": "heldout-fail",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "test/acceptance/123",
+		"heldout_digest": "0f66c4a7fa60f58b6517965984d74ded6ba65bff0993e1d3f37b8d03b14745af"
+	},
+	{
+		"name": "heldout-digest",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "test/acceptance/123",
+		"heldout_digest": "0000000000000000000000000000000000000000000000000000000000000000"
+	},
+	{
+		"name": "heldout-missing-result",
+		"expected": "passed",
+		"replacements": [],
+		"heldout_dir": "test/acceptance/123",
+		"heldout_digest": "fef0d8926c2784831d47ed48f29bc8cfb7bcab0d73fc9fad213fbc0e8a70cc65"
+	},
+	{
+		"name": "package-swap",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "registry-dependency",
+		"expected": "passed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "glob-dependency",
+		"expected": "passed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "helper-read-forgery",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "nul-direct-read-forgery",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "nul-ts-nocheck",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "alias-swap",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "acceptance-stash-lint",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "gutted-named-replacement",
+		"expected": "failed",
+		"replacements": [
+			{
+				"path": "test/specify.test.ts",
+				"reason": "Do not count a trailing empty line in inlined file totals"
+			},
+			{
+				"path": "test/orchestrator.test.ts",
+				"reason": "Do not count a trailing empty line in inlined file totals"
+			}
+		],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "heldout-expect-error",
+		"expected": "passed",
+		"replacements": [],
+		"heldout_dir": "test/acceptance/124",
+		"heldout_digest": "4dc163886e616056ac8e059faadd93e9ca87e1d683cba785fe9612acbe93eac0"
+	},
+	{
+		"name": "uppercase-ts-nocheck",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "line-separator-runtime",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	},
+	{
+		"name": "alias-swap-with-name",
+		"expected": "failed",
+		"replacements": [],
+		"heldout_dir": "",
+		"heldout_digest": ""
+	}
+]

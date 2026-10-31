@@ -1,0 +1,1081 @@
+{
+  "gateSha": "fa8cb3d28b92f816f3f03ab64a69297504e49cad",
+  "candidateSha": "f0017db8c1f4711b1e814246665f333c4ff4169b",
+  "changedFiles": [
+    "test/new-thing.test.ts"
+  ],
+  "manifestBlob": "a720546d100fcac9510c730ffc946a096e12bffe",
+  "manifestUnchanged": true,
+  "localFixtureExpectations": 35,
+  "unchangedPriorExpectations": 34,
+  "local": [
+    {
+      "name": "new-thing",
+      "candidateSha": "f0017db8c1f4711b1e814246665f333c4ff4169b",
+      "status": "passed",
+      "reason": null,
+      "checks": [
+        {
+          "name": "install",
+          "exitCode": 0
+        },
+        {
+          "name": "baseline_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "typecheck",
+          "exitCode": 0
+        },
+        {
+          "name": "lint",
+          "exitCode": 0
+        },
+        {
+          "name": "format",
+          "exitCode": 0
+        },
+        {
+          "name": "main_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "candidate_tests",
+          "exitCode": 0
+        }
+      ],
+      "wallMs": 68206
+    },
+    {
+      "name": "known-good",
+      "candidateSha": "2d589ede8a0ae23192f6c5c147f4665ddfb36537",
+      "status": "passed",
+      "reason": null,
+      "checks": [
+        {
+          "name": "install",
+          "exitCode": 0
+        },
+        {
+          "name": "baseline_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "typecheck",
+          "exitCode": 0
+        },
+        {
+          "name": "lint",
+          "exitCode": 0
+        },
+        {
+          "name": "format",
+          "exitCode": 0
+        },
+        {
+          "name": "main_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "candidate_tests",
+          "exitCode": 0
+        }
+      ],
+      "wallMs": 71503
+    },
+    {
+      "name": "wrong-behavior",
+      "candidateSha": "33b6b509245a051c3f993b690c9f559dc1613093",
+      "status": "failed",
+      "reason": null,
+      "checks": [
+        {
+          "name": "install",
+          "exitCode": 0
+        },
+        {
+          "name": "baseline_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "typecheck",
+          "exitCode": 0
+        },
+        {
+          "name": "lint",
+          "exitCode": 0
+        },
+        {
+          "name": "format",
+          "exitCode": 0
+        },
+        {
+          "name": "main_tests",
+          "exitCode": 1
+        },
+        {
+          "name": "candidate_tests",
+          "exitCode": 0
+        }
+      ],
+      "wallMs": 127870
+    },
+    {
+      "name": "noop-scripts",
+      "candidateSha": "54df2e79b090bed8a90b26c400526f2d01645699",
+      "status": "failed",
+      "reason": null,
+      "checks": [
+        {
+          "name": "install",
+          "exitCode": 0
+        },
+        {
+          "name": "baseline_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "typecheck",
+          "exitCode": 0
+        },
+        {
+          "name": "lint",
+          "exitCode": 0
+        },
+        {
+          "name": "format",
+          "exitCode": 0
+        },
+        {
+          "name": "main_tests",
+          "exitCode": 1
+        },
+        {
+          "name": "candidate_tests",
+          "exitCode": 0
+        }
+      ],
+      "wallMs": 128411
+    },
+    {
+      "name": "deleted-regression",
+      "candidateSha": "b99f857b897780e9b85fc07bf707c6e9aec9b087",
+      "status": "failed",
+      "reason": null,
+      "checks": [
+        {
+          "name": "install",
+          "exitCode": 0
+        },
+        {
+          "name": "baseline_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "typecheck",
+          "exitCode": 0
+        },
+        {
+          "name": "lint",
+          "exitCode": 0
+        },
+        {
+          "name": "format",
+          "exitCode": 0
+        },
+        {
+          "name": "main_tests",
+          "exitCode": 1
+        },
+        {
+          "name": "candidate_tests",
+          "exitCode": 0
+        }
+      ],
+      "wallMs": 128002
+    },
+    {
+      "name": "weakened-typecheck",
+      "candidateSha": "267fc8429ce3acf1fbdd2e425055143e945b29c1",
+      "status": "failed",
+      "reason": null,
+      "checks": [
+        {
+          "name": "install",
+          "exitCode": 0
+        },
+        {
+          "name": "baseline_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "typecheck",
+          "exitCode": 2
+        },
+        {
+          "name": "lint",
+          "exitCode": 0
+        },
+        {
+          "name": "format",
+          "exitCode": 0
+        },
+        {
+          "name": "main_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "candidate_tests",
+          "exitCode": 0
+        }
+      ],
+      "wallMs": 68400
+    },
+    {
+      "name": "weakened-lint",
+      "candidateSha": "0d4fe4581b6593285ff3cb703b9639ab05f81022",
+      "status": "failed",
+      "reason": null,
+      "checks": [
+        {
+          "name": "install",
+          "exitCode": 0
+        },
+        {
+          "name": "baseline_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "typecheck",
+          "exitCode": 0
+        },
+        {
+          "name": "lint",
+          "exitCode": 1
+        },
+        {
+          "name": "format",
+          "exitCode": 1
+        },
+        {
+          "name": "main_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "candidate_tests",
+          "exitCode": 0
+        }
+      ],
+      "wallMs": 68116
+    },
+    {
+      "name": "weakened-format",
+      "candidateSha": "8907b959b0c6ffe56d58a0ff5af97bdce2a8682d",
+      "status": "failed",
+      "reason": null,
+      "checks": [
+        {
+          "name": "install",
+          "exitCode": 0
+        },
+        {
+          "name": "baseline_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "typecheck",
+          "exitCode": 0
+        },
+        {
+          "name": "lint",
+          "exitCode": 0
+        },
+        {
+          "name": "format",
+          "exitCode": 1
+        },
+        {
+          "name": "main_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "candidate_tests",
+          "exitCode": 0
+        }
+      ],
+      "wallMs": 68399
+    },
+    {
+      "name": "assert-monkeypatch",
+      "candidateSha": "a9b9d2dc11fdb1126f94d75eed78797cf8c07b0a",
+      "status": "failed",
+      "reason": "runtime_patching",
+      "checks": [],
+      "wallMs": 130
+    },
+    {
+      "name": "exit-import",
+      "candidateSha": "a82075edf299138251ca1b8ef6fb7526c37f4800",
+      "status": "failed",
+      "reason": null,
+      "checks": [
+        {
+          "name": "install",
+          "exitCode": 0
+        },
+        {
+          "name": "baseline_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "typecheck",
+          "exitCode": 0
+        },
+        {
+          "name": "lint",
+          "exitCode": 1
+        },
+        {
+          "name": "format",
+          "exitCode": 0
+        },
+        {
+          "name": "main_tests",
+          "exitCode": 1
+        },
+        {
+          "name": "candidate_tests",
+          "exitCode": 0
+        }
+      ],
+      "wallMs": 50786
+    },
+    {
+      "name": "really-exit",
+      "candidateSha": "49e44f7cb0e0d5523aca20764eac8411a2d46b29",
+      "status": "failed",
+      "reason": null,
+      "checks": [
+        {
+          "name": "install",
+          "exitCode": 0
+        },
+        {
+          "name": "baseline_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "typecheck",
+          "exitCode": 2
+        },
+        {
+          "name": "lint",
+          "exitCode": 1
+        },
+        {
+          "name": "format",
+          "exitCode": 0
+        },
+        {
+          "name": "main_tests",
+          "exitCode": 1
+        },
+        {
+          "name": "candidate_tests",
+          "exitCode": 0
+        }
+      ],
+      "wallMs": 53673
+    },
+    {
+      "name": "exit-hook",
+      "candidateSha": "8fca5e22f92965ad906b1995488bae4f542ed114",
+      "status": "failed",
+      "reason": "runtime_patching",
+      "checks": [],
+      "wallMs": 122
+    },
+    {
+      "name": "skip",
+      "candidateSha": "e1a1356dd0aa67e6716c48d00f0ca61bd9e21cd0",
+      "status": "failed",
+      "reason": null,
+      "checks": [
+        {
+          "name": "install",
+          "exitCode": 0
+        },
+        {
+          "name": "baseline_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "typecheck",
+          "exitCode": 2
+        },
+        {
+          "name": "lint",
+          "exitCode": 0
+        },
+        {
+          "name": "format",
+          "exitCode": 0
+        },
+        {
+          "name": "main_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "candidate_tests",
+          "exitCode": 1
+        }
+      ],
+      "wallMs": 71614
+    },
+    {
+      "name": "todo",
+      "candidateSha": "b5dcc8cc2b10ce921d9dd659097659927a50fe39",
+      "status": "failed",
+      "reason": null,
+      "checks": [
+        {
+          "name": "install",
+          "exitCode": 0
+        },
+        {
+          "name": "baseline_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "typecheck",
+          "exitCode": 2
+        },
+        {
+          "name": "lint",
+          "exitCode": 0
+        },
+        {
+          "name": "format",
+          "exitCode": 0
+        },
+        {
+          "name": "main_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "candidate_tests",
+          "exitCode": 1
+        }
+      ],
+      "wallMs": 68344
+    },
+    {
+      "name": "only",
+      "candidateSha": "d5aa33ae02fb40464272c1d5c6f4e179203e2cfc",
+      "status": "failed",
+      "reason": null,
+      "checks": [
+        {
+          "name": "install",
+          "exitCode": 0
+        },
+        {
+          "name": "baseline_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "typecheck",
+          "exitCode": 2
+        },
+        {
+          "name": "lint",
+          "exitCode": 0
+        },
+        {
+          "name": "format",
+          "exitCode": 0
+        },
+        {
+          "name": "main_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "candidate_tests",
+          "exitCode": 1
+        }
+      ],
+      "wallMs": 68599
+    },
+    {
+      "name": "npmrc",
+      "candidateSha": "bb8d079ca75121ee14c62991bef461f646c82aa7",
+      "status": "failed",
+      "reason": "npmrc_changed",
+      "checks": [],
+      "wallMs": 97
+    },
+    {
+      "name": "git-dependency",
+      "candidateSha": "7312de7cb16b61a42f620469f54f31b612f84edb",
+      "status": "failed",
+      "reason": "invalid_dependency_spec",
+      "checks": [],
+      "wallMs": 114
+    },
+    {
+      "name": "named-replacement",
+      "candidateSha": "822e0e3936e4e75b73851a92ce64174ca5b6306c",
+      "status": "passed",
+      "reason": null,
+      "checks": [
+        {
+          "name": "install",
+          "exitCode": 0
+        },
+        {
+          "name": "baseline_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "typecheck",
+          "exitCode": 0
+        },
+        {
+          "name": "lint",
+          "exitCode": 0
+        },
+        {
+          "name": "format",
+          "exitCode": 0
+        },
+        {
+          "name": "main_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "candidate_tests",
+          "exitCode": 0
+        }
+      ],
+      "wallMs": 68591
+    },
+    {
+      "name": "unnamed-replacement",
+      "candidateSha": "a5aca750e71b6cac808fcfa4c723758ca02efeee",
+      "status": "failed",
+      "reason": null,
+      "checks": [
+        {
+          "name": "install",
+          "exitCode": 0
+        },
+        {
+          "name": "baseline_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "typecheck",
+          "exitCode": 0
+        },
+        {
+          "name": "lint",
+          "exitCode": 0
+        },
+        {
+          "name": "format",
+          "exitCode": 0
+        },
+        {
+          "name": "main_tests",
+          "exitCode": 1
+        },
+        {
+          "name": "candidate_tests",
+          "exitCode": 0
+        }
+      ],
+      "wallMs": 68352
+    },
+    {
+      "name": "new-test-fails",
+      "candidateSha": "91d2e735705082b84d2df545d8f2288279980772",
+      "status": "failed",
+      "reason": null,
+      "checks": [
+        {
+          "name": "install",
+          "exitCode": 0
+        },
+        {
+          "name": "baseline_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "typecheck",
+          "exitCode": 0
+        },
+        {
+          "name": "lint",
+          "exitCode": 0
+        },
+        {
+          "name": "format",
+          "exitCode": 0
+        },
+        {
+          "name": "main_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "candidate_tests",
+          "exitCode": 1
+        }
+      ],
+      "wallMs": 68393
+    },
+    {
+      "name": "lint-ignore",
+      "candidateSha": "feff600855cd70d9ef60314bd8791fcecbe69b2a",
+      "status": "failed",
+      "reason": null,
+      "checks": [
+        {
+          "name": "install",
+          "exitCode": 0
+        },
+        {
+          "name": "baseline_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "typecheck",
+          "exitCode": 0
+        },
+        {
+          "name": "lint",
+          "exitCode": 1
+        },
+        {
+          "name": "format",
+          "exitCode": 0
+        },
+        {
+          "name": "main_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "candidate_tests",
+          "exitCode": 0
+        }
+      ],
+      "wallMs": 68452
+    },
+    {
+      "name": "stream-forgery",
+      "candidateSha": "5b784f746e53a93c2bf05f0e65abf5212a931504",
+      "status": "failed",
+      "reason": "runtime_patching",
+      "checks": [],
+      "wallMs": 130
+    },
+    {
+      "name": "serializer-forgery",
+      "candidateSha": "41af166dc40a1f3ae7df3ffff60956f38b86a283",
+      "status": "failed",
+      "reason": "runtime_patching",
+      "checks": [],
+      "wallMs": 124
+    },
+    {
+      "name": "forgery-control",
+      "candidateSha": "f804c89d15319bc6bae6008de6ae28ba287f5a62",
+      "status": "failed",
+      "reason": null,
+      "checks": [
+        {
+          "name": "install",
+          "exitCode": 0
+        },
+        {
+          "name": "baseline_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "typecheck",
+          "exitCode": 0
+        },
+        {
+          "name": "lint",
+          "exitCode": 0
+        },
+        {
+          "name": "format",
+          "exitCode": 0
+        },
+        {
+          "name": "main_tests",
+          "exitCode": 1
+        },
+        {
+          "name": "candidate_tests",
+          "exitCode": 0
+        }
+      ],
+      "wallMs": 127965
+    },
+    {
+      "name": "suppression-types",
+      "candidateSha": "10d7cd8908cffd1b6c8c01ede8a06328f513894f",
+      "status": "failed",
+      "reason": "suppression_added",
+      "checks": [],
+      "wallMs": 109
+    },
+    {
+      "name": "suppression-lint",
+      "candidateSha": "0a35eb9b55178da58a9824941acc9112014cd504",
+      "status": "failed",
+      "reason": "suppression_added",
+      "checks": [],
+      "wallMs": 110
+    },
+    {
+      "name": "suppression-format",
+      "candidateSha": "550672082927ff5cb46cbe411be554d05d9386ba",
+      "status": "failed",
+      "reason": "suppression_added",
+      "checks": [],
+      "wallMs": 113
+    },
+    {
+      "name": "deleted-replacement",
+      "candidateSha": "826041fb5bb3ce0410c8ab731c668eb69219e8ef",
+      "status": "failed",
+      "reason": "replacement_deleted",
+      "checks": [],
+      "wallMs": 46
+    },
+    {
+      "name": "heldout-pass",
+      "candidateSha": "45c70785ef437f36f4cc64e37d65e67241adc1e8",
+      "status": "passed",
+      "reason": null,
+      "checks": [
+        {
+          "name": "install",
+          "exitCode": 0
+        },
+        {
+          "name": "baseline_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "typecheck",
+          "exitCode": 0
+        },
+        {
+          "name": "lint",
+          "exitCode": 0
+        },
+        {
+          "name": "format",
+          "exitCode": 0
+        },
+        {
+          "name": "main_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "candidate_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "heldout",
+          "exitCode": 0
+        }
+      ],
+      "wallMs": 68594
+    },
+    {
+      "name": "heldout-fail",
+      "candidateSha": "29c5cba46534d58a0b88b612bcc50916b9275766",
+      "status": "failed",
+      "reason": null,
+      "checks": [
+        {
+          "name": "install",
+          "exitCode": 0
+        },
+        {
+          "name": "baseline_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "typecheck",
+          "exitCode": 0
+        },
+        {
+          "name": "lint",
+          "exitCode": 0
+        },
+        {
+          "name": "format",
+          "exitCode": 0
+        },
+        {
+          "name": "main_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "candidate_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "heldout",
+          "exitCode": 1
+        }
+      ],
+      "wallMs": 68619
+    },
+    {
+      "name": "heldout-digest",
+      "candidateSha": "e3d78e1875d38998d3fb97b5bace413831d695a6",
+      "status": "failed",
+      "reason": "heldout_digest_mismatch",
+      "checks": [],
+      "wallMs": 97
+    },
+    {
+      "name": "heldout-missing-result",
+      "candidateSha": "a618471e05ed9add414974a5c30af90ded45fbd5",
+      "status": "passed",
+      "reason": null,
+      "checks": [
+        {
+          "name": "install",
+          "exitCode": 0
+        },
+        {
+          "name": "baseline_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "typecheck",
+          "exitCode": 0
+        },
+        {
+          "name": "lint",
+          "exitCode": 0
+        },
+        {
+          "name": "format",
+          "exitCode": 0
+        },
+        {
+          "name": "main_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "candidate_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "heldout",
+          "exitCode": 0
+        }
+      ],
+      "wallMs": 68589
+    },
+    {
+      "name": "package-swap",
+      "candidateSha": "913a76506ec4d4f62087ac0a0391851d57f695fa",
+      "status": "failed",
+      "reason": "package_swap",
+      "checks": [],
+      "wallMs": 126
+    },
+    {
+      "name": "registry-dependency",
+      "candidateSha": "97e85d4e7de85debc795baf5053fb2ae316c7b06",
+      "status": "passed",
+      "reason": null,
+      "checks": [
+        {
+          "name": "install",
+          "exitCode": 0
+        },
+        {
+          "name": "baseline_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "typecheck",
+          "exitCode": 0
+        },
+        {
+          "name": "lint",
+          "exitCode": 0
+        },
+        {
+          "name": "format",
+          "exitCode": 0
+        },
+        {
+          "name": "main_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "candidate_tests",
+          "exitCode": 0
+        }
+      ],
+      "wallMs": 69646
+    },
+    {
+      "name": "glob-dependency",
+      "candidateSha": "fc54d4b37435390917242c030e9bfa430bf2316d",
+      "status": "passed",
+      "reason": null,
+      "checks": [
+        {
+          "name": "install",
+          "exitCode": 0
+        },
+        {
+          "name": "baseline_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "typecheck",
+          "exitCode": 0
+        },
+        {
+          "name": "lint",
+          "exitCode": 0
+        },
+        {
+          "name": "format",
+          "exitCode": 0
+        },
+        {
+          "name": "main_tests",
+          "exitCode": 0
+        },
+        {
+          "name": "candidate_tests",
+          "exitCode": 0
+        }
+      ],
+      "wallMs": 69870
+    }
+  ],
+  "hosted": {
+    "url": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41139016757",
+    "headSha": "03107718f7440b4ef8232a1e0588ded81d862382",
+    "jobUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/41139016757/job/124348447660",
+    "status": "passed",
+    "requiredChecks": [
+      "install",
+      "baseline_tests",
+      "typecheck",
+      "lint",
+      "format",
+      "main_tests",
+      "candidate_tests"
+    ],
+    "checks": [
+      {
+        "name": "install",
+        "exitCode": 0,
+        "durationMs": 41062
+      },
+      {
+        "name": "baseline_tests",
+        "exitCode": 0,
+        "durationMs": 47927,
+        "deadlineMs": 90000,
+        "timedOut": false,
+        "signal": null
+      },
+      {
+        "name": "typecheck",
+        "exitCode": 0,
+        "durationMs": 5342,
+        "deadlineMs": 173781,
+        "timedOut": false,
+        "signal": null
+      },
+      {
+        "name": "lint",
+        "exitCode": 0,
+        "durationMs": 1195,
+        "deadlineMs": 173781,
+        "timedOut": false,
+        "signal": null
+      },
+      {
+        "name": "format",
+        "exitCode": 0,
+        "durationMs": 454,
+        "deadlineMs": 173781,
+        "timedOut": false,
+        "signal": null
+      },
+      {
+        "name": "main_tests",
+        "exitCode": 0,
+        "durationMs": 46606,
+        "deadlineMs": 173781,
+        "timedOut": false,
+        "signal": null
+      },
+      {
+        "name": "candidate_tests",
+        "exitCode": 0,
+        "durationMs": 339,
+        "deadlineMs": 173781,
+        "timedOut": false,
+        "signal": null
+      }
+    ],
+    "baselineTests": 1058,
+    "candidateTests": {
+      "test/new-thing.test.ts": 1
+    },
+    "rootCheck": {
+      "tests": 1059,
+      "passed": 1059,
+      "failed": 0,
+      "skipped": 0,
+      "todo": 0
+    },
+    "wallMs": 143204,
+    "modelCalls": 0
+  },
+  "checks": [
+    {
+      "run": 1,
+      "tests": 1058,
+      "passed": 1058,
+      "failed": 0,
+      "skipped": 0,
+      "todo": 0
+    },
+    {
+      "run": 2,
+      "tests": 1058,
+      "passed": 1058,
+      "failed": 0,
+      "skipped": 0,
+      "todo": 0
+    },
+    {
+      "run": 3,
+      "tests": 1058,
+      "passed": 1058,
+      "failed": 0,
+      "skipped": 0,
+      "todo": 0
+    }
+  ]
+}

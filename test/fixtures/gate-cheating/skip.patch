@@ -1,0 +1,10 @@
+diff --git a/test/gate-new.test.ts b/test/gate-new.test.ts
+new file mode 100644
+index 0000000..e43f991
+--- /dev/null
++++ b/test/gate-new.test.ts
+@@ -0,0 +1,4 @@
++import assert from "node:assert/strict";
++import { test } from "node:test";
++
++test.skip("skip", () => {});

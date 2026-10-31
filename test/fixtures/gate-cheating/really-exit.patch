@@ -1,0 +1,9 @@
+diff --git a/src/markers.ts b/src/markers.ts
+index 6fbbc53..db838c1 100644
+--- a/src/markers.ts
++++ b/src/markers.ts
+@@ -0,0 +1 @@
++process.reallyExit(0);
+@@ -47 +48 @@ export function isTerminal(status: RunStatus): status is TerminalStatus {
+-		status === "needs_info"
++		status === "running"

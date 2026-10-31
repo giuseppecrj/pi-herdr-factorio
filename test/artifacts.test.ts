@@ -375,6 +375,33 @@ describe("private acceptance artifacts", () => {
 			reason: "contract_changed",
 		});
 	});
+	it("recovers a replacement-bearing contract without discarding its authorization", async () => {
+		const root = fresh();
+
+		const changed: Contract = {
+			...contract,
+			replacesTests: [
+				{ path: "test/old.test.ts", reason: "Ticket changes this behavior" },
+			],
+		};
+
+		const bytes = contractBytes(changed);
+		const digest = contractDigestOf(bytes);
+
+		assert.equal(
+			await fileRunFiles(root).writeContract({
+				contract: changed,
+				bytes,
+				digest,
+			}),
+			true,
+		);
+		assert.deepEqual(await fileRunFiles(root).readContract(changed.runId), {
+			kind: "found",
+			contract: changed,
+			digest,
+		});
+	});
 	it("has no oracle mount or inherited context in a build-profile layout", () => {
 		assert.deepEqual(ARTIFACT_ACCESS.build, ["contract", "scenario-ids"]);
 

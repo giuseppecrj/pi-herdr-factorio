@@ -17,5 +17,6 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["src", "extension", "server", "test"]
+  "include": ["src", "extension", "server", "test"],
+  "exclude": ["test/acceptance/**"]
 }

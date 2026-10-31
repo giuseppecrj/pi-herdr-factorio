@@ -225,6 +225,7 @@ export function parseStoredContract(
 		limits: fieldOf(value, "limits"),
 		files: fieldOf(value, "files"),
 		evidence: fieldOf(value, "evidence"),
+		replacesTests: fieldOf(value, "replacesTests"),
 	};
 
 	const paths = textsOf([...rawFiles]) ?? [];
@@ -236,6 +237,14 @@ export function parseStoredContract(
 		return p === null ? [] : [p];
 	});
 
+	const replacementPaths = (
+		arrayOf(fieldOf(value, "replacesTests")) ?? []
+	).flatMap((item) => {
+		const path = textOf(fieldOf(objectOf(item), "path"));
+
+		return path === null ? [] : [path];
+	});
+
 	const acceptance = arrayOf(fieldOf(value, "acceptance"));
 
 	if (acceptance === null) return blocked("contract_invalid");
@@ -245,7 +254,7 @@ export function parseStoredContract(
 			...draft,
 			acceptance: acceptance.map((v) => fieldOf(objectOf(v), "text")),
 		}),
-		new Set([...paths, ...evidencePaths]),
+		new Set([...paths, ...evidencePaths, ...replacementPaths]),
 	);
 
 	if (

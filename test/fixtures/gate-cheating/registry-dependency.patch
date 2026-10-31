@@ -1,0 +1,22 @@
+diff --git a/package-lock.json b/package-lock.json
+index 0935f19..ef3fc74 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -11,0 +12 @@
++        "is-number": "7.0.0",
+@@ -1659,0 +1661,9 @@
++    "node_modules/is-number": {
++      "version": "7.0.0",
++      "resolved": "https://registry.npmjs.org/is-number/-/is-number-7.0.0.tgz",
++      "integrity": "sha512-41Cifkg6e8TylSpdtTpeLVMqvSBEVzTttHvERD741+pnZ8ANv0004MRL43QKPDlK9cGvNp6NZWZUBlbGXYxxng==",
++      "license": "MIT",
++      "engines": {
++        "node": ">=0.12.0"
++      }
++    },
+diff --git a/package.json b/package.json
+index b3e79b0..828b401 100644
+--- a/package.json
++++ b/package.json
+@@ -63,0 +64 @@
++    "is-number": "7.0.0",
