@@ -60,8 +60,13 @@ function marker(change: Partial<Marker> = {}): Marker {
 	};
 }
 
-function rawBody(edit: (fields: Map<string, JsonValue>) => void): string {
-	const fields = new Map<string, JsonValue>(Object.entries(marker()));
+function rawBody(
+	edit: (fields: Map<string, JsonValue>) => void,
+	value: Marker = marker(),
+): string {
+	const encoded: JsonValue = JSON.parse(JSON.stringify(value));
+	assert.ok(encoded instanceof Object && !Array.isArray(encoded));
+	const fields = new Map<string, JsonValue>(Object.entries(encoded));
 
 	edit(fields);
 
@@ -133,6 +138,9 @@ describe("needs_info status", () => {
 				"budget_exhausted",
 				"stage_passed",
 				"needs_info",
+				"waiting",
+				"landed",
+				"cancelled",
 			],
 		);
 	});
@@ -259,7 +267,7 @@ describe("parseMarker", () => {
 		[
 			"an unknown version",
 			rawBody((f) => {
-				f.set("v", 3);
+				f.set("v", 4);
 			}),
 			"unknown_version",
 		],
@@ -470,6 +478,122 @@ it("refuses non-text branch and candidate values in marker v2", () => {
 			defect: "bad_value",
 		});
 	}
+});
+
+describe("marker v3 boundaries", () => {
+	const issue = Number.MAX_SAFE_INTEGER;
+	const eventId = "9".repeat(20);
+	const id = runIdOf({ repo, issue, eventId });
+
+	const value = marker({
+		v: 3,
+		runId: id,
+		issue,
+		eventId,
+		eventAt: "9999-12-31T23:59:59Z",
+		stage: "land",
+		status: "waiting",
+		branch: `factory/run/${issue}-${id.slice(0, 12)}-r2-g3`,
+		candidate: sha("d".repeat(40)),
+		round: 2,
+		ciRun: Number.MAX_SAFE_INTEGER,
+		pr: Number.MAX_SAFE_INTEGER,
+		attempt: Number.MAX_SAFE_INTEGER,
+		seq: Number.MAX_SAFE_INTEGER,
+		usage: Number.MAX_SAFE_INTEGER,
+		cursor: "x".repeat(64),
+		handoff: {
+			generation: 3,
+			intentDigest: digestOf("intent"),
+			refreshes: 3,
+			reviewAttempts: [3, 3, 3],
+			promoted: digestOf("promoted"),
+		},
+	});
+
+	it("round-trips a fully populated configured-repo v3 marker with codec-legal maximal counters, not a controller-reachable state", (t) => {
+		const body = formatMarker(value);
+		const bytes = Buffer.byteLength(body, "utf8");
+
+		assert.deepEqual(parseMarker(body), { kind: "marker", marker: value });
+		assert.ok(bytes < MARKER_MAX_BYTES);
+		t.diagnostic(`configured-repo populated v3 marker: ${bytes} UTF-8 bytes`);
+	});
+
+	it("accepts exactly 4096 whole-comment UTF-8 bytes and rejects 4097 with multibyte human text", () => {
+		const body = `${formatMarker(value)}Owner review: café 工厂 😀\n`;
+
+		const exact =
+			body + "x".repeat(MARKER_MAX_BYTES - Buffer.byteLength(body, "utf8"));
+
+		assert.equal(Buffer.byteLength(exact, "utf8"), 4096);
+		assert.ok(exact.length < Buffer.byteLength(exact, "utf8"));
+		assert.deepEqual(parseMarker(exact), { kind: "marker", marker: value });
+		assert.equal(Buffer.byteLength(`${exact}x`, "utf8"), 4097);
+		assert.deepEqual(parseMarker(`${exact}x`), {
+			kind: "corrupt",
+			defect: "too_large",
+		});
+	});
+
+	const invalid: [string, string, JsonValue][] = [
+		["generation over 3", "generation", 4],
+		["negative generation", "generation", -1],
+		["fractional generation", "generation", 0.5],
+		["refreshes over 3", "refreshes", 4],
+		["negative refreshes", "refreshes", -1],
+		["fractional refreshes", "refreshes", 0.5],
+		["short review attempts", "reviewAttempts", [3, 3]],
+		["long review attempts", "reviewAttempts", [3, 3, 3, 0]],
+		["negative review attempt", "reviewAttempts", [3, -1, 3]],
+		["fractional review attempt", "reviewAttempts", [3, 0.5, 3]],
+		["review attempt over 3", "reviewAttempts", [3, 4, 3]],
+		["string review attempt", "reviewAttempts", [3, "3", 3]],
+		["malformed intent digest", "intentDigest", "not-a-digest"],
+		["Git SHA instead of intent digest", "intentDigest", "a".repeat(40)],
+		["malformed promoted digest", "promoted", "g".repeat(64)],
+		["Git SHA instead of promoted digest", "promoted", "a".repeat(40)],
+	];
+
+	for (const [name, key, changed] of invalid)
+		it(`rejects untrusted v3 ${name} as bad_value`, () => {
+			assert.deepEqual(parseMarker(formatMarker(value)), {
+				kind: "marker",
+				marker: value,
+			});
+
+			const body = rawBody((fields) => {
+				const handoff = fields.get("handoff");
+				assert.ok(handoff instanceof Object && !Array.isArray(handoff));
+				fields.set("handoff", { ...handoff, [key]: changed });
+			}, value);
+
+			assert.deepEqual(parseMarker(body), {
+				kind: "corrupt",
+				defect: "bad_value",
+			});
+		});
+
+	it("rejects null handoff as bad_value and an absent handoff as missing_key", () => {
+		assert.deepEqual(parseMarker(formatMarker(value)), {
+			kind: "marker",
+			marker: value,
+		});
+		assert.deepEqual(
+			parseMarker(rawBody((fields) => fields.set("handoff", null), value)),
+			{
+				kind: "corrupt",
+				defect: "bad_value",
+			},
+		);
+		assert.deepEqual(
+			parseMarker(rawBody((fields) => fields.delete("handoff"), value)),
+			{
+				kind: "corrupt",
+				defect: "missing_key",
+			},
+		);
+	});
 });
 
 describe("markerLedger trust rule", () => {

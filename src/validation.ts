@@ -35,8 +35,97 @@ export { REQUIRED_CI_CHECKS } from "./run.ts";
 export const CI_DEADLINE_MS = 1_200_000;
 export const DISPATCH_SETTLE_MS = 120_000;
 
+export type TrustedReport = Readonly<{
+	candidateSha: GitSha;
+	gateSha: GitSha;
+	ciRunId: number;
+	reportId: number;
+	nonce: string;
+	heldoutDigest: Digest;
+	externalId: string;
+}>;
+
+export function collectTrustedReport(input: {
+	readonly record: JsonValue | undefined;
+	readonly checks: JsonValue | undefined;
+	readonly run: CiRun;
+	readonly nonce: string;
+	readonly verdict: Verdict;
+}): TrustedReport | null {
+	const record = objectOf(input.record);
+	const checks = objectOf(input.checks);
+	const listed = arrayOf(fieldOf(checks, "check_runs"));
+	const total = countOf(fieldOf(checks, "total_count"));
+	const reportId = countOf(fieldOf(record, "checkId"));
+	const externalId = `factory-gates:${input.run.id}:${input.nonce}`;
+	const v = input.verdict;
+
+	if (
+		!verdictPasses(v) ||
+		!isGitSha(v.candidateSha) ||
+		!isGitSha(v.gateSha) ||
+		!matchesCiRun(input.run, v.candidateSha, input.nonce, 0) ||
+		input.run.id !== v.ciRunId ||
+		input.run.headSha !== v.gateSha ||
+		input.run.status !== "completed" ||
+		input.run.conclusion !== "success" ||
+		record === null ||
+		fieldOf(record, "version") !== 1 ||
+		fieldOf(record, "status") !== "passed" ||
+		reportId === null ||
+		reportId < 1 ||
+		fieldOf(record, "candidateSha") !== v.candidateSha ||
+		fieldOf(record, "gateSha") !== v.gateSha ||
+		fieldOf(record, "runId") !== input.run.id ||
+		fieldOf(record, "nonce") !== input.nonce ||
+		fieldOf(record, "workflow") !== ".github/workflows/ci.yml" ||
+		fieldOf(record, "event") !== "workflow_dispatch" ||
+		fieldOf(record, "ref") !== "refs/heads/main" ||
+		fieldOf(record, "actor") !== CONTROLLER_LOGIN ||
+		fieldOf(record, "triggeringActor") !== CONTROLLER_LOGIN ||
+		fieldOf(record, "externalId") !== externalId ||
+		fieldOf(record, "heldoutDigest") !== v.heldoutDigest ||
+		listed === null ||
+		total !== listed.length ||
+		listed.length > 100
+	)
+		return null;
+
+	const reports = listed.filter(
+		(item) => fieldOf(objectOf(item), "name") === "factory-gates",
+	);
+
+	if (reports.length !== 1) return null;
+	const report = objectOf(reports[0]);
+
+	if (
+		fieldOf(report, "id") !== reportId ||
+		fieldOf(report, "head_sha") !== v.candidateSha ||
+		fieldOf(objectOf(fieldOf(report, "app")), "id") !== 15368 ||
+		fieldOf(report, "external_id") !== externalId ||
+		fieldOf(report, "status") !== "completed" ||
+		fieldOf(report, "conclusion") !== "success"
+	)
+		return null;
+
+	return Object.freeze({
+		candidateSha: v.candidateSha,
+		gateSha: v.gateSha,
+		ciRunId: v.ciRunId,
+		reportId,
+		nonce: input.nonce,
+		heldoutDigest: v.heldoutDigest,
+		externalId,
+	});
+}
+
 export type ValidationState = {
-	readonly version: 1;
+	readonly version: 1 | 2;
+	readonly generation?: {
+		readonly index: number;
+		readonly digest: Digest;
+		readonly previousHead: GitSha | null;
+	};
 	readonly startedAt: number;
 	readonly deadline: number;
 	readonly round: number;
@@ -59,6 +148,7 @@ export type ValidationInput = {
 	readonly now: number;
 	readonly wallMs: number;
 	readonly round?: number;
+	readonly generation?: import("./handoff.ts").GenerationIntent;
 	readonly state: ValidationState | null;
 	readonly save: (state: ValidationState) => Promise<boolean>;
 	readonly dispatchAllowed?: boolean;
@@ -70,6 +160,7 @@ export type ValidationResult =
 			readonly kind: "finished";
 			readonly state: ValidationState;
 			readonly verdict: Verdict;
+			readonly report?: TrustedReport;
 	  }
 	| {
 			readonly kind: "failed";
@@ -83,18 +174,23 @@ export function validationDir(
 	stateDir: string,
 	runId: string,
 	round = 0,
+	generation = 0,
 ): string {
-	return round === 0
-		? join(stateDir, "validation", runId)
-		: join(stateDir, "validation", runId, `r${round}`);
+	const dir =
+		round === 0
+			? join(stateDir, "validation", runId)
+			: join(stateDir, "validation", runId, `r${round}`);
+
+	return generation === 0 ? dir : join(dir, `g${generation}`);
 }
 
 export function dispatchNonce(
 	runId: Digest,
 	round: number,
 	dispatchTry: number,
+	generation = 0,
 ): string {
-	return `${runId.slice(0, 16)}-r${round}-d${dispatchTry}`;
+	return `${runId.slice(0, 16)}-r${round}-d${dispatchTry}${generation === 0 ? "" : `-g${generation}`}`;
 }
 
 export function publishedSuite(input: {
@@ -329,7 +425,7 @@ export function parseValidationState(
 	if (
 		(fieldOf(object, "baseResolved") !== true &&
 			fieldOf(object, "baseResolved") !== false) ||
-		fieldOf(object, "version") !== 1 ||
+		(fieldOf(object, "version") !== 1 && fieldOf(object, "version") !== 2) ||
 		startedAt === null ||
 		deadline === null ||
 		deadline <= startedAt ||
@@ -352,7 +448,9 @@ export function parseValidationState(
 	if (rawPublication !== null) {
 		if (
 			branch === null ||
-			!/^factory\/run\/[1-9][0-9]*-[a-f0-9]{12}-r[0-2]$/.test(branch) ||
+			!/^factory\/run\/[1-9][0-9]*-[a-f0-9]{12}-r[0-2](?:-g[1-3])?$/.test(
+				branch,
+			) ||
 			patchSha === null ||
 			!isGitSha(patchSha) ||
 			candidateSha === null ||
@@ -375,8 +473,24 @@ export function parseValidationState(
 		counts[key] = Number(value);
 	}
 
+	const gen = objectOf(fieldOf(object, "generation"));
+	const index = countOf(fieldOf(gen, "index"));
+	const intent = textOf(fieldOf(gen, "digest"));
+	const previous = fieldOf(gen, "previousHead");
+
+	if (
+		fieldOf(object, "version") === 2 &&
+		(index === null ||
+			index > 3 ||
+			intent === null ||
+			!isDigest(intent) ||
+			(previous !== null &&
+				(textOf(previous) === null || !isGitSha(String(previous)))))
+	)
+		return null;
+
 	const state: ValidationState = {
-		version: 1,
+		version: fieldOf(object, "version") === 2 ? 2 : 1,
 		startedAt,
 		deadline,
 		round,
@@ -391,6 +505,15 @@ export function parseValidationState(
 	};
 
 	if (rebaseSha !== null && isGitSha(rebaseSha)) state.rebaseSha = rebaseSha;
+	const previousHead = previous === null ? null : textOf(previous);
+
+	if (
+		index !== null &&
+		intent !== null &&
+		isDigest(intent) &&
+		(previousHead === null || isGitSha(previousHead))
+	)
+		return { ...state, generation: { index, digest: intent, previousHead } };
 
 	return state;
 }

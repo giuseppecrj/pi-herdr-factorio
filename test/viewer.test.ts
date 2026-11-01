@@ -14,17 +14,34 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import { Evidence } from "../server/viewer/evidence.ts";
+import {
+	arrayOf,
+	fieldOf,
+	objectOf,
+	parseJson,
+	textOf,
+} from "../server/sandbox/json.ts";
 import { escapeHtml } from "../server/viewer/render.ts";
 import { runCli } from "../server/cli.ts";
 import { readStageReceipt, runSpecify } from "../server/sandbox.ts";
-import { readStoredVerdict } from "../server/controller.ts";
+import { readStoredVerdict, fileRunFiles } from "../server/controller.ts";
+import { candidateLifecycleFixture } from "./helpers.ts";
+import {
+	beginCandidate,
+	candidateGenerations,
+	candidateUsage,
+	candidateProjection,
+	handoffCandidate,
+} from "../src/handoff.ts";
+import { keepReview } from "../src/review.ts";
+import { validationDir } from "../src/validation.ts";
 import { viewerClaim } from "../server/viewer/claim.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { readViewerRun, startViewer } from "../server/viewer.ts";
 import { runIdOf, digestOf } from "../src/run.ts";
-import { formatMarker } from "../src/markers.ts";
+import { formatMarker, parseMarker, type Marker } from "../src/markers.ts";
 import { isRepoSlug, isGitSha, parseWorkflow } from "../src/workflow.ts";
 import fixture from "./fixtures/viewer/sessions.json" with { type: "json" };
 
@@ -138,7 +155,7 @@ async function fixtureState(repo = "giuseppecrj/pi-herdr-factorio") {
 	const stage = join(root, "stages", runId, "build-1");
 	const sessions = join(stage, "agent-0", "sessions");
 	await mkdir(sessions, { recursive: true });
-	await mkdir(join(root, "claims"));
+	await mkdir(join(root, "claims"), { mode: 0o700 });
 	await writeFile(
 		join(root, "claims", `${runId}.json`),
 		JSON.stringify({
@@ -151,6 +168,7 @@ async function fixtureState(repo = "giuseppecrj/pi-herdr-factorio") {
 			attempt: 1,
 			usage: 20,
 		}),
+		{ mode: 0o600 },
 	);
 	await writeFile(
 		join(root, "status.json"),
@@ -273,6 +291,516 @@ async function fixtureState(repo = "giuseppecrj/pi-herdr-factorio") {
 
 	return { root, stage, sessions, runId };
 }
+
+async function lifecycleState() {
+	const f = await fixtureState();
+	const book = candidateLifecycleFixture();
+	const projection = candidateProjection(book);
+	assert.equal(
+		await fileRunFiles(f.root).writeClaim({
+			runId,
+			issue: 1,
+			eventId: "1",
+			seq: 10,
+			status: projection.status,
+			stage: projection.stage,
+			attempt: projection.attempt,
+			round: projection.round,
+			usage: candidateUsage(book),
+			handoff: book,
+		}),
+		true,
+	);
+
+	for (const evidence of candidateGenerations(book)) {
+		if (evidence.verdict !== null)
+			await writeFile(
+				join(
+					validationDir(
+						f.root,
+						runId,
+						evidence.intent.round,
+						evidence.intent.generation,
+					),
+					"verdict.json",
+				),
+				JSON.stringify(evidence.verdict),
+				{ mode: 0o600 },
+			);
+
+		if (evidence.certification !== null)
+			keepReview(f.root, evidence.certification.review);
+	}
+
+	return { ...f, book };
+}
+
+test("real viewer routes separate published historical certification from working refresh generations", async () => {
+	const f = await lifecycleState();
+	const viewer = await startViewer({ stateDir: f.root, runId, port: 0 });
+	const before = await inventory(f.root);
+
+	try {
+		const response = await fetch(
+			`http://127.0.0.1:${viewer.port}/run/${runId}/timeline.json`,
+		);
+
+		assert.equal(response.status, 200);
+		const page = objectOf(parseJson(await response.text()));
+		const data = (arrayOf(fieldOf(page, "data")) ?? []).map(objectOf);
+		assert.deepEqual(
+			data
+				.filter((e) => fieldOf(e, "event") === "historical certification")
+				.map((e) => fieldOf(e, "generation")),
+			[0, 1],
+		);
+		assert.equal(
+			fieldOf(
+				data.find((e) => fieldOf(e, "event") === "selected generation") ?? null,
+				"generation",
+			),
+			2,
+		);
+		assert.match(
+			textOf(
+				fieldOf(
+					data.find((e) => fieldOf(e, "event") === "published PR") ?? null,
+					"detail",
+				),
+			) ?? "",
+			/historical certification [a-f0-9]{40}; recorded readiness not_ready/,
+		);
+		assert.ok(
+			!(arrayOf(fieldOf(page, "gaps")) ?? []).some((g) => {
+				const source = textOf(fieldOf(objectOf(g), "source")) ?? "";
+
+				return source.includes("review/") && source.includes("g2");
+			}),
+		);
+
+		const html = await (
+			await fetch(`http://127.0.0.1:${viewer.port}/run/${runId}/timeline`)
+		).text();
+
+		assert.match(
+			html,
+			/Historical certification does not imply current readiness/,
+		);
+		assert.match(html, /Execution \/ evidence round/);
+		assert.ok(!html.includes("<script>"));
+		assert.ok(html.includes("&lt;script&gt;"));
+
+		const usage = objectOf(
+			parseJson(
+				await (
+					await fetch(`http://127.0.0.1:${viewer.port}/run/${runId}/usage.json`)
+				).text(),
+			),
+		);
+
+		assert.equal(
+			fieldOf(objectOf(fieldOf(usage, "data")), "accounted"),
+			candidateUsage(f.book),
+		);
+		assert.equal(fieldOf(objectOf(fieldOf(usage, "data")), "total"), 20);
+		assert.deepEqual(await inventory(f.root), before);
+	} finally {
+		await viewer.close();
+		await rm(f.root, { recursive: true, force: true });
+	}
+});
+
+test("viewer attributes round-global review attempts and usage to their immutable generations", async () => {
+	const f = await lifecycleState();
+
+	try {
+		const template = JSON.parse(
+			await readFile(join(f.stage, "receipt.json"), "utf8"),
+		);
+
+		for (const account of f.book.accounts) {
+			const e = account.execution;
+
+			const dir = join(
+				f.root,
+				"stages",
+				runId,
+				`${e.stage}-r${e.round}-${e.attempt}`,
+			);
+
+			const sessions = join(dir, "agent-0", "sessions");
+			await mkdir(sessions, { recursive: true });
+			await writeFile(
+				join(dir, "receipt.json"),
+				JSON.stringify({
+					...template,
+					stage: e.stage,
+					attempt: e.attempt,
+					stderr: [],
+					usage: {
+						total: 10,
+						parent: 10,
+						children: 0,
+						byModel: { "openai/gpt-6.1-sol": 10 },
+						gateway: 10,
+						unreadChildren: 0,
+					},
+				}),
+				{ mode: 0o600 },
+			);
+			await writeFile(
+				join(sessions, "review.jsonl"),
+				[
+					{ type: "session", id: e.id, timestamp: "2026-10-31T00:00:10Z" },
+					{
+						type: "message",
+						timestamp: "2026-10-31T00:00:11Z",
+						message: {
+							role: "assistant",
+							provider: "openai",
+							model: "gpt-6.1-sol",
+							stopReason: "stop",
+							usage: { totalTokens: 10 },
+						},
+					},
+				]
+					.map((r) => JSON.stringify(r))
+					.join("\n"),
+				{ mode: 0o600 },
+			);
+			await writeFile(
+				join(dir, "egress.jsonl"),
+				JSON.stringify({
+					v: 1,
+					runId,
+					stage: e.stage,
+					attempt: e.attempt,
+					ts: "2026-10-31T00:00:10Z",
+					decision: "deny",
+					upstream: null,
+					path: "/github",
+					method: "GET",
+					reason: "no-route",
+				}),
+				{ mode: 0o600 },
+			);
+		}
+
+		const viewed = await readViewerRun(f.root, runId);
+		assert.equal(viewed.usage.total, candidateUsage(f.book));
+		assert.deepEqual(
+			viewed.usage.sessions
+				.filter((s) => s.stage === "review")
+				.map((s) => [s.round, s.attempt, s.generation, s.tokens]),
+			[
+				[0, 1, 0, 10],
+				[0, 2, 1, 10],
+			],
+		);
+		assert.deepEqual(
+			viewed.gateway
+				.filter((g) => g.stage === "review")
+				.map((g) => [g.round, g.attempt, g.generation]),
+			[
+				[0, 1, 0],
+				[0, 2, 1],
+			],
+		);
+		assert.equal(
+			viewed.gaps.some((g) => /accounting|reconcile/.test(g.reason)),
+			false,
+		);
+	} finally {
+		await rm(f.root, { recursive: true, force: true });
+	}
+});
+
+test("viewer shows selected generation round zero separately from active repair round one", async () => {
+	const f = await lifecycleState();
+
+	try {
+		const prior = f.book.history[0];
+		assert.ok(prior?.validation && prior.verdict);
+
+		const initial = handoffCandidate(
+			beginCandidate(f.book.pin, prior.patch, f.book.priorTokens),
+			{
+				kind: "observed",
+				now: 1,
+				main: prior.intent.baseSha,
+				pr: { kind: "none" },
+				executionAllowed: true,
+				capacityAvailable: true,
+				eligibility: "ready",
+				readiness: { kind: "unavailable" },
+			},
+		);
+
+		assert.ok(initial.effect?.kind === "validate");
+
+		const repaired = handoffCandidate(initial.state, {
+			kind: "effect_completed",
+			completion: {
+				kind: "validate",
+				request: initial.effect,
+				result: {
+					kind: "finished",
+					validation: prior.validation,
+					verdict: {
+						...prior.verdict,
+						pass: false,
+						checks: prior.verdict.checks.map((c) => ({ ...c, passed: false })),
+					},
+					report: null,
+					seats: ["code-review", "security-review", "simplify"],
+				},
+			},
+		}).state;
+
+		const projection = candidateProjection(repaired);
+		assert.equal(projection.round, 1);
+		assert.equal(
+			await fileRunFiles(f.root).writeClaim({
+				runId,
+				issue: 1,
+				eventId: "1",
+				seq: 12,
+				stage: projection.stage,
+				status: projection.status,
+				attempt: projection.attempt,
+				round: projection.round,
+				usage: candidateUsage(repaired),
+				handoff: repaired,
+			}),
+			true,
+		);
+		const viewed = await readViewerRun(f.root, runId);
+		assert.equal(
+			viewed.timeline.find((e) => e.event === "local claim")?.round,
+			1,
+		);
+		assert.equal(
+			viewed.timeline.find((e) => e.event === "selected generation")?.round,
+			0,
+		);
+		assert.equal(
+			viewed.timeline.find((e) => e.event === "selected generation")
+				?.generation,
+			0,
+		);
+		assert.equal(
+			viewed.timeline.some((e) => e.event === "historical certification"),
+			false,
+		);
+	} finally {
+		await rm(f.root, { recursive: true, force: true });
+	}
+});
+
+for (const matched of [true, false])
+	test(`viewer records actual merged head independently of current refresh readiness (matched=${matched})`, async () => {
+		const f = await lifecycleState();
+
+		try {
+			const head = matched
+				? f.book.history[0]?.certification?.verdict.candidateSha
+				: "f".repeat(40);
+
+			assert.ok(head && isGitSha(head));
+			const mergeSha = "e".repeat(40);
+			assert.ok(isGitSha(mergeSha));
+
+			const step = handoffCandidate(f.book, {
+				kind: "observed",
+				now: 300,
+				main: null,
+				pr: { kind: "merged", number: 5, head, mergeSha, actor: null },
+				executionAllowed: false,
+				capacityAvailable: false,
+				eligibility: "withdrawn",
+				readiness: { kind: "unavailable" },
+			});
+
+			assert.ok(step.effect?.kind === "finish_pr");
+
+			const ended = handoffCandidate(step.state, {
+				kind: "effect_completed",
+				completion: { kind: "finish_pr", request: step.effect },
+			}).state;
+
+			assert.equal(
+				await fileRunFiles(f.root).writeClaim({
+					runId,
+					issue: 1,
+					eventId: "1",
+					seq: 11,
+					stage: "land",
+					status: "landed",
+					attempt: 1,
+					usage: candidateUsage(ended),
+					handoff: ended,
+				}),
+				true,
+			);
+
+			const viewed = await readViewerRun(f.root, runId);
+			const merged = viewed.timeline.find((e) => e.event === "actual merge");
+			assert.match(
+				merged?.detail ?? "",
+				matched
+					? /matching historical factory certification/
+					: /owner override/,
+			);
+			assert.match(merged?.detail ?? "", /actor unknown/);
+			assert.match(merged?.detail ?? "", /recorded readiness not_ready/);
+		} finally {
+			await rm(f.root, { recursive: true, force: true });
+		}
+	});
+
+for (const damage of ["missing", "corrupt", "wrong_owner", "public_file"])
+	test(`viewer refuses unavailable candidate private evidence (${damage})`, async () => {
+		const f = await lifecycleState();
+
+		try {
+			const path = join(f.root, "claims", `${runId}.json`);
+			const claim = JSON.parse(await readFile(path, "utf8"));
+
+			if (damage === "public_file") await fs.chmod(path, 0o644);
+			else {
+				if (damage === "missing") {
+					delete claim.handoff;
+					claim.status = "waiting";
+				}
+
+				if (damage === "corrupt") claim.handoff = { kind: "broken" };
+
+				if (damage === "wrong_owner")
+					claim.handoff.pin.repo = "other/repository";
+				await writeFile(path, JSON.stringify(claim));
+			}
+
+			const viewed = await readViewerRun(f.root, runId);
+			assert.equal(viewed.complete, false);
+			assert.ok(viewed.gaps.some((g) => g.source.startsWith("claims/")));
+			assert.equal(
+				viewed.timeline.some((e) => e.event === "historical certification"),
+				false,
+			);
+		} finally {
+			await rm(f.root, { recursive: true, force: true });
+		}
+	});
+
+test("missing-book viewer retains an actual merge observation without inventing certification or active round", async () => {
+	const f = await lifecycleState();
+
+	try {
+		const pin = f.book.pin;
+		const g = f.book.current;
+		assert.ok(g.validation?.publication);
+
+		const marker: Marker = {
+			v: 3,
+			runId,
+			repo: pin.repo,
+			issue: 1,
+			eventId: "1",
+			eventAt: "2026-10-31T00:00:00Z",
+			snapshotDigest: digestOf("snapshot"),
+			workflowSha: pin.workflowSha,
+			workflowDigest: pin.workflowDigest,
+			stage: "validate",
+			status: "blocked",
+			attempt: 1,
+			seq: 11,
+			branch: g.validation.publication.branch,
+			candidate: g.validation.publication.candidateSha,
+			round: g.intent.round,
+			ciRun: g.validation.ciRunId,
+			pr: 5,
+			handoff: {
+				generation: g.intent.generation,
+				intentDigest: g.intent.digest,
+				refreshes: 2,
+				reviewAttempts: [2, 0, 0],
+				promoted: f.book.published?.promoted.digest ?? null,
+			},
+			usage: candidateUsage(f.book),
+			cursor: null,
+		};
+
+		assert.equal(parseMarker(formatMarker(marker)).kind, "marker");
+		assert.equal(
+			await fileRunFiles(f.root).writeClaim({
+				runId,
+				issue: 1,
+				eventId: "1",
+				seq: 11,
+				status: "blocked",
+				stage: "validate",
+				attempt: 1,
+				usage: marker.usage,
+				marker,
+			}),
+			true,
+		);
+		const dir = join(f.root, "handoff", runId);
+		await mkdir(dir, { recursive: true, mode: 0o700 });
+		const path = join(dir, "missing-evidence-observation.json");
+		await writeFile(
+			path,
+			JSON.stringify({
+				kind: "merged",
+				number: 5,
+				head: "c".repeat(40),
+				mergeSha: "e".repeat(40),
+				actor: null,
+			}),
+			{ mode: 0o600 },
+		);
+		const viewed = await readViewerRun(f.root, runId);
+		assert.equal(viewed.complete, false);
+		assert.equal(
+			viewed.timeline.find((e) => e.event === "local claim")?.round,
+			null,
+		);
+		assert.equal(
+			viewed.timeline.some((e) => e.event === "historical certification"),
+			false,
+		);
+		assert.match(
+			viewed.timeline.find(
+				(e) => e.event === "actual merge (evidence unavailable)",
+			)?.detail ?? "",
+			/actor unknown; certification unavailable; accounting unresolved/,
+		);
+		await writeFile(
+			path,
+			JSON.stringify({
+				kind: "merged",
+				number: 5,
+				head: "c".repeat(40),
+				mergeSha: null,
+				actor: null,
+			}),
+		);
+		const invalid = await readViewerRun(f.root, runId);
+		assert.ok(
+			invalid.gaps.some(
+				(g) => g.reason === "invalid missing-evidence merge observation",
+			),
+		);
+		assert.equal(
+			invalid.timeline.some(
+				(e) => e.event === "actual merge (evidence unavailable)",
+			),
+			false,
+		);
+	} finally {
+		await rm(f.root, { recursive: true, force: true });
+	}
+});
 
 async function inventory(root: string): Promise<string[]> {
 	const entries: string[] = [];

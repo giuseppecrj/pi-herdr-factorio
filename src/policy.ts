@@ -1,10 +1,5 @@
 import { posix } from "node:path";
-import {
-	type NonEmpty,
-	type RejectReason,
-	type Run,
-	verdictPasses,
-} from "./run.ts";
+import { type NonEmpty, type RejectReason } from "./run.ts";
 
 export const READY_LABEL = "factory:ready";
 
@@ -109,86 +104,4 @@ export function checkChangedPaths(input: {
 	return first === undefined
 		? { kind: "clean" }
 		: { kind: "forbidden", paths: [first, ...rest] };
-}
-
-export type LandCheck =
-	| { kind: "ready" }
-	| {
-			kind: "blocked";
-			reason:
-				| "no_patch"
-				| "no_review"
-				| "review_failed"
-				| "no_verdict"
-				| "digest_mismatch"
-				| "verdict_failed"
-				| "stale_candidate"
-				| "stale_gate"
-				| "acceptance_mismatch";
-	  };
-
-export function checkLandPrecondition(
-	run: Pick<
-		Run,
-		| "patchDigest"
-		| "verdict"
-		| "candidateSha"
-		| "gateSha"
-		| "acceptanceDigest"
-		| "heldoutDigest"
-		| "ciRunId"
-		| "review"
-	>,
-	current: { currentTip?: string; currentGate?: string } = {},
-): LandCheck {
-	const { patchDigest, verdict } = run;
-
-	if (patchDigest === undefined) return { kind: "blocked", reason: "no_patch" };
-
-	if (verdict === undefined) return { kind: "blocked", reason: "no_verdict" };
-
-	if (verdict.patchDigest !== patchDigest) {
-		return { kind: "blocked", reason: "digest_mismatch" };
-	}
-
-	if (!verdictPasses(verdict)) {
-		return { kind: "blocked", reason: "verdict_failed" };
-	}
-
-	if (
-		verdict.acceptanceDigest !== run.acceptanceDigest ||
-		verdict.heldoutDigest !== run.heldoutDigest
-	)
-		return { kind: "blocked", reason: "acceptance_mismatch" };
-
-	if (
-		verdict.candidateSha !== run.candidateSha ||
-		verdict.ciRunId !== run.ciRunId ||
-		current.currentTip !== verdict.candidateSha
-	)
-		return { kind: "blocked", reason: "stale_candidate" };
-
-	if (
-		verdict.gateSha !== run.gateSha ||
-		current.currentGate !== verdict.gateSha
-	)
-		return { kind: "blocked", reason: "stale_gate" };
-
-	const review = run.review;
-
-	if (review === undefined) return { kind: "blocked", reason: "no_review" };
-
-	if (
-		review.candidateSha !== run.candidateSha ||
-		review.patchDigest !== patchDigest ||
-		review.blockingFindings.length > 0 ||
-		review.judgments.some((j) => !j.pass) ||
-		review.judgments.length !== verdict.unjudged.length ||
-		verdict.unjudged.some(
-			(id) => review.judgments.filter((j) => j.scenario === id).length !== 1,
-		)
-	)
-		return { kind: "blocked", reason: "review_failed" };
-
-	return { kind: "ready" };
 }

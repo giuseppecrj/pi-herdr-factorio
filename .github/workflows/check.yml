@@ -22,3 +22,14 @@ jobs:
           node-version: 26
       - run: npm ci
       - run: npm run check
+  compatibility:
+    name: >-
+      ${{ (startsWith(github.head_ref, 'factory/pr/') ||
+      startsWith(github.head_ref, 'factory/run/') ||
+      github.event.pull_request.user.login == 'exe-dev-github-integration[bot]') &&
+      'factory-compatibility' || 'factory-gates' }}
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - run: printf '%s\n' 'Ordinary PR compatibility; not factory certification.'

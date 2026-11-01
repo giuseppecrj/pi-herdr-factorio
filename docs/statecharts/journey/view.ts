@@ -1,96 +1,77 @@
-const STAGE: Record<string, string> = {
-  admit: "Checking the labeler",
-  specify: "Writing the contract",
-  accept: "Writing hidden acceptance tests",
-  build: "Building the patch",
-  publishing: "Publishing patch and held-out checks",
-  awaiting_ci: "CI runs main's gates and the hidden tests",
-  verdict: "Storing the bound CI verdict",
-  review: "Reviewing the patch",
-  land: "PR waits for your review",
+type Book = {
+	phase: string;
+	pending: string;
+	terminal: string;
+	assurance: string;
 };
 
-const END: Record<string, string> = {
-  landed: "Merged, issue closed",
-  needs_info: "Waiting for your answer",
-  rejected: "Rejected",
-  failed: "Failed",
-  budget: "Stopped",
-  cancelled: "Stopped",
+type State = { b: Book };
+
+export const title = "F09a candidate journey (presentation subset)";
+
+const phases = {
+	admit: "Checking authorization",
+	specify: "Writing the contract",
+	accept: "Writing acceptance tests",
+	build: "Building the initial patch",
+	validate: "Publishing and checking the exact candidate",
+	review_due: "Fresh review due",
+	reviewing: "Reviewing captured source and pin",
+	repair_due: "Pre-PR repair due",
+	repairing: "Building a sanitized repair",
+	repair_built: "Repair settled, selection due",
+	handoff: "Certified candidate, handoff incomplete",
+	waiting: "Ready PR waits for the owner, no model slot",
+	held: "PR held, historical certificate retained",
+	finishing: "Merge observed, stop and account before finish",
 };
 
-export const title = "A ticket's journey through the factory (v1 design)";
+export const state = ({ b }: State) => {
+	if (b.phase === "terminal")
+		return b.terminal === "merged"
+			? `Issue closed (${b.assurance})`
+			: "Run ended without merge";
 
-export const state = (v: any) => {
-  if (v.phase === "admit") return [STAGE.admit];
-  if (v.phase in STAGE) {
-    if (v.merged) return ["Run in progress", "Still working on a PR you already merged"];
-    return ["Run in progress", STAGE[v.phase]];
-  }
-  return [END[v.phase]];
+	if (b.pending === "stop_execution") return "Stopping captured execution";
+
+	if (b.pending === "finish_pr")
+		return "Known settlement, terminal bookkeeping due";
+
+	return (
+		Object.entries(phases).find(([phase]) => phase === b.phase)?.[1] ?? b.phase
+	);
 };
 
-export const group = (v: any) => {
-  if (v.phase === "admit") return "built";
-  if (v.phase === "specify") return "partly";
-  if (v.phase in STAGE) return "planned";
-  return v.phase === "landed" || v.phase === "needs_info" ? "planned" : "end";
+export const group = ({ b }: State) =>
+	b.phase === "terminal"
+		? "ended"
+		: b.phase === "waiting"
+			? "waiting"
+			: "active";
+
+export const colors = { active: "teal", waiting: "blue", ended: "tan" };
+
+const actions = {
+	Early: "next trusted stage",
+	EarlyRetry: "bounded early retry",
+	Validate: "exact CI result collected",
+	ReviewDue: "issue next round-global review",
+	Launch: "captured execution starts",
+	SettleReview: "review and usage settle",
+	Handoff: "reconcile exact head and checks",
+	RemoteOpen: "owned PR created (response may be lost)",
+	Open: "owned PR identity saved",
+	OrdinaryPass: "ordinary check passes on current PR head",
+	CompleteHandoff: "mark ready after exact check",
+	OwnerMerge: "owner merges on GitHub",
+	ObserveMerge: "observe actual merged head and merge SHA",
+	Stop: "confirmed stop, usage reconciled",
+	FinishPr: "terminal bookkeeping succeeds",
+	RemotePromote: "non-force update, not CAS",
+	Promote: "reread ref and PR head",
+	Refresh: "main movement selects fresh generation or holds",
+	HeadConverges: "PR head catches up to ref",
 };
 
-export const colors = {
-  built: "teal",
-  partly: "yellow",
-  planned: "purple",
-  end: "tan",
-};
-
-const rounds = (from: any) =>
-  from.repairs >= 2 ? "[2 repair rounds used]" : "[under 2 repair rounds used]";
-
-export const step = (action: string, from: any, _to: any) => {
-  switch (action) {
-    case "Admitted":
-      return "admitted, issue text frozen";
-    case "AdmitRefuses":
-      return "the labeler lacks write access";
-    case "Specified":
-      return "contract written";
-    case "TooVague":
-      return "ticket too vague, questions posted";
-    case "Accepted":
-      return "hidden tests kept on the VM";
-    case "Built":
-      return "patch ready";
-    case "Published":
-      return "two commits published, CI dispatched";
-    case "VerdictStored":
-      return "verdict stored for the exact CI head";
-    case "ChecksPass":
-      return "every check passes on that exact patch";
-    case "ChecksFail":
-      return `a check fails ${rounds(from)}`;
-    case "ReviewClean":
-      return "no blocking findings, PR marked ready";
-    case "ReviewBlocks":
-      return `blocking findings ${rounds(from)}`;
-    case "YouComment":
-      return `you comment on the PR ${rounds(from)}`;
-    case "YouMerge":
-      return from.phase === "land" || from.phase === "build"
-        ? "you merge the PR"
-        : null;
-    case "YouClosePR":
-      return from.phase === "land" ? "you close the PR without merging" : null;
-    case "StageFails":
-      return "a stage keeps failing";
-    case "BudgetSpent":
-      return "token budget spent";
-    case "PolicyStops":
-      return "policy refuses, or the patch touches a forbidden path";
-    case "LabelRemoved":
-      return "label removed or issue closed";
-    case "Done":
-      return null;
-  }
-  return action;
-};
+export const step = (action: string) =>
+	Object.entries(actions).find(([name]) => name === action)?.[1] ?? action;

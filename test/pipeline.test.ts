@@ -1,19 +1,16 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { decideAdmission, checkChangedPaths } from "../src/policy.ts";
-import { outcomeOf, startRun, type Run } from "../src/run.ts";
+import { outcomeOf, type Run } from "../src/run.ts";
 import { advance, type RunEvent } from "../src/stages.ts";
 import { type FactoryEvent, type Ticket, ticketKey } from "../src/tickets.ts";
 import { FakeTicketAdapter } from "./fake-ticket-adapter.ts";
 import {
 	acceptanceDigest,
-	candidateEvent,
-	currentHead,
+	builtEvent,
+	newRun,
 	apply,
 	contractDigest,
-	passingVerdict,
-	reviewedEvent,
-	patch,
 	ticket,
 } from "./helpers.ts";
 
@@ -58,15 +55,7 @@ async function admitFromLabel(
 
 	if (decision.kind === "refused") return "refused";
 
-	return apply(
-		startRun({
-			id: "run-1",
-			ticket: event.ref,
-			repo: "r",
-			baseSha: "a".repeat(40),
-		}),
-		{ kind: "admitted" },
-	);
+	return apply(newRun(), { kind: "admitted" });
 }
 
 describe("controller driven through the fake adapter", () => {
@@ -147,20 +136,61 @@ describe("controller driven through the fake adapter", () => {
 		const events: RunEvent[] = [
 			{ kind: "specified", contractDigest },
 			{ kind: "accepted", acceptanceDigest },
-			{ kind: "built", patchDigest: patch("a") },
-			candidateEvent,
-			{ kind: "validated", verdict: passingVerdict(patch("a")) },
-			reviewedEvent("a"),
-			{ kind: "landed", mergeSha: "e".repeat(40), ...currentHead },
+			builtEvent(),
 		];
 
-		const done = apply(admitted, ...events);
+		const candidate = apply(admitted, ...events);
+		assert.equal(outcomeOf(candidate), undefined);
+		assert.equal(adapter.calls.length, 0);
+
+		const observed = {
+			kind: "observed",
+			now: 100,
+			main: builtEvent().pin.originalBase,
+			pr: { kind: "none" },
+			executionAllowed: true,
+			eligibility: "ready",
+			capacityAvailable: true,
+			readiness: { kind: "unavailable" },
+		} as const;
+
+		const selected = apply(candidate, { kind: "candidate", event: observed });
+
+		const merging = advance(selected, {
+			kind: "candidate",
+			event: {
+				...observed,
+				executionAllowed: false,
+				eligibility: "withdrawn",
+				pr: {
+					kind: "merged",
+					number: 5,
+					head: builtEvent().pin.originalBase,
+					mergeSha: builtEvent().pin.originalBase,
+					actor: "owner",
+				},
+			},
+		});
+
+		assert.equal(merging.kind, "advanced");
+		assert.equal(merging.effect?.kind, "finish_pr");
+
+		if (merging.effect?.kind !== "finish_pr") throw new Error("missing finish");
+
+		const done = apply(merging.run, {
+			kind: "candidate",
+			event: {
+				kind: "effect_completed",
+				completion: { kind: "finish_pr", request: merging.effect },
+			},
+		});
+
 		await adapter.report(done.ticket, done);
 		await adapter.close(done.ticket, done);
 
 		assert.deepEqual(outcomeOf(done), {
 			kind: "landed",
-			mergeSha: "e".repeat(40),
+			mergeSha: builtEvent().pin.originalBase,
 		});
 		assert.deepEqual(
 			adapter.calls.map((call) => call.kind),
@@ -199,7 +229,6 @@ describe("controller driven through the fake adapter", () => {
 			admitted,
 			{ kind: "specified", contractDigest },
 			{ kind: "accepted", acceptanceDigest },
-			{ kind: "built", patchDigest: patch("bad") },
 		);
 
 		const paths = checkChangedPaths({
@@ -212,9 +241,6 @@ describe("controller driven through the fake adapter", () => {
 			kind: "rejected",
 			reason: "forbidden_paths",
 		});
-		assert.equal(
-			advance(done, { kind: "landed", mergeSha: "f".repeat(40) }).kind,
-			"invalid",
-		);
+		assert.equal(advance(done, builtEvent()).kind, "invalid");
 	});
 });

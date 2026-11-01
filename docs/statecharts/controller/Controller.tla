@@ -1,312 +1,163 @@
 ---- MODULE Controller ----
-\* One issue as src/orchestrator.ts and server/sandbox.ts handle it today:
-\* claim, launch in the sandbox, retry with a cap, release, restart recovery.
-EXTENDS Naturals
+EXTENDS Naturals, Sequences, FiniteSets
+CONSTANTS MaxGenerations, MaxRepairs, MaxRefreshes, MaxAttempts,
+          ReviewQuota, RepairQuota, RunQuota, UsageClass, PriorUsage, Presentation, Profile, LateUnknown,
+          MaxRestarts, CleanupPartition
+VARIABLES b, env, saved, mode, process, orphan, queued, restarts, privateOK,
+          readHead, refs, moved, deleted, deadline, mergeSeenMissing, focus
+controlVars == <<b, env, saved, mode, process, orphan, queued, restarts, privateOK,
+          readHead, refs, moved, deleted, deadline, mergeSeenMissing>>
+vars == <<b, env, saved, mode, process, orphan, queued, restarts, privateOK,
+          readHead, refs, moved, deleted, deadline, mergeSeenMissing, focus>>
+J == INSTANCE Journey
+Aux == <<saved, mode, process, orphan, queued, restarts, privateOK,
+         readHead, refs, moved, deleted, deadline, mergeSeenMissing, focus>>
+Stable == UNCHANGED focus
+Init == /\ J!Init /\ saved = b /\ mode = "ready" /\ process = 0 /\ orphan = FALSE
+    /\ queued = 0 /\ restarts = 0 /\ privateOK = TRUE /\ readHead = 0
+    /\ refs = {} /\ moved = {} /\ deleted = {}
+    /\ deadline = [g \in 1..MaxGenerations |-> 0] /\ mergeSeenMissing = FALSE
+    /\ focus \in (IF ~CleanupPartition THEN {0} ELSE IF Presentation THEN {1} ELSE 1..MaxGenerations)
 
-CONSTANTS MaxAttempts, AllowRelabel, MaxRestarts
+Decide == /\ Stable /\ mode = "ready" /\ privateOK /\ J!Policy
+    /\ mode' = "save" /\ UNCHANGED <<saved, process, orphan, queued, restarts, privateOK,
+        readHead, refs, moved, deleted, deadline, mergeSeenMissing>>
+ObserveTerminal == /\ Stable /\ mode \in {"effect", "response", "promote_write"} /\ privateOK
+    /\ (J!ObserveMerge \/ J!ObserveClose) /\ mode' = "save"
+    /\ UNCHANGED <<saved, process, orphan, queued, restarts, privateOK,
+        readHead, refs, moved, deleted, deadline, mergeSeenMissing>>
+Persist == /\ Stable /\ mode = "save" /\ saved' = b
+    /\ mode' = (IF b.pending = J!None THEN "ready" ELSE "effect")
+    /\ UNCHANGED <<b, env, process, orphan, queued, restarts, privateOK,
+        readHead, refs, moved, deleted, deadline, mergeSeenMissing>>
 
-VARIABLES
-    ticket,      \* "ready" or "gone" (label removed or issue closed)
-    event,       \* the current ready label event, 1 or 2 after a re-label
-    run,         \* the event of the run in controller memory, 0 for none
-    ph,          \* "none" "claimed" "running" "blocked" "retry" "ending"
-    endAs,       \* terminal status a run in "ending" will post
-    attempt,     \* the run's attempt; the marker carries it across restarts
-    tokens,      \* TRUE while the run's token budget has room; the marker carries usage
-    marker,      \* event -> last status posted on the issue, "none" before the first
-    cur,         \* this controller's sandbox for the issue: "none" "running" "stopping"
-    orphan,      \* a sandbox left by an earlier controller process is still running
-    loaded,      \* FALSE after a restart until the first tick has recovered claims
-    reconciled,  \* the executor has stopped every leftover sandbox
-    sandboxOk,   \* the rest of the sandbox preflight passes
-    pending,     \* event of a live run reserved after a restart but not yet adopted, 0 for none
-    restarts,
-    launchedEnded, \* a stage launched for a run whose marker was already terminal
-    branches,     \* events with published refs, abstracted across rounds
-    stage,
-    round
+PublishValidation == /\ Stable /\ mode = "effect" /\ b = saved /\ b.pending = "validate"
+    /\ (focus = 0 \/ focus = J!Current(b))
+    /\ J!Current(b) \notin refs /\ J!Current(b) \notin deleted
+    /\ refs' = refs \cup {J!Current(b)}
+    /\ deadline' = [deadline EXCEPT ![J!Current(b)] = 1]
+    /\ UNCHANGED <<b, env, saved, mode, process, orphan, queued, restarts, privateOK,
+        readHead, moved, deleted, mergeSeenMissing>>
+Validate == /\ Stable /\ mode = "effect" /\ b.pending = "validate"
+    /\ ((focus # 0 /\ focus # J!Current(b)) \/ J!Current(b) \in refs)
+    /\ J!Validate /\ mode' = "save"
+    /\ UNCHANGED <<saved, process, orphan, queued, restarts, privateOK,
+        readHead, refs, moved, deleted, deadline, mergeSeenMissing>>
+LaunchProcess == /\ Stable /\ mode = "effect" /\ b = saved
+    /\ b.pending \in {"launch_review", "repair_build"} /\ process = 0 /\ ~orphan
+    /\ env.enabled /\ process' = b.active /\ mode' = "response"
+    /\ UNCHANGED <<b, env, saved, orphan, queued, restarts, privateOK,
+        readHead, refs, moved, deleted, deadline, mergeSeenMissing>>
+LaunchResponse == /\ Stable /\ mode = "response" /\ J!Launch /\ mode' = "save"
+    /\ UNCHANGED <<saved, process, orphan, queued, restarts, privateOK,
+        readHead, refs, moved, deleted, deadline, mergeSeenMissing>>
+ProcessSettles == /\ Stable /\ process # 0 /\ ~orphan /\ mode # "down" /\ queued = 0
+    /\ queued' = process /\ process' = 0
+    /\ UNCHANGED <<b, env, saved, mode, orphan, restarts, privateOK,
+        readHead, refs, moved, deleted, deadline, mergeSeenMissing>>
+Consume == /\ Stable /\ mode = "ready" /\ queued # 0 /\ privateOK
+    /\ (env.pr # "merged" \/ b.terminal = "merged")
+    /\ (IF queued = b.active /\ b.phase \in {"reviewing", "repairing"}
+       THEN J!Callback
+       ELSE /\ b' = J!Account(b, queued, UsageClass, b.accounts[queued].known, b.accounts[queued].settled)
+            /\ UNCHANGED env)
+    /\ queued' = 0 /\ mode' = "save"
+    /\ UNCHANGED <<saved, process, orphan, restarts, privateOK,
+        readHead, refs, moved, deleted, deadline, mergeSeenMissing>>
+StopProcess == /\ Stable /\ mode = "effect" /\ b.pending = "stop_execution"
+    /\ process # 0 /\ process' = 0 /\ orphan' = FALSE
+    /\ UNCHANGED <<b, env, saved, mode, queued, restarts, privateOK,
+        readHead, refs, moved, deleted, deadline, mergeSeenMissing>>
+StopResponse == /\ Stable /\ mode = "effect" /\ b.pending = "stop_execution" /\ process = 0 /\ ~orphan
+    /\ J!Stop /\ mode' = "save"
+    /\ UNCHANGED <<saved, process, orphan, queued, restarts, privateOK,
+        readHead, refs, moved, deleted, deadline, mergeSeenMissing>>
 
-vars == <<ticket, event, run, ph, endAs, attempt, tokens, marker, cur, orphan,
-          loaded, reconciled, sandboxOk, pending, restarts, launchedEnded, branches, stage, round>>
+OpenRemote == /\ Stable /\ mode = "effect" /\ b = saved /\ J!RemoteOpen /\ UNCHANGED Aux
+ReadPredecessor == /\ Stable /\ mode = "effect" /\ b = saved /\ b.pending = "promote_pr"
+    /\ env.ref = b.current.expected /\ readHead' = env.ref
+    /\ mode' = "promote_write"
+    /\ UNCHANGED <<b, env, saved, process, orphan, queued, restarts, privateOK,
+        refs, moved, deleted, deadline, mergeSeenMissing>>
+WriteNonForce == /\ Stable /\ mode = "promote_write" /\ env.enabled /\ readHead = b.current.expected
+    /\ env.ref \in {0, b.current.expected, J!Current(b)}
+    /\ env' = [env EXCEPT !.ref = J!Current(b), !.ordinary = 0]
+    /\ mode' = "effect" /\ UNCHANGED <<b, saved, process, orphan, queued, restarts, privateOK,
+        readHead, refs, moved, deleted, deadline, mergeSeenMissing>>
+RefuseNonAncestor == /\ Stable /\ mode = "promote_write" /\ env.ref = 99
+    /\ b' = J!Hold(b) /\ mode' = "save" /\ UNCHANGED <<env, saved, process, orphan, queued, restarts, privateOK,
+        readHead, refs, moved, deleted, deadline, mergeSeenMissing>>
+OtherResponse == /\ Stable /\ mode = "effect" /\ b.pending \in {"open_pr", "promote_pr", "complete_handoff", "void_readiness", "finish_pr"}
+    /\ J!Completion /\ mode' = "save"
+    /\ UNCHANGED <<saved, process, orphan, queued, restarts, privateOK,
+        readHead, refs, moved, deleted, deadline, mergeSeenMissing>>
 
-Events == {1, 2}
-Terminal == {"released", "failed", "budget_exhausted", "stage_passed"}
-CI == {"publishing", "awaiting_ci", "ci_unavailable", "verdict_pass", "verdict_fail", "ci_timeout"}
-Live == {"claimed", "running", "blocked", "retrying"} \cup CI
+Crash == /\ Stable /\ ~Presentation /\ restarts < MaxRestarts /\ mode # "down" /\ mode # "missing"
+    /\ b' = saved /\ mode' = "down" /\ restarts' = restarts + 1
+    /\ orphan' = (process # 0) /\ queued' = 0
+    /\ UNCHANGED <<env, saved, process, privateOK, readHead, refs, moved, deleted, deadline, mergeSeenMissing>>
+LosePrivate == /\ Stable /\ ~Presentation /\ mode = "down" /\ privateOK
+    /\ privateOK' = FALSE /\ UNCHANGED <<b, env, saved, mode, process, orphan, queued,
+        restarts, readHead, refs, moved, deleted, deadline, mergeSeenMissing>>
+RecoverStop == /\ Stable /\ mode = "down" /\ orphan /\ process' = 0 /\ orphan' = FALSE
+    /\ UNCHANGED <<b, env, saved, mode, queued, restarts, privateOK,
+        readHead, refs, moved, deleted, deadline, mergeSeenMissing>>
+Recover == /\ Stable /\ mode = "down" /\ ~orphan /\ process = 0
+    /\ mode' = (IF privateOK THEN "save" ELSE "missing")
+    /\ b' = (IF privateOK /\ J!Active(saved) # 0 /\ saved.terminal = J!None
+       THEN [saved EXCEPT !.pending = IF saved.accounts[J!Active(saved)].stage = "review" THEN "launch_review" ELSE "repair_build"]
+       ELSE saved)
+    /\ UNCHANGED <<env, saved, process, orphan, queued, restarts, privateOK,
+        readHead, refs, moved, deleted, deadline, mergeSeenMissing>>
+ObserveMissing == /\ Stable /\ mode = "missing" /\ env.pr = "merged" /\ ~mergeSeenMissing
+    /\ mergeSeenMissing' = TRUE /\ UNCHANGED <<b, env, saved, mode, process, orphan, queued, restarts, privateOK,
+        readHead, refs, moved, deleted, deadline>>
 
-StatusOf(p) ==
-    CASE p = "claimed" -> "claimed"
-      [] p = "running" -> "running"
-      [] p = "blocked" -> "blocked"
-      [] p = "retry"   -> "retrying"
-      [] p \in CI -> p
-
-Init ==
-    /\ ticket = "ready" /\ event = 1
-    /\ run = 0 /\ ph = "none" /\ endAs = "none"
-    /\ attempt = 0 /\ tokens = TRUE
-    /\ marker = [e \in Events |-> "none"]
-    /\ cur = "none" /\ orphan = FALSE
-    /\ loaded = TRUE /\ reconciled = TRUE /\ sandboxOk = TRUE
-    /\ pending = 0 /\ restarts = 0 /\ launchedEnded = FALSE /\ branches = {}
-    /\ stage = "build" /\ round = 0
-
-\* Moves the run to a live phase and posts its marker.
-Go(p) == ph' = p /\ marker' = [marker EXCEPT ![run] = StatusOf(p)]
-
-\* Ends the run. A terminal marker waits while an aborted sandbox is stopping
-\* (#settling); otherwise #sync posts it and forgets the run.
-Finish(st, c) ==
-    /\ cur' = c
-    /\ IF c = "stopping"
-       THEN ph' = "ending" /\ endAs' = st /\ UNCHANGED <<run, marker>>
-       ELSE /\ ph' = "none" /\ endAs' = "none" /\ run' = 0
-            /\ marker' = [marker EXCEPT ![run] = st]
-
-\* #endStage: budget first, then the attempt cap, else a retry.
-EndStage(c) ==
-    \E left \in BOOLEAN :
-        /\ tokens' = (tokens /\ left)
-        /\ IF ~tokens'
-           THEN Finish("budget_exhausted", c) /\ UNCHANGED attempt
-           ELSE IF attempt >= MaxAttempts
-                THEN Finish("failed", c) /\ UNCHANGED attempt
-                ELSE /\ attempt' = attempt + 1 /\ cur' = c
-                     /\ Go("retry") /\ UNCHANGED <<run, endAs>>
-
-Environment == <<ticket, event, orphan, loaded, reconciled, sandboxOk, pending, restarts>>
-Fixed == <<Environment, branches, stage, round>>
-
-\* Dispatch claims only after the tick's ledger read, which adopts or
-\* releases a reserved run first.
-Admit ==
-    /\ loaded /\ pending = 0 /\ ticket = "ready" /\ run = 0 /\ ph = "none"
-    /\ marker[event] = "none"
-    /\ run' = event /\ attempt' = 1 /\ tokens' = TRUE
-    /\ ph' = "claimed" /\ marker' = [marker EXCEPT ![event] = "claimed"]
-    /\ stage' = "build" /\ round' = 0
-    /\ UNCHANGED <<endAs, cur, launchedEnded, Environment, branches>>
-
-Ready == loaded /\ ticket = "ready" /\ run = event
-
-Launch ==
-    /\ Ready /\ ph \in {"claimed", "retry", "blocked"} /\ cur = "none"
-    /\ ph = "blocked" => (sandboxOk /\ reconciled)
-    /\ launchedEnded' = (launchedEnded \/ marker[run] \in Terminal)
-    /\ IF ~tokens
-       THEN Finish("budget_exhausted", "none") /\ UNCHANGED <<attempt, tokens>>
-       ELSE IF sandboxOk /\ reconciled
-            THEN /\ cur' = "running" /\ Go("running")
-                 /\ UNCHANGED <<run, endAs, attempt, tokens>>
-            ELSE /\ ph # "blocked" /\ Go("blocked")
-                 /\ UNCHANGED <<run, endAs, attempt, tokens, cur>>
-    /\ UNCHANGED Fixed
-
-Running == ph = "running" /\ cur = "running"
-
-StagePasses ==
-    /\ Running /\ stage = "build" /\ cur' = "none" /\ Go("publishing")
-    /\ UNCHANGED <<run, endAs, attempt, tokens, launchedEnded>> /\ UNCHANGED Fixed
-
-Published ==
-    /\ UNCHANGED <<stage, round>>
-    /\ ph = "publishing" /\ Go("awaiting_ci")
-    /\ branches' = branches \cup {run}
-    /\ UNCHANGED <<run, endAs, attempt, tokens, cur, launchedEnded>> /\ UNCHANGED Environment
-
-CollectCI ==
-    /\ ph = "awaiting_ci"
-    /\ \E result \in {"verdict_pass", "verdict_fail"} : Go(result)
-    /\ UNCHANGED <<run, endAs, attempt, tokens, cur, launchedEnded>> /\ UNCHANGED Fixed
-
-CIUnavailable ==
-    /\ ph = "awaiting_ci" /\ Go("ci_unavailable")
-    /\ UNCHANGED <<run, endAs, attempt, tokens, cur, launchedEnded>> /\ UNCHANGED Fixed
-
-RetryCI ==
-    /\ ph = "ci_unavailable" /\ Go("awaiting_ci")
-    /\ UNCHANGED <<run, endAs, attempt, tokens, cur, launchedEnded>> /\ UNCHANGED Fixed
-
-CIDeadline ==
-    /\ ph \in {"awaiting_ci", "ci_unavailable"} /\ Go("ci_timeout")
-    /\ UNCHANGED <<run, endAs, attempt, tokens, cur, launchedEnded>> /\ UNCHANGED Fixed
-
+Expire == /\ Stable /\ \E g \in refs : deadline[g] = 1 /\ deadline' = [deadline EXCEPT ![g] = 2]
+    /\ UNCHANGED <<b, env, saved, mode, process, orphan, queued, restarts, privateOK,
+        readHead, refs, moved, deleted, mergeSeenMissing>>
+MoveValidationRef == /\ Stable /\ ~Presentation /\ \E g \in refs : moved' = moved \cup {g}
+    /\ UNCHANGED <<b, env, saved, mode, process, orphan, queued, restarts, privateOK,
+        readHead, refs, deleted, deadline, mergeSeenMissing>>
 Cleanup ==
-    /\ UNCHANGED <<stage, round>>
-    /\ \E e \in Events :
-        /\ e \in branches /\ marker[e] \in Terminal
-        /\ branches' = branches \ {e}
-    /\ UNCHANGED <<ticket, event, run, ph, endAs, attempt, tokens, marker, cur,
-                   orphan, loaded, reconciled, sandboxOk, pending, restarts, launchedEnded>>
-
-RepairOrFail ==
-    IF round < 2
-    THEN /\ round' = round + 1 /\ stage' = "build" /\ attempt' = 1
-         /\ Go("claimed") /\ UNCHANGED <<run, endAs, cur>>
-    ELSE /\ Finish("failed", "none") /\ UNCHANGED <<attempt, stage, round>>
-
-StoreVerdict ==
-    /\ ph \in {"verdict_pass", "verdict_fail", "ci_timeout"}
-    /\ CASE ph = "verdict_pass" ->
-                /\ stage' = "review" /\ attempt' = 1 /\ Go("claimed")
-                /\ UNCHANGED <<run, endAs, cur, round>>
-         [] ph = "verdict_fail" -> RepairOrFail
-         [] OTHER -> /\ Finish("failed", "none") /\ UNCHANGED <<attempt, stage, round>>
-    /\ UNCHANGED <<tokens, launchedEnded, Environment, branches>>
-
-ReviewPasses ==
-    /\ Running /\ stage = "review" /\ Finish("stage_passed", "none")
-    /\ UNCHANGED <<attempt, tokens, launchedEnded>> /\ UNCHANGED Fixed
-
-ReviewBlocks ==
-    /\ Running /\ stage = "review"
-    /\ IF round < 2
-       THEN /\ round' = round + 1 /\ stage' = "build" /\ attempt' = 1
-            /\ cur' = "none" /\ Go("claimed") /\ UNCHANGED <<run, endAs>>
-       ELSE /\ Finish("failed", "none") /\ UNCHANGED <<attempt, stage, round>>
-    /\ UNCHANGED <<tokens, launchedEnded, Environment, branches>>
-
-StageRefuses ==
-    /\ Running /\ Finish("failed", "none")
-    /\ UNCHANGED <<attempt, tokens, launchedEnded>> /\ UNCHANGED Fixed
-
-StageFails ==
-    /\ Running /\ EndStage("none")
-    /\ UNCHANGED launchedEnded /\ UNCHANGED Fixed
-
-StageStalls ==
-    /\ Running /\ EndStage("stopping")
-    /\ UNCHANGED launchedEnded /\ UNCHANGED Fixed
-
-Release ==
-    /\ loaded /\ run # 0 /\ ph \in ({"claimed", "running", "blocked", "retry"} \cup CI)
-    /\ (ticket = "gone" \/ event # run)
-    /\ Finish("released", IF cur = "running" THEN "stopping" ELSE cur)
-    /\ UNCHANGED <<attempt, tokens, launchedEnded>> /\ UNCHANGED Fixed
-
-PostEnd ==
-    /\ ph = "ending" /\ cur # "stopping"
-    /\ marker' = [marker EXCEPT ![run] = endAs]
-    /\ run' = 0 /\ ph' = "none" /\ endAs' = "none"
-    /\ UNCHANGED <<attempt, tokens, cur, launchedEnded>> /\ UNCHANGED Fixed
-
-SandboxStops ==
-    /\ UNCHANGED <<stage, round>>
-    /\ cur = "stopping" /\ cur' = "none"
-    /\ UNCHANGED <<ticket, event, run, ph, endAs, attempt, tokens, marker,
-                   orphan, loaded, reconciled, sandboxOk, pending, restarts, launchedEnded, branches>>
-
-Restart ==
-    /\ UNCHANGED <<stage, round>>
-    /\ restarts < MaxRestarts /\ restarts' = restarts + 1
-    /\ run' = 0 /\ ph' = "none" /\ endAs' = "none"
-    /\ orphan' = (orphan \/ cur # "none") /\ cur' = "none"
-    /\ loaded' = FALSE /\ reconciled' = FALSE
-    /\ UNCHANGED <<ticket, event, attempt, tokens, marker, sandboxOk, pending, launchedEnded, branches>>
-
-LiveEvent == {e \in Events : marker[e] \in Live}
-
-\* First tick after a restart: executor.recover() stops leftovers, and
-\* #loadClaims reserves the run its claim file names. Adoption waits for
-\* a later step whose ledger, timeline and workflow reads succeed.
-Recover ==
-    /\ UNCHANGED <<stage, round>>
-    /\ ~loaded /\ loaded' = TRUE
-    /\ \E ok \in BOOLEAN :
-        /\ reconciled' = ok /\ orphan' = (orphan /\ ~ok)
-    /\ pending' = IF LiveEvent = {} THEN 0 ELSE CHOOSE x \in LiveEvent : TRUE
-    /\ UNCHANGED <<ticket, event, run, ph, endAs, attempt, tokens, marker, cur,
-                   sandboxOk, restarts, launchedEnded, branches>>
-
-\* #discover, #settleClaims and #adoptExistingRun rebuild the run from its marker.
-Adopt ==
-    /\ UNCHANGED <<stage, round>>
-    /\ loaded /\ pending # 0 /\ pending' = 0
-    /\ LET e == pending
-            m == marker[pending]
-       IN IF ticket = "gone" \/ e # event
-          THEN /\ marker' = [marker EXCEPT ![e] = "released"]
-               /\ UNCHANGED <<run, ph, endAs, attempt, tokens>>
-          ELSE IF m = "running"
-               THEN \* the interrupted attempt ends as a failed one
-                    IF ~tokens
-                    THEN /\ marker' = [marker EXCEPT ![e] = "budget_exhausted"]
-                         /\ UNCHANGED <<run, ph, endAs, attempt, tokens>>
-                    ELSE IF attempt >= MaxAttempts
-                    THEN /\ marker' = [marker EXCEPT ![e] = "failed"]
-                         /\ UNCHANGED <<run, ph, endAs, attempt, tokens>>
-                    ELSE /\ run' = e /\ attempt' = attempt + 1 /\ ph' = "retry"
-                         /\ marker' = [marker EXCEPT ![e] = "retrying"]
-                         /\ UNCHANGED <<endAs, tokens>>
-               ELSE /\ run' = e /\ marker' = marker /\ UNCHANGED <<endAs, attempt, tokens>>
-                    /\ ph' = CASE m = "claimed" -> "claimed"
-                               [] m = "blocked" -> "blocked"
-                               [] m = "retrying" -> "retry"
-                               [] m \in CI -> m
-    /\ UNCHANGED <<ticket, event, cur, orphan, loaded, reconciled, sandboxOk, restarts, launchedEnded, branches>>
-
-\* The preflight retries the reconcile until every leftover is stopped.
-Reconcile ==
-    /\ UNCHANGED <<stage, round>>
-    /\ loaded /\ ~reconciled /\ reconciled' = TRUE /\ orphan' = FALSE
-    /\ UNCHANGED <<ticket, event, run, ph, endAs, attempt, tokens, marker, cur,
-                   loaded, sandboxOk, pending, restarts, launchedEnded, branches>>
-
-YouRemoveLabel ==
-    /\ UNCHANGED <<stage, round>>
-    /\ ticket = "ready" /\ ticket' = "gone"
-    /\ UNCHANGED <<event, run, ph, endAs, attempt, tokens, marker, cur, orphan,
-                   loaded, reconciled, sandboxOk, pending, restarts, launchedEnded, branches>>
-
-YouRelabel ==
-    /\ UNCHANGED <<stage, round>>
-    /\ AllowRelabel /\ event = 1 /\ event' = 2 /\ ticket' = "ready"
-    /\ UNCHANGED <<run, ph, endAs, attempt, tokens, marker, cur, orphan,
-                   loaded, reconciled, sandboxOk, pending, restarts, launchedEnded, branches>>
-
-SandboxBreaks ==
-    /\ UNCHANGED <<stage, round>>
-    /\ sandboxOk /\ sandboxOk' = FALSE
-    /\ UNCHANGED <<ticket, event, run, ph, endAs, attempt, tokens, marker, cur,
-                   orphan, loaded, reconciled, pending, restarts, launchedEnded, branches>>
-
-SandboxHeals ==
-    /\ UNCHANGED <<stage, round>>
-    /\ ~sandboxOk /\ sandboxOk' = TRUE
-    /\ UNCHANGED <<ticket, event, run, ph, endAs, attempt, tokens, marker, cur,
-                   orphan, loaded, reconciled, pending, restarts, launchedEnded, branches>>
-
-Idle ==
-    /\ loaded /\ run = 0 /\ cur = "none" /\ pending = 0
-    /\ (ticket = "gone" \/ marker[event] \in Terminal)
+    /\ Stable
+    /\ \E g \in refs \ moved :
+           /\ (g <= Len(saved.history) \/ saved.phase \in {"held", "terminal"} \/ saved.pending = "finish_pr")
+           /\ (deadline[g] = 2 \/ (g <= Len(J!Generations(saved)) /\ J!Generations(saved)[g].ci))
+           /\ refs' = refs \ {g} /\ deleted' = deleted \cup {g}
+    /\ UNCHANGED <<b, env, saved, mode, process, orphan, queued, restarts, privateOK,
+        readHead, moved, deadline, mergeSeenMissing>>
+Environment == Stable /\ J!Environment /\ UNCHANGED Aux
+Idle == /\ (mode = "missing" \/ b.phase \in {"waiting", "held", "terminal"} \/ ~env.enabled \/ ~env.capacity)
     /\ UNCHANGED vars
+Next == Decide \/ ObserveTerminal \/ Persist \/ PublishValidation \/ Validate \/ LaunchProcess \/ LaunchResponse
+    \/ ProcessSettles \/ Consume \/ StopProcess \/ StopResponse \/ OpenRemote \/ ReadPredecessor
+    \/ WriteNonForce \/ RefuseNonAncestor \/ OtherResponse \/ Crash \/ LosePrivate \/ RecoverStop
+    \/ Recover \/ ObserveMissing \/ Expire \/ MoveValidationRef \/ Cleanup \/ Environment \/ Idle
+Spec == Init /\ [][Next]_vars /\ WF_controlVars(Persist) /\ WF_controlVars(OtherResponse)
+    /\ WF_controlVars(RecoverStop) /\ WF_controlVars(Recover) /\ WF_controlVars(Decide) /\ WF_controlVars(ObserveTerminal)
 
-Next ==
-    \/ Admit \/ Launch \/ StagePasses \/ Published \/ CollectCI \/ StoreVerdict
-    \/ CIUnavailable \/ RetryCI \/ CIDeadline \/ Cleanup \/ ReviewPasses \/ ReviewBlocks
-    \/ StageRefuses \/ StageFails \/ StageStalls
-    \/ Release \/ PostEnd \/ SandboxStops \/ Restart \/ Recover \/ Adopt \/ Reconcile
-    \/ YouRemoveLabel \/ YouRelabel \/ SandboxBreaks \/ SandboxHeals \/ Idle
-
-\* Adoption's reads succeed eventually.
-Spec == Init /\ [][Next]_vars /\ WF_vars(Adopt) /\ WF_vars(Recover)
-        /\ WF_vars(Published) /\ WF_vars(CIDeadline) /\ WF_vars(StoreVerdict)
-        /\ WF_vars(Release) /\ WF_vars(Cleanup) /\ WF_vars(ReviewPasses)
-        /\ WF_vars(StagePasses) /\ WF_vars(SandboxHeals) /\ WF_vars(Reconcile)
-        /\ SF_vars(Launch) /\ WF_vars(SandboxStops) /\ WF_vars(PostEnd)
-
-CIEnds == \A e \in Events : marker[e] \in CI ~> (marker[e] \in Terminal /\ e \notin branches)
-
-\* Never two sandboxes running a stage for one issue.
-OneSandboxPerIssue == ~(orphan /\ cur # "none") /\ (ph \in CI => cur = "none")
-\* A run that ended never launches a stage again.
-EndedStaysEnded == ~launchedEnded
-\* A run never gets more than MaxAttempts attempts at a stage.
-AttemptCap == attempt <= MaxAttempts /\ round <= 2
-\* At most one live run per issue on GitHub.
-OneLiveRun == \A a, b \in Events : (marker[a] \in Live /\ marker[b] \in Live) => a = b
-\* After the first tick, a live run on GitHub is held in memory or reserved for adoption.
-NotLost == loaded => \A e \in Events : marker[e] \in Live => (run = e \/ pending = e)
-\* A reserved run is adopted or ended: a restart never loses it.
-Adopted == pending # 0 ~> pending = 0
+TypeOK == J!TypeOK /\ mode \in {"ready", "save", "effect", "response", "promote_write", "down", "missing"}
+    /\ focus \in 0..MaxGenerations /\ (CleanupPartition => Cardinality(refs) <= 1)
+BookBounded == J!BookBounded
+ReadyHasCertificate == J!ReadyHasCertificate
+AllowanceWithinRemaining == J!AllowanceWithinRemaining
+ExactBinding == J!ExactBinding
+CertificateSound == J!CertificateSound
+MergeAssuranceTruthful == J!MergeAssuranceTruthful
+NoPostPrRepair == J!NoPostPrRepair
+WaitingSlotFree == J!WaitingSlotFree
+EffectHasDurableIntent == mode \in {"effect", "response", "promote_write"} => b = saved
+OneExecution == J!OneExecution
+OneSandbox == orphan => process # 0
+ProcessHasAccount == process # 0 => process \in J!Indices(saved.accounts)
+NoTerminalProcess == b.phase = "terminal" => process = 0 /\ J!Drained(b)
+MissingGrantsNoWork == ~privateOK => mode \in {"down", "missing"}
+CleanupOwnedOnly == deleted \cap moved = {}
+DeadlineNeverReset == [][\A g \in 1..MaxGenerations : deadline'[g] >= deadline[g]]_vars
+SavedUsageMonotonic == [][J!Usage(saved') >= J!Usage(saved)]_vars
+SavedAttemptsMonotonic == [][Len(saved'.accounts) >= Len(saved.accounts)]_vars
+SavedHistoryImmutable == [][SubSeq(saved'.history, 1, Len(saved.history)) = saved.history]_vars
+ObservedMergeSettles == (b.terminal = "merged" /\ J!Drained(b) /\ process = 0 /\ mode # "down")
+    ~> (b.phase = "terminal" \/ mode = "missing")
 ====

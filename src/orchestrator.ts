@@ -1,13 +1,27 @@
 import type { Validator, ValidationState } from "./validation.ts";
-import { MAX_REPAIR_ROUNDS } from "./stages.ts";
 import {
-	REVIEW_MAX_TOKENS,
-	REPAIR_BUILD_MAX_TOKENS,
+	beginCandidate,
+	MAX_REVIEW_ATTEMPTS,
+	candidateUsage,
+	candidateProjection,
+	handoffCandidate,
+	candidateAllowance,
+	type CandidateState,
+	type CandidateEvent,
+	type CandidateEffect,
+	type CandidateEffectResult,
+	type CandidateExecution,
+	type GenerationRef,
+	type PrObservation,
+} from "./handoff.ts";
+import {
 	REVIEW_TOOLS,
+	ReviewEvidenceUnavailable,
+	reviewSeats,
 	type ReviewInput,
 	type ReviewReceipt,
 } from "./review.ts";
-import { verdictPasses, type Verdict } from "./run.ts";
+import type { Verdict } from "./run.ts";
 
 import {
 	BUILD_TOOLS,
@@ -124,7 +138,7 @@ import {
 	parseWorkflow,
 	WORKFLOW_PATH,
 } from "./workflow.ts";
-import { digestOf } from "./run.ts";
+import { digestOf, isDigest } from "./run.ts";
 
 export type { StageResult };
 
@@ -144,6 +158,7 @@ export type StageLaunchInput = {
 	readonly runId: Digest;
 	readonly stage: ModelStage;
 	readonly attempt: number;
+	readonly execution?: CandidateExecution;
 	readonly workspace: string;
 	readonly prompt: string;
 	readonly specify?: SpecifyReviewInput;
@@ -185,10 +200,40 @@ export type StageOutput =
 type WorkflowPin = Pick<ActiveRun, "workflowSha" | "workflowDigest">;
 
 export interface StageExecutor {
+	candidate?: {
+		observeMissing?(marker: Marker): Promise<PrObservation>;
+		observe(
+			state: CandidateState,
+			now: number,
+		): Promise<
+			Omit<
+				Extract<CandidateEvent, { kind: "observed" }>,
+				"executionAllowed" | "capacityAvailable"
+			>
+		>;
+		execute(
+			state: CandidateState,
+			effect: Exclude<
+				CandidateEffect,
+				{
+					kind:
+						| "validate"
+						| "launch_review"
+						| "repair_build"
+						| "stop_execution";
+				}
+			>,
+		): Promise<CandidateEffectResult | null>;
+		patch(
+			state: CandidateState,
+			round: number,
+		): Promise<Extract<PatchRead, { kind: "found" }> | null>;
+	};
 	prepareReview?(
 		input: WorkflowPin & {
 			runId: Digest;
 			round: number;
+			execution?: Extract<CandidateExecution, { stage: "review" }>;
 			workspace: string;
 		},
 	): Promise<ReviewPreparation>;
@@ -215,6 +260,7 @@ export interface StageExecutor {
 		readonly stage: ModelStage;
 		readonly attempt: number;
 		readonly round?: number;
+		readonly execution?: CandidateExecution;
 	}): Promise<number | null>;
 	/**
 	 * The final text of an execution of the attempt that passed and kept it,
@@ -226,6 +272,7 @@ export interface StageExecutor {
 			readonly runId: Digest;
 			readonly attempt: number;
 			readonly round?: number;
+			readonly execution?: CandidateExecution;
 		} & (
 			| { readonly stage: Exclude<ModelStage, "review"> }
 			| ({ readonly stage: "review" } & WorkflowPin)
@@ -238,13 +285,13 @@ export interface StageExecutor {
 		readonly workspace: string;
 		readonly build?: boolean;
 		readonly round?: number;
+		readonly feedbackFrom?: GenerationRef;
 	}): Promise<CheckoutResult>;
 }
 
 type StageEnd = Pick<StageResult, "kind" | "usage"> & {
 	readonly output: string | null;
 	readonly build?: PatchRead;
-	readonly review?: ReviewReceipt;
 	readonly model?: string;
 	readonly observed?: string | null;
 };
@@ -275,6 +322,9 @@ export type ClaimRecord = {
 	readonly candidate?: GitSha | null;
 	readonly round?: number;
 	readonly ciRun?: number | null;
+	readonly handoff?: CandidateState;
+	readonly enteredAt?: number;
+	readonly marker?: Marker;
 };
 
 type ConfirmedRecord = ClaimRecord & { readonly seq: number };
@@ -338,7 +388,8 @@ export interface RunFiles {
 export type RetryCause = "stage_failed" | "stalled" | "interrupted";
 
 export type RunPhase =
-	| { readonly kind: "awaiting_ci" }
+	| { readonly kind: "candidate"; readonly status: RunStatus }
+	| { readonly kind: "evidence_missing" }
 	| { readonly kind: "claimed" }
 	| {
 			readonly kind: "running";
@@ -368,7 +419,6 @@ export type Effects =
 			readonly kind: "build";
 			readonly result: Extract<PatchRead, { kind: "found" }>;
 	  }
-	| { readonly kind: "review"; readonly receipt: ReviewReceipt }
 	| {
 			readonly kind: "acceptance";
 			readonly contract: Contract;
@@ -413,7 +463,6 @@ type Prepared = {
 	readonly workspace?: string;
 	readonly build?: StageLaunchInput["build"];
 	readonly specify?: SpecifyReviewInput;
-	readonly review?: ReviewPreparation;
 };
 
 const UNPREPARED: Prepared = { kind: "ready", inputs: null, prompt: "" };
@@ -485,8 +534,9 @@ export type ActiveRun = {
 	labelTick: number;
 	inputs: StageInputs | null;
 	phase: RunPhase;
-	validation?: ValidationState;
 	round?: number;
+	handoff?: CandidateState;
+	enteredAt?: number;
 };
 
 /**
@@ -783,12 +833,14 @@ function ambiguityRecursOnReread(detail: Ambiguity): boolean {
 
 function desiredStatus(phase: RunPhase): RunStatus {
 	switch (phase.kind) {
+		case "candidate":
+			return phase.status;
 		case "claimed":
 			return "claimed";
 		case "running":
-		case "awaiting_ci":
 			return "running";
 		case "blocked":
+		case "evidence_missing":
 			return "blocked";
 		case "retry_queued":
 			return "retrying";
@@ -811,6 +863,9 @@ type WorkspacePreparation =
 	| { readonly kind: "unavailable" };
 
 function holdsSlot(run: ActiveRun): boolean {
+	if (run.handoff !== undefined)
+		return run.handoff.accounts.some((a) => a.settlement !== "settled");
+
 	return (
 		run.stage !== "validate" &&
 		(run.phase.kind === "claimed" ||
@@ -900,6 +955,15 @@ export class Orchestrator {
 	readonly #behind = new Map<number, TickReport["ledgerBehind"][number]>();
 	readonly #stages = new Set<Promise<void>>();
 	readonly #draining = new Set<Draining>();
+	readonly #candidateRecovery = new Set<Digest>();
+	readonly #candidateResults: {
+		readonly runId: Digest;
+		readonly event: CandidateEvent;
+	}[] = [];
+	readonly #candidateExecutions = new Map<
+		Digest,
+		{ readonly abort: AbortController; settled: boolean }
+	>();
 	#enabled = false;
 	#last: ReportInput | null = null;
 
@@ -961,6 +1025,7 @@ export class Orchestrator {
 			await this.#loadClaims();
 		}
 
+		await this.#observeCandidates(false);
 		this.#countLateUsage();
 
 		const held = this.#limits();
@@ -991,6 +1056,8 @@ export class Orchestrator {
 
 		const open =
 			gate.kind === "open" && candidates.kind === "ok" && limits !== null;
+
+		await this.#observeCandidates(open);
 
 		if (open) {
 			await this.#dispatch({
@@ -1052,11 +1119,15 @@ export class Orchestrator {
 		if (limits === null || last === null) return null;
 
 		const running = () =>
+			[...this.#candidateExecutions.values()].some(
+				(execution) => !execution.settled,
+			) ||
 			[...this.state.runs.values()].some((run) => run.phase.kind === "running");
 
-		if (!running()) return null;
+		if (!running() && this.#candidateResults.length === 0) return null;
 
 		while (running()) {
+			await this.#observeCandidates(false);
 			this.#countLateUsage();
 			await this.#reconcileStages(this.#input.clock.now(), limits);
 
@@ -1073,6 +1144,7 @@ export class Orchestrator {
 		}
 
 		await Promise.all(this.#stages);
+		await this.#observeCandidates(false);
 		this.#countLateUsage();
 
 		for (const run of this.state.runs.values()) {
@@ -1105,10 +1177,106 @@ export class Orchestrator {
 				});
 			} else {
 				this.#reserved.add(claim.issue);
+
+				if (claim.handoff !== undefined) await this.#restoreCandidate(claim);
 			}
 		}
 
 		this.#claimsLoaded = true;
+	}
+
+	async #restoreCandidate(claim: ClaimRecord): Promise<void> {
+		const handoff = claim.handoff;
+
+		if (
+			handoff === undefined ||
+			handoff.pin.runId !== claim.runId ||
+			handoff.pin.issue !== claim.issue ||
+			handoff.pin.repo !== this.#input.repo
+		)
+			return;
+
+		const admitted = await this.#input.store.read({
+			repo: this.#input.repo,
+			issue: claim.issue,
+			eventId: claim.eventId,
+		});
+
+		if (
+			admitted.kind !== "found" ||
+			admitted.receipt.baseSha !== handoff.pin.workflowSha ||
+			admitted.receipt.workflowDigest !== handoff.pin.workflowDigest
+		)
+			return;
+		const ledger = await this.#readLedger(claim.issue);
+
+		if (ledger.kind !== "ok") return;
+
+		if (ledger.value.kind === "corrupt") {
+			this.#markCorrupt(claim.issue, ledger.value, null);
+
+			return;
+		}
+
+		const marked =
+			ledger.kind === "ok" && ledger.value.kind === "clean"
+				? (latestFor(ledger.value, claim.runId)?.marker ?? null)
+				: null;
+
+		if (
+			marked !== null &&
+			isTerminal(marked.status) &&
+			marked.seq >= (claim.seq ?? 0)
+		) {
+			await this.#keepEnded(
+				{
+					...claim,
+					seq: marked.seq,
+					status: marked.status,
+					stage: marked.stage,
+					attempt: marked.attempt,
+					usage: Math.max(candidateUsage(handoff), marked.usage),
+				},
+				true,
+			);
+			this.#reserved.delete(claim.issue);
+
+			return;
+		}
+
+		const run: ActiveRun = {
+			runId: claim.runId,
+			issue: claim.issue,
+			eventId: claim.eventId,
+			eventAt: admitted.receipt.eventAt,
+			snapshotDigest: admitted.receipt.snapshotDigest,
+			workflowSha: admitted.receipt.baseSha,
+			workflowDigest: admitted.receipt.workflowDigest,
+			stage: candidateProjection(handoff).stage,
+			attempt: candidateProjection(handoff).attempt,
+			round: candidateProjection(handoff).round,
+			usage: candidateUsage(handoff),
+			seq: claim.seq ?? 0,
+			marked,
+			inflight: null,
+			claimUnwritten: false,
+			workspaceMissing: false,
+			replay: false,
+			unsettled: null,
+			adopted: false,
+			clearNeedsInfo: false,
+			labelFailures: 0,
+			labelTick: 0,
+			inputs: null,
+			phase: { kind: "candidate", status: candidateProjection(handoff).status },
+			handoff,
+			enteredAt: claim.enteredAt,
+		};
+
+		this.state.runs.set(run.issue, run);
+		this.#candidateRecovery.add(run.runId);
+		this.#reserved.delete(run.issue);
+		this.#recover.delete(run.issue);
 	}
 
 	async #gate(): Promise<Gate> {
@@ -1195,6 +1363,9 @@ export class Orchestrator {
 	/** Refreshes every claim against GitHub, before the per-tick reads that gate dispatch. */
 	async #reconcileClaims(candidates: Read<IssueRecord[]>): Promise<void> {
 		for (const run of this.state.runs.values()) {
+			if (run.handoff !== undefined || run.phase.kind === "evidence_missing")
+				continue;
+
 			if (run.claimUnwritten) await this.#writeClaim(run);
 
 			const eligibility =
@@ -1538,44 +1709,7 @@ export class Orchestrator {
 		return spent ?? 0;
 	}
 
-	async #roundSpent(
-		run: ActiveRun,
-		stage: ModelStage,
-		prior: number,
-	): Promise<number> {
-		let total = prior;
-
-		for (let attempt = 1; attempt < run.attempt; attempt++)
-			total +=
-				(await this.#input.executor.spent({
-					runId: run.runId,
-					stage,
-					attempt,
-					round: run.round ?? 0,
-				})) ?? 0;
-
-		return total;
-	}
-
 	#finishStage(run: ActiveRun, result: StageEnd, limits: Limits): void {
-		if (run.stage === "review" && result.review !== undefined) {
-			run.usage += result.usage;
-			this.state.totals.usage += result.usage;
-			run.phase = {
-				kind: "reporting",
-				status: "stage_passed",
-				effects: { kind: "review", receipt: result.review },
-			};
-
-			return;
-		}
-
-		if (run.stage === "review" && result.kind === "passed") {
-			this.#endStage(run, "stage_failed", result.usage, limits);
-
-			return;
-		}
-
 		if (run.stage === "build" && result.build !== undefined) {
 			if (
 				result.build.kind === "unavailable" ||
@@ -1861,6 +1995,8 @@ export class Orchestrator {
 		local: ConfirmedRecord,
 		ledger: CleanLedger,
 	): Promise<Marker | null> {
+		if (local.marker !== undefined) return local.marker;
+
 		const stored = await this.#input.store.read({
 			repo: this.#input.repo,
 			issue: local.issue,
@@ -2158,7 +2294,6 @@ export class Orchestrator {
 			workspaceMissing: false,
 			replay: false,
 			unsettled: null,
-			validation: claim.validation,
 			round: claim.round ?? 0,
 			adopted: true,
 			clearNeedsInfo: false,
@@ -2286,7 +2421,6 @@ export class Orchestrator {
 				local?.runId === marker.runId ? (local.labelFailures ?? 0) : 0,
 			labelTick: 0,
 			inputs: null,
-			validation: local?.runId === marker.runId ? local.validation : undefined,
 			round: Math.max(
 				marker.round ?? 0,
 				local?.runId === marker.runId ? (local.round ?? 0) : 0,
@@ -2297,12 +2431,30 @@ export class Orchestrator {
 					: { kind: "claimed" },
 		};
 
-		if ((run.round ?? 0) > (marker.round ?? 0)) {
-			run.stage = "build";
-			run.attempt = 1;
-			run.validation = undefined;
-			run.usage = Math.max(run.usage, local?.usage ?? 0);
-			run.phase = { kind: "claimed" };
+		if (
+			marker.v === 3 ||
+			marker.candidate != null ||
+			marker.handoff !== undefined ||
+			marker.stage === "validate" ||
+			marker.stage === "review" ||
+			marker.stage === "land" ||
+			(run.round ?? 0) > 0
+		) {
+			run.phase =
+				marker.pr === null
+					? { kind: "ending", status: "failed" }
+					: { kind: "evidence_missing" };
+
+			if (marker.pr === null) this.state.totals.failures++;
+			this.#input.log("validation_failed", {
+				issue: run.issue,
+				runId: run.runId,
+				why: "validation_state_missing",
+			});
+			this.state.runs.set(run.issue, run);
+			await this.#sync(run);
+
+			return run;
 		}
 
 		this.state.runs.set(run.issue, run);
@@ -2347,26 +2499,12 @@ export class Orchestrator {
 					!(output instanceof Object && output.kind === "pending")),
 		);
 
-		const resumeCi =
-			run.stage === "validate" && marker.status === "running" && !releasing;
-
-		if (resumeCi) {
-			if (marker.candidate != null && run.validation === undefined) {
-				await this.#validate(run);
-
-				return run;
-			}
-
-			run.phase = { kind: "awaiting_ci" };
-		}
-
 		const recovered =
-			resumeCi ||
-			(limits !== null &&
-				marker.status === "running" &&
-				eligibility !== "closed" &&
-				eligibility !== "new_event" &&
-				(await this.#recoverOutput(run, output)));
+			limits !== null &&
+			marker.status === "running" &&
+			eligibility !== "closed" &&
+			eligibility !== "new_event" &&
+			(await this.#recoverOutput(run, output));
 
 		if (recovered) {
 			this.#input.log(
@@ -2425,15 +2563,6 @@ export class Orchestrator {
 	}): Promise<void> {
 		const { now, limits } = input;
 		const runs = [...this.state.runs.values()];
-
-		for (const run of runs) {
-			if (
-				run.phase.kind === "awaiting_ci" &&
-				this.#confirmed.has(run.issue) &&
-				run.inflight === null
-			)
-				await this.#validate(run);
-		}
 
 		for (const record of [...input.candidates, ...input.direct]) {
 			const issue = record.number;
@@ -3154,15 +3283,22 @@ export class Orchestrator {
 	}
 
 	async #launch(run: ActiveRun): Promise<boolean> {
-		if (run.claimUnwritten) return false;
+		if (
+			run.claimUnwritten ||
+			run.handoff !== undefined ||
+			run.phase.kind === "evidence_missing"
+		)
+			return false;
 
 		if (!(await this.#stillReady(run))) return false;
 
-		if (run.stage === "validate") {
-			await this.#validate(run);
-
+		if (
+			run.stage === "validate" ||
+			run.stage === "review" ||
+			run.stage === "land" ||
+			(run.round ?? 0) > 0
+		)
 			return false;
-		}
 
 		const { files, executor, clock } = this.#input;
 		const config = this.#config;
@@ -3177,21 +3313,9 @@ export class Orchestrator {
 			? await this.#attemptSpent(run, stage)
 			: 0;
 
-		const roundLimit =
-			stage === "review"
-				? REVIEW_MAX_TOKENS
-				: stage === "build" && (run.round ?? 0) > 0
-					? REPAIR_BUILD_MAX_TOKENS
-					: null;
-
-		const roundSpent =
-			roundLimit !== null && isModelStage(stage)
-				? await this.#roundSpent(run, stage, prior)
-				: prior;
-
 		const runExhausted = run.usage + prior >= config.usage.maxTokensPerRun;
 
-		if (runExhausted || (roundLimit !== null && roundSpent >= roundLimit)) {
+		if (runExhausted) {
 			run.usage += prior;
 			this.state.totals.usage += prior;
 			run.phase = { kind: "ending", status: "budget_exhausted" };
@@ -3199,7 +3323,7 @@ export class Orchestrator {
 				issue: run.issue,
 				runId: run.runId,
 				stage: run.stage,
-				why: runExhausted ? "run_tokens" : "round_tokens",
+				why: "run_tokens",
 			});
 			await this.#sync(run);
 
@@ -3305,7 +3429,6 @@ export class Orchestrator {
 			stage,
 			attempt: run.attempt,
 			round: run.round ?? 0,
-			review: prepared.review,
 			workspace: prepared.workspace ?? files.workspacePath(run.runId),
 			build: prepared.build,
 			prompt: prepared.prompt,
@@ -3318,38 +3441,27 @@ export class Orchestrator {
 							prepared.inputs.contract.contract.files.length > 8
 							? [...BUILD_TOOLS, "subagent"]
 							: BUILD_TOOLS
-						: stage === "review"
-							? REVIEW_TOOLS
-							: stage === "accept"
-								? ACCEPTANCE_TOOLS
-								: SPECIFY_TOOLS,
+						: stage === "accept"
+							? ACCEPTANCE_TOOLS
+							: SPECIFY_TOOLS,
 			skills:
 				prepared.inputs === null
 					? []
 					: stage === "build"
 						? ["build"]
-						: stage === "review"
-							? []
-							: stage === "accept"
-								? ACCEPTANCE_SKILLS
-								: SPECIFY_SKILLS,
+						: stage === "accept"
+							? ACCEPTANCE_SKILLS
+							: SPECIFY_SKILLS,
 			settings: {
 				model: config.stages[stage].model,
 				fallback: config.stages[stage].fallbackModel,
 				budget: config.stages[stage].budget,
 				maxTokens:
 					stage === "build"
-						? Math.max(
-								0,
-								((run.round ?? 0) > 0
-									? REPAIR_BUILD_MAX_TOKENS
-									: BUILD_MAX_TOKENS) - roundSpent,
-							)
-						: stage === "review"
-							? Math.max(0, REVIEW_MAX_TOKENS - roundSpent)
-							: stage === "accept"
-								? Math.max(0, ACCEPTANCE_MAX_TOKENS - prior)
-								: null,
+						? Math.max(0, BUILD_MAX_TOKENS - prior)
+						: stage === "accept"
+							? Math.max(0, ACCEPTANCE_MAX_TOKENS - prior)
+							: null,
 			},
 			remainingRunTokens: Math.max(
 				0,
@@ -3383,8 +3495,6 @@ export class Orchestrator {
 										stage,
 										attempt,
 										round: run.round ?? 0,
-										workflowSha: run.workflowSha,
-										workflowDigest: run.workflowDigest,
 									})
 									.catch(() => null)
 							: null;
@@ -3398,10 +3508,6 @@ export class Orchestrator {
 							result.receipt.fallback?.observed ??
 							result.receipt.models.observed,
 						usage: prior + result.usage,
-						review:
-							output instanceof Object && output.kind === "review"
-								? output.receipt
-								: undefined,
 						build:
 							output instanceof Object && output.kind === "build"
 								? output.result
@@ -3435,107 +3541,611 @@ export class Orchestrator {
 		return true;
 	}
 
-	async #repairOrFail(run: ActiveRun, why: string): Promise<void> {
-		if ((run.round ?? 0) >= MAX_REPAIR_ROUNDS) {
-			run.phase = { kind: "ending", status: "failed" };
-			this.state.totals.failures++;
-			this.#input.log("repair_cap", {
-				runId: run.runId,
-				round: run.round ?? 0,
-				why,
-			});
+	async #commitCandidate(
+		run: ActiveRun,
+		state: CandidateState,
+	): Promise<boolean> {
+		const { stage, status, attempt, round } = candidateProjection(state);
 
-			return;
+		const enteredAt =
+			run.phase.kind === "candidate" && run.phase.status === status
+				? run.enteredAt
+				: this.#input.clock.now();
+
+		const projected: ActiveRun = {
+			...run,
+			stage,
+			attempt,
+			round,
+			usage: candidateUsage(state),
+			handoff: state,
+			enteredAt,
+			phase: { kind: "candidate", status },
+		};
+
+		if (!(await this.#input.files.writeClaim(claimOf(projected)))) {
+			this.#input.log("claim_unwritable", { runId: run.runId });
+
+			return false;
 		}
 
-		run.round = (run.round ?? 0) + 1;
-		run.validation = undefined;
-		run.stage = "build";
-		run.attempt = 1;
-		run.inputs = null;
-		run.replay = false;
-		run.phase = { kind: "claimed" };
-		await this.#writeClaim(run);
-		this.#input.log("repair_started", {
-			runId: run.runId,
-			round: run.round,
-			why,
+		this.state.totals.usage += Math.max(0, projected.usage - run.usage);
+		Object.assign(run, projected);
+		run.claimUnwritten = false;
+
+		return true;
+	}
+
+	async #observeCandidates(executionAllowed: boolean): Promise<void> {
+		const port = this.#input.executor.candidate;
+
+		if (port === undefined) return;
+
+		for (const run of this.state.runs.values()) {
+			if (run.phase.kind === "evidence_missing" && run.marked !== null) {
+				const observed = await port
+					.observeMissing?.(run.marked)
+					.catch(() => null);
+
+				if (observed?.kind === "merged")
+					this.#input.log("merge_observed_evidence_missing", {
+						issue: run.issue,
+						runId: run.runId,
+						head: observed.head,
+						mergeSha: observed.mergeSha,
+						actor: observed.actor ?? "unknown",
+					});
+				continue;
+			}
+
+			if (run.handoff === undefined) continue;
+
+			const observation = await port
+				.observe(run.handoff, this.#input.clock.now())
+				.catch(() => null);
+
+			if (observation === null) continue;
+
+			let step = handoffCandidate(run.handoff, {
+				...observation,
+				executionAllowed,
+				capacityAvailable:
+					this.#enabled &&
+					this.#active() < (this.#limits()?.maxConcurrent ?? 0),
+			});
+
+			let consumed = false;
+
+			if (!(await this.#commitCandidate(run, step.state))) continue;
+
+			if (this.#candidateRecovery.has(run.runId))
+				await this.#recoverCandidate(run);
+
+			for (let index = 0; index < this.#candidateResults.length; ) {
+				const queued = this.#candidateResults[index];
+
+				if (queued === undefined || queued.runId !== run.runId) {
+					index++;
+					continue;
+				}
+
+				step = handoffCandidate(step.state, queued.event);
+
+				if (!(await this.#commitCandidate(run, step.state))) break;
+				this.#candidateResults.splice(index, 1);
+				consumed = true;
+			}
+
+			if (consumed) {
+				step = handoffCandidate(step.state, {
+					...observation,
+					executionAllowed,
+					capacityAvailable:
+						this.#enabled &&
+						this.#active() < (this.#limits()?.maxConcurrent ?? 0),
+				});
+
+				if (!(await this.#commitCandidate(run, step.state))) continue;
+			}
+
+			const effect = step.effect;
+
+			if (
+				effect !== null &&
+				(executionAllowed ||
+					effect.kind === "stop_execution" ||
+					effect.kind === "finish_pr")
+			)
+				await this.#interpretCandidate(run, effect);
+
+			if (
+				run.handoff?.kind === "selected" &&
+				run.handoff.work.kind === "terminal"
+			) {
+				if ((await this.#recoverUncertainPost(run)) === "proceed")
+					await this.#publishMarker(run);
+
+				if (run.marked !== null && isTerminal(run.marked.status)) {
+					this.state.runs.delete(run.issue);
+					await this.#keepEnded({ ...claimOf(run), seq: run.seq }, false);
+				}
+			} else if (
+				executionAllowed &&
+				(await this.#recoverUncertainPost(run)) === "proceed"
+			) {
+				await this.#publishMarker(run);
+				await this.#writeClaim(run);
+			}
+		}
+	}
+
+	#queueReviewRefusal(
+		execution: Extract<CandidateExecution, { stage: "review" }>,
+		tokens: number | null,
+	): void {
+		if (tokens !== null)
+			this.#candidateResults.push({
+				runId: execution.runId,
+				event: { kind: "execution_progress", execution, tokens },
+			});
+		this.#candidateResults.push({
+			runId: execution.runId,
+			event: {
+				kind: "review_settled",
+				execution,
+				tokens: null,
+				result: { kind: "failed" },
+			},
 		});
 	}
 
-	async #validate(run: ActiveRun): Promise<void> {
-		if (run.marked?.candidate != null && run.validation === undefined) {
-			run.phase = { kind: "ending", status: "failed" };
-			this.state.totals.failures++;
-			this.#input.log("validation_failed", {
-				issue: run.issue,
-				runId: run.runId,
-				why: "validation_state_missing",
+	async #recoverCandidate(run: ActiveRun): Promise<void> {
+		const state = run.handoff;
+		const executor = this.#input.executor;
+
+		if (state?.kind !== "selected" || !(await executor.reconciled())) return;
+
+		for (const account of state.accounts) {
+			if (account.settlement === "settled") continue;
+			const execution = account.execution;
+
+			const tokens = await executor.spent({
+				runId: execution.runId,
+				stage: execution.stage,
+				attempt: execution.attempt,
+				round: execution.round,
+				execution,
 			});
-			await this.#sync(run);
 
-			return;
+			let output: StageOutput | null;
+
+			try {
+				output = await executor.output({
+					runId: execution.runId,
+					stage: execution.stage,
+					attempt: execution.attempt,
+					round: execution.round,
+					execution,
+					workflowSha: execution.workflowSha,
+					workflowDigest: execution.workflowDigest,
+				});
+			} catch (error) {
+				if (
+					!(error instanceof ReviewEvidenceUnavailable) ||
+					execution.stage !== "review"
+				)
+					throw error;
+				this.#queueReviewRefusal(execution, tokens);
+				continue;
+			}
+
+			let event: CandidateEvent;
+
+			if (
+				output instanceof Object &&
+				output.kind === "pending" &&
+				tokens !== null
+			) {
+				event = { kind: "resume_execution", execution, tokens };
+			} else if (execution.stage === "review") {
+				const patch = await executor.candidate?.patch(state, execution.round);
+				event = {
+					kind: "review_settled",
+					execution,
+					tokens,
+					result:
+						output instanceof Object &&
+						output.kind === "review" &&
+						patch != null
+							? { kind: "passed", review: output.receipt, patch }
+							: { kind: "failed" },
+				};
+			} else
+				event = {
+					kind: "repair_settled",
+					execution,
+					tokens,
+					result:
+						output instanceof Object &&
+						output.kind === "build" &&
+						output.result.kind === "found"
+							? { kind: "passed", patch: output.result.receipt }
+							: { kind: "failed" },
+				};
+			this.#candidateResults.push({ runId: run.runId, event });
 		}
 
-		const validate = this.#input.executor.validate;
+		this.#candidateRecovery.delete(run.runId);
+	}
 
-		if (validate === undefined) {
-			run.phase = { kind: "blocked", reason: "sandbox_unavailable" };
-			await this.#sync(run);
+	async #interpretCandidate(
+		run: ActiveRun,
+		request: CandidateEffect,
+	): Promise<void> {
+		const state = run.handoff;
+		const executor = this.#input.executor;
+		const port = executor.candidate;
 
-			return;
+		if (state?.kind !== "selected" || port === undefined) return;
+		let completion: CandidateEffectResult | null = null;
+
+		if (request.kind === "validate") {
+			if (executor.validate === undefined) return;
+
+			const result = await executor.validate({
+				runId: run.runId,
+				issue: run.issue,
+				eventAt: run.eventAt,
+				baseSha: run.workflowSha,
+				round: request.generation.round,
+				generation: request.generation,
+				now: this.#input.clock.now(),
+				wallMs: this.#config?.stages.validate.budget.wallMs ?? 1_200_000,
+				state:
+					state.current.validation === null
+						? null
+						: structuredClone(state.current.validation),
+				save: async (validation) =>
+					this.#commitCandidate(
+						run,
+						handoffCandidate(run.handoff ?? state, {
+							kind: "effect_completed",
+							completion: {
+								kind: "validate",
+								request,
+								result: { kind: "waiting", validation },
+							},
+						}).state,
+					),
+			});
+
+			if (result.kind === "waiting")
+				completion = {
+					kind: "validate",
+					request,
+					result: { kind: "waiting", validation: result.state },
+				};
+			else if (
+				result.kind === "finished" &&
+				(!result.verdict.pass || result.report !== undefined)
+			)
+				completion = {
+					kind: "validate",
+					request,
+					result: {
+						kind: "finished",
+						validation: result.state,
+						verdict: result.verdict,
+						report: result.report ?? null,
+						seats: reviewSeats(state.current.patch.changedPaths),
+					},
+				};
+			else if (result.kind === "failed")
+				completion = {
+					kind: "validate",
+					request,
+					result: {
+						kind: "failed",
+						validation: result.state,
+						reason:
+							result.reason === "stale_base"
+								? "main_moving"
+								: "evidence_unavailable",
+					},
+				};
+		} else if (
+			request.kind === "launch_review" ||
+			request.kind === "repair_build"
+		) {
+			if (this.#candidateExecutions.has(request.execution.id)) return;
+			completion = await this.#launchCandidate(run, request);
+		} else if (request.kind === "stop_execution") {
+			const active = this.#candidateExecutions.get(request.execution.id);
+			active?.abort.abort();
+
+			if (active !== undefined && !active.settled) return;
+
+			if (!(await executor.reconciled())) return;
+
+			const tokens = await executor.spent({
+				runId: run.runId,
+				stage: request.execution.stage,
+				round: request.execution.round,
+				attempt: request.execution.attempt,
+				execution: request.execution,
+			});
+
+			completion = { kind: "stop_execution", request, stopped: true, tokens };
+		} else completion = await port.execute(state, request);
+
+		if (completion !== null) {
+			const step = handoffCandidate(run.handoff ?? state, {
+				kind: "effect_completed",
+				completion,
+			});
+
+			if (await this.#commitCandidate(run, step.state)) {
+				if (step.effect?.kind === "finish_pr" && request.kind !== "finish_pr")
+					await this.#interpretCandidate(run, step.effect);
+			}
+		}
+	}
+
+	async #launchCandidate(
+		run: ActiveRun,
+		request: Extract<
+			CandidateEffect,
+			{ kind: "launch_review" | "repair_build" }
+		>,
+	): Promise<CandidateEffectResult | null> {
+		const state = run.handoff;
+		const { executor, files, clock } = this.#input;
+		const config = this.#config;
+
+		if (state?.kind !== "selected" || config === null) return null;
+		const execution = request.execution;
+
+		let prepared: ReviewPreparation | null | undefined = null;
+
+		try {
+			if (execution.stage === "review")
+				prepared = await executor.prepareReview?.({
+					runId: execution.runId,
+					round: execution.round,
+					execution,
+					workflowSha: execution.workflowSha,
+					workflowDigest: execution.workflowDigest,
+					workspace: `${files.workspacePath(run.runId)}-review-r${execution.round}-a${execution.attempt}`,
+				});
+		} catch (error) {
+			if (
+				!(error instanceof ReviewEvidenceUnavailable) ||
+				execution.stage !== "review"
+			)
+				throw error;
+
+			const tokens = await executor.spent({
+				runId: execution.runId,
+				stage: "review",
+				round: execution.round,
+				attempt: execution.attempt,
+				execution,
+			});
+
+			let held: CandidateState = state;
+
+			if (tokens !== null)
+				held = handoffCandidate(held, {
+					kind: "execution_progress",
+					execution,
+					tokens,
+				}).state;
+			held = handoffCandidate(held, {
+				kind: "review_settled",
+				execution,
+				tokens: null,
+				result: { kind: "failed" },
+			}).state;
+
+			if (held.kind === "selected")
+				await this.#commitCandidate(run, {
+					...held,
+					work: {
+						kind: "held",
+						reason: "evidence_unavailable",
+						since: clock.now(),
+					},
+					published:
+						held.published === null
+							? null
+							: {
+									...held.published,
+									readiness: {
+										kind: "not_ready",
+										reason: "evidence_unavailable",
+										since: clock.now(),
+									},
+								},
+				});
+
+			return null;
 		}
 
-		run.phase = { kind: "awaiting_ci" };
+		if (execution.stage === "review" && prepared == null) return null;
+		const oldStage = run.stage;
+		const oldRound = run.round;
+		const oldAttempt = run.attempt;
+		run.stage = execution.stage;
+		run.round = execution.round;
+		run.attempt = execution.attempt;
 
-		const result = await validate({
+		const inputs =
+			execution.stage === "build" ? await this.#stageInputs(run) : null;
+
+		run.stage = oldStage;
+		run.round = oldRound;
+		run.attempt = oldAttempt;
+
+		if (inputs !== null && inputs.kind !== "ready") return null;
+		const abort = new AbortController();
+		const handle = { abort, settled: false };
+
+		const launch = await executor.launch({
 			runId: run.runId,
-			issue: run.issue,
-			eventAt: run.eventAt,
-			baseSha: run.workflowSha,
-			round: run.round ?? 0,
-			now: this.#input.clock.now(),
-			wallMs: this.#config?.stages.validate.budget.wallMs ?? 1_200_000,
-			state: run.validation ?? null,
-			save: async (state) => {
-				run.validation = state;
-				await this.#writeClaim(run);
-
-				return !run.claimUnwritten;
+			stage: execution.stage,
+			attempt: execution.attempt,
+			round: execution.round,
+			execution,
+			workspace:
+				prepared?.workspace ??
+				inputs?.workspace ??
+				files.workspacePath(run.runId),
+			review: prepared ?? undefined,
+			build: inputs?.build,
+			prompt: inputs?.prompt ?? "",
+			tools: execution.stage === "review" ? REVIEW_TOOLS : BUILD_TOOLS,
+			skills: execution.stage === "review" ? [] : ["build"],
+			settings: {
+				model: config.stages[execution.stage].model,
+				fallback: config.stages[execution.stage].fallbackModel,
+				budget: config.stages[execution.stage].budget,
+				maxTokens: candidateAllowance(state, execution),
+			},
+			remainingRunTokens: Math.max(
+				0,
+				state.pin.maxTokens - candidateUsage(state),
+			),
+			signal: abort.signal,
+			progress: (tokens) => {
+				this.#candidateResults.push({
+					runId: execution.runId,
+					event: { kind: "execution_progress", execution, tokens },
+				});
 			},
 		});
 
-		if (result.state !== null) run.validation = result.state;
+		if (launch.kind === "unavailable")
+			return request.kind === "launch_review"
+				? { kind: "launch_review", request, started: false }
+				: { kind: "repair_build", request, started: false };
+		this.#candidateExecutions.set(execution.id, handle);
+		this.state.totals.launches++;
 
-		if (result.kind === "finished") {
-			if (verdictPasses(result.verdict)) {
-				run.stage = "review";
-				run.attempt = 1;
-				run.inputs = null;
-				run.phase = { kind: "claimed" };
-			} else await this.#repairOrFail(run, "validation_failed");
-			this.#input.log("validation_verdict", {
-				issue: run.issue,
-				runId: run.runId,
-				candidate: result.verdict.candidateSha,
-				gate: result.verdict.gateSha,
-				ciRun: result.verdict.ciRunId,
-				pass: result.verdict.pass,
-			});
-		} else if (result.kind === "failed") {
-			run.phase = { kind: "ending", status: "failed" };
-			this.state.totals.failures++;
-			this.#input.log("validation_failed", {
-				issue: run.issue,
-				runId: run.runId,
-				why: result.reason,
-			});
-		}
+		const settled = launch.done
+			.then(async (result) => {
+				const tokens = await executor.spent({
+					runId: execution.runId,
+					stage: execution.stage,
+					attempt: execution.attempt,
+					round: execution.round,
+					execution,
+				});
 
-		await this.#sync(run);
+				const output =
+					result.kind === "passed"
+						? await executor.output({
+								runId: execution.runId,
+								stage: execution.stage,
+								attempt: execution.attempt,
+								round: execution.round,
+								execution,
+								workflowSha: execution.workflowSha,
+								workflowDigest: execution.workflowDigest,
+							})
+						: null;
+
+				let event: CandidateEvent;
+
+				if (execution.stage === "review") {
+					const patch = await executor.candidate?.patch(state, execution.round);
+					event = {
+						kind: "review_settled",
+						execution,
+						tokens,
+						result:
+							output instanceof Object &&
+							output.kind === "review" &&
+							patch != null
+								? { kind: "passed", review: output.receipt, patch }
+								: { kind: "failed" },
+					};
+				} else
+					event = {
+						kind: "repair_settled",
+						execution,
+						tokens,
+						result:
+							output instanceof Object &&
+							output.kind === "build" &&
+							output.result.kind === "found"
+								? { kind: "passed", patch: output.result.receipt }
+								: { kind: "failed" },
+					};
+				this.#candidateResults.push({ runId: execution.runId, event });
+			})
+			.catch(async (error) => {
+				if (
+					error instanceof ReviewEvidenceUnavailable &&
+					execution.stage === "review"
+				) {
+					const tokens = await executor.spent({
+						runId: execution.runId,
+						stage: "review",
+						attempt: execution.attempt,
+						round: execution.round,
+						execution,
+					});
+
+					this.#queueReviewRefusal(execution, tokens);
+
+					return;
+				}
+
+				this.#candidateResults.push({
+					runId: execution.runId,
+					event:
+						execution.stage === "review"
+							? {
+									kind: "review_settled",
+									execution,
+									tokens: null,
+									result: { kind: "failed" },
+								}
+							: {
+									kind: "repair_settled",
+									execution,
+									tokens: null,
+									result: { kind: "failed" },
+								},
+				});
+			})
+			.finally(() => {
+				handle.settled = true;
+			});
+
+		this.#stages.add(settled);
+		settled.finally(() => this.#stages.delete(settled));
+		this.#input.log("candidate_launched", {
+			runId: execution.runId,
+			execution: execution.id,
+			at: clock.now(),
+		});
+
+		return request.kind === "launch_review"
+			? { kind: "launch_review", request, started: true }
+			: { kind: "repair_build", request, started: true };
 	}
 
 	async #sync(run: ActiveRun): Promise<void> {
+		if (run.handoff !== undefined) return;
+
+		if (run.phase.kind === "evidence_missing") {
+			await this.#publishMarker(run);
+			await this.#writeClaim(run);
+
+			return;
+		}
+
 		if (run.inflight?.tick === this.#ticks) return;
 
 		if (isTerminal(desiredStatus(run.phase)) && this.#settling(run)) return;
@@ -3565,24 +4175,53 @@ export class Orchestrator {
 			const { status, effects } = run.phase;
 
 			if (await this.#applyEffects(run, effects)) {
-				if (
-					effects.kind === "contract" ||
-					effects.kind === "acceptance" ||
-					effects.kind === "build"
-				) {
-					run.stage =
-						effects.kind === "contract"
-							? "accept"
-							: effects.kind === "acceptance"
-								? "build"
-								: "validate";
+				if (effects.kind === "build" && this.#config !== null) {
+					const receipt = effects.result.receipt;
+
+					if (!isDigest(receipt.contractDigest))
+						throw new Error("contract_digest");
+					run.handoff = beginCandidate(
+						{
+							runId: run.runId,
+							repo: this.#input.repo,
+							issue: run.issue,
+							originalBase: run.workflowSha,
+							workflowSha: run.workflowSha,
+							workflowDigest: run.workflowDigest,
+							contractDigest: receipt.contractDigest,
+							acceptanceDigest: receipt.acceptanceDigest,
+							maxTokens: this.#config.usage.maxTokensPerRun,
+							maxReviewAttempts: Math.min(
+								MAX_REVIEW_ATTEMPTS,
+								this.#config.retry.maxAttempts,
+							),
+						},
+						receipt,
+						run.usage,
+					);
+					await this.#commitCandidate(
+						run,
+						handoffCandidate(run.handoff, {
+							kind: "observed",
+							now: this.#input.clock.now(),
+							main: null,
+							pr: { kind: "none" },
+							eligibility: "ready",
+							executionAllowed: false,
+							capacityAvailable: false,
+							readiness: { kind: "unavailable" },
+						}).state,
+					);
+
+					return;
+				}
+
+				if (effects.kind === "contract" || effects.kind === "acceptance") {
+					run.stage = effects.kind === "contract" ? "accept" : "build";
 					run.attempt = 1;
 					run.inputs = null;
 					run.replay = false;
-					run.phase =
-						run.stage === "validate"
-							? { kind: "awaiting_ci" }
-							: { kind: "claimed" };
+					run.phase = { kind: "claimed" };
 				} else run.phase = { kind: "ending", status };
 			} else if (
 				run.phase.kind === "reporting" &&
@@ -3620,38 +4259,6 @@ export class Orchestrator {
 			return { kind: "fail" } as const;
 		};
 
-		if (run.stage === "review") {
-			const prepare = this.#input.executor.prepareReview;
-
-			if (prepare === undefined) return fail("review_unavailable");
-
-			try {
-				const review = await prepare({
-					runId: run.runId,
-					round: run.round ?? 0,
-					workspace: `${files.workspacePath(run.runId)}-review-r${run.round ?? 0}`,
-					workflowSha: run.workflowSha,
-					workflowDigest: run.workflowDigest,
-				});
-
-				return {
-					kind: "ready",
-					workspace: review.workspace,
-					review,
-					inputs: {
-						files: new Set(review.input.files.keys()),
-						source: "unedited",
-						link: null,
-					},
-					prompt: "",
-				};
-			} catch (error) {
-				return fail(
-					error instanceof Error ? error.message : "review_unavailable",
-				);
-			}
-		}
-
 		if (
 			run.stage !== "specify" &&
 			run.stage !== "accept" &&
@@ -3686,6 +4293,12 @@ export class Orchestrator {
 				workspace,
 				build: run.stage === "build",
 				round: run.round ?? 0,
+				feedbackFrom:
+					run.handoff?.kind === "selected" &&
+					run.handoff.work.kind === "effect" &&
+					run.handoff.work.request.kind === "repair_build"
+						? run.handoff.work.request.execution.feedbackFrom
+						: undefined,
 			})
 			.catch((): CheckoutResult => ({ kind: "unavailable" }));
 
@@ -4047,26 +4660,6 @@ export class Orchestrator {
 			return true;
 		}
 
-		if (stage === "review") {
-			if (output instanceof Object && output.kind === "pending") {
-				run.phase = { kind: "claimed" };
-
-				return true;
-			}
-
-			if (output instanceof Object && output.kind === "review") {
-				run.phase = {
-					kind: "reporting",
-					status: "stage_passed",
-					effects: output,
-				};
-
-				return true;
-			}
-
-			return false;
-		}
-
 		if (stage !== "specify" && stage !== "accept") return false;
 
 		if (stage === "accept") {
@@ -4272,30 +4865,6 @@ export class Orchestrator {
 			return posted;
 		}
 
-		if (effects.kind === "review") {
-			const receipt = effects.receipt;
-
-			if (
-				receipt.runId !== run.runId ||
-				receipt.round !== (run.round ?? 0) ||
-				receipt.candidateSha !== run.validation?.publication?.candidateSha ||
-				receipt.ciRunId !== run.validation?.ciRunId
-			) {
-				run.phase = { kind: "ending", status: "failed" };
-				this.state.totals.failures++;
-
-				return false;
-			}
-
-			if (receipt.blocking) {
-				await this.#repairOrFail(run, "blocking_review");
-
-				return false;
-			}
-
-			return true;
-		}
-
 		if (effects.kind === "acceptance") {
 			const stored = await files.artifacts.store(effects);
 
@@ -4479,25 +5048,31 @@ export class Orchestrator {
 		const status = desiredStatus(run.phase);
 		const marked = run.marked;
 
+		const next = {
+			repo: this.#input.repo,
+			status,
+			seq: run.seq + 1,
+			cursor: this.state.seen.get(run.issue)?.updatedAt ?? null,
+		};
+
+		const marker =
+			run.handoff === undefined && marked?.v === 3
+				? { ...marked, ...next, usage: run.usage }
+				: markerOf(run, next);
+
 		if (
 			marked === null ||
 			marked.status !== status ||
 			marked.stage !== run.stage ||
 			marked.attempt !== run.attempt ||
 			marked.usage !== run.usage ||
-			marked.branch !== (run.validation?.publication?.branch ?? null) ||
-			(marked.candidate ?? null) !==
-				(run.validation?.publication?.candidateSha ?? null) ||
-			(marked.round ?? 0) !== (run.round ?? 0) ||
-			(marked.ciRun ?? null) !== (run.validation?.ciRunId ?? null)
+			marked.branch !== marker.branch ||
+			(marked.candidate ?? null) !== (marker.candidate ?? null) ||
+			(marked.round ?? 0) !== (marker.round ?? 0) ||
+			(marked.ciRun ?? null) !== (marker.ciRun ?? null) ||
+			marked.pr !== marker.pr ||
+			JSON.stringify(marked.handoff) !== JSON.stringify(marker.handoff)
 		) {
-			const marker = markerOf(run, {
-				repo: this.#input.repo,
-				status,
-				seq: run.seq + 1,
-				cursor: this.state.seen.get(run.issue)?.updatedAt ?? null,
-			});
-
 			const post = await this.#writer.postComment(
 				run.issue,
 				formatMarker(marker),
@@ -4587,6 +5162,21 @@ export class Orchestrator {
 }
 
 function claimOf(run: ActiveRun): ClaimRecord {
+	if (run.handoff !== undefined)
+		return {
+			runId: run.runId,
+			issue: run.issue,
+			eventId: run.eventId,
+			seq: run.seq === 0 ? null : run.seq,
+			status: run.seq === 0 ? null : desiredStatus(run.phase),
+			stage: run.seq === 0 ? null : run.stage,
+			attempt: run.seq === 0 ? null : run.attempt,
+			usage: run.seq === 0 ? null : run.usage,
+			round: run.round ?? 0,
+			handoff: run.handoff,
+			enteredAt: run.enteredAt,
+		};
+
 	const claim: ClaimRecord = {
 		runId: run.runId,
 		issue: run.issue,
@@ -4598,31 +5188,16 @@ function claimOf(run: ActiveRun): ClaimRecord {
 		usage: run.marked?.usage ?? null,
 	};
 
-	const saved =
-		(run.round ?? 0) > (run.marked?.round ?? 0)
-			? { ...claim, stage: run.stage, attempt: run.attempt, usage: run.usage }
-			: claim;
+	const retained =
+		run.marked?.v === 3 ? { ...claim, marker: run.marked } : claim;
 
-	const labels =
-		run.labelFailures === 0
-			? saved
-			: { ...saved, labelFailures: run.labelFailures };
-
-	if (run.validation === undefined)
-		return (run.round ?? 0) > 0 ? { ...labels, round: run.round } : labels;
-
-	return {
-		...labels,
-		validation: run.validation,
-		branch: run.validation.publication?.branch ?? null,
-		candidate: run.validation.publication?.candidateSha ?? null,
-		round: run.validation.round,
-		ciRun: run.validation.ciRunId,
-	};
+	return run.labelFailures === 0
+		? retained
+		: { ...retained, labelFailures: run.labelFailures };
 }
 
 function recordOf(marker: Marker): ConfirmedRecord {
-	return {
+	const record = {
 		runId: marker.runId,
 		issue: marker.issue,
 		eventId: marker.eventId,
@@ -4632,17 +5207,22 @@ function recordOf(marker: Marker): ConfirmedRecord {
 		attempt: marker.attempt,
 		usage: marker.usage,
 	};
+
+	return marker.v === 3 ? { ...record, marker } : record;
 }
 
 function markerOf(
 	run: Omit<
 		Marker,
-		"v" | "repo" | "status" | "seq" | "branch" | "pr" | "cursor"
-	> & { readonly validation?: ValidationState; readonly round?: number },
+		"v" | "repo" | "status" | "seq" | "branch" | "pr" | "cursor" | "handoff"
+	> & {
+		readonly round?: number;
+		readonly handoff?: CandidateState;
+	},
 
 	next: Pick<Marker, "repo" | "status" | "seq" | "cursor">,
 ): Marker {
-	return {
+	const marker: Marker = {
 		v: 2,
 		runId: run.runId,
 		repo: next.repo,
@@ -4656,13 +5236,46 @@ function markerOf(
 		status: next.status,
 		attempt: run.attempt,
 		seq: next.seq,
-		branch: run.validation?.publication?.branch ?? null,
-		candidate: run.validation?.publication?.candidateSha ?? null,
+		branch: null,
+		candidate: null,
 		round: run.round ?? 0,
-		ciRun: run.validation?.ciRunId ?? null,
+		ciRun: null,
 		pr: null,
 		usage: run.usage,
 		cursor: next.cursor,
+	};
+
+	const state = run.handoff;
+
+	if (state?.kind !== "selected") return marker;
+
+	return {
+		...marker,
+		v: 3,
+		branch: state.current.validation?.publication?.branch ?? null,
+		candidate: state.current.validation?.publication?.candidateSha ?? null,
+		round: state.current.intent.round,
+		ciRun: state.current.validation?.ciRunId ?? null,
+		pr: state.published?.number ?? null,
+		handoff: {
+			generation: state.current.intent.generation,
+			intentDigest: state.current.intent.digest,
+			refreshes: [...state.history, state.current].filter(
+				(g) => g.intent.origin.kind === "refresh",
+			).length,
+			reviewAttempts: [0, 1, 2].map((round) =>
+				Math.max(
+					0,
+					...state.accounts
+						.filter(
+							(a) =>
+								a.execution.stage === "review" && a.execution.round === round,
+						)
+						.map((a) => a.execution.attempt),
+				),
+			),
+			promoted: state.published?.promoted.digest ?? null,
+		},
 	};
 }
 

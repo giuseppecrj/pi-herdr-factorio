@@ -12,9 +12,9 @@ Treat units 0 through 3 as historical prototype evidence, not work to repeat.
 
 One box is one unit of work. Every box names the evidence that checks it. A nested box is a sub-step of the box above it. Check a box only when its evidence exists, such as a file, a log, a test result, or a SHA. The body is a how-to. The appendices explain and record.
 
-The program runs the poteto-mode playbook `playbooks/autopilot-full.md`, with merge-then-branch for this serial chain. On 2026-10-28 the owner granted the root merge authority for build PRs. The root squash-merges a PR after a clean swarm verdict on the exact head and a passing hosted `check` on that head. The `main` ruleset requires both a PR and that check. No agent arms auto-merge. This grant covers build PRs only. The factory's runtime still stops at Human Review, and the owner merges every PR the factory opens. This document grants no other execution, commit, push, PR, issue, service, or configuration action.
+The program runs the poteto-mode playbook `playbooks/autopilot-full.md`, with merge-then-branch for this serial chain. The root's historical merge grant covered build PRs through F08. From F09a onward, every build PR stops at merge-ready for the owner after its exact-head review and checks. The owner alone merges the F09a bootstrap and later build PRs. No agent arms auto-merge. The factory's runtime still stops at Human Review, and the owner merges every PR the factory opens. This document grants no other execution, commit, push, PR, issue, service, or configuration action.
 
-Use the **Factory CLI control procedure** below as the control skill. It combines `ssh`, `gh`, and the factory CLI and extension. There is no installed factory-specific control skill yet. This backend has no visual interface to verify. Live lanes drive real scenarios on `pi-factorio` against real GitHub issues in this repository, not fake-adapter tests. Save redacted logs, JSON snapshots, and issue or PR URLs instead of screenshots or video. Appendix C records this template adaptation and the other exceptions.
+Use the **Factory CLI control procedure** below as the control skill. It combines `ssh`, `gh`, and the factory CLI and extension. The maintained recipes are in `.pi/skills/verify-factory/`. This backend has no visual interface to verify. Live lanes drive real scenarios on `pi-factorio` against real GitHub issues in this repository, not fake-adapter tests. Save redacted logs, JSON snapshots, and issue or PR URLs instead of screenshots or video. Appendix C records this template adaptation and the other exceptions.
 
 Treat every new path, symbol, command, log field, and numerical budget below as a proposed implementation contract, not an existing capability. At the planning base `04b69c3`, only the pure state machine, policy helpers, fake adapter, provisioning script, and `/factory status` exist. Do not check future boxes with those prototypes alone.
 
@@ -39,7 +39,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 
 ### Launch owner rounds
 
-- [ ] Give each PR one owner role with the full lifecycle that `autopilot-full` names. The root, not the owner round, runs the merge. Launch each round as a fresh bare leaf with `fork: false`, bounded files, explicit model and thinking, verification, and commit policy. Keep one retained checkout and one canonical branch per owner.
+- [ ] Give each PR one owner role with the full lifecycle that `autopilot-full` names. The root coordinated merges through F08. From F09a onward, the owner alone merges. Launch each round as a fresh bare leaf with `fork: false`, bounded files, explicit model and thinking, verification, and commit policy. Keep one retained checkout and one canonical branch per owner.
 - [ ] Follow this dependency graph. Branch dependent work from `main` after its parent merges, or stack it on the parent's committed tip while the parent is still in review. Record the parent SHA in each brief.
   - [ ] Start `F04a` from `main`. Follow `F04a -> F04b -> F04c -> F05 -> F06a -> F06b -> F07a -> F07b -> F07c -> F07d -> F08 -> F09a -> F09b -> F10 -> F11 -> F12 -> F13`.
   - [ ] Keep this chain serial for code writes. It changes shared controller contracts and tests. Parallelize read-only verification with separate fixture issues, not dependent implementation.
@@ -62,7 +62,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 - [ ] At the code-ready head SHA and at each later push that changes the patch, run the swarm per `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/swarm/SKILL.md`. The root launches every lane per `references/fan-out.md`. Run one gates lane, the ten live verifier lanes, and the perf lane. Two or more audit lanes read the full brief and diff, with separate focuses on authorization and lifecycle correctness. The root audits the receipts before the verdict.
 - [ ] Resolve `task:qa` against the live scoped catalog before launch. Use the owner's approved default `openai/gpt-6.1-sol` explicitly where routing is unavailable. Set supported thinking explicitly, medium for ordinary verification and high for security review. Do not rewrite shared model preferences. Label same-family audit seats context-isolated. Record the unavailable cross-family gate separately from behavior passes.
 - [ ] Require every named lane to return `PASS` before a clean behavior verdict. Findings go back to the owner. A defect that a lane filed as a note is a finding. Missing identities, missing permissions, unreachable services, or missing scenarios yield `BLOCKED`, never a substituted fake pass. A new head gets a fresh swarm and verdict, except for evidence retained under the patch-id rule in `playbooks/shipping.md`.
-- [ ] Merge a PR only at the verified head, subject to the explicit `F04a` and `F07b` bootstrap exceptions. Record the verdict SHA, base SHA, patch-id, and evidence paths. Apply the patch-id rule in `playbooks/shipping.md` after rebases. Re-run CI and mergeability after rewritten pushes. The root squash-merges under the owner's build-PR grant, then branches the next PR from the new `main`. Never arm auto-merge, and never infer a verdict from a green check.
+- [ ] Merge a PR only at the verified head, subject to the explicit `F04a`, `F07b`, and owner-merged `F09a` bootstrap exceptions. Record the verdict SHA, base SHA, patch-id, and evidence paths. Apply the patch-id rule in `playbooks/shipping.md` after rebases. Re-run CI and mergeability after rewritten pushes. Through F08, the root squash-merged under the historical build-PR grant. From F09a onward, the root hands the reviewed PR to the owner and waits for the owner's merge before branching the next unit from `main`. Never arm auto-merge, and never infer a verdict from a green check.
 
 ### Keep dependencies current
 
@@ -702,18 +702,22 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Files.**
 
-- [ ] Create `src/handoff.ts`, `test/handoff.test.ts`, and `docs/operations/human-review.md`.
-- [ ] Edit `src/run.ts`, `src/stages.ts`, `src/policy.ts`, `src/publication.ts`, `src/adapters/github.ts`, `server/controller.ts`, `test/helpers.ts`, `test/pipeline.test.ts`, `test/stages.test.ts`, `test/policy.test.ts`, and `.github/workflows/ci.yml` for waiting state and exact-head required-check reporting. Edit `extension/index.ts`, `server/cli.ts`, `test/extension.test.ts`, and `docs/operations/factory-cli.md` for the attention view.
+- [ ] Create `src/handoff.ts`, `src/attention.ts`, `test/handoff.test.ts`, `test/attention.test.ts`, and `docs/operations/human-review.md`.
+- [ ] Edit `src/run.ts`, `src/stages.ts`, `src/policy.ts`, `src/orchestrator.ts`, `src/validation.ts`, `src/publication.ts`, `src/review.ts`, `src/markers.ts`, `src/tickets.ts`, and `src/adapters/github.ts` for the candidate book, immutable generations, cumulative accounting, trusted reports and owner handoff.
+- [ ] Edit `server/controller.ts`, `server/sandbox.ts`, `server/cli.ts`, `server/viewer/claim.ts`, `server/viewer/evidence.ts`, `server/viewer/render.ts`, and `extension/index.ts` for the single controller interpreter, captured executions and shared local attention view.
+- [ ] Edit `test/helpers.ts`, `test/fake-ticket-adapter.ts`, `test/pipeline.test.ts`, `test/stages.test.ts`, `test/policy.test.ts`, `test/orchestrator.test.ts`, `test/validation.test.ts`, `test/publication.test.ts`, `test/review.test.ts`, `test/markers.test.ts`, `test/github-adapter.test.ts`, `test/extension.test.ts`, `test/viewer.test.ts`, and `test/sandbox/runner.cases.ts` for these contracts.
+- [ ] Edit `.github/workflows/ci.yml` and `.github/workflows/check.yml` under the owner's explicit workflow-authoring grant. Keep candidate execution read-only and the checks-write reporter separate.
+- [ ] Edit `docs/operations/factory-cli.md`, `docs/operations/sandbox.md`, `docs/operations/viewer.md`, `docs/design.md`, this plan, `docs/statecharts/**`, and `.pi/skills/verify-factory/**` only for F09a contracts and verification recipes. No live pass is implied.
 
 **Build.**
 
-- [ ] Add `Progress.waiting` for the mandatory merge checkpoint. Preserve the future contract-checkpoint type without enabling autonomous merge. Keep the internal `land` stage as deterministic handoff preparation if that minimizes churn. Accept `landed` only from a controller-observed external merge event, not a model response.
-- [ ] Implement `handoffCandidate` with fresh switch checks, allowed paths, complete verdict, exact current head, and passing required CI. Create one ready, non-draft PR labeled `factory:review`, request the owner, and post redacted contract/verdict/findings/CI links on the issue.
+- [ ] Add `Progress.waiting` for the mandatory merge checkpoint. Preserve the future contract-checkpoint type without enabling it. Keep `land` deterministic. Use one candidate policy for the public core and controller, with immutable generation evidence and captured execution accounts. Waiting holds no model slot or timer. Accept `landed` only from a controller-observed external merge after stop and charge, never a model response.
+- [ ] Implement `handoffCandidate` with fresh switch checks, allowed paths, complete verdict, exact current head, and passing required CI. Build the final suite-bearing candidate before CI and fresh review. Promote its stable owned PR ref with `force:false`, not an expected-head CAS claim. Reconcile ref/PR lag and the ordinary PR check. Create one ready non-draft `factory:review` PR, request the owner, and post redacted evidence links. Refresh that same PR within three run-wide refreshes, two shared repairs, three issued reviews per round, and six generations. Preserve stricter configured review attempts and every existing token/time limit. No old-seat rebind or F10 repair is enabled.
 - [ ] Prototype how the main-owned validation result becomes a required check on the candidate SHA. Keep any write-capable check-reporting step separate from untrusted candidate execution, with no stored CI secret. Validate the trusted workflow identity and exact run/head association before reporting. Do not use an arbitrary same-named check as proof.
 - [ ] Document and verify the owner's branch-protection setup with required main-owned checks, review requirements, and no factory bypass. Settings changes need a separate grant. If integration permissions cannot inspect or set them, give the owner exact manual steps and leave the protection gate incomplete.
-- [ ] Watch the PR without model usage while waiting. Record owner merge as `landed` with its actual merge SHA, close the issue idempotently, and notify the later ledger writer. Record closed-without-merge as `cancelled`. A new factory push invalidates prior readiness.
+- [ ] Watch the PR without model usage while waiting. Observe merge before issue closure, unlabel, switch guards, or working refresh in every PR-backed phase and restart. Stop and charge captured work before finalizing. Record the actual merged head, merge SHA, and unknown actor when absent. Match historical certification independently of active readiness; record unmatched heads as owner overrides. Close the issue idempotently and retain evidence for the later ledger writer. Closed-unmerged is cancelled. Missing private evidence grants no reconstructed certification or budget.
 - [ ] Remove stale runtime claims that imply automatic merging. Leave full autonomy and configurable contract approval for a later checkpoint-policy release.
-- [ ] Give the kill switch one meaning. Today `advance()` ends a run as `rejected: disabled` on a `kill_switch_off` event, but the controller never sends that event. While either switch is off, the controller keeps each held run and its claim and launches nothing, then resumes when both are on. Keep that behavior, which matches `docs/design.md`. Make handoff refuse while either switch is off, and leave the run waiting rather than ending it. Remove the `kill_switch_off` event and the `disabled` reject reason, or keep `disabled` only for admission refusals. Test that a run held while a switch is off resumes once both are on, and that handoff refuses while a switch is off.
+- [ ] Give the kill switch one meaning. While either switch is off, block new claims, model launches, candidate publication, and handoff. Hold early-stage runs and their claims for resumption when both switches are on, subject to normal issue reconciliation. Continue existing-PR observation before switch holds, including stop, charge, and terminal bookkeeping. An observed merge can still end a run as landed, and a closed-unmerged PR or positive authorization withdrawal can still cancel it after captured work is stopped and charged. Remove the unused `kill_switch_off` runtime event and its `disabled` reject reason. Keep disabled admission refusals separate from runtime holds. Test held-run resumption when both switches are on, disabled handoff refusal, and existing-PR terminal observation while dispatch is held.
 - [ ] Add an attention view to `/factory status` and `status --json`. Group runs that need the owner into six kinds. Question asked is a `needs_info` run. Question answered is a run re-labeled after an answer. Spec review is a future `approve_contract` wait, shown as not enabled in v1. PR review is `waiting` at the merge checkpoint. Blocked is `sandbox_unavailable` or an exhausted budget. Failed is a `failed` outcome. Each entry names the issue, the PR when one exists, and the age. Derive the view from run state with no model call. An item leaves the view when its run moves on. Source is owner decision 2026-10-29, after comparing Warp Factories.
 
 **You see.**
@@ -747,12 +751,12 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Review gate.** The operator reviews before merge.
 
-- [ ] Post the real PR URL, required-check proof, and owner-action receipts to the operator. Use text artifacts instead of a screenshot or video. Merge this build PR on a clean verdict. Never perform the owner's test merge of a factory-opened fixture PR yourself.
+- [ ] Post the real PR URL, available required-check proof, and owner-action receipts to the operator. Use text artifacts instead of a screenshot or video. Stop this build PR at merge-ready for the owner. The owner merges its single R3 reporter bootstrap containing both approved workflow edits after local gates and independent review, with main-only P4, native Actions, production protection, owner-action, live, and perf proof explicitly pending. Never perform the owner's test merge of a factory-opened fixture PR yourself.
 
 **Merge.**
 
 - [ ] Record the exact-head verdict and Bugbot triage. Leave branch-protection or owner-action boxes unchecked when their evidence is missing.
-- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Squash-merge `F09a` on a clean verdict and a passing `check`, then branch the next PR from the new `main`. No agent gains merge authority from this PR.
+- [ ] Apply the patch-id rule in `playbooks/shipping.md`. The owner alone squash-merges `F09a` on the reviewed exact head with a passing `check`. Complete main-backed reporter and protection proof after bootstrap before enabling runtime handoff. From F09a onward every build PR stops at merge-ready for the owner; no agent gains merge authority.
 
 ## Record finished runs on the ledger branch (F09b)
 
@@ -806,7 +810,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Merge.**
 
 - [ ] Record the exact-head verdict and complete Bugbot triage after the orphan-branch prototype passes.
-- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Squash-merge `F09b` on a clean verdict and a passing `check`, then branch the next PR from the new `main`.
+- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Hand `F09b` to the owner on a clean verdict and a passing `check`. After the owner's merge, branch the next PR from the new `main`.
 
 ## Apply authorized PR feedback in place (F10)
 
@@ -861,7 +865,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Merge.**
 
 - [ ] Record the exact-head verdict and Bugbot triage, including a real owner-feedback round trip.
-- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Squash-merge `F10` on a clean verdict and a passing `check`, then branch the next PR from the new `main`.
+- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Hand `F10` to the owner on a clean verdict and a passing `check`. After the owner's merge, branch the next PR from the new `main`.
 
 ## File bounded maintenance proposals on a schedule (F11)
 
@@ -914,7 +918,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Merge.**
 
 - [ ] Record the exact-head verdict, license review, and Bugbot triage.
-- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Squash-merge `F11` on a clean verdict and a passing `check`, then branch the next PR from the new `main`.
+- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Hand `F11` to the owner on a clean verdict and a passing `check`. After the owner's merge, branch the next PR from the new `main`.
 
 ## Measure outcomes and propose tested factory improvements (F12)
 
@@ -973,7 +977,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Merge.**
 
 - [ ] Record the exact-head verdict and Bugbot triage. Keep immature-cohort evidence gaps explicit.
-- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Squash-merge `F12` on a clean verdict and a passing `check`, then branch the next PR from the new `main`.
+- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Hand `F12` to the owner on a clean verdict and a passing `check`. After the owner's merge, branch the next PR from the new `main`.
 
 ## Add a polled Linear adapter without changing stages (F13)
 
@@ -1027,7 +1031,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Merge.**
 
 - [ ] Record the exact-head verdict, live adapter proof, and Bugbot triage.
-- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Squash-merge `F13` on a clean verdict and a passing `check`, then branch the next PR from the new `main`. Leave deployment and package publication manual.
+- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Hand `F13` to the owner on a clean verdict and a passing `check`. Leave deployment and package publication manual.
 
 ## Close the program
 
@@ -1060,7 +1064,7 @@ No new sandbox, snapshot-at-label-time, main-gates, post-publication holdout, le
 
 - A GitHub App or webhook receiver conflicts with the chosen `gh` polling controller. No public ingress is needed.
 - Tailscale and hosted model execution belong to the retired prototypes. The VM now uses exe.dev integrations, and hosted CI runs deterministic checks without stored secrets.
-- Automatic merge of factory-opened PRs conflicts with v1's Human Review boundary. Later autonomy belongs in checkpoint policy, not a hidden merge command. The root's merges of its own build PRs are a separate owner grant from 2026-10-28, and they need a clean verdict and a passing hosted check.
+- Automatic merge of factory-opened PRs conflicts with v1's Human Review boundary. Later autonomy belongs in checkpoint policy, not a hidden merge command. The root's separate historical build-PR merge grant ended at F08. From F09a onward the owner alone merges build PRs too.
 - A one-shot `pi -p` parent cannot stand in for persistent Herdr RPC orchestration. Unit 1 proved result delivery only while the parent remained alive.
 - A workspace directory, Git worktree, non-root container UID, or prompt prohibition is not the OS and network boundary required by the integration's VM-wide authority.
 - Candidate-owned checks alone can be weakened by editing scripts or deleting tests. Main-owned gates, candidate tests, and held-out tests must all pass.
@@ -1086,7 +1090,7 @@ No new sandbox, snapshot-at-label-time, main-gates, post-publication holdout, le
 
 `F07b`, `F07c`, and `F09a` own the CI trust path. The repository's only CI workflow is `.github/workflows/check.yml`, which runs the candidate's own `npm run check`. A workflow that must come from `main` cannot prove its hosted dispatch path before it exists on `main`. The root merges the bootstrap under the owner's build-PR grant after local and container proof, with the hosted boxes explicitly pending. This is an exception to the normal rule that every lane passes before merge, and it is not a claimed full pass. If that proof fails, stop the hosted path rather than run untrusted candidate workflow code as a substitute.
 
-The gate prototype must settle test import routing, dependencies, read-only trusted files, and result ownership. `F09a` must prove how the trusted validation result becomes a required candidate-SHA check without exposing a write credential to candidate code. Missing or unrelated checks never pass. Branch-rule mutations require the owner's separate authorization and may need manual application if the integration lacks permission.
+The gate prototype must settle test import routing, dependencies, read-only trusted files, and result ownership. F09a's one owner-merged bootstrap contains both approved `ci.yml` and `check.yml` edits. Main-backed reporter/P4 proof follows that merge, not a local-only pass. `F09a` must prove how the trusted validation result becomes a required candidate-SHA check without exposing a write credential to candidate code. After supported proof, only the owner applies the conditional two-ruleset protection policy in `docs/operations/human-review.md`. Missing or unrelated checks never pass. Branch-rule mutations require the owner's separate authorization and may need manual application if the integration lacks permission.
 
 ### R4. Public acceptance commits complicate repair secrecy
 
@@ -1120,7 +1124,7 @@ These are every intentional template adaptation in this document.
 2. Each live lane saves a concrete text/JSON artifact or URL list instead of a `.png`. The checker calls this a screenshot requirement but only enforces a literal `Save` path. Those artifacts prove backend behavior without invented screenshots.
 3. Each review gate explicitly says that logs replace a screenshot or video. Those words satisfy the checker's literal review-block requirements. No recording or screenshot is claimed or required where it adds no evidence.
 4. The template's cross-family reviewer language becomes context-isolated same-family seats under the owner's explicit interim model decision. The missing cross-family gate remains visible, not silently waived as passed.
-5. Every PR gets a full verdict before merge, including changes without a visual interaction. This is stricter than the template's optional interaction-only review gate. Since 2026-10-28 the root merges build PRs under the owner's grant. PRs the factory opens at runtime still stop for the owner.
+5. Every PR gets a full verdict before merge, including changes without a visual interaction. This is stricter than the template's optional interaction-only review gate. The root's merge grant covered build PRs through F08. From F09a onward build PRs and runtime factory PRs both stop for the owner's merge.
 6. The dependency graph is one serial chain rather than a fabricated pair of independent first PRs. Shared contracts and the CI bootstrap justify that choice. Ten verifier lanes mean ten scenarios, not ten concurrent controllers on a two-vCPU VM. Read-only lanes may run concurrently, while mutation/resource-heavy scenarios use scoped fixtures and service capacity limits.
 7. The `F04a` main-owned configuration and the `F07b` main-owned CI workflow must land on `main` before their main-backed proof can run. The root merges both under the owner's build-PR grant. These explicit exceptions do not create false all-green verdicts. Their main-backed boxes stay pending until the post-merge checks pass.
 8. The playbook's prototype-before-plan and child investigation steps were constrained by this leaf's plan-only authorization. Existing prototypes are recorded, code was read directly, no children were launched, and unproved engineering choices became named prototype-first gates.

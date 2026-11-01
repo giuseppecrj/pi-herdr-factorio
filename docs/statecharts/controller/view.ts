@@ -1,118 +1,61 @@
-const ENDED: Record<string, string> = {
-  stage_passed: "Review clean, run stops before handoff",
-  failed: "Failed",
-  budget_exhausted: "Token budget spent",
-  released: "Released",
+import { state as journeyState, step as journeyStep } from "../journey/view.ts";
+
+type State = Parameters<typeof journeyState>[0] & { mode: string };
+
+export const title = "F09a durable controller (presentation subset)";
+
+export const state = (v: State) => {
+	if (v.mode === "down") return "Restart reconciles owned processes";
+
+	if (v.mode === "missing")
+		return "Missing private evidence blocks finalization";
+
+	if (v.mode === "save")
+		return "Claim write pending, no external effect authorized";
+
+	if (v.mode === "promote_write")
+		return "Expected predecessor read, non-force write pending";
+
+	if (v.mode === "response")
+		return "External launch occurred, response not yet durable";
+
+	if (v.mode === "effect") return `Durable intent: ${v.b.pending}`;
+
+	return journeyState(v);
 };
 
-const HELD: Record<string, string> = {
-  claimed: "Claimed, marker posted on the issue",
-  running: "Stage running in the sandbox",
-  blocked: "Sandbox down, slot kept",
-  retry: "Waiting to retry",
-  publishing: "Publishing patch and held-out checks",
-  awaiting_ci: "Waiting for CI without a slot or model",
-  ci_unavailable: "CI transport unavailable, deadline still runs",
-  ci_timeout: "CI deadline expired",
-  verdict_pass: "Storing a passing bound verdict",
-  verdict_fail: "Storing a failed verdict",
+export const group = (v: State) =>
+	v.mode === "save" || v.mode === "down"
+		? "persistence"
+		: v.b.phase === "terminal"
+			? "ended"
+			: "active";
+
+export const colors = { persistence: "orange", active: "teal", ended: "tan" };
+
+const labels = {
+	Decide: "shared candidate policy decides",
+	ObserveTerminal: "observe merge or closure before pending work",
+	Persist: "atomic claim write succeeds",
+	LaunchProcess: "launch captured execution after durable intent",
+	LaunchResponse: "record launch response",
+	ProcessSettles: "execution settles, captured callback queues",
+	Consume: "consume captured callback after PR observation",
+	OpenRemote: "owned PR exists remotely, response may be lost",
+	OtherResponse: "matching effect response",
+	PublishValidation: "generation ref and fixed deadline recorded",
+	StopProcess: "confirmed process stop",
+	StopResponse: "usage reconciled after stop",
+	ReadPredecessor: "read exact expected predecessor",
+	WriteNonForce: "force:false update, not CAS",
+	RefuseNonAncestor: "preserve unexpected owner head",
+	Crash: "controller crashes, volatile callback queue is lost",
+	RecoverStop: "stop owned orphan before reuse",
+	Recover: "recover captured private intent",
+	Cleanup: "delete only an owned retired validation ref",
+	Expire: "original CI deadline expires",
 };
 
-export const title = "What the controller does with one run today";
-
-export const state = (v: any) => {
-  if (!v.loaded) return ["Controller restarting"];
-  if (v.pending !== 0) return ["Run reserved, waiting to be adopted"];
-
-  if (v.ph in HELD) return ["Holding a claim", `${v.stage === "review" ? "Review" : "Build and CI"}: ${HELD[v.ph]}`];
-  if (v.ph === "ending") return ["Stopping the aborted stage"];
-  const last = v.marker[v.event];
-
-  if (last in ENDED) return [ENDED[last], v.branches.includes(v.event) ? "Branch deletion pending" : "Branch absent"];
-  if (v.ticket === "gone") return ["Label removed, nothing running"];
-  return ["Seen with the ready label"];
-};
-
-export const group = (v: any) => {
-  if (!v.loaded || v.pending !== 0) return "restart";
-  if (v.ph in HELD) return "held";
-  if (v.ph === "ending") return "held";
-  return v.marker[v.event] in ENDED ? "ended" : "waiting";
-};
-
-export const colors = {
-  waiting: "blue",
-  held: "teal",
-  restart: "orange",
-  ended: "tan",
-};
-
-export const step = (action: string, from: any, to: any) => {
-  switch (action) {
-    case "Admit":
-      return "admitted";
-    case "Launch":
-      if (to.ph === "blocked") return "the sandbox check fails";
-      if (to.ph === "running")
-        return from.ph === "retry" ? "backoff ends" : "the sandbox launches the stage";
-      return "launch refused, token cap reached";
-    case "StagePasses":
-      return "build passes, sandbox stops";
-    case "Published":
-      return "two commits published, CI dispatched";
-    case "CollectCI":
-      return "CI completes";
-    case "CIUnavailable":
-      return "transport retries exhausted this tick";
-    case "RetryCI":
-      return "next tick retries transport afresh";
-    case "CIDeadline":
-      return "20-minute deadline expires";
-    case "StoreVerdict":
-      return to.stage === "review" ? "passing CI claims review" : to.ph === "claimed" ? "failed CI starts a repair [rounds left]" : "CI ends failed";
-    case "ReviewPasses":
-      return "clean review, stop before handoff";
-    case "ReviewBlocks":
-      return to.ph === "claimed" ? "blocking review starts a repair [rounds left]" : "blocking review [two repairs used]";
-    case "Cleanup":
-      return "guarded branch deletion succeeds";
-    case "StageRefuses":
-      return "stage refuses";
-    case "StageFails":
-    case "StageStalls":
-      if (to.ph === "retry") return "stage fails or stalls [attempts and tokens left]";
-      if (to.ph === "ending") return "stage stalls [no attempts or tokens left]";
-      return to.marker[from.run] === "failed"
-        ? "stage fails [no attempts left]"
-        : "stage fails [token cap reached]";
-    case "Release":
-      return "label removed or issue closed";
-    case "PostEnd":
-    case "SandboxStops":
-      return "the aborted sandbox stops";
-    case "Restart":
-      return from.ph === "none" ? null : "the controller restarts";
-    case "Recover":
-      return to.pending !== 0 ? "the controller reserves the run from its claim file" : null;
-    case "Adopt": {
-      if (to.ph !== "none") return "the controller adopts the run from its marker";
-      const last = to.marker[to.event];
-      if (last === "released") return "the controller finds the label gone";
-      if (last === "failed") return "the controller ends the interrupted attempt [no attempts left]";
-      return null;
-    }
-    case "Reconcile":
-      return null;
-    case "YouRemoveLabel":
-      return "label removed or issue closed";
-    case "YouRelabel":
-      return "you re-label the issue";
-    case "SandboxBreaks":
-      return "the sandbox check starts failing";
-    case "SandboxHeals":
-      return "the sandbox check passes";
-    case "Idle":
-      return null;
-  }
-  return action;
-};
+export const step = (action: string) =>
+	Object.entries(labels).find(([name]) => name === action)?.[1] ??
+	journeyStep(action);

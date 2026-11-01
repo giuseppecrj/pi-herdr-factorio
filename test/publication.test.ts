@@ -80,7 +80,7 @@ class GitData {
 	refs = new Map<string, string>();
 	commits = new Map<
 		string,
-		{ parent: string; message: string; tree: string }
+		{ parent: string; parents: string[]; message: string; tree: string }
 	>();
 	requests: string[] = [];
 	dispatches = 0;
@@ -150,7 +150,12 @@ class GitData {
 
 		if (path === "git/commits") {
 			const tree = textOf(fieldOf(body, "tree")) ?? "";
-			const parent = textOf(arrayOf(fieldOf(body, "parents"))?.[0]) ?? "";
+
+			const parents = (arrayOf(fieldOf(body, "parents")) ?? []).map(
+				(p) => textOf(p) ?? "",
+			);
+
+			const parent = parents[0] ?? "";
 			const message = textOf(fieldOf(body, "message")) ?? "";
 			const actor = objectOf(fieldOf(body, "author"));
 			const date = textOf(fieldOf(actor, "date")) ?? "";
@@ -160,11 +165,11 @@ class GitData {
 			const sha = gitObjectSha(
 				"commit",
 				Buffer.from(
-					`tree ${tree}\nparent ${parent}\nauthor ${identity}\ncommitter ${identity}\n\n${message}`,
+					`tree ${tree}\n${parents.map((p) => `parent ${p}\n`).join("")}author ${identity}\ncommitter ${identity}\n\n${message}`,
 				),
 			);
 
-			this.commits.set(sha, { parent, tree, message });
+			this.commits.set(sha, { parent, parents, tree, message });
 
 			return ok({ sha });
 		}
@@ -281,6 +286,127 @@ const publicationInput = {
 } as const;
 
 describe("deterministic Git Data publication", () => {
+	it("formal promotion refuses an unexpected predecessor before any non-force update", async () => {
+		const target = "c".repeat(40);
+		const foreign = "d".repeat(40);
+		assert.ok(isGitSha(target));
+		const calls: string[] = [];
+
+		const api = new GitHubPublicationApi(async (_command, args) => {
+			const method = args[args.indexOf("--method") + 1];
+			calls.push(method ?? "GET");
+
+			return {
+				code: 0,
+				stdout: JSON.stringify({ object: { sha: foreign } }),
+				stderr: "",
+			};
+		}, repo);
+
+		await assert.rejects(
+			api.promotePr(`factory/pr/1-${runId.slice(0, 12)}`, baseSha, target),
+			/branch_moved/,
+		);
+		assert.deepEqual(calls, ["GET"]);
+	});
+
+	for (const race of [false, true])
+		it(`formal promotion reconciles a lost response but does not claim expected-head CAS (race=${race})`, async () => {
+			const target = "c".repeat(40);
+			const foreign = "d".repeat(40);
+			assert.ok(isGitSha(target));
+			assert.ok(isGitSha(foreign));
+			let head = baseSha;
+			let reads = 0;
+			let updates = 0;
+
+			const api = new GitHubPublicationApi(async (_command, args) => {
+				const method = args[args.indexOf("--method") + 1];
+
+				if (method === "GET") {
+					const observed = head;
+
+					if (reads++ === 0 && race) head = foreign;
+
+					return {
+						code: 0,
+						stdout: JSON.stringify({ object: { sha: observed } }),
+						stderr: "",
+					};
+				}
+
+				assert.equal(method, "PATCH");
+				const file = args[args.indexOf("--input") + 1];
+				assert.ok(file);
+				assert.deepEqual(parseJson(readFileSync(file, "utf8")), {
+					sha: target,
+					force: false,
+				});
+				updates++;
+
+				if (head === foreign)
+					return { code: 1, stdout: "", stderr: "HTTP 422" };
+				head = target;
+
+				return { code: 1, stdout: "", stderr: "HTTP 502" };
+			}, repo);
+
+			if (race)
+				await assert.rejects(
+					api.promotePr(`factory/pr/1-${runId.slice(0, 12)}`, baseSha, target),
+				);
+			else
+				await api.promotePr(
+					`factory/pr/1-${runId.slice(0, 12)}`,
+					baseSha,
+					target,
+				);
+			assert.equal(head, race ? foreign : target);
+			assert.equal(updates, 1);
+			assert.ok(reads >= 2);
+		});
+	it("keeps g0 bytes and builds the final ordered-parent SHA before certification", async () => {
+		const fake = new GitData();
+		const api = new GitHubPublicationApi(fake.exec, repo);
+		const initial = await publishCandidate(api, publicationInput);
+		assert.doesNotMatch(
+			fake.commits.get(initial.candidateSha)?.message ?? "",
+			/Factory-Generation/,
+		);
+
+		const explicitZero = await publishCandidate(api, {
+			...publicationInput,
+			generation: 0,
+		});
+
+		assert.deepEqual(explicitZero, initial);
+
+		const next = await publishCandidate(api, {
+			...publicationInput,
+			generation: 1,
+			ancestry: { kind: "successor", previousHead: initial.candidateSha },
+		});
+
+		assert.equal(next.branch, `${initial.branch}-g1`);
+		const candidate = fake.commits.get(next.candidateSha);
+		assert.ok(candidate);
+		assert.deepEqual(candidate.parents, [next.patchSha, initial.candidateSha]);
+		assert.match(candidate.message, /Factory-Generation: 1/);
+		const actor = `${CONTROLLER_LOGIN} <${BOT_EMAIL}> ${Date.parse(publicationInput.eventAt) / 1000} +0000`;
+		const bytes = `tree ${candidate.tree}\n${candidate.parents.map((p) => `parent ${p}\n`).join("")}author ${actor}\ncommitter ${actor}\n\n${candidate.message}`;
+
+		const native = execFileSync(
+			"git",
+			["hash-object", "-t", "commit", "--stdin"],
+			{ input: bytes, encoding: "utf8" },
+		).trim();
+
+		assert.equal(next.candidateSha, native);
+		assert.equal(
+			fake.requests.some((p) => p.startsWith("PATCH")),
+			false,
+		);
+	});
 	it("publishes patch then suite, and adopts the same branch without moving it", async () => {
 		const fake = new GitData();
 

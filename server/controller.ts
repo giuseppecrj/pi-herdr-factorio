@@ -8,6 +8,21 @@ import {
 } from "../src/artifacts.ts";
 import { readPatch, publicationTree } from "../src/build.ts";
 import {
+	parseCandidateState,
+	candidateUsage,
+	candidateGenerations,
+	type CandidateState,
+	type CandidateEvent,
+} from "../src/handoff.ts";
+import {
+	GitHubTicketAdapter,
+	GitHubTicketWriter,
+	parseOwnedPullRequest,
+	type OwnedPullRequest,
+} from "../src/adapters/github.ts";
+import { fileAdmissionStore, latestReadyEntry } from "../src/admission.ts";
+import { READY_LABEL, REPO_SWITCH_LABEL } from "../src/policy.ts";
+import {
 	GitHubPublicationApi,
 	PublicationError,
 	publishCandidate,
@@ -23,6 +38,7 @@ import {
 	parseCiRun,
 	matchesCiRun,
 	collectVerdict,
+	collectTrustedReport,
 	repairFeedback,
 	parseValidationState,
 	validationDir,
@@ -60,7 +76,12 @@ import { dirname, join, resolve } from "node:path";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { gunzipSync } from "node:zlib";
-import { isRunStatus, isStage } from "../src/markers.ts";
+import {
+	isRunStatus,
+	isStage,
+	parseMarker,
+	MARKER_PREFIX,
+} from "../src/markers.ts";
 import { type Digest, isDigest } from "../src/run.ts";
 import type {
 	Checkout,
@@ -72,6 +93,7 @@ import type {
 	Orchestrator,
 	RunFiles,
 	TickReport,
+	StageExecutor,
 } from "../src/orchestrator.ts";
 import {
 	type Answer,
@@ -79,6 +101,9 @@ import {
 	type ClarificationRound,
 	answersDigestOf,
 	hasControl,
+	inert,
+	renderSummary,
+	withoutKey,
 	isAnswersDigest,
 	isQuestionsDigest,
 } from "../src/specify.ts";
@@ -465,6 +490,49 @@ function parseClaim(text: string): ClaimRecord | null {
 	if (round > 2 || (validation !== undefined && validation.round !== round))
 		return null;
 	let labels = labelFailures === null ? claim : { ...claim, labelFailures };
+	const rawMarker = fieldOf(value, "marker");
+
+	if (rawMarker !== undefined) {
+		const parsed = parseMarker(
+			`${MARKER_PREFIX}${JSON.stringify(rawMarker)} -->`,
+		);
+
+		if (
+			parsed.kind !== "marker" ||
+			parsed.marker.runId !== id ||
+			parsed.marker.issue !== claim.issue ||
+			parsed.marker.eventId !== claim.eventId ||
+			parsed.marker.seq !== claim.seq ||
+			parsed.marker.usage !== claim.usage ||
+			parsed.marker.status !== claim.status
+		)
+			return null;
+		labels = { ...labels, marker: parsed.marker };
+	}
+
+	const rawHandoff = fieldOf(value, "handoff");
+
+	if (rawHandoff !== undefined) {
+		const handoff = parseCandidateState(rawHandoff);
+
+		if (
+			handoff === null ||
+			handoff.pin.runId !== id ||
+			handoff.pin.issue !== claim.issue ||
+			(usage !== null && usage !== candidateUsage(handoff))
+		)
+			return null;
+		labels = { ...labels, handoff };
+	}
+
+	const enteredAt = fieldOf(value, "enteredAt");
+
+	if (enteredAt !== undefined) {
+		const at = claimUsage(enteredAt);
+
+		if (at === undefined || at === null) return null;
+		labels = { ...labels, enteredAt: at };
+	}
 
 	if (fieldOf(objectOf(value), "round") !== undefined)
 		labels = { ...labels, round };
@@ -1283,6 +1351,70 @@ export function fileRunFiles(stateDir: string): RunFiles {
 
 		async writeClaim(claim) {
 			try {
+				const book = claim.handoff;
+
+				if (book?.kind === "selected") {
+					for (const evidence of candidateGenerations(book)) {
+						const dir = validationDir(
+							root,
+							claim.runId,
+							evidence.intent.round,
+							evidence.intent.generation,
+						);
+
+						privateDir(dir);
+
+						if (
+							!(await writeOnce(
+								join(dir, "generation.json"),
+								`${JSON.stringify(evidence.intent)}\n`,
+							))
+						)
+							return false;
+
+						if (
+							book.history.some(
+								(entry) => entry.intent.digest === evidence.intent.digest,
+							) &&
+							!(await writeOnce(
+								join(dir, "archive.json"),
+								`${JSON.stringify(evidence)}\n`,
+							))
+						)
+							return false;
+
+						if (
+							evidence.certification !== null &&
+							!(await writeOnce(
+								join(dir, "certification.json"),
+								`${JSON.stringify(evidence.certification)}\n`,
+							))
+						)
+							return false;
+					}
+
+					for (const account of book.accounts) {
+						const e = account.execution;
+
+						const dir = join(
+							root,
+							"stages",
+							claim.runId,
+							`${e.stage}-r${e.round}-${e.attempt}`,
+						);
+
+						privateDir(dir);
+
+						if (
+							!(await writeOnce(
+								join(dir, "execution.json"),
+								`${JSON.stringify(e)}\n`,
+							))
+						)
+							return false;
+					}
+				}
+
 				await mkdir(claims, { recursive: true, mode: 0o700 });
 			} catch {
 				return false;
@@ -1390,20 +1522,39 @@ export function controllerValidator(config: {
 	readonly receipt?: (repo: RepoSlug, id: number) => Promise<string | null>;
 }): Validator {
 	return async (input) => {
-		const state: ValidationState = input.state ?? {
-			version: 1,
+		const initial: ValidationState = {
+			version: input.generation === undefined ? 1 : 2,
 			startedAt: input.now,
 			deadline: input.now + Math.min(input.wallMs, CI_DEADLINE_MS),
 			round: input.round ?? 0,
 			originalBase: input.baseSha,
-			baseSha: input.baseSha,
-			baseResolved: false,
+			baseSha: input.generation?.baseSha ?? input.baseSha,
+			baseResolved: input.generation !== undefined,
 			publication: null,
 			dispatchTry: 0,
 			dispatchedAt: null,
 			ciRunId: null,
 			counters: {},
 		};
+
+		const generation = input.generation;
+
+		const prepared =
+			generation === undefined
+				? initial
+				: {
+						...initial,
+						generation: {
+							index: generation.generation,
+							digest: generation.digest,
+							previousHead:
+								generation.publication.kind === "successor"
+									? generation.publication.expectedHead
+									: null,
+						},
+					};
+
+		const state: ValidationState = input.state ?? prepared;
 
 		const save = () => input.save(state);
 		let repository: RepoSlug | null = null;
@@ -1418,11 +1569,20 @@ export function controllerValidator(config: {
 			const publication = state.publication;
 
 			if (publication !== null && repository !== null) {
-				const dir = validationDir(config.stateDir, input.runId, state.round);
+				const dir = validationDir(
+					config.stateDir,
+					input.runId,
+					state.round,
+					state.generation?.index,
+				);
+
 				privateDir(dir);
 				const path = join(dir, "failure.json");
 
-				if (!present(path) && !present(join(dir, "verdict.json")))
+				if (
+					!present(path) &&
+					(reason === "ci_timeout" || !present(join(dir, "verdict.json")))
+				)
 					exclusive(
 						path,
 						`${JSON.stringify({ ...identities, candidateSha: publication.candidateSha, gateSha: null, ciRunId: state.ciRunId, originalBase: state.originalBase, baseSha: state.baseSha, pass: false, checks: [], reason })}\n`,
@@ -1445,7 +1605,11 @@ export function controllerValidator(config: {
 		try {
 			if (
 				state.originalBase !== input.baseSha ||
-				state.round !== (input.round ?? 0)
+				state.round !== (input.round ?? 0) ||
+				(input.generation !== undefined &&
+					(state.generation?.digest !== input.generation.digest ||
+						state.baseSha !== input.generation.baseSha ||
+						state.generation.index !== input.generation.generation))
 			)
 				return failed("validation_binding");
 
@@ -1515,7 +1679,13 @@ export function controllerValidator(config: {
 				save,
 			);
 
-			const dir = validationDir(config.stateDir, input.runId, state.round);
+			const dir = validationDir(
+				config.stateDir,
+				input.runId,
+				state.round,
+				state.generation?.index,
+			);
+
 			privateDir(dir);
 			const verdictPath = join(dir, "verdict.json");
 			const failurePath = join(dir, "failure.json");
@@ -1552,6 +1722,32 @@ export function controllerValidator(config: {
 				const cleanup = await cleanupPublication(api, dir, state.publication);
 
 				if (cleanup === "branch_moved") return failed("branch_moved");
+
+				if (input.generation !== undefined && verdict.pass) {
+					if (
+						present(failurePath) &&
+						jsonField(
+							objectOf(parseJson(regularText(failurePath))),
+							"reason",
+						) === "ci_timeout"
+					)
+						return failed("ci_timeout");
+
+					const report = await controllerReport(
+						config,
+						repo,
+						input.runId,
+						state,
+						verdict,
+					);
+
+					if (report !== null)
+						return { kind: "finished", state, verdict, report };
+
+					return input.now >= state.deadline
+						? failed("ci_timeout")
+						: { kind: "waiting", state };
+				}
 
 				return { kind: "finished", state, verdict };
 			}
@@ -1632,6 +1828,14 @@ export function controllerValidator(config: {
 						issue: input.issue,
 						runId: input.runId,
 						round: state.round,
+						generation: state.generation?.index,
+						ancestry:
+							state.generation?.previousHead == null
+								? undefined
+								: {
+										kind: "successor",
+										previousHead: state.generation.previousHead,
+									},
 						eventAt: input.eventAt,
 						baseSha: state.baseSha,
 						patchDigest: patch.receipt.patchDigest,
@@ -1676,7 +1880,12 @@ export function controllerValidator(config: {
 
 					return found !== null &&
 						Array.from({ length: state.dispatchTry }, (_, index) =>
-							dispatchNonce(input.runId, state.round, index + 1),
+							dispatchNonce(
+								input.runId,
+								state.round,
+								index + 1,
+								state.generation?.index,
+							),
 						).some((nonce) =>
 							matchesCiRun(
 								found,
@@ -1722,6 +1931,7 @@ export function controllerValidator(config: {
 				if (tip === null || !isGitSha(tip)) return failed("main_unavailable");
 
 				if (tip !== state.baseSha) {
+					if (input.generation !== undefined) return failed("stale_base");
 					state.rebaseSha = tip;
 
 					if (!(await save())) return failed("claim_unwritable");
@@ -1738,6 +1948,7 @@ export function controllerValidator(config: {
 					input.runId,
 					state.round,
 					state.dispatchTry,
+					state.generation?.index,
 				);
 
 				const replacements = JSON.stringify(
@@ -1776,7 +1987,12 @@ export function controllerValidator(config: {
 
 			const nonce =
 				Array.from({ length: state.dispatchTry }, (_, index) =>
-					dispatchNonce(input.runId, state.round, index + 1),
+					dispatchNonce(
+						input.runId,
+						state.round,
+						index + 1,
+						state.generation?.index,
+					),
 				).find(
 					(nonce) => run.title === `gates ${publication.candidateSha} ${nonce}`,
 				) ?? "missing";
@@ -1851,6 +2067,23 @@ export function controllerValidator(config: {
 
 			if (cleanup === "branch_moved") return failed("branch_moved");
 
+			if (input.generation !== undefined && verdict.pass) {
+				const report = await controllerReport(
+					config,
+					repo,
+					input.runId,
+					state,
+					verdict,
+				);
+
+				if (report !== null)
+					return { kind: "finished", state, verdict, report };
+
+				return input.now >= state.deadline
+					? failed("ci_timeout")
+					: { kind: "waiting", state };
+			}
+
 			return { kind: "finished", state, verdict };
 		} catch (error) {
 			if (
@@ -1868,6 +2101,71 @@ export function controllerValidator(config: {
 	};
 }
 
+async function controllerReport(
+	config: { readonly stateDir: string; readonly exec: Exec },
+	repo: RepoSlug,
+	runId: Digest,
+	state: ValidationState,
+	verdict: Verdict,
+) {
+	const api = new GitHubPublicationApi(config.exec, repo);
+
+	const run = parseCiRun(
+		await api.request("GET", `actions/runs/${verdict.ciRunId}`),
+	);
+
+	if (run === null) return null;
+
+	const text = await downloadGateReceipt(
+		config.exec,
+		repo,
+		verdict.ciRunId,
+		"factory-report",
+	);
+
+	if (text === null) return null;
+
+	const nonce = Array.from({ length: state.dispatchTry }, (_, i) =>
+		dispatchNonce(runId, state.round, i + 1, state.generation?.index),
+	).find((n) =>
+		matchesCiRun(
+			run,
+			state.publication?.candidateSha ?? state.baseSha,
+			n,
+			state.startedAt,
+		),
+	);
+
+	if (nonce === undefined) return null;
+
+	const checks = await api.request(
+		"GET",
+		`commits/${verdict.candidateSha}/check-runs?filter=all&per_page=100`,
+	);
+
+	const report = collectTrustedReport({
+		record: parseJson(text),
+		checks,
+		run,
+		nonce,
+		verdict,
+	});
+
+	if (report !== null) {
+		const dir = validationDir(
+			config.stateDir,
+			runId,
+			state.round,
+			state.generation?.index,
+		);
+
+		keepValidationFile(join(dir, "report-receipt.json"), text);
+		keepValidationFile(join(dir, "report.json"), `${JSON.stringify(report)}\n`);
+	}
+
+	return report;
+}
+
 export async function sweepValidation(config: {
 	readonly stateDir: string;
 	readonly exec: Exec;
@@ -1878,56 +2176,131 @@ export async function sweepValidation(config: {
 	const files = fileRunFiles(config.stateDir);
 
 	for (const claim of await files.listClaims()) {
-		const state = claim.validation;
-		const publication = state?.publication;
+		const book = claim.handoff;
 
-		if (
-			claim.status === null ||
-			!["released", "failed", "budget_exhausted", "stage_passed"].includes(
-				claim.status,
-			) ||
-			state === undefined ||
-			publication == null
-		)
-			continue;
+		const terminal =
+			claim.status !== null &&
+			[
+				"released",
+				"failed",
+				"budget_exhausted",
+				"stage_passed",
+				"landed",
+				"cancelled",
+			].includes(claim.status);
 
-		if (
-			publication.branch !==
-			candidateBranch(claim.issue, claim.runId, state.round)
-		)
-			continue;
-		const dir = validationDir(config.stateDir, claim.runId, state.round);
+		const generations =
+			book?.kind === "selected" ? candidateGenerations(book) : [];
 
-		if (present(join(dir, "cleanup.json"))) continue;
-		const contract = await files.readContract(claim.runId);
+		const entries: {
+			state: ValidationState | null;
+			generation: (typeof generations)[number]["intent"] | undefined;
+			retired: boolean;
+		}[] = generations.map((evidence) => ({
+			state: evidence.validation,
+			generation: evidence.intent,
+			retired:
+				terminal ||
+				(book?.kind === "selected" &&
+					(book.current.intent.digest !== evidence.intent.digest ||
+						book.work.kind === "terminal" ||
+						book.work.kind === "held" ||
+						(book.work.kind === "effect" &&
+							book.work.request.kind === "finish_pr"))),
+		}));
 
-		if (contract.kind !== "found") continue;
+		if (book === undefined && terminal && claim.validation !== undefined)
+			entries.push({
+				state: claim.validation,
+				generation: undefined,
+				retired: true,
+			});
 
-		const api = new GitHubPublicationApi(
-			config.exec,
-			contract.contract.base.repo,
-		);
+		for (const entry of entries) {
+			const original = entry.state;
+			const publication = original?.publication;
 
-		if (
-			!present(join(dir, "verdict.json")) &&
-			!present(join(dir, "failure.json"))
-		) {
-			const listed = objectOf(
-				await api
-					.request(
-						"GET",
-						"actions/workflows/ci.yml/runs?event=workflow_dispatch&per_page=100",
-					)
-					.catch(() => undefined),
+			if (original == null || publication == null) continue;
+
+			const index =
+				entry.generation?.generation ?? original.generation?.index ?? 0;
+
+			if (
+				publication.branch !==
+				candidateBranch(claim.issue, claim.runId, original.round, index)
+			)
+				continue;
+
+			const dir = validationDir(
+				config.stateDir,
+				claim.runId,
+				original.round,
+				index,
 			);
 
-			const runs = (arrayOf(jsonField(listed, "workflow_runs")) ?? []).flatMap(
-				(value) => {
+			if (present(join(dir, "cleanup.json"))) continue;
+			const contract = await files.readContract(claim.runId);
+
+			if (
+				contract.kind !== "found" ||
+				(book !== undefined && book.pin.repo !== contract.contract.base.repo)
+			)
+				continue;
+
+			const api = new GitHubPublicationApi(
+				config.exec,
+				contract.contract.base.repo,
+			);
+
+			const progress = join(dir, "cleanup-validation.json");
+			let state = structuredClone(original);
+
+			if (present(progress)) {
+				const restored = parseValidationState(parseJson(regularText(progress)));
+
+				if (
+					restored === null ||
+					restored.startedAt !== original.startedAt ||
+					restored.deadline !== original.deadline ||
+					restored.round !== original.round ||
+					restored.originalBase !== original.originalBase ||
+					restored.baseSha !== original.baseSha ||
+					JSON.stringify(restored.generation) !==
+						JSON.stringify(original.generation) ||
+					JSON.stringify(restored.publication) !== JSON.stringify(publication)
+				)
+					continue;
+				state = restored;
+			}
+
+			if (
+				!present(join(dir, "verdict.json")) &&
+				!present(join(dir, "failure.json"))
+			) {
+				if (!entry.retired) continue;
+
+				const listed = objectOf(
+					await api
+						.request(
+							"GET",
+							"actions/workflows/ci.yml/runs?event=workflow_dispatch&per_page=100",
+						)
+						.catch(() => undefined),
+				);
+
+				const runs = (
+					arrayOf(jsonField(listed, "workflow_runs")) ?? []
+				).flatMap((value) => {
 					const run = parseCiRun(value);
 
 					return run !== null &&
-						Array.from({ length: state.dispatchTry }, (_, index) =>
-							dispatchNonce(claim.runId, state.round, index + 1),
+						Array.from({ length: state.dispatchTry }, (_, attempt) =>
+							dispatchNonce(
+								claim.runId,
+								state.round,
+								attempt + 1,
+								state.generation?.index,
+							),
 						).some((nonce) =>
 							matchesCiRun(
 								run,
@@ -1938,39 +2311,42 @@ export async function sweepValidation(config: {
 						)
 						? [run]
 						: [];
-				},
-			);
+				});
+
+				const now = config.now?.() ?? Date.now();
+
+				if (
+					now < state.deadline &&
+					(runs.length === 0 || runs.some((run) => run.status !== "completed"))
+				)
+					continue;
+
+				if (runs.length === 1) state.ciRunId = runs[0]?.id ?? null;
+				await controllerValidator(config)({
+					runId: claim.runId,
+					issue: claim.issue,
+					eventAt: contract.contract.snapshot.eventAt,
+					baseSha: contract.contract.base.sha,
+					now,
+					wallMs: CI_DEADLINE_MS,
+					round: state.round,
+					generation: entry.generation,
+					state,
+					dispatchAllowed: false,
+					save: async (validation) =>
+						entry.generation === undefined
+							? files.writeClaim({ ...claim, validation })
+							: writeAtomic(progress, `${JSON.stringify(validation)}\n`),
+				});
+			}
 
 			if (
-				runs.some((run) => run.status !== "completed") &&
-				(config.now?.() ?? Date.now()) < state.deadline
+				!present(join(dir, "verdict.json")) &&
+				!present(join(dir, "failure.json"))
 			)
 				continue;
-
-			if (runs.length === 0 && (config.now?.() ?? Date.now()) < state.deadline)
-				continue;
-
-			if (runs.length === 1) state.ciRunId = runs[0]?.id ?? null;
-			await controllerValidator(config)({
-				runId: claim.runId,
-				issue: claim.issue,
-				eventAt: contract.contract.snapshot.eventAt,
-				baseSha: contract.contract.base.sha,
-				now: config.now?.() ?? Date.now(),
-				wallMs: CI_DEADLINE_MS,
-				round: state.round,
-				state,
-				dispatchAllowed: false,
-				save: async (validation) => files.writeClaim({ ...claim, validation }),
-			});
+			await cleanupPublication(api, dir, publication);
 		}
-
-		if (
-			!present(join(dir, "verdict.json")) &&
-			!present(join(dir, "failure.json"))
-		)
-			continue;
-		await cleanupPublication(api, dir, publication);
 	}
 }
 
@@ -1978,6 +2354,7 @@ export async function downloadGateReceipt(
 	exec: Exec,
 	repo: RepoSlug,
 	id: number,
+	artifactName = "gate-receipt",
 ): Promise<string | null> {
 	const dir = mkdtempSync(join(tmpdir(), "factory-ci-"));
 
@@ -1992,7 +2369,7 @@ export async function downloadGateReceipt(
 
 		const artifacts = (arrayOf(jsonField(listed, "artifacts")) ?? []).filter(
 			(value) =>
-				jsonField(objectOf(value), "name") === "gate-receipt" &&
+				jsonField(objectOf(value), "name") === artifactName &&
 				jsonField(objectOf(value), "expired") === false,
 		);
 
@@ -2032,6 +2409,8 @@ export async function downloadGateReceipt(
 			}
 		}
 
+		if (artifactName !== "gate-receipt") return null;
+
 		const jobs = objectOf(await api.request("GET", `actions/runs/${id}/jobs`));
 
 		const gates = (arrayOf(jsonField(jobs, "jobs")) ?? []).filter(
@@ -2064,6 +2443,573 @@ export async function downloadGateReceipt(
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
+}
+
+async function retireUnissuedIntent(path: string, text: string): Promise<void> {
+	try {
+		if (present(path) && regularText(path) === text) await unlink(path);
+	} catch {
+		return;
+	}
+}
+
+export function controllerCandidatePort(config: {
+	readonly stateDir: string;
+	readonly exec: Exec;
+}): NonNullable<StageExecutor["candidate"]> {
+	const files = fileRunFiles(config.stateDir);
+
+	const branchOf = (state: CandidateState) =>
+		`factory/pr/${state.pin.issue}-${state.pin.runId.slice(0, 12)}`;
+
+	const allowed = async (state: CandidateState) => {
+		if ((await fileAdmissionStore(config.stateDir).localSwitch()) !== "enabled")
+			return false;
+
+		const enabled = await new GitHubTicketAdapter({
+			exec: config.exec,
+			repo: state.pin.repo,
+		}).readRepoSwitch();
+
+		return (
+			enabled.kind === "ok" &&
+			enabled.value.kind === "present" &&
+			enabled.value.name === REPO_SWITCH_LABEL
+		);
+	};
+
+	const apiOf = (state: CandidateState) =>
+		new GitHubPublicationApi(config.exec, state.pin.repo);
+
+	const ownedPr = async (
+		state: CandidateState,
+	): Promise<OwnedPullRequest | null> => {
+		const api = apiOf(state);
+		const branch = branchOf(state);
+
+		const number =
+			state.kind === "selected" ? state.published?.number : undefined;
+
+		if (number !== undefined) {
+			const pr = parseOwnedPullRequest(
+				await api.request("GET", `pulls/${number}`),
+				{ ...state.pin, branch, knownNumber: number },
+			);
+
+			if (pr === null) throw new PublicationError("pr_identity");
+
+			return pr;
+		}
+
+		const listed = arrayOf(
+			await api.request(
+				"GET",
+				`pulls?state=all&head=${encodeURIComponent(`${state.pin.repo.split("/")[0]}:${branch}`)}&base=main&per_page=100`,
+			),
+		);
+
+		if (listed === null || listed.length >= 100 || listed.length > 1)
+			throw new PublicationError("pr_ambiguous");
+
+		if (listed.length === 0) return null;
+		const discovered = countOf(jsonField(objectOf(listed[0]), "number"));
+
+		if (discovered === null) throw new PublicationError("pr_identity");
+
+		const pr = parseOwnedPullRequest(
+			await api.request("GET", `pulls/${discovered}`),
+			{ ...state.pin, branch },
+		);
+
+		if (pr === null) throw new PublicationError("pr_identity");
+
+		return pr;
+	};
+
+	const observation = async (
+		state: CandidateState,
+		now: number,
+	): Promise<
+		Omit<
+			Extract<CandidateEvent, { kind: "observed" }>,
+			"executionAllowed" | "capacityAvailable"
+		>
+	> => {
+		const api = apiOf(state);
+
+		let pr: Extract<CandidateEvent, { kind: "observed" }>["pr"] = {
+			kind: "none",
+		};
+
+		const possible =
+			state.kind === "selected" &&
+			(state.published !== null ||
+				(state.work.kind === "effect" &&
+					state.work.request.kind === "open_pr"));
+
+		if (possible) {
+			try {
+				const found = await ownedPr(state);
+
+				if (found !== null) {
+					if (found.status.kind === "merged")
+						pr = {
+							kind: "merged",
+							number: found.number,
+							head: found.head,
+							mergeSha: found.status.mergeSha,
+							actor: found.status.actor,
+						};
+					else if (found.status.kind === "closed")
+						pr = { kind: "closed", number: found.number, head: found.head };
+					else {
+						const refHead = await api.prRef(branchOf(state));
+						pr =
+							refHead === null
+								? { kind: "unavailable" }
+								: {
+										kind: "open",
+										number: found.number,
+										head: found.head,
+										refHead,
+									};
+					}
+				} else if (
+					present(
+						join(config.stateDir, "handoff", state.pin.runId, "create.json"),
+					)
+				) {
+					pr = { kind: "unavailable" };
+				}
+			} catch {
+				pr = { kind: "unavailable" };
+			}
+		}
+
+		const result: Omit<
+			Extract<CandidateEvent, { kind: "observed" }>,
+			"executionAllowed" | "capacityAvailable"
+		> = {
+			kind: "observed",
+			now,
+			pr,
+			main: null,
+			eligibility: "unverified",
+			readiness: { kind: "unavailable" },
+		};
+
+		if (pr.kind === "merged" || pr.kind === "closed") return result;
+
+		const adapter = new GitHubTicketAdapter({
+			exec: config.exec,
+			repo: state.pin.repo,
+		});
+
+		const issue = await adapter.readIssue(state.pin.issue);
+		let eligibility: "ready" | "withdrawn" | "unverified" = "unverified";
+
+		if (issue.kind === "ok") {
+			if (!issue.value.open || !issue.value.labels.includes(READY_LABEL))
+				eligibility = "withdrawn";
+			else {
+				const timeline = await adapter.readTimeline(state.pin.issue);
+
+				if (timeline.kind === "ok") {
+					const latest = latestReadyEntry(timeline.value);
+
+					if (latest.kind === "found") {
+						const admission = await fileAdmissionStore(config.stateDir).read({
+							repo: state.pin.repo,
+							issue: state.pin.issue,
+							eventId: latest.entry.id,
+						});
+
+						eligibility =
+							latest.entry.kind === "labeled" &&
+							admission.kind === "found" &&
+							admission.receipt.baseSha === state.pin.workflowSha
+								? "ready"
+								: "withdrawn";
+					}
+				}
+			}
+		}
+
+		let main: GitSha | null = null;
+
+		try {
+			const ref = objectOf(await api.request("GET", "git/ref/heads/main"));
+			const head = textOf(jsonField(objectOf(jsonField(ref, "object")), "sha"));
+
+			if (head !== null && isGitSha(head)) main = head;
+		} catch {
+			main = null;
+		}
+
+		let readiness: Extract<CandidateEvent, { kind: "observed" }>["readiness"] =
+			{ kind: "unavailable" };
+
+		if (
+			state.kind === "selected" &&
+			state.current.certification !== null &&
+			state.current.validation !== null
+		) {
+			const certificate = state.current.certification;
+
+			try {
+				const report = await controllerReport(
+					config,
+					state.pin.repo,
+					state.pin.runId,
+					state.current.validation,
+					certificate.verdict,
+				);
+
+				const checks = objectOf(
+					await api.request(
+						"GET",
+						`commits/${certificate.verdict.candidateSha}/check-runs?filter=all&per_page=100`,
+					),
+				);
+
+				const runs = arrayOf(jsonField(checks, "check_runs"));
+
+				const mandatory =
+					runs?.filter((r) => jsonField(objectOf(r), "name") === "check") ?? [];
+
+				const check = objectOf(mandatory[0]);
+
+				if (
+					report !== null &&
+					runs !== null &&
+					jsonField(checks, "total_count") === runs.length &&
+					(state.published === null ||
+						(state.current.intent.publication.kind === "successor" &&
+							pr.kind === "open" &&
+							pr.head !== report.candidateSha &&
+							pr.head === state.current.intent.publication.expectedHead &&
+							pr.refHead === state.current.intent.publication.expectedHead) ||
+						(mandatory.length === 1 &&
+							jsonField(check, "head_sha") === report.candidateSha &&
+							jsonField(check, "status") === "completed" &&
+							jsonField(check, "conclusion") === "success" &&
+							jsonField(objectOf(jsonField(check, "app")), "id") === 15368))
+				)
+					readiness = { kind: "current", head: report.candidateSha, report };
+				else readiness = { kind: "not_ready", reason: "checks_incomplete" };
+			} catch {
+				readiness = { kind: "unavailable" };
+			}
+		}
+
+		return { ...result, main, eligibility, readiness };
+	};
+
+	const publicBody = async (
+		state: Extract<CandidateState, { kind: "selected" }>,
+	) => {
+		const contract = await files.readContract(state.pin.runId);
+		const certificate = state.current.certification;
+
+		if (contract.kind !== "found" || certificate === null)
+			throw new PublicationError("evidence_unavailable");
+
+		const summary = renderSummary({
+			runId: state.pin.runId,
+			contract: contract.contract,
+			digest: contract.digest,
+		});
+
+		if (summary === null) throw new PublicationError("summary_too_large");
+
+		return [
+			`## Factory handoff`,
+			withoutKey(summary),
+			`Candidate: ${certificate.verdict.candidateSha}\nGate: ${certificate.verdict.gateSha}\nCI: https://github.com/${state.pin.repo}/actions/runs/${certificate.verdict.ciRunId}`,
+			`All required hard checks passed. Patch ${certificate.verdict.patchDigest.slice(0, 12)}; acceptance ${certificate.verdict.acceptanceDigest.slice(0, 12)}.`,
+			...certificate.review.seats.map(
+				(seat) =>
+					`- ${inert(seat.seat)}: ${inert(seat.label)}; ${seat.findings.length} findings`,
+			),
+			...certificate.review.seats.flatMap((seat) =>
+				seat.findings
+					.slice(0, 5)
+					.map((f) => `- ${inert(f.severity)}: ${inert(f.claim)}`),
+			),
+			`R8 cross-family review remains incomplete. The factory waits for the owner's merge; it cannot merge or arm auto-merge.`,
+			`<!-- factory:pr ${state.pin.runId} -->`,
+		].join("\n\n");
+	};
+
+	return {
+		async observeMissing(marker) {
+			if (marker.pr === null) return { kind: "none" };
+			const api = new GitHubPublicationApi(config.exec, marker.repo);
+			const branch = `factory/pr/${marker.issue}-${marker.runId.slice(0, 12)}`;
+
+			const pr = parseOwnedPullRequest(
+				await api.request("GET", `pulls/${marker.pr}`),
+				{
+					repo: marker.repo,
+					runId: marker.runId,
+					branch,
+					knownNumber: marker.pr,
+				},
+			);
+
+			if (pr === null) return { kind: "unavailable" };
+			const status = pr.status;
+
+			if (status.kind !== "merged") return { kind: "unavailable" };
+
+			const observed = {
+				kind: "merged" as const,
+				number: pr.number,
+				head: pr.head,
+				mergeSha: status.mergeSha,
+				actor: status.actor,
+			};
+
+			const dir = join(config.stateDir, "handoff", marker.runId);
+			privateDir(dir);
+			await writeOnce(
+				join(dir, "missing-evidence-observation.json"),
+				`${JSON.stringify(observed)}\n`,
+			);
+
+			return observed;
+		},
+		observe: observation,
+		async patch(state, round) {
+			const patch = readPatch(config.stateDir, {
+				runId: state.pin.runId,
+				round,
+				baseSha: state.pin.originalBase,
+				contractDigest: state.pin.contractDigest,
+				acceptanceDigest: state.pin.acceptanceDigest,
+			});
+
+			return patch.kind === "found" ? patch : null;
+		},
+		async execute(state, request) {
+			if (state.kind !== "selected") return null;
+			const api = apiOf(state);
+
+			const writer = new GitHubTicketWriter({
+				exec: config.exec,
+				repo: state.pin.repo,
+			});
+
+			if (request.kind === "finish_pr") {
+				const terminal = request.terminal;
+				const pr = terminal.kind === "failed" ? null : await ownedPr(state);
+
+				if (terminal.kind === "cancelled" && pr?.status.kind === "merged")
+					return null;
+
+				if (terminal.kind === "merged") {
+					if (
+						pr?.status.kind !== "merged" ||
+						pr.status.mergeSha !== terminal.mergeSha
+					)
+						return null;
+
+					const issue = objectOf(
+						await api.request("GET", `issues/${state.pin.issue}`),
+					);
+
+					if (jsonField(issue, "state") !== "closed")
+						await api.request(
+							"PATCH",
+							`issues/${state.pin.issue}`,
+							{ state: "closed" },
+							true,
+						);
+				} else if (terminal.kind === "cancelled" && pr?.status.kind === "open")
+					await api.request(
+						"PATCH",
+						`pulls/${pr.number}`,
+						{ state: "closed" },
+						true,
+					);
+
+				return { kind: "finish_pr", request };
+			}
+
+			if (!(await allowed(state))) return null;
+
+			if (request.kind === "open_pr") {
+				let found = await ownedPr(state);
+
+				if (found === null) {
+					await api.promotePr(request.branch, null, request.head);
+					const dir = join(config.stateDir, "handoff", state.pin.runId);
+					privateDir(dir);
+					const intent = join(dir, "create.json");
+
+					if (present(intent)) return null;
+					const bytes = `${JSON.stringify(request)}\n`;
+					exclusive(intent, bytes);
+
+					if (!(await allowed(state))) {
+						await retireUnissuedIntent(intent, bytes);
+
+						return null;
+					}
+
+					try {
+						await api.request(
+							"POST",
+							"pulls",
+							{
+								head: request.branch,
+								base: "main",
+								draft: false,
+								title: `factory: issue ${state.pin.issue}`,
+								body: await publicBody(state),
+							},
+							true,
+						);
+					} catch {
+						return null;
+					}
+
+					found = await ownedPr(state);
+				}
+
+				if (found === null) return null;
+				const refHead = await api.prRef(request.branch);
+
+				if (refHead === null) return null;
+
+				return {
+					kind: "open_pr",
+					request,
+					number: found.number,
+					head: found.head,
+					refHead,
+				};
+			}
+
+			if (request.kind === "promote_pr") {
+				try {
+					await api.promotePr(
+						branchOf(state),
+						request.expectedHead,
+						request.head,
+					);
+				} catch (error) {
+					if (
+						!(error instanceof PublicationError) ||
+						error.reason !== "branch_moved"
+					)
+						throw error;
+
+					try {
+						const pr = await ownedPr(state);
+						const refHead = await api.prRef(branchOf(state));
+
+						return pr === null || refHead === null
+							? null
+							: { kind: "promote_pr", request, head: pr.head, refHead };
+					} catch {
+						return null;
+					}
+				}
+
+				const pr = await ownedPr(state);
+				const refHead = await api.prRef(branchOf(state));
+
+				return pr === null || refHead === null
+					? null
+					: { kind: "promote_pr", request, head: pr.head, refHead };
+			}
+
+			if (request.kind === "void_readiness") {
+				const result = await writer.removeLabel(
+					request.number,
+					"factory:review",
+				);
+
+				return result.kind === "posted"
+					? { kind: "void_readiness", request }
+					: null;
+			}
+
+			const pr = await ownedPr(state);
+
+			if (
+				pr?.status.kind !== "open" ||
+				pr.head !== request.head ||
+				(await api.prRef(branchOf(state))) !== request.head
+			)
+				return null;
+			const raw = objectOf(await api.request("GET", `pulls/${pr.number}`));
+			const reviewers = arrayOf(jsonField(raw, "requested_reviewers")) ?? [];
+			const owner = state.pin.repo.split("/")[0];
+
+			if (owner === undefined) return null;
+
+			if (!reviewers.some((r) => jsonField(objectOf(r), "login") === owner)) {
+				if (!(await allowed(state))) return null;
+				await api.request(
+					"POST",
+					`pulls/${pr.number}/requested_reviewers`,
+					{ reviewers: [owner] },
+					true,
+				);
+			}
+
+			if (!(await allowed(state))) return null;
+			const labeled = await writer.addLabels(pr.number, ["factory:review"]);
+
+			if (labeled.kind !== "posted") return null;
+			const key = `<!-- factory:handoff ${state.pin.runId} ${request.head} -->`;
+
+			const adapter = new GitHubTicketAdapter({
+				exec: config.exec,
+				repo: state.pin.repo,
+			});
+
+			const comments = await adapter.readComments(state.pin.issue);
+
+			if (comments.kind !== "ok") return null;
+
+			const matching = comments.value.filter(
+				(c) =>
+					c.author?.login === "exe-dev-github-integration[bot]" &&
+					c.author.type === "Bot" &&
+					c.body.split("\n").includes(key),
+			);
+
+			if (matching.length > 1) return null;
+
+			if (matching.length === 0) {
+				const dir = join(config.stateDir, "handoff", state.pin.runId);
+				privateDir(dir);
+				const intent = join(dir, `comment-${request.head}.json`);
+
+				if (present(intent)) return null;
+				const bytes = JSON.stringify({ key });
+				exclusive(intent, bytes);
+
+				if (!(await allowed(state))) {
+					await retireUnissuedIntent(intent, bytes);
+
+					return null;
+				}
+
+				const comment = await writer.postComment(
+					state.pin.issue,
+					`${await publicBody(state)}\n\nPR: https://github.com/${state.pin.repo}/pull/${pr.number}\n${key}`,
+				);
+
+				if (comment.kind !== "posted") return null;
+			}
+
+			return { kind: "complete_handoff", request, now: Date.now() };
+		},
+	};
 }
 
 export async function serveLoop(input: {

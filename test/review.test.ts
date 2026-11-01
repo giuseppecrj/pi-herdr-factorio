@@ -6,12 +6,18 @@ import {
 	blocksReview,
 	REVIEW_MAX_TOKENS,
 	REPAIR_BUILD_MAX_TOKENS,
+	ReviewEvidenceUnavailable,
 	reviewCandidate,
 	type ReviewInput,
 	type SeatReceipt,
 } from "../src/review.ts";
 
-import { passingVerdict, patch } from "./helpers.ts";
+import {
+	passingVerdict,
+	patch,
+	issuedReviewFixture,
+	preparedReviewFixture,
+} from "./helpers.ts";
 import { digestOf } from "../src/run.ts";
 import {
 	mkdtempSync,
@@ -21,6 +27,7 @@ import {
 	readFileSync,
 	rmSync,
 	existsSync,
+	chmodSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -63,9 +70,12 @@ async function checkReviewTree(mode: string) {
 		const pin = {
 			workflowSha: mode === "workflow-sha-mismatch" ? certifiedSha : sha,
 			workflowDigest:
-				mode === "workflow-digest-mismatch"
+				mode === "workflow-digest-mismatch" ||
+				mode === "workflow-execution-pin-disagreement"
 					? digestOf("different workflow")
-					: digestOf(workflow),
+					: mode === "workflow-invalid"
+						? digestOf("not a workflow")
+						: digestOf(workflow),
 		};
 
 		writeFileSync(join(base, ".github/factory/WORKFLOW.md"), workflow, {
@@ -164,7 +174,8 @@ async function checkReviewTree(mode: string) {
 			observed: null,
 			commands: [],
 		});
-		finishPatch(state, binding, {
+
+		const kept = finishPatch(state, binding, {
 			command: "test",
 			exitCode: 0,
 			tail: "",
@@ -178,6 +189,43 @@ async function checkReviewTree(mode: string) {
 			acceptanceDigest: stored.receipt.acceptanceDigest,
 		};
 
+		assert.ok(kept.kind === "found");
+
+		const { book, execution } = issuedReviewFixture(
+			{
+				runId,
+				repo,
+				issue: 1,
+				originalBase: pin.workflowSha,
+				workflowSha: pin.workflowSha,
+				workflowDigest:
+					mode === "workflow-execution-pin-disagreement"
+						? digestOf(workflow)
+						: pin.workflowDigest,
+				contractDigest: digest,
+				acceptanceDigest: stored.receipt.acceptanceDigest,
+				maxTokens: 500_000,
+				maxReviewAttempts: 3,
+			},
+			{ ...kept.receipt, baseSha: pin.workflowSha },
+			{ ...verdict, originalBase: pin.workflowSha },
+		);
+
+		assert.equal(
+			await files.writeClaim({
+				runId,
+				issue: 1,
+				eventId: "1",
+				seq: 1,
+				status: "running",
+				stage: "review",
+				attempt: 1,
+				round: 0,
+				usage: 20,
+				handoff: book,
+			}),
+			true,
+		);
 		const dir = join(state, "validation", runId);
 		mkdirSync(dir, { recursive: true, mode: 0o700 });
 		writeFileSync(join(dir, "verdict.json"), JSON.stringify(verdict), {
@@ -300,7 +348,6 @@ async function checkReviewTree(mode: string) {
 
 		if (mode === "workflow-invalid") {
 			writeFileSync(pinnedPath, "not a workflow");
-			pin.workflowDigest = digestOf("not a workflow");
 		}
 
 		if (mode === "uncached") {
@@ -318,14 +365,28 @@ async function checkReviewTree(mode: string) {
 
 		if (mode.startsWith("workflow-") && mode !== "workflow-removed") {
 			await assert.rejects(
-				executor.prepareReview!({ runId, round: 0, workspace, ...pin }),
-				new RegExp(
-					mode === "workflow-unavailable"
-						? "^Error: workflow_checkout$"
-						: mode === "workflow-invalid"
-							? "^Error: workflow_invalid$"
-							: "^Error: workflow_mismatch$",
-				),
+				executor.prepareReview!({
+					runId,
+					round: 0,
+					workspace,
+					execution,
+					...pin,
+				}),
+				(error: Error) => {
+					assert.ok(error instanceof ReviewEvidenceUnavailable);
+					assert.equal(
+						error.message,
+						mode === "workflow-unavailable"
+							? "workflow_checkout"
+							: mode === "workflow-invalid"
+								? "workflow_invalid"
+								: mode === "workflow-execution-pin-disagreement"
+									? "review_binding"
+									: "workflow_mismatch",
+					);
+
+					return true;
+				},
 			);
 			assert.equal(
 				readFileSync(join(pristine, "value.ts"), "utf8"),
@@ -344,7 +405,13 @@ async function checkReviewTree(mode: string) {
 
 		if (mode === "missing" || mode === "conflict") {
 			await assert.rejects(
-				executor.prepareReview!({ runId, round: 0, workspace, ...pin }),
+				executor.prepareReview!({
+					runId,
+					round: 0,
+					workspace,
+					execution,
+					...pin,
+				}),
 			);
 			assert.equal(
 				readFileSync(join(pristine, "value.ts"), "utf8"),
@@ -358,6 +425,7 @@ async function checkReviewTree(mode: string) {
 			runId,
 			round: 0,
 			workspace,
+			execution,
 			...pin,
 		});
 
@@ -405,31 +473,11 @@ async function checkReviewTree(mode: string) {
 			runId,
 			round: 0,
 			workspace,
+			execution,
 			...pin,
 		});
 
-		assert.deepEqual(
-			{
-				...recoveredPreparation,
-				input: {
-					...recoveredPreparation.input,
-					prompt: recoveredPreparation.input.prompt.replace(
-						/candidate-[a-f0-9]+/g,
-						"candidate-NONCE",
-					),
-				},
-			},
-			{
-				...prepared,
-				input: {
-					...prepared.input,
-					prompt: prepared.input.prompt.replace(
-						/candidate-[a-f0-9]+/g,
-						"candidate-NONCE",
-					),
-				},
-			},
-		);
+		assert.deepEqual(recoveredPreparation, prepared);
 
 		const stage = join(state, "stages", runId, "review-r0-1");
 		mkdirSync(stage, { recursive: true, mode: 0o700 });
@@ -463,6 +511,7 @@ async function checkReviewTree(mode: string) {
 			stage: "review",
 			attempt: 1,
 			round: 0,
+			execution,
 			...pin,
 		});
 
@@ -474,39 +523,28 @@ async function checkReviewTree(mode: string) {
 			seats: JSON.parse(readFileSync(join(stage, "output.txt"), "utf8")),
 			blocking: false,
 		});
-		assert.equal(
-			await restarted.output({
-				runId,
-				stage: "review",
-				attempt: 1,
-				round: 0,
-				...pin,
-				workflowDigest: digestOf("wrong"),
-			}),
-			null,
+
+		const outputArgs = {
+			runId,
+			stage: "review" as const,
+			attempt: 1,
+			round: 0,
+			execution,
+			...pin,
+		};
+
+		await assert.rejects(
+			restarted.output({ ...outputArgs, workflowDigest: digestOf("wrong") }),
+			{ message: "review_binding" },
 		);
 		writeFileSync(pinnedPath, `${workflow}\n`);
-		assert.equal(
-			await restarted.output({
-				runId,
-				stage: "review",
-				attempt: 1,
-				round: 0,
-				...pin,
-			}),
-			null,
-		);
+		await assert.rejects(restarted.output(outputArgs), {
+			message: "workflow_mismatch",
+		});
 		rmSync(pinnedPath);
-		assert.equal(
-			await restarted.output({
-				runId,
-				stage: "review",
-				attempt: 1,
-				round: 0,
-				...pin,
-			}),
-			null,
-		);
+		await assert.rejects(restarted.output(outputArgs), {
+			message: "workflow_mismatch",
+		});
 		writeFileSync(pinnedPath, workflow);
 		assert.deepEqual(fetched, expectedFetches);
 		writeFileSync(join(dir, "feedback.json"), "[]", { mode: 0o600 });
@@ -562,6 +600,37 @@ async function checkReviewTree(mode: string) {
 	}
 }
 
+it("refuses capture publication failure without starting a review", async () => {
+	const f = await preparedReviewFixture();
+
+	try {
+		rmSync(join(f.dir, "review.json"));
+		chmodSync(f.dir, 0o500);
+		await assert.rejects(f.executor.prepareReview!(f.args), {
+			message: "review_manifest_unwritable",
+		});
+		assert.equal(existsSync(join(f.dir, "review.json")), false);
+	} finally {
+		chmodSync(f.dir, 0o700);
+		f.close();
+	}
+});
+
+it("restores a legal non-ASCII capture larger than the acceptance-file read cap", async () => {
+	const f = await preparedReviewFixture(1, true);
+
+	try {
+		const path = join(f.dir, "review.json");
+		const captured = readFileSync(path);
+		assert.ok(captured.byteLength > 256 * 1024);
+		const restored = await sandboxExecutor(f.config).prepareReview!(f.args);
+		assert.deepEqual(restored, f.prepared);
+		assert.deepEqual(readFileSync(path), captured);
+	} finally {
+		f.close();
+	}
+});
+
 for (const mode of [
 	"unchanged",
 	"moved",
@@ -575,6 +644,7 @@ for (const mode of [
 	"workflow-unavailable",
 	"workflow-sha-mismatch",
 	"workflow-digest-mismatch",
+	"workflow-execution-pin-disagreement",
 ])
 	it(`prepares review from the certified base (${mode}) while preserving the repair base`, () =>
 		checkReviewTree(mode));

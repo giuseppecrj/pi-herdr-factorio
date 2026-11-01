@@ -33,21 +33,27 @@ export function candidateBranch(
 	issue: number,
 	runId: Digest,
 	round: number,
+	generation = 0,
 ): string {
 	if (
 		!Number.isSafeInteger(issue) ||
 		issue < 1 ||
 		!Number.isInteger(round) ||
 		round < 0 ||
-		round > 2
+		round > 2 ||
+		!Number.isInteger(generation) ||
+		generation < 0 ||
+		generation > 3
 	)
 		throw new Error("invalid_branch");
 
-	return `factory/run/${issue}-${runId.slice(0, 12)}-r${round}`;
+	return `factory/run/${issue}-${runId.slice(0, 12)}-r${round}${generation === 0 ? "" : `-g${generation}`}`;
 }
 
 export function isCandidateBranch(branch: string): boolean {
-	return /^factory\/run\/[1-9][0-9]*-[a-f0-9]{12}-r[0-2]$/.test(branch);
+	return /^factory\/run\/[1-9][0-9]*-[a-f0-9]{12}-r[0-2](?:-g[1-3])?$/.test(
+		branch,
+	);
 }
 
 export function gitObjectSha(
@@ -96,7 +102,7 @@ export class GitHubPublicationApi {
 	}
 
 	async request(
-		method: "GET" | "POST" | "DELETE",
+		method: "GET" | "POST" | "PATCH" | "DELETE",
 		path: string,
 		body?: JsonValue,
 		once = false,
@@ -184,6 +190,50 @@ export class GitHubPublicationApi {
 		return shaOf(fieldOf(objectOf(fieldOf(objectOf(value), "object")), "sha"));
 	}
 
+	async prRef(branch: string): Promise<GitSha | null> {
+		if (!/^factory\/pr\/[1-9][0-9]*-[a-f0-9]{12}$/.test(branch))
+			throw new PublicationError("invalid_branch");
+		const value = await this.request("GET", `git/ref/heads/${branch}`);
+
+		return value === undefined
+			? null
+			: shaOf(fieldOf(objectOf(fieldOf(objectOf(value), "object")), "sha"));
+	}
+
+	async promotePr(
+		branch: string,
+		expectedHead: GitSha | null,
+		candidateSha: GitSha,
+	): Promise<void> {
+		const current = await this.prRef(branch);
+
+		if (current === candidateSha) return;
+
+		if (current !== expectedHead) throw new PublicationError("branch_moved");
+
+		try {
+			if (current === null)
+				await this.request(
+					"POST",
+					"git/refs",
+					{ ref: `refs/heads/${branch}`, sha: candidateSha },
+					true,
+				);
+			else
+				await this.request(
+					"PATCH",
+					`git/refs/heads/${branch}`,
+					{ sha: candidateSha, force: false },
+					true,
+				);
+		} catch (error) {
+			if ((await this.prRef(branch)) !== candidateSha) throw error;
+		}
+
+		if ((await this.prRef(branch)) !== candidateSha)
+			throw new PublicationError("branch_moved");
+	}
+
 	async remove(branch: string, candidateSha: GitSha): Promise<void> {
 		const tip = await this.ref(branch);
 
@@ -217,7 +267,7 @@ function shaOf(value: JsonValue | undefined): GitSha {
 async function commit(
 	api: GitHubPublicationApi,
 	tree: GitSha,
-	parent: GitSha,
+	parents: readonly GitSha[],
 	date: string,
 	message: string,
 ): Promise<GitSha> {
@@ -227,7 +277,7 @@ async function commit(
 	const identity = `${CONTROLLER_LOGIN} <${BOT_EMAIL}> ${epoch} +0000`;
 
 	const bytes = Buffer.from(
-		`tree ${tree}\nparent ${parent}\nauthor ${identity}\ncommitter ${identity}\n\n${message}`,
+		`tree ${tree}\n${parents.map((parent) => `parent ${parent}\n`).join("")}author ${identity}\ncommitter ${identity}\n\n${message}`,
 	);
 
 	const expected = gitObjectSha("commit", bytes);
@@ -235,7 +285,7 @@ async function commit(
 
 	const result = await api.request("POST", "git/commits", {
 		tree,
-		parents: [parent],
+		parents: [...parents],
 		message,
 		author: actor,
 		committer: actor,
@@ -293,6 +343,11 @@ export async function publishCandidate(
 		readonly issue: number;
 		readonly runId: Digest;
 		readonly round: number;
+		readonly generation?: number;
+		readonly ancestry?: {
+			readonly kind: "successor";
+			readonly previousHead: GitSha;
+		};
 		readonly eventAt: string;
 		readonly baseSha: GitSha;
 		readonly patchDigest: Digest;
@@ -302,7 +357,13 @@ export async function publishCandidate(
 		readonly suite: readonly PublishedFile[];
 	},
 ): Promise<Publication> {
-	const branch = candidateBranch(input.issue, input.runId, input.round);
+	const branch = candidateBranch(
+		input.issue,
+		input.runId,
+		input.round,
+		input.generation,
+	);
+
 	const base = await api.request("GET", `git/commits/${input.baseSha}`);
 
 	const baseTree = shaOf(
@@ -310,12 +371,12 @@ export async function publishCandidate(
 	);
 
 	const patchTree = await tree(api, baseTree, input.patch);
-	const trailers = `Factory-Run: ${input.runId}\nFactory-Round: ${input.round}\nPatch-Digest: ${input.patchDigest}\nAcceptance-Digest: ${input.acceptanceDigest}\n`;
+	const trailers = `Factory-Run: ${input.runId}\nFactory-Round: ${input.round}\n${(input.generation ?? 0) === 0 ? "" : `Factory-Generation: ${input.generation}\n`}Patch-Digest: ${input.patchDigest}\nAcceptance-Digest: ${input.acceptanceDigest}\n`;
 
 	const patchSha = await commit(
 		api,
 		patchTree,
-		input.baseSha,
+		[input.baseSha],
 		input.eventAt,
 		`factory: builder patch\n\n${trailers}Factory-Role: patch\n`,
 	);
@@ -325,7 +386,9 @@ export async function publishCandidate(
 	const candidateSha = await commit(
 		api,
 		suiteTree,
-		patchSha,
+		input.ancestry === undefined
+			? [patchSha]
+			: [patchSha, input.ancestry.previousHead],
 		input.eventAt,
 		`factory: held-out checks\n\n${trailers}Heldout-Digest: ${input.heldoutDigest}\nFactory-Role: suite\n`,
 	);

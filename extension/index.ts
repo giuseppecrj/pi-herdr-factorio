@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import manifest from "../package.json" with { type: "json" };
+import { readAttention, formatAttention } from "../src/attention.ts";
 import {
 	type AdmissionReceipt,
 	type AdmissionStore,
@@ -219,7 +220,20 @@ export async function factoryCommandText(
 
 	const state = await readWorkflowState(sources);
 
-	return redactCredentials(formatStatus(readPackageVersion(), state));
+	const attention = await readAttention({
+		stateDir: sources.env("FACTORY_STATE_DIR") ?? null,
+		repo:
+			state.kind === "no_repository"
+				? null
+				: state.kind === "loaded"
+					? state.snapshot.repo
+					: state.repo,
+		now: Date.now(),
+	});
+
+	return redactCredentials(
+		`${formatStatus(readPackageVersion(), state)}\n\n${formatAttention(attention)}`,
+	);
 }
 
 export function registerFactory(

@@ -18,7 +18,8 @@ import {
 	type TicketWriter,
 	ticketKey,
 } from "../tickets.ts";
-import type { RepoSlug } from "../workflow.ts";
+import { isGitSha, type GitSha, type RepoSlug } from "../workflow.ts";
+import type { Digest } from "../run.ts";
 
 export type Login = string & { readonly __brand: "Login" };
 
@@ -898,6 +899,82 @@ export class GitHubTicketAdapter implements TicketReader {
 
 		return read.kind === "ok" && hasWriteAccess(read.value);
 	}
+}
+
+export type OwnedPullRequest = Readonly<{
+	number: number;
+	head: GitSha;
+	status:
+		| { readonly kind: "open"; readonly draft: boolean }
+		| { readonly kind: "closed" }
+		| {
+				readonly kind: "merged";
+				readonly mergeSha: GitSha;
+				readonly actor: string | null;
+		  };
+}>;
+
+export function parseOwnedPullRequest(
+	value: JsonValue | undefined,
+	input: {
+		readonly repo: RepoSlug;
+		readonly branch: string;
+		readonly runId: Digest;
+		readonly knownNumber?: number;
+	},
+): OwnedPullRequest | null {
+	const v = objectOf(value);
+
+	if (v === null) return null;
+	const number = countOf(fieldOf(v, "number"));
+	const head = stringOf(pathOf(value, ["head", "sha"]));
+	const author = stringOf(pathOf(value, ["user", "login"]));
+	const authorType = stringOf(pathOf(value, ["user", "type"]));
+	const body = bodyTextOf(fieldOf(v, "body"));
+	const state = fieldOf(v, "state");
+	const merged = fieldOf(v, "merged");
+	const draft = fieldOf(v, "draft");
+
+	if (
+		number === null ||
+		number < 1 ||
+		head === null ||
+		!isGitSha(head) ||
+		author !== "exe-dev-github-integration[bot]" ||
+		authorType !== "Bot" ||
+		body === null ||
+		(input.knownNumber === undefined
+			? !body.split("\n").includes(`<!-- factory:pr ${input.runId} -->`)
+			: number !== input.knownNumber) ||
+		pathOf(value, ["base", "repo", "full_name"]) !== input.repo ||
+		pathOf(value, ["head", "repo", "full_name"]) !== input.repo ||
+		pathOf(value, ["base", "ref"]) !== "main" ||
+		pathOf(value, ["head", "ref"]) !== input.branch ||
+		(state !== "open" && state !== "closed") ||
+		(merged !== true && merged !== false) ||
+		(draft !== true && draft !== false)
+	)
+		return null;
+
+	if (merged === true) {
+		const mergeSha = stringOf(fieldOf(v, "merge_commit_sha"));
+		const actor = stringOf(pathOf(value, ["merged_by", "login"]));
+
+		if (
+			mergeSha === null ||
+			!isGitSha(mergeSha) ||
+			(actor !== null && !isLogin(actor))
+		)
+			return null;
+
+		return { number, head, status: { kind: "merged", mergeSha, actor } };
+	}
+
+	return {
+		number,
+		head,
+		status: state === "closed" ? { kind: "closed" } : { kind: "open", draft },
+	};
 }
 
 export class GitHubReadError extends Error {

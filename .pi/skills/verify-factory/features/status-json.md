@@ -1,29 +1,49 @@
-# status --json
+# Read status and local attention
 
-`node server/cli.ts status --json` prints the factory's status as JSON without a running controller. It loads the trusted workflow the same way `workflow-check` does and reports the result in its fields.
+`status --json` reads trusted workflow settings through `gh`, then the optional local controller snapshot and attention claims. It never advances the controller, writes a marker, or calls a model. Use this recipe with an authorized lane or existing read-only VM state.
 
 ## Sub-features
 
-- `status-settings` prints `workflowSha`, `workflowDigest`, `models` for the five model stages, and `limits` with the poll interval, concurrency, retry, usage and per-stage budgets.
-- `status-disabled` always prints `executionEnabled: false`, because `status` runs no sandbox preflight. Without `--state-dir`, `controller.state` is `"unavailable"`. The controller's own value is `controller.lastTick.executionEnabled` with `--state-dir`.
-- `status-invalid` still exits 0 when the workflow is missing or invalid. Then `workflow` is `invalid`, `workflowError` carries the error, and `models`, `limits` and `checkpoints` are `null`.
-- `status-usage` exits 2 for a missing `--json` or `--repo`, an unknown flag, a bad branch name or `--reload-ref`.
+- `status-settings` reports the trusted workflow pin, models, and limits. Invalid workflow output has null models/limits/checkpoints and a `workflowError`.
+- `status-disabled` keeps top-level execution disabled while exposing the optional saved controller snapshot.
+- `status-attention` reports six local groups or an explicit unavailable result.
+- `status-usage` exits 2 for missing required options, unknown flags, bad branch names, or `--reload-ref`.
 
 ## How to get to it (user POV)
 
-- `node server/cli.ts status --json --repo giuseppecrj/pi-herdr-factorio [--ref <branch>]`
+Use the command below with an existing private state directory on the VM. `--ref <branch>` is available for workflow verification, not remote attention reconstruction.
 
-## Driving it with ssh
+## Driving it with CLI
 
-Preconditions:
+### Read the configured state
 
-- The doctor reports `doctor=ok`.
-- A lane exists from `lane-setup.sh <pr-id> <worker-n>` at the commit under test.
+After doctor and lane setup, run on the VM from its lane checkout:
 
-- **Run status for main and a branch.** `.pi/skills/verify-factory/scripts/vm.sh .pi/skills/verify-factory/scripts/drive-workflow.sh <pr-id> <worker-n> <branch>`. Each `status` line in `workflow-evidence.txt` shows `exit=0 executionEnabled=false controller="unavailable"`. For main before the owner lands F04a, the line shows `workflow="invalid"`. For a branch with a valid file, it shows `workflow="valid"` and `build_model="openai/gpt-6.1-sol"`. Raw output is in `status-<ref>.json`.
-- **Check that no model runs.** The command calls only `gh`. Pi usage on the VM does not change between runs.
+```bash
+node server/cli.ts status --json --repo giuseppecrj/pi-herdr-factorio --state-dir "$STATE"
+```
+
+Record the tested head/tree, state origin, workflow SHA/digest, command, timestamps, output, and exit. `STATE` must name the captured private state, not another lane's directory. Expect exit 0 even if the workflow is invalid. Read `workflow` and `workflowError`, not exit status alone. `models` names specify, accept, build, and review. Top-level `executionEnabled` stays false because this command runs no preflight. The daemon's saved value is `controller.lastTick.executionEnabled`.
+
+Omit `--state-dir` and require `controller.state: "unavailable"` plus `attention.kind: "unavailable"`, `reason: "state_not_configured"`. An unsafe/inaccessible attention root or claims directory gives `state_unavailable`, never an empty clean snapshot. The reader requires owned private directories and regular private claim files. Do not chmod or repair production state to make a test pass.
+
+### Check the six attention groups
+
+Use authorized fixtures or clearly labeled disposable saved state for:
+
+- `question_asked` from `needs_info`;
+- `question_answered` from a linked early specify run after a fresh readiness event;
+- `spec_review`, empty with `specReview: "not_enabled_in_v1"`;
+- `pr_review` for a ready merge wait;
+- `blocked` for unavailable sandbox, exhaustion, working/not-ready PR, or missing candidate book;
+- `failed` for failed runs without a higher-priority PR hold.
+
+Require `runId`, `issueUrl`, nullable `prUrl`, nullable `ageMs`, and nullable `reason` in entries. The newest claim sequence per issue supersedes older questions and terminal entries. Unknown legacy/future timestamps stay `ageMs: null`. Not-ready/working PRs appear once under blocked, not also PR review. Missing books produce gaps; malformed/wrong-owner private evidence cannot become ready. Attention does not crawl GitHub or reconstruct missing accounts.
+
+Compare stdout with [the registered extension](factory-status.md) on the same VM state. Record zero model requests and unchanged state bytes. Save the output as `attention.json` privately, with a redacted result for sharing.
 
 ## Gotchas
 
-- `status --json` exits 0 even when the workflow is broken. Read `workflow` and `workflowError`, not the exit code.
-- `/factory status` in Pi shows the same workflow line as text, but only for `main` of the repository behind `origin`. A lane workspace from `git archive` has no `.git`, so its `/factory status` shows `workflow unavailable: no git remote named origin`. That output is expected.
+`test/attention.test.ts` exercises real standalone CLI processes and the registered handler with saved synthetic state and fake external transport. That is local parsing/projection proof, not native factory handoff or live VM proof. The [handoff recipe](handoff.md) supplies native prerequisites. This targeted recipe update did not run those lanes.
+
+Status needs no process cleanup. Preserve evidence, close only fixtures created under the lane grant, and let the fixture/controller owner clean its state. No service, owner action, or repository setting change is implied.

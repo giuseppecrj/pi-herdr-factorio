@@ -17,7 +17,12 @@ import fs, {
 } from "node:fs";
 import { request } from "node:http";
 import { syncBuiltinESMExports } from "node:module";
-import { fileRunFiles } from "../../server/controller.ts";
+import { fileRunFiles, serveLoop } from "../../server/controller.ts";
+import { fileAdmissionStore, admitTicket } from "../../src/admission.ts";
+import { handoffCandidate, parseCandidateState } from "../../src/handoff.ts";
+import { candidateBranch } from "../../src/publication.ts";
+import { ReviewEvidenceUnavailable } from "../../src/review.ts";
+import { FakeGitHub, fakeIssue, labelEvent } from "../fake-ticket-adapter.ts";
 import {
 	type Contract,
 	contractBytes,
@@ -88,7 +93,11 @@ import {
 	type ModelId,
 	parseWorkflow,
 } from "../../src/workflow.ts";
-import type { StageLaunchInput } from "../../src/orchestrator.ts";
+import {
+	Orchestrator,
+	type StageExecutor,
+	type StageLaunchInput,
+} from "../../src/orchestrator.ts";
 import * as sandboxModule from "../../server/sandbox.ts";
 import {
 	collectPatch,
@@ -97,7 +106,7 @@ import {
 	finishPatch,
 } from "../../src/build.ts";
 import { digestOf } from "../../src/run.ts";
-import { passingVerdict } from "../helpers.ts";
+import { preparedReviewFixture } from "../helpers.ts";
 import { manifestDigest } from "../../server/sandbox/manifest.ts";
 
 const FIXTURES = new URL("./fixtures/", import.meta.url).pathname;
@@ -3238,11 +3247,13 @@ const CRITIQUE = JSON.stringify({
 });
 
 describe("multi-seat candidate review", () => {
-	function setup(
+	async function setup(
 		security: "clean" | "fallback" | "refused" | "malformed" = "clean",
+		attempt: 1 | 2 = 1,
+		controller = false,
 	) {
-		const dir = mkdtempSync(join(tmpdir(), "factory-candidate-review-"));
-		const verdict = passingVerdict(digestOf("patch"));
+		const fixture = await preparedReviewFixture(attempt, false, controller);
+		const dir = fixture.dir;
 		const calls: string[] = [];
 		const hosts: Harness[] = [];
 
@@ -3254,29 +3265,11 @@ describe("multi-seat candidate review", () => {
 			workspace: dir,
 			tools: ["read", "grep", "ls"],
 			skills: [],
-			round: 1,
-			review: {
-				workspace: dir,
-				verdict,
-				builder: "openai/gpt-6.1-sol",
-				input: {
-					binding: {
-						runId: digest(RUN),
-						round: 1,
-						candidateSha: verdict.candidateSha,
-						patchDigest: verdict.patchDigest,
-						contractDigest: digestOf("contract"),
-						acceptanceDigest: verdict.acceptanceDigest,
-						ciRunId: verdict.ciRunId,
-						originalBase: verdict.originalBase,
-						baseSha: verdict.baseSha,
-					},
-					seats: ["code-review", "security-review", "simplify"],
-					scenarios: ["J1"],
-					files: new Map([["src/a.ts", 1]]),
-					prompt: "Private contract and diff",
-				},
-			},
+			runId: fixture.execution.runId,
+			attempt,
+			round: 0,
+			execution: fixture.execution,
+			review: fixture.prepared,
 		};
 
 		const create = (sessionDir: string, tools: readonly string[]) => {
@@ -3288,7 +3281,7 @@ describe("multi-seat candidate review", () => {
 				findings: [],
 				judgments:
 					seat === "code-review"
-						? [{ scenario: "J1", pass: true, reason: "implemented" }]
+						? [{ scenario: "S1", pass: true, reason: "implemented" }]
 						: [],
 			});
 
@@ -3367,14 +3360,634 @@ describe("multi-seat candidate review", () => {
 			create,
 			calls,
 			hosts,
-			close() {
-				rmSync(dir, { recursive: true, force: true });
-			},
+			fixture,
+			close: fixture.close,
 		};
 	}
 
+	function capturedReview(run: StageLaunchInput): StageLaunchInput {
+		assert.ok(run.execution?.stage === "review");
+
+		return run;
+	}
+
+	for (const mode of [
+		"resume",
+		"missing",
+		"corrupt",
+		"old-v2",
+		"prepare-refusal",
+	] as const)
+		it(`recovers actual partial-seat accounting through the controller (${mode}, in-process interruption)`, async (t) => {
+			const h = await setup("clean", 1, true);
+
+			try {
+				const f = h.fixture;
+				const { execution } = f;
+				const capturePath = join(h.dir, "review.json");
+				const captured = readFileSync(capturePath);
+
+				const interrupted = new Error(
+					"controlled interruption before second host",
+				);
+
+				await assert.rejects(
+					sandboxModule.runReview(h.run, h.dir, (dir, tools) => {
+						if (dir.endsWith("/security-review")) throw interrupted;
+
+						return h.create(dir, tools);
+					}),
+					(error: Error) => error === interrupted,
+				);
+				assert.equal(h.hosts.length, 1);
+				assert.equal(h.calls.length, 1);
+				assert.equal(existsSync(join(h.dir, "security-review")), false);
+				assert.equal(existsSync(join(h.dir, "receipt.json")), false);
+				assert.equal(existsSync(join(h.dir, "output.txt")), false);
+
+				const outputArgs = {
+					runId: execution.runId,
+					stage: "review" as const,
+					attempt: 1,
+					round: 0,
+					execution,
+					workflowSha: execution.workflowSha,
+					workflowDigest: execution.workflowDigest,
+				};
+
+				assert.deepEqual(await f.executor.output(outputArgs), {
+					kind: "pending",
+				});
+				assert.equal(await f.executor.spent(outputArgs), 10);
+				assert.deepEqual(
+					await sandboxModule.sandboxExecutor(f.config).prepareReview!(f.args),
+					f.prepared,
+				);
+				assert.deepEqual(readFileSync(capturePath), captured);
+				assert.ok(f.prepared.input.files.size > 0);
+				assert.deepEqual(f.prepared.input.scenarios, ["S1"]);
+
+				const github = new FakeGitHub();
+				github.add(
+					fakeIssue(1, {
+						timeline: [
+							labelEvent({
+								id: 1,
+								at: f.contract.snapshot.eventAt,
+								actor: "giuseppecrj",
+							}),
+						],
+					}),
+				);
+				const store = fileAdmissionStore(f.state);
+
+				const admission = await admitTicket({
+					exec: github.exec,
+					env: () => "/home/exedev",
+					repo: f.contract.base.repo,
+					issue: 1,
+					allowlist: [f.contract.base.repo],
+					store,
+				});
+
+				assert.equal(admission.decision, "admitted");
+
+				const started = handoffCandidate(f.book, {
+					kind: "effect_completed",
+					completion: {
+						kind: "launch_review",
+						request: { kind: "launch_review", execution },
+						started: true,
+					},
+				}).state;
+
+				assert.equal(
+					await f.files.writeClaim({
+						runId: execution.runId,
+						issue: 1,
+						eventId: "1",
+						seq: 1,
+						status: "running",
+						stage: "review",
+						attempt: 1,
+						round: 0,
+						usage: 20,
+						handoff: mode === "prepare-refusal" ? f.book : started,
+					}),
+					true,
+				);
+
+				if (mode === "missing") rmSync(capturePath);
+
+				if (mode === "corrupt") writeFileSync(capturePath, "{");
+
+				if (mode === "old-v2") {
+					const record = objectOf(parseJson(captured.toString()));
+					assert.ok(record);
+					writeFileSync(
+						capturePath,
+						JSON.stringify({
+							version: 2,
+							execution,
+							binding: f.prepared.input.binding,
+							seats: f.prepared.input.seats,
+							inputDigest: record.inputDigest,
+						}),
+					);
+				}
+
+				if (mode !== "resume" && mode !== "prepare-refusal")
+					await assert.rejects(
+						sandboxModule.runReview(h.run, h.dir, h.create),
+						(error: Error) =>
+							error instanceof ReviewEvidenceUnavailable &&
+							error.message === "review_execution_binding",
+					);
+
+				let pendingRead = false,
+					preparationRefused = false;
+
+				const launches: StageLaunchInput[] = [];
+
+				const done: Promise<
+					Awaited<ReturnType<typeof sandboxModule.runReview>>
+				>[] = [];
+
+				const executor: StageExecutor = {
+					...f.executor,
+					preflight: async () => true,
+					recover: async () => {},
+					reconciled: async () => true,
+					output: async (args) => {
+						const output = await f.executor.output(args);
+
+						if (output instanceof Object && output.kind === "pending")
+							pendingRead = true;
+
+						return output;
+					},
+					prepareReview: async (args) => {
+						if (mode === "prepare-refusal") {
+							assert.equal(pendingRead, true);
+							rmSync(capturePath);
+						}
+
+						try {
+							return await f.executor.prepareReview!(args);
+						} catch (error) {
+							assert.ok(error instanceof ReviewEvidenceUnavailable);
+							assert.equal(error.message, "review_execution_binding");
+							preparationRefused = true;
+							throw error;
+						}
+					},
+					launch: async (input) => {
+						launches.push(input);
+						const result = sandboxModule.runReview(input, h.dir, h.create);
+						done.push(result);
+
+						return { kind: "started", done: result };
+					},
+					candidate: {
+						observe: async (state, now) => ({
+							kind: "observed",
+							now,
+							main: f.contract.base.sha,
+							pr: { kind: "none" },
+							eligibility: "ready",
+							readiness:
+								state.kind === "selected" && state.current.report
+									? {
+											kind: "current",
+											head: state.current.report.candidateSha,
+											report: state.current.report,
+										}
+									: { kind: "unavailable" },
+						}),
+						patch: async () => f.kept,
+						execute: async () => null,
+					},
+				};
+
+				const make = () =>
+					new Orchestrator({
+						exec: github.exec,
+						env: () => "/home/exedev",
+						repo: f.contract.base.repo,
+						store,
+						files: f.files,
+						executor,
+						clock: { now: () => Date.parse("2026-10-31T02:00:00Z") },
+						scope: [1],
+						log: () => {},
+					});
+
+				const controller = make();
+				await controller.tick();
+				await Promise.all(done);
+				await controller.tick();
+				await controller.tick();
+				const [claim] = await f.files.listClaims();
+				assert.ok(claim);
+
+				const book = parseCandidateState(
+					JSON.parse(JSON.stringify(claim.handoff)),
+				);
+
+				assert.ok(book?.kind === "selected");
+				assert.equal(book.accounts.length, 1);
+				assert.deepEqual(book.accounts[0]?.execution, execution);
+				assert.equal(book.accounts[0]?.execution.attempt, 1);
+
+				if (mode === "resume") {
+					assert.equal(launches.length, 1);
+					assert.equal(launches[0]?.settings.maxTokens, 29_990);
+					assert.equal(launches[0]?.remainingRunTokens, 499_970);
+					assert.equal(h.hosts.length, 3);
+					assert.equal(h.calls.length, 3);
+					assert.equal(claim.usage, 50);
+					assert.ok(book.current.certification);
+					assert.ok(
+						book.work.kind === "effect" && book.work.request.kind === "open_pr",
+					);
+					assert.equal(await f.executor.spent(outputArgs), 30);
+					const output = await f.executor.output(outputArgs);
+					assert.ok(output instanceof Object && output.kind === "review");
+					assert.deepEqual(readFileSync(capturePath), captured);
+					const launch = launches[0];
+					assert.ok(launch);
+					assert.deepEqual(await f.executor.output(outputArgs), output);
+					rmSync(join(h.dir, "receipt.json"));
+					const replay = await sandboxModule.runReview(launch, h.dir, h.create);
+					assert.equal(replay.kind, "passed");
+					assert.equal(replay.usage, 0);
+					assert.equal(replay.receipt.usage.total, 30);
+				} else {
+					assert.equal(launches.length, 0);
+					assert.equal(h.hosts.length, 1);
+					assert.equal(h.calls.length, 1);
+					assert.equal(claim.usage, 30);
+					assert.ok(book.work.kind === "held");
+					assert.equal(book.work.reason, "evidence_unavailable");
+					assert.deepEqual(book.accounts[0]?.spend, {
+						kind: "unknown",
+						floor: 10,
+					});
+					assert.equal(await f.executor.spent(outputArgs), 10);
+					assert.equal(book.accounts[0]?.settlement, "uncertain");
+					assert.equal(preparationRefused, mode === "prepare-refusal");
+				}
+
+				const stop = new AbortController();
+				await serveLoop({
+					orchestrator: controller,
+					stateDir: f.state,
+					signal: stop.signal,
+					log: () => {},
+					sleep: async () => stop.abort(),
+				});
+				await make().tick();
+				const [final] = await f.files.listClaims();
+				assert.ok(final);
+
+				const finalBook = parseCandidateState(
+					JSON.parse(JSON.stringify(final.handoff)),
+				);
+
+				assert.ok(finalBook?.kind === "selected");
+				assert.deepEqual(finalBook.accounts, book.accounts);
+				assert.deepEqual(finalBook.work, book.work);
+				assert.equal(final.usage, claim.usage);
+				assert.equal(h.hosts.length, mode === "resume" ? 3 : 1);
+				assert.equal(h.calls.length, mode === "resume" ? 3 : 1);
+				assert.ok(f.cleanupRequests.length > 0);
+
+				for (const request of f.cleanupRequests)
+					assert.deepEqual(request, {
+						command: "gh",
+						args: [
+							"api",
+							"--method",
+							"GET",
+							`repos/${f.contract.base.repo}/git/ref/heads/${candidateBranch(1, execution.runId, 0, 0)}`,
+						],
+					});
+				t.diagnostic(
+					`actual runner/controller ${mode}; same attempt 1; prior 20; seat 10; final ${final.usage}; actual model requests 0; controlled in-process interruption, not native crash`,
+				);
+			} finally {
+				h.close();
+			}
+		});
+
+	it("reads the prepared v3 capture and resumes identical inputs from completed seats without an aggregate receipt", async (t) => {
+		const h = await setup();
+
+		try {
+			const run = capturedReview(h.run);
+			const prepared = run.review;
+			assert.ok(prepared);
+			const first = await sandboxModule.runReview(run, h.dir, h.create);
+			assert.equal(first.kind, "passed");
+			assert.equal(first.usage, 30);
+			assert.equal(first.receipt.usage.total, 30);
+			assert.equal(h.hosts.length, 3);
+			assert.equal(h.calls.length, 3);
+			const manifest = readFileSync(join(h.dir, "review.json"), "utf8");
+
+			assert.deepEqual(JSON.parse(manifest), {
+				version: 3,
+				execution: run.execution,
+				input: {
+					binding: prepared.input.binding,
+					seats: prepared.input.seats,
+					files: [...prepared.input.files],
+					scenarios: prepared.input.scenarios,
+					prompt: prepared.input.prompt,
+				},
+				inputDigest: digestOf(
+					JSON.stringify({
+						binding: prepared.input.binding,
+						seats: prepared.input.seats,
+						files: [...prepared.input.files],
+						scenarios: prepared.input.scenarios,
+						prompt: prepared.input.prompt,
+					}),
+				),
+			});
+
+			const receipts = prepared.input.seats.map((seat) =>
+				readFileSync(join(h.dir, seat, "receipt.json")),
+			);
+
+			const output = readFileSync(join(h.dir, "output.txt"));
+			rmSync(join(h.dir, "receipt.json"));
+			const replay = await sandboxModule.runReview(run, h.dir, h.create);
+
+			assert.equal(replay.kind, "passed");
+			assert.equal(replay.usage, 0);
+			assert.equal(replay.receipt.usage.total, 30);
+			assert.equal(h.hosts.length, 3);
+			assert.equal(h.calls.length, 3);
+			assert.equal(readFileSync(join(h.dir, "review.json"), "utf8"), manifest);
+			assert.deepEqual(readFileSync(join(h.dir, "output.txt")), output);
+			assert.deepEqual(
+				prepared.input.seats.map((seat) =>
+					readFileSync(join(h.dir, seat, "receipt.json")),
+				),
+				receipts,
+			);
+			t.diagnostic(
+				`full manifest ${Buffer.byteLength(manifest, "utf8")} bytes; first/replay fake hosts 3/0, fake prompt calls 3/0, new usage 30/0, cumulative usage 30/30; actual model requests 0`,
+			);
+		} finally {
+			h.close();
+		}
+	});
+
+	it("refuses changed prepared review inputs or captured descriptors before creating a host", async (t) => {
+		const h = await setup();
+
+		try {
+			const run = capturedReview(h.run);
+			const prepared = run.review;
+			const execution = run.execution;
+			assert.ok(prepared && execution?.stage === "review");
+			const first = await sandboxModule.runReview(run, h.dir, h.create);
+			assert.equal(first.kind, "passed");
+			assert.equal(first.usage, 30);
+			const manifest = readFileSync(join(h.dir, "review.json"));
+			const receipt = readFileSync(join(h.dir, "receipt.json"));
+
+			const inputs = [
+				[
+					"binding",
+					{
+						...prepared.input,
+						binding: {
+							...prepared.input.binding,
+							ciRunId: prepared.input.binding.ciRunId + 1,
+						},
+					},
+				],
+				[
+					"seats",
+					{ ...prepared.input, seats: prepared.input.seats.slice(0, -1) },
+				],
+				["files", { ...prepared.input, files: new Map([["src/a.ts", 2]]) }],
+				["scenarios", { ...prepared.input, scenarios: ["J1", "J2"] }],
+				[
+					"prompt",
+					{
+						...prepared.input,
+						prompt: `${prepared.input.prompt}\nRequire the documented CLI behavior.`,
+					},
+				],
+			] as const;
+
+			const otherWorkflowSha = "d".repeat(40);
+			assert.ok(isGitSha(otherWorkflowSha));
+
+			const descriptors = [
+				["id", { ...execution, id: digestOf("other execution") }],
+				["attempt", { ...execution, attempt: execution.attempt + 1 }],
+				[
+					"generation",
+					{
+						...execution,
+						generation: {
+							...execution.generation,
+							digest: digestOf("other intent"),
+						},
+					},
+				],
+				["workflowSha", { ...execution, workflowSha: otherWorkflowSha }],
+				[
+					"workflowDigest",
+					{ ...execution, workflowDigest: digestOf("other workflow") },
+				],
+				["seats", { ...execution, seats: execution.seats.slice(0, -1) }],
+			] as const;
+
+			const changes: readonly (readonly [string, StageLaunchInput])[] = [
+				...inputs.map(
+					([name, input]) =>
+						[name, { ...run, review: { ...prepared, input } }] as const,
+				),
+				...descriptors.map(
+					([name, execution]) =>
+						[`execution.${name}`, { ...run, execution }] as const,
+				),
+			];
+
+			for (const [name, changed] of changes) {
+				await assert.rejects(
+					sandboxModule.runReview(changed, h.dir, h.create),
+					{ message: "review_execution_binding" },
+					name,
+				);
+				assert.equal(h.hosts.length, 3, name);
+				assert.equal(h.calls.length, 3, name);
+				assert.deepEqual(
+					readFileSync(join(h.dir, "review.json")),
+					manifest,
+					name,
+				);
+				assert.deepEqual(
+					readFileSync(join(h.dir, "receipt.json")),
+					receipt,
+					name,
+				);
+			}
+
+			rmSync(join(h.dir, "receipt.json"));
+			const restored = await sandboxModule.runReview(run, h.dir, h.create);
+			assert.equal(restored.kind, "passed");
+			assert.equal(restored.usage, 0);
+			assert.equal(restored.receipt.usage.total, 30);
+			assert.equal(h.hosts.length, 3);
+			assert.equal(h.calls.length, 3);
+			t.diagnostic(
+				`${changes.length} input/descriptor mutations refused before hosts; fake hosts/prompts 3/3 total, new mutation/replay usage 0, actual model requests 0`,
+			);
+		} finally {
+			h.close();
+		}
+	});
+
+	it("refuses legacy, incomplete and corrupt full review manifests before creating a host", async (t) => {
+		const h = await setup();
+
+		try {
+			const run = capturedReview(h.run);
+			const prepared = run.review;
+			assert.ok(prepared);
+			const first = await sandboxModule.runReview(run, h.dir, h.create);
+			assert.equal(first.kind, "passed");
+			assert.equal(first.usage, 30);
+			const path = join(h.dir, "review.json");
+			const manifest = readFileSync(path, "utf8");
+			const fields = objectOf(parseJson(manifest));
+			assert.ok(fields);
+			const receipt = readFileSync(join(h.dir, "receipt.json"));
+
+			const cases: [string, string][] = [
+				["legacy seats only", JSON.stringify({ seats: prepared.input.seats })],
+				[
+					"complete unfinished v2 digest-only record",
+					JSON.stringify({
+						version: 2,
+						execution: run.execution,
+						binding: prepared.input.binding,
+						seats: prepared.input.seats,
+						inputDigest: fields.inputDigest,
+					}),
+				],
+				["invalid JSON", "{"],
+				["null execution", JSON.stringify({ ...fields, execution: null })],
+				[
+					"corrupt input digest",
+					JSON.stringify({ ...fields, inputDigest: digestOf("other inputs") }),
+				],
+			];
+
+			for (const key of ["version", "execution", "input", "inputDigest"]) {
+				const missing = new Map(Object.entries(fields));
+				missing.delete(key);
+				cases.push([
+					`missing ${key}`,
+					JSON.stringify(Object.fromEntries(missing)),
+				]);
+			}
+
+			for (const [name, changed] of cases) {
+				writeFileSync(path, changed);
+				await assert.rejects(
+					sandboxModule.runReview(run, h.dir, h.create),
+					(error: Error) =>
+						error instanceof ReviewEvidenceUnavailable &&
+						error.message === "review_execution_binding",
+					name,
+				);
+				assert.equal(
+					await h.fixture.executor.spent({
+						runId: h.fixture.execution.runId,
+						stage: "review",
+						attempt: 1,
+						round: 0,
+						execution: h.fixture.execution,
+					}),
+					30,
+					name,
+				);
+				assert.equal(h.hosts.length, 3, name);
+				assert.equal(h.calls.length, 3, name);
+				assert.equal(readFileSync(path, "utf8"), changed, name);
+				assert.deepEqual(
+					readFileSync(join(h.dir, "receipt.json")),
+					receipt,
+					name,
+				);
+				writeFileSync(path, manifest);
+			}
+
+			rmSync(join(h.dir, "receipt.json"));
+			const restored = await sandboxModule.runReview(run, h.dir, h.create);
+			assert.equal(restored.kind, "passed");
+			assert.equal(restored.usage, 0);
+			assert.equal(restored.receipt.usage.total, 30);
+			assert.equal(h.hosts.length, 3);
+			assert.equal(h.calls.length, 3);
+			t.diagnostic(
+				`${cases.length} stored manifest mutations refused before hosts; fake hosts/prompts 3/3 total, new mutation/replay usage 0, actual model requests 0`,
+			);
+		} finally {
+			h.close();
+		}
+	});
+
+	it("refuses a missing capture with retained seats and preserves their known spend", async () => {
+		const h = await setup();
+
+		try {
+			await sandboxModule.runReview(h.run, h.dir, h.create);
+
+			for (const name of [
+				"review.json",
+				"receipt.json",
+				"output.txt",
+				"security-review",
+				"simplify",
+			])
+				rmSync(join(h.dir, name), { recursive: true });
+			const { executor, execution, args } = h.fixture;
+
+			const request = {
+				runId: execution.runId,
+				stage: "review" as const,
+				attempt: 1,
+				round: 0,
+				execution,
+				workflowSha: args.workflowSha,
+				workflowDigest: args.workflowDigest,
+			};
+
+			assert.equal(await executor.spent(request), 10);
+			await assert.rejects(executor.output(request), {
+				message: "review_execution_binding",
+			});
+			await assert.rejects(sandboxModule.runReview(h.run, h.dir, h.create), {
+				message: "review_execution_binding",
+			});
+			assert.equal(h.hosts.length, 3);
+			assert.equal(existsSync(join(h.dir, "review.json")), false);
+		} finally {
+			h.close();
+		}
+	});
+
 	it("uses three fresh read-only sessions and sums per-seat usage", async () => {
-		const h = setup();
+		const h = await setup();
 
 		try {
 			const result = await sandboxModule.runReview(h.run, h.dir, h.create);
@@ -3400,7 +4013,7 @@ describe("multi-seat candidate review", () => {
 	});
 
 	it("proves terra fallback by injected refusal only, without switching OpenAI routes", async () => {
-		const h = setup("fallback");
+		const h = await setup("fallback");
 
 		try {
 			const result = await sandboxModule.runReview(h.run, h.dir, h.create);
@@ -3431,7 +4044,7 @@ describe("multi-seat candidate review", () => {
 
 	for (const bad of ["refused", "malformed"] as const)
 		it(`never approves ${bad} security output`, async () => {
-			const h = setup(bad);
+			const h = await setup(bad);
 
 			try {
 				const result = await sandboxModule.runReview(h.run, h.dir, h.create);
@@ -3444,7 +4057,7 @@ describe("multi-seat candidate review", () => {
 		});
 
 	it("keeps completed seats across a restart, without double charging", async () => {
-		const h = setup();
+		const h = await setup();
 
 		try {
 			await sandboxModule.runReview(h.run, h.dir, h.create);
@@ -3472,8 +4085,8 @@ describe("multi-seat candidate review", () => {
 	});
 
 	it("charges a failed review seat and enforces the remaining round share on retry", async () => {
-		const first = setup("malformed"),
-			retry = setup();
+		const first = await setup("malformed"),
+			retry = await setup("clean", 2);
 
 		try {
 			const failed = await sandboxModule.runReview(
@@ -3511,7 +4124,7 @@ describe("multi-seat candidate review", () => {
 
 	for (const maxTokens of [0, 1])
 		it(`never approves a review at ${maxTokens} remaining tokens and charges actual overshoot`, async () => {
-			const h = setup();
+			const h = await setup();
 
 			try {
 				const result = await sandboxModule.runReview(
@@ -3531,7 +4144,7 @@ describe("multi-seat candidate review", () => {
 		});
 
 	it("charges exhaustion and never accepts the seats that did not run", async () => {
-		const h = setup();
+		const h = await setup();
 
 		try {
 			const result = await sandboxModule.runReview(
