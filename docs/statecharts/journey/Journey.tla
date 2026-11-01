@@ -170,8 +170,8 @@ LateResult == /\ ~Presentation /\ Profile \in {"combined", "accounting", "late"}
 Stop == /\ b.pending = "stop_execution"
     /\ \E known \in (IF Presentation \/ Profile = "structural" THEN {TRUE} ELSE BOOLEAN) :
        LET paid == Account(b, b.active, UsageClass, known, known) IN
-       b' = (IF ~known THEN paid ELSE [paid EXCEPT !.active = 0,
-            !.pending = IF b.terminal = None THEN None ELSE "finish_pr",
+       b' = (IF ~known THEN paid ELSE [paid EXCEPT !.active = IF b.terminal = None THEN 0 ELSE Active(paid),
+            !.pending = IF b.terminal = None THEN None ELSE IF Active(paid) = 0 THEN "finish_pr" ELSE "stop_execution",
             !.phase = IF b.terminal = None THEN "handoff" ELSE "finishing"])
     /\ UNCHANGED env
 Open == /\ b.pending = "open_pr" /\ env.pr = "open"

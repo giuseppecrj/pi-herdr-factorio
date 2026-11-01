@@ -1404,6 +1404,294 @@ test("formal certification failure after publication holds the same PR without f
 	);
 });
 
+function lateUnknownReviews() {
+	const previous = waiting();
+	const old = previous.accounts[0]?.execution;
+	assert.ok(old?.stage === "review");
+
+	const refreshed = handoffCandidate(previous, {
+		...readyObservation(previous),
+		main: observed("b".repeat(40)).main,
+	}).state;
+
+	const current = reviewing(validated(refreshed));
+
+	const state = handoffCandidate(current.state, {
+		kind: "review_settled",
+		execution: old,
+		tokens: null,
+		result: { kind: "failed" },
+	}).state;
+
+	const head = previous.current.report?.candidateSha;
+	assert.ok(head);
+
+	return { state, old, current: current.execution, head };
+}
+
+function codecCandidate(state: CandidateState) {
+	assert.deepEqual(
+		parseCandidateState(JSON.parse(JSON.stringify(state))),
+		state,
+	);
+
+	return state;
+}
+
+for (const uncertain of [false, true])
+	test(`formal terminal drain settles the older account before the newer ${uncertain ? "uncertain" : "running"} review`, () => {
+		const fixture = lateUnknownReviews();
+
+		const input = uncertain
+			? handoffCandidate(fixture.state, {
+					kind: "review_settled",
+					execution: fixture.current,
+					tokens: null,
+					result: { kind: "failed" },
+				}).state
+			: fixture.state;
+
+		let state = codecCandidate(
+			handoffCandidate(input, {
+				...observed(),
+				executionAllowed: false,
+				eligibility: "withdrawn",
+				pr: {
+					kind: "merged",
+					number: 5,
+					head: fixture.head,
+					mergeSha: sha,
+					actor: null,
+				},
+			}).state,
+		);
+
+		const first = pending(state, "stop_execution");
+		assert.deepEqual(first.execution, fixture.old);
+		const terminal = first.terminal;
+		assert.ok(terminal?.kind === "merged");
+		assert.equal(terminal.assurance.kind, "factory_verified");
+		assert.equal(terminal.actor, null);
+		assert.equal(terminal.mergeSha, sha);
+		assert.equal(terminal.readiness?.kind, "not_ready");
+		const history = JSON.stringify(selected(state).history);
+		const identities = state.accounts.map((a) => a.execution);
+		const prior = candidateUsage(state);
+
+		const settleFirst = {
+			kind: "effect_completed",
+			completion: {
+				kind: "stop_execution",
+				request: first,
+				stopped: true,
+				tokens: 150,
+			},
+		} satisfies CandidateEvent;
+
+		state = codecCandidate(handoffCandidate(state, settleFirst).state);
+		const second = pending(state, "stop_execution");
+		assert.deepEqual(second.execution, fixture.current);
+		assert.deepEqual(second.terminal, terminal);
+		assert.notEqual(candidateProjection(state).status, "landed");
+		assert.equal(
+			state.accounts[1]?.settlement,
+			uncertain ? "uncertain" : "running",
+		);
+		assert.equal(candidateUsage(state), prior + 50);
+		assert.deepEqual(handoffCandidate(state, settleFirst).state, state);
+		assert.deepEqual(
+			handoffCandidate(state, {
+				kind: "effect_completed",
+				completion: {
+					kind: "stop_execution",
+					request: second,
+					stopped: false,
+					tokens: 999,
+				},
+			}).state,
+			state,
+		);
+		state = codecCandidate(
+			handoffCandidate(state, {
+				kind: "effect_completed",
+				completion: {
+					kind: "stop_execution",
+					request: second,
+					stopped: true,
+					tokens: null,
+				},
+			}).state,
+		);
+		assert.deepEqual(pending(state, "stop_execution"), second);
+		assert.notEqual(candidateProjection(state).status, "landed");
+		state = codecCandidate(
+			handoffCandidate(state, {
+				kind: "effect_completed",
+				completion: {
+					kind: "stop_execution",
+					request: second,
+					stopped: true,
+					tokens: 7,
+				},
+			}).state,
+		);
+		const finish = pending(state, "finish_pr");
+		assert.deepEqual(finish.terminal, terminal);
+		assert.ok(
+			state.accounts.every(
+				(a) => a.settlement === "settled" && a.spend.kind === "known",
+			),
+		);
+		assert.equal(candidateUsage(state), prior + 57);
+		assert.equal(JSON.stringify(selected(state).history), history);
+		assert.deepEqual(
+			state.accounts.map((a) => a.execution),
+			identities,
+		);
+		state = codecCandidate(
+			handoffCandidate(state, {
+				kind: "effect_completed",
+				completion: { kind: "finish_pr", request: finish },
+			}).state,
+		);
+		assert.equal(candidateProjection(state).status, "landed");
+		assert.deepEqual(selected(state).work, { kind: "terminal", terminal });
+		assert.deepEqual(handoffCandidate(state, settleFirst).state, state);
+	});
+
+for (const outcome of [
+	"override",
+	"closed",
+	"withdrawn",
+	"released",
+	"failed",
+] as const)
+	test(`formal terminal drain preserves ${outcome} intent across multiple captured accounts`, () => {
+		let state: CandidateState;
+
+		if (outcome === "released" || outcome === "failed") {
+			const executions: ReviewExecution[] = [];
+			state = validated(select());
+
+			for (
+				let attempt = 1;
+				attempt <= (outcome === "failed" ? 3 : 2);
+				attempt++
+			) {
+				const next = reviewing(state);
+				executions.push(next.execution);
+				state = next.state;
+
+				if (attempt < (outcome === "failed" ? 3 : 2))
+					state = handoffCandidate(state, {
+						kind: "review_settled",
+						execution: next.execution,
+						tokens: 10,
+						result: { kind: "failed" },
+					}).state;
+			}
+
+			for (const execution of executions.slice(0, -1))
+				state = handoffCandidate(state, {
+					kind: "review_settled",
+					execution,
+					tokens: null,
+					result: { kind: "failed" },
+				}).state;
+
+			if (outcome === "released")
+				state = handoffCandidate(state, {
+					...observed(),
+					eligibility: "withdrawn",
+				}).state;
+			else {
+				const current = executions.at(-1);
+				assert.ok(current);
+				state = handoffCandidate(state, {
+					kind: "review_settled",
+					execution: current,
+					tokens: 10,
+					result: { kind: "failed" },
+				}).state;
+			}
+		} else {
+			const fixture = lateUnknownReviews();
+			state = handoffCandidate(fixture.state, {
+				...observed(),
+				eligibility: outcome === "withdrawn" ? "withdrawn" : "ready",
+				pr:
+					outcome === "override"
+						? {
+								kind: "merged",
+								number: 5,
+								head: observed("f".repeat(40)).main ?? sha,
+								mergeSha: sha,
+								actor: "owner",
+							}
+						: outcome === "closed"
+							? { kind: "closed", number: 5, head: fixture.head }
+							: {
+									kind: "open",
+									number: 5,
+									head: fixture.head,
+									refHead: fixture.head,
+								},
+			}).state;
+		}
+
+		codecCandidate(state);
+		const terminal = pending(state, "stop_execution").terminal;
+		assert.ok(terminal);
+		assert.equal(
+			terminal.kind,
+			outcome === "override"
+				? "merged"
+				: outcome === "released"
+					? "released"
+					: outcome === "failed"
+						? "failed"
+						: "cancelled",
+		);
+
+		if (terminal.kind === "merged")
+			assert.equal(terminal.assurance.kind, "owner_override");
+		const unsettled = state.accounts.filter((a) => a.settlement !== "settled");
+		assert.equal(unsettled.length, 2);
+
+		for (const account of unsettled) {
+			const stop = pending(state, "stop_execution");
+			assert.deepEqual(stop.execution, account.execution);
+			assert.deepEqual(stop.terminal, terminal);
+			state = codecCandidate(
+				handoffCandidate(state, {
+					kind: "effect_completed",
+					completion: {
+						kind: "stop_execution",
+						request: stop,
+						stopped: true,
+						tokens:
+							(account.spend.kind === "known"
+								? account.spend.tokens
+								: account.spend.floor) + 1,
+					},
+				}).state,
+			);
+		}
+
+		const finish = pending(state, "finish_pr");
+		assert.deepEqual(finish.terminal, terminal);
+		assert.ok(state.accounts.every((a) => a.settlement === "settled"));
+
+		const done = codecCandidate(
+			handoffCandidate(state, {
+				kind: "effect_completed",
+				completion: { kind: "finish_pr", request: finish },
+			}).state,
+		);
+
+		assert.deepEqual(selected(done).work, { kind: "terminal", terminal });
+	});
+
 test("certification rejects missing workflow/execution evidence and mismatched source", () => {
 	const state = certified(select());
 	const c = state.current.certification;

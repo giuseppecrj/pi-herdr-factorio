@@ -1342,7 +1342,7 @@ function complete(state: Selected, c: CandidateEffectResult): Selected {
 
 			return c.request.terminal === null
 				? { ...updated, work: { kind: "handoff" } }
-				: effect(updated, { kind: "finish_pr", terminal: c.request.terminal });
+				: finish(updated, c.request.terminal);
 		}
 
 		case "open_pr": {
