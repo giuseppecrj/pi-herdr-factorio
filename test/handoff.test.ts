@@ -657,6 +657,29 @@ test("actual observer promotes a certified successor before PR checks and waits 
 			handoffCandidate(state, await observe()).effect?.kind,
 			"promote_pr",
 		);
+
+		const conflict = await port.execute(
+			first.state,
+			pending(first.state, "promote_pr"),
+		);
+
+		assert.ok(conflict?.kind === "promote_pr");
+		assert.equal(conflict.head, foreign);
+		assert.equal(conflict.refHead, foreign);
+		assert.equal(patches.length, 0);
+
+		const conflicted = selected(
+			handoffCandidate(first.state, {
+				kind: "effect_completed",
+				completion: conflict,
+			}).state,
+		);
+
+		assert.equal(conflicted.work.kind, "held");
+		assert.notEqual(
+			handoffCandidate(conflicted, await observe(conflicted)).effect?.kind,
+			"promote_pr",
+		);
 		prHead = predecessor;
 		refHead = predecessor;
 

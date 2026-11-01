@@ -26,6 +26,8 @@ import {
 	type JsonValue,
 } from "../server/sandbox/json.ts";
 
+export class ReviewEvidenceUnavailable extends Error {}
+
 export const REVIEW_DIFF_MAX_BYTES = 12 * 1024;
 export const REVIEW_TOOLS = ["read", "grep", "ls"] as const;
 

@@ -16,6 +16,7 @@ import {
 } from "./handoff.ts";
 import {
 	REVIEW_TOOLS,
+	ReviewEvidenceUnavailable,
 	reviewSeats,
 	type ReviewInput,
 	type ReviewReceipt,
@@ -3678,6 +3679,26 @@ export class Orchestrator {
 		}
 	}
 
+	#queueReviewRefusal(
+		execution: Extract<CandidateExecution, { stage: "review" }>,
+		tokens: number | null,
+	): void {
+		if (tokens !== null)
+			this.#candidateResults.push({
+				runId: execution.runId,
+				event: { kind: "execution_progress", execution, tokens },
+			});
+		this.#candidateResults.push({
+			runId: execution.runId,
+			event: {
+				kind: "review_settled",
+				execution,
+				tokens: null,
+				result: { kind: "failed" },
+			},
+		});
+	}
+
 	async #recoverCandidate(run: ActiveRun): Promise<void> {
 		const state = run.handoff;
 		const executor = this.#input.executor;
@@ -3696,15 +3717,27 @@ export class Orchestrator {
 				execution,
 			});
 
-			const output = await executor.output({
-				runId: execution.runId,
-				stage: execution.stage,
-				attempt: execution.attempt,
-				round: execution.round,
-				execution,
-				workflowSha: execution.workflowSha,
-				workflowDigest: execution.workflowDigest,
-			});
+			let output: StageOutput | null;
+
+			try {
+				output = await executor.output({
+					runId: execution.runId,
+					stage: execution.stage,
+					attempt: execution.attempt,
+					round: execution.round,
+					execution,
+					workflowSha: execution.workflowSha,
+					workflowDigest: execution.workflowDigest,
+				});
+			} catch (error) {
+				if (
+					!(error instanceof ReviewEvidenceUnavailable) ||
+					execution.stage !== "review"
+				)
+					throw error;
+				this.#queueReviewRefusal(execution, tokens);
+				continue;
+			}
 
 			let event: CandidateEvent;
 
@@ -3872,17 +3905,71 @@ export class Orchestrator {
 		if (state?.kind !== "selected" || config === null) return null;
 		const execution = request.execution;
 
-		const prepared =
-			execution.stage === "review"
-				? await executor.prepareReview?.({
-						runId: execution.runId,
-						round: execution.round,
-						execution,
-						workflowSha: execution.workflowSha,
-						workflowDigest: execution.workflowDigest,
-						workspace: `${files.workspacePath(run.runId)}-review-r${execution.round}-a${execution.attempt}`,
-					})
-				: null;
+		let prepared: ReviewPreparation | null | undefined = null;
+
+		try {
+			if (execution.stage === "review")
+				prepared = await executor.prepareReview?.({
+					runId: execution.runId,
+					round: execution.round,
+					execution,
+					workflowSha: execution.workflowSha,
+					workflowDigest: execution.workflowDigest,
+					workspace: `${files.workspacePath(run.runId)}-review-r${execution.round}-a${execution.attempt}`,
+				});
+		} catch (error) {
+			if (
+				!(error instanceof ReviewEvidenceUnavailable) ||
+				execution.stage !== "review"
+			)
+				throw error;
+
+			const tokens = await executor.spent({
+				runId: execution.runId,
+				stage: "review",
+				round: execution.round,
+				attempt: execution.attempt,
+				execution,
+			});
+
+			let held: CandidateState = state;
+
+			if (tokens !== null)
+				held = handoffCandidate(held, {
+					kind: "execution_progress",
+					execution,
+					tokens,
+				}).state;
+			held = handoffCandidate(held, {
+				kind: "review_settled",
+				execution,
+				tokens: null,
+				result: { kind: "failed" },
+			}).state;
+
+			if (held.kind === "selected")
+				await this.#commitCandidate(run, {
+					...held,
+					work: {
+						kind: "held",
+						reason: "evidence_unavailable",
+						since: clock.now(),
+					},
+					published:
+						held.published === null
+							? null
+							: {
+									...held.published,
+									readiness: {
+										kind: "not_ready",
+										reason: "evidence_unavailable",
+										since: clock.now(),
+									},
+								},
+				});
+
+			return null;
+		}
 
 		if (execution.stage === "review" && prepared == null) return null;
 		const oldStage = run.stage;
@@ -3996,7 +4083,24 @@ export class Orchestrator {
 					};
 				this.#candidateResults.push({ runId: execution.runId, event });
 			})
-			.catch(() => {
+			.catch(async (error) => {
+				if (
+					error instanceof ReviewEvidenceUnavailable &&
+					execution.stage === "review"
+				) {
+					const tokens = await executor.spent({
+						runId: execution.runId,
+						stage: "review",
+						attempt: execution.attempt,
+						round: execution.round,
+						execution,
+					});
+
+					this.#queueReviewRefusal(execution, tokens);
+
+					return;
+				}
+
 				this.#candidateResults.push({
 					runId: execution.runId,
 					event:

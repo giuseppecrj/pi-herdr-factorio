@@ -11,9 +11,12 @@ import {
 	reviewSeats,
 	reviewDir,
 	seatPrompt,
+	ReviewEvidenceUnavailable,
+	type ReviewInput,
 	type SeatReceipt,
 } from "../src/review.ts";
 import { validationDir } from "../src/validation.ts";
+import type { ReviewExecution } from "../src/handoff.ts";
 import { isGitSha, parseWorkflow, WORKFLOW_PATH } from "../src/workflow.ts";
 import {
 	collectPatch,
@@ -1401,7 +1404,15 @@ async function executionSpent(dir: string): Promise<number | null> {
 			: null;
 	}
 
-	if (existsSync(join(dir, "review.json"))) {
+	if (
+		[
+			"review.json",
+			"code-review",
+			"security-review",
+			"simplify",
+			"ultrareview",
+		].some((name) => existsSync(join(dir, name)))
+	) {
 		const names = readdirSync(dir).filter((name) =>
 			["code-review", "security-review", "simplify", "ultrareview"].includes(
 				name,
@@ -2298,6 +2309,92 @@ function cleanupBuildBase(stateDir: string, runId: Digest): void {
 	rmSync(join(stateDir, "pristine", runId), { recursive: true, force: true });
 }
 
+function capturedReviewText(path: string, cap?: number): string {
+	try {
+		return regularText(path, cap);
+	} catch {
+		throw new ReviewEvidenceUnavailable("review_execution_binding");
+	}
+}
+
+function reviewInputRecord(input: ReviewInput) {
+	return {
+		binding: input.binding,
+		seats: input.seats,
+		files: [...input.files],
+		scenarios: input.scenarios,
+		prompt: input.prompt,
+	};
+}
+
+function readCapturedReview(
+	dir: string,
+	execution: ReviewExecution,
+	expected: Omit<ReviewInput, "prompt">,
+): ReviewInput {
+	const record = objectOf(
+		parseJson(capturedReviewText(join(dir, "review.json"), Infinity)),
+	);
+
+	const input = objectOf(fieldOf(record, "input"));
+	const files = arrayOf(fieldOf(input, "files"));
+	const prompt = textOf(fieldOf(input, "prompt"));
+	const reviewedFiles = new Map<string, number>();
+
+	if (
+		capturedReviewText(join(dir, "execution.json")) !==
+			`${JSON.stringify(execution)}\n` ||
+		record === null ||
+		Object.keys(record).sort().join() !==
+			"execution,input,inputDigest,version" ||
+		fieldOf(record, "version") !== 3 ||
+		JSON.stringify(fieldOf(record, "execution")) !==
+			JSON.stringify(execution) ||
+		input === null ||
+		Object.keys(input).sort().join() !==
+			"binding,files,prompt,scenarios,seats" ||
+		JSON.stringify(fieldOf(input, "binding")) !==
+			JSON.stringify(expected.binding) ||
+		JSON.stringify(fieldOf(input, "seats")) !==
+			JSON.stringify(expected.seats) ||
+		JSON.stringify(fieldOf(input, "scenarios")) !==
+			JSON.stringify(expected.scenarios) ||
+		files === null ||
+		files.length !== expected.files.size ||
+		prompt === null ||
+		prompt.length === 0
+	)
+		throw new ReviewEvidenceUnavailable("review_execution_binding");
+
+	for (const entry of files) {
+		const tuple = arrayOf(entry);
+		const path = textOf(tuple?.[0]);
+		const lines = countOf(tuple?.[1]);
+
+		if (
+			tuple?.length !== 2 ||
+			path === null ||
+			lines === null ||
+			reviewedFiles.has(path) ||
+			expected.files.get(path) !== lines
+		)
+			throw new ReviewEvidenceUnavailable("review_execution_binding");
+		reviewedFiles.set(path, lines);
+	}
+
+	const restored = { ...expected, files: reviewedFiles, prompt };
+
+	if (
+		fieldOf(record, "inputDigest") !==
+			digestOf(JSON.stringify(reviewInputRecord(restored))) ||
+		JSON.stringify(execution.binding) !== JSON.stringify(restored.binding) ||
+		JSON.stringify(execution.seats) !== JSON.stringify(restored.seats)
+	)
+		throw new ReviewEvidenceUnavailable("review_execution_binding");
+
+	return restored;
+}
+
 async function prepareCandidateReview(
 	config: SandboxExecutorConfig,
 	input: Parameters<NonNullable<StageExecutor["prepareReview"]>>[0],
@@ -2305,10 +2402,26 @@ async function prepareCandidateReview(
 	const { runId, round, workspace, workflowSha, workflowDigest, execution } =
 		input;
 
+	if (
+		execution === undefined ||
+		execution.runId !== runId ||
+		execution.round !== round ||
+		execution.generation.round !== round ||
+		execution.workflowSha !== workflowSha ||
+		execution.workflowDigest !== workflowDigest
+	)
+		throw new ReviewEvidenceUnavailable("review_binding");
+
+	const { id, ...descriptor } = execution;
+
+	if (id !== digestOf(JSON.stringify(descriptor)))
+		throw new ReviewEvidenceUnavailable("review_execution_binding");
+
 	const files = fileRunFiles(config.stateDir);
 	const bound = await files.readContract(runId);
 
-	if (bound.kind !== "found") throw new Error("contract_missing");
+	if (bound.kind !== "found")
+		throw new ReviewEvidenceUnavailable("contract_missing");
 
 	const suite = await fileArtifacts(config.stateDir).read(
 		runId,
@@ -2319,7 +2432,7 @@ async function prepareCandidateReview(
 	const patch = readRunPatch(config.stateDir, runId, round);
 
 	if (suite.kind !== "found" || patch.kind !== "found")
-		throw new Error("review_inputs_missing");
+		throw new ReviewEvidenceUnavailable("review_inputs_missing");
 
 	const dir = validationDir(
 		config.stateDir,
@@ -2348,18 +2461,20 @@ async function prepareCandidateReview(
 				execution.binding.ciRunId !== verdict.ciRunId ||
 				execution.binding.patchDigest !== verdict.patchDigest))
 	)
-		throw new Error("review_binding");
+		throw new ReviewEvidenceUnavailable("review_binding");
 
-	const gate = objectOf(parseJson(regularText(join(dir, "receipt.json"))));
+	const gate = objectOf(
+		parseJson(capturedReviewText(join(dir, "receipt.json"))),
+	);
 
 	if (
 		countOf(fieldOf(gate, "modelCalls")) !== 0 ||
 		fieldOf(gate, "candidateSha") !== verdict.candidateSha
 	)
-		throw new Error("review_gate_binding");
+		throw new ReviewEvidenceUnavailable("review_gate_binding");
 
 	if (workflowSha !== bound.contract.base.sha)
-		throw new Error("workflow_mismatch");
+		throw new ReviewEvidenceUnavailable("workflow_mismatch");
 
 	const workflowWorkspace = files.workspacePath(runId);
 	mkdirSync(workflowWorkspace, { recursive: true, mode: 0o700 });
@@ -2373,12 +2488,13 @@ async function prepareCandidateReview(
 		fetch: config.fetchTarball ?? ghTarball,
 	});
 
-	if (pinned.kind !== "ready") throw new Error("workflow_checkout");
+	if (pinned.kind !== "ready")
+		throw new ReviewEvidenceUnavailable("workflow_checkout");
 
 	const text = await pinned.checkout.read(WORKFLOW_PATH, 256 * 1024);
 
 	if (text === null || digestOf(text) !== workflowDigest)
-		throw new Error("workflow_mismatch");
+		throw new ReviewEvidenceUnavailable("workflow_mismatch");
 
 	const workflow = parseWorkflow({
 		text,
@@ -2386,7 +2502,8 @@ async function prepareCandidateReview(
 		env: (name) => process.env[name],
 	});
 
-	if (workflow.kind !== "valid") throw new Error("workflow_invalid");
+	if (workflow.kind !== "valid")
+		throw new ReviewEvidenceUnavailable("workflow_invalid");
 
 	const reviewBase = join(config.stateDir, "review-base", verdict.baseSha);
 	const base = join(reviewBase, "trees", runId);
@@ -2401,16 +2518,37 @@ async function prepareCandidateReview(
 		fetch: config.fetchTarball ?? ghTarball,
 	});
 
-	if (checked.kind !== "ready") throw new Error("review_checkout");
+	if (checked.kind !== "ready")
+		throw new ReviewEvidenceUnavailable("review_checkout");
 
 	rmSync(workspace, { recursive: true, force: true });
-	await prepareRepairTree(
-		base,
-		workspace,
-		patch.patch,
-		patch.receipt.changedPaths,
-		"{}",
-	);
+
+	try {
+		await prepareRepairTree(
+			base,
+			workspace,
+			patch.patch,
+			patch.receipt.changedPaths,
+			"{}",
+		);
+	} catch (error) {
+		if (
+			error instanceof Error &&
+			[
+				"stale_base",
+				"patch_invalid",
+				"forbidden_paths",
+				"unsafe_symlink",
+				"unsafe_tree",
+				"unsafe_path",
+				"special_file",
+				"too_large",
+			].includes(error.message)
+		)
+			throw new ReviewEvidenceUnavailable(error.message);
+		throw error;
+	}
+
 	rmSync(join(workspace, ".factory-feedback.json"));
 	const reviewedFiles = new Map<string, number>();
 
@@ -2444,25 +2582,53 @@ async function prepareCandidateReview(
 		installScripts: arrayOf(fieldOf(gate, "installScripts")) ?? [],
 	};
 
-	return {
-		workspace,
-		verdict,
-		builder: patch.receipt.model,
-		input: {
-			binding: execution?.binding ?? {
-				runId,
-				round,
-				candidateSha: verdict.candidateSha,
-				patchDigest: patch.receipt.patchDigest,
-				contractDigest: bound.digest,
-				acceptanceDigest: suite.receipt.acceptanceDigest,
-				ciRunId: verdict.ciRunId,
-				originalBase: bound.contract.base.sha,
-				baseSha: verdict.baseSha,
+	const expected = {
+		binding: {
+			runId,
+			round,
+			candidateSha: verdict.candidateSha,
+			patchDigest: patch.receipt.patchDigest,
+			contractDigest: bound.digest,
+			acceptanceDigest: suite.receipt.acceptanceDigest,
+			ciRunId: verdict.ciRunId,
+			originalBase: bound.contract.base.sha,
+			baseSha: verdict.baseSha,
+			execution: {
+				generation: execution.generation.generation,
+				intentDigest: execution.generation.digest,
+				attempt: execution.attempt,
+				workflowSha,
+				workflowDigest,
 			},
-			files: reviewedFiles,
-			scenarios: verdict.unjudged,
-			seats: reviewSeats(patch.receipt.changedPaths, risks),
+		},
+		files: reviewedFiles,
+		scenarios: verdict.unjudged,
+		seats: reviewSeats(patch.receipt.changedPaths, risks),
+	};
+
+	const stageDir = join(
+		config.stateDir,
+		"stages",
+		runId,
+		stageName("review", execution.attempt, round),
+	);
+
+	if (
+		capturedReviewText(join(stageDir, "execution.json")) !==
+			`${JSON.stringify(execution)}\n` ||
+		JSON.stringify(expected.binding) !== JSON.stringify(execution.binding) ||
+		JSON.stringify(expected.seats) !== JSON.stringify(execution.seats)
+	)
+		throw new ReviewEvidenceUnavailable("review_execution_binding");
+
+	const path = join(stageDir, "review.json");
+
+	if (!existsSync(path)) {
+		if (readdirSync(stageDir).some((name) => name !== "execution.json"))
+			throw new ReviewEvidenceUnavailable("review_execution_binding");
+
+		const captured = reviewInputRecord({
+			...expected,
 			prompt: candidateReviewPrompt(
 				bound.contract,
 				patch.patch,
@@ -2470,7 +2636,27 @@ async function prepareCandidateReview(
 				suite.suite.scenarios.filter((s) => verdict.unjudged.includes(s.id)),
 				workflow.guidance.stages.review ?? "",
 			),
-		},
+		});
+
+		if (
+			!publishFile(
+				path,
+				JSON.stringify({
+					version: 3,
+					execution,
+					input: captured,
+					inputDigest: digestOf(JSON.stringify(captured)),
+				}),
+			)
+		)
+			throw new ReviewEvidenceUnavailable("review_manifest_unwritable");
+	}
+
+	return {
+		workspace,
+		verdict,
+		builder: patch.receipt.model,
+		input: readCapturedReview(stageDir, execution, expected),
 	};
 }
 
@@ -2487,29 +2673,23 @@ export async function runReview(
 	if (prepared === undefined) throw new Error("review_missing");
 	mkdirSync(dir, { recursive: true, mode: 0o700 });
 
-	const manifest = JSON.stringify({
-		version: 2,
-		execution: input.execution ?? null,
-		binding: prepared.input.binding,
-		seats: prepared.input.seats,
-		inputDigest: digestOf(
-			JSON.stringify({
-				binding: prepared.input.binding,
-				seats: prepared.input.seats,
-				files: [...prepared.input.files],
-				scenarios: prepared.input.scenarios,
-				prompt: prepared.input.prompt,
-			}),
-		),
-	});
+	const execution = input.execution;
 
-	const manifestPath = join(dir, "review.json");
+	if (
+		execution?.stage !== "review" ||
+		execution.runId !== input.runId ||
+		execution.attempt !== input.attempt ||
+		execution.round !== input.round
+	)
+		throw new ReviewEvidenceUnavailable("review_execution_binding");
 
-	if (existsSync(manifestPath)) {
-		if (regularText(manifestPath) !== manifest)
-			throw new Error("review_execution_binding");
-	} else if (!publishFile(manifestPath, manifest))
-		throw new Error("review_manifest_unwritable");
+	const captured = readCapturedReview(dir, execution, prepared.input);
+
+	if (
+		JSON.stringify(reviewInputRecord(captured)) !==
+		JSON.stringify(reviewInputRecord(prepared.input))
+	)
+		throw new ReviewEvidenceUnavailable("review_execution_binding");
 	const previous = (await executionSpent(dir)) ?? 0;
 	const receipts: SeatReceipt[] = [];
 	const records: Awaited<ReturnType<typeof readStageReceipt>>[] = [];
@@ -2945,34 +3125,18 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 				if (execution !== undefined && execution.stage !== "review")
 					return null;
 
-				const dir = join(
-					config.stateDir,
-					"stages",
+				const prepared = await prepareCandidateReview(config, {
 					runId,
-					stageName(stage, attempt, round),
-				);
-
-				if (execution !== undefined) {
-					try {
-						if (
-							regularText(join(dir, "execution.json")) !==
-							`${JSON.stringify(execution)}\n`
-						)
-							return null;
-
-						const manifest = objectOf(
-							parseJson(regularText(join(dir, "review.json"))),
-						);
-
-						if (
-							JSON.stringify(fieldOf(manifest, "execution")) !==
-							JSON.stringify(execution)
-						)
-							return null;
-					} catch {
-						return null;
-					}
-				}
+					round,
+					execution,
+					workflowSha: input.workflowSha,
+					workflowDigest: input.workflowDigest,
+					workspace: join(
+						config.stateDir,
+						"review-tree",
+						`${roundKey(runId, round)}-a${attempt}`,
+					),
+				});
 
 				const output = await attemptOutput(
 					config.stateDir,
@@ -2989,19 +3153,6 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 					return output;
 
 				try {
-					const prepared = await prepareCandidateReview(config, {
-						runId,
-						round,
-						execution,
-						workflowSha: input.workflowSha,
-						workflowDigest: input.workflowDigest,
-						workspace: join(
-							config.stateDir,
-							"review-tree",
-							`${roundKey(runId, round)}-a${attempt}`,
-						),
-					});
-
 					const text =
 						output instanceof Object
 							? output.kind === "output"

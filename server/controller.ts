@@ -2445,6 +2445,14 @@ export async function downloadGateReceipt(
 	}
 }
 
+async function retireUnissuedIntent(path: string, text: string): Promise<void> {
+	try {
+		if (present(path) && regularText(path) === text) await unlink(path);
+	} catch {
+		return;
+	}
+}
+
 export function controllerCandidatePort(config: {
 	readonly stateDir: string;
 	readonly exec: Exec;
@@ -2840,9 +2848,14 @@ export function controllerCandidatePort(config: {
 					const intent = join(dir, "create.json");
 
 					if (present(intent)) return null;
-					exclusive(intent, `${JSON.stringify(request)}\n`);
+					const bytes = `${JSON.stringify(request)}\n`;
+					exclusive(intent, bytes);
 
-					if (!(await allowed(state))) return null;
+					if (!(await allowed(state))) {
+						await retireUnissuedIntent(intent, bytes);
+
+						return null;
+					}
 
 					try {
 						await api.request(
@@ -2879,11 +2892,31 @@ export function controllerCandidatePort(config: {
 			}
 
 			if (request.kind === "promote_pr") {
-				await api.promotePr(
-					branchOf(state),
-					request.expectedHead,
-					request.head,
-				);
+				try {
+					await api.promotePr(
+						branchOf(state),
+						request.expectedHead,
+						request.head,
+					);
+				} catch (error) {
+					if (
+						!(error instanceof PublicationError) ||
+						error.reason !== "branch_moved"
+					)
+						throw error;
+
+					try {
+						const pr = await ownedPr(state);
+						const refHead = await api.prRef(branchOf(state));
+
+						return pr === null || refHead === null
+							? null
+							: { kind: "promote_pr", request, head: pr.head, refHead };
+					} catch {
+						return null;
+					}
+				}
+
 				const pr = await ownedPr(state);
 				const refHead = await api.prRef(branchOf(state));
 
@@ -2957,9 +2990,14 @@ export function controllerCandidatePort(config: {
 				const intent = join(dir, `comment-${request.head}.json`);
 
 				if (present(intent)) return null;
-				exclusive(intent, JSON.stringify({ key }));
+				const bytes = JSON.stringify({ key });
+				exclusive(intent, bytes);
 
-				if (!(await allowed(state))) return null;
+				if (!(await allowed(state))) {
+					await retireUnissuedIntent(intent, bytes);
+
+					return null;
+				}
 
 				const comment = await writer.postComment(
 					state.pin.issue,

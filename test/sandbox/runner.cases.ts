@@ -97,8 +97,7 @@ import {
 	finishPatch,
 } from "../../src/build.ts";
 import { digestOf } from "../../src/run.ts";
-import { passingVerdict } from "../helpers.ts";
-import type { ReviewExecution } from "../../src/handoff.ts";
+import { preparedReviewFixture } from "../helpers.ts";
 import { manifestDigest } from "../../server/sandbox/manifest.ts";
 
 const FIXTURES = new URL("./fixtures/", import.meta.url).pathname;
@@ -3239,11 +3238,12 @@ const CRITIQUE = JSON.stringify({
 });
 
 describe("multi-seat candidate review", () => {
-	function setup(
+	async function setup(
 		security: "clean" | "fallback" | "refused" | "malformed" = "clean",
+		attempt: 1 | 2 = 1,
 	) {
-		const dir = mkdtempSync(join(tmpdir(), "factory-candidate-review-"));
-		const verdict = passingVerdict(digestOf("patch"));
+		const fixture = await preparedReviewFixture(attempt);
+		const dir = fixture.dir;
 		const calls: string[] = [];
 		const hosts: Harness[] = [];
 
@@ -3255,29 +3255,11 @@ describe("multi-seat candidate review", () => {
 			workspace: dir,
 			tools: ["read", "grep", "ls"],
 			skills: [],
-			round: 1,
-			review: {
-				workspace: dir,
-				verdict,
-				builder: "openai/gpt-6.1-sol",
-				input: {
-					binding: {
-						runId: digest(RUN),
-						round: 1,
-						candidateSha: verdict.candidateSha,
-						patchDigest: verdict.patchDigest,
-						contractDigest: digestOf("contract"),
-						acceptanceDigest: verdict.acceptanceDigest,
-						ciRunId: verdict.ciRunId,
-						originalBase: verdict.originalBase,
-						baseSha: verdict.baseSha,
-					},
-					seats: ["code-review", "security-review", "simplify"],
-					scenarios: ["J1"],
-					files: new Map([["src/a.ts", 1]]),
-					prompt: "Private contract and diff",
-				},
-			},
+			runId: fixture.execution.runId,
+			attempt,
+			round: 0,
+			execution: fixture.execution,
+			review: fixture.prepared,
 		};
 
 		const create = (sessionDir: string, tools: readonly string[]) => {
@@ -3289,7 +3271,7 @@ describe("multi-seat candidate review", () => {
 				findings: [],
 				judgments:
 					seat === "code-review"
-						? [{ scenario: "J1", pass: true, reason: "implemented" }]
+						? [{ scenario: "S1", pass: true, reason: "implemented" }]
 						: [],
 			});
 
@@ -3368,57 +3350,19 @@ describe("multi-seat candidate review", () => {
 			create,
 			calls,
 			hosts,
-			close() {
-				rmSync(dir, { recursive: true, force: true });
-			},
+			fixture,
+			close: fixture.close,
 		};
 	}
 
 	function capturedReview(run: StageLaunchInput): StageLaunchInput {
-		const prepared = run.review;
-		assert.ok(prepared);
-		const workflowSha = "c".repeat(40);
-		assert.ok(isGitSha(workflowSha));
-		const workflowDigest = digestOf("admitted workflow");
+		assert.ok(run.execution?.stage === "review");
 
-		const generation = {
-			round: 1,
-			generation: 1,
-			digest: digestOf("review intent"),
-		} as const;
-
-		const binding = {
-			...prepared.input.binding,
-			execution: {
-				generation: generation.generation,
-				intentDigest: generation.digest,
-				attempt: run.attempt,
-				workflowSha,
-				workflowDigest,
-			},
-		};
-
-		const body = {
-			stage: "review",
-			runId: run.runId,
-			round: generation.round,
-			attempt: run.attempt,
-			generation,
-			workflowSha,
-			workflowDigest,
-			binding,
-			seats: prepared.input.seats,
-		} satisfies Omit<ReviewExecution, "id">;
-
-		return {
-			...run,
-			execution: { ...body, id: digestOf(JSON.stringify(body)) },
-			review: { ...prepared, input: { ...prepared.input, binding } },
-		};
+		return run;
 	}
 
-	it("writes a full v2 captured review manifest and resumes identical inputs from completed seats without an aggregate receipt", async (t) => {
-		const h = setup();
+	it("reads the prepared v3 capture and resumes identical inputs from completed seats without an aggregate receipt", async (t) => {
+		const h = await setup();
 
 		try {
 			const run = capturedReview(h.run);
@@ -3433,10 +3377,15 @@ describe("multi-seat candidate review", () => {
 			const manifest = readFileSync(join(h.dir, "review.json"), "utf8");
 
 			assert.deepEqual(JSON.parse(manifest), {
-				version: 2,
+				version: 3,
 				execution: run.execution,
-				binding: prepared.input.binding,
-				seats: prepared.input.seats,
+				input: {
+					binding: prepared.input.binding,
+					seats: prepared.input.seats,
+					files: [...prepared.input.files],
+					scenarios: prepared.input.scenarios,
+					prompt: prepared.input.prompt,
+				},
 				inputDigest: digestOf(
 					JSON.stringify({
 						binding: prepared.input.binding,
@@ -3478,7 +3427,7 @@ describe("multi-seat candidate review", () => {
 	});
 
 	it("refuses changed prepared review inputs or captured descriptors before creating a host", async (t) => {
-		const h = setup();
+		const h = await setup();
 
 		try {
 			const run = capturedReview(h.run);
@@ -3588,7 +3537,7 @@ describe("multi-seat candidate review", () => {
 	});
 
 	it("refuses legacy, incomplete and corrupt full review manifests before creating a host", async (t) => {
-		const h = setup();
+		const h = await setup();
 
 		try {
 			const run = capturedReview(h.run);
@@ -3613,13 +3562,7 @@ describe("multi-seat candidate review", () => {
 				],
 			];
 
-			for (const key of [
-				"version",
-				"execution",
-				"binding",
-				"seats",
-				"inputDigest",
-			]) {
+			for (const key of ["version", "execution", "input", "inputDigest"]) {
 				const missing = new Map(Object.entries(fields));
 				missing.delete(key);
 				cases.push([
@@ -3661,8 +3604,48 @@ describe("multi-seat candidate review", () => {
 		}
 	});
 
+	it("refuses a missing capture with retained seats and preserves their known spend", async () => {
+		const h = await setup();
+
+		try {
+			await sandboxModule.runReview(h.run, h.dir, h.create);
+
+			for (const name of [
+				"review.json",
+				"receipt.json",
+				"output.txt",
+				"security-review",
+				"simplify",
+			])
+				rmSync(join(h.dir, name), { recursive: true });
+			const { executor, execution, args } = h.fixture;
+
+			const request = {
+				runId: execution.runId,
+				stage: "review" as const,
+				attempt: 1,
+				round: 0,
+				execution,
+				workflowSha: args.workflowSha,
+				workflowDigest: args.workflowDigest,
+			};
+
+			assert.equal(await executor.spent(request), 10);
+			await assert.rejects(executor.output(request), {
+				message: "review_execution_binding",
+			});
+			await assert.rejects(sandboxModule.runReview(h.run, h.dir, h.create), {
+				message: "review_execution_binding",
+			});
+			assert.equal(h.hosts.length, 3);
+			assert.equal(existsSync(join(h.dir, "review.json")), false);
+		} finally {
+			h.close();
+		}
+	});
+
 	it("uses three fresh read-only sessions and sums per-seat usage", async () => {
-		const h = setup();
+		const h = await setup();
 
 		try {
 			const result = await sandboxModule.runReview(h.run, h.dir, h.create);
@@ -3688,7 +3671,7 @@ describe("multi-seat candidate review", () => {
 	});
 
 	it("proves terra fallback by injected refusal only, without switching OpenAI routes", async () => {
-		const h = setup("fallback");
+		const h = await setup("fallback");
 
 		try {
 			const result = await sandboxModule.runReview(h.run, h.dir, h.create);
@@ -3719,7 +3702,7 @@ describe("multi-seat candidate review", () => {
 
 	for (const bad of ["refused", "malformed"] as const)
 		it(`never approves ${bad} security output`, async () => {
-			const h = setup(bad);
+			const h = await setup(bad);
 
 			try {
 				const result = await sandboxModule.runReview(h.run, h.dir, h.create);
@@ -3732,7 +3715,7 @@ describe("multi-seat candidate review", () => {
 		});
 
 	it("keeps completed seats across a restart, without double charging", async () => {
-		const h = setup();
+		const h = await setup();
 
 		try {
 			await sandboxModule.runReview(h.run, h.dir, h.create);
@@ -3760,8 +3743,8 @@ describe("multi-seat candidate review", () => {
 	});
 
 	it("charges a failed review seat and enforces the remaining round share on retry", async () => {
-		const first = setup("malformed"),
-			retry = setup();
+		const first = await setup("malformed"),
+			retry = await setup("clean", 2);
 
 		try {
 			const failed = await sandboxModule.runReview(
@@ -3799,7 +3782,7 @@ describe("multi-seat candidate review", () => {
 
 	for (const maxTokens of [0, 1])
 		it(`never approves a review at ${maxTokens} remaining tokens and charges actual overshoot`, async () => {
-			const h = setup();
+			const h = await setup();
 
 			try {
 				const result = await sandboxModule.runReview(
@@ -3819,7 +3802,7 @@ describe("multi-seat candidate review", () => {
 		});
 
 	it("charges exhaustion and never accepts the seats that did not run", async () => {
-		const h = setup();
+		const h = await setup();
 
 		try {
 			const result = await sandboxModule.runReview(

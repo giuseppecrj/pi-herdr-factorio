@@ -10,7 +10,17 @@ import {
 	REQUIRED_CI_CHECKS,
 } from "../src/run.ts";
 import { advance, type RunEvent } from "../src/stages.ts";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, cpSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { fileRunFiles } from "../server/controller.ts";
+import { sandboxExecutor } from "../server/sandbox.ts";
+import { collectPatch, storePatch, finishPatch } from "../src/build.ts";
+import {
+	contractBytes,
+	contractDigestOf,
+	type Contract,
+} from "../src/specify.ts";
+import { writeAcceptance } from "../src/accept.ts";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -21,6 +31,7 @@ import {
 	type AdmissionPin,
 	type CandidateEvent,
 	type CandidateState,
+	type ReviewExecution,
 } from "../src/handoff.ts";
 import { candidateBranch } from "../src/publication.ts";
 import { dispatchNonce, type ValidationState } from "../src/validation.ts";
@@ -345,6 +356,326 @@ export function candidateLifecycleFixture() {
 	assert.ok(parseCandidateState(JSON.parse(JSON.stringify(state))));
 
 	return state;
+}
+
+export async function preparedReviewFixture(attempt: 1 | 2 = 1, large = false) {
+	const root = mkdtempSync(join(tmpdir(), "factory-prepared-review-"));
+
+	const state = join(root, "state"),
+		base = join(root, "base"),
+		work = join(root, "work");
+
+	const workflow = `---\nrepository: ${repo}\n---\n## review\nReview the candidate. Café.\n`;
+	mkdirSync(join(base, ".github/factory"), { recursive: true });
+	mkdirSync(join(base, "src"));
+	writeFileSync(join(base, ".github/factory/WORKFLOW.md"), workflow);
+	writeFileSync(join(base, "src/a.ts"), "export const value = 0;");
+
+	if (large)
+		for (let i = 0; i < 4000; i++)
+			writeFileSync(
+				join(base, "src", `${"x".repeat(80)}-${i}.ts`),
+				"export {};\n",
+			);
+	cpSync(base, work, { recursive: true });
+	writeFileSync(join(work, "src/a.ts"), "export const value = 1;");
+	const runId = digestOf("prepared review fixture");
+
+	const contract: Contract = {
+		version: 1,
+		runId,
+		issue: 1,
+		base: { repo: admissionPin.repo, sha: admissionPin.originalBase },
+		snapshot: {
+			digest: digestOf("snapshot"),
+			source: "unedited",
+			eventId: "1",
+			eventAt: "2026-10-31T00:00:00Z",
+		},
+		link: null,
+		summary: "Export one",
+		behavior: ["Export one"],
+		exclusions: [],
+		acceptance: [{ id: "A1", text: "Value is one" }],
+		compatibility: [],
+		limits: [],
+		files: ["src/a.ts"],
+		evidence: [],
+	};
+
+	const bytes = contractBytes(contract),
+		digest = contractDigestOf(bytes);
+
+	const files = fileRunFiles(state);
+	assert.equal(await files.writeContract({ contract, bytes, digest }), true);
+
+	const accepted = writeAcceptance(
+		JSON.stringify({
+			version: 1,
+			scenarios: [
+				{ id: "S1", criteria: ["A1"], checks: [], judge: "Value is one" },
+			],
+			files: [],
+		}),
+		contract,
+	);
+
+	assert.ok(accepted.kind === "suite");
+
+	const suite = await files.artifacts.store({
+		contract,
+		contractDigest: digest,
+		suite: accepted.suite,
+		model: "openai/gpt-6.1-sol",
+		observed: null,
+	});
+
+	assert.ok(suite.kind === "found");
+	const patch = await collectPatch({ base, workspace: work });
+	assert.ok(patch.kind === "collected");
+
+	const binding = {
+		runId,
+		baseSha: contract.base.sha,
+		contractDigest: digest,
+		acceptanceDigest: suite.receipt.acceptanceDigest,
+	};
+
+	storePatch(state, binding, patch, {
+		model: "openai/gpt-6.1-sol",
+		observed: null,
+		commands: [],
+	});
+
+	const kept = finishPatch(state, binding, {
+		command: "test",
+		exitCode: 0,
+		tail: "",
+		wallMs: 0,
+	});
+
+	assert.ok(kept.kind === "found");
+
+	const verdict = {
+		...passingVerdict(patch.patchDigest),
+		acceptanceDigest: suite.receipt.acceptanceDigest,
+		unjudged: ["S1"],
+	};
+
+	let { book, execution } = issuedReviewFixture(
+		{
+			...admissionPin,
+			runId,
+			issue: 1,
+			workflowDigest: digestOf(workflow),
+			contractDigest: digest,
+			acceptanceDigest: suite.receipt.acceptanceDigest,
+		},
+		kept.receipt,
+		verdict,
+	);
+
+	if (attempt === 2) {
+		let next = handoffCandidate(book, {
+			kind: "effect_completed",
+			completion: {
+				kind: "launch_review",
+				request: { kind: "launch_review", execution },
+				started: true,
+			},
+		}).state;
+
+		next = handoffCandidate(next, {
+			kind: "review_settled",
+			execution,
+			tokens: 20,
+			result: { kind: "failed" },
+		}).state;
+		next = handoffCandidate(next, {
+			kind: "observed",
+			now: 100,
+			main: admissionPin.originalBase,
+			pr: { kind: "none" },
+			executionAllowed: true,
+			capacityAvailable: true,
+			eligibility: "ready",
+			readiness: { kind: "unavailable" },
+		}).state;
+		assert.ok(
+			next.kind === "selected" &&
+				next.work.kind === "effect" &&
+				next.work.request.kind === "launch_review",
+		);
+		book = next;
+		execution = next.work.request.execution;
+	}
+
+	assert.equal(
+		await files.writeClaim({
+			runId,
+			issue: 1,
+			eventId: "1",
+			seq: 1,
+			status: "running",
+			stage: "review",
+			attempt,
+			round: 0,
+			usage: attempt === 1 ? 20 : 40,
+			handoff: book,
+		}),
+		true,
+	);
+	const validation = join(state, "validation", runId);
+	writeFileSync(join(validation, "verdict.json"), JSON.stringify(verdict), {
+		mode: 0o600,
+	});
+	writeFileSync(
+		join(validation, "receipt.json"),
+		JSON.stringify({ modelCalls: 0, candidateSha: verdict.candidateSha }),
+		{ mode: 0o600 },
+	);
+
+	const archive = execFileSync(
+		"tar",
+		["-czf", "-", "--transform=s,^,repo/,", ".github", "src"],
+		{ cwd: base },
+	);
+
+	const config = {
+		stateDir: state,
+		exec: async () => {
+			throw new Error("external exec forbidden");
+		},
+		log: () => {},
+		xdgRuntimeDir: join(root, "xdg"),
+		fetchTarball: async () => archive,
+	};
+
+	const executor = sandboxExecutor(config);
+
+	const args = {
+		runId,
+		round: 0,
+		execution,
+		workflowSha: execution.workflowSha,
+		workflowDigest: execution.workflowDigest,
+		workspace: join(root, "review"),
+	};
+
+	const prepared = await executor.prepareReview!(args);
+
+	return {
+		root,
+		state,
+		files,
+		book,
+		execution,
+		prepared,
+		executor,
+		config,
+		args,
+		dir: join(state, "stages", runId, `review-r0-${attempt}`),
+		close: () => rmSync(root, { recursive: true, force: true }),
+	};
+}
+
+export function issuedReviewFixture(
+	pin: AdmissionPin,
+	patch: PatchReceipt,
+	verdict: Verdict,
+	seats: ReviewExecution["seats"] = [
+		"code-review",
+		"security-review",
+		"simplify",
+	],
+) {
+	assert.ok(isGitSha(verdict.baseSha));
+
+	const observation: Extract<CandidateEvent, { kind: "observed" }> = {
+		kind: "observed",
+		now: 100,
+		main: verdict.baseSha,
+		pr: { kind: "none" },
+		executionAllowed: true,
+		capacityAvailable: true,
+		eligibility: "ready",
+		readiness: { kind: "unavailable" },
+	};
+
+	let state = handoffCandidate(
+		beginCandidate(pin, patch, 20),
+		observation,
+	).state;
+
+	assert.ok(
+		state.kind === "selected" &&
+			state.work.kind === "effect" &&
+			state.work.request.kind === "validate",
+	);
+	const request = state.work.request;
+	const g = request.generation;
+	const nonce = dispatchNonce(pin.runId, g.round, 1, g.generation);
+
+	const report = {
+		candidateSha: verdict.candidateSha,
+		gateSha: verdict.gateSha,
+		ciRunId: verdict.ciRunId,
+		reportId: 456,
+		nonce,
+		heldoutDigest: verdict.heldoutDigest,
+		externalId: `factory-gates:${verdict.ciRunId}:${nonce}`,
+	};
+
+	assert.ok(
+		isGitSha(report.candidateSha) &&
+			isGitSha(report.gateSha) &&
+			isGitSha(verdict.baseSha),
+	);
+	state = handoffCandidate(state, {
+		kind: "effect_completed",
+		completion: {
+			kind: "validate",
+			request,
+			result: {
+				kind: "finished",
+				verdict,
+				report: {
+					...report,
+					candidateSha: report.candidateSha,
+					gateSha: report.gateSha,
+				},
+				seats,
+				validation: {
+					version: 2,
+					generation: { index: 0, digest: g.digest, previousHead: null },
+					startedAt: 1,
+					deadline: 200,
+					round: 0,
+					originalBase: pin.originalBase,
+					baseSha: verdict.baseSha,
+					baseResolved: true,
+					publication: {
+						branch: candidateBranch(pin.issue, pin.runId, 0, 0),
+						patchSha: report.candidateSha,
+						candidateSha: report.candidateSha,
+					},
+					dispatchTry: 1,
+					dispatchedAt: 2,
+					ciRunId: verdict.ciRunId,
+					counters: {},
+				},
+			},
+		},
+	}).state;
+	state = handoffCandidate(state, observation).state;
+	assert.ok(
+		state.kind === "selected" &&
+			state.work.kind === "effect" &&
+			state.work.request.kind === "launch_review",
+	);
+	assert.ok(parseCandidateState(JSON.parse(JSON.stringify(state))));
+
+	return { book: state, execution: state.work.request.execution };
 }
 
 export function patch(name: string): Digest {

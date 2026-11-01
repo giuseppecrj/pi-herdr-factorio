@@ -71,11 +71,15 @@ import { passingVerdict, failingVerdict } from "./helpers.ts";
 import { advance } from "../src/stages.ts";
 import {
 	candidateProjection,
+	handoffCandidate,
 	parseCandidateState,
 	type CandidateState,
 } from "../src/handoff.ts";
 import type { Run } from "../src/run.ts";
-import type { ReviewReceipt } from "../src/review.ts";
+import {
+	ReviewEvidenceUnavailable,
+	type ReviewReceipt,
+} from "../src/review.ts";
 import { type Digest, digestOf, runIdOf } from "../src/run.ts";
 import {
 	type GitSha,
@@ -7333,6 +7337,232 @@ describe("controller-only validate", () => {
 
 		return f;
 	}
+
+	for (const restart of [false, true])
+		it(`holds unavailable review evidence on the same known-spend account (restart=${restart})`, async () => {
+			const f = await reviewingRun();
+			f.executor.spentBy.set("review-1", 10);
+			let active = f.controller;
+
+			if (restart) {
+				f.executor.behaviors = [{ kind: "hang" }];
+				await active.tick();
+				f.executor.output = async () => {
+					throw new ReviewEvidenceUnavailable("review capture unavailable");
+				};
+
+				active = f.start();
+			} else
+				f.executor.prepareReview = async () => {
+					throw new ReviewEvidenceUnavailable("review capture unavailable");
+				};
+
+			f.executor.output = async () => {
+				throw new ReviewEvidenceUnavailable("review capture unavailable");
+			};
+
+			const launches = f.executor.launches.length;
+			await active.tick();
+			await active.tick();
+			const held = f.files.claims.get(runOf(14))?.handoff;
+			assert.ok(held?.kind === "selected");
+			assert.equal(held.work.kind, "held");
+			assert.equal(held.work.reason, "evidence_unavailable");
+			assert.equal(held.accounts.length, 1);
+			assert.equal(held.accounts[0]?.execution.attempt, 1);
+			assert.deepEqual(held.accounts[0]?.spend, { kind: "unknown", floor: 10 });
+			assert.equal(f.files.claims.get(runOf(14))?.usage, 39);
+			const stop = new AbortController();
+			await serveLoop({
+				orchestrator: active,
+				stateDir: stateDir(),
+				signal: stop.signal,
+				log: () => {},
+				sleep: async () => {
+					stop.abort();
+				},
+			});
+			await f.start().tick();
+			assert.equal(f.executor.launches.length, launches);
+			assert.deepEqual(
+				f.files.claims.get(runOf(14))?.handoff?.accounts,
+				held.accounts,
+			);
+		});
+
+	it("keeps programming errors in review preparation visible", async () => {
+		const f = await reviewingRun();
+		f.executor.prepareReview = async () => {
+			throw new TypeError("programming defect");
+		};
+
+		await assert.rejects(f.controller.tick(), {
+			name: "TypeError",
+			message: "programming defect",
+		});
+	});
+
+	for (const window of ["create", "comment"] as const)
+		it(`retires only a newly created ${window} intent when its second gate is off`, async () => {
+			const f = await reviewingRun();
+			const seedPort = f.executor.candidate;
+			assert.ok(seedPort);
+			const execute = seedPort.execute;
+			seedPort.execute = async (state, request) =>
+				request.kind === "open_pr" ? null : execute(state, request);
+			f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+			await once(f.controller);
+			await f.controller.tick();
+			const claim = f.files.claims.get(runOf(14));
+			assert.ok(
+				claim?.handoff?.kind === "selected" &&
+					claim.handoff.work.kind === "effect" &&
+					claim.handoff.work.request.kind === "open_pr",
+			);
+			let book = claim.handoff;
+			const root = stateDir();
+			const files = fileRunFiles(root);
+			const contract = await f.files.readContract(runOf(14));
+			assert.ok(contract.kind === "found");
+			const stored = f.files.contracts.get(runOf(14));
+			assert.ok(stored);
+			assert.equal(
+				await files.writeContract({
+					contract: contract.contract,
+					bytes: stored.bytes,
+					digest: contract.digest,
+				}),
+				true,
+			);
+			const opening = claim.handoff.work.request;
+			const branch = opening.branch;
+			const head = opening.head;
+
+			let pr = false,
+				enabled = true,
+				reads = 0,
+				disableAt = 0,
+				creates = 0,
+				comments = 0;
+
+			const ok = (value: import("../src/tickets.ts").JsonValue) => ({
+				code: 0,
+				stdout: JSON.stringify(value),
+				stderr: "",
+			});
+
+			const exec: Exec = async (command, args) => {
+				const path = args
+					.find((a) => a.startsWith(`repos/${repo}/`))
+					?.slice(`repos/${repo}/`.length);
+
+				const method = args[args.indexOf("--method") + 1];
+
+				if (path === "labels/factory%3Aenabled") {
+					if (++reads === disableAt) enabled = false;
+
+					return enabled ? ok({ name: "factory:enabled" }) : httpError(404);
+				}
+
+				if (path?.startsWith("pulls?")) return ok(pr ? [{ number: 99 }] : []);
+
+				if (path === "pulls/99")
+					return ok({
+						number: 99,
+						head: { sha: head, ref: branch, repo: { full_name: repo } },
+						base: { ref: "main", repo: { full_name: repo } },
+						user: { login: BOT_LOGIN, type: "Bot" },
+						body: `<!-- factory:pr ${runOf(14)} -->`,
+						state: "open",
+						merged: false,
+						draft: false,
+						requested_reviewers: [{ login: repo.split("/")[0] ?? "" }],
+					});
+
+				if (path === `git/ref/heads/${branch}`)
+					return ok({ object: { sha: head } });
+
+				if (path === "pulls" && method === "POST") {
+					creates++;
+					pr = true;
+
+					return ok({});
+				}
+
+				if (path === "issues/99/labels")
+					return ok([{ name: "factory:review" }]);
+
+				if (path?.startsWith("issues/14/comments") && method === "GET")
+					return ok([]);
+
+				if (path === "issues/14/comments" && method === "POST") {
+					comments++;
+
+					return ok({ id: 900 });
+				}
+
+				return f.github.exec(command, args);
+			};
+
+			let port = controllerCandidatePort({ stateDir: root, exec });
+
+			if (window === "comment") {
+				const opened = await port.execute(book, opening);
+				assert.ok(opened?.kind === "open_pr");
+
+				const adopted = handoffCandidate(book, {
+					kind: "effect_completed",
+					completion: opened,
+				}).state;
+
+				assert.ok(adopted.kind === "selected");
+				const report = adopted.current.report;
+				assert.ok(report);
+
+				const completing = handoffCandidate(adopted, {
+					kind: "observed",
+					now: 100,
+					main: adopted.current.intent.baseSha,
+					pr: { kind: "open", number: 99, head, refHead: head },
+					executionAllowed: true,
+					capacityAvailable: true,
+					eligibility: "ready",
+					readiness: { kind: "current", head, report },
+				}).state;
+
+				assert.ok(completing.kind === "selected");
+				book = completing;
+			}
+
+			reads = 0;
+			disableAt = window === "create" ? 2 : 3;
+			assert.ok(
+				book.work.kind === "effect" &&
+					(book.work.request.kind === "open_pr" ||
+						book.work.request.kind === "complete_handoff"),
+			);
+			const request = book.work.request;
+			assert.equal(await port.execute(book, request), null);
+			assert.equal(window === "create" ? creates : comments, 0);
+
+			const intent = join(
+				root,
+				"handoff",
+				runOf(14),
+				window === "create" ? "create.json" : `comment-${head}.json`,
+			);
+
+			assert.equal(existsSync(intent), false);
+			enabled = true;
+			disableAt = 0;
+			port = controllerCandidatePort({ stateDir: root, exec });
+			const completed = await port.execute(book, request);
+			assert.equal(
+				completed?.kind,
+				window === "create" ? "open_pr" : "complete_handoff",
+			);
+			assert.equal(window === "create" ? creates : comments, 1);
+		});
 
 	for (const restart of [false, true])
 		it(`passes the admitted workflow pin to review preparation and output (restart=${restart})`, async () => {
