@@ -1,6 +1,7 @@
 import type { Validator, ValidationState } from "./validation.ts";
 import {
 	beginCandidate,
+	MAX_REVIEW_ATTEMPTS,
 	candidateUsage,
 	candidateProjection,
 	handoffCandidate,
@@ -11,6 +12,7 @@ import {
 	type CandidateEffectResult,
 	type CandidateExecution,
 	type GenerationRef,
+	type PrObservation,
 } from "./handoff.ts";
 import {
 	REVIEW_TOOLS,
@@ -198,6 +200,7 @@ type WorkflowPin = Pick<ActiveRun, "workflowSha" | "workflowDigest">;
 
 export interface StageExecutor {
 	candidate?: {
+		observeMissing?(marker: Marker): Promise<PrObservation>;
 		observe(
 			state: CandidateState,
 			now: number,
@@ -320,6 +323,7 @@ export type ClaimRecord = {
 	readonly ciRun?: number | null;
 	readonly handoff?: CandidateState;
 	readonly enteredAt?: number;
+	readonly marker?: Marker;
 };
 
 type ConfirmedRecord = ClaimRecord & { readonly seq: number };
@@ -384,6 +388,7 @@ export type RetryCause = "stage_failed" | "stalled" | "interrupted";
 
 export type RunPhase =
 	| { readonly kind: "candidate"; readonly status: RunStatus }
+	| { readonly kind: "evidence_missing" }
 	| { readonly kind: "claimed" }
 	| {
 			readonly kind: "running";
@@ -834,6 +839,7 @@ function desiredStatus(phase: RunPhase): RunStatus {
 		case "running":
 			return "running";
 		case "blocked":
+		case "evidence_missing":
 			return "blocked";
 		case "retry_queued":
 			return "retrying";
@@ -1181,7 +1187,13 @@ export class Orchestrator {
 	async #restoreCandidate(claim: ClaimRecord): Promise<void> {
 		const handoff = claim.handoff;
 
-		if (handoff === undefined) return;
+		if (
+			handoff === undefined ||
+			handoff.pin.runId !== claim.runId ||
+			handoff.pin.issue !== claim.issue ||
+			handoff.pin.repo !== this.#input.repo
+		)
+			return;
 
 		const admitted = await this.#input.store.read({
 			repo: this.#input.repo,
@@ -1350,7 +1362,8 @@ export class Orchestrator {
 	/** Refreshes every claim against GitHub, before the per-tick reads that gate dispatch. */
 	async #reconcileClaims(candidates: Read<IssueRecord[]>): Promise<void> {
 		for (const run of this.state.runs.values()) {
-			if (run.handoff !== undefined) continue;
+			if (run.handoff !== undefined || run.phase.kind === "evidence_missing")
+				continue;
 
 			if (run.claimUnwritten) await this.#writeClaim(run);
 
@@ -1992,6 +2005,8 @@ export class Orchestrator {
 		const { receipt } = stored;
 		const read = latestFor(ledger, local.runId)?.marker;
 
+		if (local.marker !== undefined) return local.marker;
+
 		return markerOf(
 			{
 				...local,
@@ -2416,13 +2431,20 @@ export class Orchestrator {
 		};
 
 		if (
+			marker.v === 3 ||
+			marker.candidate != null ||
+			marker.handoff !== undefined ||
 			marker.stage === "validate" ||
 			marker.stage === "review" ||
 			marker.stage === "land" ||
 			(run.round ?? 0) > 0
 		) {
-			run.phase = { kind: "ending", status: "failed" };
-			this.state.totals.failures++;
+			run.phase =
+				marker.pr === null
+					? { kind: "ending", status: "failed" }
+					: { kind: "evidence_missing" };
+
+			if (marker.pr === null) this.state.totals.failures++;
 			this.#input.log("validation_failed", {
 				issue: run.issue,
 				runId: run.runId,
@@ -3260,7 +3282,12 @@ export class Orchestrator {
 	}
 
 	async #launch(run: ActiveRun): Promise<boolean> {
-		if (run.claimUnwritten || run.handoff !== undefined) return false;
+		if (
+			run.claimUnwritten ||
+			run.handoff !== undefined ||
+			run.phase.kind === "evidence_missing"
+		)
+			return false;
 
 		if (!(await this.#stillReady(run))) return false;
 
@@ -3554,6 +3581,22 @@ export class Orchestrator {
 		if (port === undefined) return;
 
 		for (const run of this.state.runs.values()) {
+			if (run.phase.kind === "evidence_missing" && run.marked !== null) {
+				const observed = await port
+					.observeMissing?.(run.marked)
+					.catch(() => null);
+
+				if (observed?.kind === "merged")
+					this.#input.log("merge_observed_evidence_missing", {
+						issue: run.issue,
+						runId: run.runId,
+						head: observed.head,
+						mergeSha: observed.mergeSha,
+						actor: observed.actor ?? "unknown",
+					});
+				continue;
+			}
+
 			if (run.handoff === undefined) continue;
 
 			const observation = await port
@@ -3992,6 +4035,13 @@ export class Orchestrator {
 	async #sync(run: ActiveRun): Promise<void> {
 		if (run.handoff !== undefined) return;
 
+		if (run.phase.kind === "evidence_missing") {
+			await this.#publishMarker(run);
+			await this.#writeClaim(run);
+
+			return;
+		}
+
 		if (run.inflight?.tick === this.#ticks) return;
 
 		if (isTerminal(desiredStatus(run.phase)) && this.#settling(run)) return;
@@ -4037,7 +4087,10 @@ export class Orchestrator {
 							contractDigest: receipt.contractDigest,
 							acceptanceDigest: receipt.acceptanceDigest,
 							maxTokens: this.#config.usage.maxTokensPerRun,
-							maxReviewAttempts: this.#config.retry.maxAttempts,
+							maxReviewAttempts: Math.min(
+								MAX_REVIEW_ATTEMPTS,
+								this.#config.retry.maxAttempts,
+							),
 						},
 						receipt,
 						run.usage,
@@ -4891,12 +4944,17 @@ export class Orchestrator {
 		const status = desiredStatus(run.phase);
 		const marked = run.marked;
 
-		const marker = markerOf(run, {
+		const next = {
 			repo: this.#input.repo,
 			status,
 			seq: run.seq + 1,
 			cursor: this.state.seen.get(run.issue)?.updatedAt ?? null,
-		});
+		};
+
+		const marker =
+			run.handoff === undefined && marked?.v === 3
+				? { ...marked, ...next, usage: run.usage }
+				: markerOf(run, next);
 
 		if (
 			marked === null ||
@@ -5026,13 +5084,16 @@ function claimOf(run: ActiveRun): ClaimRecord {
 		usage: run.marked?.usage ?? null,
 	};
 
+	const retained =
+		run.marked?.v === 3 ? { ...claim, marker: run.marked } : claim;
+
 	return run.labelFailures === 0
-		? claim
-		: { ...claim, labelFailures: run.labelFailures };
+		? retained
+		: { ...retained, labelFailures: run.labelFailures };
 }
 
 function recordOf(marker: Marker): ConfirmedRecord {
-	return {
+	const record = {
 		runId: marker.runId,
 		issue: marker.issue,
 		eventId: marker.eventId,
@@ -5042,6 +5103,8 @@ function recordOf(marker: Marker): ConfirmedRecord {
 		attempt: marker.attempt,
 		usage: marker.usage,
 	};
+
+	return marker.v === 3 ? { ...record, marker } : record;
 }
 
 function markerOf(

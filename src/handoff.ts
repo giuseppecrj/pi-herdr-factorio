@@ -23,6 +23,7 @@ import type { JsonValue } from "./tickets.ts";
 export const MAX_REFRESHES = 3;
 export const MAX_GENERATIONS = 6;
 export const MAX_REPAIR_ROUNDS = 2;
+export const MAX_REVIEW_ATTEMPTS = 3;
 
 export type RepairRound = 0 | 1 | 2;
 
@@ -577,7 +578,7 @@ export function beginCandidate(
 		pin.maxTokens < 1 ||
 		!Number.isSafeInteger(pin.maxReviewAttempts) ||
 		pin.maxReviewAttempts < 1 ||
-		pin.maxReviewAttempts > 3
+		pin.maxReviewAttempts > MAX_REVIEW_ATTEMPTS
 	)
 		throw new Error("candidate_binding");
 
@@ -1717,7 +1718,7 @@ function wirePin(
 		wireDigest(v.acceptanceDigest) &&
 		wireCount(v.maxTokens, 1) &&
 		wireCount(v.maxReviewAttempts, 1) &&
-		v.maxReviewAttempts <= 3
+		v.maxReviewAttempts <= MAX_REVIEW_ATTEMPTS
 	);
 }
 
@@ -1812,7 +1813,7 @@ function wireExecution(
 		!wireCount(v.round) ||
 		v.round > 2 ||
 		!wireCount(v.attempt, 1) ||
-		v.attempt > 3 ||
+		v.attempt > MAX_REVIEW_ATTEMPTS ||
 		!wireSha(v.workflowSha) ||
 		!wireDigest(v.workflowDigest)
 	)

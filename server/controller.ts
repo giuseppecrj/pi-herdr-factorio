@@ -76,7 +76,12 @@ import { dirname, join, resolve } from "node:path";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { gunzipSync } from "node:zlib";
-import { isRunStatus, isStage } from "../src/markers.ts";
+import {
+	isRunStatus,
+	isStage,
+	parseMarker,
+	MARKER_PREFIX,
+} from "../src/markers.ts";
 import { type Digest, isDigest } from "../src/run.ts";
 import type {
 	Checkout,
@@ -485,6 +490,26 @@ function parseClaim(text: string): ClaimRecord | null {
 	if (round > 2 || (validation !== undefined && validation.round !== round))
 		return null;
 	let labels = labelFailures === null ? claim : { ...claim, labelFailures };
+	const rawMarker = fieldOf(value, "marker");
+
+	if (rawMarker !== undefined) {
+		const parsed = parseMarker(
+			`${MARKER_PREFIX}${JSON.stringify(rawMarker)} -->`,
+		);
+
+		if (
+			parsed.kind !== "marker" ||
+			parsed.marker.runId !== id ||
+			parsed.marker.issue !== claim.issue ||
+			parsed.marker.eventId !== claim.eventId ||
+			parsed.marker.seq !== claim.seq ||
+			parsed.marker.usage !== claim.usage ||
+			parsed.marker.status !== claim.status
+		)
+			return null;
+		labels = { ...labels, marker: parsed.marker };
+	}
+
 	const rawHandoff = fieldOf(value, "handoff");
 
 	if (rawHandoff !== undefined) {
@@ -2631,6 +2656,43 @@ export function controllerCandidatePort(config: {
 	};
 
 	return {
+		async observeMissing(marker) {
+			if (marker.pr === null) return { kind: "none" };
+			const api = new GitHubPublicationApi(config.exec, marker.repo);
+			const branch = `factory/pr/${marker.issue}-${marker.runId.slice(0, 12)}`;
+
+			const pr = parseOwnedPullRequest(
+				await api.request("GET", `pulls/${marker.pr}`),
+				{
+					repo: marker.repo,
+					runId: marker.runId,
+					branch,
+					knownNumber: marker.pr,
+				},
+			);
+
+			if (pr === null) return { kind: "unavailable" };
+			const status = pr.status;
+
+			if (status.kind !== "merged") return { kind: "unavailable" };
+
+			const observed = {
+				kind: "merged" as const,
+				number: pr.number,
+				head: pr.head,
+				mergeSha: status.mergeSha,
+				actor: status.actor,
+			};
+
+			const dir = join(config.stateDir, "handoff", marker.runId);
+			privateDir(dir);
+			await writeOnce(
+				join(dir, "missing-evidence-observation.json"),
+				`${JSON.stringify(observed)}\n`,
+			);
+
+			return observed;
+		},
 		observe: observation,
 		async patch(state, round) {
 			const patch = readPatch(config.stateDir, {

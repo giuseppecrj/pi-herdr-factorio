@@ -68,7 +68,11 @@ import { type SessionOutcome, stageResult } from "../server/sandbox/result.ts";
 import { READY_LABEL } from "../src/policy.ts";
 import { passingVerdict, failingVerdict } from "./helpers.ts";
 import { advance } from "../src/stages.ts";
-import { candidateProjection, type CandidateState } from "../src/handoff.ts";
+import {
+	candidateProjection,
+	parseCandidateState,
+	type CandidateState,
+} from "../src/handoff.ts";
 import type { Run } from "../src/run.ts";
 import type { ReviewReceipt } from "../src/review.ts";
 import { type Digest, digestOf, runIdOf } from "../src/run.ts";
@@ -7204,7 +7208,12 @@ describe("controller-only validate", () => {
 		f.executor.buildBehavior = { kind: "pass", usage: 12 };
 		f.executor.validate = async (input) => {
 			const state = input.state ?? {
-				version: 1,
+				version: 2,
+				generation: {
+					index: input.generation?.generation ?? 0,
+					digest: input.generation?.digest ?? digestOf("fixture"),
+					previousHead: null,
+				},
 				startedAt: input.now,
 				deadline: input.now + input.wallMs,
 				round: 0,
@@ -7376,6 +7385,185 @@ describe("controller-only validate", () => {
 			assert.equal(f.files.claims.get(runOf(14))?.status, "waiting");
 			assert.equal(f.files.claims.get(runOf(14))?.stage, "land");
 		});
+
+	for (const limit of [1, 2, 3, 5])
+		it(`bounds review entry without narrowing global retries (${limit})`, async () => {
+			const f = world();
+
+			const workflow = TRUSTED_WORKFLOW.replace(
+				"max_attempts: 3",
+				`max_attempts: ${limit}`,
+			);
+
+			f.github.workflow = workflow;
+			f.executor.workflow = () => workflow;
+			f.github.add(labeled(14));
+
+			f.executor.behaviors =
+				limit === 5
+					? [
+							...Array.from({ length: 4 }, () => ({
+								kind: "fail" as const,
+								usage: 10,
+							})),
+							{ kind: "pass", usage: 10 },
+						]
+					: [{ kind: "pass", usage: 10 }];
+			f.executor.acceptBehavior = { kind: "pass", usage: 7 };
+			f.executor.buildBehavior = { kind: "pass", usage: 12 };
+			const controller = f.start();
+
+			for (let attempt = 1; attempt <= (limit === 5 ? 5 : 1); attempt++) {
+				f.clock.t += 350_000;
+				await once(controller);
+			}
+
+			await once(controller);
+			await controller.tick();
+			const book = f.files.claims.get(runOf(14))?.handoff;
+			assert.ok(book);
+			assert.equal(book.pin.maxReviewAttempts, Math.min(3, limit));
+			assert.equal(
+				f.executor.launches.filter((entry) => entry.stage === "specify").length,
+				limit === 5 ? 5 : 1,
+			);
+			assert.equal(book.priorTokens, limit === 5 ? 69 : 29);
+		});
+
+	for (const privateState of [
+		"missing_claim",
+		"missing_book",
+		"corrupt_claim",
+		"corrupt_book",
+	])
+		it(`refuses cold v3 repair adoption with ${privateState}`, async () => {
+			const f = await waitingRun();
+			f.executor.validate = async (input) => {
+				assert.ok(input.state);
+
+				return {
+					kind: "finished",
+					state: input.state,
+					verdict: failingVerdict(digestOf("patch")),
+				};
+			};
+
+			await f.controller.tick();
+			const claim = f.files.claims.get(runOf(14));
+			assert.ok(claim?.handoff);
+			assert.ok(parseCandidateState(JSON.parse(JSON.stringify(claim.handoff))));
+			assert.equal(claim.round, 1);
+			const comments = [...(f.github.issues.get(14)?.comments ?? [])];
+			const parsed = parseMarker(f.github.markers(14).at(-1) ?? "");
+			assert.equal(parsed.kind, "marker");
+
+			if (parsed.kind !== "marker") throw new Error("marker");
+			assert.equal(parsed.marker.v, 3);
+			assert.equal(parsed.marker.round, 0);
+			assert.ok(parsed.marker.branch?.endsWith("-r0"));
+			assert.equal(
+				parseMarker(formatMarker({ ...parsed.marker, round: 1 })).kind,
+				"corrupt",
+			);
+			const cold = world();
+			cold.github.add(labeled(14, { comments }));
+
+			if (privateState !== "missing_claim") {
+				const dir = stateDir();
+				const files = fileRunFiles(dir);
+				await files.writeClaim(claim);
+				const path = join(dir, "claims", `${claim.runId}.json`);
+
+				if (privateState === "corrupt_claim")
+					writeFileSync(path, "{", { mode: 0o600 });
+				else {
+					const { handoff: _book, ...withoutBook } = claim;
+					writeFileSync(
+						path,
+						JSON.stringify(
+							privateState === "corrupt_book"
+								? { ...withoutBook, handoff: { kind: "broken" } }
+								: withoutBook,
+						),
+						{ mode: 0o600 },
+					);
+				}
+
+				for (const saved of await files.listClaims())
+					cold.files.claims.set(saved.runId, saved);
+			}
+
+			const restarted = cold.start();
+			await once(restarted);
+			await restarted.tick();
+			assert.equal(cold.executor.launches.length, 0);
+			assert.equal(
+				cold.logs.some(
+					(entry) =>
+						entry.event === "validation_failed" &&
+						entry.fields.why === "validation_state_missing",
+				),
+				true,
+			);
+			assert.equal(cold.files.claims.get(runOf(14))?.status, "failed");
+			assert.equal(cold.files.claims.get(runOf(14))?.usage, claim.usage);
+			assert.equal(
+				cold.files.claims.get(runOf(14))?.attempt,
+				parsed.marker.attempt,
+			);
+		});
+
+	it("keeps a missing-book PR observable while disabled and withdrawn without inventing certification", async () => {
+		const f = await reviewingRun();
+		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+		await once(f.controller);
+		await f.controller.tick();
+		await f.controller.tick();
+		const claim = f.files.claims.get(runOf(14));
+		assert.equal(claim?.status, "waiting");
+		assert.ok(claim?.handoff);
+		const { handoff: _book, ...withoutBook } = claim;
+		f.files.claims.set(runOf(14), withoutBook);
+		const port = f.executor.candidate;
+		assert.ok(port);
+		let observed = 0;
+		port.observeMissing = async (marker) => {
+			observed++;
+			assert.equal(marker.pr, 99);
+
+			return {
+				kind: "merged",
+				number: 99,
+				head: sha("c".repeat(40)),
+				mergeSha: sha("e".repeat(40)),
+				actor: null,
+			};
+		};
+
+		f.store.local = "disabled";
+		const issue = f.github.issues.get(14);
+		assert.ok(issue);
+		issue.state = "closed";
+		issue.labels = [];
+		const launches = f.executor.launches.length;
+		const restarted = f.start();
+		await restarted.tick();
+		await restarted.tick();
+		assert.ok(observed > 0);
+		assert.equal(f.executor.launches.length, launches);
+		assert.equal(restarted.state.runs.get(14)?.phase.kind, "evidence_missing");
+		assert.equal(f.files.claims.get(runOf(14))?.usage, claim.usage);
+		assert.equal(f.files.claims.get(runOf(14))?.marker?.pr, 99);
+		assert.equal(f.files.claims.get(runOf(14))?.handoff, undefined);
+		assert.ok(
+			f.logs.some(
+				(entry) =>
+					entry.event === "merge_observed_evidence_missing" &&
+					entry.fields.mergeSha === "e".repeat(40) &&
+					entry.fields.actor === "unknown",
+			),
+		);
+	});
 
 	it("hops from CI to isolated review and waits for the owner with charged usage", async () => {
 		const f = await reviewingRun();
