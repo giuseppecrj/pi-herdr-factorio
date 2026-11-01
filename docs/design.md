@@ -1,6 +1,6 @@
 # Factory design
 
-Status: proposed, 2026-10-28. Built from `research/SYNTHESIS.md` and `research/reports/`. Owner decisions so far:
+This explanation records the v1 design and later owner decisions. F09a implements local human handoff; main-backed reporter/P4, production protection, real owner actions, and live/performance qualification remain pending. Ledger, PR feedback, cadence, metrics, and Linear below remain later plan units. See [the implementation plan](plans/factory-v1.md) for gates and [the operator guide](operations/human-review.md) for the handoff procedure. The original research is in `research/SYNTHESIS.md` and `research/reports/`.
 
 - GitHub Issues first, Linear next.
 - v1 ends at Human Review: the factory opens a PR and a human merges it. Full autonomy comes later by loosening the checkpoint policy, not by rebuilding.
@@ -99,9 +99,9 @@ interface Run {
 }
 ```
 
-`src/run.ts` and `src/stages.ts` implement this, except `waiting`, which arrives with the checkpoint unit. `advance(run, event)` is pure. The model never chooses the next stage and never decides whether a gate passed.
+The types above summarize the design, not the complete wire schema. `src/run.ts` and `src/stages.ts` implement progress, including mandatory merge `waiting`. `advance(run, event)` is pure and delegates candidate decisions to `handoffCandidate` in `src/handoff.ts`. The controller interprets persisted effects; it does not own a second candidate policy. The model never chooses the next stage or decides whether a hard gate passed.
 
-The controller's scheduling state follows Symphony §4.1.8: `running`, `claimed`, `retry_attempts`, totals. Each run also writes a marker comment on its issue (`<!-- factory:run {...} -->`), so a restarted controller can rebuild its state from GitHub alone.
+The controller's scheduling state follows Symphony §4.1.8: `running`, `claimed`, `retry_attempts`, totals. Each run also writes a marker comment on its issue (`<!-- factory:run {...} -->`). Recovery needs authenticated markers and protocol-managed private claims/evidence. The public v3 summary cannot reconstruct a missing candidate book, certification, accounts, or budget. A manually rolled-back private file is not covered by the bounded normal-write restart evidence.
 
 ```ts
 interface TicketAdapter {
@@ -130,14 +130,15 @@ interface TicketAdapter {
 ### Rules enforced in code
 
 - **Admission.** Only a `factory:ready` label applied by an account with write access counts. The issue body is snapshotted at that moment. Later edits are data for a new run, not permission for this one.
-- **Kill switch.** A repository label named exactly `factory:enabled`, which must exist, plus a local flag file on the VM. Either one off stops new dispatch. Land re-checks both right before merging.
+- **Kill switch.** A repository label named exactly `factory:enabled`, which must exist, plus a local flag file on the VM. Either one off holds new dispatch and publication. Handoff rechecks both before writes. Existing-PR merge observation and necessary stop/account/terminal bookkeeping continue; the controller never merges.
 - **One run per ticket.** Symphony's claim rule in the controller, with the issue marker as the record that survives restarts.
 - **The builder never sees the oracle.** The acceptance suite stays on the VM until build has finished. The controller then pushes it as its own commit on the PR branch under `test/acceptance/<ticket>/`. A builder patch that touches that path is rejected. In a repair round, the builder gets the names of failing scenarios, not their code.
 - **Gates come from `main`, not the patch.** CI checks out `main`'s gate script, test files and check config and runs them against the candidate, then runs the candidate's own new tests and the held-out suite. A patch that edits `package.json` scripts or deletes tests cannot weaken the gate that judges it.
 - **Hard failures veto.** No review verdict or judge score overrides a failing check.
 - **Bounded repair.** At most two rounds back to build. Each round re-runs CI and review on the new head.
-- **Hand off only what passed.** The PR is marked ready only when CI is green on the SHA the verdict names. A later push by the owner is theirs; a later push by the factory re-runs validate and review.
-- **After handoff the controller watches.** Owner review comments start a fix round. A merge closes the issue and writes the ledger row. A PR closed without merging ends the run as `cancelled`.
+- **Hand off only what passed.** The final suite-bearing candidate passes main-owned CI and fresh review before the stable PR ref points to it. Successor candidates include the previous published head as their second ordered parent before certification. Promotion uses `force:false` with predecessor checks and rereads, not atomic expected-head CAS. Ref/PR lag and the final ordinary PR check remain separate gates.
+- **Bounded refresh.** Main movement refreshes the same PR with new CI and review. The candidate book retains at most six generations, two shared repairs, three run-wide refreshes, and three issued review attempts per round, respecting stricter configured limits. No same-patch review carry is valid. Review and repair share 30k and 50k tokens per round and the configured run cap, currently 500k. Captured results charge their own account, not a later execution.
+- **After handoff the controller watches.** Waiting is nonterminal and model-slot/token/timer-free. Fresh review uses normal capacity two. Merge observation wins from every PR-backed phase and restart before issue eligibility and switch holds. The controller stops and charges captured work, records actual merged head/SHA/actor, then closes the issue. Matching historical certification remains independent of working readiness; unmatched heads are owner overrides. Closed-unmerged cancels. F10 feedback repair and F09b ledger writing are not enabled by F09a.
 - **Forbidden paths.** Nothing under `.github/`. Composite actions, CODEOWNERS, dependabot config and the factory's own `WORKFLOW.md` steer the gates. A ticket that needs such a change ends with the patch attached to the issue for the owner to apply.
 - **Budgets.** Per-stage turn and wall-clock limits from `WORKFLOW.md`, Symphony's stall timeout, capped repair rounds, and model and runtime totals per run in the ledger.
 
@@ -155,28 +156,15 @@ A per-issue directory is not a security boundary on its own. Symphony says so to
 
 ## Human checkpoints
 
-In v1 every run stops at Human Review, so this section is the path to autonomy, not a v1 feature. The default after v1 is no human. `.github/factory/WORKFLOW.md` front matter can name the decisions that need one:
+V1 requires `checkpoints.approve_merge.mode: always`. No automatic merge path exists. `approve_contract` remains a future type and a disabled attention group, not a supported workflow setting. Path-selected checkpoints, approval-driven autonomous resumption, and CODEOWNERS policy are not shipped v1 behavior.
 
-```yaml
-checkpoints:
-  approve_contract:
-    labels: ["factory:plan-first"]
-    when: [architecture_change, public_api_change]
-  approve_merge:
-    paths: ["src/policy.ts", "src/stages.ts", "skills/**", "package.json"]
-    when: [new_dependency, migration, security_finding_accepted]
-    diff_lines_over: 400
-```
+The conditional production policy has two rulesets. The integrity/check ruleset has no bypass and requires a PR, strict up-to-date `check` and `factory-gates` from app 15368. A separate one-approval rule dismisses stale approvals and permits the tested repository-admin role-5 `pull_request` exception. That exception applies to eligible admins, not a permanently bound username, and cannot bypass the separate failed-check rule. Actions approval stays disabled. The owner alone applies settings after bootstrap and supported main-backed P4 proof; scratch evidence is not production enforcement. See [the owner setup procedure and limits](operations/human-review.md#bootstrap-and-enable-protection-as-the-owner).
 
-- **Two checkpoints.** `approve_contract` pauses after specify, before any code. `approve_merge` pauses after review, before land.
-- **Waiting.** The run moves to `waiting` and requests review from the owner. Nothing runs and no budget is spent while it waits.
-- **Resuming.** An `Approve` review on the exact head SHA, from an account with write access, resumes the run. `Request changes` becomes a feedback round. A new push invalidates an earlier approval.
-- **Enforcement.** Path rules are mirrored in `CODEOWNERS` with "require review from code owners" on `main`, so GitHub blocks the merge. The factory's bot identity cannot approve its own PR. Other rules are evaluated by the controller using `main`'s copy of `WORKFLOW.md`.
-- **Signals come from code.** Lockfile changes mean `new_dependency`, files under a migrations directory mean `migration`, and an exported-symbol diff means `public_api_change`. A model may add a signal but never remove one.
+The same VM-local attention reader serves CLI status and the registered extension. It groups questions asked/answered, disabled spec review, PR review, blocked, and failed runs without models or GitHub reconstruction. Missing private evidence and unknown ages stay visible. The viewer separates published historical certification from selected working generations and execution accounting.
 
 ## Feedback and cadence
 
-- **PR feedback.** A review or comment on an open factory PR, from an account with write access, triggers address-pr-comments (mnapoli, MIT) as a build round. In v1 this is the main loop: the owner reviews, the factory fixes. It cannot push or reply; the controller does both. Feedback on a merged PR becomes a new `factory:proposed` issue.
+- **PR feedback, planned in F10.** A review or comment on an open factory PR, from an account with write access, is intended to trigger address-pr-comments (mnapoli, MIT) as a build round. F09a instead leaves post-publication failures open, not-ready, and observed. It cannot push or reply; the controller does both. Feedback on a merged PR becomes a new `factory:proposed` issue.
 - **Scheduled jobs**, weekly at first. Each files `factory:proposed` issues and changes no code:
   - improve-codebase-architecture (Pocock, MIT) with codebase-design and domain-modeling;
   - security-review over the whole repo;
@@ -186,7 +174,7 @@ checkpoints:
 
 ## Ledger and evidence
 
-Each finished run appends one JSON line to `ledger/runs.jsonl` on the orphan branch `factory/ledger`, written only by the controller. Raw Pi sessions stay on the VM. Only redacted evidence (contract, verdict, findings, CI links) is posted to the issue, because this repo is public.
+F09b is planned to append one JSON line per finished run to `ledger/runs.jsonl` on the orphan branch `factory/ledger`, written only by the controller. Raw Pi sessions stay on the VM. Only redacted evidence (contract, verdict, findings, CI links) is posted to the issue, because this repo is public.
 
 ## Package layout
 

@@ -6,7 +6,7 @@
 
 - `serve-ready`: the structured `event=controller_ready pid=<pid> repo=<repo> scope=<issues>` line.
 - `serve-single-authority`: while `serve` holds the state directory's lock, the abstract socket `@pi-herdr-factorio/<sha256 of its real path>`, any other `tick`, `run` or `serve` on that state directory exits 2 with `controller_running` before any `gh` call. Deleting `<state>/controller.lock` does not free it; only the holder's exit does. `grep pi-herdr-factorio /proc/net/unix` on the VM shows the bound name.
-- `serve-reconcile`: an issue closed while `serve` runs is released on the next tick, and a queued issue takes its slot in the same tick.
+- `serve-reconcile`: an early-stage issue closed while serve runs is released, allowing queued work. F09a PR-backed runs observe merge before issue/switch logic, drain captured execution accounts, and then finish or cancel. Waiting consumes no model slot or tokens. Follow [handoff](handoff.md) for those native lanes.
 - `serve-stop`: SIGTERM ends with `event=controller_stopping`, exit 0 and no lock file.
 - `serve-identity`: without `GH_HOST`, `serve` logs `controller_refused reason=identity_unavailable` and exits 1.
 
@@ -35,6 +35,8 @@ Results observed on 2026-10-29 at `add4f6b`, scoped to fixtures #66, #67 and #68
 | `tick --once` on the same state | exit 2, `controller_running`, 168 ms |
 | Close #66 | 33 s later, the next tick released #66 (seq 3) and claimed #68 (seq 1 and 2) |
 | Stop | `controller_stopping`, stopped in 1 s, lock absent |
+
+For F09a, capture exact tested head/tree, admitted workflow pin, generation/intent, execution/attempt, published PR head, and CI/report identities before/after each interruption. No model calls are expected during an unchanged ready wait; authorized active stages still spend. The original results above are historical F04c evidence, not native F09a proof. The docs round source-checked this recipe without a VM drive. Service deployment, production switches/settings, and owner review/merge remain outside the lane unless separately granted.
 
 ## Gotchas
 

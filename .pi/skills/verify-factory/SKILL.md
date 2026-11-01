@@ -1,14 +1,14 @@
 ---
 name: verify-factory
-description: Verify pi-herdr-factorio on its real surfaces. Use to prove a change on the pi-factorio exe.dev VM, through repository-scoped gh reads, the /factory status and /factory run commands and the factory CLI (workflow-check, status --json, admit --json, tick --once, run --issue, serve), and when a PR needs live evidence.
+description: Verify pi-herdr-factorio on its real surfaces. Use for authorized VM/CLI/extension/viewer verification, exact-head CI and human handoff, and live evidence. Keep source-only recipes and local saved-state checks separate from native proof.
 ---
 
 # Verify pi-herdr-factorio
 
-The factory is a Pi package plus a controller that runs on the exe.dev VM `pi-factorio`. You drive three surfaces:
+The factory is a Pi package plus a controller that runs on the exe.dev VM `pi-factorio`. Drive these interfaces only under the task's grants:
 
 - the VM, over ssh as `exedev`;
-- GitHub, through `gh` with `GH_HOST=github.int.exe.xyz`, scoped to `giuseppecrj/pi-herdr-factorio`;
+- GitHub, through repository-scoped `gh`, with `GH_HOST=github.int.exe.xyz` only in the trusted VM environment, never locally;
 - the `/factory status` and `/factory run <issue>` extension commands;
 - the factory CLI, `node server/cli.ts`, documented in `docs/operations/factory-cli.md`.
 
@@ -18,7 +18,7 @@ Read `.pi/skills/verify-factory/features/README.md` for the feature map and the 
 
 ## Launch
 
-There is no long-running server to start. Launch means giving each lane its own workspace and state directory, then installing the committed dependencies there.
+For short CLI drives, give each lane its own workspace and state directory, then install its committed dependencies. A scoped controller or read-only viewer can remain running only for its authorized drive; record its PID and stop it when finished.
 
 ```bash
 S=.pi/skills/verify-factory/scripts
@@ -67,7 +67,7 @@ Feature recipes are in `.pi/skills/verify-factory/features/`. Each lists the com
 
 Pi's print mode (`pi -p "/factory status"`) sends the text to the model instead of running the command, and spends credits. `status-driver.ts` registers the real extension on a stub Pi and calls the registered `factory` handler. That is the same handler Pi runs.
 
-Mutations (creating fixture issues, labels, comments, restarts, and every `tick`, `run` or `serve`, which post marker comments) need the fixture grant from the task. A `tick`, `run` or `serve` whose sandbox preflight passes also runs a model stage and spends tokens, so it needs the model-spend grant too. See `features/sandbox-stage.md`. Use one fixture issue per lane, named with the PR ID and worker number. A step that needs the owner to review or merge stays unchecked until the owner acts.
+Mutations (creating fixture issues, labels, comments, restarts, and every `tick`, `run` or `serve`, which post marker comments) need the fixture grant from the task. A `tick`, `run` or `serve` whose sandbox preflight passes also runs a model stage and spends tokens, so it needs the model-spend grant too. See `features/sandbox-stage.md`. Use one fixture issue per lane, named with the PR ID and worker number. A step that needs the owner to review or merge stays unchecked until the owner acts. Only the owner changes `factory:enabled` or production rules. Read `features/handoff.md` for F09a bootstrap/P4, protection, exact-head identity, refresh, and merge observation. `status` and viewer reads spend no model tokens; `tick` is not a dry run. F09a rollout is forward-only from a drained controller, never deletion of private books/claims to restart.
 
 ## Snapshot
 
@@ -99,6 +99,9 @@ Proof standards:
 - Capture the action and the resulting state.
 - Record fixture URLs and label-event IDs for any mutation.
 - Never simulate a stage that is not implemented. Stop and report it.
+- Label source-checked/unrun, local saved-state/fake transport, historical scratch, and native VM/Actions/owner-action evidence separately. Recipe edits do not prove their live steps ran.
+- Bind F09a evidence to the original instruction pin, exact tested head/tree, round/generation/intent, captured execution/attempt, candidate/gate/CI run/nonce, and reporter-owned check ID. See `features/handoff.md`.
+- Keep native reporter/P4, production protection, real owner-action, and live/perf gates pending until their prerequisites and actual receipts exist. Both substantive formal checks timed out; completed partitions do not establish full formal qualification.
 - No credentials in evidence. Export only redacted output.
 
 Copy evidence into `docs/plans/media/<pr-id>/` only when the task authorizes it.
