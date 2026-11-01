@@ -286,6 +286,85 @@ const publicationInput = {
 } as const;
 
 describe("deterministic Git Data publication", () => {
+	it("formal promotion refuses an unexpected predecessor before any non-force update", async () => {
+		const target = "c".repeat(40);
+		const foreign = "d".repeat(40);
+		assert.ok(isGitSha(target));
+		const calls: string[] = [];
+
+		const api = new GitHubPublicationApi(async (_command, args) => {
+			const method = args[args.indexOf("--method") + 1];
+			calls.push(method ?? "GET");
+
+			return {
+				code: 0,
+				stdout: JSON.stringify({ object: { sha: foreign } }),
+				stderr: "",
+			};
+		}, repo);
+
+		await assert.rejects(
+			api.promotePr(`factory/pr/1-${runId.slice(0, 12)}`, baseSha, target),
+			/branch_moved/,
+		);
+		assert.deepEqual(calls, ["GET"]);
+	});
+
+	for (const race of [false, true])
+		it(`formal promotion reconciles a lost response but does not claim expected-head CAS (race=${race})`, async () => {
+			const target = "c".repeat(40);
+			const foreign = "d".repeat(40);
+			assert.ok(isGitSha(target));
+			assert.ok(isGitSha(foreign));
+			let head = baseSha;
+			let reads = 0;
+			let updates = 0;
+
+			const api = new GitHubPublicationApi(async (_command, args) => {
+				const method = args[args.indexOf("--method") + 1];
+
+				if (method === "GET") {
+					const observed = head;
+
+					if (reads++ === 0 && race) head = foreign;
+
+					return {
+						code: 0,
+						stdout: JSON.stringify({ object: { sha: observed } }),
+						stderr: "",
+					};
+				}
+
+				assert.equal(method, "PATCH");
+				const file = args[args.indexOf("--input") + 1];
+				assert.ok(file);
+				assert.deepEqual(parseJson(readFileSync(file, "utf8")), {
+					sha: target,
+					force: false,
+				});
+				updates++;
+
+				if (head === foreign)
+					return { code: 1, stdout: "", stderr: "HTTP 422" };
+				head = target;
+
+				return { code: 1, stdout: "", stderr: "HTTP 502" };
+			}, repo);
+
+			if (race)
+				await assert.rejects(
+					api.promotePr(`factory/pr/1-${runId.slice(0, 12)}`, baseSha, target),
+				);
+			else
+				await api.promotePr(
+					`factory/pr/1-${runId.slice(0, 12)}`,
+					baseSha,
+					target,
+				);
+			assert.equal(head, race ? foreign : target);
+			assert.equal(updates, 1);
+			assert.ok(reads >= 2);
+		});
 	it("keeps g0 bytes and builds the final ordered-parent SHA before certification", async () => {
 		const fake = new GitData();
 		const api = new GitHubPublicationApi(fake.exec, repo);

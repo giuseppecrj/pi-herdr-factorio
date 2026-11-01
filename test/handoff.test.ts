@@ -1052,6 +1052,358 @@ test("closed-unmerged and positive withdrawal cancel even while switched off", (
 	}
 });
 
+test("formal trace reaches all six generations and refuses a fourth refresh without issuing work", () => {
+	let state = validated(select(), false);
+	let latestPatch = patch;
+	let bytes = "patch";
+
+	for (const round of [1, 2] as const) {
+		const issued = handoffCandidate(state, observed()).state;
+		const request = pending(issued, "repair_build");
+		assert.equal(request.execution.round, round);
+
+		const running = handoffCandidate(issued, {
+			kind: "effect_completed",
+			completion: { kind: "repair_build", request, started: true },
+		}).state;
+
+		bytes = `formal-repair-${round}`;
+		latestPatch = { ...patch, round, patchDigest: digestOf(bytes) };
+
+		const built = handoffCandidate(running, {
+			kind: "repair_settled",
+			execution: request.execution,
+			tokens: 101,
+			result: { kind: "passed", patch: latestPatch },
+		}).state;
+
+		state = selected(handoffCandidate(built, observed()).state);
+
+		if (round === 1) state = validated(state, false);
+	}
+
+	for (const base of ["b", "c", "d"]) {
+		const archive = JSON.stringify([...state.history, state.current]);
+		state = selected(handoffCandidate(state, observed(base.repeat(40))).state);
+		assert.equal(JSON.stringify(state.history), archive);
+	}
+
+	assert.deepEqual(
+		[...state.history, state.current].map(({ intent }) => [
+			intent.round,
+			intent.generation,
+		]),
+		[
+			[0, 0],
+			[1, 0],
+			[2, 0],
+			[2, 1],
+			[2, 2],
+			[2, 3],
+		],
+	);
+	assert.equal(state.accounts.length, 2);
+	assert.equal(candidateUsage(state), 1436);
+	const review = reviewing(validated(state));
+	assert.equal(review.execution.attempt, 1);
+	state = selected(
+		handoffCandidate(review.state, {
+			kind: "review_settled",
+			execution: review.execution,
+			tokens: 103,
+			result: {
+				kind: "passed",
+				review: receipt(review.execution),
+				patch: { kind: "found", receipt: latestPatch, patch: bytes },
+			},
+		}).state,
+	);
+	assert.ok(state.current.certification);
+
+	const refused = selected(
+		handoffCandidate(state, observed("e".repeat(40))).state,
+	);
+
+	assert.equal(refused.history.length, 5);
+	assert.deepEqual(refused.work, {
+		kind: "held",
+		reason: "refresh_limit",
+		since: 100,
+	});
+	assert.equal(refused.accounts.length, 3);
+	assert.equal(candidateUsage(refused), 1539);
+	assert.deepEqual(
+		parseCandidateState(JSON.parse(JSON.stringify(refused))),
+		refused,
+	);
+});
+
+test("formal trace refuses a fourth round-global review after failures and refreshes", () => {
+	let state = validated(select());
+	const attempts: number[] = [];
+
+	for (const [index, base] of ["a", "b", "c"].entries()) {
+		if (index > 0)
+			state = validated(
+				handoffCandidate(state, observed(base.repeat(40))).state,
+			);
+		const review = reviewing(state);
+		attempts.push(review.execution.attempt);
+		state = selected(
+			handoffCandidate(review.state, {
+				kind: "review_settled",
+				execution: review.execution,
+				tokens: 1000,
+				result: { kind: "failed" },
+			}).state,
+		);
+	}
+
+	assert.deepEqual(attempts, [1, 2, 3]);
+	assert.equal(state.accounts.length, 3);
+	assert.equal(pending(state, "finish_pr").terminal.kind, "failed");
+	const refused = handoffCandidate(state, observed("d".repeat(40)));
+	assert.notEqual(refused.effect?.kind, "launch_review");
+	assert.equal(refused.state.accounts.length, 3);
+	assert.equal(candidateUsage(refused.state), 4234);
+});
+
+test("formal accounting retains duplicate lower unknown and late high-water usage on its captured account", () => {
+	const first = reviewing(validated(select()));
+
+	let state = handoffCandidate(first.state, {
+		kind: "execution_progress",
+		execution: first.execution,
+		tokens: 200,
+	}).state;
+
+	const stopping = handoffCandidate(state, observed("b".repeat(40))).state;
+	const request = pending(stopping, "stop_execution");
+	state = handoffCandidate(stopping, {
+		kind: "effect_completed",
+		completion: { kind: "stop_execution", request, stopped: true, tokens: 250 },
+	}).state;
+	const refreshed = handoffCandidate(state, observed("b".repeat(40))).state;
+	const next = reviewing(validated(refreshed));
+	state = next.state;
+
+	for (const tokens of [250, 249, 0, 250]) {
+		state = handoffCandidate(state, {
+			kind: "review_settled",
+			execution: first.execution,
+			tokens,
+			result: { kind: "failed" },
+		}).state;
+		assert.equal(candidateUsage(state), 1484);
+		assert.equal(selected(state).work.kind, "reviewing");
+		assert.equal(selected(state).current.certification, null);
+	}
+
+	state = handoffCandidate(state, {
+		kind: "review_settled",
+		execution: first.execution,
+		tokens: null,
+		result: { kind: "failed" },
+	}).state;
+	assert.equal(candidateUsage(state), 1484);
+	assert.equal(state.accounts[0]?.spend.kind, "unknown");
+	state = handoffCandidate(state, {
+		kind: "review_settled",
+		execution: first.execution,
+		tokens: 300,
+		result: { kind: "failed" },
+	}).state;
+	assert.equal(candidateUsage(state), 1534);
+	assert.equal(state.accounts[0]?.spend.kind, "known");
+	assert.equal(state.accounts[1]?.execution.id, next.execution.id);
+	assert.equal(candidateAllowance(selected(state), next.execution), 29_700);
+});
+
+for (const spent of [29_999, 30_000, 30_001])
+	test(`formal review accounting records cap boundary ${spent} and refuses excess work`, () => {
+		const review = reviewing(validated(select()));
+
+		const state = selected(
+			handoffCandidate(review.state, {
+				kind: "review_settled",
+				execution: review.execution,
+				tokens: spent,
+				result: { kind: "failed" },
+			}).state,
+		);
+
+		assert.equal(candidateUsage(state), 1234 + spent);
+		const next = handoffCandidate(state, observed());
+
+		if (spent < 30_000) {
+			const request = pending(next.state, "launch_review");
+			assert.equal(
+				candidateAllowance(selected(next.state), request.execution),
+				1,
+			);
+		} else assert.notEqual(next.effect?.kind, "launch_review");
+	});
+
+for (const prior of [499_999, 500_000, 500_001])
+	test(`formal run preflight preserves past-stage cap boundary ${prior}`, () => {
+		const state = validated(
+			handoffCandidate(beginCandidate(pin, patch, prior), observed()).state,
+		);
+
+		const next = handoffCandidate(state, observed());
+		assert.equal(candidateUsage(next.state), prior);
+
+		if (prior < 500_000) {
+			const request = pending(next.state, "launch_review");
+			assert.equal(
+				candidateAllowance(selected(next.state), request.execution),
+				1,
+			);
+		} else {
+			assert.equal(next.effect, null);
+			assert.deepEqual(selected(next.state).work, {
+				kind: "held",
+				reason: "run_tokens",
+				since: 100,
+			});
+		}
+	});
+
+for (const spent of [49_999, 50_000, 50_001])
+	test(`formal repair accounting records cap boundary ${spent} without censoring receipts`, () => {
+		const due = validated(select(), false);
+		const issued = handoffCandidate(due, observed()).state;
+		const request = pending(issued, "repair_build");
+
+		const running = handoffCandidate(issued, {
+			kind: "effect_completed",
+			completion: { kind: "repair_build", request, started: true },
+		}).state;
+
+		const paid = handoffCandidate(running, {
+			kind: "repair_settled",
+			execution: request.execution,
+			tokens: spent,
+			result: { kind: "failed" },
+		}).state;
+
+		assert.equal(candidateUsage(paid), 1234 + spent);
+		const next = handoffCandidate(paid, observed());
+
+		if (spent < 50_000) {
+			const retry = pending(next.state, "repair_build");
+			assert.equal(retry.execution.attempt, 2);
+			assert.equal(
+				candidateAllowance(selected(next.state), retry.execution),
+				1,
+			);
+		} else assert.notEqual(next.effect?.kind, "repair_build");
+	});
+
+test("formal owner merge of an unmatched head records override rather than current readiness", () => {
+	const previous = waiting();
+
+	const merged = handoffCandidate(previous, {
+		...observed(),
+		executionAllowed: false,
+		pr: {
+			kind: "merged",
+			number: 5,
+			head: observed("f".repeat(40)).main ?? sha,
+			mergeSha: sha,
+			actor: null,
+		},
+	}).state;
+
+	const request = pending(merged, "finish_pr");
+	assert.equal(request.terminal.kind, "merged");
+
+	if (request.terminal.kind === "merged") {
+		assert.equal(request.terminal.assurance.kind, "owner_override");
+		assert.equal(request.terminal.readiness?.kind, "ready");
+		assert.equal(request.terminal.actor, null);
+	}
+});
+
+test("formal merge holds unknown terminal drain and finalizes only after a known stop receipt", () => {
+	const previous = waiting();
+
+	const refreshed = handoffCandidate(previous, {
+		...readyObservation(previous),
+		main: observed("b".repeat(40)).main,
+	}).state;
+
+	const review = reviewing(validated(refreshed));
+	const head = previous.current.report?.candidateSha;
+	assert.ok(head);
+
+	const merged = handoffCandidate(review.state, {
+		...observed(),
+		executionAllowed: false,
+		eligibility: "withdrawn",
+		pr: { kind: "merged", number: 5, head, mergeSha: sha, actor: null },
+	}).state;
+
+	const stop = pending(merged, "stop_execution");
+
+	const unknown = handoffCandidate(merged, {
+		kind: "effect_completed",
+		completion: {
+			kind: "stop_execution",
+			request: stop,
+			stopped: true,
+			tokens: null,
+		},
+	}).state;
+
+	assert.equal(pending(unknown, "stop_execution").terminal?.kind, "merged");
+	assert.notEqual(candidateProjection(unknown).status, "landed");
+	assert.equal(candidateAllowance(selected(unknown), review.execution), 0);
+
+	const finishing = handoffCandidate(unknown, {
+		kind: "effect_completed",
+		completion: {
+			kind: "stop_execution",
+			request: stop,
+			stopped: true,
+			tokens: 901,
+		},
+	}).state;
+
+	assert.equal(candidateUsage(finishing), 2235);
+	const finish = pending(finishing, "finish_pr");
+
+	const done = handoffCandidate(finishing, {
+		kind: "effect_completed",
+		completion: { kind: "finish_pr", request: finish },
+	}).state;
+
+	assert.equal(candidateProjection(done).status, "landed");
+	assert.equal(finish.terminal.kind, "merged");
+
+	if (finish.terminal.kind === "merged")
+		assert.equal(finish.terminal.assurance.kind, "factory_verified");
+});
+
+test("formal certification failure after publication holds the same PR without feedback repair", () => {
+	const previous = waiting();
+
+	const refreshed = handoffCandidate(previous, {
+		...readyObservation(previous),
+		main: observed("b".repeat(40)).main,
+	}).state;
+
+	const failed = validated(refreshed, false);
+	assert.equal(failed.published?.number, 5);
+	assert.equal(failed.work.kind, "held");
+	assert.equal(failed.published?.readiness.kind, "not_ready");
+	assert.equal(failed.current.intent.round, 0);
+	assert.equal(
+		failed.accounts.filter((a) => a.execution.stage === "build").length,
+		0,
+	);
+});
+
 test("certification rejects missing workflow/execution evidence and mismatched source", () => {
 	const state = certified(select());
 	const c = state.current.certification;

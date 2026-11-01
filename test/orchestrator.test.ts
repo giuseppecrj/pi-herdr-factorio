@@ -7689,6 +7689,174 @@ describe("controller-only validate", () => {
 		assert.equal(f.executor.launches.length, launches);
 	});
 
+	it("formal durable review intent refuses a failed claim write before any launch", async () => {
+		const f = await reviewingRun();
+		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+		const before = f.files.claims.get(runOf(14))?.handoff;
+		assert.ok(before);
+		const write = f.files.writeClaim.bind(f.files);
+		let refused = 0;
+		f.files.writeClaim = async (claim) => {
+			const state = claim.handoff;
+
+			if (
+				state?.kind === "selected" &&
+				state.work.kind === "effect" &&
+				state.work.request.kind === "launch_review"
+			) {
+				refused++;
+
+				return false;
+			}
+
+			return write(claim);
+		};
+
+		const launches = f.executor.launches.length;
+		await f.controller.tick();
+		assert.ok(refused > 0);
+		assert.equal(f.executor.launches.length, launches);
+		assert.deepEqual(f.files.claims.get(runOf(14))?.handoff, before);
+		f.files.writeClaim = write;
+		await once(f.controller);
+		await f.controller.tick();
+		await f.controller.tick();
+		assert.equal(f.files.claims.get(runOf(14))?.status, "waiting");
+		assert.equal(f.files.claims.get(runOf(14))?.usage, 40);
+	});
+
+	it("formal restart reuses the saved captured review intent and public advance projection", async () => {
+		const f = await reviewingRun();
+		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+		const launch = f.executor.launch.bind(f.executor);
+		f.executor.launch = async () => {
+			throw new Error("formal crash before external launch");
+		};
+
+		await assert.rejects(
+			f.controller.tick(),
+			/formal crash before external launch/,
+		);
+		const saved = f.files.claims.get(runOf(14));
+		const book = saved?.handoff;
+		assert.ok(
+			book?.kind === "selected" &&
+				book.work.kind === "effect" &&
+				book.work.request.kind === "launch_review",
+		);
+		const request = book.work.request;
+		const execution = request.execution;
+		assert.equal(execution.attempt, 1);
+		f.executor.candidateSpent.set(execution.id, 0);
+		const output = f.executor.output.bind(f.executor);
+		let recovering = true;
+		f.executor.output = async (input) =>
+			recovering && input.execution?.id === execution.id
+				? { kind: "pending" }
+				: output(input);
+		f.executor.launch = async (input) => {
+			assert.deepEqual(input.execution, execution);
+			assert.deepEqual(
+				f.files.claims.get(runOf(14))?.handoff?.accounts,
+				book.accounts,
+			);
+			recovering = false;
+
+			return launch(input);
+		};
+
+		const restarted = f.start();
+		await restarted.tick();
+
+		const pure: Run = {
+			id: book.pin.runId,
+			repo: book.pin.repo,
+			baseSha: book.pin.originalBase,
+			ticket: {
+				provider: "github",
+				key: `${repo}#14`,
+				url: `https://github.com/${repo}/issues/14`,
+			},
+			handoff: book,
+			progress: candidateProjection(book).progress,
+		};
+
+		const step = advance(pure, {
+			kind: "candidate",
+			event: {
+				kind: "effect_completed",
+				completion: { kind: "launch_review", request, started: true },
+			},
+		});
+
+		assert.equal(step.kind, "advanced");
+		assert.deepEqual(f.files.claims.get(runOf(14))?.handoff, step.run.handoff);
+		await once(restarted);
+		await restarted.tick();
+		assert.equal(f.files.claims.get(runOf(14))?.status, "waiting");
+		assert.equal(f.files.claims.get(runOf(14))?.usage, 40);
+		assert.equal(
+			f.executor.launches.filter(
+				(entry) => entry.execution?.id === execution.id,
+			).length,
+			1,
+		);
+		const marker = parseMarker(f.github.markers(14).at(-1) ?? "");
+		assert.equal(marker.kind, "marker");
+
+		if (marker.kind === "marker") assert.equal(marker.marker.usage, 40);
+	});
+
+	for (const lost of ["open_pr", "complete_handoff"] as const)
+		it(`formal restart reconciles a lost ${lost} response from the persisted effect without model spend`, async () => {
+			const f = await reviewingRun();
+			f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+			const port = f.executor.candidate;
+			assert.ok(port);
+			const execute = port.execute;
+			let interrupted = false;
+			port.execute = async (state, request) => {
+				assert.deepEqual(f.files.claims.get(runOf(14))?.handoff, state);
+
+				if (request.kind === lost && !interrupted) {
+					interrupted = true;
+					await execute(state, request);
+
+					return null;
+				}
+
+				return execute(state, request);
+			};
+
+			await once(f.controller);
+
+			for (let tick = 0; tick < 4 && !interrupted; tick++)
+				await f.controller.tick();
+			assert.equal(interrupted, true);
+			const saved = f.files.claims.get(runOf(14));
+			assert.ok(saved?.handoff?.kind === "selected");
+			assert.equal(saved.handoff.work.kind, "effect");
+
+			if (saved.handoff.work.kind === "effect")
+				assert.equal(saved.handoff.work.request.kind, lost);
+			const launches = f.executor.launches.length;
+			port.execute = execute;
+			const restarted = f.start();
+			await restarted.tick();
+			await restarted.tick();
+			await restarted.tick();
+			const restored = f.files.claims.get(runOf(14));
+			assert.equal(restored?.status, "waiting");
+			assert.equal(restored.usage, 40);
+			assert.equal(f.executor.launches.length, launches);
+			assert.ok(restored.handoff?.kind === "selected");
+			assert.equal(restored.handoff.published?.number, 99);
+			assert.deepEqual(restored.handoff.accounts, saved.handoff.accounts);
+			assert.ok(
+				parseCandidateState(JSON.parse(JSON.stringify(restored.handoff))),
+			);
+		});
+
 	it("waiting uses no slot while two other issues enter execution", async () => {
 		const f = await reviewingRun();
 		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
