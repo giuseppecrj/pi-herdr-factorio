@@ -29,8 +29,17 @@ import {
 import { acceptanceDigestOf, type AcceptanceSuite } from "../src/accept.ts";
 import { CONTROLLER_LOGIN } from "../src/markers.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
-import { passingVerdict, patch, withLocalArtifactDownload } from "./helpers.ts";
-import { controllerValidator, fileRunFiles } from "../server/controller.ts";
+import {
+	passingVerdict,
+	patch,
+	withLocalArtifactDownload,
+	candidateLifecycleFixture,
+} from "./helpers.ts";
+import {
+	controllerValidator,
+	fileRunFiles,
+	sweepValidation,
+} from "../server/controller.ts";
 import { fileArtifacts } from "../src/artifacts.ts";
 import {
 	contractBytes,
@@ -43,7 +52,11 @@ import {
 	finishPatch,
 	readPatch,
 } from "../src/build.ts";
-import { generationIntent } from "../src/handoff.ts";
+import {
+	generationIntent,
+	candidateGenerations,
+	candidateUsage,
+} from "../src/handoff.ts";
 import { candidateBranch } from "../src/publication.ts";
 import type { Exec } from "../src/gh.ts";
 
@@ -975,6 +988,196 @@ describe("bound validation verdicts", () => {
 			);
 		assert.equal(parseCiRun({ id: 1, head_sha: "bad" }), null);
 	});
+});
+
+describe("generation-aware validation cleanup", () => {
+	for (const terminal of [false, true])
+		it(`sweeps bounded archives and pending current state without mutating the book (terminal=${terminal})`, async () => {
+			const root = mkdtempSync(join(tmpdir(), "factory-cleanup-generations-"));
+
+			try {
+				const fixture = candidateLifecycleFixture();
+
+				const book = terminal
+					? {
+							...fixture,
+							work: {
+								kind: "terminal" as const,
+								terminal: {
+									kind: "failed" as const,
+									reason: "validation_failed" as const,
+								},
+							},
+						}
+					: fixture;
+
+				const pin = book.pin;
+				const files = fileRunFiles(root);
+
+				const contract: Contract = {
+					version: 1,
+					runId: pin.runId,
+					issue: pin.issue,
+					base: { repo: pin.repo, sha: pin.originalBase },
+					snapshot: {
+						digest: digestOf("snapshot"),
+						source: "unedited",
+						eventId: "1",
+						eventAt: run.createdAt,
+					},
+					link: null,
+					summary: "fixture",
+					behavior: ["fixture"],
+					acceptance: [{ id: "A1", text: "fixture" }],
+					exclusions: [],
+					compatibility: [],
+					limits: [],
+					files: ["src/example.ts"],
+					evidence: [],
+				};
+
+				const bytes = contractBytes(contract);
+				assert.equal(
+					await files.writeContract({
+						contract,
+						bytes,
+						digest: contractDigestOf(bytes),
+					}),
+					true,
+				);
+				assert.equal(
+					await files.writeClaim({
+						runId: pin.runId,
+						issue: pin.issue,
+						eventId: "1",
+						seq: 1,
+						status: terminal ? "failed" : "running",
+						stage: "validate",
+						attempt: 1,
+						usage: candidateUsage(book),
+						handoff: book,
+					}),
+					true,
+				);
+
+				const claimPath = join(root, "claims", `${pin.runId}.json`);
+				const originalClaim = readFileSync(claimPath, "utf8");
+
+				const refs = new Map<string, string>([
+					["main", pin.originalBase],
+					["owner/work", pin.originalBase],
+					[book.published?.branch ?? "factory/pr/unused", pin.originalBase],
+				]);
+
+				const deletes: string[] = [];
+				let refuse = true;
+
+				for (const g of candidateGenerations(book)) {
+					const publication = g.validation?.publication;
+					assert.ok(publication);
+					refs.set(publication.branch, publication.candidateSha);
+
+					if (g.verdict !== null)
+						writeFileSync(
+							join(
+								validationDir(
+									root,
+									pin.runId,
+									g.intent.round,
+									g.intent.generation,
+								),
+								"verdict.json",
+							),
+							JSON.stringify(g.verdict),
+							{ mode: 0o600 },
+						);
+				}
+
+				const exec: Exec = async (_command, args) => {
+					const method = args[args.indexOf("--method") + 1];
+
+					const path =
+						args
+							.find((arg) => arg.startsWith(`repos/${pin.repo}/`))
+							?.slice(`repos/${pin.repo}/`.length) ?? "";
+
+					const ok = (value: JsonValue) => ({
+						code: 0,
+						stdout: JSON.stringify(value),
+						stderr: "",
+					});
+
+					if (
+						path ===
+						"actions/workflows/ci.yml/runs?event=workflow_dispatch&per_page=100"
+					)
+						return ok({ workflow_runs: [] });
+
+					const branch = path.replace(/^git\/refs?\/heads\//, "");
+
+					if (method === "GET" && path.startsWith("git/ref/heads/")) {
+						const sha = refs.get(branch);
+
+						return sha === undefined
+							? { code: 1, stdout: "", stderr: "HTTP 404" }
+							: ok({ object: { sha } });
+					}
+
+					assert.equal(method, "DELETE");
+					assert.ok(path.startsWith("git/refs/heads/factory/run/"));
+
+					if (refuse) {
+						refuse = false;
+
+						return { code: 1, stdout: "", stderr: "HTTP 403" };
+					}
+
+					deletes.push(branch);
+					refs.delete(branch);
+
+					return ok({});
+				};
+
+				const config = { stateDir: root, exec, now: () => 201 };
+				await sweepValidation(config);
+				const first = book.history[0]?.validation?.publication;
+				assert.ok(first);
+				assert.ok(
+					existsSync(
+						join(validationDir(root, pin.runId), "pending-deletion.json"),
+					),
+				);
+				refs.set(first.branch, "e".repeat(40));
+				await sweepValidation(config);
+				assert.equal(refs.get(first.branch), "e".repeat(40));
+				refs.set(first.branch, first.candidateSha);
+				await sweepValidation(config);
+				const count = deletes.length;
+				await sweepValidation(config);
+				assert.equal(deletes.length, count);
+				assert.equal(count, terminal ? 3 : 2);
+				assert.equal(
+					refs.has(book.current.validation?.publication?.branch ?? ""),
+					!terminal,
+				);
+				assert.equal(refs.get("main"), pin.originalBase);
+				assert.equal(refs.get("owner/work"), pin.originalBase);
+				assert.equal(refs.has(book.published?.branch ?? ""), true);
+				assert.equal(readFileSync(claimPath, "utf8"), originalClaim);
+
+				if (terminal)
+					assert.ok(
+						existsSync(
+							join(
+								validationDir(root, pin.runId, 0, 2),
+								"cleanup-validation.json",
+							),
+						),
+					);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		});
 });
 
 it("collection itself refuses a receipt from the wrong run actor or workflow", () => {

@@ -2176,56 +2176,131 @@ export async function sweepValidation(config: {
 	const files = fileRunFiles(config.stateDir);
 
 	for (const claim of await files.listClaims()) {
-		const state = claim.validation;
-		const publication = state?.publication;
+		const book = claim.handoff;
 
-		if (
-			claim.status === null ||
-			!["released", "failed", "budget_exhausted", "stage_passed"].includes(
-				claim.status,
-			) ||
-			state === undefined ||
-			publication == null
-		)
-			continue;
+		const terminal =
+			claim.status !== null &&
+			[
+				"released",
+				"failed",
+				"budget_exhausted",
+				"stage_passed",
+				"landed",
+				"cancelled",
+			].includes(claim.status);
 
-		if (
-			publication.branch !==
-			candidateBranch(claim.issue, claim.runId, state.round)
-		)
-			continue;
-		const dir = validationDir(config.stateDir, claim.runId, state.round);
+		const generations =
+			book?.kind === "selected" ? candidateGenerations(book) : [];
 
-		if (present(join(dir, "cleanup.json"))) continue;
-		const contract = await files.readContract(claim.runId);
+		const entries: {
+			state: ValidationState | null;
+			generation: (typeof generations)[number]["intent"] | undefined;
+			retired: boolean;
+		}[] = generations.map((evidence) => ({
+			state: evidence.validation,
+			generation: evidence.intent,
+			retired:
+				terminal ||
+				(book?.kind === "selected" &&
+					(book.current.intent.digest !== evidence.intent.digest ||
+						book.work.kind === "terminal" ||
+						book.work.kind === "held" ||
+						(book.work.kind === "effect" &&
+							book.work.request.kind === "finish_pr"))),
+		}));
 
-		if (contract.kind !== "found") continue;
+		if (book === undefined && terminal && claim.validation !== undefined)
+			entries.push({
+				state: claim.validation,
+				generation: undefined,
+				retired: true,
+			});
 
-		const api = new GitHubPublicationApi(
-			config.exec,
-			contract.contract.base.repo,
-		);
+		for (const entry of entries) {
+			const original = entry.state;
+			const publication = original?.publication;
 
-		if (
-			!present(join(dir, "verdict.json")) &&
-			!present(join(dir, "failure.json"))
-		) {
-			const listed = objectOf(
-				await api
-					.request(
-						"GET",
-						"actions/workflows/ci.yml/runs?event=workflow_dispatch&per_page=100",
-					)
-					.catch(() => undefined),
+			if (original == null || publication == null) continue;
+
+			const index =
+				entry.generation?.generation ?? original.generation?.index ?? 0;
+
+			if (
+				publication.branch !==
+				candidateBranch(claim.issue, claim.runId, original.round, index)
+			)
+				continue;
+
+			const dir = validationDir(
+				config.stateDir,
+				claim.runId,
+				original.round,
+				index,
 			);
 
-			const runs = (arrayOf(jsonField(listed, "workflow_runs")) ?? []).flatMap(
-				(value) => {
+			if (present(join(dir, "cleanup.json"))) continue;
+			const contract = await files.readContract(claim.runId);
+
+			if (
+				contract.kind !== "found" ||
+				(book !== undefined && book.pin.repo !== contract.contract.base.repo)
+			)
+				continue;
+
+			const api = new GitHubPublicationApi(
+				config.exec,
+				contract.contract.base.repo,
+			);
+
+			const progress = join(dir, "cleanup-validation.json");
+			let state = structuredClone(original);
+
+			if (present(progress)) {
+				const restored = parseValidationState(parseJson(regularText(progress)));
+
+				if (
+					restored === null ||
+					restored.startedAt !== original.startedAt ||
+					restored.deadline !== original.deadline ||
+					restored.round !== original.round ||
+					restored.originalBase !== original.originalBase ||
+					restored.baseSha !== original.baseSha ||
+					JSON.stringify(restored.generation) !==
+						JSON.stringify(original.generation) ||
+					JSON.stringify(restored.publication) !== JSON.stringify(publication)
+				)
+					continue;
+				state = restored;
+			}
+
+			if (
+				!present(join(dir, "verdict.json")) &&
+				!present(join(dir, "failure.json"))
+			) {
+				if (!entry.retired) continue;
+
+				const listed = objectOf(
+					await api
+						.request(
+							"GET",
+							"actions/workflows/ci.yml/runs?event=workflow_dispatch&per_page=100",
+						)
+						.catch(() => undefined),
+				);
+
+				const runs = (
+					arrayOf(jsonField(listed, "workflow_runs")) ?? []
+				).flatMap((value) => {
 					const run = parseCiRun(value);
 
 					return run !== null &&
-						Array.from({ length: state.dispatchTry }, (_, index) =>
-							dispatchNonce(claim.runId, state.round, index + 1),
+						Array.from({ length: state.dispatchTry }, (_, attempt) =>
+							dispatchNonce(
+								claim.runId,
+								state.round,
+								attempt + 1,
+								state.generation?.index,
+							),
 						).some((nonce) =>
 							matchesCiRun(
 								run,
@@ -2236,39 +2311,42 @@ export async function sweepValidation(config: {
 						)
 						? [run]
 						: [];
-				},
-			);
+				});
+
+				const now = config.now?.() ?? Date.now();
+
+				if (
+					now < state.deadline &&
+					(runs.length === 0 || runs.some((run) => run.status !== "completed"))
+				)
+					continue;
+
+				if (runs.length === 1) state.ciRunId = runs[0]?.id ?? null;
+				await controllerValidator(config)({
+					runId: claim.runId,
+					issue: claim.issue,
+					eventAt: contract.contract.snapshot.eventAt,
+					baseSha: contract.contract.base.sha,
+					now,
+					wallMs: CI_DEADLINE_MS,
+					round: state.round,
+					generation: entry.generation,
+					state,
+					dispatchAllowed: false,
+					save: async (validation) =>
+						entry.generation === undefined
+							? files.writeClaim({ ...claim, validation })
+							: writeAtomic(progress, `${JSON.stringify(validation)}\n`),
+				});
+			}
 
 			if (
-				runs.some((run) => run.status !== "completed") &&
-				(config.now?.() ?? Date.now()) < state.deadline
+				!present(join(dir, "verdict.json")) &&
+				!present(join(dir, "failure.json"))
 			)
 				continue;
-
-			if (runs.length === 0 && (config.now?.() ?? Date.now()) < state.deadline)
-				continue;
-
-			if (runs.length === 1) state.ciRunId = runs[0]?.id ?? null;
-			await controllerValidator(config)({
-				runId: claim.runId,
-				issue: claim.issue,
-				eventAt: contract.contract.snapshot.eventAt,
-				baseSha: contract.contract.base.sha,
-				now: config.now?.() ?? Date.now(),
-				wallMs: CI_DEADLINE_MS,
-				round: state.round,
-				state,
-				dispatchAllowed: false,
-				save: async (validation) => files.writeClaim({ ...claim, validation }),
-			});
+			await cleanupPublication(api, dir, publication);
 		}
-
-		if (
-			!present(join(dir, "verdict.json")) &&
-			!present(join(dir, "failure.json"))
-		)
-			continue;
-		await cleanupPublication(api, dir, publication);
 	}
 }
 
