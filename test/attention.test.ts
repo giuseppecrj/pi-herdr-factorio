@@ -3,6 +3,7 @@ import {
 	mkdtempSync,
 	mkdirSync,
 	writeFileSync,
+	readFileSync,
 	chmodSync,
 	symlinkSync,
 	rmSync,
@@ -27,6 +28,9 @@ import { candidateBranch } from "../src/publication.ts";
 import { REQUIRED_CI_CHECKS } from "../src/run.ts";
 import { isGitSha } from "../src/workflow.ts";
 import type { PatchReceipt } from "../src/build.ts";
+import { execFileSync } from "node:child_process";
+import { candidateLifecycleFixture } from "./helpers.ts";
+import { TRUSTED_WORKFLOW } from "./fake-ticket-adapter.ts";
 
 type ClaimExtra = {
 	readonly stage?: string;
@@ -339,6 +343,84 @@ test("an incomplete or wrong-owner candidate book is a gap, never PR-ready", asy
 	assert.equal(read.gaps.length, 2);
 });
 
+test("cold missing books and working refreshes are blocked once, never PR-ready", async () => {
+	const root = fixture();
+	claim(root, 1, "running", {
+		stage: "validate",
+		handoff: JSON.parse(JSON.stringify(candidateLifecycleFixture())),
+	});
+	claim(root, 2, "waiting", { stage: "land" });
+	const read = await readAttention({ stateDir: root, repo, now: 1000 });
+	assert.equal(read.kind, "available");
+	assert.equal(read.groups.pr_review.length, 0);
+	assert.equal(read.groups.blocked.length, 2);
+	assert.equal(read.gaps.length, 1);
+	assert.equal(
+		read.groups.blocked.find((e) => e.issueUrl.endsWith("/2"))?.ageMs,
+		null,
+	);
+	assert.equal(
+		read.groups.blocked.find((e) => e.issueUrl.endsWith("/2"))?.reason,
+		"candidate_book_unavailable",
+	);
+});
+
+test("standalone CLI process reports saved working and cold evidence without external transport", () => {
+	const root = fixture();
+	claim(root, 1, "running", {
+		stage: "validate",
+		handoff: JSON.parse(JSON.stringify(candidateLifecycleFixture())),
+	});
+	claim(root, 2, "waiting", { stage: "land" });
+	const bin = join(root, "bin");
+	mkdirSync(bin, { mode: 0o700 });
+	const requests = join(root, "requests.jsonl");
+	writeFileSync(
+		join(bin, "gh"),
+		`#!${process.execPath}\nconst fs = require("node:fs");\nconst args = process.argv.slice(2);\nfs.appendFileSync(${JSON.stringify(requests)}, JSON.stringify(args) + "\\n");\nif (args[0] !== "api" || args.includes("--method")) process.exit(7);\nif (args.includes("--jq")) process.stdout.write(${JSON.stringify("a".repeat(40))});\nelse if (args.some(a => a.includes("/contents/.github/factory/WORKFLOW.md?ref="))) process.stdout.write(${JSON.stringify(TRUSTED_WORKFLOW)});\nelse process.exit(8);\n`,
+		{ mode: 0o700 },
+	);
+
+	const before = readFileSync(
+		join(root, "claims", `${runIdOf({ repo, issue: 1, eventId: "1" })}.json`),
+		"utf8",
+	);
+
+	const output = execFileSync(
+		process.execPath,
+		[
+			"--experimental-strip-types",
+			"server/cli.ts",
+			"status",
+			"--json",
+			"--repo",
+			repo,
+			"--state-dir",
+			root,
+		],
+		{
+			cwd: process.cwd(),
+			encoding: "utf8",
+			env: { PATH: `${bin}:/usr/bin:/bin`, HOME: root },
+			timeout: 10_000,
+		},
+	);
+
+	const parsed = JSON.parse(output);
+	assert.equal(parsed.attention.kind, "available");
+	assert.equal(parsed.attention.groups.blocked.length, 2);
+	assert.equal(parsed.attention.groups.pr_review.length, 0);
+	assert.equal(parsed.attention.gaps.length, 1);
+	assert.equal(readFileSync(requests, "utf8").trim().split("\n").length, 2);
+	assert.equal(
+		readFileSync(
+			join(root, "claims", `${runIdOf({ repo, issue: 1, eventId: "1" })}.json`),
+			"utf8",
+		),
+		before,
+	);
+});
+
 test("newest issue sequence removes superseded questions and terminal entries", async () => {
 	const root = fixture();
 	claim(root, 1, "needs_info");
@@ -397,6 +479,7 @@ test("corrupt or public claim files are visible evidence gaps", async () => {
 test("real CLI status and registered extension compose the same local attention reader without models or writes", async () => {
 	const root = fixture();
 	claim(root, 1, "needs_info");
+	claim(root, 2, "waiting", { stage: "land" });
 	const requests: string[] = [];
 
 	const exec = async (command: string, args: readonly string[]) => {
@@ -467,5 +550,8 @@ test("real CLI status and registered extension compose the same local attention 
 
 	assert.match(sent, /question_asked: 1/);
 	assert.match(sent, /spec_review: not enabled in v1/);
+	assert.match(sent, /blocked: 1/);
+	assert.match(sent, /pr_review: 0/);
+	assert.match(sent, /candidate_book_unavailable/);
 	assert.ok(requests.length > 0);
 });

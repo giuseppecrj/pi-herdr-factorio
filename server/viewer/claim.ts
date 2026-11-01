@@ -1,6 +1,8 @@
 import type { ClaimRecord } from "../../src/orchestrator.ts";
 import { isRunStatus, isStage } from "../../src/markers.ts";
-import { isDigest } from "../../src/run.ts";
+import { isDigest, runIdOf } from "../../src/run.ts";
+import { parseCandidateState, candidateUsage } from "../../src/handoff.ts";
+import { parseMarker, MARKER_PREFIX } from "../../src/markers.ts";
 import { parseValidationState } from "../../src/validation.ts";
 import {
 	countOf,
@@ -71,12 +73,49 @@ export function viewerClaim(text: string, runId: string): ClaimRecord | null {
 		usage,
 	};
 
+	const rawBook = fieldOf(value, "handoff");
+	const book = parseCandidateState(rawBook);
+
+	if (
+		rawBook !== undefined &&
+		(book === null ||
+			book.pin.runId !== id ||
+			book.pin.issue !== issue ||
+			runIdOf({ repo: book.pin.repo, issue, eventId }) !== id ||
+			usage !== candidateUsage(book))
+	)
+		return null;
+
+	const rawMarker = fieldOf(value, "marker");
+
+	const marker =
+		rawMarker === undefined
+			? null
+			: parseMarker(`${MARKER_PREFIX}${JSON.stringify(rawMarker)} -->`);
+
+	if (
+		marker !== null &&
+		(marker.kind !== "marker" ||
+			marker.marker.runId !== id ||
+			marker.marker.issue !== issue ||
+			marker.marker.seq !== seq ||
+			marker.marker.status !== status ||
+			marker.marker.usage !== usage)
+	)
+		return null;
+
+	const retained: ClaimRecord = {
+		...claim,
+		handoff: book ?? undefined,
+		marker: marker?.kind === "marker" ? marker.marker : undefined,
+	};
+
 	const round = countOf(fieldOf(value, "round")) ?? validation?.round ?? 0;
 
 	if (round > 2 || (validation !== undefined && round !== validation.round))
 		return null;
 
 	return validation === undefined
-		? { ...claim, round }
-		: { ...claim, validation, round };
+		? { ...retained, round }
+		: { ...retained, validation, round };
 }

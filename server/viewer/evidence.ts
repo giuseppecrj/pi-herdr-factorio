@@ -17,8 +17,20 @@ import {
 } from "../sandbox/json.ts";
 import { childUsageOf } from "../sandbox/settle.ts";
 import { isDigest, runIdOf } from "../../src/run.ts";
-import { isRepoSlug } from "../../src/workflow.ts";
+import { isRepoSlug, isGitSha } from "../../src/workflow.ts";
+import { isLogin } from "../../src/adapters/github.ts";
 import { parseMarker } from "../../src/markers.ts";
+import {
+	candidateGenerations,
+	candidateProjection,
+	candidateUsage,
+	type GenerationEvidence,
+	type GenerationIntent,
+	type Certification,
+	type CandidateExecution,
+} from "../../src/handoff.ts";
+import { reviewDir, type ReviewReceipt } from "../../src/review.ts";
+import type { Verdict } from "../../src/run.ts";
 
 export type Gap = { source: string; reason: string };
 
@@ -28,6 +40,7 @@ export type TimelineEvent = {
 	stage: string;
 	attempt: number | null;
 	round: number | null;
+	generation: number | null;
 	event: string;
 	detail: string;
 };
@@ -37,6 +50,9 @@ export type SessionView = {
 	source: string;
 	parent: string | null;
 	stage: string;
+	attempt: number | null;
+	round: number | null;
+	generation: number | null;
 	tokens: number;
 	byModel: Record<string, number>;
 	timeline: TimelineEvent[];
@@ -55,6 +71,8 @@ export type GatewayDecision = {
 	at: string;
 	stage: string;
 	attempt: number | null;
+	round: number | null;
+	generation: number | null;
 	decision: string;
 	destination: string;
 	method: string;
@@ -71,6 +89,7 @@ export type ViewerRun = {
 	timeline: TimelineEvent[];
 	usage: {
 		total: number;
+		accounted: number | null;
 		parent: number;
 		children: number;
 		models: UsageRow[];
@@ -109,7 +128,11 @@ export class Evidence {
 
 		return true;
 	}
-	async text(path: string, cap = FILE_CAP): Promise<string | null> {
+	async text(
+		path: string,
+		cap = FILE_CAP,
+		privateSource = false,
+	): Promise<string | null> {
 		try {
 			if (!(await this.safe(path))) throw new Error("unsafe source");
 
@@ -123,6 +146,8 @@ export class Evidence {
 
 				if (
 					!info.isFile() ||
+					(privateSource &&
+						(info.uid !== process.geteuid?.() || (info.mode & 0o077) !== 0)) ||
 					info.size > cap ||
 					this.bytes + info.size > RUN_CAP
 				)
@@ -210,8 +235,9 @@ function event(
 	at: string | null = null,
 	attempt: number | null = null,
 	round: number | null = null,
+	generation: number | null = null,
 ): TimelineEvent {
-	return { source, at, stage, event: name, detail, attempt, round };
+	return { source, at, stage, event: name, detail, attempt, round, generation };
 }
 
 export async function viewerRuns(stateDir: string): Promise<string[]> {
@@ -249,22 +275,53 @@ export async function readViewerRun(
 	const stageRoot = join(root, "stages", runId);
 	const files = await io.files(stageRoot);
 	const claimPath = join(root, "claims", `${runId}.json`);
-	const claimText = await io.text(claimPath);
+	const claimText = await io.text(claimPath, FILE_CAP, true);
 
 	const claim = claimText === null ? null : viewerClaim(claimText, runId);
 
-	if (claimText !== null && claim === null) io.gap(claimPath, "corrupt claim");
+	if (claimText !== null && claim === null)
+		io.gap(claimPath, "corrupt or wrong-owner claim/book");
+	const book = claim?.handoff;
+	const projection = book === undefined ? null : candidateProjection(book);
+
+	if (
+		projection !== null &&
+		(claim?.status !== projection.status ||
+			claim?.stage !== projection.stage ||
+			claim?.attempt !== projection.attempt ||
+			claim?.round !== projection.round)
+	)
+		io.gap(claimPath, "claim/book projection mismatch");
+
+	const generationOf = (
+		stage: string,
+		round: number,
+		attempt: number | null,
+	) => {
+		const execution = book?.accounts.find(
+			(a) =>
+				a.execution.stage === stage &&
+				a.execution.round === round &&
+				a.execution.attempt === attempt,
+		)?.execution;
+
+		return execution?.stage === "review"
+			? execution.generation.generation
+			: null;
+	};
 
 	if (claim !== null)
 		timeline.push(
 			event(
 				relative(root, claimPath),
-				claim.stage ?? "admit",
+				projection?.stage ?? claim.stage ?? "admit",
 				"local claim",
-				claim.status ?? "unmarked",
+				projection?.status ?? claim.status ?? "unmarked",
 				null,
 				claim.attempt,
-				claim.round ?? null,
+				book === undefined && claim.marker?.v === 3
+					? null
+					: (projection?.round ?? claim.round ?? null),
 			),
 		);
 	const statusPath = join(root, "status.json");
@@ -347,6 +404,7 @@ export async function readViewerRun(
 		const stage = field(receipt.record, "stage") ?? "unknown";
 		const attempt = countOf(fieldOf(receipt.record, "attempt"));
 		const round = Number(/(?:build|review)-r([0-2])-/.exec(source)?.[1] ?? 0);
+		const generation = generationOf(stage, round, attempt);
 		received.add(
 			`${stage}${round > 0 || stage === "review" ? `-r${round}` : ""}-${attempt}`,
 		);
@@ -370,6 +428,7 @@ export async function readViewerRun(
 				null,
 				attempt,
 				round,
+				generation,
 			),
 		);
 		const settlement = objectOf(fieldOf(receipt.record, "settlement"));
@@ -382,6 +441,7 @@ export async function readViewerRun(
 				null,
 				attempt,
 				round,
+				generation,
 			),
 		);
 
@@ -457,12 +517,14 @@ export async function readViewerRun(
 
 		const id = field(header, "id") ?? source;
 
-		const identity = /\/(specify|accept|build|review)(?:-r([0-2]))?-\d+/.exec(
+		const identity = /\/(specify|accept|build|review)(?:-r([0-2]))?-(\d+)/.exec(
 			path,
 		);
 
 		const stage = identity?.[1] ?? "unknown";
 		const round = identity?.[2] === undefined ? null : Number(identity[2]);
+		const attempt = identity?.[3] === undefined ? null : Number(identity[3]);
+		const generation = generationOf(stage, round ?? 0, attempt);
 
 		const sessionTimeline: TimelineEvent[] = [];
 
@@ -480,8 +542,9 @@ export async function readViewerRun(
 						field(message, "stopReason") ??
 						"",
 					atOf(record),
-					null,
+					attempt,
 					round,
+					generation,
 				),
 			);
 
@@ -514,6 +577,9 @@ export async function readViewerRun(
 			source,
 			parent: field(header ?? null, "parentSession"),
 			stage,
+			attempt,
+			round,
+			generation,
 			tokens: usage.total,
 			byModel: Object.fromEntries(usage.byModel),
 			timeline: sessionTimeline,
@@ -605,11 +671,19 @@ export async function readViewerRun(
 				continue;
 			}
 
+			const identity =
+				/\/(specify|accept|build|review)(?:-r([0-2]))?-(\d+)/.exec(path);
+
+			const round = identity?.[2] === undefined ? null : Number(identity[2]);
+			const attempt = countOf(fieldOf(record, "attempt"));
+
 			gateway.push({
 				source: relative(root, path),
 				at,
 				stage,
-				attempt: countOf(fieldOf(record, "attempt")),
+				attempt,
+				round,
+				generation: generationOf(stage, round ?? 0, attempt),
 				decision,
 				destination: field(upstream, "host") ?? "not forwarded (no upstream)",
 				path: field(record, "path") ?? "unavailable",
@@ -621,7 +695,280 @@ export async function readViewerRun(
 
 	gateway.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
 
-	if (claim?.validation !== undefined) {
+	if (book?.kind === "selected") {
+		const generations = candidateGenerations(book);
+
+		const stored = async (
+			path: string,
+			expected:
+				| GenerationEvidence
+				| GenerationIntent
+				| Certification
+				| CandidateExecution
+				| ReviewReceipt
+				| Verdict,
+		) => {
+			const text = await io.text(path, FILE_CAP, true);
+
+			if (
+				text !== null &&
+				JSON.stringify(parseJson(text)) !== JSON.stringify(expected)
+			)
+				io.gap(path, "evidence binding mismatch");
+		};
+
+		for (const evidence of generations) {
+			const g = evidence.intent;
+			const dir = validationDir(root, runId, g.round, g.generation);
+			await stored(join(dir, "generation.json"), g);
+
+			if (g.digest !== book.current.intent.digest)
+				await stored(join(dir, "archive.json"), evidence);
+			timeline.push(
+				event(
+					relative(root, dir),
+					"validate",
+					g.digest === book.current.intent.digest
+						? "selected generation"
+						: "archived generation",
+					`base ${g.baseSha}; patch ${g.patchDigest}; workflow ${book.pin.workflowSha}; pin ${book.pin.workflowDigest}`,
+					null,
+					null,
+					g.round,
+					g.generation,
+				),
+			);
+			const validation = evidence.validation;
+
+			if (validation?.publication != null)
+				timeline.push(
+					event(
+						relative(root, dir),
+						"validate",
+						"publication",
+						validation.publication.candidateSha,
+						null,
+						null,
+						g.round,
+						g.generation,
+					),
+				);
+
+			if (validation?.ciRunId != null)
+				timeline.push(
+					event(
+						relative(root, dir),
+						"validate",
+						"CI run",
+						String(validation.ciRunId),
+						null,
+						null,
+						g.round,
+						g.generation,
+					),
+				);
+
+			if (evidence.verdict !== null) {
+				await stored(join(dir, "verdict.json"), evidence.verdict);
+				timeline.push(
+					event(
+						relative(root, dir),
+						"validate",
+						"CI verdict",
+						`${evidence.verdict.pass ? "passed" : "failed"}; candidate ${evidence.verdict.candidateSha}; gate ${evidence.verdict.gateSha}`,
+						null,
+						null,
+						g.round,
+						g.generation,
+					),
+				);
+			}
+
+			const certificate = evidence.certification;
+
+			if (certificate !== null) {
+				await stored(join(dir, "certification.json"), certificate);
+				await stored(
+					join(
+						reviewDir(root, book.pin.runId, g.round, g.generation),
+						"receipt.json",
+					),
+					certificate.review,
+				);
+				timeline.push(
+					event(
+						relative(root, dir),
+						"review",
+						"historical certification",
+						`candidate ${certificate.verdict.candidateSha}; CI ${certificate.verdict.ciRunId}; report ${certificate.report.reportId}; execution ${certificate.execution.id}`,
+						null,
+						certificate.execution.attempt,
+						g.round,
+						g.generation,
+					),
+				);
+
+				for (const seat of certificate.review.seats)
+					timeline.push(
+						event(
+							relative(root, dir),
+							"review",
+							seat.seat,
+							`${seat.requested}; observed ${seat.observed ?? "unknown"}; ${seat.label}; tokens ${seat.tokens}`,
+							null,
+							certificate.execution.attempt,
+							g.round,
+							g.generation,
+						),
+					);
+			}
+		}
+
+		const published = book.published;
+
+		const certified = generations.find(
+			(g) => g.intent.digest === published?.promoted.digest,
+		)?.certification;
+
+		if (published !== null)
+			timeline.push(
+				event(
+					"claims",
+					"land",
+					"published PR",
+					`PR ${published.number}; historical certification ${certified?.verdict.candidateSha ?? "unavailable"}; recorded readiness ${published.readiness.kind}${published.readiness.kind === "not_ready" ? ` (${published.readiness.reason})` : ""}; working ${book.work.kind}`,
+					new Date(published.readiness.since).toISOString(),
+					null,
+					published.promoted.round,
+					published.promoted.generation,
+				),
+			);
+
+		const work = book.work;
+
+		const terminal =
+			work.kind === "terminal"
+				? work.terminal
+				: work.kind === "effect" && work.request.kind === "finish_pr"
+					? work.request.terminal
+					: null;
+
+		if (terminal?.kind === "merged") {
+			const matching = generations.find(
+				(g) => g.certification?.verdict.candidateSha === terminal.head,
+			);
+
+			timeline.push(
+				event(
+					"claims",
+					"land",
+					"actual merge",
+					`${terminal.mergeSha}; head ${terminal.head}; actor ${terminal.actor ?? "unknown"}; ${matching === undefined ? "owner override (no matching certification)" : "matching historical factory certification"}; recorded readiness ${terminal.readiness?.kind ?? "unknown"}`,
+					null,
+					null,
+					matching?.intent.round ?? null,
+					matching?.intent.generation ?? null,
+				),
+			);
+		}
+
+		for (const account of book.accounts) {
+			const e = account.execution;
+
+			const path = join(
+				stageRoot,
+				`${e.stage}-r${e.round}-${e.attempt}`,
+				"execution.json",
+			);
+
+			await stored(path, e);
+
+			if (account.spend.kind === "unknown" || account.settlement !== "settled")
+				io.gap(path, "execution settlement or usage unavailable");
+			timeline.push(
+				event(
+					relative(root, path),
+					e.stage,
+					"execution account",
+					`${account.settlement}; tokens ${account.spend.kind === "known" ? account.spend.tokens : `unknown (floor ${account.spend.floor})`}`,
+					null,
+					e.attempt,
+					e.round,
+					e.stage === "review" ? e.generation.generation : null,
+				),
+			);
+		}
+
+		if (candidateUsage(book) !== total)
+			io.gap(
+				claimPath,
+				"candidate accounting does not reconcile with retained receipt totals",
+			);
+	} else if (
+		claim?.marker?.v === 3 ||
+		claim?.status === "waiting" ||
+		(claim?.validation === undefined &&
+			["validate", "review", "land"].includes(claim?.stage ?? ""))
+	) {
+		io.gap(
+			claimPath,
+			"candidate book unavailable; certification and working generation unknown",
+		);
+		timeline.push(
+			event(
+				"claims",
+				"land",
+				"candidate evidence unavailable",
+				`PR ${claim?.marker?.pr ?? "unknown"}; selected public floor r${claim?.marker?.round ?? "unknown"}/g${claim?.marker?.handoff?.generation ?? "unknown"}; active execution unknown; no certification reconstructed`,
+			),
+		);
+
+		const path = join(
+			root,
+			"handoff",
+			runId,
+			"missing-evidence-observation.json",
+		);
+
+		if (claim?.marker?.pr != null) {
+			try {
+				await lstat(path);
+
+				const observed = objectOf(
+					parseJson((await io.text(path, FILE_CAP, true)) ?? ""),
+				);
+
+				const head = field(observed, "head");
+				const mergeSha = field(observed, "mergeSha");
+				const actor = fieldOf(observed, "actor");
+
+				if (
+					fieldOf(observed, "kind") !== "merged" ||
+					fieldOf(observed, "number") !== claim.marker.pr ||
+					head === null ||
+					!isGitSha(head) ||
+					mergeSha === null ||
+					!isGitSha(mergeSha) ||
+					(actor !== null &&
+						(actor !== String(actor) || !isLogin(String(actor))))
+				)
+					io.gap(path, "invalid missing-evidence merge observation");
+				else
+					timeline.push(
+						event(
+							relative(root, path),
+							"land",
+							"actual merge (evidence unavailable)",
+							`${mergeSha}; head ${head}; actor ${actor ?? "unknown"}; certification unavailable; accounting unresolved`,
+						),
+					);
+			} catch {
+				io.gap(path, "merge observation unavailable");
+			}
+		}
+	}
+
+	if (book === undefined && claim?.validation !== undefined) {
 		const state = claim.validation;
 
 		if (state.publication !== null)
@@ -677,7 +1024,10 @@ export async function readViewerRun(
 		}
 	}
 
-	if (claim?.stage === "review" || (claim?.round ?? 0) > 0) {
+	if (
+		book === undefined &&
+		(claim?.stage === "review" || (claim?.round ?? 0) > 0)
+	) {
 		for (let round = 0; round <= (claim?.round ?? 0); round++) {
 			if (round === (claim?.round ?? 0) && claim?.stage !== "review") continue;
 
@@ -810,29 +1160,40 @@ export async function readViewerRun(
 
 		return (
 			(a.round ?? 0) - (b.round ?? 0) ||
+			(a.generation ?? 0) - (b.generation ?? 0) ||
 			stageOrder.indexOf(a.stage) - stageOrder.indexOf(b.stage) ||
 			(a.attempt ?? 0) - (b.attempt ?? 0)
 		);
 	});
 
-	const terminal =
-		claim?.status !== undefined &&
-		[
-			"stage_passed",
-			"failed",
-			"released",
-			"needs_info",
-			"budget_exhausted",
-		].includes(claim.status ?? "");
+	const status = projection?.status ?? claim?.status ?? "unavailable";
+
+	const terminal = [
+		"stage_passed",
+		"failed",
+		"released",
+		"needs_info",
+		"budget_exhausted",
+		"landed",
+		"cancelled",
+	].includes(status);
 
 	return {
 		runId,
 		complete: terminal && io.gaps.length === 0,
-		status: claim?.status ?? "unavailable",
+		status,
 		issue,
 		gaps: io.gaps,
 		timeline,
-		usage: { total, parent, children, models, sessions, cost: "unavailable" },
+		usage: {
+			total,
+			accounted: book === undefined ? null : candidateUsage(book),
+			parent,
+			children,
+			models,
+			sessions,
+			cost: "unavailable",
+		},
 		children: childSessions,
 		gateway,
 	};

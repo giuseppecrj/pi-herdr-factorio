@@ -1994,6 +1994,8 @@ export class Orchestrator {
 		local: ConfirmedRecord,
 		ledger: CleanLedger,
 	): Promise<Marker | null> {
+		if (local.marker !== undefined) return local.marker;
+
 		const stored = await this.#input.store.read({
 			repo: this.#input.repo,
 			issue: local.issue,
@@ -2004,8 +2006,6 @@ export class Orchestrator {
 
 		const { receipt } = stored;
 		const read = latestFor(ledger, local.runId)?.marker;
-
-		if (local.marker !== undefined) return local.marker;
 
 		return markerOf(
 			{

@@ -27,6 +27,7 @@ import {
 import {
 	acquireLock,
 	fileRunFiles,
+	controllerCandidatePort,
 	HOLDER_FILE,
 	type ProcessTable,
 	parseStartTime,
@@ -7430,6 +7431,37 @@ describe("controller-only validate", () => {
 			assert.equal(book.priorTokens, limit === 5 ? 69 : 29);
 		});
 
+	it("still recovers an ordinary early-build marker as a bounded retry", async () => {
+		const f = world();
+		f.github.add(labeled(14));
+		f.executor.behaviors = [{ kind: "pass", usage: 10 }];
+		f.executor.acceptBehavior = { kind: "pass", usage: 7 };
+		f.executor.buildBehavior = { kind: "hang" };
+		const controller = f.start();
+		await once(controller);
+		await controller.tick();
+		const marker = parseMarker(f.github.markers(14).at(-1) ?? "");
+		assert.equal(marker.kind, "marker");
+
+		if (marker.kind !== "marker") throw new Error("marker");
+		assert.equal(marker.marker.v, 2);
+		assert.equal(marker.marker.stage, "build");
+		assert.equal(marker.marker.candidate, null);
+		const cold = world();
+		cold.github.add(
+			labeled(14, { comments: [...(f.github.issues.get(14)?.comments ?? [])] }),
+		);
+		const recovered = cold.start();
+		await recovered.tick();
+		assert.equal(recovered.state.runs.get(14)?.phase.kind, "retry_queued");
+		assert.equal(recovered.state.runs.get(14)?.attempt, 2);
+		assert.equal(cold.executor.launches.length, 0);
+		assert.equal(
+			cold.logs.some((entry) => entry.event === "validation_failed"),
+			false,
+		);
+	});
+
 	for (const privateState of [
 		"missing_claim",
 		"missing_book",
@@ -7527,18 +7559,38 @@ describe("controller-only validate", () => {
 		const port = f.executor.candidate;
 		assert.ok(port);
 		let observed = 0;
-		port.observeMissing = async (marker) => {
-			observed++;
-			assert.equal(marker.pr, 99);
+		const state = stateDir();
 
-			return {
-				kind: "merged",
-				number: 99,
-				head: sha("c".repeat(40)),
-				mergeSha: sha("e".repeat(40)),
-				actor: null,
-			};
-		};
+		port.observeMissing = controllerCandidatePort({
+			stateDir: state,
+			exec: async (command, args) => {
+				observed++;
+				assert.equal(command, "gh");
+				assert.equal(args[args.indexOf("--method") + 1], "GET");
+				assert.ok(args.includes(`repos/${repo}/pulls/99`));
+
+				return {
+					code: 0,
+					stderr: "",
+					stdout: JSON.stringify({
+						number: 99,
+						head: {
+							sha: "c".repeat(40),
+							ref: `factory/pr/14-${runOf(14).slice(0, 12)}`,
+							repo: { full_name: repo },
+						},
+						base: { ref: "main", repo: { full_name: repo } },
+						user: { login: BOT_LOGIN, type: "Bot" },
+						body: `<!-- factory:pr ${runOf(14)} -->`,
+						state: "closed",
+						draft: false,
+						merged: true,
+						merge_commit_sha: "e".repeat(40),
+						merged_by: null,
+					}),
+				};
+			},
+		}).observeMissing;
 
 		f.store.local = "disabled";
 		const issue = f.github.issues.get(14);
@@ -7555,6 +7607,38 @@ describe("controller-only validate", () => {
 		assert.equal(f.files.claims.get(runOf(14))?.usage, claim.usage);
 		assert.equal(f.files.claims.get(runOf(14))?.marker?.pr, 99);
 		assert.equal(f.files.claims.get(runOf(14))?.handoff, undefined);
+		assert.partialDeepStrictEqual(
+			JSON.parse(
+				readFileSync(
+					join(
+						state,
+						"handoff",
+						runOf(14),
+						"missing-evidence-observation.json",
+					),
+					"utf8",
+				),
+			),
+			{ kind: "merged", mergeSha: "e".repeat(40), actor: null },
+		);
+		const saved = f.files.claims.get(runOf(14));
+		assert.ok(saved?.marker);
+		assert.equal(await fileRunFiles(state).writeClaim(saved), true);
+		assert.deepEqual(
+			(await fileRunFiles(state).listClaims())[0]?.marker,
+			saved.marker,
+		);
+		f.store.records.clear();
+		issue.comments = [];
+		const missingAdmission = f.start();
+		await missingAdmission.tick();
+		assert.equal(
+			missingAdmission.state.runs.get(14)?.phase.kind,
+			"evidence_missing",
+		);
+		assert.equal(f.executor.launches.length, launches);
+		assert.equal(f.files.claims.get(runOf(14))?.seq, saved.seq);
+		assert.equal(f.files.claims.get(runOf(14))?.usage, saved.usage);
 		assert.ok(
 			f.logs.some(
 				(entry) =>

@@ -20,12 +20,21 @@ function table(headers: string[], rows: string[][]): string {
 
 function timeline(events: TimelineEvent[]) {
 	return table(
-		["When / source", "Stage", "Attempt", "Repair round", "Event", "Detail"],
+		[
+			"When / source",
+			"Stage",
+			"Attempt",
+			"Execution / evidence round",
+			"Generation",
+			"Event",
+			"Detail",
+		],
 		events.map((item) => [
 			item.at ?? `${item.source} (time unavailable)`,
 			item.stage,
 			String(item.attempt ?? "—"),
 			String(item.round ?? "—"),
+			String(item.generation ?? "—"),
 			item.event,
 			item.detail,
 		]),
@@ -55,7 +64,7 @@ export function renderRun(run: ViewerRun, view: string): string {
 	let content: string;
 
 	if (view === "usage")
-		content = `<h2>Token usage</h2><p>Receipt total: <strong>${run.usage.total}</strong> · parent ${run.usage.parent} · children ${run.usage.children} · spend <strong>unavailable</strong></p><p class="muted">Per-model splits below come from sessions; missing sessions leave a reconciliation gap, not zero spend.</p>${table(
+		content = `<h2>Token usage</h2><p>Receipt total: <strong>${run.usage.total}</strong> · parent ${run.usage.parent} · children ${run.usage.children} · spend <strong>unavailable</strong></p><p>Candidate accounting high-water: <strong>${run.usage.accounted ?? "unavailable"}</strong></p><p class="muted">Per-model splits below come from sessions; missing sessions leave a reconciliation gap, not zero spend.</p>${table(
 			[
 				"Model",
 				"Parent session tokens",
@@ -71,11 +80,22 @@ export function renderRun(run: ViewerRun, view: string): string {
 				item.cost,
 			]),
 		)}<h2>Sessions</h2>${table(
-			["Session", "Parent", "Stage", "Tokens"],
+			[
+				"Session",
+				"Parent",
+				"Stage",
+				"Attempt",
+				"Round",
+				"Generation",
+				"Tokens",
+			],
 			run.usage.sessions.map((item) => [
 				item.id,
 				item.parent ?? "root",
 				item.stage,
+				String(item.attempt ?? "—"),
+				String(item.round ?? "—"),
+				String(item.generation ?? "—"),
 				String(item.tokens),
 			]),
 		)}`;
@@ -87,6 +107,8 @@ export function renderRun(run: ViewerRun, view: string): string {
 				"Time",
 				"Stage",
 				"Attempt",
+				"Round",
+				"Generation",
 				"Decision",
 				"Destination",
 				"Method",
@@ -97,6 +119,8 @@ export function renderRun(run: ViewerRun, view: string): string {
 				item.at,
 				item.stage,
 				String(item.attempt ?? "—"),
+				String(item.round ?? "—"),
+				String(item.generation ?? "—"),
 				item.decision,
 				item.destination,
 				item.method,
@@ -105,7 +129,7 @@ export function renderRun(run: ViewerRun, view: string): string {
 			]),
 		)}`;
 	else
-		content = `<h2>Timeline</h2><p class="muted">Timestamped events are chronological. Events without timestamps follow in stage and attempt order. Receipt settlement is not a fabricated session event.</p>${timeline(run.timeline)}<h2>Issue snapshot (untrusted text)</h2><pre>${escapeHtml(JSON.stringify(run.issue, null, 2))}</pre>`;
+		content = `<h2>Timeline</h2><p class="muted">Timestamped events are chronological. Events without timestamps follow in round, generation, stage and attempt order. Selected evidence generation and active execution round are separate. Historical certification does not imply current readiness. Receipt settlement is not a fabricated session event.</p>${timeline(run.timeline)}<h2>Issue snapshot (untrusted text)</h2><pre>${escapeHtml(JSON.stringify(run.issue, null, 2))}</pre>`;
 
 	return page(
 		"Run",

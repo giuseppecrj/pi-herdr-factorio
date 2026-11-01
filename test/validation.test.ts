@@ -54,6 +54,7 @@ import {
 } from "../src/build.ts";
 import {
 	generationIntent,
+	handoffCandidate,
 	candidateGenerations,
 	candidateUsage,
 } from "../src/handoff.ts";
@@ -991,25 +992,53 @@ describe("bound validation verdicts", () => {
 });
 
 describe("generation-aware validation cleanup", () => {
-	for (const terminal of [false, true])
-		it(`sweeps bounded archives and pending current state without mutating the book (terminal=${terminal})`, async () => {
+	for (const mode of ["active", "terminal", "finish_pending"])
+		it(`sweeps bounded archives and pending current state without mutating the book (${mode})`, async () => {
 			const root = mkdtempSync(join(tmpdir(), "factory-cleanup-generations-"));
 
 			try {
 				const fixture = candidateLifecycleFixture();
+				const terminal = mode !== "active";
 
-				const book = terminal
-					? {
-							...fixture,
-							work: {
-								kind: "terminal" as const,
-								terminal: {
-									kind: "failed" as const,
-									reason: "validation_failed" as const,
-								},
-							},
-						}
-					: fixture;
+				const publishedHead =
+					fixture.history[0]?.certification?.verdict.candidateSha;
+
+				assert.ok(publishedHead && isGitSha(publishedHead));
+
+				const pending = handoffCandidate(fixture, {
+					kind: "observed",
+					now: 201,
+					main: null,
+					pr: {
+						kind: "merged",
+						number: 5,
+						head: publishedHead,
+						mergeSha: fixture.pin.originalBase,
+						actor: null,
+					},
+					executionAllowed: false,
+					capacityAvailable: false,
+					eligibility: "withdrawn",
+					readiness: { kind: "unavailable" },
+				}).state;
+
+				assert.equal(pending.kind, "selected");
+
+				const book =
+					mode === "finish_pending"
+						? pending
+						: terminal
+							? {
+									...fixture,
+									work: {
+										kind: "terminal" as const,
+										terminal: {
+											kind: "failed" as const,
+											reason: "validation_failed" as const,
+										},
+									},
+								}
+							: fixture;
 
 				const pin = book.pin;
 				const files = fileRunFiles(root);
@@ -1051,7 +1080,7 @@ describe("generation-aware validation cleanup", () => {
 						issue: pin.issue,
 						eventId: "1",
 						seq: 1,
-						status: terminal ? "failed" : "running",
+						status: mode === "terminal" ? "failed" : "running",
 						stage: "validate",
 						attempt: 1,
 						usage: candidateUsage(book),

@@ -3,7 +3,8 @@ import { join, resolve } from "node:path";
 import { isDigest, type Digest, runIdOf } from "./run.ts";
 import { isRepoSlug, type RepoSlug } from "./workflow.ts";
 import type { JsonValue } from "./tickets.ts";
-import { parseCandidateState } from "./handoff.ts";
+import { parseCandidateState, candidateProjection } from "./handoff.ts";
+import { parseMarker, MARKER_PREFIX } from "./markers.ts";
 
 export const ATTENTION_KINDS = [
 	"question_asked",
@@ -51,6 +52,7 @@ type AttentionClaim = Readonly<{
 	readiness: "ready" | "not_ready" | null;
 	reason: string | null;
 	terminal: boolean;
+	evidenceMissing: boolean;
 }>;
 
 function objectOf(
@@ -169,34 +171,68 @@ function parseClaim(
 			book.pin.repo !== repo)
 	)
 		return null;
+	const rawMarker = claim?.marker;
+
+	const parsedMarker =
+		rawMarker === undefined
+			? null
+			: parseMarker(`${MARKER_PREFIX}${JSON.stringify(rawMarker)} -->`);
+
+	if (
+		parsedMarker !== null &&
+		(parsedMarker.kind !== "marker" ||
+			parsedMarker.marker.runId !== runId ||
+			parsedMarker.marker.repo !== repo ||
+			parsedMarker.marker.issue !== issue ||
+			parsedMarker.marker.eventId !== eventId ||
+			parsedMarker.marker.status !== status ||
+			parsedMarker.marker.seq !== seq)
+	)
+		return null;
+	const marker = parsedMarker?.kind === "marker" ? parsedMarker.marker : null;
+
+	const evidenceMissing =
+		book === null &&
+		(marker?.v === 3 ||
+			status === "waiting" ||
+			["validate", "review", "land"].includes(stage));
+
+	const projection = book === null ? null : candidateProjection(book);
 	const published = book?.kind === "selected" ? book.published : null;
 	const work = book?.kind === "selected" ? book.work : null;
 	const readiness = published?.readiness;
-	const pr = published?.number ?? null;
+	const pr = published?.number ?? marker?.pr ?? null;
 	const ready = readiness?.kind;
-	const enteredAt = countOf(claim?.enteredAt) ?? readiness?.since ?? null;
 
-	const reason =
-		readiness?.kind === "not_ready"
+	const enteredAt = evidenceMissing
+		? null
+		: (countOf(claim?.enteredAt) ?? readiness?.since ?? null);
+
+	const reason = evidenceMissing
+		? "candidate_book_unavailable"
+		: readiness?.kind === "not_ready"
 			? readiness.reason
 			: work?.kind === "held"
 				? work.reason
-				: null;
+				: published !== null && work?.kind !== "waiting"
+					? "working_generation"
+					: null;
 
 	return {
 		runId,
 		issue,
 		repo,
 		seq,
-		status,
-		stage,
+		status: projection?.status ?? status,
+		stage: projection?.stage ?? stage,
 		enteredAt,
 		pr,
 		readiness: ready === "ready" || ready === "not_ready" ? ready : null,
 		reason,
 		terminal: ["released", "stage_passed", "landed", "cancelled"].includes(
-			status,
+			projection?.status ?? status,
 		),
+		evidenceMissing,
 	};
 }
 
@@ -206,7 +242,15 @@ function groupOf(
 ): AttentionKind | null {
 	if (claim.terminal) return null;
 
-	if (claim.pr !== null && claim.readiness === "not_ready") return "blocked";
+	if (
+		claim.pr !== null &&
+		(claim.readiness === "not_ready" ||
+			claim.status !== "waiting" ||
+			claim.evidenceMissing)
+	)
+		return "blocked";
+
+	if (claim.evidenceMissing && claim.status !== "failed") return "blocked";
 
 	if (claim.status === "waiting" && claim.pr !== null) return "pr_review";
 
@@ -283,6 +327,8 @@ export async function readAttention(input: {
 		}
 
 		for (const claim of newest.values()) {
+			if (claim.evidenceMissing)
+				gaps.push(`candidate_book_unavailable:${claim.runId.slice(0, 12)}`);
 			let answered = false;
 
 			if (claim.stage === "admit" || claim.stage === "specify") {
