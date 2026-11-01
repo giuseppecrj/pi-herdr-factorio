@@ -164,7 +164,7 @@ The same VM-local attention reader serves CLI status and the registered extensio
 
 ## Feedback and cadence
 
-- **PR feedback, planned in F10.** A review or comment on an open factory PR, from an account with write access, is intended to trigger address-pr-comments (mnapoli, MIT) as a build round. F09a instead leaves post-publication failures open, not-ready, and observed. It cannot push or reply; the controller does both. Feedback on a merged PR becomes a new `factory:proposed` issue.
+- **PR feedback, planned in F10.** A review or comment on an open factory PR, from an account with write access, is intended to trigger address-pr-comments (mnapoli, MIT) as a build round. The planned F10 skill cannot push or reply. Only the controller does both in that planned loop. F10 also turns feedback on a merged PR into a new `factory:proposed` issue. F09a has no PR-comment repair loop and leaves post-publication failures open, not-ready, and observed.
 - **Scheduled jobs**, weekly at first. Each files `factory:proposed` issues and changes no code:
   - improve-codebase-architecture (Pocock, MIT) with codebase-design and domain-modeling;
   - security-review over the whole repo;

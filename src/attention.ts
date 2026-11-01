@@ -346,9 +346,7 @@ export async function readAttention(input: {
 						isDigest(answers);
 
 					if (!answered) gaps.push(`invalid_link:${claim.runId.slice(0, 12)}`);
-				} catch {
-					/* A run without a clarification link is ordinary intake. */
-				}
+				} catch {}
 			}
 
 			const kind = groupOf(claim, answered);

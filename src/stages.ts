@@ -28,7 +28,6 @@ export const STAGE_ORDER = [
 	"land",
 ] as const satisfies readonly Stage[];
 
-/** Only the controller uses GitHub; model stages run in the sandbox. */
 export type StageProfile = {
 	modelAccess: "none" | "judge" | "full";
 	runsIn: "controller" | "sandbox";
