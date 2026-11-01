@@ -2629,13 +2629,16 @@ async function prepareCandidateReview(
 
 		const captured = reviewInputRecord({
 			...expected,
-			prompt: candidateReviewPrompt(
-				bound.contract,
-				patch.patch,
-				patch.receipt.changedPaths,
-				suite.suite.scenarios.filter((s) => verdict.unjudged.includes(s.id)),
-				workflow.guidance.stages.review ?? "",
-			),
+			prompt: candidateReviewPrompt({
+				contract: bound.contract,
+				diff: patch.patch,
+				paths: patch.receipt.changedPaths,
+				judges: suite.suite.scenarios.filter((s) =>
+					verdict.unjudged.includes(s.id),
+				),
+				guidance: workflow.guidance.stages.review ?? "",
+				verdict,
+			}),
 		});
 
 		if (
