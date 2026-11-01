@@ -17,7 +17,12 @@ import fs, {
 } from "node:fs";
 import { request } from "node:http";
 import { syncBuiltinESMExports } from "node:module";
-import { fileRunFiles } from "../../server/controller.ts";
+import { fileRunFiles, serveLoop } from "../../server/controller.ts";
+import { fileAdmissionStore, admitTicket } from "../../src/admission.ts";
+import { handoffCandidate, parseCandidateState } from "../../src/handoff.ts";
+import { candidateBranch } from "../../src/publication.ts";
+import { ReviewEvidenceUnavailable } from "../../src/review.ts";
+import { FakeGitHub, fakeIssue, labelEvent } from "../fake-ticket-adapter.ts";
 import {
 	type Contract,
 	contractBytes,
@@ -88,7 +93,11 @@ import {
 	type ModelId,
 	parseWorkflow,
 } from "../../src/workflow.ts";
-import type { StageLaunchInput } from "../../src/orchestrator.ts";
+import {
+	Orchestrator,
+	type StageExecutor,
+	type StageLaunchInput,
+} from "../../src/orchestrator.ts";
 import * as sandboxModule from "../../server/sandbox.ts";
 import {
 	collectPatch,
@@ -3241,8 +3250,9 @@ describe("multi-seat candidate review", () => {
 	async function setup(
 		security: "clean" | "fallback" | "refused" | "malformed" = "clean",
 		attempt: 1 | 2 = 1,
+		controller = false,
 	) {
-		const fixture = await preparedReviewFixture(attempt);
+		const fixture = await preparedReviewFixture(attempt, false, controller);
 		const dir = fixture.dir;
 		const calls: string[] = [];
 		const hosts: Harness[] = [];
@@ -3360,6 +3370,315 @@ describe("multi-seat candidate review", () => {
 
 		return run;
 	}
+
+	for (const mode of [
+		"resume",
+		"missing",
+		"corrupt",
+		"old-v2",
+		"prepare-refusal",
+	] as const)
+		it(`recovers actual partial-seat accounting through the controller (${mode}, in-process interruption)`, async (t) => {
+			const h = await setup("clean", 1, true);
+
+			try {
+				const f = h.fixture;
+				const { execution } = f;
+				const capturePath = join(h.dir, "review.json");
+				const captured = readFileSync(capturePath);
+
+				const interrupted = new Error(
+					"controlled interruption before second host",
+				);
+
+				await assert.rejects(
+					sandboxModule.runReview(h.run, h.dir, (dir, tools) => {
+						if (dir.endsWith("/security-review")) throw interrupted;
+
+						return h.create(dir, tools);
+					}),
+					(error: Error) => error === interrupted,
+				);
+				assert.equal(h.hosts.length, 1);
+				assert.equal(h.calls.length, 1);
+				assert.equal(existsSync(join(h.dir, "security-review")), false);
+				assert.equal(existsSync(join(h.dir, "receipt.json")), false);
+				assert.equal(existsSync(join(h.dir, "output.txt")), false);
+
+				const outputArgs = {
+					runId: execution.runId,
+					stage: "review" as const,
+					attempt: 1,
+					round: 0,
+					execution,
+					workflowSha: execution.workflowSha,
+					workflowDigest: execution.workflowDigest,
+				};
+
+				assert.deepEqual(await f.executor.output(outputArgs), {
+					kind: "pending",
+				});
+				assert.equal(await f.executor.spent(outputArgs), 10);
+				assert.deepEqual(
+					await sandboxModule.sandboxExecutor(f.config).prepareReview!(f.args),
+					f.prepared,
+				);
+				assert.deepEqual(readFileSync(capturePath), captured);
+				assert.ok(f.prepared.input.files.size > 0);
+				assert.deepEqual(f.prepared.input.scenarios, ["S1"]);
+
+				const github = new FakeGitHub();
+				github.add(
+					fakeIssue(1, {
+						timeline: [
+							labelEvent({
+								id: 1,
+								at: f.contract.snapshot.eventAt,
+								actor: "giuseppecrj",
+							}),
+						],
+					}),
+				);
+				const store = fileAdmissionStore(f.state);
+
+				const admission = await admitTicket({
+					exec: github.exec,
+					env: () => "/home/exedev",
+					repo: f.contract.base.repo,
+					issue: 1,
+					allowlist: [f.contract.base.repo],
+					store,
+				});
+
+				assert.equal(admission.decision, "admitted");
+
+				const started = handoffCandidate(f.book, {
+					kind: "effect_completed",
+					completion: {
+						kind: "launch_review",
+						request: { kind: "launch_review", execution },
+						started: true,
+					},
+				}).state;
+
+				assert.equal(
+					await f.files.writeClaim({
+						runId: execution.runId,
+						issue: 1,
+						eventId: "1",
+						seq: 1,
+						status: "running",
+						stage: "review",
+						attempt: 1,
+						round: 0,
+						usage: 20,
+						handoff: mode === "prepare-refusal" ? f.book : started,
+					}),
+					true,
+				);
+
+				if (mode === "missing") rmSync(capturePath);
+
+				if (mode === "corrupt") writeFileSync(capturePath, "{");
+
+				if (mode === "old-v2") {
+					const record = objectOf(parseJson(captured.toString()));
+					assert.ok(record);
+					writeFileSync(
+						capturePath,
+						JSON.stringify({
+							version: 2,
+							execution,
+							binding: f.prepared.input.binding,
+							seats: f.prepared.input.seats,
+							inputDigest: record.inputDigest,
+						}),
+					);
+				}
+
+				if (mode !== "resume" && mode !== "prepare-refusal")
+					await assert.rejects(
+						sandboxModule.runReview(h.run, h.dir, h.create),
+						(error: Error) =>
+							error instanceof ReviewEvidenceUnavailable &&
+							error.message === "review_execution_binding",
+					);
+
+				let pendingRead = false,
+					preparationRefused = false;
+
+				const launches: StageLaunchInput[] = [];
+
+				const done: Promise<
+					Awaited<ReturnType<typeof sandboxModule.runReview>>
+				>[] = [];
+
+				const executor: StageExecutor = {
+					...f.executor,
+					preflight: async () => true,
+					recover: async () => {},
+					reconciled: async () => true,
+					output: async (args) => {
+						const output = await f.executor.output(args);
+
+						if (output instanceof Object && output.kind === "pending")
+							pendingRead = true;
+
+						return output;
+					},
+					prepareReview: async (args) => {
+						if (mode === "prepare-refusal") {
+							assert.equal(pendingRead, true);
+							rmSync(capturePath);
+						}
+
+						try {
+							return await f.executor.prepareReview!(args);
+						} catch (error) {
+							assert.ok(error instanceof ReviewEvidenceUnavailable);
+							assert.equal(error.message, "review_execution_binding");
+							preparationRefused = true;
+							throw error;
+						}
+					},
+					launch: async (input) => {
+						launches.push(input);
+						const result = sandboxModule.runReview(input, h.dir, h.create);
+						done.push(result);
+
+						return { kind: "started", done: result };
+					},
+					candidate: {
+						observe: async (state, now) => ({
+							kind: "observed",
+							now,
+							main: f.contract.base.sha,
+							pr: { kind: "none" },
+							eligibility: "ready",
+							readiness:
+								state.kind === "selected" && state.current.report
+									? {
+											kind: "current",
+											head: state.current.report.candidateSha,
+											report: state.current.report,
+										}
+									: { kind: "unavailable" },
+						}),
+						patch: async () => f.kept,
+						execute: async () => null,
+					},
+				};
+
+				const make = () =>
+					new Orchestrator({
+						exec: github.exec,
+						env: () => "/home/exedev",
+						repo: f.contract.base.repo,
+						store,
+						files: f.files,
+						executor,
+						clock: { now: () => Date.parse("2026-10-31T02:00:00Z") },
+						scope: [1],
+						log: () => {},
+					});
+
+				const controller = make();
+				await controller.tick();
+				await Promise.all(done);
+				await controller.tick();
+				await controller.tick();
+				const [claim] = await f.files.listClaims();
+				assert.ok(claim);
+
+				const book = parseCandidateState(
+					JSON.parse(JSON.stringify(claim.handoff)),
+				);
+
+				assert.ok(book?.kind === "selected");
+				assert.equal(book.accounts.length, 1);
+				assert.deepEqual(book.accounts[0]?.execution, execution);
+				assert.equal(book.accounts[0]?.execution.attempt, 1);
+
+				if (mode === "resume") {
+					assert.equal(launches.length, 1);
+					assert.equal(launches[0]?.settings.maxTokens, 29_990);
+					assert.equal(launches[0]?.remainingRunTokens, 499_970);
+					assert.equal(h.hosts.length, 3);
+					assert.equal(h.calls.length, 3);
+					assert.equal(claim.usage, 50);
+					assert.ok(book.current.certification);
+					assert.ok(
+						book.work.kind === "effect" && book.work.request.kind === "open_pr",
+					);
+					assert.equal(await f.executor.spent(outputArgs), 30);
+					const output = await f.executor.output(outputArgs);
+					assert.ok(output instanceof Object && output.kind === "review");
+					assert.deepEqual(readFileSync(capturePath), captured);
+					const launch = launches[0];
+					assert.ok(launch);
+					assert.deepEqual(await f.executor.output(outputArgs), output);
+					rmSync(join(h.dir, "receipt.json"));
+					const replay = await sandboxModule.runReview(launch, h.dir, h.create);
+					assert.equal(replay.kind, "passed");
+					assert.equal(replay.usage, 0);
+					assert.equal(replay.receipt.usage.total, 30);
+				} else {
+					assert.equal(launches.length, 0);
+					assert.equal(h.hosts.length, 1);
+					assert.equal(h.calls.length, 1);
+					assert.equal(claim.usage, 30);
+					assert.ok(book.work.kind === "held");
+					assert.equal(book.work.reason, "evidence_unavailable");
+					assert.deepEqual(book.accounts[0]?.spend, {
+						kind: "unknown",
+						floor: 10,
+					});
+					assert.equal(await f.executor.spent(outputArgs), 10);
+					assert.equal(book.accounts[0]?.settlement, "uncertain");
+					assert.equal(preparationRefused, mode === "prepare-refusal");
+				}
+
+				const stop = new AbortController();
+				await serveLoop({
+					orchestrator: controller,
+					stateDir: f.state,
+					signal: stop.signal,
+					log: () => {},
+					sleep: async () => stop.abort(),
+				});
+				await make().tick();
+				const [final] = await f.files.listClaims();
+				assert.ok(final);
+
+				const finalBook = parseCandidateState(
+					JSON.parse(JSON.stringify(final.handoff)),
+				);
+
+				assert.ok(finalBook?.kind === "selected");
+				assert.deepEqual(finalBook.accounts, book.accounts);
+				assert.deepEqual(finalBook.work, book.work);
+				assert.equal(final.usage, claim.usage);
+				assert.equal(h.hosts.length, mode === "resume" ? 3 : 1);
+				assert.equal(h.calls.length, mode === "resume" ? 3 : 1);
+				assert.ok(f.cleanupRequests.length > 0);
+
+				for (const request of f.cleanupRequests)
+					assert.deepEqual(request, {
+						command: "gh",
+						args: [
+							"api",
+							"--method",
+							"GET",
+							`repos/${f.contract.base.repo}/git/ref/heads/${candidateBranch(1, execution.runId, 0, 0)}`,
+						],
+					});
+				t.diagnostic(
+					`actual runner/controller ${mode}; same attempt 1; prior 20; seat 10; final ${final.usage}; actual model requests 0; controlled in-process interruption, not native crash`,
+				);
+			} finally {
+				h.close();
+			}
+		});
 
 	it("reads the prepared v3 capture and resumes identical inputs from completed seats without an aggregate receipt", async (t) => {
 		const h = await setup();
@@ -3554,6 +3873,16 @@ describe("multi-seat candidate review", () => {
 
 			const cases: [string, string][] = [
 				["legacy seats only", JSON.stringify({ seats: prepared.input.seats })],
+				[
+					"complete unfinished v2 digest-only record",
+					JSON.stringify({
+						version: 2,
+						execution: run.execution,
+						binding: prepared.input.binding,
+						seats: prepared.input.seats,
+						inputDigest: fields.inputDigest,
+					}),
+				],
 				["invalid JSON", "{"],
 				["null execution", JSON.stringify({ ...fields, execution: null })],
 				[
@@ -3575,7 +3904,20 @@ describe("multi-seat candidate review", () => {
 				writeFileSync(path, changed);
 				await assert.rejects(
 					sandboxModule.runReview(run, h.dir, h.create),
-					{ message: "review_execution_binding" },
+					(error: Error) =>
+						error instanceof ReviewEvidenceUnavailable &&
+						error.message === "review_execution_binding",
+					name,
+				);
+				assert.equal(
+					await h.fixture.executor.spent({
+						runId: h.fixture.execution.runId,
+						stage: "review",
+						attempt: 1,
+						round: 0,
+						execution: h.fixture.execution,
+					}),
+					30,
 					name,
 				);
 				assert.equal(h.hosts.length, 3, name);

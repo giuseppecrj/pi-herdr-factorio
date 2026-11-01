@@ -37,6 +37,11 @@ import { candidateBranch } from "../src/publication.ts";
 import { dispatchNonce, type ValidationState } from "../src/validation.ts";
 import type { PatchReceipt } from "../src/build.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
+import {
+	fakeIssue,
+	MAIN_SHA,
+	TRUSTED_WORKFLOW,
+} from "./fake-ticket-adapter.ts";
 
 export async function withLocalArtifactDownload<T>(
 	run: (root: string) => Promise<T>,
@@ -358,14 +363,23 @@ export function candidateLifecycleFixture() {
 	return state;
 }
 
-export async function preparedReviewFixture(attempt: 1 | 2 = 1, large = false) {
+export async function preparedReviewFixture(
+	attempt: 1 | 2 = 1,
+	large = false,
+	controller = false,
+) {
 	const root = mkdtempSync(join(tmpdir(), "factory-prepared-review-"));
 
 	const state = join(root, "state"),
 		base = join(root, "base"),
 		work = join(root, "work");
 
-	const workflow = `---\nrepository: ${repo}\n---\n## review\nReview the candidate. Café.\n`;
+	const workflow = controller
+		? TRUSTED_WORKFLOW
+		: `---\nrepository: ${repo}\n---\n## review\nReview the candidate. Café.\n`;
+
+	const baseSha = controller ? MAIN_SHA : admissionPin.originalBase;
+	assert.ok(isGitSha(baseSha));
 	mkdirSync(join(base, ".github/factory"), { recursive: true });
 	mkdirSync(join(base, "src"));
 	writeFileSync(join(base, ".github/factory/WORKFLOW.md"), workflow);
@@ -379,15 +393,22 @@ export async function preparedReviewFixture(attempt: 1 | 2 = 1, large = false) {
 			);
 	cpSync(base, work, { recursive: true });
 	writeFileSync(join(work, "src/a.ts"), "export const value = 1;");
-	const runId = digestOf("prepared review fixture");
+
+	const runId = controller
+		? runIdOf({ repo: admissionPin.repo, issue: 1, eventId: "1" })
+		: digestOf("prepared review fixture");
+
+	const issue = fakeIssue(1);
 
 	const contract: Contract = {
 		version: 1,
 		runId,
 		issue: 1,
-		base: { repo: admissionPin.repo, sha: admissionPin.originalBase },
+		base: { repo: admissionPin.repo, sha: baseSha },
 		snapshot: {
-			digest: digestOf("snapshot"),
+			digest: controller
+				? digestOf(JSON.stringify([issue.title, issue.body]))
+				: digestOf("snapshot"),
 			source: "unedited",
 			eventId: "1",
 			eventAt: "2026-10-31T00:00:00Z",
@@ -458,6 +479,9 @@ export async function preparedReviewFixture(attempt: 1 | 2 = 1, large = false) {
 
 	const verdict = {
 		...passingVerdict(patch.patchDigest),
+		originalBase: baseSha,
+		baseSha,
+		gateSha: baseSha,
 		acceptanceDigest: suite.receipt.acceptanceDigest,
 		unjudged: ["S1"],
 	};
@@ -467,6 +491,8 @@ export async function preparedReviewFixture(attempt: 1 | 2 = 1, large = false) {
 			...admissionPin,
 			runId,
 			issue: 1,
+			originalBase: baseSha,
+			workflowSha: baseSha,
 			workflowDigest: digestOf(workflow),
 			contractDigest: digest,
 			acceptanceDigest: suite.receipt.acceptanceDigest,
@@ -541,14 +567,30 @@ export async function preparedReviewFixture(attempt: 1 | 2 = 1, large = false) {
 		{ cwd: base },
 	);
 
+	const cleanupRequests: { command: string; args: readonly string[] }[] = [];
+
 	const config = {
 		stateDir: state,
-		exec: async () => {
-			throw new Error("external exec forbidden");
+		exec: async (command: string, args: readonly string[]) => {
+			cleanupRequests.push({ command, args });
+			assert.equal(command, "gh");
+			assert.deepEqual(args, [
+				"api",
+				"--method",
+				"GET",
+				`repos/${repo}/git/ref/heads/${candidateBranch(1, runId, 0, 0)}`,
+			]);
+
+			return { code: 1, stdout: "", stderr: "HTTP 404: Not Found" };
 		},
 		log: () => {},
 		xdgRuntimeDir: join(root, "xdg"),
-		fetchTarball: async () => archive,
+		fetchTarball: async (requestedRepo: string, ref: string) => {
+			assert.equal(requestedRepo, repo);
+			assert.equal(ref, baseSha);
+
+			return archive;
+		},
 	};
 
 	const executor = sandboxExecutor(config);
@@ -572,7 +614,10 @@ export async function preparedReviewFixture(attempt: 1 | 2 = 1, large = false) {
 		execution,
 		prepared,
 		executor,
+		contract,
+		kept,
 		config,
+		cleanupRequests,
 		args,
 		dir: join(state, "stages", runId, `review-r0-${attempt}`),
 		close: () => rmSync(root, { recursive: true, force: true }),

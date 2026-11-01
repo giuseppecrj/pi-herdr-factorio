@@ -6,6 +6,7 @@ import {
 	blocksReview,
 	REVIEW_MAX_TOKENS,
 	REPAIR_BUILD_MAX_TOKENS,
+	ReviewEvidenceUnavailable,
 	reviewCandidate,
 	type ReviewInput,
 	type SeatReceipt,
@@ -69,9 +70,12 @@ async function checkReviewTree(mode: string) {
 		const pin = {
 			workflowSha: mode === "workflow-sha-mismatch" ? certifiedSha : sha,
 			workflowDigest:
-				mode === "workflow-digest-mismatch"
+				mode === "workflow-digest-mismatch" ||
+				mode === "workflow-execution-pin-disagreement"
 					? digestOf("different workflow")
-					: digestOf(workflow),
+					: mode === "workflow-invalid"
+						? digestOf("not a workflow")
+						: digestOf(workflow),
 		};
 
 		writeFileSync(join(base, ".github/factory/WORKFLOW.md"), workflow, {
@@ -192,16 +196,19 @@ async function checkReviewTree(mode: string) {
 				runId,
 				repo,
 				issue: 1,
-				originalBase: sha,
-				workflowSha: sha,
-				workflowDigest: digestOf(workflow),
+				originalBase: pin.workflowSha,
+				workflowSha: pin.workflowSha,
+				workflowDigest:
+					mode === "workflow-execution-pin-disagreement"
+						? digestOf(workflow)
+						: pin.workflowDigest,
 				contractDigest: digest,
 				acceptanceDigest: stored.receipt.acceptanceDigest,
 				maxTokens: 500_000,
 				maxReviewAttempts: 3,
 			},
-			kept.receipt,
-			verdict,
+			{ ...kept.receipt, baseSha: pin.workflowSha },
+			{ ...verdict, originalBase: pin.workflowSha },
 		);
 
 		assert.equal(
@@ -341,7 +348,6 @@ async function checkReviewTree(mode: string) {
 
 		if (mode === "workflow-invalid") {
 			writeFileSync(pinnedPath, "not a workflow");
-			pin.workflowDigest = digestOf("not a workflow");
 		}
 
 		if (mode === "uncached") {
@@ -366,17 +372,21 @@ async function checkReviewTree(mode: string) {
 					execution,
 					...pin,
 				}),
-				new RegExp(
-					mode === "workflow-unavailable"
-						? "^Error: workflow_checkout$"
-						: [
-									"workflow-invalid",
-									"workflow-sha-mismatch",
-									"workflow-digest-mismatch",
-								].includes(mode)
-							? "^Error: review_binding$"
-							: "^Error: workflow_mismatch$",
-				),
+				(error: Error) => {
+					assert.ok(error instanceof ReviewEvidenceUnavailable);
+					assert.equal(
+						error.message,
+						mode === "workflow-unavailable"
+							? "workflow_checkout"
+							: mode === "workflow-invalid"
+								? "workflow_invalid"
+								: mode === "workflow-execution-pin-disagreement"
+									? "review_binding"
+									: "workflow_mismatch",
+					);
+
+					return true;
+				},
 			);
 			assert.equal(
 				readFileSync(join(pristine, "value.ts"), "utf8"),
@@ -634,6 +644,7 @@ for (const mode of [
 	"workflow-unavailable",
 	"workflow-sha-mismatch",
 	"workflow-digest-mismatch",
+	"workflow-execution-pin-disagreement",
 ])
 	it(`prepares review from the certified base (${mode}) while preserving the repair base`, () =>
 		checkReviewTree(mode));
