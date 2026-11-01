@@ -106,6 +106,11 @@ import {
 	finishPatch,
 } from "../../src/build.ts";
 import { digestOf } from "../../src/run.ts";
+import {
+	ACCEPTANCE_SKILLS,
+	ACCEPTANCE_TOOLS,
+	acceptancePrompt,
+} from "../../src/accept.ts";
 import { preparedReviewFixture } from "../helpers.ts";
 import { manifestDigest } from "../../server/sandbox/manifest.ts";
 
@@ -3138,6 +3143,176 @@ describe("stage output capture", () => {
 });
 
 describe("stage skills", () => {
+	it("transports acceptance evaluation context through the executor RPC prompt", async (t) => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-accept-context-"));
+		t.after(() => rmSync(dir, { recursive: true, force: true }));
+		const root = join(dir, "root");
+		const stateDir = join(dir, "state");
+		mkdirSync(join(stateDir, "stages", RUN), { recursive: true });
+		const staging = join(root, "staging");
+		const skill = "Map every contract criterion to a scenario ID.\n";
+		const skillPath = "skills/acceptance/SKILL.md";
+		mkdirSync(join(staging, "skills/acceptance"), { recursive: true });
+		writeFileSync(join(staging, skillPath), skill);
+		assert.doesNotMatch(skill, /exported evaluation tree|\.git|npm run check/);
+		const hash = await manifestDigest(staging);
+		assert.ok(hash);
+		const bundle = join(root, `assets-${hash}`);
+		fs.renameSync(staging, bundle);
+		symlinkSync(`assets-${hash}`, join(root, "current"));
+
+		const repo = "owner/repo";
+		const sha = "a".repeat(40);
+		assert.ok(isRepoSlug(repo) && isGitSha(sha));
+
+		const contract: Contract = {
+			version: 1,
+			runId: digest(RUN),
+			issue: 1,
+			base: { repo, sha },
+			snapshot: {
+				digest: digestOf("snapshot"),
+				source: "unedited",
+				eventId: "1",
+				eventAt: "2026-10-30T00:00:00Z",
+			},
+			link: null,
+			summary: "Return the package version",
+			behavior: ["Return the package version"],
+			exclusions: [],
+			acceptance: [{ id: "A1", text: "Returns version 0.1.0" }],
+			compatibility: [],
+			limits: [],
+			files: ["src/version.ts"],
+			evidence: [],
+		};
+
+		const prompt = acceptancePrompt({
+			contract,
+			files: ["src/version.ts"],
+			inlined: [
+				{
+					path: "src/version.ts",
+					text: "export const version = '0.1.0';",
+					totalLines: 1,
+				},
+			],
+			guidance: {
+				general: "Use observable behavior.",
+				stages: { accept: "Keep checks contract-bound." },
+			},
+		});
+
+		const h = harness([
+			(command, pi) => {
+				if (command.type === "get_last_assistant_text")
+					pi.emit({
+						type: "response",
+						id: command.id ?? "",
+						command: "get_last_assistant_text",
+						success: true,
+						data: { text: "{}" },
+					});
+				replayer([
+					started("x"),
+					{ type: "agent_start" },
+					{ type: "turn_start" },
+					assistant(),
+					{ type: "agent_settled", aborted: false },
+				])(command, pi);
+			},
+		]);
+
+		const executor = sandboxModule.sandboxExecutor({
+			stateDir,
+			root,
+			arch: "x64",
+			usernsLimit: async () => "15000",
+			xdgRuntimeDir: "/run/user/1000",
+			log: () => {},
+			exec: async (command) => ({
+				code: 0,
+				stdout: command === "bwrap" ? "bubblewrap 0.9.0\n" : "",
+				stderr: "",
+			}),
+			host: () => ({ ...h.host, assetsDigest: hash }),
+		});
+
+		assert.equal(await executor.preflight(), true);
+
+		const launched = await executor.launch({
+			...input({ stage: "accept", prompt }),
+			workspace: join(dir, "workspace"),
+			tools: ACCEPTANCE_TOOLS,
+			skills: ACCEPTANCE_SKILLS,
+		});
+
+		assert.equal(launched.kind, "started");
+
+		if (launched.kind !== "started") return;
+		assert.equal((await launched.done).kind, "passed");
+		assert.equal(h.pis.length, 1);
+		const prompts = h.pis[0]?.received.filter((c) => c.type === "prompt");
+		assert.equal(prompts?.length, 1);
+		const delivered = textOf(fieldOf(prompts?.[0] ?? null, "message"));
+		assert.ok(delivered);
+		assert.equal(readFileSync(join(bundle, skillPath), "utf8"), skill);
+		const afterHash = await manifestDigest(bundle);
+		assert.equal(afterHash, hash);
+		t.diagnostic(
+			JSON.stringify({ hash, afterHash, prompts, receipts: h.receipts }),
+		);
+		assert.equal(h.receipts.length, 1);
+		assert.ok(delivered.startsWith(prompt));
+
+		const contractBlock =
+			/<contract-([a-f0-9]{32})>\n([^\n]+)\n<\/contract-\1>/.exec(delivered);
+
+		assert.ok(contractBlock);
+		const contractData = objectOf(parseJson(contractBlock[2] ?? ""));
+		assert.equal(fieldOf(contractData, "summary"), contract.summary);
+		assert.deepEqual(fieldOf(contractData, "acceptance"), contract.acceptance);
+		assert.match(delivered, /Use observable behavior\./);
+		assert.match(delivered, /Keep checks contract-bound\./);
+		assert.match(delivered, /"version":1,"scenarios":\[/);
+		assert.match(
+			delivered,
+			/import repository modules relative to that directory/,
+		);
+		assert.match(
+			delivered,
+			/Use node:test and node:assert\/strict with real assertions/,
+		);
+		assert.ok(delivered.includes(`### Skill: acceptance\n\n${skill.trim()}`));
+		const trusted = delivered.slice(0, contractBlock.index);
+		assert.match(trusted, /read-only exported evaluation tree/);
+		assert.match(
+			trusted,
+			/repository root as cwd, not the \/workspace authoring checkout/,
+		);
+		assert.match(trusted, /no \.git, history, refs or index/);
+		assert.match(
+			trusted,
+			/Do not invoke Git to inspect the candidate or compare revisions/,
+		);
+		assert.match(trusted, /Network is unavailable/);
+		assert.match(
+			trusted,
+			/Assert actual contract behavior using available files and modules/,
+		);
+		assert.match(
+			trusted,
+			/Trusted gates separately run baseline, main and candidate tests, typecheck, lint and format/,
+		);
+		assert.match(
+			trusted,
+			/Do not invoke npm run check or duplicate those aggregate gates inside held-out tests/,
+		);
+		assert.match(
+			trusted,
+			/Every contract criterion and assertion must remain covered; this evaluation context does not waive a criterion/,
+		);
+	});
 	it("inlines only the applicable build playbook excerpt", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "factory-build-skills-"));
 
