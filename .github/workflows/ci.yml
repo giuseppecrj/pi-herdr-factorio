@@ -118,7 +118,7 @@ jobs:
           assert.match(e.GITHUB_REPOSITORY ?? '', /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/);
           assert.match(e.GITHUB_RUN_ID ?? '', /^[1-9][0-9]*$/);
           assert.equal(e.GITHUB_RUN_ATTEMPT, '1');
-          const expected = ['baseline_tests', 'typecheck', 'lint', 'format',
+          const expected = ['install', 'baseline_tests', 'typecheck', 'lint', 'format',
             'main_tests', 'candidate_tests', 'heldout'];
           let passed = false;
           try {
@@ -135,9 +135,13 @@ jobs:
             assert.equal(r.heldoutDigest, e.HELDOUT_DIGEST);
             assert.ok(r.heldoutCounts && Object.values(r.heldoutCounts)
               .some(n => Number.isSafeInteger(n) && n > 0));
-            assert.deepEqual([...r.requiredChecks].sort(), [...expected].sort());
-            assert.equal(r.checks.length, expected.length);
-            for (const name of expected) {
+            assert.ok(Array.isArray(r.requiredChecks));
+            assert.ok(Array.isArray(r.checks));
+            assert.equal(new Set(r.requiredChecks).size, r.requiredChecks.length);
+            assert.ok(expected.every(name => r.requiredChecks.includes(name)));
+            assert.equal(r.checks.length, r.requiredChecks.length);
+            for (const name of r.requiredChecks) {
+              assert.ok(typeof name === 'string' && name.length > 0);
               const matching = r.checks.filter(c => c.name === name);
               assert.equal(matching.length, 1);
               assert.equal(matching[0].exitCode, 0);

@@ -9,9 +9,33 @@ import {
 	REQUIRED_CI_CHECKS,
 } from "../src/run.ts";
 import { advance, type RunEvent } from "../src/stages.ts";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import type { AdmissionPin } from "../src/handoff.ts";
 import type { PatchReceipt } from "../src/build.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
+
+export async function withLocalArtifactDownload<T>(
+	run: (root: string) => Promise<T>,
+): Promise<T> {
+	const root = mkdtempSync(join(tmpdir(), "factory-artifact-test-"));
+	const bin = join(root, "bin");
+	mkdirSync(bin);
+	writeFileSync(join(bin, "gh"), "#!/bin/sh\nprintf 'local-test-artifact'\n", {
+		mode: 0o755,
+	});
+	const previous = process.env.PATH;
+	process.env.PATH = `${bin}:${previous ?? ""}`;
+
+	try {
+		return await run(root);
+	} finally {
+		if (previous === undefined) delete process.env.PATH;
+		else process.env.PATH = previous;
+		rmSync(root, { recursive: true, force: true });
+	}
+}
 
 export const ticket: TicketRef = {
 	provider: "github",

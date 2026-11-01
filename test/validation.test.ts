@@ -1,5 +1,17 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { spawnSync } from "node:child_process";
+import {
+	mkdtempSync,
+	mkdirSync,
+	readFileSync,
+	writeFileSync,
+	rmSync,
+	existsSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { JsonValue } from "../src/tickets.ts";
 import { verdictPasses, digestOf, REQUIRED_CI_CHECKS } from "../src/run.ts";
 import {
 	collectVerdict,
@@ -9,11 +21,31 @@ import {
 	parseCiRun,
 	repairFeedback,
 	type CiRun,
+	type ValidationState,
+	parseValidationState,
+	validationDir,
+	dispatchNonce,
 } from "../src/validation.ts";
 import { acceptanceDigestOf, type AcceptanceSuite } from "../src/accept.ts";
 import { CONTROLLER_LOGIN } from "../src/markers.ts";
-import { isGitSha } from "../src/workflow.ts";
-import { passingVerdict, patch } from "./helpers.ts";
+import { isGitSha, isRepoSlug } from "../src/workflow.ts";
+import { passingVerdict, patch, withLocalArtifactDownload } from "./helpers.ts";
+import { controllerValidator, fileRunFiles } from "../server/controller.ts";
+import { fileArtifacts } from "../src/artifacts.ts";
+import {
+	contractBytes,
+	contractDigestOf,
+	type Contract,
+} from "../src/specify.ts";
+import {
+	collectPatch,
+	storePatch,
+	finishPatch,
+	readPatch,
+} from "../src/build.ts";
+import { generationIntent } from "../src/handoff.ts";
+import { candidateBranch } from "../src/publication.ts";
+import type { Exec } from "../src/gh.ts";
 
 const candidateSha = "c".repeat(40);
 const gateSha = "a".repeat(40);
@@ -172,6 +204,616 @@ describe("reporter-owned candidate checks (unit transport)", () => {
 			collectTrustedReport({ ...input, verdict: { ...verdict, pass: false } }),
 			null,
 		);
+	});
+});
+
+describe("exact workflow reporter with CLI install receipt", () => {
+	const nonce = `${"c".repeat(16)}-r0-d1`;
+
+	const cliReceipt = {
+		...receipt,
+		nonce,
+		requiredChecks: ["install", ...REQUIRED_CI_CHECKS],
+		checks: [{ name: "install", exitCode: 0 }, ...receipt.checks],
+		heldoutCounts: { "test/acceptance/42/checks/a.test.ts": 3 },
+	};
+
+	const ciRun = { ...run, title: `gates ${candidateSha} ${nonce}` };
+
+	const script = /node --input-type=module <<'NODE'\n([\s\S]*?)\n\s*NODE/
+		.exec(
+			readFileSync(
+				new URL("../.github/workflows/ci.yml", import.meta.url),
+				"utf8",
+			),
+		)?.[1]
+		?.split("\n")
+		.map((line) => line.replace(/^ {10}/, ""))
+		.join("\n");
+
+	assert.ok(script);
+
+	function emit(text: string | null, env: Record<string, string> = {}) {
+		const root = mkdtempSync(join(tmpdir(), "factory-report-test-"));
+
+		try {
+			const input = join(root, "input.json");
+			const posts = join(root, "posts.json");
+			writeFileSync(posts, "[]");
+
+			if (text !== null) writeFileSync(input, text);
+
+			const stub = `
+import {writeFileSync as writePosts} from 'node:fs';
+globalThis.fetch = async (url, init) => {
+ const body = JSON.parse(init.body);
+ writePosts(${JSON.stringify(posts)}, JSON.stringify([body]));
+ return new Response(JSON.stringify({id:456, app:{id:15368}, ...body}), {status:201});
+};\n`;
+
+			const child = spawnSync(process.execPath, ["--input-type=module"], {
+				input: stub + script,
+				encoding: "utf8",
+				env: {
+					PATH: process.env.PATH,
+					GH_TOKEN: "dummy-local-test-token",
+					CANDIDATE_SHA: candidateSha,
+					GATE_SHA: gateSha,
+					NONCE: nonce,
+					HELDOUT_DIR: "test/acceptance/42",
+					HELDOUT_DIGEST: receipt.heldoutDigest,
+					GATE_RESULT: "success",
+					GITHUB_REF: "refs/heads/main",
+					GITHUB_EVENT_NAME: "workflow_dispatch",
+					GITHUB_ACTOR: CONTROLLER_LOGIN,
+					TRIGGERING_ACTOR: CONTROLLER_LOGIN,
+					GITHUB_REPOSITORY: "owner/repo",
+					GITHUB_RUN_ID: String(run.id),
+					GITHUB_RUN_ATTEMPT: "1",
+					REPORT_INPUT: input,
+					REPORT_OUTPUT: join(root, "out"),
+					...env,
+				},
+			});
+
+			const posted: { conclusion: string }[] = JSON.parse(
+				readFileSync(posts, "utf8"),
+			);
+
+			let record: JsonValue | undefined;
+
+			if (child.status === 0)
+				record = JSON.parse(
+					readFileSync(join(root, "out/receipt.json"), "utf8"),
+				);
+
+			return { code: child.status, posted, record, stderr: child.stderr };
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	}
+
+	function collect(
+		result: ReturnType<typeof emit>,
+		text = JSON.stringify(cliReceipt),
+	) {
+		const verdict = collectVerdict({ ...binding, run: ciRun, nonce, text });
+
+		return collectTrustedReport({
+			record: result.record,
+			checks: {
+				total_count: 1,
+				check_runs: [
+					{
+						id: 456,
+						name: "factory-gates",
+						head_sha: candidateSha,
+						app: { id: 15368 },
+						external_id: `factory-gates:${run.id}:${nonce}`,
+						status: "completed",
+						conclusion: result.posted[0]?.conclusion ?? null,
+					},
+				],
+			},
+			run: ciRun,
+			nonce,
+			verdict,
+		});
+	}
+
+	it("accepts the actual eight-check CLI shape through the trusted collector", () => {
+		const result = emit(JSON.stringify(cliReceipt));
+		assert.equal(result.code, 0, result.stderr);
+		assert.equal(result.posted[0]?.conclusion, "success");
+		assert.ok(collect(result));
+	});
+
+	for (const [name, changed] of [
+		[
+			"seven-row legacy fixture",
+			{
+				requiredChecks: [...REQUIRED_CI_CHECKS],
+				checks: receipt.checks,
+			},
+		],
+		["missing install row", { checks: receipt.checks }],
+		[
+			"duplicate install declaration",
+			{ requiredChecks: [...cliReceipt.requiredChecks, "install"] },
+		],
+		[
+			"duplicate install row",
+			{ checks: [...cliReceipt.checks, { name: "install", exitCode: 0 }] },
+		],
+		[
+			"undeclared row",
+			{ checks: [...cliReceipt.checks, { name: "extra", exitCode: 0 }] },
+		],
+		[
+			"failed additional required row",
+			{
+				requiredChecks: [...cliReceipt.requiredChecks, "extra"],
+				checks: [...cliReceipt.checks, { name: "extra", exitCode: 1 }],
+			},
+		],
+		["missing heldout evidence", { heldoutCounts: undefined }],
+		["empty heldout evidence", { heldoutCounts: {} }],
+		[
+			"zero heldout evidence",
+			{ heldoutCounts: { "test/acceptance/42/checks/a.test.ts": 0 } },
+		],
+		[
+			"failed install",
+			{
+				checks: cliReceipt.checks.map((c) => ({
+					...c,
+					exitCode: c.name === "install" ? 1 : 0,
+				})),
+			},
+		],
+		[
+			"timed-out install",
+			{
+				checks: cliReceipt.checks.map((c) => ({
+					...c,
+					timedOut: c.name === "install",
+				})),
+			},
+		],
+		[
+			"signalled install",
+			{
+				checks: cliReceipt.checks.map((c) => ({
+					...c,
+					signal: c.name === "install" ? "SIGTERM" : null,
+				})),
+			},
+		],
+		["candidate mismatch", { candidateSha: gateSha }],
+		["gate mismatch", { gateSha: candidateSha }],
+		["nonce mismatch", { nonce: "wrong" }],
+		["oracle mismatch", { heldoutDigest: digestOf("other") }],
+		["failed receipt", { status: "failed" }],
+		["model calls", { modelCalls: 1 }],
+	] as const)
+		it(`fails closed for ${name}`, () => {
+			const result = emit(JSON.stringify({ ...cliReceipt, ...changed }));
+			assert.equal(result.code, 0, result.stderr);
+			assert.equal(result.posted[0]?.conclusion, "failure");
+			assert.equal(collect(result), null);
+		});
+
+	for (const text of [null, "{", "{}"])
+		it(`fails closed for missing or malformed artifact ${text}`, () => {
+			const result = emit(text);
+			assert.equal(result.posted[0]?.conclusion, "failure");
+			assert.equal(collect(result), null);
+		});
+
+	for (const result of ["failure", "skipped", "cancelled"])
+		it(`fails closed for ${result} gates job`, () => {
+			const output = emit(JSON.stringify(cliReceipt), { GATE_RESULT: result });
+			assert.equal(output.posted[0]?.conclusion, "failure");
+			assert.equal(collect(output), null);
+		});
+
+	const invalidEnvironments: Record<string, string>[] = [
+		{ GITHUB_ACTOR: "owner" },
+		{ TRIGGERING_ACTOR: "owner" },
+		{ GITHUB_REF: "refs/heads/other" },
+		{ GITHUB_EVENT_NAME: "pull_request" },
+		{ GITHUB_RUN_ATTEMPT: "2" },
+		{ CANDIDATE_SHA: "bad" },
+		{ GATE_SHA: "bad" },
+		{ NONCE: "bad" },
+	];
+
+	for (const env of invalidEnvironments)
+		it(`does not post for wrong execution identity ${JSON.stringify(env)}`, () => {
+			const result = emit(JSON.stringify(cliReceipt), env);
+			assert.notEqual(result.code, 0);
+			assert.deepEqual(result.posted, []);
+			assert.equal(result.record, undefined);
+		});
+});
+
+async function reportDeadlineFixture(root: string) {
+	assert.ok(isGitSha(gateSha) && isGitSha(candidateSha));
+	const repo = "giuseppecrj/pi-herdr-factorio";
+	assert.ok(isRepoSlug(repo));
+	const runId = digestOf("report-deadline");
+	const start = Date.parse(run.createdAt);
+
+	const contract: Contract = {
+		version: 1,
+		runId,
+		issue: 42,
+		base: { repo, sha: gateSha },
+		snapshot: {
+			digest: digestOf("snapshot"),
+			source: "unedited",
+			eventId: "1",
+			eventAt: run.createdAt,
+		},
+		link: null,
+		summary: "Change a",
+		behavior: ["Return 2"],
+		acceptance: [{ id: "A1", text: "Return 2" }],
+		exclusions: [],
+		compatibility: [],
+		limits: [],
+		files: ["src/a.ts"],
+		evidence: [],
+	};
+
+	const bytes = contractBytes(contract);
+	const contractDigest = contractDigestOf(bytes);
+	assert.equal(
+		await fileRunFiles(root).writeContract({
+			contract,
+			bytes,
+			digest: contractDigest,
+		}),
+		true,
+	);
+
+	const stored = await fileArtifacts(root).store({
+		contract,
+		contractDigest,
+		suite: {
+			version: 1,
+			scenarios: [
+				{ id: "S1", criteria: ["A1"], checks: ["a.test.ts"], judge: null },
+			],
+			files: [
+				{
+					path: "a.test.ts",
+					type: "node:test",
+					content: "import {test} from 'node:test'; test('a',()=>{});",
+				},
+			],
+		},
+		model: "openai/gpt-6.1-sol",
+		observed: null,
+	});
+
+	assert.equal(stored.kind, "found");
+	const base = join(root, "base");
+	const workspace = join(root, "builder");
+
+	for (const dir of [base, workspace])
+		mkdirSync(join(dir, "src"), { recursive: true });
+	writeFileSync(join(base, "src/a.ts"), "export const a = 1;\n");
+	writeFileSync(join(workspace, "src/a.ts"), "export const a = 2;\n");
+	const collected = await collectPatch({ base, workspace });
+	assert.equal(collected.kind, "collected");
+
+	const patchBinding = {
+		runId,
+		baseSha: gateSha,
+		contractDigest,
+		acceptanceDigest: stored.receipt.acceptanceDigest,
+	};
+
+	storePatch(root, patchBinding, collected, {
+		model: "openai/gpt-6.1-sol",
+		observed: null,
+		commands: [],
+	});
+	finishPatch(root, patchBinding, {
+		command: "npm test",
+		exitCode: 0,
+		tail: "",
+		wallMs: 1,
+	});
+	const patch = readPatch(root, patchBinding);
+	assert.equal(patch.kind, "found");
+
+	const generation = generationIntent({
+		pin: {
+			runId,
+			repo,
+			issue: 42,
+			originalBase: gateSha,
+			workflowSha: gateSha,
+			workflowDigest: digestOf("workflow"),
+			contractDigest,
+			acceptanceDigest: stored.receipt.acceptanceDigest,
+			maxTokens: 500_000,
+			maxReviewAttempts: 3,
+		},
+		patch: patch.receipt,
+		round: 0,
+		generation: 0,
+		baseSha: gateSha,
+		origin: { kind: "initial" },
+		publication: { kind: "initial" },
+	});
+
+	const heldout = publishedSuite({
+		issue: 42,
+		suite: stored.suite,
+		canary: readFileSync(
+			join(root, "acceptance", runId, "canary.txt"),
+			"utf8",
+		).trimEnd(),
+		acceptanceDigest: stored.receipt.acceptanceDigest,
+	});
+
+	const nonce = dispatchNonce(runId, 0, 1);
+
+	const hardReceipt = {
+		...receipt,
+		nonce,
+		heldoutDigest: heldout.digest,
+		requiredChecks: ["install", ...REQUIRED_CI_CHECKS],
+		checks: [{ name: "install", exitCode: 0 }, ...receipt.checks],
+	};
+
+	let state: ValidationState = {
+		version: 2,
+		generation: { index: 0, digest: generation.digest, previousHead: null },
+		startedAt: start,
+		deadline: start + 1_200_000,
+		round: 0,
+		originalBase: gateSha,
+		baseSha: gateSha,
+		baseResolved: true,
+		publication: {
+			branch: candidateBranch(42, runId, 0),
+			patchSha: gateSha,
+			candidateSha,
+		},
+		dispatchTry: 1,
+		dispatchedAt: start,
+		ciRunId: run.id,
+		counters: {},
+	};
+
+	let ref: string | null = candidateSha;
+	let report: "missing" | "rejected" | "valid" = "missing";
+	const writes: string[] = [];
+
+	const record = {
+		version: 1,
+		status: "passed",
+		checkId: 456,
+		candidateSha,
+		gateSha,
+		runId: run.id,
+		nonce,
+		workflow: ".github/workflows/ci.yml",
+		event: "workflow_dispatch",
+		ref: "refs/heads/main",
+		actor: CONTROLLER_LOGIN,
+		triggeringActor: CONTROLLER_LOGIN,
+		externalId: `factory-gates:${run.id}:${nonce}`,
+		heldoutDigest: heldout.digest,
+	};
+
+	const exec: Exec = async (command, args) => {
+		const ok = (value: JsonValue) => ({
+			code: 0,
+			stdout: JSON.stringify(value),
+			stderr: "",
+		});
+
+		if (command === "unzip")
+			return ok(report === "rejected" ? { ...record, checkId: 999 } : record);
+
+		const path = args
+			.find((arg) => arg.startsWith(`repos/${repo}/`))
+			?.slice(`repos/${repo}/`.length);
+
+		if (args.includes("DELETE")) {
+			writes.push("DELETE");
+			ref = null;
+
+			return ok(null);
+		}
+
+		assert.ok(!args.includes("POST") && !args.includes("PATCH"));
+
+		if (path?.startsWith("git/ref/heads/factory/run/"))
+			return ref === null
+				? { code: 1, stdout: "", stderr: "HTTP 404" }
+				: ok({ object: { sha: ref } });
+
+		if (path === `actions/runs/${run.id}`)
+			return ok({
+				id: run.id,
+				head_sha: gateSha,
+				head_branch: "main",
+				updated_at: run.completedAt,
+				display_title: `gates ${candidateSha} ${nonce}`,
+				status: "completed",
+				conclusion: "success",
+				event: "workflow_dispatch",
+				path: ".github/workflows/ci.yml",
+				actor: { login: CONTROLLER_LOGIN },
+				triggering_actor: { login: CONTROLLER_LOGIN },
+				created_at: run.createdAt,
+			});
+
+		if (path === `actions/runs/${run.id}/artifacts`)
+			return ok({
+				artifacts:
+					report === "missing"
+						? []
+						: [{ id: 999, name: "factory-report", expired: false }],
+			});
+
+		if (path === `commits/${candidateSha}/check-runs?filter=all&per_page=100`)
+			return ok({
+				total_count: 1,
+				check_runs: [
+					{
+						id: 456,
+						name: "factory-gates",
+						head_sha: candidateSha,
+						app: { id: 15368 },
+						external_id: record.externalId,
+						status: "completed",
+						conclusion: "success",
+					},
+				],
+			});
+		throw new Error(`unexpected ${command} ${path}`);
+	};
+
+	const step = async (now: number) => {
+		const restored = parseValidationState(JSON.parse(JSON.stringify(state)));
+		assert.ok(restored);
+
+		return controllerValidator({
+			stateDir: root,
+			exec,
+			receipt: async () => JSON.stringify(hardReceipt),
+		})({
+			runId,
+			issue: 42,
+			baseSha: gateSha,
+			eventAt: run.createdAt,
+			now,
+			wallMs: 1_200_000,
+			generation,
+			state: restored,
+			save: async (next) => {
+				state = structuredClone(next);
+
+				return true;
+			},
+		});
+	};
+
+	return {
+		step,
+		start,
+		deadline: state.deadline,
+		writes,
+		dir: validationDir(root, runId),
+		setReport: (next: typeof report) => {
+			report = next;
+		},
+		moveBranch: () => {
+			ref = gateSha;
+		},
+		ref: () => ref,
+	};
+}
+
+describe("report evidence uses the fixed CI deadline", () => {
+	for (const cached of [false, true])
+		for (const report of ["missing", "rejected"] as const)
+			for (const offset of [-1, 0, 1])
+				it(`${cached ? "stored verdict restart" : "first completion"}, ${report}, deadline offset ${offset}`, async () => {
+					await withLocalArtifactDownload(async (root) => {
+						const f = await reportDeadlineFixture(root);
+						f.setReport(report);
+
+						if (cached)
+							assert.equal((await f.step(f.start + 60_000)).kind, "waiting");
+						const result = await f.step(f.deadline + offset);
+						assert.equal(result.state?.deadline, f.deadline);
+						assert.equal(result.kind, offset < 0 ? "waiting" : "failed");
+
+						if (result.kind === "failed")
+							assert.equal(result.reason, "ci_timeout");
+						assert.equal(f.ref(), null);
+						assert.deepEqual(f.writes, ["DELETE"]);
+					});
+				});
+
+	it("persists timeout separately without rewriting the positive hard verdict or reviving on reload", async () => {
+		await withLocalArtifactDownload(async (root) => {
+			const f = await reportDeadlineFixture(root);
+			assert.equal((await f.step(f.start + 60_000)).kind, "waiting");
+			const verdictPath = join(f.dir, "verdict.json");
+			const hardVerdict = readFileSync(verdictPath, "utf8");
+
+			for (const report of ["missing", "valid", "missing"] as const) {
+				f.setReport(report);
+				const result = await f.step(f.deadline + 1);
+				assert.equal(result.kind, "failed");
+
+				if (result.kind === "failed") assert.equal(result.reason, "ci_timeout");
+				assert.equal(readFileSync(verdictPath, "utf8"), hardVerdict);
+			}
+
+			assert.equal(
+				JSON.parse(readFileSync(join(f.dir, "failure.json"), "utf8")).reason,
+				"ci_timeout",
+			);
+			assert.deepEqual(f.writes, ["DELETE"]);
+		});
+	});
+
+	for (const offset of [-1, 1])
+		it(`recovers complete valid reporter evidence at deadline offset ${offset}`, async () => {
+			await withLocalArtifactDownload(async (root) => {
+				const f = await reportDeadlineFixture(root);
+				assert.equal((await f.step(f.start + 60_000)).kind, "waiting");
+				const hardVerdict = readFileSync(join(f.dir, "verdict.json"), "utf8");
+				f.setReport("valid");
+				const result = await f.step(f.deadline + offset);
+				assert.equal(result.kind, "finished");
+
+				if (result.kind === "finished")
+					assert.ok(result.verdict.pass && result.report);
+				assert.equal(
+					readFileSync(join(f.dir, "verdict.json"), "utf8"),
+					hardVerdict,
+				);
+				assert.equal(existsSync(join(f.dir, "failure.json")), false);
+			});
+		});
+
+	it("preserves stored verdict binding and branch drift refusals", async () => {
+		for (const drift of [false, true])
+			await withLocalArtifactDownload(async (root) => {
+				const f = await reportDeadlineFixture(root);
+				await f.step(f.start + 60_000);
+
+				if (drift) f.moveBranch();
+				else {
+					const path = join(f.dir, "verdict.json");
+					const verdict = JSON.parse(readFileSync(path, "utf8"));
+					writeFileSync(
+						path,
+						JSON.stringify({ ...verdict, candidateSha: gateSha }),
+					);
+				}
+
+				const result = await f.step(f.deadline - 1);
+				assert.equal(result.kind, "failed");
+
+				if (result.kind === "failed")
+					assert.equal(
+						result.reason,
+						drift ? "branch_moved" : "verdict_binding",
+					);
+				assert.deepEqual(f.writes, ["DELETE"]);
+			});
 	});
 });
 

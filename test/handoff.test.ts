@@ -32,6 +32,12 @@ import { candidateBranch } from "../src/publication.ts";
 import type { JsonValue } from "../src/tickets.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
 import type { PatchReceipt } from "../src/build.ts";
+import { controllerCandidatePort } from "../server/controller.ts";
+import { fileAdmissionStore } from "../src/admission.ts";
+import { CONTROLLER_LOGIN } from "../src/markers.ts";
+import { withLocalArtifactDownload } from "./helpers.ts";
+import { readFileSync } from "node:fs";
+import { fieldOf, objectOf, parseJson } from "../server/sandbox/json.ts";
 
 const sha = "a".repeat(40);
 const repo = "giuseppecrj/pi-herdr-factorio";
@@ -223,7 +229,13 @@ function validated(state: CandidateState, passes = true) {
 	assert.ok(isGitSha(head));
 
 	const validation: ValidationState = {
-		version: 1,
+		version: 2,
+		generation: {
+			index: g.generation,
+			digest: g.digest,
+			previousHead:
+				g.publication.kind === "successor" ? g.publication.expectedHead : null,
+		},
 		startedAt: 1,
 		deadline: 200,
 		round: g.round,
@@ -418,6 +430,312 @@ function waiting() {
 		}).state,
 	);
 }
+
+test("actual observer promotes a certified successor before PR checks and waits for exact-head readiness", async () => {
+	await withLocalArtifactDownload(async (root) => {
+		const previous = waiting();
+		const predecessor = previous.current.report?.candidateSha;
+		assert.ok(predecessor);
+
+		const state = certified(
+			handoffCandidate(previous, {
+				...readyObservation(previous),
+				main: observed("b".repeat(40)).main,
+			}).state,
+		);
+
+		const certificate = state.current.certification;
+		assert.ok(certificate);
+		const report = certificate.report;
+		const head = report.candidateSha;
+		const branch = previous.published?.branch;
+		assert.ok(branch);
+		let prHead = predecessor;
+		let refHead = predecessor;
+		let reportAvailable = true;
+		let reportValid = true;
+		const patches: JsonValue[] = [];
+
+		const factoryCheck = {
+			id: report.reportId,
+			name: "factory-gates",
+			head_sha: head,
+			app: { id: 15368 },
+			external_id: report.externalId,
+			status: "completed",
+			conclusion: "success",
+		};
+
+		const ordinaryCheck = {
+			id: 789,
+			name: "check",
+			head_sha: head,
+			app: { id: 15368 },
+			status: "completed",
+			conclusion: "success",
+		};
+
+		let checks: JsonValue[] = [factoryCheck];
+		let missingChecks = 0;
+
+		const record = {
+			version: 1,
+			status: "passed",
+			checkId: report.reportId,
+			candidateSha: head,
+			gateSha: report.gateSha,
+			runId: report.ciRunId,
+			nonce: report.nonce,
+			workflow: ".github/workflows/ci.yml",
+			event: "workflow_dispatch",
+			ref: "refs/heads/main",
+			actor: CONTROLLER_LOGIN,
+			triggeringActor: CONTROLLER_LOGIN,
+			externalId: report.externalId,
+			heldoutDigest: report.heldoutDigest,
+		};
+
+		await fileAdmissionStore(root).record(
+			{
+				repo: pin.repo,
+				issue: pin.issue,
+				issueUrl: `https://github.com/${pin.repo}/issues/${pin.issue}`,
+				decision: "admitted",
+				reasons: [],
+				eventId: "700",
+				eventAt: "2026-10-30T00:00:00Z",
+				actor: "giuseppecrj",
+				actorPermission: "admin",
+				snapshotDigest: digestOf("snapshot"),
+				snapshotSource: "unedited",
+				baseSha: pin.workflowSha,
+				workflowDigest: pin.workflowDigest,
+			},
+			{ title: "issue", body: "body" },
+		);
+
+		const port = controllerCandidatePort({
+			stateDir: root,
+			exec: async (command, args) => {
+				const ok = (value: JsonValue) => ({
+					code: 0,
+					stdout: JSON.stringify(value),
+					stderr: "",
+				});
+
+				if (command === "unzip")
+					return ok(reportValid ? record : { ...record, checkId: 999 });
+
+				const path = args
+					.find((a) => a.startsWith(`repos/${pin.repo}/`))
+					?.slice(`repos/${pin.repo}/`.length);
+
+				const method = args[args.indexOf("--method") + 1];
+
+				if (path === "pulls/5")
+					return ok({
+						number: 5,
+						head: { sha: prHead, ref: branch, repo: { full_name: pin.repo } },
+						base: { ref: "main", repo: { full_name: pin.repo } },
+						user: { login: CONTROLLER_LOGIN, type: "Bot" },
+						body: `<!-- factory:pr ${pin.runId} -->`,
+						state: "open",
+						merged: false,
+						draft: false,
+					});
+
+				if (path === `git/ref/heads/${branch}`)
+					return ok({ object: { sha: refHead } });
+
+				if (path === `git/refs/heads/${branch}` && method === "PATCH") {
+					const input = args[args.indexOf("--input") + 1];
+					assert.ok(input);
+					const body = parseJson(readFileSync(input, "utf8"));
+					assert.equal(fieldOf(objectOf(body), "force"), false);
+					assert.equal(fieldOf(objectOf(body), "sha"), head);
+					patches.push(body ?? null);
+					refHead = head;
+
+					return ok(null);
+				}
+
+				if (path === "labels/factory%3Aenabled")
+					return ok({ name: "factory:enabled" });
+
+				if (path === `issues/${pin.issue}`)
+					return ok({
+						number: pin.issue,
+						updated_at: "2026-10-30T00:00:00Z",
+						title: "issue",
+						body: "body",
+						state: "open",
+						labels: [{ name: "factory:ready" }],
+						user: { login: "giuseppecrj" },
+					});
+
+				if (path?.startsWith(`issues/${pin.issue}/timeline`))
+					return ok([
+						{
+							id: 700,
+							event: "labeled",
+							created_at: "2026-10-30T00:00:00Z",
+							actor: { login: "giuseppecrj" },
+							label: { name: "factory:ready" },
+						},
+					]);
+
+				if (path === "git/ref/heads/main")
+					return ok({ object: { sha: report.gateSha } });
+
+				if (path === `actions/runs/${report.ciRunId}`)
+					return ok({
+						id: report.ciRunId,
+						head_sha: report.gateSha,
+						head_branch: "main",
+						updated_at: "2026-10-31T00:01:00Z",
+						display_title: `gates ${head} ${report.nonce}`,
+						status: "completed",
+						conclusion: "success",
+						event: "workflow_dispatch",
+						path: ".github/workflows/ci.yml",
+						actor: { login: CONTROLLER_LOGIN },
+						triggering_actor: { login: CONTROLLER_LOGIN },
+						created_at: "2026-10-31T00:00:00Z",
+					});
+
+				if (path === `actions/runs/${report.ciRunId}/artifacts`)
+					return ok({
+						artifacts: reportAvailable
+							? [{ id: 999, name: "factory-report", expired: false }]
+							: [],
+					});
+
+				if (path === `commits/${head}/check-runs?filter=all&per_page=100`)
+					return ok({
+						total_count: checks.length + missingChecks,
+						check_runs: checks,
+					});
+				throw new Error(`unexpected ${command} ${method} ${path}`);
+			},
+		});
+
+		const observe = async (book = state) => ({
+			...(await port.observe(book, 1000)),
+			executionAllowed: true,
+			capacityAvailable: true,
+		});
+
+		for (const rejected of ["missing", "mismatch"]) {
+			reportAvailable = rejected !== "missing";
+			reportValid = rejected !== "mismatch";
+			assert.notEqual(
+				handoffCandidate(state, await observe()).effect?.kind,
+				"promote_pr",
+			);
+		}
+
+		reportAvailable = true;
+		reportValid = true;
+		const firstObservation = await observe();
+		assert.equal(firstObservation.pr.kind, "open");
+		assert.equal(firstObservation.eligibility, "ready");
+		assert.equal(
+			firstObservation.readiness.kind,
+			"current",
+			JSON.stringify(firstObservation),
+		);
+		const first = handoffCandidate(state, firstObservation);
+		assert.equal(first.effect?.kind, "promote_pr");
+		assert.equal(pending(first.state, "promote_pr").expectedHead, predecessor);
+		assert.equal(pending(first.state, "promote_pr").head, head);
+
+		const foreign = observed("e".repeat(40)).main;
+		assert.ok(foreign);
+		prHead = foreign;
+		refHead = foreign;
+		assert.notEqual(
+			handoffCandidate(state, await observe()).effect?.kind,
+			"promote_pr",
+		);
+		prHead = predecessor;
+		refHead = predecessor;
+
+		const result = await port.execute(
+			first.state,
+			pending(first.state, "promote_pr"),
+		);
+
+		assert.ok(result?.kind === "promote_pr");
+		assert.equal(patches.length, 1);
+		assert.equal(result.head, predecessor);
+		assert.equal(result.refHead, head);
+
+		const lagged = handoffCandidate(first.state, {
+			kind: "effect_completed",
+			completion: result,
+		}).state;
+
+		assert.notEqual(
+			handoffCandidate(lagged, await observe(selected(lagged))).effect?.kind,
+			"complete_handoff",
+		);
+
+		const lostResponse = handoffCandidate(
+			first.state,
+			await observe(selected(first.state)),
+		);
+
+		assert.equal(lostResponse.effect?.kind, "promote_pr");
+		await port.execute(
+			lostResponse.state,
+			pending(lostResponse.state, "promote_pr"),
+		);
+		assert.equal(patches.length, 1);
+		prHead = head;
+		refHead = head;
+
+		const badOrdinary = [
+			[],
+			[{ ...ordinaryCheck, status: "in_progress", conclusion: null }],
+			[{ ...ordinaryCheck, conclusion: "failure" }],
+			[{ ...ordinaryCheck, conclusion: "skipped" }],
+			[{ ...ordinaryCheck, app: { id: 7 } }],
+			[{ ...ordinaryCheck, head_sha: predecessor }],
+			[ordinaryCheck, { ...ordinaryCheck, id: 790 }],
+		];
+
+		for (const rows of badOrdinary) {
+			checks = [factoryCheck, ...rows];
+			assert.notEqual(
+				handoffCandidate(state, await observe()).effect?.kind,
+				"complete_handoff",
+			);
+		}
+
+		checks = [factoryCheck, ordinaryCheck];
+		missingChecks = 1;
+		assert.notEqual(
+			handoffCandidate(state, await observe()).effect?.kind,
+			"complete_handoff",
+		);
+		missingChecks = 0;
+		const completing = handoffCandidate(state, await observe());
+		assert.equal(completing.effect?.kind, "complete_handoff");
+
+		const ready = handoffCandidate(completing.state, {
+			kind: "effect_completed",
+			completion: {
+				kind: "complete_handoff",
+				request: pending(completing.state, "complete_handoff"),
+				now: 1000,
+			},
+		}).state;
+
+		assert.equal(selected(ready).work.kind, "waiting");
+		assert.equal(selected(ready).published?.readiness.kind, "ready");
+		assert.equal(candidateUsage(ready), candidateUsage(state));
+	});
+});
 
 test("one ready PR waits without issuing more effects, attempts or tokens", () => {
 	const state = waiting();

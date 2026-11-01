@@ -1554,7 +1554,10 @@ export function controllerValidator(config: {
 				privateDir(dir);
 				const path = join(dir, "failure.json");
 
-				if (!present(path) && !present(join(dir, "verdict.json")))
+				if (
+					!present(path) &&
+					(reason === "ci_timeout" || !present(join(dir, "verdict.json")))
+				)
 					exclusive(
 						path,
 						`${JSON.stringify({ ...identities, candidateSha: publication.candidateSha, gateSha: null, ciRunId: state.ciRunId, originalBase: state.originalBase, baseSha: state.baseSha, pass: false, checks: [], reason })}\n`,
@@ -1696,6 +1699,15 @@ export function controllerValidator(config: {
 				if (cleanup === "branch_moved") return failed("branch_moved");
 
 				if (input.generation !== undefined && verdict.pass) {
+					if (
+						present(failurePath) &&
+						jsonField(
+							objectOf(parseJson(regularText(failurePath))),
+							"reason",
+						) === "ci_timeout"
+					)
+						return failed("ci_timeout");
+
 					const report = await controllerReport(
 						config,
 						repo,
@@ -1704,9 +1716,12 @@ export function controllerValidator(config: {
 						verdict,
 					);
 
-					return report === null
-						? { kind: "waiting", state }
-						: { kind: "finished", state, verdict, report };
+					if (report !== null)
+						return { kind: "finished", state, verdict, report };
+
+					return input.now >= state.deadline
+						? failed("ci_timeout")
+						: { kind: "waiting", state };
 				}
 
 				return { kind: "finished", state, verdict };
@@ -2036,9 +2051,12 @@ export function controllerValidator(config: {
 					verdict,
 				);
 
-				return report === null
-					? { kind: "waiting", state }
-					: { kind: "finished", state, verdict, report };
+				if (report !== null)
+					return { kind: "finished", state, verdict, report };
+
+				return input.now >= state.deadline
+					? failed("ci_timeout")
+					: { kind: "waiting", state };
 			}
 
 			return { kind: "finished", state, verdict };
@@ -2555,6 +2573,11 @@ export function controllerCandidatePort(config: {
 					runs !== null &&
 					jsonField(checks, "total_count") === runs.length &&
 					(state.published === null ||
+						(state.current.intent.publication.kind === "successor" &&
+							pr.kind === "open" &&
+							pr.head !== report.candidateSha &&
+							pr.head === state.current.intent.publication.expectedHead &&
+							pr.refHead === state.current.intent.publication.expectedHead) ||
 						(mandatory.length === 1 &&
 							jsonField(check, "head_sha") === report.candidateSha &&
 							jsonField(check, "status") === "completed" &&
