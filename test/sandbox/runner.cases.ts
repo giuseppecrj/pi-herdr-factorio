@@ -3540,6 +3540,263 @@ describe("multi-seat candidate review", () => {
 		};
 	}
 
+	it("transports frozen controller review evidence through preparation and executor RPC", async (t) => {
+		const h = await setup();
+
+		try {
+			const f = h.fixture;
+			const capturePath = join(h.dir, "review.json");
+
+			const verdictPath = join(
+				f.state,
+				"validation",
+				f.execution.runId,
+				"verdict.json",
+			);
+
+			const verdict = {
+				...f.prepared.verdict,
+				checks: f.prepared.verdict.checks.map((check) => ({
+					...check,
+					detail: "PRIVATE_GATE_DETAIL /private/controller/session RAW_STDOUT",
+				})),
+			};
+
+			writeFileSync(verdictPath, JSON.stringify(verdict), { mode: 0o600 });
+			rmSync(capturePath);
+			const root = join(f.root, "runtime");
+			const staging = join(root, "staging");
+
+			for (const seat of f.prepared.input.seats) {
+				mkdirSync(join(staging, "skills", seat), { recursive: true });
+				writeFileSync(
+					join(staging, "skills", seat, "SKILL.md"),
+					`Read-only ${seat} fixture skill.\n`,
+				);
+			}
+
+			const hash = await manifestDigest(staging);
+			assert.ok(hash);
+			fs.renameSync(staging, join(root, `assets-${hash}`));
+			symlinkSync(`assets-${hash}`, join(root, "current"));
+			let interrupt = true;
+
+			const config = {
+				...f.config,
+				root,
+				arch: "x64",
+				usernsLimit: async () => "15000",
+				exec: async (command: string) => ({
+					code: 0,
+					stdout: command === "bwrap" ? "bubblewrap 0.9.0\n" : "",
+					stderr: "",
+				}),
+				host: (config: Parameters<typeof sandboxHost>[0]) => {
+					assert.ok(config.stageDir);
+
+					if (interrupt && config.stageDir.endsWith("/security-review"))
+						throw new Error("fixture interruption");
+
+					return {
+						...h.create(config.stageDir, config.tools),
+						assetsDigest: hash,
+					};
+				},
+			};
+
+			const executor = sandboxModule.sandboxExecutor(config);
+			const prepared = await executor.prepareReview!(f.args);
+			const captured = readFileSync(capturePath);
+			const record = objectOf(parseJson(captured.toString()));
+			assert.ok(record);
+			assert.equal(record.version, 3);
+			assert.deepEqual(Object.keys(record).sort(), [
+				"execution",
+				"input",
+				"inputDigest",
+				"version",
+			]);
+			const frozen = objectOf(record.input);
+			assert.ok(frozen);
+			assert.deepEqual(Object.keys(frozen).sort(), [
+				"binding",
+				"files",
+				"prompt",
+				"scenarios",
+				"seats",
+			]);
+			assert.equal(record.inputDigest, digestOf(JSON.stringify(frozen)));
+			assert.equal(statSync(capturePath).mode & 0o777, 0o600);
+			assert.equal(await executor.preflight(), true);
+
+			const launched = await executor.launch({
+				...h.run,
+				workspace: prepared.workspace,
+				review: prepared,
+			});
+
+			assert.ok(launched.kind === "started");
+			await assert.rejects(launched.done, { message: "fixture interruption" });
+			assert.equal(h.calls.length, 1);
+
+			const delivered = textOf(
+				h.hosts[0]?.pis[0]?.received.find((c) => c.type === "prompt")?.message,
+			);
+
+			assert.ok(delivered);
+
+			const evidenceBlock =
+				/<controller-evidence>\n([^\n]+)\n<\/controller-evidence>/.exec(
+					delivered,
+				);
+
+			assert.ok(
+				evidenceBlock,
+				"controller gate evidence missing from actual RPC prompt",
+			);
+			assert.deepEqual(JSON.parse(evidenceBlock[1] ?? "null"), {
+				candidateSha: verdict.candidateSha,
+				gateSha: verdict.gateSha,
+				ciRunId: verdict.ciRunId,
+				originalBase: verdict.originalBase,
+				baseSha: verdict.baseSha,
+				patchDigest: verdict.patchDigest,
+				acceptanceDigest: verdict.acceptanceDigest,
+				heldoutDigest: verdict.heldoutDigest,
+				pass: verdict.pass,
+				requiredChecks: verdict.requiredChecks,
+				checks: verdict.checks.map(({ name, passed }) => ({ name, passed })),
+				changedPaths: f.kept.receipt.changedPaths,
+			});
+			assert.ok(
+				delivered.indexOf(evidenceBlock[0]) < delivered.indexOf("<candidate-"),
+			);
+			assert.equal(delivered.split('"changedPaths"').length, 2);
+			assert.match(
+				delivered,
+				/Controller-owned held-out publication is outside this path scope/,
+			);
+			assert.doesNotMatch(evidenceBlock[1] ?? "", /test\/acceptance\//);
+			assert.doesNotMatch(
+				delivered,
+				/PRIVATE_GATE_DETAIL|\/private\/controller|RAW_STDOUT|"detail"|"executed"/,
+			);
+			assert.match(
+				delivered,
+				/not a receipt of literal npm run check invocation/,
+			);
+			assert.match(
+				delivered,
+				/does not automatically satisfy any contract criterion/,
+			);
+			assert.match(delivered, /Read-only code-review fixture skill/);
+			assert.match(
+				delivered,
+				/Judge exactly these scenarios once each: \["S1"\]/,
+			);
+			assert.ok(delivered.startsWith(prepared.input.prompt));
+
+			const request = {
+				runId: f.execution.runId,
+				stage: "review",
+				attempt: 1,
+				round: 0,
+				execution: f.execution,
+			} satisfies Parameters<StageExecutor["spent"]>[0];
+
+			assert.equal(await executor.spent(request), 10);
+			interrupt = false;
+
+			const restarted = sandboxModule.sandboxExecutor({
+				...config,
+				fetchTarball: async () => {
+					throw new Error("unexpected late fetch");
+				},
+			});
+
+			const restored = await restarted.prepareReview!(f.args);
+			assert.deepEqual(restored, prepared);
+			assert.deepEqual(readFileSync(capturePath), captured);
+			assert.equal(await restarted.preflight(), true);
+
+			const resumed = await restarted.launch({
+				...h.run,
+				workspace: restored.workspace,
+				review: restored,
+			});
+
+			assert.ok(resumed.kind === "started");
+			const result = await resumed.done;
+			assert.equal(result.kind, "passed");
+			assert.equal(result.usage, 20);
+			assert.equal(result.receipt.usage.total, 30);
+			assert.equal(await restarted.spent(request), 30);
+			assert.equal(h.hosts.length, 3);
+			assert.equal(h.calls.length, 3);
+
+			for (const call of h.calls)
+				assert.ok(call.includes(prepared.input.prompt));
+			rmSync(join(h.dir, "receipt.json"));
+			const settled = sandboxModule.sandboxExecutor(config);
+			const settledInput = await settled.prepareReview!(f.args);
+			assert.equal(await settled.preflight(), true);
+
+			const replay = await settled.launch({
+				...h.run,
+				workspace: settledInput.workspace,
+				review: settledInput,
+			});
+
+			assert.ok(replay.kind === "started");
+			const replayed = await replay.done;
+			assert.equal(replayed.kind, "passed");
+			assert.equal(replayed.usage, 0);
+			assert.equal(replayed.receipt.usage.total, 30);
+			assert.equal(h.calls.length, 3);
+			assert.deepEqual(readFileSync(capturePath), captured);
+
+			for (const damaged of [
+				null,
+				"{",
+				JSON.stringify({ ...record, version: 2 }),
+				JSON.stringify({ ...record, inputDigest: digestOf("wrong") }),
+				JSON.stringify({
+					...record,
+					execution: { ...f.execution, id: digestOf("foreign execution") },
+				}),
+			]) {
+				if (damaged === null) rmSync(capturePath);
+				else writeFileSync(capturePath, damaged, { mode: 0o600 });
+
+				const refused = sandboxModule.sandboxExecutor(config);
+				await assert.rejects(refused.prepareReview!(f.args), {
+					message: "review_execution_binding",
+				});
+				assert.equal(await refused.spent(request), 30);
+				assert.equal(h.calls.length, 3);
+				assert.equal(h.hosts.length, 3);
+
+				if (damaged === null) assert.equal(existsSync(capturePath), false);
+				else assert.equal(readFileSync(capturePath, "utf8"), damaged);
+				writeFileSync(capturePath, captured, { mode: 0o600 });
+			}
+
+			t.diagnostic(
+				JSON.stringify({
+					capture: record,
+					rpcPrompts: h.calls,
+					resumedReceipt: result.receipt,
+					replayedReceipt: replayed.receipt,
+				}),
+			);
+			t.diagnostic(
+				`capture=${digestOf(captured)} input=${record.inputDigest}; executor reconstruction partial/settled new usage 20/0, total 30; 5 capture controls refuse without charge changes; fake external RPC only, actual model requests 0`,
+			);
+		} finally {
+			h.close();
+		}
+	});
+
 	function capturedReview(run: StageLaunchInput): StageLaunchInput {
 		assert.ok(run.execution?.stage === "review");
 
