@@ -98,6 +98,7 @@ import {
 } from "../../src/build.ts";
 import { digestOf } from "../../src/run.ts";
 import { passingVerdict } from "../helpers.ts";
+import type { ReviewExecution } from "../../src/handoff.ts";
 import { manifestDigest } from "../../server/sandbox/manifest.ts";
 
 const FIXTURES = new URL("./fixtures/", import.meta.url).pathname;
@@ -3372,6 +3373,293 @@ describe("multi-seat candidate review", () => {
 			},
 		};
 	}
+
+	function capturedReview(run: StageLaunchInput): StageLaunchInput {
+		const prepared = run.review;
+		assert.ok(prepared);
+		const workflowSha = "c".repeat(40);
+		assert.ok(isGitSha(workflowSha));
+		const workflowDigest = digestOf("admitted workflow");
+
+		const generation = {
+			round: 1,
+			generation: 1,
+			digest: digestOf("review intent"),
+		} as const;
+
+		const binding = {
+			...prepared.input.binding,
+			execution: {
+				generation: generation.generation,
+				intentDigest: generation.digest,
+				attempt: run.attempt,
+				workflowSha,
+				workflowDigest,
+			},
+		};
+
+		const body = {
+			stage: "review",
+			runId: run.runId,
+			round: generation.round,
+			attempt: run.attempt,
+			generation,
+			workflowSha,
+			workflowDigest,
+			binding,
+			seats: prepared.input.seats,
+		} satisfies Omit<ReviewExecution, "id">;
+
+		return {
+			...run,
+			execution: { ...body, id: digestOf(JSON.stringify(body)) },
+			review: { ...prepared, input: { ...prepared.input, binding } },
+		};
+	}
+
+	it("writes a full v2 captured review manifest and resumes identical inputs from completed seats without an aggregate receipt", async (t) => {
+		const h = setup();
+
+		try {
+			const run = capturedReview(h.run);
+			const prepared = run.review;
+			assert.ok(prepared);
+			const first = await sandboxModule.runReview(run, h.dir, h.create);
+			assert.equal(first.kind, "passed");
+			assert.equal(first.usage, 30);
+			assert.equal(first.receipt.usage.total, 30);
+			assert.equal(h.hosts.length, 3);
+			assert.equal(h.calls.length, 3);
+			const manifest = readFileSync(join(h.dir, "review.json"), "utf8");
+
+			assert.deepEqual(JSON.parse(manifest), {
+				version: 2,
+				execution: run.execution,
+				binding: prepared.input.binding,
+				seats: prepared.input.seats,
+				inputDigest: digestOf(
+					JSON.stringify({
+						binding: prepared.input.binding,
+						seats: prepared.input.seats,
+						files: [...prepared.input.files],
+						scenarios: prepared.input.scenarios,
+						prompt: prepared.input.prompt,
+					}),
+				),
+			});
+
+			const receipts = prepared.input.seats.map((seat) =>
+				readFileSync(join(h.dir, seat, "receipt.json")),
+			);
+
+			const output = readFileSync(join(h.dir, "output.txt"));
+			rmSync(join(h.dir, "receipt.json"));
+			const replay = await sandboxModule.runReview(run, h.dir, h.create);
+
+			assert.equal(replay.kind, "passed");
+			assert.equal(replay.usage, 0);
+			assert.equal(replay.receipt.usage.total, 30);
+			assert.equal(h.hosts.length, 3);
+			assert.equal(h.calls.length, 3);
+			assert.equal(readFileSync(join(h.dir, "review.json"), "utf8"), manifest);
+			assert.deepEqual(readFileSync(join(h.dir, "output.txt")), output);
+			assert.deepEqual(
+				prepared.input.seats.map((seat) =>
+					readFileSync(join(h.dir, seat, "receipt.json")),
+				),
+				receipts,
+			);
+			t.diagnostic(
+				`full manifest ${Buffer.byteLength(manifest, "utf8")} bytes; first/replay fake hosts 3/0, fake prompt calls 3/0, new usage 30/0, cumulative usage 30/30; actual model requests 0`,
+			);
+		} finally {
+			h.close();
+		}
+	});
+
+	it("refuses changed prepared review inputs or captured descriptors before creating a host", async (t) => {
+		const h = setup();
+
+		try {
+			const run = capturedReview(h.run);
+			const prepared = run.review;
+			const execution = run.execution;
+			assert.ok(prepared && execution?.stage === "review");
+			const first = await sandboxModule.runReview(run, h.dir, h.create);
+			assert.equal(first.kind, "passed");
+			assert.equal(first.usage, 30);
+			const manifest = readFileSync(join(h.dir, "review.json"));
+			const receipt = readFileSync(join(h.dir, "receipt.json"));
+
+			const inputs = [
+				[
+					"binding",
+					{
+						...prepared.input,
+						binding: {
+							...prepared.input.binding,
+							ciRunId: prepared.input.binding.ciRunId + 1,
+						},
+					},
+				],
+				[
+					"seats",
+					{ ...prepared.input, seats: prepared.input.seats.slice(0, -1) },
+				],
+				["files", { ...prepared.input, files: new Map([["src/a.ts", 2]]) }],
+				["scenarios", { ...prepared.input, scenarios: ["J1", "J2"] }],
+				[
+					"prompt",
+					{
+						...prepared.input,
+						prompt: `${prepared.input.prompt}\nRequire the documented CLI behavior.`,
+					},
+				],
+			] as const;
+
+			const otherWorkflowSha = "d".repeat(40);
+			assert.ok(isGitSha(otherWorkflowSha));
+
+			const descriptors = [
+				["id", { ...execution, id: digestOf("other execution") }],
+				["attempt", { ...execution, attempt: execution.attempt + 1 }],
+				[
+					"generation",
+					{
+						...execution,
+						generation: {
+							...execution.generation,
+							digest: digestOf("other intent"),
+						},
+					},
+				],
+				["workflowSha", { ...execution, workflowSha: otherWorkflowSha }],
+				[
+					"workflowDigest",
+					{ ...execution, workflowDigest: digestOf("other workflow") },
+				],
+				["seats", { ...execution, seats: execution.seats.slice(0, -1) }],
+			] as const;
+
+			const changes: readonly (readonly [string, StageLaunchInput])[] = [
+				...inputs.map(
+					([name, input]) =>
+						[name, { ...run, review: { ...prepared, input } }] as const,
+				),
+				...descriptors.map(
+					([name, execution]) =>
+						[`execution.${name}`, { ...run, execution }] as const,
+				),
+			];
+
+			for (const [name, changed] of changes) {
+				await assert.rejects(
+					sandboxModule.runReview(changed, h.dir, h.create),
+					{ message: "review_execution_binding" },
+					name,
+				);
+				assert.equal(h.hosts.length, 3, name);
+				assert.equal(h.calls.length, 3, name);
+				assert.deepEqual(
+					readFileSync(join(h.dir, "review.json")),
+					manifest,
+					name,
+				);
+				assert.deepEqual(
+					readFileSync(join(h.dir, "receipt.json")),
+					receipt,
+					name,
+				);
+			}
+
+			rmSync(join(h.dir, "receipt.json"));
+			const restored = await sandboxModule.runReview(run, h.dir, h.create);
+			assert.equal(restored.kind, "passed");
+			assert.equal(restored.usage, 0);
+			assert.equal(restored.receipt.usage.total, 30);
+			assert.equal(h.hosts.length, 3);
+			assert.equal(h.calls.length, 3);
+			t.diagnostic(
+				`${changes.length} input/descriptor mutations refused before hosts; fake hosts/prompts 3/3 total, new mutation/replay usage 0, actual model requests 0`,
+			);
+		} finally {
+			h.close();
+		}
+	});
+
+	it("refuses legacy, incomplete and corrupt full review manifests before creating a host", async (t) => {
+		const h = setup();
+
+		try {
+			const run = capturedReview(h.run);
+			const prepared = run.review;
+			assert.ok(prepared);
+			const first = await sandboxModule.runReview(run, h.dir, h.create);
+			assert.equal(first.kind, "passed");
+			assert.equal(first.usage, 30);
+			const path = join(h.dir, "review.json");
+			const manifest = readFileSync(path, "utf8");
+			const fields = objectOf(parseJson(manifest));
+			assert.ok(fields);
+			const receipt = readFileSync(join(h.dir, "receipt.json"));
+
+			const cases: [string, string][] = [
+				["legacy seats only", JSON.stringify({ seats: prepared.input.seats })],
+				["invalid JSON", "{"],
+				["null execution", JSON.stringify({ ...fields, execution: null })],
+				[
+					"corrupt input digest",
+					JSON.stringify({ ...fields, inputDigest: digestOf("other inputs") }),
+				],
+			];
+
+			for (const key of [
+				"version",
+				"execution",
+				"binding",
+				"seats",
+				"inputDigest",
+			]) {
+				const missing = new Map(Object.entries(fields));
+				missing.delete(key);
+				cases.push([
+					`missing ${key}`,
+					JSON.stringify(Object.fromEntries(missing)),
+				]);
+			}
+
+			for (const [name, changed] of cases) {
+				writeFileSync(path, changed);
+				await assert.rejects(
+					sandboxModule.runReview(run, h.dir, h.create),
+					{ message: "review_execution_binding" },
+					name,
+				);
+				assert.equal(h.hosts.length, 3, name);
+				assert.equal(h.calls.length, 3, name);
+				assert.equal(readFileSync(path, "utf8"), changed, name);
+				assert.deepEqual(
+					readFileSync(join(h.dir, "receipt.json")),
+					receipt,
+					name,
+				);
+				writeFileSync(path, manifest);
+			}
+
+			rmSync(join(h.dir, "receipt.json"));
+			const restored = await sandboxModule.runReview(run, h.dir, h.create);
+			assert.equal(restored.kind, "passed");
+			assert.equal(restored.usage, 0);
+			assert.equal(restored.receipt.usage.total, 30);
+			assert.equal(h.hosts.length, 3);
+			assert.equal(h.calls.length, 3);
+			t.diagnostic(
+				`${cases.length} stored manifest mutations refused before hosts; fake hosts/prompts 3/3 total, new mutation/replay usage 0, actual model requests 0`,
+			);
+		} finally {
+			h.close();
+		}
+	});
 
 	it("uses three fresh read-only sessions and sums per-seat usage", async () => {
 		const h = setup();

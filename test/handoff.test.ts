@@ -1708,6 +1708,23 @@ test("certification rejects missing workflow/execution evidence and mismatched s
 	};
 
 	assert.doesNotThrow(() => certifyGeneration(input));
+	const execution = c.review.execution;
+	assert.ok(execution);
+
+	for (const [field, changed] of [
+		["intentDigest", { intentDigest: digestOf("other intent") }],
+		["attempt", { attempt: execution.attempt + 1 }],
+		["workflowSha", { workflowSha: "e".repeat(40) }],
+	] as const)
+		assert.throws(
+			() =>
+				certifyGeneration({
+					...input,
+					review: { ...c.review, execution: { ...execution, ...changed } },
+				}),
+			{ message: "certification_binding" },
+			`untrusted receipt execution.${field} must match the unchanged captured execution`,
+		);
 
 	for (const changed of [
 		{ patchDigest: digestOf("different patch") },
