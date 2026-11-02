@@ -110,11 +110,13 @@ Copy evidence into `docs/plans/media/<pr-id>/` only when the task authorizes it.
 
 ## Trusted reporter gate
 
-Before merging any factory source PR, run main's gate test globs locally through the trusted reporter under `umask 022`:
+Before merging any factory source PR, run main's gate tests locally through the trusted reporter, the same way `testArgv` in `server/gates.ts` does:
 
 ```bash
-node --import ./.github/factory/gates/freeze.mjs --experimental-strip-types --test --test-concurrency=1 --test-timeout=60000 --test-reporter ./.github/factory/gates/reporter.mjs test/*.test.ts test/sandbox/*.cases.ts
+(umask 022; node --import ./.github/factory/gates/freeze.mjs --experimental-strip-types --test --test-concurrency=1 --test-timeout=60000 --test-reporter ./.github/factory/gates/reporter.mjs test/*.test.ts)
 ```
+
+Pass only `test/*.test.ts`. The gate drops `test/sandbox/*.cases.ts` from its file list because `test/sandbox.test.ts` imports them, so passing both globs runs each sandbox case twice. A looser umask such as 077 makes the mode assertions in `test/sandbox/assets.cases.ts` fail.
 
 Require `"complete":true`, `"bad":false` and `"failures":[]` in the final JSON line. `npm run check` uses Node's default reporter and does not exercise the trusted reporter.
 
