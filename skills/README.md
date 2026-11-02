@@ -17,3 +17,7 @@ Each skill sets `disable-model-invocation`, because it is a stage prompt and not
 | `simplify` | none, written fresh | repository MIT | `simplify/SOURCE.md` |
 | `ultrareview` | none, written fresh | repository MIT | `ultrareview/SOURCE.md` |
 | `deep-research` | `mattpocock/skills` `research` at `59db609` | MIT, Matt Pocock, `deep-research/LICENSE` | `deep-research/SOURCE.md` |
+
+## Human review
+
+Sandboxed model stages have no GitHub write authority; the trusted controller handles GitHub publication and progress reporting. The candidate must pass exact-head CI and review before the controller opens a ready, non-draft PR labeled `factory:review`. The factory then waits for the owner and never merges or arms auto-merge. See the [owner guide](../docs/operations/human-review.md).
