@@ -1065,14 +1065,14 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [ ] Record the exact-head verdict and Bugbot triage. Keep immature-cohort evidence gaps explicit.
 - [ ] Apply the patch-id rule in `playbooks/shipping.md`. Hand `F12a` to the owner on a clean verdict and a passing `check`. After the owner's merge, branch the next PR from the new `main`.
 
-## Expose an owner feed and harden controller health (F09c)
+## Give the owner a dashboard and harden controller health (F09c)
 
-**Depends on.** F12a. This small maintenance unit adds controller liveness, attention thresholds, a read-only owner feed, and a backup runbook. It adds no cancel or retry verbs. Removing `factory:ready` already releases an early-stage run, per `docs/operations/factory-cli.md:455`. A terminal run never restarts, and removing and re-adding `factory:ready` starts a fresh run, per `docs/operations/factory-cli.md:534`.
+**Depends on.** F12a. This unit adds controller liveness, attention thresholds, a read-only owner feed, an owner dashboard on the existing viewer with one hold control, and a backup runbook. Owner decision 2026-11-02 added the dashboard. It adds no cancel or retry verbs. Removing `factory:ready` already releases an early-stage run, per `docs/operations/factory-cli.md:455`. A terminal run never restarts, and removing and re-adding `factory:ready` starts a fresh run, per `docs/operations/factory-cli.md:534`.
 
 **Files.**
 
-- [ ] Create `src/feed.ts`, `test/feed.test.ts`, `test/fixtures/owner-feed/`, and `docs/operations/backup.md`.
-- [ ] Edit `src/attention.ts`, `src/workflow.ts`, `.github/factory/WORKFLOW.md`, `server/controller.ts`, `server/cli.ts`, `server/viewer.ts`, `server/factory.service`, `extension/index.ts`, `test/attention.test.ts`, `test/viewer.test.ts`, `test/extension.test.ts`, and `docs/operations/factory-cli.md` for liveness, thresholds, and the feed.
+- [ ] Create `src/feed.ts`, `server/viewer/dashboard.ts`, `test/feed.test.ts`, `test/dashboard.test.ts`, `test/fixtures/owner-feed/`, and `docs/operations/backup.md`.
+- [ ] Edit `src/attention.ts`, `src/workflow.ts`, `.github/factory/WORKFLOW.md`, `server/controller.ts`, `server/cli.ts`, `server/viewer.ts`, `server/viewer/render.ts`, `server/factory.service`, `extension/index.ts`, `test/attention.test.ts`, `test/viewer.test.ts`, `test/extension.test.ts`, `docs/operations/viewer.md`, and `docs/operations/factory-cli.md` for liveness, thresholds, the feed, the dashboard, and the hold control.
 
 **Build.**
 
@@ -1082,7 +1082,11 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [ ] Add a title and a status to each attention entry. Take the title from the admission snapshot, cap it at 120 characters, and treat it as untrusted plain text. The status is the claim's run status.
 - [ ] Build the read-only owner feed in `src/feed.ts` from `readAttention` and the controller status. It returns versioned JSON, `OwnerFeed` v1, with controller state, last tick, local switch, entries, counts per kind, an explicit working-run count, and evidence gaps. The working-run count is the number of non-terminal claims with no attention kind. `groupOf` in `src/attention.ts` returns null for terminal runs and for unpublished in-progress runs. It returns `blocked` for a published run that is not `waiting`, so a published run in active refresh counts as blocked, not working. Neither path below writes state, calls `gh`, or calls a model.
 - [ ] Serve the feed as `owner-feed --json` and as a GET-only route on the existing loopback viewer in `server/viewer.ts`, not a second port. Save golden feed output in `test/fixtures/owner-feed/` for `F09d`.
-- [ ] Keep the viewer and its feed route loopback-only. Build no VM-to-VM, exe.dev integration, or tailnet exposure. Record exposure beyond loopback in `docs/operations/factory-cli.md` as a later owner decision.
+- [ ] Build an owner dashboard as the viewer's home page in `server/viewer/dashboard.ts`, rendered from `OwnerFeed` v1. Show every run grouped by attention kind, with its title, stage, status, round, tokens against the run cap, CI result, PR link, and age. Show the run's "Not proven" entries from `F10b`, its failure class when it has one, and `F12a`'s primary metric when the ledger has a mature cohort. Keep the existing single-run timeline pages as the drill-down. The dashboard reads private state and calls no model and no `gh`.
+- [ ] Send every ticket action to GitHub. The dashboard links to the issue or PR for labeling, answering questions, review, merge, and close, so those actions keep the owner's GitHub identity. Add no merge, approve, label, retry, stage, or cap control.
+- [ ] Add one control, a hold switch. A POST to a dashboard route creates or removes only the controller's local `disabled` file, the same hold `docs/operations/factory-cli.md` describes. Accept it only from the loopback or the authorized tailnet host, with a matching `Origin` and a per-process token embedded in the page. Refuse every other method and route. Log each change with its time and source, and write nothing else in private state.
+- [ ] Expose the viewer on the owner's tailnet only, as the owner authorized on 2026-11-02. The viewer still binds `127.0.0.1`. Publish it with `tailscale serve` and its `--allowed-host` check, through an SSH tunnel from a tailnet machine, because the VM has no tailnet. Document starting, stopping, and the one-host rule in `docs/operations/viewer.md`. Build no public ingress, VM-to-VM, or exe.dev integration exposure.
+- [ ] Make the dashboard an installable web app, with a manifest and icons, so it opens like an app on a phone. Cache no private data in the browser. A service worker, if any, caches only static assets.
 - [ ] Write `docs/operations/backup.md`, a backup and restore runbook for VM state. Name every private path the controller needs to recover, including claims, receipts, candidate books, the ledger checkout, and status. Describe how to copy them with the controller stopped and how to restore them onto a VM set up by `server/provision.sh`.
 
 **You see.**
@@ -1091,7 +1095,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Test thresholds, the separate budget kind, titles and statuses, feed shape, counts, the working-run count, and the offline extension view in `test/attention.test.ts`, `test/feed.test.ts`, and `test/extension.test.ts`. Test that the feed route refuses every method except GET and that the viewer refuses a non-loopback bind in `test/viewer.test.ts`. Run `npm run check`.
+- [ ] Test thresholds, the separate budget kind, titles and statuses, feed shape, counts, the working-run count, and the offline extension view in `test/attention.test.ts`, `test/feed.test.ts`, and `test/extension.test.ts`. Test that the feed route refuses every method except GET and that the viewer refuses a non-loopback bind in `test/viewer.test.ts`. Test the dashboard's groups, links, escaping, and metric panel, and that the hold route refuses a missing token, a foreign `Origin`, an unlisted host, and any write but the `disabled` file in `test/dashboard.test.ts`. Run `npm run check`.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, per the boot recipe.
 
@@ -1101,21 +1105,21 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [ ] Lane 4. Lower a scoped verification run's token cap in the verification workflow, then exhaust that lowered cap with a fixture run. Save `budget-kind.json`. Pass when the run appears under the budget kind, not under blocked, and the production caps are unchanged.
 - [ ] Lane 5. Hold fixture runs that are working, waiting, and terminal at the same tick. Save `working-count.json`. Pass when the feed's working-run count equals the non-terminal claims with no attention kind, those runs appear in no attention kind, and terminal runs appear in neither.
 - [ ] Lane 6. Read the feed over the CLI and the viewer route at the same tick. Save `owner-feed.json`. Pass when both return the same entries, each count equals its list length, and no `gh` or model process starts during the reads.
-- [ ] Lane 7. Send a POST to the feed route, connect from the VM's external address, and read a fixture title that contains HTML and control characters. Save `feed-boundary.log`. Pass when the POST is refused, the external connection fails, and the title arrives as escaped plain text within 120 characters.
-- [ ] Lane 8. Read the existing viewer pages and the feed route from one viewer process. Save `viewer-route.json`. Pass when the feed is served on the viewer's port, no second listening port appears, and the existing pages still render.
+- [ ] Lane 7. Send a POST to the feed route, send the hold POST without a token and with a foreign `Origin`, connect from the VM's external address, and read a fixture title that contains HTML and control characters. Save `feed-boundary.log`. Pass when every POST is refused, the external connection fails, and the title arrives as escaped plain text within 120 characters.
+- [ ] Lane 8. Open the dashboard on the owner's tailnet through `tailscale serve`, with fixture runs in several kinds, then switch the hold on and off from it. Save `dashboard.json` and the rendered HTML. Pass when every run shows under its kind with working GitHub links, no second listening port appears, the existing timeline pages still render, the controller reports `locally_disabled` while held and dispatch again after release, and a hash of private state shows that only the `disabled` file changed.
 - [ ] Lane 9. Follow `docs/operations/backup.md` to back up the verification state and restore it into a scratch state directory. Save `backup-restore.json`. Pass when `status --json` on the restored directory matches the source and production state is unchanged.
 - [ ] Lane 10. Remove `factory:ready` from an early-stage fixture run before handoff, then end a second fixture run and relabel its issue. Save `release-relabel.json`. Pass when the controller releases the first run through its existing `unlabeled` path with no CLI command, and the relabel starts a fresh run rather than reviving the ended one.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Metric. Measure `status --json` and `owner-feed --json` wall time, feed route response time, the tick time the notify call adds, and model tokens on trunk and head.
+- [ ] Metric. Measure `status --json` and `owner-feed --json` wall time, feed route and dashboard response time, the tick time the notify call adds, and model tokens on trunk and head.
 - [ ] Probe. Interleave three status calls on each revision and three head feed reads over the CLI and the viewer route on the same fixture state. Save `perf.json`.
 - [ ] Baseline. Record trunk status milliseconds and zero model calls before head measurements.
-- [ ] Rule. Fail if a feed read exceeds 500 milliseconds, the notify call adds over 10 milliseconds to a tick, or any read calls a model. Fail if systemd takes over `WatchdogSec` plus `RestartSec` plus one poll interval, 180 seconds at the proposed settings, to restart a live controller that stopped sending `WATCHDOG=1`.
+- [ ] Rule. Fail if a feed read or a dashboard render exceeds 500 milliseconds, the notify call adds over 10 milliseconds to a tick, or any read calls a model. Fail if systemd takes over `WatchdogSec` plus `RestartSec` plus one poll interval, 180 seconds at the proposed settings, to restart a live controller that stopped sending `WATCHDOG=1`.
 
 **Review gate.** The operator reviews before merge.
 
-- [ ] Post `owner-feed.json`, `watchdog.log`, and `backup-restore.json` to the operator. Use text artifacts instead of a screenshot or video. Keep exposure beyond loopback recorded as a later owner decision. Merge on a clean verdict and a passing `check`.
+- [ ] Post `owner-feed.json`, `dashboard.json`, the rendered dashboard HTML, `watchdog.log`, and `backup-restore.json` to the operator, with the tailnet dashboard link. Use text artifacts instead of a screenshot or video. Keep public exposure out of scope. Merge on a clean verdict and a passing `check`.
 
 **Merge.**
 
@@ -1133,7 +1137,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Build.**
 
-- [ ] Write `decision.md`. Compare a dedicated new app, a Factory section in Shep, and an installable web app on fit to the job, one-time owner actions, per-change cost, push, and inbox. Name the dedicated app as the current lean and state what would change it.
+- [ ] Write `decision.md`. Compare a dedicated new app, a Factory section in Shep, and F09c's installable dashboard on fit to the job, one-time owner actions, per-change cost, push, and inbox. Name the dedicated app as the current lean and state what would change it.
 - [ ] Write `screens.md` with three sketches. Home orders runs by what needs the owner, with working runs as the feed's working-run count. Run detail shows status, stages, repairs, and tokens against caps, with buttons that open GitHub. Notification rules push only owner decisions, cap each push at 100 words, and suppress pushes for a run while the owner is viewing it.
 - [ ] Write `feed-contract.md`. Describe how the app reads F09c's `OwnerFeed` v1, which fields it needs, including the working-run count, and how it treats unknown fields and a newer version. Every action opens GitHub and none calls the factory.
 - [ ] Write `shep-lessons.md` with the Shep practices that transfer as copied code or rules, not a shared package. Include seeding without a push, suppression while viewing, the protocol document as the contract, and a fake backend by default.
