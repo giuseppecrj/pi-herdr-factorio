@@ -4,8 +4,9 @@ Build the GitHub-first factory for `giuseppecrj/pi-herdr-factorio` on the exe.de
 Take authorized issues through fixed stages to a ready PR labeled `factory:review`. The owner merges every PR.
 Keep GitHub writes in the controller, model execution in a sandbox, and required checks in secret-free GitHub-hosted CI.
 Implement build-order units 4 through 13 in this order.
-`F04a`, `F04b`, `F04c`, `F05`, `F06a`, `F06b`, `F07a`, `F07b`, `F07c`, `F07d`, `F08`, `F09a`, `F09b`, `F10`, `F11`, `F12`, `F13`.
+`F04a`, `F04b`, `F04c`, `F05`, `F06a`, `F06b`, `F07a`, `F07b`, `F07c`, `F07d`, `F08`, `F09a`, `F09b`, `F10b`, `F10c`, `F10`, `F12a`, `F09c`, `F11`, `F12`, `F13`.
 `F07d` is an operator tool, build-order row 7d, not a runtime stage.
+`F09d` is an optional research unit after `F09c`. It ships a decision memo and a throwaway prototype, not product code, and blocks nothing.
 Treat units 0 through 3 as historical prototype evidence, not work to repeat.
 
 ## How to read this
@@ -18,7 +19,7 @@ Use the **Factory CLI control procedure** below as the control skill. It combine
 
 Treat every new path, symbol, command, log field, and numerical budget below as a proposed implementation contract, not an existing capability. At the planning base `04b69c3`, only the pure state machine, policy helpers, fake adapter, provisioning script, and `/factory status` exist. Do not check future boxes with those prototypes alone.
 
-Use OpenAI models through exe.dev's ChatGPT subscription only. The owner's 2026-10-30 decision supersedes the earlier xAI fallback. F08 configures `openai/gpt-6.1-sol` for review and `openai/gpt-6.1-terra` for one retry after a recorded security-seat refusal. Count both models' usage. Use fresh acceptance and review sessions. Label each review seat `context-isolated, <same|different> model, same family, not cross-family`, comparing its answering model with the builder. R8 remains incomplete. Spend no exe.dev Anthropic or xAI credits.
+The owner's 2026-10-30 decision limited VM stages to OpenAI models through exe.dev's ChatGPT subscription and superseded the earlier xAI fallback. The owner's 2026-11-02 decision allows Anthropic models on the VM through exe.dev's integration. OpenAI stays the builder family. `F10c` moves the accept stage and one blocking review seat to an Anthropic model. Until `F10c` merges, every stage stays on OpenAI. F08 configures `openai/gpt-6.1-sol` for review and `openai/gpt-6.1-terra` for one retry after a recorded security-seat refusal. Count both models' usage. Anthropic usage counts against the same caps. xAI stays unused. Use fresh acceptance and review sessions. Today F08 labels each review seat `context-isolated, <same|different> model, same family, not cross-family`, comparing its answering model with the builder, and R8 stays incomplete until `F10c` merges.
 
 Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
@@ -41,7 +42,8 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 
 - [ ] Give each PR one owner role with the full lifecycle that `autopilot-full` names. The root coordinated merges through F08. From F09a onward, the owner alone merges. Launch each round as a fresh bare leaf with `fork: false`, bounded files, explicit model and thinking, verification, and commit policy. Keep one retained checkout and one canonical branch per owner.
 - [ ] Follow this dependency graph. Branch dependent work from `main` after its parent merges, or stack it on the parent's committed tip while the parent is still in review. Record the parent SHA in each brief.
-  - [ ] Start `F04a` from `main`. Follow `F04a -> F04b -> F04c -> F05 -> F06a -> F06b -> F07a -> F07b -> F07c -> F07d -> F08 -> F09a -> F09b -> F10 -> F11 -> F12 -> F13`.
+  - [ ] Start `F04a` from `main`. Follow `F04a -> F04b -> F04c -> F05 -> F06a -> F06b -> F07a -> F07b -> F07c -> F07d -> F08 -> F09a -> F09b -> F10b -> F10c -> F10 -> F12a -> F09c -> F11 -> F12 -> F13`.
+  - [ ] Run `F09d` after `F09c` as optional docs-only work. It writes only `docs/prototypes/ios-app/`, so it may run beside later code units, and no unit depends on it.
   - [ ] Keep this chain serial for code writes. It changes shared controller contracts and tests. Parallelize read-only verification with separate fixture issues, not dependent implementation.
   - [ ] Treat `F04a`'s first main-owned configuration and `F07b`'s first main-owned CI workflow as bootstrap gates. Prove parsing and execution locally first. Complete their main-backed live checks after those trusted files land on `main`, before dependent dispatch or publication. Record the bootstrap exceptions in Appendix C rather than claiming clean full verdicts early.
 - [ ] Hold the file boundaries in each PR's **Files** block. Treat listed directories as that PR's only directory-wide allowances. Obtain a revised scope before editing another path. New prototype receipts belong only in that PR's named documentation directory.
@@ -771,8 +773,9 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 - [ ] Prototype controller-only append to `ledger/runs.jsonl` on the `factory/ledger` orphan branch. Keep its Git checkout outside all stage mounts. Verify that the branch has no main ancestry and is never a source branch for product PRs.
 - [ ] Implement `appendRun` keyed by run ID with terminal outcome, issue/PR URLs, SHAs, artifact digests, stage timings, repair count, model versions, token totals, spend availability, and evidence links. Append each finished run once, including failures and `needs_info`, not only merges.
+- [ ] Freeze the trusted `WORKFLOW.md` digest, the gate-set digest, and the autonomy level into each ledger row. In v1 the autonomy level is always `approve_merge: always`, which R13 calls `land: propose`. They are two names for the same current policy, not two levels. Do not add a per-tick decision log.
 - [ ] Serialize writes in the single controller. Reconcile a pushed row before retrying after a crash. On a remote advance, fetch and reapply only the missing row, without force-pushing the ledger. Preserve unknown or corrupt rows for diagnosis instead of rewriting history.
-- [ ] Count interrupted attempts apart from failed ones. Today a controller restart during a stage ends that attempt as failed, so restarts use up the attempt cap. Keep that charge, because the interrupted attempt may already have spent tokens. Record each run's interrupted attempts in its ledger row, so `F12` can tell restarts from real failures. Source is the controller statechart in `docs/statecharts/README.md`.
+- [ ] Count interrupted attempts apart from failed ones. Today a controller restart during a stage ends that attempt as failed, so restarts use up the attempt cap. Keep that charge, because the interrupted attempt may already have spent tokens. Record each run's interrupted attempts in its ledger row, so `F12a` can tell restarts from real failures. Source is the controller statechart in `docs/statecharts/README.md`.
 - [ ] Persist usage at stage boundaries and before dispatching another request. Restore totals after restart. Block new work when a configured token, wall, or known spend cap is exhausted. Keep raw sessions private and publish only redacted evidence.
 
 **You see.**
@@ -781,7 +784,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Test append deduplication, remote advance, crash-after-push, redaction, unknown spend, restored totals, and corrupt rows in `test/ledger.test.ts`. Run `npm run check`.
+- [ ] Test append deduplication, remote advance, crash-after-push, redaction, unknown spend, restored totals, frozen policy digests, and corrupt rows in `test/ledger.test.ts`. Run `npm run check`.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, per the boot recipe.
 
@@ -812,23 +815,158 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [ ] Record the exact-head verdict and complete Bugbot triage after the orphan-branch prototype passes.
 - [ ] Apply the patch-id rule in `playbooks/shipping.md`. Hand `F09b` to the owner on a clean verdict and a passing `check`. After the owner's merge, branch the next PR from the new `main`.
 
+## Prove held-out tests fail on the base (F10b)
+
+**Depends on.** F09b. This adds a base-tree check and oracle-quality diagnosis to the acceptance suite from `F06b`, before build spends tokens.
+
+**Files.**
+
+- [ ] Create `src/diagnosis.ts`, `test/base-check.test.ts`, `test/diagnosis.test.ts`, `test/fixtures/oracle-corpus/`, and `docs/prototypes/base-check/`.
+- [ ] Edit `src/specify.ts`, `src/accept.ts`, `src/stages.ts`, `src/orchestrator.ts`, `server/gates.ts`, `server/controller.ts`, `skills/acceptance/SKILL.md`, `test/accept.test.ts`, `test/specify.test.ts`, `test/candidate-gates.test.ts`, and `test/orchestrator.test.ts` for scenario kinds, the base run, private failure details, failure classes, and their receipts.
+- [ ] Edit `src/handoff.ts`, `src/review.ts`, `server/controller.ts`, `test/handoff.test.ts`, and `test/review.test.ts` for the "Not proven" section and the closed set of non-pass judgment outcomes.
+
+**Build.**
+
+- [ ] Give each acceptance criterion in `Contract` a kind, `new_behavior` or `preservation`. Specify chooses the kind. A missing or unknown kind fails contract validation. Each accept scenario takes the kind of the criteria it maps, and a scenario that maps both kinds fails suite validation. The base rule covers only scenarios with checks. A judge-only scenario has no assertion, so the base run skips it and review still judges it. Each checked scenario's tests are mapped to it by test name, so a check file shared by several scenarios still yields one result per scenario. Every `new_behavior` criterion needs at least one checked scenario. A suite whose new-behavior criterion maps only to judge-only scenarios fails suite validation.
+- [ ] Add a named held-out base runner, `runHeldoutBase`, to `server/gates.ts`. Do not reuse `runVisibleTests`, which applies a patch and runs the visible command, not the private suite. After `accept` stores the suite, export the run's pinned base SHA with `exportTree`, the same export the CI gate builds, so the tree has no `.git`. Run only the private suite there, through the existing `GateRunner` isolation in `server/gates.ts`, with no network, no credentials, and no publication route. Never run generated checks directly on the controller host. Use a proposed 180-second cap and charge the wall time to the accept stage.
+- [ ] Judge each scenario against its kind. A new-behavior scenario must fail on the base, and only an assertion failure counts as that expected red. A preservation scenario must pass on the base. Any other result ends the run `failed` before build with a public, redacted reason, such as "acceptance does not reproduce the ticket" or "a preservation check fails on the base".
+- [ ] Never count a broken run as an expected red. A module-load failure, zero registered tests, a runner error, and a timeout each end the run `failed` with its own redacted reason, such as `base_load_error`, `base_no_tests`, `base_runner_error`, or `base_timeout`.
+- [ ] Keep assertion-level held-out failures in private state for both the base run and CI validation. Record each failing test's name and its bounded assertion message beside the file path. Today `server/gates.ts:1437-1443` keeps only file paths. Public evidence carries only a redacted summary, never held-out test names or messages.
+- [ ] Add `classifyFailure` to `src/diagnosis.ts`. Before any repair round, classify a hard failure as `candidate`, `oracle`, `missing_evidence`, or `infrastructure` from the private failure details and receipts. Classification is deterministic code and calls no model. A runner error, timeout, or unavailable runner is `infrastructure`. A receipt that lacks a required fact is `missing_evidence`. A failure is `oracle` only when it matches an adjudicated corpus entry, or when its scenario's base result was not the expected one. An expected red on the base, a new-behavior assertion failure, does not make a later failure of that scenario an oracle. Every other assertion failure is `candidate`. Only a `candidate` failure spends a repair. An `infrastructure` failure follows the existing retry caps. An `oracle` or `missing_evidence` failure ends the run `failed` with its own redacted reason and spends no repair.
+- [ ] Add a small adjudicated regression corpus in `test/fixtures/oracle-corpus/`. Include a proposed three known-good patches, a proposed three known-bad patches, fixture 558's load-time `git` call, and fixture 561's overconstrained oracle. Each entry records its expected base result, its expected class, and who adjudicated it. Fixture 558's expected base result is `base_load_error`. Fixture 561's expected class is `oracle`. Run the corpus in `npm run check`.
+- [ ] Record a base-run receipt with the base SHA, suite digest, each scenario's kind and result, exit code, wall time, and runner version. Keep it in private state. Keep the gates from `main`, held-out isolation, and budgets unchanged. Build and repair sessions never see the suite, its receipt, or the private failure details. Update `skills/acceptance/SKILL.md` to say each scenario has a kind and the suite runs against the base.
+- [ ] Add a code-written "Not proven" section to the handoff PR body. It lists judge-only criteria, same-family review while the receipt records `r8: "incomplete"`, non-pass judgment outcomes, and live proof still pending. The controller derives each entry from receipts and calls no model. Replace the fixed sentence `R8 cross-family review remains incomplete.` in `publicBody` at `server/controller.ts:2739` with this section, so the body never claims more or less than the receipts show.
+- [ ] Record `oracle` and `missing_evidence` on the run's pre-build failure record, not in the handoff body. Those classes end the run `failed` before build, so they never reach a PR.
+- [ ] Add a closed set of non-pass judgment outcomes for review scenarios, `unverifiable`, `inconclusive`, and `timeout`. Today a judgment is `{scenario, pass, reason}` in `src/review.ts`. A non-pass outcome can never set `pass: true`, and an unknown outcome fails validation. Leave CI's boolean `Verdict.pass` and the existing `refused` and `malformed` stage errors unchanged.
+
+**You see.**
+
+- [ ] Save a bug fixture whose new-behavior scenarios fail on the base by assertion and whose preservation scenarios pass, so it goes on to build. Save replays of fixtures 558 and 561 that end `failed` before build. Each has its base-run receipt.
+
+**Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Test kind parsing and validation, per-scenario judging, each non-assertion failure reason, the no-`.git` export, receipt contents, the redacted public reason, and that build never starts after a refusal in `test/base-check.test.ts`, `test/accept.test.ts`, and `test/specify.test.ts`. Test private failure details for base and CI runs in `test/candidate-gates.test.ts`. Test every failure class, that only `candidate` spends a repair, and the full corpus in `test/diagnosis.test.ts` and `test/orchestrator.test.ts`. Test the "Not proven" entries, the scenario rule for each `new_behavior` criterion, and that no non-pass verdict renders green in `test/handoff.test.ts` and `test/accept.test.ts`. Run `npm run check`.
+
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, per the boot recipe.
+
+- [ ] Lane 1. Regression lane against trunk. Run the same tiny bug fixture on trunk and head. Save `base-check.json`. Pass when head records a base run whose new-behavior scenarios fail by assertion and whose preservation scenarios pass, the run continues to build, and trunk's missing base run is recorded. When head's run reaches handoff, its PR body has a code-written "Not proven" section that lists same-family review and `r8: "incomplete"`.
+- [ ] Lane 2. Replay fixture 558, whose generated check calls `git` at load. Save `replay-558.json`. Pass when the base run reports `base_load_error` in the no-`.git` export and the run ends `failed` before build with no build tokens spent.
+- [ ] Lane 3. Replay fixture 561, whose preservation scenario S7 depends on the new heading and asserts whole-document equality. Save `replay-561.json`. Pass when S7 fails on the base as a preservation scenario and the run ends `failed` before build with no build tokens spent.
+- [ ] Lane 4. Run a fixture whose requested behavior already exists on the base. Save `base-passes.json`. Pass when its new-behavior scenarios pass on the base and the run ends `failed` before build with the redacted reason.
+- [ ] Lane 5. Inspect the base run's tree and sandbox. Save `base-export.json`. Pass when the tree has no `.git` and matches the CI gate's export of the same SHA, the gateway audit shows no GitHub route, and no branch or CI run appears.
+- [ ] Lane 6. Run a fixture whose suite registers zero tests, and one whose suite hangs. Save `base-broken.json`. Pass when each ends `failed` with its own reason, `base_no_tests` or `base_timeout`, never an expected red.
+- [ ] Lane 7. Drive one candidate whose held-out CI failure is a real defect, and one that fails only an adjudicated overconstrained oracle from the corpus. Save `failure-class.json`. Pass when the first is classified `candidate` and spends one repair, and the second is classified `oracle`, spends no repair, and ends `failed`.
+- [ ] Lane 8. Read private state and public evidence for a run with held-out failures. Save `failure-details.json`. Pass when private state holds each failing test's name and assertion message for the base and CI runs, and the public marker shows only the redacted summary.
+- [ ] Lane 9. Inspect the build session's mounts and history after a base run. Save `base-isolation.json`. Pass when the build sees no held-out file, test name, failure message, or base-run receipt.
+- [ ] Lane 10. Restart the controller during the base run, then compare run totals with and without the base run. Save `base-restart.json`. Pass when recovery charges the interrupted attempt per R11 and does not skip the base check, the base run uses no model tokens, and its wall time counts against the accept stage.
+
+**Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Metric. Measure base-run wall time, accept-stage wall time, failure classification time, full run time, and tokens per run on trunk and head.
+- [ ] Probe. Interleave three tiny bug fixture runs on each revision, and run the 558 and 561 replays once on head. Save `perf.json`.
+- [ ] Baseline. Record trunk accept-stage time and run usage first.
+- [ ] Rule. Fail if the base run takes over the proposed 180 seconds on the tiny fixture, calls a model, or lets a refused run spend build tokens. Report the added accept-stage time against trunk.
+
+**Review gate.** The operator reviews before merge.
+
+- [ ] Post the base-run receipts for the bug fixture and the 558 and 561 replays, and the failure-class receipt, to the operator. Use JSON instead of a screenshot or video. Merge on a clean verdict and a passing `check`.
+
+**Merge.**
+
+- [ ] Record the exact-head verdict and complete Bugbot triage.
+- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Hand `F10b` to the owner on a clean verdict and a passing `check`. After the owner's merge, branch the next PR from the new `main`.
+
+## Write acceptance and review with a second model family (F10c)
+
+**Depends on.** F10b. This closes R8 and R12 under the owner's 2026-11-02 decision to allow Anthropic models on the VM. It moves the accept stage and one blocking review seat to an Anthropic model. The builder and repair stay on OpenAI. The Anthropic route does not exist today. It is a planned prototype.
+
+**Files.**
+
+- [ ] Create `docs/prototypes/anthropic-route/` for the route prototype's receipts.
+- [ ] Edit `server/sandbox/routes.ts`, `server/sandbox/meter.ts`, `server/sandbox/gateway.ts`, and `server/provision.sh` for the Anthropic route, its usage meter, and the sandbox provider entry.
+- [ ] Edit `src/review.ts`, `src/handoff.ts`, `src/accept.ts`, `src/workflow.ts`, and `server/controller.ts` for the family check, seat labels, cross-family certification, and named fallbacks.
+- [ ] Edit `test/sandbox/routes.cases.ts`, `test/sandbox/gateway.cases.ts`, `test/review.test.ts`, `test/handoff.test.ts`, `test/accept.test.ts`, and `test/workflow.test.ts` for these contracts. Create a new test file only when a case fits none of them.
+- [ ] Edit `docs/operations/sandbox.md` and `docs/operations/factory-cli.md` for the route, the family labels, and the fallback receipts.
+- [ ] Edit `.github/factory/WORKFLOW.md` for the accept model, the Anthropic review seat, and any named same-family fallback. It is main-owned, so the owner authors that edit, the same as other trusted configuration.
+
+**Build.**
+
+- [ ] Prototype the Anthropic route before wiring any stage. Stop and report if `pi-factorio` cannot complete one metered call.
+  - [ ] Add a `model-anthropic` route to `server/sandbox/routes.ts`. Today `MODEL_ROUTE_IDS` at `server/sandbox/routes.ts:164` lists `model-openai` and `model-xai`. The gateway has one meter, `openai-responses-sse`, the only `Meter` value at `server/sandbox/routes.ts:112`. It always mounts `/openai/v1/` at `server/sandbox/routes.ts:336`, and mounts `model-xai` at `/xai/v1/` for any fallback that does not start with `openai/`, at `server/sandbox/routes.ts:343-349`. Make `model-anthropic` a third route id with its own prefix. Never reach it through that non-OpenAI fallback branch.
+  - [ ] Add an Anthropic value to `Meter` and a metered parser for Anthropic's streamed usage in `server/sandbox/meter.ts`. Today the OpenAI meter counts a stream with no usage as `unmetered` and still forwards it, per `server/sandbox/gateway.ts:995`. For the Anthropic route, a stream with a missing usage block fails the stage instead.
+  - [ ] Add the `anthropic` provider to the sandbox bundle's `models.json` in `server/provision.sh`, through the in-sandbox forwarder. Today that file lists only `openai` and `xai`, per `server/provision.sh:145-149`. The host's Pi config already names `anthropic` at `$LLM/anthropic`, per `server/provision.sh:82-86`. The sandbox still holds no credential.
+  - [ ] Prove one metered accept-stage call on `pi-factorio` before wiring stages. Save the gateway audit and meter receipt in `docs/prototypes/anthropic-route/`.
+- [ ] Move the accept stage to an Anthropic model set in trusted `.github/factory/WORKFLOW.md`. Today every model stage there is `openai/gpt-6.1-sol`. Keep the builder and repair on OpenAI. Choose the exact Anthropic model ID from the live integration catalog when building.
+- [ ] Add one blocking review seat on an Anthropic model, or move the code-review seat to it. Keep the other seats, the security fallback, and the shared review budget.
+- [ ] Add a `familyOf` check in code.
+  - [ ] Classify the acceptance author and each review seat by the observed answering model ID in its stage receipt, never by the requested or configured ID. A missing, null, or unknown observed ID is never cross-family. Label a seat `cross-family` only when that observed family differs from the builder's. Today `src/review.ts:412` builds the label from the requested ID and always appends `same family, not cross-family`, and `SeatReceipt.observed` may be null.
+  - [ ] Change certification in `src/handoff.ts`. Today `src/handoff.ts:931-940` requires `r8 === "incomplete"` and every seat label ending `same family, not cross-family`. Recompute the families from observed IDs inside certification, rather than trusting a label string. Accept `r8: "complete"` only when the accept author and at least one blocking review seat are observed cross-family, and reject it otherwise. Widen the `r8: "incomplete"` literal on `ReviewReceipt` at `src/review.ts:105` and the guard in the review wiring in the same change.
+  - [ ] Keep same-family runs certifiable with `r8: "incomplete"`. List them under the handoff's "Not proven" section from `F10b`.
+- [ ] Never substitute a model silently. If the Anthropic route is unavailable or refuses, the stage follows the existing retry and refusal rules. The security seat's named `openai/gpt-6.1-terra` retry stays on that seat only. Another stage gets a same-family fallback only when trusted `WORKFLOW.md` names one for that stage, and that run records `r8: "incomplete"`.
+- [ ] Charge Anthropic tokens and wall time to the existing per-stage and run caps. Report spend as known only where the integration meters it, and otherwise as unavailable. Mark any new number in this unit as proposed.
+
+**You see.**
+
+- [ ] Save one run whose accept author and one blocking seat answered from an Anthropic model, certified with `r8: "complete"`, at a ready `factory:review` PR. Save one forced same-family fallback run that certifies with `r8: "incomplete"` and shows under "Not proven".
+
+**Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Test the Anthropic route, the usage parser, unknown-usage fail-closed, and denial of an unlisted provider in `test/sandbox/routes.cases.ts` and `test/sandbox/gateway.cases.ts`. Test `familyOf`, seat labels, unknown families, and cross-family certification in `test/review.test.ts` and `test/handoff.test.ts`. Test the accept model choice and named fallbacks in `test/accept.test.ts` and `test/workflow.test.ts`. Run `npm run check`.
+
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, per the boot recipe.
+
+- [ ] Lane 1. Regression lane against trunk. Run the same tiny bug fixture on trunk and head. Save `anthropic-accept.json`. Pass when trunk's accept stays on OpenAI, and head's accept makes one metered call through the `model-anthropic` route with tokens in the meter receipt, while build and repair stay on OpenAI.
+- [ ] Lane 2. Request an unlisted provider route from a stage sandbox. Save `unlisted-provider.log`. Pass when the gateway denies it and no upstream request leaves the sandbox.
+- [ ] Lane 3. Replay an Anthropic stream with missing usage through the gateway's echo fixture. Save `unknown-usage.json`. Pass when the Anthropic stage fails on the missing usage block and cannot succeed on unmetered usage, while the OpenAI route's existing `unmetered` count is unchanged.
+- [ ] Lane 4. Drive a real fixture issue to handoff with the Anthropic accept stage and review seat. Save `cross-family-run.json`. Pass when certification records `r8: "complete"`, the PR is ready and labeled `factory:review`, and its "Not proven" section omits same-family review.
+- [ ] Lane 5. Make the Anthropic route unavailable while a verification `WORKFLOW.md` names a same-family fallback. Save `same-family-fallback.json`. Pass when the run certifies with `r8: "incomplete"` and the PR body lists same-family review under "Not proven".
+- [ ] Lane 6. Inspect seat labels on a run where an OpenAI model answered a seat that requested Anthropic. Save `label-check.json`. Pass when that seat is never labeled `cross-family`, and no seat with an unknown family is labeled `cross-family`.
+- [ ] Lane 7. Make the Anthropic review seat refuse. Save `anthropic-refusal.json`. Pass when the seat follows the existing refusal rule, no unnamed model substitutes for it, and the missing seat never becomes a pass.
+- [ ] Lane 8. Run one fixture whose stages use both providers. Save `two-provider-budget.json`. Pass when both providers' tokens and wall time count against the per-stage and run caps, each stage reserves its full allowance before launch, and spend shows unavailable where the integration meters none.
+- [ ] Lane 9. Inspect the build and repair sessions' mounts, history, and gateway audit after an Anthropic accept stage. Save `heldout-isolation.json`. Pass when the builder sees no held-out file, test name, or acceptance session, the same as on trunk.
+- [ ] Lane 10. Restart the controller during the Anthropic accept stage. Save `accept-restart.json`. Pass when recovery charges the interrupted attempt per R11, retries accept on the same Anthropic model, and keeps both providers' totals.
+
+**Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Metric. Measure accept-stage wall time and tokens on trunk and head, and the gateway meter time added per Anthropic call.
+- [ ] Probe. Interleave three tiny bug fixture runs on each revision. Time the meter's parse of each Anthropic stream separately. Save `perf.json`.
+- [ ] Baseline. Record trunk's OpenAI accept-stage wall time and tokens first.
+- [ ] Rule. Fail if head's median accept-stage wall time exceeds trunk's by more than a proposed 50%, or the meter adds more than a proposed 50 milliseconds per call. Fail if any Anthropic call goes unmetered. Report spend as unavailable where the integration meters none.
+
+**Review gate.** The operator reviews before merge.
+
+- [ ] Post the cross-family run's PR URL, its certification receipt, the fallback receipt, and the Anthropic meter receipt to the operator. Use JSON instead of a screenshot or video. Merge on a clean verdict and a passing `check`.
+
+**Merge.**
+
+- [ ] Record the exact-head verdict and complete Bugbot triage, with each seat's observed family.
+- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Hand `F10c` to the owner on a clean verdict and a passing `check`. After the owner's merge, branch the next PR from the new `main`.
+
 ## Apply authorized PR feedback in place (F10)
 
-**Depends on.** F09b. This implements unit 10 and completes the GitHub feedback part of the definition of done.
+**Depends on.** F10c. This implements unit 10 and completes the GitHub feedback part of the definition of done.
 
 **Files.**
 
 - [ ] Create `src/feedback.ts`, `test/feedback.test.ts`, and `skills/address-pr-comments/` with provenance.
-- [ ] Edit `src/tickets.ts`, `src/adapters/github.ts`, `src/run.ts`, `src/stages.ts`, `src/markers.ts`, `server/controller.ts`, `test/fake-ticket-adapter.ts`, `test/pipeline.test.ts`, and `skills/README.md` for feedback cursors and fresh repair rounds.
+- [ ] Edit `src/tickets.ts`, `src/adapters/github.ts`, `src/run.ts`, `src/stages.ts`, `src/markers.ts`, `src/orchestrator.ts`, `src/handoff.ts`, `src/review.ts`, `server/controller.ts`, `test/fake-ticket-adapter.ts`, `test/pipeline.test.ts`, `test/orchestrator.test.ts`, `test/handoff.test.ts`, `test/review.test.ts`, `skills/README.md`, and `docs/statecharts/journey/Journey.tla` for the feedback batch, feedback cursors, fresh repair rounds, and repair stop rules.
 
 **Build.**
 
-- [ ] Poll PR conversation comments, submitted reviews, and inline review comments. Normalize stable IDs, actor permissions, PR identity, and referenced head. Deduplicate bot messages and already-processed feedback.
+- [ ] Poll PR conversation comments, submitted reviews, and inline review comments once per thread. Give every thread and event a provider-qualified ID, such as `github:<owner>/<repo>:pr:<n>` for a PR and `github:<owner>/<repo>:review-comment:<id>` for an inline comment. Normalize actor permissions, PR identity, and referenced head. Deduplicate bot messages and already-processed feedback.
+- [ ] Collect each round's new feedback into one immutable feedback batch for the publishing run. Persist the batch and each event's disposition before the thread's ingestion cursor advances. Hand the batch to a fresh build only at a stage boundary, never into a running stage.
+- [ ] Give each PR one repair owner, the run that published it. Defer delivering feedback to other runs bound to the same PR. Add related-run delivery only when a real case needs it.
+- [ ] Deliver feedback to the build session as bounded cards. Each card carries the event ID, the head, a bounded excerpt, and a truncation flag. When the excerpt is cut, the card points to an immutable JSON file with the full text and its digest. Add the same truncation flag to the acceptance and build prompts' inlined sources. Cap the cards at a proposed 8 KiB per round.
+- [ ] Never revive a terminal run. Feedback on a run that ended `needs_info` needs fresh readiness and a linked successor run. Feedback on a merged PR files a proposal, as below. Feedback on a cancelled or failed run starts nothing.
 - [ ] Implement `applyFeedback` only for an open factory PR and a write-access actor. Treat comments as requested work within the original contract, not permission to edit forbidden files or broaden scope. Route incompatible requests to a question or proposal.
 - [ ] Adapt the MIT address-pr-comments skill without its direct pushes or replies. Use a fresh sanitized build session, the same branch and PR, and cumulative repair and cost budgets. Persist the feedback cursor before retries can redispatch it.
 - [ ] Remove readiness while a factory repair is active. Convert the PR to a draft with `gh pr ready --undo` and remove `factory:review`, because a missing label does not block a merge but GitHub refuses to merge a draft. Re-run validate and review at the new head before marking the PR ready and restoring `factory:review`. Have only the controller push and reply. Do not rewrite unexpected owner commits without explicit reconciliation and scope confirmation.
-- [ ] Handle a merge that lands during a repair anyway, such as after the owner marks the draft ready. Today `advance()` accepts `landed` only during `land` and returns `invalid` in any other stage, so the run keeps building on a merged PR. Keep the PR's published head and its verdict apart from the repair in progress, because a repair round clears the working patch and verdict. Once a PR exists, a merge ends the run as landed from any stage, aborts the repair stage, and records the merged SHA. Record whether that SHA carries a passing factory verdict and review. A head without one, such as a head the owner marked ready during a repair, is recorded as an owner override, never as a factory-verified landing. `docs/statecharts/README.md` shows the current gap as the `MergeEndsRun` break.
+- [ ] Keep merge observation working through repair rounds, such as after the owner marks the draft ready. Since F09a, `observed` in `src/handoff.ts` ends a run when it sees a merged PR in any non-terminal candidate state. It stops and charges captured work, records the merged SHA, and records `owner_override` when no certified generation matches the merged head. Route the F10 repair stage through that same path, so a merge aborts the repair. Keep the PR's published head and its verdict apart from the repair in progress, because a repair round clears the working patch and verdict. A head the owner marked ready during a repair records as an owner override, never as a factory-verified landing.
+- [ ] Change the journey model's locks on repair after publication. `NoPostPrRepair` at `docs/statecharts/journey/Journey.tla:249` forbids every repair phase once a PR is published. The `RepairDue` guard `b.published = 0` at `Journey.tla:106` allows a repair only before publication. `FailOrRepair` at `Journey.tla:74-76` holds instead of entering `repair_due` once `published # 0`, and `ReviewResult` holds the same way at `Journey.tla:146`. Replace those holds with a `repair_due` entry for the publishing run's feedback batch, within the shared repair cap. Keep every other path held, and keep every other run out of repair.
 - [ ] For feedback on a merged PR, file a deduplicated `factory:proposed` issue instead of modifying the merged branch. Keep it ineligible for automatic admission.
+- [ ] Stop a repair that makes no progress. Today a repair whose patch digest matches the current patch is refused but falls through to another `repair_due` attempt at `src/handoff.ts:1597`. End the run `failed` with reason `repair_no_progress` only for a passed build whose patch digest is unchanged. A failed or invalid repair patch still uses the existing attempt cap and repair limit.
+- [ ] End the run `failed` with a proposed reason `repair_repeated_finding` when the same blocking finding repeats across rounds. Match a repeat by seat plus finding fingerprint. A later review round blocks only on an unfixed earlier finding or on a defect inside the repair diff. Add no separate signature limit, because the two-round cap already bounds repeats.
+- [ ] Record a disposition, `adopted`, `rejected`, or `merged`, for each feedback item and each blocking finding. Store it with the feedback batch and the round receipt.
 
 **You see.**
 
@@ -836,19 +974,19 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Cover all comment sources, permission checks, stale heads, cursor recovery, owner commits, scope expansion, shared repair caps, and a merge during a repair round in `test/feedback.test.ts`. Run `npm run check`. Give `docs/statecharts/journey/Journey.tla` the same published-head split, and rerun it until `MergeEndsRun` holds and every merge without an owner override names a head whose checks and review passed.
+- [ ] Cover all comment sources, provider-qualified IDs, permission checks, stale heads, cursor recovery, owner commits, scope expansion, shared repair caps, and a merge during a repair round in `test/feedback.test.ts`. Test `repair_no_progress`, repeated findings by fingerprint, later-round blocking scope, and dispositions in `test/handoff.test.ts` and `test/review.test.ts`. Test the feedback batch across crash boundaries, card truncation, and terminal runs that stay terminal in `test/orchestrator.test.ts` and `test/handoff.test.ts`. Run `npm run check`. Give `docs/statecharts/journey/Journey.tla` the same published-head split and the changed `NoPostPrRepair`, `RepairDue`, `FailOrRepair`, and `ReviewResult`. Check that TLC reaches a published-PR repair state, so the invariants are not passing vacuously. Rerun TLC until every invariant holds and every merge without an owner override names a head whose checks and review passed.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, per the boot recipe.
 
 - [ ] Lane 1. Regression lane against trunk. Post the same authorized fixture feedback to each revision's open PR. Save `feedback-round.json`. Pass when head updates its existing PR and trunk's missing feedback behavior is recorded.
-- [ ] Lane 2. Submit an owner review with requested changes. Save `review-feedback.json`. Pass when one repair starts, the PR is a draft that GitHub refuses to merge, and readiness is withheld until fresh evidence passes.
-- [ ] Lane 3. Add an inline review comment. Save `inline-feedback.json`. Pass when the adapter associates it with the correct PR and head.
-- [ ] Lane 4. Post a non-writer comment to a real fixture PR under the identity grant. Save `unauthorized-feedback.json`. Pass when it starts no run.
+- [ ] Lane 2. Submit a long owner review with requested changes. Save `review-feedback.json`. Pass when one repair starts, the build receives the review as a bounded card with a truncation pointer, the PR is a draft that GitHub refuses to merge, and readiness is withheld until fresh evidence passes.
+- [ ] Lane 3. Add an inline review comment. Save `inline-feedback.json`. Pass when the adapter associates it with the correct PR and head under a provider-qualified event ID.
+- [ ] Lane 4. Post a non-writer comment to a real fixture PR under the identity grant. Save `feedback-authority.json`. Pass when the comment starts no run, spends no repair round, and adds nothing to the publishing run's feedback batch.
 - [ ] Lane 5. Poll a processed comment twice. Save `feedback-dedup.log`. Pass when only one repair and one reply occur.
 - [ ] Lane 6. Restart after the repair push but before acknowledging the comment. Save `feedback-restart.json`. Pass when recovery keeps the same branch/head mapping and does not rebuild twice.
 - [ ] Lane 7. Request a workflow edit in feedback. Save `feedback-scope.json`. Pass when the controller refuses or routes owner-only work without weakening path policy.
 - [ ] Lane 8. Add an owner commit while a repair is prepared. Save `owner-head-drift.json`. Pass when the factory detects drift and does not overwrite the owner's work.
-- [ ] Lane 9. Post authorized feedback on a merged fixture PR. Save `merged-feedback.json`. Pass when one proposed issue appears and no merged branch is changed.
+- [ ] Lane 9. Post authorized feedback on a merged fixture PR and on a `needs_info` fixture issue. Save `merged-feedback.json`. Pass when one proposed issue appears, no merged branch is changed, and neither terminal run revives.
 - [ ] Lane 10. Send more feedback after the shared two-repair cap. Save `feedback-budget.json`. Pass when the run stops with an explanation rather than resetting its repair budget.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
@@ -856,7 +994,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [ ] Metric. Measure comment-to-dispatch latency, repair-stage wall time, full feedback-to-ready time, and cumulative tokens/spend on both revisions.
 - [ ] Probe. Interleave three small comment-fix scenarios. On trunk record polling and unchanged PR state, not a successful repair. Save `perf.json`.
 - [ ] Baseline. Record trunk's PR polling latency and existing run usage first.
-- [ ] Rule. Fail if authorized feedback takes over two ticks to dispatch, a tiny repair takes over 20 minutes excluding CI queue delay, or it consumes over 80,000 extra tokens. Fail any repair that resets cumulative spend or turn limits.
+- [ ] Rule. Fail if authorized feedback takes over two ticks to dispatch, a tiny repair takes over 20 minutes excluding CI queue delay, or it consumes over 80,000 extra tokens. Fail if a round's feedback cards exceed 8 KiB inline. Fail any repair that resets cumulative spend or turn limits.
 
 **Review gate.** The operator reviews before merge.
 
@@ -867,9 +1005,178 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [ ] Record the exact-head verdict and Bugbot triage, including a real owner-feedback round trip.
 - [ ] Apply the patch-id rule in `playbooks/shipping.md`. Hand `F10` to the owner on a clean verdict and a passing `check`. After the owner's merge, branch the next PR from the new `main`.
 
+## Measure ticket outcomes before adding work (F12a)
+
+**Depends on.** F10. This implements unit 12's primary outcome metric before `F11` adds scheduled work. It does not depend on `F11`'s cadence.
+
+**Files.**
+
+- [ ] Create `src/metrics.ts`, `src/replay.ts`, `test/metrics.test.ts`, `test/replay.test.ts`, `test/fixtures/replay/`, and `docs/operations/metrics.md`.
+- [ ] Edit `src/ledger.ts`, `server/cli.ts`, and `.github/factory/WORKFLOW.md` for the metric and replay commands, mature-cohort settings, and the replay cap.
+
+**Build.**
+
+- [ ] Implement the primary metric from `docs/design.md`. Report the share of `factory:ready` tickets that landed with zero repair rounds and no linked follow-up defect within seven days. Report it against all tokens spent on that cohort, including failed, cancelled, and `needs_info` runs, as tokens per clean landing. Count a ticket once across clarification attempts.
+- [ ] Apply mature-cohort rules. A landed ticket matures seven days after its merge. Report a cohort with immature tickets as pending, and report unknown defect follow-up separately instead of treating missing evidence as clean. Serve the report as `metrics --json`. It reads only the ledger and redacted receipts and calls no model.
+- [ ] Add measurements that decide deferred work. Report context pressure, the share of stage prompts that hit a truncation flag or a prompt cap, to decide on full context packs. Report restart-ended runs, failed runs with interrupted attempts on the ledger, to decide R11. Report explicit-intake demand, write-access requests for factory work on issues without `factory:ready`, to decide on a model intake router. Each report names its revisit threshold, proposed at 10% of mature runs. None of them builds the deferred work.
+- [ ] Pin a small versioned replay corpus in `test/fixtures/replay/` of a proposed five sanitized past tickets, including known-good, known-bad, and vague cases. Replay it on the previous trusted factory and a candidate factory in clean environments, with previous-policy gates and isolated state. Report the primary metric, wall time, tokens, and spend for each factory. Prevent replay from creating ordinary production issues or PRs without a dedicated fixture grant.
+- [ ] Charge replay tokens and wall time to a configured replay cap in trusted `WORKFLOW.md`. No metric or replay result gates, advances, or promotes a run.
+
+**You see.**
+
+- [ ] Save a metric report with numerator, denominator, tokens per clean landing, mature-cohort count, and unknowns. Save one replay comparison of the previous and candidate factories on the fixed corpus.
+
+**Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Test cohort boundaries, duplicate attempts, the token denominator, seven-day defects, missing evidence, and the deferred-work thresholds in `test/metrics.test.ts`. Test corpus pinning, previous-policy selection, and replay isolation in `test/replay.test.ts`. Run `npm run check`.
+
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, per the boot recipe.
+
+- [ ] Lane 1. Regression lane against trunk. Read the same real ledger cohort on trunk and head. Save `outcome-metric.json`. Pass when head computes the defined metric and the deferred-work report, marks counts below their revisit thresholds, and does not invent mature history absent on trunk.
+- [ ] Lane 2. Inspect a recent cohort younger than seven days that includes a ticket with several clarification attempts. Save `immature-cohort.json`. Pass when the cohort is reported as pending rather than zero-defect success, and the ticket is counted once with its attempts visible.
+- [ ] Lane 3. Link an authorized follow-up defect issue to a fixture run. Save `defect-window.json`. Pass when the affected mature cohort's result changes according to the seven-day rule.
+- [ ] Lane 4. Include a failed run and a `needs_info` run in a fixture cohort. Save `token-denominator.json`. Pass when their tokens count in the denominator and neither counts as a clean landing.
+- [ ] Lane 5. Include a fixture ticket that landed after one repair round. Save `repaired-landing.json`. Pass when it counts as landed but not clean, and its repair tokens count.
+- [ ] Lane 6. Replay a known-good real fixture ticket on the previous and candidate factories. Save `replay.json`. Pass when both factories use clean state and the ticket produces comparable behavior receipts.
+- [ ] Lane 7. Run a replay and inspect side effects through `gh`. Save `replay-isolation.json`. Pass when no production issue, PR, or ticket dispatch appears and replay state stays apart from production state.
+- [ ] Lane 8. Read ledger rows that include truncation flags and restart-ended runs. Save `deferred-work.json`. Pass when each report names its count, its share of mature runs, and its revisit threshold, and no deferred work is built.
+- [ ] Lane 9. Remove a fixture run's receipt from a verification copy of the state. Save `metric-unknowns.json`. Pass when its ticket appears under unknowns, not as a clean landing.
+- [ ] Lane 10. Compare replay session/model and policy versions. Save `replay-provenance.json`. Pass when the report records exact versions, same-family limitations, and unavailable spend without claiming improvement from incomparable runs.
+
+**Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Metric. Measure metric computation time, replay wall time per stage, and tokens and spend per replayed run on trunk and head.
+- [ ] Probe. Interleave three metric calculations on the same ledger copy and three previous/head replay pairs for one fixed tiny ticket. Record trunk's unsupported metric command separately. Save `perf.json`.
+- [ ] Baseline. Record trunk's unsupported metric response and the previous factory's tiny-ticket stage timings and usage first.
+- [ ] Rule. Fail if computing the metric over 1,000 rows exceeds 2 seconds, the metric calls a model, or a replay creates a production issue or PR. Flag over 20% higher median tokens or stage time for the same successful replay as a regression unless approved before the run.
+
+**Review gate.** The operator reviews before merge.
+
+- [ ] Post the metric report, the pending-cohort receipt, and the replay comparison to the operator. Use JSON instead of a screenshot or video. Merge on a clean verdict and a passing `check`. Do not count the seven-day claim as verified before real mature evidence exists.
+
+**Merge.**
+
+- [ ] Record the exact-head verdict and Bugbot triage. Keep immature-cohort evidence gaps explicit.
+- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Hand `F12a` to the owner on a clean verdict and a passing `check`. After the owner's merge, branch the next PR from the new `main`.
+
+## Expose an owner feed and harden controller health (F09c)
+
+**Depends on.** F12a. This small maintenance unit adds controller liveness, attention thresholds, a read-only owner feed, and a backup runbook. It adds no cancel or retry verbs. Removing `factory:ready` already releases an early-stage run, per `docs/operations/factory-cli.md:455`. A terminal run never restarts, and removing and re-adding `factory:ready` starts a fresh run, per `docs/operations/factory-cli.md:534`.
+
+**Files.**
+
+- [ ] Create `src/feed.ts`, `test/feed.test.ts`, `test/fixtures/owner-feed/`, and `docs/operations/backup.md`.
+- [ ] Edit `src/attention.ts`, `src/workflow.ts`, `.github/factory/WORKFLOW.md`, `server/controller.ts`, `server/cli.ts`, `server/viewer.ts`, `server/factory.service`, `extension/index.ts`, `test/attention.test.ts`, `test/viewer.test.ts`, `test/extension.test.ts`, and `docs/operations/factory-cli.md` for liveness, thresholds, and the feed.
+
+**Build.**
+
+- [ ] Add controller liveness. Set `Type=notify` and `WatchdogSec=120` in `server/factory.service`, and keep `Restart=on-failure` and `RestartPreventExitStatus=2`. Have `serveLoop` in `server/controller.ts` send `READY=1` once and `WATCHDOG=1` after each `writeStatus`. systemd then restarts a controller that is alive but has stopped ticking. Node has no Unix datagram socket, so first prove the notify route, such as `systemd-notify` with the matching `NotifyAccess`, under `systemd-run --user -p WatchdogSec=10s` on the VM.
+- [ ] Add age thresholds to `src/attention.ts`. Mark a `waiting` entry stale after a proposed 3 days and a blocked entry stale after a proposed 6 hours. Read both from trusted `.github/factory/WORKFLOW.md`. A stale entry stays in its group, and no threshold launches work or calls a model.
+- [ ] Keep `budget_exhausted` distinct from `blocked`. Give it its own attention kind, `budget`, instead of folding it into blocked. The attention view then has seven kinds.
+- [ ] Add a title and a status to each attention entry. Take the title from the admission snapshot, cap it at 120 characters, and treat it as untrusted plain text. The status is the claim's run status.
+- [ ] Build the read-only owner feed in `src/feed.ts` from `readAttention` and the controller status. It returns versioned JSON, `OwnerFeed` v1, with controller state, last tick, local switch, entries, counts per kind, an explicit working-run count, and evidence gaps. The working-run count is the number of non-terminal claims with no attention kind. `groupOf` in `src/attention.ts` returns null for terminal runs and for unpublished in-progress runs. It returns `blocked` for a published run that is not `waiting`, so a published run in active refresh counts as blocked, not working. Neither path below writes state, calls `gh`, or calls a model.
+- [ ] Serve the feed as `owner-feed --json` and as a GET-only route on the existing loopback viewer in `server/viewer.ts`, not a second port. Save golden feed output in `test/fixtures/owner-feed/` for `F09d`.
+- [ ] Keep the viewer and its feed route loopback-only. Build no VM-to-VM, exe.dev integration, or tailnet exposure. Record exposure beyond loopback in `docs/operations/factory-cli.md` as a later owner decision.
+- [ ] Write `docs/operations/backup.md`, a backup and restore runbook for VM state. Name every private path the controller needs to recover, including claims, receipts, candidate books, the ledger checkout, and status. Describe how to copy them with the controller stopped and how to restore them onto a VM set up by `server/provision.sh`.
+
+**You see.**
+
+- [ ] Save `owner-feed.json` from `owner-feed --json`, with a waiting PR, a blocked run, and a budget run under their own kinds, each with a title and a status, and a working-run count. Save the journal line where systemd restarts a live controller that stopped sending `WATCHDOG=1`.
+
+**Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Test thresholds, the separate budget kind, titles and statuses, feed shape, counts, the working-run count, and the offline extension view in `test/attention.test.ts`, `test/feed.test.ts`, and `test/extension.test.ts`. Test that the feed route refuses every method except GET and that the viewer refuses a non-loopback bind in `test/viewer.test.ts`. Run `npm run check`.
+
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, per the boot recipe.
+
+- [ ] Lane 1. Regression lane against trunk. Run `status --json` on trunk and head with the same fixtures. Save `attention-diff.json`. Pass when head adds titles, statuses, and the budget kind, and every trunk entry still appears.
+- [ ] Lane 2. Hang the tick loop of a scoped verification controller in a live, runnable process, so it stops sending `WATCHDOG=1`. Do not use `kill -STOP`, because a stopped process waits out `TimeoutStopSec=300`. Save `watchdog.log`. Pass when the journal shows a watchdog timeout, systemd restarts the controller within `WatchdogSec` plus `RestartSec` plus one poll, 120 plus 30 plus 30 seconds, and recovery leaves one claim per run.
+- [ ] Lane 3. Leave a fixture PR waiting past a shortened verification threshold. Save `stale-wait.json`. Pass when the entry is marked stale, stays under PR review, and its model usage does not increase.
+- [ ] Lane 4. Lower a scoped verification run's token cap in the verification workflow, then exhaust that lowered cap with a fixture run. Save `budget-kind.json`. Pass when the run appears under the budget kind, not under blocked, and the production caps are unchanged.
+- [ ] Lane 5. Hold fixture runs that are working, waiting, and terminal at the same tick. Save `working-count.json`. Pass when the feed's working-run count equals the non-terminal claims with no attention kind, those runs appear in no attention kind, and terminal runs appear in neither.
+- [ ] Lane 6. Read the feed over the CLI and the viewer route at the same tick. Save `owner-feed.json`. Pass when both return the same entries, each count equals its list length, and no `gh` or model process starts during the reads.
+- [ ] Lane 7. Send a POST to the feed route, connect from the VM's external address, and read a fixture title that contains HTML and control characters. Save `feed-boundary.log`. Pass when the POST is refused, the external connection fails, and the title arrives as escaped plain text within 120 characters.
+- [ ] Lane 8. Read the existing viewer pages and the feed route from one viewer process. Save `viewer-route.json`. Pass when the feed is served on the viewer's port, no second listening port appears, and the existing pages still render.
+- [ ] Lane 9. Follow `docs/operations/backup.md` to back up the verification state and restore it into a scratch state directory. Save `backup-restore.json`. Pass when `status --json` on the restored directory matches the source and production state is unchanged.
+- [ ] Lane 10. Remove `factory:ready` from an early-stage fixture run before handoff, then end a second fixture run and relabel its issue. Save `release-relabel.json`. Pass when the controller releases the first run through its existing `unlabeled` path with no CLI command, and the relabel starts a fresh run rather than reviving the ended one.
+
+**Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Metric. Measure `status --json` and `owner-feed --json` wall time, feed route response time, the tick time the notify call adds, and model tokens on trunk and head.
+- [ ] Probe. Interleave three status calls on each revision and three head feed reads over the CLI and the viewer route on the same fixture state. Save `perf.json`.
+- [ ] Baseline. Record trunk status milliseconds and zero model calls before head measurements.
+- [ ] Rule. Fail if a feed read exceeds 500 milliseconds, the notify call adds over 10 milliseconds to a tick, or any read calls a model. Fail if systemd takes over `WatchdogSec` plus `RestartSec` plus one poll interval, 180 seconds at the proposed settings, to restart a live controller that stopped sending `WATCHDOG=1`.
+
+**Review gate.** The operator reviews before merge.
+
+- [ ] Post `owner-feed.json`, `watchdog.log`, and `backup-restore.json` to the operator. Use text artifacts instead of a screenshot or video. Keep exposure beyond loopback recorded as a later owner decision. Merge on a clean verdict and a passing `check`.
+
+**Merge.**
+
+- [ ] Record the exact-head verdict and complete Bugbot triage after the notify prototype passes.
+- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Hand `F09c` to the owner on a clean verdict and a passing `check`. After the owner's merge, branch the next PR from the new `main`.
+
+## Investigate a factorio iOS app (F09d)
+
+**Depends on.** F09c. This unit is optional and blocks nothing. It writes only `docs/prototypes/ios-app/`, so it may run beside later code units. Its prototype decodes real F09c feed output. This is research and prototype work only, and no product code ships.
+
+**Files.**
+
+- [ ] Create `docs/prototypes/ios-app/` with `decision.md`, `screens.md`, `feed-contract.md`, `shep-lessons.md`, `apple-setup.md`, `fixtures/`, and a throwaway Swift package in `model/`.
+- [ ] Edit nothing outside `docs/prototypes/ios-app/`. Make no change to the shep repository.
+
+**Build.**
+
+- [ ] Write `decision.md`. Compare a dedicated new app, a Factory section in Shep, and an installable web app on fit to the job, one-time owner actions, per-change cost, push, and inbox. Name the dedicated app as the current lean and state what would change it.
+- [ ] Write `screens.md` with three sketches. Home orders runs by what needs the owner, with working runs as the feed's working-run count. Run detail shows status, stages, repairs, and tokens against caps, with buttons that open GitHub. Notification rules push only owner decisions, cap each push at 100 words, and suppress pushes for a run while the owner is viewing it.
+- [ ] Write `feed-contract.md`. Describe how the app reads F09c's `OwnerFeed` v1, which fields it needs, including the working-run count, and how it treats unknown fields and a newer version. Every action opens GitHub and none calls the factory.
+- [ ] Write `shep-lessons.md` with the Shep practices that transfer as copied code or rules, not a shared package. Include seeding without a push, suppression while viewing, the protocol document as the contract, and a fake backend by default.
+- [ ] Write `apple-setup.md` with the owner's Apple steps and costs. Cover the bundle ID, the Push capability, the App Store Connect record, internal TestFlight testers, APNs key scope, and where a push sender may run.
+- [ ] Capture real feed output into `fixtures/`. Run the F09c controller on `pi-factorio` through the boot recipe with fixture runs in each attention kind and at least one working run, and save redacted `owner-feed --json` output.
+- [ ] Build a throwaway SwiftUI or ShepKit-style model in `model/` on a machine with Xcode. Decode every fixture, order Home, and apply the notification rules in Swift Testing cases. Record the Xcode and Swift versions. The model never becomes product code.
+- [ ] Record the open exposure question in `decision.md`. Name the choices, such as an exe.dev VM-to-VM integration, the exe.dev HTTPS proxy, and a relay on another VM, and leave the choice to the owner. Take no Apple account action, build no TestFlight release, and run no VM-to-VM check.
+
+**You see.**
+
+- [ ] Save `decision.md` with a recommendation, the three screen sketches, and a Swift Testing run that decodes real F09c fixtures.
+
+**Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Run the one Swift Testing suite in `model/` against F09c's captured feeds on the Xcode machine and save its output in `swift-tests.log`. Run `npm run check` to show the factorio code is unchanged and green.
+- [ ] Have an independent reviewer read the five memos against the captured fixtures. Save the review in `memo-review.md`.
+
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, satisfied by the scoped adaptation in Appendix C R10 item 11. No lane runs on the VM. Each lane is a Swift Testing case, the memo review, or a local scope check.
+
+- [ ] Lane 1. Satisfied by the scoped adaptation. Run `npm run check` on trunk and head. Save `check-trunk-head.log`. Pass when both pass.
+- [ ] Lane 2. Satisfied by the scoped adaptation. The Swift suite decodes every captured feed. Save `decode.log`. Pass when every entry decodes and none is dropped.
+- [ ] Lane 3. Satisfied by the scoped adaptation. The Swift suite decodes a copy with an unknown field and a copy with `v` set to 2. Save `decode-versions.log`. Pass when the model ignores the unknown field and refuses version 2 with a visible error.
+- [ ] Lane 4. Satisfied by the scoped adaptation. The Swift suite orders Home from a captured feed. Save `home-order.json`. Pass when runs that wait on the owner come first, then blocked, budget, and failed runs, and working runs appear only as the feed's working-run count.
+- [ ] Lane 5. Satisfied by the scoped adaptation. The Swift suite applies the notification rules to two consecutive captures. Save `push-diff.json`. Pass when the first capture seeds without a push, the second pushes only new owner decisions, and a repeat pushes nothing.
+- [ ] Lane 6. Satisfied by the scoped adaptation. The Swift suite counts the words in every generated push. Save `push-words.json`. Pass when each push has 100 words or fewer and carries no issue body or model text.
+- [ ] Lane 7. Satisfied by the scoped adaptation. The Swift suite marks one run as on screen while its entry changes. Save `push-suppressed.json`. Pass when that run produces no push and other runs still do.
+- [ ] Lane 8. Satisfied by the scoped adaptation. The Swift suite renders each captured title, including a fixture title with Markdown and HTML. Save `title-plain.log`. Pass when every title renders as plain text.
+- [ ] Lane 9. Satisfied by the scoped adaptation. Read the independent memo review. Save `memo-review.md`. Pass when every memo claim about `OwnerFeed` v1 matches the captured fixtures and the exposure question is left to the owner.
+- [ ] Lane 10. Satisfied by the scoped adaptation. Inspect the PR diff and the shep repository head. Save `scope.json`. Pass when only `docs/prototypes/ios-app/` changed and the shep repository head is unchanged.
+
+**Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Metric. Satisfied by the scoped adaptation. This unit ships no product code, so it has no perf probe. Record the Swift suite's wall time and model calls.
+- [ ] Probe. Satisfied by the scoped adaptation. Reuse the one Swift suite run from the unit box and its timing in `swift-tests.log`.
+- [ ] Baseline. Satisfied by the scoped adaptation. No trunk baseline applies, because trunk has no Swift model.
+- [ ] Rule. Satisfied by the scoped adaptation. Fail if any step calls a model.
+
+**Review gate.** The operator reviews before merge.
+
+- [ ] Post `decision.md`, the screen sketches, `swift-tests.log`, and `memo-review.md` to the operator. Use text artifacts instead of a screenshot or video. Bring the owner the app choice and the exposure question. Merge on a clean verdict and a passing `check`.
+
+**Merge.**
+
+- [ ] Record the exact-head verdict and complete Bugbot triage. Confirm that no Apple account, TestFlight, VM-to-VM, or shep repository action happened.
+- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Hand `F09d` to the owner on a clean verdict and a passing `check`. No later unit waits for this merge.
+
 ## File bounded maintenance proposals on a schedule (F11)
 
-**Depends on.** F10. This implements unit 11.
+**Depends on.** F09c. This implements unit 11.
 
 **Files.**
 
@@ -920,63 +1227,67 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [ ] Record the exact-head verdict, license review, and Bugbot triage.
 - [ ] Apply the patch-id rule in `playbooks/shipping.md`. Hand `F11` to the owner on a clean verdict and a passing `check`. After the owner's merge, branch the next PR from the new `main`.
 
-## Measure outcomes and propose tested factory improvements (F12)
+## Score runs and propose tested factory improvements (F12)
 
-**Depends on.** F11. This implements unit 12 without self-promoting changes.
+**Depends on.** F11. This implements the rest of unit 12 without self-promoting changes. The primary metric is `F12a`'s, and every other measure here is secondary to it.
 
 **Files.**
 
-- [ ] Create `src/metrics.ts`, `src/replay.ts`, `src/scorers.ts`, `src/benchmarks.ts`, `test/metrics.test.ts`, `test/replay.test.ts`, `test/scorers.test.ts`, `test/benchmarks.test.ts`, `test/fixtures/replay/`, `test/fixtures/benchmarks/`, `skills/agent-loop-spec/`, `skills/reflect-ledger/`, and `docs/operations/improvement.md`.
-- [ ] Edit `src/cadence.ts`, `src/ledger.ts`, `server/cli.ts`, `.github/factory/WORKFLOW.md`, and `skills/README.md` for metric, replay, scorer, and benchmark commands, score records, and proposal cadence.
+- [ ] Create `src/scorers.ts`, `src/benchmarks.ts`, `src/explain.ts`, `test/scorers.test.ts`, `test/benchmarks.test.ts`, `test/explain.test.ts`, `test/fixtures/benchmarks/`, `skills/agent-loop-spec/`, `skills/reflect-ledger/`, and `docs/operations/improvement.md`.
+- [ ] Edit `src/metrics.ts`, `src/replay.ts`, `src/cadence.ts`, `src/ledger.ts`, `server/cli.ts`, `.github/factory/WORKFLOW.md`, `skills/README.md`, `test/replay.test.ts`, and `test/fixtures/replay/` for scorer, benchmark, and explain commands, score records, proposal cadence, and the wider replay corpus.
 
 **Build.**
 
-- [ ] Implement the metric from the design using ready-ticket cohorts, zero-repair landed outcomes, and linked follow-up defects within seven days. Count a ticket once across clarification attempts. Report immature cohorts and unknown defect follow-up separately instead of treating missing evidence as clean.
+- [ ] Use `F12a`'s metric as the primary measure. Every proposal, replay comparison, and benchmark recommendation reports its effect on that metric first.
 - [ ] Adapt agent-loop-spec and pstack reflect to read the ledger rather than private transcripts. Generate bounded `factory:proposed` issues with the baseline, proposed change, evidence, and keep-or-reject rule. Never edit a skill or enable a proposal automatically.
-- [ ] Implement replay of a versioned fixed corpus on the previous trusted factory and a candidate factory in clean environments. Use previous-policy gates, isolated state, and sanitized historic tickets. Prevent replay from creating ordinary production issues or PRs without a dedicated fixture grant.
-- [ ] Include known-good, known-bad, vague, forbidden-path, budget-exhausted, and feedback cases. Report acceptance quality, missed defects, false rejection, wall time, tokens, and spend. Require no seeded bad acceptance and no regression in mandatory behavior before proposing promotion.
+- [ ] Extend `F12a`'s replay corpus with forbidden-path, budget-exhausted, and feedback cases. Report acceptance quality, missed defects, false rejection, wall time, tokens, and spend. Require no seeded bad acceptance and no regression in mandatory behavior or in the primary metric before proposing promotion.
 - [ ] Add scorers. Source is owner decision 2026-10-29, after comparing Warp Factories. A scorer is an LLM judge declared in trusted `WORKFLOW.md`. It returns exactly one label from a declared set, and each label carries a score from 0 to 1. Each scorer has a `passingScore` and a `samplingRate`. Record the label, score, reasoning, judge model, and scored run ID on the ledger. Let a scorer include child runs, and let `score --run <id>` score on demand. A re-score replaces the earlier result and keeps its history. Reject an undeclared label as a failed scoring, never a pass.
 - [ ] Add benchmark tasks. A task has a prompt, success criteria, and repository state pinned to a full 40-character SHA. Reject branches and tags. Let `benchmark task --from-run <id>` build a task from a past ledger run. Keep task inputs immutable so later edits do not change past results.
 - [ ] Add benchmark runs. A run is a matrix of up to N model or configuration variants, tasks, and repetitions. Show the trial count before launch. Report correctness against tokens and known cost per variant, plus a recommendation that needs at least two comparable variants. Label unknown spend unavailable. Run trials through the replay isolation above, with no production issue or PR.
 - [ ] Add the improvement trigger. After K unreviewed failing scores for one scorer, or when the oldest is D days old, file one deduplicated `factory:proposed` issue that cites the failing runs. Never open a code PR from this trigger. That keeps the never-self-promote rule. Read N, K, and D from trusted `WORKFLOW.md`. Start at Warp's published values of 6 variants, 25 failures, and 7 days, and tune them only from ledger evidence.
-- [ ] Run judges and benchmark trials in the `F05` sandbox, through the egress gateway. Charge their tokens and wall time to the configured usage caps. Choose a judge model family different from the builder's where one is available. Otherwise record `context-isolated, same family, not cross-family` on the score. A score is a measurement, never a gate. A failing hard check still vetoes, and no score can advance a run.
+- [ ] Add `explain --run <id>`, an on-demand diagnosis of why a run ended as it did. It reads the run's ledger row and redacted receipts, never raw sessions, and prints plain-text findings. It is a hint for the owner. No command runs from it, and no timer triggers it.
+- [ ] Add secondary benchmark rows that replicate the measures from DeepSeek's "Exploring Super-agent Design" where they apply to fixed stages. Report them below the primary metric. Measure feedback-routing tokens on a fixed feedback corpus with F10's feedback batch and with a full-PR-thread rebuild ablation, which rebuilds each round's context from the whole PR thread. Report p50 ticket time from `factory:ready` to the ready PR as a secondary row. Leave out the article's router measures, because this controller has no router.
+- [ ] Add replay thresholds measured on `F12a`'s primary metric. A proposal fails replay when the pass rate drops by more than a proposed 0.05, or any case falls from a proposed 3/3 to 1/3 or fewer. A within-noise result is a primary-metric change of at most that proposed 0.05 that trips no case rule. It blocks the proposal from claiming an improvement and has no other effect.
+- [ ] Fingerprint the scorer and the replay corpus, and void any candidate that touches either. Pin the grader model by exact ID in trusted `WORKFLOW.md`, and refuse to score with an unpinned grader.
+- [ ] Keep never-self-promote. A proposal never edits prompts or gates. A score is never a gate, even after calibration.
+- [ ] Run judges, benchmark trials, and `explain --run` in the `F05` sandbox, through the egress gateway. Charge their tokens and wall time to the configured usage caps. Choose a judge model family different from the builder's where one is available. Otherwise record `context-isolated, same family, not cross-family` on the score. A score is a measurement, never a gate. A failing hard check still vetoes, and no score can advance a run.
 
 **You see.**
 
-- [ ] Save a metric report with numerator, denominator, mature-cohort count, and unknowns. Save one improvement proposal and a replay comparison that rejects a deliberately weakened validator.
-- [ ] Save one scorer result with its label, score, reasoning, and judge family, and one benchmark report with a correctness against cost table and a recommendation.
+- [ ] Save one improvement proposal and a replay comparison that rejects a deliberately weakened validator.
+- [ ] Save one scorer result with its label, score, reasoning, and judge family, and one benchmark report with the primary metric first, a correctness against cost table, the secondary article rows, and a recommendation. Save one `explain --run` report for a failed run.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Test cohort boundaries, duplicate attempts, seven-day defects, missing evidence, corpus pinning, and previous-policy selection in `test/metrics.test.ts` and `test/replay.test.ts`. Test declared labels, undeclared labels, sampling, re-scoring, SHA pinning, matrix limits, the K and D trigger, and the hard-check veto in `test/scorers.test.ts` and `test/benchmarks.test.ts`. Run `npm run check`.
+- [ ] Test the extended corpus pinning and previous-policy selection in `test/replay.test.ts`. Test declared labels, undeclared labels, sampling, re-scoring, SHA pinning, matrix limits, the K and D trigger, and the hard-check veto in `test/scorers.test.ts` and `test/benchmarks.test.ts`. Test that `explain` reads only redacted inputs, charges the caps, and triggers no command in `test/explain.test.ts`. Test the replay thresholds, voided candidates that touch the scorer or corpus, and refusal of an unpinned grader in `test/replay.test.ts` and `test/scorers.test.ts`. Test the secondary article rows and that every report puts the primary metric first in `test/benchmarks.test.ts`. Run `npm run check`.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, per the boot recipe.
 
-- [ ] Lane 1. Regression lane against trunk. Read the same real ledger cohort on trunk and head. Save `outcome-metric.json`. Pass when head computes the defined metric and does not invent mature history absent on trunk.
-- [ ] Lane 2. Inspect a recent cohort younger than seven days that includes a ticket with several clarification attempts. Save `immature-cohort.json`. Pass when the cohort is reported as pending rather than zero-defect success, and the ticket is counted once with its attempts visible.
-- [ ] Lane 3. Link an authorized follow-up defect issue to a fixture run. Save `defect-window.json`. Pass when the affected mature cohort's result changes according to the seven-day rule.
+- [ ] Lane 1. Regression lane against trunk. Read the same real ledger cohort with `F12a`'s metric on trunk and head. Save `primary-metric.json`. Pass when both revisions report the same primary metric, and head adds scorer and benchmark records without changing it.
+- [ ] Lane 2. Score a finished fixture run on demand, then re-score it. Save `rescore.json`. Pass when the new result replaces the old one, the history keeps both, and the scorer's `passingScore` decides pass or fail.
+- [ ] Lane 3. Build benchmark tasks from a past ledger run with a branch name, a tag, and a 40-character SHA. Save `task-pinning.json`. Pass when the branch and the tag are refused, the SHA task is accepted, and a later edit to the task does not change past results.
 - [ ] Lane 4. Run reflect twice against unchanged redacted ledger data. Save `reflect-proposal.json`. Pass when one evidence-backed proposed issue appears, the second run files no duplicate, and no skill file changes.
-- [ ] Lane 5. Replay a known-good real fixture ticket on previous and candidate factories. Save `replay-good.json`. Pass when both use clean state and produce comparable behavior receipts.
-- [ ] Lane 6. Replay a deliberately weakened validator against a seeded bad ticket. Save `replay-bad.json`. Pass when previous trusted gates reject promotion.
+- [ ] Lane 5. Replay a deliberately weakened validator against a seeded bad ticket from the extended corpus on previous and candidate factories. Save `replay.json`. Pass when both factories use clean state and previous trusted gates reject promotion of the weakened validator.
+- [ ] Lane 6. Run `explain --run` on a real failed fixture run. Save `explain-run.json`. Pass when the findings cite ledger and receipt evidence, the gateway audit shows it ran in the sandbox, its tokens count against the caps, and no command or GitHub write follows.
 - [ ] Lane 7. Score a finished fixture run on demand, including its child runs, then score a run whose hard check failed. Save `scorer-result.json`. Pass when each score has one declared label, a 0 to 1 score, reasoning, and a judge family label, the gateway audit shows the judge ran in the sandbox, its tokens count against the run caps, and the failed run stays failed despite a passing score.
-- [ ] Lane 8. Build a task from a past ledger run and launch a two-variant, one-task, two-repetition benchmark. Inspect side effects through `gh`. Save `benchmark-run.json`. Pass when the task pins a 40-character SHA, the report shows correctness against cost and a recommendation, and no production issue, PR, or ticket dispatch appears.
+- [ ] Lane 8. Build a task from a past ledger run and launch a two-variant, one-task, two-repetition benchmark with the article rows. Inspect side effects through `gh`. Save `benchmark-run.json`. Pass when the task pins a 40-character SHA, the report shows the primary metric first, correctness against cost, feedback-routing tokens for F10's feedback batch and for the full-PR-thread rebuild ablation, p50 ticket time as a secondary row, and a recommendation, and no production issue, PR, or ticket dispatch appears.
 - [ ] Lane 9. Seed K unreviewed failing scores for one scorer, then run the trigger twice. Save `improvement-trigger.json`. Pass when one `factory:proposed` issue cites the failing runs, no PR or skill change appears, and the second run files no duplicate.
-- [ ] Lane 10. Compare replay session/model and policy versions. Save `replay-provenance.json`. Pass when the report records exact versions, same-family limitations, and unavailable spend without claiming improvement from incomparable runs.
+- [ ] Lane 10. Request a benchmark matrix above the configured N variants, then launch one that reaches its token cap. Save `benchmark-limits.json`. Pass when the trial count shows before launch, the oversized matrix is refused, the capped run stops at its cap, and no production issue or PR appears.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Metric. Measure ledger-analysis time, replay wall time per stage, tokens/spend per run, and outcome quality on trunk and head. Measure scorer tokens as a share of the scored runs' tokens, and benchmark trial tokens against the benchmark cap.
-- [ ] Probe. Interleave three metric calculations on the same corpus and three previous/head replay pairs for the fixed tiny ticket. Score the same head runs at the configured sampling rate. Keep fixture and model versions fixed. Save `perf.json`.
-- [ ] Baseline. Record previous-factory behavior, stage timings, and usage before the candidate comparison. For absent metric commands, record unsupported behavior separately.
-- [ ] Rule. Fail if local analysis of 1,000 rows exceeds 2 seconds, any seeded bad candidate passes, or candidate replay regresses mandatory behavior. Flag over 20% higher median tokens or elapsed stage time for the same successful scenario as a failed improvement claim unless approved before the run. Fail if scoring at the configured sampling rate exceeds 10% of the scored runs' tokens, or a benchmark run exceeds its configured cap. Warp reports scoring near 3% of its own tokens. Record that figure as a reference, not a budget.
+- [ ] Metric. Measure replay wall time per stage, tokens/spend per run, and outcome quality on trunk and head. Measure scorer tokens as a share of the scored runs' tokens, benchmark trial tokens against the benchmark cap, and `explain --run` tokens and wall time.
+- [ ] Probe. Interleave three previous/head replay pairs for the fixed tiny ticket. Score the same head runs at the configured sampling rate. Keep fixture and model versions fixed. Save `perf.json`.
+- [ ] Baseline. Record previous-factory behavior, stage timings, and usage before the candidate comparison. For absent scorer, benchmark, and explain commands, record unsupported behavior separately.
+- [ ] Rule. Fail if any seeded bad candidate passes, or candidate replay regresses mandatory behavior. Flag over 20% higher median tokens or elapsed stage time for the same successful scenario as a failed improvement claim unless approved before the run. Fail if scoring at the configured sampling rate exceeds 10% of the scored runs' tokens, or a benchmark run exceeds its configured cap. Fail if one `explain --run` exceeds a proposed 30,000 tokens or 5 minutes. Warp reports scoring near 3% of its own tokens. Record that figure as a reference, not a budget.
 
 **Review gate.** The operator reviews before merge.
 
-- [ ] Post the metric, replay comparison, and proposed issue to the operator. Use JSON instead of a screenshot or video. Merge on a clean verdict. Do not count the seven-day claim as verified before real mature evidence exists.
+- [ ] Post the replay comparison, a scorer result, a benchmark report, and the proposed issue to the operator. Use JSON instead of a screenshot or video. Merge on a clean verdict.
 
 **Merge.**
 
-- [ ] Record the exact-head verdict and Bugbot triage. Keep immature-cohort evidence gaps explicit.
+- [ ] Record the exact-head verdict and Bugbot triage.
 - [ ] Apply the patch-id rule in `playbooks/shipping.md`. Hand `F12` to the owner on a clean verdict and a passing `check`. After the owner's merge, branch the next PR from the new `main`.
 
 ## Add a polled Linear adapter without changing stages (F13)
@@ -986,13 +1297,15 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Files.**
 
 - [ ] Create `src/adapters/linear.ts`, `test/linear-adapter.test.ts`, `test/adapter-contract.test.ts`, `docs/prototypes/linear-polling/`, and `docs/operations/linear.md`.
-- [ ] Edit `src/tickets.ts`, `src/workflow.ts`, `src/markers.ts`, `server/controller.ts`, `server/cli.ts`, `test/fake-ticket-adapter.ts`, and `.github/factory/WORKFLOW.md` only for provider configuration and shared adapter contract support.
+- [ ] Edit `src/tickets.ts`, `src/admission.ts`, `src/orchestrator.ts`, `src/run.ts`, `src/workflow.ts`, `src/markers.ts`, `server/controller.ts`, `server/cli.ts`, `test/fake-ticket-adapter.ts`, `test/admission.test.ts`, `test/orchestrator.test.ts`, and `.github/factory/WORKFLOW.md` only for provider configuration, capability ports, and shared adapter contract support.
 
 **Build.**
 
 - [ ] Prototype polled Linear issue/event reads, authorization, state transitions, comment reporting, and stable cursors with an owner-approved workspace and controller-only credential route. Keep Linear disabled until that authorization and access exist. Do not introduce an App receiver, webhook, or Tailscale.
-- [ ] Implement `LinearTicketAdapter` against the same `TicketAdapter` contract used by GitHub. Normalize provider-qualified ticket keys, readiness actor, immutable snapshot, questions, progress, and closure. Keep GitHub branch/PR/CI publication in the existing publisher.
+- [ ] Put each tracker behind capability ports in `src/tickets.ts`. A `SourceReader` polls with a cursor and implements `proveReady`, which returns the source actor, an immutable snapshot, and a proof digest, or nothing. Admission in `src/admission.ts` refuses a run without that proof. Keep GitHub's historical proof algorithm behind its port, and never infer GitHub write authority from a Linear identity. A separate controller port reports questions, progress, and closure. Add no plugin registry.
+- [ ] Implement `LinearTicketAdapter` against those same ports. Reuse F10's provider-qualified thread and event IDs for ticket keys. Normalize readiness actor, immutable snapshot, questions, progress, and closure. Keep GitHub branch/PR/CI publication in the existing publisher.
 - [ ] Prove the readiness actor and snapshot contract through Linear's actual history APIs. If polling cannot establish them, block that admission instead of assuming an assignee or current label grants authority. Map the approved workspace/team to this repository explicitly.
+- [ ] Bring the owner the choice between an anchor issue and native identity, and record the decision before building either. With an anchor, the paired GitHub evidence issue is the run's execution identity, and the Linear-origin provenance is stored beside it. With native identity, claim keys and run IDs in `src/run.ts` and `src/orchestrator.ts` move to provider-qualified keys with explicit legacy decoding. Never fabricate a ready-label event to make a Linear ticket fit.
 - [ ] Run the shared adapter tests against GitHub, Linear, and the fake. Reuse the state machine, budgets, marker reconciliation semantics, and Human Review checkpoint without tracker-specific stage forks. Keep Linear credentials outside all agent containers.
 - [ ] Link real Linear verification tickets to paired GitHub evidence issues and PRs in this repository. Do not claim native Linear agent-session acknowledgments. This adapter polls generic tickets and reports progress through comments.
 
@@ -1002,15 +1315,15 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Run the shared admission, clarification, recovery, reporting, and closure tests through all three adapters. Add pagination, GraphQL error, rate-limit, and missing-authority cases in `test/linear-adapter.test.ts`. Run `npm run check`.
+- [ ] Run the shared admission, clarification, recovery, reporting, and closure tests through all three adapters. Add pagination, GraphQL error, rate-limit, and missing-authority cases in `test/linear-adapter.test.ts`. Test that admission refuses a missing or mismatched proof in `test/admission.test.ts`, and test the chosen identity, including legacy decoding when native identity is chosen, in `test/orchestrator.test.ts`. Run `npm run check`.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, per the boot recipe. Each Linear scenario includes a paired real GitHub evidence issue in this repository.
 
 - [ ] Lane 1. Regression lane against trunk. Drive the same GitHub fixture on trunk and head, then its equivalent Linear ticket on head. Save `adapter-parity.json`. Pass when GitHub behavior is preserved and Linear reaches the same Human Review state.
-- [ ] Lane 2. Apply the approved readiness signal through an authorized Linear actor. Save `linear-admission.json`. Pass when the normalized actor and snapshot are proved and exactly one run starts.
+- [ ] Lane 2. Apply the approved readiness signal through an authorized Linear actor. Save `linear-admission.json`. Pass when `proveReady` returns the actor, the snapshot, and a proof digest, and exactly one run starts.
 - [ ] Lane 3. Apply an unauthorized readiness signal under the test identity grant. Save `linear-unauthorized.json`. Pass when no run or GitHub branch appears.
 - [ ] Lane 4. Submit a vague Linear ticket and answer its questions with fresh readiness. Save `linear-clarification.json`. Pass when the linked attempt preserves the first outcome and uses the updated authorized snapshot.
-- [ ] Lane 5. Restart the controller during a Linear-origin run. Save `linear-recovery.json`. Pass when one run and one GitHub PR mapping survive.
+- [ ] Lane 5. Restart the controller during a Linear-origin run. Save `linear-recovery.json`. Pass when one run and one GitHub PR mapping survive under the chosen identity.
 - [ ] Lane 6. Disable either factory switch before Linear dispatch. Save `linear-disabled.json`. Pass when both trackers stop new work under the same policy.
 - [ ] Lane 7. Exercise pagination and a real bounded rate-limit/error response. Save `linear-polling.log`. Pass when cursors do not skip tickets and errors cannot create authorization.
 - [ ] Lane 8. Add owner feedback to the resulting GitHub PR. Save `linear-pr-feedback.json`. Pass when the existing feedback loop updates that PR and reports status back to Linear.
@@ -1036,9 +1349,10 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 ## Close the program
 
 - [ ] Check every completed box against its artifact and exact revision. Leave blocked boxes unchecked. Do not describe this program as fully verified while Linear live proof, branch protection, mature metrics, or the required cross-family acceptance evidence is absent.
-- [ ] Re-run the eight definition-of-done scenarios from `docs/design.md` on the assembled GitHub controller. Link the results from `F04b`, `F04c`, `F06a`, `F07b`, `F07c`, `F09a`, `F09b`, and `F10`. Explicitly report item 2's cross-family clause as incomplete under the approved same-family v1 limitation.
+- [ ] Re-run the eight definition-of-done scenarios from `docs/design.md` on the assembled GitHub controller. Link the results from `F04b`, `F04c`, `F06a`, `F07b`, `F07c`, `F09a`, `F09b`, `F10c`, and `F10`. Verify item 2's cross-family clause through `F10c`'s cross-family certified run, rather than reporting it as incomplete.
 - [ ] Deliver the `autopilot-full` report with each PR's URL, merge commit, one-line verdict and exact verified head, the external actions taken and their grants, and excluded work with reasons. Include evidence and decision-trail paths.
 - [ ] Confirm that the factory stops at Human Review, uses no stored GitHub token on the VM, uses no GitHub secrets for model access, and has no GitHub App, webhook receiver, or Tailscale dependency. Leave npm publishing and any future deployment outside this program.
+- [ ] Name the measured next steps after the core loop. Run real production tickets and report them with `F12a`'s metric. Then run the same factory on a second target repository. This program builds neither.
 - [ ] Leave computer-use verification out of v1. `docs/design.md` Known risks records the deferred pattern for a future UI target. Source is owner decision 2026-10-29, after comparing Warp Factories.
 
 ## Appendix A. Prototype evidence
@@ -1050,7 +1364,7 @@ The planning checkout was clean at `04b69c3b72b68ee8d4351d40bd42daf68d42a67f`. N
 | 0 | [Run 40767252647](https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/40767252647) printed `factory-smoke-ok` | The decisions row identifies the run, not its source SHA or branch. Read run metadata if reproducing historical provenance. | Current VM isolation or current CI architecture. Tailnet workflows and credentials were removed in `a893370`. Do not recreate them. |
 | 1 | [Run 40768344796](https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/40768344796), [job 123098473635](https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/40768344796/job/123098473635), `docs/prototypes/herdr-on-runner.md` | Tested commit `a8f1285bb4e358bcfe6d56b4e7234b14fdaa2299`. Report committed at `1a345ea`, prototype merged at `fc34d66`. Decisions identify retained branch `factory-herdr-probe`, worktree removed with approval. | Rootless containment, allowed egress, full pstack execution, concurrent capacity, or cross-family review. The old runner used revoked tailnet access. |
 | 2 | `npm run check` with 60 of 60 tests, `docs/decisions.tsv` | Skeleton `8ef1924`, widened `.github/` path protection `db91d1a`. Decisions identify retained branch `factory-skeleton`, worktree removed with approval. | Polling, service state, real adapter, sandbox, CI, or publication. Existing pipeline tests call the pure transition function through a fake. |
-| 3 | VM `gh` reads, clone and label writes. Four model smoke replies. Later default-model smoke replied `default-ok`. All recorded in `docs/decisions.tsv`. | VM bring-up under `8154ca8`, provisioning `3228ca1`, default model `04b69c3`. No hosted run URL is recorded for these VM checks. | Current Anthropic authorization, sandbox egress, service recovery, or hosted candidate validation. Earlier Anthropic success does not authorize its use now. |
+| 3 | VM `gh` reads, clone and label writes. Four model smoke replies. Later default-model smoke replied `default-ok`. All recorded in `docs/decisions.tsv`. | VM bring-up under `8154ca8`, provisioning `3228ca1`, default model `04b69c3`. No hosted run URL is recorded for these VM checks. | Current Anthropic authorization, sandbox egress, service recovery, or hosted candidate validation. Earlier Anthropic success did not authorize its use. The owner's 2026-11-02 decision does, through `F10c`. |
 
 The unit 1 report records 10 seconds of setup, 22 seconds for the probe, and 34 seconds for the full CI job. Those are historical measurements on another execution setup, not budgets or comparative baselines for the new sandbox.
 
@@ -1069,9 +1383,10 @@ No new sandbox, snapshot-at-label-time, main-gates, post-publication holdout, le
 - A workspace directory, Git worktree, non-root container UID, or prompt prohibition is not the OS and network boundary required by the integration's VM-wide authority.
 - Candidate-owned checks alone can be weakened by editing scripts or deleting tests. Main-owned gates, candidate tests, and held-out tests must all pass.
 - A sanitized working tree with the original Git object database still leaks an acceptance commit. Repair gets a clean export and restricted network, not a checkout with the suite merely deleted.
-- Same-family sessions cannot establish cross-family judgment. They are the approved interim execution choice, with the missing independence claim explicit.
+- Same-family sessions cannot establish cross-family judgment. They are the approved interim execution choice until `F10c` merges, with the missing independence claim explicit.
 - Linear-native agent sessions introduce webhook acknowledgement requirements outside the selected polling model. Unit 13 uses ordinary polled tickets through the existing adapter.
 - A database or distributed claim service adds no demonstrated value for the single VM/controller scope. Marker comments, workspace receipts, and serialized ledger writes cover the specified restart cases. Revisit only if an observed failure requires it.
+- Decomposition, multi-PR splitting, and large agent swarms stay out of v1, by owner decision on 2026-11-02. They do not serve one authorized issue to one ready PR.
 - Reports 4 and 5 contain earlier recommendations about draft PRs, Apps, tailnets, and automatic landing. The later owner decisions in `docs/design.md` and `docs/decisions.tsv` supersede those recommendations.
 
 ## Appendix C. Risks
@@ -1108,13 +1423,13 @@ The gate prototype must settle test import routing, dependencies, read-only trus
 
 `F13` owns the adapter but does not authorize a new credential, workspace, or integration. The owner must supply an approved controller-only access path and test identities. Polling history must establish readiness authority and snapshot identity. Leave Linear disabled and its live lanes blocked until those facts are proved. GitHub v1 delivery need not wait for Linear access, but unit 13 remains incomplete.
 
-### R8. Cross-family review remains incomplete
+### R8. Cross-family review is incomplete until F10c
 
-All current stages use `openai/gpt-6.1-sol`. The design's cross-family acceptance criterion remains unmet even if every behavior lane passes. `F06b` and `F08` record identities and disclosure so a later provider change does not require a new state machine. When the owner's Anthropic proxy returns, first verify reachability and supported exact model IDs without changing shared preferences silently. Then run fresh acceptance and review seats on that family, repeat the seeded-defect corpus, and record family identities in evidence. Only then remove the incomplete cross-family label. This later provider enablement is not a hidden v1 dependency or permission to spend exe.dev credits.
+All current stages use `openai/gpt-6.1-sol`. The design's cross-family acceptance criterion remains unmet even if every behavior lane passes. `F06b` and `F08` record identities and disclosure so a later provider change does not require a new state machine. `F10c` closes this risk. It first proves one metered Anthropic call on `pi-factorio` without changing shared preferences silently. Then it moves the accept stage and one blocking review seat to an Anthropic model and records each seat's observed family in evidence. Only a run whose accept author and at least one blocking seat are cross-family records `r8: "complete"`. Until `F10c` merges, keep the incomplete cross-family label.
 
 ### R9. Human gates and real identities cannot be simulated away
 
-`F04b`, `F09a`, `F10`, and `F13` need actual actor permissions and some owner actions. A read-only account generally cannot apply GitHub labels, while a triage account may label without write access. Use an explicitly authorized test identity rather than a forged payload for the live admission lane. Fake adapters remain unit evidence only. Owner merges, closure tests, and branch rules are real gates. Missing authorization leaves them blocked. The seven-day metric in `F12` also needs mature evidence before a real zero-defect claim.
+`F04b`, `F09a`, `F10`, and `F13` need actual actor permissions and some owner actions. A read-only account generally cannot apply GitHub labels, while a triage account may label without write access. Use an explicitly authorized test identity rather than a forged payload for the live admission lane. Fake adapters remain unit evidence only. Owner merges, closure tests, and branch rules are real gates. Missing authorization leaves them blocked. The seven-day metric in `F12a` also needs mature evidence before a real zero-defect claim.
 
 ### R10. The plan template needs backend-specific adaptations
 
@@ -1123,17 +1438,26 @@ These are every intentional template adaptation in this document.
 1. The control skill is a named CLI procedure, not a preinstalled UI automation skill. `docs/operations/factory-cli.md` arrives in `F04a`. The installed swarm skill is present and retains its real path.
 2. Each live lane saves a concrete text/JSON artifact or URL list instead of a `.png`. The checker calls this a screenshot requirement but only enforces a literal `Save` path. Those artifacts prove backend behavior without invented screenshots.
 3. Each review gate explicitly says that logs replace a screenshot or video. Those words satisfy the checker's literal review-block requirements. No recording or screenshot is claimed or required where it adds no evidence.
-4. The template's cross-family reviewer language becomes context-isolated same-family seats under the owner's explicit interim model decision. The missing cross-family gate remains visible, not silently waived as passed.
+4. Until `F10c` merges, the template's cross-family reviewer language becomes context-isolated same-family seats under the owner's explicit interim model decision. The missing cross-family gate remains visible, not silently waived as passed. After `F10c`, a run records `r8: "complete"` only when its accept author and at least one blocking seat are cross-family.
 5. Every PR gets a full verdict before merge, including changes without a visual interaction. This is stricter than the template's optional interaction-only review gate. The root's merge grant covered build PRs through F08. From F09a onward build PRs and runtime factory PRs both stop for the owner's merge.
-6. The dependency graph is one serial chain rather than a fabricated pair of independent first PRs. Shared contracts and the CI bootstrap justify that choice. Ten verifier lanes mean ten scenarios, not ten concurrent controllers on a two-vCPU VM. Read-only lanes may run concurrently, while mutation/resource-heavy scenarios use scoped fixtures and service capacity limits.
+6. The dependency graph is one serial chain for code writes rather than a fabricated pair of independent first PRs. Only the optional docs-only `F09d` sits beside it. `F10c` sits in the chain between `F10b` and `F10`. Shared contracts and the CI bootstrap justify that choice. Ten verifier lanes mean ten scenarios, not ten concurrent controllers on a two-vCPU VM. Read-only lanes may run concurrently, while mutation/resource-heavy scenarios use scoped fixtures and service capacity limits.
 7. The `F04a` main-owned configuration and the `F07b` main-owned CI workflow must land on `main` before their main-backed proof can run. The root merges both under the owner's build-PR grant. These explicit exceptions do not create false all-green verdicts. Their main-backed boxes stay pending until the post-merge checks pass.
 8. The playbook's prototype-before-plan and child investigation steps were constrained by this leaf's plan-only authorization. Existing prototypes are recorded, code was read directly, no children were launched, and unproved engineering choices became named prototype-first gates.
-9. The check script is not silent on success. It always prints one box-count line per PR and a summary. The success predicate is exit code 0 and `17 PR sections, 0 problems`, with no diagnostic lines. Its source was read before writing this plan.
+9. The check script is not silent on success. It always prints one box-count line per PR and a summary. The success predicate is exit code 0 and `22 PR sections, 0 problems`, with no diagnostic lines. Its source was read before writing this plan.
 10. New CLI commands, runtime symbols, and paths are planned deliverables. Trunk lanes record unsupported features instead of pretending that the skeleton already runs the controller. Performance uses absolute budgets for new work rather than ratios to missing behavior.
+11. `F09d` is an optional research unit that ships no product code. Its scoped adaptation replaces ten live lanes and a perf probe with one Swift Testing suite against F09c's captured feeds, an independent memo review, and `npm run check`. The checker still requires ten lane boxes and four perf boxes, so each of them says the scoped adaptation satisfies it. No `F09d` lane runs on the VM. The one feed capture on `pi-factorio` is a build step, not a lane.
 
 ### R11. Restarts use up attempts
 
-`F04c` charges a restart during a stage as a failed attempt. With the default of 3 attempts, two badly timed restarts and one real failure end a run as failed. That charge is the safe default, because the interrupted attempt may already have spent tokens. `F09b` records interrupted attempts in each ledger row. If `F12`'s data shows restarts end runs, revisit the charge then, not before.
+`F04c` charges a restart during a stage as a failed attempt. With the default of 3 attempts, two badly timed restarts and one real failure end a run as failed. That charge is the safe default, because the interrupted attempt may already have spent tokens. `F09b` records interrupted attempts in each ledger row. If `F12a`'s data shows restarts end runs, revisit the charge then, not before.
+
+### R12. Cross-family acceptance is decided and closed by F10c
+
+`docs/design.md` item 2 requires the held-out suite to come from a different model family than the builder. Until 2026-11-02 this was an open owner decision, because the VM ran OpenAI models only and no plan unit closed the gap. On 2026-11-02 the owner allowed Anthropic models on the VM, and `F10c` moves the accept stage to an Anthropic model. A run that uses a named same-family fallback records `r8: "incomplete"` and lists it under the handoff's "Not proven" section. Before `F10c` merges, report item 2's cross-family clause as incomplete.
+
+### R13. Loosening autonomy needs a designed ladder
+
+This is a design note only. Each stage gets a level, `observe`, `propose`, or `act`. The effective level is the strictest of the requested level, the policy on `main`, and a `factory:hold` label. Tightening takes effect at once. Loosening takes effect only when a policy change merges to `main` with an owner-issued, single-use grant bound to that policy SHA. The controller never counts its own comments as approval. A CI check rejects a policy diff that loosens a level unless it carries the owner's label. Today `land` is `propose`, because the owner merges every PR. Build none of this before `F13`, and name no auto-merge candidate.
 
 ## Appendix D. Links and reading list
 

@@ -35,12 +35,12 @@ Only one session coordinates the program. If another session's decision rows are
 - **Never narrow a stage below the plan's rule in a lane**, unless the lane is testing an exhausted budget. A narrower stage tests the verifier, not the factory.
 - **Write lane pass criteria to match the controller's real behavior.** A closed issue's run posts a terminal `released` marker. The gateway logs its own `GET /` readiness probe. Neither is a defect.
 - **Some comments are required.** `.oxlintrc.json` requires a `SAFETY:` comment before every type assertion, so a comment cleanup must keep them.
-- **The plan checker has style rules.** Run `node <pstack>/skills/poteto-mode/scripts/check-plan.mjs docs/plans/factory-v1.md` after any plan edit. It must print `17 PR sections, 0 problems`. It rejects mid-sentence colons.
+- **The plan checker has style rules.** Run `node <pstack>/skills/poteto-mode/scripts/check-plan.mjs docs/plans/factory-v1.md` after any plan edit. It must print `22 PR sections, 0 problems`. It rejects mid-sentence colons.
 - **Long shell output may be cut off by tool wrappers.** Write diffs to a file before reading them.
 
 ## Models and spend
 
-- **VM stages use OpenAI models only**, through the owner's ChatGPT subscription and exe.dev's `llm` integration. Spend no exe.dev credits, which rules out Anthropic and xAI routes on the VM.
+- **VM stages default to OpenAI models**, through the owner's ChatGPT subscription and exe.dev's `llm` integration. On 2026-11-02 the owner allowed Anthropic models on the VM. They spend exe.dev credits. Plan unit F10c moves only the accept stage and one blocking review seat to an Anthropic model. Put no other stage on Anthropic without the owner. xAI stays unused.
 - **Local reviewers must be from a different model family than the PR's author.** When a GPT model built the PR, review it with Claude or Grok.
 - **Raising a token or time limit in the plan needs the owner.** Record the raise in the plan before the perf probe runs.
 
