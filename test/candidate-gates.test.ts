@@ -330,6 +330,47 @@ for (const cheat of [
 	});
 }
 
+for (const [name, body, bad] of [
+	[
+		"ordinary prose diagnostics",
+		'test("prose", (t) => t.diagnostic("Require a receipt only if the criterion explicitly requires that execution."));',
+		false,
+	],
+	["Node's test-only warning", 'test.only("focused", () => {});', true],
+] as const) {
+	test(`trusted reporter handles ${name}`, (t) => {
+		const f = repo(t);
+		f.put(
+			"test/diagnostic.test.ts",
+			`import {test} from "node:test"; ${body}\n`,
+		);
+
+		const output = execFileSync(
+			process.execPath,
+			[
+				"--import",
+				"./.github/factory/gates/freeze.mjs",
+				"--test",
+				"--test-reporter",
+				"./.github/factory/gates/reporter.mjs",
+				"test/diagnostic.test.ts",
+			],
+			{
+				cwd: f.root,
+				encoding: "utf8",
+				env: { PATH: process.env.PATH, HOME: "/tmp" },
+			},
+		);
+
+		const result = JSON.parse(output);
+
+		assert.equal(result.complete, true);
+		assert.deepEqual(result.failures, []);
+		assert.deepEqual(Object.values(result.counts), [1]);
+		assert.equal(result.bad, bad);
+	});
+}
+
 function gateInput(f: ReturnType<typeof repo>, candidateSha: string) {
 	return {
 		repository: f.root,
