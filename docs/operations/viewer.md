@@ -10,6 +10,16 @@ Wait for `viewer_ready bind=127.0.0.1 port=8080`. Fetch the timeline on that mac
 
 Omit `--run` to select a run from the index. The ID is the full 64-character run digest. The default port is 8080. A missing state directory or occupied port exits 1. Invalid arguments exit 2. The viewer never creates the state directory.
 
+## Troubleshooting startup
+
+A missing state directory exits 1. Point `--state-dir` at existing controller state; the viewer does not create the state directory.
+
+An occupied port exits 1. Select another port with `--port`, for example:
+
+```bash
+node server/cli.ts viewer --state-dir "$STATE" --run "$RUN_ID" --port 8081
+```
+
 ## Read the four views
 
 Select **Timeline**, **Usage**, **Children**, or **Gateway**. Each view also has a JSON link at `/run/<id>/<view>.json`. JSON responses contain `runId`, `status`, `complete`, `gaps`, and `data`.
