@@ -3683,11 +3683,24 @@ describe("multi-seat candidate review", () => {
 			);
 			assert.match(
 				delivered,
-				/not a receipt of literal npm run check invocation/,
+				/Distinguish an aggregate check passing from evidence that its literal wrapper was invoked/,
 			);
 			assert.match(
 				delivered,
-				/does not automatically satisfy any contract criterion/,
+				/Use the aggregate command definition from the trusted base, not a candidate-edited script/,
+			);
+			assert.match(
+				delivered,
+				/Judge an aggregate-pass criterion by matching that definition to the covering component results, checking for missing components and no-op gates/,
+			);
+			assert.match(
+				delivered,
+				/Require a wrapper-invocation receipt only if the criterion explicitly requires that execution/,
+			);
+			assert.match(delivered, /Never claim an unobserved invocation/);
+			assert.match(
+				delivered,
+				/Gate success does not automatically satisfy any contract criterion/,
 			);
 			assert.match(delivered, /Read-only code-review fixture skill/);
 			assert.match(
