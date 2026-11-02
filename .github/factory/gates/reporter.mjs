@@ -7,7 +7,7 @@ export default async function* reporter(events) {
 	for await (const event of events) {
 		const d = event.data;
 
-		if (event.type === "test:diagnostic" && /only.*(?:require|option)/i.test(d.message)) bad = true;
+		if (event.type === "test:diagnostic" && /^'only' and 'runOnly' require the --test-only command-line option\.?$/.test(d.message)) bad = true;
 
 		if (event.type === "test:pass" || event.type === "test:fail") {
 			if (d.skip || d.todo || event.type === "test:fail") bad = true;

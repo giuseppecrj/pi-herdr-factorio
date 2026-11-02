@@ -29,6 +29,8 @@ This ships `git archive HEAD` of your checkout to `/home/exedev/factory-verifica
 
 Live lanes always use a per-lane workspace and state directory under `/home/exedev/factory-verification/`. Never share one between lanes.
 
+Never run a verification controller against this repository while production `factory.service` is running. Stop the service under an explicit grant, not just dispatch with a hold. A held controller still adopts runs from public markers.
+
 Start a controller only with `drive-serve.sh`, which scopes it to the lane's fixture issues with `--issue` and records its PID. Never start `serve` without `--issue` from a lane.
 
 ## Doctor
@@ -105,6 +107,16 @@ Proof standards:
 - No credentials in evidence. Export only redacted output.
 
 Copy evidence into `docs/plans/media/<pr-id>/` only when the task authorizes it.
+
+## Trusted reporter gate
+
+Before merging any factory source PR, run main's gate test globs locally through the trusted reporter under `umask 022`:
+
+```bash
+node --import ./.github/factory/gates/freeze.mjs --experimental-strip-types --test --test-concurrency=1 --test-timeout=60000 --test-reporter ./.github/factory/gates/reporter.mjs test/*.test.ts test/sandbox/*.cases.ts
+```
+
+Require `"complete":true`, `"bad":false` and `"failures":[]` in the final JSON line. `npm run check` uses Node's default reporter and does not exercise the trusted reporter.
 
 ## Dependency gate
 
