@@ -16,7 +16,7 @@ import {
 	type SeatReceipt,
 } from "../src/review.ts";
 import { validationDir } from "../src/validation.ts";
-import type { ReviewExecution } from "../src/handoff.ts";
+import { parseReviewReceipt, type ReviewExecution } from "../src/handoff.ts";
 import { isGitSha, parseWorkflow, WORKFLOW_PATH } from "../src/workflow.ts";
 import {
 	collectPatch,
@@ -3246,13 +3246,12 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 					);
 
 					const stored = existsSync(reviewPath)
-						? JSON.parse(regularText(reviewPath))
-						: null;
+						? parseReviewReceipt(parseJson(regularText(reviewPath)))
+						: undefined;
 
-					if (stored !== null && stored.version !== 2)
-						throw new Error("review_receipt_version");
+					if (stored === null) throw new Error("review_receipt_invalid");
 
-					const review = stored === null ? [] : reviewFeedback(stored);
+					const review = stored === undefined ? [] : reviewFeedback(stored);
 
 					const feedback = JSON.stringify({
 						version: 1,

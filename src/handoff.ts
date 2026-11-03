@@ -1973,6 +1973,71 @@ function wireReview(
 	});
 }
 
+function migrateReview(value: JsonValue | undefined): JsonValue | undefined {
+	const v = wireObject(value);
+
+	if (v?.version !== 1) return value;
+
+	if (!Array.isArray(v.seats)) return null;
+	const seats: JsonValue[] = [];
+
+	for (const entry of v.seats) {
+		const s = wireObject(entry);
+
+		if (s === null || !Array.isArray(s.judgments)) return null;
+		const judgments: JsonValue[] = [];
+
+		for (const item of s.judgments) {
+			const j = wireObject(item);
+
+			if (
+				j === null ||
+				Object.keys(j).sort().join() !== "pass,reason,scenario" ||
+				(j.pass !== true && j.pass !== false)
+			)
+				return null;
+			judgments.push({
+				scenario: j.scenario ?? null,
+				outcome: j.pass ? "pass" : "fail",
+				reason: j.reason ?? null,
+			});
+		}
+
+		seats.push({ ...s, judgments });
+	}
+
+	return { ...v, version: 2, seats };
+}
+
+export function parseReviewReceipt(
+	value: JsonValue | undefined,
+): ReviewReceipt | null {
+	const migrated = migrateReview(value);
+
+	return wireReview(migrated) ? snapshot(migrated) : null;
+}
+
+export function migrateCertificationValue(
+	value: JsonValue | undefined,
+): JsonValue | undefined {
+	const c = wireObject(value);
+
+	return c === null ? value : { ...c, review: migrateReview(c.review) ?? null };
+}
+
+export function migrateEvidenceValue(
+	value: JsonValue | undefined,
+): JsonValue | undefined {
+	const e = wireObject(value);
+
+	return e === null || wireObject(e.certification) === null
+		? value
+		: {
+				...e,
+				certification: migrateCertificationValue(e.certification) ?? null,
+			};
+}
+
 function wireValidation(
 	value: JsonValue | undefined,
 ): value is ValidationState & JsonValue {
@@ -2364,7 +2429,18 @@ function wireCandidate(
 export function parseCandidateState(
 	value: JsonValue | undefined,
 ): CandidateState | null {
-	return wireCandidate(value) ? snapshot(value) : null;
+	const v = wireObject(value);
+
+	const migrated =
+		v?.kind === "selected" && Array.isArray(v.history)
+			? {
+					...v,
+					history: v.history.map((g) => migrateEvidenceValue(g) ?? null),
+					current: migrateEvidenceValue(v.current) ?? null,
+				}
+			: value;
+
+	return wireCandidate(migrated) ? snapshot(migrated) : null;
 }
 
 export type Limitation =

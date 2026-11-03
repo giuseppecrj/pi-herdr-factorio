@@ -24,13 +24,16 @@ import {
 	candidateGenerations,
 	candidateProjection,
 	candidateUsage,
+	migrateCertificationValue,
+	migrateEvidenceValue,
+	parseReviewReceipt,
 	type GenerationEvidence,
 	type GenerationIntent,
 	type Certification,
 	type CandidateExecution,
 } from "../../src/handoff.ts";
 import { reviewDir, type ReviewReceipt } from "../../src/review.ts";
-import type { Verdict } from "../../src/run.ts";
+import { blocksReview, type Verdict } from "../../src/run.ts";
 
 export type Gap = { source: string; reason: string };
 
@@ -707,12 +710,15 @@ export async function readViewerRun(
 				| CandidateExecution
 				| ReviewReceipt
 				| Verdict,
+			canonical: (value: JsonValue | undefined) => string | undefined = (
+				value,
+			) => JSON.stringify(value),
 		) => {
 			const text = await io.text(path, FILE_CAP, true);
 
 			if (
 				text !== null &&
-				JSON.stringify(parseJson(text)) !== JSON.stringify(expected)
+				canonical(parseJson(text)) !== JSON.stringify(expected)
 			)
 				io.gap(path, "evidence binding mismatch");
 		};
@@ -723,7 +729,9 @@ export async function readViewerRun(
 			await stored(join(dir, "generation.json"), g);
 
 			if (g.digest !== book.current.intent.digest)
-				await stored(join(dir, "archive.json"), evidence);
+				await stored(join(dir, "archive.json"), evidence, (value) =>
+					JSON.stringify(migrateEvidenceValue(value)),
+				);
 			timeline.push(
 				event(
 					relative(root, dir),
@@ -787,13 +795,16 @@ export async function readViewerRun(
 			const certificate = evidence.certification;
 
 			if (certificate !== null) {
-				await stored(join(dir, "certification.json"), certificate);
+				await stored(join(dir, "certification.json"), certificate, (value) =>
+					JSON.stringify(migrateCertificationValue(value)),
+				);
 				await stored(
 					join(
 						reviewDir(root, book.pin.runId, g.round, g.generation),
 						"receipt.json",
 					),
 					certificate.review,
+					(value) => JSON.stringify(parseReviewReceipt(value)),
 				);
 				timeline.push(
 					event(
@@ -1048,27 +1059,28 @@ export async function readViewerRun(
 			}
 
 			const path = join(root, "review", runId, `r${round}`, "receipt.json");
-			const receipt = objectOf(await io.json(path));
-			const seats = arrayOf(fieldOf(receipt, "seats"));
+			const raw = await io.json(path);
+			const receipt = raw === null ? null : parseReviewReceipt(raw);
 
 			if (
 				receipt === null ||
-				seats === null ||
-				fieldOf(receipt, "runId") !== runId ||
-				fieldOf(receipt, "round") !== round
+				receipt.runId !== runId ||
+				receipt.round !== round
 			) {
 				io.gap(path, "missing_or_corrupt_round_review");
 				continue;
 			}
 
-			for (const raw of seats) {
-				const seat = objectOf(raw);
+			const verdict =
+				receipt.blocking || blocksReview(receipt.seats) ? "blocking" : "clean";
+
+			for (const seat of receipt.seats) {
 				timeline.push(
 					event(
 						relative(root, path),
 						"review",
-						field(seat, "seat") ?? "unknown seat",
-						`${field(seat, "requested") ?? "unknown model"}; ${field(seat, "label") ?? "isolation unavailable"}; tokens ${countOf(fieldOf(seat, "tokens")) ?? "unavailable"}; ${fieldOf(receipt, "blocking") === true ? "blocking" : "clean"}`,
+						seat.seat,
+						`${seat.requested}; ${seat.label}; tokens ${seat.tokens}; ${verdict}`,
 						null,
 						null,
 						round,
