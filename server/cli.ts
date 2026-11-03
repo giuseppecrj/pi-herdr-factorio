@@ -1,6 +1,7 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { lstat } from "node:fs/promises";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import manifest from "../package.json" with { type: "json" };
@@ -394,7 +395,11 @@ function realRuntime(): ControllerRuntime {
 		},
 		signal: new AbortController().signal,
 		executor: (context) =>
-			sandboxExecutor({ ...context, xdgRuntimeDir: XDG_RUNTIME_DIR }),
+			sandboxExecutor({
+				...context,
+				xdgRuntimeDir: XDG_RUNTIME_DIR,
+				sourceRoot: fileURLToPath(new URL("..", import.meta.url)),
+			}),
 	};
 }
 

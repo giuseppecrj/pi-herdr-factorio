@@ -31,6 +31,8 @@ import type { PatchReceipt } from "../src/build.ts";
 import { execFileSync } from "node:child_process";
 import { candidateLifecycleFixture } from "./helpers.ts";
 import { TRUSTED_WORKFLOW } from "./fake-ticket-adapter.ts";
+import { fileRunFiles } from "../server/controller.ts";
+import type { AnswersDigest } from "../src/specify.ts";
 
 type ClaimExtra = {
 	readonly stage?: string;
@@ -324,6 +326,34 @@ test("six groups distinguish unknown legacy ages and never duplicate a not-ready
 	assert.equal(read.groups.blocked.length, 2);
 	assert.equal(read.groups.failed.length, 1);
 	assert.equal(read.groups.spec_review.length, 0);
+});
+
+test("link records: the controller's unlinked record is no gap, a real link is answered, a corrupt one is a gap", async () => {
+	const root = fixture();
+	const files = fileRunFiles(root);
+	const unlinked = claim(root, 1, "running", { stage: "admit" });
+	assert.equal(await files.writeLink(unlinked, null), true);
+	const linkedClaim = claim(root, 2, "running", { enteredAt: 100 });
+	assert.equal(
+		await files.writeLink(linkedClaim, {
+			prevRunId: digestOf("previous"),
+			questionsDigest: null,
+			// SAFETY: AnswersDigest is a brand over the 64-hex Digest that digestOf returns.
+			answersDigest: digestOf("answers") as AnswersDigest,
+		}),
+		true,
+	);
+	const corrupt = claim(root, 3, "running");
+	writeFileSync(
+		join(root, "links", `${corrupt}.json`),
+		JSON.stringify({ version: 1, prevRunId: "nope" }),
+		{ mode: 0o600 },
+	);
+	const read = await readAttention({ stateDir: root, repo, now: 1000 });
+	assert.equal(read.kind, "available");
+	assert.deepEqual(read.gaps, [`invalid_link:${corrupt.slice(0, 12)}`]);
+	assert.equal(read.groups.question_answered.length, 1);
+	assert.equal(read.groups.question_answered[0]?.runId, linkedClaim);
 });
 
 test("an incomplete or wrong-owner candidate book is a gap, never PR-ready", async () => {

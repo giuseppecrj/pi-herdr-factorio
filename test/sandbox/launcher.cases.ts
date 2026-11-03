@@ -41,7 +41,10 @@ import {
 	parseJson,
 	textOf,
 } from "../../server/sandbox/json.ts";
-import { manifestDigest } from "../../server/sandbox/manifest.ts";
+import {
+	bundleMatchesSource,
+	manifestDigest,
+} from "../../server/sandbox/manifest.ts";
 import {
 	type PreflightDeps,
 	runPreflight,
@@ -1466,6 +1469,158 @@ describe("gateway lifecycle from the runner", () => {
 				}),
 				{ ok: false, reason: "socket-path-too-long" },
 			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("stale bundle", () => {
+	const FILES = {
+		"skills/acceptance/SKILL.md": "accept v1\n",
+		"skills/build/SKILL.md": "build v1\n",
+		"sandbox/pi.ts": "pi\n",
+		"sandbox/stage-init.ts": "init\n",
+		"pkg/package.json": "{}\n",
+		"pkg/package-lock.json": "{}\n",
+	} satisfies Record<string, string>;
+
+	const SOURCE_PATH = new Map([
+		["sandbox/pi.ts", "server/sandbox/assets/pi.ts"],
+		["sandbox/stage-init.ts", "server/sandbox/assets/stage-init.ts"],
+		["pkg/package.json", "server/sandbox/assets/package.json"],
+		["pkg/package-lock.json", "server/sandbox/assets/package-lock.json"],
+	]);
+
+	function put(base: string, path: string, text: string) {
+		mkdirSync(join(base, path, ".."), { recursive: true });
+		writeFileSync(join(base, path), text);
+	}
+
+	function layout() {
+		const dir = mkdtempSync(join(tmpdir(), "factory-stale-"));
+		const checkout = join(dir, "checkout");
+		const bundle = join(dir, "bundle");
+		mkdirSync(checkout);
+		mkdirSync(bundle);
+
+		for (const [path, text] of Object.entries(FILES)) {
+			put(bundle, path, text);
+			put(checkout, SOURCE_PATH.get(path) ?? path, text);
+		}
+
+		// the checkout's skills README is not bundled
+		put(checkout, "skills/README.md", "readme\n");
+		put(bundle, "node/bin/node", "not reproducible\n");
+
+		return { dir, checkout, bundle };
+	}
+
+	it("matches a bundle built from the same checkout inputs", async () => {
+		const { dir, checkout, bundle } = layout();
+
+		try {
+			assert.equal(await bundleMatchesSource(checkout, bundle), true);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("refuses a bundle whose skill, asset, package, extra skill or missing file differs", async () => {
+		const edits: ((c: string, b: string) => void)[] = [
+			(c) => put(c, "skills/acceptance/SKILL.md", "accept v2\n"),
+			(c) => put(c, "server/sandbox/assets/pi.ts", "pi2\n"),
+			(c) => put(c, "server/sandbox/assets/package-lock.json", '{"a":1}\n'),
+			(c) => put(c, "skills/new/SKILL.md", "new\n"),
+			(_c, b) => put(b, "skills/gone/SKILL.md", "gone\n"),
+			(_c, b) => rmSync(join(b, "sandbox/stage-init.ts")),
+		];
+
+		for (const edit of edits) {
+			const { dir, checkout, bundle } = layout();
+
+			try {
+				edit(checkout, bundle);
+				assert.equal(await bundleMatchesSource(checkout, bundle), false);
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		}
+	});
+
+	it("blocks the executor on a stale or missing current bundle and accepts a matching one", async () => {
+		const { dir, checkout, bundle } = layout();
+		const root = join(dir, "root");
+		const stateDir = join(dir, "state");
+		const logs: [string, LogFields][] = [];
+		mkdirSync(stateDir);
+		mkdirSync(root);
+
+		const executor = () =>
+			sandboxExecutor({
+				stateDir,
+				root,
+				sourceRoot: checkout,
+				arch: "x64",
+				usernsLimit: async () => "15000",
+				xdgRuntimeDir: "/run/user/1000",
+				log: (event, fields) => logs.push([event, fields]),
+				exec: async (command, args): Promise<ExecResult> => {
+					if (args.includes("list-units"))
+						return { stdout: "", stderr: "", code: 0 };
+
+					if (command === "bwrap")
+						return { stdout: "bubblewrap 0.9.0\n", stderr: "", code: 0 };
+
+					return { stdout: "", stderr: "", code: 0 };
+				},
+			});
+
+		const failed = () =>
+			logs.filter(([event]) => event === "sandbox_preflight").at(-1)?.[1]
+				.failed;
+
+		try {
+			const missing = executor();
+			await missing.recover();
+			assert.equal(await missing.preflight(), false);
+			assert.match(String(failed()), /assets/);
+
+			const digest = await manifestDigest(bundle);
+			assert.ok(digest);
+			renameSync(bundle, join(root, `assets-${digest}`));
+			symlinkSync(`assets-${digest}`, join(root, "current"));
+
+			const fresh = executor();
+			await fresh.recover();
+			assert.equal(await fresh.preflight(), true);
+
+			put(checkout, "skills/acceptance/SKILL.md", "accept v2\n");
+			const stale = executor();
+			await stale.recover();
+			assert.equal(await stale.preflight(), false);
+			assert.equal(failed(), "stale_bundle");
+
+			const launch = await stale.launch({
+				runId: runDigest(RUN),
+				stage: "specify",
+				attempt: 1,
+				workspace: dir,
+				prompt: "probe",
+				tools: [],
+				skills: [],
+				settings: {
+					model: modelId("openai/gpt-6.1-sol"),
+					fallback: null,
+					budget: { maxTurns: 1, wallMs: 60_000, stallMs: 60_000 },
+					maxTokens: null,
+				},
+				remainingRunTokens: 1,
+				signal: new AbortController().signal,
+				progress: () => {},
+			});
+
+			assert.equal(launch.kind, "unavailable");
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
