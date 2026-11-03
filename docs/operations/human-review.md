@@ -35,6 +35,10 @@ If status reports a blocked PR, inspect its reason and evidence gaps before acti
 
 Before the first PR, complete failing CI or blocking review can use the shared repair allowance. After a PR exists, conflict, failure, or exhaustion leaves it open, not-ready, and observed. F09a does not implement F10's owner-comment repair loop. Do not delete private state or start a replacement run to reset the same handoff's budget. Escalate unresolved holds with the run ID, PR head, reason, and redacted evidence.
 
+## Refused before build
+
+Refusal of private acceptance checks against the unchanged base ends the run `failed` before any build starts, so no PR is opened. The issue receives one keyed `factory-base-refusal` comment containing a fixed reason and scenario IDs only.
+
 ## Merge or close as the owner
 
 1. Recheck the current head and required checks in GitHub. If you accept the patch, merge through your owner account. The factory has no merge command. A review approval is not itself a merge.
