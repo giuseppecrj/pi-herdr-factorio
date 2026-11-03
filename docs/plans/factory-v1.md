@@ -4,7 +4,7 @@ Build the GitHub-first factory for `giuseppecrj/pi-herdr-factorio` on the exe.de
 Take authorized issues through fixed stages to a ready PR labeled `factory:review`. The owner merges every PR.
 Keep GitHub writes in the controller, model execution in a sandbox, and required checks in secret-free GitHub-hosted CI.
 Implement build-order units 4 through 13 in this order.
-`F04a`, `F04b`, `F04c`, `F05`, `F06a`, `F06b`, `F07a`, `F07b`, `F07c`, `F07d`, `F08`, `F09a`, `F09b`, `F10b`, `F10c`, `F10`, `F12a`, `F09c`, `F11`, `F12`, `F13`.
+`F04a`, `F04b`, `F04c`, `F05`, `F06a`, `F06b`, `F07a`, `F07b`, `F07c`, `F07d`, `F08`, `F09a`, `F10b`, `F09b`, `F10c`, `F10`, `F12a`, `F09c`, `F11`, `F12`, `F13`.
 `F07d` is an operator tool, build-order row 7d, not a runtime stage.
 `F09d` is an optional research unit after `F09c`. It ships a decision memo and a throwaway prototype, not product code, and blocks nothing.
 Treat units 0 through 3 as historical prototype evidence, not work to repeat.
@@ -42,7 +42,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 
 - [ ] Give each PR one owner role with the full lifecycle that `autopilot-full` names. The root coordinated merges through F08. From F09a onward, the owner alone merges. Launch each round as a fresh bare leaf with `fork: false`, bounded files, explicit model and thinking, verification, and commit policy. Keep one retained checkout and one canonical branch per owner.
 - [ ] Follow this dependency graph. Branch dependent work from `main` after its parent merges, or stack it on the parent's committed tip while the parent is still in review. Record the parent SHA in each brief.
-  - [ ] Start `F04a` from `main`. Follow `F04a -> F04b -> F04c -> F05 -> F06a -> F06b -> F07a -> F07b -> F07c -> F07d -> F08 -> F09a -> F09b -> F10b -> F10c -> F10 -> F12a -> F09c -> F11 -> F12 -> F13`.
+  - [ ] Start `F04a` from `main`. Follow `F04a -> F04b -> F04c -> F05 -> F06a -> F06b -> F07a -> F07b -> F07c -> F07d -> F08 -> F09a -> F10b -> F09b -> F10c -> F10 -> F12a -> F09c -> F11 -> F12 -> F13`.
   - [ ] Run `F09d` after `F09c` as optional docs-only work. It writes only `docs/prototypes/ios-app/`, so it may run beside later code units, and no unit depends on it.
   - [ ] Keep this chain serial for code writes. It changes shared controller contracts and tests. Parallelize read-only verification with separate fixture issues, not dependent implementation.
   - [ ] Treat `F04a`'s first main-owned configuration and `F07b`'s first main-owned CI workflow as bootstrap gates. Prove parsing and execution locally first. Complete their main-backed live checks after those trusted files land on `main`, before dependent dispatch or publication. Record the bootstrap exceptions in Appendix C rather than claiming clean full verdicts early.
@@ -760,9 +760,75 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [ ] Record the exact-head verdict and Bugbot triage. Leave branch-protection or owner-action boxes unchecked when their evidence is missing.
 - [ ] Apply the patch-id rule in `playbooks/shipping.md`. The owner alone squash-merges `F09a` on the reviewed exact head with a passing `check`. Complete main-backed reporter and protection proof after bootstrap before enabling runtime handoff. From F09a onward every build PR stops at merge-ready for the owner; no agent gains merge authority.
 
+## Prove held-out tests fail on the base (F10b)
+
+**Depends on.** F09a. This adds a base-tree check and oracle-quality diagnosis to the acceptance suite from `F06b`, before build spends tokens. On 2026-11-02 the owner moved F10b ahead of F09b, because generated suites with broken checks killed fixtures 558, 561 and 568 after their build tokens were spent, and the paused F09a lanes need that blocker fixed first.
+
+**Split.** F10b ships as two sequential PRs.
+
+- [ ] `F10b-1` refuses broken suites before build. It adds criterion kinds, suite version 2, the reporter's private facts, the asynchronous base-check subphase with its receipts and keyed refusal notice, the base-qualification corpus with the 558, 561 and 568 base replays, and the receipt-derived "Not proven" entries for judge-only criteria, `r8` and pending live proof. The paused F09a lanes resume after it merges.
+- [ ] `F10b-2` diagnoses failed CI before repairing. It adds the private VM replay, `classifyFailure` with a mandatory validation assessment, outcome-only judgments, the remaining "Not proven" entries and the patch-level oracle corpus. The live lanes below run after it merges.
+
+**Files.**
+
+- [ ] Create `src/diagnosis.ts`, `test/base-check.test.ts`, `test/diagnosis.test.ts`, `test/fixtures/oracle-corpus/`, and `docs/prototypes/base-check/`.
+- [ ] Edit `src/specify.ts`, `src/accept.ts`, `src/stages.ts`, `src/orchestrator.ts`, `server/gates.ts`, `server/controller.ts`, `skills/acceptance/SKILL.md`, `test/accept.test.ts`, `test/specify.test.ts`, `test/candidate-gates.test.ts`, and `test/orchestrator.test.ts` for scenario kinds, the base run, private failure details, failure classes, and their receipts.
+- [ ] Edit `src/handoff.ts`, `src/review.ts`, `server/controller.ts`, `test/handoff.test.ts`, and `test/review.test.ts` for the "Not proven" section and the closed set of non-pass judgment outcomes.
+
+**Build.**
+
+- [ ] Give each acceptance criterion in `Contract` a kind, `new_behavior` or `preservation`. Specify chooses the kind. A missing or unknown kind fails contract validation. Each accept scenario takes the kind of the criteria it maps, and a scenario that maps both kinds fails suite validation. The base rule covers only scenarios with checks. A judge-only scenario has no assertion, so the base run skips it and review still judges it. Each checked scenario owns exactly one check file, never shared with another scenario, so each file's result is that scenario's result. Every `new_behavior` criterion needs at least one checked scenario. A suite whose new-behavior criterion maps only to judge-only scenarios fails suite validation.
+- [ ] Add a named held-out base runner, `runHeldoutBase`, to `server/gates.ts`. Do not reuse `runVisibleTests`, which applies a patch and runs the visible command, not the private suite. After `accept` stores the suite, reuse the run's pinned GitHub tarball checkout, which has no `.git`. A unit test pins its tree digest to the CI gate's `exportTree` output for the repository, so new export attributes, symlinks or submodules fail closed. Install dependencies once per `package-lock.json` digest with the gate's prefetch and offline install, and bind that cache read-only. Run only the private suite there, through the existing `GateRunner` isolation in `server/gates.ts`, with no network, no credentials, and no publication route. Never run generated checks directly on the controller host. Run inside an owner-named systemd user scope, so the startup reconcile stops a leftover after a restart. Run it as an asynchronous subphase of `accept`, not a new stage. Cap it at the lesser of 180 seconds and the accept wall still unspent, including setup, and charge an interruption once to the accept attempt per R11. Build starts only on a qualified proof bound to the run, contract, suite, base and gate.
+- [ ] Judge each scenario against its kind. A new-behavior scenario must fail at least one assertion on the base, with its other tests passing or failing by assertion. Only an assertion failure counts as that expected red. A preservation scenario must pass on the base. Any other result ends the run `failed` before build with a public, redacted reason, such as "acceptance does not reproduce the ticket" or "a preservation check fails on the base".
+- [ ] Never count a broken run as an expected red. A module-load failure, zero registered tests, a runner error, and a timeout each end the run `failed` with its own redacted reason, such as `base_load_error`, `base_no_tests`, `base_runner_error`, or `base_timeout`.
+- [ ] Keep assertion-level held-out failures in private state for both the base run and CI validation. Record each failing test's name and its bounded assertion message beside the file path. Today `server/gates.ts:1437-1443` keeps only file paths. Public evidence carries only a redacted summary, never held-out test names or messages.
+- [ ] Add `classifyFailure` to `src/diagnosis.ts`. Before any repair round, classify a hard failure as `candidate`, `oracle`, `missing_evidence`, or `infrastructure` from the private failure details and receipts. Classification is deterministic code and calls no model. A runner error, timeout, or unavailable runner is `infrastructure`. A receipt that lacks a required fact is `missing_evidence`. A failure is `oracle` only when it matches an adjudicated corpus entry, or when its scenario's base result was not the expected one. An expected red on the base, a new-behavior assertion failure, does not make a later failure of that scenario an oracle. Every other assertion failure is `candidate`. Only a `candidate` failure spends a repair. An `infrastructure` failure follows the existing retry caps. An `oracle` or `missing_evidence` failure ends the run `failed` with its own redacted reason and spends no repair.
+- [ ] Add a small adjudicated regression corpus in `test/fixtures/oracle-corpus/`. Include a proposed three known-good patches, a proposed three known-bad patches, fixture 558's load-time `git` call, and fixture 561's overconstrained oracle. Each entry records its expected base result, its expected class, and who adjudicated it. Fixture 558's expected base result is `base_load_error`. Fixture 561's base result must actually be run. If its S7 passes on the base, the pre-build refusal is the exact adjudicated corpus veto, `adjudicated_oracle`, never a fabricated preservation failure. Run the corpus in `npm run check`.
+- [ ] Record a base-run receipt with the base SHA, suite digest, each scenario's kind and result, exit code, wall time, and runner version. Keep it in private state. Keep the gates from `main`, held-out isolation, and budgets unchanged. Build and repair sessions never see the suite, its receipt, or the private failure details. Update `skills/acceptance/SKILL.md` to say each scenario has a kind and the suite runs against the base.
+- [ ] Add a code-written "Not proven" section to the handoff PR body. It lists judge-only criteria, same-family review while the receipt records `r8: "incomplete"`, non-pass judgment outcomes, and live proof still pending. The controller derives each entry from receipts and calls no model. Replace the fixed sentence `R8 cross-family review remains incomplete.` in `publicBody` at `server/controller.ts:2739` with this section, so the body never claims more or less than the receipts show.
+- [ ] Record `oracle` and `missing_evidence` on the run's pre-build failure record, not in the handoff body. Those classes end the run `failed` before build, so they never reach a PR.
+- [ ] Add a closed set of non-pass judgment outcomes for review scenarios, `unverifiable`, `inconclusive`, and `timeout`. Today a judgment is `{scenario, pass, reason}` in `src/review.ts`. A non-pass outcome can never set `pass: true`, and an unknown outcome fails validation. Leave CI's boolean `Verdict.pass` and the existing `refused` and `malformed` stage errors unchanged.
+
+**You see.**
+
+- [ ] Save a bug fixture whose new-behavior scenarios fail on the base by assertion and whose preservation scenarios pass, so it goes on to build. Save replays of fixtures 558 and 561 that end `failed` before build. Each has its base-run receipt.
+
+**Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Test kind parsing and validation, per-scenario judging, each non-assertion failure reason, the no-`.git` export, receipt contents, the redacted public reason, and that build never starts after a refusal in `test/base-check.test.ts`, `test/accept.test.ts`, and `test/specify.test.ts`. Test private failure details for base and CI runs in `test/candidate-gates.test.ts`. Test every failure class, that only `candidate` spends a repair, and the full corpus in `test/diagnosis.test.ts` and `test/orchestrator.test.ts`. Test the "Not proven" entries, the scenario rule for each `new_behavior` criterion, and that no non-pass verdict renders green in `test/handoff.test.ts` and `test/accept.test.ts`. Run `npm run check`.
+
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, per the boot recipe.
+
+- [ ] Lane 1. Regression lane against trunk. Run the same tiny bug fixture on trunk and head. Save `base-check.json`. Pass when head records a base run whose new-behavior scenarios fail by assertion and whose preservation scenarios pass, the run continues to build, and trunk's missing base run is recorded. When head's run reaches handoff, its PR body has a code-written "Not proven" section that lists same-family review and `r8: "incomplete"`.
+- [ ] Lane 2. Replay fixture 558, whose generated check calls `git` at load. Save `replay-558.json`. Pass when the base run reports `base_load_error` in the no-`.git` export and the run ends `failed` before build with no build tokens spent.
+- [ ] Lane 3. Replay fixture 561, whose preservation scenario S7 depends on the new heading and asserts whole-document equality. Save `replay-561.json`. Pass when the run ends `failed` before build with no build tokens spent, with S7's actual base result recorded and either `preservation_failed` or the exact corpus veto `adjudicated_oracle` as the reason.
+- [ ] Lane 4. Run a fixture whose requested behavior already exists on the base. Save `base-passes.json`. Pass when its new-behavior scenarios pass on the base and the run ends `failed` before build with the redacted reason.
+- [ ] Lane 5. Inspect the base run's tree and sandbox. Save `base-export.json`. Pass when the tree has no `.git` and its recorded tree digest matches the CI gate's export of the same SHA, the gateway audit shows no GitHub route, and no branch or CI run appears.
+- [ ] Lane 6. Run a fixture whose suite registers zero tests, and one whose suite hangs. Save `base-broken.json`. Pass when each ends `failed` with its own reason, `base_no_tests` or `base_timeout`, never an expected red.
+- [ ] Lane 7. Drive one candidate whose held-out CI failure is a real defect, and one that fails only an adjudicated overconstrained oracle from the corpus. Save `failure-class.json`. Pass when the first is classified `candidate` and spends one repair, and the second is classified `oracle`, spends no repair, and ends `failed`.
+- [ ] Lane 8. Read private state and public evidence for a run with held-out failures. Save `failure-details.json`. Pass when private state holds each failing test's name and assertion message for the base and CI runs, and the public marker shows only the redacted summary.
+- [ ] Lane 9. Inspect the build session's mounts and history after a base run. Save `base-isolation.json`. Pass when the build sees no held-out file, test name, failure message, or base-run receipt.
+- [ ] Lane 10. Restart the controller during the base run, then compare run totals with and without the base run. Save `base-restart.json`. Pass when recovery charges the interrupted attempt per R11 and does not skip the base check, the base run uses no model tokens, and its wall time counts against the accept stage.
+
+**Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Metric. Measure base-run wall time, accept-stage wall time, failure classification time, full run time, and tokens per run on trunk and head.
+- [ ] Probe. Interleave three tiny bug fixture runs on each revision, and run the 558 and 561 replays once on head. Save `perf.json`.
+- [ ] Baseline. Record trunk accept-stage time and run usage first.
+- [ ] Rule. Fail if the base run takes over the proposed 180 seconds on the tiny fixture, calls a model, or lets a refused run spend build tokens. Report the added accept-stage time against trunk.
+
+**Review gate.** The operator reviews before merge.
+
+- [ ] Post the base-run receipts for the bug fixture and the 558 and 561 replays, and the failure-class receipt, to the operator. Use JSON instead of a screenshot or video. Merge on a clean verdict and a passing `check`.
+
+**Merge.**
+
+- [ ] Record the exact-head verdict and complete Bugbot triage.
+- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Hand `F10b` to the owner on a clean verdict and a passing `check`. After the owner's merge, branch the next PR from the new `main`.
+
 ## Record finished runs on the ledger branch (F09b)
 
-**Depends on.** F09a. This completes unit 9's ledger and usage accounting.
+**Depends on.** F10b. This completes unit 9's ledger and usage accounting.
 
 **Files.**
 
@@ -815,70 +881,9 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [ ] Record the exact-head verdict and complete Bugbot triage after the orphan-branch prototype passes.
 - [ ] Apply the patch-id rule in `playbooks/shipping.md`. Hand `F09b` to the owner on a clean verdict and a passing `check`. After the owner's merge, branch the next PR from the new `main`.
 
-## Prove held-out tests fail on the base (F10b)
-
-**Depends on.** F09b. This adds a base-tree check and oracle-quality diagnosis to the acceptance suite from `F06b`, before build spends tokens.
-
-**Files.**
-
-- [ ] Create `src/diagnosis.ts`, `test/base-check.test.ts`, `test/diagnosis.test.ts`, `test/fixtures/oracle-corpus/`, and `docs/prototypes/base-check/`.
-- [ ] Edit `src/specify.ts`, `src/accept.ts`, `src/stages.ts`, `src/orchestrator.ts`, `server/gates.ts`, `server/controller.ts`, `skills/acceptance/SKILL.md`, `test/accept.test.ts`, `test/specify.test.ts`, `test/candidate-gates.test.ts`, and `test/orchestrator.test.ts` for scenario kinds, the base run, private failure details, failure classes, and their receipts.
-- [ ] Edit `src/handoff.ts`, `src/review.ts`, `server/controller.ts`, `test/handoff.test.ts`, and `test/review.test.ts` for the "Not proven" section and the closed set of non-pass judgment outcomes.
-
-**Build.**
-
-- [ ] Give each acceptance criterion in `Contract` a kind, `new_behavior` or `preservation`. Specify chooses the kind. A missing or unknown kind fails contract validation. Each accept scenario takes the kind of the criteria it maps, and a scenario that maps both kinds fails suite validation. The base rule covers only scenarios with checks. A judge-only scenario has no assertion, so the base run skips it and review still judges it. Each checked scenario's tests are mapped to it by test name, so a check file shared by several scenarios still yields one result per scenario. Every `new_behavior` criterion needs at least one checked scenario. A suite whose new-behavior criterion maps only to judge-only scenarios fails suite validation.
-- [ ] Add a named held-out base runner, `runHeldoutBase`, to `server/gates.ts`. Do not reuse `runVisibleTests`, which applies a patch and runs the visible command, not the private suite. After `accept` stores the suite, export the run's pinned base SHA with `exportTree`, the same export the CI gate builds, so the tree has no `.git`. Run only the private suite there, through the existing `GateRunner` isolation in `server/gates.ts`, with no network, no credentials, and no publication route. Never run generated checks directly on the controller host. Use a proposed 180-second cap and charge the wall time to the accept stage.
-- [ ] Judge each scenario against its kind. A new-behavior scenario must fail on the base, and only an assertion failure counts as that expected red. A preservation scenario must pass on the base. Any other result ends the run `failed` before build with a public, redacted reason, such as "acceptance does not reproduce the ticket" or "a preservation check fails on the base".
-- [ ] Never count a broken run as an expected red. A module-load failure, zero registered tests, a runner error, and a timeout each end the run `failed` with its own redacted reason, such as `base_load_error`, `base_no_tests`, `base_runner_error`, or `base_timeout`.
-- [ ] Keep assertion-level held-out failures in private state for both the base run and CI validation. Record each failing test's name and its bounded assertion message beside the file path. Today `server/gates.ts:1437-1443` keeps only file paths. Public evidence carries only a redacted summary, never held-out test names or messages.
-- [ ] Add `classifyFailure` to `src/diagnosis.ts`. Before any repair round, classify a hard failure as `candidate`, `oracle`, `missing_evidence`, or `infrastructure` from the private failure details and receipts. Classification is deterministic code and calls no model. A runner error, timeout, or unavailable runner is `infrastructure`. A receipt that lacks a required fact is `missing_evidence`. A failure is `oracle` only when it matches an adjudicated corpus entry, or when its scenario's base result was not the expected one. An expected red on the base, a new-behavior assertion failure, does not make a later failure of that scenario an oracle. Every other assertion failure is `candidate`. Only a `candidate` failure spends a repair. An `infrastructure` failure follows the existing retry caps. An `oracle` or `missing_evidence` failure ends the run `failed` with its own redacted reason and spends no repair.
-- [ ] Add a small adjudicated regression corpus in `test/fixtures/oracle-corpus/`. Include a proposed three known-good patches, a proposed three known-bad patches, fixture 558's load-time `git` call, and fixture 561's overconstrained oracle. Each entry records its expected base result, its expected class, and who adjudicated it. Fixture 558's expected base result is `base_load_error`. Fixture 561's expected class is `oracle`. Run the corpus in `npm run check`.
-- [ ] Record a base-run receipt with the base SHA, suite digest, each scenario's kind and result, exit code, wall time, and runner version. Keep it in private state. Keep the gates from `main`, held-out isolation, and budgets unchanged. Build and repair sessions never see the suite, its receipt, or the private failure details. Update `skills/acceptance/SKILL.md` to say each scenario has a kind and the suite runs against the base.
-- [ ] Add a code-written "Not proven" section to the handoff PR body. It lists judge-only criteria, same-family review while the receipt records `r8: "incomplete"`, non-pass judgment outcomes, and live proof still pending. The controller derives each entry from receipts and calls no model. Replace the fixed sentence `R8 cross-family review remains incomplete.` in `publicBody` at `server/controller.ts:2739` with this section, so the body never claims more or less than the receipts show.
-- [ ] Record `oracle` and `missing_evidence` on the run's pre-build failure record, not in the handoff body. Those classes end the run `failed` before build, so they never reach a PR.
-- [ ] Add a closed set of non-pass judgment outcomes for review scenarios, `unverifiable`, `inconclusive`, and `timeout`. Today a judgment is `{scenario, pass, reason}` in `src/review.ts`. A non-pass outcome can never set `pass: true`, and an unknown outcome fails validation. Leave CI's boolean `Verdict.pass` and the existing `refused` and `malformed` stage errors unchanged.
-
-**You see.**
-
-- [ ] Save a bug fixture whose new-behavior scenarios fail on the base by assertion and whose preservation scenarios pass, so it goes on to build. Save replays of fixtures 558 and 561 that end `failed` before build. Each has its base-run receipt.
-
-**Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
-
-- [ ] Test kind parsing and validation, per-scenario judging, each non-assertion failure reason, the no-`.git` export, receipt contents, the redacted public reason, and that build never starts after a refusal in `test/base-check.test.ts`, `test/accept.test.ts`, and `test/specify.test.ts`. Test private failure details for base and CI runs in `test/candidate-gates.test.ts`. Test every failure class, that only `candidate` spends a repair, and the full corpus in `test/diagnosis.test.ts` and `test/orchestrator.test.ts`. Test the "Not proven" entries, the scenario rule for each `new_behavior` criterion, and that no non-pass verdict renders green in `test/handoff.test.ts` and `test/accept.test.ts`. Run `npm run check`.
-
-**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, per the boot recipe.
-
-- [ ] Lane 1. Regression lane against trunk. Run the same tiny bug fixture on trunk and head. Save `base-check.json`. Pass when head records a base run whose new-behavior scenarios fail by assertion and whose preservation scenarios pass, the run continues to build, and trunk's missing base run is recorded. When head's run reaches handoff, its PR body has a code-written "Not proven" section that lists same-family review and `r8: "incomplete"`.
-- [ ] Lane 2. Replay fixture 558, whose generated check calls `git` at load. Save `replay-558.json`. Pass when the base run reports `base_load_error` in the no-`.git` export and the run ends `failed` before build with no build tokens spent.
-- [ ] Lane 3. Replay fixture 561, whose preservation scenario S7 depends on the new heading and asserts whole-document equality. Save `replay-561.json`. Pass when S7 fails on the base as a preservation scenario and the run ends `failed` before build with no build tokens spent.
-- [ ] Lane 4. Run a fixture whose requested behavior already exists on the base. Save `base-passes.json`. Pass when its new-behavior scenarios pass on the base and the run ends `failed` before build with the redacted reason.
-- [ ] Lane 5. Inspect the base run's tree and sandbox. Save `base-export.json`. Pass when the tree has no `.git` and matches the CI gate's export of the same SHA, the gateway audit shows no GitHub route, and no branch or CI run appears.
-- [ ] Lane 6. Run a fixture whose suite registers zero tests, and one whose suite hangs. Save `base-broken.json`. Pass when each ends `failed` with its own reason, `base_no_tests` or `base_timeout`, never an expected red.
-- [ ] Lane 7. Drive one candidate whose held-out CI failure is a real defect, and one that fails only an adjudicated overconstrained oracle from the corpus. Save `failure-class.json`. Pass when the first is classified `candidate` and spends one repair, and the second is classified `oracle`, spends no repair, and ends `failed`.
-- [ ] Lane 8. Read private state and public evidence for a run with held-out failures. Save `failure-details.json`. Pass when private state holds each failing test's name and assertion message for the base and CI runs, and the public marker shows only the redacted summary.
-- [ ] Lane 9. Inspect the build session's mounts and history after a base run. Save `base-isolation.json`. Pass when the build sees no held-out file, test name, failure message, or base-run receipt.
-- [ ] Lane 10. Restart the controller during the base run, then compare run totals with and without the base run. Save `base-restart.json`. Pass when recovery charges the interrupted attempt per R11 and does not skip the base check, the base run uses no model tokens, and its wall time counts against the accept stage.
-
-**Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
-
-- [ ] Metric. Measure base-run wall time, accept-stage wall time, failure classification time, full run time, and tokens per run on trunk and head.
-- [ ] Probe. Interleave three tiny bug fixture runs on each revision, and run the 558 and 561 replays once on head. Save `perf.json`.
-- [ ] Baseline. Record trunk accept-stage time and run usage first.
-- [ ] Rule. Fail if the base run takes over the proposed 180 seconds on the tiny fixture, calls a model, or lets a refused run spend build tokens. Report the added accept-stage time against trunk.
-
-**Review gate.** The operator reviews before merge.
-
-- [ ] Post the base-run receipts for the bug fixture and the 558 and 561 replays, and the failure-class receipt, to the operator. Use JSON instead of a screenshot or video. Merge on a clean verdict and a passing `check`.
-
-**Merge.**
-
-- [ ] Record the exact-head verdict and complete Bugbot triage.
-- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Hand `F10b` to the owner on a clean verdict and a passing `check`. After the owner's merge, branch the next PR from the new `main`.
-
 ## Write acceptance and review with a second model family (F10c)
 
-**Depends on.** F10b. This closes R8 and R12 under the owner's 2026-11-02 decision to allow Anthropic models on the VM. It moves the accept stage and one blocking review seat to an Anthropic model. The builder and repair stay on OpenAI. The Anthropic route does not exist today. It is a planned prototype.
+**Depends on.** F09b. This closes R8 and R12 under the owner's 2026-11-02 decision to allow Anthropic models on the VM. It moves the accept stage and one blocking review seat to an Anthropic model. The builder and repair stay on OpenAI. The Anthropic route does not exist today. It is a planned prototype.
 
 **Files.**
 
@@ -1440,7 +1445,7 @@ These are every intentional template adaptation in this document.
 3. Each review gate explicitly says that logs replace a screenshot or video. Those words satisfy the checker's literal review-block requirements. No recording or screenshot is claimed or required where it adds no evidence.
 4. Until `F10c` merges, the template's cross-family reviewer language becomes context-isolated same-family seats under the owner's explicit interim model decision. The missing cross-family gate remains visible, not silently waived as passed. After `F10c`, a run records `r8: "complete"` only when its accept author and at least one blocking seat are cross-family.
 5. Every PR gets a full verdict before merge, including changes without a visual interaction. This is stricter than the template's optional interaction-only review gate. The root's merge grant covered build PRs through F08. From F09a onward build PRs and runtime factory PRs both stop for the owner's merge.
-6. The dependency graph is one serial chain for code writes rather than a fabricated pair of independent first PRs. Only the optional docs-only `F09d` sits beside it. `F10c` sits in the chain between `F10b` and `F10`. Shared contracts and the CI bootstrap justify that choice. Ten verifier lanes mean ten scenarios, not ten concurrent controllers on a two-vCPU VM. Read-only lanes may run concurrently, while mutation/resource-heavy scenarios use scoped fixtures and service capacity limits.
+6. The dependency graph is one serial chain for code writes rather than a fabricated pair of independent first PRs. Only the optional docs-only `F09d` sits beside it. `F10c` sits in the chain between `F09b` and `F10`. Shared contracts and the CI bootstrap justify that choice. Ten verifier lanes mean ten scenarios, not ten concurrent controllers on a two-vCPU VM. Read-only lanes may run concurrently, while mutation/resource-heavy scenarios use scoped fixtures and service capacity limits.
 7. The `F04a` main-owned configuration and the `F07b` main-owned CI workflow must land on `main` before their main-backed proof can run. The root merges both under the owner's build-PR grant. These explicit exceptions do not create false all-green verdicts. Their main-backed boxes stay pending until the post-merge checks pass.
 8. The playbook's prototype-before-plan and child investigation steps were constrained by this leaf's plan-only authorization. Existing prototypes are recorded, code was read directly, no children were launched, and unproved engineering choices became named prototype-first gates.
 9. The check script is not silent on success. It always prints one box-count line per PR and a summary. The success predicate is exit code 0 and `22 PR sections, 0 problems`, with no diagnostic lines. Its source was read before writing this plan.
