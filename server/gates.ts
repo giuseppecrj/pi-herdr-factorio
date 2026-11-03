@@ -54,6 +54,15 @@ const SOURCE = ["src", "extension", "server", "skills"];
 const CHECK_NAMES = ["typecheck", "lint", "format"];
 const SHA = /^[a-f0-9]{40}$/;
 
+function isDocumentation(path: string): boolean {
+	return (
+		path.endsWith(".md") &&
+		!path.startsWith(".github/") &&
+		!path.startsWith("test/acceptance/") &&
+		!SOURCE.some((dir) => path.startsWith(`${dir}/`))
+	);
+}
+
 const CONFIG = new Set([
 	"biome.json",
 	"biome.jsonc",
@@ -399,7 +408,20 @@ export async function materializeCandidate(input: {
 				});
 		}
 
+		for (const path of base.keys())
+			if (isDocumentation(path) && !candidate.has(path))
+				rmSync(join(input.dest, path), { force: true });
+
 		for (const [path, item] of candidate) {
+			if (isDocumentation(path)) {
+				if (item.blob !== base.get(path)?.blob) {
+					mkdirSync(dirname(join(input.dest, path)), { recursive: true });
+					cpSync(join(temp, "tree", path), join(input.dest, path));
+				}
+
+				continue;
+			}
+
 			const fromSource = SOURCE.some((dir) => path.startsWith(`${dir}/`));
 			const replacement = replacements.some((r) => r.path === path);
 

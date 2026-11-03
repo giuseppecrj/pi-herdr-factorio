@@ -150,6 +150,49 @@ test("merged tree routes imports to candidate source and preserves every unnamed
 	assert.equal(existsSync(join(dest, "src/biome.json")), false);
 });
 
+test("merged tree takes candidate documentation outside .github while main keeps its workflow docs", async (t) => {
+	const f = repo(t);
+	f.put("docs/guide.md", "main guide\n");
+	f.put("docs/old.md", "old\n");
+	f.put(".github/notes.md", "main notes\n");
+	const gateSha = f.commit();
+
+	f.put("docs/guide.md", "candidate guide\n");
+	f.put("docs/new.md", "new\n");
+	f.put("README.md", "candidate readme\n");
+	f.put(".github/notes.md", "candidate notes\n");
+	rmSync(join(f.root, "docs/old.md"));
+	const sha = f.commit();
+	const dest = join(f.root, "out");
+
+	const result = await materializeCandidate({
+		repository: f.root,
+		gateSha,
+		candidateSha: sha,
+		dest,
+		replacements: [],
+	});
+
+	assert.equal(
+		readFileSync(join(dest, "docs/guide.md"), "utf8"),
+		"candidate guide\n",
+	);
+
+	assert.equal(readFileSync(join(dest, "docs/new.md"), "utf8"), "new\n");
+	assert.equal(
+		readFileSync(join(dest, "README.md"), "utf8"),
+		"candidate readme\n",
+	);
+	assert.equal(existsSync(join(dest, "docs/old.md")), false);
+
+	assert.equal(
+		readFileSync(join(dest, ".github/notes.md"), "utf8"),
+		"main notes\n",
+	);
+
+	assert.deepEqual(result.ignoredChanges, [".github/notes.md"]);
+});
+
 test("a candidate defect cannot pass preserved regression tests; receipts bind both SHAs", async (t) => {
 	const f = repo(t);
 	f.put("src/value.ts", 'export const value = "wrong";\n');
