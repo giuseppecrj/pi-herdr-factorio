@@ -516,7 +516,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [ ] Metric. Measure gate wall time, queue time, and model tokens/spend per candidate on trunk and head. Model usage must be zero in CI.
 - [ ] Probe. Interleave three runs of the same good candidate under the existing check command and the new isolated gate command. Record hosted queue time separately. Save `perf.json`.
 - [ ] Baseline. Record trunk `npm run check` elapsed time first. Use the same dependencies and candidate for comparable gate execution.
-- [ ] Rule. Fail if head's comparable gate execution exceeds twice trunk plus 60 seconds, or exceeds 10 minutes. Fail any model use in CI. Bound time from dispatch to a terminal receipt at 20 minutes, with queue outages reported separately rather than hidden.
+- [ ] Rule. Fail if head's comparable gate execution exceeds twice trunk plus 60 seconds, or exceeds 10 minutes. Fail any model use in CI. Bound time from dispatch to a terminal receipt at 20 minutes, with queue outages reported separately rather than hidden. Give main's baseline test run 180 seconds. The owner raised it from 90 seconds on 2026-11-03, after main's own baseline took 89.9 seconds on the hosted runner for fixture 568.
 
 **Review gate.** The operator reviews before merge.
 

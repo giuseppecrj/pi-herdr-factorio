@@ -1526,7 +1526,7 @@ export async function checkCandidate(
 		tree = join(temp, "tree"),
 		gates = join(temp, "gates");
 
-	let deadlineMs = 90000;
+	let deadlineMs = 180000;
 
 	const run = async (name: string, source: string, argv: readonly string[]) => {
 		const began = Date.now();
