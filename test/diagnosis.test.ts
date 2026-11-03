@@ -19,6 +19,7 @@ import {
 	type ClassifyInput,
 	type FailureClass,
 	type HeldoutReplay,
+	type TreeReplay,
 } from "../src/diagnosis.ts";
 import { digestOf } from "../src/run.ts";
 import {
@@ -952,6 +953,130 @@ test("classifier: disagreements are missing evidence and message bytes are ignor
 		classifyFailure(unitInput({ replay: { ...r, full: reworded } })).kind,
 		"candidate",
 	);
+});
+
+test("classifier: agreement negatives from the sketch all veto repair", () => {
+	const r = observedReplay(E, first);
+	assert.ok(r.kind === "observed" && r.gate.execution.kind === "observed");
+	const gateExec = r.gate.execution;
+
+	const kind = (
+		input: Partial<ClassifyInput> & { receiptPatch?: JsonObject },
+	) => classifyFailure(unitInput(input));
+
+	for (const heldoutFailures of [
+		[first, first],
+		[],
+		[first, "test/acceptance/8/checks/a.test.mjs"],
+	])
+		assert.deepEqual(kind({ receiptPatch: { heldoutFailures } }), {
+			kind: "missing_evidence",
+			reason: "invalid_report",
+		});
+
+	const counts: JsonObject[] = [
+		{ [first]: 1 },
+		{ [first]: 1, [second]: 1, extra: 1 },
+		{ [first]: -1, [second]: 1 },
+		{ [first]: 1.5, [second]: 1 },
+	];
+
+	for (const heldoutCounts of counts)
+		assert.deepEqual(kind({ receiptPatch: { heldoutCounts } }), {
+			kind: "missing_evidence",
+			reason: "invalid_report",
+		});
+
+	assert.deepEqual(
+		kind({ receiptPatch: { heldoutCounts: { [first]: 2, [second]: 1 } } }),
+		{ kind: "missing_evidence", reason: "ci_replay_disagrees" },
+	);
+
+	const extra = {
+		...r.full,
+		projection: { ...r.full.projection, failed: [first, second] },
+	};
+
+	assert.deepEqual(kind({ replay: { ...r, full: extra } }), {
+		kind: "missing_evidence",
+		reason: "tree_replays_disagree",
+	});
+
+	const counted = {
+		...r.full,
+		projection: {
+			...r.full.projection,
+			counts: { [first]: 1, [second]: 2 },
+		},
+	};
+
+	assert.deepEqual(kind({ replay: { ...r, full: counted } }), {
+		kind: "missing_evidence",
+		reason: "tree_replays_disagree",
+	});
+
+	const changes: Partial<{
+		name: string;
+		kind: "runtime_error";
+		code: string;
+	}>[] = [{ name: "other" }, { kind: "runtime_error" }, { code: "ERR_OTHER" }];
+
+	for (const change of changes) {
+		const changed: TreeReplay = {
+			...r.full,
+			execution: {
+				...gateExec,
+				files: gateExec.files.map((f) => ({
+					...f,
+					failures: f.failures.map((x) => ({ ...x, ...change })),
+				})),
+			},
+		};
+
+		assert.deepEqual(
+			kind({ replay: { ...r, full: changed } }),
+			{ kind: "missing_evidence", reason: "tree_replays_disagree" },
+			JSON.stringify(change),
+		);
+	}
+
+	const malformed = {
+		...r.full,
+		execution: {
+			kind: "unavailable" as const,
+			reason: "invalid_report" as const,
+			wallMs: 1,
+		},
+	};
+
+	assert.deepEqual(kind({ replay: { ...r, full: malformed } }), {
+		kind: "missing_evidence",
+		reason: "invalid_report",
+	});
+
+	const reordered = {
+		...r,
+		files: [...E].reverse(),
+		full: {
+			...r.full,
+			execution: { ...gateExec, files: [...gateExec.files].reverse() },
+		},
+	};
+
+	assert.equal(kind({ replay: reordered }).kind, "candidate");
+
+	const load = observedReplay(E, first, "load_error");
+	assert.deepEqual(
+		kind({
+			receiptPatch: { heldoutCounts: { [first]: 0, [second]: 1 } },
+			replay: load,
+		}),
+		{ kind: "candidate", reason: "candidate_heldout", scenarios: ["S1"] },
+	);
+	assert.deepEqual(kind({ replay: load }), {
+		kind: "missing_evidence",
+		reason: "ci_replay_disagrees",
+	});
 });
 
 test("classifier: a wrong base result vetoes repair as oracle, even beside a candidate check failure", () => {
