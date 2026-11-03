@@ -8818,13 +8818,38 @@ describe("controller-only validate", () => {
 
 			const restarted = f.start();
 			await once(restarted);
-			await restarted.tick();
+
+			for (let tick = 0; tick < 4; tick++) {
+				await restarted.tick();
+				await settle();
+				f.clock.t += 600_000;
+			}
+
 			assert.equal(
 				f.executor.launches.filter(
 					(entry) => entry.stage === "build" && entry.round === 1,
 				).length,
 				0,
 			);
+			assert.equal(f.files.claims.get(runOf(14))?.status, "failed");
+
+			const ended = statuses(f.github, 14).filter((s) =>
+				s.endsWith(":failed"),
+			);
+
+			assert.equal(ended.length, 1);
+			assert.equal(statuses(f.github, 14).at(-1), ended[0]);
+			const refused = keyed(f.github, 14, "base-refusal");
+			assert.equal(refused.length, 1);
+			assert.match(
+				refused[0] ?? "",
+				/^Acceptance refused before build: base_evidence_missing\. Base qualification evidence is incomplete or invalid\.\n\n<!-- factory-base-refusal /,
+			);
+			const settledChecks = f.executor.baseChecks.length;
+			await restarted.tick();
+			await settle();
+			assert.equal(f.executor.baseChecks.length, settledChecks);
+			assert.equal(keyed(f.github, 14, "base-refusal").length, 1);
 			const repairChecks = f.executor.baseChecks.slice(checks);
 			assert.ok(repairChecks.length > 0);
 			assert.ok(repairChecks.every((c) => c.readOnly === true));
