@@ -4,6 +4,12 @@ Use this guide to inspect a factory handoff, decide whether to merge, and confir
 
 F09a implements this protocol locally. Main-backed reporter/P4 proof, production protection, real owner-action lanes, and live/performance qualification remain pending. A source check, scratch GitHub experiment, or saved-state test is not a certified factory run. See the [plan's F09a gates](../plans/factory-v1.md#hand-off-verified-prs-and-require-human-merge-f09a) and [formal proof limits](../statecharts/README.md).
 
+## Quick reference
+
+- Factory PRs use branch `factory/pr/<issue>-<runId12>` and carry the `factory:review` label.
+- Both `check` and `factory-gates` must pass on the exact PR head before merging.
+- The factory never merges. Closing a PR without merging records `cancelled`, not `landed`.
+
 ## Inspect the handoff
 
 1. Open the issue's handoff comment and follow its PR and CI links. Expect one non-draft PR against `main`, on `factory/pr/<issue>-<runId12>`, labeled `factory:review`, with the repository owner requested. The controller adopts only its own bot PR with the matching repository, base, branch, and run trailer. It reconciles a lost create response rather than opening another PR.
