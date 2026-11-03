@@ -46,6 +46,12 @@ import {
 	repairFeedback,
 	parseValidationState,
 	validationDir,
+	assessmentBinding,
+	assessmentBytes,
+	feedbackBytes,
+	readAssessmentBytes,
+	type ReadAssessment,
+	type ValidationAssessment,
 } from "../src/validation.ts";
 import {
 	arrayOf,
@@ -61,9 +67,10 @@ import { isGitSha } from "../src/workflow.ts";
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync, readdirSync, mkdirSync, existsSync } from "node:fs";
-import { runHeldoutBase } from "./gates.ts";
+import { replacementDigest, runHeldoutBase } from "./gates.ts";
 import {
 	assessBase,
+	classifyFailure,
 	parseBaseReceipt,
 	parseBaseCheckReference,
 	type BaseCheckInput,
@@ -1797,6 +1804,33 @@ export function lineLog(write: (text: string) => void, now: () => number): Log {
 /** Resolves after `ms`, or as soon as `signal` aborts. */
 export type Sleep = (ms: number, signal: AbortSignal) => Promise<void>;
 
+export function readStoredAssessment(dir: string): ReadAssessment | null {
+	const path = join(dir, "assessment.json");
+
+	try {
+		return present(path)
+			? readAssessmentBytes(regularText(path, 64 * 1024))
+			: null;
+	} catch {
+		return null;
+	}
+}
+
+function storeAssessment(
+	dir: string,
+	input: Parameters<typeof assessmentBinding>[0],
+	assessment: ValidationAssessment,
+): ReadAssessment {
+	const text = assessmentBytes(assessmentBinding(input), assessment);
+	keepValidationFile(join(dir, "assessment.json"), text);
+	const read = readStoredAssessment(dir);
+
+	if (read === null || read.ref.recordDigest !== digestOf(text))
+		throw new Error("assessment_unreadable");
+
+	return read;
+}
+
 function keepValidationFile(path: string, text: string): void {
 	if (present(path)) {
 		if (regularText(path, 1024 * 1024) !== text)
@@ -2007,6 +2041,95 @@ export function controllerValidator(config: {
 			privateDir(dir);
 			const verdictPath = join(dir, "verdict.json");
 			const failurePath = join(dir, "failure.json");
+			const receiptPath = join(dir, "receipt.json");
+
+			const assess = (verdict: Verdict): ReadAssessment => {
+				const text = present(receiptPath)
+					? regularText(receiptPath, 1024 * 1024)
+					: null;
+
+				const raw = objectOf(parseJson(text ?? ""));
+
+				const binding = {
+					runId: input.runId,
+					round: state.round,
+					generation: state.generation?.index ?? 0,
+					verdict,
+				};
+
+				const nonces = Array.from({ length: state.dispatchTry }, (_, index) =>
+					dispatchNonce(
+						input.runId,
+						state.round,
+						index + 1,
+						state.generation?.index,
+					),
+				);
+
+				const stored = readStoredAssessment(dir);
+
+				const read =
+					stored ??
+					storeAssessment(
+						dir,
+						binding,
+						verdict.pass
+							? { kind: "passed" }
+							: {
+									kind: "failed",
+									failure: classifyFailure({
+										receipt: raw ?? undefined,
+										identity: {
+											gateSha: state.baseSha,
+											candidateSha:
+												state.publication?.candidateSha ?? state.baseSha,
+											nonce:
+												nonces.find((n) => n === jsonField(raw, "nonce")) ??
+												"missing",
+											heldoutDigest: heldout.digest,
+											replacementsDigest: replacementDigest(
+												contract.contract.replacesTests ?? [],
+											),
+										},
+										expected: heldout.files.map((f) => f.path).toSorted(),
+										scenarios: suite.suite.scenarios.flatMap((s) =>
+											s.checks.length === 1
+												? [
+														{
+															scenario: s.id,
+															kind: s.kind,
+															file: `${heldout.directory}/checks/${s.checks[0]}`,
+														},
+													]
+												: [],
+										),
+										base: null,
+										ignoredChanges: null,
+										replay: null,
+										dependencies: null,
+									}),
+								},
+					);
+
+				if (
+					read.assessment.kind === "failed" &&
+					read.assessment.failure.kind === "candidate"
+				)
+					keepValidationFile(
+						join(dir, "feedback.json"),
+						feedbackBytes(
+							read.ref,
+							repairFeedback(
+								suite.suite,
+								contract.contract,
+								textsOf(jsonField(raw, "heldoutFailures")) ?? [],
+								heldout.directory,
+							),
+						),
+					);
+
+				return read;
+			};
 
 			if (state.publication !== null) {
 				const tip = await api.ref(state.publication.branch);
@@ -2060,14 +2183,25 @@ export function controllerValidator(config: {
 					);
 
 					if (report !== null)
-						return { kind: "finished", state, verdict, report };
+						return {
+							kind: "finished",
+							state,
+							verdict,
+							report,
+							assessment: assess(verdict),
+						};
 
 					return input.now >= state.deadline
 						? failed("ci_timeout")
 						: { kind: "waiting", state };
 				}
 
-				return { kind: "finished", state, verdict };
+				return {
+					kind: "finished",
+					state,
+					verdict,
+					assessment: assess(verdict),
+				};
 			}
 
 			if (present(failurePath))
@@ -2368,18 +2502,7 @@ export function controllerValidator(config: {
 				),
 			});
 
-			const feedback = repairFeedback(
-				suite.suite,
-				contract.contract,
-				textsOf(jsonField(raw, "heldoutFailures")) ?? [],
-				heldout.directory,
-			);
-
-			keepValidationFile(
-				join(dir, "feedback.json"),
-				`${JSON.stringify(feedback)}\n`,
-			);
-			keepValidationFile(join(dir, "receipt.json"), text ?? "null\n");
+			keepValidationFile(receiptPath, text ?? "null\n");
 			keepValidationFile(verdictPath, `${JSON.stringify(verdict)}\n`);
 			const cleanup = await cleanupPublication(api, dir, publication);
 
@@ -2395,14 +2518,20 @@ export function controllerValidator(config: {
 				);
 
 				if (report !== null)
-					return { kind: "finished", state, verdict, report };
+					return {
+						kind: "finished",
+						state,
+						verdict,
+						report,
+						assessment: assess(verdict),
+					};
 
 				return input.now >= state.deadline
 					? failed("ci_timeout")
 					: { kind: "waiting", state };
 			}
 
-			return { kind: "finished", state, verdict };
+			return { kind: "finished", state, verdict, assessment: assess(verdict) };
 		} catch (error) {
 			if (
 				error instanceof PublicationError &&

@@ -25,7 +25,7 @@ import { escapeHtml } from "../server/viewer/render.ts";
 import { runCli } from "../server/cli.ts";
 import { readStageReceipt, runSpecify } from "../server/sandbox.ts";
 import { readStoredVerdict, fileRunFiles } from "../server/controller.ts";
-import { candidateLifecycleFixture } from "./helpers.ts";
+import { candidateLifecycleFixture, verdictAssessment } from "./helpers.ts";
 import {
 	beginCandidate,
 	candidateGenerations,
@@ -658,6 +658,12 @@ test("viewer shows selected generation round zero separately from active repair 
 
 		assert.ok(initial.effect?.kind === "validate");
 
+		const failed = {
+			...prior.verdict,
+			pass: false,
+			checks: prior.verdict.checks.map((c) => ({ ...c, passed: false })),
+		};
+
 		const repaired = handoffCandidate(initial.state, {
 			kind: "effect_completed",
 			completion: {
@@ -666,13 +672,15 @@ test("viewer shows selected generation round zero separately from active repair 
 				result: {
 					kind: "finished",
 					validation: prior.validation,
-					verdict: {
-						...prior.verdict,
-						pass: false,
-						checks: prior.verdict.checks.map((c) => ({ ...c, passed: false })),
-					},
+					verdict: failed,
 					report: null,
 					seats: ["code-review", "security-review", "simplify"],
+					assessment: verdictAssessment(
+						f.book.pin.runId,
+						initial.effect.generation.round,
+						initial.effect.generation.generation,
+						failed,
+					),
 				},
 			},
 		}).state;

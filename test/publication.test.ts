@@ -53,6 +53,7 @@ import {
 	downloadGateReceipt,
 } from "../server/controller.ts";
 import { type ValidationState } from "../src/validation.ts";
+import { replacementDigest } from "../server/gates.ts";
 import { CONTROLLER_LOGIN } from "../src/markers.ts";
 
 const repo = "giuseppecrj/pi-herdr-factorio";
@@ -1255,6 +1256,75 @@ describe("controller publication and waiting recovery", () => {
 			assert.equal(result.reason, "duplicate_dispatch");
 		assert.equal(f.fake.refs.size, 0);
 	});
+
+	for (const failing of ["lint", "heldout"] as const)
+		it(`stores the assessment before feedback and returns it on the fresh and stored-verdict paths (${failing})`, async () => {
+			const f = await validationFixture();
+			const passing = f.fake.receipt.bind(f.fake);
+
+			f.fake.receipt = () => {
+				const r = JSON.parse(passing());
+
+				return JSON.stringify({
+					...r,
+					status: "failed",
+					reason: null,
+					replacementsDigest: replacementDigest([]),
+					checks: REQUIRED_CI_CHECKS.map((name) => ({
+						name,
+						exitCode: name === failing ? 1 : 0,
+					})),
+					heldoutFailures: failing === "heldout" ? ["unknown"] : [],
+				});
+			};
+
+			const dir = join(f.root, "validation", runId);
+			await f.step();
+			assert.equal(existsSync(join(dir, "assessment.json")), false);
+			f.fake.completed = true;
+			const first = await f.step();
+			assert.equal(first.kind, "finished");
+
+			if (first.kind !== "finished") return;
+			assert.equal(first.verdict.pass, false);
+			const stored = readFileSync(join(dir, "assessment.json"), "utf8");
+			assert.equal(digestOf(stored), first.assessment.ref.recordDigest);
+
+			if (failing === "lint") {
+				assert.deepEqual(first.assessment.assessment, {
+					kind: "failed",
+					failure: {
+						kind: "candidate",
+						reason: "candidate_check",
+						scenarios: [],
+					},
+				});
+
+				const feedback = JSON.parse(
+					readFileSync(join(dir, "feedback.json"), "utf8"),
+				);
+
+				assert.equal(feedback.version, 2);
+				assert.deepEqual(feedback.assessment, first.assessment.ref);
+			} else {
+				assert.equal(first.assessment.assessment.kind, "failed");
+				assert.equal(
+					first.assessment.assessment.kind === "failed" &&
+						first.assessment.assessment.failure.kind,
+					"missing_evidence",
+				);
+				assert.equal(existsSync(join(dir, "feedback.json")), false);
+			}
+
+			const again = await f.step();
+			assert.ok(again.kind === "finished");
+			assert.deepEqual(again.assessment, first.assessment);
+			rmSync(join(dir, "assessment.json"));
+			const restored = await f.step();
+			assert.ok(restored.kind === "finished");
+			assert.deepEqual(restored.assessment, first.assessment);
+			assert.equal(readFileSync(join(dir, "assessment.json"), "utf8"), stored);
+		});
 
 	it("reapplies on moved main without a model or repair round", async () => {
 		const f = await validationFixture();

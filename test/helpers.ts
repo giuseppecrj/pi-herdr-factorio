@@ -8,6 +8,7 @@ import {
 	type TicketRef,
 	type Verdict,
 	REQUIRED_CI_CHECKS,
+	verdictPasses,
 } from "../src/run.ts";
 import { advance, type RunEvent } from "../src/stages.ts";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, cpSync } from "node:fs";
@@ -255,6 +256,12 @@ export function candidateLifecycleFixture() {
 						verdict,
 						report,
 						seats: ["code-review", "security-review", "simplify"],
+						assessment: verdictAssessment(
+							pin.runId,
+							g.round,
+							g.generation,
+							verdict,
+						),
 					},
 				},
 			}).state,
@@ -715,6 +722,12 @@ export function issuedReviewFixture(
 					gateSha: report.gateSha,
 				},
 				seats,
+				assessment: verdictAssessment(
+					pin.runId,
+					g.round,
+					g.generation,
+					verdict,
+				),
 				validation: {
 					version: 2,
 					generation: { index: 0, digest: g.digest, previousHead: null },
@@ -1083,4 +1096,26 @@ export function classifiedCase(
 		},
 		dependencies: null,
 	});
+}
+
+export function verdictAssessment(
+	runId: Digest,
+	round: number,
+	generation: number,
+	verdict: Verdict,
+	failure: FailureClass = {
+		kind: "candidate",
+		reason: "candidate_heldout",
+		scenarios: ["S1"],
+	},
+): ReadAssessment {
+	return storedAssessment({
+		runId,
+		round,
+		generation,
+		verdict,
+		assessment: verdictPasses(verdict)
+			? { kind: "passed" }
+			: { kind: "failed", failure },
+	}).read;
 }

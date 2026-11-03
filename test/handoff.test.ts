@@ -38,7 +38,7 @@ import type { PatchReceipt } from "../src/build.ts";
 import { controllerCandidatePort } from "../server/controller.ts";
 import { fileAdmissionStore } from "../src/admission.ts";
 import { CONTROLLER_LOGIN } from "../src/markers.ts";
-import { withLocalArtifactDownload } from "./helpers.ts";
+import { verdictAssessment, withLocalArtifactDownload } from "./helpers.ts";
 import { readFileSync } from "node:fs";
 import { fieldOf, objectOf, parseJson } from "../server/sandbox/json.ts";
 
@@ -225,7 +225,14 @@ function pending<K extends CandidateEffect["kind"]>(
 	return current.work.request as Extract<CandidateEffect, { kind: K }>;
 }
 
-function validated(state: CandidateState, passes = true) {
+function validated(
+	state: CandidateState,
+	passes = true,
+	failure?: import("../src/diagnosis.ts").FailureClass,
+	tamper?: (
+		read: import("../src/validation.ts").ReadAssessment,
+	) => import("../src/validation.ts").ReadAssessment,
+) {
 	const request = pending(state, "validate");
 	const g = request.generation;
 	const head = digestOf(JSON.stringify(g)).slice(0, 40);
@@ -296,6 +303,15 @@ function validated(state: CandidateState, passes = true) {
 					verdict,
 					report,
 					seats: ["code-review", "security-review", "simplify"],
+					assessment: (tamper ?? ((read) => read))(
+						verdictAssessment(
+							pin.runId,
+							g.round,
+							g.generation,
+							verdict,
+							failure,
+						),
+					),
 				},
 			},
 		}).state,
@@ -761,6 +777,117 @@ test("actual observer promotes a certified successor before PR checks and waits 
 		assert.equal(selected(ready).published?.readiness.kind, "ready");
 		assert.equal(candidateUsage(ready), candidateUsage(state));
 	});
+});
+
+test("only a candidate assessment repairs; other classes stop or hold durably, and the book codec round-trips them", () => {
+	const roundTrip = (state: CandidateState) =>
+		assert.deepEqual(
+			parseCandidateState(JSON.parse(JSON.stringify(state))),
+			state,
+		);
+
+	const candidate = validated(select(), false);
+	assert.equal(candidate.work.kind, "repair_due");
+	assert.ok(candidate.work.kind === "repair_due");
+	assert.equal(candidate.work.cause.kind, "validation");
+	assert.deepEqual(
+		candidate.work.cause.assessment,
+		candidate.current.assessment,
+	);
+	roundTrip(candidate);
+
+	const issued = selected(handoffCandidate(candidate, observed()).state);
+	assert.ok(issued.work.kind === "effect");
+	assert.ok(issued.work.request.kind === "repair_build");
+	assert.deepEqual(issued.work.request.execution.cause, candidate.work.cause);
+	roundTrip(issued);
+
+	for (const [failure, reason] of [
+		[
+			{ kind: "oracle", cause: "unexpected_base", scenarios: ["S1"] },
+			"diagnosis_oracle",
+		],
+		[
+			{ kind: "missing_evidence", reason: "tree_replays_disagree" },
+			"diagnosis_missing_evidence",
+		],
+	] as const) {
+		const stopped = validated(select(), false, failure);
+		assert.deepEqual(stopped.work, {
+			kind: "effect",
+			request: { kind: "finish_pr", terminal: { kind: "failed", reason } },
+		});
+		roundTrip(stopped);
+	}
+
+	const held = validated(select(), false, {
+		kind: "infrastructure",
+		reason: "timeout",
+	});
+
+	assert.deepEqual(held.work, {
+		kind: "held",
+		reason: "diagnosis_infrastructure",
+		since: 0,
+	});
+	roundTrip(held);
+
+	for (let tick = 0; tick < 3; tick++) {
+		const step = handoffCandidate(held, observed());
+		assert.equal(step.effect, null);
+		assert.deepEqual(step.state, held);
+	}
+});
+
+test("an assessment bound to another verdict or contradicting it never repairs", () => {
+	for (const tamper of [
+		(read: import("../src/validation.ts").ReadAssessment) => ({
+			...read,
+			binding: { ...read.binding, generation: 1 },
+		}),
+		(read: import("../src/validation.ts").ReadAssessment) => ({
+			...read,
+			binding: { ...read.binding, verdictDigest: digestOf("other") },
+		}),
+		(read: import("../src/validation.ts").ReadAssessment) => ({
+			...read,
+			assessment: { kind: "passed" as const },
+		}),
+	]) {
+		const state = validated(select(), false, undefined, tamper);
+		assert.deepEqual(state.work, {
+			kind: "effect",
+			request: {
+				kind: "finish_pr",
+				terminal: { kind: "failed", reason: "diagnosis_missing_evidence" },
+			},
+		});
+	}
+
+	const failedPass = validated(select(), true, undefined, (read) => ({
+		...read,
+		assessment: {
+			kind: "failed",
+			failure: { kind: "candidate", reason: "candidate_check", scenarios: [] },
+		},
+	}));
+
+	assert.notEqual(failedPass.work.kind, "review_due");
+	assert.notEqual(failedPass.work.kind, "repair_due");
+});
+
+test("a persisted repair without its assessment cause does not parse", () => {
+	const issued = selected(
+		handoffCandidate(validated(select(), false), observed()).state,
+	);
+
+	const wire = JSON.parse(JSON.stringify(issued));
+	delete wire.work.request.execution.cause;
+	assert.equal(parseCandidateState(wire), null);
+
+	const due = JSON.parse(JSON.stringify(validated(select(), false)));
+	delete due.work.cause;
+	assert.equal(parseCandidateState(due), null);
 });
 
 test("one ready PR waits without issuing more effects, attempts or tokens", () => {

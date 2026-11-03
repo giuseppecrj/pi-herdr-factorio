@@ -15,7 +15,7 @@ import {
 	type ReviewInput,
 	type SeatReceipt,
 } from "../src/review.ts";
-import { validationDir } from "../src/validation.ts";
+import { readFeedbackBytes, validationDir } from "../src/validation.ts";
 import { parseReviewReceipt, type ReviewExecution } from "../src/handoff.ts";
 import { isGitSha, parseWorkflow, WORKFLOW_PATH } from "../src/workflow.ts";
 import {
@@ -85,6 +85,7 @@ import {
 	sweepValidation,
 	fileRunFiles,
 	readStoredVerdict,
+	readStoredAssessment,
 	ghTarball,
 	type TarballFetch,
 } from "./controller.ts";
@@ -3232,8 +3233,29 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 						feedbackFrom?.generation,
 					);
 
-					const validation =
-						parseJson(regularText(join(dir, "feedback.json"))) ?? [];
+					const assessed = readStoredAssessment(dir);
+					const feedbackPath = join(dir, "feedback.json");
+
+					if (
+						assessed === null ||
+						assessed.binding.runId !== runId ||
+						assessed.binding.round !== (feedbackFrom?.round ?? round - 1) ||
+						assessed.binding.generation !== (feedbackFrom?.generation ?? 0)
+					)
+						throw new Error("assessment_missing");
+					let validation: ReturnType<typeof readFeedbackBytes> = null;
+
+					if (assessed.assessment.kind === "passed") {
+						if (existsSync(feedbackPath))
+							throw new Error("feedback_unexpected");
+						validation = [];
+					} else if (assessed.assessment.failure.kind === "candidate")
+						validation = readFeedbackBytes(
+							regularText(feedbackPath),
+							assessed.ref,
+						);
+
+					if (validation === null) throw new Error("feedback_provenance");
 
 					const reviewPath = join(
 						reviewDir(

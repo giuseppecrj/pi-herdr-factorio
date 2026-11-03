@@ -75,6 +75,7 @@ import {
 	failingVerdict,
 	qualifiedProof,
 	storedAssessment,
+	verdictAssessment,
 } from "./helpers.ts";
 import type {
 	BaseCheckInput,
@@ -478,6 +479,28 @@ class FakeExecutor implements StageExecutor {
 	readonly spentBy = new Map<string, number>();
 	readonly assessments = new Map<string, string>();
 	readonly assessmentReads: string[] = [];
+
+	assess(
+		input: import("../src/validation.ts").ValidationInput,
+		verdict: import("../src/run.ts").Verdict,
+	) {
+		const round = input.round ?? 0;
+		const generation = input.generation?.generation ?? 0;
+		const read = verdictAssessment(input.runId, round, generation, verdict);
+
+		this.assessments.set(
+			`${input.runId}/${round}/${generation}`,
+			storedAssessment({
+				runId: input.runId,
+				round,
+				generation,
+				verdict,
+				assessment: read.assessment,
+			}).text,
+		);
+
+		return read;
+	}
 
 	async readAssessment(input: {
 		runId: Digest;
@@ -7567,6 +7590,7 @@ describe("controller-only validate", () => {
 			state: input.state!,
 			verdict,
 			report: reportOf(verdict),
+			assessment: f.executor.assess(input, verdict),
 		});
 
 		const receipt: ReviewReceipt = {
@@ -8021,10 +8045,13 @@ describe("controller-only validate", () => {
 			f.executor.validate = async (input) => {
 				assert.ok(input.state);
 
+				const verdict = failingVerdict(digestOf("patch"));
+
 				return {
 					kind: "finished",
 					state: input.state,
-					verdict: failingVerdict(digestOf("patch")),
+					verdict,
+					assessment: f.executor.assess(input, verdict),
 				};
 			};
 
@@ -8534,10 +8561,13 @@ describe("controller-only validate", () => {
 
 				if (result.state === null) throw new Error("validation state");
 
+				const verdict = failingVerdict(digestOf("patch"));
+
 				return {
 					kind: "finished",
 					state: result.state,
-					verdict: failingVerdict(digestOf("patch")),
+					verdict,
+					assessment: f.executor.assess(input, verdict),
 				};
 			};
 
@@ -8879,6 +8909,7 @@ describe("controller-only validate", () => {
 				digestOf(round ? `patch-r${round}` : "patch"),
 			);
 
+			const assessment = f.executor.assess(input, verdict);
 			const book = f.files.claims.get(runOf(14))?.handoff;
 			assert.ok(
 				book?.kind === "selected" &&
@@ -8912,6 +8943,7 @@ describe("controller-only validate", () => {
 							verdict,
 							report: null,
 							seats: ["code-review", "security-review", "simplify"],
+							assessment,
 						},
 					},
 				},
@@ -8920,7 +8952,7 @@ describe("controller-only validate", () => {
 			assert.equal(decision.kind, "advanced");
 			expected = decision.run.handoff;
 
-			return { kind: "finished", state, verdict };
+			return { kind: "finished", state, verdict, assessment };
 		};
 
 		await f.controller.tick();
@@ -8981,12 +9013,15 @@ describe("controller-only validate", () => {
 
 				await input.save(state);
 
+				const verdict = failingVerdict(
+					digestOf(round ? `patch-r${round}` : "patch"),
+				);
+
 				return {
 					kind: "finished",
 					state,
-					verdict: failingVerdict(
-						digestOf(round ? `patch-r${round}` : "patch"),
-					),
+					verdict,
+					assessment: f.executor.assess(input, verdict),
 				};
 			};
 
