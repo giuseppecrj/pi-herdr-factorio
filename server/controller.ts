@@ -67,15 +67,30 @@ import { isGitSha } from "../src/workflow.ts";
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync, readdirSync, mkdirSync, existsSync } from "node:fs";
-import { replacementDigest, runHeldoutBase } from "./gates.ts";
+import {
+	materializeFromDirectories,
+	replacementDigest,
+	replayHeldoutCandidate,
+	runHeldoutBase,
+	validateDependencies,
+	type GateRunner,
+} from "./gates.ts";
 import {
 	assessBase,
 	classifyFailure,
+	diagnosisNeeds,
 	parseBaseReceipt,
 	parseBaseCheckReference,
+	type AcceptanceBinding,
 	type BaseCheckInput,
 	type BaseCheckProgress,
+	type BaseReceipt,
+	type DiagnosisNeeds,
+	type FailureClass,
+	type HeldoutReplay,
 } from "../src/diagnosis.ts";
+import type { AcceptanceSuite } from "../src/accept.ts";
+import type { Contract, ReplacedTest } from "../src/specify.ts";
 import { scopeOwner, scopeUnit } from "./sandbox/scope.ts";
 import {
 	cp,
@@ -1522,6 +1537,336 @@ export function controllerBaseChecker(config: {
 	};
 }
 
+export type DiagnosisFacts = Readonly<{
+	base: BaseReceipt | null;
+	ignoredChanges: readonly string[] | null;
+	replay: HeldoutReplay | null;
+	dependencies: Readonly<{ reason: string | null }> | null;
+}>;
+
+export type DiagnosisRequest = Readonly<{
+	runId: Digest;
+	dir: string;
+	bindingDigest: Digest;
+	repo: RepoSlug;
+	gateSha: GitSha;
+	candidateSha: GitSha;
+	round: number;
+	allowanceMs: number;
+	needs: DiagnosisNeeds;
+	heldoutDir: string;
+	heldoutDigest: string;
+	replacements: readonly ReplacedTest[];
+	base:
+		| Readonly<{ kind: "stored"; receipt: BaseReceipt | null }>
+		| Readonly<{
+				kind: "fresh";
+				binding: AcceptanceBinding;
+				contract: Contract;
+				suite: AcceptanceSuite;
+				canary: string;
+		  }>;
+	finish: (facts: DiagnosisFacts) => void;
+	interrupted: () => void;
+}>;
+
+export function storedBaseReceipt(
+	stateDir: string,
+	binding: AcceptanceBinding,
+): BaseReceipt | null {
+	const parent = join(
+		stateDir,
+		"base-check",
+		binding.runId,
+		digestOf(JSON.stringify(binding)),
+	);
+
+	if (!existsSync(parent)) return null;
+
+	const attempts = readdirSync(parent)
+		.flatMap((name) => {
+			const n = /^a([1-9][0-9]*)$/.exec(name)?.[1];
+
+			return n === undefined ? [] : [Number(n)];
+		})
+		.sort((a, b) => b - a);
+
+	for (const n of attempts) {
+		const dir = join(parent, `a${n}`);
+
+		if (!present(join(dir, "result.json"))) continue;
+		const text = regularText(join(dir, "result.json"), 2 * 1024 * 1024);
+		const receipt = parseBaseReceipt(text);
+
+		return receipt !== null &&
+			digestOf(text) === regularText(join(dir, "result.digest")) &&
+			JSON.stringify(receipt.evidence.binding) === JSON.stringify(binding)
+			? receipt
+			: null;
+	}
+
+	return null;
+}
+
+function dependencyFacts(
+	gate: string,
+	candidate: string,
+): DiagnosisFacts["dependencies"] {
+	const text = (tree: string, name: string) =>
+		readFileSync(join(tree, name), "utf8");
+
+	try {
+		validateDependencies(
+			text(gate, "package.json"),
+			text(gate, "package-lock.json"),
+			text(gate, "package-lock.json"),
+		);
+	} catch {
+		return null;
+	}
+
+	try {
+		validateDependencies(
+			text(candidate, "package.json"),
+			text(candidate, "package-lock.json"),
+			text(gate, "package-lock.json"),
+		);
+
+		return { reason: null };
+	} catch (error) {
+		return { reason: error instanceof Error ? error.message : null };
+	}
+}
+
+export function controllerDiagnosis(config: {
+	readonly stateDir: string;
+	readonly fetch?: TarballFetch;
+	readonly runner?: GateRunner;
+	readonly materialize?: (input: {
+		readonly gateTree: string;
+		readonly candidateTree: string;
+		readonly dest: string;
+		readonly replacements: readonly ReplacedTest[];
+		readonly heldoutDir: string;
+		readonly heldoutDigest: string;
+	}) => { readonly ignoredChanges: readonly string[] };
+}) {
+	const jobs = new Map<
+		string,
+		{ runId: Digest; abort: AbortController; done: Promise<void> }
+	>();
+
+	const check = (request: DiagnosisRequest): "checking" | "settled" => {
+		const root = join(request.dir, "diagnosis", request.bindingDigest);
+		const intentPath = join(root, "intent.json");
+
+		if (jobs.has(root)) return "checking";
+
+		if (present(intentPath)) {
+			const intent = objectOf(parseJson(regularText(intentPath)));
+
+			const startedAt = countOf(jsonField(intent, "startedAt")),
+				deadline = countOf(jsonField(intent, "deadline"));
+
+			if (
+				startedAt === null ||
+				deadline === null ||
+				deadline < startedAt ||
+				jsonField(intent, "bindingDigest") !== request.bindingDigest
+			)
+				throw new Error("diagnosis_intent_invalid");
+			keepValidationFile(
+				join(root, "interrupted.json"),
+				`${JSON.stringify({ wallMs: deadline - startedAt, tokens: 0 })}\n`,
+			);
+			request.interrupted();
+
+			return "settled";
+		}
+
+		const startedAt = Date.now();
+		const deadline = startedAt + Math.min(180_000, request.allowanceMs);
+
+		const scope = scopeUnit(
+			scopeOwner(config.stateDir),
+			request.runId,
+			"diagnosis",
+			request.round,
+			randomBytes(4).toString("hex"),
+		);
+
+		privateDir(join(request.dir, "diagnosis"));
+		privateDir(root);
+		exclusive(
+			intentPath,
+			`${JSON.stringify({ bindingDigest: request.bindingDigest, gateSha: request.gateSha, candidateSha: request.candidateSha, startedAt, deadline, scope })}\n`,
+		);
+		const abort = new AbortController();
+		const late = () => abort.signal.aborted || Date.now() >= deadline;
+
+		const work = [
+			"gate",
+			"candidate",
+			"materialized",
+			"replay",
+			"base",
+			"gate-meta",
+			"candidate-meta",
+		];
+
+		const done = (async () => {
+			const acquire = async (sha: GitSha, name: string) => {
+				const tree = join(root, name);
+				await mkdir(tree, { recursive: true, mode: 0o700 });
+
+				if (late()) return false;
+
+				const checked = await checkoutWorkspace({
+					stateDir: join(root, `${name}-meta`),
+					runId: request.runId,
+					workspace: tree,
+					repo: request.repo,
+					sha,
+					fetch: config.fetch ?? ghTarball,
+				});
+
+				return checked.kind === "ready" && checked.omitted === 0;
+			};
+
+			const gate = join(root, "gate"),
+				candidate = join(root, "candidate");
+
+			const acquired =
+				(await acquire(request.gateSha, "gate")) &&
+				(await acquire(request.candidateSha, "candidate"));
+
+			let facts: DiagnosisFacts = {
+				base: request.base.kind === "stored" ? request.base.receipt : null,
+				ignoredChanges: null,
+				replay: null,
+				dependencies: null,
+			};
+
+			if (!acquired || late())
+				facts = {
+					...facts,
+					replay: {
+						kind: "unavailable",
+						reason: late() ? "timeout" : "unsupported_tree",
+						wallMs: Date.now() - startedAt,
+					},
+				};
+			else {
+				if (request.needs.dependencies)
+					facts = { ...facts, dependencies: dependencyFacts(gate, candidate) };
+
+				if (request.needs.replay && request.base.kind === "fresh") {
+					const { receipt } = assessBase(
+						await runHeldoutBase({
+							tree: gate,
+							workDir: join(root, "base"),
+							cacheDir: join(config.stateDir, "base-dependencies"),
+							binding: request.base.binding,
+							contract: request.base.contract,
+							suite: request.base.suite,
+							canary: request.base.canary,
+							startedAt: Date.now(),
+							deadline,
+							scope,
+							signal: abort.signal,
+							runner: config.runner,
+						}),
+					);
+
+					keepValidationFile(
+						join(root, "refreshed-base.json"),
+						JSON.stringify(receipt),
+					);
+					facts = { ...facts, base: receipt };
+				}
+
+				if (request.needs.replay) {
+					const materialized = join(root, "materialized");
+					let ignoredChanges: readonly string[] | null = null;
+
+					try {
+						ignoredChanges = (config.materialize ?? materializeFromDirectories)(
+							{
+								gateTree: gate,
+								candidateTree: candidate,
+								dest: materialized,
+								replacements: request.replacements,
+								heldoutDir: request.heldoutDir,
+								heldoutDigest: request.heldoutDigest,
+							},
+						).ignoredChanges;
+					} catch {
+						ignoredChanges = null;
+					}
+
+					facts = {
+						...facts,
+						ignoredChanges,
+						replay:
+							ignoredChanges === null
+								? {
+										kind: "unavailable",
+										reason: "unsupported_tree",
+										wallMs: Date.now() - startedAt,
+									}
+								: await replayHeldoutCandidate({
+										gateTree: materialized,
+										fullTree: candidate,
+										gates: join(gate, ".github/factory/gates"),
+										heldoutDir: request.heldoutDir,
+										heldoutDigest: request.heldoutDigest,
+										workDir: join(root, "replay"),
+										cacheDir: join(config.stateDir, "base-dependencies"),
+										deadline,
+										scope,
+										signal: abort.signal,
+										runner: config.runner,
+									}),
+					};
+				}
+			}
+
+			for (const name of work)
+				await rm(join(root, name), { recursive: true, force: true });
+			keepValidationFile(
+				join(root, "replay.json"),
+				`${JSON.stringify(facts)}\n`,
+			);
+			keepValidationFile(
+				join(root, "charge.json"),
+				`${JSON.stringify({ wallMs: Date.now() - startedAt, tokens: 0 })}\n`,
+			);
+			request.finish(facts);
+		})().finally(async () => {
+			for (const name of work)
+				await rm(join(root, name), { recursive: true, force: true }).catch(
+					() => undefined,
+				);
+			jobs.delete(root);
+		});
+
+		jobs.set(root, { runId: request.runId, abort, done });
+		void done.catch(() => {});
+
+		return "checking";
+	};
+
+	return {
+		check,
+		async stop(runId: Digest) {
+			const owned = [...jobs.values()].filter((j) => j.runId === runId);
+
+			for (const job of owned) job.abort.abort();
+			await Promise.allSettled(owned.map((j) => j.done));
+		},
+	};
+}
+
 export function fileRunFiles(stateDir: string): RunFiles {
 	const root = resolve(stateDir);
 	const claims = join(root, "claims");
@@ -1872,6 +2217,7 @@ export function controllerValidator(config: {
 	readonly exec: Exec;
 	readonly fetch?: TarballFetch;
 	readonly receipt?: (repo: RepoSlug, id: number) => Promise<string | null>;
+	readonly diagnosis?: ReturnType<typeof controllerDiagnosis>;
 }): Validator {
 	return async (input) => {
 		const initial: ValidationState = {
@@ -2043,20 +2389,24 @@ export function controllerValidator(config: {
 			const failurePath = join(dir, "failure.json");
 			const receiptPath = join(dir, "receipt.json");
 
-			const assess = (verdict: Verdict): ReadAssessment => {
-				const text = present(receiptPath)
-					? regularText(receiptPath, 1024 * 1024)
-					: null;
+			const receiptOf = () =>
+				objectOf(
+					parseJson(
+						present(receiptPath) ? regularText(receiptPath, 1024 * 1024) : "",
+					),
+				);
 
-				const raw = objectOf(parseJson(text ?? ""));
+			const bindingOf = (verdict: Verdict) => ({
+				runId: input.runId,
+				round: state.round,
+				generation: state.generation?.index ?? 0,
+				verdict,
+			});
 
-				const binding = {
-					runId: input.runId,
-					round: state.round,
-					generation: state.generation?.index ?? 0,
-					verdict,
-				};
-
+			const classifyWith = (
+				raw: ReturnType<typeof receiptOf>,
+				facts: DiagnosisFacts | null,
+			): FailureClass => {
 				const nonces = Array.from({ length: state.dispatchTry }, (_, index) =>
 					dispatchNonce(
 						input.runId,
@@ -2066,49 +2416,132 @@ export function controllerValidator(config: {
 					),
 				);
 
-				const stored = readStoredAssessment(dir);
+				return classifyFailure({
+					receipt: raw ?? undefined,
+					identity: {
+						gateSha: state.baseSha,
+						candidateSha: state.publication?.candidateSha ?? state.baseSha,
+						nonce:
+							nonces.find((n) => n === jsonField(raw, "nonce")) ?? "missing",
+						heldoutDigest: heldout.digest,
+						replacementsDigest: replacementDigest(
+							contract.contract.replacesTests ?? [],
+						),
+					},
+					expected: heldout.files.map((f) => f.path).toSorted(),
+					scenarios: suite.suite.scenarios.flatMap((s) =>
+						s.checks.length === 1
+							? [
+									{
+										scenario: s.id,
+										kind: s.kind,
+										file: `${heldout.directory}/checks/${s.checks[0]}`,
+									},
+								]
+							: [],
+					),
+					base: facts?.base ?? null,
+					ignoredChanges: facts?.ignoredChanges ?? null,
+					replay: facts?.replay ?? null,
+					dependencies: facts?.dependencies ?? null,
+				});
+			};
+
+			const diagnosed = (verdict: Verdict): boolean => {
+				if (verdict.pass || readStoredAssessment(dir) !== null) return true;
+				const raw = receiptOf();
+				const needs = diagnosisNeeds(raw ?? undefined);
+				const binding = bindingOf(verdict);
+
+				const fail = (failure: FailureClass) => {
+					storeAssessment(dir, binding, { kind: "failed", failure });
+				};
+
+				if (!needs.replay && !needs.dependencies) {
+					fail(classifyWith(raw, null));
+
+					return true;
+				}
+
+				const bindingDigest = digestOf(
+					JSON.stringify(assessmentBinding(binding)),
+				);
+
+				const allowanceMs = state.deadline - input.now;
+
+				if (
+					allowanceMs <= 0 &&
+					!present(join(dir, "diagnosis", bindingDigest, "intent.json"))
+				) {
+					fail({ kind: "infrastructure", reason: "timeout" });
+
+					return true;
+				}
+
+				const publication = state.publication;
+
+				if (config.diagnosis === undefined || publication === null)
+					return false;
+
+				const original: AcceptanceBinding = {
+					runId: input.runId,
+					repo,
+					issue: input.issue,
+					contractDigest: contract.digest,
+					acceptanceDigest: suite.receipt.acceptanceDigest,
+					baseSha: state.originalBase,
+					gateSha: state.originalBase,
+				};
+
+				return (
+					config.diagnosis.check({
+						runId: input.runId,
+						dir,
+						bindingDigest,
+						repo,
+						gateSha: state.baseSha,
+						candidateSha: publication.candidateSha,
+						round: state.round,
+						allowanceMs,
+						needs,
+						heldoutDir: heldout.directory,
+						heldoutDigest: heldout.digest,
+						replacements: contract.contract.replacesTests ?? [],
+						base:
+							state.baseSha === state.originalBase
+								? {
+										kind: "stored",
+										receipt: storedBaseReceipt(config.stateDir, original),
+									}
+								: {
+										kind: "fresh",
+										binding: {
+											...original,
+											baseSha: state.baseSha,
+											gateSha: state.baseSha,
+										},
+										contract: contract.contract,
+										suite: suite.suite,
+										canary,
+									},
+						finish: (facts) => fail(classifyWith(raw, facts)),
+						interrupted: () =>
+							fail({ kind: "infrastructure", reason: "interrupted" }),
+					}) === "settled"
+				);
+			};
+
+			const assess = (verdict: Verdict): ReadAssessment => {
+				const raw = receiptOf();
 
 				const read =
-					stored ??
+					readStoredAssessment(dir) ??
 					storeAssessment(
 						dir,
-						binding,
+						bindingOf(verdict),
 						verdict.pass
 							? { kind: "passed" }
-							: {
-									kind: "failed",
-									failure: classifyFailure({
-										receipt: raw ?? undefined,
-										identity: {
-											gateSha: state.baseSha,
-											candidateSha:
-												state.publication?.candidateSha ?? state.baseSha,
-											nonce:
-												nonces.find((n) => n === jsonField(raw, "nonce")) ??
-												"missing",
-											heldoutDigest: heldout.digest,
-											replacementsDigest: replacementDigest(
-												contract.contract.replacesTests ?? [],
-											),
-										},
-										expected: heldout.files.map((f) => f.path).toSorted(),
-										scenarios: suite.suite.scenarios.flatMap((s) =>
-											s.checks.length === 1
-												? [
-														{
-															scenario: s.id,
-															kind: s.kind,
-															file: `${heldout.directory}/checks/${s.checks[0]}`,
-														},
-													]
-												: [],
-										),
-										base: null,
-										ignoredChanges: null,
-										replay: null,
-										dependencies: null,
-									}),
-								},
+							: { kind: "failed", failure: classifyWith(raw, null) },
 					);
 
 				if (
@@ -2160,6 +2593,8 @@ export function controllerValidator(config: {
 					verdict.ciRunId !== state.ciRunId
 				)
 					return failed("verdict_binding");
+
+				if (!diagnosed(verdict)) return { kind: "waiting", state };
 				const cleanup = await cleanupPublication(api, dir, state.publication);
 
 				if (cleanup === "branch_moved") return failed("branch_moved");
@@ -2504,6 +2939,8 @@ export function controllerValidator(config: {
 
 			keepValidationFile(receiptPath, text ?? "null\n");
 			keepValidationFile(verdictPath, `${JSON.stringify(verdict)}\n`);
+
+			if (!diagnosed(verdict)) return { kind: "waiting", state };
 			const cleanup = await cleanupPublication(api, dir, publication);
 
 			if (cleanup === "branch_moved") return failed("branch_moved");
@@ -2788,8 +3225,11 @@ export async function sweepValidation(config: {
 			}
 
 			if (
-				!present(join(dir, "verdict.json")) &&
-				!present(join(dir, "failure.json"))
+				(!present(join(dir, "verdict.json")) &&
+					!present(join(dir, "failure.json"))) ||
+				(!entry.retired &&
+					present(join(dir, "verdict.json")) &&
+					!present(join(dir, "assessment.json")))
 			)
 				continue;
 			await cleanupPublication(api, dir, publication);

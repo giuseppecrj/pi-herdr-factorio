@@ -1258,7 +1258,7 @@ describe("controller publication and waiting recovery", () => {
 	});
 
 	for (const failing of ["lint", "heldout"] as const)
-		it(`stores the assessment before feedback and returns it on the fresh and stored-verdict paths (${failing})`, async () => {
+		it(`stores the assessment before feedback and returns it on the fresh and stored-verdict paths; a held-out failure waits for its diagnosis job and keeps the branch (${failing})`, async () => {
 			const f = await validationFixture();
 			const passing = f.fake.receipt.bind(f.fake);
 
@@ -1283,6 +1283,16 @@ describe("controller publication and waiting recovery", () => {
 			assert.equal(existsSync(join(dir, "assessment.json")), false);
 			f.fake.completed = true;
 			const first = await f.step();
+
+			if (failing === "heldout") {
+				assert.equal(first.kind, "waiting");
+				assert.equal(existsSync(join(dir, "assessment.json")), false);
+				assert.equal(existsSync(join(dir, "feedback.json")), false);
+				assert.equal(f.fake.refs.size, 1);
+
+				return;
+			}
+
 			assert.equal(first.kind, "finished");
 
 			if (first.kind !== "finished") return;
@@ -1306,14 +1316,6 @@ describe("controller publication and waiting recovery", () => {
 
 				assert.equal(feedback.version, 2);
 				assert.deepEqual(feedback.assessment, first.assessment.ref);
-			} else {
-				assert.equal(first.assessment.assessment.kind, "failed");
-				assert.equal(
-					first.assessment.assessment.kind === "failed" &&
-						first.assessment.assessment.failure.kind,
-					"missing_evidence",
-				);
-				assert.equal(existsSync(join(dir, "feedback.json")), false);
 			}
 
 			const again = await f.step();

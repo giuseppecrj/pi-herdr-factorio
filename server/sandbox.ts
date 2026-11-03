@@ -82,6 +82,7 @@ import {
 	controllerValidator,
 	controllerCandidatePort,
 	controllerBaseChecker,
+	controllerDiagnosis,
 	sweepValidation,
 	fileRunFiles,
 	readStoredVerdict,
@@ -2915,6 +2916,11 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 		fetch: config.fetchTarball,
 	});
 
+	const diagnosis = controllerDiagnosis({
+		stateDir: config.stateDir,
+		fetch: config.fetchTarball,
+	});
+
 	let ready: { readonly bundle: Bundle; readonly arch: SeccompArch } | null =
 		null;
 
@@ -2971,7 +2977,10 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 
 	return {
 		baseCheck: baseChecker.check,
-		stopBase: baseChecker.stop,
+		async stopBase(runId) {
+			await baseChecker.stop(runId);
+			await diagnosis.stop(runId);
+		},
 		candidate: controllerCandidatePort({
 			stateDir: config.stateDir,
 			exec: config.exec,
@@ -2980,6 +2989,7 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 			stateDir: config.stateDir,
 			exec: config.exec,
 			fetch: config.fetchTarball,
+			diagnosis,
 		}),
 		cleanupValidation: () =>
 			sweepValidation({
