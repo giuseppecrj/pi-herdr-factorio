@@ -733,6 +733,7 @@ systemd-run --user --scope --quiet --unit=factory-stage-<owner>-<run16>-<stage>-
   - The runner closes the gate first. Then it closes Pi's stdin, waits, and runs `systemctl --user stop factory-stage-…`, every wait inside one window bounded by the 10 s reserve **[E `docs/plans/factory-v1.md` line 291]**.
   - At startup, before adopting `running` markers, the controller stops every leftover `factory-stage-<owner>-*` scope it owns **[E `walkthrough/explanation.md` gotcha 6]**. Swap is not limited by the scope; `MemorySwapMax` is not set.
   - The gateway is not in the scope. It dies with the controller (section 2.3).
+- **Base checks use the same scope.** The pre-build held-out base check runs bwrap under a `factory-stage-<owner>-<run16>-basecheck-<attempt>-<nonce>` scope, with no network, no credentials and a read-only dependency cache. Startup reconcile stops a leftover one like any stage scope. See `docs/operations/factory-cli.md`, "Base check".
 
 ## 8. Implementation plan
 
