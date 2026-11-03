@@ -846,6 +846,7 @@ export function qualifiedProof(binding: AcceptanceBinding): BaseProof {
 			kind: "ready",
 			treeDigest: digestOf("tree"),
 			lockDigest: digestOf("lock"),
+			gatesDigest: digestOf("gates"),
 		},
 		execution: {
 			kind: "observed",

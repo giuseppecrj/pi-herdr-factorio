@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
+	cpSync,
+	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
 	rmSync,
 	statSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -234,11 +237,29 @@ export async function baseFixture(
 	source: string,
 	kind: "new_behavior" | "preservation" = "new_behavior",
 	timeout = 10_000,
+	gates: "trusted" | "absent" | Readonly<{ reporter: string }> = "trusted",
 ) {
 	const root = mkdtempSync(join(tmpdir(), "factory-base-"));
 	t.after(() => rmSync(root, { recursive: true, force: true }));
 	const tree = join(root, "base");
 	mkdirSync(tree);
+
+	if (gates !== "absent") {
+		cpSync(
+			resolve(".github/factory/gates"),
+			join(tree, ".github/factory/gates"),
+			{
+				recursive: true,
+			},
+		);
+
+		if (gates !== "trusted")
+			writeFileSync(
+				join(tree, ".github/factory/gates/reporter.mjs"),
+				gates.reporter,
+			);
+	}
+
 	writeFileSync(
 		join(tree, "package.json"),
 		'{"name":"base","version":"1.0.0","type":"module"}',
@@ -308,7 +329,6 @@ export async function baseFixture(
 
 	const evidence = await runHeldoutBase({
 		tree,
-		gates: resolve(".github/factory/gates"),
 		workDir: join(root, "execution"),
 		cacheDir: join(root, "dependencies"),
 		binding,
@@ -426,7 +446,10 @@ test("tarball checkout and CI's exportTree produce the same base tree digest at 
 	assert.equal(baseTreeDigest(workspace), baseTreeDigest(exported));
 });
 
-test("controller base check runs in a scope, keeps 0600 receipts, survives restart and charges an interruption once", async (t) => {
+async function controllerWorld(
+	t: { after(fn: () => void): void },
+	extra: (source: string) => void = () => {},
+) {
 	const root = mkdtempSync(join(tmpdir(), "factory-base-controller-"));
 	t.after(() => rmSync(root, { recursive: true, force: true }));
 	const source = join(root, "source");
@@ -440,6 +463,12 @@ test("controller base check runs in a scope, keeps 0600 receipts, survives resta
 		'{"name":"base","version":"1.0.0","lockfileVersion":3,"packages":{"":{"name":"base","version":"1.0.0"}}}',
 	);
 	writeFileSync(join(source, "src/value.mjs"), "export const value = 1;\n");
+	cpSync(
+		resolve(".github/factory/gates"),
+		join(source, ".github/factory/gates"),
+		{ recursive: true },
+	);
+	extra(source);
 	git(root, "init", "-q", source);
 	git(source, "add", ".");
 	git(source, "commit", "-qm", "base");
@@ -529,16 +558,49 @@ test("controller base check runs in a scope, keeps 0600 receipts, survives resta
 		gateSha: sha,
 	};
 
-	let fetches = 0;
+	const counter = { fetches: 0 };
 
 	const fetch = async () => {
-		fetches++;
+		counter.fetches++;
 
 		return tarballOf(source, sha);
 	};
 
 	const reference = { binding, remainingAcceptMs: 900_000 };
 	const signal = new AbortController().signal;
+
+	return {
+		root,
+		source,
+		sha,
+		state,
+		contract,
+		binding,
+		reference,
+		signal,
+		counter,
+		fetch,
+	};
+}
+
+async function settled(
+	checker: ReturnType<typeof controllerBaseChecker>,
+	input: Parameters<ReturnType<typeof controllerBaseChecker>["check"]>[0],
+) {
+	let progress = await checker.check(input);
+
+	for (let i = 0; i < 200 && progress.kind === "checking"; i++) {
+		await new Promise((r) => setTimeout(r, 50));
+		progress = await checker.check(input);
+	}
+
+	return progress;
+}
+
+test("controller base check runs in a scope, keeps 0600 receipts, survives restart and charges an interruption once", async (t) => {
+	const { state, contract, binding, reference, signal, counter, fetch } =
+		await controllerWorld(t);
+
 	const checker = controllerBaseChecker({ stateDir: state, fetch });
 	assert.deepEqual(
 		await checker.check({ ...reference, acceptAttempt: 1, signal }),
@@ -559,7 +621,7 @@ test("controller base check runs in a scope, keeps 0600 receipts, survives resta
 	}
 
 	assert.equal(progress.kind, "ready", JSON.stringify(progress));
-	assert.equal(fetches, 1);
+	assert.equal(counter.fetches, 1);
 
 	const dir = join(
 		state,
@@ -599,7 +661,19 @@ test("controller base check runs in a scope, keeps 0600 receipts, survives resta
 	});
 
 	assert.equal(again.kind, "ready");
-	assert.equal(fetches, 1);
+	assert.equal(counter.fetches, 1);
+	assert.equal(
+		(
+			await restarted.check({
+				...reference,
+				acceptAttempt: 9,
+				signal,
+				readOnly: true,
+			})
+		).kind,
+		"ready",
+	);
+	assert.equal(existsSync(join(dirname(dir), "a9")), false);
 
 	const a2 = join(dirname(dir), "a2");
 	mkdirSync(a2, { mode: 0o700 });
@@ -643,4 +717,132 @@ test("controller base check runs in a scope, keeps 0600 receipts, survives resta
 		intent.deadline - intent.startedAt,
 		Math.min(180_000, 900_000 - charged),
 	);
+});
+
+test("a real ustar with a symlink is reported partial and never qualifies", async (t) => {
+	const w = await controllerWorld(t, (source) => {
+		writeFileSync(join(source, "kept.txt"), "kept\n");
+		symlinkSync("kept.txt", join(source, "dropped-link"));
+	});
+
+	const workspace = join(w.root, "workspace");
+	mkdirSync(workspace);
+
+	const checkout = await checkoutWorkspace({
+		stateDir: join(w.root, "specify-state"),
+		runId: w.contract.runId,
+		workspace,
+		repo: w.binding.repo,
+		sha: w.sha,
+		fetch: w.fetch,
+	});
+
+	assert.equal(checkout.kind, "ready");
+	assert.equal(checkout.kind === "ready" && checkout.omitted, 1);
+
+	const progress = await settled(
+		controllerBaseChecker({ stateDir: w.state, fetch: w.fetch }),
+		{ ...w.reference, acceptAttempt: 1, signal: w.signal },
+	);
+
+	assert.equal(progress.kind, "refused", JSON.stringify(progress));
+	assert.equal(
+		progress.kind === "refused" && progress.failure.reason,
+		"base_tree_unsupported",
+	);
+});
+
+test("the base check never reuses a model-writable workspace as its tree", async (t) => {
+	const w = await controllerWorld(t);
+	const files = fileRunFiles(w.state);
+	const workspace = files.workspacePath(w.contract.runId);
+	mkdirSync(workspace, { recursive: true });
+
+	const listed = await checkoutWorkspace({
+		stateDir: w.state,
+		runId: w.contract.runId,
+		workspace,
+		repo: w.binding.repo,
+		sha: w.sha,
+		fetch: w.fetch,
+	});
+
+	assert.equal(listed.kind, "ready");
+	writeFileSync(join(workspace, "src/value.mjs"), "export const value = 2;\n");
+
+	const progress = await settled(
+		controllerBaseChecker({ stateDir: w.state, fetch: w.fetch }),
+		{ ...w.reference, acceptAttempt: 1, signal: w.signal },
+	);
+
+	assert.equal(progress.kind, "ready", JSON.stringify(progress));
+});
+
+test("the base check runs the base tree's gates, records their digest and refuses without them", async (t) => {
+	const trusted = await baseFixture(
+		t,
+		`${prefix}test('red',()=>assert.equal(1,2));`,
+	);
+
+	assert.equal(
+		trusted.assessment.kind,
+		"ready",
+		JSON.stringify(trusted.evidence),
+	);
+	assert.ok(trusted.evidence.source.kind === "ready");
+	assert.equal(
+		trusted.evidence.source.kind === "ready" &&
+			trusted.evidence.source.gatesDigest,
+		baseTreeDigest(join(trusted.tree, ".github/factory/gates")),
+	);
+
+	const forged = await baseFixture(
+		t,
+		`${prefix}test('red',()=>assert.equal(1,2));`,
+		"new_behavior",
+		10_000,
+		{
+			reporter:
+				'export default async function* r(e){for await (const _ of e);yield \'{"complete":true,"bad":false,"counts":{},"failures":[]}\\n\';}\n',
+		},
+	);
+
+	assert.equal(
+		forged.assessment.kind,
+		"refused",
+		JSON.stringify(forged.evidence),
+	);
+	assert.notEqual(
+		forged.evidence.runtime.protocolDigest,
+		trusted.evidence.runtime.protocolDigest,
+	);
+
+	const absent = await baseFixture(
+		t,
+		`${prefix}test('red',()=>assert.equal(1,2));`,
+		"new_behavior",
+		10_000,
+		"absent",
+	);
+
+	assert.equal(absent.assessment.kind, "refused");
+	assert.equal(
+		absent.assessment.kind === "refused" && absent.assessment.failure.reason,
+		"base_tree_unsupported",
+	);
+});
+
+test("a base check whose gate SHA is not its base SHA is refused before running", async (t) => {
+	const w = await controllerWorld(t);
+	const gateSha = "f".repeat(40);
+	assert.ok(isGitSha(gateSha));
+	const binding = { ...w.binding, gateSha };
+
+	const progress = await settled(
+		controllerBaseChecker({ stateDir: w.state, fetch: w.fetch }),
+		{ ...w.reference, binding, acceptAttempt: 1, signal: w.signal },
+	);
+
+	assert.equal(progress.kind, "refused");
+	assert.equal(w.counter.fetches, 0);
 });

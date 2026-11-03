@@ -354,7 +354,11 @@ export type Checkout = {
 };
 
 export type CheckoutResult =
-	| { readonly kind: "ready"; readonly checkout: Checkout }
+	| {
+			readonly kind: "ready";
+			readonly checkout: Checkout;
+			readonly omitted: number | null;
+	  }
 	| { readonly kind: "refused"; readonly reason: string }
 	| { readonly kind: "unavailable" };
 
@@ -4259,7 +4263,10 @@ export class Orchestrator {
 					: {
 							binding: reference.binding,
 							receiptDigest: digestOf(JSON.stringify(reference)),
-							reason: "base_evidence_missing" as const,
+							reason:
+								progress?.kind === "interrupted"
+									? ("base_interrupted" as const)
+									: ("base_evidence_missing" as const),
 							scenarios: [],
 						};
 
@@ -4507,6 +4514,9 @@ export class Orchestrator {
 
 		if (checked.kind === "refused") return fail(`checkout_${checked.reason}`);
 
+		if (run.stage === "accept" && checked.omitted !== 0)
+			return fail("checkout_base_tree_unsupported");
+
 		const { checkout } = checked;
 
 		const workflow = await checkout.read(WORKFLOW_PATH, 256 * 1024);
@@ -4549,31 +4559,32 @@ export class Orchestrator {
 					return fail(
 						suite.kind === "blocked" ? suite.reason : "acceptance_missing",
 					);
-				const reference = run.baseCheck;
 
-				if (
-					(run.round ?? 0) === 0 &&
-					(reference === undefined ||
-						reference.binding.contractDigest !== contract.digest ||
-						reference.binding.acceptanceDigest !==
-							suite.receipt.acceptanceDigest ||
-						reference.binding.baseSha !== run.workflowSha)
-				)
-					return fail("base_evidence_missing");
+				const binding = {
+					runId: run.runId,
+					repo,
+					issue: run.issue,
+					contractDigest: contract.digest,
+					acceptanceDigest: suite.receipt.acceptanceDigest,
+					baseSha: run.workflowSha,
+					gateSha: run.workflowSha,
+				};
 
-				if ((run.round ?? 0) === 0 && reference !== undefined) {
-					const qualified = await this.#input.executor.baseCheck?.({
-						...reference,
+				const qualified = await this.#input.executor
+					.baseCheck?.({
+						binding,
+						acceptAttempt: run.baseCheck?.acceptAttempt ?? 1,
+						remainingAcceptMs: 0,
 						signal: new AbortController().signal,
 						readOnly: true,
-					});
+					})
+					.catch(() => undefined);
 
-					if (
-						qualified?.kind !== "ready" ||
-						!matchingBaseProof(qualified.proof, reference.binding)
-					)
-						return fail("base_evidence_missing");
-				}
+				if (
+					qualified?.kind !== "ready" ||
+					!matchingBaseProof(qualified.proof, binding)
+				)
+					return fail("base_evidence_missing");
 
 				build = {
 					binding: {

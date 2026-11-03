@@ -126,7 +126,6 @@ export type OracleKey = Readonly<{
 export type BaseReason =
 	| "acceptance_not_reproduced"
 	| "preservation_failed"
-	| "adjudicated_oracle"
 	| "base_load_error"
 	| "base_no_tests"
 	| "base_runner_error"
@@ -135,6 +134,8 @@ export type BaseReason =
 	| "base_skip"
 	| "base_todo"
 	| "base_cancelled"
+	| "base_tree_unsupported"
+	| "base_interrupted"
 	| "base_evidence_missing";
 
 export type ScenarioBaseEvidence = Readonly<{
@@ -152,7 +153,12 @@ export type BaseEvidence = Readonly<{
 	startedAt: number;
 	finishedAt: number;
 	source:
-		| Readonly<{ kind: "ready"; treeDigest: Digest; lockDigest: Digest }>
+		| Readonly<{
+				kind: "ready";
+				treeDigest: Digest;
+				lockDigest: Digest;
+				gatesDigest: Digest;
+		  }>
 		| Readonly<{ kind: "unavailable"; reason: string }>;
 	execution: PrivateExecution;
 	scenarios: readonly ScenarioBaseEvidence[];
@@ -230,13 +236,13 @@ export function oracleKey(
 	};
 }
 
-const adjudications: readonly Readonly<{
-	id: string;
-	key: OracleKey;
-	adjudicator: string;
-}>[] = [];
-
 export const BASE_PROTOCOL_VERSION = "heldout-base-v2-1";
+
+const UNSUPPORTED_TREE: ReadonlySet<string> = new Set([
+	"tree_partial",
+	"tree_refused",
+	"gates_missing",
+]);
 
 export function matchingBaseProof(
 	proof: BaseProof,
@@ -258,7 +264,9 @@ export function assessBase(evidence: BaseEvidence): BaseEvaluation {
 
 	const global: BaseReason | null =
 		evidence.source.kind !== "ready"
-			? "base_runner_error"
+			? UNSUPPORTED_TREE.has(evidence.source.reason)
+				? "base_tree_unsupported"
+				: "base_runner_error"
 			: execution.kind === "unavailable"
 				? execution.reason === "timeout"
 					? "base_timeout"
@@ -298,13 +306,6 @@ export function assessBase(evidence: BaseEvidence): BaseEvaluation {
 			)
 				? "expected_red"
 				: "acceptance_not_reproduced";
-
-		if (
-			adjudications.some(
-				(a) => JSON.stringify(a.key) === JSON.stringify(s.oracleKey),
-			)
-		)
-			result = "adjudicated_oracle";
 
 		return { scenario: s.scenario, kind: s.kind, result };
 	});
@@ -385,6 +386,7 @@ export function parseBaseReceipt(text: string): BaseReceipt | null {
 		sourceKind = fieldOf(s, "kind"),
 		treeDigest = textOf(fieldOf(s, "treeDigest")) ?? "",
 		lockDigest = textOf(fieldOf(s, "lockDigest")) ?? "",
+		gatesDigest = textOf(fieldOf(s, "gatesDigest")) ?? "",
 		sourceReason = textOf(fieldOf(s, "reason"));
 
 	const rawScenarios = arrayOf(fieldOf(e, "scenarios"));
@@ -404,8 +406,11 @@ export function parseBaseReceipt(text: string): BaseReceipt | null {
 		return null;
 
 	const source: BaseEvidence["source"] | null =
-		sourceKind === "ready" && isDigest(treeDigest) && isDigest(lockDigest)
-			? { kind: "ready", treeDigest, lockDigest }
+		sourceKind === "ready" &&
+		isDigest(treeDigest) &&
+		isDigest(lockDigest) &&
+		isDigest(gatesDigest)
+			? { kind: "ready", treeDigest, lockDigest, gatesDigest }
 			: sourceKind === "unavailable" && sourceReason !== null
 				? { kind: "unavailable", reason: sourceReason }
 				: null;
@@ -543,8 +548,6 @@ export function baseRefusalNotice(failure: BaseRefusal) {
 		acceptance_not_reproduced:
 			"Acceptance does not reproduce the ticket on the unchanged base.",
 		preservation_failed: "A preservation check fails on the unchanged base.",
-		adjudicated_oracle:
-			"The suite matches an adjudicated overconstrained oracle.",
 		base_load_error: "A check could not load on the unchanged base.",
 		base_no_tests: "A check registered no tests.",
 		base_runner_error: "The isolated base runner could not execute.",
@@ -553,6 +556,10 @@ export function baseRefusalNotice(failure: BaseRefusal) {
 		base_skip: "A check skipped a test.",
 		base_todo: "A check left a test as todo.",
 		base_cancelled: "A check cancelled a test.",
+		base_tree_unsupported:
+			"The unchanged base tree is partial or lacks its trusted gates.",
+		base_interrupted:
+			"Base qualification was interrupted on every accept attempt.",
 		base_evidence_missing:
 			"Base qualification evidence is incomplete or invalid.",
 	};

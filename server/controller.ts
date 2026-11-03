@@ -59,7 +59,6 @@ import { isGitSha } from "../src/workflow.ts";
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync, readdirSync, mkdirSync, existsSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { runHeldoutBase } from "./gates.ts";
 import {
 	assessBase,
@@ -897,9 +896,10 @@ const CHECKOUT_LIST_MAX_BYTES = 16 * 1024 * 1024;
 function parseCheckoutRecord(
 	text: string | null,
 	sha: GitSha,
-): string[] | null {
+): { paths: string[]; omitted: number | null } | null {
 	const value = text === null ? undefined : parseJson(text);
 	const files = fieldOf(value, "files");
+	const omitted = countOf(fieldOf(value, "omitted"));
 
 	if (fieldOf(value, "sha") !== sha || !Array.isArray(files)) return null;
 
@@ -913,7 +913,7 @@ function parseCheckoutRecord(
 		paths.push(path);
 	}
 
-	return paths;
+	return { paths, omitted };
 }
 
 function checkoutOf(workspace: string, files: readonly string[]): Checkout {
@@ -1123,7 +1123,11 @@ export async function checkoutWorkspace(input: {
 	const listed = parseCheckoutRecord(kept, sha);
 
 	if (listed !== null)
-		return { kind: "ready", checkout: checkoutOf(workspace, listed) };
+		return {
+			kind: "ready",
+			omitted: listed.omitted,
+			checkout: checkoutOf(workspace, listed.paths),
+		};
 
 	const gz = await input.fetch(repo, sha).catch(() => null);
 
@@ -1164,7 +1168,7 @@ export async function checkoutWorkspace(input: {
 		.flatMap((entry) => (entry.kind === "file" ? [entry.path] : []))
 		.sort();
 
-	const text = `${JSON.stringify({ sha, files })}\n`;
+	const text = `${JSON.stringify({ sha, files, omitted: read.omitted })}\n`;
 
 	if (
 		Buffer.byteLength(text) > CHECKOUT_LIST_MAX_BYTES ||
@@ -1181,7 +1185,11 @@ export async function checkoutWorkspace(input: {
 		});
 	}
 
-	return { kind: "ready", checkout: checkoutOf(workspace, files) };
+	return {
+		kind: "ready",
+		omitted: read.omitted,
+		checkout: checkoutOf(workspace, files),
+	};
 }
 
 export async function checkoutBuildWorkspace(
@@ -1237,16 +1245,11 @@ async function writeOnce(path: string, text: string): Promise<boolean> {
 export function controllerBaseChecker(config: {
 	readonly stateDir: string;
 	readonly fetch?: TarballFetch;
-	readonly gates?: string;
 }) {
 	const jobs = new Map<
 		string,
 		{ runId: Digest; abort: AbortController; done: Promise<void> }
 	>();
-
-	const gates =
-		config.gates ??
-		fileURLToPath(new URL("../.github/factory/gates/", import.meta.url));
 
 	const files = fileRunFiles(config.stateDir);
 
@@ -1273,10 +1276,27 @@ export function controllerBaseChecker(config: {
 			bindingDigest,
 		);
 
-		const dir = join(parent, `a${input.acceptAttempt}`);
+		const stored =
+			input.readOnly && existsSync(parent)
+				? readdirSync(parent)
+						.flatMap((name) => {
+							const n = /^a([1-9][0-9]*)$/.exec(name)?.[1];
+
+							return n !== undefined &&
+								present(join(parent, name, "result.json"))
+								? [Number(n)]
+								: [];
+						})
+						.sort((a, b) => b - a)[0]
+				: undefined;
+
+		const dir = join(parent, `a${stored ?? input.acceptAttempt}`);
 		const resultPath = join(dir, "result.json");
 
 		try {
+			if (input.binding.gateSha !== input.binding.baseSha)
+				return fail(input, "base_evidence_missing");
+
 			if (present(resultPath)) {
 				const text = regularText(resultPath, 2 * 1024 * 1024);
 				const receipt = parseBaseReceipt(text);
@@ -1291,6 +1311,8 @@ export function controllerBaseChecker(config: {
 
 				return assessBase(receipt.evidence).assessment;
 			}
+
+			if (input.readOnly) return fail(input, "base_evidence_missing");
 
 			if (jobs.has(dir)) return { kind: "checking" };
 
@@ -1318,8 +1340,6 @@ export function controllerBaseChecker(config: {
 
 				return { kind: "interrupted", wallMs: deadline - startedAt };
 			}
-
-			if (input.readOnly) return fail(input, "base_evidence_missing");
 
 			if (input.allowLaunch === false) return { kind: "checking" };
 			const bound = await files.readContract(input.binding.runId);
@@ -1408,37 +1428,29 @@ export function controllerBaseChecker(config: {
 			const done = (async () => {
 				const tree = join(dir, "source");
 				await mkdir(tree, { mode: 0o700 });
-				let source: string = tree;
-				const reused = files.workspacePath(input.binding.runId);
 
-				const record = join(
-					config.stateDir,
-					"checkouts",
-					`${input.binding.runId}.json`,
-				);
-
-				const pinned = existsSync(record)
-					? objectOf(parseJson(readFileSync(record, "utf8")))
-					: null;
-
-				if (
-					jsonField(pinned, "sha") === input.binding.baseSha &&
-					existsSync(join(reused, "package-lock.json"))
-				)
-					source = reused;
-				else if (Date.now() < deadline && !abort.signal.aborted)
-					await checkoutWorkspace({
-						stateDir: dir,
-						runId: input.binding.runId,
-						workspace: tree,
-						repo: input.binding.repo,
-						sha: input.binding.baseSha,
-						fetch: config.fetch ?? ghTarball,
-					});
+				const checked =
+					Date.now() < deadline && !abort.signal.aborted
+						? await checkoutWorkspace({
+								stateDir: dir,
+								runId: input.binding.runId,
+								workspace: tree,
+								repo: input.binding.repo,
+								sha: input.binding.baseSha,
+								fetch: config.fetch ?? ghTarball,
+							})
+						: ({ kind: "unavailable" } as const);
 
 				const evidence = await runHeldoutBase({
-					tree: source,
-					gates,
+					tree,
+					refused:
+						checked.kind === "unavailable"
+							? "tree_unavailable"
+							: checked.kind === "refused"
+								? "tree_refused"
+								: checked.omitted !== 0
+									? "tree_partial"
+									: undefined,
 					workDir: dir,
 					cacheDir: join(config.stateDir, "base-dependencies"),
 					binding: input.binding,

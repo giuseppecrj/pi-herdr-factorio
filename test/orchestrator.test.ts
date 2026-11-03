@@ -461,6 +461,7 @@ class FakeExecutor implements StageExecutor {
 	readonly tree = new Map(CHECKOUT_TREE);
 	readonly checkouts: string[] = [];
 	checkoutResult: "ready" | "unavailable" | "refused" = "ready";
+	checkoutOmitted: number | null = 0;
 	workflow: () => string | null = () => TRUSTED_WORKFLOW;
 	readonly launches: StageLaunchInput[] = [];
 	readonly spentBy = new Map<string, number>();
@@ -493,6 +494,7 @@ class FakeExecutor implements StageExecutor {
 
 		return {
 			kind: "ready",
+			omitted: this.checkoutOmitted,
 			checkout: {
 				files: [...tree.keys()].sort(),
 				async read(path, cap) {
@@ -1798,6 +1800,64 @@ describe("Orchestrator base qualification", () => {
 			["specify", "accept"],
 		);
 		assert.equal(files.claims.get(runOf(14))?.stage, "build");
+	});
+
+	it("refuses an interruption on every accept attempt with its own public reason", async () => {
+		const { github, executor, clock, start } = world();
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "pass", usage: 20 };
+		executor.baseOutcome = "interrupted";
+		const controller = start();
+
+		for (let i = 0; i < 6; i++) {
+			await once(controller);
+			clock.t += 600_000;
+		}
+
+		assert.ok(!executor.launches.some((l) => l.stage === "build"));
+		assert.equal(statuses(github, 14).at(-1)?.endsWith(":failed"), true);
+		assert.equal(refusals(github).length, 1);
+		assert.match(
+			refusals(github)[0] ?? "",
+			/^Acceptance refused before build: base_interrupted\. Base qualification was interrupted on every accept attempt\.\n\n<!-- factory-base-refusal /,
+		);
+		assert.doesNotMatch(refusals(github)[0] ?? "", /base_evidence_missing/);
+	});
+
+	it("refuses accept on a checkout that omitted base paths, while specify still reads it", async () => {
+		const { github, executor, logs, start } = world();
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "pass", usage: 20 };
+		executor.checkoutOmitted = 1;
+		await once(start());
+		assert.deepEqual(
+			executor.launches.map((l) => l.stage),
+			["specify"],
+		);
+		assert.equal(statuses(github, 14).at(-1)?.endsWith(":failed"), true);
+		assert.ok(
+			logs.some(
+				(e) =>
+					e.event === "stage_inputs_refused" &&
+					e.fields.why === "checkout_base_tree_unsupported",
+			),
+		);
+		assert.equal(executor.baseChecks.length, 0);
+	});
+
+	it("treats an unrecorded omission count as unsupported at accept", async () => {
+		const { github, executor, start } = world();
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "pass", usage: 20 };
+		executor.checkoutOmitted = null;
+		await once(start());
+		assert.deepEqual(
+			executor.launches.map((l) => l.stage),
+			["specify"],
+		);
 	});
 });
 
@@ -8693,6 +8753,89 @@ describe("controller-only validate", () => {
 			3,
 		);
 	});
+
+	for (const receipt of ["missing", "drifted"] as const)
+		it(`refuses a repair build before launch when the stored base receipt is ${receipt}`, async () => {
+			const f = await waitingRun();
+			f.executor.validate = async (input) => {
+				const round = input.round ?? 0;
+
+				const state = input.state ?? {
+					version: 1,
+					startedAt: input.now,
+					deadline: input.now + input.wallMs,
+					round,
+					originalBase: input.baseSha,
+					baseSha: input.baseSha,
+					baseResolved: true,
+					publication: {
+						branch: `factory/run/14-${input.runId.slice(0, 12)}-r${round}`,
+						patchSha: sha("b".repeat(40)),
+						candidateSha: sha("c".repeat(40)),
+					},
+					dispatchTry: 1,
+					dispatchedAt: input.now,
+					ciRunId: 123,
+					counters: {},
+				};
+
+				await input.save(state);
+
+				return {
+					kind: "finished",
+					state,
+					verdict: failingVerdict(
+						digestOf(round ? `patch-r${round}` : "patch"),
+					),
+				};
+			};
+
+			await f.controller.tick();
+			assert.equal(f.files.claims.get(runOf(14))?.round, 1);
+			const checks = f.executor.baseChecks.length;
+
+			f.executor.baseCheck = async (input) => {
+				f.executor.baseChecks.push(input);
+
+				return receipt === "missing"
+					? {
+							kind: "refused",
+							failure: {
+								binding: input.binding,
+								receiptDigest: digestOf("missing"),
+								reason: "base_evidence_missing",
+								scenarios: [],
+							},
+						}
+					: {
+							kind: "ready",
+							proof: qualifiedProof({
+								...input.binding,
+								acceptanceDigest: digestOf("drifted suite"),
+							}),
+						};
+			};
+
+			const restarted = f.start();
+			await once(restarted);
+			await restarted.tick();
+			assert.equal(
+				f.executor.launches.filter(
+					(entry) => entry.stage === "build" && entry.round === 1,
+				).length,
+				0,
+			);
+			const repairChecks = f.executor.baseChecks.slice(checks);
+			assert.ok(repairChecks.length > 0);
+			assert.ok(repairChecks.every((c) => c.readOnly === true));
+			assert.ok(
+				f.logs.some(
+					(e) =>
+						e.event === "stage_inputs_refused" &&
+						e.fields.why === "base_evidence_missing",
+				),
+			);
+		});
 
 	for (const field of ["candidate", "ciRun"] as const)
 		it(`posts another marker when only ${field} changes`, async () => {

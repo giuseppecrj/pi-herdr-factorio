@@ -1269,7 +1269,7 @@ const dependencyJobs = new Map<string, Promise<string>>();
 
 export async function runHeldoutBase(input: {
 	readonly tree: string;
-	readonly gates: string;
+	readonly refused?: "tree_partial" | "tree_refused" | "tree_unavailable";
 	readonly workDir: string;
 	readonly cacheDir: string;
 	readonly binding: AcceptanceBinding;
@@ -1283,17 +1283,24 @@ export async function runHeldoutBase(input: {
 	readonly runner?: GateRunner;
 }): Promise<BaseEvidence> {
 	const runner = input.runner ?? localRunner;
+	const gates = join(input.tree, ".github/factory/gates");
+
+	const gateBytes = ["reporter.mjs", "freeze.mjs"].map((name) => {
+		try {
+			const path = join(gates, name);
+
+			return lstatSync(path).isFile() ? readFileSync(path, "utf8") : null;
+		} catch {
+			return null;
+		}
+	});
 
 	const runtime = {
 		runner: runner.kind,
 		node: process.version,
 		platform: `${process.platform}/${process.arch}`,
 		bwrap: "unavailable",
-		protocolDigest: digestOf(
-			BASE_PROTOCOL_VERSION +
-				readFileSync(join(input.gates, "reporter.mjs"), "utf8") +
-				readFileSync(join(input.gates, "freeze.mjs"), "utf8"),
-		),
+		protocolDigest: digestOf(BASE_PROTOCOL_VERSION + JSON.stringify(gateBytes)),
 	};
 
 	const scenarios = input.suite.scenarios.map((s) => {
@@ -1313,7 +1320,9 @@ export async function runHeldoutBase(input: {
 
 	let source: BaseEvidence["source"] = {
 		kind: "unavailable",
-		reason: "unsafe_tree",
+		reason:
+			input.refused ??
+			(gateBytes.includes(null) ? "gates_missing" : "unsafe_tree"),
 	};
 
 	let execution: PrivateExecution = {
@@ -1341,6 +1350,7 @@ export async function runHeldoutBase(input: {
 	};
 
 	try {
+		if (source.reason !== "unsafe_tree") throw new Error(source.reason);
 		remaining();
 
 		const version = await command(
@@ -1353,6 +1363,7 @@ export async function runHeldoutBase(input: {
 
 		runtime.bwrap = version.stdout.trim().slice(0, 100);
 		const treeDigest = baseTreeDigest(input.tree);
+		const gatesDigest = baseTreeDigest(gates);
 
 		const lockDigest = digestOf(
 			readFileSync(join(input.tree, "package-lock.json")),
@@ -1387,7 +1398,7 @@ export async function runHeldoutBase(input: {
 
 					const installed = await install(
 						tree,
-						input.gates,
+						gates,
 						archives,
 						join(cache, "npm"),
 						run,
@@ -1415,7 +1426,7 @@ export async function runHeldoutBase(input: {
 		}
 
 		remaining();
-		source = { kind: "ready", treeDigest, lockDigest };
+		source = { kind: "ready", treeDigest, lockDigest, gatesDigest };
 		const tree = join(input.workDir, "tree");
 		cpSync(input.tree, tree, {
 			recursive: true,
@@ -1440,7 +1451,7 @@ export async function runHeldoutBase(input: {
 
 		const result = await run.run({
 			tree,
-			gates: input.gates,
+			gates,
 			dependencies: dependency,
 			argv: testArgv(files),
 		});
