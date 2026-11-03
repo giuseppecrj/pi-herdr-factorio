@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { EXIT, runCli } from "../server/cli.ts";
 import { sandboxExecutor } from "../server/sandbox.ts";
+import { readViewerRun } from "../server/viewer.ts";
 import { manifestDigest } from "../server/sandbox/manifest.ts";
 import {
 	collectPatch,
@@ -8192,6 +8193,105 @@ describe("controller-only validate", () => {
 		assert.equal(f.files.claims.get(runOf(14))?.stage, "land");
 		assert.equal(f.files.claims.get(runOf(14))?.usage, 40);
 	});
+
+	for (const published of [true, false])
+		it(`restarts a version-1 certified book ${published ? "with an open PR" : "before its PR"} by migrating it on read`, async () => {
+			const f = await reviewingRun("pass");
+			f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+
+			if (!published) {
+				await f.controller.tick();
+				f.store.local = "disabled";
+			}
+
+			await once(f.controller);
+			await f.controller.tick();
+
+			if (published) await f.controller.tick();
+			const claim = f.files.claims.get(runOf(14));
+			const book = claim?.handoff;
+			assert.ok(claim && book?.kind === "selected");
+			assert.equal(book.published?.number ?? null, published ? 99 : null);
+			assert.equal(
+				book.current.certification?.review.seats[0]?.judgments[0]?.outcome,
+				"pass",
+			);
+			const stored = JSON.parse(JSON.stringify(claim));
+
+			for (const evidence of [
+				...stored.handoff.history,
+				stored.handoff.current,
+			])
+				if (evidence.certification !== null) {
+					evidence.certification.review.version = 1;
+
+					for (const seat of evidence.certification.review.seats)
+						seat.judgments = seat.judgments.map(
+							({
+								scenario,
+								outcome,
+								reason,
+							}: {
+								readonly scenario: string;
+								readonly outcome: string;
+								readonly reason: string;
+							}) => ({ scenario, pass: outcome === "pass", reason }),
+						);
+				}
+
+			const dir = stateDir();
+			const files = fileRunFiles(dir);
+			assert.equal(await files.writeClaim(stored), true);
+
+			const certificate = join(
+				dir,
+				"validation",
+				runOf(14),
+				"certification.json",
+			);
+
+			const original = readFileSync(certificate, "utf8");
+			assert.match(original, /"version":1,/);
+			assert.match(original, /"pass":true/);
+			f.files.claims.clear();
+
+			for (const saved of await files.listClaims())
+				f.files.claims.set(saved.runId, saved);
+			f.store.local = "enabled";
+			const launches = f.executor.launches.length;
+			const restarted = f.start();
+			await restarted.tick();
+			await restarted.tick();
+			assert.notEqual(
+				restarted.state.runs.get(14)?.phase.kind,
+				"evidence_missing",
+			);
+			assert.notEqual(restarted.state.runs.get(14)?.phase.kind, "failed");
+			const resumed = f.files.claims.get(runOf(14));
+			assert.equal(resumed?.status, "waiting");
+			assert.equal(resumed.usage, 40);
+			assert.equal(f.executor.launches.length, launches);
+			assert.ok(resumed.handoff?.kind === "selected");
+			assert.equal(resumed.handoff.published?.number, 99);
+			assert.deepEqual(
+				resumed.handoff.current.certification,
+				book.current.certification,
+			);
+			assert.equal(await files.writeClaim(resumed), true);
+			assert.equal(readFileSync(certificate, "utf8"), original);
+			assert.deepEqual(
+				(await readViewerRun(dir, runOf(14))).gaps.filter(
+					(gap) => gap.reason === "evidence binding mismatch",
+				),
+				[],
+			);
+			assert.equal(
+				JSON.parse(
+					readFileSync(join(dir, "claims", `${runOf(14)}.json`), "utf8"),
+				).handoff.current.certification.review.version,
+				2,
+			);
+		});
 
 	it("holds certified handoff while disabled and resumes the same book without new model spend", async () => {
 		const f = await reviewingRun();

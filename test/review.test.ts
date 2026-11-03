@@ -598,34 +598,92 @@ async function checkReviewTree(mode: string) {
 		);
 		const reviewReceipt = join(reviewDir(state, runId, 0), "receipt.json");
 		mkdirSync(dirname(reviewReceipt), { recursive: true, mode: 0o700 });
-		writeFileSync(
-			reviewReceipt,
+
+		const v1Receipt = (judgments: readonly object[], version = 1) =>
 			JSON.stringify({
 				...prepared.input.binding,
-				version: 1,
+				version,
 				r8: "incomplete",
 				seats: [
 					{
 						seat: "code-review",
 						findings: [],
-						judgments: [{ scenario: "S1", pass: true, reason: "ok" }],
+						judgments,
+						requested: "openai/gpt-6.1-sol",
+						observed: null,
+						label: "context-isolated",
+						fallback: false,
+						tokens: 1,
 					},
 				],
-				blocking: false,
-			}),
+				blocking: true,
+			});
+
+		writeFileSync(
+			reviewReceipt,
+			v1Receipt([
+				{ scenario: "S1", pass: true, reason: "PASSED_REASON" },
+				{ scenario: "S2", pass: false, reason: "missing guard" },
+			]),
 			{ mode: 0o600 },
 		);
-		assert.deepEqual(
-			await executor.checkout({
-				runId,
-				repo,
-				sha,
-				workspace: join(root, "repair-v1"),
-				build: true,
-				round: 1,
-			}),
-			{ kind: "refused", reason: "repair_inputs_invalid" },
+		const migratedWorkspace = join(root, "repair-v1");
+		assert.equal(
+			(
+				await executor.checkout({
+					runId,
+					repo,
+					sha,
+					workspace: migratedWorkspace,
+					build: true,
+					round: 1,
+				})
+			).kind,
+			"ready",
 		);
+
+		const migratedFeedback = readFileSync(
+			join(migratedWorkspace, ".factory-feedback.json"),
+			"utf8",
+		);
+
+		assert.deepEqual(JSON.parse(migratedFeedback).review, [
+			{
+				seat: "code-review",
+				category: "criterion",
+				scenario: "S2",
+				claim: "missing guard",
+			},
+		]);
+		assert.doesNotMatch(migratedFeedback, /PASSED_REASON|"S1"/);
+
+		for (const [i, malformed] of [
+			v1Receipt([
+				{ scenario: "S1", pass: true, reason: "ok" },
+				{ scenario: "S2", outcome: "fail", reason: "why" },
+			]),
+			v1Receipt([{ scenario: "S1", pass: true, reason: "ok" }], 2),
+			v1Receipt([{ scenario: "S1", pass: true, reason: "ok" }], 3),
+			v1Receipt([
+				{ scenario: "S1", outcome: "pass", pass: true, reason: "ok" },
+			]),
+			v1Receipt([{ scenario: "S1", pass: "yes", reason: "ok" }]),
+		].entries()) {
+			writeFileSync(reviewReceipt, malformed, { mode: 0o600 });
+			assert.deepEqual(
+				await executor.checkout({
+					runId,
+					repo,
+					sha,
+					workspace: join(root, `repair-malformed-${i}`),
+					build: true,
+					round: 1,
+				}),
+				{ kind: "refused", reason: "repair_inputs_invalid" },
+				malformed,
+			);
+		}
+
 		assert.ok(prepared.input.files.has("value.ts"));
 		assert.match(
 			readFileSync(join(workspace, "value.ts"), "utf8"),

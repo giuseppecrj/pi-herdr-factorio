@@ -15,6 +15,7 @@ import {
 	certifyGeneration,
 	notProven,
 	parseCandidateState,
+	parseReviewReceipt,
 	renderLimitation,
 } from "../src/handoff.ts";
 import {
@@ -1886,40 +1887,88 @@ test("certification accepts only pass judgments, and stored reviews keep the clo
 			},
 		});
 
-	for (const review of [
+	const v1 = (review: ReturnType<typeof judged>, version = 1) => ({
+		...review,
+		version,
+		seats: review.seats.map((seat) => ({
+			...seat,
+			judgments: seat.judgments.map(({ scenario, outcome, reason }) => ({
+				scenario,
+				pass: outcome === "pass",
+				reason,
+			})),
+		})),
+	});
+
+	const migrated = stored(JSON.parse(JSON.stringify(v1(judged("pass")))));
+	assert.notEqual(migrated, null);
+	assert.deepEqual(
+		migrated,
+		stored(JSON.parse(JSON.stringify(judged("pass")))),
+	);
+	assert.equal(
+		migrated?.kind === "selected" &&
+			migrated.current.certification?.review.version,
+		2,
+	);
+
+	for (const outcome of ["pass", "fail"])
+		assert.deepEqual(
+			parseReviewReceipt(JSON.parse(JSON.stringify(v1(judged(outcome))))),
+			judged(outcome),
+			outcome,
+		);
+
+	for (const outcome of ["unverifiable", "timeout"])
+		assert.deepEqual(
+			parseReviewReceipt(JSON.parse(JSON.stringify(judged(outcome)))),
+			judged(outcome),
+		);
+
+	const mixed = [
 		{ ...judged("pass"), version: 1 },
-		{
-			...judged("pass"),
-			seats: judged("pass").seats.map((seat) => ({
-				...seat,
-				judgments: seat.judgments.map(({ scenario, reason }) => ({
-					scenario,
-					pass: true,
-					reason,
-				})),
-			})),
-		},
-		{
-			...judged("pass"),
-			version: 1,
-			seats: judged("pass").seats.map((seat) => ({
-				...seat,
-				judgments: seat.judgments.map(({ scenario, reason }) => ({
-					scenario,
-					pass: true,
-					reason,
-				})),
-			})),
-		},
+		v1(judged("pass"), 2),
+		v1(judged("pass"), 3),
+		{ ...judged("pass", { pass: true }), version: 1 },
 		judged("pass", { pass: true }),
 		judged("skipped"),
-		judged("unverifiable"),
-	])
+		{
+			...v1(judged("pass")),
+			seats: [
+				...v1(judged("pass")).seats,
+				{
+					...v1(judged("pass")).seats[0],
+					judgments: [{ scenario: "J2", outcome: "pass", reason: "why" }],
+				},
+			],
+		},
+		{
+			...v1(judged("pass")),
+			seats: v1(judged("pass")).seats.map((seat) => ({
+				...seat,
+				judgments: seat.judgments.map((j) => ({ ...j, pass: "yes" })),
+			})),
+		},
+	];
+
+	for (const review of mixed) {
 		assert.equal(
 			stored(JSON.parse(JSON.stringify(review))),
 			null,
-			JSON.stringify(review.seats[0]),
+			JSON.stringify(review),
 		);
+		assert.equal(
+			parseReviewReceipt(JSON.parse(JSON.stringify(review))),
+			null,
+			JSON.stringify(review),
+		);
+	}
+
+	assert.equal(
+		stored(JSON.parse(JSON.stringify(judged("unverifiable")))),
+		null,
+	);
+	assert.equal(stored(JSON.parse(JSON.stringify(v1(judged("fail"))))), null);
 });
 
 test("Not proven lists every non-pass review outcome by scenario and outcome only, never as passed", () => {
