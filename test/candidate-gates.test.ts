@@ -1092,6 +1092,31 @@ test("baseline timeout is incomplete; candidate deadlines have measured headroom
 	assert.equal(incomplete.reason, "baseline_deadline");
 });
 
+test("main's baseline test run gets 180 seconds and candidates three times its measured time", async (t) => {
+	const f = repo(t);
+	const deadlines: { tree: string; tests: boolean; deadlineMs?: number }[] = [];
+
+	const runner: GateRunner = {
+		kind: "recording",
+		run: (input) => {
+			deadlines.push({
+				tree: input.tree.endsWith("/baseline") ? "baseline" : "tree",
+				tests: input.argv.includes("--test"),
+				deadlineMs: input.deadlineMs,
+			});
+
+			return miniRunner.run(input);
+		},
+	};
+
+	await checkCandidate({ ...gateInput(f, f.gateSha), runner });
+	const baseline = deadlines.find((d) => d.tree === "baseline" && d.tests);
+	assert.equal(baseline?.deadlineMs, 180000);
+
+	for (const later of deadlines.slice(deadlines.indexOf(baseline) + 1))
+		assert.ok((later.deadlineMs ?? 0) >= 90000, JSON.stringify(later));
+});
+
 test("bad manifests, stale bases, missing checks and tampered replacement digests fail incomplete", async (t) => {
 	const f = repo(t);
 	f.put("src/value.ts", "export const value=1;\n");
