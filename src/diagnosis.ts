@@ -946,6 +946,15 @@ function heldoutClass(
 				? missing("invalid_report")
 				: infrastructure(tree.execution.reason);
 
+	for (const tree of [replay.gate, replay.full])
+		if (
+			tree.execution.kind === "observed" &&
+			tree.execution.files.some((f) =>
+				f.failures.some((x) => x.kind === "timeout"),
+			)
+		)
+			return infrastructure("timeout");
+
 	const ignored = textsOf(fieldOf(receipt, "ignoredChanges"));
 
 	if (ignored === null) return missing("invalid_report");

@@ -976,6 +976,81 @@ test("classifier: a scanner rejection blames the candidate only for its own chan
 	}
 });
 
+test("classifier: a per-test timeout in a replay is infrastructure before agreement, oracle or candidate, even when mixed (L2)", () => {
+	const timed = (tree: TreeReplay, file: string): TreeReplay => {
+		assert.ok(tree.execution.kind === "observed");
+
+		return {
+			...tree,
+			execution: {
+				...tree.execution,
+				files: tree.execution.files.map((f) =>
+					f.file === file
+						? {
+								...f,
+								failures: [
+									{
+										file,
+										name: "check",
+										message: "test timed out after 20ms",
+										code: null,
+										kind: "timeout" as const,
+									},
+								],
+							}
+						: f,
+				),
+			},
+		};
+	};
+
+	const r = observedReplay(E, first);
+	assert.ok(r.kind === "observed");
+
+	for (const replay of [
+		{ ...r, gate: timed(r.gate, first), full: timed(r.full, first) },
+		{ ...r, full: timed(r.full, first) },
+		{ ...r, gate: timed(r.gate, second), full: timed(r.full, second) },
+	])
+		for (const base of [unitInput().base, null])
+			assert.deepEqual(classifyFailure(unitInput({ replay, base })), {
+				kind: "infrastructure",
+				reason: "timeout",
+			});
+
+	const mixed = observedReplay(E, first);
+	assert.ok(mixed.kind === "observed");
+	const timedSecond = timed(mixed.gate, second);
+	assert.ok(timedSecond.execution.kind === "observed");
+	assert.ok(mixed.gate.execution.kind === "observed");
+	const assertion = mixed.gate.execution.files.find((f) => f.file === first);
+	assert.ok(assertion !== undefined);
+
+	const withAssertion: TreeReplay = {
+		execution: {
+			...timedSecond.execution,
+			files: timedSecond.execution.files.map((f) =>
+				f.file === first ? assertion : f,
+			),
+		},
+		projection: {
+			counts: mixed.gate.projection.counts,
+			failed: E,
+			passed: false,
+		},
+	};
+
+	assert.deepEqual(
+		classifyFailure(
+			unitInput({
+				receiptPatch: { heldoutFailures: E },
+				replay: { ...mixed, gate: withAssertion, full: withAssertion },
+			}),
+		),
+		{ kind: "infrastructure", reason: "timeout" },
+	);
+});
+
 test("classifier: identity, completeness and timeouts fail closed before blame", () => {
 	assert.deepEqual(
 		classifyFailure(unitInput({ receiptPatch: { nonce: "other" } })),
