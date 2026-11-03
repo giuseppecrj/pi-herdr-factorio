@@ -83,7 +83,7 @@ import type {
 	BaseReason,
 } from "../src/diagnosis.ts";
 import { advance } from "../src/stages.ts";
-import { readAssessmentBytes } from "../src/validation.ts";
+import { readAssessmentBytes, validationDir } from "../src/validation.ts";
 import {
 	candidateProjection,
 	handoffCandidate,
@@ -9212,6 +9212,61 @@ describe("controller-only validate", () => {
 		assert.ok(f.executor.assessmentReads.includes(`${runOf(14)}/0/0`));
 		assert.equal(keyed(f.github, 14, "diagnosis").length, 0);
 	});
+
+	for (const stored of [true, false])
+		it(`launches ${stored ? "one repair" : "no repair"} through the production executor's assessment reader when the candidate assessment is ${stored ? "stored" : "absent"}`, async () => {
+			const f = await waitingRun();
+			const state = stateDir();
+
+			const disk = sandboxExecutor({
+				stateDir: state,
+				exec: async () => ({ code: 0, stdout: "", stderr: "" }),
+				log: () => {},
+				xdgRuntimeDir: "/run/user/1000",
+			});
+
+			f.executor.readAssessment = disk.readAssessment.bind(disk);
+
+			const validate = assessedValidator(
+				f,
+				classifiedCase("candidate_load_error"),
+			);
+
+			f.executor.validate = async (input) => {
+				const result = await validate(input);
+
+				for (const [key, text] of f.executor.assessments) {
+					const [runId, round, generation] = key.split("/");
+
+					const dir = validationDir(
+						state,
+						runId ?? "",
+						Number(round),
+						Number(generation),
+					);
+
+					mkdirSync(dir, { recursive: true, mode: 0o700 });
+
+					if (stored)
+						writeFileSync(join(dir, "assessment.json"), text, {
+							mode: 0o600,
+						});
+				}
+
+				f.executor.assessments.clear();
+
+				return result;
+			};
+
+			await drive(f.controller, f);
+
+			assert.equal(
+				f.executor.launches.filter(
+					(entry) => entry.stage === "build" && (entry.round ?? 0) > 0,
+				).length,
+				stored ? 1 : 0,
+			);
+		});
 
 	it("does not repair a restored repair_due whose assessment is missing", async () => {
 		const f = await waitingRun();

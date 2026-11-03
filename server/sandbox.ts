@@ -2991,6 +2991,11 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 			fetch: config.fetchTarball,
 			diagnosis,
 		}),
+		async readAssessment({ runId, round, generation }) {
+			return readStoredAssessment(
+				validationDir(config.stateDir, runId, round, generation),
+			);
+		},
 		cleanupValidation: () =>
 			sweepValidation({
 				stateDir: config.stateDir,

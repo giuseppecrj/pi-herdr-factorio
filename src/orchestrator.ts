@@ -254,7 +254,7 @@ export interface StageExecutor {
 	): Promise<ReviewPreparation>;
 	readonly validate?: Validator;
 	/** Re-reads a stored validation assessment; null when absent or unreadable. */
-	readAssessment?(input: {
+	readAssessment(input: {
 		runId: Digest;
 		round: number;
 		generation: number;
@@ -4321,7 +4321,7 @@ export class Orchestrator {
 		execution: Extract<CandidateExecution, { stage: "build" }>,
 	): Promise<boolean> {
 		const read = await this.#input.executor
-			.readAssessment?.({
+			.readAssessment({
 				runId: execution.runId,
 				round: execution.feedbackFrom.round,
 				generation: execution.feedbackFrom.generation,
