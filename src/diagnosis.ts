@@ -609,6 +609,7 @@ export type MissingEvidenceReason =
 	| "base_missing"
 	| "invalid_report"
 	| "unsupported_tree"
+	| "unsupported_materializer"
 	| "materialize_mismatch"
 	| "ci_replay_disagrees"
 	| "tree_replays_disagree";
@@ -662,6 +663,7 @@ export type HeldoutReplay =
 				| "runner_error"
 				| "dependency_transport"
 				| "unsupported_tree"
+				| "unsupported_materializer"
 				| "suite_mismatch";
 			wallMs: number;
 	  }>
@@ -934,8 +936,9 @@ function heldoutClass(
 	if (replay === null) return missing("unsupported_tree");
 
 	if (replay.kind === "unavailable")
-		return replay.reason === "unsupported_tree"
-			? missing("unsupported_tree")
+		return replay.reason === "unsupported_tree" ||
+			replay.reason === "unsupported_materializer"
+			? missing(replay.reason)
 			: replay.reason === "suite_mismatch"
 				? missing("identity_mismatch")
 				: infrastructure(replay.reason);
@@ -1113,6 +1116,7 @@ const MISSING_REASONS: readonly MissingEvidenceReason[] = [
 	"base_missing",
 	"invalid_report",
 	"unsupported_tree",
+	"unsupported_materializer",
 	"materialize_mismatch",
 	"ci_replay_disagrees",
 	"tree_replays_disagree",
@@ -1201,6 +1205,8 @@ export function diagnosisDetail(failure: FailureClass): string | null {
 			return "CI and the gate-tree replay disagree.";
 		case "tree_replays_disagree":
 			return "Gate and candidate replays disagree.";
+		case "unsupported_materializer":
+			return "The gate's materializer differs from the controller's.";
 		case "materialize_mismatch":
 			return `The replay's ignored changes differ from CI's in ${failure.differing} path${failure.differing === 1 ? "" : "s"}.`;
 		default:

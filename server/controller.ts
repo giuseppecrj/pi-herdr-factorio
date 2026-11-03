@@ -66,7 +66,13 @@ import { digestOf, type Verdict } from "../src/run.ts";
 import { isGitSha } from "../src/workflow.ts";
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { readFileSync, readdirSync, mkdirSync, existsSync } from "node:fs";
+import {
+	readFileSync,
+	readdirSync,
+	mkdirSync,
+	existsSync,
+	lstatSync,
+} from "node:fs";
 import {
 	materializeFromDirectories,
 	replacementDigest,
@@ -1638,6 +1644,22 @@ function dependencyFacts(
 	}
 }
 
+function sameMaterializer(gate: string, source: Uint8Array): boolean {
+	const path = join(gate, "server/gates.ts");
+
+	try {
+		const stat = lstatSync(path);
+
+		return (
+			stat.isFile() &&
+			stat.size === source.byteLength &&
+			Buffer.from(source).equals(readFileSync(path))
+		);
+	} catch {
+		return false;
+	}
+}
+
 export function controllerDiagnosis(config: {
 	readonly stateDir: string;
 	readonly fetch?: TarballFetch;
@@ -1650,7 +1672,12 @@ export function controllerDiagnosis(config: {
 		readonly heldoutDir: string;
 		readonly heldoutDigest: string;
 	}) => { readonly ignoredChanges: readonly string[] };
+	readonly materializerSource?: Uint8Array;
 }) {
+	const materializerSource =
+		config.materializerSource ??
+		readFileSync(new URL("./gates.ts", import.meta.url));
+
 	const jobs = new Map<
 		string,
 		{ runId: Digest; abort: AbortController; done: Promise<void> }
@@ -1785,7 +1812,16 @@ export function controllerDiagnosis(config: {
 					facts = { ...facts, base: receipt };
 				}
 
-				if (request.needs.replay) {
+				if (request.needs.replay && !sameMaterializer(gate, materializerSource))
+					facts = {
+						...facts,
+						replay: {
+							kind: "unavailable",
+							reason: "unsupported_materializer",
+							wallMs: Date.now() - startedAt,
+						},
+					};
+				else if (request.needs.replay) {
 					const materialized = join(root, "materialized");
 					let ignoredChanges: readonly string[] | null = null;
 

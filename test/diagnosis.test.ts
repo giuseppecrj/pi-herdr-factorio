@@ -1421,6 +1421,8 @@ function tarballOf(repository: string, sha: string): Buffer {
 	);
 }
 
+const GATE_SOURCE = "export const materializer = 1;\n";
+
 const SLOW_VALUE =
 	"const end = Date.now() + 1500; while (Date.now() < end) {}\nexport function value() { return 3; }\nexport const name = 'factory';\n";
 
@@ -1450,15 +1452,15 @@ async function jobWorld(
 		})) ?? syntheticScenarios
 	).map((s) => ({ ...s, criteria: s.criteria.map((c) => ids.get(c) ?? c) }));
 
-	const f = repository(
-		t,
-		Object.fromEntries(
+	const f = repository(t, {
+		"server/gates.ts": GATE_SOURCE,
+		...Object.fromEntries(
 			Object.entries(entry.base ?? {}).map(([path, file]) => [
 				path,
 				read(file),
 			]),
 		),
-	);
+	});
 
 	const gateSha = f.gateSha;
 	const repo = "owner/repo";
@@ -1774,11 +1776,15 @@ async function jobWorld(
 		throw new Error(`unexpected ${path}`);
 	};
 
-	const owner = (materialize = entry.materializer === "legacy-pre-577") =>
+	const owner = (
+		materialize = entry.materializer === "legacy-pre-577",
+		source: Uint8Array | null = Buffer.from(GATE_SOURCE),
+	) =>
 		controllerDiagnosis({
 			stateDir: state,
 			fetch,
 			materialize: materialize ? legacyMaterialize : undefined,
+			materializerSource: source ?? undefined,
 		});
 
 	const step = async (
@@ -1942,6 +1948,35 @@ scoped(
 	},
 );
 
+for (const source of ["differs", "default"] as const)
+	scoped(
+		`a gate whose materializer source ${source === "differs" ? "differs from" : "is not"} this controller's is unsupported_materializer with no repair (S2)`,
+		async (t) => {
+			const w = await jobWorld(t, "synthetic-wrong-value");
+
+			const read = finishedAssessment(
+				await w.settle(
+					w.owner(
+						false,
+						source === "differs"
+							? Buffer.from("export const materializer = 2;\n")
+							: null,
+					),
+				),
+			);
+
+			assert.deepEqual(read.assessment, {
+				kind: "failed",
+				failure: {
+					kind: "missing_evidence",
+					reason: "unsupported_materializer",
+				},
+			});
+			assert.equal(existsSync(join(w.dir, "feedback.json")), false);
+			assert.deepEqual(w.writes, ["DELETE"]);
+		},
+	);
+
 scoped(
 	"a diagnosis that runs out of time is infrastructure and holds with no redispatch",
 	async (t) => {
@@ -2059,6 +2094,21 @@ test("notices and the failure codec name which pair disagreed, with a path count
 			differing: 4,
 		}),
 		`${stopped} The replay's ignored changes differ from CI's in 4 paths.`,
+	);
+	assert.equal(
+		sentence({ kind: "missing_evidence", reason: "unsupported_materializer" }),
+		`${stopped} The gate's materializer differs from the controller's.`,
+	);
+	assert.deepEqual(
+		parseFailureClass(
+			parseJson(
+				JSON.stringify({
+					kind: "missing_evidence",
+					reason: "unsupported_materializer",
+				}),
+			),
+		),
+		{ kind: "missing_evidence", reason: "unsupported_materializer" },
 	);
 	assert.equal(
 		sentence({ kind: "missing_evidence", reason: "base_missing" }),
