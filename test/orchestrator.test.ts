@@ -1746,6 +1746,41 @@ describe("Orchestrator base qualification", () => {
 		assert.match(refusals(github)[0] ?? "", /base_evidence_missing/);
 	});
 
+	it("ends round 0 with one keyed refusal when the stored proof is gone at build launch", async () => {
+		const { github, executor, clock, start } = world();
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "pass", usage: 20 };
+		const ready = executor.baseCheck.bind(executor);
+
+		executor.baseCheck = async (input) => {
+			if (input.readOnly !== true) return ready(input);
+			executor.baseChecks.push(input);
+
+			return {
+				kind: "refused",
+				failure: {
+					binding: input.binding,
+					receiptDigest: digestOf("missing"),
+					reason: "base_evidence_missing",
+					scenarios: [],
+				},
+			};
+		};
+
+		const controller = start();
+
+		for (let tick = 0; tick < 4; tick++) {
+			await once(controller);
+			clock.t += 600_000;
+		}
+
+		assert.ok(!executor.launches.some((l) => l.stage === "build"));
+		assert.equal(statuses(github, 14).at(-1)?.endsWith(":failed"), true);
+		assert.equal(refusals(github).length, 1);
+		assert.match(refusals(github)[0] ?? "", /: base_evidence_missing\. /);
+	});
+
 	it("keeps a pending check running across ticks and restarts without another model launch", async () => {
 		const { github, executor, files, clock, start } = world();
 		github.add(labeled(14));
@@ -8833,9 +8868,7 @@ describe("controller-only validate", () => {
 			);
 			assert.equal(f.files.claims.get(runOf(14))?.status, "failed");
 
-			const ended = statuses(f.github, 14).filter((s) =>
-				s.endsWith(":failed"),
-			);
+			const ended = statuses(f.github, 14).filter((s) => s.endsWith(":failed"));
 
 			assert.equal(ended.length, 1);
 			assert.equal(statuses(f.github, 14).at(-1), ended[0]);

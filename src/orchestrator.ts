@@ -199,7 +199,11 @@ export type StageOutput =
 
 type WorkflowPin = Pick<ActiveRun, "workflowSha" | "workflowDigest">;
 
-import { baseRefusalNotice, matchingBaseProof } from "./diagnosis.ts";
+import {
+	baseRefusalNotice,
+	matchingBaseProof,
+	type BaseRefusal,
+} from "./diagnosis.ts";
 
 export interface StageExecutor {
 	baseCheck?(
@@ -3440,6 +3444,13 @@ export class Orchestrator {
 		if (prepared.kind === "wait") return false;
 
 		if (prepared.kind === "fail") {
+			if (prepared.refusal !== undefined) {
+				const notice = baseRefusalNotice(prepared.refusal);
+
+				if (!(await this.#postKeyed(run, notice.key, notice.body)))
+					return false;
+			}
+
 			run.phase = { kind: "ending", status: "failed" };
 			this.state.totals.failures++;
 			await this.#sync(run);
@@ -4062,6 +4073,38 @@ export class Orchestrator {
 		run.round = oldRound;
 		run.attempt = oldAttempt;
 
+		if (inputs?.kind === "fail" && request.kind === "repair_build") {
+			if (inputs.refusal !== undefined) {
+				const notice = baseRefusalNotice(inputs.refusal);
+
+				if (!(await this.#postKeyed(run, notice.key, notice.body))) return null;
+			}
+
+			const settled = handoffCandidate(state, {
+				kind: "effect_completed",
+				completion: { kind: "repair_build", request, started: false },
+			}).state;
+
+			if (settled.kind !== "selected") return null;
+
+			const finish: CandidateEffect = {
+				kind: "finish_pr",
+				terminal: { kind: "failed", reason: "evidence_unavailable" },
+			};
+
+			if (
+				await this.#commitCandidate(run, {
+					...settled,
+					work: { kind: "effect", request: finish },
+				})
+			) {
+				this.state.totals.failures++;
+				await this.#interpretCandidate(run, finish);
+			}
+
+			return null;
+		}
+
 		if (inputs !== null && inputs.kind !== "ready") return null;
 		const abort = new AbortController();
 		const handle = { abort, settled: false };
@@ -4451,7 +4494,11 @@ export class Orchestrator {
 
 	async #stageInputs(
 		run: ActiveRun,
-	): Promise<Prepared | { readonly kind: "wait" } | { readonly kind: "fail" }> {
+	): Promise<
+		| Prepared
+		| { readonly kind: "wait" }
+		| { readonly kind: "fail"; readonly refusal?: BaseRefusal }
+	> {
 		const { files, repo } = this.#input;
 		const fields = { issue: run.issue, runId: run.runId };
 
@@ -4461,10 +4508,10 @@ export class Orchestrator {
 			return { kind: "wait" } as const;
 		};
 
-		const fail = (why: string) => {
+		const fail = (why: string, refusal?: BaseRefusal) => {
 			this.#input.log("stage_inputs_refused", { ...fields, why });
 
-			return { kind: "fail" } as const;
+			return { kind: "fail", refusal } as const;
 		};
 
 		if (
@@ -4584,7 +4631,14 @@ export class Orchestrator {
 					qualified?.kind !== "ready" ||
 					!matchingBaseProof(qualified.proof, binding)
 				)
-					return fail("base_evidence_missing");
+					return fail("base_evidence_missing", {
+						binding,
+						receiptDigest: digestOf(
+							JSON.stringify({ binding, round: run.round ?? 0 }),
+						),
+						reason: "base_evidence_missing",
+						scenarios: [],
+					});
 
 				build = {
 					binding: {
