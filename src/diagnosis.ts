@@ -632,7 +632,15 @@ export type FailureClass =
 			cause: "unexpected_base";
 			scenarios: readonly string[];
 	  }>
-	| Readonly<{ kind: "missing_evidence"; reason: MissingEvidenceReason }>
+	| Readonly<{
+			kind: "missing_evidence";
+			reason: Exclude<MissingEvidenceReason, "materialize_mismatch">;
+	  }>
+	| Readonly<{
+			kind: "missing_evidence";
+			reason: "materialize_mismatch";
+			differing: number;
+	  }>
 	| Readonly<{ kind: "infrastructure"; reason: InfrastructureReason }>;
 
 export type HeldoutProjection = Readonly<{
@@ -733,7 +741,9 @@ type ReceiptCheck = Readonly<{
 	signal: string | null;
 }>;
 
-const missing = (reason: MissingEvidenceReason): FailureClass => ({
+const missing = (
+	reason: Exclude<MissingEvidenceReason, "materialize_mismatch">,
+): FailureClass => ({
 	kind: "missing_evidence",
 	reason,
 });
@@ -912,12 +922,21 @@ function heldoutClass(
 
 	const ignored = textsOf(fieldOf(receipt, "ignoredChanges"));
 
-	if (
-		input.ignoredChanges === null ||
-		ignored === null ||
-		!sameList(ignored, input.ignoredChanges)
-	)
-		return missing("materialize_mismatch");
+	if (ignored === null) return missing("invalid_report");
+
+	if (input.ignoredChanges === null) return missing("unsupported_tree");
+	const replayed = input.ignoredChanges;
+
+	if (!sameList(ignored, replayed))
+		return {
+			kind: "missing_evidence",
+			reason: "materialize_mismatch",
+			differing: new Set(
+				[...ignored, ...replayed].filter(
+					(p) => !ignored.includes(p) || !replayed.includes(p),
+				),
+			).size,
+		};
 
 	if (!sameList(replay.files, expected)) return missing("identity_mismatch");
 
@@ -1109,11 +1128,28 @@ export function parseFailureClass(
 			? { kind, cause: "unexpected_base", scenarios }
 			: null;
 	const reason = textOf(fieldOf(v, "reason"));
+	const differing = countOf(fieldOf(v, "differing"));
+
+	if (
+		kind === "missing_evidence" &&
+		reason === "materialize_mismatch" &&
+		keys.join() === "differing,kind,reason" &&
+		differing !== null &&
+		differing > 0
+	)
+		return { kind, reason, differing };
 
 	if (keys.join() !== "kind,reason" || reason === null) return null;
-	const missingReason = MISSING_REASONS.find((r) => r === reason);
 
-	if (kind === "missing_evidence" && missingReason !== undefined)
+	const missingReason = MISSING_REASONS.find(
+		(r) => r === reason && r !== "materialize_mismatch",
+	);
+
+	if (
+		kind === "missing_evidence" &&
+		missingReason !== undefined &&
+		missingReason !== "materialize_mismatch"
+	)
 		return { kind, reason: missingReason };
 	const infraReason = INFRASTRUCTURE_REASONS.find((r) => r === reason);
 
@@ -1122,7 +1158,20 @@ export function parseFailureClass(
 		: null;
 }
 
-export const DISAGREEMENT_SENTENCE = "Gate and candidate replays disagree.";
+export function diagnosisDetail(failure: FailureClass): string | null {
+	if (failure.kind !== "missing_evidence") return null;
+
+	switch (failure.reason) {
+		case "ci_replay_disagrees":
+			return "CI and the gate-tree replay disagree.";
+		case "tree_replays_disagree":
+			return "Gate and candidate replays disagree.";
+		case "materialize_mismatch":
+			return `The replay's ignored changes differ from CI's in ${failure.differing} path${failure.differing === 1 ? "" : "s"}.`;
+		default:
+			return null;
+	}
+}
 
 export function diagnosisNotice(failure: FailureClass, key: string) {
 	const scenarios =
@@ -1130,12 +1179,8 @@ export function diagnosisNotice(failure: FailureClass, key: string) {
 			? failure.scenarios.filter((s) => SCENARIO_ID.test(s))
 			: [];
 
-	const extra =
-		failure.kind === "missing_evidence" &&
-		(failure.reason === "tree_replays_disagree" ||
-			failure.reason === "ci_replay_disagrees")
-			? ` ${DISAGREEMENT_SENTENCE}`
-			: "";
+	const detail = diagnosisDetail(failure);
+	const extra = detail === null ? "" : ` ${detail}`;
 
 	return {
 		key,
