@@ -25,7 +25,9 @@ import {
 	patch,
 	issuedReviewFixture,
 	preparedReviewFixture,
+	storedAssessment,
 } from "./helpers.ts";
+import { feedbackBytes } from "../src/validation.ts";
 import { digestOf } from "../src/run.ts";
 import {
 	mkdtempSync,
@@ -556,7 +558,104 @@ async function checkReviewTree(mode: string) {
 		});
 		writeFileSync(pinnedPath, workflow);
 		assert.deepEqual(fetched, expectedFetches);
+
+		const repairAt = async (name: string) =>
+			executor.checkout({
+				runId,
+				repo,
+				sha,
+				workspace: join(root, name),
+				build: true,
+				round: 1,
+			});
+
+		const refused = { kind: "refused", reason: "repair_inputs_invalid" };
 		writeFileSync(join(dir, "feedback.json"), "[]", { mode: 0o600 });
+		assert.deepEqual(await repairAt("repair-unassessed"), refused);
+
+		const candidate = storedAssessment({
+			runId,
+			round: 0,
+			generation: 0,
+			verdict,
+			assessment: {
+				kind: "failed",
+				failure: {
+					kind: "candidate",
+					reason: "candidate_heldout",
+					scenarios: ["S1"],
+				},
+			},
+		});
+
+		writeFileSync(join(dir, "assessment.json"), candidate.text, {
+			mode: 0o600,
+		});
+		assert.deepEqual(await repairAt("repair-legacy-feedback"), refused);
+		rmSync(join(dir, "feedback.json"));
+		assert.deepEqual(await repairAt("repair-missing-feedback"), refused);
+		const scenarios = [{ scenario: "S1", criteria: [{ id: "A1", text: "x" }] }];
+
+		writeFileSync(
+			join(dir, "feedback.json"),
+			feedbackBytes(
+				{ ...candidate.read.ref, recordDigest: digestOf("other") },
+				scenarios,
+			),
+			{ mode: 0o600 },
+		);
+		assert.deepEqual(await repairAt("repair-mismatched-feedback"), refused);
+		writeFileSync(
+			join(dir, "feedback.json"),
+			feedbackBytes(candidate.read.ref, scenarios),
+			{ mode: 0o600 },
+		);
+		assert.equal((await repairAt("repair-candidate")).kind, "ready");
+		assert.deepEqual(
+			JSON.parse(
+				readFileSync(
+					join(root, "repair-candidate", ".factory-feedback.json"),
+					"utf8",
+				),
+			).validation,
+			scenarios,
+		);
+
+		const oracle = storedAssessment({
+			runId,
+			round: 0,
+			generation: 0,
+			verdict,
+			assessment: {
+				kind: "failed",
+				failure: {
+					kind: "oracle",
+					cause: "unexpected_base",
+					scenarios: ["S1"],
+				},
+			},
+		});
+
+		writeFileSync(join(dir, "assessment.json"), oracle.text, { mode: 0o600 });
+		writeFileSync(
+			join(dir, "feedback.json"),
+			feedbackBytes(oracle.read.ref, scenarios),
+			{ mode: 0o600 },
+		);
+		assert.deepEqual(await repairAt("repair-oracle"), refused);
+		rmSync(join(dir, "feedback.json"));
+
+		writeFileSync(
+			join(dir, "assessment.json"),
+			storedAssessment({
+				runId,
+				round: 0,
+				generation: 0,
+				verdict,
+				assessment: { kind: "passed" },
+			}).text,
+			{ mode: 0o600 },
+		);
 		const repairWorkspace = join(root, "repair");
 
 		const repaired = await executor.checkout({

@@ -29,6 +29,7 @@ import {
 	type JsonValue,
 } from "../server/sandbox/json.ts";
 import { CONTROLLER_LOGIN } from "./markers.ts";
+import { type FailureClass, parseFailureClass } from "./diagnosis.ts";
 
 export { REQUIRED_CI_CHECKS } from "./run.ts";
 
@@ -161,6 +162,7 @@ export type ValidationResult =
 			readonly state: ValidationState;
 			readonly verdict: Verdict;
 			readonly report?: TrustedReport;
+			readonly assessment: ReadAssessment;
 	  }
 	| {
 			readonly kind: "failed";
@@ -516,4 +518,212 @@ export function parseValidationState(
 		return { ...state, generation: { index, digest: intent, previousHead } };
 
 	return state;
+}
+
+export type AssessmentRef = Readonly<{
+	bindingDigest: Digest;
+	recordDigest: Digest;
+}>;
+
+export type AssessmentBinding = Readonly<{
+	runId: Digest;
+	round: number;
+	generation: number;
+	candidateSha: string;
+	ciRunId: number;
+	verdictDigest: Digest;
+}>;
+
+export type ValidationAssessment =
+	| Readonly<{ kind: "passed" }>
+	| Readonly<{ kind: "failed"; failure: FailureClass }>;
+
+export type AssessmentRecord = Readonly<{
+	version: 1;
+	classifier: 1;
+	binding: AssessmentBinding;
+	assessment: ValidationAssessment;
+}>;
+
+export type ReadAssessment = Readonly<{
+	ref: AssessmentRef;
+	binding: AssessmentBinding;
+	assessment: ValidationAssessment;
+}>;
+
+export type RepairFeedbackFile = Readonly<{
+	version: 2;
+	assessment: AssessmentRef;
+	scenarios: ReturnType<typeof repairFeedback>;
+}>;
+
+export function assessmentBinding(input: {
+	runId: Digest;
+	round: number;
+	generation: number;
+	verdict: Verdict;
+}): AssessmentBinding {
+	return {
+		runId: input.runId,
+		round: input.round,
+		generation: input.generation,
+		candidateSha: input.verdict.candidateSha,
+		ciRunId: input.verdict.ciRunId,
+		verdictDigest: digestOf(JSON.stringify(input.verdict)),
+	};
+}
+
+export function assessmentBytes(
+	binding: AssessmentBinding,
+	assessment: ValidationAssessment,
+): string {
+	const record: AssessmentRecord = {
+		version: 1,
+		classifier: 1,
+		binding: {
+			runId: binding.runId,
+			round: binding.round,
+			generation: binding.generation,
+			candidateSha: binding.candidateSha,
+			ciRunId: binding.ciRunId,
+			verdictDigest: binding.verdictDigest,
+		},
+		assessment:
+			assessment.kind === "passed"
+				? { kind: "passed" }
+				: { kind: "failed", failure: assessment.failure },
+	};
+
+	return `${JSON.stringify(record)}\n`;
+}
+
+function parseAssessmentBinding(
+	value: JsonValue | undefined,
+): AssessmentBinding | null {
+	const v = objectOf(value);
+	const runId = textOf(fieldOf(v, "runId"));
+	const round = countOf(fieldOf(v, "round"));
+	const generation = countOf(fieldOf(v, "generation"));
+	const candidateSha = textOf(fieldOf(v, "candidateSha"));
+	const ciRunId = countOf(fieldOf(v, "ciRunId"));
+	const verdictDigest = textOf(fieldOf(v, "verdictDigest"));
+
+	return runId !== null &&
+		isDigest(runId) &&
+		round !== null &&
+		round <= 2 &&
+		generation !== null &&
+		generation <= 3 &&
+		candidateSha !== null &&
+		isGitSha(candidateSha) &&
+		ciRunId !== null &&
+		verdictDigest !== null &&
+		isDigest(verdictDigest)
+		? { runId, round, generation, candidateSha, ciRunId, verdictDigest }
+		: null;
+}
+
+export function readAssessmentBytes(text: string): ReadAssessment | null {
+	const v = objectOf(parseJson(text));
+	const binding = parseAssessmentBinding(fieldOf(v, "binding"));
+	const raw = objectOf(fieldOf(v, "assessment"));
+
+	const assessment: ValidationAssessment | null =
+		fieldOf(raw, "kind") === "passed"
+			? { kind: "passed" }
+			: fieldOf(raw, "kind") === "failed"
+				? (() => {
+						const failure = parseFailureClass(fieldOf(raw, "failure"));
+
+						return failure === null ? null : { kind: "failed", failure };
+					})()
+				: null;
+
+	if (
+		fieldOf(v, "version") !== 1 ||
+		fieldOf(v, "classifier") !== 1 ||
+		binding === null ||
+		assessment === null ||
+		assessmentBytes(binding, assessment) !== text
+	)
+		return null;
+
+	return {
+		ref: {
+			bindingDigest: digestOf(JSON.stringify(binding)),
+			recordDigest: digestOf(text),
+		},
+		binding,
+		assessment,
+	};
+}
+
+export function sameAssessmentRef(
+	a: AssessmentRef | null | undefined,
+	b: AssessmentRef | null | undefined,
+): boolean {
+	return (
+		a != null &&
+		b != null &&
+		a.bindingDigest === b.bindingDigest &&
+		a.recordDigest === b.recordDigest
+	);
+}
+
+export function feedbackBytes(
+	ref: AssessmentRef,
+	scenarios: ReturnType<typeof repairFeedback>,
+): string {
+	const file: RepairFeedbackFile = {
+		version: 2,
+		assessment: {
+			bindingDigest: ref.bindingDigest,
+			recordDigest: ref.recordDigest,
+		},
+		scenarios,
+	};
+
+	return `${JSON.stringify(file)}\n`;
+}
+
+export function readFeedbackBytes(
+	text: string,
+	ref: AssessmentRef,
+): ReturnType<typeof repairFeedback> | null {
+	const v = objectOf(parseJson(text));
+	const a = objectOf(fieldOf(v, "assessment"));
+	const list = arrayOf(fieldOf(v, "scenarios"));
+
+	const scenarios: {
+		scenario: string;
+		criteria: { id: string; text: string }[];
+	}[] = [];
+
+	for (const item of list ?? []) {
+		const o = objectOf(item);
+		const scenario = textOf(fieldOf(o, "scenario"));
+		const criteria: { id: string; text: string }[] = [];
+
+		for (const c of arrayOf(fieldOf(o, "criteria")) ?? []) {
+			const id = textOf(fieldOf(objectOf(c), "id"));
+			const body = textOf(fieldOf(objectOf(c), "text"));
+
+			if (id === null || body === null) return null;
+			criteria.push({ id, text: body });
+		}
+
+		if (scenario === null) return null;
+		scenarios.push({ scenario, criteria });
+	}
+
+	const bindingDigest = textOf(fieldOf(a, "bindingDigest"));
+	const recordDigest = textOf(fieldOf(a, "recordDigest"));
+
+	return fieldOf(v, "version") === 2 &&
+		list !== null &&
+		bindingDigest === ref.bindingDigest &&
+		recordDigest === ref.recordDigest &&
+		feedbackBytes(ref, scenarios) === text
+		? scenarios
+		: null;
 }

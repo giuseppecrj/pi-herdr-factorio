@@ -1023,3 +1023,94 @@ export const FAILURE_SENTENCES: Readonly<Record<FailureClass["kind"], string>> =
 		infrastructure:
 			"Held: validation could not execute reliably. No repair was started.",
 	};
+
+const MISSING_REASONS: readonly MissingEvidenceReason[] = [
+	"assessment_missing",
+	"identity_mismatch",
+	"incomplete_ci",
+	"base_missing",
+	"invalid_report",
+	"unsupported_tree",
+	"materialize_mismatch",
+	"ci_replay_disagrees",
+	"tree_replays_disagree",
+];
+
+const INFRASTRUCTURE_REASONS: readonly InfrastructureReason[] = [
+	"runner_unavailable",
+	"runner_error",
+	"timeout",
+	"dependency_transport",
+	"baseline_failed",
+	"interrupted",
+];
+
+const SCENARIO_ID = /^S[1-9][0-9]{0,2}$/;
+
+export function parseFailureClass(
+	value: JsonValue | undefined,
+): FailureClass | null {
+	const v = objectOf(value);
+	const kind = fieldOf(v, "kind");
+	const keys = Object.keys(v ?? {}).toSorted();
+	const scenarios = textsOf(fieldOf(v, "scenarios"));
+
+	const ids =
+		scenarios !== null &&
+		scenarios.length <= 50 &&
+		new Set(scenarios).size === scenarios.length &&
+		scenarios.every((s) => SCENARIO_ID.test(s));
+
+	if (kind === "candidate") {
+		const reason = fieldOf(v, "reason");
+
+		return ids &&
+			scenarios !== null &&
+			(reason === "candidate_check" || reason === "candidate_heldout") &&
+			keys.join() === "kind,reason,scenarios"
+			? { kind, reason, scenarios }
+			: null;
+	}
+
+	if (kind === "oracle")
+		return ids &&
+			scenarios !== null &&
+			scenarios.length > 0 &&
+			fieldOf(v, "cause") === "unexpected_base" &&
+			keys.join() === "cause,kind,scenarios"
+			? { kind, cause: "unexpected_base", scenarios }
+			: null;
+	const reason = textOf(fieldOf(v, "reason"));
+
+	if (keys.join() !== "kind,reason" || reason === null) return null;
+	const missingReason = MISSING_REASONS.find((r) => r === reason);
+
+	if (kind === "missing_evidence" && missingReason !== undefined)
+		return { kind, reason: missingReason };
+	const infraReason = INFRASTRUCTURE_REASONS.find((r) => r === reason);
+
+	return kind === "infrastructure" && infraReason !== undefined
+		? { kind, reason: infraReason }
+		: null;
+}
+
+export const DISAGREEMENT_SENTENCE = "Gate and candidate replays disagree.";
+
+export function diagnosisNotice(failure: FailureClass, key: string) {
+	const scenarios =
+		failure.kind === "candidate" || failure.kind === "oracle"
+			? failure.scenarios.filter((s) => SCENARIO_ID.test(s))
+			: [];
+
+	const extra =
+		failure.kind === "missing_evidence" &&
+		(failure.reason === "tree_replays_disagree" ||
+			failure.reason === "ci_replay_disagrees")
+			? ` ${DISAGREEMENT_SENTENCE}`
+			: "";
+
+	return {
+		key,
+		body: `${FAILURE_SENTENCES[failure.kind]}${extra}${scenarios.length > 0 ? ` Scenarios: ${scenarios.join(", ")}.` : ""}\n\n${key}`,
+	};
+}

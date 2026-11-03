@@ -24,8 +24,12 @@ import {
 import { writeAcceptance } from "../src/accept.ts";
 import {
 	assessBase,
+	classifyFailure,
 	type AcceptanceBinding,
 	type BaseProof,
+	type BaseReceipt,
+	type FailureClass,
+	type HeldoutReplay,
 } from "../src/diagnosis.ts";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -40,7 +44,15 @@ import {
 	type ReviewExecution,
 } from "../src/handoff.ts";
 import { candidateBranch } from "../src/publication.ts";
-import { dispatchNonce, type ValidationState } from "../src/validation.ts";
+import {
+	assessmentBinding,
+	assessmentBytes,
+	dispatchNonce,
+	readAssessmentBytes,
+	type ReadAssessment,
+	type ValidationAssessment,
+	type ValidationState,
+} from "../src/validation.ts";
 import type { PatchReceipt } from "../src/build.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
 import {
@@ -919,4 +931,156 @@ export function stageOf(run: Run): string {
 	return run.progress.kind === "active"
 		? run.progress.stage
 		: run.progress.kind;
+}
+
+export function storedAssessment(input: {
+	runId: Digest;
+	round: number;
+	generation: number;
+	verdict: Verdict;
+	assessment: ValidationAssessment;
+}) {
+	const text = assessmentBytes(assessmentBinding(input), input.assessment);
+	const read = readAssessmentBytes(text);
+	assert.ok(read !== null);
+
+	return { text, read: read satisfies ReadAssessment };
+}
+
+const heldoutFiles = [
+	"test/acceptance/9/checks/a.test.mjs",
+	"test/acceptance/9/checks/b.test.mjs",
+] as const;
+
+function replayTree(
+	failing: boolean,
+	kind: "assertion" | "load_error",
+): HeldoutReplay & { kind: "observed" } extends { gate: infer T } ? T : never {
+	const [first] = heldoutFiles;
+	const zero = failing && kind === "load_error";
+
+	return {
+		execution: {
+			kind: "observed",
+			exitCode: failing ? 1 : 0,
+			wallMs: 1,
+			files: heldoutFiles.map((file) => ({
+				file,
+				registered: file === first && zero ? 0 : 1,
+				failures:
+					failing && file === first
+						? [
+								{
+									file,
+									name: "check",
+									message: "m",
+									code: kind === "assertion" ? "ERR_ASSERTION" : null,
+									kind,
+								},
+							]
+						: [],
+			})),
+		},
+		projection: {
+			counts: Object.fromEntries(
+				heldoutFiles.map((f) => [f, f === first && zero ? 0 : 1]),
+			),
+			failed: failing ? [first] : [],
+			passed: !failing,
+		},
+	};
+}
+
+export function classifiedCase(
+	scenario: "tree_disagreement" | "candidate_load_error",
+): FailureClass {
+	const [first, second] = heldoutFiles;
+	const gate = base;
+	const candidate = "c".repeat(40);
+	const kind = scenario === "candidate_load_error" ? "load_error" : "assertion";
+	const baseContract = contractDigestOf("contract");
+	assert.ok(isGitSha(gate) && isGitSha(candidate) && isRepoSlug(repo));
+	const checks = [...REQUIRED_CI_CHECKS];
+
+	const baseReceipt: BaseReceipt = {
+		evidence: {
+			binding: {
+				runId: digestOf("r"),
+				repo,
+				issue: 9,
+				contractDigest: baseContract,
+				acceptanceDigest,
+				baseSha: gate,
+				gateSha: gate,
+			},
+			runtime: {
+				runner: "local-bwrap",
+				node: "v",
+				platform: "p",
+				bwrap: "b",
+				protocolDigest: digestOf("p"),
+			},
+			startedAt: 1,
+			finishedAt: 2,
+			source: {
+				kind: "ready",
+				treeDigest: digestOf("t"),
+				lockDigest: digestOf("l"),
+				gatesDigest: digestOf("g"),
+			},
+			execution: { kind: "observed", exitCode: 1, wallMs: 1, files: [] },
+			scenarios: [],
+		},
+		results: [
+			{ scenario: "S1", kind: "new_behavior", result: "expected_red" },
+			{ scenario: "S2", kind: "preservation", result: "preserved" },
+		],
+	};
+
+	return classifyFailure({
+		receipt: {
+			version: 2,
+			requiredChecks: checks,
+			tamperSignals: [],
+			heldoutDigest: "d".repeat(64),
+			heldoutCounts: { [first]: kind === "load_error" ? 0 : 1, [second]: 1 },
+			heldoutFailures: [first],
+			gateSha: gate,
+			candidateSha: candidate,
+			nonce: "n",
+			runner: "local-bwrap",
+			status: "failed",
+			reason: null,
+			checks: checks.map((name) => ({
+				name,
+				exitCode: name === "heldout" ? 1 : 0,
+				durationMs: 1,
+			})),
+			ignoredChanges: [],
+			replacementsDigest: "e".repeat(64),
+			modelCalls: 0,
+		},
+		identity: {
+			gateSha: gate,
+			candidateSha: candidate,
+			nonce: "n",
+			heldoutDigest: "d".repeat(64),
+			replacementsDigest: "e".repeat(64),
+		},
+		expected: [...heldoutFiles],
+		scenarios: [
+			{ scenario: "S1", kind: "new_behavior", file: first },
+			{ scenario: "S2", kind: "preservation", file: second },
+		],
+		base: baseReceipt,
+		ignoredChanges: [],
+		replay: {
+			kind: "observed",
+			files: [...heldoutFiles],
+			gate: replayTree(true, kind),
+			full: replayTree(scenario === "candidate_load_error", kind),
+			wallMs: 2,
+		},
+		dependencies: null,
+	});
 }
