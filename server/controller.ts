@@ -642,6 +642,7 @@ async function writeAtomic(path: string, text: string): Promise<boolean> {
 export type TarballFetch = (
 	repo: RepoSlug,
 	sha: GitSha,
+	bound?: Readonly<{ signal?: AbortSignal; deadline?: number }>,
 ) => Promise<
 	Buffer | { readonly kind: "refused"; readonly reason: string } | null
 >;
@@ -650,16 +651,24 @@ const TARBALL_MAX_BYTES = 64 * 1024 * 1024;
 
 const TARBALL_TIMEOUT_MS = 120_000;
 
-export const ghTarball: TarballFetch = (repo, sha) =>
+export const ghTarball: TarballFetch = (repo, sha, bound) =>
 	new Promise((done) => {
+		const timeout = Math.min(
+			TARBALL_TIMEOUT_MS,
+			bound?.deadline === undefined
+				? TARBALL_TIMEOUT_MS
+				: Math.max(1, bound.deadline - Date.now()),
+		);
+
 		execFile(
 			"gh",
 			["api", `repos/${repo}/tarball/${sha}`],
 			{
 				encoding: "buffer",
 				maxBuffer: TARBALL_MAX_BYTES,
-				timeout: TARBALL_TIMEOUT_MS,
+				timeout,
 				killSignal: "SIGKILL",
+				signal: bound?.signal,
 			},
 			(error, stdout) =>
 				done(
@@ -1132,6 +1141,41 @@ function parseLink(text: string): LinkRead {
  * workspace left half-extracted by a crash, with no record, is emptied and
  * extracted again.
  */
+async function boundedFetch(input: {
+	readonly repo: RepoSlug;
+	readonly sha: GitSha;
+	readonly fetch: TarballFetch;
+	readonly signal?: AbortSignal;
+	readonly deadline?: number;
+}): ReturnType<TarballFetch> {
+	const { signal, deadline } = input;
+
+	if (signal?.aborted || (deadline !== undefined && Date.now() >= deadline))
+		return null;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let onAbort = () => {};
+
+	const stopped = new Promise<null>((done) => {
+		onAbort = () => done(null);
+		signal?.addEventListener("abort", onAbort, { once: true });
+
+		if (deadline !== undefined)
+			timer = setTimeout(onAbort, Math.max(0, deadline - Date.now()));
+	});
+
+	try {
+		return await Promise.race([
+			input
+				.fetch(input.repo, input.sha, { signal, deadline })
+				.catch(() => null),
+			stopped,
+		]);
+	} finally {
+		clearTimeout(timer);
+		signal?.removeEventListener("abort", onAbort);
+	}
+}
+
 export async function checkoutWorkspace(input: {
 	readonly stateDir: string;
 	readonly runId: Digest;
@@ -1140,8 +1184,10 @@ export async function checkoutWorkspace(input: {
 	readonly sha: GitSha;
 	readonly fetch: TarballFetch;
 	readonly log?: Log;
+	readonly signal?: AbortSignal;
+	readonly deadline?: number;
 }): Promise<CheckoutResult> {
-	const { runId, workspace, repo, sha } = input;
+	const { runId, workspace, sha } = input;
 	const checkouts = join(resolve(input.stateDir), "checkouts");
 	const record = join(checkouts, `${runId}.json`);
 
@@ -1162,7 +1208,7 @@ export async function checkoutWorkspace(input: {
 			checkout: checkoutOf(workspace, listed.paths),
 		};
 
-	const gz = await input.fetch(repo, sha).catch(() => null);
+	const gz = await boundedFetch(input);
 
 	if (gz === null) return { kind: "unavailable" };
 
@@ -1823,6 +1869,9 @@ export function controllerDiagnosis(config: {
 		const abort = new AbortController();
 		const late = () => abort.signal.aborted || Date.now() >= deadline;
 
+		const acquireBy =
+			deadline - Math.min(5_000, Math.floor((deadline - startedAt) / 10));
+
 		const work = [
 			"gate",
 			"candidate",
@@ -1847,6 +1896,8 @@ export function controllerDiagnosis(config: {
 					repo: request.repo,
 					sha,
 					fetch: config.fetch ?? ghTarball,
+					signal: abort.signal,
+					deadline: acquireBy,
 				});
 
 				return checked.kind === "ready" && checked.omitted === 0;
@@ -1872,7 +1923,10 @@ export function controllerDiagnosis(config: {
 					...facts,
 					replay: {
 						kind: "unavailable",
-						reason: late() ? "timeout" : "unsupported_tree",
+						reason:
+							late() || Date.now() >= acquireBy
+								? "timeout"
+								: "unsupported_tree",
 						wallMs: Date.now() - startedAt,
 					},
 				};

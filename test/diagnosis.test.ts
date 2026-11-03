@@ -2208,6 +2208,45 @@ scoped(
 );
 
 scoped(
+	"tree acquisition honours the diagnosis deadline and stop, even when a fetch never returns (L5)",
+	async (t) => {
+		const w = await jobWorld(t, "synthetic-wrong-value");
+		w.hold(new Promise(() => {}));
+		const owner = w.owner();
+		const began = Date.now();
+		let result = await w.step(owner, w.deadline - 400);
+
+		while (result.kind === "waiting" && Date.now() - began < 3_000) {
+			await new Promise((r) => setTimeout(r, 25));
+			result = await w.step(owner, w.deadline - 400);
+		}
+
+		assert.deepEqual(finishedAssessment(result).assessment, {
+			kind: "failed",
+			failure: { kind: "infrastructure", reason: "timeout" },
+		});
+		assert.ok(Date.now() - began < 2_000, `${Date.now() - began} ms`);
+
+		const other = await jobWorld(t, "synthetic-wrong-value");
+		other.hold(new Promise(() => {}));
+		const stopping = other.owner();
+		assert.equal((await other.step(stopping)).kind, "waiting");
+
+		for (let i = 0; i < 100 && other.fetches.length === 0; i++)
+			await new Promise((r) => setTimeout(r, 10));
+		const asked = Date.now();
+
+		const stopped = await Promise.race([
+			stopping.stop(digestOf("job synthetic-wrong-value")).then(() => true),
+			new Promise<false>((r) => setTimeout(() => r(false), 2_000)),
+		]);
+
+		assert.equal(stopped, true);
+		assert.ok(Date.now() - asked < 1_000, `${Date.now() - asked} ms`);
+	},
+);
+
+scoped(
 	"an interrupted diagnosis is charged once, holds as infrastructure and never relaunches",
 	async (t) => {
 		const w = await jobWorld(t, "synthetic-wrong-value");
