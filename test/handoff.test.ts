@@ -15,6 +15,7 @@ import {
 	certifyGeneration,
 	notProven,
 	parseCandidateState,
+	reviewReceiptDigest,
 	parseReviewReceipt,
 	renderLimitation,
 } from "../src/handoff.ts";
@@ -370,6 +371,25 @@ function receipt(e: ReviewExecution): ReviewReceipt {
 			fallback: false,
 			tokens: 10,
 		})),
+	};
+}
+
+function blockingReceipt(e: ReviewExecution): ReviewReceipt {
+	const r = receipt(e);
+
+	return {
+		...r,
+		blocking: true,
+		seats: r.seats.map((seat, i) =>
+			i === 0
+				? {
+						...seat,
+						judgments: [
+							{ scenario: "S1", outcome: "fail", reason: "missing guard" },
+						],
+					}
+				: seat,
+		),
 	};
 }
 
@@ -876,6 +896,55 @@ test("an assessment bound to another verdict or contradicting it never repairs",
 	assert.notEqual(failedPass.work.kind, "repair_due");
 });
 
+test("a review-driven repair binds its blocking review receipt, and a non-blocking failed certification never repairs (L4)", () => {
+	const active = reviewing(validated(select()));
+
+	const settle = (review: ReviewReceipt) =>
+		selected(
+			handoffCandidate(active.state, {
+				kind: "review_settled",
+				execution: active.execution,
+				tokens: 7,
+				result: {
+					kind: "passed",
+					review,
+					patch: { kind: "found", receipt: patch, patch: "patch" },
+				},
+			}).state,
+		);
+
+	const blocking = blockingReceipt(active.execution);
+	const due = settle(blocking);
+	assert.ok(due.work.kind === "repair_due");
+	assert.deepEqual(due.work.cause, {
+		kind: "review",
+		assessment: due.current.assessment,
+		review: reviewReceiptDigest(blocking),
+	});
+	assert.equal(
+		reviewReceiptDigest(blocking),
+		digestOf(JSON.stringify(blocking)),
+	);
+	assert.deepEqual(parseCandidateState(JSON.parse(JSON.stringify(due))), due);
+
+	const wire = JSON.parse(JSON.stringify(due));
+	delete wire.work.cause.review;
+	assert.equal(parseCandidateState(wire), null);
+
+	const validation = JSON.parse(JSON.stringify(validated(select(), false)));
+	validation.work.cause.review = digestOf("review");
+	assert.equal(parseCandidateState(validation), null);
+
+	for (const review of [
+		{ ...receipt(active.execution), blocking: true },
+		{ ...blocking, blocking: false },
+		{ ...receipt(active.execution), ciRunId: 999 },
+	]) {
+		const held = settle(review);
+		assert.equal(held.work.kind, "held", JSON.stringify(review));
+	}
+});
+
 test("a persisted repair without its assessment cause does not parse", () => {
 	const issued = selected(
 		handoffCandidate(validated(select(), false), observed()).state,
@@ -1158,7 +1227,7 @@ test("canonical repair accounts share the two-round cap across validation and re
 					tokens: 7,
 					result: {
 						kind: "passed",
-						review: { ...receipt(active.execution), blocking: true },
+						review: blockingReceipt(active.execution),
 						patch: { kind: "found", receipt: nextPatch, patch: bytes },
 					},
 				}).state,

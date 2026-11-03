@@ -89,10 +89,14 @@ export type ReviewExecution = Readonly<{
 	seats: readonly ReviewSeat[];
 }>;
 
-export type RepairCause = Readonly<{
-	kind: "validation" | "review";
-	assessment: AssessmentRef;
-}>;
+export type RepairCause =
+	| Readonly<{ kind: "validation"; assessment: AssessmentRef }>
+	| Readonly<{ kind: "review"; assessment: AssessmentRef; review: Digest }>;
+
+/** The digest a review-driven repair binds: the receipt's stored JSON bytes. */
+export function reviewReceiptDigest(receipt: ReviewReceipt): Digest {
+	return digestOf(JSON.stringify(receipt));
+}
 
 export type RepairExecution = Readonly<{
 	id: Digest;
@@ -1646,13 +1650,20 @@ export function handoffCandidate(
 					};
 				} catch {
 					const passed = updated.current.assessment;
+					const review = event.result.review;
 
 					next =
-						passed === undefined
+						passed === undefined ||
+						!review.blocking ||
+						!blocksReview(review.seats)
 							? hold(updated, "evidence_unavailable", 0)
 							: failOrRepair(
 									updated,
-									{ kind: "review", assessment: passed },
+									{
+										kind: "review",
+										assessment: passed,
+										review: reviewReceiptDigest(review),
+									},
 									0,
 								);
 				}
@@ -1810,7 +1821,9 @@ function wireCause(
 
 	return (
 		v !== null &&
-		(v.kind === "validation" || v.kind === "review") &&
+		(v.kind === "validation"
+			? v.review === undefined
+			: v.kind === "review" && wireDigest(v.review)) &&
 		a !== null &&
 		wireDigest(a.bindingDigest) &&
 		wireDigest(a.recordDigest)

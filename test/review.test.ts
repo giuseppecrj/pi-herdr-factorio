@@ -28,6 +28,11 @@ import {
 	storedAssessment,
 } from "./helpers.ts";
 import { feedbackBytes } from "../src/validation.ts";
+import {
+	parseReviewReceipt,
+	reviewReceiptDigest,
+	type RepairCause,
+} from "../src/handoff.ts";
 import { digestOf } from "../src/run.ts";
 import {
 	mkdtempSync,
@@ -559,6 +564,8 @@ async function checkReviewTree(mode: string) {
 		writeFileSync(pinnedPath, workflow);
 		assert.deepEqual(fetched, expectedFetches);
 
+		let cause: RepairCause | undefined;
+
 		const repairAt = async (name: string) =>
 			executor.checkout({
 				runId,
@@ -567,6 +574,7 @@ async function checkReviewTree(mode: string) {
 				workspace: join(root, name),
 				build: true,
 				round: 1,
+				cause,
 			});
 
 		const refused = { kind: "refused", reason: "repair_inputs_invalid" };
@@ -591,6 +599,7 @@ async function checkReviewTree(mode: string) {
 		writeFileSync(join(dir, "assessment.json"), candidate.text, {
 			mode: 0o600,
 		});
+		cause = { kind: "validation", assessment: candidate.read.ref };
 		assert.deepEqual(await repairAt("repair-legacy-feedback"), refused);
 		rmSync(join(dir, "feedback.json"));
 		assert.deepEqual(await repairAt("repair-missing-feedback"), refused);
@@ -610,6 +619,20 @@ async function checkReviewTree(mode: string) {
 			feedbackBytes(candidate.read.ref, scenarios),
 			{ mode: 0o600 },
 		);
+		cause = undefined;
+		assert.deepEqual(await repairAt("repair-without-cause"), refused);
+		cause = {
+			kind: "review",
+			assessment: candidate.read.ref,
+			review: digestOf("review"),
+		};
+		assert.deepEqual(await repairAt("repair-candidate-as-review"), refused);
+		cause = {
+			kind: "validation",
+			assessment: { ...candidate.read.ref, recordDigest: digestOf("other") },
+		};
+		assert.deepEqual(await repairAt("repair-other-assessment"), refused);
+		cause = { kind: "validation", assessment: candidate.read.ref };
 		assert.equal((await repairAt("repair-candidate")).kind, "ready");
 		assert.deepEqual(
 			JSON.parse(
@@ -637,6 +660,7 @@ async function checkReviewTree(mode: string) {
 		});
 
 		writeFileSync(join(dir, "assessment.json"), oracle.text, { mode: 0o600 });
+		cause = { kind: "validation", assessment: oracle.read.ref };
 		writeFileSync(
 			join(dir, "feedback.json"),
 			feedbackBytes(oracle.read.ref, scenarios),
@@ -645,17 +669,81 @@ async function checkReviewTree(mode: string) {
 		assert.deepEqual(await repairAt("repair-oracle"), refused);
 		rmSync(join(dir, "feedback.json"));
 
-		writeFileSync(
-			join(dir, "assessment.json"),
-			storedAssessment({
-				runId,
-				round: 0,
-				generation: 0,
-				verdict,
-				assessment: { kind: "passed" },
-			}).text,
-			{ mode: 0o600 },
-		);
+		const passed = storedAssessment({
+			runId,
+			round: 0,
+			generation: 0,
+			verdict,
+			assessment: { kind: "passed" },
+		});
+
+		writeFileSync(join(dir, "assessment.json"), passed.text, { mode: 0o600 });
+		const reviewReceipt = join(reviewDir(state, runId, 0), "receipt.json");
+		mkdirSync(dirname(reviewReceipt), { recursive: true, mode: 0o700 });
+
+		const v1Receipt = (judgments: readonly object[], version = 1) =>
+			JSON.stringify({
+				...prepared.input.binding,
+				version,
+				r8: "incomplete",
+				seats: [
+					{
+						seat: "code-review",
+						findings: [],
+						judgments,
+						requested: "openai/gpt-6.1-sol",
+						observed: null,
+						label: "context-isolated",
+						fallback: false,
+						tokens: 1,
+					},
+				],
+				blocking: true,
+			});
+
+		const blockingText = v1Receipt([
+			{ scenario: "S1", pass: true, reason: "PASSED_REASON" },
+			{ scenario: "S2", pass: false, reason: "missing guard" },
+		]);
+
+		const blocking = parseReviewReceipt(parseJson(blockingText));
+		assert.ok(blocking !== null);
+
+		const reviewCause = (review: ReviewReceipt): RepairCause => ({
+			kind: "review",
+			assessment: passed.read.ref,
+			review: reviewReceiptDigest(review),
+		});
+
+		cause = reviewCause(blocking);
+		assert.deepEqual(await repairAt("repair-review-missing"), refused);
+		writeFileSync(reviewReceipt, blockingText, { mode: 0o600 });
+		cause = { kind: "validation", assessment: passed.read.ref };
+		assert.deepEqual(await repairAt("repair-passed-as-validation"), refused);
+		cause = {
+			kind: "review",
+			assessment: passed.read.ref,
+			review: digestOf("other"),
+		};
+		assert.deepEqual(await repairAt("repair-review-mismatch"), refused);
+
+		const cleared = {
+			...blocking,
+			blocking: false,
+			seats: blocking.seats.map((seat) => ({
+				...seat,
+				judgments: seat.judgments.map((j) => ({
+					...j,
+					outcome: "pass" as const,
+				})),
+			})),
+		};
+
+		writeFileSync(reviewReceipt, JSON.stringify(cleared), { mode: 0o600 });
+		cause = reviewCause(cleared);
+		assert.deepEqual(await repairAt("repair-review-not-blocking"), refused);
+		writeFileSync(reviewReceipt, blockingText, { mode: 0o600 });
+		cause = reviewCause(blocking);
 		const repairWorkspace = join(root, "repair");
 
 		const repaired = await executor.checkout({
@@ -665,6 +753,7 @@ async function checkReviewTree(mode: string) {
 			workspace: repairWorkspace,
 			build: true,
 			round: 1,
+			cause,
 		});
 
 		assert.equal(repaired.kind, "ready");
@@ -695,37 +784,6 @@ async function checkReviewTree(mode: string) {
 			Buffer.from(repairedPatch.patch).toString(),
 			/-export const value = 0/,
 		);
-		const reviewReceipt = join(reviewDir(state, runId, 0), "receipt.json");
-		mkdirSync(dirname(reviewReceipt), { recursive: true, mode: 0o700 });
-
-		const v1Receipt = (judgments: readonly object[], version = 1) =>
-			JSON.stringify({
-				...prepared.input.binding,
-				version,
-				r8: "incomplete",
-				seats: [
-					{
-						seat: "code-review",
-						findings: [],
-						judgments,
-						requested: "openai/gpt-6.1-sol",
-						observed: null,
-						label: "context-isolated",
-						fallback: false,
-						tokens: 1,
-					},
-				],
-				blocking: true,
-			});
-
-		writeFileSync(
-			reviewReceipt,
-			v1Receipt([
-				{ scenario: "S1", pass: true, reason: "PASSED_REASON" },
-				{ scenario: "S2", pass: false, reason: "missing guard" },
-			]),
-			{ mode: 0o600 },
-		);
 		const migratedWorkspace = join(root, "repair-v1");
 		assert.equal(
 			(
@@ -736,6 +794,7 @@ async function checkReviewTree(mode: string) {
 					workspace: migratedWorkspace,
 					build: true,
 					round: 1,
+					cause,
 				})
 			).kind,
 			"ready",
@@ -777,6 +836,7 @@ async function checkReviewTree(mode: string) {
 					workspace: join(root, `repair-malformed-${i}`),
 					build: true,
 					round: 1,
+					cause,
 				}),
 				{ kind: "refused", reason: "repair_inputs_invalid" },
 				malformed,

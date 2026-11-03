@@ -16,6 +16,7 @@ import {
 	type CandidateEffectResult,
 	type CandidateExecution,
 	type GenerationRef,
+	type RepairCause,
 	type PrObservation,
 } from "./handoff.ts";
 import {
@@ -307,6 +308,7 @@ export interface StageExecutor {
 		readonly build?: boolean;
 		readonly round?: number;
 		readonly feedbackFrom?: GenerationRef;
+		readonly cause?: RepairCause;
 	}): Promise<CheckoutResult>;
 }
 
@@ -4641,6 +4643,12 @@ export class Orchestrator {
 					run.handoff.work.kind === "effect" &&
 					run.handoff.work.request.kind === "repair_build"
 						? run.handoff.work.request.execution.feedbackFrom
+						: undefined,
+				cause:
+					run.handoff?.kind === "selected" &&
+					run.handoff.work.kind === "effect" &&
+					run.handoff.work.request.kind === "repair_build"
+						? run.handoff.work.request.execution.cause
 						: undefined,
 			})
 			.catch((): CheckoutResult => ({ kind: "unavailable" }));
