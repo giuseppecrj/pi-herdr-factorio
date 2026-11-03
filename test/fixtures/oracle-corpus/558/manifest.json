@@ -1,0 +1,74 @@
+{
+	"fixture": 558,
+	"issue": 558,
+	"baseSha": "f42ab429e74c25760c2d563d939af7f4b9b6f406",
+	"provenance": "Recorded held-out check bytes from the public published test/acceptance/558/checks/ of fixture 558, kept under original/.",
+	"originalPackaging": "Version 1: one shared check file per original file, mapping several scenarios and criteria to the same file.",
+	"version2Mapping": "Each scenario owns one file: the original file header (imports, load-time reads and helpers) followed by the original test bodies listed under tests, unchanged. The original canary comment is dropped; the store plants a fresh one.",
+	"baseFiles": [
+		{
+			"path": "skills/README.md",
+			"commit": "f42ab429e74c25760c2d563d939af7f4b9b6f406",
+			"blob": "30e11736c6b18a41584f8c2b8f263919cd236fdf",
+			"sha256": "86b1a3a7c93c4d72f9a5690cd03e1cbce053153279f0da4c408b73637308d2cc"
+		}
+	],
+	"criteria": [
+		{
+			"id": "A1",
+			"kind": "new_behavior",
+			"text": "A1: README exposes a nonempty Human review section; A5: Human review includes a Markdown link to the owner guide"
+		},
+		{
+			"id": "A2",
+			"kind": "preservation",
+			"text": "A6: provenance/license table remains byte-for-byte intact; Compatibility: existing stage and bundle descriptions remain intact and ordered"
+		},
+		{
+			"id": "A3",
+			"kind": "preservation",
+			"text": "A7: builder patch changes only skills/README.md; A7: existing npm run check succeeds"
+		}
+	],
+	"scenarios": [
+		{
+			"id": "S1",
+			"criteria": ["A1"],
+			"file": "v2/s1.test.mjs.txt",
+			"path": "s1.test.mjs",
+			"original": "original/documentation.test.mjs.txt",
+			"tests": [
+				"A1: README exposes a nonempty Human review section",
+				"A5: Human review includes a Markdown link to the owner guide"
+			]
+		},
+		{
+			"id": "S2",
+			"criteria": ["A2"],
+			"file": "v2/s2.test.mjs.txt",
+			"path": "s2.test.mjs",
+			"original": "original/documentation.test.mjs.txt",
+			"tests": [
+				"A6: provenance/license table remains byte-for-byte intact",
+				"Compatibility: existing stage and bundle descriptions remain intact and ordered"
+			]
+		},
+		{
+			"id": "S3",
+			"criteria": ["A3"],
+			"file": "v2/s3.test.mjs.txt",
+			"path": "s3.test.mjs",
+			"original": "original/patch-and-check.test.mjs.txt",
+			"tests": [
+				"A7: builder patch changes only skills/README.md",
+				"A7: existing npm run check succeeds"
+			]
+		}
+	],
+	"expected": {
+		"outcome": "refused",
+		"reason": "base_load_error"
+	},
+	"gates": "Replays run the current trusted .github/factory/gates, because the base-era reporter predates the private facts the base check reads.",
+	"baseTree": "Only the base files the suite reads, each verified against its recorded blob, plus a dependency-free package.json and lockfile."
+}

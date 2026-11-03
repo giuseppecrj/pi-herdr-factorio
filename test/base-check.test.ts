@@ -36,6 +36,42 @@ import {
 import { digestOf } from "../src/run.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
 
+function missing(argv: readonly string[]): string | null {
+	const [command = "", ...args] = argv;
+
+	try {
+		execFileSync(command, args, { stdio: "ignore", timeout: 10_000 });
+
+		return null;
+	} catch {
+		return `${argv.join(" ")} failed in this environment`;
+	}
+}
+
+const bwrap = missing([
+	"bwrap",
+	"--unshare-all",
+	"--die-with-parent",
+	"--ro-bind",
+	"/",
+	"/",
+	"true",
+]);
+
+const scope =
+	bwrap ?? missing(["systemd-run", "--user", "--scope", "--quiet", "true"]);
+
+const checkout = missing(["git", "rev-parse", "--verify", "HEAD"]);
+
+function where(
+	absent: string | null,
+	name: string,
+	fn: (t: import("node:test").TestContext) => Promise<void>,
+) {
+	if (absent === null) test(name, fn);
+	else test(name, (t) => t.diagnostic(`not run: ${absent}`));
+}
+
 const criteria = [
 	{ id: "A1", kind: "new_behavior" as const, text: "Return two" },
 	{ id: "A2", kind: "preservation" as const, text: "Keep errors" },
@@ -343,7 +379,7 @@ export async function baseFixture(
 }
 
 for (const [name, source, want, kind] of cases)
-	test(`isolated base: ${name}`, async (t) => {
+	where(bwrap, `isolated base: ${name}`, async (t) => {
 		const f = await baseFixture(t, prefix + source, kind);
 		assert.equal(
 			f.assessment.kind,
@@ -365,32 +401,36 @@ for (const [name, source, want, kind] of cases)
 		assert.equal(f.evidence.runtime.runner, "local-bwrap");
 	});
 
-test("isolated base: no git, no host state or network, and timeout is never red", async (t) => {
-	const f = await baseFixture(
-		t,
-		prefix +
-			"import {existsSync} from 'node:fs'; test('boundary',()=>{assert.equal(existsSync('.git'),false);assert.equal(existsSync('/home/g'),false);assert.equal(existsSync('/run/user'),false); assert.equal(1,2);});",
-	);
-
-	assert.equal(f.assessment.kind, "ready", JSON.stringify(f.evidence));
-
-	const hang = await baseFixture(
-		t,
-		prefix + "test('hang',async()=>{await new Promise(()=>{});});",
-		"new_behavior",
-		500,
-	);
-
-	assert.equal(hang.assessment.kind, "refused");
-
-	if (hang.assessment.kind === "refused")
-		assert.ok(
-			["base_timeout", "base_cancelled"].includes(
-				hang.assessment.failure.reason,
-			),
-			JSON.stringify(hang.evidence),
+where(
+	bwrap,
+	"isolated base: no git, no host state or network, and timeout is never red",
+	async (t) => {
+		const f = await baseFixture(
+			t,
+			prefix +
+				"import {existsSync} from 'node:fs'; test('boundary',()=>{assert.equal(existsSync('.git'),false);assert.equal(existsSync('/home/g'),false);assert.equal(existsSync('/run/user'),false); assert.equal(1,2);});",
 		);
-});
+
+		assert.equal(f.assessment.kind, "ready", JSON.stringify(f.evidence));
+
+		const hang = await baseFixture(
+			t,
+			prefix + "test('hang',async()=>{await new Promise(()=>{});});",
+			"new_behavior",
+			500,
+		);
+
+		assert.equal(hang.assessment.kind, "refused");
+
+		if (hang.assessment.kind === "refused")
+			assert.ok(
+				["base_timeout", "base_cancelled"].includes(
+					hang.assessment.failure.reason,
+				),
+				JSON.stringify(hang.evidence),
+			);
+	},
+);
 
 function git(cwd: string, ...args: string[]): string {
 	return execFileSync("git", ["-C", cwd, ...args], {
@@ -421,30 +461,34 @@ function tarballOf(repository: string, sha: string): Buffer {
 	);
 }
 
-test("tarball checkout and CI's exportTree produce the same base tree digest at the real repository head", async (t) => {
-	const root = mkdtempSync(join(tmpdir(), "factory-parity-"));
-	t.after(() => rmSync(root, { recursive: true, force: true }));
-	const sha = git(".", "rev-parse", "HEAD").trim();
-	assert.ok(isGitSha(sha));
-	const repo = "owner/repo";
-	assert.ok(isRepoSlug(repo));
-	const exported = join(root, "exported");
-	await exportTree(".", sha, exported);
-	const workspace = join(root, "workspace");
-	mkdirSync(workspace);
+where(
+	checkout,
+	"tarball checkout and CI's exportTree produce the same base tree digest at the real repository head",
+	async (t) => {
+		const root = mkdtempSync(join(tmpdir(), "factory-parity-"));
+		t.after(() => rmSync(root, { recursive: true, force: true }));
+		const sha = git(".", "rev-parse", "HEAD").trim();
+		assert.ok(isGitSha(sha));
+		const repo = "owner/repo";
+		assert.ok(isRepoSlug(repo));
+		const exported = join(root, "exported");
+		await exportTree(".", sha, exported);
+		const workspace = join(root, "workspace");
+		mkdirSync(workspace);
 
-	const checkout = await checkoutWorkspace({
-		stateDir: join(root, "state"),
-		runId: digestOf("parity"),
-		workspace,
-		repo,
-		sha,
-		fetch: async () => tarballOf(".", sha),
-	});
+		const checkout = await checkoutWorkspace({
+			stateDir: join(root, "state"),
+			runId: digestOf("parity"),
+			workspace,
+			repo,
+			sha,
+			fetch: async () => tarballOf(".", sha),
+		});
 
-	assert.equal(checkout.kind, "ready");
-	assert.equal(baseTreeDigest(workspace), baseTreeDigest(exported));
-});
+		assert.equal(checkout.kind, "ready");
+		assert.equal(baseTreeDigest(workspace), baseTreeDigest(exported));
+	},
+);
 
 async function controllerWorld(
 	t: { after(fn: () => void): void },
@@ -597,252 +641,470 @@ async function settled(
 	return progress;
 }
 
-test("controller base check runs in a scope, keeps 0600 receipts, survives restart and charges an interruption once", async (t) => {
-	const { state, contract, binding, reference, signal, counter, fetch } =
-		await controllerWorld(t);
+where(
+	scope,
+	"controller base check runs in a scope, keeps 0600 receipts, survives restart and charges an interruption once",
+	async (t) => {
+		const { state, contract, binding, reference, signal, counter, fetch } =
+			await controllerWorld(t);
 
-	const checker = controllerBaseChecker({ stateDir: state, fetch });
-	assert.deepEqual(
-		await checker.check({ ...reference, acceptAttempt: 1, signal }),
-		{
-			kind: "checking",
-		},
-	);
+		const checker = controllerBaseChecker({ stateDir: state, fetch });
+		assert.deepEqual(
+			await checker.check({ ...reference, acceptAttempt: 1, signal }),
+			{
+				kind: "checking",
+			},
+		);
 
-	let progress = await checker.check({
-		...reference,
-		acceptAttempt: 1,
-		signal,
-	});
+		let progress = await checker.check({
+			...reference,
+			acceptAttempt: 1,
+			signal,
+		});
 
-	for (let i = 0; i < 200 && progress.kind === "checking"; i++) {
-		await new Promise((r) => setTimeout(r, 50));
-		progress = await checker.check({ ...reference, acceptAttempt: 1, signal });
-	}
-
-	assert.equal(progress.kind, "ready", JSON.stringify(progress));
-	assert.equal(counter.fetches, 1);
-
-	const dir = join(
-		state,
-		"base-check",
-		contract.runId,
-		digestOf(JSON.stringify(binding)),
-		"a1",
-	);
-
-	assert.deepEqual(readdirSync(dir).sort(), [
-		"intent.json",
-		"result.digest",
-		"result.json",
-	]);
-
-	for (const name of readdirSync(dir))
-		assert.equal(statSync(join(dir, name)).mode & 0o777, 0o600);
-	assert.equal(statSync(dir).mode & 0o777, 0o700);
-	const receipt = JSON.parse(readFileSync(join(dir, "result.json"), "utf8"));
-	assert.deepEqual(
-		receipt.results.map((r: { result: string }) => r.result),
-		["expected_red", "preserved"],
-	);
-	assert.equal(receipt.evidence.source.kind, "ready");
-	assert.match(
-		JSON.stringify(readFileSync(join(dir, "intent.json"), "utf8")),
-		/factory-stage-[0-9a-f]{8}-[0-9a-f]{16}-basecheck-1-/,
-	);
-
-	const restarted = controllerBaseChecker({ stateDir: state, fetch });
-
-	const again = await restarted.check({
-		...reference,
-		acceptAttempt: 1,
-		signal,
-		readOnly: true,
-	});
-
-	assert.equal(again.kind, "ready");
-	assert.equal(counter.fetches, 1);
-	assert.equal(
-		(
-			await restarted.check({
+		for (let i = 0; i < 200 && progress.kind === "checking"; i++) {
+			await new Promise((r) => setTimeout(r, 50));
+			progress = await checker.check({
 				...reference,
-				acceptAttempt: 9,
+				acceptAttempt: 1,
 				signal,
-				readOnly: true,
-			})
-		).kind,
-		"ready",
-	);
-	assert.equal(existsSync(join(dirname(dir), "a9")), false);
+			});
+		}
 
-	const a2 = join(dirname(dir), "a2");
-	mkdirSync(a2, { mode: 0o700 });
-	writeFileSync(
-		join(a2, "intent.json"),
-		`${JSON.stringify({ bindingDigest: digestOf(JSON.stringify(binding)), binding, startedAt: 1000, deadline: 4000 })}\n`,
-		{ mode: 0o600 },
-	);
+		assert.equal(progress.kind, "ready", JSON.stringify(progress));
+		assert.equal(counter.fetches, 1);
 
-	const interrupted = await restarted.check({
-		...reference,
-		acceptAttempt: 2,
-		signal,
-	});
+		const dir = join(
+			state,
+			"base-check",
+			contract.runId,
+			digestOf(JSON.stringify(binding)),
+			"a1",
+		);
 
-	assert.deepEqual(interrupted, { kind: "interrupted", wallMs: 3000 });
-	assert.deepEqual(
-		await controllerBaseChecker({ stateDir: state, fetch }).check({
+		assert.deepEqual(readdirSync(dir).sort(), [
+			"intent.json",
+			"result.digest",
+			"result.json",
+		]);
+
+		for (const name of readdirSync(dir))
+			assert.equal(statSync(join(dir, name)).mode & 0o777, 0o600);
+		assert.equal(statSync(dir).mode & 0o777, 0o700);
+		const receipt = JSON.parse(readFileSync(join(dir, "result.json"), "utf8"));
+		assert.deepEqual(
+			receipt.results.map((r: { result: string }) => r.result),
+			["expected_red", "preserved"],
+		);
+		assert.equal(receipt.evidence.source.kind, "ready");
+		assert.match(
+			JSON.stringify(readFileSync(join(dir, "intent.json"), "utf8")),
+			/factory-stage-[0-9a-f]{8}-[0-9a-f]{16}-basecheck-1-/,
+		);
+
+		const restarted = controllerBaseChecker({ stateDir: state, fetch });
+
+		const again = await restarted.check({
+			...reference,
+			acceptAttempt: 1,
+			signal,
+			readOnly: true,
+		});
+
+		assert.equal(again.kind, "ready");
+		assert.equal(counter.fetches, 1);
+		assert.equal(
+			(
+				await restarted.check({
+					...reference,
+					acceptAttempt: 9,
+					signal,
+					readOnly: true,
+				})
+			).kind,
+			"ready",
+		);
+		assert.equal(existsSync(join(dirname(dir), "a9")), false);
+
+		const a2 = join(dirname(dir), "a2");
+		mkdirSync(a2, { mode: 0o700 });
+		writeFileSync(
+			join(a2, "intent.json"),
+			`${JSON.stringify({ bindingDigest: digestOf(JSON.stringify(binding)), binding, startedAt: 1000, deadline: 4000 })}\n`,
+			{ mode: 0o600 },
+		);
+
+		const interrupted = await restarted.check({
 			...reference,
 			acceptAttempt: 2,
 			signal,
+		});
+
+		assert.deepEqual(interrupted, { kind: "interrupted", wallMs: 3000 });
+		assert.deepEqual(
+			await controllerBaseChecker({ stateDir: state, fetch }).check({
+				...reference,
+				acceptAttempt: 2,
+				signal,
+			}),
+			interrupted,
+		);
+
+		const third = controllerBaseChecker({ stateDir: state, fetch });
+		assert.equal(
+			(await third.check({ ...reference, acceptAttempt: 3, signal })).kind,
+			"checking",
+		);
+		await third.stop(contract.runId);
+
+		const intent = JSON.parse(
+			readFileSync(join(dirname(dir), "a3", "intent.json"), "utf8"),
+		);
+
+		const charged =
+			receipt.evidence.finishedAt - receipt.evidence.startedAt + 3000;
+
+		assert.equal(
+			intent.deadline - intent.startedAt,
+			Math.min(180_000, 900_000 - charged),
+		);
+	},
+);
+
+where(
+	scope,
+	"a real ustar with a symlink is reported partial and never qualifies",
+	async (t) => {
+		const w = await controllerWorld(t, (source) => {
+			writeFileSync(join(source, "kept.txt"), "kept\n");
+			symlinkSync("kept.txt", join(source, "dropped-link"));
+		});
+
+		const workspace = join(w.root, "workspace");
+		mkdirSync(workspace);
+
+		const checkout = await checkoutWorkspace({
+			stateDir: join(w.root, "specify-state"),
+			runId: w.contract.runId,
+			workspace,
+			repo: w.binding.repo,
+			sha: w.sha,
+			fetch: w.fetch,
+		});
+
+		assert.equal(checkout.kind, "ready");
+		assert.equal(checkout.kind === "ready" && checkout.omitted, 1);
+
+		const progress = await settled(
+			controllerBaseChecker({ stateDir: w.state, fetch: w.fetch }),
+			{ ...w.reference, acceptAttempt: 1, signal: w.signal },
+		);
+
+		assert.equal(progress.kind, "refused", JSON.stringify(progress));
+		assert.equal(
+			progress.kind === "refused" && progress.failure.reason,
+			"base_tree_unsupported",
+		);
+	},
+);
+
+where(
+	scope,
+	"the base check never reuses a model-writable workspace as its tree",
+	async (t) => {
+		const w = await controllerWorld(t);
+		const files = fileRunFiles(w.state);
+		const workspace = files.workspacePath(w.contract.runId);
+		mkdirSync(workspace, { recursive: true });
+
+		const listed = await checkoutWorkspace({
+			stateDir: w.state,
+			runId: w.contract.runId,
+			workspace,
+			repo: w.binding.repo,
+			sha: w.sha,
+			fetch: w.fetch,
+		});
+
+		assert.equal(listed.kind, "ready");
+		writeFileSync(
+			join(workspace, "src/value.mjs"),
+			"export const value = 2;\n",
+		);
+
+		const progress = await settled(
+			controllerBaseChecker({ stateDir: w.state, fetch: w.fetch }),
+			{ ...w.reference, acceptAttempt: 1, signal: w.signal },
+		);
+
+		assert.equal(progress.kind, "ready", JSON.stringify(progress));
+	},
+);
+
+where(
+	bwrap,
+	"the base check runs the base tree's gates, records their digest and refuses without them",
+	async (t) => {
+		const trusted = await baseFixture(
+			t,
+			`${prefix}test('red',()=>assert.equal(1,2));`,
+		);
+
+		assert.equal(
+			trusted.assessment.kind,
+			"ready",
+			JSON.stringify(trusted.evidence),
+		);
+		assert.ok(trusted.evidence.source.kind === "ready");
+		assert.equal(
+			trusted.evidence.source.kind === "ready" &&
+				trusted.evidence.source.gatesDigest,
+			baseTreeDigest(join(trusted.tree, ".github/factory/gates")),
+		);
+
+		const forged = await baseFixture(
+			t,
+			`${prefix}test('red',()=>assert.equal(1,2));`,
+			"new_behavior",
+			10_000,
+			{
+				reporter:
+					'export default async function* r(e){for await (const _ of e);yield \'{"complete":true,"bad":false,"counts":{},"failures":[]}\\n\';}\n',
+			},
+		);
+
+		assert.equal(
+			forged.assessment.kind,
+			"refused",
+			JSON.stringify(forged.evidence),
+		);
+		assert.notEqual(
+			forged.evidence.runtime.protocolDigest,
+			trusted.evidence.runtime.protocolDigest,
+		);
+
+		const absent = await baseFixture(
+			t,
+			`${prefix}test('red',()=>assert.equal(1,2));`,
+			"new_behavior",
+			10_000,
+			"absent",
+		);
+
+		assert.equal(absent.assessment.kind, "refused");
+		assert.equal(
+			absent.assessment.kind === "refused" && absent.assessment.failure.reason,
+			"base_tree_unsupported",
+		);
+	},
+);
+
+where(
+	scope,
+	"a base check whose gate SHA is not its base SHA is refused before running",
+	async (t) => {
+		const w = await controllerWorld(t);
+		const gateSha = "f".repeat(40);
+		assert.ok(isGitSha(gateSha));
+		const binding = { ...w.binding, gateSha };
+
+		const progress = await settled(
+			controllerBaseChecker({ stateDir: w.state, fetch: w.fetch }),
+			{ ...w.reference, binding, acceptAttempt: 1, signal: w.signal },
+		);
+
+		assert.equal(progress.kind, "refused");
+		assert.equal(w.counter.fetches, 0);
+	},
+);
+
+type CorpusManifest = Readonly<{
+	issue: number;
+	baseSha: string;
+	baseFiles: readonly Readonly<{ path: string; blob: string }>[];
+	criteria: readonly Readonly<{
+		id: string;
+		kind: "new_behavior" | "preservation";
+		text: string;
+	}>[];
+	scenarios: readonly Readonly<{
+		id: string;
+		criteria: readonly string[];
+		file: string;
+		path: string;
+	}>[];
+	expected: Readonly<{ reason: BaseReason; scenarios?: readonly string[] }>;
+}>;
+
+async function replay(
+	t: { after(fn: () => void): void },
+	fixture: string,
+	replace: Readonly<Record<string, string>> = {},
+) {
+	const corpus = resolve("test/fixtures/oracle-corpus", fixture);
+
+	const manifest: CorpusManifest = JSON.parse(
+		readFileSync(join(corpus, "manifest.json"), "utf8"),
+	);
+
+	const root = mkdtempSync(join(tmpdir(), `factory-replay-${fixture}-`));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	const tree = join(root, "base");
+
+	for (const file of manifest.baseFiles) {
+		const bytes = readFileSync(join(corpus, "base", file.path));
+
+		const blob = execFileSync("git", ["hash-object", "--stdin"], {
+			input: bytes,
+			encoding: "utf8",
+		}).trim();
+
+		assert.equal(blob, file.blob, `${file.path} is the recorded base blob`);
+		mkdirSync(dirname(join(tree, file.path)), { recursive: true });
+		writeFileSync(join(tree, file.path), bytes);
+	}
+
+	cpSync(
+		resolve(".github/factory/gates"),
+		join(tree, ".github/factory/gates"),
+		{ recursive: true },
+	);
+	writeFileSync(
+		join(tree, "package.json"),
+		'{"name":"base","version":"1.0.0","type":"module"}',
+	);
+	writeFileSync(
+		join(tree, "package-lock.json"),
+		'{"name":"base","version":"1.0.0","lockfileVersion":3,"packages":{"":{"name":"base","version":"1.0.0"}}}',
+	);
+
+	const repo = "owner/repo",
+		sha = manifest.baseSha;
+
+	assert.ok(isRepoSlug(repo) && isGitSha(sha));
+	const [first, ...rest] = manifest.criteria;
+	assert.ok(first !== undefined);
+
+	const contract: Contract = {
+		version: 2,
+		runId: digestOf(`replay ${fixture}`),
+		issue: manifest.issue,
+		base: { repo, sha },
+		snapshot: {
+			digest: digestOf("snapshot"),
+			source: "unedited",
+			eventId: "1",
+			eventAt: "2026-11-02T00:00:00Z",
+		},
+		link: null,
+		summary: `Replay of fixture ${fixture}`,
+		behavior: ["Recorded fixture behavior"],
+		exclusions: [],
+		acceptance: [{ ...first }, ...rest.map((c) => ({ ...c }))],
+		compatibility: [],
+		limits: [],
+		files: [],
+		evidence: [],
+	};
+
+	const parsed = writeAcceptance(
+		JSON.stringify({
+			version: 2,
+			scenarios: manifest.scenarios.map((s) => ({
+				id: s.id,
+				criteria: s.criteria,
+				checks: [s.path],
+				judge: null,
+			})),
+			files: manifest.scenarios.map((s) => ({
+				path: s.path,
+				type: "node:test",
+				content: replace[s.id] ?? readFileSync(join(corpus, s.file), "utf8"),
+			})),
 		}),
-		interrupted,
+		contract,
 	);
 
-	const third = controllerBaseChecker({ stateDir: state, fetch });
-	assert.equal(
-		(await third.check({ ...reference, acceptAttempt: 3, signal })).kind,
-		"checking",
-	);
-	await third.stop(contract.runId);
+	assert.ok(parsed.kind === "suite", JSON.stringify(parsed));
 
-	const intent = JSON.parse(
-		readFileSync(join(dirname(dir), "a3", "intent.json"), "utf8"),
-	);
+	const startedAt = Date.now();
 
-	const charged =
-		receipt.evidence.finishedAt - receipt.evidence.startedAt + 3000;
-
-	assert.equal(
-		intent.deadline - intent.startedAt,
-		Math.min(180_000, 900_000 - charged),
-	);
-});
-
-test("a real ustar with a symlink is reported partial and never qualifies", async (t) => {
-	const w = await controllerWorld(t, (source) => {
-		writeFileSync(join(source, "kept.txt"), "kept\n");
-		symlinkSync("kept.txt", join(source, "dropped-link"));
+	const evidence = await runHeldoutBase({
+		tree,
+		workDir: join(root, "execution"),
+		cacheDir: join(root, "dependencies"),
+		binding: {
+			runId: contract.runId,
+			repo,
+			issue: manifest.issue,
+			contractDigest: contractDigestOf(contractBytes(contract)),
+			acceptanceDigest: digestOf(`suite ${fixture}`),
+			baseSha: sha,
+			gateSha: sha,
+		},
+		contract,
+		suite: parsed.suite,
+		canary: `factory-holdout-${"0".repeat(64)}`,
+		startedAt,
+		deadline: startedAt + 60_000,
 	});
 
-	const workspace = join(w.root, "workspace");
-	mkdirSync(workspace);
+	return { manifest, evidence, ...assessBase(evidence) };
+}
 
-	const checkout = await checkoutWorkspace({
-		stateDir: join(w.root, "specify-state"),
-		runId: w.contract.runId,
-		workspace,
-		repo: w.binding.repo,
-		sha: w.sha,
-		fetch: w.fetch,
-	});
+for (const fixture of ["558", "561", "568"])
+	where(
+		bwrap,
+		`replays fixture ${fixture}'s recorded suite on its real base content`,
+		async (t) => {
+			const r = await replay(t, fixture);
 
-	assert.equal(checkout.kind, "ready");
-	assert.equal(checkout.kind === "ready" && checkout.omitted, 1);
+			const results = Object.fromEntries(
+				r.receipt.results.map((x) => [x.scenario, x.result]),
+			);
 
-	const progress = await settled(
-		controllerBaseChecker({ stateDir: w.state, fetch: w.fetch }),
-		{ ...w.reference, acceptAttempt: 1, signal: w.signal },
-	);
+			assert.equal(r.assessment.kind, "refused", JSON.stringify(results));
 
-	assert.equal(progress.kind, "refused", JSON.stringify(progress));
-	assert.equal(
-		progress.kind === "refused" && progress.failure.reason,
-		"base_tree_unsupported",
-	);
-});
+			if (r.assessment.kind !== "refused") return;
+			assert.equal(
+				r.assessment.failure.reason,
+				r.manifest.expected.reason,
+				JSON.stringify(results),
+			);
 
-test("the base check never reuses a model-writable workspace as its tree", async (t) => {
-	const w = await controllerWorld(t);
-	const files = fileRunFiles(w.state);
-	const workspace = files.workspacePath(w.contract.runId);
-	mkdirSync(workspace, { recursive: true });
-
-	const listed = await checkoutWorkspace({
-		stateDir: w.state,
-		runId: w.contract.runId,
-		workspace,
-		repo: w.binding.repo,
-		sha: w.sha,
-		fetch: w.fetch,
-	});
-
-	assert.equal(listed.kind, "ready");
-	writeFileSync(join(workspace, "src/value.mjs"), "export const value = 2;\n");
-
-	const progress = await settled(
-		controllerBaseChecker({ stateDir: w.state, fetch: w.fetch }),
-		{ ...w.reference, acceptAttempt: 1, signal: w.signal },
-	);
-
-	assert.equal(progress.kind, "ready", JSON.stringify(progress));
-});
-
-test("the base check runs the base tree's gates, records their digest and refuses without them", async (t) => {
-	const trusted = await baseFixture(
-		t,
-		`${prefix}test('red',()=>assert.equal(1,2));`,
-	);
-
-	assert.equal(
-		trusted.assessment.kind,
-		"ready",
-		JSON.stringify(trusted.evidence),
-	);
-	assert.ok(trusted.evidence.source.kind === "ready");
-	assert.equal(
-		trusted.evidence.source.kind === "ready" &&
-			trusted.evidence.source.gatesDigest,
-		baseTreeDigest(join(trusted.tree, ".github/factory/gates")),
-	);
-
-	const forged = await baseFixture(
-		t,
-		`${prefix}test('red',()=>assert.equal(1,2));`,
-		"new_behavior",
-		10_000,
-		{
-			reporter:
-				'export default async function* r(e){for await (const _ of e);yield \'{"complete":true,"bad":false,"counts":{},"failures":[]}\\n\';}\n',
+			for (const id of r.manifest.expected.scenarios ?? [])
+				assert.equal(results[id], r.manifest.expected.reason);
+			assert.doesNotMatch(
+				baseRefusalNotice(r.assessment.failure).body,
+				/Human review|viewer|git|assert|\.mjs/i,
+			);
+			t.diagnostic(`${fixture}: ${JSON.stringify(results)}`);
 		},
 	);
 
-	assert.equal(
-		forged.assessment.kind,
-		"refused",
-		JSON.stringify(forged.evidence),
-	);
-	assert.notEqual(
-		forged.evidence.runtime.protocolDigest,
-		trusted.evidence.runtime.protocolDigest,
-	);
+where(
+	bwrap,
+	"a minimal correct version-2 suite qualifies on fixture 568's real base",
+	async (t) => {
+		const r = await replay(t, "568", {
+			S4: `import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
-	const absent = await baseFixture(
-		t,
-		`${prefix}test('red',()=>assert.equal(1,2));`,
-		"new_behavior",
-		10_000,
-		"absent",
-	);
+const document = readFileSync('docs/operations/viewer.md', 'utf8');
 
-	assert.equal(absent.assessment.kind, "refused");
-	assert.equal(
-		absent.assessment.kind === "refused" && absent.assessment.failure.reason,
-		"base_tree_unsupported",
-	);
+test('existing startup guidance remains available', () => {
+  assert.match(document, /node server\\/cli\\.ts viewer --state-dir "\\$STATE" --run "\\$RUN_ID" --port 8080/);
+  assert.match(document, /viewer_ready bind=127\\.0\\.0\\.1 port=8080/);
+  assert.match(document, /Invalid arguments exit 2/);
 });
+`,
+		});
 
-test("a base check whose gate SHA is not its base SHA is refused before running", async (t) => {
-	const w = await controllerWorld(t);
-	const gateSha = "f".repeat(40);
-	assert.ok(isGitSha(gateSha));
-	const binding = { ...w.binding, gateSha };
-
-	const progress = await settled(
-		controllerBaseChecker({ stateDir: w.state, fetch: w.fetch }),
-		{ ...w.reference, binding, acceptAttempt: 1, signal: w.signal },
-	);
-
-	assert.equal(progress.kind, "refused");
-	assert.equal(w.counter.fetches, 0);
-});
+		assert.equal(r.assessment.kind, "ready", JSON.stringify(r.receipt.results));
+		assert.deepEqual(
+			r.receipt.results.map((x) => x.result),
+			["expected_red", "expected_red", "expected_red", "preserved"],
+		);
+	},
+);

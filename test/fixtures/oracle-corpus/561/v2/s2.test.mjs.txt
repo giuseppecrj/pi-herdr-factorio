@@ -1,0 +1,71 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+const original = [
+  '# Skills',
+  '',
+  "These are the factory's stage skills. The specify stage runs `audit-ticket`, `grill-me` and `deep-research`, in that order. Accept runs `acceptance` in a fresh sandbox session with the immutable contract and trusted base only. Build runs `build` with the applicable Feature or Bug fix playbook excerpt read from the pinned pstack dependency in that same bundle. It receives no suite or previous session. Review runs fresh sequential code-review, security-review and simplify seats, plus ultrareview for deterministic risk paths. The security seat alone has a refusal fallback.",
+  '',
+  '`server/provision.sh` copies every skill directory into the sandbox bundle at `skills/`, so the bundle digest in each stage receipt names the exact skill text that ran. The stage executor reads each `SKILL.md` from the bundle on the host and appends it to the stage prompt. The stage Pi runs with `--no-skills`, so it loads no other skill.',
+  '',
+  'Each skill sets `disable-model-invocation`, because it is a stage prompt and not a skill for an interactive session.',
+  '',
+  '| Skill | Upstream | License | `SOURCE.md` |',
+  '| --- | --- | --- | --- |',
+  "| `audit-ticket` | none, a clean-room rewrite | this repository's MIT | `audit-ticket/SOURCE.md` |",
+  "| `acceptance` | none, clean-room scenario-holdout skill | this repository's MIT | `acceptance/SOURCE.md` |",
+  "| `build` | factory protocol plus bundled pstack playbook | repository MIT and pstack's bundled license | `build/SOURCE.md` |",
+  '| `grill-me` | `mattpocock/skills` `grilling` at `59db609` | MIT, Matt Pocock, `grill-me/LICENSE` | `grill-me/SOURCE.md` |',
+  '| `code-review` | `anthropics/claude-plugins-official` at `f8c5e7a` | Apache-2.0, `code-review/LICENSE` | `code-review/SOURCE.md` |',
+  '| `security-review` | `anthropics/claude-code-security-review` at `0c6a49f` | MIT, `security-review/LICENSE` | `security-review/SOURCE.md` |',
+  '| `simplify` | none, written fresh | repository MIT | `simplify/SOURCE.md` |',
+  '| `ultrareview` | none, written fresh | repository MIT | `ultrareview/SOURCE.md` |',
+  '| `deep-research` | `mattpocock/skills` `research` at `59db609` | MIT, Matt Pocock, `deep-research/LICENSE` | `deep-research/SOURCE.md` |'
+].join('\n');
+
+function document() {
+  return readFileSync('skills/README.md', 'utf8').replace(/\r\n/g, '\n');
+}
+
+function section() {
+  const text = document();
+  const headings = [...text.matchAll(/^(#{1,6})[ \t]+Human review[ \t]*#*[ \t]*$/gmi)];
+  assert.equal(headings.length, 1, 'Provide one Markdown Human review section');
+  const heading = headings[0];
+  const start = heading.index;
+  const bodyStart = start + heading[0].length;
+  const rest = text.slice(bodyStart);
+  const next = new RegExp('^#{1,' + heading[1].length + '}[ \\t]+', 'm').exec(rest);
+  const end = next ? bodyStart + next.index : text.length;
+  return { text, start, end, body: text.slice(bodyStart, end) };
+}
+
+function prose() {
+  return section().body.replace(/[`*_]/g, '').replace(/[\u2010-\u2014]/g, '-').replace(/\s+/g, ' ').trim();
+}
+
+function sentences() {
+  return prose().split(/(?<=[.!?;])\s+/);
+}
+
+function someSentence(patterns, message) {
+  assert.ok(sentences().some(s => patterns.every(pattern => pattern.test(s))), message);
+}
+
+test('S2: sandboxed models lack GitHub writes; the trusted controller owns publication and progress', () => {
+  someSentence([
+    /sandbox(?:ed)?/i,
+    /model|stages?/i,
+    /github/i,
+    /(?:no|without|lack\w*|not|cannot|can't|never|neither)\b/i,
+    /writ(?:e|es|ing)|write authority|write access|write permissions?/i
+  ], 'Explicitly deny GitHub write authority to sandboxed model stages');
+  someSentence([
+    /trusted controller/i,
+    /publish|publication|publishing/i,
+    /progress/i,
+    /report|updat|summar/i
+  ], 'Assign publication and progress reporting to the trusted controller');
+  assert.doesNotMatch(prose(), /sandboxed model stages (?:have|retain|receive) (?:full |direct )?github write (?:authority|access)/i);
+});
