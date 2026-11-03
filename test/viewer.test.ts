@@ -25,7 +25,11 @@ import { escapeHtml } from "../server/viewer/render.ts";
 import { runCli } from "../server/cli.ts";
 import { readStageReceipt, runSpecify } from "../server/sandbox.ts";
 import { readStoredVerdict, fileRunFiles } from "../server/controller.ts";
-import { candidateLifecycleFixture, verdictAssessment } from "./helpers.ts";
+import {
+	candidateLifecycleFixture,
+	storedAssessment,
+	verdictAssessment,
+} from "./helpers.ts";
 import {
 	beginCandidate,
 	candidateGenerations,
@@ -724,6 +728,104 @@ test("viewer shows selected generation round zero separately from active repair 
 		await rm(f.root, { recursive: true, force: true });
 	}
 });
+
+test("viewer timeline shows each assessment's class and subreason, never private details, and a gap when it is unreadable", async () => {
+	const f = await lifecycleState();
+
+	try {
+		const evidence = candidateGenerations(f.book)[0];
+		assert.ok(evidence?.verdict);
+		const g = evidence.intent;
+		const dir = validationDir(f.root, runId, g.round, g.generation);
+		const failed = { ...evidence.verdict, pass: false };
+
+		const cases: [import("../src/diagnosis.ts").FailureClass, RegExp][] = [
+			[
+				{ kind: "missing_evidence", reason: "tree_replays_disagree" },
+				/^missing_evidence: tree_replays_disagree\. Gate and candidate replays disagree\. No repair spent\.$/,
+			],
+			[
+				{ kind: "missing_evidence", reason: "ci_replay_disagrees" },
+				/^missing_evidence: ci_replay_disagrees\. CI and the gate-tree replay disagree\. No repair spent\.$/,
+			],
+			[
+				{
+					kind: "missing_evidence",
+					reason: "materialize_mismatch",
+					differing: 2,
+				},
+				/^missing_evidence: materialize_mismatch\. The replay's ignored changes differ from CI's in 2 paths\. No repair spent\.$/,
+			],
+			[
+				{ kind: "infrastructure", reason: "timeout" },
+				/^infrastructure: timeout\. Held\. No repair spent\.$/,
+			],
+			[
+				{ kind: "oracle", cause: "unexpected_base", scenarios: ["S1"] },
+				/^oracle: unexpected_base\. Scenarios S1\. No repair spent\.$/,
+			],
+			[
+				{
+					kind: "candidate",
+					reason: "candidate_heldout",
+					scenarios: ["S1"],
+				},
+				/^candidate: candidate_heldout\. Scenarios S1\. One bounded repair authorized\.$/,
+			],
+		];
+
+		for (const [failure, detail] of cases) {
+			await writeFile(
+				join(dir, "assessment.json"),
+				verdictAssessmentText(g.round, g.generation, failed, failure),
+				{ mode: 0o600 },
+			);
+
+			const viewed = await readViewerRun(f.root, runId);
+			const shown = viewed.timeline.filter((e) => e.event === "diagnosis");
+			assert.equal(shown.length, 1);
+			assert.match(shown[0]?.detail ?? "", detail);
+			assert.equal(shown[0]?.round, g.round);
+			assert.equal(shown[0]?.generation, g.generation);
+			assert.ok(!viewed.gaps.some((x) => x.source.endsWith("assessment.json")));
+		}
+
+		await writeFile(join(dir, "assessment.json"), '{"kind":"failed"}\n', {
+			mode: 0o600,
+		});
+		let viewed = await readViewerRun(f.root, runId);
+		assert.equal(
+			viewed.timeline.some((e) => e.event === "diagnosis"),
+			false,
+		);
+		assert.ok(viewed.gaps.some((x) => x.source.endsWith("assessment.json")));
+
+		await rm(join(dir, "assessment.json"));
+		viewed = await readViewerRun(f.root, runId);
+		assert.equal(
+			viewed.timeline.some((e) => e.event === "diagnosis"),
+			false,
+		);
+		assert.ok(!viewed.gaps.some((x) => x.source.endsWith("assessment.json")));
+	} finally {
+		await rm(f.root, { recursive: true, force: true });
+	}
+});
+
+function verdictAssessmentText(
+	round: number,
+	generation: number,
+	verdict: import("../src/run.ts").Verdict,
+	failure: import("../src/diagnosis.ts").FailureClass,
+): string {
+	return storedAssessment({
+		runId,
+		round,
+		generation,
+		verdict,
+		assessment: { kind: "failed", failure },
+	}).text;
+}
 
 for (const matched of [true, false])
 	test(`viewer records actual merged head independently of current refresh readiness (matched=${matched})`, async () => {
