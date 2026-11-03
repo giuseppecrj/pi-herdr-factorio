@@ -3021,7 +3021,10 @@ export function controllerCandidatePort(config: {
 			contract.digest,
 		);
 
-		if (suite.kind !== "found")
+		if (
+			suite.kind !== "found" ||
+			suite.receipt.acceptanceDigest !== certificate.verdict.acceptanceDigest
+		)
 			throw new PublicationError("evidence_unavailable");
 
 		const limitations = notProven({

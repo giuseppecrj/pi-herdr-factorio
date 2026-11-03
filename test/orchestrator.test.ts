@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import {
 	chmodSync,
+	cpSync,
 	existsSync,
 	mkdirSync,
 	symlinkSync,
@@ -198,7 +199,9 @@ function memoryFiles(): RunFiles & {
 	links: Map<string, Link>;
 	answers: Map<string, AnswersRecord>;
 	unavailable: Set<"contract" | "link">;
+	artifactRoot: string;
 } {
+	const artifactRoot = stateDir();
 	const claims = new Map<string, ClaimRecord>();
 	const workspaces = new Set<string>();
 	const contracts = new Map<string, { bytes: string; digest: string }>();
@@ -209,7 +212,8 @@ function memoryFiles(): RunFiles & {
 	const unavailable = new Set<"contract" | "link">();
 
 	return {
-		artifacts: fileRunFiles(stateDir()).artifacts,
+		artifactRoot,
+		artifacts: fileRunFiles(artifactRoot).artifacts,
 		async readContract(runId) {
 			const stored = contracts.get(runId);
 
@@ -7581,6 +7585,11 @@ describe("controller-only validate", () => {
 					digest: contract.digest,
 				}),
 				true,
+			);
+			cpSync(
+				join(f.files.artifactRoot, "acceptance"),
+				join(root, "acceptance"),
+				{ recursive: true },
 			);
 			const opening = claim.handoff.work.request;
 			const branch = opening.branch;
