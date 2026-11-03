@@ -1521,6 +1521,8 @@ export async function runHeldoutBase(input: {
 		wallMs: 0,
 	};
 
+	let repeat: PrivateExecution = execution;
+
 	const remaining = () => {
 		if (input.signal?.aborted || Date.now() >= input.deadline)
 			throw new Error("base_timeout");
@@ -1572,40 +1574,52 @@ export async function runHeldoutBase(input: {
 		remaining();
 		source = { kind: "ready", treeDigest, lockDigest, gatesDigest };
 		const tree = join(input.workDir, "tree");
-		cpSync(input.tree, tree, {
-			recursive: true,
-			errorOnExist: true,
-			force: false,
-		});
-
-		if (dependency !== undefined)
-			mkdirSync(join(tree, "node_modules"), { recursive: true });
-
-		for (const [path, bytes] of acceptanceEntries(
-			input.suite,
-			input.canary,
-		).filter(([p]) => p.startsWith("checks/"))) {
-			const target = join(tree, `test/acceptance/${input.binding.issue}`, path);
-			mkdirSync(dirname(target), { recursive: true });
-			writeFileSync(target, bytes, { flag: "wx", mode: 0o600 });
-		}
 
 		const files = scenarios.flatMap((s) =>
 			s.mode === "checked" ? [s.file] : [],
 		);
 
-		const started = Date.now();
+		const once = async (): Promise<PrivateExecution> => {
+			rmSync(tree, { recursive: true, force: true });
+			cpSync(input.tree, tree, {
+				recursive: true,
+				errorOnExist: true,
+				force: false,
+			});
 
-		const result = await run.run({
-			tree,
-			gates,
-			dependencies: dependency,
-			argv: testArgv(files),
-		});
+			if (dependency !== undefined)
+				mkdirSync(join(tree, "node_modules"), { recursive: true });
 
-		execution = privateExecution(result, files, Date.now() - started);
+			for (const [path, bytes] of acceptanceEntries(
+				input.suite,
+				input.canary,
+			).filter(([p]) => p.startsWith("checks/"))) {
+				const target = join(
+					tree,
+					`test/acceptance/${input.binding.issue}`,
+					path,
+				);
+
+				mkdirSync(dirname(target), { recursive: true });
+				writeFileSync(target, bytes, { flag: "wx", mode: 0o600 });
+			}
+
+			const started = Date.now();
+
+			const result = await run.run({
+				tree,
+				gates,
+				dependencies: dependency,
+				argv: testArgv(files),
+			});
+
+			return privateExecution(result, files, Date.now() - started);
+		};
+
+		execution = await once();
+		repeat = await once();
 	} catch (error) {
-		execution = {
+		const failed: PrivateExecution = {
 			kind: "unavailable",
 			reason:
 				input.signal?.aborted ||
@@ -1615,6 +1629,9 @@ export async function runHeldoutBase(input: {
 					: "runner_error",
 			wallMs: 0,
 		};
+
+		if (execution.kind === "observed") repeat = failed;
+		else execution = repeat = failed;
 	}
 
 	return {
@@ -1624,6 +1641,7 @@ export async function runHeldoutBase(input: {
 		finishedAt: Date.now(),
 		source,
 		execution,
+		repeat,
 		scenarios,
 	};
 }

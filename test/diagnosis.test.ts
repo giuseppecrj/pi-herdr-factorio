@@ -725,6 +725,7 @@ function unitInput(
 				gatesDigest: digestOf("g"),
 			},
 			execution: { kind: "observed", exitCode: 1, wallMs: 1, files: [] },
+			repeat: { kind: "observed", exitCode: 1, wallMs: 1, files: [] },
 			scenarios: [],
 		},
 		results: [

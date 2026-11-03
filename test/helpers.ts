@@ -856,6 +856,27 @@ export function apply(run: Run, ...events: RunEvent[]): Run {
 }
 
 export function qualifiedProof(binding: AcceptanceBinding): BaseProof {
+	const execution = {
+		kind: "observed",
+		exitCode: 1,
+		wallMs: 1,
+		files: [
+			{
+				file: "a.test.ts",
+				registered: 1,
+				failures: [
+					{
+						file: "a.test.ts",
+						name: "red",
+						message: "assertion",
+						kind: "assertion",
+						code: "ERR_ASSERTION",
+					},
+				],
+			},
+		],
+	} as const;
+
 	const { assessment } = assessBase({
 		binding,
 		runtime: {
@@ -873,26 +894,8 @@ export function qualifiedProof(binding: AcceptanceBinding): BaseProof {
 			lockDigest: digestOf("lock"),
 			gatesDigest: digestOf("gates"),
 		},
-		execution: {
-			kind: "observed",
-			exitCode: 1,
-			wallMs: 1,
-			files: [
-				{
-					file: "a.test.ts",
-					registered: 1,
-					failures: [
-						{
-							file: "a.test.ts",
-							name: "red",
-							message: "assertion",
-							kind: "assertion",
-							code: "ERR_ASSERTION",
-						},
-					],
-				},
-			],
-		},
+		execution,
+		repeat: execution,
 		scenarios: [
 			{
 				scenario: "S1",
@@ -1042,6 +1045,7 @@ export function classifiedCase(
 				gatesDigest: digestOf("g"),
 			},
 			execution: { kind: "observed", exitCode: 1, wallMs: 1, files: [] },
+			repeat: { kind: "observed", exitCode: 1, wallMs: 1, files: [] },
 			scenarios: [],
 		},
 		results: [

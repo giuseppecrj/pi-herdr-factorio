@@ -137,6 +137,7 @@ export type BaseReason =
 	| "base_cancelled"
 	| "base_tree_unsupported"
 	| "base_interrupted"
+	| "base_nondeterministic"
 	| "base_evidence_missing";
 
 export type ScenarioBaseEvidence = Readonly<{
@@ -162,6 +163,7 @@ export type BaseEvidence = Readonly<{
 		  }>
 		| Readonly<{ kind: "unavailable"; reason: string }>;
 	execution: PrivateExecution;
+	repeat: PrivateExecution;
 	scenarios: readonly ScenarioBaseEvidence[];
 }>;
 
@@ -237,7 +239,7 @@ export function oracleKey(
 	};
 }
 
-export const BASE_PROTOCOL_VERSION = "heldout-base-v2-1";
+export const BASE_PROTOCOL_VERSION = "heldout-base-v2-2";
 
 const UNSUPPORTED_TREE: ReadonlySet<string> = new Set([
 	"tree_partial",
@@ -260,21 +262,37 @@ export type BaseEvaluation = Readonly<{
 	assessment: BaseAssessment;
 }>;
 
+export function executionOutcomes(execution: PrivateExecution): string | null {
+	return execution.kind === "observed"
+		? JSON.stringify(
+				execution.files
+					.map((f) => [f.file, f.registered, signature([f])])
+					.toSorted((a, b) => (String(a[0]) < String(b[0]) ? -1 : 1)),
+			)
+		: null;
+}
+
 export function assessBase(evidence: BaseEvidence): BaseEvaluation {
 	const execution = evidence.execution;
+
+	const unavailable = [execution, evidence.repeat].find(
+		(x) => x.kind === "unavailable",
+	);
 
 	const global: BaseReason | null =
 		evidence.source.kind !== "ready"
 			? UNSUPPORTED_TREE.has(evidence.source.reason)
 				? "base_tree_unsupported"
 				: "base_runner_error"
-			: execution.kind === "unavailable"
-				? execution.reason === "timeout"
+			: unavailable?.kind === "unavailable"
+				? unavailable.reason === "timeout"
 					? "base_timeout"
-					: execution.reason === "runner_error"
+					: unavailable.reason === "runner_error"
 						? "base_runner_error"
 						: "base_evidence_missing"
-				: null;
+				: executionOutcomes(execution) !== executionOutcomes(evidence.repeat)
+					? "base_nondeterministic"
+					: null;
 
 	const results: ScenarioBaseResult[] = evidence.scenarios.map((s) => {
 		if (global !== null)
@@ -368,6 +386,79 @@ export function assessBase(evidence: BaseEvidence): BaseEvaluation {
 	};
 }
 
+function parseExecution(value: JsonValue | undefined): PrivateExecution | null {
+	const x = objectOf(value),
+		wallMs = countOf(fieldOf(x, "wallMs"));
+
+	if (wallMs === null) return null;
+
+	if (fieldOf(x, "kind") === "unavailable") {
+		const reason = fieldOf(x, "reason");
+
+		if (
+			reason !== "runner_error" &&
+			reason !== "timeout" &&
+			reason !== "invalid_report"
+		)
+			return null;
+
+		return { kind: "unavailable", reason, wallMs };
+	}
+
+	const exitCode = countOf(fieldOf(x, "exitCode")),
+		rawFiles = arrayOf(fieldOf(x, "files"));
+
+	if (
+		fieldOf(x, "kind") !== "observed" ||
+		exitCode === null ||
+		rawFiles === null
+	)
+		return null;
+	const files: FileObservation[] = [];
+
+	for (const raw of rawFiles) {
+		const v = objectOf(raw),
+			file = textOf(fieldOf(v, "file")),
+			registered = countOf(fieldOf(v, "registered")),
+			rawFailures = arrayOf(fieldOf(v, "failures"));
+
+		if (file === null || registered === null || rawFailures === null)
+			return null;
+		const failures: TestFailure[] = [];
+
+		for (const item of rawFailures) {
+			const f = objectOf(item),
+				failureFile = textOf(fieldOf(f, "file")),
+				name = textOf(fieldOf(f, "name")),
+				message = textOf(fieldOf(f, "message")),
+				code = fieldOf(f, "code"),
+				kind = fieldOf(f, "kind");
+
+			if (
+				failureFile !== file ||
+				name === null ||
+				name.length > 300 ||
+				message === null ||
+				message.length > 200 ||
+				(code !== null && textOf(code) === null) ||
+				(kind !== "assertion" &&
+					kind !== "runtime_error" &&
+					kind !== "load_error" &&
+					kind !== "timeout" &&
+					kind !== "skip" &&
+					kind !== "todo" &&
+					kind !== "cancelled")
+			)
+				return null;
+			failures.push({ file, name, message, code: textOf(code), kind });
+		}
+
+		files.push({ file, registered, failures });
+	}
+
+	return { kind: "observed", exitCode, wallMs, files };
+}
+
 export function parseBaseReceipt(text: string): BaseReceipt | null {
 	const record = objectOf(parseJson(text));
 	const e = objectOf(fieldOf(record, "evidence"));
@@ -458,76 +549,10 @@ export function parseBaseReceipt(text: string): BaseReceipt | null {
 		}
 	}
 
-	const x = objectOf(fieldOf(e, "execution")),
-		wallMs = countOf(fieldOf(x, "wallMs"));
+	const execution = parseExecution(fieldOf(e, "execution")),
+		repeat = parseExecution(fieldOf(e, "repeat"));
 
-	if (wallMs === null) return null;
-	let execution: PrivateExecution;
-
-	if (fieldOf(x, "kind") === "unavailable") {
-		const reason = fieldOf(x, "reason");
-
-		if (
-			reason !== "runner_error" &&
-			reason !== "timeout" &&
-			reason !== "invalid_report"
-		)
-			return null;
-		execution = { kind: "unavailable", reason, wallMs };
-	} else {
-		const exitCode = countOf(fieldOf(x, "exitCode")),
-			rawFiles = arrayOf(fieldOf(x, "files"));
-
-		if (
-			fieldOf(x, "kind") !== "observed" ||
-			exitCode === null ||
-			rawFiles === null
-		)
-			return null;
-		const files: FileObservation[] = [];
-
-		for (const raw of rawFiles) {
-			const v = objectOf(raw),
-				file = textOf(fieldOf(v, "file")),
-				registered = countOf(fieldOf(v, "registered")),
-				rawFailures = arrayOf(fieldOf(v, "failures"));
-
-			if (file === null || registered === null || rawFailures === null)
-				return null;
-			const failures: TestFailure[] = [];
-
-			for (const item of rawFailures) {
-				const f = objectOf(item),
-					failureFile = textOf(fieldOf(f, "file")),
-					name = textOf(fieldOf(f, "name")),
-					message = textOf(fieldOf(f, "message")),
-					code = fieldOf(f, "code"),
-					kind = fieldOf(f, "kind");
-
-				if (
-					failureFile !== file ||
-					name === null ||
-					name.length > 300 ||
-					message === null ||
-					message.length > 200 ||
-					(code !== null && textOf(code) === null) ||
-					(kind !== "assertion" &&
-						kind !== "runtime_error" &&
-						kind !== "load_error" &&
-						kind !== "timeout" &&
-						kind !== "skip" &&
-						kind !== "todo" &&
-						kind !== "cancelled")
-				)
-					return null;
-				failures.push({ file, name, message, code: textOf(code), kind });
-			}
-
-			files.push({ file, registered, failures });
-		}
-
-		execution = { kind: "observed", exitCode, wallMs, files };
-	}
+	if (execution === null || repeat === null) return null;
 
 	const evidence: BaseEvidence = {
 		binding,
@@ -536,6 +561,7 @@ export function parseBaseReceipt(text: string): BaseReceipt | null {
 		finishedAt,
 		source,
 		execution,
+		repeat,
 		scenarios,
 	};
 
@@ -561,6 +587,8 @@ export function baseRefusalNotice(failure: BaseRefusal) {
 			"The unchanged base tree is partial or lacks its trusted gates.",
 		base_interrupted:
 			"Base qualification was interrupted on every accept attempt.",
+		base_nondeterministic:
+			"Two base runs of the checks gave different results.",
 		base_evidence_missing:
 			"Base qualification evidence is incomplete or invalid.",
 	};
