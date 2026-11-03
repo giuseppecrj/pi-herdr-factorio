@@ -90,6 +90,7 @@ import {
 	type AcceptanceBinding,
 	type BaseCheckInput,
 	type BaseCheckProgress,
+	type BaseReason,
 	type BaseReceipt,
 	type DiagnosisNeeds,
 	type FailureClass,
@@ -1545,6 +1546,7 @@ export function controllerBaseChecker(config: {
 
 export type DiagnosisFacts = Readonly<{
 	base: BaseReceipt | null;
+	baseRefusal: BaseReason | null;
 	ignoredChanges: readonly string[] | null;
 	replay: HeldoutReplay | null;
 	dependencies: Readonly<{ reason: string | null }> | null;
@@ -1769,6 +1771,7 @@ export function controllerDiagnosis(config: {
 
 			let facts: DiagnosisFacts = {
 				base: request.base.kind === "stored" ? request.base.receipt : null,
+				baseRefusal: null,
 				ignoredChanges: null,
 				replay: null,
 				dependencies: null,
@@ -1788,7 +1791,7 @@ export function controllerDiagnosis(config: {
 					facts = { ...facts, dependencies: dependencyFacts(gate, candidate) };
 
 				if (request.needs.replay && request.base.kind === "fresh") {
-					const { receipt } = assessBase(
+					const { receipt, assessment } = assessBase(
 						await runHeldoutBase({
 							tree: gate,
 							workDir: join(root, "base"),
@@ -1809,7 +1812,12 @@ export function controllerDiagnosis(config: {
 						join(root, "refreshed-base.json"),
 						JSON.stringify(receipt),
 					);
-					facts = { ...facts, base: receipt };
+					facts = {
+						...facts,
+						base: receipt,
+						baseRefusal:
+							assessment.kind === "refused" ? assessment.failure.reason : null,
+					};
 				}
 
 				if (request.needs.replay && !sameMaterializer(gate, materializerSource))
@@ -2481,6 +2489,7 @@ export function controllerValidator(config: {
 					replay: facts?.replay ?? null,
 					dependencies: facts?.dependencies ?? null,
 					candidatePaths: patch.receipt.changedPaths,
+					baseRefusal: facts?.baseRefusal ?? null,
 				});
 			};
 

@@ -520,6 +520,7 @@ async function drive(t: { after(fn: () => void): void }, raw: Entry) {
 		ignoredChanges,
 		replay,
 		dependencies: null,
+		baseRefusal: null,
 		candidatePaths: [
 			...Object.keys(entry.candidate ?? {}),
 			...(synthetic?.candidate.keys() ?? []),
@@ -787,6 +788,7 @@ function unitInput(
 		replay: observedReplay(E, first),
 		dependencies: null,
 		candidatePaths: ["src/value.ts"],
+		baseRefusal: null,
 		...overrides,
 	};
 }
@@ -1048,6 +1050,61 @@ test("classifier: a per-test timeout in a replay is infrastructure before agreem
 			}),
 		),
 		{ kind: "infrastructure", reason: "timeout" },
+	);
+});
+
+test("classifier: a refused refreshed base is infrastructure or missing evidence, never oracle (S3)", () => {
+	const wrong = unitInput().base;
+	assert.ok(wrong !== null);
+
+	const oracleBase: BaseReceipt = {
+		...wrong,
+		results: [
+			{
+				scenario: "S1",
+				kind: "new_behavior",
+				result: "acceptance_not_reproduced",
+			},
+			{ scenario: "S2", kind: "preservation", result: "preserved" },
+		],
+	};
+
+	assert.equal(classifyFailure(unitInput({ base: oracleBase })).kind, "oracle");
+
+	for (const [refusal, expected] of [
+		[
+			"base_nondeterministic",
+			{ kind: "infrastructure", reason: "base_nondeterministic" },
+		],
+		["base_timeout", { kind: "infrastructure", reason: "timeout" }],
+		["base_runner_error", { kind: "infrastructure", reason: "runner_error" }],
+		["base_interrupted", { kind: "infrastructure", reason: "interrupted" }],
+		[
+			"acceptance_not_reproduced",
+			{ kind: "missing_evidence", reason: "base_missing" },
+		],
+		["base_load_error", { kind: "missing_evidence", reason: "base_missing" }],
+		[
+			"base_tree_unsupported",
+			{ kind: "missing_evidence", reason: "base_missing" },
+		],
+	] as const)
+		assert.deepEqual(
+			classifyFailure(unitInput({ base: oracleBase, baseRefusal: refusal })),
+			expected,
+			refusal,
+		);
+
+	assert.deepEqual(
+		parseFailureClass(
+			parseJson(
+				JSON.stringify({
+					kind: "infrastructure",
+					reason: "base_nondeterministic",
+				}),
+			),
+		),
+		{ kind: "infrastructure", reason: "base_nondeterministic" },
 	);
 });
 
@@ -1429,7 +1486,7 @@ const SLOW_VALUE =
 async function jobWorld(
 	t: { after(fn: () => void): void },
 	id: string,
-	options: { slow?: boolean } = {},
+	options: { slow?: boolean; drift?: string | null } = {},
 ) {
 	const raw = manifest.entries.find((e) => e.id === id);
 	assert.ok(raw !== undefined);
@@ -1543,6 +1600,15 @@ async function jobWorld(
 		acceptanceDigest,
 	});
 
+	let ciGate = gateSha;
+
+	if (options.drift !== undefined) {
+		f.put("docs/drift.md", "main moved on\n");
+
+		if (options.drift !== null) f.put("src/value.ts", options.drift);
+		ciGate = f.commit();
+	}
+
 	for (const file of heldout.files)
 		f.put(file.path, Buffer.from(file.bytes ?? new Uint8Array()).toString());
 
@@ -1642,7 +1708,7 @@ async function jobWorld(
 		patch: patch.receipt,
 		round: 0,
 		generation: 0,
-		baseSha: gateSha,
+		baseSha: ciGate,
 		origin: { kind: "initial" },
 		publication: { kind: "initial" },
 	});
@@ -1652,7 +1718,7 @@ async function jobWorld(
 
 	const ci = await checkCandidate({
 		repository: f.repo,
-		gateSha,
+		gateSha: ciGate,
 		candidateSha,
 		nonce,
 		output: join(f.root, "ci"),
@@ -1719,9 +1785,9 @@ async function jobWorld(
 		deadline: start + 1_200_000,
 		round: 0,
 		originalBase: gateSha,
-		baseSha: gateSha,
+		baseSha: ciGate,
 		baseResolved: true,
-		publication: { branch, patchSha: gateSha, candidateSha },
+		publication: { branch, patchSha: ciGate, candidateSha },
 		dispatchTry: 1,
 		dispatchedAt: start,
 		ciRunId: 77,
@@ -1760,7 +1826,7 @@ async function jobWorld(
 		if (path === "actions/runs/77")
 			return ok({
 				id: 77,
-				head_sha: gateSha,
+				head_sha: ciGate,
 				head_branch: "main",
 				updated_at: "2026-11-03T00:01:00Z",
 				display_title: `gates ${candidateSha} ${nonce}`,
@@ -1976,6 +2042,43 @@ for (const source of ["differs", "default"] as const)
 			assert.deepEqual(w.writes, ["DELETE"]);
 		},
 	);
+
+scoped(
+	"base drift: fresh base evidence for the drifted gate qualifies, and a genuinely bad candidate is candidate",
+	async (t) => {
+		const w = await jobWorld(t, "synthetic-wrong-value", { drift: null });
+		const read = finishedAssessment(await w.settle(w.owner()));
+
+		assert.deepEqual(read.assessment, {
+			kind: "failed",
+			failure: {
+				kind: "candidate",
+				reason: "candidate_heldout",
+				scenarios: ["S1"],
+			},
+		});
+		assert.ok(existsSync(join(w.dir, "feedback.json")));
+		assert.equal(w.fetches.length, 2);
+	},
+);
+
+scoped(
+	"a refreshed base that does not qualify after drift is never an oracle stop (S3)",
+	async (t) => {
+		const w = await jobWorld(t, "synthetic-wrong-value", {
+			drift:
+				"export function value() { return 2; }\nexport const name = 'factory';\n",
+		});
+
+		const read = finishedAssessment(await w.settle(w.owner()));
+
+		assert.deepEqual(read.assessment, {
+			kind: "failed",
+			failure: { kind: "missing_evidence", reason: "base_missing" },
+		});
+		assert.equal(existsSync(join(w.dir, "feedback.json")), false);
+	},
+);
 
 scoped(
 	"a diagnosis that runs out of time is infrastructure and holds with no redispatch",

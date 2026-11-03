@@ -1100,6 +1100,7 @@ export function classifiedCase(
 		},
 		dependencies: null,
 		candidatePaths: [],
+		baseRefusal: null,
 	});
 }
 

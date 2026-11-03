@@ -707,6 +707,7 @@ test("an encoding rejection names each rejected file so diagnosis can tell whose
 			replay: null,
 			dependencies: null,
 			candidatePaths: candidate ? ["src/value.ts"] : [],
+			baseRefusal: null,
 		});
 
 		assert.deepEqual(classified, {

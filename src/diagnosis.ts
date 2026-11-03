@@ -617,6 +617,7 @@ export type MissingEvidenceReason =
 export type InfrastructureReason =
 	| "runner_unavailable"
 	| "runner_error"
+	| "base_nondeterministic"
 	| "timeout"
 	| "dependency_transport"
 	| "baseline_failed"
@@ -699,6 +700,7 @@ export type ClassifyInput = Readonly<{
 	replay: HeldoutReplay | null;
 	dependencies: Readonly<{ reason: string | null }> | null;
 	candidatePaths: readonly string[] | null;
+	baseRefusal: BaseReason | null;
 }>;
 
 const SCANNED_ABORTS: ReadonlySet<string> = new Set([
@@ -998,6 +1000,17 @@ function heldoutClass(
 			signature(replay.full.execution.files)
 	)
 		return missing("tree_replays_disagree");
+
+	if (input.baseRefusal !== null)
+		return input.baseRefusal === "base_nondeterministic"
+			? infrastructure("base_nondeterministic")
+			: input.baseRefusal === "base_timeout"
+				? infrastructure("timeout")
+				: input.baseRefusal === "base_runner_error"
+					? infrastructure("runner_error")
+					: input.baseRefusal === "base_interrupted"
+						? infrastructure("interrupted")
+						: missing("base_missing");
 	const base = baseClass(input, gate.failed);
 
 	if (base.kind === "class") return base.failure;
@@ -1125,6 +1138,7 @@ const MISSING_REASONS: readonly MissingEvidenceReason[] = [
 const INFRASTRUCTURE_REASONS: readonly InfrastructureReason[] = [
 	"runner_unavailable",
 	"runner_error",
+	"base_nondeterministic",
 	"timeout",
 	"dependency_transport",
 	"baseline_failed",
