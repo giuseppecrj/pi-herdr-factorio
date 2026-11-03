@@ -6,7 +6,7 @@ import { advance, type RunEvent } from "../src/stages.ts";
 import { type FactoryEvent, type Ticket, ticketKey } from "../src/tickets.ts";
 import { FakeTicketAdapter } from "./fake-ticket-adapter.ts";
 import {
-	acceptanceDigest,
+	acceptedEvent,
 	builtEvent,
 	newRun,
 	apply,
@@ -135,7 +135,7 @@ describe("controller driven through the fake adapter", () => {
 
 		const events: RunEvent[] = [
 			{ kind: "specified", contractDigest },
-			{ kind: "accepted", acceptanceDigest },
+			acceptedEvent(),
 			builtEvent(),
 		];
 
@@ -228,7 +228,7 @@ describe("controller driven through the fake adapter", () => {
 		const built = apply(
 			admitted,
 			{ kind: "specified", contractDigest },
-			{ kind: "accepted", acceptanceDigest },
+			acceptedEvent(),
 		);
 
 		const paths = checkChangedPaths({

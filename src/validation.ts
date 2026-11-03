@@ -390,9 +390,9 @@ export function repairFeedback(
 			? [
 					{
 						scenario: scenario.id,
-						criteria: contract.acceptance.filter((criterion) =>
-							scenario.criteria.includes(criterion.id),
-						),
+						criteria: contract.acceptance
+							.filter((criterion) => scenario.criteria.includes(criterion.id))
+							.map(({ id, text }) => ({ id, text })),
 					},
 				]
 			: [],

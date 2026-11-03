@@ -81,6 +81,7 @@ import {
 	checkoutBuildWorkspace,
 	controllerValidator,
 	controllerCandidatePort,
+	controllerBaseChecker,
 	sweepValidation,
 	fileRunFiles,
 	readStoredVerdict,
@@ -2902,6 +2903,11 @@ const PREFLIGHT_RUN =
 export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 	const root = config.root ?? SANDBOX_ROOT;
 
+	const baseChecker = controllerBaseChecker({
+		stateDir: config.stateDir,
+		fetch: config.fetchTarball,
+	});
+
 	let ready: { readonly bundle: Bundle; readonly arch: SeccompArch } | null =
 		null;
 
@@ -2957,6 +2963,8 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 	};
 
 	return {
+		baseCheck: baseChecker.check,
+		stopBase: baseChecker.stop,
 		candidate: controllerCandidatePort({
 			stateDir: config.stateDir,
 			exec: config.exec,
