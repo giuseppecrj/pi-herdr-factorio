@@ -15,7 +15,7 @@ export const SPECIFY_TOOLS = ["read", "grep", "ls"] as const;
 
 export const SPECIFY_SKILLS = ["audit-ticket", "grill-me", "deep-research"];
 
-export const CONTRACT_VERSION = 1;
+export const CONTRACT_VERSION = 2;
 
 export const COMMENT_MAX_BYTES = 8 * 1024;
 
@@ -63,7 +63,13 @@ export type Question = {
 
 export type Evidence = Cite & { readonly fact: string };
 
-export type Criterion = { readonly id: string; readonly text: string };
+export type CriterionKind = "new_behavior" | "preservation";
+
+export type Criterion = {
+	readonly id: string;
+	readonly kind: CriterionKind;
+	readonly text: string;
+};
 
 export type ReplacedTest = { readonly path: string; readonly reason: string };
 
@@ -376,8 +382,24 @@ function contractOf(
 		behavior: nonEmpty(linesOf(fieldOf(value, "behavior"), 1, MAX_BEHAVIOR)),
 		exclusions: linesOf(fieldOf(value, "exclusions"), 0, MAX_LIST),
 		acceptance: nonEmpty(
-			linesOf(fieldOf(value, "acceptance"), 1, MAX_CRITERIA).map(
-				(text, index) => ({ id: `A${index + 1}`, text }),
+			listOf(fieldOf(value, "acceptance"), 1, MAX_CRITERIA).map(
+				(item, index) => {
+					const criterion = only(objectOf(item) ?? reject("bad_field"), [
+						"kind",
+						"text",
+					]);
+
+					const kind = fieldOf(criterion, "kind");
+
+					if (kind !== "new_behavior" && kind !== "preservation")
+						return reject("bad_field");
+
+					return {
+						id: `A${index + 1}`,
+						kind,
+						text: lineOf(fieldOf(criterion, "text")) ?? reject("bad_field"),
+					};
+				},
 			),
 		),
 		compatibility: linesOf(fieldOf(value, "compatibility"), 0, MAX_LIST),
@@ -1071,7 +1093,7 @@ export function revisionPrompt(
 const OUTPUT_SCHEMA = `Reply with exactly one JSON object and nothing else, in one of two shapes.
 
 A contract, when the issue and the repository settle every decision that changes behavior:
-{"kind":"contract","summary":"<one line>","behavior":["<what the change does>"],"exclusions":["<what it must not do or change>"],"acceptance":["<one checkable criterion>"],"compatibility":["<what must keep working>"],"limits":["<non-functional limit>"],"files":["<repo path likely touched>"],"evidence":[{"path":"<repo path>","start":<line>,"end":<line>,"fact":"<what those lines show>"}]}
+{"kind":"contract","summary":"<one line>","behavior":["<what the change does>"],"exclusions":["<what it must not do or change>"],"acceptance":[{"kind":"new_behavior|preservation","text":"<one checkable criterion>"}],"compatibility":["<what must keep working>"],"limits":["<non-functional limit>"],"files":["<repo path likely touched>"],"evidence":[{"path":"<repo path>","start":<line>,"end":<line>,"fact":"<what those lines show>"}]}
 
 Questions, when a decision that changes behavior is open and the repository does not answer it:
 {"kind":"questions","questions":[{"text":"<one specific question>","cites":[{"path":"<repo path>","start":<line>,"end":<line>}]}]}

@@ -86,11 +86,13 @@ export function formatStageTable(): string {
 		.join("\n");
 }
 
+import { matchingBaseProof } from "./diagnosis.ts";
+
 export type RunEvent =
 	| { kind: "admitted" }
 	| { kind: "specified"; contractDigest: Digest }
 	| { kind: "needs_info"; questions: NonEmpty<string> }
-	| { kind: "accepted"; acceptanceDigest: Digest }
+	| { kind: "accepted"; proof: import("./diagnosis.ts").BaseProof }
 	| {
 			kind: "built";
 			pin: AdmissionPin;
@@ -170,10 +172,24 @@ export function advance(run: Run, event: RunEvent): Transition {
 			return stage === "specify"
 				? finish(run, { kind: "needs_info", questions: event.questions })
 				: wrongStage();
-		case "accepted":
-			return stage === "accept"
-				? moveTo(run, "build", { acceptanceDigest: event.acceptanceDigest })
-				: wrongStage();
+		case "accepted": {
+			if (stage !== "accept") return wrongStage();
+			const binding = event.proof.binding;
+
+			if (
+				!matchingBaseProof(event.proof, binding) ||
+				binding.runId !== run.id ||
+				binding.repo !== run.repo ||
+				binding.baseSha !== run.baseSha ||
+				binding.contractDigest !== run.contractDigest
+			)
+				return invalid("acceptance qualification binding mismatch");
+
+			return moveTo(run, "build", {
+				acceptanceDigest: binding.acceptanceDigest,
+			});
+		}
+
 		case "built": {
 			if (stage !== "build") return wrongStage();
 

@@ -18,9 +18,15 @@ import { collectPatch, storePatch, finishPatch } from "../src/build.ts";
 import {
 	contractBytes,
 	contractDigestOf,
+	isContractDigest,
 	type Contract,
 } from "../src/specify.ts";
 import { writeAcceptance } from "../src/accept.ts";
+import {
+	assessBase,
+	type AcceptanceBinding,
+	type BaseProof,
+} from "../src/diagnosis.ts";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -401,7 +407,7 @@ export async function preparedReviewFixture(
 	const issue = fakeIssue(1);
 
 	const contract: Contract = {
-		version: 1,
+		version: 2,
 		runId,
 		issue: 1,
 		base: { repo: admissionPin.repo, sha: baseSha },
@@ -417,7 +423,7 @@ export async function preparedReviewFixture(
 		summary: "Export one",
 		behavior: ["Export one"],
 		exclusions: [],
-		acceptance: [{ id: "A1", text: "Value is one" }],
+		acceptance: [{ id: "A1", kind: "new_behavior", text: "Value is one" }],
 		compatibility: [],
 		limits: [],
 		files: ["src/a.ts"],
@@ -432,11 +438,18 @@ export async function preparedReviewFixture(
 
 	const accepted = writeAcceptance(
 		JSON.stringify({
-			version: 1,
+			version: 2,
 			scenarios: [
 				{ id: "S1", criteria: ["A1"], checks: [], judge: "Value is one" },
+				{ id: "S2", criteria: ["A1"], checks: ["value.test.ts"], judge: null },
 			],
-			files: [],
+			files: [
+				{
+					path: "value.test.ts",
+					type: "node:test",
+					content: "import {test} from 'node:test'; test('value',()=>{});",
+				},
+			],
 		}),
 		contract,
 	);
@@ -817,12 +830,88 @@ export function apply(run: Run, ...events: RunEvent[]): Run {
 	return current;
 }
 
+export function qualifiedProof(binding: AcceptanceBinding): BaseProof {
+	const { assessment } = assessBase({
+		binding,
+		runtime: {
+			runner: "unit-policy",
+			node: process.version,
+			platform: process.platform,
+			bwrap: "unit",
+			protocolDigest: digestOf("protocol"),
+		},
+		startedAt: 0,
+		finishedAt: 1,
+		source: {
+			kind: "ready",
+			treeDigest: digestOf("tree"),
+			lockDigest: digestOf("lock"),
+			gatesDigest: digestOf("gates"),
+		},
+		execution: {
+			kind: "observed",
+			exitCode: 1,
+			wallMs: 1,
+			files: [
+				{
+					file: "a.test.ts",
+					registered: 1,
+					failures: [
+						{
+							file: "a.test.ts",
+							name: "red",
+							message: "assertion",
+							kind: "assertion",
+							code: "ERR_ASSERTION",
+						},
+					],
+				},
+			],
+		},
+		scenarios: [
+			{
+				scenario: "S1",
+				kind: "new_behavior",
+				mode: "checked",
+				file: "a.test.ts",
+				oracleKey: {
+					contractScopeDigest: digestOf("scope"),
+					criteriaDigest: digestOf("criteria"),
+					sourceDigest: digestOf("source"),
+				},
+			},
+		],
+	});
+
+	assert.ok(assessment.kind === "ready");
+
+	return assessment.proof;
+}
+
+export function acceptedEvent(): Extract<RunEvent, { kind: "accepted" }> {
+	const c = contractDigest;
+	assert.ok(isContractDigest(c));
+
+	return {
+		kind: "accepted",
+		proof: qualifiedProof({
+			runId: admissionPin.runId,
+			repo: admissionPin.repo,
+			issue: admissionPin.issue,
+			contractDigest: c,
+			acceptanceDigest,
+			baseSha: admissionPin.originalBase,
+			gateSha: admissionPin.originalBase,
+		}),
+	};
+}
+
 export function reachBuild(): Run {
 	return apply(
 		newRun(),
 		{ kind: "admitted" },
 		{ kind: "specified", contractDigest },
-		{ kind: "accepted", acceptanceDigest },
+		acceptedEvent(),
 	);
 }
 

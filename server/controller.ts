@@ -11,6 +11,8 @@ import {
 	parseCandidateState,
 	candidateUsage,
 	candidateGenerations,
+	notProven,
+	renderLimitation,
 	type CandidateState,
 	type CandidateEvent,
 } from "../src/handoff.ts";
@@ -56,7 +58,16 @@ import { digestOf, type Verdict } from "../src/run.ts";
 import { isGitSha } from "../src/workflow.ts";
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, mkdirSync, existsSync } from "node:fs";
+import { runHeldoutBase } from "./gates.ts";
+import {
+	assessBase,
+	parseBaseReceipt,
+	parseBaseCheckReference,
+	type BaseCheckInput,
+	type BaseCheckProgress,
+} from "../src/diagnosis.ts";
+import { scopeOwner, scopeUnit } from "./sandbox/scope.ts";
 import {
 	cp,
 	lstat,
@@ -510,6 +521,29 @@ function parseClaim(text: string): ClaimRecord | null {
 		labels = { ...labels, marker: parsed.marker };
 	}
 
+	const rawBaseCheck = fieldOf(value, "baseCheck");
+
+	if (rawBaseCheck !== undefined) {
+		const baseCheck = parseBaseCheckReference(rawBaseCheck);
+
+		if (
+			baseCheck === null ||
+			baseCheck.binding.runId !== id ||
+			baseCheck.binding.issue !== claim.issue
+		)
+			return null;
+		labels = { ...labels, baseCheck };
+	}
+
+	const acceptWallMs = fieldOf(value, "acceptWallMs");
+
+	if (acceptWallMs !== undefined) {
+		const wall = countOf(acceptWallMs);
+
+		if (wall === null) return null;
+		labels = { ...labels, acceptWallMs: wall };
+	}
+
 	const rawHandoff = fieldOf(value, "handoff");
 
 	if (rawHandoff !== undefined) {
@@ -862,9 +896,10 @@ const CHECKOUT_LIST_MAX_BYTES = 16 * 1024 * 1024;
 function parseCheckoutRecord(
 	text: string | null,
 	sha: GitSha,
-): string[] | null {
+): { paths: string[]; omitted: number | null } | null {
 	const value = text === null ? undefined : parseJson(text);
 	const files = fieldOf(value, "files");
+	const omitted = countOf(fieldOf(value, "omitted"));
 
 	if (fieldOf(value, "sha") !== sha || !Array.isArray(files)) return null;
 
@@ -878,7 +913,7 @@ function parseCheckoutRecord(
 		paths.push(path);
 	}
 
-	return paths;
+	return { paths, omitted };
 }
 
 function checkoutOf(workspace: string, files: readonly string[]): Checkout {
@@ -1088,7 +1123,11 @@ export async function checkoutWorkspace(input: {
 	const listed = parseCheckoutRecord(kept, sha);
 
 	if (listed !== null)
-		return { kind: "ready", checkout: checkoutOf(workspace, listed) };
+		return {
+			kind: "ready",
+			omitted: listed.omitted,
+			checkout: checkoutOf(workspace, listed.paths),
+		};
 
 	const gz = await input.fetch(repo, sha).catch(() => null);
 
@@ -1129,7 +1168,7 @@ export async function checkoutWorkspace(input: {
 		.flatMap((entry) => (entry.kind === "file" ? [entry.path] : []))
 		.sort();
 
-	const text = `${JSON.stringify({ sha, files })}\n`;
+	const text = `${JSON.stringify({ sha, files, omitted: read.omitted })}\n`;
 
 	if (
 		Buffer.byteLength(text) > CHECKOUT_LIST_MAX_BYTES ||
@@ -1146,7 +1185,11 @@ export async function checkoutWorkspace(input: {
 		});
 	}
 
-	return { kind: "ready", checkout: checkoutOf(workspace, files) };
+	return {
+		kind: "ready",
+		omitted: read.omitted,
+		checkout: checkoutOf(workspace, files),
+	};
 }
 
 export async function checkoutBuildWorkspace(
@@ -1197,6 +1240,268 @@ async function writeOnce(path: string, text: string): Promise<boolean> {
 	}
 
 	return writeAtomic(path, text);
+}
+
+export function controllerBaseChecker(config: {
+	readonly stateDir: string;
+	readonly fetch?: TarballFetch;
+}) {
+	const jobs = new Map<
+		string,
+		{ runId: Digest; abort: AbortController; done: Promise<void> }
+	>();
+
+	const files = fileRunFiles(config.stateDir);
+
+	const fail = (
+		input: BaseCheckInput,
+		reason: "base_evidence_missing" | "base_runner_error" | "base_timeout",
+	): BaseCheckProgress => ({
+		kind: "refused",
+		failure: {
+			binding: input.binding,
+			receiptDigest: digestOf(JSON.stringify([input.binding, reason])),
+			reason,
+			scenarios: [],
+		},
+	});
+
+	const check = async (input: BaseCheckInput): Promise<BaseCheckProgress> => {
+		const bindingDigest = digestOf(JSON.stringify(input.binding));
+
+		const parent = join(
+			config.stateDir,
+			"base-check",
+			input.binding.runId,
+			bindingDigest,
+		);
+
+		const stored =
+			input.readOnly && existsSync(parent)
+				? readdirSync(parent)
+						.flatMap((name) => {
+							const n = /^a([1-9][0-9]*)$/.exec(name)?.[1];
+
+							return n !== undefined &&
+								present(join(parent, name, "result.json"))
+								? [Number(n)]
+								: [];
+						})
+						.sort((a, b) => b - a)[0]
+				: undefined;
+
+		const dir = join(parent, `a${stored ?? input.acceptAttempt}`);
+		const resultPath = join(dir, "result.json");
+
+		try {
+			if (input.binding.gateSha !== input.binding.baseSha)
+				return fail(input, "base_evidence_missing");
+
+			if (present(resultPath)) {
+				const text = regularText(resultPath, 2 * 1024 * 1024);
+				const receipt = parseBaseReceipt(text);
+
+				if (
+					receipt === null ||
+					digestOf(text) !== regularText(join(dir, "result.digest")) ||
+					JSON.stringify(receipt.evidence.binding) !==
+						JSON.stringify(input.binding)
+				)
+					return fail(input, "base_evidence_missing");
+
+				return assessBase(receipt.evidence).assessment;
+			}
+
+			if (input.readOnly) return fail(input, "base_evidence_missing");
+
+			if (jobs.has(dir)) return { kind: "checking" };
+
+			if (present(join(dir, "intent.json"))) {
+				const intent = objectOf(
+					parseJson(regularText(join(dir, "intent.json"))),
+				);
+
+				const startedAt = countOf(jsonField(intent, "startedAt")),
+					deadline = countOf(jsonField(intent, "deadline"));
+
+				if (
+					startedAt === null ||
+					deadline === null ||
+					deadline < startedAt ||
+					jsonField(intent, "bindingDigest") !== bindingDigest
+				)
+					return fail(input, "base_evidence_missing");
+				const interrupted = join(dir, "interrupted.json");
+				const record = `${JSON.stringify({ wallMs: deadline - startedAt })}\n`;
+
+				if (!present(interrupted)) exclusive(interrupted, record);
+				else if (regularText(interrupted) !== record)
+					return fail(input, "base_evidence_missing");
+
+				return { kind: "interrupted", wallMs: deadline - startedAt };
+			}
+
+			if (input.allowLaunch === false) return { kind: "checking" };
+			const bound = await files.readContract(input.binding.runId);
+
+			if (
+				bound.kind !== "found" ||
+				bound.digest !== input.binding.contractDigest ||
+				bound.contract.base.sha !== input.binding.baseSha ||
+				bound.contract.base.repo !== input.binding.repo ||
+				bound.contract.issue !== input.binding.issue
+			)
+				return fail(input, "base_evidence_missing");
+
+			const suite = await files.artifacts.read(
+				input.binding.runId,
+				bound.contract,
+				bound.digest,
+			);
+
+			if (
+				suite.kind !== "found" ||
+				suite.receipt.acceptanceDigest !== input.binding.acceptanceDigest
+			)
+				return fail(input, "base_evidence_missing");
+			let charged = 0;
+
+			if (existsSync(parent))
+				for (const name of readdirSync(parent)) {
+					if (!/^a[1-9][0-9]*$/.test(name))
+						return fail(input, "base_evidence_missing");
+					const previous = join(parent, name);
+
+					const completed = present(join(previous, "result.json"))
+						? parseBaseReceipt(
+								regularText(join(previous, "result.json"), 2 * 1024 * 1024),
+							)
+						: null;
+
+					const interrupted = present(join(previous, "interrupted.json"))
+						? countOf(
+								jsonField(
+									objectOf(
+										parseJson(regularText(join(previous, "interrupted.json"))),
+									),
+									"wallMs",
+								),
+							)
+						: null;
+
+					if (completed !== null)
+						charged +=
+							completed.evidence.finishedAt - completed.evidence.startedAt;
+					else if (interrupted !== null) charged += interrupted;
+					else return fail(input, "base_evidence_missing");
+				}
+
+			const startedAt = Date.now();
+
+			const allowance = Math.max(
+				0,
+				Math.min(180_000, input.remainingAcceptMs - charged),
+			);
+
+			const deadline = startedAt + allowance;
+
+			const scope = scopeUnit(
+				scopeOwner(config.stateDir),
+				input.binding.runId,
+				"basecheck",
+				input.acceptAttempt,
+				randomBytes(4).toString("hex"),
+			);
+
+			privateDir(parent);
+			mkdirSync(dir, { mode: 0o700 });
+			exclusive(
+				join(dir, "intent.json"),
+				`${JSON.stringify({ bindingDigest, binding: input.binding, startedAt, deadline, scope })}\n`,
+			);
+			const abort = new AbortController();
+			const externalAbort = () => abort.abort();
+			input.signal.addEventListener("abort", externalAbort, { once: true });
+
+			if (input.signal.aborted) abort.abort();
+
+			const done = (async () => {
+				const tree = join(dir, "source");
+				await mkdir(tree, { mode: 0o700 });
+
+				const checked =
+					Date.now() < deadline && !abort.signal.aborted
+						? await checkoutWorkspace({
+								stateDir: dir,
+								runId: input.binding.runId,
+								workspace: tree,
+								repo: input.binding.repo,
+								sha: input.binding.baseSha,
+								fetch: config.fetch ?? ghTarball,
+							})
+						: ({ kind: "unavailable" } as const);
+
+				const evidence = await runHeldoutBase({
+					tree,
+					refused:
+						checked.kind === "unavailable"
+							? "tree_unavailable"
+							: checked.kind === "refused"
+								? "tree_refused"
+								: checked.omitted !== 0
+									? "tree_partial"
+									: undefined,
+					workDir: dir,
+					cacheDir: join(config.stateDir, "base-dependencies"),
+					binding: input.binding,
+					contract: bound.contract,
+					suite: suite.suite,
+					canary: regularText(
+						join(
+							config.stateDir,
+							"acceptance",
+							input.binding.runId,
+							"canary.txt",
+						),
+					).trimEnd(),
+					startedAt,
+					deadline,
+					scope,
+					signal: abort.signal,
+				});
+
+				const { receipt } = assessBase(evidence);
+				const text = JSON.stringify(receipt);
+				await rm(join(dir, "tree"), { recursive: true, force: true });
+				await rm(tree, { recursive: true, force: true });
+				await rm(join(dir, "checkouts"), { recursive: true, force: true });
+				exclusive(join(dir, "result.digest"), digestOf(text));
+
+				if (!(await writeAtomic(resultPath, text)))
+					throw new Error("base_result_unwritable");
+			})().finally(() => {
+				input.signal.removeEventListener("abort", externalAbort);
+				jobs.delete(dir);
+			});
+
+			jobs.set(dir, { runId: input.binding.runId, abort, done });
+			void done.catch(() => {});
+
+			return { kind: "checking" };
+		} catch {
+			return fail(input, "base_evidence_missing");
+		}
+	};
+
+	return {
+		check,
+		async stop(runId: Digest) {
+			const owned = [...jobs.values()].filter((j) => j.runId === runId);
+
+			for (const job of owned) job.abort.abort();
+			await Promise.allSettled(owned.map((j) => j.done));
+		},
+	};
 }
 
 export function fileRunFiles(stateDir: string): RunFiles {
@@ -2722,6 +3027,24 @@ export function controllerCandidatePort(config: {
 
 		if (summary === null) throw new PublicationError("summary_too_large");
 
+		const suite = await files.artifacts.read(
+			state.pin.runId,
+			contract.contract,
+			contract.digest,
+		);
+
+		if (
+			suite.kind !== "found" ||
+			suite.receipt.acceptanceDigest !== certificate.verdict.acceptanceDigest
+		)
+			throw new PublicationError("evidence_unavailable");
+
+		const limitations = notProven({
+			criteria: contract.contract.acceptance,
+			scenarios: suite.suite.scenarios,
+			r8: certificate.review.r8,
+		});
+
 		return [
 			`## Factory handoff`,
 			withoutKey(summary),
@@ -2736,7 +3059,9 @@ export function controllerCandidatePort(config: {
 					.slice(0, 5)
 					.map((f) => `- ${inert(f.severity)}: ${inert(f.claim)}`),
 			),
-			`R8 cross-family review remains incomplete. The factory waits for the owner's merge; it cannot merge or arm auto-merge.`,
+			"## Not proven",
+			limitations.map(renderLimitation).join("\n"),
+			"The factory waits for the owner's merge; it cannot merge or arm auto-merge.",
 			`<!-- factory:pr ${state.pin.runId} -->`,
 		].join("\n\n");
 	};

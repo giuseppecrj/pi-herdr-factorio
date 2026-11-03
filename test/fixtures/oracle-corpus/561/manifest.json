@@ -1,0 +1,115 @@
+{
+	"fixture": 561,
+	"issue": 561,
+	"baseSha": "f42ab429e74c25760c2d563d939af7f4b9b6f406",
+	"provenance": "Recorded held-out check bytes from the public published test/acceptance/561/checks/ of fixture 561, kept under original/.",
+	"originalPackaging": "Version 1: one shared check file per original file, mapping several scenarios and criteria to the same file.",
+	"version2Mapping": "Each scenario owns one file: the original file header (imports, load-time reads and helpers) followed by the original test bodies listed under tests, unchanged. The original canary comment is dropped; the store plants a fresh one.",
+	"baseFiles": [
+		{
+			"path": "skills/README.md",
+			"commit": "f42ab429e74c25760c2d563d939af7f4b9b6f406",
+			"blob": "30e11736c6b18a41584f8c2b8f263919cd236fdf",
+			"sha256": "86b1a3a7c93c4d72f9a5690cd03e1cbce053153279f0da4c408b73637308d2cc"
+		}
+	],
+	"criteria": [
+		{
+			"id": "A1",
+			"kind": "new_behavior",
+			"text": "S1: a short Human review section is added"
+		},
+		{
+			"id": "A2",
+			"kind": "new_behavior",
+			"text": "S2: sandboxed models lack GitHub writes; the trusted controller owns publication and progress"
+		},
+		{
+			"id": "A3",
+			"kind": "new_behavior",
+			"text": "S3: exact-head CI and review precede the controller ready PR handoff"
+		},
+		{
+			"id": "A4",
+			"kind": "new_behavior",
+			"text": "S4: the factory waits for its owner and cannot merge or arm auto-merge"
+		},
+		{
+			"id": "A5",
+			"kind": "new_behavior",
+			"text": "S5: an actual Markdown owner-guide link uses the required relative target"
+		},
+		{
+			"id": "A6",
+			"kind": "preservation",
+			"text": "S7: existing descriptions, provenance table, licenses and links remain unchanged"
+		}
+	],
+	"scenarios": [
+		{
+			"id": "S1",
+			"criteria": ["A1"],
+			"file": "v2/s1.test.mjs.txt",
+			"path": "s1.test.mjs",
+			"original": "original/human-review.test.mjs.txt",
+			"tests": ["S1: a short Human review section is added"]
+		},
+		{
+			"id": "S2",
+			"criteria": ["A2"],
+			"file": "v2/s2.test.mjs.txt",
+			"path": "s2.test.mjs",
+			"original": "original/human-review.test.mjs.txt",
+			"tests": [
+				"S2: sandboxed models lack GitHub writes; the trusted controller owns publication and progress"
+			]
+		},
+		{
+			"id": "S3",
+			"criteria": ["A3"],
+			"file": "v2/s3.test.mjs.txt",
+			"path": "s3.test.mjs",
+			"original": "original/human-review.test.mjs.txt",
+			"tests": [
+				"S3: exact-head CI and review precede the controller ready PR handoff"
+			]
+		},
+		{
+			"id": "S4",
+			"criteria": ["A4"],
+			"file": "v2/s4.test.mjs.txt",
+			"path": "s4.test.mjs",
+			"original": "original/human-review.test.mjs.txt",
+			"tests": [
+				"S4: the factory waits for its owner and cannot merge or arm auto-merge"
+			]
+		},
+		{
+			"id": "S5",
+			"criteria": ["A5"],
+			"file": "v2/s5.test.mjs.txt",
+			"path": "s5.test.mjs",
+			"original": "original/human-review.test.mjs.txt",
+			"tests": [
+				"S5: an actual Markdown owner-guide link uses the required relative target"
+			]
+		},
+		{
+			"id": "S7",
+			"criteria": ["A6"],
+			"file": "v2/s7.test.mjs.txt",
+			"path": "s7.test.mjs",
+			"original": "original/human-review.test.mjs.txt",
+			"tests": [
+				"S7: existing descriptions, provenance table, licenses and links remain unchanged"
+			]
+		}
+	],
+	"expected": {
+		"outcome": "refused",
+		"reason": "preservation_failed",
+		"scenarios": ["S7"]
+	},
+	"gates": "Replays run the current trusted .github/factory/gates, because the base-era reporter predates the private facts the base check reads.",
+	"baseTree": "Only the base files the suite reads, each verified against its recorded blob, plus a dependency-free package.json and lockfile."
+}

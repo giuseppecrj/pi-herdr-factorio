@@ -8,6 +8,7 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	lstatSync,
 	readdirSync,
 	rmSync,
 	writeFileSync,
@@ -17,7 +18,22 @@ import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { scanSource, type Signal } from "../.github/factory/gates/scan.ts";
 import { readStoredContract } from "../src/artifacts.ts";
-import { isDigest } from "../src/run.ts";
+import { isDigest, digestOf } from "../src/run.ts";
+import { acceptanceEntries, type AcceptanceSuite } from "../src/accept.ts";
+import {
+	BASE_PROTOCOL_VERSION,
+	oracleKey,
+	type AcceptanceBinding,
+	type BaseEvidence,
+	type PrivateExecution,
+	type TestFailure,
+} from "../src/diagnosis.ts";
+import type { Contract } from "../src/specify.ts";
+import {
+	DEFAULT_SCOPE_LIMITS,
+	scopeArgv,
+	stopScopeArgv,
+} from "./sandbox/scope.ts";
 import { hasControl, type ReplacedTest } from "../src/specify.ts";
 import { isGitSha } from "../src/workflow.ts";
 import {
@@ -72,6 +88,9 @@ type RunInput = {
 	readonly install?: boolean;
 	readonly cache?: string;
 	readonly archives?: string;
+	readonly dependencies?: string;
+	readonly scope?: string;
+	readonly signal?: AbortSignal;
 };
 
 export interface GateRunner {
@@ -243,7 +262,7 @@ async function entries(
 	return entries;
 }
 
-async function exportTree(
+export async function exportTree(
 	repository: string,
 	sha: string,
 	dest: string,
@@ -742,56 +761,96 @@ const localRunner: GateRunner = {
 
 		if (input.archives) binds.push("--ro-bind", input.archives, "/archives");
 
-		return command(
-			"bwrap",
-			[
-				"--die-with-parent",
-				"--new-session",
-				"--unshare-all",
-				"--ro-bind",
-				"/usr",
-				"/usr",
-				"--symlink",
-				"usr/bin",
-				"/bin",
-				"--symlink",
-				"usr/lib",
-				"/lib",
-				"--symlink",
-				"usr/lib64",
-				"/lib64",
-				"--ro-bind",
-				dirname(dirname(process.execPath)),
-				dirname(dirname(process.execPath)),
-				...["/etc/passwd", "/etc/group", "/etc/ld.so.cache"].flatMap((path) =>
-					existsSync(path) ? ["--ro-bind", path, path] : [],
-				),
-				"--tmpfs",
-				"/tmp",
-				"--dev",
-				"/dev",
-				"--proc",
-				"/proc",
-				...binds,
-				"--chdir",
-				"/w",
-				"--clearenv",
-				...Object.entries({
-					...CLEAN_ENV,
-					PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
-				}).flatMap(([k, v]) => ["--setenv", k, v]),
-				...input.argv,
-			],
-			input.tree,
-			CLEAN_ENV,
-			input.deadlineMs,
-		);
+		if (input.dependencies)
+			binds.push("--ro-bind", input.dependencies, "/w/node_modules");
+
+		const args = [
+			"--die-with-parent",
+			"--new-session",
+			"--unshare-all",
+			"--ro-bind",
+			"/usr",
+			"/usr",
+			"--symlink",
+			"usr/bin",
+			"/bin",
+			"--symlink",
+			"usr/lib",
+			"/lib",
+			"--symlink",
+			"usr/lib64",
+			"/lib64",
+			"--ro-bind",
+			dirname(dirname(process.execPath)),
+			dirname(dirname(process.execPath)),
+			...["/etc/passwd", "/etc/group", "/etc/ld.so.cache"].flatMap((path) =>
+				existsSync(path) ? ["--ro-bind", path, path] : [],
+			),
+			"--tmpfs",
+			"/tmp",
+			"--dev",
+			"/dev",
+			"--proc",
+			"/proc",
+			...binds,
+			"--chdir",
+			"/w",
+			"--clearenv",
+			...Object.entries({
+				...CLEAN_ENV,
+				PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
+			}).flatMap(([k, v]) => ["--setenv", k, v]),
+			...input.argv,
+		];
+
+		const argv = input.scope
+			? scopeArgv(input.scope, DEFAULT_SCOPE_LIMITS, ["bwrap", ...args])
+			: ["bwrap", ...args];
+
+		const stop = async () => {
+			if (input.scope) {
+				const [cmd = "systemctl", ...rest] = stopScopeArgv(input.scope);
+				await command(
+					cmd,
+					rest,
+					input.tree,
+					{
+						PATH: "/usr/bin:/bin",
+						XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR,
+					},
+					5000,
+				);
+			}
+		};
+
+		const abort = () => {
+			void stop();
+		};
+
+		input.signal?.addEventListener("abort", abort, { once: true });
+
+		try {
+			if (input.signal?.aborted)
+				return { exitCode: 1, stdout: "", stderr: "", timedOut: true };
+
+			return await command(
+				argv[0] ?? "bwrap",
+				argv.slice(1),
+				input.tree,
+				{ ...CLEAN_ENV, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR },
+				input.deadlineMs,
+			);
+		} finally {
+			input.signal?.removeEventListener("abort", abort);
+			await stop();
+		}
 	},
 };
 
 async function prefetch(
 	deps: readonly Dependency[],
 	archives: string,
+	deadline = Date.now() + 180_000,
 ): Promise<void> {
 	mkdirSync(archives, { recursive: true });
 	const unique = [...new Map(deps.map((d) => [d.integrity, d])).values()];
@@ -826,7 +885,9 @@ async function prefetch(
 
 				const response = await fetch(url, {
 					redirect: "error",
-					signal: AbortSignal.timeout(30000),
+					signal: AbortSignal.timeout(
+						Math.max(1, Math.min(30000, deadline - Date.now())),
+					),
 				});
 
 				if (!response.ok) throw new Error("dependency_fetch_failed");
@@ -1077,6 +1138,347 @@ async function scanCandidate(
 	}
 
 	return result;
+}
+
+function privateExecution(
+	result: Result,
+	files: readonly string[],
+	wallMs: number,
+): PrivateExecution {
+	if (result.timedOut)
+		return { kind: "unavailable", reason: "timeout", wallMs };
+
+	if (result.runnerError || result.exitCode > 1)
+		return { kind: "unavailable", reason: "runner_error", wallMs };
+	const summary = objectOf(parseJson(result.stdout.trim()));
+	const counts = objectOf(fieldOf(summary, "counts"));
+	const raw = arrayOf(fieldOf(summary, "failures"));
+
+	if (
+		result.stdout.length > 1024 * 1024 ||
+		fieldOf(summary, "complete") !== true ||
+		fieldOf(summary, "invalid") !== false ||
+		fieldOf(summary, "truncated") !== false ||
+		counts === null ||
+		raw === null
+	)
+		return { kind: "unavailable", reason: "invalid_report", wallMs };
+	const failures: TestFailure[] = [];
+
+	for (const value of raw) {
+		const f = objectOf(value);
+		const file = textOf(fieldOf(f, "file"));
+		const name = textOf(fieldOf(f, "name"));
+		const message = textOf(fieldOf(f, "message"));
+		const code = fieldOf(f, "code");
+		const kind = fieldOf(f, "kind");
+
+		if (
+			file === null ||
+			!files.includes(file) ||
+			name === null ||
+			name.length > 300 ||
+			message === null ||
+			message.length > 200 ||
+			(code !== null && textOf(code) === null) ||
+			(kind !== "assertion" &&
+				kind !== "runtime_error" &&
+				kind !== "load_error" &&
+				kind !== "timeout" &&
+				kind !== "skip" &&
+				kind !== "todo" &&
+				kind !== "cancelled")
+		)
+			return { kind: "unavailable", reason: "invalid_report", wallMs };
+		failures.push({ file, name, message, code: textOf(code), kind });
+	}
+
+	if (
+		Object.keys(counts).some((p) => !files.includes(p)) ||
+		files.some(
+			(p) =>
+				fieldOf(counts, p) !== undefined &&
+				countOf(fieldOf(counts, p)) === null,
+		) ||
+		(result.exitCode !== 0 && failures.length === 0) ||
+		(fieldOf(summary, "bad") === true &&
+			failures.length === 0 &&
+			files.some((p) => (countOf(fieldOf(counts, p)) ?? 0) > 0))
+	)
+		return { kind: "unavailable", reason: "invalid_report", wallMs };
+
+	return {
+		kind: "observed",
+		exitCode: result.exitCode,
+		wallMs,
+		files: files.map((file) => ({
+			file,
+			registered: countOf(fieldOf(counts, file)) ?? 0,
+			failures: failures.filter((f) => f.file === file),
+		})),
+	};
+}
+
+function publicFailurePaths(
+	summary: JsonObject | null,
+	files: readonly string[],
+): readonly string[] {
+	return [
+		...new Set(
+			(arrayOf(fieldOf(summary, "failures")) ?? [])
+				.map((f) => textOf(fieldOf(objectOf(f), "file")) ?? "")
+				.filter((p) => files.includes(p)),
+		),
+	];
+}
+
+export function baseTreeDigest(tree: string): ReturnType<typeof digestOf> {
+	const entries: (readonly [string, number, string])[] = [];
+
+	const walk = (rel: string) => {
+		for (const entry of readdirSync(join(tree, rel), {
+			withFileTypes: true,
+		}).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+			const path = rel ? `${rel}/${entry.name}` : entry.name;
+			const stat = lstatSync(join(tree, path));
+
+			if (
+				!safePath(path) ||
+				entry.name === ".gitattributes" ||
+				stat.isSymbolicLink() ||
+				(!stat.isDirectory() && !stat.isFile())
+			)
+				throw new Error("unsafe_tree");
+
+			if (stat.isDirectory()) walk(path);
+			else
+				entries.push([
+					path,
+					stat.mode & 0o111 ? 0o755 : 0o644,
+					digestOf(readFileSync(join(tree, path))),
+				]);
+		}
+	};
+
+	walk("");
+
+	return digestOf(JSON.stringify(entries));
+}
+
+const dependencyJobs = new Map<string, Promise<string>>();
+
+export async function runHeldoutBase(input: {
+	readonly tree: string;
+	readonly refused?: "tree_partial" | "tree_refused" | "tree_unavailable";
+	readonly workDir: string;
+	readonly cacheDir: string;
+	readonly binding: AcceptanceBinding;
+	readonly contract: Contract;
+	readonly suite: AcceptanceSuite;
+	readonly canary: string;
+	readonly startedAt: number;
+	readonly deadline: number;
+	readonly scope?: string;
+	readonly signal?: AbortSignal;
+	readonly runner?: GateRunner;
+}): Promise<BaseEvidence> {
+	const runner = input.runner ?? localRunner;
+	const gates = join(input.tree, ".github/factory/gates");
+
+	const gateBytes = ["reporter.mjs", "freeze.mjs"].map((name) => {
+		try {
+			const path = join(gates, name);
+
+			return lstatSync(path).isFile() ? readFileSync(path, "utf8") : null;
+		} catch {
+			return null;
+		}
+	});
+
+	const runtime = {
+		runner: runner.kind,
+		node: process.version,
+		platform: `${process.platform}/${process.arch}`,
+		bwrap: "unavailable",
+		protocolDigest: digestOf(BASE_PROTOCOL_VERSION + JSON.stringify(gateBytes)),
+	};
+
+	const scenarios = input.suite.scenarios.map((s) => {
+		const path = s.checks[0];
+		const file = input.suite.files.find((f) => f.path === path);
+
+		return path === undefined || file === undefined
+			? { scenario: s.id, kind: s.kind, mode: "judge_only" as const }
+			: {
+					scenario: s.id,
+					kind: s.kind,
+					mode: "checked" as const,
+					file: `test/acceptance/${input.binding.issue}/checks/${path}`,
+					oracleKey: oracleKey(input.contract, s.criteria, file.content),
+				};
+	});
+
+	let source: BaseEvidence["source"] = {
+		kind: "unavailable",
+		reason:
+			input.refused ??
+			(gateBytes.includes(null) ? "gates_missing" : "unsafe_tree"),
+	};
+
+	let execution: PrivateExecution = {
+		kind: "unavailable",
+		reason: "runner_error",
+		wallMs: 0,
+	};
+
+	const remaining = () => {
+		if (input.signal?.aborted || Date.now() >= input.deadline)
+			throw new Error("base_timeout");
+
+		return Math.max(1, input.deadline - Date.now());
+	};
+
+	const run: GateRunner = {
+		kind: runner.kind,
+		run: (request) =>
+			runner.run({
+				...request,
+				deadlineMs: Math.min(request.deadlineMs ?? Infinity, remaining()),
+				scope: input.scope,
+				signal: input.signal,
+			}),
+	};
+
+	try {
+		if (source.reason !== "unsafe_tree") throw new Error(source.reason);
+		remaining();
+
+		const version = await command(
+			"bwrap",
+			["--version"],
+			input.tree,
+			CLEAN_ENV,
+			remaining(),
+		);
+
+		runtime.bwrap = version.stdout.trim().slice(0, 100);
+		const treeDigest = baseTreeDigest(input.tree);
+		const gatesDigest = baseTreeDigest(gates);
+
+		const lockDigest = digestOf(
+			readFileSync(join(input.tree, "package-lock.json")),
+		);
+
+		const deps = readDependencies(input.tree);
+		const cache = join(input.cacheDir, lockDigest);
+		let dependency: string | undefined;
+
+		if (deps.length > 0) {
+			let job = dependencyJobs.get(cache);
+
+			if (job === undefined) {
+				job = (async () => {
+					if (existsSync(join(cache, "READY"))) {
+						if (readFileSync(join(cache, "READY"), "utf8") !== lockDigest)
+							throw new Error("invalid_dependency_cache");
+
+						return join(cache, "tree/node_modules");
+					}
+
+					mkdirSync(input.cacheDir, { recursive: true, mode: 0o700 });
+					rmSync(cache, { recursive: true, force: true });
+					mkdirSync(cache, { mode: 0o700 });
+					const tree = join(cache, "tree");
+					mkdirSync(tree);
+
+					for (const path of ["package.json", "package-lock.json"])
+						cpSync(join(input.tree, path), join(tree, path));
+					const archives = join(cache, "archives");
+					await prefetch(deps, archives, input.deadline);
+
+					const installed = await install(
+						tree,
+						gates,
+						archives,
+						join(cache, "npm"),
+						run,
+					);
+
+					if (
+						installed.exitCode !== 0 ||
+						installed.timedOut ||
+						installed.runnerError
+					)
+						throw new Error("dependency_setup_failed");
+					remaining();
+					writeFileSync(join(cache, "READY"), lockDigest, {
+						flag: "wx",
+						mode: 0o600,
+					});
+
+					return join(tree, "node_modules");
+				})();
+				dependencyJobs.set(cache, job);
+				void job.catch(() => dependencyJobs.delete(cache));
+			}
+
+			dependency = await job;
+		}
+
+		remaining();
+		source = { kind: "ready", treeDigest, lockDigest, gatesDigest };
+		const tree = join(input.workDir, "tree");
+		cpSync(input.tree, tree, {
+			recursive: true,
+			errorOnExist: true,
+			force: false,
+		});
+
+		for (const [path, bytes] of acceptanceEntries(
+			input.suite,
+			input.canary,
+		).filter(([p]) => p.startsWith("checks/"))) {
+			const target = join(tree, `test/acceptance/${input.binding.issue}`, path);
+			mkdirSync(dirname(target), { recursive: true });
+			writeFileSync(target, bytes, { flag: "wx", mode: 0o600 });
+		}
+
+		const files = scenarios.flatMap((s) =>
+			s.mode === "checked" ? [s.file] : [],
+		);
+
+		const started = Date.now();
+
+		const result = await run.run({
+			tree,
+			gates,
+			dependencies: dependency,
+			argv: testArgv(files),
+		});
+
+		execution = privateExecution(result, files, Date.now() - started);
+	} catch (error) {
+		execution = {
+			kind: "unavailable",
+			reason:
+				input.signal?.aborted ||
+				Date.now() >= input.deadline ||
+				(error instanceof Error && error.message === "base_timeout")
+					? "timeout"
+					: "runner_error",
+			wallMs: 0,
+		};
+	}
+
+	return {
+		binding: input.binding,
+		runtime,
+		startedAt: input.startedAt,
+		finishedAt: Date.now(),
+		source,
+		execution,
+		scenarios,
+	};
 }
 
 export async function checkCandidate(
@@ -1434,14 +1836,7 @@ export async function checkCandidate(
 			receipt.heldoutCounts = Object.fromEntries(
 				heldoutFiles.map((p) => [p, countOf(fieldOf(counts, p)) ?? 0]),
 			);
-			const failures = arrayOf(fieldOf(summary, "failures")) ?? [];
-			receipt.heldoutFailures = [
-				...new Set(
-					failures
-						.map((f) => textOf(fieldOf(objectOf(f), "file")) ?? "")
-						.filter((p) => heldoutFiles.includes(p)),
-				),
-			];
+			receipt.heldoutFailures = publicFailurePaths(summary, heldoutFiles);
 
 			if (
 				countsOf(heldout.result) === null ||

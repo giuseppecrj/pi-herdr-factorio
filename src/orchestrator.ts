@@ -199,7 +199,17 @@ export type StageOutput =
 
 type WorkflowPin = Pick<ActiveRun, "workflowSha" | "workflowDigest">;
 
+import {
+	baseRefusalNotice,
+	matchingBaseProof,
+	type BaseRefusal,
+} from "./diagnosis.ts";
+
 export interface StageExecutor {
+	baseCheck?(
+		input: import("./diagnosis.ts").BaseCheckInput,
+	): Promise<import("./diagnosis.ts").BaseCheckProgress>;
+	stopBase?(runId: Digest): Promise<void>;
 	candidate?: {
 		observeMissing?(marker: Marker): Promise<PrObservation>;
 		observe(
@@ -290,6 +300,7 @@ export interface StageExecutor {
 }
 
 type StageEnd = Pick<StageResult, "kind" | "usage"> & {
+	readonly wallMs?: number;
 	readonly output: string | null;
 	readonly build?: PatchRead;
 	readonly model?: string;
@@ -308,6 +319,8 @@ function isModelStage(stage: Stage): stage is ModelStage {
  * `null` in a record written before it existed.
  */
 export type ClaimRecord = {
+	readonly baseCheck?: import("./diagnosis.ts").BaseCheckReference;
+	readonly acceptWallMs?: number;
 	readonly runId: Digest;
 	readonly issue: number;
 	readonly eventId: string;
@@ -345,7 +358,11 @@ export type Checkout = {
 };
 
 export type CheckoutResult =
-	| { readonly kind: "ready"; readonly checkout: Checkout }
+	| {
+			readonly kind: "ready";
+			readonly checkout: Checkout;
+			readonly omitted: number | null;
+	  }
 	| { readonly kind: "refused"; readonly reason: string }
 	| { readonly kind: "unavailable" };
 
@@ -388,6 +405,12 @@ export interface RunFiles {
 export type RetryCause = "stage_failed" | "stalled" | "interrupted";
 
 export type RunPhase =
+	| {
+			readonly kind: "base_check";
+			readonly abort: AbortController;
+			dueAt: number;
+			checking: boolean;
+	  }
 	| { readonly kind: "candidate"; readonly status: RunStatus }
 	| { readonly kind: "evidence_missing" }
 	| { readonly kind: "claimed" }
@@ -503,6 +526,8 @@ type Unsettled = {
 
 /** One claimed run. The identity fields never change; the rest moves only inside a tick. */
 export type ActiveRun = {
+	baseCheck?: import("./diagnosis.ts").BaseCheckReference;
+	acceptWallMs?: number;
 	readonly runId: Digest;
 	readonly issue: number;
 	readonly eventId: string;
@@ -838,6 +863,7 @@ function desiredStatus(phase: RunPhase): RunStatus {
 		case "claimed":
 			return "claimed";
 		case "running":
+		case "base_check":
 			return "running";
 		case "blocked":
 		case "evidence_missing":
@@ -869,6 +895,7 @@ function holdsSlot(run: ActiveRun): boolean {
 	return (
 		run.stage !== "validate" &&
 		(run.phase.kind === "claimed" ||
+			run.phase.kind === "base_check" ||
 			run.phase.kind === "running" ||
 			run.phase.kind === "blocked")
 	);
@@ -1122,7 +1149,11 @@ export class Orchestrator {
 			[...this.#candidateExecutions.values()].some(
 				(execution) => !execution.settled,
 			) ||
-			[...this.state.runs.values()].some((run) => run.phase.kind === "running");
+			[...this.state.runs.values()].some(
+				(run) =>
+					run.phase.kind === "running" ||
+					(run.phase.kind === "base_check" && run.phase.checking),
+			);
 
 		if (!running() && this.#candidateResults.length === 0) return null;
 
@@ -1132,6 +1163,11 @@ export class Orchestrator {
 			await this.#reconcileStages(this.#input.clock.now(), limits);
 
 			for (const run of this.state.runs.values()) {
+				if (run.phase.kind === "base_check") {
+					await this.#pollBase(run);
+					await this.#sync(run);
+				}
+
 				if (
 					run.stage === "accept" &&
 					run.phase.kind === "claimed" &&
@@ -1519,6 +1555,12 @@ export class Orchestrator {
 	#abortRunning(run: ActiveRun): void {
 		const { phase } = run;
 
+		if (phase.kind === "base_check") {
+			phase.abort.abort();
+
+			return;
+		}
+
 		if (phase.kind !== "running") return;
 
 		phase.abort.abort();
@@ -1710,6 +1752,9 @@ export class Orchestrator {
 	}
 
 	#finishStage(run: ActiveRun, result: StageEnd, limits: Limits): void {
+		if (run.stage === "accept")
+			run.acceptWallMs = (run.acceptWallMs ?? 0) + (result.wallMs ?? 0);
+
 		if (run.stage === "build" && result.build !== undefined) {
 			if (
 				result.build.kind === "unavailable" ||
@@ -2457,6 +2502,34 @@ export class Orchestrator {
 			return run;
 		}
 
+		if (local?.runId === run.runId) {
+			run.baseCheck = local.baseCheck;
+			run.acceptWallMs = local.acceptWallMs;
+
+			if (run.baseCheck !== undefined && run.stage === "accept") {
+				const unmarked = Math.max(0, (local.usage ?? 0) - run.usage);
+				run.usage += unmarked;
+				this.state.totals.usage += unmarked;
+				run.attempt = run.baseCheck.acceptAttempt;
+				run.adopted = false;
+				run.replay = false;
+				run.phase = {
+					kind: "base_check",
+					abort: new AbortController(),
+					dueAt: 0,
+					checking: true,
+				};
+				this.state.runs.set(run.issue, run);
+
+				if (eligibility !== "current" && eligibility !== "unverified")
+					this.#release(run, eligibility);
+				else if (eligibility === "current") this.#confirmed.add(run.issue);
+				await this.#sync(run);
+
+				return run;
+			}
+		}
+
 		this.state.runs.set(run.issue, run);
 		this.#local.set(run.issue, { ...claimOf(run), seq });
 		await this.#writeClaim(run);
@@ -2592,6 +2665,12 @@ export class Orchestrator {
 		}
 
 		for (const run of runs) {
+			if (run.phase.kind === "base_check" && this.#confirmed.has(run.issue)) {
+				await this.#pollBase(run);
+				await this.#sync(run);
+				continue;
+			}
+
 			if (
 				run.inflight === null &&
 				this.#confirmed.has(run.issue) &&
@@ -3365,6 +3444,13 @@ export class Orchestrator {
 		if (prepared.kind === "wait") return false;
 
 		if (prepared.kind === "fail") {
+			if (prepared.refusal !== undefined) {
+				const notice = baseRefusalNotice(prepared.refusal);
+
+				if (!(await this.#postKeyed(run, notice.key, notice.body)))
+					return false;
+			}
+
 			run.phase = { kind: "ending", status: "failed" };
 			this.state.totals.failures++;
 			await this.#sync(run);
@@ -3501,6 +3587,7 @@ export class Orchestrator {
 
 					phase.result = {
 						kind: result.kind,
+						wallMs: result.receipt.wallMs,
 						model:
 							result.receipt.fallback?.requested ??
 							result.receipt.models.requested,
@@ -3986,6 +4073,38 @@ export class Orchestrator {
 		run.round = oldRound;
 		run.attempt = oldAttempt;
 
+		if (inputs?.kind === "fail" && request.kind === "repair_build") {
+			if (inputs.refusal !== undefined) {
+				const notice = baseRefusalNotice(inputs.refusal);
+
+				if (!(await this.#postKeyed(run, notice.key, notice.body))) return null;
+			}
+
+			const settled = handoffCandidate(state, {
+				kind: "effect_completed",
+				completion: { kind: "repair_build", request, started: false },
+			}).state;
+
+			if (settled.kind !== "selected") return null;
+
+			const finish: CandidateEffect = {
+				kind: "finish_pr",
+				terminal: { kind: "failed", reason: "evidence_unavailable" },
+			};
+
+			if (
+				await this.#commitCandidate(run, {
+					...settled,
+					work: { kind: "effect", request: finish },
+				})
+			) {
+				this.state.totals.failures++;
+				await this.#interpretCandidate(run, finish);
+			}
+
+			return null;
+		}
+
 		if (inputs !== null && inputs.kind !== "ready") return null;
 		const abort = new AbortController();
 		const handle = { abort, settled: false };
@@ -4136,6 +4255,135 @@ export class Orchestrator {
 			: { kind: "repair_build", request, started: true };
 	}
 
+	async #pollBase(run: ActiveRun): Promise<void> {
+		if (
+			run.phase.kind !== "base_check" ||
+			run.baseCheck === undefined ||
+			this.#input.clock.now() < run.phase.dueAt
+		)
+			return;
+		const reference = run.baseCheck;
+
+		const progress = await this.#input.executor.baseCheck?.({
+			...reference,
+			signal: run.phase.abort.signal,
+		});
+
+		run.phase.checking = progress?.kind === "checking";
+
+		if (progress?.kind === "checking") return;
+
+		if (progress?.kind === "interrupted") {
+			const limits = this.#limits();
+
+			if (limits !== null && reference.acceptAttempt < limits.maxAttempts) {
+				run.attempt = reference.acceptAttempt + 1;
+				run.baseCheck = { ...reference, acceptAttempt: run.attempt };
+				run.phase.dueAt =
+					this.#input.clock.now() +
+					backoffMs(run.attempt - 1, limits.maxBackoffMs);
+				this.state.totals.retries++;
+				this.#input.log("stage_ended", {
+					issue: run.issue,
+					runId: run.runId,
+					cause: "interrupted",
+					attempt: reference.acceptAttempt,
+					next: "base_check",
+				});
+				await this.#writeClaim(run);
+
+				return;
+			}
+		}
+
+		if (
+			progress?.kind !== "ready" ||
+			!matchingBaseProof(progress.proof, reference.binding)
+		) {
+			const failure =
+				progress?.kind === "refused"
+					? progress.failure
+					: {
+							binding: reference.binding,
+							receiptDigest: digestOf(JSON.stringify(reference)),
+							reason:
+								progress?.kind === "interrupted"
+									? ("base_interrupted" as const)
+									: ("base_evidence_missing" as const),
+							scenarios: [],
+						};
+
+			const notice = baseRefusalNotice(failure);
+
+			if (!(await this.#postKeyed(run, notice.key, notice.body))) return;
+			run.phase = { kind: "ending", status: "failed" };
+			this.state.totals.failures++;
+
+			return;
+		}
+
+		const contract = await this.#input.files.readContract(run.runId);
+
+		const stored =
+			contract.kind === "found"
+				? await this.#input.files.artifacts.read(
+						run.runId,
+						contract.contract,
+						contract.digest,
+					)
+				: null;
+
+		if (
+			stored?.kind !== "found" ||
+			stored.receipt.acceptanceDigest !== reference.binding.acceptanceDigest ||
+			contract.kind !== "found" ||
+			contract.digest !== reference.binding.contractDigest
+		) {
+			this.#input.log("stage_inputs_refused", {
+				issue: run.issue,
+				runId: run.runId,
+				why: stored?.kind === "blocked" ? stored.reason : "acceptance_missing",
+			});
+			run.phase = { kind: "ending", status: "failed" };
+			this.state.totals.failures++;
+
+			return;
+		}
+
+		const body = renderAcceptanceSummary({
+			runId: run.runId,
+			digest: reference.binding.acceptanceDigest,
+			scenarios: stored.suite.scenarios,
+		});
+
+		if (body === null) {
+			this.#input.log("stage_inputs_refused", {
+				issue: run.issue,
+				runId: run.runId,
+				why: "summary_too_large",
+			});
+			run.phase = { kind: "ending", status: "failed" };
+			this.state.totals.failures++;
+
+			return;
+		}
+
+		if (
+			!(await this.#postKeyed(
+				run,
+				acceptanceKey(run.runId, reference.binding.acceptanceDigest),
+				body,
+			))
+		)
+			return;
+		run.stage = "build";
+		run.attempt = 1;
+		run.inputs = null;
+		run.replay = false;
+		run.phase = { kind: "claimed" };
+		await this.#writeClaim(run);
+	}
+
 	async #sync(run: ActiveRun): Promise<void> {
 		if (run.handoff !== undefined) return;
 
@@ -4158,6 +4406,9 @@ export class Orchestrator {
 		) {
 			return;
 		}
+
+		if (run.phase.kind === "ending" && run.baseCheck !== undefined)
+			await this.#input.executor.stopBase?.(run.runId);
 
 		const before = run.seq;
 
@@ -4243,7 +4494,11 @@ export class Orchestrator {
 
 	async #stageInputs(
 		run: ActiveRun,
-	): Promise<Prepared | { readonly kind: "wait" } | { readonly kind: "fail" }> {
+	): Promise<
+		| Prepared
+		| { readonly kind: "wait" }
+		| { readonly kind: "fail"; readonly refusal?: BaseRefusal }
+	> {
 		const { files, repo } = this.#input;
 		const fields = { issue: run.issue, runId: run.runId };
 
@@ -4253,10 +4508,10 @@ export class Orchestrator {
 			return { kind: "wait" } as const;
 		};
 
-		const fail = (why: string) => {
+		const fail = (why: string, refusal?: BaseRefusal) => {
 			this.#input.log("stage_inputs_refused", { ...fields, why });
 
-			return { kind: "fail" } as const;
+			return { kind: "fail", refusal } as const;
 		};
 
 		if (
@@ -4306,6 +4561,9 @@ export class Orchestrator {
 
 		if (checked.kind === "refused") return fail(`checkout_${checked.reason}`);
 
+		if (run.stage === "accept" && checked.omitted !== 0)
+			return fail("checkout_base_tree_unsupported");
+
 		const { checkout } = checked;
 
 		const workflow = await checkout.read(WORKFLOW_PATH, 256 * 1024);
@@ -4348,6 +4606,40 @@ export class Orchestrator {
 					return fail(
 						suite.kind === "blocked" ? suite.reason : "acceptance_missing",
 					);
+
+				const binding = {
+					runId: run.runId,
+					repo,
+					issue: run.issue,
+					contractDigest: contract.digest,
+					acceptanceDigest: suite.receipt.acceptanceDigest,
+					baseSha: run.workflowSha,
+					gateSha: run.workflowSha,
+				};
+
+				const qualified = await this.#input.executor
+					.baseCheck?.({
+						binding,
+						acceptAttempt: run.baseCheck?.acceptAttempt ?? 1,
+						remainingAcceptMs: 0,
+						signal: new AbortController().signal,
+						readOnly: true,
+					})
+					.catch(() => undefined);
+
+				if (
+					qualified?.kind !== "ready" ||
+					!matchingBaseProof(qualified.proof, binding)
+				)
+					return fail("base_evidence_missing", {
+						binding,
+						receiptDigest: digestOf(
+							JSON.stringify({ binding, round: run.round ?? 0 }),
+						),
+						reason: "base_evidence_missing",
+						scenarios: [],
+					});
+
 				build = {
 					binding: {
 						runId: run.runId,
@@ -4881,25 +5173,33 @@ export class Orchestrator {
 
 			const digest = stored.receipt.acceptanceDigest;
 			this.#input.log("acceptance_stored", { ...fields, digest });
+			run.baseCheck ??= {
+				binding: {
+					runId: run.runId,
+					repo: this.#input.repo,
+					issue: run.issue,
+					contractDigest: effects.contractDigest,
+					acceptanceDigest: digest,
+					baseSha: run.workflowSha,
+					gateSha: run.workflowSha,
+				},
+				acceptAttempt: run.attempt,
+				remainingAcceptMs: Math.max(
+					0,
+					(this.#config?.stages.accept.budget.wallMs ?? 0) -
+						(run.acceptWallMs ?? 0),
+				),
+			};
+			run.phase = {
+				kind: "base_check",
+				abort: new AbortController(),
+				dueAt: 0,
+				checking: true,
+			};
+			await this.#writeClaim(run);
+			await this.#pollBase(run);
 
-			const body = renderAcceptanceSummary({
-				runId: run.runId,
-				digest,
-				scenarios: stored.suite.scenarios,
-			});
-
-			if (body === null) {
-				this.#input.log("stage_inputs_refused", {
-					...fields,
-					why: "summary_too_large",
-				});
-				run.phase = { kind: "ending", status: "failed" };
-				this.state.totals.failures++;
-
-				return false;
-			}
-
-			return this.#postKeyed(run, acceptanceKey(run.runId, digest), body);
+			return false;
 		}
 
 		if (effects.kind === "contract") {
@@ -5185,11 +5485,20 @@ function claimOf(run: ActiveRun): ClaimRecord {
 		status: run.marked?.status ?? null,
 		stage: run.marked?.stage ?? null,
 		attempt: run.marked?.attempt ?? null,
-		usage: run.marked?.usage ?? null,
+		usage:
+			run.baseCheck === undefined ? (run.marked?.usage ?? null) : run.usage,
 	};
 
-	const retained =
-		run.marked?.v === 3 ? { ...claim, marker: run.marked } : claim;
+	const base =
+		run.baseCheck === undefined
+			? claim
+			: {
+					...claim,
+					baseCheck: run.baseCheck,
+					acceptWallMs: run.acceptWallMs ?? 0,
+				};
+
+	const retained = run.marked?.v === 3 ? { ...base, marker: run.marked } : base;
 
 	return run.labelFailures === 0
 		? retained

@@ -1272,7 +1272,7 @@ describe("private build executor", () => {
 				assert.ok(isRepoSlug(repo) && isGitSha(sha));
 
 				const contract: Contract = {
-					version: 1,
+					version: 2,
 					runId: digest(RUN),
 					issue: 1,
 					base: { repo, sha },
@@ -1286,7 +1286,9 @@ describe("private build executor", () => {
 					summary: "Change behavior",
 					behavior: ["Change behavior"],
 					exclusions: [],
-					acceptance: [{ id: "A1", text: "New behavior" }],
+					acceptance: [
+						{ id: "A1", kind: "new_behavior", text: "New behavior" },
+					],
 					compatibility: [],
 					limits: [],
 					files: [],
@@ -1471,7 +1473,7 @@ describe("private build executor", () => {
 		assert.ok(isRepoSlug(repo) && isGitSha(sha));
 
 		const contract: Contract = {
-			version: 1,
+			version: 2,
 			runId: digest(RUN),
 			issue: 1,
 			base: { repo, sha },
@@ -1484,7 +1486,7 @@ describe("private build executor", () => {
 			link: null,
 			summary: "Change value",
 			behavior: ["Change value"],
-			acceptance: [{ id: "A1", text: "Value changes" }],
+			acceptance: [{ id: "A1", kind: "new_behavior", text: "Value changes" }],
 			exclusions: [],
 			compatibility: [],
 			limits: [],
@@ -3166,7 +3168,7 @@ describe("stage skills", () => {
 		assert.ok(isRepoSlug(repo) && isGitSha(sha));
 
 		const contract: Contract = {
-			version: 1,
+			version: 2,
 			runId: digest(RUN),
 			issue: 1,
 			base: { repo, sha },
@@ -3180,7 +3182,9 @@ describe("stage skills", () => {
 			summary: "Return the package version",
 			behavior: ["Return the package version"],
 			exclusions: [],
-			acceptance: [{ id: "A1", text: "Returns version 0.1.0" }],
+			acceptance: [
+				{ id: "A1", kind: "new_behavior", text: "Returns version 0.1.0" },
+			],
 			compatibility: [],
 			limits: [],
 			files: ["src/version.ts"],
@@ -3274,7 +3278,7 @@ describe("stage skills", () => {
 		assert.deepEqual(fieldOf(contractData, "acceptance"), contract.acceptance);
 		assert.match(delivered, /Use observable behavior\./);
 		assert.match(delivered, /Keep checks contract-bound\./);
-		assert.match(delivered, /"version":1,"scenarios":\[/);
+		assert.match(delivered, /"version":2,"scenarios":\[/);
 		assert.match(
 			delivered,
 			/import repository modules relative to that directory/,
@@ -3400,7 +3404,7 @@ const DRAFT = JSON.stringify({
 	summary: "Add --version",
 	behavior: ["Print the package version"],
 	exclusions: [],
-	acceptance: ["--version prints 0.1.0"],
+	acceptance: [{ kind: "new_behavior", text: "--version prints 0.1.0" }],
 	compatibility: [],
 	limits: [],
 	files: ["server/cli.ts"],

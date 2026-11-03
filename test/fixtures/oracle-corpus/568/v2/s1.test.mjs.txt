@@ -1,0 +1,43 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+const document = readFileSync('docs/operations/viewer.md', 'utf8');
+const plain = (text) => text.replace(/[`*_]/g, '').replace(/\s+/g, ' ').trim();
+
+function troubleshooting() {
+  const lines = document.split('\n');
+  const start = lines.findIndex((line) => /^#{2,6}\s+Troubleshooting startup\s*#*\s*$/.test(line));
+  assert.notEqual(start, -1, 'Add a subsection titled Troubleshooting startup');
+  const level = lines[start].match(/^#+/)[0].length;
+  let end = start + 1;
+  while (end < lines.length) {
+    const heading = lines[end].match(/^(#{1,6})\s/);
+    if (heading && heading[1].length <= level) break;
+    end++;
+  }
+  const body = lines.slice(start + 1, end).join('\n');
+  assert.ok(body.trim(), 'The troubleshooting subsection must contain guidance');
+  return body;
+}
+
+const missingState = /(?:missing|nonexistent|non-existent|absent|does not exist|doesn't exist|not found)/i;
+const occupiedPort = /(?:occupied|already in use|in use|unavailable|EADDRINUSE)/i;
+const exitOne = /(?:exit(?:s|ed)?(?:\s+(?:with|status|code|an?|exit))*\s*[:=]?\s*1\b|exit(?:\s+status|\s+code)\s*(?:is|of|:)\s*1\b)/i;
+
+test('troubleshooting explains both startup failures and exit status 1', () => {
+  const text = plain(troubleshooting());
+  assert.match(text, missingState, 'Explain the missing state failure in this subsection');
+  assert.match(text, /state\s+director(?:y|ies)/i);
+  assert.match(text, occupiedPort, 'Explain an occupied port in this subsection');
+  assert.match(text, /port/i);
+  assert.match(text, exitOne, 'Explicitly document exit status 1');
+  // Each failure must either have its own exit-status explanation or be
+  // included in a shared explanation (for example: both cases exit 1).
+  const units = text.split(/(?<=[.!?;])\s+|\s*\|\s*/);
+  const stateHasStatus = units.some((unit) => missingState.test(unit) && /state/i.test(unit) && exitOne.test(unit));
+  const portHasStatus = units.some((unit) => occupiedPort.test(unit) && /port/i.test(unit) && exitOne.test(unit));
+  const sharedStatus = /(?:both|either|these (?:cases|failures|errors)|each).*?exit(?:s)?(?:\s+(?:with|status|code))*\s*1\b/i.test(text);
+  assert.ok((stateHasStatus && portHasStatus) || sharedStatus,
+    'Associate exit 1 with both failures, not just one');
+});

@@ -459,7 +459,7 @@ async function reportDeadlineFixture(root: string) {
 	const start = Date.parse(run.createdAt);
 
 	const contract: Contract = {
-		version: 1,
+		version: 2,
 		runId,
 		issue: 42,
 		base: { repo, sha: gateSha },
@@ -472,7 +472,7 @@ async function reportDeadlineFixture(root: string) {
 		link: null,
 		summary: "Change a",
 		behavior: ["Return 2"],
-		acceptance: [{ id: "A1", text: "Return 2" }],
+		acceptance: [{ id: "A1", kind: "new_behavior", text: "Return 2" }],
 		exclusions: [],
 		compatibility: [],
 		limits: [],
@@ -495,9 +495,15 @@ async function reportDeadlineFixture(root: string) {
 		contract,
 		contractDigest,
 		suite: {
-			version: 1,
+			version: 2,
 			scenarios: [
-				{ id: "S1", criteria: ["A1"], checks: ["a.test.ts"], judge: null },
+				{
+					id: "S1",
+					kind: "new_behavior",
+					criteria: ["A1"],
+					checks: ["a.test.ts"],
+					judge: null,
+				},
 			],
 			files: [
 				{
@@ -832,10 +838,22 @@ describe("report evidence uses the fixed CI deadline", () => {
 });
 
 const suite: AcceptanceSuite = {
-	version: 1,
+	version: 2,
 	scenarios: [
-		{ id: "S1", criteria: ["A1"], checks: ["a.test.ts"], judge: null },
-		{ id: "S2", criteria: ["A2"], checks: [], judge: "Readability" },
+		{
+			id: "S1",
+			kind: "new_behavior",
+			criteria: ["A1"],
+			checks: ["a.test.ts"],
+			judge: null,
+		},
+		{
+			id: "S2",
+			kind: "preservation",
+			criteria: ["A2"],
+			checks: [],
+			judge: "Readability",
+		},
 	],
 	files: [
 		{
@@ -1044,7 +1062,7 @@ describe("generation-aware validation cleanup", () => {
 				const files = fileRunFiles(root);
 
 				const contract: Contract = {
-					version: 1,
+					version: 2,
 					runId: pin.runId,
 					issue: pin.issue,
 					base: { repo: pin.repo, sha: pin.originalBase },
@@ -1057,7 +1075,7 @@ describe("generation-aware validation cleanup", () => {
 					link: null,
 					summary: "fixture",
 					behavior: ["fixture"],
-					acceptance: [{ id: "A1", text: "fixture" }],
+					acceptance: [{ id: "A1", kind: "new_behavior", text: "fixture" }],
 					exclusions: [],
 					compatibility: [],
 					limits: [],
@@ -1272,8 +1290,8 @@ describe("published held-out bytes and repair feedback", () => {
 			suite,
 			{
 				acceptance: [
-					{ id: "A1", text: "The approved behavior" },
-					{ id: "A2", text: "Readable" },
+					{ id: "A1", kind: "new_behavior", text: "The approved behavior" },
+					{ id: "A2", kind: "preservation", text: "Readable" },
 				],
 			},
 			["test/acceptance/42/checks/a.test.ts", "outside.test.ts"],

@@ -1,0 +1,49 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const root = fileURLToPath(new URL('../../../../', import.meta.url));
+const base = 'f42ab429e74c25760c2d563d939af7f4b9b6f406';
+const text = readFileSync(new URL('skills/README.md', new URL('../../../../', import.meta.url)), 'utf8');
+const original = execFileSync('git', ['show', `${base}:skills/README.md`], { cwd: root, encoding: 'utf8' });
+
+function humanReview() {
+  const lines = text.split(/\r?\n/);
+  const headings = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const atx = /^(#{1,6})[\t ]+Human review(?:[\t ]+#+)?[\t ]*$/i.exec(lines[i]);
+    if (atx) headings.push({ start: i, body: i + 1, level: atx[1].length });
+    if (/^Human review[\t ]*$/i.test(lines[i]) && /^[\t ]*(?:=+|-+)[\t ]*$/.test(lines[i + 1] ?? '')) {
+      headings.push({ start: i, body: i + 2, level: lines[i + 1].trim().startsWith('=') ? 1 : 2 });
+    }
+  }
+  assert.equal(headings.length, 1, 'Expected one Markdown section headed Human review');
+  const heading = headings[0];
+  let end = lines.length;
+  for (let i = heading.body; i < lines.length; i += 1) {
+    const atx = /^(#{1,6})[\t ]+/.exec(lines[i]);
+    const setext = lines[i].trim() && /^[\t ]*(?:=+|-+)[\t ]*$/.test(lines[i + 1] ?? '');
+    if ((atx && atx[1].length <= heading.level) || (setext && (lines[i + 1].trim().startsWith('=') ? 1 : 2) <= heading.level)) {
+      end = i;
+      break;
+    }
+  }
+  return lines.slice(heading.body, end).join('\n');
+}
+
+test('A1: README exposes a nonempty Human review section', () => {
+  assert.ok(humanReview().trim().length > 0, 'Human review must contain explanatory text');
+});
+
+test('A5: Human review includes a Markdown link to the owner guide', () => {
+  const section = humanReview();
+  const inline = /\[[^\]\n]+\]\(\s*<?\.\.\/docs\/operations\/human-review\.md>?(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/;
+  const definitions = [...text.matchAll(/^ {0,3}\[([^\]]+)\]:\s*<?\.\.\/docs\/operations\/human-review\.md>?(?:\s+.*)?$/gm)];
+  const referenced = definitions.some((match) => {
+    const label = match[1].trim().toLowerCase();
+    return [...section.matchAll(/\[([^\]\n]+)\](?:\[([^\]\n]*)\])?/g)].some((ref) => (ref[2] || ref[1]).trim().toLowerCase() === label);
+  });
+  assert.ok(inline.test(section) || referenced, 'Owner guide must be linked from Human review using the specified relative Markdown target');
+});

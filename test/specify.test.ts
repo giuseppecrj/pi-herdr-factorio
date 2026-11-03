@@ -92,7 +92,10 @@ const CONTRACT = {
 	summary: "Add --version to the factory CLI",
 	behavior: ["node server/cli.ts --version prints the package version"],
 	exclusions: ["No other command changes its output"],
-	acceptance: ["--version prints 0.1.0 and exits 0", "--help lists --version"],
+	acceptance: [
+		{ kind: "new_behavior", text: "--version prints 0.1.0 and exits 0" },
+		{ kind: "new_behavior", text: "--help lists --version" },
+	],
 	compatibility: ["Existing commands keep their exit codes"],
 	limits: ["No new dependency"],
 	files: ["server/cli.ts", "test/cli.test.ts", "server/cli.ts"],
@@ -112,8 +115,12 @@ describe("specify output: contract schema", () => {
 		assert.equal(parsed.kind, "contract");
 		assert.ok(parsed.kind === "contract");
 		assert.deepEqual(parsed.draft.acceptance, [
-			{ id: "A1", text: "--version prints 0.1.0 and exits 0" },
-			{ id: "A2", text: "--help lists --version" },
+			{
+				id: "A1",
+				kind: "new_behavior",
+				text: "--version prints 0.1.0 and exits 0",
+			},
+			{ id: "A2", kind: "new_behavior", text: "--help lists --version" },
 		]);
 		assert.deepEqual(parsed.draft.files, ["server/cli.ts", "test/cli.test.ts"]);
 		assert.deepEqual(parsed.draft.evidence, [
@@ -310,7 +317,7 @@ describe("contract bytes and digest", () => {
 	assert.ok(parsed.kind === "contract");
 
 	const contract: Contract = {
-		version: 1,
+		version: 2,
 		runId,
 		issue: 14,
 		base: { repo, sha: base },
@@ -348,7 +355,7 @@ describe("contract bytes and digest", () => {
 
 		const stored = JSON.parse(bytes);
 
-		assert.equal(stored.version, 1);
+		assert.equal(stored.version, 2);
 		assert.deepEqual(stored.base, { repo, sha: base });
 		assert.equal(stored.snapshot.digest, digestOf("snapshot"));
 		assert.deepEqual(Object.keys(stored).slice(0, 7), [
@@ -1321,7 +1328,7 @@ describe("specify records on the host", () => {
 	assert.ok(parsed.kind === "contract");
 
 	const contract: Contract = {
-		version: 1,
+		version: 2,
 		runId,
 		issue: 14,
 		base: { repo, sha: base },

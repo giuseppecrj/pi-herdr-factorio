@@ -11,6 +11,7 @@ import {
 	STAGE_PROFILES,
 } from "../src/stages.ts";
 import {
+	acceptedEvent,
 	acceptanceDigest,
 	apply,
 	builtEvent,
@@ -81,7 +82,7 @@ describe("public advance", () => {
 		assert.equal(stageOf(run), "admit");
 		const specify = apply(run, { kind: "admitted" });
 		const accept = apply(specify, { kind: "specified", contractDigest });
-		const build = apply(accept, { kind: "accepted", acceptanceDigest });
+		const build = apply(accept, acceptedEvent());
 		assert.equal(stageOf(specify), "specify");
 		assert.equal(stageOf(accept), "accept");
 		assert.equal(stageOf(build), "build");

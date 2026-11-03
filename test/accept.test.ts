@@ -12,7 +12,7 @@ const sha = "a".repeat(40);
 if (!isRepoSlug(repo) || !isGitSha(sha)) throw new Error("fixture");
 
 const contract: Contract = {
-	version: 1,
+	version: 2,
 	runId: digestOf("run"),
 	issue: 1,
 	base: { repo, sha },
@@ -26,8 +26,8 @@ const contract: Contract = {
 	summary: "Version",
 	behavior: ["Print version"],
 	acceptance: [
-		{ id: "A1", text: "Print version" },
-		{ id: "A2", text: "Reject invalid input" },
+		{ id: "A1", kind: "new_behavior", text: "Print version" },
+		{ id: "A2", kind: "preservation", text: "Reject invalid input" },
 	],
 	exclusions: [],
 	compatibility: [],
@@ -37,12 +37,17 @@ const contract: Contract = {
 };
 
 const suite = {
-	version: 1,
+	version: 2,
 	scenarios: [
 		{ id: "S1", criteria: ["A1"], checks: ["version.test.ts"], judge: null },
-		{ id: "S2", criteria: ["A2"], checks: ["version.test.ts"], judge: null },
+		{ id: "S2", criteria: ["A2"], checks: ["invalid.test.ts"], judge: null },
 	],
 	files: [
+		{
+			path: "invalid.test.ts",
+			type: "node:test",
+			content: "import { test } from 'node:test'; test('invalid', () => {});",
+		},
 		{
 			path: "version.test.ts",
 			type: "node:test",
@@ -159,6 +164,7 @@ describe("held-out acceptance output", () => {
 			writeAcceptance(
 				JSON.stringify({
 					...suite,
+					files: suite.files.filter((f) => f.path === "version.test.ts"),
 					scenarios: [
 						suite.scenarios[0],
 						{

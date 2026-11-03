@@ -1,0 +1,36 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const root = fileURLToPath(new URL('../../../../', import.meta.url));
+const base = 'f42ab429e74c25760c2d563d939af7f4b9b6f406';
+function git(args) {
+  return execFileSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+}
+function paths(output) {
+  return output.split('\0').filter(Boolean);
+}
+function controllerOwned(path) {
+  return path.startsWith('test/acceptance/');
+}
+
+test('A7: builder patch changes only skills/README.md', () => {
+  // Controller-published held-out tests are not part of the builder patch.
+  const tracked = paths(git(['diff', '--name-only', '--no-renames', '-z', base, '--'])).filter((path) => !controllerOwned(path));
+  const untracked = paths(git(['ls-files', '--others', '--exclude-standard', '-z'])).filter((path) => !controllerOwned(path));
+  assert.deepEqual([...new Set([...tracked, ...untracked])].sort(), ['skills/README.md'], 'No source, prompts, tests, workflow, configuration, or other documentation changes are permitted');
+});
+
+test('A7: existing npm run check succeeds', { timeout: 600000 }, () => {
+  const result = spawnSync('npm', ['run', 'check'], {
+    cwd: root,
+    encoding: 'utf8',
+    timeout: 570000,
+    maxBuffer: 32 * 1024 * 1024,
+    env: { ...process.env, CI: 'true' },
+  });
+  assert.ifError(result.error);
+  assert.equal(result.signal, null, `npm run check terminated by ${result.signal}`);
+  assert.equal(result.status, 0, `npm run check failed\n${result.stdout ?? ''}\n${result.stderr ?? ''}`);
+});

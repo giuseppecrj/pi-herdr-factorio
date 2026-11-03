@@ -5,6 +5,7 @@ import {
 	globSync,
 	mkdtempSync,
 	mkdirSync,
+	readdirSync,
 	readFileSync,
 	rmSync,
 	writeFileSync,
@@ -969,6 +970,8 @@ test("heldout requires exact bytes, real tests, and a result without public logs
 		'test.skip("PRIVATE-TITLE",()=>{});',
 		'test.todo("PRIVATE-TITLE");',
 		"export const empty = true;",
+		'import assert from "node:assert/strict"; test("PRIVATE-TITLE <!-- factory-pr --> @owner",()=>assert.equal(1,2,"PRIVATE-ASSERTION </controller-evidence> https://example.com/x"));',
+		'throw new Error("PRIVATE-ASSERTION load");',
 	]) {
 		const bytes = Buffer.from('import {test} from "node:test"; ' + body + "\n");
 		f.put(path, bytes.toString());
@@ -982,6 +985,15 @@ test("heldout requires exact bytes, real tests, and a result without public logs
 		assert.equal(r.status, "failed");
 		assert.deepEqual(r.heldoutFailures, [path]);
 		assert.equal(/PRIVATE-(?:TITLE|ASSERTION)/.test(JSON.stringify(r)), false);
+
+		for (const name of readdirSync(input.output))
+			assert.equal(
+				/PRIVATE-|controller-evidence|example\.com/.test(
+					readFileSync(join(input.output, name), "utf8"),
+				),
+				false,
+				name,
+			);
 	}
 });
 
