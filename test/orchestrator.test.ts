@@ -83,7 +83,10 @@ import {
 } from "../src/handoff.ts";
 import type { Run } from "../src/run.ts";
 import {
+	blocksReview,
+	JUDGMENT_OUTCOMES,
 	ReviewEvidenceUnavailable,
+	type JudgmentOutcome,
 	type ReviewReceipt,
 } from "../src/review.ts";
 import { type Digest, digestOf, runIdOf } from "../src/run.ts";
@@ -7497,7 +7500,7 @@ describe("controller-only validate", () => {
 		return { ...f, controller };
 	}
 
-	async function reviewingRun() {
+	async function reviewingRun(outcome?: JudgmentOutcome) {
 		const f = await waitingRun();
 		const contract = await f.files.readContract(runOf(14));
 		assert.equal(contract.kind, "found");
@@ -7518,7 +7521,24 @@ describe("controller-only validate", () => {
 			originalBase: MAIN_SHA,
 			baseSha: MAIN_SHA,
 			gateSha: MAIN_SHA,
+			unjudged: outcome === undefined ? [] : ["S2"],
 		};
+
+		const seats = ["code-review", "security-review", "simplify"].map(
+			(seat) => ({
+				seat,
+				findings: [],
+				judgments:
+					seat === "code-review" && outcome !== undefined
+						? [{ scenario: "S2", outcome, reason: "no live evidence" }]
+						: [],
+				requested: "openai/gpt-6.1-sol",
+				observed: null,
+				label: "context-isolated, same model, same family, not cross-family",
+				fallback: false,
+				tokens: 1,
+			}),
+		);
 
 		f.executor.validate = async (input) => ({
 			kind: "finished",
@@ -7528,7 +7548,7 @@ describe("controller-only validate", () => {
 		});
 
 		const receipt: ReviewReceipt = {
-			version: 1,
+			version: 2,
 			r8: "incomplete",
 			runId: runOf(14),
 			round: 0,
@@ -7539,17 +7559,8 @@ describe("controller-only validate", () => {
 			ciRunId: verdict.ciRunId,
 			originalBase: MAIN_SHA,
 			baseSha: MAIN_SHA,
-			seats: ["code-review", "security-review", "simplify"].map((seat) => ({
-				seat,
-				findings: [],
-				judgments: [],
-				requested: "openai/gpt-6.1-sol",
-				observed: null,
-				label: "context-isolated, same model, same family, not cross-family",
-				fallback: false,
-				tokens: 1,
-			})),
-			blocking: false,
+			seats,
+			blocking: blocksReview(seats),
 		};
 
 		f.executor.prepareReview = async ({ workspace, execution }) => ({
@@ -7634,6 +7645,40 @@ describe("controller-only validate", () => {
 			assert.deepEqual(
 				f.files.claims.get(runOf(14))?.handoff?.accounts,
 				held.accounts,
+			);
+		});
+
+	for (const outcome of JUDGMENT_OUTCOMES)
+		it(`hands off a ${outcome} review judgment only when it is pass`, async () => {
+			const f = await reviewingRun(outcome);
+			f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+			await once(f.controller);
+			await f.controller.tick();
+			const book = f.files.claims.get(runOf(14))?.handoff;
+			assert.ok(book?.kind === "selected");
+
+			if (outcome === "pass") {
+				assert.equal(
+					book.current.certification?.review.seats[0]?.judgments[0]?.outcome,
+					"pass",
+				);
+				assert.ok(
+					book.work.kind === "effect" && book.work.request.kind === "open_pr",
+				);
+
+				return;
+			}
+
+			assert.equal(book.current.certification, null);
+			assert.equal(book.published, null);
+			assert.ok(
+				!(book.work.kind === "effect" && book.work.request.kind === "open_pr"),
+			);
+			assert.ok(
+				book.work.kind === "repair_due" ||
+					(book.work.kind === "effect" &&
+						book.work.request.kind === "repair_build"),
+				JSON.stringify(book.work),
 			);
 		});
 

@@ -10,7 +10,11 @@ import {
 	candidateReviewPrompt,
 	REVIEW_DIFF_MAX_BYTES,
 	reviewCandidate,
+	reviewFeedback,
+	seatPrompt,
+	JUDGMENT_OUTCOMES,
 	type ReviewInput,
+	type ReviewReceipt,
 	type SeatReceipt,
 } from "../src/review.ts";
 
@@ -810,8 +814,83 @@ describe("candidate review", () => {
 	const seat = {
 		seat: "code-review",
 		findings: [],
-		judgments: [{ scenario: "J1", pass: true, reason: "satisfied" }],
+		judgments: [{ scenario: "J1", outcome: "pass", reason: "satisfied" }],
 	};
+
+	it("parses a closed judgment outcome set and rejects booleans, unknown and missing outcomes", () => {
+		assert.deepEqual(JUDGMENT_OUTCOMES, [
+			"pass",
+			"fail",
+			"unverifiable",
+			"inconclusive",
+			"timeout",
+		]);
+
+		for (const outcome of JUDGMENT_OUTCOMES)
+			assert.deepEqual(
+				parseSeat(
+					JSON.stringify({
+						...seat,
+						judgments: [{ scenario: "J1", outcome, reason: "why" }],
+					}),
+					"code-review",
+					files,
+					["J1"],
+				)?.judgments,
+				[{ scenario: "J1", outcome, reason: "why" }],
+			);
+
+		for (const judgment of [
+			{ scenario: "J1", pass: true, reason: "why" },
+			{ scenario: "J1", pass: false, reason: "why" },
+			{ scenario: "J1", outcome: "pass", pass: true, reason: "why" },
+			{ scenario: "J1", outcome: "unverifiable", pass: true, reason: "why" },
+			{ scenario: "J1", outcome: "skipped", reason: "why" },
+			{ scenario: "J1", outcome: "PASS", reason: "why" },
+			{ scenario: "J1", outcome: true, reason: "why" },
+			{ scenario: "J1", outcome: null, reason: "why" },
+			{ scenario: "J1", reason: "why" },
+		])
+			assert.equal(
+				parseSeat(
+					JSON.stringify({ ...seat, judgments: [judgment] }),
+					"code-review",
+					files,
+					["J1"],
+				),
+				null,
+				JSON.stringify(judgment),
+			);
+	});
+
+	it("asks the review seat for the outcome enum, not a pass boolean", () => {
+		const prompt = seatPrompt(
+			{
+				binding: {
+					runId: digestOf("run"),
+					round: 0,
+					candidateSha: "a".repeat(40),
+					patchDigest: digestOf("patch"),
+					contractDigest: digestOf("contract"),
+					acceptanceDigest: digestOf("acceptance"),
+					ciRunId: 1,
+					originalBase: "b".repeat(40),
+					baseSha: "b".repeat(40),
+				},
+				seats: ["code-review", "security-review", "simplify"],
+				files,
+				scenarios: ["J1"],
+				prompt: "review",
+			},
+			"code-review",
+		);
+
+		assert.match(
+			prompt,
+			/"judgments":\[\{"scenario":"ID","outcome":"pass\|fail\|unverifiable\|inconclusive\|timeout","reason":"at most 600 characters"\}\]/,
+		);
+		assert.doesNotMatch(prompt, /"pass":/);
+	});
 
 	it("requires exact seats, binds findings to the SHA and patch, and lets hard checks veto approval", () => {
 		const verdict = passingVerdict(patch("one"));
@@ -846,6 +925,38 @@ describe("candidate review", () => {
 		}));
 
 		assert.equal(reviewCandidate(input, verdict, receipts).blocking, false);
+		assert.equal(reviewCandidate(input, verdict, receipts).version, 2);
+
+		for (const outcome of JUDGMENT_OUTCOMES.filter((o) => o !== "pass")) {
+			const judged = receipts.map((entry) =>
+				entry.seat === "code-review"
+					? {
+							...entry,
+							judgments: [{ scenario: "J1", outcome, reason: "no proof" }],
+						}
+					: entry,
+			);
+
+			const blocked: ReviewReceipt = reviewCandidate(input, verdict, judged);
+			assert.equal(blocked.blocking, true, outcome);
+			assert.deepEqual(
+				reviewFeedback(blocked),
+				[
+					{
+						seat: "code-review",
+						category: "criterion",
+						scenario: "J1",
+						claim: "no proof",
+					},
+				],
+				outcome,
+			);
+		}
+
+		assert.deepEqual(
+			reviewFeedback(reviewCandidate(input, verdict, receipts)),
+			[],
+		);
 		assert.throws(
 			() => reviewCandidate(input, verdict, receipts.slice(1)),
 			/missing_seat/,
@@ -1044,11 +1155,24 @@ describe("candidate review", () => {
 			blocksReview([
 				{
 					...seat,
-					judgments: [{ scenario: "J1", pass: false, reason: "missing" }],
+					judgments: [{ scenario: "J1", outcome: "fail", reason: "missing" }],
 				},
 			]),
 			true,
 		);
+
+		for (const outcome of ["unverifiable", "inconclusive", "timeout"] as const)
+			assert.equal(
+				blocksReview([
+					{
+						...seat,
+						judgments: [{ scenario: "J1", outcome, reason: "unknown" }],
+					},
+				]),
+				true,
+				outcome,
+			);
+		assert.equal(blocksReview([seat]), false);
 		assert.equal(REVIEW_MAX_TOKENS + REPAIR_BUILD_MAX_TOKENS, 80_000);
 	});
 });

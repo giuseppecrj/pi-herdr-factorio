@@ -340,7 +340,7 @@ function reviewing(state: CandidateState) {
 function receipt(e: ReviewExecution): ReviewReceipt {
 	return {
 		...e.binding,
-		version: 1,
+		version: 2,
 		r8: "incomplete",
 		blocking: false,
 		seats: e.seats.map((seat) => ({
@@ -1814,6 +1814,171 @@ test("certification rejects missing workflow/execution evidence and mismatched s
 	);
 });
 
+test("certification accepts only pass judgments, and stored reviews keep the closed outcome set", () => {
+	const state = certified(select());
+	const c = state.current.certification;
+	assert.ok(c);
+
+	const judged = (
+		outcome: string,
+		extra: { readonly pass?: boolean } = {},
+	) => ({
+		...c.review,
+		seats: c.review.seats.map((seat) =>
+			seat.seat === "code-review"
+				? {
+						...seat,
+						judgments: [{ scenario: "J1", outcome, reason: "why", ...extra }],
+					}
+				: seat,
+		),
+	});
+
+	const input = {
+		pin,
+		generation: state.current.intent,
+		execution: c.execution,
+		patch: { kind: "found", receipt: patch, patch: "patch" } as const,
+		verdict: { ...c.verdict, unjudged: ["J1"] },
+		review: c.review,
+		report: c.report,
+	};
+
+	const passed = certifyGeneration({
+		...input,
+		// SAFETY: "pass" is a member of the closed outcome set.
+		review: judged("pass") as ReviewReceipt,
+	});
+
+	assert.equal(passed.review.seats[0]?.judgments[0]?.outcome, "pass");
+
+	for (const outcome of ["fail", "unverifiable", "inconclusive", "timeout"])
+		assert.throws(
+			() =>
+				certifyGeneration({
+					...input,
+					// SAFETY: each value is a non-pass member of the closed outcome set.
+					review: judged(outcome) as ReviewReceipt,
+				}),
+			/certification/,
+			outcome,
+		);
+
+	const book = JSON.parse(
+		JSON.stringify({
+			...state,
+			current: {
+				...state.current,
+				verdict: input.verdict,
+				certification: { ...passed, verdict: input.verdict },
+			},
+		}),
+	);
+
+	assert.notEqual(parseCandidateState(book), null);
+
+	const stored = (review: JsonValue) =>
+		parseCandidateState({
+			...book,
+			current: {
+				...book.current,
+				certification: { ...book.current.certification, review },
+			},
+		});
+
+	for (const review of [
+		{ ...judged("pass"), version: 1 },
+		{
+			...judged("pass"),
+			seats: judged("pass").seats.map((seat) => ({
+				...seat,
+				judgments: seat.judgments.map(({ scenario, reason }) => ({
+					scenario,
+					pass: true,
+					reason,
+				})),
+			})),
+		},
+		{
+			...judged("pass"),
+			version: 1,
+			seats: judged("pass").seats.map((seat) => ({
+				...seat,
+				judgments: seat.judgments.map(({ scenario, reason }) => ({
+					scenario,
+					pass: true,
+					reason,
+				})),
+			})),
+		},
+		judged("pass", { pass: true }),
+		judged("skipped"),
+		judged("unverifiable"),
+	])
+		assert.equal(
+			stored(JSON.parse(JSON.stringify(review))),
+			null,
+			JSON.stringify(review.seats[0]),
+		);
+});
+
+test("Not proven lists every non-pass review outcome by scenario and outcome only, never as passed", () => {
+	const outcomes = ["fail", "unverifiable", "inconclusive", "timeout"] as const;
+
+	const limitations = notProven({
+		criteria: [{ id: "A1" }],
+		scenarios: [{ criteria: ["A1"], checks: ["a.test.ts"] }],
+		r8: "complete",
+		judgments: [
+			{ scenario: "S1", outcome: "pass", reason: "private pass reason" },
+			...outcomes.map((outcome, i) => ({
+				scenario: `S${i + 2}`,
+				outcome,
+				reason: `private ${outcome} reason test/acceptance/secret.test.ts`,
+			})),
+		],
+	});
+
+	assert.deepEqual(limitations, [
+		...outcomes.map((outcome, i) => ({
+			kind: "judgment",
+			scenario: `S${i + 2}`,
+			outcome,
+		})),
+		{ kind: "live_proof_not_recorded" },
+	]);
+
+	const rendered = limitations.map(renderLimitation);
+	assert.deepEqual(rendered.slice(0, 4), [
+		"- Review judged S2 as fail; it is not proven.",
+		"- Review judged S3 as unverifiable; it is not proven.",
+		"- Review judged S4 as inconclusive; it is not proven.",
+		"- Review judged S5 as timeout; it is not proven.",
+	]);
+
+	for (const line of rendered) {
+		assert.doesNotMatch(line, /\bS1\b|pass|private|secret|acceptance/);
+	}
+
+	assert.equal(
+		renderLimitation({
+			kind: "judgment",
+			scenario: "S1 ![x](y) @owner",
+			outcome: "unverifiable",
+		}),
+		"- Review judged a scenario as unverifiable; it is not proven.",
+	);
+	assert.deepEqual(
+		notProven({
+			criteria: [{ id: "A1" }],
+			scenarios: [{ criteria: ["A1"], checks: ["a.test.ts"] }],
+			r8: "complete",
+			judgments: [{ scenario: "S1", outcome: "pass", reason: "ok" }],
+		}),
+		[{ kind: "live_proof_not_recorded" }],
+	);
+});
+
 test("handoff Not proven section derives judge-only criteria, same-family review and pending live proof from receipts", () => {
 	const limitations = notProven({
 		criteria: [{ id: "A1" }, { id: "A2" }, { id: "A3" }],
@@ -1823,6 +1988,7 @@ test("handoff Not proven section derives judge-only criteria, same-family review
 			{ criteria: ["A3"], checks: [] },
 		],
 		r8: "incomplete",
+		judgments: [],
 	});
 
 	assert.deepEqual(limitations, [
@@ -1840,6 +2006,7 @@ test("handoff Not proven section derives judge-only criteria, same-family review
 			criteria: [{ id: "A1" }],
 			scenarios: [{ criteria: ["A1"], checks: ["a.test.ts"] }],
 			r8: "complete",
+			judgments: [],
 		}),
 		[{ kind: "live_proof_not_recorded" }],
 	);
