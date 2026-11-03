@@ -339,14 +339,26 @@ export async function readAttention(input: {
 					const link = objectOf(await privateJson(linkPath));
 					const prev = stringOf(link?.prevRunId);
 					const answers = stringOf(link?.answersDigest);
-					answered =
-						prev !== null &&
-						isDigest(prev) &&
-						answers !== null &&
-						isDigest(answers);
 
-					if (!answered) gaps.push(`invalid_link:${claim.runId.slice(0, 12)}`);
-				} catch {}
+					const unlinked =
+						link?.version === 1 &&
+						link.prevRunId === null &&
+						link.questionsDigest === undefined &&
+						link.answersDigest === undefined;
+
+					if (!unlinked) {
+						answered =
+							prev !== null &&
+							isDigest(prev) &&
+							answers !== null &&
+							isDigest(answers);
+
+						if (!answered)
+							gaps.push(`invalid_link:${claim.runId.slice(0, 12)}`);
+					}
+				} catch {
+					answered = false;
+				}
 			}
 
 			const kind = groupOf(claim, answered);
