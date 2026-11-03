@@ -9,15 +9,37 @@
 			"provenance": "Fixture 576. Base docs/operations/human-review.md is blob c90382b at gate b2367de. The candidate file is blob b3d76b1 and the two published checks are the exact bytes of candidate 73628e5 (sha256 8082812640e3 and 52222637a3ee, matching diagnose-576.stdout). The original canary comment is dropped; the store plants a fresh one.",
 			"issue": 576,
 			"criteria": [
-				{ "id": "A1", "kind": "new_behavior", "text": "Quick reference follows the introduction and precedes Inspect the handoff" },
-				{ "id": "A5", "kind": "preservation", "text": "The existing owner merge/close section is byte-for-byte unchanged" }
+				{
+					"id": "A1",
+					"kind": "new_behavior",
+					"text": "Quick reference follows the introduction and precedes Inspect the handoff"
+				},
+				{
+					"id": "A5",
+					"kind": "preservation",
+					"text": "The existing owner merge/close section is byte-for-byte unchanged"
+				}
 			],
 			"scenarios": [
-				{ "id": "S1", "criteria": ["A1"], "path": "quick-reference.test.mjs", "file": "576/checks/quick-reference.test.mjs.txt" },
-				{ "id": "S2", "criteria": ["A5"], "path": "owner-guidance.test.mjs", "file": "576/checks/owner-guidance.test.mjs.txt" }
+				{
+					"id": "S1",
+					"criteria": ["A1"],
+					"path": "quick-reference.test.mjs",
+					"file": "576/checks/quick-reference.test.mjs.txt"
+				},
+				{
+					"id": "S2",
+					"criteria": ["A5"],
+					"path": "owner-guidance.test.mjs",
+					"file": "576/checks/owner-guidance.test.mjs.txt"
+				}
 			],
-			"base": { "docs/operations/human-review.md": "576/base/docs/operations/human-review.md" },
-			"candidate": { "docs/operations/human-review.md": "576/candidate/docs/operations/human-review.md" },
+			"base": {
+				"docs/operations/human-review.md": "576/base/docs/operations/human-review.md"
+			},
+			"candidate": {
+				"docs/operations/human-review.md": "576/candidate/docs/operations/human-review.md"
+			},
 			"ci": {
 				"kind": "recorded",
 				"run": 41580633761,
@@ -26,7 +48,10 @@
 				"note": "CI 41580633761 ran the pre-#577 materializer. Its failure path and ignoredChanges are recorded in diagnose-576.md; its counts are not, so the test takes them from the legacy gate replay."
 			},
 			"materializer": "legacy-pre-577",
-			"expected": { "kind": "missing_evidence", "reason": "tree_replays_disagree" },
+			"expected": {
+				"kind": "missing_evidence",
+				"reason": "tree_replays_disagree"
+			},
 			"adjudicator": "coordinator (owner approves at PR review)",
 			"rationale": "diagnose-576.md: the gate kept main's documentation, so the correct patch failed only on the gate tree. The full candidate tree passes all five tests. No repair can fix a gate defect."
 		},
@@ -38,7 +63,10 @@
 			"issue": 576,
 			"same": "576-docs-pre-577-gate",
 			"materializer": "current",
-			"expected": { "kind": "missing_evidence", "reason": "materialize_mismatch" },
+			"expected": {
+				"kind": "missing_evidence",
+				"reason": "materialize_mismatch"
+			},
 			"adjudicator": "coordinator (owner approves at PR review)",
 			"rationale": "The current materializer overlays the documentation, so its ignoredChanges is empty while the historical receipt lists the doc. The parity check stops before any tree comparison can blame the candidate."
 		},
@@ -49,14 +77,29 @@
 			"provenance": "Fixture 561's recorded S7 check bytes (../561/v2/s7.test.mjs.txt) on its recorded base skills/README.md at f42ab42. The patch is synthetic: it inserts a correct Human review section before the provenance table.",
 			"issue": 561,
 			"criteria": [
-				{ "id": "A6", "kind": "preservation", "text": "S7: existing descriptions, provenance table, licenses and links remain unchanged" }
+				{
+					"id": "A6",
+					"kind": "preservation",
+					"text": "S7: existing descriptions, provenance table, licenses and links remain unchanged"
+				}
 			],
-			"scenarios": [{ "id": "S7", "criteria": ["A6"], "path": "s7.test.mjs", "file": "../561/v2/s7.test.mjs.txt" }],
+			"scenarios": [
+				{
+					"id": "S7",
+					"criteria": ["A6"],
+					"path": "s7.test.mjs",
+					"file": "../561/v2/s7.test.mjs.txt"
+				}
+			],
 			"base": { "skills/README.md": "../561/base/skills/README.md" },
 			"candidate": { "skills/README.md": "561-s7/candidate/skills/README.md" },
 			"ci": { "kind": "checkCandidate" },
 			"materializer": "current",
-			"expected": { "kind": "oracle", "cause": "unexpected_base", "scenarios": ["S7"] },
+			"expected": {
+				"kind": "oracle",
+				"cause": "unexpected_base",
+				"scenarios": ["S7"]
+			},
 			"adjudicator": "coordinator (owner approves at PR review)",
 			"rationale": "S7 is a preservation check that requires the new heading, so it fails on the unchanged base, and its whole-document equality rejects a correct section placed before the table."
 		},
@@ -67,14 +110,33 @@
 			"provenance": "Fixture 568's recorded S4 check bytes (../568/v2/s4.test.mjs.txt) on its recorded base docs/operations/viewer.md at 265e1b7. The patch is synthetic: it appends a correct Troubleshooting startup subsection.",
 			"issue": 568,
 			"criteria": [
-				{ "id": "A4", "kind": "preservation", "text": "existing startup and privacy guidance remains available" }
+				{
+					"id": "A4",
+					"kind": "preservation",
+					"text": "existing startup and privacy guidance remains available"
+				}
 			],
-			"scenarios": [{ "id": "S4", "criteria": ["A4"], "path": "s4.test.mjs", "file": "../568/v2/s4.test.mjs.txt" }],
-			"base": { "docs/operations/viewer.md": "../568/base/docs/operations/viewer.md" },
-			"candidate": { "docs/operations/viewer.md": "568-s4/candidate/docs/operations/viewer.md" },
+			"scenarios": [
+				{
+					"id": "S4",
+					"criteria": ["A4"],
+					"path": "s4.test.mjs",
+					"file": "../568/v2/s4.test.mjs.txt"
+				}
+			],
+			"base": {
+				"docs/operations/viewer.md": "../568/base/docs/operations/viewer.md"
+			},
+			"candidate": {
+				"docs/operations/viewer.md": "568-s4/candidate/docs/operations/viewer.md"
+			},
 			"ci": { "kind": "checkCandidate" },
 			"materializer": "current",
-			"expected": { "kind": "oracle", "cause": "unexpected_base", "scenarios": ["S4"] },
+			"expected": {
+				"kind": "oracle",
+				"cause": "unexpected_base",
+				"scenarios": ["S4"]
+			},
 			"adjudicator": "coordinator (owner approves at PR review)",
 			"rationale": "S4 asserts guidance the base never had, so the preservation check fails on the unchanged base. A correct troubleshooting patch cannot make it pass."
 		},
@@ -84,7 +146,11 @@
 			"source": "synthetic",
 			"provenance": "Minimal synthetic source patch. The ticket asks value() to return two; the patch returns three.",
 			"issue": 7001,
-			"expected": { "kind": "candidate", "reason": "candidate_heldout", "scenarios": ["S1"] },
+			"expected": {
+				"kind": "candidate",
+				"reason": "candidate_heldout",
+				"scenarios": ["S1"]
+			},
 			"adjudicator": "coordinator (owner approves at PR review)",
 			"rationale": "The check is red on the base by assertion, the preservation check passes, and the candidate fails the same assertion on both trees."
 		},
@@ -94,7 +160,11 @@
 			"source": "synthetic",
 			"provenance": "Minimal synthetic source patch that renames the export the ticket requires, so the check fails to load.",
 			"issue": 7002,
-			"expected": { "kind": "candidate", "reason": "candidate_heldout", "scenarios": ["S1"] },
+			"expected": {
+				"kind": "candidate",
+				"reason": "candidate_heldout",
+				"scenarios": ["S1"]
+			},
 			"adjudicator": "coordinator (owner approves at PR review)",
 			"rationale": "After a qualified base, a candidate-side load error that both trees reproduce is a candidate defect."
 		},
@@ -104,7 +174,11 @@
 			"source": "synthetic",
 			"provenance": "Minimal synthetic patch that adds an .npmrc, which the gate rejects before any check runs.",
 			"issue": 7003,
-			"expected": { "kind": "candidate", "reason": "candidate_check", "scenarios": [] },
+			"expected": {
+				"kind": "candidate",
+				"reason": "candidate_check",
+				"scenarios": []
+			},
 			"adjudicator": "coordinator (owner approves at PR review)",
 			"rationale": "npmrc_changed is a recognized candidate-policy early abort in the closed table."
 		}
