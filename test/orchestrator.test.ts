@@ -7662,9 +7662,7 @@ describe("controller-only validate", () => {
 					book.current.certification?.review.seats[0]?.judgments[0]?.outcome,
 					"pass",
 				);
-				assert.ok(
-					book.work.kind === "effect" && book.work.request.kind === "open_pr",
-				);
+				assert.equal(book.work.kind, "handoff");
 
 				return;
 			}
@@ -7675,9 +7673,10 @@ describe("controller-only validate", () => {
 				!(book.work.kind === "effect" && book.work.request.kind === "open_pr"),
 			);
 			assert.ok(
-				book.work.kind === "repair_due" ||
-					(book.work.kind === "effect" &&
-						book.work.request.kind === "repair_build"),
+				book.work.kind === "rebuilding" &&
+					book.work.execution.round === 1 &&
+					book.work.execution.feedbackFrom.digest ===
+						book.current.intent.digest,
 				JSON.stringify(book.work),
 			);
 		});

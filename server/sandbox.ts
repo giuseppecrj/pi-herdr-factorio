@@ -3245,9 +3245,14 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 						"receipt.json",
 					);
 
-					const review = existsSync(reviewPath)
-						? reviewFeedback(JSON.parse(regularText(reviewPath)))
-						: [];
+					const stored = existsSync(reviewPath)
+						? JSON.parse(regularText(reviewPath))
+						: null;
+
+					if (stored !== null && stored.version !== 2)
+						throw new Error("review_receipt_version");
+
+					const review = stored === null ? [] : reviewFeedback(stored);
 
 					const feedback = JSON.stringify({
 						version: 1,

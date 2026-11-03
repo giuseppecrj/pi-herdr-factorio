@@ -1,6 +1,13 @@
 import type { PatchRead, PatchReceipt } from "./build.ts";
 import { checkChangedPaths } from "./policy.ts";
-import type { ReviewBinding, ReviewReceipt, ReviewSeat } from "./review.ts";
+import {
+	isJudgmentOutcome,
+	type Judgment,
+	type JudgmentOutcome,
+	type ReviewBinding,
+	type ReviewReceipt,
+	type ReviewSeat,
+} from "./review.ts";
 import {
 	REPAIR_BUILD_MAX_TOKENS,
 	REVIEW_MAX_TOKENS,
@@ -951,7 +958,9 @@ export function certifyGeneration(input: {
 	if (
 		judgments.length !== v.unjudged.length ||
 		v.unjudged.some(
-			(id) => judgments.filter((j) => j.scenario === id && j.pass).length !== 1,
+			(id) =>
+				judgments.filter((j) => j.scenario === id && j.outcome === "pass")
+					.length !== 1,
 		)
 	)
 		throw new Error("certification_judgments");
@@ -1906,7 +1915,7 @@ function wireReview(
 	if (
 		!wireReviewBinding(value) ||
 		v === null ||
-		v.version !== 1 ||
+		v.version !== 2 ||
 		v.r8 !== "incomplete" ||
 		(v.blocking !== true && v.blocking !== false) ||
 		!Array.isArray(v.seats) ||
@@ -1954,8 +1963,9 @@ function wireReview(
 
 				return (
 					j !== null &&
+					Object.keys(j).length === 3 &&
 					wireText(j.scenario) &&
-					(j.pass === true || j.pass === false) &&
+					isJudgmentOutcome(j.outcome) &&
 					wireText(j.reason)
 				);
 			})
@@ -2360,6 +2370,11 @@ export function parseCandidateState(
 export type Limitation =
 	| { readonly kind: "judge_only"; readonly criteria: readonly string[] }
 	| { readonly kind: "same_family" }
+	| {
+			readonly kind: "judgment";
+			readonly scenario: string;
+			readonly outcome: Exclude<JudgmentOutcome, "pass">;
+	  }
 	| { readonly kind: "live_proof_not_recorded" };
 
 export function notProven(input: {
@@ -2369,6 +2384,7 @@ export function notProven(input: {
 		readonly checks: readonly string[];
 	}[];
 	readonly r8: string;
+	readonly judgments: readonly Judgment[];
 }): readonly Limitation[] {
 	const checked = new Set(
 		input.scenarios.flatMap((s) => (s.checks.length > 0 ? s.criteria : [])),
@@ -2383,6 +2399,11 @@ export function notProven(input: {
 			? [{ kind: "judge_only" as const, criteria: judgeOnly }]
 			: []),
 		...(input.r8 === "complete" ? [] : [{ kind: "same_family" as const }]),
+		...input.judgments.flatMap(({ scenario, outcome }) =>
+			outcome === "pass"
+				? []
+				: [{ kind: "judgment" as const, scenario, outcome }],
+		),
 		{ kind: "live_proof_not_recorded" },
 	];
 }
@@ -2393,6 +2414,8 @@ export function renderLimitation(limitation: Limitation): string {
 			return `- No executable check covers ${limitation.criteria.filter((id) => /^A[1-9][0-9]{0,2}$/.test(id)).join(", ")}; only review judged them.`;
 		case "same_family":
 			return "- R8 cross-family review remains incomplete.";
+		case "judgment":
+			return `- Review judged ${/^S[1-9][0-9]{0,2}$/.test(limitation.scenario) ? limitation.scenario : "a scenario"} as ${limitation.outcome}; it is not proven.`;
 		case "live_proof_not_recorded":
 			return "- No live proof is recorded; CI and review ran on the candidate only.";
 	}

@@ -8,7 +8,7 @@ export function blocksReview(
 ): boolean {
 	return seats.some(
 		(seat) =>
-			seat.judgments.some((judgment) => !judgment.pass) ||
+			seat.judgments.some((judgment) => judgment.outcome !== "pass") ||
 			seat.findings.some(
 				(finding) =>
 					finding.severity === "blocking" && finding.category !== "simplify",

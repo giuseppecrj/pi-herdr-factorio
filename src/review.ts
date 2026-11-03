@@ -50,9 +50,23 @@ export type Finding = {
 	readonly evidence: string;
 };
 
+export const JUDGMENT_OUTCOMES = [
+	"pass",
+	"fail",
+	"unverifiable",
+	"inconclusive",
+	"timeout",
+] as const;
+
+export type JudgmentOutcome = (typeof JUDGMENT_OUTCOMES)[number];
+
+export function isJudgmentOutcome(value: unknown): value is JudgmentOutcome {
+	return JUDGMENT_OUTCOMES.some((outcome) => outcome === value);
+}
+
 export type Judgment = {
 	readonly scenario: string;
-	readonly pass: boolean;
+	readonly outcome: JudgmentOutcome;
 	readonly reason: string;
 };
 
@@ -101,7 +115,7 @@ export type SeatReceipt = SeatResult & {
 };
 
 export type ReviewReceipt = ReviewBinding & {
-	readonly version: 1;
+	readonly version: 2;
 	readonly r8: "incomplete";
 	readonly seats: readonly SeatReceipt[];
 	readonly blocking: boolean;
@@ -213,19 +227,19 @@ export function parseSeat(
 	for (const item of judgments) {
 		const j = objectOf(item);
 		const scenario = textOf(fieldOf(j, "scenario"));
-		const pass = fieldOf(j, "pass");
+		const outcome = fieldOf(j, "outcome");
 		const reason = bounded(fieldOf(j, "reason"), 600);
 
 		if (
-			!keys(j, ["scenario", "pass", "reason"]) ||
+			!keys(j, ["scenario", "outcome", "reason"]) ||
 			scenario === null ||
 			!wanted.includes(scenario) ||
 			judged.some((p) => p.scenario === scenario) ||
-			(pass !== true && pass !== false) ||
+			!isJudgmentOutcome(outcome) ||
 			reason === null
 		)
 			return null;
-		judged.push({ scenario, pass, reason });
+		judged.push({ scenario, outcome, reason });
 	}
 
 	if (judged.length !== wanted.length) return null;
@@ -300,7 +314,7 @@ export function reviewCandidate(
 
 	return {
 		...input.binding,
-		version: 1,
+		version: 2,
 		r8: "incomplete",
 		seats,
 		blocking: blocksReview(seats),
@@ -354,7 +368,7 @@ export function reviewFeedback(receipt: ReviewReceipt) {
 
 	const judgments = receipt.seats.flatMap((seat) =>
 		seat.judgments
-			.filter((j) => !j.pass)
+			.filter((j) => j.outcome !== "pass")
 			.map((j) => ({
 				seat: seat.seat,
 				category: "criterion",
@@ -402,7 +416,7 @@ export function candidateReviewPrompt({
 }
 
 export function seatPrompt(input: ReviewInput, seat: ReviewSeat): string {
-	return `${input.prompt}\n\nYou are the ${seat} seat. Return exactly one JSON object, no fences or prose, no other keys:\n{"seat":"${seat}","findings":[{"id":"F1","severity":"blocking|advisory","category":"bug|security|contract|simplify","path":"src/example.ts","startLine":1,"endLine":1,"claim":"at most 600 characters","evidence":"at most 1200 characters"}],"judgments":[{"scenario":"ID","pass":true,"reason":"at most 600 characters"}]}\nUse actual enum values, not pipe-separated values. Paths must exist in the patched tree, never .github or test/acceptance. Line numbers must be valid. Empty findings are []. ${seat === "code-review" ? `Judge exactly these scenarios once each: ${JSON.stringify(input.scenarios)}.` : "judgments must be []."} ${seat === "simplify" ? "Only advisory simplify findings; no edits." : seat === "security-review" ? "Only high-confidence security findings with a concrete reachable failure; category security." : "Only concrete bugs, security defects or broken contract lines block; ignore speculative and style concerns."}`;
+	return `${input.prompt}\n\nYou are the ${seat} seat. Return exactly one JSON object, no fences or prose, no other keys:\n{"seat":"${seat}","findings":[{"id":"F1","severity":"blocking|advisory","category":"bug|security|contract|simplify","path":"src/example.ts","startLine":1,"endLine":1,"claim":"at most 600 characters","evidence":"at most 1200 characters"}],"judgments":[{"scenario":"ID","outcome":"pass|fail|unverifiable|inconclusive|timeout","reason":"at most 600 characters"}]}\nUse actual enum values, not pipe-separated values. Paths must exist in the patched tree, never .github or test/acceptance. Line numbers must be valid. Empty findings are []. ${seat === "code-review" ? `Judge exactly these scenarios once each: ${JSON.stringify(input.scenarios)}.` : "judgments must be []."} ${seat === "simplify" ? "Only advisory simplify findings; no edits." : seat === "security-review" ? "Only high-confidence security findings with a concrete reachable failure; category security." : "Only concrete bugs, security defects or broken contract lines block; ignore speculative and style concerns."}`;
 }
 
 export function reviewIdentityLabel(

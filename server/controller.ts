@@ -3043,6 +3043,7 @@ export function controllerCandidatePort(config: {
 			criteria: contract.contract.acceptance,
 			scenarios: suite.suite.scenarios,
 			r8: certificate.review.r8,
+			judgments: certificate.review.seats.flatMap((seat) => seat.judgments),
 		});
 
 		return [

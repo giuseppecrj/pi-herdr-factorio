@@ -10,12 +10,14 @@ import {
 	candidateReviewPrompt,
 	REVIEW_DIFF_MAX_BYTES,
 	reviewCandidate,
+	reviewDir,
 	reviewFeedback,
 	seatPrompt,
 	JUDGMENT_OUTCOMES,
 	type ReviewInput,
 	type ReviewReceipt,
 	type SeatReceipt,
+	type SeatResult,
 } from "../src/review.ts";
 
 import {
@@ -36,7 +38,7 @@ import {
 	chmodSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileRunFiles } from "../server/controller.ts";
 import { sandboxExecutor } from "../server/sandbox.ts";
@@ -525,7 +527,7 @@ async function checkReviewTree(mode: string) {
 		assert.ok(recovered instanceof Object && recovered.kind === "review");
 		assert.deepEqual(recovered.receipt, {
 			...prepared.input.binding,
-			version: 1,
+			version: 2,
 			r8: "incomplete",
 			seats: JSON.parse(readFileSync(join(stage, "output.txt"), "utf8")),
 			blocking: false,
@@ -593,6 +595,36 @@ async function checkReviewTree(mode: string) {
 		assert.match(
 			Buffer.from(repairedPatch.patch).toString(),
 			/-export const value = 0/,
+		);
+		const reviewReceipt = join(reviewDir(state, runId, 0), "receipt.json");
+		mkdirSync(dirname(reviewReceipt), { recursive: true, mode: 0o700 });
+		writeFileSync(
+			reviewReceipt,
+			JSON.stringify({
+				...prepared.input.binding,
+				version: 1,
+				r8: "incomplete",
+				seats: [
+					{
+						seat: "code-review",
+						findings: [],
+						judgments: [{ scenario: "S1", pass: true, reason: "ok" }],
+					},
+				],
+				blocking: false,
+			}),
+			{ mode: 0o600 },
+		);
+		assert.deepEqual(
+			await executor.checkout({
+				runId,
+				repo,
+				sha,
+				workspace: join(root, "repair-v1"),
+				build: true,
+				round: 1,
+			}),
+			{ kind: "refused", reason: "repair_inputs_invalid" },
 		);
 		assert.ok(prepared.input.files.has("value.ts"));
 		assert.match(
@@ -811,7 +843,7 @@ for (const mode of [
 describe("candidate review", () => {
 	const files = new Map([["src/a.ts", 10]]);
 
-	const seat = {
+	const seat: SeatResult = {
 		seat: "code-review",
 		findings: [],
 		judgments: [{ scenario: "J1", outcome: "pass", reason: "satisfied" }],
