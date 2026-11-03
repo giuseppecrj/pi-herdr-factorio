@@ -85,7 +85,9 @@ import {
 	assessBase,
 	classifyFailure,
 	diagnosisNeeds,
+	parseBaseReason,
 	parseBaseReceipt,
+	parseHeldoutReplay,
 	parseBaseCheckReference,
 	type AcceptanceBinding,
 	type BaseCheckInput,
@@ -98,7 +100,7 @@ import {
 } from "../src/diagnosis.ts";
 import type { AcceptanceSuite } from "../src/accept.ts";
 import type { Contract, ReplacedTest } from "../src/specify.ts";
-import { scopeOwner, scopeUnit } from "./sandbox/scope.ts";
+import { scopeOwner, scopeUnit, stopScopeArgv } from "./sandbox/scope.ts";
 import {
 	cp,
 	lstat,
@@ -1646,6 +1648,78 @@ function dependencyFacts(
 	}
 }
 
+async function stopDiagnosisScope(unit: string): Promise<void> {
+	const [command = "systemctl", ...args] = stopScopeArgv(unit);
+
+	await new Promise<void>((done) => {
+		execFile(
+			command,
+			args,
+			{
+				env: {
+					PATH: "/usr/bin:/bin",
+					XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR,
+				},
+				timeout: 5_000,
+			},
+			() => done(),
+		);
+	});
+}
+
+function completedDiagnosis(root: string): DiagnosisFacts | null {
+	try {
+		if (
+			!present(join(root, "replay.json")) ||
+			!present(join(root, "charge.json"))
+		)
+			return null;
+		const charge = objectOf(parseJson(regularText(join(root, "charge.json"))));
+		const text = regularText(join(root, "replay.json"), 4 * 1024 * 1024);
+		const raw = objectOf(parseJson(text));
+		const rawBase = jsonField(raw, "base");
+		const rawRefusal = jsonField(raw, "baseRefusal");
+		const rawIgnored = jsonField(raw, "ignoredChanges");
+		const rawReplay = jsonField(raw, "replay");
+		const rawDependencies = jsonField(raw, "dependencies");
+
+		const base =
+			rawBase === null ? null : parseBaseReceipt(JSON.stringify(rawBase));
+
+		const ignoredChanges = rawIgnored === null ? null : textsOf(rawIgnored);
+		const replay = rawReplay === null ? null : parseHeldoutReplay(rawReplay);
+
+		const dependencies =
+			rawDependencies === null
+				? null
+				: { reason: textOf(jsonField(objectOf(rawDependencies), "reason")) };
+
+		const refusal = parseBaseReason(rawRefusal);
+
+		if (
+			countOf(jsonField(charge, "wallMs")) === null ||
+			jsonField(charge, "tokens") !== 0 ||
+			(rawBase !== null && base === null) ||
+			(rawRefusal !== null && refusal === null) ||
+			(rawIgnored !== null && ignoredChanges === null) ||
+			(rawReplay !== null && replay === null)
+		)
+			return null;
+
+		const facts: DiagnosisFacts = {
+			base,
+			baseRefusal: refusal,
+			ignoredChanges,
+			replay,
+			dependencies,
+		};
+
+		return `${JSON.stringify(facts)}\n` === text ? facts : null;
+	} catch {
+		return null;
+	}
+}
+
 function sameMaterializer(gate: string, source: Uint8Array): boolean {
 	const path = join(gate, "server/gates.ts");
 
@@ -1675,7 +1749,10 @@ export function controllerDiagnosis(config: {
 		readonly heldoutDigest: string;
 	}) => { readonly ignoredChanges: readonly string[] };
 	readonly materializerSource?: Uint8Array;
+	readonly stopScope?: (unit: string) => Promise<void>;
 }) {
+	const stopScope = config.stopScope ?? stopDiagnosisScope;
+
 	const materializerSource =
 		config.materializerSource ??
 		readFileSync(new URL("./gates.ts", import.meta.url));
@@ -1685,7 +1762,9 @@ export function controllerDiagnosis(config: {
 		{ runId: Digest; abort: AbortController; done: Promise<void> }
 	>();
 
-	const check = (request: DiagnosisRequest): "checking" | "settled" => {
+	const check = async (
+		request: DiagnosisRequest,
+	): Promise<"checking" | "settled"> => {
 		const root = join(request.dir, "diagnosis", request.bindingDigest);
 		const intentPath = join(root, "intent.json");
 
@@ -1695,15 +1774,26 @@ export function controllerDiagnosis(config: {
 			const intent = objectOf(parseJson(regularText(intentPath)));
 
 			const startedAt = countOf(jsonField(intent, "startedAt")),
-				deadline = countOf(jsonField(intent, "deadline"));
+				deadline = countOf(jsonField(intent, "deadline")),
+				unit = textOf(jsonField(intent, "scope"));
 
 			if (
 				startedAt === null ||
 				deadline === null ||
 				deadline < startedAt ||
+				unit === null ||
 				jsonField(intent, "bindingDigest") !== request.bindingDigest
 			)
 				throw new Error("diagnosis_intent_invalid");
+			const completed = completedDiagnosis(root);
+
+			if (completed !== null) {
+				request.finish(completed);
+
+				return "settled";
+			}
+
+			await stopScope(unit);
 			keepValidationFile(
 				join(root, "interrupted.json"),
 				`${JSON.stringify({ wallMs: deadline - startedAt, tokens: 0 })}\n`,
@@ -2493,7 +2583,7 @@ export function controllerValidator(config: {
 				});
 			};
 
-			const diagnosed = (verdict: Verdict): boolean => {
+			const diagnosed = async (verdict: Verdict): Promise<boolean> => {
 				if (verdict.pass || readStoredAssessment(dir) !== null) return true;
 				const raw = receiptOf();
 				const needs = diagnosisNeeds(raw ?? undefined);
@@ -2540,7 +2630,7 @@ export function controllerValidator(config: {
 				};
 
 				return (
-					config.diagnosis.check({
+					(await config.diagnosis.check({
 						runId: input.runId,
 						dir,
 						bindingDigest,
@@ -2573,7 +2663,7 @@ export function controllerValidator(config: {
 						finish: (facts) => fail(classifyWith(raw, facts)),
 						interrupted: () =>
 							fail({ kind: "infrastructure", reason: "interrupted" }),
-					}) === "settled"
+					})) === "settled"
 				);
 			};
 
@@ -2640,7 +2730,7 @@ export function controllerValidator(config: {
 				)
 					return failed("verdict_binding");
 
-				if (!diagnosed(verdict)) return { kind: "waiting", state };
+				if (!(await diagnosed(verdict))) return { kind: "waiting", state };
 				const cleanup = await cleanupPublication(api, dir, state.publication);
 
 				if (cleanup === "branch_moved") return failed("branch_moved");
@@ -2986,7 +3076,7 @@ export function controllerValidator(config: {
 			keepValidationFile(receiptPath, text ?? "null\n");
 			keepValidationFile(verdictPath, `${JSON.stringify(verdict)}\n`);
 
-			if (!diagnosed(verdict)) return { kind: "waiting", state };
+			if (!(await diagnosed(verdict))) return { kind: "waiting", state };
 			const cleanup = await cleanupPublication(api, dir, publication);
 
 			if (cleanup === "branch_moved") return failed("branch_moved");

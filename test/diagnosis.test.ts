@@ -58,6 +58,7 @@ import {
 	controllerDiagnosis,
 	controllerValidator,
 	fileRunFiles,
+	type DiagnosisFacts,
 	type TarballFetch,
 } from "../server/controller.ts";
 import {
@@ -1842,6 +1843,8 @@ async function jobWorld(
 		throw new Error(`unexpected ${path}`);
 	};
 
+	const stopped: string[] = [];
+
 	const owner = (
 		materialize = entry.materializer === "legacy-pre-577",
 		source: Uint8Array | null = Buffer.from(GATE_SOURCE),
@@ -1851,6 +1854,9 @@ async function jobWorld(
 			fetch,
 			materialize: materialize ? legacyMaterialize : undefined,
 			materializerSource: source ?? undefined,
+			stopScope: async (unit) => {
+				stopped.push(unit);
+			},
 		});
 
 	const step = async (
@@ -1906,6 +1912,7 @@ async function jobWorld(
 		deadline: start + 1_200_000,
 		fetches,
 		writes,
+		stopped,
 		owner,
 		step,
 		settle,
@@ -2116,6 +2123,91 @@ scoped(
 );
 
 scoped(
+	"a restart after a completed replay classifies from its stored evidence without rerunning (L6)",
+	async (t) => {
+		const w = await jobWorld(t, "synthetic-wrong-value");
+		const actual = w.owner();
+		let completed: DiagnosisFacts | null = null;
+
+		const crashed = {
+			...actual,
+			check: (request: Parameters<typeof actual.check>[0]) =>
+				actual.check({
+					...request,
+					finish: (facts) => {
+						completed = facts;
+					},
+				}),
+		};
+
+		assert.equal((await w.step(crashed)).kind, "waiting");
+
+		for (let n = 0; n < 400 && completed === null; n++)
+			await new Promise((r) => setTimeout(r, 10));
+		assert.ok(completed !== null);
+		assert.equal(w.fetches.length, 2);
+		const read = finishedAssessment(await w.step(w.owner()));
+
+		assert.deepEqual(read.assessment, {
+			kind: "failed",
+			failure: {
+				kind: "candidate",
+				reason: "candidate_heldout",
+				scenarios: ["S1"],
+			},
+		});
+		assert.equal(w.fetches.length, 2);
+		assert.deepEqual(w.stopped, []);
+		assert.deepEqual(
+			diagnosisFiles(w.dir)
+				.map((p) => p.split("/")[1])
+				.toSorted(),
+			["charge.json", "intent.json", "replay.json"],
+		);
+		assert.ok(existsSync(join(w.dir, "feedback.json")));
+	},
+);
+
+scoped(
+	"a restart whose stored replay is torn is interrupted, not classified (L6)",
+	async (t) => {
+		const w = await jobWorld(t, "synthetic-wrong-value");
+		const actual = w.owner();
+		let completed: DiagnosisFacts | null = null;
+
+		const crashed = {
+			...actual,
+			check: (request: Parameters<typeof actual.check>[0]) =>
+				actual.check({
+					...request,
+					finish: (facts) => {
+						completed = facts;
+					},
+				}),
+		};
+
+		assert.equal((await w.step(crashed)).kind, "waiting");
+
+		for (let n = 0; n < 400 && completed === null; n++)
+			await new Promise((r) => setTimeout(r, 10));
+		assert.ok(completed !== null);
+		const [digest] = readdirSync(join(w.dir, "diagnosis"));
+		assert.ok(digest !== undefined);
+		const path = join(w.dir, "diagnosis", digest, "replay.json");
+		const text = readFileSync(path, "utf8");
+		writeFileSync(path, text.slice(0, Math.floor(text.length / 2)));
+		const read = finishedAssessment(await w.step(w.owner()));
+
+		assert.deepEqual(read.assessment, {
+			kind: "failed",
+			failure: { kind: "infrastructure", reason: "interrupted" },
+		});
+		assert.equal(w.stopped.length, 1);
+		assert.equal(existsSync(join(w.dir, "feedback.json")), false);
+	},
+);
+
+scoped(
 	"an interrupted diagnosis is charged once, holds as infrastructure and never relaunches",
 	async (t) => {
 		const w = await jobWorld(t, "synthetic-wrong-value");
@@ -2151,6 +2243,7 @@ scoped(
 			wallMs: intent.deadline - intent.startedAt,
 			tokens: 0,
 		});
+		assert.deepEqual(w.stopped, [intent.scope]);
 
 		for (const owner of [restarted, w.owner()])
 			assert.deepEqual(finishedAssessment(await w.step(owner)), read);

@@ -459,6 +459,88 @@ function parseExecution(value: JsonValue | undefined): PrivateExecution | null {
 	return { kind: "observed", exitCode, wallMs, files };
 }
 
+const REPLAY_UNAVAILABLE: ReadonlySet<string> = new Set([
+	"timeout",
+	"runner_error",
+	"dependency_transport",
+	"unsupported_tree",
+	"unsupported_materializer",
+	"suite_mismatch",
+]);
+
+function parseProjection(
+	value: JsonValue | undefined,
+): HeldoutProjection | null {
+	const v = objectOf(value);
+	const rawCounts = objectOf(fieldOf(v, "counts"));
+	const failed = textsOf(fieldOf(v, "failed"));
+	const passed = fieldOf(v, "passed");
+
+	if (
+		rawCounts === null ||
+		failed === null ||
+		(passed !== true && passed !== false)
+	)
+		return null;
+	const counts: Record<string, number> = {};
+
+	for (const [file, raw] of Object.entries(rawCounts)) {
+		const count = countOf(raw);
+
+		if (count === null) return null;
+		counts[file] = count;
+	}
+
+	return { counts, failed, passed };
+}
+
+/** Reads a stored replay back; null unless it round-trips byte for byte. */
+export function parseHeldoutReplay(
+	value: JsonValue | undefined,
+): HeldoutReplay | null {
+	const v = objectOf(value);
+	const wallMs = countOf(fieldOf(v, "wallMs"));
+	const reason = textOf(fieldOf(v, "reason"));
+
+	if (wallMs === null) return null;
+	let replay: HeldoutReplay | null = null;
+
+	if (fieldOf(v, "kind") === "unavailable") {
+		if (reason === null || !REPLAY_UNAVAILABLE.has(reason)) return null;
+		replay = {
+			kind: "unavailable",
+			// SAFETY: membership in REPLAY_UNAVAILABLE is checked on the line above.
+			reason: reason as Extract<
+				HeldoutReplay,
+				{ kind: "unavailable" }
+			>["reason"],
+			wallMs,
+		};
+	} else if (fieldOf(v, "kind") === "observed") {
+		const files = textsOf(fieldOf(v, "files"));
+
+		const tree = (name: string): TreeReplay | null => {
+			const t = objectOf(fieldOf(v, name));
+			const execution = parseExecution(fieldOf(t, "execution"));
+			const projection = parseProjection(fieldOf(t, "projection"));
+
+			return execution === null || projection === null
+				? null
+				: { execution, projection };
+		};
+
+		const gate = tree("gate"),
+			full = tree("full");
+
+		if (files === null || gate === null || full === null) return null;
+		replay = { kind: "observed", files, gate, full, wallMs };
+	}
+
+	return replay !== null && JSON.stringify(replay) === JSON.stringify(v)
+		? replay
+		: null;
+}
+
 export function parseBaseReceipt(text: string): BaseReceipt | null {
 	const record = objectOf(parseJson(text));
 	const e = objectOf(fieldOf(record, "evidence"));
@@ -570,28 +652,52 @@ export function parseBaseReceipt(text: string): BaseReceipt | null {
 	return JSON.stringify(receipt) === JSON.stringify(record) ? receipt : null;
 }
 
+const BASE_REASON_SENTENCES: Readonly<Record<BaseReason, string>> = {
+	acceptance_not_reproduced:
+		"Acceptance does not reproduce the ticket on the unchanged base.",
+	preservation_failed: "A preservation check fails on the unchanged base.",
+	base_load_error: "A check could not load on the unchanged base.",
+	base_no_tests: "A check registered no tests.",
+	base_runner_error: "The isolated base runner could not execute.",
+	base_timeout: "Base qualification exceeded its deadline.",
+	base_non_assertion_failure: "A check raised a non-assertion error.",
+	base_skip: "A check skipped a test.",
+	base_todo: "A check left a test as todo.",
+	base_cancelled: "A check cancelled a test.",
+	base_tree_unsupported:
+		"The unchanged base tree is partial or lacks its trusted gates.",
+	base_interrupted:
+		"Base qualification was interrupted on every accept attempt.",
+	base_nondeterministic: "Two base runs of the checks gave different results.",
+	base_evidence_missing:
+		"Base qualification evidence is incomplete or invalid.",
+};
+
+const BASE_REASONS: readonly BaseReason[] = [
+	"acceptance_not_reproduced",
+	"preservation_failed",
+	"base_load_error",
+	"base_no_tests",
+	"base_runner_error",
+	"base_timeout",
+	"base_non_assertion_failure",
+	"base_skip",
+	"base_todo",
+	"base_cancelled",
+	"base_tree_unsupported",
+	"base_interrupted",
+	"base_nondeterministic",
+	"base_evidence_missing",
+];
+
+export function parseBaseReason(
+	value: JsonValue | undefined,
+): BaseReason | null {
+	return BASE_REASONS.find((r) => r === value) ?? null;
+}
+
 export function baseRefusalNotice(failure: BaseRefusal) {
-	const reasons: Record<BaseReason, string> = {
-		acceptance_not_reproduced:
-			"Acceptance does not reproduce the ticket on the unchanged base.",
-		preservation_failed: "A preservation check fails on the unchanged base.",
-		base_load_error: "A check could not load on the unchanged base.",
-		base_no_tests: "A check registered no tests.",
-		base_runner_error: "The isolated base runner could not execute.",
-		base_timeout: "Base qualification exceeded its deadline.",
-		base_non_assertion_failure: "A check raised a non-assertion error.",
-		base_skip: "A check skipped a test.",
-		base_todo: "A check left a test as todo.",
-		base_cancelled: "A check cancelled a test.",
-		base_tree_unsupported:
-			"The unchanged base tree is partial or lacks its trusted gates.",
-		base_interrupted:
-			"Base qualification was interrupted on every accept attempt.",
-		base_nondeterministic:
-			"Two base runs of the checks gave different results.",
-		base_evidence_missing:
-			"Base qualification evidence is incomplete or invalid.",
-	};
+	const reasons = BASE_REASON_SENTENCES;
 
 	const key = `<!-- factory-base-refusal run=${failure.binding.runId} r=${failure.receiptDigest} -->`;
 	const ids = failure.scenarios.filter((s) => /^S[1-9][0-9]{0,2}$/.test(s));
