@@ -1460,13 +1460,13 @@ export function controllerBaseChecker(config: {
 
 				const { receipt } = assessBase(evidence);
 				const text = JSON.stringify(receipt);
+				await rm(join(dir, "tree"), { recursive: true, force: true });
+				await rm(tree, { recursive: true, force: true });
+				await rm(join(dir, "checkouts"), { recursive: true, force: true });
 				exclusive(join(dir, "result.digest"), digestOf(text));
 
 				if (!(await writeAtomic(resultPath, text)))
 					throw new Error("base_result_unwritable");
-				await rm(join(dir, "tree"), { recursive: true, force: true });
-				await rm(tree, { recursive: true, force: true });
-				await rm(join(dir, "checkouts"), { recursive: true, force: true });
 			})().finally(() => {
 				input.signal.removeEventListener("abort", externalAbort);
 				jobs.delete(dir);
