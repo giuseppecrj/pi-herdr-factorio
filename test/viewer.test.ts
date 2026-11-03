@@ -128,6 +128,126 @@ test("repair claims preserve their counter without validation and display only t
 	}
 });
 
+test("missing-book round reviews render only through the strict-or-migrate review parser", async () => {
+	const f = await fixtureState();
+
+	try {
+		const claim = JSON.parse(
+			await readFile(join(f.root, "claims", `${runId}.json`), "utf8"),
+		);
+
+		await writeFile(
+			join(f.root, "claims", `${runId}.json`),
+			JSON.stringify({ ...claim, stage: "review", round: 1 }),
+		);
+		await mkdir(join(f.root, "stages", runId, "review-r1-1"));
+		const path = join(f.root, "review", runId, "r1", "receipt.json");
+		await mkdir(join(path, ".."), { recursive: true });
+
+		type StoredJudgment = {
+			readonly scenario: string;
+			readonly reason: string;
+			readonly pass?: boolean;
+			readonly outcome?: string;
+		};
+
+		const receipt = (
+			version: number,
+			judgments: readonly StoredJudgment[],
+		) => ({
+			runId,
+			round: 1,
+			candidateSha: "c".repeat(40),
+			patchDigest: digestOf("patch"),
+			contractDigest: digestOf("contract"),
+			acceptanceDigest: digestOf("acceptance"),
+			ciRunId: 1,
+			originalBase: "a".repeat(40),
+			baseSha: "a".repeat(40),
+			execution: {
+				generation: 0,
+				intentDigest: digestOf("intent"),
+				attempt: 1,
+				workflowSha: "b".repeat(40),
+				workflowDigest: digestOf("workflow"),
+			},
+			version,
+			r8: "incomplete",
+			seats: [
+				{
+					seat: "code-review",
+					findings: [],
+					judgments,
+					requested: "openai/gpt-6.1-sol",
+					observed: null,
+					label: "context-isolated",
+					fallback: false,
+					tokens: 1,
+				},
+			],
+			blocking: false,
+		});
+
+		const view = async (
+			value: ReturnType<typeof receipt> | { readonly seats: unknown },
+		) => {
+			await writeFile(path, JSON.stringify(value), { mode: 0o600 });
+			const viewed = await readViewerRun(f.root, runId);
+
+			return {
+				details: viewed.timeline
+					.filter(
+						(entry) =>
+							entry.source.endsWith(join("r1", "receipt.json")) &&
+							entry.event === "code-review",
+					)
+					.map((entry) => entry.detail.split("; ").at(-1)),
+				gap: viewed.gaps.some(
+					(entry) =>
+						entry.source.endsWith(join("r1", "receipt.json")) &&
+						entry.reason === "missing_or_corrupt_round_review",
+				),
+			};
+		};
+
+		const judgment = (
+			extra: Omit<StoredJudgment, "scenario" | "reason">,
+		): StoredJudgment => ({
+			scenario: "S1",
+			...extra,
+			reason: "why",
+		});
+
+		for (const [value, detail] of [
+			[receipt(1, [judgment({ pass: true })]), "clean"],
+			[receipt(1, [judgment({ pass: false })]), "blocking"],
+			[receipt(2, [judgment({ outcome: "pass" })]), "clean"],
+			[receipt(2, [judgment({ outcome: "unverifiable" })]), "blocking"],
+		] as const)
+			assert.deepEqual(
+				await view(value),
+				{ details: [detail], gap: false },
+				JSON.stringify(value),
+			);
+
+		for (const value of [
+			receipt(1, [judgment({ outcome: "pass" })]),
+			receipt(2, [judgment({ pass: true })]),
+			receipt(3, [judgment({ outcome: "pass" })]),
+			receipt(2, [judgment({ outcome: "skipped" })]),
+			receipt(1, [judgment({ pass: true, outcome: "pass" })]),
+			{ ...receipt(2, []), seats: [{ seat: "code-review" }] },
+		])
+			assert.deepEqual(
+				await view(value),
+				{ details: [], gap: true },
+				JSON.stringify(value),
+			);
+	} finally {
+		await rm(f.root, { recursive: true, force: true });
+	}
+});
+
 test("round-qualified sessions keep their stage and round in usage and timelines", async () => {
 	const f = await fixtureState();
 

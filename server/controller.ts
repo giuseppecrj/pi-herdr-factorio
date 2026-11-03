@@ -11,6 +11,8 @@ import {
 	parseCandidateState,
 	candidateUsage,
 	candidateGenerations,
+	migrateCertificationValue,
+	migrateEvidenceValue,
 	notProven,
 	renderLimitation,
 	type CandidateState,
@@ -1228,10 +1230,19 @@ export async function checkoutBuildWorkspace(
 	return result;
 }
 
-async function writeOnce(path: string, text: string): Promise<boolean> {
+async function writeOnce(
+	path: string,
+	text: string,
+	migrate?: (value: JsonValue | undefined) => JsonValue | undefined,
+): Promise<boolean> {
 	const existing = await readFile(path, "utf8").catch(() => null);
 
-	if (existing !== null) return existing === text;
+	if (existing !== null)
+		return (
+			existing === text ||
+			(migrate !== undefined &&
+				`${JSON.stringify(migrate(parseJson(existing)))}\n` === text)
+		);
 
 	try {
 		await mkdir(dirname(path), { recursive: true, mode: 0o700 });
@@ -1684,6 +1695,7 @@ export function fileRunFiles(stateDir: string): RunFiles {
 							!(await writeOnce(
 								join(dir, "archive.json"),
 								`${JSON.stringify(evidence)}\n`,
+								migrateEvidenceValue,
 							))
 						)
 							return false;
@@ -1693,6 +1705,7 @@ export function fileRunFiles(stateDir: string): RunFiles {
 							!(await writeOnce(
 								join(dir, "certification.json"),
 								`${JSON.stringify(evidence.certification)}\n`,
+								migrateCertificationValue,
 							))
 						)
 							return false;
@@ -3043,6 +3056,7 @@ export function controllerCandidatePort(config: {
 			criteria: contract.contract.acceptance,
 			scenarios: suite.suite.scenarios,
 			r8: certificate.review.r8,
+			judgments: certificate.review.seats.flatMap((seat) => seat.judgments),
 		});
 
 		return [

@@ -1,6 +1,13 @@
 import type { PatchRead, PatchReceipt } from "./build.ts";
 import { checkChangedPaths } from "./policy.ts";
-import type { ReviewBinding, ReviewReceipt, ReviewSeat } from "./review.ts";
+import {
+	isJudgmentOutcome,
+	type Judgment,
+	type JudgmentOutcome,
+	type ReviewBinding,
+	type ReviewReceipt,
+	type ReviewSeat,
+} from "./review.ts";
 import {
 	REPAIR_BUILD_MAX_TOKENS,
 	REVIEW_MAX_TOKENS,
@@ -951,7 +958,9 @@ export function certifyGeneration(input: {
 	if (
 		judgments.length !== v.unjudged.length ||
 		v.unjudged.some(
-			(id) => judgments.filter((j) => j.scenario === id && j.pass).length !== 1,
+			(id) =>
+				judgments.filter((j) => j.scenario === id && j.outcome === "pass")
+					.length !== 1,
 		)
 	)
 		throw new Error("certification_judgments");
@@ -1906,7 +1915,7 @@ function wireReview(
 	if (
 		!wireReviewBinding(value) ||
 		v === null ||
-		v.version !== 1 ||
+		v.version !== 2 ||
 		v.r8 !== "incomplete" ||
 		(v.blocking !== true && v.blocking !== false) ||
 		!Array.isArray(v.seats) ||
@@ -1954,13 +1963,79 @@ function wireReview(
 
 				return (
 					j !== null &&
+					Object.keys(j).length === 3 &&
 					wireText(j.scenario) &&
-					(j.pass === true || j.pass === false) &&
+					isJudgmentOutcome(j.outcome) &&
 					wireText(j.reason)
 				);
 			})
 		);
 	});
+}
+
+function migrateReview(value: JsonValue | undefined): JsonValue | undefined {
+	const v = wireObject(value);
+
+	if (v?.version !== 1) return value;
+
+	if (!Array.isArray(v.seats)) return null;
+	const seats: JsonValue[] = [];
+
+	for (const entry of v.seats) {
+		const s = wireObject(entry);
+
+		if (s === null || !Array.isArray(s.judgments)) return null;
+		const judgments: JsonValue[] = [];
+
+		for (const item of s.judgments) {
+			const j = wireObject(item);
+
+			if (
+				j === null ||
+				Object.keys(j).sort().join() !== "pass,reason,scenario" ||
+				(j.pass !== true && j.pass !== false)
+			)
+				return null;
+			judgments.push({
+				scenario: j.scenario ?? null,
+				outcome: j.pass ? "pass" : "fail",
+				reason: j.reason ?? null,
+			});
+		}
+
+		seats.push({ ...s, judgments });
+	}
+
+	return { ...v, version: 2, seats };
+}
+
+export function parseReviewReceipt(
+	value: JsonValue | undefined,
+): ReviewReceipt | null {
+	const migrated = migrateReview(value);
+
+	return wireReview(migrated) ? snapshot(migrated) : null;
+}
+
+export function migrateCertificationValue(
+	value: JsonValue | undefined,
+): JsonValue | undefined {
+	const c = wireObject(value);
+
+	return c === null ? value : { ...c, review: migrateReview(c.review) ?? null };
+}
+
+export function migrateEvidenceValue(
+	value: JsonValue | undefined,
+): JsonValue | undefined {
+	const e = wireObject(value);
+
+	return e === null || wireObject(e.certification) === null
+		? value
+		: {
+				...e,
+				certification: migrateCertificationValue(e.certification) ?? null,
+			};
 }
 
 function wireValidation(
@@ -2354,12 +2429,28 @@ function wireCandidate(
 export function parseCandidateState(
 	value: JsonValue | undefined,
 ): CandidateState | null {
-	return wireCandidate(value) ? snapshot(value) : null;
+	const v = wireObject(value);
+
+	const migrated =
+		v?.kind === "selected" && Array.isArray(v.history)
+			? {
+					...v,
+					history: v.history.map((g) => migrateEvidenceValue(g) ?? null),
+					current: migrateEvidenceValue(v.current) ?? null,
+				}
+			: value;
+
+	return wireCandidate(migrated) ? snapshot(migrated) : null;
 }
 
 export type Limitation =
 	| { readonly kind: "judge_only"; readonly criteria: readonly string[] }
 	| { readonly kind: "same_family" }
+	| {
+			readonly kind: "judgment";
+			readonly scenario: string;
+			readonly outcome: Exclude<JudgmentOutcome, "pass">;
+	  }
 	| { readonly kind: "live_proof_not_recorded" };
 
 export function notProven(input: {
@@ -2369,6 +2460,7 @@ export function notProven(input: {
 		readonly checks: readonly string[];
 	}[];
 	readonly r8: string;
+	readonly judgments: readonly Judgment[];
 }): readonly Limitation[] {
 	const checked = new Set(
 		input.scenarios.flatMap((s) => (s.checks.length > 0 ? s.criteria : [])),
@@ -2383,6 +2475,11 @@ export function notProven(input: {
 			? [{ kind: "judge_only" as const, criteria: judgeOnly }]
 			: []),
 		...(input.r8 === "complete" ? [] : [{ kind: "same_family" as const }]),
+		...input.judgments.flatMap(({ scenario, outcome }) =>
+			outcome === "pass"
+				? []
+				: [{ kind: "judgment" as const, scenario, outcome }],
+		),
 		{ kind: "live_proof_not_recorded" },
 	];
 }
@@ -2393,6 +2490,8 @@ export function renderLimitation(limitation: Limitation): string {
 			return `- No executable check covers ${limitation.criteria.filter((id) => /^A[1-9][0-9]{0,2}$/.test(id)).join(", ")}; only review judged them.`;
 		case "same_family":
 			return "- R8 cross-family review remains incomplete.";
+		case "judgment":
+			return `- Review judged ${/^S[1-9][0-9]{0,2}$/.test(limitation.scenario) ? limitation.scenario : "a scenario"} as ${limitation.outcome}; it is not proven.`;
 		case "live_proof_not_recorded":
 			return "- No live proof is recorded; CI and review ran on the candidate only.";
 	}

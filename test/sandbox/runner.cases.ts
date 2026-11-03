@@ -3460,7 +3460,7 @@ describe("multi-seat candidate review", () => {
 				findings: [],
 				judgments:
 					seat === "code-review"
-						? [{ scenario: "S1", pass: true, reason: "implemented" }]
+						? [{ scenario: "S1", outcome: "pass", reason: "implemented" }]
 						: [],
 			});
 

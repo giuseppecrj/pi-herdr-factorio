@@ -271,7 +271,7 @@ export function candidateLifecycleFixture() {
 					patch: { kind: "found", receipt: patch, patch: "patch" },
 					review: {
 						...review.execution.binding,
-						version: 1,
+						version: 2,
 						r8: "incomplete",
 						blocking: false,
 						seats: review.execution.seats.map((seat) => ({

@@ -220,7 +220,7 @@ function prBook(issue: number, number: number, ready: boolean): JsonValue {
 			patch: { kind: "found", receipt: patch, patch: "patch" },
 			review: {
 				...request.execution.binding,
-				version: 1,
+				version: 2,
 				r8: "incomplete",
 				blocking: false,
 				seats: request.execution.seats.map((seat) => ({

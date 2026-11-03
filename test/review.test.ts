@@ -10,8 +10,14 @@ import {
 	candidateReviewPrompt,
 	REVIEW_DIFF_MAX_BYTES,
 	reviewCandidate,
+	reviewDir,
+	reviewFeedback,
+	seatPrompt,
+	JUDGMENT_OUTCOMES,
 	type ReviewInput,
+	type ReviewReceipt,
 	type SeatReceipt,
+	type SeatResult,
 } from "../src/review.ts";
 
 import {
@@ -32,7 +38,7 @@ import {
 	chmodSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileRunFiles } from "../server/controller.ts";
 import { sandboxExecutor } from "../server/sandbox.ts";
@@ -521,7 +527,7 @@ async function checkReviewTree(mode: string) {
 		assert.ok(recovered instanceof Object && recovered.kind === "review");
 		assert.deepEqual(recovered.receipt, {
 			...prepared.input.binding,
-			version: 1,
+			version: 2,
 			r8: "incomplete",
 			seats: JSON.parse(readFileSync(join(stage, "output.txt"), "utf8")),
 			blocking: false,
@@ -590,6 +596,94 @@ async function checkReviewTree(mode: string) {
 			Buffer.from(repairedPatch.patch).toString(),
 			/-export const value = 0/,
 		);
+		const reviewReceipt = join(reviewDir(state, runId, 0), "receipt.json");
+		mkdirSync(dirname(reviewReceipt), { recursive: true, mode: 0o700 });
+
+		const v1Receipt = (judgments: readonly object[], version = 1) =>
+			JSON.stringify({
+				...prepared.input.binding,
+				version,
+				r8: "incomplete",
+				seats: [
+					{
+						seat: "code-review",
+						findings: [],
+						judgments,
+						requested: "openai/gpt-6.1-sol",
+						observed: null,
+						label: "context-isolated",
+						fallback: false,
+						tokens: 1,
+					},
+				],
+				blocking: true,
+			});
+
+		writeFileSync(
+			reviewReceipt,
+			v1Receipt([
+				{ scenario: "S1", pass: true, reason: "PASSED_REASON" },
+				{ scenario: "S2", pass: false, reason: "missing guard" },
+			]),
+			{ mode: 0o600 },
+		);
+		const migratedWorkspace = join(root, "repair-v1");
+		assert.equal(
+			(
+				await executor.checkout({
+					runId,
+					repo,
+					sha,
+					workspace: migratedWorkspace,
+					build: true,
+					round: 1,
+				})
+			).kind,
+			"ready",
+		);
+
+		const migratedFeedback = readFileSync(
+			join(migratedWorkspace, ".factory-feedback.json"),
+			"utf8",
+		);
+
+		assert.deepEqual(JSON.parse(migratedFeedback).review, [
+			{
+				seat: "code-review",
+				category: "criterion",
+				scenario: "S2",
+				claim: "missing guard",
+			},
+		]);
+		assert.doesNotMatch(migratedFeedback, /PASSED_REASON|"S1"/);
+
+		for (const [i, malformed] of [
+			v1Receipt([
+				{ scenario: "S1", pass: true, reason: "ok" },
+				{ scenario: "S2", outcome: "fail", reason: "why" },
+			]),
+			v1Receipt([{ scenario: "S1", pass: true, reason: "ok" }], 2),
+			v1Receipt([{ scenario: "S1", pass: true, reason: "ok" }], 3),
+			v1Receipt([
+				{ scenario: "S1", outcome: "pass", pass: true, reason: "ok" },
+			]),
+			v1Receipt([{ scenario: "S1", pass: "yes", reason: "ok" }]),
+		].entries()) {
+			writeFileSync(reviewReceipt, malformed, { mode: 0o600 });
+			assert.deepEqual(
+				await executor.checkout({
+					runId,
+					repo,
+					sha,
+					workspace: join(root, `repair-malformed-${i}`),
+					build: true,
+					round: 1,
+				}),
+				{ kind: "refused", reason: "repair_inputs_invalid" },
+				malformed,
+			);
+		}
+
 		assert.ok(prepared.input.files.has("value.ts"));
 		assert.match(
 			readFileSync(join(workspace, "value.ts"), "utf8"),
@@ -807,11 +901,86 @@ for (const mode of [
 describe("candidate review", () => {
 	const files = new Map([["src/a.ts", 10]]);
 
-	const seat = {
+	const seat: SeatResult = {
 		seat: "code-review",
 		findings: [],
-		judgments: [{ scenario: "J1", pass: true, reason: "satisfied" }],
+		judgments: [{ scenario: "J1", outcome: "pass", reason: "satisfied" }],
 	};
+
+	it("parses a closed judgment outcome set and rejects booleans, unknown and missing outcomes", () => {
+		assert.deepEqual(JUDGMENT_OUTCOMES, [
+			"pass",
+			"fail",
+			"unverifiable",
+			"inconclusive",
+			"timeout",
+		]);
+
+		for (const outcome of JUDGMENT_OUTCOMES)
+			assert.deepEqual(
+				parseSeat(
+					JSON.stringify({
+						...seat,
+						judgments: [{ scenario: "J1", outcome, reason: "why" }],
+					}),
+					"code-review",
+					files,
+					["J1"],
+				)?.judgments,
+				[{ scenario: "J1", outcome, reason: "why" }],
+			);
+
+		for (const judgment of [
+			{ scenario: "J1", pass: true, reason: "why" },
+			{ scenario: "J1", pass: false, reason: "why" },
+			{ scenario: "J1", outcome: "pass", pass: true, reason: "why" },
+			{ scenario: "J1", outcome: "unverifiable", pass: true, reason: "why" },
+			{ scenario: "J1", outcome: "skipped", reason: "why" },
+			{ scenario: "J1", outcome: "PASS", reason: "why" },
+			{ scenario: "J1", outcome: true, reason: "why" },
+			{ scenario: "J1", outcome: null, reason: "why" },
+			{ scenario: "J1", reason: "why" },
+		])
+			assert.equal(
+				parseSeat(
+					JSON.stringify({ ...seat, judgments: [judgment] }),
+					"code-review",
+					files,
+					["J1"],
+				),
+				null,
+				JSON.stringify(judgment),
+			);
+	});
+
+	it("asks the review seat for the outcome enum, not a pass boolean", () => {
+		const prompt = seatPrompt(
+			{
+				binding: {
+					runId: digestOf("run"),
+					round: 0,
+					candidateSha: "a".repeat(40),
+					patchDigest: digestOf("patch"),
+					contractDigest: digestOf("contract"),
+					acceptanceDigest: digestOf("acceptance"),
+					ciRunId: 1,
+					originalBase: "b".repeat(40),
+					baseSha: "b".repeat(40),
+				},
+				seats: ["code-review", "security-review", "simplify"],
+				files,
+				scenarios: ["J1"],
+				prompt: "review",
+			},
+			"code-review",
+		);
+
+		assert.match(
+			prompt,
+			/"judgments":\[\{"scenario":"ID","outcome":"pass\|fail\|unverifiable\|inconclusive\|timeout","reason":"at most 600 characters"\}\]/,
+		);
+		assert.doesNotMatch(prompt, /"pass":/);
+	});
 
 	it("requires exact seats, binds findings to the SHA and patch, and lets hard checks veto approval", () => {
 		const verdict = passingVerdict(patch("one"));
@@ -846,6 +1015,38 @@ describe("candidate review", () => {
 		}));
 
 		assert.equal(reviewCandidate(input, verdict, receipts).blocking, false);
+		assert.equal(reviewCandidate(input, verdict, receipts).version, 2);
+
+		for (const outcome of JUDGMENT_OUTCOMES.filter((o) => o !== "pass")) {
+			const judged = receipts.map((entry) =>
+				entry.seat === "code-review"
+					? {
+							...entry,
+							judgments: [{ scenario: "J1", outcome, reason: "no proof" }],
+						}
+					: entry,
+			);
+
+			const blocked: ReviewReceipt = reviewCandidate(input, verdict, judged);
+			assert.equal(blocked.blocking, true, outcome);
+			assert.deepEqual(
+				reviewFeedback(blocked),
+				[
+					{
+						seat: "code-review",
+						category: "criterion",
+						scenario: "J1",
+						claim: "no proof",
+					},
+				],
+				outcome,
+			);
+		}
+
+		assert.deepEqual(
+			reviewFeedback(reviewCandidate(input, verdict, receipts)),
+			[],
+		);
 		assert.throws(
 			() => reviewCandidate(input, verdict, receipts.slice(1)),
 			/missing_seat/,
@@ -1044,11 +1245,24 @@ describe("candidate review", () => {
 			blocksReview([
 				{
 					...seat,
-					judgments: [{ scenario: "J1", pass: false, reason: "missing" }],
+					judgments: [{ scenario: "J1", outcome: "fail", reason: "missing" }],
 				},
 			]),
 			true,
 		);
+
+		for (const outcome of ["unverifiable", "inconclusive", "timeout"] as const)
+			assert.equal(
+				blocksReview([
+					{
+						...seat,
+						judgments: [{ scenario: "J1", outcome, reason: "unknown" }],
+					},
+				]),
+				true,
+				outcome,
+			);
+		assert.equal(blocksReview([seat]), false);
 		assert.equal(REVIEW_MAX_TOKENS + REPAIR_BUILD_MAX_TOKENS, 80_000);
 	});
 });
