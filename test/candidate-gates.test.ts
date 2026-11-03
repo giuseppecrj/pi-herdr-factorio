@@ -1109,12 +1109,23 @@ test("main's baseline test run gets 180 seconds and candidates three times its m
 		},
 	};
 
-	await checkCandidate({ ...gateInput(f, f.gateSha), runner });
+	const result = await checkCandidate({ ...gateInput(f, f.gateSha), runner });
 	const baseline = deadlines.find((d) => d.tree === "baseline" && d.tests);
 	assert.equal(baseline?.deadlineMs, 180000);
 
-	for (const later of deadlines.slice(deadlines.indexOf(baseline) + 1))
-		assert.ok((later.deadlineMs ?? 0) >= 90000, JSON.stringify(later));
+	const measured =
+		result.checks.find((c) => c.name === "baseline_tests")?.durationMs ?? -1;
+
+	assert.ok(measured >= 0);
+	const later = deadlines.slice(deadlines.indexOf(baseline) + 1);
+	assert.ok(later.length > 0);
+
+	for (const run of later)
+		assert.equal(
+			run.deadlineMs,
+			Math.max(90000, measured * 3 + 30000),
+			JSON.stringify(run),
+		);
 });
 
 test("bad manifests, stale bases, missing checks and tampered replacement digests fail incomplete", async (t) => {
