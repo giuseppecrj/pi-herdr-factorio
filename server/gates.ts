@@ -25,7 +25,10 @@ import {
 	oracleKey,
 	type AcceptanceBinding,
 	type BaseEvidence,
+	type HeldoutProjection,
+	type HeldoutReplay,
 	type PrivateExecution,
+	type TreeReplay,
 	type TestFailure,
 } from "../src/diagnosis.ts";
 import type { Contract } from "../src/specify.ts";
@@ -353,6 +356,124 @@ function replacementsOf(text: string): readonly ReplacedTest[] {
 	});
 }
 
+type Inventory = ReadonlyMap<string, { mode: string; blob: string }>;
+
+function checkReplacements(
+	base: Inventory,
+	candidate: Inventory,
+	list: readonly ReplacedTest[],
+): readonly ReplacedTest[] {
+	const replacements = replacementsOf(JSON.stringify(list));
+
+	for (const item of replacements) {
+		if (!base.has(item.path)) throw new Error("invalid_replacements");
+
+		if (!candidate.has(item.path)) throw new Error("replacement_deleted");
+	}
+
+	return replacements;
+}
+
+function overlay(input: {
+	readonly base: Inventory;
+	readonly candidate: Inventory;
+	readonly candidateDir: string;
+	readonly dest: string;
+	readonly replacements: readonly ReplacedTest[];
+	readonly heldoutDir?: string;
+	readonly heldoutDigest?: string;
+}) {
+	const { base, candidate, replacements } = input;
+	const source = input.candidateDir;
+	const ignoredChanges: string[] = [];
+	const newTests: string[] = [];
+	const heldout = heldoutOf(source, input.heldoutDir, input.heldoutDigest);
+
+	for (const [path, entry] of candidate)
+		if (
+			path.startsWith("test/acceptance/") &&
+			(entry.blob !== base.get(path)?.blob ||
+				entry.mode !== base.get(path)?.mode) &&
+			!heldout.includes(path)
+		)
+			throw new Error("unauthorized_acceptance");
+	rmSync(join(input.dest, "test/acceptance"), {
+		recursive: true,
+		force: true,
+	});
+
+	for (const dir of SOURCE) {
+		rmSync(join(input.dest, dir), { recursive: true, force: true });
+
+		if (existsSync(join(source, dir)))
+			cpSync(join(source, dir), join(input.dest, dir), {
+				recursive: true,
+			});
+	}
+
+	for (const path of base.keys())
+		if (isDocumentation(path) && !candidate.has(path))
+			rmSync(join(input.dest, path), { force: true });
+
+	for (const [path, item] of candidate) {
+		if (isDocumentation(path)) {
+			if (item.blob !== base.get(path)?.blob) {
+				mkdirSync(dirname(join(input.dest, path)), { recursive: true });
+				cpSync(join(source, path), join(input.dest, path));
+			}
+
+			continue;
+		}
+
+		const fromSource = SOURCE.some((dir) => path.startsWith(`${dir}/`));
+		const replacement = replacements.some((r) => r.path === path);
+
+		const additional =
+			path.startsWith("test/") &&
+			(!base.has(path) || path.startsWith("test/acceptance/"));
+
+		if (
+			path.split("/").at(-1) === ".npmrc" &&
+			item.blob !== base.get(path)?.blob
+		)
+			throw new Error("npmrc_changed");
+
+		if (additional || replacement) {
+			mkdirSync(dirname(join(input.dest, path)), { recursive: true });
+			cpSync(join(source, path), join(input.dest, path));
+
+			if (
+				additional &&
+				/\.(?:test|cases)\.[cm]?[jt]s$/.test(path) &&
+				!path.startsWith("test/acceptance/")
+			)
+				newTests.push(path);
+		}
+
+		if (
+			(fromSource || additional) &&
+			CONFIG.has(path.split("/").at(-1) ?? "")
+		) {
+			rmSync(join(input.dest, path), { force: true });
+			ignoredChanges.push(path);
+		} else if (
+			!fromSource &&
+			!additional &&
+			!replacement &&
+			item.blob !== base.get(path)?.blob &&
+			path !== "package-lock.json" &&
+			path !== "package.json"
+		)
+			ignoredChanges.push(path);
+	}
+
+	for (const path of base.keys())
+		if (path.split("/").at(-1) === ".npmrc" && !candidate.has(path))
+			throw new Error("npmrc_changed");
+
+	return { ignoredChanges: ignoredChanges.sort(), newTests: newTests.sort() };
+}
+
 export async function materializeCandidate(input: {
 	readonly repository: string;
 	readonly gateSha: string;
@@ -364,114 +485,77 @@ export async function materializeCandidate(input: {
 }) {
 	const base = await entries(input.repository, input.gateSha);
 	const candidate = await entries(input.repository, input.candidateSha);
-	const replacements = replacementsOf(JSON.stringify(input.replacements));
-
-	for (const item of replacements) {
-		if (!base.has(item.path)) throw new Error("invalid_replacements");
-
-		if (!candidate.has(item.path)) throw new Error("replacement_deleted");
-	}
-
+	const replacements = checkReplacements(base, candidate, input.replacements);
 	await exportTree(input.repository, input.gateSha, input.dest);
 	const temp = mkdtempSync(join(dirname(input.dest), "candidate-"));
-	const ignoredChanges: string[] = [];
-	const newTests: string[] = [];
 
 	try {
 		await exportTree(input.repository, input.candidateSha, join(temp, "tree"));
 
-		const heldout = heldoutOf(
-			join(temp, "tree"),
-			input.heldoutDir,
-			input.heldoutDigest,
-		);
-
-		for (const [path, entry] of candidate)
-			if (
-				path.startsWith("test/acceptance/") &&
-				(entry.blob !== base.get(path)?.blob ||
-					entry.mode !== base.get(path)?.mode) &&
-				!heldout.includes(path)
-			)
-				throw new Error("unauthorized_acceptance");
-		rmSync(join(input.dest, "test/acceptance"), {
-			recursive: true,
-			force: true,
+		return overlay({
+			...input,
+			base,
+			candidate,
+			candidateDir: join(temp, "tree"),
+			replacements,
 		});
-
-		for (const dir of SOURCE) {
-			rmSync(join(input.dest, dir), { recursive: true, force: true });
-
-			if (existsSync(join(temp, "tree", dir)))
-				cpSync(join(temp, "tree", dir), join(input.dest, dir), {
-					recursive: true,
-				});
-		}
-
-		for (const path of base.keys())
-			if (isDocumentation(path) && !candidate.has(path))
-				rmSync(join(input.dest, path), { force: true });
-
-		for (const [path, item] of candidate) {
-			if (isDocumentation(path)) {
-				if (item.blob !== base.get(path)?.blob) {
-					mkdirSync(dirname(join(input.dest, path)), { recursive: true });
-					cpSync(join(temp, "tree", path), join(input.dest, path));
-				}
-
-				continue;
-			}
-
-			const fromSource = SOURCE.some((dir) => path.startsWith(`${dir}/`));
-			const replacement = replacements.some((r) => r.path === path);
-
-			const additional =
-				path.startsWith("test/") &&
-				(!base.has(path) || path.startsWith("test/acceptance/"));
-
-			if (
-				path.split("/").at(-1) === ".npmrc" &&
-				item.blob !== base.get(path)?.blob
-			)
-				throw new Error("npmrc_changed");
-
-			if (additional || replacement) {
-				mkdirSync(dirname(join(input.dest, path)), { recursive: true });
-				cpSync(join(temp, "tree", path), join(input.dest, path));
-
-				if (
-					additional &&
-					/\.(?:test|cases)\.[cm]?[jt]s$/.test(path) &&
-					!path.startsWith("test/acceptance/")
-				)
-					newTests.push(path);
-			}
-
-			if (
-				(fromSource || additional) &&
-				CONFIG.has(path.split("/").at(-1) ?? "")
-			) {
-				rmSync(join(input.dest, path), { force: true });
-				ignoredChanges.push(path);
-			} else if (
-				!fromSource &&
-				!additional &&
-				!replacement &&
-				item.blob !== base.get(path)?.blob &&
-				path !== "package-lock.json" &&
-				path !== "package.json"
-			)
-				ignoredChanges.push(path);
-		}
-
-		for (const path of base.keys())
-			if (path.split("/").at(-1) === ".npmrc" && !candidate.has(path))
-				throw new Error("npmrc_changed");
 	} finally {
 		rmSync(temp, { recursive: true, force: true });
 	}
+}
 
-	return { ignoredChanges: ignoredChanges.sort(), newTests: newTests.sort() };
+function inventory(tree: string): Inventory {
+	const found = new Map<string, { mode: string; blob: string }>();
+
+	const walk = (rel: string) => {
+		for (const entry of readdirSync(join(tree, rel), { withFileTypes: true })) {
+			const path = rel ? `${rel}/${entry.name}` : entry.name;
+			const stat = lstatSync(join(tree, path));
+
+			if (
+				!safePath(path) ||
+				entry.name === ".gitattributes" ||
+				stat.isSymbolicLink() ||
+				(!stat.isDirectory() && !stat.isFile())
+			)
+				throw new Error("unsafe_tree");
+
+			if (stat.isDirectory()) walk(path);
+			else
+				found.set(path, {
+					mode: stat.mode & 0o111 ? "100755" : "100644",
+					blob: digestOf(readFileSync(join(tree, path))),
+				});
+		}
+	};
+
+	walk("");
+
+	if (found.size > 10000) throw new Error("tree_too_large");
+
+	return found;
+}
+
+export function materializeFromDirectories(input: {
+	readonly gateTree: string;
+	readonly candidateTree: string;
+	readonly dest: string;
+	readonly replacements: readonly ReplacedTest[];
+	readonly heldoutDir?: string;
+	readonly heldoutDigest?: string;
+}) {
+	const base = inventory(input.gateTree);
+	const candidate = inventory(input.candidateTree);
+	const replacements = checkReplacements(base, candidate, input.replacements);
+	cpSync(input.gateTree, input.dest, { recursive: true, errorOnExist: true });
+
+	return overlay({
+		...input,
+		base,
+		candidate,
+		candidateDir: input.candidateTree,
+		replacements,
+	});
 }
 
 function specs(value: JsonObject | null): void {
@@ -765,7 +849,7 @@ const dockerRunner: GateRunner = {
 	},
 };
 
-const localRunner: GateRunner = {
+export const localRunner: GateRunner = {
 	kind: "local-bwrap",
 	async run(input) {
 		const binds = [
@@ -1254,6 +1338,27 @@ function publicFailurePaths(
 	];
 }
 
+function heldoutProjection(
+	result: Result,
+	files: readonly string[],
+): HeldoutProjection {
+	const summary = objectOf(parseJson(result.stdout.trim()));
+	const counts = objectOf(fieldOf(summary, "counts"));
+
+	const projected = Object.fromEntries(
+		files.map((p) => [p, countOf(fieldOf(counts, p)) ?? 0]),
+	);
+
+	const passed = countsOf(result) !== null && files.every((p) => projected[p]);
+	const failed = publicFailurePaths(summary, files);
+
+	return {
+		counts: projected,
+		failed: !passed && failed.length === 0 ? [...files] : failed,
+		passed,
+	};
+}
+
 export function baseTreeDigest(tree: string): ReturnType<typeof digestOf> {
 	const entries: (readonly [string, number, string])[] = [];
 
@@ -1288,6 +1393,69 @@ export function baseTreeDigest(tree: string): ReturnType<typeof digestOf> {
 }
 
 const dependencyJobs = new Map<string, Promise<string>>();
+
+async function dependencyCache(
+	source: string,
+	gates: string,
+	cacheDir: string,
+	deps: readonly Dependency[],
+	deadline: number,
+	run: GateRunner,
+	remaining: () => number,
+): Promise<string | undefined> {
+	if (deps.length === 0) return undefined;
+	const lockDigest = digestOf(readFileSync(join(source, "package-lock.json")));
+	const cache = join(cacheDir, lockDigest);
+	let job = dependencyJobs.get(cache);
+
+	if (job === undefined) {
+		job = (async () => {
+			if (existsSync(join(cache, "READY"))) {
+				if (readFileSync(join(cache, "READY"), "utf8") !== lockDigest)
+					throw new Error("invalid_dependency_cache");
+
+				return join(cache, "tree/node_modules");
+			}
+
+			mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
+			rmSync(cache, { recursive: true, force: true });
+			mkdirSync(cache, { mode: 0o700 });
+			const tree = join(cache, "tree");
+			mkdirSync(tree);
+
+			for (const path of ["package.json", "package-lock.json"])
+				cpSync(join(source, path), join(tree, path));
+			const archives = join(cache, "archives");
+			await prefetch(deps, archives, deadline);
+
+			const installed = await install(
+				tree,
+				gates,
+				archives,
+				join(cache, "npm"),
+				run,
+			);
+
+			if (
+				installed.exitCode !== 0 ||
+				installed.timedOut ||
+				installed.runnerError
+			)
+				throw new Error("dependency_setup_failed");
+			remaining();
+			writeFileSync(join(cache, "READY"), lockDigest, {
+				flag: "wx",
+				mode: 0o600,
+			});
+
+			return join(tree, "node_modules");
+		})();
+		dependencyJobs.set(cache, job);
+		void job.catch(() => dependencyJobs.delete(cache));
+	}
+
+	return job;
+}
 
 export async function runHeldoutBase(input: {
 	readonly tree: string;
@@ -1391,61 +1559,15 @@ export async function runHeldoutBase(input: {
 			readFileSync(join(input.tree, "package-lock.json")),
 		);
 
-		const deps = readDependencies(input.tree);
-		const cache = join(input.cacheDir, lockDigest);
-		let dependency: string | undefined;
-
-		if (deps.length > 0) {
-			let job = dependencyJobs.get(cache);
-
-			if (job === undefined) {
-				job = (async () => {
-					if (existsSync(join(cache, "READY"))) {
-						if (readFileSync(join(cache, "READY"), "utf8") !== lockDigest)
-							throw new Error("invalid_dependency_cache");
-
-						return join(cache, "tree/node_modules");
-					}
-
-					mkdirSync(input.cacheDir, { recursive: true, mode: 0o700 });
-					rmSync(cache, { recursive: true, force: true });
-					mkdirSync(cache, { mode: 0o700 });
-					const tree = join(cache, "tree");
-					mkdirSync(tree);
-
-					for (const path of ["package.json", "package-lock.json"])
-						cpSync(join(input.tree, path), join(tree, path));
-					const archives = join(cache, "archives");
-					await prefetch(deps, archives, input.deadline);
-
-					const installed = await install(
-						tree,
-						gates,
-						archives,
-						join(cache, "npm"),
-						run,
-					);
-
-					if (
-						installed.exitCode !== 0 ||
-						installed.timedOut ||
-						installed.runnerError
-					)
-						throw new Error("dependency_setup_failed");
-					remaining();
-					writeFileSync(join(cache, "READY"), lockDigest, {
-						flag: "wx",
-						mode: 0o600,
-					});
-
-					return join(tree, "node_modules");
-				})();
-				dependencyJobs.set(cache, job);
-				void job.catch(() => dependencyJobs.delete(cache));
-			}
-
-			dependency = await job;
-		}
+		const dependency = await dependencyCache(
+			input.tree,
+			gates,
+			input.cacheDir,
+			readDependencies(input.tree),
+			input.deadline,
+			run,
+			remaining,
+		);
 
 		remaining();
 		source = { kind: "ready", treeDigest, lockDigest, gatesDigest };
@@ -1504,6 +1626,143 @@ export async function runHeldoutBase(input: {
 		execution,
 		scenarios,
 	};
+}
+
+export async function replayHeldoutCandidate(input: {
+	readonly gateTree: string;
+	readonly fullTree: string;
+	readonly gates: string;
+	readonly heldoutDir: string;
+	readonly heldoutDigest: string;
+	readonly workDir: string;
+	readonly cacheDir: string;
+	readonly deadline: number;
+	readonly scope?: string;
+	readonly signal?: AbortSignal;
+	readonly runner?: GateRunner;
+}): Promise<HeldoutReplay> {
+	const runner = input.runner ?? localRunner;
+	const started = Date.now();
+
+	const remaining = () => {
+		if (input.signal?.aborted || Date.now() >= input.deadline)
+			throw new Error("replay_timeout");
+
+		return Math.max(1, input.deadline - Date.now());
+	};
+
+	const run: GateRunner = {
+		kind: runner.kind,
+		run: (request) =>
+			runner.run({
+				...request,
+				deadlineMs: Math.min(request.deadlineMs ?? Infinity, remaining()),
+				scope: input.scope,
+				signal: input.signal,
+			}),
+	};
+
+	const unavailable = (
+		reason: Extract<HeldoutReplay, { kind: "unavailable" }>["reason"],
+	): HeldoutReplay => ({
+		kind: "unavailable",
+		reason,
+		wallMs: Date.now() - started,
+	});
+
+	let files: string[];
+	let deps: readonly Dependency[];
+
+	try {
+		remaining();
+		baseTreeDigest(input.gateTree);
+		baseTreeDigest(input.fullTree);
+		baseTreeDigest(input.gates);
+		deps = validateDependencies(
+			readFileSync(join(input.fullTree, "package.json"), "utf8"),
+			readFileSync(join(input.fullTree, "package-lock.json"), "utf8"),
+			readFileSync(join(input.gateTree, "package-lock.json"), "utf8"),
+		);
+	} catch (error) {
+		return error instanceof Error && error.message === "replay_timeout"
+			? unavailable("timeout")
+			: unavailable("unsupported_tree");
+	}
+
+	try {
+		files = heldoutOf(input.fullTree, input.heldoutDir, input.heldoutDigest);
+
+		if (
+			JSON.stringify(
+				heldoutOf(input.gateTree, input.heldoutDir, input.heldoutDigest),
+			) !== JSON.stringify(files)
+		)
+			return unavailable("suite_mismatch");
+	} catch {
+		return unavailable("suite_mismatch");
+	}
+
+	let dependency: string | undefined;
+
+	try {
+		dependency = await dependencyCache(
+			input.fullTree,
+			input.gates,
+			input.cacheDir,
+			deps,
+			input.deadline,
+			run,
+			remaining,
+		);
+	} catch {
+		return input.signal?.aborted || Date.now() >= input.deadline
+			? unavailable("timeout")
+			: unavailable("dependency_transport");
+	}
+
+	const replayTree = async (
+		name: string,
+		source: string,
+	): Promise<TreeReplay> => {
+		const tree = join(input.workDir, name);
+		cpSync(source, tree, { recursive: true, errorOnExist: true, force: false });
+
+		if (dependency !== undefined)
+			mkdirSync(join(tree, "node_modules"), { recursive: true });
+		const began = Date.now();
+
+		const result = await run.run({
+			tree,
+			gates: input.gates,
+			dependencies: dependency,
+			argv: testArgv(files),
+		});
+
+		return {
+			execution: privateExecution(result, files, Date.now() - began),
+			projection: heldoutProjection(result, files),
+		};
+	};
+
+	try {
+		mkdirSync(input.workDir, { recursive: true, mode: 0o700 });
+		const gate = await replayTree("gate", input.gateTree);
+		const full = await replayTree("full", input.fullTree);
+
+		return {
+			kind: "observed",
+			files,
+			gate,
+			full,
+			wallMs: Date.now() - started,
+		};
+	} catch (error) {
+		return input.signal?.aborted ||
+			Date.now() >= input.deadline ||
+			(error instanceof Error && error.message === "replay_timeout")
+			? unavailable("timeout")
+			: unavailable("runner_error");
+	}
 }
 
 export async function checkCandidate(
@@ -1856,22 +2115,11 @@ export async function checkCandidate(
 
 		if (heldoutFiles.length) {
 			const heldout = await run("heldout", tree, testArgv(heldoutFiles));
-			const summary = objectOf(parseJson(heldout.result.stdout.trim()));
-			const counts = objectOf(fieldOf(summary, "counts"));
-			receipt.heldoutCounts = Object.fromEntries(
-				heldoutFiles.map((p) => [p, countOf(fieldOf(counts, p)) ?? 0]),
-			);
-			receipt.heldoutFailures = publicFailurePaths(summary, heldoutFiles);
+			const projection = heldoutProjection(heldout.result, heldoutFiles);
+			receipt.heldoutCounts = projection.counts;
+			receipt.heldoutFailures = projection.failed;
 
-			if (
-				countsOf(heldout.result) === null ||
-				heldoutFiles.some((p) => !receipt.heldoutCounts[p])
-			) {
-				heldout.check.exitCode = 1;
-
-				if (!receipt.heldoutFailures.length)
-					receipt.heldoutFailures = heldoutFiles;
-			}
+			if (!projection.passed) heldout.check.exitCode = 1;
 		}
 
 		for (const timed of receipt.checks.filter((c) => c.timedOut)) {

@@ -1,0 +1,61 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+const guide = readFileSync('docs/operations/human-review.md', 'utf8');
+const introduction = `# Review and merge a factory PR
+
+Use this guide to inspect a factory handoff, decide whether to merge, and confirm the controller recorded your action. The factory never merges or arms auto-merge. Approval alone does not resume an automatic merge path.
+
+F09a implements this protocol locally. Main-backed reporter/P4 proof, production protection, real owner-action lanes, and live/performance qualification remain pending. A source check, scratch GitHub experiment, or saved-state test is not a certified factory run. See the [plan's F09a gates](../plans/factory-v1.md#hand-off-verified-prs-and-require-human-merge-f09a) and [formal proof limits](../statecharts/README.md).`;
+
+function quickReference() {
+  const headings = [...guide.matchAll(/^(#{2,6})[ \t]+([^\n]+)$/gm)];
+  const matches = headings.filter((heading) => heading[2].trim() === 'Quick reference');
+  assert.equal(matches.length, 1, 'There must be one Quick reference subsection');
+  const heading = matches[0];
+  const next = headings.find((entry) => entry.index > heading.index && entry[1].length <= heading[1].length);
+  return { heading, body: guide.slice(heading.index + heading[0].length, next?.index ?? guide.length) };
+}
+
+function prose(text) {
+  return text.replace(/[`*_]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+test('A1: Quick reference follows the introduction and precedes Inspect the handoff', () => {
+  const { heading, body } = quickReference();
+  assert.equal(guide.slice(0, heading.index).trimEnd(), introduction,
+    'Keep the introductory paragraphs and insert the quick reference immediately after them');
+  const inspect = guide.indexOf('\n## Inspect the handoff\n');
+  assert.ok(inspect > heading.index, 'Quick reference must precede Inspect the handoff');
+  const between = guide.slice(heading.index + heading[0].length, inspect);
+  assert.equal(between.trim(), body.trim(), 'Quick reference belongs directly before Inspect the handoff');
+  assert.ok(body.trim().length > 0, 'The subsection must contain the reference, not just a heading');
+});
+
+test('A2: the quick reference gives the exact factory branch pattern and review label', () => {
+  const { body } = quickReference();
+  assert.ok(body.includes('`factory/pr/<issue>-<runId12>`'), 'List the exact branch pattern in the quick reference');
+  assert.ok(body.includes('`factory:review`'), 'List the exact review label in the quick reference');
+  assert.match(prose(body), /\bbranch(?:es)?\b/i, 'Identify the branch pattern as a branch');
+  assert.match(prose(body), /\blabel(?:ed|led|s)?\b/i, 'Identify factory:review as the label');
+});
+
+test('A3: both named checks must pass on the exact PR head before merging', () => {
+  const text = prose(quickReference().body);
+  assert.match(text, /\bcheck\b/, 'Name the ordinary check');
+  assert.match(text, /\bfactory-gates\b/, 'Name the factory gate');
+  assert.match(text, /\bboth\b|\bcheck\s+(?:and|&)\s+factory-gates\b|\bfactory-gates\s+(?:and|&)\s+check\b/i, 'Require both checks, not either one');
+  assert.match(text, /\bmust\s+(?:both\s+)?(?:pass|be\s+(?:passing|green|successful))\b|\brequire(?:d|s)?\b[^.!?]*\b(?:pass|passing|green|successful)\b/i, 'Passing is a requirement');
+  assert.match(text, /\bexact\s+(?:(?:current|candidate)\s+)?PR\s+head\b|\bexact\s+head\s+of\s+the\s+PR\b/i, 'Checks must certify the exact PR head');
+  assert.match(text, /\bbefore\s+(?:you\s+)?merg(?:e|ing)\b|\bprior\s+to\s+merging\b|\bdo\s+not\s+merge\s+until\b/i, 'Checks must pass before merging');
+});
+
+test('A4: the reference forbids factory merging and distinguishes cancellation from landing', () => {
+  const text = prose(quickReference().body);
+  assert.match(text, /\bfactory\s+(?:never\s+merges|does\s+not\s+merge|has\s+no\s+merge\s+command)\b/i, 'Say explicitly that the factory never merges');
+  assert.match(text, /\bclos(?:e|es|ed|ing|ure)\b[^.!?]*\bwithout\s+merging\b/i, 'Describe closure without merging');
+  assert.match(text, /\brecord(?:s|ed)?\b[^.!?]*\bcancelled\b/i, 'Closure without merge records cancelled');
+  assert.match(text, /\bcancelled\b\s*[,;:—–-]?\s*(?:and\s+)?not\s+landed\b/i, 'Explicitly distinguish cancelled from landed');
+});
+// factory-holdout-8e29966dd65cbfcf32e5917de9227db8908642ff8c7c854f34b95723b5dedf4f

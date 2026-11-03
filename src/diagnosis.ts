@@ -14,6 +14,7 @@ import {
 	objectOf,
 	parseJson,
 	textOf,
+	textsOf,
 } from "../server/sandbox/json.ts";
 import type { JsonValue } from "./tickets.ts";
 
@@ -572,3 +573,453 @@ export function baseRefusalNotice(failure: BaseRefusal) {
 		body: `Acceptance refused before build: ${failure.reason}. ${reasons[failure.reason]}${ids.length ? ` Scenarios: ${ids.join(", ")}.` : ""}\n\n${key}`,
 	};
 }
+
+export type MissingEvidenceReason =
+	| "assessment_missing"
+	| "identity_mismatch"
+	| "incomplete_ci"
+	| "base_missing"
+	| "invalid_report"
+	| "unsupported_tree"
+	| "materialize_mismatch"
+	| "ci_replay_disagrees"
+	| "tree_replays_disagree";
+
+export type InfrastructureReason =
+	| "runner_unavailable"
+	| "runner_error"
+	| "timeout"
+	| "dependency_transport"
+	| "baseline_failed"
+	| "interrupted";
+
+export type FailureClass =
+	| Readonly<{
+			kind: "candidate";
+			reason: "candidate_check" | "candidate_heldout";
+			scenarios: readonly string[];
+	  }>
+	| Readonly<{
+			kind: "oracle";
+			cause: "unexpected_base";
+			scenarios: readonly string[];
+	  }>
+	| Readonly<{ kind: "missing_evidence"; reason: MissingEvidenceReason }>
+	| Readonly<{ kind: "infrastructure"; reason: InfrastructureReason }>;
+
+export type HeldoutProjection = Readonly<{
+	counts: Readonly<Record<string, number>>;
+	failed: readonly string[];
+	passed: boolean;
+}>;
+
+export type TreeReplay = Readonly<{
+	execution: PrivateExecution;
+	projection: HeldoutProjection;
+}>;
+
+export type HeldoutReplay =
+	| Readonly<{
+			kind: "unavailable";
+			reason:
+				| "timeout"
+				| "runner_error"
+				| "dependency_transport"
+				| "unsupported_tree"
+				| "suite_mismatch";
+			wallMs: number;
+	  }>
+	| Readonly<{
+			kind: "observed";
+			files: readonly string[];
+			gate: TreeReplay;
+			full: TreeReplay;
+			wallMs: number;
+	  }>;
+
+export type DiagnosisIdentity = Readonly<{
+	gateSha: GitSha;
+	candidateSha: GitSha;
+	nonce: string;
+	heldoutDigest: string;
+	replacementsDigest: string;
+}>;
+
+export type CheckedScenario = Readonly<{
+	scenario: string;
+	kind: CriterionKind;
+	file: string;
+}>;
+
+export type ClassifyInput = Readonly<{
+	receipt: JsonValue | undefined;
+	identity: DiagnosisIdentity;
+	expected: readonly string[];
+	scenarios: readonly CheckedScenario[];
+	base: BaseReceipt | null;
+	ignoredChanges: readonly string[] | null;
+	replay: HeldoutReplay | null;
+	dependencies: Readonly<{ reason: string | null }> | null;
+}>;
+
+const CANDIDATE_ABORTS: ReadonlySet<string> = new Set([
+	"npmrc_changed",
+	"replacement_deleted",
+	"unauthorized_acceptance",
+	"runtime_patching",
+	"suppression_added",
+	"invalid_source_encoding",
+]);
+
+const DEPENDENCY_ABORTS: ReadonlySet<string> = new Set([
+	"invalid_dependency_manifest",
+	"invalid_dependency_spec",
+	"invalid_dependency_lock",
+	"invalid_dependency_url",
+	"package_swap",
+]);
+
+const INFRASTRUCTURE_ABORTS: ReadonlyMap<string, InfrastructureReason> =
+	new Map([
+		["runner_error", "runner_error"],
+		["baseline_failed", "baseline_failed"],
+		["baseline_deadline", "timeout"],
+		["dependency_fetch_failed", "dependency_transport"],
+		["dependency_integrity", "dependency_transport"],
+	]);
+
+const NORMAL_CHECKS = [
+	"baseline_tests",
+	"typecheck",
+	"lint",
+	"format",
+	"main_tests",
+	"candidate_tests",
+	"heldout",
+] as const;
+
+type ReceiptCheck = Readonly<{
+	name: string;
+	exitCode: number;
+	timedOut: boolean;
+	signal: string | null;
+}>;
+
+const missing = (reason: MissingEvidenceReason): FailureClass => ({
+	kind: "missing_evidence",
+	reason,
+});
+
+const infrastructure = (reason: InfrastructureReason): FailureClass => ({
+	kind: "infrastructure",
+	reason,
+});
+
+function sameList(a: readonly string[], b: readonly string[]): boolean {
+	return JSON.stringify(a.toSorted()) === JSON.stringify(b.toSorted());
+}
+
+function signature(files: readonly FileObservation[]): string {
+	return JSON.stringify(
+		files
+			.map((f) => [
+				f.file,
+				f.failures
+					.map((x) => JSON.stringify([x.name, x.kind, x.code]))
+					.toSorted(),
+			])
+			.toSorted((a, b) => (String(a[0]) < String(b[0]) ? -1 : 1)),
+	);
+}
+
+export type DiagnosisNeeds = Readonly<{
+	replay: boolean;
+	dependencies: boolean;
+}>;
+
+export function diagnosisNeeds(receipt: JsonValue | undefined): DiagnosisNeeds {
+	const r = objectOf(receipt);
+	const reason = textOf(fieldOf(r, "reason"));
+
+	const heldout = (arrayOf(fieldOf(r, "checks")) ?? []).some((c) => {
+		const check = objectOf(c);
+
+		return (
+			fieldOf(check, "name") === "heldout" && fieldOf(check, "exitCode") !== 0
+		);
+	});
+
+	return {
+		replay: reason === null && fieldOf(r, "reason") === null && heldout,
+		dependencies: reason !== null && DEPENDENCY_ABORTS.has(reason),
+	};
+}
+
+function earlyAbort(
+	reason: string,
+	receipt: NonNullable<ReturnType<typeof objectOf>>,
+	checks: readonly ReceiptCheck[],
+	input: ClassifyInput,
+): FailureClass {
+	if (checks.some((c) => c.timedOut)) return infrastructure("timeout");
+	const infra = INFRASTRUCTURE_ABORTS.get(reason);
+
+	if (infra !== undefined) return infrastructure(infra);
+
+	if (fieldOf(receipt, "status") !== "failed") return missing("incomplete_ci");
+
+	if (CANDIDATE_ABORTS.has(reason)) {
+		if (reason === "runtime_patching" || reason === "suppression_added") {
+			const rules = (arrayOf(fieldOf(receipt, "tamperSignals")) ?? []).map(
+				(s) => fieldOf(objectOf(s), "rule"),
+			);
+
+			if (
+				!rules.includes(reason) ||
+				(reason === "suppression_added" && rules.includes("runtime_patching"))
+			)
+				return missing("invalid_report");
+		}
+
+		return { kind: "candidate", reason: "candidate_check", scenarios: [] };
+	}
+
+	if (DEPENDENCY_ABORTS.has(reason))
+		return input.dependencies?.reason === reason
+			? { kind: "candidate", reason: "candidate_check", scenarios: [] }
+			: missing("incomplete_ci");
+
+	return missing("incomplete_ci");
+}
+
+type BaseJudgement =
+	| Readonly<{ kind: "class"; failure: FailureClass }>
+	| Readonly<{ kind: "wrong"; scenarios: readonly string[] }>;
+
+function baseClass(
+	input: ClassifyInput,
+	failed: readonly string[],
+): BaseJudgement {
+	const stop = (failure: FailureClass): BaseJudgement => ({
+		kind: "class",
+		failure,
+	});
+
+	const base = input.base;
+
+	if (
+		base === null ||
+		base.evidence.binding.baseSha !== input.identity.gateSha ||
+		base.evidence.binding.gateSha !== input.identity.gateSha
+	)
+		return stop(missing("base_missing"));
+	const wrong: string[] = [];
+
+	for (const file of failed) {
+		const s = input.scenarios.find((x) => x.file === file);
+
+		if (s === undefined) return stop(missing("identity_mismatch"));
+		const result = base.results.find((r) => r.scenario === s.scenario)?.result;
+
+		if (result === undefined) return stop(missing("base_missing"));
+
+		if (result === "base_timeout") return stop(infrastructure("timeout"));
+
+		if (result === "base_runner_error")
+			return stop(infrastructure("runner_error"));
+
+		if (result === "base_interrupted")
+			return stop(infrastructure("interrupted"));
+
+		if (
+			result === "base_evidence_missing" ||
+			result === "base_tree_unsupported" ||
+			result === "judge_only"
+		)
+			return stop(missing("base_missing"));
+
+		if (result !== (s.kind === "new_behavior" ? "expected_red" : "preserved"))
+			wrong.push(s.scenario);
+	}
+
+	return { kind: "wrong", scenarios: wrong };
+}
+
+function heldoutClass(
+	input: ClassifyInput,
+	receipt: NonNullable<ReturnType<typeof objectOf>>,
+): FailureClass {
+	const expected = input.expected.toSorted();
+	const ciFailed = textsOf(fieldOf(receipt, "heldoutFailures"));
+	const ciCounts = objectOf(fieldOf(receipt, "heldoutCounts"));
+
+	if (
+		expected.length === 0 ||
+		new Set(expected).size !== expected.length ||
+		ciFailed === null ||
+		ciFailed.length === 0 ||
+		new Set(ciFailed).size !== ciFailed.length ||
+		ciFailed.some((f) => !expected.includes(f)) ||
+		ciCounts === null ||
+		!sameList(Object.keys(ciCounts), expected) ||
+		expected.some((f) => countOf(fieldOf(ciCounts, f)) === null)
+	)
+		return missing("invalid_report");
+	const replay = input.replay;
+
+	if (replay === null) return missing("unsupported_tree");
+
+	if (replay.kind === "unavailable")
+		return replay.reason === "unsupported_tree"
+			? missing("unsupported_tree")
+			: replay.reason === "suite_mismatch"
+				? missing("identity_mismatch")
+				: infrastructure(replay.reason);
+
+	for (const tree of [replay.gate, replay.full])
+		if (tree.execution.kind === "unavailable")
+			return tree.execution.reason === "invalid_report"
+				? missing("invalid_report")
+				: infrastructure(tree.execution.reason);
+
+	const ignored = textsOf(fieldOf(receipt, "ignoredChanges"));
+
+	if (
+		input.ignoredChanges === null ||
+		ignored === null ||
+		!sameList(ignored, input.ignoredChanges)
+	)
+		return missing("materialize_mismatch");
+
+	if (!sameList(replay.files, expected)) return missing("identity_mismatch");
+
+	const gate = replay.gate.projection,
+		full = replay.full.projection;
+
+	if (
+		gate.passed ||
+		!sameList(gate.failed, ciFailed) ||
+		expected.some((f) => gate.counts[f] !== countOf(fieldOf(ciCounts, f)))
+	)
+		return missing("ci_replay_disagrees");
+
+	if (
+		replay.gate.execution.kind !== "observed" ||
+		replay.full.execution.kind !== "observed" ||
+		full.passed ||
+		!sameList(full.failed, gate.failed) ||
+		expected.some((f) => full.counts[f] !== gate.counts[f]) ||
+		signature(replay.gate.execution.files) !==
+			signature(replay.full.execution.files)
+	)
+		return missing("tree_replays_disagree");
+	const base = baseClass(input, gate.failed);
+
+	if (base.kind === "class") return base.failure;
+
+	if (base.scenarios.length > 0)
+		return {
+			kind: "oracle",
+			cause: "unexpected_base",
+			scenarios: base.scenarios,
+		};
+
+	return {
+		kind: "candidate",
+		reason: "candidate_heldout",
+		scenarios: gate.failed.flatMap(
+			(f) => input.scenarios.find((s) => s.file === f)?.scenario ?? [],
+		),
+	};
+}
+
+export function classifyFailure(input: ClassifyInput): FailureClass {
+	const r = objectOf(input.receipt);
+	const id = input.identity;
+
+	if (
+		r === null ||
+		fieldOf(r, "version") !== 2 ||
+		fieldOf(r, "gateSha") !== id.gateSha ||
+		fieldOf(r, "candidateSha") !== id.candidateSha ||
+		fieldOf(r, "nonce") !== id.nonce ||
+		fieldOf(r, "heldoutDigest") !== id.heldoutDigest ||
+		fieldOf(r, "modelCalls") !== 0
+	)
+		return missing("identity_mismatch");
+	const required = textsOf(fieldOf(r, "requiredChecks"));
+	const rawChecks = arrayOf(fieldOf(r, "checks"));
+	const rawReason = fieldOf(r, "reason");
+	const reason = rawReason === null ? null : textOf(rawReason);
+
+	if (
+		required === null ||
+		new Set(required).size !== required.length ||
+		rawChecks === null ||
+		(rawReason !== null && reason === null)
+	)
+		return missing("invalid_report");
+	const checks: ReceiptCheck[] = [];
+
+	for (const raw of rawChecks) {
+		const c = objectOf(raw);
+		const name = textOf(fieldOf(c, "name"));
+		const exitCode = countOf(fieldOf(c, "exitCode"));
+		const timedOut = fieldOf(c, "timedOut");
+		const signal = fieldOf(c, "signal");
+
+		if (
+			name === null ||
+			exitCode === null ||
+			(timedOut !== undefined && timedOut !== true && timedOut !== false) ||
+			(signal !== undefined && signal !== null && textOf(signal) === null)
+		)
+			return missing("invalid_report");
+		checks.push({
+			name,
+			exitCode,
+			timedOut: timedOut === true,
+			signal: signal == null ? null : textOf(signal),
+		});
+	}
+
+	if (reason !== null) return earlyAbort(reason, r, checks, input);
+
+	if (fieldOf(r, "replacementsDigest") !== id.replacementsDigest)
+		return missing("identity_mismatch");
+
+	if (fieldOf(r, "status") !== "failed") return missing("incomplete_ci");
+
+	if (checks.some((c) => c.timedOut)) return infrastructure("timeout");
+
+	if (checks.some((c) => c.signal !== null))
+		return infrastructure("runner_error");
+
+	if (
+		NORMAL_CHECKS.some((n) => !required.includes(n)) ||
+		required.some((n) => checks.filter((c) => c.name === n).length !== 1) ||
+		checks.length !== required.length
+	)
+		return missing("incomplete_ci");
+	const failed = checks.flatMap((c) => (c.exitCode !== 0 ? [c.name] : []));
+
+	if (failed.includes("baseline_tests"))
+		return infrastructure("baseline_failed");
+
+	if (!failed.includes("heldout"))
+		return failed.length > 0
+			? { kind: "candidate", reason: "candidate_check", scenarios: [] }
+			: missing("incomplete_ci");
+
+	return heldoutClass(input, r);
+}
+
+export const FAILURE_SENTENCES: Readonly<Record<FailureClass["kind"], string>> =
+	{
+		candidate: "Hard CI failed for this candidate. A bounded repair is next.",
+		oracle: "Stopped: acceptance checks are invalid for this contract or base.",
+		missing_evidence:
+			"Stopped: CI diagnosis could not establish reliable evidence.",
+		infrastructure:
+			"Held: validation could not execute reliably. No repair was started.",
+	};
