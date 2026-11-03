@@ -31,7 +31,8 @@ export const ACCEPTANCE_OUTPUT_DIR = "checks";
 export const ACCEPTANCE_MAX_BYTES = 256 * 1024;
 
 export const ACCEPTANCE_STORED_MAX_BYTES =
-	ACCEPTANCE_MAX_BYTES + 30 * Buffer.byteLength(',"kind":"new_behavior"') +
+	ACCEPTANCE_MAX_BYTES +
+	30 * Buffer.byteLength(',"kind":"new_behavior"') +
 	Buffer.byteLength(`,"canary":"factory-holdout-${"0".repeat(64)}"\n`);
 
 export const ACCEPTANCE_MAX_TOKENS = 25_000;
