@@ -49,3 +49,5 @@ The server binds only to `127.0.0.1`. It accepts `GET` only. It checks Host and 
 Exposure requires the owner's explicit approval. Do not forward the port merely because the viewer is read-only. It contains private issue and session metadata.
 
 Only after approval, start it with `--allowed-host <machine>.<tailnet>.ts.net`, then publish that loopback port through `tailscale serve`. Verify the HTTPS Tailscale URL before sharing it. The explicit hostname flag permits only that additional Host and its matching HTTPS Origin. It never changes the loopback bind. The factory has no Tailscale dependency, and the viewer does not invoke Tailscale.
+
+To keep the host's root free for other services, serve the viewer under a path. Start it with `--base-path /factory` and publish it with `tailscale serve --bg --https=443 --set-path=/factory/ http://127.0.0.1:<port>`. Tailscale strips the mount path before proxying, so the viewer's routes stay unprefixed. `--base-path` changes only the links and the pinned-run redirect the viewer renders. It must be one or more lowercase `/segment` parts with no trailing slash.

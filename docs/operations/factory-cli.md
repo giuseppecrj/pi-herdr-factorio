@@ -16,12 +16,12 @@ Errors and warnings carry only text the factory builds itself. They never quote 
 ## Local run viewer
 
 ```bash
-node server/cli.ts viewer --state-dir "$STATE" [--run <64-character-id>] [--port <n>]
+node server/cli.ts viewer --state-dir "$STATE" [--run <64-character-id>] [--port <n>] [--allowed-host <host>] [--base-path </prefix>]
 ```
 
 `viewer` serves local evidence on `127.0.0.1` with no GitHub or model calls. It needs neither `--repo` nor `--json`. The default port is 8080. All four views have HTML and JSON routes. Missing sources are visible gaps, never a complete run. A missing state directory or occupied port exits 1. Invalid options exit 2. Ctrl+C or SIGTERM stops it with exit 0.
 
-See [Inspect one run's local evidence](viewer.md) for the routes, source limits, session-retention gaps, and owner-authorized Tailscale exposure. `--allowed-host` permits an explicitly authorized Tailscale hostname without changing the loopback bind. No exposure is enabled by default.
+See [Inspect one run's local evidence](viewer.md) for the routes, source limits, session-retention gaps, and owner-authorized Tailscale exposure. `--allowed-host` permits an explicitly authorized Tailscale hostname without changing the loopback bind. `--base-path` prefixes rendered links for a `tailscale serve --set-path` mount. No exposure is enabled by default.
 
 ## Commands
 

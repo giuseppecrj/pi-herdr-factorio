@@ -10,8 +10,8 @@ export function escapeHtml(value: string): string {
 	);
 }
 
-function page(title: string, body: string): string {
-	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · Factory</title><link rel="stylesheet" href="/style.css"></head><body><header><a href="/">FACTORY <span>/ run evidence</span></a><span class="badge">READ ONLY · LOCAL</span></header><main>${body}</main><footer>Local evidence only. No GitHub requests. No model calls. Missing evidence is never a pass.</footer></body></html>`;
+function page(title: string, body: string, base: string): string {
+	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · Factory</title><link rel="stylesheet" href="${base}/style.css"></head><body><header><a href="${base}/">FACTORY <span>/ run evidence</span></a><span class="badge">READ ONLY · LOCAL</span></header><main>${body}</main><footer>Local evidence only. No GitHub requests. No model calls. Missing evidence is never a pass.</footer></body></html>`;
 }
 
 function table(headers: string[], rows: string[][]): string {
@@ -41,14 +41,16 @@ function timeline(events: TimelineEvent[]) {
 	);
 }
 
-export function renderIndex(ids: string[]): string {
+export function renderIndex(ids: string[], base: string): string {
 	return page(
 		"Runs",
-		`<h1>Run evidence</h1><p class="muted">Select one run from the local controller state.</p><ul class="runs">${ids.map((id) => `<li><a href="/run/${id}/timeline"><code>${escapeHtml(id)}</code><span>View run →</span></a></li>`).join("")}</ul>${ids.length === 0 ? "<p>No runs found. This does not establish a completed run.</p>" : ""}`,
+		`<h1>Run evidence</h1><p class="muted">Select one run from the local controller state.</p><ul class="runs">${ids.map((id) => `<li><a href="${base}/run/${id}/timeline"><code>${escapeHtml(id)}</code><span>View run →</span></a></li>`).join("")}</ul>${ids.length === 0 ? "<p>No runs found. This does not establish a completed run.</p>" : ""}`,
+
+		base,
 	);
 }
 
-export function renderRun(run: ViewerRun, view: string): string {
+export function renderRun(run: ViewerRun, view: string, base: string): string {
 	const gaps =
 		run.gaps.length === 0
 			? ""
@@ -57,7 +59,7 @@ export function renderRun(run: ViewerRun, view: string): string {
 	const tabs = ["timeline", "usage", "children", "gateway"]
 		.map(
 			(tab) =>
-				`<a ${tab === view ? 'aria-current="page"' : ""} href="/run/${run.runId}/${tab}">${tab[0]?.toUpperCase()}${tab.slice(1)}</a>`,
+				`<a ${tab === view ? 'aria-current="page"' : ""} href="${base}/run/${run.runId}/${tab}">${tab[0]?.toUpperCase()}${tab.slice(1)}</a>`,
 		)
 		.join("");
 
@@ -133,6 +135,8 @@ export function renderRun(run: ViewerRun, view: string): string {
 
 	return page(
 		"Run",
-		`<p class="eyebrow">RUN / ${escapeHtml(run.status)}</p><h1>${escapeHtml(run.runId.slice(0, 16))}<span class="muted">…</span></h1><p><code>${escapeHtml(run.runId)}</code></p><p class="badge">${run.complete ? "Evidence complete" : "Evidence incomplete"}</p>${gaps}<nav aria-label="Run views">${tabs}<a class="json" href="/run/${run.runId}/${escapeHtml(view)}.json">JSON ↗</a></nav>${content}`,
+		`<p class="eyebrow">RUN / ${escapeHtml(run.status)}</p><h1>${escapeHtml(run.runId.slice(0, 16))}<span class="muted">…</span></h1><p><code>${escapeHtml(run.runId)}</code></p><p class="badge">${run.complete ? "Evidence complete" : "Evidence incomplete"}</p>${gaps}<nav aria-label="Run views">${tabs}<a class="json" href="${base}/run/${run.runId}/${escapeHtml(view)}.json">JSON ↗</a></nav>${content}`,
+
+		base,
 	);
 }

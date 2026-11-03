@@ -1151,6 +1151,86 @@ test("invalid allowed-host is a usage error, exit 2", async () => {
 	}
 });
 
+test("invalid base-path is a usage error, exit 2", async () => {
+	for (const base of [
+		"factory",
+		"/",
+		"/factory/",
+		"//evil.example",
+		"/a/../b",
+		"/Factory",
+	]) {
+		assert.equal(
+			await runCli(["viewer", "--state-dir", "/tmp", "--base-path", base], {
+				exec: async () => {
+					throw new Error("unexpected command");
+				},
+				env: () => undefined,
+				stdout: () => {},
+				stderr: () => {},
+			}),
+			2,
+		);
+	}
+});
+
+test("a base path prefixes every rendered link and redirect while routes stay unprefixed", async () => {
+	const { root } = await fixtureState();
+
+	const viewer = await startViewer({
+		stateDir: root,
+		port: 0,
+		basePath: "/factory",
+	});
+
+	const pinned = await startViewer({
+		stateDir: root,
+		port: 0,
+		runId,
+		basePath: "/factory",
+	});
+
+	const plain = await startViewer({ stateDir: root, port: 0 });
+
+	const links = (html: string) =>
+		[...html.matchAll(/(?:href|src)="([^"]*)"/g)].map((m) => m[1] ?? "");
+
+	try {
+		const url = `http://127.0.0.1:${viewer.port}`;
+		const index = await (await fetch(`${url}/`)).text();
+		const run = await (await fetch(`${url}/run/${runId}/usage`)).text();
+		assert.ok(links(index).includes(`/factory/run/${runId}/timeline`));
+		assert.ok(links(run).includes(`/factory/run/${runId}/usage.json`));
+
+		for (const href of [...links(index), ...links(run)])
+			assert.match(href, /^\/factory\//, href);
+		assert.equal((await fetch(`${url}/style.css`)).status, 200);
+		assert.equal((await fetch(`${url}/factory/`)).status, 404);
+
+		const redirect = await fetch(`http://127.0.0.1:${pinned.port}/`, {
+			redirect: "manual",
+		});
+
+		assert.equal(redirect.status, 302);
+		assert.equal(
+			redirect.headers.get("location"),
+			`/factory/run/${runId}/timeline`,
+		);
+
+		const unprefixed = await (
+			await fetch(`http://127.0.0.1:${plain.port}/`)
+		).text();
+
+		assert.ok(links(unprefixed).includes("/style.css"));
+		assert.ok(links(unprefixed).includes(`/run/${runId}/timeline`));
+	} finally {
+		await viewer.close();
+		await pinned.close();
+		await plain.close();
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
 test("escaping quotes and every bidi control leaves visible escapes", () => {
 	assert.equal(escapeHtml('"'), "&quot;");
 
