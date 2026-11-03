@@ -98,7 +98,11 @@ import {
 	parseJson,
 	textOf,
 } from "./sandbox/json.ts";
-import { manifestDigest, PINNED_VERSIONS } from "./sandbox/manifest.ts";
+import {
+	bundleMatchesSource,
+	manifestDigest,
+	PINNED_VERSIONS,
+} from "./sandbox/manifest.ts";
 import { readUsernsLimit, runPreflight } from "./sandbox/preflight.ts";
 import { BUNDLE, bwrapArgv } from "./sandbox/bwrap.ts";
 import type {
@@ -2882,6 +2886,8 @@ export type SandboxExecutorConfig = {
 	readonly log: Log;
 	readonly xdgRuntimeDir: string;
 	readonly root?: string;
+	/** The checkout whose inputs the installed bundle must match. Absent skips the check. */
+	readonly sourceRoot?: string;
 	readonly arch?: string;
 	readonly usernsLimit?: () => Promise<string>;
 	readonly fetchTarball?: TarballFetch;
@@ -3279,6 +3285,10 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 				assetsDigest: async () =>
 					bundle === null ? null : manifestDigest(bundle.dir),
 				expectedDigest: bundle?.digest ?? "",
+				bundleCurrent:
+					config.sourceRoot === undefined || bundle === null
+						? undefined
+						: () => bundleMatchesSource(config.sourceRoot ?? "", bundle.dir),
 				gatewayReady,
 			});
 

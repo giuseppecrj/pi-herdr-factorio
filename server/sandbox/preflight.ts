@@ -9,6 +9,7 @@ export const PREFLIGHT_CHECKS = [
 	"userns",
 	"bwrap",
 	"assets",
+	"stale_bundle",
 	"scope",
 	"gateway",
 ] as const;
@@ -31,6 +32,8 @@ export type PreflightDeps = {
 	readonly exec: Exec;
 	readonly assetsDigest: () => Promise<string | null>;
 	readonly expectedDigest: string;
+	/** Whether the installed bundle holds the checkout's own inputs. Absent means not checked. */
+	readonly bundleCurrent?: () => Promise<boolean>;
 	readonly gatewayReady: () => Promise<boolean>;
 };
 
@@ -85,7 +88,7 @@ async function safely<T>(work: () => Promise<T>, fallback: T): Promise<T> {
 /**
  * The runner's preflight: leftover stage scopes stopped, a known CPU
  * architecture, unprivileged user namespaces, bwrap at least 0.9.0, the
- * expected asset digest, a user scope that launches, and a gateway that
+ * expected asset digest, a bundle that matches the checkout's inputs, a user scope that launches, and a gateway that
  * comes up ready. Every check runs, so a failure names each cause.
  * `executionEnabled` follows `ok`.
  */
@@ -115,6 +118,11 @@ export async function runPreflight(
 	const digest = await safely(deps.assetsDigest, null);
 
 	if (digest === null || digest !== deps.expectedDigest) failed.push("assets");
+	else if (
+		deps.bundleCurrent !== undefined &&
+		!(await safely(deps.bundleCurrent, false))
+	)
+		failed.push("stale_bundle");
 
 	const scope = await safely(
 		async () =>

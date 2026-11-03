@@ -79,6 +79,79 @@ export async function manifestDigest(root: string): Promise<string | null> {
 				.digest("hex");
 }
 
+/** Bundle path, then checkout path, of each single file `provision.sh` copies in. */
+const ASSET_FILES: readonly (readonly [string, string])[] = [
+	["sandbox/pi.ts", "server/sandbox/assets/pi.ts"],
+	["sandbox/stage-init.ts", "server/sandbox/assets/stage-init.ts"],
+	["pkg/package.json", "server/sandbox/assets/package.json"],
+	["pkg/package-lock.json", "server/sandbox/assets/package-lock.json"],
+];
+
+async function fileLine(path: string, name: string): Promise<string> {
+	const hash = createHash("sha256")
+		.update(await readFile(path))
+		.digest("hex");
+
+	return `${hash} ${name}`;
+}
+
+async function skillLines(skills: string): Promise<string[]> {
+	const lines: string[] = [];
+
+	for (const skill of await readdir(skills, { withFileTypes: true })) {
+		if (!skill.isDirectory()) continue;
+
+		const dir = join(skills, skill.name);
+
+		for (const file of await readdir(dir, { withFileTypes: true })) {
+			if (file.isFile())
+				lines.push(
+					await fileLine(
+						join(dir, file.name),
+						`skills/${skill.name}/${file.name}`,
+					),
+				);
+		}
+	}
+
+	return lines;
+}
+
+/**
+ * Whether the installed bundle holds the checkout's own copy of every input
+ * `server/provision.sh` copies in: each skill's top-level files, `pi.ts`,
+ * `stage-init.ts` and the pinned package files. The Node tarball, Herdr and
+ * the npm tree cannot be rebuilt cheaply, so they are not compared. Their
+ * pins live in `provision.sh` and `package-lock.json`, and a change to the
+ * lockfile is compared. Any read error is a mismatch.
+ */
+export async function bundleMatchesSource(
+	sourceRoot: string,
+	bundleDir: string,
+): Promise<boolean> {
+	try {
+		const source = [
+			...(await skillLines(join(sourceRoot, "skills"))),
+			...(await Promise.all(
+				ASSET_FILES.map(([name, path]) =>
+					fileLine(join(sourceRoot, path), name),
+				),
+			)),
+		];
+
+		const bundle = [
+			...(await skillLines(join(bundleDir, "skills"))),
+			...(await Promise.all(
+				ASSET_FILES.map(([name]) => fileLine(join(bundleDir, name), name)),
+			)),
+		];
+
+		return source.sort().join("\n") === bundle.sort().join("\n");
+	} catch {
+		return false;
+	}
+}
+
 if (import.meta.main) {
 	const digest = await manifestDigest(process.argv[2] ?? "");
 
