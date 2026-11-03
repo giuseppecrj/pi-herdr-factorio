@@ -40,13 +40,23 @@ function missing(argv: readonly string[]): string | null {
 	const [command = "", ...args] = argv;
 
 	try {
-		execFileSync(command, args, { stdio: "ignore", timeout: 10_000 });
+		execFileSync(command, args, {
+			stdio: ["ignore", "ignore", "pipe"],
+			timeout: 10_000,
+		});
 
 		return null;
-	} catch {
-		return `${argv.join(" ")} failed in this environment`;
+	} catch (error) {
+		const stderr =
+			error instanceof Error && "stderr" in error
+				? String(error.stderr).trim()
+				: "";
+
+		return `${argv.join(" ")} failed in this environment${stderr ? `: ${stderr.slice(0, 300)}` : ""}`;
 	}
 }
+
+const strict = process.env.FACTORY_REQUIRE_SANDBOX_TESTS === "1";
 
 const bwrap = missing([
 	"bwrap",
@@ -69,6 +79,10 @@ function where(
 	fn: (t: import("node:test").TestContext) => Promise<void>,
 ) {
 	if (absent === null) test(name, fn);
+	else if (strict)
+		test(name, () =>
+			assert.fail(`FACTORY_REQUIRE_SANDBOX_TESTS=1 but ${absent}`),
+		);
 	else test(name, (t) => t.diagnostic(`not run: ${absent}`));
 }
 
