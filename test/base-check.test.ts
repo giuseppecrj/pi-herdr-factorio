@@ -288,6 +288,7 @@ export async function baseFixture(
 	kind: "new_behavior" | "preservation" = "new_behavior",
 	timeout = 10_000,
 	gates: "trusted" | "absent" | Readonly<{ reporter: string }> = "trusted",
+	dependency: "none" | "yaml" = "none",
 ) {
 	const root = mkdtempSync(join(tmpdir(), "factory-base-"));
 	t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -310,14 +311,51 @@ export async function baseFixture(
 			);
 	}
 
+	const deps = dependency === "yaml" ? { yaml: "^2.9.0" } : undefined;
+
 	writeFileSync(
 		join(tree, "package.json"),
-		'{"name":"base","version":"1.0.0","type":"module"}',
+		JSON.stringify({
+			name: "base",
+			version: "1.0.0",
+			type: "module",
+			dependencies: deps,
+		}),
 	);
-	writeFileSync(
-		join(tree, "package-lock.json"),
-		'{"name":"base","version":"1.0.0","lockfileVersion":3,"packages":{"":{"name":"base","version":"1.0.0"}}}',
-	);
+
+	const rootPackage = { name: "base", version: "1.0.0", dependencies: deps };
+
+	const yamlPackage = {
+		version: "2.9.0",
+		resolved: "https://registry.npmjs.org/yaml/-/yaml-2.9.0.tgz",
+		integrity:
+			"sha512-2AvhNX3mb8zd6Zy7INTtSpl1F15HW6Wnqj0srWlkKLcpYl/gMIMJiyuGq2KeI2YFxUPjdlB+3Lc10seMLtL4cA==",
+	};
+
+	const packages =
+		dependency === "yaml"
+			? { "": rootPackage, "node_modules/yaml": yamlPackage }
+			: { "": rootPackage };
+
+	const lock = JSON.stringify({
+		name: "base",
+		version: "1.0.0",
+		lockfileVersion: 3,
+		packages,
+	});
+
+	writeFileSync(join(tree, "package-lock.json"), lock);
+
+	if (dependency === "yaml") {
+		const cached = join(root, "dependencies", digestOf(lock));
+		mkdirSync(join(cached, "tree/node_modules"), { recursive: true });
+		cpSync(
+			resolve("node_modules/yaml"),
+			join(cached, "tree/node_modules/yaml"),
+			{ recursive: true },
+		);
+		writeFileSync(join(cached, "READY"), digestOf(lock));
+	}
 
 	const repo = "owner/repo",
 		sha = "a".repeat(40);
@@ -414,6 +452,23 @@ for (const [name, source, want, kind] of cases)
 		assert.ok(f.evidence.finishedAt >= f.evidence.startedAt);
 		assert.equal(f.evidence.runtime.runner, "local-bwrap");
 	});
+
+where(
+	bwrap,
+	"isolated base: a lockfile dependency is importable from the read-only base tree",
+	async (t) => {
+		const f = await baseFixture(
+			t,
+			`${prefix}import YAML from 'yaml'; test('S1 parses', () => assert.equal(YAML.parse('a: 1').a, 2));`,
+			"new_behavior",
+			10_000,
+			"trusted",
+			"yaml",
+		);
+
+		assert.equal(f.assessment.kind, "ready", JSON.stringify(f.evidence));
+	},
+);
 
 where(
 	bwrap,

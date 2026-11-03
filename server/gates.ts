@@ -1434,6 +1434,9 @@ export async function runHeldoutBase(input: {
 			force: false,
 		});
 
+		if (dependency !== undefined)
+			mkdirSync(join(tree, "node_modules"), { recursive: true });
+
 		for (const [path, bytes] of acceptanceEntries(
 			input.suite,
 			input.canary,
