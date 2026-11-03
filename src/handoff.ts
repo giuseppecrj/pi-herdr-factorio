@@ -2356,3 +2356,44 @@ export function parseCandidateState(
 ): CandidateState | null {
 	return wireCandidate(value) ? snapshot(value) : null;
 }
+
+export type Limitation =
+	| { readonly kind: "judge_only"; readonly criteria: readonly string[] }
+	| { readonly kind: "same_family" }
+	| { readonly kind: "live_proof_not_recorded" };
+
+export function notProven(input: {
+	readonly criteria: readonly { readonly id: string }[];
+	readonly scenarios: readonly {
+		readonly criteria: readonly string[];
+		readonly checks: readonly string[];
+	}[];
+	readonly r8: string;
+}): readonly Limitation[] {
+	const checked = new Set(
+		input.scenarios.flatMap((s) => (s.checks.length > 0 ? s.criteria : [])),
+	);
+
+	const judgeOnly = input.criteria
+		.map((c) => c.id)
+		.filter((id) => !checked.has(id));
+
+	return [
+		...(judgeOnly.length > 0
+			? [{ kind: "judge_only" as const, criteria: judgeOnly }]
+			: []),
+		...(input.r8 === "complete" ? [] : [{ kind: "same_family" as const }]),
+		{ kind: "live_proof_not_recorded" },
+	];
+}
+
+export function renderLimitation(limitation: Limitation): string {
+	switch (limitation.kind) {
+		case "judge_only":
+			return `- No executable check covers ${limitation.criteria.filter((id) => /^A[1-9][0-9]{0,2}$/.test(id)).join(", ")}; only review judged them.`;
+		case "same_family":
+			return "- R8 cross-family review remains incomplete.";
+		case "live_proof_not_recorded":
+			return "- No live proof is recorded; CI and review ran on the candidate only.";
+	}
+}

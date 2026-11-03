@@ -11,6 +11,8 @@ import {
 	parseCandidateState,
 	candidateUsage,
 	candidateGenerations,
+	notProven,
+	renderLimitation,
 	type CandidateState,
 	type CandidateEvent,
 } from "../src/handoff.ts";
@@ -3013,6 +3015,21 @@ export function controllerCandidatePort(config: {
 
 		if (summary === null) throw new PublicationError("summary_too_large");
 
+		const suite = await files.artifacts.read(
+			state.pin.runId,
+			contract.contract,
+			contract.digest,
+		);
+
+		if (suite.kind !== "found")
+			throw new PublicationError("evidence_unavailable");
+
+		const limitations = notProven({
+			criteria: contract.contract.acceptance,
+			scenarios: suite.suite.scenarios,
+			r8: certificate.review.r8,
+		});
+
 		return [
 			`## Factory handoff`,
 			withoutKey(summary),
@@ -3027,7 +3044,9 @@ export function controllerCandidatePort(config: {
 					.slice(0, 5)
 					.map((f) => `- ${inert(f.severity)}: ${inert(f.claim)}`),
 			),
-			`R8 cross-family review remains incomplete. The factory waits for the owner's merge; it cannot merge or arm auto-merge.`,
+			"## Not proven",
+			limitations.map(renderLimitation).join("\n"),
+			"The factory waits for the owner's merge; it cannot merge or arm auto-merge.",
 			`<!-- factory:pr ${state.pin.runId} -->`,
 		].join("\n\n");
 	};

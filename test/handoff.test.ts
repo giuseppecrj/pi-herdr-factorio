@@ -13,7 +13,9 @@ import {
 	type ReviewExecution,
 	candidateAllowance,
 	certifyGeneration,
+	notProven,
 	parseCandidateState,
+	renderLimitation,
 } from "../src/handoff.ts";
 import {
 	digestOf,
@@ -1809,5 +1811,36 @@ test("certification rejects missing workflow/execution evidence and mismatched s
 				verdict: { ...c.verdict, baseSha: "f".repeat(40) },
 			}),
 		/binding/,
+	);
+});
+
+test("handoff Not proven section derives judge-only criteria, same-family review and pending live proof from receipts", () => {
+	const limitations = notProven({
+		criteria: [{ id: "A1" }, { id: "A2" }, { id: "A3" }],
+		scenarios: [
+			{ criteria: ["A1"], checks: ["a.test.ts"] },
+			{ criteria: ["A1", "A2"], checks: [] },
+			{ criteria: ["A3"], checks: [] },
+		],
+		r8: "incomplete",
+	});
+
+	assert.deepEqual(limitations, [
+		{ kind: "judge_only", criteria: ["A2", "A3"] },
+		{ kind: "same_family" },
+		{ kind: "live_proof_not_recorded" },
+	]);
+	assert.deepEqual(limitations.map(renderLimitation), [
+		"- No executable check covers A2, A3; only review judged them.",
+		"- R8 cross-family review remains incomplete.",
+		"- No live proof is recorded; CI and review ran on the candidate only.",
+	]);
+	assert.deepEqual(
+		notProven({
+			criteria: [{ id: "A1" }],
+			scenarios: [{ criteria: ["A1"], checks: ["a.test.ts"] }],
+			r8: "complete",
+		}),
+		[{ kind: "live_proof_not_recorded" }],
 	);
 });
