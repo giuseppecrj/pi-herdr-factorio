@@ -1099,6 +1099,7 @@ export function classifiedCase(
 			wallMs: 2,
 		},
 		dependencies: null,
+		candidatePaths: [],
 	});
 }
 

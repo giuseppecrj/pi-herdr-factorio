@@ -520,6 +520,10 @@ async function drive(t: { after(fn: () => void): void }, raw: Entry) {
 		ignoredChanges,
 		replay,
 		dependencies: null,
+		candidatePaths: [
+			...Object.keys(entry.candidate ?? {}),
+			...(synthetic?.candidate.keys() ?? []),
+		],
 	};
 
 	return {
@@ -782,6 +786,7 @@ function unitInput(
 		ignoredChanges: [],
 		replay: observedReplay(E, first),
 		dependencies: null,
+		candidatePaths: ["src/value.ts"],
 		...overrides,
 	};
 }
@@ -837,25 +842,25 @@ test("classifier: the closed early-abort table", () => {
 			}),
 		);
 
+	const signal = (rule: string, path = "src/value.ts") => ({
+		tamperSignals: [{ path, line: 1, rule }],
+	});
+
 	for (const reason of [
 		"npmrc_changed",
 		"replacement_deleted",
 		"unauthorized_acceptance",
-		"invalid_source_encoding",
 	])
 		assert.equal(abort(reason).kind, "candidate", reason);
 	assert.equal(abort("runtime_patching").kind, "missing_evidence");
-	assert.equal(
-		abort("runtime_patching", { tamperSignals: [{ rule: "runtime_patching" }] })
-			.kind,
-		"candidate",
-	);
-	assert.equal(
-		abort("suppression_added", {
-			tamperSignals: [{ rule: "suppression_added" }],
-		}).kind,
-		"candidate",
-	);
+	assert.equal(abort("invalid_source_encoding").kind, "missing_evidence");
+
+	for (const reason of [
+		"runtime_patching",
+		"suppression_added",
+		"invalid_source_encoding",
+	])
+		assert.equal(abort(reason, signal(reason)).kind, "candidate", reason);
 	assert.equal(abort("package_swap").kind, "missing_evidence");
 	assert.equal(
 		abort("package_swap", {}, { reason: "package_swap" }).kind,
@@ -878,6 +883,97 @@ test("classifier: the closed early-abort table", () => {
 			"infrastructure",
 			reason,
 		);
+});
+
+test("classifier: an early abort without its replacements binding is identity mismatch, never candidate (S1)", () => {
+	for (const replacementsDigest of ["f".repeat(64), undefined])
+		for (const reason of [
+			"npmrc_changed",
+			"unauthorized_acceptance",
+			"replacement_deleted",
+			"runner_error",
+		])
+			assert.deepEqual(
+				classifyFailure(
+					unitInput({
+						receiptPatch: {
+							reason,
+							checks: [],
+							replacementsDigest: replacementsDigest ?? null,
+						},
+						replay: null,
+					}),
+				),
+				{ kind: "missing_evidence", reason: "identity_mismatch" },
+				`${reason} ${replacementsDigest ?? "missing"}`,
+			);
+});
+
+test("classifier: a scanner rejection blames the candidate only for its own changes outside the held-out suite (L3)", () => {
+	const abort = (
+		reason: string,
+		signals: readonly { path: string; rule: string }[],
+		candidatePaths: readonly string[] | null = ["src/value.ts"],
+	) =>
+		classifyFailure(
+			unitInput({
+				receiptPatch: {
+					reason,
+					checks: [],
+					tamperSignals: signals.map((s) => ({ ...s, line: 1 })),
+				},
+				replay: null,
+				candidatePaths,
+			}),
+		);
+
+	for (const reason of [
+		"invalid_source_encoding",
+		"runtime_patching",
+		"suppression_added",
+	]) {
+		assert.deepEqual(
+			abort(reason, [{ path: "src/value.ts", rule: reason }]),
+			{ kind: "candidate", reason: "candidate_check", scenarios: [] },
+			reason,
+		);
+		assert.deepEqual(
+			abort(reason, [{ path: first, rule: reason }]),
+			{ kind: "missing_evidence", reason: "incomplete_ci" },
+			`${reason} held-out`,
+		);
+		assert.deepEqual(
+			abort(
+				reason,
+				[{ path: "test/acceptance/9/helper.ts", rule: reason }],
+				["src/value.ts", "test/acceptance/9/helper.ts"],
+			),
+			{ kind: "missing_evidence", reason: "incomplete_ci" },
+			`${reason} acceptance directory`,
+		);
+		assert.deepEqual(
+			abort(reason, [{ path: "src/other.ts", rule: reason }]),
+			{ kind: "missing_evidence", reason: "incomplete_ci" },
+			`${reason} unchanged by the candidate`,
+		);
+		assert.deepEqual(
+			abort(
+				reason,
+				[
+					{ path: "src/value.ts", rule: reason },
+					{ path: first, rule: reason },
+				],
+				["src/value.ts"],
+			),
+			{ kind: "missing_evidence", reason: "incomplete_ci" },
+			`${reason} mixed`,
+		);
+		assert.deepEqual(
+			abort(reason, [{ path: "src/value.ts", rule: reason }], null),
+			{ kind: "missing_evidence", reason: "incomplete_ci" },
+			`${reason} no candidate paths`,
+		);
+	}
 });
 
 test("classifier: identity, completeness and timeouts fail closed before blame", () => {

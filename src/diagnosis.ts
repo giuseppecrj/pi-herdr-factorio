@@ -696,7 +696,14 @@ export type ClassifyInput = Readonly<{
 	ignoredChanges: readonly string[] | null;
 	replay: HeldoutReplay | null;
 	dependencies: Readonly<{ reason: string | null }> | null;
+	candidatePaths: readonly string[] | null;
 }>;
+
+const SCANNED_ABORTS: ReadonlySet<string> = new Set([
+	"runtime_patching",
+	"suppression_added",
+	"invalid_source_encoding",
+]);
 
 const CANDIDATE_ABORTS: ReadonlySet<string> = new Set([
 	"npmrc_changed",
@@ -807,16 +814,35 @@ function earlyAbort(
 	if (fieldOf(receipt, "status") !== "failed") return missing("incomplete_ci");
 
 	if (CANDIDATE_ABORTS.has(reason)) {
-		if (reason === "runtime_patching" || reason === "suppression_added") {
-			const rules = (arrayOf(fieldOf(receipt, "tamperSignals")) ?? []).map(
-				(s) => fieldOf(objectOf(s), "rule"),
+		if (SCANNED_ABORTS.has(reason)) {
+			const signals = (arrayOf(fieldOf(receipt, "tamperSignals")) ?? []).map(
+				(s) => ({
+					rule: fieldOf(objectOf(s), "rule"),
+					path: textOf(fieldOf(objectOf(s), "path")),
+				}),
 			);
+
+			const rules = signals.map((s) => s.rule);
 
 			if (
 				!rules.includes(reason) ||
+				(reason !== "invalid_source_encoding" &&
+					rules.includes("invalid_source_encoding")) ||
 				(reason === "suppression_added" && rules.includes("runtime_patching"))
 			)
 				return missing("invalid_report");
+
+			if (
+				input.candidatePaths === null ||
+				signals.some(
+					(s) =>
+						s.path === null ||
+						s.path.startsWith("test/acceptance/") ||
+						input.expected.includes(s.path) ||
+						!input.candidatePaths?.includes(s.path),
+				)
+			)
+				return missing("incomplete_ci");
 		}
 
 		return { kind: "candidate", reason: "candidate_check", scenarios: [] };
@@ -1030,10 +1056,10 @@ export function classifyFailure(input: ClassifyInput): FailureClass {
 		});
 	}
 
-	if (reason !== null) return earlyAbort(reason, r, checks, input);
-
 	if (fieldOf(r, "replacementsDigest") !== id.replacementsDigest)
 		return missing("identity_mismatch");
+
+	if (reason !== null) return earlyAbort(reason, r, checks, input);
 
 	if (fieldOf(r, "status") !== "failed") return missing("incomplete_ci");
 

@@ -2444,6 +2444,7 @@ export function controllerValidator(config: {
 					ignoredChanges: facts?.ignoredChanges ?? null,
 					replay: facts?.replay ?? null,
 					dependencies: facts?.dependencies ?? null,
+					candidatePaths: patch.receipt.changedPaths,
 				});
 			};
 

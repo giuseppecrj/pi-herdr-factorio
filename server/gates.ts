@@ -1176,6 +1176,7 @@ async function scanCandidate(
 	const base = await entries(input.repository, input.gateSha);
 	const candidate = await entries(input.repository, input.candidateSha);
 	const result: Signal[] = [];
+	const encoding: Signal[] = [];
 
 	for (const [path, entry] of candidate) {
 		if (
@@ -1192,13 +1193,19 @@ async function scanCandidate(
 			continue;
 
 		const bytes = readFileSync(join(tree, path));
-
-		if (!isUtf8(bytes) || bytes.includes(0))
-			throw new Error("invalid_source_encoding");
 		const text = bytes.toString("utf8");
 
-		if (/[\u2028\u2029]|\r(?!\n)/.test(text))
-			throw new Error("invalid_source_encoding");
+		if (
+			!isUtf8(bytes) ||
+			bytes.includes(0) ||
+			/[\u2028\u2029]|\r(?!\n)/.test(text)
+		) {
+			encoding.push({ path, line: 0, rule: "invalid_source_encoding" });
+
+			continue;
+		}
+
+		if (encoding.length > 0) continue;
 
 		if (base.get(path)?.blob === entry.blob && !heldout.includes(path))
 			continue;
@@ -1243,7 +1250,7 @@ async function scanCandidate(
 		);
 	}
 
-	return result;
+	return encoding.length > 0 ? encoding : result;
 }
 
 function privateExecution(
@@ -1933,9 +1940,11 @@ export async function checkCandidate(
 
 		if (receipt.tamperSignals.length)
 			throw new Error(
-				receipt.tamperSignals.some((s) => s.rule === "runtime_patching")
-					? "runtime_patching"
-					: "suppression_added",
+				receipt.tamperSignals.some((s) => s.rule === "invalid_source_encoding")
+					? "invalid_source_encoding"
+					: receipt.tamperSignals.some((s) => s.rule === "runtime_patching")
+						? "runtime_patching"
+						: "suppression_added",
 			);
 		mkdirSync(gates, { mode: 0o755 });
 		cpSync(join(baseline, ".github/factory/gates"), gates, { recursive: true });
