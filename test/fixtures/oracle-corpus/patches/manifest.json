@@ -65,7 +65,8 @@
 			"materializer": "current",
 			"expected": {
 				"kind": "missing_evidence",
-				"reason": "materialize_mismatch"
+				"reason": "materialize_mismatch",
+				"differing": 1
 			},
 			"adjudicator": "coordinator (owner approves at PR review)",
 			"rationale": "The current materializer overlays the documentation, so its ignoredChanges is empty while the historical receipt lists the doc. The parity check stops before any tree comparison can blame the candidate."

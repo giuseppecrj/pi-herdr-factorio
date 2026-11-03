@@ -18,6 +18,8 @@ import {
 	assessBase,
 	classifyFailure,
 	diagnosisNeeds,
+	diagnosisNotice,
+	parseFailureClass,
 	type BaseReceipt,
 	type ClassifyInput,
 	type FailureClass,
@@ -954,8 +956,25 @@ test("classifier: disagreements are missing evidence and message bytes are ignor
 	);
 	assert.deepEqual(
 		classifyFailure(unitInput({ ignoredChanges: ["docs/x.md"] })),
-		{ kind: "missing_evidence", reason: "materialize_mismatch" },
+		{ kind: "missing_evidence", reason: "materialize_mismatch", differing: 1 },
 	);
+	assert.deepEqual(
+		classifyFailure(
+			unitInput({
+				ignoredChanges: ["docs/x.md", "docs/y.md", "z.json"],
+				receiptPatch: { ignoredChanges: ["z.json", "w.json"] },
+			}),
+		),
+		{ kind: "missing_evidence", reason: "materialize_mismatch", differing: 3 },
+	);
+	assert.deepEqual(
+		classifyFailure(unitInput({ receiptPatch: { ignoredChanges: null } })),
+		{ kind: "missing_evidence", reason: "invalid_report" },
+	);
+	assert.deepEqual(classifyFailure(unitInput({ ignoredChanges: null })), {
+		kind: "missing_evidence",
+		reason: "unsupported_tree",
+	});
 	const load = observedReplay(E, first, "load_error");
 	assert.ok(load.kind === "observed");
 	assert.deepEqual(
@@ -1836,3 +1855,67 @@ scoped(
 		assert.equal(existsSync(join(w.dir, "feedback.json")), false);
 	},
 );
+
+test("notices and the failure codec name which pair disagreed, with a path count and never the paths", () => {
+	const key = "<!-- factory-diagnosis run=x -->";
+
+	const sentence = (failure: FailureClass) =>
+		diagnosisNotice(failure, key).body.split("\n")[0];
+
+	const stopped =
+		"Stopped: CI diagnosis could not establish reliable evidence.";
+
+	assert.equal(
+		sentence({ kind: "missing_evidence", reason: "ci_replay_disagrees" }),
+		`${stopped} CI and the gate-tree replay disagree.`,
+	);
+	assert.equal(
+		sentence({ kind: "missing_evidence", reason: "tree_replays_disagree" }),
+		`${stopped} Gate and candidate replays disagree.`,
+	);
+	assert.equal(
+		sentence({
+			kind: "missing_evidence",
+			reason: "materialize_mismatch",
+			differing: 1,
+		}),
+		`${stopped} The replay's ignored changes differ from CI's in 1 path.`,
+	);
+	assert.equal(
+		sentence({
+			kind: "missing_evidence",
+			reason: "materialize_mismatch",
+			differing: 4,
+		}),
+		`${stopped} The replay's ignored changes differ from CI's in 4 paths.`,
+	);
+	assert.equal(
+		sentence({ kind: "missing_evidence", reason: "base_missing" }),
+		stopped,
+	);
+
+	const counted: FailureClass = {
+		kind: "missing_evidence",
+		reason: "materialize_mismatch",
+		differing: 2,
+	};
+
+	assert.deepEqual(
+		parseFailureClass(parseJson(JSON.stringify(counted))),
+		counted,
+	);
+
+	for (const bad of [
+		{ kind: "missing_evidence", reason: "materialize_mismatch" },
+		{ kind: "missing_evidence", reason: "materialize_mismatch", differing: 0 },
+		{ kind: "missing_evidence", reason: "materialize_mismatch", differing: -1 },
+		{ kind: "missing_evidence", reason: "base_missing", differing: 1 },
+		{
+			kind: "missing_evidence",
+			reason: "materialize_mismatch",
+			differing: 1,
+			paths: ["docs/x.md"],
+		},
+	])
+		assert.equal(parseFailureClass(parseJson(JSON.stringify(bad))), null);
+});
