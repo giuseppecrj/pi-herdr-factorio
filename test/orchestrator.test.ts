@@ -9177,6 +9177,16 @@ describe("controller-only validate", () => {
 			kind: "terminal",
 			terminal: { kind: "failed", reason: "diagnosis_missing_evidence" },
 		});
+
+		const notices = keyed(f.github, 14, "diagnosis");
+		assert.equal(notices.length, 1);
+		assert.match(
+			notices[0] ?? "",
+			/^Stopped: CI diagnosis could not establish reliable evidence\. Gate and candidate replays disagree\.\n\n<!-- factory-diagnosis run=[a-f0-9]{64} g=0\.0 a=[a-f0-9]{64} -->$/,
+		);
+		await f.controller.tick();
+		await settle();
+		assert.equal(keyed(f.github, 14, "diagnosis").length, 1);
 	});
 
 	it("repairs a candidate load error after a qualified base exactly once, bound to its assessment", async () => {
@@ -9200,6 +9210,7 @@ describe("controller-only validate", () => {
 			assessment: readAssessmentBytes(stored)?.ref,
 		});
 		assert.ok(f.executor.assessmentReads.includes(`${runOf(14)}/0/0`));
+		assert.equal(keyed(f.github, 14, "diagnosis").length, 0);
 	});
 
 	it("does not repair a restored repair_due whose assessment is missing", async () => {

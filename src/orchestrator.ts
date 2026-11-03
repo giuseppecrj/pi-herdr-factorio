@@ -205,6 +205,7 @@ type WorkflowPin = Pick<ActiveRun, "workflowSha" | "workflowDigest">;
 
 import {
 	baseRefusalNotice,
+	diagnosisNotice,
 	matchingBaseProof,
 	type BaseRefusal,
 } from "./diagnosis.ts";
@@ -3925,7 +3926,21 @@ export class Orchestrator {
 			else if (
 				result.kind === "finished" &&
 				(!result.verdict.pass || result.report !== undefined)
-			)
+			) {
+				const read = result.assessment;
+
+				if (
+					read.assessment.kind === "failed" &&
+					read.assessment.failure.kind !== "candidate"
+				) {
+					const notice = diagnosisNotice(
+						read.assessment.failure,
+						`<!-- factory-diagnosis run=${run.runId} g=${read.binding.round}.${read.binding.generation} a=${read.ref.recordDigest} -->`,
+					);
+
+					if (!(await this.#postKeyed(run, notice.key, notice.body))) return;
+				}
+
 				completion = {
 					kind: "validate",
 					request,
@@ -3938,7 +3953,7 @@ export class Orchestrator {
 						assessment: result.assessment,
 					},
 				};
-			else if (result.kind === "failed")
+			} else if (result.kind === "failed")
 				completion = {
 					kind: "validate",
 					request,
