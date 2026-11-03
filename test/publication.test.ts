@@ -582,7 +582,7 @@ async function validationFixture() {
 	writeFileSync(join(workspace, "src/a.ts"), "export const a = 2;\n");
 
 	const contract: Contract = {
-		version: 1,
+		version: 2,
 		runId,
 		issue: 1,
 		base: { repo: identity.repo, sha: identity.baseSha },
@@ -595,7 +595,7 @@ async function validationFixture() {
 		link: null,
 		summary: "Change a",
 		behavior: ["Return 2"],
-		acceptance: [{ id: "A1", text: "Return 2" }],
+		acceptance: [{ id: "A1", kind: "new_behavior", text: "Return 2" }],
 		exclusions: [],
 		compatibility: [],
 		limits: [],
@@ -614,9 +614,15 @@ async function validationFixture() {
 	);
 
 	const suite: AcceptanceSuite = {
-		version: 1,
+		version: 2,
 		scenarios: [
-			{ id: "S1", criteria: ["A1"], checks: ["a.test.ts"], judge: null },
+			{
+				id: "S1",
+				kind: "new_behavior",
+				criteria: ["A1"],
+				checks: ["a.test.ts"],
+				judge: null,
+			},
 		],
 		files: [
 			{

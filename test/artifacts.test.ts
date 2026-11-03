@@ -38,7 +38,7 @@ const sha = "a".repeat(40);
 if (!isRepoSlug(repo) || !isGitSha(sha)) throw new Error("fixture");
 
 const contract: Contract = {
-	version: 1,
+	version: 2,
 	runId: digestOf("artifact-run"),
 	issue: 1,
 	base: { repo, sha },
@@ -51,7 +51,7 @@ const contract: Contract = {
 	link: null,
 	summary: "Version",
 	behavior: ["Print version"],
-	acceptance: [{ id: "A1", text: "Print version" }],
+	acceptance: [{ id: "A1", kind: "new_behavior", text: "Print version" }],
 	exclusions: [],
 	compatibility: [],
 	limits: [],
@@ -62,12 +62,20 @@ const contract: Contract = {
 const digest = contractDigestOf(contractBytes(contract));
 
 const suite: AcceptanceSuite = {
-	version: 1,
+	version: 2,
 	scenarios: [
 		{
 			id: "S1",
+			kind: "new_behavior",
 			criteria: ["A1"],
-			checks: ["a.test.ts", "b.test.ts"],
+			checks: ["a.test.ts"],
+			judge: null,
+		},
+		{
+			id: "S2",
+			kind: "new_behavior",
+			criteria: ["A1"],
+			checks: ["b.test.ts"],
 			judge: null,
 		},
 	],
@@ -84,6 +92,13 @@ const suite: AcceptanceSuite = {
 		},
 	],
 };
+
+function modelText(suite: AcceptanceSuite): string {
+	return JSON.stringify({
+		...suite,
+		scenarios: suite.scenarios.map(({ kind: _derived, ...rest }) => rest),
+	});
+}
 
 const input = {
 	contract,
@@ -186,13 +201,18 @@ describe("private acceptance artifacts", () => {
 		const paths = ["a.test.ts", "b.test.ts", "c.test.ts", "d.test.ts"];
 
 		const boundary: AcceptanceSuite = {
-			version: 1,
-			scenarios: [{ id: "S1", criteria: ["A1"], checks: paths, judge: null }],
+			version: 2,
+			scenarios: paths.map((path, i) => ({
+				id: `S${i + 1}`,
+				kind: "new_behavior",
+				criteria: ["A1"],
+				checks: [path],
+				judge: null,
+			})),
 			files: paths.map((path) => ({ path, type: "node:test", content: "x" })),
 		};
 
-		let spare =
-			ACCEPTANCE_MAX_BYTES - Buffer.byteLength(JSON.stringify(boundary));
+		let spare = ACCEPTANCE_MAX_BYTES - Buffer.byteLength(modelText(boundary));
 
 		const files = boundary.files.map((file) => {
 			const extra = Math.min(spare, 65535);
@@ -203,14 +223,8 @@ describe("private acceptance artifacts", () => {
 
 		assert.equal(spare, 0);
 		const legal = { ...boundary, files };
-		assert.equal(
-			Buffer.byteLength(JSON.stringify(legal)),
-			ACCEPTANCE_MAX_BYTES,
-		);
-		assert.equal(
-			writeAcceptance(JSON.stringify(legal), contract).kind,
-			"suite",
-		);
+		assert.equal(Buffer.byteLength(modelText(legal)), ACCEPTANCE_MAX_BYTES);
+		assert.equal(writeAcceptance(modelText(legal), contract).kind, "suite");
 		const root = fresh();
 		const stored = await fileArtifacts(root).store({ ...input, suite: legal });
 		assert.equal(stored.kind, "found");
@@ -222,7 +236,7 @@ describe("private acceptance artifacts", () => {
 			await fileArtifacts(root).store({ ...input, suite: legal }),
 			stored,
 		);
-		assert.deepEqual(writeAcceptance(`${JSON.stringify(legal)} `, contract), {
+		assert.deepEqual(writeAcceptance(`${modelText(legal)} `, contract), {
 			kind: "malformed",
 			reason: "too_large",
 		});

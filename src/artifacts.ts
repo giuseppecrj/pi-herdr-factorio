@@ -17,7 +17,7 @@ import {
 	CANARY,
 	acceptanceDigestOf,
 	acceptanceEntries,
-	writeAcceptance,
+	readAcceptanceSuite,
 	type AcceptanceSuite,
 } from "./accept.ts";
 import { type Digest, isDigest } from "./run.ts";
@@ -208,7 +208,7 @@ export function parseStoredContract(
 		eventAt === null ||
 		issue === null ||
 		issue < 1 ||
-		fieldOf(value, "version") !== 1 ||
+		fieldOf(value, "version") !== 2 ||
 		fieldOf(value, "runId") !== runId ||
 		fieldOf(receipt, "baseSha") !== sha ||
 		fieldOf(receipt, "bytes") !== Buffer.byteLength(bytes) ||
@@ -252,7 +252,10 @@ export function parseStoredContract(
 	const parsed = parseSpecifyOutput(
 		JSON.stringify({
 			...draft,
-			acceptance: acceptance.map((v) => fieldOf(objectOf(v), "text")),
+			acceptance: acceptance.map((v) => ({
+				kind: fieldOf(objectOf(v), "kind"),
+				text: fieldOf(objectOf(v), "text"),
+			})),
 		}),
 		new Set([...paths, ...evidencePaths, ...replacementPaths]),
 	);
@@ -291,7 +294,7 @@ export function parseStoredContract(
 	}
 
 	const contract: Contract = {
-		version: 1,
+		version: 2,
 		runId,
 		issue,
 		base: { repo, sha },
@@ -390,7 +393,7 @@ export function fileArtifacts(stateDir: string): ArtifactStore {
 			)
 				return { kind: "blocked", reason: "acceptance_changed" };
 			const { canary: _planted, ...body } = stored;
-			const parsed = writeAcceptance(JSON.stringify(body), contract);
+			const parsed = readAcceptanceSuite(body, contract);
 
 			if (parsed.kind !== "suite")
 				return { kind: "blocked", reason: "acceptance_changed" };
@@ -461,7 +464,11 @@ export function fileArtifacts(stateDir: string): ArtifactStore {
 			const previous = await read(contract.runId, contract, contractDigest);
 
 			if (previous.kind !== "absent") return previous;
-			const validated = writeAcceptance(JSON.stringify(suite), contract);
+
+			const validated = readAcceptanceSuite(
+				objectOf(parseJson(JSON.stringify(suite))) ?? {},
+				contract,
+			);
 
 			if (validated.kind !== "suite")
 				return { kind: "blocked", reason: "acceptance_invalid" };

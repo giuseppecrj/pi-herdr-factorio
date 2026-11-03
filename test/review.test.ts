@@ -101,7 +101,7 @@ async function checkReviewTree(mode: string) {
 		const runId = digestOf("review fixture");
 
 		const contract: Contract = {
-			version: 1,
+			version: 2,
 			runId,
 			issue: 1,
 			base: { repo, sha },
@@ -115,7 +115,7 @@ async function checkReviewTree(mode: string) {
 			summary: "Add value",
 			behavior: ["Export value"],
 			exclusions: [],
-			acceptance: [{ id: "A1", text: "Value is one" }],
+			acceptance: [{ id: "A1", kind: "new_behavior", text: "Value is one" }],
 			compatibility: [],
 			limits: [],
 			files: ["value.ts"],
@@ -130,7 +130,7 @@ async function checkReviewTree(mode: string) {
 
 		const accepted = writeAcceptance(
 			JSON.stringify({
-				version: 1,
+				version: 2,
 				scenarios: [
 					{
 						id: "S1",

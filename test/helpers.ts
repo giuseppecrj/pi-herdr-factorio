@@ -401,7 +401,7 @@ export async function preparedReviewFixture(
 	const issue = fakeIssue(1);
 
 	const contract: Contract = {
-		version: 1,
+		version: 2,
 		runId,
 		issue: 1,
 		base: { repo: admissionPin.repo, sha: baseSha },
@@ -417,7 +417,10 @@ export async function preparedReviewFixture(
 		summary: "Export one",
 		behavior: ["Export one"],
 		exclusions: [],
-		acceptance: [{ id: "A1", text: "Value is one" }],
+		acceptance: [
+			{ id: "A1", kind: "new_behavior", text: "Value is one" },
+			{ id: "A2", kind: "preservation", text: "Readable value" },
+		],
 		compatibility: [],
 		limits: [],
 		files: ["src/a.ts"],
@@ -432,11 +435,18 @@ export async function preparedReviewFixture(
 
 	const accepted = writeAcceptance(
 		JSON.stringify({
-			version: 1,
+			version: 2,
 			scenarios: [
-				{ id: "S1", criteria: ["A1"], checks: [], judge: "Value is one" },
+				{ id: "S1", criteria: ["A1"], checks: ["value.test.ts"], judge: null },
+				{ id: "S2", criteria: ["A2"], checks: [], judge: "Readable value" },
 			],
-			files: [],
+			files: [
+				{
+					path: "value.test.ts",
+					type: "node:test",
+					content: "import {test} from 'node:test'; test('value',()=>{});",
+				},
+			],
 		}),
 		contract,
 	);
@@ -483,7 +493,7 @@ export async function preparedReviewFixture(
 		baseSha,
 		gateSha: baseSha,
 		acceptanceDigest: suite.receipt.acceptanceDigest,
-		unjudged: ["S1"],
+		unjudged: ["S2"],
 	};
 
 	let { book, execution } = issuedReviewFixture(

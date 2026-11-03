@@ -343,7 +343,7 @@ const CONTRACT_TEXT = JSON.stringify({
 	summary: "Print the package version",
 	behavior: ["The CLI prints the version"],
 	exclusions: ["No other command changes"],
-	acceptance: ["--version prints 0.1.0"],
+	acceptance: [{ kind: "new_behavior", text: "--version prints 0.1.0" }],
 	compatibility: [],
 	limits: [],
 	files: ["server/cli.ts"],
@@ -351,7 +351,7 @@ const CONTRACT_TEXT = JSON.stringify({
 });
 
 const ACCEPTANCE_TEXT = JSON.stringify({
-	version: 1,
+	version: 2,
 	scenarios: [
 		{ id: "S1", criteria: ["A1"], checks: ["version.test.ts"], judge: null },
 	],
