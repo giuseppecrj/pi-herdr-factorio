@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
+	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
 	rmSync,
+	statSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -48,6 +51,31 @@ import {
 	runHeldoutBase,
 } from "../server/gates.ts";
 import { legacyMaterialize } from "./fixtures/oracle-corpus/patches/legacy-materializer.ts";
+import {
+	controllerBaseChecker,
+	controllerDiagnosis,
+	controllerValidator,
+	fileRunFiles,
+	type TarballFetch,
+} from "../server/controller.ts";
+import {
+	dispatchNonce,
+	parseValidationState,
+	publishedSuite,
+	readFeedbackBytes,
+	validationDir,
+	type ValidationState,
+} from "../src/validation.ts";
+import {
+	collectPatch,
+	finishPatch,
+	readPatch,
+	storePatch,
+} from "../src/build.ts";
+import { generationIntent } from "../src/handoff.ts";
+import { candidateBranch } from "../src/publication.ts";
+import { CONTROLLER_LOGIN } from "../src/markers.ts";
+import type { Exec } from "../src/gh.ts";
 
 function missingTool(argv: readonly string[]): string | null {
 	const [command = "", ...args] = argv;
@@ -1172,3 +1200,639 @@ test("legacy materializer fixture stays out of production imports", () => {
 			/oracle-corpus|legacy-materializer/,
 		);
 });
+
+const systemd =
+	bwrap ?? missingTool(["systemd-run", "--user", "--scope", "--quiet", "true"]);
+
+function scoped(
+	name: string,
+	fn: (t: import("node:test").TestContext) => Promise<void>,
+) {
+	if (systemd === null) test(name, fn);
+	else if (strict)
+		test(name, () =>
+			assert.fail(`FACTORY_REQUIRE_SANDBOX_TESTS=1 but ${systemd}`),
+		);
+	else test(name, (t) => t.diagnostic(`not run: ${systemd}`));
+}
+
+function tarballOf(repository: string, sha: string): Buffer {
+	return execFileSync(
+		"git",
+		[
+			"-C",
+			repository,
+			"archive",
+			"--format=tar.gz",
+			`--prefix=repo-${sha.slice(0, 7)}/`,
+			sha,
+		],
+		{ maxBuffer: 128 * 1024 * 1024 },
+	);
+}
+
+const SLOW_VALUE =
+	"const end = Date.now() + 1500; while (Date.now() < end) {}\nexport function value() { return 3; }\nexport const name = 'factory';\n";
+
+async function jobWorld(
+	t: { after(fn: () => void): void },
+	id: string,
+	options: { slow?: boolean } = {},
+) {
+	const raw = manifest.entries.find((e) => e.id === id);
+	assert.ok(raw !== undefined);
+	const entry = resolveEntry(raw);
+	const synthetic = SYNTHETIC.get(entry.id);
+
+	const ids = new Map(
+		(entry.criteria ?? syntheticCriteria).map((c, i) => [c.id, `A${i + 1}`]),
+	);
+
+	const criteria = (entry.criteria ?? syntheticCriteria).map((c) => ({
+		...c,
+		id: ids.get(c.id) ?? c.id,
+	}));
+
+	const scenarios = (
+		entry.scenarios?.map((s) => ({
+			...s,
+			text: read(s.file).replace(/\/\/ factory-holdout-[0-9a-f]{64}\n$/, ""),
+		})) ?? syntheticScenarios
+	).map((s) => ({ ...s, criteria: s.criteria.map((c) => ids.get(c) ?? c) }));
+
+	const f = repository(
+		t,
+		Object.fromEntries(
+			Object.entries(entry.base ?? {}).map(([path, file]) => [
+				path,
+				read(file),
+			]),
+		),
+	);
+
+	const gateSha = f.gateSha;
+	const repo = "owner/repo";
+	assert.ok(isGitSha(gateSha) && isRepoSlug(repo));
+	const state = join(f.root, "state");
+	mkdirSync(state, { mode: 0o700 });
+	const [first, ...rest] = criteria;
+	assert.ok(first !== undefined);
+
+	const contract: Contract = {
+		version: 2,
+		runId: digestOf(`job ${entry.id}`),
+		issue: entry.issue,
+		base: { repo, sha: gateSha },
+		snapshot: {
+			digest: digestOf("snapshot"),
+			source: "unedited",
+			eventId: "1",
+			eventAt: "2026-11-03T00:00:00Z",
+		},
+		link: null,
+		summary: `Job ${entry.id}`,
+		behavior: ["Job behavior"],
+		exclusions: [],
+		acceptance: [first, ...rest],
+		compatibility: [],
+		limits: [],
+		files: [],
+		evidence: [],
+	};
+
+	const bytes = contractBytes(contract);
+	const contractDigest = contractDigestOf(bytes);
+	const files = fileRunFiles(state);
+	assert.ok(
+		await files.writeContract({ contract, bytes, digest: contractDigest }),
+	);
+
+	const parsed = writeAcceptance(
+		JSON.stringify({
+			version: 2,
+			scenarios: scenarios.map((s) => ({
+				id: s.id,
+				criteria: s.criteria,
+				checks: [s.path],
+				judge: null,
+			})),
+			files: scenarios.map((s) => ({
+				path: s.path,
+				type: "node:test",
+				content: s.text,
+			})),
+		}),
+		contract,
+	);
+
+	assert.ok(parsed.kind === "suite");
+
+	const stored = await files.artifacts.store({
+		contract,
+		contractDigest,
+		suite: parsed.suite,
+		model: "openai/gpt-6.1-sol",
+		observed: null,
+	});
+
+	assert.ok(stored.kind === "found");
+	const runId = contract.runId;
+	const acceptanceDigest = stored.receipt.acceptanceDigest;
+
+	const canaryText = readFileSync(
+		join(state, "acceptance", runId, "canary.txt"),
+		"utf8",
+	).trimEnd();
+
+	const heldout = publishedSuite({
+		issue: entry.issue,
+		suite: stored.suite,
+		canary: canaryText,
+		acceptanceDigest,
+	});
+
+	for (const file of heldout.files)
+		f.put(file.path, Buffer.from(file.bytes ?? new Uint8Array()).toString());
+
+	for (const [path, file] of Object.entries(entry.candidate ?? {}))
+		f.put(path, read(file));
+
+	for (const [path, text] of synthetic?.candidate ?? new Map<string, string>())
+		f.put(path, text);
+
+	if (options.slow) f.put("src/value.ts", SLOW_VALUE);
+	const candidateSha = f.commit();
+	const fetches: string[] = [];
+	let hold: Promise<void> | null = null;
+
+	const fetch: TarballFetch = async (_repo, sha) => {
+		fetches.push(sha);
+
+		if (hold !== null) await hold;
+
+		return tarballOf(f.repo, sha);
+	};
+
+	const binding = {
+		runId,
+		repo,
+		issue: entry.issue,
+		contractDigest,
+		acceptanceDigest,
+		baseSha: gateSha,
+		gateSha,
+	};
+
+	const checker = controllerBaseChecker({ stateDir: state, fetch });
+	const signal = new AbortController().signal;
+
+	const reference = {
+		binding,
+		acceptAttempt: 1,
+		remainingAcceptMs: 900_000,
+		signal,
+	};
+
+	let base = await checker.check(reference);
+
+	for (let i = 0; i < 400 && base.kind === "checking"; i++) {
+		await new Promise((r) => setTimeout(r, 50));
+		base = await checker.check(reference);
+	}
+
+	assert.notEqual(base.kind, "checking");
+	fetches.length = 0;
+
+	const before = join(f.root, "patch-base"),
+		after = join(f.root, "patch-after");
+
+	for (const dir of [before, after])
+		mkdirSync(join(dir, "src"), { recursive: true });
+	writeFileSync(join(before, "src/value.ts"), SOURCE_FILES["src/value.ts"]);
+	writeFileSync(join(after, "src/value.ts"), "export const changed = true;\n");
+	const collected = await collectPatch({ base: before, workspace: after });
+	assert.ok(collected.kind === "collected");
+
+	const patchBinding = {
+		runId,
+		baseSha: gateSha,
+		contractDigest,
+		acceptanceDigest,
+	};
+
+	storePatch(state, patchBinding, collected, {
+		model: "openai/gpt-6.1-sol",
+		observed: null,
+		commands: [],
+	});
+	finishPatch(state, patchBinding, {
+		command: "npm test",
+		exitCode: 0,
+		tail: "",
+		wallMs: 1,
+	});
+	const patch = readPatch(state, patchBinding);
+	assert.ok(patch.kind === "found");
+
+	const generation = generationIntent({
+		pin: {
+			runId,
+			repo,
+			issue: entry.issue,
+			originalBase: gateSha,
+			workflowSha: gateSha,
+			workflowDigest: digestOf("workflow"),
+			contractDigest,
+			acceptanceDigest,
+			maxTokens: 500_000,
+			maxReviewAttempts: 3,
+		},
+		patch: patch.receipt,
+		round: 0,
+		generation: 0,
+		baseSha: gateSha,
+		origin: { kind: "initial" },
+		publication: { kind: "initial" },
+	});
+
+	const nonce = dispatchNonce(runId, 0, 1);
+	const heldoutDir = heldout.directory;
+
+	const ci = await checkCandidate({
+		repository: f.repo,
+		gateSha,
+		candidateSha,
+		nonce,
+		output: join(f.root, "ci"),
+		runner: localRunner,
+		install: false,
+		heldoutDir,
+		heldoutDigest: heldout.digest,
+	});
+
+	let receipt: JsonObject = objectOf(parseJson(JSON.stringify(ci))) ?? {};
+
+	if (entry.ci?.kind === "recorded") {
+		const gateExport = join(f.root, "gate-export"),
+			fullExport = join(f.root, "full-export");
+
+		await exportTree(f.repo, gateSha, gateExport);
+		await exportTree(f.repo, candidateSha, fullExport);
+
+		legacyMaterialize({
+			gateTree: gateExport,
+			candidateTree: fullExport,
+			dest: join(f.root, "historical-gate"),
+			replacements: [],
+			heldoutDir,
+			heldoutDigest: heldout.digest,
+		});
+
+		const historical = await replayHeldoutCandidate({
+			gateTree: join(f.root, "historical-gate"),
+			fullTree: fullExport,
+			gates: join(gateExport, ".github/factory/gates"),
+			heldoutDir,
+			heldoutDigest: heldout.digest,
+			workDir: join(f.root, "historical-replay"),
+			cacheDir: join(f.root, "dependencies"),
+			deadline: Date.now() + 120_000,
+		});
+
+		assert.ok(historical.kind === "observed");
+		receipt = {
+			...receipt,
+			status: "failed",
+			checks: ci.checks.map((c) =>
+				c.name === "heldout" ? { ...c, exitCode: 1 } : { ...c },
+			),
+			heldoutFailures: (entry.ci.heldoutFailures ?? []).map(
+				(p) => `${heldoutDir}/checks/${p}`,
+			),
+			heldoutCounts: { ...historical.gate.projection.counts },
+			ignoredChanges: [...(entry.ci.ignoredChanges ?? [])],
+		};
+	}
+
+	assert.equal(receipt.status, "failed", JSON.stringify(receipt));
+	const start = Date.parse("2026-11-03T00:00:00Z");
+	const branch = candidateBranch(entry.issue, runId, 0);
+	let ref: string | null = candidateSha;
+	const writes: string[] = [];
+
+	let validation: ValidationState = {
+		version: 2,
+		generation: { index: 0, digest: generation.digest, previousHead: null },
+		startedAt: start,
+		deadline: start + 1_200_000,
+		round: 0,
+		originalBase: gateSha,
+		baseSha: gateSha,
+		baseResolved: true,
+		publication: { branch, patchSha: gateSha, candidateSha },
+		dispatchTry: 1,
+		dispatchedAt: start,
+		ciRunId: 77,
+		counters: {},
+	};
+
+	const exec: Exec = async (_command, args) => {
+		const ok = (value: JsonValue) => ({
+			code: 0,
+			stdout: JSON.stringify(value),
+			stderr: "",
+		});
+
+		const path = args
+			.find((arg) => arg.startsWith(`repos/${repo}/`))
+			?.slice(`repos/${repo}/`.length);
+
+		if (args.includes("DELETE")) {
+			writes.push("DELETE");
+			ref = null;
+
+			return ok(null);
+		}
+
+		if (args.includes("POST") || args.includes("PATCH")) {
+			writes.push(`write ${path}`);
+
+			throw new Error("unexpected GitHub write");
+		}
+
+		if (path?.startsWith("git/ref/heads/factory/run/"))
+			return ref === null
+				? { code: 1, stdout: "", stderr: "HTTP 404" }
+				: ok({ object: { sha: ref } });
+
+		if (path === "actions/runs/77")
+			return ok({
+				id: 77,
+				head_sha: gateSha,
+				head_branch: "main",
+				updated_at: "2026-11-03T00:01:00Z",
+				display_title: `gates ${candidateSha} ${nonce}`,
+				status: "completed",
+				conclusion: "failure",
+				event: "workflow_dispatch",
+				path: ".github/workflows/ci.yml",
+				actor: { login: CONTROLLER_LOGIN },
+				triggering_actor: { login: CONTROLLER_LOGIN },
+				created_at: "2026-11-03T00:00:00Z",
+			});
+
+		throw new Error(`unexpected ${path}`);
+	};
+
+	const owner = (materialize = entry.materializer === "legacy-pre-577") =>
+		controllerDiagnosis({
+			stateDir: state,
+			fetch,
+			materialize: materialize ? legacyMaterialize : undefined,
+		});
+
+	const step = async (
+		diagnosis: ReturnType<typeof controllerDiagnosis>,
+		now = start + 60_000,
+	) => {
+		const restored = parseValidationState(
+			JSON.parse(JSON.stringify(validation)),
+		);
+
+		assert.ok(restored);
+
+		return controllerValidator({
+			stateDir: state,
+			exec,
+			fetch,
+			receipt: async () => `${JSON.stringify(receipt)}\n`,
+			diagnosis,
+		})({
+			runId,
+			issue: entry.issue,
+			baseSha: gateSha,
+			eventAt: "2026-11-03T00:00:00Z",
+			now,
+			wallMs: 1_200_000,
+			generation,
+			state: restored,
+			save: async (next) => {
+				validation = structuredClone(next);
+
+				return true;
+			},
+		});
+	};
+
+	const settle = async (
+		diagnosis: ReturnType<typeof controllerDiagnosis>,
+		now?: number,
+	) => {
+		let result = await step(diagnosis, now);
+
+		for (let i = 0; i < 600 && result.kind === "waiting"; i++) {
+			await new Promise((r) => setTimeout(r, 50));
+			result = await step(diagnosis, now);
+		}
+
+		return result;
+	};
+
+	return {
+		state,
+		dir: validationDir(state, runId, 0, 0),
+		deadline: start + 1_200_000,
+		fetches,
+		writes,
+		owner,
+		step,
+		settle,
+		hold(gate: Promise<void> | null) {
+			hold = gate;
+		},
+	};
+}
+
+function finishedAssessment(
+	result: Awaited<ReturnType<ReturnType<typeof controllerValidator>>>,
+) {
+	assert.equal(result.kind, "finished", JSON.stringify(result));
+	assert.ok(result.kind === "finished");
+
+	return result.assessment;
+}
+
+function diagnosisFiles(dir: string): string[] {
+	const root = join(dir, "diagnosis");
+
+	return readdirSync(root).flatMap((digest) =>
+		readdirSync(join(root, digest)).map((name) => `${digest}/${name}`),
+	);
+}
+
+scoped(
+	"#576 end to end through the controller job: both trees replay, the class is tree_replays_disagree and no repair is authorized",
+	async (t) => {
+		const w = await jobWorld(t, "576-docs-pre-577-gate");
+		const owner = w.owner();
+		const first = await w.step(owner);
+		assert.equal(first.kind, "waiting", JSON.stringify(first));
+		assert.deepEqual(w.writes, []);
+		const read = finishedAssessment(await w.settle(owner));
+
+		assert.deepEqual(read.assessment, {
+			kind: "failed",
+			failure: { kind: "missing_evidence", reason: "tree_replays_disagree" },
+		});
+		assert.equal(existsSync(join(w.dir, "feedback.json")), false);
+		assert.deepEqual(w.writes, ["DELETE"]);
+		assert.equal(w.fetches.length, 2);
+
+		const kept = diagnosisFiles(w.dir)
+			.map((p) => p.split("/")[1])
+			.toSorted();
+
+		assert.deepEqual(kept, ["charge.json", "intent.json", "replay.json"]);
+
+		const [digest] = readdirSync(join(w.dir, "diagnosis"));
+		assert.ok(digest !== undefined);
+
+		const intent = JSON.parse(
+			readFileSync(join(w.dir, "diagnosis", digest, "intent.json"), "utf8"),
+		);
+
+		assert.match(intent.scope, /-diagnosis-0-[0-9a-f]{8}$/);
+		assert.ok(intent.deadline - intent.startedAt <= 180_000);
+
+		for (const name of kept)
+			assert.equal(
+				statSync(join(w.dir, "diagnosis", digest, name)).mode & 0o777,
+				0o600,
+			);
+
+		const charge = JSON.parse(
+			readFileSync(join(w.dir, "diagnosis", digest, "charge.json"), "utf8"),
+		);
+
+		assert.equal(charge.tokens, 0);
+		assert.ok(charge.wallMs >= 0);
+
+		const again = finishedAssessment(await w.step(w.owner()));
+		assert.deepEqual(again, read);
+		assert.equal(w.fetches.length, 2);
+		assert.deepEqual(w.writes, ["DELETE"]);
+	},
+);
+
+scoped(
+	"a genuinely bad candidate through the controller job is candidate, with feedback for exactly one repair",
+	async (t) => {
+		const w = await jobWorld(t, "synthetic-wrong-value");
+		const read = finishedAssessment(await w.settle(w.owner()));
+
+		assert.deepEqual(read.assessment, {
+			kind: "failed",
+			failure: {
+				kind: "candidate",
+				reason: "candidate_heldout",
+				scenarios: ["S1"],
+			},
+		});
+
+		const feedback = readFeedbackBytes(
+			readFileSync(join(w.dir, "feedback.json"), "utf8"),
+			read.ref,
+		);
+
+		assert.deepEqual(
+			feedback?.map((s) => s.scenario),
+			["S1"],
+		);
+		assert.deepEqual(w.writes, ["DELETE"]);
+	},
+);
+
+scoped(
+	"a diagnosis that runs out of time is infrastructure and holds with no redispatch",
+	async (t) => {
+		const w = await jobWorld(t, "synthetic-wrong-value", { slow: true });
+		const owner = w.owner();
+		const read = finishedAssessment(await w.settle(owner, w.deadline - 1_000));
+
+		assert.deepEqual(read.assessment, {
+			kind: "failed",
+			failure: { kind: "infrastructure", reason: "timeout" },
+		});
+		assert.equal(existsSync(join(w.dir, "feedback.json")), false);
+
+		for (let i = 0; i < 3; i++)
+			assert.deepEqual(
+				finishedAssessment(await w.step(owner, w.deadline - 500)),
+				read,
+			);
+		assert.deepEqual(w.writes, ["DELETE"]);
+		assert.equal(w.fetches.length, 2);
+
+		const exhausted = await jobWorld(t, "synthetic-wrong-value");
+
+		const none = finishedAssessment(
+			await exhausted.step(exhausted.owner(), exhausted.deadline),
+		);
+
+		assert.deepEqual(none.assessment, {
+			kind: "failed",
+			failure: { kind: "infrastructure", reason: "timeout" },
+		});
+		assert.equal(exhausted.fetches.length, 0);
+	},
+);
+
+scoped(
+	"an interrupted diagnosis is charged once, holds as infrastructure and never relaunches",
+	async (t) => {
+		const w = await jobWorld(t, "synthetic-wrong-value");
+		let release = () => {};
+
+		w.hold(new Promise((r) => (release = r)));
+		const crashed = w.owner();
+		assert.equal((await w.step(crashed)).kind, "waiting");
+
+		for (let i = 0; i < 100 && w.fetches.length === 0; i++)
+			await new Promise((r) => setTimeout(r, 20));
+		assert.equal(w.fetches.length, 1);
+		w.hold(null);
+
+		const restarted = w.owner();
+		const read = finishedAssessment(await w.step(restarted));
+
+		assert.deepEqual(read.assessment, {
+			kind: "failed",
+			failure: { kind: "infrastructure", reason: "interrupted" },
+		});
+
+		const [digest] = readdirSync(join(w.dir, "diagnosis"));
+		assert.ok(digest !== undefined);
+		const charged = join(w.dir, "diagnosis", digest, "interrupted.json");
+		const charge = readFileSync(charged, "utf8");
+
+		const intent = JSON.parse(
+			readFileSync(join(w.dir, "diagnosis", digest, "intent.json"), "utf8"),
+		);
+
+		assert.deepEqual(JSON.parse(charge), {
+			wallMs: intent.deadline - intent.startedAt,
+			tokens: 0,
+		});
+
+		for (const owner of [restarted, w.owner()])
+			assert.deepEqual(finishedAssessment(await w.step(owner)), read);
+		assert.equal(readFileSync(charged, "utf8"), charge);
+		assert.equal(w.fetches.length, 1);
+
+		release();
+		await crashed.stop(digestOf("job synthetic-wrong-value"));
+		assert.deepEqual(finishedAssessment(await w.step(w.owner())), read);
+		assert.equal(readFileSync(charged, "utf8"), charge);
+		assert.equal(existsSync(join(w.dir, "feedback.json")), false);
+	},
+);
