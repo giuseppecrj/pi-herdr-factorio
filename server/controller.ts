@@ -3229,7 +3229,13 @@ export async function sweepValidation(config: {
 					!present(join(dir, "failure.json"))) ||
 				(!entry.retired &&
 					present(join(dir, "verdict.json")) &&
-					!present(join(dir, "assessment.json")))
+					!present(join(dir, "assessment.json")) &&
+					jsonField(
+						objectOf(
+							parseJson(regularText(join(dir, "verdict.json"), 1024 * 1024)),
+						),
+						"pass",
+					) !== true)
 			)
 				continue;
 			await cleanupPublication(api, dir, publication);
