@@ -54,7 +54,7 @@ import { runGatesCli } from "./gates.ts";
 import { runViewerCli } from "./viewer.ts";
 
 export const USAGE = `Usage:
-  node server/cli.ts viewer --state-dir <dir> [--run <id>] [--port <n>] [--allowed-host <authorized.ts.net>]
+  node server/cli.ts viewer --state-dir <dir> [--run <id>] [--port <n>] [--allowed-host <authorized.ts.net>] [--base-path </prefix>]
   node server/cli.ts gates --repository <dir> --gate-sha <sha> --candidate-sha <sha> --nonce <id> --output <dir> [--runner docker|local]
   node server/cli.ts workflow-check --json --repo <owner/name> [--ref <branch>] [--reload-ref <branch>]
   node server/cli.ts status --json --repo <owner/name> [--ref <branch>] [--state-dir <dir>]

@@ -13,7 +13,10 @@ export type ViewerOptions = {
 	runId?: string;
 	port?: number;
 	allowedHost?: string;
+	basePath?: string;
 };
+
+const basePathPattern = /^(?:\/[a-z0-9-]+)+$/;
 
 export async function startViewer(options: ViewerOptions) {
 	const info = await lstat(options.stateDir);
@@ -35,6 +38,10 @@ export async function startViewer(options: ViewerOptions) {
 		!/^[a-z0-9-]+(?:\.[a-z0-9-]+)+\.ts\.net$/.test(options.allowedHost)
 	)
 		throw new Error("expected an authorized Tailscale hostname");
+
+	if (options.basePath !== undefined && !basePathPattern.test(options.basePath))
+		throw new Error("invalid base path");
+	const base = options.basePath ?? "";
 	let port = options.port ?? 8080;
 
 	const server = createServer(async (req, res) => {
@@ -91,11 +98,13 @@ export async function startViewer(options: ViewerOptions) {
 				if (options.runId === undefined)
 					send(
 						200,
-						renderIndex(await viewerRuns(stateDir)),
+						renderIndex(await viewerRuns(stateDir), base),
 						"text/html; charset=utf-8",
 					);
 				else {
-					res.writeHead(302, { Location: `/run/${options.runId}/timeline` });
+					res.writeHead(302, {
+						Location: `${base}/run/${options.runId}/timeline`,
+					});
 					res.end();
 				}
 
@@ -148,7 +157,7 @@ export async function startViewer(options: ViewerOptions) {
 					}),
 					"application/json; charset=utf-8",
 				);
-			} else send(200, renderRun(run, view), "text/html; charset=utf-8");
+			} else send(200, renderRun(run, view, base), "text/html; charset=utf-8");
 		} catch {
 			send(500, "Evidence unavailable");
 		}
@@ -197,6 +206,7 @@ export async function runViewerCli(
 				run: { type: "string" },
 				port: { type: "string" },
 				"allowed-host": { type: "string" },
+				"base-path": { type: "string" },
 			},
 		});
 
@@ -210,7 +220,11 @@ export async function runViewerCli(
 			port > 65535 ||
 			(values.run !== undefined && !isDigest(values.run)) ||
 			(values["allowed-host"] !== undefined &&
-				!/^[a-z0-9-]+(?:\.[a-z0-9-]+)+\.ts\.net$/.test(values["allowed-host"]))
+				!/^[a-z0-9-]+(?:\.[a-z0-9-]+)+\.ts\.net$/.test(
+					values["allowed-host"],
+				)) ||
+			(values["base-path"] !== undefined &&
+				!basePathPattern.test(values["base-path"]))
 		)
 			throw new Error("usage");
 		options = { stateDir, port };
@@ -219,9 +233,12 @@ export async function runViewerCli(
 
 		if (values["allowed-host"] !== undefined)
 			options.allowedHost = values["allowed-host"];
+
+		if (values["base-path"] !== undefined)
+			options.basePath = values["base-path"];
 	} catch {
 		io.stderr(
-			"Usage: node server/cli.ts viewer --state-dir <dir> [--run <id>] [--port <1-65535>] [--allowed-host <authorized.ts.net>]\n",
+			"Usage: node server/cli.ts viewer --state-dir <dir> [--run <id>] [--port <1-65535>] [--allowed-host <authorized.ts.net>] [--base-path </prefix>]\n",
 		);
 
 		return 2;
