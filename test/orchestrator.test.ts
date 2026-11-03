@@ -69,13 +69,21 @@ import {
 } from "../src/orchestrator.ts";
 import { type SessionOutcome, stageResult } from "../server/sandbox/result.ts";
 import { READY_LABEL } from "../src/policy.ts";
-import { passingVerdict, failingVerdict, qualifiedProof } from "./helpers.ts";
+import {
+	classifiedCase,
+	passingVerdict,
+	failingVerdict,
+	qualifiedProof,
+	storedAssessment,
+	verdictAssessment,
+} from "./helpers.ts";
 import type {
 	BaseCheckInput,
 	BaseCheckProgress,
 	BaseReason,
 } from "../src/diagnosis.ts";
 import { advance } from "../src/stages.ts";
+import { readAssessmentBytes, validationDir } from "../src/validation.ts";
 import {
 	candidateProjection,
 	handoffCandidate,
@@ -469,6 +477,42 @@ class FakeExecutor implements StageExecutor {
 	workflow: () => string | null = () => TRUSTED_WORKFLOW;
 	readonly launches: StageLaunchInput[] = [];
 	readonly spentBy = new Map<string, number>();
+	readonly assessments = new Map<string, string>();
+	readonly assessmentReads: string[] = [];
+
+	assess(
+		input: import("../src/validation.ts").ValidationInput,
+		verdict: import("../src/run.ts").Verdict,
+	) {
+		const round = input.round ?? 0;
+		const generation = input.generation?.generation ?? 0;
+		const read = verdictAssessment(input.runId, round, generation, verdict);
+
+		this.assessments.set(
+			`${input.runId}/${round}/${generation}`,
+			storedAssessment({
+				runId: input.runId,
+				round,
+				generation,
+				verdict,
+				assessment: read.assessment,
+			}).text,
+		);
+
+		return read;
+	}
+
+	async readAssessment(input: {
+		runId: Digest;
+		round: number;
+		generation: number;
+	}) {
+		const key = `${input.runId}/${input.round}/${input.generation}`;
+		this.assessmentReads.push(key);
+		const text = this.assessments.get(key);
+
+		return text === undefined ? null : readAssessmentBytes(text);
+	}
 
 	async output(
 		input: Parameters<StageExecutor["output"]>[0],
@@ -7546,6 +7590,7 @@ describe("controller-only validate", () => {
 			state: input.state!,
 			verdict,
 			report: reportOf(verdict),
+			assessment: f.executor.assess(input, verdict),
 		});
 
 		const receipt: ReviewReceipt = {
@@ -8000,10 +8045,13 @@ describe("controller-only validate", () => {
 			f.executor.validate = async (input) => {
 				assert.ok(input.state);
 
+				const verdict = failingVerdict(digestOf("patch"));
+
 				return {
 					kind: "finished",
 					state: input.state,
-					verdict: failingVerdict(digestOf("patch")),
+					verdict,
+					assessment: f.executor.assess(input, verdict),
 				};
 			};
 
@@ -8513,10 +8561,13 @@ describe("controller-only validate", () => {
 
 				if (result.state === null) throw new Error("validation state");
 
+				const verdict = failingVerdict(digestOf("patch"));
+
 				return {
 					kind: "finished",
 					state: result.state,
-					verdict: failingVerdict(digestOf("patch")),
+					verdict,
+					assessment: f.executor.assess(input, verdict),
 				};
 			};
 
@@ -8858,6 +8909,7 @@ describe("controller-only validate", () => {
 				digestOf(round ? `patch-r${round}` : "patch"),
 			);
 
+			const assessment = f.executor.assess(input, verdict);
 			const book = f.files.claims.get(runOf(14))?.handoff;
 			assert.ok(
 				book?.kind === "selected" &&
@@ -8891,6 +8943,7 @@ describe("controller-only validate", () => {
 							verdict,
 							report: null,
 							seats: ["code-review", "security-review", "simplify"],
+							assessment,
 						},
 					},
 				},
@@ -8899,7 +8952,7 @@ describe("controller-only validate", () => {
 			assert.equal(decision.kind, "advanced");
 			expected = decision.run.handoff;
 
-			return { kind: "finished", state, verdict };
+			return { kind: "finished", state, verdict, assessment };
 		};
 
 		await f.controller.tick();
@@ -8960,12 +9013,15 @@ describe("controller-only validate", () => {
 
 				await input.save(state);
 
+				const verdict = failingVerdict(
+					digestOf(round ? `patch-r${round}` : "patch"),
+				);
+
 				return {
 					kind: "finished",
 					state,
-					verdict: failingVerdict(
-						digestOf(round ? `patch-r${round}` : "patch"),
-					),
+					verdict,
+					assessment: f.executor.assess(input, verdict),
 				};
 			};
 
@@ -9038,6 +9094,214 @@ describe("controller-only validate", () => {
 				),
 			);
 		});
+
+	function assessedValidator(
+		f: Awaited<ReturnType<typeof waitingRun>>,
+		failure: import("../src/diagnosis.ts").FailureClass,
+	): import("../src/validation.ts").Validator {
+		return async (input) => {
+			const round = input.round ?? 0;
+
+			const state = input.state ?? {
+				version: 1,
+				startedAt: input.now,
+				deadline: input.now + input.wallMs,
+				round,
+				originalBase: input.baseSha,
+				baseSha: input.baseSha,
+				baseResolved: true,
+				publication: {
+					branch: `factory/run/14-${input.runId.slice(0, 12)}-r${round}`,
+					patchSha: sha("b".repeat(40)),
+					candidateSha: sha("c".repeat(40)),
+				},
+				dispatchTry: 1,
+				dispatchedAt: input.now,
+				ciRunId: 123,
+				counters: {},
+			};
+
+			await input.save(state);
+
+			if (round > 0) return { kind: "waiting", state };
+			const verdict = failingVerdict(digestOf("patch"));
+			const generation = input.generation?.generation ?? 0;
+
+			const { text, read } = storedAssessment({
+				runId: input.runId,
+				round,
+				generation,
+				verdict,
+				assessment: { kind: "failed", failure },
+			});
+
+			f.executor.assessments.set(`${input.runId}/${round}/${generation}`, text);
+
+			return { kind: "finished", state, verdict, assessment: read };
+		};
+	}
+
+	async function drive(
+		controller: Awaited<ReturnType<typeof waitingRun>>["controller"],
+		f: Awaited<ReturnType<typeof waitingRun>>,
+	) {
+		for (let tick = 0; tick < 4; tick++) {
+			await controller.tick();
+			await settle();
+			f.clock.t += 600_000;
+		}
+	}
+
+	it("ends a #576-shape failure as missing evidence with zero repairs", async () => {
+		const f = await waitingRun();
+		const failure = classifiedCase("tree_disagreement");
+		assert.deepEqual(failure, {
+			kind: "missing_evidence",
+			reason: "tree_replays_disagree",
+		});
+		f.executor.validate = assessedValidator(f, failure);
+		await drive(f.controller, f);
+
+		assert.equal(
+			f.executor.launches.filter(
+				(entry) => entry.stage === "build" && (entry.round ?? 0) > 0,
+			).length,
+			0,
+		);
+		const claim = f.files.claims.get(runOf(14));
+		assert.equal(claim?.status, "failed");
+		assert.equal(claim?.round, 0);
+		const book = claim?.handoff;
+		assert.ok(book?.kind === "selected");
+		assert.deepEqual(book.work, {
+			kind: "terminal",
+			terminal: { kind: "failed", reason: "diagnosis_missing_evidence" },
+		});
+
+		const notices = keyed(f.github, 14, "diagnosis");
+		assert.equal(notices.length, 1);
+		assert.match(
+			notices[0] ?? "",
+			/^Stopped: CI diagnosis could not establish reliable evidence\. Gate and candidate replays disagree\.\n\n<!-- factory-diagnosis run=[a-f0-9]{64} g=0\.0 a=[a-f0-9]{64} -->$/,
+		);
+		await f.controller.tick();
+		await settle();
+		assert.equal(keyed(f.github, 14, "diagnosis").length, 1);
+	});
+
+	it("repairs a candidate load error after a qualified base exactly once, bound to its assessment", async () => {
+		const f = await waitingRun();
+		const failure = classifiedCase("candidate_load_error");
+		assert.equal(failure.kind, "candidate");
+		f.executor.validate = assessedValidator(f, failure);
+		await drive(f.controller, f);
+
+		const repairs = f.executor.launches.filter(
+			(entry) => entry.stage === "build" && (entry.round ?? 0) > 0,
+		);
+
+		assert.equal(repairs.length, 1);
+		const execution = repairs[0]?.execution;
+		assert.ok(execution?.stage === "build");
+		const stored = f.executor.assessments.get(`${runOf(14)}/0/0`);
+		assert.ok(stored !== undefined);
+		assert.deepEqual(execution.cause, {
+			kind: "validation",
+			assessment: readAssessmentBytes(stored)?.ref,
+		});
+		assert.ok(f.executor.assessmentReads.includes(`${runOf(14)}/0/0`));
+		assert.equal(keyed(f.github, 14, "diagnosis").length, 0);
+	});
+
+	for (const stored of [true, false])
+		it(`launches ${stored ? "one repair" : "no repair"} through the production executor's assessment reader when the candidate assessment is ${stored ? "stored" : "absent"}`, async () => {
+			const f = await waitingRun();
+			const state = stateDir();
+
+			const disk = sandboxExecutor({
+				stateDir: state,
+				exec: async () => ({ code: 0, stdout: "", stderr: "" }),
+				log: () => {},
+				xdgRuntimeDir: "/run/user/1000",
+			});
+
+			f.executor.readAssessment = disk.readAssessment.bind(disk);
+
+			const validate = assessedValidator(
+				f,
+				classifiedCase("candidate_load_error"),
+			);
+
+			f.executor.validate = async (input) => {
+				const result = await validate(input);
+
+				for (const [key, text] of f.executor.assessments) {
+					const [runId, round, generation] = key.split("/");
+
+					const dir = validationDir(
+						state,
+						runId ?? "",
+						Number(round),
+						Number(generation),
+					);
+
+					mkdirSync(dir, { recursive: true, mode: 0o700 });
+
+					if (stored)
+						writeFileSync(join(dir, "assessment.json"), text, {
+							mode: 0o600,
+						});
+				}
+
+				f.executor.assessments.clear();
+
+				return result;
+			};
+
+			await drive(f.controller, f);
+
+			assert.equal(
+				f.executor.launches.filter(
+					(entry) => entry.stage === "build" && (entry.round ?? 0) > 0,
+				).length,
+				stored ? 1 : 0,
+			);
+		});
+
+	it("does not repair a restored repair_due whose assessment is missing", async () => {
+		const f = await waitingRun();
+		f.executor.validate = assessedValidator(
+			f,
+			classifiedCase("candidate_load_error"),
+		);
+		await f.controller.tick();
+		assert.equal(f.files.claims.get(runOf(14))?.round, 1);
+		assert.equal(
+			f.executor.launches.filter(
+				(entry) => entry.stage === "build" && (entry.round ?? 0) > 0,
+			).length,
+			0,
+		);
+		f.executor.assessments.clear();
+		const restarted = f.start();
+		await once(restarted);
+		await drive(restarted, f);
+
+		assert.equal(
+			f.executor.launches.filter(
+				(entry) => entry.stage === "build" && (entry.round ?? 0) > 0,
+			).length,
+			0,
+		);
+		const claim = f.files.claims.get(runOf(14));
+		assert.equal(claim?.status, "failed");
+		const book = claim?.handoff;
+		assert.ok(book?.kind === "selected");
+		assert.deepEqual(book.work, {
+			kind: "terminal",
+			terminal: { kind: "failed", reason: "diagnosis_missing_evidence" },
+		});
+	});
 
 	for (const field of ["candidate", "ciRun"] as const)
 		it(`posts another marker when only ${field} changes`, async () => {

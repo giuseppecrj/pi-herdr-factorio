@@ -17,7 +17,12 @@ import {
 	type Verdict,
 	verdictPasses,
 } from "./run.ts";
-import type { TrustedReport, ValidationState } from "./validation.ts";
+import type {
+	AssessmentRef,
+	ReadAssessment,
+	TrustedReport,
+	ValidationState,
+} from "./validation.ts";
 import {
 	isGitSha,
 	isRepoSlug,
@@ -84,6 +89,15 @@ export type ReviewExecution = Readonly<{
 	seats: readonly ReviewSeat[];
 }>;
 
+export type RepairCause =
+	| Readonly<{ kind: "validation"; assessment: AssessmentRef }>
+	| Readonly<{ kind: "review"; assessment: AssessmentRef; review: Digest }>;
+
+/** The digest a review-driven repair binds: the receipt's stored JSON bytes. */
+export function reviewReceiptDigest(receipt: ReviewReceipt): Digest {
+	return digestOf(JSON.stringify(receipt));
+}
+
 export type RepairExecution = Readonly<{
 	id: Digest;
 	stage: "build";
@@ -91,6 +105,7 @@ export type RepairExecution = Readonly<{
 	round: 1 | 2;
 	attempt: number;
 	feedbackFrom: GenerationRef;
+	cause: RepairCause;
 	workflowSha: GitSha;
 	workflowDigest: Digest;
 }>;
@@ -122,6 +137,7 @@ export type GenerationEvidence = Readonly<{
 	verdict: Verdict | null;
 	report: TrustedReport | null;
 	certification: Certification | null;
+	assessment?: AssessmentRef;
 }>;
 
 export type HandoffReason =
@@ -138,7 +154,10 @@ export type HandoffReason =
 	| "review_failed"
 	| "validation_failed"
 	| "evidence_unavailable"
-	| "repair_limit";
+	| "repair_limit"
+	| "diagnosis_oracle"
+	| "diagnosis_missing_evidence"
+	| "diagnosis_infrastructure";
 
 export type PublishedPr = Readonly<{
 	number: number;
@@ -238,6 +257,7 @@ export type CandidateWork =
 			readonly round: 1 | 2;
 			readonly attempt: number;
 			readonly feedbackFrom: GenerationRef;
+			readonly cause: RepairCause;
 	  }
 	| { readonly kind: "rebuilding"; readonly execution: RepairExecution }
 	| {
@@ -285,6 +305,7 @@ export type CandidateEffectResult =
 						readonly verdict: Verdict;
 						readonly report: TrustedReport | null;
 						readonly seats: readonly ReviewSeat[];
+						readonly assessment: ReadAssessment;
 				  }
 				| {
 						readonly kind: "failed";
@@ -791,10 +812,15 @@ function finish(state: Selected, terminal: TerminalObservation): Selected {
 
 function failOrRepair(
 	state: Selected,
-	reason: HandoffReason,
+	cause: RepairCause,
 	now: number,
 ): Selected {
-	if (state.published !== null) return hold(state, reason, now);
+	if (state.published !== null)
+		return hold(
+			state,
+			cause.kind === "validation" ? "validation_failed" : "review_failed",
+			now,
+		);
 	const round = state.current.intent.round;
 
 	if (round === MAX_REPAIR_ROUNDS)
@@ -807,8 +833,63 @@ function failOrRepair(
 			round: round === 0 ? 1 : 2,
 			attempt: 1,
 			feedbackFrom: refOf(state.current.intent),
+			cause,
 		},
 	};
+}
+
+function stopDiagnosed(state: Selected, reason: HandoffReason): Selected {
+	return state.published === null && reason !== "diagnosis_infrastructure"
+		? finish(state, { kind: "failed", reason })
+		: hold(state, reason, 0);
+}
+
+function assessedValidation(
+	state: Selected,
+	current: GenerationEvidence,
+	verdict: Verdict,
+	read: ReadAssessment,
+): Selected {
+	const intent = current.intent;
+	const b = read.binding;
+
+	const assessed = {
+		...state,
+		current: { ...current, verdict, assessment: read.ref },
+	};
+
+	if (
+		b.runId !== state.pin.runId ||
+		b.round !== intent.round ||
+		b.generation !== intent.generation ||
+		b.candidateSha !== verdict.candidateSha ||
+		b.ciRunId !== verdict.ciRunId ||
+		b.verdictDigest !== digestOf(JSON.stringify(verdict)) ||
+		(read.assessment.kind === "passed") !== verdictPasses(verdict)
+	)
+		return stopDiagnosed(assessed, "diagnosis_missing_evidence");
+
+	if (read.assessment.kind === "passed") return assessed;
+
+	switch (read.assessment.failure.kind) {
+		case "candidate":
+			return failOrRepair(
+				assessed,
+				{ kind: "validation", assessment: read.ref },
+				0,
+			);
+		case "oracle":
+			return stopDiagnosed(assessed, "diagnosis_oracle");
+		case "missing_evidence":
+			return stopDiagnosed(assessed, "diagnosis_missing_evidence");
+		case "infrastructure":
+			return stopDiagnosed(assessed, "diagnosis_infrastructure");
+		default: {
+			const exhaustive: never = read.assessment.failure;
+
+			return exhaustive;
+		}
+	}
 }
 
 function issueExecution(
@@ -1037,6 +1118,7 @@ function observed(
 			round: work.round,
 			attempt: nextAttempt(state, "build", work.round),
 			feedbackFrom: work.feedbackFrom,
+			cause: work.cause,
 			workflowSha: state.pin.workflowSha,
 			workflowDigest: state.pin.workflowDigest,
 		} as const;
@@ -1270,17 +1352,22 @@ function complete(state: Selected, c: CandidateEffectResult): Selected {
 			if (c.result.kind === "waiting") return { ...state, current };
 
 			if (c.result.kind === "failed")
-				return c.result.reason === "validation_failed"
-					? failOrRepair({ ...state, current }, "validation_failed", 0)
-					: hold({ ...state, current }, c.result.reason, 0);
+				return hold({ ...state, current }, c.result.reason, 0);
 			const { verdict, report, seats } = c.result;
 
-			if (!verdictPasses(verdict))
-				return failOrRepair(
-					{ ...state, current: { ...current, verdict } },
-					"validation_failed",
-					0,
-				);
+			const assessed = assessedValidation(
+				state,
+				current,
+				verdict,
+				c.result.assessment,
+			);
+
+			if (
+				assessed.current.assessment === undefined ||
+				assessed.work !== state.work ||
+				!verdictPasses(verdict)
+			)
+				return assessed;
 
 			if (
 				report === null ||
@@ -1296,7 +1383,7 @@ function complete(state: Selected, c: CandidateEffectResult): Selected {
 
 			return {
 				...state,
-				current: { ...current, verdict, report },
+				current: { ...assessed.current, verdict, report },
 				work: { kind: "review_due", seats },
 			};
 		}
@@ -1330,6 +1417,7 @@ function complete(state: Selected, c: CandidateEffectResult): Selected {
 									round: execution.round,
 									attempt: execution.attempt + 1,
 									feedbackFrom: execution.feedbackFrom,
+									cause: execution.cause,
 								},
 				};
 
@@ -1561,7 +1649,23 @@ export function handoffCandidate(
 						work: { kind: "handoff" },
 					};
 				} catch {
-					next = failOrRepair(updated, "review_failed", 0);
+					const passed = updated.current.assessment;
+					const review = event.result.review;
+
+					next =
+						passed === undefined ||
+						!review.blocking ||
+						!blocksReview(review.seats)
+							? hold(updated, "evidence_unavailable", 0)
+							: failOrRepair(
+									updated,
+									{
+										kind: "review",
+										assessment: passed,
+										review: reviewReceiptDigest(review),
+									},
+									0,
+								);
 				}
 
 				break;
@@ -1618,6 +1722,7 @@ export function handoffCandidate(
 											event.execution.round,
 										),
 										feedbackFrom: event.execution.feedbackFrom,
+										cause: event.execution.cause,
 									},
 								}
 							: finish(updated, { kind: "failed", reason });
@@ -1705,6 +1810,23 @@ function wireRef(
 			v.generation === 2 ||
 			v.generation === 3) &&
 		wireDigest(v.digest)
+	);
+}
+
+function wireCause(
+	value: JsonValue | undefined,
+): value is RepairCause & JsonValue {
+	const v = wireObject(value);
+	const a = wireObject(v?.assessment);
+
+	return (
+		v !== null &&
+		(v.kind === "validation"
+			? v.review === undefined
+			: v.kind === "review" && wireDigest(v.review)) &&
+		a !== null &&
+		wireDigest(a.bindingDigest) &&
+		wireDigest(a.recordDigest)
 	);
 }
 
@@ -1832,7 +1954,8 @@ function wireExecution(
 		return (
 			(v.round === 1 || v.round === 2) &&
 			wireRef(v.feedbackFrom) &&
-			v.feedbackFrom.round + 1 === v.round
+			v.feedbackFrom.round + 1 === v.round &&
+			wireCause(v.cause)
 		);
 	const seats = v.seats;
 
@@ -2166,6 +2289,9 @@ function wireReason(value: JsonValue | undefined): value is HandoffReason {
 			"validation_failed",
 			"evidence_unavailable",
 			"repair_limit",
+			"diagnosis_oracle",
+			"diagnosis_missing_evidence",
+			"diagnosis_infrastructure",
 		].includes(value)
 	);
 }
@@ -2281,7 +2407,8 @@ function wireWork(
 			return (
 				(v.round === 1 || v.round === 2) &&
 				wireCount(v.attempt, 1) &&
-				wireRef(v.feedbackFrom)
+				wireRef(v.feedbackFrom) &&
+				wireCause(v.cause)
 			);
 		case "repair_built":
 			return wirePatch(v.patch) && wireRef(v.feedbackFrom);
@@ -2310,7 +2437,13 @@ function wireEvidence(
 		!wireIntent(v.intent, pin, v.patch) ||
 		(v.validation !== null && !wireValidation(v.validation)) ||
 		(v.verdict !== null && !wireVerdict(v.verdict)) ||
-		(v.report !== null && !wireReport(v.report))
+		(v.report !== null && !wireReport(v.report)) ||
+		(v.assessment !== undefined &&
+			!(
+				wireObject(v.assessment) !== null &&
+				wireDigest(wireObject(v.assessment)?.bindingDigest) &&
+				wireDigest(wireObject(v.assessment)?.recordDigest)
+			))
 	)
 		return false;
 

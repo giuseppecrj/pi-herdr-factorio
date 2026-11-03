@@ -1,4 +1,8 @@
-import type { Validator, ValidationState } from "./validation.ts";
+import {
+	sameAssessmentRef,
+	type Validator,
+	type ValidationState,
+} from "./validation.ts";
 import {
 	beginCandidate,
 	MAX_REVIEW_ATTEMPTS,
@@ -12,6 +16,7 @@ import {
 	type CandidateEffectResult,
 	type CandidateExecution,
 	type GenerationRef,
+	type RepairCause,
 	type PrObservation,
 } from "./handoff.ts";
 import {
@@ -201,6 +206,7 @@ type WorkflowPin = Pick<ActiveRun, "workflowSha" | "workflowDigest">;
 
 import {
 	baseRefusalNotice,
+	diagnosisNotice,
 	matchingBaseProof,
 	type BaseRefusal,
 } from "./diagnosis.ts";
@@ -248,6 +254,12 @@ export interface StageExecutor {
 		},
 	): Promise<ReviewPreparation>;
 	readonly validate?: Validator;
+	/** Re-reads a stored validation assessment; null when absent or unreadable. */
+	readAssessment(input: {
+		runId: Digest;
+		round: number;
+		generation: number;
+	}): Promise<import("./validation.ts").ReadAssessment | null>;
 	cleanupValidation?(): Promise<void>;
 	/** Stops whatever a previous controller left running. Called once, before the first tick adopts a run. */
 	recover(): Promise<void>;
@@ -296,6 +308,7 @@ export interface StageExecutor {
 		readonly build?: boolean;
 		readonly round?: number;
 		readonly feedbackFrom?: GenerationRef;
+		readonly cause?: RepairCause;
 	}): Promise<CheckoutResult>;
 }
 
@@ -3915,7 +3928,21 @@ export class Orchestrator {
 			else if (
 				result.kind === "finished" &&
 				(!result.verdict.pass || result.report !== undefined)
-			)
+			) {
+				const read = result.assessment;
+
+				if (
+					read.assessment.kind === "failed" &&
+					read.assessment.failure.kind !== "candidate"
+				) {
+					const notice = diagnosisNotice(
+						read.assessment.failure,
+						`<!-- factory-diagnosis run=${run.runId} g=${read.binding.round}.${read.binding.generation} a=${read.ref.recordDigest} -->`,
+					);
+
+					if (!(await this.#postKeyed(run, notice.key, notice.body))) return;
+				}
+
 				completion = {
 					kind: "validate",
 					request,
@@ -3925,9 +3952,10 @@ export class Orchestrator {
 						verdict: result.verdict,
 						report: result.report ?? null,
 						seats: reviewSeats(state.current.patch.changedPaths),
+						assessment: result.assessment,
 					},
 				};
-			else if (result.kind === "failed")
+			} else if (result.kind === "failed")
 				completion = {
 					kind: "validate",
 					request,
@@ -4059,6 +4087,42 @@ export class Orchestrator {
 		}
 
 		if (execution.stage === "review" && prepared == null) return null;
+
+		if (
+			execution.stage === "build" &&
+			request.kind === "repair_build" &&
+			!(await this.#repairAuthorized(execution))
+		) {
+			const settled = handoffCandidate(state, {
+				kind: "effect_completed",
+				completion: { kind: "repair_build", request, started: false },
+			}).state;
+
+			if (settled.kind !== "selected") return null;
+
+			const finish: CandidateEffect = {
+				kind: "finish_pr",
+				terminal: { kind: "failed", reason: "diagnosis_missing_evidence" },
+			};
+
+			this.#input.log("repair_refused", {
+				runId: run.runId,
+				why: "assessment_missing",
+			});
+
+			if (
+				await this.#commitCandidate(run, {
+					...settled,
+					work: { kind: "effect", request: finish },
+				})
+			) {
+				this.state.totals.failures++;
+				await this.#interpretCandidate(run, finish);
+			}
+
+			return null;
+		}
+
 		const oldStage = run.stage;
 		const oldRound = run.round;
 		const oldAttempt = run.attempt;
@@ -4253,6 +4317,32 @@ export class Orchestrator {
 		return request.kind === "launch_review"
 			? { kind: "launch_review", request, started: true }
 			: { kind: "repair_build", request, started: true };
+	}
+
+	async #repairAuthorized(
+		execution: Extract<CandidateExecution, { stage: "build" }>,
+	): Promise<boolean> {
+		const read = await this.#input.executor
+			.readAssessment({
+				runId: execution.runId,
+				round: execution.feedbackFrom.round,
+				generation: execution.feedbackFrom.generation,
+			})
+			.catch(() => null);
+
+		if (
+			read == null ||
+			read.binding.runId !== execution.runId ||
+			read.binding.round !== execution.feedbackFrom.round ||
+			read.binding.generation !== execution.feedbackFrom.generation ||
+			!sameAssessmentRef(read.ref, execution.cause.assessment)
+		)
+			return false;
+
+		return execution.cause.kind === "review"
+			? read.assessment.kind === "passed"
+			: read.assessment.kind === "failed" &&
+					read.assessment.failure.kind === "candidate";
 	}
 
 	async #pollBase(run: ActiveRun): Promise<void> {
@@ -4553,6 +4643,12 @@ export class Orchestrator {
 					run.handoff.work.kind === "effect" &&
 					run.handoff.work.request.kind === "repair_build"
 						? run.handoff.work.request.execution.feedbackFrom
+						: undefined,
+				cause:
+					run.handoff?.kind === "selected" &&
+					run.handoff.work.kind === "effect" &&
+					run.handoff.work.request.kind === "repair_build"
+						? run.handoff.work.request.execution.cause
 						: undefined,
 			})
 			.catch((): CheckoutResult => ({ kind: "unavailable" }));

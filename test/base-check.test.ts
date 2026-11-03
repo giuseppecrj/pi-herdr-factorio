@@ -31,6 +31,7 @@ import {
 import {
 	assessBase,
 	baseRefusalNotice,
+	parseBaseReceipt,
 	type BaseReason,
 } from "../src/diagnosis.ts";
 import { digestOf } from "../src/run.ts";
@@ -498,6 +499,56 @@ where(
 				),
 				JSON.stringify(hang.evidence),
 			);
+	},
+);
+
+where(
+	bwrap,
+	"isolated base: runs the checks twice in fresh trees and refuses a nondeterministic suite",
+	async (t) => {
+		const stable = await baseFixture(
+			t,
+			`${prefix}test('S1 red', () => assert.equal(1, 2));`,
+		);
+
+		assert.equal(stable.assessment.kind, "ready");
+		assert.equal(stable.evidence.repeat.kind, "observed");
+		assert.deepEqual(
+			stable.evidence.repeat.kind === "observed" &&
+				stable.evidence.repeat.files.map((f) => f.failures.length),
+			[1],
+		);
+		assert.ok(parseBaseReceipt(JSON.stringify(stable.receipt)) !== null);
+
+		const names = Array.from({ length: 40 }, (_, i) => `t${i}`);
+
+		const random = await baseFixture(
+			t,
+			`${prefix}for (const name of ${JSON.stringify(names)}) test(name, () => assert.ok(Math.random() < 0.5));`,
+		);
+
+		assert.equal(random.assessment.kind, "refused");
+
+		if (random.assessment.kind === "refused") {
+			assert.equal(random.assessment.failure.reason, "base_nondeterministic");
+			assert.equal(
+				baseRefusalNotice(random.assessment.failure).body.split("\n")[0],
+				"Acceptance refused before build: base_nondeterministic. Two base runs of the checks gave different results. Scenarios: S1.",
+			);
+		}
+
+		assert.ok(parseBaseReceipt(JSON.stringify(random.receipt)) !== null);
+
+		const fresh = await baseFixture(
+			t,
+			`${prefix}import {existsSync, writeFileSync} from 'node:fs'; test('S1 first run only', () => { const seen = existsSync('/tmp/seen') || existsSync('seen'); try { writeFileSync('seen', '1'); } catch {} assert.equal(seen, true); });`,
+		);
+
+		assert.equal(
+			fresh.assessment.kind,
+			"ready",
+			JSON.stringify(fresh.evidence),
+		);
 	},
 );
 

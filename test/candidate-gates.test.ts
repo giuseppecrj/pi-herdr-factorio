@@ -22,6 +22,15 @@ import {
 	receiptPasses,
 	type GateRunner,
 } from "../server/gates.ts";
+import { classifyFailure } from "../src/diagnosis.ts";
+import { isGitSha } from "../src/workflow.ts";
+import { parseJson } from "../server/sandbox/json.ts";
+
+function gitSha(text: string) {
+	assert.ok(isGitSha(text));
+
+	return text;
+}
 
 function repo(t: { after(fn: () => void): void }) {
 	const root = mkdtempSync(join(tmpdir(), "factory-gates-"));
@@ -652,6 +661,62 @@ for (const separator of ["\u2028", "\u2029", "\r"])
 		assert.equal(r.status, "failed");
 		assert.equal(r.reason, "invalid_source_encoding");
 	});
+
+test("an encoding rejection names each rejected file so diagnosis can tell whose it is (L3)", async (t) => {
+	const f = repo(t);
+	const path = "test/acceptance/123/checks/scenario.test.mjs";
+
+	const text =
+		'import {test} from "node:test";\ntest("held",()=>{});\n// \u2028\n';
+
+	for (const candidate of [false, true]) {
+		f.put(path, text);
+
+		if (candidate) f.put("src/value.ts", 'export const value = "\u2028";\n');
+		const candidateSha = f.commit();
+
+		const r = await checkCandidate({
+			...gateInput(f, candidateSha),
+			heldoutDir: "test/acceptance/123",
+			heldoutDigest: heldoutDigest([{ path, bytes: Buffer.from(text) }]),
+		});
+
+		assert.equal(r.status, "failed");
+		assert.equal(r.reason, "invalid_source_encoding");
+		assert.deepEqual(
+			r.tamperSignals.map((s) => s.path).toSorted(),
+			candidate ? ["src/value.ts", path] : [path],
+		);
+		assert.ok(
+			r.tamperSignals.every((s) => s.rule === "invalid_source_encoding"),
+		);
+
+		const classified = classifyFailure({
+			receipt: parseJson(JSON.stringify(r)) ?? undefined,
+			identity: {
+				gateSha: gitSha(f.gateSha),
+				candidateSha: gitSha(candidateSha),
+				nonce: "unit",
+				heldoutDigest: heldoutDigest([{ path, bytes: Buffer.from(text) }]),
+				replacementsDigest: replacementDigest([]),
+			},
+			expected: [path],
+			scenarios: [{ scenario: "S1", kind: "new_behavior", file: path }],
+			base: null,
+			ignoredChanges: null,
+			replay: null,
+			dependencies: null,
+			candidatePaths: candidate ? ["src/value.ts"] : [],
+			baseRefusal: null,
+		});
+
+		assert.deepEqual(classified, {
+			kind: "missing_evidence",
+			reason: "incomplete_ci",
+		});
+		f.git("reset", "-q", "--hard", f.gateSha);
+	}
+});
 
 test("source encoding permits CRLF line endings", async (t) => {
 	const f = repo(t);

@@ -15,8 +15,12 @@ import {
 	type ReviewInput,
 	type SeatReceipt,
 } from "../src/review.ts";
-import { validationDir } from "../src/validation.ts";
-import { parseReviewReceipt, type ReviewExecution } from "../src/handoff.ts";
+import { readFeedbackBytes, validationDir } from "../src/validation.ts";
+import {
+	parseReviewReceipt,
+	reviewReceiptDigest,
+	type ReviewExecution,
+} from "../src/handoff.ts";
 import { isGitSha, parseWorkflow, WORKFLOW_PATH } from "../src/workflow.ts";
 import {
 	collectPatch,
@@ -64,7 +68,13 @@ import type {
 	StageOutput,
 	ReviewPreparation,
 } from "../src/orchestrator.ts";
-import { digestOf, isDigest, verdictPasses, type Digest } from "../src/run.ts";
+import {
+	blocksReview,
+	digestOf,
+	isDigest,
+	verdictPasses,
+	type Digest,
+} from "../src/run.ts";
 import {
 	parseSpecifyOutput,
 	parseReviewOutput,
@@ -82,9 +92,11 @@ import {
 	controllerValidator,
 	controllerCandidatePort,
 	controllerBaseChecker,
+	controllerDiagnosis,
 	sweepValidation,
 	fileRunFiles,
 	readStoredVerdict,
+	readStoredAssessment,
 	ghTarball,
 	type TarballFetch,
 } from "./controller.ts";
@@ -2914,6 +2926,11 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 		fetch: config.fetchTarball,
 	});
 
+	const diagnosis = controllerDiagnosis({
+		stateDir: config.stateDir,
+		fetch: config.fetchTarball,
+	});
+
 	let ready: { readonly bundle: Bundle; readonly arch: SeccompArch } | null =
 		null;
 
@@ -2970,7 +2987,10 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 
 	return {
 		baseCheck: baseChecker.check,
-		stopBase: baseChecker.stop,
+		async stopBase(runId) {
+			await baseChecker.stop(runId);
+			await diagnosis.stop(runId);
+		},
 		candidate: controllerCandidatePort({
 			stateDir: config.stateDir,
 			exec: config.exec,
@@ -2979,7 +2999,13 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 			stateDir: config.stateDir,
 			exec: config.exec,
 			fetch: config.fetchTarball,
+			diagnosis,
 		}),
+		async readAssessment({ runId, round, generation }) {
+			return readStoredAssessment(
+				validationDir(config.stateDir, runId, round, generation),
+			);
+		},
 		cleanupValidation: () =>
 			sweepValidation({
 				stateDir: config.stateDir,
@@ -3205,6 +3231,7 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 			build,
 			round = 0,
 			feedbackFrom,
+			cause,
 		}) {
 			const checked = await (build
 				? checkoutBuildWorkspace
@@ -3232,8 +3259,35 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 						feedbackFrom?.generation,
 					);
 
-					const validation =
-						parseJson(regularText(join(dir, "feedback.json"))) ?? [];
+					const assessed = readStoredAssessment(dir);
+					const feedbackPath = join(dir, "feedback.json");
+
+					if (
+						assessed === null ||
+						cause === undefined ||
+						assessed.binding.runId !== runId ||
+						assessed.binding.round !== (feedbackFrom?.round ?? round - 1) ||
+						assessed.binding.generation !== (feedbackFrom?.generation ?? 0) ||
+						assessed.ref.bindingDigest !== cause.assessment.bindingDigest ||
+						assessed.ref.recordDigest !== cause.assessment.recordDigest
+					)
+						throw new Error("assessment_missing");
+					let validation: ReturnType<typeof readFeedbackBytes> = null;
+
+					if (assessed.assessment.kind === "passed") {
+						if (existsSync(feedbackPath) || cause.kind !== "review")
+							throw new Error("feedback_unexpected");
+						validation = [];
+					} else if (
+						assessed.assessment.failure.kind === "candidate" &&
+						cause.kind === "validation"
+					)
+						validation = readFeedbackBytes(
+							regularText(feedbackPath),
+							assessed.ref,
+						);
+
+					if (validation === null) throw new Error("feedback_provenance");
 
 					const reviewPath = join(
 						reviewDir(
@@ -3251,7 +3305,23 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 
 					if (stored === null) throw new Error("review_receipt_invalid");
 
+					if (
+						cause.kind === "review" &&
+						(stored === undefined ||
+							reviewReceiptDigest(stored) !== cause.review ||
+							stored.runId !== runId ||
+							stored.round !== (feedbackFrom?.round ?? round - 1) ||
+							(stored.execution?.generation ?? 0) !==
+								(feedbackFrom?.generation ?? 0) ||
+							!stored.blocking ||
+							!blocksReview(stored.seats))
+					)
+						throw new Error("review_receipt_mismatch");
+
 					const review = stored === undefined ? [] : reviewFeedback(stored);
+
+					if (cause.kind === "review" && review.length === 0)
+						throw new Error("review_feedback_empty");
 
 					const feedback = JSON.stringify({
 						version: 1,

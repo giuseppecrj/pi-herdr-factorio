@@ -29,7 +29,7 @@ import { REQUIRED_CI_CHECKS } from "../src/run.ts";
 import { isGitSha } from "../src/workflow.ts";
 import type { PatchReceipt } from "../src/build.ts";
 import { execFileSync } from "node:child_process";
-import { candidateLifecycleFixture } from "./helpers.ts";
+import { candidateLifecycleFixture, verdictAssessment } from "./helpers.ts";
 import { TRUSTED_WORKFLOW } from "./fake-ticket-adapter.ts";
 import { fileRunFiles } from "../server/controller.ts";
 import type { AnswersDigest } from "../src/specify.ts";
@@ -197,6 +197,7 @@ function prBook(issue: number, number: number, ready: boolean): JsonValue {
 				verdict,
 				report,
 				seats: ["code-review", "security-review", "simplify"],
+				assessment: verdictAssessment(pin.runId, 0, 0, verdict),
 			},
 		},
 	}).state;

@@ -2,7 +2,12 @@ import { constants } from "node:fs";
 import { lstat, open, readdir, realpath } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { readStoredVerdict } from "../controller.ts";
-import { validationDir } from "../../src/validation.ts";
+import {
+	readAssessmentBytes,
+	validationDir,
+	type ValidationAssessment,
+} from "../../src/validation.ts";
+import { diagnosisDetail } from "../../src/diagnosis.ts";
 import { viewerClaim } from "./claim.ts";
 import { readStageReceipt } from "../sandbox.ts";
 import {
@@ -228,6 +233,33 @@ function atOf(record: JsonObject | null) {
 	const at = field(record, "timestamp") ?? field(record, "ts");
 
 	return at !== null && Number.isFinite(Date.parse(at)) ? at : null;
+}
+
+function assessmentDetail(assessment: ValidationAssessment): string {
+	if (assessment.kind === "passed") return "passed.";
+	const failure = assessment.failure;
+
+	const subreason = failure.kind === "oracle" ? failure.cause : failure.reason;
+
+	const scenarios =
+		failure.kind === "candidate" || failure.kind === "oracle"
+			? failure.scenarios.filter((s) => /^S[1-9][0-9]{0,2}$/.test(s))
+			: [];
+
+	const detail =
+		diagnosisDetail(failure) ??
+		(failure.kind === "infrastructure" ? "Held." : null);
+
+	return [
+		`${failure.kind}: ${subreason}.`,
+		detail,
+		scenarios.length > 0 ? `Scenarios ${scenarios.join(", ")}.` : null,
+		failure.kind === "candidate"
+			? "One bounded repair authorized."
+			: "No repair spent.",
+	]
+		.filter((x) => x !== null)
+		.join(" ");
 }
 
 function event(
@@ -790,6 +822,38 @@ export async function readViewerRun(
 						g.generation,
 					),
 				);
+			}
+
+			const assessmentPath = join(dir, "assessment.json");
+
+			if (
+				evidence.verdict !== null &&
+				(!evidence.verdict.pass ||
+					(await lstat(assessmentPath).then(
+						() => true,
+						() => false,
+					)))
+			) {
+				const path = assessmentPath;
+				const text = await io.text(path, FILE_CAP, true);
+				const read = text === null ? null : readAssessmentBytes(text);
+
+				if (text !== null && read === null)
+					io.gap(path, "assessment unreadable");
+
+				if (read !== null)
+					timeline.push(
+						event(
+							relative(root, dir),
+							"validate",
+							"diagnosis",
+							assessmentDetail(read.assessment),
+							null,
+							null,
+							g.round,
+							g.generation,
+						),
+					);
 			}
 
 			const certificate = evidence.certification;
