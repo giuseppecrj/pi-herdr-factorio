@@ -26,7 +26,7 @@ Before the first native claim, `accounting/<runId>/policy.json` freezes the star
 
 Rows project validated stage receipts and write-once attempt dispositions into stage summaries; requested and observed model identities stay separate. Aggregate receipts cover their child sessions for usage, while model observations come from the leaves and retain fallbacks and available runtime/assets versions. Provider versions stay unavailable. Each validation export also retains `gate-policy.json` for its exact base SHA when the export is complete and safe; generation rows use that pin or their bound diagnosis base receipt. Interrupted attempts consume attempts but do not add tokens a second time. Linked runs retain `previousRunId` without adding the predecessor's usage again.
 
-Token totals are charged amounts, not necessarily measured spend. They are `lower_bound` where receipt coverage is incomplete, and `uncertain` with `reason: "request_unsettled"` if a request has a dispatch but no result. Per owner policy, such requests charge the recorded input-size estimate plus their enforced maximum output and are never replayed. Legacy dispatches without those bounds remain incomplete. A later aggregate or leaf receipt does not erase uncertainty. Available parent/child usage is counted once; the residual charge is unattributed.
+Token totals are charged amounts, not necessarily measured spend. They are `lower_bound` where receipt coverage is incomplete, and `uncertain` with `reason: "request_unsettled"` if a request has a dispatch but no result, or a result with no metered usage. Per owner policy, such requests charge the recorded input-size estimate plus their enforced maximum output and are never replayed. Legacy dispatches without those bounds remain incomplete. A metered request body that is not a JSON object is forwarded unchanged and bounded by its byte length plus the execution's token ceiling. A later aggregate or leaf receipt does not erase uncertainty. A run whose stages directory exists but cannot be read gets unavailable stages, models and usage split, and a `lower_bound` token total with `reason: "receipt_invalid"`, never a known empty list. Available parent/child usage is counted once; the residual charge is unattributed.
 
 At landing, the existing repository-scoped PR read retains valid `merged_at` metadata bound to repository, run, PR number, head and merge SHA. Missing or invalid merge time remains unavailable, never the observation time. Context-pressure flags are not instrumented; omitted checkout paths do not prove prompt truncation. Repair-round aggregate counts remain unavailable where authorization/start/completion coverage is not established.
 
@@ -43,11 +43,12 @@ The outbox lives under `<state>/ledger/` with mode 0600 in 0700 directories, out
 | `<runId>/terminal.json` | once, before the terminal marker | The terminal snapshot, including the fixed `terminalObservedAt`. |
 | `<runId>/row.json` | once, after the marker is confirmed | The exact public row bytes. |
 | `<runId>/retry.json` | replaced | Attempts, next try time, last fixed error, and whether the job is blocked. |
+| `<runId>/blocked.json` | once, instead of `terminal.json` | The terminal snapshot could not be encoded; the job is blocked as `row_invalid`. |
 | `<runId>/published.json` | once | The row digest, the tip where it was read back, the blob and the line number. |
 | `anchor.json` | replaced | The last verified root, tip, blob, byte length and prefix digest. |
 | `<runId>/adoption.json` | replaced | Tip/base-bound lineage cursor and total walk count for resumable adoption. |
 
-If `terminal.json` cannot be written, the run stays ending and posts no terminal marker until it can. A row is never rebuilt with different bytes. A write-once mismatch blocks the job.
+If `terminal.json` cannot be written or its snapshot cannot be encoded, the run stays ending and posts no terminal marker until it can. A failed `row.json` freeze is retried on later ticks. A corrupt or unreadable record in one run's directory blocks only that job as `state_invalid`; a directory with no `terminal.json` or `blocked.json` is not enrolled yet and is skipped. A row is never rebuilt with different bytes. A write-once mismatch blocks the job.
 
 ## How a row reaches the branch
 
@@ -73,7 +74,9 @@ Each pump that has work logs `ledger_backlog`, with the published, pending and b
 | `adoption_pending` | retried | Another bounded ancestry slice is needed; the saved cursor resumes it. |
 | `state_unwritable` | retried | A private record could not be written. |
 | `ledger_contended` | retried | The branch kept moving through three rebases. |
-| `ref_missing` | blocked | The ref vanished after an anchor was verified. The controller never recreates it. |
+| `ref_missing` | blocked | The ref is absent after an anchor or a published receipt exists. The controller creates the root only when neither exists, and never recreates it. |
+| `state_invalid` | blocked | A private outbox record, including `anchor.json`, is unreadable or corrupt. A corrupt anchor blocks every job and never creates a root. |
+| `row_invalid` | blocked | The terminal snapshot could not be encoded, so no terminal marker was posted. |
 | `lineage_changed` | blocked | History was rewritten, branched or rooted in a source tree. |
 | `ledger_corrupt`, `ledger_version_unsupported` | blocked | A line the writer cannot index. It is preserved, never repaired. |
 | `row_conflict` | blocked | The run ID is present with different bytes, or twice. |
