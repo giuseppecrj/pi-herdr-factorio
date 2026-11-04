@@ -1249,7 +1249,7 @@ describe("gateway admission gate and control", () => {
 });
 
 describe("gateway process request journal", () => {
-	it("leaves a dispatch without a result when the gateway dies mid-request, and recovery keeps it as a floor", async () => {
+	it("charges an input-plus-output upper bound without replay when the gateway dies mid-request", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "factory-gw-journal-"));
 		const fixture = await startEchoFixture(0);
 
@@ -1270,7 +1270,13 @@ describe("gateway process request journal", () => {
 			assert.ok(started.ok, started.ok ? "" : started.reason);
 
 			const json = { "Content-Type": "application/json" };
-			const model = JSON.stringify({ model: "gpt-6.1-sol", stream: true });
+
+			const model = JSON.stringify({
+				model: "gpt-6.1-sol",
+				stream: true,
+				max_output_tokens: 1000,
+			});
+
 			const socket = started.handle.socketPath;
 
 			assert.equal(
@@ -1289,10 +1295,17 @@ describe("gateway process request journal", () => {
 
 			assert.deepEqual(
 				journalCharge(readFileSync(join(stage, JOURNAL_FILE), "utf8")),
-				{ tokens: 16, dispatched: 2, settled: 1, unmetered: 0, uncertain: 1 },
+				{
+					tokens: 16,
+					dispatched: 2,
+					settled: 1,
+					unmetered: 0,
+					uncertain: 1,
+					uncertainTokens: Buffer.byteLength(model) + 1000,
+				},
 			);
 			assert.deepEqual(await executionCharge(stage), {
-				total: 16,
+				total: 16 + Buffer.byteLength(model) + 1000,
 				uncertain: 1,
 			});
 			assert.equal(fixture.arrivals("/openai/v1/hang"), arrived);

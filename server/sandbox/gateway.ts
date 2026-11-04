@@ -31,6 +31,7 @@ import {
 	SecretScanner,
 } from "./credentials.ts";
 import { SseMeter } from "./meter.ts";
+import { countOf, fieldOf, objectOf, parseJson } from "./json.ts";
 import {
 	type AdmissionState,
 	checkBody,
@@ -738,6 +739,24 @@ export class Gateway implements AdmissionState {
 		if (!this.#audit.healthy())
 			return this.#deny(exchange, res, "audit-unavailable");
 
+		// One byte per input token is conservative; bound output explicitly even
+		// when the client omits a provider limit, so a lost result is chargeable.
+		const json = objectOf(parseJson(body.toString("utf8")));
+
+		const forwarded =
+			route.meter === null
+				? body
+				: Buffer.from(
+						JSON.stringify({
+							...json,
+							max_output_tokens: Math.min(
+								countOf(fieldOf(json, "max_output_tokens")) ??
+									this.#table.ceiling.modelTokens,
+								this.#table.ceiling.modelTokens,
+							),
+						}),
+					);
+
 		this.#forward(
 			exchange,
 			req,
@@ -745,7 +764,7 @@ export class Gateway implements AdmissionState {
 			route,
 			decision.upstreamPath,
 			address,
-			body,
+			forwarded,
 		);
 	}
 
@@ -767,6 +786,14 @@ export class Gateway implements AdmissionState {
 				!this.#audit.journal({
 					...this.#journalIdentity(exchange, route.id),
 					kind: "dispatch",
+					inputTokenEstimate: body.length,
+					maxOutputTokens:
+						countOf(
+							fieldOf(
+								objectOf(parseJson(body.toString("utf8"))),
+								"max_output_tokens",
+							),
+						) ?? 0,
 				})
 			) {
 				this.#journalFailed();

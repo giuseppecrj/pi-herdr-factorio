@@ -1486,8 +1486,10 @@ export type ExecutionCharge = {
 export function uncertainCharge(
 	floor: number,
 	requests: number,
+	metered = 0,
+	upperBound = 0,
 ): ExecutionCharge {
-	return { total: floor, uncertain: requests };
+	return { total: Math.max(floor, metered + upperBound), uncertain: requests };
 }
 
 function summed(charges: (ExecutionCharge | null)[]): ExecutionCharge | null {
@@ -1509,8 +1511,8 @@ function summed(charges: (ExecutionCharge | null)[]): ExecutionCharge | null {
  * review dir sums its session dirs, and a leaf takes the larger of its
  * synced request journal and the gateway's `egress.jsonl` tally, never
  * their sum. A dispatched request with no result is `uncertain`: its
- * tokens are unknown, so `total` is only a floor and the request is never
- * sent again. A line cut short by a crash is skipped. `null` when the dir
+ * recorded input-plus-output bound is charged by `uncertainCharge` and the
+ * request is never sent again. Legacy dispatches without bounds remain floors. A line cut short by a crash is skipped. `null` when the dir
  * has no receipt, journal or audit.
  */
 export async function executionCharge(
@@ -1589,6 +1591,8 @@ export async function executionCharge(
 		...uncertainCharge(
 			Math.max(sum, charged?.tokens ?? 0, highTotal ?? 0),
 			charged?.uncertain ?? 0,
+			Math.max(sum, charged?.tokens ?? 0),
+			charged?.uncertainTokens ?? 0,
 		),
 	};
 }

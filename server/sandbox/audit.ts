@@ -52,7 +52,11 @@ type JournalIdentity = {
  * upstream, and a `result` once it ends. Only ids, counters and metering.
  */
 export type JournalRecord =
-	| (JournalIdentity & { readonly kind: "dispatch" })
+	| (JournalIdentity & {
+			readonly kind: "dispatch";
+			readonly inputTokenEstimate?: number;
+			readonly maxOutputTokens?: number;
+	  })
 	| (JournalIdentity & {
 			readonly kind: "result";
 			readonly status: number;
@@ -80,15 +84,17 @@ export type JournalCharge = {
 	readonly settled: number;
 	readonly unmetered: number;
 	readonly uncertain: number;
+	readonly uncertainTokens: number;
 };
 
 /**
  * What a journal proves: metered tokens of each settled request, once per
  * request number. A dispatch with no result is an uncertain charge, so the
- * tokens are only a floor. A line cut short by a crash is skipped.
+ * tokens retain the recorded input-plus-output bound separately. Legacy dispatches
+ * without a bound remain a floor. A line cut short by a crash is skipped.
  */
 export function journalCharge(text: string): JournalCharge {
-	const dispatched = new Set<number>();
+	const dispatched = new Map<number, number>();
 	const settled = new Map<number, number | null>();
 
 	for (const line of text.split("\n")) {
@@ -98,7 +104,12 @@ export function journalCharge(text: string): JournalCharge {
 
 		if (record === null || req === null) continue;
 
-		if (kind === "dispatch") dispatched.add(req);
+		if (kind === "dispatch" && !dispatched.has(req))
+			dispatched.set(
+				req,
+				(countOf(fieldOf(record, "inputTokenEstimate")) ?? 0) +
+					(countOf(fieldOf(record, "maxOutputTokens")) ?? 0),
+			);
 		else if (kind === "result" && !settled.has(req)) {
 			const input = countOf(fieldOf(record, "inputTokens"));
 			const output = countOf(fieldOf(record, "outputTokens"));
@@ -117,7 +128,11 @@ export function journalCharge(text: string): JournalCharge {
 		dispatched: dispatched.size,
 		settled: settled.size,
 		unmetered: metered.filter((value) => value === null).length,
-		uncertain: [...dispatched].filter((req) => !settled.has(req)).length,
+		uncertain: [...dispatched.keys()].filter((req) => !settled.has(req)).length,
+		uncertainTokens: [...dispatched].reduce(
+			(sum, [req, bound]) => sum + (settled.has(req) ? 0 : bound),
+			0,
+		),
 	};
 }
 

@@ -167,6 +167,7 @@ describe("gateway request journal", () => {
 			settled: 3,
 			unmetered: 1,
 			uncertain: 1,
+			uncertainTokens: 0,
 		});
 		assert.deepEqual(journalCharge(""), {
 			tokens: 0,
@@ -174,6 +175,7 @@ describe("gateway request journal", () => {
 			settled: 0,
 			unmetered: 0,
 			uncertain: 0,
+			uncertainTokens: 0,
 		});
 	});
 });
