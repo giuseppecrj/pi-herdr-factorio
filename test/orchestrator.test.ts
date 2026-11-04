@@ -51,7 +51,7 @@ import {
 	type Link,
 } from "../src/specify.ts";
 import type { Exec } from "../src/gh.ts";
-import { formatMarker, parseMarker } from "../src/markers.ts";
+import { formatMarker, parseMarker, type RunStatus } from "../src/markers.ts";
 import {
 	backoffMs,
 	type CheckoutResult,
@@ -2716,6 +2716,176 @@ describe("Orchestrator runs of another state directory", () => {
 			"3:retrying",
 		]);
 		assert.equal(events(logs).includes("claim_foreign"), false);
+	});
+
+	async function foreignMarker(
+		github: FakeGitHub,
+		change: {
+			eventId: string;
+			eventAt: string;
+			seq: number;
+			status: RunStatus;
+		},
+	): Promise<Digest> {
+		const f = world();
+		f.github.add(labeled(14));
+		await f.start().tick();
+		const parsed = parseMarker(f.github.markers(14)[0] ?? "");
+
+		if (parsed.kind !== "marker") throw new Error("marker");
+		const runId = runIdOf({ repo, issue: 14, eventId: change.eventId });
+		const issue = github.issues.get(14);
+		assert.ok(issue);
+		github.comment(issue, formatMarker({ ...parsed.marker, ...change, runId }));
+
+		return runId;
+	}
+
+	it("frees its own claim's slot under another controller's live run, posting nothing there", async () => {
+		const github = new FakeGitHub();
+		const state = stateDir();
+		const issue = github.add(labeled(14));
+		const once = ["tick", "--once", "--json", ...base, "--state-dir", state];
+
+		const first = await cli(once, github);
+
+		assert.equal(first.code, EXIT.ok, first.stderr);
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+		const replaced = relabel(github, issue);
+
+		const foreign = await foreignMarker(github, {
+			eventId: "34537529999",
+			eventAt: "2026-10-29T02:31:00Z",
+			seq: 3,
+			status: "blocked",
+		});
+
+		assert.equal(foreign, replaced);
+		github.add(labeled(15));
+		github.add(labeled(16));
+		const before = statuses(github, 14);
+
+		const restarted = await cli(once, github);
+
+		assert.equal(restarted.code, EXIT.ok, restarted.stderr);
+		assert.deepEqual(statuses(github, 14), before);
+		assert.match(restarted.stderr, /event=claim_foreign issue=14 /);
+		assert.doesNotMatch(
+			restarted.stderr,
+			/event=(claim_adopted|claim_released|claim_taken|marker_posted) issue=14 /,
+		);
+		assert.deepEqual(
+			runIssues(JSON.parse(restarted.stdout)).sort((a, b) => a - b),
+			[15, 16],
+		);
+		assert.deepEqual(statuses(github, 15), ["1:claimed", "2:blocked"]);
+		assert.deepEqual(statuses(github, 16), ["1:claimed", "2:blocked"]);
+		assert.equal(
+			JSON.parse(
+				readFileSync(join(state, "claims", `${runOf(14)}.json`), "utf8"),
+			).status,
+			"blocked",
+		);
+	});
+
+	for (const claimFile of ["kept", "lost"] as const)
+		it(`recovers its own unmarked admission under another controller's live run (claim file ${claimFile})`, async () => {
+			const github = new FakeGitHub();
+			const state = stateDir();
+			github.add(labeled(14));
+			const once = ["tick", "--once", "--json", ...base, "--state-dir", state];
+			github.posts = ["rejected"];
+
+			const first = await cli(once, github);
+
+			assert.equal(first.code, EXIT.ok, first.stderr);
+			assert.deepEqual(statuses(github, 14), []);
+
+			if (claimFile === "lost")
+				rmSync(join(state, "claims", `${runOf(14)}.json`));
+
+			const foreign = await foreignMarker(github, {
+				eventId: "34537520000",
+				eventAt: "2026-10-29T01:00:00Z",
+				seq: 1,
+				status: "running",
+			});
+
+			const restarted = await cli(once, github);
+
+			assert.equal(restarted.code, EXIT.ok, restarted.stderr);
+			assert.match(restarted.stderr, /event=claim_foreign issue=14 /);
+			assert.equal(JSON.parse(restarted.stdout).runs[0]?.runId, runOf(14));
+			assert.deepEqual(statuses(github, 14).slice(0, 2), [
+				"1:running",
+				"2:claimed",
+			]);
+
+			const runIds = github.markers(14).flatMap((body) => {
+				const parsed = parseMarker(body);
+
+				return parsed.kind === "marker" ? [parsed.marker.runId] : [];
+			});
+
+			assert.deepEqual(
+				runIds.slice(1),
+				runIds.slice(1).map(() => runOf(14)),
+			);
+			assert.equal(runIds[0], foreign);
+		});
+
+	it("admits a newer ready event only once the owner ends its run", async () => {
+		const f = world();
+		const issue = f.github.add(labeled(14));
+		const owner = f.start();
+		await owner.tick();
+		assert.deepEqual(statuses(f.github, 14), ["1:claimed", "2:blocked"]);
+
+		const clock = new FakeClock();
+		clock.t = START + 3_600_000;
+		const executor = new FakeExecutor();
+		executor.workflow = () => f.github.workflow;
+		const logs: { event: string; fields: LogFields }[] = [];
+
+		const other = new Orchestrator({
+			exec: f.github.exec,
+			env: () => "/home/exedev",
+			repo,
+			store: memoryStore(),
+			files: memoryFiles(),
+			executor,
+			clock,
+			scope: null,
+			log: (event, fields) => logs.push({ event, fields }),
+		});
+
+		await other.tick();
+		const calls = f.github.calls.length;
+		const newer = relabel(f.github, issue);
+		await other.tick();
+		clock.t += 60_000;
+		await other.tick();
+		assert.deepEqual(writes(f.github, calls), []);
+		assert.equal(other.state.runs.size, 0);
+		assert.equal(events(logs).filter((e) => e === "claim_foreign").length, 1);
+
+		f.store.local = "disabled";
+		await owner.tick();
+		assert.deepEqual(statuses(f.github, 14), [
+			"1:claimed",
+			"2:blocked",
+			"3:released",
+		]);
+
+		clock.t += 60_000;
+		await other.tick();
+		assert.equal(other.state.runs.get(14)?.runId, newer);
+		assert.deepEqual(statuses(f.github, 14).slice(0, 4), [
+			"1:claimed",
+			"2:blocked",
+			"3:released",
+			"4:claimed",
+		]);
 	});
 });
 
@@ -8245,6 +8415,46 @@ describe("controller-only validate", () => {
 			);
 		});
 
+	it("neither adopts nor posts on a ledger-behind v3 claim this directory never admitted", async () => {
+		const f = await waitingRun();
+		const comments = [...(f.github.issues.get(14)?.comments ?? [])];
+		const parsed = parseMarker(f.github.markers(14).at(-1) ?? "");
+		assert.equal(parsed.kind, "marker");
+
+		if (parsed.kind !== "marker") throw new Error("marker");
+		const { marker } = parsed;
+		assert.equal(marker.v, 3);
+		const cold = world();
+		cold.github.add(labeled(14, { comments: comments.slice(0, -1) }));
+		const before = statuses(cold.github, 14);
+		assert.equal(before.length, marker.seq - 1);
+		cold.files.claims.set(marker.runId, {
+			runId: marker.runId,
+			issue: 14,
+			eventId: marker.eventId,
+			seq: marker.seq,
+			status: marker.status,
+			stage: marker.stage,
+			attempt: marker.attempt,
+			usage: marker.usage,
+			marker,
+		});
+
+		const restarted = cold.start();
+		const report = await restarted.tick();
+
+		assert.deepEqual(statuses(cold.github, 14), before);
+		assert.equal(
+			cold.github.calls.some((call) => call.includes("POST")),
+			false,
+		);
+		assert.equal(restarted.state.runs.size, 0);
+		assert.deepEqual(report.runs, []);
+		assert.equal(cold.executor.launches.length, 0);
+		assert.equal(events(cold.logs).includes("claim_adopted"), false);
+		assert.equal(events(cold.logs).includes("claim_foreign"), true);
+	});
+
 	it("keeps a missing-book PR observable while disabled and withdrawn without inventing certification", async () => {
 		const f = await reviewingRun();
 		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
@@ -8328,17 +8538,6 @@ describe("controller-only validate", () => {
 			(await fileRunFiles(state).listClaims())[0]?.marker,
 			saved.marker,
 		);
-		f.store.records.clear();
-		issue.comments = [];
-		const missingAdmission = f.start();
-		await missingAdmission.tick();
-		assert.equal(
-			missingAdmission.state.runs.get(14)?.phase.kind,
-			"evidence_missing",
-		);
-		assert.equal(f.executor.launches.length, launches);
-		assert.equal(f.files.claims.get(runOf(14))?.seq, saved.seq);
-		assert.equal(f.files.claims.get(runOf(14))?.usage, saved.usage);
 		assert.ok(
 			f.logs.some(
 				(entry) =>
@@ -8346,6 +8545,28 @@ describe("controller-only validate", () => {
 					entry.fields.mergeSha === "e".repeat(40) &&
 					entry.fields.actor === "unknown",
 			),
+		);
+		f.store.records.clear();
+		issue.comments = [];
+		const calls = f.github.calls.length;
+		const logged = f.logs.length;
+		const missingAdmission = f.start();
+		await missingAdmission.tick();
+		assert.equal(missingAdmission.state.runs.has(14), false);
+		assert.equal(
+			f.github.calls.slice(calls).some((call) => call.includes("POST")),
+			false,
+		);
+		assert.deepEqual(issue.comments, []);
+		assert.equal(f.executor.launches.length, launches);
+		assert.deepEqual(f.files.claims.get(runOf(14)), saved);
+		assert.ok(
+			f.logs
+				.slice(logged)
+				.some(
+					(entry) =>
+						entry.event === "claim_foreign" && entry.fields.issue === 14,
+				),
 		);
 	});
 
