@@ -38,4 +38,17 @@ Save the receipt here as `receipt.json` once it has run. Review it for anything 
 
 ## Result
 
-Not run yet. The coordinator runs it on `pi-factorio`.
+The coordinator ran it on `pi-factorio` on 2026-11-04, from a separate checkout. Production was stopped during the run, and the bundle link and held service were restored afterwards.
+
+**First run, at `d01146a`: denied.** The gateway refused Pi 1.4.0's real 5,190-byte body with `body-not-allowed` before any dispatch. The cause was the `defer_loading` key on Pi's `__pi_deferred_placeholder__` tool. Fixed in `8635aba`, and a regression test now uses the captured real body.
+
+**Second run, at `8635aba`: pass** (`receipt.json`). Every check holds:
+- exactly one dispatch and result, status 200, forwarded;
+- route `model-anthropic`;
+- `maxOutputTokens` 25,000, which is Pi's 128,000 clamped to the accept cap;
+- metered at 1,924 input tokens (cache included) and 4 output tokens;
+- `observedModel` `claude-sonnet-5-5`, taken from `message_start`;
+- `journalCharge` at 1,928 tokens, none uncertain;
+- Pi printed `ok` and exited 0.
+
+Pi 1.4.0 sends adaptive thinking for this model even with `--thinking off`, so thinking tokens count against the cap.

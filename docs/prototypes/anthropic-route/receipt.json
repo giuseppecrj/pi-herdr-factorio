@@ -1,0 +1,155 @@
+{
+    "v": 1,
+    "probe": "anthropic-route",
+    "date": "2026-11-04T23:29:07Z",
+    "controller": "8635abac4f75a1b5d07ed30d280f019ca2f10860",
+    "bundle": "f04647480932ec376585c71c58830e2901bcfd02b0caf01405387cdb14634439",
+    "runId": "21e92ed6fa909d287723c46f2047b761f56e69d36e3e8834374f032ada09a519",
+    "requested": "anthropic/claude-sonnet-5-5",
+    "ceiling": {
+        "modelTokens": 25000,
+        "modelRequests": 1
+    },
+    "promptBytes": 1992,
+    "pi": {
+        "exit": 0,
+        "timedOut": false,
+        "stdout": "ok\n",
+        "stdoutBytes": 3,
+        "stderrTail": "",
+        "stderrBytes": 0
+    },
+    "denied": [],
+    "audit": [
+        {
+            "v": 1,
+            "ts": "2026-11-04T23:29:02.607Z",
+            "stage": "accept",
+            "runId": "21e92ed6fa909d287723c46f2047b761f56e69d36e3e8834374f032ada09a519",
+            "attempt": 1,
+            "req": 1,
+            "route": null,
+            "method": "GET",
+            "path": "/",
+            "upstream": null,
+            "status": 403,
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "durationMs": 1,
+            "credential": null,
+            "decision": "deny",
+            "reason": "no-route",
+            "gate": "open",
+            "inputTokens": null,
+            "outputTokens": null
+        },
+        {
+            "v": 1,
+            "ts": "2026-11-04T23:29:07.211Z",
+            "stage": "accept",
+            "runId": "21e92ed6fa909d287723c46f2047b761f56e69d36e3e8834374f032ada09a519",
+            "attempt": 1,
+            "req": 2,
+            "route": "model-anthropic",
+            "method": "POST",
+            "path": "/anthropic/v1/messages?\u2026",
+            "upstream": {
+                "host": "llm.int.exe.xyz",
+                "sni": "llm.int.exe.xyz",
+                "port": 443,
+                "addr": "169.254.169.254",
+                "tls": "TLSv1.3"
+            },
+            "status": 200,
+            "bytesIn": 5190,
+            "bytesOut": 1283,
+            "durationMs": 3875,
+            "credential": null,
+            "decision": "forward",
+            "reason": null,
+            "gate": "closed",
+            "inputTokens": 1924,
+            "outputTokens": 4,
+            "observedModel": "claude-sonnet-5-5"
+        }
+    ],
+    "journal": [
+        {
+            "v": 1,
+            "ts": "2026-11-04T23:29:03.338Z",
+            "stage": "accept",
+            "runId": "21e92ed6fa909d287723c46f2047b761f56e69d36e3e8834374f032ada09a519",
+            "attempt": 1,
+            "req": 2,
+            "route": "model-anthropic",
+            "kind": "dispatch",
+            "inputTokenEstimate": 5189,
+            "maxOutputTokens": 25000
+        },
+        {
+            "v": 1,
+            "ts": "2026-11-04T23:29:07.208Z",
+            "stage": "accept",
+            "runId": "21e92ed6fa909d287723c46f2047b761f56e69d36e3e8834374f032ada09a519",
+            "attempt": 1,
+            "req": 2,
+            "route": "model-anthropic",
+            "kind": "result",
+            "decision": "forward",
+            "status": 200,
+            "inputTokens": 1924,
+            "outputTokens": 4,
+            "observedModel": "claude-sonnet-5-5"
+        }
+    ],
+    "charge": {
+        "tokens": 1928,
+        "dispatched": 1,
+        "settled": 1,
+        "unmetered": 0,
+        "uncertain": 0,
+        "uncertainTokens": 0
+    },
+    "summary": {
+        "event": "summary",
+        "gate": "closed",
+        "modelTokens": 1928,
+        "modelRequests": 1,
+        "routes": [
+            {
+                "route": "model-anthropic",
+                "forwarded": 1,
+                "denied": 0,
+                "bytesIn": 5190,
+                "bytesOut": 1283,
+                "inputTokens": 1924,
+                "outputTokens": 4,
+                "unmetered": 0,
+                "peakConcurrent": 1
+            },
+            {
+                "route": "npm",
+                "forwarded": 0,
+                "denied": 0,
+                "bytesIn": 0,
+                "bytesOut": 0,
+                "inputTokens": 0,
+                "outputTokens": 0,
+                "unmetered": 0,
+                "peakConcurrent": 0
+            }
+        ]
+    },
+    "checks": {
+        "oneCall": true,
+        "status200": true,
+        "metered": true,
+        "observedModelBare": true,
+        "observedModelIsRequested": true,
+        "boundAtMostModelMax": true,
+        "routeAnthropic": true,
+        "piExitZero": true,
+        "noDenial": true
+    },
+    "pass": true
+}
