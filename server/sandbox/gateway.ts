@@ -80,6 +80,7 @@ type Exchange = {
 	outputTokens: number | null;
 	finished: boolean;
 	dispatched: RouteId | null;
+	rejected: number | null;
 };
 
 const REFUSED_V4 = [
@@ -463,6 +464,7 @@ export class Gateway implements AdmissionState {
 			outputTokens: null,
 			finished: false,
 			dispatched: null,
+			rejected: null,
 		};
 	}
 
@@ -501,10 +503,19 @@ export class Gateway implements AdmissionState {
 			!this.#audit.journal({
 				...this.#journalIdentity(exchange, exchange.dispatched),
 				kind: "result",
-				status,
 				decision,
-				inputTokens: exchange.inputTokens,
-				outputTokens: exchange.outputTokens,
+				...(exchange.rejected === null
+					? {
+							status,
+							inputTokens: exchange.inputTokens,
+							outputTokens: exchange.outputTokens,
+						}
+					: {
+							status: exchange.rejected,
+							reason: "provider_rejected",
+							inputTokens: 0,
+							outputTokens: 0,
+						}),
 			})
 		) {
 			this.#journalFailed();
@@ -964,6 +975,8 @@ export class Gateway implements AdmissionState {
 		refuse: (code: ProxyCode) => void,
 	): void {
 		const status = incoming.statusCode ?? 502;
+
+		if (status < 200 || status > 299) exchange.rejected = status;
 
 		const blockedHead = (code: DenyCode) => {
 			incoming.destroy();

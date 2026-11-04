@@ -49,7 +49,8 @@ type JournalIdentity = {
 
 /**
  * One model request in the synced journal: a `dispatch` before anything goes
- * upstream, and a `result` once it ends. Only ids, counters and metering.
+ * upstream, and a `result` once it ends. Only ids, counters and metering. A
+ * provider's non-2xx status at the headers is `provider_rejected`, metered zero.
  */
 export type JournalRecord =
 	| (JournalIdentity & {
@@ -90,10 +91,11 @@ export type JournalCharge = {
 
 /**
  * What a journal proves: metered tokens of each settled request, once per
- * request number. A dispatch with no result, or with an unmetered result and
- * a positive recorded bound, is an uncertain charge, so the tokens retain the
- * recorded input-plus-output bound separately. Legacy dispatches without a
- * bound remain a floor. A line cut short by a crash is skipped.
+ * request number. A provider-rejected result is a known zero. A dispatch with
+ * no result, or with an unmetered result and a positive recorded bound, is an
+ * uncertain charge, so the tokens retain the recorded input-plus-output bound
+ * separately. Legacy dispatches without a bound remain a floor. A line cut
+ * short by a crash is skipped.
  */
 export function journalCharge(text: string): JournalCharge {
 	const dispatched = new Map<number, number>();
