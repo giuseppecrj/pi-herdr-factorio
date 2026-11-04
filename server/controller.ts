@@ -63,13 +63,18 @@ import {
 	countOf,
 } from "./sandbox/json.ts";
 import { type Exec } from "../src/gh.ts";
-import { digestOf, type Verdict } from "../src/run.ts";
+import { digestOf, type Verdict, type Stage } from "../src/run.ts";
 import {
 	frozenRowOf,
 	ledgerApiOf,
 	ledgerRowOf,
 	pumpLedger,
 	parseAttemptEnd,
+	parseRunStart,
+	AUTONOMY_DIGEST,
+	type TerminalEvidence,
+	type LedgerRow,
+	ledgerModelOf,
 	parseAdoption,
 	type RunAccounting,
 	type AttemptEnd,
@@ -91,6 +96,7 @@ import {
 	lstatSync,
 } from "node:fs";
 import {
+	baseTreeDigest,
 	materializeFromDirectories,
 	replacementDigest,
 	replayHeldoutCandidate,
@@ -2072,13 +2078,21 @@ export function controllerDiagnosis(config: {
 	};
 }
 
-export function fileRunFiles(stateDir: string): RunFiles {
+export function fileRunFiles(
+	stateDir: string,
+	policySource?: { readonly fetch?: TarballFetch },
+): RunFiles {
 	const root = resolve(stateDir);
 	const claims = join(root, "claims");
 	const workspaces = join(root, "workspaces");
 	const contracts = join(root, "contracts");
 	const links = join(root, "links");
 	const answers = join(root, "answers");
+
+	const policyPins = new Map<
+		GitSha,
+		{ workflowDigest: Digest; gatesDigest: Digest }
+	>();
 
 	const workspacePath = (runId: string) => join(workspaces, runId);
 
@@ -2097,6 +2111,99 @@ export function fileRunFiles(stateDir: string): RunFiles {
 		artifacts: fileArtifacts(root),
 		ledger: fileLedgerOutbox(root),
 		accounting: fileRunAccounting(root),
+		terminalEvidence: (runId, floor, candidate) =>
+			readTerminalEvidence(root, runId, floor, candidate),
+		prepareRun:
+			policySource === undefined
+				? undefined
+				: async (input) => {
+						const accounting = fileRunAccounting(root);
+						const existing = await accounting.start(input.runId);
+
+						if (existing === undefined) return false;
+
+						if (existing !== null)
+							return (
+								existing.policy.workflowSha === input.workflowSha &&
+								existing.policy.workflowDigest === input.workflowDigest &&
+								existing.policy.gates.kind === "known"
+							);
+
+						const begin = (gatesDigest: Digest) =>
+							accounting.begin({
+								v: 1,
+								runId: input.runId,
+								startedAt: input.startedAt,
+								policy: {
+									workflowSha: input.workflowSha,
+									workflowDigest: input.workflowDigest,
+									gates: {
+										kind: "known",
+										value: {
+											sourceSha: input.workflowSha,
+											digest: gatesDigest,
+										},
+									},
+									autonomy: {
+										approveMerge: "always",
+										land: "propose",
+										digest: AUTONOMY_DIGEST,
+									},
+								},
+							});
+
+						const cached = policyPins.get(input.workflowSha);
+
+						if (cached !== undefined)
+							return (
+								cached.workflowDigest === input.workflowDigest &&
+								(await begin(cached.gatesDigest))
+							);
+						let scratch: string | null = null;
+
+						try {
+							privateDir(root);
+							scratch = await mkdtemp(join(root, "policy-"));
+							const workspace = join(scratch, "source");
+							await mkdir(workspace, { mode: 0o700 });
+
+							const checked = await checkoutWorkspace({
+								stateDir: scratch,
+								workspace,
+								runId: input.runId,
+								repo: input.repo,
+								sha: input.workflowSha,
+								fetch: policySource.fetch ?? ghTarball,
+							});
+
+							if (
+								checked.kind !== "ready" ||
+								checked.omitted !== 0 ||
+								digestOf(
+									await readFile(
+										join(workspace, ".github/factory/WORKFLOW.md"),
+									),
+								) !== input.workflowDigest
+							)
+								return false;
+
+							const gatesDigest = baseTreeDigest(
+								join(workspace, ".github/factory/gates"),
+							);
+
+							policyPins.set(input.workflowSha, {
+								workflowDigest: input.workflowDigest,
+								gatesDigest,
+							});
+
+							return begin(gatesDigest);
+						} catch {
+							return false;
+						} finally {
+							if (scratch !== null)
+								await rm(scratch, { recursive: true, force: true });
+						}
+					},
 		async readContract(runId) {
 			return readStoredContract(root, runId);
 		},
@@ -2345,6 +2452,29 @@ export function fileRunAccounting(stateDir: string): RunAccounting {
 		`${stage}-r${round}-${attempt}.json`;
 
 	return {
+		async start(runId) {
+			try {
+				const parsed = parseRunStart(
+					parseJsonText(
+						await readFile(join(root, runId, "policy.json"), "utf8"),
+					),
+				);
+
+				return parsed?.runId === runId ? parsed : undefined;
+			} catch (error) {
+				return error instanceof Error && errorCode(error) === "ENOENT"
+					? null
+					: undefined;
+			}
+		},
+		async begin(record) {
+			if (parseRunStart(record) === null) return false;
+
+			return installOnce(
+				join(root, record.runId, "policy.json"),
+				`${JSON.stringify(record)}\n`,
+			);
+		},
 		async readAttempt(runId, stage, round, attempt) {
 			try {
 				const parsed = parseAttemptEnd(
@@ -2636,6 +2766,428 @@ export function fileLedgerOutbox(stateDir: string): LedgerOutbox {
 }
 
 /** Read-only per-run token floors; aggregate execution receipts cover their descendants. */
+function validLedgerInstant(value: string): boolean {
+	if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value))
+		return false;
+	const time = Date.parse(value);
+
+	return (
+		Number.isFinite(time) &&
+		new Date(time).toISOString() === value.replace(/(?<!\.[0-9]{3})Z$/, ".000Z")
+	);
+}
+
+const EXECUTION_NAME =
+	/^(specify|accept|build|review)(?:-r[0-9]+)?-[1-9][0-9]*(?:\.[1-9][0-9]*)?$/;
+
+/** Project only validated controller-private records; never scan a workspace. */
+export async function readTerminalEvidence(
+	stateDir: string,
+	runId: Digest,
+	floor: number,
+	candidate: CandidateState | null,
+): Promise<TerminalEvidence> {
+	const { executionCharge, readStageReceipt } = await import("./sandbox.ts");
+	const root = join(resolve(stateDir), "stages", runId);
+
+	const names = (await readdir(root).catch(() => []))
+		.filter((name) => EXECUTION_NAME.test(name))
+		.sort();
+
+	const accounting = fileRunAccounting(stateDir);
+	const attempts = await accounting.attempts(runId);
+	const start = await accounting.start(runId);
+	const known = <T>(value: T) => ({ kind: "known" as const, value });
+
+	const missing = {
+		kind: "unavailable" as const,
+		reason: "receipt_missing" as const,
+	};
+
+	const stages = new Map<
+		Stage,
+		{ total: number; uncertain: number; wall: number; wallComplete: boolean }
+	>();
+
+	const models = new Map<
+		string,
+		NonNullable<ReturnType<typeof ledgerModelOf>>
+	>();
+
+	const digests = new Set<Digest>();
+
+	let total = 0,
+		uncertain = 0,
+		parent = 0,
+		children = 0;
+
+	let splitComplete = true;
+
+	const stageOf = (stage: Stage) => {
+		let value = stages.get(stage);
+
+		if (value === undefined) {
+			value = { total: 0, uncertain: 0, wall: 0, wallComplete: true };
+			stages.set(stage, value);
+		}
+
+		return value;
+	};
+
+	for (const name of names) {
+		const stageName = EXECUTION_NAME.exec(name)?.[1];
+
+		if (
+			stageName !== "specify" &&
+			stageName !== "accept" &&
+			stageName !== "build" &&
+			stageName !== "review"
+		)
+			continue;
+		const dir = join(root, name);
+		const charge = await executionCharge(dir).catch(() => null);
+		const summary = stageOf(stageName);
+		summary.total += charge?.total ?? 0;
+		summary.uncertain += charge?.uncertain ?? 0;
+		total += charge?.total ?? 0;
+		uncertain += charge?.uncertain ?? 0;
+		const receipt = await readStageReceipt(join(dir, "receipt.json"));
+
+		const valid =
+			receipt !== null &&
+			jsonField(receipt.record, "runId") === runId &&
+			jsonField(receipt.record, "stage") === stageName &&
+			jsonField(receipt.record, "version") === 1;
+
+		if (valid) {
+			summary.wall += receipt.wallMs;
+			const usage = objectOf(jsonField(receipt.record, "usage"));
+			const p = countOf(jsonField(usage, "parent"));
+			const c = countOf(jsonField(usage, "children"));
+
+			if (
+				p === null ||
+				c === null ||
+				p + c > receipt.usage.total ||
+				receipt.usage.unreadChildren > 0
+			)
+				splitComplete = false;
+			else {
+				parent += p;
+				children += c;
+			}
+		} else {
+			splitComplete = false;
+			summary.wallComplete = false;
+		}
+
+		const sessionNames = [
+			"draft",
+			"review",
+			"revision",
+			"code-review",
+			"security-review",
+			"simplify",
+			"ultrareview",
+		];
+
+		const sessions = (
+			await readdir(dir, { withFileTypes: true }).catch(() => [])
+		).filter(
+			(entry) => entry.isDirectory() && sessionNames.includes(entry.name),
+		);
+
+		const paths = [
+			join(dir, "receipt.json"),
+			...sessions.map((entry) => join(dir, entry.name, "receipt.json")),
+		];
+
+		for (const path of paths) {
+			const saved = await readStageReceipt(path);
+
+			if (
+				saved === null ||
+				jsonField(saved.record, "runId") !== runId ||
+				jsonField(saved.record, "stage") !== stageName ||
+				jsonField(saved.record, "version") !== 1
+			)
+				continue;
+			const bytes = await readFile(path);
+			digests.add(digestOf(bytes));
+
+			if (sessions.length > 0 && path === paths[0]) continue;
+			const rawModels = objectOf(jsonField(saved.record, "models"));
+			const versions = objectOf(jsonField(saved.record, "versions"));
+
+			const runtime = {
+				pi: jsonField(versions, "pi") ?? null,
+				agents: jsonField(versions, "piHerdrAgents") ?? null,
+				pstack: jsonField(versions, "piHerdrPstack") ?? null,
+				assetsDigest: jsonField(saved.record, "assetsDigest") ?? null,
+			};
+
+			for (const identity of [
+				rawModels,
+				objectOf(jsonField(saved.record, "fallback")),
+			]) {
+				if (identity === null) continue;
+				const observed = textOf(jsonField(identity, "observed"));
+
+				const input = {
+					requested: jsonField(identity, "requested") ?? null,
+					observed:
+						observed === null
+							? { kind: "unavailable", reason: "provider_not_reported" }
+							: known(observed),
+					providerVersion: {
+						kind: "unavailable",
+						reason: "provider_not_reported",
+					},
+					runtime: known(runtime),
+					executions: 1,
+				};
+
+				const projected =
+					ledgerModelOf(input) ?? ledgerModelOf({ ...input, runtime: missing });
+
+				if (projected !== null) {
+					const key = JSON.stringify([
+						projected.requested,
+						projected.observed,
+						projected.runtime,
+					]);
+
+					const previous = models.get(key);
+					models.set(key, {
+						...projected,
+						executions: (previous?.executions ?? 0) + 1,
+					});
+				}
+			}
+		}
+	}
+
+	total = Math.max(total, floor);
+
+	const summaries: Extract<LedgerRow["stages"], { kind: "known" }>["value"] =
+		[];
+
+	for (const attempt of attempts ?? []) stageOf(attempt.stage);
+
+	for (const [stage, data] of stages) {
+		const ends = attempts?.filter((attempt) => attempt.stage === stage);
+
+		const counts = {
+			passed: 0,
+			failed: 0,
+			interrupted: 0,
+			refused: 0,
+			budgetExhausted: 0,
+			aborted: 0,
+		};
+
+		for (const end of ends ?? []) {
+			const key = {
+				completed: "passed",
+				model_failure: "failed",
+				interrupted: "interrupted",
+				refused: "refused",
+				budget_stop: "budgetExhausted",
+				aborted: "aborted",
+			} as const;
+
+			counts[key[end.disposition]]++;
+		}
+
+		summaries.push({
+			stage,
+			wallMs: data.wallComplete
+				? { kind: "exact", unit: "milliseconds", total: data.wall }
+				: {
+						kind: "lower_bound",
+						unit: "milliseconds",
+						total: data.wall,
+						reason: "receipt_missing",
+					},
+			attempts: ends == null || start == null ? missing : known(counts),
+			tokens:
+				data.uncertain > 0
+					? {
+							kind: "uncertain",
+							unit: "tokens",
+							total: data.total,
+							reason: "request_unsettled",
+						}
+					: {
+							kind: "lower_bound",
+							unit: "tokens",
+							total: data.total,
+							reason: "receipt_missing",
+						},
+		});
+	}
+
+	const stageOrder: readonly Stage[] = [
+		"admit",
+		"specify",
+		"accept",
+		"build",
+		"validate",
+		"review",
+		"land",
+	];
+
+	summaries.sort(
+		(a, b) => stageOrder.indexOf(a.stage) - stageOrder.indexOf(b.stage),
+	);
+
+	const orderedModels = [...models]
+		.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+		.map(([, model]) => model);
+
+	const artifactPrefix = async (): Promise<LedgerRow["artifacts"]> => {
+		const contract = await readStoredContract(stateDir, runId);
+
+		if (contract.kind !== "found") return { kind: "admission" };
+
+		const suite = await fileArtifacts(stateDir).read(
+			runId,
+			contract.contract,
+			contract.digest,
+		);
+
+		if (suite.kind !== "found")
+			return { kind: "contract", contractDigest: contract.digest };
+
+		const patch = readPatch(stateDir, {
+			runId,
+			baseSha: contract.contract.base.sha,
+			contractDigest: contract.digest,
+			acceptanceDigest: suite.receipt.acceptanceDigest,
+		});
+
+		return patch.kind === "found"
+			? {
+					kind: "built",
+					contractDigest: contract.digest,
+					acceptanceDigest: suite.receipt.acceptanceDigest,
+					patchDigest: patch.receipt.patchDigest,
+				}
+			: {
+					kind: "acceptance",
+					contractDigest: contract.digest,
+					acceptanceDigest: suite.receipt.acceptanceDigest,
+				};
+	};
+
+	const evidence: TerminalEvidence = {
+		artifacts: await artifactPrefix(),
+		stages:
+			summaries.length === 0 && start == null ? missing : known(summaries),
+		models:
+			models.size === 0 && (names.length > 0 || start == null)
+				? missing
+				: known(orderedModels),
+		usage: {
+			tokens:
+				uncertain > 0
+					? {
+							kind: "uncertain",
+							unit: "tokens",
+							total,
+							reason: "request_unsettled",
+						}
+					: {
+							kind: "lower_bound",
+							unit: "tokens",
+							total,
+							reason: "receipt_missing",
+						},
+			parentTokens: splitComplete ? known(parent) : missing,
+			childTokens: splitComplete ? known(children) : missing,
+			unattributedTokens:
+				splitComplete && parent + children <= total
+					? known(total - parent - children)
+					: missing,
+			money: { kind: "unavailable", reason: "provider_not_reported" },
+		},
+		redactedReceiptDigests: [...digests].sort(),
+	};
+
+	const generationGates: Record<string, Digest> = {};
+
+	if (start?.policy.gates.kind === "known")
+		generationGates[start.policy.gates.value.sourceSha] =
+			start.policy.gates.value.digest;
+
+	for (const generation of candidate?.kind === "selected"
+		? candidateGenerations(candidate)
+		: []) {
+		try {
+			const base = parseBaseReceipt(
+				await readFile(
+					join(
+						validationDir(
+							stateDir,
+							runId,
+							generation.intent.round,
+							generation.intent.generation,
+						),
+						"refreshed-base.json",
+					),
+					"utf8",
+				),
+			);
+
+			if (
+				base?.evidence.binding.runId === runId &&
+				base.evidence.source.kind === "ready"
+			)
+				generationGates[base.evidence.binding.baseSha] =
+					base.evidence.source.gatesDigest;
+		} catch {
+			/* Missing historical base evidence remains unavailable. */
+		}
+	}
+
+	const terminal =
+		candidate?.kind === "selected" && candidate.work.kind === "terminal"
+			? candidate.work.terminal
+			: null;
+
+	let mergedAt: string | undefined;
+
+	if (terminal?.kind === "merged") {
+		try {
+			const metadata = objectOf(
+				parseJsonText(
+					await readFile(
+						join(stateDir, "accounting", runId, "merge.json"),
+						"utf8",
+					),
+				),
+			);
+
+			const at = textOf(jsonField(metadata, "mergedAt"));
+
+			if (
+				jsonField(metadata, "runId") === runId &&
+				jsonField(metadata, "repo") === candidate?.pin.repo &&
+				jsonField(metadata, "number") === terminal.number &&
+				jsonField(metadata, "headSha") === terminal.head &&
+				jsonField(metadata, "mergeSha") === terminal.mergeSha &&
+				at !== null &&
+				validLedgerInstant(at)
+			)
+				mergedAt = at;
+		} catch {
+			/* Public merge time is optional, never inferred from observation time. */
+		}
+	}
+
+	return { ...evidence, generationGates, mergedAt };
+}
+
 export async function readRunCharges(
 	stateDir: string,
 	runId: Digest,
@@ -2655,12 +3207,7 @@ export async function readRunCharges(
 	});
 
 	for (const name of names) {
-		if (
-			!/^(specify|accept|build|review)(?:-r[0-9]+)?-[1-9][0-9]*(?:\.[1-9][0-9]*)?$/.test(
-				name,
-			)
-		)
-			continue;
+		if (!EXECUTION_NAME.test(name)) continue;
 		const charge = await executionCharge(join(root, name)).catch(() => null);
 
 		if (charge === null) {
@@ -2679,7 +3226,10 @@ export async function readRunCharges(
 		readable,
 		uncertainRequests,
 		tokens: {
-			kind: "lower_bound" as const,
+			kind:
+				uncertainRequests > 0
+					? ("uncertain" as const)
+					: ("lower_bound" as const),
 			unit: "tokens" as const,
 			total: Math.max(floor, total),
 			reason:
@@ -4062,6 +4612,33 @@ export function controllerCandidatePort(config: {
 	const apiOf = (state: CandidateState) =>
 		new GitHubPublicationApi(config.exec, state.pin.repo);
 
+	const retainMerge = async (
+		state: CandidateState,
+		raw: JsonValue | undefined,
+		pr: OwnedPullRequest,
+	) => {
+		const mergedAt = textOf(jsonField(objectOf(raw), "merged_at"));
+
+		if (
+			pr.status.kind !== "merged" ||
+			mergedAt === null ||
+			!validLedgerInstant(mergedAt)
+		)
+			return;
+		await installOnce(
+			join(config.stateDir, "accounting", state.pin.runId, "merge.json"),
+			`${JSON.stringify({
+				v: 1,
+				runId: state.pin.runId,
+				repo: state.pin.repo,
+				number: pr.number,
+				headSha: pr.head,
+				mergeSha: pr.status.mergeSha,
+				mergedAt,
+			})}\n`,
+		);
+	};
+
 	const ownedPr = async (
 		state: CandidateState,
 	): Promise<OwnedPullRequest | null> => {
@@ -4072,12 +4649,16 @@ export function controllerCandidatePort(config: {
 			state.kind === "selected" ? state.published?.number : undefined;
 
 		if (number !== undefined) {
-			const pr = parseOwnedPullRequest(
-				await api.request("GET", `pulls/${number}`),
-				{ ...state.pin, branch, knownNumber: number },
-			);
+			const raw = await api.request("GET", `pulls/${number}`);
+
+			const pr = parseOwnedPullRequest(raw, {
+				...state.pin,
+				branch,
+				knownNumber: number,
+			});
 
 			if (pr === null) throw new PublicationError("pr_identity");
+			await retainMerge(state, raw, pr);
 
 			return pr;
 		}
@@ -4097,12 +4678,12 @@ export function controllerCandidatePort(config: {
 
 		if (discovered === null) throw new PublicationError("pr_identity");
 
-		const pr = parseOwnedPullRequest(
-			await api.request("GET", `pulls/${discovered}`),
-			{ ...state.pin, branch },
-		);
+		const raw = await api.request("GET", `pulls/${discovered}`);
+
+		const pr = parseOwnedPullRequest(raw, { ...state.pin, branch });
 
 		if (pr === null) throw new PublicationError("pr_identity");
+		await retainMerge(state, raw, pr);
 
 		return pr;
 	};

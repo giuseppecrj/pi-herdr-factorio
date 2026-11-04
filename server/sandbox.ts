@@ -1533,12 +1533,20 @@ export async function executionCharge(
 					),
 				);
 
-	if (total !== null) return { total, uncertain: 0 };
+	const covered = (charge: ExecutionCharge | null): ExecutionCharge | null =>
+		total === null
+			? charge
+			: {
+					total: Math.max(total, charge?.total ?? 0),
+					uncertain: charge?.uncertain ?? 0,
+				};
 
 	if (existsSync(join(dir, "specify.json"))) {
-		return summed(
-			await Promise.all(
-				SPECIFY_SESSIONS.map((name) => executionCharge(join(dir, name))),
+		return covered(
+			summed(
+				await Promise.all(
+					SPECIFY_SESSIONS.map((name) => executionCharge(join(dir, name))),
+				),
 			),
 		);
 	}
@@ -1558,8 +1566,12 @@ export async function executionCharge(
 			),
 		);
 
-		return summed(
-			await Promise.all(names.map((name) => executionCharge(join(dir, name)))),
+		return covered(
+			summed(
+				await Promise.all(
+					names.map((name) => executionCharge(join(dir, name))),
+				),
+			),
 		);
 	}
 
@@ -1574,7 +1586,8 @@ export async function executionCharge(
 	const charged = journal === null ? null : journalCharge(journal);
 	const audit = await boundedText(join(dir, "egress.jsonl"), AUDIT_CAP_BYTES);
 
-	if (audit === null && charged === null && highTotal === null) return null;
+	if (audit === null && charged === null && highTotal === null)
+		return covered(null);
 
 	let sum = 0;
 
@@ -1589,7 +1602,7 @@ export async function executionCharge(
 
 	return {
 		...uncertainCharge(
-			Math.max(sum, charged?.tokens ?? 0, highTotal ?? 0),
+			Math.max(sum, charged?.tokens ?? 0, highTotal ?? 0, total ?? 0),
 			charged?.uncertain ?? 0,
 			Math.max(sum, charged?.tokens ?? 0),
 			charged?.uncertainTokens ?? 0,

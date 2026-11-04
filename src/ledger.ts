@@ -200,6 +200,11 @@ function measured<U extends "tokens" | "milliseconds">(unit: U) {
 	return tagged({
 		exact: { unit: literal(unit), total: count },
 		lower_bound: { unit: literal(unit), total: count, reason: gap },
+		uncertain: {
+			unit: literal(unit),
+			total: count,
+			reason: literal("request_unsettled"),
+		},
 	});
 }
 
@@ -233,6 +238,24 @@ const policy = record({
 		digest,
 	}),
 });
+
+const runStartCodec = record({
+	v: literal(1),
+	runId: digest,
+	startedAt: instant,
+	policy,
+});
+
+export type RunStart = Out<typeof runStartCodec>;
+
+export function parseRunStart(value: JsonValue | undefined): RunStart | null {
+	try {
+		return runStartCodec(value);
+	} catch (error) {
+		if (error instanceof LedgerRowError) return null;
+		throw error;
+	}
+}
 
 const provenance = tagged({
 	production: { policy },
@@ -342,7 +365,12 @@ const stageSummary = record({
 
 const modelSummary = record({
 	requested: modelId,
-	observed: fact(modelId),
+	observed: fact(
+		pattern(
+			/^([a-z0-9][a-z0-9-]*\/)?[A-Za-z0-9][A-Za-z0-9._:-]*$/,
+			"invalid_observed_model",
+		),
+	),
 	providerVersion: record({
 		kind: literal("unavailable"),
 		reason: literal("provider_not_reported"),
@@ -357,6 +385,17 @@ const modelSummary = record({
 	),
 	executions: count,
 });
+
+export function ledgerModelOf(
+	value: JsonValue | undefined,
+): Out<typeof modelSummary> | null {
+	try {
+		return modelSummary(value);
+	} catch (error) {
+		if (error instanceof LedgerRowError) return null;
+		throw error;
+	}
+}
 
 const rowFields = {
 	v: literal(1),
@@ -418,7 +457,9 @@ function gapsOf(value: JsonValue, into: Set<GapCode>): Set<GapCode> {
 	const reason = GAP_CODES.find((code) => code === fieldOf(object, "reason"));
 
 	if (
-		(kind === "unavailable" || kind === "lower_bound") &&
+		(kind === "unavailable" ||
+			kind === "lower_bound" ||
+			kind === "uncertain") &&
 		reason !== undefined
 	)
 		into.add(reason);
@@ -985,11 +1026,29 @@ export type TerminalFacts = {
 	readonly observedAt: string;
 	readonly candidate: CandidateState | null;
 	readonly attemptEnds?: readonly AttemptEnd[] | null;
+	readonly evidence?: TerminalEvidence;
+	readonly start?: RunStart | null;
+	readonly previousRunId?: Digest | null;
 	readonly verification?: {
 		readonly digest: Digest;
 		readonly trustedRunTokenCap: number;
 		readonly effectiveRunTokenCap: number;
 	} | null;
+};
+
+export type TerminalEvidence = Partial<
+	Pick<
+		LedgerRow,
+		| "stages"
+		| "models"
+		| "usage"
+		| "repairRounds"
+		| "redactedReceiptDigests"
+		| "artifacts"
+	>
+> & {
+	readonly mergedAt?: string;
+	readonly generationGates?: Readonly<Record<string, Digest>>;
 };
 
 function outcomeOf(facts: TerminalFacts): JsonValue {
@@ -1034,7 +1093,10 @@ function outcomeOf(facts: TerminalFacts): JsonValue {
 				stage: "land",
 				headSha: terminal.head,
 				mergeSha: terminal.mergeSha,
-				mergedAt: unavailable("public_metadata_unavailable"),
+				mergedAt:
+					facts.evidence?.mergedAt === undefined
+						? unavailable("public_metadata_unavailable")
+						: known(facts.evidence.mergedAt),
 				assurance:
 					terminal.assurance.kind === "factory_verified"
 						? {
@@ -1053,6 +1115,9 @@ function outcomeOf(facts: TerminalFacts): JsonValue {
 
 function artifactsOf(facts: TerminalFacts): JsonValue {
 	const state = facts.candidate;
+
+	if (state === null && facts.evidence?.artifacts !== undefined)
+		return facts.evidence.artifacts;
 
 	if (state === null)
 		return facts.stage === "specify"
@@ -1080,6 +1145,11 @@ function artifactsOf(facts: TerminalFacts): JsonValue {
 			const publication = validation?.publication ?? null;
 			const ci = validation?.ciRunId ?? null;
 
+			const gatesDigest =
+				verdict === null
+					? undefined
+					: facts.evidence?.generationGates?.[verdict.gateSha];
+
 			return {
 				round: intent.round,
 				generation: intent.generation,
@@ -1098,7 +1168,10 @@ function artifactsOf(facts: TerminalFacts): JsonValue {
 					verdict === null
 						? unavailable("receipt_missing")
 						: known(verdict.gateSha),
-				gatesDigest: unavailable("not_instrumented"),
+				gatesDigest:
+					gatesDigest === undefined
+						? unavailable("receipt_missing")
+						: known(gatesDigest),
 				ciRunId: ci === null ? unavailable("receipt_missing") : known(ci),
 			};
 		}),
@@ -1111,7 +1184,7 @@ function artifactsOf(facts: TerminalFacts): JsonValue {
  * unavailable, never zero.
  */
 function provenanceOf(facts: TerminalFacts): JsonValue {
-	const policy = {
+	const policy = facts.start?.policy ?? {
 		workflowSha: facts.workflowSha,
 		workflowDigest: facts.workflowDigest,
 		gates: unavailable("not_instrumented"),
@@ -1123,6 +1196,15 @@ function provenanceOf(facts: TerminalFacts): JsonValue {
 	};
 
 	const verification = facts.verification ?? null;
+
+	if (facts.start == null && verification === null)
+		return {
+			kind: "legacy_import",
+			workflowSha: facts.workflowSha,
+			workflowDigest: facts.workflowDigest,
+			gates: unavailable("receipt_missing"),
+			autonomy: unavailable("receipt_missing"),
+		};
 
 	return verification === null
 		? { kind: "production", policy }
@@ -1160,10 +1242,16 @@ export function terminalSnapshot(facts: TerminalFacts): JsonValue {
 		issue: facts.issue,
 		eventId: facts.eventId,
 		eventAt: facts.eventAt,
-		previousRunId: unavailable("not_instrumented"),
+		previousRunId:
+			facts.previousRunId === undefined
+				? unavailable("receipt_missing")
+				: known(facts.previousRunId),
 		snapshotDigest: facts.snapshotDigest,
 		originalBase: state?.pin.originalBase ?? facts.workflowSha,
-		startedAt: unavailable("not_instrumented"),
+		startedAt:
+			facts.start == null
+				? unavailable("receipt_missing")
+				: known(facts.start.startedAt),
 		terminalObservedAt: facts.observedAt,
 		provenance: provenanceOf(facts),
 		outcome: outcomeOf(facts),
@@ -1172,10 +1260,11 @@ export function terminalSnapshot(facts: TerminalFacts): JsonValue {
 				? null
 				: { number: published.number, url: `${base}/pull/${published.number}` },
 		artifacts: artifactsOf(facts),
-		repairRounds: unavailable("not_instrumented"),
-		stages: unavailable("not_instrumented"),
-		models: unavailable("not_instrumented"),
-		usage: {
+		repairRounds:
+			facts.evidence?.repairRounds ?? unavailable("not_instrumented"),
+		stages: facts.evidence?.stages ?? unavailable("receipt_missing"),
+		models: facts.evidence?.models ?? unavailable("receipt_missing"),
+		usage: facts.evidence?.usage ?? {
 			tokens: {
 				kind: "lower_bound",
 				unit: "tokens",
@@ -1188,7 +1277,7 @@ export function terminalSnapshot(facts: TerminalFacts): JsonValue {
 			money: unavailable("provider_not_reported"),
 		},
 		interruptedAttempts:
-			facts.attemptEnds == null
+			facts.attemptEnds == null || facts.start == null
 				? unavailable("not_instrumented")
 				: known(
 						facts.attemptEnds.filter(
@@ -1196,7 +1285,7 @@ export function terminalSnapshot(facts: TerminalFacts): JsonValue {
 						).length,
 					),
 		contextPressure: unavailable("not_instrumented"),
-		redactedReceiptDigests: [],
+		redactedReceiptDigests: facts.evidence?.redactedReceiptDigests ?? [],
 		evidence: { issueUrl: `${base}/issues/${facts.issue}`, ciUrls },
 	};
 }
@@ -1248,6 +1337,8 @@ export function parseAttemptEnd(
 }
 
 export interface RunAccounting {
+	start(runId: Digest): Promise<RunStart | null | undefined>;
+	begin(record: RunStart): Promise<boolean>;
 	readAttempt(
 		runId: Digest,
 		stage: Stage,

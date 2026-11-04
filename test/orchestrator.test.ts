@@ -1,6 +1,6 @@
 import { parseStoredContract } from "../src/artifacts.ts";
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import {
 	chmodSync,
 	cpSync,
@@ -3325,6 +3325,114 @@ describe("Orchestrator runs of another state directory", () => {
 			"3:released",
 			"4:claimed",
 		]);
+	});
+});
+
+describe("admission accounting policy", () => {
+	it("pins policy bytes from the original SHA once, caches its gates and retains start time across restart", async () => {
+		const dir = stateDir();
+		const archive = stateDir();
+		const tree = join(archive, "repo", ".github", "factory");
+		mkdirSync(join(tree, "gates"), { recursive: true });
+		writeFileSync(join(tree, "WORKFLOW.md"), TRUSTED_WORKFLOW);
+		writeFileSync(join(tree, "gates", "ci.sh"), "echo trusted\n");
+		const bytes = execFileSync("tar", ["-czf", "-", "-C", archive, "repo"]);
+		let fetched = 0;
+
+		const files = fileRunFiles(dir, {
+			fetch: async (requestedRepo, requestedSha) => {
+				assert.equal(requestedRepo, repo);
+				assert.equal(requestedSha, MAIN_SHA);
+				fetched++;
+
+				return bytes;
+			},
+		});
+
+		const input = {
+			runId: runOf(14),
+			repo,
+			workflowSha: sha(MAIN_SHA),
+			workflowDigest: digestOf(TRUSTED_WORKFLOW),
+			startedAt: new Date(START).toISOString(),
+		};
+
+		assert.equal(await files.prepareRun?.(input), true);
+		const pinned = await files.accounting?.start(input.runId);
+		assert.ok(pinned);
+		assert.equal(pinned.policy.gates.kind, "known");
+		assert.equal(
+			statSync(join(dir, "accounting", input.runId, "policy.json")).mode &
+				0o777,
+			0o600,
+		);
+		assert.equal(
+			await files.prepareRun?.({ ...input, runId: runOf(15) }),
+			true,
+		);
+		assert.equal(fetched, 1);
+
+		const restarted = fileRunFiles(dir, {
+			fetch: async () => {
+				throw new Error("must not fetch");
+			},
+		});
+
+		assert.equal(
+			await restarted.prepareRun?.({
+				...input,
+				startedAt: new Date(START + 1000).toISOString(),
+			}),
+			true,
+		);
+		assert.deepEqual(await restarted.accounting?.start(input.runId), pinned);
+		assert.equal(
+			await restarted.prepareRun?.({
+				...input,
+				workflowDigest: digestOf("different"),
+			}),
+			false,
+		);
+		assert.equal(
+			await restarted.accounting?.begin({
+				...pinned,
+				startedAt: new Date(START + 1000).toISOString(),
+			}),
+			false,
+		);
+		assert.equal(
+			await files.prepareRun?.({
+				...input,
+				runId: runOf(16),
+				workflowDigest: digestOf("different"),
+			}),
+			false,
+		);
+	});
+
+	it("defers the first claim until its original workflow and gate policy are durably pinned", async () => {
+		const f = world();
+		f.github.add(labeled(14));
+		let ready = false;
+		const calls: string[] = [];
+		f.files.prepareRun = async (input) => {
+			assert.equal(input.workflowSha, MAIN_SHA);
+			assert.equal(input.runId, runOf(14));
+			assert.equal(f.files.claims.size, 0);
+			calls.push(input.startedAt);
+
+			return ready;
+		};
+
+		const controller = f.start();
+		await controller.tick();
+		assert.equal(f.files.claims.size, 0);
+		assert.equal(f.executor.launches.length, 0);
+		assert.deepEqual(statuses(f.github, 14), []);
+		ready = true;
+		await controller.tick();
+		assert.equal(f.files.claims.size, 1);
+		assert.equal(calls.length, 2);
 	});
 });
 
@@ -9073,6 +9181,115 @@ describe("controller-only validate", () => {
 		);
 	});
 
+	it("projects the longest validated artifact prefix before a candidate exists", async () => {
+		const f = await waitingRun();
+		const dir = stateDir();
+		const native = fileRunFiles(dir);
+		const contract = await f.files.readContract(runOf(14));
+		const stored = f.files.contracts.get(runOf(14));
+		assert.ok(contract.kind === "found" && stored);
+		assert.equal(
+			await native.writeContract({
+				contract: contract.contract,
+				bytes: stored.bytes,
+				digest: contract.digest,
+			}),
+			true,
+		);
+		const prefix = await native.terminalEvidence?.(runOf(14), 29, null);
+		assert.deepEqual(prefix?.artifacts, {
+			kind: "contract",
+			contractDigest: contract.digest,
+		});
+		cpSync(join(f.files.artifactRoot, "acceptance"), join(dir, "acceptance"), {
+			recursive: true,
+		});
+
+		const suite = await native.artifacts.read(
+			runOf(14),
+			contract.contract,
+			contract.digest,
+		);
+
+		assert.ok(suite.kind === "found");
+		assert.deepEqual(
+			(await native.terminalEvidence?.(runOf(14), 29, null))?.artifacts,
+			{
+				kind: "acceptance",
+				contractDigest: contract.digest,
+				acceptanceDigest: suite.receipt.acceptanceDigest,
+			},
+		);
+	});
+
+	it("retains validated PR merge time at landing and refuses mismatched merge metadata on reads", async () => {
+		const f = await reviewingRun();
+		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+		await once(f.controller);
+		await f.controller.tick();
+		await f.controller.tick();
+		const dir = stateDir();
+		const native = fileRunFiles(dir);
+		Object.assign(f.files, {
+			ledger: native.ledger,
+			terminalEvidence: native.terminalEvidence,
+		});
+		const mergedAt = "2026-10-29T02:01:00Z";
+
+		const port = controllerCandidatePort({
+			stateDir: dir,
+			exec: async (command, args) => {
+				assert.equal(command, "gh");
+				assert.ok(args.includes(`repos/${repo}/pulls/99`));
+
+				return {
+					code: 0,
+					stderr: "",
+					stdout: JSON.stringify({
+						number: 99,
+						head: {
+							sha: "c".repeat(40),
+							ref: `factory/pr/14-${runOf(14).slice(0, 12)}`,
+							repo: { full_name: repo },
+						},
+						base: { ref: "main", repo: { full_name: repo } },
+						user: { login: BOT_LOGIN, type: "Bot" },
+						body: `<!-- factory:pr ${runOf(14)} -->`,
+						state: "closed",
+						draft: false,
+						merged: true,
+						merge_commit_sha: "e".repeat(40),
+						merged_by: null,
+						merged_at: mergedAt,
+					}),
+				};
+			},
+		});
+
+		assert.ok(f.executor.candidate);
+		f.executor.candidate.observe = port.observe;
+		await f.controller.tick();
+		await f.controller.tick();
+		const row = (await native.ledger?.scan())?.[0]?.row?.row;
+		assert.ok(row?.outcome.kind === "landed");
+		assert.deepEqual(row.outcome.mergedAt, { kind: "known", value: mergedAt });
+		const terminal = f.files.claims.get(runOf(14))?.handoff;
+		assert.ok(terminal);
+		const path = join(dir, "accounting", runOf(14), "merge.json");
+		const saved = JSON.parse(readFileSync(path, "utf8"));
+		assert.equal(statSync(path).mode & 0o777, 0o600);
+		writeFileSync(path, JSON.stringify({ ...saved, repo: "other/repo" }));
+		assert.equal(
+			(await native.terminalEvidence?.(runOf(14), 40, terminal))?.mergedAt,
+			undefined,
+		);
+		writeFileSync(path, JSON.stringify({ ...saved, mergeSha: "f".repeat(40) }));
+		assert.equal(
+			(await native.terminalEvidence?.(runOf(14), 40, terminal))?.mergedAt,
+			undefined,
+		);
+	});
+
 	it("persists a completed candidate review disposition before its handoff", async () => {
 		const f = await reviewingRun();
 		f.files.accounting = fileRunFiles(f.files.artifactRoot).accounting;
@@ -11640,6 +11857,28 @@ describe("specify: linked runs and answers", () => {
 		);
 	});
 
+	it("puts the original run ID on a linked terminal row without adding its tokens again", async () => {
+		const outbox = fileLedgerOutbox(stateDir());
+
+		const ctx = await askedThenRelabeled(
+			(github, issue) => {
+				github.comment(issue, "Use package.json.", user("giuseppecrj"));
+			},
+			undefined,
+			({ files, executor }) => {
+				Object.assign(files, { ledger: outbox });
+				executor.outputs = [QUESTIONS_TEXT];
+			},
+		);
+
+		const row = (await outbox.scan())?.[0]?.row?.row;
+		assert.ok(row);
+		assert.equal(row.runId, nextRun);
+		assert.deepEqual(row.previousRunId, { kind: "known", value: runOf(14) });
+		assert.equal(row.usage.tokens.total, 900);
+		assert.equal(ctx.executor.launches.length, 2);
+	});
+
 	it("links a relabel after needs_info to the earlier run and feeds it only authorized answers", async () => {
 		const { github, files, executor, logs, writes, report } =
 			await askedThenRelabeled((github, issue) => {
@@ -12274,12 +12513,131 @@ describe("ledger outbox enrollment", () => {
 		return ctx;
 	}
 
+	async function instrument(files: RunFiles) {
+		assert.equal(
+			await files.accounting?.begin({
+				v: 1,
+				runId: runOf(14),
+				startedAt: new Date(START).toISOString(),
+				policy: {
+					workflowSha: sha(MAIN_SHA),
+					workflowDigest: digestOf(TRUSTED_WORKFLOW),
+					gates: {
+						kind: "known",
+						value: { sourceSha: sha(MAIN_SHA), digest: digestOf("gates") },
+					},
+					autonomy: {
+						approveMerge: "always",
+						land: "propose",
+						digest: digestOf(
+							JSON.stringify({ approveMerge: "always", land: "propose" }),
+						),
+					},
+				},
+			}),
+			true,
+		);
+	}
+
+	it("projects retained receipt facts, model identities and uncertain charges without counting aggregate children twice", async () => {
+		const dir = stateDir();
+		const outbox = fileLedgerOutbox(dir);
+		const ctx = needsInfoWorld(outbox);
+		const native = fileRunFiles(dir);
+		ctx.files.accounting = native.accounting;
+		ctx.files.terminalEvidence = native.terminalEvidence;
+		await instrument(native);
+		const controller = ctx.start();
+		await controller.tick();
+		const input = ctx.executor.launches[0];
+		assert.ok(input);
+		const receipt = resultOf(input, { kind: "passed" }, 300).receipt;
+		const stage = join(dir, "stages", runOf(14), "specify-1");
+		mkdirSync(join(stage, "draft"), { recursive: true });
+		writeFileSync(join(stage, "receipt.json"), JSON.stringify(receipt));
+		writeFileSync(join(stage, "specify.json"), "{}");
+		writeFileSync(
+			join(stage, "draft", "egress.requests.jsonl"),
+			`${JSON.stringify({ kind: "result", req: 1, inputTokens: 300, outputTokens: 0 })}\n${JSON.stringify({ kind: "dispatch", req: 2, inputTokenEstimate: 20, maxOutputTokens: 100 })}\n`,
+		);
+		writeFileSync(
+			join(stage, "draft", "receipt.json"),
+			JSON.stringify({
+				...receipt,
+				models: { ...receipt.models, observed: "gpt-6.1-sol" },
+				fallback: {
+					requested: "xai/grok-4.6",
+					observed: "grok-4.6",
+					outcome: { kind: "passed" },
+					settlement: { event: "agent_settled", aborted: false },
+					refusal: null,
+				},
+			}),
+		);
+		await once(controller);
+		const row = (await outbox.scan())?.[0]?.row?.row;
+		assert.ok(row);
+		assert.equal(row.stages.kind, "known");
+		assert.equal(row.models.kind, "known");
+		assert.deepEqual(row.usage.parentTokens, { kind: "known", value: 300 });
+		assert.deepEqual(row.usage.childTokens, { kind: "known", value: 0 });
+		assert.deepEqual(row.usage.unattributedTokens, {
+			kind: "known",
+			value: 120,
+		});
+		assert.deepEqual(row.previousRunId, { kind: "known", value: null });
+		assert.equal(row.usage.tokens.total, 420);
+		assert.equal(row.usage.tokens.kind, "uncertain");
+		assert.ok(row.gaps.includes("request_unsettled"));
+		assert.equal(
+			row.stages.kind === "known" && row.stages.value[0]?.tokens.total,
+			420,
+		);
+		assert.equal(
+			row.stages.kind === "known" && row.stages.value[0]?.attempts.kind,
+			"known",
+		);
+		assert.equal(
+			row.models.kind === "known" && row.models.value[0]?.observed.kind,
+			"known",
+		);
+		assert.equal(row.redactedReceiptDigests.length, 2);
+		assert.equal(row.contextPressure.kind, "unavailable");
+		assert.deepEqual(row.startedAt, {
+			kind: "known",
+			value: new Date(START).toISOString(),
+		});
+		assert.equal(row.provenance.kind, "production");
+		assert.equal(row.models.kind === "known" && row.models.value.length, 2);
+		assert.equal(
+			row.models.kind === "known" && row.models.value[1]?.requested,
+			"xai/grok-4.6",
+		);
+
+		const accept = join(dir, "stages", runOf(14), "accept-1");
+		mkdirSync(accept);
+		writeFileSync(
+			join(accept, "receipt.json"),
+			JSON.stringify({
+				...receipt,
+				stage: "accept",
+				usage: { ...receipt.usage, total: 20, parent: 20, gateway: 20 },
+			}),
+		);
+		const later = await native.terminalEvidence?.(runOf(14), 300, null);
+		assert.deepEqual(
+			later?.stages?.kind === "known" && later.stages.value.map((s) => s.stage),
+			["specify", "accept"],
+		);
+	});
+
 	it("records interrupted attempts on the terminal row without charging the interruption twice", async () => {
 		const dir = stateDir();
 		const outbox = fileLedgerOutbox(dir);
 		const ctx = world(null, outbox);
 
 		ctx.files.accounting = fileRunFiles(dir).accounting;
+		await instrument(ctx.files);
 		ctx.github.add(labeled(14));
 		ctx.executor.behaviors = [{ kind: "hang" }];
 		await ctx.start().tick();

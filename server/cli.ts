@@ -51,6 +51,7 @@ import {
 	readLedgerBacklog,
 	readDurableAccounting,
 	type Sleep,
+	type TarballFetch,
 	serveLoop,
 	writeStatus,
 } from "./controller.ts";
@@ -76,6 +77,7 @@ export type ControllerRuntime = {
 	procs: ProcessTable;
 	sleep: Sleep;
 	signal: AbortSignal;
+	policySource?: { readonly fetch?: TarballFetch };
 	executor: (context: ExecutorContext) => StageExecutor;
 };
 
@@ -416,6 +418,7 @@ async function isPrivateDirectory(path: string): Promise<boolean> {
 function realRuntime(): ControllerRuntime {
 	return {
 		clock: { now: () => Date.now() },
+		policySource: {},
 		procs: procTable(),
 		sleep: async (ms, signal) => {
 			await delay(ms, undefined, { signal }).catch(() => undefined);
@@ -527,7 +530,7 @@ async function runController(
 			env: io.env,
 			repo: parsed.repo,
 			store: fileAdmissionStore(parsed.stateDir),
-			files: fileRunFiles(parsed.stateDir),
+			files: fileRunFiles(parsed.stateDir, runtime.policySource),
 			executor: runtime.executor({
 				stateDir: parsed.stateDir,
 				exec: io.exec,

@@ -407,6 +407,19 @@ export interface RunFiles {
 	/** The private ledger outbox. A terminal snapshot is kept before its marker is posted. */
 	readonly ledger?: LedgerOutbox;
 	accounting?: RunAccounting;
+	/** Native admission policy must be durable before the first claim or dispatch. */
+	prepareRun?(input: {
+		runId: Digest;
+		repo: RepoSlug;
+		workflowSha: GitSha;
+		workflowDigest: Digest;
+		startedAt: string;
+	}): Promise<boolean>;
+	terminalEvidence?(
+		runId: Digest,
+		floor: number,
+		candidate: CandidateState | null,
+	): Promise<import("./ledger.ts").TerminalEvidence>;
 	/** Writes the contract and its receipt once. The same bytes again succeed. */
 	writeContract(input: {
 		readonly contract: Contract;
@@ -2052,6 +2065,16 @@ export class Orchestrator {
 				};
 	}
 
+	async #previousRunId(runId: Digest): Promise<Digest | null | undefined> {
+		const link = await this.#input.files.readLink(runId);
+
+		return link.kind === "found"
+			? link.link.prevRunId
+			: link.kind === "unlinked"
+				? null
+				: undefined;
+	}
+
 	async #prepareTerminal(run: ActiveRun): Promise<boolean> {
 		const ledger = this.#input.files.ledger;
 		const status = desiredStatus(run.phase);
@@ -2076,6 +2099,13 @@ export class Orchestrator {
 				observedAt: new Date(this.#input.clock.now()).toISOString(),
 				candidate: run.handoff ?? null,
 				attemptEnds: await this.#input.files.accounting?.attempts(run.runId),
+				start: await this.#input.files.accounting?.start(run.runId),
+				previousRunId: await this.#previousRunId(run.runId),
+				evidence: await this.#input.files.terminalEvidence?.(
+					run.runId,
+					run.usage,
+					run.handoff ?? null,
+				),
 				verification: this.#verificationFacts(),
 			});
 		} catch (error) {
@@ -3314,6 +3344,21 @@ export class Orchestrator {
 			!(await this.#input.files.writeLink(runId, null))
 		) {
 			this.#input.log("link_unwritable", { issue, runId });
+
+			return null;
+		}
+
+		if (
+			this.#input.files.prepareRun !== undefined &&
+			!(await this.#input.files.prepareRun({
+				runId,
+				repo,
+				workflowSha: admitted.baseSha,
+				workflowDigest: admitted.workflowDigest,
+				startedAt: new Date(this.#input.clock.now()).toISOString(),
+			}))
+		) {
+			this.#input.log("admission_policy_unavailable", { issue, runId });
 
 			return null;
 		}

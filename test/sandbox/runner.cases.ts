@@ -5183,7 +5183,7 @@ describe("durable request charges after a restart", () => {
 			assert.equal(await spent("accept", 1), 25);
 			assert.deepEqual(
 				await sandboxModule.executionCharge(join(runs, "accept-1")),
-				{ total: 25, uncertain: 0 },
+				{ total: 25, uncertain: 1 },
 			);
 
 			const specify = join(runs, "specify-1");
@@ -5215,6 +5215,10 @@ describe("durable request charges after a restart", () => {
 				JSON.stringify({ usage: { total: 40 } }),
 			);
 			assert.equal(await spent("specify", 1), 40);
+			assert.deepEqual(await sandboxModule.executionCharge(specify), {
+				total: 40,
+				uncertain: 1,
+			});
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
