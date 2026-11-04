@@ -23,6 +23,8 @@ import {
 	REVIEW_TOOLS,
 	ReviewEvidenceUnavailable,
 	reviewSeats,
+	type FamilyInput,
+	withFamily,
 	type ReviewInput,
 	type ReviewReceipt,
 } from "./review.ts";
@@ -195,6 +197,11 @@ export type ReviewPreparation = {
 	readonly input: ReviewInput;
 	readonly verdict: Verdict;
 	readonly builder: string;
+	/** The builder's and the accept author's stored family evidence. Absent, both are missing. */
+	readonly families?: {
+		readonly builder: FamilyInput;
+		readonly accept: FamilyInput;
+	};
 	readonly workspace: string;
 };
 
@@ -208,6 +215,8 @@ export type StageOutput =
 			readonly text: string;
 			readonly model: string;
 			readonly observed: string | null;
+			/** The answering session's stored family, for accept. */
+			readonly family?: FamilyInput;
 	  };
 
 type WorkflowPin = Pick<ActiveRun, "workflowSha" | "workflowDigest">;
@@ -326,6 +335,7 @@ type StageEnd = Pick<StageResult, "kind" | "usage"> & {
 	readonly build?: PatchRead;
 	readonly model?: string;
 	readonly observed?: string | null;
+	readonly family?: FamilyInput;
 };
 
 function isModelStage(stage: Stage): stage is ModelStage {
@@ -486,6 +496,7 @@ export type Effects =
 			readonly suite: AcceptanceSuite;
 			readonly model: string;
 			readonly observed: string | null;
+			readonly family?: FamilyInput;
 	  }
 	| {
 			readonly kind: "contract";
@@ -1911,7 +1922,13 @@ export class Orchestrator {
 			const reporting =
 				run.stage === "specify"
 					? this.#specified(run, result.output)
-					: this.#accepted(run, result.output, result.model, result.observed);
+					: this.#accepted(
+							run,
+							result.output,
+							result.model,
+							result.observed,
+							result.family,
+						);
 
 			if (reporting === null) {
 				this.#endStage(run, "stage_failed", result.usage, limits);
@@ -3882,14 +3899,17 @@ export class Orchestrator {
 					run.phase = {
 						kind: "reporting",
 						status: "stage_passed",
-						effects: {
-							kind: "acceptance",
-							contract: bound.contract,
-							contractDigest: bound.digest,
-							suite: kept.suite,
-							model: kept.receipt.model,
-							observed: kept.receipt.observed,
-						},
+						effects: withFamily(
+							{
+								kind: "acceptance",
+								contract: bound.contract,
+								contractDigest: bound.digest,
+								suite: kept.suite,
+								model: kept.receipt.model,
+								observed: kept.receipt.observed,
+							},
+							kept.receipt.family,
+						),
 					};
 				await this.#sync(run);
 
@@ -3983,27 +4003,32 @@ export class Orchestrator {
 									.catch(() => null)
 							: null;
 
-					phase.result = {
-						kind: result.kind,
-						wallMs: result.receipt.wallMs,
-						model:
-							result.receipt.fallback?.requested ??
-							result.receipt.models.requested,
-						observed:
-							result.receipt.fallback?.observed ??
-							result.receipt.models.observed,
-						usage: prior + result.usage,
-						build:
-							output instanceof Object && output.kind === "build"
-								? output.result
-								: undefined,
-						output:
-							output instanceof Object
-								? output.kind === "output"
-									? output.text
-									: null
-								: output,
-					};
+					phase.result = withFamily(
+						{
+							kind: result.kind,
+							wallMs: result.receipt.wallMs,
+							model:
+								result.receipt.fallback?.requested ??
+								result.receipt.models.requested,
+							observed:
+								result.receipt.fallback?.observed ??
+								result.receipt.models.observed,
+							usage: prior + result.usage,
+							build:
+								output instanceof Object && output.kind === "build"
+									? output.result
+									: undefined,
+							output:
+								output instanceof Object
+									? output.kind === "output"
+										? output.text
+										: null
+									: output,
+						},
+						output instanceof Object && output.kind === "output"
+							? output.family
+							: undefined,
+					);
 				},
 				() => {
 					phase.result = { kind: "failed", usage: phase.usage, output: null };
@@ -4643,6 +4668,10 @@ export class Orchestrator {
 			settings: {
 				model: config.stages[execution.stage].model,
 				fallback: config.stages[execution.stage].fallbackModel,
+				codeReviewModel:
+					execution.stage === "review"
+						? config.stages.review.codeReviewModel
+						: null,
 				budget: config.stages[execution.stage].budget,
 				maxTokens: candidateAllowance(state, execution),
 			},
@@ -5447,6 +5476,7 @@ export class Orchestrator {
 		output: string | null,
 		model?: string,
 		observed?: string | null,
+		family?: FamilyInput,
 	): Extract<RunPhase, { kind: "reporting" }> | null {
 		const bound = run.inputs?.contract;
 
@@ -5472,6 +5502,7 @@ export class Orchestrator {
 				suite: parsed.suite,
 				model: model ?? this.#config?.stages.accept.model ?? "openai/unknown",
 				observed: observed ?? null,
+				family,
 			},
 		};
 	}
@@ -5584,14 +5615,17 @@ export class Orchestrator {
 				run.phase = {
 					kind: "reporting",
 					status: "stage_passed",
-					effects: {
-						kind: "acceptance",
-						contract: bound.contract,
-						contractDigest: bound.digest,
-						suite: kept.suite,
-						model: kept.receipt.model,
-						observed: kept.receipt.observed,
-					},
+					effects: withFamily(
+						{
+							kind: "acceptance",
+							contract: bound.contract,
+							contractDigest: bound.digest,
+							suite: kept.suite,
+							model: kept.receipt.model,
+							observed: kept.receipt.observed,
+						},
+						kept.receipt.family,
+					),
 				};
 
 				return true;
@@ -5640,6 +5674,7 @@ export class Orchestrator {
 						text,
 						output instanceof Object ? output.model : undefined,
 						output instanceof Object ? output.observed : null,
+						output instanceof Object ? output.family : undefined,
 					);
 
 		if (reporting === null) return false;

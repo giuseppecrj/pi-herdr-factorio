@@ -1,4 +1,5 @@
 import type { Digest, Stage } from "../../src/run.ts";
+import type { FamilyInput } from "../../src/review.ts";
 import type { ModelId, StageBudget } from "../../src/workflow.ts";
 import type { RouteSummary } from "./control.ts";
 import { countOf, fieldOf, objectOf, type JsonValue } from "./json.ts";
@@ -84,6 +85,12 @@ export type StageRunSettings = {
 	readonly fallback: ModelId | null;
 	readonly budget: StageBudget;
 	readonly maxTokens: number | null;
+	/**
+	 * `stages.review.seats.code-review.model`. Only the review launch sets
+	 * it, and only the code-review seat runs it; absent or `null`, that seat
+	 * runs `model`.
+	 */
+	readonly codeReviewModel?: ModelId | null;
 };
 
 export type FailedExit = "error" | "malformed" | "crashed" | "aborted";
@@ -182,6 +189,12 @@ export type StageReceipt = {
 	readonly assetsDigest: string;
 	readonly versions: PinnedVersions;
 	readonly pricing: "unavailable";
+	/**
+	 * The answering session's family, from this attempt's request journal when
+	 * the host wrote the receipt. Absent on receipts written before F10c and
+	 * by hosts that keep no journal.
+	 */
+	readonly family?: FamilyInput;
 };
 
 export type StageResult =

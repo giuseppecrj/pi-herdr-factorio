@@ -7,7 +7,12 @@ import {
 	parseSeat,
 	reviewCandidate,
 	reviewFeedback,
-	reviewIdentityLabel,
+	FAMILY_MISSING,
+	type FamilyInput,
+	familyFromJournal,
+	familyLabel,
+	parseFamily,
+	withFamily,
 	reviewSeats,
 	reviewDir,
 	seatPrompt,
@@ -233,6 +238,12 @@ export interface StageHost {
 	writeReceipt(receipt: StageReceipt): Promise<boolean>;
 	writeOutput(text: string): Promise<boolean>;
 	stderrLog(session: number): Promise<StderrRecord | null>;
+	/**
+	 * The attempt's synced request journal, `egress.requests.jsonl`, or
+	 * `null` when it is missing or too large. A host without it records no
+	 * family and cannot pass an Anthropic stage.
+	 */
+	readJournal?(): Promise<string | null>;
 }
 
 /** The model id as the request body names it, without its provider prefix. */
@@ -727,14 +738,61 @@ async function guardedSession(
 	}
 }
 
+/** A fallback runs only after a refused or unavailable primary, so when one ran it answered. */
 function finalOutcome(
 	primary: SessionReport,
 	fallback: FallbackRecord | null,
 ): SessionOutcome {
-	if (primary.outcome.kind !== "refused" || fallback === null)
-		return primary.outcome;
+	return fallback === null ? primary.outcome : fallback.outcome;
+}
 
-	return fallback.outcome;
+const UNUSABLE: SessionOutcome = { kind: "failed", exit: "error" };
+
+/**
+ * True when the journal shows a `model-anthropic` reply the host cannot
+ * meter: a settled result with null tokens that the provider did not reject
+ * at the headers, or, once the gateway has stopped (`settled`), a dispatch
+ * with no result. Pi may already have read the streamed bytes, so the
+ * attempt fails rather than pass on unmetered Anthropic usage.
+ */
+function anthropicUnmetered(journal: string, settled: boolean): boolean {
+	const dispatched = new Set<number>();
+	const results = new Set<number>();
+
+	for (const line of journal.split("\n")) {
+		const record = objectOf(parseJson(line));
+		const req = countOf(fieldOf(record, "req"));
+
+		if (
+			record === null ||
+			req === null ||
+			fieldOf(record, "route") !== "model-anthropic"
+		)
+			continue;
+
+		if (fieldOf(record, "kind") === "dispatch") {
+			dispatched.add(req);
+			continue;
+		}
+
+		if (fieldOf(record, "kind") !== "result") continue;
+
+		results.add(req);
+
+		if (
+			fieldOf(record, "reason") !== "provider_rejected" &&
+			(countOf(fieldOf(record, "inputTokens")) === null ||
+				countOf(fieldOf(record, "outputTokens")) === null)
+		)
+			return true;
+	}
+
+	return settled && [...dispatched].some((req) => !results.has(req));
+}
+
+/** The route a model id is served on in a stage table. */
+function modelRouteOf(model: ModelId): "model-anthropic" | "model-openai" {
+	return model.startsWith("anthropic/") ? "model-anthropic" : "model-openai";
 }
 
 async function keepOutput(
@@ -752,7 +810,7 @@ async function keepOutput(
 }
 
 function routeId(
-	text: "model-openai" | "model-xai",
+	text: "model-openai" | "model-xai" | "model-anthropic",
 	table: RouteTable,
 ): RouteId | null {
 	return table.routes.find((route) => route.id === text)?.id ?? null;
@@ -760,8 +818,20 @@ function routeId(
 
 /**
  * Runs one stage attempt in the sandbox and returns its result with a
- * host-side receipt. On a structured refusal it opens the fallback route,
- * closes the primary, and runs one fresh session on the fallback model.
+ * host-side receipt. In order:
+ *
+ * 1. An Anthropic reply the gateway could not meter fails the attempt, even
+ *    when Pi passed, before any receipt or output is kept, and nothing
+ *    substitutes for it.
+ * 2. On a structured refusal with a fallback configured, it opens the
+ *    fallback route, closes the primary, and runs one fresh session on the
+ *    fallback model.
+ * 3. On an Anthropic primary that failed with its route unavailable (it
+ *    forwarded nothing and was denied at least once) and an `openai/`
+ *    fallback configured, it closes `model-anthropic`, opens `model-openai`
+ *    and runs the fallback the same way.
+ *
+ * The receipt's `family` follows the session that answered.
  */
 export async function runStage(
 	input: StageRunInput,
@@ -808,13 +878,31 @@ export async function runStage(
 
 	const cleanup = new CleanupWindow(host, wallEnd, input.signal);
 
+	const anthropic = input.settings.model.startsWith("anthropic/");
+	const primaryRoute = modelRouteOf(input.settings.model);
+
 	const receipt = async (
 		primary: SessionReport,
 		fallback: FallbackRecord | null,
 		egress: StageReceipt["egress"],
 		text: string | null = null,
+		evidence: { readonly journal: string | null; readonly vetoed: boolean } = {
+			journal: null,
+			vetoed: false,
+		},
 	): Promise<StageResult> => {
-		const outcome = finalOutcome(primary, fallback);
+		const outcome = evidence.vetoed
+			? UNUSABLE
+			: finalOutcome(primary, fallback);
+
+		const family: FamilyInput | undefined =
+			host.readJournal === undefined
+				? undefined
+				: familyFromJournal({
+						journal: evidence.journal,
+						requested: fallback?.requested ?? input.settings.model,
+						superseded: fallback === null ? null : primaryRoute,
+					});
 
 		const output =
 			outcome.kind === "passed" && text !== null
@@ -829,26 +917,29 @@ export async function runStage(
 			}),
 		);
 
-		const record: StageReceipt = {
-			version: 1,
-			runId: input.runId,
-			stage: input.stage,
-			attempt: input.attempt,
-			outcome,
-			settlement: fallback?.settlement ?? primary.settlement,
-			models: { requested: input.settings.model, observed: primary.observed },
-			fallback,
-			refusal: primary.refusal,
-			wallMs: Math.max(0, host.now() - started),
-			turns: ledger.turns,
-			usage: ledger.usage(gatewayRan),
-			egress,
-			stderr: stderr.filter((entry) => entry !== null),
-			output,
-			assetsDigest: host.assetsDigest,
-			versions: host.versions,
-			pricing: "unavailable",
-		};
+		const record: StageReceipt = withFamily(
+			{
+				version: 1,
+				runId: input.runId,
+				stage: input.stage,
+				attempt: input.attempt,
+				outcome,
+				settlement: fallback?.settlement ?? primary.settlement,
+				models: { requested: input.settings.model, observed: primary.observed },
+				fallback,
+				refusal: primary.refusal,
+				wallMs: Math.max(0, host.now() - started),
+				turns: ledger.turns,
+				usage: ledger.usage(gatewayRan),
+				egress,
+				stderr: stderr.filter((entry) => entry !== null),
+				output,
+				assetsDigest: host.assetsDigest,
+				versions: host.versions,
+				pricing: "unavailable",
+			},
+			family,
+		);
 
 		const written = await host.writeReceipt(record).catch(() => false);
 
@@ -877,23 +968,32 @@ export async function runStage(
 		);
 	}
 
-	const table = builtinTable({
-		stage: input.stage,
-		runId: input.runId,
-		attempt: input.attempt,
-		model: bareModel(input.settings.model),
-		fallback:
-			input.settings.fallback === null
-				? null
-				: input.settings.fallback.startsWith("openai/")
-					? input.settings.fallback
-					: bareModel(input.settings.fallback),
-		modelTokens: tokenCap - ledger.total,
-		modelRequests: Math.min(
-			MODEL_REQUEST_CEILING,
-			budget.maxTurns - ledger.turns,
-		),
-	});
+	let table: RouteTable;
+
+	try {
+		table = builtinTable({
+			stage: input.stage,
+			runId: input.runId,
+			attempt: input.attempt,
+			provider: anthropic ? "anthropic" : "openai",
+			model: bareModel(input.settings.model),
+			fallback:
+				input.settings.fallback === null
+					? null
+					: input.settings.fallback.startsWith("openai/")
+						? input.settings.fallback
+						: bareModel(input.settings.fallback),
+			modelTokens: tokenCap - ledger.total,
+			modelRequests: Math.min(
+				MODEL_REQUEST_CEILING,
+				budget.maxTurns - ledger.turns,
+			),
+		});
+	} catch {
+		return receipt(plainReport(CRASHED), null, null);
+	}
+
+	const routeCounts = new Map<string, { forwarded: number; denied: number }>();
 
 	const gateway = await host.startGateway(table).catch(() => null);
 
@@ -917,6 +1017,17 @@ export async function runStage(
 	gateway.subscribe((event) => {
 		if (event.event === "usage") {
 			ledger.gateway += (event.inputTokens ?? 0) + (event.outputTokens ?? 0);
+
+			if (event.route !== null) {
+				const counts = routeCounts.get(event.route) ?? {
+					forwarded: 0,
+					denied: 0,
+				};
+
+				if (event.decision === "forward") counts.forwarded += 1;
+				else counts.denied += 1;
+				routeCounts.set(event.route, counts);
+			}
 
 			if (event.reason === "secret-in-request") stage.alert = "error";
 		}
@@ -943,20 +1054,45 @@ export async function runStage(
 	let fallback: FallbackRecord | null = null;
 	let text = primary.text;
 
+	const readJournal = async (): Promise<string | null> => {
+		if (host.readJournal === undefined) return null;
+
+		const read = host.readJournal().catch(() => null);
+
+		return (await cleanup.wait(read)) ? read : null;
+	};
+
+	let vetoed =
+		anthropic && anthropicUnmetered((await readJournal()) ?? "", false);
+
+	const counts = routeCounts.get(primaryRoute);
+
+	const unavailable =
+		anthropic &&
+		primary.outcome.kind === "failed" &&
+		(counts?.forwarded ?? 0) === 0 &&
+		(counts?.denied ?? 0) > 0;
+
 	if (
-		primary.outcome.kind === "refused" &&
+		!vetoed &&
+		(primary.outcome.kind === "refused" || unavailable) &&
 		input.settings.fallback !== null &&
 		stage.gateReason === null
 	) {
 		const openai = routeId("model-openai", table);
 		const xai = routeId("model-xai", table);
+		const closed = routeId("model-anthropic", table);
 
-		const switched =
-			input.settings.fallback.startsWith("openai/") ||
-			(openai !== null &&
-				xai !== null &&
-				(await gateway.setRoute(openai, false).catch(() => false)) &&
-				(await gateway.setRoute(xai, true).catch(() => false)));
+		const switched = anthropic
+			? openai !== null &&
+				closed !== null &&
+				(await gateway.setRoute(closed, false).catch(() => false)) &&
+				(await gateway.setRoute(openai, true).catch(() => false))
+			: input.settings.fallback.startsWith("openai/") ||
+				(openai !== null &&
+					xai !== null &&
+					(await gateway.setRoute(openai, false).catch(() => false)) &&
+					(await gateway.setRoute(xai, true).catch(() => false)));
 
 		if (switched) sessions.push(1);
 
@@ -985,8 +1121,21 @@ export async function runStage(
 	if (!closed) gateway.kill();
 
 	const summary = closed ? await shutdown : null;
+	const journal = await readJournal();
 
-	return receipt(primary, fallback, summary?.routes ?? null, text);
+	// The final veto, before the receipt or output is kept: an unmetered
+	// Anthropic reply, or a passing Anthropic answer with no journal to show.
+	vetoed ||=
+		anthropic &&
+		(anthropicUnmetered(journal ?? "", true) ||
+			(journal === null &&
+				fallback === null &&
+				primary.outcome.kind === "passed"));
+
+	return receipt(primary, fallback, summary?.routes ?? null, text, {
+		journal,
+		vetoed,
+	});
 }
 
 export type SandboxHostConfig = {
@@ -1391,6 +1540,9 @@ export function sandboxHost(config: SandboxHostConfig): StageHost {
 		},
 		async writeOutput(text) {
 			return publishFile(join(stageDir, "output.txt"), text);
+		},
+		readJournal() {
+			return boundedText(join(stageDir, JOURNAL_FILE), AUDIT_CAP_BYTES);
 		},
 		async stderrLog(session) {
 			const finish = stderr.get(session);
@@ -2179,20 +2331,92 @@ async function attemptOutput(
 				textOf(fieldOf(fallback, "requested")) ??
 				textOf(fieldOf(models, "requested"));
 
+			const family = parseFamily(fieldOf(receipt, "family"));
+
 			return model === null
 				? null
-				: {
-						kind: "output",
-						text,
-						model,
-						observed:
-							textOf(fieldOf(fallback, "observed")) ??
-							textOf(fieldOf(models, "observed")),
-					};
+				: withFamily(
+						{
+							kind: "output" as const,
+							text,
+							model,
+							observed:
+								textOf(fieldOf(fallback, "observed")) ??
+								textOf(fieldOf(models, "observed")),
+						},
+						family,
+					);
 		}
 	}
 
 	return null;
+}
+
+/**
+ * The builder's family for a round: the family stored on the latest passed
+ * build attempt of that round whose answering request is the patch's
+ * recorded model. Only `openai-request` for that exact model counts;
+ * anything else is unavailable, so `r8` stays incomplete.
+ */
+async function builderFamily(
+	stateDir: string,
+	runId: Digest,
+	round: number,
+	model: string,
+): Promise<FamilyInput> {
+	const root = join(stateDir, "stages", runId);
+	const prefix = round > 0 ? `build-r${round}-` : "build-";
+	const name = /^(\d+)(?:\.(\d+))?$/;
+	let names: string[];
+
+	try {
+		names = readdirSync(root);
+	} catch {
+		return FAMILY_MISSING;
+	}
+
+	const attempts = names
+		.flatMap((entry) => {
+			const match = entry.startsWith(prefix)
+				? name.exec(entry.slice(prefix.length))
+				: null;
+
+			return match === null
+				? []
+				: [{ entry, attempt: Number(match[1]), n: Number(match[2] ?? 1) }];
+		})
+		.sort((a, b) => b.attempt - a.attempt || b.n - a.n);
+
+	for (const { entry } of attempts) {
+		const receipt = objectOf(
+			parseJson(
+				(await boundedText(
+					join(root, entry, "receipt.json"),
+					MAX_RECEIPT_BYTES,
+				)) ?? "",
+			),
+		);
+
+		if (
+			textOf(fieldOf(objectOf(fieldOf(receipt, "outcome")), "kind")) !==
+			"passed"
+		)
+			continue;
+
+		const requested =
+			textOf(fieldOf(objectOf(fieldOf(receipt, "fallback")), "requested")) ??
+			textOf(fieldOf(objectOf(fieldOf(receipt, "models")), "requested"));
+
+		const family = parseFamily(fieldOf(receipt, "family"));
+
+		return requested === model &&
+			family?.kind === "openai-request" &&
+			family.model === model
+			? family
+			: FAMILY_MISSING;
+	}
+
+	return FAMILY_MISSING;
 }
 
 function stageName(stage: ModelStage, attempt: number, round = 0): string {
@@ -2876,6 +3100,15 @@ async function prepareCandidateReview(
 		workspace,
 		verdict,
 		builder: patch.receipt.model,
+		families: {
+			builder: await builderFamily(
+				config.stateDir,
+				runId,
+				round,
+				patch.receipt.model,
+			),
+			accept: suite.receipt.family ?? FAMILY_MISSING,
+		},
 		input: readCapturedReview(stageDir, execution, expected),
 	};
 }
@@ -3015,6 +3248,10 @@ export async function runReview(
 					prompt,
 					settings: {
 						...input.settings,
+						model:
+							seat === "code-review"
+								? (input.settings.codeReviewModel ?? input.settings.model)
+								: input.settings.model,
 						fallback:
 							seat === "security-review" ? input.settings.fallback : null,
 						maxTokens,
@@ -3078,18 +3315,17 @@ export async function runReview(
 			textOf(fieldOf(models, "requested")) ??
 			input.settings.model;
 
+		const family =
+			parseFamily(fieldOf(record.record, "family")) ?? FAMILY_MISSING;
+
 		receipts.push({
 			...parsed,
+			family,
 			requested,
 			observed:
 				textOf(fieldOf(fallback, "observed")) ??
 				textOf(fieldOf(models, "observed")),
-			label: reviewIdentityLabel(
-				textOf(fieldOf(fallback, "observed")) ??
-					textOf(fieldOf(models, "observed")) ??
-					requested,
-				prepared.builder,
-			),
+			label: familyLabel(family, prepared.families?.builder ?? FAMILY_MISSING),
 			primary: textOf(fieldOf(models, "requested")) ?? input.settings.model,
 			refusal: textOf(fieldOf(record.record, "refusal")),
 			fallbackRecord: fallback,
@@ -3419,6 +3655,10 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 						prepared.input,
 						prepared.verdict,
 						seats,
+						prepared.families ?? {
+							builder: FAMILY_MISSING,
+							accept: FAMILY_MISSING,
+						},
 					);
 
 					keepReview(config.stateDir, receipt);
