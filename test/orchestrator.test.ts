@@ -36,6 +36,7 @@ import {
 	HOLDER_FILE,
 	type ProcessTable,
 	parseStartTime,
+	readLedgerBacklog,
 	serveLoop,
 	writeStatus,
 } from "../server/controller.ts";
@@ -12949,6 +12950,58 @@ describe("ledger outbox enrollment", () => {
 		await once(restarted);
 		await once(restarted);
 		assert.ok(readFileSync(rowPath).equals(before));
+		assert.equal(ctx.executor.launches.length, 1);
+	});
+
+	it("posts no marker for an unencodable snapshot, reports it blocked, and ends once it encodes", async () => {
+		const dir = stateDir();
+		const outbox = fileLedgerOutbox(dir);
+		const ctx = needsInfoWorld(outbox);
+		const native = fileRunFiles(dir);
+		let mismatched = true;
+
+		ctx.files.accounting = {
+			...(native.accounting ?? assert.fail("accounting")),
+			start: async (runId) => {
+				const start = await native.accounting?.start(runId);
+
+				return start == null || !mismatched
+					? start
+					: {
+							...start,
+							policy: { ...start.policy, workflowDigest: digestOf("other") },
+						};
+			},
+		};
+		await instrument(native);
+		const controller = ctx.start();
+		await once(controller);
+
+		assert.notEqual(statuses(ctx.github, 14).at(-1), "3:needs_info");
+		assert.ok(ctx.logs.some((entry) => entry.event === "ledger_row_invalid"));
+		assert.deepEqual(
+			((await outbox.scan()) ?? assert.fail("scan")).map((job) => [
+				job.runId,
+				job.row,
+				job.retry?.reason,
+				job.retry?.blocked,
+			]),
+			[[runOf(14), null, "row_invalid", true]],
+		);
+		const backlog = await readLedgerBacklog(dir, ctx.clock.now());
+		assert.deepEqual(
+			[backlog.state, backlog.pending, backlog.blocked, backlog.lastError],
+			["blocked", 1, 1, "row_invalid"],
+		);
+
+		mismatched = false;
+		ctx.clock.t += 60_000;
+		await once(controller);
+		assert.equal(statuses(ctx.github, 14).at(-1), "3:needs_info");
+		assert.equal(
+			(await outbox.scan())?.[0]?.row?.row.outcome.kind,
+			"needs_info",
+		);
 		assert.equal(ctx.executor.launches.length, 1);
 	});
 

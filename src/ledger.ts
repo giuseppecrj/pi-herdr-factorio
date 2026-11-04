@@ -683,7 +683,8 @@ export type LedgerErrorCode =
 	| "ref_missing"
 	| "object_mismatch"
 	| "adoption_pending"
-	| "state_invalid";
+	| "state_invalid"
+	| "row_invalid";
 
 export type LedgerIndex =
 	| {
@@ -1395,6 +1396,8 @@ export type PublishedReceipt = {
 export interface LedgerOutbox {
 	/** Keeps the first snapshot for a run; a later one never replaces it. */
 	prepare(runId: Digest, snapshot: JsonValue): Promise<boolean>;
+	/** Records, once, that a run's terminal snapshot cannot be encoded, so it shows as blocked. */
+	block(runId: Digest, observedAt: string): Promise<boolean>;
 	freeze(
 		runId: Digest,
 		marker: MarkerProof,
@@ -1545,6 +1548,7 @@ const retryCodec = record({
 		"object_mismatch",
 		"adoption_pending",
 		"state_invalid",
+		"row_invalid",
 	),
 	blocked: flag,
 });

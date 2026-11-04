@@ -2651,7 +2651,31 @@ export function fileLedgerOutbox(stateDir: string): LedgerOutbox {
 			if ((await readText(join(dir, "published.json"))) !== null) return null;
 			const terminal = await readText(join(dir, "terminal.json"));
 
-			if (terminal === null) return null;
+			if (terminal === null) {
+				const blocked = await readText(join(dir, "blocked.json"));
+
+				if (blocked === null) return null;
+
+				const at = textOf(
+					jsonField(objectOf(parseJsonText(blocked)), "observedAt"),
+				);
+
+				if (at === null || !validLedgerInstant(at))
+					return invalidJob(runId, null);
+
+				return {
+					runId,
+					observedAt: at,
+					row: null,
+					retry: {
+						attempts: 1,
+						nextAt: 0,
+						reason: "row_invalid",
+						blocked: true,
+					},
+					adoption: null,
+				};
+			}
 
 			observedAt = textOf(
 				jsonField(objectOf(parseJsonText(terminal)), "terminalObservedAt"),
@@ -2699,6 +2723,14 @@ export function fileLedgerOutbox(stateDir: string): LedgerOutbox {
 			if (existing !== null) return parseJsonText(existing) !== undefined;
 
 			return installOnce(path, `${JSON.stringify(snapshot)}\n`);
+		},
+		async block(runId, observedAt) {
+			const path = join(dirOf(runId), "blocked.json");
+			const existing = await readFile(path, "utf8").catch(() => null);
+
+			if (existing !== null) return true;
+
+			return installOnce(path, `${JSON.stringify({ v: 1, observedAt })}\n`);
 		},
 		async freeze(runId, marker) {
 			const dir = dirOf(runId);

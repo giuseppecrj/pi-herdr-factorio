@@ -2084,6 +2084,7 @@ export class Orchestrator {
 
 		if (ledger === undefined || !isTerminal(status)) return true;
 		const fields = { issue: run.issue, runId: run.runId };
+		const observedAt = new Date(this.#input.clock.now()).toISOString();
 		let snapshot: JsonValue;
 
 		try {
@@ -2099,7 +2100,7 @@ export class Orchestrator {
 				status,
 				stage: run.stage,
 				usage: run.usage,
-				observedAt: new Date(this.#input.clock.now()).toISOString(),
+				observedAt,
 				candidate: run.handoff ?? null,
 				attemptEnds: await this.#input.files.accounting?.attempts(run.runId),
 				start: await this.#input.files.accounting?.start(run.runId),
@@ -2114,8 +2115,9 @@ export class Orchestrator {
 		} catch (error) {
 			if (!(error instanceof LedgerRowError)) throw error;
 			this.#input.log("ledger_row_invalid", { ...fields, reason: error.code });
+			await ledger.block(run.runId, observedAt);
 
-			return true;
+			return false;
 		}
 
 		if (await ledger.prepare(run.runId, snapshot)) return true;
