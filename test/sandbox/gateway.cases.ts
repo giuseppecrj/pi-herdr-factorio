@@ -1941,6 +1941,109 @@ describe("gateway anthropic route", () => {
 		assert.deepEqual(h.journal, []);
 	});
 
+	it("forwards Pi 1.4.0's real accept request, and each protection still denies its hostile variant", async () => {
+		mode = "full";
+
+		const real = JSON.parse(
+			readFileSync(
+				new URL(
+					"./fixtures/pi-1.4.0-anthropic-accept-request.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+
+		const h = await anthropicHarness({
+			model: "claude-sonnet-5-5",
+			ceilingTokens: 25_000,
+		});
+
+		const before = sent.length;
+		const headers: Record<string, string> = real.headers;
+		const body = real.body;
+
+		const reply = await call(
+			h.socketPath,
+			real.method,
+			real.path,
+			headers,
+			JSON.stringify(body),
+		);
+
+		assert.equal(reply.code, null);
+		assert.equal(reply.status, 200);
+		assert.equal(sent.length, before + 1);
+
+		const seen = sent.at(-1);
+		const forwarded = JSON.parse(seen?.body ?? "{}");
+
+		assert.equal(seen?.url, "/anthropic/v1/messages?beta=true");
+		assert.equal(seen?.headers["anthropic-version"], "2023-06-01");
+		assert.equal(seen?.headers["anthropic-beta"], headers["anthropic-beta"]);
+		assert.equal(seen?.headers["x-api-key"], undefined);
+		assert.deepEqual(forwarded, { ...body, max_tokens: 25_000 });
+		assert.equal(h.journal[0]?.kind, "dispatch");
+		assert.equal(
+			h.journal[0]?.kind === "dispatch" && h.journal[0].maxOutputTokens,
+			25_000,
+		);
+
+		const hostile: [string, string, JsonValue][] = [
+			[
+				"a server tool",
+				real.path,
+				{
+					...body,
+					tools: [
+						...body.tools,
+						{ type: "web_search_20250305", name: "web_search" },
+					],
+				},
+			],
+			[
+				"a tool key outside the allowlist",
+				real.path,
+				{
+					...body,
+					tools: body.tools.map((tool: Record<string, JsonValue>) => ({
+						...tool,
+						type: "custom",
+					})),
+				},
+			],
+			[
+				"remote MCP servers",
+				real.path,
+				{ ...body, mcp_servers: [{ type: "url", url: "https://x.test" }] },
+			],
+			[
+				"a model outside the table",
+				real.path,
+				{ ...body, model: "claude-opus-4-5" },
+			],
+			["another query", "/anthropic/v1/messages?beta=false", body],
+		];
+
+		for (const [name, path, variant] of hostile) {
+			assert.equal(
+				(
+					await call(
+						h.socketPath,
+						real.method,
+						path,
+						headers,
+						JSON.stringify(variant),
+					)
+				).code,
+				path === real.path ? "body-not-allowed" : "query-not-allowed",
+				name,
+			);
+		}
+
+		assert.equal(sent.length, before + 1);
+	});
+
 	it("forwards the models list unjournaled, so it can neither fail a stage nor count as a model request", async () => {
 		const h = await anthropicHarness();
 

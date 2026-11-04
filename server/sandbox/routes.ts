@@ -319,7 +319,9 @@ function modelRoute(input: {
 }
 
 /**
- * The keys Pi 1.4.0 writes on an Anthropic tool (`pi-ai` `convertTools`).
+ * The keys Pi 1.4.0 writes on an Anthropic tool: `pi-ai` `convertTools`,
+ * plus `defer_loading` on the `__pi_deferred_placeholder__` client tool it
+ * appends to every tool list. A deferred client tool stays a client tool.
  * A server tool carries `type` and no `input_schema`, so it is refused.
  */
 const ANTHROPIC_TOOL_KEYS = [
@@ -329,6 +331,7 @@ const ANTHROPIC_TOOL_KEYS = [
 	"eager_input_streaming",
 	"strict",
 	"cache_control",
+	"defer_loading",
 ] as const;
 
 /**

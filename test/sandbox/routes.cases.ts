@@ -327,6 +327,7 @@ describe("sandbox route registry", () => {
 						"eager_input_streaming",
 						"strict",
 						"cache_control",
+						"defer_loading",
 					],
 				},
 				{ kind: "absent", pointer: "/max_output_tokens" },

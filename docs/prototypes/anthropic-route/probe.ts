@@ -248,6 +248,20 @@ const lines = (name: string): JsonObject[] => {
 const audit = lines("egress.jsonl");
 const journal = lines(JOURNAL_FILE);
 
+// Each routed request the gateway denied, with its reason. The gateway's own
+// `GET /` readiness probe has no route, so it is left out.
+const denied = audit
+	.filter(
+		(entry) =>
+			fieldOf(entry, "decision") === "deny" && fieldOf(entry, "route") !== null,
+	)
+	.map((entry) => ({
+		route: textOf(fieldOf(entry, "route")),
+		path: textOf(fieldOf(entry, "path")),
+		reason: textOf(fieldOf(entry, "reason")),
+		bytesIn: countOf(fieldOf(entry, "bytesIn")),
+	}));
+
 const dispatches = journal.filter(
 	(entry) => fieldOf(entry, "kind") === "dispatch",
 );
@@ -272,6 +286,7 @@ const checks = {
 		bound !== null && bound <= (anthropicMaxOutput(model) ?? 0),
 	routeAnthropic: fieldOf(result, "route") === "model-anthropic",
 	piExitZero: exit === 0 && !timedOut,
+	noDenial: denied.length === 0,
 };
 
 const receipt = {
@@ -300,6 +315,7 @@ const receipt = {
 		stderrTail: stderr.slice(-2000),
 		stderrBytes: Buffer.byteLength(stderr),
 	},
+	denied,
 	audit,
 	journal,
 	charge: journalCharge(
