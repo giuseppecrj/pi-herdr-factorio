@@ -43,6 +43,7 @@ function probeInput({ contract = { files: [] }, base = [] } = {}) {
 		bound: { contract },
 		checked: { checkout: { files: base } },
 		hash,
+		canary,
 	});
 }
 
@@ -261,4 +262,57 @@ test("does NOT check pristine/patches/visible-tests (not inventoried): readable 
 		).pass,
 		true,
 	);
+});
+
+const oldCanary = `factory-holdout-${"c".repeat(64)}`;
+
+test("an old canary committed to the base still passes", async () => {
+	const r = await fixture(({ write }) =>
+		write(
+			"/workspace/test/acceptance/561/checks/old.test.mjs",
+			`// ${oldCanary}\n`,
+		),
+	);
+
+	assert.equal(r.seen.canaryHits, 0);
+	assert.equal(r.seen.foreignCanaryShapedFiles, 1);
+	assert.equal(r.pass, true);
+});
+
+test("the run's own canary in a synthetic build record is caught", async () => {
+	const r = await fixture(({ write }) =>
+		write(
+			`/tmp/stages/${id}/build-1/sessions/agent-0/s.jsonl`,
+			`{"text":"${canary}"}\n`,
+		),
+	);
+
+	assert.equal(r.seen.canaryHits, 1);
+	assert.equal(r.pass, false);
+});
+
+test("the run's own canary is caught even when an old canary is in the base", async () => {
+	const r = await fixture(({ write }) => {
+		write(
+			"/workspace/test/acceptance/561/checks/old.test.mjs",
+			`// ${oldCanary}\n`,
+		);
+		write(
+			`/tmp/stages/${id}/build-1/sessions/agent-0/s.jsonl`,
+			`{"text":"${canary}"}\n`,
+		);
+	});
+
+	assert.equal(r.seen.canaryHits, 1);
+	assert.equal(r.seen.foreignCanaryShapedFiles, 1);
+	assert.equal(r.pass, false);
+});
+
+test("the run's canary next to an old canary in one file is caught", async () => {
+	const r = await fixture(({ write }) =>
+		write("/workspace/mixed.txt", `${oldCanary} ${canary}\n`),
+	);
+
+	assert.equal(r.seen.canaryHits, 1);
+	assert.equal(r.pass, false);
 });
