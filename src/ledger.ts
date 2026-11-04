@@ -11,7 +11,15 @@ import {
 	type LedgerCommit,
 	type LedgerFile,
 } from "./publication.ts";
-import { isGitSha, isRepoSlug, type GitSha } from "./workflow.ts";
+import { candidateGenerations, type CandidateState } from "./handoff.ts";
+import type { TerminalStatus } from "./markers.ts";
+import type { Stage } from "./run.ts";
+import {
+	isGitSha,
+	isRepoSlug,
+	type GitSha,
+	type RepoSlug,
+} from "./workflow.ts";
 import {
 	arrayOf,
 	countOf,
@@ -218,7 +226,7 @@ const money = tagged({
 const policy = record({
 	workflowSha: sha,
 	workflowDigest: digest,
-	gates: record({ sourceSha: sha, digest }),
+	gates: fact(record({ sourceSha: sha, digest })),
 	autonomy: record({
 		approveMerge: literal("always"),
 		land: literal("propose"),
@@ -249,7 +257,7 @@ const provenance = tagged({
 });
 
 const outcome = tagged({
-	needs_info: { stage: literal("specify") },
+	needs_info: { stage },
 	released: { stage },
 	cancelled: { stage, reason: fact(oneOf("closed", "withdrawn")) },
 	failed: {
@@ -370,8 +378,8 @@ const rowFields = {
 	repairRounds: fact(
 		record({ authorized: count, started: count, completed: count }),
 	),
-	stages: list(stageSummary),
-	models: list(modelSummary),
+	stages: fact(list(stageSummary)),
+	models: fact(list(modelSummary)),
 	usage: record({
 		tokens,
 		parentTokens: fact(count),
@@ -467,17 +475,19 @@ function invariant(row: LedgerRow): string | null {
 		row.provenance.effectiveRunTokenCap > row.provenance.trustedRunTokenCap
 	)
 		return "verification_cap_raised";
-	const order = row.stages.map((item) => STAGES.indexOf(item.stage));
+	const stages = row.stages.kind === "known" ? row.stages.value : [];
+	const order = stages.map((item) => STAGES.indexOf(item.stage));
 
 	if (!order.every((at, index) => index === 0 || (order[index - 1] ?? 0) < at))
 		return "stages_unordered";
 
-	const interrupted = row.stages.map((item) =>
+	const interrupted = stages.map((item) =>
 		item.attempts.kind === "known" ? item.attempts.value.interrupted : null,
 	);
 
 	if (
 		row.interruptedAttempts.kind === "known" &&
+		row.stages.kind === "known" &&
 		interrupted.every((item) => item !== null) &&
 		interrupted.reduce((sum, item) => sum + item, 0) !==
 			row.interruptedAttempts.value
@@ -502,13 +512,13 @@ function invariant(row: LedgerRow): string | null {
 		return "usage_parts_mismatch";
 
 	if (
-		row.stages.reduce((sum, item) => sum + item.tokens.total, 0) >
+		stages.reduce((sum, item) => sum + item.tokens.total, 0) >
 		usage.tokens.total
 	)
 		return "stage_tokens_exceed_run";
 
-	const models = row.models.map((item) =>
-		JSON.stringify([item.requested, item.observed, item.runtime]),
+	const models = (row.models.kind === "known" ? row.models.value : []).map(
+		(item) => JSON.stringify([item.requested, item.observed, item.runtime]),
 	);
 
 	if (!sorted(models)) return "models_unsorted";
@@ -538,7 +548,13 @@ function frozen(canonical: LedgerRow): FrozenRow {
 
 /** Builds the one canonical row for a terminal run. Gaps are derived, never supplied. */
 export function ledgerRow(input: LedgerRowInput): FrozenRow {
-	const canonical = rowCodec({ ...input, gaps: [] });
+	return ledgerRowOf(input);
+}
+
+/** Builds a row from untyped stored input, such as a frozen terminal snapshot. */
+export function ledgerRowOf(input: JsonValue): FrozenRow {
+	const fields = objectOf(input) ?? fail("invalid_object");
+	const canonical = rowCodec({ ...fields, gaps: [] });
 	const gaps = [...gapsOf(canonical, new Set())].sort();
 
 	return frozen(rowCodec({ ...canonical, gaps }));
@@ -882,4 +898,385 @@ export function frozenRowOf(bytes: Buffer): FrozenRow | null {
 	const [line, ...rest] = parseLedger(bytes);
 
 	return line?.kind === "known" && rest.length === 0 ? line : null;
+}
+
+const unavailable = (reason: GapCode) => ({ kind: "unavailable", reason });
+
+const known = (value: JsonValue) => ({ kind: "known", value });
+
+export const AUTONOMY_DIGEST = digestOf(
+	JSON.stringify({ approveMerge: "always", land: "propose" }),
+);
+
+export type TerminalFacts = {
+	readonly repo: RepoSlug;
+	readonly runId: Digest;
+	readonly issue: number;
+	readonly eventId: string;
+	readonly eventAt: string;
+	readonly snapshotDigest: Digest;
+	readonly workflowSha: GitSha;
+	readonly workflowDigest: Digest;
+	readonly status: TerminalStatus;
+	readonly stage: Stage;
+	readonly usage: number;
+	readonly observedAt: string;
+	readonly candidate: CandidateState | null;
+};
+
+function outcomeOf(facts: TerminalFacts): JsonValue {
+	const { stage, candidate } = facts;
+
+	const terminal =
+		candidate?.kind === "selected" && candidate.work.kind === "terminal"
+			? candidate.work.terminal
+			: null;
+
+	switch (facts.status) {
+		case "needs_info":
+		case "released":
+		case "stage_passed":
+			return { kind: facts.status, stage };
+		case "failed":
+			return {
+				kind: "failed",
+				stage,
+				cause: unavailable("not_instrumented"),
+			};
+		case "budget_exhausted":
+			return {
+				kind: "budget_exhausted",
+				stage,
+				cap: unavailable("not_instrumented"),
+			};
+		case "cancelled":
+			return {
+				kind: "cancelled",
+				stage,
+				reason:
+					terminal?.kind === "cancelled"
+						? known(terminal.reason)
+						: unavailable("receipt_missing"),
+			};
+		case "landed":
+			if (terminal?.kind !== "merged") return fail("landing_incomplete");
+
+			return {
+				kind: "landed",
+				stage: "land",
+				headSha: terminal.head,
+				mergeSha: terminal.mergeSha,
+				mergedAt: unavailable("public_metadata_unavailable"),
+				assurance:
+					terminal.assurance.kind === "factory_verified"
+						? {
+								kind: "factory_verified",
+								generationDigest: terminal.assurance.certification.digest,
+							}
+						: { kind: "owner_override" },
+			};
+		default: {
+			const exhaustive: never = facts.status;
+
+			return exhaustive;
+		}
+	}
+}
+
+function artifactsOf(facts: TerminalFacts): JsonValue {
+	const state = facts.candidate;
+
+	if (state === null)
+		return facts.stage === "specify"
+			? { kind: "admission" }
+			: {
+					kind: "legacy_incomplete",
+					contractDigest: unavailable("not_instrumented"),
+					acceptanceDigest: unavailable("not_instrumented"),
+				};
+
+	if (state.kind === "unprepared")
+		return {
+			kind: "built",
+			contractDigest: state.pin.contractDigest,
+			acceptanceDigest: state.pin.acceptanceDigest,
+			patchDigest: state.patch.patchDigest,
+		};
+
+	return {
+		kind: "candidate",
+		contractDigest: state.pin.contractDigest,
+		acceptanceDigest: state.pin.acceptanceDigest,
+		generations: candidateGenerations(state).map((evidence) => {
+			const { intent, verdict, validation } = evidence;
+			const publication = validation?.publication ?? null;
+			const ci = validation?.ciRunId ?? null;
+
+			return {
+				round: intent.round,
+				generation: intent.generation,
+				intentDigest: intent.digest,
+				baseSha: intent.baseSha,
+				patchDigest: intent.patchDigest,
+				heldoutDigest:
+					verdict === null
+						? unavailable("receipt_missing")
+						: known(verdict.heldoutDigest),
+				candidateSha:
+					publication === null
+						? unavailable("receipt_missing")
+						: known(publication.candidateSha),
+				gateSha:
+					verdict === null
+						? unavailable("receipt_missing")
+						: known(verdict.gateSha),
+				gatesDigest: unavailable("not_instrumented"),
+				ciRunId: ci === null ? unavailable("receipt_missing") : known(ci),
+			};
+		}),
+	};
+}
+
+/**
+ * Projects what the controller knows at a terminal decision into a row
+ * without its marker proof. Facts this build does not yet record are
+ * unavailable, never zero.
+ */
+export function terminalSnapshot(facts: TerminalFacts): JsonValue {
+	const base = `https://github.com/${facts.repo}`;
+	const state = facts.candidate;
+	const published = state?.kind === "selected" ? state.published : null;
+
+	const ciUrls =
+		state?.kind === "selected"
+			? [
+					...new Set(
+						candidateGenerations(state).flatMap((evidence) =>
+							evidence.validation?.ciRunId == null
+								? []
+								: [`${base}/actions/runs/${evidence.validation.ciRunId}`],
+						),
+					),
+				].sort()
+			: [];
+
+	return {
+		v: 1,
+		runId: facts.runId,
+		repo: facts.repo,
+		issue: facts.issue,
+		eventId: facts.eventId,
+		eventAt: facts.eventAt,
+		previousRunId: unavailable("not_instrumented"),
+		snapshotDigest: facts.snapshotDigest,
+		originalBase: state?.pin.originalBase ?? facts.workflowSha,
+		startedAt: unavailable("not_instrumented"),
+		terminalObservedAt: facts.observedAt,
+		provenance: {
+			kind: "production",
+			policy: {
+				workflowSha: facts.workflowSha,
+				workflowDigest: facts.workflowDigest,
+				gates: unavailable("not_instrumented"),
+				autonomy: {
+					approveMerge: "always",
+					land: "propose",
+					digest: AUTONOMY_DIGEST,
+				},
+			},
+		},
+		outcome: outcomeOf(facts),
+		pr:
+			published === null
+				? null
+				: { number: published.number, url: `${base}/pull/${published.number}` },
+		artifacts: artifactsOf(facts),
+		repairRounds: unavailable("not_instrumented"),
+		stages: unavailable("not_instrumented"),
+		models: unavailable("not_instrumented"),
+		usage: {
+			tokens: {
+				kind: "lower_bound",
+				unit: "tokens",
+				total: facts.usage,
+				reason: "not_instrumented",
+			},
+			parentTokens: unavailable("not_instrumented"),
+			childTokens: unavailable("not_instrumented"),
+			unattributedTokens: unavailable("not_instrumented"),
+			money: unavailable("provider_not_reported"),
+		},
+		interruptedAttempts: unavailable("not_instrumented"),
+		contextPressure: unavailable("not_instrumented"),
+		redactedReceiptDigests: [],
+		evidence: { issueUrl: `${base}/issues/${facts.issue}`, ciUrls },
+	};
+}
+
+export type MarkerProof = { readonly seq: number; readonly digest: Digest };
+
+export type LedgerRetry = {
+	readonly attempts: number;
+	readonly nextAt: number;
+	readonly reason: LedgerErrorCode;
+	readonly blocked: boolean;
+};
+
+export type OutboxJob = {
+	readonly runId: Digest;
+	readonly observedAt: string;
+	readonly row: FrozenRow | null;
+	readonly retry: LedgerRetry | null;
+};
+
+export type PublishedReceipt = {
+	readonly v: 1;
+	readonly runId: Digest;
+	readonly rowDigest: Digest;
+	readonly observedTip: GitSha;
+	readonly blobSha: GitSha;
+	readonly lineNumber: number;
+};
+
+/** The controller-private record of terminal runs and their ledger rows. */
+export interface LedgerOutbox {
+	/** Keeps the first snapshot for a run; a later one never replaces it. */
+	prepare(runId: Digest, snapshot: JsonValue): Promise<boolean>;
+	freeze(
+		runId: Digest,
+		marker: MarkerProof,
+	): Promise<"frozen" | "absent" | "invalid" | "unwritable">;
+	/** Unpublished jobs, or `null` when the outbox cannot be read in full. */
+	scan(): Promise<readonly OutboxJob[] | null>;
+	anchor(): Promise<LedgerAnchor | null>;
+	published(receipt: PublishedReceipt, anchor: LedgerAnchor): Promise<boolean>;
+	retry(runId: Digest, retry: LedgerRetry): Promise<boolean>;
+}
+
+export type LedgerBacklog = {
+	readonly readable: boolean;
+	readonly pending: number;
+	readonly blocked: number;
+	readonly published: number;
+	readonly oldestObservedAt: string | null;
+	readonly lastError: LedgerErrorCode | null;
+};
+
+const BACKOFF_MS = 5_000;
+const BACKOFF_MAX_MS = 300_000;
+
+/** One bounded pass over the outbox. It calls no model and launches no stage. */
+export async function pumpLedger(
+	outbox: LedgerOutbox,
+	api: LedgerApi,
+	now: number,
+): Promise<LedgerBacklog> {
+	const jobs = await outbox.scan();
+
+	if (jobs === null)
+		return {
+			readable: false,
+			pending: 0,
+			blocked: 0,
+			published: 0,
+			oldestObservedAt: null,
+			lastError: "state_unwritable",
+		};
+
+	const ordered = [...jobs].sort((a, b) =>
+		a.observedAt === b.observedAt
+			? a.runId.localeCompare(b.runId)
+			: a.observedAt.localeCompare(b.observedAt),
+	);
+
+	let anchor = await outbox.anchor();
+	let published = 0;
+	let blocked = 0;
+	let lastError: LedgerErrorCode | null = null;
+	const waiting: string[] = [];
+
+	for (const job of ordered) {
+		if (job.row === null || (job.retry !== null && job.retry.nextAt > now)) {
+			if (job.retry?.blocked === true) blocked += 1;
+			lastError = job.retry?.reason ?? lastError;
+			waiting.push(job.observedAt);
+			continue;
+		}
+
+		const result = await appendRun(
+			api,
+			{
+				runId: job.runId,
+				bytes: job.row.bytes,
+				digest: job.row.digest,
+				date: job.observedAt.replace(/\.\d{3}Z$/, "Z"),
+			},
+			anchor,
+		);
+
+		if (result.kind === "published") {
+			const receipt: PublishedReceipt = {
+				v: 1,
+				runId: job.runId,
+				rowDigest: job.row.digest,
+				observedTip: result.tip,
+				blobSha: result.blob,
+				lineNumber: result.line,
+			};
+
+			if (await outbox.published(receipt, result.anchor)) {
+				anchor = result.anchor;
+				published += 1;
+				continue;
+			}
+
+			lastError = "state_unwritable";
+		} else lastError = result.reason;
+		const attempts = (job.retry?.attempts ?? 0) + 1;
+
+		await outbox.retry(job.runId, {
+			attempts,
+			nextAt: now + Math.min(BACKOFF_MAX_MS, BACKOFF_MS * 2 ** (attempts - 1)),
+			reason: lastError,
+			blocked: result.kind === "blocked",
+		});
+
+		if (result.kind === "blocked") blocked += 1;
+		waiting.push(job.observedAt);
+	}
+
+	return {
+		readable: true,
+		pending: waiting.length,
+		blocked,
+		published,
+		oldestObservedAt: waiting.sort()[0] ?? null,
+		lastError,
+	};
+}
+
+const retryCodec = record({
+	attempts: positive,
+	nextAt: count,
+	reason: oneOf(
+		"state_unwritable",
+		"transport_unavailable",
+		"row_conflict",
+		"ledger_corrupt",
+		"ledger_version_unsupported",
+		"ledger_contended",
+		"lineage_changed",
+		"ref_missing",
+		"object_mismatch",
+	),
+	blocked: flag,
+});
+
+export function parseRetry(value: JsonValue | undefined): LedgerRetry | null {
+	try {
+		return retryCodec(value);
+	} catch (error) {
+		if (error instanceof LedgerRowError) return null;
+		throw error;
+	}
 }

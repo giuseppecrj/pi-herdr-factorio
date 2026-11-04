@@ -57,12 +57,25 @@ import {
 	arrayOf,
 	objectOf,
 	fieldOf as jsonField,
+	parseJson as parseJsonText,
 	textOf,
 	textsOf,
 	countOf,
 } from "./sandbox/json.ts";
 import { type Exec } from "../src/gh.ts";
 import { digestOf, type Verdict } from "../src/run.ts";
+import {
+	frozenRowOf,
+	ledgerApiOf,
+	ledgerRowOf,
+	pumpLedger,
+	type LedgerBacklog,
+	LedgerRowError,
+	parseAnchor,
+	parseRetry,
+	type LedgerOutbox,
+	type OutboxJob,
+} from "../src/ledger.ts";
 import { isGitSha } from "../src/workflow.ts";
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -2078,6 +2091,7 @@ export function fileRunFiles(stateDir: string): RunFiles {
 	return {
 		workspacePath,
 		artifacts: fileArtifacts(root),
+		ledger: fileLedgerOutbox(root),
 		async readContract(runId) {
 			return readStoredContract(root, runId);
 		},
@@ -2281,6 +2295,178 @@ export function fileRunFiles(stateDir: string): RunFiles {
 			return writeAtomic(
 				join(claims, `${claim.runId}.json`),
 				`${JSON.stringify(claim)}\n`,
+			);
+		},
+	};
+}
+
+async function syncDirectory(dir: string): Promise<boolean> {
+	try {
+		const handle = await open(dir, "r");
+
+		try {
+			await handle.sync();
+		} finally {
+			await handle.close();
+		}
+
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+async function installOnce(path: string, text: string): Promise<boolean> {
+	const existing = await readFile(path, "utf8").catch(() => null);
+
+	if (existing !== null) return existing === text;
+
+	try {
+		await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+	} catch {
+		return false;
+	}
+
+	return (
+		(await writeAtomic(path, text)) && (await syncDirectory(dirname(path)))
+	);
+}
+
+/**
+ * The controller-private ledger outbox under `<state>/ledger`. Each run's
+ * terminal snapshot and row are write-once; only its retry record and the
+ * shared anchor are replaced.
+ */
+export function fileLedgerOutbox(stateDir: string): LedgerOutbox {
+	const root = join(resolve(stateDir), "ledger");
+	const dirOf = (runId: string) => join(root, runId);
+
+	const readText = (path: string) =>
+		readFile(path, "utf8").then(
+			(text) => text,
+			(error: NodeJS.ErrnoException) =>
+				error.code === "ENOENT" ? null : Promise.reject(error),
+		);
+
+	return {
+		async prepare(runId, snapshot) {
+			const path = join(dirOf(runId), "terminal.json");
+			const existing = await readFile(path, "utf8").catch(() => null);
+
+			if (existing !== null) return parseJsonText(existing) !== undefined;
+
+			return installOnce(path, `${JSON.stringify(snapshot)}\n`);
+		},
+		async freeze(runId, marker) {
+			const dir = dirOf(runId);
+			const stored = await readFile(join(dir, "row.json")).catch(() => null);
+
+			if (stored !== null)
+				return frozenRowOf(stored)?.row.runId === runId ? "frozen" : "invalid";
+
+			const terminal = await readFile(join(dir, "terminal.json"), "utf8").catch(
+				() => null,
+			);
+
+			if (terminal === null) return "absent";
+			const snapshot = objectOf(parseJsonText(terminal));
+
+			if (snapshot === null) return "invalid";
+			let bytes: Buffer;
+
+			try {
+				const row = ledgerRowOf({
+					...snapshot,
+					terminalMarker: { seq: marker.seq, digest: marker.digest },
+				});
+
+				if (row.row.runId !== runId) return "invalid";
+				bytes = row.bytes;
+			} catch (error) {
+				if (error instanceof LedgerRowError) return "invalid";
+				throw error;
+			}
+
+			return (await installOnce(join(dir, "row.json"), bytes.toString()))
+				? "frozen"
+				: "unwritable";
+		},
+		async scan() {
+			try {
+				const names = await readdir(root).catch(
+					(error: NodeJS.ErrnoException) =>
+						error.code === "ENOENT" ? [] : Promise.reject(error),
+				);
+
+				const jobs: OutboxJob[] = [];
+
+				for (const runId of names.sort()) {
+					if (!isDigest(runId)) continue;
+					const dir = dirOf(runId);
+
+					if ((await readText(join(dir, "published.json"))) !== null) continue;
+					const terminal = await readText(join(dir, "terminal.json"));
+
+					if (terminal === null) return null;
+
+					const observedAt = textOf(
+						jsonField(objectOf(parseJsonText(terminal)), "terminalObservedAt"),
+					);
+
+					if (observedAt === null) return null;
+
+					const rowBytes = await readFile(join(dir, "row.json")).catch(
+						(error: NodeJS.ErrnoException) =>
+							error.code === "ENOENT" ? null : Promise.reject(error),
+					);
+
+					const row = rowBytes === null ? null : frozenRowOf(rowBytes);
+
+					if (rowBytes !== null && row === null) return null;
+					const retryText = await readText(join(dir, "retry.json"));
+
+					const retry =
+						retryText === null ? null : parseRetry(parseJsonText(retryText));
+
+					jobs.push({ runId, observedAt, row, retry });
+				}
+
+				return jobs;
+			} catch {
+				return null;
+			}
+		},
+		async anchor() {
+			const text = await readFile(join(root, "anchor.json"), "utf8").catch(
+				() => null,
+			);
+
+			return text === null ? null : parseAnchor(parseJsonText(text));
+		},
+		async published(receipt, anchor) {
+			const installed = await installOnce(
+				join(dirOf(receipt.runId), "published.json"),
+				`${JSON.stringify(receipt)}\n`,
+			);
+
+			if (!installed) return false;
+			await writeAtomic(
+				join(root, "anchor.json"),
+				`${JSON.stringify(anchor)}\n`,
+			);
+
+			return true;
+		},
+		async retry(runId, retry) {
+			try {
+				await mkdir(dirOf(runId), { recursive: true, mode: 0o700 });
+			} catch {
+				return false;
+			}
+
+			return writeAtomic(
+				join(dirOf(runId), "retry.json"),
+				`${JSON.stringify(retry)}\n`,
 			);
 		},
 	};
@@ -4116,12 +4302,49 @@ export function controllerCandidatePort(config: {
 	};
 }
 
+/**
+ * One pass of the ledger outbox for this state directory. It reads and
+ * advances only `factory/ledger`, and never fails the tick that calls it.
+ */
+export async function pumpLedgerOutbox(input: {
+	readonly stateDir: string;
+	readonly exec: Exec;
+	readonly repo: RepoSlug;
+	readonly now: number;
+	readonly log: Log;
+}): Promise<LedgerBacklog | null> {
+	try {
+		const backlog = await pumpLedger(
+			fileLedgerOutbox(input.stateDir),
+			ledgerApiOf(new GitHubPublicationApi(input.exec, input.repo)),
+			input.now,
+		);
+
+		if (backlog.published > 0 || backlog.pending > 0 || !backlog.readable)
+			input.log("ledger_backlog", {
+				readable: backlog.readable,
+				published: backlog.published,
+				pending: backlog.pending,
+				blocked: backlog.blocked,
+				oldest: backlog.oldestObservedAt,
+				error: backlog.lastError,
+			});
+
+		return backlog;
+	} catch {
+		input.log("ledger_pump_failed", {});
+
+		return null;
+	}
+}
+
 export async function serveLoop(input: {
 	orchestrator: Orchestrator;
 	stateDir: string;
 	sleep: Sleep;
 	signal: AbortSignal;
 	log: Log;
+	pump?: () => Promise<LedgerBacklog | null>;
 }): Promise<void> {
 	const { orchestrator, signal, log } = input;
 
@@ -4131,6 +4354,8 @@ export async function serveLoop(input: {
 		if (!(await writeStatus(input.stateDir, report))) {
 			log("status_unwritable", {});
 		}
+
+		await input.pump?.();
 
 		if (signal.aborted) break;
 

@@ -28,6 +28,7 @@ import {
 } from "../src/build.ts";
 import {
 	acquireLock,
+	fileLedgerOutbox,
 	fileRunFiles,
 	controllerCandidatePort,
 	HOLDER_FILE,
@@ -83,6 +84,14 @@ import type {
 	BaseReason,
 } from "../src/diagnosis.ts";
 import { advance } from "../src/stages.ts";
+import {
+	ledgerApiOf,
+	parseLedger,
+	pumpLedger,
+	type LedgerOutbox,
+} from "../src/ledger.ts";
+import { GitHubPublicationApi, readLedgerFile } from "../src/publication.ts";
+import { LedgerGit, repo as ledgerRepo } from "./ledger-git.ts";
 import { readAssessmentBytes, validationDir } from "../src/validation.ts";
 import {
 	candidateProjection,
@@ -741,11 +750,12 @@ function runOf(issue: number): Digest {
 
 type Wire = { intercept: Exec | null };
 
-function world(scope: readonly number[] | null = null) {
+function world(scope: readonly number[] | null = null, ledger?: LedgerOutbox) {
 	const github = new FakeGitHub();
 	const clock = new FakeClock();
 	const store = memoryStore();
-	const files = memoryFiles();
+	const memory = memoryFiles();
+	const files = ledger === undefined ? memory : { ...memory, ledger };
 	const executor = new FakeExecutor();
 	const logs: { event: string; fields: LogFields }[] = [];
 	const wire: Wire = { intercept: null };
@@ -11827,5 +11837,170 @@ describe("specify: linked runs and answers", () => {
 
 		assert.equal(executor.launches.length, 1);
 		assert.equal(statuses(github, 14).length, 3);
+	});
+});
+
+describe("ledger outbox enrollment", () => {
+	const ledgerApi = (fake: LedgerGit) =>
+		ledgerApiOf(
+			new GitHubPublicationApi(
+				fake.exec,
+				ledgerRepo,
+				{},
+				async () => true,
+				async () => {},
+			),
+		);
+
+	async function remoteRows(fake: LedgerGit) {
+		const tip = fake.refs.get("factory/ledger") ?? assert.fail("no ledger");
+		const tree = fake.trees.get(`commit:${tip}`)?.get("tree");
+		assert.ok(tree !== undefined && isGitSha(tree));
+
+		const file = await readLedgerFile(
+			new GitHubPublicationApi(fake.exec, ledgerRepo),
+			tree,
+		);
+
+		return parseLedger(file.bytes);
+	}
+
+	function needsInfoWorld(outbox: LedgerOutbox) {
+		const ctx = world(null, outbox);
+		ctx.wire.intercept = writesWire(ctx.github, []);
+		ctx.github.add(labeled(14));
+		ctx.executor.outputs = [QUESTIONS_TEXT];
+		ctx.executor.behaviors = [{ kind: "pass", usage: 300 }];
+
+		return ctx;
+	}
+
+	it("keeps the terminal snapshot before the needs_info marker and freezes one row after it", async () => {
+		const dir = stateDir();
+		const outbox = fileLedgerOutbox(dir);
+		const ctx = needsInfoWorld(outbox);
+		const runDir = join(dir, "ledger", runOf(14));
+		const seen: string[] = [];
+		const writes: string[] = [];
+		const inner = writesWire(ctx.github, writes);
+
+		ctx.wire.intercept = async (command, args) => {
+			const body = args.find((arg) => arg.startsWith("body="))?.slice(5) ?? "";
+			const parsed = parseMarker(body);
+
+			if (parsed.kind === "marker" && parsed.marker.status === "needs_info")
+				seen.push(
+					`${existsSync(join(runDir, "terminal.json"))}:${existsSync(join(runDir, "row.json"))}`,
+				);
+
+			return inner(command, args);
+		};
+
+		await once(ctx.start());
+		assert.equal(statuses(ctx.github, 14).at(-1), "3:needs_info");
+		assert.deepEqual(seen, ["true:false"]);
+
+		const jobs = (await outbox.scan()) ?? assert.fail("scan");
+		assert.equal(jobs.length, 1);
+		const row = jobs[0]?.row?.row ?? assert.fail("row");
+		assert.equal(row.outcome.kind, "needs_info");
+		assert.equal(row.terminalMarker.seq, 3);
+		assert.deepEqual(row.usage.tokens, {
+			kind: "lower_bound",
+			unit: "tokens",
+			total: 300,
+			reason: "not_instrumented",
+		});
+		assert.equal(row.usage.money.kind, "unavailable");
+		assert.equal(row.issue, 14);
+
+		const fake = new LedgerGit();
+		const first = await pumpLedger(outbox, ledgerApi(fake), ctx.clock.now());
+		assert.equal(first.published, 1);
+		assert.equal(first.pending, 0);
+		const again = await pumpLedger(outbox, ledgerApi(fake), ctx.clock.now());
+		assert.deepEqual([again.published, again.pending], [0, 0]);
+
+		const restarted = ctx.start();
+		await once(restarted);
+		await once(restarted);
+		assert.deepEqual(await outbox.scan(), []);
+		const rows = await remoteRows(fake);
+		assert.equal(rows.length, 1);
+		assert.equal(rows[0]?.kind === "known" && rows[0].row.runId, runOf(14));
+	});
+
+	it("finishes the row from the confirmed marker after a crash before row.json", async () => {
+		const dir = stateDir();
+		const outbox = fileLedgerOutbox(dir);
+		const ctx = needsInfoWorld(outbox);
+		await once(ctx.start());
+		const rowPath = join(dir, "ledger", runOf(14), "row.json");
+		const before = readFileSync(rowPath);
+		rmSync(rowPath);
+		assert.equal((await outbox.scan())?.[0]?.row, null);
+
+		const restarted = ctx.start();
+		await once(restarted);
+		await once(restarted);
+		assert.ok(readFileSync(rowPath).equals(before));
+		assert.equal(ctx.executor.launches.length, 1);
+	});
+
+	it("serve pumps the outbox after every tick", async () => {
+		const ctx = world();
+		const stop = new AbortController();
+		const order: string[] = [];
+		let ticks = 0;
+
+		await serveLoop({
+			orchestrator: ctx.start(),
+			stateDir: stateDir(),
+			signal: stop.signal,
+			log: () => {},
+			pump: async () => {
+				order.push(`pump${ticks}`);
+
+				return null;
+			},
+			sleep: async () => {
+				ticks += 1;
+				order.push(`sleep${ticks}`);
+
+				if (ticks === 2) stop.abort();
+			},
+		});
+
+		assert.deepEqual(order, ["pump0", "sleep1", "pump1", "sleep2"]);
+	});
+
+	it("posts no terminal marker while the snapshot cannot be written, then ends once it can", async () => {
+		const dir = stateDir();
+		const real = fileLedgerOutbox(dir);
+		let writable = false;
+
+		const outbox: LedgerOutbox = {
+			...real,
+			prepare: async (runId, snapshot) =>
+				writable && real.prepare(runId, snapshot),
+		};
+
+		const ctx = needsInfoWorld(outbox);
+		const controller = ctx.start();
+		await once(controller);
+		assert.notEqual(statuses(ctx.github, 14).at(-1), "3:needs_info");
+		assert.ok(
+			ctx.logs.some((entry) => entry.event === "ledger_terminal_unwritable"),
+		);
+
+		writable = true;
+		ctx.clock.t += 60_000;
+		await once(controller);
+		assert.equal(statuses(ctx.github, 14).at(-1), "3:needs_info");
+		assert.equal(
+			(await outbox.scan())?.[0]?.row?.row.outcome.kind,
+			"needs_info",
+		);
+		assert.equal(ctx.executor.launches.length, 1);
 	});
 });

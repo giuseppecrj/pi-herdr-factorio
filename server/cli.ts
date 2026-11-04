@@ -45,6 +45,7 @@ import {
 	type ProcessTable,
 	procTable,
 	readLock,
+	pumpLedgerOutbox,
 	readStatus,
 	type Sleep,
 	serveLoop,
@@ -488,6 +489,15 @@ async function runController(
 			log,
 		});
 
+		const pump = () =>
+			pumpLedgerOutbox({
+				stateDir: parsed.stateDir,
+				exec: io.exec,
+				repo: parsed.repo,
+				now: clock.now(),
+				log,
+			});
+
 		if (parsed.command === "serve") {
 			log("controller_ready", {
 				pid: lock.holder.pid,
@@ -501,6 +511,7 @@ async function runController(
 				sleep: runtime.sleep,
 				signal: runtime.signal,
 				log,
+				pump,
 			});
 
 			return EXIT.ok;
@@ -517,6 +528,7 @@ async function runController(
 			log("status_unwritable", {});
 		}
 
+		await pump();
 		io.stdout(json(report));
 
 		if (parsed.command === "tick") return EXIT.ok;

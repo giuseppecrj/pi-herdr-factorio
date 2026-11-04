@@ -144,6 +144,12 @@ import {
 	WORKFLOW_PATH,
 } from "./workflow.ts";
 import { digestOf, isDigest } from "./run.ts";
+import {
+	LedgerRowError,
+	terminalSnapshot,
+	type LedgerOutbox,
+} from "./ledger.ts";
+import type { JsonValue } from "./tickets.ts";
 
 export type { StageResult };
 
@@ -396,6 +402,8 @@ export interface RunFiles {
 	): Promise<"present" | "created" | "unavailable">;
 	listClaims(): Promise<ClaimRecord[]>;
 	writeClaim(claim: ClaimRecord): Promise<boolean>;
+	/** The private ledger outbox. A terminal snapshot is kept before its marker is posted. */
+	readonly ledger?: LedgerOutbox;
 	/** Writes the contract and its receipt once. The same bytes again succeed. */
 	writeContract(input: {
 		readonly contract: Contract;
@@ -1278,6 +1286,7 @@ export class Orchestrator {
 			isTerminal(marked.status) &&
 			marked.seq >= (claim.seq ?? 0)
 		) {
+			await this.#freezeRow(marked);
 			await this.#keepEnded(
 				{
 					...claim,
@@ -1523,7 +1532,7 @@ export class Orchestrator {
 		}
 
 		this.#localAhead(run.issue, ledger.value);
-		this.#confirmEnd(run.issue, ledger.value);
+		await this.#confirmEnd(run.issue, ledger.value);
 
 		const replaced = replacedBy(timeline.value, run);
 
@@ -1901,7 +1910,7 @@ export class Orchestrator {
 		});
 	}
 
-	#confirmEnd(issue: number, ledger: CleanLedger): void {
+	async #confirmEnd(issue: number, ledger: CleanLedger): Promise<void> {
 		const ledgerSeq = ledger.markers.at(-1)?.marker.seq ?? 0;
 
 		for (const ended of this.#ended.values()) {
@@ -1909,6 +1918,10 @@ export class Orchestrator {
 
 			ended.tick = this.#ticks;
 			ended.confirmed ||= ledgerSeq >= ended.claim.seq;
+			const marker = latestFor(ledger, ended.claim.runId)?.marker;
+
+			if (marker !== undefined && marker.seq === ended.claim.seq)
+				await this.#freezeRow(marker);
 		}
 	}
 
@@ -1934,8 +1947,63 @@ export class Orchestrator {
 			}
 
 			this.#localAhead(issue, ledger.value);
-			this.#confirmEnd(issue, ledger.value);
+			await this.#confirmEnd(issue, ledger.value);
 		}
+	}
+
+	async #prepareTerminal(run: ActiveRun): Promise<boolean> {
+		const ledger = this.#input.files.ledger;
+		const status = desiredStatus(run.phase);
+
+		if (ledger === undefined || !isTerminal(status)) return true;
+		const fields = { issue: run.issue, runId: run.runId };
+		let snapshot: JsonValue;
+
+		try {
+			snapshot = terminalSnapshot({
+				repo: this.#input.repo,
+				runId: run.runId,
+				issue: run.issue,
+				eventId: run.eventId,
+				eventAt: run.eventAt,
+				snapshotDigest: run.snapshotDigest,
+				workflowSha: run.workflowSha,
+				workflowDigest: run.workflowDigest,
+				status,
+				stage: run.stage,
+				usage: run.usage,
+				observedAt: new Date(this.#input.clock.now()).toISOString(),
+				candidate: run.handoff ?? null,
+			});
+		} catch (error) {
+			if (!(error instanceof LedgerRowError)) throw error;
+			this.#input.log("ledger_row_invalid", { ...fields, reason: error.code });
+
+			return true;
+		}
+
+		if (await ledger.prepare(run.runId, snapshot)) return true;
+		this.#input.log("ledger_terminal_unwritable", fields);
+
+		return false;
+	}
+
+	async #freezeRow(marker: Marker): Promise<void> {
+		const ledger = this.#input.files.ledger;
+
+		if (ledger === undefined || !isTerminal(marker.status)) return;
+
+		const frozen = await ledger.freeze(marker.runId, {
+			seq: marker.seq,
+			digest: digestOf(formatMarker(marker)),
+		});
+
+		if (frozen === "invalid" || frozen === "unwritable")
+			this.#input.log("ledger_row_unfrozen", {
+				issue: marker.issue,
+				runId: marker.runId,
+				reason: frozen,
+			});
 	}
 
 	async #keepEnded(claim: ConfirmedRecord, confirmed: boolean): Promise<void> {
@@ -2137,7 +2205,7 @@ export class Orchestrator {
 			}
 
 			this.state.corrupt.delete(issue);
-			this.#confirmEnd(issue, ledger.value);
+			await this.#confirmEnd(issue, ledger.value);
 
 			const local = this.#localAhead(issue, ledger.value);
 
@@ -2337,6 +2405,7 @@ export class Orchestrator {
 						: "undecided";
 				}
 
+				await this.#freezeRow(latest);
 				await this.#keepEnded({ ...claim, ...recordOf(latest) }, true);
 				continue;
 			}
@@ -3858,10 +3927,14 @@ export class Orchestrator {
 				run.handoff?.kind === "selected" &&
 				run.handoff.work.kind === "terminal"
 			) {
-				if ((await this.#recoverUncertainPost(run)) === "proceed")
+				if (
+					(await this.#recoverUncertainPost(run)) === "proceed" &&
+					(await this.#prepareTerminal(run))
+				)
 					await this.#publishMarker(run);
 
 				if (run.marked !== null && isTerminal(run.marked.status)) {
+					await this.#freezeRow(run.marked);
 					this.state.runs.delete(run.issue);
 					await this.#keepEnded({ ...claimOf(run), seq: run.seq }, false);
 				}
@@ -4668,9 +4741,12 @@ export class Orchestrator {
 			}
 		}
 
+		if (!(await this.#prepareTerminal(run))) return;
+
 		await this.#publishMarker(run);
 
 		if (run.marked !== null && isTerminal(run.marked.status)) {
+			await this.#freezeRow(run.marked);
 			this.state.runs.delete(run.issue);
 			await this.#keepEnded({ ...claimOf(run), seq: run.seq }, false);
 		} else if (run.seq !== before) {

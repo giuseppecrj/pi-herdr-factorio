@@ -10,6 +10,8 @@ import {
 import {
 	appendRun,
 	frozenRowOf,
+	pumpLedger,
+	type LedgerOutbox,
 	indexLedger,
 	ledgerApiOf,
 	ledgerRow,
@@ -21,6 +23,11 @@ import {
 import { digestOf, runIdOf } from "../src/run.ts";
 import { isGitSha, type GitSha } from "../src/workflow.ts";
 import { LedgerGit, repo } from "./ledger-git.ts";
+import { fileLedgerOutbox } from "../server/controller.ts";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { after } from "node:test";
 
 const sha = (char: string): GitSha => {
 	const value = char.repeat(40);
@@ -37,7 +44,10 @@ function rowInput(issue: number, eventId = "100"): LedgerRowInput {
 	const policy = {
 		workflowSha: sha("1"),
 		workflowDigest: digestOf("workflow"),
-		gates: { sourceSha: sha("1"), digest: digestOf("gates") },
+		gates: {
+			kind: "known" as const,
+			value: { sourceSha: sha("1"), digest: digestOf("gates") },
+		},
 		autonomy: {
 			approveMerge: "always" as const,
 			land: "propose" as const,
@@ -66,44 +76,50 @@ function rowInput(issue: number, eventId = "100"): LedgerRowInput {
 			kind: "known",
 			value: { authorized: 0, started: 0, completed: 0 },
 		},
-		stages: [
-			{
-				stage: "specify",
-				wallMs: { kind: "exact", unit: "milliseconds", total: 41_000 },
-				attempts: {
-					kind: "known",
-					value: {
-						passed: 1,
-						failed: 0,
-						interrupted: 0,
-						refused: 0,
-						budgetExhausted: 0,
-						aborted: 0,
+		stages: {
+			kind: "known",
+			value: [
+				{
+					stage: "specify",
+					wallMs: { kind: "exact", unit: "milliseconds", total: 41_000 },
+					attempts: {
+						kind: "known",
+						value: {
+							passed: 1,
+							failed: 0,
+							interrupted: 0,
+							refused: 0,
+							budgetExhausted: 0,
+							aborted: 0,
+						},
 					},
+					tokens: { kind: "exact", unit: "tokens", total: 5_900 },
 				},
-				tokens: { kind: "exact", unit: "tokens", total: 5_900 },
-			},
-		],
-		models: [
-			{
-				requested: "openai/gpt-6.1-sol",
-				observed: { kind: "unavailable", reason: "receipt_missing" },
-				providerVersion: {
-					kind: "unavailable",
-					reason: "provider_not_reported",
-				},
-				runtime: {
-					kind: "known",
-					value: {
-						pi: "1.5.0",
-						agents: "0.9.1",
-						pstack: "0.4.2",
-						assetsDigest: digestOf("assets"),
+			],
+		},
+		models: {
+			kind: "known",
+			value: [
+				{
+					requested: "openai/gpt-6.1-sol",
+					observed: { kind: "unavailable", reason: "receipt_missing" },
+					providerVersion: {
+						kind: "unavailable",
+						reason: "provider_not_reported",
 					},
+					runtime: {
+						kind: "known",
+						value: {
+							pi: "1.5.0",
+							agents: "0.9.1",
+							pstack: "0.4.2",
+							assetsDigest: digestOf("assets"),
+						},
+					},
+					executions: 1,
 				},
-				executions: 1,
-			},
-		],
+			],
+		},
 		usage: {
 			tokens: { kind: "exact", unit: "tokens", total: 5_900 },
 			parentTokens: { kind: "known", value: 5_900 },
@@ -275,6 +291,10 @@ describe("ledger row codec", () => {
 		const base = rowInput(4);
 		const landed = landedInput(5);
 
+		const specify =
+			(base.stages.kind === "known" ? base.stages.value[0] : undefined) ??
+			assert.fail("fixture");
+
 		const cases: [string, LedgerRowInput][] = [
 			["run_id_mismatch", { ...base, eventId: "101" }],
 			[
@@ -339,10 +359,13 @@ describe("ledger row codec", () => {
 				"stages_unordered",
 				{
 					...base,
-					stages: [
-						{ ...(base.stages[0] ?? assert.fail()), stage: "build" },
-						{ ...(base.stages[0] ?? assert.fail()), stage: "specify" },
-					],
+					stages: {
+						kind: "known",
+						value: [
+							{ ...specify, stage: "build" },
+							{ ...specify, stage: "specify" },
+						],
+					},
 					usage: {
 						...base.usage,
 						tokens: { kind: "exact", unit: "tokens", total: 11_800 },
@@ -747,5 +770,126 @@ describe("ledger append protocol", () => {
 			[refused.kind, refused.kind === "blocked" && refused.reason],
 			["blocked", "lineage_changed"],
 		);
+	});
+});
+
+describe("ledger outbox pump", () => {
+	const dirs: string[] = [];
+
+	after(() => {
+		for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+	});
+
+	const fresh = () => {
+		const dir = mkdtempSync(join(tmpdir(), "ledger-outbox-"));
+		dirs.push(dir);
+
+		return dir;
+	};
+
+	async function enrolled(dir: string, issue: number) {
+		const outbox = fileLedgerOutbox(dir);
+		const { terminalMarker: _marker, ...snapshot } = rowInput(issue);
+		const runId = snapshot.runId;
+		assert.equal(await outbox.prepare(runId, snapshot), true);
+		const marker = { seq: 4, digest: digestOf(`marker-${issue}`) };
+		assert.equal(await outbox.freeze(runId, marker), "frozen");
+
+		return { outbox, runId };
+	}
+
+	it("keeps the first terminal snapshot and freezes the same row on every retry", async () => {
+		const dir = fresh();
+		const { outbox, runId } = await enrolled(dir, 30);
+
+		const { terminalMarker: _marker, ...later } = {
+			...rowInput(30),
+			terminalObservedAt: "2026-11-04T12:30:00Z",
+		};
+
+		assert.equal(await outbox.prepare(runId, later), true);
+		const marker = { seq: 4, digest: digestOf("marker-30") };
+		assert.equal(await outbox.freeze(runId, marker), "frozen");
+		const jobs = (await outbox.scan()) ?? assert.fail("scan");
+		assert.equal(jobs[0]?.observedAt, "2026-11-04T11:05:00Z");
+		assert.equal(jobs[0]?.row?.digest, ledgerRow(rowInput(30)).digest);
+		assert.equal(
+			await fileLedgerOutbox(fresh()).freeze(runId, marker),
+			"absent",
+		);
+	});
+
+	it("publishes once, and a lost receipt write is reconciled without a second row", async () => {
+		const dir = fresh();
+		const { outbox, runId } = await enrolled(dir, 31);
+		const fake = new LedgerGit();
+		const api = ledgerApiOf(quietApi(fake));
+		let failReceipt = true;
+
+		const flaky: LedgerOutbox = {
+			...outbox,
+			published: async (receipt, anchor) =>
+				!failReceipt && outbox.published(receipt, anchor),
+		};
+
+		const lost = await pumpLedger(flaky, api, 0);
+		assert.deepEqual(
+			[lost.published, lost.pending, lost.lastError],
+			[0, 1, "state_unwritable"],
+		);
+
+		const retry = JSON.parse(
+			readFileSync(join(dir, "ledger", runId, "retry.json"), "utf8"),
+		);
+
+		assert.equal(retry.nextAt, 5_000);
+
+		const early = await pumpLedger(flaky, api, 1_000);
+		assert.equal(early.published, 0);
+
+		failReceipt = false;
+		const writes = fake.writes.length;
+		const recovered = await pumpLedger(flaky, api, 10_000);
+		assert.deepEqual([recovered.published, recovered.pending], [1, 0]);
+		assert.equal(fake.writes.length, writes);
+		assert.deepEqual(await outbox.scan(), []);
+		assert.equal(
+			(await outbox.anchor())?.byteLength,
+			ledgerRow(rowInput(31)).bytes.length,
+		);
+		assert.equal((await remoteBytes(fake)).toString().split("\n").length, 2);
+	});
+
+	it("reports unreadable outbox state instead of an empty backlog, and blocks on a conflicting row", async () => {
+		const dir = fresh();
+		const { outbox, runId } = await enrolled(dir, 32);
+		writeFileSync(join(dir, "ledger", runId, "row.json"), "garbage\n");
+		const fake = new LedgerGit();
+		const unreadable = await pumpLedger(outbox, ledgerApiOf(quietApi(fake)), 0);
+		assert.equal(unreadable.readable, false);
+		assert.equal(fake.requests.length, 0);
+
+		const other = fresh();
+		const second = await enrolled(other, 33);
+		const remote = new LedgerGit();
+
+		const conflicting = ledgerRow({
+			...rowInput(33),
+			terminalObservedAt: "2026-11-04T11:09:00Z",
+		});
+
+		await appendRun(ledgerApiOf(quietApi(remote)), pending(conflicting), null);
+
+		const blocked = await pumpLedger(
+			second.outbox,
+			ledgerApiOf(quietApi(remote)),
+			0,
+		);
+
+		assert.deepEqual(
+			[blocked.blocked, blocked.pending, blocked.lastError],
+			[1, 1, "row_conflict"],
+		);
+		assert.ok((await remoteBytes(remote)).equals(conflicting.bytes));
 	});
 });
