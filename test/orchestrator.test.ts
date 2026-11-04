@@ -11,6 +11,7 @@ import {
 	mkdtempSync,
 	readFileSync,
 	rmSync,
+	statSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -2315,6 +2316,184 @@ async function cli(
 
 describe("server/cli.ts controller commands", () => {
 	const base = ["--repo", repo];
+
+	describe("--verification-token-cap", () => {
+		const tick = (state: string, ...extra: string[]) => [
+			"tick",
+			"--once",
+			"--json",
+			...base,
+			"--state-dir",
+			state,
+			...extra,
+		];
+
+		const manifestOf = (state: string) =>
+			JSON.parse(readFileSync(join(state, "verification.json"), "utf8"));
+
+		it("requires --issue scope and a positive integer cap", async () => {
+			for (const extra of [
+				["--verification-token-cap", "1000"],
+				["--issue", "14", "--verification-token-cap", "0"],
+				["--issue", "14", "--verification-token-cap", "1e3"],
+				["--issue", "14", "--verification-token-cap", "-5"],
+			]) {
+				const run = await cli(tick(stateDir(), ...extra), new FakeGitHub());
+
+				assert.equal(run.code, EXIT.usage, extra.join(" "));
+				assert.match(run.stderr, /--verification-token-cap/);
+			}
+
+			const admit = await cli(
+				[
+					"admit",
+					"--json",
+					...base,
+					"--issue",
+					"14",
+					"--state-dir",
+					stateDir(),
+					"--verification-token-cap",
+					"1000",
+				],
+				new FakeGitHub(),
+			);
+
+			assert.equal(admit.code, EXIT.usage);
+		});
+
+		it("pins a write-once manifest in a fresh state dir and refuses changed scope, cap or production use", async () => {
+			const state = stateDir();
+			const github = new FakeGitHub();
+
+			github.add(labeled(14));
+
+			const first = await cli(
+				tick(state, "--issue", "14", "--verification-token-cap", "12000"),
+				github,
+			);
+
+			assert.equal(first.code, EXIT.ok, first.stderr);
+			assert.deepEqual(manifestOf(state), {
+				v: 1,
+				repo,
+				issues: [14],
+				tokenCap: 12_000,
+			});
+			assert.equal(
+				statSync(join(state, "verification.json")).mode & 0o777,
+				0o600,
+			);
+
+			const again = await cli(
+				tick(state, "--issue", "14", "--verification-token-cap", "12000"),
+				github,
+			);
+
+			assert.equal(again.code, EXIT.ok, again.stderr);
+
+			for (const extra of [
+				["--issue", "14", "--verification-token-cap", "13000"],
+				["--issue", "14", "--issue", "15", "--verification-token-cap", "12000"],
+				["--issue", "14"],
+				[],
+			]) {
+				const refused = await cli(tick(state, ...extra), github);
+
+				assert.equal(refused.code, EXIT.invalid, extra.join(" "));
+				assert.match(
+					refused.stderr,
+					/event=controller_refused reason=verification_(manifest_mismatch|state)/,
+				);
+			}
+
+			assert.deepEqual(manifestOf(state).tokenCap, 12_000);
+		});
+
+		it("refuses a state dir that already holds production state", async () => {
+			const state = stateDir();
+			const github = new FakeGitHub();
+
+			github.add(labeled(14));
+			assert.equal(
+				(await cli(tick(state, "--issue", "14"), github)).code,
+				EXIT.ok,
+			);
+
+			const run = await cli(
+				tick(state, "--issue", "14", "--verification-token-cap", "12000"),
+				github,
+			);
+
+			assert.equal(run.code, EXIT.invalid);
+			assert.match(
+				run.stderr,
+				/event=controller_refused reason=verification_state_not_new/,
+			);
+			assert.equal(existsSync(join(state, "verification.json")), false);
+		});
+
+		it("only lowers the trusted run cap and marks the terminal row as verification", async () => {
+			for (const [cap, effective] of [
+				[12_000, 12_000],
+				[900_000, 500_000],
+			] as const) {
+				const state = stateDir();
+				const github = new FakeGitHub();
+				const executor = new FakeExecutor();
+
+				github.add(labeled(14));
+				executor.behaviors = [{ kind: "fail", usage: effective }];
+
+				const argv = tick(
+					state,
+					"--issue",
+					"14",
+					"--verification-token-cap",
+					String(cap),
+				);
+
+				const run = await cli(argv, github, new AbortController(), executor);
+
+				assert.equal(run.code, EXIT.ok, run.stderr);
+				assert.equal(executor.launches[0]?.remainingRunTokens, effective);
+				await cli(argv, github, new AbortController(), executor);
+				assert.equal(statuses(github, 14).at(-1), "3:budget_exhausted");
+
+				const terminal = JSON.parse(
+					readFileSync(
+						join(state, "ledger", runOf(14), "terminal.json"),
+						"utf8",
+					),
+				);
+
+				assert.partialDeepStrictEqual(terminal.provenance, {
+					kind: "verification",
+					trustedRunTokenCap: 500_000,
+					effectiveRunTokenCap: effective,
+				});
+				assert.equal(
+					terminal.provenance.verificationDigest,
+					digestOf(readFileSync(join(state, "verification.json"), "utf8")),
+				);
+			}
+		});
+
+		it("never reaches the production unit's ExecStart", () => {
+			const unit = readFileSync(
+				new URL("../server/factory.service", import.meta.url),
+				"utf8",
+			);
+
+			const exec = unit
+				.split("\n")
+				.filter((line) => line.startsWith("ExecStart"));
+
+			assert.equal(exec.length, 1);
+			assert.match(exec[0] ?? "", /server\/cli\.ts serve /);
+			assert.doesNotMatch(unit, /verification/);
+		});
+	});
 
 	it("tick --once prints the claim snapshot, writes status and releases the lock", async () => {
 		const github = new FakeGitHub();

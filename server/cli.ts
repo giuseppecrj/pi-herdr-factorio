@@ -45,6 +45,7 @@ import {
 	type ProcessTable,
 	procTable,
 	readLock,
+	pinVerification,
 	pumpLedgerOutbox,
 	readStatus,
 	type Sleep,
@@ -61,9 +62,9 @@ export const USAGE = `Usage:
   node server/cli.ts workflow-check --json --repo <owner/name> [--ref <branch>] [--reload-ref <branch>]
   node server/cli.ts status --json --repo <owner/name> [--ref <branch>] [--state-dir <dir>]
   node server/cli.ts admit --json --repo <owner/name> --issue <number> --state-dir <dir>
-  node server/cli.ts tick --once --json --repo <owner/name> --state-dir <dir> [--issue <number>]...
-  node server/cli.ts run --json --repo <owner/name> --issue <number> --state-dir <dir>
-  node server/cli.ts serve --repo <owner/name> --state-dir <dir> [--issue <number>]...`;
+  node server/cli.ts tick --once --json --repo <owner/name> --state-dir <dir> [--issue <number>]... [--verification-token-cap <n>]
+  node server/cli.ts run --json --repo <owner/name> --issue <number> --state-dir <dir> [--verification-token-cap <n>]
+  node server/cli.ts serve --repo <owner/name> --state-dir <dir> [--issue <number>]... [--verification-token-cap <n>]`;
 
 export const EXIT = { ok: 0, invalid: 1, usage: 2 } as const;
 
@@ -116,6 +117,7 @@ type Parsed =
 			repo: RepoSlug;
 			stateDir: string;
 			scope: readonly number[] | null;
+			verificationCap: number | null;
 	  }
 	| { kind: "usage"; message: string };
 
@@ -175,12 +177,23 @@ function parseController(
 		return { kind: "usage", message: "--state-dir <dir> is required" };
 	}
 
+	const cap = values["verification-token-cap"];
+
+	if (cap !== undefined && (issues.length === 0 || !ISSUE_NUMBER.test(cap))) {
+		return {
+			kind: "usage",
+			message:
+				"--verification-token-cap takes a positive integer and requires --issue",
+		};
+	}
+
 	return {
 		kind: "controller",
 		command,
 		repo,
 		stateDir: resolve(values["state-dir"]),
 		scope: issues.length === 0 ? null : [...new Set(issues)],
+		verificationCap: cap === undefined ? null : Number(cap),
 	};
 }
 
@@ -230,6 +243,13 @@ function parse(argv: readonly string[]): Parsed {
 		return {
 			kind: "usage",
 			message: "--once applies only to tick, and tick requires it",
+		};
+	}
+
+	if (values["verification-token-cap"] !== undefined) {
+		return {
+			kind: "usage",
+			message: "--verification-token-cap applies only to tick, run and serve",
 		};
 	}
 
@@ -314,6 +334,7 @@ function parseCliArgs(argv: readonly string[]) {
 			"reload-ref": { type: "string" },
 			issue: { type: "string", multiple: true },
 			"state-dir": { type: "string" },
+			"verification-token-cap": { type: "string" },
 		},
 	});
 }
@@ -473,6 +494,29 @@ async function runController(
 			return EXIT.invalid;
 		}
 
+		const pinned = await pinVerification(
+			parsed.stateDir,
+			parsed.verificationCap === null
+				? null
+				: {
+						repo: parsed.repo,
+						issues: parsed.scope ?? [],
+						tokenCap: parsed.verificationCap,
+					},
+		);
+
+		if (pinned.kind === "refused") {
+			log("controller_refused", { reason: pinned.reason });
+
+			return EXIT.invalid;
+		}
+
+		if (pinned.kind === "pinned")
+			log("verification_cap_pinned", {
+				tokenCap: pinned.tokenCap,
+				digest: pinned.digest.slice(0, 12),
+			});
+
 		const orchestrator = new Orchestrator({
 			exec: io.exec,
 			env: io.env,
@@ -487,6 +531,10 @@ async function runController(
 			clock,
 			scope: parsed.scope,
 			log,
+			verification:
+				pinned.kind === "pinned"
+					? { digest: pinned.digest, tokenCap: pinned.tokenCap }
+					: null,
 		});
 
 		const pump = () =>

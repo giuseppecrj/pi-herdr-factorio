@@ -922,6 +922,11 @@ export type TerminalFacts = {
 	readonly usage: number;
 	readonly observedAt: string;
 	readonly candidate: CandidateState | null;
+	readonly verification?: {
+		readonly digest: Digest;
+		readonly trustedRunTokenCap: number;
+		readonly effectiveRunTokenCap: number;
+	} | null;
 };
 
 function outcomeOf(facts: TerminalFacts): JsonValue {
@@ -1042,6 +1047,31 @@ function artifactsOf(facts: TerminalFacts): JsonValue {
  * without its marker proof. Facts this build does not yet record are
  * unavailable, never zero.
  */
+function provenanceOf(facts: TerminalFacts): JsonValue {
+	const policy = {
+		workflowSha: facts.workflowSha,
+		workflowDigest: facts.workflowDigest,
+		gates: unavailable("not_instrumented"),
+		autonomy: {
+			approveMerge: "always",
+			land: "propose",
+			digest: AUTONOMY_DIGEST,
+		},
+	};
+
+	const verification = facts.verification ?? null;
+
+	return verification === null
+		? { kind: "production", policy }
+		: {
+				kind: "verification",
+				policy,
+				verificationDigest: verification.digest,
+				trustedRunTokenCap: verification.trustedRunTokenCap,
+				effectiveRunTokenCap: verification.effectiveRunTokenCap,
+			};
+}
+
 export function terminalSnapshot(facts: TerminalFacts): JsonValue {
 	const base = `https://github.com/${facts.repo}`;
 	const state = facts.candidate;
@@ -1072,19 +1102,7 @@ export function terminalSnapshot(facts: TerminalFacts): JsonValue {
 		originalBase: state?.pin.originalBase ?? facts.workflowSha,
 		startedAt: unavailable("not_instrumented"),
 		terminalObservedAt: facts.observedAt,
-		provenance: {
-			kind: "production",
-			policy: {
-				workflowSha: facts.workflowSha,
-				workflowDigest: facts.workflowDigest,
-				gates: unavailable("not_instrumented"),
-				autonomy: {
-					approveMerge: "always",
-					land: "propose",
-					digest: AUTONOMY_DIGEST,
-				},
-			},
-		},
+		provenance: provenanceOf(facts),
 		outcome: outcomeOf(facts),
 		pr:
 			published === null

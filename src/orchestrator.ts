@@ -962,6 +962,8 @@ export type OrchestratorInput = {
 	scope: readonly number[] | null;
 	log: Log;
 	paging?: GitHubPaging;
+	/** A verification-only run cap pinned to its state directory. It only lowers the trusted cap. */
+	verification?: { readonly digest: Digest; readonly tokenCap: number } | null;
 };
 
 /**
@@ -1361,7 +1363,7 @@ export class Orchestrator {
 		}
 
 		if (reads.workflow.kind === "loaded") {
-			this.#config = reads.workflow.snapshot.config;
+			this.#config = this.#capped(reads.workflow.snapshot.config);
 			this.#workflowSha = reads.workflow.snapshot.sha;
 		} else {
 			reasons.push("workflow_unavailable");
@@ -1951,6 +1953,39 @@ export class Orchestrator {
 		}
 	}
 
+	#trustedRunTokens: number | null = null;
+
+	#capped(config: WorkflowConfig): WorkflowConfig {
+		const verification = this.#input.verification ?? null;
+
+		this.#trustedRunTokens = config.usage.maxTokensPerRun;
+
+		return verification === null
+			? config
+			: {
+					...config,
+					usage: {
+						maxTokensPerRun: Math.min(
+							verification.tokenCap,
+							config.usage.maxTokensPerRun,
+						),
+					},
+				};
+	}
+
+	#verificationFacts() {
+		const verification = this.#input.verification ?? null;
+		const trusted = this.#trustedRunTokens;
+
+		return verification === null || trusted === null
+			? null
+			: {
+					digest: verification.digest,
+					trustedRunTokenCap: trusted,
+					effectiveRunTokenCap: Math.min(verification.tokenCap, trusted),
+				};
+	}
+
 	async #prepareTerminal(run: ActiveRun): Promise<boolean> {
 		const ledger = this.#input.files.ledger;
 		const status = desiredStatus(run.phase);
@@ -1974,6 +2009,7 @@ export class Orchestrator {
 				usage: run.usage,
 				observedAt: new Date(this.#input.clock.now()).toISOString(),
 				candidate: run.handoff ?? null,
+				verification: this.#verificationFacts(),
 			});
 		} catch (error) {
 			if (!(error instanceof LedgerRowError)) throw error;

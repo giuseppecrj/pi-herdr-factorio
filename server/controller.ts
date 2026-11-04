@@ -2332,6 +2332,77 @@ async function installOnce(path: string, text: string): Promise<boolean> {
 	);
 }
 
+/** The verification manifest's name in a verification state directory. */
+export const VERIFICATION_FILE = "verification.json";
+
+export type VerificationPin =
+	| { readonly kind: "production" }
+	| {
+			readonly kind: "pinned";
+			readonly digest: Digest;
+			readonly tokenCap: number;
+	  }
+	| {
+			readonly kind: "refused";
+			readonly reason:
+				| "verification_state"
+				| "verification_state_not_new"
+				| "verification_manifest_mismatch"
+				| "verification_unwritable";
+	  };
+
+/**
+ * Binds a verification-only token cap to its state directory. The first
+ * run writes `verification.json`, naming the repo, the issue scope and the
+ * cap, into a directory that holds nothing but the lock. Every later run
+ * must name the same bytes, and a run without the cap refuses a directory
+ * that has one, so verification rows never mix with production state.
+ */
+export async function pinVerification(
+	stateDir: string,
+	wanted: {
+		readonly repo: RepoSlug;
+		readonly issues: readonly number[];
+		readonly tokenCap: number;
+	} | null,
+): Promise<VerificationPin> {
+	const path = join(stateDir, VERIFICATION_FILE);
+
+	const existing = await readFile(path, "utf8").catch(
+		(error: NodeJS.ErrnoException) =>
+			error.code === "ENOENT" ? null : undefined,
+	);
+
+	if (existing === undefined)
+		return { kind: "refused", reason: "verification_state" };
+
+	if (wanted === null)
+		return existing === null
+			? { kind: "production" }
+			: { kind: "refused", reason: "verification_state" };
+
+	const text = `${JSON.stringify({
+		v: 1,
+		repo: wanted.repo,
+		issues: [...new Set(wanted.issues)].sort((a, b) => a - b),
+		tokenCap: wanted.tokenCap,
+	})}\n`;
+
+	if (existing !== null)
+		return existing === text
+			? { kind: "pinned", digest: digestOf(text), tokenCap: wanted.tokenCap }
+			: { kind: "refused", reason: "verification_manifest_mismatch" };
+
+	const entries = await readdir(stateDir).catch(() => null);
+
+	if (entries === null || entries.some((name) => name !== HOLDER_FILE))
+		return { kind: "refused", reason: "verification_state_not_new" };
+
+	return (await installOnce(path, text))
+		? { kind: "pinned", digest: digestOf(text), tokenCap: wanted.tokenCap }
+		: { kind: "refused", reason: "verification_unwritable" };
+}
+
 /**
  * The controller-private ledger outbox under `<state>/ledger`. Each run's
  * terminal snapshot and row are write-once; only its retry record and the

@@ -48,6 +48,7 @@ The flags below describe the workflow and controller commands. `viewer` has its 
 | `--ref <branch>` | `workflow-check`, `status` | no | `main` | The branch to load. Any branch other than `main` sets `verification: true`. |
 | `--reload-ref <branch>` | `workflow-check` | no | none | Load a second branch as a reload on top of `--ref` and report which snapshot stays in force. |
 | `--issue <number>` | `admit`, `run`, `tick`, `serve` | `admit` and `run`: exactly one. `tick` and `serve`: no | every candidate | The issue number, from 1 to 9999999999, with no leading zero. `tick` and `serve` take it any number of times and then touch only those issues. |
+| `--verification-token-cap <n>` | `tick`, `run`, `serve` | no | none | Verification lanes only. It lowers the run token cap to `min(n, usage.max_tokens_per_run)` and never raises it. It requires `--issue`. See [Verification token cap](#verification-token-cap). |
 | `--state-dir <dir>` | `admit`, `tick`, `run`, `serve`; optional for `status` | yes, except for `status` | none | The controller state directory. It must already exist as a directory, not a symlink, owned by the effective user and not writable by group or others. A relative path is resolved against the working directory. |
 
 `--ref` and `--reload-ref` exist so verification lanes can load fixture branches. The controller always loads `main` and takes no such flag.
@@ -445,6 +446,16 @@ Each command does these steps in order and stops at the first that fails:
 3. It checks that `gh` acts as the integration bot. It reads `gh api graphql -f query='query { viewer { login } }'` and requires exactly `exe-dev-github-integration[bot]`. Without `GH_HOST`, `gh` on the VM has no credentials and the read fails, and on a workstation it answers as the owner. Either way it logs `controller_refused` with `identity_unavailable` or `identity_mismatch`, releases the lock and exits 1. See `docs/prototypes/restart-recovery/README.md`.
 
 `serve` then logs `controller_ready` with its pid, repository and scope. That line means the service is ready.
+
+### Verification token cap
+
+`--verification-token-cap <n>` lets a verification lane test an almost exhausted run budget without spending most of main's 500,000-token cap. It is not for production, and `server/factory.service` never passes it.
+
+- It requires `--issue`. A missing scope, or a value that is not a positive integer, is a usage error. Other commands refuse it.
+- After the identity check and before the first tick, the controller pins `<state-dir>/verification.json`, mode 0600. The file holds the repository, the sorted issue scope and `n`. The first run requires a state directory that holds nothing but `controller.lock`. Each later run must name the same repository, scope and cap.
+- It logs `controller_refused`, releases the lock and exits 1 with `verification_state_not_new` when the state directory already holds other state, and with `verification_manifest_mismatch` when the scope or cap changed. Without the flag, a state directory that has the manifest is refused with `verification_state`.
+- The effective run cap is `min(n, usage.max_tokens_per_run)`. Every limit that reads the run cap uses it, including launch allowances, the retry budget and the candidate's token limit.
+- Each terminal row from that directory has `provenance.kind: "verification"`, with the manifest's digest, the trusted cap and the effective cap. Production cohorts exclude these rows.
 
 ### The lock
 
