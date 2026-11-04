@@ -513,8 +513,8 @@ export class Gateway implements AdmissionState {
 					: {
 							status: exchange.rejected,
 							reason: "provider_rejected",
-							inputTokens: 0,
-							outputTokens: 0,
+							inputTokens: exchange.inputTokens ?? 0,
+							outputTokens: exchange.outputTokens ?? 0,
 						}),
 			})
 		) {

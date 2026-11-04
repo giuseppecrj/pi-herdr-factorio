@@ -50,7 +50,7 @@ type JournalIdentity = {
 /**
  * One model request in the synced journal: a `dispatch` before anything goes
  * upstream, and a `result` once it ends. Only ids, counters and metering. A
- * provider's non-2xx status at the headers is `provider_rejected`, metered zero.
+ * provider's non-2xx status at the headers is `provider_rejected`, metered at its reported usage or zero.
  */
 export type JournalRecord =
 	| (JournalIdentity & {
