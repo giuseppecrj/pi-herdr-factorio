@@ -20,6 +20,11 @@ import {
 	publishCandidate,
 	gitObjectSha,
 	BOT_EMAIL,
+	LEDGER_FILE,
+	createLedgerChild,
+	createLedgerRoot,
+	readLedgerCommit,
+	readLedgerFile,
 } from "../src/publication.ts";
 import { digestOf, REQUIRED_CI_CHECKS } from "../src/run.ts";
 import { type Exec, type ExecResult } from "../src/gh.ts";
@@ -31,7 +36,7 @@ import {
 	arrayOf,
 	type JsonValue,
 } from "../server/sandbox/json.ts";
-import { isGitSha, isRepoSlug } from "../src/workflow.ts";
+import { isGitSha, isRepoSlug, type GitSha } from "../src/workflow.ts";
 import {
 	type Contract,
 	contractBytes,
@@ -1469,5 +1474,558 @@ describe("controller publication and waiting recovery", () => {
 			),
 			/unsafe_symlink/,
 		);
+	});
+});
+
+class LedgerGit {
+	readonly blobs = new Map<string, Buffer>();
+	readonly trees = new Map<string, Map<string, string>>();
+	readonly commits = new Map<string, readonly string[]>();
+	readonly refs = new Map<string, string>();
+	readonly writes: { method: string; path: string; body: JsonValue }[] = [];
+	readonly requests: string[] = [];
+	lose: ((method: string, path: string) => "before" | "after" | null) | null =
+		null;
+	hook: ((method: string, path: string) => ExecResult | null) | null = null;
+	readonly exec: Exec = async (_command, args): Promise<ExecResult> => {
+		const path =
+			args
+				.find((a) => a.startsWith(`repos/${repo}/`))
+				?.slice(`repos/${repo}/`.length) ?? "";
+
+		const method = args[args.indexOf("--method") + 1] ?? "GET";
+		const file = args[args.indexOf("--input") + 1];
+
+		const body =
+			args.includes("--input") && file !== undefined
+				? (parseJson(readFileSync(file, "utf8")) ?? null)
+				: null;
+
+		this.requests.push(`${method} ${path}`);
+
+		if (method !== "GET") this.writes.push({ method, path, body });
+		const hooked = this.hook?.(method, path);
+
+		if (hooked != null) return hooked;
+		const lost = this.lose?.(method, path) ?? null;
+
+		if (lost === "before")
+			return { code: 1, stdout: "", stderr: "connection reset" };
+		const result = this.answer(method, path, objectOf(body));
+
+		return lost === "after"
+			? { code: 1, stdout: "", stderr: "connection reset" }
+			: result;
+	};
+	answer(method: string, path: string, body: ReturnType<typeof objectOf>) {
+		const ok = (value?: JsonValue): ExecResult => ({
+			code: 0,
+			stdout: value === undefined ? "" : JSON.stringify(value),
+			stderr: "",
+		});
+
+		const no = (status: number): ExecResult => ({
+			code: 1,
+			stdout: "",
+			stderr: `HTTP ${status}`,
+		});
+
+		if (method === "POST" && path === "git/blobs") {
+			const bytes = Buffer.from(
+				textOf(fieldOf(body, "content")) ?? "",
+				"base64",
+			);
+
+			const sha = gitObjectSha("blob", bytes);
+			this.blobs.set(sha, bytes);
+
+			return ok({ sha });
+		}
+
+		if (method === "POST" && path === "git/trees") {
+			const base = textOf(fieldOf(body, "base_tree"));
+			const files = new Map(base === null ? [] : this.trees.get(base));
+
+			for (const entry of arrayOf(fieldOf(body, "tree")) ?? []) {
+				const sha = textOf(fieldOf(objectOf(entry), "sha"));
+				const name = textOf(fieldOf(objectOf(entry), "path")) ?? "";
+
+				if (sha === null) files.delete(name);
+				else files.set(name, sha);
+			}
+
+			const sha = createHash("sha1")
+				.update(JSON.stringify([...files].sort()))
+				.digest("hex");
+
+			this.trees.set(sha, files);
+
+			return ok({ sha });
+		}
+
+		if (method === "GET" && path.startsWith("git/trees/")) {
+			const sha = path.slice("git/trees/".length).replace(/\?.*$/, "");
+			const files = this.trees.get(sha);
+
+			if (files === undefined) return no(404);
+			const dirs = new Set<string>();
+
+			for (const name of files.keys()) {
+				const parts = name.split("/");
+
+				for (let i = 1; i < parts.length; i++)
+					dirs.add(parts.slice(0, i).join("/"));
+			}
+
+			return ok({
+				sha,
+				truncated: false,
+				tree: [
+					...[...dirs].map((dir) => ({
+						path: dir,
+						mode: "040000",
+						type: "tree",
+						sha: "e".repeat(40),
+					})),
+					...[...files].map(([name, blob]) => ({
+						path: name,
+						mode: "100644",
+						type: "blob",
+						sha: blob,
+					})),
+				],
+			});
+		}
+
+		if (method === "GET" && path.startsWith("git/blobs/")) {
+			const sha = path.slice("git/blobs/".length);
+			const bytes = this.blobs.get(sha);
+
+			return bytes === undefined
+				? no(404)
+				: ok({ sha, encoding: "base64", content: bytes.toString("base64") });
+		}
+
+		if (method === "POST" && path === "git/commits") {
+			const tree = textOf(fieldOf(body, "tree")) ?? "";
+
+			const parents = (arrayOf(fieldOf(body, "parents")) ?? []).map(
+				(p) => textOf(p) ?? "",
+			);
+
+			const message = textOf(fieldOf(body, "message")) ?? "";
+			const date = textOf(fieldOf(objectOf(fieldOf(body, "author")), "date"));
+			const actor = `${CONTROLLER_LOGIN} <${BOT_EMAIL}> ${Date.parse(date ?? "") / 1000} +0000`;
+
+			const sha = gitObjectSha(
+				"commit",
+				Buffer.from(
+					`tree ${tree}\n${parents.map((p) => `parent ${p}\n`).join("")}author ${actor}\ncommitter ${actor}\n\n${message}`,
+				),
+			);
+
+			this.commits.set(sha, parents);
+			this.trees.set(`commit:${sha}`, new Map([["tree", tree]]));
+
+			return ok({ sha });
+		}
+
+		if (method === "GET" && path.startsWith("git/commits/")) {
+			const sha = path.slice("git/commits/".length);
+			const parents = this.commits.get(sha);
+			const tree = this.trees.get(`commit:${sha}`)?.get("tree");
+
+			return parents === undefined || tree === undefined
+				? no(404)
+				: ok({
+						sha,
+						tree: { sha: tree },
+						parents: parents.map((parent) => ({ sha: parent })),
+					});
+		}
+
+		if (method === "POST" && path === "git/refs") {
+			const name = (textOf(fieldOf(body, "ref")) ?? "").slice(
+				"refs/heads/".length,
+			);
+
+			if (this.refs.has(name)) return no(422);
+			const sha = textOf(fieldOf(body, "sha")) ?? "";
+			this.refs.set(name, sha);
+
+			return ok({ ref: `refs/heads/${name}`, object: { sha } });
+		}
+
+		if (method === "GET" && path.startsWith("git/ref/heads/")) {
+			const name = path.slice("git/ref/heads/".length);
+			const sha = this.refs.get(name);
+
+			return sha === undefined
+				? no(404)
+				: ok({ ref: `refs/heads/${name}`, object: { sha, type: "commit" } });
+		}
+
+		if (method === "PATCH" && path.startsWith("git/refs/heads/")) {
+			const name = path.slice("git/refs/heads/".length);
+			const current = this.refs.get(name);
+			const next = textOf(fieldOf(body, "sha")) ?? "";
+
+			if (current === undefined) return no(422);
+
+			if (fieldOf(body, "force") !== false || !this.descends(next, current))
+				return no(422);
+			this.refs.set(name, next);
+
+			return ok({ ref: `refs/heads/${name}`, object: { sha: next } });
+		}
+
+		throw new Error(`unexpected ${method} ${path}`);
+	}
+	descends(sha: string, ancestor: string): boolean {
+		const queue = [sha];
+
+		for (let next = queue.pop(); next !== undefined; next = queue.pop()) {
+			if (next === ancestor) return true;
+			queue.push(...(this.commits.get(next) ?? []));
+		}
+
+		return false;
+	}
+}
+
+const ledgerDate = "2026-11-04T12:00:00Z";
+
+const quietApi = (exec: Exec) =>
+	new GitHubPublicationApi(
+		exec,
+		repo,
+		{},
+		async () => true,
+		async () => {},
+	);
+
+describe("ledger Git API", () => {
+	it("candidate ref, prRef and remove refuse factory/ledger before any request", async () => {
+		const fake = new LedgerGit();
+		const api = quietApi(fake.exec);
+		const sha = "c".repeat(40);
+		assert.ok(isGitSha(sha));
+		fake.refs.set("factory/ledger", sha);
+
+		for (const branch of [
+			"factory/ledger",
+			"refs/heads/factory/ledger",
+			"factory/ledger/x",
+		]) {
+			await assert.rejects(api.ref(branch), /invalid_branch/);
+			await assert.rejects(api.prRef(branch), /invalid_branch/);
+			await assert.rejects(api.remove(branch, sha), /invalid_branch/);
+			await assert.rejects(api.promotePr(branch, null, sha), /invalid_branch/);
+		}
+
+		assert.equal(fake.requests.length, 0);
+		assert.equal(fake.refs.get("factory/ledger"), sha);
+	});
+
+	it("ledger methods name no branch and write only refs/heads/factory/ledger", async () => {
+		const fake = new LedgerGit();
+		const api = quietApi(fake.exec);
+		const other = candidateBranch(1, runId, 0);
+		const otherSha = "d".repeat(40);
+		fake.refs.set(other, otherSha);
+		assert.equal(api.ledgerRef.length, 0);
+		assert.equal(api.advanceLedger.length, 2);
+
+		for (const bad of [other, "factory/ledger", "main", "f".repeat(39)])
+			await assert.rejects(
+				// SAFETY: deliberately passes a non-SHA to prove the runtime guard.
+				api.advanceLedger(null, bad as GitSha),
+				/invalid_sha/,
+			);
+		assert.equal(fake.requests.length, 0);
+
+		assert.equal(await api.ledgerRef(), null);
+		const root = await createLedgerRoot(api, ledgerDate);
+		assert.deepEqual(await api.advanceLedger(null, root.sha), {
+			kind: "advanced",
+			tip: root.sha,
+		});
+
+		const child = await createLedgerChild(
+			api,
+			root,
+			Buffer.from("row\n"),
+			ledgerDate,
+			"factory: ledger child\n",
+		);
+
+		assert.deepEqual(await api.advanceLedger(root.sha, child.sha), {
+			kind: "advanced",
+			tip: child.sha,
+		});
+		assert.equal(await api.ledgerRef(), child.sha);
+
+		const refWrites = fake.writes.filter((w) => w.path.includes("refs"));
+
+		assert.deepEqual(
+			refWrites.map((w) => [w.method, w.path, w.body]),
+			[
+				[
+					"POST",
+					"git/refs",
+					{ ref: "refs/heads/factory/ledger", sha: root.sha },
+				],
+				[
+					"PATCH",
+					"git/refs/heads/factory/ledger",
+					{ sha: child.sha, force: false },
+				],
+			],
+		);
+		assert.ok(
+			fake.requests
+				.filter((r) => r.includes("git/ref/"))
+				.every((r) => r === "GET git/ref/heads/factory/ledger"),
+		);
+		assert.equal(
+			fake.requests.some((r) => r.startsWith("DELETE")),
+			false,
+		);
+		assert.equal(fake.refs.get(other), otherSha);
+	});
+
+	it("only ledger root creation omits base_tree, and it has no parents", async () => {
+		const fake = new LedgerGit();
+		const api = quietApi(fake.exec);
+		const root = await createLedgerRoot(api, ledgerDate);
+
+		const child = await createLedgerChild(
+			api,
+			root,
+			Buffer.from("row\n"),
+			ledgerDate,
+			"factory: ledger child\n",
+		);
+
+		const trees = fake.writes.filter((w) => w.path === "git/trees");
+		assert.equal(trees.length, 2);
+		assert.equal(
+			Object.hasOwn(objectOf(trees[0]?.body) ?? {}, "base_tree"),
+			false,
+		);
+		assert.deepEqual(fieldOf(objectOf(trees[0]?.body), "tree"), [
+			{
+				path: LEDGER_FILE,
+				mode: "100644",
+				type: "blob",
+				sha: gitObjectSha("blob", new Uint8Array()),
+			},
+		]);
+		assert.equal(fieldOf(objectOf(trees[1]?.body), "base_tree"), root.tree);
+		assert.deepEqual(root.parents, []);
+		assert.deepEqual(fake.commits.get(root.sha), []);
+		assert.deepEqual(child.parents, [root.sha]);
+		assert.deepEqual(fake.commits.get(child.sha), [root.sha]);
+
+		const read = await readLedgerCommit(api, root.sha);
+		assert.deepEqual(read, root);
+		const file = await readLedgerFile(api, root.tree);
+		assert.equal(file.bytes.length, 0);
+		assert.deepEqual(file.paths, ["ledger", LEDGER_FILE]);
+		assert.equal(file.blob, gitObjectSha("blob", new Uint8Array()));
+
+		const candidateTrees: JsonValue[] = [];
+		const recorded = new GitData();
+
+		recorded.hook = (args) => {
+			const file = args[args.indexOf("--input") + 1];
+
+			if (args.includes(`repos/${repo}/git/trees`) && file !== undefined)
+				candidateTrees.push(parseJson(readFileSync(file, "utf8")) ?? null);
+
+			return null;
+		};
+
+		await publishCandidate(quietApi(recorded.exec), publicationInput);
+		assert.equal(candidateTrees.length, 2);
+
+		for (const body of candidateTrees)
+			assert.ok(isGitSha(textOf(fieldOf(objectOf(body), "base_tree")) ?? ""));
+	});
+
+	it("fast-forwards only, and a sibling advance is rejected with the ref left in place", async () => {
+		const fake = new LedgerGit();
+		const api = quietApi(fake.exec);
+		const root = await createLedgerRoot(api, ledgerDate);
+		await api.advanceLedger(null, root.sha);
+		const empty = Buffer.alloc(0);
+		const a = await createLedgerChild(api, root, empty, ledgerDate, "a\n");
+		const b = await createLedgerChild(api, root, empty, ledgerDate, "b\n");
+		assert.notEqual(a.sha, b.sha);
+		assert.equal(a.tree, root.tree);
+		assert.deepEqual(await api.advanceLedger(root.sha, a.sha), {
+			kind: "advanced",
+			tip: a.sha,
+		});
+		assert.deepEqual(await api.advanceLedger(root.sha, b.sha), {
+			kind: "conflict",
+			tip: a.sha,
+		});
+		assert.equal(fake.refs.get("factory/ledger"), a.sha);
+
+		const otherRoot = await createLedgerRoot(api, "2026-11-04T12:00:01Z");
+		assert.deepEqual(await api.advanceLedger(null, otherRoot.sha), {
+			kind: "conflict",
+			tip: a.sha,
+		});
+		assert.deepEqual(await api.advanceLedger(null, a.sha), {
+			kind: "advanced",
+			tip: a.sha,
+		});
+		assert.equal(fake.refs.get("factory/ledger"), a.sha);
+
+		for (const write of fake.writes.filter((w) => w.method === "PATCH"))
+			assert.equal(fieldOf(objectOf(write.body), "force"), false);
+		assert.equal(
+			fake.requests.some((r) => r.startsWith("DELETE")),
+			false,
+		);
+	});
+
+	it("reconciles a lost write response by reading the ledger ref back", async () => {
+		const fake = new LedgerGit();
+		const api = quietApi(fake.exec);
+		const root = await createLedgerRoot(api, ledgerDate);
+		fake.lose = (method) => (method === "POST" ? "after" : null);
+		assert.deepEqual(await api.advanceLedger(null, root.sha), {
+			kind: "advanced",
+			tip: root.sha,
+		});
+		fake.lose = null;
+
+		const a = await createLedgerChild(
+			api,
+			root,
+			Buffer.alloc(0),
+			ledgerDate,
+			"a\n",
+		);
+
+		fake.lose = (method) => (method === "PATCH" ? "after" : null);
+		assert.deepEqual(await api.advanceLedger(root.sha, a.sha), {
+			kind: "advanced",
+			tip: a.sha,
+		});
+
+		const c = await createLedgerChild(
+			api,
+			a,
+			Buffer.alloc(0),
+			ledgerDate,
+			"c\n",
+		);
+
+		fake.lose = (method) => (method === "PATCH" ? "before" : null);
+		await assert.rejects(api.advanceLedger(a.sha, c.sha), /github_refused/);
+		assert.equal(fake.refs.get("factory/ledger"), a.sha);
+		fake.lose = null;
+
+		fake.hook = (method) =>
+			method === "PATCH" ? { code: 1, stdout: "", stderr: "HTTP 403" } : null;
+		await assert.rejects(api.advanceLedger(a.sha, c.sha), /github_refused/);
+		fake.hook = null;
+
+		assert.equal(fake.writes.filter((w) => w.method === "PATCH").length, 3);
+		assert.deepEqual(await api.advanceLedger(a.sha, c.sha), {
+			kind: "advanced",
+			tip: c.sha,
+		});
+	});
+
+	it("keeps blob, commit and read-back hashes fatal", async () => {
+		for (const target of ["git/blobs", "git/commits"]) {
+			const fake = new LedgerGit();
+			const api = quietApi(fake.exec);
+
+			fake.hook = (method, path) =>
+				method === "POST" && path === target
+					? {
+							code: 0,
+							stdout: JSON.stringify({ sha: "f".repeat(40) }),
+							stderr: "",
+						}
+					: null;
+			await assert.rejects(
+				createLedgerRoot(api, ledgerDate),
+				target === "git/blobs" ? /blob_mismatch/ : /commit_mismatch/,
+			);
+			assert.equal(fake.refs.size, 0);
+		}
+
+		const fake = new LedgerGit();
+		const api = quietApi(fake.exec);
+		const root = await createLedgerRoot(api, ledgerDate);
+		const blob = gitObjectSha("blob", new Uint8Array());
+		fake.blobs.set(blob, Buffer.from("tampered"));
+		await assert.rejects(readLedgerFile(api, root.tree), /blob_mismatch/);
+
+		fake.hook = (method, path) =>
+			method === "GET" && path.startsWith("git/trees/")
+				? {
+						code: 0,
+						stdout: JSON.stringify({
+							sha: root.tree,
+							truncated: true,
+							tree: [],
+						}),
+						stderr: "",
+					}
+				: null;
+		await assert.rejects(readLedgerFile(api, root.tree), /tree_truncated/);
+
+		fake.hook = (method, path) =>
+			method === "GET" && path.startsWith("git/trees/")
+				? {
+						code: 0,
+						stdout: JSON.stringify({
+							sha: root.tree,
+							truncated: false,
+							tree: [],
+						}),
+						stderr: "",
+					}
+				: null;
+		await assert.rejects(readLedgerFile(api, root.tree), /ledger_file_missing/);
+
+		fake.hook = (method, path) =>
+			method === "GET" && path.startsWith("git/commits/")
+				? {
+						code: 0,
+						stdout: JSON.stringify({
+							sha: "f".repeat(40),
+							tree: { sha: root.tree },
+							parents: [],
+						}),
+						stderr: "",
+					}
+				: null;
+		await assert.rejects(readLedgerCommit(api, root.sha), /object_mismatch/);
+
+		fake.hook = (method, path) =>
+			method === "GET" && path.startsWith("git/ref/")
+				? {
+						code: 0,
+						stdout: JSON.stringify({
+							ref: "refs/heads/factory/ledger-other",
+							object: { sha: root.sha },
+						}),
+						stderr: "",
+					}
+				: null;
+		await assert.rejects(api.ledgerRef(), /malformed_ref/);
+		fake.hook = null;
+		const absent = "a".repeat(40);
+		assert.ok(isGitSha(absent));
+		await assert.rejects(readLedgerCommit(api, absent), /object_missing/);
 	});
 });
