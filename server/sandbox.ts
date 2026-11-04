@@ -101,7 +101,11 @@ import {
 	type TarballFetch,
 } from "./controller.ts";
 import { HERDR_AGENTS, PI_AGENT_DIR } from "./sandbox/assets/pi.ts";
-import { AUDIT_CAP_BYTES } from "./sandbox/audit.ts";
+import {
+	AUDIT_CAP_BYTES,
+	JOURNAL_FILE,
+	journalCharge,
+} from "./sandbox/audit.ts";
 import {
 	countOf,
 	arrayOf,
@@ -1387,13 +1391,41 @@ async function attemptSpent(
 	return total;
 }
 
-/**
- * Tokens one execution dir is known to have used, from host-side files
- * only: the receipt's `usage.total`, else the sum of the gateway's metered
- * tokens in `egress.jsonl`. A line cut short by a crash is skipped. `null`
- * when the dir has neither file.
- */
 async function executionSpent(dir: string): Promise<number | null> {
+	return (await executionCharge(dir))?.total ?? null;
+}
+
+export type ExecutionCharge = {
+	readonly total: number;
+	readonly uncertain: number;
+};
+
+function summed(charges: (ExecutionCharge | null)[]): ExecutionCharge | null {
+	return charges.some((charge) => charge !== null)
+		? {
+				total: charges.reduce((sum, charge) => sum + (charge?.total ?? 0), 0),
+				uncertain: charges.reduce(
+					(sum, charge) => sum + (charge?.uncertain ?? 0),
+					0,
+				),
+			}
+		: null;
+}
+
+/**
+ * What one execution dir is known to have charged, from host-side files
+ * only. A finished receipt's `usage.total` covers everything under it, so
+ * its leaves are not added again. Without one, an aggregate specify or
+ * review dir sums its session dirs, and a leaf takes the larger of its
+ * synced request journal and the gateway's `egress.jsonl` tally, never
+ * their sum. A dispatched request with no result is `uncertain`: its
+ * tokens are unknown, so `total` is only a floor and the request is never
+ * sent again. A line cut short by a crash is skipped. `null` when the dir
+ * has no receipt, journal or audit.
+ */
+export async function executionCharge(
+	dir: string,
+): Promise<ExecutionCharge | null> {
 	const receipt = await boundedText(
 		join(dir, "receipt.json"),
 		MAX_RECEIPT_BYTES,
@@ -1409,16 +1441,14 @@ async function executionSpent(dir: string): Promise<number | null> {
 					),
 				);
 
-	if (total !== null) return total;
+	if (total !== null) return { total, uncertain: 0 };
 
 	if (existsSync(join(dir, "specify.json"))) {
-		const totals = await Promise.all(
-			SPECIFY_SESSIONS.map((name) => executionSpent(join(dir, name))),
+		return summed(
+			await Promise.all(
+				SPECIFY_SESSIONS.map((name) => executionCharge(join(dir, name))),
+			),
 		);
-
-		return totals.some((value) => value !== null)
-			? totals.reduce<number>((sum, value) => sum + (value ?? 0), 0)
-			: null;
 	}
 
 	if (
@@ -1436,18 +1466,19 @@ async function executionSpent(dir: string): Promise<number | null> {
 			),
 		);
 
-		const totals = await Promise.all(
-			names.map((name) => executionSpent(join(dir, name))),
+		return summed(
+			await Promise.all(names.map((name) => executionCharge(join(dir, name)))),
 		);
-
-		return totals.some((value) => value !== null)
-			? totals.reduce<number>((sum, value) => sum + (value ?? 0), 0)
-			: null;
 	}
 
+	const journal = await boundedText(join(dir, JOURNAL_FILE), AUDIT_CAP_BYTES);
+	const charged = journal === null ? null : journalCharge(journal);
 	const audit = await boundedText(join(dir, "egress.jsonl"), AUDIT_CAP_BYTES);
 
-	if (audit === null) return null;
+	if (audit === null)
+		return charged === null
+			? null
+			: { total: charged.tokens, uncertain: charged.uncertain };
 
 	let sum = 0;
 
@@ -1460,7 +1491,10 @@ async function executionSpent(dir: string): Promise<number | null> {
 		sum += countOf(fieldOf(record, "outputTokens")) ?? 0;
 	}
 
-	return sum;
+	return {
+		total: Math.max(sum, charged?.tokens ?? 0),
+		uncertain: charged?.uncertain ?? 0,
+	};
 }
 
 /** Where `server/provision.sh` installs content-addressed asset bundles. */

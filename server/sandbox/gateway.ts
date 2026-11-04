@@ -78,6 +78,7 @@ type Exchange = {
 	inputTokens: number | null;
 	outputTokens: number | null;
 	finished: boolean;
+	dispatched: RouteId | null;
 };
 
 const REFUSED_V4 = [
@@ -460,7 +461,25 @@ export class Gateway implements AdmissionState {
 			inputTokens: null,
 			outputTokens: null,
 			finished: false,
+			dispatched: null,
 		};
+	}
+
+	#journalIdentity(exchange: Exchange, route: RouteId) {
+		return {
+			v: 1,
+			ts: new Date(this.#now()).toISOString(),
+			stage: this.#table.stage,
+			runId: this.#table.runId,
+			attempt: this.#table.attempt,
+			req: exchange.req,
+			route,
+		} as const;
+	}
+
+	#journalFailed(): void {
+		if (this.#gate === null)
+			this.closeGate(this.#audit.full ? "audit_full" : "audit_failed");
 	}
 
 	#record(
@@ -475,6 +494,20 @@ export class Gateway implements AdmissionState {
 
 		const route = exchange.route;
 		const state = route === null ? undefined : this.#routes.get(route.id);
+
+		if (
+			exchange.dispatched !== null &&
+			!this.#audit.journal({
+				...this.#journalIdentity(exchange, exchange.dispatched),
+				kind: "result",
+				status,
+				decision,
+				inputTokens: exchange.inputTokens,
+				outputTokens: exchange.outputTokens,
+			})
+		) {
+			this.#journalFailed();
+		}
 
 		if (state !== undefined) {
 			if (decision === "forward") state.forwarded += 1;
@@ -728,6 +761,21 @@ export class Gateway implements AdmissionState {
 		const state = this.#routes.get(route.id);
 
 		if (state === undefined) return this.#deny(exchange, res, "no-route");
+
+		if (route.meter !== null) {
+			if (
+				!this.#audit.journal({
+					...this.#journalIdentity(exchange, route.id),
+					kind: "dispatch",
+				})
+			) {
+				this.#journalFailed();
+
+				return this.#deny(exchange, res, "audit-unavailable");
+			}
+
+			exchange.dispatched = route.id;
+		}
 
 		state.tokens -= 1;
 		state.active += 1;

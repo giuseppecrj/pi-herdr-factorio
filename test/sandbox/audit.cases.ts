@@ -1,9 +1,22 @@
 import assert from "node:assert/strict";
+import {
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import {
 	AuditLog,
 	type AuditRecord,
 	auditLine,
+	JOURNAL_FILE,
+	type JournalRecord,
+	journalCharge,
+	openAuditFile,
 	redactMethod,
 	redactPath,
 } from "../../server/sandbox/audit.ts";
@@ -12,6 +25,7 @@ import {
 	secretForms,
 } from "../../server/sandbox/credentials.ts";
 import { SseMeter } from "../../server/sandbox/meter.ts";
+import type { RouteId } from "../../server/sandbox/routes.ts";
 
 function record(overrides: Partial<AuditRecord> = {}): AuditRecord {
 	return {
@@ -38,6 +52,131 @@ function record(overrides: Partial<AuditRecord> = {}): AuditRecord {
 		...overrides,
 	};
 }
+
+// SAFETY: a literal route id that matches the RouteId pattern.
+const OPENAI = "model-openai" as RouteId;
+
+const NO_JOURNAL = { write: () => {}, sync: () => {} };
+
+function dispatch(req: number): JournalRecord {
+	return {
+		v: 1,
+		kind: "dispatch",
+		ts: "2026-11-04T10:00:00.000Z",
+		stage: "specify",
+		runId: "a".repeat(64),
+		attempt: 1,
+		req,
+		route: OPENAI,
+	};
+}
+
+function result(
+	req: number,
+	inputTokens: number | null,
+	outputTokens: number | null,
+): JournalRecord {
+	return {
+		v: 1,
+		kind: "result",
+		ts: "2026-11-04T10:00:01.000Z",
+		stage: "specify",
+		runId: "a".repeat(64),
+		attempt: 1,
+		req,
+		route: OPENAI,
+		status: 200,
+		decision: "forward",
+		inputTokens,
+		outputTokens,
+	};
+}
+
+describe("gateway request journal", () => {
+	it("syncs each dispatch and result before reporting it written", () => {
+		const steps: string[] = [];
+
+		const log = new AuditLog(() => steps.push("audit"), 1_000_000, {
+			write: (text) => steps.push(`write:${JSON.parse(text).kind}`),
+			sync: () => steps.push("sync"),
+		});
+
+		assert.equal(log.journal(dispatch(1)), true);
+		assert.equal(log.journal(result(1, 11, 5)), true);
+		assert.deepEqual(steps, ["write:dispatch", "sync", "write:result", "sync"]);
+	});
+
+	it("refuses every later record once a journal write or sync fails", () => {
+		for (const broken of ["write", "sync"] as const) {
+			const log = new AuditLog(() => {}, 1_000_000, {
+				write: () => {
+					if (broken === "write") throw new Error("EIO");
+				},
+				sync: () => {
+					if (broken === "sync") throw new Error("EIO");
+				},
+			});
+
+			assert.equal(log.journal(dispatch(1)), false, broken);
+			assert.equal(log.healthy(), false, broken);
+			assert.equal(log.append(record()), false, broken);
+		}
+	});
+
+	it("opens the journal beside the audit, mode 0600, and never reuses one", () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-journal-"));
+
+		try {
+			const file = openAuditFile(join(dir, "egress.jsonl"), 1_000_000);
+
+			assert.equal(file.log.journal(dispatch(1)), true);
+			file.close();
+			assert.equal(statSync(join(dir, JOURNAL_FILE)).mode & 0o777, 0o600);
+			assert.equal(
+				JSON.parse(readFileSync(join(dir, JOURNAL_FILE), "utf8")).kind,
+				"dispatch",
+			);
+
+			const other = mkdtempSync(join(dir, "again-"));
+
+			writeFileSync(join(other, JOURNAL_FILE), "");
+			assert.throws(() => openAuditFile(join(other, "egress.jsonl"), 1000));
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("counts settled results once and a dispatch without a result as uncertain", () => {
+		const text = [
+			dispatch(1),
+			result(1, 11, 5),
+			dispatch(2),
+			result(2, null, null),
+			dispatch(3),
+			result(3, 20, 4),
+			result(3, 20, 4),
+			dispatch(4),
+		]
+			.map((entry) => JSON.stringify(entry))
+			.join("\n")
+			.concat('\n{"v":1,"kind":"res');
+
+		assert.deepEqual(journalCharge(text), {
+			tokens: 40,
+			dispatched: 4,
+			settled: 3,
+			unmetered: 1,
+			uncertain: 1,
+		});
+		assert.deepEqual(journalCharge(""), {
+			tokens: 0,
+			dispatched: 0,
+			settled: 0,
+			unmetered: 0,
+			uncertain: 0,
+		});
+	});
+});
 
 describe("gateway audit", () => {
 	it("redacts the query, truncates and replaces unsafe bytes in the path", () => {
@@ -116,7 +255,7 @@ describe("gateway audit", () => {
 
 	it("reports unavailable once a write fails or the cap is reached", () => {
 		const lines: string[] = [];
-		const capped = new AuditLog((text) => lines.push(text), 600);
+		const capped = new AuditLog((text) => lines.push(text), 600, NO_JOURNAL);
 
 		assert.equal(capped.append(record()), true);
 		assert.equal(capped.healthy(), true);
@@ -125,9 +264,13 @@ describe("gateway audit", () => {
 		assert.equal(capped.full, true);
 		assert.equal(lines.length, 1);
 
-		const broken = new AuditLog(() => {
-			throw new Error("EIO");
-		}, 1_000_000);
+		const broken = new AuditLog(
+			() => {
+				throw new Error("EIO");
+			},
+			1_000_000,
+			NO_JOURNAL,
+		);
 
 		assert.equal(broken.append(record()), false);
 		assert.equal(broken.healthy(), false);

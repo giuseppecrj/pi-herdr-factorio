@@ -48,7 +48,7 @@ import {
 	STDERR_CAP_BYTES,
 	withSkills,
 } from "../../server/sandbox.ts";
-import { AuditLog } from "../../server/sandbox/audit.ts";
+import { AuditLog, type JournalRecord } from "../../server/sandbox/audit.ts";
 import type {
 	CloseReason,
 	ControlEvent,
@@ -133,6 +133,13 @@ function model(text: string): ModelId {
 
 	// SAFETY: the assertion above checks the ModelId pattern.
 	return text as ModelId;
+}
+
+function asRoute(text: string): RouteId {
+	assert.match(text, /^[a-z][a-z0-9-]{0,31}$/);
+
+	// SAFETY: the assertion above checks the RouteId pattern.
+	return text as RouteId;
 }
 
 function digest(text: string): Digest {
@@ -2466,7 +2473,10 @@ function inProcessGateway(fixturePort: number, events: ControlEvent[]) {
 		const gateway = new Gateway({
 			table: routed,
 			credentials,
-			audit: new AuditLog(() => {}, 1_000_000),
+			audit: new AuditLog(() => {}, 1_000_000, {
+				write: () => {},
+				sync: () => {},
+			}),
 			emit: (event) => {
 				events.push(event);
 
@@ -4972,6 +4982,132 @@ describe("controller-run specify review", () => {
 			assert.equal(h.calls.length, 3);
 		} finally {
 			h.close();
+		}
+	});
+});
+
+describe("durable request charges after a restart", () => {
+	const id = {
+		ts: "2026-11-04T10:00:00.000Z",
+		stage: "specify",
+		runId: RUN,
+		attempt: 1,
+		route: asRoute("model-openai"),
+	};
+
+	const line = (entry: JournalRecord) => `${JSON.stringify(entry)}\n`;
+
+	const journal = (
+		...entries: [number, number | null, "settled" | "dispatched"][]
+	) =>
+		entries
+			.map(([req, tokens, state]) => {
+				const sent = line({ v: 1, kind: "dispatch", ...id, req });
+
+				return state === "dispatched"
+					? sent
+					: sent +
+							line({
+								v: 1,
+								kind: "result",
+								...id,
+								req,
+								status: 200,
+								decision: "forward",
+								inputTokens: tokens,
+								outputTokens: 0,
+							});
+			})
+			.join("");
+
+	it("counts journal results once, keeps an unsettled dispatch as a floor, and lets a receipt cover its leaves", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-charges-"));
+		const runs = join(dir, "stages", RUN);
+
+		const executor = sandboxModule.sandboxExecutor({
+			stateDir: dir,
+			xdgRuntimeDir: "/run/user/1000",
+			log: () => {},
+			exec: async () => ({ stdout: "", stderr: "", code: 0 }),
+		});
+
+		const spent = (stage: "specify" | "build" | "accept", attempt: number) =>
+			executor.spent({ runId: digest(RUN), stage, attempt });
+
+		try {
+			mkdirSync(join(runs, "build-1"), { recursive: true });
+			writeFileSync(
+				join(runs, "build-1", "egress.requests.jsonl"),
+				journal(
+					[1, 30, "settled"],
+					[2, 12, "settled"],
+					[3, null, "dispatched"],
+				),
+			);
+			writeFileSync(
+				join(runs, "build-1", "egress.jsonl"),
+				'{"inputTokens":30,"outputTokens":0}\n',
+			);
+
+			mkdirSync(join(runs, "build-1.1"), { recursive: true });
+			writeFileSync(
+				join(runs, "build-1.1", "egress.requests.jsonl"),
+				journal([1, 8, "settled"]),
+			);
+
+			assert.equal(await spent("build", 1), 50);
+			assert.deepEqual(
+				await sandboxModule.executionCharge(join(runs, "build-1")),
+				{ total: 42, uncertain: 1 },
+			);
+
+			mkdirSync(join(runs, "accept-1"), { recursive: true });
+			writeFileSync(
+				join(runs, "accept-1", "receipt.json"),
+				JSON.stringify({ usage: { total: 25 } }),
+			);
+			writeFileSync(
+				join(runs, "accept-1", "egress.requests.jsonl"),
+				journal([1, 20, "settled"], [2, null, "dispatched"]),
+			);
+
+			assert.equal(await spent("accept", 1), 25);
+			assert.deepEqual(
+				await sandboxModule.executionCharge(join(runs, "accept-1")),
+				{ total: 25, uncertain: 0 },
+			);
+
+			const specify = join(runs, "specify-1");
+
+			mkdirSync(join(specify, "draft"), { recursive: true });
+			mkdirSync(join(specify, "review"), { recursive: true });
+			writeFileSync(join(specify, "specify.json"), "{}\n");
+			writeFileSync(
+				join(specify, "draft", "receipt.json"),
+				JSON.stringify({ usage: { total: 10 } }),
+			);
+			writeFileSync(
+				join(specify, "draft", "egress.requests.jsonl"),
+				journal([1, 10, "settled"]),
+			);
+			writeFileSync(
+				join(specify, "review", "egress.requests.jsonl"),
+				journal([1, 7, "settled"], [2, null, "dispatched"]),
+			);
+
+			assert.equal(await spent("specify", 1), 17);
+			assert.deepEqual(await sandboxModule.executionCharge(specify), {
+				total: 17,
+				uncertain: 1,
+			});
+
+			writeFileSync(
+				join(specify, "receipt.json"),
+				JSON.stringify({ usage: { total: 40 } }),
+			);
+			assert.equal(await spent("specify", 1), 40);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
 		}
 	});
 });

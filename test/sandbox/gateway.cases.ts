@@ -13,7 +13,15 @@ import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
-import { AuditLog, type AuditRecord } from "../../server/sandbox/audit.ts";
+import {
+	AuditLog,
+	type AuditRecord,
+	JOURNAL_FILE,
+	type JournalRecord,
+	journalCharge,
+} from "../../server/sandbox/audit.ts";
+import { startGatewayProcess } from "../../server/sandbox/gateway-client.ts";
+import { executionCharge } from "../../server/sandbox.ts";
 import {
 	type ControlEvent,
 	encodeCommand,
@@ -242,6 +250,8 @@ type Harness = {
 	events: ControlEvent[];
 	audit: AuditRecord[];
 	failAudit: { on: boolean };
+	journal: JournalRecord[];
+	failJournal: { on: boolean; upstreamAt: number[] };
 };
 
 async function startHarness(
@@ -250,12 +260,16 @@ async function startHarness(
 	options: {
 		ceilingTokens?: number;
 		lookup?: (host: string) => Promise<string[]>;
+		arrivals?: () => number;
 	} = {},
 ): Promise<Harness> {
 	const table = testTable(port, options);
 	const events: ControlEvent[] = [];
 	const audit: AuditRecord[] = [];
 	const failAudit = { on: false };
+	const journal: JournalRecord[] = [];
+	const upstreamAt: number[] = [];
+	const failJournal = { on: false, upstreamAt };
 
 	const socketPath = join(
 		dir,
@@ -265,18 +279,38 @@ async function startHarness(
 	const gateway = new Gateway({
 		table,
 		credentials: binding(table),
-		audit: new AuditLog((text) => {
-			if (failAudit.on) throw new Error("EIO");
+		audit: new AuditLog(
+			(text) => {
+				if (failAudit.on) throw new Error("EIO");
 
-			audit.push(JSON.parse(text));
-		}, 1_000_000),
+				audit.push(JSON.parse(text));
+			},
+			1_000_000,
+			{
+				write: (text) => {
+					if (failJournal.on) throw new Error("EIO");
+
+					journal.push(JSON.parse(text));
+					failJournal.upstreamAt.push(options.arrivals?.() ?? -1);
+				},
+				sync: () => {},
+			},
+		),
 		emit: (event) => events.push(event),
 		lookup: options.lookup ?? (async () => ["10.1.2.3"]),
 	});
 
 	await gateway.listen(socketPath);
 
-	return { gateway, socketPath, events, audit, failAudit };
+	return {
+		gateway,
+		socketPath,
+		events,
+		audit,
+		failAudit,
+		journal,
+		failJournal,
+	};
 }
 
 describe("upstream address checks", () => {
@@ -406,7 +440,10 @@ describe("gateway over a real unix socket", () => {
 			new Gateway({
 				table: testTable(fixture.port),
 				credentials: binding(testTable(fixture.port)),
-				audit: new AuditLog(() => {}, 1000),
+				audit: new AuditLog(() => {}, 1000, {
+					write: () => {},
+					sync: () => {},
+				}),
 				emit: () => {},
 				lookup: async () => [],
 			}).listen(h.socketPath),
@@ -969,7 +1006,7 @@ describe("gateway admission gate and control", () => {
 
 	async function harness(
 		port: number,
-		options: { ceilingTokens?: number } = {},
+		options: { ceilingTokens?: number; arrivals?: () => number } = {},
 	): Promise<Harness> {
 		const started = await startHarness(dir, port, options);
 
@@ -1125,6 +1162,74 @@ describe("gateway admission gate and control", () => {
 		assert.equal(fixture.received.length, before + 1);
 	});
 
+	it("journals a synced dispatch before a model request goes upstream, and its result after", async () => {
+		const h = await harness(fixture.port, {
+			arrivals: () => fixture.received.length,
+		});
+
+		const before = fixture.received.length;
+
+		assert.equal(
+			(await call(h.socketPath, "POST", "/openai/v1/responses", json, model))
+				.status,
+			200,
+		);
+		assert.equal(
+			(await call(h.socketPath, "GET", "/plain/api/echo")).status,
+			200,
+		);
+
+		const req = h.audit.find(
+			(entry) => entry.path === "/openai/v1/responses",
+		)?.req;
+
+		assert.deepEqual(
+			h.journal.map((entry) => [entry.kind, entry.req, entry.route]),
+			[
+				["dispatch", req, "model-openai"],
+				["result", req, "model-openai"],
+			],
+		);
+		assert.deepEqual(h.failJournal.upstreamAt, [before, before + 1]);
+
+		const settled = h.journal[1];
+
+		assert.equal(settled?.kind, "result");
+		assert.deepEqual(
+			settled?.kind === "result"
+				? [settled.inputTokens, settled.outputTokens, settled.decision]
+				: null,
+			[11, 5, "forward"],
+		);
+	});
+
+	it("forwards nothing upstream when the dispatch cannot be synced", async () => {
+		const h = await harness(fixture.port);
+		const before = fixture.arrivals("/openai/v1/responses");
+
+		h.failJournal.on = true;
+
+		const reply = await call(
+			h.socketPath,
+			"POST",
+			"/openai/v1/responses",
+			json,
+			model,
+		);
+
+		assert.equal(reply.code, "audit-unavailable");
+		assert.equal(fixture.arrivals("/openai/v1/responses"), before);
+		assert.equal(h.gateway.summary().modelRequests, 0);
+		assert.deepEqual(
+			h.events.find((event) => event.event === "gate_closed"),
+			{ event: "gate_closed", reason: "audit_failed" },
+		);
+		assert.equal(
+			(await call(h.socketPath, "GET", "/plain/api/echo")).code,
+			"audit-unavailable",
+		);
+	});
+
 	it("reports an upstream that refuses connections as upstream-error", async () => {
 		const h = await harness(REFUSED_PORT);
 
@@ -1139,6 +1244,61 @@ describe("gateway admission gate and control", () => {
 
 		for (const code of DENY_CODES) {
 			assert.ok(source.includes(`"${code}"`), code);
+		}
+	});
+});
+
+describe("gateway process request journal", () => {
+	it("leaves a dispatch without a result when the gateway dies mid-request, and recovery keeps it as a floor", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-gw-journal-"));
+		const fixture = await startEchoFixture(0);
+
+		try {
+			const table = testTable(fixture.port);
+			const stage = join(dir, "stages", "specify-1");
+
+			mkdirSync(stage, { recursive: true });
+
+			const started = await startGatewayProcess({
+				gatewayDir: join(dir, "gw"),
+				auditPath: join(stage, "egress.jsonl"),
+				table: { ...table, routes: table.routes.slice(0, 2) },
+				readyTimeoutMs: 10_000,
+				testMode: true,
+			});
+
+			assert.ok(started.ok, started.ok ? "" : started.reason);
+
+			const json = { "Content-Type": "application/json" };
+			const model = JSON.stringify({ model: "gpt-6.1-sol", stream: true });
+			const socket = started.handle.socketPath;
+
+			assert.equal(
+				(await call(socket, "POST", "/openai/v1/responses", json, model))
+					.status,
+				200,
+			);
+
+			const arrived = fixture.arrivals("/openai/v1/hang") + 1;
+			const hung = call(socket, "POST", "/openai/v1/hang", json, model);
+
+			await fixture.waitFor("/openai/v1/hang", arrived);
+			started.handle.kill();
+			await started.handle.exited;
+			await hung;
+
+			assert.deepEqual(
+				journalCharge(readFileSync(join(stage, JOURNAL_FILE), "utf8")),
+				{ tokens: 16, dispatched: 2, settled: 1, unmetered: 0, uncertain: 1 },
+			);
+			assert.deepEqual(await executionCharge(stage), {
+				total: 16,
+				uncertain: 1,
+			});
+			assert.equal(fixture.arrivals("/openai/v1/hang"), arrived);
+		} finally {
+			await fixture.close();
+			rmSync(dir, { recursive: true, force: true });
 		}
 	});
 });
