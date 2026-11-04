@@ -33,9 +33,11 @@ import {
 	parseCeilings,
 } from "../../server/sandbox/credentials.ts";
 import {
+	ANTHROPIC_REPLAYS,
 	type EchoFixture,
 	startEchoFixture,
 } from "../../server/sandbox/echo-fixture.ts";
+import { familyFromJournal } from "../../src/review.ts";
 import {
 	addressAllowed,
 	dialOrder,
@@ -2416,4 +2418,119 @@ describe("gateway process and control pipe", () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	}
+});
+
+describe("echo fixture Anthropic replay through the gateway (lane 3, zero tokens)", () => {
+	let dir = "";
+
+	before(() => {
+		dir = mkdtempSync(join(tmpdir(), "factory-gw-echo-anthropic-"));
+	});
+
+	after(() => rmSync(dir, { recursive: true, force: true }));
+
+	async function replay(mode: (typeof ANTHROPIC_REPLAYS)[number]) {
+		const fixture = await startEchoFixture(0, { anthropic: mode });
+
+		const base = anthropicTable({
+			model: "claude-sonnet-5-5",
+			fallback: null,
+			modelTokens: 25_000,
+		});
+
+		const table: RouteTable = {
+			...base,
+			routes: base.routes.map((route) =>
+				route.meter === null ? route : fixtureModelRoute(fixture.port, route),
+			),
+		};
+
+		const journal: string[] = [];
+
+		const gateway = new Gateway({
+			table,
+			credentials: { ok: true, bound: new Map(), forms: [] },
+			audit: new AuditLog(() => {}, 1_000_000, {
+				write: (text) => journal.push(text.trimEnd()),
+				sync: () => {},
+			}),
+			emit: () => {},
+			lookup: async () => ["10.1.2.3"],
+		});
+
+		const socketPath = join(dir, `gw-${mode}.sock`);
+
+		await gateway.listen(socketPath);
+
+		try {
+			const reply = await call(
+				socketPath,
+				"POST",
+				"/anthropic/v1/messages?beta=true",
+				{
+					"Content-Type": "application/json",
+					"anthropic-version": "2023-06-01",
+				},
+				JSON.stringify({
+					model: "claude-sonnet-5-5",
+					messages: [{ role: "user", content: "Reply ok" }],
+					max_tokens: 1_000,
+					stream: true,
+				}),
+			);
+
+			return {
+				reply,
+				journal: journal.join("\n"),
+				summary: gateway.summary(),
+				arrivals: fixture.arrivals("/anthropic/v1/messages"),
+			};
+		} finally {
+			await gateway.close();
+			await fixture.close();
+		}
+	}
+
+	it("meters a full replay and records the observed model as Anthropic family", async () => {
+		const run = await replay("usage");
+
+		assert.equal(run.reply.status, 200);
+		assert.equal(run.arrivals, 1);
+		assert.equal(run.summary.routes[0]?.unmetered, 0);
+		assert.equal(run.summary.modelTokens, 22);
+		assert.deepEqual(
+			familyFromJournal({
+				journal: run.journal,
+				requested: "anthropic/claude-sonnet-5-5",
+				superseded: null,
+			}),
+			{ kind: "anthropic-gateway", model: "claude-sonnet-5-5" },
+		);
+	});
+
+	it("counts a replay with no usage block unmetered, charges it uncertain and gives no family", async () => {
+		const run = await replay("no-usage");
+
+		assert.equal(run.reply.status, 200);
+		assert.match(run.reply.body, /message_stop/);
+		assert.equal(run.summary.routes[0]?.unmetered, 1);
+		assert.equal(run.summary.modelTokens, 0);
+		assert.equal(journalCharge(run.journal).uncertain, 1);
+		assert.deepEqual(
+			familyFromJournal({
+				journal: run.journal,
+				requested: "anthropic/claude-sonnet-5-5",
+				superseded: null,
+			}),
+			{ kind: "unavailable", reason: "unmetered" },
+		);
+	});
+
+	it("meters a refusal replay with its full usage, so the refusal rule and not the veto applies", async () => {
+		const run = await replay("refusal");
+
+		assert.match(run.reply.body, /"stop_reason":"refusal"/);
+		assert.equal(run.summary.routes[0]?.unmetered, 0);
+		assert.equal(run.summary.modelTokens, 22);
+	});
 });

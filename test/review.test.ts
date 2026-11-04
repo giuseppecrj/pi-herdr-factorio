@@ -1871,3 +1871,86 @@ describe("cross-family certification", () => {
 		);
 	});
 });
+
+describe("builder family at review preparation", () => {
+	it("takes the latest passed build attempt's stored family, and only openai-request for the patch's model", async () => {
+		const f = await preparedReviewFixture();
+
+		try {
+			const runId = f.execution.runId;
+
+			const write = (
+				name: string,
+				outcome: string,
+				requested: string,
+				family: FamilyInput | null,
+			) => {
+				const dir = join(f.state, "stages", runId, name);
+
+				mkdirSync(dir, { recursive: true, mode: 0o700 });
+				writeFileSync(
+					join(dir, "receipt.json"),
+					JSON.stringify({
+						outcome: { kind: outcome },
+						models: { requested, observed: null },
+						fallback: null,
+						family: family ?? undefined,
+					}),
+					{ mode: 0o600 },
+				);
+			};
+
+			const builder = async () =>
+				(await sandboxExecutor(f.config).prepareReview!(f.args)).families
+					?.builder;
+
+			const openai: FamilyInput = { kind: "openai-request", model: OPENAI };
+
+			assert.deepEqual(await builder(), {
+				kind: "unavailable",
+				reason: "missing",
+			});
+
+			write("build-1", "passed", OPENAI, openai);
+			write("build-2", "failed", OPENAI, openai);
+			assert.deepEqual(await builder(), openai);
+
+			write("build-1", "passed", OPENAI, {
+				kind: "unavailable",
+				reason: "mixed",
+			});
+			// A stored unavailable family is never a builder family.
+			assert.deepEqual(await builder(), {
+				kind: "unavailable",
+				reason: "missing",
+			});
+
+			write("build-1", "passed", "openai/gpt-6.1-terra", {
+				kind: "openai-request",
+				model: "openai/gpt-6.1-terra",
+			});
+			assert.deepEqual(await builder(), {
+				kind: "unavailable",
+				reason: "missing",
+			});
+
+			write("build-1", "passed", OPENAI, null);
+			assert.deepEqual(await builder(), {
+				kind: "unavailable",
+				reason: "missing",
+			});
+
+			write("build-1", "passed", OPENAI, openai);
+			write("build-1.2", "passed", OPENAI, {
+				kind: "anthropic-gateway",
+				model: "claude-sonnet-5-5",
+			});
+			assert.deepEqual(await builder(), {
+				kind: "unavailable",
+				reason: "missing",
+			});
+		} finally {
+			f.close();
+		}
+	});
+});

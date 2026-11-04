@@ -4941,6 +4941,7 @@ export class Orchestrator {
 			runId: run.runId,
 			digest: reference.binding.acceptanceDigest,
 			scenarios: stored.suite.scenarios,
+			author: stored.receipt.family,
 		});
 
 		if (body === null) {

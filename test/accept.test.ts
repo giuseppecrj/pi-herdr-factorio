@@ -1,8 +1,23 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { acceptancePrompt, writeAcceptance } from "../src/accept.ts";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+	ACCEPTANCE_ISOLATION,
+	acceptancePrompt,
+	writeAcceptance,
+} from "../src/accept.ts";
+import { fileArtifacts } from "../src/artifacts.ts";
+import { type FamilyInput, familyLabel } from "../src/review.ts";
 import { digestOf } from "../src/run.ts";
-import { renderAcceptanceSummary, acceptanceKey } from "../src/specify.ts";
+import {
+	renderAcceptanceSummary,
+	acceptanceKey,
+	contractBytes,
+	contractDigestOf,
+} from "../src/specify.ts";
+import type { JsonObject } from "../server/sandbox/json.ts";
 import type { Contract } from "../src/specify.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
 
@@ -209,5 +224,150 @@ describe("held-out acceptance output", () => {
 		assert.ok(!prompt.includes("snapshot"));
 		assert.ok(!prompt.includes("runId"));
 		assert.ok(!prompt.includes("/state/acceptance/"));
+	});
+});
+
+const CLAUDE: FamilyInput = {
+	kind: "anthropic-gateway",
+	model: "claude-sonnet-5-5",
+};
+
+describe("acceptance author disclosure", () => {
+	const digest = digestOf("suite");
+
+	const body = (author?: FamilyInput) =>
+		renderAcceptanceSummary({
+			runId: contract.runId,
+			digest,
+			scenarios: suite.scenarios,
+			author,
+		}) ?? "";
+
+	it("reports an Anthropic author and fresh context, and defers the family claim to certification", () => {
+		const text = body(CLAUDE);
+
+		assert.match(
+			text,
+			/Author: claude\\-sonnet\\-5\\-5, an Anthropic model the gateway observed/,
+		);
+		assert.match(text, /context-isolated, fresh context/);
+		assert.match(text, /decided at certification/);
+		assert.doesNotMatch(text, /cross-family/);
+		assert.doesNotMatch(text, /same family/);
+	});
+
+	it("never claims a family for an unobserved author", () => {
+		const text = body({ kind: "unavailable", reason: "unmetered" });
+
+		assert.match(text, /Author: not observed \(unmetered\)/);
+		assert.doesNotMatch(text, /cross-family|same family/);
+	});
+
+	it("keeps the same-family line for an OpenAI author and for a legacy receipt", () => {
+		assert.match(
+			body({ kind: "openai-request", model: "openai/gpt-6.1-sol" }),
+			/context-isolated, same family, not cross-family\. Author: openai\/gpt\\-6\\\.1\\-sol, requested on the OpenAI route/,
+		);
+		assert.ok(
+			body().includes("context-isolated, same family, not cross-family"),
+		);
+	});
+});
+
+describe("acceptance receipts with family evidence", () => {
+	async function stored(family?: FamilyInput) {
+		const root = mkdtempSync(join(tmpdir(), "factory-accept-family-"));
+		const parsed = writeAcceptance(JSON.stringify(suite), contract);
+
+		if (parsed.kind !== "suite") throw new Error("suite");
+
+		const read = await fileArtifacts(root).store({
+			contract,
+			contractDigest: contractDigestOf(contractBytes(contract)),
+			suite: parsed.suite,
+			model: "anthropic/claude-sonnet-5-5",
+			observed: "anthropic/claude-sonnet-5-5",
+			family,
+		});
+
+		return { root, read };
+	}
+
+	it("stores the family and a label equal to familyLabel(family), and reads it back", async () => {
+		const { root, read } = await stored(CLAUDE);
+
+		try {
+			assert.equal(read.kind, "found");
+
+			if (read.kind !== "found") return;
+
+			assert.deepEqual(read.receipt.family, CLAUDE);
+			assert.equal(read.receipt.isolation, familyLabel(CLAUDE));
+			assert.doesNotMatch(read.receipt.isolation, /cross-family/);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps the legacy isolation string when no family is stored", async () => {
+		const { root, read } = await stored();
+
+		try {
+			assert.equal(read.kind, "found");
+
+			if (read.kind === "found") {
+				assert.equal(read.receipt.isolation, ACCEPTANCE_ISOLATION);
+				assert.equal(read.receipt.family, undefined);
+			}
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("refuses a forged label or a hand-minted family on read", async () => {
+		for (const forge of [
+			(r: JsonObject) => ({
+				...r,
+				isolation: "context-isolated, different family, cross-family",
+			}),
+			(r: JsonObject) => ({
+				...r,
+				isolation: ACCEPTANCE_ISOLATION,
+			}),
+			(r: JsonObject) => ({
+				...r,
+				family: { kind: "anthropic-gateway", model: "claude-imaginary" },
+			}),
+			(r: JsonObject) => {
+				const { family: _family, ...legacy } = r;
+
+				return legacy;
+			},
+		]) {
+			const { root, read } = await stored(CLAUDE);
+
+			try {
+				assert.equal(read.kind, "found");
+
+				for (const path of [
+					join(root, "acceptance", contract.runId, "receipt.json"),
+					join(root, "acceptance", `${contract.runId}.json`),
+				]) {
+					const record = JSON.parse(readFileSync(path, "utf8"));
+					writeFileSync(path, `${JSON.stringify(forge(record), null, "\t")}\n`);
+				}
+
+				assert.deepEqual(
+					await fileArtifacts(root).read(
+						contract.runId,
+						contract,
+						contractDigestOf(contractBytes(contract)),
+					),
+					{ kind: "blocked", reason: "acceptance_invalid" },
+				);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		}
 	});
 });
