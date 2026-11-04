@@ -70,6 +70,7 @@ import {
 	ledgerRowOf,
 	pumpLedger,
 	parseAttemptEnd,
+	parseAdoption,
 	type RunAccounting,
 	type AttemptEnd,
 	type LedgerBacklog,
@@ -2574,7 +2575,17 @@ export function fileLedgerOutbox(stateDir: string): LedgerOutbox {
 					const retry =
 						retryText === null ? null : parseRetry(parseJsonText(retryText));
 
-					jobs.push({ runId, observedAt, row, retry });
+					if (retryText !== null && retry === null) return null;
+					const adoptionText = await readText(join(dir, "adoption.json"));
+
+					const adoption =
+						adoptionText === null
+							? null
+							: parseAdoption(parseJsonText(adoptionText));
+
+					if (adoptionText !== null && adoption === null) return null;
+
+					jobs.push({ runId, observedAt, row, retry, adoption });
 				}
 
 				return jobs;
@@ -2602,6 +2613,12 @@ export function fileLedgerOutbox(stateDir: string): LedgerOutbox {
 			);
 
 			return true;
+		},
+		async adoption(runId, cursor) {
+			return writeAtomic(
+				join(dirOf(runId), "adoption.json"),
+				`${JSON.stringify(cursor)}\n`,
+			);
 		},
 		async retry(runId, retry) {
 			try {
@@ -4458,12 +4475,26 @@ export async function pumpLedgerOutbox(input: {
 	readonly repo: RepoSlug;
 	readonly now: number;
 	readonly log: Log;
+	readonly clock?: () => number;
 }): Promise<LedgerBacklog | null> {
+	const clock = input.clock ?? Date.now;
+	const started = clock();
+
 	try {
 		const backlog = await pumpLedger(
 			fileLedgerOutbox(input.stateDir),
-			ledgerApiOf(new GitHubPublicationApi(input.exec, input.repo)),
+			ledgerApiOf(
+				new GitHubPublicationApi(
+					input.exec,
+					input.repo,
+					{},
+					async () => true,
+					undefined,
+					{ now: clock, sliceMs: 20_000, callMs: 5_000 },
+				),
+			),
 			input.now,
+			() => input.now + clock() - started,
 		);
 
 		if (backlog.published > 0 || backlog.pending > 0 || !backlog.readable)

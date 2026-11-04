@@ -23,7 +23,8 @@ import {
 import { digestOf, runIdOf } from "../src/run.ts";
 import { isGitSha, type GitSha } from "../src/workflow.ts";
 import { LedgerGit, repo } from "./ledger-git.ts";
-import { fileLedgerOutbox } from "../server/controller.ts";
+import { fileLedgerOutbox, pumpLedgerOutbox } from "../server/controller.ts";
+import { execFile } from "../server/cli.ts";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -824,6 +825,111 @@ describe("ledger outbox pump", () => {
 
 		return { outbox, runId };
 	}
+
+	it("bounds each gh call by five seconds and the remaining job slice, without inline retries", async () => {
+		const dir = fresh();
+		await enrolled(dir, 70);
+		const fake = new LedgerGit();
+		let now = 0;
+		const timeouts: (number | undefined)[] = [];
+
+		const result = await pumpLedgerOutbox({
+			stateDir: dir,
+			repo,
+			now: 0,
+			clock: () => now,
+			log: () => {},
+			exec: async (command, args, options) => {
+				timeouts.push(options?.timeoutMs);
+				const response = await fake.exec(command, args);
+				now = timeouts.length === 1 ? 18_700 : 20_000;
+
+				return response;
+			},
+		});
+
+		assert.deepEqual(timeouts, [5_000, 1_300]);
+		assert.equal(result?.pending, 1);
+		assert.equal(
+			(await fileLedgerOutbox(dir).scan())?.[0]?.retry?.nextAt,
+			25_000,
+		);
+	});
+
+	it("kills a real timed-out child and persists pump transport backoff without inline retries", async () => {
+		const started = Date.now();
+
+		const child = await execFile(
+			process.execPath,
+			["-e", "setInterval(() => {}, 1000)"],
+			50,
+		);
+
+		assert.notEqual(child.code, 0);
+		assert.match(child.stderr, /timed out/);
+		assert.ok(Date.now() - started < 2_000);
+		const dir = fresh();
+		await enrolled(dir, 72);
+		let calls = 0;
+
+		const failed = await pumpLedgerOutbox({
+			stateDir: dir,
+			repo,
+			now: 0,
+			clock: () => 0,
+			log: () => {},
+			exec: async () => {
+				calls++;
+
+				return { code: 1, stdout: "", stderr: "connection reset" };
+			},
+		});
+
+		assert.equal(calls, 1);
+		assert.equal(failed?.lastError, "transport_unavailable");
+		await pumpLedgerOutbox({
+			stateDir: dir,
+			repo,
+			now: 1_000,
+			clock: () => 0,
+			log: () => {},
+			exec: async () => {
+				throw new Error("backoff must skip gh");
+			},
+		});
+		assert.equal(
+			(await fileLedgerOutbox(dir).scan())?.[0]?.retry?.nextAt,
+			5_000,
+		);
+	});
+
+	it("resumes first adoption from a persisted cursor instead of rewalking a long ledger", async () => {
+		const dir = fresh();
+		const { outbox } = await enrolled(dir, 71);
+		const fake = new LedgerGit();
+		const api = quietApi(fake);
+		let parent = await createLedgerRoot(api, date);
+
+		for (let n = 0; n < 40; n++)
+			parent = await createLedgerChild(
+				api,
+				parent,
+				Buffer.alloc(0),
+				date,
+				"empty\n",
+			);
+		fake.refs.set("factory/ledger", parent.sha);
+		const port = ledgerApiOf(api);
+		const first = await pumpLedger(outbox, port, 0);
+		assert.equal(first.lastError, "adoption_pending");
+		const retry = (await outbox.scan())?.[0]?.retry;
+		assert.ok(retry);
+
+		for (let n = 1; n < 5; n++)
+			await pumpLedger(fileLedgerOutbox(dir), port, n * 400_000);
+		assert.deepEqual(await outbox.scan(), []);
+		assert.equal((await remoteBytes(fake)).toString().split("\n").length, 2);
+	});
 
 	it("keeps the first terminal snapshot and freezes the same row on every retry", async () => {
 		const dir = fresh();

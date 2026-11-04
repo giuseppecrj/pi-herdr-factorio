@@ -16,6 +16,7 @@ export type ExecResult = {
 export type Exec = (
 	command: string,
 	args: readonly string[],
+	options?: { readonly timeoutMs: number },
 ) => Promise<ExecResult>;
 
 const NETWORK_FAILURE =

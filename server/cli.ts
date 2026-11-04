@@ -730,7 +730,12 @@ if (import.meta.main) {
 	}
 
 	process.exitCode = await runCli(process.argv.slice(2), {
-		exec: (command, args) => execFile(command, args, FETCH_TIMEOUT_MS),
+		exec: (command, args, options) =>
+			execFile(
+				command,
+				args,
+				Math.min(FETCH_TIMEOUT_MS, options?.timeoutMs ?? FETCH_TIMEOUT_MS),
+			),
 		env: (name) => process.env[name],
 		stdout: (text) => process.stdout.write(text),
 		stderr: (text) => process.stderr.write(text),

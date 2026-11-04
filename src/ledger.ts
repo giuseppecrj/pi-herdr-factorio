@@ -631,7 +631,8 @@ export type LedgerErrorCode =
 	| "ledger_contended"
 	| "lineage_changed"
 	| "ref_missing"
-	| "object_mismatch";
+	| "object_mismatch"
+	| "adoption_pending";
 
 export type LedgerIndex =
 	| {
@@ -670,6 +671,7 @@ export function indexLedger(lines: readonly LedgerLine[]): LedgerIndex {
 }
 
 export interface LedgerApi {
+	startJob?(): void;
 	ref(): Promise<GitSha | null>;
 	commit(sha: GitSha): Promise<LedgerCommit>;
 	file(tree: GitSha): Promise<LedgerFile>;
@@ -685,6 +687,7 @@ export interface LedgerApi {
 
 export function ledgerApiOf(api: GitHubPublicationApi): LedgerApi {
 	return {
+		startJob: () => api.startJob(),
 		ref: () => api.ledgerRef(),
 		commit: (sha) => readLedgerCommit(api, sha),
 		file: (tree) => readLedgerFile(api, tree),
@@ -749,17 +752,58 @@ type Seen =
 
 const changed: Seen = { kind: "blocked", reason: "lineage_changed" };
 
+export type AdoptionCursor = {
+	readonly base: GitSha | null;
+	readonly tip: GitSha;
+	readonly cursor: GitSha;
+	readonly walked: number;
+};
+
+export function parseAdoption(
+	value: JsonValue | undefined,
+): AdoptionCursor | null {
+	try {
+		return record({
+			base: nullable(sha),
+			tip: sha,
+			cursor: sha,
+			walked: count,
+		})(value);
+	} catch (error) {
+		if (error instanceof LedgerRowError) return null;
+		throw error;
+	}
+}
+
+type Adoption = {
+	readonly cursor: AdoptionCursor | null;
+	save(cursor: AdoptionCursor): Promise<boolean>;
+};
+
 async function verifyTip(
 	api: LedgerApi,
 	tip: GitSha,
 	anchor: LedgerAnchor | null,
+	adoption?: Adoption,
 ): Promise<Seen> {
 	const head = await api.commit(tip);
-	const file = await api.file(head.tree);
-	let cursor = head;
+
+	const saved =
+		adoption?.cursor?.tip === tip &&
+		adoption.cursor.base === (anchor?.tipSha ?? null)
+			? adoption.cursor
+			: null;
+
+	let cursor =
+		saved === null || saved.cursor === tip
+			? head
+			: await api.commit(saved.cursor);
 
 	for (let walked = 0; ; walked++) {
-		if (walked > MAX_WALK) return changed;
+		if (walked + (saved?.walked ?? 0) > MAX_WALK) return changed;
+
+		if (adoption !== undefined && walked >= 16)
+			return { kind: "blocked", reason: "adoption_pending" };
 
 		if (anchor !== null && cursor.sha === anchor.tipSha) break;
 		const [parent, ...others] = cursor.parents;
@@ -777,8 +821,21 @@ async function verifyTip(
 		}
 
 		if (others.length > 0) return changed;
+
+		if (
+			adoption !== undefined &&
+			!(await adoption.save({
+				base: anchor?.tipSha ?? null,
+				tip,
+				cursor: parent,
+				walked: walked + 1 + (saved?.walked ?? 0),
+			}))
+		)
+			throw new PublicationError("claim_unwritable");
 		cursor = await api.commit(parent);
 	}
+
+	const file = await api.file(head.tree);
 
 	if (
 		anchor !== null &&
@@ -826,6 +883,7 @@ export async function appendRun(
 	row: PendingRow,
 	anchor: LedgerAnchor | null,
 	rounds = 3,
+	adoption?: Adoption,
 ): Promise<AppendResult> {
 	let current = anchor;
 
@@ -841,10 +899,14 @@ export async function appendRun(
 				continue;
 			}
 
-			const seen = await verifyTip(api, tip, current);
+			const seen = await verifyTip(api, tip, current, adoption);
 
 			if (seen.kind === "blocked")
-				return { kind: "blocked", reason: seen.reason, anchor: current };
+				return {
+					kind: seen.reason === "adoption_pending" ? "deferred" : "blocked",
+					reason: seen.reason,
+					anchor: current,
+				};
 			const index = indexLedger(parseLedger(seen.file.bytes));
 
 			if (index.kind === "blocked")
@@ -1210,6 +1272,7 @@ export type OutboxJob = {
 	readonly observedAt: string;
 	readonly row: FrozenRow | null;
 	readonly retry: LedgerRetry | null;
+	readonly adoption?: AdoptionCursor | null;
 };
 
 export type PublishedReceipt = {
@@ -1232,6 +1295,7 @@ export interface LedgerOutbox {
 	/** Unpublished jobs, or `null` when the outbox cannot be read in full. */
 	scan(): Promise<readonly OutboxJob[] | null>;
 	anchor(): Promise<LedgerAnchor | null>;
+	adoption(runId: Digest, cursor: AdoptionCursor): Promise<boolean>;
 	published(receipt: PublishedReceipt, anchor: LedgerAnchor): Promise<boolean>;
 	retry(runId: Digest, retry: LedgerRetry): Promise<boolean>;
 }
@@ -1253,6 +1317,7 @@ export async function pumpLedger(
 	outbox: LedgerOutbox,
 	api: LedgerApi,
 	now: number,
+	clock: () => number = () => now,
 ): Promise<LedgerBacklog> {
 	const jobs = await outbox.scan();
 
@@ -1286,6 +1351,8 @@ export async function pumpLedger(
 			continue;
 		}
 
+		api.startJob?.();
+
 		const result = await appendRun(
 			api,
 			{
@@ -1295,6 +1362,11 @@ export async function pumpLedger(
 				date: job.observedAt.replace(/\.\d{3}Z$/, "Z"),
 			},
 			anchor,
+			3,
+			{
+				cursor: job.adoption ?? null,
+				save: (cursor) => outbox.adoption(job.runId, cursor),
+			},
 		);
 
 		if (result.kind === "published") {
@@ -1319,7 +1391,8 @@ export async function pumpLedger(
 
 		await outbox.retry(job.runId, {
 			attempts,
-			nextAt: now + Math.min(BACKOFF_MAX_MS, BACKOFF_MS * 2 ** (attempts - 1)),
+			nextAt:
+				clock() + Math.min(BACKOFF_MAX_MS, BACKOFF_MS * 2 ** (attempts - 1)),
 			reason: lastError,
 			blocked: result.kind === "blocked",
 		});
@@ -1351,6 +1424,7 @@ const retryCodec = record({
 		"lineage_changed",
 		"ref_missing",
 		"object_mismatch",
+		"adoption_pending",
 	),
 	blocked: flag,
 });

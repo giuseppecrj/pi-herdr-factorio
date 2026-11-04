@@ -107,6 +107,20 @@ export class GitHubPublicationApi {
 	readonly counters: TransportCounters;
 	readonly persist: () => Promise<boolean>;
 	readonly sleep: (ms: number) => Promise<void>;
+	readonly budget?: {
+		readonly now: () => number;
+		readonly sliceMs: number;
+		readonly callMs: number;
+	};
+	#deadline = Infinity;
+
+	startJob(): void {
+		this.#deadline =
+			this.budget === undefined
+				? Infinity
+				: this.budget.now() + this.budget.sliceMs;
+	}
+
 	constructor(
 		exec: Exec,
 		repo: RepoSlug,
@@ -114,12 +128,18 @@ export class GitHubPublicationApi {
 		persist: () => Promise<boolean> = async () => true,
 		sleep: (ms: number) => Promise<void> = (ms) =>
 			new Promise((done) => setTimeout(done, ms)),
+		budget?: {
+			readonly now: () => number;
+			readonly sliceMs: number;
+			readonly callMs: number;
+		},
 	) {
 		this.exec = exec;
 		this.repo = repo;
 		this.counters = counters;
 		this.persist = persist;
 		this.sleep = sleep;
+		this.budget = budget;
 	}
 
 	async request(
@@ -129,7 +149,7 @@ export class GitHubPublicationApi {
 		once = false,
 	): Promise<JsonValue | undefined> {
 		const key = digestOf(JSON.stringify([method, path, body ?? null]));
-		const max = once ? 1 : 3;
+		const max = once || this.budget !== undefined ? 1 : 3;
 
 		for (let attempt = 0; attempt < max; attempt++) {
 			this.counters[key] = attempt + 1;
@@ -148,7 +168,19 @@ export class GitHubPublicationApi {
 					args.push("--input", file);
 				}
 
-				result = await this.exec("gh", args).catch(() => ({
+				const timeoutMs =
+					this.budget === undefined
+						? undefined
+						: Math.min(this.budget.callMs, this.#deadline - this.budget.now());
+
+				if (timeoutMs !== undefined && timeoutMs <= 0)
+					throw new PublicationError("slice_exhausted");
+
+				result = await this.exec(
+					"gh",
+					args,
+					timeoutMs === undefined ? undefined : { timeoutMs },
+				).catch(() => ({
 					code: 1,
 					stdout: "",
 					stderr: "connection reset",
