@@ -570,7 +570,7 @@ describe("gateway policy: model body", () => {
 
 describe("gateway deny shape", () => {
 	it("has a closed code set and a fixed body that never echoes input", () => {
-		assert.equal(DENY_CODES.length, 20);
+		assert.equal(DENY_CODES.length, 21);
 		assert.equal(denyBody("no-route"), "factory-gateway: denied: no-route\n");
 		assert.equal(
 			denyBody("budget-closed"),

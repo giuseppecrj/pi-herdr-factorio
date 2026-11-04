@@ -24,7 +24,7 @@ import {
 	SecretScanner,
 	secretForms,
 } from "../../server/sandbox/credentials.ts";
-import { SseMeter } from "../../server/sandbox/meter.ts";
+import { AnthropicSseMeter, SseMeter } from "../../server/sandbox/meter.ts";
 import type { RouteId } from "../../server/sandbox/routes.ts";
 
 function record(overrides: Partial<AuditRecord> = {}): AuditRecord {
@@ -352,5 +352,188 @@ describe("openai-responses-sse meter", () => {
 			Buffer.from('data: {"type":"response.created"}\n\ndata: [DONE]\n\n'),
 		);
 		assert.equal(meter.usage(), null);
+	});
+});
+
+/** Probe r6's stream, byte for byte, including the edge's trailing space padding. */
+const R6_START =
+	'event: message_start\ndata: {"type":"message_start","message":{"model":"claude-haiku-5-5","id":"msg_011CgifeeqXmwL6iHuNdTavu","type":"message","role":"assistant","content":[],"container":null,"stop_reason":null,"stop_sequence":null,"stop_details":null,"usage":{"input_tokens":18,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":4,"service_tier":"standard","inference_geo":"us","speed":"standard"},"diagnostics":null}          }\n\n';
+
+const R6_BODY = [
+	'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+	'event: ping\ndata: {"type": "ping"}\n\n',
+	'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}             }\n\n',
+	'event: content_block_stop\ndata: {"type":"content_block_stop","index":0      }\n\n',
+].join("");
+
+const R6_DELTA =
+	'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null,"stop_details":null,"container":null},"usage":{"input_tokens":18,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":4,"output_tokens_details":{"thinking_tokens":0}}      }\n\n';
+
+const R6_STOP =
+	'event: message_stop\ndata: {"type":"message_stop"         }\n\n';
+
+const R6 = R6_START + R6_BODY + R6_DELTA + R6_STOP;
+
+function anthropicMeter(
+	text: string,
+	step = text.length,
+): ReturnType<AnthropicSseMeter["result"]> {
+	const bytes = Buffer.from(text);
+	const meter = new AnthropicSseMeter();
+
+	for (let index = 0; index < bytes.length; index += step) {
+		meter.push(bytes.subarray(index, index + step));
+	}
+
+	meter.end();
+
+	return meter.result();
+}
+
+const R6_METERED = {
+	kind: "metered",
+	inputTokens: 18,
+	outputTokens: 4,
+	observedModel: "claude-haiku-5-5",
+} as const;
+
+describe("anthropic-messages-sse meter", () => {
+	it("reads probe r6's padded stream: input 18, output 4, the bare model", () => {
+		assert.deepEqual(anthropicMeter(R6), R6_METERED);
+	});
+
+	it("handles CRLF framing and lines split across chunks", () => {
+		for (const step of [1, 7, 64]) {
+			assert.deepEqual(
+				anthropicMeter(R6.replace(/\n/g, "\r\n"), step),
+				R6_METERED,
+				String(step),
+			);
+		}
+	});
+
+	it("decodes a multibyte character split across chunks inside the usage line", () => {
+		const delta = R6_DELTA.replace(
+			'"stop_sequence":null',
+			'"stop_sequence":"✓é"',
+		);
+
+		assert.deepEqual(
+			anthropicMeter(R6_START + R6_BODY + delta + R6_STOP, 1),
+			R6_METERED,
+		);
+	});
+
+	it("counts cache creation and cache reads as input, like probe r9 and r10", () => {
+		const written = R6_DELTA.replace(
+			'"input_tokens":18,"cache_creation_input_tokens":0',
+			'"input_tokens":16,"cache_creation_input_tokens":12460',
+		);
+
+		const read = R6_DELTA.replace(
+			'"input_tokens":18,"cache_creation_input_tokens":0,"cache_read_input_tokens":0',
+			'"input_tokens":16,"cache_creation_input_tokens":0,"cache_read_input_tokens":12460',
+		);
+
+		for (const delta of [written, read]) {
+			assert.deepEqual(anthropicMeter(R6_START + R6_BODY + delta + R6_STOP), {
+				...R6_METERED,
+				inputTokens: 16 + 12460,
+			});
+		}
+	});
+
+	it("takes output from the last message_delta, and input from message_start when the delta omits it", () => {
+		const early = R6_DELTA.replace('"output_tokens":4', '"output_tokens":1');
+
+		const outputOnly =
+			'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":9}}\n\n';
+
+		assert.deepEqual(
+			anthropicMeter(R6_START + R6_BODY + early + R6_DELTA + R6_STOP),
+			R6_METERED,
+		);
+		assert.deepEqual(
+			anthropicMeter(R6_START + R6_BODY + outputOnly + R6_STOP),
+			{ ...R6_METERED, outputTokens: 9 },
+		);
+	});
+
+	it("meters a non-stream JSON message with usage the same way", () => {
+		const r1 =
+			'{"model":"claude-haiku-5-5","id":"msg_011CgifdWg7xhLc7kHd8mx2F","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"container":null,"stop_reason":"end_turn","stop_sequence":null,"stop_details":null,"usage":{"input_tokens":18,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":4,"output_tokens_details":{"thinking_tokens":0},"service_tier":"standard","inference_geo":"us","speed":"standard"},"diagnostics":null}';
+
+		const r9 = r1.replace(
+			'"input_tokens":18,"cache_creation_input_tokens":0',
+			'"input_tokens":16,"cache_creation_input_tokens":12460',
+		);
+
+		assert.deepEqual(anthropicMeter(r1, 5), R6_METERED);
+		assert.deepEqual(anthropicMeter(`\n ${r9}\n`), {
+			...R6_METERED,
+			inputTokens: 12476,
+		});
+
+		for (const broken of [
+			r1.replace(/,"usage":\{.*\},"diagnostics"/, ',"diagnostics"'),
+			r1.slice(0, -20),
+			r1.replace('"type":"message"', '"type":"error"'),
+			'{"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: 500000 > 128000"}}',
+		]) {
+			assert.deepEqual(anthropicMeter(broken), { kind: "unusable" });
+		}
+	});
+
+	it("is unusable without a message_delta, without message_stop, or with a second message_start", () => {
+		for (const [name, text] of [
+			["no delta", R6_START + R6_BODY + R6_STOP],
+			["no stop", R6_START + R6_BODY + R6_DELTA],
+			["no start", R6_BODY + R6_DELTA + R6_STOP],
+			["two starts", R6_START + R6_START + R6_BODY + R6_DELTA + R6_STOP],
+			["empty", ""],
+		] as const) {
+			assert.deepEqual(anthropicMeter(text), { kind: "unusable" }, name);
+		}
+	});
+
+	it("is unusable on missing cache counts, an error event, a broken data line or a model outside the table", () => {
+		const noCache = (text: string) =>
+			text.replace(/,"cache_read_input_tokens":0/g, "");
+
+		const error =
+			'event: error\ndata: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}\n\n';
+
+		for (const [name, text] of [
+			[
+				"no cache read",
+				noCache(R6_START) + R6_BODY + noCache(R6_DELTA) + R6_STOP,
+			],
+			["error event", R6_START + R6_BODY + error + R6_DELTA + R6_STOP],
+			[
+				"broken line",
+				`${R6_START}data: {"type":"message_delta"\n\n${R6_BODY}${R6_DELTA}${R6_STOP}`,
+			],
+			[
+				"prefixed model",
+				R6.replace(
+					'"model":"claude-haiku-5-5"',
+					'"model":"anthropic/claude-haiku-5-5"',
+				),
+			],
+			[
+				"unknown model",
+				R6.replace('"model":"claude-haiku-5-5"', '"model":"claude-opus-4-6"'),
+			],
+			["no model", R6.replace('"model":"claude-haiku-5-5",', "")],
+			[
+				"string count",
+				R6.replace(
+					'"output_tokens":4,"output_tokens_details"',
+					'"output_tokens":"4","output_tokens_details"',
+				),
+			],
+		] as const) {
+			assert.deepEqual(anthropicMeter(text), { kind: "unusable" }, name);
+		}
 	});
 });

@@ -42,6 +42,7 @@ export const DENY_CODES = [
 	"redirect-refused",
 	"response-blocked",
 	"audit-unavailable",
+	"model-maximum-unknown",
 ] as const;
 
 export type DenyCode = (typeof DENY_CODES)[number];
@@ -172,6 +173,8 @@ export function pathMatches(rule: PathRule, relative: string): boolean {
 
 function queryAllowed(rule: QueryRule, query: string | null): boolean {
 	if (query === null) return true;
+
+	if (rule.kind === "exact") return rule.values.includes(query);
 
 	if (rule.kind === "none" || !QUERY_CHARS.test(query)) return false;
 
@@ -360,11 +363,24 @@ function constraintHolds(root: JsonValue, constraint: JsonConstraint): boolean {
 
 	const items = arrayOf(value);
 
-	return (
-		items !== null &&
-		items.every((item) =>
-			scalarIn(fieldOf(objectOf(item), constraint.field), constraint.values),
-		)
+	if (items === null) return false;
+
+	if (constraint.kind === "each_keys") {
+		const { required, allowed } = constraint;
+
+		return items.every((item) => {
+			const object = objectOf(item);
+
+			return (
+				object !== null &&
+				required.every((key) => Object.hasOwn(object, key)) &&
+				Object.keys(object).every((key) => allowed.includes(key))
+			);
+		});
+	}
+
+	return items.every((item) =>
+		scalarIn(fieldOf(objectOf(item), constraint.field), constraint.values),
 	);
 }
 

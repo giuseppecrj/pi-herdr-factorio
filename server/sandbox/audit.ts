@@ -35,6 +35,8 @@ export type AuditRecord = {
 	readonly gate: "open" | "closed";
 	readonly inputTokens: number | null;
 	readonly outputTokens: number | null;
+	/** The bare model id the Anthropic meter observed. Absent otherwise. */
+	readonly observedModel?: string;
 };
 
 type JournalIdentity = {
@@ -65,6 +67,11 @@ export type JournalRecord =
 			readonly reason?: "provider_rejected";
 			readonly inputTokens: number | null;
 			readonly outputTokens: number | null;
+			/**
+			 * `message_start.message.model` as the edge reported it, present only
+			 * when the Anthropic meter metered the reply. `journalCharge` never reads it.
+			 */
+			readonly observedModel?: string;
 	  });
 
 export type JournalSink = {

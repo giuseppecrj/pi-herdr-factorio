@@ -53,7 +53,8 @@ import {
 	ECHO_SECRET,
 	LINEAR_CEILING,
 } from "./credentials.cases.ts";
-import { modelTable } from "./routes.cases.ts";
+import type { JsonValue } from "../../src/tickets.ts";
+import { anthropicTable, modelTable } from "./routes.cases.ts";
 
 const HOST = "127.0.0.1:18080";
 
@@ -1498,6 +1499,554 @@ describe("gateway admission gate and control", () => {
 		for (const code of DENY_CODES) {
 			assert.ok(source.includes(`"${code}"`), code);
 		}
+	});
+});
+
+const ANTHROPIC_START =
+	'event: message_start\ndata: {"type":"message_start","message":{"model":"claude-haiku-5-5","id":"msg_1","type":"message","role":"assistant","content":[],"usage":{"input_tokens":16,"cache_creation_input_tokens":12460,"cache_read_input_tokens":0,"output_tokens":1}}}   \n\n';
+
+const ANTHROPIC_TEXT =
+	'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}\n\n';
+
+const ANTHROPIC_DELTA =
+	'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":16,"cache_creation_input_tokens":12460,"cache_read_input_tokens":0,"output_tokens":4}}   \n\n';
+
+const ANTHROPIC_STOP = 'event: message_stop\ndata: {"type":"message_stop"}\n\n';
+
+type Sent = {
+	method: string;
+	url: string;
+	headers: Record<string, string | string[] | undefined>;
+	body: string;
+};
+
+describe("gateway anthropic route", () => {
+	let dir = "";
+	let port = 0;
+	let mode = "full";
+	const sent: Sent[] = [];
+
+	const upstream = createServer((req, res) => {
+		const chunks: Buffer[] = [];
+
+		req.on("data", (chunk: Buffer) => chunks.push(chunk));
+		req.on("end", () => {
+			sent.push({
+				method: req.method ?? "",
+				url: req.url ?? "",
+				headers: req.headers,
+				body: Buffer.concat(chunks).toString("utf8"),
+			});
+
+			if (req.url?.startsWith("/openai/")) {
+				res.writeHead(200, { "Content-Type": "text/event-stream" });
+				res.end(
+					'event: response.created\ndata: {"type":"response.created"}\n\n',
+				);
+
+				return;
+			}
+
+			if (req.url === "/anthropic/v1/models") {
+				res.writeHead(200, { "Content-Type": "application/json" });
+				res.end('{"data":[],"has_more":false}');
+
+				return;
+			}
+
+			res.writeHead(200, { "Content-Type": "text/event-stream" });
+
+			if (mode === "cut") {
+				res.write(ANTHROPIC_START, () => res.socket?.destroy());
+
+				return;
+			}
+
+			res.end(
+				mode === "nodelta"
+					? ANTHROPIC_START + ANTHROPIC_TEXT + ANTHROPIC_STOP
+					: mode === "twostarts"
+						? ANTHROPIC_START +
+							ANTHROPIC_START +
+							ANTHROPIC_TEXT +
+							ANTHROPIC_DELTA +
+							ANTHROPIC_STOP
+						: ANTHROPIC_START +
+							ANTHROPIC_TEXT +
+							ANTHROPIC_DELTA +
+							ANTHROPIC_STOP,
+			);
+		});
+	});
+
+	const open: Gateway[] = [];
+
+	before(async () => {
+		dir = mkdtempSync(join(tmpdir(), "factory-gw-anthropic-"));
+		await new Promise<void>((done) => upstream.listen(0, "127.0.0.1", done));
+
+		const address = upstream.address();
+
+		port = address !== null && address instanceof Object ? address.port : 0;
+	});
+
+	after(async () => {
+		await Promise.all(open.map((gateway) => gateway.close()));
+		upstream.closeAllConnections();
+		await new Promise((done) => upstream.close(done));
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	async function anthropicHarness(
+		options: { model?: string; ceilingTokens?: number; fallback?: string } = {},
+	) {
+		const base = anthropicTable({
+			model: options.model ?? "claude-haiku-5-5",
+			fallback: options.fallback ?? null,
+			modelTokens: options.ceilingTokens ?? 500_000,
+		});
+
+		const table: RouteTable = {
+			...base,
+			routes: base.routes.map((route) =>
+				route.meter === null ? route : fixtureModelRoute(port, route),
+			),
+		};
+
+		const audit: AuditRecord[] = [];
+		const journal: JournalRecord[] = [];
+		const events: ControlEvent[] = [];
+
+		const socketPath = join(
+			dir,
+			`gw-${Math.random().toString(16).slice(2)}.sock`,
+		);
+
+		const gateway = new Gateway({
+			table,
+			credentials: { ok: true, bound: new Map(), forms: [] },
+			audit: new AuditLog((text) => audit.push(JSON.parse(text)), 1_000_000, {
+				write: (text) => journal.push(JSON.parse(text)),
+				sync: () => {},
+			}),
+			emit: (event) => events.push(event),
+			lookup: async () => ["10.1.2.3"],
+		});
+
+		await gateway.listen(socketPath);
+		open.push(gateway);
+
+		return { gateway, socketPath, audit, journal, events };
+	}
+
+	const piHeaders = {
+		"Content-Type": "application/json",
+		Accept: "application/json",
+		"anthropic-version": "2023-06-01",
+		"anthropic-beta": "fine-grained-tool-streaming-2025-05-14",
+		"anthropic-dangerous-direct-browser-access": "true",
+		"x-api-key": "sandbox-placeholder-not-a-key",
+		"X-Stainless-Retry-Count": "0",
+	};
+
+	const piTool = {
+		name: "read",
+		description: "Read a file",
+		eager_input_streaming: true,
+		input_schema: { type: "object", properties: {}, required: [] },
+		cache_control: { type: "ephemeral" },
+	};
+
+	const messages = (extra: Record<string, JsonValue> = {}) =>
+		JSON.stringify({
+			model: "claude-haiku-5-5",
+			messages: [{ role: "user", content: "Reply ok" }],
+			max_tokens: 500_000,
+			stream: true,
+			tools: [piTool],
+			...extra,
+		});
+
+	it("forwards Pi's request with its version and beta headers, strips the key, clamps max_tokens to the model maximum and meters cache as input", async () => {
+		mode = "full";
+
+		const h = await anthropicHarness();
+		const before = sent.length;
+
+		const reply = await call(
+			h.socketPath,
+			"POST",
+			"/anthropic/v1/messages?beta=true",
+			piHeaders,
+			messages(),
+		);
+
+		assert.equal(reply.status, 200);
+		assert.match(reply.body, /message_stop/);
+		assert.equal(sent.length, before + 1);
+
+		const seen = sent.at(-1);
+
+		assert.equal(seen?.url, "/anthropic/v1/messages?beta=true");
+		assert.equal(seen?.headers["anthropic-version"], "2023-06-01");
+		assert.equal(
+			seen?.headers["anthropic-beta"],
+			"fine-grained-tool-streaming-2025-05-14",
+		);
+		assert.equal(seen?.headers["x-api-key"], undefined);
+		assert.equal(
+			seen?.headers["anthropic-dangerous-direct-browser-access"],
+			undefined,
+		);
+		assert.equal(seen?.headers["x-stainless-retry-count"], undefined);
+
+		const body = JSON.parse(seen?.body ?? "{}");
+
+		assert.equal(body.max_tokens, 128_000);
+		assert.equal("max_output_tokens" in body, false);
+		assert.deepEqual(body.tools, [piTool]);
+
+		const [dispatch, result] = h.journal;
+
+		assert.ok(dispatch?.kind === "dispatch" && result?.kind === "result");
+		assert.equal(dispatch.route, "model-anthropic");
+		assert.equal(dispatch.maxOutputTokens, 128_000);
+		assert.deepEqual(
+			[result.status, result.decision, result.inputTokens, result.outputTokens],
+			[200, "forward", 16 + 12460, 4],
+		);
+		assert.equal(result.observedModel, "claude-haiku-5-5");
+		assert.equal(h.audit.at(-1)?.observedModel, "claude-haiku-5-5");
+		assert.equal(h.audit.at(-1)?.path, "/anthropic/v1/messages?…");
+		assert.deepEqual(
+			journalCharge(h.journal.map((entry) => JSON.stringify(entry)).join("\n")),
+			{
+				tokens: 12480,
+				dispatched: 1,
+				settled: 1,
+				unmetered: 0,
+				uncertain: 0,
+				uncertainTokens: 0,
+			},
+		);
+
+		const summary = h.gateway.summary();
+
+		assert.equal(summary.modelTokens, 12480);
+		assert.equal(summary.modelRequests, 1);
+		assert.deepEqual(
+			summary.routes.find((route) => route.route === "model-anthropic"),
+			{
+				route: "model-anthropic",
+				forwarded: 1,
+				denied: 0,
+				bytesIn: summary.routes[0]?.bytesIn,
+				bytesOut: Buffer.byteLength(reply.body),
+				inputTokens: 12476,
+				outputTokens: 4,
+				unmetered: 0,
+				peakConcurrent: 1,
+			},
+		);
+	});
+
+	it("bounds max_tokens by the client, the stage ceiling and the model maximum, and charges a lost result at that bound", async () => {
+		mode = "full";
+
+		const h = await anthropicHarness({ ceilingTokens: 25_000 });
+		const before = sent.length;
+
+		const extras: Record<string, JsonValue>[] = [{}, { max_tokens: 900 }];
+
+		for (const extra of extras) {
+			assert.equal(
+				(
+					await call(
+						h.socketPath,
+						"POST",
+						"/anthropic/v1/messages",
+						piHeaders,
+						messages(extra),
+					)
+				).status,
+				200,
+			);
+		}
+
+		const noClient = JSON.parse(
+			JSON.stringify({ model: "claude-haiku-5-5", messages: [], stream: true }),
+		);
+
+		assert.equal(
+			(
+				await call(
+					h.socketPath,
+					"POST",
+					"/anthropic/v1/messages",
+					piHeaders,
+					JSON.stringify(noClient),
+				)
+			).status,
+			200,
+		);
+		assert.deepEqual(
+			sent.slice(before).map((seen) => JSON.parse(seen.body).max_tokens),
+			[25_000, 900, 25_000],
+		);
+
+		const wide = await anthropicHarness({
+			model: "claude-haiku-4-5",
+			ceilingTokens: 500_000,
+		});
+
+		mode = "cut";
+
+		const cut = await call(
+			wide.socketPath,
+			"POST",
+			"/anthropic/v1/messages",
+			piHeaders,
+			messages({ model: "claude-haiku-4-5" }),
+		);
+
+		mode = "full";
+		assert.equal(cut.aborted || !cut.body.includes("message_stop"), true);
+		assert.equal(JSON.parse(sent.at(-1)?.body ?? "{}").max_tokens, 64_000);
+
+		const [dispatch, result] = wide.journal;
+
+		assert.ok(dispatch?.kind === "dispatch" && result?.kind === "result");
+		assert.equal(dispatch.maxOutputTokens, 64_000);
+		assert.deepEqual([result.inputTokens, result.outputTokens], [null, null]);
+		assert.equal(result.observedModel, undefined);
+
+		for (const lines of [[dispatch], [dispatch, result]]) {
+			assert.deepEqual(
+				journalCharge(lines.map((entry) => JSON.stringify(entry)).join("\n")),
+				{
+					tokens: 0,
+					dispatched: 1,
+					settled: lines.length - 1,
+					unmetered: lines.length - 1,
+					uncertain: 1,
+					uncertainTokens: (dispatch.inputTokenEstimate ?? 0) + 64_000,
+				},
+			);
+		}
+	});
+
+	it("denies a model with no output maximum with model-maximum-unknown before any upstream call", async () => {
+		const h = await anthropicHarness({ model: "claude-opus-4-6" });
+		const before = sent.length;
+
+		const reply = await call(
+			h.socketPath,
+			"POST",
+			"/anthropic/v1/messages",
+			piHeaders,
+			messages({ model: "claude-opus-4-6" }),
+		);
+
+		assert.equal(reply.code, "model-maximum-unknown");
+		assert.equal(reply.status, 403);
+		assert.equal(reply.body, denyBody("model-maximum-unknown"));
+		assert.equal(sent.length, before);
+		assert.deepEqual(h.journal, []);
+		assert.equal(h.gateway.summary().modelRequests, 0);
+		assert.equal(h.audit.at(-1)?.reason, "model-maximum-unknown");
+	});
+
+	it("denies a non-JSON body, an OpenAI output field, a hosted tool, remote MCP servers and any other query", async () => {
+		const h = await anthropicHarness();
+		const before = sent.length;
+
+		const cases: [string, Record<string, string>, string, string][] = [
+			[
+				"/anthropic/v1/messages",
+				{ ...piHeaders, "Content-Type": "text/plain" },
+				"not json",
+				"body-not-allowed",
+			],
+			["/anthropic/v1/messages", piHeaders, "[1,2]", "body-not-allowed"],
+			[
+				"/anthropic/v1/messages",
+				piHeaders,
+				messages({ max_output_tokens: 10 }),
+				"body-not-allowed",
+			],
+			[
+				"/anthropic/v1/messages",
+				piHeaders,
+				messages({
+					tools: [{ type: "web_search_20250305", name: "web_search" }],
+				}),
+				"body-not-allowed",
+			],
+			[
+				"/anthropic/v1/messages",
+				piHeaders,
+				messages({ tools: [{ ...piTool, type: "custom" }] }),
+				"body-not-allowed",
+			],
+			[
+				"/anthropic/v1/messages",
+				piHeaders,
+				messages({ mcp_servers: [{ type: "url", url: "https://x.test" }] }),
+				"body-not-allowed",
+			],
+			[
+				"/anthropic/v1/messages",
+				piHeaders,
+				messages({ model: "claude-sonnet-5-5" }),
+				"body-not-allowed",
+			],
+			[
+				"/anthropic/v1/messages?beta=false",
+				piHeaders,
+				messages(),
+				"query-not-allowed",
+			],
+			[
+				"/anthropic/v1/messages?other=1",
+				piHeaders,
+				messages(),
+				"query-not-allowed",
+			],
+			[
+				"/anthropic/v1/messages?beta=true&beta=true",
+				piHeaders,
+				messages(),
+				"query-not-allowed",
+			],
+			["/anthropic/v1/complete", piHeaders, messages(), "path-not-allowed"],
+			[
+				"/anthropic/v1/messages/count_tokens?beta=true",
+				piHeaders,
+				messages(),
+				"path-not-allowed",
+			],
+			["/xai/v1/responses", piHeaders, messages(), "no-route"],
+			["/openai/v1/responses", piHeaders, messages(), "no-route"],
+		];
+
+		for (const [path, headers, body, code] of cases) {
+			assert.equal(
+				(await call(h.socketPath, "POST", path, headers, body)).code,
+				code,
+				`${path} ${body.slice(0, 40)}`,
+			);
+		}
+
+		assert.equal(sent.length, before);
+		assert.deepEqual(h.journal, []);
+	});
+
+	it("forwards the models list unjournaled, so it can neither fail a stage nor count as a model request", async () => {
+		const h = await anthropicHarness();
+
+		const reply = await call(h.socketPath, "GET", "/anthropic/v1/models", {
+			"anthropic-version": "2023-06-01",
+		});
+
+		assert.equal(reply.status, 200);
+		assert.deepEqual(h.journal, []);
+		assert.equal(h.gateway.summary().modelRequests, 0);
+		assert.equal(h.gateway.summary().routes[0]?.unmetered, 0);
+		assert.equal(h.gateway.summary().routes[0]?.forwarded, 1);
+	});
+
+	it("marks an Anthropic stream without usage or with two message_starts unusable, while OpenAI keeps its unmetered rule and output field", async () => {
+		const h = await anthropicHarness({ fallback: "openai/gpt-6.1-sol" });
+
+		for (const next of ["nodelta", "twostarts"]) {
+			mode = next;
+
+			const reply = await call(
+				h.socketPath,
+				"POST",
+				"/anthropic/v1/messages?beta=true",
+				piHeaders,
+				messages(),
+			);
+
+			assert.equal(reply.status, 200, next);
+		}
+
+		mode = "full";
+
+		const results = h.journal.flatMap((entry) =>
+			entry.kind === "result" ? [entry] : [],
+		);
+
+		assert.deepEqual(
+			results.map((entry) => [
+				entry.route,
+				entry.status,
+				entry.decision,
+				entry.inputTokens,
+				entry.outputTokens,
+				entry.observedModel ?? null,
+			]),
+			[
+				["model-anthropic", 200, "forward", null, null, null],
+				["model-anthropic", 200, "forward", null, null, null],
+			],
+		);
+		assert.equal(h.gateway.summary().routes[0]?.unmetered, 2);
+		assert.equal(h.gateway.summary().modelTokens, 0);
+		assert.equal(
+			journalCharge(h.journal.map((entry) => JSON.stringify(entry)).join("\n"))
+				.uncertain,
+			2,
+		);
+
+		const openai = JSON.stringify({ model: "gpt-6.1-sol", stream: true });
+
+		assert.equal(
+			(
+				await call(
+					h.socketPath,
+					"POST",
+					"/openai/v1/responses",
+					{ "Content-Type": "application/json" },
+					openai,
+				)
+			).code,
+			"route-closed",
+		);
+		assert.equal(h.gateway.setRoute(asRouteId("model-anthropic"), false), true);
+		assert.equal(h.gateway.setRoute(asRouteId("model-openai"), true), true);
+		assert.equal(
+			(
+				await call(
+					h.socketPath,
+					"POST",
+					"/openai/v1/responses",
+					{ "Content-Type": "application/json" },
+					openai,
+				)
+			).status,
+			200,
+		);
+
+		const body = JSON.parse(sent.at(-1)?.body ?? "{}");
+
+		assert.equal(body.max_output_tokens, 500_000);
+		assert.equal("max_tokens" in body, false);
+
+		const last = h.journal.at(-1);
+
+		assert.ok(last?.kind === "result");
+		assert.deepEqual(
+			[last.route, last.inputTokens, last.observedModel],
+			["model-openai", null, undefined],
+		);
+		assert.equal(
+			h.gateway.summary().routes.find((route) => route.route === "model-openai")
+				?.unmetered,
+			1,
+		);
+		assert.equal("observedModel" in (h.audit.at(-1) ?? {}), false);
 	});
 });
 
