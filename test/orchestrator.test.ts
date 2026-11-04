@@ -12824,6 +12824,36 @@ describe("ledger outbox enrollment", () => {
 		);
 	});
 
+	it("makes accounting unavailable, never a known empty zero, when the stages directory cannot be read", async () => {
+		const dir = stateDir();
+		const native = fileRunFiles(dir);
+		await instrument(native);
+
+		const none = await native.terminalEvidence?.(runOf(14), 7, null);
+		assert.deepEqual(none?.stages, { kind: "known", value: [] });
+
+		mkdirSync(join(dir, "stages"), { recursive: true });
+		writeFileSync(join(dir, "stages", runOf(14)), "not a directory");
+
+		const unreadable = await native.terminalEvidence?.(runOf(14), 7, null);
+		const gap = { kind: "unavailable", reason: "receipt_invalid" };
+		assert.deepEqual(unreadable?.stages, gap);
+		assert.deepEqual(unreadable?.models, gap);
+		assert.deepEqual(unreadable?.usage, {
+			tokens: {
+				kind: "lower_bound",
+				unit: "tokens",
+				total: 7,
+				reason: "receipt_invalid",
+			},
+			parentTokens: gap,
+			childTokens: gap,
+			unattributedTokens: gap,
+			money: { kind: "unavailable", reason: "provider_not_reported" },
+		});
+		assert.deepEqual(unreadable?.redactedReceiptDigests, []);
+	});
+
 	it("records interrupted attempts on the terminal row without charging the interruption twice", async () => {
 		const dir = stateDir();
 		const outbox = fileLedgerOutbox(dir);

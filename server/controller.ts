@@ -2790,7 +2790,11 @@ export async function readTerminalEvidence(
 	const { executionCharge, readStageReceipt } = await import("./sandbox.ts");
 	const root = join(resolve(stateDir), "stages", runId);
 
-	const names = (await readdir(root).catch(() => []))
+	const listed = await readdir(root).catch((error: NodeJS.ErrnoException) =>
+		error.code === "ENOENT" ? [] : null,
+	);
+
+	const names = (listed ?? [])
 		.filter((name) => EXECUTION_NAME.test(name))
 		.sort();
 
@@ -3080,39 +3084,66 @@ export async function readTerminalEvidence(
 				};
 	};
 
-	const evidence: TerminalEvidence = {
-		artifacts: await artifactPrefix(),
-		stages:
-			summaries.length === 0 && start == null ? missing : known(summaries),
-		models:
-			models.size === 0 && (names.length > 0 || start == null)
-				? missing
-				: known(orderedModels),
-		usage: {
-			tokens:
-				uncertain > 0
-					? {
-							kind: "uncertain",
-							unit: "tokens",
-							total,
-							reason: "request_unsettled",
-						}
-					: {
+	const invalid = {
+		kind: "unavailable" as const,
+		reason: "receipt_invalid" as const,
+	};
+
+	const evidence: TerminalEvidence =
+		listed === null
+			? {
+					artifacts: await artifactPrefix(),
+					stages: invalid,
+					models: invalid,
+					usage: {
+						tokens: {
 							kind: "lower_bound",
 							unit: "tokens",
 							total,
-							reason: "receipt_missing",
+							reason: "receipt_invalid",
 						},
-			parentTokens: splitComplete ? known(parent) : missing,
-			childTokens: splitComplete ? known(children) : missing,
-			unattributedTokens:
-				splitComplete && parent + children <= total
-					? known(total - parent - children)
-					: missing,
-			money: { kind: "unavailable", reason: "provider_not_reported" },
-		},
-		redactedReceiptDigests: [...digests].sort(),
-	};
+						parentTokens: invalid,
+						childTokens: invalid,
+						unattributedTokens: invalid,
+						money: { kind: "unavailable", reason: "provider_not_reported" },
+					},
+					redactedReceiptDigests: [],
+				}
+			: {
+					artifacts: await artifactPrefix(),
+					stages:
+						summaries.length === 0 && start == null
+							? missing
+							: known(summaries),
+					models:
+						models.size === 0 && (names.length > 0 || start == null)
+							? missing
+							: known(orderedModels),
+					usage: {
+						tokens:
+							uncertain > 0
+								? {
+										kind: "uncertain",
+										unit: "tokens",
+										total,
+										reason: "request_unsettled",
+									}
+								: {
+										kind: "lower_bound",
+										unit: "tokens",
+										total,
+										reason: "receipt_missing",
+									},
+						parentTokens: splitComplete ? known(parent) : missing,
+						childTokens: splitComplete ? known(children) : missing,
+						unattributedTokens:
+							splitComplete && parent + children <= total
+								? known(total - parent - children)
+								: missing,
+						money: { kind: "unavailable", reason: "provider_not_reported" },
+					},
+					redactedReceiptDigests: [...digests].sort(),
+				};
 
 	const generationGates: Record<string, Digest> = {};
 
