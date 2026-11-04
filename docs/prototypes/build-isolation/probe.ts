@@ -149,6 +149,7 @@ assert.ok(rawOutputs > 0, "no private accept output to fingerprint");
 
 const input = {
 	runId,
+	canarySha256: hash(canary),
 	gitLayout: gitState(workspace) === "dir" ? "trusted-bind" : "tmpfs",
 	privatePaths,
 	fingerprints: {
@@ -235,10 +236,10 @@ out.freshTmpfs = ['/home', '/tmp', '/run'].every(at => mounts.some(m => m.at ===
 out.cachePaths = ['/home/agent/.cache', '/home/agent/.npm', '/home/agent/.pi', '/run/credentials', '/run/user', '/root'].filter(p => existsSync(p));
 out.envLeaks = ['SSH_AUTH_SOCK', 'GH_TOKEN', 'GITHUB_TOKEN', 'OPENAI_API_KEY', 'NODE_OPTIONS', 'XDG_RUNTIME_DIR_HOST'].filter(k => process.env[k] !== undefined);
 out.tools = process.env.FACTORY_PI_TOOLS;
-const pattern = /factory-holdout-[0-9a-f]{64}/;
+const pattern = /factory-holdout-[0-9a-f]{64}/g;
 const fileHashes = new Set(input.fingerprints.files);
 const pathHashes = new Set(input.fingerprints.paths);
-let scanned = 0; let canaryHits = 0; let fingerprintHits = 0; let pathHits = 0; let scanErrors = 0; let scanDenied = 0; let danglingLinks = 0;
+let foreignCanaryShapedFiles = 0; let scanned = 0; let canaryHits = 0; let fingerprintHits = 0; let pathHits = 0; let scanErrors = 0; let scanDenied = 0; let danglingLinks = 0;
 const visited = new Set();
 const scan = path => {
  try {
@@ -250,7 +251,9 @@ const scan = path => {
   else if (stat.isFile()) {
    const bytes = readFileSync(path); scanned++;
    const text = bytes.toString('utf8');
-   if (pattern.test(text)) canaryHits++;
+   const shaped = text.match(pattern) ?? [];
+   if (shaped.some(s => hash(s) === input.canarySha256)) canaryHits++;
+   else if (shaped.length) foreignCanaryShapedFiles++;
    if (fileHashes.has(hash(bytes))) fingerprintHits++;
    for (const token of text.match(/[A-Za-z0-9_./-]+\.test\.(?:ts|js|mjs)/g) ?? []) {
     const parts = token.split('/');
@@ -265,7 +268,7 @@ const scan = path => {
  }
 };
 for (const root of roots) scan(root);
-out.filesScanned = scanned; out.canaryHits = canaryHits; out.fingerprintHits = fingerprintHits; out.pathHits = pathHits; out.scanErrors = scanErrors; out.scanDenied = scanDenied; out.danglingLinks = danglingLinks;
+out.filesScanned = scanned; out.canaryHits = canaryHits; out.foreignCanaryShapedFiles = foreignCanaryShapedFiles; out.fingerprintHits = fingerprintHits; out.pathHits = pathHits; out.scanErrors = scanErrors; out.scanDenied = scanDenied; out.danglingLinks = danglingLinks;
 out.complete = out.discovery && out.requiredRoots && out.gitRootIsolated && scanErrors === 0 && scanned > 0;
 out.githubGateway = await new Promise(done => { const req = http.get('http://127.0.0.1:18080/github/repos/giuseppecrj/pi-herdr-factorio', r => { r.resume(); r.on('end', () => done(r.statusCode)); }); req.on('error', () => done(null)); req.setTimeout?.(3000, () => { req.destroy(); done(null); }); });
 out.githubDirect = await fetch('https://api.github.com', { signal: AbortSignal.timeout(1500) }).then(() => 'reachable', () => 'denied');
