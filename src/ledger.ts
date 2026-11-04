@@ -250,7 +250,16 @@ export type RunStart = Out<typeof runStartCodec>;
 
 export function parseRunStart(value: JsonValue | undefined): RunStart | null {
 	try {
-		return runStartCodec(value);
+		const start = runStartCodec(value);
+
+		if (
+			(start.policy.gates.kind === "known" &&
+				start.policy.gates.value.sourceSha !== start.policy.workflowSha) ||
+			start.policy.autonomy.digest !== AUTONOMY_DIGEST
+		)
+			return null;
+
+		return start;
 	} catch (error) {
 		if (error instanceof LedgerRowError) return null;
 		throw error;
@@ -1145,10 +1154,8 @@ function artifactsOf(facts: TerminalFacts): JsonValue {
 			const publication = validation?.publication ?? null;
 			const ci = validation?.ciRunId ?? null;
 
-			const gatesDigest =
-				verdict === null
-					? undefined
-					: facts.evidence?.generationGates?.[verdict.gateSha];
+			const gateSha = verdict?.gateSha ?? intent.baseSha;
+			const gatesDigest = facts.evidence?.generationGates?.[gateSha];
 
 			return {
 				round: intent.round,
@@ -1165,9 +1172,9 @@ function artifactsOf(facts: TerminalFacts): JsonValue {
 						? unavailable("receipt_missing")
 						: known(publication.candidateSha),
 				gateSha:
-					verdict === null
+					verdict === null && gatesDigest === undefined
 						? unavailable("receipt_missing")
-						: known(verdict.gateSha),
+						: known(gateSha),
 				gatesDigest:
 					gatesDigest === undefined
 						? unavailable("receipt_missing")
@@ -1218,6 +1225,13 @@ function provenanceOf(facts: TerminalFacts): JsonValue {
 }
 
 export function terminalSnapshot(facts: TerminalFacts): JsonValue {
+	if (
+		facts.start != null &&
+		(facts.start.runId !== facts.runId ||
+			facts.start.policy.workflowSha !== facts.workflowSha ||
+			facts.start.policy.workflowDigest !== facts.workflowDigest)
+	)
+		fail("policy_binding");
 	const base = `https://github.com/${facts.repo}`;
 	const state = facts.candidate;
 	const published = state?.kind === "selected" ? state.published : null;

@@ -329,6 +329,31 @@ test("six groups distinguish unknown legacy ages and never duplicate a not-ready
 	assert.equal(read.groups.spec_review.length, 0);
 });
 
+test("legacy attention ignores private ledger accounting and request journals without rewriting claims", async () => {
+	const root = fixture();
+	const id = claim(root, 1, "needs_info");
+	claim(root, 2, "failed");
+	const input = { stateDir: root, repo, now: 1000 };
+	const before = await readAttention(input);
+	const path = join(root, "claims", `${id}.json`);
+	const bytes = readFileSync(path, "utf8");
+	mkdirSync(join(root, "accounting", id, "attempts"), { recursive: true });
+	writeFileSync(join(root, "accounting", id, "policy.json"), "{}");
+	mkdirSync(join(root, "ledger", id), { recursive: true });
+	writeFileSync(join(root, "ledger", id, "terminal.json"), "{}");
+	const stage = join(root, "stages", id, "specify-1");
+	mkdirSync(stage, { recursive: true });
+	writeFileSync(
+		join(stage, "egress.requests.jsonl"),
+		'{"kind":"dispatch","req":1}\n{"kind":"result"',
+	);
+	assert.deepEqual(await readAttention(input), before);
+	assert.equal(before.kind, "available");
+	assert.equal(before.groups.question_asked[0]?.ageMs, null);
+	assert.equal(before.groups.failed.length, 1);
+	assert.equal(readFileSync(path, "utf8"), bytes);
+});
+
 test("link records: the controller's unlinked record is no gap, a real link is answered, a corrupt one is a gap", async () => {
 	const root = fixture();
 	const files = fileRunFiles(root);

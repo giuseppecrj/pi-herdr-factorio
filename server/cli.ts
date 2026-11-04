@@ -669,7 +669,9 @@ export async function runCli(
 			accounting.state === "unavailable"
 				? { kind: "unavailable", reason: "legacy_not_recorded" }
 				: {
-						kind: "lower_bound",
+						kind: accounting.runs.some((run) => run.uncertainRequests > 0)
+							? "uncertain"
+							: "lower_bound",
 						unit: "tokens",
 						total: accounting.runs.reduce(
 							(sum, run) => sum + run.tokens.total,

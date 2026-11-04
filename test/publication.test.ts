@@ -4,6 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import {
 	mkdtempSync,
 	mkdirSync,
+	cpSync,
 	readFileSync,
 	writeFileSync,
 	rmSync,
@@ -58,7 +59,7 @@ import {
 	downloadGateReceipt,
 } from "../server/controller.ts";
 import { type ValidationState } from "../src/validation.ts";
-import { replacementDigest } from "../server/gates.ts";
+import { baseTreeDigest, replacementDigest } from "../server/gates.ts";
 import { CONTROLLER_LOGIN } from "../src/markers.ts";
 import { LedgerGit } from "./ledger-git.ts";
 
@@ -553,12 +554,21 @@ describe("deterministic Git Data publication", () => {
 	});
 });
 
-async function validationFixture() {
+async function validationFixture(withGates = false) {
 	const root = fresh();
 	const base = join(root, "source");
 	mkdirSync(base);
 	mkdirSync(join(base, "src"));
 	writeFileSync(join(base, "src/a.ts"), "export const a = 1;\n");
+
+	if (withGates) {
+		mkdirSync(join(base, ".github/factory/gates"), { recursive: true });
+		writeFileSync(
+			join(base, ".github/factory/gates/check.sh"),
+			"echo trusted\n",
+		);
+	}
+
 	execFileSync("git", ["init", "-q", base]);
 	execFileSync("git", ["-C", base, "add", "."]);
 	execFileSync("git", [
@@ -587,6 +597,11 @@ async function validationFixture() {
 	mkdirSync(workspace);
 	mkdirSync(join(workspace, "src"));
 	writeFileSync(join(workspace, "src/a.ts"), "export const a = 2;\n");
+
+	if (withGates)
+		cpSync(join(base, ".github"), join(workspace, ".github"), {
+			recursive: true,
+		});
 
 	const contract: Contract = {
 		version: 2,
@@ -710,6 +725,24 @@ async function validationFixture() {
 		archive,
 	};
 }
+
+describe("generation policy evidence", () => {
+	it("retains the gate-set digest from the exact exported validation base before deleting its source", async () => {
+		const f = await validationFixture(true);
+		assert.equal((await f.step()).kind, "waiting");
+		const path = join(f.root, "validation", runId, "gate-policy.json");
+		assert.equal(existsSync(path), true);
+		assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {
+			v: 1,
+			runId,
+			round: 0,
+			generation: 0,
+			sourceSha: baseSha,
+			digest: baseTreeDigest(join(f.base, ".github/factory/gates")),
+		});
+		assert.equal(lstatSync(path).mode & 0o777, 0o600);
+	});
+});
 
 describe("fix round 1 recovery regressions", () => {
 	const start = Date.parse("2026-10-31T00:00:00Z");

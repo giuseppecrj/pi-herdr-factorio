@@ -459,6 +459,79 @@ async function lifecycleState() {
 	return { ...f, book };
 }
 
+test("legacy claim and receipt views stay read-only and tolerate the private request journal", async () => {
+	const f = await fixtureState();
+
+	try {
+		const stage = join(f.root, "stages", runId, "build-1");
+		const before = await readViewerRun(f.root, runId);
+
+		const claimBytes = await readFile(
+			join(f.root, "claims", `${runId}.json`),
+			"utf8",
+		);
+
+		assert.equal(viewerClaim(claimBytes, runId)?.usage, 20);
+		assert.equal(
+			(await readStageReceipt(join(stage, "receipt.json")))?.usage.total,
+			20,
+		);
+		await writeFile(
+			join(stage, "egress.requests.jsonl"),
+			[
+				JSON.stringify({
+					v: 1,
+					runId,
+					stage: "build",
+					attempt: 1,
+					kind: "dispatch",
+					req: 1,
+					inputTokenEstimate: 30,
+					maxOutputTokens: 100,
+				}),
+				JSON.stringify({
+					v: 1,
+					runId,
+					stage: "build",
+					attempt: 1,
+					kind: "result",
+					req: 1,
+					inputTokens: 10,
+					outputTokens: 10,
+				}),
+				JSON.stringify({
+					v: 1,
+					runId,
+					stage: "build",
+					attempt: 1,
+					kind: "dispatch",
+					req: 2,
+					inputTokenEstimate: 30,
+					maxOutputTokens: 100,
+					privateSentinel: "DO_NOT_RENDER_JOURNAL",
+				}),
+				'{"kind":"result"',
+			].join("\n"),
+		);
+		await mkdir(join(f.root, "accounting", runId), { recursive: true });
+		await writeFile(join(f.root, "accounting", runId, "policy.json"), "{}");
+		const inventoryBefore = await inventory(f.root);
+		const after = await readViewerRun(f.root, runId);
+		assert.deepEqual(after, before);
+		assert.equal(
+			JSON.stringify(after).includes("DO_NOT_RENDER_JOURNAL"),
+			false,
+		);
+		assert.deepEqual(await inventory(f.root), inventoryBefore);
+		assert.equal(
+			await readFile(join(f.root, "claims", `${runId}.json`), "utf8"),
+			claimBytes,
+		);
+	} finally {
+		await rm(f.root, { recursive: true, force: true });
+	}
+});
+
 test("real viewer routes separate published historical certification from working refresh generations", async () => {
 	const f = await lifecycleState();
 	const viewer = await startViewer({ stateDir: f.root, runId, port: 0 });

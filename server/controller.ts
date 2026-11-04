@@ -3123,7 +3123,51 @@ export async function readTerminalEvidence(
 	for (const generation of candidate?.kind === "selected"
 		? candidateGenerations(candidate)
 		: []) {
+		const verdict = generation.verdict;
+		const expectedSha = verdict?.gateSha ?? generation.intent.baseSha;
+
+		const dir = validationDir(
+			stateDir,
+			runId,
+			generation.intent.round,
+			generation.intent.generation,
+		);
+
 		try {
+			const pin = objectOf(
+				parseJsonText(await readFile(join(dir, "gate-policy.json"), "utf8")),
+			);
+
+			const digest = textOf(jsonField(pin, "digest"));
+
+			if (
+				jsonField(pin, "v") === 1 &&
+				jsonField(pin, "runId") === runId &&
+				jsonField(pin, "round") === generation.intent.round &&
+				jsonField(pin, "generation") === generation.intent.generation &&
+				jsonField(pin, "sourceSha") === expectedSha &&
+				digest !== null &&
+				isDigest(digest)
+			)
+				generationGates[expectedSha] = digest;
+		} catch {
+			/* Older generations have only base qualification evidence. */
+		}
+
+		try {
+			if (verdict === null) continue;
+
+			const bindingDigest = digestOf(
+				JSON.stringify(
+					assessmentBinding({
+						runId,
+						round: generation.intent.round,
+						generation: generation.intent.generation,
+						verdict,
+					}),
+				),
+			);
+
 			const base = parseBaseReceipt(
 				await readFile(
 					join(
@@ -3133,6 +3177,8 @@ export async function readTerminalEvidence(
 							generation.intent.round,
 							generation.intent.generation,
 						),
+						"diagnosis",
+						bindingDigest,
 						"refreshed-base.json",
 					),
 					"utf8",
@@ -3141,6 +3187,14 @@ export async function readTerminalEvidence(
 
 			if (
 				base?.evidence.binding.runId === runId &&
+				base.evidence.binding.repo === candidate?.pin.repo &&
+				base.evidence.binding.issue === candidate?.pin.issue &&
+				base.evidence.binding.contractDigest ===
+					candidate?.pin.contractDigest &&
+				base.evidence.binding.acceptanceDigest ===
+					candidate?.pin.acceptanceDigest &&
+				base.evidence.binding.baseSha === verdict.gateSha &&
+				base.evidence.binding.gateSha === verdict.gateSha &&
 				base.evidence.source.kind === "ready"
 			)
 				generationGates[base.evidence.binding.baseSha] =
@@ -3250,9 +3304,17 @@ export async function readDurableAccounting(
 	repo: RepoSlug,
 ) {
 	const runs: Awaited<ReturnType<typeof readRunCharges>>[] = [];
-	let readable = stateDir !== null;
 
-	if (stateDir !== null) {
+	const available =
+		stateDir !== null &&
+		(await lstat(stateDir).then(
+			(info) => info.isDirectory(),
+			() => false,
+		));
+
+	let readable = available;
+
+	if (stateDir !== null && available) {
 		const root = join(resolve(stateDir), "claims");
 
 		const names = await readdir(root).catch((error: NodeJS.ErrnoException) => {
@@ -3295,16 +3357,24 @@ export async function readDurableAccounting(
 	}
 
 	return {
-		state:
-			stateDir === null ? "unavailable" : readable ? "readable" : "incomplete",
+		state: !available ? "unavailable" : readable ? "readable" : "incomplete",
 		countersScope: "process",
 		runs,
 	};
 }
 
 export async function readLedgerBacklog(stateDir: string | null, now: number) {
+	const available =
+		stateDir !== null &&
+		(await lstat(stateDir).then(
+			(info) => info.isDirectory(),
+			() => false,
+		));
+
 	const jobs =
-		stateDir === null ? null : await fileLedgerOutbox(stateDir).scan();
+		stateDir === null || !available
+			? null
+			: await fileLedgerOutbox(stateDir).scan();
 
 	const blocked = jobs?.filter((job) => job.retry?.blocked).length ?? null;
 	const oldest = jobs?.map((job) => job.observedAt).sort()[0] ?? null;
@@ -3932,6 +4002,28 @@ export function controllerValidator(config: {
 					});
 
 					if (checked.kind !== "ready") return failed("base_unavailable");
+					let gatesDigest: Digest | null = null;
+
+					if (checked.omitted === 0) {
+						try {
+							gatesDigest = baseTreeDigest(join(base, ".github/factory/gates"));
+						} catch {
+							/* A missing or unsafe historical gate tree is not a digest. */
+						}
+					}
+
+					if (gatesDigest !== null)
+						keepValidationFile(
+							join(dir, "gate-policy.json"),
+							`${JSON.stringify({
+								v: 1,
+								runId: input.runId,
+								round: state.round,
+								generation: state.generation?.index ?? 0,
+								sourceSha: state.baseSha,
+								digest: gatesDigest,
+							})}\n`,
+						);
 
 					if (
 						checked.checkout.files.some(

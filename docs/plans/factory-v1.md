@@ -835,7 +835,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 - [ ] Create `src/ledger.ts`, `test/ledger.test.ts`, `test/ledger-git.ts`, `docs/prototypes/ledger-branch/`, and `docs/operations/ledger.md`.
 - [ ] Edit `src/run.ts`, `src/markers.ts`, `src/orchestrator.ts`, `server/controller.ts`, and `server/cli.ts` for durable totals and terminal publication.
-- [ ] Edit `src/publication.ts` for the exact `factory/ledger` ref methods, the shared hash-checked object helpers and the root tree without `base_tree`. Candidate branch guards stay unchanged.
+- [ ] Edit `src/publication.ts` and `src/gh.ts` for the exact `factory/ledger` ref methods, the shared hash-checked object helpers, the root tree without `base_tree` and bounded ledger transport calls. Candidate branch guards stay unchanged.
 - [ ] Edit `server/sandbox.ts`, `server/sandbox/result.ts`, `server/sandbox/audit.ts`, and `server/sandbox/gateway.ts` for the synced request dispatch and result journal, execution high-water marks and durable charge recovery. The owner amended this block on 2026-11-04, because the before-request durability rule cannot hold without them.
 - [ ] Edit `test/orchestrator.test.ts`, `test/workflow.test.ts`, `test/publication.test.ts`, `test/sandbox/audit.cases.ts`, `test/sandbox/gateway.cases.ts`, `test/sandbox/runner.cases.ts`, `test/viewer.test.ts`, `test/attention.test.ts`, and `docs/operations/factory-cli.md` for these contracts at their call sites and for old-reader compatibility.
 

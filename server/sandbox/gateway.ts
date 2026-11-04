@@ -744,7 +744,7 @@ export class Gateway implements AdmissionState {
 		const json = objectOf(parseJson(body.toString("utf8")));
 
 		const forwarded =
-			route.meter === null
+			route.meter === null || body.length === 0
 				? body
 				: Buffer.from(
 						JSON.stringify({

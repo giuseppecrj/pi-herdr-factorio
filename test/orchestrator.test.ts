@@ -80,10 +80,12 @@ import {
 	storedAssessment,
 	verdictAssessment,
 } from "./helpers.ts";
-import type {
-	BaseCheckInput,
-	BaseCheckProgress,
-	BaseReason,
+import {
+	assessBase,
+	parseBaseReceipt,
+	type BaseCheckInput,
+	type BaseCheckProgress,
+	type BaseReason,
 } from "../src/diagnosis.ts";
 import { advance } from "../src/stages.ts";
 import {
@@ -94,7 +96,11 @@ import {
 } from "../src/ledger.ts";
 import { GitHubPublicationApi, readLedgerFile } from "../src/publication.ts";
 import { LedgerGit, repo as ledgerRepo } from "./ledger-git.ts";
-import { readAssessmentBytes, validationDir } from "../src/validation.ts";
+import {
+	assessmentBinding,
+	readAssessmentBytes,
+	validationDir,
+} from "../src/validation.ts";
 import {
 	candidateProjection,
 	handoffCandidate,
@@ -2870,6 +2876,47 @@ describe("server/cli.ts controller commands", () => {
 		assert.equal(JSON.parse(broken.stdout).ledger.pending, null);
 	});
 
+	it("status marks upper-bound charges uncertain and never calls missing state an empty backlog", async () => {
+		const github = new FakeGitHub();
+		const state = stateDir();
+		github.add(labeled(14));
+		const executor = new FakeExecutor();
+		executor.behaviors = [{ kind: "refuse", usage: 40 }];
+		await cli(
+			["tick", "--once", "--json", ...base, "--state-dir", state],
+			github,
+			new AbortController(),
+			executor,
+		);
+		const stage = join(state, "stages", runOf(14), "specify-1");
+		mkdirSync(stage, { recursive: true });
+		writeFileSync(
+			join(stage, "egress.requests.jsonl"),
+			'{"kind":"result","req":1,"inputTokens":10,"outputTokens":0}\n{"kind":"dispatch","req":2,"inputTokenEstimate":20,"maxOutputTokens":50}\n',
+		);
+
+		const result = await cli(
+			["status", "--json", ...base, "--state-dir", state],
+			github,
+		);
+
+		const status = JSON.parse(result.stdout);
+		assert.equal(status.accounting.runs[0].tokens.kind, "uncertain");
+		assert.equal(status.durableUsage.kind, "uncertain");
+		assert.equal(status.durableUsage.total, 80);
+
+		const missing = await cli(
+			["status", "--json", ...base, "--state-dir", join(state, "missing")],
+			github,
+		);
+
+		const unavailable = JSON.parse(missing.stdout);
+		assert.equal(unavailable.accounting.state, "unavailable");
+		assert.equal(unavailable.durableUsage.kind, "unavailable");
+		assert.equal(unavailable.ledger.state, "unreadable");
+		assert.equal(unavailable.ledger.pending, null);
+	});
+
 	it("rejects a state directory others can write", async () => {
 		const github = new FakeGitHub();
 		const state = stateDir();
@@ -3371,6 +3418,37 @@ describe("admission accounting policy", () => {
 			true,
 		);
 		assert.equal(fetched, 1);
+		assert.equal(
+			await files.accounting?.begin({
+				...pinned,
+				runId: runOf(16),
+				policy: {
+					...pinned.policy,
+					gates: {
+						kind: "known",
+						value: {
+							sourceSha: sha("f".repeat(40)),
+							digest: digestOf("gates"),
+						},
+					},
+				},
+			}),
+			false,
+		);
+		assert.equal(
+			await files.accounting?.begin({
+				...pinned,
+				runId: runOf(16),
+				policy: {
+					...pinned.policy,
+					autonomy: {
+						...pinned.policy.autonomy,
+						digest: digestOf("not autonomy"),
+					},
+				},
+			}),
+			false,
+		);
 
 		const restarted = fileRunFiles(dir, {
 			fetch: async () => {
@@ -3408,6 +3486,11 @@ describe("admission accounting policy", () => {
 			}),
 			false,
 		);
+		symlinkSync("ci.sh", join(tree, "gates", "omitted-link"));
+		const partial = execFileSync("tar", ["-czf", "-", "-C", archive, "repo"]);
+		const refused = fileRunFiles(stateDir(), { fetch: async () => partial });
+		assert.equal(await refused.prepareRun?.(input), false);
+		assert.equal(await refused.accounting?.start(input.runId), null);
 	});
 
 	it("defers the first claim until its original workflow and gate policy are durably pinned", async () => {
@@ -9178,6 +9261,116 @@ describe("controller-only validate", () => {
 					(entry) =>
 						entry.event === "claim_foreign" && entry.fields.issue === 14,
 				),
+		);
+	});
+
+	it("recovers a generation's gate digest from its exact diagnosis receipt rather than a guessed path", async () => {
+		const f = await reviewingRun();
+		const book = f.files.claims.get(runOf(14))?.handoff;
+		assert.ok(book?.kind === "selected");
+		const verdict = book.current.verdict;
+		const original = f.executor.baseChecks[0]?.binding;
+		assert.ok(verdict && original);
+		const gatesDigest = digestOf("refreshed gates");
+
+		const { receipt } = assessBase({
+			binding: {
+				...original,
+				baseSha: sha(verdict.gateSha),
+				gateSha: sha(verdict.gateSha),
+			},
+			runtime: {
+				runner: "fixture",
+				node: process.version,
+				platform: process.platform,
+				bwrap: "fixture",
+				protocolDigest: digestOf("protocol"),
+			},
+			startedAt: 0,
+			finishedAt: 10,
+			source: {
+				kind: "ready",
+				treeDigest: digestOf("tree"),
+				lockDigest: digestOf("lock"),
+				gatesDigest,
+			},
+			execution: { kind: "observed", exitCode: 0, wallMs: 5, files: [] },
+			repeat: { kind: "observed", exitCode: 0, wallMs: 5, files: [] },
+			scenarios: [],
+		});
+
+		const root = stateDir();
+
+		const binding = {
+			runId: runOf(14),
+			round: book.current.intent.round,
+			generation: book.current.intent.generation,
+			verdict,
+		};
+
+		const dir = join(
+			validationDir(root, runOf(14), binding.round, binding.generation),
+			"diagnosis",
+			digestOf(JSON.stringify(assessmentBinding(binding))),
+		);
+
+		assert.ok(parseBaseReceipt(JSON.stringify(receipt)));
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, "refreshed-base.json"), JSON.stringify(receipt));
+		const native = fileRunFiles(root);
+		assert.equal(
+			(await native.terminalEvidence?.(runOf(14), 29, book))?.generationGates?.[
+				verdict.gateSha
+			],
+			gatesDigest,
+		);
+		writeFileSync(
+			join(dir, "refreshed-base.json"),
+			JSON.stringify({
+				...receipt,
+				evidence: {
+					...receipt.evidence,
+					binding: { ...receipt.evidence.binding, runId: runOf(15) },
+				},
+			}),
+		);
+		assert.equal(
+			(await native.terminalEvidence?.(runOf(14), 29, book))?.generationGates?.[
+				verdict.gateSha
+			],
+			undefined,
+		);
+
+		const policy = join(
+			validationDir(root, runOf(14), binding.round, binding.generation),
+			"gate-policy.json",
+		);
+
+		const pin = {
+			v: 1,
+			runId: runOf(14),
+			round: binding.round,
+			generation: binding.generation,
+			sourceSha: verdict.gateSha,
+			digest: gatesDigest,
+		};
+
+		writeFileSync(policy, JSON.stringify(pin));
+		assert.equal(
+			(await native.terminalEvidence?.(runOf(14), 29, book))?.generationGates?.[
+				verdict.gateSha
+			],
+			gatesDigest,
+		);
+		writeFileSync(
+			policy,
+			JSON.stringify({ ...pin, generation: binding.generation + 1 }),
+		);
+		assert.equal(
+			(await native.terminalEvidence?.(runOf(14), 29, book))?.generationGates?.[
+				verdict.gateSha
+			],
+			undefined,
 		);
 	});
 

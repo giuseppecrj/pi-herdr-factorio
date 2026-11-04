@@ -1162,6 +1162,18 @@ describe("gateway admission gate and control", () => {
 		assert.equal(fixture.received.length, before + 1);
 	});
 
+	it("does not add an output-limit body to a bodyless model metadata read", async () => {
+		const h = await harness(fixture.port);
+		assert.equal(
+			(await call(h.socketPath, "GET", "/openai/v1/models")).status,
+			200,
+		);
+		const sent = h.journal[0];
+		assert.ok(sent?.kind === "dispatch");
+		assert.equal(sent.inputTokenEstimate, 0);
+		assert.equal(sent.maxOutputTokens, 0);
+	});
+
 	it("journals a synced dispatch before a model request goes upstream, and its result after", async () => {
 		const h = await harness(fixture.port, {
 			arrivals: () => fixture.received.length,

@@ -196,7 +196,7 @@ The `reload` object has these fields:
 | `executionEnabled` | boolean | Always `false`, because `status` runs no preflight. The controller's own value is in `controller.lastTick.executionEnabled`. |
 | `controller` | object | Without `--state-dir`, `state` is `unavailable` and `reason` is `pass --state-dir to read the controller lock`. With it, see below. |
 | `ledger` | object | Read-only local outbox state, pending and blocked counts, oldest age and next retry time. See below. |
-| `durableUsage` | object | Token floor summed once per distinct locally owned run, including ended runs. Never adds ledger rows to the same charges. Unavailable without `--state-dir`. |
+| `durableUsage` | object | Charged tokens summed once per distinct locally owned run, including ended runs. Never adds ledger rows to the same charges. Unavailable without readable state. |
 | `accounting` | object | `state` is `readable`, `incomplete` or `unavailable`; `countersScope` is `process`. `runs` contains each owned run's token floor, uncertain-request count, money availability and durable attempt records. |
 | `models` | object or `null` | The model for each of `specify`, `accept`, `build` and `review`. Validate has no model. |
 | `limits` | object or `null` | `pollIntervalMs`, `maxConcurrent`, `retry`, `usage` and `stages`, where `stages` maps each stage to `maxTurns`, `wallMs` and `stallMs`. |
@@ -210,7 +210,7 @@ When `workflow` is `valid`, `workflowSha` and `workflowDigest` are set, `workflo
 
 The controller retries ledger jobs after ticks, with persisted exponential backoff starting at 5 seconds and capped at 5 minutes. First adoption saves a lineage cursor and walks at most 16 parent links per slice. Transport timeouts leave publication uncertain: the next attempt reads the remote ledger before appending again. Integrity failures remain visible and do not replenish or block a run's token allowance.
 
-`durableUsage` and per-run `tokens` are lower bounds when coverage is incomplete. `uncertainRequests` counts dispatched requests whose result was not durably recorded. Current policy charges their recorded input-size estimate plus maximum allowed output, never replays them, and lets the run continue within its remaining allowance. The gateway records a conservative one-token-per-input-byte estimate and an enforced output limit before forwarding. Legacy dispatches without those bounds remain explicitly incomplete floors. Uncertain charges are not exact metering. Money remains unavailable because no validated price source is recorded. Existing `controller.lastTick.totals` are process-scoped counters, not lifetime totals. `status.json` is not restart authority.
+`durableUsage` and per-run `tokens` use `kind: "lower_bound"` when coverage is incomplete and `kind: "uncertain"` when unmatched requests contribute policy charges. `uncertainRequests` counts dispatched requests whose result was not durably recorded. Current policy charges their recorded input-size estimate plus maximum allowed output, never replays them, and lets the run continue within its remaining allowance. The gateway records a conservative one-token-per-input-byte estimate and an enforced output limit before forwarding. Legacy dispatches without those bounds remain explicitly incomplete floors. Uncertain charges are not exact metering. Money remains unavailable because no validated price source is recorded. Existing `controller.lastTick.totals` are process-scoped counters, not lifetime totals. `status.json` is not restart authority.
 
 ## `admit`
 
