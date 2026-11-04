@@ -10,6 +10,7 @@ import {
 	renameSync,
 	mkdtempSync,
 	readFileSync,
+	readdirSync,
 	rmSync,
 	statSync,
 	writeFileSync,
@@ -2823,6 +2824,50 @@ describe("server/cli.ts controller commands", () => {
 			[stale.controller.state, stale.controller.pid],
 			["stale_lock", 5000],
 		);
+	});
+
+	it("status reports a durable ended-run floor and ledger backlog without launching or writing", async () => {
+		const github = new FakeGitHub();
+		const state = stateDir();
+		const executor = new FakeExecutor();
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "refuse", usage: 40 }];
+		await cli(
+			["tick", "--once", "--json", ...base, "--state-dir", state],
+			github,
+			new AbortController(),
+			executor,
+		);
+		const before = readdirSync(state).sort();
+		const launches = executor.launches.length;
+
+		const result = await cli(
+			["status", "--json", ...base, "--state-dir", state],
+			github,
+			new AbortController(),
+			executor,
+		);
+
+		const status = JSON.parse(result.stdout);
+		assert.equal(status.ledger.pending, 1);
+		assert.equal(status.ledger.oldestAgeMs, 0);
+		assert.equal(status.ledger.state, "pending");
+		assert.equal(status.durableUsage.total, 40);
+		assert.equal(status.durableUsage.kind, "lower_bound");
+		assert.equal(status.accounting.runs.length, 1);
+		assert.equal(status.accounting.runs[0].money.kind, "unavailable");
+		assert.equal(status.accounting.countersScope, "process");
+		assert.equal(executor.launches.length, launches);
+		assert.deepEqual(readdirSync(state).sort(), before);
+		writeFileSync(join(state, "ledger", runOf(14), "retry.json"), "{");
+
+		const broken = await cli(
+			["status", "--json", ...base, "--state-dir", state],
+			github,
+		);
+
+		assert.equal(JSON.parse(broken.stdout).ledger.state, "unreadable");
+		assert.equal(JSON.parse(broken.stdout).ledger.pending, null);
 	});
 
 	it("rejects a state directory others can write", async () => {

@@ -2635,6 +2635,155 @@ export function fileLedgerOutbox(stateDir: string): LedgerOutbox {
 	};
 }
 
+/** Read-only per-run token floors; aggregate execution receipts cover their descendants. */
+export async function readRunCharges(
+	stateDir: string,
+	runId: Digest,
+	floor: number,
+) {
+	const { executionCharge } = await import("./sandbox.ts");
+	let readable = true;
+	let total = 0;
+	let uncertainRequests = 0;
+	let executions = 0;
+	const root = join(resolve(stateDir), "stages", runId);
+
+	const names = await readdir(root).catch((error: NodeJS.ErrnoException) => {
+		if (error.code !== "ENOENT") readable = false;
+
+		return [];
+	});
+
+	for (const name of names) {
+		if (
+			!/^(specify|accept|build|review)(?:-r[0-9]+)?-[1-9][0-9]*(?:\.[1-9][0-9]*)?$/.test(
+				name,
+			)
+		)
+			continue;
+		const charge = await executionCharge(join(root, name)).catch(() => null);
+
+		if (charge === null) {
+			readable = false;
+			continue;
+		}
+
+		executions++;
+		total += charge.total;
+		uncertainRequests += charge.uncertain;
+	}
+
+	return {
+		runId,
+		executions,
+		readable,
+		uncertainRequests,
+		tokens: {
+			kind: "lower_bound" as const,
+			unit: "tokens" as const,
+			total: Math.max(floor, total),
+			reason:
+				uncertainRequests > 0
+					? ("request_unsettled" as const)
+					: ("receipt_missing" as const),
+		},
+		money: {
+			kind: "unavailable" as const,
+			reason: "provider_not_reported" as const,
+		},
+		attempts: await fileRunAccounting(stateDir).attempts(runId),
+	};
+}
+
+export async function readDurableAccounting(
+	stateDir: string | null,
+	repo: RepoSlug,
+) {
+	const runs: Awaited<ReturnType<typeof readRunCharges>>[] = [];
+	let readable = stateDir !== null;
+
+	if (stateDir !== null) {
+		const root = join(resolve(stateDir), "claims");
+
+		const names = await readdir(root).catch((error: NodeJS.ErrnoException) => {
+			if (error.code !== "ENOENT") readable = false;
+
+			return [];
+		});
+
+		const seen = new Set<Digest>();
+
+		for (const name of names.sort()) {
+			if (!/^[a-f0-9]{64}\.json$/.test(name)) continue;
+			const text = await readFile(join(root, name), "utf8").catch(() => null);
+			const claim = text === null ? null : parseClaim(text);
+
+			if (claim === null || name !== `${claim.runId}.json`) {
+				readable = false;
+				continue;
+			}
+
+			if (seen.has(claim.runId)) continue;
+
+			const admitted = await fileAdmissionStore(stateDir).read({
+				repo,
+				issue: claim.issue,
+				eventId: claim.eventId,
+			});
+
+			if (admitted.kind === "unreadable") {
+				readable = false;
+				continue;
+			}
+
+			if (admitted.kind !== "found") continue;
+			seen.add(claim.runId);
+			const run = await readRunCharges(stateDir, claim.runId, claim.usage ?? 0);
+			readable &&= run.readable;
+			runs.push(run);
+		}
+	}
+
+	return {
+		state:
+			stateDir === null ? "unavailable" : readable ? "readable" : "incomplete",
+		countersScope: "process",
+		runs,
+	};
+}
+
+export async function readLedgerBacklog(stateDir: string | null, now: number) {
+	const jobs =
+		stateDir === null ? null : await fileLedgerOutbox(stateDir).scan();
+
+	const blocked = jobs?.filter((job) => job.retry?.blocked).length ?? null;
+	const oldest = jobs?.map((job) => job.observedAt).sort()[0] ?? null;
+
+	const next =
+		jobs
+			?.flatMap((job) => (job.retry === null ? [] : [job.retry.nextAt]))
+			.sort((a, b) => a - b)[0] ?? null;
+
+	return {
+		state:
+			stateDir === null
+				? "unavailable"
+				: jobs === null
+					? "unreadable"
+					: (blocked ?? 0) > 0
+						? "blocked"
+						: jobs.length > 0
+							? "pending"
+							: "empty",
+		pending: jobs?.length ?? null,
+		blocked,
+		oldestObservedAt: oldest,
+		oldestAgeMs: oldest === null ? null : Math.max(0, now - Date.parse(oldest)),
+		nextAttemptAt: next === null ? null : new Date(next).toISOString(),
+		lastError: jobs?.find((job) => job.retry !== null)?.retry?.reason ?? null,
+	};
+}
+
 /** Writes the last tick's report for `status --json`. */
 export async function writeStatus(
 	stateDir: string,

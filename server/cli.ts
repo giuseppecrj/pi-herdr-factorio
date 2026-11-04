@@ -48,6 +48,8 @@ import {
 	pinVerification,
 	pumpLedgerOutbox,
 	readStatus,
+	readLedgerBacklog,
+	readDurableAccounting,
 	type Sleep,
 	serveLoop,
 	writeStatus,
@@ -357,6 +359,9 @@ type ControllerView =
 type StatusOutput = Omit<StatusReport, "controller"> & {
 	readonly controller: ControllerView;
 	readonly attention: AttentionRead;
+	readonly ledger: Awaited<ReturnType<typeof readLedgerBacklog>>;
+	readonly accounting: Awaited<ReturnType<typeof readDurableAccounting>>;
+	readonly durableUsage: JsonValue;
 };
 
 type Printable =
@@ -650,7 +655,38 @@ export async function runCli(
 			now: Date.now(),
 		});
 
-		io.stdout(json({ ...report, controller, attention }));
+		const ledger = await readLedgerBacklog(
+			parsed.stateDir,
+			io.runtime?.clock.now() ?? Date.now(),
+		);
+
+		const accounting = await readDurableAccounting(parsed.stateDir, repo);
+
+		const durableUsage: JsonValue =
+			accounting.state === "unavailable"
+				? { kind: "unavailable", reason: "legacy_not_recorded" }
+				: {
+						kind: "lower_bound",
+						unit: "tokens",
+						total: accounting.runs.reduce(
+							(sum, run) => sum + run.tokens.total,
+							0,
+						),
+						reason: accounting.runs.some((run) => run.uncertainRequests > 0)
+							? "request_unsettled"
+							: "receipt_missing",
+					};
+
+		io.stdout(
+			json({
+				...report,
+				controller,
+				attention,
+				ledger,
+				accounting,
+				durableUsage,
+			}),
+		);
 
 		return EXIT.ok;
 	}
