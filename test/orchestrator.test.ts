@@ -2872,8 +2872,12 @@ describe("server/cli.ts controller commands", () => {
 			github,
 		);
 
-		assert.equal(JSON.parse(broken.stdout).ledger.state, "unreadable");
-		assert.equal(JSON.parse(broken.stdout).ledger.pending, null);
+		assert.deepEqual(
+			["state", "pending", "blocked", "lastError"].map(
+				(key) => JSON.parse(broken.stdout).ledger[key],
+			),
+			["blocked", 1, 1, "state_invalid"],
+		);
 	});
 
 	it("status marks upper-bound charges uncertain and never calls missing state an empty backlog", async () => {

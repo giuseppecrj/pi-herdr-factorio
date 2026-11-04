@@ -135,6 +135,7 @@ import {
 	realpath,
 	rename,
 	rm,
+	stat,
 	unlink,
 	writeFile,
 } from "node:fs/promises";
@@ -2625,6 +2626,71 @@ export function fileLedgerOutbox(stateDir: string): LedgerOutbox {
 				error.code === "ENOENT" ? null : Promise.reject(error),
 		);
 
+	const invalidJob = async (
+		runId: Digest,
+		observedAt: string | null,
+	): Promise<OutboxJob> => ({
+		runId,
+		observedAt:
+			observedAt ??
+			(await stat(dirOf(runId)).then(
+				(info) => info.mtime.toISOString(),
+				() => new Date(0).toISOString(),
+			)),
+		row: null,
+		retry: { attempts: 1, nextAt: 0, reason: "state_invalid", blocked: true },
+		adoption: null,
+	});
+
+	/** One job, `null` when it is published or not yet enrolled; a corrupt record blocks only it. */
+	const jobOf = async (runId: Digest): Promise<OutboxJob | null> => {
+		const dir = dirOf(runId);
+		let observedAt: string | null = null;
+
+		try {
+			if ((await readText(join(dir, "published.json"))) !== null) return null;
+			const terminal = await readText(join(dir, "terminal.json"));
+
+			if (terminal === null) return null;
+
+			observedAt = textOf(
+				jsonField(objectOf(parseJsonText(terminal)), "terminalObservedAt"),
+			);
+
+			if (observedAt === null) return invalidJob(runId, null);
+
+			const rowBytes = await readFile(join(dir, "row.json")).catch(
+				(error: NodeJS.ErrnoException) =>
+					error.code === "ENOENT" ? null : Promise.reject(error),
+			);
+
+			const row = rowBytes === null ? null : frozenRowOf(rowBytes);
+
+			if (rowBytes !== null && row === null)
+				return invalidJob(runId, observedAt);
+			const retryText = await readText(join(dir, "retry.json"));
+
+			const retry =
+				retryText === null ? null : parseRetry(parseJsonText(retryText));
+
+			if (retryText !== null && retry === null)
+				return invalidJob(runId, observedAt);
+			const adoptionText = await readText(join(dir, "adoption.json"));
+
+			const adoption =
+				adoptionText === null
+					? null
+					: parseAdoption(parseJsonText(adoptionText));
+
+			if (adoptionText !== null && adoption === null)
+				return invalidJob(runId, observedAt);
+
+			return { runId, observedAt, row, retry, adoption };
+		} catch {
+			return invalidJob(runId, observedAt);
+		}
+	};
+
 	return {
 		async prepare(runId, snapshot) {
 			const path = join(dirOf(runId), "terminal.json");
@@ -2679,43 +2745,9 @@ export function fileLedgerOutbox(stateDir: string): LedgerOutbox {
 
 				for (const runId of names.sort()) {
 					if (!isDigest(runId)) continue;
-					const dir = dirOf(runId);
+					const job = await jobOf(runId);
 
-					if ((await readText(join(dir, "published.json"))) !== null) continue;
-					const terminal = await readText(join(dir, "terminal.json"));
-
-					if (terminal === null) return null;
-
-					const observedAt = textOf(
-						jsonField(objectOf(parseJsonText(terminal)), "terminalObservedAt"),
-					);
-
-					if (observedAt === null) return null;
-
-					const rowBytes = await readFile(join(dir, "row.json")).catch(
-						(error: NodeJS.ErrnoException) =>
-							error.code === "ENOENT" ? null : Promise.reject(error),
-					);
-
-					const row = rowBytes === null ? null : frozenRowOf(rowBytes);
-
-					if (rowBytes !== null && row === null) return null;
-					const retryText = await readText(join(dir, "retry.json"));
-
-					const retry =
-						retryText === null ? null : parseRetry(parseJsonText(retryText));
-
-					if (retryText !== null && retry === null) return null;
-					const adoptionText = await readText(join(dir, "adoption.json"));
-
-					const adoption =
-						adoptionText === null
-							? null
-							: parseAdoption(parseJsonText(adoptionText));
-
-					if (adoptionText !== null && adoption === null) return null;
-
-					jobs.push({ runId, observedAt, row, retry, adoption });
+					if (job !== null) jobs.push(job);
 				}
 
 				return jobs;

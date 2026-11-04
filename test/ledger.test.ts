@@ -25,7 +25,13 @@ import { isGitSha, type GitSha } from "../src/workflow.ts";
 import { LedgerGit, repo } from "./ledger-git.ts";
 import { fileLedgerOutbox, pumpLedgerOutbox } from "../server/controller.ts";
 import { execFile } from "../server/cli.ts";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after } from "node:test";
@@ -993,15 +999,38 @@ describe("ledger outbox pump", () => {
 		assert.equal((await remoteBytes(fake)).toString().split("\n").length, 2);
 	});
 
-	it("reports unreadable outbox state instead of an empty backlog, and blocks on a conflicting row", async () => {
+	it("blocks only the job whose private record is corrupt, skips an unfinished one, and publishes the rest", async () => {
 		const dir = fresh();
 		const { outbox, runId } = await enrolled(dir, 32);
+		const ready = await enrolled(dir, 34);
 		writeFileSync(join(dir, "ledger", runId, "row.json"), "garbage\n");
+		const unfinished = runIdOf({ repo, issue: 35, eventId: "100" });
+		mkdirSync(join(dir, "ledger", unfinished));
 		const fake = new LedgerGit();
-		const unreadable = await pumpLedger(outbox, ledgerApiOf(quietApi(fake)), 0);
-		assert.equal(unreadable.readable, false);
-		assert.equal(fake.requests.length, 0);
+		const pumped = await pumpLedger(outbox, ledgerApiOf(quietApi(fake)), 0);
 
+		assert.deepEqual(
+			[
+				pumped.readable,
+				pumped.published,
+				pumped.pending,
+				pumped.blocked,
+				pumped.lastError,
+			],
+			[true, 1, 1, 1, "state_invalid"],
+		);
+		const [line] = parseLedger(await remoteBytes(fake));
+		assert.equal(line?.kind === "known" && line.row.runId, ready.runId);
+
+		const jobs = (await outbox.scan()) ?? assert.fail("scan");
+		assert.deepEqual(
+			jobs.map((job) => [job.runId, job.row, job.retry?.blocked]),
+			[[runId, null, true]],
+		);
+		assert.equal(jobs[0]?.observedAt, "2026-11-04T11:05:00Z");
+	});
+
+	it("blocks on a conflicting row", async () => {
 		const other = fresh();
 		const second = await enrolled(other, 33);
 		const remote = new LedgerGit();

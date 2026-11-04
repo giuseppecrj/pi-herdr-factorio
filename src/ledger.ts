@@ -682,7 +682,8 @@ export type LedgerErrorCode =
 	| "lineage_changed"
 	| "ref_missing"
 	| "object_mismatch"
-	| "adoption_pending";
+	| "adoption_pending"
+	| "state_invalid";
 
 export type LedgerIndex =
 	| {
@@ -1397,7 +1398,7 @@ export interface LedgerOutbox {
 		runId: Digest,
 		marker: MarkerProof,
 	): Promise<"frozen" | "absent" | "invalid" | "unwritable">;
-	/** Unpublished jobs, or `null` when the outbox cannot be read in full. */
+	/** Unpublished jobs, or `null` when the outbox cannot be listed; a corrupt job blocks alone. */
 	scan(): Promise<readonly OutboxJob[] | null>;
 	anchor(): Promise<LedgerAnchor | null>;
 	adoption(runId: Digest, cursor: AdoptionCursor): Promise<boolean>;
@@ -1530,6 +1531,7 @@ const retryCodec = record({
 		"ref_missing",
 		"object_mismatch",
 		"adoption_pending",
+		"state_invalid",
 	),
 	blocked: flag,
 });
