@@ -2146,7 +2146,11 @@ export class Orchestrator {
 					? currentMarker(ledger.value)
 					: await this.#localMarker(local, ledger.value);
 
-			if (local !== null && current === null) continue;
+			if (local !== null && current === null) {
+				if (await this.#unadmitted(issue, local.eventId)) this.#resolve(issue);
+
+				continue;
+			}
 
 			const candidate =
 				isReady(record) || (record.open && candidates.includes(record));
@@ -2236,17 +2240,11 @@ export class Orchestrator {
 	/**
 	 * A live marker whose event has no admission record under this state
 	 * directory belongs to another controller. It is left alone: nothing is
-	 * adopted for it, no release is posted and no new event is admitted while
-	 * it is the newest marker.
+	 * adopted for it, no release is posted, and neither a new event nor an own
+	 * unmarked admission is claimed while it is the newest marker.
 	 */
 	async #foreign(marker: Marker): Promise<boolean> {
-		const stored = await this.#input.store.read({
-			repo: this.#input.repo,
-			issue: marker.issue,
-			eventId: marker.eventId,
-		});
-
-		if (stored.kind !== "absent") return false;
+		if (!(await this.#unadmitted(marker.issue, marker.eventId))) return false;
 
 		if (!this.#foreignRuns.has(marker.runId)) {
 			this.#foreignRuns.add(marker.runId);
@@ -2259,6 +2257,16 @@ export class Orchestrator {
 		}
 
 		return true;
+	}
+
+	async #unadmitted(issue: number, eventId: string): Promise<boolean> {
+		const stored = await this.#input.store.read({
+			repo: this.#input.repo,
+			issue,
+			eventId,
+		});
+
+		return stored.kind === "absent";
 	}
 
 	#resolve(issue: number): void {
@@ -2333,6 +2341,15 @@ export class Orchestrator {
 				continue;
 			}
 
+			if (
+				foreign ||
+				(latest === null &&
+					(await this.#unadmitted(claim.issue, claim.eventId)))
+			) {
+				if (settled === "resolved") settled = "refused";
+				continue;
+			}
+
 			let why: ReleaseReason | null = record.open ? "unlabeled" : "closed";
 
 			if (candidate && latest === null) {
@@ -2356,10 +2373,8 @@ export class Orchestrator {
 				why = null;
 			}
 
-			if (foreign && (latest !== null || why !== null)) {
-				settled = "refused";
-			} else if (why === null) {
-				if (settled === "resolved") settled = "held";
+			if (why === null) {
+				settled = "held";
 			} else if (
 				!(await this.#releaseClaim({
 					claim,
@@ -2994,24 +3009,19 @@ export class Orchestrator {
 		const issue = record.number;
 		const repo = this.#input.repo;
 
-		const local = await this.#recordedAdmission(record, ledger);
+		const top = currentMarker(ledger);
 
-		if (local.kind === "defer") return null;
-
-		if (local.kind === "ended") {
+		if (top !== null && !isTerminal(top.status) && (await this.#foreign(top))) {
 			this.#see(issue, record.updatedAt, { kind: "decided" });
 
 			return null;
 		}
 
-		const top = currentMarker(ledger);
+		const local = await this.#recordedAdmission(record, ledger);
 
-		if (
-			local.kind === "none" &&
-			top !== null &&
-			!isTerminal(top.status) &&
-			(await this.#foreign(top))
-		) {
+		if (local.kind === "defer") return null;
+
+		if (local.kind === "ended") {
 			this.#see(issue, record.updatedAt, { kind: "decided" });
 
 			return null;
