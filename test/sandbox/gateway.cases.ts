@@ -1221,7 +1221,7 @@ describe("gateway admission gate and control", () => {
 	});
 
 	it("settles a provider's non-2xx response at zero and keeps a 2xx without usage uncertain", async () => {
-		const modes = ["429", "500", "bare", "cut", "500usage"];
+		const modes = ["429", "500", "bare", "cut", "500usage", "500cut"];
 		let mode = "";
 
 		const upstream = createServer((req, res) => {
@@ -1230,6 +1230,16 @@ describe("gateway admission gate and control", () => {
 				if (mode === "429" || mode === "500") {
 					res.writeHead(Number(mode), { "Content-Type": "application/json" });
 					res.end('{"error":{"message":"rejected"}}');
+
+					return;
+				}
+
+				if (mode === "500cut") {
+					res.writeHead(500, { "Content-Type": "text/event-stream" });
+					res.write(
+						'event: response.completed\ndata: {"type":"response.completed","response":{"usage":{"input_tokens":11,"output_tokens":5}}}\n\n',
+						() => res.socket?.destroy(),
+					);
 
 					return;
 				}
@@ -1281,7 +1291,7 @@ describe("gateway admission gate and control", () => {
 					: [],
 			);
 
-			assert.equal(bounds.length, 5);
+			assert.equal(bounds.length, 6);
 			assert.deepEqual(
 				h.journal.flatMap((entry) =>
 					entry.kind === "result"
@@ -1302,7 +1312,25 @@ describe("gateway admission gate and control", () => {
 					[200, "forward", null, null, null],
 					[200, "error", null, null, null],
 					[500, "forward", "provider_rejected", 11, 5],
+					[500, "error", null, null, null],
 				],
+			);
+
+			assert.deepEqual(
+				journalCharge(
+					h.journal
+						.slice(10)
+						.map((e) => JSON.stringify(e))
+						.join("\n"),
+				),
+				{
+					tokens: 0,
+					dispatched: 1,
+					settled: 1,
+					unmetered: 1,
+					uncertain: 1,
+					uncertainTokens: bounds[5] ?? 0,
+				},
 			);
 
 			const lines = h.journal.slice(0, 8).map((entry) => JSON.stringify(entry));
@@ -1310,7 +1338,7 @@ describe("gateway admission gate and control", () => {
 			assert.deepEqual(
 				journalCharge(
 					h.journal
-						.slice(8)
+						.slice(8, 10)
 						.map((e) => JSON.stringify(e))
 						.join("\n"),
 				),
