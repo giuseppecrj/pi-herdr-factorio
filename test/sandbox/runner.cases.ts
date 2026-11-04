@@ -5223,6 +5223,43 @@ describe("durable request charges after a restart", () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+
+	it("charges an unmetered result its dispatch bound and keeps it uncertain", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-charges-"));
+		const build = join(dir, "stages", RUN, "build-1");
+
+		try {
+			mkdirSync(build, { recursive: true });
+			writeFileSync(
+				join(build, "egress.requests.jsonl"),
+				line({
+					v: 1,
+					kind: "dispatch",
+					...id,
+					req: 1,
+					inputTokenEstimate: 500,
+					maxOutputTokens: 1000,
+				}) +
+					line({
+						v: 1,
+						kind: "result",
+						...id,
+						req: 1,
+						status: 200,
+						decision: "forward",
+						inputTokens: null,
+						outputTokens: null,
+					}),
+			);
+
+			assert.deepEqual(await sandboxModule.executionCharge(build), {
+				total: 1500,
+				uncertain: 1,
+			});
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });
 
 describe("restored allowance edges at the stage boundary", () => {

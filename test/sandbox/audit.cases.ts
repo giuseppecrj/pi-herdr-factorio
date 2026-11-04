@@ -169,6 +169,29 @@ describe("gateway request journal", () => {
 			uncertain: 1,
 			uncertainTokens: 0,
 		});
+		assert.deepEqual(
+			journalCharge(
+				[
+					{ ...dispatch(1), inputTokenEstimate: 500, maxOutputTokens: 1000 },
+					result(1, null, null),
+					{ ...dispatch(2), inputTokenEstimate: 0, maxOutputTokens: 0 },
+					result(2, null, null),
+					{ ...dispatch(3), inputTokenEstimate: 9, maxOutputTokens: 1 },
+					result(3, 4, 2),
+				]
+					.map((entry) => JSON.stringify(entry))
+					.join("\n"),
+			),
+			{
+				tokens: 6,
+				dispatched: 3,
+				settled: 3,
+				unmetered: 2,
+				uncertain: 1,
+				uncertainTokens: 1500,
+			},
+			"an unmetered result keeps its positive dispatch bound uncertain",
+		);
 		assert.deepEqual(journalCharge(""), {
 			tokens: 0,
 			dispatched: 0,

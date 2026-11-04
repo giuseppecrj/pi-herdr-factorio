@@ -89,9 +89,10 @@ export type JournalCharge = {
 
 /**
  * What a journal proves: metered tokens of each settled request, once per
- * request number. A dispatch with no result is an uncertain charge, so the
- * tokens retain the recorded input-plus-output bound separately. Legacy dispatches
- * without a bound remain a floor. A line cut short by a crash is skipped.
+ * request number. A dispatch with no result, or with an unmetered result and
+ * a positive recorded bound, is an uncertain charge, so the tokens retain the
+ * recorded input-plus-output bound separately. Legacy dispatches without a
+ * bound remain a floor. A line cut short by a crash is skipped.
  */
 export function journalCharge(text: string): JournalCharge {
 	const dispatched = new Map<number, number>();
@@ -123,16 +124,18 @@ export function journalCharge(text: string): JournalCharge {
 
 	const metered = [...settled.values()];
 
+	const unsettled = [...dispatched].filter(
+		([req, bound]) =>
+			!settled.has(req) || (settled.get(req) === null && bound > 0),
+	);
+
 	return {
 		tokens: metered.reduce<number>((sum, value) => sum + (value ?? 0), 0),
 		dispatched: dispatched.size,
 		settled: settled.size,
 		unmetered: metered.filter((value) => value === null).length,
-		uncertain: [...dispatched.keys()].filter((req) => !settled.has(req)).length,
-		uncertainTokens: [...dispatched].reduce(
-			(sum, [req, bound]) => sum + (settled.has(req) ? 0 : bound),
-			0,
-		),
+		uncertain: unsettled.length,
+		uncertainTokens: unsettled.reduce((sum, [, bound]) => sum + bound, 0),
 	};
 }
 
