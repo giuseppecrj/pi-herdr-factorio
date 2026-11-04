@@ -504,7 +504,7 @@ export class Gateway implements AdmissionState {
 				...this.#journalIdentity(exchange, exchange.dispatched),
 				kind: "result",
 				decision,
-				...(exchange.rejected === null
+				...(exchange.rejected === null || decision !== "forward"
 					? {
 							status,
 							inputTokens: exchange.inputTokens,

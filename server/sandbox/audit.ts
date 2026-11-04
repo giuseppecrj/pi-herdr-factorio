@@ -50,7 +50,7 @@ type JournalIdentity = {
 /**
  * One model request in the synced journal: a `dispatch` before anything goes
  * upstream, and a `result` once it ends. Only ids, counters and metering. A
- * provider's non-2xx status at the headers is `provider_rejected`, metered at its reported usage or zero.
+ * provider's non-2xx status at the headers, on a response that completed, is `provider_rejected`, metered at its reported usage or zero.
  */
 export type JournalRecord =
 	| (JournalIdentity & {
@@ -91,7 +91,7 @@ export type JournalCharge = {
 
 /**
  * What a journal proves: metered tokens of each settled request, once per
- * request number. A provider-rejected result is a known zero. A dispatch with
+ * request number. A provider-rejected result that completed is charged its reported usage, or a known zero. A dispatch with
  * no result, or with an unmetered result and a positive recorded bound, is an
  * uncertain charge, so the tokens retain the recorded input-plus-output bound
  * separately. Legacy dispatches without a bound remain a floor. A line cut
