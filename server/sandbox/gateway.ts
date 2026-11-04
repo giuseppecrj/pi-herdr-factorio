@@ -741,20 +741,27 @@ export class Gateway implements AdmissionState {
 
 		// One byte per input token is conservative; bound output explicitly even
 		// when the client omits a provider limit, so a lost result is chargeable.
-		const json = objectOf(parseJson(body.toString("utf8")));
+		// A body that is not a JSON object passes unchanged, bounded by the ceiling.
+		const ceiling = this.#table.ceiling.modelTokens;
+
+		const json =
+			route.meter === null || body.length === 0
+				? null
+				: objectOf(parseJson(body.toString("utf8")));
+
+		const maxOutputTokens =
+			route.meter === null || body.length === 0
+				? 0
+				: Math.min(
+						countOf(fieldOf(json, "max_output_tokens")) ?? ceiling,
+						ceiling,
+					);
 
 		const forwarded =
-			route.meter === null || body.length === 0
+			json === null
 				? body
 				: Buffer.from(
-						JSON.stringify({
-							...json,
-							max_output_tokens: Math.min(
-								countOf(fieldOf(json, "max_output_tokens")) ??
-									this.#table.ceiling.modelTokens,
-								this.#table.ceiling.modelTokens,
-							),
-						}),
+						JSON.stringify({ ...json, max_output_tokens: maxOutputTokens }),
 					);
 
 		this.#forward(
@@ -765,6 +772,7 @@ export class Gateway implements AdmissionState {
 			decision.upstreamPath,
 			address,
 			forwarded,
+			maxOutputTokens,
 		);
 	}
 
@@ -776,6 +784,7 @@ export class Gateway implements AdmissionState {
 		upstreamPath: string,
 		address: string,
 		body: Buffer,
+		maxOutputTokens: number,
 	): void {
 		const state = this.#routes.get(route.id);
 
@@ -787,13 +796,7 @@ export class Gateway implements AdmissionState {
 					...this.#journalIdentity(exchange, route.id),
 					kind: "dispatch",
 					inputTokenEstimate: body.length,
-					maxOutputTokens:
-						countOf(
-							fieldOf(
-								objectOf(parseJson(body.toString("utf8"))),
-								"max_output_tokens",
-							),
-						) ?? 0,
+					maxOutputTokens,
 				})
 			) {
 				this.#journalFailed();

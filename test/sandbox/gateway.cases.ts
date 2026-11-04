@@ -8,7 +8,7 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs";
-import { request } from "node:http";
+import { createServer, request } from "node:http";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -212,6 +212,12 @@ function testTable(
 				},
 			},
 			credentialedRoute(port),
+			{
+				...fixtureModelRoute(port, openai),
+				id: asRouteId("opaque-model"),
+				prefix: "/opaque/",
+				body: { kind: "opaque", contentTypes: ["text/plain"] },
+			},
 		],
 	};
 }
@@ -1160,6 +1166,58 @@ describe("gateway admission gate and control", () => {
 			"audit-unavailable",
 		);
 		assert.equal(fixture.received.length, before + 1);
+	});
+
+	it("forwards a non-object metered body unchanged and bounds it by its bytes plus the ceiling", async () => {
+		const bodies: string[] = [];
+
+		const upstream = createServer((req, res) => {
+			const chunks: Buffer[] = [];
+
+			req.on("data", (chunk: Buffer) => chunks.push(chunk));
+			req.on("end", () => {
+				bodies.push(Buffer.concat(chunks).toString("utf8"));
+				res.writeHead(200, { "Content-Type": "text/event-stream" });
+				res.end(
+					'event: response.completed\ndata: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":1}}}\n\n',
+				);
+			});
+		});
+
+		await new Promise<void>((done) => upstream.listen(0, "127.0.0.1", done));
+
+		try {
+			const address = upstream.address();
+
+			const port =
+				address !== null && address instanceof Object ? address.port : 0;
+
+			const h = await harness(port, { ceilingTokens: 4000 });
+			const text = { "Content-Type": "text/plain" };
+
+			for (const sent of ["not json at all", "[1,2,3]", '"a string"'])
+				assert.equal(
+					(await call(h.socketPath, "POST", "/opaque/responses", text, sent))
+						.status,
+					200,
+				);
+
+			assert.deepEqual(bodies, ["not json at all", "[1,2,3]", '"a string"']);
+			assert.deepEqual(
+				h.journal.flatMap((entry) =>
+					entry.kind === "dispatch"
+						? [[entry.inputTokenEstimate, entry.maxOutputTokens]]
+						: [],
+				),
+				[
+					[15, 4000],
+					[7, 4000],
+					[10, 4000],
+				],
+			);
+		} finally {
+			await new Promise((done) => upstream.close(done));
+		}
 	});
 
 	it("does not add an output-limit body to a bodyless model metadata read", async () => {
