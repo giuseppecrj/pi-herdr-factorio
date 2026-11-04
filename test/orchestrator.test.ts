@@ -1432,6 +1432,33 @@ describe("Orchestrator restart recovery", () => {
 		});
 	}
 
+	for (const [spent, launches] of [
+		[499_999, true],
+		[500_000, false],
+		[500_001, false],
+	] as const)
+		it(`restores ${spent} spent tokens against the 500000 run cap and ${launches ? "launches with what is left" : "launches nothing"}`, async () => {
+			const ctx = world();
+			const { github, executor, start } = ctx;
+
+			await stopAfterUnmarkedSpend(ctx, spent);
+			executor.behaviors = [{ kind: "hang" }];
+
+			const report = await start().tick();
+
+			if (launches) {
+				assert.equal(executor.launches.length, 2);
+				assert.equal(executor.launches[1]?.remainingRunTokens, 500_000 - spent);
+
+				return;
+			}
+
+			assert.equal(executor.launches.length, 1);
+			assert.deepEqual(report.runs, []);
+			assert.equal(statuses(github, 14).at(-1), "2:budget_exhausted");
+			assert.equal(usageOf(github, 14).at(-1), spent);
+		});
+
 	it("gives a replay of a claimed attempt only what that attempt's earlier execution left of the run cap", async () => {
 		const ctx = world();
 		const { github, executor, start } = ctx;

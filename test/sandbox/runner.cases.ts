@@ -5111,3 +5111,29 @@ describe("durable request charges after a restart", () => {
 		}
 	});
 });
+
+describe("restored allowance edges at the stage boundary", () => {
+	for (const [name, edge] of [
+		["run", (left: number) => input({ remainingRunTokens: left })],
+		["stage", (left: number) => input({}, { maxTokens: left })],
+	] as const)
+		for (const left of [1, 0, -1])
+			it(`${left > 0 ? "forwards within" : "launches nothing at"} a ${name} allowance of ${left}`, async () => {
+				const h = harness([]);
+				const result = await runStage(edge(left), h.host);
+
+				if (left > 0) {
+					assert.equal(h.tables.length, 1);
+					assert.equal(h.tables[0]?.ceiling.modelTokens, left);
+
+					return;
+				}
+
+				assert.equal(h.tables.length, 0);
+				assert.equal(h.launches.length, 0);
+				assert.deepEqual(
+					result.kind === "budget_exhausted" ? result.cap : result.kind,
+					name === "run" ? "run_tokens" : "tokens",
+				);
+			});
+});
