@@ -113,6 +113,7 @@ import {
 	objectOf,
 	parseJson,
 	textOf,
+	type JsonValue,
 } from "./sandbox/json.ts";
 import {
 	bundleMatchesSource,
@@ -146,7 +147,11 @@ import type {
 	StageUsage,
 	StderrRecord,
 } from "./sandbox/result.ts";
-import { stageResult } from "./sandbox/result.ts";
+import {
+	stageResult,
+	executionUsageOf,
+	type ExecutionUsage,
+} from "./sandbox/result.ts";
 import {
 	builtinTable,
 	type RouteId,
@@ -223,6 +228,8 @@ export interface StageHost {
 		session: number,
 		sessionFile: string,
 	): Promise<ChildUsage | null>;
+	readUsage?(): JsonValue | undefined;
+	writeUsage?(usage: ExecutionUsage): boolean;
 	writeReceipt(receipt: StageReceipt): Promise<boolean>;
 	writeOutput(text: string): Promise<boolean>;
 	stderrLog(session: number): Promise<StderrRecord | null>;
@@ -269,6 +276,7 @@ type StageRun = {
 	readonly gateway: GatewayHandle;
 	readonly ledger: Ledger;
 	readonly deadline: number;
+	readonly checkpoint: () => boolean;
 	readonly cleanup: CleanupWindow;
 	gateReason: CloseReason | null;
 	alert: FailedExit | null;
@@ -484,6 +492,8 @@ async function runSession(
 
 				ledger.children += usage.total;
 				ledger.add(usage.byModel);
+
+				if (!stage.checkpoint()) stage.alert = "crashed";
 				recheck();
 			},
 			() => {
@@ -548,8 +558,6 @@ async function runSession(
 			}
 
 			for (const line of lines) {
-				input.progress(ledger.total);
-
 				const record = parsePiRecord(line);
 				const signal = tracker.apply(record);
 
@@ -573,6 +581,9 @@ async function runSession(
 				}
 
 				if (signal.kind === "child") reads.push(readChild(signal.sessionFile));
+
+				if (!stage.checkpoint()) end(CRASHED);
+				else input.progress(ledger.total);
 
 				if (finished) continue;
 
@@ -756,9 +767,36 @@ export async function runStage(
 	input: StageRunInput,
 	host: StageHost,
 ): Promise<StageResult> {
-	const started = host.now();
+	const saved = host.readUsage === undefined ? null : host.readUsage();
+	const restored = saved === null ? null : executionUsageOf(saved, input);
+	const started = restored?.startedAt ?? host.now();
 	const ledger = new Ledger();
 	const { maxTokens, budget } = input.settings;
+	const wallEnd = restored?.deadline ?? started + budget.wallMs;
+
+	if (restored !== null) {
+		ledger.parent = restored.usage.parent;
+		ledger.children = restored.usage.children;
+		ledger.gateway = Math.max(
+			restored.usage.gateway ?? 0,
+			restored.usage.total,
+		);
+		ledger.turns = restored.turns;
+		ledger.unreadChildren = restored.usage.unreadChildren;
+		ledger.add(new Map(Object.entries(restored.usage.byModel)));
+	}
+
+	const checkpoint = () =>
+		host.writeUsage?.({
+			version: 1,
+			runId: input.runId,
+			stage: input.stage,
+			attempt: input.attempt,
+			startedAt: started,
+			deadline: wallEnd,
+			turns: ledger.turns,
+			usage: ledger.usage(true),
+		}) ?? true;
 
 	const tokenCap = Math.min(
 		maxTokens ?? Number.MAX_SAFE_INTEGER,
@@ -768,11 +806,7 @@ export async function runStage(
 	const sessions: number[] = [];
 	let gatewayRan = false;
 
-	const cleanup = new CleanupWindow(
-		host,
-		started + budget.wallMs,
-		input.signal,
-	);
+	const cleanup = new CleanupWindow(host, wallEnd, input.signal);
 
 	const receipt = async (
 		primary: SessionReport,
@@ -821,14 +855,19 @@ export async function runStage(
 		return stageResult(written ? record : { ...record, outcome: CRASHED });
 	};
 
+	if ((saved !== null && restored === null) || !checkpoint())
+		return receipt(plainReport(CRASHED), null, null);
+
 	const early: BudgetCap | null =
-		maxTokens !== null && maxTokens <= 0
+		maxTokens !== null && ledger.total >= maxTokens
 			? "tokens"
-			: input.remainingRunTokens <= 0
+			: ledger.total >= input.remainingRunTokens
 				? "run_tokens"
-				: budget.wallMs <= host.cleanupReserveMs
-					? "wall"
-					: null;
+				: ledger.turns >= budget.maxTurns
+					? "turns"
+					: wallEnd - host.now() <= host.cleanupReserveMs
+						? "wall"
+						: null;
 
 	if (early !== null) {
 		return receipt(
@@ -849,8 +888,11 @@ export async function runStage(
 				: input.settings.fallback.startsWith("openai/")
 					? input.settings.fallback
 					: bareModel(input.settings.fallback),
-		modelTokens: tokenCap,
-		modelRequests: Math.min(MODEL_REQUEST_CEILING, budget.maxTurns),
+		modelTokens: tokenCap - ledger.total,
+		modelRequests: Math.min(
+			MODEL_REQUEST_CEILING,
+			budget.maxTurns - ledger.turns,
+		),
 	});
 
 	const gateway = await host.startGateway(table).catch(() => null);
@@ -864,7 +906,8 @@ export async function runStage(
 		host,
 		gateway,
 		ledger,
-		deadline: started + budget.wallMs - host.cleanupReserveMs,
+		deadline: wallEnd - host.cleanupReserveMs,
+		checkpoint,
 		cleanup,
 		gateReason: null,
 		alert: null,
@@ -882,7 +925,10 @@ export async function runStage(
 			stage.gateReason = event.reason;
 		}
 
-		input.progress(ledger.total);
+		if (!checkpoint()) {
+			stage.alert = "crashed";
+			void closeGate(stage, "abort");
+		} else input.progress(ledger.total);
 		stage.listener?.(event);
 	});
 	gateway.exited.then(() => {
@@ -1323,6 +1369,20 @@ export function sandboxHost(config: SandboxHostConfig): StageHost {
 
 			return childUsageOf(await readFile(path, "utf8"));
 		},
+		readUsage() {
+			const path = join(stageDir, "usage.json");
+
+			if (!existsSync(path)) return null;
+
+			try {
+				return parseJson(readFileSync(path, "utf8"));
+			} catch {
+				return undefined;
+			}
+		},
+		writeUsage(usage) {
+			return replaceUsage(join(stageDir, "usage.json"), usage);
+		},
 		async writeReceipt(receipt) {
 			return publishFile(
 				join(stageDir, "receipt.json"),
@@ -1341,6 +1401,29 @@ export function sandboxHost(config: SandboxHostConfig): StageHost {
 				: { session, file: `pi-stderr-${session}.log`, bytes };
 		},
 	};
+}
+
+function replaceUsage(path: string, usage: ExecutionUsage): boolean {
+	const temp = `${path}.next`;
+
+	try {
+		mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+		rmSync(temp, { force: true });
+
+		if (!publishFile(temp, `${JSON.stringify(usage)}\n`)) return false;
+		renameSync(temp, path);
+		const dir = openSync(dirname(path), "r");
+
+		try {
+			fsyncSync(dir);
+		} finally {
+			closeSync(dir);
+		}
+
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 const MAX_RECEIPT_BYTES = 1024 * 1024;
@@ -1399,6 +1482,13 @@ export type ExecutionCharge = {
 	readonly total: number;
 	readonly uncertain: number;
 };
+
+export function uncertainCharge(
+	floor: number,
+	requests: number,
+): ExecutionCharge {
+	return { total: floor, uncertain: requests };
+}
 
 function summed(charges: (ExecutionCharge | null)[]): ExecutionCharge | null {
 	return charges.some((charge) => charge !== null)
@@ -1471,18 +1561,22 @@ export async function executionCharge(
 		);
 	}
 
+	const high = objectOf(
+		parseJson(
+			(await boundedText(join(dir, "usage.json"), MAX_RECEIPT_BYTES)) ?? "",
+		),
+	);
+
+	const highTotal = countOf(fieldOf(objectOf(fieldOf(high, "usage")), "total"));
 	const journal = await boundedText(join(dir, JOURNAL_FILE), AUDIT_CAP_BYTES);
 	const charged = journal === null ? null : journalCharge(journal);
 	const audit = await boundedText(join(dir, "egress.jsonl"), AUDIT_CAP_BYTES);
 
-	if (audit === null)
-		return charged === null
-			? null
-			: { total: charged.tokens, uncertain: charged.uncertain };
+	if (audit === null && charged === null && highTotal === null) return null;
 
 	let sum = 0;
 
-	for (const line of audit.split("\n")) {
+	for (const line of (audit ?? "").split("\n")) {
 		const record = objectOf(parseJson(line));
 
 		if (record === null) continue;
@@ -1492,8 +1586,10 @@ export async function executionCharge(
 	}
 
 	return {
-		total: Math.max(sum, charged?.tokens ?? 0),
-		uncertain: charged?.uncertain ?? 0,
+		...uncertainCharge(
+			Math.max(sum, charged?.tokens ?? 0, highTotal ?? 0),
+			charged?.uncertain ?? 0,
+		),
 	};
 }
 
@@ -1619,6 +1715,45 @@ async function keptSession(dir: string): Promise<KeptSession | null> {
 	};
 }
 
+async function executionWindow(
+	dir: string,
+	input: StageLaunchInput,
+): Promise<ExecutionUsage> {
+	const path = join(dir, "usage.json");
+	const text = await boundedText(path, MAX_RECEIPT_BYTES);
+	const now = Date.now();
+
+	const record =
+		text === null
+			? {
+					version: 1 as const,
+					runId: input.runId,
+					stage: input.stage,
+					attempt: input.attempt,
+					startedAt: now,
+					deadline: now + input.settings.budget.wallMs,
+					turns: 0,
+					usage: {
+						total: 0,
+						parent: 0,
+						children: 0,
+						gateway: null,
+						unreadChildren: 0,
+						byModel: {},
+					},
+				}
+			: executionUsageOf(parseJson(text), input);
+
+	if (
+		record === null ||
+		(text === null && existsSync(path)) ||
+		!replaceUsage(path, record)
+	)
+		throw new Error("execution_usage_unavailable");
+
+	return record;
+}
+
 export async function runSpecify(
 	input: StageLaunchInput,
 	dir: string,
@@ -1636,6 +1771,7 @@ export async function runSpecify(
 	)
 		throw new Error("specify checkpoint unavailable");
 
+	const window = await executionWindow(dir, input);
 	const previous = (await executionSpent(dir)) ?? 0;
 	const records: KeptSession[] = [];
 	let metadata: Pick<StageReceipt, "assetsDigest" | "versions"> | null = null;
@@ -1693,7 +1829,13 @@ export async function runSpecify(
 			input.settings.budget.maxTurns - turns(),
 		);
 
-		const remainingWall = Math.max(0, input.settings.budget.wallMs - wallMs());
+		const remainingWall = Math.max(
+			0,
+			Math.min(
+				window.deadline - Date.now(),
+				input.settings.budget.wallMs - wallMs(),
+			),
+		);
 
 		const cap: BudgetCap | null =
 			maxTokens !== null && maxTokens <= 0
@@ -1828,12 +1970,19 @@ export async function runSpecify(
 			pricing: "unavailable",
 		};
 
+		const checkpoint = replaceUsage(join(dir, "usage.json"), {
+			...window,
+			turns: receipt.turns,
+			usage: receipt.usage,
+		});
+
 		const written =
-			existsSync(join(dir, "receipt.json")) ||
-			publishFile(
-				join(dir, "receipt.json"),
-				JSON.stringify(receipt, null, "\t"),
-			);
+			checkpoint &&
+			(existsSync(join(dir, "receipt.json")) ||
+				publishFile(
+					join(dir, "receipt.json"),
+					JSON.stringify(receipt, null, "\t"),
+				));
 
 		return {
 			...stageResult(written ? receipt : { ...receipt, outcome: CRASHED }),
@@ -2744,6 +2893,7 @@ export async function runReview(
 		JSON.stringify(reviewInputRecord(prepared.input))
 	)
 		throw new ReviewEvidenceUnavailable("review_execution_binding");
+	const window = await executionWindow(dir, input);
 	const previous = (await executionSpent(dir)) ?? 0;
 	const receipts: SeatReceipt[] = [];
 	const records: Awaited<ReturnType<typeof readStageReceipt>>[] = [];
@@ -2806,10 +2956,12 @@ export async function runReview(
 			pricing: "unavailable",
 		};
 
-		const written = publishFile(
-			join(dir, "receipt.json"),
-			JSON.stringify(receipt),
-		);
+		const written =
+			replaceUsage(join(dir, "usage.json"), {
+				...window,
+				turns,
+				usage: receipt.usage,
+			}) && publishFile(join(dir, "receipt.json"), JSON.stringify(receipt));
 
 		return {
 			...stageResult(written ? receipt : { ...receipt, outcome: CRASHED }),
@@ -2852,7 +3004,13 @@ export async function runReview(
 						budget: {
 							...input.settings.budget,
 							maxTurns: Math.max(0, input.settings.budget.maxTurns - turns),
-							wallMs: Math.max(0, input.settings.budget.wallMs - wallMs),
+							wallMs: Math.max(
+								0,
+								Math.min(
+									window.deadline - Date.now(),
+									input.settings.budget.wallMs - wallMs,
+								),
+							),
 						},
 					},
 					remainingRunTokens: Math.max(

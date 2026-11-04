@@ -1372,6 +1372,44 @@ describe("Orchestrator restart recovery", () => {
 		assert.equal(report.totals.usage, 700);
 	});
 
+	it("keeps an attempt-end decision across a lost marker and preserves its original retry time", async () => {
+		const { github, executor, files, start, clock } = world();
+		const disk = fileRunFiles(files.artifactRoot);
+
+		files.accounting = disk.accounting;
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "hang" }];
+		await start().tick();
+		executor.spentBy.set("specify-1", 700);
+		github.posts = ["rejected"];
+		await start().tick();
+
+		const record = await disk.accounting!.readAttempt(
+			runOf(14),
+			"specify",
+			0,
+			1,
+		);
+
+		assert.equal(record?.disposition, "interrupted");
+		assert.equal(record?.usage, 700);
+		assert.equal(record?.next.kind, "retry");
+		clock.t += 6_000;
+		const restored = await start().tick();
+
+		assert.equal(restored.runs[0]?.attempt, 2);
+		assert.equal(restored.runs[0]?.usage, 700);
+		assert.equal(executor.launches.length, 1);
+		clock.t += 4_000;
+		executor.behaviors = [{ kind: "hang" }];
+		await start().tick();
+		assert.equal(executor.launches.length, 2);
+		assert.deepEqual(
+			await disk.accounting!.readAttempt(runOf(14), "specify", 0, 1),
+			record,
+		);
+	});
+
 	it("turns an interrupted running stage into a counted retry", async () => {
 		const { github, executor, start } = world();
 
@@ -1906,6 +1944,35 @@ describe("Orchestrator base qualification", () => {
 		assert.equal(files.claims.get(runOf(14))?.stage, "build");
 		assert.equal(keyed(github, 14, "acceptance").length, 1);
 		assert.equal(refusals(github).length, 0);
+	});
+
+	it("persists base interruption and its retry deadline across a restart", async () => {
+		const f = world();
+		f.files.accounting = fileRunFiles(f.files.artifactRoot).accounting;
+		f.github.add(labeled(14));
+		f.executor.behaviors = [{ kind: "pass", usage: 10 }];
+		f.executor.acceptBehavior = { kind: "pass", usage: 20 };
+		f.executor.baseOutcome = "interrupted";
+		await once(f.start());
+
+		const ended = await f.files.accounting!.readAttempt(
+			runOf(14),
+			"accept",
+			0,
+			1,
+		);
+
+		assert.equal(ended?.disposition, "interrupted");
+		assert.equal(ended?.next.kind, "base_retry");
+		f.clock.t += 5_000;
+		f.executor.baseOutcome = "ready";
+		const restarted = f.start();
+		await restarted.tick();
+		assert.equal(f.executor.baseChecks.length, 1);
+		f.clock.t += 5_000;
+		await once(restarted);
+		assert.equal(f.files.claims.get(runOf(14))?.stage, "build");
+		assert.equal((await f.files.accounting!.attempts(runOf(14)))?.length, 3);
 	});
 
 	it("charges an interrupted check once to the accept attempt and retries the stored suite", async () => {
@@ -3213,6 +3280,70 @@ describe("Orchestrator runs of another state directory", () => {
 			"3:released",
 			"4:claimed",
 		]);
+	});
+});
+
+describe("durable attempt ends", () => {
+	it("writes each disposition once, rejects conflicting bytes and distinguishes corrupt from absent", async () => {
+		const state = stateDir();
+		const accounting = fileRunFiles(state).accounting!;
+
+		const dispositions = [
+			"completed",
+			"model_failure",
+			"interrupted",
+			"refused",
+			"budget_stop",
+			"aborted",
+		] as const;
+
+		for (const [index, disposition] of dispositions.entries()) {
+			const attempt = index + 1;
+
+			const record = {
+				v: 1 as const,
+				runId: runOf(14),
+				stage: "specify" as const,
+				round: 0,
+				attempt,
+				disposition,
+				usage: 37,
+				next: { kind: "end" as const, status: "failed" as const },
+			};
+
+			assert.equal(await accounting.writeAttempt(record), true);
+			assert.equal(await accounting.writeAttempt(record), true);
+			assert.equal(
+				await accounting.writeAttempt({ ...record, usage: 99 }),
+				false,
+			);
+			assert.deepEqual(
+				await accounting.readAttempt(runOf(14), "specify", 0, attempt),
+				record,
+			);
+		}
+
+		assert.equal((await accounting.attempts(runOf(14)))?.length, 6);
+		assert.equal(
+			await accounting.readAttempt(runOf(14), "specify", 0, 7),
+			null,
+		);
+
+		const path = join(
+			state,
+			"accounting",
+			runOf(14),
+			"attempts",
+			"specify-r0-1.json",
+		);
+
+		assert.equal(statSync(path).mode & 0o777, 0o600);
+		writeFileSync(path, "{");
+		assert.equal(
+			await accounting.readAttempt(runOf(14), "specify", 0, 1),
+			undefined,
+		);
+		assert.equal(await accounting.attempts(runOf(14)), null);
 	});
 });
 
@@ -8897,6 +9028,23 @@ describe("controller-only validate", () => {
 		);
 	});
 
+	it("persists a completed candidate review disposition before its handoff", async () => {
+		const f = await reviewingRun();
+		f.files.accounting = fileRunFiles(f.files.artifactRoot).accounting;
+		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+		await once(f.controller);
+
+		const record = await f.files.accounting!.readAttempt(
+			runOf(14),
+			"review",
+			0,
+			1,
+		);
+
+		assert.equal(record?.disposition, "completed");
+		assert.equal(record?.usage, 40);
+	});
+
 	it("hops from CI to isolated review and waits for the owner with charged usage", async () => {
 		const f = await reviewingRun();
 		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
@@ -12080,6 +12228,27 @@ describe("ledger outbox enrollment", () => {
 
 		return ctx;
 	}
+
+	it("records interrupted attempts on the terminal row without charging the interruption twice", async () => {
+		const dir = stateDir();
+		const outbox = fileLedgerOutbox(dir);
+		const ctx = world(null, outbox);
+
+		ctx.files.accounting = fileRunFiles(dir).accounting;
+		ctx.github.add(labeled(14));
+		ctx.executor.behaviors = [{ kind: "hang" }];
+		await ctx.start().tick();
+		ctx.executor.spentBy.set("specify-1", 17);
+		await ctx.start().tick();
+		ctx.clock.t += 10_000;
+		ctx.executor.behaviors = [{ kind: "refuse", usage: 3 }];
+		await once(ctx.start());
+		const row = (await outbox.scan())?.[0]?.row?.row;
+
+		assert.ok(row);
+		assert.deepEqual(row.interruptedAttempts, { kind: "known", value: 1 });
+		assert.equal(row.usage.tokens.total, 20);
+	});
 
 	it("keeps the terminal snapshot before the needs_info marker and freezes one row after it", async () => {
 		const dir = stateDir();

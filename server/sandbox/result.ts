@@ -1,6 +1,82 @@
 import type { Digest, Stage } from "../../src/run.ts";
 import type { ModelId, StageBudget } from "../../src/workflow.ts";
 import type { RouteSummary } from "./control.ts";
+import { countOf, fieldOf, objectOf, type JsonValue } from "./json.ts";
+
+export type ExecutionUsage = {
+	readonly version: 1;
+	readonly runId: Digest;
+	readonly stage: Stage;
+	readonly attempt: number;
+	readonly startedAt: number;
+	readonly deadline: number;
+	readonly turns: number;
+	readonly usage: StageUsage;
+};
+
+export function executionUsageOf(
+	value: JsonValue | undefined,
+	binding: {
+		readonly runId: Digest;
+		readonly stage: Stage;
+		readonly attempt: number;
+	},
+): ExecutionUsage | null {
+	const record = objectOf(value);
+	const usage = objectOf(fieldOf(record, "usage"));
+
+	const numbers = ["startedAt", "deadline", "turns"].map((key) =>
+		countOf(fieldOf(record, key)),
+	);
+
+	const [startedAt, deadline, turns] = numbers;
+	const total = countOf(fieldOf(usage, "total"));
+	const parent = countOf(fieldOf(usage, "parent"));
+	const children = countOf(fieldOf(usage, "children"));
+	const unreadChildren = countOf(fieldOf(usage, "unreadChildren"));
+
+	const gateway =
+		fieldOf(usage, "gateway") === null
+			? null
+			: countOf(fieldOf(usage, "gateway"));
+
+	const models = objectOf(fieldOf(usage, "byModel"));
+
+	if (
+		fieldOf(record, "version") !== 1 ||
+		fieldOf(record, "runId") !== binding.runId ||
+		fieldOf(record, "stage") !== binding.stage ||
+		fieldOf(record, "attempt") !== binding.attempt ||
+		startedAt == null ||
+		deadline == null ||
+		turns == null ||
+		deadline < startedAt ||
+		total === null ||
+		parent === null ||
+		children === null ||
+		unreadChildren === null ||
+		models === null ||
+		total < Math.max(parent + children, gateway ?? 0)
+	)
+		return null;
+	const byModel: Record<string, number> = {};
+
+	for (const [key, value] of Object.entries(models)) {
+		const tokens = countOf(value);
+
+		if (tokens === null) return null;
+		byModel[key] = tokens;
+	}
+
+	return {
+		version: 1,
+		...binding,
+		startedAt,
+		deadline,
+		turns,
+		usage: { total, parent, children, gateway, unreadChildren, byModel },
+	};
+}
 
 /** Per-stage launch settings. Round 2 moves `StageLaunch` input onto this. */
 export type StageRunSettings = {

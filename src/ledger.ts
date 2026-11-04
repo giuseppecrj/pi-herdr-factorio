@@ -922,6 +922,7 @@ export type TerminalFacts = {
 	readonly usage: number;
 	readonly observedAt: string;
 	readonly candidate: CandidateState | null;
+	readonly attemptEnds?: readonly AttemptEnd[] | null;
 	readonly verification?: {
 		readonly digest: Digest;
 		readonly trustedRunTokenCap: number;
@@ -1124,11 +1125,75 @@ export function terminalSnapshot(facts: TerminalFacts): JsonValue {
 			unattributedTokens: unavailable("not_instrumented"),
 			money: unavailable("provider_not_reported"),
 		},
-		interruptedAttempts: unavailable("not_instrumented"),
+		interruptedAttempts:
+			facts.attemptEnds == null
+				? unavailable("not_instrumented")
+				: known(
+						facts.attemptEnds.filter(
+							(attempt) => attempt.disposition === "interrupted",
+						).length,
+					),
 		contextPressure: unavailable("not_instrumented"),
 		redactedReceiptDigests: [],
 		evidence: { issueUrl: `${base}/issues/${facts.issue}`, ciUrls },
 	};
+}
+
+const attemptEndCodec = record({
+	v: literal(1),
+	runId: digest,
+	stage,
+	round: count,
+	attempt: positive,
+	disposition: oneOf(
+		"completed",
+		"model_failure",
+		"interrupted",
+		"refused",
+		"budget_stop",
+		"aborted",
+	),
+	usage: count,
+	next: tagged({
+		retry: { attempt: positive, dueAt: count },
+		base_retry: { attempt: positive, dueAt: count },
+		continue: {},
+		end: {
+			status: oneOf(
+				"released",
+				"failed",
+				"budget_exhausted",
+				"needs_info",
+				"stage_passed",
+				"landed",
+				"cancelled",
+			),
+		},
+	}),
+});
+
+export type AttemptEnd = Out<typeof attemptEndCodec>;
+
+export function parseAttemptEnd(
+	value: JsonValue | undefined,
+): AttemptEnd | null {
+	try {
+		return attemptEndCodec(value);
+	} catch (error) {
+		if (error instanceof LedgerRowError) return null;
+		throw error;
+	}
+}
+
+export interface RunAccounting {
+	readAttempt(
+		runId: Digest,
+		stage: Stage,
+		round: number,
+		attempt: number,
+	): Promise<AttemptEnd | null | undefined>;
+	writeAttempt(record: AttemptEnd): Promise<boolean>;
+	attempts(runId: Digest): Promise<readonly AttemptEnd[] | null>;
 }
 
 export type MarkerProof = { readonly seq: number; readonly digest: Digest };

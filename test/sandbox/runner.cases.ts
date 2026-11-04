@@ -419,6 +419,83 @@ function input(
 	};
 }
 
+describe("durable execution high water", () => {
+	it("restores an exhausted token high water before opening a gateway", async () => {
+		const h = harness([]);
+
+		const old = {
+			version: 1,
+			runId: RUN,
+			stage: "specify",
+			attempt: 1,
+			startedAt: 100,
+			deadline: 60_100,
+			turns: 2,
+			usage: {
+				total: 100,
+				parent: 80,
+				children: 20,
+				gateway: 100,
+				unreadChildren: 0,
+				byModel: {},
+			},
+		};
+
+		const result = await runStage(input({}, { maxTokens: 100 }), {
+			...h.host,
+			now: () => 200,
+			readUsage: () => old,
+			writeUsage: () => true,
+		});
+
+		assert.equal(result.kind, "budget_exhausted");
+		assert.equal(result.usage, 100);
+		assert.equal(h.tables.length, 0);
+	});
+
+	it("keeps the original deadline and fails closed if the high water cannot be synced", async () => {
+		const h = harness([]);
+
+		const old = {
+			version: 1,
+			runId: RUN,
+			stage: "specify",
+			attempt: 1,
+			startedAt: 100,
+			deadline: 200,
+			turns: 0,
+			usage: {
+				total: 0,
+				parent: 0,
+				children: 0,
+				gateway: 0,
+				unreadChildren: 0,
+				byModel: {},
+			},
+		};
+
+		const expired = await runStage(input(), {
+			...h.host,
+			now: () => 201,
+			readUsage: () => old,
+			writeUsage: () => true,
+		});
+
+		assert.equal(expired.kind, "budget_exhausted");
+		assert.equal(expired.receipt.wallMs, 101);
+		assert.equal(h.tables.length, 0);
+
+		const unwritable = await runStage(input(), {
+			...h.host,
+			readUsage: () => null,
+			writeUsage: () => false,
+		});
+
+		assert.equal(unwritable.kind, "failed");
+		assert.equal(h.tables.length, 0);
+	});
+});
+
 describe("Pi RPC framing and records", () => {
 	it("splits on LF only, keeps U+2028 inside a record and strips a trailing CR", () => {
 		const splitter = new LineSplitter(1024);
@@ -4719,6 +4796,38 @@ describe("controller-run specify review", () => {
 			},
 		};
 	}
+
+	it("does not reset the aggregate specify deadline when continuing between sessions", async () => {
+		const h = setup([DRAFT, CLEAN_REVIEW]);
+
+		try {
+			writeFileSync(
+				join(h.dir, "usage.json"),
+				JSON.stringify({
+					version: 1,
+					runId: h.run.runId,
+					stage: "specify",
+					attempt: h.run.attempt,
+					startedAt: 1,
+					deadline: 2,
+					turns: 0,
+					usage: {
+						total: 0,
+						parent: 0,
+						children: 0,
+						gateway: null,
+						unreadChildren: 0,
+						byModel: {},
+					},
+				}),
+			);
+			const result = await h.execute();
+			assert.equal(result.kind, "budget_exhausted");
+			assert.equal(h.calls.length, 0);
+		} finally {
+			h.close();
+		}
+	});
 
 	it("reviews a draft once with no tools and only the draft and untrusted ticket, and sums usage", async () => {
 		const h = setup([DRAFT, CLEAN_REVIEW]);

@@ -69,6 +69,9 @@ import {
 	ledgerApiOf,
 	ledgerRowOf,
 	pumpLedger,
+	parseAttemptEnd,
+	type RunAccounting,
+	type AttemptEnd,
 	type LedgerBacklog,
 	LedgerRowError,
 	parseAnchor,
@@ -2092,6 +2095,7 @@ export function fileRunFiles(stateDir: string): RunFiles {
 		workspacePath,
 		artifacts: fileArtifacts(root),
 		ledger: fileLedgerOutbox(root),
+		accounting: fileRunAccounting(root),
 		async readContract(runId) {
 			return readStoredContract(root, runId);
 		},
@@ -2330,6 +2334,77 @@ async function installOnce(path: string, text: string): Promise<boolean> {
 	return (
 		(await writeAtomic(path, text)) && (await syncDirectory(dirname(path)))
 	);
+}
+
+export function fileRunAccounting(stateDir: string): RunAccounting {
+	const root = join(resolve(stateDir), "accounting");
+	const attempts = (runId: Digest) => join(root, runId, "attempts");
+
+	const name = (stage: string, round: number, attempt: number) =>
+		`${stage}-r${round}-${attempt}.json`;
+
+	return {
+		async readAttempt(runId, stage, round, attempt) {
+			try {
+				const parsed = parseAttemptEnd(
+					parseJsonText(
+						await readFile(
+							join(attempts(runId), name(stage, round, attempt)),
+							"utf8",
+						),
+					),
+				);
+
+				return parsed?.runId === runId &&
+					parsed.stage === stage &&
+					parsed.round === round &&
+					parsed.attempt === attempt
+					? parsed
+					: undefined;
+			} catch (error) {
+				return error instanceof Error && errorCode(error) === "ENOENT"
+					? null
+					: undefined;
+			}
+		},
+		async writeAttempt(record) {
+			return installOnce(
+				join(
+					attempts(record.runId),
+					name(record.stage, record.round, record.attempt),
+				),
+				`${JSON.stringify(record)}\n`,
+			);
+		},
+		async attempts(runId) {
+			try {
+				const entries = await readdir(attempts(runId)).catch(
+					(error: NodeJS.ErrnoException) =>
+						error.code === "ENOENT" ? [] : Promise.reject(error),
+				);
+
+				const records: AttemptEnd[] = [];
+
+				for (const entry of entries) {
+					const record = parseAttemptEnd(
+						parseJsonText(await readFile(join(attempts(runId), entry), "utf8")),
+					);
+
+					if (
+						record === null ||
+						record.runId !== runId ||
+						entry !== name(record.stage, record.round, record.attempt)
+					)
+						return null;
+					records.push(record);
+				}
+
+				return records;
+			} catch {
+				return null;
+			}
+		},
+	};
 }
 
 /** The verification manifest's name in a verification state directory. */
