@@ -31,6 +31,7 @@ import {
 	SecretScanner,
 } from "./credentials.ts";
 import { SseMeter } from "./meter.ts";
+import { countOf, fieldOf, objectOf, parseJson } from "./json.ts";
 import {
 	type AdmissionState,
 	checkBody,
@@ -78,6 +79,8 @@ type Exchange = {
 	inputTokens: number | null;
 	outputTokens: number | null;
 	finished: boolean;
+	dispatched: RouteId | null;
+	rejected: number | null;
 };
 
 const REFUSED_V4 = [
@@ -460,7 +463,26 @@ export class Gateway implements AdmissionState {
 			inputTokens: null,
 			outputTokens: null,
 			finished: false,
+			dispatched: null,
+			rejected: null,
 		};
+	}
+
+	#journalIdentity(exchange: Exchange, route: RouteId) {
+		return {
+			v: 1,
+			ts: new Date(this.#now()).toISOString(),
+			stage: this.#table.stage,
+			runId: this.#table.runId,
+			attempt: this.#table.attempt,
+			req: exchange.req,
+			route,
+		} as const;
+	}
+
+	#journalFailed(): void {
+		if (this.#gate === null)
+			this.closeGate(this.#audit.full ? "audit_full" : "audit_failed");
 	}
 
 	#record(
@@ -475,6 +497,29 @@ export class Gateway implements AdmissionState {
 
 		const route = exchange.route;
 		const state = route === null ? undefined : this.#routes.get(route.id);
+
+		if (
+			exchange.dispatched !== null &&
+			!this.#audit.journal({
+				...this.#journalIdentity(exchange, exchange.dispatched),
+				kind: "result",
+				decision,
+				...(exchange.rejected === null || decision !== "forward"
+					? {
+							status,
+							inputTokens: exchange.inputTokens,
+							outputTokens: exchange.outputTokens,
+						}
+					: {
+							status: exchange.rejected,
+							reason: "provider_rejected",
+							inputTokens: exchange.inputTokens ?? 0,
+							outputTokens: exchange.outputTokens ?? 0,
+						}),
+			})
+		) {
+			this.#journalFailed();
+		}
 
 		if (state !== undefined) {
 			if (decision === "forward") state.forwarded += 1;
@@ -705,6 +750,31 @@ export class Gateway implements AdmissionState {
 		if (!this.#audit.healthy())
 			return this.#deny(exchange, res, "audit-unavailable");
 
+		// One byte per input token is conservative; bound output explicitly even
+		// when the client omits a provider limit, so a lost result is chargeable.
+		// A body that is not a JSON object passes unchanged, bounded by the ceiling.
+		const ceiling = this.#table.ceiling.modelTokens;
+
+		const json =
+			route.meter === null || body.length === 0
+				? null
+				: objectOf(parseJson(body.toString("utf8")));
+
+		const maxOutputTokens =
+			route.meter === null || body.length === 0
+				? 0
+				: Math.min(
+						countOf(fieldOf(json, "max_output_tokens")) ?? ceiling,
+						ceiling,
+					);
+
+		const forwarded =
+			json === null
+				? body
+				: Buffer.from(
+						JSON.stringify({ ...json, max_output_tokens: maxOutputTokens }),
+					);
+
 		this.#forward(
 			exchange,
 			req,
@@ -712,7 +782,8 @@ export class Gateway implements AdmissionState {
 			route,
 			decision.upstreamPath,
 			address,
-			body,
+			forwarded,
+			maxOutputTokens,
 		);
 	}
 
@@ -724,10 +795,28 @@ export class Gateway implements AdmissionState {
 		upstreamPath: string,
 		address: string,
 		body: Buffer,
+		maxOutputTokens: number,
 	): void {
 		const state = this.#routes.get(route.id);
 
 		if (state === undefined) return this.#deny(exchange, res, "no-route");
+
+		if (route.meter !== null) {
+			if (
+				!this.#audit.journal({
+					...this.#journalIdentity(exchange, route.id),
+					kind: "dispatch",
+					inputTokenEstimate: body.length,
+					maxOutputTokens,
+				})
+			) {
+				this.#journalFailed();
+
+				return this.#deny(exchange, res, "audit-unavailable");
+			}
+
+			exchange.dispatched = route.id;
+		}
 
 		state.tokens -= 1;
 		state.active += 1;
@@ -886,6 +975,8 @@ export class Gateway implements AdmissionState {
 		refuse: (code: ProxyCode) => void,
 	): void {
 		const status = incoming.statusCode ?? 502;
+
+		if (status < 200 || status > 299) exchange.rejected = status;
 
 		const blockedHead = (code: DenyCode) => {
 			incoming.destroy();

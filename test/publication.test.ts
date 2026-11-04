@@ -4,6 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import {
 	mkdtempSync,
 	mkdirSync,
+	cpSync,
 	readFileSync,
 	writeFileSync,
 	rmSync,
@@ -20,6 +21,11 @@ import {
 	publishCandidate,
 	gitObjectSha,
 	BOT_EMAIL,
+	LEDGER_FILE,
+	createLedgerChild,
+	createLedgerRoot,
+	readLedgerCommit,
+	readLedgerFile,
 } from "../src/publication.ts";
 import { digestOf, REQUIRED_CI_CHECKS } from "../src/run.ts";
 import { type Exec, type ExecResult } from "../src/gh.ts";
@@ -31,7 +37,7 @@ import {
 	arrayOf,
 	type JsonValue,
 } from "../server/sandbox/json.ts";
-import { isGitSha, isRepoSlug } from "../src/workflow.ts";
+import { isGitSha, isRepoSlug, type GitSha } from "../src/workflow.ts";
 import {
 	type Contract,
 	contractBytes,
@@ -53,8 +59,9 @@ import {
 	downloadGateReceipt,
 } from "../server/controller.ts";
 import { type ValidationState } from "../src/validation.ts";
-import { replacementDigest } from "../server/gates.ts";
+import { baseTreeDigest, replacementDigest } from "../server/gates.ts";
 import { CONTROLLER_LOGIN } from "../src/markers.ts";
+import { LedgerGit } from "./ledger-git.ts";
 
 const repo = "giuseppecrj/pi-herdr-factorio";
 const baseSha = "a".repeat(40);
@@ -547,12 +554,21 @@ describe("deterministic Git Data publication", () => {
 	});
 });
 
-async function validationFixture() {
+async function validationFixture(withGates = false) {
 	const root = fresh();
 	const base = join(root, "source");
 	mkdirSync(base);
 	mkdirSync(join(base, "src"));
 	writeFileSync(join(base, "src/a.ts"), "export const a = 1;\n");
+
+	if (withGates) {
+		mkdirSync(join(base, ".github/factory/gates"), { recursive: true });
+		writeFileSync(
+			join(base, ".github/factory/gates/check.sh"),
+			"echo trusted\n",
+		);
+	}
+
 	execFileSync("git", ["init", "-q", base]);
 	execFileSync("git", ["-C", base, "add", "."]);
 	execFileSync("git", [
@@ -581,6 +597,11 @@ async function validationFixture() {
 	mkdirSync(workspace);
 	mkdirSync(join(workspace, "src"));
 	writeFileSync(join(workspace, "src/a.ts"), "export const a = 2;\n");
+
+	if (withGates)
+		cpSync(join(base, ".github"), join(workspace, ".github"), {
+			recursive: true,
+		});
 
 	const contract: Contract = {
 		version: 2,
@@ -704,6 +725,24 @@ async function validationFixture() {
 		archive,
 	};
 }
+
+describe("generation policy evidence", () => {
+	it("retains the gate-set digest from the exact exported validation base before deleting its source", async () => {
+		const f = await validationFixture(true);
+		assert.equal((await f.step()).kind, "waiting");
+		const path = join(f.root, "validation", runId, "gate-policy.json");
+		assert.equal(existsSync(path), true);
+		assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {
+			v: 1,
+			runId,
+			round: 0,
+			generation: 0,
+			sourceSha: baseSha,
+			digest: baseTreeDigest(join(f.base, ".github/factory/gates")),
+		});
+		assert.equal(lstatSync(path).mode & 0o777, 0o600);
+	});
+});
 
 describe("fix round 1 recovery regressions", () => {
 	const start = Date.parse("2026-10-31T00:00:00Z");
@@ -1469,5 +1508,342 @@ describe("controller publication and waiting recovery", () => {
 			),
 			/unsafe_symlink/,
 		);
+	});
+});
+
+const ledgerDate = "2026-11-04T12:00:00Z";
+
+const quietApi = (exec: Exec) =>
+	new GitHubPublicationApi(
+		exec,
+		repo,
+		{},
+		async () => true,
+		async () => {},
+	);
+
+describe("ledger Git API", () => {
+	it("candidate ref, prRef and remove refuse factory/ledger before any request", async () => {
+		const fake = new LedgerGit();
+		const api = quietApi(fake.exec);
+		const sha = "c".repeat(40);
+		assert.ok(isGitSha(sha));
+		fake.refs.set("factory/ledger", sha);
+
+		for (const branch of [
+			"factory/ledger",
+			"refs/heads/factory/ledger",
+			"factory/ledger/x",
+		]) {
+			await assert.rejects(api.ref(branch), /invalid_branch/);
+			await assert.rejects(api.prRef(branch), /invalid_branch/);
+			await assert.rejects(api.remove(branch, sha), /invalid_branch/);
+			await assert.rejects(api.promotePr(branch, null, sha), /invalid_branch/);
+		}
+
+		assert.equal(fake.requests.length, 0);
+		assert.equal(fake.refs.get("factory/ledger"), sha);
+	});
+
+	it("ledger methods name no branch and write only refs/heads/factory/ledger", async () => {
+		const fake = new LedgerGit();
+		const api = quietApi(fake.exec);
+		const other = candidateBranch(1, runId, 0);
+		const otherSha = "d".repeat(40);
+		fake.refs.set(other, otherSha);
+		assert.equal(api.ledgerRef.length, 0);
+		assert.equal(api.advanceLedger.length, 2);
+
+		for (const bad of [other, "factory/ledger", "main", "f".repeat(39)])
+			await assert.rejects(
+				// SAFETY: deliberately passes a non-SHA to prove the runtime guard.
+				api.advanceLedger(null, bad as GitSha),
+				/invalid_sha/,
+			);
+		assert.equal(fake.requests.length, 0);
+
+		assert.equal(await api.ledgerRef(), null);
+		const root = await createLedgerRoot(api, ledgerDate);
+		assert.deepEqual(await api.advanceLedger(null, root.sha), {
+			kind: "advanced",
+			tip: root.sha,
+		});
+
+		const child = await createLedgerChild(
+			api,
+			root,
+			Buffer.from("row\n"),
+			ledgerDate,
+			"factory: ledger child\n",
+		);
+
+		assert.deepEqual(await api.advanceLedger(root.sha, child.sha), {
+			kind: "advanced",
+			tip: child.sha,
+		});
+		assert.equal(await api.ledgerRef(), child.sha);
+
+		const refWrites = fake.writes.filter((w) => w.path.includes("refs"));
+
+		assert.deepEqual(
+			refWrites.map((w) => [w.method, w.path, w.body]),
+			[
+				[
+					"POST",
+					"git/refs",
+					{ ref: "refs/heads/factory/ledger", sha: root.sha },
+				],
+				[
+					"PATCH",
+					"git/refs/heads/factory/ledger",
+					{ sha: child.sha, force: false },
+				],
+			],
+		);
+		assert.ok(
+			fake.requests
+				.filter((r) => r.includes("git/ref/"))
+				.every((r) => r === "GET git/ref/heads/factory/ledger"),
+		);
+		assert.equal(
+			fake.requests.some((r) => r.startsWith("DELETE")),
+			false,
+		);
+		assert.equal(fake.refs.get(other), otherSha);
+	});
+
+	it("only ledger root creation omits base_tree, and it has no parents", async () => {
+		const fake = new LedgerGit();
+		const api = quietApi(fake.exec);
+		const root = await createLedgerRoot(api, ledgerDate);
+
+		const child = await createLedgerChild(
+			api,
+			root,
+			Buffer.from("row\n"),
+			ledgerDate,
+			"factory: ledger child\n",
+		);
+
+		const trees = fake.writes.filter((w) => w.path === "git/trees");
+		assert.equal(trees.length, 2);
+		assert.equal(
+			Object.hasOwn(objectOf(trees[0]?.body) ?? {}, "base_tree"),
+			false,
+		);
+		assert.deepEqual(fieldOf(objectOf(trees[0]?.body), "tree"), [
+			{
+				path: LEDGER_FILE,
+				mode: "100644",
+				type: "blob",
+				sha: gitObjectSha("blob", new Uint8Array()),
+			},
+		]);
+		assert.equal(fieldOf(objectOf(trees[1]?.body), "base_tree"), root.tree);
+		assert.deepEqual(root.parents, []);
+		assert.deepEqual(fake.commits.get(root.sha), []);
+		assert.deepEqual(child.parents, [root.sha]);
+		assert.deepEqual(fake.commits.get(child.sha), [root.sha]);
+
+		const read = await readLedgerCommit(api, root.sha);
+		assert.deepEqual(read, root);
+		const file = await readLedgerFile(api, root.tree);
+		assert.equal(file.bytes.length, 0);
+		assert.deepEqual(file.paths, ["ledger", LEDGER_FILE]);
+		assert.equal(file.blob, gitObjectSha("blob", new Uint8Array()));
+
+		const candidateTrees: JsonValue[] = [];
+		const recorded = new GitData();
+
+		recorded.hook = (args) => {
+			const file = args[args.indexOf("--input") + 1];
+
+			if (args.includes(`repos/${repo}/git/trees`) && file !== undefined)
+				candidateTrees.push(parseJson(readFileSync(file, "utf8")) ?? null);
+
+			return null;
+		};
+
+		await publishCandidate(quietApi(recorded.exec), publicationInput);
+		assert.equal(candidateTrees.length, 2);
+
+		for (const body of candidateTrees)
+			assert.ok(isGitSha(textOf(fieldOf(objectOf(body), "base_tree")) ?? ""));
+	});
+
+	it("fast-forwards only, and a sibling advance is rejected with the ref left in place", async () => {
+		const fake = new LedgerGit();
+		const api = quietApi(fake.exec);
+		const root = await createLedgerRoot(api, ledgerDate);
+		await api.advanceLedger(null, root.sha);
+		const empty = Buffer.alloc(0);
+		const a = await createLedgerChild(api, root, empty, ledgerDate, "a\n");
+		const b = await createLedgerChild(api, root, empty, ledgerDate, "b\n");
+		assert.notEqual(a.sha, b.sha);
+		assert.equal(a.tree, root.tree);
+		assert.deepEqual(await api.advanceLedger(root.sha, a.sha), {
+			kind: "advanced",
+			tip: a.sha,
+		});
+		assert.deepEqual(await api.advanceLedger(root.sha, b.sha), {
+			kind: "conflict",
+			tip: a.sha,
+		});
+		assert.equal(fake.refs.get("factory/ledger"), a.sha);
+
+		const otherRoot = await createLedgerRoot(api, "2026-11-04T12:00:01Z");
+		assert.deepEqual(await api.advanceLedger(null, otherRoot.sha), {
+			kind: "conflict",
+			tip: a.sha,
+		});
+		assert.deepEqual(await api.advanceLedger(null, a.sha), {
+			kind: "advanced",
+			tip: a.sha,
+		});
+		assert.equal(fake.refs.get("factory/ledger"), a.sha);
+
+		for (const write of fake.writes.filter((w) => w.method === "PATCH"))
+			assert.equal(fieldOf(objectOf(write.body), "force"), false);
+		assert.equal(
+			fake.requests.some((r) => r.startsWith("DELETE")),
+			false,
+		);
+	});
+
+	it("reconciles a lost write response by reading the ledger ref back", async () => {
+		const fake = new LedgerGit();
+		const api = quietApi(fake.exec);
+		const root = await createLedgerRoot(api, ledgerDate);
+		fake.lose = (method) => (method === "POST" ? "after" : null);
+		assert.deepEqual(await api.advanceLedger(null, root.sha), {
+			kind: "advanced",
+			tip: root.sha,
+		});
+		fake.lose = null;
+
+		const a = await createLedgerChild(
+			api,
+			root,
+			Buffer.alloc(0),
+			ledgerDate,
+			"a\n",
+		);
+
+		fake.lose = (method) => (method === "PATCH" ? "after" : null);
+		assert.deepEqual(await api.advanceLedger(root.sha, a.sha), {
+			kind: "advanced",
+			tip: a.sha,
+		});
+
+		const c = await createLedgerChild(
+			api,
+			a,
+			Buffer.alloc(0),
+			ledgerDate,
+			"c\n",
+		);
+
+		fake.lose = (method) => (method === "PATCH" ? "before" : null);
+		await assert.rejects(api.advanceLedger(a.sha, c.sha), /github_refused/);
+		assert.equal(fake.refs.get("factory/ledger"), a.sha);
+		fake.lose = null;
+
+		fake.hook = (method) =>
+			method === "PATCH" ? { code: 1, stdout: "", stderr: "HTTP 403" } : null;
+		await assert.rejects(api.advanceLedger(a.sha, c.sha), /github_refused/);
+		fake.hook = null;
+
+		assert.equal(fake.writes.filter((w) => w.method === "PATCH").length, 3);
+		assert.deepEqual(await api.advanceLedger(a.sha, c.sha), {
+			kind: "advanced",
+			tip: c.sha,
+		});
+	});
+
+	it("keeps blob, commit and read-back hashes fatal", async () => {
+		for (const target of ["git/blobs", "git/commits"]) {
+			const fake = new LedgerGit();
+			const api = quietApi(fake.exec);
+
+			fake.hook = (method, path) =>
+				method === "POST" && path === target
+					? {
+							code: 0,
+							stdout: JSON.stringify({ sha: "f".repeat(40) }),
+							stderr: "",
+						}
+					: null;
+			await assert.rejects(
+				createLedgerRoot(api, ledgerDate),
+				target === "git/blobs" ? /blob_mismatch/ : /commit_mismatch/,
+			);
+			assert.equal(fake.refs.size, 0);
+		}
+
+		const fake = new LedgerGit();
+		const api = quietApi(fake.exec);
+		const root = await createLedgerRoot(api, ledgerDate);
+		const blob = gitObjectSha("blob", new Uint8Array());
+		fake.blobs.set(blob, Buffer.from("tampered"));
+		await assert.rejects(readLedgerFile(api, root.tree), /blob_mismatch/);
+
+		fake.hook = (method, path) =>
+			method === "GET" && path.startsWith("git/trees/")
+				? {
+						code: 0,
+						stdout: JSON.stringify({
+							sha: root.tree,
+							truncated: true,
+							tree: [],
+						}),
+						stderr: "",
+					}
+				: null;
+		await assert.rejects(readLedgerFile(api, root.tree), /tree_truncated/);
+
+		fake.hook = (method, path) =>
+			method === "GET" && path.startsWith("git/trees/")
+				? {
+						code: 0,
+						stdout: JSON.stringify({
+							sha: root.tree,
+							truncated: false,
+							tree: [],
+						}),
+						stderr: "",
+					}
+				: null;
+		await assert.rejects(readLedgerFile(api, root.tree), /ledger_file_missing/);
+
+		fake.hook = (method, path) =>
+			method === "GET" && path.startsWith("git/commits/")
+				? {
+						code: 0,
+						stdout: JSON.stringify({
+							sha: "f".repeat(40),
+							tree: { sha: root.tree },
+							parents: [],
+						}),
+						stderr: "",
+					}
+				: null;
+		await assert.rejects(readLedgerCommit(api, root.sha), /object_mismatch/);
+
+		fake.hook = (method, path) =>
+			method === "GET" && path.startsWith("git/ref/")
+				? {
+						code: 0,
+						stdout: JSON.stringify({
+							ref: "refs/heads/factory/ledger-other",
+							object: { sha: root.sha },
+						}),
+						stderr: "",
+					}
+				: null;
+		await assert.rejects(api.ledgerRef(), /malformed_ref/);
+		fake.hook = null;
+		const absent = "a".repeat(40);
+		assert.ok(isGitSha(absent));
+		await assert.rejects(readLedgerCommit(api, absent), /object_missing/);
 	});
 });

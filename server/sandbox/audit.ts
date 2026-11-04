@@ -1,4 +1,5 @@
-import { closeSync, openSync, writeSync } from "node:fs";
+import { closeSync, fsyncSync, openSync, writeSync } from "node:fs";
+import { countOf, fieldOf, objectOf, parseJson } from "./json.ts";
 import type { ProxyCode } from "./policy.ts";
 import type { CredentialId, RouteId } from "./routes.ts";
 
@@ -35,6 +36,111 @@ export type AuditRecord = {
 	readonly inputTokens: number | null;
 	readonly outputTokens: number | null;
 };
+
+type JournalIdentity = {
+	readonly v: 1;
+	readonly ts: string;
+	readonly stage: string;
+	readonly runId: string;
+	readonly attempt: number;
+	readonly req: number;
+	readonly route: RouteId;
+};
+
+/**
+ * One model request in the synced journal: a `dispatch` before anything goes
+ * upstream, and a `result` once it ends. Only ids, counters and metering. A
+ * provider's non-2xx status at the headers, on a response that completed, is `provider_rejected`, metered at its reported usage or zero.
+ */
+export type JournalRecord =
+	| (JournalIdentity & {
+			readonly kind: "dispatch";
+			readonly inputTokenEstimate?: number;
+			readonly maxOutputTokens?: number;
+	  })
+	| (JournalIdentity & {
+			readonly kind: "result";
+			readonly status: number;
+			readonly decision: AuditDecision;
+			readonly reason?: "provider_rejected";
+			readonly inputTokens: number | null;
+			readonly outputTokens: number | null;
+	  });
+
+export type JournalSink = {
+	readonly write: (text: string) => void;
+	readonly sync: () => void;
+};
+
+/** The journal beside an audit file: `egress.jsonl` keeps `egress.requests.jsonl`. */
+function journalPath(auditPath: string): string {
+	return `${auditPath.replace(/\.jsonl$/, "")}.requests.jsonl`;
+}
+
+/** The journal's name beside an execution's `egress.jsonl`. */
+export const JOURNAL_FILE = "egress.requests.jsonl";
+
+export type JournalCharge = {
+	readonly tokens: number;
+	readonly dispatched: number;
+	readonly settled: number;
+	readonly unmetered: number;
+	readonly uncertain: number;
+	readonly uncertainTokens: number;
+};
+
+/**
+ * What a journal proves: metered tokens of each settled request, once per
+ * request number. A provider-rejected result that completed is charged its reported usage, or a known zero. A dispatch with
+ * no result, or with an unmetered result and a positive recorded bound, is an
+ * uncertain charge, so the tokens retain the recorded input-plus-output bound
+ * separately. Legacy dispatches without a bound remain a floor. A line cut
+ * short by a crash is skipped.
+ */
+export function journalCharge(text: string): JournalCharge {
+	const dispatched = new Map<number, number>();
+	const settled = new Map<number, number | null>();
+
+	for (const line of text.split("\n")) {
+		const record = objectOf(parseJson(line));
+		const req = countOf(fieldOf(record, "req"));
+		const kind = fieldOf(record, "kind");
+
+		if (record === null || req === null) continue;
+
+		if (kind === "dispatch" && !dispatched.has(req))
+			dispatched.set(
+				req,
+				(countOf(fieldOf(record, "inputTokenEstimate")) ?? 0) +
+					(countOf(fieldOf(record, "maxOutputTokens")) ?? 0),
+			);
+		else if (kind === "result" && !settled.has(req)) {
+			const input = countOf(fieldOf(record, "inputTokens"));
+			const output = countOf(fieldOf(record, "outputTokens"));
+
+			settled.set(
+				req,
+				input === null && output === null ? null : (input ?? 0) + (output ?? 0),
+			);
+		}
+	}
+
+	const metered = [...settled.values()];
+
+	const unsettled = [...dispatched].filter(
+		([req, bound]) =>
+			!settled.has(req) || (settled.get(req) === null && bound > 0),
+	);
+
+	return {
+		tokens: metered.reduce<number>((sum, value) => sum + (value ?? 0), 0),
+		dispatched: dispatched.size,
+		settled: settled.size,
+		unmetered: metered.filter((value) => value === null).length,
+		uncertain: unsettled.length,
+		uncertainTokens: unsettled.reduce((sum, [, bound]) => sum + bound, 0),
+	};
+}
 
 export const AUDIT_CAP_BYTES = 32 * 1024 * 1024;
 
@@ -97,13 +203,46 @@ export function auditLine(record: AuditRecord): string {
 export class AuditLog {
 	readonly #write: (text: string) => void;
 	readonly #cap: number;
+	readonly #journal: JournalSink;
 	#bytes = 0;
+	#journalBytes = 0;
 	#failed = false;
 	#full = false;
 
-	constructor(write: (text: string) => void, capBytes: number) {
+	constructor(
+		write: (text: string) => void,
+		capBytes: number,
+		journal: JournalSink,
+	) {
 		this.#write = write;
 		this.#cap = capBytes;
+		this.#journal = journal;
+	}
+
+	/** Appends one journal record and syncs it to disk; false leaves the log unhealthy. */
+	journal(record: JournalRecord): boolean {
+		if (!this.healthy()) return false;
+
+		const line = `${JSON.stringify(record)}\n`;
+		const size = Buffer.byteLength(line);
+
+		if (this.#journalBytes + size > this.#cap) {
+			this.#full = true;
+
+			return false;
+		}
+
+		try {
+			this.#journal.write(line);
+			this.#journal.sync();
+			this.#journalBytes += size;
+
+			return true;
+		} catch {
+			this.#failed = true;
+
+			return false;
+		}
 	}
 
 	get full(): boolean {
@@ -141,14 +280,37 @@ export class AuditLog {
 
 export type AuditFile = { readonly log: AuditLog; close(): void };
 
-/** Opens a new audit file, mode 0600. An existing file is an error, never reused. */
+/**
+ * Opens a new audit file and its request journal beside it, both mode 0600.
+ * An existing file is an error, never reused.
+ */
 export function openAuditFile(path: string, capBytes: number): AuditFile {
 	const fd = openSync(path, "wx", 0o600);
+	let journal: number;
+
+	try {
+		journal = openSync(journalPath(path), "wx", 0o600);
+	} catch (error) {
+		closeSync(fd);
+		throw error;
+	}
 
 	return {
-		log: new AuditLog((text) => {
-			writeSync(fd, text);
-		}, capBytes),
-		close: () => closeSync(fd),
+		log: new AuditLog(
+			(text) => {
+				writeSync(fd, text);
+			},
+			capBytes,
+			{
+				write: (text) => {
+					writeSync(journal, text);
+				},
+				sync: () => fsyncSync(journal),
+			},
+		),
+		close: () => {
+			closeSync(fd);
+			closeSync(journal);
+		},
 	};
 }

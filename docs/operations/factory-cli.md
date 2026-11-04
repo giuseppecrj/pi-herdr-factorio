@@ -7,7 +7,7 @@ node server/cli.ts <command> --json --repo <owner/name> [options]
 node server/cli.ts serve --repo <owner/name> --state-dir <dir> [--issue <number>]...
 ```
 
-Except for `gates` and `viewer`, every command reads `.github/factory/WORKFLOW.md` from GitHub through `gh`, never from the local checkout. It first resolves the branch to a SHA with `gh api repos/<repo>/git/ref/heads/<branch> --jq .object.sha`, then fetches the file at that SHA with `gh api -H 'Accept: application/vnd.github.raw' repos/<repo>/contents/.github/factory/WORKFLOW.md?ref=<sha>`. Each `gh` call has a 30-second timeout. `gh` inherits the environment, including `GH_HOST`. On the VM, set `GH_HOST=github.int.exe.xyz`.
+Except for `gates` and `viewer`, every command reads `.github/factory/WORKFLOW.md` from GitHub through `gh`, never from the local checkout. It first resolves the branch to a SHA with `gh api repos/<repo>/git/ref/heads/<branch> --jq .object.sha`, then fetches the file at that SHA with `gh api -H 'Accept: application/vnd.github.raw' repos/<repo>/contents/.github/factory/WORKFLOW.md?ref=<sha>`. Ordinary `gh` calls have a 30-second timeout. Ledger publication uses a separate 20-second job slice, with each call capped at the smaller of 5 seconds and the remaining slice. `gh` inherits the environment, including `GH_HOST`. On the VM, set `GH_HOST=github.int.exe.xyz`.
 
 `admit` makes more `gh` reads, described below. `tick`, `run`, and `serve` run the controller. They can write markers, summaries, labels, Git objects and refs, dispatch CI, open a PR, request review, and close an issue after an observed merge. They never merge or arm auto-merge. Only these controller commands launch models, inside the stage sandbox. `admit` and the controller write private state under `--state-dir`; `gates` writes its own receipt output directory. The viewer is read-only. See [Review and merge a factory PR](human-review.md) for the owner procedure.
 
@@ -48,6 +48,7 @@ The flags below describe the workflow and controller commands. `viewer` has its 
 | `--ref <branch>` | `workflow-check`, `status` | no | `main` | The branch to load. Any branch other than `main` sets `verification: true`. |
 | `--reload-ref <branch>` | `workflow-check` | no | none | Load a second branch as a reload on top of `--ref` and report which snapshot stays in force. |
 | `--issue <number>` | `admit`, `run`, `tick`, `serve` | `admit` and `run`: exactly one. `tick` and `serve`: no | every candidate | The issue number, from 1 to 9999999999, with no leading zero. `tick` and `serve` take it any number of times and then touch only those issues. |
+| `--verification-token-cap <n>` | `tick`, `run`, `serve` | no | none | Verification lanes only. It lowers the run token cap to `min(n, usage.max_tokens_per_run)` and never raises it. It requires `--issue`. See [Verification token cap](#verification-token-cap). |
 | `--state-dir <dir>` | `admit`, `tick`, `run`, `serve`; optional for `status` | yes, except for `status` | none | The controller state directory. It must already exist as a directory, not a symlink, owned by the effective user and not writable by group or others. A relative path is resolved against the working directory. |
 
 `--ref` and `--reload-ref` exist so verification lanes can load fixture branches. The controller always loads `main` and takes no such flag.
@@ -194,11 +195,22 @@ The `reload` object has these fields:
 | `warnings` | string array | Same as in `workflow-check`. |
 | `executionEnabled` | boolean | Always `false`, because `status` runs no preflight. The controller's own value is in `controller.lastTick.executionEnabled`. |
 | `controller` | object | Without `--state-dir`, `state` is `unavailable` and `reason` is `pass --state-dir to read the controller lock`. With it, see below. |
+| `ledger` | object | Read-only local outbox state, pending and blocked counts, oldest age and next retry time. See below. |
+| `durableUsage` | object | Charged tokens summed once per distinct locally owned run, including ended runs. Never adds ledger rows to the same charges. Unavailable without readable state. |
+| `accounting` | object | `state` is `readable`, `incomplete` or `unavailable`; `countersScope` is `process`. `runs` contains each owned run's token floor, uncertain-request count, money availability and durable attempt records. |
 | `models` | object or `null` | The model for each of `specify`, `accept`, `build` and `review`. Validate has no model. |
 | `limits` | object or `null` | `pollIntervalMs`, `maxConcurrent`, `retry`, `usage` and `stages`, where `stages` maps each stage to `maxTurns`, `wallMs` and `stallMs`. |
 | `checkpoints` | object or `null` | `approveMerge.mode`, which is always `always`. |
 
 When `workflow` is `valid`, `workflowSha` and `workflowDigest` are set, `workflowError` is `null`, and `models`, `limits` and `checkpoints` are set. When it is `invalid`, `workflowError` is set and `models`, `limits` and `checkpoints` are `null`.
+
+### Ledger backlog and accounting
+
+`status` reads the local outbox without taking the controller lock, pumping it, or launching models. `ledger.state` is `empty`, `pending`, `blocked`, `unreadable` or `unavailable`. `pending` and `blocked` are `null`, not zero, when the outbox cannot be read. `oldestObservedAt` and `oldestAgeMs` describe the oldest unpublished terminal run; `nextAttemptAt` is the earliest persisted retry time. Absent times are `null`. `lastError` names a persisted transport or integrity failure; `adoption_pending` means bounded lineage adoption is still in progress.
+
+The controller retries ledger jobs after ticks, with persisted exponential backoff starting at 5 seconds and capped at 5 minutes. First adoption saves a lineage cursor and walks at most 16 parent links per slice. Transport timeouts leave publication uncertain: the next attempt reads the remote ledger before appending again. Integrity failures remain visible and do not replenish or block a run's token allowance.
+
+`durableUsage` and per-run `tokens` use `kind: "lower_bound"` when coverage is incomplete and `kind: "uncertain"` when unmatched requests contribute policy charges. `uncertainRequests` counts dispatched requests whose result was not durably recorded, or whose result carried no metered usage against a positive bound. Current policy charges their recorded input-size estimate plus maximum allowed output, never replays them, and lets the run continue within its remaining allowance. The gateway records a conservative one-token-per-input-byte estimate and an enforced output limit before forwarding. Legacy dispatches without those bounds remain explicitly incomplete floors. Uncertain charges are not exact metering. Money remains unavailable because no validated price source is recorded. Existing `controller.lastTick.totals` are process-scoped counters, not lifetime totals. `status.json` is not restart authority.
 
 ## `admit`
 
@@ -445,6 +457,16 @@ Each command does these steps in order and stops at the first that fails:
 3. It checks that `gh` acts as the integration bot. It reads `gh api graphql -f query='query { viewer { login } }'` and requires exactly `exe-dev-github-integration[bot]`. Without `GH_HOST`, `gh` on the VM has no credentials and the read fails, and on a workstation it answers as the owner. Either way it logs `controller_refused` with `identity_unavailable` or `identity_mismatch`, releases the lock and exits 1. See `docs/prototypes/restart-recovery/README.md`.
 
 `serve` then logs `controller_ready` with its pid, repository and scope. That line means the service is ready.
+
+### Verification token cap
+
+`--verification-token-cap <n>` lets a verification lane test an almost exhausted run budget without spending most of main's 500,000-token cap. It is not for production, and `server/factory.service` never passes it.
+
+- It requires `--issue`. A missing scope, or a value that is not a positive integer, is a usage error. Other commands refuse it.
+- After the identity check and before the first tick, the controller pins `<state-dir>/verification.json`, mode 0600. The file holds the repository, the sorted issue scope and `n`. The first run requires a state directory that holds nothing but `controller.lock`. Each later run must name the same repository, scope and cap.
+- It logs `controller_refused`, releases the lock and exits 1 with `verification_state_not_new` when the state directory already holds other state, and with `verification_manifest_mismatch` when the scope or cap changed. Without the flag, a state directory that has the manifest is refused with `verification_state`.
+- The effective run cap is `min(n, usage.max_tokens_per_run)`. Every limit that reads the run cap uses it, including launch allowances, the retry budget and the candidate's token limit.
+- Each terminal row from that directory has `provenance.kind: "verification"`, with the manifest's digest, the trusted cap and the effective cap. Production cohorts exclude these rows.
 
 ### The lock
 

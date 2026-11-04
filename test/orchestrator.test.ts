@@ -1,6 +1,6 @@
 import { parseStoredContract } from "../src/artifacts.ts";
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import {
 	chmodSync,
 	cpSync,
@@ -10,7 +10,9 @@ import {
 	renameSync,
 	mkdtempSync,
 	readFileSync,
+	readdirSync,
 	rmSync,
+	statSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -28,11 +30,13 @@ import {
 } from "../src/build.ts";
 import {
 	acquireLock,
+	fileLedgerOutbox,
 	fileRunFiles,
 	controllerCandidatePort,
 	HOLDER_FILE,
 	type ProcessTable,
 	parseStartTime,
+	readLedgerBacklog,
 	serveLoop,
 	writeStatus,
 } from "../server/controller.ts";
@@ -77,13 +81,27 @@ import {
 	storedAssessment,
 	verdictAssessment,
 } from "./helpers.ts";
-import type {
-	BaseCheckInput,
-	BaseCheckProgress,
-	BaseReason,
+import {
+	assessBase,
+	parseBaseReceipt,
+	type BaseCheckInput,
+	type BaseCheckProgress,
+	type BaseReason,
 } from "../src/diagnosis.ts";
 import { advance } from "../src/stages.ts";
-import { readAssessmentBytes, validationDir } from "../src/validation.ts";
+import {
+	ledgerApiOf,
+	parseLedger,
+	pumpLedger,
+	type LedgerOutbox,
+} from "../src/ledger.ts";
+import { GitHubPublicationApi, readLedgerFile } from "../src/publication.ts";
+import { LedgerGit, repo as ledgerRepo } from "./ledger-git.ts";
+import {
+	assessmentBinding,
+	readAssessmentBytes,
+	validationDir,
+} from "../src/validation.ts";
 import {
 	candidateProjection,
 	handoffCandidate,
@@ -741,11 +759,12 @@ function runOf(issue: number): Digest {
 
 type Wire = { intercept: Exec | null };
 
-function world(scope: readonly number[] | null = null) {
+function world(scope: readonly number[] | null = null, ledger?: LedgerOutbox) {
 	const github = new FakeGitHub();
 	const clock = new FakeClock();
 	const store = memoryStore();
-	const files = memoryFiles();
+	const memory = memoryFiles();
+	const files = ledger === undefined ? memory : { ...memory, ledger };
 	const executor = new FakeExecutor();
 	const logs: { event: string; fields: LogFields }[] = [];
 	const wire: Wire = { intercept: null };
@@ -1361,6 +1380,44 @@ describe("Orchestrator restart recovery", () => {
 		assert.equal(report.totals.usage, 700);
 	});
 
+	it("keeps an attempt-end decision across a lost marker and preserves its original retry time", async () => {
+		const { github, executor, files, start, clock } = world();
+		const disk = fileRunFiles(files.artifactRoot);
+
+		files.accounting = disk.accounting;
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "hang" }];
+		await start().tick();
+		executor.spentBy.set("specify-1", 700);
+		github.posts = ["rejected"];
+		await start().tick();
+
+		const record = await disk.accounting!.readAttempt(
+			runOf(14),
+			"specify",
+			0,
+			1,
+		);
+
+		assert.equal(record?.disposition, "interrupted");
+		assert.equal(record?.usage, 700);
+		assert.equal(record?.next.kind, "retry");
+		clock.t += 6_000;
+		const restored = await start().tick();
+
+		assert.equal(restored.runs[0]?.attempt, 2);
+		assert.equal(restored.runs[0]?.usage, 700);
+		assert.equal(executor.launches.length, 1);
+		clock.t += 4_000;
+		executor.behaviors = [{ kind: "hang" }];
+		await start().tick();
+		assert.equal(executor.launches.length, 2);
+		assert.deepEqual(
+			await disk.accounting!.readAttempt(runOf(14), "specify", 0, 1),
+			record,
+		);
+	});
+
 	it("turns an interrupted running stage into a counted retry", async () => {
 		const { github, executor, start } = world();
 
@@ -1420,6 +1477,33 @@ describe("Orchestrator restart recovery", () => {
 			return parsed.kind === "marker" ? parsed.marker.usage : -1;
 		});
 	}
+
+	for (const [spent, launches] of [
+		[499_999, true],
+		[500_000, false],
+		[500_001, false],
+	] as const)
+		it(`restores ${spent} spent tokens against the 500000 run cap and ${launches ? "launches with what is left" : "launches nothing"}`, async () => {
+			const ctx = world();
+			const { github, executor, start } = ctx;
+
+			await stopAfterUnmarkedSpend(ctx, spent);
+			executor.behaviors = [{ kind: "hang" }];
+
+			const report = await start().tick();
+
+			if (launches) {
+				assert.equal(executor.launches.length, 2);
+				assert.equal(executor.launches[1]?.remainingRunTokens, 500_000 - spent);
+
+				return;
+			}
+
+			assert.equal(executor.launches.length, 1);
+			assert.deepEqual(report.runs, []);
+			assert.equal(statuses(github, 14).at(-1), "2:budget_exhausted");
+			assert.equal(usageOf(github, 14).at(-1), spent);
+		});
 
 	it("gives a replay of a claimed attempt only what that attempt's earlier execution left of the run cap", async () => {
 		const ctx = world();
@@ -1870,6 +1954,35 @@ describe("Orchestrator base qualification", () => {
 		assert.equal(refusals(github).length, 0);
 	});
 
+	it("persists base interruption and its retry deadline across a restart", async () => {
+		const f = world();
+		f.files.accounting = fileRunFiles(f.files.artifactRoot).accounting;
+		f.github.add(labeled(14));
+		f.executor.behaviors = [{ kind: "pass", usage: 10 }];
+		f.executor.acceptBehavior = { kind: "pass", usage: 20 };
+		f.executor.baseOutcome = "interrupted";
+		await once(f.start());
+
+		const ended = await f.files.accounting!.readAttempt(
+			runOf(14),
+			"accept",
+			0,
+			1,
+		);
+
+		assert.equal(ended?.disposition, "interrupted");
+		assert.equal(ended?.next.kind, "base_retry");
+		f.clock.t += 5_000;
+		f.executor.baseOutcome = "ready";
+		const restarted = f.start();
+		await restarted.tick();
+		assert.equal(f.executor.baseChecks.length, 1);
+		f.clock.t += 5_000;
+		await once(restarted);
+		assert.equal(f.files.claims.get(runOf(14))?.stage, "build");
+		assert.equal((await f.files.accounting!.attempts(runOf(14)))?.length, 3);
+	});
+
 	it("charges an interrupted check once to the accept attempt and retries the stored suite", async () => {
 		const { github, executor, files, clock, start } = world();
 		github.add(labeled(14));
@@ -2306,6 +2419,184 @@ async function cli(
 describe("server/cli.ts controller commands", () => {
 	const base = ["--repo", repo];
 
+	describe("--verification-token-cap", () => {
+		const tick = (state: string, ...extra: string[]) => [
+			"tick",
+			"--once",
+			"--json",
+			...base,
+			"--state-dir",
+			state,
+			...extra,
+		];
+
+		const manifestOf = (state: string) =>
+			JSON.parse(readFileSync(join(state, "verification.json"), "utf8"));
+
+		it("requires --issue scope and a positive integer cap", async () => {
+			for (const extra of [
+				["--verification-token-cap", "1000"],
+				["--issue", "14", "--verification-token-cap", "0"],
+				["--issue", "14", "--verification-token-cap", "1e3"],
+				["--issue", "14", "--verification-token-cap", "-5"],
+			]) {
+				const run = await cli(tick(stateDir(), ...extra), new FakeGitHub());
+
+				assert.equal(run.code, EXIT.usage, extra.join(" "));
+				assert.match(run.stderr, /--verification-token-cap/);
+			}
+
+			const admit = await cli(
+				[
+					"admit",
+					"--json",
+					...base,
+					"--issue",
+					"14",
+					"--state-dir",
+					stateDir(),
+					"--verification-token-cap",
+					"1000",
+				],
+				new FakeGitHub(),
+			);
+
+			assert.equal(admit.code, EXIT.usage);
+		});
+
+		it("pins a write-once manifest in a fresh state dir and refuses changed scope, cap or production use", async () => {
+			const state = stateDir();
+			const github = new FakeGitHub();
+
+			github.add(labeled(14));
+
+			const first = await cli(
+				tick(state, "--issue", "14", "--verification-token-cap", "12000"),
+				github,
+			);
+
+			assert.equal(first.code, EXIT.ok, first.stderr);
+			assert.deepEqual(manifestOf(state), {
+				v: 1,
+				repo,
+				issues: [14],
+				tokenCap: 12_000,
+			});
+			assert.equal(
+				statSync(join(state, "verification.json")).mode & 0o777,
+				0o600,
+			);
+
+			const again = await cli(
+				tick(state, "--issue", "14", "--verification-token-cap", "12000"),
+				github,
+			);
+
+			assert.equal(again.code, EXIT.ok, again.stderr);
+
+			for (const extra of [
+				["--issue", "14", "--verification-token-cap", "13000"],
+				["--issue", "14", "--issue", "15", "--verification-token-cap", "12000"],
+				["--issue", "14"],
+				[],
+			]) {
+				const refused = await cli(tick(state, ...extra), github);
+
+				assert.equal(refused.code, EXIT.invalid, extra.join(" "));
+				assert.match(
+					refused.stderr,
+					/event=controller_refused reason=verification_(manifest_mismatch|state)/,
+				);
+			}
+
+			assert.deepEqual(manifestOf(state).tokenCap, 12_000);
+		});
+
+		it("refuses a state dir that already holds production state", async () => {
+			const state = stateDir();
+			const github = new FakeGitHub();
+
+			github.add(labeled(14));
+			assert.equal(
+				(await cli(tick(state, "--issue", "14"), github)).code,
+				EXIT.ok,
+			);
+
+			const run = await cli(
+				tick(state, "--issue", "14", "--verification-token-cap", "12000"),
+				github,
+			);
+
+			assert.equal(run.code, EXIT.invalid);
+			assert.match(
+				run.stderr,
+				/event=controller_refused reason=verification_state_not_new/,
+			);
+			assert.equal(existsSync(join(state, "verification.json")), false);
+		});
+
+		it("only lowers the trusted run cap and marks the terminal row as verification", async () => {
+			for (const [cap, effective] of [
+				[12_000, 12_000],
+				[900_000, 500_000],
+			] as const) {
+				const state = stateDir();
+				const github = new FakeGitHub();
+				const executor = new FakeExecutor();
+
+				github.add(labeled(14));
+				executor.behaviors = [{ kind: "fail", usage: effective }];
+
+				const argv = tick(
+					state,
+					"--issue",
+					"14",
+					"--verification-token-cap",
+					String(cap),
+				);
+
+				const run = await cli(argv, github, new AbortController(), executor);
+
+				assert.equal(run.code, EXIT.ok, run.stderr);
+				assert.equal(executor.launches[0]?.remainingRunTokens, effective);
+				await cli(argv, github, new AbortController(), executor);
+				assert.equal(statuses(github, 14).at(-1), "3:budget_exhausted");
+
+				const terminal = JSON.parse(
+					readFileSync(
+						join(state, "ledger", runOf(14), "terminal.json"),
+						"utf8",
+					),
+				);
+
+				assert.partialDeepStrictEqual(terminal.provenance, {
+					kind: "verification",
+					trustedRunTokenCap: 500_000,
+					effectiveRunTokenCap: effective,
+				});
+				assert.equal(
+					terminal.provenance.verificationDigest,
+					digestOf(readFileSync(join(state, "verification.json"), "utf8")),
+				);
+			}
+		});
+
+		it("never reaches the production unit's ExecStart", () => {
+			const unit = readFileSync(
+				new URL("../server/factory.service", import.meta.url),
+				"utf8",
+			);
+
+			const exec = unit
+				.split("\n")
+				.filter((line) => line.startsWith("ExecStart"));
+
+			assert.equal(exec.length, 1);
+			assert.match(exec[0] ?? "", /server\/cli\.ts serve /);
+			assert.doesNotMatch(unit, /verification/);
+		});
+	});
+
 	it("tick --once prints the claim snapshot, writes status and releases the lock", async () => {
 		const github = new FakeGitHub();
 		const state = stateDir();
@@ -2540,6 +2831,95 @@ describe("server/cli.ts controller commands", () => {
 			[stale.controller.state, stale.controller.pid],
 			["stale_lock", 5000],
 		);
+	});
+
+	it("status reports a durable ended-run floor and ledger backlog without launching or writing", async () => {
+		const github = new FakeGitHub();
+		const state = stateDir();
+		const executor = new FakeExecutor();
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "refuse", usage: 40 }];
+		await cli(
+			["tick", "--once", "--json", ...base, "--state-dir", state],
+			github,
+			new AbortController(),
+			executor,
+		);
+		const before = readdirSync(state).sort();
+		const launches = executor.launches.length;
+
+		const result = await cli(
+			["status", "--json", ...base, "--state-dir", state],
+			github,
+			new AbortController(),
+			executor,
+		);
+
+		const status = JSON.parse(result.stdout);
+		assert.equal(status.ledger.pending, 1);
+		assert.equal(status.ledger.oldestAgeMs, 0);
+		assert.equal(status.ledger.state, "pending");
+		assert.equal(status.durableUsage.total, 40);
+		assert.equal(status.durableUsage.kind, "lower_bound");
+		assert.equal(status.accounting.runs.length, 1);
+		assert.equal(status.accounting.runs[0].money.kind, "unavailable");
+		assert.equal(status.accounting.countersScope, "process");
+		assert.equal(executor.launches.length, launches);
+		assert.deepEqual(readdirSync(state).sort(), before);
+		writeFileSync(join(state, "ledger", runOf(14), "retry.json"), "{");
+
+		const broken = await cli(
+			["status", "--json", ...base, "--state-dir", state],
+			github,
+		);
+
+		assert.deepEqual(
+			["state", "pending", "blocked", "lastError"].map(
+				(key) => JSON.parse(broken.stdout).ledger[key],
+			),
+			["blocked", 1, 1, "state_invalid"],
+		);
+	});
+
+	it("status marks upper-bound charges uncertain and never calls missing state an empty backlog", async () => {
+		const github = new FakeGitHub();
+		const state = stateDir();
+		github.add(labeled(14));
+		const executor = new FakeExecutor();
+		executor.behaviors = [{ kind: "refuse", usage: 40 }];
+		await cli(
+			["tick", "--once", "--json", ...base, "--state-dir", state],
+			github,
+			new AbortController(),
+			executor,
+		);
+		const stage = join(state, "stages", runOf(14), "specify-1");
+		mkdirSync(stage, { recursive: true });
+		writeFileSync(
+			join(stage, "egress.requests.jsonl"),
+			'{"kind":"result","req":1,"inputTokens":10,"outputTokens":0}\n{"kind":"dispatch","req":2,"inputTokenEstimate":20,"maxOutputTokens":50}\n',
+		);
+
+		const result = await cli(
+			["status", "--json", ...base, "--state-dir", state],
+			github,
+		);
+
+		const status = JSON.parse(result.stdout);
+		assert.equal(status.accounting.runs[0].tokens.kind, "uncertain");
+		assert.equal(status.durableUsage.kind, "uncertain");
+		assert.equal(status.durableUsage.total, 80);
+
+		const missing = await cli(
+			["status", "--json", ...base, "--state-dir", join(state, "missing")],
+			github,
+		);
+
+		const unavailable = JSON.parse(missing.stdout);
+		assert.equal(unavailable.accounting.state, "unavailable");
+		assert.equal(unavailable.durableUsage.kind, "unavailable");
+		assert.equal(unavailable.ledger.state, "unreadable");
+		assert.equal(unavailable.ledger.pending, null);
 	});
 
 	it("rejects a state directory others can write", async () => {
@@ -2997,6 +3377,214 @@ describe("Orchestrator runs of another state directory", () => {
 			"3:released",
 			"4:claimed",
 		]);
+	});
+});
+
+describe("admission accounting policy", () => {
+	it("pins policy bytes from the original SHA once, caches its gates and retains start time across restart", async () => {
+		const dir = stateDir();
+		const archive = stateDir();
+		const tree = join(archive, "repo", ".github", "factory");
+		mkdirSync(join(tree, "gates"), { recursive: true });
+		writeFileSync(join(tree, "WORKFLOW.md"), TRUSTED_WORKFLOW);
+		writeFileSync(join(tree, "gates", "ci.sh"), "echo trusted\n");
+		const bytes = execFileSync("tar", ["-czf", "-", "-C", archive, "repo"]);
+		let fetched = 0;
+
+		const files = fileRunFiles(dir, {
+			fetch: async (requestedRepo, requestedSha) => {
+				assert.equal(requestedRepo, repo);
+				assert.equal(requestedSha, MAIN_SHA);
+				fetched++;
+
+				return bytes;
+			},
+		});
+
+		const input = {
+			runId: runOf(14),
+			repo,
+			workflowSha: sha(MAIN_SHA),
+			workflowDigest: digestOf(TRUSTED_WORKFLOW),
+			startedAt: new Date(START).toISOString(),
+		};
+
+		assert.equal(await files.prepareRun?.(input), true);
+		const pinned = await files.accounting?.start(input.runId);
+		assert.ok(pinned);
+		assert.equal(pinned.policy.gates.kind, "known");
+		assert.equal(
+			statSync(join(dir, "accounting", input.runId, "policy.json")).mode &
+				0o777,
+			0o600,
+		);
+		assert.equal(
+			await files.prepareRun?.({ ...input, runId: runOf(15) }),
+			true,
+		);
+		assert.equal(fetched, 1);
+		assert.equal(
+			await files.accounting?.begin({
+				...pinned,
+				runId: runOf(16),
+				policy: {
+					...pinned.policy,
+					gates: {
+						kind: "known",
+						value: {
+							sourceSha: sha("f".repeat(40)),
+							digest: digestOf("gates"),
+						},
+					},
+				},
+			}),
+			false,
+		);
+		assert.equal(
+			await files.accounting?.begin({
+				...pinned,
+				runId: runOf(16),
+				policy: {
+					...pinned.policy,
+					autonomy: {
+						...pinned.policy.autonomy,
+						digest: digestOf("not autonomy"),
+					},
+				},
+			}),
+			false,
+		);
+
+		const restarted = fileRunFiles(dir, {
+			fetch: async () => {
+				throw new Error("must not fetch");
+			},
+		});
+
+		assert.equal(
+			await restarted.prepareRun?.({
+				...input,
+				startedAt: new Date(START + 1000).toISOString(),
+			}),
+			true,
+		);
+		assert.deepEqual(await restarted.accounting?.start(input.runId), pinned);
+		assert.equal(
+			await restarted.prepareRun?.({
+				...input,
+				workflowDigest: digestOf("different"),
+			}),
+			false,
+		);
+		assert.equal(
+			await restarted.accounting?.begin({
+				...pinned,
+				startedAt: new Date(START + 1000).toISOString(),
+			}),
+			false,
+		);
+		assert.equal(
+			await files.prepareRun?.({
+				...input,
+				runId: runOf(16),
+				workflowDigest: digestOf("different"),
+			}),
+			false,
+		);
+		symlinkSync("ci.sh", join(tree, "gates", "omitted-link"));
+		const partial = execFileSync("tar", ["-czf", "-", "-C", archive, "repo"]);
+		const refused = fileRunFiles(stateDir(), { fetch: async () => partial });
+		assert.equal(await refused.prepareRun?.(input), false);
+		assert.equal(await refused.accounting?.start(input.runId), null);
+	});
+
+	it("defers the first claim until its original workflow and gate policy are durably pinned", async () => {
+		const f = world();
+		f.github.add(labeled(14));
+		let ready = false;
+		const calls: string[] = [];
+		f.files.prepareRun = async (input) => {
+			assert.equal(input.workflowSha, MAIN_SHA);
+			assert.equal(input.runId, runOf(14));
+			assert.equal(f.files.claims.size, 0);
+			calls.push(input.startedAt);
+
+			return ready;
+		};
+
+		const controller = f.start();
+		await controller.tick();
+		assert.equal(f.files.claims.size, 0);
+		assert.equal(f.executor.launches.length, 0);
+		assert.deepEqual(statuses(f.github, 14), []);
+		ready = true;
+		await controller.tick();
+		assert.equal(f.files.claims.size, 1);
+		assert.equal(calls.length, 2);
+	});
+});
+
+describe("durable attempt ends", () => {
+	it("writes each disposition once, rejects conflicting bytes and distinguishes corrupt from absent", async () => {
+		const state = stateDir();
+		const accounting = fileRunFiles(state).accounting!;
+
+		const dispositions = [
+			"completed",
+			"model_failure",
+			"interrupted",
+			"refused",
+			"budget_stop",
+			"aborted",
+		] as const;
+
+		for (const [index, disposition] of dispositions.entries()) {
+			const attempt = index + 1;
+
+			const record = {
+				v: 1 as const,
+				runId: runOf(14),
+				stage: "specify" as const,
+				round: 0,
+				attempt,
+				disposition,
+				usage: 37,
+				next: { kind: "end" as const, status: "failed" as const },
+			};
+
+			assert.equal(await accounting.writeAttempt(record), true);
+			assert.equal(await accounting.writeAttempt(record), true);
+			assert.equal(
+				await accounting.writeAttempt({ ...record, usage: 99 }),
+				false,
+			);
+			assert.deepEqual(
+				await accounting.readAttempt(runOf(14), "specify", 0, attempt),
+				record,
+			);
+		}
+
+		assert.equal((await accounting.attempts(runOf(14)))?.length, 6);
+		assert.equal(
+			await accounting.readAttempt(runOf(14), "specify", 0, 7),
+			null,
+		);
+
+		const path = join(
+			state,
+			"accounting",
+			runOf(14),
+			"attempts",
+			"specify-r0-1.json",
+		);
+
+		assert.equal(statSync(path).mode & 0o777, 0o600);
+		writeFileSync(path, "{");
+		assert.equal(
+			await accounting.readAttempt(runOf(14), "specify", 0, 1),
+			undefined,
+		);
+		assert.equal(await accounting.attempts(runOf(14)), null);
 	});
 });
 
@@ -8681,6 +9269,242 @@ describe("controller-only validate", () => {
 		);
 	});
 
+	it("recovers a generation's gate digest from its exact diagnosis receipt rather than a guessed path", async () => {
+		const f = await reviewingRun();
+		const book = f.files.claims.get(runOf(14))?.handoff;
+		assert.ok(book?.kind === "selected");
+		const verdict = book.current.verdict;
+		const original = f.executor.baseChecks[0]?.binding;
+		assert.ok(verdict && original);
+		const gatesDigest = digestOf("refreshed gates");
+
+		const { receipt } = assessBase({
+			binding: {
+				...original,
+				baseSha: sha(verdict.gateSha),
+				gateSha: sha(verdict.gateSha),
+			},
+			runtime: {
+				runner: "fixture",
+				node: process.version,
+				platform: process.platform,
+				bwrap: "fixture",
+				protocolDigest: digestOf("protocol"),
+			},
+			startedAt: 0,
+			finishedAt: 10,
+			source: {
+				kind: "ready",
+				treeDigest: digestOf("tree"),
+				lockDigest: digestOf("lock"),
+				gatesDigest,
+			},
+			execution: { kind: "observed", exitCode: 0, wallMs: 5, files: [] },
+			repeat: { kind: "observed", exitCode: 0, wallMs: 5, files: [] },
+			scenarios: [],
+		});
+
+		const root = stateDir();
+
+		const binding = {
+			runId: runOf(14),
+			round: book.current.intent.round,
+			generation: book.current.intent.generation,
+			verdict,
+		};
+
+		const dir = join(
+			validationDir(root, runOf(14), binding.round, binding.generation),
+			"diagnosis",
+			digestOf(JSON.stringify(assessmentBinding(binding))),
+		);
+
+		assert.ok(parseBaseReceipt(JSON.stringify(receipt)));
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, "refreshed-base.json"), JSON.stringify(receipt));
+		const native = fileRunFiles(root);
+		assert.equal(
+			(await native.terminalEvidence?.(runOf(14), 29, book))?.generationGates?.[
+				verdict.gateSha
+			],
+			gatesDigest,
+		);
+		writeFileSync(
+			join(dir, "refreshed-base.json"),
+			JSON.stringify({
+				...receipt,
+				evidence: {
+					...receipt.evidence,
+					binding: { ...receipt.evidence.binding, runId: runOf(15) },
+				},
+			}),
+		);
+		assert.equal(
+			(await native.terminalEvidence?.(runOf(14), 29, book))?.generationGates?.[
+				verdict.gateSha
+			],
+			undefined,
+		);
+
+		const policy = join(
+			validationDir(root, runOf(14), binding.round, binding.generation),
+			"gate-policy.json",
+		);
+
+		const pin = {
+			v: 1,
+			runId: runOf(14),
+			round: binding.round,
+			generation: binding.generation,
+			sourceSha: verdict.gateSha,
+			digest: gatesDigest,
+		};
+
+		writeFileSync(policy, JSON.stringify(pin));
+		assert.equal(
+			(await native.terminalEvidence?.(runOf(14), 29, book))?.generationGates?.[
+				verdict.gateSha
+			],
+			gatesDigest,
+		);
+		writeFileSync(
+			policy,
+			JSON.stringify({ ...pin, generation: binding.generation + 1 }),
+		);
+		assert.equal(
+			(await native.terminalEvidence?.(runOf(14), 29, book))?.generationGates?.[
+				verdict.gateSha
+			],
+			undefined,
+		);
+	});
+
+	it("projects the longest validated artifact prefix before a candidate exists", async () => {
+		const f = await waitingRun();
+		const dir = stateDir();
+		const native = fileRunFiles(dir);
+		const contract = await f.files.readContract(runOf(14));
+		const stored = f.files.contracts.get(runOf(14));
+		assert.ok(contract.kind === "found" && stored);
+		assert.equal(
+			await native.writeContract({
+				contract: contract.contract,
+				bytes: stored.bytes,
+				digest: contract.digest,
+			}),
+			true,
+		);
+		const prefix = await native.terminalEvidence?.(runOf(14), 29, null);
+		assert.deepEqual(prefix?.artifacts, {
+			kind: "contract",
+			contractDigest: contract.digest,
+		});
+		cpSync(join(f.files.artifactRoot, "acceptance"), join(dir, "acceptance"), {
+			recursive: true,
+		});
+
+		const suite = await native.artifacts.read(
+			runOf(14),
+			contract.contract,
+			contract.digest,
+		);
+
+		assert.ok(suite.kind === "found");
+		assert.deepEqual(
+			(await native.terminalEvidence?.(runOf(14), 29, null))?.artifacts,
+			{
+				kind: "acceptance",
+				contractDigest: contract.digest,
+				acceptanceDigest: suite.receipt.acceptanceDigest,
+			},
+		);
+	});
+
+	it("retains validated PR merge time at landing and refuses mismatched merge metadata on reads", async () => {
+		const f = await reviewingRun();
+		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+		await once(f.controller);
+		await f.controller.tick();
+		await f.controller.tick();
+		const dir = stateDir();
+		const native = fileRunFiles(dir);
+		Object.assign(f.files, {
+			ledger: native.ledger,
+			terminalEvidence: native.terminalEvidence,
+		});
+		const mergedAt = "2026-10-29T02:01:00Z";
+
+		const port = controllerCandidatePort({
+			stateDir: dir,
+			exec: async (command, args) => {
+				assert.equal(command, "gh");
+				assert.ok(args.includes(`repos/${repo}/pulls/99`));
+
+				return {
+					code: 0,
+					stderr: "",
+					stdout: JSON.stringify({
+						number: 99,
+						head: {
+							sha: "c".repeat(40),
+							ref: `factory/pr/14-${runOf(14).slice(0, 12)}`,
+							repo: { full_name: repo },
+						},
+						base: { ref: "main", repo: { full_name: repo } },
+						user: { login: BOT_LOGIN, type: "Bot" },
+						body: `<!-- factory:pr ${runOf(14)} -->`,
+						state: "closed",
+						draft: false,
+						merged: true,
+						merge_commit_sha: "e".repeat(40),
+						merged_by: null,
+						merged_at: mergedAt,
+					}),
+				};
+			},
+		});
+
+		assert.ok(f.executor.candidate);
+		f.executor.candidate.observe = port.observe;
+		await f.controller.tick();
+		await f.controller.tick();
+		const row = (await native.ledger?.scan())?.[0]?.row?.row;
+		assert.ok(row?.outcome.kind === "landed");
+		assert.deepEqual(row.outcome.mergedAt, { kind: "known", value: mergedAt });
+		const terminal = f.files.claims.get(runOf(14))?.handoff;
+		assert.ok(terminal);
+		const path = join(dir, "accounting", runOf(14), "merge.json");
+		const saved = JSON.parse(readFileSync(path, "utf8"));
+		assert.equal(statSync(path).mode & 0o777, 0o600);
+		writeFileSync(path, JSON.stringify({ ...saved, repo: "other/repo" }));
+		assert.equal(
+			(await native.terminalEvidence?.(runOf(14), 40, terminal))?.mergedAt,
+			undefined,
+		);
+		writeFileSync(path, JSON.stringify({ ...saved, mergeSha: "f".repeat(40) }));
+		assert.equal(
+			(await native.terminalEvidence?.(runOf(14), 40, terminal))?.mergedAt,
+			undefined,
+		);
+	});
+
+	it("persists a completed candidate review disposition before its handoff", async () => {
+		const f = await reviewingRun();
+		f.files.accounting = fileRunFiles(f.files.artifactRoot).accounting;
+		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+		await once(f.controller);
+
+		const record = await f.files.accounting!.readAttempt(
+			runOf(14),
+			"review",
+			0,
+			1,
+		);
+
+		assert.equal(record?.disposition, "completed");
+		assert.equal(record?.usage, 40);
+	});
+
 	it("hops from CI to isolated review and waits for the owner with charged usage", async () => {
 		const f = await reviewingRun();
 		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
@@ -11231,6 +12055,28 @@ describe("specify: linked runs and answers", () => {
 		);
 	});
 
+	it("puts the original run ID on a linked terminal row without adding its tokens again", async () => {
+		const outbox = fileLedgerOutbox(stateDir());
+
+		const ctx = await askedThenRelabeled(
+			(github, issue) => {
+				github.comment(issue, "Use package.json.", user("giuseppecrj"));
+			},
+			undefined,
+			({ files, executor }) => {
+				Object.assign(files, { ledger: outbox });
+				executor.outputs = [QUESTIONS_TEXT];
+			},
+		);
+
+		const row = (await outbox.scan())?.[0]?.row?.row;
+		assert.ok(row);
+		assert.equal(row.runId, nextRun);
+		assert.deepEqual(row.previousRunId, { kind: "known", value: runOf(14) });
+		assert.equal(row.usage.tokens.total, 900);
+		assert.equal(ctx.executor.launches.length, 2);
+	});
+
 	it("links a relabel after needs_info to the earlier run and feeds it only authorized answers", async () => {
 		const { github, files, executor, logs, writes, report } =
 			await askedThenRelabeled((github, issue) => {
@@ -11827,5 +12673,432 @@ describe("specify: linked runs and answers", () => {
 
 		assert.equal(executor.launches.length, 1);
 		assert.equal(statuses(github, 14).length, 3);
+	});
+});
+
+describe("ledger outbox enrollment", () => {
+	const ledgerApi = (fake: LedgerGit) =>
+		ledgerApiOf(
+			new GitHubPublicationApi(
+				fake.exec,
+				ledgerRepo,
+				{},
+				async () => true,
+				async () => {},
+			),
+		);
+
+	async function remoteRows(fake: LedgerGit) {
+		const tip = fake.refs.get("factory/ledger") ?? assert.fail("no ledger");
+		const tree = fake.trees.get(`commit:${tip}`)?.get("tree");
+		assert.ok(tree !== undefined && isGitSha(tree));
+
+		const file = await readLedgerFile(
+			new GitHubPublicationApi(fake.exec, ledgerRepo),
+			tree,
+		);
+
+		return parseLedger(file.bytes);
+	}
+
+	function needsInfoWorld(outbox: LedgerOutbox) {
+		const ctx = world(null, outbox);
+		ctx.wire.intercept = writesWire(ctx.github, []);
+		ctx.github.add(labeled(14));
+		ctx.executor.outputs = [QUESTIONS_TEXT];
+		ctx.executor.behaviors = [{ kind: "pass", usage: 300 }];
+
+		return ctx;
+	}
+
+	async function instrument(files: RunFiles) {
+		assert.equal(
+			await files.accounting?.begin({
+				v: 1,
+				runId: runOf(14),
+				startedAt: new Date(START).toISOString(),
+				policy: {
+					workflowSha: sha(MAIN_SHA),
+					workflowDigest: digestOf(TRUSTED_WORKFLOW),
+					gates: {
+						kind: "known",
+						value: { sourceSha: sha(MAIN_SHA), digest: digestOf("gates") },
+					},
+					autonomy: {
+						approveMerge: "always",
+						land: "propose",
+						digest: digestOf(
+							JSON.stringify({ approveMerge: "always", land: "propose" }),
+						),
+					},
+				},
+			}),
+			true,
+		);
+	}
+
+	it("projects retained receipt facts, model identities and uncertain charges without counting aggregate children twice", async () => {
+		const dir = stateDir();
+		const outbox = fileLedgerOutbox(dir);
+		const ctx = needsInfoWorld(outbox);
+		const native = fileRunFiles(dir);
+		ctx.files.accounting = native.accounting;
+		ctx.files.terminalEvidence = native.terminalEvidence;
+		await instrument(native);
+		const controller = ctx.start();
+		await controller.tick();
+		const input = ctx.executor.launches[0];
+		assert.ok(input);
+		const receipt = resultOf(input, { kind: "passed" }, 300).receipt;
+		const stage = join(dir, "stages", runOf(14), "specify-1");
+		mkdirSync(join(stage, "draft"), { recursive: true });
+		writeFileSync(join(stage, "receipt.json"), JSON.stringify(receipt));
+		writeFileSync(join(stage, "specify.json"), "{}");
+		writeFileSync(
+			join(stage, "draft", "egress.requests.jsonl"),
+			`${JSON.stringify({ kind: "result", req: 1, inputTokens: 300, outputTokens: 0 })}\n${JSON.stringify({ kind: "dispatch", req: 2, inputTokenEstimate: 20, maxOutputTokens: 100 })}\n`,
+		);
+		writeFileSync(
+			join(stage, "draft", "receipt.json"),
+			JSON.stringify({
+				...receipt,
+				models: { ...receipt.models, observed: "gpt-6.1-sol" },
+				fallback: {
+					requested: "xai/grok-4.6",
+					observed: "grok-4.6",
+					outcome: { kind: "passed" },
+					settlement: { event: "agent_settled", aborted: false },
+					refusal: null,
+				},
+			}),
+		);
+		await once(controller);
+		const row = (await outbox.scan())?.[0]?.row?.row;
+		assert.ok(row);
+		assert.equal(row.stages.kind, "known");
+		assert.equal(row.models.kind, "known");
+		assert.deepEqual(row.usage.parentTokens, { kind: "known", value: 300 });
+		assert.deepEqual(row.usage.childTokens, { kind: "known", value: 0 });
+		assert.deepEqual(row.usage.unattributedTokens, {
+			kind: "known",
+			value: 120,
+		});
+		assert.deepEqual(row.previousRunId, { kind: "known", value: null });
+		assert.equal(row.usage.tokens.total, 420);
+		assert.equal(row.usage.tokens.kind, "uncertain");
+		assert.ok(row.gaps.includes("request_unsettled"));
+		assert.equal(
+			row.stages.kind === "known" && row.stages.value[0]?.tokens.total,
+			420,
+		);
+		assert.equal(
+			row.stages.kind === "known" && row.stages.value[0]?.attempts.kind,
+			"known",
+		);
+		assert.equal(
+			row.models.kind === "known" && row.models.value[0]?.observed.kind,
+			"known",
+		);
+		assert.equal(row.redactedReceiptDigests.length, 2);
+		assert.equal(row.contextPressure.kind, "unavailable");
+		assert.deepEqual(row.startedAt, {
+			kind: "known",
+			value: new Date(START).toISOString(),
+		});
+		assert.equal(row.provenance.kind, "production");
+		assert.equal(row.models.kind === "known" && row.models.value.length, 2);
+		assert.equal(
+			row.models.kind === "known" && row.models.value[1]?.requested,
+			"xai/grok-4.6",
+		);
+
+		const accept = join(dir, "stages", runOf(14), "accept-1");
+		mkdirSync(accept);
+		writeFileSync(
+			join(accept, "receipt.json"),
+			JSON.stringify({
+				...receipt,
+				stage: "accept",
+				usage: { ...receipt.usage, total: 20, parent: 20, gateway: 20 },
+			}),
+		);
+		const later = await native.terminalEvidence?.(runOf(14), 300, null);
+		assert.deepEqual(
+			later?.stages?.kind === "known" && later.stages.value.map((s) => s.stage),
+			["specify", "accept"],
+		);
+	});
+
+	it("makes accounting unavailable, never a known empty zero, when the stages directory cannot be read", async () => {
+		const dir = stateDir();
+		const native = fileRunFiles(dir);
+		await instrument(native);
+
+		const none = await native.terminalEvidence?.(runOf(14), 7, null);
+		assert.deepEqual(none?.stages, { kind: "known", value: [] });
+
+		mkdirSync(join(dir, "stages"), { recursive: true });
+		writeFileSync(join(dir, "stages", runOf(14)), "not a directory");
+
+		const unreadable = await native.terminalEvidence?.(runOf(14), 7, null);
+		const gap = { kind: "unavailable", reason: "receipt_invalid" };
+		assert.deepEqual(unreadable?.stages, gap);
+		assert.deepEqual(unreadable?.models, gap);
+		assert.deepEqual(unreadable?.usage, {
+			tokens: {
+				kind: "lower_bound",
+				unit: "tokens",
+				total: 7,
+				reason: "receipt_invalid",
+			},
+			parentTokens: gap,
+			childTokens: gap,
+			unattributedTokens: gap,
+			money: { kind: "unavailable", reason: "provider_not_reported" },
+		});
+		assert.deepEqual(unreadable?.redactedReceiptDigests, []);
+	});
+
+	it("records interrupted attempts on the terminal row without charging the interruption twice", async () => {
+		const dir = stateDir();
+		const outbox = fileLedgerOutbox(dir);
+		const ctx = world(null, outbox);
+
+		ctx.files.accounting = fileRunFiles(dir).accounting;
+		await instrument(ctx.files);
+		ctx.github.add(labeled(14));
+		ctx.executor.behaviors = [{ kind: "hang" }];
+		await ctx.start().tick();
+		ctx.executor.spentBy.set("specify-1", 17);
+		await ctx.start().tick();
+		ctx.clock.t += 10_000;
+		ctx.executor.behaviors = [{ kind: "refuse", usage: 3 }];
+		await once(ctx.start());
+		const row = (await outbox.scan())?.[0]?.row?.row;
+
+		assert.ok(row);
+		assert.deepEqual(row.interruptedAttempts, { kind: "known", value: 1 });
+		assert.equal(row.usage.tokens.total, 20);
+	});
+
+	it("keeps the terminal snapshot before the needs_info marker and freezes one row after it", async () => {
+		const dir = stateDir();
+		const outbox = fileLedgerOutbox(dir);
+		const ctx = needsInfoWorld(outbox);
+		const runDir = join(dir, "ledger", runOf(14));
+		const seen: string[] = [];
+		const writes: string[] = [];
+		const inner = writesWire(ctx.github, writes);
+
+		ctx.wire.intercept = async (command, args) => {
+			const body = args.find((arg) => arg.startsWith("body="))?.slice(5) ?? "";
+			const parsed = parseMarker(body);
+
+			if (parsed.kind === "marker" && parsed.marker.status === "needs_info")
+				seen.push(
+					`${existsSync(join(runDir, "terminal.json"))}:${existsSync(join(runDir, "row.json"))}`,
+				);
+
+			return inner(command, args);
+		};
+
+		await once(ctx.start());
+		assert.equal(statuses(ctx.github, 14).at(-1), "3:needs_info");
+		assert.deepEqual(seen, ["true:false"]);
+
+		const jobs = (await outbox.scan()) ?? assert.fail("scan");
+		assert.equal(jobs.length, 1);
+		const row = jobs[0]?.row?.row ?? assert.fail("row");
+		assert.equal(row.outcome.kind, "needs_info");
+		assert.equal(row.terminalMarker.seq, 3);
+		assert.deepEqual(row.usage.tokens, {
+			kind: "lower_bound",
+			unit: "tokens",
+			total: 300,
+			reason: "not_instrumented",
+		});
+		assert.equal(row.usage.money.kind, "unavailable");
+		assert.equal(row.issue, 14);
+
+		const fake = new LedgerGit();
+		const first = await pumpLedger(outbox, ledgerApi(fake), ctx.clock.now());
+		assert.equal(first.published, 1);
+		assert.equal(first.pending, 0);
+		const again = await pumpLedger(outbox, ledgerApi(fake), ctx.clock.now());
+		assert.deepEqual([again.published, again.pending], [0, 0]);
+
+		const restarted = ctx.start();
+		await once(restarted);
+		await once(restarted);
+		assert.deepEqual(await outbox.scan(), []);
+		const rows = await remoteRows(fake);
+		assert.equal(rows.length, 1);
+		assert.equal(rows[0]?.kind === "known" && rows[0].row.runId, runOf(14));
+	});
+
+	it("finishes the row from the confirmed marker after a crash before row.json", async () => {
+		const dir = stateDir();
+		const outbox = fileLedgerOutbox(dir);
+		const ctx = needsInfoWorld(outbox);
+		await once(ctx.start());
+		const rowPath = join(dir, "ledger", runOf(14), "row.json");
+		const before = readFileSync(rowPath);
+		rmSync(rowPath);
+		assert.equal((await outbox.scan())?.[0]?.row, null);
+
+		const restarted = ctx.start();
+		await once(restarted);
+		await once(restarted);
+		assert.ok(readFileSync(rowPath).equals(before));
+		assert.equal(ctx.executor.launches.length, 1);
+	});
+
+	it("posts no marker for an unencodable snapshot, reports it blocked, and ends once it encodes", async () => {
+		const dir = stateDir();
+		const outbox = fileLedgerOutbox(dir);
+		const ctx = needsInfoWorld(outbox);
+		const native = fileRunFiles(dir);
+		let mismatched = true;
+
+		ctx.files.accounting = {
+			...(native.accounting ?? assert.fail("accounting")),
+			start: async (runId) => {
+				const start = await native.accounting?.start(runId);
+
+				return start == null || !mismatched
+					? start
+					: {
+							...start,
+							policy: { ...start.policy, workflowDigest: digestOf("other") },
+						};
+			},
+		};
+		await instrument(native);
+		const controller = ctx.start();
+		await once(controller);
+
+		assert.notEqual(statuses(ctx.github, 14).at(-1), "3:needs_info");
+		assert.ok(ctx.logs.some((entry) => entry.event === "ledger_row_invalid"));
+		assert.deepEqual(
+			((await outbox.scan()) ?? assert.fail("scan")).map((job) => [
+				job.runId,
+				job.row,
+				job.retry?.reason,
+				job.retry?.blocked,
+			]),
+			[[runOf(14), null, "row_invalid", true]],
+		);
+		const backlog = await readLedgerBacklog(dir, ctx.clock.now());
+		assert.deepEqual(
+			[backlog.state, backlog.pending, backlog.blocked, backlog.lastError],
+			["blocked", 1, 1, "row_invalid"],
+		);
+
+		mismatched = false;
+		ctx.clock.t += 60_000;
+		await once(controller);
+		assert.equal(statuses(ctx.github, 14).at(-1), "3:needs_info");
+		assert.equal(
+			(await outbox.scan())?.[0]?.row?.row.outcome.kind,
+			"needs_info",
+		);
+		assert.equal(ctx.executor.launches.length, 1);
+	});
+
+	it("retries a failed freeze on later ticks until row.json is durable, without a restart", async () => {
+		const dir = stateDir();
+		const real = fileLedgerOutbox(dir);
+		let failures = 3;
+		let calls = 0;
+
+		const outbox: LedgerOutbox = {
+			...real,
+			freeze: async (runId, marker) => {
+				calls += 1;
+
+				if (failures > 0) {
+					failures -= 1;
+
+					return "unwritable";
+				}
+
+				return real.freeze(runId, marker);
+			},
+		};
+
+		const ctx = needsInfoWorld(outbox);
+		const controller = ctx.start();
+		const rowPath = join(dir, "ledger", runOf(14), "row.json");
+
+		for (let tick = 0; tick < 6 && !existsSync(rowPath); tick++) {
+			ctx.clock.t += 60_000;
+			await once(controller);
+		}
+
+		assert.equal(statuses(ctx.github, 14).at(-1), "3:needs_info");
+		assert.equal(existsSync(rowPath), true);
+		assert.equal(calls, 4);
+		const settled = calls;
+		await once(controller);
+		await once(controller);
+		assert.equal(calls, settled);
+		assert.equal(ctx.executor.launches.length, 1);
+	});
+
+	it("serve pumps the outbox after every tick", async () => {
+		const ctx = world();
+		const stop = new AbortController();
+		const order: string[] = [];
+		let ticks = 0;
+
+		await serveLoop({
+			orchestrator: ctx.start(),
+			stateDir: stateDir(),
+			signal: stop.signal,
+			log: () => {},
+			pump: async () => {
+				order.push(`pump${ticks}`);
+
+				return null;
+			},
+			sleep: async () => {
+				ticks += 1;
+				order.push(`sleep${ticks}`);
+
+				if (ticks === 2) stop.abort();
+			},
+		});
+
+		assert.deepEqual(order, ["pump0", "sleep1", "pump1", "sleep2"]);
+	});
+
+	it("posts no terminal marker while the snapshot cannot be written, then ends once it can", async () => {
+		const dir = stateDir();
+		const real = fileLedgerOutbox(dir);
+		let writable = false;
+
+		const outbox: LedgerOutbox = {
+			...real,
+			prepare: async (runId, snapshot) =>
+				writable && real.prepare(runId, snapshot),
+		};
+
+		const ctx = needsInfoWorld(outbox);
+		const controller = ctx.start();
+		await once(controller);
+		assert.notEqual(statuses(ctx.github, 14).at(-1), "3:needs_info");
+		assert.ok(
+			ctx.logs.some((entry) => entry.event === "ledger_terminal_unwritable"),
+		);
+
+		writable = true;
+		ctx.clock.t += 60_000;
+		await once(controller);
+		assert.equal(statuses(ctx.github, 14).at(-1), "3:needs_info");
+		assert.equal(
+			(await outbox.scan())?.[0]?.row?.row.outcome.kind,
+			"needs_info",
+		);
+		assert.equal(ctx.executor.launches.length, 1);
 	});
 });

@@ -57,12 +57,34 @@ import {
 	arrayOf,
 	objectOf,
 	fieldOf as jsonField,
+	parseJson as parseJsonText,
 	textOf,
 	textsOf,
 	countOf,
 } from "./sandbox/json.ts";
 import { type Exec } from "../src/gh.ts";
-import { digestOf, type Verdict } from "../src/run.ts";
+import { digestOf, type Verdict, type Stage } from "../src/run.ts";
+import {
+	frozenRowOf,
+	ledgerApiOf,
+	ledgerRowOf,
+	pumpLedger,
+	parseAttemptEnd,
+	parseRunStart,
+	AUTONOMY_DIGEST,
+	type TerminalEvidence,
+	type LedgerRow,
+	ledgerModelOf,
+	parseAdoption,
+	type RunAccounting,
+	type AttemptEnd,
+	type LedgerBacklog,
+	LedgerRowError,
+	parseAnchor,
+	parseRetry,
+	type LedgerOutbox,
+	type OutboxJob,
+} from "../src/ledger.ts";
 import { isGitSha } from "../src/workflow.ts";
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -74,6 +96,7 @@ import {
 	lstatSync,
 } from "node:fs";
 import {
+	baseTreeDigest,
 	materializeFromDirectories,
 	replacementDigest,
 	replayHeldoutCandidate,
@@ -112,6 +135,7 @@ import {
 	realpath,
 	rename,
 	rm,
+	stat,
 	unlink,
 	writeFile,
 } from "node:fs/promises";
@@ -2055,13 +2079,21 @@ export function controllerDiagnosis(config: {
 	};
 }
 
-export function fileRunFiles(stateDir: string): RunFiles {
+export function fileRunFiles(
+	stateDir: string,
+	policySource?: { readonly fetch?: TarballFetch },
+): RunFiles {
 	const root = resolve(stateDir);
 	const claims = join(root, "claims");
 	const workspaces = join(root, "workspaces");
 	const contracts = join(root, "contracts");
 	const links = join(root, "links");
 	const answers = join(root, "answers");
+
+	const policyPins = new Map<
+		GitSha,
+		{ workflowDigest: Digest; gatesDigest: Digest }
+	>();
 
 	const workspacePath = (runId: string) => join(workspaces, runId);
 
@@ -2078,6 +2110,101 @@ export function fileRunFiles(stateDir: string): RunFiles {
 	return {
 		workspacePath,
 		artifacts: fileArtifacts(root),
+		ledger: fileLedgerOutbox(root),
+		accounting: fileRunAccounting(root),
+		terminalEvidence: (runId, floor, candidate) =>
+			readTerminalEvidence(root, runId, floor, candidate),
+		prepareRun:
+			policySource === undefined
+				? undefined
+				: async (input) => {
+						const accounting = fileRunAccounting(root);
+						const existing = await accounting.start(input.runId);
+
+						if (existing === undefined) return false;
+
+						if (existing !== null)
+							return (
+								existing.policy.workflowSha === input.workflowSha &&
+								existing.policy.workflowDigest === input.workflowDigest &&
+								existing.policy.gates.kind === "known"
+							);
+
+						const begin = (gatesDigest: Digest) =>
+							accounting.begin({
+								v: 1,
+								runId: input.runId,
+								startedAt: input.startedAt,
+								policy: {
+									workflowSha: input.workflowSha,
+									workflowDigest: input.workflowDigest,
+									gates: {
+										kind: "known",
+										value: {
+											sourceSha: input.workflowSha,
+											digest: gatesDigest,
+										},
+									},
+									autonomy: {
+										approveMerge: "always",
+										land: "propose",
+										digest: AUTONOMY_DIGEST,
+									},
+								},
+							});
+
+						const cached = policyPins.get(input.workflowSha);
+
+						if (cached !== undefined)
+							return (
+								cached.workflowDigest === input.workflowDigest &&
+								(await begin(cached.gatesDigest))
+							);
+						let scratch: string | null = null;
+
+						try {
+							privateDir(root);
+							scratch = await mkdtemp(join(root, "policy-"));
+							const workspace = join(scratch, "source");
+							await mkdir(workspace, { mode: 0o700 });
+
+							const checked = await checkoutWorkspace({
+								stateDir: scratch,
+								workspace,
+								runId: input.runId,
+								repo: input.repo,
+								sha: input.workflowSha,
+								fetch: policySource.fetch ?? ghTarball,
+							});
+
+							if (
+								checked.kind !== "ready" ||
+								checked.omitted !== 0 ||
+								digestOf(
+									await readFile(
+										join(workspace, ".github/factory/WORKFLOW.md"),
+									),
+								) !== input.workflowDigest
+							)
+								return false;
+
+							const gatesDigest = baseTreeDigest(
+								join(workspace, ".github/factory/gates"),
+							);
+
+							policyPins.set(input.workflowSha, {
+								workflowDigest: input.workflowDigest,
+								gatesDigest,
+							});
+
+							return begin(gatesDigest);
+						} catch {
+							return false;
+						} finally {
+							if (scratch !== null)
+								await rm(scratch, { recursive: true, force: true });
+						}
+					},
 		async readContract(runId) {
 			return readStoredContract(root, runId);
 		},
@@ -2283,6 +2410,1112 @@ export function fileRunFiles(stateDir: string): RunFiles {
 				`${JSON.stringify(claim)}\n`,
 			);
 		},
+	};
+}
+
+async function syncDirectory(dir: string): Promise<boolean> {
+	try {
+		const handle = await open(dir, "r");
+
+		try {
+			await handle.sync();
+		} finally {
+			await handle.close();
+		}
+
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+async function installOnce(path: string, text: string): Promise<boolean> {
+	const existing = await readFile(path, "utf8").catch(() => null);
+
+	if (existing !== null) return existing === text;
+
+	try {
+		await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+	} catch {
+		return false;
+	}
+
+	return (
+		(await writeAtomic(path, text)) && (await syncDirectory(dirname(path)))
+	);
+}
+
+export function fileRunAccounting(stateDir: string): RunAccounting {
+	const root = join(resolve(stateDir), "accounting");
+	const attempts = (runId: Digest) => join(root, runId, "attempts");
+
+	const name = (stage: string, round: number, attempt: number) =>
+		`${stage}-r${round}-${attempt}.json`;
+
+	return {
+		async start(runId) {
+			try {
+				const parsed = parseRunStart(
+					parseJsonText(
+						await readFile(join(root, runId, "policy.json"), "utf8"),
+					),
+				);
+
+				return parsed?.runId === runId ? parsed : undefined;
+			} catch (error) {
+				return error instanceof Error && errorCode(error) === "ENOENT"
+					? null
+					: undefined;
+			}
+		},
+		async begin(record) {
+			if (parseRunStart(record) === null) return false;
+
+			return installOnce(
+				join(root, record.runId, "policy.json"),
+				`${JSON.stringify(record)}\n`,
+			);
+		},
+		async readAttempt(runId, stage, round, attempt) {
+			try {
+				const parsed = parseAttemptEnd(
+					parseJsonText(
+						await readFile(
+							join(attempts(runId), name(stage, round, attempt)),
+							"utf8",
+						),
+					),
+				);
+
+				return parsed?.runId === runId &&
+					parsed.stage === stage &&
+					parsed.round === round &&
+					parsed.attempt === attempt
+					? parsed
+					: undefined;
+			} catch (error) {
+				return error instanceof Error && errorCode(error) === "ENOENT"
+					? null
+					: undefined;
+			}
+		},
+		async writeAttempt(record) {
+			return installOnce(
+				join(
+					attempts(record.runId),
+					name(record.stage, record.round, record.attempt),
+				),
+				`${JSON.stringify(record)}\n`,
+			);
+		},
+		async attempts(runId) {
+			try {
+				const entries = await readdir(attempts(runId)).catch(
+					(error: NodeJS.ErrnoException) =>
+						error.code === "ENOENT" ? [] : Promise.reject(error),
+				);
+
+				const records: AttemptEnd[] = [];
+
+				for (const entry of entries) {
+					const record = parseAttemptEnd(
+						parseJsonText(await readFile(join(attempts(runId), entry), "utf8")),
+					);
+
+					if (
+						record === null ||
+						record.runId !== runId ||
+						entry !== name(record.stage, record.round, record.attempt)
+					)
+						return null;
+					records.push(record);
+				}
+
+				return records;
+			} catch {
+				return null;
+			}
+		},
+	};
+}
+
+/** The verification manifest's name in a verification state directory. */
+export const VERIFICATION_FILE = "verification.json";
+
+export type VerificationPin =
+	| { readonly kind: "production" }
+	| {
+			readonly kind: "pinned";
+			readonly digest: Digest;
+			readonly tokenCap: number;
+	  }
+	| {
+			readonly kind: "refused";
+			readonly reason:
+				| "verification_state"
+				| "verification_state_not_new"
+				| "verification_manifest_mismatch"
+				| "verification_unwritable";
+	  };
+
+/**
+ * Binds a verification-only token cap to its state directory. The first
+ * run writes `verification.json`, naming the repo, the issue scope and the
+ * cap, into a directory that holds nothing but the lock. Every later run
+ * must name the same bytes, and a run without the cap refuses a directory
+ * that has one, so verification rows never mix with production state.
+ */
+export async function pinVerification(
+	stateDir: string,
+	wanted: {
+		readonly repo: RepoSlug;
+		readonly issues: readonly number[];
+		readonly tokenCap: number;
+	} | null,
+): Promise<VerificationPin> {
+	const path = join(stateDir, VERIFICATION_FILE);
+
+	const existing = await readFile(path, "utf8").catch(
+		(error: NodeJS.ErrnoException) =>
+			error.code === "ENOENT" ? null : undefined,
+	);
+
+	if (existing === undefined)
+		return { kind: "refused", reason: "verification_state" };
+
+	if (wanted === null)
+		return existing === null
+			? { kind: "production" }
+			: { kind: "refused", reason: "verification_state" };
+
+	const text = `${JSON.stringify({
+		v: 1,
+		repo: wanted.repo,
+		issues: [...new Set(wanted.issues)].sort((a, b) => a - b),
+		tokenCap: wanted.tokenCap,
+	})}\n`;
+
+	if (existing !== null)
+		return existing === text
+			? { kind: "pinned", digest: digestOf(text), tokenCap: wanted.tokenCap }
+			: { kind: "refused", reason: "verification_manifest_mismatch" };
+
+	const entries = await readdir(stateDir).catch(() => null);
+
+	if (entries === null || entries.some((name) => name !== HOLDER_FILE))
+		return { kind: "refused", reason: "verification_state_not_new" };
+
+	return (await installOnce(path, text))
+		? { kind: "pinned", digest: digestOf(text), tokenCap: wanted.tokenCap }
+		: { kind: "refused", reason: "verification_unwritable" };
+}
+
+/**
+ * The controller-private ledger outbox under `<state>/ledger`. Each run's
+ * terminal snapshot and row are write-once; only its retry record and the
+ * shared anchor are replaced.
+ */
+export function fileLedgerOutbox(stateDir: string): LedgerOutbox {
+	const root = join(resolve(stateDir), "ledger");
+	const dirOf = (runId: string) => join(root, runId);
+
+	const readText = (path: string) =>
+		readFile(path, "utf8").then(
+			(text) => text,
+			(error: NodeJS.ErrnoException) =>
+				error.code === "ENOENT" ? null : Promise.reject(error),
+		);
+
+	const invalidJob = async (
+		runId: Digest,
+		observedAt: string | null,
+	): Promise<OutboxJob> => ({
+		runId,
+		observedAt:
+			observedAt ??
+			(await stat(dirOf(runId)).then(
+				(info) => info.mtime.toISOString(),
+				() => new Date(0).toISOString(),
+			)),
+		row: null,
+		retry: { attempts: 1, nextAt: 0, reason: "state_invalid", blocked: true },
+		adoption: null,
+	});
+
+	/** One job, `null` when it is published or not yet enrolled; a corrupt record blocks only it. */
+	const jobOf = async (runId: Digest): Promise<OutboxJob | null> => {
+		const dir = dirOf(runId);
+		let observedAt: string | null = null;
+
+		try {
+			if ((await readText(join(dir, "published.json"))) !== null) return null;
+			const terminal = await readText(join(dir, "terminal.json"));
+
+			if (terminal === null) {
+				const blocked = await readText(join(dir, "blocked.json"));
+
+				if (blocked === null) return null;
+
+				const at = textOf(
+					jsonField(objectOf(parseJsonText(blocked)), "observedAt"),
+				);
+
+				if (at === null || !validLedgerInstant(at))
+					return invalidJob(runId, null);
+
+				return {
+					runId,
+					observedAt: at,
+					row: null,
+					retry: {
+						attempts: 1,
+						nextAt: 0,
+						reason: "row_invalid",
+						blocked: true,
+					},
+					adoption: null,
+				};
+			}
+
+			observedAt = textOf(
+				jsonField(objectOf(parseJsonText(terminal)), "terminalObservedAt"),
+			);
+
+			if (observedAt === null) return invalidJob(runId, null);
+
+			const rowBytes = await readFile(join(dir, "row.json")).catch(
+				(error: NodeJS.ErrnoException) =>
+					error.code === "ENOENT" ? null : Promise.reject(error),
+			);
+
+			const row = rowBytes === null ? null : frozenRowOf(rowBytes);
+
+			if (rowBytes !== null && row === null)
+				return invalidJob(runId, observedAt);
+			const retryText = await readText(join(dir, "retry.json"));
+
+			const retry =
+				retryText === null ? null : parseRetry(parseJsonText(retryText));
+
+			if (retryText !== null && retry === null)
+				return invalidJob(runId, observedAt);
+			const adoptionText = await readText(join(dir, "adoption.json"));
+
+			const adoption =
+				adoptionText === null
+					? null
+					: parseAdoption(parseJsonText(adoptionText));
+
+			if (adoptionText !== null && adoption === null)
+				return invalidJob(runId, observedAt);
+
+			return { runId, observedAt, row, retry, adoption };
+		} catch {
+			return invalidJob(runId, observedAt);
+		}
+	};
+
+	return {
+		async prepare(runId, snapshot) {
+			const path = join(dirOf(runId), "terminal.json");
+			const existing = await readFile(path, "utf8").catch(() => null);
+
+			if (existing !== null) return parseJsonText(existing) !== undefined;
+
+			return installOnce(path, `${JSON.stringify(snapshot)}\n`);
+		},
+		async block(runId, observedAt) {
+			const path = join(dirOf(runId), "blocked.json");
+			const existing = await readFile(path, "utf8").catch(() => null);
+
+			if (existing !== null) return true;
+
+			return installOnce(path, `${JSON.stringify({ v: 1, observedAt })}\n`);
+		},
+		async freeze(runId, marker) {
+			const dir = dirOf(runId);
+			const stored = await readFile(join(dir, "row.json")).catch(() => null);
+
+			if (stored !== null)
+				return frozenRowOf(stored)?.row.runId === runId ? "frozen" : "invalid";
+
+			const terminal = await readFile(join(dir, "terminal.json"), "utf8").catch(
+				() => null,
+			);
+
+			if (terminal === null) return "absent";
+			const snapshot = objectOf(parseJsonText(terminal));
+
+			if (snapshot === null) return "invalid";
+			let bytes: Buffer;
+
+			try {
+				const row = ledgerRowOf({
+					...snapshot,
+					terminalMarker: { seq: marker.seq, digest: marker.digest },
+				});
+
+				if (row.row.runId !== runId) return "invalid";
+				bytes = row.bytes;
+			} catch (error) {
+				if (error instanceof LedgerRowError) return "invalid";
+				throw error;
+			}
+
+			return (await installOnce(join(dir, "row.json"), bytes.toString()))
+				? "frozen"
+				: "unwritable";
+		},
+		async scan() {
+			try {
+				const names = await readdir(root).catch(
+					(error: NodeJS.ErrnoException) =>
+						error.code === "ENOENT" ? [] : Promise.reject(error),
+				);
+
+				const jobs: OutboxJob[] = [];
+
+				for (const runId of names.sort()) {
+					if (!isDigest(runId)) continue;
+					const job = await jobOf(runId);
+
+					if (job !== null) jobs.push(job);
+				}
+
+				return jobs;
+			} catch {
+				return null;
+			}
+		},
+		async anchor() {
+			try {
+				const text = await readText(join(root, "anchor.json"));
+
+				if (text !== null) return parseAnchor(parseJsonText(text)) ?? "invalid";
+
+				const names = await readdir(root).catch(
+					(error: NodeJS.ErrnoException) =>
+						error.code === "ENOENT" ? [] : Promise.reject(error),
+				);
+
+				for (const runId of names)
+					if (
+						isDigest(runId) &&
+						(await lstat(join(dirOf(runId), "published.json")).then(
+							() => true,
+							(error: NodeJS.ErrnoException) =>
+								error.code === "ENOENT" ? false : Promise.reject(error),
+						))
+					)
+						return "orphaned";
+
+				return null;
+			} catch {
+				return "invalid";
+			}
+		},
+		async published(receipt, anchor) {
+			const installed = await installOnce(
+				join(dirOf(receipt.runId), "published.json"),
+				`${JSON.stringify(receipt)}\n`,
+			);
+
+			if (!installed) return false;
+			await writeAtomic(
+				join(root, "anchor.json"),
+				`${JSON.stringify(anchor)}\n`,
+			);
+
+			return true;
+		},
+		async adoption(runId, cursor) {
+			return writeAtomic(
+				join(dirOf(runId), "adoption.json"),
+				`${JSON.stringify(cursor)}\n`,
+			);
+		},
+		async retry(runId, retry) {
+			try {
+				await mkdir(dirOf(runId), { recursive: true, mode: 0o700 });
+			} catch {
+				return false;
+			}
+
+			return writeAtomic(
+				join(dirOf(runId), "retry.json"),
+				`${JSON.stringify(retry)}\n`,
+			);
+		},
+	};
+}
+
+/** Read-only per-run token floors; aggregate execution receipts cover their descendants. */
+function validLedgerInstant(value: string): boolean {
+	if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value))
+		return false;
+	const time = Date.parse(value);
+
+	return (
+		Number.isFinite(time) &&
+		new Date(time).toISOString() === value.replace(/(?<!\.[0-9]{3})Z$/, ".000Z")
+	);
+}
+
+const EXECUTION_NAME =
+	/^(specify|accept|build|review)(?:-r[0-9]+)?-[1-9][0-9]*(?:\.[1-9][0-9]*)?$/;
+
+/** Project only validated controller-private records; never scan a workspace. */
+export async function readTerminalEvidence(
+	stateDir: string,
+	runId: Digest,
+	floor: number,
+	candidate: CandidateState | null,
+): Promise<TerminalEvidence> {
+	const { executionCharge, readStageReceipt } = await import("./sandbox.ts");
+	const root = join(resolve(stateDir), "stages", runId);
+
+	const listed = await readdir(root).catch((error: NodeJS.ErrnoException) =>
+		error.code === "ENOENT" ? [] : null,
+	);
+
+	const names = (listed ?? [])
+		.filter((name) => EXECUTION_NAME.test(name))
+		.sort();
+
+	const accounting = fileRunAccounting(stateDir);
+	const attempts = await accounting.attempts(runId);
+	const start = await accounting.start(runId);
+	const known = <T>(value: T) => ({ kind: "known" as const, value });
+
+	const missing = {
+		kind: "unavailable" as const,
+		reason: "receipt_missing" as const,
+	};
+
+	const stages = new Map<
+		Stage,
+		{ total: number; uncertain: number; wall: number; wallComplete: boolean }
+	>();
+
+	const models = new Map<
+		string,
+		NonNullable<ReturnType<typeof ledgerModelOf>>
+	>();
+
+	const digests = new Set<Digest>();
+
+	let total = 0,
+		uncertain = 0,
+		parent = 0,
+		children = 0;
+
+	let splitComplete = true;
+
+	const stageOf = (stage: Stage) => {
+		let value = stages.get(stage);
+
+		if (value === undefined) {
+			value = { total: 0, uncertain: 0, wall: 0, wallComplete: true };
+			stages.set(stage, value);
+		}
+
+		return value;
+	};
+
+	for (const name of names) {
+		const stageName = EXECUTION_NAME.exec(name)?.[1];
+
+		if (
+			stageName !== "specify" &&
+			stageName !== "accept" &&
+			stageName !== "build" &&
+			stageName !== "review"
+		)
+			continue;
+		const dir = join(root, name);
+		const charge = await executionCharge(dir).catch(() => null);
+		const summary = stageOf(stageName);
+		summary.total += charge?.total ?? 0;
+		summary.uncertain += charge?.uncertain ?? 0;
+		total += charge?.total ?? 0;
+		uncertain += charge?.uncertain ?? 0;
+		const receipt = await readStageReceipt(join(dir, "receipt.json"));
+
+		const valid =
+			receipt !== null &&
+			jsonField(receipt.record, "runId") === runId &&
+			jsonField(receipt.record, "stage") === stageName &&
+			jsonField(receipt.record, "version") === 1;
+
+		if (valid) {
+			summary.wall += receipt.wallMs;
+			const usage = objectOf(jsonField(receipt.record, "usage"));
+			const p = countOf(jsonField(usage, "parent"));
+			const c = countOf(jsonField(usage, "children"));
+
+			if (
+				p === null ||
+				c === null ||
+				p + c > receipt.usage.total ||
+				receipt.usage.unreadChildren > 0
+			)
+				splitComplete = false;
+			else {
+				parent += p;
+				children += c;
+			}
+		} else {
+			splitComplete = false;
+			summary.wallComplete = false;
+		}
+
+		const sessionNames = [
+			"draft",
+			"review",
+			"revision",
+			"code-review",
+			"security-review",
+			"simplify",
+			"ultrareview",
+		];
+
+		const sessions = (
+			await readdir(dir, { withFileTypes: true }).catch(() => [])
+		).filter(
+			(entry) => entry.isDirectory() && sessionNames.includes(entry.name),
+		);
+
+		const paths = [
+			join(dir, "receipt.json"),
+			...sessions.map((entry) => join(dir, entry.name, "receipt.json")),
+		];
+
+		for (const path of paths) {
+			const saved = await readStageReceipt(path);
+
+			if (
+				saved === null ||
+				jsonField(saved.record, "runId") !== runId ||
+				jsonField(saved.record, "stage") !== stageName ||
+				jsonField(saved.record, "version") !== 1
+			)
+				continue;
+			const bytes = await readFile(path);
+			digests.add(digestOf(bytes));
+
+			if (sessions.length > 0 && path === paths[0]) continue;
+			const rawModels = objectOf(jsonField(saved.record, "models"));
+			const versions = objectOf(jsonField(saved.record, "versions"));
+
+			const runtime = {
+				pi: jsonField(versions, "pi") ?? null,
+				agents: jsonField(versions, "piHerdrAgents") ?? null,
+				pstack: jsonField(versions, "piHerdrPstack") ?? null,
+				assetsDigest: jsonField(saved.record, "assetsDigest") ?? null,
+			};
+
+			for (const identity of [
+				rawModels,
+				objectOf(jsonField(saved.record, "fallback")),
+			]) {
+				if (identity === null) continue;
+				const observed = textOf(jsonField(identity, "observed"));
+
+				const input = {
+					requested: jsonField(identity, "requested") ?? null,
+					observed:
+						observed === null
+							? { kind: "unavailable", reason: "provider_not_reported" }
+							: known(observed),
+					providerVersion: {
+						kind: "unavailable",
+						reason: "provider_not_reported",
+					},
+					runtime: known(runtime),
+					executions: 1,
+				};
+
+				const projected =
+					ledgerModelOf(input) ?? ledgerModelOf({ ...input, runtime: missing });
+
+				if (projected !== null) {
+					const key = JSON.stringify([
+						projected.requested,
+						projected.observed,
+						projected.runtime,
+					]);
+
+					const previous = models.get(key);
+					models.set(key, {
+						...projected,
+						executions: (previous?.executions ?? 0) + 1,
+					});
+				}
+			}
+		}
+	}
+
+	total = Math.max(total, floor);
+
+	const summaries: Extract<LedgerRow["stages"], { kind: "known" }>["value"] =
+		[];
+
+	for (const attempt of attempts ?? []) stageOf(attempt.stage);
+
+	for (const [stage, data] of stages) {
+		const ends = attempts?.filter((attempt) => attempt.stage === stage);
+
+		const counts = {
+			passed: 0,
+			failed: 0,
+			interrupted: 0,
+			refused: 0,
+			budgetExhausted: 0,
+			aborted: 0,
+		};
+
+		for (const end of ends ?? []) {
+			const key = {
+				completed: "passed",
+				model_failure: "failed",
+				interrupted: "interrupted",
+				refused: "refused",
+				budget_stop: "budgetExhausted",
+				aborted: "aborted",
+			} as const;
+
+			counts[key[end.disposition]]++;
+		}
+
+		summaries.push({
+			stage,
+			wallMs: data.wallComplete
+				? { kind: "exact", unit: "milliseconds", total: data.wall }
+				: {
+						kind: "lower_bound",
+						unit: "milliseconds",
+						total: data.wall,
+						reason: "receipt_missing",
+					},
+			attempts: ends == null || start == null ? missing : known(counts),
+			tokens:
+				data.uncertain > 0
+					? {
+							kind: "uncertain",
+							unit: "tokens",
+							total: data.total,
+							reason: "request_unsettled",
+						}
+					: {
+							kind: "lower_bound",
+							unit: "tokens",
+							total: data.total,
+							reason: "receipt_missing",
+						},
+		});
+	}
+
+	const stageOrder: readonly Stage[] = [
+		"admit",
+		"specify",
+		"accept",
+		"build",
+		"validate",
+		"review",
+		"land",
+	];
+
+	summaries.sort(
+		(a, b) => stageOrder.indexOf(a.stage) - stageOrder.indexOf(b.stage),
+	);
+
+	const orderedModels = [...models]
+		.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+		.map(([, model]) => model);
+
+	const artifactPrefix = async (): Promise<LedgerRow["artifacts"]> => {
+		const contract = await readStoredContract(stateDir, runId);
+
+		if (contract.kind !== "found") return { kind: "admission" };
+
+		const suite = await fileArtifacts(stateDir).read(
+			runId,
+			contract.contract,
+			contract.digest,
+		);
+
+		if (suite.kind !== "found")
+			return { kind: "contract", contractDigest: contract.digest };
+
+		const patch = readPatch(stateDir, {
+			runId,
+			baseSha: contract.contract.base.sha,
+			contractDigest: contract.digest,
+			acceptanceDigest: suite.receipt.acceptanceDigest,
+		});
+
+		return patch.kind === "found"
+			? {
+					kind: "built",
+					contractDigest: contract.digest,
+					acceptanceDigest: suite.receipt.acceptanceDigest,
+					patchDigest: patch.receipt.patchDigest,
+				}
+			: {
+					kind: "acceptance",
+					contractDigest: contract.digest,
+					acceptanceDigest: suite.receipt.acceptanceDigest,
+				};
+	};
+
+	const invalid = {
+		kind: "unavailable" as const,
+		reason: "receipt_invalid" as const,
+	};
+
+	const evidence: TerminalEvidence =
+		listed === null
+			? {
+					artifacts: await artifactPrefix(),
+					stages: invalid,
+					models: invalid,
+					usage: {
+						tokens: {
+							kind: "lower_bound",
+							unit: "tokens",
+							total,
+							reason: "receipt_invalid",
+						},
+						parentTokens: invalid,
+						childTokens: invalid,
+						unattributedTokens: invalid,
+						money: { kind: "unavailable", reason: "provider_not_reported" },
+					},
+					redactedReceiptDigests: [],
+				}
+			: {
+					artifacts: await artifactPrefix(),
+					stages:
+						summaries.length === 0 && start == null
+							? missing
+							: known(summaries),
+					models:
+						models.size === 0 && (names.length > 0 || start == null)
+							? missing
+							: known(orderedModels),
+					usage: {
+						tokens:
+							uncertain > 0
+								? {
+										kind: "uncertain",
+										unit: "tokens",
+										total,
+										reason: "request_unsettled",
+									}
+								: {
+										kind: "lower_bound",
+										unit: "tokens",
+										total,
+										reason: "receipt_missing",
+									},
+						parentTokens: splitComplete ? known(parent) : missing,
+						childTokens: splitComplete ? known(children) : missing,
+						unattributedTokens:
+							splitComplete && parent + children <= total
+								? known(total - parent - children)
+								: missing,
+						money: { kind: "unavailable", reason: "provider_not_reported" },
+					},
+					redactedReceiptDigests: [...digests].sort(),
+				};
+
+	const generationGates: Record<string, Digest> = {};
+
+	if (start?.policy.gates.kind === "known")
+		generationGates[start.policy.gates.value.sourceSha] =
+			start.policy.gates.value.digest;
+
+	for (const generation of candidate?.kind === "selected"
+		? candidateGenerations(candidate)
+		: []) {
+		const verdict = generation.verdict;
+		const expectedSha = verdict?.gateSha ?? generation.intent.baseSha;
+
+		const dir = validationDir(
+			stateDir,
+			runId,
+			generation.intent.round,
+			generation.intent.generation,
+		);
+
+		try {
+			const pin = objectOf(
+				parseJsonText(await readFile(join(dir, "gate-policy.json"), "utf8")),
+			);
+
+			const digest = textOf(jsonField(pin, "digest"));
+
+			if (
+				jsonField(pin, "v") === 1 &&
+				jsonField(pin, "runId") === runId &&
+				jsonField(pin, "round") === generation.intent.round &&
+				jsonField(pin, "generation") === generation.intent.generation &&
+				jsonField(pin, "sourceSha") === expectedSha &&
+				digest !== null &&
+				isDigest(digest)
+			)
+				generationGates[expectedSha] = digest;
+		} catch {
+			/* Older generations have only base qualification evidence. */
+		}
+
+		try {
+			if (verdict === null) continue;
+
+			const bindingDigest = digestOf(
+				JSON.stringify(
+					assessmentBinding({
+						runId,
+						round: generation.intent.round,
+						generation: generation.intent.generation,
+						verdict,
+					}),
+				),
+			);
+
+			const base = parseBaseReceipt(
+				await readFile(
+					join(
+						validationDir(
+							stateDir,
+							runId,
+							generation.intent.round,
+							generation.intent.generation,
+						),
+						"diagnosis",
+						bindingDigest,
+						"refreshed-base.json",
+					),
+					"utf8",
+				),
+			);
+
+			if (
+				base?.evidence.binding.runId === runId &&
+				base.evidence.binding.repo === candidate?.pin.repo &&
+				base.evidence.binding.issue === candidate?.pin.issue &&
+				base.evidence.binding.contractDigest ===
+					candidate?.pin.contractDigest &&
+				base.evidence.binding.acceptanceDigest ===
+					candidate?.pin.acceptanceDigest &&
+				base.evidence.binding.baseSha === verdict.gateSha &&
+				base.evidence.binding.gateSha === verdict.gateSha &&
+				base.evidence.source.kind === "ready"
+			)
+				generationGates[base.evidence.binding.baseSha] =
+					base.evidence.source.gatesDigest;
+		} catch {
+			/* Missing historical base evidence remains unavailable. */
+		}
+	}
+
+	const terminal =
+		candidate?.kind === "selected" && candidate.work.kind === "terminal"
+			? candidate.work.terminal
+			: null;
+
+	let mergedAt: string | undefined;
+
+	if (terminal?.kind === "merged") {
+		try {
+			const metadata = objectOf(
+				parseJsonText(
+					await readFile(
+						join(stateDir, "accounting", runId, "merge.json"),
+						"utf8",
+					),
+				),
+			);
+
+			const at = textOf(jsonField(metadata, "mergedAt"));
+
+			if (
+				jsonField(metadata, "runId") === runId &&
+				jsonField(metadata, "repo") === candidate?.pin.repo &&
+				jsonField(metadata, "number") === terminal.number &&
+				jsonField(metadata, "headSha") === terminal.head &&
+				jsonField(metadata, "mergeSha") === terminal.mergeSha &&
+				at !== null &&
+				validLedgerInstant(at)
+			)
+				mergedAt = at;
+		} catch {
+			/* Public merge time is optional, never inferred from observation time. */
+		}
+	}
+
+	return { ...evidence, generationGates, mergedAt };
+}
+
+export async function readRunCharges(
+	stateDir: string,
+	runId: Digest,
+	floor: number,
+) {
+	const { executionCharge } = await import("./sandbox.ts");
+	let readable = true;
+	let total = 0;
+	let uncertainRequests = 0;
+	let executions = 0;
+	const root = join(resolve(stateDir), "stages", runId);
+
+	const names = await readdir(root).catch((error: NodeJS.ErrnoException) => {
+		if (error.code !== "ENOENT") readable = false;
+
+		return [];
+	});
+
+	for (const name of names) {
+		if (!EXECUTION_NAME.test(name)) continue;
+		const charge = await executionCharge(join(root, name)).catch(() => null);
+
+		if (charge === null) {
+			readable = false;
+			continue;
+		}
+
+		executions++;
+		total += charge.total;
+		uncertainRequests += charge.uncertain;
+	}
+
+	return {
+		runId,
+		executions,
+		readable,
+		uncertainRequests,
+		tokens: {
+			kind:
+				uncertainRequests > 0
+					? ("uncertain" as const)
+					: ("lower_bound" as const),
+			unit: "tokens" as const,
+			total: Math.max(floor, total),
+			reason:
+				uncertainRequests > 0
+					? ("request_unsettled" as const)
+					: ("receipt_missing" as const),
+		},
+		money: {
+			kind: "unavailable" as const,
+			reason: "provider_not_reported" as const,
+		},
+		attempts: await fileRunAccounting(stateDir).attempts(runId),
+	};
+}
+
+export async function readDurableAccounting(
+	stateDir: string | null,
+	repo: RepoSlug,
+) {
+	const runs: Awaited<ReturnType<typeof readRunCharges>>[] = [];
+
+	const available =
+		stateDir !== null &&
+		(await lstat(stateDir).then(
+			(info) => info.isDirectory(),
+			() => false,
+		));
+
+	let readable = available;
+
+	if (stateDir !== null && available) {
+		const root = join(resolve(stateDir), "claims");
+
+		const names = await readdir(root).catch((error: NodeJS.ErrnoException) => {
+			if (error.code !== "ENOENT") readable = false;
+
+			return [];
+		});
+
+		const seen = new Set<Digest>();
+
+		for (const name of names.sort()) {
+			if (!/^[a-f0-9]{64}\.json$/.test(name)) continue;
+			const text = await readFile(join(root, name), "utf8").catch(() => null);
+			const claim = text === null ? null : parseClaim(text);
+
+			if (claim === null || name !== `${claim.runId}.json`) {
+				readable = false;
+				continue;
+			}
+
+			if (seen.has(claim.runId)) continue;
+
+			const admitted = await fileAdmissionStore(stateDir).read({
+				repo,
+				issue: claim.issue,
+				eventId: claim.eventId,
+			});
+
+			if (admitted.kind === "unreadable") {
+				readable = false;
+				continue;
+			}
+
+			if (admitted.kind !== "found") continue;
+			seen.add(claim.runId);
+			const run = await readRunCharges(stateDir, claim.runId, claim.usage ?? 0);
+			readable &&= run.readable;
+			runs.push(run);
+		}
+	}
+
+	return {
+		state: !available ? "unavailable" : readable ? "readable" : "incomplete",
+		countersScope: "process",
+		runs,
+	};
+}
+
+export async function readLedgerBacklog(stateDir: string | null, now: number) {
+	const available =
+		stateDir !== null &&
+		(await lstat(stateDir).then(
+			(info) => info.isDirectory(),
+			() => false,
+		));
+
+	const jobs =
+		stateDir === null || !available
+			? null
+			: await fileLedgerOutbox(stateDir).scan();
+
+	const blocked = jobs?.filter((job) => job.retry?.blocked).length ?? null;
+	const oldest = jobs?.map((job) => job.observedAt).sort()[0] ?? null;
+
+	const next =
+		jobs
+			?.flatMap((job) => (job.retry === null ? [] : [job.retry.nextAt]))
+			.sort((a, b) => a - b)[0] ?? null;
+
+	return {
+		state:
+			stateDir === null
+				? "unavailable"
+				: jobs === null
+					? "unreadable"
+					: (blocked ?? 0) > 0
+						? "blocked"
+						: jobs.length > 0
+							? "pending"
+							: "empty",
+		pending: jobs?.length ?? null,
+		blocked,
+		oldestObservedAt: oldest,
+		oldestAgeMs: oldest === null ? null : Math.max(0, now - Date.parse(oldest)),
+		nextAttemptAt: next === null ? null : new Date(next).toISOString(),
+		lastError: jobs?.find((job) => job.retry !== null)?.retry?.reason ?? null,
 	};
 }
 
@@ -2884,6 +4117,28 @@ export function controllerValidator(config: {
 					});
 
 					if (checked.kind !== "ready") return failed("base_unavailable");
+					let gatesDigest: Digest | null = null;
+
+					if (checked.omitted === 0) {
+						try {
+							gatesDigest = baseTreeDigest(join(base, ".github/factory/gates"));
+						} catch {
+							/* A missing or unsafe historical gate tree is not a digest. */
+						}
+					}
+
+					if (gatesDigest !== null)
+						keepValidationFile(
+							join(dir, "gate-policy.json"),
+							`${JSON.stringify({
+								v: 1,
+								runId: input.runId,
+								round: state.round,
+								generation: state.generation?.index ?? 0,
+								sourceSha: state.baseSha,
+								digest: gatesDigest,
+							})}\n`,
+						);
 
 					if (
 						checked.checkout.files.some(
@@ -3564,6 +4819,33 @@ export function controllerCandidatePort(config: {
 	const apiOf = (state: CandidateState) =>
 		new GitHubPublicationApi(config.exec, state.pin.repo);
 
+	const retainMerge = async (
+		state: CandidateState,
+		raw: JsonValue | undefined,
+		pr: OwnedPullRequest,
+	) => {
+		const mergedAt = textOf(jsonField(objectOf(raw), "merged_at"));
+
+		if (
+			pr.status.kind !== "merged" ||
+			mergedAt === null ||
+			!validLedgerInstant(mergedAt)
+		)
+			return;
+		await installOnce(
+			join(config.stateDir, "accounting", state.pin.runId, "merge.json"),
+			`${JSON.stringify({
+				v: 1,
+				runId: state.pin.runId,
+				repo: state.pin.repo,
+				number: pr.number,
+				headSha: pr.head,
+				mergeSha: pr.status.mergeSha,
+				mergedAt,
+			})}\n`,
+		);
+	};
+
 	const ownedPr = async (
 		state: CandidateState,
 	): Promise<OwnedPullRequest | null> => {
@@ -3574,12 +4856,16 @@ export function controllerCandidatePort(config: {
 			state.kind === "selected" ? state.published?.number : undefined;
 
 		if (number !== undefined) {
-			const pr = parseOwnedPullRequest(
-				await api.request("GET", `pulls/${number}`),
-				{ ...state.pin, branch, knownNumber: number },
-			);
+			const raw = await api.request("GET", `pulls/${number}`);
+
+			const pr = parseOwnedPullRequest(raw, {
+				...state.pin,
+				branch,
+				knownNumber: number,
+			});
 
 			if (pr === null) throw new PublicationError("pr_identity");
+			await retainMerge(state, raw, pr);
 
 			return pr;
 		}
@@ -3599,12 +4885,12 @@ export function controllerCandidatePort(config: {
 
 		if (discovered === null) throw new PublicationError("pr_identity");
 
-		const pr = parseOwnedPullRequest(
-			await api.request("GET", `pulls/${discovered}`),
-			{ ...state.pin, branch },
-		);
+		const raw = await api.request("GET", `pulls/${discovered}`);
+
+		const pr = parseOwnedPullRequest(raw, { ...state.pin, branch });
 
 		if (pr === null) throw new PublicationError("pr_identity");
+		await retainMerge(state, raw, pr);
 
 		return pr;
 	};
@@ -4116,12 +5402,63 @@ export function controllerCandidatePort(config: {
 	};
 }
 
+/**
+ * One pass of the ledger outbox for this state directory. It reads and
+ * advances only `factory/ledger`, and never fails the tick that calls it.
+ */
+export async function pumpLedgerOutbox(input: {
+	readonly stateDir: string;
+	readonly exec: Exec;
+	readonly repo: RepoSlug;
+	readonly now: number;
+	readonly log: Log;
+	readonly clock?: () => number;
+}): Promise<LedgerBacklog | null> {
+	const clock = input.clock ?? Date.now;
+	const started = clock();
+
+	try {
+		const backlog = await pumpLedger(
+			fileLedgerOutbox(input.stateDir),
+			ledgerApiOf(
+				new GitHubPublicationApi(
+					input.exec,
+					input.repo,
+					{},
+					async () => true,
+					undefined,
+					{ now: clock, sliceMs: 20_000, callMs: 5_000 },
+				),
+			),
+			input.now,
+			() => input.now + clock() - started,
+		);
+
+		if (backlog.published > 0 || backlog.pending > 0 || !backlog.readable)
+			input.log("ledger_backlog", {
+				readable: backlog.readable,
+				published: backlog.published,
+				pending: backlog.pending,
+				blocked: backlog.blocked,
+				oldest: backlog.oldestObservedAt,
+				error: backlog.lastError,
+			});
+
+		return backlog;
+	} catch {
+		input.log("ledger_pump_failed", {});
+
+		return null;
+	}
+}
+
 export async function serveLoop(input: {
 	orchestrator: Orchestrator;
 	stateDir: string;
 	sleep: Sleep;
 	signal: AbortSignal;
 	log: Log;
+	pump?: () => Promise<LedgerBacklog | null>;
 }): Promise<void> {
 	const { orchestrator, signal, log } = input;
 
@@ -4131,6 +5468,8 @@ export async function serveLoop(input: {
 		if (!(await writeStatus(input.stateDir, report))) {
 			log("status_unwritable", {});
 		}
+
+		await input.pump?.();
 
 		if (signal.aborted) break;
 

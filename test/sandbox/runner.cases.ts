@@ -48,7 +48,7 @@ import {
 	STDERR_CAP_BYTES,
 	withSkills,
 } from "../../server/sandbox.ts";
-import { AuditLog } from "../../server/sandbox/audit.ts";
+import { AuditLog, type JournalRecord } from "../../server/sandbox/audit.ts";
 import type {
 	CloseReason,
 	ControlEvent,
@@ -133,6 +133,13 @@ function model(text: string): ModelId {
 
 	// SAFETY: the assertion above checks the ModelId pattern.
 	return text as ModelId;
+}
+
+function asRoute(text: string): RouteId {
+	assert.match(text, /^[a-z][a-z0-9-]{0,31}$/);
+
+	// SAFETY: the assertion above checks the RouteId pattern.
+	return text as RouteId;
 }
 
 function digest(text: string): Digest {
@@ -411,6 +418,83 @@ function input(
 		...overrides,
 	};
 }
+
+describe("durable execution high water", () => {
+	it("restores an exhausted token high water before opening a gateway", async () => {
+		const h = harness([]);
+
+		const old = {
+			version: 1,
+			runId: RUN,
+			stage: "specify",
+			attempt: 1,
+			startedAt: 100,
+			deadline: 60_100,
+			turns: 2,
+			usage: {
+				total: 100,
+				parent: 80,
+				children: 20,
+				gateway: 100,
+				unreadChildren: 0,
+				byModel: {},
+			},
+		};
+
+		const result = await runStage(input({}, { maxTokens: 100 }), {
+			...h.host,
+			now: () => 200,
+			readUsage: () => old,
+			writeUsage: () => true,
+		});
+
+		assert.equal(result.kind, "budget_exhausted");
+		assert.equal(result.usage, 100);
+		assert.equal(h.tables.length, 0);
+	});
+
+	it("keeps the original deadline and fails closed if the high water cannot be synced", async () => {
+		const h = harness([]);
+
+		const old = {
+			version: 1,
+			runId: RUN,
+			stage: "specify",
+			attempt: 1,
+			startedAt: 100,
+			deadline: 200,
+			turns: 0,
+			usage: {
+				total: 0,
+				parent: 0,
+				children: 0,
+				gateway: 0,
+				unreadChildren: 0,
+				byModel: {},
+			},
+		};
+
+		const expired = await runStage(input(), {
+			...h.host,
+			now: () => 201,
+			readUsage: () => old,
+			writeUsage: () => true,
+		});
+
+		assert.equal(expired.kind, "budget_exhausted");
+		assert.equal(expired.receipt.wallMs, 101);
+		assert.equal(h.tables.length, 0);
+
+		const unwritable = await runStage(input(), {
+			...h.host,
+			readUsage: () => null,
+			writeUsage: () => false,
+		});
+
+		assert.equal(unwritable.kind, "failed");
+		assert.equal(h.tables.length, 0);
+	});
+});
 
 describe("Pi RPC framing and records", () => {
 	it("splits on LF only, keeps U+2028 inside a record and strips a trailing CR", () => {
@@ -2466,7 +2550,10 @@ function inProcessGateway(fixturePort: number, events: ControlEvent[]) {
 		const gateway = new Gateway({
 			table: routed,
 			credentials,
-			audit: new AuditLog(() => {}, 1_000_000),
+			audit: new AuditLog(() => {}, 1_000_000, {
+				write: () => {},
+				sync: () => {},
+			}),
 			emit: (event) => {
 				events.push(event);
 
@@ -4710,6 +4797,38 @@ describe("controller-run specify review", () => {
 		};
 	}
 
+	it("does not reset the aggregate specify deadline when continuing between sessions", async () => {
+		const h = setup([DRAFT, CLEAN_REVIEW]);
+
+		try {
+			writeFileSync(
+				join(h.dir, "usage.json"),
+				JSON.stringify({
+					version: 1,
+					runId: h.run.runId,
+					stage: "specify",
+					attempt: h.run.attempt,
+					startedAt: 1,
+					deadline: 2,
+					turns: 0,
+					usage: {
+						total: 0,
+						parent: 0,
+						children: 0,
+						gateway: null,
+						unreadChildren: 0,
+						byModel: {},
+					},
+				}),
+			);
+			const result = await h.execute();
+			assert.equal(result.kind, "budget_exhausted");
+			assert.equal(h.calls.length, 0);
+		} finally {
+			h.close();
+		}
+	});
+
 	it("reviews a draft once with no tools and only the draft and untrusted ticket, and sums usage", async () => {
 		const h = setup([DRAFT, CLEAN_REVIEW]);
 
@@ -4974,4 +5093,197 @@ describe("controller-run specify review", () => {
 			h.close();
 		}
 	});
+});
+
+describe("durable request charges after a restart", () => {
+	const id = {
+		ts: "2026-11-04T10:00:00.000Z",
+		stage: "specify",
+		runId: RUN,
+		attempt: 1,
+		route: asRoute("model-openai"),
+	};
+
+	const line = (entry: JournalRecord) => `${JSON.stringify(entry)}\n`;
+
+	const journal = (
+		...entries: [number, number | null, "settled" | "dispatched"][]
+	) =>
+		entries
+			.map(([req, tokens, state]) => {
+				const sent = line({ v: 1, kind: "dispatch", ...id, req });
+
+				return state === "dispatched"
+					? sent
+					: sent +
+							line({
+								v: 1,
+								kind: "result",
+								...id,
+								req,
+								status: 200,
+								decision: "forward",
+								inputTokens: tokens,
+								outputTokens: 0,
+							});
+			})
+			.join("");
+
+	it("counts journal results once, keeps an unsettled dispatch as a floor, and lets a receipt cover its leaves", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-charges-"));
+		const runs = join(dir, "stages", RUN);
+
+		const executor = sandboxModule.sandboxExecutor({
+			stateDir: dir,
+			xdgRuntimeDir: "/run/user/1000",
+			log: () => {},
+			exec: async () => ({ stdout: "", stderr: "", code: 0 }),
+		});
+
+		const spent = (stage: "specify" | "build" | "accept", attempt: number) =>
+			executor.spent({ runId: digest(RUN), stage, attempt });
+
+		try {
+			mkdirSync(join(runs, "build-1"), { recursive: true });
+			writeFileSync(
+				join(runs, "build-1", "egress.requests.jsonl"),
+				journal(
+					[1, 30, "settled"],
+					[2, 12, "settled"],
+					[3, null, "dispatched"],
+				),
+			);
+			writeFileSync(
+				join(runs, "build-1", "egress.jsonl"),
+				'{"inputTokens":30,"outputTokens":0}\n',
+			);
+
+			mkdirSync(join(runs, "build-1.1"), { recursive: true });
+			writeFileSync(
+				join(runs, "build-1.1", "egress.requests.jsonl"),
+				journal([1, 8, "settled"]),
+			);
+
+			assert.equal(await spent("build", 1), 50);
+			assert.deepEqual(
+				await sandboxModule.executionCharge(join(runs, "build-1")),
+				{ total: 42, uncertain: 1 },
+			);
+
+			mkdirSync(join(runs, "accept-1"), { recursive: true });
+			writeFileSync(
+				join(runs, "accept-1", "receipt.json"),
+				JSON.stringify({ usage: { total: 25 } }),
+			);
+			writeFileSync(
+				join(runs, "accept-1", "egress.requests.jsonl"),
+				journal([1, 20, "settled"], [2, null, "dispatched"]),
+			);
+
+			assert.equal(await spent("accept", 1), 25);
+			assert.deepEqual(
+				await sandboxModule.executionCharge(join(runs, "accept-1")),
+				{ total: 25, uncertain: 1 },
+			);
+
+			const specify = join(runs, "specify-1");
+
+			mkdirSync(join(specify, "draft"), { recursive: true });
+			mkdirSync(join(specify, "review"), { recursive: true });
+			writeFileSync(join(specify, "specify.json"), "{}\n");
+			writeFileSync(
+				join(specify, "draft", "receipt.json"),
+				JSON.stringify({ usage: { total: 10 } }),
+			);
+			writeFileSync(
+				join(specify, "draft", "egress.requests.jsonl"),
+				journal([1, 10, "settled"]),
+			);
+			writeFileSync(
+				join(specify, "review", "egress.requests.jsonl"),
+				journal([1, 7, "settled"], [2, null, "dispatched"]),
+			);
+
+			assert.equal(await spent("specify", 1), 17);
+			assert.deepEqual(await sandboxModule.executionCharge(specify), {
+				total: 17,
+				uncertain: 1,
+			});
+
+			writeFileSync(
+				join(specify, "receipt.json"),
+				JSON.stringify({ usage: { total: 40 } }),
+			);
+			assert.equal(await spent("specify", 1), 40);
+			assert.deepEqual(await sandboxModule.executionCharge(specify), {
+				total: 40,
+				uncertain: 1,
+			});
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("charges an unmetered result its dispatch bound and keeps it uncertain", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-charges-"));
+		const build = join(dir, "stages", RUN, "build-1");
+
+		try {
+			mkdirSync(build, { recursive: true });
+			writeFileSync(
+				join(build, "egress.requests.jsonl"),
+				line({
+					v: 1,
+					kind: "dispatch",
+					...id,
+					req: 1,
+					inputTokenEstimate: 500,
+					maxOutputTokens: 1000,
+				}) +
+					line({
+						v: 1,
+						kind: "result",
+						...id,
+						req: 1,
+						status: 200,
+						decision: "forward",
+						inputTokens: null,
+						outputTokens: null,
+					}),
+			);
+
+			assert.deepEqual(await sandboxModule.executionCharge(build), {
+				total: 1500,
+				uncertain: 1,
+			});
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("restored allowance edges at the stage boundary", () => {
+	for (const [name, edge] of [
+		["run", (left: number) => input({ remainingRunTokens: left })],
+		["stage", (left: number) => input({}, { maxTokens: left })],
+	] as const)
+		for (const left of [1, 0, -1])
+			it(`${left > 0 ? "forwards within" : "launches nothing at"} a ${name} allowance of ${left}`, async () => {
+				const h = harness([]);
+				const result = await runStage(edge(left), h.host);
+
+				if (left > 0) {
+					assert.equal(h.tables.length, 1);
+					assert.equal(h.tables[0]?.ceiling.modelTokens, left);
+
+					return;
+				}
+
+				assert.equal(h.tables.length, 0);
+				assert.equal(h.launches.length, 0);
+				assert.deepEqual(
+					result.kind === "budget_exhausted" ? result.cap : result.kind,
+					name === "run" ? "run_tokens" : "tokens",
+				);
+			});
 });

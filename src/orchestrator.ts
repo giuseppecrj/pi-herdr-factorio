@@ -144,6 +144,14 @@ import {
 	WORKFLOW_PATH,
 } from "./workflow.ts";
 import { digestOf, isDigest } from "./run.ts";
+import {
+	LedgerRowError,
+	terminalSnapshot,
+	type LedgerOutbox,
+	type AttemptEnd,
+	type RunAccounting,
+} from "./ledger.ts";
+import type { JsonValue } from "./tickets.ts";
 
 export type { StageResult };
 
@@ -396,6 +404,22 @@ export interface RunFiles {
 	): Promise<"present" | "created" | "unavailable">;
 	listClaims(): Promise<ClaimRecord[]>;
 	writeClaim(claim: ClaimRecord): Promise<boolean>;
+	/** The private ledger outbox. A terminal snapshot is kept before its marker is posted. */
+	readonly ledger?: LedgerOutbox;
+	accounting?: RunAccounting;
+	/** Native admission policy must be durable before the first claim or dispatch. */
+	prepareRun?(input: {
+		runId: Digest;
+		repo: RepoSlug;
+		workflowSha: GitSha;
+		workflowDigest: Digest;
+		startedAt: string;
+	}): Promise<boolean>;
+	terminalEvidence?(
+		runId: Digest,
+		floor: number,
+		candidate: CandidateState | null,
+	): Promise<import("./ledger.ts").TerminalEvidence>;
 	/** Writes the contract and its receipt once. The same bytes again succeed. */
 	writeContract(input: {
 		readonly contract: Contract;
@@ -539,6 +563,7 @@ type Unsettled = {
 
 /** One claimed run. The identity fields never change; the rest moves only inside a tick. */
 export type ActiveRun = {
+	attemptEnd?: AttemptEnd;
 	baseCheck?: import("./diagnosis.ts").BaseCheckReference;
 	acceptWallMs?: number;
 	readonly runId: Digest;
@@ -954,6 +979,8 @@ export type OrchestratorInput = {
 	scope: readonly number[] | null;
 	log: Log;
 	paging?: GitHubPaging;
+	/** A verification-only run cap pinned to its state directory. It only lowers the trusted cap. */
+	verification?: { readonly digest: Digest; readonly tokenCap: number } | null;
 };
 
 /**
@@ -1000,6 +1027,7 @@ export class Orchestrator {
 	readonly #candidateResults: {
 		readonly runId: Digest;
 		readonly event: CandidateEvent;
+		readonly disposition?: AttemptEnd["disposition"];
 	}[] = [];
 	readonly #candidateExecutions = new Map<
 		Digest,
@@ -1278,6 +1306,7 @@ export class Orchestrator {
 			isTerminal(marked.status) &&
 			marked.seq >= (claim.seq ?? 0)
 		) {
+			const durable = await this.#freezeRow(marked);
 			await this.#keepEnded(
 				{
 					...claim,
@@ -1287,7 +1316,7 @@ export class Orchestrator {
 					attempt: marked.attempt,
 					usage: Math.max(candidateUsage(handoff), marked.usage),
 				},
-				true,
+				durable,
 			);
 			this.#reserved.delete(claim.issue);
 
@@ -1352,7 +1381,7 @@ export class Orchestrator {
 		}
 
 		if (reads.workflow.kind === "loaded") {
-			this.#config = reads.workflow.snapshot.config;
+			this.#config = this.#capped(reads.workflow.snapshot.config);
 			this.#workflowSha = reads.workflow.snapshot.sha;
 		} else {
 			reasons.push("workflow_unavailable");
@@ -1523,7 +1552,7 @@ export class Orchestrator {
 		}
 
 		this.#localAhead(run.issue, ledger.value);
-		this.#confirmEnd(run.issue, ledger.value);
+		await this.#confirmEnd(run.issue, ledger.value);
 
 		const replaced = replacedBy(timeline.value, run);
 
@@ -1553,9 +1582,14 @@ export class Orchestrator {
 	}
 
 	#release(run: ActiveRun, why: ReleaseReason): void {
+		const running =
+			run.phase.kind === "running" || run.phase.kind === "base_check";
+
 		this.#abortRunning(run);
 
 		run.phase = { kind: "ending", status: "released" };
+
+		if (running) this.#recordAttempt(run, "aborted");
 		this.state.totals.releases++;
 		this.state.seen.delete(run.issue);
 		this.#input.log("claim_released", {
@@ -1765,7 +1799,56 @@ export class Orchestrator {
 		return spent ?? 0;
 	}
 
+	#recordAttempt(
+		run: ActiveRun,
+		disposition: AttemptEnd["disposition"],
+		attempt = run.attempt,
+	): void {
+		const phase = run.phase;
+		const status = desiredStatus(phase);
+
+		run.attemptEnd = {
+			v: 1,
+			runId: run.runId,
+			stage: run.stage,
+			round: run.round ?? 0,
+			attempt,
+			disposition,
+			usage: run.usage,
+			next:
+				phase.kind === "retry_queued"
+					? { kind: "retry", attempt: run.attempt, dueAt: phase.dueAt }
+					: phase.kind === "base_check"
+						? { kind: "base_retry", attempt: run.attempt, dueAt: phase.dueAt }
+						: isTerminal(status) && phase.kind !== "reporting"
+							? { kind: "end", status }
+							: { kind: "continue" },
+		};
+	}
+
 	#finishStage(run: ActiveRun, result: StageEnd, limits: Limits): void {
+		const attempt = run.attempt;
+
+		this.#finishStageResult(run, result, limits);
+
+		if (
+			run.attemptEnd === undefined &&
+			!(run.stage === "accept" && result.kind === "passed")
+		)
+			this.#recordAttempt(
+				run,
+				result.kind === "passed"
+					? "completed"
+					: result.kind === "refused"
+						? "refused"
+						: result.kind === "budget_exhausted"
+							? "budget_stop"
+							: "model_failure",
+				attempt,
+			);
+	}
+
+	#finishStageResult(run: ActiveRun, result: StageEnd, limits: Limits): void {
 		if (run.stage === "accept")
 			run.acceptWallMs = (run.acceptWallMs ?? 0) + (result.wallMs ?? 0);
 
@@ -1873,6 +1956,8 @@ export class Orchestrator {
 		usage: number,
 		limits: Limits,
 	): void {
+		const attempt = run.attempt;
+
 		run.usage += usage;
 		this.state.totals.usage += usage;
 
@@ -1892,6 +1977,11 @@ export class Orchestrator {
 			};
 		}
 
+		this.#recordAttempt(
+			run,
+			cause === "interrupted" ? "interrupted" : "model_failure",
+			attempt,
+		);
 		this.#input.log("stage_ended", {
 			issue: run.issue,
 			runId: run.runId,
@@ -1901,14 +1991,21 @@ export class Orchestrator {
 		});
 	}
 
-	#confirmEnd(issue: number, ledger: CleanLedger): void {
+	async #confirmEnd(issue: number, ledger: CleanLedger): Promise<void> {
 		const ledgerSeq = ledger.markers.at(-1)?.marker.seq ?? 0;
 
 		for (const ended of this.#ended.values()) {
 			if (ended.claim.issue !== issue) continue;
 
 			ended.tick = this.#ticks;
-			ended.confirmed ||= ledgerSeq >= ended.claim.seq;
+			const marker = latestFor(ledger, ended.claim.runId)?.marker;
+
+			const durable =
+				marker === undefined ||
+				marker.seq !== ended.claim.seq ||
+				(await this.#freezeRow(marker));
+
+			ended.confirmed ||= ledgerSeq >= ended.claim.seq && durable;
 		}
 	}
 
@@ -1934,8 +2031,120 @@ export class Orchestrator {
 			}
 
 			this.#localAhead(issue, ledger.value);
-			this.#confirmEnd(issue, ledger.value);
+			await this.#confirmEnd(issue, ledger.value);
 		}
+	}
+
+	#trustedRunTokens: number | null = null;
+
+	#capped(config: WorkflowConfig): WorkflowConfig {
+		const verification = this.#input.verification ?? null;
+
+		this.#trustedRunTokens = config.usage.maxTokensPerRun;
+
+		return verification === null
+			? config
+			: {
+					...config,
+					usage: {
+						maxTokensPerRun: Math.min(
+							verification.tokenCap,
+							config.usage.maxTokensPerRun,
+						),
+					},
+				};
+	}
+
+	#verificationFacts() {
+		const verification = this.#input.verification ?? null;
+		const trusted = this.#trustedRunTokens;
+
+		return verification === null || trusted === null
+			? null
+			: {
+					digest: verification.digest,
+					trustedRunTokenCap: trusted,
+					effectiveRunTokenCap: Math.min(verification.tokenCap, trusted),
+				};
+	}
+
+	async #previousRunId(runId: Digest): Promise<Digest | null | undefined> {
+		const link = await this.#input.files.readLink(runId);
+
+		return link.kind === "found"
+			? link.link.prevRunId
+			: link.kind === "unlinked"
+				? null
+				: undefined;
+	}
+
+	async #prepareTerminal(run: ActiveRun): Promise<boolean> {
+		const ledger = this.#input.files.ledger;
+		const status = desiredStatus(run.phase);
+
+		if (ledger === undefined || !isTerminal(status)) return true;
+		const fields = { issue: run.issue, runId: run.runId };
+		const observedAt = new Date(this.#input.clock.now()).toISOString();
+		let snapshot: JsonValue;
+
+		try {
+			snapshot = terminalSnapshot({
+				repo: this.#input.repo,
+				runId: run.runId,
+				issue: run.issue,
+				eventId: run.eventId,
+				eventAt: run.eventAt,
+				snapshotDigest: run.snapshotDigest,
+				workflowSha: run.workflowSha,
+				workflowDigest: run.workflowDigest,
+				status,
+				stage: run.stage,
+				usage: run.usage,
+				observedAt,
+				candidate: run.handoff ?? null,
+				attemptEnds: await this.#input.files.accounting?.attempts(run.runId),
+				start: await this.#input.files.accounting?.start(run.runId),
+				previousRunId: await this.#previousRunId(run.runId),
+				evidence: await this.#input.files.terminalEvidence?.(
+					run.runId,
+					run.usage,
+					run.handoff ?? null,
+				),
+				verification: this.#verificationFacts(),
+			});
+		} catch (error) {
+			if (!(error instanceof LedgerRowError)) throw error;
+			this.#input.log("ledger_row_invalid", { ...fields, reason: error.code });
+			await ledger.block(run.runId, observedAt);
+
+			return false;
+		}
+
+		if (await ledger.prepare(run.runId, snapshot)) return true;
+		this.#input.log("ledger_terminal_unwritable", fields);
+
+		return false;
+	}
+
+	/** False only while a frozen row could not yet be made durable; later ticks retry it. */
+	async #freezeRow(marker: Marker): Promise<boolean> {
+		const ledger = this.#input.files.ledger;
+
+		if (ledger === undefined || !isTerminal(marker.status)) return true;
+
+		const frozen = await ledger.freeze(marker.runId, {
+			seq: marker.seq,
+			digest: digestOf(formatMarker(marker)),
+		});
+
+		if (frozen === "invalid" || frozen === "unwritable")
+			this.#input.log("ledger_row_unfrozen", {
+				issue: marker.issue,
+				runId: marker.runId,
+				reason: frozen,
+			});
+
+		return frozen !== "unwritable";
 	}
 
 	async #keepEnded(claim: ConfirmedRecord, confirmed: boolean): Promise<void> {
@@ -2137,7 +2346,7 @@ export class Orchestrator {
 			}
 
 			this.state.corrupt.delete(issue);
-			this.#confirmEnd(issue, ledger.value);
+			await this.#confirmEnd(issue, ledger.value);
 
 			const local = this.#localAhead(issue, ledger.value);
 
@@ -2337,7 +2546,10 @@ export class Orchestrator {
 						: "undecided";
 				}
 
-				await this.#keepEnded({ ...claim, ...recordOf(latest) }, true);
+				await this.#keepEnded(
+					{ ...claim, ...recordOf(latest) },
+					await this.#freezeRow(latest),
+				);
 				continue;
 			}
 
@@ -2602,12 +2814,23 @@ export class Orchestrator {
 				run.usage += unmarked;
 				this.state.totals.usage += unmarked;
 				run.attempt = run.baseCheck.acceptAttempt;
+				const ends = await this.#input.files.accounting?.attempts(run.runId);
+
+				const last = ends
+					?.filter((end) => end.stage === "accept")
+					.sort((a, b) => b.attempt - a.attempt)[0];
+
+				if (last?.next.kind === "base_retry") {
+					run.attempt = last.next.attempt;
+					run.baseCheck = { ...run.baseCheck, acceptAttempt: run.attempt };
+				}
+
 				run.adopted = false;
 				run.replay = false;
 				run.phase = {
 					kind: "base_check",
 					abort: new AbortController(),
-					dueAt: 0,
+					dueAt: last?.next.kind === "base_retry" ? last.next.dueAt : 0,
 					checking: true,
 				};
 				this.state.runs.set(run.issue, run);
@@ -2635,6 +2858,57 @@ export class Orchestrator {
 
 		const limits = this.#limits();
 		const releasing = eligibility !== "current" && eligibility !== "unverified";
+
+		const ended = await this.#input.files.accounting?.readAttempt(
+			run.runId,
+			run.stage,
+			run.round ?? 0,
+			run.attempt,
+		);
+
+		if (this.#input.files.accounting !== undefined && ended === undefined) {
+			run.phase = { kind: "evidence_missing" };
+
+			return run;
+		}
+
+		if (ended != null && !releasing) {
+			await this.#accountAdopted(
+				run,
+				marker,
+				ledger,
+				marker.status === "running",
+			);
+			run.usage = Math.max(run.usage, ended.usage);
+			run.attemptEnd = ended;
+			const next = ended.next;
+
+			if (next.kind === "retry") {
+				run.attempt = next.attempt;
+				run.phase = { kind: "retry_queued", dueAt: next.dueAt };
+			} else if (next.kind === "end")
+				run.phase = { kind: "ending", status: next.status };
+			else if (next.kind === "continue") {
+				const output = isModelStage(run.stage)
+					? await this.#input.executor.output({
+							runId: run.runId,
+							stage: run.stage,
+							attempt: run.attempt,
+							round: run.round ?? 0,
+							workflowSha: run.workflowSha,
+							workflowDigest: run.workflowDigest,
+						})
+					: null;
+
+				if (!(await this.#recoverOutput(run, output)))
+					run.phase = { kind: "evidence_missing" };
+			}
+
+			if (eligibility === "current") this.#confirmed.add(run.issue);
+			await this.#sync(run);
+
+			return run;
+		}
 
 		const output =
 			(run.round ?? 0) === (marker.round ?? 0) &&
@@ -3080,6 +3354,21 @@ export class Orchestrator {
 			!(await this.#input.files.writeLink(runId, null))
 		) {
 			this.#input.log("link_unwritable", { issue, runId });
+
+			return null;
+		}
+
+		if (
+			this.#input.files.prepareRun !== undefined &&
+			!(await this.#input.files.prepareRun({
+				runId,
+				repo,
+				workflowSha: admitted.baseSha,
+				workflowDigest: admitted.workflowDigest,
+				startedAt: new Date(this.#input.clock.now()).toISOString(),
+			}))
+		) {
+			this.#input.log("admission_policy_unavailable", { issue, runId });
 
 			return null;
 		}
@@ -3826,6 +4115,43 @@ export class Orchestrator {
 				}
 
 				step = handoffCandidate(step.state, queued.event);
+				const event = queued.event;
+
+				if (
+					(event.kind === "review_settled" ||
+						event.kind === "repair_settled") &&
+					this.#input.files.accounting !== undefined
+				) {
+					const execution = event.execution;
+
+					const saved = await this.#input.files.accounting.readAttempt(
+						run.runId,
+						execution.stage,
+						execution.round,
+						execution.attempt,
+					);
+
+					if (saved === undefined) break;
+
+					if (
+						saved === null &&
+						!(await this.#input.files.accounting.writeAttempt({
+							v: 1,
+							runId: run.runId,
+							stage: execution.stage,
+							round: execution.round,
+							attempt: execution.attempt,
+							disposition:
+								queued.disposition ??
+								(event.result.kind === "passed"
+									? "completed"
+									: "model_failure"),
+							usage: candidateUsage(step.state),
+							next: { kind: "continue" },
+						}))
+					)
+						break;
+				}
 
 				if (!(await this.#commitCandidate(run, step.state))) break;
 				this.#candidateResults.splice(index, 1);
@@ -3858,10 +4184,14 @@ export class Orchestrator {
 				run.handoff?.kind === "selected" &&
 				run.handoff.work.kind === "terminal"
 			) {
-				if ((await this.#recoverUncertainPost(run)) === "proceed")
+				if (
+					(await this.#recoverUncertainPost(run)) === "proceed" &&
+					(await this.#prepareTerminal(run))
+				)
 					await this.#publishMarker(run);
 
 				if (run.marked !== null && isTerminal(run.marked.status)) {
+					await this.#freezeRow(run.marked);
 					this.state.runs.delete(run.issue);
 					await this.#keepEnded({ ...claimOf(run), seq: run.seq }, false);
 				}
@@ -3935,6 +4265,22 @@ export class Orchestrator {
 				continue;
 			}
 
+			const ended = await this.#input.files.accounting?.readAttempt(
+				run.runId,
+				execution.stage,
+				execution.round,
+				execution.attempt,
+			);
+
+			if (ended === undefined && this.#input.files.accounting !== undefined)
+				continue;
+
+			if (
+				ended !== null &&
+				ended !== undefined &&
+				ended.disposition !== "completed"
+			)
+				output = null;
 			let event: CandidateEvent;
 
 			if (
@@ -3968,7 +4314,17 @@ export class Orchestrator {
 							? { kind: "passed", patch: output.result.receipt }
 							: { kind: "failed" },
 				};
-			this.#candidateResults.push({ runId: run.runId, event });
+			this.#candidateResults.push({
+				runId: run.runId,
+				event,
+				disposition:
+					ended?.disposition ??
+					(event.kind === "resume_execution"
+						? undefined
+						: event.result.kind === "passed"
+							? "completed"
+							: "interrupted"),
+			});
 		}
 
 		this.#candidateRecovery.delete(run.runId);
@@ -4360,7 +4716,20 @@ export class Orchestrator {
 								? { kind: "passed", patch: output.result.receipt }
 								: { kind: "failed" },
 					};
-				this.#candidateResults.push({ runId: execution.runId, event });
+				this.#candidateResults.push({
+					runId: execution.runId,
+					event,
+					disposition:
+						result.kind === "passed"
+							? "completed"
+							: result.kind === "refused"
+								? "refused"
+								: result.kind === "budget_exhausted"
+									? "budget_stop"
+									: abort.signal.aborted
+										? "aborted"
+										: "model_failure",
+				});
 			})
 			.catch(async (error) => {
 				if (
@@ -4476,6 +4845,9 @@ export class Orchestrator {
 					attempt: reference.acceptAttempt,
 					next: "base_check",
 				});
+				this.#recordAttempt(run, "interrupted", reference.acceptAttempt);
+
+				if (!(await this.#saveAttempt(run))) return;
 				await this.#writeClaim(run);
 
 				return;
@@ -4562,12 +4934,38 @@ export class Orchestrator {
 			))
 		)
 			return;
+		this.#recordAttempt(run, "completed", reference.acceptAttempt);
+		// Qualification has finished; recovery may safely reuse the stored suite.
+		run.attemptEnd = { ...run.attemptEnd!, next: { kind: "continue" } };
+
+		if (!(await this.#saveAttempt(run))) return;
 		run.stage = "build";
 		run.attempt = 1;
 		run.inputs = null;
 		run.replay = false;
 		run.phase = { kind: "claimed" };
 		await this.#writeClaim(run);
+	}
+
+	async #saveAttempt(run: ActiveRun): Promise<boolean> {
+		const attemptEnd = run.attemptEnd;
+
+		if (attemptEnd === undefined || this.#input.files.accounting === undefined)
+			return true;
+
+		if (!(await this.#input.files.accounting.writeAttempt(attemptEnd))) {
+			this.#input.log("attempt_end_unwritable", {
+				runId: run.runId,
+				stage: attemptEnd.stage,
+				attempt: attemptEnd.attempt,
+			});
+
+			return false;
+		}
+
+		run.attemptEnd = undefined;
+
+		return true;
 	}
 
 	async #sync(run: ActiveRun): Promise<void> {
@@ -4595,6 +4993,8 @@ export class Orchestrator {
 
 		if (run.phase.kind === "ending" && run.baseCheck !== undefined)
 			await this.#input.executor.stopBase?.(run.runId);
+
+		if (!(await this.#saveAttempt(run))) return;
 
 		const before = run.seq;
 
@@ -4668,9 +5068,12 @@ export class Orchestrator {
 			}
 		}
 
+		if (!(await this.#prepareTerminal(run))) return;
+
 		await this.#publishMarker(run);
 
 		if (run.marked !== null && isTerminal(run.marked.status)) {
+			await this.#freezeRow(run.marked);
 			this.state.runs.delete(run.issue);
 			await this.#keepEnded({ ...claimOf(run), seq: run.seq }, false);
 		} else if (run.seq !== before) {

@@ -833,12 +833,15 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Files.**
 
-- [ ] Create `src/ledger.ts`, `test/ledger.test.ts`, `docs/prototypes/ledger-branch/`, and `docs/operations/ledger.md`.
+- [ ] Create `src/ledger.ts`, `test/ledger.test.ts`, `test/ledger-git.ts`, `docs/prototypes/ledger-branch/`, and `docs/operations/ledger.md`.
 - [ ] Edit `src/run.ts`, `src/markers.ts`, `src/orchestrator.ts`, `server/controller.ts`, and `server/cli.ts` for durable totals and terminal publication.
+- [ ] Edit `src/publication.ts` and `src/gh.ts` for the exact `factory/ledger` ref methods, the shared hash-checked object helpers, the root tree without `base_tree` and bounded ledger transport calls. Candidate branch guards stay unchanged.
+- [ ] Edit `server/sandbox.ts`, `server/sandbox/result.ts`, `server/sandbox/audit.ts`, and `server/sandbox/gateway.ts` for the synced request dispatch and result journal, execution high-water marks and durable charge recovery. The owner amended this block on 2026-11-04, because the before-request durability rule cannot hold without them.
+- [ ] Edit `test/orchestrator.test.ts`, `test/workflow.test.ts`, `test/publication.test.ts`, `test/sandbox/audit.cases.ts`, `test/sandbox/gateway.cases.ts`, `test/sandbox/runner.cases.ts`, `test/viewer.test.ts`, `test/attention.test.ts`, and `docs/operations/factory-cli.md` for these contracts at their call sites and for old-reader compatibility.
 
 **Build.**
 
-- [ ] Prototype controller-only append to `ledger/runs.jsonl` on the `factory/ledger` orphan branch. Keep its Git checkout outside all stage mounts. Verify that the branch has no main ancestry and is never a source branch for product PRs.
+- [ ] Prototype controller-only append to `ledger/runs.jsonl` on the `factory/ledger` orphan branch. Keep its controller-private ledger receipts outside all stage mounts. Verify that the branch has no main ancestry and is never a source branch for product PRs.
 - [ ] Implement `appendRun` keyed by run ID with terminal outcome, issue/PR URLs, SHAs, artifact digests, stage timings, repair count, model versions, token totals, spend availability, and evidence links. Append each finished run once, including failures and `needs_info`, not only merges.
 - [ ] Freeze the trusted `WORKFLOW.md` digest, the gate-set digest, and the autonomy level into each ledger row. In v1 the autonomy level is always `approve_merge: always`, which R13 calls `land: propose`. They are two names for the same current policy, not two levels. Do not add a per-tick decision log.
 - [ ] Serialize writes in the single controller. Reconcile a pushed row before retrying after a crash. On a remote advance, fetch and reapply only the missing row, without force-pushing the ledger. Preserve unknown or corrupt rows for diagnosis instead of rewriting history.

@@ -45,8 +45,13 @@ import {
 	type ProcessTable,
 	procTable,
 	readLock,
+	pinVerification,
+	pumpLedgerOutbox,
 	readStatus,
+	readLedgerBacklog,
+	readDurableAccounting,
 	type Sleep,
+	type TarballFetch,
 	serveLoop,
 	writeStatus,
 } from "./controller.ts";
@@ -60,9 +65,9 @@ export const USAGE = `Usage:
   node server/cli.ts workflow-check --json --repo <owner/name> [--ref <branch>] [--reload-ref <branch>]
   node server/cli.ts status --json --repo <owner/name> [--ref <branch>] [--state-dir <dir>]
   node server/cli.ts admit --json --repo <owner/name> --issue <number> --state-dir <dir>
-  node server/cli.ts tick --once --json --repo <owner/name> --state-dir <dir> [--issue <number>]...
-  node server/cli.ts run --json --repo <owner/name> --issue <number> --state-dir <dir>
-  node server/cli.ts serve --repo <owner/name> --state-dir <dir> [--issue <number>]...`;
+  node server/cli.ts tick --once --json --repo <owner/name> --state-dir <dir> [--issue <number>]... [--verification-token-cap <n>]
+  node server/cli.ts run --json --repo <owner/name> --issue <number> --state-dir <dir> [--verification-token-cap <n>]
+  node server/cli.ts serve --repo <owner/name> --state-dir <dir> [--issue <number>]... [--verification-token-cap <n>]`;
 
 export const EXIT = { ok: 0, invalid: 1, usage: 2 } as const;
 
@@ -72,6 +77,7 @@ export type ControllerRuntime = {
 	procs: ProcessTable;
 	sleep: Sleep;
 	signal: AbortSignal;
+	policySource?: { readonly fetch?: TarballFetch };
 	executor: (context: ExecutorContext) => StageExecutor;
 };
 
@@ -115,6 +121,7 @@ type Parsed =
 			repo: RepoSlug;
 			stateDir: string;
 			scope: readonly number[] | null;
+			verificationCap: number | null;
 	  }
 	| { kind: "usage"; message: string };
 
@@ -174,12 +181,23 @@ function parseController(
 		return { kind: "usage", message: "--state-dir <dir> is required" };
 	}
 
+	const cap = values["verification-token-cap"];
+
+	if (cap !== undefined && (issues.length === 0 || !ISSUE_NUMBER.test(cap))) {
+		return {
+			kind: "usage",
+			message:
+				"--verification-token-cap takes a positive integer and requires --issue",
+		};
+	}
+
 	return {
 		kind: "controller",
 		command,
 		repo,
 		stateDir: resolve(values["state-dir"]),
 		scope: issues.length === 0 ? null : [...new Set(issues)],
+		verificationCap: cap === undefined ? null : Number(cap),
 	};
 }
 
@@ -229,6 +247,13 @@ function parse(argv: readonly string[]): Parsed {
 		return {
 			kind: "usage",
 			message: "--once applies only to tick, and tick requires it",
+		};
+	}
+
+	if (values["verification-token-cap"] !== undefined) {
+		return {
+			kind: "usage",
+			message: "--verification-token-cap applies only to tick, run and serve",
 		};
 	}
 
@@ -313,6 +338,7 @@ function parseCliArgs(argv: readonly string[]) {
 			"reload-ref": { type: "string" },
 			issue: { type: "string", multiple: true },
 			"state-dir": { type: "string" },
+			"verification-token-cap": { type: "string" },
 		},
 	});
 }
@@ -335,6 +361,9 @@ type ControllerView =
 type StatusOutput = Omit<StatusReport, "controller"> & {
 	readonly controller: ControllerView;
 	readonly attention: AttentionRead;
+	readonly ledger: Awaited<ReturnType<typeof readLedgerBacklog>>;
+	readonly accounting: Awaited<ReturnType<typeof readDurableAccounting>>;
+	readonly durableUsage: JsonValue;
 };
 
 type Printable =
@@ -389,6 +418,7 @@ async function isPrivateDirectory(path: string): Promise<boolean> {
 function realRuntime(): ControllerRuntime {
 	return {
 		clock: { now: () => Date.now() },
+		policySource: {},
 		procs: procTable(),
 		sleep: async (ms, signal) => {
 			await delay(ms, undefined, { signal }).catch(() => undefined);
@@ -472,12 +502,35 @@ async function runController(
 			return EXIT.invalid;
 		}
 
+		const pinned = await pinVerification(
+			parsed.stateDir,
+			parsed.verificationCap === null
+				? null
+				: {
+						repo: parsed.repo,
+						issues: parsed.scope ?? [],
+						tokenCap: parsed.verificationCap,
+					},
+		);
+
+		if (pinned.kind === "refused") {
+			log("controller_refused", { reason: pinned.reason });
+
+			return EXIT.invalid;
+		}
+
+		if (pinned.kind === "pinned")
+			log("verification_cap_pinned", {
+				tokenCap: pinned.tokenCap,
+				digest: pinned.digest.slice(0, 12),
+			});
+
 		const orchestrator = new Orchestrator({
 			exec: io.exec,
 			env: io.env,
 			repo: parsed.repo,
 			store: fileAdmissionStore(parsed.stateDir),
-			files: fileRunFiles(parsed.stateDir),
+			files: fileRunFiles(parsed.stateDir, runtime.policySource),
 			executor: runtime.executor({
 				stateDir: parsed.stateDir,
 				exec: io.exec,
@@ -486,7 +539,20 @@ async function runController(
 			clock,
 			scope: parsed.scope,
 			log,
+			verification:
+				pinned.kind === "pinned"
+					? { digest: pinned.digest, tokenCap: pinned.tokenCap }
+					: null,
 		});
+
+		const pump = () =>
+			pumpLedgerOutbox({
+				stateDir: parsed.stateDir,
+				exec: io.exec,
+				repo: parsed.repo,
+				now: clock.now(),
+				log,
+			});
 
 		if (parsed.command === "serve") {
 			log("controller_ready", {
@@ -501,6 +567,7 @@ async function runController(
 				sleep: runtime.sleep,
 				signal: runtime.signal,
 				log,
+				pump,
 			});
 
 			return EXIT.ok;
@@ -517,6 +584,7 @@ async function runController(
 			log("status_unwritable", {});
 		}
 
+		await pump();
 		io.stdout(json(report));
 
 		if (parsed.command === "tick") return EXIT.ok;
@@ -590,7 +658,40 @@ export async function runCli(
 			now: Date.now(),
 		});
 
-		io.stdout(json({ ...report, controller, attention }));
+		const ledger = await readLedgerBacklog(
+			parsed.stateDir,
+			io.runtime?.clock.now() ?? Date.now(),
+		);
+
+		const accounting = await readDurableAccounting(parsed.stateDir, repo);
+
+		const durableUsage: JsonValue =
+			accounting.state === "unavailable"
+				? { kind: "unavailable", reason: "legacy_not_recorded" }
+				: {
+						kind: accounting.runs.some((run) => run.uncertainRequests > 0)
+							? "uncertain"
+							: "lower_bound",
+						unit: "tokens",
+						total: accounting.runs.reduce(
+							(sum, run) => sum + run.tokens.total,
+							0,
+						),
+						reason: accounting.runs.some((run) => run.uncertainRequests > 0)
+							? "request_unsettled"
+							: "receipt_missing",
+					};
+
+		io.stdout(
+			json({
+				...report,
+				controller,
+				attention,
+				ledger,
+				accounting,
+				durableUsage,
+			}),
+		);
 
 		return EXIT.ok;
 	}
@@ -670,7 +771,12 @@ if (import.meta.main) {
 	}
 
 	process.exitCode = await runCli(process.argv.slice(2), {
-		exec: (command, args) => execFile(command, args, FETCH_TIMEOUT_MS),
+		exec: (command, args, options) =>
+			execFile(
+				command,
+				args,
+				Math.min(FETCH_TIMEOUT_MS, options?.timeoutMs ?? FETCH_TIMEOUT_MS),
+			),
 		env: (name) => process.env[name],
 		stdout: (text) => process.stdout.write(text),
 		stderr: (text) => process.stderr.write(text),
