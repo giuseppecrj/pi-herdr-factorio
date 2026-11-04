@@ -992,10 +992,9 @@ describe("ledger outbox pump", () => {
 		assert.deepEqual([recovered.published, recovered.pending], [1, 0]);
 		assert.equal(fake.writes.length, writes);
 		assert.deepEqual(await outbox.scan(), []);
-		assert.equal(
-			(await outbox.anchor())?.byteLength,
-			ledgerRow(rowInput(31)).bytes.length,
-		);
+		const anchor = await outbox.anchor();
+		assert.ok(anchor !== null && anchor !== "orphaned" && anchor !== "invalid");
+		assert.equal(anchor.byteLength, ledgerRow(rowInput(31)).bytes.length);
 		assert.equal((await remoteBytes(fake)).toString().split("\n").length, 2);
 	});
 
@@ -1028,6 +1027,54 @@ describe("ledger outbox pump", () => {
 			[[runId, null, true]],
 		);
 		assert.equal(jobs[0]?.observedAt, "2026-11-04T11:05:00Z");
+	});
+
+	it("never creates a new root once an anchor or receipt exists, and blocks on a corrupt anchor", async () => {
+		const dir = fresh();
+		const first = await enrolled(dir, 36);
+		const origin = new LedgerGit();
+
+		const done = await pumpLedger(
+			first.outbox,
+			ledgerApiOf(quietApi(origin)),
+			0,
+		);
+
+		assert.equal(done.published, 1);
+		await enrolled(dir, 37);
+		const anchorPath = join(dir, "ledger", "anchor.json");
+
+		writeFileSync(anchorPath, "{");
+		const empty = new LedgerGit();
+
+		const corrupt = await pumpLedger(
+			fileLedgerOutbox(dir),
+			ledgerApiOf(quietApi(empty)),
+			0,
+		);
+
+		assert.deepEqual(
+			[corrupt.published, corrupt.blocked, corrupt.lastError],
+			[0, 1, "state_invalid"],
+		);
+		assert.equal(empty.requests.length, 0);
+		assert.equal(empty.refs.has("factory/ledger"), false);
+
+		rmSync(anchorPath);
+		rmSync(join(dir, "ledger", rowInput(37).runId, "retry.json"));
+
+		const orphaned = await pumpLedger(
+			fileLedgerOutbox(dir),
+			ledgerApiOf(quietApi(empty)),
+			0,
+		);
+
+		assert.deepEqual(
+			[orphaned.published, orphaned.blocked, orphaned.lastError],
+			[0, 1, "ref_missing"],
+		);
+		assert.equal(empty.refs.has("factory/ledger"), false);
+		assert.equal(empty.writes.length, 0);
 	});
 
 	it("blocks on a conflicting row", async () => {

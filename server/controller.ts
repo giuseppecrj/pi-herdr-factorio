@@ -2756,11 +2756,31 @@ export function fileLedgerOutbox(stateDir: string): LedgerOutbox {
 			}
 		},
 		async anchor() {
-			const text = await readFile(join(root, "anchor.json"), "utf8").catch(
-				() => null,
-			);
+			try {
+				const text = await readText(join(root, "anchor.json"));
 
-			return text === null ? null : parseAnchor(parseJsonText(text));
+				if (text !== null) return parseAnchor(parseJsonText(text)) ?? "invalid";
+
+				const names = await readdir(root).catch(
+					(error: NodeJS.ErrnoException) =>
+						error.code === "ENOENT" ? [] : Promise.reject(error),
+				);
+
+				for (const runId of names)
+					if (
+						isDigest(runId) &&
+						(await lstat(join(dirOf(runId), "published.json")).then(
+							() => true,
+							(error: NodeJS.ErrnoException) =>
+								error.code === "ENOENT" ? false : Promise.reject(error),
+						))
+					)
+						return "orphaned";
+
+				return null;
+			} catch {
+				return "invalid";
+			}
 		},
 		async published(receipt, anchor) {
 			const installed = await installOnce(

@@ -935,6 +935,7 @@ export async function appendRun(
 	anchor: LedgerAnchor | null,
 	rounds = 3,
 	adoption?: Adoption,
+	allowRoot = true,
 ): Promise<AppendResult> {
 	let current = anchor;
 
@@ -943,7 +944,7 @@ export async function appendRun(
 			const tip = await api.ref();
 
 			if (tip === null) {
-				if (current !== null)
+				if (current !== null || !allowRoot)
 					return { kind: "blocked", reason: "ref_missing", anchor: current };
 				const root = await api.root(row.date);
 				await api.advance(null, root.sha);
@@ -1400,7 +1401,12 @@ export interface LedgerOutbox {
 	): Promise<"frozen" | "absent" | "invalid" | "unwritable">;
 	/** Unpublished jobs, or `null` when the outbox cannot be listed; a corrupt job blocks alone. */
 	scan(): Promise<readonly OutboxJob[] | null>;
-	anchor(): Promise<LedgerAnchor | null>;
+	/**
+	 * The verified anchor; `null` only when neither an anchor nor a receipt
+	 * exists, `orphaned` when receipts exist without one, `invalid` when it
+	 * cannot be read or parsed.
+	 */
+	anchor(): Promise<LedgerAnchor | null | "orphaned" | "invalid">;
 	adoption(runId: Digest, cursor: AdoptionCursor): Promise<boolean>;
 	published(receipt: PublishedReceipt, anchor: LedgerAnchor): Promise<boolean>;
 	retry(runId: Digest, retry: LedgerRetry): Promise<boolean>;
@@ -1443,7 +1449,8 @@ export async function pumpLedger(
 			: a.observedAt.localeCompare(b.observedAt),
 	);
 
-	let anchor = await outbox.anchor();
+	const stored = await outbox.anchor();
+	let anchor = stored === "orphaned" || stored === "invalid" ? null : stored;
 	let published = 0;
 	let blocked = 0;
 	let lastError: LedgerErrorCode | null = null;
@@ -1457,23 +1464,29 @@ export async function pumpLedger(
 			continue;
 		}
 
-		api.startJob?.();
+		let result: AppendResult;
 
-		const result = await appendRun(
-			api,
-			{
-				runId: job.runId,
-				bytes: job.row.bytes,
-				digest: job.row.digest,
-				date: job.observedAt.replace(/\.\d{3}Z$/, "Z"),
-			},
-			anchor,
-			3,
-			{
-				cursor: job.adoption ?? null,
-				save: (cursor) => outbox.adoption(job.runId, cursor),
-			},
-		);
+		if (stored === "invalid")
+			result = { kind: "blocked", reason: "state_invalid", anchor: null };
+		else {
+			api.startJob?.();
+			result = await appendRun(
+				api,
+				{
+					runId: job.runId,
+					bytes: job.row.bytes,
+					digest: job.row.digest,
+					date: job.observedAt.replace(/\.\d{3}Z$/, "Z"),
+				},
+				anchor,
+				3,
+				{
+					cursor: job.adoption ?? null,
+					save: (cursor) => outbox.adoption(job.runId, cursor),
+				},
+				stored === null,
+			);
+		}
 
 		if (result.kind === "published") {
 			const receipt: PublishedReceipt = {
