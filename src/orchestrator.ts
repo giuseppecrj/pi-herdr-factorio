@@ -2151,16 +2151,12 @@ export class Orchestrator {
 			const candidate =
 				isReady(record) || (record.open && candidates.includes(record));
 
-			if (
-				local === null &&
+			const foreign =
 				current !== null &&
 				!isTerminal(current.status) &&
-				(await this.#foreign(current, record.updatedAt))
-			) {
-				continue;
-			}
+				(await this.#foreign(current));
 
-			if (current !== null && !isTerminal(current.status)) {
+			if (current !== null && !isTerminal(current.status) && !foreign) {
 				const eligibility = await this.#eligibilityOf(
 					current,
 					record,
@@ -2192,7 +2188,27 @@ export class Orchestrator {
 				}
 			}
 
-			const settled = await this.#settleClaims(ledger.value, record, candidate);
+			const settled = await this.#settleClaims(
+				ledger.value,
+				record,
+				candidate,
+				foreign,
+			);
+
+			if (settled === "refused") {
+				this.#reserved.delete(issue);
+				continue;
+			}
+
+			if (
+				foreign &&
+				settled === "resolved" &&
+				(await this.#unmarkedEvents(issue, ledger.value))?.length === 0
+			) {
+				this.#resolve(issue);
+				this.#see(issue, record.updatedAt, { kind: "decided" });
+				continue;
+			}
 
 			if (settled === "resolved" || settled === "corrupt") {
 				this.#resolve(issue);
@@ -2220,9 +2236,10 @@ export class Orchestrator {
 	/**
 	 * A live marker whose event has no admission record under this state
 	 * directory belongs to another controller. It is left alone: nothing is
-	 * adopted, written or posted, and the issue is not admitted here.
+	 * adopted for it, no release is posted and no new event is admitted while
+	 * it is the newest marker.
 	 */
-	async #foreign(marker: Marker, updatedAt: string): Promise<boolean> {
+	async #foreign(marker: Marker): Promise<boolean> {
 		const stored = await this.#input.store.read({
 			repo: this.#input.repo,
 			issue: marker.issue,
@@ -2240,8 +2257,6 @@ export class Orchestrator {
 				seq: marker.seq,
 			});
 		}
-
-		this.#see(marker.issue, updatedAt, { kind: "decided" });
 
 		return true;
 	}
@@ -2295,8 +2310,9 @@ export class Orchestrator {
 		ledger: CleanLedger,
 		record: IssueRecord,
 		candidate: boolean,
-	): Promise<"held" | "resolved" | "undecided" | "corrupt"> {
-		let settled: "held" | "resolved" = "resolved";
+		foreign: boolean,
+	): Promise<"held" | "resolved" | "refused" | "undecided" | "corrupt"> {
+		let settled: "held" | "resolved" | "refused" = "resolved";
 		let timeline: Read<TimelineEntry[]> | null = null;
 
 		for (const claim of await this.#input.files.listClaims()) {
@@ -2307,7 +2323,7 @@ export class Orchestrator {
 			const latest = latestFor(ledger, claim.runId)?.marker ?? null;
 
 			if (latest !== null && isTerminal(latest.status)) {
-				if (!(await this.#matchesAdmission(latest, record.updatedAt))) {
+				if (!(await this.#matchesAdmission(latest, record.updatedAt, true))) {
 					return this.state.corrupt.has(record.number)
 						? "corrupt"
 						: "undecided";
@@ -2340,8 +2356,10 @@ export class Orchestrator {
 				why = null;
 			}
 
-			if (why === null) {
-				settled = "held";
+			if (foreign && (latest !== null || why !== null)) {
+				settled = "refused";
+			} else if (why === null) {
+				if (settled === "resolved") settled = "held";
 			} else if (
 				!(await this.#releaseClaim({
 					claim,
@@ -2448,7 +2466,11 @@ export class Orchestrator {
 		};
 	}
 
-	async #matchesAdmission(marker: Marker, updatedAt: string): Promise<boolean> {
+	async #matchesAdmission(
+		marker: Marker,
+		updatedAt: string,
+		ended = false,
+	): Promise<boolean> {
 		const record = await this.#input.store.read({
 			repo: this.#input.repo,
 			issue: marker.issue,
@@ -2456,6 +2478,8 @@ export class Orchestrator {
 		});
 
 		if (record.kind === "unreadable") return false;
+
+		if (record.kind === "absent") return ended;
 
 		if (record.kind === "found" && !matchesRecord(marker, record.receipt)) {
 			this.#markCorrupt(
@@ -2805,6 +2829,21 @@ export class Orchestrator {
 		return claimed.phase.kind !== "ending";
 	}
 
+	async #unmarkedEvents(
+		issue: number,
+		ledger: CleanLedger,
+	): Promise<string[] | null> {
+		const repo = this.#input.repo;
+		const events = await this.#input.store.listEvents({ repo, issue });
+
+		return (
+			events?.filter(
+				(eventId) =>
+					latestFor(ledger, runIdOf({ repo, issue, eventId })) === null,
+			) ?? null
+		);
+	}
+
 	/**
 	 * Finds an admission this controller recorded for the issue's current ready
 	 * event but never marked, such as after a crash before the first marker. It
@@ -2823,14 +2862,9 @@ export class Orchestrator {
 	> {
 		const repo = this.#input.repo;
 		const issue = record.number;
-		const events = await this.#input.store.listEvents({ repo, issue });
+		const unmarked = await this.#unmarkedEvents(issue, ledger);
 
-		if (events === null) return { kind: "defer" };
-
-		const unmarked = events.filter(
-			(eventId) =>
-				latestFor(ledger, runIdOf({ repo, issue, eventId })) === null,
-		);
+		if (unmarked === null) return { kind: "defer" };
 
 		if (unmarked.length === 0) return { kind: "none" };
 
@@ -2965,6 +2999,19 @@ export class Orchestrator {
 		if (local.kind === "defer") return null;
 
 		if (local.kind === "ended") {
+			this.#see(issue, record.updatedAt, { kind: "decided" });
+
+			return null;
+		}
+
+		const top = currentMarker(ledger);
+
+		if (
+			local.kind === "none" &&
+			top !== null &&
+			!isTerminal(top.status) &&
+			(await this.#foreign(top))
+		) {
 			this.#see(issue, record.updatedAt, { kind: "decided" });
 
 			return null;
