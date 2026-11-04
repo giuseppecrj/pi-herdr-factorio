@@ -990,6 +990,7 @@ export class Orchestrator {
 	/** Issues whose claim this tick confirmed eligible. Only these launch. */
 	readonly #confirmed = new Set<number>();
 	readonly #readOpen = new Set<number>();
+	readonly #foreignRuns = new Set<Digest>();
 	readonly #local = new Map<number, ConfirmedRecord>();
 	readonly #ended = new Map<Digest, EndedRecord>();
 	readonly #behind = new Map<number, TickReport["ledgerBehind"][number]>();
@@ -2150,6 +2151,15 @@ export class Orchestrator {
 			const candidate =
 				isReady(record) || (record.open && candidates.includes(record));
 
+			if (
+				local === null &&
+				current !== null &&
+				!isTerminal(current.status) &&
+				(await this.#foreign(current, record.updatedAt))
+			) {
+				continue;
+			}
+
 			if (current !== null && !isTerminal(current.status)) {
 				const eligibility = await this.#eligibilityOf(
 					current,
@@ -2205,6 +2215,35 @@ export class Orchestrator {
 		}
 
 		return direct;
+	}
+
+	/**
+	 * A live marker whose event has no admission record under this state
+	 * directory belongs to another controller. It is left alone: nothing is
+	 * adopted, written or posted, and the issue is not admitted here.
+	 */
+	async #foreign(marker: Marker, updatedAt: string): Promise<boolean> {
+		const stored = await this.#input.store.read({
+			repo: this.#input.repo,
+			issue: marker.issue,
+			eventId: marker.eventId,
+		});
+
+		if (stored.kind !== "absent") return false;
+
+		if (!this.#foreignRuns.has(marker.runId)) {
+			this.#foreignRuns.add(marker.runId);
+			this.#input.log("claim_foreign", {
+				issue: marker.issue,
+				runId: marker.runId,
+				status: marker.status,
+				seq: marker.seq,
+			});
+		}
+
+		this.#see(marker.issue, updatedAt, { kind: "decided" });
+
+		return true;
 	}
 
 	#resolve(issue: number): void {

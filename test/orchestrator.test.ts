@@ -866,6 +866,15 @@ function statuses(github: FakeGitHub, issue: number): string[] {
 	});
 }
 
+function keepAdmissions(
+	from: ReturnType<typeof memoryStore>,
+	to: ReturnType<typeof memoryStore>,
+): void {
+	for (const [key, receipt] of from.records) to.records.set(key, receipt);
+
+	for (const [key, snapshot] of from.snapshots) to.snapshots.set(key, snapshot);
+}
+
 function runIssues(report: TickReport): number[] {
 	return report.runs.map((run) => run.issue);
 }
@@ -2594,6 +2603,120 @@ describe("server/cli.ts controller commands", () => {
 			assert.equal(github.calls.length, 0);
 		});
 	}
+});
+
+describe("Orchestrator runs of another state directory", () => {
+	const base = ["--repo", repo];
+
+	function writes(github: FakeGitHub, from: number): string[][] {
+		return github.calls.slice(from).filter((call) => {
+			const at = call.indexOf("--method");
+
+			return at >= 0 && call[at + 1] !== "GET";
+		});
+	}
+
+	for (const lane of ["running", "blocked"] as const)
+		for (const held of [true, false])
+			it(`leaves a ${lane} run alone from a ${held ? "held" : "live"} controller`, async () => {
+				const f = world();
+				f.github.add(labeled(14));
+
+				if (lane === "running") f.executor.behaviors = [{ kind: "hang" }];
+				const controller = f.start();
+				await controller.tick();
+				const before = statuses(f.github, 14);
+				assert.deepEqual(before, ["1:claimed", `2:${lane}`]);
+
+				const state = stateDir();
+
+				if (held) writeFileSync(join(state, "disabled"), "");
+
+				const executor = new FakeExecutor();
+				const calls = f.github.calls.length;
+
+				const other = await cli(
+					["tick", "--once", "--json", ...base, "--state-dir", state],
+					f.github,
+					new AbortController(),
+					executor,
+				);
+
+				assert.equal(other.code, EXIT.ok, other.stderr);
+				assert.deepEqual(writes(f.github, calls), []);
+				assert.deepEqual(statuses(f.github, 14), before);
+				assert.deepEqual(JSON.parse(other.stdout).runs, []);
+				assert.equal(executor.launches.length, 0);
+				assert.equal(
+					existsSync(join(state, "claims", `${runOf(14)}.json`)),
+					false,
+				);
+				assert.doesNotMatch(
+					other.stderr,
+					/event=(claim_adopted|claim_taken|marker_posted|marker_corrupt|claim_dropped)/,
+				);
+				assert.equal(
+					other.stderr.match(/event=claim_foreign issue=14 /g)?.length,
+					1,
+				);
+
+				await controller.tick();
+				assert.deepEqual(statuses(f.github, 14), before);
+				assert.equal(events(f.logs).includes("marker_corrupt"), false);
+				assert.equal(controller.state.runs.get(14)?.runId, runOf(14));
+			});
+
+	for (const held of [true, false])
+		it(`adopts its own run after a restart that lost its claim file (${held ? "held" : "live"})`, async () => {
+			const github = new FakeGitHub();
+			const state = stateDir();
+			github.add(labeled(14));
+
+			const first = await cli(
+				["tick", "--once", "--json", ...base, "--state-dir", state],
+				github,
+			);
+
+			assert.equal(first.code, EXIT.ok, first.stderr);
+			assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+			const claim = join(state, "claims", `${runOf(14)}.json`);
+			rmSync(claim);
+
+			if (held) writeFileSync(join(state, "disabled"), "");
+
+			const restarted = await cli(
+				["tick", "--once", "--json", ...base, "--state-dir", state],
+				github,
+			);
+
+			assert.equal(restarted.code, EXIT.ok, restarted.stderr);
+			assert.match(restarted.stderr, /event=claim_adopted issue=14 /);
+			assert.doesNotMatch(restarted.stderr, /event=claim_foreign/);
+			assert.equal(JSON.parse(restarted.stdout).runs[0]?.runId, runOf(14));
+			assert.equal(JSON.parse(readFileSync(claim, "utf8")).seq, 2);
+			assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
+		});
+
+	it("turns its own interrupted running stage into a retry after losing the claim file", async () => {
+		const { github, executor, files, logs, start } = world();
+
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "hang" }];
+		await start().tick();
+		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:running"]);
+		files.claims.clear();
+
+		const report = await start().tick();
+
+		assert.equal(report.runs[0]?.attempt, 2);
+		assert.equal(report.runs[0]?.status, "retrying");
+		assert.deepEqual(statuses(github, 14), [
+			"1:claimed",
+			"2:running",
+			"3:retrying",
+		]);
+		assert.equal(events(logs).includes("claim_foreign"), false);
+	});
 });
 
 describe("fileRunFiles", () => {
@@ -8020,6 +8143,7 @@ describe("controller-only validate", () => {
 		assert.equal(marker.marker.stage, "build");
 		assert.equal(marker.marker.candidate, null);
 		const cold = world();
+		keepAdmissions(f.store, cold.store);
 		cold.github.add(
 			labeled(14, { comments: [...(f.github.issues.get(14)?.comments ?? [])] }),
 		);
@@ -8073,6 +8197,7 @@ describe("controller-only validate", () => {
 				"corrupt",
 			);
 			const cold = world();
+			keepAdmissions(f.store, cold.store);
 			cold.github.add(labeled(14, { comments }));
 
 			if (privateState !== "missing_claim") {
