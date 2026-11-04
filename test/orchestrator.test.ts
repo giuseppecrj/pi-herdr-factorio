@@ -2789,49 +2789,160 @@ describe("Orchestrator runs of another state directory", () => {
 	});
 
 	for (const claimFile of ["kept", "lost"] as const)
-		it(`recovers its own unmarked admission under another controller's live run (claim file ${claimFile})`, async () => {
-			const github = new FakeGitHub();
-			const state = stateDir();
-			github.add(labeled(14));
-			const once = ["tick", "--once", "--json", ...base, "--state-dir", state];
-			github.posts = ["rejected"];
+		it(`waits with its own recovered admission until another controller's live run ends (claim file ${claimFile})`, async () => {
+			const f = world();
+			const issue = f.github.add(labeled(14));
+			let finish: (result: StageResult) => void = () => undefined;
+			f.executor.behaviors = [
+				{
+					kind: "later",
+					result: new Promise((done) => {
+						finish = done;
+					}),
+				},
+			];
+			const owner = f.start();
+			await owner.tick();
+			assert.deepEqual(statuses(f.github, 14), ["1:claimed", "2:running"]);
 
-			const first = await cli(once, github);
+			const newer = relabel(f.github, issue);
+			const store = memoryStore();
+			const files = memoryFiles();
 
-			assert.equal(first.code, EXIT.ok, first.stderr);
-			assert.deepEqual(statuses(github, 14), []);
-
-			if (claimFile === "lost")
-				rmSync(join(state, "claims", `${runOf(14)}.json`));
-
-			const foreign = await foreignMarker(github, {
-				eventId: "34537520000",
-				eventAt: "2026-10-29T01:00:00Z",
-				seq: 1,
-				status: "running",
+			const admitted = await admitTicket({
+				exec: f.github.exec,
+				env: () => "/home/exedev",
+				repo,
+				issue: 14,
+				allowlist: [repo],
+				store,
 			});
 
-			const restarted = await cli(once, github);
+			assert.equal(admitted.decision, "admitted");
 
-			assert.equal(restarted.code, EXIT.ok, restarted.stderr);
-			assert.match(restarted.stderr, /event=claim_foreign issue=14 /);
-			assert.equal(JSON.parse(restarted.stdout).runs[0]?.runId, runOf(14));
-			assert.deepEqual(statuses(github, 14).slice(0, 2), [
-				"1:running",
-				"2:claimed",
-			]);
+			if (claimFile === "kept")
+				files.claims.set(newer, {
+					runId: newer,
+					issue: 14,
+					eventId: "34537529999",
+					seq: null,
+					status: null,
+					stage: null,
+					attempt: null,
+					usage: null,
+				});
 
-			const runIds = github.markers(14).flatMap((body) => {
-				const parsed = parseMarker(body);
+			f.github.add(labeled(15));
+			f.github.add(labeled(16));
+			const clock = new FakeClock();
+			clock.t = START + 3_600_000;
+			const executor = new FakeExecutor();
+			executor.workflow = () => f.github.workflow;
+			const logs: { event: string; fields: LogFields }[] = [];
 
-				return parsed.kind === "marker" ? [parsed.marker.runId] : [];
+			const other = new Orchestrator({
+				exec: f.github.exec,
+				env: () => "/home/exedev",
+				repo,
+				store,
+				files,
+				executor,
+				clock,
+				scope: null,
+				log: (event, fields) => logs.push({ event, fields }),
 			});
+
+			await other.tick();
+			assert.deepEqual(statuses(f.github, 14), ["1:claimed", "2:running"]);
+			assert.equal(other.state.runs.has(14), false);
+			assert.deepEqual(
+				[...other.state.runs.keys()].sort((a, b) => a - b),
+				[15, 16],
+			);
+
+			const launch = f.executor.launches[0];
+			assert.ok(launch);
+			finish(resultOf(launch, { kind: "failed", exit: "error" }, 0));
+			f.store.local = "disabled";
+			await owner.tick();
+			assert.equal(statuses(f.github, 14)[2], "3:retrying");
+
+			for (let tick = 0; tick < 3; tick++) {
+				f.clock.t += 60_000;
+				clock.t += 60_000;
+				await other.tick();
+				await owner.tick();
+			}
+
+			assert.equal(events(f.logs).includes("marker_corrupt"), false);
+			assert.equal(events(logs).includes("marker_corrupt"), false);
+			const ended = statuses(f.github, 14);
+			assert.match(ended.at(-1) ?? "", /^\d+:released$/);
+			assert.equal(other.state.runs.has(14), false);
+
+			for (const number of [15, 16]) {
+				const done = f.github.issues.get(number);
+				assert.ok(done);
+				done.state = "closed";
+				done.updatedAt = "2026-10-29T02:40:00Z";
+			}
+
+			clock.t += 60_000;
+			await other.tick();
+			assert.deepEqual([...other.state.runs.keys()], [14]);
+			assert.equal(other.state.runs.get(14)?.runId, newer);
+			assert.equal(
+				statuses(f.github, 14)[ended.length],
+				`${ended.length + 1}:claimed`,
+			);
+			assert.equal(events(f.logs).includes("marker_corrupt"), false);
+			assert.equal(events(logs).includes("marker_corrupt"), false);
+		});
+
+	it("frees the slot of a claim ahead of the ledger that has no admission here", async () => {
+		const { github, files, logs, start } = world();
+		github.add(labeled(14));
+		github.add(labeled(15));
+		github.add(labeled(16));
+		files.claims.set(runOf(14), blockedClaim(14, 3));
+
+		const report = await start().tick();
+
+		assert.deepEqual(
+			runIssues(report).sort((a, b) => a - b),
+			[15, 16],
+		);
+		assert.deepEqual(statuses(github, 14), []);
+		assert.equal(events(logs).includes("claim_adopted"), false);
+	});
+
+	for (const lane of ["ready", "closed"] as const)
+		it(`frees the slot of an unmarked ${lane} claim that has no admission here`, async () => {
+			const { github, files, logs, start } = world();
+			const issue = github.add(labeled(14));
+
+			if (lane === "closed") issue.state = "closed";
+			github.add(labeled(15));
+			github.add(labeled(16));
+			files.claims.set(runOf(14), {
+				runId: runOf(14),
+				issue: 14,
+				eventId: String(EVENT_ID + 14),
+				seq: null,
+				status: null,
+				stage: null,
+				attempt: null,
+				usage: null,
+			});
+
+			const report = await start().tick();
 
 			assert.deepEqual(
-				runIds.slice(1),
-				runIds.slice(1).map(() => runOf(14)),
+				runIssues(report).sort((a, b) => a - b),
+				[15, 16],
 			);
-			assert.equal(runIds[0], foreign);
+			assert.deepEqual(statuses(github, 14), []);
+			assert.equal(events(logs).includes("claim_released"), false);
 		});
 
 	it("admits a newer ready event only once the owner ends its run", async () => {
