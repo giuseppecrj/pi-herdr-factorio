@@ -1306,7 +1306,7 @@ export class Orchestrator {
 			isTerminal(marked.status) &&
 			marked.seq >= (claim.seq ?? 0)
 		) {
-			await this.#freezeRow(marked);
+			const durable = await this.#freezeRow(marked);
 			await this.#keepEnded(
 				{
 					...claim,
@@ -1316,7 +1316,7 @@ export class Orchestrator {
 					attempt: marked.attempt,
 					usage: Math.max(candidateUsage(handoff), marked.usage),
 				},
-				true,
+				durable,
 			);
 			this.#reserved.delete(claim.issue);
 
@@ -1998,11 +1998,14 @@ export class Orchestrator {
 			if (ended.claim.issue !== issue) continue;
 
 			ended.tick = this.#ticks;
-			ended.confirmed ||= ledgerSeq >= ended.claim.seq;
 			const marker = latestFor(ledger, ended.claim.runId)?.marker;
 
-			if (marker !== undefined && marker.seq === ended.claim.seq)
-				await this.#freezeRow(marker);
+			const durable =
+				marker === undefined ||
+				marker.seq !== ended.claim.seq ||
+				(await this.#freezeRow(marker));
+
+			ended.confirmed ||= ledgerSeq >= ended.claim.seq && durable;
 		}
 	}
 
@@ -2121,10 +2124,11 @@ export class Orchestrator {
 		return false;
 	}
 
-	async #freezeRow(marker: Marker): Promise<void> {
+	/** False only while a frozen row could not yet be made durable; later ticks retry it. */
+	async #freezeRow(marker: Marker): Promise<boolean> {
 		const ledger = this.#input.files.ledger;
 
-		if (ledger === undefined || !isTerminal(marker.status)) return;
+		if (ledger === undefined || !isTerminal(marker.status)) return true;
 
 		const frozen = await ledger.freeze(marker.runId, {
 			seq: marker.seq,
@@ -2137,6 +2141,8 @@ export class Orchestrator {
 				runId: marker.runId,
 				reason: frozen,
 			});
+
+		return frozen !== "unwritable";
 	}
 
 	async #keepEnded(claim: ConfirmedRecord, confirmed: boolean): Promise<void> {
@@ -2538,8 +2544,10 @@ export class Orchestrator {
 						: "undecided";
 				}
 
-				await this.#freezeRow(latest);
-				await this.#keepEnded({ ...claim, ...recordOf(latest) }, true);
+				await this.#keepEnded(
+					{ ...claim, ...recordOf(latest) },
+					await this.#freezeRow(latest),
+				);
 				continue;
 			}
 

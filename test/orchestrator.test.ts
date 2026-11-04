@@ -12952,6 +12952,46 @@ describe("ledger outbox enrollment", () => {
 		assert.equal(ctx.executor.launches.length, 1);
 	});
 
+	it("retries a failed freeze on later ticks until row.json is durable, without a restart", async () => {
+		const dir = stateDir();
+		const real = fileLedgerOutbox(dir);
+		let failures = 3;
+		let calls = 0;
+
+		const outbox: LedgerOutbox = {
+			...real,
+			freeze: async (runId, marker) => {
+				calls += 1;
+
+				if (failures > 0) {
+					failures -= 1;
+
+					return "unwritable";
+				}
+
+				return real.freeze(runId, marker);
+			},
+		};
+
+		const ctx = needsInfoWorld(outbox);
+		const controller = ctx.start();
+		const rowPath = join(dir, "ledger", runOf(14), "row.json");
+
+		for (let tick = 0; tick < 6 && !existsSync(rowPath); tick++) {
+			ctx.clock.t += 60_000;
+			await once(controller);
+		}
+
+		assert.equal(statuses(ctx.github, 14).at(-1), "3:needs_info");
+		assert.equal(existsSync(rowPath), true);
+		assert.equal(calls, 4);
+		const settled = calls;
+		await once(controller);
+		await once(controller);
+		assert.equal(calls, settled);
+		assert.equal(ctx.executor.launches.length, 1);
+	});
+
 	it("serve pumps the outbox after every tick", async () => {
 		const ctx = world();
 		const stop = new AbortController();
