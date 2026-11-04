@@ -318,7 +318,7 @@ const artifacts = tagged({
 		acceptanceDigest: digest,
 		generations: list(generation, 1),
 	},
-	legacy_incomplete: {
+	pre_build_stop: {
 		contractDigest: fact(digest),
 		acceptanceDigest: fact(digest),
 	},
@@ -995,7 +995,7 @@ function artifactsOf(facts: TerminalFacts): JsonValue {
 		return facts.stage === "specify"
 			? { kind: "admission" }
 			: {
-					kind: "legacy_incomplete",
+					kind: "pre_build_stop",
 					contractDigest: unavailable("not_instrumented"),
 					acceptanceDigest: unavailable("not_instrumented"),
 				};

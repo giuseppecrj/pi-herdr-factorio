@@ -262,6 +262,33 @@ describe("ledger row codec", () => {
 		assert.equal(frozenRowOf(landed.bytes)?.digest, landed.digest);
 	});
 
+	it("names a native stop before build pre_build_stop, never legacy_incomplete", () => {
+		const stop = {
+			kind: "pre_build_stop",
+			contractDigest: { kind: "known", value: digestOf("contract") },
+			acceptanceDigest: { kind: "unavailable", reason: "not_instrumented" },
+		} as const;
+
+		const row = ledgerRow({
+			...rowInput(9),
+			outcome: {
+				kind: "failed",
+				stage: "accept",
+				cause: { kind: "known", value: "base_refused" },
+			},
+			artifacts: stop,
+		});
+
+		assert.deepEqual(frozenRowOf(row.bytes)?.row.artifacts, stop);
+
+		const legacy = Buffer.from(
+			row.bytes.toString().replace('"pre_build_stop"', '"legacy_incomplete"'),
+		);
+
+		assert.equal(frozenRowOf(legacy), null);
+		assert.equal(parseLedger(legacy)[0]?.kind, "corrupt");
+	});
+
 	it("derives gaps from every unavailable fact and lower bound, and never writes money as zero", () => {
 		const row = ledgerRow({
 			...rowInput(3),
