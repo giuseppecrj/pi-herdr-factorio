@@ -1220,6 +1220,134 @@ describe("gateway admission gate and control", () => {
 		}
 	});
 
+	it("settles a provider's non-2xx response at zero and keeps a 2xx without usage uncertain", async () => {
+		const modes = ["429", "500", "bare", "cut"];
+		let mode = "";
+
+		const upstream = createServer((req, res) => {
+			req.resume();
+			req.on("end", () => {
+				if (mode === "429" || mode === "500") {
+					res.writeHead(Number(mode), { "Content-Type": "application/json" });
+					res.end('{"error":{"message":"rejected"}}');
+
+					return;
+				}
+
+				res.writeHead(200, { "Content-Type": "text/event-stream" });
+
+				if (mode === "bare") {
+					res.end(
+						'event: response.created\ndata: {"type":"response.created"}\n\n',
+					);
+
+					return;
+				}
+
+				res.write(
+					'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"he"}\n\n',
+					() => res.socket?.destroy(),
+				);
+			});
+		});
+
+		await new Promise<void>((done) => upstream.listen(0, "127.0.0.1", done));
+
+		try {
+			const address = upstream.address();
+
+			const port =
+				address !== null && address instanceof Object ? address.port : 0;
+
+			const h = await harness(port);
+
+			for (const next of modes) {
+				mode = next;
+				await call(h.socketPath, "POST", "/openai/v1/responses", json, model);
+			}
+
+			const bounds = h.journal.flatMap((entry) =>
+				entry.kind === "dispatch"
+					? [(entry.inputTokenEstimate ?? 0) + (entry.maxOutputTokens ?? 0)]
+					: [],
+			);
+
+			assert.equal(bounds.length, 4);
+			assert.deepEqual(
+				h.journal.flatMap((entry) =>
+					entry.kind === "result"
+						? [
+								[
+									entry.status,
+									entry.decision,
+									entry.reason ?? null,
+									entry.inputTokens,
+									entry.outputTokens,
+								],
+							]
+						: [],
+				),
+				[
+					[429, "forward", "provider_rejected", 0, 0],
+					[500, "forward", "provider_rejected", 0, 0],
+					[200, "forward", null, null, null],
+					[200, "error", null, null, null],
+				],
+			);
+
+			const lines = h.journal.map((entry) => JSON.stringify(entry));
+
+			assert.deepEqual(journalCharge(lines.slice(0, 4).join("\n")), {
+				tokens: 0,
+				dispatched: 2,
+				settled: 2,
+				unmetered: 0,
+				uncertain: 0,
+				uncertainTokens: 0,
+			});
+			assert.deepEqual(journalCharge(lines.join("\n")), {
+				tokens: 0,
+				dispatched: 4,
+				settled: 4,
+				unmetered: 2,
+				uncertain: 2,
+				uncertainTokens: (bounds[2] ?? 0) + (bounds[3] ?? 0),
+			});
+		} finally {
+			await new Promise((done) => upstream.close(done));
+		}
+	});
+
+	it("keeps a model request that never reached the provider's headers uncertain", async () => {
+		const h = await harness(REFUSED_PORT);
+
+		assert.equal(
+			(await call(h.socketPath, "POST", "/openai/v1/responses", json, model))
+				.code,
+			"upstream-error",
+		);
+
+		const [sent, settled] = h.journal;
+
+		assert.ok(sent?.kind === "dispatch" && settled?.kind === "result");
+		assert.deepEqual(
+			[settled.status, settled.reason ?? null, settled.inputTokens],
+			[502, null, null],
+		);
+		assert.deepEqual(
+			journalCharge(h.journal.map((entry) => JSON.stringify(entry)).join("\n")),
+			{
+				tokens: 0,
+				dispatched: 1,
+				settled: 1,
+				unmetered: 1,
+				uncertain: 1,
+				uncertainTokens:
+					(sent.inputTokenEstimate ?? 0) + (sent.maxOutputTokens ?? 0),
+			},
+		);
+	});
+
 	it("does not add an output-limit body to a bodyless model metadata read", async () => {
 		const h = await harness(fixture.port);
 		assert.equal(

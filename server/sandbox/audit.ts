@@ -61,6 +61,7 @@ export type JournalRecord =
 			readonly kind: "result";
 			readonly status: number;
 			readonly decision: AuditDecision;
+			readonly reason?: "provider_rejected";
 			readonly inputTokens: number | null;
 			readonly outputTokens: number | null;
 	  });
