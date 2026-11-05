@@ -652,8 +652,8 @@ When the host writes a stage or seat receipt, it reads that attempt's request jo
 | `family.kind` | When |
 |---|---|
 | `anthropic-gateway` | The answering session requested an `anthropic/` model, and every settled `model-anthropic` reply that the provider did not reject was metered with a `message_start.message.model` the gateway observed in the limits table. `model` is that bare ID. |
-| `openai-request` | The answering session requested an `openai/` model, and every metered line was on `model-openai`. `model` is the requested ID. |
-| `unavailable` | Anything else. `reason` is `missing` (no journal, or no metered line), `unknown-model`, `mixed` (a line on another route) or `unmetered` (an Anthropic reply without usage, or a dispatch without a result). |
+| `openai-request` | The answering session requested an `openai/` model, every line was on `model-openai`, and at least one result that the provider did not reject was metered. Provider-rejected results are skipped. A result whose `observedModel` is anything but the requested ID, bare or prefixed, makes the family `unknown-model`. `model` is the requested ID. |
+| `unavailable` | Anything else. `reason` is `missing` (no journal, an empty journal, or no metered line that the provider did not reject), `unknown-model`, `mixed` (a line on another route) or `unmetered` (an Anthropic reply without usage, or a dispatch without a result). |
 
 When a fallback answered, only its route counts, and the superseded primary's lines are ignored. The builder's family is the family on the latest passed build attempt of the round, and only `openai-request` for the patch's recorded model counts.
 
@@ -661,11 +661,12 @@ Review receipts are version 3. They store `builder`, `accept` (from the acceptan
 
 | Label | When |
 |---|---|
-| `context-isolated, different family, cross-family` | The seat's family and the builder's are both known and different. |
+| `context-isolated, different family, cross-family` | The builder is `openai-request` and the seat is `anthropic-gateway`. This is the only pair that counts for R8. |
+| `context-isolated, different family, builder not OpenAI, not cross-family` | Both are known and different, but the builder is not OpenAI. |
 | `context-isolated, same family, not cross-family` | Both are known and the same. |
 | `context-isolated, unknown family, not cross-family` | Either is unknown. |
 
-`r8` is `complete` only when the builder is `openai-request`, the accept author is `anthropic-gateway`, and a seat other than `simplify` is `anthropic-gateway`. Otherwise it is `incomplete`. Certification recomputes `r8` and every label from the stored families and refuses the review with `certification_binding` on any mismatch. A builder family whose model is not the patch's model is refused too. Version 2 receipts, written before F10c, keep their same-family labels and certify only as `incomplete`. They are never migrated. The PR body states R8 from the recomputed value. Its Not proven section lists `R8 cross-family review remains incomplete.` unless that value is `complete`. Publication refuses a version 3 review whose `accept` evidence differs from the acceptance receipt's own.
+`r8` is `complete` only when all three hold: the builder is `openai-request` with an `openai/` model, the accept author is `anthropic-gateway` with a table model, and at least one seat other than `simplify` is `anthropic-gateway` with a table model. Every other shape is `incomplete`, including an Anthropic builder, inverted families, and Anthropic evidence only on `simplify`. Certification recomputes `r8` and every label from the stored families and refuses the review with `certification_binding` on any mismatch. It also refuses any builder family other than `unavailable` that is not `openai-request` for the patch's recorded model. Version 2 receipts, written before F10c, certify only as `incomplete`, and only when every seat label equals one of the two historical labels exactly: `context-isolated, same model, same family, not cross-family` or `context-isolated, different model, same family, not cross-family`. They are never migrated. A stored `family` is trusted only because the host writes it from the journal into host-owned state outside every stage mount. `parseFamily` checks its shape, not its truth. On a restart the review runner reuses each finished seat's stored `family`, and certification still applies the strict rule above to it. The PR body states R8 from the recomputed value. Its Not proven section lists `R8 cross-family review remains incomplete.` unless that value is `complete`. Publication refuses a version 3 review whose `accept` evidence differs from the acceptance receipt's own.
 
 A same-family fallback, such as an Anthropic accept that fell back to its `openai/` `fallback_model`, records an `openai-request` author, so the run certifies `r8: "incomplete"`. An OpenAI model that answered a seat that requested Anthropic is never labeled `cross-family`.
 

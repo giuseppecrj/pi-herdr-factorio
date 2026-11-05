@@ -1019,9 +1019,11 @@ export function certifyGeneration(input: {
 		r.blocking ||
 		blocksReview(r.seats) ||
 		!familyClaimsHold(r) ||
+		// Any builder family present must be the patch's own OpenAI request.
 		(r.version === 3 &&
-			r.builder.kind === "openai-request" &&
-			r.builder.model !== patch.receipt.model) ||
+			r.builder.kind !== "unavailable" &&
+			(r.builder.kind !== "openai-request" ||
+				r.builder.model !== patch.receipt.model)) ||
 		r.seats.length !== e.seats.length ||
 		e.seats.some(
 			(seat) => r.seats.filter((s) => s.seat === seat).length !== 1,

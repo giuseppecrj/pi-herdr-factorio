@@ -21,7 +21,13 @@ import { fileRunFiles, serveLoop } from "../../server/controller.ts";
 import { fileAdmissionStore, admitTicket } from "../../src/admission.ts";
 import { handoffCandidate, parseCandidateState } from "../../src/handoff.ts";
 import { candidateBranch } from "../../src/publication.ts";
-import { ReviewEvidenceUnavailable } from "../../src/review.ts";
+import {
+	type FamilyInput,
+	familyClaimsHold,
+	ReviewEvidenceUnavailable,
+	reviewCandidate,
+	type SeatReceipt,
+} from "../../src/review.ts";
 import { FakeGitHub, fakeIssue, labelEvent } from "../fake-ticket-adapter.ts";
 import {
 	type Contract,
@@ -2723,6 +2729,28 @@ describe("runStage on an Anthropic primary", () => {
 			{ kind: "unavailable", reason: "unmetered" },
 		],
 		["no journal at all", null, { kind: "unavailable", reason: "missing" }],
+		["an empty journal", "", { kind: "unavailable", reason: "missing" }],
+		[
+			"only a provider-rejected result",
+			[
+				journalLines(1, "model-anthropic", { kind: "unsettled" })[0],
+				JSON.stringify({
+					v: 1,
+					ts: "2026-11-04T00:00:00.000Z",
+					stage: "accept",
+					runId: RUN,
+					attempt: 1,
+					req: 1,
+					route: "model-anthropic",
+					kind: "result",
+					status: 529,
+					reason: "provider_rejected",
+					inputTokens: 0,
+					outputTokens: 0,
+				}),
+			].join("\n"),
+			{ kind: "unavailable", reason: "missing" },
+		],
 	] as const)
 		it(`fails the attempt on ${name}, even though Pi passed, and keeps no output`, async () => {
 			const h = anthropicHarness(
@@ -5089,6 +5117,130 @@ describe("multi-seat candidate review", () => {
 			assert.equal(result.usage, 10);
 			assert.equal(result.receipt.usage.total, 30);
 			assert.equal(h.hosts.length, 4);
+		} finally {
+			h.close();
+		}
+	});
+
+	it("certifies a reloaded seat receipt's stored family only under the strict r8 rule", async () => {
+		const openaiJournal = journalLines(1, "model-openai", {
+			kind: "metered",
+		}).join("\n");
+
+		const h = await setup("clean", 1, false, {
+			codeReviewModel: model(CLAUDE),
+			journals: {
+				"code-review": journalLines(1, "model-anthropic", {
+					kind: "metered",
+					observedModel: "claude-sonnet-5-5",
+				}).join("\n"),
+				"security-review": openaiJournal,
+				simplify: openaiJournal,
+			},
+		});
+
+		const openai: FamilyInput = {
+			kind: "openai-request",
+			model: "openai/gpt-6.1-sol",
+		};
+
+		const claude: FamilyInput = {
+			kind: "anthropic-gateway",
+			model: "claude-sonnet-5-5",
+		};
+
+		const prepared = h.fixture.prepared;
+
+		const reload = async (families: {
+			readonly builder: FamilyInput;
+			readonly accept: FamilyInput;
+		}) => {
+			rmSync(join(h.dir, "receipt.json"), { force: true });
+			rmSync(join(h.dir, "output.txt"), { force: true });
+
+			const before = h.hosts.length;
+
+			const result = await sandboxModule.runReview(
+				{ ...h.run, review: { ...prepared, families } },
+				h.dir,
+				h.create,
+			);
+
+			assert.equal(result.kind, "passed");
+			assert.equal(h.hosts.length, before, "no seat ran again");
+
+			const seats: SeatReceipt[] = JSON.parse(
+				readFileSync(join(h.dir, "output.txt"), "utf8"),
+			);
+
+			const receipt = reviewCandidate(
+				prepared.input,
+				prepared.verdict,
+				seats,
+				families,
+			);
+
+			if (receipt.version !== 3) throw new Error("version 3 expected");
+
+			return receipt;
+		};
+
+		const storeFamily = (seat: string, family: FamilyInput) => {
+			const path = join(h.dir, seat, "receipt.json");
+
+			writeFileSync(
+				path,
+				JSON.stringify({
+					...JSON.parse(readFileSync(path, "utf8")),
+					family,
+				}),
+			);
+		};
+
+		try {
+			await sandboxModule.runReview(
+				{
+					...h.run,
+					review: {
+						...prepared,
+						families: { builder: openai, accept: claude },
+					},
+				},
+				h.dir,
+				h.create,
+			);
+
+			const complete = await reload({ builder: openai, accept: claude });
+
+			assert.equal(complete.r8, "complete");
+			assert.ok(familyClaimsHold(complete));
+
+			// Inverted families from the same stored seats never complete.
+			const inverted = await reload({ builder: claude, accept: openai });
+
+			assert.equal(inverted.r8, "incomplete");
+			assert.ok(
+				inverted.seats.every(
+					(seat) => !/(?<!not )cross-family/.test(seat.label),
+				),
+			);
+			assert.equal(familyClaimsHold({ ...inverted, r8: "complete" }), false);
+
+			// Anthropic evidence stored only on simplify never completes.
+			storeFamily("code-review", openai);
+			storeFamily("simplify", claude);
+
+			const simplifyOnly = await reload({ builder: openai, accept: claude });
+
+			assert.deepEqual(
+				simplifyOnly.seats.map((seat) => seat.family),
+				[openai, openai, claude],
+			);
+			assert.equal(simplifyOnly.r8, "incomplete");
+			assert.equal(
+				familyClaimsHold({ ...simplifyOnly, r8: "complete" }),
+				false,
+			);
 		} finally {
 			h.close();
 		}

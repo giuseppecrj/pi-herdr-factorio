@@ -2350,7 +2350,30 @@ test("certification recomputes r8 and every label from stored family evidence, n
 		codeReview: { kind: "unavailable", reason: "unknown-model" },
 	});
 
+	const inverted = familyReceipt(c.review, {
+		builder: CLAUDE,
+		accept: OPENAI_BUILDER,
+		codeReview: OPENAI_BUILDER,
+	});
+
+	assert.equal(inverted.r8, "incomplete", "inverted families");
+
+	if (inverted.version !== 3) throw new Error("version 3 expected");
+
 	const forged: [string, ReviewReceipt][] = [
+		["an Anthropic builder", inverted],
+		["an Anthropic builder claiming complete", { ...inverted, r8: "complete" }],
+		[
+			"a version 2 label that also claims cross-family",
+			{
+				...c.review,
+				seats: c.review.seats.map((seat) => ({
+					...seat,
+					label:
+						"context-isolated, different family, cross-family; same family, not cross-family",
+				})),
+			},
+		],
 		["r8 complete on a same-family accept", { ...fallback, r8: "complete" }],
 		["r8 incomplete on complete evidence", { ...complete, r8: "incomplete" }],
 		[
@@ -2400,7 +2423,11 @@ test("certification recomputes r8 and every label from stored family evidence, n
 		// can see a builder that is not the patch's model.
 		assert.deepEqual(
 			parseReviewReceipt(JSON.parse(JSON.stringify(review))),
-			name === "a builder that is not the patch's model" ? review : null,
+			name === "a builder that is not the patch's model" ||
+				name === "an Anthropic builder" ||
+				name === "a version 2 label that also claims cross-family"
+				? review
+				: null,
 			name,
 		);
 	}

@@ -1626,6 +1626,69 @@ describe("family evidence", () => {
 		);
 	});
 
+	it("never verifies an OpenAI builder from a rejected or contradictory journal", () => {
+		const rejected: Line[] = [
+			{ req: 9, route: "model-openai", kind: "dispatch" },
+			{
+				req: 9,
+				route: "model-openai",
+				kind: "result",
+				reason: "provider_rejected",
+				inputTokens: 0,
+				outputTokens: 0,
+			},
+		];
+
+		const cases: [string, string, string | null, string][] = [
+			["only a provider rejection", journal(...rejected), null, "missing"],
+			[
+				"a provider rejection after a superseded Anthropic answer",
+				journal(
+					...metered(1, "model-anthropic", "claude-sonnet-5-5"),
+					...rejected,
+				),
+				"model-anthropic",
+				"missing",
+			],
+			[
+				"an Anthropic observed model on model-openai",
+				journal(...metered(1, "model-openai", "claude-sonnet-5-5")),
+				null,
+				"unknown-model",
+			],
+			[
+				"another OpenAI model observed",
+				journal(
+					...metered(1, "model-openai"),
+					...metered(2, "model-openai", "gpt-6.1-terra"),
+				),
+				null,
+				"unknown-model",
+			],
+		];
+
+		for (const [name, text, superseded, reason] of cases)
+			assert.deepEqual(
+				familyFromJournal({ journal: text, requested: OPENAI, superseded }),
+				{ kind: "unavailable", reason },
+				name,
+			);
+
+		assert.deepEqual(
+			familyFromJournal({
+				journal: journal(
+					...rejected,
+					...metered(1, "model-openai"),
+					...metered(2, "model-openai", "gpt-6.1-sol"),
+				),
+				requested: OPENAI,
+				superseded: null,
+			}),
+			{ kind: "openai-request", model: OPENAI },
+			"a rejection beside a metered answer of the requested model",
+		);
+	});
+
 	it("names the builder openai-request only when every metered line is on model-openai", () => {
 		assert.deepEqual(
 			familyFromJournal({
@@ -1744,8 +1807,133 @@ describe("cross-family certification", () => {
 				"Anthropic builder",
 				{ builder: claude, accept: claude, seats: seats(claude) },
 			],
+			[
+				"inverted families",
+				{ builder: claude, accept: openai, seats: seats(openai) },
+			],
+			[
+				"inverted families with Anthropic only on simplify",
+				{ builder: claude, accept: openai, seats: seats(openai, claude) },
+			],
+			[
+				"an Anthropic builder and an Anthropic accept with OpenAI seats",
+				{ builder: claude, accept: claude, seats: seats(openai) },
+			],
 		] as const)
 			assert.equal(certifyR8(families), "incomplete", name);
+	});
+
+	it("never labels an inverted shape cross-family, and a stored inverted receipt keeps r8 incomplete", () => {
+		assert.equal(
+			familyLabel(openai, claude),
+			"context-isolated, different family, builder not OpenAI, not cross-family",
+		);
+		assert.equal(
+			familyLabel(claude, claude),
+			"context-isolated, same family, not cross-family",
+		);
+
+		// A label claims cross-family only for the one shape certifyR8 counts.
+		const evidenceKinds: readonly FamilyInput[] = [claude, openai, unknown];
+
+		for (const b of evidenceKinds)
+			for (const author of evidenceKinds)
+				assert.equal(
+					/(?<!not )cross-family/.test(familyLabel(author, b)),
+					b === openai && author === claude,
+					`${b.kind} builder, ${author.kind} seat`,
+				);
+
+		const binding = {
+			runId: digestOf("run"),
+			round: 0,
+			candidateSha: "a".repeat(40),
+			patchDigest: digestOf("patch"),
+			contractDigest: digestOf("contract"),
+			acceptanceDigest: digestOf("acceptance"),
+			ciRunId: 1,
+			originalBase: "b".repeat(40),
+			baseSha: "b".repeat(40),
+		};
+
+		for (const simplify of [openai, claude]) {
+			const stored: readonly {
+				readonly seat: string;
+				readonly evidence: FamilyInput;
+			}[] = seats(openai, simplify);
+
+			const receipt: ReviewReceipt = {
+				...binding,
+				version: 3,
+				r8: "complete",
+				builder: claude,
+				accept: openai,
+				seats: stored.map(({ seat, evidence }) => ({
+					seat,
+					findings: [],
+					judgments: [],
+					requested: OPENAI,
+					observed: null,
+					family: evidence,
+					label: familyLabel(evidence, claude),
+					fallback: false,
+					tokens: 1,
+				})),
+				blocking: false,
+			};
+
+			assert.equal(reviewR8(receipt), "incomplete");
+			assert.equal(familyClaimsHold(receipt), false, "a stored complete");
+			assert.equal(
+				familyClaimsHold({ ...receipt, r8: "incomplete" }),
+				true,
+				"a stored incomplete",
+			);
+		}
+	});
+
+	it("accepts a version 2 receipt only with an exact historical label", () => {
+		const legacy = (label: string): ReviewReceipt => ({
+			runId: digestOf("run"),
+			round: 0,
+			candidateSha: "a".repeat(40),
+			patchDigest: digestOf("patch"),
+			contractDigest: digestOf("contract"),
+			acceptanceDigest: digestOf("acceptance"),
+			ciRunId: 1,
+			originalBase: "b".repeat(40),
+			baseSha: "b".repeat(40),
+			version: 2,
+			r8: "incomplete",
+			seats: [
+				{
+					seat: "code-review",
+					findings: [],
+					judgments: [],
+					requested: OPENAI,
+					observed: null,
+					label,
+					fallback: false,
+					tokens: 1,
+				},
+			],
+			blocking: false,
+		});
+
+		for (const label of [
+			"context-isolated, same model, same family, not cross-family",
+			"context-isolated, different model, same family, not cross-family",
+		])
+			assert.equal(familyClaimsHold(legacy(label)), true, label);
+
+		for (const label of [
+			"context-isolated, different family, cross-family; same family, not cross-family",
+			"context-isolated, cross-family, same family, not cross-family",
+			"context-isolated, same family, not cross-family",
+			"context-isolated, same model, same family, not cross-family ",
+			"context-isolated",
+		])
+			assert.equal(familyClaimsHold(legacy(label)), false, label);
 	});
 
 	it("labels from evidence only, never cross-family for unknown or same family", () => {

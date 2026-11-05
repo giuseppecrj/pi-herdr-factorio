@@ -790,6 +790,26 @@ function anthropicUnmetered(journal: string, settled: boolean): boolean {
 	return settled && [...dispatched].some((req) => !results.has(req));
 }
 
+/**
+ * True when the journal holds at least one metered `model-anthropic` result
+ * that the provider did not reject: the gateway's proof that an Anthropic
+ * model answered.
+ */
+function anthropicMetered(journal: string): boolean {
+	return journal.split("\n").some((line) => {
+		const record = objectOf(parseJson(line));
+
+		return (
+			record !== null &&
+			fieldOf(record, "route") === "model-anthropic" &&
+			fieldOf(record, "kind") === "result" &&
+			fieldOf(record, "reason") !== "provider_rejected" &&
+			countOf(fieldOf(record, "inputTokens")) !== null &&
+			countOf(fieldOf(record, "outputTokens")) !== null
+		);
+	});
+}
+
 /** The route a model id is served on in a stage table. */
 function modelRouteOf(model: ModelId): "model-anthropic" | "model-openai" {
 	return model.startsWith("anthropic/") ? "model-anthropic" : "model-openai";
@@ -1124,13 +1144,14 @@ export async function runStage(
 	const journal = await readJournal();
 
 	// The final veto, before the receipt or output is kept: an unmetered
-	// Anthropic reply, or a passing Anthropic answer with no journal to show.
+	// Anthropic reply, or a passing Anthropic answer whose journal, missing
+	// or empty, holds no metered `model-anthropic` result.
 	vetoed ||=
 		anthropic &&
 		(anthropicUnmetered(journal ?? "", true) ||
-			(journal === null &&
-				fallback === null &&
-				primary.outcome.kind === "passed"));
+			(fallback === null &&
+				primary.outcome.kind === "passed" &&
+				!anthropicMetered(journal ?? "")));
 
 	return receipt(primary, fallback, summary?.routes ?? null, text, {
 		journal,
