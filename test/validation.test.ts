@@ -1408,6 +1408,97 @@ describe("published held-out bytes and repair feedback", () => {
 			assert.doesNotMatch(JSON.stringify(feedback), leak);
 		});
 
+		// Grok's probe: tsc follows an import into the excluded suite, so the
+		// candidate can place a probe per character and let only the line
+		// equal to the held-out byte fail. Line 67 is `C`.
+		it("gives a static check only its file, so no line, TS code or rule id can encode a held-out byte", () => {
+			const root = mkdtempSync(join(tmpdir(), "line-oracle-"));
+
+			try {
+				const probe = [
+					`import { canary } from "../${heldoutDir}/checks/secret.ts";`,
+					"type Secret = typeof canary;",
+					"type First = Secret extends `${infer C}${string}` ? C : never;",
+					"type Is<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;",
+					"type FailIf<T extends false> = T;",
+					...Array.from({ length: 60 }, () => ""),
+					...["B", "C", "D"].map(
+						(c) => `export type L${c} = FailIf<Is<First, "${c}">>;`,
+					),
+					"export const bad: unique symbol = canary;",
+					"",
+				].join("\n");
+
+				for (const [path, text] of Object.entries({
+					[`${heldoutDir}/checks/secret.ts`]: `export const canary = "${canary}";\n`,
+					"src/probe.ts": probe,
+					"tsconfig.json": JSON.stringify({
+						compilerOptions: {
+							target: "ES2023",
+							module: "NodeNext",
+							moduleResolution: "NodeNext",
+							strict: true,
+							allowImportingTsExtensions: true,
+							noEmit: true,
+							skipLibCheck: true,
+							types: [],
+						},
+						include: ["src", "test"],
+						exclude: ["test/acceptance/**"],
+					}),
+				})) {
+					mkdirSync(join(root, path, ".."), { recursive: true });
+					writeFileSync(join(root, path), text);
+				}
+
+				const run = spawnSync(
+					process.execPath,
+					[
+						join(import.meta.dirname, "../node_modules/typescript/bin/tsc"),
+						"--noEmit",
+						"-p",
+						join(root, "tsconfig.json"),
+					],
+					{ cwd: root, encoding: "utf8", timeout: 60_000 },
+				);
+
+				const typecheck = run.stdout + run.stderr;
+
+				// The real compiler log carries the byte as a line number.
+				assert.match(typecheck, /src\/probe\.ts\(67,\d+\): error TS2344/);
+				assert.doesNotMatch(typecheck, /src\/probe\.ts\((66|68),/);
+
+				const lint = [
+					"  × anti-slop(require-readable-spacing): Expected blank line.",
+					"    ╭─[src/probe.ts:67:2]",
+					"src/probe.ts:68:1: error eslint(no-debugger): x",
+				].join("\n");
+
+				const feedback = checkFeedback({
+					logs: new Map([
+						["typecheck", typecheck],
+						["lint", lint],
+						["format", "src/probe.ts format ━━━━\n"],
+					]),
+					failed: ["typecheck", "lint", "format"],
+					changedPaths: ["src/probe.ts"],
+					heldoutDir,
+				});
+
+				assert.deepEqual(feedback, [
+					{ check: "typecheck", file: "src/probe.ts" },
+					{ check: "lint", file: "src/probe.ts" },
+					{ check: "format", file: "src/probe.ts" },
+				]);
+				assert.doesNotMatch(
+					JSON.stringify(feedback),
+					/\d|TS|anti-slop|eslint|"line"|"code"/,
+				);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		});
+
 		it("keeps only the fixed-form fact from a tool line, however long or disguised its held-out text", () => {
 			const changedPaths = ["src/a.ts", "test/provenance.test.ts"];
 
@@ -1428,20 +1519,8 @@ describe("published held-out bytes and repair feedback", () => {
 			});
 
 			assert.deepEqual(feedback, [
-				{ check: "typecheck", file: "src/a.ts", line: 3, code: "TS2322" },
-				{ check: "typecheck", file: "src/a.ts", line: 4, code: "TS2307" },
-				{
-					check: "typecheck",
-					file: "test/provenance.test.ts",
-					line: 5,
-					code: "TS2305",
-				},
-				{
-					check: "typecheck",
-					file: "test/provenance.test.ts",
-					line: 6,
-					code: "TS2305",
-				},
+				{ check: "typecheck", file: "src/a.ts" },
+				{ check: "typecheck", file: "test/provenance.test.ts" },
 			]);
 			assert.doesNotMatch(JSON.stringify(feedback), leak);
 		});
@@ -1504,7 +1583,7 @@ describe("published held-out bytes and repair feedback", () => {
 			assert.doesNotMatch(JSON.stringify(feedback), leak);
 		});
 
-		it("still names H4's lint rule and line and its EROFS test file", () => {
+		it("still names H4's lint and format file and its EROFS test file", () => {
 			const lint = [
 				"\u001b[31m  × anti-slop(require-readable-spacing): Expected blank line before this statement.\u001b[0m",
 				"    ╭─[test/provenance.test.ts:26:2]",
@@ -1558,12 +1637,7 @@ describe("published held-out bytes and repair feedback", () => {
 			});
 
 			assert.deepEqual(feedback, [
-				...[26, 32, 35].map((line) => ({
-					check: "lint",
-					file: "test/provenance.test.ts",
-					line,
-					code: "anti-slop/require-readable-spacing",
-				})),
+				{ check: "lint", file: "test/provenance.test.ts" },
 				{ check: "format", file: "test/provenance.test.ts" },
 				{
 					check: "candidate_tests",
@@ -1574,24 +1648,24 @@ describe("published held-out bytes and repair feedback", () => {
 		});
 
 		it("bounds the facts to 20 deduplicated entries shared across the failed checks", () => {
-			const changedPaths = ["src/a.ts", "src/b.ts"];
+			const changedPaths = Array.from({ length: 40 }, (_, i) => `src/f${i}.ts`);
 
 			const tsLines = (n: number) =>
 				Array.from(
 					{ length: n },
-					(_, i) => `src/a.ts(${i + 1},1): error TS2322: x`,
+					(_, i) => `src/f${i}.ts(${i + 1},1): error TS2322: x`,
 				).join("\n");
 
 			const lint = Array.from(
 				{ length: 30 },
-				(_, i) => `src/b.ts:${i + 1}:1: error eslint(no-debugger): x`,
+				(_, i) => `src/f${i}.ts:${i + 1}:1: error eslint(no-debugger): x`,
 			).join("\n");
 
 			const feedback = checkFeedback({
 				logs: new Map([
 					["typecheck", `${tsLines(40)}\n${tsLines(40)}`],
 					["lint", lint],
-					["format", "src/a.ts format\nsrc/a.ts format\n"],
+					["format", "src/f0.ts format\nsrc/f0.ts format\n"],
 				]),
 				failed: ["typecheck", "lint", "format"],
 				changedPaths,
@@ -1618,7 +1692,8 @@ describe("published held-out bytes and repair feedback", () => {
 			const stored = (text: string): JsonValue => JSON.parse(text);
 
 			const good = [
-				{ check: "typecheck", file: "src/a.ts", line: 3, code: "TS2322" },
+				{ check: "typecheck", file: "src/a.ts" },
+				{ check: "lint", file: "src/a.ts" },
 				{ check: "format", file: "src/a.ts" },
 				{ check: "candidate_tests", file: "src/a.ts", code: "EROFS" },
 			];
@@ -1645,6 +1720,18 @@ describe("published held-out bytes and repair feedback", () => {
 				{ check: "typecheck", file: "src/b.ts", line: 1, code: "TS2322" },
 				{ check: "typecheck", file: "src/a.ts", line: 0, code: "TS2322" },
 				{ check: "typecheck", file: "src/a.ts", code: "TS2322" },
+				// Fix round 1 stored a line and a code for static checks.
+				{ check: "typecheck", file: "src/a.ts", line: 3, code: "TS2322" },
+				{
+					check: "lint",
+					file: "src/a.ts",
+					line: 26,
+					code: "anti-slop/require-readable-spacing",
+				},
+				{ check: "lint", file: "src/a.ts", code: "eslint/no-debugger" },
+				{ check: "lint", file: "src/a.ts", line: 26 },
+				{ check: "candidate_tests", file: "src/a.ts", code: null },
+				{ check: "candidate_tests", file: "src/a.ts" },
 				{ check: "candidate_tests", file: "src/a.ts", code: "E_SECRET" },
 				{ check: "candidate_tests", file: "src/a.ts", line: 1, code: "EROFS" },
 				{ check: "format", file: "src/a.ts", code: "other" },
@@ -1681,6 +1768,22 @@ describe("published held-out bytes and repair feedback", () => {
 						...scenarios,
 						// SAFETY: a stored file from before fix round 1 had free text.
 						{ check: "lint", lines: ["src/a.ts x"] } as never,
+					]),
+					ref,
+				),
+				null,
+			);
+			assert.equal(
+				readFeedbackBytes(
+					feedbackBytes(ref, [
+						...scenarios,
+						// SAFETY: a stored file from fix round 1 had a typecheck line and code.
+						{
+							check: "typecheck",
+							file: "src/a.ts",
+							line: 67,
+							code: "TS2344",
+						} as never,
 					]),
 					ref,
 				),

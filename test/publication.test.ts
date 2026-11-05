@@ -1434,12 +1434,7 @@ describe("controller publication and waiting recovery", () => {
 				assert.deepEqual(feedback.assessment, first.assessment.ref);
 				assert.deepEqual(feedback.scenarios, [
 					failing === "lint"
-						? {
-								check: "lint",
-								file: "src/a.ts",
-								line: 1,
-								code: "eslint/no-unused-vars",
-							}
+						? { check: "lint", file: "src/a.ts" }
 						: {
 								check: "candidate_tests",
 								file: "src/a.ts",

@@ -26,6 +26,7 @@ import {
 	buildPrompt,
 } from "../src/build.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
+import { feedbackPrompt } from "../src/review.ts";
 import { digestOf } from "../src/run.ts";
 import { execFileSync } from "node:child_process";
 import { renderBuildSummary } from "../src/specify.ts";
@@ -663,4 +664,11 @@ test("build and repair prompts say CI runs tests read-only at the root, so temp 
 		prompt,
 		/CI runs the candidate tree read-only at the repository root[^\n]*os\.tmpdir\(\)[^\n]*never inside the checkout/,
 	);
+
+	// Static-check entries name only a file, so repair reruns the checks.
+	for (const text of [prompt, feedbackPrompt("{}")])
+		assert.match(
+			text,
+			/lint, format or typecheck entry[^\n]*npm run lint, npm run format:check or npm run typecheck[^\n]*to see the details/,
+		);
 });

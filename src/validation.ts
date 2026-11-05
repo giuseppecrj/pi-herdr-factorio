@@ -23,7 +23,6 @@ import {
 	countOf,
 	fieldOf,
 	hasOnlyKeys,
-	numberOf,
 	objectOf,
 	parseJson,
 	textOf,
@@ -419,14 +418,16 @@ export const FEEDBACK_CHECKS = [
 type FeedbackCheck = (typeof FEEDBACK_CHECKS)[number];
 
 /**
- * One fixed-form fact from a failed visible gate: a candidate file and, per
- * check, a line and a code. No field carries tool or test text, because a
- * candidate test in CI can read the published held-out suite and fail with it.
+ * One fixed-form fact from a failed visible gate: a candidate file, plus an
+ * allowlisted code for a candidate test file. No field carries tool or test
+ * text, because a candidate test in CI can read the published held-out suite
+ * and fail with it. A static check gives no line, TS code or rule id either:
+ * tsc follows an import into the suite, so a candidate can make which line
+ * or code fails spell a held-out byte. Repair reruns those checks itself.
  */
 export type CheckFeedback = Readonly<{
 	check: FeedbackCheck;
 	file: string;
-	line?: number;
 	code?: string;
 	scenario?: undefined;
 }>;
@@ -435,15 +436,11 @@ export type ValidationFeedback = ScenarioFeedback | CheckFeedback;
 
 const FEEDBACK_MAX_FACTS = 20;
 
-// Lint rule ids come from the trusted config and TS codes from the compiler.
-// A candidate test picks its own failure code, so only these few pass.
-const CODE_FORMS: Readonly<Record<FeedbackCheck, RegExp | null>> = {
-	typecheck: /^TS\d{4,5}$/,
-	lint: /^[a-z0-9@/_-]{1,64}$/,
-	format: null,
-	candidate_tests:
-		/^(?:ERR_ASSERTION|EROFS|ENOENT|EACCES|EPERM|ERR_MODULE_NOT_FOUND|ERR_TEST_FAILURE|timeout|other)$/,
-};
+// Only a candidate test file keeps a code. CI-only failures such as EROFS
+// cannot be reproduced in the repair sandbox, and a candidate test picks its
+// own failure code, so only these few pass.
+const TEST_CODE =
+	/^(?:ERR_ASSERTION|EROFS|ENOENT|EACCES|EPERM|ERR_MODULE_NOT_FOUND|ERR_TEST_FAILURE|timeout|other)$/;
 
 // ANSI escape sequences, built from a string because a regular expression
 // literal may not contain the escape control character.
@@ -471,25 +468,17 @@ function hiddenPath(path: string, heldoutDir: string): boolean {
 function factOf(
 	check: FeedbackCheck,
 	file: string | null,
-	line: number | null,
 	code: string | null,
 	visible: ReadonlySet<string> | null,
 ): CheckFeedback | null {
-	const lined = check === "lint" || check === "typecheck";
-	const form = CODE_FORMS[check];
-
 	if (
 		file === null ||
 		(visible === null ? hiddenPath(file, "") : !visible.has(file)) ||
-		(lined
-			? line === null || !Number.isSafeInteger(line) || line < 1
-			: line !== null) ||
-		(form === null ? code !== null : code === null || !form.test(code))
+		(check === "candidate_tests"
+			? code === null || !TEST_CODE.test(code)
+			: code !== null)
 	)
 		return null;
-
-	// A line implies a code, because both lined checks require one.
-	if (line !== null && code !== null) return { check, file, line, code };
 
 	return code === null ? { check, file } : { check, file, code };
 }
@@ -501,42 +490,33 @@ function logLines(log: string): string[] {
 		.map((line) => line.trim());
 }
 
-// oxlint names a rule `plugin(rule)`; the fact spells it `plugin/rule`.
-function ruleOf(header: string): string {
-	const rule = /^([\w@/-]+)\(([\w@/-]+)\)/.exec(header);
-	const id = rule === null ? "" : `${rule[1]}/${rule[2]}`;
-
-	return CODE_FORMS.lint?.test(id) === true ? id : "other";
-}
-
-type RawFact = readonly [string, number | null, string | null];
+type RawFact = readonly [string, string | null];
 
 // Errors only, from oxlint's graphical (`× rule` then `╭─[file:line:col]`)
-// or one-line (`file:line:col: error rule`) output.
+// or one-line (`file:line:col: error rule`) output. Only the file is kept.
 function lintFacts(log: string): RawFact[] {
 	const facts: RawFact[] = [];
-	let rule: string | null = null;
+	let error = false;
 
 	for (const text of logLines(log)) {
-		const header = /^([×⚠!])\s*(.*)$/u.exec(text);
+		const header = /^([×⚠!])/u.exec(text);
 
 		if (header !== null) {
-			rule = header[1] === "×" ? ruleOf(header[2] ?? "") : null;
+			error = header[1] === "×";
 			continue;
 		}
 
-		const at = /^╭─\[(.+):(\d+):\d+\]$/u.exec(text);
+		const at = /^╭─\[(.+):\d+:\d+\]$/u.exec(text);
 
 		if (at !== null) {
-			if (rule !== null) facts.push([at[1] ?? "", Number(at[2]), rule]);
-			rule = null;
+			if (error) facts.push([at[1] ?? "", null]);
+			error = false;
 			continue;
 		}
 
-		const flat = /^(.+?):(\d+):\d+: error (.*)$/.exec(text);
+		const flat = /^(.+?):\d+:\d+: error /.exec(text);
 
-		if (flat !== null)
-			facts.push([flat[1] ?? "", Number(flat[2]), ruleOf(flat[3] ?? "")]);
+		if (flat !== null) facts.push([flat[1] ?? "", null]);
 	}
 
 	return facts;
@@ -545,10 +525,10 @@ function lintFacts(log: string): RawFact[] {
 function typecheckFacts(log: string): RawFact[] {
 	return logLines(log).flatMap((text): RawFact[] => {
 		const at =
-			/^(.+?)\((\d+),\d+\): error (TS\d+):/.exec(text) ??
-			/^(.+?):(\d+):\d+ - error (TS\d+):/.exec(text);
+			/^(.+?)\(\d+,\d+\): error TS\d+:/.exec(text) ??
+			/^(.+?):\d+:\d+ - error TS\d+:/.exec(text);
 
-		return at === null ? [] : [[at[1] ?? "", Number(at[2]), at[3] ?? ""]];
+		return at === null ? [] : [[at[1] ?? "", null]];
 	});
 }
 
@@ -556,7 +536,7 @@ function formatFacts(log: string): RawFact[] {
 	return logLines(log).flatMap((text): RawFact[] => {
 		const at = /^(\S+)\s+format(?:\s+[━─]+)?$/u.exec(text);
 
-		return at === null ? [] : [[at[1] ?? "", null, null]];
+		return at === null ? [] : [[at[1] ?? "", null]];
 	});
 }
 
@@ -583,10 +563,9 @@ function testFacts(log: string): RawFact[] {
 			return [
 				[
 					file,
-					null,
 					fieldOf(f, "kind") === "timeout"
 						? "timeout"
-						: code !== "timeout" && CODE_FORMS.candidate_tests?.test(code)
+						: code !== "timeout" && TEST_CODE.test(code)
 							? code
 							: "other",
 				],
@@ -609,7 +588,7 @@ const FACT_READERS: Readonly<
 /**
  * Fixed-form facts about the failed visible gate checks, for repair: at most
  * 20, deduplicated, shared fairly across the checks and each naming one of
- * the candidate's own changed files. No log text is kept.
+ * the candidate's own changed files. No log text, line or tool code is kept.
  */
 export function checkFeedback(input: {
 	readonly logs: ReadonlyMap<string, string>;
@@ -627,8 +606,8 @@ export function checkFeedback(input: {
 
 		return !input.failed.includes(check) || log === undefined
 			? []
-			: FACT_READERS[check](log).flatMap(([file, line, code]) => {
-					const fact = factOf(check, file, line, code, visible);
+			: FACT_READERS[check](log).flatMap(([file, code]) => {
+					const fact = factOf(check, file, code, visible);
 					const key = JSON.stringify(fact);
 
 					if (fact === null || seen.has(key)) return [];
@@ -686,20 +665,15 @@ function checkFactOf(
 	visible: ReadonlySet<string> | null,
 ): CheckFeedback | null {
 	const check = FEEDBACK_CHECKS.find((name) => name === fieldOf(o, "check"));
-	const line = numberOf(fieldOf(o, "line"));
+	const code = fieldOf(o, "code");
 
+	// An entry stored before fix round 2 had a line, or a static-check code.
 	return o === null ||
 		check === undefined ||
-		!hasOnlyKeys(o, ["check", "file", "line", "code"]) ||
-		(fieldOf(o, "line") !== undefined && line === null)
+		!hasOnlyKeys(o, ["check", "file", "code"]) ||
+		(code !== undefined && textOf(code) === null)
 		? null
-		: factOf(
-				check,
-				textOf(fieldOf(o, "file")),
-				line,
-				textOf(fieldOf(o, "code")),
-				visible,
-			);
+		: factOf(check, textOf(fieldOf(o, "file")), textOf(code), visible);
 }
 
 function parseFeedbackEntry(
