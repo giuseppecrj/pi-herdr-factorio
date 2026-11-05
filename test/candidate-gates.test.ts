@@ -202,6 +202,35 @@ test("merged tree takes candidate documentation outside .github while main keeps
 	assert.deepEqual(result.ignoredChanges, [".github/notes.md"]);
 });
 
+test("merged tree takes candidate scripts but still drops nested config inside them", async (t) => {
+	const f = repo(t);
+	f.put("scripts/x.sh", "main x\n");
+	f.put("scripts/y.sh", "main y\n");
+	const gateSha = f.commit();
+
+	f.put("scripts/x.sh", "candidate x\n");
+	f.put("scripts/biome.json", "{}");
+	rmSync(join(f.root, "scripts/y.sh"));
+	const sha = f.commit();
+	const dest = join(f.root, "out");
+
+	const result = await materializeCandidate({
+		repository: f.root,
+		gateSha,
+		candidateSha: sha,
+		dest,
+		replacements: [],
+	});
+
+	assert.equal(
+		readFileSync(join(dest, "scripts/x.sh"), "utf8"),
+		"candidate x\n",
+	);
+	assert.equal(existsSync(join(dest, "scripts/y.sh")), false);
+	assert.equal(existsSync(join(dest, "scripts/biome.json")), false);
+	assert.deepEqual(result.ignoredChanges, ["scripts/biome.json"]);
+});
+
 test("a candidate defect cannot pass preserved regression tests; receipts bind both SHAs", async (t) => {
 	const f = repo(t);
 	f.put("src/value.ts", 'export const value = "wrong";\n');

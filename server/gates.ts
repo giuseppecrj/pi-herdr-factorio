@@ -53,7 +53,7 @@ import {
 const GATE_IMAGE =
 	"node@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617";
 
-const SOURCE = ["src", "extension", "server", "skills"];
+const SOURCE = ["src", "extension", "server", "skills", "scripts"];
 const CHECK_NAMES = ["typecheck", "lint", "format"];
 const SHA = /^[a-f0-9]{40}$/;
 
