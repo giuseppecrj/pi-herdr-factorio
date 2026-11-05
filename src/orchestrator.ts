@@ -223,9 +223,15 @@ type WorkflowPin = Pick<ActiveRun, "workflowSha" | "workflowDigest">;
 
 import {
 	baseRefusalNotice,
+	baseRetryFeedback,
 	diagnosisNotice,
 	matchingBaseProof,
+	retryableBaseReason,
+	retryPending,
+	type BaseCheckProgress,
+	type BaseCheckReference,
 	type BaseRefusal,
+	type RetryFeedback,
 } from "./diagnosis.ts";
 
 export interface StageExecutor {
@@ -1814,6 +1820,7 @@ export class Orchestrator {
 		run: ActiveRun,
 		disposition: AttemptEnd["disposition"],
 		attempt = run.attempt,
+		next?: AttemptEnd["next"],
 	): void {
 		const phase = run.phase;
 		const status = desiredStatus(phase);
@@ -1827,14 +1834,165 @@ export class Orchestrator {
 			disposition,
 			usage: run.usage,
 			next:
-				phase.kind === "retry_queued"
+				next ??
+				(phase.kind === "retry_queued"
 					? { kind: "retry", attempt: run.attempt, dueAt: phase.dueAt }
 					: phase.kind === "base_check"
 						? { kind: "base_retry", attempt: run.attempt, dueAt: phase.dueAt }
 						: isTerminal(status) && phase.kind !== "reporting"
 							? { kind: "end", status }
-							: { kind: "continue" },
+							: { kind: "continue" }),
 		};
+	}
+
+	/** Tokens accept attempts 1 to `through` are known to have used. */
+	async #acceptSpent(run: ActiveRun, through: number): Promise<number> {
+		let total = 0;
+
+		for (let attempt = 1; attempt <= through; attempt++)
+			total +=
+				(await this.#input.executor
+					.spent({ runId: run.runId, stage: "accept", attempt, round: 0 })
+					.catch(() => null)) ?? 0;
+
+		return total;
+	}
+
+	/** Retires the refused first suite again; the store makes this idempotent. */
+	async #retireRefused(
+		run: ActiveRun,
+		reference: BaseCheckReference,
+	): Promise<boolean> {
+		const refused = reference.retry?.refused ?? reference.binding;
+		const contract = await this.#input.files.readContract(run.runId);
+
+		const retired =
+			contract.kind === "found" && contract.digest === refused.contractDigest
+				? await this.#input.files.artifacts.retire(
+						run.runId,
+						contract.contract,
+						contract.digest,
+						refused.acceptanceDigest,
+					)
+				: "refused";
+
+		if (retired !== "retired")
+			this.#input.log("accept_retry_unavailable", {
+				issue: run.issue,
+				runId: run.runId,
+				why: `retire_${retired}`,
+			});
+
+		return retired === "retired";
+	}
+
+	/**
+	 * Grants the one feedback retry after an author-fixable base refusal: the
+	 * next accept attempt, inside the same accept allowance and run cap. False
+	 * keeps today's final refusal.
+	 */
+	async #retryAccept(
+		run: ActiveRun,
+		reference: BaseCheckReference,
+		progress: Extract<BaseCheckProgress, { kind: "refused" }>,
+	): Promise<boolean> {
+		const limits = this.#limits();
+		const config = this.#config;
+		const reason = progress.failure.reason;
+
+		if (
+			reference.retry !== undefined ||
+			!retryableBaseReason(reason) ||
+			limits === null ||
+			config === null
+		)
+			return false;
+
+		const evidence = progress.receipt?.evidence;
+
+		const baseWallMs =
+			evidence === undefined
+				? 0
+				: Math.max(0, evidence.finishedAt - evidence.startedAt);
+
+		const spent = await this.#acceptSpent(run, reference.acceptAttempt);
+
+		const why =
+			reference.acceptAttempt >= limits.maxAttempts
+				? "attempts"
+				: spent >= ACCEPTANCE_MAX_TOKENS
+					? "stage_tokens"
+					: run.usage >= limits.maxTokensPerRun
+						? "run_tokens"
+						: config.stages.accept.budget.wallMs -
+									(run.acceptWallMs ?? 0) -
+									baseWallMs <=
+								0
+							? "wall"
+							: null;
+
+		if (why !== null) {
+			this.#input.log("accept_retry_unavailable", {
+				issue: run.issue,
+				runId: run.runId,
+				why,
+			});
+
+			return false;
+		}
+
+		// The store's exclusive marker makes this the run's only retirement.
+		if (!(await this.#retireRefused(run, reference))) return false;
+
+		run.baseCheck = {
+			...reference,
+			retry: { refused: reference.binding, reason, baseWallMs },
+		};
+		run.attempt = reference.acceptAttempt + 1;
+		run.inputs = null;
+		run.replay = false;
+		run.phase = { kind: "claimed" };
+		this.state.totals.retries++;
+		this.#recordAttempt(run, "refused", reference.acceptAttempt, {
+			kind: "retry",
+			attempt: run.attempt,
+			dueAt: this.#input.clock.now(),
+		});
+		this.#input.log("accept_retry", {
+			issue: run.issue,
+			runId: run.runId,
+			reason,
+			attempt: run.attempt,
+		});
+
+		if (await this.#saveAttempt(run)) await this.#writeClaim(run);
+
+		return true;
+	}
+
+	/** The pending retry's private feedback, from the refused suite's stored receipt. */
+	async #retryFeedback(run: ActiveRun): Promise<RetryFeedback | undefined> {
+		const reference = run.baseCheck;
+
+		if (reference?.retry === undefined || !retryPending(reference))
+			return undefined;
+		const { refused, reason } = reference.retry;
+
+		const stored = await this.#input.executor
+			.baseCheck?.({
+				binding: refused,
+				acceptAttempt: reference.acceptAttempt,
+				remainingAcceptMs: 0,
+				signal: new AbortController().signal,
+				readOnly: true,
+			})
+			.catch(() => undefined);
+
+		return stored?.kind === "refused" &&
+			stored.receipt !== undefined &&
+			stored.failure.reason === reason
+			? baseRetryFeedback(stored.receipt, stored.failure)
+			: baseRetryFeedback(null, { reason, scenarios: [] });
 	}
 
 	#finishStage(run: ActiveRun, result: StageEnd, limits: Limits): void {
@@ -2825,8 +2983,43 @@ export class Orchestrator {
 		if (local?.runId === run.runId) {
 			run.baseCheck = local.baseCheck;
 			run.acceptWallMs = local.acceptWallMs;
+			const reference = run.baseCheck;
 
-			if (run.baseCheck !== undefined && run.stage === "accept") {
+			// A granted retry awaiting its new suite: finish the retirement before
+			// anything reads the suite, then relaunch it once. A marker already past
+			// the refused attempt adopts that retry attempt as usual.
+			if (
+				reference !== undefined &&
+				retryPending(reference) &&
+				run.stage === "accept"
+			) {
+				const retired = await this.#retireRefused(run, reference);
+
+				if (!retired || marker.attempt <= reference.acceptAttempt) {
+					const unmarked = Math.max(0, (local.usage ?? 0) - run.usage);
+					run.usage += unmarked;
+					this.state.totals.usage += unmarked;
+					run.attempt = reference.acceptAttempt + 1;
+					run.adopted = false;
+					run.replay = false;
+					run.phase = { kind: "claimed" };
+
+					if (!retired) {
+						run.phase = { kind: "ending", status: "failed" };
+						this.state.totals.failures++;
+					}
+
+					this.state.runs.set(run.issue, run);
+
+					if (eligibility !== "current" && eligibility !== "unverified")
+						this.#release(run, eligibility);
+					else if (eligibility === "current") this.#confirmed.add(run.issue);
+					await this.#writeClaim(run);
+					await this.#sync(run);
+
+					return run;
+				}
+			} else if (run.baseCheck !== undefined && run.stage === "accept") {
 				const unmarked = Math.max(0, (local.usage ?? 0) - run.usage);
 				run.usage += unmarked;
 				this.state.totals.usage += unmarked;
@@ -3917,6 +4110,12 @@ export class Orchestrator {
 			}
 		}
 
+		// Once the feedback retry is granted, accept attempts share one allowance.
+		const earlier =
+			stage === "accept" && run.baseCheck?.retry !== undefined
+				? await this.#acceptSpent(run, run.attempt - 1)
+				: 0;
+
 		const abort = new AbortController();
 		const now = clock.now();
 
@@ -3964,7 +4163,7 @@ export class Orchestrator {
 					stage === "build"
 						? Math.max(0, BUILD_MAX_TOKENS - prior)
 						: stage === "accept"
-							? Math.max(0, ACCEPTANCE_MAX_TOKENS - prior)
+							? Math.max(0, ACCEPTANCE_MAX_TOKENS - earlier - prior)
 							: null,
 			},
 			remainingRunTokens: Math.max(
@@ -4900,6 +5099,13 @@ export class Orchestrator {
 							scenarios: [],
 						};
 
+			// A retried refusal stays private; only the final one is published.
+			if (
+				progress?.kind === "refused" &&
+				(await this.#retryAccept(run, reference, progress))
+			)
+				return;
+
 			const notice = baseRefusalNotice(failure);
 
 			if (!(await this.#postKeyed(run, notice.key, notice.body))) return;
@@ -5300,6 +5506,7 @@ export class Orchestrator {
 								files: checkout.files,
 								inlined: shown,
 								guidance: parsed.guidance,
+								feedback: await this.#retryFeedback(run),
 							}),
 			};
 		}
@@ -5804,23 +6011,38 @@ export class Orchestrator {
 
 			const digest = stored.receipt.acceptanceDigest;
 			this.#input.log("acceptance_stored", { ...fields, digest });
-			run.baseCheck ??= {
-				binding: {
-					runId: run.runId,
-					repo: this.#input.repo,
-					issue: run.issue,
-					contractDigest: effects.contractDigest,
-					acceptanceDigest: digest,
-					baseSha: run.workflowSha,
-					gateSha: run.workflowSha,
-				},
-				acceptAttempt: run.attempt,
-				remainingAcceptMs: Math.max(
-					0,
-					(this.#config?.stages.accept.budget.wallMs ?? 0) -
-						(run.acceptWallMs ?? 0),
-				),
-			};
+			const prior = run.baseCheck;
+
+			// The retried suite takes the refused one's place; the retry stays recorded.
+			if (
+				prior === undefined ||
+				(retryPending(prior) && prior.binding.acceptanceDigest !== digest)
+			) {
+				const reference: BaseCheckReference = {
+					binding: {
+						runId: run.runId,
+						repo: this.#input.repo,
+						issue: run.issue,
+						contractDigest: effects.contractDigest,
+						acceptanceDigest: digest,
+						baseSha: run.workflowSha,
+						gateSha: run.workflowSha,
+					},
+					acceptAttempt: run.attempt,
+					remainingAcceptMs: Math.max(
+						0,
+						(this.#config?.stages.accept.budget.wallMs ?? 0) -
+							(run.acceptWallMs ?? 0) -
+							(prior?.retry?.baseWallMs ?? 0),
+					),
+				};
+
+				run.baseCheck =
+					prior?.retry === undefined
+						? reference
+						: { ...reference, retry: prior.retry };
+			}
+
 			run.phase = {
 				kind: "base_check",
 				abort: new AbortController(),

@@ -87,6 +87,7 @@ import {
 	type BaseCheckInput,
 	type BaseCheckProgress,
 	type BaseReason,
+	type BaseReceipt,
 } from "../src/diagnosis.ts";
 import { advance } from "../src/stages.ts";
 import {
@@ -416,31 +417,49 @@ const QUESTIONS_TEXT = JSON.stringify({
 
 class FakeExecutor implements StageExecutor {
 	baseOutcome: "ready" | "checking" | "interrupted" | BaseReason = "ready";
+	/** Outcomes by suite, in the order suites first reach the base check. */
+	baseOutcomes: ("ready" | "checking" | BaseReason)[] | null = null;
+	readonly baseSuites: Digest[] = [];
+	/** The stored receipt a refusal carries, when the check ran. */
+	baseReceipt: ((binding: BaseCheckInput["binding"]) => BaseReceipt) | null =
+		null;
 	readonly baseChecks: BaseCheckInput[] = [];
 	readonly baseStops: Digest[] = [];
 
 	async baseCheck(input: BaseCheckInput): Promise<BaseCheckProgress> {
 		this.baseChecks.push(input);
+		const suite = input.binding.acceptanceDigest;
 
-		switch (this.baseOutcome) {
+		if (!this.baseSuites.includes(suite)) this.baseSuites.push(suite);
+
+		const outcome =
+			this.baseOutcomes?.[this.baseSuites.indexOf(suite)] ?? this.baseOutcome;
+
+		switch (outcome) {
 			case "ready":
 				return { kind: "ready", proof: qualifiedProof(input.binding) };
 			case "checking":
 				return { kind: "checking" };
 			case "interrupted":
 				return { kind: "interrupted", wallMs: 1000 };
-			default:
+			default: {
+				const failure = {
+					binding: input.binding,
+					receiptDigest: digestOf(
+						JSON.stringify([input.binding, input.acceptAttempt]),
+					),
+					reason: outcome,
+					scenarios: ["S1"],
+				};
+
+				if (this.baseReceipt === null) return { kind: "refused", failure };
+
 				return {
 					kind: "refused",
-					failure: {
-						binding: input.binding,
-						receiptDigest: digestOf(
-							JSON.stringify([input.binding, input.acceptAttempt]),
-						),
-						reason: this.baseOutcome,
-						scenarios: ["S1"],
-					},
+					failure,
+					receipt: this.baseReceipt(input.binding),
 				};
+			}
 		}
 	}
 
@@ -1852,7 +1871,7 @@ describe("Orchestrator retries and stalls", () => {
 describe("Orchestrator base qualification", () => {
 	const refusals = (github: FakeGitHub) => keyed(github, 14, "base-refusal");
 
-	it("refuses a broken suite before build with one keyed public reason", async () => {
+	it("refuses a broken suite twice before build with only the final keyed public reason", async () => {
 		const { github, executor, start } = world();
 		github.add(labeled(14));
 		executor.behaviors = [{ kind: "pass", usage: 10 }];
@@ -1862,6 +1881,10 @@ describe("Orchestrator base qualification", () => {
 		const report = await once(controller);
 		await controller.tick();
 		assert.ok(!executor.launches.some((l) => l.stage === "build"));
+		assert.deepEqual(
+			executor.launches.map((l) => `${l.stage}-${l.attempt}`),
+			["specify-1", "accept-1", "accept-2"],
+		);
 		assert.equal(statuses(github, 14).at(-1)?.endsWith(":failed"), true);
 		assert.equal(report.totals.failures, 1);
 		assert.equal(refusals(github).length, 1);
@@ -1869,10 +1892,355 @@ describe("Orchestrator base qualification", () => {
 			refusals(github)[0] ?? "",
 			/^Acceptance refused before build: preservation_failed\. A preservation check fails on the unchanged base\. Scenarios: S1\.\n\n<!-- factory-base-refusal run=[0-9a-f]{64} r=[0-9a-f]{64} -->$/,
 		);
+		const checked = executor.baseChecks.filter((c) => c.readOnly !== true);
+		assert.equal(executor.baseSuites.length, 2);
+		assert.deepEqual(
+			checked.map((c) => [c.binding.acceptanceDigest, c.acceptAttempt]),
+			[
+				[executor.baseSuites[0], 1],
+				[executor.baseSuites[1], 2],
+			],
+		);
+		assert.ok(
+			refusals(github)[0]?.includes(
+				digestOf(JSON.stringify([checked[1]?.binding, 2])),
+			),
+			"the notice is the second suite's refusal",
+		);
 		assert.equal(keyed(github, 14, "acceptance").length, 0);
-		assert.equal(executor.baseChecks.length, 1);
-		assert.equal(executor.baseChecks[0]?.acceptAttempt, 1);
-		assert.equal(executor.baseChecks[0]?.binding.issue, 14);
+		assert.equal(checked[0]?.binding.issue, 14);
+	});
+
+	function refusedReceipt(
+		binding: BaseCheckInput["binding"],
+		message: string,
+	): BaseReceipt {
+		const execution = {
+			kind: "observed" as const,
+			exitCode: 1,
+			wallMs: 5,
+			files: [
+				{
+					file: "checks/version.test.ts",
+					registered: 1,
+					failures: [
+						{
+							file: "checks/version.test.ts",
+							name: "PRIVATE-TEST-NAME",
+							message,
+							code: "ERR_ASSERTION",
+							kind: "assertion" as const,
+						},
+					],
+				},
+			],
+		};
+
+		return assessBase({
+			binding,
+			runtime: {
+				runner: "fixture",
+				node: process.version,
+				platform: process.platform,
+				bwrap: "fixture",
+				protocolDigest: digestOf("protocol"),
+			},
+			startedAt: 0,
+			finishedAt: 4_000,
+			source: {
+				kind: "ready",
+				treeDigest: digestOf("tree"),
+				lockDigest: digestOf("lock"),
+				gatesDigest: digestOf("gates"),
+			},
+			execution,
+			repeat: execution,
+			scenarios: [
+				{
+					scenario: "S1",
+					kind: "preservation",
+					mode: "checked",
+					file: "checks/version.test.ts",
+					oracleKey: {
+						contractScopeDigest: digestOf("scope"),
+						criteriaDigest: digestOf("criteria"),
+						sourceDigest: digestOf("source"),
+					},
+				},
+			],
+		}).receipt;
+	}
+
+	const FEEDBACK = "Expected PRIVATE-FEEDBACK-MESSAGE to equal 'v0.1.0'";
+
+	/** Ticks a controller; `pending` leaves a checking base check undrained. */
+	async function drive(
+		controller: Orchestrator,
+		clock: FakeClock,
+		pending = false,
+	) {
+		for (let tick = 0; tick < 4; tick++) {
+			if (pending) {
+				await controller.tick();
+				await settle();
+			} else await once(controller);
+			clock.t += 600_000;
+		}
+	}
+
+	const launched = (executor: FakeExecutor) => [
+		...new Set(executor.launches.map((l) => `${l.stage}-${l.attempt}`)),
+	];
+
+	it("retries a retryable refusal once with private feedback, then builds on a qualified proof", async () => {
+		const { github, executor, files, clock, start } = world();
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "pass", usage: 20 };
+		executor.baseOutcomes = ["preservation_failed", "ready"];
+		executor.baseReceipt = (binding) => refusedReceipt(binding, FEEDBACK);
+		await drive(start(), clock);
+
+		assert.deepEqual(launched(executor), [
+			"specify-1",
+			"accept-1",
+			"accept-2",
+			"build-1",
+		]);
+		const [, first, retry, build] = executor.launches;
+		assert.doesNotMatch(first?.prompt ?? "", /base-refusal/);
+
+		const block =
+			/<base-refusal-([0-9a-f]{32})>\n(.*)\n<\/base-refusal-\1>/.exec(
+				retry?.prompt ?? "",
+			);
+
+		assert.ok(block, "the retry prompt carries one nonce-tagged block");
+		assert.match(retry?.prompt ?? "", new RegExp(`<contract-${block[1]}>`));
+		assert.deepEqual(JSON.parse(block[2] ?? ""), {
+			reason: "preservation_failed",
+			sentence: "A preservation check fails on the unchanged base.",
+			scenarios: ["S1"],
+			files: [
+				{
+					scenario: "S1",
+					file: "checks/version.test.ts",
+					kind: "assertion",
+					code: "ERR_ASSERTION",
+					message: FEEDBACK,
+				},
+			],
+			omitted: 0,
+		});
+		assert.doesNotMatch(retry?.prompt ?? "", /PRIVATE-TEST-NAME/);
+		assert.equal(retry?.settings.maxTokens, 25_000);
+
+		const run = runOf(14);
+		const aside = join(files.artifactRoot, "acceptance", `${run}.retired`);
+
+		const retiredCanary = readFileSync(
+			join(aside, "suite", "canary.txt"),
+			"utf8",
+		).trim();
+
+		assert.match(retiredCanary, /^factory-holdout-[0-9a-f]{64}$/);
+
+		const current = readFileSync(
+			join(files.artifactRoot, "acceptance", run, "canary.txt"),
+			"utf8",
+		).trim();
+
+		assert.notEqual(current, retiredCanary);
+
+		for (const text of [
+			build?.prompt ?? "",
+			JSON.stringify(build),
+			...github.markers(14),
+		]) {
+			assert.ok(!text.includes(retiredCanary));
+			assert.ok(!text.includes("PRIVATE-FEEDBACK-MESSAGE"));
+			assert.doesNotMatch(text, /base-refusal-|PRIVATE-TEST-NAME/);
+		}
+
+		assert.equal(refusals(github).length, 0);
+		assert.equal(keyed(github, 14, "acceptance").length, 1);
+		assert.ok(
+			keyed(github, 14, "acceptance")[0]?.includes(
+				`a=${executor.baseSuites[1]?.slice(0, 12)}`,
+			) ?? false,
+			keyed(github, 14, "acceptance")[0] ?? "no acceptance summary",
+		);
+		const claim = files.claims.get(run);
+		assert.equal(claim?.stage, "build");
+		assert.equal(
+			claim?.baseCheck?.retry?.refused.acceptanceDigest,
+			executor.baseSuites[0],
+		);
+		assert.equal(
+			claim?.baseCheck?.binding.acceptanceDigest,
+			executor.baseSuites[1],
+		);
+		assert.equal(claim?.baseCheck?.acceptAttempt, 2);
+		assert.equal(claim?.baseCheck?.remainingAcceptMs, 900_000 - 2 - 4_000);
+		assert.ok(
+			executor.baseChecks
+				.filter((c) => c.readOnly === true)
+				.every(
+					(c) =>
+						c.binding.acceptanceDigest !== executor.baseSuites[0] ||
+						c.acceptAttempt === 1,
+				),
+		);
+	});
+
+	for (const reason of ["base_timeout", "base_runner_error"] as const)
+		it(`fails a ${reason} refusal at once, with no retry`, async () => {
+			const { github, executor, clock, start } = world();
+			github.add(labeled(14));
+			executor.behaviors = [{ kind: "pass", usage: 10 }];
+			executor.acceptBehavior = { kind: "pass", usage: 20 };
+			executor.baseOutcome = reason;
+			await drive(start(), clock);
+			assert.deepEqual(
+				executor.launches.map((l) => l.stage),
+				["specify", "accept"],
+			);
+			assert.equal(statuses(github, 14).at(-1)?.endsWith(":failed"), true);
+			assert.equal(refusals(github).length, 1);
+			assert.match(refusals(github)[0] ?? "", new RegExp(`: ${reason}\\. `));
+		});
+
+	for (const exhausted of ["tokens", "attempts", "run"] as const)
+		it(`does not retry when the accept ${exhausted} allowance cannot admit it`, async () => {
+			const { github, executor, files, clock, start } = world();
+			github.add(labeled(14));
+			executor.behaviors = [{ kind: "pass", usage: 10 }];
+			executor.acceptBehavior = {
+				kind: "pass",
+				usage: exhausted === "run" ? 499_990 : 20,
+			};
+			executor.baseOutcome = "preservation_failed";
+
+			if (exhausted === "tokens") executor.spentBy.set("accept-1", 25_000);
+
+			if (exhausted === "attempts")
+				setWorkflow(github, "max_attempts: 3", "max_attempts: 1");
+			await drive(start(), clock);
+			assert.deepEqual(
+				executor.launches.map((l) => l.stage),
+				["specify", "accept"],
+			);
+			assert.equal(statuses(github, 14).at(-1)?.endsWith(":failed"), true);
+			assert.equal(refusals(github).length, 1);
+			assert.match(refusals(github)[0] ?? "", /: preservation_failed\. /);
+			assert.ok(
+				existsSync(join(files.artifactRoot, "acceptance", runOf(14))),
+				"the refused suite is not retired",
+			);
+		});
+
+	it("charges the retry to what is left of the accept token allowance", async () => {
+		const { github, executor, clock, start } = world();
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "pass", usage: 20 };
+		executor.baseOutcomes = ["preservation_failed", "ready"];
+		executor.spentBy.set("accept-1", 18_000);
+		await drive(start(), clock);
+
+		const retry = executor.launches.find(
+			(l) => l.stage === "accept" && l.attempt === 2,
+		);
+
+		assert.equal(retry?.settings.maxTokens, 7_000);
+	});
+
+	for (const crash of ["before_retire", "after_retire", "after_claim"] as const)
+		it(`relaunches once after a restart between the refusal and the relaunch (${crash})`, async () => {
+			const { github, executor, files, clock, start } = world();
+			github.add(labeled(14));
+			executor.behaviors = [{ kind: "pass", usage: 10 }];
+			executor.acceptBehavior = { kind: "pass", usage: 20 };
+			executor.baseOutcomes = ["checking"];
+			executor.baseReceipt = (binding) => refusedReceipt(binding, FEEDBACK);
+			await drive(start(), clock, true);
+			const claim = files.claims.get(runOf(14));
+			const first = claim?.baseCheck;
+			assert.ok(first);
+			assert.equal(first.retry, undefined);
+
+			if (crash !== "before_retire") {
+				const contract = await files.readContract(runOf(14));
+				assert.ok(contract.kind === "found");
+				assert.equal(
+					await files.artifacts.retire(
+						runOf(14),
+						contract.contract,
+						contract.digest,
+						first.binding.acceptanceDigest,
+					),
+					"retired",
+				);
+
+				if (crash === "after_claim")
+					files.claims.set(runOf(14), {
+						...claim,
+						baseCheck: {
+							...first,
+							retry: {
+								refused: first.binding,
+								reason: "preservation_failed",
+								baseWallMs: 4_000,
+							},
+						},
+					});
+			}
+
+			executor.baseOutcomes = ["preservation_failed", "ready"];
+			await drive(start(), clock);
+			await drive(start(), clock);
+			assert.deepEqual(launched(executor), [
+				"specify-1",
+				"accept-1",
+				"accept-2",
+				"build-1",
+			]);
+			assert.match(
+				executor.launches[2]?.prompt ?? "",
+				/PRIVATE-FEEDBACK-MESSAGE/,
+			);
+			assert.equal(refusals(github).length, 0);
+			assert.equal(files.claims.get(runOf(14))?.stage, "build");
+		});
+
+	it("never grants a second retry after a restart once the retried suite is stored", async () => {
+		const { github, executor, files, clock, start } = world();
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "pass", usage: 20 };
+		executor.baseOutcomes = ["preservation_failed", "checking"];
+		await drive(start(), clock, true);
+		assert.equal(
+			files.claims.get(runOf(14))?.baseCheck?.binding.acceptanceDigest,
+			executor.baseSuites[1],
+		);
+		executor.baseOutcomes = ["preservation_failed", "preservation_failed"];
+		await drive(start(), clock);
+		await drive(start(), clock);
+		assert.deepEqual(launched(executor), ["specify-1", "accept-1", "accept-2"]);
+		assert.equal(statuses(github, 14).at(-1)?.endsWith(":failed"), true);
+		assert.equal(refusals(github).length, 1);
+		const contract = await files.readContract(runOf(14));
+		assert.ok(contract.kind === "found");
+		assert.equal(
+			await files.artifacts.retire(
+				runOf(14),
+				contract.contract,
+				contract.digest,
+				executor.baseSuites[1] ?? digestOf("none"),
+			),
+			"refused",
+		);
 	});
 
 	it("fails closed without a base-check port", async () => {

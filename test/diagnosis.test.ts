@@ -23,7 +23,9 @@ import {
 	diagnosisNotice,
 	parseBaseReason,
 	parseFailureClass,
+	parseBaseCheckReference,
 	retryableBaseReason,
+	retryPending,
 	type BaseReason,
 	type BaseReceipt,
 	type ClassifyInput,
@@ -2525,4 +2527,59 @@ test("accept retry: feedback carries the refusal facts, bounded per file and in 
 	assert.equal(bounded.files.length + bounded.omitted, 30);
 	assert.ok(bounded.omitted > 0);
 	assert.equal(bounded.scenarios.length, 30);
+});
+
+test("accept retry: the claim's retry record round-trips and binds to the same run and contract", () => {
+	const sha = "a".repeat(40);
+	const repo = "o/r";
+
+	if (!isGitSha(sha) || !isRepoSlug(repo)) throw new Error("fixture");
+
+	const refused = {
+		runId: digestOf("r"),
+		repo,
+		issue: 9,
+		contractDigest,
+		acceptanceDigest: digestOf("first suite"),
+		baseSha: sha,
+		gateSha: sha,
+	};
+
+	const retry = { refused, reason: "preservation_failed", baseWallMs: 4000 };
+
+	const pending = {
+		binding: refused,
+		acceptAttempt: 1,
+		remainingAcceptMs: 9,
+		retry,
+	};
+
+	const parsed = parseBaseCheckReference(JSON.parse(JSON.stringify(pending)));
+	assert.deepEqual(parsed, pending);
+	assert.equal(parsed !== null && retryPending(parsed), true);
+
+	const rebound = {
+		...pending,
+		binding: { ...refused, acceptanceDigest: digestOf("second suite") },
+	};
+
+	const stored = parseBaseCheckReference(JSON.parse(JSON.stringify(rebound)));
+	assert.deepEqual(stored, rebound);
+	assert.equal(stored !== null && retryPending(stored), false);
+
+	for (const bad of [
+		{ ...retry, reason: "base_unknown" },
+		{ ...retry, baseWallMs: -1 },
+		{ ...retry, refused: { ...refused, issue: 10 } },
+		{
+			...retry,
+			refused: { ...refused, contractDigest: contractDigestFor("x") },
+		},
+	])
+		assert.equal(
+			parseBaseCheckReference(
+				JSON.parse(JSON.stringify({ ...pending, retry: bad })),
+			),
+			null,
+		);
 });

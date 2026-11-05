@@ -28,11 +28,33 @@ export type AcceptanceBinding = Readonly<{
 	gateSha: GitSha;
 }>;
 
+/**
+ * The one accept feedback retry, persisted in the claim once granted, so a
+ * restart never grants another.
+ */
+export type AcceptRetry = Readonly<{
+	/** The refused, retired first suite. Its stored receipt sources the feedback. */
+	refused: AcceptanceBinding;
+	reason: BaseReason;
+	/** Wall time the refused suite's base check spent, charged to accept. */
+	baseWallMs: number;
+}>;
+
 export type BaseCheckReference = Readonly<{
 	binding: AcceptanceBinding;
 	acceptAttempt: number;
 	remainingAcceptMs: number;
+	retry?: AcceptRetry;
 }>;
+
+/** Whether the granted retry still awaits its new suite. */
+export function retryPending(reference: BaseCheckReference): boolean {
+	return (
+		reference.retry !== undefined &&
+		reference.retry.refused.acceptanceDigest ===
+			reference.binding.acceptanceDigest
+	);
+}
 
 export function parseAcceptanceBinding(
 	value: JsonValue | undefined,
@@ -68,11 +90,34 @@ export function parseBaseCheckReference(
 		acceptAttempt = countOf(fieldOf(v, "acceptAttempt")),
 		remainingAcceptMs = countOf(fieldOf(v, "remainingAcceptMs"));
 
-	return binding !== null &&
-		acceptAttempt !== null &&
-		acceptAttempt >= 1 &&
-		remainingAcceptMs !== null
-		? { binding, acceptAttempt, remainingAcceptMs }
+	if (
+		binding === null ||
+		acceptAttempt === null ||
+		acceptAttempt < 1 ||
+		remainingAcceptMs === null
+	)
+		return null;
+	const rawRetry = fieldOf(v, "retry");
+
+	if (rawRetry === undefined)
+		return { binding, acceptAttempt, remainingAcceptMs };
+
+	const r = objectOf(rawRetry),
+		refused = parseAcceptanceBinding(fieldOf(r, "refused")),
+		reason = parseBaseReason(fieldOf(r, "reason")),
+		baseWallMs = countOf(fieldOf(r, "baseWallMs"));
+
+	return refused !== null &&
+		reason !== null &&
+		baseWallMs !== null &&
+		JSON.stringify(refused) ===
+			JSON.stringify({ ...binding, acceptanceDigest: refused.acceptanceDigest })
+		? {
+				binding,
+				acceptAttempt,
+				remainingAcceptMs,
+				retry: { refused, reason, baseWallMs },
+			}
 		: null;
 }
 
@@ -209,7 +254,13 @@ export type BaseCheckInput = Readonly<{
 export type BaseCheckProgress =
 	| Readonly<{ kind: "checking" }>
 	| Readonly<{ kind: "interrupted"; wallMs: number }>
-	| BaseAssessment;
+	| Readonly<{ kind: "ready"; proof: BaseProof }>
+	| Readonly<{
+			kind: "refused";
+			failure: BaseRefusal;
+			/** The stored receipt, when the check ran; private, for retry feedback only. */
+			receipt?: BaseReceipt;
+	  }>;
 
 export function oracleKey(
 	contract: Contract,
@@ -743,13 +794,18 @@ export type RetryFeedback = Readonly<{
 }>;
 
 export function baseRetryFeedback(
-	receipt: BaseReceipt,
-	failure: BaseRefusal,
+	receipt: BaseReceipt | null,
+	failure: Pick<BaseRefusal, "reason" | "scenarios">,
 ): RetryFeedback {
-	const execution = receipt.evidence.execution;
+	const execution: PrivateExecution = receipt?.evidence.execution ?? {
+		kind: "unavailable",
+		reason: "invalid_report",
+		wallMs: 0,
+	};
+
 	const scenarios = failure.scenarios.filter((s) => SCENARIO_ID.test(s));
 
-	const candidates = receipt.evidence.scenarios.flatMap(
+	const candidates = (receipt?.evidence.scenarios ?? []).flatMap(
 		(s): RetryFileFeedback[] => {
 			if (s.mode !== "checked" || !scenarios.includes(s.scenario)) return [];
 

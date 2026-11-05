@@ -31,7 +31,9 @@ import {
 import {
 	assessBase,
 	baseRefusalNotice,
+	baseRetryFeedback,
 	parseBaseReceipt,
+	retryableBaseReason,
 	type BaseReason,
 } from "../src/diagnosis.ts";
 import { digestOf } from "../src/run.ts";
@@ -1198,6 +1200,19 @@ for (const fixture of ["558", "561", "568"])
 				baseRefusalNotice(r.assessment.failure).body,
 				/Human review|viewer|git|assert|\.mjs/i,
 			);
+			// The first suite's refusal is the author's to fix, so it earns the
+			// one feedback retry; the feedback stays bounded and names no test.
+			assert.equal(retryableBaseReason(r.assessment.failure.reason), true);
+			const feedback = baseRetryFeedback(r.receipt, r.assessment.failure);
+			assert.ok(Buffer.byteLength(JSON.stringify(feedback)) <= 4096);
+			assert.ok(feedback.files.length > 0);
+
+			// A load error names its file, which the feedback may carry.
+			for (const failure of r.evidence.execution.kind === "observed"
+				? r.evidence.execution.files.flatMap((f) => f.failures)
+				: [])
+				if (failure.name !== failure.file)
+					assert.ok(!JSON.stringify(feedback).includes(failure.name));
 			t.diagnostic(`${fixture}: ${JSON.stringify(results)}`);
 		},
 	);

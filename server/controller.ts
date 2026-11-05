@@ -1421,8 +1421,12 @@ export function controllerBaseChecker(config: {
 						JSON.stringify(input.binding)
 				)
 					return fail(input, "base_evidence_missing");
+				const { assessment } = assessBase(receipt.evidence);
 
-				return assessBase(receipt.evidence).assessment;
+				// The receipt goes only to the accept retry's private feedback.
+				return assessment.kind === "refused"
+					? { ...assessment, receipt }
+					: assessment;
 			}
 
 			if (input.readOnly) return fail(input, "base_evidence_missing");
