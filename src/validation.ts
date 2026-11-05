@@ -22,6 +22,8 @@ import {
 	arrayOf,
 	countOf,
 	fieldOf,
+	hasOnlyKeys,
+	numberOf,
 	objectOf,
 	parseJson,
 	textOf,
@@ -414,17 +416,34 @@ export const FEEDBACK_CHECKS = [
 	"candidate_tests",
 ] as const;
 
+type FeedbackCheck = (typeof FEEDBACK_CHECKS)[number];
+
+/**
+ * One fixed-form fact from a failed visible gate: a candidate file and, per
+ * check, a line and a code. No field carries tool or test text, because a
+ * candidate test in CI can read the published held-out suite and fail with it.
+ */
 export type CheckFeedback = Readonly<{
-	check: (typeof FEEDBACK_CHECKS)[number];
-	lines: readonly string[];
+	check: FeedbackCheck;
+	file: string;
+	line?: number;
+	code?: string;
 	scenario?: undefined;
 }>;
 
 export type ValidationFeedback = ScenarioFeedback | CheckFeedback;
 
-const FEEDBACK_MAX_BYTES = 4096,
-	FEEDBACK_LINES = 5,
-	FEEDBACK_LINE_CHARS = 300;
+const FEEDBACK_MAX_FACTS = 20;
+
+// Lint rule ids come from the trusted config and TS codes from the compiler.
+// A candidate test picks its own failure code, so only these few pass.
+const CODE_FORMS: Readonly<Record<FeedbackCheck, RegExp | null>> = {
+	typecheck: /^TS\d{4,5}$/,
+	lint: /^[a-z0-9@/_-]{1,64}$/,
+	format: null,
+	candidate_tests:
+		/^(?:ERR_ASSERTION|EROFS|ENOENT|EACCES|EPERM|ERR_MODULE_NOT_FOUND|ERR_TEST_FAILURE|timeout|other)$/,
+};
 
 // ANSI escape sequences, built from a string because a regular expression
 // literal may not contain the escape control character.
@@ -439,75 +458,158 @@ function hiddenPath(path: string, heldoutDir: string): boolean {
 	return (
 		lower === "test/acceptance" ||
 		lower.startsWith("test/acceptance/") ||
-		path === heldoutDir ||
-		path.startsWith(`${heldoutDir}/`)
+		(heldoutDir !== "" &&
+			(path === heldoutDir || path.startsWith(`${heldoutDir}/`)))
 	);
 }
 
-function mentions(line: string, path: string): boolean {
-	for (let at = line.indexOf(path); at >= 0; at = line.indexOf(path, at + 1)) {
-		const before = line[at - 1] ?? " ",
-			after = line[at + path.length] ?? " ";
+/**
+ * Builds a fact only from fields in their fixed form. `visible` holds the
+ * candidate's changed paths; a file must equal one exactly. Without it, as
+ * for a stored feedback file, the file must only lie outside the suite.
+ */
+function factOf(
+	check: FeedbackCheck,
+	file: string | null,
+	line: number | null,
+	code: string | null,
+	visible: ReadonlySet<string> | null,
+): CheckFeedback | null {
+	const lined = check === "lint" || check === "typecheck";
+	const form = CODE_FORMS[check];
 
-		if (!/[\w.\-/]/.test(before) && !/[\w\-/]/.test(after)) return true;
-	}
+	if (
+		file === null ||
+		(visible === null ? hiddenPath(file, "") : !visible.has(file)) ||
+		(lined
+			? line === null || !Number.isSafeInteger(line) || line < 1
+			: line !== null) ||
+		(form === null ? code !== null : code === null || !form.test(code))
+	)
+		return null;
 
-	return false;
+	// A line implies a code, because both lined checks require one.
+	if (line !== null && code !== null) return { check, file, line, code };
+
+	return code === null ? { check, file } : { check, file, code };
 }
 
-function toolLines(log: string): string[] {
-	const lines: string[] = [];
-	let header: string | null = null;
+function logLines(log: string): string[] {
+	return log
+		.replace(ANSI, "")
+		.split(/\r?\n/)
+		.map((line) => line.trim());
+}
 
-	for (const raw of log.replace(ANSI, "").split(/\r?\n/)) {
-		const text = raw.trim();
-		const marker = /^[×⚠!]\s*(.*)$/u.exec(text);
+// oxlint names a rule `plugin(rule)`; the fact spells it `plugin/rule`.
+function ruleOf(header: string): string {
+	const rule = /^([\w@/-]+)\(([\w@/-]+)\)/.exec(header);
+	const id = rule === null ? "" : `${rule[1]}/${rule[2]}`;
 
-		if (marker !== null) {
-			header = marker[1] ?? "";
+	return CODE_FORMS.lint?.test(id) === true ? id : "other";
+}
+
+type RawFact = readonly [string, number | null, string | null];
+
+// Errors only, from oxlint's graphical (`× rule` then `╭─[file:line:col]`)
+// or one-line (`file:line:col: error rule`) output.
+function lintFacts(log: string): RawFact[] {
+	const facts: RawFact[] = [];
+	let rule: string | null = null;
+
+	for (const text of logLines(log)) {
+		const header = /^([×⚠!])\s*(.*)$/u.exec(text);
+
+		if (header !== null) {
+			rule = header[1] === "×" ? ruleOf(header[2] ?? "") : null;
 			continue;
 		}
 
-		const at = /^╭─\[([^\]]+)\]/u.exec(text);
+		const at = /^╭─\[(.+):(\d+):\d+\]$/u.exec(text);
 
-		if (at !== null && header !== null) lines.push(`${at[1]} ${header}`);
-		else lines.push(text.replace(/\s*[━─]+$/u, ""));
-		header = at === null ? header : null;
+		if (at !== null) {
+			if (rule !== null) facts.push([at[1] ?? "", Number(at[2]), rule]);
+			rule = null;
+			continue;
+		}
+
+		const flat = /^(.+?):(\d+):\d+: error (.*)$/.exec(text);
+
+		if (flat !== null)
+			facts.push([flat[1] ?? "", Number(flat[2]), ruleOf(flat[3] ?? "")]);
 	}
 
-	return lines;
+	return facts;
 }
 
-function testLines(log: string, visible: readonly string[]): string[] {
+function typecheckFacts(log: string): RawFact[] {
+	return logLines(log).flatMap((text): RawFact[] => {
+		const at =
+			/^(.+?)\((\d+),\d+\): error (TS\d+):/.exec(text) ??
+			/^(.+?):(\d+):\d+ - error (TS\d+):/.exec(text);
+
+		return at === null ? [] : [[at[1] ?? "", Number(at[2]), at[3] ?? ""]];
+	});
+}
+
+function formatFacts(log: string): RawFact[] {
+	return logLines(log).flatMap((text): RawFact[] => {
+		const at = /^(\S+)\s+format(?:\s+[━─]+)?$/u.exec(text);
+
+		return at === null ? [] : [[at[1] ?? "", null, null]];
+	});
+}
+
+// From the trusted reporter's JSON line, never from test names or messages.
+// One fact per file, with its first failure's code, so a candidate cannot
+// spell anything by choosing which codes its tests fail with.
+function testFacts(log: string): RawFact[] {
 	for (const raw of log.split("\n")) {
 		const failures = arrayOf(
 			fieldOf(objectOf(parseJson(raw.trim())), "failures"),
 		);
 
 		if (failures === null) continue;
+		const seen = new Set<string>();
 
-		return failures.flatMap((item) => {
+		return failures.flatMap((item): RawFact[] => {
 			const f = objectOf(item);
 			const file = textOf(fieldOf(f, "file"));
-			const name = textOf(fieldOf(f, "name"));
+			const code = textOf(fieldOf(f, "code")) ?? "";
 
-			const kind = [textOf(fieldOf(f, "kind")), textOf(fieldOf(f, "code"))]
-				.filter((part) => part !== null)
-				.join(" ");
+			if (file === null || seen.has(file)) return [];
+			seen.add(file);
 
-			return file === null || name === null || !visible.includes(file)
-				? []
-				: [`${file}: ${name}: ${kind}: ${textOf(fieldOf(f, "message")) ?? ""}`];
+			return [
+				[
+					file,
+					null,
+					fieldOf(f, "kind") === "timeout"
+						? "timeout"
+						: code !== "timeout" && CODE_FORMS.candidate_tests?.test(code)
+							? code
+							: "other",
+				],
+			];
 		});
 	}
 
 	return [];
 }
 
+const FACT_READERS: Readonly<
+	Record<FeedbackCheck, (log: string) => RawFact[]>
+> = {
+	typecheck: typecheckFacts,
+	lint: lintFacts,
+	format: formatFacts,
+	candidate_tests: testFacts,
+};
+
 /**
- * A bounded excerpt of the failed visible gate checks, for repair. It keeps
- * only lines that name one of the candidate's own changed files, never a
- * held-out or acceptance path, and never the held-out run's output.
+ * Fixed-form facts about the failed visible gate checks, for repair: at most
+ * 20, deduplicated, shared fairly across the checks and each naming one of
+ * the candidate's own changed files. No log text is kept.
  */
 export function checkFeedback(input: {
 	readonly logs: ReadonlyMap<string, string>;
@@ -515,76 +617,97 @@ export function checkFeedback(input: {
 	readonly changedPaths: readonly string[];
 	readonly heldoutDir: string;
 }): CheckFeedback[] {
-	const visible = input.changedPaths.filter(
-		(path) => !hiddenPath(path, input.heldoutDir),
+	const visible = new Set(
+		input.changedPaths.filter((path) => !hiddenPath(path, input.heldoutDir)),
 	);
 
-	const hiddenText = (line: string) =>
-		line.toLowerCase().includes("test/acceptance") ||
-		(input.heldoutDir !== "" && line.includes(input.heldoutDir));
+	const lists = FEEDBACK_CHECKS.map((check) => {
+		const log = input.logs.get(check);
+		const seen = new Set<string>();
 
+		return !input.failed.includes(check) || log === undefined
+			? []
+			: FACT_READERS[check](log).flatMap(([file, line, code]) => {
+					const fact = factOf(check, file, line, code, visible);
+					const key = JSON.stringify(fact);
+
+					if (fact === null || seen.has(key)) return [];
+					seen.add(key);
+
+					return [fact];
+				});
+	});
+
+	const taken = lists.map(() => 0);
+
+	for (let total = 0, more = true; more && total < FEEDBACK_MAX_FACTS; ) {
+		more = false;
+
+		for (const [i, list] of lists.entries())
+			if (total < FEEDBACK_MAX_FACTS && (taken[i] ?? 0) < list.length) {
+				taken[i] = (taken[i] ?? 0) + 1;
+				total += 1;
+				more = true;
+			}
+	}
+
+	return lists.flatMap((list, i) => list.slice(0, taken[i]));
+}
+
+/** Re-checks stored facts in full; anything else in the file refuses them all. */
+export function parseCheckFeedback(
+	value: JsonValue | undefined,
+	scope: {
+		readonly changedPaths: readonly string[];
+		readonly heldoutDir: string;
+	},
+): CheckFeedback[] | null {
+	const list = arrayOf(value);
+
+	const visible = new Set(
+		scope.changedPaths.filter((path) => !hiddenPath(path, scope.heldoutDir)),
+	);
+
+	if (list === null || list.length > FEEDBACK_MAX_FACTS) return null;
 	const result: CheckFeedback[] = [];
 
-	for (const check of FEEDBACK_CHECKS) {
-		const log = input.logs.get(check);
+	for (const item of list) {
+		const entry = checkFactOf(objectOf(item), visible);
 
-		if (!input.failed.includes(check) || log === undefined) continue;
-		const lines: string[] = [];
-
-		for (const raw of check === "candidate_tests"
-			? testLines(log, visible)
-			: toolLines(log)) {
-			if (lines.length >= FEEDBACK_LINES) break;
-
-			const line =
-				raw.length > FEEDBACK_LINE_CHARS
-					? `${raw.slice(0, FEEDBACK_LINE_CHARS - 1)}…`
-					: raw;
-
-			if (
-				!visible.some((path) => mentions(line, path)) ||
-				hiddenText(line) ||
-				lines.includes(line) ||
-				Buffer.byteLength(
-					JSON.stringify([...result, { check, lines: [...lines, line] }]),
-				) > FEEDBACK_MAX_BYTES
-			)
-				continue;
-			lines.push(line);
-		}
-
-		if (lines.length > 0) result.push({ check, lines });
+		if (entry === null) return null;
+		result.push(entry);
 	}
 
 	return result;
 }
 
-export function parseCheckFeedback(
-	value: JsonValue | undefined,
-): CheckFeedback[] | null {
-	const result: CheckFeedback[] = [];
+function checkFactOf(
+	o: ReturnType<typeof objectOf>,
+	visible: ReadonlySet<string> | null,
+): CheckFeedback | null {
+	const check = FEEDBACK_CHECKS.find((name) => name === fieldOf(o, "check"));
+	const line = numberOf(fieldOf(o, "line"));
 
-	for (const item of arrayOf(value) ?? []) {
-		const entry = parseFeedbackEntry(item);
-
-		if (entry?.check === undefined) return null;
-		result.push(entry);
-	}
-
-	return arrayOf(value) === null ? null : result;
+	return o === null ||
+		check === undefined ||
+		!hasOnlyKeys(o, ["check", "file", "line", "code"]) ||
+		(fieldOf(o, "line") !== undefined && line === null)
+		? null
+		: factOf(
+				check,
+				textOf(fieldOf(o, "file")),
+				line,
+				textOf(fieldOf(o, "code")),
+				visible,
+			);
 }
 
 function parseFeedbackEntry(
 	item: JsonValue | undefined,
 ): ValidationFeedback | null {
 	const o = objectOf(item);
-	const check = FEEDBACK_CHECKS.find((name) => name === fieldOf(o, "check"));
 
-	if (fieldOf(o, "check") !== undefined) {
-		const lines = textsOf(fieldOf(o, "lines"));
-
-		return check === undefined || lines === null ? null : { check, lines };
-	}
+	if (fieldOf(o, "check") !== undefined) return checkFactOf(o, null);
 
 	const scenario = textOf(fieldOf(o, "scenario"));
 	const criteria: { id: string; text: string }[] = [];

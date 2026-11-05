@@ -4013,6 +4013,10 @@ export function controllerValidator(config: {
 							...((present(checksPath)
 								? parseCheckFeedback(
 										parseJson(regularText(checksPath, 64 * 1024)),
+										{
+											changedPaths: patch.receipt.changedPaths,
+											heldoutDir: heldout.directory,
+										},
 									)
 								: null) ?? []),
 						]),

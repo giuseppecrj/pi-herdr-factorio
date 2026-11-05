@@ -58,7 +58,7 @@ import {
 	fileRunFiles,
 	downloadGateReceipt,
 } from "../server/controller.ts";
-import { type ValidationState } from "../src/validation.ts";
+import { type ValidationState, readFeedbackBytes } from "../src/validation.ts";
 import { baseTreeDigest, replacementDigest } from "../server/gates.ts";
 import { CONTROLLER_LOGIN } from "../src/markers.ts";
 import { LedgerGit } from "./ledger-git.ts";
@@ -1348,7 +1348,7 @@ describe("controller publication and waiting recovery", () => {
 		assert.equal(f.fake.refs.size, 0);
 	});
 
-	for (const failing of ["lint", "heldout"] as const)
+	for (const failing of ["lint", "candidate_tests", "heldout"] as const)
 		it(`stores the assessment before feedback and returns it on the fresh and stored-verdict paths; a held-out failure waits for its diagnosis job and keeps the branch (${failing})`, async () => {
 			const f = await validationFixture();
 			const passing = f.fake.receipt.bind(f.fake);
@@ -1372,6 +1372,25 @@ describe("controller publication and waiting recovery", () => {
 			f.fake.logs.set(
 				"lint",
 				"  × eslint(no-unused-vars): unused value\n    ╭─[src/a.ts:1:1]\n  × eslint(no-debugger): hidden\n    ╭─[test/acceptance/1/checks/a.test.ts:1:1]\n",
+			);
+			// A candidate test that read the published suite in CI and failed
+			// with its names and bytes, the path stripped.
+			f.fake.logs.set(
+				"candidate_tests",
+				`${JSON.stringify({
+					complete: true,
+					bad: true,
+					failures: [
+						{
+							file: "src/a.ts",
+							name: "secret-scenario.test.mjs",
+							kind: "assertion",
+							code: "ERR_ASSERTION",
+							message:
+								"+ [ 'secret-scenario.test.mjs' ] export const canary = 'CANARY-secret-bytes'",
+						},
+					],
+				})}\n`,
 			);
 			f.fake.logs.set("heldout", "hidden held-out output naming src/a.ts");
 
@@ -1397,7 +1416,7 @@ describe("controller publication and waiting recovery", () => {
 			const stored = readFileSync(join(dir, "assessment.json"), "utf8");
 			assert.equal(digestOf(stored), first.assessment.ref.recordDigest);
 
-			if (failing === "lint") {
+			{
 				assert.deepEqual(first.assessment.assessment, {
 					kind: "failed",
 					failure: {
@@ -1414,15 +1433,45 @@ describe("controller publication and waiting recovery", () => {
 				assert.equal(feedback.version, 2);
 				assert.deepEqual(feedback.assessment, first.assessment.ref);
 				assert.deepEqual(feedback.scenarios, [
-					{
-						check: "lint",
-						lines: ["src/a.ts:1:1 eslint(no-unused-vars): unused value"],
-					},
+					failing === "lint"
+						? {
+								check: "lint",
+								file: "src/a.ts",
+								line: 1,
+								code: "eslint/no-unused-vars",
+							}
+						: {
+								check: "candidate_tests",
+								file: "src/a.ts",
+								code: "ERR_ASSERTION",
+							},
 				]);
-				assert.doesNotMatch(
+
+				// The repair workspace file carries the same list as validation.
+				const validation = readFeedbackBytes(
 					readFileSync(join(dir, "feedback.json"), "utf8"),
-					/hidden|acceptance/,
+					first.assessment.ref,
 				);
+
+				assert.deepEqual(validation, feedback.scenarios);
+				const repair = join(f.root, "repair");
+				await prepareRepairTree(
+					f.base,
+					repair,
+					f.patch.patch,
+					f.patch.changedPaths,
+					JSON.stringify({ version: 1, round: 1, validation, review: [] }),
+				);
+
+				for (const text of [
+					readFileSync(join(dir, "feedback.json"), "utf8"),
+					readFileSync(join(dir, "checks.json"), "utf8"),
+					readFileSync(join(repair, ".factory-feedback.json"), "utf8"),
+				])
+					assert.doesNotMatch(
+						text,
+						/hidden|acceptance|secret|canary|unused value|debugger/i,
+					);
 			}
 
 			const again = await f.step();
