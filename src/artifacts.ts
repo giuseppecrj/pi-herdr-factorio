@@ -164,16 +164,35 @@ function retirementMarker(root: string, runId: Digest): string {
 	return join(root, `${runId}.retired.json`);
 }
 
-/** The retired digest the run's marker names, or `null` with no marker. */
+/** The digest a retirement record names for the run, or `null` when it names none. */
+function namedDigest(path: string, runId: Digest): string | null {
+	try {
+		const record = objectOf(parseJson(regularText(path)));
+		const digest = textOf(fieldOf(record, "acceptanceDigest"));
+
+		return fieldOf(record, "runId") === runId && digest !== null
+			? digest
+			: null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * The retired digest the run's marker names, or `null` with no marker. An
+ * unreadable marker falls back to the retired copy's own receipt, so a torn
+ * marker never strands the replacement suite. With no copy it throws.
+ */
 function retiredDigest(root: string, runId: Digest): string | null {
 	const path = retirementMarker(root, runId);
 
 	if (!present(path)) return null;
-	const marker = objectOf(parseJson(regularText(path)));
-	const retired = textOf(fieldOf(marker, "acceptanceDigest"));
 
-	if (fieldOf(marker, "runId") !== runId || retired === null)
-		throw new Error("invalid retirement marker");
+	const retired =
+		namedDigest(path, runId) ??
+		namedDigest(join(root, `${runId}.retired`, "suite", "receipt.json"), runId);
+
+	if (retired === null) throw new Error("invalid retirement marker");
 
 	return retired;
 }

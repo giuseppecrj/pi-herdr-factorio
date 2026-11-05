@@ -533,6 +533,64 @@ describe("private acceptance artifacts", () => {
 		walk(acceptance);
 	});
 
+	it("serves the replacement suite past an unreadable retirement marker, and fails closed without a retired copy", async () => {
+		const root = fresh();
+		const store = fileArtifacts(root);
+		const first = await store.store(input);
+		assert.equal(first.kind, "found");
+
+		if (first.kind !== "found") return;
+		const acceptance = join(root, "acceptance");
+		const marker = join(acceptance, `${contract.runId}.retired.json`);
+
+		assert.equal(
+			await store.retire(
+				contract.runId,
+				contract,
+				digest,
+				first.receipt.acceptanceDigest,
+			),
+			"retired",
+		);
+		const second = await store.store(input);
+		assert.equal(second.kind, "found");
+
+		if (second.kind !== "found") return;
+		writeFileSync(marker, "{not json\n");
+		assert.deepEqual(
+			await store.read(contract.runId, contract, digest),
+			second,
+		);
+		assert.equal(
+			await store.retire(
+				contract.runId,
+				contract,
+				digest,
+				second.receipt.acceptanceDigest,
+			),
+			"refused",
+		);
+		assert.deepEqual(
+			await store.read(contract.runId, contract, digest),
+			second,
+		);
+
+		// A marker written before the move, then torn: no retired copy to
+		// compare, so the suite still on disk may be the retired one.
+		const torn = fresh();
+		const early = fileArtifacts(torn);
+		assert.equal((await early.store(input)).kind, "found");
+		writeFileSync(
+			join(torn, "acceptance", `${contract.runId}.retired.json`),
+			"{not json\n",
+			{ mode: 0o600 },
+		);
+		assert.deepEqual(await early.read(contract.runId, contract, digest), {
+			kind: "blocked",
+			reason: "acceptance_invalid",
+		});
+	});
+
 	for (const crash of ["marker", "suite"] as const)
 		it(`recovers a crash after the ${crash} step of a retirement to the same end state`, async () => {
 			const done = fresh();
