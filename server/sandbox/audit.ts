@@ -53,6 +53,10 @@ type JournalIdentity = {
  * One model request in the synced journal: a `dispatch` before anything goes
  * upstream, and a `result` once it ends. Only ids, counters and metering. A
  * provider's non-2xx status at the headers, on a response that completed, is `provider_rejected`, metered at its reported usage or zero.
+ * An `error` the gateway answered itself, before any upstream response
+ * headers arrived (connection or DNS failure, or a timeout before headers),
+ * is `upstream_unreachable`. It never appears once a response has started,
+ * and it does not change the charge. Older journals lack it.
  */
 export type JournalRecord =
 	| (JournalIdentity & {
@@ -64,7 +68,7 @@ export type JournalRecord =
 			readonly kind: "result";
 			readonly status: number;
 			readonly decision: AuditDecision;
-			readonly reason?: "provider_rejected";
+			readonly reason?: "provider_rejected" | "upstream_unreachable";
 			readonly inputTokens: number | null;
 			readonly outputTokens: number | null;
 			/**

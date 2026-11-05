@@ -22,6 +22,7 @@ import { fileAdmissionStore, admitTicket } from "../../src/admission.ts";
 import { handoffCandidate, parseCandidateState } from "../../src/handoff.ts";
 import { candidateBranch } from "../../src/publication.ts";
 import {
+	certifyR8,
 	type FamilyInput,
 	familyClaimsHold,
 	ReviewEvidenceUnavailable,
@@ -2533,7 +2534,12 @@ function journalLines(
 	result:
 		| { readonly kind: "metered"; readonly observedModel?: string }
 		| { readonly kind: "unusable" }
-		| { readonly kind: "unsettled" },
+		| { readonly kind: "unsettled" }
+		| {
+				readonly kind: "error";
+				readonly status: number;
+				readonly unreachable?: boolean;
+		  },
 ): string[] {
 	const identity = {
 		v: 1 as const,
@@ -2554,14 +2560,19 @@ function journalLines(
 
 	if (result.kind === "unsettled") return [dispatch];
 
-	const settled: JournalRecord = {
+	const answered: JournalRecord = {
 		...identity,
 		kind: "result",
-		status: 200,
-		decision: "forward",
+		status: result.kind === "error" ? result.status : 200,
+		decision: result.kind === "error" ? "error" : "forward",
 		inputTokens: result.kind === "metered" ? 1_924 : null,
 		outputTokens: result.kind === "metered" ? 4 : null,
 	};
+
+	const settled: JournalRecord =
+		result.kind === "error" && result.unreachable === true
+			? { ...answered, reason: "upstream_unreachable" }
+			: answered;
 
 	const observedModel =
 		result.kind === "metered" ? result.observedModel : undefined;
@@ -2855,6 +2866,160 @@ describe("runStage on an Anthropic primary", () => {
 				[],
 			);
 			assert.equal(result.receipt.fallback, null);
+		});
+
+	// The lane 5a journal: the Anthropic upstream was unreachable, so the
+	// gateway itself answered each request with a 502, journaled as an
+	// `error` result with null tokens, no upstream response and
+	// `reason: "upstream_unreachable"`.
+	const gatewayErrors = (status: 502 | 504) =>
+		[2, 3, 4, 5].flatMap((req) =>
+			journalLines(req, "model-anthropic", {
+				kind: "error",
+				status,
+				unreachable: true,
+			}),
+		);
+
+	const UPSTREAM_DOWN = [2, 3, 4, 5].map(() =>
+		usageEvent("model-anthropic", "error"),
+	);
+
+	for (const status of [502, 504] as const)
+		it(`switches to the named openai/ fallback when the gateway answered every Anthropic request with its own ${status}, and certifies r8 incomplete`, async () => {
+			const h = anthropicHarness(
+				[
+					(gw) => gatewayScript(gw, UPSTREAM_DOWN, ERROR_END),
+					() =>
+						replayer([
+							started("x"),
+							OPENAI_PASS,
+							{ type: "agent_settled", aborted: false },
+						]),
+				],
+				[
+					...gatewayErrors(status),
+					...journalLines(6, "model-openai", { kind: "metered" }),
+				].join("\n"),
+			);
+
+			const result = await runStage(
+				anthropicInput(model("openai/gpt-6.1-sol")),
+				h.host,
+			);
+
+			assert.equal(result.kind, "passed");
+			assert.deepEqual(h.launches, [CLAUDE, "openai/gpt-6.1-sol"]);
+			assert.deepEqual(
+				h.timeline.filter((entry) => entry.startsWith("route:")),
+				["route:model-anthropic:closed", "route:model-openai:open"],
+			);
+			assert.equal(result.receipt.fallback?.requested, "openai/gpt-6.1-sol");
+
+			const openai: FamilyInput = {
+				kind: "openai-request",
+				model: "openai/gpt-6.1-sol",
+			};
+
+			assert.deepEqual(result.receipt.family, openai);
+
+			assert.ok(result.receipt.family !== undefined);
+			assert.equal(
+				certifyR8({
+					builder: openai,
+					accept: result.receipt.family,
+					seats: [
+						{
+							seat: "code-review",
+							evidence: {
+								kind: "anthropic-gateway",
+								model: "claude-sonnet-5-5",
+							},
+						},
+					],
+				}),
+				"incomplete",
+			);
+		});
+
+	it("fails as before when the gateway answered every Anthropic request with its own 502 and no fallback is named", async () => {
+		const h = anthropicHarness(
+			[(gw) => gatewayScript(gw, UPSTREAM_DOWN, ERROR_END)],
+			gatewayErrors(502).join("\n"),
+		);
+
+		const result = await runStage(anthropicInput(), h.host);
+
+		assert.equal(result.kind, "failed");
+		assert.deepEqual(result.receipt.outcome, { kind: "failed", exit: "error" });
+		assert.deepEqual(h.launches, [CLAUDE]);
+		assert.deepEqual(
+			h.timeline.filter((entry) => entry.startsWith("route:")),
+			[],
+		);
+		assert.equal(result.receipt.fallback, null);
+	});
+
+	for (const [name, journal] of [
+		[
+			"an error after a 200 response started streaming",
+			journalLines(1, "model-anthropic", { kind: "error", status: 200 }),
+		],
+		[
+			"an upstream 502 whose stream was cut after its headers",
+			journalLines(1, "model-anthropic", { kind: "error", status: 502 }),
+		],
+		[
+			"an upstream 504 whose stream was cut after its headers",
+			journalLines(1, "model-anthropic", { kind: "error", status: 504 }),
+		],
+		[
+			"a gateway 502 next to a forwarded 200 with no usage",
+			[
+				...journalLines(1, "model-anthropic", {
+					kind: "error",
+					status: 502,
+					unreachable: true,
+				}),
+				...journalLines(2, "model-anthropic", { kind: "unusable" }),
+			],
+		],
+	] as const)
+		it(`vetoes and does not fall back on ${name}, though the route forwarded nothing`, async () => {
+			const h = anthropicHarness(
+				[
+					(gw) =>
+						gatewayScript(
+							gw,
+							[usageEvent("model-anthropic", "error")],
+							ERROR_END,
+						),
+					() =>
+						replayer([
+							started("x"),
+							OPENAI_PASS,
+							{ type: "agent_settled", aborted: false },
+						]),
+				],
+				journal.join("\n"),
+			);
+
+			const result = await runStage(
+				anthropicInput(model("openai/gpt-6.1-sol")),
+				h.host,
+			);
+
+			assert.equal(result.kind, "failed");
+			assert.deepEqual(h.launches, [CLAUDE]);
+			assert.deepEqual(
+				h.timeline.filter((entry) => entry.startsWith("route:")),
+				[],
+			);
+			assert.equal(result.receipt.fallback, null);
+			assert.deepEqual(result.receipt.family, {
+				kind: "unavailable",
+				reason: "unmetered",
+			});
 		});
 
 	it("follows the existing refusal rule: no fallback ends refused, a named one switches routes", async () => {

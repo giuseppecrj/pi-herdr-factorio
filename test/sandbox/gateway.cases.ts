@@ -1390,7 +1390,7 @@ describe("gateway admission gate and control", () => {
 		assert.ok(sent?.kind === "dispatch" && settled?.kind === "result");
 		assert.deepEqual(
 			[settled.status, settled.reason ?? null, settled.inputTokens],
-			[502, null, null],
+			[502, "upstream_unreachable", null],
 		);
 		assert.deepEqual(
 			journalCharge(h.journal.map((entry) => JSON.stringify(entry)).join("\n")),
@@ -1556,6 +1556,17 @@ describe("gateway anthropic route", () => {
 				return;
 			}
 
+			if (mode === "hang") return;
+
+			if (mode === "502cut" || mode === "504cut") {
+				res.writeHead(Number(mode.slice(0, 3)), {
+					"Content-Type": "text/event-stream",
+				});
+				res.write(ANTHROPIC_START, () => res.socket?.destroy());
+
+				return;
+			}
+
 			res.writeHead(200, { "Content-Type": "text/event-stream" });
 
 			if (mode === "cut") {
@@ -1600,7 +1611,12 @@ describe("gateway anthropic route", () => {
 	});
 
 	async function anthropicHarness(
-		options: { model?: string; ceilingTokens?: number; fallback?: string } = {},
+		options: {
+			model?: string;
+			ceilingTokens?: number;
+			fallback?: string;
+			port?: number;
+		} = {},
 	) {
 		const base = anthropicTable({
 			model: options.model ?? "claude-haiku-5-5",
@@ -1611,7 +1627,9 @@ describe("gateway anthropic route", () => {
 		const table: RouteTable = {
 			...base,
 			routes: base.routes.map((route) =>
-				route.meter === null ? route : fixtureModelRoute(port, route),
+				route.meter === null
+					? route
+					: fixtureModelRoute(options.port ?? port, route),
 			),
 		};
 
@@ -2058,6 +2076,77 @@ describe("gateway anthropic route", () => {
 		assert.equal(h.gateway.summary().modelRequests, 0);
 		assert.equal(h.gateway.summary().routes[0]?.unmetered, 0);
 		assert.equal(h.gateway.summary().routes[0]?.forwarded, 1);
+	});
+
+	it("marks only the gateway's own answer before any upstream response upstream_unreachable, never an upstream 502 or 504 cut mid-stream", async () => {
+		const down = await anthropicHarness({ port: REFUSED_PORT });
+
+		const refused = await call(
+			down.socketPath,
+			"POST",
+			"/anthropic/v1/messages?beta=true",
+			piHeaders,
+			messages(),
+		);
+
+		assert.deepEqual([refused.status, refused.code], [502, "upstream-error"]);
+
+		const h = await anthropicHarness();
+		const replies: (string | number | null)[][] = [];
+
+		for (const next of ["hang", "502cut", "504cut"]) {
+			mode = next;
+
+			const reply = await call(
+				h.socketPath,
+				"POST",
+				"/anthropic/v1/messages?beta=true",
+				piHeaders,
+				messages(),
+			);
+
+			replies.push([next, reply.status, reply.code]);
+		}
+
+		mode = "full";
+
+		assert.deepEqual(replies, [
+			["hang", 504, "upstream-timeout"],
+			["502cut", 502, null],
+			["504cut", 504, null],
+		]);
+
+		const results = [...down.journal, ...h.journal].flatMap((entry) =>
+			entry.kind === "result"
+				? [
+						[
+							entry.status,
+							entry.decision,
+							entry.reason ?? null,
+							entry.inputTokens,
+							entry.outputTokens,
+						],
+					]
+				: [],
+		);
+
+		assert.deepEqual(results, [
+			[502, "error", "upstream_unreachable", null, null],
+			[504, "error", "upstream_unreachable", null, null],
+			[502, "error", null, null, null],
+			[504, "error", null, null, null],
+		]);
+
+		// Charging ignores the marker: every one of these stays uncertain.
+		assert.deepEqual(
+			[down, h].map(
+				(each) =>
+					journalCharge(
+						each.journal.map((entry) => JSON.stringify(entry)).join("\n"),
+					).uncertain,
+			),
+			[1, 3],
+		);
 	});
 
 	it("marks an Anthropic stream without usage or with two message_starts unusable, while OpenAI keeps its unmetered rule and output field", async () => {

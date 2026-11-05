@@ -754,6 +754,13 @@ const UNUSABLE: SessionOutcome = { kind: "failed", exit: "error" };
  * at the headers, or, once the gateway has stopped (`settled`), a dispatch
  * with no result. Pi may already have read the streamed bytes, so the
  * attempt fails rather than pass on unmetered Anthropic usage.
+ *
+ * A result with `reason: "upstream_unreachable"` is not a reply. The gateway
+ * marks only its own answer, sent before any upstream response headers
+ * arrived, so nothing reached Pi and the route was unavailable. The status
+ * code cannot tell this apart from an upstream 502 or 504 whose stream was
+ * cut, so an unmarked error, including one from an older journal, stays
+ * vetoed.
  */
 function anthropicUnmetered(journal: string, settled: boolean): boolean {
 	const dispatched = new Set<number>();
@@ -778,6 +785,8 @@ function anthropicUnmetered(journal: string, settled: boolean): boolean {
 		if (fieldOf(record, "kind") !== "result") continue;
 
 		results.add(req);
+
+		if (fieldOf(record, "reason") === "upstream_unreachable") continue;
 
 		if (
 			fieldOf(record, "reason") !== "provider_rejected" &&
