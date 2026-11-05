@@ -22,6 +22,7 @@ import {
 	arrayOf,
 	countOf,
 	fieldOf,
+	hasOnlyKeys,
 	objectOf,
 	parseJson,
 	textOf,
@@ -401,6 +402,301 @@ export function repairFeedback(
 	);
 }
 
+export type ScenarioFeedback = Readonly<{
+	scenario: string;
+	criteria: readonly Readonly<{ id: string; text: string }>[];
+	check?: undefined;
+}>;
+
+export const FEEDBACK_CHECKS = [
+	"typecheck",
+	"lint",
+	"format",
+	"candidate_tests",
+] as const;
+
+type FeedbackCheck = (typeof FEEDBACK_CHECKS)[number];
+
+/**
+ * One fixed-form fact from a failed visible gate: a candidate file, plus an
+ * allowlisted code for a candidate test file. No field carries tool or test
+ * text, because a candidate test in CI can read the published held-out suite
+ * and fail with it. A static check gives no line, TS code or rule id either:
+ * tsc follows an import into the suite, so a candidate can make which line
+ * or code fails spell a held-out byte. Repair reruns those checks itself.
+ */
+export type CheckFeedback = Readonly<{
+	check: FeedbackCheck;
+	file: string;
+	code?: string;
+	scenario?: undefined;
+}>;
+
+export type ValidationFeedback = ScenarioFeedback | CheckFeedback;
+
+const FEEDBACK_MAX_FACTS = 20;
+
+// Only a candidate test file keeps a code. CI-only failures such as EROFS
+// cannot be reproduced in the repair sandbox, and a candidate test picks its
+// own failure code, so only these few pass.
+const TEST_CODE =
+	/^(?:ERR_ASSERTION|EROFS|ENOENT|EACCES|EPERM|ERR_MODULE_NOT_FOUND|ERR_TEST_FAILURE|timeout|other)$/;
+
+// ANSI escape sequences, built from a string because a regular expression
+// literal may not contain the escape control character.
+const ANSI = new RegExp(
+	`${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`,
+	"g",
+);
+
+function hiddenPath(path: string, heldoutDir: string): boolean {
+	const lower = path.toLowerCase();
+
+	return (
+		lower === "test/acceptance" ||
+		lower.startsWith("test/acceptance/") ||
+		(heldoutDir !== "" &&
+			(path === heldoutDir || path.startsWith(`${heldoutDir}/`)))
+	);
+}
+
+/**
+ * Builds a fact only from fields in their fixed form. `visible` holds the
+ * candidate's changed paths; a file must equal one exactly. Without it, as
+ * for a stored feedback file, the file must only lie outside the suite.
+ */
+function factOf(
+	check: FeedbackCheck,
+	file: string | null,
+	code: string | null,
+	visible: ReadonlySet<string> | null,
+): CheckFeedback | null {
+	if (
+		file === null ||
+		(visible === null ? hiddenPath(file, "") : !visible.has(file)) ||
+		(check === "candidate_tests"
+			? code === null || !TEST_CODE.test(code)
+			: code !== null)
+	)
+		return null;
+
+	return code === null ? { check, file } : { check, file, code };
+}
+
+function logLines(log: string): string[] {
+	return log
+		.replace(ANSI, "")
+		.split(/\r?\n/)
+		.map((line) => line.trim());
+}
+
+type RawFact = readonly [string, string | null];
+
+// Errors only, from oxlint's graphical (`× rule` then `╭─[file:line:col]`)
+// or one-line (`file:line:col: error rule`) output. Only the file is kept.
+function lintFacts(log: string): RawFact[] {
+	const facts: RawFact[] = [];
+	let error = false;
+
+	for (const text of logLines(log)) {
+		const header = /^([×⚠!])/u.exec(text);
+
+		if (header !== null) {
+			error = header[1] === "×";
+			continue;
+		}
+
+		const at = /^╭─\[(.+):\d+:\d+\]$/u.exec(text);
+
+		if (at !== null) {
+			if (error) facts.push([at[1] ?? "", null]);
+			error = false;
+			continue;
+		}
+
+		const flat = /^(.+?):\d+:\d+: error /.exec(text);
+
+		if (flat !== null) facts.push([flat[1] ?? "", null]);
+	}
+
+	return facts;
+}
+
+function typecheckFacts(log: string): RawFact[] {
+	return logLines(log).flatMap((text): RawFact[] => {
+		const at =
+			/^(.+?)\(\d+,\d+\): error TS\d+:/.exec(text) ??
+			/^(.+?):\d+:\d+ - error TS\d+:/.exec(text);
+
+		return at === null ? [] : [[at[1] ?? "", null]];
+	});
+}
+
+function formatFacts(log: string): RawFact[] {
+	return logLines(log).flatMap((text): RawFact[] => {
+		const at = /^(\S+)\s+format(?:\s+[━─]+)?$/u.exec(text);
+
+		return at === null ? [] : [[at[1] ?? "", null]];
+	});
+}
+
+// From the trusted reporter's JSON line, never from test names or messages.
+// One fact per file, with its first failure's code, so a candidate cannot
+// spell anything by choosing which codes its tests fail with.
+function testFacts(log: string): RawFact[] {
+	for (const raw of log.split("\n")) {
+		const failures = arrayOf(
+			fieldOf(objectOf(parseJson(raw.trim())), "failures"),
+		);
+
+		if (failures === null) continue;
+		const seen = new Set<string>();
+
+		return failures.flatMap((item): RawFact[] => {
+			const f = objectOf(item);
+			const file = textOf(fieldOf(f, "file"));
+			const code = textOf(fieldOf(f, "code")) ?? "";
+
+			if (file === null || seen.has(file)) return [];
+			seen.add(file);
+
+			return [
+				[
+					file,
+					fieldOf(f, "kind") === "timeout"
+						? "timeout"
+						: code !== "timeout" && TEST_CODE.test(code)
+							? code
+							: "other",
+				],
+			];
+		});
+	}
+
+	return [];
+}
+
+const FACT_READERS: Readonly<
+	Record<FeedbackCheck, (log: string) => RawFact[]>
+> = {
+	typecheck: typecheckFacts,
+	lint: lintFacts,
+	format: formatFacts,
+	candidate_tests: testFacts,
+};
+
+/**
+ * Fixed-form facts about the failed visible gate checks, for repair: at most
+ * 20, deduplicated, shared fairly across the checks and each naming one of
+ * the candidate's own changed files. No log text, line or tool code is kept.
+ */
+export function checkFeedback(input: {
+	readonly logs: ReadonlyMap<string, string>;
+	readonly failed: readonly string[];
+	readonly changedPaths: readonly string[];
+	readonly heldoutDir: string;
+}): CheckFeedback[] {
+	const visible = new Set(
+		input.changedPaths.filter((path) => !hiddenPath(path, input.heldoutDir)),
+	);
+
+	const lists = FEEDBACK_CHECKS.map((check) => {
+		const log = input.logs.get(check);
+		const seen = new Set<string>();
+
+		return !input.failed.includes(check) || log === undefined
+			? []
+			: FACT_READERS[check](log).flatMap(([file, code]) => {
+					const fact = factOf(check, file, code, visible);
+					const key = JSON.stringify(fact);
+
+					if (fact === null || seen.has(key)) return [];
+					seen.add(key);
+
+					return [fact];
+				});
+	});
+
+	const taken = lists.map(() => 0);
+
+	for (let total = 0, more = true; more && total < FEEDBACK_MAX_FACTS; ) {
+		more = false;
+
+		for (const [i, list] of lists.entries())
+			if (total < FEEDBACK_MAX_FACTS && (taken[i] ?? 0) < list.length) {
+				taken[i] = (taken[i] ?? 0) + 1;
+				total += 1;
+				more = true;
+			}
+	}
+
+	return lists.flatMap((list, i) => list.slice(0, taken[i]));
+}
+
+/** Re-checks stored facts in full; anything else in the file refuses them all. */
+export function parseCheckFeedback(
+	value: JsonValue | undefined,
+	scope: {
+		readonly changedPaths: readonly string[];
+		readonly heldoutDir: string;
+	},
+): CheckFeedback[] | null {
+	const list = arrayOf(value);
+
+	const visible = new Set(
+		scope.changedPaths.filter((path) => !hiddenPath(path, scope.heldoutDir)),
+	);
+
+	if (list === null || list.length > FEEDBACK_MAX_FACTS) return null;
+	const result: CheckFeedback[] = [];
+
+	for (const item of list) {
+		const entry = checkFactOf(objectOf(item), visible);
+
+		if (entry === null) return null;
+		result.push(entry);
+	}
+
+	return result;
+}
+
+function checkFactOf(
+	o: ReturnType<typeof objectOf>,
+	visible: ReadonlySet<string> | null,
+): CheckFeedback | null {
+	const check = FEEDBACK_CHECKS.find((name) => name === fieldOf(o, "check"));
+	const code = fieldOf(o, "code");
+
+	// An entry stored before fix round 2 had a line, or a static-check code.
+	return o === null ||
+		check === undefined ||
+		!hasOnlyKeys(o, ["check", "file", "code"]) ||
+		(code !== undefined && textOf(code) === null)
+		? null
+		: factOf(check, textOf(fieldOf(o, "file")), textOf(code), visible);
+}
+
+function parseFeedbackEntry(
+	item: JsonValue | undefined,
+): ValidationFeedback | null {
+	const o = objectOf(item);
+
+	if (fieldOf(o, "check") !== undefined) return checkFactOf(o, null);
+
+	const scenario = textOf(fieldOf(o, "scenario"));
+	const criteria: { id: string; text: string }[] = [];
+
+	for (const c of arrayOf(fieldOf(o, "criteria")) ?? []) {
+		const id = textOf(fieldOf(objectOf(c), "id"));
+		const body = textOf(fieldOf(objectOf(c), "text"));
+
+		if (id === null || body === null) return null;
+		criteria.push({ id, text: body });
+	}
+
+	return scenario === null ? null : { scenario, criteria };
+}
+
 export function parseValidationState(
 	value: JsonValue | undefined,
 ): ValidationState | null {
@@ -554,7 +850,7 @@ export type ReadAssessment = Readonly<{
 export type RepairFeedbackFile = Readonly<{
 	version: 2;
 	assessment: AssessmentRef;
-	scenarios: ReturnType<typeof repairFeedback>;
+	scenarios: readonly ValidationFeedback[];
 }>;
 
 export function assessmentBinding(input: {
@@ -672,7 +968,7 @@ export function sameAssessmentRef(
 
 export function feedbackBytes(
 	ref: AssessmentRef,
-	scenarios: ReturnType<typeof repairFeedback>,
+	scenarios: readonly ValidationFeedback[],
 ): string {
 	const file: RepairFeedbackFile = {
 		version: 2,
@@ -689,31 +985,17 @@ export function feedbackBytes(
 export function readFeedbackBytes(
 	text: string,
 	ref: AssessmentRef,
-): ReturnType<typeof repairFeedback> | null {
+): ValidationFeedback[] | null {
 	const v = objectOf(parseJson(text));
 	const a = objectOf(fieldOf(v, "assessment"));
 	const list = arrayOf(fieldOf(v, "scenarios"));
-
-	const scenarios: {
-		scenario: string;
-		criteria: { id: string; text: string }[];
-	}[] = [];
+	const scenarios: ValidationFeedback[] = [];
 
 	for (const item of list ?? []) {
-		const o = objectOf(item);
-		const scenario = textOf(fieldOf(o, "scenario"));
-		const criteria: { id: string; text: string }[] = [];
+		const entry = parseFeedbackEntry(item);
 
-		for (const c of arrayOf(fieldOf(o, "criteria")) ?? []) {
-			const id = textOf(fieldOf(objectOf(c), "id"));
-			const body = textOf(fieldOf(objectOf(c), "text"));
-
-			if (id === null || body === null) return null;
-			criteria.push({ id, text: body });
-		}
-
-		if (scenario === null) return null;
-		scenarios.push({ scenario, criteria });
+		if (entry === null) return null;
+		scenarios.push(entry);
 	}
 
 	const bindingDigest = textOf(fieldOf(a, "bindingDigest"));

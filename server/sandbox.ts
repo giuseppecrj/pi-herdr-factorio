@@ -4043,6 +4043,7 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 								base,
 								workspace: input.workspace,
 								allowNoChange: input.build.allowNoChange,
+								repairTree: (input.round ?? 0) > 0,
 							});
 
 							if (patch.kind === "error") {

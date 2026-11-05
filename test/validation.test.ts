@@ -20,6 +20,10 @@ import {
 	matchesCiRun,
 	parseCiRun,
 	repairFeedback,
+	checkFeedback,
+	parseCheckFeedback,
+	feedbackBytes,
+	readFeedbackBytes,
 	type CiRun,
 	type ValidationState,
 	parseValidationState,
@@ -1308,5 +1312,487 @@ describe("published held-out bytes and repair feedback", () => {
 			JSON.stringify(feedback),
 			/secret|assert|test\.ts|Readability/,
 		);
+	});
+
+	describe("visible check facts for repair", () => {
+		const heldoutDir = "test/acceptance/42";
+		const canary = "CANARY-secret-bytes";
+		const leak = /secret-scenario|CANARY|canary|acceptance|checks\/|hidden|\\/;
+
+		// Runs candidate tests under the trusted gate reporter in a tree rooted
+		// at .../w/, as CI does, beside a published held-out suite.
+		const reporterLog = (tests: Record<string, string>) => {
+			const root = mkdtempSync(join(tmpdir(), "check-facts-"));
+
+			try {
+				const tree = join(root, "w");
+
+				for (const [path, text] of Object.entries({
+					[`${heldoutDir}/checks/secret-scenario.test.mjs`]: `export const canary = '${canary}';\n`,
+					...tests,
+				})) {
+					mkdirSync(join(tree, path, ".."), { recursive: true });
+					writeFileSync(join(tree, path), text);
+				}
+
+				const run = spawnSync(
+					process.execPath,
+					[
+						"--test",
+						"--test-concurrency=1",
+						`--test-reporter=${join(import.meta.dirname, "../.github/factory/gates/reporter.mjs")}`,
+						...Object.keys(tests),
+					],
+					// No inherited NODE_TEST_CONTEXT, so the child runs its own files.
+					{
+						cwd: tree,
+						encoding: "utf8",
+						timeout: 60_000,
+						env: { PATH: process.env.PATH },
+					},
+				);
+
+				return run.stdout + run.stderr;
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		};
+
+		it("never carries held-out names or bytes that a candidate test reads and fails with", () => {
+			const pad = "n".repeat(280);
+
+			const log = reporterLog({
+				"test/candidate.test.mjs": [
+					'import { test } from "node:test";',
+					'import assert from "node:assert/strict";',
+					'import { readdirSync, readFileSync } from "node:fs";',
+					"",
+					'test("suite is absent", () => {',
+					"\tlet names = [];",
+					`\ttry { names = readdirSync("${heldoutDir}/checks"); } catch { names = []; }`,
+					"\tassert.deepEqual(names, []);",
+					"});",
+					"",
+					'test("suite bytes are absent", () => {',
+					`\tconst path = "${heldoutDir}/checks/secret-scenario.test.mjs";`,
+					'\tassert.equal(readFileSync(path, "utf8").replaceAll(path, ""), "");',
+					"});",
+					"",
+					`test("${pad}", () => {`,
+					`\tthrow new Error("${heldoutDir}/checks/secret-scenario.test.mjs");`,
+					"});",
+					"",
+				].join("\n"),
+			});
+
+			// The real reporter does carry the leak; the facts must not.
+			assert.match(log, /secret-scenario\.test\.mjs/);
+			assert.match(log, new RegExp(canary));
+
+			const feedback = checkFeedback({
+				logs: new Map([["candidate_tests", log]]),
+				failed: ["candidate_tests"],
+				changedPaths: ["test/candidate.test.mjs"],
+				heldoutDir,
+			});
+
+			// One fact per failing file, its first failure's code, so the
+			// candidate cannot spell anything with a choice of codes.
+			assert.deepEqual(feedback, [
+				{
+					check: "candidate_tests",
+					file: "test/candidate.test.mjs",
+					code: "ERR_ASSERTION",
+				},
+			]);
+			assert.doesNotMatch(JSON.stringify(feedback), leak);
+		});
+
+		// Grok's probe: tsc follows an import into the excluded suite, so the
+		// candidate can place a probe per character and let only the line
+		// equal to the held-out byte fail. Line 67 is `C`.
+		it("gives a static check only its file, so no line, TS code or rule id can encode a held-out byte", () => {
+			const root = mkdtempSync(join(tmpdir(), "line-oracle-"));
+
+			try {
+				const probe = [
+					`import { canary } from "../${heldoutDir}/checks/secret.ts";`,
+					"type Secret = typeof canary;",
+					"type First = Secret extends `${infer C}${string}` ? C : never;",
+					"type Is<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;",
+					"type FailIf<T extends false> = T;",
+					...Array.from({ length: 60 }, () => ""),
+					...["B", "C", "D"].map(
+						(c) => `export type L${c} = FailIf<Is<First, "${c}">>;`,
+					),
+					"export const bad: unique symbol = canary;",
+					"",
+				].join("\n");
+
+				for (const [path, text] of Object.entries({
+					[`${heldoutDir}/checks/secret.ts`]: `export const canary = "${canary}";\n`,
+					"src/probe.ts": probe,
+					"tsconfig.json": JSON.stringify({
+						compilerOptions: {
+							target: "ES2023",
+							module: "NodeNext",
+							moduleResolution: "NodeNext",
+							strict: true,
+							allowImportingTsExtensions: true,
+							noEmit: true,
+							skipLibCheck: true,
+							types: [],
+						},
+						include: ["src", "test"],
+						exclude: ["test/acceptance/**"],
+					}),
+				})) {
+					mkdirSync(join(root, path, ".."), { recursive: true });
+					writeFileSync(join(root, path), text);
+				}
+
+				const run = spawnSync(
+					process.execPath,
+					[
+						join(import.meta.dirname, "../node_modules/typescript/bin/tsc"),
+						"--noEmit",
+						"-p",
+						join(root, "tsconfig.json"),
+					],
+					{ cwd: root, encoding: "utf8", timeout: 60_000 },
+				);
+
+				const typecheck = run.stdout + run.stderr;
+
+				// The real compiler log carries the byte as a line number.
+				assert.match(typecheck, /src\/probe\.ts\(67,\d+\): error TS2344/);
+				assert.doesNotMatch(typecheck, /src\/probe\.ts\((66|68),/);
+
+				const lint = [
+					"  × anti-slop(require-readable-spacing): Expected blank line.",
+					"    ╭─[src/probe.ts:67:2]",
+					"src/probe.ts:68:1: error eslint(no-debugger): x",
+				].join("\n");
+
+				const feedback = checkFeedback({
+					logs: new Map([
+						["typecheck", typecheck],
+						["lint", lint],
+						["format", "src/probe.ts format ━━━━\n"],
+					]),
+					failed: ["typecheck", "lint", "format"],
+					changedPaths: ["src/probe.ts"],
+					heldoutDir,
+				});
+
+				assert.deepEqual(feedback, [
+					{ check: "typecheck", file: "src/probe.ts" },
+					{ check: "lint", file: "src/probe.ts" },
+					{ check: "format", file: "src/probe.ts" },
+				]);
+				assert.doesNotMatch(
+					JSON.stringify(feedback),
+					/\d|TS|anti-slop|eslint|"line"|"code"/,
+				);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		});
+
+		it("keeps only the fixed-form fact from a tool line, however long or disguised its held-out text", () => {
+			const changedPaths = ["src/a.ts", "test/provenance.test.ts"];
+
+			const typecheck = [
+				`src/a.ts(3,7): error TS2322: Type '"${canary}"' is not assignable to type 'Secret'.`,
+				`src/a.ts(4,1): error TS2307: ${"x".repeat(280)} test/acceptance/42/checks/secret-scenario.test.mjs ${canary}`,
+				`test/provenance.test.ts(5,1): error TS2305: test/./acceptance/42/checks/secret-scenario.test.mjs ${canary}`,
+				`test/provenance.test.ts(6,1): error TS2305: test\\acceptance\\42\\checks\\secret-scenario.test.mjs ${canary}`,
+				`test/acceptance/42/checks/secret-scenario.test.mjs(1,1): error TS1005: ${canary}`,
+				`src/a.ts(7,1): error TS${canary}: forged code`,
+			].join("\n");
+
+			const feedback = checkFeedback({
+				logs: new Map([["typecheck", typecheck]]),
+				failed: ["typecheck"],
+				changedPaths,
+				heldoutDir,
+			});
+
+			assert.deepEqual(feedback, [
+				{ check: "typecheck", file: "src/a.ts" },
+				{ check: "typecheck", file: "test/provenance.test.ts" },
+			]);
+			assert.doesNotMatch(JSON.stringify(feedback), leak);
+		});
+
+		it("maps an unknown candidate-test failure code to other, and a timeout to timeout", () => {
+			const log = `${JSON.stringify({
+				complete: true,
+				bad: true,
+				failures: [
+					{
+						file: "src/a.test.ts",
+						name: canary,
+						kind: "runtime_error",
+						code: `E_${canary}`,
+						message: canary,
+					},
+					{
+						file: "src/b.test.ts",
+						name: "b",
+						kind: "timeout",
+						code: null,
+						message: "",
+					},
+					{
+						file: "src/c.test.ts",
+						name: "c",
+						kind: "runtime_error",
+						code: "ENOENT",
+						message: canary,
+					},
+					{
+						file: "./src/c.test.ts",
+						name: "c",
+						kind: "runtime_error",
+						code: "EACCES",
+						message: "",
+					},
+					{
+						file: "src/c.test.ts.bak",
+						name: "c",
+						kind: "runtime_error",
+						code: "EPERM",
+						message: "",
+					},
+				],
+			})}\n`;
+
+			const feedback = checkFeedback({
+				logs: new Map([["candidate_tests", log]]),
+				failed: ["candidate_tests"],
+				changedPaths: ["src/a.test.ts", "src/b.test.ts", "src/c.test.ts"],
+				heldoutDir,
+			});
+
+			assert.deepEqual(feedback, [
+				{ check: "candidate_tests", file: "src/a.test.ts", code: "other" },
+				{ check: "candidate_tests", file: "src/b.test.ts", code: "timeout" },
+				{ check: "candidate_tests", file: "src/c.test.ts", code: "ENOENT" },
+			]);
+			assert.doesNotMatch(JSON.stringify(feedback), leak);
+		});
+
+		it("still names H4's lint and format file and its EROFS test file", () => {
+			const lint = [
+				"\u001b[31m  × anti-slop(require-readable-spacing): Expected blank line before this statement.\u001b[0m",
+				"    ╭─[test/provenance.test.ts:26:2]",
+				" 26 │   return root;",
+				"    ╰────",
+				"  × anti-slop(require-readable-spacing): Expected blank line before this statement.",
+				"    ╭─[test/provenance.test.ts:32:2]",
+				"  ⚠ eslint(no-unused-vars): Variable 'secret' is declared but never used.",
+				"    ╭─[test/provenance.test.ts:3:7]",
+				"  × eslint(no-unused-vars): Variable 'secret' is declared but never used.",
+				"    ╭─[src/untouched.ts:3:7]",
+				"  × eslint(no-debugger): `debugger` statement is not allowed",
+				"    ╭─[test/acceptance/42/checks/a.test.ts:1:1]",
+				"test/provenance.test.ts:35:2: error anti-slop(require-readable-spacing): Expected blank line before this statement.",
+				"Found 0 warnings and 3 errors.",
+			].join("\n");
+
+			const tests = `${JSON.stringify({
+				complete: true,
+				bad: true,
+				counts: {},
+				failures: ["keeps the provenance file", "restores the original"].map(
+					(name) => ({
+						file: "test/provenance.test.ts",
+						name,
+						kind: "runtime_error",
+						code: "EROFS",
+						message:
+							"EROFS: read-only file system, mkdtemp '/w/.provenance-test-XXXXXX'",
+					}),
+				),
+			})}\n`;
+
+			const feedback = checkFeedback({
+				logs: new Map([
+					["lint", lint],
+					["candidate_tests", tests],
+					[
+						"format",
+						"test/provenance.test.ts format ━━━━━━━━━━\n  × Formatter would have printed\n    5 │ - src/a.ts format\nscripts/provenance.sh.bak format ━━━\n",
+					],
+					["typecheck", "scripts/provenance.sh(1,1): error TS1005: x\n"],
+				]),
+				failed: ["lint", "candidate_tests", "format"],
+				changedPaths: [
+					"scripts/provenance.sh",
+					"test/provenance.test.ts",
+					"src/a.ts",
+				],
+				heldoutDir,
+			});
+
+			assert.deepEqual(feedback, [
+				{ check: "lint", file: "test/provenance.test.ts" },
+				{ check: "format", file: "test/provenance.test.ts" },
+				{
+					check: "candidate_tests",
+					file: "test/provenance.test.ts",
+					code: "EROFS",
+				},
+			]);
+		});
+
+		it("bounds the facts to 20 deduplicated entries shared across the failed checks", () => {
+			const changedPaths = Array.from({ length: 40 }, (_, i) => `src/f${i}.ts`);
+
+			const tsLines = (n: number) =>
+				Array.from(
+					{ length: n },
+					(_, i) => `src/f${i}.ts(${i + 1},1): error TS2322: x`,
+				).join("\n");
+
+			const lint = Array.from(
+				{ length: 30 },
+				(_, i) => `src/f${i}.ts:${i + 1}:1: error eslint(no-debugger): x`,
+			).join("\n");
+
+			const feedback = checkFeedback({
+				logs: new Map([
+					["typecheck", `${tsLines(40)}\n${tsLines(40)}`],
+					["lint", lint],
+					["format", "src/f0.ts format\nsrc/f0.ts format\n"],
+				]),
+				failed: ["typecheck", "lint", "format"],
+				changedPaths,
+				heldoutDir,
+			});
+
+			assert.equal(feedback.length, 20);
+			assert.equal(
+				new Set(feedback.map((entry) => JSON.stringify(entry))).size,
+				20,
+			);
+			assert.deepEqual(
+				["typecheck", "lint", "format"].map(
+					(check) => feedback.filter((entry) => entry.check === check).length,
+				),
+				[10, 9, 1],
+			);
+		});
+
+		it("re-checks stored facts against the changed paths and fixed forms before they reach feedback", () => {
+			const changedPaths = ["src/a.ts"];
+
+			// A stored checks.json is read back as parsed JSON.
+			const stored = (text: string): JsonValue => JSON.parse(text);
+
+			const good = [
+				{ check: "typecheck", file: "src/a.ts" },
+				{ check: "lint", file: "src/a.ts" },
+				{ check: "format", file: "src/a.ts" },
+				{ check: "candidate_tests", file: "src/a.ts", code: "EROFS" },
+			];
+
+			assert.deepEqual(
+				parseCheckFeedback(stored(JSON.stringify(good)), {
+					changedPaths,
+					heldoutDir,
+				}),
+				good,
+			);
+
+			for (const bad of [
+				{ check: "lint", lines: [`src/a.ts ${canary}`] },
+				{
+					check: "lint",
+					file: "src/a.ts",
+					line: 1,
+					code: "x",
+					message: canary,
+				},
+				{ check: "lint", file: "src/a.ts", line: 1, code: `A ${canary}` },
+				{ check: "typecheck", file: "src/a.ts", line: 1, code: "eslint/x" },
+				{ check: "typecheck", file: "src/b.ts", line: 1, code: "TS2322" },
+				{ check: "typecheck", file: "src/a.ts", line: 0, code: "TS2322" },
+				{ check: "typecheck", file: "src/a.ts", code: "TS2322" },
+				// Fix round 1 stored a line and a code for static checks.
+				{ check: "typecheck", file: "src/a.ts", line: 3, code: "TS2322" },
+				{
+					check: "lint",
+					file: "src/a.ts",
+					line: 26,
+					code: "anti-slop/require-readable-spacing",
+				},
+				{ check: "lint", file: "src/a.ts", code: "eslint/no-debugger" },
+				{ check: "lint", file: "src/a.ts", line: 26 },
+				{ check: "candidate_tests", file: "src/a.ts", code: null },
+				{ check: "candidate_tests", file: "src/a.ts" },
+				{ check: "candidate_tests", file: "src/a.ts", code: "E_SECRET" },
+				{ check: "candidate_tests", file: "src/a.ts", line: 1, code: "EROFS" },
+				{ check: "format", file: "src/a.ts", code: "other" },
+				{ check: "heldout", file: "src/a.ts" },
+			])
+				assert.equal(
+					parseCheckFeedback(stored(JSON.stringify([bad])), {
+						changedPaths,
+						heldoutDir,
+					}),
+					null,
+					JSON.stringify(bad),
+				);
+
+			const ref = { bindingDigest: digestOf("b"), recordDigest: digestOf("r") };
+
+			const scenarios = [
+				{ scenario: "S1", criteria: [{ id: "A1", text: "x" }] },
+			];
+
+			const checks =
+				parseCheckFeedback(stored(JSON.stringify(good)), {
+					changedPaths,
+					heldoutDir,
+				}) ?? [];
+
+			assert.deepEqual(
+				readFeedbackBytes(feedbackBytes(ref, [...scenarios, ...checks]), ref),
+				[...scenarios, ...checks],
+			);
+			assert.equal(
+				readFeedbackBytes(
+					feedbackBytes(ref, [
+						...scenarios,
+						// SAFETY: a stored file from before fix round 1 had free text.
+						{ check: "lint", lines: ["src/a.ts x"] } as never,
+					]),
+					ref,
+				),
+				null,
+			);
+			assert.equal(
+				readFeedbackBytes(
+					feedbackBytes(ref, [
+						...scenarios,
+						// SAFETY: a stored file from fix round 1 had a typecheck line and code.
+						{
+							check: "typecheck",
+							file: "src/a.ts",
+							line: 67,
+							code: "TS2344",
+						} as never,
+					]),
+					ref,
+				),
+				null,
+			);
+			assert.equal(
+				feedbackBytes(ref, scenarios),
+				`${JSON.stringify({ version: 2, assessment: ref, scenarios })}\n`,
+			);
+		});
 	});
 });

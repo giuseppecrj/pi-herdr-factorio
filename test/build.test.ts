@@ -23,7 +23,10 @@ import {
 	PATCH_MAX_BYTES,
 	PATCH_RECEIPT_MAX_BYTES,
 	COMMAND_MAX_BYTES,
+	buildPrompt,
 } from "../src/build.ts";
+import { isGitSha, isRepoSlug } from "../src/workflow.ts";
+import { feedbackPrompt } from "../src/review.ts";
 import { digestOf } from "../src/run.ts";
 import { execFileSync } from "node:child_process";
 import { renderBuildSummary } from "../src/specify.ts";
@@ -623,4 +626,49 @@ test("command receipts use tool calls and results rather than final prose", () =
 	assert.deepEqual(commandReceipts(session), [
 		{ command: "npm test", exitCode: 1 },
 	]);
+});
+
+test("build and repair prompts say CI runs tests read-only at the root, so temp files go under os.tmpdir()", () => {
+	const repo = "o/r",
+		sha = "a".repeat(40);
+
+	assert.ok(isRepoSlug(repo) && isGitSha(sha));
+
+	const prompt = buildPrompt({
+		contract: {
+			version: 2,
+			runId: digestOf("prompt"),
+			issue: 1,
+			base: { repo, sha },
+			snapshot: {
+				digest: digestOf("snapshot"),
+				source: "unedited",
+				eventId: "1",
+				eventAt: "2026-11-05T00:00:00Z",
+			},
+			link: null,
+			summary: "Fix a bug",
+			behavior: ["Return 2"],
+			acceptance: [{ id: "A1", kind: "new_behavior", text: "Return 2" }],
+			exclusions: [],
+			compatibility: [],
+			limits: [],
+			files: ["src/a.ts"],
+			evidence: [],
+		},
+		guidance: { general: "", stages: {} },
+		inlined: [],
+	});
+
+	assert.match(
+		prompt,
+		/CI runs the candidate tree read-only at the repository root[^\n]*os\.tmpdir\(\)[^\n]*never inside the checkout/,
+	);
+
+	// Static-check entries name only a file, so repair reruns the checks.
+	for (const text of [prompt, feedbackPrompt("{}")])
+		assert.match(
+			text,
+			/lint, format or typecheck entry[^\n]*npm run lint, npm run format:check or npm run typecheck[^\n]*to see the details[^\n]*base copies of \.oxlintrc\.json, tsconfig\.json and biome\.json[^\n]*never change them to make a check pass/,
+		);
 });
