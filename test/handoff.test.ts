@@ -18,6 +18,7 @@ import {
 	reviewReceiptDigest,
 	parseReviewReceipt,
 	renderLimitation,
+	migrateCertificationValue,
 } from "../src/handoff.ts";
 import {
 	digestOf,
@@ -26,7 +27,12 @@ import {
 	type Run,
 } from "../src/run.ts";
 import { advance } from "../src/stages.ts";
-import type { ReviewReceipt } from "../src/review.ts";
+import {
+	type FamilyInput,
+	familyLabel,
+	type ReviewReceipt,
+	reviewR8,
+} from "../src/review.ts";
 import {
 	dispatchNonce,
 	type TrustedReport,
@@ -2255,4 +2261,260 @@ test("handoff Not proven section derives judge-only criteria, same-family review
 		}),
 		[{ kind: "live_proof_not_recorded" }],
 	);
+});
+
+const OPENAI_BUILDER: FamilyInput = {
+	kind: "openai-request",
+	model: "openai/gpt-6.1-sol",
+};
+
+const CLAUDE: FamilyInput = {
+	kind: "anthropic-gateway",
+	model: "claude-sonnet-5-5",
+};
+
+/** A version 3 receipt with consistent labels and `r8` for the given families. */
+function familyReceipt(
+	review: ReviewReceipt,
+	families: {
+		readonly builder: FamilyInput;
+		readonly accept: FamilyInput;
+		readonly codeReview: FamilyInput;
+	},
+): ReviewReceipt {
+	const seats = review.seats.map((seat) => {
+		const family =
+			seat.seat === "code-review" ? families.codeReview : OPENAI_BUILDER;
+
+		return { ...seat, family, label: familyLabel(family, families.builder) };
+	});
+
+	const v3 = {
+		...review,
+		version: 3,
+		r8: "incomplete",
+		builder: families.builder,
+		accept: families.accept,
+		seats,
+	} as const;
+
+	return { ...v3, r8: reviewR8(v3) };
+}
+
+test("certification recomputes r8 and every label from stored family evidence, never from a label", () => {
+	const state = certified(select());
+	const c = state.current.certification;
+	assert.ok(c);
+
+	const input = {
+		pin,
+		generation: state.current.intent,
+		execution: c.execution,
+		patch: { kind: "found", receipt: patch, patch: "patch" } as const,
+		verdict: c.verdict,
+		review: c.review,
+		report: c.report,
+	};
+
+	const complete = familyReceipt(c.review, {
+		builder: OPENAI_BUILDER,
+		accept: CLAUDE,
+		codeReview: CLAUDE,
+	});
+
+	assert.equal(complete.r8, "complete");
+	assert.equal(
+		certifyGeneration({ ...input, review: complete }).review.r8,
+		"complete",
+	);
+	assert.deepEqual(
+		parseReviewReceipt(JSON.parse(JSON.stringify(complete))),
+		complete,
+	);
+
+	const fallback = familyReceipt(c.review, {
+		builder: OPENAI_BUILDER,
+		accept: OPENAI_BUILDER,
+		codeReview: CLAUDE,
+	});
+
+	assert.equal(fallback.r8, "incomplete");
+	assert.doesNotThrow(() => certifyGeneration({ ...input, review: fallback }));
+
+	if (complete.version !== 3 || fallback.version !== 3)
+		throw new Error("version 3 expected");
+
+	const unknownSeat = familyReceipt(c.review, {
+		builder: OPENAI_BUILDER,
+		accept: CLAUDE,
+		codeReview: { kind: "unavailable", reason: "unknown-model" },
+	});
+
+	const inverted = familyReceipt(c.review, {
+		builder: CLAUDE,
+		accept: OPENAI_BUILDER,
+		codeReview: OPENAI_BUILDER,
+	});
+
+	assert.equal(inverted.r8, "incomplete", "inverted families");
+
+	if (inverted.version !== 3) throw new Error("version 3 expected");
+
+	const forged: [string, ReviewReceipt][] = [
+		["an Anthropic builder", inverted],
+		["an Anthropic builder claiming complete", { ...inverted, r8: "complete" }],
+		[
+			"a version 2 label that also claims cross-family",
+			{
+				...c.review,
+				seats: c.review.seats.map((seat) => ({
+					...seat,
+					label:
+						"context-isolated, different family, cross-family; same family, not cross-family",
+				})),
+			},
+		],
+		["r8 complete on a same-family accept", { ...fallback, r8: "complete" }],
+		["r8 incomplete on complete evidence", { ...complete, r8: "incomplete" }],
+		[
+			"a cross-family label on unavailable evidence",
+			{
+				...unknownSeat,
+				seats: unknownSeat.seats.map((seat) => ({
+					...seat,
+					label: "context-isolated, different family, cross-family",
+				})),
+			},
+		],
+		[
+			"a same-family label on cross-family evidence",
+			{
+				...complete,
+				seats: complete.seats.map((seat) => ({
+					...seat,
+					label: "context-isolated, same family, not cross-family",
+				})),
+			},
+		],
+		[
+			"a builder that is not the patch's model",
+			familyReceipt(c.review, {
+				builder: { kind: "openai-request", model: "openai/gpt-6.1-terra" },
+				accept: CLAUDE,
+				codeReview: CLAUDE,
+			}),
+		],
+		[
+			"a seat with no family",
+			{
+				...complete,
+				seats: complete.seats.map(({ family: _family, ...seat }) => seat),
+			},
+		],
+	];
+
+	for (const [name, review] of forged) {
+		assert.throws(
+			() => certifyGeneration({ ...input, review }),
+			{ message: "certification_binding" },
+			name,
+		);
+		// The patch binding lives outside the receipt, so only certification
+		// can see a builder that is not the patch's model.
+		assert.deepEqual(
+			parseReviewReceipt(JSON.parse(JSON.stringify(review))),
+			name === "a builder that is not the patch's model" ||
+				name === "an Anthropic builder" ||
+				name === "a version 2 label that also claims cross-family"
+				? review
+				: null,
+			name,
+		);
+	}
+
+	for (const minted of [
+		{
+			...complete,
+			accept: { kind: "anthropic-gateway", model: "claude-next" },
+		},
+		{ ...complete, builder: { kind: "openai-request", model: "anthropic/x" } },
+		{
+			...complete,
+			seats: complete.seats.map((seat) => ({
+				...seat,
+				family: {
+					kind: "anthropic-gateway",
+					model: "anthropic/claude-sonnet-5-5",
+				},
+			})),
+		},
+	])
+		assert.equal(parseReviewReceipt(JSON.parse(JSON.stringify(minted))), null);
+
+	assert.equal(
+		parseReviewReceipt(
+			JSON.parse(JSON.stringify({ ...c.review, r8: "complete" })),
+		),
+		null,
+		"a version 2 receipt claiming complete",
+	);
+
+	const legacy = parseReviewReceipt(JSON.parse(JSON.stringify(c.review)));
+
+	assert.equal(legacy?.version, 2);
+	assert.equal(legacy?.r8, "incomplete");
+	assert.equal(
+		certifyGeneration({ ...input, review: c.review }).review.r8,
+		"incomplete",
+	);
+});
+
+test("Not proven omits same-family review only for recomputed complete evidence", () => {
+	const state = certified(select());
+	const c = state.current.certification;
+	assert.ok(c);
+
+	const base = {
+		criteria: [{ id: "A1" }],
+		scenarios: [{ criteria: ["A1"], checks: ["a.test.ts"] }],
+		judgments: [],
+	};
+
+	const complete = familyReceipt(c.review, {
+		builder: OPENAI_BUILDER,
+		accept: CLAUDE,
+		codeReview: CLAUDE,
+	});
+
+	const fallback = familyReceipt(c.review, {
+		builder: OPENAI_BUILDER,
+		accept: OPENAI_BUILDER,
+		codeReview: CLAUDE,
+	});
+
+	assert.deepEqual(
+		notProven({ ...base, r8: reviewR8(complete) }).map((l) => l.kind),
+		["live_proof_not_recorded"],
+	);
+	assert.deepEqual(
+		notProven({ ...base, r8: reviewR8(fallback) }).map((l) => l.kind),
+		["same_family", "live_proof_not_recorded"],
+	);
+	assert.deepEqual(
+		notProven({ ...base, r8: reviewR8(c.review) }).map((l) => l.kind),
+		["same_family", "live_proof_not_recorded"],
+	);
+});
+
+test("a version 1 review that fails migration keeps its bytes, not an explicit null", () => {
+	const broken = { version: 1, seats: "not seats" };
+
+	const migrated = objectOf(
+		migrateCertificationValue({ review: broken, other: 1 }) ?? null,
+	);
+
+	assert.deepEqual(fieldOf(migrated, "review"), broken);
+	assert.deepEqual(migrateCertificationValue({ review: null }), {
+		review: null,
+	});
 });

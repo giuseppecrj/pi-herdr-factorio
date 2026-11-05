@@ -142,9 +142,13 @@ printf '# factory sandbox: no nameservers\n' >"$b/etc/resolv.conf"
 
 # Pi reaches the model only through the in-sandbox forwarder. The key is a placeholder:
 # exe.dev's edge authorizes the model, and the gateway strips client credentials anyway.
+# The anthropic baseUrl has no /v1: Pi's Anthropic SDK appends /v1/messages?beta=true. That
+# SDK (0.129.0, bundled by Pi 1.4.0) sends anthropic-version: 2023-06-01 itself, and the
+# model-anthropic route forwards it, so nothing injects the header.
 cat >"$b/pi-agent/models.json" <<JSON
 {
   "providers": {
+    "anthropic": { "baseUrl": "$FORWARDER/anthropic", "apiKey": "sandbox-placeholder-not-a-key" },
     "openai": { "baseUrl": "$FORWARDER/openai/v1", "apiKey": "sandbox-placeholder-not-a-key" },
     "xai": { "baseUrl": "$FORWARDER/xai/v1", "apiKey": "sandbox-placeholder-not-a-key" }
   }

@@ -24,6 +24,7 @@ import {
 	MODEL_STAGES,
 	modelsOf,
 	parseWorkflow,
+	seatModelsOf,
 	type RepoSlug,
 	type ReloadView,
 	redactCredentials,
@@ -355,13 +356,165 @@ describe("parseWorkflow", () => {
 		);
 	});
 
-	it("rejects provider anthropic with the owner rule", () => {
-		const error = validation(
-			frontMatter("stages:\n  review:\n    model: anthropic/claude-sonnet-5-5"),
+	it("rejects provider anthropic outside accept and the code-review seat", () => {
+		for (const stage of ["specify", "build", "review"]) {
+			const error = validation(
+				frontMatter(
+					`stages:\n  ${stage}:\n    model: anthropic/claude-sonnet-5-5`,
+				),
+			);
+
+			assert.equal(error.field, `stages.${stage}.model`, stage);
+			assert.match(error.message, /exe\.dev credits/, stage);
+		}
+	});
+
+	it("accepts an Anthropic accept model and code-review seat from the limits table", () => {
+		const parsed = parse(
+			frontMatter(
+				[
+					"stages:",
+					"  accept:",
+					"    model: anthropic/claude-sonnet-5-5",
+					"  review:",
+					"    model: openai/gpt-6.1-sol",
+					"    fallback_model: openai/gpt-6.1-terra",
+					"    seats:",
+					"      code-review:",
+					"        model: anthropic/claude-sonnet-5-5",
+				].join("\n"),
+			),
 		);
 
-		assert.equal(error.field, "stages.review.model");
-		assert.match(error.message, /exe\.dev credits/);
+		assert.equal(parsed.kind, "valid");
+
+		if (parsed.kind !== "valid") return;
+
+		const { stages } = parsed.config;
+
+		assert.equal(stages.accept.model, "anthropic/claude-sonnet-5-5");
+		assert.equal(stages.accept.fallbackModel, null);
+		assert.equal(stages.review.model, "openai/gpt-6.1-sol");
+		assert.equal(stages.review.fallbackModel, "openai/gpt-6.1-terra");
+		assert.equal(stages.review.codeReviewModel, "anthropic/claude-sonnet-5-5");
+		assert.equal(stages.build.model, "openai/gpt-6.1-sol");
+		assert.equal(modelsOf(parsed.config).review, "openai/gpt-6.1-sol");
+		assert.deepEqual(seatModelsOf(parsed.config), {
+			"code-review": "anthropic/claude-sonnet-5-5",
+		});
+
+		const openaiSeat = parse(
+			frontMatter(
+				"stages:\n  review:\n    seats:\n      code-review:\n        model: openai/gpt-6.1-terra",
+			),
+		);
+
+		assert.equal(openaiSeat.kind, "valid");
+
+		if (openaiSeat.kind === "valid")
+			assert.equal(
+				openaiSeat.config.stages.review.codeReviewModel,
+				"openai/gpt-6.1-terra",
+			);
+	});
+
+	it("rejects an Anthropic model outside the limits table, on accept or the seat", () => {
+		for (const yaml of [
+			"stages:\n  accept:\n    model: anthropic/not-a-model",
+			"stages:\n  accept:\n    model: anthropic/claude-sonnet-5-5-preview",
+			"stages:\n  review:\n    seats:\n      code-review:\n        model: anthropic/not-a-model",
+		]) {
+			const error = validation(frontMatter(yaml));
+
+			assert.match(error.field, /accept\.model|code-review\.model/, yaml);
+			assert.match(error.message, /limits table/, yaml);
+		}
+
+		const xaiSeat = validation(
+			frontMatter(
+				"stages:\n  review:\n    seats:\n      code-review:\n        model: xai/grok-4.6",
+			),
+		);
+
+		assert.equal(xaiSeat.field, "stages.review.seats.code-review.model");
+		assert.match(xaiSeat.message, /openai or a listed anthropic/);
+	});
+
+	it("allows only a different openai/ accept fallback", () => {
+		const ok = parse(
+			frontMatter(
+				"stages:\n  accept:\n    model: anthropic/claude-sonnet-5-5\n    fallback_model: openai/gpt-6.1-sol",
+			),
+		);
+
+		assert.equal(ok.kind, "valid");
+
+		if (ok.kind === "valid")
+			assert.equal(ok.config.stages.accept.fallbackModel, "openai/gpt-6.1-sol");
+
+		const cases: [string, string, RegExp][] = [
+			["anthropic/claude-sonnet-5-5", "anthropic/claude-haiku-5-5", /openai/],
+			["anthropic/claude-sonnet-5-5", "xai/grok-4.6", /openai/],
+			["openai/gpt-6.1-sol", "xai/grok-4.6", /openai/],
+			["openai/gpt-6.1-sol", "openai/gpt-6.1-sol", /differ/],
+		];
+
+		for (const [primary, fallback, message] of cases) {
+			const error = validation(
+				frontMatter(
+					`stages:\n  accept:\n    model: ${primary}\n    fallback_model: ${fallback}`,
+				),
+			);
+
+			assert.equal(error.field, "stages.accept.fallback_model", fallback);
+			assert.match(error.message, message, fallback);
+		}
+	});
+
+	it("rejects every seat key except code-review, and every seat field except model", () => {
+		for (const [yaml, field] of [
+			[
+				"stages:\n  review:\n    seats:\n      security-review:\n        model: openai/gpt-6.1-sol",
+				"stages.review.seats.(unknown key)",
+			],
+			[
+				"stages:\n  review:\n    seats:\n      simplify:\n        model: openai/gpt-6.1-sol",
+				"stages.review.seats.(unknown key)",
+			],
+			[
+				"stages:\n  review:\n    seats:\n      code-review:\n        fallback_model: openai/gpt-6.1-sol",
+				"stages.review.seats.code-review.(unknown key)",
+			],
+			[
+				"stages:\n  accept:\n    seats:\n      code-review:\n        model: openai/gpt-6.1-sol",
+				"stages.accept.(unknown key)",
+			],
+			[
+				"stages:\n  review:\n    seats: openai/gpt-6.1-sol",
+				"stages.review.seats",
+			],
+		] as const) {
+			assert.equal(validation(frontMatter(yaml)).field, field, yaml);
+		}
+	});
+
+	it("lets code-review inherit review.model when the seat key is absent, against the real WORKFLOW.md", () => {
+		const parsed = parse(readFileSync(WORKFLOW_PATH, "utf8"));
+
+		assert.equal(parsed.kind, "valid");
+
+		if (parsed.kind !== "valid") return;
+
+		assert.equal(parsed.config.stages.review.codeReviewModel, null);
+		assert.equal(parsed.config.stages.review.model, "openai/gpt-6.1-sol");
+		assert.equal(parsed.config.stages.accept.model, "openai/gpt-6.1-sol");
+
+		const empty = parse(frontMatter("stages:\n  review:\n    seats: {}"));
+
+		assert.equal(empty.kind, "valid");
+
+		if (empty.kind === "valid")
+			assert.equal(empty.config.stages.review.codeReviewModel, null);
 	});
 
 	it("rejects a primary model whose provider the sandbox cannot route", () => {
@@ -1028,6 +1181,7 @@ describe("server/cli.ts", () => {
 			workflow: "valid",
 			workflowDigest: digestOf(valid),
 			models: { build: DEFAULT_MODEL, review: DEFAULT_MODEL },
+			seatModels: { "code-review": DEFAULT_MODEL },
 			limits: { pollIntervalMs: 30_000, maxConcurrent: 2 },
 			executionEnabled: false,
 		});

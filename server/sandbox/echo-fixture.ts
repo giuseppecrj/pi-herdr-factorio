@@ -5,6 +5,7 @@ import {
 } from "node:http";
 import { brotliCompressSync, deflateRawSync, gzipSync } from "node:zlib";
 import { GATEWAY_USER_AGENT } from "./credentials.ts";
+import type { JsonObject } from "./json.ts";
 
 /** What the fixture saw: names and the injected credential, never a body. */
 export type Received = {
@@ -30,6 +31,68 @@ const SSE_USAGE = [
 	'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_fixture","status":"completed","usage":{"input_tokens":11,"output_tokens":5,"total_tokens":16}}}\n\n',
 ];
 
+/**
+ * Which Anthropic Messages stream `/anthropic/v1/messages` replays. `usage`
+ * is a complete stream with a final `message_delta` usage block. `no-usage`
+ * drops that block, so the gateway's Anthropic meter must call it
+ * unusable. `refusal` ends with `stop_reason: "refusal"` and full usage.
+ * Lane 3 and lane 7 replay these with zero real tokens.
+ */
+export const ANTHROPIC_REPLAYS = ["usage", "no-usage", "refusal"] as const;
+
+export type AnthropicReplay = (typeof ANTHROPIC_REPLAYS)[number];
+
+export const ANTHROPIC_REPLAY_MODEL = "claude-sonnet-5-5";
+
+function anthropicStream(mode: AnthropicReplay): string {
+	const event = (name: string, data: JsonObject) =>
+		`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
+
+	const usage = {
+		input_tokens: 18,
+		cache_creation_input_tokens: 0,
+		cache_read_input_tokens: 0,
+		output_tokens: 4,
+	};
+
+	const ending: JsonObject = {
+		type: "message_delta",
+		delta: { stop_reason: mode === "refusal" ? "refusal" : "end_turn" },
+	};
+
+	// `no-usage` is the missing usage block the Anthropic meter must refuse.
+	const delta: JsonObject = mode === "no-usage" ? ending : { ...ending, usage };
+
+	return [
+		event("message_start", {
+			type: "message_start",
+			message: {
+				id: "msg_fixture",
+				type: "message",
+				role: "assistant",
+				model: ANTHROPIC_REPLAY_MODEL,
+				content: [],
+				stop_reason: null,
+				usage: { ...usage, output_tokens: 1 },
+			},
+		}),
+		event("content_block_start", {
+			type: "content_block_start",
+			index: 0,
+			content_block: { type: "text", text: "" },
+		}),
+		event("ping", { type: "ping" }),
+		event("content_block_delta", {
+			type: "content_block_delta",
+			index: 0,
+			delta: { type: "text_delta", text: "OK" },
+		}),
+		event("content_block_stop", { type: "content_block_stop", index: 0 }),
+		event("message_delta", delta),
+		event("message_stop", { type: "message_stop" }),
+	].join("");
+}
+
 function headerOf(req: IncomingMessage, name: string): string | null {
 	const values: string[] = [];
 
@@ -47,10 +110,25 @@ function secretOf(req: IncomingMessage): string {
 	return (headerOf(req, "authorization") ?? "").replace(/^Bearer /, "");
 }
 
-function respond(req: IncomingMessage, res: ServerResponse, path: string) {
+function respond(
+	req: IncomingMessage,
+	res: ServerResponse,
+	path: string,
+	anthropic: AnthropicReplay,
+) {
 	const secret = secretOf(req);
 
 	switch (path) {
+		case "/anthropic/v1/models":
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end('{"data":[],"has_more":false}');
+
+			return;
+		case "/anthropic/v1/messages":
+			res.writeHead(200, { "Content-Type": "text/event-stream" });
+			res.end(anthropicStream(anthropic));
+
+			return;
 		case "/api/echo":
 			res.writeHead(200, { "Content-Type": "application/json" });
 			res.end(
@@ -207,7 +285,11 @@ function respond(req: IncomingMessage, res: ServerResponse, path: string) {
  * requests carrying the gateway's own User-Agent. Any other client gets a
  * 421 and is only counted in `strays`.
  */
-export async function startEchoFixture(port: number): Promise<EchoFixture> {
+export async function startEchoFixture(
+	port: number,
+	options: { readonly anthropic?: AnthropicReplay } = {},
+): Promise<EchoFixture> {
+	const anthropic = options.anthropic ?? "usage";
 	const received: Received[] = [];
 	const waiters: { path: string; count: number; done: () => void }[] = [];
 
@@ -244,7 +326,7 @@ export async function startEchoFixture(port: number): Promise<EchoFixture> {
 		}
 
 		req.resume();
-		req.on("end", () => respond(req, res, path));
+		req.on("end", () => respond(req, res, path, anthropic));
 	});
 
 	await new Promise<void>((done) => server.listen(port, "127.0.0.1", done));
@@ -274,7 +356,11 @@ export async function startEchoFixture(port: number): Promise<EchoFixture> {
 }
 
 if (import.meta.main) {
-	const fixture = await startEchoFixture(Number(process.argv[2] ?? "0"));
+	const mode = ANTHROPIC_REPLAYS.find((known) => known === process.argv[3]);
+
+	const fixture = await startEchoFixture(Number(process.argv[2] ?? "0"), {
+		anthropic: mode ?? "usage",
+	});
 
 	process.stdout.write(`${JSON.stringify({ port: fixture.port })}\n`);
 }

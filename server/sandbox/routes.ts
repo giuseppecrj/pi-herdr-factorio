@@ -36,6 +36,8 @@ export type PathRule =
 
 export type QueryRule =
 	| { readonly kind: "none" }
+	/** No query, or a query string equal to one of `values`. */
+	| { readonly kind: "exact"; readonly values: readonly string[] }
 	| {
 			readonly kind: "keys";
 			readonly allow: readonly string[];
@@ -61,6 +63,13 @@ export type JsonConstraint =
 			readonly pointer: string;
 			readonly field: string;
 			readonly values: readonly JsonScalar[];
+	  }
+	/** Every item is an object holding all of `required` and no key outside `allowed`. */
+	| {
+			readonly kind: "each_keys";
+			readonly pointer: string;
+			readonly required: readonly string[];
+			readonly allowed: readonly string[];
 	  };
 
 export type BodyRule =
@@ -109,7 +118,12 @@ export type CredentialRef = {
 	readonly placement: CredentialPlacement;
 };
 
-export type Meter = "openai-responses-sse";
+export const METERS = [
+	"openai-responses-sse",
+	"anthropic-messages-sse",
+] as const;
+
+export type Meter = (typeof METERS)[number];
 
 export type Route = {
 	readonly id: RouteId;
@@ -161,7 +175,14 @@ export const BUILTIN_HOSTS = [MODEL_HOST, NPM_HOST] as const;
 
 export const EDGE_ADDRESS = "169.254.169.254";
 
-export const MODEL_ROUTE_IDS = ["model-openai", "model-xai"] as const;
+export const MODEL_ROUTE_IDS = [
+	"model-openai",
+	"model-xai",
+	"model-anthropic",
+] as const;
+
+/** The provider whose route serves a stage's primary model. */
+export type PrimaryProvider = "openai" | "anthropic";
 
 const ROUTE_ID = /^[a-z][a-z0-9-]{0,31}$/;
 
@@ -297,6 +318,69 @@ function modelRoute(input: {
 	};
 }
 
+/**
+ * The keys Pi 1.4.0 writes on an Anthropic tool: `pi-ai` `convertTools`,
+ * plus `defer_loading` on the `__pi_deferred_placeholder__` client tool it
+ * appends to every tool list. A deferred client tool stays a client tool.
+ * A server tool carries `type` and no `input_schema`, so it is refused.
+ */
+const ANTHROPIC_TOOL_KEYS = [
+	"name",
+	"description",
+	"input_schema",
+	"eager_input_streaming",
+	"strict",
+	"cache_control",
+	"defer_loading",
+] as const;
+
+/**
+ * Pi's Anthropic client posts `v1/messages?beta=true` and sends
+ * `anthropic-version` itself. The edge returns 400 without that header.
+ * `max_tokens` is rewritten by the gateway, never `max_output_tokens`.
+ */
+function anthropicRoute(model: string): Route {
+	return {
+		id: builtinRouteId("model-anthropic"),
+		prefix: "/anthropic/",
+		upstream: modelUpstream("/anthropic/"),
+		methods: ["GET", "POST"],
+		paths: [
+			{ kind: "exact", path: "v1/models" },
+			{ kind: "exact", path: "v1/messages" },
+		],
+		query: { kind: "exact", values: ["beta=true"] },
+		body: {
+			kind: "json",
+			contentTypes: ["application/json"],
+			constraints: [
+				{ kind: "one_of", pointer: "/model", values: [model] },
+				{
+					kind: "each_keys",
+					pointer: "/tools",
+					required: ["name", "input_schema"],
+					allowed: ANTHROPIC_TOOL_KEYS,
+				},
+				{ kind: "absent", pointer: "/max_output_tokens" },
+				{ kind: "absent", pointer: "/mcp_servers" },
+			],
+		},
+		requestHeaders: [
+			"accept",
+			"content-type",
+			"anthropic-version",
+			"anthropic-beta",
+		],
+		responseHeaders: ["content-type", "cache-control", "x-request-id"],
+		limits: MODEL_LIMITS,
+		credential: null,
+		budget: true,
+		audit: "detailed",
+		initially: "open",
+		meter: "anthropic-messages-sse",
+	};
+}
+
 const NPM_ROUTE: Route = {
 	id: builtinRouteId("npm"),
 	prefix: "/npm/",
@@ -321,37 +405,27 @@ const NPM_ROUTE: Route = {
 	meter: null,
 };
 
+/**
+ * The stage's routes. `model` is the bare primary id. An OpenAI primary
+ * keeps `model-openai` open and puts a non-OpenAI fallback on a closed
+ * `model-xai`; it never mounts Anthropic. An Anthropic primary mounts
+ * `model-anthropic` open, and only an `openai/` fallback, on a closed
+ * `model-openai`. `provider` defaults to `openai`.
+ */
 export function builtinTable(input: {
 	stage: string;
 	runId: string;
 	attempt: number;
+	provider?: PrimaryProvider;
 	model: string;
 	fallback: string | null;
 	modelTokens: number;
 	modelRequests: number;
 }): RouteTable {
-	const routes: Route[] = [
-		modelRoute({
-			id: builtinRouteId("model-openai"),
-			prefix: "/openai/v1/",
-			model: input.model,
-			fallback: input.fallback?.startsWith("openai/")
-				? input.fallback.slice(7)
-				: undefined,
-			initially: "open",
-		}),
-	];
-
-	if (input.fallback !== null && !input.fallback.startsWith("openai/")) {
-		routes.push(
-			modelRoute({
-				id: builtinRouteId("model-xai"),
-				prefix: "/xai/v1/",
-				model: input.fallback,
-				initially: "closed",
-			}),
-		);
-	}
+	const routes =
+		input.provider === "anthropic"
+			? anthropicRoutes(input.model, input.fallback)
+			: openaiRoutes(input.model, input.fallback);
 
 	routes.push(NPM_ROUTE);
 
@@ -367,6 +441,49 @@ export function builtinTable(input: {
 			modelRequests: input.modelRequests,
 		},
 	};
+}
+
+function anthropicRoutes(model: string, fallback: string | null): Route[] {
+	if (fallback === null) return [anthropicRoute(model)];
+
+	if (!fallback.startsWith("openai/")) {
+		throw new Error("an Anthropic primary takes only an openai/ fallback");
+	}
+
+	return [
+		anthropicRoute(model),
+		modelRoute({
+			id: builtinRouteId("model-openai"),
+			prefix: "/openai/v1/",
+			model: fallback.slice(7),
+			initially: "closed",
+		}),
+	];
+}
+
+function openaiRoutes(model: string, fallback: string | null): Route[] {
+	const routes: Route[] = [
+		modelRoute({
+			id: builtinRouteId("model-openai"),
+			prefix: "/openai/v1/",
+			model,
+			fallback: fallback?.startsWith("openai/") ? fallback.slice(7) : undefined,
+			initially: "open",
+		}),
+	];
+
+	if (fallback !== null && !fallback.startsWith("openai/")) {
+		routes.push(
+			modelRoute({
+				id: builtinRouteId("model-xai"),
+				prefix: "/xai/v1/",
+				model: fallback,
+				initially: "closed",
+			}),
+		);
+	}
+
+	return routes;
 }
 
 function normalHost(host: string): string {
@@ -497,6 +614,16 @@ function readQuery(value: JsonValue | undefined): Parsed<QueryRule> {
 
 	if (kind === "none" && hasOnlyKeys(rule, ["kind"])) return { kind };
 
+	if (kind === "exact" && hasOnlyKeys(rule, ["kind", "values"])) {
+		const values = textsOf(fieldOf(rule, "values"));
+
+		return values !== null &&
+			values.length > 0 &&
+			values.every((text) => /^[A-Za-z0-9_.=&-]{1,128}$/.test(text))
+			? { kind, values }
+			: null;
+	}
+
 	if (
 		kind !== "keys" ||
 		!hasOnlyKeys(rule, ["kind", "allow", "maxValueBytes"])
@@ -575,6 +702,21 @@ function readConstraint(value: JsonValue | undefined): Parsed<JsonConstraint> {
 		return field === null || values === null
 			? null
 			: { kind, pointer, field, values };
+	}
+
+	if (
+		kind === "each_keys" &&
+		hasOnlyKeys(rule, ["kind", "pointer", "required", "allowed"])
+	) {
+		const required = textsOf(fieldOf(rule, "required"));
+		const allowed = textsOf(fieldOf(rule, "allowed"));
+
+		return required === null ||
+			allowed === null ||
+			allowed.length === 0 ||
+			!required.every((key) => allowed.includes(key))
+			? null
+			: { kind, pointer, required, allowed };
 	}
 
 	return null;
@@ -861,11 +1003,7 @@ function readRoute(value: JsonValue | undefined): Parsed<Route> {
 	const meterValue = fieldOf(route, "meter");
 
 	const meter =
-		meterValue === null
-			? null
-			: meterValue === "openai-responses-sse"
-				? meterValue
-				: undefined;
+		meterValue === null ? null : METERS.find((known) => known === meterValue);
 
 	if (
 		id === null ||
@@ -915,6 +1053,8 @@ function builtinUpstream(id: RouteId): Upstream | null {
 	if (id === "model-openai") return modelUpstream("/openai/v1/");
 
 	if (id === "model-xai") return modelUpstream("/xai/v1/");
+
+	if (id === "model-anthropic") return modelUpstream("/anthropic/");
 
 	if (id === "npm") return NPM_UPSTREAM;
 

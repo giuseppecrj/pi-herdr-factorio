@@ -25,8 +25,283 @@ import {
 	textOf,
 	type JsonValue,
 } from "../server/sandbox/json.ts";
+import {
+	isAnthropicModelId,
+	parseAnthropicModel,
+} from "../server/sandbox/anthropic-limits.ts";
 
 export class ReviewEvidenceUnavailable extends Error {}
+
+/**
+ * What the host saw of one author's model family, computed when it wrote
+ * the stage or seat receipt. `anthropic-gateway` comes only from
+ * `familyFromJournal`: a metered `model-anthropic` journal line whose
+ * gateway-observed model is in the host's limits table. `openai-request`
+ * is a host-recorded `openai/` request with at least one metered,
+ * non-rejected line, all on `model-openai`. Anything else is `unavailable`,
+ * never a family.
+ */
+export type FamilyInput =
+	| { readonly kind: "anthropic-gateway"; readonly model: string }
+	| { readonly kind: "openai-request"; readonly model: string }
+	| {
+			readonly kind: "unavailable";
+			readonly reason: "missing" | "unknown-model" | "mixed" | "unmetered";
+	  };
+
+export type R8 = "complete" | "incomplete";
+
+export type CertificationFamilies = {
+	readonly builder: FamilyInput;
+	readonly accept: FamilyInput;
+	readonly seats: readonly {
+		readonly seat: string;
+		readonly evidence: FamilyInput;
+	}[];
+};
+
+export const FAMILY_MISSING: FamilyInput = {
+	kind: "unavailable",
+	reason: "missing",
+};
+
+const UNAVAILABLE_REASONS = [
+	"missing",
+	"unknown-model",
+	"mixed",
+	"unmetered",
+] as const;
+
+/** The family, or `null`. A variant whose model breaks its own rule has none. */
+export function familyOf(input: FamilyInput): "anthropic" | "openai" | null {
+	switch (input.kind) {
+		case "anthropic-gateway":
+			return isAnthropicModelId(input.model) ? "anthropic" : null;
+		case "openai-request":
+			return input.model.startsWith("openai/") ? "openai" : null;
+		case "unavailable":
+			return null;
+		default: {
+			const exhaustive: never = input;
+
+			return exhaustive;
+		}
+	}
+}
+
+/** True only for two known, different families. */
+export function crossFamily(a: FamilyInput, b: FamilyInput): boolean {
+	const left = familyOf(a);
+	const right = familyOf(b);
+
+	return left !== null && right !== null && left !== right;
+}
+
+/**
+ * True only for the one direction R8 counts: a verified OpenAI builder and
+ * a gateway-observed Anthropic author.
+ */
+function certifiedPair(builder: FamilyInput, author: FamilyInput): boolean {
+	return familyOf(builder) === "openai" && familyOf(author) === "anthropic";
+}
+
+/**
+ * `complete` only when the builder is a verified OpenAI family and the
+ * gateway observed an Anthropic model on the accept author and on at least
+ * one blocking seat (any seat but the advisory `simplify`). Every other
+ * shape, an Anthropic builder included, is `incomplete`. Labels are never
+ * an input.
+ */
+export function certifyR8(input: CertificationFamilies): R8 {
+	const seatCross = input.seats.some(
+		(seat) =>
+			seat.seat !== "simplify" && certifiedPair(input.builder, seat.evidence),
+	);
+
+	return certifiedPair(input.builder, input.accept) && seatCross
+		? "complete"
+		: "incomplete";
+}
+
+/**
+ * The only writer of a family label. Against a builder it says cross-family
+ * only for an OpenAI builder and an Anthropic author, the pair `certifyR8`
+ * counts. Two known, different families in any other direction say so and
+ * stay not cross-family. Without a builder, as on an acceptance receipt
+ * written before any build, it names the author's family and defers the
+ * claim to certification.
+ */
+export function familyLabel(
+	evidence: FamilyInput,
+	builder?: FamilyInput,
+): string {
+	const family = familyOf(evidence);
+
+	if (builder === undefined)
+		return `context-isolated, ${family ?? "unknown"} author, family checked at certification`;
+
+	if (certifiedPair(builder, evidence))
+		return "context-isolated, different family, cross-family";
+
+	if (crossFamily(builder, evidence))
+		return "context-isolated, different family, builder not OpenAI, not cross-family";
+
+	return family !== null && family === familyOf(builder)
+		? "context-isolated, same family, not cross-family"
+		: "context-isolated, unknown family, not cross-family";
+}
+
+/** `value` with `family` added when there is one; otherwise `value` itself, unchanged. */
+export function withFamily<T extends object>(
+	value: T,
+	family: FamilyInput | null | undefined,
+): T & { readonly family?: FamilyInput } {
+	if (family === null || family === undefined) return value;
+
+	return { ...value, family };
+}
+
+/**
+ * Rebuilds a stored `FamilyInput`, or `null`. It checks shape only: an
+ * `anthropic-gateway` model must be a bare id in the limits table, and an
+ * `openai-request` model must start `openai/`. It does not prove the
+ * evidence, and a hand-written receipt of that shape parses. What makes a
+ * stored family trustworthy is where it lives: the host writes it from the
+ * gateway journal with `familyFromJournal` into host-owned state outside
+ * every stage mount. Certification then still requires the strict
+ * `certifyR8` direction and binds the builder's model to the patch receipt.
+ */
+export function parseFamily(value: JsonValue | undefined): FamilyInput | null {
+	const v = objectOf(value);
+	const kind = textOf(fieldOf(v, "kind"));
+
+	if (v === null || Object.keys(v).length !== 2) return null;
+
+	if (kind === "unavailable") {
+		const reason = UNAVAILABLE_REASONS.find(
+			(known) => known === fieldOf(v, "reason"),
+		);
+
+		return reason === undefined ? null : { kind, reason };
+	}
+
+	const model = textOf(fieldOf(v, "model"));
+
+	if (model === null) return null;
+
+	if (kind === "anthropic-gateway")
+		return isAnthropicModelId(model) ? { kind, model } : null;
+
+	if (kind === "openai-request")
+		return model.startsWith("openai/") ? { kind, model } : null;
+
+	return null;
+}
+
+/**
+ * The family of the session that answered one stage attempt, from that
+ * attempt's request journal (`egress.requests.jsonl`) and the host-recorded
+ * requested id of that session. Lines on `superseded`, the route of a
+ * primary a fallback replaced, are ignored.
+ *
+ * Provider-rejected results are skipped on both routes. An `anthropic/`
+ * request is `anthropic-gateway` only when every settled `model-anthropic`
+ * result that was not provider-rejected is metered with a table model, and
+ * at least one is. An `openai/` request is `openai-request` only when at
+ * least one non-rejected `model-openai` line is metered, and any
+ * `observedModel` on one is the requested id, bare or prefixed; another is
+ * `unknown-model`. Any other route's line is `mixed`.
+ */
+export function familyFromJournal(input: {
+	readonly journal: string | null;
+	readonly requested: string;
+	readonly superseded: string | null;
+}): FamilyInput {
+	if (input.journal === null) return FAMILY_MISSING;
+
+	const anthropic = input.requested.startsWith("anthropic/");
+
+	const route = anthropic
+		? "model-anthropic"
+		: input.requested.startsWith("openai/")
+			? "model-openai"
+			: null;
+
+	if (
+		route === null ||
+		(anthropic && parseAnthropicModel(input.requested) === null)
+	)
+		return { kind: "unavailable", reason: "unknown-model" };
+
+	const dispatched = new Set<number>();
+	const settled = new Map<number, Record<string, JsonValue>>();
+	let mixed = false;
+
+	for (const line of input.journal.split("\n")) {
+		const record = objectOf(parseJson(line));
+		const req = countOf(fieldOf(record, "req"));
+		const at = textOf(fieldOf(record, "route"));
+		const kind = fieldOf(record, "kind");
+
+		if (record === null || req === null || at === null) continue;
+
+		if (at !== route) {
+			if (at !== input.superseded) mixed = true;
+
+			continue;
+		}
+
+		if (kind === "dispatch") dispatched.add(req);
+		else if (kind === "result" && !settled.has(req)) settled.set(req, record);
+	}
+
+	if (mixed) return { kind: "unavailable", reason: "mixed" };
+
+	let model: string | null = null;
+	let metered = 0;
+
+	if (anthropic && [...dispatched].some((req) => !settled.has(req)))
+		return { kind: "unavailable", reason: "unmetered" };
+
+	for (const record of settled.values()) {
+		if (fieldOf(record, "reason") === "provider_rejected") continue;
+
+		const tokens =
+			countOf(fieldOf(record, "inputTokens")) !== null &&
+			countOf(fieldOf(record, "outputTokens")) !== null;
+
+		const stated = fieldOf(record, "observedModel");
+
+		if (!anthropic) {
+			if (
+				stated !== undefined &&
+				stated !== input.requested &&
+				stated !== input.requested.slice("openai/".length)
+			)
+				return { kind: "unavailable", reason: "unknown-model" };
+
+			if (tokens) metered += 1;
+
+			continue;
+		}
+
+		if (!tokens) return { kind: "unavailable", reason: "unmetered" };
+
+		const observed = textOf(stated);
+
+		if (observed === null || !isAnthropicModelId(observed))
+			return { kind: "unavailable", reason: "unknown-model" };
+
+		model = observed;
+		metered += 1;
+	}
+
+	if (metered === 0) return FAMILY_MISSING;
+
+	return anthropic && model !== null
+		? { kind: "anthropic-gateway", model }
+		: { kind: "openai-request", model: input.requested };
+}
 
 export const REVIEW_DIFF_MAX_BYTES = 12 * 1024;
 export const REVIEW_TOOLS = ["read", "grep", "ls"] as const;
@@ -104,6 +379,8 @@ export type ReviewInput = {
 };
 
 export type SeatReceipt = SeatResult & {
+	/** Present on version 3 receipts: the seat's family evidence. */
+	readonly family?: FamilyInput;
 	readonly primary?: string;
 	readonly refusal?: string | null;
 	readonly fallbackRecord?: JsonValue;
@@ -114,12 +391,77 @@ export type SeatReceipt = SeatResult & {
 	readonly tokens: number;
 };
 
-export type ReviewReceipt = ReviewBinding & {
-	readonly version: 2;
-	readonly r8: "incomplete";
-	readonly seats: readonly SeatReceipt[];
-	readonly blocking: boolean;
-};
+/**
+ * A stored review. Version 2 predates family evidence and certifies only as
+ * `incomplete`; it is never migrated. Version 3 carries the builder's, the
+ * accept author's and each seat's `FamilyInput`, and its `r8` and labels
+ * must equal `certifyR8` and `familyLabel` of them.
+ */
+export type ReviewReceipt =
+	| (ReviewBinding & {
+			readonly version: 2;
+			readonly r8: "incomplete";
+			readonly seats: readonly SeatReceipt[];
+			readonly blocking: boolean;
+	  })
+	| (ReviewBinding & {
+			readonly version: 3;
+			readonly r8: R8;
+			readonly builder: FamilyInput;
+			readonly accept: FamilyInput;
+			readonly seats: readonly SeatReceipt[];
+			readonly blocking: boolean;
+	  });
+
+/** The only labels the pre-F10c review writer emitted, matched exactly. */
+const LEGACY_LABELS: readonly string[] = [
+	"context-isolated, same model, same family, not cross-family",
+	"context-isolated, different model, same family, not cross-family",
+];
+
+/** The families a version 3 receipt stores, with a seat lacking one as missing. */
+export function familiesOf(
+	receipt: Extract<ReviewReceipt, { version: 3 }>,
+): CertificationFamilies {
+	return {
+		builder: receipt.builder,
+		accept: receipt.accept,
+		seats: receipt.seats.map((seat) => ({
+			seat: seat.seat,
+			evidence: seat.family ?? FAMILY_MISSING,
+		})),
+	};
+}
+
+/** `r8` recomputed from stored evidence. A version 2 receipt is always `incomplete`. */
+export function reviewR8(receipt: ReviewReceipt): R8 {
+	return receipt.version === 2 ? "incomplete" : certifyR8(familiesOf(receipt));
+}
+
+/**
+ * True when the stored `r8` and every seat label equal what the stored
+ * evidence gives. A version 2 receipt keeps only `incomplete` and, on
+ * every seat, one of the exact historical labels.
+ */
+export function familyClaimsHold(receipt: ReviewReceipt): boolean {
+	if (receipt.version === 2)
+		return (
+			receipt.r8 === "incomplete" &&
+			receipt.seats.every(
+				(seat) =>
+					seat.family === undefined && LEGACY_LABELS.includes(seat.label),
+			)
+		);
+
+	return (
+		receipt.r8 === reviewR8(receipt) &&
+		receipt.seats.every(
+			(seat) =>
+				seat.family !== undefined &&
+				seat.label === familyLabel(seat.family, receipt.builder),
+		)
+	);
+}
 
 function keys(
 	value: Record<string, JsonValue> | null,
@@ -273,10 +615,16 @@ export function reviewSeats(
 	return [...REVIEW_SEATS, ...(risk ? ["ultrareview" as const] : [])];
 }
 
+/**
+ * The version 3 review receipt. Each seat's label is rewritten by
+ * `familyLabel` from its stored family against the builder's, and `r8` is
+ * `certifyR8` of the stored evidence. A seat without a family is missing.
+ */
 export function reviewCandidate(
 	input: ReviewInput,
 	verdict: Verdict,
 	seats: readonly SeatReceipt[],
+	families: { readonly builder: FamilyInput; readonly accept: FamilyInput },
 ): ReviewReceipt {
 	if (
 		!verdictPasses(verdict) ||
@@ -312,13 +660,23 @@ export function reviewCandidate(
 		)
 			throw new Error("review_malformed");
 
-	return {
+	const labeled = seats.map((seat) => {
+		const family = seat.family ?? FAMILY_MISSING;
+
+		return { ...seat, family, label: familyLabel(family, families.builder) };
+	});
+
+	const receipt = {
 		...input.binding,
-		version: 2,
+		version: 3,
 		r8: "incomplete",
-		seats,
-		blocking: blocksReview(seats),
-	};
+		builder: families.builder,
+		accept: families.accept,
+		seats: labeled,
+		blocking: blocksReview(labeled),
+	} as const;
+
+	return { ...receipt, r8: reviewR8(receipt) };
 }
 
 export function reviewDir(
@@ -417,13 +775,6 @@ export function candidateReviewPrompt({
 
 export function seatPrompt(input: ReviewInput, seat: ReviewSeat): string {
 	return `${input.prompt}\n\nYou are the ${seat} seat. Return exactly one JSON object, no fences or prose, no other keys:\n{"seat":"${seat}","findings":[{"id":"F1","severity":"blocking|advisory","category":"bug|security|contract|simplify","path":"src/example.ts","startLine":1,"endLine":1,"claim":"at most 600 characters","evidence":"at most 1200 characters"}],"judgments":[{"scenario":"ID","outcome":"pass|fail|unverifiable|inconclusive|timeout","reason":"at most 600 characters"}]}\nUse actual enum values, not pipe-separated values. Paths must exist in the patched tree, never .github or test/acceptance. Line numbers must be valid. Empty findings are []. ${seat === "code-review" ? `Judge exactly these scenarios once each: ${JSON.stringify(input.scenarios)}.` : "judgments must be []."} ${seat === "simplify" ? "Only advisory simplify findings; no edits." : seat === "security-review" ? "Only high-confidence security findings with a concrete reachable failure; category security." : "Only concrete bugs, security defects or broken contract lines block; ignore speculative and style concerns."}`;
-}
-
-export function reviewIdentityLabel(
-	requested: string,
-	builder: string,
-): string {
-	return `context-isolated, ${requested === builder ? "same" : "different"} model, same family, not cross-family`;
 }
 
 export function feedbackPrompt(feedback: string): string {

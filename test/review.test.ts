@@ -18,6 +18,15 @@ import {
 	type ReviewReceipt,
 	type SeatReceipt,
 	type SeatResult,
+	certifyR8,
+	crossFamily,
+	type FamilyInput,
+	familyClaimsHold,
+	familyFromJournal,
+	familyLabel,
+	familyOf,
+	parseFamily,
+	reviewR8,
 } from "../src/review.ts";
 
 import {
@@ -532,11 +541,22 @@ async function checkReviewTree(mode: string) {
 		});
 
 		assert.ok(recovered instanceof Object && recovered.kind === "review");
+		const missing = { kind: "unavailable", reason: "missing" } as const;
+
+		assert.deepEqual(prepared.families, { builder: missing, accept: missing });
 		assert.deepEqual(recovered.receipt, {
 			...prepared.input.binding,
-			version: 2,
+			version: 3,
 			r8: "incomplete",
-			seats: JSON.parse(readFileSync(join(stage, "output.txt"), "utf8")),
+			builder: missing,
+			accept: missing,
+			seats: JSON.parse(readFileSync(join(stage, "output.txt"), "utf8")).map(
+				(seat: SeatReceipt) => ({
+					...seat,
+					family: missing,
+					label: "context-isolated, unknown family, not cross-family",
+				}),
+			),
 			blocking: false,
 		});
 
@@ -1173,8 +1193,15 @@ describe("candidate review", () => {
 			tokens: 10,
 		}));
 
-		assert.equal(reviewCandidate(input, verdict, receipts).blocking, false);
-		assert.equal(reviewCandidate(input, verdict, receipts).version, 2);
+		assert.equal(
+			reviewCandidate(input, verdict, receipts, SAME).blocking,
+			false,
+		);
+		assert.equal(reviewCandidate(input, verdict, receipts, SAME).version, 3);
+		assert.equal(
+			reviewCandidate(input, verdict, receipts, SAME).r8,
+			"incomplete",
+		);
 
 		for (const outcome of JUDGMENT_OUTCOMES.filter((o) => o !== "pass")) {
 			const judged = receipts.map((entry) =>
@@ -1186,7 +1213,13 @@ describe("candidate review", () => {
 					: entry,
 			);
 
-			const blocked: ReviewReceipt = reviewCandidate(input, verdict, judged);
+			const blocked: ReviewReceipt = reviewCandidate(
+				input,
+				verdict,
+				judged,
+				SAME,
+			);
+
 			assert.equal(blocked.blocking, true, outcome);
 			assert.deepEqual(
 				reviewFeedback(blocked),
@@ -1203,20 +1236,21 @@ describe("candidate review", () => {
 		}
 
 		assert.deepEqual(
-			reviewFeedback(reviewCandidate(input, verdict, receipts)),
+			reviewFeedback(reviewCandidate(input, verdict, receipts, SAME)),
 			[],
 		);
 		assert.throws(
-			() => reviewCandidate(input, verdict, receipts.slice(1)),
+			() => reviewCandidate(input, verdict, receipts.slice(1), SAME),
 			/missing_seat/,
 		);
 		assert.throws(
 			() =>
-				reviewCandidate(input, verdict, [
-					receipts[0]!,
-					receipts[0]!,
-					receipts[2]!,
-				]),
+				reviewCandidate(
+					input,
+					verdict,
+					[receipts[0]!, receipts[0]!, receipts[2]!],
+					SAME,
+				),
 			/missing_seat/,
 		);
 		assert.throws(
@@ -1228,6 +1262,7 @@ describe("candidate review", () => {
 					},
 					verdict,
 					receipts,
+					SAME,
 				),
 			/binding/,
 		);
@@ -1240,6 +1275,7 @@ describe("candidate review", () => {
 					},
 					verdict,
 					receipts,
+					SAME,
 				),
 			/binding/,
 		);
@@ -1255,6 +1291,7 @@ describe("candidate review", () => {
 						})),
 					},
 					receipts,
+					SAME,
 				),
 			/binding/,
 		);
@@ -1264,6 +1301,7 @@ describe("candidate review", () => {
 					input,
 					verdict,
 					receipts.map((entry) => ({ ...entry, judgments: [] })),
+					SAME,
 				),
 			/malformed/,
 		);
@@ -1423,5 +1461,684 @@ describe("candidate review", () => {
 			);
 		assert.equal(blocksReview([seat]), false);
 		assert.equal(REVIEW_MAX_TOKENS + REPAIR_BUILD_MAX_TOKENS, 80_000);
+	});
+});
+
+const SAME = {
+	builder: { kind: "openai-request", model: "openai/gpt-6.1-sol" },
+	accept: { kind: "openai-request", model: "openai/gpt-6.1-sol" },
+} as const satisfies { builder: FamilyInput; accept: FamilyInput };
+
+type Line = {
+	req: number;
+	route: string;
+	kind: "dispatch" | "result";
+	inputTokens?: number | null;
+	outputTokens?: number | null;
+	observedModel?: string;
+	reason?: "provider_rejected";
+};
+
+function journal(...lines: Line[]): string {
+	return lines
+		.map((line) =>
+			JSON.stringify({
+				v: 1,
+				ts: "2026-11-04T00:00:00.000Z",
+				stage: "accept",
+				runId: "a".repeat(64),
+				attempt: 1,
+				...line,
+				...(line.kind === "result"
+					? {
+							status: 200,
+							decision: "forward",
+							inputTokens: line.inputTokens ?? null,
+							outputTokens: line.outputTokens ?? null,
+						}
+					: { inputTokenEstimate: 100, maxOutputTokens: 25_000 }),
+			}),
+		)
+		.join("\n");
+}
+
+function metered(req: number, route: string, observedModel?: string): Line[] {
+	const result: Line = {
+		req,
+		route,
+		kind: "result",
+		inputTokens: 1_924,
+		outputTokens: 4,
+	};
+
+	if (observedModel !== undefined) result.observedModel = observedModel;
+
+	return [{ req, route, kind: "dispatch" }, result];
+}
+
+const ANTHROPIC = "anthropic/claude-sonnet-5-5";
+const OPENAI = "openai/gpt-6.1-sol";
+
+describe("family evidence", () => {
+	it("is anthropic-gateway only from metered model-anthropic lines with a table model", () => {
+		assert.deepEqual(
+			familyFromJournal({
+				journal: journal(
+					...metered(1, "model-anthropic", "claude-sonnet-5-5"),
+					...metered(2, "model-anthropic", "claude-haiku-5-5"),
+				),
+				requested: ANTHROPIC,
+				superseded: null,
+			}),
+			{ kind: "anthropic-gateway", model: "claude-haiku-5-5" },
+		);
+
+		const cases: [string, string | null, string, string][] = [
+			["requested only, empty journal", "", ANTHROPIC, "missing"],
+			["no journal", null, ANTHROPIC, "missing"],
+			[
+				"unknown observed id",
+				journal(...metered(1, "model-anthropic", "claude-unknown-9")),
+				ANTHROPIC,
+				"unknown-model",
+			],
+			[
+				"prefixed observed id",
+				journal(
+					...metered(1, "model-anthropic", "anthropic/claude-sonnet-5-5"),
+				),
+				ANTHROPIC,
+				"unknown-model",
+			],
+			[
+				"observed null",
+				journal(...metered(1, "model-anthropic")),
+				ANTHROPIC,
+				"unknown-model",
+			],
+			[
+				"one unusable 200",
+				journal(
+					...metered(1, "model-anthropic", "claude-sonnet-5-5"),
+					{ req: 2, route: "model-anthropic", kind: "dispatch" },
+					{ req: 2, route: "model-anthropic", kind: "result" },
+				),
+				ANTHROPIC,
+				"unmetered",
+			],
+			[
+				"a dispatch with no result",
+				journal(...metered(1, "model-anthropic", "claude-sonnet-5-5"), {
+					req: 2,
+					route: "model-anthropic",
+					kind: "dispatch",
+				}),
+				ANTHROPIC,
+				"unmetered",
+			],
+			[
+				"an OpenAI answer on an Anthropic request",
+				journal(...metered(1, "model-openai")),
+				ANTHROPIC,
+				"mixed",
+			],
+			[
+				"an Anthropic id outside the table",
+				journal(...metered(1, "model-anthropic", "claude-sonnet-5-5")),
+				"anthropic/claude-next",
+				"unknown-model",
+			],
+			[
+				"an xai request",
+				journal(...metered(1, "model-xai")),
+				"xai/grok-4.6",
+				"unknown-model",
+			],
+		];
+
+		for (const [name, text, requested, reason] of cases)
+			assert.deepEqual(
+				familyFromJournal({ journal: text, requested, superseded: null }),
+				{ kind: "unavailable", reason },
+				name,
+			);
+	});
+
+	it("skips a provider-rejected Anthropic call, which is neither an observation nor unmetered", () => {
+		assert.deepEqual(
+			familyFromJournal({
+				journal: journal(
+					{ req: 1, route: "model-anthropic", kind: "dispatch" },
+					{
+						req: 1,
+						route: "model-anthropic",
+						kind: "result",
+						reason: "provider_rejected",
+						inputTokens: 0,
+						outputTokens: 0,
+					},
+					...metered(2, "model-anthropic", "claude-sonnet-5-5"),
+				),
+				requested: ANTHROPIC,
+				superseded: null,
+			}),
+			{ kind: "anthropic-gateway", model: "claude-sonnet-5-5" },
+		);
+	});
+
+	it("never verifies an OpenAI builder from a rejected or contradictory journal", () => {
+		const rejected: Line[] = [
+			{ req: 9, route: "model-openai", kind: "dispatch" },
+			{
+				req: 9,
+				route: "model-openai",
+				kind: "result",
+				reason: "provider_rejected",
+				inputTokens: 0,
+				outputTokens: 0,
+			},
+		];
+
+		const cases: [string, string, string | null, string][] = [
+			["only a provider rejection", journal(...rejected), null, "missing"],
+			[
+				"a provider rejection after a superseded Anthropic answer",
+				journal(
+					...metered(1, "model-anthropic", "claude-sonnet-5-5"),
+					...rejected,
+				),
+				"model-anthropic",
+				"missing",
+			],
+			[
+				"an Anthropic observed model on model-openai",
+				journal(...metered(1, "model-openai", "claude-sonnet-5-5")),
+				null,
+				"unknown-model",
+			],
+			[
+				"another OpenAI model observed",
+				journal(
+					...metered(1, "model-openai"),
+					...metered(2, "model-openai", "gpt-6.1-terra"),
+				),
+				null,
+				"unknown-model",
+			],
+		];
+
+		for (const [name, text, superseded, reason] of cases)
+			assert.deepEqual(
+				familyFromJournal({ journal: text, requested: OPENAI, superseded }),
+				{ kind: "unavailable", reason },
+				name,
+			);
+
+		assert.deepEqual(
+			familyFromJournal({
+				journal: journal(
+					...rejected,
+					...metered(1, "model-openai"),
+					...metered(2, "model-openai", "gpt-6.1-sol"),
+				),
+				requested: OPENAI,
+				superseded: null,
+			}),
+			{ kind: "openai-request", model: OPENAI },
+			"a rejection beside a metered answer of the requested model",
+		);
+	});
+
+	it("names the builder openai-request only when every metered line is on model-openai", () => {
+		assert.deepEqual(
+			familyFromJournal({
+				journal: journal(
+					...metered(1, "model-openai"),
+					...metered(2, "model-openai"),
+				),
+				requested: OPENAI,
+				superseded: null,
+			}),
+			{ kind: "openai-request", model: OPENAI },
+		);
+		assert.deepEqual(
+			familyFromJournal({
+				journal: journal(
+					...metered(1, "model-openai"),
+					...metered(2, "model-anthropic", "claude-sonnet-5-5"),
+				),
+				requested: OPENAI,
+				superseded: null,
+			}),
+			{ kind: "unavailable", reason: "mixed" },
+		);
+		assert.deepEqual(
+			familyFromJournal({ journal: "", requested: OPENAI, superseded: null }),
+			{ kind: "unavailable", reason: "missing" },
+		);
+	});
+
+	it("follows the session that answered: a fallback ignores the superseded primary's lines", () => {
+		const mixedPrimary = journal(
+			...metered(1, "model-anthropic", "claude-sonnet-5-5"),
+			...metered(2, "model-openai"),
+		);
+
+		assert.deepEqual(
+			familyFromJournal({
+				journal: mixedPrimary,
+				requested: OPENAI,
+				superseded: "model-anthropic",
+			}),
+			{ kind: "openai-request", model: OPENAI },
+		);
+		assert.deepEqual(
+			familyFromJournal({
+				journal: mixedPrimary,
+				requested: OPENAI,
+				superseded: null,
+			}),
+			{ kind: "unavailable", reason: "mixed" },
+		);
+	});
+
+	it("rebuilds stored evidence and refuses a hand-minted family", () => {
+		for (const good of [
+			{ kind: "anthropic-gateway", model: "claude-sonnet-5-5" },
+			{ kind: "openai-request", model: OPENAI },
+			{ kind: "unavailable", reason: "unmetered" },
+		] as const)
+			assert.deepEqual(parseFamily(parseJson(JSON.stringify(good))), good);
+
+		for (const bad of [
+			{ kind: "anthropic-gateway", model: "claude-imaginary" },
+			{ kind: "anthropic-gateway", model: ANTHROPIC },
+			{ kind: "openai-request", model: "anthropic/claude-sonnet-5-5" },
+			{ kind: "openai-request", model: OPENAI, extra: true },
+			{ kind: "unavailable", reason: "trust-me" },
+			{ kind: "cross-family" },
+			null,
+			"anthropic",
+		])
+			assert.equal(
+				parseFamily(parseJson(JSON.stringify(bad))),
+				null,
+				JSON.stringify(bad),
+			);
+	});
+});
+
+describe("cross-family certification", () => {
+	const builder: FamilyInput = { kind: "openai-request", model: OPENAI };
+
+	const claude: FamilyInput = {
+		kind: "anthropic-gateway",
+		model: "claude-sonnet-5-5",
+	};
+
+	const openai: FamilyInput = { kind: "openai-request", model: OPENAI };
+	const unknown: FamilyInput = { kind: "unavailable", reason: "missing" };
+
+	const seats = (code: FamilyInput, simplify: FamilyInput = openai) => [
+		{ seat: "code-review", evidence: code },
+		{ seat: "security-review", evidence: openai },
+		{ seat: "simplify", evidence: simplify },
+	];
+
+	it("completes only for an OpenAI builder, an Anthropic accept and a blocking Anthropic seat", () => {
+		assert.equal(
+			certifyR8({ builder, accept: claude, seats: seats(claude) }),
+			"complete",
+		);
+
+		for (const [name, families] of [
+			["same-family accept", { builder, accept: openai, seats: seats(claude) }],
+			["same-family seats", { builder, accept: claude, seats: seats(openai) }],
+			[
+				"simplify-only Anthropic seat",
+				{ builder, accept: claude, seats: seats(openai, claude) },
+			],
+			[
+				"unknown builder",
+				{ builder: unknown, accept: claude, seats: seats(claude) },
+			],
+			["unknown accept", { builder, accept: unknown, seats: seats(claude) }],
+			[
+				"Anthropic builder",
+				{ builder: claude, accept: claude, seats: seats(claude) },
+			],
+			[
+				"inverted families",
+				{ builder: claude, accept: openai, seats: seats(openai) },
+			],
+			[
+				"inverted families with Anthropic only on simplify",
+				{ builder: claude, accept: openai, seats: seats(openai, claude) },
+			],
+			[
+				"an Anthropic builder and an Anthropic accept with OpenAI seats",
+				{ builder: claude, accept: claude, seats: seats(openai) },
+			],
+		] as const)
+			assert.equal(certifyR8(families), "incomplete", name);
+	});
+
+	it("never labels an inverted shape cross-family, and a stored inverted receipt keeps r8 incomplete", () => {
+		assert.equal(
+			familyLabel(openai, claude),
+			"context-isolated, different family, builder not OpenAI, not cross-family",
+		);
+		assert.equal(
+			familyLabel(claude, claude),
+			"context-isolated, same family, not cross-family",
+		);
+
+		// A label claims cross-family only for the one shape certifyR8 counts.
+		const evidenceKinds: readonly FamilyInput[] = [claude, openai, unknown];
+
+		for (const b of evidenceKinds)
+			for (const author of evidenceKinds)
+				assert.equal(
+					/(?<!not )cross-family/.test(familyLabel(author, b)),
+					b === openai && author === claude,
+					`${b.kind} builder, ${author.kind} seat`,
+				);
+
+		const binding = {
+			runId: digestOf("run"),
+			round: 0,
+			candidateSha: "a".repeat(40),
+			patchDigest: digestOf("patch"),
+			contractDigest: digestOf("contract"),
+			acceptanceDigest: digestOf("acceptance"),
+			ciRunId: 1,
+			originalBase: "b".repeat(40),
+			baseSha: "b".repeat(40),
+		};
+
+		for (const simplify of [openai, claude]) {
+			const stored: readonly {
+				readonly seat: string;
+				readonly evidence: FamilyInput;
+			}[] = seats(openai, simplify);
+
+			const receipt: ReviewReceipt = {
+				...binding,
+				version: 3,
+				r8: "complete",
+				builder: claude,
+				accept: openai,
+				seats: stored.map(({ seat, evidence }) => ({
+					seat,
+					findings: [],
+					judgments: [],
+					requested: OPENAI,
+					observed: null,
+					family: evidence,
+					label: familyLabel(evidence, claude),
+					fallback: false,
+					tokens: 1,
+				})),
+				blocking: false,
+			};
+
+			assert.equal(reviewR8(receipt), "incomplete");
+			assert.equal(familyClaimsHold(receipt), false, "a stored complete");
+			assert.equal(
+				familyClaimsHold({ ...receipt, r8: "incomplete" }),
+				true,
+				"a stored incomplete",
+			);
+		}
+	});
+
+	it("accepts a version 2 receipt only with an exact historical label", () => {
+		const legacy = (label: string): ReviewReceipt => ({
+			runId: digestOf("run"),
+			round: 0,
+			candidateSha: "a".repeat(40),
+			patchDigest: digestOf("patch"),
+			contractDigest: digestOf("contract"),
+			acceptanceDigest: digestOf("acceptance"),
+			ciRunId: 1,
+			originalBase: "b".repeat(40),
+			baseSha: "b".repeat(40),
+			version: 2,
+			r8: "incomplete",
+			seats: [
+				{
+					seat: "code-review",
+					findings: [],
+					judgments: [],
+					requested: OPENAI,
+					observed: null,
+					label,
+					fallback: false,
+					tokens: 1,
+				},
+			],
+			blocking: false,
+		});
+
+		for (const label of [
+			"context-isolated, same model, same family, not cross-family",
+			"context-isolated, different model, same family, not cross-family",
+		])
+			assert.equal(familyClaimsHold(legacy(label)), true, label);
+
+		for (const label of [
+			"context-isolated, different family, cross-family; same family, not cross-family",
+			"context-isolated, cross-family, same family, not cross-family",
+			"context-isolated, same family, not cross-family",
+			"context-isolated, same model, same family, not cross-family ",
+			"context-isolated",
+		])
+			assert.equal(familyClaimsHold(legacy(label)), false, label);
+	});
+
+	it("labels from evidence only, never cross-family for unknown or same family", () => {
+		assert.equal(
+			familyLabel(claude, builder),
+			"context-isolated, different family, cross-family",
+		);
+		assert.equal(
+			familyLabel(openai, builder),
+			"context-isolated, same family, not cross-family",
+		);
+		assert.equal(
+			familyLabel(unknown, builder),
+			"context-isolated, unknown family, not cross-family",
+		);
+		assert.equal(
+			familyLabel(claude, unknown),
+			"context-isolated, unknown family, not cross-family",
+		);
+		assert.equal(
+			familyLabel({ kind: "anthropic-gateway", model: ANTHROPIC }, builder),
+			"context-isolated, unknown family, not cross-family",
+		);
+		assert.equal(familyOf({ kind: "openai-request", model: ANTHROPIC }), null);
+		assert.equal(crossFamily(claude, claude), false);
+
+		for (const evidence of [claude, openai, unknown])
+			assert.doesNotMatch(familyLabel(evidence), /cross-family/);
+	});
+
+	it("writes version 3 receipts whose r8 and labels come from the stored families", () => {
+		const verdict = passingVerdict(patch("one"));
+
+		const input: ReviewInput = {
+			binding: {
+				runId: digestOf("run"),
+				round: 0,
+				candidateSha: verdict.candidateSha,
+				patchDigest: verdict.patchDigest,
+				contractDigest: digestOf("contract"),
+				acceptanceDigest: verdict.acceptanceDigest,
+				ciRunId: verdict.ciRunId,
+				originalBase: verdict.originalBase,
+				baseSha: verdict.baseSha,
+			},
+			seats: ["code-review", "security-review", "simplify"],
+			files: new Map([["src/a.ts", 3]]),
+			scenarios: [],
+			prompt: "",
+		};
+
+		const receipts = (code: FamilyInput | undefined): SeatReceipt[] =>
+			input.seats.map((name) => ({
+				seat: name,
+				findings: [],
+				judgments: [],
+				requested: name === "code-review" ? ANTHROPIC : OPENAI,
+				observed: null,
+				label: "context-isolated, different family, cross-family",
+				fallback: false,
+				tokens: 10,
+				...(name === "code-review"
+					? code === undefined
+						? {}
+						: { family: code }
+					: { family: openai }),
+			}));
+
+		const complete = reviewCandidate(input, verdict, receipts(claude), {
+			builder,
+			accept: claude,
+		});
+
+		assert.equal(complete.version, 3);
+		assert.equal(complete.r8, "complete");
+		assert.deepEqual(
+			complete.seats.map((seat) => seat.label),
+			[
+				"context-isolated, different family, cross-family",
+				"context-isolated, same family, not cross-family",
+				"context-isolated, same family, not cross-family",
+			],
+		);
+		assert.ok(familyClaimsHold(complete));
+
+		const missing = reviewCandidate(input, verdict, receipts(undefined), {
+			builder,
+			accept: claude,
+		});
+
+		assert.equal(missing.r8, "incomplete");
+		assert.equal(
+			missing.seats[0]?.label,
+			"context-isolated, unknown family, not cross-family",
+		);
+
+		const fallback = reviewCandidate(input, verdict, receipts(claude), {
+			builder,
+			accept: openai,
+		});
+
+		assert.equal(fallback.r8, "incomplete");
+		assert.equal(reviewR8(fallback), "incomplete");
+
+		if (fallback.version !== 3 || missing.version !== 3)
+			throw new Error("version 3 expected");
+
+		assert.equal(
+			familyClaimsHold({ ...fallback, r8: "complete" }),
+			false,
+			"a forged complete",
+		);
+		assert.equal(
+			familyClaimsHold({
+				...missing,
+				seats: missing.seats.map((seat) => ({
+					...seat,
+					label: "context-isolated, different family, cross-family",
+				})),
+			}),
+			false,
+			"a forged cross-family label",
+		);
+	});
+});
+
+describe("builder family at review preparation", () => {
+	it("takes the latest passed build attempt's stored family, and only openai-request for the patch's model", async () => {
+		const f = await preparedReviewFixture();
+
+		try {
+			const runId = f.execution.runId;
+
+			const write = (
+				name: string,
+				outcome: string,
+				requested: string,
+				family: FamilyInput | null,
+			) => {
+				const dir = join(f.state, "stages", runId, name);
+
+				mkdirSync(dir, { recursive: true, mode: 0o700 });
+				writeFileSync(
+					join(dir, "receipt.json"),
+					JSON.stringify({
+						outcome: { kind: outcome },
+						models: { requested, observed: null },
+						fallback: null,
+						family: family ?? undefined,
+					}),
+					{ mode: 0o600 },
+				);
+			};
+
+			const builder = async () =>
+				(await sandboxExecutor(f.config).prepareReview!(f.args)).families
+					?.builder;
+
+			const openai: FamilyInput = { kind: "openai-request", model: OPENAI };
+
+			assert.deepEqual(await builder(), {
+				kind: "unavailable",
+				reason: "missing",
+			});
+
+			write("build-1", "passed", OPENAI, openai);
+			write("build-2", "failed", OPENAI, openai);
+			assert.deepEqual(await builder(), openai);
+
+			write("build-1", "passed", OPENAI, {
+				kind: "unavailable",
+				reason: "mixed",
+			});
+			// A stored unavailable family is never a builder family.
+			assert.deepEqual(await builder(), {
+				kind: "unavailable",
+				reason: "missing",
+			});
+
+			write("build-1", "passed", "openai/gpt-6.1-terra", {
+				kind: "openai-request",
+				model: "openai/gpt-6.1-terra",
+			});
+			assert.deepEqual(await builder(), {
+				kind: "unavailable",
+				reason: "missing",
+			});
+
+			write("build-1", "passed", OPENAI, null);
+			assert.deepEqual(await builder(), {
+				kind: "unavailable",
+				reason: "missing",
+			});
+
+			write("build-1", "passed", OPENAI, openai);
+			write("build-1.2", "passed", OPENAI, {
+				kind: "anthropic-gateway",
+				model: "claude-sonnet-5-5",
+			});
+			assert.deepEqual(await builder(), {
+				kind: "unavailable",
+				reason: "missing",
+			});
+		} finally {
+			f.close();
+		}
 	});
 });

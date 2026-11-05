@@ -1,9 +1,11 @@
 import type { PatchRead, PatchReceipt } from "./build.ts";
 import { checkChangedPaths } from "./policy.ts";
 import {
+	familyClaimsHold,
 	isJudgmentOutcome,
 	type Judgment,
 	type JudgmentOutcome,
+	parseFamily,
 	type ReviewBinding,
 	type ReviewReceipt,
 	type ReviewSeat,
@@ -1016,18 +1018,17 @@ export function certifyGeneration(input: {
 			}) ||
 		r.blocking ||
 		blocksReview(r.seats) ||
-		r.r8 !== "incomplete" ||
+		!familyClaimsHold(r) ||
+		// Any builder family present must be the patch's own OpenAI request.
+		(r.version === 3 &&
+			r.builder.kind !== "unavailable" &&
+			(r.builder.kind !== "openai-request" ||
+				r.builder.model !== patch.receipt.model)) ||
 		r.seats.length !== e.seats.length ||
 		e.seats.some(
 			(seat) => r.seats.filter((s) => s.seat === seat).length !== 1,
 		) ||
-		r.seats.some(
-			(s) =>
-				!s.label.startsWith("context-isolated,") ||
-				!s.label.endsWith("same family, not cross-family") ||
-				!Number.isSafeInteger(s.tokens) ||
-				s.tokens < 0,
-		) ||
+		r.seats.some((s) => !Number.isSafeInteger(s.tokens) || s.tokens < 0) ||
 		report.candidateSha !== v.candidateSha ||
 		report.gateSha !== v.gateSha ||
 		report.ciRunId !== v.ciRunId ||
@@ -2030,7 +2031,22 @@ function wireReport(
 	);
 }
 
+/**
+ * A stored review receipt. Version 2 has no family evidence and only
+ * `r8: "incomplete"`. Version 3 rebuilds the builder's, the accept author's
+ * and each seat's `FamilyInput` with `parseFamily`, and its `r8` and labels
+ * must equal what that evidence gives; a forged label or `r8` fails.
+ */
 function wireReview(
+	value: JsonValue | undefined,
+): value is ReviewReceipt & JsonValue {
+	// A version 2 receipt's labels are checked only when it is certified.
+	return (
+		wireReviewFields(value) && (value.version === 2 || familyClaimsHold(value))
+	);
+}
+
+function wireReviewFields(
 	value: JsonValue | undefined,
 ): value is ReviewReceipt & JsonValue {
 	const v = wireObject(value);
@@ -2038,19 +2054,28 @@ function wireReview(
 	if (
 		!wireReviewBinding(value) ||
 		v === null ||
-		v.version !== 2 ||
-		v.r8 !== "incomplete" ||
+		(v.version === 2
+			? v.r8 !== "incomplete" ||
+				v.builder !== undefined ||
+				v.accept !== undefined
+			: v.version !== 3 ||
+				(v.r8 !== "complete" && v.r8 !== "incomplete") ||
+				parseFamily(v.builder) === null ||
+				parseFamily(v.accept) === null) ||
 		(v.blocking !== true && v.blocking !== false) ||
 		!Array.isArray(v.seats) ||
 		v.seats.length > 4
 	)
 		return false;
 
-	return v.seats.every((entry) => {
+	const seatsHold = v.seats.every((entry) => {
 		const s = wireObject(entry);
 
 		if (
 			s === null ||
+			(v.version === 3
+				? parseFamily(s.family) === null
+				: s.family !== undefined) ||
 			!wireText(s.seat) ||
 			!wireText(s.requested) ||
 			(s.observed !== null && !wireText(s.observed)) ||
@@ -2094,6 +2119,8 @@ function wireReview(
 			})
 		);
 	});
+
+	return seatsHold;
 }
 
 function migrateReview(value: JsonValue | undefined): JsonValue | undefined {
@@ -2145,7 +2172,16 @@ export function migrateCertificationValue(
 ): JsonValue | undefined {
 	const c = wireObject(value);
 
-	return c === null ? value : { ...c, review: migrateReview(c.review) ?? null };
+	if (c === null) return value;
+
+	// A version 1 review that fails migration keeps its original bytes, so it
+	// never compares equal to an explicit null review.
+	const review = migrateReview(c.review);
+
+	return {
+		...c,
+		review: review === null ? (c.review ?? null) : (review ?? null),
+	};
 }
 
 export function migrateEvidenceValue(

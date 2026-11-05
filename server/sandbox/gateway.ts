@@ -13,7 +13,13 @@ import { BlockList, isIP, type Socket } from "node:net";
 import { networkInterfaces } from "node:os";
 import { TLSSocket } from "node:tls";
 import type { Duplex } from "node:stream";
-import type { AuditDecision, AuditLog, AuditUpstream } from "./audit.ts";
+import type {
+	AuditDecision,
+	AuditLog,
+	AuditRecord,
+	AuditUpstream,
+	JournalRecord,
+} from "./audit.ts";
 import { REDACTED_PATH, redactMethod, redactPath } from "./audit.ts";
 import type {
 	CloseReason,
@@ -30,8 +36,16 @@ import {
 	responseHeadersFor,
 	SecretScanner,
 } from "./credentials.ts";
-import { SseMeter } from "./meter.ts";
-import { countOf, fieldOf, objectOf, parseJson } from "./json.ts";
+import { anthropicMaxOutput } from "./anthropic-limits.ts";
+import { AnthropicSseMeter, SseMeter } from "./meter.ts";
+import {
+	countOf,
+	fieldOf,
+	type JsonObject,
+	objectOf,
+	parseJson,
+	textOf,
+} from "./json.ts";
 import {
 	type AdmissionState,
 	checkBody,
@@ -41,7 +55,7 @@ import {
 	pathMatches,
 	type ProxyCode,
 } from "./policy.ts";
-import type { PathRule, Route, RouteId, RouteTable } from "./routes.ts";
+import type { Meter, PathRule, Route, RouteId, RouteTable } from "./routes.ts";
 
 export type GatewayOptions = {
 	readonly table: RouteTable;
@@ -78,10 +92,145 @@ type Exchange = {
 	bytesOut: number;
 	inputTokens: number | null;
 	outputTokens: number | null;
+	/** The bare model id the Anthropic meter observed, once metered. */
+	observedModel: string | null;
+	/** The meter this request runs under. `null` for a route without one, and for an Anthropic read. */
+	meter: Meter | null;
 	finished: boolean;
 	dispatched: RouteId | null;
 	rejected: number | null;
 };
+
+/**
+ * Which meter a request runs under. Every OpenAI request does, as before.
+ * On the Anthropic route only a POST does, so a models list writes no
+ * journal line and counts as no model request.
+ */
+function meterFor(route: Route, method: string): Meter | null {
+	if (route.meter === "anthropic-messages-sse")
+		return method === "POST" ? route.meter : null;
+
+	return route.meter;
+}
+
+type Bounded =
+	| { readonly kind: "forward"; readonly body: Buffer; readonly max: number }
+	| { readonly kind: "deny"; readonly code: DenyCode };
+
+/**
+ * The body sent upstream and its output bound. OpenAI gets
+ * `max_output_tokens` and a non-object body passes unchanged, bounded by the
+ * ceiling. Anthropic gets `max_tokens` = min(client, ceiling, the model's
+ * table maximum), never `max_output_tokens`; a non-object body or a model
+ * with no table entry is denied.
+ */
+function boundBody(
+	meter: Meter | null,
+	body: Buffer,
+	ceiling: number,
+): Bounded {
+	if (meter === null || body.length === 0)
+		return { kind: "forward", body, max: 0 };
+
+	const json: JsonObject | null = objectOf(parseJson(body.toString("utf8")));
+
+	if (meter === "openai-responses-sse") {
+		const max = Math.min(
+			countOf(fieldOf(json, "max_output_tokens")) ?? ceiling,
+			ceiling,
+		);
+
+		return {
+			kind: "forward",
+			body:
+				json === null
+					? body
+					: Buffer.from(JSON.stringify({ ...json, max_output_tokens: max })),
+			max,
+		};
+	}
+
+	if (json === null) return { kind: "deny", code: "body-not-allowed" };
+
+	const model = textOf(fieldOf(json, "model"));
+	const modelMax = model === null ? null : anthropicMaxOutput(model);
+
+	if (modelMax === null) return { kind: "deny", code: "model-maximum-unknown" };
+
+	const max = Math.min(
+		countOf(fieldOf(json, "max_tokens")) ?? ceiling,
+		ceiling,
+		modelMax,
+	);
+
+	const { max_output_tokens: _dropped, ...rest } = json;
+
+	return {
+		kind: "forward",
+		body: Buffer.from(JSON.stringify({ ...rest, max_tokens: max })),
+		max,
+	};
+}
+
+/**
+ * The record with the Anthropic meter's observed model added, when it
+ * metered one. Every other record keeps its shape.
+ */
+function withObservedModel<T extends AuditRecord | JournalRecord>(
+	record: T,
+	exchange: Exchange,
+): T {
+	const observedModel = exchange.observedModel;
+
+	return observedModel === null ? record : { ...record, observedModel };
+}
+
+/** One meter per metered response, behind one result shape. */
+type ResponseMeter = {
+	push(chunk: Buffer): void;
+	end(): void;
+	usage(): {
+		readonly inputTokens: number;
+		readonly outputTokens: number;
+		readonly observedModel: string | null;
+	} | null;
+};
+
+function responseMeter(meter: Meter | null): ResponseMeter | null {
+	if (meter === null) return null;
+
+	if (meter === "openai-responses-sse") {
+		const sse = new SseMeter();
+
+		return {
+			push: (chunk) => sse.push(chunk),
+			end: () => sse.end(),
+			usage: () => {
+				const usage = sse.usage();
+
+				return usage === null ? null : { ...usage, observedModel: null };
+			},
+		};
+	}
+
+	const anthropic = new AnthropicSseMeter();
+
+	return {
+		push: (chunk) => anthropic.push(chunk),
+		end: () => anthropic.end(),
+		usage: () => {
+			const result = anthropic.result();
+
+			return result.kind === "metered"
+				? {
+						inputTokens: result.inputTokens,
+						outputTokens: result.outputTokens,
+						observedModel: result.observedModel,
+					}
+				: null;
+		},
+	};
+}
 
 const REFUSED_V4 = [
 	["0.0.0.0", 8],
@@ -462,6 +611,8 @@ export class Gateway implements AdmissionState {
 			bytesOut: 0,
 			inputTokens: null,
 			outputTokens: null,
+			observedModel: null,
+			meter: null,
 			finished: false,
 			dispatched: null,
 			rejected: null,
@@ -500,23 +651,12 @@ export class Gateway implements AdmissionState {
 
 		if (
 			exchange.dispatched !== null &&
-			!this.#audit.journal({
-				...this.#journalIdentity(exchange, exchange.dispatched),
-				kind: "result",
-				decision,
-				...(exchange.rejected === null || decision !== "forward"
-					? {
-							status,
-							inputTokens: exchange.inputTokens,
-							outputTokens: exchange.outputTokens,
-						}
-					: {
-							status: exchange.rejected,
-							reason: "provider_rejected",
-							inputTokens: exchange.inputTokens ?? 0,
-							outputTokens: exchange.outputTokens ?? 0,
-						}),
-			})
+			!this.#audit.journal(
+				withObservedModel(
+					this.#settled(exchange, exchange.dispatched, decision, status),
+					exchange,
+				),
+			)
 		) {
 			this.#journalFailed();
 		}
@@ -529,7 +669,7 @@ export class Gateway implements AdmissionState {
 			state.bytesOut += exchange.bytesOut;
 		}
 
-		const written = this.#audit.append({
+		const line: AuditRecord = {
 			v: 1,
 			ts: new Date(this.#now()).toISOString(),
 			stage: this.#table.stage,
@@ -551,7 +691,9 @@ export class Gateway implements AdmissionState {
 			gate: this.#gate === null ? "open" : "closed",
 			inputTokens: exchange.inputTokens,
 			outputTokens: exchange.outputTokens,
-		});
+		};
+
+		const written = this.#audit.append(withObservedModel(line, exchange));
 
 		if (!written && this.#gate === null) {
 			this.closeGate(this.#audit.full ? "audit_full" : "audit_failed");
@@ -568,6 +710,32 @@ export class Gateway implements AdmissionState {
 			inputTokens: exchange.inputTokens,
 			outputTokens: exchange.outputTokens,
 		});
+	}
+
+	/** The journal result for a dispatched request, without `observedModel`. */
+	#settled(
+		exchange: Exchange,
+		dispatched: RouteId,
+		decision: AuditDecision,
+		status: number,
+	): JournalRecord {
+		return {
+			...this.#journalIdentity(exchange, dispatched),
+			kind: "result",
+			decision,
+			...(exchange.rejected === null || decision !== "forward"
+				? {
+						status,
+						inputTokens: exchange.inputTokens,
+						outputTokens: exchange.outputTokens,
+					}
+				: {
+						status: exchange.rejected,
+						reason: "provider_rejected",
+						inputTokens: exchange.inputTokens ?? 0,
+						outputTokens: exchange.outputTokens ?? 0,
+					}),
+		};
 	}
 
 	/**
@@ -730,6 +898,22 @@ export class Gateway implements AdmissionState {
 			return;
 		}
 
+		exchange.meter = meterFor(route, exchange.method);
+
+		// One byte per input token is conservative; bound output explicitly even
+		// when the client omits a provider limit, so a lost result is chargeable.
+		const bounded = boundBody(
+			exchange.meter,
+			body,
+			this.#table.ceiling.modelTokens,
+		);
+
+		if (bounded.kind === "deny") {
+			this.#deny(exchange, res, bounded.code);
+
+			return;
+		}
+
 		const address = await this.#address(route);
 
 		if (address === null) {
@@ -750,31 +934,6 @@ export class Gateway implements AdmissionState {
 		if (!this.#audit.healthy())
 			return this.#deny(exchange, res, "audit-unavailable");
 
-		// One byte per input token is conservative; bound output explicitly even
-		// when the client omits a provider limit, so a lost result is chargeable.
-		// A body that is not a JSON object passes unchanged, bounded by the ceiling.
-		const ceiling = this.#table.ceiling.modelTokens;
-
-		const json =
-			route.meter === null || body.length === 0
-				? null
-				: objectOf(parseJson(body.toString("utf8")));
-
-		const maxOutputTokens =
-			route.meter === null || body.length === 0
-				? 0
-				: Math.min(
-						countOf(fieldOf(json, "max_output_tokens")) ?? ceiling,
-						ceiling,
-					);
-
-		const forwarded =
-			json === null
-				? body
-				: Buffer.from(
-						JSON.stringify({ ...json, max_output_tokens: maxOutputTokens }),
-					);
-
 		this.#forward(
 			exchange,
 			req,
@@ -782,8 +941,8 @@ export class Gateway implements AdmissionState {
 			route,
 			decision.upstreamPath,
 			address,
-			forwarded,
-			maxOutputTokens,
+			bounded.body,
+			bounded.max,
 		);
 	}
 
@@ -801,7 +960,7 @@ export class Gateway implements AdmissionState {
 
 		if (state === undefined) return this.#deny(exchange, res, "no-route");
 
-		if (route.meter !== null) {
+		if (exchange.meter !== null) {
 			if (
 				!this.#audit.journal({
 					...this.#journalIdentity(exchange, route.id),
@@ -822,7 +981,7 @@ export class Gateway implements AdmissionState {
 		state.active += 1;
 		state.peakConcurrent = Math.max(state.peakConcurrent, state.active);
 
-		if (route.meter !== null) {
+		if (exchange.meter !== null) {
 			this.#modelRequests += 1;
 
 			// Counted and closed in the same step as admission, so the request
@@ -1023,7 +1182,7 @@ export class Gateway implements AdmissionState {
 			done("blocked_mid_stream", "response-blocked", status);
 		};
 
-		const meter = route.meter === null ? null : new SseMeter();
+		const meter = responseMeter(exchange.meter);
 
 		incoming.on("data", (chunk: Buffer) => {
 			exchange.bytesOut += chunk.length;
@@ -1076,7 +1235,13 @@ export class Gateway implements AdmissionState {
 		});
 	}
 
-	#meter(exchange: Exchange, route: Route, meter: SseMeter | null): void {
+	/**
+	 * Settles one response's usage. A response with none counts `unmetered`
+	 * and journals null tokens. On the Anthropic route that includes an
+	 * unusable stream, so its request is never metered as a success and its
+	 * dispatch bound stays an uncertain charge.
+	 */
+	#meter(exchange: Exchange, route: Route, meter: ResponseMeter | null): void {
 		if (meter === null) return;
 
 		const state = this.#routes.get(route.id);
@@ -1090,6 +1255,7 @@ export class Gateway implements AdmissionState {
 
 		exchange.inputTokens = usage.inputTokens;
 		exchange.outputTokens = usage.outputTokens;
+		exchange.observedModel = usage.observedModel;
 
 		if (state !== undefined) {
 			state.inputTokens += usage.inputTokens;

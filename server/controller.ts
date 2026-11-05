@@ -86,6 +86,7 @@ import {
 	type OutboxJob,
 } from "../src/ledger.ts";
 import { isGitSha } from "../src/workflow.ts";
+import { FAMILY_MISSING, familyClaimsHold, reviewR8 } from "../src/review.ts";
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
@@ -5097,16 +5098,25 @@ export function controllerCandidatePort(config: {
 			contract.digest,
 		);
 
+		// The body states R8 from the stored family evidence, recomputed here,
+		// never from the receipt's own `r8` or labels. A version 3 receipt's
+		// accept evidence must be the acceptance receipt's own.
+		const review = certificate.review;
+
 		if (
 			suite.kind !== "found" ||
-			suite.receipt.acceptanceDigest !== certificate.verdict.acceptanceDigest
+			suite.receipt.acceptanceDigest !== certificate.verdict.acceptanceDigest ||
+			!familyClaimsHold(review) ||
+			(review.version === 3 &&
+				JSON.stringify(review.accept) !==
+					JSON.stringify(suite.receipt.family ?? FAMILY_MISSING))
 		)
 			throw new PublicationError("evidence_unavailable");
 
 		const limitations = notProven({
 			criteria: contract.contract.acceptance,
 			scenarios: suite.suite.scenarios,
-			r8: certificate.review.r8,
+			r8: reviewR8(review),
 			judgments: certificate.review.seats.flatMap((seat) => seat.judgments),
 		});
 

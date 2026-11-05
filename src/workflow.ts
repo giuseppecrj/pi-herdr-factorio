@@ -17,6 +17,7 @@ import {
 	type GhFailure,
 	ghFailure,
 } from "./gh.ts";
+import { parseAnthropicModel } from "../server/sandbox/anthropic-limits.ts";
 import { type Digest, digestOf, type Stage } from "./run.ts";
 import { STAGE_ORDER } from "./stages.ts";
 
@@ -45,14 +46,28 @@ export type StageBudget = {
 	readonly stallMs: number;
 };
 
+export type ModelStageSettings = {
+	readonly model: ModelId;
+	readonly fallbackModel: ModelId | null;
+	readonly budget: StageBudget;
+};
+
+/**
+ * Review's settings. `model` serves the security, simplify and ultrareview
+ * seats; `fallbackModel` is the security seat's refusal retry only.
+ * `codeReviewModel` is `stages.review.seats.code-review.model`, and `null`
+ * means code-review inherits `model`.
+ */
+export type ReviewStageSettings = ModelStageSettings & {
+	readonly codeReviewModel: ModelId | null;
+};
+
 export type StageSettings = {
-	readonly [S in Stage]: S extends ModelStage
-		? {
-				readonly model: ModelId;
-				readonly fallbackModel: ModelId | null;
-				readonly budget: StageBudget;
-			}
-		: { readonly budget: StageBudget };
+	readonly [S in Stage]: S extends "review"
+		? ReviewStageSettings
+		: S extends ModelStage
+			? ModelStageSettings
+			: { readonly budget: StageBudget };
 };
 
 export type WorkflowConfig = {
@@ -376,17 +391,43 @@ function integerOr(
 		: range.fallback;
 }
 
-function readModel(node: YamlNode, field: string): ModelId {
+const ANTHROPIC_RULE =
+	"provider anthropic is allowed only for stages.accept.model and stages.review.seats.code-review.model: on the VM it spends exe.dev credits";
+
+/** A `<provider>/<model>` id. Callers decide which providers a field allows. */
+function readModelText(node: YamlNode, field: string): ModelId {
 	const text = readString(node, field);
 
 	if (!isModelId(text)) fail(field, "must be <provider>/<model>");
 
+	return text;
+}
+
+/** A model id whose provider is not anthropic. */
+function readModel(node: YamlNode, field: string): ModelId {
+	const text = readModelText(node, field);
+
+	if (text.startsWith("anthropic/")) fail(field, ANTHROPIC_RULE);
+
+	return text;
+}
+
+/** An `openai/` model, or an `anthropic/` model in the host's limits table. */
+function readAnthropicOrOpenai(node: YamlNode, field: string): ModelId {
+	const text = readModelText(node, field);
+
 	if (text.startsWith("anthropic/")) {
-		fail(
-			field,
-			"provider anthropic is not allowed: on the VM it spends exe.dev credits until the owner's proxy exists",
-		);
+		if (parseAnthropicModel(text) === null)
+			fail(
+				field,
+				"names an anthropic model outside the limits table (server/sandbox/anthropic-limits.ts)",
+			);
+
+		return text;
 	}
+
+	if (!text.startsWith("openai/"))
+		fail(field, "must be an openai or a listed anthropic model");
 
 	return text;
 }
@@ -440,6 +481,8 @@ function readWorkspaceRoot(
 const BUDGET_KEYS = ["max_turns", "wall_ms", "stall_ms"];
 
 const MODEL_KEYS = ["model", "fallback_model"];
+
+const SEAT_KEYS = ["code-review"];
 
 function stageEntries(
 	stages: Map<string, YamlNode>,
@@ -498,20 +541,72 @@ function readControllerStage(
 
 function readModelStage(
 	stages: Map<string, YamlNode>,
-	stage: ModelStage,
-): StageSettings[typeof stage] {
-	const entries = stageEntries(stages, stage, [...MODEL_KEYS, ...BUDGET_KEYS]);
+	stage: Exclude<ModelStage, "review">,
+): ModelStageSettings {
+	return readStageModels(
+		stageEntries(stages, stage, [...MODEL_KEYS, ...BUDGET_KEYS]),
+		stage,
+	);
+}
 
-	const model = entries.has("model")
-		? readPrimaryModel(entries.get("model") ?? null, `stages.${stage}.model`)
-		: defaultModel();
+/**
+ * Review, plus its one per-seat key, `seats.code-review.model`. Any other
+ * seat or seat field fails the load. Absent, code-review inherits `model`.
+ */
+function readReviewStage(stages: Map<string, YamlNode>): ReviewStageSettings {
+	const entries = stageEntries(stages, "review", [
+		...MODEL_KEYS,
+		...BUDGET_KEYS,
+		"seats",
+	]);
 
-	const fallbackModel = entries.has("fallback_model")
-		? readFallbackModel(
-				entries.get("fallback_model") ?? null,
-				`stages.${stage}.fallback_model`,
+	const seats = optionalEntries(
+		entries,
+		"seats",
+		"stages.review.seats",
+		SEAT_KEYS,
+	);
+
+	const codeReview = optionalEntries(
+		seats,
+		"code-review",
+		"stages.review.seats.code-review",
+		["model"],
+	);
+
+	const codeReviewModel = codeReview.has("model")
+		? readAnthropicOrOpenai(
+				codeReview.get("model") ?? null,
+				"stages.review.seats.code-review.model",
 			)
 		: null;
+
+	return Object.freeze({
+		...readStageModels(entries, "review"),
+		codeReviewModel,
+	});
+}
+
+function readStageModels(
+	entries: Map<string, YamlNode>,
+	stage: ModelStage,
+): ModelStageSettings {
+	const field = `stages.${stage}`;
+	const modelNode = entries.get("model") ?? null;
+
+	const model = !entries.has("model")
+		? defaultModel()
+		: stage === "accept"
+			? readAnthropicOrOpenai(modelNode, `${field}.model`)
+			: readPrimaryModel(modelNode, `${field}.model`);
+
+	const fallbackNode = entries.get("fallback_model") ?? null;
+
+	const fallbackModel = !entries.has("fallback_model")
+		? null
+		: stage === "accept"
+			? readAcceptFallback(fallbackNode, `${field}.fallback_model`)
+			: readFallbackModel(fallbackNode, `${field}.fallback_model`);
 
 	if (fallbackModel === model)
 		fail(
@@ -529,6 +624,16 @@ function readModelStage(
 	}
 
 	return Object.freeze({ model, fallbackModel, budget });
+}
+
+/** Accept's same-family retry: only `openai/`, so an Anthropic fallback cannot pass as cross-family. */
+function readAcceptFallback(node: YamlNode, field: string): ModelId {
+	const model = readModelText(node, field);
+
+	if (!model.startsWith("openai/"))
+		fail(field, "must be an openai model: accept's fallback is same-family");
+
+	return model;
 }
 
 function readPrimaryModel(node: YamlNode, field: string): ModelId {
@@ -595,7 +700,7 @@ function readStages(
 		accept: readModelStage(stages, "accept"),
 		build: readModelStage(stages, "build"),
 		validate: readValidateStage(stages, warnings),
-		review: readModelStage(stages, "review"),
+		review: readReviewStage(stages),
 		land: readControllerStage(stages, "land"),
 	});
 }
@@ -1230,6 +1335,7 @@ export type StatusReport =
 			readonly workflowDigest: Digest;
 			readonly workflowError: null;
 			readonly models: Readonly<Record<ModelStage, ModelId>>;
+			readonly seatModels: SeatModels;
 			readonly limits: StatusLimits;
 			readonly checkpoints: WorkflowConfig["checkpoints"];
 	  }>
@@ -1239,6 +1345,7 @@ export type StatusReport =
 			readonly workflowDigest: Digest | null;
 			readonly workflowError: WorkflowError;
 			readonly models: null;
+			readonly seatModels: null;
 			readonly limits: null;
 			readonly checkpoints: null;
 	  }>;
@@ -1290,6 +1397,15 @@ export function modelsOf(config: WorkflowConfig): Record<ModelStage, ModelId> {
 		build: stages.build.model,
 		review: stages.review.model,
 	};
+}
+
+/** The model each review seat with its own key runs. Shown beside `models.review`, never folded into it. */
+export type SeatModels = { readonly "code-review": ModelId };
+
+export function seatModelsOf(config: WorkflowConfig): SeatModels {
+	const { review } = config.stages;
+
+	return { "code-review": review.codeReviewModel ?? review.model };
 }
 
 function budgetsOf(config: WorkflowConfig): Record<Stage, StageBudget> {
@@ -1390,6 +1506,7 @@ export function statusReport(
 			warnings: [],
 			...runtime,
 			models: null,
+			seatModels: null,
 			limits: null,
 			checkpoints: null,
 		};
@@ -1408,6 +1525,7 @@ export function statusReport(
 		warnings: snapshot.warnings,
 		...runtime,
 		models: modelsOf(config),
+		seatModels: seatModelsOf(config),
 		limits: {
 			pollIntervalMs: config.polling.intervalMs,
 			maxConcurrent: config.agent.maxConcurrent,

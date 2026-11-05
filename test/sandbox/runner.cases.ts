@@ -21,7 +21,13 @@ import { fileRunFiles, serveLoop } from "../../server/controller.ts";
 import { fileAdmissionStore, admitTicket } from "../../src/admission.ts";
 import { handoffCandidate, parseCandidateState } from "../../src/handoff.ts";
 import { candidateBranch } from "../../src/publication.ts";
-import { ReviewEvidenceUnavailable } from "../../src/review.ts";
+import {
+	type FamilyInput,
+	familyClaimsHold,
+	ReviewEvidenceUnavailable,
+	reviewCandidate,
+	type SeatReceipt,
+} from "../../src/review.ts";
 import { FakeGitHub, fakeIssue, labelEvent } from "../fake-ticket-adapter.ts";
 import {
 	type Contract,
@@ -2518,6 +2524,429 @@ describe("runStage refusal fallback", () => {
 	});
 });
 
+const CLAUDE = "anthropic/claude-sonnet-5-5";
+
+/** Journal lines for one model request, as the gateway writes them. */
+function journalLines(
+	req: number,
+	route: string,
+	result:
+		| { readonly kind: "metered"; readonly observedModel?: string }
+		| { readonly kind: "unusable" }
+		| { readonly kind: "unsettled" },
+): string[] {
+	const identity = {
+		v: 1 as const,
+		ts: "2026-11-04T00:00:00.000Z",
+		stage: "accept",
+		runId: RUN,
+		attempt: 1,
+		req,
+		route: asRoute(route),
+	};
+
+	const dispatch = JSON.stringify({
+		...identity,
+		kind: "dispatch",
+		inputTokenEstimate: 100,
+		maxOutputTokens: 25_000,
+	});
+
+	if (result.kind === "unsettled") return [dispatch];
+
+	const settled: JournalRecord = {
+		...identity,
+		kind: "result",
+		status: 200,
+		decision: "forward",
+		inputTokens: result.kind === "metered" ? 1_924 : null,
+		outputTokens: result.kind === "metered" ? 4 : null,
+	};
+
+	const observedModel =
+		result.kind === "metered" ? result.observedModel : undefined;
+
+	return [
+		dispatch,
+		JSON.stringify(
+			observedModel === undefined ? settled : { ...settled, observedModel },
+		),
+	];
+}
+
+function usageEvent(
+	route: string,
+	decision: "forward" | "deny" | "error",
+): ControlEvent {
+	return {
+		event: "usage",
+		route: asRoute(route),
+		decision,
+		reason:
+			decision === "deny"
+				? "route-closed"
+				: decision === "error"
+					? "upstream-error"
+					: null,
+		status: decision === "forward" ? 400 : 502,
+		bytesIn: 10,
+		bytesOut: 0,
+		inputTokens: null,
+		outputTokens: null,
+	};
+}
+
+/** One Pi session that sends `events` through the gateway, then ends with `end`. */
+function gatewayScript(
+	gateway: () => FakeGateway,
+	events: readonly ControlEvent[],
+	end: JsonObject,
+) {
+	return (command: JsonObject, pi: FakePi) => {
+		const type = textOf(fieldOf(command, "type"));
+
+		if (type === "abort") pi.emit({ type: "agent_settled", aborted: true });
+
+		if (type !== "prompt") return;
+
+		for (const event of events) gateway().send(event);
+		pi.emit(
+			started(textOf(fieldOf(command, "id")) ?? ""),
+			{ type: "agent_start" },
+			{ type: "turn_start" },
+			end,
+			{ type: "agent_settled", aborted: false },
+		);
+	};
+}
+
+const PASSED_END = assistant({
+	provider: "anthropic",
+	model: "claude-sonnet-5-5",
+	tokens: 20,
+});
+
+const ERROR_END = assistant({
+	provider: "anthropic",
+	model: "claude-sonnet-5-5",
+	stopReason: "error",
+	rawStopReason: null,
+	errorMessage: "Anthropic API error",
+	tokens: 0,
+});
+
+const REFUSAL_END = assistant({
+	provider: "anthropic",
+	model: "claude-sonnet-5-5",
+	stopReason: "error",
+	rawStopReason: "refusal",
+	tokens: 20,
+});
+
+const OPENAI_PASS = assistant({ tokens: 30 });
+
+describe("runStage on an Anthropic primary", () => {
+	function anthropicHarness(
+		scripts: ((
+			gateway: () => FakeGateway,
+		) => (command: JsonObject, pi: FakePi) => void)[],
+		journal: string | null,
+	) {
+		let gateway: FakeGateway | null = null;
+
+		const current = () => {
+			assert.ok(gateway);
+
+			return gateway;
+		};
+
+		const h = harness(
+			scripts.map((script) => script(current)),
+			{
+				gateway: (_table, timeline) => {
+					gateway = new FakeGateway(timeline);
+
+					return gateway;
+				},
+			},
+		);
+
+		h.host.readJournal = () => Promise.resolve(journal);
+
+		return h;
+	}
+
+	const anthropicInput = (fallback: ModelId | null = null) =>
+		input({ stage: "accept" }, { model: model(CLAUDE), fallback });
+
+	it("passes on a metered reply and records the gateway-observed family", async () => {
+		const h = anthropicHarness(
+			[
+				(gw) =>
+					gatewayScript(
+						gw,
+						[usageEvent("model-anthropic", "forward")],
+						PASSED_END,
+					),
+			],
+			journalLines(1, "model-anthropic", {
+				kind: "metered",
+				observedModel: "claude-sonnet-5-5",
+			}).join("\n"),
+		);
+
+		const result = await runStage(anthropicInput(), h.host);
+
+		assert.equal(result.kind, "passed");
+		assert.deepEqual(result.receipt.family, {
+			kind: "anthropic-gateway",
+			model: "claude-sonnet-5-5",
+		});
+		assert.deepEqual(
+			h.tables[0]?.routes.map((route) => [route.id, route.initially]),
+			[
+				["model-anthropic", "open"],
+				["npm", "open"],
+			],
+		);
+	});
+
+	for (const [name, journal, family] of [
+		[
+			"a forwarded 200 with no usage",
+			[
+				...journalLines(1, "model-anthropic", {
+					kind: "metered",
+					observedModel: "claude-sonnet-5-5",
+				}),
+				...journalLines(2, "model-anthropic", { kind: "unusable" }),
+			].join("\n"),
+			{ kind: "unavailable", reason: "unmetered" },
+		],
+		[
+			"a dispatch with no result",
+			journalLines(1, "model-anthropic", { kind: "unsettled" }).join("\n"),
+			{ kind: "unavailable", reason: "unmetered" },
+		],
+		["no journal at all", null, { kind: "unavailable", reason: "missing" }],
+		["an empty journal", "", { kind: "unavailable", reason: "missing" }],
+		[
+			"only a provider-rejected result",
+			[
+				journalLines(1, "model-anthropic", { kind: "unsettled" })[0],
+				JSON.stringify({
+					v: 1,
+					ts: "2026-11-04T00:00:00.000Z",
+					stage: "accept",
+					runId: RUN,
+					attempt: 1,
+					req: 1,
+					route: "model-anthropic",
+					kind: "result",
+					status: 529,
+					reason: "provider_rejected",
+					inputTokens: 0,
+					outputTokens: 0,
+				}),
+			].join("\n"),
+			{ kind: "unavailable", reason: "missing" },
+		],
+	] as const)
+		it(`fails the attempt on ${name}, even though Pi passed, and keeps no output`, async () => {
+			const h = anthropicHarness(
+				[(gw) => gatewayScript(gw, [], PASSED_END)],
+				journal,
+			);
+
+			const result = await runStage(anthropicInput(), h.host);
+
+			assert.equal(result.kind, "failed");
+			assert.deepEqual(result.receipt.outcome, {
+				kind: "failed",
+				exit: "error",
+			});
+			assert.deepEqual(result.receipt.family, family);
+			assert.equal(result.receipt.output, null);
+			assert.deepEqual(h.outputs, []);
+			assert.deepEqual(
+				h.receipts.map((r) => r.outcome.kind),
+				["failed"],
+			);
+		});
+
+	it("switches to the named openai/ fallback only when the Anthropic route forwarded nothing and was denied", async () => {
+		const h = anthropicHarness(
+			[
+				(gw) =>
+					gatewayScript(gw, [usageEvent("model-anthropic", "deny")], ERROR_END),
+				() =>
+					replayer([
+						started("x"),
+						OPENAI_PASS,
+						{ type: "agent_settled", aborted: false },
+					]),
+			],
+			journalLines(1, "model-openai", { kind: "metered" }).join("\n"),
+		);
+
+		const result = await runStage(
+			anthropicInput(model("openai/gpt-6.1-sol")),
+			h.host,
+		);
+
+		assert.equal(result.kind, "passed");
+		assert.deepEqual(h.launches, [CLAUDE, "openai/gpt-6.1-sol"]);
+		assert.deepEqual(
+			h.timeline.filter((entry) => entry.startsWith("route:")),
+			["route:model-anthropic:closed", "route:model-openai:open"],
+		);
+		assert.deepEqual(
+			h.tables[0]?.routes.map((route) => [route.id, route.initially]),
+			[
+				["model-anthropic", "open"],
+				["model-openai", "closed"],
+				["npm", "open"],
+			],
+		);
+		assert.equal(result.receipt.models.requested, CLAUDE);
+		assert.equal(result.receipt.fallback?.requested, "openai/gpt-6.1-sol");
+		assert.deepEqual(result.receipt.family, {
+			kind: "openai-request",
+			model: "openai/gpt-6.1-sol",
+		});
+	});
+
+	for (const [name, events, fallback] of [
+		[
+			"a 400 after a forwarded response",
+			[usageEvent("model-anthropic", "forward")],
+			"openai/gpt-6.1-sol",
+		],
+		[
+			"a forwarded response before a denial",
+			[
+				usageEvent("model-anthropic", "forward"),
+				usageEvent("model-anthropic", "error"),
+			],
+			"openai/gpt-6.1-sol",
+		],
+		["a failure with no denial", [], "openai/gpt-6.1-sol"],
+		[
+			"an unavailable route with no fallback",
+			[usageEvent("model-anthropic", "deny")],
+			null,
+		],
+	] as const)
+		it(`does not switch on ${name}`, async () => {
+			const h = anthropicHarness(
+				[(gw) => gatewayScript(gw, events, ERROR_END)],
+				"",
+			);
+
+			const result = await runStage(
+				anthropicInput(fallback === null ? null : model(fallback)),
+				h.host,
+			);
+
+			assert.equal(result.kind, "failed");
+			assert.deepEqual(h.launches, [CLAUDE]);
+			assert.deepEqual(
+				h.timeline.filter((entry) => entry.startsWith("route:")),
+				[],
+			);
+			assert.equal(result.receipt.fallback, null);
+		});
+
+	it("follows the existing refusal rule: no fallback ends refused, a named one switches routes", async () => {
+		const metered = journalLines(1, "model-anthropic", {
+			kind: "metered",
+			observedModel: "claude-sonnet-5-5",
+		}).join("\n");
+
+		const alone = anthropicHarness(
+			[
+				(gw) =>
+					gatewayScript(
+						gw,
+						[usageEvent("model-anthropic", "forward")],
+						REFUSAL_END,
+					),
+			],
+			metered,
+		);
+
+		const refused = await runStage(anthropicInput(), alone.host);
+
+		assert.equal(refused.kind, "refused");
+		assert.equal(refused.receipt.refusal, "refusal");
+		assert.deepEqual(alone.launches, [CLAUDE]);
+
+		const switched = anthropicHarness(
+			[
+				(gw) =>
+					gatewayScript(
+						gw,
+						[usageEvent("model-anthropic", "forward")],
+						REFUSAL_END,
+					),
+				() =>
+					replayer([
+						started("x"),
+						OPENAI_PASS,
+						{ type: "agent_settled", aborted: false },
+					]),
+			],
+			[metered, ...journalLines(2, "model-openai", { kind: "metered" })].join(
+				"\n",
+			),
+		);
+
+		const passed = await runStage(
+			anthropicInput(model("openai/gpt-6.1-sol")),
+			switched.host,
+		);
+
+		assert.equal(passed.kind, "passed");
+		assert.deepEqual(
+			switched.timeline.filter((entry) => entry.startsWith("route:")),
+			["route:model-anthropic:closed", "route:model-openai:open"],
+		);
+		assert.deepEqual(passed.receipt.family, {
+			kind: "openai-request",
+			model: "openai/gpt-6.1-sol",
+		});
+	});
+
+	it("never falls back from an unusable Anthropic reply, even on a refusal", async () => {
+		const h = anthropicHarness(
+			[
+				(gw) =>
+					gatewayScript(
+						gw,
+						[usageEvent("model-anthropic", "forward")],
+						REFUSAL_END,
+					),
+				() =>
+					replayer([
+						started("x"),
+						OPENAI_PASS,
+						{ type: "agent_settled", aborted: false },
+					]),
+			],
+			journalLines(1, "model-anthropic", { kind: "unusable" }).join("\n"),
+		);
+
+		const result = await runStage(
+			anthropicInput(model("openai/gpt-6.1-sol")),
+			h.host,
+		);
+
+		assert.equal(result.kind, "failed");
+		assert.deepEqual(h.launches, [CLAUDE]);
+		assert.equal(result.receipt.fallback, null);
+	});
+});
+
 function inProcessGateway(fixturePort: number, events: ControlEvent[]) {
 	return async (
 		table: RouteTable,
@@ -3517,6 +3946,10 @@ describe("multi-seat candidate review", () => {
 		security: "clean" | "fallback" | "refused" | "malformed" = "clean",
 		attempt: 1 | 2 = 1,
 		controller = false,
+		seats: {
+			readonly journals?: Readonly<Record<string, string>>;
+			readonly codeReviewModel?: ModelId;
+		} = {},
 	) {
 		const fixture = await preparedReviewFixture(attempt, false, controller);
 		const dir = fixture.dir;
@@ -3526,7 +3959,11 @@ describe("multi-seat candidate review", () => {
 		const run: StageLaunchInput = {
 			...input(
 				{ stage: "review" },
-				{ fallback: model("openai/gpt-6.1-terra"), maxTokens: 30_000 },
+				{
+					fallback: model("openai/gpt-6.1-terra"),
+					maxTokens: 30_000,
+					codeReviewModel: seats.codeReviewModel ?? null,
+				},
 			),
 			workspace: dir,
 			tools: ["read", "grep", "ls"],
@@ -3605,6 +4042,11 @@ describe("multi-seat candidate review", () => {
 
 			hosts.push(h);
 			mkdirSync(sessionDir, { recursive: true });
+
+			const journals = seats.journals;
+
+			if (journals !== undefined)
+				h.host.readJournal = () => Promise.resolve(journals[seat] ?? null);
 
 			return {
 				...h.host,
@@ -4536,11 +4978,71 @@ describe("multi-seat candidate review", () => {
 				seats.map((s: { seat: string }) => s.seat),
 				["code-review", "security-review", "simplify"],
 			);
+			// Fake hosts keep no journal, so no seat has a family.
 			assert.ok(
 				seats.every(
 					(s: { label: string }) =>
-						s.label ===
-						"context-isolated, same model, same family, not cross-family",
+						s.label === "context-isolated, unknown family, not cross-family",
+				),
+			);
+		} finally {
+			h.close();
+		}
+	});
+
+	it("runs only the code-review seat on its seat model, on an Anthropic table with no second model route", async () => {
+		const openai = journalLines(1, "model-openai", { kind: "metered" }).join(
+			"\n",
+		);
+
+		const h = await setup("clean", 1, false, {
+			codeReviewModel: model(CLAUDE),
+			journals: {
+				"code-review": journalLines(1, "model-anthropic", {
+					kind: "metered",
+					observedModel: "claude-sonnet-5-5",
+				}).join("\n"),
+				"security-review": openai,
+				simplify: openai,
+			},
+		});
+
+		try {
+			const result = await sandboxModule.runReview(h.run, h.dir, h.create);
+			assert.equal(result.kind, "passed");
+			assert.deepEqual(
+				h.hosts.map((host) => host.launches),
+				[[CLAUDE], ["openai/gpt-6.1-sol"], ["openai/gpt-6.1-sol"]],
+			);
+			assert.deepEqual(
+				h.hosts.map((host) => host.tables[0]?.routes.map((route) => route.id)),
+				[
+					["model-anthropic", "npm"],
+					["model-openai", "npm"],
+					["model-openai", "npm"],
+				],
+			);
+
+			const seats = JSON.parse(readFileSync(join(h.dir, "output.txt"), "utf8"));
+
+			assert.deepEqual(
+				seats.map((s: { requested: string }) => s.requested),
+				[CLAUDE, "openai/gpt-6.1-sol", "openai/gpt-6.1-sol"],
+			);
+			assert.deepEqual(
+				seats.map((s: { family: JsonValue }) => s.family),
+				[
+					{ kind: "anthropic-gateway", model: "claude-sonnet-5-5" },
+					{ kind: "openai-request", model: "openai/gpt-6.1-sol" },
+					{ kind: "openai-request", model: "openai/gpt-6.1-sol" },
+				],
+			);
+			// The fixture has no build attempt receipt, so the builder is
+			// unknown and no seat may be labeled cross-family.
+			assert.ok(
+				seats.every(
+					(s: { label: string }) =>
+						s.label === "context-isolated, unknown family, not cross-family",
 				),
 			);
 		} finally {
@@ -4564,7 +5066,7 @@ describe("multi-seat candidate review", () => {
 			assert.equal(security.fallback, true);
 			assert.equal(
 				security.label,
-				"context-isolated, different model, same family, not cross-family",
+				"context-isolated, unknown family, not cross-family",
 			);
 			assert.deepEqual(h.hosts[1]?.launches, [
 				"openai/gpt-6.1-sol",
@@ -4615,6 +5117,130 @@ describe("multi-seat candidate review", () => {
 			assert.equal(result.usage, 10);
 			assert.equal(result.receipt.usage.total, 30);
 			assert.equal(h.hosts.length, 4);
+		} finally {
+			h.close();
+		}
+	});
+
+	it("certifies a reloaded seat receipt's stored family only under the strict r8 rule", async () => {
+		const openaiJournal = journalLines(1, "model-openai", {
+			kind: "metered",
+		}).join("\n");
+
+		const h = await setup("clean", 1, false, {
+			codeReviewModel: model(CLAUDE),
+			journals: {
+				"code-review": journalLines(1, "model-anthropic", {
+					kind: "metered",
+					observedModel: "claude-sonnet-5-5",
+				}).join("\n"),
+				"security-review": openaiJournal,
+				simplify: openaiJournal,
+			},
+		});
+
+		const openai: FamilyInput = {
+			kind: "openai-request",
+			model: "openai/gpt-6.1-sol",
+		};
+
+		const claude: FamilyInput = {
+			kind: "anthropic-gateway",
+			model: "claude-sonnet-5-5",
+		};
+
+		const prepared = h.fixture.prepared;
+
+		const reload = async (families: {
+			readonly builder: FamilyInput;
+			readonly accept: FamilyInput;
+		}) => {
+			rmSync(join(h.dir, "receipt.json"), { force: true });
+			rmSync(join(h.dir, "output.txt"), { force: true });
+
+			const before = h.hosts.length;
+
+			const result = await sandboxModule.runReview(
+				{ ...h.run, review: { ...prepared, families } },
+				h.dir,
+				h.create,
+			);
+
+			assert.equal(result.kind, "passed");
+			assert.equal(h.hosts.length, before, "no seat ran again");
+
+			const seats: SeatReceipt[] = JSON.parse(
+				readFileSync(join(h.dir, "output.txt"), "utf8"),
+			);
+
+			const receipt = reviewCandidate(
+				prepared.input,
+				prepared.verdict,
+				seats,
+				families,
+			);
+
+			if (receipt.version !== 3) throw new Error("version 3 expected");
+
+			return receipt;
+		};
+
+		const storeFamily = (seat: string, family: FamilyInput) => {
+			const path = join(h.dir, seat, "receipt.json");
+
+			writeFileSync(
+				path,
+				JSON.stringify({
+					...JSON.parse(readFileSync(path, "utf8")),
+					family,
+				}),
+			);
+		};
+
+		try {
+			await sandboxModule.runReview(
+				{
+					...h.run,
+					review: {
+						...prepared,
+						families: { builder: openai, accept: claude },
+					},
+				},
+				h.dir,
+				h.create,
+			);
+
+			const complete = await reload({ builder: openai, accept: claude });
+
+			assert.equal(complete.r8, "complete");
+			assert.ok(familyClaimsHold(complete));
+
+			// Inverted families from the same stored seats never complete.
+			const inverted = await reload({ builder: claude, accept: openai });
+
+			assert.equal(inverted.r8, "incomplete");
+			assert.ok(
+				inverted.seats.every(
+					(seat) => !/(?<!not )cross-family/.test(seat.label),
+				),
+			);
+			assert.equal(familyClaimsHold({ ...inverted, r8: "complete" }), false);
+
+			// Anthropic evidence stored only on simplify never completes.
+			storeFamily("code-review", openai);
+			storeFamily("simplify", claude);
+
+			const simplifyOnly = await reload({ builder: openai, accept: claude });
+
+			assert.deepEqual(
+				simplifyOnly.seats.map((seat) => seat.family),
+				[openai, openai, claude],
+			);
+			assert.equal(simplifyOnly.r8, "incomplete");
+			assert.equal(
+				familyClaimsHold({ ...simplifyOnly, r8: "complete" }),
+				false,
+			);
 		} finally {
 			h.close();
 		}

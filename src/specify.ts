@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { SnapshotSource } from "./admission.ts";
+import type { FamilyInput } from "./review.ts";
 import { type Digest, digestOf, isDigest, type NonEmpty } from "./run.ts";
 import type { JsonValue } from "./tickets.ts";
 import {
@@ -736,6 +737,31 @@ export function acceptanceKey(runId: Digest, digest: Digest): string {
 	return `${COMMENT_KEY_PREFIX}acceptance run=${runId} a=${digest} -->`;
 }
 
+/**
+ * The isolation line of the pre-build acceptance comment. Without stored
+ * evidence it keeps the legacy wording. With it, it names the author the
+ * host recorded and its fresh context; for an Anthropic or unknown author
+ * it leaves the family claim to certification, because no builder has run.
+ */
+function isolationLine(author: FamilyInput | undefined): string {
+	if (author === undefined)
+		return "Isolation: context-isolated, same family, not cross-family. The design's cross-family requirement remains unmet.";
+
+	switch (author.kind) {
+		case "openai-request":
+			return `Isolation: context-isolated, same family, not cross-family. Author: ${inert(author.model)}, requested on the OpenAI route. The design's cross-family requirement remains unmet.`;
+		case "anthropic-gateway":
+			return `Isolation: context-isolated, fresh context. Author: ${inert(author.model)}, an Anthropic model the gateway observed. Independence from the builder's family is decided at certification, after build and review.`;
+		case "unavailable":
+			return `Isolation: context-isolated, fresh context. Author: not observed (${author.reason}). Its family is unknown, and certification cannot count it as independent of the builder.`;
+		default: {
+			const exhaustive: never = author;
+
+			return exhaustive;
+		}
+	}
+}
+
 export function renderAcceptanceSummary(input: {
 	readonly runId: Digest;
 	readonly digest: Digest;
@@ -743,6 +769,8 @@ export function renderAcceptanceSummary(input: {
 		readonly id: string;
 		readonly criteria: readonly string[];
 	}[];
+	/** The accept author's stored family evidence, when the receipt has one. */
+	readonly author?: FamilyInput;
 }): string | null {
 	return bounded(
 		[
@@ -752,7 +780,7 @@ export function renderAcceptanceSummary(input: {
 				(s) => `- ${inert(s.id)}: ${s.criteria.map(inert).join(", ")}`,
 			),
 			"",
-			"Isolation: context-isolated, same family, not cross-family. The design's cross-family requirement remains unmet.",
+			isolationLine(input.author),
 			"Test code stays private on the factory host. Do not edit this comment.",
 			"",
 			acceptanceKey(input.runId, input.digest),
