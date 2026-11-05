@@ -2424,6 +2424,8 @@ test("accept retry: one exhaustive table classifies every base reason", () => {
 function refusedEvidence(
 	files: number,
 	message: string,
+	/** Only the repeat run fails, so the two runs disagree. */
+	flaky = false,
 ): ReturnType<typeof assessBase> {
 	const sha = "a".repeat(40);
 	const repo = "o/r";
@@ -2456,26 +2458,28 @@ function refusedEvidence(
 			gatesDigest: digestOf("g"),
 		},
 		...(() => {
-			const execution = {
+			const run = (failing: boolean) => ({
 				kind: "observed" as const,
-				exitCode: 1,
+				exitCode: failing ? 1 : 0,
 				wallMs: 1,
 				files: Array.from({ length: files }, (_, i) => ({
 					file: `checks/s${i + 1}.test.mjs`,
 					registered: 1,
-					failures: [
-						{
-							file: `checks/s${i + 1}.test.mjs`,
-							name: `PRIVATE-NAME-${i + 1}`,
-							message,
-							code: "ERR_ASSERTION",
-							kind: "assertion" as const,
-						},
-					],
+					failures: failing
+						? [
+								{
+									file: `checks/s${i + 1}.test.mjs`,
+									name: `PRIVATE-NAME-${i + 1}`,
+									message,
+									code: "ERR_ASSERTION",
+									kind: "assertion" as const,
+								},
+							]
+						: [],
 				})),
-			};
+			});
 
-			return { execution, repeat: execution };
+			return { execution: run(!flaky), repeat: run(true) };
 		})(),
 		scenarios: Array.from({ length: files }, (_, i) => ({
 			scenario: `S${i + 1}`,
@@ -2509,6 +2513,7 @@ test("accept retry: feedback carries the refusal facts, bounded per file and in 
 				kind: "assertion",
 				code: "ERR_ASSERTION",
 				message: "Expected values to be strictly equal",
+				failedIn: "both",
 			},
 		],
 		omitted: 0,
@@ -2545,11 +2550,18 @@ test("accept retry: the claim's retry record round-trips and binds to the same r
 		gateSha: sha,
 	};
 
-	const retry = { refused, reason: "preservation_failed", baseWallMs: 4000 };
+	const retry = {
+		refused,
+		reason: "preservation_failed",
+		receiptDigest: digestOf("first receipt"),
+		scenarios: ["S1", "S2"],
+		baseWallMs: 4000,
+	};
 
 	const pending = {
 		binding: refused,
-		acceptAttempt: 1,
+		acceptAttempt: 2,
+		storedAttempt: 1,
 		remainingAcceptMs: 9,
 		retry,
 	};
@@ -2567,8 +2579,28 @@ test("accept retry: the claim's retry record round-trips and binds to the same r
 	assert.deepEqual(stored, rebound);
 	assert.equal(stored !== null && retryPending(stored), false);
 
+	const legacy = { binding: refused, acceptAttempt: 1, remainingAcceptMs: 9 };
+	assert.deepEqual(
+		parseBaseCheckReference(JSON.parse(JSON.stringify(legacy))),
+		legacy,
+	);
+
+	for (const storedAttempt of [0, 3, "1"])
+		assert.equal(
+			parseBaseCheckReference(
+				JSON.parse(JSON.stringify({ ...pending, storedAttempt })),
+			),
+			null,
+		);
+
 	for (const bad of [
 		{ ...retry, reason: "base_unknown" },
+		// A claim may only record a retry the controller could have granted.
+		{ ...retry, reason: "base_timeout" },
+		{ ...retry, reason: "base_evidence_missing" },
+		{ ...retry, receiptDigest: "r" },
+		{ ...retry, scenarios: ["not a scenario"] },
+		{ ...retry, scenarios: undefined },
 		{ ...retry, baseWallMs: -1 },
 		{ ...retry, refused: { ...refused, issue: 10 } },
 		{
@@ -2582,4 +2614,25 @@ test("accept retry: the claim's retry record round-trips and binds to the same r
 			),
 			null,
 		);
+});
+
+test("accept retry: a nondeterministic refusal's feedback says which run failed", () => {
+	const flaky = refusedEvidence(1, "Expected 2 to equal 3", true);
+	assert.equal(flaky.assessment.kind, "refused");
+
+	if (flaky.assessment.kind !== "refused") return;
+	assert.equal(flaky.assessment.failure.reason, "base_nondeterministic");
+	const feedback = baseRetryFeedback(flaky.receipt, flaky.assessment.failure);
+
+	assert.deepEqual(feedback.files, [
+		{
+			scenario: "S1",
+			file: "checks/s1.test.mjs",
+			kind: "assertion",
+			code: "ERR_ASSERTION",
+			message: "Expected 2 to equal 3",
+			failedIn: "repeat",
+		},
+	]);
+	assert.doesNotMatch(JSON.stringify(feedback), /PRIVATE-NAME/);
 });

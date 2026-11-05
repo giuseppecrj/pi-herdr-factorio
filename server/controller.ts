@@ -1379,6 +1379,45 @@ export function controllerBaseChecker(config: {
 		},
 	});
 
+	/**
+	 * Every attempt's base-check wall on one binding: each stored receipt's run
+	 * plus each interruption's charge. `null` when an attempt has neither.
+	 */
+	const bindingWall = (parent: string): number | null => {
+		let charged = 0;
+
+		if (!existsSync(parent)) return 0;
+
+		for (const name of readdirSync(parent)) {
+			if (!/^a[1-9][0-9]*$/.test(name)) return null;
+			const previous = join(parent, name);
+
+			const completed = present(join(previous, "result.json"))
+				? parseBaseReceipt(
+						regularText(join(previous, "result.json"), 2 * 1024 * 1024),
+					)
+				: null;
+
+			const interrupted = present(join(previous, "interrupted.json"))
+				? countOf(
+						jsonField(
+							objectOf(
+								parseJson(regularText(join(previous, "interrupted.json"))),
+							),
+							"wallMs",
+						),
+					)
+				: null;
+
+			if (completed !== null)
+				charged += completed.evidence.finishedAt - completed.evidence.startedAt;
+			else if (interrupted !== null) charged += interrupted;
+			else return null;
+		}
+
+		return charged;
+	};
+
 	const check = async (input: BaseCheckInput): Promise<BaseCheckProgress> => {
 		const bindingDigest = digestOf(JSON.stringify(input.binding));
 
@@ -1423,10 +1462,20 @@ export function controllerBaseChecker(config: {
 					return fail(input, "base_evidence_missing");
 				const { assessment } = assessBase(receipt.evidence);
 
-				// The receipt goes only to the accept retry's private feedback.
-				return assessment.kind === "refused"
+				if (assessment.kind !== "refused") return assessment;
+				let baseWallMs: number | null;
+
+				try {
+					baseWallMs = bindingWall(parent);
+				} catch {
+					baseWallMs = null;
+				}
+
+				// The receipt goes only to the accept retry's private feedback; its
+				// binding's whole base wall is charged before any retry is granted.
+				return baseWallMs === null
 					? { ...assessment, receipt }
-					: assessment;
+					: { ...assessment, receipt, baseWallMs };
 			}
 
 			if (input.readOnly) return fail(input, "base_evidence_missing");
@@ -1481,37 +1530,9 @@ export function controllerBaseChecker(config: {
 				suite.receipt.acceptanceDigest !== input.binding.acceptanceDigest
 			)
 				return fail(input, "base_evidence_missing");
-			let charged = 0;
+			const charged = bindingWall(parent);
 
-			if (existsSync(parent))
-				for (const name of readdirSync(parent)) {
-					if (!/^a[1-9][0-9]*$/.test(name))
-						return fail(input, "base_evidence_missing");
-					const previous = join(parent, name);
-
-					const completed = present(join(previous, "result.json"))
-						? parseBaseReceipt(
-								regularText(join(previous, "result.json"), 2 * 1024 * 1024),
-							)
-						: null;
-
-					const interrupted = present(join(previous, "interrupted.json"))
-						? countOf(
-								jsonField(
-									objectOf(
-										parseJson(regularText(join(previous, "interrupted.json"))),
-									),
-									"wallMs",
-								),
-							)
-						: null;
-
-					if (completed !== null)
-						charged +=
-							completed.evidence.finishedAt - completed.evidence.startedAt;
-					else if (interrupted !== null) charged += interrupted;
-					else return fail(input, "base_evidence_missing");
-				}
+			if (charged === null) return fail(input, "base_evidence_missing");
 
 			const startedAt = Date.now();
 

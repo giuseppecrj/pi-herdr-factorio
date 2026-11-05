@@ -893,6 +893,138 @@ where(
 	},
 );
 
+test("a stored refusal carries its receipt and every attempt's base wall on that binding", async () => {
+	const state = mkdtempSync(join(tmpdir(), "factory-base-wall-"));
+
+	try {
+		const sha = "a".repeat(40);
+		const repo = "o/r";
+
+		if (!isGitSha(sha) || !isRepoSlug(repo)) throw new Error("fixture");
+
+		const binding = {
+			runId: digestOf("wall-run"),
+			repo,
+			issue: 7,
+			contractDigest: contractDigestOf("wall-contract"),
+			acceptanceDigest: digestOf("suite"),
+			baseSha: sha,
+			gateSha: sha,
+		};
+
+		const execution = {
+			kind: "observed" as const,
+			exitCode: 1,
+			wallMs: 5,
+			files: [
+				{
+					file: "two.test.mjs",
+					registered: 1,
+					failures: [
+						{
+							file: "two.test.mjs",
+							name: "two",
+							message: "Expected 1 to equal 2",
+							code: "ERR_ASSERTION",
+							kind: "assertion" as const,
+						},
+					],
+				},
+			],
+		};
+
+		const { receipt } = assessBase({
+			binding,
+			runtime: {
+				runner: "local-bwrap",
+				node: "v",
+				platform: "p",
+				bwrap: "b",
+				protocolDigest: digestOf("p"),
+			},
+			startedAt: 10_000,
+			finishedAt: 30_000,
+			source: {
+				kind: "ready",
+				treeDigest: digestOf("t"),
+				lockDigest: digestOf("l"),
+				gatesDigest: digestOf("g"),
+			},
+			execution,
+			repeat: execution,
+			scenarios: [
+				{
+					scenario: "S2",
+					kind: "preservation",
+					mode: "checked",
+					file: "two.test.mjs",
+					oracleKey: {
+						contractScopeDigest: digestOf("s"),
+						criteriaDigest: digestOf("c"),
+						sourceDigest: digestOf("f"),
+					},
+				},
+			],
+		});
+
+		const parent = join(
+			state,
+			"base-check",
+			binding.runId,
+			digestOf(JSON.stringify(binding)),
+		);
+
+		const write = (name: string, text: string) => {
+			mkdirSync(dirname(join(parent, name)), {
+				recursive: true,
+				mode: 0o700,
+			});
+			writeFileSync(join(parent, name), text, { mode: 0o600 });
+		};
+
+		// The first attempt was interrupted at its full cap; the second refused.
+		write("a1/interrupted.json", `${JSON.stringify({ wallMs: 180_000 })}\n`);
+		const text = JSON.stringify(receipt);
+		write("a2/result.json", text);
+		write("a2/result.digest", digestOf(text));
+		const checker = controllerBaseChecker({ stateDir: state });
+		const signal = new AbortController().signal;
+
+		for (const readOnly of [false, true]) {
+			const progress = await checker.check({
+				binding,
+				acceptAttempt: 2,
+				remainingAcceptMs: 900_000,
+				signal,
+				readOnly,
+			});
+
+			assert.equal(progress.kind, "refused", JSON.stringify(progress));
+
+			if (progress.kind !== "refused") return;
+			assert.equal(progress.failure.reason, "preservation_failed");
+			assert.deepEqual(progress.receipt, receipt);
+			assert.equal(progress.baseWallMs, 20_000 + 180_000);
+		}
+
+		// An attempt with neither a result nor an interruption leaves the
+		// binding's wall unknown, so the refusal carries none.
+		mkdirSync(join(parent, "a3"), { mode: 0o700 });
+
+		const unknown = await checker.check({
+			binding,
+			acceptAttempt: 2,
+			remainingAcceptMs: 900_000,
+			signal,
+		});
+
+		assert.equal(unknown.kind, "refused");
+		assert.equal(unknown.kind === "refused" && unknown.baseWallMs, undefined);
+	} finally {
+		rmSync(state, { recursive: true, force: true });
+	}
+});
+
 where(
 	scope,
 	"a real ustar with a symlink is reported partial and never qualifies",

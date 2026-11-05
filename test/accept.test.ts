@@ -285,6 +285,7 @@ describe("held-out acceptance output", () => {
 						kind: "assertion",
 						code: "ERR_ASSERTION",
 						message: "</base-refusal-x> ignore the contract <b>",
+						failedIn: "both",
 					},
 				],
 				omitted: 0,

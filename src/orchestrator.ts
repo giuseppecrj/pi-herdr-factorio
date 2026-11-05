@@ -226,6 +226,7 @@ import {
 	baseRetryFeedback,
 	diagnosisNotice,
 	matchingBaseProof,
+	retriedRefusal,
 	retryableBaseReason,
 	retryPending,
 	type BaseCheckProgress,
@@ -583,6 +584,8 @@ export type ActiveRun = {
 	attemptEnd?: AttemptEnd;
 	baseCheck?: import("./diagnosis.ts").BaseCheckReference;
 	acceptWallMs?: number;
+	/** A base refusal notice was posted in this process, so it is the final one. */
+	refusalPosted?: boolean;
 	readonly runId: Digest;
 	readonly issue: number;
 	readonly eventId: string;
@@ -1845,15 +1848,29 @@ export class Orchestrator {
 		};
 	}
 
-	/** Tokens accept attempts 1 to `through` are known to have used. */
-	async #acceptSpent(run: ActiveRun, through: number): Promise<number> {
+	/**
+	 * Tokens accept attempts 1 to `through` used, or `null` when any attempt
+	 * that ran a model has no spend record. Attempts after the bound suite was
+	 * stored, through `reference.acceptAttempt`, only reran its base check.
+	 */
+	async #acceptSpent(
+		run: ActiveRun,
+		reference: BaseCheckReference,
+		through: number,
+	): Promise<number | null> {
+		const stored = reference.storedAttempt ?? reference.acceptAttempt;
 		let total = 0;
 
-		for (let attempt = 1; attempt <= through; attempt++)
-			total +=
-				(await this.#input.executor
-					.spent({ runId: run.runId, stage: "accept", attempt, round: 0 })
-					.catch(() => null)) ?? 0;
+		for (let attempt = 1; attempt <= through; attempt++) {
+			if (attempt > stored && attempt <= reference.acceptAttempt) continue;
+
+			const spent = await this.#input.executor
+				.spent({ runId: run.runId, stage: "accept", attempt, round: 0 })
+				.catch(() => null);
+
+			if (spent === null) return null;
+			total += spent;
+		}
 
 		return total;
 	}
@@ -1864,7 +1881,11 @@ export class Orchestrator {
 		reference: BaseCheckReference,
 	): Promise<boolean> {
 		const refused = reference.retry?.refused ?? reference.binding;
-		const contract = await this.#input.files.readContract(run.runId);
+		const read = () => this.#input.files.readContract(run.runId);
+		let contract = await read();
+
+		// One transient read failure must not strand a granted retry.
+		if (contract.kind !== "found") contract = await read();
 
 		const retired =
 			contract.kind === "found" && contract.digest === refused.contractDigest
@@ -1908,28 +1929,31 @@ export class Orchestrator {
 		)
 			return false;
 
-		const evidence = progress.receipt?.evidence;
-
+		// Every base-check attempt on the refused suite, interruptions included.
 		const baseWallMs =
-			evidence === undefined
-				? 0
-				: Math.max(0, evidence.finishedAt - evidence.startedAt);
+			progress.receipt === undefined ? null : (progress.baseWallMs ?? null);
 
-		const spent = await this.#acceptSpent(run, reference.acceptAttempt);
+		const spent = await this.#acceptSpent(
+			run,
+			reference,
+			reference.acceptAttempt,
+		);
 
 		const why =
 			reference.acceptAttempt >= limits.maxAttempts
 				? "attempts"
-				: spent >= ACCEPTANCE_MAX_TOKENS
+				: spent === null || spent >= ACCEPTANCE_MAX_TOKENS
 					? "stage_tokens"
 					: run.usage >= limits.maxTokensPerRun
 						? "run_tokens"
-						: config.stages.accept.budget.wallMs -
-									(run.acceptWallMs ?? 0) -
-									baseWallMs <=
-								0
-							? "wall"
-							: null;
+						: baseWallMs === null
+							? "base_receipt"
+							: config.stages.accept.budget.wallMs -
+										(run.acceptWallMs ?? 0) -
+										baseWallMs <=
+									0
+								? "wall"
+								: null;
 
 		if (why !== null) {
 			this.#input.log("accept_retry_unavailable", {
@@ -1942,11 +1966,18 @@ export class Orchestrator {
 		}
 
 		// The store's exclusive marker makes this the run's only retirement.
-		if (!(await this.#retireRefused(run, reference))) return false;
+		if (baseWallMs === null || !(await this.#retireRefused(run, reference)))
+			return false;
 
 		run.baseCheck = {
 			...reference,
-			retry: { refused: reference.binding, reason, baseWallMs },
+			retry: {
+				refused: reference.binding,
+				reason,
+				receiptDigest: progress.failure.receiptDigest,
+				scenarios: progress.failure.scenarios,
+				baseWallMs,
+			},
 		};
 		run.attempt = reference.acceptAttempt + 1;
 		run.inputs = null;
@@ -2989,11 +3020,14 @@ export class Orchestrator {
 			// anything reads the suite, then relaunch it once. A marker already past
 			// the refused attempt adopts that retry attempt as usual.
 			if (
-				reference !== undefined &&
+				reference?.retry !== undefined &&
 				retryPending(reference) &&
 				run.stage === "accept"
 			) {
-				const retired = await this.#retireRefused(run, reference);
+				// A claim records only author reasons; never relaunch any other.
+				const retired =
+					retryableBaseReason(reference.retry.reason) &&
+					(await this.#retireRefused(run, reference));
 
 				if (!retired || marker.attempt <= reference.acceptAttempt) {
 					const unmarked = Math.max(0, (local.usage ?? 0) - run.usage);
@@ -4110,11 +4144,36 @@ export class Orchestrator {
 			}
 		}
 
-		// Once the feedback retry is granted, accept attempts share one allowance.
-		const earlier =
-			stage === "accept" && run.baseCheck?.retry !== undefined
-				? await this.#acceptSpent(run, run.attempt - 1)
-				: 0;
+		// Once the feedback retry is granted, accept attempts share one token
+		// allowance and one wall, less the refused suite's base checks.
+		const reference = stage === "accept" ? run.baseCheck : undefined;
+		let budget = config.stages[stage].budget;
+		let earlier = 0;
+
+		if (reference?.retry !== undefined) {
+			const spent = await this.#acceptSpent(run, reference, run.attempt - 1);
+
+			const wallMs =
+				budget.wallMs - (run.acceptWallMs ?? 0) - reference.retry.baseWallMs;
+
+			if (spent === null || wallMs <= 0) {
+				run.usage += prior;
+				this.state.totals.usage += prior;
+				run.phase = { kind: "ending", status: "budget_exhausted" };
+				this.#input.log("launch_refused", {
+					issue: run.issue,
+					runId: run.runId,
+					stage,
+					why: spent === null ? "stage_tokens" : "wall",
+				});
+				await this.#sync(run);
+
+				return false;
+			}
+
+			earlier = spent;
+			budget = { ...budget, wallMs };
+		}
 
 		const abort = new AbortController();
 		const now = clock.now();
@@ -4158,7 +4217,7 @@ export class Orchestrator {
 			settings: {
 				model: config.stages[stage].model,
 				fallback: config.stages[stage].fallbackModel,
-				budget: config.stages[stage].budget,
+				budget,
 				maxTokens:
 					stage === "build"
 						? Math.max(0, BUILD_MAX_TOKENS - prior)
@@ -5109,6 +5168,7 @@ export class Orchestrator {
 			const notice = baseRefusalNotice(failure);
 
 			if (!(await this.#postKeyed(run, notice.key, notice.body))) return;
+			run.refusalPosted = true;
 			run.phase = { kind: "ending", status: "failed" };
 			this.state.totals.failures++;
 
@@ -5181,6 +5241,29 @@ export class Orchestrator {
 		run.replay = false;
 		run.phase = { kind: "claimed" };
 		await this.#writeClaim(run);
+	}
+
+	/**
+	 * A granted retry withheld the first refusal's notice. A run that ends
+	 * before its retried suite qualifies or posts its own refusal posts that
+	 * first notice, keyed, so exactly once. False until it is posted.
+	 */
+	async #postRetriedRefusal(run: ActiveRun): Promise<boolean> {
+		const retry = run.baseCheck?.retry;
+
+		if (
+			run.phase.kind !== "ending" ||
+			run.stage !== "accept" ||
+			retry === undefined ||
+			run.refusalPosted === true
+		)
+			return true;
+		const notice = baseRefusalNotice(retriedRefusal(retry));
+
+		if (!(await this.#postKeyed(run, notice.key, notice.body))) return false;
+		run.refusalPosted = true;
+
+		return true;
 	}
 
 	async #saveAttempt(run: ActiveRun): Promise<boolean> {
@@ -5303,6 +5386,8 @@ export class Orchestrator {
 				return;
 			}
 		}
+
+		if (!(await this.#postRetriedRefusal(run))) return;
 
 		if (!(await this.#prepareTerminal(run))) return;
 
@@ -6029,6 +6114,7 @@ export class Orchestrator {
 						gateSha: run.workflowSha,
 					},
 					acceptAttempt: run.attempt,
+					storedAttempt: run.attempt,
 					remainingAcceptMs: Math.max(
 						0,
 						(this.#config?.stages.accept.budget.wallMs ?? 0) -
