@@ -44,6 +44,9 @@ import {
 	collectVerdict,
 	collectTrustedReport,
 	repairFeedback,
+	checkFeedback,
+	parseCheckFeedback,
+	FEEDBACK_CHECKS,
 	parseValidationState,
 	validationDir,
 	assessmentBinding,
@@ -3663,7 +3666,7 @@ export function controllerValidator(config: {
 	readonly stateDir: string;
 	readonly exec: Exec;
 	readonly fetch?: TarballFetch;
-	readonly receipt?: (repo: RepoSlug, id: number) => Promise<string | null>;
+	readonly receipt?: GateReceiptSource;
 	readonly diagnosis?: ReturnType<typeof controllerDiagnosis>;
 }): Validator {
 	return async (input) => {
@@ -3835,6 +3838,7 @@ export function controllerValidator(config: {
 			const verdictPath = join(dir, "verdict.json");
 			const failurePath = join(dir, "failure.json");
 			const receiptPath = join(dir, "receipt.json");
+			const checksPath = join(dir, "checks.json");
 
 			const receiptOf = () =>
 				objectOf(
@@ -3999,15 +4003,19 @@ export function controllerValidator(config: {
 				)
 					keepValidationFile(
 						join(dir, "feedback.json"),
-						feedbackBytes(
-							read.ref,
-							repairFeedback(
+						feedbackBytes(read.ref, [
+							...repairFeedback(
 								suite.suite,
 								contract.contract,
 								textsOf(jsonField(raw, "heldoutFailures")) ?? [],
 								heldout.directory,
 							),
-						),
+							...((present(checksPath)
+								? parseCheckFeedback(
+										parseJson(regularText(checksPath, 64 * 1024)),
+									)
+								: null) ?? []),
+						]),
 					);
 
 				return read;
@@ -4375,10 +4383,13 @@ export function controllerValidator(config: {
 
 			if (run.headSha !== state.baseSha) return failed("stale_base");
 
+			const logs = new Map<string, string>();
+
 			const text = await (
 				config.receipt ??
-				((repo, id) => downloadGateReceipt(config.exec, repo, id))
-			)(repo, run.id).catch(() => null);
+				((repo, id, sink) =>
+					downloadGateReceipt(config.exec, repo, id, "gate-receipt", sink))
+			)(repo, run.id, logs).catch(() => null);
 
 			if (text === null && run.conclusion === "success")
 				return input.now >= state.deadline
@@ -4409,6 +4420,22 @@ export function controllerValidator(config: {
 			});
 
 			keepValidationFile(receiptPath, text ?? "null\n");
+
+			// Written once: a later download may differ in which logs it fetched.
+			if (!present(checksPath))
+				exclusive(
+					checksPath,
+					`${JSON.stringify(
+						checkFeedback({
+							logs,
+							failed: verdict.checks
+								.filter((check) => !check.passed)
+								.map((check) => check.name),
+							changedPaths: patch.receipt.changedPaths,
+							heldoutDir: heldout.directory,
+						}),
+					)}\n`,
+				);
 			keepValidationFile(verdictPath, `${JSON.stringify(verdict)}\n`);
 
 			if (!(await diagnosed(verdict))) return { kind: "waiting", state };
@@ -4525,7 +4552,7 @@ export async function sweepValidation(config: {
 	readonly stateDir: string;
 	readonly exec: Exec;
 	readonly fetch?: TarballFetch;
-	readonly receipt?: (repo: RepoSlug, id: number) => Promise<string | null>;
+	readonly receipt?: GateReceiptSource;
 	readonly now?: () => number;
 }): Promise<void> {
 	const files = fileRunFiles(config.stateDir);
@@ -4714,11 +4741,22 @@ export async function sweepValidation(config: {
 	}
 }
 
+/**
+ * Fetches a run's trusted gate receipt. A `logs` sink also receives the
+ * visible check logs beside it in the artifact, for repair feedback.
+ */
+export type GateReceiptSource = (
+	repo: RepoSlug,
+	id: number,
+	logs?: Map<string, string>,
+) => Promise<string | null>;
+
 export async function downloadGateReceipt(
 	exec: Exec,
 	repo: RepoSlug,
 	id: number,
 	artifactName = "gate-receipt",
+	checkLogs?: Map<string, string>,
 ): Promise<string | null> {
 	const dir = mkdtempSync(join(tmpdir(), "factory-ci-"));
 
@@ -4763,8 +4801,22 @@ export async function downloadGateReceipt(
 						if (
 							receipt.code === 0 &&
 							Buffer.byteLength(receipt.stdout) < 1024 * 1024
-						)
+						) {
+							for (const name of checkLogs === undefined
+								? []
+								: FEEDBACK_CHECKS) {
+								const member = await exec("unzip", [
+									"-p",
+									path,
+									`${name}.log`,
+								]).catch(() => null);
+
+								if (member?.code === 0)
+									checkLogs?.set(name, member.stdout.slice(0, 1024 * 1024));
+							}
+
 							return receipt.stdout;
+						}
 					}
 
 					if (attempt < 2)

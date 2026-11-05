@@ -62,6 +62,7 @@ import { type ValidationState } from "../src/validation.ts";
 import { baseTreeDigest, replacementDigest } from "../server/gates.ts";
 import { CONTROLLER_LOGIN } from "../src/markers.ts";
 import { LedgerGit } from "./ledger-git.ts";
+import { withLocalArtifactDownload } from "./helpers.ts";
 
 const repo = "giuseppecrj/pi-herdr-factorio";
 const baseSha = "a".repeat(40);
@@ -99,6 +100,7 @@ class GitData {
 	failure: number | null = null;
 	hook?: (args: readonly string[]) => ExecResult | null;
 	receiptMissing = false;
+	logs = new Map<string, string>();
 	beforeDispatch?: () => void;
 	onSave?: (state: ValidationState) => void;
 	input: Record<string, string> = {};
@@ -697,7 +699,11 @@ async function validationFixture(withGates = false) {
 			stateDir: root,
 			exec: fake.exec,
 			fetch: async () => fetch,
-			receipt: async () => (fake.receiptMissing ? null : fake.receipt()),
+			receipt: async (_repo, _id, logs) => {
+				for (const [name, text] of fake.logs) logs?.set(name, text);
+
+				return fake.receiptMissing ? null : fake.receipt();
+			},
 		})({
 			runId,
 			issue: 1,
@@ -1053,6 +1059,52 @@ describe("fix round 1 recovery regressions", () => {
 });
 
 describe("receipt download transport", () => {
+	it("hands the visible check logs beside the receipt to a logs sink, never the held-out run", async () => {
+		await withLocalArtifactDownload(async () => {
+			const members: string[] = [];
+
+			const exec: Exec = async (command, args) => {
+				if (command === "unzip") {
+					const member = args[2] ?? "";
+					members.push(member);
+
+					return member === "format.log"
+						? { code: 11, stdout: "", stderr: "missing" }
+						: { code: 0, stdout: `bytes of ${member}`, stderr: "" };
+				}
+
+				return {
+					code: 0,
+					stdout: JSON.stringify({
+						artifacts: [{ id: 9, name: "gate-receipt", expired: false }],
+					}),
+					stderr: "",
+				};
+			};
+
+			const logs = new Map<string, string>();
+			assert.equal(
+				await downloadGateReceipt(exec, repo, 123, "gate-receipt", logs),
+				"bytes of receipt.json",
+			);
+			assert.deepEqual(Object.fromEntries(logs), {
+				typecheck: "bytes of typecheck.log",
+				lint: "bytes of lint.log",
+				candidate_tests: "bytes of candidate_tests.log",
+			});
+			assert.deepEqual(members, [
+				"receipt.json",
+				"typecheck.log",
+				"lint.log",
+				"format.log",
+				"candidate_tests.log",
+			]);
+			members.length = 0;
+			await downloadGateReceipt(exec, repo, 123);
+			assert.deepEqual(members, ["receipt.json"]);
+		});
+	});
+
 	it("does not turn a transport failure into an absent receipt", async () => {
 		let failures = true;
 
@@ -1317,6 +1369,12 @@ describe("controller publication and waiting recovery", () => {
 				});
 			};
 
+			f.fake.logs.set(
+				"lint",
+				"  × eslint(no-unused-vars): unused value\n    ╭─[src/a.ts:1:1]\n  × eslint(no-debugger): hidden\n    ╭─[test/acceptance/1/checks/a.test.ts:1:1]\n",
+			);
+			f.fake.logs.set("heldout", "hidden held-out output naming src/a.ts");
+
 			const dir = join(f.root, "validation", runId);
 			await f.step();
 			assert.equal(existsSync(join(dir, "assessment.json")), false);
@@ -1355,6 +1413,16 @@ describe("controller publication and waiting recovery", () => {
 
 				assert.equal(feedback.version, 2);
 				assert.deepEqual(feedback.assessment, first.assessment.ref);
+				assert.deepEqual(feedback.scenarios, [
+					{
+						check: "lint",
+						lines: ["src/a.ts:1:1 eslint(no-unused-vars): unused value"],
+					},
+				]);
+				assert.doesNotMatch(
+					readFileSync(join(dir, "feedback.json"), "utf8"),
+					/hidden|acceptance/,
+				);
 			}
 
 			const again = await f.step();
@@ -1508,6 +1576,60 @@ describe("controller publication and waiting recovery", () => {
 			),
 			/unsafe_symlink/,
 		);
+	});
+
+	it("collects a repair round without the controller's own acceptance removal, and still forbids model edits there", async () => {
+		const f = await validationFixture();
+
+		const tracked: [string, string][] = [
+			["test/acceptance/561/checks/human-review.test.mjs", "public"],
+			["Test/Acceptance/canary.test.ts", "secret"],
+		];
+
+		for (const [path, text] of tracked) {
+			mkdirSync(join(f.base, path, ".."), { recursive: true });
+			writeFileSync(join(f.base, path), text);
+		}
+
+		const repair = join(f.root, "repair");
+		await prepareRepairTree(
+			f.base,
+			repair,
+			f.patch.patch,
+			f.patch.changedPaths,
+			"{}",
+		);
+		rmSync(join(repair, ".factory-feedback.json"));
+
+		const collect = () =>
+			collectPatch({ base: f.base, workspace: repair, repairTree: true });
+
+		const clean = await collect();
+		assert.ok(clean.kind === "collected");
+		assert.equal(clean.policy, "clean");
+		assert.deepEqual(clean.changedPaths, f.patch.changedPaths);
+		assert.equal(clean.patchDigest, f.patch.patchDigest);
+		assert.doesNotMatch(clean.patch.toString(), /acceptance/i);
+
+		for (const path of [
+			"test/acceptance/561/checks/human-review.test.mjs",
+			"test/acceptance/562/checks/new.test.mjs",
+			"Test/Acceptance/canary.test.ts",
+		]) {
+			mkdirSync(join(repair, path, ".."), { recursive: true });
+			writeFileSync(join(repair, path), "model edit");
+			const edited = await collect();
+			assert.ok(edited.kind === "collected");
+			assert.equal(edited.policy, "forbidden");
+			assert.ok(edited.changedPaths.includes(path));
+			rmSync(join(repair, path.split("/").slice(0, 2).join("/")), {
+				recursive: true,
+			});
+		}
+
+		const initial = await collectPatch({ base: f.base, workspace: repair });
+		assert.ok(initial.kind === "collected");
+		assert.equal(initial.policy, "forbidden");
 	});
 });
 

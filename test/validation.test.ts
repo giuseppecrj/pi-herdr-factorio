@@ -20,6 +20,9 @@ import {
 	matchesCiRun,
 	parseCiRun,
 	repairFeedback,
+	checkFeedback,
+	feedbackBytes,
+	readFeedbackBytes,
 	type CiRun,
 	type ValidationState,
 	parseValidationState,
@@ -1307,6 +1310,119 @@ describe("published held-out bytes and repair feedback", () => {
 		assert.doesNotMatch(
 			JSON.stringify(feedback),
 			/secret|assert|test\.ts|Readability/,
+		);
+	});
+
+	it("excerpts failed lint, typecheck, format and candidate-test lines for the candidate's own files only, within the bound", () => {
+		const lint = [
+			"\u001b[31m  × anti-slop(require-readable-spacing): Expected blank line before this statement.\u001b[0m",
+			"    ╭─[test/provenance.test.ts:26:2]",
+			" 26 │   return root;",
+			"    ╰────",
+			"  × eslint(no-unused-vars): Variable 'secret' is declared but never used.",
+			"    ╭─[src/untouched.ts:3:7]",
+			"  × eslint(no-debugger): `debugger` statement is not allowed",
+			"    ╭─[test/acceptance/42/checks/a.test.ts:1:1]",
+			"Found 0 warnings and 3 errors.",
+		].join("\n");
+
+		const tests = `${JSON.stringify({
+			complete: true,
+			bad: true,
+			counts: {},
+			failures: [
+				{
+					file: "test/provenance.test.ts",
+					name: "keeps the provenance file",
+					kind: "runtime_error",
+					code: "EROFS",
+					message:
+						"EROFS: read-only file system, mkdtemp '/w/.provenance-test-XXXXXX'",
+				},
+				{
+					file: "test/acceptance/42/checks/a.test.ts",
+					name: "hidden scenario name",
+					kind: "assertion",
+					code: "ERR_ASSERTION",
+					message: "hidden scenario message about scripts/provenance.sh",
+				},
+			],
+		})}\nstderr noise naming test/provenance.test.ts\n`;
+
+		const changedPaths = [
+			"scripts/provenance.sh",
+			"test/provenance.test.ts",
+			"test/acceptance/42/checks/a.test.ts",
+		];
+
+		const feedback = checkFeedback({
+			logs: new Map([
+				["lint", lint],
+				["candidate_tests", tests],
+				["typecheck", "scripts/provenance.sh(1,1): error TS1: unused\n"],
+				["format", "test/provenance.test.ts format ━━━━━━━━━━\n"],
+			]),
+			failed: ["lint", "candidate_tests", "format"],
+			changedPaths,
+			heldoutDir: "test/acceptance/42",
+		});
+
+		assert.deepEqual(feedback, [
+			{
+				check: "lint",
+				lines: [
+					"test/provenance.test.ts:26:2 anti-slop(require-readable-spacing): Expected blank line before this statement.",
+				],
+			},
+			{ check: "format", lines: ["test/provenance.test.ts format"] },
+			{
+				check: "candidate_tests",
+				lines: [
+					"test/provenance.test.ts: keeps the provenance file: runtime_error EROFS: EROFS: read-only file system, mkdtemp '/w/.provenance-test-XXXXXX'",
+				],
+			},
+		]);
+		assert.doesNotMatch(
+			JSON.stringify(feedback),
+			/acceptance|hidden|secret|untouched|TS1/,
+		);
+
+		const many = Array.from(
+			{ length: 400 },
+			(_, i) =>
+				`test/provenance.test.ts(${i},1): error TS2: ${"x".repeat(500)}`,
+		).join("\n");
+
+		const bounded = checkFeedback({
+			logs: new Map(
+				["typecheck", "lint", "format", "candidate_tests"].map((name) => [
+					name,
+					name === "candidate_tests" ? tests : many,
+				]),
+			),
+			failed: ["typecheck", "lint", "format", "candidate_tests"],
+			changedPaths,
+			heldoutDir: "test/acceptance/42",
+		});
+
+		assert.ok(Buffer.byteLength(JSON.stringify(bounded)) <= 4096);
+		assert.ok(bounded.length >= 2);
+
+		for (const entry of bounded) {
+			assert.ok(entry.lines.length <= 5);
+			assert.ok(entry.lines.every((line) => line.length <= 300));
+		}
+
+		const ref = { bindingDigest: digestOf("b"), recordDigest: digestOf("r") };
+		const scenarios = [{ scenario: "S1", criteria: [{ id: "A1", text: "x" }] }];
+
+		assert.deepEqual(
+			readFeedbackBytes(feedbackBytes(ref, [...scenarios, ...feedback]), ref),
+			[...scenarios, ...feedback],
+		);
+		assert.equal(
+			feedbackBytes(ref, scenarios),
+			`${JSON.stringify({ version: 2, assessment: ref, scenarios })}\n`,
 		);
 	});
 });

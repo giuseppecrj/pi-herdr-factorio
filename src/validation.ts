@@ -401,6 +401,205 @@ export function repairFeedback(
 	);
 }
 
+export type ScenarioFeedback = Readonly<{
+	scenario: string;
+	criteria: readonly Readonly<{ id: string; text: string }>[];
+	check?: undefined;
+}>;
+
+export const FEEDBACK_CHECKS = [
+	"typecheck",
+	"lint",
+	"format",
+	"candidate_tests",
+] as const;
+
+export type CheckFeedback = Readonly<{
+	check: (typeof FEEDBACK_CHECKS)[number];
+	lines: readonly string[];
+	scenario?: undefined;
+}>;
+
+export type ValidationFeedback = ScenarioFeedback | CheckFeedback;
+
+const FEEDBACK_MAX_BYTES = 4096,
+	FEEDBACK_LINES = 5,
+	FEEDBACK_LINE_CHARS = 300;
+
+// ANSI escape sequences, built from a string because a regular expression
+// literal may not contain the escape control character.
+const ANSI = new RegExp(
+	`${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`,
+	"g",
+);
+
+function hiddenPath(path: string, heldoutDir: string): boolean {
+	const lower = path.toLowerCase();
+
+	return (
+		lower === "test/acceptance" ||
+		lower.startsWith("test/acceptance/") ||
+		path === heldoutDir ||
+		path.startsWith(`${heldoutDir}/`)
+	);
+}
+
+function mentions(line: string, path: string): boolean {
+	for (let at = line.indexOf(path); at >= 0; at = line.indexOf(path, at + 1)) {
+		const before = line[at - 1] ?? " ",
+			after = line[at + path.length] ?? " ";
+
+		if (!/[\w.\-/]/.test(before) && !/[\w\-/]/.test(after)) return true;
+	}
+
+	return false;
+}
+
+function toolLines(log: string): string[] {
+	const lines: string[] = [];
+	let header: string | null = null;
+
+	for (const raw of log.replace(ANSI, "").split(/\r?\n/)) {
+		const text = raw.trim();
+		const marker = /^[×⚠!]\s*(.*)$/u.exec(text);
+
+		if (marker !== null) {
+			header = marker[1] ?? "";
+			continue;
+		}
+
+		const at = /^╭─\[([^\]]+)\]/u.exec(text);
+
+		if (at !== null && header !== null) lines.push(`${at[1]} ${header}`);
+		else lines.push(text.replace(/\s*[━─]+$/u, ""));
+		header = at === null ? header : null;
+	}
+
+	return lines;
+}
+
+function testLines(log: string, visible: readonly string[]): string[] {
+	for (const raw of log.split("\n")) {
+		const failures = arrayOf(
+			fieldOf(objectOf(parseJson(raw.trim())), "failures"),
+		);
+
+		if (failures === null) continue;
+
+		return failures.flatMap((item) => {
+			const f = objectOf(item);
+			const file = textOf(fieldOf(f, "file"));
+			const name = textOf(fieldOf(f, "name"));
+
+			const kind = [textOf(fieldOf(f, "kind")), textOf(fieldOf(f, "code"))]
+				.filter((part) => part !== null)
+				.join(" ");
+
+			return file === null || name === null || !visible.includes(file)
+				? []
+				: [`${file}: ${name}: ${kind}: ${textOf(fieldOf(f, "message")) ?? ""}`];
+		});
+	}
+
+	return [];
+}
+
+/**
+ * A bounded excerpt of the failed visible gate checks, for repair. It keeps
+ * only lines that name one of the candidate's own changed files, never a
+ * held-out or acceptance path, and never the held-out run's output.
+ */
+export function checkFeedback(input: {
+	readonly logs: ReadonlyMap<string, string>;
+	readonly failed: readonly string[];
+	readonly changedPaths: readonly string[];
+	readonly heldoutDir: string;
+}): CheckFeedback[] {
+	const visible = input.changedPaths.filter(
+		(path) => !hiddenPath(path, input.heldoutDir),
+	);
+
+	const hiddenText = (line: string) =>
+		line.toLowerCase().includes("test/acceptance") ||
+		(input.heldoutDir !== "" && line.includes(input.heldoutDir));
+
+	const result: CheckFeedback[] = [];
+
+	for (const check of FEEDBACK_CHECKS) {
+		const log = input.logs.get(check);
+
+		if (!input.failed.includes(check) || log === undefined) continue;
+		const lines: string[] = [];
+
+		for (const raw of check === "candidate_tests"
+			? testLines(log, visible)
+			: toolLines(log)) {
+			if (lines.length >= FEEDBACK_LINES) break;
+
+			const line =
+				raw.length > FEEDBACK_LINE_CHARS
+					? `${raw.slice(0, FEEDBACK_LINE_CHARS - 1)}…`
+					: raw;
+
+			if (
+				!visible.some((path) => mentions(line, path)) ||
+				hiddenText(line) ||
+				lines.includes(line) ||
+				Buffer.byteLength(
+					JSON.stringify([...result, { check, lines: [...lines, line] }]),
+				) > FEEDBACK_MAX_BYTES
+			)
+				continue;
+			lines.push(line);
+		}
+
+		if (lines.length > 0) result.push({ check, lines });
+	}
+
+	return result;
+}
+
+export function parseCheckFeedback(
+	value: JsonValue | undefined,
+): CheckFeedback[] | null {
+	const result: CheckFeedback[] = [];
+
+	for (const item of arrayOf(value) ?? []) {
+		const entry = parseFeedbackEntry(item);
+
+		if (entry?.check === undefined) return null;
+		result.push(entry);
+	}
+
+	return arrayOf(value) === null ? null : result;
+}
+
+function parseFeedbackEntry(
+	item: JsonValue | undefined,
+): ValidationFeedback | null {
+	const o = objectOf(item);
+	const check = FEEDBACK_CHECKS.find((name) => name === fieldOf(o, "check"));
+
+	if (fieldOf(o, "check") !== undefined) {
+		const lines = textsOf(fieldOf(o, "lines"));
+
+		return check === undefined || lines === null ? null : { check, lines };
+	}
+
+	const scenario = textOf(fieldOf(o, "scenario"));
+	const criteria: { id: string; text: string }[] = [];
+
+	for (const c of arrayOf(fieldOf(o, "criteria")) ?? []) {
+		const id = textOf(fieldOf(objectOf(c), "id"));
+		const body = textOf(fieldOf(objectOf(c), "text"));
+
+		if (id === null || body === null) return null;
+		criteria.push({ id, text: body });
+	}
+
+	return scenario === null ? null : { scenario, criteria };
+}
+
 export function parseValidationState(
 	value: JsonValue | undefined,
 ): ValidationState | null {
@@ -554,7 +753,7 @@ export type ReadAssessment = Readonly<{
 export type RepairFeedbackFile = Readonly<{
 	version: 2;
 	assessment: AssessmentRef;
-	scenarios: ReturnType<typeof repairFeedback>;
+	scenarios: readonly ValidationFeedback[];
 }>;
 
 export function assessmentBinding(input: {
@@ -672,7 +871,7 @@ export function sameAssessmentRef(
 
 export function feedbackBytes(
 	ref: AssessmentRef,
-	scenarios: ReturnType<typeof repairFeedback>,
+	scenarios: readonly ValidationFeedback[],
 ): string {
 	const file: RepairFeedbackFile = {
 		version: 2,
@@ -689,31 +888,17 @@ export function feedbackBytes(
 export function readFeedbackBytes(
 	text: string,
 	ref: AssessmentRef,
-): ReturnType<typeof repairFeedback> | null {
+): ValidationFeedback[] | null {
 	const v = objectOf(parseJson(text));
 	const a = objectOf(fieldOf(v, "assessment"));
 	const list = arrayOf(fieldOf(v, "scenarios"));
-
-	const scenarios: {
-		scenario: string;
-		criteria: { id: string; text: string }[];
-	}[] = [];
+	const scenarios: ValidationFeedback[] = [];
 
 	for (const item of list ?? []) {
-		const o = objectOf(item);
-		const scenario = textOf(fieldOf(o, "scenario"));
-		const criteria: { id: string; text: string }[] = [];
+		const entry = parseFeedbackEntry(item);
 
-		for (const c of arrayOf(fieldOf(o, "criteria")) ?? []) {
-			const id = textOf(fieldOf(objectOf(c), "id"));
-			const body = textOf(fieldOf(objectOf(c), "text"));
-
-			if (id === null || body === null) return null;
-			criteria.push({ id, text: body });
-		}
-
-		if (scenario === null) return null;
-		scenarios.push({ scenario, criteria });
+		if (entry === null) return null;
+		scenarios.push(entry);
 	}
 
 	const bindingDigest = textOf(fieldOf(a, "bindingDigest"));
