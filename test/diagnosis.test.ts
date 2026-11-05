@@ -16,10 +16,15 @@ import { test } from "node:test";
 import { acceptanceEntries, writeAcceptance } from "../src/accept.ts";
 import {
 	assessBase,
+	BASE_RETRY,
+	baseRetryFeedback,
 	classifyFailure,
 	diagnosisNeeds,
 	diagnosisNotice,
+	parseBaseReason,
 	parseFailureClass,
+	retryableBaseReason,
+	type BaseReason,
 	type BaseReceipt,
 	type ClassifyInput,
 	type FailureClass,
@@ -2374,4 +2379,150 @@ test("notices and the failure codec name which pair disagreed, with a path count
 		},
 	])
 		assert.equal(parseFailureClass(parseJson(JSON.stringify(bad))), null);
+});
+
+const AUTHOR_FIXABLE: readonly BaseReason[] = [
+	"acceptance_not_reproduced",
+	"preservation_failed",
+	"base_load_error",
+	"base_no_tests",
+	"base_non_assertion_failure",
+	"base_skip",
+	"base_todo",
+	"base_cancelled",
+	"base_nondeterministic",
+];
+
+const NOT_AUTHOR: readonly BaseReason[] = [
+	"base_runner_error",
+	"base_timeout",
+	"base_tree_unsupported",
+	"base_interrupted",
+	"base_evidence_missing",
+];
+
+test("accept retry: one exhaustive table classifies every base reason", () => {
+	assert.deepEqual(
+		Object.keys(BASE_RETRY).toSorted(),
+		[...AUTHOR_FIXABLE, ...NOT_AUTHOR].toSorted(),
+	);
+
+	for (const reason of AUTHOR_FIXABLE) {
+		assert.equal(parseBaseReason(reason), reason);
+		assert.equal(BASE_RETRY[reason], "author", reason);
+		assert.equal(retryableBaseReason(reason), true, reason);
+	}
+
+	for (const reason of NOT_AUTHOR) {
+		assert.equal(parseBaseReason(reason), reason);
+		assert.equal(retryableBaseReason(reason), false, reason);
+	}
+});
+
+function refusedEvidence(
+	files: number,
+	message: string,
+): ReturnType<typeof assessBase> {
+	const sha = "a".repeat(40);
+	const repo = "o/r";
+
+	if (!isGitSha(sha) || !isRepoSlug(repo)) throw new Error("fixture");
+
+	return assessBase({
+		binding: {
+			runId: digestOf("r"),
+			repo,
+			issue: 9,
+			contractDigest,
+			acceptanceDigest: digestOf("a"),
+			baseSha: sha,
+			gateSha: sha,
+		},
+		runtime: {
+			runner: "local-bwrap",
+			node: "v",
+			platform: "p",
+			bwrap: "b",
+			protocolDigest: digestOf("p"),
+		},
+		startedAt: 1,
+		finishedAt: 2,
+		source: {
+			kind: "ready",
+			treeDigest: digestOf("t"),
+			lockDigest: digestOf("l"),
+			gatesDigest: digestOf("g"),
+		},
+		...(() => {
+			const execution = {
+				kind: "observed" as const,
+				exitCode: 1,
+				wallMs: 1,
+				files: Array.from({ length: files }, (_, i) => ({
+					file: `checks/s${i + 1}.test.mjs`,
+					registered: 1,
+					failures: [
+						{
+							file: `checks/s${i + 1}.test.mjs`,
+							name: `PRIVATE-NAME-${i + 1}`,
+							message,
+							code: "ERR_ASSERTION",
+							kind: "assertion" as const,
+						},
+					],
+				})),
+			};
+
+			return { execution, repeat: execution };
+		})(),
+		scenarios: Array.from({ length: files }, (_, i) => ({
+			scenario: `S${i + 1}`,
+			kind: "preservation" as const,
+			mode: "checked" as const,
+			file: `checks/s${i + 1}.test.mjs`,
+			oracleKey: {
+				contractScopeDigest: digestOf("s"),
+				criteriaDigest: digestOf("c"),
+				sourceDigest: digestOf(`f${i}`),
+			},
+		})),
+	});
+}
+
+test("accept retry: feedback carries the refusal facts, bounded per file and in total", () => {
+	const one = refusedEvidence(1, "Expected values to be strictly equal");
+	assert.equal(one.assessment.kind, "refused");
+
+	if (one.assessment.kind !== "refused") return;
+	const feedback = baseRetryFeedback(one.receipt, one.assessment.failure);
+
+	assert.deepEqual(feedback, {
+		reason: "preservation_failed",
+		sentence: "A preservation check fails on the unchanged base.",
+		scenarios: ["S1"],
+		files: [
+			{
+				scenario: "S1",
+				file: "checks/s1.test.mjs",
+				kind: "assertion",
+				code: "ERR_ASSERTION",
+				message: "Expected values to be strictly equal",
+			},
+		],
+		omitted: 0,
+	});
+	assert.doesNotMatch(JSON.stringify(feedback), /PRIVATE-NAME/);
+
+	const many = refusedEvidence(30, "x".repeat(2_000));
+	assert.equal(many.assessment.kind, "refused");
+
+	if (many.assessment.kind !== "refused") return;
+	const bounded = baseRetryFeedback(many.receipt, many.assessment.failure);
+
+	assert.ok(Buffer.byteLength(JSON.stringify(bounded)) <= 4096);
+	assert.ok(bounded.files.length > 0);
+	assert.ok(bounded.files.every((f) => f.message.length <= 500));
+	assert.equal(bounded.files.length + bounded.omitted, 30);
+	assert.ok(bounded.omitted > 0);
+	assert.equal(bounded.scenarios.length, 30);
 });

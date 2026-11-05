@@ -696,6 +696,110 @@ export function parseBaseReason(
 	return BASE_REASONS.find((r) => r === value) ?? null;
 }
 
+/**
+ * Whether the accept author can fix a base refusal. `author` allows the one
+ * feedback retry; `final` keeps the pre-retry behavior. Typed over every
+ * `BaseReason`, so a new reason must be classified to compile.
+ */
+export const BASE_RETRY = {
+	acceptance_not_reproduced: "author",
+	preservation_failed: "author",
+	base_load_error: "author",
+	base_no_tests: "author",
+	base_non_assertion_failure: "author",
+	base_skip: "author",
+	base_todo: "author",
+	base_cancelled: "author",
+	base_nondeterministic: "author",
+	base_runner_error: "final",
+	base_timeout: "final",
+	base_tree_unsupported: "final",
+	base_interrupted: "final",
+	base_evidence_missing: "final",
+} as const satisfies Readonly<Record<BaseReason, "author" | "final">>;
+
+export function retryableBaseReason(reason: BaseReason): boolean {
+	return BASE_RETRY[reason] === "author";
+}
+
+export const RETRY_MESSAGE_CHARS = 500;
+export const RETRY_FEEDBACK_BYTES = 4096;
+
+export type RetryFileFeedback = Readonly<{
+	scenario: string;
+	file: string;
+	kind: TestFailure["kind"] | "passed" | "not_observed";
+	code: string | null;
+	message: string;
+}>;
+
+/** Private refusal facts for the accept retry prompt only; never published. */
+export type RetryFeedback = Readonly<{
+	reason: BaseReason;
+	sentence: string;
+	scenarios: readonly string[];
+	files: readonly RetryFileFeedback[];
+	omitted: number;
+}>;
+
+export function baseRetryFeedback(
+	receipt: BaseReceipt,
+	failure: BaseRefusal,
+): RetryFeedback {
+	const execution = receipt.evidence.execution;
+	const scenarios = failure.scenarios.filter((s) => SCENARIO_ID.test(s));
+
+	const candidates = receipt.evidence.scenarios.flatMap(
+		(s): RetryFileFeedback[] => {
+			if (s.mode !== "checked" || !scenarios.includes(s.scenario)) return [];
+
+			const observed =
+				execution.kind === "observed"
+					? execution.files.find((f) => f.file === s.file)
+					: undefined;
+
+			const first = observed?.failures[0];
+
+			return [
+				{
+					scenario: s.scenario,
+					file: s.file.slice(0, 300),
+					kind:
+						first?.kind ?? (observed === undefined ? "not_observed" : "passed"),
+					code: first?.code?.slice(0, 100) ?? null,
+					message: (first?.message ?? "").slice(0, RETRY_MESSAGE_CHARS),
+				},
+			];
+		},
+	);
+
+	const files: RetryFileFeedback[] = [];
+
+	const size = (list: readonly RetryFileFeedback[]) =>
+		Buffer.byteLength(
+			JSON.stringify({
+				reason: failure.reason,
+				sentence: BASE_REASON_SENTENCES[failure.reason],
+				scenarios,
+				files: list,
+				omitted: candidates.length,
+			}),
+		);
+
+	for (const entry of candidates) {
+		if (size([...files, entry]) > RETRY_FEEDBACK_BYTES) break;
+		files.push(entry);
+	}
+
+	return {
+		reason: failure.reason,
+		sentence: BASE_REASON_SENTENCES[failure.reason],
+		scenarios,
+		files,
+		omitted: candidates.length - files.length,
+	};
+}
+
 export function baseRefusalNotice(failure: BaseRefusal) {
 	const reasons = BASE_REASON_SENTENCES;
 
