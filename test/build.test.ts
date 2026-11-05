@@ -669,6 +669,6 @@ test("build and repair prompts say CI runs tests read-only at the root, so temp 
 	for (const text of [prompt, feedbackPrompt("{}")])
 		assert.match(
 			text,
-			/lint, format or typecheck entry[^\n]*npm run lint, npm run format:check or npm run typecheck[^\n]*to see the details/,
+			/lint, format or typecheck entry[^\n]*npm run lint, npm run format:check or npm run typecheck[^\n]*to see the details[^\n]*base copies of \.oxlintrc\.json, tsconfig\.json and biome\.json[^\n]*never change them to make a check pass/,
 		);
 });
