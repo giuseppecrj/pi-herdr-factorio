@@ -87,6 +87,7 @@ import {
 	type BaseCheckInput,
 	type BaseCheckProgress,
 	type BaseReason,
+	type BaseReceipt,
 } from "../src/diagnosis.ts";
 import { advance } from "../src/stages.ts";
 import {
@@ -414,33 +415,78 @@ const QUESTIONS_TEXT = JSON.stringify({
 	],
 });
 
+type BaseOutcome = "ready" | "checking" | "interrupted" | BaseReason;
+
 class FakeExecutor implements StageExecutor {
-	baseOutcome: "ready" | "checking" | "interrupted" | BaseReason = "ready";
+	baseOutcome: BaseOutcome = "ready";
+	/**
+	 * Outcomes by suite, in the order suites first reach the base check. A
+	 * list is consumed one launching check at a time; its last entry stays.
+	 */
+	baseOutcomes: (BaseOutcome | BaseOutcome[])[] | null = null;
+	readonly baseSuites: Digest[] = [];
+	/** The stored receipt a refusal carries, when the check ran. */
+	baseReceipt: ((binding: BaseCheckInput["binding"]) => BaseReceipt) | null =
+		null;
+	/** What each interrupted base check charged. */
+	baseInterruptMs = 1000;
+	readonly #interrupted = new Map<Digest, number>();
 	readonly baseChecks: BaseCheckInput[] = [];
 	readonly baseStops: Digest[] = [];
 
 	async baseCheck(input: BaseCheckInput): Promise<BaseCheckProgress> {
 		this.baseChecks.push(input);
+		const suite = input.binding.acceptanceDigest;
 
-		switch (this.baseOutcome) {
+		if (!this.baseSuites.includes(suite)) this.baseSuites.push(suite);
+
+		const planned = this.baseOutcomes?.[this.baseSuites.indexOf(suite)];
+
+		const outcome =
+			planned === undefined
+				? this.baseOutcome
+				: !Array.isArray(planned)
+					? planned
+					: input.readOnly !== true && planned.length > 1
+						? (planned.shift() ?? this.baseOutcome)
+						: (planned.at(-1) ?? this.baseOutcome);
+
+		switch (outcome) {
 			case "ready":
 				return { kind: "ready", proof: qualifiedProof(input.binding) };
 			case "checking":
 				return { kind: "checking" };
 			case "interrupted":
-				return { kind: "interrupted", wallMs: 1000 };
-			default:
+				this.#interrupted.set(
+					suite,
+					(this.#interrupted.get(suite) ?? 0) + this.baseInterruptMs,
+				);
+
+				return { kind: "interrupted", wallMs: this.baseInterruptMs };
+			default: {
+				const failure = {
+					binding: input.binding,
+					receiptDigest: digestOf(
+						JSON.stringify([input.binding, input.acceptAttempt]),
+					),
+					reason: outcome,
+					scenarios: ["S1"],
+				};
+
+				if (this.baseReceipt === null) return { kind: "refused", failure };
+				const receipt = this.baseReceipt(input.binding);
+
+				// Like the controller: every attempt's wall on this binding.
 				return {
 					kind: "refused",
-					failure: {
-						binding: input.binding,
-						receiptDigest: digestOf(
-							JSON.stringify([input.binding, input.acceptAttempt]),
-						),
-						reason: this.baseOutcome,
-						scenarios: ["S1"],
-					},
+					failure,
+					receipt,
+					baseWallMs:
+						receipt.evidence.finishedAt -
+						receipt.evidence.startedAt +
+						(this.#interrupted.get(suite) ?? 0),
 				};
+			}
 		}
 	}
 
@@ -482,6 +528,8 @@ class FakeExecutor implements StageExecutor {
 	buildPolicy: "clean" | "forbidden" = "clean";
 	readonly builds = new Map<string, Extract<StageOutput, { kind: "build" }>>();
 	acceptBehavior: Behavior = { kind: "unavailable" };
+	/** Accept behaviors by launch, before `acceptBehavior`. */
+	acceptBehaviors: Behavior[] = [];
 	acceptText: string | null = ACCEPTANCE_TEXT;
 	outputs: (string | null)[] = [];
 	text: string | null = CONTRACT_TEXT;
@@ -689,7 +737,7 @@ class FakeExecutor implements StageExecutor {
 			input.stage === "build"
 				? this.buildBehavior
 				: input.stage === "accept"
-					? this.acceptBehavior
+					? (this.acceptBehaviors.shift() ?? this.acceptBehavior)
 					: (this.behaviors.shift() ?? this.fallback);
 
 		this.launches.push(input);
@@ -1852,16 +1900,22 @@ describe("Orchestrator retries and stalls", () => {
 describe("Orchestrator base qualification", () => {
 	const refusals = (github: FakeGitHub) => keyed(github, 14, "base-refusal");
 
-	it("refuses a broken suite before build with one keyed public reason", async () => {
+	it("refuses a broken suite twice before build with only the final keyed public reason", async () => {
 		const { github, executor, start } = world();
 		github.add(labeled(14));
 		executor.behaviors = [{ kind: "pass", usage: 10 }];
 		executor.acceptBehavior = { kind: "pass", usage: 20 };
 		executor.baseOutcome = "preservation_failed";
+		executor.baseReceipt = (binding) => refusedReceipt(binding, FEEDBACK);
+		executor.spentBy.set("accept-1", 20);
 		const controller = start();
 		const report = await once(controller);
 		await controller.tick();
 		assert.ok(!executor.launches.some((l) => l.stage === "build"));
+		assert.deepEqual(
+			executor.launches.map((l) => `${l.stage}-${l.attempt}`),
+			["specify-1", "accept-1", "accept-2"],
+		);
 		assert.equal(statuses(github, 14).at(-1)?.endsWith(":failed"), true);
 		assert.equal(report.totals.failures, 1);
 		assert.equal(refusals(github).length, 1);
@@ -1869,10 +1923,632 @@ describe("Orchestrator base qualification", () => {
 			refusals(github)[0] ?? "",
 			/^Acceptance refused before build: preservation_failed\. A preservation check fails on the unchanged base\. Scenarios: S1\.\n\n<!-- factory-base-refusal run=[0-9a-f]{64} r=[0-9a-f]{64} -->$/,
 		);
+		const checked = executor.baseChecks.filter((c) => c.readOnly !== true);
+		assert.equal(executor.baseSuites.length, 2);
+		assert.deepEqual(
+			checked.map((c) => [c.binding.acceptanceDigest, c.acceptAttempt]),
+			[
+				[executor.baseSuites[0], 1],
+				[executor.baseSuites[1], 2],
+			],
+		);
+		assert.ok(
+			refusals(github)[0]?.includes(
+				digestOf(JSON.stringify([checked[1]?.binding, 2])),
+			),
+			"the notice is the second suite's refusal",
+		);
 		assert.equal(keyed(github, 14, "acceptance").length, 0);
-		assert.equal(executor.baseChecks.length, 1);
-		assert.equal(executor.baseChecks[0]?.acceptAttempt, 1);
-		assert.equal(executor.baseChecks[0]?.binding.issue, 14);
+		assert.equal(checked[0]?.binding.issue, 14);
+	});
+
+	function refusedReceipt(
+		binding: BaseCheckInput["binding"],
+		message: string,
+	): BaseReceipt {
+		const execution = {
+			kind: "observed" as const,
+			exitCode: 1,
+			wallMs: 5,
+			files: [
+				{
+					file: "checks/version.test.ts",
+					registered: 1,
+					failures: [
+						{
+							file: "checks/version.test.ts",
+							name: "PRIVATE-TEST-NAME",
+							message,
+							code: "ERR_ASSERTION",
+							kind: "assertion" as const,
+						},
+					],
+				},
+			],
+		};
+
+		return assessBase({
+			binding,
+			runtime: {
+				runner: "fixture",
+				node: process.version,
+				platform: process.platform,
+				bwrap: "fixture",
+				protocolDigest: digestOf("protocol"),
+			},
+			startedAt: 0,
+			finishedAt: 4_000,
+			source: {
+				kind: "ready",
+				treeDigest: digestOf("tree"),
+				lockDigest: digestOf("lock"),
+				gatesDigest: digestOf("gates"),
+			},
+			execution,
+			repeat: execution,
+			scenarios: [
+				{
+					scenario: "S1",
+					kind: "preservation",
+					mode: "checked",
+					file: "checks/version.test.ts",
+					oracleKey: {
+						contractScopeDigest: digestOf("scope"),
+						criteriaDigest: digestOf("criteria"),
+						sourceDigest: digestOf("source"),
+					},
+				},
+			],
+		}).receipt;
+	}
+
+	const FEEDBACK = "Expected PRIVATE-FEEDBACK-MESSAGE to equal 'v0.1.0'";
+
+	/** Ticks a controller; `pending` leaves a checking base check undrained. */
+	async function drive(
+		controller: Orchestrator,
+		clock: FakeClock,
+		pending = false,
+	) {
+		for (let tick = 0; tick < 4; tick++) {
+			if (pending) {
+				await controller.tick();
+				await settle();
+			} else await once(controller);
+			clock.t += 600_000;
+		}
+	}
+
+	const launched = (executor: FakeExecutor) => [
+		...new Set(executor.launches.map((l) => `${l.stage}-${l.attempt}`)),
+	];
+
+	it("retries a retryable refusal once with private feedback, then builds on a qualified proof", async () => {
+		const { github, executor, files, clock, start } = world();
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "pass", usage: 20 };
+		executor.baseOutcomes = ["preservation_failed", "ready"];
+		executor.baseReceipt = (binding) => refusedReceipt(binding, FEEDBACK);
+		executor.spentBy.set("accept-1", 20);
+		await drive(start(), clock);
+
+		assert.deepEqual(launched(executor), [
+			"specify-1",
+			"accept-1",
+			"accept-2",
+			"build-1",
+		]);
+		const [, first, retry, build] = executor.launches;
+		assert.doesNotMatch(first?.prompt ?? "", /base-refusal/);
+
+		const block =
+			/<base-refusal-([0-9a-f]{32})>\n(.*)\n<\/base-refusal-\1>/.exec(
+				retry?.prompt ?? "",
+			);
+
+		assert.ok(block, "the retry prompt carries one nonce-tagged block");
+		assert.match(retry?.prompt ?? "", new RegExp(`<contract-${block[1]}>`));
+		assert.deepEqual(JSON.parse(block[2] ?? ""), {
+			reason: "preservation_failed",
+			sentence: "A preservation check fails on the unchanged base.",
+			scenarios: ["S1"],
+			files: [
+				{
+					scenario: "S1",
+					file: "checks/version.test.ts",
+					kind: "assertion",
+					code: "ERR_ASSERTION",
+					message: FEEDBACK,
+					failedIn: "both",
+				},
+			],
+			omitted: 0,
+		});
+		assert.doesNotMatch(retry?.prompt ?? "", /PRIVATE-TEST-NAME/);
+		assert.equal(retry?.settings.maxTokens, 25_000 - 20);
+		// The retry runs in what is left of the one accept wall.
+		assert.equal(first?.settings.budget.wallMs, 900_000);
+		assert.equal(retry?.settings.budget.wallMs, 900_000 - 1 - 4_000);
+
+		const run = runOf(14);
+		const aside = join(files.artifactRoot, "acceptance", `${run}.retired`);
+
+		const retiredCanary = readFileSync(
+			join(aside, "suite", "canary.txt"),
+			"utf8",
+		).trim();
+
+		assert.match(retiredCanary, /^factory-holdout-[0-9a-f]{64}$/);
+
+		const current = readFileSync(
+			join(files.artifactRoot, "acceptance", run, "canary.txt"),
+			"utf8",
+		).trim();
+
+		assert.notEqual(current, retiredCanary);
+
+		for (const text of [
+			build?.prompt ?? "",
+			JSON.stringify(build),
+			...github.markers(14),
+		]) {
+			assert.ok(!text.includes(retiredCanary));
+			assert.ok(!text.includes("PRIVATE-FEEDBACK-MESSAGE"));
+			assert.doesNotMatch(text, /base-refusal-|PRIVATE-TEST-NAME/);
+		}
+
+		assert.equal(refusals(github).length, 0);
+		assert.equal(keyed(github, 14, "acceptance").length, 1);
+		assert.ok(
+			keyed(github, 14, "acceptance")[0]?.includes(
+				`a=${executor.baseSuites[1]?.slice(0, 12)}`,
+			) ?? false,
+			keyed(github, 14, "acceptance")[0] ?? "no acceptance summary",
+		);
+		const claim = files.claims.get(run);
+		assert.equal(claim?.stage, "build");
+		assert.equal(
+			claim?.baseCheck?.retry?.refused.acceptanceDigest,
+			executor.baseSuites[0],
+		);
+		assert.equal(
+			claim?.baseCheck?.binding.acceptanceDigest,
+			executor.baseSuites[1],
+		);
+		assert.equal(claim?.baseCheck?.acceptAttempt, 2);
+		assert.equal(claim?.baseCheck?.remainingAcceptMs, 900_000 - 2 - 4_000);
+		assert.ok(
+			executor.baseChecks
+				.filter((c) => c.readOnly === true)
+				.every(
+					(c) =>
+						c.binding.acceptanceDigest !== executor.baseSuites[0] ||
+						c.acceptAttempt === 1,
+				),
+		);
+	});
+
+	for (const reason of ["base_timeout", "base_runner_error"] as const)
+		it(`fails a ${reason} refusal at once, with no retry`, async () => {
+			const { github, executor, clock, start } = world();
+			github.add(labeled(14));
+			executor.behaviors = [{ kind: "pass", usage: 10 }];
+			executor.acceptBehavior = { kind: "pass", usage: 20 };
+			executor.baseOutcome = reason;
+			await drive(start(), clock);
+			assert.deepEqual(
+				executor.launches.map((l) => l.stage),
+				["specify", "accept"],
+			);
+			assert.equal(statuses(github, 14).at(-1)?.endsWith(":failed"), true);
+			assert.equal(refusals(github).length, 1);
+			assert.match(refusals(github)[0] ?? "", new RegExp(`: ${reason}\\. `));
+		});
+
+	for (const [exhausted, why] of [
+		["tokens", "stage_tokens"],
+		["attempts", "attempts"],
+		["run", "run_tokens"],
+		// An accept attempt with no spend record is unknown spend, not zero.
+		["unknown_spend", "stage_tokens"],
+		// Without the refused suite's receipt its base wall is unknown.
+		["no_receipt", "base_receipt"],
+		// An interrupted base check on the same suite spent the accept wall.
+		["wall", "wall"],
+	] as const)
+		it(`does not retry when the accept ${exhausted} allowance cannot admit it`, async () => {
+			const { github, executor, files, clock, logs, start } = world();
+			github.add(labeled(14));
+			executor.behaviors = [{ kind: "pass", usage: 10 }];
+			executor.acceptBehavior = {
+				kind: "pass",
+				usage: exhausted === "run" ? 499_990 : 20,
+			};
+			executor.baseOutcome = "preservation_failed";
+
+			if (exhausted !== "no_receipt")
+				executor.baseReceipt = (binding) => refusedReceipt(binding, FEEDBACK);
+
+			if (exhausted !== "unknown_spend")
+				executor.spentBy.set("accept-1", exhausted === "tokens" ? 25_000 : 20);
+
+			if (exhausted === "attempts")
+				setWorkflow(github, "max_attempts: 3", "max_attempts: 1");
+
+			if (exhausted === "wall") {
+				// 1 ms of model wall, 895,000 interrupted and the 4,000 refusal.
+				executor.baseOutcomes = [["interrupted", "preservation_failed"]];
+				executor.baseInterruptMs = 895_999;
+			}
+
+			await drive(start(), clock);
+			assert.deepEqual(
+				executor.launches.map((l) => l.stage),
+				["specify", "accept"],
+			);
+			assert.deepEqual(
+				logs
+					.filter((l) => l.event === "accept_retry_unavailable")
+					.map((l) => l.fields.why),
+				[why],
+			);
+			assert.equal(statuses(github, 14).at(-1)?.endsWith(":failed"), true);
+			assert.equal(refusals(github).length, 1);
+			assert.match(refusals(github)[0] ?? "", /: preservation_failed\. /);
+			assert.ok(
+				existsSync(join(files.artifactRoot, "acceptance", runOf(14))),
+				"the refused suite is not retired",
+			);
+		});
+
+	it("charges the retry to what is left of the accept token allowance", async () => {
+		const { github, executor, clock, start } = world();
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "pass", usage: 20 };
+		executor.baseOutcomes = ["preservation_failed", "ready"];
+		executor.baseReceipt = (binding) => refusedReceipt(binding, FEEDBACK);
+		executor.spentBy.set("accept-1", 18_000);
+		await drive(start(), clock);
+
+		const retry = executor.launches.find(
+			(l) => l.stage === "accept" && l.attempt === 2,
+		);
+
+		assert.equal(retry?.settings.maxTokens, 7_000);
+	});
+
+	for (const crash of ["before_retire", "after_retire", "after_claim"] as const)
+		it(`relaunches once after a restart between the refusal and the relaunch (${crash})`, async () => {
+			const { github, executor, files, clock, start } = world();
+			github.add(labeled(14));
+			executor.behaviors = [{ kind: "pass", usage: 10 }];
+			executor.acceptBehavior = { kind: "pass", usage: 20 };
+			executor.baseOutcomes = ["checking"];
+			executor.baseReceipt = (binding) => refusedReceipt(binding, FEEDBACK);
+			executor.spentBy.set("accept-1", 20);
+			await drive(start(), clock, true);
+			const claim = files.claims.get(runOf(14));
+			const first = claim?.baseCheck;
+			assert.ok(first);
+			assert.equal(first.retry, undefined);
+
+			if (crash !== "before_retire") {
+				const contract = await files.readContract(runOf(14));
+				assert.ok(contract.kind === "found");
+				assert.equal(
+					await files.artifacts.retire(
+						runOf(14),
+						contract.contract,
+						contract.digest,
+						first.binding.acceptanceDigest,
+					),
+					"retired",
+				);
+
+				if (crash === "after_claim")
+					files.claims.set(runOf(14), {
+						...claim,
+						baseCheck: {
+							...first,
+							retry: {
+								refused: first.binding,
+								reason: "preservation_failed",
+								receiptDigest: digestOf(JSON.stringify([first.binding, 1])),
+								scenarios: ["S1"],
+								baseWallMs: 4_000,
+							},
+						},
+					});
+			}
+
+			executor.baseOutcomes = ["preservation_failed", "ready"];
+			await drive(start(), clock);
+			await drive(start(), clock);
+			assert.deepEqual(launched(executor), [
+				"specify-1",
+				"accept-1",
+				"accept-2",
+				"build-1",
+			]);
+			assert.match(
+				executor.launches[2]?.prompt ?? "",
+				/PRIVATE-FEEDBACK-MESSAGE/,
+			);
+			assert.equal(refusals(github).length, 0);
+			assert.equal(files.claims.get(runOf(14))?.stage, "build");
+		});
+
+	it("never grants a second retry after a restart once the retried suite is stored", async () => {
+		const { github, executor, files, clock, start } = world();
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "pass", usage: 20 };
+		executor.baseOutcomes = ["preservation_failed", "checking"];
+		executor.baseReceipt = (binding) => refusedReceipt(binding, FEEDBACK);
+		executor.spentBy.set("accept-1", 20);
+		await drive(start(), clock, true);
+		assert.equal(
+			files.claims.get(runOf(14))?.baseCheck?.binding.acceptanceDigest,
+			executor.baseSuites[1],
+		);
+		executor.baseOutcomes = ["preservation_failed", "preservation_failed"];
+		await drive(start(), clock);
+		await drive(start(), clock);
+		assert.deepEqual(launched(executor), ["specify-1", "accept-1", "accept-2"]);
+		assert.equal(statuses(github, 14).at(-1)?.endsWith(":failed"), true);
+		assert.equal(refusals(github).length, 1);
+		const contract = await files.readContract(runOf(14));
+		assert.ok(contract.kind === "found");
+		assert.equal(
+			await files.artifacts.retire(
+				runOf(14),
+				contract.contract,
+				contract.digest,
+				executor.baseSuites[1] ?? digestOf("none"),
+			),
+			"refused",
+		);
+	});
+
+	/** The first suite's refusal notice, as the fake keys it. */
+	const original = (executor: FakeExecutor, run: Digest) =>
+		digestOf(
+			JSON.stringify([
+				executor.baseChecks.find(
+					(c) => c.binding.acceptanceDigest === executor.baseSuites[0],
+				)?.binding ?? { runId: run },
+				1,
+			]),
+		);
+
+	for (const ending of ["fail", "budget", "refuse", "hang"] as const)
+		it(`posts the first refusal once when the feedback attempt is the last allowed and ends ${ending}`, async () => {
+			const { github, executor, clock, start } = world();
+			github.add(labeled(14));
+			setWorkflow(github, "max_attempts: 3", "max_attempts: 2");
+			executor.behaviors = [{ kind: "pass", usage: 10 }];
+			executor.acceptBehaviors = [{ kind: "pass", usage: 20 }];
+			executor.acceptBehavior =
+				ending === "hang" ? { kind: "hang" } : { kind: ending, usage: 30 };
+			executor.baseOutcomes = ["preservation_failed"];
+			executor.baseReceipt = (binding) => refusedReceipt(binding, FEEDBACK);
+			executor.spentBy.set("accept-1", 20);
+			const controller = start();
+			await drive(controller, clock, true);
+			await drive(controller, clock, true);
+
+			assert.deepEqual(launched(executor), [
+				"specify-1",
+				"accept-1",
+				"accept-2",
+			]);
+			assert.match(
+				statuses(github, 14).at(-1) ?? "",
+				ending === "budget" ? /:budget_exhausted$/ : /:failed$/,
+			);
+			assert.equal(refusals(github).length, 1);
+			assert.match(
+				refusals(github)[0] ?? "",
+				new RegExp(
+					`^Acceptance refused before build: preservation_failed\\. .* r=${original(executor, runOf(14))} -->$`,
+					"s",
+				),
+			);
+		});
+
+	for (const [maxAttempts, recorded] of [
+		[2, true],
+		[3, true],
+		// The interrupted feedback attempt left no spend record: unknown spend.
+		[3, false],
+	] as const)
+		it(`recovers a restart while the feedback attempt runs, at max_attempts: ${maxAttempts}${recorded ? "" : " with its spend unknown"}`, async () => {
+			const { github, executor, files, clock, logs, start } = world();
+			github.add(labeled(14));
+			setWorkflow(github, "max_attempts: 3", `max_attempts: ${maxAttempts}`);
+			executor.behaviors = [{ kind: "pass", usage: 10 }];
+			executor.acceptBehaviors = [
+				{ kind: "pass", usage: 20 },
+				{ kind: "hang" },
+			];
+			executor.acceptBehavior = { kind: "pass", usage: 20 };
+			executor.baseOutcomes = ["preservation_failed", "ready"];
+			executor.baseReceipt = (binding) => refusedReceipt(binding, FEEDBACK);
+			executor.spentBy.set("accept-1", 20);
+			const first = start();
+
+			// No clock movement, so the hung feedback attempt never stalls.
+			for (let tick = 0; tick < 6; tick++) {
+				await first.tick();
+				await settle();
+			}
+
+			assert.deepEqual(launched(executor), [
+				"specify-1",
+				"accept-1",
+				"accept-2",
+			]);
+			assert.equal(statuses(github, 14).at(-1)?.endsWith(":running"), true);
+
+			if (recorded) executor.spentBy.set("accept-2", 5);
+			await drive(start(), clock);
+			await drive(start(), clock);
+
+			if (!recorded) {
+				assert.deepEqual(launched(executor), [
+					"specify-1",
+					"accept-1",
+					"accept-2",
+				]);
+				assert.deepEqual(
+					logs
+						.filter((l) => l.event === "launch_refused")
+						.map((l) => l.fields.why),
+					["stage_tokens"],
+				);
+				assert.equal(
+					statuses(github, 14).at(-1)?.endsWith(":budget_exhausted"),
+					true,
+				);
+				assert.equal(refusals(github).length, 1);
+				assert.ok(refusals(github)[0]?.includes(original(executor, runOf(14))));
+
+				return;
+			}
+
+			if (maxAttempts === 2) {
+				assert.deepEqual(launched(executor), [
+					"specify-1",
+					"accept-1",
+					"accept-2",
+				]);
+				assert.equal(statuses(github, 14).at(-1)?.endsWith(":failed"), true);
+				assert.equal(refusals(github).length, 1);
+				assert.ok(refusals(github)[0]?.includes(original(executor, runOf(14))));
+
+				return;
+			}
+
+			assert.deepEqual(launched(executor), [
+				"specify-1",
+				"accept-1",
+				"accept-2",
+				"accept-3",
+				"build-1",
+			]);
+
+			const relaunch = executor.launches.find(
+				(l) => l.stage === "accept" && l.attempt === 3,
+			);
+
+			assert.match(relaunch?.prompt ?? "", /PRIVATE-FEEDBACK-MESSAGE/);
+			assert.equal(relaunch?.settings.maxTokens, 25_000 - 20 - 5);
+			assert.equal(refusals(github).length, 0);
+			assert.equal(files.claims.get(runOf(14))?.stage, "build");
+		});
+
+	for (const failure of ["retire", "contract_once"] as const)
+		it(`recovers a granted retry whose retirement ${failure === "retire" ? "fails, posting the first refusal" : "meets one transient contract read failure"}`, async () => {
+			const { github, executor, files, clock, start } = world();
+			github.add(labeled(14));
+			executor.behaviors = [{ kind: "pass", usage: 10 }];
+			executor.acceptBehavior = { kind: "pass", usage: 20 };
+			executor.baseOutcomes = ["checking"];
+			executor.baseReceipt = (binding) => refusedReceipt(binding, FEEDBACK);
+			executor.spentBy.set("accept-1", 20);
+			await drive(start(), clock, true);
+			const claim = files.claims.get(runOf(14));
+			const first = claim?.baseCheck;
+			assert.ok(claim && first);
+			files.claims.set(runOf(14), {
+				...claim,
+				baseCheck: {
+					...first,
+					retry: {
+						refused: first.binding,
+						reason: "preservation_failed",
+						receiptDigest: digestOf(JSON.stringify([first.binding, 1])),
+						scenarios: ["S1"],
+						baseWallMs: 4_000,
+					},
+				},
+			});
+
+			if (failure === "retire") files.artifacts.retire = async () => "failed";
+			else {
+				const read = files.readContract.bind(files);
+				let failures = 1;
+
+				files.readContract = async (runId) =>
+					failures-- > 0
+						? { kind: "blocked", reason: "contract_invalid" }
+						: read(runId);
+			}
+
+			executor.baseOutcomes = ["preservation_failed", "ready"];
+			await drive(start(), clock);
+			await drive(start(), clock);
+
+			if (failure === "contract_once") {
+				assert.deepEqual(launched(executor), [
+					"specify-1",
+					"accept-1",
+					"accept-2",
+					"build-1",
+				]);
+				assert.equal(refusals(github).length, 0);
+
+				return;
+			}
+
+			assert.deepEqual(launched(executor), ["specify-1", "accept-1"]);
+			assert.equal(statuses(github, 14).at(-1)?.endsWith(":failed"), true);
+			assert.equal(refusals(github).length, 1);
+			assert.ok(
+				refusals(github)[0]?.includes(
+					`r=${digestOf(JSON.stringify([first.binding, 1]))} -->`,
+				),
+			);
+		});
+
+	it("never relaunches a forged retry of a reason the author cannot fix", async () => {
+		const { github, executor, files, clock, start } = world();
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "pass", usage: 20 };
+		executor.baseOutcomes = ["checking"];
+		executor.baseReceipt = (binding) => refusedReceipt(binding, FEEDBACK);
+		executor.spentBy.set("accept-1", 20);
+		await drive(start(), clock, true);
+		const claim = files.claims.get(runOf(14));
+		const first = claim?.baseCheck;
+		assert.ok(claim && first);
+		files.claims.set(runOf(14), {
+			...claim,
+			baseCheck: {
+				...first,
+				retry: {
+					refused: first.binding,
+					reason: "base_timeout",
+					receiptDigest: digestOf("forged"),
+					scenarios: [],
+					baseWallMs: 0,
+				},
+			},
+		});
+		executor.baseOutcomes = ["base_timeout", "ready"];
+		await drive(start(), clock);
+		await drive(start(), clock);
+		assert.deepEqual(launched(executor), ["specify-1", "accept-1"]);
+		assert.equal(statuses(github, 14).at(-1)?.endsWith(":failed"), true);
+		assert.ok(
+			existsSync(join(files.artifactRoot, "acceptance", runOf(14))),
+			"the suite is not retired",
+		);
+		assert.equal(refusals(github).length, 1);
+		assert.match(refusals(github)[0] ?? "", /: base_timeout\. /);
 	});
 
 	it("fails closed without a base-check port", async () => {
@@ -2116,6 +2792,7 @@ describe("Orchestrator stage results", () => {
 					baseCheck: executor.baseChecks[0] && {
 						binding: executor.baseChecks[0].binding,
 						acceptAttempt: 1,
+						storedAttempt: 1,
 						remainingAcceptMs: 900_000 - 1,
 					},
 					acceptWallMs: 1,

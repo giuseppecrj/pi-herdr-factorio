@@ -5,6 +5,7 @@ import {
 	readFileSync,
 	readdirSync,
 	openSync,
+	renameSync,
 	writeFileSync,
 	fsyncSync,
 	closeSync,
@@ -111,7 +112,22 @@ export interface ArtifactStore {
 		/** Absent writes the legacy receipt shape, with no family evidence. */
 		readonly family?: FamilyInput;
 	}): Promise<AcceptanceRead>;
+	/**
+	 * Retires the run's stored suite once, for the one accept feedback retry.
+	 * An exclusive marker names the retired digest; the suite and its guard
+	 * then move to `acceptance/<runId>.retired/`, kept as private evidence and
+	 * never overwritten. The same digest again finishes or repeats the move;
+	 * any other digest is `refused`, so a run retires at most one suite.
+	 */
+	retire(
+		runId: Digest,
+		contract: Contract,
+		digest: ContractDigest,
+		acceptanceDigest: Digest,
+	): Promise<RetireResult>;
 }
+
+export type RetireResult = "retired" | "refused" | "failed";
 
 export function checkPrivateDir(path: string): void {
 	const stat = lstatSync(path);
@@ -142,6 +158,53 @@ export function present(path: string): boolean {
 
 function regenerationGuard(root: string, runId: Digest): string {
 	return join(root, `${runId}.json`);
+}
+
+function retirementMarker(root: string, runId: Digest): string {
+	return join(root, `${runId}.retired.json`);
+}
+
+/** The digest a retirement record names for the run, or `null` when it names none. */
+function namedDigest(path: string, runId: Digest): string | null {
+	try {
+		const record = objectOf(parseJson(regularText(path)));
+		const digest = textOf(fieldOf(record, "acceptanceDigest"));
+
+		return fieldOf(record, "runId") === runId && digest !== null
+			? digest
+			: null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * The retired digest the run's marker names, or `null` with no marker. An
+ * unreadable marker falls back to the retired copy's own receipt, so a torn
+ * marker never strands the replacement suite. With no copy it throws.
+ */
+function retiredDigest(root: string, runId: Digest): string | null {
+	const path = retirementMarker(root, runId);
+
+	if (!present(path)) return null;
+
+	const retired =
+		namedDigest(path, runId) ??
+		namedDigest(join(root, `${runId}.retired`, "suite", "receipt.json"), runId);
+
+	if (retired === null) throw new Error("invalid retirement marker");
+
+	return retired;
+}
+
+function syncDir(path: string): void {
+	const dir = openSync(path, "r");
+
+	try {
+		fsyncSync(dir);
+	} finally {
+		closeSync(dir);
+	}
 }
 
 function acceptanceEntryCap(path: string): number {
@@ -448,7 +511,9 @@ export function fileArtifacts(stateDir: string): ArtifactStore {
 
 			if (
 				!walk("") ||
-				acceptanceDigestOf(parsed.suite, canary) !== acceptanceDigest
+				acceptanceDigestOf(parsed.suite, canary) !== acceptanceDigest ||
+				// A retirement interrupted before its move never serves the old suite.
+				retiredDigest(root, runId) === acceptanceDigest
 			)
 				return { kind: "blocked", reason: "acceptance_changed" };
 
@@ -483,6 +548,65 @@ export function fileArtifacts(stateDir: string): ArtifactStore {
 
 	return {
 		read,
+		async retire(runId, contract, digest, acceptanceDigest) {
+			const marker = retirementMarker(root, runId);
+			const aside = join(root, `${runId}.retired`);
+			const text = `${JSON.stringify({ version: 1, runId, contractDigest: digest, acceptanceDigest })}\n`;
+
+			const movable = (path: string) =>
+				fieldOf(objectOf(parseJson(regularText(path))), "acceptanceDigest") ===
+				acceptanceDigest;
+
+			try {
+				if (contract.runId !== runId) return "refused";
+
+				if (present(marker)) {
+					if (regularText(marker) !== text) return "refused";
+				} else {
+					const current = await read(runId, contract, digest);
+
+					if (
+						current.kind !== "found" ||
+						current.receipt.acceptanceDigest !== acceptanceDigest
+					)
+						return "refused";
+					exclusive(marker, text);
+				}
+
+				if (!present(aside)) {
+					mkdirSync(aside, { mode: 0o700 });
+					syncDir(root);
+				}
+
+				checkPrivateDir(aside);
+				const suite = join(aside, "suite");
+				const guard = join(aside, "guard.json");
+
+				// Each step is skipped once done, so a restart finishes the move
+				// and a suite stored after it is never touched.
+				if (!present(suite)) {
+					const dir = join(root, runId);
+
+					if (!movable(join(dir, "receipt.json"))) return "refused";
+					renameSync(dir, suite);
+					syncDir(aside);
+					syncDir(root);
+				}
+
+				if (!present(guard)) {
+					const current = regenerationGuard(root, runId);
+
+					if (!movable(current)) return "refused";
+					renameSync(current, guard);
+					syncDir(aside);
+					syncDir(root);
+				}
+
+				return "retired";
+			} catch {
+				return "failed";
+			}
+		},
 		async store(input) {
 			const { contract, contractDigest, suite, model, observed, family } =
 				input;

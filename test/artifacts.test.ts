@@ -3,6 +3,8 @@ import { spawnSync } from "node:child_process";
 import {
 	mkdtempSync,
 	chmodSync,
+	existsSync,
+	renameSync,
 	readFileSync,
 	writeFileSync,
 	lstatSync,
@@ -120,6 +122,24 @@ const fresh = () => {
 after(() => {
 	for (const root of roots) rmSync(root, { recursive: true, force: true });
 });
+
+/** Every path below `root` with its bytes, for exact before-and-after comparisons. */
+function tree(
+	root: string,
+	prefix = "",
+	out = new Map<string, string>(),
+): Map<string, string> {
+	for (const entry of readdirSync(join(root, prefix), {
+		withFileTypes: true,
+	})) {
+		const path = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+
+		if (entry.isDirectory()) tree(root, path, out);
+		else out.set(path, readFileSync(join(root, path), "utf8"));
+	}
+
+	return out;
+}
 
 describe("private acceptance artifacts", () => {
 	it("hashes the exact named bytes in a stable order, including manifest and canary", () => {
@@ -416,6 +436,207 @@ describe("private acceptance artifacts", () => {
 			digest,
 		});
 	});
+	it("retires the first suite once behind an exclusive marker, so the retry stores once", async () => {
+		const root = fresh();
+		const store = fileArtifacts(root);
+		const first = await store.store(input);
+		assert.equal(first.kind, "found");
+
+		if (first.kind !== "found") return;
+		const d1 = first.receipt.acceptanceDigest;
+		const acceptance = join(root, "acceptance");
+		const aside = join(acceptance, `${contract.runId}.retired`);
+
+		const retiredCanary = readFileSync(
+			join(acceptance, contract.runId, "canary.txt"),
+			"utf8",
+		).trim();
+
+		assert.equal(
+			await store.retire(contract.runId, contract, digest, digestOf("other")),
+			"refused",
+		);
+		assert.equal(
+			existsSync(join(acceptance, `${contract.runId}.retired.json`)),
+			false,
+		);
+		assert.deepEqual(await store.read(contract.runId, contract, digest), first);
+
+		assert.equal(
+			await store.retire(contract.runId, contract, digest, d1),
+			"retired",
+		);
+		assert.deepEqual(await store.read(contract.runId, contract, digest), {
+			kind: "absent",
+		});
+		assert.equal(existsSync(join(acceptance, contract.runId)), false);
+		assert.equal(existsSync(join(acceptance, `${contract.runId}.json`)), false);
+		assert.equal(
+			readFileSync(join(aside, "suite", "canary.txt"), "utf8").trim(),
+			retiredCanary,
+		);
+		assert.ok(existsSync(join(aside, "guard.json")));
+		const kept = tree(aside);
+
+		assert.equal(
+			await store.retire(contract.runId, contract, digest, d1),
+			"retired",
+		);
+		assert.deepEqual(tree(aside), kept);
+
+		const second = await store.store(input);
+		assert.equal(second.kind, "found");
+
+		if (second.kind !== "found") return;
+		assert.notEqual(second.receipt.acceptanceDigest, d1);
+		assert.deepEqual(await store.store(input), second);
+		assert.equal(
+			await store.retire(contract.runId, contract, digest, d1),
+			"retired",
+		);
+		assert.equal(
+			await store.retire(
+				contract.runId,
+				contract,
+				digest,
+				second.receipt.acceptanceDigest,
+			),
+			"refused",
+		);
+		assert.deepEqual(
+			await store.read(contract.runId, contract, digest),
+			second,
+		);
+		assert.deepEqual(tree(aside), kept);
+
+		const reachable = [
+			JSON.stringify(second),
+			...acceptanceEntries(
+				second.suite,
+				readFileSync(
+					join(acceptance, contract.runId, "canary.txt"),
+					"utf8",
+				).trim(),
+			).map(([path, bytes]) => path + bytes),
+		].join("\n");
+
+		assert.ok(!reachable.includes(retiredCanary));
+
+		const walk = (path: string) => {
+			const stat = lstatSync(path);
+			assert.equal(stat.mode & 0o777, stat.isDirectory() ? 0o700 : 0o600, path);
+
+			if (stat.isDirectory())
+				for (const name of readdirSync(path)) walk(join(path, name));
+		};
+
+		walk(acceptance);
+	});
+
+	it("serves the replacement suite past an unreadable retirement marker, and fails closed without a retired copy", async () => {
+		const root = fresh();
+		const store = fileArtifacts(root);
+		const first = await store.store(input);
+		assert.equal(first.kind, "found");
+
+		if (first.kind !== "found") return;
+		const acceptance = join(root, "acceptance");
+		const marker = join(acceptance, `${contract.runId}.retired.json`);
+
+		assert.equal(
+			await store.retire(
+				contract.runId,
+				contract,
+				digest,
+				first.receipt.acceptanceDigest,
+			),
+			"retired",
+		);
+		const second = await store.store(input);
+		assert.equal(second.kind, "found");
+
+		if (second.kind !== "found") return;
+		writeFileSync(marker, "{not json\n");
+		assert.deepEqual(
+			await store.read(contract.runId, contract, digest),
+			second,
+		);
+		assert.equal(
+			await store.retire(
+				contract.runId,
+				contract,
+				digest,
+				second.receipt.acceptanceDigest,
+			),
+			"refused",
+		);
+		assert.deepEqual(
+			await store.read(contract.runId, contract, digest),
+			second,
+		);
+
+		// A marker written before the move, then torn: no retired copy to
+		// compare, so the suite still on disk may be the retired one.
+		const torn = fresh();
+		const early = fileArtifacts(torn);
+		assert.equal((await early.store(input)).kind, "found");
+		writeFileSync(
+			join(torn, "acceptance", `${contract.runId}.retired.json`),
+			"{not json\n",
+			{ mode: 0o600 },
+		);
+		assert.deepEqual(await early.read(contract.runId, contract, digest), {
+			kind: "blocked",
+			reason: "acceptance_invalid",
+		});
+	});
+
+	for (const crash of ["marker", "suite"] as const)
+		it(`recovers a crash after the ${crash} step of a retirement to the same end state`, async () => {
+			const done = fresh();
+			const reference = fileArtifacts(done);
+			const stored = await reference.store(input);
+			assert.equal(stored.kind, "found");
+
+			if (stored.kind !== "found") return;
+			const d1 = stored.receipt.acceptanceDigest;
+			assert.equal(
+				await reference.retire(contract.runId, contract, digest, d1),
+				"retired",
+			);
+			const acceptance = join(done, "acceptance");
+			const aside = join(acceptance, `${contract.runId}.retired`);
+			const end = tree(acceptance);
+
+			renameSync(
+				join(aside, "guard.json"),
+				join(acceptance, `${contract.runId}.json`),
+			);
+
+			if (crash === "marker") {
+				renameSync(join(aside, "suite"), join(acceptance, contract.runId));
+				rmSync(aside, { recursive: true });
+			}
+
+			const store = fileArtifacts(done);
+			const torn = await store.read(contract.runId, contract, digest);
+			assert.equal(torn.kind, "blocked");
+			assert.deepEqual(await store.store(input), torn);
+			assert.equal(
+				await store.retire(contract.runId, contract, digest, digestOf("x")),
+				"refused",
+			);
+			assert.equal(
+				await store.retire(contract.runId, contract, digest, d1),
+				"retired",
+			);
+			assert.deepEqual(tree(acceptance), end);
+			assert.deepEqual(await store.read(contract.runId, contract, digest), {
+				kind: "absent",
+			});
+			assert.equal((await store.store(input)).kind, "found");
+		});
+
 	it("has no oracle mount or inherited context in a build-profile layout", () => {
 		assert.deepEqual(ARTIFACT_ACCESS.build, ["contract", "scenario-ids"]);
 
