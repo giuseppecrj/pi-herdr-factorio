@@ -1,8 +1,18 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { describe, it } from "node:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	cpSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { runHeldoutBase } from "../server/gates.ts";
+import { assessBase } from "../src/diagnosis.ts";
 import {
 	ACCEPTANCE_ISOLATION,
 	acceptancePrompt,
@@ -225,6 +235,30 @@ describe("held-out acceptance output", () => {
 		assert.ok(!prompt.includes("runId"));
 		assert.ok(!prompt.includes("/state/acceptance/"));
 	});
+	it("states the process.cwd() repository-root rule and the exact four-level depth from checks/", () => {
+		const prompt = acceptancePrompt({
+			contract,
+			files: [],
+			inlined: [],
+			guidance: { general: "", stages: {} },
+		});
+
+		assert.ok(
+			prompt.includes(
+				"Read repository files relative to process.cwd(), which is the repository root in every evaluation context.",
+			),
+		);
+		assert.ok(prompt.includes("test/acceptance/<ticket>/checks/"));
+		assert.ok(
+			prompt.includes(
+				"A file directly in that directory is exactly four parent directories below the repository root",
+			),
+		);
+		assert.ok(prompt.includes("../../../../src/"));
+		assert.ok(
+			prompt.includes("three parent segments from that directory is one short"),
+		);
+	});
 });
 
 const CLAUDE: FamilyInput = {
@@ -370,4 +404,139 @@ describe("acceptance receipts with family evidence", () => {
 			}
 		}
 	});
+});
+
+function bwrapMissing(): string | null {
+	try {
+		execFileSync(
+			"bwrap",
+			["--unshare-all", "--die-with-parent", "--ro-bind", "/", "/", "true"],
+			{ stdio: "ignore", timeout: 10_000 },
+		);
+
+		return null;
+	} catch {
+		return "bwrap --unshare-all failed in this environment";
+	}
+}
+
+describe("held-out checks resolve the repository root through the real base check", () => {
+	const absent = bwrapMissing();
+	const strict = process.env.FACTORY_REQUIRE_SANDBOX_TESTS === "1";
+
+	async function base(root: string, read: string) {
+		const tree = join(root, "base");
+		mkdirSync(join(tree, "data"), { recursive: true });
+		cpSync(
+			resolve(".github/factory/gates"),
+			join(tree, ".github/factory/gates"),
+			{ recursive: true },
+		);
+		writeFileSync(join(tree, "data/marker.txt"), "MARKER");
+		writeFileSync(
+			join(tree, "package.json"),
+			JSON.stringify({ name: "base", version: "1.0.0", type: "module" }),
+		);
+		writeFileSync(
+			join(tree, "package-lock.json"),
+			JSON.stringify({
+				name: "base",
+				version: "1.0.0",
+				lockfileVersion: 3,
+				packages: { "": { name: "base", version: "1.0.0" } },
+			}),
+		);
+
+		const preserved: Contract = {
+			...contract,
+			acceptance: [{ id: "A1", kind: "preservation", text: "Keep marker" }],
+		};
+
+		const parsed = writeAcceptance(
+			JSON.stringify({
+				version: 2,
+				scenarios: [
+					{
+						id: "S1",
+						criteria: ["A1"],
+						checks: ["root.test.mjs"],
+						judge: null,
+					},
+				],
+				files: [
+					{
+						path: "root.test.mjs",
+						type: "node:test",
+						content: `import {test} from 'node:test'; import assert from 'node:assert/strict'; import {readFileSync} from 'node:fs'; import {dirname, resolve} from 'node:path'; import {fileURLToPath} from 'node:url'; const here = dirname(fileURLToPath(import.meta.url)); test('reads the marker', () => assert.equal(readFileSync(${read}, 'utf8'), 'MARKER'));`,
+					},
+				],
+			}),
+			preserved,
+		);
+
+		assert.ok(parsed.kind === "suite");
+		const startedAt = Date.now();
+
+		const evidence = await runHeldoutBase({
+			tree,
+			workDir: join(root, "execution"),
+			cacheDir: join(root, "dependencies"),
+			binding: {
+				runId: preserved.runId,
+				repo: preserved.base.repo,
+				issue: 1,
+				contractDigest: contractDigestOf(contractBytes(preserved)),
+				acceptanceDigest: digestOf("suite"),
+				baseSha: preserved.base.sha,
+				gateSha: preserved.base.sha,
+			},
+			contract: preserved,
+			suite: parsed.suite,
+			canary: `factory-holdout-${"0".repeat(64)}`,
+			startedAt,
+			deadline: startedAt + 10_000,
+		});
+
+		return { evidence, ...assessBase(evidence) };
+	}
+
+	for (const [name, read, want] of [
+		[
+			"process.cwd() reads a repository file",
+			"resolve(process.cwd(), 'data/marker.txt')",
+			"ready",
+		],
+		[
+			"four parent segments from checks/ reach the repository root",
+			"resolve(here, '../../../..', 'data/marker.txt')",
+			"ready",
+		],
+		[
+			"three parent segments from checks/ fail with a non-assertion error",
+			"resolve(here, '../../..', 'data/marker.txt')",
+			"base_non_assertion_failure",
+		],
+	] as const)
+		it(name, async (t) => {
+			if (absent !== null) {
+				if (strict)
+					assert.fail(`FACTORY_REQUIRE_SANDBOX_TESTS=1 but ${absent}`);
+				t.diagnostic(`not run: ${absent}`);
+
+				return;
+			}
+
+			const root = mkdtempSync(join(tmpdir(), "accept-path-"));
+			t.after(() => rmSync(root, { recursive: true, force: true }));
+			const f = await base(root, read);
+
+			if (want === "ready")
+				assert.equal(f.assessment.kind, "ready", JSON.stringify(f.evidence));
+			else {
+				assert.equal(f.assessment.kind, "refused", JSON.stringify(f.evidence));
+
+				if (f.assessment.kind === "refused")
+					assert.equal(f.assessment.failure.reason, want);
+			}
+		});
 });
