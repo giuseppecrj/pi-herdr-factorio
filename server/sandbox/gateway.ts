@@ -99,6 +99,8 @@ type Exchange = {
 	finished: boolean;
 	dispatched: RouteId | null;
 	rejected: number | null;
+	/** The gateway gave up before any upstream response headers arrived. */
+	unreachable: boolean;
 };
 
 /**
@@ -616,6 +618,7 @@ export class Gateway implements AdmissionState {
 			finished: false,
 			dispatched: null,
 			rejected: null,
+			unreachable: false,
 		};
 	}
 
@@ -719,8 +722,23 @@ export class Gateway implements AdmissionState {
 		decision: AuditDecision,
 		status: number,
 	): JournalRecord {
+		const identity = this.#journalIdentity(exchange, dispatched);
+
+		// Only the gateway's own answer, sent before any upstream response
+		// headers arrived, is marked. Its tokens stay as they are for charging.
+		if (decision === "error" && exchange.unreachable)
+			return {
+				...identity,
+				kind: "result",
+				decision,
+				status,
+				reason: "upstream_unreachable",
+				inputTokens: exchange.inputTokens,
+				outputTokens: exchange.outputTokens,
+			};
+
 		return {
-			...this.#journalIdentity(exchange, dispatched),
+			...identity,
 			kind: "result",
 			decision,
 			...(exchange.rejected === null || decision !== "forward"
@@ -1072,6 +1090,9 @@ export class Gateway implements AdmissionState {
 				res.destroy();
 				done("error", code, res.statusCode);
 			} else {
+				// No upstream response started, so the gateway's own 502 or 504 is
+				// the only answer Pi gets.
+				exchange.unreachable = true;
 				refuse(code);
 			}
 		};

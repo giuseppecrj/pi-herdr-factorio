@@ -2535,7 +2535,11 @@ function journalLines(
 		| { readonly kind: "metered"; readonly observedModel?: string }
 		| { readonly kind: "unusable" }
 		| { readonly kind: "unsettled" }
-		| { readonly kind: "error"; readonly status: number },
+		| {
+				readonly kind: "error";
+				readonly status: number;
+				readonly unreachable?: boolean;
+		  },
 ): string[] {
 	const identity = {
 		v: 1 as const,
@@ -2556,7 +2560,7 @@ function journalLines(
 
 	if (result.kind === "unsettled") return [dispatch];
 
-	const settled: JournalRecord = {
+	const answered: JournalRecord = {
 		...identity,
 		kind: "result",
 		status: result.kind === "error" ? result.status : 200,
@@ -2564,6 +2568,11 @@ function journalLines(
 		inputTokens: result.kind === "metered" ? 1_924 : null,
 		outputTokens: result.kind === "metered" ? 4 : null,
 	};
+
+	const settled: JournalRecord =
+		result.kind === "error" && result.unreachable === true
+			? { ...answered, reason: "upstream_unreachable" }
+			: answered;
 
 	const observedModel =
 		result.kind === "metered" ? result.observedModel : undefined;
@@ -2861,10 +2870,15 @@ describe("runStage on an Anthropic primary", () => {
 
 	// The lane 5a journal: the Anthropic upstream was unreachable, so the
 	// gateway itself answered each request with a 502, journaled as an
-	// `error` result with null tokens and no upstream response.
+	// `error` result with null tokens, no upstream response and
+	// `reason: "upstream_unreachable"`.
 	const gatewayErrors = (status: 502 | 504) =>
 		[2, 3, 4, 5].flatMap((req) =>
-			journalLines(req, "model-anthropic", { kind: "error", status }),
+			journalLines(req, "model-anthropic", {
+				kind: "error",
+				status,
+				unreachable: true,
+			}),
 		);
 
 	const UPSTREAM_DOWN = [2, 3, 4, 5].map(() =>
@@ -2952,9 +2966,21 @@ describe("runStage on an Anthropic primary", () => {
 			journalLines(1, "model-anthropic", { kind: "error", status: 200 }),
 		],
 		[
+			"an upstream 502 whose stream was cut after its headers",
+			journalLines(1, "model-anthropic", { kind: "error", status: 502 }),
+		],
+		[
+			"an upstream 504 whose stream was cut after its headers",
+			journalLines(1, "model-anthropic", { kind: "error", status: 504 }),
+		],
+		[
 			"a gateway 502 next to a forwarded 200 with no usage",
 			[
-				...journalLines(1, "model-anthropic", { kind: "error", status: 502 }),
+				...journalLines(1, "model-anthropic", {
+					kind: "error",
+					status: 502,
+					unreachable: true,
+				}),
 				...journalLines(2, "model-anthropic", { kind: "unusable" }),
 			],
 		],
