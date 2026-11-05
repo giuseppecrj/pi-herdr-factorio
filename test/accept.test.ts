@@ -255,7 +255,9 @@ describe("held-out acceptance output", () => {
 			),
 		);
 		assert.ok(prompt.includes("../../../../src/"));
-		assert.ok(prompt.includes("four parent segments, not three"));
+		assert.ok(
+			prompt.includes("three parent segments from that directory is one short"),
+		);
 	});
 });
 
