@@ -18,7 +18,7 @@ retry:
   max_backoff_ms: 300000
 
 usage:
-  max_tokens_per_run: 500000
+  max_tokens_per_run: 800000
 
 stages:
   admit:

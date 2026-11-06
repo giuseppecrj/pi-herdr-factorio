@@ -31,7 +31,7 @@ Only one session coordinates the program. If another session's decision rows are
 
 - **Never set an upstream on a branch made from `origin/main`.** A bare `git push` then targets `main`. Create branches with `--no-track`, and push with `../pi-herdr-factorio-trails/bin/checked-push.sh` or an explicit `HEAD:refs/heads/<branch>`.
 - **Distrust child summaries.** Check the side effects yourself: diffs, remote heads, CI, fixture state and receipts. A child once said "no changes" over an almost complete draft.
-- **Size live lane token caps to stage allowances, not expected spend.** A verifier reserves every stage's full allowance before it launches a run. One full specify, accept and build run reserves about 265,000 tokens. A cap below that launches nothing.
+- **Size live lane token caps to stage allowances, not expected spend.** A verifier reserves every stage's full allowance before it launches a run. One full specify, accept and build run reserves about 540,000 tokens (specify about 40,000, accept 100,000, build 400,000). A cap below that launches nothing.
 - **Never narrow a stage below the plan's rule in a lane**, unless the lane is testing an exhausted budget. A narrower stage tests the verifier, not the factory.
 - **Write lane pass criteria to match the controller's real behavior.** A closed issue's run posts a terminal `released` marker. The gateway logs its own `GET /` readiness probe. Neither is a defect.
 - **Some comments are required.** `.oxlintrc.json` requires a `SAFETY:` comment before every type assertion, so a comment cleanup must keep them.

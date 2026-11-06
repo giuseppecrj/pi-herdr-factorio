@@ -24,7 +24,7 @@ All substantive configurations retain **6 total generations, 2 shared repairs, 3
 
 The accounting partition explores an exact certification tuple and each single-coordinate mismatch class. A mismatched tuple cannot certify the current generation. Workflow SHA/digest are one pinned identity class; cryptographic hashes and malformed wire types remain runtime boundaries.
 
-The abstract quotas are not replacements for the unchanged real limits of **30,000 review tokens per round, 50,000 repair-build tokens per round and 500,000 run tokens**. There is no claim of linear scaling or a proof for all real amounts. Actual reducer tests check cap−1, cap and cap+1 at each real limit, cumulative attempts, prior-stage spend, duplicate/lower/unknown late results and oversized final receipts. Oversized usage is retained; it does not authorize another launch. Monetary accounting is not proved.
+The abstract quotas are not replacements for the unchanged real limits of **30,000 review tokens per round, 50,000 repair-build tokens per round and 800,000 run tokens**. There is no claim of linear scaling or a proof for all real amounts. Actual reducer tests check cap−1, cap and cap+1 at each real limit, cumulative attempts, prior-stage spend, duplicate/lower/unknown late results and oversized final receipts. Oversized usage is retained; it does not authorize another launch. Monetary accounting is not proved.
 
 ### Explicit partitions
 

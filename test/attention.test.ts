@@ -30,7 +30,7 @@ import { isGitSha } from "../src/workflow.ts";
 import type { PatchReceipt } from "../src/build.ts";
 import { execFileSync } from "node:child_process";
 import { candidateLifecycleFixture, verdictAssessment } from "./helpers.ts";
-import { TRUSTED_WORKFLOW } from "./fake-ticket-adapter.ts";
+import { TRUSTED_RUN_CAP, TRUSTED_WORKFLOW } from "./fake-ticket-adapter.ts";
 import { fileRunFiles } from "../server/controller.ts";
 import type { AnswersDigest } from "../src/specify.ts";
 
@@ -94,7 +94,7 @@ function prBook(issue: number, number: number, ready: boolean): JsonValue {
 		workflowDigest: digestOf("workflow"),
 		contractDigest: digestOf("contract"),
 		acceptanceDigest: digestOf("suite"),
-		maxTokens: 500_000,
+		maxTokens: TRUSTED_RUN_CAP,
 		maxReviewAttempts: 3,
 	};
 

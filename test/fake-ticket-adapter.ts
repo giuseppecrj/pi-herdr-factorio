@@ -115,6 +115,15 @@ export const TRUSTED_WORKFLOW = readFileSync(
 	"utf8",
 );
 
+const trustedRunCap = /^\s*max_tokens_per_run:\s*(\d+)\s*$/m.exec(
+	TRUSTED_WORKFLOW,
+)?.[1];
+
+if (trustedRunCap === undefined) throw new Error("trusted run cap");
+
+/** The run token cap in the committed trusted WORKFLOW.md. */
+export const TRUSTED_RUN_CAP = Number(trustedRunCap);
+
 export type FakeVersion = {
 	editedAt: string;
 	deletedAt: string | null;

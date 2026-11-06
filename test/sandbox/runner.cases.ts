@@ -29,7 +29,12 @@ import {
 	reviewCandidate,
 	type SeatReceipt,
 } from "../../src/review.ts";
-import { FakeGitHub, fakeIssue, labelEvent } from "../fake-ticket-adapter.ts";
+import {
+	FakeGitHub,
+	fakeIssue,
+	labelEvent,
+	TRUSTED_RUN_CAP,
+} from "../fake-ticket-adapter.ts";
 import {
 	type Contract,
 	contractBytes,
@@ -4745,7 +4750,7 @@ describe("multi-seat candidate review", () => {
 				if (mode === "resume") {
 					assert.equal(launches.length, 1);
 					assert.equal(launches[0]?.settings.maxTokens, 29_990);
-					assert.equal(launches[0]?.remainingRunTokens, 499_970);
+					assert.equal(launches[0]?.remainingRunTokens, TRUSTED_RUN_CAP - 30);
 					assert.equal(h.hosts.length, 3);
 					assert.equal(h.calls.length, 3);
 					assert.equal(claim.usage, 50);
