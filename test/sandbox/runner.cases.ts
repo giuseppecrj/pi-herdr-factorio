@@ -740,6 +740,249 @@ describe("refusal classification on proto-runtime exp 8 fields", () => {
 	});
 });
 
+function toolStart(id: string, name: string, args: JsonObject): JsonObject {
+	return { type: "tool_execution_start", toolCallId: id, toolName: name, args };
+}
+
+function acceptReplay(records: JsonObject[]) {
+	return replayer([
+		started("x"),
+		{ type: "turn_start" },
+		assistant({ stopReason: "toolUse", tokens: 70 }),
+		...records,
+		assistant({ tokens: 10 }),
+		{ type: "agent_settled", aborted: false },
+	]);
+}
+
+describe("accept efficiency guards", () => {
+	it("parses tool starts with their call identity and arguments", () => {
+		const event = toolStart("t1", "read", { path: "PRIVATE", offset: 1 });
+		assert.deepEqual(parsePiRecord(JSON.stringify(event)), event);
+	});
+
+	for (const sequential of [false, true])
+		it(`allows two ${sequential ? "sequential" : "batched"} tool calls`, async () => {
+			const h = harness([
+				acceptReplay([
+					toolStart("a", "grep", { pattern: "VERSION" }),
+					...(sequential
+						? [assistant({ stopReason: "toolUse", tokens: 5 })]
+						: []),
+					toolStart("b", "read", {
+						path: "server/cli.ts",
+						offset: 1,
+						limit: 10,
+					}),
+				]),
+			]);
+
+			assert.equal(
+				(await runStage(input({ stage: "accept" }), h.host)).kind,
+				"passed",
+			);
+		});
+
+	it("counts duplicate lifecycle notifications once", async () => {
+		const call = toolStart("a", "read", { path: "x" });
+
+		const h = harness([
+			acceptReplay([
+				call,
+				call,
+				{
+					type: "tool_execution_update",
+					toolCallId: "a",
+					toolName: "read",
+					args: { path: "x" },
+				},
+				{
+					type: "tool_execution_end",
+					toolCallId: "a",
+					toolName: "read",
+					isError: false,
+					result: {},
+				},
+				toolStart("b", "ls", { path: "." }),
+			]),
+		]);
+
+		assert.equal(
+			(await runStage(input({ stage: "accept" }), h.host)).kind,
+			"passed",
+		);
+	});
+
+	for (const name of ["read", "grep", "ls"])
+		it(`fails a duplicate ${name} with reordered (also nested) keys without recording arguments`, async () => {
+			const h = harness([
+				acceptReplay([
+					toolStart("a", name, {
+						path: "PRIVATE-ARG",
+						options: { limit: 1, offset: 2 },
+					}),
+					toolStart("b", name, {
+						options: { offset: 2, limit: 1 },
+						path: "PRIVATE-ARG",
+					}),
+				]),
+			]);
+
+			const result = await runStage(input({ stage: "accept" }), h.host);
+			assert.equal(result.kind === "failed" && result.exit, "error");
+			assert.match(
+				JSON.stringify(result.receipt),
+				/"diagnostic":"accept_tool_limit"/,
+			);
+			assert.ok(!JSON.stringify(result.receipt).includes("PRIVATE-ARG"));
+			assert.equal(result.usage, 80);
+			assert.deepEqual(h.outputs, []);
+			assert.deepEqual(h.timeline.slice(1, 4), [
+				"gate:abort",
+				"pi:abort",
+				"drain",
+			]);
+		});
+
+	it("fails the third distinct call and C's seven-read shape at the second read", async () => {
+		for (const repeated of [false, true]) {
+			const tracker = new SessionTracker("p", 20, 0, {
+				ids: new Set(),
+				args: new Set(),
+			});
+
+			const stops: number[] = [];
+
+			for (let n = 1; n <= 7; n++) {
+				const signal = tracker.apply(
+					parsePiRecord(
+						JSON.stringify(
+							toolStart(String(n), "read", {
+								path: "x",
+								offset: repeated ? 1 : n,
+								limit: 1,
+							}),
+						),
+					),
+				);
+
+				if (signal.kind === "failed") {
+					stops.push(n);
+					break;
+				}
+			}
+
+			assert.deepEqual(stops, [repeated ? 2 : 3]);
+		}
+	});
+
+	for (const stage of ["specify", "build", "review"] as const)
+		it(`leaves ${stage} rereads and length stops unchanged (repair uses build)`, async () => {
+			const h = harness([
+				replayer([
+					started("x"),
+					...Array.from({ length: 7 }, (_, n) =>
+						toolStart(String(n), "read", { path: "x" }),
+					),
+					assistant({ stopReason: "length", tokens: 1 }),
+					{ type: "agent_settled", aborted: false },
+				]),
+			]);
+
+			assert.equal((await runStage(input({ stage }), h.host)).kind, "passed");
+			assert.equal(h.tables[0]?.ceiling.modelRequests, 10);
+		});
+
+	it("fails length immediately, closes the gate, and never requests or keeps partial output", async () => {
+		const h = harness([
+			replayer([
+				started("x"),
+				assistant({ stopReason: "length", tokens: 70 }),
+				{ type: "agent_settled", aborted: false },
+			]),
+		]);
+
+		const result = await runStage(input({ stage: "accept" }), h.host);
+		assert.equal(result.kind === "failed" && result.exit, "error");
+		assert.equal(result.usage, 70);
+		assert.deepEqual(h.outputs, []);
+		assert.deepEqual(h.timeline.slice(1, 4), [
+			"gate:abort",
+			"pi:abort",
+			"drain",
+		]);
+		assert.ok(
+			!h.pis[0]?.received.some((c) => c.type === "get_last_assistant_text"),
+		);
+	});
+
+	for (const repeated of [false, true])
+		it(`keeps the accept ${repeated ? "duplicate" : "two-call"} guard across a named refusal fallback`, async () => {
+			const h = harness([
+				replayer([
+					started("x"),
+					toolStart("a", "read", { path: "x" }),
+					...(repeated ? [] : [toolStart("b", "read", { path: "y" })]),
+					assistant({
+						stopReason: "error",
+						rawStopReason: "refusal",
+						tokens: 20,
+					}),
+					{ type: "agent_settled", aborted: false },
+				]),
+				acceptReplay([toolStart("c", "read", { path: repeated ? "x" : "z" })]),
+			]);
+
+			const result = await runStage(
+				input({ stage: "accept" }, { fallback: model("openai/gpt-6.1-terra") }),
+				h.host,
+			);
+
+			assert.equal(result.kind === "failed" && result.exit, "error");
+			assert.equal(result.receipt.fallback?.outcome.kind, "failed");
+			assert.match(
+				JSON.stringify(result.receipt),
+				/"diagnostic":"accept_tool_limit"/,
+			);
+			assert.equal(result.usage, 100);
+		});
+
+	it("keeps real token and wall exhaustion authoritative over length", async () => {
+		for (const wall of [false, true]) {
+			let now = 100;
+
+			const h = harness(
+				[
+					(command, pi) => {
+						if (command.type === "prompt") {
+							if (wall) now = 60_100;
+							pi.emit(
+								started(String(command.id)),
+								assistant({ stopReason: "length", tokens: 70 }),
+							);
+						}
+
+						if (command.type === "abort")
+							pi.emit({ type: "agent_settled", aborted: true });
+					},
+				],
+				{ now: () => now },
+			);
+
+			const result = await runStage(
+				input({ stage: "accept" }, { maxTokens: wall ? 1000 : 70 }),
+				h.host,
+			);
+
+			assert.equal(
+				result.kind === "budget_exhausted" && result.cap,
+				wall ? "wall" : "tokens",
+			);
+			assert.ok(!JSON.stringify(result.receipt).includes("diagnostic"));
+		}
+	});
+});
+
 describe("runStage", () => {
 	it("passes a simple stage and records a receipt from message_end usage", async () => {
 		const h = harness([
@@ -3339,6 +3582,153 @@ describe("budget stops before the next request, through the gate", () => {
 				?.forwarded,
 			2,
 		);
+	});
+
+	it("never forwards a fourth accept request and treats the backstop as a charged failure", async () => {
+		const { result, forwarded, events, h } = await capped(
+			{ stage: "accept" },
+			{},
+		);
+
+		assert.equal(result.kind === "failed" && result.exit, "error");
+		assert.equal(forwarded, 3);
+		assert.equal(result.usage, 48);
+		assert.equal(h.tables[0]?.ceiling.modelRequests, 3);
+		assert.match(
+			JSON.stringify(result.receipt),
+			/"diagnostic":"accept_request_limit"/,
+		);
+		assert.deepEqual(h.outputs, []);
+		assert.deepEqual(
+			events.find((event) => event.event === "gate_closed"),
+			{
+				event: "gate_closed",
+				reason: "requests",
+			},
+		);
+		assert.equal(
+			result.receipt.egress?.find((route) => route.route === "model-openai")
+				?.denied,
+			1,
+		);
+	});
+
+	it("keeps stricter accept turn limits and real token exhaustion terminal", async () => {
+		for (const maxTurns of [2, 3]) {
+			const { result, forwarded } = await capped(
+				{ stage: "accept" },
+				{
+					budget: { maxTurns, wallMs: 60_000, stallMs: 300_000 },
+				},
+			);
+
+			assert.equal(result.kind === "budget_exhausted" && result.cap, "turns");
+			assert.equal(forwarded, maxTurns);
+		}
+
+		const { result, forwarded } = await capped(
+			{ stage: "accept" },
+			{ maxTokens: 40 },
+		);
+
+		assert.equal(result.kind === "budget_exhausted" && result.cap, "tokens");
+		assert.equal(forwarded, 3);
+	});
+
+	it("allows an accept final answer on request three", async () => {
+		const events: ControlEvent[] = [];
+		const factory = inProcessGateway(upstream.port, events);
+		let handle: GatewayHandle | null = null;
+		const statuses: number[] = [];
+
+		const h = harness(
+			[
+				(command, pi) => {
+					if (command.type !== "prompt") return;
+
+					pi.emit(started(String(command.id)));
+					void (async () => {
+						for (let n = 1; n <= 3; n++) {
+							const reply = await post(handle?.socketPath ?? "");
+
+							statuses.push(reply.status);
+							pi.emit(
+								{ type: "turn_start" },
+								assistant({
+									stopReason: n === 3 ? "stop" : "toolUse",
+									tokens: reply.usage ?? 0,
+								}),
+							);
+						}
+
+						pi.emit({ type: "agent_settled", aborted: false });
+					})();
+				},
+			],
+			{
+				gateway: async (table, timeline) => {
+					handle = await factory(table, timeline);
+
+					return handle;
+				},
+			},
+		);
+
+		const result = await runStage(input({ stage: "accept" }), h.host);
+
+		assert.equal(result.kind, "passed");
+		assert.equal(result.usage, 48);
+		assert.deepEqual(statuses, [200, 200, 200]);
+	});
+
+	it("closes the real gateway on length before Pi can send a summary request", async () => {
+		const events: ControlEvent[] = [];
+		const factory = inProcessGateway(upstream.port, events);
+		let handle: GatewayHandle | null = null;
+
+		let summaryDone = (_status: number) => {};
+
+		const summaryStatus = new Promise<number>((resolve) => {
+			summaryDone = resolve;
+		});
+
+		const h = harness(
+			[
+				(command, pi) => {
+					if (command.type === "abort")
+						pi.emit({ type: "agent_settled", aborted: true });
+
+					if (command.type !== "prompt") return;
+
+					pi.emit(started(String(command.id)));
+					void (async () => {
+						const reply = await post(handle?.socketPath ?? "");
+
+						pi.emit(
+							assistant({ stopReason: "length", tokens: reply.usage ?? 0 }),
+						);
+						const summary = await post(handle?.socketPath ?? "");
+
+						summaryDone(summary.status);
+					})();
+				},
+			],
+			{
+				gateway: async (table, timeline) => {
+					handle = await factory(table, timeline);
+
+					return handle;
+				},
+			},
+		);
+
+		const before = upstream.arrivals("/openai/v1/responses");
+		const result = await runStage(input({ stage: "accept" }), h.host);
+
+		assert.equal(result.kind === "failed" && result.exit, "error");
+		assert.equal(upstream.arrivals("/openai/v1/responses") - before, 1);
+		assert.notEqual(await summaryStatus, 200);
+		assert.deepEqual(h.outputs, []);
 	});
 
 	it("stops at the stage token cap via the gateway ceiling", async () => {

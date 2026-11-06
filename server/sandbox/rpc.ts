@@ -37,6 +37,12 @@ export type PiRecord =
 	| { readonly type: "agent_settled"; readonly aborted: boolean }
 	| { readonly type: "turn_start" }
 	| { readonly type: "assistant_end"; readonly message: AssistantEnd }
+	| {
+			readonly type: "tool_execution_start";
+			readonly toolCallId: string;
+			readonly toolName: string;
+			readonly args: JsonObject;
+	  }
 	| { readonly type: "subagent_launch" }
 	| { readonly type: "subagent_result"; readonly sessionFile: string | null }
 	| { readonly type: "queue"; readonly queued: number }
@@ -162,6 +168,16 @@ export function parsePiRecord(line: string): PiRecord {
 
 		case "message_end":
 			return messageEnd(objectOf(fieldOf(record, "message")));
+		case "tool_execution_start": {
+			const toolCallId = textOf(fieldOf(record, "toolCallId"));
+			const toolName = textOf(fieldOf(record, "toolName"));
+			const args = objectOf(fieldOf(record, "args"));
+
+			return toolCallId === null || toolName === null || args === null
+				? MALFORMED
+				: { type, toolCallId, toolName, args };
+		}
+
 		case "tool_execution_end": {
 			const details = objectOf(
 				fieldOf(objectOf(fieldOf(record, "result")), "details"),

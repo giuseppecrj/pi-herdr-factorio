@@ -175,6 +175,7 @@ import {
 import { type SeccompArch, seccompProgram } from "./sandbox/seccomp.ts";
 import {
 	type ChildUsage,
+	type AcceptCalls,
 	childUsageOf,
 	modelKey,
 	SessionTracker,
@@ -191,6 +192,13 @@ export type {
 export const CLEANUP_RESERVE_MS = STAGE_CLEANUP_RESERVE_MS;
 
 export const MODEL_REQUEST_CEILING = 2_000;
+
+const ACCEPT_REQUEST_CEILING = 3;
+
+type AcceptDiagnostic =
+	| "accept_tool_limit"
+	| "accept_request_limit"
+	| "accept_length";
 
 export const STDERR_CAP_BYTES = 64 * 1024;
 
@@ -289,6 +297,8 @@ type StageRun = {
 	readonly deadline: number;
 	readonly checkpoint: () => boolean;
 	readonly cleanup: CleanupWindow;
+	readonly requestBackstop: boolean;
+	readonly acceptCalls: AcceptCalls | null;
 	gateReason: CloseReason | null;
 	alert: FailedExit | null;
 	listener: ((event: ControlEvent) => void) | null;
@@ -300,6 +310,7 @@ type SessionReport = {
 	readonly settlement: Settlement;
 	readonly observed: string | null;
 	readonly text: string | null;
+	readonly diagnostic?: AcceptDiagnostic;
 };
 
 function capFor(stage: StageRun): BudgetCap | null {
@@ -470,8 +481,10 @@ async function runSession(
 		PROMPT_ID,
 		input.settings.budget.maxTurns,
 		ledger.turns,
+		stage.acceptCalls,
 	);
 
+	let diagnostic: AcceptDiagnostic | undefined;
 	const reads: Promise<void>[] = [];
 	let pendingReads = 0;
 	let readFailed = false;
@@ -538,6 +551,17 @@ async function runSession(
 			if (cap !== null) capped(cap);
 		};
 
+		const acceptFailure = (code: AcceptDiagnostic) => {
+			checkTokens();
+
+			if (host.now() >= stage.deadline) capped("wall");
+
+			if (finished) return;
+
+			diagnostic = code;
+			end({ kind: "failed", exit: "error" });
+		};
+
 		recheck = checkTokens;
 
 		const onAbort = () => end({ kind: "failed", exit: "aborted" });
@@ -555,6 +579,14 @@ async function runSession(
 		input.signal.addEventListener("abort", onAbort);
 		stage.listener = (event) => {
 			if (stage.alert !== null) end({ kind: "failed", exit: stage.alert });
+			else if (
+				stage.requestBackstop &&
+				stage.gateReason === "requests" &&
+				event.event === "usage" &&
+				event.decision === "deny" &&
+				event.reason === "budget-closed"
+			)
+				acceptFailure("accept_request_limit");
 			else if (event.event === "gate_closed" || event.event === "usage")
 				checkTokens();
 		};
@@ -598,10 +630,20 @@ async function runSession(
 
 				if (finished) continue;
 
-				if (record.type === "assistant_end") checkTokens();
+				if (record.type === "assistant_end") {
+					checkTokens();
 
-				if (signal.kind === "failed") end(signal);
-				else if (signal.kind === "cap") capped(signal.cap);
+					if (
+						input.stage === "accept" &&
+						record.message.stopReason === "length"
+					)
+						acceptFailure("accept_length");
+				}
+
+				if (signal.kind === "failed") {
+					if (signal.diagnostic !== undefined) acceptFailure(signal.diagnostic);
+					else end(signal);
+				} else if (signal.kind === "cap") capped(signal.cap);
 				else if (signal.kind === "settled") end("settled");
 				else if (signal.kind === "answer_ui") {
 					sendCommand(pi, {
@@ -681,7 +723,14 @@ async function runSession(
 			: { event: "agent_settled", aborted: tracker.aborted };
 
 	if (report !== "settled") {
-		return { outcome: report, refusal: null, settlement, observed, text: null };
+		return {
+			outcome: report,
+			refusal: null,
+			settlement,
+			observed,
+			text: null,
+			diagnostic,
+		};
 	}
 
 	const cap =
@@ -691,7 +740,9 @@ async function runSession(
 
 	if (
 		cap !== null ||
-		(last?.stopReason === "error" && stage.gateReason === "requests")
+		(last?.stopReason === "error" &&
+			stage.gateReason === "requests" &&
+			!stage.requestBackstop)
 	) {
 		return {
 			outcome: { kind: "budget_exhausted", cap: cap ?? "turns" },
@@ -701,6 +752,20 @@ async function runSession(
 			text: null,
 		};
 	}
+
+	if (
+		last?.stopReason === "error" &&
+		stage.gateReason === "requests" &&
+		stage.requestBackstop
+	)
+		return {
+			outcome: { kind: "failed", exit: "error" },
+			refusal: null,
+			settlement,
+			observed,
+			text: null,
+			diagnostic: "accept_request_limit",
+		};
 
 	if (readFailed)
 		return {
@@ -908,6 +973,12 @@ export async function runStage(
 	const cleanup = new CleanupWindow(host, wallEnd, input.signal);
 
 	const anthropic = input.settings.model.startsWith("anthropic/");
+	let diagnostic: AcceptDiagnostic | undefined;
+
+	const requestBackstop =
+		input.stage === "accept" &&
+		budget.maxTurns - ledger.turns > ACCEPT_REQUEST_CEILING;
+
 	const primaryRoute = modelRouteOf(input.settings.model);
 
 	const receipt = async (
@@ -946,7 +1017,7 @@ export async function runStage(
 			}),
 		);
 
-		const record: StageReceipt = withFamily(
+		const record: StageReceipt & { diagnostic?: AcceptDiagnostic } = withFamily(
 			{
 				version: 1,
 				runId: input.runId,
@@ -969,6 +1040,8 @@ export async function runStage(
 			},
 			family,
 		);
+
+		if (diagnostic !== undefined) record.diagnostic = diagnostic;
 
 		const written = await host.writeReceipt(record).catch(() => false);
 
@@ -1014,7 +1087,9 @@ export async function runStage(
 						: bareModel(input.settings.fallback),
 			modelTokens: tokenCap - ledger.total,
 			modelRequests: Math.min(
-				MODEL_REQUEST_CEILING,
+				input.stage === "accept"
+					? ACCEPT_REQUEST_CEILING
+					: MODEL_REQUEST_CEILING,
 				budget.maxTurns - ledger.turns,
 			),
 		});
@@ -1038,6 +1113,9 @@ export async function runStage(
 		deadline: wallEnd - host.cleanupReserveMs,
 		checkpoint,
 		cleanup,
+		requestBackstop,
+		acceptCalls:
+			input.stage === "accept" ? { ids: new Set(), args: new Set() } : null,
 		gateReason: null,
 		alert: null,
 		listener: null,
@@ -1080,6 +1158,7 @@ export async function runStage(
 	sessions.push(0);
 
 	const primary = await guardedSession(stage, input.settings.model, 0);
+	diagnostic = primary.diagnostic;
 	let fallback: FallbackRecord | null = null;
 	let text = primary.text;
 
@@ -1132,6 +1211,7 @@ export async function runStage(
 			: plainReport(CRASHED);
 
 		text = second.text;
+		diagnostic = second.diagnostic;
 		fallback = {
 			requested: input.settings.fallback,
 			observed: second.observed,

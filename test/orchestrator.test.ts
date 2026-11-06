@@ -20,7 +20,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { EXIT, runCli } from "../server/cli.ts";
-import { sandboxExecutor } from "../server/sandbox.ts";
+import {
+	sandboxExecutor,
+	runStage,
+	type StageHost,
+} from "../server/sandbox.ts";
+import { PassThrough } from "node:stream";
+import type { JsonValue } from "../src/tickets.ts";
+import type { ControlEvent } from "../server/sandbox/control.ts";
 import { readViewerRun } from "../server/viewer.ts";
 import { manifestDigest } from "../server/sandbox/manifest.ts";
 import {
@@ -1956,8 +1963,194 @@ describe("Orchestrator retries and stalls", () => {
 	});
 });
 
+async function replayAcceptGuard(
+	input: StageLaunchInput,
+	guard: "tools" | "length" | "requests",
+) {
+	const stdin = new PassThrough();
+	const stdout = new PassThrough();
+	let exit = (_code: number | null) => {};
+
+	const exited = new Promise<number | null>((resolve) => {
+		exit = resolve;
+	});
+
+	let listener: ((event: ControlEvent) => void) | undefined;
+
+	const emit = (record: JsonValue) =>
+		stdout.write(`${JSON.stringify(record)}\n`);
+
+	stdin.on("data", (chunk: Buffer) => {
+		const command = JSON.parse(chunk.toString());
+
+		if (command.type === "abort")
+			emit({ type: "agent_settled", aborted: true });
+
+		if (command.type !== "prompt") return;
+
+		emit({
+			type: "response",
+			id: command.id,
+			command: "prompt",
+			success: true,
+			data: { disposition: "started" },
+		});
+		emit({
+			type: "message_end",
+			message: {
+				role: "assistant",
+				stopReason: guard === "length" ? "length" : "toolUse",
+				provider: "openai",
+				model: "gpt-6.1-sol",
+				usage: { totalTokens: 70 },
+			},
+		});
+
+		if (guard === "tools")
+			for (const id of ["a", "b"])
+				emit({
+					type: "tool_execution_start",
+					toolCallId: id,
+					toolName: "read",
+					args: { path: "PRIVATE-TOOL-ARG" },
+				});
+
+		if (guard === "requests") {
+			listener?.({ event: "gate_closed", reason: "requests" });
+			listener?.({
+				event: "usage",
+				route: null,
+				decision: "deny",
+				reason: "budget-closed",
+				status: 403,
+				bytesIn: 0,
+				bytesOut: 0,
+				inputTokens: null,
+				outputTokens: null,
+			});
+		}
+	});
+	stdin.on("end", () => exit(0));
+
+	const host: StageHost = {
+		now: Date.now,
+		cleanupReserveMs: 100,
+		assetsDigest: "a".repeat(64),
+		versions: { pi: "1.4.0", piHerdrAgents: "3.3.1", piHerdrPstack: "0.5.0" },
+		async startGateway() {
+			return {
+				socketPath: "unused",
+				exited: new Promise(() => {}),
+				subscribe: (callback) => {
+					listener = callback;
+				},
+				closeGate: async () => true,
+				setRoute: async () => true,
+				drainAbort: async () => true,
+				shutdown: async () => null,
+				kill: () => {},
+			};
+		},
+		async launchPi() {
+			return {
+				stdin,
+				stdout,
+				exited,
+				kill: () => exit(null),
+			};
+		},
+		stopSandbox: async () => {},
+		readChildUsage: async () => null,
+		writeReceipt: async () => true,
+		writeOutput: async () => {
+			throw new Error("must not keep partial suite");
+		},
+		stderrLog: async () => null,
+	};
+
+	return runStage(input, host);
+}
+
 describe("Orchestrator base qualification", () => {
 	const refusals = (github: FakeGitHub) => keyed(github, 14, "base-refusal");
+
+	for (const guard of ["tools", "length", "requests"] as const)
+		for (const beforeFeedback of [true, false])
+			it(`retries a charged ${guard} stop ${beforeFeedback ? "before" : "during"} base feedback, preserving attempts across restart and the one-shot`, async () => {
+				const { github, executor, files, clock, start } = world();
+				github.add(labeled(14));
+				executor.behaviors = [{ kind: "pass", usage: 10 }];
+				executor.acceptBehavior = { kind: "pass", usage: 20 };
+				executor.baseOutcome = "preservation_failed";
+				executor.baseReceipt = (binding) => refusedReceipt(binding, FEEDBACK);
+				const failedAttempt = beforeFeedback ? 1 : 2;
+				const launch = executor.launch.bind(executor);
+
+				executor.launch = async (input) => {
+					let attempt: StageLaunch;
+
+					if (input.stage === "accept" && input.attempt === failedAttempt) {
+						executor.launches.push(input);
+						attempt = {
+							kind: "started",
+							done: replayAcceptGuard(input, guard),
+						};
+					} else attempt = await launch(input);
+
+					if (attempt.kind !== "started" || input.stage !== "accept")
+						return attempt;
+
+					return {
+						kind: "started",
+						done: attempt.done.then((result) => {
+							executor.spentBy.set(`accept-${input.attempt}`, result.usage);
+
+							return result;
+						}),
+					};
+				};
+
+				const first = start();
+				await once(first);
+				const claim = files.claims.get(runOf(14));
+				assert.equal(claim?.status, "retrying");
+				assert.equal(claim.attempt, failedAttempt + 1);
+				assert.equal(claim.usage, beforeFeedback ? 80 : 100);
+				assert.equal(claim.baseCheck?.retry !== undefined, !beforeFeedback);
+				assert.ok(!executor.launches.some((l) => l.stage === "build"));
+				const restarted = start();
+				await once(restarted);
+				assert.equal(
+					executor.launches.filter((l) => l.stage === "accept").length,
+					failedAttempt,
+				);
+				clock.t += 9_999;
+				await once(restarted);
+				assert.equal(
+					executor.launches.filter((l) => l.stage === "accept").length,
+					failedAttempt,
+				);
+				clock.t += 20_001;
+				await once(restarted);
+				await restarted.tick();
+
+				assert.deepEqual(launched(executor), [
+					"specify-1",
+					"accept-1",
+					"accept-2",
+					"accept-3",
+				]);
+				assert.equal(files.claims.get(runOf(14))?.usage, 120);
+				assert.equal(files.claims.get(runOf(14))?.status, "failed");
+				assert.equal(refusals(github).length, 1);
+				assert.equal(keyed(github, 14, "acceptance").length, 0);
+				assert.ok(
+					!JSON.stringify(github.markers(14)).includes("PRIVATE-TOOL-ARG"),
+				);
+				const last = executor.launches.at(-1);
+				assert.equal(last?.remainingRunTokens, TRUSTED_RUN_CAP - 100);
+				assert.equal(last?.settings.maxTokens, ACCEPTANCE_MAX_TOKENS - 90);
+			});
 
 	it("refuses a broken suite twice before build with only the final keyed public reason", async () => {
 		const { github, executor, start } = world();
