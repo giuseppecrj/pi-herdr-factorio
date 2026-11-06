@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import fs, {
 	chmodSync,
+	cpSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
@@ -15,10 +16,13 @@ import fs, {
 	writeSync,
 	utimesSync,
 } from "node:fs";
-import { request } from "node:http";
+import { createServer, request } from "node:http";
+import { runHeldoutBase } from "../../server/gates.ts";
+import { assessBase } from "../../src/diagnosis.ts";
 import {
 	createReadTool,
 	createGrepTool,
+	createLsTool,
 	createEditTool,
 	createBashTool,
 } from "@earendil-works/pi-coding-agent";
@@ -141,9 +145,11 @@ import {
 	ACCEPTANCE_SKILLS,
 	ACCEPTANCE_TOOLS,
 	acceptancePrompt,
+	writeAcceptance,
 } from "../../src/accept.ts";
 import { preparedReviewFixture } from "../helpers.ts";
 import { manifestDigest } from "../../server/sandbox/manifest.ts";
+import { wrapPiArgv } from "../../server/sandbox/assets/pi.ts";
 
 const FIXTURES = new URL("./fixtures/", import.meta.url).pathname;
 const RUN = "a".repeat(64);
@@ -3811,6 +3817,501 @@ function agentThroughGateway(socketPath: () => string) {
 	};
 }
 
+describe("pinned zero-token accept replay", () => {
+	it("takes one serialized request with sufficient evidence, retains missing-fact fallback and sends accept effort", async (t) => {
+		const pin = JSON.parse(
+			readFileSync(
+				new URL("../fixtures/efficiency/accept-replay.json", import.meta.url),
+				"utf8",
+			),
+		);
+
+		const repo = "owner/repo";
+		assert.ok(isRepoSlug(repo) && isGitSha(pin.baseline));
+		assert.equal(
+			digestOf(readFileSync(".github/factory/WORKFLOW.md", "utf8")),
+			pin.workflowDigest,
+		);
+		const root = mkdtempSync(join(tmpdir(), "factory-eff3-replay-"));
+		t.after(() => rmSync(root, { recursive: true, force: true }));
+		const tree = join(root, "base");
+		mkdirSync(join(tree, "src"), { recursive: true });
+		mkdirSync(join(tree, "test"));
+
+		const lines = Array.from(
+			{ length: pin.sourceLines },
+			() => "// public padding",
+		);
+
+		const source = [...lines];
+		source[pin.implementationLine - 1] =
+			"export function increment(value) { return value; }";
+		const tests = [...lines];
+		tests[0] =
+			"import test from 'node:test'; import assert from 'node:assert/strict';";
+		tests[1] = "import { increment } from '../src/increment.mjs';";
+		tests[pin.testLine - 1] =
+			"test('finite', () => assert.equal(increment(1), 1));";
+		writeFileSync(join(tree, "src/increment.mjs"), source.join("\n"));
+		writeFileSync(join(tree, "test/increment.test.mjs"), tests.join("\n"));
+		writeFileSync(
+			join(tree, "package.json"),
+			JSON.stringify({
+				name: "replay",
+				version: "1.0.0",
+				type: "module",
+				scripts: { test: "node --test test/*.test.mjs" },
+			}),
+		);
+		writeFileSync(
+			join(tree, "package-lock.json"),
+			JSON.stringify({
+				name: "replay",
+				version: "1.0.0",
+				lockfileVersion: 3,
+				packages: { "": { name: "replay", version: "1.0.0" } },
+			}),
+		);
+
+		const paths = [
+			"src/increment.mjs",
+			"test/increment.test.mjs",
+			"package.json",
+		];
+
+		const contract: Contract = {
+			version: 2,
+			runId: digest(RUN),
+			issue: 41,
+			base: { repo, sha: pin.baseline },
+			snapshot: {
+				digest: digestOf("public accept replay"),
+				source: "unedited",
+				eventId: "41",
+				eventAt: "2026-11-06T00:00:00Z",
+			},
+			link: null,
+			summary: "Increment finite values and reject non-finite input",
+			behavior: [
+				"Increment finite values by one; non-finite values return zero",
+			],
+			exclusions: ["No dependencies"],
+			acceptance: [
+				{
+					id: "A1",
+					kind: "new_behavior",
+					text: "Finite values increment by one and non-finite values return zero",
+				},
+				{
+					id: "A2",
+					kind: "preservation",
+					text: "Preserve the callable increment export",
+				},
+			],
+			compatibility: ["Preserve the export"],
+			limits: ["No network"],
+			files: ["src/increment.mjs"],
+			evidence: [
+				{
+					path: "src/increment.mjs",
+					start: pin.implementationLine,
+					end: pin.implementationLine,
+					fact: "increment export",
+				},
+			],
+		};
+
+		const unchanged = contractDigestOf(contractBytes(contract));
+		const suiteText = JSON.stringify(pin.suite);
+		const suite = writeAcceptance(suiteText, contract);
+		assert.ok(suite.kind === "suite");
+		const upstream = await startEchoFixture(0);
+		t.after(() => upstream.close());
+		const forwarded: string[] = [];
+
+		const capture = createServer((req, res) => {
+			const chunks: Buffer[] = [];
+			req.on("data", (chunk) => chunks.push(chunk));
+			req.on("end", () => {
+				const body = Buffer.concat(chunks);
+				forwarded.push(body.toString("utf8"));
+
+				const echo = request(
+					{
+						hostname: "127.0.0.1",
+						port: upstream.port,
+						method: "POST",
+						path: req.url,
+						headers: req.headers,
+					},
+					(reply) => {
+						res.writeHead(reply.statusCode ?? 500, {
+							"Content-Type": "text/event-stream",
+						});
+						reply.pipe(res);
+					},
+				);
+
+				echo.on("error", () => res.destroy());
+				echo.end(body);
+			});
+		});
+
+		await new Promise<void>((done) => capture.listen(0, "127.0.0.1", done));
+		t.after(() => new Promise<void>((done) => capture.close(() => done())));
+		const address = capture.address();
+		assert.ok(address !== null && address instanceof Object);
+
+		const fixtureModel: Model<"openai-responses"> = {
+			id: "gpt-6.1-sol",
+			name: "synthetic echo",
+			api: "openai-responses",
+			provider: "openai",
+			baseUrl: "http://127.0.0.1:1/openai/v1",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 8192,
+		};
+
+		const zero: Usage = {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		};
+
+		const read = createReadTool(tree);
+		const tools = [read, createGrepTool(tree), createLsTool(tree)];
+
+		const results: {
+			variant: string;
+			requestBytes: number[];
+			forwardedBytes: number[];
+			requests: number;
+			tools: number;
+			effort: string;
+			injectedTokens: number;
+		}[] = [];
+
+		for (const variant of ["baseline", "fixed", "missing"] as const) {
+			const shown = await sourceExcerpts({
+				files: contract.files,
+				evidence: contract.evidence,
+				identity: `${repo}@${pin.baseline}`,
+				accept: variant !== "baseline",
+				checkout: {
+					files: paths,
+					read: async (path) =>
+						variant === "missing" && path === "test/increment.test.mjs"
+							? null
+							: readFileSync(join(tree, path), "utf8"),
+				},
+			});
+
+			let prompt = acceptancePrompt({
+				contract,
+				files: paths,
+				inlined: shown,
+				guidance: { general: "", stages: {} },
+			});
+
+			if (variant === "baseline") {
+				const instruction = prompt.split("\n\n")[1];
+				assert.ok(instruction !== undefined);
+				prompt = prompt.replace(instruction, pin.baselineInstruction);
+			}
+
+			assert.ok(sourceFacts(shown).bytes <= 16 * 1024);
+
+			for (const criterion of contract.acceptance)
+				assert.ok(prompt.includes(criterion.text));
+
+			const history: Message[] = [
+				{ role: "user", content: prompt, timestamp: 0 },
+			];
+
+			const bodies: string[] = [];
+			const events: ControlEvent[] = [];
+			const offset = forwarded.length;
+
+			let handle: GatewayHandle | null = null,
+				journal = "",
+				error: string | null = null;
+
+			const handles: GatewayHandle[] = [];
+			let calls = 0;
+
+			const gateway = inProcessGateway(address.port, events, (text) => {
+				journal += text;
+			});
+
+			const send = async () => {
+				const response = await streamSimple(
+					fixtureModel,
+					{ systemPrompt: STAGE_SYSTEM_PROMPT, messages: history, tools },
+					{
+						apiKey: "synthetic-not-a-secret",
+						reasoning: "low",
+						fetch: async (_url, init) => {
+							const body = String(init?.body ?? "");
+							bodies.push(body);
+
+							return new Promise<Response>((done, reject) => {
+								const req = request(
+									{
+										socketPath: handle?.socketPath,
+										method: "POST",
+										path: "/openai/v1/responses",
+										headers: {
+											Host: "127.0.0.1:18080",
+											"Content-Type": "application/json",
+										},
+										setHost: false,
+									},
+									(res) => {
+										const chunks: Buffer[] = [];
+										res.on("data", (chunk) => chunks.push(chunk));
+										res.on("end", () =>
+											done(
+												new Response(Buffer.concat(chunks), {
+													status: res.statusCode,
+													headers: { "Content-Type": "text/event-stream" },
+												}),
+											),
+										);
+									},
+								);
+
+								req.on("error", reject);
+								req.end(body);
+							});
+						},
+					},
+				).result();
+
+				assert.notEqual(
+					response.stopReason,
+					"error",
+					response.errorMessage ?? "echo failed",
+				);
+			};
+
+			const h = harness(
+				[
+					(command, pi) => {
+						if (command.type === "get_last_assistant_text") {
+							pi.emit({
+								type: "response",
+								id: command.id ?? "",
+								command: "get_last_assistant_text",
+								success: true,
+								data: { text: suiteText },
+							});
+
+							return;
+						}
+
+						if (command.type === "abort") {
+							pi.emit({ type: "agent_settled", aborted: true });
+
+							return;
+						}
+
+						if (command.type !== "prompt") return;
+						pi.emit(started(String(command.id)), { type: "agent_start" });
+						void (async () => {
+							pi.emit({ type: "turn_start" });
+							await send();
+
+							// Scripted discovery depends on the serialized evidence, not the variant name.
+							if (!(bodies[0] ?? "").includes("test('finite'")) {
+								const args = {
+									path: "test/increment.test.mjs",
+									offset: 1,
+									limit: 120,
+								};
+
+								const id = "call_harness";
+								history.push({
+									role: "assistant",
+									api: "openai-responses",
+									provider: "openai",
+									model: fixtureModel.id,
+									content: [
+										{
+											type: "text",
+											text: "Missing fact: how existing tests import and exercise increment.",
+										},
+										{ type: "toolCall", id, name: "read", arguments: args },
+									],
+									usage: zero,
+									stopReason: "toolUse",
+									timestamp: 0,
+								});
+								pi.emit(assistant({ tokens: 16, stopReason: "toolUse" }), {
+									type: "tool_execution_start",
+									toolCallId: id,
+									toolName: "read",
+									args,
+								});
+
+								const output = await read.execute(
+									id,
+									args,
+									new AbortController().signal,
+								);
+
+								calls++;
+
+								const message = {
+									role: "toolResult" as const,
+									toolCallId: id,
+									toolName: "read",
+									content: output.content.flatMap((block) =>
+										block.type === "text"
+											? [{ type: "text" as const, text: block.text }]
+											: [],
+									),
+									isError: false,
+									timestamp: 0,
+								};
+
+								history.push(message);
+								pi.emit(
+									{ type: "message_end", message },
+									{
+										type: "tool_execution_end",
+										toolCallId: id,
+										toolName: "read",
+										result: { content: message.content },
+										isError: false,
+									},
+									{ type: "turn_start" },
+								);
+								await send();
+							}
+
+							assert.ok((bodies.at(-1) ?? "").includes("test('finite'"));
+							pi.emit(assistant({ tokens: 16 }), {
+								type: "agent_settled",
+								aborted: false,
+							});
+						})().catch((caught) => {
+							error = String(caught);
+							pi.emit(
+								assistant({
+									stopReason: "error",
+									errorMessage: String(caught),
+								}),
+								{ type: "agent_settled", aborted: false },
+							);
+						});
+					},
+				],
+				{
+					gateway: async (table, timeline) => {
+						handle = await gateway(table, timeline);
+						handles.push(handle);
+
+						return handle;
+					},
+					cleanupReserveMs: 2000,
+				},
+			);
+
+			const result = await runStage(
+				input({ stage: "accept", prompt, source: sourceFacts(shown) }),
+				{ ...h.host, readJournal: async () => journal },
+			);
+
+			assert.equal(error, null);
+			assert.equal(result.kind, "passed");
+			assert.equal(h.outputs[0], suiteText);
+			assert.equal(writeAcceptance(h.outputs[0] ?? "", contract).kind, "suite");
+			assert.equal(result.receipt.guardStop, null);
+			assert.equal(bodies.length, pin.expectedRequests[variant]);
+			assert.equal(result.receipt.efficiency?.modelRequests, bodies.length);
+			assert.equal(calls, variant === "fixed" ? 0 : 1);
+			assert.equal(h.tables[0]?.ceiling.modelRequests, 3);
+			const sent = forwarded.slice(offset);
+			assert.equal(sent.length, bodies.length);
+
+			for (const body of sent)
+				assert.equal(JSON.parse(body).reasoning.effort, pin.effort);
+			results.push({
+				variant,
+				requestBytes: bodies.map((body) => Buffer.byteLength(body)),
+				forwardedBytes: sent.map((body) => Buffer.byteLength(body)),
+				requests: bodies.length,
+				tools: calls,
+				effort: pin.effort,
+				injectedTokens: result.usage,
+			});
+
+			if (variant === "fixed")
+				t.diagnostic(
+					JSON.stringify({
+						serializedAcceptRequest: JSON.parse(bodies[0] ?? "{}"),
+					}),
+				);
+
+			for (const current of handles)
+				rmSync(join(current.socketPath, ".."), {
+					recursive: true,
+					force: true,
+				});
+		}
+
+		cpSync(
+			join(process.cwd(), ".github/factory/gates"),
+			join(tree, ".github/factory/gates"),
+			{ recursive: true },
+		);
+		const startedAt = Date.now();
+
+		const evidence = await runHeldoutBase({
+			tree,
+			workDir: join(root, "base-check"),
+			cacheDir: join(root, "dependencies"),
+			binding: {
+				runId: contract.runId,
+				repo,
+				issue: contract.issue,
+				contractDigest: unchanged,
+				acceptanceDigest: digestOf(suiteText),
+				baseSha: contract.base.sha,
+				gateSha: contract.base.sha,
+			},
+			contract,
+			suite: suite.suite,
+			canary: `factory-holdout-${"0".repeat(64)}`,
+			startedAt,
+			deadline: startedAt + 30_000,
+		});
+
+		assert.equal(
+			assessBase(evidence).assessment.kind,
+			"ready",
+			JSON.stringify(evidence),
+		);
+		assert.equal(contractDigestOf(contractBytes(contract)), unchanged);
+		assert.equal(upstream.arrivals("/openai/v1/responses"), 5);
+		assert.equal(upstream.strays, 0);
+		t.diagnostic(
+			JSON.stringify({
+				acceptReplay: results,
+				baseQualified: true,
+				realModelTokens: 0,
+				fixture: pin.baseline,
+			}),
+		);
+	});
+});
+
 describe("pinned zero-token source replay", () => {
 	it("reduces serialized provider input at equal B-shaped build/repair work without losing cited facts", async (t) => {
 		const pin = JSON.parse(
@@ -4852,6 +5353,21 @@ describe("runStage with a fake Pi process", () => {
 });
 
 describe("stage Pi command", () => {
+	it("forwards the selected accept effort through the existing hardened wrapper", () => {
+		const args = piCommand(model("openai/gpt-6.1-sol"), false, "low");
+		const wrapped = wrapPiArgv(args.slice(1), ["read", "grep", "ls"]);
+
+		assert.equal(wrapped.ok, true);
+
+		if (!wrapped.ok) return;
+		assert.deepEqual(wrapped.argv.slice(-2), ["--thinking", "low"]);
+		assert.ok(wrapped.argv.includes("--no-context-files"));
+		assert.equal(wrapped.argv.includes("--no-tools"), false);
+		assert.equal(
+			piCommand(model("openai/gpt-6.1-sol")).includes("--thinking"),
+			false,
+		);
+	});
 	it("keeps a session under the writable agent dir without loading any extension", () => {
 		assert.deepEqual(piCommand(model("openai/gpt-6.1-sol")), [
 			"/opt/factory/bin/pi",
@@ -5185,13 +5701,18 @@ describe("stage skills", () => {
 				stdout: command === "bwrap" ? "bubblewrap 0.9.0\n" : "",
 				stderr: "",
 			}),
-			host: () => ({ ...h.host, assetsDigest: hash }),
+			host: (config) => {
+				assert.equal(config.acceptEffort, "low");
+
+				return { ...h.host, assetsDigest: hash };
+			},
 		});
 
 		assert.equal(await executor.preflight(), true);
 
 		const launched = await executor.launch({
 			...input({ stage: "accept", prompt }),
+			acceptEffort: "low",
 			workspace: join(dir, "workspace"),
 			tools: ACCEPTANCE_TOOLS,
 			skills: ACCEPTANCE_SKILLS,

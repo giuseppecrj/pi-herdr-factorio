@@ -933,6 +933,7 @@ export type InlinedFile = {
 		readonly contentDigest: Digest;
 		readonly selection:
 			| "evidence"
+			| "test_harness"
 			| "fallback_missing"
 			| "fallback_stale"
 			| "omitted_ceiling";
@@ -1002,6 +1003,144 @@ export function sourceFacts(files: readonly InlinedFile[]): SourceFacts {
 	};
 }
 
+/** Public checkout material only, never a held-out suite, session or controller state. */
+export function acceptanceSourcePath(path: string): boolean {
+	return (
+		isRepoPath(path) &&
+		!path
+			.split("/")
+			.some(
+				(part) =>
+					part.startsWith(".") ||
+					/^(?:acceptance|heldout|held-out|oracle-corpus|factory-state|state|sessions)$/i.test(
+						part,
+					),
+			)
+	);
+}
+
+async function acceptExcerpts(
+	input: Parameters<typeof sourceExcerpts>[0],
+): Promise<InlinedFile[]> {
+	const files = input.checkout.files.filter(acceptanceSourcePath);
+	const named = input.files.filter(acceptanceSourcePath);
+	const evidence = input.evidence.filter((e) => acceptanceSourcePath(e.path));
+	const sources = [...new Set([...evidence.map((e) => e.path), ...named])];
+
+	const tests = files.filter((path) =>
+		/\.(?:test|spec|cases)\.[cm]?[jt]sx?$/.test(path),
+	);
+
+	const harness = new Set(sources.filter((path) => tests.includes(path)));
+
+	const stem = (path: string) =>
+		path
+			.replace(/^(?:src|server|lib|test|tests)\//, "")
+			.replace(/(?:\.(?:test|spec|cases))?\.[cm]?[jt]sx?$/, "");
+
+	for (const source of sources) {
+		if (tests.includes(source)) continue;
+		const key = stem(source);
+
+		const rank = (test: string) => {
+			const candidate = stem(test);
+
+			if (candidate === key) return 100;
+
+			if (candidate.split("/").at(-1) === key.split("/").at(-1)) return 50;
+
+			const directory = key.includes("/")
+				? key.slice(0, key.lastIndexOf("/") + 1)
+				: "";
+
+			return directory !== "" &&
+				candidate.startsWith(directory) &&
+				/(?:runner|index)$/.test(candidate)
+				? 10
+				: 0;
+		};
+
+		const nearest = tests
+			.filter((path) => rank(path) > 0)
+			.sort((a, b) => rank(b) - rank(a) || a.localeCompare(b))[0];
+
+		if (nearest !== undefined && !sources.includes(nearest) && harness.size < 3)
+			harness.add(nearest);
+	}
+
+	if (files.includes("package.json")) harness.add("package.json");
+	const cached = new Map<string, string | null>();
+
+	const checkout = {
+		files,
+		async read(path: string, cap: number): Promise<string | null> {
+			if (!files.includes(path)) return null;
+
+			if (!cached.has(path))
+				cached.set(
+					path,
+					await input.checkout.read(path, NAMED_FILE_READ_BYTES),
+				);
+			const text = cached.get(path) ?? null;
+
+			return text !== null && Buffer.byteLength(text) <= cap ? text : null;
+		},
+	};
+
+	const hints: Evidence[] = [];
+
+	for (const path of harness) {
+		const text = await checkout.read(path, NAMED_FILE_READ_BYTES);
+
+		if (text === null) continue;
+		const lines = text.split("\n");
+		const points = new Set([0]);
+
+		if (path === "package.json") {
+			const scripts = lines.findIndex((line) => /"scripts"\s*:/.test(line));
+
+			if (scripts >= 0) points.add(scripts);
+		} else {
+			const imported = lines.findIndex(
+				(line) =>
+					sources.some((source) =>
+						line.includes(stem(source).split("/").at(-1) ?? source),
+					) && /(?:from\s|import\s|require\()/.test(line),
+			);
+
+			const firstTest = lines.findIndex((line) =>
+				/\b(?:describe|it|test)\s*\(/.test(line),
+			);
+
+			if (imported >= 0) points.add(imported);
+
+			if (firstTest >= 0) points.add(firstTest);
+		}
+
+		for (const point of points)
+			hints.push({
+				path,
+				start: point + 1,
+				end: Math.min(lines.length, point + 16),
+				fact: "Existing public test harness",
+			});
+	}
+
+	const shown = await sourceExcerpts({
+		...input,
+		files: [...named, ...harness],
+		evidence: [...evidence, ...hints],
+		checkout,
+		accept: false,
+	});
+
+	return shown.map((file) =>
+		harness.has(file.path) && file.excerpt?.selection === "evidence"
+			? { ...file, excerpt: { ...file.excerpt, selection: "test_harness" } }
+			: file,
+	);
+}
+
 /** Localize only in the prepared checkout. The immutable contract is never rewritten. */
 export async function sourceExcerpts(input: {
 	readonly files: readonly string[];
@@ -1012,7 +1151,9 @@ export async function sourceExcerpts(input: {
 	};
 	readonly identity: string;
 	readonly repair?: boolean;
+	readonly accept?: boolean;
 }): Promise<InlinedFile[]> {
+	if (input.accept) return acceptExcerpts(input);
 	const paths = new Set([...input.evidence.map((e) => e.path), ...input.files]);
 	const unavailable: InlinedFile[] = [];
 

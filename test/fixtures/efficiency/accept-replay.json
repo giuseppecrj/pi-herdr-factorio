@@ -1,0 +1,43 @@
+{
+	"version": 1,
+	"baseline": "ae49670f5d0b8f95119a9fbc3c505adbc6ea97eb",
+	"workflowDigest": "756d5df811d6d282dfc483c3bc6cf35255adbd8c57f18413d4a78164284643ad",
+	"kind": "synthetic-public-accept-generation-and-missing-fact-fallback",
+	"sourceLines": 200,
+	"implementationLine": 120,
+	"testLine": 90,
+	"effort": "low",
+	"expectedRequests": { "baseline": 2, "fixed": 1, "missing": 2 },
+	"baselineInstruction": "Reply in one turn when the inlined files suffice. Otherwise use at most two read, grep or ls calls, only under /workspace. Read 80 to 120 lines per read using offset and limit; grep with limit 10 to 20 and context 2 to 3. Refine searches rather than paginating grep. A larger relevant block is allowed when justified. Never read a SKILL.md, a session or a path outside /workspace. Do not implement the change, run checks or write files: the controller stores the suite.",
+	"suite": {
+		"version": 2,
+		"scenarios": [
+			{
+				"id": "S1",
+				"criteria": ["A1"],
+				"checks": ["increment.test.mjs"],
+				"judge": null
+			},
+			{
+				"id": "S2",
+				"criteria": ["A2"],
+				"checks": ["export.test.mjs"],
+				"judge": null
+			}
+		],
+		"files": [
+			{
+				"path": "increment.test.mjs",
+				"type": "node:test",
+				"content": "import test from 'node:test'; import assert from 'node:assert/strict'; import { increment } from '../../../../src/increment.mjs'; test('finite increments', () => assert.equal(increment(1), 2)); test('invalid returns zero', () => assert.equal(increment(NaN), 0));\n"
+			},
+			{
+				"path": "export.test.mjs",
+				"type": "node:test",
+				"content": "import test from 'node:test'; import assert from 'node:assert/strict'; import { increment } from '../../../../src/increment.mjs'; test('export preserved', () => assert.equal(typeof increment, 'function'));\n"
+			}
+		]
+	},
+	"realModelRequests": 0,
+	"realModelTokens": 0
+}

@@ -165,6 +165,42 @@ describe("parseWorkflow", () => {
 		);
 	});
 
+	it("defaults accept reasoning effort to medium and validates the trusted accept-only setting", () => {
+		const defaults = parse(frontMatter(""));
+
+		assert.equal(defaults.kind, "valid");
+
+		if (defaults.kind !== "valid") return;
+		assert.equal(defaults.config.stages.accept.reasoningEffort, "medium");
+
+		for (const effort of ["low", "medium", "high"]) {
+			const result = parse(
+				frontMatter(`stages:\n  accept:\n    reasoning_effort: ${effort}`),
+			);
+
+			assert.equal(result.kind, "valid");
+
+			if (result.kind === "valid")
+				assert.equal(result.config.stages.accept.reasoningEffort, effort);
+		}
+
+		for (const effort of ["off", "turbo", "null", "[]", "7"]) {
+			assert.equal(
+				validation(
+					frontMatter(`stages:\n  accept:\n    reasoning_effort: ${effort}`),
+				).field,
+				"stages.accept.reasoning_effort",
+			);
+		}
+
+		for (const stage of ["specify", "build", "review", "validate"])
+			assert.equal(
+				errorOf(frontMatter(`stages:\n  ${stage}:\n    reasoning_effort: low`))
+					.kind,
+				"workflow_validation_error",
+			);
+	});
+
 	it("parses front matter, defaults and stage guidance", () => {
 		const parsed = parse(valid);
 

@@ -238,6 +238,51 @@ describe("held-out acceptance output", () => {
 		assert.ok(!prompt.includes("runId"));
 		assert.ok(!prompt.includes("/state/acceptance/"));
 	});
+	it("requests one structured suite, allows only named missing-fact fallback, and hides private map entries", () => {
+		const prompt = acceptancePrompt({
+			contract,
+			files: [
+				"src/version.ts",
+				"test/version.test.ts",
+				"test/acceptance/1/checks/private.test.ts",
+				"test/fixtures/oracle-corpus/561/private.test.ts",
+				".pi/sessions/private.jsonl",
+				"/state/receipt.json",
+			],
+			inlined: [
+				{
+					path: "test/acceptance/1/checks/private.test.ts",
+					text: "PRIVATE-ORACLE",
+					totalLines: 1,
+				},
+			],
+			guidance: { general: "", stages: {} },
+		});
+
+		assert.match(prompt, /one structured generation request/);
+		assert.match(prompt, /Prefer zero tool calls/);
+		assert.match(prompt, /name the missing fact/);
+		assert.match(prompt, /at most two read, grep or ls calls/);
+		assert.match(prompt, /cover every criterion/);
+		assert.doesNotMatch(
+			prompt,
+			/private\.test|private\.jsonl|\/state\/receipt|PRIVATE-ORACLE/,
+		);
+
+		for (const field of [
+			"base",
+			"summary",
+			"behavior",
+			"exclusions",
+			"acceptance",
+			"compatibility",
+			"limits",
+			"files",
+			"evidence",
+		])
+			assert.ok(prompt.includes(`"${field}":`), field);
+	});
+
 	it("states the process.cwd() repository-root rule and the exact four-level depth from checks/", () => {
 		const prompt = acceptancePrompt({
 			contract,
