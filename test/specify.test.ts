@@ -992,6 +992,85 @@ describe("accept source and existing-test pack", () => {
 		);
 	});
 
+	it("keeps import and script entry points when tests and package.json are already contract inputs", async () => {
+		const path = "test/a.test.ts";
+
+		const tree = new Map([
+			[
+				path,
+				`import test from 'node:test';\n${"// padding\n".repeat(120)}test('cited', () => {});`,
+			],
+			[
+				"package.json",
+				`{\n${"\n".repeat(100)}"scripts":{"test":"node --test"}\n}`,
+			],
+		]);
+
+		const shown = await sourceExcerpts({
+			files: [path, "package.json"],
+			evidence: [{ path, start: 122, end: 122, fact: "cited test" }],
+			checkout: {
+				files: [...tree.keys()],
+				read: async (path) => tree.get(path) ?? null,
+			},
+			identity: "repo@base",
+			accept: true,
+		});
+
+		const text = shown.map(renderInlined).join("\n");
+		assert.match(text, /import test from/);
+		assert.match(text, /test\('cited'/);
+		assert.match(text, /node --test/);
+	});
+
+	it("selects nested cases or a nearby runner deterministically from the public map", async () => {
+		const tree = new Map([
+			["server/sandbox/gateway.ts", "export const gateway = 1;"],
+			["server/sandbox/assets/pi.ts", "export const pi = 1;"],
+			["test/sandbox/gateway.cases.ts", "test('gateway harness', () => {});"],
+			["test/sandbox/assets/runner.test.ts", "test('pi harness', () => {});"],
+			["test/gateway.test.ts", "WRONG-HARNESS"],
+		]);
+
+		const shown = await sourceExcerpts({
+			files: ["server/sandbox/gateway.ts", "server/sandbox/assets/pi.ts"],
+			evidence: [],
+			checkout: {
+				files: [...tree.keys()].reverse(),
+				read: async (path) => tree.get(path) ?? null,
+			},
+			identity: "repo@base",
+			accept: true,
+		});
+
+		const text = shown.map(renderInlined).join("\n");
+		assert.match(text, /gateway harness/);
+		assert.match(text, /pi harness/);
+		assert.doesNotMatch(text, /WRONG-HARNESS/);
+	});
+
+	it("bounds source, public tests and their labels together at the existing 16 KiB ceiling", async () => {
+		const paths = ["src/a.ts", "test/a.test.ts", "package.json"];
+
+		const shown = await sourceExcerpts({
+			files: ["src/a.ts"],
+			evidence: [{ path: "src/a.ts", start: 1, end: 50, fact: "wide" }],
+			checkout: {
+				files: paths,
+				read: async (path) =>
+					path === "package.json"
+						? '{"scripts":{"test":"node --test"}}'
+						: `${"€".repeat(400)}\n`.repeat(100),
+			},
+			identity: "repo@base",
+			accept: true,
+		});
+
+		assert.ok(sourceFacts(shown).bytes <= 16 * 1024);
+		assert.equal(sourceFacts(shown).capHit, true);
+		assert.ok(!shown.map(renderInlined).join("\n").includes("\ufffd"));
+	});
+
 	it("falls back to the public package test entry point when no matching test exists", async () => {
 		const tree = new Map([
 			["src/new.ts", "export const value = 0;"],

@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 Use only the contract and trusted base checkout supplied in this fresh session. The issue, any earlier session, candidate code and implementation transcript are not inputs. Do not implement the change.
 
-Start with the checkout-bound evidence excerpts. Omission labels mean other code exists. If more source is needed, read 80 to 120 lines with offset/limit. Grep with limit 10 to 20 and context 2 to 3; refine the search rather than paginate it. A larger relevant block is allowed when justified. Stay within the prompt's two-call allowance.
+Treat this as one structured generation request. Use the complete contract and checkout-bound source and existing-test excerpts to return the complete suite in one reply. Prefer zero tool calls. Omission labels mean other code exists, not that you must browse it. Only when a fact needed for a correct check is missing, name that fact before requesting it. Then read 80 to 120 lines with offset/limit, or grep with limit 10 to 20 and context 2 to 3; refine the search rather than paginate it. A larger relevant block is allowed when justified. Stay within the same two-call allowance in total. Never read test/acceptance, held-out material, controller state or other sessions. Do not drop a criterion or assertion to fit.
 
 Map every contract criterion to a scenario ID. Use executable node:test checks with real assertions for observable behavior, including invalid input and compatibility where the contract requires them. Checks should fail on a violating candidate, not merely confirm that a file exists. Do not require behavior outside the contract. Use a short judge instruction only for a genuinely non-executable criterion.
 

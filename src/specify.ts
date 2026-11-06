@@ -1031,7 +1031,7 @@ async function acceptExcerpts(
 		/\.(?:test|spec|cases)\.[cm]?[jt]sx?$/.test(path),
 	);
 
-	const harness = new Set<string>();
+	const harness = new Set(sources.filter((path) => tests.includes(path)));
 
 	const stem = (path: string) =>
 		path
@@ -1068,8 +1068,7 @@ async function acceptExcerpts(
 			harness.add(nearest);
 	}
 
-	if (files.includes("package.json") && !sources.includes("package.json"))
-		harness.add("package.json");
+	if (files.includes("package.json")) harness.add("package.json");
 	const cached = new Map<string, string | null>();
 
 	const checkout = {

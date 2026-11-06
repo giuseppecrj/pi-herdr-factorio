@@ -249,7 +249,13 @@ describe("held-out acceptance output", () => {
 				".pi/sessions/private.jsonl",
 				"/state/receipt.json",
 			],
-			inlined: [],
+			inlined: [
+				{
+					path: "test/acceptance/1/checks/private.test.ts",
+					text: "PRIVATE-ORACLE",
+					totalLines: 1,
+				},
+			],
 			guidance: { general: "", stages: {} },
 		});
 
@@ -260,7 +266,7 @@ describe("held-out acceptance output", () => {
 		assert.match(prompt, /cover every criterion/);
 		assert.doesNotMatch(
 			prompt,
-			/private\.test|private\.jsonl|\/state\/receipt/,
+			/private\.test|private\.jsonl|\/state\/receipt|PRIVATE-ORACLE/,
 		);
 
 		for (const field of [
