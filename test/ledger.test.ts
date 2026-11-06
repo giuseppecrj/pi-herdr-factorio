@@ -27,6 +27,7 @@ import {
 import { digestOf, runIdOf } from "../src/run.ts";
 import { isGitSha, type GitSha } from "../src/workflow.ts";
 import { LedgerGit, repo } from "./ledger-git.ts";
+import { TRUSTED_RUN_CAP } from "./fake-ticket-adapter.ts";
 import { fileLedgerOutbox, pumpLedgerOutbox } from "../server/controller.ts";
 import { execFile } from "../server/cli.ts";
 import {
@@ -351,7 +352,7 @@ describe("ledger row codec", () => {
 					kind: "unavailable",
 					reason: "legacy_not_recorded",
 				},
-				effectiveRunTokenCap: 500_000,
+				effectiveRunTokenCap: TRUSTED_RUN_CAP,
 			},
 		});
 
@@ -366,7 +367,7 @@ describe("ledger row codec", () => {
 						policy,
 						verificationDigest: digestOf("manifest"),
 						trustedRunTokenCap: 0,
-						effectiveRunTokenCap: 500_000,
+						effectiveRunTokenCap: TRUSTED_RUN_CAP,
 					},
 				}),
 			{ code: "invalid_count" },
@@ -422,8 +423,8 @@ describe("ledger row codec", () => {
 								? base.provenance.policy
 								: assert.fail("fixture"),
 						verificationDigest: digestOf("manifest"),
-						trustedRunTokenCap: 500_000,
-						effectiveRunTokenCap: 500_001,
+						trustedRunTokenCap: TRUSTED_RUN_CAP,
+						effectiveRunTokenCap: TRUSTED_RUN_CAP + 1,
 					},
 				},
 			],

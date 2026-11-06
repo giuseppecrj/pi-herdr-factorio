@@ -24,6 +24,7 @@ import { sandboxExecutor } from "../server/sandbox.ts";
 import { readViewerRun } from "../server/viewer.ts";
 import { manifestDigest } from "../server/sandbox/manifest.ts";
 import {
+	BUILD_MAX_TOKENS,
 	collectPatch,
 	storePatch,
 	readPatch,
@@ -144,6 +145,7 @@ import {
 	MAIN_SHA,
 	networkError,
 	renamedEvent,
+	TRUSTED_RUN_CAP,
 	TRUSTED_WORKFLOW,
 } from "./fake-ticket-adapter.ts";
 
@@ -1571,11 +1573,11 @@ describe("Orchestrator restart recovery", () => {
 	}
 
 	for (const [spent, launches] of [
-		[499_999, true],
-		[500_000, false],
-		[500_001, false],
+		[TRUSTED_RUN_CAP - 1, true],
+		[TRUSTED_RUN_CAP, false],
+		[TRUSTED_RUN_CAP + 1, false],
 	] as const)
-		it(`restores ${spent} spent tokens against the 500000 run cap and ${launches ? "launches with what is left" : "launches nothing"}`, async () => {
+		it(`restores ${spent} spent tokens against the ${TRUSTED_RUN_CAP} run cap and ${launches ? "launches with what is left" : "launches nothing"}`, async () => {
 			const ctx = world();
 			const { github, executor, start } = ctx;
 
@@ -1586,7 +1588,10 @@ describe("Orchestrator restart recovery", () => {
 
 			if (launches) {
 				assert.equal(executor.launches.length, 2);
-				assert.equal(executor.launches[1]?.remainingRunTokens, 500_000 - spent);
+				assert.equal(
+					executor.launches[1]?.remainingRunTokens,
+					TRUSTED_RUN_CAP - spent,
+				);
 
 				return;
 			}
@@ -1601,7 +1606,7 @@ describe("Orchestrator restart recovery", () => {
 		const ctx = world();
 		const { github, executor, start } = ctx;
 
-		await stopAfterUnmarkedSpend(ctx, 499_900);
+		await stopAfterUnmarkedSpend(ctx, TRUSTED_RUN_CAP - 100);
 
 		executor.behaviors = [{ kind: "pass", usage: 200 }];
 
@@ -1611,7 +1616,7 @@ describe("Orchestrator restart recovery", () => {
 		assert.equal(executor.launches[1]?.attempt, 1);
 		assert.equal(executor.launches[1]?.remainingRunTokens, 100);
 
-		executor.spentBy.set("specify-1", 500_100);
+		executor.spentBy.set("specify-1", TRUSTED_RUN_CAP + 100);
 
 		const ended = await second.tick();
 
@@ -1621,8 +1626,8 @@ describe("Orchestrator restart recovery", () => {
 			"3:claimed",
 			"4:budget_exhausted",
 		]);
-		assert.equal(usageOf(github, 14).at(-1), 500_100);
-		assert.equal(ended.totals.usage, 500_100);
+		assert.equal(usageOf(github, 14).at(-1), TRUSTED_RUN_CAP + 100);
+		assert.equal(ended.totals.usage, TRUSTED_RUN_CAP + 100);
 	});
 
 	it("counts a replayed attempt's executions once when the replay is interrupted too", async () => {
@@ -1633,7 +1638,10 @@ describe("Orchestrator restart recovery", () => {
 
 		executor.behaviors = [{ kind: "hang" }];
 		await start().tick();
-		assert.equal(executor.launches[1]?.remainingRunTokens, 499_700);
+		assert.equal(
+			executor.launches[1]?.remainingRunTokens,
+			TRUSTED_RUN_CAP - 300,
+		);
 		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:running"]);
 
 		executor.spentBy.set("specify-1", 300 + 50);
@@ -1677,7 +1685,10 @@ describe("Orchestrator restart recovery", () => {
 			const controller = start();
 
 			await controller.tick();
-			assert.equal(executor.launches.at(-1)?.remainingRunTokens, 499_700);
+			assert.equal(
+				executor.launches.at(-1)?.remainingRunTokens,
+				TRUSTED_RUN_CAP - 300,
+			);
 
 			clock.t += 300_001;
 
@@ -1694,7 +1705,10 @@ describe("Orchestrator restart recovery", () => {
 			await controller.tick();
 
 			assert.equal(executor.launches.at(-1)?.attempt, 2);
-			assert.equal(executor.launches.at(-1)?.remainingRunTokens, 499_700);
+			assert.equal(
+				executor.launches.at(-1)?.remainingRunTokens,
+				TRUSTED_RUN_CAP - 300,
+			);
 		});
 
 		it(`counts a ${origin} replay's progress on top of its earlier spend at a stall, and late usage once`, async () => {
@@ -1904,7 +1918,7 @@ describe("Orchestrator retries and stalls", () => {
 		const { github, executor, start } = world();
 
 		github.add(labeled(14));
-		executor.behaviors = [{ kind: "fail", usage: 500_000 }];
+		executor.behaviors = [{ kind: "fail", usage: TRUSTED_RUN_CAP }];
 
 		const controller = start();
 
@@ -1913,7 +1927,7 @@ describe("Orchestrator retries and stalls", () => {
 		const report = await controller.tick();
 
 		assert.deepEqual(report.runs, []);
-		assert.equal(report.totals.usage, 500_000);
+		assert.equal(report.totals.usage, TRUSTED_RUN_CAP);
 		assert.equal(
 			statuses(github, 14).at(-1)?.endsWith(":budget_exhausted"),
 			true,
@@ -2286,7 +2300,7 @@ describe("Orchestrator base qualification", () => {
 			executor.behaviors = [{ kind: "pass", usage: 10 }];
 			executor.acceptBehavior = {
 				kind: "pass",
-				usage: exhausted === "run" ? 499_990 : 20,
+				usage: exhausted === "run" ? TRUSTED_RUN_CAP - 10 : 20,
 			};
 			executor.baseOutcome = "preservation_failed";
 
@@ -2889,7 +2903,7 @@ describe("Orchestrator stage results", () => {
 		assert.ok(launch);
 		assert.equal(launch.stage, "specify");
 		assert.equal(launch.attempt, 1);
-		assert.equal(launch.remainingRunTokens, 500_000);
+		assert.equal(launch.remainingRunTokens, TRUSTED_RUN_CAP);
 		assert.deepEqual(launch.settings, {
 			model: "openai/gpt-6.1-sol",
 			fallback: null,
@@ -2972,7 +2986,10 @@ describe("Orchestrator stage results", () => {
 		await controller.tick();
 
 		assert.equal(executor.launches[1]?.attempt, 2);
-		assert.equal(executor.launches[1]?.remainingRunTokens, 380_000);
+		assert.equal(
+			executor.launches[1]?.remainingRunTokens,
+			TRUSTED_RUN_CAP - 120_000,
+		);
 	});
 
 	it("ends the run failed on a refusal, with no scheduler retry", async () => {
@@ -3344,7 +3361,7 @@ describe("server/cli.ts controller commands", () => {
 		it("only lowers the trusted run cap and marks the terminal row as verification", async () => {
 			for (const [cap, effective] of [
 				[12_000, 12_000],
-				[900_000, 500_000],
+				[TRUSTED_RUN_CAP + 400_000, TRUSTED_RUN_CAP],
 			] as const) {
 				const state = stateDir();
 				const github = new FakeGitHub();
@@ -3377,7 +3394,7 @@ describe("server/cli.ts controller commands", () => {
 
 				assert.partialDeepStrictEqual(terminal.provenance, {
 					kind: "verification",
-					trustedRunTokenCap: 500_000,
+					trustedRunTokenCap: TRUSTED_RUN_CAP,
 					effectiveRunTokenCap: effective,
 				});
 				assert.equal(
@@ -4223,14 +4240,14 @@ describe("admission accounting policy", () => {
 			workflowSha: sha(MAIN_SHA),
 			workflowDigest: digestOf(TRUSTED_WORKFLOW),
 			startedAt: new Date(START).toISOString(),
-			runTokenCap: 500_000,
+			runTokenCap: TRUSTED_RUN_CAP,
 		};
 
 		assert.equal(await files.prepareRun?.(input), true);
 		const pinned = await files.accounting?.start(input.runId);
 		assert.ok(pinned);
 		assert.equal(pinned.policy.gates.kind, "known");
-		assert.equal(pinned.runTokenCap, 500_000);
+		assert.equal(pinned.runTokenCap, TRUSTED_RUN_CAP);
 		assert.equal(
 			statSync(join(dir, "accounting", input.runId, "policy.json")).mode &
 				0o777,
@@ -5841,14 +5858,14 @@ describe("Orchestrator terminal claim records", () => {
 		const other = github.add(labeled(15));
 
 		github.add(labeled(16));
-		executor.behaviors = [{ kind: "fail", usage: 500_000 }];
+		executor.behaviors = [{ kind: "fail", usage: TRUSTED_RUN_CAP }];
 
 		const controller = start();
 		const exhausted = ["1:claimed", "2:running", "3:budget_exhausted"];
 
 		const record = endedClaim(14, 3, {
 			status: "budget_exhausted",
-			usage: 500_000,
+			usage: TRUSTED_RUN_CAP,
 		});
 
 		await controller.tick();
@@ -6617,7 +6634,7 @@ describe("Orchestrator before the first workflow load", () => {
 
 		setWorkflow(
 			github,
-			"max_tokens_per_run: 500000",
+			`max_tokens_per_run: ${TRUSTED_RUN_CAP}`,
 			"max_tokens_per_run: 2000000",
 		);
 		github.add(labeled(14));
@@ -7028,8 +7045,9 @@ describe("Orchestrator claim record usage", () => {
 		const ctx = world();
 		const { github, clock, files, start } = ctx;
 		const issue = github.add(labeled(14));
+		const attemptUsage = TRUSTED_RUN_CAP * 0.6;
 
-		ctx.executor.fallback = { kind: "fail", usage: 300_000 };
+		ctx.executor.fallback = { kind: "fail", usage: attemptUsage };
 
 		const controller = start();
 
@@ -7039,10 +7057,14 @@ describe("Orchestrator claim record usage", () => {
 
 		const failed = await controller.tick();
 
-		assert.equal(failed.runs[0]?.usage, 300_000);
+		assert.equal(failed.runs[0]?.usage, attemptUsage);
 		assert.deepEqual(
 			files.claims.get(runOf(14)),
-			endedClaim(14, 3, { status: "retrying", attempt: 2, usage: 300_000 }),
+			endedClaim(14, 3, {
+				status: "retrying",
+				attempt: 2,
+				usage: attemptUsage,
+			}),
 		);
 
 		const hidden = hideMarker(ctx, issue, 3);
@@ -7054,7 +7076,7 @@ describe("Orchestrator claim record usage", () => {
 
 		assert.deepEqual(
 			adopted.runs.map((run) => [run.status, run.attempt, run.usage]),
-			[["retrying", 2, 300_000]],
+			[["retrying", 2, attemptUsage]],
 		);
 
 		hidden.hidden = false;
@@ -7319,7 +7341,7 @@ describe("Orchestrator run allowance at launch", () => {
 
 		setWorkflow(
 			github,
-			"max_tokens_per_run: 500000",
+			`max_tokens_per_run: ${TRUSTED_RUN_CAP}`,
 			"max_tokens_per_run: 100000",
 		);
 		clock.t += 10_000;
@@ -7381,7 +7403,10 @@ describe("Orchestrator usage reported after a stall", () => {
 		clock.t += 10_000;
 		await controller.tick();
 
-		assert.equal(executor.launches[1]?.remainingRunTokens, 499_750);
+		assert.equal(
+			executor.launches[1]?.remainingRunTokens,
+			TRUSTED_RUN_CAP - 250,
+		);
 
 		const after = await controller.tick();
 
@@ -7426,7 +7451,10 @@ describe("Orchestrator usage reported after a stall", () => {
 		await settle();
 		await controller.tick();
 		assert.equal(executor.launches.length, 2);
-		assert.equal(executor.launches[1]?.remainingRunTokens, 499_960);
+		assert.equal(
+			executor.launches[1]?.remainingRunTokens,
+			TRUSTED_RUN_CAP - 40,
+		);
 	});
 
 	it("puts late usage in the terminal marker when the stall ends the run", async () => {
@@ -7450,22 +7478,28 @@ describe("Orchestrator usage reported after a stall", () => {
 		const launch = executor.launches[0];
 
 		assert.ok(launch);
-		launch.progress(500_000);
+		launch.progress(TRUSTED_RUN_CAP);
 		clock.t += 300_001;
 		await controller.tick();
 
 		assert.equal(statuses(github, 14).at(-1), "2:running");
 
-		launch.progress(600_000);
-		finish(resultOf(launch, { kind: "failed", exit: "aborted" }, 600_000));
+		launch.progress(TRUSTED_RUN_CAP + 100_000);
+		finish(
+			resultOf(
+				launch,
+				{ kind: "failed", exit: "aborted" },
+				TRUSTED_RUN_CAP + 100_000,
+			),
+		);
 		await settle();
 
 		const report = await controller.tick();
 
 		assert.deepEqual(report.runs, []);
-		assert.equal(report.totals.usage, 600_000);
+		assert.equal(report.totals.usage, TRUSTED_RUN_CAP + 100_000);
 		assert.equal(statuses(github, 14).at(-1), "3:budget_exhausted");
-		assert.equal(lastMarkerUsage(github, 14), 600_000);
+		assert.equal(lastMarkerUsage(github, 14), TRUSTED_RUN_CAP + 100_000);
 	});
 
 	it("posts the terminal marker once the cleanup reserve and its grace pass, if the stage never settles", async () => {
@@ -7477,7 +7511,7 @@ describe("Orchestrator usage reported after a stall", () => {
 		const controller = start();
 
 		await controller.tick();
-		executor.launches[0]?.progress(500_000);
+		executor.launches[0]?.progress(TRUSTED_RUN_CAP);
 		clock.t += 300_001;
 		await controller.tick();
 		assert.equal(statuses(github, 14).at(-1), "2:running");
@@ -7552,7 +7586,10 @@ describe("Orchestrator late usage across a restart", () => {
 		await second.tick();
 
 		assert.equal(executor.launches.length, 2);
-		assert.equal(executor.launches[1]?.remainingRunTokens, 499_750);
+		assert.equal(
+			executor.launches[1]?.remainingRunTokens,
+			TRUSTED_RUN_CAP - 250,
+		);
 	});
 
 	it("reconciles the previous attempt's records once when the controller stopped before it counted the late usage", async () => {
@@ -7582,7 +7619,10 @@ describe("Orchestrator late usage across a restart", () => {
 
 		clock.t += 10_000;
 		await second.tick();
-		assert.equal(executor.launches[1]?.remainingRunTokens, 499_750);
+		assert.equal(
+			executor.launches[1]?.remainingRunTokens,
+			TRUSTED_RUN_CAP - 250,
+		);
 
 		const third = start();
 		const again = await third.tick();
@@ -7612,7 +7652,10 @@ describe("Orchestrator late usage across a restart", () => {
 		clock.t += 10_000;
 		await controller.tick();
 
-		assert.equal(executor.launches[1]?.remainingRunTokens, 499_300);
+		assert.equal(
+			executor.launches[1]?.remainingRunTokens,
+			TRUSTED_RUN_CAP - 700,
+		);
 	});
 
 	it("releases an adopted run only once its scopes are stopped, with what its attempt spent until then", async () => {
@@ -7677,24 +7720,28 @@ describe("Orchestrator late usage across a restart", () => {
 		const launch = executor.launches[0];
 
 		assert.ok(launch);
-		launch.progress(500_000);
+		launch.progress(TRUSTED_RUN_CAP);
 		clock.t += 300_001;
 		await controller.tick();
 		clock.t += 10_000;
 		await controller.tick();
 		assert.equal(statuses(github, 14).at(-1), "2:running");
 
-		launch.progress(600_000);
+		launch.progress(TRUSTED_RUN_CAP + 100_000);
 		stage.finish(
-			resultOf(launch, { kind: "failed", exit: "aborted" }, 600_000),
+			resultOf(
+				launch,
+				{ kind: "failed", exit: "aborted" },
+				TRUSTED_RUN_CAP + 100_000,
+			),
 		);
 		await settle();
 
 		const report = await controller.tick();
 
-		assert.equal(report.totals.usage, 600_000);
+		assert.equal(report.totals.usage, TRUSTED_RUN_CAP + 100_000);
 		assert.equal(statuses(github, 14).at(-1), "3:budget_exhausted");
-		assert.equal(lastMarkerUsage(github, 14), 600_000);
+		assert.equal(lastMarkerUsage(github, 14), TRUSTED_RUN_CAP + 100_000);
 	});
 });
 
@@ -9160,8 +9207,8 @@ describe("private build stage", () => {
 			"edit",
 			"write",
 		]);
-		assert.equal(build.settings.maxTokens, 200_000);
-		assert.equal(build.remainingRunTokens, 499_983);
+		assert.equal(build.settings.maxTokens, BUILD_MAX_TOKENS);
+		assert.equal(build.remainingRunTokens, TRUSTED_RUN_CAP - 17);
 		assert.ok(build.workspace.endsWith("-build-r0-1"));
 		assert.match(build.prompt, /only the focused test file/);
 		assert.match(build.prompt, /tail -n 40/);
@@ -10347,7 +10394,7 @@ describe("controller-only validate", () => {
 					terminalEvidence: native.terminalEvidence,
 				});
 				world.files.prepareRun = (input) => {
-					assert.equal(input.runTokenCap, 500_000);
+					assert.equal(input.runTokenCap, TRUSTED_RUN_CAP);
 
 					const start = {
 						v: 1,
@@ -10435,7 +10482,7 @@ describe("controller-only validate", () => {
 				policy,
 				verificationDigest: pin.digest,
 				trustedRunTokenCap: captured
-					? 500_000
+					? TRUSTED_RUN_CAP
 					: { kind: "unavailable", reason: "legacy_not_recorded" },
 				effectiveRunTokenCap: pin.tokenCap,
 			});
@@ -11047,7 +11094,7 @@ describe("controller-only validate", () => {
 		assert.equal(f.executor.launches.at(-1)?.settings.maxTokens, 14_000);
 		assert.equal(
 			f.executor.launches.at(-1)?.remainingRunTokens,
-			500_000 - 29 - 12_000 - 4_000,
+			TRUSTED_RUN_CAP - 29 - 12_000 - 4_000,
 		);
 		assert.equal(
 			f.files.claims.get(runOf(14))?.usage,
@@ -11104,7 +11151,7 @@ describe("controller-only validate", () => {
 					? null
 					: stage === "accept"
 						? ACCEPTANCE_MAX_TOKENS
-						: 200_000;
+						: BUILD_MAX_TOKENS;
 
 			assert.deepEqual(
 				attempts.map((entry) => entry.settings.maxTokens),
@@ -11112,7 +11159,7 @@ describe("controller-only validate", () => {
 			);
 			assert.equal(
 				attempts[1]?.remainingRunTokens,
-				500_000 -
+				TRUSTED_RUN_CAP -
 					200 -
 					(stage === "specify" ? 0 : stage === "accept" ? 10 : 17),
 			);
@@ -11131,7 +11178,7 @@ describe("controller-only validate", () => {
 		);
 		assert.equal(
 			f.executor.launches.at(-1)?.remainingRunTokens,
-			500_000 - 29 - 25_169,
+			TRUSTED_RUN_CAP - 29 - 25_169,
 		);
 	});
 
@@ -11860,7 +11907,7 @@ describe("held-out acceptance stage", () => {
 		assert.deepEqual(accept.tools, ["read", "grep", "ls"]);
 		assert.deepEqual(accept.skills, ["acceptance"]);
 		assert.equal(accept.settings.maxTokens, ACCEPTANCE_MAX_TOKENS);
-		assert.equal(accept.remainingRunTokens, 499_900);
+		assert.equal(accept.remainingRunTokens, TRUSTED_RUN_CAP - 100);
 		assert.ok(!accept.prompt.includes("PRIVATE-ISSUE-TRANSCRIPT"));
 		assert.ok(!accept.prompt.includes("snapshot"));
 		assert.ok(accept.prompt.includes(MAIN_SHA));
@@ -12928,7 +12975,10 @@ describe("specify: questions", () => {
 			2,
 		);
 		assert.equal(executor.launches[1]?.attempt, 1);
-		assert.equal(executor.launches[1]?.remainingRunTokens, 500_000 - 300);
+		assert.equal(
+			executor.launches[1]?.remainingRunTokens,
+			TRUSTED_RUN_CAP - 300,
+		);
 		assert.equal(report.totals.usage, 320);
 		assert.deepEqual(statuses(github, 14), [
 			"1:claimed",
@@ -14188,7 +14238,7 @@ describe("terminal rows keep the real cause", () => {
 
 	it("names the run cap when retries spend the run's tokens", async () => {
 		const { row } = await causeWorld((f) => {
-			f.executor.behaviors = [{ kind: "fail", usage: 500_000 }];
+			f.executor.behaviors = [{ kind: "fail", usage: TRUSTED_RUN_CAP }];
 		});
 
 		assert.deepEqual(row.outcome, {

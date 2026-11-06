@@ -24,7 +24,7 @@ Preconditions are those of `specify.md`. `readlink /var/lib/factory-sandbox/curr
 5. Count specify's root receipt once and accept's receipt once. Per-request tokens are `inputTokens` and `outputTokens` in each session's `egress.jsonl`. Accept must stay under 25,000 tokens and 5 minutes, and specify plus accept under 45,000 tokens and 10 minutes.
 6. Run `node docs/prototypes/acceptance-isolation/probe.ts <state> <runId>` from the lane workspace with `XDG_RUNTIME_DIR=/run/user/1000`.
 7. Read the comments through `gh` and check `accept-summary`. The first tick now leaves build claimed; it does not finish the run.
-8. If build is in scope, run a second scoped `drive-stage.sh` tick and follow `build.md`. Reserve its full 200,000-token allowance before launching.
+8. If build is in scope, run a second scoped `drive-stage.sh` tick and follow `build.md`. Reserve its full 400,000-token allowance before launching.
 9. Close every fixture, confirm CLOSED, snapshot again and run `cleanup.sh`.
 
 ## Results observed

@@ -31,7 +31,7 @@ If status reports a blocked PR, inspect its reason and evidence gaps before acti
 
 - At most three refreshes per run, two shared repairs, and six retained generations.
 - At most three issued review attempts per repair round, or the stricter configured value of one or two. Early-stage `retry.max_attempts: 5` remains valid without raising that review ceiling.
-- Review shares 30,000 tokens per round. Repair build shares 50,000. The configured run limit is currently 500,000 tokens. Failed, interrupted, fallback, and child usage remains charged. Existing wall and turn limits still apply per attempt.
+- Review shares 30,000 tokens per round. Repair build shares 50,000. The configured run limit is currently 800,000 tokens. Failed, interrupted, fallback, and child usage remains charged. Existing wall and turn limits still apply per attempt.
 
 Before the first PR, complete failing CI or blocking review can use the shared repair allowance. After a PR exists, conflict, failure, or exhaustion leaves it open, not-ready, and observed. F09a does not implement F10's owner-comment repair loop. Do not delete private state or start a replacement run to reset the same handoff's budget. Escalate unresolved holds with the run ID, PR head, reason, and redacted evidence.
 

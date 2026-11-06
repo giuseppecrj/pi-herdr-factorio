@@ -28,6 +28,7 @@ import {
 	type Run,
 } from "../src/run.ts";
 import { advance } from "../src/stages.ts";
+import { TRUSTED_RUN_CAP } from "./fake-ticket-adapter.ts";
 import {
 	type FamilyInput,
 	familyLabel,
@@ -64,7 +65,7 @@ const pin: AdmissionPin = {
 	workflowDigest: digestOf("workflow"),
 	contractDigest: digestOf("contract"),
 	acceptanceDigest: digestOf("suite"),
-	maxTokens: 500_000,
+	maxTokens: TRUSTED_RUN_CAP,
 	maxReviewAttempts: 3,
 };
 
@@ -1473,7 +1474,7 @@ for (const spent of [29_999, 30_000, 30_001])
 		} else assert.notEqual(next.effect?.kind, "launch_review");
 	});
 
-for (const prior of [499_999, 500_000, 500_001])
+for (const prior of [TRUSTED_RUN_CAP - 1, TRUSTED_RUN_CAP, TRUSTED_RUN_CAP + 1])
 	test(`formal run preflight preserves past-stage cap boundary ${prior}`, () => {
 		const state = validated(
 			handoffCandidate(beginCandidate(pin, patch, prior), observed()).state,
@@ -1482,7 +1483,7 @@ for (const prior of [499_999, 500_000, 500_001])
 		const next = handoffCandidate(state, observed());
 		assert.equal(candidateUsage(next.state), prior);
 
-		if (prior < 500_000) {
+		if (prior < TRUSTED_RUN_CAP) {
 			const request = pending(next.state, "launch_review");
 			assert.equal(
 				candidateAllowance(selected(next.state), request.execution),

@@ -59,6 +59,7 @@ import { isGitSha, isRepoSlug } from "../src/workflow.ts";
 import {
 	fakeIssue,
 	MAIN_SHA,
+	TRUSTED_RUN_CAP,
 	TRUSTED_WORKFLOW,
 } from "./fake-ticket-adapter.ts";
 
@@ -105,7 +106,7 @@ export const admissionPin: AdmissionPin = {
 	workflowDigest: digestOf("workflow"),
 	contractDigest,
 	acceptanceDigest,
-	maxTokens: 500_000,
+	maxTokens: TRUSTED_RUN_CAP,
 	maxReviewAttempts: 3,
 };
 

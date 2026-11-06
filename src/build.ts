@@ -43,7 +43,7 @@ export const BUILD_TOOLS = [
 	"write",
 ] as const;
 
-export const BUILD_MAX_TOKENS = 200_000;
+export const BUILD_MAX_TOKENS = 400_000;
 export const PATCH_MAX_BYTES = 64 * 1024 * 1024;
 export const TEST_TAIL_BYTES = 16 * 1024;
 export const PATCH_RECEIPT_MAX_BYTES = 8 * 1024 * 1024;
