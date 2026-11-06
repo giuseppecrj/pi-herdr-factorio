@@ -1003,7 +1003,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [ ] Metric. Measure comment-to-dispatch latency, repair-stage wall time, full feedback-to-ready time, and cumulative tokens/spend on both revisions.
 - [ ] Probe. Interleave three small comment-fix scenarios. On trunk record polling and unchanged PR state, not a successful repair. Save `perf.json`.
 - [ ] Baseline. Record trunk's PR polling latency and existing run usage first.
-- [ ] Rule. Fail if authorized feedback takes over two ticks to dispatch, a tiny repair takes over 20 minutes excluding CI queue delay, or it consumes over 130,000 extra tokens. On 2026-11-06 the coordinator raised the repair-build allowance per round from 50,000 to 100,000 tokens under the owner's standing cap grant, after live lane H6 exhausted 50,000 in one repair round with no patch; review stays 30,000. Fail if a round's feedback cards exceed 8 KiB inline. Fail any repair that resets cumulative spend or turn limits.
+- [ ] Rule. Fail if authorized feedback takes over two ticks to dispatch, a tiny repair takes over 20 minutes excluding CI queue delay, or it consumes over 230,000 extra tokens. On 2026-11-06 the coordinator raised the repair-build allowance per round from 50,000 to 100,000 tokens under the owner's standing cap grant, after live lane H6 exhausted 50,000 in one repair round with no patch, then to 200,000 after pilot 1's repair exhausted 100,000 in 10 turns; review stays 30,000. Fail if a round's feedback cards exceed 8 KiB inline. Fail any repair that resets cumulative spend or turn limits.
 
 **Review gate.** The operator reviews before merge.
 
