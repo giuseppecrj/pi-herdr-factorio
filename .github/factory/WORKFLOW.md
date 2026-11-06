@@ -31,7 +31,7 @@ stages:
     wall_ms: 900000
     stall_ms: 300000
   accept:
-    model: anthropic/claude-sonnet-5-5
+    model: anthropic/claude-opus-5-5
     max_turns: 20
     wall_ms: 900000
     stall_ms: 300000

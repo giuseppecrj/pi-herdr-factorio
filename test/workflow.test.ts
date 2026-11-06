@@ -155,9 +155,7 @@ describe("parseWorkflow", () => {
 		for (const stage of MODEL_STAGES) {
 			assert.equal(
 				parsed.config.stages[stage].model,
-				stage === "accept"
-					? "anthropic/claude-sonnet-5-5"
-					: "openai/gpt-6.1-sol",
+				stage === "accept" ? "anthropic/claude-opus-5-5" : "openai/gpt-6.1-sol",
 			);
 			assert.ok(parsed.guidance.stages[stage], `${stage} has guidance`);
 		}
