@@ -1,3 +1,4 @@
+import { ACCEPTANCE_MAX_TOKENS } from "../src/accept.ts";
 import { parseStoredContract } from "../src/artifacts.ts";
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
@@ -2066,7 +2067,7 @@ describe("Orchestrator base qualification", () => {
 			omitted: 0,
 		});
 		assert.doesNotMatch(retry?.prompt ?? "", /PRIVATE-TEST-NAME/);
-		assert.equal(retry?.settings.maxTokens, 25_000 - 20);
+		assert.equal(retry?.settings.maxTokens, ACCEPTANCE_MAX_TOKENS - 20);
 		// The retry runs in what is left of the one accept wall.
 		assert.equal(first?.settings.budget.wallMs, 900_000);
 		assert.equal(retry?.settings.budget.wallMs, 900_000 - 1 - 4_000);
@@ -2171,7 +2172,10 @@ describe("Orchestrator base qualification", () => {
 				executor.baseReceipt = (binding) => refusedReceipt(binding, FEEDBACK);
 
 			if (exhausted !== "unknown_spend")
-				executor.spentBy.set("accept-1", exhausted === "tokens" ? 25_000 : 20);
+				executor.spentBy.set(
+					"accept-1",
+					exhausted === "tokens" ? ACCEPTANCE_MAX_TOKENS : 20,
+				);
 
 			if (exhausted === "attempts")
 				setWorkflow(github, "max_attempts: 3", "max_attempts: 1");
@@ -2216,7 +2220,7 @@ describe("Orchestrator base qualification", () => {
 			(l) => l.stage === "accept" && l.attempt === 2,
 		);
 
-		assert.equal(retry?.settings.maxTokens, 7_000);
+		assert.equal(retry?.settings.maxTokens, ACCEPTANCE_MAX_TOKENS - 18_000);
 	});
 
 	for (const crash of ["before_retire", "after_retire", "after_claim"] as const)
@@ -2444,7 +2448,10 @@ describe("Orchestrator base qualification", () => {
 			);
 
 			assert.match(relaunch?.prompt ?? "", /PRIVATE-FEEDBACK-MESSAGE/);
-			assert.equal(relaunch?.settings.maxTokens, 25_000 - 20 - 5);
+			assert.equal(
+				relaunch?.settings.maxTokens,
+				ACCEPTANCE_MAX_TOKENS - 20 - 5,
+			);
 			assert.equal(refusals(github).length, 0);
 			assert.equal(files.claims.get(runOf(14))?.stage, "build");
 		});
@@ -10808,7 +10815,11 @@ describe("controller-only validate", () => {
 			);
 
 			const cap =
-				stage === "specify" ? null : stage === "accept" ? 25_000 : 200_000;
+				stage === "specify"
+					? null
+					: stage === "accept"
+						? ACCEPTANCE_MAX_TOKENS
+						: 200_000;
 
 			assert.deepEqual(
 				attempts.map((entry) => entry.settings.maxTokens),
@@ -11478,7 +11489,7 @@ describe("held-out acceptance stage", () => {
 		assert.equal(accept.specify, undefined);
 		assert.deepEqual(accept.tools, ["read", "grep", "ls"]);
 		assert.deepEqual(accept.skills, ["acceptance"]);
-		assert.equal(accept.settings.maxTokens, 25_000);
+		assert.equal(accept.settings.maxTokens, ACCEPTANCE_MAX_TOKENS);
 		assert.equal(accept.remainingRunTokens, 499_900);
 		assert.ok(!accept.prompt.includes("PRIVATE-ISSUE-TRANSCRIPT"));
 		assert.ok(!accept.prompt.includes("snapshot"));
