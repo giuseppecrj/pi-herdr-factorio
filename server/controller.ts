@@ -668,13 +668,32 @@ async function writeAtomic(path: string, text: string): Promise<boolean> {
 	}
 }
 
+/**
+ * Fetches a tarball. `null` means the fetch failed. `timeout` means it gave
+ * up at `bound.deadline` or at its own time limit, whatever Date.now() says.
+ */
 export type TarballFetch = (
 	repo: RepoSlug,
 	sha: GitSha,
 	bound?: Readonly<{ signal?: AbortSignal; deadline?: number }>,
 ) => Promise<
-	Buffer | { readonly kind: "refused"; readonly reason: string } | null
+	| Buffer
+	| { readonly kind: "refused"; readonly reason: string }
+	| typeof TIMED_OUT
+	| null
 >;
+
+const TIMED_OUT = { kind: "timeout" } as const;
+
+/** A non-finite deadline is no deadline. */
+function finiteDeadline(deadline: number | undefined): number | undefined {
+	return deadline !== undefined && Number.isFinite(deadline)
+		? deadline
+		: undefined;
+}
+
+/** Node's largest timer delay. A longer one fires after 1 ms. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
 
 const TARBALL_MAX_BYTES = 64 * 1024 * 1024;
 
@@ -682,11 +701,13 @@ const TARBALL_TIMEOUT_MS = 120_000;
 
 export const ghTarball: TarballFetch = (repo, sha, bound) =>
 	new Promise((done) => {
+		const deadline = finiteDeadline(bound?.deadline);
+
 		const timeout = Math.min(
 			TARBALL_TIMEOUT_MS,
-			bound?.deadline === undefined
+			deadline === undefined
 				? TARBALL_TIMEOUT_MS
-				: Math.max(1, bound.deadline - Date.now()),
+				: Math.max(1, deadline - Date.now()),
 		);
 
 		execFile(
@@ -705,7 +726,10 @@ export const ghTarball: TarballFetch = (repo, sha, bound) =>
 						? stdout
 						: error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
 							? { kind: "refused", reason: "too_large" }
-							: null,
+							: // Only execFile's own timeout kills gh and reports `killed`.
+								error.killed === true
+								? TIMED_OUT
+								: null,
 				),
 		);
 	});
@@ -1177,28 +1201,27 @@ async function boundedFetch(input: {
 	readonly signal?: AbortSignal;
 	readonly deadline?: number;
 }): ReturnType<TarballFetch> {
-	const { signal, deadline } = input;
+	const { signal } = input;
+	const deadline = finiteDeadline(input.deadline);
 
-	if (signal?.aborted || (deadline !== undefined && Date.now() >= deadline))
-		return null;
+	if (signal?.aborted) return null;
+
+	if (deadline !== undefined && Date.now() >= deadline) return TIMED_OUT;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let onAbort = () => {};
 
-	const stopped = new Promise<null>((done) => {
+	const stopped = new Promise<null | typeof TIMED_OUT>((done) => {
 		onAbort = () => done(null);
 		signal?.addEventListener("abort", onAbort, { once: true });
 
-		// Timers run on libuv's millisecond monotonic clock and can fire just
-		// before Date.now() reaches the deadline. Callers classify by
-		// Date.now(), so give up only once the wall clock agrees.
-		const arm = () => {
-			const left = (deadline ?? 0) - Date.now();
-
-			if (left <= 0) onAbort();
-			else timer = setTimeout(arm, left);
-		};
-
-		if (deadline !== undefined) arm();
+		// The timer can fire just before Date.now() reaches the deadline, so
+		// it reports the timeout outright instead of leaving callers to infer
+		// it from the wall clock.
+		if (deadline !== undefined)
+			timer = setTimeout(
+				() => done(TIMED_OUT),
+				Math.min(MAX_TIMER_MS, Math.max(0, deadline - Date.now())),
+			);
 	});
 
 	try {
@@ -1214,7 +1237,7 @@ async function boundedFetch(input: {
 	}
 }
 
-export async function checkoutWorkspace(input: {
+type CheckoutInput = {
 	readonly stateDir: string;
 	readonly runId: Digest;
 	readonly workspace: string;
@@ -1224,7 +1247,20 @@ export async function checkoutWorkspace(input: {
 	readonly log?: Log;
 	readonly signal?: AbortSignal;
 	readonly deadline?: number;
-}): Promise<CheckoutResult> {
+};
+
+export async function checkoutWorkspace(
+	input: CheckoutInput,
+): Promise<CheckoutResult> {
+	const result = await checkoutTree(input);
+
+	return result.kind === "timeout" ? { kind: "unavailable" } : result;
+}
+
+/** `checkoutWorkspace`, reporting a fetch that timed out as `timeout`. */
+async function checkoutTree(
+	input: CheckoutInput,
+): Promise<CheckoutResult | typeof TIMED_OUT> {
 	const { runId, workspace, sha } = input;
 	const checkouts = join(resolve(input.stateDir), "checkouts");
 	const record = join(checkouts, `${runId}.json`);
@@ -1249,6 +1285,8 @@ export async function checkoutWorkspace(input: {
 	const gz = await boundedFetch(input);
 
 	if (gz === null) return { kind: "unavailable" };
+
+	if (!Buffer.isBuffer(gz) && gz.kind === "timeout") return TIMED_OUT;
 
 	const read = Buffer.isBuffer(gz) ? readTarball(gz) : gz;
 
@@ -1946,13 +1984,15 @@ export function controllerDiagnosis(config: {
 		];
 
 		const done = (async () => {
+			let timedOut = false;
+
 			const acquire = async (sha: GitSha, name: string) => {
 				const tree = join(root, name);
 				await mkdir(tree, { recursive: true, mode: 0o700 });
 
 				if (late()) return false;
 
-				const checked = await checkoutWorkspace({
+				const checked = await checkoutTree({
 					stateDir: join(root, `${name}-meta`),
 					runId: request.runId,
 					workspace: tree,
@@ -1962,6 +2002,8 @@ export function controllerDiagnosis(config: {
 					signal: abort.signal,
 					deadline: acquireBy,
 				});
+
+				timedOut ||= checked.kind === "timeout";
 
 				return checked.kind === "ready" && checked.omitted === 0;
 			};
@@ -1987,7 +2029,7 @@ export function controllerDiagnosis(config: {
 					replay: {
 						kind: "unavailable",
 						reason:
-							late() || Date.now() >= acquireBy
+							timedOut || late() || Date.now() >= acquireBy
 								? "timeout"
 								: "unsupported_tree",
 						wallMs: Date.now() - startedAt,
