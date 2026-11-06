@@ -1,4 +1,10 @@
-import { fieldOf, objectOf, parseJson, textOf } from "./json.ts";
+import {
+	fieldOf,
+	objectOf,
+	parseJson,
+	textOf,
+	type JsonValue,
+} from "./json.ts";
 import type { BudgetCap, RefusalSignal, SessionOutcome } from "./result.ts";
 import { type AssistantEnd, DIALOG_METHODS, type PiRecord } from "./rpc.ts";
 
@@ -91,7 +97,32 @@ export type TrackerSignal =
 	| { readonly kind: "settled" }
 	| { readonly kind: "cap"; readonly cap: BudgetCap }
 	| { readonly kind: "child"; readonly sessionFile: string | null }
-	| { readonly kind: "failed"; readonly exit: "error" | "malformed" };
+	| {
+			readonly kind: "failed";
+			readonly exit: "error" | "malformed";
+			readonly diagnostic?: "accept_tool_limit";
+	  };
+
+export type AcceptCalls = {
+	readonly ids: Set<string>;
+	readonly args: Set<string>;
+};
+
+function normalizedArgs(value: JsonValue): string {
+	if (Array.isArray(value)) return `[${value.map(normalizedArgs).join(",")}]`;
+
+	const object = objectOf(value);
+
+	return object === null
+		? JSON.stringify(value)
+		: `{${Object.keys(object)
+				.sort()
+				.map(
+					(key) =>
+						`${JSON.stringify(key)}:${normalizedArgs(object[key] ?? null)}`,
+				)
+				.join(",")}}`;
+}
 
 /**
  * One Pi session's view of the RPC stream. The stage is settled when every
@@ -102,6 +133,7 @@ export type TrackerSignal =
 export class SessionTracker {
 	readonly #promptId: string;
 	readonly #maxTurns: number;
+	readonly #acceptCalls: AcceptCalls | null;
 	turns: number;
 	launches = 0;
 	results = 0;
@@ -111,9 +143,15 @@ export class SessionTracker {
 	aborted: boolean | null = null;
 	lastAssistant: AssistantEnd | null = null;
 
-	constructor(promptId: string, maxTurns: number, turnsSoFar: number) {
+	constructor(
+		promptId: string,
+		maxTurns: number,
+		turnsSoFar: number,
+		acceptCalls: AcceptCalls | null = null,
+	) {
 		this.#promptId = promptId;
 		this.#maxTurns = maxTurns;
+		this.#acceptCalls = acceptCalls;
 		this.turns = turnsSoFar;
 	}
 
@@ -137,6 +175,27 @@ export class SessionTracker {
 				this.lastAssistant = record.message;
 
 				return { kind: "none" };
+
+			case "tool_execution_start": {
+				const calls = this.#acceptCalls;
+
+				if (calls === null || calls.ids.has(record.toolCallId))
+					return { kind: "none" };
+
+				calls.ids.add(record.toolCallId);
+
+				const key = `${record.toolName}:${normalizedArgs(record.args)}`;
+
+				const duplicate =
+					["read", "grep", "ls"].includes(record.toolName) &&
+					calls.args.has(key);
+
+				calls.args.add(key);
+
+				return duplicate || calls.ids.size > 2
+					? { kind: "failed", exit: "error", diagnostic: "accept_tool_limit" }
+					: { kind: "none" };
+			}
 
 			case "subagent_launch":
 				this.launches += 1;
