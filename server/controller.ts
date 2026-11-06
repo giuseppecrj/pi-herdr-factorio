@@ -1188,8 +1188,17 @@ async function boundedFetch(input: {
 		onAbort = () => done(null);
 		signal?.addEventListener("abort", onAbort, { once: true });
 
-		if (deadline !== undefined)
-			timer = setTimeout(onAbort, Math.max(0, deadline - Date.now()));
+		// Timers run on libuv's millisecond monotonic clock and can fire just
+		// before Date.now() reaches the deadline. Callers classify by
+		// Date.now(), so give up only once the wall clock agrees.
+		const arm = () => {
+			const left = (deadline ?? 0) - Date.now();
+
+			if (left <= 0) onAbort();
+			else timer = setTimeout(arm, left);
+		};
+
+		if (deadline !== undefined) arm();
 	});
 
 	try {

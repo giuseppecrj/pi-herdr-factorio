@@ -2254,6 +2254,37 @@ scoped(
 );
 
 scoped(
+	"tree acquisition reports a timeout when its deadline timer fires before the wall clock reaches the deadline (L5)",
+	async (t) => {
+		const w = await jobWorld(t, "synthetic-wrong-value");
+		w.hold(new Promise(() => {}));
+		const owner = w.owner();
+
+		// Node runs timers on libuv's millisecond monotonic clock, so a timer
+		// armed for `deadline - Date.now()` can fire up to a millisecond before
+		// Date.now() reaches the deadline. A wall clock at half speed forces
+		// that ordering on every timer the acquisition arms.
+		const real = Date.now.bind(Date);
+		const origin = real();
+
+		t.mock.method(Date, "now", () =>
+			Math.floor(origin + (real() - origin) / 2),
+		);
+		let result = await w.step(owner, w.deadline - 400);
+
+		for (let i = 0; i < 200 && result.kind === "waiting"; i++) {
+			await new Promise((r) => setTimeout(r, 25));
+			result = await w.step(owner, w.deadline - 400);
+		}
+
+		assert.deepEqual(finishedAssessment(result).assessment, {
+			kind: "failed",
+			failure: { kind: "infrastructure", reason: "timeout" },
+		});
+	},
+);
+
+scoped(
 	"an interrupted diagnosis is charged once, holds as infrastructure and never relaunches",
 	async (t) => {
 		const w = await jobWorld(t, "synthetic-wrong-value");
