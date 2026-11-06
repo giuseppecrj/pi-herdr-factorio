@@ -2789,7 +2789,7 @@ test("suite scan: a tamper signal refuses the suite, author-fixable, with file, 
 	assert.deepEqual(feedback, {
 		reason: "suite_tamper_signal",
 		sentence:
-			"A check uses a module loader hook, a runtime patch, a process exit hook or a suppression comment that the trusted tamper scan rejects.",
+			"A check uses a module loader hook, a runtime patch or a process exit hook that the trusted tamper scan rejects.",
 		scenarios: ["S1", "S2"],
 		files: [],
 		signals: [signal],

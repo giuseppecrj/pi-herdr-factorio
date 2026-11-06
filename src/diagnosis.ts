@@ -801,7 +801,7 @@ const BASE_REASON_SENTENCES: Readonly<Record<BaseReason, string>> = {
 	base_evidence_missing:
 		"Base qualification evidence is incomplete or invalid.",
 	suite_tamper_signal:
-		"A check uses a module loader hook, a runtime patch, a process exit hook or a suppression comment that the trusted tamper scan rejects.",
+		"A check uses a module loader hook, a runtime patch or a process exit hook that the trusted tamper scan rejects.",
 };
 
 const BASE_REASONS: readonly BaseReason[] = [
