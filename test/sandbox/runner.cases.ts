@@ -596,6 +596,122 @@ describe("execution efficiency facts", () => {
 });
 
 describe("durable execution high water", () => {
+	for (const cap of ["tokens", "run_tokens", "turns", "wall"] as const) {
+		for (const available of [true, false]) {
+			it(`preserves ${available ? "durable" : "unavailable"} request facts on a same-attempt ${cap} budget resume`, async (t) => {
+				const dir = mkdtempSync(join(tmpdir(), "resume-efficiency-"));
+				t.after(() => rmSync(dir, { recursive: true, force: true }));
+				const h = harness([]);
+
+				const usage = {
+					version: 1,
+					runId: RUN,
+					stage: "specify",
+					attempt: 1,
+					startedAt: 100,
+					deadline: 60_100,
+					turns: 2,
+					usage: {
+						total: 100,
+						parent: 80,
+						children: 20,
+						gateway: 100,
+						unreadChildren: 0,
+						byModel: {},
+					},
+					efficiency: {
+						...unknownEfficiency(),
+						assistantTurns: 2,
+						toolResultBytes: 17,
+					},
+				};
+
+				writeFileSync(join(dir, "usage.json"), JSON.stringify(usage));
+
+				if (available)
+					writeFileSync(
+						join(dir, "egress.requests.jsonl"),
+						[
+							{ kind: "dispatch", req: 1 },
+							{ kind: "result", req: 1, inputTokens: 8, outputTokens: 2 },
+							{ kind: "dispatch", req: 2 },
+							{ kind: "result", req: 2, inputTokens: 16, outputTokens: 4 },
+						]
+							.map((line) => JSON.stringify(line))
+							.join("\n") + "\n",
+					);
+
+				const result = await runStage(
+					input(
+						{ remainingRunTokens: cap === "run_tokens" ? 100 : 1_000_000 },
+						{
+							maxTokens: cap === "tokens" ? 100 : null,
+							budget: {
+								maxTurns: cap === "turns" ? 2 : 10,
+								wallMs: 60_000,
+								stallMs: 300_000,
+							},
+						},
+					),
+					{
+						...h.host,
+						now: () => (cap === "wall" ? 60_101 : 200),
+						readUsage: () =>
+							parseJson(readFileSync(join(dir, "usage.json"), "utf8")),
+						writeUsage: () => true,
+						readJournal: () =>
+							fs.promises.readFile(join(dir, "egress.requests.jsonl"), "utf8"),
+						writeReceipt: async (receipt) => {
+							await fs.promises.writeFile(
+								join(dir, "receipt.json"),
+								JSON.stringify(receipt),
+							);
+
+							return true;
+						},
+					},
+				);
+
+				assert.deepEqual(result.receipt.outcome, {
+					kind: "budget_exhausted",
+					cap,
+				});
+				assert.equal(result.usage, 100);
+				assert.equal(h.tables.length, 0);
+				assert.equal(h.launches.length, 0);
+
+				const expected = {
+					modelRequests: available ? 2 : null,
+					inputTokens: available ? 24 : null,
+					outputTokens: available ? 6 : null,
+					firstInputTokens: available ? 8 : null,
+					lastInputTokens: available ? 16 : null,
+					maxInputTokens: available ? 16 : null,
+				};
+
+				for (const facts of [
+					result.receipt.efficiency,
+					await sandboxModule.executionEfficiency(dir),
+				]) {
+					assert.ok(facts);
+					assert.deepEqual(
+						{
+							modelRequests: facts.modelRequests,
+							inputTokens: facts.inputTokens,
+							outputTokens: facts.outputTokens,
+							firstInputTokens: facts.firstInputTokens,
+							lastInputTokens: facts.lastInputTokens,
+							maxInputTokens: facts.maxInputTokens,
+						},
+						expected,
+					);
+					assert.equal(facts.assistantTurns, 2);
+					assert.equal(facts.toolResultBytes, 17);
+				}
+			});
+		}
+	}
+
 	it("restores an exhausted token high water before opening a gateway", async () => {
 		const h = harness([]);
 
