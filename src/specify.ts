@@ -922,12 +922,20 @@ export type InlinedFile = {
 	readonly path: string;
 	readonly text: string;
 	readonly totalLines: number;
+	readonly unavailable?: {
+		readonly reason: "missing" | "unreadable";
+		readonly checkout: string;
+	};
 	readonly excerpt?: {
 		readonly start: number;
 		readonly end: number;
 		readonly checkout: string;
 		readonly contentDigest: Digest;
-		readonly selection: "evidence" | "fallback_missing" | "fallback_stale";
+		readonly selection:
+			| "evidence"
+			| "fallback_missing"
+			| "fallback_stale"
+			| "omitted_ceiling";
 		readonly repair: boolean;
 		readonly omitted: boolean;
 		readonly capHit: boolean;
@@ -942,6 +950,9 @@ export type SourceFacts = {
 };
 
 export function renderInlined(file: InlinedFile): string {
+	if (file.unavailable !== undefined)
+		return `=== ${file.path}; line count unavailable; omitted=true; checkout=${file.unavailable.checkout}; ${file.unavailable.reason}; use grep to locate the contract fact in the prepared checkout ===`;
+
 	const e = file.excerpt;
 
 	if (e === undefined) {
@@ -966,7 +977,7 @@ export function renderInlined(file: InlinedFile): string {
 					`[omitted lines ${e.end + 1}-${file.totalLines}; grep this file, then read the relevant block]`,
 				]
 			: []),
-		...(e.selection !== "evidence"
+		...(e.selection === "fallback_missing" || e.selection === "fallback_stale"
 			? ["[fallback prefix; locate the contract fact with grep in this file]"]
 			: []),
 	].join("\n");
@@ -978,7 +989,10 @@ export function sourceFacts(files: readonly InlinedFile[]): SourceFacts {
 		omissions: files.reduce(
 			(sum, f) =>
 				sum +
-				Number(f.excerpt?.omitted ?? f.text.split("\n").length < f.totalLines) +
+				Number(
+					f.unavailable !== undefined ||
+						(f.excerpt?.omitted ?? f.text.split("\n").length < f.totalLines),
+				) +
 				(f.excerpt?.skipped ?? 0),
 			0,
 		),
@@ -1000,6 +1014,7 @@ export async function sourceExcerpts(input: {
 	readonly repair?: boolean;
 }): Promise<InlinedFile[]> {
 	const paths = new Set([...input.evidence.map((e) => e.path), ...input.files]);
+	const unavailable: InlinedFile[] = [];
 
 	const sources: {
 		path: string;
@@ -1010,10 +1025,25 @@ export async function sourceExcerpts(input: {
 	}[] = [];
 
 	for (const path of paths) {
-		if (!input.checkout.files.includes(path)) continue;
-		const text = await input.checkout.read(path, NAMED_FILE_READ_BYTES);
+		const listed = input.checkout.files.includes(path);
 
-		if (text === null) continue;
+		const text = listed
+			? await input.checkout.read(path, NAMED_FILE_READ_BYTES)
+			: null;
+
+		if (text === null) {
+			unavailable.push({
+				path,
+				text: "",
+				totalLines: 0,
+				unavailable: {
+					reason: listed ? "unreadable" : "missing",
+					checkout: input.identity,
+				},
+			});
+			continue;
+		}
+
 		const lines = text === "" ? [] : text.split("\n");
 		const evidence = input.evidence.filter((e) => e.path === path);
 
@@ -1035,8 +1065,9 @@ export async function sourceExcerpts(input: {
 		});
 	}
 
-	const windows = (context: number): InlinedFile[] =>
-		sources.flatMap((source) => {
+	const windows = (context: number): InlinedFile[] => [
+		...unavailable,
+		...sources.flatMap((source) => {
 			const { path, lines, cites } = source;
 
 			const ranges =
@@ -1087,7 +1118,8 @@ export async function sourceExcerpts(input: {
 					capHit: false,
 				},
 			}));
-		});
+		}),
+	];
 
 	let shown = windows(30);
 
@@ -1100,10 +1132,6 @@ export async function sourceExcerpts(input: {
 	let remaining = INLINE_TOTAL_BYTES - 128;
 
 	for (const file of shown) {
-		const e = file.excerpt;
-
-		if (e === undefined) continue;
-
 		const full =
 			Buffer.byteLength(renderInlined(file)) + (bounded.length > 0 ? 2 : 0);
 
@@ -1112,6 +1140,10 @@ export async function sourceExcerpts(input: {
 			remaining -= full;
 			continue;
 		}
+
+		const e = file.excerpt;
+
+		if (e === undefined) continue;
 
 		const header = {
 			...file,
@@ -1136,6 +1168,7 @@ export async function sourceExcerpts(input: {
 				...header.excerpt,
 				start: count === 0 ? 0 : e.start,
 				end: count === 0 ? 0 : e.start + count - 1,
+				selection: count === 0 ? ("omitted_ceiling" as const) : e.selection,
 			},
 		};
 
@@ -1148,10 +1181,11 @@ export async function sourceExcerpts(input: {
 		}
 	}
 
-	const first = bounded[0];
+	const firstIndex = bounded.findIndex((file) => file.excerpt !== undefined);
+	const first = bounded[firstIndex];
 
 	if (first?.excerpt !== undefined)
-		bounded[0] = {
+		bounded[firstIndex] = {
 			...first,
 			excerpt: {
 				...first.excerpt,
