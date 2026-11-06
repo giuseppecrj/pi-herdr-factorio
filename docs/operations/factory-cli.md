@@ -711,7 +711,7 @@ A marker counts only when all of these hold. Anything else from another author i
 - `user.login` is `exe-dev-github-integration[bot]` and `user.type` is `Bot`.
 - `performed_via_github_app.slug` is `exe-dev-github-integration` when it is present.
 - `issue_url` names the same repository and issue.
-- GraphQL `lastEditedAt` for the comment is `null`. One request reads it for every comment by `exe-dev-github-integration[bot]`, marker or not: `gh api graphql -f query=<nodes query> -f ids[]=<node_id>...`, at most 100 IDs per request.
+- GraphQL `lastEditedAt` for the comment is `null`. It is read for every comment by `exe-dev-github-integration[bot]`, marker or not: `gh api graphql -f query=<nodes query> -f ids[]=<node_id>...`, in requests of at most 50 IDs, the exe.dev proxy's limit.
 - The JSON parses with exactly its version's keys, `v` is `1`, `2`, or `3`, every value matches its pattern, and `runId` is the digest of its own `repo`, `issue`, and `eventId`.
 - When the state directory has an admission record for the event, the marker's `eventAt`, `snapshotDigest`, `workflowSha` and `workflowDigest` match it. This holds for a terminal marker as for a live one: a terminal marker that disagrees is `record_mismatch`, and the controller does not rewrite its claim record from it.
 
@@ -780,7 +780,7 @@ The controller keeps no database. F09a candidate recovery requires its validated
 | `workflowSha` | string or `null` | The `main` SHA of the last valid workflow. |
 | `maxConcurrent` | number | The slot limit in force, `0` until the process has loaded a workflow. |
 | `active` | number | Slot holders. Candidate runs hold one while any captured account is unsettled; other runs use non-validate claimed/running/blocked phases. Waiting holds none. It can exceed a newly lowered `maxConcurrent` while existing holders drain. |
-| `runs` | array | One entry per claim: `issue`, `runId`, `eventId`, `stage`, `status`, `attempt`, `seq`, `markerPending`, `workspace` (`present` or `missing_replayed`), `retryAt` and `usage`. |
+| `runs` | array | One entry per claim: `issue`, `runId`, `eventId`, `stage`, `status`, `attempt`, `seq`, `markerPending`, `workspace` (`present` or `missing_replayed`), `retryAt`, `usage` and `unverified`. `unverified` is `null` unless this tick's check of the claim failed a GitHub read, so the claim does not launch. It is then `{why, failure}`: `why` is `issue`, `timeline`, `ledger`, or `timeline_entry` for a timeline with no entry for the run's ready event, and `failure` is the read's failure kind, such as `gh_failed`, or `null` for `timeline_entry`. The run keeps its claim and is checked again on the next tick. It is never ended for this. |
 | `queued` | number array | Candidates that waited for a slot this tick, including a claimed run waiting for a slot before it is adopted or recovered. On a tick that skips dispatch, every claim record not yet adopted, released or dropped. |
 | `absent` | number array | Issues named with `--issue` that are not open `factory:ready` issues and hold no claim. |
 | `refused` | array | `issue` and the refusal `reasons` kinds from admission this tick. A refusal cached as described in Refusals and the watermark, such as `unauthorized`, is not read again until the issue's `updated_at` changes. Any other refusal is read again, and listed again, on the next tick. |
@@ -807,7 +807,9 @@ The reader selects the newest claim sequence per issue. A linked early specify r
 
 ### Logs
 
-The controller logs one line per event to stderr, as `at=<ISO time> event=<name> key=value ...`. A value outside letters, digits and `:._@/[]+-` is printed as `(withheld)`. Core early-stage events include `controller_ready`, `controller_running`, `controller_refused`, `controller_stopping`, `lock_stale_replaced`, `tick`, `claim_taken`, `claim_adopted`, `claim_released`, `claim_dropped`, `claim_foreign`, `claim_unwritable`, `admission_refused`, `admission_recovered`, `ledger_behind`, `stage_launched`, `launch_refused`, `stage_stalled`, `stage_ended`, `stage_late_usage`, `marker_posted`, `marker_unconfirmed`, `marker_corrupt`, `workspace_missing`, `workspace_unavailable`, `status_unwritable`, `sandbox_reconciled`, `scope_unowned` and `sandbox_preflight`.
+The controller logs one line per event to stderr, as `at=<ISO time> event=<name> key=value ...`. A value outside letters, digits and `:._@/[]+-` is printed as `(withheld)`. Core early-stage events include `controller_ready`, `controller_running`, `controller_refused`, `controller_stopping`, `lock_stale_replaced`, `tick`, `claim_taken`, `claim_adopted`, `claim_released`, `claim_dropped`, `claim_foreign`, `claim_unwritable`, `claim_unverified`, `admission_refused`, `admission_recovered`, `ledger_behind`, `stage_launched`, `launch_refused`, `stage_stalled`, `stage_ended`, `stage_late_usage`, `marker_posted`, `marker_unconfirmed`, `marker_corrupt`, `workspace_missing`, `workspace_unavailable`, `status_unwritable`, `sandbox_reconciled`, `scope_unowned` and `sandbox_preflight`.
+
+`claim_unverified` has `issue`, `runId`, `why` and `failure`, with the same values as a run's `unverified` in the claim snapshot. It is logged when a run's claim first fails a read, and again only when the reason changes or after a tick on which the claim did not fail a read, not on every tick.
 
 ### Stop
 

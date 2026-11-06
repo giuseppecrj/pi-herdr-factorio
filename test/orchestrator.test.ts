@@ -1028,6 +1028,7 @@ describe("Orchestrator claims and dispatch", () => {
 				workspace: "present",
 				retryAt: null,
 				usage: 0,
+				unverified: null,
 			},
 		]);
 		assert.deepEqual(statuses(github, 14), ["1:claimed", "2:blocked"]);
@@ -11936,6 +11937,15 @@ describe("controller-only validate", () => {
 	});
 });
 
+/** Moves the fake's clock on every POST, so each marker changes the issue's `updated_at` as on GitHub. */
+function advanceOnPost(github: FakeGitHub, args: readonly string[]): void {
+	if (args[1] !== "--method" || args[2] !== "POST") return;
+
+	github.now = new Date(Date.parse(github.now) + 1000)
+		.toISOString()
+		.replace(".000Z", "Z");
+}
+
 describe("held-out acceptance stage", () => {
 	it("runs specify then a fresh accept, stores the suite, and claims build after one redacted summary", async () => {
 		const { github, executor, files, start } = world();
@@ -12003,6 +12013,105 @@ describe("held-out acceptance stage", () => {
 		assert.equal(report.active, 1);
 		assert.equal(report.runs[0]?.stage, "build");
 		assert.deepEqual(report.corrupt, []);
+	});
+
+	it("launches accept once the issue carries more than 50 controller comments", async () => {
+		const { github, executor, logs, wire, start } = world();
+		const issue = github.add(labeled(14));
+
+		// 48 bot comments plus markers 1-3 make 51 before accept's ledger read.
+		for (let i = 0; i < 48; i++) github.comment(issue, `old ${i}`);
+
+		const ids = (args: readonly string[]) =>
+			args.filter((arg) => arg.startsWith("ids[]=")).length;
+
+		let largest = 0;
+
+		wire.intercept = async (command, args) => {
+			largest = Math.max(largest, ids(args));
+			advanceOnPost(github, args);
+
+			return ids(args) > 50
+				? httpError(
+						403,
+						"GitHub GraphQL request rejected: document references 51 node IDs, more than the 50 the proxy will resolve",
+					)
+				: github.exec(command, args);
+		};
+
+		executor.behaviors = [{ kind: "pass", usage: 100 }];
+		executor.acceptBehavior = { kind: "pass", usage: 20 };
+
+		// Ticks, as `serve` runs them: the next tick sees specify's markers.
+		const controller = start();
+		await controller.tick();
+		await settle();
+		await controller.tick();
+		assert.deepEqual(
+			executor.launches.map((l) => [l.stage, l.attempt]),
+			[
+				["specify", 1],
+				["accept", 1],
+			],
+		);
+		assert.equal(largest, 50);
+		assert.ok(!logs.some((l) => l.event === "claim_unverified"));
+	});
+
+	it("logs a claim whose ledger read keeps failing once, and shows why in status", async () => {
+		const { github, executor, logs, wire, start } = world();
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 100 }];
+		executor.acceptBehavior = { kind: "pass", usage: 20 };
+
+		// Every comment-edit read fails once specify has handed the claim back.
+		wire.intercept = async (command, args) => {
+			advanceOnPost(github, args);
+
+			return statuses(github, 14).includes("3:claimed") &&
+				args.some((arg) => arg.includes("nodes(ids:"))
+				? httpError(403, "rejected")
+				: github.exec(command, args);
+		};
+
+		const controller = start();
+		await controller.tick();
+		await settle();
+		await controller.tick();
+		await controller.tick();
+		const stalled = await controller.tick();
+		assert.deepEqual(
+			executor.launches.map((l) => l.stage),
+			["specify"],
+		);
+		assert.equal(statuses(github, 14).at(-1), "3:claimed");
+		assert.deepEqual(
+			logs.filter((l) => l.event === "claim_unverified"),
+			[
+				{
+					event: "claim_unverified",
+					fields: {
+						issue: 14,
+						runId: runOf(14),
+						why: "ledger",
+						failure: "gh_failed",
+					},
+				},
+			],
+		);
+		assert.deepEqual(stalled.runs[0]?.unverified, {
+			why: "ledger",
+			failure: "gh_failed",
+		});
+
+		wire.intercept = null;
+		const healed = await controller.tick();
+		assert.deepEqual(
+			executor.launches.map((l) => l.stage),
+			["specify", "accept"],
+		);
+		assert.equal(healed.runs[0]?.unverified, null);
+		assert.equal(logs.filter((l) => l.event === "claim_unverified").length, 1);
 	});
 
 	it("counts an acceptance store failure once", async () => {
