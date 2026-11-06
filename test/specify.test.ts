@@ -909,6 +909,61 @@ describe("evidence-first source excerpts", () => {
 	});
 });
 
+describe("accept source and existing-test pack", () => {
+	it("includes nearby public tests and their import/harness entry points without changing the contract evidence", async () => {
+		const evidence = [{ path: "src/math/add.ts", start: 180, end: 180, fact: "add export" }];
+		const before = JSON.stringify(evidence);
+		const testLines = Array.from({ length: 180 }, () => "// padding");
+		testLines[0] = "import test from 'node:test';";
+		testLines[85] = "import { add } from '../../src/math/add.ts';";
+		testLines[120] = "test('add', () => assert.equal(add(1), 1));";
+		const tree = new Map([
+			["src/math/add.ts", `${"// source\n".repeat(179)}export const add = n => n;`],
+			["test/math/add.test.ts", testLines.join("\n")],
+			["test/other.test.ts", "UNRELATED"],
+			["package.json", '{"scripts":{"test":"node --test test/*.test.ts"}}'],
+		]);
+		const shown = await sourceExcerpts({
+			files: ["src/math/add.ts"], evidence,
+			checkout: { files: [...tree.keys()], read: async path => tree.get(path) ?? null },
+			identity: "repo@base", accept: true,
+		});
+		const text = shown.map(renderInlined).join("\n");
+		assert.match(text, /export const add/);
+		assert.match(text, /import test from 'node:test'/);
+		assert.match(text, /import \{ add \} from/);
+		assert.match(text, /test\('add'/);
+		assert.match(text, /test_harness/);
+		assert.doesNotMatch(text, /UNRELATED/);
+		assert.ok(sourceFacts(shown).bytes <= 16 * 1024);
+		assert.equal(JSON.stringify(evidence), before);
+	});
+
+	it("never reads held-out paths or controller state even when cited or named", async () => {
+		const forbidden = ["test/acceptance/1/checks/x.test.ts", "test/fixtures/oracle-corpus/561/x.test.ts", "/state/acceptance/x", "../state/receipt.json", ".pi/sessions/x", "factory-state/claims.json"];
+		const reads: string[] = [];
+		const shown = await sourceExcerpts({
+			files: ["src/a.ts", ...forbidden],
+			evidence: forbidden.map(path => ({ path, start: 1, end: 1, fact: "not public" })),
+			checkout: { files: ["src/a.ts", ...forbidden], read: async path => { reads.push(path); return path === "src/a.ts" ? "PUBLIC" : "PRIVATE-CANARY"; } },
+			identity: "repo@base", accept: true,
+		});
+		assert.deepEqual(reads, ["src/a.ts"]);
+		assert.doesNotMatch(shown.map(renderInlined).join("\n"), /PRIVATE-CANARY|oracle-corpus|acceptance\/1|state\/|sessions/);
+	});
+
+	it("falls back to the public package test entry point when no matching test exists", async () => {
+		const tree = new Map([["src/new.ts", "export const value = 0;"], ["package.json", '{"scripts":{"test":"node --test"}}']]);
+		const shown = await sourceExcerpts({
+			files: ["src/new.ts"], evidence: [],
+			checkout: { files: [...tree.keys()], read: async path => tree.get(path) ?? null },
+			identity: "repo@base", accept: true,
+		});
+		assert.match(shown.map(renderInlined).join("\n"), /node --test/);
+		assert.match(shown.map(renderInlined).join("\n"), /test_harness/);
+	});
+});
+
 describe("inlined byte accounting", () => {
 	it("retains exact-fit text without a trailing newline", () => {
 		for (const text of [
