@@ -1,5 +1,10 @@
 import { digestOf, isDigest, runIdOf, type Digest } from "./run.ts";
 import {
+	EFFICIENCY_COUNTS,
+	unknownEfficiency,
+	type EfficiencyFacts,
+} from "../server/sandbox/result.ts";
+import {
 	GitHubPublicationApi,
 	LEDGER_FILE,
 	PublicationError,
@@ -458,12 +463,26 @@ const attempts = record({
 	aborted: count,
 });
 
-const stageSummary = record({
+const stageSummaryFields = {
 	stage,
 	wallMs: milliseconds,
 	attempts: fact(attempts),
 	tokens,
-});
+};
+
+const stageSummary = record(stageSummaryFields);
+
+const efficiencyCodec: Codec<EfficiencyFacts> = (value) => {
+	const input = objectOf(value) ?? fail("invalid_object");
+
+	if (Object.keys(input).length !== EFFICIENCY_COUNTS.length)
+		fail("unexpected_keys");
+	const facts = { ...unknownEfficiency() };
+
+	for (const key of EFFICIENCY_COUNTS) facts[key] = nullable(count)(input[key]);
+
+	return facts;
+};
 
 const modelSummary = record({
 	requested: modelId,
@@ -573,18 +592,46 @@ const rowV2Codec = record({
 	gaps: list(gap),
 });
 
+const rowV3Codec = record({
+	v: literal(3),
+	...sharedFields,
+	stages: fact(
+		list(record({ ...stageSummaryFields, efficiency: efficiencyCodec })),
+	),
+	failure: nullable(failureFact),
+	acceptAttempts: fact(
+		list(
+			record({ attempt: positive, disposition: oneOf(...ACCEPT_DISPOSITIONS) }),
+		),
+	),
+	efficiency: efficiencyCodec,
+	gaps: list(gap),
+});
+
 export type LedgerRowV1 = Out<typeof rowCodec>;
 
 export type LedgerRowV2 = Out<typeof rowV2Codec>;
 
-export type LedgerRow = LedgerRowV1 | LedgerRowV2;
+export type LedgerRowV3 = Out<typeof rowV3Codec>;
+
+export type LedgerRow = LedgerRowV1 | LedgerRowV2 | LedgerRowV3;
+
+/** Old immutable rows expose unknown facts without adding fields to their bytes. */
+export function ledgerEfficiency(row: LedgerRow): EfficiencyFacts {
+	return row.v === 3 ? row.efficiency : unknownEfficiency();
+}
 
 export type LedgerRowInput =
 	| Omit<LedgerRowV1, "gaps">
-	| Omit<LedgerRowV2, "gaps">;
+	| Omit<LedgerRowV2, "gaps">
+	| Omit<LedgerRowV3, "gaps">;
 
 const codecOf = (value: JsonValue): Codec<LedgerRow> =>
-	fieldOf(objectOf(value), "v") === 2 ? rowV2Codec : rowCodec;
+	fieldOf(objectOf(value), "v") === 3
+		? rowV3Codec
+		: fieldOf(objectOf(value), "v") === 2
+			? rowV2Codec
+			: rowCodec;
 
 export type LedgerOutcome = LedgerRow["outcome"];
 
@@ -716,7 +763,7 @@ function invariant(row: LedgerRow): string | null {
 
 	if (!sorted(row.redactedReceiptDigests)) return "receipts_unsorted";
 
-	if (row.v === 2) {
+	if (row.v !== 1) {
 		const stopped =
 			row.outcome.kind === "failed" || row.outcome.kind === "budget_exhausted";
 
@@ -818,7 +865,7 @@ function lineOf(bytes: Buffer): LedgerLine {
 
 	if (v === null) return { kind: "corrupt", bytes, code: "missing_version" };
 
-	if (v !== 1 && v !== 2) return { kind: "unknown_version", bytes };
+	if (v !== 1 && v !== 2 && v !== 3) return { kind: "unknown_version", bytes };
 
 	try {
 		const row = frozen(codecOf(value)(value));
@@ -1239,6 +1286,8 @@ export type TerminalEvidence = Partial<
 	>
 > & {
 	readonly mergedAt?: string;
+	readonly efficiency?: EfficiencyFacts;
+	readonly contextPressure?: LedgerRow["contextPressure"];
 	readonly generationGates?: Readonly<Record<string, Digest>>;
 };
 
@@ -1465,7 +1514,7 @@ export function terminalFailureOf(value: JsonValue | undefined): JsonValue {
 		return {
 			outcome: stopped,
 			failure:
-				object.v === 2
+				object.v === 2 || object.v === 3
 					? nullable(failureFact)(object.failure)
 					: stopped.kind === "failed" || stopped.kind === "budget_exhausted"
 						? unavailable("legacy_not_recorded")
@@ -1605,7 +1654,7 @@ export function terminalSnapshot(facts: TerminalFacts): JsonValue {
 			: [];
 
 	return {
-		v: 2,
+		v: 3,
 		runId: facts.runId,
 		repo: facts.repo,
 		issue: facts.issue,
@@ -1631,7 +1680,16 @@ export function terminalSnapshot(facts: TerminalFacts): JsonValue {
 		artifacts: artifactsOf(facts),
 		repairRounds:
 			facts.evidence?.repairRounds ?? unavailable("not_instrumented"),
-		stages: facts.evidence?.stages ?? unavailable("receipt_missing"),
+		stages:
+			facts.evidence?.stages?.kind === "known"
+				? known(
+						facts.evidence.stages.value.map((s) => ({
+							...s,
+							efficiency:
+								"efficiency" in s ? s.efficiency : unknownEfficiency(),
+						})),
+					)
+				: (facts.evidence?.stages ?? unavailable("receipt_missing")),
 		models: facts.evidence?.models ?? unavailable("receipt_missing"),
 		usage: facts.evidence?.usage ?? {
 			tokens: {
@@ -1653,7 +1711,9 @@ export function terminalSnapshot(facts: TerminalFacts): JsonValue {
 							(attempt) => attempt.disposition === "interrupted",
 						).length,
 					),
-		contextPressure: unavailable("not_instrumented"),
+		contextPressure:
+			facts.evidence?.contextPressure ?? unavailable("not_instrumented"),
+		efficiency: facts.evidence?.efficiency ?? unknownEfficiency(),
 		redactedReceiptDigests: facts.evidence?.redactedReceiptDigests ?? [],
 		evidence: { issueUrl: `${base}/issues/${facts.issue}`, ciUrls },
 		failure: failureOf(facts),

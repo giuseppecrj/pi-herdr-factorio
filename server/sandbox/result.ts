@@ -2,7 +2,169 @@ import type { Digest, Stage } from "../../src/run.ts";
 import type { FamilyInput } from "../../src/review.ts";
 import type { ModelId, StageBudget } from "../../src/workflow.ts";
 import type { RouteSummary } from "./control.ts";
-import { countOf, fieldOf, objectOf, type JsonValue } from "./json.ts";
+import {
+	countOf,
+	fieldOf,
+	objectOf,
+	parseJson,
+	type JsonValue,
+} from "./json.ts";
+
+export const EFFICIENCY_COUNTS = [
+	"assistantTurns",
+	"modelRequests",
+	"inputTokens",
+	"outputTokens",
+	"firstInputTokens",
+	"lastInputTokens",
+	"maxInputTokens",
+	"toolResultBytes",
+	"initialPromptBytes",
+	"initialSourceBytes",
+	"excerptOmissions",
+	"sourceCapHits",
+	"guardStops",
+] as const;
+
+export type EfficiencyFacts = {
+	readonly [K in (typeof EFFICIENCY_COUNTS)[number]]: number | null;
+};
+
+export type GuardStop =
+	| "accept_tool_limit"
+	| "accept_request_limit"
+	| "accept_length";
+
+export function unknownEfficiency(): EfficiencyFacts {
+	// SAFETY: every declared numeric field is initialized to unavailable.
+	return Object.fromEntries(
+		EFFICIENCY_COUNTS.map((key) => [key, null]),
+	) as EfficiencyFacts;
+}
+
+export function parseEfficiency(
+	value: JsonValue | undefined,
+): EfficiencyFacts | null {
+	const record = objectOf(value);
+
+	if (
+		record === null ||
+		Object.keys(record).length !== EFFICIENCY_COUNTS.length
+	)
+		return null;
+	const facts = { ...unknownEfficiency() };
+
+	for (const key of EFFICIENCY_COUNTS) {
+		const raw = record[key];
+		const number = raw === null ? null : countOf(raw);
+
+		if (raw !== null && number === null) return null;
+		facts[key] = number;
+	}
+
+	return facts;
+}
+
+/** Request journal metering is diagnostic, never a replacement for charged tokens. */
+export function requestEfficiency(
+	journal: string | null,
+): Pick<
+	EfficiencyFacts,
+	| "modelRequests"
+	| "inputTokens"
+	| "outputTokens"
+	| "firstInputTokens"
+	| "lastInputTokens"
+	| "maxInputTokens"
+> {
+	const unknown = {
+		modelRequests: null,
+		inputTokens: null,
+		outputTokens: null,
+		firstInputTokens: null,
+		lastInputTokens: null,
+		maxInputTokens: null,
+	};
+
+	if (journal === null || journal === "" || !journal.endsWith("\n"))
+		return unknown;
+	const requests = new Set<number>();
+
+	const results = new Map<
+		number,
+		{ input: number | null; output: number | null }
+	>();
+
+	for (const line of journal.split("\n").filter((line) => line !== "")) {
+		const record = objectOf(parseJson(line));
+		const req = countOf(fieldOf(record, "req"));
+
+		if (record === null || req === null) return unknown;
+
+		if (record.kind === "dispatch") requests.add(req);
+		else if (record.kind === "result") {
+			const value = {
+				input: countOf(record.inputTokens),
+				output: countOf(record.outputTokens),
+			};
+
+			const previous = results.get(req);
+
+			if (
+				previous !== undefined &&
+				JSON.stringify(previous) !== JSON.stringify(value)
+			)
+				return unknown;
+			results.set(req, value);
+		} else return unknown;
+	}
+
+	if (
+		requests.size === 0 ||
+		[...results.keys()].some((req) => !requests.has(req))
+	)
+		return unknown;
+	const inputs = [...requests].map((req) => results.get(req)?.input ?? null);
+	const outputs = [...requests].map((req) => results.get(req)?.output ?? null);
+
+	const sum = (items: (number | null)[]) =>
+		items.every((n) => n !== null) ? items.reduce((a, b) => a + b, 0) : null;
+
+	return {
+		modelRequests: requests.size,
+		inputTokens: sum(inputs),
+		outputTokens: sum(outputs),
+		firstInputTokens: inputs[0] ?? null,
+		lastInputTokens: inputs.at(-1) ?? null,
+		maxInputTokens: inputs.every((n) => n !== null)
+			? Math.max(...inputs)
+			: null,
+	};
+}
+
+/** Inputs are non-overlapping executions in execution order, never aggregates plus their leaves. */
+export function aggregateEfficiency(
+	records: readonly EfficiencyFacts[],
+): EfficiencyFacts {
+	if (records.length === 0) return unknownEfficiency();
+	const facts = { ...unknownEfficiency() };
+
+	for (const key of EFFICIENCY_COUNTS) {
+		const values = records.map((r) => r[key]);
+
+		facts[key] = values.every((n) => n !== null)
+			? values.reduce((a, b) => a + b, 0)
+			: null;
+	}
+
+	facts.firstInputTokens = records[0]?.firstInputTokens ?? null;
+	facts.lastInputTokens = records.at(-1)?.lastInputTokens ?? null;
+	facts.maxInputTokens = records.every((r) => r.maxInputTokens !== null)
+		? Math.max(...records.map((r) => r.maxInputTokens ?? 0))
+		: null;
+
+	return facts;
+}
 
 export type ExecutionUsage = {
 	readonly version: 1;
@@ -13,6 +175,7 @@ export type ExecutionUsage = {
 	readonly deadline: number;
 	readonly turns: number;
 	readonly usage: StageUsage;
+	readonly efficiency?: EfficiencyFacts;
 };
 
 export function executionUsageOf(
@@ -76,6 +239,7 @@ export function executionUsageOf(
 		deadline,
 		turns,
 		usage: { total, parent, children, gateway, unreadChildren, byModel },
+		efficiency: parseEfficiency(fieldOf(record, "efficiency")) ?? undefined,
 	};
 }
 
@@ -189,6 +353,9 @@ export type StageReceipt = {
 	readonly assetsDigest: string;
 	readonly versions: PinnedVersions;
 	readonly pricing: "unavailable";
+	/** Absent on legacy receipts; null fields mean unavailable, never zero. */
+	readonly efficiency?: EfficiencyFacts;
+	readonly guardStop?: GuardStop | null;
 	/**
 	 * The answering session's family, from this attempt's request journal when
 	 * the host wrote the receipt. Absent on receipts written before F10c and

@@ -16,6 +16,16 @@ import fs, {
 	utimesSync,
 } from "node:fs";
 import { request } from "node:http";
+import {
+	createReadTool,
+	createGrepTool,
+	createEditTool,
+	createBashTool,
+} from "@earendil-works/pi-coding-agent";
+import { streamSimple } from "@earendil-works/pi-ai/compat";
+import type { Message, Model, Usage } from "@earendil-works/pi-ai";
+import { buildPrompt } from "../../src/build.ts";
+import { buildPrompt as baselineBuildPrompt } from "../fixtures/efficiency/baseline-build.ts";
 import { syncBuiltinESMExports } from "node:module";
 import { fileRunFiles, serveLoop } from "../../server/controller.ts";
 import { fileAdmissionStore, admitTicket } from "../../src/admission.ts";
@@ -39,6 +49,10 @@ import {
 	type Contract,
 	contractBytes,
 	contractDigestOf,
+	inlined,
+	sourceExcerpts,
+	sourceFacts,
+	renderInlined,
 } from "../../src/specify.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -86,7 +100,12 @@ import {
 } from "../../server/sandbox/json.ts";
 import { LineSplitter } from "../../server/sandbox/lines.ts";
 import { SseMeter } from "../../server/sandbox/meter.ts";
-import type { StageReceipt } from "../../server/sandbox/result.ts";
+import {
+	requestEfficiency,
+	aggregateEfficiency,
+	unknownEfficiency,
+	type StageReceipt,
+} from "../../server/sandbox/result.ts";
 import type { RouteId, RouteTable } from "../../server/sandbox/routes.ts";
 import {
 	type AssistantEnd,
@@ -431,7 +450,268 @@ function input(
 	};
 }
 
+describe("execution efficiency facts", () => {
+	const journal = (records: JsonValue[]) =>
+		records.map((record) => JSON.stringify(record)).join("\n") + "\n";
+
+	const dispatch = (req: number) => ({ kind: "dispatch", req });
+
+	const result = (
+		req: number,
+		inputTokens: number | null,
+		outputTokens: number | null,
+	) => ({ kind: "result", req, inputTokens, outputTokens });
+
+	it("counts actual dispatched requests once, not assistant turns, and preserves first/last/max metering", () => {
+		const facts = requestEfficiency(
+			journal([
+				dispatch(1),
+				result(1, 100, 10),
+				result(1, 100, 10),
+				dispatch(2),
+				result(2, 180, 20),
+				dispatch(3),
+				result(3, 120, 30),
+			]),
+		);
+
+		assert.deepEqual(facts, {
+			modelRequests: 3,
+			inputTokens: 400,
+			outputTokens: 60,
+			firstInputTokens: 100,
+			lastInputTokens: 120,
+			maxInputTokens: 180,
+		});
+	});
+
+	it("keeps missing, cut and unsettled metering unavailable, never zero", () => {
+		for (const text of [
+			null,
+			"",
+			journal([dispatch(1), result(1, null, null)]),
+			journal([dispatch(1)]) + '{"kind":"dispatch"',
+		]) {
+			const facts = requestEfficiency(text);
+			assert.equal(facts.inputTokens, null);
+			assert.equal(facts.outputTokens, null);
+		}
+
+		assert.equal(requestEfficiency(journal([dispatch(1)])).modelRequests, 1);
+	});
+
+	it("keeps malformed tool text unavailable rather than counting it as zero bytes", () => {
+		assert.deepEqual(
+			parsePiRecord(
+				JSON.stringify({
+					type: "message_end",
+					message: { role: "toolResult", content: [{ type: "text" }] },
+				}),
+			),
+			{ type: "other", textBytes: null },
+		);
+	});
+
+	it("sums executions without pretending missing facts are zero", () => {
+		const a = {
+			...unknownEfficiency(),
+			assistantTurns: 2,
+			modelRequests: 3,
+			inputTokens: 400,
+			outputTokens: 60,
+			firstInputTokens: 100,
+			lastInputTokens: 120,
+			maxInputTokens: 180,
+		};
+
+		const total = aggregateEfficiency([
+			a,
+			{
+				...a,
+				firstInputTokens: 200,
+				lastInputTokens: 220,
+				maxInputTokens: 280,
+			},
+		]);
+
+		assert.equal(total.assistantTurns, 4);
+		assert.equal(total.modelRequests, 6);
+		assert.equal(total.inputTokens, 800);
+		assert.equal(total.firstInputTokens, 100);
+		assert.equal(total.lastInputTokens, 220);
+		assert.equal(total.maxInputTokens, 280);
+		assert.equal(
+			aggregateEfficiency([a, unknownEfficiency()]).inputTokens,
+			null,
+		);
+	});
+
+	it("records assistant ends, UTF-8 tool-result text bytes, prompt/source bytes and guard codes without changing charges", async () => {
+		const h = harness([
+			replayer([
+				started("x"),
+				{ type: "agent_start" },
+				{ type: "turn_start" },
+				assistant({ tokens: 10 }),
+				{
+					type: "message_end",
+					message: {
+						role: "toolResult",
+						content: [
+							{ type: "text", text: "€\nOK" },
+							{ type: "image", data: "not text" },
+						],
+					},
+				},
+				{ type: "agent_settled", aborted: false },
+			]),
+		]);
+
+		const completed = await runStage(
+			input({
+				stage: "build",
+				source: { bytes: 33, omissions: 2, capHit: false },
+			}),
+			{
+				...h.host,
+				readJournal: async () => journal([dispatch(1), result(1, 8, 2)]),
+			},
+		);
+
+		assert.equal(completed.usage, 10);
+		assert.equal(completed.receipt.efficiency?.assistantTurns, 1);
+		assert.equal(
+			completed.receipt.efficiency?.toolResultBytes,
+			Buffer.byteLength("€\nOK"),
+		);
+		assert.equal(
+			completed.receipt.efficiency?.initialPromptBytes,
+			Buffer.byteLength(input().prompt),
+		);
+		assert.equal(completed.receipt.efficiency?.initialSourceBytes, 33);
+		assert.equal(completed.receipt.efficiency?.excerptOmissions, 2);
+		assert.equal(completed.receipt.efficiency?.inputTokens, 8);
+		assert.equal(completed.receipt.guardStop, null);
+	});
+});
+
 describe("durable execution high water", () => {
+	for (const cap of ["tokens", "run_tokens", "turns", "wall"] as const) {
+		for (const available of [true, false]) {
+			it(`preserves ${available ? "durable" : "unavailable"} request facts on a same-attempt ${cap} budget resume`, async (t) => {
+				const dir = mkdtempSync(join(tmpdir(), "resume-efficiency-"));
+				t.after(() => rmSync(dir, { recursive: true, force: true }));
+				const h = harness([]);
+
+				const usage = {
+					version: 1,
+					runId: RUN,
+					stage: "specify",
+					attempt: 1,
+					startedAt: 100,
+					deadline: 60_100,
+					turns: 2,
+					usage: {
+						total: 100,
+						parent: 80,
+						children: 20,
+						gateway: 100,
+						unreadChildren: 0,
+						byModel: {},
+					},
+					efficiency: {
+						...unknownEfficiency(),
+						assistantTurns: 2,
+						toolResultBytes: 17,
+					},
+				};
+
+				writeFileSync(join(dir, "usage.json"), JSON.stringify(usage));
+
+				if (available)
+					writeFileSync(
+						join(dir, "egress.requests.jsonl"),
+						[
+							{ kind: "dispatch", req: 1 },
+							{ kind: "result", req: 1, inputTokens: 8, outputTokens: 2 },
+							{ kind: "dispatch", req: 2 },
+							{ kind: "result", req: 2, inputTokens: 16, outputTokens: 4 },
+						]
+							.map((line) => JSON.stringify(line))
+							.join("\n") + "\n",
+					);
+
+				const result = await runStage(
+					input(
+						{ remainingRunTokens: cap === "run_tokens" ? 100 : 1_000_000 },
+						{
+							maxTokens: cap === "tokens" ? 100 : null,
+							budget: {
+								maxTurns: cap === "turns" ? 2 : 10,
+								wallMs: 60_000,
+								stallMs: 300_000,
+							},
+						},
+					),
+					{
+						...h.host,
+						now: () => (cap === "wall" ? 60_101 : 200),
+						readUsage: () =>
+							parseJson(readFileSync(join(dir, "usage.json"), "utf8")),
+						writeUsage: () => true,
+						readJournal: () =>
+							fs.promises.readFile(join(dir, "egress.requests.jsonl"), "utf8"),
+						writeReceipt: async (receipt) => {
+							await fs.promises.writeFile(
+								join(dir, "receipt.json"),
+								JSON.stringify(receipt),
+							);
+
+							return true;
+						},
+					},
+				);
+
+				assert.deepEqual(result.receipt.outcome, {
+					kind: "budget_exhausted",
+					cap,
+				});
+				assert.equal(result.usage, 100);
+				assert.equal(h.tables.length, 0);
+				assert.equal(h.launches.length, 0);
+
+				const expected = {
+					modelRequests: available ? 2 : null,
+					inputTokens: available ? 24 : null,
+					outputTokens: available ? 6 : null,
+					firstInputTokens: available ? 8 : null,
+					lastInputTokens: available ? 16 : null,
+					maxInputTokens: available ? 16 : null,
+				};
+
+				for (const facts of [
+					result.receipt.efficiency,
+					await sandboxModule.executionEfficiency(dir),
+				]) {
+					assert.ok(facts);
+					assert.deepEqual(
+						{
+							modelRequests: facts.modelRequests,
+							inputTokens: facts.inputTokens,
+							outputTokens: facts.outputTokens,
+							firstInputTokens: facts.firstInputTokens,
+							lastInputTokens: facts.lastInputTokens,
+							maxInputTokens: facts.maxInputTokens,
+						},
+						expected,
+					);
+					assert.equal(facts.assistantTurns, 2);
+					assert.equal(facts.toolResultBytes, 17);
+				}
+			});
+		}
+	}
+
 	it("restores an exhausted token high water before opening a gateway", async () => {
 		const h = harness([]);
 
@@ -836,6 +1116,8 @@ describe("accept efficiency guards", () => {
 			);
 			assert.ok(!JSON.stringify(result.receipt).includes("PRIVATE-ARG"));
 			assert.equal(result.usage, 80);
+			assert.equal(result.receipt.guardStop, "accept_tool_limit");
+			assert.equal(result.receipt.efficiency?.guardStops, 1);
 			assert.deepEqual(h.outputs, []);
 			assert.deepEqual(h.timeline.slice(1, 4), [
 				"gate:abort",
@@ -3360,7 +3642,11 @@ describe("runStage on an Anthropic primary", () => {
 	});
 });
 
-function inProcessGateway(fixturePort: number, events: ControlEvent[]) {
+function inProcessGateway(
+	fixturePort: number,
+	events: ControlEvent[],
+	journal: (text: string) => void = () => {},
+) {
 	return async (
 		table: RouteTable,
 		timeline: string[],
@@ -3393,7 +3679,7 @@ function inProcessGateway(fixturePort: number, events: ControlEvent[]) {
 			table: routed,
 			credentials,
 			audit: new AuditLog(() => {}, 1_000_000, {
-				write: () => {},
+				write: journal,
 				sync: () => {},
 			}),
 			emit: (event) => {
@@ -3524,6 +3810,590 @@ function agentThroughGateway(socketPath: () => string) {
 		void turn();
 	};
 }
+
+describe("pinned zero-token source replay", () => {
+	it("reduces serialized provider input at equal B-shaped build/repair work without losing cited facts", async (t) => {
+		const pin = JSON.parse(
+			readFileSync(
+				new URL("../fixtures/efficiency/replay.json", import.meta.url),
+				"utf8",
+			),
+		);
+
+		const upstream = await startEchoFixture(0);
+		const root = mkdtempSync(join(tmpdir(), "factory-eff2-replay-"));
+
+		const workflow = readFileSync(
+			new URL("../../.github/factory/WORKFLOW.md", import.meta.url),
+			"utf8",
+		);
+
+		assert.equal(digestOf(workflow), pin.workflowDigest);
+		const repo = "giuseppecrj/pi-herdr-factorio";
+		assert.ok(isRepoSlug(repo));
+		assert.ok(isGitSha(pin.baseline));
+
+		const baseText = Array.from(
+			{ length: pin.sourceLines },
+			(_, n) => `// public padding ${n + 1} ${"x".repeat(48)}`,
+		);
+
+		const moduleLines = [...baseText];
+		moduleLines[pin.implementationLine - 1] =
+			"export function increment(value) { return value; }";
+		const testLines = [...baseText];
+		testLines[0] =
+			"import test from 'node:test'; import assert from 'node:assert/strict';";
+		testLines[pin.testLine - 1] = "import { increment } from './module.mjs';";
+		testLines[pin.testLine] =
+			"test('finite', () => assert.equal(increment(1), 1));";
+
+		const initial = new Map([
+			["module.mjs", moduleLines.join("\n")],
+			["case.test.mjs", testLines.join("\n")],
+		]);
+
+		const paths = [...initial.keys()];
+
+		const contract: Contract = {
+			version: 2,
+			runId: digest(RUN),
+			issue: 41,
+			base: { repo, sha: pin.baseline },
+			snapshot: {
+				digest: digestOf("synthetic efficiency replay"),
+				source: "unedited",
+				eventId: "41",
+				eventAt: "2026-11-06T00:00:00Z",
+			},
+			link: null,
+			summary:
+				"Fix increment: increments finite values and rejects non-finite values with zero",
+			behavior: [
+				"increments finite values and rejects non-finite values with zero",
+			],
+			exclusions: ["No publication"],
+			acceptance: [
+				{
+					id: "A1",
+					kind: "new_behavior",
+					text: "Finite values increment by one",
+				},
+				{
+					id: "A2",
+					kind: "new_behavior",
+					text: "Non-finite values return zero",
+				},
+			],
+			compatibility: ["Preserve the increment export"],
+			limits: ["No dependencies"],
+			files: paths,
+			evidence: [
+				{
+					path: "module.mjs",
+					start: pin.implementationLine,
+					end: pin.implementationLine,
+					fact: "increment export",
+				},
+				{
+					path: "case.test.mjs",
+					start: pin.testLine,
+					end: pin.testLine + 1,
+					fact: "public node:test harness",
+				},
+			],
+		};
+
+		const unchanged = contractDigestOf(contractBytes(contract));
+		const guidance = { general: "", stages: { build: "Keep the fix narrow." } };
+
+		const fixtureModel: Model<"openai-responses"> = {
+			id: "gpt-6.1-sol",
+			name: "synthetic echo",
+			api: "openai-responses",
+			provider: "openai",
+			baseUrl: "http://127.0.0.1:1/openai/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 8192,
+		};
+
+		const zero: Usage = {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		};
+
+		const before = upstream.arrivals("/openai/v1/responses");
+
+		const paired = async (variant: "baseline" | "ranges") => {
+			const workspace = join(root, variant.padEnd(8, "x"));
+			mkdirSync(workspace);
+
+			for (const [path, text] of initial)
+				writeFileSync(join(workspace, path), text);
+
+			const bytes: number[] = [],
+				providerInputs: string[] = [],
+				exits: number[] = [],
+				gates: boolean[] = [],
+				receipts: StageReceipt[] = [];
+
+			const checkout = {
+				files: paths,
+				read: async (path: string) =>
+					readFileSync(join(workspace, path), "utf8"),
+			};
+
+			const read = createReadTool(workspace),
+				grep = createGrepTool(workspace),
+				edit = createEditTool(workspace),
+				bash = createBashTool(workspace);
+
+			const tools = [read, grep, edit, bash];
+			const signal = new AbortController().signal;
+
+			type Step = {
+				name: string;
+				args: JsonObject;
+				execute: () => Promise<{
+					isError?: boolean;
+					content: (
+						| { type: "text"; text: string }
+						| { type: "image"; data: string; mimeType: string }
+					)[];
+				}>;
+				expectedExit?: number;
+			};
+
+			const search = (pattern: string, path: string): Step => ({
+				name: "grep",
+				args: { pattern, path, limit: 10, context: 2 },
+				execute: () =>
+					grep.execute(
+						"grep",
+						{ pattern, path, limit: 10, context: 2 },
+						signal,
+					),
+			});
+
+			const slice = (path: string, offset: number): Step => ({
+				name: "read",
+				args: { path, offset, limit: 80 },
+				execute: () =>
+					read.execute("read", { path, offset, limit: 80 }, signal),
+			});
+
+			const change = (
+				path: string,
+				oldText: string,
+				newText: string,
+			): Step => ({
+				name: "edit",
+				args: { path, edits: [{ oldText, newText }] },
+				execute: () =>
+					edit.execute("edit", { path, edits: [{ oldText, newText }] }, signal),
+			});
+
+			const check = (expectedExit: number): Step => ({
+				name: "bash",
+				args: { command: "env -u NODE_TEST_CONTEXT node --test case.test.mjs" },
+				execute: () =>
+					bash.execute(
+						"bash",
+						{ command: "env -u NODE_TEST_CONTEXT node --test case.test.mjs" },
+						signal,
+					),
+				expectedExit,
+			});
+
+			const publicGate = () => {
+				try {
+					execFileSync(
+						process.execPath,
+						[
+							"--input-type=module",
+							"-e",
+							`import { increment } from ${JSON.stringify(new URL(`file://${join(workspace, "module.mjs")}`).href)}; import assert from 'node:assert/strict'; assert.equal(increment(1),2); assert.equal(increment(NaN),0);`,
+						],
+						{ stdio: "pipe" },
+					);
+
+					return true;
+				} catch {
+					return false;
+				}
+			};
+
+			for (const repair of [false, true]) {
+				if (repair)
+					writeFileSync(
+						join(workspace, "module.mjs"),
+						`${"// shifted candidate\n".repeat(pin.repairShift)}${readFileSync(join(workspace, "module.mjs"), "utf8")}`,
+					);
+				let budget = 16 * 1024;
+
+				const prefixes = paths.map((path) => {
+					const file = inlined(
+						path,
+						initial.get(path) ?? "",
+						Math.min(12 * 1024, budget),
+					);
+
+					budget -= Buffer.byteLength(file.text);
+
+					return file;
+				});
+
+				const shown = await sourceExcerpts({
+					files: paths,
+					evidence: contract.evidence,
+					checkout,
+					identity: `${repo}@${pin.baseline}${repair ? " workspace-r1" : ""}`,
+					repair,
+				});
+
+				const prompt =
+					variant === "baseline"
+						? baselineBuildPrompt({ contract, guidance, inlined: prefixes })
+						: buildPrompt({ contract, guidance, inlined: shown });
+
+				for (const criterion of contract.acceptance)
+					assert.ok(
+						prompt.includes(criterion.text),
+						`complete criterion ${criterion.id}`,
+					);
+
+				if (repair && variant === "ranges") {
+					assert.match(prompt, /base citations are hints/);
+					assert.ok(
+						!shown.map(renderInlined).join("\n").includes("return value;"),
+					);
+				}
+
+				const actions = repair
+					? [
+							search("increment", "module.mjs"),
+							slice(
+								"module.mjs",
+								pin.implementationLine + pin.repairShift - 20,
+							),
+							slice("case.test.mjs", pin.testLine - 20),
+							change(
+								"case.test.mjs",
+								"test('finite', () => assert.equal(increment(1), 2));",
+								"test('finite', () => assert.equal(increment(1), 2));\ntest('invalid', () => assert.equal(increment(NaN), 0));",
+							),
+							check(1),
+							change(
+								"module.mjs",
+								"return value + 1;",
+								"return Number.isFinite(value) ? value + 1 : 0;",
+							),
+							check(0),
+							search("Number.isFinite", "module.mjs"),
+							slice(
+								"module.mjs",
+								pin.implementationLine + pin.repairShift - 20,
+							),
+						]
+					: [
+							search("increment", "module.mjs"),
+							slice("module.mjs", pin.implementationLine - 20),
+							slice("case.test.mjs", pin.testLine - 20),
+							change("case.test.mjs", "increment(1), 1", "increment(1), 2"),
+							check(1),
+							change("module.mjs", "return value;", "return value + 1;"),
+							check(0),
+							slice("module.mjs", pin.implementationLine - 20),
+							search("test", "case.test.mjs"),
+						];
+
+				const history: Message[] = [
+					{ role: "user", content: prompt, timestamp: 0 },
+				];
+
+				const events: ControlEvent[] = [];
+				const handles: GatewayHandle[] = [];
+
+				let journal = "",
+					handle: GatewayHandle | null = null,
+					error: string | null = null;
+
+				const gateway = inProcessGateway(upstream.port, events, (text) => {
+					journal += text;
+				});
+
+				const send = async () => {
+					const reply = await streamSimple(
+						fixtureModel,
+						{ systemPrompt: STAGE_SYSTEM_PROMPT, messages: history, tools },
+						{
+							apiKey: "synthetic-not-a-secret",
+							fetch: async (_url, init) => {
+								const body = String(init?.body ?? "");
+								bytes.push(Buffer.byteLength(body));
+								providerInputs.push(body);
+
+								return new Promise<Response>((done, reject) => {
+									const req = request(
+										{
+											socketPath: handle?.socketPath,
+											method: "POST",
+											path: "/openai/v1/responses",
+											headers: {
+												Host: "127.0.0.1:18080",
+												"Content-Type": "application/json",
+											},
+											setHost: false,
+										},
+										(res) => {
+											const chunks: Buffer[] = [];
+											res.on("data", (chunk) => chunks.push(chunk));
+											res.on("end", () =>
+												done(
+													new Response(Buffer.concat(chunks), {
+														status: res.statusCode,
+														headers: { "Content-Type": "text/event-stream" },
+													}),
+												),
+											);
+										},
+									);
+
+									req.on("error", reject);
+									req.end(body);
+								});
+							},
+						},
+					).result();
+
+					assert.notEqual(
+						reply.stopReason,
+						"error",
+						reply.errorMessage ?? "echo failed",
+					);
+				};
+
+				const h = harness(
+					[
+						(command, pi) => {
+							if (command.type === "abort") {
+								pi.emit({ type: "agent_settled", aborted: true });
+
+								return;
+							}
+
+							if (command.type === "get_last_assistant_text") {
+								pi.emit({
+									type: "response",
+									id: command.id ?? "",
+									command: "get_last_assistant_text",
+									success: true,
+									data: { text: "Done" },
+								});
+
+								return;
+							}
+
+							if (command.type !== "prompt") return;
+							pi.emit(started(String(command.id)), { type: "agent_start" });
+							void (async () => {
+								for (const [n, action] of actions.entries()) {
+									pi.emit({ type: "turn_start" });
+									await send();
+
+									if (action.name === "edit") {
+										const context = providerInputs.at(-1) ?? "";
+
+										assert.ok(
+											context.includes("export function increment(value)"),
+											"implementation fact present before editing",
+										);
+										assert.ok(
+											context.includes(
+												"import { increment } from './module.mjs'",
+											),
+											"test harness fact present before editing",
+										);
+									}
+
+									const id = `call_${n}`;
+									history.push({
+										role: "assistant",
+										api: "openai-responses",
+										provider: "openai",
+										model: fixtureModel.id,
+										content: [
+											{
+												type: "toolCall",
+												id,
+												name: action.name,
+												arguments: action.args,
+											},
+										],
+										usage: zero,
+										stopReason: "toolUse",
+										timestamp: 0,
+									});
+									pi.emit(assistant({ tokens: 16, stopReason: "toolUse" }));
+
+									let content: Awaited<ReturnType<Step["execute"]>>["content"];
+
+									let failed = false;
+
+									try {
+										const output = await action.execute();
+										content = output.content;
+										failed = output.isError === true;
+									} catch (caught) {
+										failed = true;
+										content = [
+											{
+												type: "text" as const,
+												text:
+													caught instanceof Error
+														? caught.message
+														: String(caught),
+											},
+										];
+									}
+
+									if (action.expectedExit !== undefined) {
+										const code = failed ? 1 : 0;
+										exits.push(code);
+										assert.equal(
+											code,
+											action.expectedExit,
+											JSON.stringify(content),
+										);
+									}
+
+									const message = {
+										role: "toolResult" as const,
+										toolCallId: id,
+										toolName: action.name,
+										content,
+										isError: failed,
+										timestamp: 0,
+									};
+
+									history.push(message);
+									pi.emit({ type: "message_end", message });
+								}
+
+								pi.emit({ type: "turn_start" });
+								await send();
+								pi.emit(assistant({ tokens: 16 }), {
+									type: "agent_settled",
+									aborted: false,
+								});
+							})().catch((caught) => {
+								error = String(caught);
+								pi.emit(
+									assistant({
+										stopReason: "error",
+										errorMessage: String(caught),
+										tokens: 0,
+									}),
+									{ type: "agent_settled", aborted: false },
+								);
+							});
+						},
+					],
+					{
+						gateway: async (table, timeline) => {
+							handle = await gateway(table, timeline);
+							handles.push(handle);
+
+							return handle;
+						},
+						cleanupReserveMs: 2000,
+					},
+				);
+
+				const result = await runStage(
+					input({ stage: "build", prompt, source: sourceFacts(shown) }),
+					{ ...h.host, readJournal: async () => journal },
+				);
+
+				assert.equal(error, null);
+				assert.equal(result.kind, "passed");
+				receipts.push(result.receipt);
+				gates.push(publicGate());
+
+				for (const current of handles)
+					rmSync(join(current.socketPath, ".."), {
+						recursive: true,
+						force: true,
+					});
+			}
+
+			assert.deepEqual(exits, pin.expectedFocusedExits);
+			assert.deepEqual(gates, pin.expectedPublicGateOutcomes);
+
+			for (const fact of pin.requiredFacts)
+				assert.ok(
+					providerInputs.some((body) => body.includes(fact)),
+					`${variant} lost ${fact}`,
+				);
+			assert.equal(contractDigestOf(contractBytes(contract)), unchanged);
+			assert.equal(
+				receipts.reduce(
+					(sum, r) => sum + (r.efficiency?.modelRequests ?? 0),
+					0,
+				),
+				20,
+			);
+			assert.equal(
+				receipts.reduce((sum, r) => sum + r.usage.total, 0),
+				320,
+				"injected fixture usage, not real model spend",
+			);
+
+			return {
+				bytes: bytes.reduce((a, b) => a + b, 0),
+				requests: bytes.length,
+				patch: paths.map((path) => readFileSync(join(workspace, path), "utf8")),
+			};
+		};
+
+		try {
+			const baseline = await paired("baseline"),
+				head = await paired("ranges");
+
+			assert.equal(baseline.requests, head.requests);
+			assert.deepEqual(baseline.patch, head.patch);
+			const reduction = 1 - head.bytes / baseline.bytes;
+			assert.ok(
+				reduction >= pin.minimumProviderInputReduction,
+				`only ${reduction}`,
+			);
+			assert.equal(upstream.arrivals("/openai/v1/responses") - before, 40);
+			assert.equal(upstream.strays, 0);
+			t.diagnostic(
+				JSON.stringify({
+					baseline: baseline.bytes,
+					head: head.bytes,
+					reduction,
+					requestsPerVariant: head.requests,
+					realModelTokens: 0,
+					injectedTokensPerVariant: 320,
+					focusedExits: pin.expectedFocusedExits,
+					publicGates: pin.expectedPublicGateOutcomes,
+				}),
+			);
+		} finally {
+			await upstream.close();
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+});
 
 describe("budget stops before the next request, through the gate", () => {
 	let upstream: EchoFixture;

@@ -649,7 +649,7 @@ export function answerBody(text: string): string {
 
 const MARKDOWN_META = /[\\`*_{}[\]()+\-.!|<>~&:=]/g;
 
-const INVISIBLE = /[\p{Cf}\u034f\u115f\u2800\u3164]/gu;
+const INVISIBLE = /\p{Cf}|\u034f|\u115f|\u2800|\u3164/gu;
 
 const BARE_CREDENTIAL =
 	/(?<![A-Za-z0-9])(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{20,}|sk-(?:proj|svcacct|admin|ant(?:-api\d+)?)-[A-Za-z0-9_-]{20,}|sk-(?:[A-Za-z][A-Za-z0-9]*-)*(?=[A-Za-z0-9_-]*[A-Za-z0-9]{20})[A-Za-z0-9_-]{20,}|xai-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16})(?![A-Za-z0-9])/g;
@@ -922,7 +922,280 @@ export type InlinedFile = {
 	readonly path: string;
 	readonly text: string;
 	readonly totalLines: number;
+	readonly unavailable?: {
+		readonly reason: "missing" | "unreadable";
+		readonly checkout: string;
+	};
+	readonly excerpt?: {
+		readonly start: number;
+		readonly end: number;
+		readonly checkout: string;
+		readonly contentDigest: Digest;
+		readonly selection:
+			| "evidence"
+			| "fallback_missing"
+			| "fallback_stale"
+			| "omitted_ceiling";
+		readonly repair: boolean;
+		readonly omitted: boolean;
+		readonly capHit: boolean;
+		readonly skipped?: number;
+	};
 };
+
+export type SourceFacts = {
+	readonly bytes: number;
+	readonly omissions: number;
+	readonly capHit: boolean;
+};
+
+export function renderInlined(file: InlinedFile): string {
+	if (file.unavailable !== undefined)
+		return `=== ${file.path}; line count unavailable; omitted=true; checkout=${file.unavailable.checkout}; ${file.unavailable.reason}; use grep to locate the contract fact in the prepared checkout ===`;
+
+	const e = file.excerpt;
+
+	if (e === undefined) {
+		const kept = file.text === "" ? 0 : file.text.split("\n").length;
+
+		return `=== ${file.path}; lines 1-${kept} of ${file.totalLines}; omitted=${kept < file.totalLines} ===\n${file.text}`;
+	}
+
+	const lines =
+		file.totalLines === 0
+			? "empty file; total=0"
+			: e.end === 0
+				? `no lines included; total=${file.totalLines}`
+				: `lines ${e.start}-${e.end} of ${file.totalLines}`;
+
+	return [
+		`=== ${file.path}; ${lines}; omitted=${e.omitted}; checkout=${e.checkout}; content=${e.contentDigest}; ${e.selection}${e.repair ? "; base citations are hints, verify with grep" : ""}${e.capHit ? "; source ceiling hit" : ""}${e.skipped ? `; ${e.skipped} other excerpts omitted, use grep` : ""} ===`,
+		...(e.start > 1 ? [`[omitted lines 1-${e.start - 1}]`] : []),
+		file.text,
+		...(e.end < file.totalLines
+			? [
+					`[omitted lines ${e.end + 1}-${file.totalLines}; grep this file, then read the relevant block]`,
+				]
+			: []),
+		...(e.selection === "fallback_missing" || e.selection === "fallback_stale"
+			? ["[fallback prefix; locate the contract fact with grep in this file]"]
+			: []),
+	].join("\n");
+}
+
+export function sourceFacts(files: readonly InlinedFile[]): SourceFacts {
+	return {
+		bytes: Buffer.byteLength(files.map(renderInlined).join("\n\n")),
+		omissions: files.reduce(
+			(sum, f) =>
+				sum +
+				Number(
+					f.unavailable !== undefined ||
+						(f.excerpt?.omitted ?? f.text.split("\n").length < f.totalLines),
+				) +
+				(f.excerpt?.skipped ?? 0),
+			0,
+		),
+		capHit: files.some(
+			(f) => f.excerpt?.capHit ?? f.text.split("\n").length < f.totalLines,
+		),
+	};
+}
+
+/** Localize only in the prepared checkout. The immutable contract is never rewritten. */
+export async function sourceExcerpts(input: {
+	readonly files: readonly string[];
+	readonly evidence: readonly Evidence[];
+	readonly checkout: {
+		readonly files: readonly string[];
+		read(path: string, cap: number): Promise<string | null>;
+	};
+	readonly identity: string;
+	readonly repair?: boolean;
+}): Promise<InlinedFile[]> {
+	const paths = new Set([...input.evidence.map((e) => e.path), ...input.files]);
+	const unavailable: InlinedFile[] = [];
+
+	const sources: {
+		path: string;
+		lines: string[];
+		digest: Digest;
+		cites: readonly Evidence[];
+		stale: boolean;
+	}[] = [];
+
+	for (const path of paths) {
+		const listed = input.checkout.files.includes(path);
+
+		const text = listed
+			? await input.checkout.read(path, NAMED_FILE_READ_BYTES)
+			: null;
+
+		if (text === null) {
+			unavailable.push({
+				path,
+				text: "",
+				totalLines: 0,
+				unavailable: {
+					reason: listed ? "unreadable" : "missing",
+					checkout: input.identity,
+				},
+			});
+			continue;
+		}
+
+		const lines = text === "" ? [] : text.split("\n");
+		const evidence = input.evidence.filter((e) => e.path === path);
+
+		const cites = evidence.filter(
+			(e) =>
+				Number.isSafeInteger(e.start) &&
+				Number.isSafeInteger(e.end) &&
+				e.start >= 1 &&
+				e.end >= e.start &&
+				e.end <= lines.length,
+		);
+
+		sources.push({
+			path,
+			lines,
+			digest: digestOf(text),
+			cites,
+			stale: evidence.length !== cites.length,
+		});
+	}
+
+	const windows = (context: number): InlinedFile[] => [
+		...unavailable,
+		...sources.flatMap((source) => {
+			const { path, lines, cites } = source;
+
+			const ranges =
+				cites.length === 0
+					? [
+							{
+								start: lines.length === 0 ? 0 : 1,
+								end: Math.min(12, lines.length),
+							},
+						]
+					: cites
+							.map((e) => ({
+								start: Math.max(1, e.start - context),
+								end: Math.min(lines.length, e.end + context),
+							}))
+							.sort((a, b) => a.start - b.start);
+
+			if (source.stale && cites.length > 0)
+				ranges.unshift({ start: 1, end: Math.min(12, lines.length) });
+
+			const merged: { start: number; end: number }[] = [];
+
+			for (const range of ranges) {
+				const last = merged.at(-1);
+
+				if (last !== undefined && range.start <= last.end + 1)
+					last.end = Math.max(last.end, range.end);
+				else merged.push({ ...range });
+			}
+
+			return merged.map(({ start, end }) => ({
+				path,
+				text: lines.slice(Math.max(0, start - 1), end).join("\n"),
+				totalLines: lines.length,
+				excerpt: {
+					start,
+					end,
+					checkout: input.identity,
+					contentDigest: source.digest,
+					selection:
+						source.stale && start <= 1
+							? ("fallback_stale" as const)
+							: cites.length === 0
+								? ("fallback_missing" as const)
+								: ("evidence" as const),
+					repair: input.repair === true,
+					omitted: start > 1 || end < lines.length,
+					capHit: false,
+				},
+			}));
+		}),
+	];
+
+	let shown = windows(30);
+
+	if (sourceFacts(shown).bytes > 6 * 1024) shown = windows(20);
+
+	if (sourceFacts(shown).bytes > INLINE_TOTAL_BYTES) shown = windows(0);
+
+	if (sourceFacts(shown).bytes <= INLINE_TOTAL_BYTES) return shown;
+	const bounded: InlinedFile[] = [];
+	let remaining = INLINE_TOTAL_BYTES - 128;
+
+	for (const file of shown) {
+		const full =
+			Buffer.byteLength(renderInlined(file)) + (bounded.length > 0 ? 2 : 0);
+
+		if (full <= remaining) {
+			bounded.push(file);
+			remaining -= full;
+			continue;
+		}
+
+		const e = file.excerpt;
+
+		if (e === undefined) continue;
+
+		const header = {
+			...file,
+			text: "",
+			excerpt: { ...e, start: 0, end: 0, omitted: true, capHit: true },
+		};
+
+		const allowance = Math.max(
+			0,
+			remaining - Buffer.byteLength(renderInlined(header)) - 128,
+		);
+
+		const kept =
+			allowance === 0 ? "" : inlined(file.path, file.text, allowance).text;
+
+		const count = kept === "" ? 0 : kept.split("\n").length;
+
+		const trimmed = {
+			...header,
+			text: kept,
+			excerpt: {
+				...header.excerpt,
+				start: count === 0 ? 0 : e.start,
+				end: count === 0 ? 0 : e.start + count - 1,
+				selection: count === 0 ? ("omitted_ceiling" as const) : e.selection,
+			},
+		};
+
+		const bytes =
+			Buffer.byteLength(renderInlined(trimmed)) + (bounded.length > 0 ? 2 : 0);
+
+		if (bytes <= remaining) {
+			bounded.push(trimmed);
+			remaining -= bytes;
+		}
+	}
+
+	const firstIndex = bounded.findIndex((file) => file.excerpt !== undefined);
+	const first = bounded[firstIndex];
+
+	if (first?.excerpt !== undefined)
+		bounded[firstIndex] = {
+			...first,
+			excerpt: {
+				...first.excerpt,
+				capHit: true,
+				skipped: shown.length - bounded.length,
+			},
+		};
+
+	return bounded;
+}
 
 export function inlined(
 	path: string,
@@ -1130,6 +1403,22 @@ Optional contract field: "replacesTests":[{"path":"test/existing.test.ts","reaso
 
 Rules: every string is one line of at most ${LINE_MAX} characters. behavior has 1-${MAX_BEHAVIOR} items, acceptance 1-${MAX_CRITERIA}, questions 1-${MAX_QUESTIONS}, cites at most ${MAX_CITES} per question. Every cited path must exist in the checkout. Ask a question only for a decision the repository cannot settle, and never ask what the repository already answers.`;
 
+function renderSpecifyFile(file: InlinedFile): string {
+	const shown = file.text.split("\n").length;
+
+	const range =
+		shown < file.totalLines ? ` (lines 1-${shown} of ${file.totalLines})` : "";
+
+	return `=== ${file.path}${range} ===\n${numbered(file.text)}`;
+}
+
+export function specifySourceFacts(files: readonly InlinedFile[]): SourceFacts {
+	return {
+		...sourceFacts(files),
+		bytes: Buffer.byteLength(files.map(renderSpecifyFile).join("\n")),
+	};
+}
+
 export function specifyPrompt(input: PromptInput): string {
 	const untrusted = promptBlocks();
 
@@ -1137,16 +1426,7 @@ export function specifyPrompt(input: PromptInput): string {
 		.filter((part) => part !== "")
 		.join("\n\n");
 
-	const files = input.inlined.map((file) => {
-		const shown = file.text.split("\n").length;
-
-		const range =
-			shown < file.totalLines
-				? ` (lines 1-${shown} of ${file.totalLines})`
-				: "";
-
-		return `=== ${file.path}${range} ===\n${numbered(file.text)}`;
-	});
+	const files = input.inlined.map(renderSpecifyFile);
 
 	const answers =
 		input.answers === null

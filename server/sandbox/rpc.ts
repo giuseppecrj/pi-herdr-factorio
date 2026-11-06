@@ -51,7 +51,7 @@ export type PiRecord =
 			readonly id: string;
 			readonly method: string;
 	  }
-	| { readonly type: "other" }
+	| { readonly type: "other"; readonly textBytes?: number | null }
 	| { readonly type: "malformed" };
 
 export type PiCommand =
@@ -114,6 +114,27 @@ function messageEnd(message: JsonObject | null): PiRecord {
 				provider,
 				model,
 			},
+		};
+	}
+
+	if (role === "toolResult") {
+		const content = arrayOf(fieldOf(message, "content"));
+
+		return {
+			type: "other",
+			textBytes:
+				content === null
+					? null
+					: content.reduce<number | null>((sum, block) => {
+							const part = objectOf(block);
+
+							if (sum === null || part === null) return null;
+
+							if (fieldOf(part, "type") !== "text") return sum;
+							const text = textOf(fieldOf(part, "text"));
+
+							return text === null ? null : sum + Buffer.byteLength(text);
+						}, 0),
 		};
 	}
 

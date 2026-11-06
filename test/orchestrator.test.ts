@@ -2212,7 +2212,7 @@ describe("Orchestrator base qualification", () => {
 		assert.equal(statuses(github, 14).at(-1)?.endsWith(":failed"), true);
 
 		const row = (await outbox.scan())?.[0]?.row?.row;
-		assert.ok(row?.v === 2);
+		assert.ok(row?.v === 3);
 		assert.deepEqual(row.acceptAttempts, {
 			kind: "known",
 			value: [
@@ -2263,7 +2263,7 @@ describe("Orchestrator base qualification", () => {
 		);
 
 		const row = (await outbox.scan())?.[0]?.row?.row;
-		assert.ok(row?.v === 2);
+		assert.ok(row?.v === 3);
 		assert.equal(row.outcome.kind, "budget_exhausted");
 		assert.ok(row.outcome.kind === "budget_exhausted");
 		assert.equal(row.outcome.cap.kind, "unavailable");
@@ -11801,7 +11801,7 @@ describe("controller-only validate", () => {
 		};
 
 		const row = (await outbox.scan())?.[0]?.row?.row;
-		assert.ok(row?.v === 2);
+		assert.ok(row?.v === 3);
 		assert.deepEqual(row.failure, failed);
 		assert.deepEqual(row.outcome, {
 			kind: "failed",
@@ -12172,6 +12172,9 @@ describe("held-out acceptance stage", () => {
 		assert.ok(accept.prompt.includes(MAIN_SHA));
 		assert.ok(accept.prompt.includes('"id":"A1"'));
 		assert.ok(accept.prompt.includes("export const VERSION"));
+		assert.match(accept.prompt, /lines \d+-\d+ of \d+; omitted=/);
+		assert.match(accept.prompt, /checkout=/);
+		assert.ok((accept.source?.bytes ?? Infinity) <= 6144);
 		const bound = await files.readContract(runOf(14));
 		assert.equal(bound.kind, "found");
 
@@ -14566,7 +14569,7 @@ describe("terminal rows keep the real cause", () => {
 		}
 
 		const row = (await outbox.scan())?.[0]?.row?.row;
-		assert.ok(row?.v === 2, "a version 2 row");
+		assert.ok(row?.v === 3, "a version 3 row");
 
 		return { ...f, dir, row };
 	}

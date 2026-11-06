@@ -8,6 +8,8 @@ disable-model-invocation: true
 
 Use only the contract and trusted base checkout supplied in this fresh session. The issue, any earlier session, candidate code and implementation transcript are not inputs. Do not implement the change.
 
+Start with the checkout-bound evidence excerpts. Omission labels mean other code exists. If more source is needed, read 80 to 120 lines with offset/limit. Grep with limit 10 to 20 and context 2 to 3; refine the search rather than paginate it. A larger relevant block is allowed when justified. Stay within the prompt's two-call allowance.
+
 Map every contract criterion to a scenario ID. Use executable node:test checks with real assertions for observable behavior, including invalid input and compatibility where the contract requires them. Checks should fail on a violating candidate, not merely confirm that a file exists. Do not require behavior outside the contract. Use a short judge instruction only for a genuinely non-executable criterion.
 
 Each criterion has a kind, `new_behavior` or `preservation`. A scenario maps criteria of one kind only, and the controller derives the scenario's kind. Each checked scenario owns exactly one check file, never shared with another scenario; put helpers inside that file. Every `new_behavior` criterion needs a checked scenario.
