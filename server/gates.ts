@@ -23,6 +23,8 @@ import { acceptanceEntries, type AcceptanceSuite } from "../src/accept.ts";
 import {
 	BASE_PROTOCOL_VERSION,
 	oracleKey,
+	SCAN_RULES,
+	type SuiteSignal,
 	type AcceptanceBinding,
 	type BaseEvidence,
 	type HeldoutProjection,
@@ -1482,15 +1484,17 @@ export async function runHeldoutBase(input: {
 	const runner = input.runner ?? localRunner;
 	const gates = join(input.tree, ".github/factory/gates");
 
-	const gateBytes = ["reporter.mjs", "freeze.mjs"].map((name) => {
-		try {
-			const path = join(gates, name);
+	const gateBytes = ["reporter.mjs", "freeze.mjs", "scan-rules.json"].map(
+		(name) => {
+			try {
+				const path = join(gates, name);
 
-			return lstatSync(path).isFile() ? readFileSync(path, "utf8") : null;
-		} catch {
-			return null;
-		}
-	});
+				return lstatSync(path).isFile() ? readFileSync(path, "utf8") : null;
+			} catch {
+				return null;
+			}
+		},
+	);
 
 	const runtime = {
 		runner: runner.kind,
@@ -1529,6 +1533,22 @@ export async function runHeldoutBase(input: {
 	};
 
 	let repeat: PrivateExecution = execution;
+	let tamper: SuiteSignal[] = [];
+
+	const evidence = (): BaseEvidence => {
+		const clean: BaseEvidence = {
+			binding: input.binding,
+			runtime,
+			startedAt: input.startedAt,
+			finishedAt: Date.now(),
+			source,
+			execution,
+			repeat,
+			scenarios,
+		};
+
+		return tamper.length > 0 ? { ...clean, tamper } : clean;
+	};
 
 	const remaining = () => {
 		if (input.signal?.aborted || Date.now() >= input.deadline)
@@ -1567,6 +1587,21 @@ export async function runHeldoutBase(input: {
 		const lockDigest = digestOf(
 			readFileSync(join(input.tree, "package-lock.json")),
 		);
+
+		// The gate's tamper scan, with the base tree's own rules, before any
+		// install or run: a suite CI would reject never runs or qualifies.
+		tamper = scanSuite(
+			input.suite,
+			input.binding.issue,
+			input.canary,
+			join(gates, "scan-rules.json"),
+		);
+
+		if (tamper.length > 0) {
+			source = { kind: "ready", treeDigest, lockDigest, gatesDigest };
+
+			return evidence();
+		}
 
 		const dependency = await dependencyCache(
 			input.tree,
@@ -1641,16 +1676,52 @@ export async function runHeldoutBase(input: {
 		else execution = repeat = failed;
 	}
 
-	return {
-		binding: input.binding,
-		runtime,
-		startedAt: input.startedAt,
-		finishedAt: Date.now(),
-		source,
-		execution,
-		repeat,
-		scenarios,
+	return evidence();
+}
+
+/**
+ * `scanCandidate`'s held-out treatment of the suite's installed checks: every
+ * line counts as changed, suppression comments are allowed, and an encoding
+ * rejection replaces every other hit.
+ */
+function scanSuite(
+	suite: AcceptanceSuite,
+	issue: number,
+	canary: string,
+	rulesPath: string,
+): SuiteSignal[] {
+	const result: SuiteSignal[] = [];
+	const encoding: SuiteSignal[] = [];
+
+	const rule = (signal: Signal): SuiteSignal[] => {
+		const known = SCAN_RULES.find((r) => r === signal.rule);
+
+		if (known === undefined) throw new Error("invalid_scan_rule");
+
+		return [{ file: signal.path, line: signal.line, rule: known }];
 	};
+
+	for (const [path, text] of acceptanceEntries(suite, canary)) {
+		const file = `test/acceptance/${issue}/${path}`;
+
+		if (!path.startsWith("checks/") || !/\.[cm]?[jt]sx?$/.test(path)) continue;
+
+		if (/[\u2028\u2029]|\r(?!\n)/.test(text)) {
+			encoding.push({ file, line: 0, rule: "invalid_source_encoding" });
+
+			continue;
+		}
+
+		const changed = new Set(text.split("\n").map((_, i) => i + 1));
+
+		result.push(
+			...scanSource(file, text, changed, rulesPath)
+				.filter((s) => s.rule !== "suppression_added")
+				.flatMap(rule),
+		);
+	}
+
+	return encoding.length > 0 ? encoding : result;
 }
 
 export async function replayHeldoutCandidate(input: {

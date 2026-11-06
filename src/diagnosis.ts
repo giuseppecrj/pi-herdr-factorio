@@ -221,7 +221,22 @@ export type BaseReason =
 	| "base_tree_unsupported"
 	| "base_interrupted"
 	| "base_nondeterministic"
-	| "base_evidence_missing";
+	| "base_evidence_missing"
+	| "suite_tamper_signal";
+
+/** The gate's closed set of tamper-scan rules. */
+export const SCAN_RULES = [
+	"runtime_patching",
+	"suppression_added",
+	"invalid_source_encoding",
+] as const;
+
+/** One trusted tamper-scan hit in a held-out check, found before it runs. */
+export type SuiteSignal = Readonly<{
+	file: string;
+	line: number;
+	rule: (typeof SCAN_RULES)[number];
+}>;
 
 export type ScenarioBaseEvidence = Readonly<{
 	scenario: string;
@@ -248,6 +263,11 @@ export type BaseEvidence = Readonly<{
 	execution: PrivateExecution;
 	repeat: PrivateExecution;
 	scenarios: readonly ScenarioBaseEvidence[];
+	/**
+	 * The gate's tamper-scan hits in the suite, present only when non-empty.
+	 * The suite then never ran.
+	 */
+	tamper?: readonly SuiteSignal[];
 }>;
 
 export type ScenarioBaseResult = Readonly<{
@@ -330,7 +350,7 @@ export function oracleKey(
 	};
 }
 
-export const BASE_PROTOCOL_VERSION = "heldout-base-v2-2";
+export const BASE_PROTOCOL_VERSION = "heldout-base-v2-3";
 
 const UNSUPPORTED_TREE: ReadonlySet<string> = new Set([
 	"tree_partial",
@@ -375,15 +395,17 @@ export function assessBase(evidence: BaseEvidence): BaseEvaluation {
 			? UNSUPPORTED_TREE.has(evidence.source.reason)
 				? "base_tree_unsupported"
 				: "base_runner_error"
-			: unavailable?.kind === "unavailable"
-				? unavailable.reason === "timeout"
-					? "base_timeout"
-					: unavailable.reason === "runner_error"
-						? "base_runner_error"
-						: "base_evidence_missing"
-				: executionOutcomes(execution) !== executionOutcomes(evidence.repeat)
-					? "base_nondeterministic"
-					: null;
+			: (evidence.tamper?.length ?? 0) > 0
+				? "suite_tamper_signal"
+				: unavailable?.kind === "unavailable"
+					? unavailable.reason === "timeout"
+						? "base_timeout"
+						: unavailable.reason === "runner_error"
+							? "base_runner_error"
+							: "base_evidence_missing"
+					: executionOutcomes(execution) !== executionOutcomes(evidence.repeat)
+						? "base_nondeterministic"
+						: null;
 
 	const results: ScenarioBaseResult[] = evidence.scenarios.map((s) => {
 		if (global !== null)
@@ -726,8 +748,22 @@ export function parseBaseReceipt(text: string): BaseReceipt | null {
 		repeat = parseExecution(fieldOf(e, "repeat"));
 
 	if (execution === null || repeat === null) return null;
+	const rawTamper = fieldOf(e, "tamper");
+	const tamper: SuiteSignal[] = [];
 
-	const evidence: BaseEvidence = {
+	for (const raw of rawTamper === undefined ? [] : (arrayOf(rawTamper) ?? [])) {
+		const v = objectOf(raw),
+			file = textOf(fieldOf(v, "file")),
+			line = countOf(fieldOf(v, "line")),
+			rule = SCAN_RULES.find((r) => r === fieldOf(v, "rule"));
+
+		if (file === null || line === null || rule === undefined) return null;
+		tamper.push({ file, line, rule });
+	}
+
+	if (rawTamper !== undefined && tamper.length === 0) return null;
+
+	const clean: BaseEvidence = {
 		binding,
 		runtime: { runner, node, platform, bwrap, protocolDigest },
 		startedAt,
@@ -737,6 +773,8 @@ export function parseBaseReceipt(text: string): BaseReceipt | null {
 		repeat,
 		scenarios,
 	};
+
+	const evidence = tamper.length > 0 ? { ...clean, tamper } : clean;
 
 	const { receipt } = assessBase(evidence);
 
@@ -762,6 +800,8 @@ const BASE_REASON_SENTENCES: Readonly<Record<BaseReason, string>> = {
 	base_nondeterministic: "Two base runs of the checks gave different results.",
 	base_evidence_missing:
 		"Base qualification evidence is incomplete or invalid.",
+	suite_tamper_signal:
+		"A check uses a module loader hook, a runtime patch or a process exit hook that the trusted tamper scan rejects.",
 };
 
 const BASE_REASONS: readonly BaseReason[] = [
@@ -779,6 +819,7 @@ const BASE_REASONS: readonly BaseReason[] = [
 	"base_interrupted",
 	"base_nondeterministic",
 	"base_evidence_missing",
+	"suite_tamper_signal",
 ];
 
 export function parseBaseReason(
@@ -802,6 +843,7 @@ export const BASE_RETRY = {
 	base_todo: "author",
 	base_cancelled: "author",
 	base_nondeterministic: "author",
+	suite_tamper_signal: "author",
 	base_runner_error: "final",
 	base_timeout: "final",
 	base_tree_unsupported: "final",
@@ -832,6 +874,9 @@ export type RetryFeedback = Readonly<{
 	sentence: string;
 	scenarios: readonly string[];
 	files: readonly RetryFileFeedback[];
+	/** The tamper scan's file, line and rule hits; only for `suite_tamper_signal`. */
+	signals?: readonly SuiteSignal[];
+	/** Files or signals cut by the byte bound. */
 	omitted: number;
 }>;
 
@@ -884,31 +929,41 @@ export function baseRetryFeedback(
 		},
 	);
 
-	const files: RetryFileFeedback[] = [];
+	// A tampered suite never ran: its feedback is the scan's own hits, the
+	// author's file, line and a closed rule name.
+	const tamper =
+		failure.reason === "suite_tamper_signal"
+			? (receipt?.evidence.tamper ?? []).map((s) => ({
+					file: s.file.slice(0, 300),
+					line: s.line,
+					rule: s.rule,
+				}))
+			: [];
 
-	const size = (list: readonly RetryFileFeedback[]) =>
-		Buffer.byteLength(
-			JSON.stringify({
-				reason: failure.reason,
-				sentence: BASE_REASON_SENTENCES[failure.reason],
-				scenarios,
-				files: list,
-				omitted: candidates.length,
-			}),
-		);
+	const entries: readonly unknown[] = tamper.length > 0 ? tamper : candidates;
 
-	for (const entry of candidates) {
-		if (size([...files, entry]) > RETRY_FEEDBACK_BYTES) break;
-		files.push(entry);
-	}
+	const feedback = (count: number, omitted: number): RetryFeedback => {
+		const common = {
+			reason: failure.reason,
+			sentence: BASE_REASON_SENTENCES[failure.reason],
+			scenarios,
+		};
 
-	return {
-		reason: failure.reason,
-		sentence: BASE_REASON_SENTENCES[failure.reason],
-		scenarios,
-		files,
-		omitted: candidates.length - files.length,
+		return tamper.length > 0
+			? { ...common, files: [], signals: tamper.slice(0, count), omitted }
+			: { ...common, files: candidates.slice(0, count), omitted };
 	};
+
+	let kept = 0;
+
+	while (
+		kept < entries.length &&
+		Buffer.byteLength(JSON.stringify(feedback(kept + 1, entries.length))) <=
+			RETRY_FEEDBACK_BYTES
+	)
+		kept++;
+
+	return feedback(kept, entries.length - kept);
 }
 
 export function baseRefusalNotice(failure: BaseRefusal) {

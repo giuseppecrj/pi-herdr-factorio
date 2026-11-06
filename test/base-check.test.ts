@@ -290,7 +290,10 @@ export async function baseFixture(
 	source: string,
 	kind: "new_behavior" | "preservation" = "new_behavior",
 	timeout = 10_000,
-	gates: "trusted" | "absent" | Readonly<{ reporter: string }> = "trusted",
+	gates:
+		| "trusted"
+		| "absent"
+		| Readonly<{ reporter?: string; scanRules?: string | null }> = "trusted",
 	dependency: "none" | "yaml" = "none",
 ) {
 	const root = mkdtempSync(join(tmpdir(), "factory-base-"));
@@ -307,11 +310,17 @@ export async function baseFixture(
 			},
 		);
 
-		if (gates !== "trusted")
+		if (gates !== "trusted" && gates.reporter !== undefined)
 			writeFileSync(
 				join(tree, ".github/factory/gates/reporter.mjs"),
 				gates.reporter,
 			);
+		const rules = join(tree, ".github/factory/gates/scan-rules.json");
+
+		const scanRules = gates === "trusted" ? undefined : gates.scanRules;
+
+		if (scanRules === null) rmSync(rules);
+		else if (scanRules !== undefined) writeFileSync(rules, scanRules);
 	}
 
 	const deps = dependency === "yaml" ? { yaml: "^2.9.0" } : undefined;
@@ -455,6 +464,105 @@ for (const [name, source, want, kind] of cases)
 		assert.ok(f.evidence.finishedAt >= f.evidence.startedAt);
 		assert.equal(f.evidence.runtime.runner, "local-bwrap");
 	});
+
+const HOOKED = `${prefix}import { registerHooks } from 'node:module';
+registerHooks({ resolve: (s, c, next) => next(s, c) });
+test('red', () => assert.equal(1, 2));`;
+
+where(
+	bwrap,
+	"suite scan: a suite with registerHooks is refused before it runs, with file, line and rule feedback",
+	async (t) => {
+		const f = await baseFixture(t, HOOKED);
+
+		assert.equal(f.assessment.kind, "refused", JSON.stringify(f.evidence));
+
+		if (f.assessment.kind !== "refused") return;
+		assert.equal(f.assessment.failure.reason, "suite_tamper_signal");
+		assert.equal(retryableBaseReason(f.assessment.failure.reason), true);
+		assert.deepEqual(f.evidence.tamper, [
+			{
+				file: "test/acceptance/1/checks/shape.test.mjs",
+				line: 2,
+				rule: "runtime_patching",
+			},
+		]);
+		// The suite never ran: no execution and no dependency install.
+		assert.equal(f.evidence.execution.kind, "unavailable");
+		assert.equal(f.evidence.execution.wallMs, 0);
+		assert.equal(existsSync(join(f.root, "execution", "tree")), false);
+		assert.equal(f.evidence.source.kind, "ready");
+
+		const stored = parseBaseReceipt(JSON.stringify(f.receipt));
+		assert.deepEqual(stored, f.receipt);
+		const feedback = baseRetryFeedback(stored, f.assessment.failure);
+		assert.deepEqual(feedback.signals, f.evidence.tamper);
+		assert.doesNotMatch(
+			baseRefusalNotice(f.assessment.failure).body,
+			/shape\.test|runtime_patching/,
+		);
+	},
+);
+
+where(
+	bwrap,
+	"suite scan: a clean suite still qualifies and a held-out suppression comment passes, as in the gate",
+	async (t) => {
+		const f = await baseFixture(
+			t,
+			`${prefix}// eslint-disable-next-line\ntest('red', () => assert.equal(1, 2));`,
+		);
+
+		assert.equal(f.assessment.kind, "ready", JSON.stringify(f.evidence));
+		assert.equal("tamper" in f.evidence, false);
+	},
+);
+
+where(
+	bwrap,
+	"suite scan: the rules come from the base tree's trusted gates, never another copy",
+	async (t) => {
+		const trusted = JSON.parse(
+			readFileSync(".github/factory/gates/scan-rules.json", "utf8"),
+		);
+
+		// A base tree whose own rules omit registerHooks lets the same suite run.
+		const relaxed = await baseFixture(t, HOOKED, "new_behavior", 10_000, {
+			scanRules: JSON.stringify({
+				...trusted,
+				loaderCalls: trusted.loaderCalls.filter(
+					(c: string) => !c.endsWith("registerHooks"),
+				),
+			}),
+		});
+
+		assert.equal("tamper" in relaxed.evidence, false);
+		assert.equal(relaxed.evidence.execution.kind, "observed");
+
+		// The rules are part of the recorded protocol.
+		const strictBase = await baseFixture(
+			t,
+			`${prefix}test('red',()=>assert.equal(1,2));`,
+		);
+
+		assert.notEqual(
+			relaxed.evidence.runtime.protocolDigest,
+			strictBase.evidence.runtime.protocolDigest,
+		);
+
+		// A base tree without them is unsupported, never scanned by another copy.
+		const absent = await baseFixture(t, HOOKED, "new_behavior", 10_000, {
+			scanRules: null,
+		});
+
+		assert.equal(absent.assessment.kind, "refused");
+		assert.equal(
+			absent.assessment.kind === "refused" && absent.assessment.failure.reason,
+			"base_tree_unsupported",
+		);
+		assert.equal(absent.evidence.execution.kind, "unavailable");
+	},
+);
 
 where(
 	bwrap,

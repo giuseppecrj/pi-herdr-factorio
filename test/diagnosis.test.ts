@@ -17,7 +17,9 @@ import { acceptanceEntries, writeAcceptance } from "../src/accept.ts";
 import {
 	assessBase,
 	BASE_RETRY,
+	baseRefusalNotice,
 	baseRetryFeedback,
+	parseBaseReceipt,
 	classifyFailure,
 	diagnosisNeeds,
 	diagnosisNotice,
@@ -30,6 +32,7 @@ import {
 	type BaseReceipt,
 	type ClassifyInput,
 	type FailureClass,
+	type SuiteSignal,
 	type HeldoutReplay,
 	type TreeReplay,
 } from "../src/diagnosis.ts";
@@ -2513,6 +2516,7 @@ const AUTHOR_FIXABLE: readonly BaseReason[] = [
 	"base_todo",
 	"base_cancelled",
 	"base_nondeterministic",
+	"suite_tamper_signal",
 ];
 
 const NOT_AUTHOR: readonly BaseReason[] = [
@@ -2734,6 +2738,108 @@ test("accept retry: the claim's retry record round-trips and binds to the same r
 			),
 			null,
 		);
+});
+
+function tamperedEvidence(
+	tamper: readonly SuiteSignal[],
+): ReturnType<typeof assessBase> {
+	const { evidence } = refusedEvidence(2, "PRIVATE-MESSAGE").receipt;
+
+	const skipped = {
+		kind: "unavailable" as const,
+		reason: "runner_error" as const,
+		wallMs: 0,
+	};
+
+	return assessBase({
+		...evidence,
+		execution: skipped,
+		repeat: skipped,
+		tamper,
+	});
+}
+
+test("suite scan: a tamper signal refuses the suite, author-fixable, with file, line and rule feedback", () => {
+	const signal: SuiteSignal = {
+		file: "test/acceptance/9/checks/s2.test.mjs",
+		line: 25,
+		rule: "runtime_patching",
+	};
+
+	const tampered = tamperedEvidence([signal]);
+	assert.equal(tampered.assessment.kind, "refused");
+
+	if (tampered.assessment.kind !== "refused") return;
+	assert.equal(tampered.assessment.failure.reason, "suite_tamper_signal");
+	assert.equal(retryableBaseReason("suite_tamper_signal"), true);
+	assert.deepEqual(
+		tampered.receipt.results.map((r) => r.result),
+		["suite_tamper_signal", "suite_tamper_signal"],
+	);
+
+	// The stored receipt round-trips, so the retry reads its signals back.
+	const text = JSON.stringify(tampered.receipt);
+	assert.deepEqual(parseBaseReceipt(text), tampered.receipt);
+
+	const feedback = baseRetryFeedback(
+		parseBaseReceipt(text),
+		tampered.assessment.failure,
+	);
+
+	assert.deepEqual(feedback, {
+		reason: "suite_tamper_signal",
+		sentence:
+			"A check uses a module loader hook, a runtime patch or a process exit hook that the trusted tamper scan rejects.",
+		scenarios: ["S1", "S2"],
+		files: [],
+		signals: [signal],
+		omitted: 0,
+	});
+	assert.doesNotMatch(JSON.stringify(feedback), /PRIVATE-/);
+
+	// The public notice names the reason, never a file or rule.
+	assert.doesNotMatch(
+		baseRefusalNotice(tampered.assessment.failure).body,
+		/\.mjs|runtime_patching|line/,
+	);
+
+	// Many signals stay inside the feedback bound.
+	const many = tamperedEvidence(
+		Array.from({ length: 200 }, (_, i) => ({
+			...signal,
+			file: `test/acceptance/9/checks/${"d/".repeat(60)}s${i}.test.mjs`,
+			line: i + 1,
+		})),
+	);
+
+	assert.ok(many.assessment.kind === "refused");
+	const bounded = baseRetryFeedback(many.receipt, many.assessment.failure);
+	assert.ok(Buffer.byteLength(JSON.stringify(bounded)) <= 4096);
+	assert.ok((bounded.signals?.length ?? 0) > 0);
+	assert.equal((bounded.signals?.length ?? 0) + bounded.omitted, 200);
+
+	// Only the scan's closed rule set and well-formed lines are read back.
+	for (const bad of [
+		{ ...signal, rule: "made_up" },
+		{ ...signal, line: -1 },
+		{ ...signal, extra: true },
+	]) {
+		const forged = JSON.parse(text);
+		forged.evidence.tamper = [bad];
+		assert.equal(parseBaseReceipt(JSON.stringify(forged)), null);
+	}
+
+	const empty = JSON.parse(text);
+	empty.evidence.tamper = [];
+	assert.equal(parseBaseReceipt(JSON.stringify(empty)), null);
+
+	// A clean receipt carries no tamper field, as before the scan existed.
+	const clean = refusedEvidence(1, "Expected 1 to equal 2");
+	assert.equal("tamper" in clean.receipt.evidence, false);
+	assert.deepEqual(
+		parseBaseReceipt(JSON.stringify(clean.receipt)),
+		clean.receipt,
+	);
 });
 
 test("accept retry: a nondeterministic refusal's feedback says which run failed", () => {
