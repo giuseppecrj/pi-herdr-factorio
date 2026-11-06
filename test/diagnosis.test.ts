@@ -63,8 +63,10 @@ import { legacyMaterialize } from "./fixtures/oracle-corpus/patches/legacy-mater
 import {
 	controllerBaseChecker,
 	controllerDiagnosis,
+	checkoutWorkspace,
 	controllerValidator,
 	fileRunFiles,
+	ghTarball,
 	type DiagnosisFacts,
 	type TarballFetch,
 } from "../server/controller.ts";
@@ -1855,10 +1857,11 @@ async function jobWorld(
 	const owner = (
 		materialize = entry.materializer === "legacy-pre-577",
 		source: Uint8Array | null = Buffer.from(GATE_SOURCE),
+		diagnosisFetch: TarballFetch = fetch,
 	) =>
 		controllerDiagnosis({
 			stateDir: state,
-			fetch,
+			fetch: diagnosisFetch,
 			materialize: materialize ? legacyMaterialize : undefined,
 			materializerSource: source ?? undefined,
 			stopScope: async (unit) => {
@@ -2252,6 +2255,123 @@ scoped(
 		assert.ok(Date.now() - asked < 1_000, `${Date.now() - asked} ms`);
 	},
 );
+
+scoped(
+	"tree acquisition reports a timeout when its deadline timer fires before the wall clock reaches the deadline (L5)",
+	async (t) => {
+		const w = await jobWorld(t, "synthetic-wrong-value");
+		w.hold(new Promise(() => {}));
+		const owner = w.owner();
+
+		// Node runs timers on libuv's millisecond monotonic clock, so a timer
+		// armed for `deadline - Date.now()` can fire up to a millisecond before
+		// Date.now() reaches the deadline. A wall clock at half speed forces
+		// that ordering on every timer the acquisition arms.
+		const real = Date.now.bind(Date);
+		const origin = real();
+
+		t.mock.method(Date, "now", () =>
+			Math.floor(origin + (real() - origin) / 2),
+		);
+		let result = await w.step(owner, w.deadline - 400);
+
+		for (let i = 0; i < 200 && result.kind === "waiting"; i++) {
+			await new Promise((r) => setTimeout(r, 25));
+			result = await w.step(owner, w.deadline - 400);
+		}
+
+		assert.deepEqual(finishedAssessment(result).assessment, {
+			kind: "failed",
+			failure: { kind: "infrastructure", reason: "timeout" },
+		});
+	},
+);
+
+/** Puts a `gh` on PATH that never answers, for the test's duration. */
+function hangingGh(t: import("node:test").TestContext) {
+	const bin = mkdtempSync(join(tmpdir(), "factory-gh-"));
+	const previous = process.env.PATH;
+
+	writeFileSync(join(bin, "gh"), "#!/bin/sh\nexec sleep 30\n", {
+		mode: 0o755,
+	});
+	process.env.PATH = `${bin}:${previous ?? "/usr/bin:/bin"}`;
+	t.after(() => {
+		if (previous === undefined) delete process.env.PATH;
+		else process.env.PATH = previous;
+		rmSync(bin, { recursive: true, force: true });
+	});
+}
+
+/** A wall clock at half speed, so every timer fires before Date.now() reaches its deadline. */
+function halfSpeedClock(t: import("node:test").TestContext) {
+	const real = Date.now.bind(Date);
+	const origin = real();
+
+	t.mock.method(Date, "now", () => Math.floor(origin + (real() - origin) / 2));
+}
+
+test("ghTarball reports its own timeout as a timeout even before the wall clock reaches the deadline", async (t) => {
+	hangingGh(t);
+	halfSpeedClock(t);
+
+	assert.deepEqual(
+		await ghTarball(repoSlug, sha, { deadline: Date.now() + 200 }),
+		{ kind: "timeout" },
+	);
+});
+
+scoped(
+	"tree acquisition through the real gh fetch reports a timeout when gh's own timeout fires before the wall clock reaches the deadline (L5)",
+	async (t) => {
+		const w = await jobWorld(t, "synthetic-wrong-value");
+		const owner = w.owner(undefined, undefined, ghTarball);
+
+		hangingGh(t);
+		halfSpeedClock(t);
+		const began = performance.now();
+		let result = await w.step(owner, w.deadline - 400);
+
+		while (result.kind === "waiting" && performance.now() - began < 5_000) {
+			await new Promise((r) => setTimeout(r, 25));
+			result = await w.step(owner, w.deadline - 400);
+		}
+
+		assert.deepEqual(finishedAssessment(result).assessment, {
+			kind: "failed",
+			failure: { kind: "infrastructure", reason: "timeout" },
+		});
+	},
+);
+
+for (const deadline of [Number.NaN, Number.POSITIVE_INFINITY])
+	test(`a ${deadline} acquisition deadline means no deadline and arms no timer`, async (t) => {
+		const state = mkdtempSync(join(tmpdir(), "factory-deadline-"));
+		t.after(() => rmSync(state, { recursive: true, force: true }));
+		const workspace = join(state, "ws");
+		mkdirSync(workspace);
+		const realSetTimeout = setTimeout;
+		const armed = t.mock.method(globalThis, "setTimeout");
+		let bound: unknown;
+
+		const result = await checkoutWorkspace({
+			stateDir: state,
+			runId: digestOf("non-finite deadline"),
+			workspace,
+			repo: repoSlug,
+			sha,
+			deadline,
+			fetch: (_repo, _sha, given) => {
+				bound = given?.deadline;
+
+				return new Promise((r) => realSetTimeout(() => r(null), 100));
+			},
+		});
+
+		assert.equal(armed.mock.callCount(), 0);
+		assert.deepEqual(result, { kind: "unavailable" });
+		assert.equal(bound, undefined);
+	});
 
 scoped(
 	"an interrupted diagnosis is charged once, holds as infrastructure and never relaunches",
