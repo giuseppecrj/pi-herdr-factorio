@@ -11928,7 +11928,7 @@ describe("held-out acceptance stage", () => {
 
 		if (suite.kind !== "found") throw new Error("suite missing");
 		assert.equal(suite.receipt.contractDigest, bound.digest);
-		assert.equal(suite.receipt.model, "anthropic/claude-sonnet-5-5");
+		assert.equal(suite.receipt.model, "anthropic/claude-opus-5-5");
 		const [summary] = keyed(github, 14, "acceptance");
 		assert.ok(summary?.includes("S1: A1"));
 		assert.ok(
