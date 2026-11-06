@@ -711,7 +711,7 @@ A marker counts only when all of these hold. Anything else from another author i
 - `user.login` is `exe-dev-github-integration[bot]` and `user.type` is `Bot`.
 - `performed_via_github_app.slug` is `exe-dev-github-integration` when it is present.
 - `issue_url` names the same repository and issue.
-- GraphQL `lastEditedAt` for the comment is `null`. One request reads it for every comment by `exe-dev-github-integration[bot]`, marker or not: `gh api graphql -f query=<nodes query> -f ids[]=<node_id>...`, at most 100 IDs per request.
+- GraphQL `lastEditedAt` for the comment is `null`. It is read for every comment by `exe-dev-github-integration[bot]`, marker or not: `gh api graphql -f query=<nodes query> -f ids[]=<node_id>...`, in requests of at most 50 IDs, the exe.dev proxy's limit.
 - The JSON parses with exactly its version's keys, `v` is `1`, `2`, or `3`, every value matches its pattern, and `runId` is the digest of its own `repo`, `issue`, and `eventId`.
 - When the state directory has an admission record for the event, the marker's `eventAt`, `snapshotDigest`, `workflowSha` and `workflowDigest` match it. This holds for a terminal marker as for a live one: a terminal marker that disagrees is `record_mismatch`, and the controller does not rewrite its claim record from it.
 
