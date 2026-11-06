@@ -1,0 +1,21 @@
+{
+	"version": 1,
+	"baseline": "0f2a046bddd0efd38c82cfe3b306c756ed8380de",
+	"workflowDigest": "756d5df811d6d282dfc483c3bc6cf35255adbd8c57f18413d4a78164284643ad",
+	"runtime": "pi-coding-agent 1.4.0; local echo fixture, no installed VM bundle",
+	"kind": "synthetic-public-B-shaped-build-and-repair",
+	"sourceLines": 1200,
+	"implementationLine": 600,
+	"testLine": 700,
+	"repairShift": 90,
+	"requiredFacts": [
+		"export function increment(value)",
+		"import { increment } from './module.mjs'",
+		"Number.isFinite(value)",
+		"increments finite values and rejects non-finite values with zero"
+	],
+	"expectedFocusedExits": [1, 0, 1, 0],
+	"expectedPublicGateOutcomes": [false, true],
+	"minimumProviderInputReduction": 0.2,
+	"realModelRequests": 0
+}

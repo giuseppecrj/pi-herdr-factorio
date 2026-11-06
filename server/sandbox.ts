@@ -94,6 +94,7 @@ import {
 import {
 	checkoutWorkspace,
 	checkoutBuildWorkspace,
+	checkoutOf,
 	controllerValidator,
 	controllerCandidatePort,
 	controllerBaseChecker,
@@ -154,6 +155,11 @@ import type {
 } from "./sandbox/result.ts";
 import {
 	stageResult,
+	unknownEfficiency,
+	parseEfficiency,
+	requestEfficiency,
+	aggregateEfficiency,
+	type EfficiencyFacts,
 	executionUsageOf,
 	type ExecutionUsage,
 } from "./sandbox/result.ts";
@@ -222,6 +228,7 @@ export type StageRunInput = {
 	readonly stage: ModelStage;
 	readonly attempt: number;
 	readonly prompt: string;
+	readonly source?: import("../src/specify.ts").SourceFacts;
 	readonly settings: StageRunSettings;
 	readonly remainingRunTokens: number;
 	readonly signal: AbortSignal;
@@ -240,7 +247,15 @@ export interface StageHost {
 	readChildUsage(
 		session: number,
 		sessionFile: string,
-	): Promise<ChildUsage | null>;
+	): Promise<
+		| (ChildUsage & {
+				readonly efficiency?: Pick<
+					EfficiencyFacts,
+					"assistantTurns" | "toolResultBytes"
+				>;
+		  })
+		| null
+	>;
 	readUsage?(): JsonValue | undefined;
 	writeUsage?(usage: ExecutionUsage): boolean;
 	writeReceipt(receipt: StageReceipt): Promise<boolean>;
@@ -265,6 +280,7 @@ class Ledger {
 	gateway = 0;
 	unreadChildren = 0;
 	turns = 0;
+	efficiency = { ...unknownEfficiency() };
 	readonly byModel = new Map<string, number>();
 
 	add(byModel: ReadonlyMap<string, number>): void {
@@ -508,6 +524,15 @@ async function runSession(
 
 				pendingReads -= 1;
 
+				for (const key of ["assistantTurns", "toolResultBytes"] as const) {
+					const value = usage?.efficiency?.[key];
+
+					ledger.efficiency[key] =
+						value == null || ledger.efficiency[key] === null
+							? null
+							: ledger.efficiency[key] + value;
+				}
+
 				if (usage === null) {
 					ledger.unreadChildren += 1;
 
@@ -525,6 +550,8 @@ async function runSession(
 
 				pendingReads -= 1;
 				ledger.unreadChildren += 1;
+				ledger.efficiency.assistantTurns = null;
+				ledger.efficiency.toolResultBytes = null;
 				readFailed = true;
 			},
 		);
@@ -612,7 +639,17 @@ async function runSession(
 					textReply?.(record.success ? record.text : null);
 				}
 
+				if (record.type === "other" && record.textBytes !== undefined) {
+					ledger.efficiency.toolResultBytes =
+						record.textBytes === null ||
+						ledger.efficiency.toolResultBytes === null
+							? null
+							: ledger.efficiency.toolResultBytes + record.textBytes;
+				}
+
 				if (record.type === "assistant_end") {
+					if (ledger.efficiency.assistantTurns !== null)
+						ledger.efficiency.assistantTurns++;
 					const tokens = record.message.usage?.totalTokens ?? 0;
 
 					ledger.parent += tokens;
@@ -711,6 +748,8 @@ async function runSession(
 
 	if (pendingReads > 0) {
 		ledger.unreadChildren += pendingReads;
+		ledger.efficiency.assistantTurns = null;
+		ledger.efficiency.toolResultBytes = null;
 		readFailed = true;
 	}
 
@@ -937,6 +976,20 @@ export async function runStage(
 	const ledger = new Ledger();
 	const { maxTokens, budget } = input.settings;
 	const wallEnd = restored?.deadline ?? started + budget.wallMs;
+	ledger.efficiency =
+		restored === null
+			? {
+					...unknownEfficiency(),
+					assistantTurns: 0,
+					toolResultBytes: 0,
+					initialPromptBytes: Buffer.byteLength(input.prompt),
+					initialSourceBytes: input.source?.bytes ?? null,
+					excerptOmissions: input.source?.omissions ?? null,
+					sourceCapHits:
+						input.source === undefined ? null : Number(input.source.capHit),
+					guardStops: 0,
+				}
+			: { ...(restored.efficiency ?? unknownEfficiency()) };
 
 	if (restored !== null) {
 		ledger.parent = restored.usage.parent;
@@ -960,6 +1013,7 @@ export async function runStage(
 			deadline: wallEnd,
 			turns: ledger.turns,
 			usage: ledger.usage(true),
+			efficiency: ledger.efficiency,
 		}) ?? true;
 
 	const tokenCap = Math.min(
@@ -1037,6 +1091,15 @@ export async function runStage(
 				assetsDigest: host.assetsDigest,
 				versions: host.versions,
 				pricing: "unavailable",
+				efficiency: {
+					...ledger.efficiency,
+					...requestEfficiency(evidence.journal),
+					guardStops:
+						ledger.efficiency.guardStops === null
+							? null
+							: ledger.efficiency.guardStops + Number(diagnostic !== undefined),
+				},
+				guardStop: diagnostic ?? null,
 			},
 			family,
 		);
@@ -1626,7 +1689,46 @@ export function sandboxHost(config: SandboxHostConfig): StageHost {
 
 			if (path === null || statSync(path).size > MAX_SESSION_BYTES) return null;
 
-			return childUsageOf(await readFile(path, "utf8"));
+			const text = await readFile(path, "utf8");
+			let assistantTurns: number | null = 0;
+			let toolResultBytes: number | null = 0;
+
+			for (const line of text.split("\n").filter((line) => line !== "")) {
+				const entry = objectOf(parseJson(line));
+
+				if (entry === null) {
+					assistantTurns = null;
+					toolResultBytes = null;
+					continue;
+				}
+
+				const message = fieldOf(entry, "message");
+
+				if (message === undefined) continue;
+
+				const record = parsePiRecord(
+					JSON.stringify({ type: "message_end", message }),
+				);
+
+				if (record.type === "malformed") {
+					assistantTurns = null;
+					toolResultBytes = null;
+				}
+
+				if (record.type === "assistant_end" && assistantTurns !== null)
+					assistantTurns++;
+
+				if (record.type === "other" && record.textBytes !== undefined)
+					toolResultBytes =
+						record.textBytes === null || toolResultBytes === null
+							? null
+							: toolResultBytes + record.textBytes;
+			}
+
+			return {
+				...childUsageOf(text),
+				efficiency: { assistantTurns, toolResultBytes },
+			};
 		},
 		readUsage() {
 			const path = join(stageDir, "usage.json");
@@ -1872,6 +1974,51 @@ export async function executionCharge(
 	};
 }
 
+/** Numeric diagnostics follow the same aggregate/leaf boundary as charges. */
+export async function executionEfficiency(
+	dir: string,
+): Promise<EfficiencyFacts> {
+	const receipt = objectOf(
+		parseJson(
+			(await boundedText(join(dir, "receipt.json"), MAX_RECEIPT_BYTES)) ?? "",
+		),
+	);
+
+	const saved = parseEfficiency(fieldOf(receipt, "efficiency"));
+
+	if (saved !== null) return saved;
+
+	const leaves = [
+		...SPECIFY_SESSIONS,
+		"code-review",
+		"security-review",
+		"simplify",
+		"ultrareview",
+	];
+
+	const names = leaves.filter((name) => existsSync(join(dir, name)));
+
+	if (names.length > 0)
+		return aggregateEfficiency(
+			await Promise.all(
+				names.map((name) => executionEfficiency(join(dir, name))),
+			),
+		);
+
+	const high = objectOf(
+		parseJson(
+			(await boundedText(join(dir, "usage.json"), MAX_RECEIPT_BYTES)) ?? "",
+		),
+	);
+
+	const progress =
+		parseEfficiency(fieldOf(high, "efficiency")) ?? unknownEfficiency();
+
+	const journal = await boundedText(join(dir, JOURNAL_FILE), AUDIT_CAP_BYTES);
+
+	return { ...progress, ...requestEfficiency(journal) };
+}
+
 /** Where `server/provision.sh` installs content-addressed asset bundles. */
 export const SANDBOX_ROOT = "/var/lib/factory-sandbox";
 
@@ -1902,6 +2049,7 @@ type KeptSession = {
 	readonly turns: number;
 	readonly wallMs: number;
 	readonly text: string | null;
+	readonly efficiency?: EfficiencyFacts;
 };
 
 export async function readStageReceipt(path: string) {
@@ -1987,6 +2135,8 @@ async function keptSession(dir: string): Promise<KeptSession | null> {
 		usage: parsed.usage,
 		turns: parsed.turns,
 		wallMs: parsed.wallMs,
+		efficiency:
+			parseEfficiency(fieldOf(parsed.record, "efficiency")) ?? undefined,
 		text:
 			parsed.outcome.kind === "passed" && file === "output.txt"
 				? await boundedText(join(dir, file), OUTPUT_MAX_BYTES)
@@ -2157,6 +2307,10 @@ export async function runSpecify(
 			{
 				...input,
 				prompt,
+				source:
+					name === "draft"
+						? input.source
+						: { bytes: 0, omissions: 0, capHit: false },
 				settings: {
 					...input.settings,
 					fallback: name === "draft" ? input.settings.fallback : null,
@@ -2228,6 +2382,9 @@ export async function runSpecify(
 			fallback: null,
 			refusal: null,
 			usage: usage(),
+			efficiency: aggregateEfficiency(
+				records.map((r) => r.efficiency ?? unknownEfficiency()),
+			),
 			turns: turns(),
 			wallMs: wallMs(),
 			egress: null,
@@ -3299,6 +3456,13 @@ export async function runReview(
 			},
 			turns,
 			wallMs,
+			efficiency: aggregateEfficiency(
+				records.map(
+					(r) =>
+						parseEfficiency(fieldOf(r?.record ?? null, "efficiency")) ??
+						unknownEfficiency(),
+				),
+			),
 			egress: null,
 			stderr: [],
 			output: kept
@@ -3335,6 +3499,7 @@ export async function runReview(
 
 		if (record === null) {
 			if (existsSync(sessionDir)) {
+				records.push(null);
 				total += (await executionSpent(sessionDir)) ?? 0;
 
 				return finish(CRASHED);
@@ -3356,6 +3521,7 @@ export async function runReview(
 				{
 					...input,
 					prompt,
+					source: { bytes: 0, omissions: 0, capHit: false },
 					settings: {
 						...input.settings,
 						model:
@@ -3897,6 +4063,21 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 						previous.receipt.changedPaths,
 						feedback,
 					);
+
+					const paths = [
+						...new Set([
+							...checked.checkout.files,
+							...previous.receipt.changedPaths,
+						]),
+					].filter((path) => {
+						try {
+							return lstatSync(join(workspace, path)).isFile();
+						} catch {
+							return false;
+						}
+					});
+
+					return { ...checked, checkout: checkoutOf(workspace, paths) };
 				} catch {
 					return { kind: "refused", reason: "repair_inputs_invalid" };
 				}
@@ -4052,6 +4233,7 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 					stage: input.stage,
 					attempt: input.attempt,
 					prompt,
+					source: input.source,
 					settings: input.settings,
 					remainingRunTokens: input.remainingRunTokens,
 					signal: input.signal,

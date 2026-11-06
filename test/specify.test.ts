@@ -17,6 +17,7 @@ import { after, describe, it } from "node:test";
 import {
 	checkoutWorkspace,
 	checkoutBuildWorkspace,
+	checkoutOf,
 	fileRunFiles,
 	ghTarball,
 	readTarball,
@@ -707,10 +708,12 @@ describe("evidence-first source excerpts", () => {
 		{ length: 500 },
 		(_, n) => `line ${n + 1}: ${"x".repeat(60)}`,
 	).join("\n");
+
 	const checkout = {
 		files: ["a.ts", "empty.ts"],
 		read: async (path: string) => (path === "a.ts" ? text : ""),
 	};
+
 	const select = (
 		evidence: { path: string; start: number; end: number; fact: string }[],
 		repair = false,
@@ -728,6 +731,7 @@ describe("evidence-first source excerpts", () => {
 			{ path: "a.ts", start: 400, end: 402, fact: "deep block" },
 			{ path: "a.ts", start: 405, end: 407, fact: "nearby" },
 		]);
+
 		const source = shown.map(renderInlined).join("\n\n");
 		assert.match(source, /line 400:/);
 		assert.match(source, /line 407:/);
@@ -749,6 +753,7 @@ describe("evidence-first source excerpts", () => {
 			const evidence = [
 				{ path: "a.ts", start: start ?? 0, end: end ?? 0, fact: "old" },
 			];
+
 			const before = JSON.stringify(evidence);
 			const source = (await select(evidence)).map(renderInlined).join("\n");
 			assert.match(source, /fallback_stale/);
@@ -758,26 +763,42 @@ describe("evidence-first source excerpts", () => {
 		}
 	});
 
+	it("keeps valid cited ranges alongside a labeled prefix when another citation is stale", async () => {
+		const shown = await select([
+			{ path: "a.ts", start: 400, end: 402, fact: "valid" },
+			{ path: "a.ts", start: 0, end: 1, fact: "stale" },
+		]);
+
+		const source = shown.map(renderInlined).join("\n");
+		assert.match(source, /line 400:/);
+		assert.match(source, /line 1:/);
+		assert.match(source, /fallback_stale/);
+	});
+
 	it("handles empty files, missing evidence, EOF and trailing newlines explicitly", async () => {
 		const source = (
 			await select([{ path: "a.ts", start: 500, end: 500, fact: "EOF" }])
 		)
 			.map(renderInlined)
 			.join("\n");
+
 		assert.match(source, /line 500:/);
 		assert.match(source, /empty file; total=0/);
 		assert.match(source, /fallback_missing/);
+
 		const trailing = await sourceExcerpts({
 			files: ["a.ts"],
 			evidence: [{ path: "a.ts", start: 2, end: 2, fact: "blank EOF" }],
 			checkout: { files: ["a.ts"], read: async () => "x\n" },
 			identity: "base",
 		});
+
 		assert.match(trailing.map(renderInlined).join("\n"), /lines 1-2 of 2/);
 	});
 
 	it("regenerates repair text from the workspace and marks base citations as hints", async () => {
 		let current = text;
+
 		const args = {
 			files: ["a.ts"],
 			evidence: [{ path: "a.ts", start: 400, end: 402, fact: "base location" }],
@@ -785,6 +806,7 @@ describe("evidence-first source excerpts", () => {
 			identity: "workspace-r1",
 			repair: true,
 		};
+
 		const first = (await sourceExcerpts(args)).map(renderInlined).join("\n");
 		current = "shifted workspace\n";
 		const second = (await sourceExcerpts(args)).map(renderInlined).join("\n");
@@ -792,6 +814,27 @@ describe("evidence-first source excerpts", () => {
 		assert.match(second, /shifted workspace/);
 		assert.match(second, /fallback_stale/);
 		assert.notEqual(first, second);
+	});
+
+	it("keeps nearby context when the soft target is exceeded but the safety ceiling allows it", async () => {
+		const paths = ["a.ts", "b.ts"];
+
+		const shown = await sourceExcerpts({
+			files: paths,
+			evidence: paths.map((path) => ({
+				path,
+				start: 400,
+				end: 400,
+				fact: "deep block",
+			})),
+			checkout: { files: paths, read: async () => text },
+			identity: "base",
+		});
+
+		const source = shown.map(renderInlined).join("\n\n");
+		assert.match(source, /line 380:/);
+		assert.match(source, /line 420:/);
+		assert.ok(Buffer.byteLength(source) <= 16 * 1024);
 	});
 
 	it("bounds multibyte source and omission labels together at 16 KiB", async () => {
@@ -804,6 +847,7 @@ describe("evidence-first source excerpts", () => {
 			},
 			identity: "base",
 		});
+
 		const source = shown.map(renderInlined).join("\n\n");
 		assert.ok(Buffer.byteLength(source) <= 16 * 1024);
 		assert.match(source, /omitted=true/);
@@ -1136,7 +1180,28 @@ describe("tarball checkout", () => {
 			"# readme\n",
 		);
 		writeFileSync(join(buildWorkspace, "README.md"), "builder change");
+		assert.equal(
+			await built.checkout.read("README.md", 100),
+			"builder change",
+			"repair source must come from the current workspace, not pristine base",
+		);
 		writeFileSync(join(buildWorkspace, "leftover"), "dirty");
+
+		const repaired = checkoutOf(buildWorkspace, [
+			...built.checkout.files,
+			"leftover",
+		]);
+
+		const excerpts = await sourceExcerpts({
+			files: ["leftover"],
+			evidence: [],
+			checkout: repaired,
+			identity: "workspace-r1",
+			repair: true,
+		});
+
+		assert.match(excerpts.map(renderInlined).join("\n"), /dirty/);
+		assert.match(excerpts.map(renderInlined).join("\n"), /fallback_missing/);
 		await checkoutBuildWorkspace({ ...input, workspace: buildWorkspace });
 		assert.equal(
 			readFileSync(join(buildWorkspace, "README.md"), "utf8"),

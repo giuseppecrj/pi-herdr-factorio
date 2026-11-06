@@ -30,7 +30,11 @@ import { unknownEfficiency } from "../server/sandbox/result.ts";
 import { isGitSha, type GitSha } from "../src/workflow.ts";
 import { LedgerGit, repo } from "./ledger-git.ts";
 import { TRUSTED_RUN_CAP } from "./fake-ticket-adapter.ts";
-import { fileLedgerOutbox, pumpLedgerOutbox } from "../server/controller.ts";
+import {
+	fileLedgerOutbox,
+	pumpLedgerOutbox,
+	readTerminalEvidence,
+} from "../server/controller.ts";
 import { execFile } from "../server/cli.ts";
 import {
 	mkdirSync,
@@ -473,7 +477,7 @@ describe("ledger row codec", () => {
 
 		const lines = [
 			good.bytes,
-			Buffer.from('{"v":3,"future":true}\n'),
+			Buffer.from('{"v":4,"future":true}\n'),
 			Buffer.from("{not json\n"),
 			Buffer.from(
 				`${good.bytes.toString().slice(0, -1).replace('"v":1,', "")}\n`,
@@ -665,16 +669,218 @@ describe("ledger row codec", () => {
 
 	it("round-trips v3 efficiency, while v1/v2 bytes and unknown facts stay unchanged", () => {
 		const base = rowInput(10);
-		const facts = { ...unknownEfficiency(), assistantTurns: 4, modelRequests: 5, inputTokens: 600, outputTokens: 40, firstInputTokens: 80, lastInputTokens: 160, maxInputTokens: 200, initialPromptBytes: 2000, initialSourceBytes: 500, excerptOmissions: 2, sourceCapHits: 0, guardStops: 1 };
+
+		const facts = {
+			...unknownEfficiency(),
+			assistantTurns: 4,
+			modelRequests: 5,
+			inputTokens: 600,
+			outputTokens: 40,
+			firstInputTokens: 80,
+			lastInputTokens: 160,
+			maxInputTokens: 200,
+			initialPromptBytes: 2000,
+			initialSourceBytes: 500,
+			excerptOmissions: 2,
+			sourceCapHits: 0,
+			guardStops: 1,
+		};
+
 		const v1 = ledgerRow(base);
-		const v2 = ledgerRow({ ...base, v: 2, failure: null, acceptAttempts: { kind: "unavailable", reason: "not_instrumented" } });
-		const v3 = ledgerRowOf({ ...v2.row, v: 3, efficiency: facts, stages: base.stages.kind === "known" ? { kind: "known", value: base.stages.value.map(s => ({ ...s, efficiency: facts })) } : base.stages });
+
+		const v2 = ledgerRow({
+			...base,
+			v: 2,
+			failure: null,
+			acceptAttempts: { kind: "unavailable", reason: "not_instrumented" },
+		});
+
+		const v3 = ledgerRowOf({
+			...v2.row,
+			v: 3,
+			efficiency: facts,
+			stages:
+				base.stages.kind === "known"
+					? {
+							kind: "known",
+							value: base.stages.value.map((s) => ({
+								...s,
+								efficiency: facts,
+							})),
+						}
+					: base.stages,
+		});
+
 		assert.equal(v3.row.v, 3);
 		assert.deepEqual(ledgerEfficiency(v3.row), facts);
 		assert.deepEqual(ledgerEfficiency(v1.row), unknownEfficiency());
 		assert.deepEqual(ledgerEfficiency(v2.row), unknownEfficiency());
-		for (const frozen of [v1, v2, v3]) assert.deepEqual(frozenRowOf(frozen.bytes)?.bytes, frozen.bytes);
-		assert.throws(() => ledgerRowOf({ ...v3.row, efficiency: { ...facts, inputTokens: -1 } }), /invalid_count/);
+
+		for (const frozen of [v1, v2, v3])
+			assert.deepEqual(frozenRowOf(frozen.bytes)?.bytes, frozen.bytes);
+		assert.throws(
+			() =>
+				ledgerRowOf({ ...v3.row, efficiency: { ...facts, inputTokens: -1 } }),
+			/invalid_count/,
+		);
+	});
+
+	it("reconciles receipts, failed retries and interrupted journals into v3 without adding aggregate leaves twice", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-efficiency-ledger-"));
+		const base = rowInput(41);
+
+		const facts = {
+			assistantTurns: 1,
+			modelRequests: 1,
+			inputTokens: 8,
+			outputTokens: 3,
+			firstInputTokens: 8,
+			lastInputTokens: 8,
+			maxInputTokens: 8,
+			toolResultBytes: 7,
+			initialPromptBytes: 500,
+			initialSourceBytes: 250,
+			excerptOmissions: 1,
+			sourceCapHits: 0,
+			guardStops: 0,
+		};
+
+		const usage = (total: number) => ({
+			total,
+			parent: total,
+			children: 0,
+			gateway: total,
+			unreadChildren: 0,
+			byModel: {},
+		});
+
+		const receipt = (stage: string, total: number) => ({
+			version: 1,
+			runId: base.runId,
+			stage,
+			attempt: 1,
+			outcome: { kind: "passed" },
+			turns: 1,
+			wallMs: 10,
+			usage: usage(total),
+			efficiency: facts,
+		});
+
+		const save = (name: string, file: string, value: string) => {
+			const path = join(dir, "stages", base.runId, name);
+			mkdirSync(path, { recursive: true });
+			writeFileSync(join(path, file), value);
+		};
+
+		try {
+			save("specify-1", "receipt.json", JSON.stringify(receipt("specify", 11)));
+			save("specify-1", "specify.json", "{}");
+			save(
+				"specify-1/draft",
+				"receipt.json",
+				JSON.stringify(receipt("specify", 11)),
+			);
+			save(
+				"accept-1",
+				"receipt.json",
+				JSON.stringify({
+					...receipt("accept", 12),
+					outcome: { kind: "failed", exit: "error" },
+					efficiency: {
+						...facts,
+						inputTokens: 9,
+						firstInputTokens: 9,
+						lastInputTokens: 9,
+						maxInputTokens: 9,
+						guardStops: 1,
+					},
+				}),
+			);
+			save(
+				"accept-2",
+				"usage.json",
+				JSON.stringify({
+					version: 1,
+					runId: base.runId,
+					stage: "accept",
+					attempt: 2,
+					startedAt: 200,
+					deadline: 1000,
+					turns: 1,
+					usage: usage(3),
+					efficiency: {
+						...facts,
+						...unknownEfficiency(),
+						assistantTurns: 1,
+						toolResultBytes: 7,
+						initialPromptBytes: 500,
+						initialSourceBytes: 250,
+						excerptOmissions: 1,
+						sourceCapHits: 0,
+						guardStops: 0,
+					},
+				}),
+			);
+			save(
+				"accept-2",
+				"egress.requests.jsonl",
+				[
+					{ kind: "dispatch", req: 1 },
+					{ kind: "result", req: 1, inputTokens: 2, outputTokens: 1 },
+					{
+						kind: "dispatch",
+						req: 2,
+						inputTokenEstimate: 4,
+						maxOutputTokens: 5,
+					},
+				]
+					.map((v) => JSON.stringify(v))
+					.join("\n") + "\n",
+			);
+			const evidence = await readTerminalEvidence(dir, base.runId, 0, null);
+
+			assert.equal(evidence.usage?.tokens.total, 35);
+			assert.equal(evidence.usage?.tokens.kind, "uncertain");
+			assert.equal(evidence.efficiency?.assistantTurns, 3);
+			assert.equal(evidence.efficiency?.modelRequests, 4);
+			assert.equal(evidence.efficiency?.inputTokens, null);
+			assert.equal(evidence.efficiency?.toolResultBytes, 21);
+			assert.equal(evidence.efficiency?.guardStops, 1);
+			assert.deepEqual(evidence.contextPressure, {
+				kind: "known",
+				value: { truncated: true, promptCapHit: false },
+			});
+
+			const row = ledgerRowOf({
+				...base,
+				v: 3,
+				stages: evidence.stages ?? base.stages,
+				usage: evidence.usage ?? base.usage,
+				efficiency: evidence.efficiency ?? unknownEfficiency(),
+				contextPressure: evidence.contextPressure ?? base.contextPressure,
+				failure: null,
+				acceptAttempts: { kind: "unavailable", reason: "not_instrumented" },
+			});
+
+			assert.equal(row.row.v, 3);
+			assert.equal(row.row.usage.tokens.total, 35);
+			assert.equal(ledgerEfficiency(row.row).modelRequests, 4);
+			assert.deepEqual(frozenRowOf(row.bytes)?.bytes, row.bytes);
+			rmSync(join(dir, "stages", base.runId, "accept-2"), { recursive: true });
+			const incomplete = await readTerminalEvidence(dir, base.runId, 35, null);
+			assert.equal(
+				incomplete.usage?.tokens.total,
+				35,
+				"the charged floor survives a missing execution",
+			);
+			assert.equal(
+				incomplete.efficiency?.modelRequests,
+				null,
+				"missing work is not a known zero",
+			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	it("parses, validates and indexes 1,000 varied rows in under one second", () => {

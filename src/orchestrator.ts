@@ -106,6 +106,10 @@ import {
 	contractDigestOf,
 	contractKey,
 	type InlinedFile,
+	type SourceFacts,
+	sourceExcerpts,
+	sourceFacts,
+	specifySourceFacts,
 	type Link,
 	INLINE_TOTAL_BYTES,
 	inlined,
@@ -180,6 +184,7 @@ export type StageLaunchInput = {
 	readonly execution?: CandidateExecution;
 	readonly workspace: string;
 	readonly prompt: string;
+	readonly source?: SourceFacts;
 	readonly specify?: SpecifyReviewInput;
 	readonly round?: number;
 	readonly review?: ReviewPreparation;
@@ -550,6 +555,7 @@ type Prepared = {
 	readonly inputs: StageInputs | null;
 	readonly prompt: string;
 	readonly workspace?: string;
+	readonly source?: SourceFacts;
 	readonly build?: StageLaunchInput["build"];
 	readonly specify?: SpecifyReviewInput;
 };
@@ -4395,6 +4401,7 @@ export class Orchestrator {
 			workspace: prepared.workspace ?? files.workspacePath(run.runId),
 			build: prepared.build,
 			prompt: prepared.prompt,
+			source: prepared.source,
 			specify: prepared.specify,
 			tools:
 				prepared.inputs === null
@@ -5731,17 +5738,13 @@ export class Orchestrator {
 		if (parsed.kind === "invalid") return fail("workflow_invalid");
 
 		if (contract?.kind === "found") {
-			const shown: InlinedFile[] = [];
-			let budget = INLINE_TOTAL_BYTES;
-
-			for (const path of contract.contract.files) {
-				const text = await checkout.read(path, NAMED_FILE_READ_BYTES);
-
-				if (text === null || budget < 1024) continue;
-				const file = inlined(path, text, Math.min(NAMED_FILE_BYTES, budget));
-				budget -= Buffer.byteLength(file.text);
-				shown.push(file);
-			}
+			const shown = await sourceExcerpts({
+				files: contract.contract.files,
+				evidence: contract.contract.evidence,
+				checkout,
+				identity: `${repo}@${run.workflowSha}${run.stage === "build" && (run.round ?? 0) > 0 ? ` workspace-r${run.round}-${run.attempt}` : ""}`,
+				repair: run.stage === "build" && (run.round ?? 0) > 0,
+			});
 
 			let build: Prepared["build"];
 
@@ -5807,6 +5810,7 @@ export class Orchestrator {
 				kind: "ready",
 				workspace,
 				build,
+				source: sourceFacts(shown),
 				inputs: {
 					contract,
 					files: new Set(checkout.files),
@@ -5887,6 +5891,7 @@ export class Orchestrator {
 		return {
 			kind: "ready",
 			inputs: { files: set, source: stored.receipt.snapshotSource, link },
+			source: specifySourceFacts(shown),
 			specify: { title, body, answers, files: checkout.files },
 			prompt: specifyPrompt({
 				repo,

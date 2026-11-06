@@ -1040,6 +1040,8 @@ function checkoutOf(workspace: string, files: readonly string[]): Checkout {
 	};
 }
 
+export { checkoutOf };
+
 function textList(value: JsonValue | undefined): string | null {
 	const text = String(value);
 
@@ -1380,7 +1382,10 @@ export async function checkoutBuildWorkspace(
 		return { kind: "unavailable" };
 	}
 
-	return result;
+	return {
+		...result,
+		checkout: checkoutOf(input.workspace, result.checkout.files),
+	};
 }
 
 async function writeOnce(
@@ -2960,7 +2965,13 @@ export async function readTerminalEvidence(
 	floor: number,
 	candidate: CandidateState | null,
 ): Promise<TerminalEvidence> {
-	const { executionCharge, readStageReceipt } = await import("./sandbox.ts");
+	const { executionCharge, executionEfficiency, readStageReceipt } =
+		await import("./sandbox.ts");
+
+	const { aggregateEfficiency, unknownEfficiency } = await import(
+		"./sandbox/result.ts"
+	);
+
 	const root = join(resolve(stateDir), "stages", runId);
 
 	const listed = await readdir(root).catch((error: NodeJS.ErrnoException) =>
@@ -2969,7 +2980,7 @@ export async function readTerminalEvidence(
 
 	const names = (listed ?? [])
 		.filter((name) => EXECUTION_NAME.test(name))
-		.sort();
+		.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 
 	const accounting = fileRunAccounting(stateDir);
 	const attempts = await accounting.attempts(runId);
@@ -2983,7 +2994,13 @@ export async function readTerminalEvidence(
 
 	const stages = new Map<
 		Stage,
-		{ total: number; uncertain: number; wall: number; wallComplete: boolean }
+		{
+			total: number;
+			uncertain: number;
+			wall: number;
+			wallComplete: boolean;
+			efficiency: import("./sandbox/result.ts").EfficiencyFacts[];
+		}
 	>();
 
 	const models = new Map<
@@ -2992,6 +3009,11 @@ export async function readTerminalEvidence(
 	>();
 
 	const digests = new Set<Digest>();
+
+	const executions: {
+		facts: import("./sandbox/result.ts").EfficiencyFacts;
+		started: number | null;
+	}[] = [];
 
 	let total = 0,
 		uncertain = 0,
@@ -3004,7 +3026,13 @@ export async function readTerminalEvidence(
 		let value = stages.get(stage);
 
 		if (value === undefined) {
-			value = { total: 0, uncertain: 0, wall: 0, wallComplete: true };
+			value = {
+				total: 0,
+				uncertain: 0,
+				wall: 0,
+				wallComplete: true,
+				efficiency: [],
+			};
 			stages.set(stage, value);
 		}
 
@@ -3024,6 +3052,22 @@ export async function readTerminalEvidence(
 		const dir = join(root, name);
 		const charge = await executionCharge(dir).catch(() => null);
 		const summary = stageOf(stageName);
+
+		const efficiency = await executionEfficiency(dir).catch(() =>
+			unknownEfficiency(),
+		);
+
+		const high = objectOf(
+			parseJsonText(
+				await readFile(join(dir, "usage.json"), "utf8").catch(() => ""),
+			),
+		);
+
+		summary.efficiency.push(efficiency);
+		executions.push({
+			facts: efficiency,
+			started: countOf(jsonField(high, "startedAt")),
+		});
 		summary.total += charge?.total ?? 0;
 		summary.uncertain += charge?.uncertain ?? 0;
 		total += charge?.total ?? 0;
@@ -3144,6 +3188,7 @@ export async function readTerminalEvidence(
 		}
 	}
 
+	const uncovered = floor > total;
 	total = Math.max(total, floor);
 
 	const summaries: Extract<LedgerRow["stages"], { kind: "known" }>["value"] =
@@ -3179,6 +3224,7 @@ export async function readTerminalEvidence(
 
 		summaries.push({
 			stage,
+			efficiency: aggregateEfficiency(data.efficiency),
 			wallMs: data.wallComplete
 				? { kind: "exact", unit: "milliseconds", total: data.wall }
 				: {
@@ -3444,7 +3490,39 @@ export async function readTerminalEvidence(
 		}
 	}
 
-	return { ...evidence, generationGates, mergedAt };
+	executions.sort((a, b) => (a.started ?? 0) - (b.started ?? 0));
+	const endpoints = aggregateEfficiency(executions.map((e) => e.facts));
+
+	const efficiency = uncovered
+		? unknownEfficiency()
+		: aggregateEfficiency(
+				[...stages.values()].map((data) =>
+					aggregateEfficiency(data.efficiency),
+				),
+			);
+
+	const ordered =
+		!uncovered &&
+		[...stages.values()].every((data) => data.efficiency.length > 0) &&
+		executions.every((e) => e.started !== null);
+
+	const omissions = efficiency.excerptOmissions;
+	const caps = efficiency.sourceCapHits;
+
+	return {
+		...evidence,
+		generationGates,
+		mergedAt,
+		efficiency: {
+			...efficiency,
+			firstInputTokens: ordered ? endpoints.firstInputTokens : null,
+			lastInputTokens: ordered ? endpoints.lastInputTokens : null,
+		},
+		contextPressure:
+			omissions !== null && caps !== null
+				? known({ truncated: omissions > 0, promptCapHit: caps > 0 })
+				: { kind: "unavailable", reason: "not_instrumented" },
+	};
 }
 
 export async function readRunCharges(
