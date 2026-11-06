@@ -700,6 +700,65 @@ describe("questions and summary comments", () => {
 	});
 });
 
+describe("inlined byte accounting", () => {
+	it("retains exact-fit text without a trailing newline", () => {
+		for (const text of [
+			"x\ny",
+			"é\n😀",
+			"x".repeat(12286) + "\ny",
+			"é".repeat(6142) + "\n€",
+		]) {
+			const cap = Buffer.byteLength(text, "utf8");
+
+			const expected = {
+				path: "a.ts",
+				text,
+				totalLines: text.split("\n").length,
+			};
+
+			assert.deepEqual(inlined("a.ts", text, cap), expected);
+
+			if (cap === 12288) assert.deepEqual(inlined("a.ts", text), expected);
+		}
+	});
+
+	it("truncates oversized text only at line boundaries within the byte cap", () => {
+		for (const [text, cap, expected] of [
+			["x\ny\nz", 3, "x\ny"],
+			["é\n😀\nz", 7, "é\n😀"],
+			["long\nx", 3, ""],
+			["😀\nx", 3, ""],
+			["x\n", 2, "x\n"],
+			["x\n", 1, "x"],
+		] as const) {
+			const result = inlined("a.ts", text, cap);
+
+			assert.deepEqual(result, {
+				path: "a.ts",
+				text: expected,
+				totalLines: text.split("\n").length,
+			});
+			assert.ok(Buffer.byteLength(result.text, "utf8") <= cap);
+		}
+	});
+
+	it("renders the final numbered line of an exact-fit file without a partial range", () => {
+		const prompt = specifyPrompt({
+			repo,
+			baseSha: base,
+			guidance: { general: "", stages: {} },
+			files: ["a.ts"],
+			inlined: [inlined("a.ts", "x\ny", 3)],
+			title: "Exact fit",
+			body: "",
+			answers: null,
+		});
+
+		assert.ok(prompt.includes("=== a.ts ===\n1\tx\n2\ty"));
+		assert.ok(!prompt.includes("a.ts (lines"));
+	});
+});
+
 describe("specify prompt", () => {
 	const prompt = specifyPrompt({
 		repo,

@@ -934,7 +934,7 @@ export function inlined(
 	let bytes = 0;
 
 	for (const line of all) {
-		bytes += Buffer.byteLength(line, "utf8") + 1;
+		bytes += Buffer.byteLength(line, "utf8") + (kept.length > 0 ? 1 : 0);
 
 		if (bytes > capBytes) break;
 
