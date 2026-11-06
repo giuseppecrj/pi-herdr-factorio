@@ -2159,8 +2159,8 @@ export function fileRunFiles(
 								existing.policy.gates.kind === "known"
 							);
 
-						const begin = (gatesDigest: Digest) =>
-							accounting.begin({
+						const begin = (gatesDigest: Digest) => {
+							const start = {
 								v: 1,
 								runId: input.runId,
 								startedAt: input.startedAt,
@@ -2180,7 +2180,15 @@ export function fileRunFiles(
 										digest: AUTONOMY_DIGEST,
 									},
 								},
-							});
+							} as const;
+
+							// An unloaded admitted workflow leaves the cap out; its rows say so.
+							return accounting.begin(
+								input.runTokenCap === null
+									? start
+									: { ...start, runTokenCap: input.runTokenCap },
+							);
+						};
 
 						const cached = policyPins.get(input.workflowSha);
 

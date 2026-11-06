@@ -321,6 +321,46 @@ describe("ledger row codec", () => {
 		assert.doesNotMatch(row.bytes.toString(), /"micros"/);
 	});
 
+	it("records an unknown trusted run cap as a verification gap, never a production row", () => {
+		const base = rowInput(4);
+
+		const policy =
+			base.provenance.kind === "production"
+				? base.provenance.policy
+				: assert.fail("fixture");
+
+		const row = ledgerRow({
+			...base,
+			provenance: {
+				kind: "verification",
+				policy,
+				verificationDigest: digestOf("manifest"),
+				trustedRunTokenCap: {
+					kind: "unavailable",
+					reason: "legacy_not_recorded",
+				},
+				effectiveRunTokenCap: 500_000,
+			},
+		});
+
+		assert.equal(row.row.provenance.kind, "verification");
+		assert.ok(row.row.gaps.includes("legacy_not_recorded"));
+		assert.throws(
+			() =>
+				ledgerRow({
+					...base,
+					provenance: {
+						kind: "verification",
+						policy,
+						verificationDigest: digestOf("manifest"),
+						trustedRunTokenCap: 0,
+						effectiveRunTokenCap: 500_000,
+					},
+				}),
+			{ code: "invalid_count" },
+		);
+	});
+
 	it("refuses rows whose cross-field facts disagree", () => {
 		const base = rowInput(4);
 		const landed = landedInput(5);

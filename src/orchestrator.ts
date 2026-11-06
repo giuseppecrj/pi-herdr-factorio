@@ -152,6 +152,7 @@ import {
 	type LedgerOutbox,
 	type AttemptEnd,
 	type RunAccounting,
+	type RunStart,
 } from "./ledger.ts";
 import type { JsonValue } from "./tickets.ts";
 
@@ -431,6 +432,8 @@ export interface RunFiles {
 		workflowSha: GitSha;
 		workflowDigest: Digest;
 		startedAt: string;
+		/** The admitted workflow's trusted `maxTokensPerRun`, or `null` when this process has not loaded those bytes. */
+		runTokenCap: number | null;
 	}): Promise<boolean>;
 	terminalEvidence?(
 		runId: Digest,
@@ -1029,6 +1032,9 @@ export class Orchestrator {
 	readonly #writer: GitHubTicketWriter;
 	#config: WorkflowConfig | null = null;
 	#workflowSha: GitSha | null = null;
+	/** The last loaded workflow's digest and its trusted run cap, before any verification cap. */
+	#trustedRun: { readonly digest: Digest; readonly tokens: number } | null =
+		null;
 	#claimsLoaded = false;
 	#ticks = 0;
 	#tickAt = 0;
@@ -1401,8 +1407,13 @@ export class Orchestrator {
 		}
 
 		if (reads.workflow.kind === "loaded") {
-			this.#config = this.#capped(reads.workflow.snapshot.config);
-			this.#workflowSha = reads.workflow.snapshot.sha;
+			const { snapshot } = reads.workflow;
+			this.#config = this.#capped(snapshot.config);
+			this.#workflowSha = snapshot.sha;
+			this.#trustedRun = {
+				digest: snapshot.digest,
+				tokens: snapshot.config.usage.maxTokensPerRun,
+			};
 		} else {
 			reasons.push("workflow_unavailable");
 		}
@@ -2241,12 +2252,8 @@ export class Orchestrator {
 		}
 	}
 
-	#trustedRunTokens: number | null = null;
-
 	#capped(config: WorkflowConfig): WorkflowConfig {
 		const verification = this.#input.verification ?? null;
-
-		this.#trustedRunTokens = config.usage.maxTokensPerRun;
 
 		return verification === null
 			? config
@@ -2261,17 +2268,37 @@ export class Orchestrator {
 				};
 	}
 
-	#verificationFacts() {
+	/**
+	 * A verification state dir's pin always makes a verification row. The caps
+	 * are the run's own, never whatever workflow this process loaded: the
+	 * trusted cap from its admission pin, or from a load of the very bytes it
+	 * was admitted under; the effective cap from that or from the candidate's
+	 * captured run cap. A cap none of these records is unavailable.
+	 */
+	#verificationFacts(run: ActiveRun, start: RunStart | null | undefined) {
 		const verification = this.#input.verification ?? null;
-		const trusted = this.#trustedRunTokens;
 
-		return verification === null || trusted === null
-			? null
-			: {
-					digest: verification.digest,
-					trustedRunTokenCap: trusted,
-					effectiveRunTokenCap: Math.min(verification.tokenCap, trusted),
-				};
+		if (verification === null) return null;
+
+		const trusted =
+			start?.runTokenCap ??
+			(this.#trustedRun?.digest === run.workflowDigest
+				? this.#trustedRun.tokens
+				: undefined);
+
+		const missing = {
+			kind: "unavailable",
+			reason: start == null ? "receipt_missing" : "legacy_not_recorded",
+		} as const;
+
+		return {
+			digest: verification.digest,
+			trustedRunTokenCap: trusted ?? missing,
+			effectiveRunTokenCap:
+				trusted === undefined
+					? (run.handoff?.pin.maxTokens ?? missing)
+					: Math.min(verification.tokenCap, trusted),
+		};
 	}
 
 	async #previousRunId(runId: Digest): Promise<Digest | null | undefined> {
@@ -2294,6 +2321,7 @@ export class Orchestrator {
 		let snapshot: JsonValue;
 
 		try {
+			const start = await this.#input.files.accounting?.start(run.runId);
 			snapshot = terminalSnapshot({
 				repo: this.#input.repo,
 				runId: run.runId,
@@ -2309,14 +2337,14 @@ export class Orchestrator {
 				observedAt,
 				candidate: run.handoff ?? null,
 				attemptEnds: await this.#input.files.accounting?.attempts(run.runId),
-				start: await this.#input.files.accounting?.start(run.runId),
+				start,
 				previousRunId: await this.#previousRunId(run.runId),
 				evidence: await this.#input.files.terminalEvidence?.(
 					run.runId,
 					run.usage,
 					run.handoff ?? null,
 				),
-				verification: this.#verificationFacts(),
+				verification: this.#verificationFacts(run, start),
 			});
 		} catch (error) {
 			if (!(error instanceof LedgerRowError)) throw error;
@@ -3610,6 +3638,10 @@ export class Orchestrator {
 				workflowSha: admitted.baseSha,
 				workflowDigest: admitted.workflowDigest,
 				startedAt: new Date(this.#input.clock.now()).toISOString(),
+				runTokenCap:
+					this.#trustedRun?.digest === admitted.workflowDigest
+						? this.#trustedRun.tokens
+						: null,
 			}))
 		) {
 			this.#input.log("admission_policy_unavailable", { issue, runId });
