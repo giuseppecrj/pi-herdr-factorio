@@ -62,12 +62,22 @@ export type ReviewStageSettings = ModelStageSettings & {
 	readonly codeReviewModel: ModelId | null;
 };
 
+export const ACCEPT_EFFORTS = ["low", "medium", "high"] as const;
+
+export type AcceptEffort = (typeof ACCEPT_EFFORTS)[number];
+
+export type AcceptStageSettings = ModelStageSettings & {
+	readonly reasoningEffort: AcceptEffort;
+};
+
 export type StageSettings = {
 	readonly [S in Stage]: S extends "review"
 		? ReviewStageSettings
-		: S extends ModelStage
-			? ModelStageSettings
-			: { readonly budget: StageBudget };
+		: S extends "accept"
+			? AcceptStageSettings
+			: S extends ModelStage
+				? ModelStageSettings
+				: { readonly budget: StageBudget };
 };
 
 export type WorkflowConfig = {
@@ -549,6 +559,28 @@ function readModelStage(
 	);
 }
 
+function readAcceptStage(stages: Map<string, YamlNode>): AcceptStageSettings {
+	const entries = stageEntries(stages, "accept", [
+		...MODEL_KEYS,
+		...BUDGET_KEYS,
+		"reasoning_effort",
+	]);
+
+	const field = "stages.accept.reasoning_effort";
+
+	const effort = entries.has("reasoning_effort")
+		? readString(entries.get("reasoning_effort") ?? null, field)
+		: "medium";
+
+	if (effort !== "low" && effort !== "medium" && effort !== "high")
+		fail(field, "must be low, medium or high");
+
+	return Object.freeze({
+		...readStageModels(entries, "accept"),
+		reasoningEffort: effort,
+	});
+}
+
 /**
  * Review, plus its one per-seat key, `seats.code-review.model`. Any other
  * seat or seat field fails the load. Absent, code-review inherits `model`.
@@ -697,7 +729,7 @@ function readStages(
 	return Object.freeze({
 		admit: readControllerStage(stages, "admit"),
 		specify: readModelStage(stages, "specify"),
-		accept: readModelStage(stages, "accept"),
+		accept: readAcceptStage(stages),
 		build: readModelStage(stages, "build"),
 		validate: readValidateStage(stages, warnings),
 		review: readReviewStage(stages),

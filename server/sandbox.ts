@@ -87,6 +87,7 @@ import {
 	revisionPrompt,
 } from "../src/specify.ts";
 import {
+	type AcceptEffort,
 	type ModelId,
 	type ModelStage,
 	STAGE_CLEANUP_RESERVE_MS,
@@ -1318,6 +1319,7 @@ export type SandboxHostConfig = {
 	readonly bundleDir: string;
 	readonly workspace: string;
 	readonly stageDir?: string;
+	readonly acceptEffort?: AcceptEffort;
 	readonly runId: Digest;
 	readonly stage: ModelStage;
 	readonly attempt: number;
@@ -1349,7 +1351,11 @@ function freshDir(base: string): string {
 	}
 }
 
-export function piCommand(model: ModelId, children = false): string[] {
+export function piCommand(
+	model: ModelId,
+	children = false,
+	effort?: AcceptEffort,
+): string[] {
 	return [
 		`${BUNDLE.bin}/pi`,
 		...(children ? ["-e", HERDR_AGENTS] : []),
@@ -1362,6 +1368,7 @@ export function piCommand(model: ModelId, children = false): string[] {
 		`${PI_AGENT_DIR}/sessions`,
 		"--model",
 		model,
+		...(effort === undefined ? [] : ["--thinking", effort]),
 	];
 }
 
@@ -1642,7 +1649,11 @@ export function sandboxHost(config: SandboxHostConfig): StageHost {
 				...config,
 				agentDir,
 				socketPath,
-				command: piCommand(model, config.tools.includes("subagent")),
+				command: piCommand(
+					model,
+					config.tools.includes("subagent"),
+					config.stage === "accept" ? config.acceptEffort : undefined,
+				),
 			});
 
 			if (launched === null) return null;
@@ -4169,6 +4180,7 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 				stage: input.stage,
 				attempt: input.attempt,
 				tools: input.tools,
+				acceptEffort: input.acceptEffort,
 				arch,
 				xdgRuntimeDir: config.xdgRuntimeDir,
 				assetsDigest: bundle.digest,

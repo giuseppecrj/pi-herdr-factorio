@@ -139,6 +139,7 @@ import type {
 } from "../server/sandbox/result.ts";
 import {
 	DEFAULTS,
+	type AcceptEffort,
 	type EnvLookup,
 	type GitSha,
 	MODEL_STAGES,
@@ -195,6 +196,7 @@ export type StageLaunchInput = {
 	};
 	readonly tools: readonly string[];
 	readonly skills: readonly string[];
+	readonly acceptEffort?: AcceptEffort;
 	readonly settings: StageRunSettings;
 	readonly remainingRunTokens: number;
 	readonly signal: AbortSignal;
@@ -4422,6 +4424,8 @@ export class Orchestrator {
 						: stage === "accept"
 							? ACCEPTANCE_SKILLS
 							: SPECIFY_SKILLS,
+			acceptEffort:
+				stage === "accept" ? config.stages.accept.reasoningEffort : undefined,
 			settings: {
 				model: config.stages[stage].model,
 				fallback: config.stages[stage].fallbackModel,

@@ -12140,6 +12140,27 @@ function advanceOnPost(github: FakeGitHub, args: readonly string[]): void {
 }
 
 describe("held-out acceptance stage", () => {
+	for (const effort of ["default", "low"] as const)
+		it(`forwards ${effort} trusted reasoning effort only to accept`, async () => {
+			const { github, executor, start } = world();
+
+			if (effort !== "default")
+				setWorkflow(
+					github,
+					"  accept:\n",
+					`  accept:\n    reasoning_effort: ${effort}\n`,
+				);
+			github.add(labeled(14));
+			executor.behaviors = [{ kind: "pass", usage: 100 }];
+			executor.acceptBehavior = { kind: "pass", usage: 20 };
+			await once(start());
+			assert.equal(executor.launches[0]?.acceptEffort, undefined);
+			assert.equal(executor.launches[1]?.stage, "accept");
+			assert.equal(
+				executor.launches[1]?.acceptEffort,
+				effort === "default" ? "medium" : effort,
+			);
+		});
 	it("runs specify then a fresh accept, stores the suite, and claims build after one redacted summary", async () => {
 		const { github, executor, files, start } = world();
 		github.add(labeled(14, { body: "PRIVATE-ISSUE-TRANSCRIPT server/cli.ts" }));
