@@ -218,7 +218,7 @@ const STATUS_TEXT: Readonly<Record<RunStatus, string>> = {
 	retrying: "waiting to retry",
 	released: "released: the issue is no longer eligible",
 	failed: "failed: the stage did not pass",
-	budget_exhausted: "stopped: the run budget is spent",
+	budget_exhausted: "stopped: a token or time budget is spent",
 	stage_passed: "stopped: stage passed; the next stage is not installed",
 	needs_info:
 		"stopped: questions are on the issue; answer them and add factory:ready again",

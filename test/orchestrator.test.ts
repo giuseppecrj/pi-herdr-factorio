@@ -118,7 +118,12 @@ import {
 	type JudgmentOutcome,
 	type ReviewReceipt,
 } from "../src/review.ts";
-import { type Digest, digestOf, runIdOf } from "../src/run.ts";
+import {
+	type Digest,
+	digestOf,
+	runIdOf,
+	REPAIR_BUILD_MAX_TOKENS,
+} from "../src/run.ts";
 import {
 	type GitSha,
 	isGitSha,
@@ -9450,7 +9455,9 @@ describe("controller-only validate", () => {
 			cpSync(
 				join(f.files.artifactRoot, "acceptance"),
 				join(root, "acceptance"),
-				{ recursive: true },
+				{
+					recursive: true,
+				},
 			);
 			const opening = claim.handoff.work.request;
 			const branch = opening.branch;
@@ -10578,7 +10585,9 @@ describe("controller-only validate", () => {
 				writeFileSync(
 					join(dir, "execution.json"),
 					`${JSON.stringify(input.execution)}\n`,
-					{ mode: 0o600 },
+					{
+						mode: 0o600,
+					},
 				);
 			}
 
@@ -10617,8 +10626,11 @@ describe("controller-only validate", () => {
 		for (const restart of [false, true])
 			it(`keeps ${stage} retries within one round${restart ? " after process recovery" : ""}`, async () => {
 				const f = await cappedRun(stage);
-				const spent = stage === "build" ? 25_169 : 12_000;
-				const cap = stage === "build" ? 50_000 : 30_000;
+
+				const spent =
+					stage === "build" ? REPAIR_BUILD_MAX_TOKENS / 2 + 169 : 12_000;
+
+				const cap = stage === "build" ? REPAIR_BUILD_MAX_TOKENS : 30_000;
 
 				if (stage === "build")
 					f.executor.buildBehavior = { kind: "fail", usage: spent };
@@ -10661,6 +10673,9 @@ describe("controller-only validate", () => {
 		it(`counts interrupted ${stage} gateway usage before a retry in the same round`, async () => {
 			const f = await cappedRun(stage);
 
+			const interrupted =
+				(stage === "build" ? REPAIR_BUILD_MAX_TOKENS / 2 : 25_000) + 169;
+
 			if (stage === "build") f.executor.buildBehavior = { kind: "hang" };
 			else f.executor.behaviors = [{ kind: "hang" }];
 			await f.controller.tick();
@@ -10670,7 +10685,10 @@ describe("controller-only validate", () => {
 			mkdirSync(dir, { recursive: true, mode: 0o700 });
 			writeFileSync(
 				join(dir, "egress.jsonl"),
-				JSON.stringify({ inputTokens: 25_000, outputTokens: 169 }) + "\n",
+				JSON.stringify({
+					inputTokens: stage === "build" ? REPAIR_BUILD_MAX_TOKENS / 2 : 25_000,
+					outputTokens: 169,
+				}) + "\n",
 			);
 
 			if (stage === "build")
@@ -10683,14 +10701,14 @@ describe("controller-only validate", () => {
 			assert.equal(f.executor.launches.at(-1)?.attempt, 2);
 			assert.equal(
 				f.executor.launches.at(-1)?.settings.maxTokens,
-				(stage === "build" ? 50_000 : 30_000) - 25_169,
+				(stage === "build" ? REPAIR_BUILD_MAX_TOKENS : 30_000) - interrupted,
 			);
-			assert.equal(f.files.claims.get(runOf(14))?.usage, 29 + 25_169 + 11);
+			assert.equal(f.files.claims.get(runOf(14))?.usage, 29 + interrupted + 11);
 		});
 
 		it(`does not launch or approve ${stage} after cumulative round exhaustion`, async () => {
 			const f = await cappedRun(stage);
-			const cap = stage === "build" ? 50_000 : 30_000;
+			const cap = stage === "build" ? REPAIR_BUILD_MAX_TOKENS : 30_000;
 
 			if (stage === "build")
 				f.executor.buildBehavior = { kind: "fail", usage: cap / 2 };
@@ -10840,7 +10858,10 @@ describe("controller-only validate", () => {
 		await f.controller.tick();
 		assert.equal(f.files.claims.get(runOf(14))?.round, 2);
 		await once(f.controller);
-		assert.equal(f.executor.launches.at(-1)?.settings.maxTokens, 50_000);
+		assert.equal(
+			f.executor.launches.at(-1)?.settings.maxTokens,
+			REPAIR_BUILD_MAX_TOKENS,
+		);
 		assert.equal(
 			f.executor.launches.at(-1)?.remainingRunTokens,
 			500_000 - 29 - 25_169,
@@ -10936,7 +10957,7 @@ describe("controller-only validate", () => {
 		);
 
 		assert.equal(repair?.build?.binding.round, 1);
-		assert.equal(repair?.settings.maxTokens, 50_000);
+		assert.equal(repair?.settings.maxTokens, REPAIR_BUILD_MAX_TOKENS);
 		assert.equal(
 			f.executor.launches.filter(
 				(entry) => entry.stage === "build" && entry.round === 1,
@@ -11679,7 +11700,9 @@ describe("held-out acceptance stage", () => {
 			if (bound.kind !== "found") throw new Error("contract missing");
 			assert.deepEqual(
 				await files.artifacts.read(runOf(14), bound.contract, bound.digest),
-				{ kind: "absent" },
+				{
+					kind: "absent",
+				},
 			);
 		});
 	}
@@ -11698,7 +11721,9 @@ describe("held-out acceptance stage", () => {
 		if (bound.kind !== "found") throw new Error("contract missing");
 		assert.deepEqual(
 			await files.artifacts.read(runOf(14), bound.contract, bound.digest),
-			{ kind: "absent" },
+			{
+				kind: "absent",
+			},
 		);
 	});
 

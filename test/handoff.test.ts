@@ -22,6 +22,7 @@ import {
 } from "../src/handoff.ts";
 import {
 	digestOf,
+	REPAIR_BUILD_MAX_TOKENS,
 	REQUIRED_CI_CHECKS,
 	type Verdict,
 	type Run,
@@ -1198,7 +1199,7 @@ test("canonical repair accounts share the two-round cap across validation and re
 		assert.equal(request.execution.round, round);
 		assert.equal(
 			candidateAllowance(selected(issued), request.execution),
-			50_000,
+			REPAIR_BUILD_MAX_TOKENS,
 		);
 
 		const running = handoffCandidate(issued, {
@@ -1497,7 +1498,11 @@ for (const prior of [499_999, 500_000, 500_001])
 		}
 	});
 
-for (const spent of [49_999, 50_000, 50_001])
+for (const spent of [
+	REPAIR_BUILD_MAX_TOKENS - 1,
+	REPAIR_BUILD_MAX_TOKENS,
+	REPAIR_BUILD_MAX_TOKENS + 1,
+])
 	test(`formal repair accounting records cap boundary ${spent} without censoring receipts`, () => {
 		const due = validated(select(), false);
 		const issued = handoffCandidate(due, observed()).state;
@@ -1518,7 +1523,7 @@ for (const spent of [49_999, 50_000, 50_001])
 		assert.equal(candidateUsage(paid), 1234 + spent);
 		const next = handoffCandidate(paid, observed());
 
-		if (spent < 50_000) {
+		if (spent < REPAIR_BUILD_MAX_TOKENS) {
 			const retry = pending(next.state, "repair_build");
 			assert.equal(retry.execution.attempt, 2);
 			assert.equal(
