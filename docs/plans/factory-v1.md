@@ -1018,6 +1018,8 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Depends on.** F10. This implements unit 12's primary outcome metric before `F11` adds scheduled work. It does not depend on `F11`'s cadence.
 
+**Efficiency groundwork, owner-approved 2026-11-06.** Before the next pilot, efficiency PR 2 replaces accept/build/repair file prefixes with checkout-bound evidence ranges and nearby context, targeting 6 KiB with the existing 16 KiB source ceiling. Complete criteria, accepted contract digests, held-out isolation and token/time/retry caps stay unchanged. Receipts retain execution cost facts, stage summaries and new v3 ledger rows include them, and v1/v2 bytes stay unchanged. A pinned synthetic zero-token replay must retain every required fact and the good/bad outcomes while reducing serialized provider input by at least 20% at equal build-and-repair work. Interrupted and failed work stays in the charged denominator. The full F12a metrics system and a live all-GPT pilot remain separate work.
+
 **Files.**
 
 - [ ] Create `src/metrics.ts`, `src/replay.ts`, `test/metrics.test.ts`, `test/replay.test.ts`, `test/fixtures/replay/`, and `docs/operations/metrics.md`.

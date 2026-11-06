@@ -12,7 +12,7 @@ Ruleset `26531115`, "Factory ledger append-only", forbids deletion and non-fast-
 
 ## What a row says
 
-A row is one canonical JSON line with `v: 1` or `v: 2`. Its keys come in a fixed order, it ends in one LF, and its digest is SHA-256 over those exact bytes. It holds:
+A row is one canonical JSON line with `v: 1`, `v: 2` or `v: 3`. Its keys come in a fixed order, it ends in one LF, and its digest is SHA-256 over those exact bytes. It holds:
 
 - the run's identity;
 - the frozen workflow pin and autonomy policy;
@@ -23,7 +23,7 @@ A row is one canonical JSON line with `v: 1` or `v: 2`. Its keys come in a fixed
 
 ### Version 2: the real cause
 
-Every terminal snapshot written by this build is version 2. It has all version 1 keys in the same order, then two more before `gaps`:
+Version 2 introduced two fields after the version 1 fields and before `gaps`. Version 3 keeps them:
 
 - `failure` is `null` unless the outcome is `failed` or `budget_exhausted`. Otherwise it is a fact whose value holds:
   - `stage`, the stage that caused the stop. It can differ from `outcome.stage`, which stays the run's projected stage. A validation dead end ends at `land` but names `validate`.
@@ -37,11 +37,30 @@ Every terminal snapshot written by this build is version 2. It has all version 1
 
   The final base refusal of a checked suite records its attempt before the terminal snapshot, so the accept stage summary counts it as `refused`, not as zero attempts.
 
-With a recorded cause, version 2 also fills the version 1 fields. `outcome.cap` is the cap. `outcome.cause` is the class's cause: `attempts_exhausted`, `input_refused`, `base_refused`, `provider_refused`, `label_write_failed`, `candidate_failed`, `evidence_missing`, `oracle_invalid`, `infrastructure_failed`, `review_failed` or `handoff_stopped`. The last four, and the cap `round_tokens`, exist only in version 2 rows. A cause the controller did not record is `{"kind":"unavailable","reason":"receipt_missing"}`, never guessed. One example is a run whose stop decision a restart replayed from a bare attempt record.
+With a recorded cause, version 2 also fills the version 1 fields. `outcome.cap` is the cap. `outcome.cause` is the class's cause: `attempts_exhausted`, `input_refused`, `base_refused`, `provider_refused`, `label_write_failed`, `candidate_failed`, `evidence_missing`, `oracle_invalid`, `infrastructure_failed`, `review_failed` or `handoff_stopped`. The last four, and the cap `round_tokens`, exist in version 2 and later rows. A cause the controller did not record is `{"kind":"unavailable","reason":"receipt_missing"}`, never guessed. One example is a run whose stop decision a restart replayed from a bare attempt record.
 
 The controller records a candidate stop from the durable handoff terminal and the current generation's stored assessment, so a restart keeps it. Every other stop it records when it decides it.
 
-Version 1 rows and stored version 1 terminal snapshots still parse and freeze to the same bytes; no shipped row is rewritten. A controller from before this build reads a version 2 line as `ledger_version_unsupported` and blocks its appends. Roll forward rather than back once a version 2 row is published.
+Version 1 and 2 rows and stored terminal snapshots still parse and freeze to the same bytes; no shipped row is rewritten. An older controller that does not recognize a row version blocks appends as `ledger_version_unsupported`. Roll forward rather than back after publishing a new row version.
+
+### Version 3: execution cost facts
+
+New terminal snapshots and rows use version 3. Each stage summary and the run have an `efficiency` object with these numeric fields:
+
+- `assistantTurns`, assistant messages completed by the parent and readable children, distinct from the existing turn-budget counter;
+- `modelRequests`, unique dispatched requests from the execution journal, including children, fallbacks and internal requests;
+- metered `inputTokens`, `outputTokens`, `firstInputTokens`, `lastInputTokens` and `maxInputTokens` per request;
+- `toolResultBytes`, UTF-8 text bytes in tool-result messages, excluding images;
+- `initialPromptBytes`, initial user-prompt bytes, including bundled skills, and `initialSourceBytes`, the source pack including its labels and omission markers;
+- `excerptOmissions`, the count of incomplete excerpts and entirely skipped excerpts, `sourceCapHits`, executions whose source pack hit a byte ceiling, and `guardStops`, fixed accept guard stops.
+
+Every unavailable number is `null`, not zero. `ledgerEfficiency` exposes all-null facts for v1/v2 without altering their bytes. A missing or cut journal cannot establish complete metering. A dispatched but interrupted request counts as a request, while its missing token measurements stay null. Unknown parts propagate through sums; the charged total remains available independently. First/last stage inputs follow attempt and repair order; run first/last inputs are null without complete execution timestamps. Maxima are maxima, not sums.
+
+`usage.tokens` and stage `tokens` remain the authoritative charged amounts, with their existing exact, lower-bound and uncertain coverage. The new metering never replaces them, converts an absent value to zero, or changes a cap. Processed tokens per assistant turn is charged tokens divided by `assistantTurns`, not input per request. Metered input per request is `inputTokens / modelRequests`; a missing value or zero denominator makes either ratio unavailable.
+
+The controller sums each execution once, including failed attempts, retries and interrupted executions. Specify/review aggregate receipts cover their leaves; they are never added to those leaves again. Thus every terminal outcome retains the full charged token denominator needed for later cost-per-trustworthy-landing metrics. This is not the F12a cohort report.
+
+When all source observations are available, `contextPressure.truncated` means at least one excerpt or source pack omitted content, and `promptCapHit` means a source byte ceiling was reached. Intentional evidence windows are incomplete files, even when well below the ceiling. Missing historical observations leave context pressure unavailable.
 
 A fact the controller did not record is `{"kind":"unavailable","reason":...}`, never zero. Every reason also appears in `gaps`. Money is always unavailable, including deterministic zero-token work, because no validated price source exists.
 
@@ -51,7 +70,7 @@ Rows project validated stage receipts and write-once attempt dispositions into s
 
 Token totals are charged amounts, not necessarily measured spend. They are `lower_bound` where receipt coverage is incomplete. A request is `uncertain`, with `reason: "request_unsettled"`, when it has a dispatch but no result, a result with no metered usage, or a response that ended in an error. Per owner policy, an uncertain request is charged its recorded input-size estimate plus its enforced maximum output, and is never replayed. A non-2xx provider status at the response headers whose response then completes is journaled with `reason: "provider_rejected"` and is not uncertain: it is charged the usage the provider reported, or a known zero when it reported none. The gateway's own 502 or 504, answered before any upstream response headers arrived, is journaled with `reason: "upstream_unreachable"` and stays uncertain like any other error. Legacy dispatches without those bounds remain incomplete. A metered request body that is not a JSON object is forwarded unchanged and bounded by its byte length plus the execution's token ceiling. A later aggregate or leaf receipt does not erase uncertainty. A run whose stages directory exists but cannot be read gets unavailable stages, models and usage split, and a `lower_bound` token total with `reason: "receipt_invalid"`, never a known empty list. Available parent/child usage is counted once; the residual charge is unattributed.
 
-At landing, the existing repository-scoped PR read retains valid `merged_at` metadata bound to repository, run, PR number, head and merge SHA. Missing or invalid merge time remains unavailable, never the observation time. Context-pressure flags are not instrumented; omitted checkout paths do not prove prompt truncation. Repair-round aggregate counts remain unavailable where authorization/start/completion coverage is not established.
+At landing, the existing repository-scoped PR read retains valid `merged_at` metadata bound to repository, run, PR number, head and merge SHA. Missing or invalid merge time remains unavailable, never the observation time. Omitted checkout paths do not prove prompt truncation; v3 source observations supply context-pressure flags separately. Repair-round aggregate counts remain unavailable where authorization/start/completion coverage is not established.
 
 Runs lacking an admission-time accounting pin are distinguishable as `legacy_import` (verification state remains explicitly verification). Their unrecorded start and interruption histories remain unavailable; an attempt number never proves zero interruptions.
 
@@ -63,7 +82,7 @@ The row holds no private test names, messages, paths, prompts or session content
 
 ## Private state
 
-The outbox lives under `<state>/ledger/` with mode 0600 in 0700 directories, outside every stage mount. Back it up with `<state>/accounting/`, stage receipts and claims. `accounting/<runId>/attempts/<stage>-r<round>-<attempt>.json` records each disposition and recovery action once. Execution `usage.json` retains token high-water, turns and the original deadline; `egress.requests.jsonl` syncs dispatch bounds before upstream and results after completion.
+The outbox lives under `<state>/ledger/` with mode 0600 in 0700 directories, outside every stage mount. Back it up with `<state>/accounting/`, stage receipts and claims. `accounting/<runId>/attempts/<stage>-r<round>-<attempt>.json` records each disposition and recovery action once. Execution `usage.json` retains token high-water, turns, numeric efficiency progress and the original deadline; `egress.requests.jsonl` syncs dispatch bounds before upstream and results after completion.
 
 | Path | Written | Meaning |
 | --- | --- | --- |
@@ -113,4 +132,4 @@ A blocked job needs the owner. Fix the cause outside the controller, then delete
 
 ## Not yet built
 
-Retrospective backfill of runs that ended before this build is not implemented. Context-pressure flags and complete repair-round aggregates are not yet recorded. Those facts remain unavailable rather than inferred. F12a cohort metrics and money pricing are not part of this build.
+Retrospective backfill of runs that ended before this build is not implemented. Historical context pressure and complete repair-round aggregates remain unavailable where they were not recorded, rather than inferred. F12a cohort metrics and money pricing are not part of this build.
