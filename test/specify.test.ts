@@ -39,6 +39,7 @@ import {
 	inert,
 	inlined,
 	sourceExcerpts,
+	sourceFacts,
 	renderInlined,
 	namedFiles,
 	parseSpecifyOutput,
@@ -814,6 +815,59 @@ describe("evidence-first source excerpts", () => {
 		assert.match(second, /shifted workspace/);
 		assert.match(second, /fallback_stale/);
 		assert.notEqual(first, second);
+	});
+
+	for (const reason of ["unreadable", "missing"] as const) {
+		it(`labels and counts a ${reason} cited repair file beside a fully shown sibling`, async () => {
+			const path = "test/acceptance/1/checks/secret.test.ts";
+			const reads: string[] = [];
+
+			const shown = await sourceExcerpts({
+				files: ["a.ts"],
+				evidence: ["a.ts", path].map((path) => ({
+					path,
+					start: 1,
+					end: 1,
+					fact: "cited fact",
+				})),
+				checkout: {
+					files: reason === "missing" ? ["a.ts"] : ["a.ts", path],
+					read: async (name) => {
+						reads.push(name);
+
+						return name === "a.ts" ? "fully shown sibling" : null;
+					},
+				},
+				identity: "workspace-r1",
+				repair: true,
+			});
+
+			const source = shown.map(renderInlined).join("\n\n");
+			assert.ok(source.includes(path));
+			assert.match(source, new RegExp(`omitted=true.*${reason}`));
+			assert.match(source, /workspace-r1/);
+			assert.match(source, /fully shown sibling/);
+			assert.equal(sourceFacts(shown).omissions, 1);
+			assert.equal(sourceFacts(shown).capHit, false);
+			assert.equal(reads.includes(path), reason === "unreadable");
+		});
+	}
+
+	it("labels an oversized cited line as omitted rather than evidence", async () => {
+		const shown = await sourceExcerpts({
+			files: ["a.ts"],
+			evidence: [{ path: "a.ts", start: 1, end: 1, fact: "huge line" }],
+			checkout: { files: ["a.ts"], read: async () => "x".repeat(20_000) },
+			identity: "base",
+		});
+
+		const source = shown.map(renderInlined).join("\n\n");
+		assert.match(source, /no lines included/);
+		assert.match(source, /omitted_ceiling/);
+		assert.doesNotMatch(source, /; evidence[; ]/);
+		assert.equal(sourceFacts(shown).omissions, 1);
+		assert.equal(sourceFacts(shown).capHit, true);
+		assert.ok(Buffer.byteLength(source) <= 16 * 1024);
 	});
 
 	it("keeps nearby context when the soft target is exceeded but the safety ceiling allows it", async () => {
