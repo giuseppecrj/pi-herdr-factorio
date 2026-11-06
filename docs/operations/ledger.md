@@ -12,13 +12,36 @@ Ruleset `26531115`, "Factory ledger append-only", forbids deletion and non-fast-
 
 ## What a row says
 
-A row is one canonical JSON line with `v: 1`. Its keys come in a fixed order, it ends in one LF, and its digest is SHA-256 over those exact bytes. It holds:
+A row is one canonical JSON line with `v: 1` or `v: 2`. Its keys come in a fixed order, it ends in one LF, and its digest is SHA-256 over those exact bytes. It holds:
 
 - the run's identity;
 - the frozen workflow pin and autonomy policy;
 - the terminal outcome, and the PR and merge evidence a landing requires;
 - the artifact digests reached;
-- usage, and a sorted `gaps` list.
+- usage, and a sorted `gaps` list;
+- from version 2, the stop's cause and each accept attempt's final disposition.
+
+### Version 2: the real cause
+
+Every terminal snapshot written by this build is version 2. It has all version 1 keys in the same order, then two more before `gaps`:
+
+- `failure` is `null` unless the outcome is `failed` or `budget_exhausted`. Otherwise it is a fact whose value holds:
+  - `stage`, the stage that caused the stop. It can differ from `outcome.stage`, which stays the run's projected stage. A validation dead end ends at `land` but names `validate`.
+  - `class`, one of `budget`, `attempts`, `input`, `base`, `provider`, `label`, `candidate`, `oracle`, `infrastructure`, `missing_evidence`, `review` or `handoff`.
+  - `reason`, a fixed controller code. A `budget` reason is the exhausted cap: `run_tokens`, `stage_tokens`, `round_tokens`, `wall` or `turns`. The four diagnosis classes carry the `src/diagnosis.ts` reason, such as `tree_replays_disagree`. `base` carries the base refusal reason, such as `base_timeout`. `input` carries the logged `why`, and `attempts` the last retry cause.
+  - `failedVisibleChecks`, the failed visible check names of a validation stop, in gate order. These are only `baseline_tests`, `typecheck`, `lint`, `format`, `main_tests` or `candidate_tests`, never `heldout` or a detail.
+  - `retainedPatch`, the digest of the private patch a validation stop retains, or `null`.
+- `acceptAttempts` is a fact listing each round-0 accept attempt in order, as `{attempt, disposition}`. The disposition is one of:
+  - `suite_qualified`, `base_refused` or `retried`, for a refusal that granted the one feedback retry;
+  - `model_failed`, `model_refused`, `budget_stopped`, `interrupted` or `aborted`.
+
+  The final base refusal of a checked suite records its attempt before the terminal snapshot, so the accept stage summary counts it as `refused`, not as zero attempts.
+
+With a recorded cause, version 2 also fills the version 1 fields. `outcome.cap` is the cap. `outcome.cause` is the class's cause: `attempts_exhausted`, `input_refused`, `base_refused`, `provider_refused`, `label_write_failed`, `candidate_failed`, `evidence_missing`, `oracle_invalid`, `infrastructure_failed`, `review_failed` or `handoff_stopped`. The last four, and the cap `round_tokens`, exist only in version 2 rows. A cause the controller did not record is `{"kind":"unavailable","reason":"receipt_missing"}`, never guessed. One example is a run whose stop decision a restart replayed from a bare attempt record.
+
+The controller records a candidate stop from the durable handoff terminal and the current generation's stored assessment, so a restart keeps it. Every other stop it records when it decides it.
+
+Version 1 rows and stored version 1 terminal snapshots still parse and freeze to the same bytes; no shipped row is rewritten. A controller from before this build reads a version 2 line as `ledger_version_unsupported` and blocks its appends. Roll forward rather than back once a version 2 row is published.
 
 A fact the controller did not record is `{"kind":"unavailable","reason":...}`, never zero. Every reason also appears in `gaps`. Money is always unavailable, including deterministic zero-token work, because no validated price source exists.
 
@@ -82,7 +105,7 @@ Each pump that has work logs `ledger_backlog`, with the published, pending and b
 | `state_invalid` | blocked | A private outbox record, including `anchor.json`, is unreadable or corrupt. A corrupt anchor blocks every job and never creates a root. |
 | `row_invalid` | blocked | The terminal snapshot could not be encoded, so no terminal marker was posted. |
 | `lineage_changed` | blocked | History was rewritten, branched or rooted in a source tree. |
-| `ledger_corrupt`, `ledger_version_unsupported` | blocked | A line the writer cannot index. It is preserved, never repaired. |
+| `ledger_corrupt`, `ledger_version_unsupported` | blocked | A line the writer cannot index, such as a version 2 line read by an older controller. It is preserved, never repaired. |
 | `row_conflict` | blocked | The run ID is present with different bytes, or twice. |
 | `object_mismatch` | blocked | A hash or object read did not match. |
 

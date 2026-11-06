@@ -1549,7 +1549,41 @@ export function diagnosisDetail(failure: FailureClass): string | null {
 	}
 }
 
-export function diagnosisNotice(failure: FailureClass, key: string) {
+/**
+ * The trusted gate's visible checks, in gate order. `heldout` is never one:
+ * a dead end names only these, so no held-out suite detail leaves the gate.
+ */
+export const VISIBLE_CHECKS = [
+	"baseline_tests",
+	"typecheck",
+	"lint",
+	"format",
+	"main_tests",
+	"candidate_tests",
+] as const;
+
+export type VisibleCheck = (typeof VISIBLE_CHECKS)[number];
+
+/** The names of the failed visible checks, in gate order. Never a detail. */
+export function failedVisibleChecks(
+	checks: readonly Readonly<{ name: string; passed: boolean }>[] | null,
+): VisibleCheck[] {
+	return VISIBLE_CHECKS.filter((name) =>
+		(checks ?? []).some((check) => check.name === name && !check.passed),
+	);
+}
+
+/** What else the owner sees at a validation dead end: check names and the retained patch. */
+export type DeadEndContext = Readonly<{
+	failedChecks: readonly VisibleCheck[];
+	patchDigest: Digest | null;
+}>;
+
+export function diagnosisNotice(
+	failure: FailureClass,
+	key: string,
+	context?: DeadEndContext,
+) {
 	const scenarios =
 		failure.kind === "candidate" || failure.kind === "oracle"
 			? failure.scenarios.filter((s) => SCENARIO_ID.test(s))
@@ -1558,8 +1592,16 @@ export function diagnosisNotice(failure: FailureClass, key: string) {
 	const detail = diagnosisDetail(failure);
 	const extra = detail === null ? "" : ` ${detail}`;
 
+	const checks = (context?.failedChecks ?? []).filter((name) =>
+		VISIBLE_CHECKS.includes(name),
+	);
+
+	const patch = context?.patchDigest ?? null;
+
+	const others = `${checks.length > 0 ? ` Other failed checks: ${checks.join(", ")}.` : ""}${patch !== null && isDigest(patch) ? ` Retained private patch: ${patch}.` : ""}`;
+
 	return {
 		key,
-		body: `${FAILURE_SENTENCES[failure.kind]}${extra}${scenarios.length > 0 ? ` Scenarios: ${scenarios.join(", ")}.` : ""}\n\n${key}`,
+		body: `${FAILURE_SENTENCES[failure.kind]}${extra}${scenarios.length > 0 ? ` Scenarios: ${scenarios.join(", ")}.` : ""}${others}\n\n${key}`,
 	};
 }

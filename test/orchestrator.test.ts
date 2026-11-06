@@ -38,6 +38,7 @@ import {
 	type ProcessTable,
 	parseStartTime,
 	readLedgerBacklog,
+	readRunCharges,
 	serveLoop,
 	writeStatus,
 } from "../server/controller.ts";
@@ -964,6 +965,33 @@ function runIssues(report: TickReport): number[] {
 
 function events(logs: { event: string }[]): string[] {
 	return logs.map((entry) => entry.event);
+}
+
+/** Pins the admission policy a native run starts with, so attempts are counted. */
+async function instrument(files: RunFiles) {
+	assert.equal(
+		await files.accounting?.begin({
+			v: 1,
+			runId: runOf(14),
+			startedAt: new Date(START).toISOString(),
+			policy: {
+				workflowSha: sha(MAIN_SHA),
+				workflowDigest: digestOf(TRUSTED_WORKFLOW),
+				gates: {
+					kind: "known",
+					value: { sourceSha: sha(MAIN_SHA), digest: digestOf("gates") },
+				},
+				autonomy: {
+					approveMerge: "always",
+					land: "propose",
+					digest: digestOf(
+						JSON.stringify({ approveMerge: "always", land: "propose" }),
+					),
+				},
+			},
+		}),
+		true,
+	);
 }
 
 describe("backoffMs", () => {
@@ -1956,6 +1984,47 @@ describe("Orchestrator base qualification", () => {
 		);
 		assert.equal(keyed(github, 14, "acceptance").length, 0);
 		assert.equal(checked[0]?.binding.issue, 14);
+	});
+
+	it("records a retried accept and its final refusal on the terminal row", async () => {
+		const dir = stateDir();
+		const outbox = fileLedgerOutbox(dir);
+		const { github, executor, files, start } = world(null, outbox);
+		files.accounting = fileRunFiles(dir).accounting;
+		await instrument(files);
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "pass", usage: 20 };
+		executor.baseOutcome = "preservation_failed";
+		executor.baseReceipt = (binding) => refusedReceipt(binding, FEEDBACK);
+		executor.spentBy.set("accept-1", 20);
+		const controller = start();
+		await once(controller);
+		await controller.tick();
+		assert.equal(statuses(github, 14).at(-1)?.endsWith(":failed"), true);
+
+		const row = (await outbox.scan())?.[0]?.row?.row;
+		assert.ok(row?.v === 2);
+		assert.deepEqual(row.acceptAttempts, {
+			kind: "known",
+			value: [
+				{ attempt: 1, disposition: "retried" },
+				{ attempt: 2, disposition: "base_refused" },
+			],
+		});
+		assert.deepEqual(
+			row.failure?.kind === "known" && [
+				row.failure.value.stage,
+				row.failure.value.class,
+				row.failure.value.reason,
+			],
+			["accept", "base", "preservation_failed"],
+		);
+		assert.deepEqual(row.outcome, {
+			kind: "failed",
+			stage: "accept",
+			cause: { kind: "known", value: "base_refused" },
+		});
 	});
 
 	function refusedReceipt(
@@ -3562,6 +3631,16 @@ describe("server/cli.ts controller commands", () => {
 		assert.equal(status.durableUsage.kind, "lower_bound");
 		assert.equal(status.accounting.runs.length, 1);
 		assert.equal(status.accounting.runs[0].money.kind, "unavailable");
+		assert.deepEqual(status.accounting.runs[0].terminal.failure, {
+			kind: "known",
+			value: {
+				stage: "specify",
+				class: "provider",
+				reason: "refused",
+				failedVisibleChecks: [],
+				retainedPatch: null,
+			},
+		});
 		assert.equal(status.accounting.countersScope, "process");
 		assert.equal(executor.launches.length, launches);
 		assert.deepEqual(readdirSync(state).sort(), before);
@@ -11238,6 +11317,7 @@ describe("controller-only validate", () => {
 	function assessedValidator(
 		f: Awaited<ReturnType<typeof waitingRun>>,
 		failure: import("../src/diagnosis.ts").FailureClass,
+		verdictOf = failingVerdict,
 	): import("../src/validation.ts").Validator {
 		return async (input) => {
 			const round = input.round ?? 0;
@@ -11264,7 +11344,7 @@ describe("controller-only validate", () => {
 			await input.save(state);
 
 			if (round > 0) return { kind: "waiting", state };
-			const verdict = failingVerdict(digestOf("patch"));
+			const verdict = verdictOf(digestOf("patch"));
 			const generation = input.generation?.generation ?? 0;
 
 			const { text, read } = storedAssessment({
@@ -11322,11 +11402,92 @@ describe("controller-only validate", () => {
 		assert.equal(notices.length, 1);
 		assert.match(
 			notices[0] ?? "",
-			/^Stopped: CI diagnosis could not establish reliable evidence\. Gate and candidate replays disagree\.\n\n<!-- factory-diagnosis run=[a-f0-9]{64} g=0\.0 a=[a-f0-9]{64} -->$/,
+			/^Stopped: CI diagnosis could not establish reliable evidence\. Gate and candidate replays disagree\. Retained private patch: [a-f0-9]{64}\.\n\n<!-- factory-diagnosis run=[a-f0-9]{64} g=0\.0 a=[a-f0-9]{64} -->$/,
 		);
 		await f.controller.tick();
 		await settle();
 		assert.equal(keyed(f.github, 14, "diagnosis").length, 1);
+	});
+
+	it("shows the owner an H2-shape dead end's other failed visible checks and retained patch, with no held-out content and no repair", async () => {
+		const dir = stateDir();
+		const outbox = fileLedgerOutbox(dir);
+
+		const f = await waitingRun((world) => {
+			const native = fileRunFiles(dir);
+			Object.assign(world.files, {
+				ledger: outbox,
+				accounting: native.accounting,
+			});
+		});
+
+		const failure = classifiedCase("tree_disagreement");
+		const patch = digestOf("patch");
+
+		// H2: tree disagreement plus failing lint and candidate_tests.
+		f.executor.validate = assessedValidator(f, failure, (digest) => {
+			const verdict = failingVerdict(digest);
+
+			return {
+				...verdict,
+				checks: verdict.checks.map((check) =>
+					check.name === "lint" || check.name === "candidate_tests"
+						? { ...check, passed: false, detail: "PRIVATE-CHECK-DETAIL" }
+						: check,
+				),
+			};
+		});
+		await drive(f.controller, f);
+
+		assert.equal(
+			f.executor.launches.filter(
+				(entry) => entry.stage === "build" && (entry.round ?? 0) > 0,
+			).length,
+			0,
+		);
+		const [notice, ...others] = keyed(f.github, 14, "diagnosis");
+		assert.equal(others.length, 0);
+		assert.match(
+			notice ?? "",
+			new RegExp(
+				`^Stopped: CI diagnosis could not establish reliable evidence\\. Gate and candidate replays disagree\\. Other failed checks: lint, candidate_tests\\. Retained private patch: ${patch}\\.\\n\\n<!-- factory-diagnosis `,
+			),
+		);
+
+		const failed = {
+			kind: "known",
+			value: {
+				stage: "validate",
+				class: "missing_evidence",
+				reason: "tree_replays_disagree",
+				failedVisibleChecks: ["lint", "candidate_tests"],
+				retainedPatch: patch,
+			},
+		};
+
+		const row = (await outbox.scan())?.[0]?.row?.row;
+		assert.ok(row?.v === 2);
+		assert.deepEqual(row.failure, failed);
+		assert.deepEqual(row.outcome, {
+			kind: "failed",
+			stage: "land",
+			cause: { kind: "known", value: "evidence_missing" },
+		});
+
+		const status = await readRunCharges(dir, runOf(14), 0);
+		assert.deepEqual(status.terminal, {
+			outcome: row.outcome,
+			failure: failed,
+		});
+
+		for (const text of [
+			notice ?? "",
+			JSON.stringify(row),
+			JSON.stringify(status),
+		]) {
+			assert.doesNotMatch(text, /"heldout"|1 failing|PRIVATE-CHECK-DETAIL/);
+			assert.doesNotMatch(text, /version\.test\.ts|checks\//);
+		}
 	});
 
 	it("repairs a candidate load error after a qualified base exactly once, bound to its assessment", async () => {
@@ -13574,32 +13735,6 @@ describe("ledger outbox enrollment", () => {
 		return ctx;
 	}
 
-	async function instrument(files: RunFiles) {
-		assert.equal(
-			await files.accounting?.begin({
-				v: 1,
-				runId: runOf(14),
-				startedAt: new Date(START).toISOString(),
-				policy: {
-					workflowSha: sha(MAIN_SHA),
-					workflowDigest: digestOf(TRUSTED_WORKFLOW),
-					gates: {
-						kind: "known",
-						value: { sourceSha: sha(MAIN_SHA), digest: digestOf("gates") },
-					},
-					autonomy: {
-						approveMerge: "always",
-						land: "propose",
-						digest: digestOf(
-							JSON.stringify({ approveMerge: "always", land: "propose" }),
-						),
-					},
-				},
-			}),
-			true,
-		);
-	}
-
 	it("projects retained receipt facts, model identities and uncertain charges without counting aggregate children twice", async () => {
 		const dir = stateDir();
 		const outbox = fileLedgerOutbox(dir);
@@ -13963,5 +14098,133 @@ describe("ledger outbox enrollment", () => {
 			"needs_info",
 		);
 		assert.equal(ctx.executor.launches.length, 1);
+	});
+});
+
+describe("terminal rows keep the real cause", () => {
+	async function causeWorld(setup: (f: ReturnType<typeof world>) => void) {
+		const dir = stateDir();
+		const outbox = fileLedgerOutbox(dir);
+		const f = world(null, outbox);
+		const native = fileRunFiles(dir);
+		f.files.accounting = native.accounting;
+		f.files.terminalEvidence = native.terminalEvidence;
+		await instrument(f.files);
+		f.github.add(labeled(14));
+		setup(f);
+		const controller = f.start();
+
+		for (let tick = 0; tick < 4; tick++) {
+			await once(controller);
+			f.clock.t += 600_000;
+		}
+
+		const row = (await outbox.scan())?.[0]?.row?.row;
+		assert.ok(row?.v === 2, "a version 2 row");
+
+		return { ...f, dir, row };
+	}
+
+	it("names the stage allowance a budget-exhausted stage spent", async () => {
+		const { row } = await causeWorld((f) => {
+			f.executor.behaviors = [{ kind: "budget", usage: 900 }];
+		});
+
+		assert.deepEqual(row.outcome, {
+			kind: "budget_exhausted",
+			stage: "specify",
+			cap: { kind: "known", value: "stage_tokens" },
+		});
+		assert.deepEqual(row.failure, {
+			kind: "known",
+			value: {
+				stage: "specify",
+				class: "budget",
+				reason: "stage_tokens",
+				failedVisibleChecks: [],
+				retainedPatch: null,
+			},
+		});
+		assert.deepEqual(row.acceptAttempts, { kind: "known", value: [] });
+	});
+
+	it("names the run cap when retries spend the run's tokens", async () => {
+		const { row } = await causeWorld((f) => {
+			f.executor.behaviors = [{ kind: "fail", usage: 500_000 }];
+		});
+
+		assert.deepEqual(row.outcome, {
+			kind: "budget_exhausted",
+			stage: "specify",
+			cap: { kind: "known", value: "run_tokens" },
+		});
+		assert.deepEqual(
+			row.failure?.kind === "known" && [
+				row.failure.value.class,
+				row.failure.value.reason,
+			],
+			["budget", "run_tokens"],
+		);
+	});
+
+	it("names a base_timeout refusal and records the refused accept attempt", async () => {
+		const { row } = await causeWorld((f) => {
+			f.executor.behaviors = [{ kind: "pass", usage: 10 }];
+			f.executor.acceptBehavior = { kind: "pass", usage: 20 };
+			f.executor.baseOutcome = "base_timeout";
+		});
+
+		assert.deepEqual(row.outcome, {
+			kind: "failed",
+			stage: "accept",
+			cause: { kind: "known", value: "base_refused" },
+		});
+		assert.deepEqual(row.failure, {
+			kind: "known",
+			value: {
+				stage: "accept",
+				class: "base",
+				reason: "base_timeout",
+				failedVisibleChecks: [],
+				retainedPatch: null,
+			},
+		});
+		assert.deepEqual(row.acceptAttempts, {
+			kind: "known",
+			value: [{ attempt: 1, disposition: "base_refused" }],
+		});
+
+		const accept =
+			row.stages.kind === "known"
+				? row.stages.value.find((s) => s.stage === "accept")
+				: undefined;
+
+		assert.deepEqual(
+			accept?.attempts.kind === "known" && accept.attempts.value.refused,
+			1,
+		);
+	});
+
+	it("names a provider refusal in the row and in status --json", async () => {
+		const { row, dir } = await causeWorld((f) => {
+			f.executor.behaviors = [{ kind: "refuse", usage: 40 }];
+		});
+
+		const expected = {
+			kind: "known",
+			value: {
+				stage: "specify",
+				class: "provider",
+				reason: "refused",
+				failedVisibleChecks: [],
+				retainedPatch: null,
+			},
+		};
+
+		assert.deepEqual(row.failure, expected);
+		assert.deepEqual((await readRunCharges(dir, runOf(14), 0)).terminal, {
+			outcome: row.outcome,
+			failure: expected,
+		});
 	});
 });
