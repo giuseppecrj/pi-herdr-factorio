@@ -153,17 +153,11 @@ describe("parseWorkflow", () => {
 		assert.equal(parsed.config.checkpoints.approveMerge.mode, "always");
 
 		for (const stage of MODEL_STAGES) {
-			assert.equal(
-				parsed.config.stages[stage].model,
-				stage === "accept" ? "anthropic/claude-opus-5-5" : "openai/gpt-6.1-sol",
-			);
+			assert.equal(parsed.config.stages[stage].model, "openai/gpt-6.1-sol");
 			assert.ok(parsed.guidance.stages[stage], `${stage} has guidance`);
 		}
 
-		assert.equal(
-			parsed.config.stages.review.codeReviewModel,
-			"anthropic/claude-sonnet-5-5",
-		);
+		assert.equal(parsed.config.stages.review.codeReviewModel, null);
 		assert.equal(parsed.config.stages.accept.fallbackModel, null);
 		assert.equal(
 			parsed.config.stages.review.fallbackModel,
@@ -514,14 +508,9 @@ describe("parseWorkflow", () => {
 	it("lets code-review inherit review.model when the seat key is absent", () => {
 		const real = readFileSync(WORKFLOW_PATH, "utf8");
 
-		const inherited = real.replace(
-			/\n    seats:\n      code-review:\n        model: [^\n]+/,
-			"",
-		);
+		assert.doesNotMatch(real, /\n    seats:/);
 
-		assert.notEqual(inherited, real);
-
-		const parsed = parse(inherited);
+		const parsed = parse(real);
 
 		assert.equal(parsed.kind, "valid");
 

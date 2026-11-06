@@ -31,7 +31,7 @@ stages:
     wall_ms: 900000
     stall_ms: 300000
   accept:
-    model: anthropic/claude-opus-5-5
+    model: openai/gpt-6.1-sol
     max_turns: 20
     wall_ms: 900000
     stall_ms: 300000
@@ -47,9 +47,6 @@ stages:
   review:
     model: openai/gpt-6.1-sol
     fallback_model: openai/gpt-6.1-terra
-    seats:
-      code-review:
-        model: anthropic/claude-sonnet-5-5
     max_turns: 20
     wall_ms: 900000
     stall_ms: 300000
@@ -90,4 +87,4 @@ The controller publishes the patch and held-out checks, dispatches main's gates 
 
 ## review
 
-Review the full diff read-only against the contract in fresh code-review, security-review and simplify sessions, plus ultrareview for deterministic high-risk changes. Judge every supplied judge-only scenario. Only concrete bugs, security defects, broken contract lines and failed judgments block. Simplify is advisory and never edits. The security seat alone retries a recorded refusal once on the configured fallback. The code-review seat runs Anthropic and the security, simplify and ultrareview seats run OpenAI, like the builder. A seat is cross-family only when the gateway observed Anthropic answering it; certification records `r8` complete only for an OpenAI builder with an Anthropic accept author and an Anthropic blocking seat. Blocking results share two repair rounds with failed CI; every repair is rebuilt, revalidated and reviewed on its new SHA.
+Review the full diff read-only against the contract in fresh code-review, security-review and simplify sessions, plus ultrareview for deterministic high-risk changes. Judge every supplied judge-only scenario. Only concrete bugs, security defects, broken contract lines and failed judgments block. Simplify is advisory and never edits. The security seat alone retries a recorded refusal once on the configured fallback. Every seat runs OpenAI, like the builder, so every seat is context-isolated, same family, not cross-family, and certification records `r8` as incomplete. Blocking results share two repair rounds with failed CI; every repair is rebuilt, revalidated and reviewed on its new SHA.
