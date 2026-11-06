@@ -4289,10 +4289,7 @@ export class Orchestrator {
 			if (spent === null || wallMs <= 0) {
 				run.usage += prior;
 				this.state.totals.usage += prior;
-				this.#stop(
-					run,
-					budgetCause(stage, spent === null ? "stage_tokens" : "wall"),
-				);
+				this.#stop(run, budgetCause(stage, wallMs <= 0 ? "wall" : null));
 				this.#input.log("launch_refused", {
 					issue: run.issue,
 					runId: run.runId,

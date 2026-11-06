@@ -2027,6 +2027,44 @@ describe("Orchestrator base qualification", () => {
 		});
 	});
 
+	it("never names a cap on the row when a feedback attempt's spend is unknown", async () => {
+		const dir = stateDir();
+		const outbox = fileLedgerOutbox(dir);
+		const { github, executor, files, clock, start } = world(null, outbox);
+		files.accounting = fileRunFiles(dir).accounting;
+		await instrument(files);
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehaviors = [{ kind: "pass", usage: 20 }, { kind: "hang" }];
+		executor.acceptBehavior = { kind: "pass", usage: 20 };
+		executor.baseOutcomes = ["preservation_failed", "ready"];
+		executor.baseReceipt = (binding) => refusedReceipt(binding, FEEDBACK);
+		executor.spentBy.set("accept-1", 20);
+		const first = start();
+
+		for (let tick = 0; tick < 6; tick++) {
+			await first.tick();
+			await settle();
+		}
+
+		await drive(start(), clock);
+		await drive(start(), clock);
+		assert.equal(
+			statuses(github, 14).at(-1)?.endsWith(":budget_exhausted"),
+			true,
+		);
+
+		const row = (await outbox.scan())?.[0]?.row?.row;
+		assert.ok(row?.v === 2);
+		assert.equal(row.outcome.kind, "budget_exhausted");
+		assert.ok(row.outcome.kind === "budget_exhausted");
+		assert.equal(row.outcome.cap.kind, "unavailable");
+		assert.notEqual(
+			row.failure?.kind === "known" && row.failure.value.reason,
+			"stage_tokens",
+		);
+	});
+
 	function refusedReceipt(
 		binding: BaseCheckInput["binding"],
 		message: string,
