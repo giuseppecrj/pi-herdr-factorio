@@ -5744,6 +5744,7 @@ export class Orchestrator {
 				checkout,
 				identity: `${repo}@${run.workflowSha}${run.stage === "build" && (run.round ?? 0) > 0 ? ` workspace-r${run.round}-${run.attempt}` : ""}`,
 				repair: run.stage === "build" && (run.round ?? 0) > 0,
+				accept: run.stage === "accept",
 			});
 
 			let build: Prepared["build"];

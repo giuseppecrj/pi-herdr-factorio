@@ -12143,6 +12143,14 @@ describe("held-out acceptance stage", () => {
 	it("runs specify then a fresh accept, stores the suite, and claims build after one redacted summary", async () => {
 		const { github, executor, files, start } = world();
 		github.add(labeled(14, { body: "PRIVATE-ISSUE-TRANSCRIPT server/cli.ts" }));
+		executor.tree.set(
+			"test/cli.test.ts",
+			"import test from 'node:test';\nimport { VERSION } from '../server/cli.ts';\ntest('public harness', () => {});",
+		);
+		executor.tree.set(
+			"test/acceptance/14/checks/secret.test.ts",
+			"PRIVATE-ORACLE",
+		);
 		executor.behaviors = [{ kind: "pass", usage: 100 }];
 		executor.acceptBehavior = { kind: "pass", usage: 20 };
 		const report = await once(start());
@@ -12172,6 +12180,9 @@ describe("held-out acceptance stage", () => {
 		assert.ok(accept.prompt.includes(MAIN_SHA));
 		assert.ok(accept.prompt.includes('"id":"A1"'));
 		assert.ok(accept.prompt.includes("export const VERSION"));
+		assert.match(accept.prompt, /test_harness/);
+		assert.match(accept.prompt, /public harness/);
+		assert.doesNotMatch(accept.prompt, /secret\.test|PRIVATE-ORACLE/);
 		assert.match(accept.prompt, /lines \d+-\d+ of \d+; omitted=/);
 		assert.match(accept.prompt, /checkout=/);
 		assert.ok((accept.source?.bytes ?? Infinity) <= 6144);
