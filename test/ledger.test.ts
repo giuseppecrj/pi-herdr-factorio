@@ -13,6 +13,7 @@ import {
 	ledgerRowOf,
 	pumpLedger,
 	terminalFailureOf,
+	ledgerEfficiency,
 	type LedgerOutbox,
 	indexLedger,
 	ledgerApiOf,
@@ -25,6 +26,7 @@ import {
 	type LedgerRowV2,
 } from "../src/ledger.ts";
 import { digestOf, runIdOf } from "../src/run.ts";
+import { unknownEfficiency } from "../server/sandbox/result.ts";
 import { isGitSha, type GitSha } from "../src/workflow.ts";
 import { LedgerGit, repo } from "./ledger-git.ts";
 import { TRUSTED_RUN_CAP } from "./fake-ticket-adapter.ts";
@@ -659,6 +661,20 @@ describe("ledger row codec", () => {
 			() => ledgerRowOf({ ...base, v: 2 }),
 			/missing_key|unexpected_keys/,
 		);
+	});
+
+	it("round-trips v3 efficiency, while v1/v2 bytes and unknown facts stay unchanged", () => {
+		const base = rowInput(10);
+		const facts = { ...unknownEfficiency(), assistantTurns: 4, modelRequests: 5, inputTokens: 600, outputTokens: 40, firstInputTokens: 80, lastInputTokens: 160, maxInputTokens: 200, initialPromptBytes: 2000, initialSourceBytes: 500, excerptOmissions: 2, sourceCapHits: 0, guardStops: 1 };
+		const v1 = ledgerRow(base);
+		const v2 = ledgerRow({ ...base, v: 2, failure: null, acceptAttempts: { kind: "unavailable", reason: "not_instrumented" } });
+		const v3 = ledgerRowOf({ ...v2.row, v: 3, efficiency: facts, stages: base.stages.kind === "known" ? { kind: "known", value: base.stages.value.map(s => ({ ...s, efficiency: facts })) } : base.stages });
+		assert.equal(v3.row.v, 3);
+		assert.deepEqual(ledgerEfficiency(v3.row), facts);
+		assert.deepEqual(ledgerEfficiency(v1.row), unknownEfficiency());
+		assert.deepEqual(ledgerEfficiency(v2.row), unknownEfficiency());
+		for (const frozen of [v1, v2, v3]) assert.deepEqual(frozenRowOf(frozen.bytes)?.bytes, frozen.bytes);
+		assert.throws(() => ledgerRowOf({ ...v3.row, efficiency: { ...facts, inputTokens: -1 } }), /invalid_count/);
 	});
 
 	it("parses, validates and indexes 1,000 varied rows in under one second", () => {
