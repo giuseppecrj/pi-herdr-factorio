@@ -1040,12 +1040,14 @@ export async function runStage(
 		fallback: FallbackRecord | null,
 		egress: StageReceipt["egress"],
 		text: string | null = null,
-		evidence: { readonly journal: string | null; readonly vetoed: boolean } = {
-			journal: null,
-			vetoed: false,
-		},
+		evidence?: { readonly journal: string | null; readonly vetoed: boolean },
 	): Promise<StageResult> => {
-		const outcome = evidence.vetoed
+		const journal =
+			evidence === undefined
+				? ((await host.readJournal?.().catch(() => null)) ?? null)
+				: evidence.journal;
+
+		const outcome = evidence?.vetoed
 			? UNUSABLE
 			: finalOutcome(primary, fallback);
 
@@ -1053,7 +1055,7 @@ export async function runStage(
 			host.readJournal === undefined
 				? undefined
 				: familyFromJournal({
-						journal: evidence.journal,
+						journal,
 						requested: fallback?.requested ?? input.settings.model,
 						superseded: fallback === null ? null : primaryRoute,
 					});
@@ -1093,7 +1095,7 @@ export async function runStage(
 				pricing: "unavailable",
 				efficiency: {
 					...ledger.efficiency,
-					...requestEfficiency(evidence.journal),
+					...requestEfficiency(journal),
 					guardStops:
 						ledger.efficiency.guardStops === null
 							? null
