@@ -37,6 +37,8 @@ import {
 	contractKeyOf,
 	inert,
 	inlined,
+	sourceExcerpts,
+	renderInlined,
 	namedFiles,
 	parseSpecifyOutput,
 	type Question,
@@ -697,6 +699,115 @@ describe("questions and summary comments", () => {
 			runId,
 			digest: contractDigest,
 		});
+	});
+});
+
+describe("evidence-first source excerpts", () => {
+	const text = Array.from(
+		{ length: 500 },
+		(_, n) => `line ${n + 1}: ${"x".repeat(60)}`,
+	).join("\n");
+	const checkout = {
+		files: ["a.ts", "empty.ts"],
+		read: async (path: string) => (path === "a.ts" ? text : ""),
+	};
+	const select = (
+		evidence: { path: string; start: number; end: number; fact: string }[],
+		repair = false,
+	) =>
+		sourceExcerpts({
+			files: checkout.files,
+			evidence,
+			checkout,
+			identity: "repo@base",
+			repair,
+		});
+
+	it("keeps deep cited facts, merges nearby ranges and labels real lines and omissions", async () => {
+		const shown = await select([
+			{ path: "a.ts", start: 400, end: 402, fact: "deep block" },
+			{ path: "a.ts", start: 405, end: 407, fact: "nearby" },
+		]);
+		const source = shown.map(renderInlined).join("\n\n");
+		assert.match(source, /line 400:/);
+		assert.match(source, /line 407:/);
+		assert.doesNotMatch(source, /line 1:/);
+		assert.equal(shown.filter((f) => f.path === "a.ts").length, 1);
+		assert.match(source, /lines \d+-\d+ of 500/);
+		assert.match(source, /omitted=true/);
+		assert.match(source, /repo@base/);
+		assert.ok(Buffer.byteLength(source) <= 6144);
+	});
+
+	it("rejects zero, reversed, partially past-EOF and fully past-EOF locations without mutating evidence", async () => {
+		for (const [start, end] of [
+			[0, 1],
+			[499, 501],
+			[501, 502],
+			[20, 10],
+		]) {
+			const evidence = [
+				{ path: "a.ts", start: start ?? 0, end: end ?? 0, fact: "old" },
+			];
+			const before = JSON.stringify(evidence);
+			const source = (await select(evidence)).map(renderInlined).join("\n");
+			assert.match(source, /fallback_stale/);
+			assert.match(source, /grep/);
+			assert.match(source, /line 1:/);
+			assert.equal(JSON.stringify(evidence), before);
+		}
+	});
+
+	it("handles empty files, missing evidence, EOF and trailing newlines explicitly", async () => {
+		const source = (
+			await select([{ path: "a.ts", start: 500, end: 500, fact: "EOF" }])
+		)
+			.map(renderInlined)
+			.join("\n");
+		assert.match(source, /line 500:/);
+		assert.match(source, /empty file; total=0/);
+		assert.match(source, /fallback_missing/);
+		const trailing = await sourceExcerpts({
+			files: ["a.ts"],
+			evidence: [{ path: "a.ts", start: 2, end: 2, fact: "blank EOF" }],
+			checkout: { files: ["a.ts"], read: async () => "x\n" },
+			identity: "base",
+		});
+		assert.match(trailing.map(renderInlined).join("\n"), /lines 1-2 of 2/);
+	});
+
+	it("regenerates repair text from the workspace and marks base citations as hints", async () => {
+		let current = text;
+		const args = {
+			files: ["a.ts"],
+			evidence: [{ path: "a.ts", start: 400, end: 402, fact: "base location" }],
+			checkout: { files: ["a.ts"], read: async () => current },
+			identity: "workspace-r1",
+			repair: true,
+		};
+		const first = (await sourceExcerpts(args)).map(renderInlined).join("\n");
+		current = "shifted workspace\n";
+		const second = (await sourceExcerpts(args)).map(renderInlined).join("\n");
+		assert.match(first, /base citations are hints/);
+		assert.match(second, /shifted workspace/);
+		assert.match(second, /fallback_stale/);
+		assert.notEqual(first, second);
+	});
+
+	it("bounds multibyte source and omission labels together at 16 KiB", async () => {
+		const shown = await sourceExcerpts({
+			files: ["a.ts"],
+			evidence: [{ path: "a.ts", start: 1, end: 100, fact: "wide" }],
+			checkout: {
+				files: ["a.ts"],
+				read: async () => `${"€".repeat(100)}\n`.repeat(100),
+			},
+			identity: "base",
+		});
+		const source = shown.map(renderInlined).join("\n\n");
+		assert.ok(Buffer.byteLength(source) <= 16 * 1024);
+		assert.match(source, /omitted=true/);
+		assert.ok(!source.includes("\ufffd"));
 	});
 });
 

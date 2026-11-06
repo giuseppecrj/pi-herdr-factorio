@@ -86,7 +86,12 @@ import {
 } from "../../server/sandbox/json.ts";
 import { LineSplitter } from "../../server/sandbox/lines.ts";
 import { SseMeter } from "../../server/sandbox/meter.ts";
-import type { StageReceipt } from "../../server/sandbox/result.ts";
+import {
+	requestEfficiency,
+	aggregateEfficiency,
+	unknownEfficiency,
+	type StageReceipt,
+} from "../../server/sandbox/result.ts";
 import type { RouteId, RouteTable } from "../../server/sandbox/routes.ts";
 import {
 	type AssistantEnd,
@@ -430,6 +435,131 @@ function input(
 		...overrides,
 	};
 }
+
+describe("execution efficiency facts", () => {
+	const journal = (records: JsonValue[]) =>
+		records.map((record) => JSON.stringify(record)).join("\n") + "\n";
+	const dispatch = (req: number) => ({ kind: "dispatch", req });
+	const result = (
+		req: number,
+		inputTokens: number | null,
+		outputTokens: number | null,
+	) => ({ kind: "result", req, inputTokens, outputTokens });
+
+	it("counts actual dispatched requests once, not assistant turns, and preserves first/last/max metering", () => {
+		const facts = requestEfficiency(
+			journal([
+				dispatch(1),
+				result(1, 100, 10),
+				result(1, 100, 10),
+				dispatch(2),
+				result(2, 180, 20),
+				dispatch(3),
+				result(3, 120, 30),
+			]),
+		);
+		assert.deepEqual(facts, {
+			modelRequests: 3,
+			inputTokens: 400,
+			outputTokens: 60,
+			firstInputTokens: 100,
+			lastInputTokens: 120,
+			maxInputTokens: 180,
+		});
+	});
+
+	it("keeps missing, cut and unsettled metering unavailable, never zero", () => {
+		for (const text of [
+			null,
+			"",
+			journal([dispatch(1), result(1, null, null)]),
+			journal([dispatch(1)]) + '{"kind":"dispatch"',
+		]) {
+			const facts = requestEfficiency(text);
+			assert.equal(facts.inputTokens, null);
+			assert.equal(facts.outputTokens, null);
+		}
+		assert.equal(requestEfficiency(journal([dispatch(1)])).modelRequests, 1);
+	});
+
+	it("sums executions without pretending missing facts are zero", () => {
+		const a = {
+			...unknownEfficiency(),
+			assistantTurns: 2,
+			modelRequests: 3,
+			inputTokens: 400,
+			outputTokens: 60,
+			firstInputTokens: 100,
+			lastInputTokens: 120,
+			maxInputTokens: 180,
+		};
+		const total = aggregateEfficiency([
+			a,
+			{
+				...a,
+				firstInputTokens: 200,
+				lastInputTokens: 220,
+				maxInputTokens: 280,
+			},
+		]);
+		assert.equal(total.assistantTurns, 4);
+		assert.equal(total.modelRequests, 6);
+		assert.equal(total.inputTokens, 800);
+		assert.equal(total.firstInputTokens, 100);
+		assert.equal(total.lastInputTokens, 220);
+		assert.equal(total.maxInputTokens, 280);
+		assert.equal(
+			aggregateEfficiency([a, unknownEfficiency()]).inputTokens,
+			null,
+		);
+	});
+
+	it("records assistant ends, UTF-8 tool-result text bytes, prompt/source bytes and guard codes without changing charges", async () => {
+		const h = harness([
+			replayer([
+				started("x"),
+				{ type: "agent_start" },
+				{ type: "turn_start" },
+				assistant({ tokens: 10 }),
+				{
+					type: "message_end",
+					message: {
+						role: "toolResult",
+						content: [
+							{ type: "text", text: "€\nOK" },
+							{ type: "image", data: "not text" },
+						],
+					},
+				},
+				{ type: "agent_settled", aborted: false },
+			]),
+		]);
+		const completed = await runStage(
+			input({
+				stage: "build",
+				source: { bytes: 33, omissions: 2, capHit: false },
+			}),
+			{
+				...h.host,
+				readJournal: async () => journal([dispatch(1), result(1, 8, 2)]),
+			},
+		);
+		assert.equal(completed.usage, 10);
+		assert.equal(completed.receipt.efficiency?.assistantTurns, 1);
+		assert.equal(
+			completed.receipt.efficiency?.toolResultBytes,
+			Buffer.byteLength("€\nOK"),
+		);
+		assert.equal(
+			completed.receipt.efficiency?.initialPromptBytes,
+			Buffer.byteLength(input().prompt),
+		);
+		assert.equal(completed.receipt.efficiency?.initialSourceBytes, 33);
+		assert.equal(completed.receipt.efficiency?.excerptOmissions, 2);
+		assert.equal(completed.receipt.efficiency?.inputTokens, 8);
+		assert.equal(completed.receipt.guardStop, null);
+	});
+});
 
 describe("durable execution high water", () => {
 	it("restores an exhausted token high water before opening a gateway", async () => {
