@@ -64,6 +64,7 @@ import {
 	checkIdentity,
 	type LogFields,
 	Orchestrator,
+	type OrchestratorInput,
 	type RunFiles,
 	type StageExecutor,
 	type StageLaunch,
@@ -92,6 +93,7 @@ import {
 } from "../src/diagnosis.ts";
 import { advance } from "../src/stages.ts";
 import {
+	AUTONOMY_DIGEST,
 	ledgerApiOf,
 	parseLedger,
 	pumpLedger,
@@ -813,6 +815,10 @@ function runOf(issue: number): Digest {
 
 type Wire = { intercept: Exec | null };
 
+type WorldOptions = {
+	verification: OrchestratorInput["verification"];
+};
+
 function world(scope: readonly number[] | null = null, ledger?: LedgerOutbox) {
 	const github = new FakeGitHub();
 	const clock = new FakeClock();
@@ -822,6 +828,9 @@ function world(scope: readonly number[] | null = null, ledger?: LedgerOutbox) {
 	const executor = new FakeExecutor();
 	const logs: { event: string; fields: LogFields }[] = [];
 	const wire: Wire = { intercept: null };
+
+	/** The verification pin each started controller receives, as `serve` reads it from `verification.json`. */
+	const options: WorldOptions = { verification: null };
 
 	executor.workflow = () => github.workflow;
 	const published = new Map<Digest, { number: number; head: GitSha }>();
@@ -920,9 +929,10 @@ function world(scope: readonly number[] | null = null, ledger?: LedgerOutbox) {
 			clock,
 			scope,
 			log: (event, fields) => logs.push({ event, fields }),
+			verification: options.verification,
 		});
 
-	return { github, clock, store, files, executor, logs, wire, start };
+	return { github, clock, store, files, executor, logs, wire, options, start };
 }
 
 function statuses(github: FakeGitHub, issue: number): string[] {
@@ -4096,12 +4106,14 @@ describe("admission accounting policy", () => {
 			workflowSha: sha(MAIN_SHA),
 			workflowDigest: digestOf(TRUSTED_WORKFLOW),
 			startedAt: new Date(START).toISOString(),
+			runTokenCap: 500_000,
 		};
 
 		assert.equal(await files.prepareRun?.(input), true);
 		const pinned = await files.accounting?.start(input.runId);
 		assert.ok(pinned);
 		assert.equal(pinned.policy.gates.kind, "known");
+		assert.equal(pinned.runTokenCap, 500_000);
 		assert.equal(
 			statSync(join(dir, "accounting", input.runId, "policy.json")).mode &
 				0o777,
@@ -4110,6 +4122,21 @@ describe("admission accounting policy", () => {
 		assert.equal(
 			await files.prepareRun?.({ ...input, runId: runOf(15) }),
 			true,
+		);
+		assert.equal(
+			await files.prepareRun?.({
+				...input,
+				runId: runOf(17),
+				runTokenCap: null,
+			}),
+			true,
+		);
+		assert.equal(
+			Object.hasOwn(
+				(await files.accounting?.start(runOf(17))) ?? {},
+				"runTokenCap",
+			),
+			false,
 		);
 		assert.equal(fetched, 1);
 		assert.equal(
@@ -9181,8 +9208,11 @@ function reportOf(verdict: import("../src/run.ts").Verdict) {
 }
 
 describe("controller-only validate", () => {
-	async function waitingRun() {
+	async function waitingRun(
+		setup: (f: ReturnType<typeof world>) => void = () => {},
+	) {
 		const f = world();
+		setup(f);
 		f.github.add(labeled(14));
 		f.executor.behaviors = [{ kind: "pass", usage: 10 }];
 		f.executor.acceptBehavior = { kind: "pass", usage: 7 };
@@ -9226,8 +9256,11 @@ describe("controller-only validate", () => {
 		return { ...f, controller };
 	}
 
-	async function reviewingRun(outcome?: JudgmentOutcome) {
-		const f = await waitingRun();
+	async function reviewingRun(
+		outcome?: JudgmentOutcome,
+		setup?: (f: ReturnType<typeof world>) => void,
+	) {
+		const f = await waitingRun(setup);
 		const contract = await f.files.readContract(runOf(14));
 		assert.equal(contract.kind, "found");
 
@@ -10178,6 +10211,123 @@ describe("controller-only validate", () => {
 			undefined,
 		);
 	});
+
+	for (const captured of [false, true])
+		it(`keeps a verification run's landed row verification when a restart observes the merge before any workflow load (${captured ? "captured" : "legacy"} admission pin)`, async () => {
+			const dir = stateDir();
+			const native = fileRunFiles(dir);
+
+			const pin = {
+				digest: digestOf("verification manifest"),
+				tokenCap: 12_000,
+			};
+
+			const f = await reviewingRun(undefined, (world) => {
+				world.options.verification = pin;
+				Object.assign(world.files, {
+					ledger: native.ledger,
+					accounting: native.accounting,
+					terminalEvidence: native.terminalEvidence,
+				});
+				world.files.prepareRun = (input) => {
+					assert.equal(input.runTokenCap, 500_000);
+
+					const start = {
+						v: 1,
+						runId: input.runId,
+						startedAt: input.startedAt,
+						policy: {
+							workflowSha: input.workflowSha,
+							workflowDigest: input.workflowDigest,
+							gates: {
+								kind: "known",
+								value: {
+									sourceSha: input.workflowSha,
+									digest: digestOf("gates"),
+								},
+							},
+							autonomy: {
+								approveMerge: "always",
+								land: "propose",
+								digest: AUTONOMY_DIGEST,
+							},
+						},
+					} as const;
+
+					// A legacy pin is one an earlier build wrote, with no captured run cap.
+					return native.accounting!.begin(
+						captured ? { ...start, runTokenCap: input.runTokenCap } : start,
+					);
+				};
+			});
+
+			f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+			await once(f.controller);
+			await f.controller.tick();
+			await f.controller.tick();
+			assert.equal(f.files.claims.get(runOf(14))?.status, "waiting");
+			const policy = (await native.accounting?.start(runOf(14)))?.policy;
+			assert.ok(policy);
+
+			const port = controllerCandidatePort({
+				stateDir: dir,
+				exec: async () => ({
+					code: 0,
+					stderr: "",
+					stdout: JSON.stringify({
+						number: 99,
+						head: {
+							sha: "c".repeat(40),
+							ref: `factory/pr/14-${runOf(14).slice(0, 12)}`,
+							repo: { full_name: repo },
+						},
+						base: { ref: "main", repo: { full_name: repo } },
+						user: { login: BOT_LOGIN, type: "Bot" },
+						body: `<!-- factory:pr ${runOf(14)} -->`,
+						state: "closed",
+						draft: false,
+						merged: true,
+						merge_commit_sha: "e".repeat(40),
+						merged_by: null,
+						merged_at: "2026-10-29T02:01:00Z",
+					}),
+				}),
+			});
+
+			assert.ok(f.executor.candidate);
+			f.executor.candidate.observe = port.observe;
+
+			// The restarted controller cannot load WORKFLOW.md at all, so nothing
+			// it writes can lean on a workflow load.
+			f.wire.intercept = (command, args) =>
+				args.some((arg) => arg.includes("WORKFLOW.md"))
+					? Promise.resolve({ code: 1, stdout: "", stderr: "HTTP 502" })
+					: f.github.exec(command, args);
+			const restarted = f.start();
+			const report = await restarted.tick();
+			assert.deepEqual(report.dispatch.reasons, ["workflow_unavailable"]);
+			assert.equal(statuses(f.github, 14).at(-1)?.endsWith(":landed"), true);
+
+			const terminal = JSON.parse(
+				readFileSync(join(dir, "ledger", runOf(14), "terminal.json"), "utf8"),
+			);
+
+			assert.equal(terminal.outcome.kind, "landed");
+			assert.deepEqual(terminal.provenance, {
+				kind: "verification",
+				policy,
+				verificationDigest: pin.digest,
+				trustedRunTokenCap: captured
+					? 500_000
+					: { kind: "unavailable", reason: "legacy_not_recorded" },
+				effectiveRunTokenCap: pin.tokenCap,
+			});
+			await restarted.tick();
+			const row = (await native.ledger?.scan())?.[0]?.row?.row;
+			assert.ok(row);
+			assert.deepEqual(row.provenance, terminal.provenance);
+			assert.equal(row.gaps.includes("legacy_not_recorded"), !captured);
+		});
 
 	it("persists a completed candidate review disposition before its handoff", async () => {
 		const f = await reviewingRun();

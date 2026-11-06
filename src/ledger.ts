@@ -239,18 +239,28 @@ const policy = record({
 	}),
 });
 
-const runStartCodec = record({
+const startFields = {
 	v: literal(1),
 	runId: digest,
 	startedAt: instant,
 	policy,
-});
+};
 
-export type RunStart = Out<typeof runStartCodec>;
+/** A pin written before the run's trusted token cap was captured. */
+const legacyRunStartCodec = record(startFields);
+
+const runStartCodec = record({ ...startFields, runTokenCap: positive });
+
+/** `runTokenCap` is the trusted `maxTokensPerRun` of the admitted workflow, absent in older pins. */
+export type RunStart = Out<typeof legacyRunStartCodec> & {
+	readonly runTokenCap?: number;
+};
 
 export function parseRunStart(value: JsonValue | undefined): RunStart | null {
 	try {
-		const start = runStartCodec(value);
+		const start: RunStart = Object.hasOwn(objectOf(value) ?? {}, "runTokenCap")
+			? runStartCodec(value)
+			: legacyRunStartCodec(value);
 
 		if (
 			(start.policy.gates.kind === "known" &&
@@ -266,13 +276,25 @@ export function parseRunStart(value: JsonValue | undefined): RunStart | null {
 	}
 }
 
+const unavailableCap = record({ kind: literal("unavailable"), reason: gap });
+
+/** A run token cap, or why it was not recorded. Older rows hold only numbers. */
+export type RunCap = number | Out<typeof unavailableCap>;
+
+export function isKnownCap(cap: RunCap): cap is number {
+	return !(cap instanceof Object);
+}
+
+const runCap: Codec<RunCap> = (value) =>
+	objectOf(value) === null ? positive(value) : unavailableCap(value);
+
 const provenance = tagged({
 	production: { policy },
 	verification: {
 		policy,
 		verificationDigest: digest,
-		trustedRunTokenCap: positive,
-		effectiveRunTokenCap: positive,
+		trustedRunTokenCap: runCap,
+		effectiveRunTokenCap: runCap,
 	},
 	legacy_import: {
 		workflowSha: sha,
@@ -520,11 +542,14 @@ function invariant(row: LedgerRow): string | null {
 			return "landing_unverified";
 	}
 
-	if (
-		row.provenance.kind === "verification" &&
-		row.provenance.effectiveRunTokenCap > row.provenance.trustedRunTokenCap
-	)
-		return "verification_cap_raised";
+	if (row.provenance.kind === "verification") {
+		const { trustedRunTokenCap: trusted, effectiveRunTokenCap: effective } =
+			row.provenance;
+
+		if (isKnownCap(trusted) && isKnownCap(effective) && effective > trusted)
+			return "verification_cap_raised";
+	}
+
 	const stages = row.stages.kind === "known" ? row.stages.value : [];
 	const order = stages.map((item) => STAGES.indexOf(item.stage));
 
@@ -1043,8 +1068,8 @@ export type TerminalFacts = {
 	readonly previousRunId?: Digest | null;
 	readonly verification?: {
 		readonly digest: Digest;
-		readonly trustedRunTokenCap: number;
-		readonly effectiveRunTokenCap: number;
+		readonly trustedRunTokenCap: RunCap;
+		readonly effectiveRunTokenCap: RunCap;
 	} | null;
 };
 
