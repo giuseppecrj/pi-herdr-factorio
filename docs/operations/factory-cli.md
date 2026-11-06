@@ -470,7 +470,7 @@ Each command does these steps in order and stops at the first that fails:
 - After the identity check and before the first tick, the controller pins `<state-dir>/verification.json`, mode 0600. The file holds the repository, the sorted issue scope and `n`. The first run requires a state directory that holds nothing but `controller.lock`. Each later run must name the same repository, scope and cap.
 - It logs `controller_refused`, releases the lock and exits 1 with `verification_state_not_new` when the state directory already holds other state, and with `verification_manifest_mismatch` when the scope or cap changed. Without the flag, a state directory that has the manifest is refused with `verification_state`.
 - The effective run cap is `min(n, usage.max_tokens_per_run)`. Every limit that reads the run cap uses it, including launch allowances, the retry budget and the candidate's token limit.
-- Each terminal row from that directory has `provenance.kind: "verification"`, with the manifest's digest, the trusted cap and the effective cap. Production cohorts exclude these rows.
+- Each terminal row from that directory has `provenance.kind: "verification"`, with the manifest's digest, the trusted cap and the effective cap. The label comes from the state directory's verification pin, never from a workflow load. A cap that no record holds is `unavailable` and listed in `gaps`. Production cohorts exclude these rows.
 
 ### The lock
 
