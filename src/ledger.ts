@@ -12,6 +12,12 @@ import {
 	type LedgerFile,
 } from "./publication.ts";
 import { candidateGenerations, type CandidateState } from "./handoff.ts";
+import {
+	VISIBLE_CHECKS,
+	failedVisibleChecks,
+	type FailureClass,
+	type VisibleCheck,
+} from "./diagnosis.ts";
 import type { TerminalStatus } from "./markers.ts";
 import type { Stage } from "./run.ts";
 import {
@@ -310,6 +316,67 @@ const provenance = tagged({
 	},
 });
 
+/**
+ * Why a run stopped, by class. `budget` reasons are the exhausted cap; the
+ * diagnosis classes carry the `src/diagnosis.ts` reason; `base` carries the
+ * base refusal reason. Version 1 rows never hold the four later causes.
+ */
+export const FAILURE_CLASSES = [
+	"budget",
+	"attempts",
+	"input",
+	"base",
+	"provider",
+	"label",
+	"candidate",
+	"oracle",
+	"infrastructure",
+	"missing_evidence",
+	"review",
+	"handoff",
+] as const;
+
+export type FailureClassName = (typeof FAILURE_CLASSES)[number];
+
+const CAUSES = {
+	attempts: "attempts_exhausted",
+	input: "input_refused",
+	base: "base_refused",
+	provider: "provider_refused",
+	label: "label_write_failed",
+	candidate: "candidate_failed",
+	missing_evidence: "evidence_missing",
+	oracle: "oracle_invalid",
+	infrastructure: "infrastructure_failed",
+	review: "review_failed",
+	handoff: "handoff_stopped",
+} as const satisfies Record<Exclude<FailureClassName, "budget">, string>;
+
+export const BUDGET_CAPS = [
+	"run_tokens",
+	"stage_tokens",
+	"round_tokens",
+	"wall",
+	"turns",
+] as const;
+
+export type BudgetCapName = (typeof BUDGET_CAPS)[number];
+
+const REASON = /^[a-z][a-z0-9_]{0,63}$/;
+
+/** The controller's own record of why a run stopped, before its row freezes. */
+export type TerminalCause = Readonly<{
+	/** The stage that caused the stop, not the run's last projected stage. */
+	stage: Stage;
+	class: FailureClassName;
+	/** A fixed controller code: the cap, diagnosis reason or refusal reason. */
+	reason: string;
+	/** Visible check names only, never held-out content. */
+	failedVisibleChecks?: readonly VisibleCheck[];
+	/** The private patch the stop retains, by digest. */
+	retainedPatch?: Digest | null;
+}>;
+
 const outcome = tagged({
 	needs_info: { stage },
 	released: { stage },
@@ -325,12 +392,16 @@ const outcome = tagged({
 				"evidence_missing",
 				"label_write_failed",
 				"provider_refused",
+				"oracle_invalid",
+				"infrastructure_failed",
+				"review_failed",
+				"handoff_stopped",
 			),
 		),
 	},
 	budget_exhausted: {
 		stage,
-		cap: fact(oneOf("run_tokens", "stage_tokens", "wall", "turns")),
+		cap: fact(oneOf(...BUDGET_CAPS)),
 	},
 	stage_passed: { stage },
 	landed: {
@@ -428,8 +499,7 @@ export function ledgerModelOf(
 	}
 }
 
-const rowFields = {
-	v: literal(1),
+const sharedFields = {
 	runId: digest,
 	repo: repoSlug,
 	issue: positive,
@@ -461,14 +531,60 @@ const rowFields = {
 	contextPressure: fact(record({ truncated: flag, promptCapHit: flag })),
 	redactedReceiptDigests: list(digest),
 	evidence: record({ issueUrl: url, ciUrls: list(url) }),
-	gaps: list(gap),
 };
 
-const rowCodec = record(rowFields);
+const rowCodec = record({ v: literal(1), ...sharedFields, gaps: list(gap) });
 
-export type LedgerRow = Out<typeof rowCodec>;
+const failureFact = fact(
+	record({
+		stage,
+		class: oneOf(...FAILURE_CLASSES),
+		reason: pattern(REASON, "invalid_reason"),
+		failedVisibleChecks: list(oneOf(...VISIBLE_CHECKS)),
+		retainedPatch: nullable(digest),
+	}),
+);
 
-export type LedgerRowInput = Omit<LedgerRow, "gaps">;
+const ACCEPT_DISPOSITIONS = [
+	"model_failed",
+	"model_refused",
+	"budget_stopped",
+	"interrupted",
+	"aborted",
+	"base_refused",
+	"retried",
+	"suite_qualified",
+] as const;
+
+/**
+ * Version 2 adds the stop's cause (`null` unless the run failed or spent a
+ * budget) and each accept attempt's final disposition. Version 1 rows parse
+ * and freeze exactly as they were written.
+ */
+const rowV2Codec = record({
+	v: literal(2),
+	...sharedFields,
+	failure: nullable(failureFact),
+	acceptAttempts: fact(
+		list(
+			record({ attempt: positive, disposition: oneOf(...ACCEPT_DISPOSITIONS) }),
+		),
+	),
+	gaps: list(gap),
+});
+
+export type LedgerRowV1 = Out<typeof rowCodec>;
+
+export type LedgerRowV2 = Out<typeof rowV2Codec>;
+
+export type LedgerRow = LedgerRowV1 | LedgerRowV2;
+
+export type LedgerRowInput =
+	| Omit<LedgerRowV1, "gaps">
+	| Omit<LedgerRowV2, "gaps">;
+
+const codecOf = (value: JsonValue): Codec<LedgerRow> =>
+	fieldOf(objectOf(value), "v") === 2 ? rowV2Codec : rowCodec;
 
 export type LedgerOutcome = LedgerRow["outcome"];
 
@@ -599,6 +715,41 @@ function invariant(row: LedgerRow): string | null {
 	if (!sorted(models)) return "models_unsorted";
 
 	if (!sorted(row.redactedReceiptDigests)) return "receipts_unsorted";
+
+	if (row.v === 2) {
+		const stopped =
+			row.outcome.kind === "failed" || row.outcome.kind === "budget_exhausted";
+
+		if (stopped !== (row.failure !== null)) return "failure_mismatch";
+
+		if (row.failure?.kind === "known") {
+			const cause = row.failure.value;
+			const budget = row.outcome.kind === "budget_exhausted";
+
+			const order = cause.failedVisibleChecks.map((n) =>
+				VISIBLE_CHECKS.indexOf(n),
+			);
+
+			if (
+				(cause.class === "budget") !== budget ||
+				(budget && !BUDGET_CAPS.some((cap) => cap === cause.reason)) ||
+				!order.every((at, index) => index === 0 || (order[index - 1] ?? 0) < at)
+			)
+				return "failure_mismatch";
+		}
+
+		const accepts =
+			row.acceptAttempts.kind === "known" ? row.acceptAttempts.value : [];
+
+		if (
+			!accepts.every(
+				(item, at) =>
+					at === 0 || (accepts[at - 1]?.attempt ?? 0) < item.attempt,
+			)
+		)
+			return "accept_attempts_unordered";
+	}
+
 	const gaps = [...gapsOf(row, new Set())].sort();
 
 	if (JSON.stringify(gaps) !== JSON.stringify(row.gaps)) return "gaps_mismatch";
@@ -629,10 +780,11 @@ export function ledgerRow(input: LedgerRowInput): FrozenRow {
 /** Builds a row from untyped stored input, such as a frozen terminal snapshot. */
 export function ledgerRowOf(input: JsonValue): FrozenRow {
 	const fields = objectOf(input) ?? fail("invalid_object");
-	const canonical = rowCodec({ ...fields, gaps: [] });
+	const codec = codecOf(input);
+	const canonical = codec({ ...fields, gaps: [] });
 	const gaps = [...gapsOf(canonical, new Set())].sort();
 
-	return frozen(rowCodec({ ...canonical, gaps }));
+	return frozen(codec({ ...canonical, gaps }));
 }
 
 export type LedgerLine =
@@ -666,10 +818,10 @@ function lineOf(bytes: Buffer): LedgerLine {
 
 	if (v === null) return { kind: "corrupt", bytes, code: "missing_version" };
 
-	if (v !== 1) return { kind: "unknown_version", bytes };
+	if (v !== 1 && v !== 2) return { kind: "unknown_version", bytes };
 
 	try {
-		const row = frozen(rowCodec(value));
+		const row = frozen(codecOf(value)(value));
 
 		return row.bytes.equals(bytes)
 			? { kind: "known", ...row, bytes }
@@ -1063,6 +1215,8 @@ export type TerminalFacts = {
 	readonly observedAt: string;
 	readonly candidate: CandidateState | null;
 	readonly attemptEnds?: readonly AttemptEnd[] | null;
+	/** Why a failed or budget-exhausted run stopped, when the controller recorded it. */
+	readonly cause?: TerminalCause | null;
 	readonly evidence?: TerminalEvidence;
 	readonly start?: RunStart | null;
 	readonly previousRunId?: Digest | null;
@@ -1101,18 +1255,30 @@ function outcomeOf(facts: TerminalFacts): JsonValue {
 		case "released":
 		case "stage_passed":
 			return { kind: facts.status, stage };
-		case "failed":
+		case "failed": {
+			const cause = causeOf(facts);
+
 			return {
 				kind: "failed",
 				stage,
-				cause: unavailable("not_instrumented"),
+				cause:
+					cause === null || cause.class === "budget"
+						? unavailable("receipt_missing")
+						: known(CAUSES[cause.class]),
 			};
-		case "budget_exhausted":
+		}
+
+		case "budget_exhausted": {
+			const cause = causeOf(facts);
+
 			return {
 				kind: "budget_exhausted",
 				stage,
-				cap: unavailable("not_instrumented"),
+				cap:
+					cause === null ? unavailable("receipt_missing") : known(cause.reason),
 			};
+		}
+
 		case "cancelled":
 			return {
 				kind: "cancelled",
@@ -1147,6 +1313,167 @@ function outcomeOf(facts: TerminalFacts): JsonValue {
 
 			return exhaustive;
 		}
+	}
+}
+
+/** The recorded cause when it agrees with the terminal status, else `null`. */
+function causeOf(facts: TerminalFacts): TerminalCause | null {
+	const cause = facts.cause ?? null;
+	const budget = facts.status === "budget_exhausted";
+
+	if (
+		cause === null ||
+		(facts.status !== "failed" && !budget) ||
+		(cause.class === "budget") !== budget ||
+		!REASON.test(cause.reason) ||
+		(budget && !BUDGET_CAPS.some((cap) => cap === cause.reason))
+	)
+		return null;
+
+	return cause;
+}
+
+function failureOf(facts: TerminalFacts): JsonValue {
+	if (facts.status !== "failed" && facts.status !== "budget_exhausted")
+		return null;
+	const cause = causeOf(facts);
+
+	if (cause === null) return unavailable("receipt_missing");
+
+	return known({
+		stage: cause.stage,
+		class: cause.class,
+		reason: cause.reason,
+		failedVisibleChecks: VISIBLE_CHECKS.filter((name) =>
+			(cause.failedVisibleChecks ?? []).includes(name),
+		),
+		retainedPatch: cause.retainedPatch ?? null,
+	});
+}
+
+const ACCEPT_DISPOSITION = {
+	completed: "suite_qualified",
+	model_failure: "model_failed",
+	refused: "model_refused",
+	base_refused: "base_refused",
+	interrupted: "interrupted",
+	budget_stop: "budget_stopped",
+	aborted: "aborted",
+} as const satisfies Record<
+	AttemptEnd["disposition"],
+	(typeof ACCEPT_DISPOSITIONS)[number]
+>;
+
+/**
+ * Each accept attempt's final disposition. A refusal followed by the one
+ * feedback retry is `retried`; earlier builds recorded it as `refused`.
+ */
+function acceptAttemptsOf(facts: TerminalFacts): JsonValue {
+	if (facts.attemptEnds == null || facts.start == null)
+		return unavailable("receipt_missing");
+
+	return known(
+		facts.attemptEnds
+			.filter((end) => end.stage === "accept" && end.round === 0)
+			.sort((a, b) => a.attempt - b.attempt)
+			.map((end) => ({
+				attempt: end.attempt,
+				disposition:
+					(end.disposition === "refused" ||
+						end.disposition === "base_refused") &&
+					end.next.kind === "retry"
+						? "retried"
+						: ACCEPT_DISPOSITION[end.disposition],
+			})),
+	);
+}
+
+const DIAGNOSIS_STOPS = {
+	diagnosis_missing_evidence: "missing_evidence",
+	diagnosis_oracle: "oracle",
+	diagnosis_infrastructure: "infrastructure",
+	validation_failed: "candidate",
+	repair_limit: "candidate",
+} as const;
+
+/**
+ * Why a candidate handoff stopped, from its durable terminal reason and, for
+ * a validation stop, the current generation's stored diagnosis. A dead end
+ * keeps the failed visible check names and the retained private patch.
+ */
+export function candidateCause(
+	state: CandidateState,
+	diagnosis: FailureClass | null,
+): TerminalCause | null {
+	if (
+		state.kind !== "selected" ||
+		state.work.kind !== "terminal" ||
+		state.work.terminal.kind !== "failed"
+	)
+		return null;
+	const reason = state.work.terminal.reason;
+
+	if (reason === "review_tokens" || reason === "repair_tokens")
+		return {
+			stage: reason === "review_tokens" ? "review" : "build",
+			class: "budget",
+			reason: "round_tokens",
+		};
+
+	if (reason === "run_tokens")
+		return {
+			stage: state.accounts.at(-1)?.execution.stage ?? "validate",
+			class: "budget",
+			reason: "run_tokens",
+		};
+
+	if (reason === "review_attempts" || reason === "review_failed")
+		return { stage: "review", class: "review", reason };
+
+	if (!Object.hasOwn(DIAGNOSIS_STOPS, reason))
+		return { stage: "land", class: "handoff", reason };
+	// SAFETY: `reason` was just checked to be a key of `DIAGNOSIS_STOPS`.
+	const kind = DIAGNOSIS_STOPS[reason as keyof typeof DIAGNOSIS_STOPS];
+	const matched = diagnosis?.kind === kind ? diagnosis : null;
+	const patch = state.current.patch.patchDigest;
+
+	return {
+		stage: "validate",
+		class: kind,
+		reason:
+			matched === null
+				? reason
+				: matched.kind === "oracle"
+					? matched.cause
+					: matched.reason,
+		failedVisibleChecks: failedVisibleChecks(
+			state.current.verdict?.checks ?? null,
+		),
+		retainedPatch: isDigest(patch) ? patch : null,
+	};
+}
+
+/**
+ * The owner-facing stop facts of a stored terminal snapshot, for `status`:
+ * the outcome and, from version 2, the cause. Never a held-out detail.
+ */
+export function terminalFailureOf(value: JsonValue | undefined): JsonValue {
+	try {
+		const object = objectOf(value) ?? fail("invalid_object");
+		const stopped = outcome(object.outcome);
+
+		return {
+			outcome: stopped,
+			failure:
+				object.v === 2
+					? nullable(failureFact)(object.failure)
+					: stopped.kind === "failed" || stopped.kind === "budget_exhausted"
+						? unavailable("legacy_not_recorded")
+						: null,
+		};
+	} catch (error) {
+		if (error instanceof LedgerRowError) return null;
+		throw error;
 	}
 }
 
@@ -1278,7 +1605,7 @@ export function terminalSnapshot(facts: TerminalFacts): JsonValue {
 			: [];
 
 	return {
-		v: 1,
+		v: 2,
 		runId: facts.runId,
 		repo: facts.repo,
 		issue: facts.issue,
@@ -1329,6 +1656,8 @@ export function terminalSnapshot(facts: TerminalFacts): JsonValue {
 		contextPressure: unavailable("not_instrumented"),
 		redactedReceiptDigests: facts.evidence?.redactedReceiptDigests ?? [],
 		evidence: { issueUrl: `${base}/issues/${facts.issue}`, ciUrls },
+		failure: failureOf(facts),
+		acceptAttempts: acceptAttemptsOf(facts),
 	};
 }
 
@@ -1345,6 +1674,7 @@ const attemptEndCodec = record({
 		"refused",
 		"budget_stop",
 		"aborted",
+		"base_refused",
 	),
 	usage: count,
 	next: tagged({

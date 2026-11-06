@@ -74,6 +74,7 @@ import {
 	pumpLedger,
 	parseAttemptEnd,
 	parseRunStart,
+	terminalFailureOf,
 	AUTONOMY_DIGEST,
 	type TerminalEvidence,
 	type LedgerRow,
@@ -3117,6 +3118,7 @@ export async function readTerminalEvidence(
 				model_failure: "failed",
 				interrupted: "interrupted",
 				refused: "refused",
+				base_refused: "refused",
 				budget_stop: "budgetExhausted",
 				aborted: "aborted",
 			} as const;
@@ -3448,6 +3450,13 @@ export async function readRunCharges(
 			reason: "provider_not_reported" as const,
 		},
 		attempts: await fileRunAccounting(stateDir).attempts(runId),
+		terminal: await readFile(
+			join(resolve(stateDir), "ledger", runId, "terminal.json"),
+			"utf8",
+		).then(
+			(text) => terminalFailureOf(parseJsonText(text)),
+			() => null,
+		),
 	};
 }
 

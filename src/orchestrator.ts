@@ -148,7 +148,10 @@ import {
 import { digestOf, isDigest } from "./run.ts";
 import {
 	LedgerRowError,
+	candidateCause,
 	terminalSnapshot,
+	type BudgetCapName,
+	type TerminalCause,
 	type LedgerOutbox,
 	type AttemptEnd,
 	type RunAccounting,
@@ -226,6 +229,7 @@ import {
 	baseRefusalNotice,
 	baseRetryFeedback,
 	diagnosisNotice,
+	failedVisibleChecks,
 	matchingBaseProof,
 	retriedRefusal,
 	retryableBaseReason,
@@ -339,6 +343,10 @@ export interface StageExecutor {
 
 type StageEnd = Pick<StageResult, "kind" | "usage"> & {
 	readonly wallMs?: number;
+	/** The sandbox cap a `budget_exhausted` attempt hit. */
+	readonly cap?: Extract<StageResult, { kind: "budget_exhausted" }>["cap"];
+	/** The structured signal a `refused` attempt reported. */
+	readonly refusal?: StageResult["receipt"]["refusal"];
 	readonly output: string | null;
 	readonly build?: PatchRead;
 	readonly model?: string;
@@ -589,6 +597,8 @@ export type ActiveRun = {
 	acceptWallMs?: number;
 	/** A base refusal notice was posted in this process, so it is the final one. */
 	refusalPosted?: boolean;
+	/** Why the run is ending failed or budget-exhausted, kept for its ledger row. */
+	cause?: TerminalCause;
 	readonly runId: Digest;
 	readonly issue: number;
 	readonly eventId: string;
@@ -777,6 +787,37 @@ const SETTLE_MS = 1000;
 const CLEANUP_GRACE_MS = 5_000;
 
 const DRAIN_POLL_MS = 1000;
+
+/** The sandbox's cap names, as the ledger names them. */
+const SANDBOX_CAPS = {
+	tokens: "stage_tokens",
+	run_tokens: "run_tokens",
+	wall: "wall",
+	turns: "turns",
+} as const satisfies Record<
+	Extract<StageResult, { kind: "budget_exhausted" }>["cap"],
+	BudgetCapName
+>;
+
+/** A spent budget. A cap the sandbox did not report freezes as unavailable. */
+function budgetCause(stage: Stage, cap: BudgetCapName | null): TerminalCause {
+	return { stage, class: "budget", reason: cap ?? "unreported" };
+}
+
+/** A failed preparation: its base refusal, or the input it refused. */
+function preparedCause(
+	stage: Stage,
+	prepared: { readonly why: string; readonly refusal?: BaseRefusal },
+): TerminalCause {
+	return prepared.refusal === undefined
+		? inputCause(stage, prepared.why)
+		: { stage, class: "base", reason: prepared.refusal.reason };
+}
+
+/** A stage input the controller refused, by its logged `why`. */
+function inputCause(stage: Stage, why: string): TerminalCause {
+	return { stage, class: "input", reason: why };
+}
 
 const END_STATUS: Readonly<
 	Record<Exclude<StageResult["kind"], "failed">, TerminalStatus>
@@ -1995,7 +2036,7 @@ export class Orchestrator {
 		run.replay = false;
 		run.phase = { kind: "claimed" };
 		this.state.totals.retries++;
-		this.#recordAttempt(run, "refused", reference.acceptAttempt, {
+		this.#recordAttempt(run, "base_refused", reference.acceptAttempt, {
 			kind: "retry",
 			attempt: run.attempt,
 			dueAt: this.#input.clock.now(),
@@ -2059,6 +2100,19 @@ export class Orchestrator {
 			);
 	}
 
+	/**
+	 * Ends a run failed, or budget-exhausted for a `budget` cause, and keeps
+	 * the cause for its ledger row. Only a failure counts as one.
+	 */
+	#stop(run: ActiveRun, cause: TerminalCause): void {
+		const status = cause.class === "budget" ? "budget_exhausted" : "failed";
+
+		run.phase = { kind: "ending", status };
+		run.cause = cause;
+
+		if (status === "failed") this.state.totals.failures++;
+	}
+
 	#finishStageResult(run: ActiveRun, result: StageEnd, limits: Limits): void {
 		if (run.stage === "accept")
 			run.acceptWallMs = (run.acceptWallMs ?? 0) + (result.wallMs ?? 0);
@@ -2092,15 +2146,13 @@ export class Orchestrator {
 					effects: { kind: "build", result: result.build },
 				};
 			else {
-				this.#input.log("stage_inputs_refused", {
-					runId: run.runId,
-					why:
-						result.build.kind === "blocked"
-							? result.build.reason
-							: "patch_missing",
-				});
-				run.phase = { kind: "ending", status: "failed" };
-				this.state.totals.failures++;
+				const why =
+					result.build.kind === "blocked"
+						? result.build.reason
+						: "patch_missing";
+
+				this.#input.log("stage_inputs_refused", { runId: run.runId, why });
+				this.#stop(run, inputCause(run.stage, why));
 			}
 
 			return;
@@ -2155,9 +2207,21 @@ export class Orchestrator {
 
 		const status = END_STATUS[result.kind];
 
-		if (status === "failed") this.state.totals.failures++;
-
-		run.phase = { kind: "ending", status };
+		if (result.kind === "budget_exhausted")
+			this.#stop(
+				run,
+				budgetCause(
+					run.stage,
+					result.cap === undefined ? null : SANDBOX_CAPS[result.cap],
+				),
+			);
+		else if (result.kind === "refused")
+			this.#stop(run, {
+				stage: run.stage,
+				class: "provider",
+				reason: result.refusal ?? "refused",
+			});
+		else run.phase = { kind: "ending", status };
 		this.#input.log("stage_ended", {
 			issue: run.issue,
 			runId: run.runId,
@@ -2179,10 +2243,9 @@ export class Orchestrator {
 		this.state.totals.usage += usage;
 
 		if (run.usage >= limits.maxTokensPerRun) {
-			run.phase = { kind: "ending", status: "budget_exhausted" };
+			this.#stop(run, budgetCause(run.stage, "run_tokens"));
 		} else if (run.attempt >= limits.maxAttempts) {
-			run.phase = { kind: "ending", status: "failed" };
-			this.state.totals.failures++;
+			this.#stop(run, { stage: run.stage, class: "attempts", reason: cause });
 		} else {
 			run.attempt++;
 			this.state.totals.retries++;
@@ -2311,6 +2374,27 @@ export class Orchestrator {
 				: undefined;
 	}
 
+	/** The current generation's stored diagnosis, when it is a bound failure. */
+	async #currentDiagnosis(runId: Digest, state: CandidateState) {
+		if (state.kind !== "selected") return null;
+		const { round, generation } = state.current.intent;
+
+		const read = await this.#input.executor
+			.readAssessment({ runId, round, generation })
+			.catch(() => null);
+
+		const bound = state.current.assessment;
+
+		return read != null &&
+			read.binding.runId === runId &&
+			read.binding.round === round &&
+			read.binding.generation === generation &&
+			(bound === undefined || sameAssessmentRef(read.ref, bound)) &&
+			read.assessment.kind === "failed"
+			? read.assessment.failure
+			: null;
+	}
+
 	async #prepareTerminal(run: ActiveRun): Promise<boolean> {
 		const ledger = this.#input.files.ledger;
 		const status = desiredStatus(run.phase);
@@ -2337,6 +2421,13 @@ export class Orchestrator {
 				observedAt,
 				candidate: run.handoff ?? null,
 				attemptEnds: await this.#input.files.accounting?.attempts(run.runId),
+				cause:
+					run.handoff === undefined
+						? (run.cause ?? null)
+						: candidateCause(
+								run.handoff,
+								await this.#currentDiagnosis(run.runId, run.handoff),
+							),
 				start,
 				previousRunId: await this.#previousRunId(run.runId),
 				evidence: await this.#input.files.terminalEvidence?.(
@@ -3022,12 +3113,13 @@ export class Orchestrator {
 			marker.stage === "land" ||
 			(run.round ?? 0) > 0
 		) {
-			run.phase =
-				marker.pr === null
-					? { kind: "ending", status: "failed" }
-					: { kind: "evidence_missing" };
-
-			if (marker.pr === null) this.state.totals.failures++;
+			if (marker.pr === null)
+				this.#stop(run, {
+					stage: run.stage,
+					class: "missing_evidence",
+					reason: "validation_state_missing",
+				});
+			else run.phase = { kind: "evidence_missing" };
 			this.#input.log("validation_failed", {
 				issue: run.issue,
 				runId: run.runId,
@@ -3066,10 +3158,12 @@ export class Orchestrator {
 					run.replay = false;
 					run.phase = { kind: "claimed" };
 
-					if (!retired) {
-						run.phase = { kind: "ending", status: "failed" };
-						this.state.totals.failures++;
-					}
+					if (!retired)
+						this.#stop(run, {
+							stage: "accept",
+							class: "base",
+							reason: reference.retry.reason,
+						});
 
 					this.state.runs.set(run.issue, run);
 
@@ -3336,8 +3430,11 @@ export class Orchestrator {
 			}
 
 			if (run.attempt > limits.maxAttempts) {
-				run.phase = { kind: "ending", status: "failed" };
-				this.state.totals.failures++;
+				this.#stop(run, {
+					stage: run.stage,
+					class: "attempts",
+					reason: "retry_limit",
+				});
 				await this.#sync(run);
 				continue;
 			}
@@ -3734,8 +3831,11 @@ export class Orchestrator {
 		)
 			return false;
 
-		run.phase = { kind: "ending", status: "failed" };
-		this.state.totals.failures++;
+		this.#stop(run, {
+			stage: run.stage,
+			class: "label",
+			reason: "label_retries_exhausted",
+		});
 		this.#input.log("label_retries_exhausted", {
 			issue: run.issue,
 			runId: run.runId,
@@ -4071,7 +4171,7 @@ export class Orchestrator {
 		if (runExhausted) {
 			run.usage += prior;
 			this.state.totals.usage += prior;
-			run.phase = { kind: "ending", status: "budget_exhausted" };
+			this.#stop(run, budgetCause(run.stage, "run_tokens"));
 			this.#input.log("launch_refused", {
 				issue: run.issue,
 				runId: run.runId,
@@ -4125,8 +4225,7 @@ export class Orchestrator {
 					return false;
 			}
 
-			run.phase = { kind: "ending", status: "failed" };
-			this.state.totals.failures++;
+			this.#stop(run, preparedCause(run.stage, prepared));
 			await this.#sync(run);
 
 			return false;
@@ -4152,8 +4251,7 @@ export class Orchestrator {
 						runId: run.runId,
 						why: kept.reason,
 					});
-					run.phase = { kind: "ending", status: "failed" };
-					this.state.totals.failures++;
+					this.#stop(run, inputCause(stage, kept.reason));
 				} else
 					run.phase = {
 						kind: "reporting",
@@ -4191,7 +4289,7 @@ export class Orchestrator {
 			if (spent === null || wallMs <= 0) {
 				run.usage += prior;
 				this.state.totals.usage += prior;
-				run.phase = { kind: "ending", status: "budget_exhausted" };
+				this.#stop(run, budgetCause(stage, wallMs <= 0 ? "wall" : null));
 				this.#input.log("launch_refused", {
 					issue: run.issue,
 					runId: run.runId,
@@ -4304,6 +4402,8 @@ export class Orchestrator {
 								result.receipt.fallback?.observed ??
 								result.receipt.models.observed,
 							usage: prior + result.usage,
+							cap: result.kind === "budget_exhausted" ? result.cap : undefined,
+							refusal: result.receipt.refusal,
 							build:
 								output instanceof Object && output.kind === "build"
 									? output.result
@@ -4702,9 +4802,16 @@ export class Orchestrator {
 					read.assessment.kind === "failed" &&
 					read.assessment.failure.kind !== "candidate"
 				) {
+					// A dead end spends no repair, so the owner sees what else failed.
 					const notice = diagnosisNotice(
 						read.assessment.failure,
 						`<!-- factory-diagnosis run=${run.runId} g=${read.binding.round}.${read.binding.generation} a=${read.ref.recordDigest} -->`,
+						{
+							failedChecks: failedVisibleChecks(result.verdict.checks),
+							patchDigest: isDigest(state.current.patch.patchDigest)
+								? state.current.patch.patchDigest
+								: null,
+						},
 					);
 
 					if (!(await this.#postKeyed(run, notice.key, notice.body))) return;
@@ -5201,8 +5308,22 @@ export class Orchestrator {
 
 			if (!(await this.#postKeyed(run, notice.key, notice.body))) return;
 			run.refusalPosted = true;
-			run.phase = { kind: "ending", status: "failed" };
-			this.state.totals.failures++;
+			this.#stop(run, {
+				stage: "accept",
+				class: "base",
+				reason: failure.reason,
+			});
+
+			// The final refusal is this attempt's disposition, recorded once.
+			const recorded = await this.#input.files.accounting?.readAttempt(
+				run.runId,
+				"accept",
+				0,
+				reference.acceptAttempt,
+			);
+
+			if (recorded === null)
+				this.#recordAttempt(run, "base_refused", reference.acceptAttempt);
 
 			return;
 		}
@@ -5229,8 +5350,13 @@ export class Orchestrator {
 				runId: run.runId,
 				why: stored?.kind === "blocked" ? stored.reason : "acceptance_missing",
 			});
-			run.phase = { kind: "ending", status: "failed" };
-			this.state.totals.failures++;
+			this.#stop(
+				run,
+				inputCause(
+					"accept",
+					stored?.kind === "blocked" ? stored.reason : "acceptance_missing",
+				),
+			);
 
 			return;
 		}
@@ -5248,8 +5374,7 @@ export class Orchestrator {
 				runId: run.runId,
 				why: "summary_too_large",
 			});
-			run.phase = { kind: "ending", status: "failed" };
-			this.state.totals.failures++;
+			this.#stop(run, inputCause("accept", "summary_too_large"));
 
 			return;
 		}
@@ -5421,6 +5546,10 @@ export class Orchestrator {
 
 		if (!(await this.#postRetriedRefusal(run))) return;
 
+		// A stop decided while reporting, such as a final base refusal, records
+		// its attempt here, before the terminal snapshot reads the attempts.
+		if (!(await this.#saveAttempt(run))) return;
+
 		if (!(await this.#prepareTerminal(run))) return;
 
 		await this.#publishMarker(run);
@@ -5434,12 +5563,14 @@ export class Orchestrator {
 		}
 	}
 
-	async #stageInputs(
-		run: ActiveRun,
-	): Promise<
+	async #stageInputs(run: ActiveRun): Promise<
 		| Prepared
 		| { readonly kind: "wait" }
-		| { readonly kind: "fail"; readonly refusal?: BaseRefusal }
+		| {
+				readonly kind: "fail";
+				readonly why: string;
+				readonly refusal?: BaseRefusal;
+		  }
 	> {
 		const { files, repo } = this.#input;
 		const fields = { issue: run.issue, runId: run.runId };
@@ -5453,7 +5584,7 @@ export class Orchestrator {
 		const fail = (why: string, refusal?: BaseRefusal) => {
 			this.#input.log("stage_inputs_refused", { ...fields, why });
 
-			return { kind: "fail", refusal } as const;
+			return { kind: "fail", why, refusal } as const;
 		};
 
 		if (
@@ -5888,8 +6019,13 @@ export class Orchestrator {
 					runId: run.runId,
 					why: result.kind === "blocked" ? result.reason : "patch_binding",
 				});
-				run.phase = { kind: "ending", status: "failed" };
-				this.state.totals.failures++;
+				this.#stop(
+					run,
+					inputCause(
+						stage,
+						result.kind === "blocked" ? result.reason : "patch_binding",
+					),
+				);
 
 				return true;
 			}
@@ -5913,8 +6049,7 @@ export class Orchestrator {
 					runId: run.runId,
 					why: bound.reason,
 				});
-				run.phase = { kind: "ending", status: "failed" };
-				this.state.totals.failures++;
+				this.#stop(run, inputCause(stage, bound.reason));
 
 				return true;
 			}
@@ -5930,8 +6065,7 @@ export class Orchestrator {
 					runId: run.runId,
 					why: kept.reason,
 				});
-				run.phase = { kind: "ending", status: "failed" };
-				this.state.totals.failures++;
+				this.#stop(run, inputCause(stage, kept.reason));
 
 				return true;
 			}
@@ -5979,8 +6113,7 @@ export class Orchestrator {
 		}
 
 		if (prepared.kind === "fail") {
-			run.phase = { kind: "ending", status: "failed" };
-			this.state.totals.failures++;
+			this.#stop(run, preparedCause(stage, prepared));
 
 			return true;
 		}
@@ -6074,8 +6207,7 @@ export class Orchestrator {
 					...fields,
 					why: "patch_binding",
 				});
-				run.phase = { kind: "ending", status: "failed" };
-				this.state.totals.failures++;
+				this.#stop(run, inputCause("build", "patch_binding"));
 
 				return false;
 			}
@@ -6083,8 +6215,7 @@ export class Orchestrator {
 			const body = renderBuildSummary({ runId: run.runId, receipt });
 
 			if (body === null) {
-				run.phase = { kind: "ending", status: "failed" };
-				this.state.totals.failures++;
+				this.#stop(run, inputCause("build", "summary_too_large"));
 				this.#input.log("stage_inputs_refused", {
 					...fields,
 					why: "summary_too_large",
@@ -6103,8 +6234,14 @@ export class Orchestrator {
 				posted &&
 				(receipt.policy === "forbidden" || receipt.visibleTests?.exitCode !== 0)
 			) {
-				run.phase = { kind: "ending", status: "failed" };
-				this.state.totals.failures++;
+				this.#stop(run, {
+					stage: "build",
+					class: "candidate",
+					reason:
+						receipt.policy === "forbidden"
+							? "patch_forbidden"
+							: "visible_tests_failed",
+				});
 
 				return false;
 			}
@@ -6120,8 +6257,13 @@ export class Orchestrator {
 					...fields,
 					why: stored.kind === "blocked" ? stored.reason : "acceptance_missing",
 				});
-				run.phase = { kind: "ending", status: "failed" };
-				this.state.totals.failures++;
+				this.#stop(
+					run,
+					inputCause(
+						"accept",
+						stored.kind === "blocked" ? stored.reason : "acceptance_missing",
+					),
+				);
 
 				return false;
 			}

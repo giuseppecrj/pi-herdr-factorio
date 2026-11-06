@@ -10,7 +10,9 @@ import {
 import {
 	appendRun,
 	frozenRowOf,
+	ledgerRowOf,
 	pumpLedger,
+	terminalFailureOf,
 	type LedgerOutbox,
 	indexLedger,
 	ledgerApiOf,
@@ -19,6 +21,8 @@ import {
 	type FrozenRow,
 	type LedgerApi,
 	type LedgerRowInput,
+	type LedgerRowV1,
+	type LedgerRowV2,
 } from "../src/ledger.ts";
 import { digestOf, runIdOf } from "../src/run.ts";
 import { isGitSha, type GitSha } from "../src/workflow.ts";
@@ -36,6 +40,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after } from "node:test";
 
+type V1Input = Omit<LedgerRowV1, "gaps">;
+
+type V2Input = Omit<LedgerRowV2, "gaps">;
+
 const sha = (char: string): GitSha => {
 	const value = char.repeat(40);
 	assert.ok(isGitSha(value));
@@ -45,7 +53,7 @@ const sha = (char: string): GitSha => {
 
 const date = "2026-11-04T12:00:00Z";
 
-function rowInput(issue: number, eventId = "100"): LedgerRowInput {
+function rowInput(issue: number, eventId = "100"): V1Input {
 	const runId = runIdOf({ repo, issue, eventId });
 
 	const policy = {
@@ -184,6 +192,10 @@ function landedInput(issue: number): LedgerRowInput {
 		},
 	};
 }
+
+/** A failed-run row exactly as the build before version 2 froze it. */
+const SHIPPED_V1_ROW =
+	'{"v":1,"runId":"48df48b3c37af62da81e8a19411d48c0fd70de8cc1dd1d8576ea9f2d6997a7f3","repo":"giuseppecrj/pi-herdr-factorio-fixture","issue":41,"eventId":"4100","eventAt":"2026-11-04T11:00:00Z","previousRunId":{"kind":"known","value":null},"snapshotDigest":"a10fc1ad41fab5aaf0c3b526637806a62b0e6edefb619c0e6eb009f8f6b37593","originalBase":"1111111111111111111111111111111111111111","startedAt":{"kind":"known","value":"2026-11-04T11:00:05.000Z"},"terminalObservedAt":"2026-11-04T11:05:00.000Z","provenance":{"kind":"production","policy":{"workflowSha":"1111111111111111111111111111111111111111","workflowDigest":"da7f739f627198465eeab537a6f7a435dc4a0c332f9e4a8462293eb3f4ab7ee0","gates":{"kind":"known","value":{"sourceSha":"1111111111111111111111111111111111111111","digest":"7a3b3573cac24bf3922c7294de56c9f17013da092bfcdb33fc663de934e9546e"}},"autonomy":{"approveMerge":"always","land":"propose","digest":"d4bf357348c1219d00252a80cd797e4a9477a6e8dd3a54918efb6f2ed8633fa3"}}},"terminalMarker":{"seq":5,"digest":"b22595e4dfdf22937adda7583fd64cd550228e5556b2c39243388aac12a04252"},"outcome":{"kind":"failed","stage":"accept","cause":{"kind":"unavailable","reason":"not_instrumented"}},"pr":null,"artifacts":{"kind":"pre_build_stop","contractDigest":{"kind":"unavailable","reason":"not_instrumented"},"acceptanceDigest":{"kind":"unavailable","reason":"not_instrumented"}},"repairRounds":{"kind":"unavailable","reason":"not_instrumented"},"stages":{"kind":"unavailable","reason":"receipt_missing"},"models":{"kind":"unavailable","reason":"receipt_missing"},"usage":{"tokens":{"kind":"lower_bound","unit":"tokens","total":1234,"reason":"not_instrumented"},"parentTokens":{"kind":"unavailable","reason":"not_instrumented"},"childTokens":{"kind":"unavailable","reason":"not_instrumented"},"unattributedTokens":{"kind":"unavailable","reason":"not_instrumented"},"money":{"kind":"unavailable","reason":"provider_not_reported"}},"interruptedAttempts":{"kind":"known","value":0},"contextPressure":{"kind":"unavailable","reason":"not_instrumented"},"redactedReceiptDigests":[],"evidence":{"issueUrl":"https://github.com/giuseppecrj/pi-herdr-factorio-fixture/issues/41","ciUrls":[]},"gaps":["not_instrumented","provider_not_reported","receipt_missing"]}';
 
 const pending = (row: FrozenRow) => ({
 	runId: row.row.runId,
@@ -458,7 +470,7 @@ describe("ledger row codec", () => {
 
 		const lines = [
 			good.bytes,
-			Buffer.from('{"v":2,"future":true}\n'),
+			Buffer.from('{"v":3,"future":true}\n'),
 			Buffer.from("{not json\n"),
 			Buffer.from(
 				`${good.bytes.toString().slice(0, -1).replace('"v":1,', "")}\n`,
@@ -520,6 +532,132 @@ describe("ledger row codec", () => {
 			reason: "ledger_corrupt",
 			line: 1,
 		});
+	});
+
+	it("parses a shipped version 1 row, and freezes its stored snapshot, to unchanged bytes", () => {
+		// Bytes the build before version 2 wrote for a failed run.
+		const shipped = Buffer.from(`${SHIPPED_V1_ROW}\n`);
+		const [line] = parseLedger(shipped);
+
+		assert.equal(line?.kind, "known");
+		assert.ok(line?.bytes.equals(shipped));
+		assert.equal(frozenRowOf(shipped)?.digest, digestOf(shipped));
+
+		const {
+			gaps: _gaps,
+			terminalMarker,
+			...snapshot
+		} = JSON.parse(SHIPPED_V1_ROW);
+
+		const refrozen = ledgerRowOf({ ...snapshot, terminalMarker });
+		assert.ok(refrozen.bytes.equals(shipped));
+		assert.deepEqual(terminalFailureOf(snapshot), {
+			outcome: {
+				kind: "failed",
+				stage: "accept",
+				cause: { kind: "unavailable", reason: "not_instrumented" },
+			},
+			failure: { kind: "unavailable", reason: "legacy_not_recorded" },
+		});
+	});
+
+	it("versions the stop cause and accept dispositions as row version 2, and refuses a cause that disagrees with the outcome", () => {
+		const base = rowInput(10);
+
+		const cause: Extract<V2Input["failure"], { kind: "known" }>["value"] = {
+			stage: "validate",
+			class: "missing_evidence",
+			reason: "tree_replays_disagree",
+			failedVisibleChecks: ["lint", "candidate_tests"],
+			retainedPatch: digestOf("patch"),
+		};
+
+		const input: V2Input = {
+			...base,
+			v: 2,
+			outcome: {
+				kind: "failed",
+				stage: "land",
+				cause: { kind: "known", value: "evidence_missing" },
+			},
+			failure: { kind: "known", value: cause },
+			acceptAttempts: {
+				kind: "known",
+				value: [
+					{ attempt: 1, disposition: "retried" },
+					{ attempt: 2, disposition: "suite_qualified" },
+				],
+			},
+		};
+
+		const row = ledgerRow(input);
+		assert.equal(row.row.v, 2);
+		assert.deepEqual(frozenRowOf(row.bytes)?.row, row.row);
+		assert.equal(parseLedger(row.bytes)[0]?.kind, "known");
+
+		const cases: [string, V2Input][] = [
+			["failure_mismatch", { ...input, failure: null }],
+			[
+				"failure_mismatch",
+				{ ...input, outcome: { kind: "needs_info", stage: "specify" } },
+			],
+			[
+				"failure_mismatch",
+				{
+					...input,
+					failure: {
+						kind: "known",
+						value: {
+							...cause,
+							failedVisibleChecks: ["candidate_tests", "lint"],
+						},
+					},
+				},
+			],
+			[
+				"failure_mismatch",
+				{
+					...input,
+					outcome: {
+						kind: "budget_exhausted",
+						stage: "land",
+						cap: { kind: "known", value: "run_tokens" },
+					},
+				},
+			],
+			[
+				"accept_attempts_unordered",
+				{
+					...input,
+					acceptAttempts: {
+						kind: "known",
+						value: [
+							{ attempt: 2, disposition: "suite_qualified" },
+							{ attempt: 1, disposition: "retried" },
+						],
+					},
+				},
+			],
+		];
+
+		for (const [code, bad] of cases)
+			assert.throws(() => ledgerRow(bad), new RegExp(code), code);
+
+		assert.throws(
+			() =>
+				ledgerRowOf({
+					...input,
+					failure: {
+						kind: "known",
+						value: { ...cause, failedVisibleChecks: ["heldout"] },
+					},
+				}),
+			/invalid_enum/,
+		);
+		assert.throws(
+			() => ledgerRowOf({ ...base, v: 2 }),
+			/missing_key|unexpected_keys/,
+		);
 	});
 
 	it("parses, validates and indexes 1,000 varied rows in under one second", () => {
