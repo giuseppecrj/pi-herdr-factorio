@@ -1,4 +1,4 @@
-import { ACCEPTANCE_MAX_TOKENS } from "../src/accept.ts";
+import { ACCEPTANCE_MAX_TOKENS, SCAN_SENTENCE } from "../src/accept.ts";
 import { parseStoredContract } from "../src/artifacts.ts";
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
@@ -2264,6 +2264,62 @@ describe("Orchestrator base qualification", () => {
 						c.acceptAttempt === 1,
 				),
 		);
+	});
+
+	it("retries a tampered suite once with the scan's file, line and rule as feedback", async () => {
+		const { github, executor, clock, start } = world();
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "pass", usage: 20 };
+		executor.baseOutcomes = ["suite_tamper_signal", "ready"];
+
+		const signal = {
+			file: "test/acceptance/14/checks/version.test.ts",
+			line: 25,
+			rule: "runtime_patching" as const,
+		};
+
+		executor.baseReceipt = (binding) => {
+			const { evidence } = refusedReceipt(binding, FEEDBACK);
+
+			const skipped = {
+				kind: "unavailable" as const,
+				reason: "runner_error" as const,
+				wallMs: 0,
+			};
+
+			return assessBase({
+				...evidence,
+				execution: skipped,
+				repeat: skipped,
+				tamper: [signal],
+			}).receipt;
+		};
+
+		executor.spentBy.set("accept-1", 20);
+		await drive(start(), clock);
+
+		assert.deepEqual(launched(executor), [
+			"specify-1",
+			"accept-1",
+			"accept-2",
+			"build-1",
+		]);
+		const [, first, retry] = executor.launches;
+		assert.ok(first?.prompt.includes(SCAN_SENTENCE));
+
+		const block =
+			/<base-refusal-([0-9a-f]{32})>\n(.*)\n<\/base-refusal-\1>/.exec(
+				retry?.prompt ?? "",
+			);
+
+		assert.ok(block, "the retry prompt carries one nonce-tagged block");
+		const feedback = JSON.parse(block[2] ?? "");
+		assert.equal(feedback.reason, "suite_tamper_signal");
+		assert.deepEqual(feedback.signals, [signal]);
+		assert.deepEqual(feedback.files, []);
+		assert.doesNotMatch(retry?.prompt ?? "", /PRIVATE-/);
+		assert.equal(refusals(github).length, 0);
 	});
 
 	for (const reason of ["base_timeout", "base_runner_error"] as const)

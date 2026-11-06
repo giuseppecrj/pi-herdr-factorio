@@ -16,6 +16,9 @@ import { assessBase } from "../src/diagnosis.ts";
 import {
 	ACCEPTANCE_ISOLATION,
 	acceptancePrompt,
+	SCAN_GUIDANCE,
+	SCAN_SENTENCE,
+	SUPPRESSION_EXAMPLES,
 	writeAcceptance,
 } from "../src/accept.ts";
 import { fileArtifacts } from "../src/artifacts.ts";
@@ -258,6 +261,41 @@ describe("held-out acceptance output", () => {
 		assert.ok(
 			prompt.includes("three parent segments from that directory is one short"),
 		);
+	});
+	it("tells the author what the trusted tamper scan refuses, derived from scan-rules.json", () => {
+		const rules = JSON.parse(
+			readFileSync(".github/factory/gates/scan-rules.json", "utf8"),
+		);
+
+		// The guidance mirrors every scan list and the suppression pattern.
+		const { version, ...lists } = rules;
+		assert.equal(version, 1);
+		assert.deepEqual(SCAN_GUIDANCE, lists);
+		const suppression = new RegExp(rules.suppression, "i");
+
+		for (const example of SUPPRESSION_EXAMPLES)
+			assert.match(`// ${example}`, suppression, example);
+
+		const prompt = acceptancePrompt({
+			contract,
+			files: [],
+			inlined: [],
+			guidance: { general: "", stages: {} },
+		});
+
+		assert.ok(prompt.includes(SCAN_SENTENCE));
+		assert.match(
+			SCAN_SENTENCE,
+			/node:module register or registerHooks.*Import the real modules and assert on their behavior instead\.$/,
+		);
+
+		for (const name of [
+			...rules.mutators,
+			...rules.processEvents,
+			...rules.processMembers,
+			...SUPPRESSION_EXAMPLES,
+		])
+			assert.ok(SCAN_SENTENCE.includes(name), name);
 	});
 	it("puts retry feedback only in a nonce-tagged untrusted block with the rewrite rule", () => {
 		const plain = acceptancePrompt({
