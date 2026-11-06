@@ -120,8 +120,13 @@ export const MAX_BODY_VERSIONS = 100;
 
 export const MAX_TITLE_RENAMES = 100;
 
-/** The most node IDs one GraphQL `nodes` request asks for. */
-export const MAX_NODE_IDS = 100;
+/**
+ * The most node IDs one GraphQL `nodes` request asks for. The exe.dev GitHub
+ * proxy rejects a document that references more than 50 node IDs with HTTP
+ * 403, so a larger chunk fails every ledger read on an issue with more than 50
+ * controller comments.
+ */
+export const MAX_NODE_IDS = 50;
 
 const NODE_ID = /^[A-Za-z0-9_=-]{1,100}$/;
 

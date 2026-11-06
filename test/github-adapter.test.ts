@@ -782,6 +782,37 @@ describe("GitHubTicketAdapter comment reads", () => {
 		assert.equal(github.calls.length, 1);
 	});
 
+	it("reads comment edits in chunks the exe.dev proxy accepts", async () => {
+		const github = new FakeGitHub();
+		const issue = github.add(fakeIssue(14));
+
+		const ids = Array.from(
+			{ length: 51 },
+			(_, i) => github.comment(issue, `c${i}`).nodeId,
+		);
+
+		const count = (args: readonly string[]) =>
+			args.filter((arg) => arg.startsWith("ids[]=")).length;
+
+		const read = await new GitHubTicketAdapter({
+			exec: async (command, args) =>
+				count(args) > 50
+					? httpError(
+							403,
+							`GitHub GraphQL request rejected: document references ${count(args)} node IDs, more than the 50 the proxy will resolve`,
+						)
+					: github.exec(command, args),
+			repo,
+		}).readCommentEdits(ids);
+
+		assert.equal(read.kind, "ok");
+		assert.equal(read.kind === "ok" ? read.value.size : 0, 51);
+		assert.deepEqual(
+			github.calls.map((call) => count(call)),
+			[50, 1],
+		);
+	});
+
 	it("fails the edit read when a node is not an issue comment", async () => {
 		const github = new FakeGitHub();
 

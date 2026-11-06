@@ -691,6 +691,17 @@ export type GateReason =
 	| "workflow_unavailable"
 	| "candidates_unavailable";
 
+/**
+ * Why a claim could not be confirmed this tick, so it does not launch. `why`
+ * names the read: the issue, its timeline, its marker ledger, or a timeline
+ * with no entry for the run's ready event. `failure` is the read's failure
+ * kind, `null` for a timeline with no entry.
+ */
+export type Unverified = {
+	readonly why: "issue" | "timeline" | "ledger" | "timeline_entry";
+	readonly failure: GitHubFailure["kind"] | null;
+};
+
 export type RunView = {
 	readonly issue: number;
 	readonly runId: Digest;
@@ -703,6 +714,8 @@ export type RunView = {
 	readonly workspace: "present" | "missing_replayed";
 	readonly retryAt: string | null;
 	readonly usage: number;
+	/** Set while the claim stays unconfirmed because a GitHub read fails. */
+	readonly unverified: Unverified | null;
 };
 
 /** One tick's claim snapshot. Never carries issue text. */
@@ -757,6 +770,15 @@ type Eligibility = "confirmed" | "unverified" | "released" | "dropped";
 type ReleaseReason = "closed" | "unlabeled" | "new_event";
 
 type Replacement = "current" | "unverified" | "unlabeled" | "new_event";
+
+function unverifiedView(
+	held: (Unverified & { readonly runId: Digest }) | undefined,
+	run: ActiveRun,
+): Unverified | null {
+	return held?.runId === run.runId
+		? { why: held.why, failure: held.failure }
+		: null;
+}
 
 function replacedBy(
 	timeline: readonly TimelineEntry[],
@@ -1088,6 +1110,11 @@ export class Orchestrator {
 	readonly #local = new Map<number, ConfirmedRecord>();
 	readonly #ended = new Map<Digest, EndedRecord>();
 	readonly #behind = new Map<number, TickReport["ledgerBehind"][number]>();
+	/** Claims whose last check failed a read, with the tick that saw it. */
+	readonly #unverified = new Map<
+		number,
+		Unverified & { readonly runId: Digest; readonly tick: number }
+	>();
 	readonly #stages = new Set<Promise<void>>();
 	readonly #draining = new Set<Draining>();
 	readonly #candidateRecovery = new Set<Digest>();
@@ -1526,6 +1553,45 @@ export class Orchestrator {
 
 			if (eligibility !== "dropped") await this.#sync(run);
 		}
+
+		for (const [issue, held] of this.#unverified) {
+			if (
+				held.tick !== this.#ticks ||
+				this.state.runs.get(issue)?.runId !== held.runId
+			)
+				this.#unverified.delete(issue);
+		}
+	}
+
+	/**
+	 * Records a claim left unverified by a failed read. It logs
+	 * `claim_unverified` once per run until the reason changes or the claim is
+	 * confirmed, not on every tick.
+	 */
+	#unverifiedBy(
+		run: ActiveRun,
+		why: Unverified["why"],
+		failure: GitHubFailure | null,
+	): "unverified" {
+		const kind = failure?.kind ?? null;
+		const last = this.#unverified.get(run.issue);
+
+		if (last?.runId !== run.runId || last.why !== why || last.failure !== kind)
+			this.#input.log("claim_unverified", {
+				issue: run.issue,
+				runId: run.runId,
+				why,
+				failure: kind,
+			});
+
+		this.#unverified.set(run.issue, {
+			runId: run.runId,
+			why,
+			failure: kind,
+			tick: this.#ticks,
+		});
+
+		return "unverified";
 	}
 
 	/**
@@ -1541,7 +1607,8 @@ export class Orchestrator {
 		if (run.phase.kind === "recovering") {
 			const issue = await this.#adapter.readIssue(run.issue);
 
-			if (issue.kind === "failed") return "unverified";
+			if (issue.kind === "failed")
+				return this.#unverifiedBy(run, "issue", issue.failure);
 
 			if (!issue.value.open) {
 				this.#release(run, "closed");
@@ -1579,7 +1646,8 @@ export class Orchestrator {
 		if (record === undefined) {
 			const read = await this.#adapter.readIssue(run.issue);
 
-			if (read.kind === "failed") return "unverified";
+			if (read.kind === "failed")
+				return this.#unverifiedBy(run, "issue", read.failure);
 
 			const issue = read.value;
 
@@ -1610,11 +1678,13 @@ export class Orchestrator {
 	): Promise<Eligibility> {
 		const timeline = await this.#adapter.readTimeline(run.issue);
 
-		if (timeline.kind === "failed") return "unverified";
+		if (timeline.kind === "failed")
+			return this.#unverifiedBy(run, "timeline", timeline.failure);
 
 		const ledger = await this.#readLedger(run.issue);
 
-		if (ledger.kind === "failed") return "unverified";
+		if (ledger.kind === "failed")
+			return this.#unverifiedBy(run, "ledger", ledger.failure);
 
 		if (ledger.value.kind === "corrupt") {
 			this.#markCorrupt(run.issue, ledger.value, updatedAt);
@@ -1628,7 +1698,8 @@ export class Orchestrator {
 
 		const replaced = replacedBy(timeline.value, run);
 
-		if (replaced === "unverified") return "unverified";
+		if (replaced === "unverified")
+			return this.#unverifiedBy(run, "timeline_entry", null);
 
 		if (replaced !== "current") {
 			this.#release(run, replaced);
@@ -6540,6 +6611,7 @@ export class Orchestrator {
 							? new Date(run.phase.dueAt).toISOString()
 							: null,
 					usage: run.usage,
+					unverified: unverifiedView(this.#unverified.get(run.issue), run),
 				}),
 			);
 
