@@ -542,6 +542,7 @@ class FakeExecutor implements StageExecutor {
 	fallback: Behavior = { kind: "unavailable" };
 	buildBehavior: Behavior = { kind: "unavailable" };
 	buildExitCode: number | null = 0;
+	buildBaseExitCode: number | null | undefined;
 	missingBuildTests = false;
 	buildPolicy: "clean" | "forbidden" = "clean";
 	readonly builds = new Map<string, Extract<StageOutput, { kind: "build" }>>();
@@ -672,6 +673,15 @@ class FakeExecutor implements StageExecutor {
 								: {
 										command: "npm test",
 										exitCode: this.buildExitCode,
+										base:
+											this.buildBaseExitCode === undefined
+												? undefined
+												: {
+														command: "npm test",
+														exitCode: this.buildBaseExitCode,
+														tail: "PRIVATE BASE",
+														wallMs: 1,
+													},
 										tail: "private output",
 										wallMs: 1,
 									},
@@ -9538,6 +9548,75 @@ describe("private build stage", () => {
 				forbidden ? /no publication/ : /Visible tests: failed/,
 			);
 			assert.equal((await controller.tick()).totals.failures, 1);
+		});
+
+	for (const baseExitCode of [0, 1, null, undefined])
+		it(`attributes visible failure only with a passing base control (${baseExitCode}) across restart and status`, async () => {
+			const dir = stateDir();
+			const outbox = fileLedgerOutbox(dir);
+
+			const { github, executor, files, start, wire, clock } = world(
+				null,
+				outbox,
+			);
+
+			files.accounting = fileRunFiles(dir).accounting;
+			await instrument(files);
+			github.add(labeled(14));
+			executor.behaviors = [{ kind: "pass", usage: 10 }];
+			executor.acceptBehavior = { kind: "pass", usage: 7 };
+			executor.buildBehavior = { kind: "pass", usage: 12 };
+			executor.buildExitCode = 1;
+			executor.buildBaseExitCode = baseExitCode;
+			wire.intercept = async (command, args) =>
+				args.some((a) => a.includes("<!-- factory-build "))
+					? networkError()
+					: github.exec(command, args);
+			const first = start();
+			await once(first);
+			await once(first);
+			assert.equal(statuses(github, 14).at(-1), "6:running");
+			executor.spentBy.set("build-1", 12);
+			wire.intercept = null;
+			clock.t += 60_000;
+			const restarted = start();
+			await once(restarted);
+			await restarted.tick();
+			const row = (await outbox.scan())?.[0]?.row?.row;
+			assert.ok(row?.v === 3);
+			assert.equal(row.outcome.kind, "failed");
+
+			const failure = {
+				kind: "known",
+				value: {
+					stage: "build",
+					class: baseExitCode === 0 ? "candidate" : "missing_evidence",
+					reason:
+						baseExitCode === 0
+							? "visible_tests_failed"
+							: baseExitCode === 1
+								? "visible_base_failed"
+								: "visible_base_unavailable",
+					failedVisibleChecks: [],
+					retainedPatch: null,
+				},
+			};
+
+			assert.deepEqual(row.failure, failure);
+			assert.deepEqual((await readRunCharges(dir, runOf(14), 0)).terminal, {
+				outcome: row.outcome,
+				failure,
+			});
+			assert.equal(files.claims.get(runOf(14))?.round ?? 0, 0);
+			assert.equal(
+				executor.launches.filter((l) => (l.round ?? 0) > 0).length,
+				0,
+			);
+			assert.equal(
+				executor.launches.filter((l) => l.stage === "build").length,
+				1,
+			);
+			assert.doesNotMatch(JSON.stringify(row), /PRIVATE BASE|private output/);
 		});
 
 	for (const missing of [false, true])

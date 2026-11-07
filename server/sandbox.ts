@@ -3840,6 +3840,26 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 
 						if (checked.kind !== "ready") {
 							cleanupBuildBase(config.stateDir, runId);
+							const candidate = kept.receipt.candidateTests;
+
+							if (candidate !== undefined)
+								return {
+									kind: "build",
+									result: finishPatch(
+										config.stateDir,
+										patchBinding(kept.receipt),
+										{
+											...candidate,
+											base: {
+												command: candidate.command,
+												exitCode: null,
+												reason: "visible_tests_unavailable",
+												tail: "Visible base could not be prepared",
+												wallMs: 0,
+											},
+										},
+									),
+								};
 
 							return {
 								kind: "build",
@@ -3855,29 +3875,57 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 						runId,
 					);
 
-					const tests = await (config.visibleTests ?? runVisibleTests)(
-						{
-							stateDir: config.stateDir,
-							bundleDir: ready.bundle.dir,
-							workspace: "",
-							runId,
-							stage: "build",
-							attempt,
-							tools: [],
-							arch: ready.arch,
-							xdgRuntimeDir: config.xdgRuntimeDir,
-							assetsDigest: ready.bundle.digest,
-							versions: PINNED_VERSIONS,
-							exec: config.exec,
-						},
-						join(config.stateDir, "pristine", runId),
-						kept.patch,
-						kept.receipt.testCommand,
-						contract.kind === "found" &&
-							contract.digest === kept.receipt.contractDigest
-							? (contract.contract.replacesTests ?? [])
-							: [],
-					);
+					const testConfig: SandboxHostConfig = {
+						stateDir: config.stateDir,
+						bundleDir: ready.bundle.dir,
+						workspace: "",
+						runId,
+						stage: "build",
+						attempt,
+						tools: [],
+						arch: ready.arch,
+						xdgRuntimeDir: config.xdgRuntimeDir,
+						assetsDigest: ready.bundle.digest,
+						versions: PINNED_VERSIONS,
+						exec: config.exec,
+					};
+
+					const runTests = config.visibleTests ?? runVisibleTests;
+					const binding = patchBinding(kept.receipt);
+
+					let tests: VisibleTests =
+						kept.receipt.candidateTests ??
+						(await runTests(
+							testConfig,
+							base,
+							kept.patch,
+							kept.receipt.testCommand,
+							contract.kind === "found" &&
+								contract.digest === kept.receipt.contractDigest
+								? (contract.contract.replacesTests ?? [])
+								: [],
+						));
+
+					if (tests.exitCode !== null && tests.exitCode !== 0) {
+						const checkpoint = finishPatch(
+							config.stateDir,
+							binding,
+							tests,
+							"candidate",
+						);
+
+						if (checkpoint.kind !== "found")
+							return { kind: "build", result: checkpoint };
+						tests = {
+							...tests,
+							base: await runTests(
+								testConfig,
+								base,
+								"",
+								kept.receipt.testCommand,
+							),
+						};
+					}
 
 					kept = finishPatch(
 						config.stateDir,

@@ -6315,13 +6315,19 @@ export class Orchestrator {
 				posted &&
 				(receipt.policy === "forbidden" || receipt.visibleTests?.exitCode !== 0)
 			) {
+				const forbidden = receipt.policy === "forbidden";
+				const baseExit = receipt.visibleTests?.base?.exitCode;
+
 				this.#stop(run, {
 					stage: "build",
-					class: "candidate",
-					reason:
-						receipt.policy === "forbidden"
-							? "patch_forbidden"
-							: "visible_tests_failed",
+					class: forbidden || baseExit === 0 ? "candidate" : "missing_evidence",
+					reason: forbidden
+						? "patch_forbidden"
+						: baseExit == null
+							? "visible_base_unavailable"
+							: baseExit !== 0
+								? "visible_base_failed"
+								: "visible_tests_failed",
 				});
 
 				return false;

@@ -55,7 +55,7 @@ export type CommandReceipt = {
 	readonly exitCode: number | null;
 };
 
-export type VisibleTests = {
+export type VisibleTestResult = {
 	readonly command: string;
 	readonly exitCode: number | null;
 	readonly tail: string;
@@ -67,6 +67,10 @@ export type VisibleTests = {
 		| "malformed_patch"
 		| "timeout"
 		| "build_disk_limit";
+};
+
+export type VisibleTests = VisibleTestResult & {
+	readonly base?: VisibleTestResult;
 };
 
 export type PatchBinding = {
@@ -103,6 +107,7 @@ export type PatchReceipt = PatchBinding & {
 	readonly testScriptChanged: boolean;
 	readonly testInputsChanged: boolean;
 	readonly visibleTests: VisibleTests | null;
+	readonly candidateTests?: VisibleTestResult;
 };
 
 export type PatchRead =
@@ -629,27 +634,37 @@ export function readPatch(stateDir: string, binding: PatchBinding): PatchRead {
 		if (digestOf(patch) !== receipt.patchDigest)
 			return { kind: "blocked", reason: "patch_changed" };
 
-		if (present(join(dir, "tests.json"))) {
-			// SAFETY: host-authored test record; a failed result is write-once and never overwritten.
-			const tests = JSON.parse(
-				regularText(join(dir, "tests.json")),
-			) as VisibleTests & PatchBinding & { patchDigest: Digest };
+		const recovered = { ...receipt };
+
+		for (const [name, field] of [
+			["candidate-tests.json", "candidateTests"],
+			["tests.json", "visibleTests"],
+		] as const) {
+			if (!present(join(dir, name))) continue;
+
+			// SAFETY: host-authored write-once record; bindings and base control are checked before use.
+			const tests = JSON.parse(regularText(join(dir, name))) as VisibleTests &
+				PatchBinding & { patchDigest: Digest };
+
+			const base = tests.base;
 
 			if (
 				!sameBinding(tests, binding) ||
 				tests.patchDigest !== receipt.patchDigest ||
-				!Number.isSafeInteger(tests.exitCode)
+				!Number.isSafeInteger(tests.exitCode) ||
+				(base !== undefined &&
+					(base === null ||
+						base.command !== tests.command ||
+						(base.exitCode !== null && !Number.isSafeInteger(base.exitCode)) ||
+						textOf(base.tail) === null ||
+						!Number.isFinite(base.wallMs) ||
+						base.wallMs < 0))
 			)
 				return { kind: "blocked", reason: "patch_invalid" };
-
-			return {
-				kind: "found",
-				patch,
-				receipt: { ...receipt, visibleTests: tests },
-			};
+			Object.assign(recovered, { [field]: tests });
 		}
 
-		return { kind: "found", patch, receipt };
+		return { kind: "found", patch, receipt: recovered };
 	} catch (error) {
 		return {
 			kind: "blocked",
@@ -732,10 +747,15 @@ export function finishPatch(
 	stateDir: string,
 	binding: PatchBinding,
 	tests: VisibleTests,
+	phase: "candidate" | "complete" = "complete",
 ): PatchRead {
 	const prior = readPatch(stateDir, binding);
 
-	if (prior.kind !== "found" || prior.receipt.visibleTests !== null)
+	if (
+		prior.kind !== "found" ||
+		prior.receipt.visibleTests !== null ||
+		(phase === "candidate" && prior.receipt.candidateTests !== undefined)
+	)
 		return prior;
 
 	try {
@@ -748,13 +768,23 @@ export function finishPatch(
 			tail: Buffer.from(tests.tail).subarray(-TEST_TAIL_BYTES).toString(),
 		};
 
+		if (tests.base !== undefined)
+			record.base = {
+				...tests.base,
+				tail: Buffer.from(tests.base.tail)
+					.subarray(-TEST_TAIL_BYTES)
+					.toString(),
+			};
+
 		if (unavailable) record.reason = "visible_tests_unavailable";
 		exclusive(
 			join(
 				patchDir(stateDir, binding.runId, binding.round),
 				unavailable
 					? `unavailable-${randomBytes(4).toString("hex")}.json`
-					: "tests.json",
+					: phase === "candidate"
+						? "candidate-tests.json"
+						: "tests.json",
 			),
 			`${JSON.stringify(record)}\n`,
 		);
