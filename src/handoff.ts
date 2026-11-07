@@ -538,8 +538,29 @@ export function candidateProjection(
 		if (work.kind === "waiting") {
 			status = "waiting";
 			progress = { kind: "waiting", checkpoint: "merge" };
-		} else if (work.kind === "held") status = "blocked";
-		else if (work.kind === "terminal") {
+		} else if (work.kind === "held") {
+			status = "blocked";
+			const latest = state.accounts.at(-1)?.execution;
+
+			round = Math.max(round, ...state.accounts.map((a) => a.execution.round));
+
+			if (
+				work.reason.startsWith("repair_") ||
+				work.reason === "feedback_repair"
+			)
+				stage = "build";
+			else if (work.reason.startsWith("review_")) stage = "review";
+			else if (
+				work.reason === "validation_failed" ||
+				work.reason.startsWith("diagnosis_")
+			)
+				stage = "validate";
+			else if (
+				latest !== undefined &&
+				["run_tokens", "disabled", "evidence_unavailable"].includes(work.reason)
+			)
+				stage = latest.stage;
+		} else if (work.kind === "terminal") {
 			const terminal = work.terminal;
 
 			if (terminal.kind === "merged") {

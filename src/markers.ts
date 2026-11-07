@@ -1,4 +1,5 @@
 import type { CommentEdit, IssueComment } from "./adapters/github.ts";
+import type { HandoffReason } from "./handoff.ts";
 import { type Digest, isDigest, runIdOf, type Stage } from "./run.ts";
 import { STAGE_ORDER } from "./stages.ts";
 import type { JsonValue } from "./tickets.ts";
@@ -224,9 +225,52 @@ const STATUS_TEXT: Readonly<Record<RunStatus, string>> = {
 		"stopped: questions are on the issue; answer them and add factory:ready again",
 };
 
+const HOLD_TEXT: Readonly<Record<HandoffReason, string>> = {
+	disabled: "factory execution is disabled",
+	main_moving: "the base branch keeps changing",
+	refresh_limit: "the base refresh allowance is used",
+	review_attempts: "the review attempt allowance is used",
+	review_tokens: "a review round used its token allowance",
+	repair_tokens: "a repair round used its token allowance",
+	run_tokens: "the run used its token allowance",
+	head_drift: "the PR head changed unexpectedly",
+	head_lag: "the PR head has not caught up",
+	checks_incomplete: "waiting for required checks",
+	review_failed: "the review did not pass",
+	review_input_too_large: "the review input is too large",
+	summary_too_large: "the PR summary is too large",
+	pr_identity: "the PR identity could not be verified",
+	pr_ambiguous: "more than one PR matches this run",
+	validation_failed: "validation did not pass",
+	evidence_unavailable: "required evidence is unavailable",
+	repair_limit: "the repair round allowance is used",
+	diagnosis_oracle: "the acceptance checks need attention",
+	diagnosis_missing_evidence: "diagnosis is missing required evidence",
+	diagnosis_infrastructure: "diagnosis found an infrastructure problem",
+	feedback_overflow: "owner feedback exceeds the intake limit",
+	feedback_repair: "owner feedback requires a repair",
+	repair_no_progress: "the repair made no progress",
+	repair_repeated_finding: "the repair repeated a blocking finding",
+	closed: "the PR is closed",
+	withdrawn: "authorization was withdrawn",
+};
+
 /** The full comment body: the marker line, then one line a person can read. */
-export function formatMarker(marker: Marker): string {
-	const body = `${MARKER_PREFIX}${markerJson(marker)}${MARKER_SUFFIX}\nFactory run \`${marker.runId.slice(0, 12)}\` is ${STATUS_TEXT[marker.status]}. Stage ${marker.stage}, attempt ${marker.attempt}.\n`;
+export function formatMarker(
+	marker: Marker,
+	holdReason?: HandoffReason,
+	displayRound = marker.round,
+): string {
+	let statusText = STATUS_TEXT[marker.status];
+
+	if (marker.status === "blocked") {
+		if (holdReason !== undefined)
+			statusText = `blocked: ${HOLD_TEXT[holdReason]} (${holdReason})`;
+		else if (marker.v === 3) statusText = "blocked: this run is on hold";
+	}
+
+	const roundText = displayRound === undefined ? "" : `, round ${displayRound}`;
+	const body = `${MARKER_PREFIX}${markerJson(marker)}${MARKER_SUFFIX}\nFactory run \`${marker.runId.slice(0, 12)}\` is ${statusText}. Stage ${marker.stage}${roundText}, attempt ${marker.attempt}.\n`;
 
 	if (Buffer.byteLength(body, "utf8") > MARKER_MAX_BYTES) {
 		throw new Error("a marker exceeds the size cap");
@@ -500,6 +544,7 @@ export function isControllerComment(comment: IssueComment): boolean {
 
 export type TrustedMarker = {
 	readonly marker: Marker;
+	readonly body: string;
 	readonly commentId: string;
 	readonly createdAt: string;
 };
@@ -571,7 +616,12 @@ function trustCheck(input: {
 		return defect("wrong_issue");
 	}
 
-	return { marker, commentId: comment.id, createdAt: comment.createdAt };
+	return {
+		marker,
+		body: comment.body,
+		commentId: comment.id,
+		createdAt: comment.createdAt,
+	};
 }
 
 function editDefect(

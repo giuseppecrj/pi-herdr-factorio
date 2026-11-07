@@ -2767,6 +2767,21 @@ function rebuildingFeedback(
 	};
 }
 
+test("a held feedback repair projects its real stage, round and attempt", () => {
+	const build = rebuildingFeedback();
+
+	const state = {
+		...build.state,
+		work: { kind: "held", reason: "repair_tokens", since: 100 } as const,
+	};
+
+	const projection = candidateProjection(state);
+	assert.equal(projection.status, "blocked");
+	assert.equal(projection.stage, "build");
+	assert.equal(projection.round, 1);
+	assert.equal(projection.attempt, build.execution.attempt);
+});
+
 function feedbackReview(
 	initial: ReturnType<typeof selected> = queuedFeedback(),
 ) {
