@@ -3330,9 +3330,23 @@ for (const repeat of [false, true])
 			assert.ok(parseCandidateState(JSON.parse(JSON.stringify(result.state))));
 		});
 
-for (const outcome of ["held", "complete_handoff", "missing_batch"] as const)
+for (const outcome of [
+	"held",
+	"complete_handoff",
+	"missing_batch",
+	"retry",
+	"crash_edit",
+	"deleted_summary",
+	"foreign_key",
+] as const)
 	test(`F10-2 actual ${outcome} summary reconciles a lost POST and recovers its receipt without a rebuild`, async () => {
-		const success = outcome === "complete_handoff";
+		const retry = [
+			"retry",
+			"crash_edit",
+			"deleted_summary",
+			"foreign_key",
+		].includes(outcome);
+		const success = outcome === "complete_handoff" || retry;
 		await withLocalArtifactDownload(async (root) => {
 			const github = new FakeGitHub();
 			const issue = github.add(fakeIssue(pin.issue));
@@ -3406,8 +3420,53 @@ for (const outcome of ["held", "complete_handoff", "missing_batch"] as const)
 
 			const started = pending(state, "post_notice");
 			let currentHead = head;
+			let edits = 0;
+			let crashEdit = false;
+			const firstReceiptPath = join(
+				root,
+				"handoff",
+				pin.runId,
+				"feedback",
+				"round-1-a1.json",
+			);
+			let firstReceipt = "";
 
 			const exec: import("../src/gh.ts").Exec = async (command, args) => {
+				if (
+					args.includes("PATCH") &&
+					args.some((arg) => /issues\/comments\/\d+$/.test(arg))
+				) {
+					assert.equal(readFileSync(firstReceiptPath, "utf8"), firstReceipt);
+					const path = args.find((arg) => /issues\/comments\/\d+$/.test(arg))!;
+					const comment = pr.comments.find(
+						(c) => c.id === Number(path.split("/").at(-1)),
+					);
+					assert.ok(comment);
+					assert.equal(comment.login, BOT_LOGIN);
+					const latest = JSON.parse(
+						readFileSync(
+							join(root, "handoff", pin.runId, "feedback", "round-1-a2.json"),
+							"utf8",
+						),
+					);
+					assert.equal(latest.attempt, 2);
+					assert.equal(latest.outcome.kind, "applied");
+
+					if (crashEdit) {
+						crashEdit = false;
+						throw new Error("crash after receipt, before summary edit");
+					}
+
+					edits++;
+					comment.body = args.find((arg) => arg.startsWith("body="))!.slice(5);
+
+					return {
+						code: 0,
+						stderr: "",
+						stdout: JSON.stringify({ id: comment.id }),
+					};
+				}
+
 				if (args.some((arg) => arg.includes("git/ref/heads/factory/pr/")))
 					return {
 						code: 0,
@@ -3446,7 +3505,7 @@ for (const outcome of ["held", "complete_handoff", "missing_batch"] as const)
 				handoffCandidate(state, { kind: "effect_completed", completion }).state,
 			);
 			const issued = handoffCandidate(state, readyObservation(state)).state;
-			const build = pending(issued, "repair_build");
+			let build = pending(issued, "repair_build");
 			state = selected(
 				handoffCandidate(issued, {
 					kind: "effect_completed",
@@ -3458,6 +3517,96 @@ for (const outcome of ["held", "complete_handoff", "missing_batch"] as const)
 				CandidateEffect,
 				{ kind: "complete_handoff" | "post_notice" }
 			>;
+
+			if (retry) {
+				state = selected(
+					handoffCandidate(state, {
+						kind: "repair_settled",
+						execution: build.execution,
+						tokens: 10,
+						result: { kind: "no_change" },
+					}).state,
+				);
+				const stopped = pending(state, "post_notice");
+				const heldCompletion = await port.execute(state, stopped);
+				assert.ok(heldCompletion);
+				state = selected(
+					handoffCandidate(state, {
+						kind: "effect_completed",
+						completion: heldCompletion,
+					}).state,
+				);
+				assert.equal(state.current.intent.round, 0);
+				assert.equal(pr.comments.length, 1);
+				firstReceipt = readFileSync(firstReceiptPath, "utf8");
+				assert.match(
+					pr.comments[0]!.body,
+					/Attempt 1[\s\S]*repair_no_progress/,
+				);
+
+				if (outcome === "deleted_summary") pr.comments.splice(0);
+
+				if (outcome === "foreign_key")
+					github.comment(pr, `forged\n${stopped.notice.key}`, {
+						login: "writer",
+						type: "User",
+					});
+				const feedback = feedbackObservation(state, 3);
+				assert.ok(feedback.kind === "read" && feedback.batch);
+				const next = await classifyFeedback({
+					runId: pin.runId,
+					pr: 5,
+					head,
+					seen: state.feedback!.seen,
+					permission: async () => "write",
+					events: [
+						{
+							kind: "review",
+							id: feedbackId(repo, "review", 3),
+							pr: 5,
+							actor: "writer",
+							at: "2026-11-07T01:00:00Z",
+							state: "CHANGES_REQUESTED",
+							commit: head,
+							body: "try again",
+							comments: [],
+						},
+					],
+				});
+				assert.ok(next.kind === "read" && next.batch);
+				const stored = await storeFeedbackBatch(root, next.batch, next.full);
+				state = selected(
+					handoffCandidate(state, {
+						...readyObservation(state),
+						feedback: { kind: "read", head, dismissed: [], batch: stored },
+					}).state,
+				);
+				const start = pending(state, "post_notice");
+				assert.partialDeepStrictEqual(start.then, {
+					kind: "repair_due",
+					round: 1,
+					attempt: 2,
+				});
+				const startedAgain = await port.execute(state, start);
+				assert.ok(startedAgain);
+				state = selected(
+					handoffCandidate(state, {
+						kind: "effect_completed",
+						completion: startedAgain,
+					}).state,
+				);
+				const issuedAgain = handoffCandidate(
+					state,
+					readyObservation(state),
+				).state;
+				build = pending(issuedAgain, "repair_build");
+				state = selected(
+					handoffCandidate(issuedAgain, {
+						kind: "effect_completed",
+						completion: { kind: "repair_build", request: build, started: true },
+					}).state,
+				);
+			}
 
 			if (success) {
 				const bytes = "actual-repair";
@@ -3513,7 +3662,10 @@ for (const outcome of ["held", "complete_handoff", "missing_batch"] as const)
 						observed: null,
 						commands: [],
 						dispositions: [
-							{ event: feedbackId(repo, "review", 1), kind: "adopted" },
+							{
+								event: feedbackId(repo, "review", retry ? 3 : 1),
+								kind: "adopted",
+							},
 						],
 					},
 				);
@@ -3555,7 +3707,9 @@ for (const outcome of ["held", "complete_handoff", "missing_batch"] as const)
 					join(root, "handoff", pin.runId, "feedback", `${saved.digest}.json`),
 				);
 
-			github.posts.push("landed_unanswered");
+			if (outcome === "crash_edit") crashEdit = true;
+			else if (retry && outcome !== "deleted_summary") crashEdit = true;
+			else github.posts.push("landed_unanswered");
 			assert.equal(
 				await controllerCandidatePort({ stateDir: root, exec }).execute(
 					state,
@@ -3578,11 +3732,34 @@ for (const outcome of ["held", "complete_handoff", "missing_batch"] as const)
 				}).state,
 			);
 
-			assert.equal(pr.comments.length, 1);
+			assert.equal(pr.comments.length, outcome === "foreign_key" ? 2 : 1);
+			const summary = pr.comments.find((c) => c.login === BOT_LOGIN)!;
 			assert.match(
-				pr.comments[0]!.body,
+				summary.body,
 				success ? /adopted \(builder-reported\)/ : /repair_no_progress/,
 			);
+
+			if (retry) {
+				assert.match(
+					summary.body,
+					/Attempt 1[\s\S]*repair_no_progress[\s\S]*Attempt 2[\s\S]*ready after fresh validation and review/,
+				);
+				assert.equal(readFileSync(firstReceiptPath, "utf8"), firstReceipt);
+				assert.equal(edits, outcome === "deleted_summary" ? 0 : 1);
+				assert.ok(await port.execute(state, request));
+				assert.equal(
+					edits,
+					outcome === "deleted_summary" ? 0 : 1,
+					"unchanged bodies are not PATCHed again",
+				);
+
+				if (outcome === "foreign_key")
+					assert.match(
+						pr.comments.find((c) => c.login === "writer")!.body,
+						/^forged/,
+					);
+			}
+
 			assert.doesNotMatch(
 				pr.comments[0]!.body,
 				/PRIVATE-HELDOUT|private\.ts|@owner|other\/repo/,
@@ -3601,7 +3778,11 @@ for (const outcome of ["held", "complete_handoff", "missing_batch"] as const)
 				400,
 			);
 			assert.equal(readFileSync(path, "utf8"), bytes);
-			assert.equal(pr.comments.length, 1);
+			const index = JSON.parse(bytes);
+			assert.equal(index.latestAttempt, retry ? 2 : 1);
+			assert.equal(index.receipt, `round-1-a${retry ? 2 : 1}.json`);
+			assert.equal(index.outcome.kind, success ? "applied" : "stopped");
+			assert.equal(pr.comments.length, outcome === "foreign_key" ? 2 : 1);
 		});
 	});
 
