@@ -2213,41 +2213,125 @@ describe("Orchestrator base qualification", () => {
 		assert.deepEqual(await checker.check(input), found);
 	});
 
-	it("reads legacy receipts but never uses an unattested storedAttempt to discount model spend", async () => {
-		const { github, executor, files, clock, start } = world();
-		github.add(labeled(14));
-		executor.behaviors = [{ kind: "pass", usage: 10 }];
-		executor.acceptBehavior = { kind: "pass", usage: 20 };
-		executor.baseOutcomes = [["interrupted", "checking"]];
-		executor.baseReceipt = (binding) => refusedReceipt(binding, FEEDBACK);
-		executor.spentBy.set("accept-1", 20);
-		await drive(start(), clock, true);
-		const runId = runOf(14);
+	for (const granted of [false, true])
+		it(`keeps a legacy receipt's feedback retry after a check-only recheck (${granted ? "already granted" : "not yet granted"})`, async () => {
+			const { github, executor, files, clock, logs, start } = world();
+			github.add(labeled(14));
+			executor.behaviors = [{ kind: "pass", usage: 10 }];
+			executor.acceptBehavior = { kind: "pass", usage: 20 };
+			executor.baseOutcome = "checking";
+			executor.baseReceipt = (binding) => refusedReceipt(binding, FEEDBACK);
+			executor.spentBy.set("accept-1", 20);
+			await drive(start(), clock, true);
+			const runId = runOf(14);
+			const root = join(files.artifactRoot, "acceptance");
+			const receiptPath = join(root, runId, "receipt.json");
 
-		const receiptPath = join(
-			files.artifactRoot,
-			"acceptance",
-			runId,
-			"receipt.json",
-		);
+			const { storedAttempt: _legacy, ...legacy } = JSON.parse(
+				readFileSync(receiptPath, "utf8"),
+			);
 
-		const { storedAttempt: _legacy, ...legacy } = JSON.parse(
-			readFileSync(receiptPath, "utf8"),
-		);
+			// Main wrote both copies with tabs, a trailing newline and no storedAttempt.
+			const bytes = `${JSON.stringify(legacy, null, "\t")}\n`;
+			writeFileSync(receiptPath, bytes);
+			writeFileSync(join(root, `${runId}.json`), bytes);
+			executor.baseOutcomes = [["interrupted", "checking"]];
+			await drive(start(), clock, true);
+			const claim = files.claims.get(runId);
+			assert.ok(claim?.baseCheck);
+			const reference = claim.baseCheck;
+			assert.equal(reference.storedAttempt, 1);
+			assert.equal(reference.acceptAttempt, 2);
+			assert.ok(
+				executor.baseChecks.some(
+					(check) => check.acceptAttempt === 2 && check.readOnly !== true,
+				),
+			);
+			assert.equal(
+				await executor.spent({ runId, stage: "accept", attempt: 2 }),
+				null,
+			);
+			assert.equal(readFileSync(receiptPath, "utf8"), bytes);
 
-		const bytes = `${JSON.stringify(legacy)}\n`;
-		writeFileSync(receiptPath, bytes);
-		writeFileSync(
-			join(files.artifactRoot, "acceptance", `${runId}.json`),
-			bytes,
-		);
-		executor.baseOutcomes = ["preservation_failed"];
-		await roundTripQualification(files);
-		await drive(start(), clock);
-		assert.deepEqual(launched(executor), ["specify-1", "accept-1"]);
-		assert.equal(refusals(github).length, 1);
-		assert.equal(readFileSync(receiptPath, "utf8"), bytes);
-	});
+			if (granted) {
+				const contract = await files.readContract(runId);
+				assert.ok(contract.kind === "found");
+				assert.equal(
+					await files.artifacts.retire(
+						runId,
+						contract.contract,
+						contract.digest,
+						reference.binding.acceptanceDigest,
+					),
+					"retired",
+				);
+			}
+
+			const disk = fileRunFiles(files.artifactRoot);
+			assert.equal(await disk.writeClaim(claim), true);
+			const claimPath = join(files.artifactRoot, "claims", `${runId}.json`);
+			const stored = JSON.parse(readFileSync(claimPath, "utf8"));
+			delete stored.baseCheck.kind;
+
+			if (granted)
+				stored.baseCheck.retry = {
+					refused: reference.binding,
+					reason: "preservation_failed",
+					receiptDigest: digestOf(JSON.stringify([reference.binding, 2])),
+					scenarios: ["S1"],
+					baseWallMs: 5_000,
+				};
+
+			const claimBytes = `${JSON.stringify(stored)}\n`;
+
+			writeFileSync(claimPath, claimBytes);
+
+			const recovered = (await disk.listClaims()).find(
+				(c) => c.runId === runId,
+			);
+
+			assert.ok(recovered?.baseCheck);
+			assert.equal(readFileSync(claimPath, "utf8"), claimBytes);
+			assert.equal(
+				recovered.baseCheck.kind,
+				granted ? "retry_pending" : "checking",
+			);
+			files.claims.set(runId, recovered);
+			executor.baseOutcomes = ["preservation_failed", "preservation_failed"];
+			await drive(start(), clock);
+			await drive(start(), clock);
+			assert.deepEqual(launched(executor), [
+				"specify-1",
+				"accept-1",
+				"accept-3",
+			]);
+			assert.equal(files.claims.get(runId)?.status, "failed");
+			assert.ok(
+				!statuses(github, 14).some((status) =>
+					status.endsWith(":budget_exhausted"),
+				),
+			);
+			assert.ok(!logs.some((log) => log.event === "launch_refused"));
+
+			const retry = executor.launches.find(
+				(l) => l.stage === "accept" && l.attempt === 3,
+			);
+
+			assert.equal(retry?.settings.maxTokens, ACCEPTANCE_MAX_TOKENS - 20);
+			assert.equal(retry?.settings.budget.wallMs, 900_000 - 1 - 5_000);
+			assert.equal(refusals(github).length, 1);
+			assert.equal(
+				readFileSync(
+					join(root, `${runId}.retired`, "suite", "receipt.json"),
+					"utf8",
+				),
+				bytes,
+			);
+			assert.equal(
+				readFileSync(join(root, `${runId}.retired`, "guard.json"), "utf8"),
+				bytes,
+			);
+		});
 
 	const refusals = (github: FakeGitHub) => keyed(github, 14, "base-refusal");
 
