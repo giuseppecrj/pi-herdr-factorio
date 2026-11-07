@@ -12534,6 +12534,13 @@ describe("controller-only validate", () => {
 					"must reach review preparation after validation",
 				);
 			assert.equal(result.work.kind, "held");
+			const heldMarker = f.github.markers(14).at(-1) ?? "";
+
+			assert.ok(heldMarker.includes(`(${result.work.reason})`));
+			assert.doesNotMatch(heldMarker, /the stage sandbox is unavailable/);
+
+			if (fault === "no_change")
+				assert.match(heldMarker, /Stage build, round 1, attempt 1\./);
 			assert.equal(
 				notices.filter((kind) => kind === "repair_started").length,
 				1,
@@ -12584,6 +12591,24 @@ describe("controller-only validate", () => {
 				assert.equal(keyed(f.github, 14, "review-input").length, 1);
 				assert.deepEqual(restored.feedback, result.feedback);
 				assert.deepEqual(restored.work, result.work);
+			}
+
+			if (fault === "no_change") {
+				const saved = f.files.claims.get(runOf(14));
+				assert.ok(saved && restored.work.kind === "held");
+				f.files.claims.set(runOf(14), {
+					...saved,
+					handoff: {
+						...restored,
+						work: { ...restored.work, reason: "repair_tokens" },
+					},
+				});
+				const changed = f.start();
+				await drive(changed, f);
+				assert.match(f.github.markers(14).at(-1) ?? "", /\(repair_tokens\)/);
+				const count = f.github.markers(14).length;
+				await drive(changed, f);
+				assert.equal(f.github.markers(14).length, count);
 			}
 		});
 
