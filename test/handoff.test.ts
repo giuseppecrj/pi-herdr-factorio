@@ -3131,8 +3131,12 @@ for (const ending of roundEndings)
 
 		assert.ok(persisted);
 
+		const movedMain = "f".repeat(40);
+		assert.ok(isGitSha(movedMain));
+
 		const retry = handoffCandidate(persisted, {
 			...roundObservation(persisted),
+			main: movedMain,
 			now: 9999,
 		});
 
@@ -3990,6 +3994,7 @@ for (const outcome of [
 	"foreign_key",
 	"build_retry",
 	"other_applying",
+	"start_merge_window",
 ] as const)
 	test(`F10-2 actual ${outcome} summary reconciles a lost POST and recovers its receipt without a rebuild`, async () => {
 		const retry = [
@@ -4173,6 +4178,38 @@ for (const outcome of [
 			assert.ok(completion?.kind === "post_notice");
 			assert.ok(!pr.labels.includes("factory:review"));
 			assert.equal(issue.comments.length, 1);
+
+			if (outcome === "start_merge_window") {
+				const restored = parseCandidateState(JSON.parse(JSON.stringify(state)));
+				assert.ok(restored);
+
+				const merged = handoffCandidate(restored, {
+					...observed(),
+					pr: {
+						kind: "merged",
+						number: 5,
+						head,
+						mergeSha: sha,
+						actor: "owner",
+					},
+				});
+
+				assert.partialDeepStrictEqual(
+					pending(merged.state, "finish_pr").terminal,
+					{
+						kind: "merged",
+						assurance: { kind: "factory_verified" },
+						readiness: {
+							kind: "not_ready",
+							reason: "feedback_repair",
+							since: started.at,
+						},
+					},
+				);
+
+				return;
+			}
+
 			state = selected(
 				handoffCandidate(state, { kind: "effect_completed", completion }).state,
 			);
