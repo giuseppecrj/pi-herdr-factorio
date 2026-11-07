@@ -825,8 +825,10 @@ test("check assessments preserve independent CI failures without relaxing dual-t
 			})),
 		},
 	});
+
 	const replay = input.replay;
 	assert.ok(replay?.kind === "observed");
+
 	const assessed = assessCiFailure({
 		...input,
 		replay: {
@@ -837,6 +839,7 @@ test("check assessments preserve independent CI failures without relaxing dual-t
 			},
 		},
 	});
+
 	assert.equal(assessed.kind, "unavailable");
 	assert.deepEqual(assessed.failure, {
 		kind: "missing_evidence",
@@ -868,10 +871,42 @@ test("check assessment gives a candidate-only CI check a reasoned control proof"
 			replay: null,
 		}),
 	);
+
 	assert.equal(assessed.kind, "candidate_failure");
+
 	if (assessed.kind !== "candidate_failure") return;
 	assert.equal(assessed.proof.kind, "candidate_only_check");
 	assert.ok(JSON.stringify(assessed.proof).includes("npmrc_changed"));
+});
+
+test("a failing check that exists only in the candidate has a candidate-only proof", () => {
+	const assessed = assessCiFailure(
+		unitInput({
+			receiptPatch: {
+				heldoutFailures: [],
+				checks: [
+					"baseline_tests",
+					"typecheck",
+					"lint",
+					"format",
+					"main_tests",
+					"candidate_tests",
+					"heldout",
+				].map((name) => ({
+					name,
+					exitCode: name === "candidate_tests" ? 1 : 0,
+				})),
+			},
+		}),
+	);
+
+	assert.equal(assessed.kind, "candidate_failure");
+
+	if (assessed.kind !== "candidate_failure") return;
+	assert.equal(assessed.proof.kind, "candidate_only_check");
+
+	if (assessed.proof.kind !== "candidate_only_check") return;
+	assert.equal(assessed.proof.justification.kind, "new_visible_tests");
 });
 
 test("visible check assessments require comparable control identities before blame", () => {
@@ -879,6 +914,7 @@ test("visible check assessments require comparable control identities before bla
 		dependenciesDigest: digestOf("lock"),
 		runtimeDigest: digestOf("bundle + sandbox"),
 	};
+
 	const result = {
 		command: "node --test test/*.ts",
 		exitCode: 1,
@@ -886,14 +922,17 @@ test("visible check assessments require comparable control identities before bla
 		wallMs: 1,
 		environment,
 	};
+
 	const receipt = {
 		runId: digestOf("assessment"),
 		baseSha: "a".repeat(40),
 		patchDigest: digestOf("patch"),
 		visibleTests: { ...result, base: { ...result, exitCode: 0 } },
 	};
+
 	const regression = assessVisibleChecks(receipt);
 	assert.equal(regression.kind, "candidate_failure");
+
 	if (regression.kind === "candidate_failure")
 		assert.equal(regression.proof.kind, "base_passed");
 	assert.deepEqual(regression.binding.candidate, {
@@ -930,6 +969,7 @@ test("visible check assessments require comparable control identities before bla
 		assessVisibleChecks({ ...receipt, visibleTests: result }, "candidate").kind,
 		"pending",
 	);
+
 	for (const [base, reason] of [
 		[undefined, "base_missing"],
 		[{ ...result, exitCode: null, detail: "timeout" }, "timeout"],
@@ -945,29 +985,40 @@ test("visible check assessments require comparable control identities before bla
 			},
 			"identity_mismatch",
 		],
-		[
-			{
-				...result,
-				exitCode: 0,
-				environment: {
-					...environment,
-					dependenciesDigest: digestOf("another lock"),
-				},
-			},
-			"identity_mismatch",
-		],
 	] as const) {
 		const assessed = assessVisibleChecks({
 			...receipt,
 			visibleTests: { ...result, base },
 		});
+
 		assert.equal(assessed.kind, "unavailable");
+
 		if (assessed.kind === "unavailable") assert.equal(assessed.reason, reason);
 	}
+
+	// Candidate dependency changes are part of its patch, not a changed runtime.
+	const dependencyChange = assessVisibleChecks({
+		...receipt,
+		visibleTests: {
+			...result,
+			base: {
+				...result,
+				exitCode: 0,
+				environment: {
+					...environment,
+					dependenciesDigest: digestOf("base lock"),
+				},
+			},
+		},
+	});
+
+	assert.equal(dependencyChange.kind, "candidate_failure");
+
 	const timedOut = assessVisibleChecks({
 		...receipt,
 		visibleTests: { ...result, exitCode: null, detail: "timeout" },
 	});
+
 	assert.equal(timedOut.kind, "unavailable");
 });
 

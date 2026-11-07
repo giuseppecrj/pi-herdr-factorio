@@ -32,6 +32,7 @@ import {
 	commandReceipts,
 	baseTestCommand,
 	trustedVisiblePlan,
+	visibleEnvironment,
 	checkBuildDisk,
 	patchBinding,
 	patchDir,
@@ -2796,6 +2797,7 @@ export async function runVisibleTests(
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let tail = Buffer.alloc(0);
 	let timedOut = false;
+	let environment: VisibleTests["environment"];
 
 	try {
 		await patchedTree(base, workspace, patch);
@@ -2805,6 +2807,17 @@ export async function runVisibleTests(
 			command,
 			replacesTests,
 		).command;
+		environment = visibleEnvironment(
+			workspace,
+			digestOf(
+				JSON.stringify({
+					bundle: config.assetsDigest,
+					arch: config.arch,
+					versions: config.versions,
+					runner: "visible-bwrap-v1",
+				}),
+			),
+		);
 
 		const table = builtinTable({
 			stage: "build",
@@ -2888,6 +2901,7 @@ export async function runVisibleTests(
 
 		return {
 			command,
+			environment,
 			exitCode,
 			tail: tail.toString(),
 			wallMs: Date.now() - start,
@@ -2906,6 +2920,7 @@ export async function runVisibleTests(
 
 		return {
 			command,
+			environment,
 			exitCode: null,
 			reason: "visible_tests_unavailable",
 			// SAFETY: only the fixed infrastructure reason allowlist above reaches this field.

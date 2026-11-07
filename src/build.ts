@@ -23,6 +23,11 @@ import {
 	regularBytes,
 } from "./artifacts.ts";
 import { checkChangedPaths } from "./policy.ts";
+import {
+	assessVisibleChecks,
+	type CheckAssessment,
+	type CheckEnvironment,
+} from "./diagnosis.ts";
 import { digestOf, isDigest, type Digest } from "./run.ts";
 import { renderInlined, type Contract, type InlinedFile } from "./specify.ts";
 import type { Guidance } from "./workflow.ts";
@@ -56,6 +61,7 @@ export type CommandReceipt = {
 };
 
 export type VisibleTestResult = {
+	readonly environment?: CheckEnvironment;
 	readonly command: string;
 	readonly exitCode: number | null;
 	readonly tail: string;
@@ -70,6 +76,7 @@ export type VisibleTestResult = {
 };
 
 export type VisibleTests = VisibleTestResult & {
+	readonly assessment?: CheckAssessment;
 	readonly base?: VisibleTestResult;
 };
 
@@ -107,7 +114,7 @@ export type PatchReceipt = PatchBinding & {
 	readonly testScriptChanged: boolean;
 	readonly testInputsChanged: boolean;
 	readonly visibleTests: VisibleTests | null;
-	readonly candidateTests?: VisibleTestResult;
+	readonly candidateTests?: VisibleTests;
 };
 
 export type PatchRead =
@@ -584,6 +591,33 @@ export function trustedVisiblePlan(
 	};
 }
 
+/** Identity of the dependency inputs actually supplied to npm ci, not builder caches. */
+export function visibleEnvironment(
+	workspace: string,
+	runtimeDigest: Digest,
+): CheckEnvironment {
+	const manifest = objectOf(
+		parseJson(
+			present(join(workspace, "package.json"))
+				? readFileSync(join(workspace, "package.json"), "utf8")
+				: "null",
+		),
+	);
+
+	const { scripts: _scripts, ...dependencies } = manifest ?? {};
+
+	const lock = present(join(workspace, "package-lock.json"))
+		? digestOf(readFileSync(join(workspace, "package-lock.json")))
+		: null;
+
+	return {
+		dependenciesDigest: digestOf(
+			JSON.stringify({ manifest: dependencies, lock }),
+		),
+		runtimeDigest,
+	};
+}
+
 export function roundKey(runId: string, round = 0): string {
 	if (!Number.isSafeInteger(round) || round < 0 || round > 2)
 		throw new Error("invalid_round");
@@ -648,19 +682,40 @@ export function readPatch(stateDir: string, binding: PatchBinding): PatchRead {
 
 			const base = tests.base;
 
+			const environmentValid = (result: VisibleTestResult): boolean =>
+				result.environment === undefined ||
+				(result.environment !== null &&
+					isDigest(result.environment.dependenciesDigest) &&
+					isDigest(result.environment.runtimeDigest));
+
 			if (
 				!sameBinding(tests, binding) ||
 				tests.patchDigest !== receipt.patchDigest ||
 				!Number.isSafeInteger(tests.exitCode) ||
+				!environmentValid(tests) ||
 				(base !== undefined &&
 					(base === null ||
 						base.command !== tests.command ||
+						!environmentValid(base) ||
 						(base.exitCode !== null && !Number.isSafeInteger(base.exitCode)) ||
 						textOf(base.tail) === null ||
 						!Number.isFinite(base.wallMs) ||
 						base.wallMs < 0))
 			)
 				return { kind: "blocked", reason: "patch_invalid" };
+
+			if (
+				tests.assessment !== undefined &&
+				JSON.stringify(tests.assessment) !==
+					JSON.stringify(
+						assessVisibleChecks(
+							{ ...receipt, visibleTests: tests },
+							field === "candidateTests" ? "candidate" : "complete",
+						),
+					)
+			)
+				return { kind: "blocked", reason: "patch_invalid" };
+
 			Object.assign(recovered, { [field]: tests });
 		}
 
@@ -765,6 +820,7 @@ export function finishPatch(
 			...tests,
 			...patchBinding(binding),
 			patchDigest: prior.receipt.patchDigest,
+			assessment: tests.assessment,
 			tail: Buffer.from(tests.tail).subarray(-TEST_TAIL_BYTES).toString(),
 		};
 
@@ -775,6 +831,11 @@ export function finishPatch(
 					.subarray(-TEST_TAIL_BYTES)
 					.toString(),
 			};
+
+		record.assessment = assessVisibleChecks(
+			{ ...prior.receipt, visibleTests: record },
+			phase,
+		);
 
 		if (unavailable) record.reason = "visible_tests_unavailable";
 		exclusive(

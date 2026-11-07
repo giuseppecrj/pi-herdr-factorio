@@ -234,6 +234,7 @@ export type StageOutput =
 type WorkflowPin = Pick<ActiveRun, "workflowSha" | "workflowDigest">;
 
 import {
+	assessVisibleChecks,
 	baseRefusalNotice,
 	baseRetryFeedback,
 	diagnosisNotice,
@@ -6516,23 +6517,27 @@ export class Orchestrator {
 				body,
 			);
 
+			const assessment = assessVisibleChecks(receipt);
+
 			if (
 				posted &&
-				(receipt.policy === "forbidden" || receipt.visibleTests?.exitCode !== 0)
+				(receipt.policy === "forbidden" || assessment.kind !== "passed")
 			) {
 				const forbidden = receipt.policy === "forbidden";
-				const baseExit = receipt.visibleTests?.base?.exitCode;
 
 				this.#stop(run, {
 					stage: "build",
-					class: forbidden || baseExit === 0 ? "candidate" : "missing_evidence",
+					class:
+						forbidden || assessment.kind === "candidate_failure"
+							? "candidate"
+							: "missing_evidence",
 					reason: forbidden
 						? "patch_forbidden"
-						: baseExit == null
-							? "visible_base_unavailable"
-							: baseExit !== 0
+						: assessment.kind === "candidate_failure"
+							? "visible_tests_failed"
+							: assessment.kind === "base_failure"
 								? "visible_base_failed"
-								: "visible_tests_failed",
+								: "visible_base_unavailable",
 				});
 
 				return false;
