@@ -37,24 +37,35 @@ export type AcceptRetry = Readonly<{
 	/** The refused, retired first suite. Its stored receipt sources the feedback. */
 	refused: AcceptanceBinding;
 	/** Always an `author` reason; the rest of the original refusal notice. */
-	reason: BaseReason;
+	reason: AuthorRetryReason;
 	receiptDigest: Digest;
 	scenarios: readonly string[];
 	/** Every base-check attempt's wall on the refused suite, charged to accept. */
 	baseWallMs: number;
 }>;
 
-export type BaseCheckReference = Readonly<{
+type AcceptanceSuiteReference = Readonly<{
+	/** The current suite, or the retired suite while a replacement is pending. */
 	binding: AcceptanceBinding;
 	acceptAttempt: number;
-	/**
-	 * The accept attempt that stored the bound suite; later attempts only
-	 * reran its base check. Older claims lack it and read as `acceptAttempt`.
-	 */
-	storedAttempt?: number;
+	/** The model attempt in the acceptance receipt, not a later check-only attempt. */
+	storedAttempt: number;
 	remainingAcceptMs: number;
-	retry?: AcceptRetry;
 }>;
+
+export type AcceptanceQualification = AcceptanceSuiteReference &
+	(
+		| Readonly<{ kind: "checking"; retry?: never }>
+		| Readonly<{ kind: "retry_pending"; retry: AcceptRetry }>
+		| Readonly<{ kind: "rechecking_replacement"; retry: AcceptRetry }>
+		| Readonly<{ kind: "qualified"; proof: BaseProof; retry?: AcceptRetry }>
+		| Readonly<{
+				kind: "refused";
+				failure: BaseRefusal;
+				noticeKey: string;
+				retry?: AcceptRetry;
+		  }>
+	);
 
 /** The granted retry's original refusal, posted if the run ends without a final one. */
 export function retriedRefusal(retry: AcceptRetry): BaseRefusal {
@@ -67,12 +78,10 @@ export function retriedRefusal(retry: AcceptRetry): BaseRefusal {
 }
 
 /** Whether the granted retry still awaits its new suite. */
-export function retryPending(reference: BaseCheckReference): boolean {
-	return (
-		reference.retry !== undefined &&
-		reference.retry.refused.acceptanceDigest ===
-			reference.binding.acceptanceDigest
-	);
+export function retryPending(
+	reference: AcceptanceQualification,
+): reference is Extract<AcceptanceQualification, { kind: "retry_pending" }> {
+	return reference.kind === "retry_pending";
 }
 
 export function parseAcceptanceBinding(
@@ -103,7 +112,7 @@ export function parseAcceptanceBinding(
 
 export function parseBaseCheckReference(
 	value: JsonValue | undefined,
-): BaseCheckReference | null {
+): AcceptanceQualification | null {
 	const v = objectOf(value),
 		binding = parseAcceptanceBinding(fieldOf(v, "binding")),
 		acceptAttempt = countOf(fieldOf(v, "acceptAttempt")),
@@ -123,17 +132,81 @@ export function parseBaseCheckReference(
 	)
 		return null;
 
-	let reference: BaseCheckReference = {
+	const reference: AcceptanceSuiteReference = {
 		binding,
 		acceptAttempt,
+		storedAttempt: storedAttempt ?? acceptAttempt,
 		remainingAcceptMs,
 	};
 
-	if (storedAttempt !== null) reference = { ...reference, storedAttempt };
+	const rawKind = fieldOf(v, "kind");
 	const rawRetry = fieldOf(v, "retry");
 
-	if (rawRetry === undefined) return reference;
+	const retry =
+		rawRetry === undefined ? undefined : parseAcceptRetry(rawRetry, binding);
 
+	if (retry === null) return null;
+
+	// Legacy claims inferred pending from digest equality. Only the decoder does
+	// that now; every live transition carries its own discriminant.
+	const kind =
+		rawKind === undefined
+			? retry === undefined
+				? "checking"
+				: retry.refused.acceptanceDigest === binding.acceptanceDigest
+					? "retry_pending"
+					: "rechecking_replacement"
+			: rawKind;
+
+	if (kind === "checking")
+		return retry === undefined ? { ...reference, kind } : null;
+
+	if (kind === "retry_pending" || kind === "rechecking_replacement") {
+		if (
+			retry === undefined ||
+			(retry.refused.acceptanceDigest === binding.acceptanceDigest) !==
+				(kind === "retry_pending")
+		)
+			return null;
+
+		return { ...reference, kind, retry };
+	}
+
+	if (kind === "qualified") {
+		// A serialized claim cannot mint BaseProof's private brand. Recovery goes
+		// back to the stored base receipt, including after a summary-write crash.
+		return retry === undefined
+			? { ...reference, kind: "checking" }
+			: retry.refused.acceptanceDigest !== binding.acceptanceDigest
+				? { ...reference, kind: "rechecking_replacement", retry }
+				: null;
+	}
+
+	if (kind === "refused") {
+		const failure = parseBaseRefusal(fieldOf(v, "failure"));
+		const noticeKey = textOf(fieldOf(v, "noticeKey"));
+
+		if (
+			failure === null ||
+			noticeKey !== baseRefusalNotice(failure).key ||
+			(JSON.stringify(failure.binding) !== JSON.stringify(binding) &&
+				(retry === undefined ||
+					JSON.stringify(failure) !== JSON.stringify(retriedRefusal(retry))))
+		)
+			return null;
+
+		return retry === undefined
+			? { ...reference, kind, failure, noticeKey }
+			: { ...reference, kind, failure, noticeKey, retry };
+	}
+
+	return null;
+}
+
+function parseAcceptRetry(
+	rawRetry: JsonValue,
+	binding: AcceptanceBinding,
+): AcceptRetry | null {
 	const r = objectOf(rawRetry),
 		refused = parseAcceptanceBinding(fieldOf(r, "refused")),
 		reason = parseBaseReason(fieldOf(r, "reason")),
@@ -153,10 +226,24 @@ export function parseBaseCheckReference(
 		baseWallMs !== null &&
 		JSON.stringify(refused) ===
 			JSON.stringify({ ...binding, acceptanceDigest: refused.acceptanceDigest })
-		? {
-				...reference,
-				retry: { refused, reason, receiptDigest, scenarios, baseWallMs },
-			}
+		? { refused, reason, receiptDigest, scenarios, baseWallMs }
+		: null;
+}
+
+function parseBaseRefusal(value: JsonValue | undefined): BaseRefusal | null {
+	const v = objectOf(value);
+	const binding = parseAcceptanceBinding(fieldOf(v, "binding"));
+	const receiptDigest = textOf(fieldOf(v, "receiptDigest")) ?? "";
+	const reason = parseBaseReason(fieldOf(v, "reason"));
+	const scenarios = textsOf(fieldOf(v, "scenarios"));
+
+	return binding !== null &&
+		isDigest(receiptDigest) &&
+		reason !== null &&
+		scenarios !== null &&
+		scenarios.length <= 50 &&
+		scenarios.every((s) => SCENARIO_ID.test(s))
+		? { binding, receiptDigest, reason, scenarios }
 		: null;
 }
 
@@ -304,6 +391,7 @@ export type BaseAssessment =
 export type BaseCheckInput = Readonly<{
 	binding: AcceptanceBinding;
 	acceptAttempt: number;
+	storedAttempt?: number;
 	remainingAcceptMs: number;
 	signal: AbortSignal;
 	allowLaunch?: boolean;
@@ -852,7 +940,15 @@ export const BASE_RETRY = {
 	base_evidence_missing: "final",
 } as const satisfies Readonly<Record<BaseReason, "author" | "final">>;
 
-export function retryableBaseReason(reason: BaseReason): boolean {
+export type AuthorRetryReason = {
+	[Reason in BaseReason]: (typeof BASE_RETRY)[Reason] extends "author"
+		? Reason
+		: never;
+}[BaseReason];
+
+export function retryableBaseReason(
+	reason: BaseReason,
+): reason is AuthorRetryReason {
 	return BASE_RETRY[reason] === "author";
 }
 

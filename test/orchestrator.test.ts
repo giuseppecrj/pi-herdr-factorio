@@ -43,6 +43,7 @@ import {
 	fileRunFiles,
 	pinVerification,
 	controllerCandidatePort,
+	controllerBaseChecker,
 	HOLDER_FILE,
 	type ProcessTable,
 	parseStartTime,
@@ -100,6 +101,7 @@ import {
 	type BaseCheckProgress,
 	type BaseReason,
 	type BaseReceipt,
+	type AcceptRetry,
 } from "../src/diagnosis.ts";
 import { advance } from "../src/stages.ts";
 import {
@@ -2109,6 +2111,228 @@ async function replayAcceptGuard(
 }
 
 describe("Orchestrator base qualification", () => {
+	it("rejects a hand-edited storedAttempt before reusing a base check", async () => {
+		const { github, executor, files, clock, start } = world();
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "pass", usage: 20 };
+		executor.baseOutcome = "interrupted";
+		await once(start());
+		const claim = files.claims.get(runOf(14));
+		assert.ok(claim?.baseCheck);
+		assert.equal(claim.baseCheck.acceptAttempt, 2);
+		files.claims.set(runOf(14), {
+			...claim,
+			baseCheck: { ...claim.baseCheck, storedAttempt: 2 },
+		});
+		executor.baseOutcome = "ready";
+		clock.t += 60_000;
+		await once(start());
+		assert.ok(!executor.launches.some((l) => l.stage === "build"));
+		assert.notEqual(files.claims.get(runOf(14))?.stage, "build");
+		assert.equal(statuses(github, 14).at(-1)?.endsWith(":failed"), true);
+	});
+
+	it("rejects lowering the stored attempt to hide a model attempt from the feedback allowance", async () => {
+		const { github, executor, files, clock, start } = world();
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehaviors = [
+			{ kind: "fail", usage: 10 },
+			{ kind: "pass", usage: 20 },
+		];
+		executor.acceptBehavior = { kind: "pass", usage: 20 };
+		executor.baseOutcome = "checking";
+		executor.baseReceipt = (binding) => refusedReceipt(binding, FEEDBACK);
+		executor.spentBy.set("accept-1", 10);
+		executor.spentBy.set("accept-2", 20);
+		const controller = start();
+		await drive(controller, clock, true);
+		await drive(controller, clock, true);
+		const claim = files.claims.get(runOf(14));
+		assert.ok(claim?.baseCheck);
+		assert.equal(claim.baseCheck.storedAttempt, 2);
+		files.claims.set(runOf(14), {
+			...claim,
+			baseCheck: { ...claim.baseCheck, storedAttempt: 1 },
+		});
+		await roundTripQualification(files);
+		executor.baseOutcome = "preservation_failed";
+		await drive(start(), clock);
+		assert.deepEqual(launched(executor), ["specify-1", "accept-1", "accept-2"]);
+		assert.equal(statuses(github, 14).at(-1)?.endsWith(":failed"), true);
+	});
+
+	it("checks the receipt's model attempt before recovering a cached controller base result", async () => {
+		const { github, executor, files, clock, start } = world();
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "pass", usage: 20 };
+		executor.baseOutcome = "checking";
+		await drive(start(), clock, true);
+		const reference = files.claims.get(runOf(14))?.baseCheck;
+		assert.ok(reference);
+
+		const dir = join(
+			files.artifactRoot,
+			"base-check",
+			runOf(14),
+			digestOf(JSON.stringify(reference.binding)),
+			"a1",
+		);
+
+		mkdirSync(dir, { recursive: true, mode: 0o700 });
+		const text = JSON.stringify(refusedReceipt(reference.binding, FEEDBACK));
+		writeFileSync(join(dir, "result.json"), text, { mode: 0o600 });
+		writeFileSync(join(dir, "result.digest"), digestOf(text), { mode: 0o600 });
+		const checker = controllerBaseChecker({ stateDir: files.artifactRoot });
+
+		const input = {
+			...reference,
+			signal: new AbortController().signal,
+			readOnly: true,
+		};
+
+		const found = await checker.check(input);
+		assert.ok(found.kind === "refused");
+		assert.equal(found.failure.reason, "preservation_failed");
+		const forged = await checker.check({ ...input, storedAttempt: 2 });
+		assert.ok(forged.kind === "refused");
+		assert.equal(forged.failure.reason, "base_evidence_missing");
+		const contract = await files.readContract(runOf(14));
+		assert.ok(contract.kind === "found");
+		assert.equal(
+			await files.artifacts.retire(
+				runOf(14),
+				contract.contract,
+				contract.digest,
+				reference.binding.acceptanceDigest,
+			),
+			"retired",
+		);
+		assert.deepEqual(await checker.check(input), found);
+	});
+
+	for (const granted of [false, true])
+		it(`keeps a legacy receipt's feedback retry after a check-only recheck (${granted ? "already granted" : "not yet granted"})`, async () => {
+			const { github, executor, files, clock, logs, start } = world();
+			github.add(labeled(14));
+			executor.behaviors = [{ kind: "pass", usage: 10 }];
+			executor.acceptBehavior = { kind: "pass", usage: 20 };
+			executor.baseOutcome = "checking";
+			executor.baseReceipt = (binding) => refusedReceipt(binding, FEEDBACK);
+			executor.spentBy.set("accept-1", 20);
+			await drive(start(), clock, true);
+			const runId = runOf(14);
+			const root = join(files.artifactRoot, "acceptance");
+			const receiptPath = join(root, runId, "receipt.json");
+
+			const { storedAttempt: _legacy, ...legacy } = JSON.parse(
+				readFileSync(receiptPath, "utf8"),
+			);
+
+			// Main wrote both copies with tabs, a trailing newline and no storedAttempt.
+			const bytes = `${JSON.stringify(legacy, null, "\t")}\n`;
+			writeFileSync(receiptPath, bytes);
+			writeFileSync(join(root, `${runId}.json`), bytes);
+			executor.baseOutcomes = [["interrupted", "checking"]];
+			await drive(start(), clock, true);
+			const claim = files.claims.get(runId);
+			assert.ok(claim?.baseCheck);
+			const reference = claim.baseCheck;
+			assert.equal(reference.storedAttempt, 1);
+			assert.equal(reference.acceptAttempt, 2);
+			assert.ok(
+				executor.baseChecks.some(
+					(check) => check.acceptAttempt === 2 && check.readOnly !== true,
+				),
+			);
+			assert.equal(
+				await executor.spent({ runId, stage: "accept", attempt: 2 }),
+				null,
+			);
+			assert.equal(readFileSync(receiptPath, "utf8"), bytes);
+
+			if (granted) {
+				const contract = await files.readContract(runId);
+				assert.ok(contract.kind === "found");
+				assert.equal(
+					await files.artifacts.retire(
+						runId,
+						contract.contract,
+						contract.digest,
+						reference.binding.acceptanceDigest,
+					),
+					"retired",
+				);
+			}
+
+			const disk = fileRunFiles(files.artifactRoot);
+			assert.equal(await disk.writeClaim(claim), true);
+			const claimPath = join(files.artifactRoot, "claims", `${runId}.json`);
+			const stored = JSON.parse(readFileSync(claimPath, "utf8"));
+			delete stored.baseCheck.kind;
+
+			if (granted)
+				stored.baseCheck.retry = {
+					refused: reference.binding,
+					reason: "preservation_failed",
+					receiptDigest: digestOf(JSON.stringify([reference.binding, 2])),
+					scenarios: ["S1"],
+					baseWallMs: 5_000,
+				};
+
+			const claimBytes = `${JSON.stringify(stored)}\n`;
+
+			writeFileSync(claimPath, claimBytes);
+
+			const recovered = (await disk.listClaims()).find(
+				(c) => c.runId === runId,
+			);
+
+			assert.ok(recovered?.baseCheck);
+			assert.equal(readFileSync(claimPath, "utf8"), claimBytes);
+			assert.equal(
+				recovered.baseCheck.kind,
+				granted ? "retry_pending" : "checking",
+			);
+			files.claims.set(runId, recovered);
+			executor.baseOutcomes = ["preservation_failed", "preservation_failed"];
+			await drive(start(), clock);
+			await drive(start(), clock);
+			assert.deepEqual(launched(executor), [
+				"specify-1",
+				"accept-1",
+				"accept-3",
+			]);
+			assert.equal(files.claims.get(runId)?.status, "failed");
+			assert.ok(
+				!statuses(github, 14).some((status) =>
+					status.endsWith(":budget_exhausted"),
+				),
+			);
+			assert.ok(!logs.some((log) => log.event === "launch_refused"));
+
+			const retry = executor.launches.find(
+				(l) => l.stage === "accept" && l.attempt === 3,
+			);
+
+			assert.equal(retry?.settings.maxTokens, ACCEPTANCE_MAX_TOKENS - 20);
+			assert.equal(retry?.settings.budget.wallMs, 900_000 - 1 - 5_000);
+			assert.equal(refusals(github).length, 1);
+			assert.equal(
+				readFileSync(
+					join(root, `${runId}.retired`, "suite", "receipt.json"),
+					"utf8",
+				),
+				bytes,
+			);
+			assert.equal(
+				readFileSync(join(root, `${runId}.retired`, "guard.json"), "utf8"),
+				bytes,
+			);
+		});
+
 	const refusals = (github: FakeGitHub) => keyed(github, 14, "base-refusal");
 
 	for (const guard of ["tools", "length", "requests"] as const)
@@ -2387,6 +2611,27 @@ describe("Orchestrator base qualification", () => {
 		}
 	}
 
+	async function roundTripQualification(
+		files: ReturnType<typeof world>["files"],
+	) {
+		const disk = fileRunFiles(files.artifactRoot);
+		const claim = files.claims.get(runOf(14));
+		assert.ok(claim);
+		assert.equal(await disk.writeClaim(claim), true);
+		const path = join(files.artifactRoot, "claims", `${claim.runId}.json`);
+		const before = readFileSync(path, "utf8");
+
+		const recovered = (await disk.listClaims()).find(
+			(c) => c.runId === claim.runId,
+		);
+
+		assert.ok(recovered?.baseCheck);
+		assert.equal(readFileSync(path, "utf8"), before);
+		files.claims.set(claim.runId, recovered);
+
+		return recovered.baseCheck;
+	}
+
 	const launched = (executor: FakeExecutor) => [
 		...new Set(executor.launches.map((l) => `${l.stage}-${l.attempt}`)),
 	];
@@ -2646,7 +2891,12 @@ describe("Orchestrator base qualification", () => {
 		assert.equal(retry?.settings.maxTokens, ACCEPTANCE_MAX_TOKENS - 18_000);
 	});
 
-	for (const crash of ["before_retire", "after_retire", "after_claim"] as const)
+	for (const crash of [
+		"before_retire",
+		"after_suite_move",
+		"after_retire",
+		"after_claim",
+	] as const)
 		it(`relaunches once after a restart between the refusal and the relaunch (${crash})`, async () => {
 			const { github, executor, files, clock, start } = world();
 			github.add(labeled(14));
@@ -2674,11 +2924,23 @@ describe("Orchestrator base qualification", () => {
 					"retired",
 				);
 
+				if (crash === "after_suite_move")
+					renameSync(
+						join(
+							files.artifactRoot,
+							"acceptance",
+							`${runOf(14)}.retired`,
+							"guard.json",
+						),
+						join(files.artifactRoot, "acceptance", `${runOf(14)}.json`),
+					);
+
 				if (crash === "after_claim")
 					files.claims.set(runOf(14), {
 						...claim,
 						baseCheck: {
 							...first,
+							kind: "retry_pending",
 							retry: {
 								refused: first.binding,
 								reason: "preservation_failed",
@@ -2690,6 +2952,10 @@ describe("Orchestrator base qualification", () => {
 					});
 			}
 
+			assert.equal(
+				(await roundTripQualification(files)).kind,
+				crash === "after_claim" ? "retry_pending" : "checking",
+			);
 			executor.baseOutcomes = ["preservation_failed", "ready"];
 			await drive(start(), clock);
 			await drive(start(), clock);
@@ -2707,37 +2973,61 @@ describe("Orchestrator base qualification", () => {
 			assert.equal(files.claims.get(runOf(14))?.stage, "build");
 		});
 
-	it("never grants a second retry after a restart once the retried suite is stored", async () => {
-		const { github, executor, files, clock, start } = world();
-		github.add(labeled(14));
-		executor.behaviors = [{ kind: "pass", usage: 10 }];
-		executor.acceptBehavior = { kind: "pass", usage: 20 };
-		executor.baseOutcomes = ["preservation_failed", "checking"];
-		executor.baseReceipt = (binding) => refusedReceipt(binding, FEEDBACK);
-		executor.spentBy.set("accept-1", 20);
-		await drive(start(), clock, true);
-		assert.equal(
-			files.claims.get(runOf(14))?.baseCheck?.binding.acceptanceDigest,
-			executor.baseSuites[1],
-		);
-		executor.baseOutcomes = ["preservation_failed", "preservation_failed"];
-		await drive(start(), clock);
-		await drive(start(), clock);
-		assert.deepEqual(launched(executor), ["specify-1", "accept-1", "accept-2"]);
-		assert.equal(statuses(github, 14).at(-1)?.endsWith(":failed"), true);
-		assert.equal(refusals(github).length, 1);
-		const contract = await files.readContract(runOf(14));
-		assert.ok(contract.kind === "found");
-		assert.equal(
-			await files.artifacts.retire(
-				runOf(14),
-				contract.contract,
-				contract.digest,
-				executor.baseSuites[1] ?? digestOf("none"),
-			),
-			"refused",
-		);
-	});
+	for (const crash of ["before_claim", "after_claim"] as const)
+		it(`never grants a second retry after replacement storage and restart (${crash})`, async () => {
+			const { github, executor, files, clock, start } = world();
+			let pending: ClaimRecord | undefined;
+			const writeClaim = files.writeClaim.bind(files);
+
+			files.writeClaim = async (claim) => {
+				if (claim.baseCheck?.kind === "retry_pending") pending = claim;
+
+				return writeClaim(claim);
+			};
+
+			github.add(labeled(14));
+			executor.behaviors = [{ kind: "pass", usage: 10 }];
+			executor.acceptBehavior = { kind: "pass", usage: 20 };
+			executor.baseOutcomes = ["preservation_failed", "checking"];
+			executor.baseReceipt = (binding) => refusedReceipt(binding, FEEDBACK);
+			executor.spentBy.set("accept-1", 20);
+			await drive(start(), clock, true);
+			assert.equal(
+				files.claims.get(runOf(14))?.baseCheck?.binding.acceptanceDigest,
+				executor.baseSuites[1],
+			);
+
+			if (crash === "before_claim") {
+				assert.ok(pending);
+				files.claims.set(runOf(14), pending);
+			}
+
+			assert.equal(
+				(await roundTripQualification(files)).kind,
+				crash === "before_claim" ? "retry_pending" : "rechecking_replacement",
+			);
+			executor.baseOutcomes = ["preservation_failed", "preservation_failed"];
+			await drive(start(), clock);
+			await drive(start(), clock);
+			assert.deepEqual(launched(executor), [
+				"specify-1",
+				"accept-1",
+				"accept-2",
+			]);
+			assert.equal(statuses(github, 14).at(-1)?.endsWith(":failed"), true);
+			assert.equal(refusals(github).length, 1);
+			const contract = await files.readContract(runOf(14));
+			assert.ok(contract.kind === "found");
+			assert.equal(
+				await files.artifacts.retire(
+					runOf(14),
+					contract.contract,
+					contract.digest,
+					executor.baseSuites[1] ?? digestOf("none"),
+				),
+				"refused",
+			);
+		});
 
 	/** The first suite's refusal notice, as the fake keys it. */
 	const original = (executor: FakeExecutor, run: Digest) =>
@@ -2896,6 +3186,7 @@ describe("Orchestrator base qualification", () => {
 				...claim,
 				baseCheck: {
 					...first,
+					kind: "retry_pending",
 					retry: {
 						refused: first.binding,
 						reason: "preservation_failed",
@@ -2955,18 +3246,19 @@ describe("Orchestrator base qualification", () => {
 		const claim = files.claims.get(runOf(14));
 		const first = claim?.baseCheck;
 		assert.ok(claim && first);
+
+		const forged: AcceptRetry = {
+			refused: first.binding,
+			// @ts-expect-error A hostile claim also proves the retry reason is narrowed.
+			reason: "base_timeout",
+			receiptDigest: digestOf("forged"),
+			scenarios: [],
+			baseWallMs: 0,
+		};
+
 		files.claims.set(runOf(14), {
 			...claim,
-			baseCheck: {
-				...first,
-				retry: {
-					refused: first.binding,
-					reason: "base_timeout",
-					receiptDigest: digestOf("forged"),
-					scenarios: [],
-					baseWallMs: 0,
-				},
-			},
+			baseCheck: { ...first, kind: "retry_pending", retry: forged },
 		});
 		executor.baseOutcomes = ["base_timeout", "ready"];
 		await drive(start(), clock);
@@ -2980,6 +3272,54 @@ describe("Orchestrator base qualification", () => {
 		assert.equal(refusals(github).length, 1);
 		assert.match(refusals(github)[0] ?? "", /: base_timeout\. /);
 	});
+
+	for (const outcome of ["ready", "base_timeout"] as const)
+		it(`recovers the stored ${outcome === "ready" ? "proof before its summary" : "final refusal before its notice"} without a model replay`, async () => {
+			const { github, executor, files, clock, start } = world();
+			github.add(labeled(14));
+			executor.behaviors = [{ kind: "pass", usage: 10 }];
+			executor.acceptBehavior = { kind: "pass", usage: 20 };
+			executor.baseOutcome = outcome;
+
+			const key =
+				outcome === "ready" ? "factory-acceptance" : "factory-base-refusal";
+
+			github.beforeCall = (args) => {
+				if (args.some((a) => a.startsWith("body=") && a.includes(key)))
+					github.posts = ["rejected"];
+			};
+
+			await once(start());
+			const qualification = files.claims.get(runOf(14))?.baseCheck;
+			assert.equal(
+				qualification?.kind,
+				outcome === "ready" ? "qualified" : "refused",
+			);
+			assert.equal(
+				(await roundTripQualification(files)).kind,
+				outcome === "ready" ? "checking" : "refused",
+			);
+			const checks = executor.baseChecks.length;
+			github.beforeCall = null;
+
+			if (outcome === "base_timeout") executor.baseOutcome = "ready";
+			await once(start());
+			await drive(start(), clock);
+			assert.equal(
+				executor.launches.filter((l) => l.stage === "accept").length,
+				1,
+			);
+
+			if (outcome === "ready") {
+				assert.equal(keyed(github, 14, "acceptance").length, 1);
+				assert.equal(refusals(github).length, 0);
+			} else {
+				assert.equal(executor.baseChecks.length, checks);
+				assert.equal(refusals(github).length, 1);
+				assert.match(refusals(github)[0] ?? "", /: base_timeout\. /);
+				assert.ok(!executor.launches.some((l) => l.stage === "build"));
+			}
+		});
 
 	it("fails closed without a base-check port", async () => {
 		const { github, executor, start } = world();
@@ -3047,6 +3387,7 @@ describe("Orchestrator base qualification", () => {
 		assert.equal(claim?.stage, "accept");
 		assert.equal(claim?.baseCheck?.acceptAttempt, 1);
 		assert.equal(claim?.usage, 30);
+		assert.equal((await roundTripQualification(files)).kind, "checking");
 		executor.baseOutcome = "ready";
 		clock.t += 60_000;
 		const restarted = start();
@@ -3220,6 +3561,8 @@ describe("Orchestrator stage results", () => {
 					status: "claimed",
 					usage: 812,
 					baseCheck: executor.baseChecks[0] && {
+						kind: "qualified",
+						proof: qualifiedProof(executor.baseChecks[0].binding),
 						binding: executor.baseChecks[0].binding,
 						acceptAttempt: 1,
 						storedAttempt: 1,
