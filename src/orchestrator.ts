@@ -19,7 +19,6 @@ import {
 	type GenerationRef,
 	type RepairCause,
 	type PrObservation,
-	type HandoffReason,
 } from "./handoff.ts";
 import {
 	REVIEW_TOOLS,
@@ -636,7 +635,6 @@ export type ActiveRun = {
 	/** The highest marker `seq` on the issue that this controller knows landed. */
 	seq: number;
 	marked: Marker | null;
-	markedHoldReason?: HandoffReason;
 	inflight: InflightMarker | null;
 	claimUnwritten: boolean;
 	workspaceMissing: boolean;
@@ -7139,6 +7137,9 @@ export class Orchestrator {
 		const status = desiredStatus(run.phase);
 		const marked = run.marked;
 
+		const projection =
+			run.handoff === undefined ? undefined : candidateProjection(run.handoff);
+
 		const holdReason =
 			run.handoff?.kind === "selected" && run.handoff.work.kind === "held"
 				? run.handoff.work.reason
@@ -7156,34 +7157,47 @@ export class Orchestrator {
 				? { ...marked, ...next, usage: run.usage }
 				: markerOf(run, next);
 
-		if (
+		let changed =
 			marked === null ||
 			marked.status !== status ||
-			run.markedHoldReason !== holdReason ||
-			marked.stage !== run.stage ||
-			marked.attempt !== run.attempt ||
-			marked.usage !== run.usage ||
+			marked.stage !== marker.stage ||
+			marked.attempt !== marker.attempt ||
+			marked.usage !== marker.usage ||
 			marked.branch !== marker.branch ||
 			(marked.candidate ?? null) !== (marker.candidate ?? null) ||
 			(marked.round ?? 0) !== (marker.round ?? 0) ||
 			(marked.ciRun ?? null) !== (marker.ciRun ?? null) ||
 			marked.pr !== marker.pr ||
-			JSON.stringify(marked.handoff) !== JSON.stringify(marker.handoff)
-		) {
+			JSON.stringify(marked.handoff) !== JSON.stringify(marker.handoff);
+
+		if (!changed && projection !== undefined && marked !== null) {
+			const ledger = await this.#readLedger(run.issue);
+
+			if (ledger.kind === "failed") return;
+
+			if (ledger.value.kind === "corrupt") {
+				this.#markCorrupt(run.issue, ledger.value, null);
+
+				return;
+			}
+
+			changed =
+				latestFor(ledger.value, run.runId)?.body !==
+				formatMarker(
+					{ ...marker, seq: marked.seq, cursor: marked.cursor },
+					holdReason,
+					projection.round,
+				);
+		}
+
+		if (changed) {
 			const post = await this.#writer.postComment(
 				run.issue,
-				formatMarker(
-					marker,
-					holdReason,
-					run.handoff === undefined
-						? marker.round
-						: candidateProjection(run.handoff).round,
-				),
+				formatMarker(marker, holdReason, projection?.round ?? marker.round),
 			);
 
 			if (post.kind === "posted") {
 				this.state.totals.markersPosted++;
-				run.markedHoldReason = holdReason;
 				this.#landed(run, marker);
 			} else {
 				run.inflight = { marker, outcome: post.kind, tick: this.#ticks };
@@ -7391,9 +7405,13 @@ function markerOf(
 
 	if (state?.kind !== "selected") return marker;
 
+	const projection = candidateProjection(state);
+
 	return {
 		...marker,
 		v: 3,
+		stage: projection.stage,
+		attempt: projection.attempt,
 		branch: state.current.validation?.publication?.branch ?? null,
 		candidate: state.current.validation?.publication?.candidateSha ?? null,
 		round: state.current.intent.round,

@@ -261,10 +261,13 @@ export function formatMarker(
 	holdReason?: HandoffReason,
 	displayRound = marker.round,
 ): string {
-	const statusText =
-		marker.status === "blocked" && holdReason !== undefined
-			? `blocked: ${HOLD_TEXT[holdReason]} (${holdReason})`
-			: STATUS_TEXT[marker.status];
+	let statusText = STATUS_TEXT[marker.status];
+
+	if (marker.status === "blocked") {
+		if (holdReason !== undefined)
+			statusText = `blocked: ${HOLD_TEXT[holdReason]} (${holdReason})`;
+		else if (marker.v === 3) statusText = "blocked: this run is on hold";
+	}
 
 	const roundText = displayRound === undefined ? "" : `, round ${displayRound}`;
 	const body = `${MARKER_PREFIX}${markerJson(marker)}${MARKER_SUFFIX}\nFactory run \`${marker.runId.slice(0, 12)}\` is ${statusText}. Stage ${marker.stage}${roundText}, attempt ${marker.attempt}.\n`;
@@ -541,6 +544,7 @@ export function isControllerComment(comment: IssueComment): boolean {
 
 export type TrustedMarker = {
 	readonly marker: Marker;
+	readonly body: string;
 	readonly commentId: string;
 	readonly createdAt: string;
 };
@@ -612,7 +616,12 @@ function trustCheck(input: {
 		return defect("wrong_issue");
 	}
 
-	return { marker, commentId: comment.id, createdAt: comment.createdAt };
+	return {
+		marker,
+		body: comment.body,
+		commentId: comment.id,
+		createdAt: comment.createdAt,
+	};
 }
 
 function editDefect(
