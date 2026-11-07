@@ -2100,17 +2100,11 @@ export class Orchestrator {
 		const receipt = await this.#acceptanceReceipt(reference);
 
 		if (receipt === null) return null;
-		// Legacy receipts still read, but cannot attest a check-only interval.
-		const stored = receipt.storedAttempt;
+		const stored = receipt.storedAttempt ?? reference.storedAttempt;
 		let total = 0;
 
 		for (let attempt = 1; attempt <= through; attempt++) {
-			if (
-				stored !== undefined &&
-				attempt > stored &&
-				attempt <= reference.acceptAttempt
-			)
-				continue;
+			if (attempt > stored && attempt <= reference.acceptAttempt) continue;
 
 			const spent = await this.#input.executor
 				.spent({ runId: run.runId, stage: "accept", attempt, round: 0 })
@@ -2123,7 +2117,7 @@ export class Orchestrator {
 		return total;
 	}
 
-	/** A check-only interval is usable only with the suite's own attempt evidence. */
+	/** New receipts bind the claim's stored attempt; legacy receipts predate that field. */
 	async #acceptanceReceipt(reference: AcceptanceQualification) {
 		const receipt = await this.#input.files.artifacts.receipt(
 			reference.binding.runId,
