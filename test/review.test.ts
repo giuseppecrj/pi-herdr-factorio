@@ -36,7 +36,7 @@ import {
 	preparedReviewFixture,
 	storedAssessment,
 } from "./helpers.ts";
-import { feedbackBytes } from "../src/validation.ts";
+import { feedbackBytes, validationDir } from "../src/validation.ts";
 import {
 	parseReviewReceipt,
 	reviewReceiptDigest,
@@ -454,6 +454,7 @@ async function checkReviewTree(mode: string) {
 			...pin,
 		});
 
+		assert.ok(!("kind" in prepared));
 		assert.ok(prepared.input.prompt.includes("PINNED_ADMISSION_GUIDANCE"));
 		assert.equal(prepared.input.prompt.includes("MOVED_MAIN_GUIDANCE"), false);
 
@@ -900,7 +901,9 @@ it("projects actual verdict values as escaped data without inferring criterion s
 			verdict,
 		};
 
-		const prompt = candidateReviewPrompt(args);
+		const result = candidateReviewPrompt(args);
+		assert.ok(result.kind === "ready");
+		const prompt = result.prompt;
 
 		const block =
 			/<controller-evidence>\n([^\n]+)\n<\/controller-evidence>/.exec(prompt);
@@ -954,13 +957,24 @@ it("projects actual verdict values as escaped data without inferring criterion s
 			},
 		]);
 		assert.equal(untrusted.diff, diff);
-		assert.throws(
-			() =>
-				candidateReviewPrompt({
-					...args,
-					diff: "x".repeat(REVIEW_DIFF_MAX_BYTES + 1),
-				}),
-			/review_input_too_large/,
+
+		for (const diff of [
+			"x".repeat(REVIEW_DIFF_MAX_BYTES + 1),
+			"é".repeat(REVIEW_DIFF_MAX_BYTES / 2 + 1),
+			Buffer.alloc(REVIEW_DIFF_MAX_BYTES + 1),
+		])
+			assert.deepEqual(candidateReviewPrompt({ ...args, diff }), {
+				kind: "refused",
+				reason: "review_input_too_large",
+				bytes: Buffer.byteLength(diff),
+				limit: REVIEW_DIFF_MAX_BYTES,
+			});
+		assert.equal(
+			candidateReviewPrompt({
+				...args,
+				diff: Buffer.alloc(REVIEW_DIFF_MAX_BYTES),
+			}).kind,
+			"ready",
 		);
 	} finally {
 		f.close();
@@ -1007,6 +1021,7 @@ it("preserves an evidence-free historical-shaped v3 capture without enrichment o
 		});
 
 		const restored = await restarted.prepareReview!(f.args);
+		assert.ok(!("kind" in restored));
 		assert.equal(restored.input.prompt, historicalInput.prompt);
 		assert.equal(readFileSync(path, "utf8"), historical);
 		assert.equal(digestOf(JSON.stringify(historicalInput)), inputDigest);
@@ -1043,6 +1058,62 @@ it("refuses capture publication failure without starting a review", async () => 
 		f.close();
 	}
 });
+
+it("leaves a bad non-artifact review workspace path visible", async () => {
+	const f = await preparedReviewFixture();
+
+	try {
+		writeFileSync(join(f.root, "obstructed"), "not a directory");
+		await assert.rejects(
+			f.executor.prepareReview!({
+				...f.args,
+				workspace: join(f.root, "obstructed", "review"),
+			}),
+			{ code: "ENOTDIR", syscall: "mkdir" },
+		);
+	} finally {
+		f.close();
+	}
+});
+
+for (const damage of ["missing", "json", "null", "checks", "unjudged"] as const)
+	it(`contains review preparation artifact failure (${damage})`, async () => {
+		const f = await preparedReviewFixture();
+
+		try {
+			const path = join(
+				validationDir(f.state, f.execution.runId, 0),
+				"verdict.json",
+			);
+
+			if (damage === "missing") rmSync(path);
+			else if (damage === "json" || damage === "null")
+				writeFileSync(path, damage === "json" ? "{" : "null");
+			else
+				writeFileSync(
+					path,
+					JSON.stringify({
+						...f.prepared.verdict,
+						...(damage === "checks"
+							? {
+									checks: f.prepared.verdict.checks.map((check, index) =>
+										index === 0 ? null : check,
+									),
+								}
+							: { unjudged: null }),
+					}),
+				);
+
+			if (damage === "unjudged") rmSync(join(f.dir, "review.json"));
+
+			await assert.rejects(
+				f.executor.prepareReview!(f.args),
+				ReviewEvidenceUnavailable,
+			);
+		} finally {
+			f.close();
+		}
+	});
 
 it("restores a legal non-ASCII capture larger than the acceptance-file read cap", async () => {
 	const f = await preparedReviewFixture(1, true);
@@ -2101,9 +2172,12 @@ describe("builder family at review preparation", () => {
 				);
 			};
 
-			const builder = async () =>
-				(await sandboxExecutor(f.config).prepareReview!(f.args)).families
-					?.builder;
+			const builder = async () => {
+				const prepared = await sandboxExecutor(f.config).prepareReview!(f.args);
+				assert.ok(!("kind" in prepared));
+
+				return prepared.families?.builder;
+			};
 
 			const openai: FamilyInput = { kind: "openai-request", model: OPENAI };
 

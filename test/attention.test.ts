@@ -20,6 +20,7 @@ import type { JsonValue } from "../src/tickets.ts";
 import {
 	beginCandidate,
 	handoffCandidate,
+	parseCandidateState,
 	type CandidateState,
 	type CandidateEvent,
 } from "../src/handoff.ts";
@@ -328,6 +329,41 @@ test("six groups distinguish unknown legacy ages and never duplicate a not-ready
 	assert.equal(read.groups.failed.length, 1);
 	assert.equal(read.groups.spec_review.length, 0);
 });
+
+for (const reason of ["pr_identity", "pr_ambiguous"] as const)
+	for (const published of [false, true])
+		test(`attention shows ${reason} with hold age (published=${published})`, async () => {
+			const root = fixture();
+			const book = parseCandidateState(prBook(14, 99, true));
+			assert.ok(book?.kind === "selected");
+			claim(root, 14, "blocked", {
+				enteredAt: 10,
+				stage: "land",
+				handoff: JSON.parse(
+					JSON.stringify({
+						...book,
+						published: published
+							? {
+									...book.published,
+									readiness: { kind: "not_ready", reason, since: 200 },
+								}
+							: null,
+						work: { kind: "held", reason, since: 200 },
+					}),
+				),
+			});
+			const read = await readAttention({ stateDir: root, repo, now: 1000 });
+			assert.equal(read.kind, "available");
+			assert.deepEqual(read.gaps, []);
+			assert.equal(read.groups.blocked.length, 1);
+			assert.deepEqual(read.groups.blocked[0], {
+				runId: book.pin.runId,
+				issueUrl: `https://github.com/${repo}/issues/14`,
+				prUrl: published ? `https://github.com/${repo}/pull/99` : null,
+				reason,
+				ageMs: 800,
+			});
+		});
 
 test("an unverified claim appears once in blocked with the observation's age, and clears on recovery", async () => {
 	const root = fixture();

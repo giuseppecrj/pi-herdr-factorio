@@ -26,9 +26,11 @@ import {
 	type FamilyInput,
 	withFamily,
 	type ReviewInput,
+	type ReviewInputRefusal,
 	type ReviewReceipt,
 } from "./review.ts";
 import type { Verdict } from "./run.ts";
+import { PublicationError } from "./publication.ts";
 
 import {
 	BUILD_TOOLS,
@@ -218,6 +220,7 @@ export type ReviewPreparation = {
 };
 
 export type StageOutput =
+	| ReviewInputRefusal
 	| { readonly kind: "review"; readonly receipt: ReviewReceipt }
 	| { readonly kind: "build"; readonly result: PatchRead }
 	| string
@@ -290,7 +293,7 @@ export interface StageExecutor {
 			execution?: Extract<CandidateExecution, { stage: "review" }>;
 			workspace: string;
 		},
-	): Promise<ReviewPreparation>;
+	): Promise<ReviewPreparation | ReviewInputRefusal>;
 	readonly validate?: Validator;
 	/** Re-reads a stored validation assessment; null when absent or unreadable. */
 	readAssessment(input: {
@@ -1151,6 +1154,7 @@ export class Orchestrator {
 		readonly runId: Digest;
 		readonly event: CandidateEvent;
 		readonly disposition?: AttemptEnd["disposition"];
+		readonly refusal?: ReviewInputRefusal;
 	}[] = [];
 	readonly #candidateExecutions = new Map<
 		Digest,
@@ -2602,10 +2606,22 @@ export class Orchestrator {
 				cause:
 					run.handoff === undefined
 						? (run.cause ?? null)
-						: candidateCause(
-								run.handoff,
-								await this.#currentDiagnosis(run.runId, run.handoff),
-							),
+						: run.handoff.kind === "selected" &&
+								run.handoff.work.kind === "terminal" &&
+								run.handoff.work.terminal.kind === "failed" &&
+								(run.handoff.work.terminal.reason ===
+									"review_input_too_large" ||
+									run.handoff.work.terminal.reason === "summary_too_large")
+							? inputCause(
+									run.handoff.work.terminal.reason === "review_input_too_large"
+										? "review"
+										: "land",
+									run.handoff.work.terminal.reason,
+								)
+							: candidateCause(
+									run.handoff,
+									await this.#currentDiagnosis(run.runId, run.handoff),
+								),
 				start,
 				previousRunId: await this.#previousRunId(run.runId),
 				evidence: await this.#input.files.terminalEvidence?.(
@@ -4837,6 +4853,18 @@ export class Orchestrator {
 				}
 
 				step = handoffCandidate(step.state, queued.event);
+
+				if (queued.refusal !== undefined) {
+					const failed = await this.#reviewInputFailure(
+						run,
+						step.state,
+						queued.refusal,
+					);
+
+					if (failed === null) break;
+					step = { state: failed, effect: null };
+				}
+
 				const event = queued.event;
 
 				if (
@@ -4876,6 +4904,8 @@ export class Orchestrator {
 				}
 
 				if (!(await this.#commitCandidate(run, step.state))) break;
+
+				if (queued.refusal !== undefined) this.state.totals.failures++;
 				this.#candidateResults.splice(index, 1);
 				consumed = true;
 			}
@@ -4925,6 +4955,35 @@ export class Orchestrator {
 				await this.#writeClaim(run);
 			}
 		}
+	}
+
+	async #reviewInputFailure(
+		run: ActiveRun,
+		state: CandidateState,
+		refusal: ReviewInputRefusal,
+	): Promise<CandidateState | null> {
+		if (state.kind !== "selected") return null;
+		const key = `<!-- factory-review-input run=${run.runId} -->`;
+
+		if (
+			!(await this.#postKeyed(
+				run,
+				key,
+				`Stopped: ${refusal.reason}. Candidate diff is ${refusal.bytes} bytes; the review limit is ${refusal.limit} bytes. No review model was launched.\n\n${key}`,
+			))
+		)
+			return null;
+
+		return {
+			...state,
+			work: {
+				kind: "effect",
+				request: {
+					kind: "finish_pr",
+					terminal: { kind: "failed", reason: refusal.reason },
+				},
+			},
+		};
 	}
 
 	#queueReviewRefusal(
@@ -5039,6 +5098,10 @@ export class Orchestrator {
 			this.#candidateResults.push({
 				runId: run.runId,
 				event,
+				refusal:
+					output instanceof Object && output.kind === "refused"
+						? output
+						: undefined,
 				disposition:
 					ended?.disposition ??
 					(event.kind === "resume_execution"
@@ -5172,7 +5235,61 @@ export class Orchestrator {
 			});
 
 			completion = { kind: "stop_execution", request, stopped: true, tokens };
-		} else completion = await port.execute(state, request);
+		} else {
+			try {
+				completion = await port.execute(state, request);
+			} catch (error) {
+				if (!(error instanceof PublicationError)) throw error;
+
+				if (error.reason === "summary_too_large") {
+					const key = `<!-- factory-handoff-input run=${run.runId} -->`;
+
+					if (
+						!(await this.#postKeyed(
+							run,
+							key,
+							`Stopped: summary_too_large. The pinned contract summary exceeds the handoff limit.\n\n${key}`,
+						))
+					)
+						return;
+
+					const terminal = {
+						kind: "finish_pr",
+						terminal: { kind: "failed", reason: "summary_too_large" },
+					} as const;
+
+					if (
+						await this.#commitCandidate(run, {
+							...state,
+							work: { kind: "effect", request: terminal },
+						})
+					)
+						await this.#interpretCandidate(run, terminal);
+
+					return;
+				}
+
+				if (
+					error.reason !== "evidence_unavailable" &&
+					error.reason !== "pr_identity" &&
+					error.reason !== "pr_ambiguous"
+				)
+					throw error;
+
+				this.#input.log("candidate_effect_held", {
+					runId: run.runId,
+					reason: error.reason,
+				});
+				await this.#commitCandidate(
+					run,
+					handoffCandidate(state, {
+						kind: "effect_held",
+						reason: error.reason,
+						now: this.#input.clock.now(),
+					}).state,
+				);
+			}
+		}
 
 		if (completion !== null) {
 			const step = handoffCandidate(run.handoff ?? state, {
@@ -5201,7 +5318,8 @@ export class Orchestrator {
 		if (state?.kind !== "selected" || config === null) return null;
 		const execution = request.execution;
 
-		let prepared: ReviewPreparation | null | undefined = null;
+		let prepared: ReviewPreparation | ReviewInputRefusal | null | undefined =
+			null;
 
 		try {
 			if (execution.stage === "review")
@@ -5268,6 +5386,41 @@ export class Orchestrator {
 		}
 
 		if (execution.stage === "review" && prepared == null) return null;
+
+		if (
+			prepared != null &&
+			"kind" in prepared &&
+			request.kind === "launch_review"
+		) {
+			const tokens = await executor.spent({
+				runId: execution.runId,
+				stage: execution.stage,
+				round: execution.round,
+				attempt: execution.attempt,
+				execution,
+			});
+
+			const settled = handoffCandidate(state, {
+				kind: "review_settled",
+				execution: request.execution,
+				tokens,
+				result: { kind: "failed" },
+			}).state;
+
+			const failed = await this.#reviewInputFailure(run, settled, prepared);
+
+			if (failed !== null && (await this.#commitCandidate(run, failed))) {
+				this.state.totals.failures++;
+				await this.#interpretCandidate(run, {
+					kind: "finish_pr",
+					terminal: { kind: "failed", reason: prepared.reason },
+				});
+			}
+
+			return null;
+		}
+
+		if (prepared != null && "kind" in prepared) return null;
 
 		if (
 			execution.stage === "build" &&
@@ -5452,6 +5605,10 @@ export class Orchestrator {
 				this.#candidateResults.push({
 					runId: execution.runId,
 					event,
+					refusal:
+						output instanceof Object && output.kind === "refused"
+							? output
+							: undefined,
 					disposition:
 						result.kind === "passed"
 							? "completed"
@@ -6444,7 +6601,9 @@ export class Orchestrator {
 		if (
 			output === null ||
 			(output instanceof Object &&
-				(output.kind === "build" || output.kind === "review"))
+				(output.kind === "build" ||
+					output.kind === "review" ||
+					output.kind === "refused"))
 		)
 			return false;
 

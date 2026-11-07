@@ -18,6 +18,7 @@ import {
 	seatPrompt,
 	ReviewEvidenceUnavailable,
 	type ReviewInput,
+	type ReviewInputRefusal,
 	type SeatReceipt,
 } from "../src/review.ts";
 import { readFeedbackBytes, validationDir } from "../src/validation.ts";
@@ -80,6 +81,7 @@ import {
 	isDigest,
 	verdictPasses,
 	type Digest,
+	type Verdict,
 } from "../src/run.ts";
 import {
 	parseSpecifyOutput,
@@ -103,7 +105,6 @@ import {
 	controllerDiagnosis,
 	sweepValidation,
 	fileRunFiles,
-	readStoredVerdict,
 	readStoredAssessment,
 	ghTarball,
 	type TarballFetch,
@@ -3118,10 +3119,79 @@ function readCapturedReview(
 	return restored;
 }
 
+function reviewVerdict(path: string): Verdict {
+	const record = objectOf(parseJson(capturedReviewText(path, 1024 * 1024)));
+	const checks = arrayOf(fieldOf(record, "checks"));
+	const required = arrayOf(fieldOf(record, "requiredChecks"));
+	const unjudged = arrayOf(fieldOf(record, "unjudged"));
+	const patchDigest = textOf(fieldOf(record, "patchDigest"));
+	const acceptanceDigest = textOf(fieldOf(record, "acceptanceDigest"));
+	const heldoutDigest = textOf(fieldOf(record, "heldoutDigest"));
+
+	if (
+		record === null ||
+		checks === null ||
+		required === null ||
+		unjudged === null ||
+		patchDigest === null ||
+		!isDigest(patchDigest) ||
+		acceptanceDigest === null ||
+		!isDigest(acceptanceDigest) ||
+		heldoutDigest === null ||
+		!isDigest(heldoutDigest) ||
+		[...required, ...unjudged].some((value) => textOf(value) === null)
+	)
+		throw new ReviewEvidenceUnavailable("stored_verdict_invalid");
+
+	return {
+		...record,
+		patchDigest,
+		acceptanceDigest,
+		heldoutDigest,
+		candidateSha: textOf(record.candidateSha) ?? "",
+		gateSha: textOf(record.gateSha) ?? "",
+		ciRunId: countOf(record.ciRunId) ?? 0,
+		originalBase: textOf(record.originalBase) ?? "",
+		baseSha: textOf(record.baseSha) ?? "",
+		pass: record.pass === true,
+		checks: checks.map((check) => {
+			const item = objectOf(check);
+			const name = textOf(fieldOf(item, "name"));
+			const passed = fieldOf(item, "passed");
+
+			if (name === null || (passed !== true && passed !== false))
+				throw new ReviewEvidenceUnavailable("stored_verdict_invalid");
+
+			return { ...item, name, passed };
+		}),
+		requiredChecks: required.map((value) => textOf(value) ?? ""),
+		unjudged: unjudged.map((value) => textOf(value) ?? ""),
+	};
+}
+
 async function prepareCandidateReview(
 	config: SandboxExecutorConfig,
 	input: Parameters<NonNullable<StageExecutor["prepareReview"]>>[0],
-): Promise<ReviewPreparation> {
+): Promise<ReviewPreparation | ReviewInputRefusal> {
+	try {
+		return await candidateReviewInputs(config, input);
+	} catch (error) {
+		if (
+			error instanceof Error &&
+			"code" in error &&
+			["ENOSPC", "EROFS", "EIO", "EMFILE", "ENFILE"].includes(
+				String(error.code),
+			)
+		)
+			throw new ReviewEvidenceUnavailable("review_inputs_unavailable");
+		throw error;
+	}
+}
+
+async function candidateReviewInputs(
+	config: SandboxExecutorConfig,
+	input: Parameters<NonNullable<StageExecutor["prepareReview"]>>[0],
+): Promise<ReviewPreparation | ReviewInputRefusal> {
 	const { runId, round, workspace, workflowSha, workflowDigest, execution } =
 		input;
 
@@ -3164,7 +3234,7 @@ async function prepareCandidateReview(
 		execution?.generation.generation,
 	);
 
-	const verdict = readStoredVerdict(join(dir, "verdict.json"));
+	const verdict = reviewVerdict(join(dir, "verdict.json"));
 
 	if (
 		!verdictPasses(verdict) ||
@@ -3350,19 +3420,20 @@ async function prepareCandidateReview(
 		if (readdirSync(stageDir).some((name) => name !== "execution.json"))
 			throw new ReviewEvidenceUnavailable("review_execution_binding");
 
-		const captured = reviewInputRecord({
-			...expected,
-			prompt: candidateReviewPrompt({
-				contract: bound.contract,
-				diff: patch.patch,
-				paths: patch.receipt.changedPaths,
-				judges: suite.suite.scenarios.filter((s) =>
-					verdict.unjudged.includes(s.id),
-				),
-				guidance: workflow.guidance.stages.review ?? "",
-				verdict,
-			}),
+		const prompt = candidateReviewPrompt({
+			contract: bound.contract,
+			diff: patch.patch,
+			paths: patch.receipt.changedPaths,
+			judges: suite.suite.scenarios.filter((s) =>
+				verdict.unjudged.includes(s.id),
+			),
+			guidance: workflow.guidance.stages.review ?? "",
+			verdict,
 		});
+
+		if (prompt.kind === "refused") return prompt;
+
+		const captured = reviewInputRecord({ ...expected, prompt: prompt.prompt });
 
 		if (
 			!publishFile(
@@ -3964,6 +4035,8 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 						`${roundKey(runId, round)}-a${attempt}`,
 					),
 				});
+
+				if ("kind" in prepared) return prepared;
 
 				const output = await attemptOutput(
 					config.stateDir,

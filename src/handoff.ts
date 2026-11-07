@@ -154,6 +154,10 @@ export type HandoffReason =
 	| "head_lag"
 	| "checks_incomplete"
 	| "review_failed"
+	| "review_input_too_large"
+	| "summary_too_large"
+	| "pr_identity"
+	| "pr_ambiguous"
 	| "validation_failed"
 	| "evidence_unavailable"
 	| "repair_limit"
@@ -380,6 +384,11 @@ export type CandidateEvent =
 				  }
 				| { readonly kind: "not_ready"; readonly reason: HandoffReason }
 				| { readonly kind: "unavailable" };
+	  }
+	| {
+			readonly kind: "effect_held";
+			readonly reason: "evidence_unavailable" | "pr_identity" | "pr_ambiguous";
+			readonly now: number;
 	  }
 	| {
 			readonly kind: "effect_completed";
@@ -1107,6 +1116,12 @@ function observed(
 		return state;
 	const work = state.work;
 
+	if (
+		work.kind === "held" &&
+		(work.reason === "pr_identity" || work.reason === "pr_ambiguous")
+	)
+		return state;
+
 	if (work.kind === "repair_due") {
 		if (!event.capacityAvailable) return state;
 		const reason = preflight(state, "build", work.round);
@@ -1583,6 +1598,10 @@ export function handoffCandidate(
 
 			case "observed":
 				next = observed(state, event);
+				break;
+			case "effect_held":
+				if (state.work.kind === "effect")
+					next = hold(state, event.reason, event.now);
 				break;
 			case "effect_completed":
 				next = complete(state, event.completion);
@@ -2322,6 +2341,10 @@ function wireReason(value: JsonValue | undefined): value is HandoffReason {
 			"head_lag",
 			"checks_incomplete",
 			"review_failed",
+			"review_input_too_large",
+			"summary_too_large",
+			"pr_identity",
+			"pr_ambiguous",
 			"validation_failed",
 			"evidence_unavailable",
 			"repair_limit",
