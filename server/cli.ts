@@ -671,15 +671,21 @@ export async function runCli(
 				: {
 						kind: accounting.runs.some((run) => run.uncertainRequests > 0)
 							? "uncertain"
-							: "lower_bound",
+							: accounting.state === "readable" &&
+									accounting.runs.every((run) => run.tokens.kind === "exact")
+								? "exact"
+								: "lower_bound",
 						unit: "tokens",
 						total: accounting.runs.reduce(
 							(sum, run) => sum + run.tokens.total,
 							0,
 						),
-						reason: accounting.runs.some((run) => run.uncertainRequests > 0)
-							? "request_unsettled"
-							: "receipt_missing",
+						...(accounting.runs.some((run) => run.uncertainRequests > 0)
+							? { reason: "request_unsettled" }
+							: accounting.state === "readable" &&
+									accounting.runs.every((run) => run.tokens.kind === "exact")
+								? {}
+								: { reason: "receipt_missing" }),
 					};
 
 		io.stdout(
