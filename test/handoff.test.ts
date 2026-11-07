@@ -2823,9 +2823,6 @@ const roundEndings = [
 	"generation_limit",
 	"repair_round",
 	"certification",
-	"checks",
-	"head_lag",
-	"promotion_lag",
 	"review_execution",
 	"resume_spend",
 	"closed",
@@ -3084,49 +3081,6 @@ for (const ending of roundEndings)
 				assert.ok(isGitSha(main));
 				event = { ...event, main };
 			}
-		} else if (["checks", "head_lag", "promotion_lag"].includes(ending)) {
-			state = selected(
-				handoffCandidate(review.state, {
-					kind: "review_settled",
-					execution: review.execution,
-					tokens: 10,
-					result: {
-						kind: "passed",
-						review: receipt(review.execution),
-						patch: {
-							kind: "found",
-							receipt: review.changed,
-							patch: "round-ending",
-						},
-					},
-				}).state,
-			);
-			const head = state.current.report!.candidateSha;
-			const old = build.state.current.report!.candidateSha;
-			event = {
-				...readyObservation(state),
-				pr: { kind: "open", number: 5, head: old, refHead: head },
-			};
-
-			if (ending === "checks")
-				event = {
-					...readyObservation(state),
-					readiness: { kind: "not_ready", reason: "checks_incomplete" },
-				};
-
-			if (ending === "promotion_lag") {
-				state = selected(
-					handoffCandidate(state, {
-						...readyObservation(state),
-						pr: { kind: "open", number: 5, head: old, refHead: old },
-					}).state,
-				);
-				const request = pending(state, "promote_pr");
-				event = {
-					kind: "effect_completed",
-					completion: { kind: "promote_pr", request, head: old, refHead: old },
-				};
-			}
 		}
 
 		const timed = { ...event, now: 4321 };
@@ -3226,6 +3180,80 @@ for (const ending of roundEndings)
 			null,
 			"exactly one summary intent per ending",
 		);
+	});
+
+for (const wait of ["checks", "head_lag", "promotion_lag"] as const)
+	test(`F10-2 transient ${wait} does not end a repair before forge convergence`, () => {
+		const review = feedbackReview();
+
+		let state = handoffCandidate(review.state, {
+			kind: "review_settled",
+			execution: review.execution,
+			tokens: 10,
+			result: {
+				kind: "passed",
+				review: receipt(review.execution),
+				patch: {
+					kind: "found",
+					receipt: review.changed,
+					patch: "round-ending",
+				},
+			},
+		}).state;
+
+		const book = selected(state);
+		const head = book.current.report!.candidateSha;
+		const old = book.history[0]!.report!.candidateSha;
+
+		if (wait === "promotion_lag") {
+			state = handoffCandidate(state, roundObservation(state)).state;
+			const request = pending(state, "promote_pr");
+			state = handoffCandidate(state, {
+				kind: "effect_completed",
+				completion: { kind: "promote_pr", request, head: old, refHead: old },
+			}).state;
+		} else
+			state = handoffCandidate(state, {
+				...roundObservation(state),
+				pr: {
+					kind: "open",
+					number: 5,
+					head: wait === "head_lag" ? old : head,
+					refHead: head,
+				},
+				readiness:
+					wait === "checks"
+						? { kind: "not_ready", reason: "checks_incomplete" }
+						: readyObservation(state).readiness,
+			}).state;
+		assert.deepEqual(selected(state).feedback?.batches[0]?.status, {
+			kind: "applying",
+			round: 1,
+		});
+
+		if (wait === "checks") {
+			const request = pending(state, "void_readiness");
+			state = handoffCandidate(state, {
+				kind: "effect_completed",
+				completion: { kind: "void_readiness", request },
+			}).state;
+		}
+
+		const restored = parseCandidateState(JSON.parse(JSON.stringify(state)));
+		assert.ok(restored);
+		state = handoffCandidate(restored, readyObservation(restored)).state;
+		const request = pending(state, "complete_handoff");
+
+		const completed = handoffCandidate(state, {
+			kind: "effect_completed",
+			completion: { kind: "complete_handoff", request, now: 5000 },
+		});
+
+		assert.equal(selected(completed.state).published?.readiness.kind, "ready");
+		assert.deepEqual(selected(completed.state).feedback?.batches[0]?.status, {
+			kind: "settled",
+			outcome: { kind: "applied", head },
+		});
 	});
 
 test("F10-2 complete_handoff settles only its repair batch, not another applying batch", () => {
