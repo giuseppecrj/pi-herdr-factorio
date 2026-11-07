@@ -225,6 +225,31 @@ const holdLabels = {
 } satisfies Record<HandoffReason, string>;
 
 describe("held marker text", () => {
+	it("uses stable neutral text when a candidate hold reason is unavailable", () => {
+		const value = marker({
+			v: 3,
+			status: "blocked",
+			stage: "land",
+			candidate: null,
+			round: 0,
+			ciRun: null,
+			handoff: {
+				generation: 0,
+				intentDigest: digestOf("intent"),
+				refreshes: 0,
+				reviewAttempts: [0, 0, 0],
+				promoted: null,
+			},
+		});
+
+		const body = formatMarker(value);
+
+		assert.match(body, /blocked: this run is on hold/);
+		assert.doesNotMatch(body, /sandbox/);
+		assert.equal(formatMarker(structuredClone(value)), body);
+		assert.deepEqual(parseMarker(body), { kind: "marker", marker: value });
+	});
+
 	it("retains the authenticated comment body for restart-stable comparison", () => {
 		const body = formatMarker(
 			marker({ status: "blocked", stage: "build" }),
