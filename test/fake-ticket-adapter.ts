@@ -260,6 +260,9 @@ export class FakeGitHub {
 	now = "2026-10-29T02:00:00Z";
 	#nextCommentId = 9000;
 	readonly issues = new Map<number, FakeIssue>();
+	readonly pulls = new Map<number, JsonValue>();
+	readonly reviews = new Map<number, JsonValue[]>();
+	readonly reviewComments = new Map<string, JsonValue[]>();
 	readonly permissions = new Map<string, string>();
 	readonly failures = new Map<string, ExecResult>();
 	workflow: string | null = TRUSTED_WORKFLOW;
@@ -331,6 +334,24 @@ export class FakeGitHub {
 	}
 
 	#post(path: string, args: readonly string[]): ExecResult {
+		if (path === `repos/${FAKE_REPO}/issues`) {
+			const behavior = this.posts.shift() ?? "ok";
+			if (behavior === "rejected") return httpError(422);
+			if (behavior === "lost") return networkError();
+			const number = Math.max(100, ...this.issues.keys()) + 1;
+			const issue = this.add(
+				fakeIssue(number, {
+					title: args.find((a) => a.startsWith("title="))?.slice(6) ?? "",
+					body: args.find((a) => a.startsWith("body="))?.slice(5) ?? "",
+					labels: args.flatMap((a) =>
+						a.startsWith("labels[]=") ? [a.slice(9)] : [],
+					),
+				}),
+			);
+			return behavior === "landed_unanswered"
+				? networkError()
+				: ok(this.#rest(issue));
+		}
 		const match = /^repos\/[^/]+\/[^/]+\/issues\/(\d+)\/comments$/.exec(path);
 		const issue = this.issues.get(Number(match?.[1]));
 		const body = args.find((arg) => arg.startsWith("body="))?.slice(5);
@@ -396,10 +417,27 @@ export class FakeGitHub {
 				: ok({ permission: level, role_name: level, user: { login } });
 		}
 
+		const pullRoute = /^pulls\/(\d+)(?:\/reviews(?:\/(\d+)\/comments)?)?$/.exec(
+			route,
+		);
+		if (pullRoute !== null) {
+			const number = Number(pullRoute[1]);
+			if (!route.includes("/reviews"))
+				return ok(this.pulls.get(number) ?? null);
+			return ok(
+				this.#page(
+					pullRoute[2] === undefined
+						? (this.reviews.get(number) ?? [])
+						: (this.reviewComments.get(`${number}/${pullRoute[2]}`) ?? []),
+					url,
+				),
+			);
+		}
+
 		if (route === "issues") {
 			const open = [...this.issues.values()].filter(
 				(issue) =>
-					issue.state === "open" &&
+					(url.searchParams.get("state") === "all" || issue.state === "open") &&
 					issue.labels.includes(url.searchParams.get("labels") ?? ""),
 			);
 

@@ -23,6 +23,111 @@ import {
 	renamedEvent,
 } from "./fake-ticket-adapter.ts";
 
+describe("PR feedback readers and proposal writer", () => {
+	it("parses paginated submitted reviews with qualified ids, without pending reviews", async () => {
+		const github = new FakeGitHub();
+		github.reviews.set(
+			5,
+			[1, 2, 3].map((id) => ({
+				id,
+				state: "CHANGES_REQUESTED",
+				commit_id: MAIN_HEAD,
+				body: "fix",
+				submitted_at: "2026-11-07T00:00:00Z",
+				user: { login: "writer" },
+			})),
+		);
+		const read = await adapterFor(github, 2).readPullReviews(5);
+		assert.ok(read.kind === "ok");
+		assert.equal(read.value.length, 3);
+		assert.equal(read.value[0]?.id, `github:${FAKE_REPO}:review:1`);
+		assert.equal(read.value[0]?.commit, MAIN_HEAD);
+		assert.equal(github.calls.length, 2);
+	});
+	it("parses inline comments, reply ids and nullable lines, never diff_hunk", async () => {
+		const github = new FakeGitHub();
+		github.reviewComments.set(
+			"5/1",
+			[1, 2, 3].map((id) => ({
+				id,
+				path: "src/a.ts",
+				line: id === 1 ? null : 4,
+				commit_id: MAIN_HEAD,
+				in_reply_to_id: id === 1 ? null : 1,
+				body: "fix",
+				diff_hunk: "PRIVATE",
+			})),
+		);
+		const read = await adapterFor(github, 2).readReviewComments(5, 1);
+		assert.ok(read.kind === "ok");
+		assert.equal(read.value.length, 3);
+		assert.equal(read.value[0]?.line, null);
+		assert.equal(
+			read.value[1]?.inReplyTo,
+			`github:${FAKE_REPO}:review-comment:1`,
+		);
+		assert.doesNotMatch(JSON.stringify(read), /PRIVATE|diff_hunk/);
+	});
+	for (const source of ["reviews", "comments"])
+		it(`caps ${source} at 1000 and rejects malformed input`, async () => {
+			const github = new FakeGitHub();
+			const entries = Array.from({ length: 1001 }, (_, n) =>
+				source === "reviews"
+					? {
+							id: n + 1,
+							state: "COMMENTED",
+							commit_id: MAIN_HEAD,
+							body: "text",
+							submitted_at: "2026-11-07T00:00:00Z",
+							user: { login: "writer" },
+						}
+					: {
+							id: n + 1,
+							path: "src/a",
+							line: null,
+							commit_id: MAIN_HEAD,
+							in_reply_to_id: null,
+							body: "text",
+						},
+			);
+			if (source === "reviews") github.reviews.set(5, entries);
+			else github.reviewComments.set("5/1", entries);
+			const adapter = adapterFor(github);
+			const read = await (source === "reviews"
+				? adapter.readPullReviews(5)
+				: adapter.readReviewComments(5, 1));
+			assert.deepEqual(read, {
+				kind: "failed",
+				failure: { kind: "pagination_limit" },
+			});
+			assert.equal(github.calls.length, 11);
+			entries.splice(0, entries.length, { bad: true });
+			assert.equal(
+				(
+					await (source === "reviews"
+						? adapter.readPullReviews(5)
+						: adapter.readReviewComments(5, 1))
+				).kind,
+				"failed",
+			);
+		});
+	it("creates only the requested proposed issue using argument arrays", async () => {
+		const github = new FakeGitHub();
+		const writer = new GitHubTicketWriter({ exec: github.exec, repo });
+		const result = await writer.createIssue(
+			"literal $(touch /tmp/no)",
+			"body",
+			["factory:proposed"],
+		);
+		assert.equal(result.kind, "posted");
+		assert.equal(github.issues.size, 1);
+		assert.deepEqual([...github.issues.values()][0]?.labels, [
+			"factory:proposed",
+		]);
+	});
+});
+const MAIN_HEAD = "a".repeat(40);
+
 function slug(text: string): RepoSlug {
 	if (!isRepoSlug(text)) throw new Error(`bad slug ${text}`);
 
