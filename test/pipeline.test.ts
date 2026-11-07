@@ -70,13 +70,11 @@ describe("controller driven through the fake adapter", () => {
 		const adapter = fixture();
 
 		const event: FactoryEvent = {
-			kind: "pr_feedback",
+			kind: "answered",
 			id: "6485238589",
 			at: "2026-10-29T01:21:48Z",
 			ref: ticket,
 			actor: "maintainer",
-			prUrl: "https://github.com/giuseppecrj/pi-herdr-factorio/pull/7",
-			comment: "rename this",
 		};
 
 		assert.deepEqual(adapter.normalize(adapter.rawEvent(event)), event);

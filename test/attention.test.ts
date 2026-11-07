@@ -294,6 +294,60 @@ after(() => {
 	for (const root of roots) rmSync(root, { recursive: true, force: true });
 });
 
+test("feedback overflow attention uses the durable hold age during notice and after posting", async () => {
+	const root = fixture();
+	const initial = parseCandidateState(prBook(42, 5, true));
+
+	assert.ok(initial?.kind === "selected");
+
+	for (const notice of ["due", "posted"] as const) {
+		const work =
+			notice === "posted"
+				? ({ kind: "held", reason: "feedback_overflow", since: 100 } as const)
+				: ({
+						kind: "effect",
+						request: {
+							kind: "post_notice",
+							number: 5,
+							notice: {
+								kind: "feedback_overflow",
+								place: "issue",
+								key: `<!-- factory:notice ${initial.pin.runId} feedback_overflow -->`,
+							},
+							withdraw: null,
+							// Persisted transition data, not a Promise callback.
+							// oxlint-disable-next-line unicorn/no-thenable
+							then: {
+								kind: "resume",
+								work: { kind: "held", reason: "feedback_overflow", since: 100 },
+							},
+						},
+					} as const);
+
+		const handoff: JsonValue = JSON.parse(
+			JSON.stringify({
+				...initial,
+				work,
+				feedback: {
+					pr: 5,
+					seen: [],
+					batches: [],
+					overflow: { since: 100, notice },
+				},
+			}),
+		);
+
+		claim(root, 42, "blocked", { stage: "land", enteredAt: 900, handoff });
+		const attention = await readAttention({ stateDir: root, repo, now: 1000 });
+
+		assert.ok(attention.kind === "available");
+		assert.equal(attention.groups.blocked.length, 1);
+		assert.equal(attention.groups.blocked[0]?.reason, "feedback_overflow");
+		assert.equal(attention.groups.blocked[0]?.ageMs, 900);
+		assert.deepEqual(attention.gaps, []);
+	}
+});
+
 test("six groups distinguish unknown legacy ages and never duplicate a not-ready PR", async () => {
 	const root = fixture();
 	claim(root, 1, "needs_info");

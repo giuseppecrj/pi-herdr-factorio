@@ -8,6 +8,17 @@ import {
 } from "../src/artifacts.ts";
 import { readPatch, publicationTree } from "../src/build.ts";
 import {
+	canonicalJson,
+	classifyFeedback,
+	feedbackId,
+	type FeedbackBatch,
+	type FeedbackEvent,
+	type FeedbackId,
+	type FeedbackObservation,
+} from "../src/feedback.ts";
+import { CONTROLLER_LOGIN } from "../src/markers.ts";
+import {
+	promotedHead,
 	parseCandidateState,
 	candidateUsage,
 	candidateGenerations,
@@ -23,9 +34,14 @@ import {
 	GitHubTicketWriter,
 	parseOwnedPullRequest,
 	type OwnedPullRequest,
+	isLogin,
 } from "../src/adapters/github.ts";
 import { fileAdmissionStore, latestReadyEntry } from "../src/admission.ts";
-import { READY_LABEL, REPO_SWITCH_LABEL } from "../src/policy.ts";
+import {
+	READY_LABEL,
+	REPO_SWITCH_LABEL,
+	hasWriteAccess,
+} from "../src/policy.ts";
 import {
 	GitHubPublicationApi,
 	PublicationError,
@@ -69,6 +85,7 @@ import { type Exec } from "../src/gh.ts";
 import { digestOf, type Verdict, type Stage } from "../src/run.ts";
 import {
 	frozenRowOf,
+	parseLedger,
 	ledgerApiOf,
 	ledgerRowOf,
 	pumpLedger,
@@ -5357,6 +5374,7 @@ export function controllerCandidatePort(config: {
 			pr,
 			main: null,
 			eligibility: "unverified",
+			feedback: { kind: "none" },
 			readiness: { kind: "unavailable" },
 		};
 
@@ -5464,7 +5482,27 @@ export function controllerCandidatePort(config: {
 			}
 		}
 
-		return { ...result, main, eligibility, readiness };
+		const head = promotedHead(state);
+
+		const feedback =
+			state.kind === "selected" &&
+			state.published !== null &&
+			pr.kind === "open" &&
+			head !== null
+				? await observeFeedback({
+						stateDir: config.stateDir,
+						adapter,
+						runId: state.pin.runId,
+						pr: pr.number,
+						head,
+						prHead: pr.head,
+						refHead: pr.refHead,
+						seen: state.feedback?.seen ?? [],
+						held: state.feedback?.overflow !== undefined,
+					})
+				: { kind: "none" as const };
+
+		return { ...result, main, eligibility, readiness, feedback };
 	};
 
 	const publicBody = async (
@@ -5572,6 +5610,56 @@ export function controllerCandidatePort(config: {
 			return observed;
 		},
 		observe: observation,
+		async sweep(repo, now) {
+			if (
+				(await fileAdmissionStore(config.stateDir).localSwitch()) !== "enabled"
+			)
+				return;
+			const dir = join(config.stateDir, "feedback-sweep");
+			privateDir(dir);
+			const cursor = join(dir, "ledger.json");
+
+			const last = present(cursor)
+				? countOf(jsonField(objectOf(parseJson(regularText(cursor))), "at"))
+				: null;
+
+			if (last !== null && now - last < 3_600_000) return;
+
+			if (!(await writeAtomic(cursor, JSON.stringify({ version: 1, at: now }))))
+				return;
+
+			const api = ledgerApiOf(
+				new GitHubPublicationApi(
+					config.exec,
+					repo,
+					{},
+					async () => true,
+					undefined,
+					{ now: Date.now, sliceMs: 20_000, callMs: 5_000 },
+				),
+			);
+
+			const tip = await api.ref();
+
+			if (tip === null) return;
+			const commit = await api.commit(tip);
+			const file = await api.file(commit.tree);
+			const lines = parseLedger(file.bytes);
+
+			if (!lines.every((line) => line.kind === "known")) return;
+
+			const landed = lines.flatMap((line) =>
+				line.kind === "known" &&
+				line.row.repo === repo &&
+				line.row.outcome.kind === "landed" &&
+				line.row.pr !== null
+					? [{ runId: line.row.runId, pr: line.row.pr.number }]
+					: [],
+			);
+
+			if (landed.length > 0)
+				await sweepMergedFeedback({ ...config, repo, now, landed });
+		},
 		async patch(state, round) {
 			const patch = readPatch(config.stateDir, {
 				runId: state.pin.runId,
@@ -5629,6 +5717,123 @@ export function controllerCandidatePort(config: {
 			}
 
 			if (!(await allowed(state))) return null;
+
+			if (request.kind === "post_notice") {
+				const batch = state.feedback?.batches.find(
+					(b) =>
+						request.notice.key ===
+						`<!-- factory:notice ${state.pin.runId} feedback_intake ${b.digest} -->`,
+				);
+
+				if (request.number !== state.published?.number) return null;
+
+				const dir = join(
+					config.stateDir,
+					"handoff",
+					state.pin.runId,
+					"feedback",
+				);
+
+				let body: string;
+
+				if (request.notice.kind === "feedback_overflow") {
+					if (state.feedback?.overflow === undefined) return null;
+					body = [
+						"## Factory feedback overflow",
+						"Feedback intake is held as feedback_overflow. A card metadata or cursor limit was reached. Stored feedback is retained; no repair will start. Owner intervention is needed before intake can continue. Readiness and budgets are unchanged.",
+						request.notice.key,
+					].join("\n\n");
+				} else {
+					if (batch === undefined) return null;
+
+					const bytes = regularText(join(dir, `${batch.digest}.json`));
+
+					if (digestOf(bytes) !== batch.digest) return null;
+					const stored = objectOf(parseJson(bytes));
+					const records = arrayOf(jsonField(stored, "records"));
+
+					if (
+						records === null ||
+						jsonField(stored, "runId") !== state.pin.runId ||
+						jsonField(stored, "head") !== batch.head ||
+						jsonField(stored, "pr") !== request.number
+					)
+						return null;
+
+					const refused = records
+						.flatMap((r) => arrayOf(jsonField(objectOf(r), "inline")) ?? [])
+						.filter(
+							(c) =>
+								jsonField(
+									objectOf(jsonField(objectOf(c), "intake")),
+									"kind",
+								) === "refused",
+						).length;
+
+					body = [
+						"## Factory feedback intake",
+						...(batch.actionable
+							? [
+									"Your change request is kept in the queue. Repair is not in this deploy; the repair slice will pick it up. Dismissing the review or pushing a new head cancels this batch. Readiness and budgets are unchanged.",
+								]
+							: []),
+						...(refused > 0
+							? [
+									`Refused ${refused} inline comment(s) on held-out acceptance files. Their text is not forwarded.`,
+								]
+							: []),
+						request.notice.key,
+					].join("\n\n");
+				}
+
+				const adapter = new GitHubTicketAdapter({
+					exec: config.exec,
+					repo: state.pin.repo,
+				});
+
+				const comments = await adapter.readComments(state.pin.issue);
+
+				if (comments.kind !== "ok") return null;
+
+				const matching = comments.value.filter(
+					(c) =>
+						c.author?.login.toLowerCase() === CONTROLLER_LOGIN.toLowerCase() &&
+						c.author.type === "Bot" &&
+						c.body.split("\n").includes(request.notice.key),
+				);
+
+				if (matching.length > 1) return null;
+
+				if (matching.length === 0) {
+					const intent = join(
+						dir,
+						request.notice.kind === "feedback_overflow"
+							? "notice-feedback-overflow.json"
+							: `notice-${batch?.digest}.json`,
+					);
+
+					const intentBytes = JSON.stringify({ key: request.notice.key });
+
+					if (present(intent)) {
+						if (regularText(intent) !== intentBytes) return null;
+					} else exclusive(intent, intentBytes);
+
+					if (!(await allowed(state))) {
+						await retireUnissuedIntent(intent, intentBytes);
+
+						return null;
+					}
+
+					const posted = await writer.postComment(state.pin.issue, body);
+
+					if (posted.kind === "rejected")
+						await retireUnissuedIntent(intent, intentBytes);
+
+					if (posted.kind !== "posted") return null;
+				}
+
+				return { kind: "post_notice", request };
+			}
 
 			if (request.kind === "open_pr") {
 				let found = await ownedPr(state);
@@ -5802,6 +6007,355 @@ export function controllerCandidatePort(config: {
 			return { kind: "complete_handoff", request, now: Date.now() };
 		},
 	};
+}
+
+export async function storeFeedbackBatch(
+	stateDir: string,
+	batch: FeedbackBatch,
+	full: string | null,
+): Promise<
+	NonNullable<Extract<FeedbackObservation, { kind: "read" }>["batch"]>
+> {
+	const dir = join(resolve(stateDir), "handoff", batch.runId, "feedback");
+	privateDir(dir);
+
+	const put = async (path: string, bytes: string) => {
+		if (present(path)) {
+			const stat = lstatSync(path);
+
+			if (!stat.isFile() || (stat.mode & 0o077) !== 0)
+				throw new Error("unsafe private file");
+
+			if (
+				stat.size === Buffer.byteLength(bytes) &&
+				digestOf(regularText(path, stat.size)) === digestOf(bytes)
+			)
+				return;
+		}
+
+		if (!(await writeAtomic(path, bytes))) throw new Error("feedback_write");
+	};
+
+	if (batch.full !== null) {
+		if (
+			full === null ||
+			digestOf(full) !== batch.full.digest ||
+			Buffer.byteLength(full) !== batch.full.bytes
+		)
+			throw new Error("feedback_full_binding");
+		await put(join(dir, `${batch.full.digest}.full.json`), full);
+	}
+
+	const bytes = canonicalJson(batch);
+	const digest = digestOf(bytes);
+	await put(join(dir, `${digest}.json`), bytes);
+
+	const stored: NonNullable<
+		Extract<FeedbackObservation, { kind: "read" }>["batch"]
+	> = {
+		digest,
+		seen: batch.records.map((r) => r.event).sort(),
+		reviews: batch.records
+			.filter((r) => r.intake.kind === "actionable")
+			.map((r) => r.event)
+			.sort(),
+		actionable: batch.records.some((r) => r.intake.kind === "actionable"),
+		refusedInline: batch.records.some((r) =>
+			r.inline.some((c) => c.intake.kind === "refused"),
+		),
+	};
+
+	return batch.overflow === true ? { ...stored, overflow: true } : stored;
+}
+
+async function feedbackEvents(
+	adapter: GitHubTicketAdapter,
+	pr: number,
+	seen: readonly FeedbackId[],
+): Promise<readonly FeedbackEvent[] | null> {
+	const comments = await adapter.readComments(pr);
+	const reviews = await adapter.readPullReviews(pr);
+
+	if (comments.kind !== "ok" || reviews.kind !== "ok") return null;
+	const events: FeedbackEvent[] = [];
+
+	for (const c of comments.value) {
+		if (c.author === null) continue;
+		events.push({
+			kind: "conversation",
+			id: feedbackId(adapter.repo, "issue-comment", Number(c.id)),
+			pr,
+			actor: c.author.login,
+			at: c.createdAt,
+			body: c.body,
+		});
+	}
+
+	for (const r of reviews.value) {
+		if (
+			seen.includes(r.id) ||
+			r.actor.toLowerCase() === CONTROLLER_LOGIN.toLowerCase()
+		) {
+			events.push(r);
+			continue;
+		}
+
+		const inline = await adapter.readReviewComments(
+			pr,
+			Number(r.id.split(":").at(-1)),
+		);
+
+		if (inline.kind !== "ok") return null;
+		events.push({ ...r, comments: inline.value });
+	}
+
+	return events;
+}
+
+export async function observeFeedback(input: {
+	stateDir: string;
+	adapter: GitHubTicketAdapter;
+	runId: Digest;
+	pr: number;
+	head: GitSha;
+	prHead: string;
+	refHead: string;
+	seen: readonly FeedbackId[];
+	held?: boolean;
+}): Promise<FeedbackObservation> {
+	if (input.prHead !== input.head || input.refHead !== input.head)
+		return { kind: "deferred" };
+
+	try {
+		if (input.held === true) {
+			const reviews = await input.adapter.readPullReviews(input.pr);
+
+			return reviews.kind !== "ok"
+				? { kind: "unavailable" }
+				: {
+						kind: "read",
+						head: input.head,
+						batch: null,
+						dismissed: reviews.value
+							.filter(
+								(r) => r.state === "DISMISSED" && input.seen.includes(r.id),
+							)
+							.map((r) => r.id),
+					};
+		}
+
+		const events = await feedbackEvents(input.adapter, input.pr, input.seen);
+
+		if (events === null) return { kind: "unavailable" };
+
+		const classified = await classifyFeedback({
+			...input,
+			events,
+			permission: async (actor) => {
+				if (!isLogin(actor)) return "read";
+				const permission = await input.adapter.readPermission(actor);
+
+				return permission.kind === "failed"
+					? "failed"
+					: hasWriteAccess(permission.value)
+						? "write"
+						: "read";
+			},
+		});
+
+		if (classified.kind === "unavailable") return classified;
+
+		const batch =
+			classified.batch === null
+				? null
+				: await storeFeedbackBatch(
+						input.stateDir,
+						classified.batch,
+						classified.full,
+					);
+
+		return {
+			kind: "read",
+			head: input.head,
+			batch,
+			dismissed: classified.dismissed,
+		};
+	} catch {
+		return { kind: "unavailable" };
+	}
+}
+
+type MergedFeedbackSweep = Readonly<{
+	stateDir: string;
+	exec: Exec;
+	repo: RepoSlug;
+	now: number;
+	landed: readonly Readonly<{ runId: Digest; pr: number }>[];
+}>;
+
+type SubmittedFeedback = Extract<FeedbackEvent, { kind: "review" }>;
+
+function proposalBody(
+	repo: RepoSlug,
+	review: SubmittedFeedback,
+	key: string,
+): string {
+	return [
+		`Feedback on merged factory PR https://github.com/${repo}/pull/${review.pr}`,
+		`Review: ${inert(review.id)}`,
+		inert(review.body),
+		...review.comments.map((c) =>
+			c.path.startsWith("test/acceptance/")
+				? `Refused inline comment ${inert(c.id)} on a held-out acceptance file; text is not quoted.`
+				: `${inert(c.path)}${c.line === null ? "" : `:${c.line}`}\n${inert(c.body)}`,
+		),
+		"This proposal needs owner review and is not ready for automatic admission.",
+		key,
+	].join("\n\n");
+}
+
+async function proposeMergedReview(
+	input: MergedFeedbackSweep,
+	adapter: GitHubTicketAdapter,
+	review: SubmittedFeedback,
+): Promise<boolean> {
+	const key = `<!-- factory:proposal ${input.repo} ${review.id} -->`;
+
+	const path = join(
+		input.stateDir,
+		"feedback-sweep",
+		"proposals",
+		`${review.pr}-${review.id.split(":").at(-1)}.json`,
+	);
+
+	let body = proposalBody(input.repo, review, key);
+
+	if (present(path)) {
+		const intent = objectOf(parseJson(regularText(path)));
+		const savedBody = textOf(jsonField(intent, "body"));
+
+		if (
+			jsonField(intent, "key") !== key ||
+			savedBody === null ||
+			!savedBody.endsWith(`\n\n${key}`)
+		)
+			return false;
+		body = savedBody;
+	} else exclusive(path, JSON.stringify({ key, body }));
+	const proposals = await adapter.readProposedIssues();
+
+	if (proposals.kind !== "ok") return false;
+
+	const matching = proposals.value.filter((p) =>
+		p.body.split("\n").includes(key),
+	);
+
+	if (matching.length > 0) return matching.length === 1;
+
+	if ((await fileAdmissionStore(input.stateDir).localSwitch()) !== "enabled")
+		return false;
+	const enabled = await adapter.readRepoSwitch();
+
+	if (enabled.kind !== "ok" || enabled.value.kind !== "present") return false;
+	const writer = new GitHubTicketWriter({ exec: input.exec, repo: input.repo });
+
+	const created = await writer.createIssue(
+		`Factory follow-up for PR ${review.pr}`,
+		body,
+		["factory:proposed"],
+	);
+
+	return created.kind === "posted";
+}
+
+async function sweepMergedPr(
+	input: MergedFeedbackSweep,
+	adapter: GitHubTicketAdapter,
+	number: number,
+): Promise<void> {
+	const dir = join(input.stateDir, "feedback-sweep");
+	privateDir(dir);
+	const path = join(dir, `${number}.json`);
+	const cursor = present(path) ? objectOf(parseJson(regularText(path))) : null;
+	const last = countOf(jsonField(cursor, "at"));
+
+	if (last !== null && input.now - last < 3_600_000) return;
+	const seen = new Set(textsOf(jsonField(cursor, "seen")) ?? []);
+
+	const save = () =>
+		writeAtomic(
+			path,
+			JSON.stringify({ version: 1, at: input.now, seen: [...seen].sort() }),
+		);
+
+	if (!(await save())) return;
+	const api = new GitHubPublicationApi(input.exec, input.repo);
+	const pr = objectOf(await api.request("GET", `pulls/${number}`));
+	const mergedAt = textOf(jsonField(pr, "merged_at"));
+
+	if (mergedAt === null || !validLedgerInstant(mergedAt)) return;
+	const reviews = await adapter.readPullReviews(number);
+
+	if (reviews.kind !== "ok") return;
+
+	for (const review of reviews.value) {
+		if (
+			seen.has(review.id) ||
+			review.actor.toLowerCase() === CONTROLLER_LOGIN.toLowerCase() ||
+			Date.parse(review.at) <= Date.parse(mergedAt) ||
+			!isLogin(review.actor)
+		)
+			continue;
+		const permission = await adapter.readPermission(review.actor);
+
+		if (permission.kind !== "ok") return;
+
+		if (!hasWriteAccess(permission.value)) continue;
+
+		const comments = await adapter.readReviewComments(
+			number,
+			Number(review.id.split(":").at(-1)),
+		);
+
+		if (comments.kind !== "ok") return;
+
+		if (!review.body.trim() && comments.value.length === 0) continue;
+
+		if (
+			!(await proposeMergedReview(input, adapter, {
+				...review,
+				comments: comments.value,
+			}))
+		)
+			return;
+		seen.add(review.id);
+
+		if (!(await save())) return;
+	}
+}
+
+export async function sweepMergedFeedback(
+	input: MergedFeedbackSweep,
+): Promise<void> {
+	if ((await fileAdmissionStore(input.stateDir).localSwitch()) !== "enabled")
+		return;
+
+	const adapter = new GitHubTicketAdapter({
+		exec: input.exec,
+		repo: input.repo,
+	});
+
+	const enabled = await adapter.readRepoSwitch();
+
+	if (enabled.kind !== "ok" || enabled.value.kind !== "present") return;
+
+	for (const number of new Set(input.landed.map((row) => row.pr))) {
+		try {
+			await sweepMergedPr(input, adapter, number);
+		} catch {
+			continue;
+		}
+	}
 }
 
 /**

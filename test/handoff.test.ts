@@ -1,4 +1,11 @@
 import assert from "node:assert/strict";
+import {
+	feedbackId,
+	MAX_FEEDBACK_SEEN,
+	MAX_FEEDBACK_BATCHES,
+	type FeedbackObservation,
+	type FeedbackBatchStatus,
+} from "../src/feedback.ts";
 import { test } from "node:test";
 import {
 	beginCandidate,
@@ -29,7 +36,14 @@ import {
 	type Run,
 } from "../src/run.ts";
 import { advance } from "../src/stages.ts";
-import { TRUSTED_RUN_CAP } from "./fake-ticket-adapter.ts";
+import {
+	TRUSTED_RUN_CAP,
+	FakeGitHub,
+	fakeIssue,
+	BOT_LOGIN,
+} from "./fake-ticket-adapter.ts";
+import { classifyFeedback } from "../src/feedback.ts";
+import { storeFeedbackBatch } from "../server/controller.ts";
 import {
 	type FamilyInput,
 	familyLabel,
@@ -580,6 +594,7 @@ test("actual observer promotes a certified successor before PR checks and waits 
 		let refHead = predecessor;
 		let reportAvailable = true;
 		let reportValid = true;
+		const feedbackReads: string[] = [];
 		const patches: JsonValue[] = [];
 
 		const factoryCheck = {
@@ -669,6 +684,40 @@ test("actual observer promotes a certified successor before PR checks and waits 
 						merged: false,
 						draft: false,
 					});
+
+				if (path?.startsWith("issues/5/comments")) {
+					feedbackReads.push(path);
+
+					return ok([]);
+				}
+
+				if (path?.startsWith("pulls/5/reviews/8/comments")) {
+					feedbackReads.push(path);
+
+					return ok([]);
+				}
+
+				if (path?.startsWith("pulls/5/reviews")) {
+					feedbackReads.push(path);
+
+					return ok(
+						prHead === head
+							? [
+									{
+										id: 8,
+										state: "CHANGES_REQUESTED",
+										commit_id: head,
+										body: "Fix on the new head",
+										submitted_at: "2026-11-07T00:00:00Z",
+										user: { login: "writer" },
+									},
+								]
+							: [],
+					);
+				}
+
+				if (path === "collaborators/writer/permission")
+					return ok({ permission: "write", user: { login: "writer" } });
 
 				if (path === `git/ref/heads/${branch}`)
 					return ok({ object: { sha: refHead } });
@@ -842,6 +891,15 @@ test("actual observer promotes a certified successor before PR checks and waits 
 		assert.equal(patches.length, 1);
 		prHead = head;
 		refHead = head;
+		feedbackReads.length = 0;
+		const promotionWindow = await observe();
+
+		assert.deepEqual(promotionWindow.feedback, { kind: "deferred" });
+		assert.deepEqual(feedbackReads, []);
+		assert.equal(
+			selected(handoffCandidate(state, promotionWindow).state).feedback,
+			null,
+		);
 
 		const badOrdinary = [
 			[],
@@ -883,6 +941,15 @@ test("actual observer promotes a certified successor before PR checks and waits 
 		assert.equal(selected(ready).work.kind, "waiting");
 		assert.equal(selected(ready).published?.readiness.kind, "ready");
 		assert.equal(candidateUsage(ready), candidateUsage(state));
+		const intake = await observe(selected(ready));
+
+		assert.ok(
+			intake.feedback?.kind === "read" && intake.feedback.batch?.actionable,
+		);
+		assert.ok(feedbackReads.length > 0);
+		const ingested = selected(handoffCandidate(ready, intake).state);
+
+		assert.deepEqual(ingested.feedback?.batches[0]?.status, { kind: "queued" });
 	});
 });
 
@@ -2614,5 +2681,774 @@ test("a version 1 review that fails migration keeps its bytes, not an explicit n
 	assert.deepEqual(fieldOf(migrated, "review"), broken);
 	assert.deepEqual(migrateCertificationValue({ review: null }), {
 		review: null,
+	});
+});
+
+function feedbackObservation(
+	state: CandidateState,
+	n = 1,
+): FeedbackObservation {
+	const book = selected(state);
+
+	const head = [...book.history, book.current].find(
+		(g) => g.intent.digest === book.published?.promoted.digest,
+	)?.report?.candidateSha;
+
+	assert.ok(head);
+
+	return {
+		kind: "read",
+		head,
+		batch: {
+			digest: digestOf(`batch-${n}`),
+			seen: [feedbackId(pin.repo, "review", n)],
+			reviews: [feedbackId(pin.repo, "review", n)],
+			actionable: true,
+			refusedInline: true,
+		},
+		dismissed: [],
+	};
+}
+
+function withFeedback(
+	state: CandidateState,
+	n = 1,
+): Extract<CandidateEvent, { kind: "observed" }> {
+	return {
+		...readyObservation(state),
+		feedback: feedbackObservation(state, n),
+	};
+}
+
+for (const kind of [
+	"waiting",
+	"held",
+	"rebuilding",
+	"reviewing",
+	"validate",
+	"handoff",
+	"repair_due",
+	"review_due",
+	"repair_built",
+] as const)
+	test(`feedback double-apply and fall-through preserve one cursor while ${kind}`, () => {
+		const initial = waiting();
+		const g = initial.current.intent;
+		const ref = { round: g.round, generation: g.generation, digest: g.digest };
+
+		const repair = {
+			stage: "build",
+			id: digestOf("repair"),
+			runId: pin.runId,
+			round: 1,
+			attempt: 1,
+			feedbackFrom: ref,
+			cause: { kind: "validation", assessment: initial.current.assessment! },
+			workflowSha: pin.workflowSha,
+			workflowDigest: pin.workflowDigest,
+		} as const;
+
+		const review = reviewing(validated(select())).execution;
+
+		const work =
+			kind === "held"
+				? ({ kind: "held", reason: "validation_failed", since: 17 } as const)
+				: kind === "rebuilding"
+					? ({ kind, execution: repair } as const)
+					: kind === "reviewing"
+						? ({ kind, execution: review } as const)
+						: kind === "validate"
+							? ({
+									kind: "effect",
+									request: { kind: "validate", generation: g },
+								} as const)
+							: kind === "repair_due"
+								? ({
+										kind,
+										round: 1,
+										attempt: 1,
+										feedbackFrom: ref,
+										cause: repair.cause,
+									} as const)
+								: kind === "repair_built"
+									? ({
+											kind,
+											patch: { ...patch, round: 1 },
+											feedbackFrom: ref,
+										} as const)
+									: kind === "review_due"
+										? ({
+												kind,
+												seats: ["code-review", "security-review", "simplify"],
+											} as const)
+										: ({ kind } as const);
+
+		const state = { ...initial, work };
+		const obs = { ...withFeedback(state), capacityAvailable: false };
+		const first = handoffCandidate(state, obs);
+		const second = handoffCandidate(first.state, obs);
+		assert.ok(
+			first.state.kind === "selected" && second.state.kind === "selected",
+		);
+		assert.deepEqual(second.state.feedback, first.state.feedback);
+		assert.equal(second.state.feedback?.batches.length, 1);
+		assert.deepEqual(second.state.feedback?.seen, [
+			feedbackId(repo, "review", 1),
+		]);
+		assert.ok(
+			new Set(
+				[first.effect, second.effect].flatMap((e) =>
+					e?.kind === "post_notice" ? [e.notice.key] : [],
+				),
+			).size <= 1,
+		);
+
+		if (["rebuilding", "reviewing", "validate"].includes(kind))
+			assert.deepEqual(first.state.work, work);
+		assert.deepEqual(first.state.accounts, state.accounts);
+		assert.deepEqual(
+			first.state.published?.readiness,
+			state.published?.readiness,
+		);
+		assert.deepEqual(first.state.feedback?.batches[0]?.status, {
+			kind: "queued",
+		});
+	});
+
+for (const fault of ["landed_unanswered", "rejected", "lost"] as const)
+	test(`C2 actual intake notice reconciles ${fault} without duplicating the comment or settling the batch`, async () => {
+		await withLocalArtifactDownload(async (root) => {
+			const github = new FakeGitHub();
+			const issue = github.add(fakeIssue(pin.issue));
+			const initial = waiting();
+			const head = initial.current.report!.candidateSha;
+
+			const classified = await classifyFeedback({
+				runId: pin.runId,
+				pr: 5,
+				head,
+				seen: [],
+				permission: async () => "write",
+				events: [
+					{
+						kind: "review",
+						id: feedbackId(pin.repo, "review", 9),
+						pr: 5,
+						actor: "writer",
+						at: "2026-11-07T00:00:00Z",
+						state: "CHANGES_REQUESTED",
+						commit: head,
+						body: "fix",
+						comments: [
+							{
+								id: feedbackId(pin.repo, "review-comment", 10),
+								path: "test/acceptance/a",
+								line: 1,
+								commit: head,
+								inReplyTo: null,
+								body: "PRIVATE-REFUSED-TEXT",
+							},
+						],
+					},
+				],
+			});
+
+			assert.ok(classified.kind === "read" && classified.batch);
+
+			const batch = await storeFeedbackBatch(
+				root,
+				classified.batch,
+				classified.full,
+			);
+
+			const step = handoffCandidate(initial, {
+				...readyObservation(initial),
+				feedback: { kind: "read", head, batch, dismissed: [] },
+			});
+
+			const request = pending(step.state, "post_notice");
+
+			github.posts.push(fault);
+			assert.equal(
+				await controllerCandidatePort({
+					stateDir: root,
+					exec: github.exec,
+				}).execute(step.state, request),
+				null,
+			);
+
+			const completion = await controllerCandidatePort({
+				stateDir: root,
+				exec: github.exec,
+			}).execute(step.state, request);
+
+			assert.ok(completion?.kind === "post_notice");
+			assert.equal(
+				issue.comments.filter((c) => c.login === BOT_LOGIN).length,
+				1,
+			);
+			assert.match(
+				issue.comments[0]?.body ?? "",
+				/Repair is not in this deploy/,
+			);
+			assert.match(issue.comments[0]?.body ?? "", /Refused 1 inline comment/);
+			assert.doesNotMatch(
+				issue.comments[0]?.body ?? "",
+				/PRIVATE-REFUSED-TEXT/,
+			);
+
+			const done = selected(
+				handoffCandidate(step.state, { kind: "effect_completed", completion })
+					.state,
+			);
+
+			assert.deepEqual(done.feedback?.batches[0]?.status, { kind: "queued" });
+			assert.equal(done.feedback?.batches[0]?.notice, "posted");
+			assert.deepEqual(done.accounts, initial.accounts);
+			assert.deepEqual(done.published?.readiness, initial.published?.readiness);
+		});
+	});
+
+test("47-comment card overflow advances the stored cursor and posts one visible hold notice", async () => {
+	await withLocalArtifactDownload(async (root) => {
+		const github = new FakeGitHub();
+		const issue = github.add(fakeIssue(pin.issue));
+		const initial = waiting();
+		const head = initial.current.report!.candidateSha;
+
+		const classified = await classifyFeedback({
+			runId: pin.runId,
+			pr: 5,
+			head,
+			seen: [],
+			permission: async () => "write",
+			events: [
+				{
+					kind: "review",
+					id: feedbackId(repo, "review", 9),
+					pr: 5,
+					actor: "writer",
+					at: "2026-11-07T00:00:00Z",
+					state: "CHANGES_REQUESTED",
+					commit: head,
+					body: "",
+					comments: Array.from({ length: 47 }, (_, n) => ({
+						id: feedbackId(repo, "review-comment", 100000 + n),
+						path: "src/a.ts",
+						line: 1,
+						commit: head,
+						inReplyTo: null,
+						body: "PRIVATE-OVERFLOW-TEXT",
+					})),
+				},
+			],
+		});
+
+		assert.ok(
+			classified.kind === "read" && classified.batch && classified.full,
+		);
+
+		const batch = await storeFeedbackBatch(
+			root,
+			classified.batch,
+			classified.full,
+		);
+
+		const step = handoffCandidate(initial, {
+			...readyObservation(initial),
+			feedback: { kind: "read", head, batch, dismissed: [] },
+		});
+
+		const request = pending(step.state, "post_notice");
+
+		assert.equal(request.notice.kind, "feedback_overflow");
+		assert.deepEqual(selected(step.state).feedback?.seen, [
+			feedbackId(repo, "review", 9),
+		]);
+		assert.equal(
+			selected(step.state).feedback?.batches[0]?.digest,
+			batch.digest,
+		);
+		assert.ok(parseCandidateState(JSON.parse(JSON.stringify(step.state))));
+		github.posts.push("lost");
+		assert.equal(
+			await controllerCandidatePort({
+				stateDir: root,
+				exec: github.exec,
+			}).execute(step.state, request),
+			null,
+		);
+
+		const completion = await controllerCandidatePort({
+			stateDir: root,
+			exec: github.exec,
+		}).execute(step.state, request);
+
+		assert.ok(completion?.kind === "post_notice");
+
+		const done = selected(
+			handoffCandidate(step.state, { kind: "effect_completed", completion })
+				.state,
+		);
+
+		assert.deepEqual(done.work, {
+			kind: "held",
+			reason: "feedback_overflow",
+			since: 100,
+		});
+		assert.deepEqual(done.published, initial.published);
+		assert.equal(done.feedback?.overflow?.notice, "posted");
+		assert.equal(done.feedback?.batches[0]?.notice, "none");
+		assert.equal(issue.comments.length, 1);
+		assert.match(issue.comments[0]!.body, /feedback_overflow/);
+		assert.doesNotMatch(issue.comments[0]!.body, /PRIVATE-OVERFLOW-TEXT/);
+
+		const dismissed = handoffCandidate(done, {
+			...readyObservation(done),
+			now: 900,
+			feedback: {
+				kind: "read",
+				head,
+				batch: null,
+				dismissed: [feedbackId(repo, "review", 9)],
+			},
+		});
+
+		assert.equal(dismissed.effect, null);
+		assert.deepEqual(selected(dismissed.state).work, done.work);
+		assert.deepEqual(selected(dismissed.state).feedback?.batches[0]?.status, {
+			kind: "settled",
+			outcome: { kind: "superseded", by: "dismissed" },
+		});
+
+		const replay = await controllerCandidatePort({
+			stateDir: root,
+			exec: github.exec,
+		}).execute(step.state, request);
+
+		assert.deepEqual(replay, completion);
+		assert.equal(issue.comments.length, 1);
+	});
+});
+
+test("feedback partial overlap is an all-or-nothing no-op", () => {
+	const first = selected(
+		handoffCandidate(waiting(), withFeedback(waiting())).state,
+	);
+
+	const obs = feedbackObservation(first, 2);
+	assert.ok(obs.kind === "read" && obs.batch);
+
+	const overlap = {
+		...obs,
+		batch: {
+			...obs.batch,
+			seen: [feedbackId(repo, "review", 1), feedbackId(repo, "review", 2)],
+		},
+	};
+
+	const result = selected(
+		handoffCandidate(first, { ...readyObservation(first), feedback: overlap })
+			.state,
+	);
+
+	assert.deepEqual(result.feedback, first.feedback);
+});
+
+for (const gate of [
+	"unpublished",
+	"disabled",
+	"unverified",
+	"pr_identity",
+	"pr_ambiguous",
+	"merge",
+	"close",
+	"withdraw",
+] as const)
+	test(`feedback does not bypass ${gate}`, () => {
+		const initial = waiting();
+
+		const state =
+			gate === "unpublished"
+				? { ...initial, published: null }
+				: gate === "pr_identity" || gate === "pr_ambiguous"
+					? {
+							...initial,
+							work: { kind: "held", reason: gate, since: 5 } as const,
+						}
+					: initial;
+
+		const head = initial.current.report!.candidateSha;
+
+		const obs = {
+			...withFeedback(initial),
+			executionAllowed: gate !== "disabled",
+			eligibility:
+				gate === "unverified"
+					? "unverified"
+					: gate === "withdraw"
+						? "withdrawn"
+						: "ready",
+		} satisfies Extract<CandidateEvent, { kind: "observed" }>;
+
+		if (gate === "merge")
+			obs.pr = { kind: "merged", number: 5, head, mergeSha: sha, actor: null };
+
+		if (gate === "close") obs.pr = { kind: "closed", number: 5, head };
+
+		assert.equal(selected(handoffCandidate(state, obs).state).feedback, null);
+	});
+
+test("C2/C11 intake notice completes once, retains queued work and restores held since", () => {
+	const state = {
+		...waiting(),
+		work: { kind: "held", reason: "validation_failed", since: 17 } as const,
+	};
+
+	const first = handoffCandidate(state, withFeedback(state));
+	const request = pending(first.state, "post_notice");
+	assert.equal(request.notice.kind, "feedback_intake");
+	assert.equal(request.withdraw, null);
+
+	const completed = selected(
+		handoffCandidate(first.state, {
+			kind: "effect_completed",
+			completion: { kind: "post_notice", request },
+		}).state,
+	);
+
+	assert.deepEqual(completed.work, state.work);
+	assert.deepEqual(completed.feedback?.batches[0]?.status, { kind: "queued" });
+	assert.equal(completed.feedback?.batches[0]?.notice, "posted");
+	const restored = parseCandidateState(JSON.parse(JSON.stringify(completed)));
+	assert.ok(restored);
+	assert.notEqual(
+		handoffCandidate(restored, withFeedback(restored)).effect?.kind,
+		"post_notice",
+	);
+});
+
+test("dismissal supersedes a queued batch without re-ingesting the review", () => {
+	const initial = waiting();
+
+	const first = selected(
+		handoffCandidate(initial, withFeedback(initial)).state,
+	);
+
+	const obs = feedbackObservation(first);
+	assert.ok(obs.kind === "read");
+
+	const second = selected(
+		handoffCandidate(first, {
+			...readyObservation(first),
+			feedback: {
+				...obs,
+				batch: null,
+				dismissed: [feedbackId(repo, "review", 1)],
+			},
+		}).state,
+	);
+
+	assert.deepEqual(second.feedback?.batches[0]?.status, {
+		kind: "settled",
+		outcome: { kind: "superseded", by: "dismissed" },
+	});
+});
+
+for (const limit of ["seen", "batches"] as const)
+	test(`feedback ${limit} overflow holds without consuming ids`, () => {
+		const initial = waiting();
+
+		const feedback = {
+			pr: 5,
+			seen:
+				limit === "seen"
+					? Array.from({ length: MAX_FEEDBACK_SEEN }, (_, n) =>
+							feedbackId(repo, "review", 100 + n),
+						)
+					: [],
+			batches:
+				limit === "batches"
+					? Array.from({ length: MAX_FEEDBACK_BATCHES }, (_, n) => ({
+							digest: digestOf(`old-${n}`),
+							head: initial.current.report!.candidateSha,
+							actionable: false,
+							reviews: [],
+							notice: "none" as const,
+							status: {
+								kind: "settled",
+								outcome: { kind: "no_action" },
+							} as const,
+						}))
+					: [],
+		};
+
+		const state = { ...initial, feedback };
+		const step = handoffCandidate(state, withFeedback(state));
+		assert.ok(step.state.kind === "selected");
+		assert.deepEqual(step.state.feedback?.seen, feedback.seen);
+		assert.deepEqual(step.state.feedback?.batches, feedback.batches);
+		const request = pending(step.state, "post_notice");
+		assert.equal(request.notice.kind, "feedback_overflow");
+
+		const done = selected(
+			handoffCandidate(step.state, {
+				kind: "effect_completed",
+				completion: { kind: "post_notice", request },
+			}).state,
+		);
+
+		assert.deepEqual(done.work, {
+			kind: "held",
+			reason: "feedback_overflow",
+			since: 100,
+		});
+		assert.deepEqual(done.published, initial.published);
+
+		const restored = parseCandidateState(JSON.parse(JSON.stringify(done)));
+		assert.ok(restored);
+
+		const repeat = handoffCandidate(restored, {
+			...withFeedback(restored),
+			now: 999,
+		});
+
+		assert.equal(repeat.effect, null);
+		assert.deepEqual(selected(repeat.state).work, done.work);
+	});
+
+test("dismissal is retained when the same observation reaches either cursor cap", () => {
+	for (const limit of ["seen", "batches"] as const) {
+		const initial = waiting();
+
+		const queued = selected(
+			handoffCandidate(initial, withFeedback(initial)).state,
+		);
+
+		assert.ok(queued.feedback);
+
+		const state = {
+			...queued,
+			work: initial.work,
+			feedback: {
+				...queued.feedback,
+				seen:
+					limit === "seen"
+						? [
+								feedbackId(repo, "review", 1),
+								...Array.from({ length: MAX_FEEDBACK_SEEN - 1 }, (_, n) =>
+									feedbackId(repo, "review", 100 + n),
+								),
+							].sort()
+						: queued.feedback.seen,
+				batches:
+					limit === "batches"
+						? Array.from({ length: MAX_FEEDBACK_BATCHES }, (_, n) => ({
+								...queued.feedback!.batches[0]!,
+								digest: digestOf(`cap-${n}`),
+								notice: "posted" as const,
+							}))
+						: queued.feedback.batches,
+			},
+		};
+
+		const feedback = feedbackObservation(state, 2);
+
+		assert.ok(feedback.kind === "read");
+
+		const result = selected(
+			handoffCandidate(state, {
+				...readyObservation(state),
+				feedback: { ...feedback, dismissed: [feedbackId(repo, "review", 1)] },
+			}).state,
+		);
+
+		assert.ok(
+			result.feedback?.batches.every(
+				(b) =>
+					b.status.kind === "settled" &&
+					b.status.outcome.kind === "superseded" &&
+					b.status.outcome.by === "dismissed",
+			),
+		);
+	}
+});
+
+for (const kind of ["reviewing", "rebuilding", "validate"] as const)
+	test(`cursor overflow waits for the ${kind} stage boundary without dropping settlement`, () => {
+		const initial = waiting();
+		const active = reviewing(validated(select()));
+		const ref = initial.current.intent;
+
+		const repair = {
+			stage: "build",
+			id: digestOf("cap-repair"),
+			runId: pin.runId,
+			round: 1,
+			attempt: 1,
+			feedbackFrom: {
+				round: ref.round,
+				generation: ref.generation,
+				digest: ref.digest,
+			},
+			cause: { kind: "validation", assessment: initial.current.assessment! },
+			workflowSha: pin.workflowSha,
+			workflowDigest: pin.workflowDigest,
+		} as const;
+
+		const work =
+			kind === "reviewing"
+				? active.state.work
+				: kind === "rebuilding"
+					? ({ kind, execution: repair } as const)
+					: ({
+							kind: "effect",
+							request: { kind: "validate", generation: ref },
+						} as const);
+
+		const state = {
+			...initial,
+			work,
+			accounts:
+				kind === "reviewing"
+					? active.state.accounts
+					: kind === "rebuilding"
+						? [
+								...initial.accounts,
+								{
+									execution: repair,
+									spend: { kind: "known", tokens: 0 } as const,
+									settlement: "running" as const,
+								},
+							]
+						: initial.accounts,
+			feedback: {
+				pr: 5,
+				seen: Array.from({ length: MAX_FEEDBACK_SEEN }, (_, n) =>
+					feedbackId(repo, "review", 100 + n),
+				).sort(),
+				batches: [],
+			},
+		};
+
+		const obs = withFeedback(state);
+		const step = handoffCandidate(state, obs);
+		assert.deepEqual(selected(step.state).work, work);
+		assert.deepEqual(selected(step.state).published, state.published);
+		assert.deepEqual(selected(step.state).accounts, state.accounts);
+		assert.ok(parseCandidateState(JSON.parse(JSON.stringify(step.state))));
+
+		const settlement: CandidateEvent =
+			kind === "reviewing"
+				? {
+						kind: "review_settled",
+						execution: active.execution,
+						tokens: 30,
+						result: {
+							kind: "passed",
+							patch: { kind: "found", receipt: patch, patch: "patch" },
+							review: receipt(active.execution),
+						},
+					}
+				: kind === "rebuilding"
+					? {
+							kind: "repair_settled",
+							execution: repair,
+							tokens: 10,
+							result: {
+								kind: "passed",
+								patch: {
+									...patch,
+									round: 1,
+									patchDigest: digestOf("cap-repaired"),
+								},
+							},
+						}
+					: {
+							kind: "effect_completed",
+							completion: {
+								kind: "validate",
+								request: { kind: "validate", generation: ref },
+								result: {
+									kind: "failed",
+									validation: null,
+									reason: "evidence_unavailable",
+								},
+							},
+						};
+
+		const expected = selected(handoffCandidate(state, settlement).state);
+		const actual = selected(handoffCandidate(step.state, settlement).state);
+
+		assert.deepEqual(actual.current, expected.current);
+		assert.deepEqual(actual.accounts, expected.accounts);
+		assert.deepEqual(actual.work, expected.work);
+		assert.equal(
+			actual.work.kind,
+			kind === "reviewing"
+				? "handoff"
+				: kind === "rebuilding"
+					? "repair_built"
+					: "held",
+		);
+	});
+
+test("feedback full status/outcome codec and pre-F10 books round-trip", () => {
+	const first = selected(
+		handoffCandidate(waiting(), withFeedback(waiting())).state,
+	);
+
+	const statuses: FeedbackBatchStatus[] = [
+		{ kind: "queued" },
+		{ kind: "applying", round: 1 },
+		{ kind: "applying", round: 2 },
+		...(
+			[
+				{ kind: "no_action" },
+				{ kind: "applied", head: sha },
+				{ kind: "stopped", reason: "validation_failed" },
+				{ kind: "superseded", by: "promotion" },
+				{ kind: "superseded", by: "owner_head" },
+				{ kind: "superseded", by: "dismissed" },
+				{ kind: "merged", mergeSha: sha },
+				{ kind: "refused", reason: "cap_reached" },
+				{ kind: "refused", reason: "repair_unavailable" },
+				{ kind: "refused", reason: "owner_authored_head" },
+			] as const
+		).map((outcome) => ({ kind: "settled" as const, outcome })),
+	];
+
+	for (const status of statuses) {
+		assert.ok(first.feedback);
+
+		const book = {
+			...first,
+			feedback: {
+				...first.feedback,
+				batches: first.feedback.batches.map((b) => ({ ...b, status })),
+			},
+		};
+
+		assert.deepEqual(
+			parseCandidateState(JSON.parse(JSON.stringify(book))),
+			book,
+		);
+	}
+
+	for (const status of [
+		{ kind: "future" },
+		{ kind: "applying", round: 3 },
+		{ kind: "settled", outcome: { kind: "refused", reason: "future" } },
+	]) {
+		const book = JSON.parse(JSON.stringify(first));
+		book.feedback.batches[0].status = status;
+		assert.equal(parseCandidateState(book), null);
+	}
+
+	const legacy = JSON.parse(JSON.stringify(waiting()));
+	delete legacy.feedback;
+	assert.deepEqual(parseCandidateState(legacy), {
+		...waiting(),
+		feedback: null,
 	});
 });

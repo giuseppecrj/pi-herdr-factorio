@@ -1,4 +1,11 @@
 import type { PatchRead, PatchReceipt } from "./build.ts";
+import {
+	MAX_FEEDBACK_SEEN,
+	MAX_FEEDBACK_BATCHES,
+	wireFeedbackCursor,
+	type FeedbackCursor,
+	type FeedbackObservation,
+} from "./feedback.ts";
 import { checkChangedPaths } from "./policy.ts";
 import {
 	familyClaimsHold,
@@ -163,7 +170,8 @@ export type HandoffReason =
 	| "repair_limit"
 	| "diagnosis_oracle"
 	| "diagnosis_missing_evidence"
-	| "diagnosis_infrastructure";
+	| "diagnosis_infrastructure"
+	| "feedback_overflow";
 
 export type PublishedPr = Readonly<{
 	number: number;
@@ -219,6 +227,17 @@ export type TerminalObservation =
 	  }
 	| { readonly kind: "failed"; readonly reason: HandoffReason };
 
+export type HandoffNotice = Readonly<{
+	kind: "feedback_intake" | "feedback_overflow";
+	place: "issue";
+	key: `<!-- factory:notice ${string} -->`;
+}>;
+
+export type NoticeNext = Readonly<{
+	kind: "resume";
+	work: Extract<CandidateWork, { kind: "waiting" | "held" }>;
+}>;
+
 export type CandidateEffect =
 	| { readonly kind: "validate"; readonly generation: GenerationIntent }
 	| { readonly kind: "launch_review"; readonly execution: ReviewExecution }
@@ -251,6 +270,13 @@ export type CandidateEffect =
 			readonly kind: "void_readiness";
 			readonly number: number;
 			readonly reason: HandoffReason;
+	  }
+	| {
+			readonly kind: "post_notice";
+			readonly number: number;
+			readonly notice: HandoffNotice;
+			readonly withdraw: null;
+			readonly then: NoticeNext;
 	  }
 	| { readonly kind: "finish_pr"; readonly terminal: TerminalObservation };
 
@@ -294,6 +320,7 @@ export type CandidateState =
 				history: readonly GenerationEvidence[];
 				current: GenerationEvidence;
 				published: PublishedPr | null;
+				feedback: FeedbackCursor | null;
 				work: CandidateWork;
 			}>);
 
@@ -358,6 +385,10 @@ export type CandidateEffectResult =
 			readonly request: Extract<CandidateEffect, { kind: "void_readiness" }>;
 	  }
 	| {
+			readonly kind: "post_notice";
+			readonly request: Extract<CandidateEffect, { kind: "post_notice" }>;
+	  }
+	| {
 			readonly kind: "finish_pr";
 			readonly request: Extract<CandidateEffect, { kind: "finish_pr" }>;
 	  };
@@ -375,6 +406,7 @@ export type CandidateEvent =
 			readonly main: GitSha | null;
 			readonly executionAllowed: boolean;
 			readonly eligibility: "ready" | "withdrawn" | "unverified";
+			readonly feedback?: FeedbackObservation;
 			readonly capacityAvailable: boolean;
 			readonly readiness:
 				| {
@@ -1067,6 +1099,106 @@ export function certifyGeneration(input: {
 	});
 }
 
+export function promotedHead(state: CandidateState): GitSha | null {
+	return state.kind !== "selected" || state.published === null
+		? null
+		: (candidateGenerations(state).find((g) =>
+				sameGeneration(g.intent, state.published!.promoted),
+			)?.certification?.report.candidateSha ?? null);
+}
+
+function ingest(
+	state: Selected,
+	feedback: FeedbackObservation,
+	now: number,
+): Selected {
+	if (
+		state.published === null ||
+		feedback.kind !== "read" ||
+		feedback.head !== promotedHead(state)
+	)
+		return state;
+
+	const cursor = state.feedback ?? {
+		pr: state.published.number,
+		seen: [],
+		batches: [],
+	};
+
+	const dismissed = new Set(feedback.dismissed);
+
+	const batches = cursor.batches.map((b) =>
+		b.status.kind === "queued" &&
+		b.reviews.length > 0 &&
+		b.reviews.every((id) => dismissed.has(id))
+			? {
+					...b,
+					status: {
+						kind: "settled",
+						outcome: { kind: "superseded", by: "dismissed" },
+					} as const,
+				}
+			: b,
+	);
+
+	const updated = { ...state, feedback: { ...cursor, batches } };
+	const batch = feedback.batch;
+
+	if (batch === null) return state.feedback === null ? state : updated;
+
+	if (cursor.overflow !== undefined) return updated;
+
+	const seen = new Set(cursor.seen);
+	const fresh = batch.seen.filter((id) => !seen.has(id));
+
+	if (
+		fresh.length === 0 ||
+		fresh.length !== batch.seen.length ||
+		batches.some((b) => b.digest === batch.digest)
+	)
+		return updated;
+
+	if (
+		seen.size + fresh.length > MAX_FEEDBACK_SEEN ||
+		batches.length >= MAX_FEEDBACK_BATCHES
+	)
+		return {
+			...updated,
+			feedback: {
+				...updated.feedback,
+				overflow: { since: now, notice: "due" },
+			},
+		};
+
+	let next: FeedbackCursor = {
+		pr: cursor.pr,
+		seen: [...seen, ...fresh].sort(),
+		batches: [
+			...batches,
+			{
+				digest: batch.digest,
+				head: feedback.head,
+				actionable: batch.actionable,
+				reviews: batch.reviews,
+				notice:
+					batch.overflow === true
+						? "none"
+						: batch.actionable || batch.refusedInline
+							? "due"
+							: "none",
+				status: batch.actionable
+					? { kind: "queued" }
+					: { kind: "settled", outcome: { kind: "no_action" } },
+			},
+		],
+	};
+
+	if (batch.overflow === true)
+		next = { ...next, overflow: { since: now, notice: "due" } };
+
+	return { ...updated, feedback: next };
+}
+
 function observed(
 	state: Selected,
 	event: Extract<CandidateEvent, { kind: "observed" }>,
@@ -1114,13 +1246,64 @@ function observed(
 
 	if (!event.executionAllowed || event.eligibility === "unverified")
 		return state;
+
+	if (
+		state.work.kind === "held" &&
+		(state.work.reason === "pr_identity" ||
+			state.work.reason === "pr_ambiguous")
+	)
+		return state;
+
+	state = ingest(state, event.feedback ?? { kind: "none" }, event.now);
 	const work = state.work;
 
 	if (
-		work.kind === "held" &&
-		(work.reason === "pr_identity" || work.reason === "pr_ambiguous")
-	)
-		return state;
+		state.published !== null &&
+		(work.kind === "waiting" || work.kind === "held")
+	) {
+		const overflow = state.feedback?.overflow;
+
+		if (overflow !== undefined) {
+			const held = {
+				kind: "held",
+				reason: "feedback_overflow",
+				since: overflow.since,
+			} as const;
+
+			if (overflow.notice === "posted") return { ...state, work: held };
+
+			return effect(state, {
+				kind: "post_notice",
+				number: state.published.number,
+				notice: {
+					kind: "feedback_overflow",
+					place: "issue",
+					key: `<!-- factory:notice ${state.pin.runId} feedback_overflow -->`,
+				},
+				withdraw: null,
+				// Persisted transition data, not a Promise callback.
+				// oxlint-disable-next-line unicorn/no-thenable
+				then: { kind: "resume", work: held },
+			});
+		}
+
+		const due = state.feedback?.batches.find((b) => b.notice === "due");
+
+		if (due !== undefined)
+			return effect(state, {
+				kind: "post_notice",
+				number: state.published.number,
+				notice: {
+					kind: "feedback_intake",
+					place: "issue",
+					key: `<!-- factory:notice ${state.pin.runId} feedback_intake ${due.digest} -->`,
+				},
+				withdraw: null,
+				// This is persisted transition data, never a Promise callback.
+				// oxlint-disable-next-line unicorn/no-thenable
+				then: { kind: "resume", work },
+			});
+	}
 
 	if (work.kind === "repair_due") {
 		if (!event.capacityAvailable) return state;
@@ -1498,6 +1681,33 @@ function complete(state: Selected, c: CandidateEffectResult): Selected {
 					since: state.published?.readiness.since ?? 0,
 				},
 			};
+		case "post_notice": {
+			let feedback = state.feedback;
+
+			if (feedback !== null) {
+				if (
+					c.request.notice.kind === "feedback_overflow" &&
+					feedback.overflow !== undefined
+				)
+					feedback = {
+						...feedback,
+						overflow: { ...feedback.overflow, notice: "posted" },
+					};
+				else
+					feedback = {
+						...feedback,
+						batches: feedback.batches.map((b) =>
+							c.request.notice.key ===
+							`<!-- factory:notice ${state.pin.runId} feedback_intake ${b.digest} -->`
+								? { ...b, notice: "posted" }
+								: b,
+						),
+					};
+			}
+
+			return { ...state, feedback, work: c.request.then.work };
+		}
+
 		case "finish_pr":
 			return {
 				...state,
@@ -1543,6 +1753,7 @@ export function handoffCandidate(
 				history: [],
 				current: freshEvidence(intent, state.patch),
 				published: null,
+				feedback: null,
 				work: { kind: "handoff" },
 			};
 
@@ -2351,6 +2562,7 @@ function wireReason(value: JsonValue | undefined): value is HandoffReason {
 			"diagnosis_oracle",
 			"diagnosis_missing_evidence",
 			"diagnosis_infrastructure",
+			"feedback_overflow",
 		].includes(value)
 	);
 }
@@ -2425,6 +2637,32 @@ function wireEffect(
 			);
 		case "void_readiness":
 			return wireCount(v.number, 1) && wireReason(v.reason);
+		case "post_notice": {
+			const notice = wireObject(v.notice);
+			const then = wireObject(v.then);
+			const work = wireObject(then?.work);
+
+			return (
+				wireCount(v.number, 1) &&
+				v.withdraw === null &&
+				(notice?.kind === "feedback_intake" ||
+					notice?.kind === "feedback_overflow") &&
+				notice.place === "issue" &&
+				wireText(notice.key) &&
+				new RegExp(
+					notice.kind === "feedback_intake"
+						? `^<!-- factory:notice ${pin.runId} feedback_intake [0-9a-f]{64} -->$`
+						: `^<!-- factory:notice ${pin.runId} feedback_overflow -->$`,
+				).test(notice.key) &&
+				then?.kind === "resume" &&
+				work !== null &&
+				(work.kind === "waiting" ||
+					(work.kind === "held" &&
+						wireReason(work.reason) &&
+						wireCount(work.since)))
+			);
+		}
+
 		case "finish_pr":
 			return wireTerminal(v.terminal);
 		default:
@@ -2585,7 +2823,9 @@ function wireCandidate(
 		v.history.length >= MAX_GENERATIONS ||
 		!v.history.every((g) => wireEvidence(g, pin)) ||
 		!wireEvidence(v.current, v.pin) ||
-		!wireWork(v.work, v.pin, v.current.patch)
+		!wireWork(v.work, v.pin, v.current.patch) ||
+		(v.feedback !== null &&
+			!wireFeedbackCursor(v.feedback, v.pin.repo, wireReason))
 	)
 		return false;
 	const generations = [...v.history, v.current];
@@ -2599,7 +2839,12 @@ function wireCandidate(
 	if (v.published === null) return true;
 	const published = wireObject(v.published);
 
-	if (published === null || !wireRef(published.promoted)) return false;
+	if (
+		published === null ||
+		!wireRef(published.promoted) ||
+		(v.feedback !== null && v.feedback.pr !== published.number)
+	)
+		return false;
 	const promoted = published.promoted;
 
 	return (
@@ -2627,6 +2872,7 @@ export function parseCandidateState(
 		v?.kind === "selected" && Array.isArray(v.history)
 			? {
 					...v,
+					feedback: v.feedback ?? null,
 					history: v.history.map((g) => migrateEvidenceValue(g) ?? null),
 					current: migrateEvidenceValue(v.current) ?? null,
 				}
