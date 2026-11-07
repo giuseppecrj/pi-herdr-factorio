@@ -2720,7 +2720,7 @@ function queuedFeedback() {
 	};
 }
 
-function startFeedback(state = queuedFeedback()) {
+function startFeedback(state: ReturnType<typeof selected> = queuedFeedback()) {
 	const step = handoffCandidate(state, readyObservation(state));
 	const request = pending(step.state, "post_notice");
 	assert.equal(request.notice.kind, "repair_started");
@@ -2745,7 +2745,9 @@ function startFeedback(state = queuedFeedback()) {
 	return started;
 }
 
-function rebuildingFeedback(state = queuedFeedback()) {
+function rebuildingFeedback(
+	state: ReturnType<typeof selected> = queuedFeedback(),
+) {
 	const started = startFeedback(state);
 	const issued = handoffCandidate(started, readyObservation(started)).state;
 	const request = pending(issued, "repair_build");
@@ -2971,6 +2973,68 @@ test("F10-2 failed patches keep attempt cap but a published run never fails", ()
 	const summary = pending(step.state, "post_notice");
 	assert.deepEqual(summary.then, { kind: "held", reason: "review_attempts" });
 	assert.equal(summary.notice.kind, "round_summary");
+});
+
+test("F10-2 three no-progress attempts reuse one round, then refuse without corrupting the book", () => {
+	let state: ReturnType<typeof selected> = queuedFeedback();
+
+	for (let attempt = 1; attempt <= 3; attempt++) {
+		const building = rebuildingFeedback(state);
+		assert.equal(building.execution.round, 1);
+		assert.equal(building.execution.attempt, attempt);
+		const stopped = handoffCandidate(building.state, {
+			kind: "repair_settled",
+			execution: building.execution,
+			tokens: 10,
+			result: { kind: "no_change" },
+		}).state;
+		const request = pending(stopped, "post_notice");
+		state = selected(
+			handoffCandidate(stopped, {
+				kind: "effect_completed",
+				completion: { kind: "post_notice", request },
+			}).state,
+		);
+		assert.equal(state.current.intent.round, 0);
+		assert.equal(
+			state.accounts.filter((a) => a.execution.stage === "build").length,
+			attempt,
+		);
+		assert.ok(parseCandidateState(JSON.parse(JSON.stringify(state))));
+		const incoming = feedbackObservation(state, attempt + 10);
+		assert.ok(incoming.kind === "read" && incoming.batch);
+		state = {
+			...state,
+			feedback: {
+				...state.feedback!,
+				seen: [...state.feedback!.seen, ...incoming.batch.seen].sort(),
+				batches: [
+					...state.feedback!.batches,
+					{
+						digest: incoming.batch.digest,
+						head: incoming.head,
+						actionable: true,
+						reviews: incoming.batch.reviews,
+						notice: "none",
+						status: { kind: "queued" },
+					},
+				],
+			},
+		};
+	}
+
+	const refusal = handoffCandidate(state, readyObservation(state));
+	assert.equal(
+		pending(refusal.state, "post_notice").notice.kind,
+		"repair_unavailable",
+	);
+	assert.equal(pending(refusal.state, "post_notice").detail, "review_attempts");
+	assert.deepEqual(selected(refusal.state).accounts, state.accounts);
+	assert.equal(candidateUsage(refusal.state), candidateUsage(state));
+	assert.ok(
+		parseCandidateState(JSON.parse(JSON.stringify(refusal.state))),
+		"a refused fourth attempt must still be a readable durable book",
+	);
 });
 
 test("F10-2 published repair is a successor and fresh proof applies the batch", () => {
@@ -3346,6 +3410,7 @@ for (const outcome of [
 			"deleted_summary",
 			"foreign_key",
 		].includes(outcome);
+
 		const success = outcome === "complete_handoff" || retry;
 		await withLocalArtifactDownload(async (root) => {
 			const github = new FakeGitHub();
@@ -3422,6 +3487,7 @@ for (const outcome of [
 			let currentHead = head;
 			let edits = 0;
 			let crashEdit = false;
+
 			const firstReceiptPath = join(
 				root,
 				"handoff",
@@ -3429,6 +3495,7 @@ for (const outcome of [
 				"feedback",
 				"round-1-a1.json",
 			);
+
 			let firstReceipt = "";
 
 			const exec: import("../src/gh.ts").Exec = async (command, args) => {
@@ -3438,27 +3505,38 @@ for (const outcome of [
 				) {
 					assert.equal(readFileSync(firstReceiptPath, "utf8"), firstReceipt);
 					const path = args.find((arg) => /issues\/comments\/\d+$/.test(arg))!;
+
 					const comment = pr.comments.find(
 						(c) => c.id === Number(path.split("/").at(-1)),
 					);
+
 					assert.ok(comment);
 					assert.equal(comment.login, BOT_LOGIN);
+
 					const latest = JSON.parse(
 						readFileSync(
 							join(root, "handoff", pin.runId, "feedback", "round-1-a2.json"),
 							"utf8",
 						),
 					);
+
 					assert.equal(latest.attempt, 2);
 					assert.equal(latest.outcome.kind, "applied");
+					assert.equal(statSync(firstReceiptPath).mode & 0o777, 0o600);
 
-					if (crashEdit) {
+					if (crashEdit && outcome !== "retry") {
 						crashEdit = false;
 						throw new Error("crash after receipt, before summary edit");
 					}
 
 					edits++;
 					comment.body = args.find((arg) => arg.startsWith("body="))!.slice(5);
+
+					if (crashEdit) {
+						crashEdit = false;
+
+						return { code: 1, stderr: "lost PATCH response", stdout: "" };
+					}
 
 					return {
 						code: 0,
@@ -3553,6 +3631,7 @@ for (const outcome of [
 					});
 				const feedback = feedbackObservation(state, 3);
 				assert.ok(feedback.kind === "read" && feedback.batch);
+
 				const next = await classifyFeedback({
 					runId: pin.runId,
 					pr: 5,
@@ -3573,6 +3652,7 @@ for (const outcome of [
 						},
 					],
 				});
+
 				assert.ok(next.kind === "read" && next.batch);
 				const stored = await storeFeedbackBatch(root, next.batch, next.full);
 				state = selected(
@@ -3595,10 +3675,12 @@ for (const outcome of [
 						completion: startedAgain,
 					}).state,
 				);
+
 				const issuedAgain = handoffCandidate(
 					state,
 					readyObservation(state),
 				).state;
+
 				build = pending(issuedAgain, "repair_build");
 				state = selected(
 					handoffCandidate(issuedAgain, {
