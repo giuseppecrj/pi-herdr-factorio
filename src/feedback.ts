@@ -120,6 +120,7 @@ export type FeedbackBatchRef = Readonly<{
 	binding?: Readonly<{ patchDigest: Digest; promoted: GenerationRef }>;
 	/** Retained after settlement so round receipts can be recovered after a crash. */
 	round?: 1 | 2;
+	attempt?: number;
 	actionable: boolean;
 	reviews: readonly FeedbackId[];
 	notice: BatchNotice;
@@ -186,8 +187,14 @@ export type FindingDisposition = Readonly<{
 	disposition: FeedbackDisposition;
 }>;
 
+/** Immutable attempt evidence; round-<n>.json indexes the latest attempt. */
 export type RoundReceipt = Readonly<{
 	round: 1 | 2;
+	attempt: number;
+	outcome: Extract<
+		BatchOutcome,
+		{ kind: "applied" | "stopped" | "merged" | "superseded" }
+	>;
 	batch: Digest;
 	items: readonly Readonly<{
 		event: FeedbackId;
@@ -681,6 +688,7 @@ export function wireFeedbackCursor(
 				"status",
 				...(b.binding === undefined ? [] : ["binding"]),
 				...(b.round === undefined ? [] : ["round"]),
+				...(b.attempt === undefined ? [] : ["attempt"]),
 			]) ||
 			!text(b.digest) ||
 			!isDigest(b.digest) ||
@@ -701,6 +709,12 @@ export function wireFeedbackCursor(
 			return false;
 
 		if (b.round !== undefined && b.round !== 1 && b.round !== 2) return false;
+
+		if (
+			b.attempt !== undefined &&
+			(!count(b.attempt) || b.attempt < 1 || b.attempt > 3)
+		)
+			return false;
 
 		if (b.binding !== undefined) {
 			const binding = record(b.binding);

@@ -5358,6 +5358,7 @@ export function controllerCandidatePort(config: {
 		number: number,
 		key: string,
 		body: string,
+		update = false,
 	): Promise<boolean> => {
 		const adapter = new GitHubTicketAdapter({
 			exec: config.exec,
@@ -5377,7 +5378,23 @@ export function controllerCandidatePort(config: {
 
 		if (matching.length > 1) return false;
 
-		if (matching.length === 1) return true;
+		if (matching.length === 1) {
+			const comment = matching[0]!;
+
+			if (!update || comment.body === body) return true;
+
+			if (!(await allowed(state))) return false;
+
+			return (
+				(
+					await new GitHubTicketWriter({
+						exec: config.exec,
+						repo: state.pin.repo,
+					}).editComment(comment.id, body)
+				).kind === "posted"
+			);
+		}
+
 		const dir = join(config.stateDir, "handoff", state.pin.runId, "feedback");
 		privateDir(dir);
 		const intent = join(dir, `notice-${digestOf(key)}.json`);
@@ -5491,7 +5508,8 @@ export function controllerCandidatePort(config: {
 			"executionAllowed" | "capacityAvailable"
 		>
 	> => {
-		if (state.kind === "selected") keepFeedbackRounds(config.stateDir, state);
+		if (state.kind === "selected")
+			await keepFeedbackRounds(config.stateDir, state);
 		const api = apiOf(state);
 
 		let pr: Extract<CandidateEvent, { kind: "observed" }>["pr"] = {
@@ -5851,7 +5869,7 @@ export function controllerCandidatePort(config: {
 		},
 		async execute(state, request) {
 			if (state.kind !== "selected") return null;
-			keepFeedbackRounds(config.stateDir, state);
+			await keepFeedbackRounds(config.stateDir, state);
 			const api = apiOf(state);
 
 			const writer = new GitHubTicketWriter({
@@ -5898,9 +5916,11 @@ export function controllerCandidatePort(config: {
 			if (!(await allowed(state))) return null;
 
 			if (request.kind === "post_notice") {
-				const batch = state.feedback?.batches.find((b) =>
+				const batch = state.feedback?.batches.findLast((b) =>
 					request.notice.kind === "round_summary"
 						? b.round !== undefined &&
+							b.status.kind === "settled" &&
+							b.status.outcome.kind === "stopped" &&
 							request.notice.key ===
 								`<!-- factory:notice ${state.pin.runId} round_summary ${b.round} -->`
 						: request.notice.key ===
@@ -5922,14 +5942,16 @@ export function controllerCandidatePort(config: {
 						"posted"
 				)
 					return null;
-				let body: string;
+				let body: string | null;
 
 				if (request.notice.kind === "round_summary") {
 					if (batch === undefined) return null;
 					const receipt = feedbackRound(config.stateDir, state, batch);
 
 					if (receipt === null) return null;
-					body = roundSummary(
+					body = await roundSummary(
+						config.stateDir,
+						state.pin.runId,
 						receipt.receipt,
 						request.notice.key,
 						batch.status.kind === "settled" &&
@@ -6005,10 +6027,20 @@ export function controllerCandidatePort(config: {
 					].join("\n\n");
 				}
 
+				if (body === null) return null;
+
 				const number =
 					request.notice.place === "pr" ? request.number : state.pin.issue;
 
-				if (!(await postNotice(state, number, request.notice.key, body)))
+				if (
+					!(await postNotice(
+						state,
+						number,
+						request.notice.key,
+						body,
+						request.notice.kind === "round_summary",
+					))
+				)
 					return null;
 
 				return { kind: "post_notice", request };
@@ -6197,19 +6229,20 @@ export function controllerCandidatePort(config: {
 			if (receipt !== null) {
 				const summaryKey = `<!-- factory:notice ${state.pin.runId} round_summary ${receipt.receipt.round} -->`;
 
+				const summary = await roundSummary(
+					config.stateDir,
+					state.pin.runId,
+					receipt.receipt,
+					summaryKey,
+					"ready after fresh validation and review",
+					request.head,
+					!receipt.batchAvailable,
+				);
+
+				if (summary === null) return null;
+
 				if (
-					!(await postNotice(
-						state,
-						request.number,
-						summaryKey,
-						roundSummary(
-							receipt.receipt,
-							summaryKey,
-							"ready after fresh validation and review",
-							request.head,
-							!receipt.batchAvailable,
-						),
-					))
+					!(await postNotice(state, request.number, summaryKey, summary, true))
 				)
 					return null;
 			}
@@ -6319,7 +6352,7 @@ function feedbackRound(
 		})),
 	]);
 
-	const build = state.accounts.find(
+	const build = state.accounts.findLast(
 		(a) =>
 			a.execution.stage === "build" &&
 			a.execution.cause.kind === "feedback" &&
@@ -6366,65 +6399,117 @@ function feedbackRound(
 	];
 
 	return {
-		receipt: { round, batch: ref.digest, items, findings },
+		receipt: {
+			round,
+			attempt: build?.attempt ?? ref.attempt ?? 1,
+			outcome,
+			batch: ref.digest,
+			items,
+			findings,
+		},
 		batchAvailable: stored !== null,
 	};
 }
 
-function roundSummary(
+async function roundSummary(
+	stateDir: string,
+	runId: Digest,
 	receipt: RoundReceipt,
 	key: string,
 	result: string,
 	head: string | null,
 	batchUnavailable = false,
-): string {
-	const describe = (d: FeedbackDisposition) =>
-		d.kind === "adopted"
-			? `adopted (builder-reported), head ${d.head}`
-			: d.kind === "merged"
-				? `merged at ${d.mergeSha}`
-				: `rejected: ${d.reason}`;
+): Promise<string | null> {
+	try {
+		if (!(await keepRoundReceipt(stateDir, runId, receipt))) return null;
+		const dir = join(stateDir, "handoff", runId, "feedback");
+		const attempts: RoundReceipt[] = [];
 
-	return [
-		`## Factory feedback round ${receipt.round}`,
-		`Result: ${result}. Head: ${head ?? "no new candidate head"}.`,
-		...(batchUnavailable
-			? [
-					"Original batch text is unavailable. Only review IDs retained in the book can be listed; inline details are not reconstructed.",
-				]
-			: []),
-		"Adoption is builder-reported, not controller proof. Readiness requires fresh validation and review. No owner commits were rewritten.",
-		...receipt.items.map((i) => `- \`${i.event}\`: ${describe(i.disposition)}`),
-		...receipt.findings.map(
-			(f) =>
-				`- Finding \`${f.fingerprint}\` (${f.seat}): ${describe(f.disposition)}`,
-		),
-		key,
-	].join("\n\n");
+		for (let attempt = 1; attempt <= receipt.attempt; attempt++) {
+			const path = join(dir, `round-${receipt.round}-a${attempt}.json`);
+
+			if (!present(path)) continue;
+			// SAFETY: controller-written immutable attempt artifact, never candidate input.
+			attempts.push(JSON.parse(regularText(path)) as RoundReceipt);
+		}
+
+		const describe = (d: FeedbackDisposition) =>
+			d.kind === "adopted"
+				? `adopted (builder-reported), head ${d.head}`
+				: d.kind === "merged"
+					? `merged at ${d.mergeSha}`
+					: `rejected: ${d.reason}`;
+
+		return [
+			`## Factory feedback round ${receipt.round}`,
+			`Result: ${result}. Head: ${head ?? "no new candidate head"}.`,
+			...(batchUnavailable
+				? [
+						"Original batch text is unavailable. Only review IDs retained in the book can be listed; inline details are not reconstructed.",
+					]
+				: []),
+			"Adoption is builder-reported, not controller proof. Readiness requires fresh validation and review. No owner commits were rewritten.",
+			...attempts.flatMap((attempt) => [
+				`### Attempt ${attempt.attempt}\n\n${attempt.attempt === receipt.attempt ? result : attempt.outcome.kind === "stopped" ? `held: ${attempt.outcome.reason}` : attempt.outcome.kind}`,
+				...attempt.items.map(
+					(i) => `- \`${i.event}\`: ${describe(i.disposition)}`,
+				),
+				...attempt.findings.map(
+					(f) =>
+						`- Finding \`${f.fingerprint}\` (${f.seat}): ${describe(f.disposition)}`,
+				),
+			]),
+			key,
+		].join("\n\n");
+	} catch {
+		return null;
+	}
 }
 
-/** Recreate a missing round receipt from the committed book, never from a model replay. */
-function keepFeedbackRounds(
+/** Attempt evidence is immutable; the per-round index always names its latest attempt. */
+async function keepRoundReceipt(
+	stateDir: string,
+	runId: Digest,
+	receipt: RoundReceipt,
+): Promise<boolean> {
+	try {
+		const dir = join(stateDir, "handoff", runId, "feedback");
+		const name = `round-${receipt.round}-a${receipt.attempt}.json`;
+		const path = join(dir, name);
+
+		if (!present(path)) exclusive(path, `${JSON.stringify(receipt)}\n`);
+		// SAFETY: controller-authored write-once artifact, not model output.
+		const stored = JSON.parse(regularText(path)) as RoundReceipt;
+		const index = join(dir, `round-${receipt.round}.json`);
+
+		const previous = present(index)
+			? countOf(
+					fieldOf(objectOf(parseJson(regularText(index))), "latestAttempt"),
+				)
+			: null;
+
+		if (previous !== null && previous > stored.attempt) return true;
+		const bytes = `${JSON.stringify({ round: stored.round, latestAttempt: stored.attempt, outcome: stored.outcome, receipt: name })}\n`;
+
+		if (present(index) && regularText(index) === bytes) return true;
+
+		return await writeAtomic(index, bytes);
+	} catch {
+		return false;
+	}
+}
+
+/** Recreate missing receipts and indices from the book, without a model replay. */
+async function keepFeedbackRounds(
 	stateDir: string,
 	state: Extract<CandidateState, { kind: "selected" }>,
-): void {
+): Promise<void> {
 	for (const ref of state.feedback?.batches ?? []) {
 		if (ref.status.kind !== "settled" || ref.round === undefined) continue;
-
-		const path = join(
-			stateDir,
-			"handoff",
-			state.pin.runId,
-			"feedback",
-			`round-${ref.round}.json`,
-		);
-
-		if (present(path)) continue;
-
 		const receipt = feedbackRound(stateDir, state, ref);
 
 		if (receipt !== null)
-			exclusive(path, `${JSON.stringify(receipt.receipt)}\n`);
+			await keepRoundReceipt(stateDir, state.pin.runId, receipt.receipt);
 	}
 }
 

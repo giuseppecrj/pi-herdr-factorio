@@ -1304,21 +1304,26 @@ function startQueuedFeedback(
 				? null
 				: {
 						...state.feedback,
-						batches: state.feedback.batches.map((b) =>
-							b.digest !== batch.digest
-								? b
-								: {
-										...b,
-										round,
-										status:
-											reason === null
-												? ({ kind: "applying", round } as const)
-												: ({
-														kind: "settled",
-														outcome: { kind: "refused", reason },
-													} as const),
-									},
-						),
+						batches: state.feedback.batches.map((b) => {
+							if (b.digest !== batch.digest) return b;
+
+							if (reason !== null)
+								return {
+									...b,
+									round,
+									status: {
+										kind: "settled",
+										outcome: { kind: "refused", reason },
+									} as const,
+								};
+
+							return {
+								...b,
+								round,
+								attempt: nextAttempt(state, "build", round),
+								status: { kind: "applying", round } as const,
+							};
+						}),
 					},
 	};
 

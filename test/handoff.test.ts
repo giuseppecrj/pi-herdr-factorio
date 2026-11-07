@@ -2982,12 +2982,14 @@ test("F10-2 three no-progress attempts reuse one round, then refuse without corr
 		const building = rebuildingFeedback(state);
 		assert.equal(building.execution.round, 1);
 		assert.equal(building.execution.attempt, attempt);
+
 		const stopped = handoffCandidate(building.state, {
 			kind: "repair_settled",
 			execution: building.execution,
 			tokens: 10,
 			result: { kind: "no_change" },
 		}).state;
+
 		const request = pending(stopped, "post_notice");
 		state = selected(
 			handoffCandidate(stopped, {

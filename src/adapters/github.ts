@@ -1252,6 +1252,20 @@ export class GitHubTicketWriter implements TicketWriter {
 		return id === null ? { kind: "unknown" } : { kind: "posted", id };
 	}
 
+	async editComment(id: string, body: string): Promise<LabelWrite> {
+		return this.#write(
+			[
+				"api",
+				"--method",
+				"PATCH",
+				`repos/${this.repo}/issues/comments/${id}`,
+				"-f",
+				`body=${body}`,
+			],
+			false,
+		);
+	}
+
 	async #write(
 		args: readonly string[],
 		absentIsDone: boolean,
