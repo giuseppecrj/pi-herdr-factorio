@@ -638,7 +638,7 @@ describe("accept same-session draft checks", () => {
 		assert.equal(result.receipt.guardStop, "accept_length");
 		assert.deepEqual(h.outputs, []);
 	});
-	it("abort during a draft aborts the check and returns wall exhaustion", async () => {
+	it("abort during a draft aborts the check and returns the normal aborted outcome", async () => {
 		const h = draftHost(),
 			abort = new AbortController();
 
@@ -665,10 +665,16 @@ describe("accept same-session draft checks", () => {
 			h.host,
 		);
 
-		assert.equal(result.kind, "budget_exhausted");
+		assert.equal(result.kind, "failed");
 
-		if (result.kind === "budget_exhausted") assert.equal(result.cap, "wall");
+		if (result.kind === "failed") assert.equal(result.exit, "aborted");
+		assert.equal(result.usage, 100);
 		assert.equal(stopped, true);
+		assert.deepEqual(h.outputs, []);
+		assert.equal(
+			h.pis[0]?.received.filter((c) => c.type === "prompt").length,
+			1,
+		);
 	});
 });
 

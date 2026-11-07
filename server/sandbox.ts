@@ -621,8 +621,7 @@ async function runSession(
 
 		recheck = checkTokens;
 
-		const onAbort = () =>
-			checkingDraft ? capped("wall") : end({ kind: "failed", exit: "aborted" });
+		const onAbort = () => end({ kind: "failed", exit: "aborted" });
 
 		brokenPipe = () => end(CRASHED);
 
