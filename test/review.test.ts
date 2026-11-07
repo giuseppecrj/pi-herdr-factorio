@@ -1059,14 +1059,24 @@ it("refuses capture publication failure without starting a review", async () => 
 	}
 });
 
-for (const damage of [
-	"missing",
-	"json",
-	"null",
-	"checks",
-	"unjudged",
-	"workspace",
-] as const)
+it("leaves a bad non-artifact review workspace path visible", async () => {
+	const f = await preparedReviewFixture();
+
+	try {
+		writeFileSync(join(f.root, "obstructed"), "not a directory");
+		await assert.rejects(
+			f.executor.prepareReview!({
+				...f.args,
+				workspace: join(f.root, "obstructed", "review"),
+			}),
+			{ code: "ENOTDIR", syscall: "mkdir" },
+		);
+	} finally {
+		f.close();
+	}
+});
+
+for (const damage of ["missing", "json", "null", "checks", "unjudged"] as const)
 	it(`contains review preparation artifact failure (${damage})`, async () => {
 		const f = await preparedReviewFixture();
 
@@ -1079,8 +1089,6 @@ for (const damage of [
 			if (damage === "missing") rmSync(path);
 			else if (damage === "json" || damage === "null")
 				writeFileSync(path, damage === "json" ? "{" : "null");
-			else if (damage === "workspace")
-				writeFileSync(join(f.root, "obstructed"), "not a directory");
 			else
 				writeFileSync(
 					path,
@@ -1099,13 +1107,7 @@ for (const damage of [
 			if (damage === "unjudged") rmSync(join(f.dir, "review.json"));
 
 			await assert.rejects(
-				f.executor.prepareReview!({
-					...f.args,
-					workspace:
-						damage === "workspace"
-							? join(f.root, "obstructed", "review")
-							: f.args.workspace,
-				}),
+				f.executor.prepareReview!(f.args),
 				ReviewEvidenceUnavailable,
 			);
 		} finally {

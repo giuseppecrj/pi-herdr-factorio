@@ -10635,15 +10635,18 @@ describe("controller-only validate", () => {
 					{ cwd: base },
 				);
 
+				if (fault === "programmer_enoent")
+					symlinkSync(join(root, "absent"), join(root, "review-base"));
+
 				const native = sandboxExecutor({
 					stateDir: root,
 					exec: f.github.exec,
 					log: () => {},
 					xdgRuntimeDir: join(root, "xdg"),
 					fetchTarball: async () => {
-						if (fault === "programmer_enoent" || fault === "disk_eio")
-							throw Object.assign(new Error("checkout defect"), {
-								code: fault === "programmer_enoent" ? "ENOENT" : "EIO",
+						if (fault === "disk_eio")
+							throw Object.assign(new Error("checkout I/O error"), {
+								code: "EIO",
 							});
 
 						return archive;
@@ -10665,8 +10668,8 @@ describe("controller-only validate", () => {
 
 				if (fault === "programmer_enoent") {
 					await assert.rejects(active.tick(), {
-						message: "checkout defect",
 						code: "ENOENT",
+						syscall: "mkdir",
 					});
 					assert.equal(f.executor.launches.length, launches);
 
@@ -10877,15 +10880,18 @@ describe("controller-only validate", () => {
 					book.published?.readiness.kind,
 					target === "open_pr" ? undefined : "not_ready",
 				);
-				assert.deepEqual(
-					parseCandidateState(JSON.parse(JSON.stringify(book))),
-					book,
+				assert.equal(
+					JSON.stringify(parseCandidateState(JSON.parse(JSON.stringify(book)))),
+					JSON.stringify(book),
 				);
 				const launches = f.executor.launches.length;
 				const restarted = f.start();
 				await restarted.tick();
 				await restarted.tick();
-				assert.deepEqual(f.files.claims.get(runOf(14))?.handoff, book);
+				assert.equal(
+					JSON.stringify(f.files.claims.get(runOf(14))?.handoff),
+					JSON.stringify(book),
+				);
 				assert.equal(calls, 1);
 				assert.equal(f.executor.launches.length, launches);
 			});

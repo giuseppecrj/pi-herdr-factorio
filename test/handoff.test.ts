@@ -501,6 +501,7 @@ for (const reason of ["pr_identity", "pr_ambiguous"] as const)
 					reason,
 					since: 200,
 				});
+
 			const restored = parseCandidateState(JSON.parse(JSON.stringify(held)));
 			assert.deepEqual(restored, held);
 			assert.ok(restored);
@@ -511,6 +512,7 @@ for (const reason of ["pr_identity", "pr_ambiguous"] as const)
 					main: observed(main).main,
 					now: 1000,
 				});
+
 				assert.deepEqual(step.state, held);
 				assert.equal(step.effect, null);
 			}
@@ -519,6 +521,7 @@ for (const reason of ["pr_identity", "pr_ambiguous"] as const)
 				...readyObservation(restored),
 				eligibility: "withdrawn",
 			});
+
 			assert.equal(withdrawn.effect?.kind, "finish_pr");
 
 			if (hasPr) {
@@ -533,6 +536,7 @@ for (const reason of ["pr_identity", "pr_ambiguous"] as const)
 						...readyObservation(restored),
 						pr,
 					});
+
 					assert.equal(step.effect?.kind, "finish_pr");
 				}
 			}
@@ -541,10 +545,12 @@ for (const reason of ["pr_identity", "pr_ambiguous"] as const)
 for (const reason of ["review_input_too_large", "summary_too_large"] as const)
 	test(`terminal input reason ${reason} round-trips`, () => {
 		const state = certified(select());
+
 		const terminal: CandidateState = {
 			...state,
 			work: { kind: "terminal", terminal: { kind: "failed", reason } },
 		};
+
 		assert.deepEqual(
 			parseCandidateState(JSON.parse(JSON.stringify(terminal))),
 			terminal,
