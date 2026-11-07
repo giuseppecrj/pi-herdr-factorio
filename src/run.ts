@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const REVIEW_MAX_TOKENS = 30_000;
+export const REVIEW_MAX_TOKENS = 120_000;
 export const REPAIR_BUILD_MAX_TOKENS = 200_000;
 
 export function blocksReview(

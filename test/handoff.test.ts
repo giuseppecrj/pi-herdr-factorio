@@ -23,6 +23,7 @@ import {
 import {
 	digestOf,
 	REPAIR_BUILD_MAX_TOKENS,
+	REVIEW_MAX_TOKENS,
 	REQUIRED_CI_CHECKS,
 	type Verdict,
 	type Run,
@@ -996,7 +997,10 @@ test("refresh archives immutable evidence, does not consume repair, and issues r
 	assert.equal(refreshed.current.intent.publication.kind, "successor");
 	const next = reviewing(validated(refreshed));
 	assert.equal(next.execution.attempt, 2);
-	assert.equal(candidateAllowance(next.state, next.execution), 29_900);
+	assert.equal(
+		candidateAllowance(next.state, next.execution),
+		REVIEW_MAX_TOKENS - 100,
+	);
 	assert.equal(next.execution.workflowSha, pin.workflowSha);
 	assert.equal(next.execution.binding.baseSha, event.main);
 });
@@ -1035,7 +1039,10 @@ test("base movement stops active review and charges known settlement before sele
 	assert.equal(refreshed.current.intent.generation, 1);
 	const next = reviewing(validated(refreshed));
 	assert.equal(next.execution.attempt, 2);
-	assert.equal(candidateAllowance(next.state, next.execution), 10_000);
+	assert.equal(
+		candidateAllowance(next.state, next.execution),
+		REVIEW_MAX_TOKENS - 20_000,
+	);
 
 	const late = handoffCandidate(next.state, {
 		kind: "review_settled",
@@ -1446,10 +1453,17 @@ test("formal accounting retains duplicate lower unknown and late high-water usag
 	assert.equal(candidateUsage(state), 1534);
 	assert.equal(state.accounts[0]?.spend.kind, "known");
 	assert.equal(state.accounts[1]?.execution.id, next.execution.id);
-	assert.equal(candidateAllowance(selected(state), next.execution), 29_700);
+	assert.equal(
+		candidateAllowance(selected(state), next.execution),
+		REVIEW_MAX_TOKENS - 300,
+	);
 });
 
-for (const spent of [29_999, 30_000, 30_001])
+for (const spent of [
+	REVIEW_MAX_TOKENS - 1,
+	REVIEW_MAX_TOKENS,
+	REVIEW_MAX_TOKENS + 1,
+])
 	test(`formal review accounting records cap boundary ${spent} and refuses excess work`, () => {
 		const review = reviewing(validated(select()));
 
@@ -1465,7 +1479,7 @@ for (const spent of [29_999, 30_000, 30_001])
 		assert.equal(candidateUsage(state), 1234 + spent);
 		const next = handoffCandidate(state, observed());
 
-		if (spent < 30_000) {
+		if (spent < REVIEW_MAX_TOKENS) {
 			const request = pending(next.state, "launch_review");
 			assert.equal(
 				candidateAllowance(selected(next.state), request.execution),
