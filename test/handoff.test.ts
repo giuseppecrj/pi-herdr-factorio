@@ -3404,6 +3404,7 @@ for (const outcome of [
 	"crash_edit",
 	"deleted_summary",
 	"foreign_key",
+	"build_retry",
 ] as const)
 	test(`F10-2 actual ${outcome} summary reconciles a lost POST and recovers its receipt without a rebuild`, async () => {
 		const retry = [
@@ -3413,7 +3414,8 @@ for (const outcome of [
 			"foreign_key",
 		].includes(outcome);
 
-		const success = outcome === "complete_handoff" || retry;
+		const secondAttempt = retry || outcome === "build_retry";
+		const success = outcome === "complete_handoff" || secondAttempt;
 		await withLocalArtifactDownload(async (root) => {
 			const github = new FakeGitHub();
 			const issue = github.add(fakeIssue(pin.issue));
@@ -3597,6 +3599,30 @@ for (const outcome of [
 				CandidateEffect,
 				{ kind: "complete_handoff" | "post_notice" }
 			>;
+
+			if (outcome === "build_retry") {
+				state = selected(
+					handoffCandidate(state, {
+						kind: "repair_settled",
+						execution: build.execution,
+						tokens: 10,
+						result: { kind: "failed" },
+					}).state,
+				);
+				assert.equal(state.work.kind, "repair_due");
+				await port.observe(state, 100);
+				firstReceipt = readFileSync(firstReceiptPath, "utf8");
+				assert.equal(JSON.parse(firstReceipt).outcome.kind, "build_failed");
+				const again = handoffCandidate(state, readyObservation(state)).state;
+				build = pending(again, "repair_build");
+				assert.equal(build.execution.attempt, 2);
+				state = selected(
+					handoffCandidate(again, {
+						kind: "effect_completed",
+						completion: { kind: "repair_build", request: build, started: true },
+					}).state,
+				);
+			}
 
 			if (retry) {
 				state = selected(
@@ -3844,6 +3870,14 @@ for (const outcome of [
 					);
 			}
 
+			if (outcome === "build_retry") {
+				assert.match(
+					summary.body,
+					/Attempt 1[\s\S]*build_failed[\s\S]*Attempt 2[\s\S]*ready after fresh validation and review/,
+				);
+				assert.equal(readFileSync(firstReceiptPath, "utf8"), firstReceipt);
+			}
+
 			assert.doesNotMatch(
 				pr.comments[0]!.body,
 				/PRIVATE-HELDOUT|private\.ts|@owner|other\/repo/,
@@ -3863,8 +3897,8 @@ for (const outcome of [
 			);
 			assert.equal(readFileSync(path, "utf8"), bytes);
 			const index = JSON.parse(bytes);
-			assert.equal(index.latestAttempt, retry ? 2 : 1);
-			assert.equal(index.receipt, `round-1-a${retry ? 2 : 1}.json`);
+			assert.equal(index.latestAttempt, secondAttempt ? 2 : 1);
+			assert.equal(index.receipt, `round-1-a${secondAttempt ? 2 : 1}.json`);
 			assert.equal(index.outcome.kind, success ? "applied" : "stopped");
 			assert.equal(pr.comments.length, outcome === "foreign_key" ? 2 : 1);
 		});
