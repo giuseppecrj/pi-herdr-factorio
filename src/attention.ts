@@ -200,26 +200,37 @@ function parseClaim(
 	const projection = book === null ? null : candidateProjection(book);
 	const published = book?.kind === "selected" ? book.published : null;
 	const work = book?.kind === "selected" ? book.work : null;
+
+	const overflow =
+		book?.kind === "selected" ? book.feedback?.overflow : undefined;
+
 	const readiness = published?.readiness;
 	const pr = published?.number ?? marker?.pr ?? null;
+
 	const ready = readiness?.kind;
 
 	const enteredAt = evidenceMissing
 		? null
-		: work?.kind === "held" &&
-				(work.reason === "pr_identity" || work.reason === "pr_ambiguous")
-			? work.since
-			: (countOf(claim?.enteredAt) ?? readiness?.since ?? null);
+		: overflow !== undefined
+			? overflow.since
+			: work?.kind === "held" &&
+					(work.reason === "pr_identity" ||
+						work.reason === "pr_ambiguous" ||
+						work.reason === "feedback_overflow")
+				? work.since
+				: (countOf(claim?.enteredAt) ?? readiness?.since ?? null);
 
 	const reason = evidenceMissing
 		? "candidate_book_unavailable"
-		: readiness?.kind === "not_ready"
-			? readiness.reason
-			: work?.kind === "held"
-				? work.reason
-				: published !== null && work?.kind !== "waiting"
-					? "working_generation"
-					: null;
+		: overflow !== undefined
+			? "feedback_overflow"
+			: readiness?.kind === "not_ready"
+				? readiness.reason
+				: work?.kind === "held"
+					? work.reason
+					: published !== null && work?.kind !== "waiting"
+						? "working_generation"
+						: null;
 
 	return {
 		runId,
@@ -248,6 +259,7 @@ function groupOf(
 	if (
 		claim.pr !== null &&
 		(claim.readiness === "not_ready" ||
+			claim.reason === "feedback_overflow" ||
 			claim.status !== "waiting" ||
 			claim.evidenceMissing)
 	)

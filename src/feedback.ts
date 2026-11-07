@@ -1,6 +1,7 @@
 import type { HandoffReason } from "./handoff.ts";
 import type { JsonValue } from "./tickets.ts";
 import { CONTROLLER_LOGIN } from "./markers.ts";
+import { posix } from "node:path";
 import { digestOf, isDigest, type Digest } from "./run.ts";
 import { isGitSha, type GitSha, type RepoSlug } from "./workflow.ts";
 
@@ -78,6 +79,8 @@ export type FeedbackBatch = Readonly<{
 	head: GitSha;
 	records: readonly IntakeRecord[];
 	cards: readonly FeedbackCard[];
+	/** Metadata alone exceeded the card bound; full text is retained for the hold. */
+	overflow?: true;
 	full: Readonly<{ digest: Digest; bytes: number }> | null;
 }>;
 
@@ -119,6 +122,8 @@ export type FeedbackCursor = Readonly<{
 	pr: number;
 	seen: readonly FeedbackId[];
 	batches: readonly FeedbackBatchRef[];
+	/** Intake stops here; apply this hold only after the current stage settles. */
+	overflow?: Readonly<{ since: number; notice: "due" | "posted" }>;
 }>;
 
 export type FeedbackObservation =
@@ -132,6 +137,7 @@ export type FeedbackObservation =
 				reviews: readonly FeedbackId[];
 				actionable: boolean;
 				refusedInline: boolean;
+				overflow?: true;
 			}> | null;
 			dismissed: readonly FeedbackId[];
 	  }>;
@@ -178,6 +184,15 @@ export function canonicalJson(
 
 		return item;
 	});
+}
+
+function heldoutPath(path: string): boolean {
+	const normalized = posix.normalize(path.replaceAll("\\", "/")).toLowerCase();
+
+	return (
+		normalized === "test/acceptance" ||
+		normalized.startsWith("test/acceptance/")
+	);
 }
 
 export type ClassifiedFeedback =
@@ -237,7 +252,7 @@ export async function classifyFeedback(input: {
 						.sort((a, b) => a.id.localeCompare(b.id, "en"))
 						.map((c) => ({
 							id: c.id,
-							intake: c.path.startsWith("test/acceptance/")
+							intake: heldoutPath(c.path)
 								? { kind: "refused", reason: "heldout_path" }
 								: { kind: "forwarded" },
 						}))
@@ -253,9 +268,7 @@ export async function classifyFeedback(input: {
 			intake = { kind: "refused", reason: "stale_head" };
 		else if (
 			!event.body.trim() &&
-			!event.comments.some(
-				(c) => !c.path.startsWith("test/acceptance/") && c.body.trim(),
-			)
+			!event.comments.some((c) => !heldoutPath(c.path) && c.body.trim())
 		)
 			intake = { kind: "refused", reason: "empty" };
 		else intake = { kind: "actionable" };
@@ -276,7 +289,7 @@ export async function classifyFeedback(input: {
 		for (const c of [...event.comments].sort((a, b) =>
 			a.id.localeCompare(b.id, "en"),
 		)) {
-			if (!c.path.startsWith("test/acceptance/") && c.body.trim())
+			if (!heldoutPath(c.path) && c.body.trim())
 				originals.push({
 					event: c.id,
 					head: input.head,
@@ -298,8 +311,10 @@ export async function classifyFeedback(input: {
 		truncated: c.excerpt.length > 0,
 	}));
 
-	if (Buffer.byteLength(JSON.stringify(cards)) > FEEDBACK_CARD_BYTES)
-		return { kind: "unavailable" };
+	const overflow =
+		Buffer.byteLength(JSON.stringify(cards)) > FEEDBACK_CARD_BYTES;
+
+	if (overflow) cards.length = 0;
 
 	for (const [index, original] of originals.entries()) {
 		const card = cards[index];
@@ -324,7 +339,10 @@ export async function classifyFeedback(input: {
 		card.truncated = low < chars.length;
 	}
 
-	const full = cards.some((c) => c.truncated) ? canonicalJson(originals) : null;
+	const full =
+		overflow || cards.some((c) => c.truncated)
+			? canonicalJson(originals)
+			: null;
 
 	const batch: FeedbackBatch = {
 		version: 1,
@@ -339,7 +357,12 @@ export async function classifyFeedback(input: {
 				: { digest: digestOf(full), bytes: Buffer.byteLength(full) },
 	};
 
-	return { kind: "read", batch, full, dismissed };
+	return {
+		kind: "read",
+		batch: overflow ? { ...batch, overflow: true } : batch,
+		full,
+		dismissed,
+	};
 }
 
 function record(
@@ -397,7 +420,12 @@ export function wireFeedbackCursor(
 
 	if (
 		v === null ||
-		!keys(v, ["pr", "seen", "batches"]) ||
+		!keys(
+			v,
+			v.overflow === undefined
+				? ["pr", "seen", "batches"]
+				: ["pr", "seen", "batches", "overflow"],
+		) ||
 		!count(v.pr) ||
 		v.pr < 1 ||
 		!Array.isArray(v.seen) ||
@@ -409,6 +437,19 @@ export function wireFeedbackCursor(
 		v.batches.length > MAX_FEEDBACK_BATCHES
 	)
 		return false;
+
+	if (v.overflow !== undefined) {
+		const overflow = record(v.overflow);
+
+		if (
+			overflow === null ||
+			!keys(overflow, ["since", "notice"]) ||
+			!count(overflow.since) ||
+			!["due", "posted"].includes(String(overflow.notice))
+		)
+			return false;
+	}
+
 	const digests = new Set<string>();
 
 	for (const entry of v.batches) {

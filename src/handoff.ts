@@ -228,7 +228,7 @@ export type TerminalObservation =
 	| { readonly kind: "failed"; readonly reason: HandoffReason };
 
 export type HandoffNotice = Readonly<{
-	kind: "feedback_intake";
+	kind: "feedback_intake" | "feedback_overflow";
 	place: "issue";
 	key: `<!-- factory:notice ${string} -->`;
 }>;
@@ -1145,6 +1145,9 @@ function ingest(
 	const batch = feedback.batch;
 
 	if (batch === null) return state.feedback === null ? state : updated;
+
+	if (cursor.overflow !== undefined) return updated;
+
 	const seen = new Set(cursor.seen);
 	const fresh = batch.seen.filter((id) => !seen.has(id));
 
@@ -1159,28 +1162,41 @@ function ingest(
 		seen.size + fresh.length > MAX_FEEDBACK_SEEN ||
 		batches.length >= MAX_FEEDBACK_BATCHES
 	)
-		return hold(state, "feedback_overflow", now);
+		return {
+			...updated,
+			feedback: {
+				...updated.feedback,
+				overflow: { since: now, notice: "due" },
+			},
+		};
 
-	return {
-		...updated,
-		feedback: {
-			pr: cursor.pr,
-			seen: [...seen, ...fresh].sort(),
-			batches: [
-				...batches,
-				{
-					digest: batch.digest,
-					head: feedback.head,
-					actionable: batch.actionable,
-					reviews: batch.reviews,
-					notice: batch.actionable || batch.refusedInline ? "due" : "none",
-					status: batch.actionable
-						? { kind: "queued" }
-						: { kind: "settled", outcome: { kind: "no_action" } },
-				},
-			],
-		},
+	let next: FeedbackCursor = {
+		pr: cursor.pr,
+		seen: [...seen, ...fresh].sort(),
+		batches: [
+			...batches,
+			{
+				digest: batch.digest,
+				head: feedback.head,
+				actionable: batch.actionable,
+				reviews: batch.reviews,
+				notice:
+					batch.overflow === true
+						? "none"
+						: batch.actionable || batch.refusedInline
+							? "due"
+							: "none",
+				status: batch.actionable
+					? { kind: "queued" }
+					: { kind: "settled", outcome: { kind: "no_action" } },
+			},
+		],
 	};
+
+	if (batch.overflow === true)
+		next = { ...next, overflow: { since: now, notice: "due" } };
+
+	return { ...updated, feedback: next };
 }
 
 function observed(
@@ -1241,12 +1257,36 @@ function observed(
 	state = ingest(state, event.feedback ?? { kind: "none" }, event.now);
 	const work = state.work;
 
-	if (work.kind === "held" && work.reason === "feedback_overflow") return state;
-
 	if (
 		state.published !== null &&
 		(work.kind === "waiting" || work.kind === "held")
 	) {
+		const overflow = state.feedback?.overflow;
+
+		if (overflow !== undefined) {
+			const held = {
+				kind: "held",
+				reason: "feedback_overflow",
+				since: overflow.since,
+			} as const;
+
+			if (overflow.notice === "posted") return { ...state, work: held };
+
+			return effect(state, {
+				kind: "post_notice",
+				number: state.published.number,
+				notice: {
+					kind: "feedback_overflow",
+					place: "issue",
+					key: `<!-- factory:notice ${state.pin.runId} feedback_overflow -->`,
+				},
+				withdraw: null,
+				// Persisted transition data, not a Promise callback.
+				// oxlint-disable-next-line unicorn/no-thenable
+				then: { kind: "resume", work: held },
+			});
+		}
+
 		const due = state.feedback?.batches.find((b) => b.notice === "due");
 
 		if (due !== undefined)
@@ -1641,23 +1681,33 @@ function complete(state: Selected, c: CandidateEffectResult): Selected {
 					since: state.published?.readiness.since ?? 0,
 				},
 			};
-		case "post_notice":
-			return {
-				...state,
-				feedback:
-					state.feedback === null
-						? null
-						: {
-								...state.feedback,
-								batches: state.feedback.batches.map((b) =>
-									c.request.notice.key ===
-									`<!-- factory:notice ${state.pin.runId} feedback_intake ${b.digest} -->`
-										? { ...b, notice: "posted" }
-										: b,
-								),
-							},
-				work: c.request.then.work,
-			};
+		case "post_notice": {
+			let feedback = state.feedback;
+
+			if (feedback !== null) {
+				if (
+					c.request.notice.kind === "feedback_overflow" &&
+					feedback.overflow !== undefined
+				)
+					feedback = {
+						...feedback,
+						overflow: { ...feedback.overflow, notice: "posted" },
+					};
+				else
+					feedback = {
+						...feedback,
+						batches: feedback.batches.map((b) =>
+							c.request.notice.key ===
+							`<!-- factory:notice ${state.pin.runId} feedback_intake ${b.digest} -->`
+								? { ...b, notice: "posted" }
+								: b,
+						),
+					};
+			}
+
+			return { ...state, feedback, work: c.request.then.work };
+		}
+
 		case "finish_pr":
 			return {
 				...state,
@@ -2595,11 +2645,14 @@ function wireEffect(
 			return (
 				wireCount(v.number, 1) &&
 				v.withdraw === null &&
-				notice?.kind === "feedback_intake" &&
+				(notice?.kind === "feedback_intake" ||
+					notice?.kind === "feedback_overflow") &&
 				notice.place === "issue" &&
 				wireText(notice.key) &&
 				new RegExp(
-					`^<!-- factory:notice ${pin.runId} feedback_intake [0-9a-f]{64} -->$`,
+					notice.kind === "feedback_intake"
+						? `^<!-- factory:notice ${pin.runId} feedback_intake [0-9a-f]{64} -->$`
+						: `^<!-- factory:notice ${pin.runId} feedback_overflow -->$`,
 				).test(notice.key) &&
 				then?.kind === "resume" &&
 				work !== null &&

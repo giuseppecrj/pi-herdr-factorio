@@ -5498,6 +5498,7 @@ export function controllerCandidatePort(config: {
 						prHead: pr.head,
 						refHead: pr.refHead,
 						seen: state.feedback?.seen ?? [],
+						held: state.feedback?.overflow !== undefined,
 					})
 				: { kind: "none" as const };
 
@@ -5724,8 +5725,7 @@ export function controllerCandidatePort(config: {
 						`<!-- factory:notice ${state.pin.runId} feedback_intake ${b.digest} -->`,
 				);
 
-				if (batch === undefined || request.number !== state.published?.number)
-					return null;
+				if (request.number !== state.published?.number) return null;
 
 				const dir = join(
 					config.stateDir,
@@ -5734,42 +5734,57 @@ export function controllerCandidatePort(config: {
 					"feedback",
 				);
 
-				const bytes = regularText(join(dir, `${batch.digest}.json`));
+				let body: string;
 
-				if (digestOf(bytes) !== batch.digest) return null;
-				const stored = objectOf(parseJson(bytes));
-				const records = arrayOf(jsonField(stored, "records"));
+				if (request.notice.kind === "feedback_overflow") {
+					if (state.feedback?.overflow === undefined) return null;
+					body = [
+						"## Factory feedback overflow",
+						"Feedback intake is held as feedback_overflow. A card metadata or cursor limit was reached. Stored feedback is retained; no repair will start. Owner intervention is needed before intake can continue. Readiness and budgets are unchanged.",
+						request.notice.key,
+					].join("\n\n");
+				} else {
+					if (batch === undefined) return null;
 
-				if (
-					records === null ||
-					jsonField(stored, "runId") !== state.pin.runId ||
-					jsonField(stored, "head") !== batch.head ||
-					jsonField(stored, "pr") !== request.number
-				)
-					return null;
+					const bytes = regularText(join(dir, `${batch.digest}.json`));
 
-				const refused = records
-					.flatMap((r) => arrayOf(jsonField(objectOf(r), "inline")) ?? [])
-					.filter(
-						(c) =>
-							jsonField(objectOf(jsonField(objectOf(c), "intake")), "kind") ===
-							"refused",
-					).length;
+					if (digestOf(bytes) !== batch.digest) return null;
+					const stored = objectOf(parseJson(bytes));
+					const records = arrayOf(jsonField(stored, "records"));
 
-				const body = [
-					"## Factory feedback intake",
-					...(batch.actionable
-						? [
-								"Your change request is kept in the queue. Repair is not in this deploy; the repair slice will pick it up. Dismissing the review or pushing a new head cancels this batch. Readiness and budgets are unchanged.",
-							]
-						: []),
-					...(refused > 0
-						? [
-								`Refused ${refused} inline comment(s) on held-out acceptance files. Their text is not forwarded.`,
-							]
-						: []),
-					request.notice.key,
-				].join("\n\n");
+					if (
+						records === null ||
+						jsonField(stored, "runId") !== state.pin.runId ||
+						jsonField(stored, "head") !== batch.head ||
+						jsonField(stored, "pr") !== request.number
+					)
+						return null;
+
+					const refused = records
+						.flatMap((r) => arrayOf(jsonField(objectOf(r), "inline")) ?? [])
+						.filter(
+							(c) =>
+								jsonField(
+									objectOf(jsonField(objectOf(c), "intake")),
+									"kind",
+								) === "refused",
+						).length;
+
+					body = [
+						"## Factory feedback intake",
+						...(batch.actionable
+							? [
+									"Your change request is kept in the queue. Repair is not in this deploy; the repair slice will pick it up. Dismissing the review or pushing a new head cancels this batch. Readiness and budgets are unchanged.",
+								]
+							: []),
+						...(refused > 0
+							? [
+									`Refused ${refused} inline comment(s) on held-out acceptance files. Their text is not forwarded.`,
+								]
+							: []),
+						request.notice.key,
+					].join("\n\n");
+				}
 
 				const adapter = new GitHubTicketAdapter({
 					exec: config.exec,
@@ -5790,11 +5805,18 @@ export function controllerCandidatePort(config: {
 				if (matching.length > 1) return null;
 
 				if (matching.length === 0) {
-					const intent = join(dir, `notice-${batch.digest}.json`);
+					const intent = join(
+						dir,
+						request.notice.kind === "feedback_overflow"
+							? "notice-feedback-overflow.json"
+							: `notice-${batch?.digest}.json`,
+					);
 
-					if (present(intent)) return null;
 					const intentBytes = JSON.stringify({ key: request.notice.key });
-					exclusive(intent, intentBytes);
+
+					if (present(intent)) {
+						if (regularText(intent) !== intentBytes) return null;
+					} else exclusive(intent, intentBytes);
 
 					if (!(await allowed(state))) {
 						await retireUnissuedIntent(intent, intentBytes);
@@ -5997,11 +6019,21 @@ export async function storeFeedbackBatch(
 	const dir = join(resolve(stateDir), "handoff", batch.runId, "feedback");
 	privateDir(dir);
 
-	const put = (path: string, bytes: string) => {
+	const put = async (path: string, bytes: string) => {
 		if (present(path)) {
-			if (regularText(path, Buffer.byteLength(bytes)) !== bytes)
-				throw new Error("feedback_conflict");
-		} else exclusive(path, bytes);
+			const stat = lstatSync(path);
+
+			if (!stat.isFile() || (stat.mode & 0o077) !== 0)
+				throw new Error("unsafe private file");
+
+			if (
+				stat.size === Buffer.byteLength(bytes) &&
+				digestOf(regularText(path, stat.size)) === digestOf(bytes)
+			)
+				return;
+		}
+
+		if (!(await writeAtomic(path, bytes))) throw new Error("feedback_write");
 	};
 
 	if (batch.full !== null) {
@@ -6011,14 +6043,16 @@ export async function storeFeedbackBatch(
 			Buffer.byteLength(full) !== batch.full.bytes
 		)
 			throw new Error("feedback_full_binding");
-		put(join(dir, `${batch.full.digest}.full.json`), full);
+		await put(join(dir, `${batch.full.digest}.full.json`), full);
 	}
 
 	const bytes = canonicalJson(batch);
 	const digest = digestOf(bytes);
-	put(join(dir, `${digest}.json`), bytes);
+	await put(join(dir, `${digest}.json`), bytes);
 
-	return {
+	const stored: NonNullable<
+		Extract<FeedbackObservation, { kind: "read" }>["batch"]
+	> = {
 		digest,
 		seen: batch.records.map((r) => r.event).sort(),
 		reviews: batch.records
@@ -6030,6 +6064,8 @@ export async function storeFeedbackBatch(
 			r.inline.some((c) => c.intake.kind === "refused"),
 		),
 	};
+
+	return batch.overflow === true ? { ...stored, overflow: true } : stored;
 }
 
 async function feedbackEvents(
@@ -6085,11 +6121,29 @@ export async function observeFeedback(input: {
 	prHead: string;
 	refHead: string;
 	seen: readonly FeedbackId[];
+	held?: boolean;
 }): Promise<FeedbackObservation> {
 	if (input.prHead !== input.head || input.refHead !== input.head)
 		return { kind: "deferred" };
 
 	try {
+		if (input.held === true) {
+			const reviews = await input.adapter.readPullReviews(input.pr);
+
+			return reviews.kind !== "ok"
+				? { kind: "unavailable" }
+				: {
+						kind: "read",
+						head: input.head,
+						batch: null,
+						dismissed: reviews.value
+							.filter(
+								(r) => r.state === "DISMISSED" && input.seen.includes(r.id),
+							)
+							.map((r) => r.id),
+					};
+		}
+
 		const events = await feedbackEvents(input.adapter, input.pr, input.seen);
 
 		if (events === null) return { kind: "unavailable" };

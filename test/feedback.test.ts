@@ -5,6 +5,7 @@ import {
 	readFileSync,
 	readdirSync,
 	statSync,
+	writeFileSync,
 	rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -258,6 +259,105 @@ test("8 KiB cards truncate UTF-8 safely and bind full-text bytes", async () => {
 	});
 });
 
+test("47 short inline comments overflow durably instead of retrying as unavailable", async () => {
+	const result = await classify([
+		review(1, {
+			body: "",
+			comments: Array.from({ length: 47 }, (_, n) => ({
+				id: feedbackId(repo, "review-comment", 100000 + n),
+				path: "src/a.ts",
+				line: 1,
+				commit: head,
+				inReplyTo: null,
+				body: "fix",
+			})),
+		}),
+	]);
+
+	assert.ok(result.kind === "read" && result.batch && result.full);
+	assert.partialDeepStrictEqual(result.batch, { overflow: true });
+	assert.ok(
+		Buffer.byteLength(JSON.stringify(result.batch.cards)) <=
+			FEEDBACK_CARD_BYTES,
+	);
+	assert.deepEqual(result.batch.full, {
+		digest: digestOf(result.full),
+		bytes: Buffer.byteLength(result.full),
+	});
+	assert.equal(JSON.parse(result.full).length, 47);
+	const root = mkdtempSync(join(tmpdir(), "feedback-"));
+
+	try {
+		const stored = await storeFeedbackBatch(root, result.batch, result.full);
+		assert.deepEqual(stored.seen, [id(1)]);
+		assert.partialDeepStrictEqual(stored, { overflow: true });
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+for (const path of [
+	"Test/Acceptance/secret.ts",
+	"test/foo/../acceptance/secret.ts",
+	"test/acceptance",
+	"test\\\\acceptance\\\\secret.ts",
+])
+	test(`held-out policy normalization refuses ${path}`, async () => {
+		const result = await classify([
+			review(1, {
+				body: "x".repeat(12000),
+				comments: [
+					{
+						id: feedbackId(repo, "review-comment", 7),
+						path,
+						line: 1,
+						commit: head,
+						inReplyTo: null,
+						body: "PRIVATE-NORMALIZED",
+					},
+				],
+			}),
+		]);
+
+		assert.ok(result.kind === "read" && result.batch);
+		assert.deepEqual(result.batch.records[0]?.inline[0]?.intake, {
+			kind: "refused",
+			reason: "heldout_path",
+		});
+		assert.doesNotMatch(JSON.stringify(result), /PRIVATE-NORMALIZED/);
+	});
+
+test("C1 torn batch and full-text files recover to their content-addressed bytes", async () => {
+	const root = mkdtempSync(join(tmpdir(), "feedback-"));
+
+	try {
+		const result = await classify([review(1, { body: "long".repeat(4000) })]);
+		assert.ok(result.kind === "read" && result.batch && result.full);
+		const first = await storeFeedbackBatch(root, result.batch, result.full);
+		const dir = join(root, "handoff", runId, "feedback");
+
+		for (const name of readdirSync(dir))
+			writeFileSync(join(dir, name), '{"version":');
+		assert.deepEqual(
+			await storeFeedbackBatch(root, result.batch, result.full),
+			first,
+		);
+		assert.equal(
+			digestOf(readFileSync(join(dir, `${first.digest}.json`), "utf8")),
+			first.digest,
+		);
+		assert.equal(
+			readFileSync(join(dir, `${result.batch.full!.digest}.full.json`), "utf8"),
+			result.full,
+		);
+
+		for (const name of readdirSync(dir))
+			assert.equal(statSync(join(dir, name)).mode & 0o777, 0o600);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("C1 batch files are exclusive, private and retryable before cursor commit", async () => {
 	const root = mkdtempSync(join(tmpdir(), "feedback-"));
 
@@ -381,6 +481,55 @@ test("head binding defers without reading any feedback source or permission", as
 		}
 
 		assert.equal(github.calls.length, 0);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("overflow holds read only known-review dismissals, never classify the overflowing set again", async () => {
+	const github = new FakeGitHub();
+	github.reviews.set(5, [
+		{
+			id: 1,
+			state: "DISMISSED",
+			commit_id: head,
+			body: "",
+			submitted_at: "2026-11-07T00:00:00Z",
+			user: { login: "writer" },
+		},
+		{
+			id: 2,
+			state: "CHANGES_REQUESTED",
+			commit_id: head,
+			body: "new",
+			submitted_at: "2026-11-07T00:00:00Z",
+			user: { login: "writer" },
+		},
+	]);
+	const root = mkdtempSync(join(tmpdir(), "feedback-"));
+
+	try {
+		const input = {
+			stateDir: root,
+			adapter: new GitHubTicketAdapter({ exec: github.exec, repo }),
+			runId,
+			pr: 5,
+			head,
+			prHead: head,
+			refHead: head,
+			seen: [id(1)],
+			held: true,
+		};
+
+		for (let n = 0; n < 2; n++)
+			assert.deepEqual(await observeFeedback(input), {
+				kind: "read",
+				head,
+				batch: null,
+				dismissed: [id(1)],
+			});
+		assert.equal(github.calls.length, 2);
+		assert.deepEqual(readdirSync(root), []);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

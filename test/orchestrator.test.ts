@@ -12353,7 +12353,7 @@ describe("controller-only validate", () => {
 			assert.equal(f.executor.launches.length, launches);
 		});
 
-	it("F10 ingests once when a published refresh review callback settles inside the second observation", async () => {
+	async function feedbackCallback(capped: boolean) {
 		const f = await reviewingRun();
 		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
 		await once(f.controller);
@@ -12461,7 +12461,12 @@ describe("controller-only validate", () => {
 							head: oldHead,
 							batch: {
 								digest: digestOf("interleaved-batch"),
-								seen: [`github:${repo}:review:5`],
+								seen: capped
+									? Array.from(
+											{ length: 501 },
+											(_, n) => `github:${repo}:review:${n + 5}` as const,
+										)
+									: [`github:${repo}:review:5`],
 								reviews: [`github:${repo}:review:5`],
 								actionable: true,
 								refusedInline: false,
@@ -12495,8 +12500,11 @@ describe("controller-only validate", () => {
 		const book = f.files.claims.get(runOf(14))?.handoff;
 
 		assert.ok(book?.kind === "selected");
-		assert.equal(book.feedback?.batches.length, 1);
-		assert.deepEqual(book.feedback?.seen, [`github:${repo}:review:5`]);
+		assert.equal(book.feedback?.batches.length, capped ? 0 : 1);
+		assert.deepEqual(
+			book.feedback?.seen,
+			capped ? [] : [`github:${repo}:review:5`],
+		);
 		assert.equal(
 			book.current.certification?.execution.id,
 			launched.execution.id,
@@ -12506,13 +12514,19 @@ describe("controller-only validate", () => {
 				(s) =>
 					s.kind === "selected" &&
 					s.work.kind === "reviewing" &&
-					s.feedback?.batches.length === 1,
+					(capped
+						? s.feedback?.overflow !== undefined
+						: s.feedback?.batches.length === 1),
 			),
-			"batch commit precedes consuming the queued review callback",
+			"intake commit precedes consuming the queued review callback",
 		);
 		assert.ok(
 			writes.filter(
-				(s) => s.kind === "selected" && s.feedback?.batches.length === 1,
+				(s) =>
+					s.kind === "selected" &&
+					(capped
+						? s.feedback?.overflow !== undefined
+						: s.feedback?.batches.length === 1),
 			).length >= 2,
 			"the same observation crosses both candidate commits",
 		);
@@ -12534,14 +12548,23 @@ describe("controller-only validate", () => {
 		const restored = f.files.claims.get(runOf(14))?.handoff;
 
 		assert.ok(restored?.kind === "selected");
-		assert.equal(restored.feedback?.batches.length, 1);
-		assert.equal(restored.feedback?.batches[0]?.notice, "posted");
+		assert.equal(restored.feedback?.batches.length, capped ? 0 : 1);
+		assert.equal(
+			capped
+				? restored.feedback?.overflow?.notice
+				: restored.feedback?.batches[0]?.notice,
+			"posted",
+		);
 		assert.equal(notices, 1);
 		assert.equal(
 			f.executor.launches.filter((l) => l.stage === "build").length,
 			1,
 		);
-	});
+	}
+
+	for (const capped of [false, true])
+		it(`F10 published refresh callback survives the second feedback observation (cursor capped=${capped})`, async () =>
+			feedbackCallback(capped));
 
 	it("F10 tick sweeps landed ledger PRs hourly, survives a lost proposal POST and never admits proposals", async () => {
 		const dir = stateDir();
