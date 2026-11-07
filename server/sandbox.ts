@@ -3178,24 +3178,10 @@ async function prepareCandidateReview(
 	} catch (error) {
 		if (
 			error instanceof Error &&
-			(error.message === "unsafe private directory" ||
-				("code" in error &&
-					[
-						"ENOENT",
-						"ENOTDIR",
-						"EISDIR",
-						"EACCES",
-						"EPERM",
-						"EEXIST",
-						"ELOOP",
-						"ENOSPC",
-						"EROFS",
-						"EIO",
-						"ENAMETOOLONG",
-						"EMFILE",
-						"ENFILE",
-						"EFBIG",
-					].includes(String(error.code))))
+			"code" in error &&
+			["ENOSPC", "EROFS", "EIO", "EMFILE", "ENFILE"].includes(
+				String(error.code),
+			)
 		)
 			throw new ReviewEvidenceUnavailable("review_inputs_unavailable");
 		throw error;

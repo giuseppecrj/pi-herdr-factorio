@@ -2609,8 +2609,15 @@ export class Orchestrator {
 						: run.handoff.kind === "selected" &&
 								run.handoff.work.kind === "terminal" &&
 								run.handoff.work.terminal.kind === "failed" &&
-								run.handoff.work.terminal.reason === "review_input_too_large"
-							? inputCause("review", "review_input_too_large")
+								(run.handoff.work.terminal.reason ===
+									"review_input_too_large" ||
+									run.handoff.work.terminal.reason === "summary_too_large")
+							? inputCause(
+									run.handoff.work.terminal.reason === "review_input_too_large"
+										? "review"
+										: "land",
+									run.handoff.work.terminal.reason,
+								)
 							: candidateCause(
 									run.handoff,
 									await this.#currentDiagnosis(run.runId, run.handoff),
@@ -5232,14 +5239,40 @@ export class Orchestrator {
 			try {
 				completion = await port.execute(state, request);
 			} catch (error) {
+				if (!(error instanceof PublicationError)) throw error;
+
+				if (error.reason === "summary_too_large") {
+					const key = `<!-- factory-handoff-input run=${run.runId} -->`;
+
+					if (
+						!(await this.#postKeyed(
+							run,
+							key,
+							`Stopped: summary_too_large. The pinned contract summary exceeds the handoff limit.\n\n${key}`,
+						))
+					)
+						return;
+
+					const terminal = {
+						kind: "finish_pr",
+						terminal: { kind: "failed", reason: "summary_too_large" },
+					} as const;
+
+					if (
+						await this.#commitCandidate(run, {
+							...state,
+							work: { kind: "effect", request: terminal },
+						})
+					)
+						await this.#interpretCandidate(run, terminal);
+
+					return;
+				}
+
 				if (
-					!(error instanceof PublicationError) ||
-					![
-						"evidence_unavailable",
-						"summary_too_large",
-						"pr_identity",
-						"pr_ambiguous",
-					].includes(error.reason)
+					error.reason !== "evidence_unavailable" &&
+					error.reason !== "pr_identity" &&
+					error.reason !== "pr_ambiguous"
 				)
 					throw error;
 
@@ -5247,14 +5280,14 @@ export class Orchestrator {
 					runId: run.runId,
 					reason: error.reason,
 				});
-				await this.#commitCandidate(run, {
-					...state,
-					work: {
-						kind: "held",
-						reason: "evidence_unavailable",
-						since: this.#input.clock.now(),
-					},
-				});
+				await this.#commitCandidate(
+					run,
+					handoffCandidate(state, {
+						kind: "effect_held",
+						reason: error.reason,
+						now: this.#input.clock.now(),
+					}).state,
+				);
 			}
 		}
 

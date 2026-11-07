@@ -206,7 +206,10 @@ function parseClaim(
 
 	const enteredAt = evidenceMissing
 		? null
-		: (countOf(claim?.enteredAt) ?? readiness?.since ?? null);
+		: work?.kind === "held" &&
+				(work.reason === "pr_identity" || work.reason === "pr_ambiguous")
+			? work.since
+			: (countOf(claim?.enteredAt) ?? readiness?.since ?? null);
 
 	const reason = evidenceMissing
 		? "candidate_book_unavailable"
