@@ -1,4 +1,6 @@
 import { randomBytes } from "node:crypto";
+import { draftFeedbackPrompt } from "../src/accept.ts";
+import { draftNeedsRevision, type DraftFeedback } from "../src/diagnosis.ts";
 import { fileArtifacts, regularText } from "../src/artifacts.ts";
 import {
 	candidateReviewPrompt,
@@ -102,6 +104,7 @@ import {
 	controllerValidator,
 	controllerCandidatePort,
 	controllerBaseChecker,
+	controllerDraftChecker,
 	controllerDiagnosis,
 	sweepValidation,
 	fileRunFiles,
@@ -204,7 +207,10 @@ export const CLEANUP_RESERVE_MS = STAGE_CLEANUP_RESERVE_MS;
 
 export const MODEL_REQUEST_CEILING = 2_000;
 
-const ACCEPT_REQUEST_CEILING = 3;
+const ACCEPT_REQUEST_CEILING = 5;
+export const DRAFT_MAX_RUNS = 2;
+export const DRAFT_RESERVE_TOKENS = 35_000;
+export const DRAFT_RESERVE_MS = 180_000;
 
 type AcceptDiagnostic =
 	| "accept_tool_limit"
@@ -228,12 +234,22 @@ const ABORT_WAIT_MS = 5_000;
 
 const EXIT_WAIT_MS = 2_000;
 
+export type DraftCheckContext = Readonly<{
+	signal: AbortSignal;
+	deadline: number;
+	run: 1 | 2;
+}>;
+
 export type StageRunInput = {
 	readonly runId: Digest;
 	readonly stage: ModelStage;
 	readonly attempt: number;
 	readonly prompt: string;
 	readonly source?: import("../src/specify.ts").SourceFacts;
+	readonly draftCheck?: (
+		text: string,
+		context: DraftCheckContext,
+	) => Promise<DraftFeedback | null>;
 	readonly settings: StageRunSettings;
 	readonly remainingRunTokens: number;
 	readonly signal: AbortSignal;
@@ -280,6 +296,9 @@ export function bareModel(model: ModelId): string {
 }
 
 class Ledger {
+	draftRuns = 0;
+	revisionStart: number | null = null;
+	readonly draftSkips: ("tokens" | "wall")[] = [];
 	parent = 0;
 	children = 0;
 	gateway = 0;
@@ -514,6 +533,11 @@ async function runSession(
 	let settledAfterAbort: (() => void) | null = null;
 	let textReply: ((text: string | null) => void) | null = null;
 	let recheck = () => {};
+	let finalText: string | null = null;
+	let checkingDraft = false;
+	let readingDraft = false;
+	const draftAbort = new AbortController();
+	let pendingDraft: Promise<DraftFeedback | null> | null = null;
 
 	const readChild = (sessionFile: string | null): Promise<void> => {
 		pendingReads += 1;
@@ -572,6 +596,7 @@ async function runSession(
 			clearTimeout(deadline);
 			input.signal.removeEventListener("abort", onAbort);
 			stage.listener = null;
+			draftAbort.abort();
 			finish(outcome);
 		};
 
@@ -596,7 +621,8 @@ async function runSession(
 
 		recheck = checkTokens;
 
-		const onAbort = () => end({ kind: "failed", exit: "aborted" });
+		const onAbort = () =>
+			checkingDraft ? capped("wall") : end({ kind: "failed", exit: "aborted" });
 
 		brokenPipe = () => end(CRASHED);
 
@@ -621,6 +647,112 @@ async function runSession(
 				acceptFailure("accept_request_limit");
 			else if (event.event === "gate_closed" || event.event === "usage")
 				checkTokens();
+		};
+
+		const settleDraft = async () => {
+			if (readingDraft || checkingDraft || finished) return;
+			const last = tracker.lastAssistant;
+
+			if (
+				input.stage !== "accept" ||
+				input.draftCheck === undefined ||
+				ledger.draftRuns >= DRAFT_MAX_RUNS ||
+				settledOutcome(last).outcome.kind !== "passed"
+			) {
+				end("settled");
+
+				return;
+			}
+
+			const tokens =
+				Math.min(
+					input.settings.maxTokens ?? Infinity,
+					input.remainingRunTokens,
+				) - ledger.total;
+
+			const wall = stage.deadline - host.now();
+
+			if (tokens < DRAFT_RESERVE_TOKENS || wall < DRAFT_RESERVE_MS) {
+				ledger.draftSkips.push(
+					tokens < DRAFT_RESERVE_TOKENS ? "tokens" : "wall",
+				);
+				end("settled");
+
+				return;
+			}
+
+			readingDraft = true;
+			let draft: string | null = null;
+
+			const reply = new Promise<void>((done) => {
+				textReply = (value) => {
+					draft = value;
+					done();
+				};
+			});
+
+			sendCommand(pi, { id: OUTPUT_ID, type: "get_last_assistant_text" });
+			await waitFor(reply, Math.min(OUTPUT_WAIT_MS, wall));
+			textReply = null;
+			readingDraft = false;
+
+			if (finished) return;
+
+			if (draft === null) {
+				end("settled");
+
+				return;
+			}
+
+			finalText = draft;
+			checkingDraft = true;
+			const run = ledger.draftRuns === 0 ? 1 : 2;
+			let feedback: DraftFeedback | null;
+
+			try {
+				pendingDraft = input.draftCheck(draft, {
+					signal: draftAbort.signal,
+					deadline: Math.min(
+						host.now() + 60000,
+						stage.deadline - DRAFT_RESERVE_MS,
+					),
+					run,
+				});
+				feedback = await pendingDraft;
+			} catch {
+				feedback = null;
+			}
+
+			checkingDraft = false;
+
+			if (finished) return;
+
+			if (feedback === null) {
+				end("settled");
+
+				return;
+			}
+
+			ledger.draftRuns++;
+
+			if (!draftNeedsRevision(feedback)) {
+				end("settled");
+
+				return;
+			}
+
+			if (ledger.revisionStart === null) ledger.revisionStart = ledger.total;
+			finalText = null;
+			const id = `factory-draft-${run}`;
+			tracker.expect(id);
+			sendCommand(pi, {
+				id,
+				type: "prompt",
+				message: draftFeedbackPrompt(
+					{ ...feedback, run },
+					randomBytes(16).toString("hex"),
+				),
+			});
 		};
 
 		pi.stdout.on("data", (chunk: Buffer) => {
@@ -686,7 +818,7 @@ async function runSession(
 					if (signal.diagnostic !== undefined) acceptFailure(signal.diagnostic);
 					else end(signal);
 				} else if (signal.kind === "cap") capped(signal.cap);
-				else if (signal.kind === "settled") end("settled");
+				else if (signal.kind === "settled") void settleDraft();
 				else if (signal.kind === "answer_ui") {
 					sendCommand(pi, {
 						type: "extension_ui_response",
@@ -725,9 +857,11 @@ async function runSession(
 		await bounded(stage.gateway.drainAbort());
 	}
 
-	let text: string | null = null;
+	if (pendingDraft !== null) await bounded(pendingDraft);
 
-	if (report === "settled") {
+	let text: string | null = finalText;
+
+	if (report === "settled" && text === null) {
 		// Pi can exit before it answers a command sent after stdin ends, so the
 		// reply is awaited first.
 		const reply = new Promise<void>((done) => {
@@ -1096,11 +1230,24 @@ export async function runStage(
 			family,
 		);
 
-		if (diagnostic !== undefined) record.diagnostic = diagnostic;
+		const complete: StageReceipt & { diagnostic?: AcceptDiagnostic } =
+			input.stage === "accept"
+				? {
+						...record,
+						draftRuns: ledger.draftRuns,
+						draftRevisionTokens:
+							ledger.revisionStart === null
+								? 0
+								: Math.max(0, ledger.total - ledger.revisionStart),
+						draftSkips: ledger.draftSkips,
+					}
+				: record;
 
-		const written = await host.writeReceipt(record).catch(() => false);
+		if (diagnostic !== undefined) complete.diagnostic = diagnostic;
 
-		return stageResult(written ? record : { ...record, outcome: CRASHED });
+		const written = await host.writeReceipt(complete).catch(() => false);
+
+		return stageResult(written ? complete : { ...complete, outcome: CRASHED });
 	};
 
 	if ((saved !== null && restored === null) || !checkpoint())
@@ -4364,6 +4511,26 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 				};
 			}
 
+			const stageDir = freshDir(
+				join(
+					config.stateDir,
+					"stages",
+					input.runId,
+					stageName(input.stage, input.attempt, input.round),
+				),
+			);
+
+			const draftCheck =
+				input.stage === "accept" && input.acceptDraft !== undefined
+					? controllerDraftChecker({
+							stateDir: config.stateDir,
+							stageDir,
+							attempt: input.attempt,
+							input: input.acceptDraft,
+							fetch: config.fetchTarball,
+						})
+					: undefined;
+
 			const done = runStage(
 				{
 					runId: input.runId,
@@ -4371,6 +4538,7 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 					attempt: input.attempt,
 					prompt,
 					source: input.source,
+					draftCheck,
 					settings: input.settings,
 					remainingRunTokens: input.remainingRunTokens,
 					signal: input.signal,
@@ -4378,14 +4546,7 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 				},
 				(config.host ?? sandboxHost)({
 					...hostConfig,
-					stageDir: freshDir(
-						join(
-							config.stateDir,
-							"stages",
-							input.runId,
-							stageName(input.stage, input.attempt, input.round),
-						),
-					),
+					stageDir,
 				}),
 			);
 

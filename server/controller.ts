@@ -125,11 +125,13 @@ import {
 	replacementDigest,
 	replayHeldoutCandidate,
 	runHeldoutBase,
+	runDraftBase,
 	validateDependencies,
 	type GateRunner,
 } from "./gates.ts";
 import {
 	assessBase,
+	draftCheckFeedback,
 	classifyFailure,
 	diagnosisNeeds,
 	parseBaseReason,
@@ -145,7 +147,12 @@ import {
 	type FailureClass,
 	type HeldoutReplay,
 } from "../src/diagnosis.ts";
-import type { AcceptanceSuite } from "../src/accept.ts";
+import {
+	writeAcceptance,
+	acceptanceDigestOf,
+	type AcceptanceSuite,
+} from "../src/accept.ts";
+import type { DraftCheckContext, StageRunInput } from "./sandbox.ts";
 import type { Contract, ReplacedTest } from "../src/specify.ts";
 import { scopeOwner, scopeUnit, stopScopeArgv } from "./sandbox/scope.ts";
 import {
@@ -1428,6 +1435,114 @@ async function writeOnce(
 	}
 
 	return writeAtomic(path, text);
+}
+
+export function controllerDraftChecker(config: {
+	readonly stateDir: string;
+	readonly stageDir: string;
+	readonly attempt: number;
+	readonly input: NonNullable<
+		import("../src/orchestrator.ts").StageLaunchInput["acceptDraft"]
+	>;
+	readonly fetch?: TarballFetch;
+	readonly runner?: GateRunner;
+}): NonNullable<StageRunInput["draftCheck"]> {
+	let cached: ReturnType<TarballFetch> | null = null;
+
+	const fetch: TarballFetch = (repo, sha, bound) => {
+		cached ??= (config.fetch ?? ghTarball)(repo, sha, bound);
+
+		return cached;
+	};
+
+	return async (text: string, context: DraftCheckContext) => {
+		const parsed = writeAcceptance(text, config.input.contract);
+
+		if (parsed.kind !== "suite") return null;
+		const { contract, digest, repo, issue, baseSha } = config.input;
+
+		const dir = join(config.stageDir, `draft-${context.run}`),
+			tree = join(dir, "source");
+
+		privateDir(dir);
+		const deadline = context.deadline;
+
+		const signal = AbortSignal.any([
+			context.signal,
+			AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+		]);
+
+		const startedAt = Date.now();
+		const canary = `factory-holdout-${randomBytes(32).toString("hex")}`;
+
+		try {
+			await mkdir(tree, { mode: 0o700 });
+
+			const checked = await checkoutWorkspace({
+				stateDir: dir,
+				runId: contract.runId,
+				workspace: tree,
+				repo,
+				sha: baseSha,
+				fetch,
+				signal,
+				deadline,
+			});
+
+			const { evidence, details } = await runDraftBase({
+				tree,
+				workDir: dir,
+				cacheDir: join(config.stateDir, "base-dependencies"),
+				binding: {
+					runId: contract.runId,
+					repo,
+					issue,
+					contractDigest: digest,
+					acceptanceDigest: acceptanceDigestOf(parsed.suite, canary),
+					baseSha,
+					gateSha: baseSha,
+				},
+				contract,
+				suite: parsed.suite,
+				canary,
+				startedAt,
+				deadline,
+				signal,
+				scope: scopeUnit(
+					scopeOwner(config.stateDir),
+					contract.runId,
+					"draftcheck",
+					config.attempt,
+					randomBytes(4).toString("hex"),
+				),
+				runner: config.runner,
+				refused:
+					checked.kind === "unavailable"
+						? "tree_unavailable"
+						: checked.kind === "refused"
+							? "tree_refused"
+							: checked.omitted !== 0
+								? "tree_partial"
+								: undefined,
+			});
+
+			const { receipt } = assessBase(evidence);
+
+			const feedback = {
+				...draftCheckFeedback(receipt, details, issue),
+				run: context.run,
+			};
+
+			exclusive(
+				join(config.stageDir, `draft-${context.run}.json`),
+				JSON.stringify({ receipt, details, feedback }),
+			);
+
+			return feedback;
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	};
 }
 
 export function controllerBaseChecker(config: {

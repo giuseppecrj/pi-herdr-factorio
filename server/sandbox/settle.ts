@@ -131,7 +131,7 @@ function normalizedArgs(value: JsonValue): string {
  * outcome; the last assistant `message_end` is.
  */
 export class SessionTracker {
-	readonly #promptId: string;
+	#promptId: string;
 	readonly #maxTurns: number;
 	readonly #acceptCalls: AcceptCalls | null;
 	turns: number;
@@ -153,6 +153,14 @@ export class SessionTracker {
 		this.#maxTurns = maxTurns;
 		this.#acceptCalls = acceptCalls;
 		this.turns = turnsSoFar;
+	}
+
+	expect(promptId: string): void {
+		this.#promptId = promptId;
+		this.started = false;
+		this.settledAfterLast = false;
+		this.aborted = null;
+		this.lastAssistant = null;
 	}
 
 	apply(record: PiRecord): TrackerSignal {
