@@ -1019,6 +1019,121 @@ export function acceptanceSourcePath(path: string): boolean {
 	);
 }
 
+function testCode(text: string): string[] {
+	return text
+		.replace(
+			/"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|`(?:\\[\s\S]|[^`\\])*`|\/\/[^\n]*|\/\*[\s\S]*?(?:\*\/|$)/g,
+			(literal) => {
+				const blank = literal.replace(/[^\r\n]/g, " ");
+
+				return literal.startsWith("/") ? blank : `0${blank.slice(1)}`;
+			},
+		)
+		.split("\n");
+}
+
+function testCalls(code: string): string[] {
+	return [
+		...code.matchAll(/(?<![\w$.])([\w$]+)\s*(?:<[^;\n]+>)?\s*\(/g),
+	].flatMap((call) =>
+		/\bfunction\s*$/.test(code.slice(0, call.index)) ? [] : [call[1] ?? ""],
+	);
+}
+
+function helperExpressionEnd(code: string, start: number): number {
+	let depth = 0;
+
+	for (let i = start; i < code.length; i++) {
+		const char = code[i] ?? "";
+
+		if (depth === 0) {
+			if (char === ";") return i + 1;
+
+			if (char === "\n") {
+				const before = code.slice(start, i).trimEnd();
+				const after = code.slice(i + 1).trimStart();
+
+				if (
+					before !== "" &&
+					!/[=,+*/%&|?:.<>!~-]$/.test(before) &&
+					!/^[([.,?+*/%&|:<>!=~-]/.test(after) &&
+					!/^(?:as|satisfies|instanceof|in)\b/.test(after)
+				)
+					return i - (code.slice(start, i).length - before.length);
+			}
+		}
+
+		if ("([{".includes(char)) depth++;
+		else if (")]}".includes(char)) {
+			depth--;
+
+			if (depth === 0 && code[start] === "{") return i + 1;
+		}
+	}
+
+	return depth > 0 ? code.length : code.trimEnd().length;
+}
+
+function localTestHelpers(code: readonly string[]) {
+	const helpers = new Map<string, { start: number; end: number }>();
+
+	for (const [index, line] of code.entries()) {
+		const declaration =
+			/^(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s+([\w$]+)\s*[(<]/.exec(
+				line,
+			);
+
+		const binding =
+			/^(?:export\s+)?(?:const|let|var)\s+([\w$]+)(?:\s*:[^\n=]+)?\s*=\s*/.exec(
+				line,
+			);
+
+		const name = declaration?.[1] ?? binding?.[1];
+
+		if (name === undefined || helpers.has(name)) continue;
+		const head = code.slice(index, index + 40).join("\n");
+		const offset = binding?.[0].length ?? 0;
+		const expression = head.slice(offset);
+
+		const arrow =
+			/^(?:async\s+)?(?:\([\s\S]*?\)|[\w$]+)\s*(?::[^=]+)?=>\s*/.exec(
+				expression,
+			);
+
+		let body: number;
+
+		if (declaration !== null || /^(?:async\s+)?function\b/.test(expression)) {
+			let depth = 0;
+			let paramsEnd = -1;
+
+			for (let i = head.indexOf("("); i >= 0 && i < head.length; i++) {
+				if (head[i] === "(") depth++;
+				else if (head[i] === ")" && --depth === 0) {
+					paramsEnd = i;
+					break;
+				}
+			}
+
+			if (paramsEnd < 0) continue;
+			const tail = head.slice(paramsEnd + 1);
+			const opening = tail.search(/[;{]/);
+
+			if (opening < 0 || tail[opening] === ";") continue;
+			body = paramsEnd + 1 + opening;
+		} else {
+			if (arrow === null) continue;
+			body = offset + arrow[0].length;
+		}
+
+		const end =
+			index + head.slice(0, helperExpressionEnd(head, body)).split("\n").length;
+
+		helpers.set(name, { start: index + 1, end });
+	}
+
+	return helpers;
+}
+
 async function acceptExcerpts(
 	input: Parameters<typeof sourceExcerpts>[0],
 ): Promise<InlinedFile[]> {
@@ -1126,19 +1241,151 @@ async function acceptExcerpts(
 			});
 	}
 
-	const shown = await sourceExcerpts({
-		...input,
-		files: [...named, ...harness],
-		evidence: [...evidence, ...hints],
-		checkout,
-		accept: false,
-	});
-
-	return shown.map((file) =>
-		harness.has(file.path) && file.excerpt?.selection === "evidence"
-			? { ...file, excerpt: { ...file.excerpt, selection: "test_harness" } }
-			: file,
+	const shown = (
+		await sourceExcerpts({
+			...input,
+			files: [...named, ...harness],
+			evidence: [...evidence, ...hints],
+			checkout,
+			accept: false,
+		})
+	).map(
+		(file): InlinedFile =>
+			harness.has(file.path) && file.excerpt?.selection === "evidence"
+				? { ...file, excerpt: { ...file.excerpt, selection: "test_harness" } }
+				: file,
 	);
+
+	const helpers: InlinedFile[] = [];
+	const dependencies: (() => void)[] = [];
+
+	for (const path of harness) {
+		if (!tests.includes(path)) continue;
+		const text = cached.get(path);
+
+		if (text === null || text === undefined) continue;
+		const lines = text.split("\n");
+		const code = testCode(text);
+		const definitions = localTestHelpers(code);
+		const windows = shown.filter((file) => file.path === path);
+
+		const add = (name: string, file: InlinedFile, follow: boolean) => {
+			const range = definitions.get(name);
+			const e = file.excerpt;
+
+			if (range === undefined || e === undefined) return;
+			definitions.delete(name);
+
+			if (follow)
+				dependencies.push(() => {
+					for (const call of testCalls(
+						code.slice(range.start - 1, range.end).join("\n"),
+					))
+						add(call, file, false);
+				});
+
+			if (
+				windows.some(
+					(window) =>
+						window.excerpt !== undefined &&
+						window.excerpt.start <= range.start &&
+						window.excerpt.end >= range.end,
+				)
+			)
+				return;
+
+			helpers.push({
+				...file,
+				text: lines.slice(range.start - 1, range.end).join("\n"),
+				excerpt: {
+					...e,
+					...range,
+					selection: "test_harness",
+					omitted: range.start > 1 || range.end < lines.length,
+					capHit: false,
+					skipped: undefined,
+				},
+			});
+		};
+
+		for (const file of windows) {
+			const e = file.excerpt;
+
+			if (
+				e === undefined ||
+				!evidence.some(
+					(cite) =>
+						cite.path === path &&
+						Number.isSafeInteger(cite.start) &&
+						Number.isSafeInteger(cite.end) &&
+						cite.start >= 1 &&
+						cite.end <= lines.length &&
+						cite.start <= cite.end &&
+						cite.start <= e.end &&
+						cite.end >= e.start,
+				)
+			)
+				continue;
+
+			for (const name of testCalls(code.slice(e.start - 1, e.end).join("\n")))
+				add(name, file, true);
+		}
+	}
+
+	for (const follow of dependencies) follow();
+
+	const selected: InlinedFile[] = [];
+	let skipped = 0;
+	let capHit = false;
+	const firstIndex = shown.findIndex((file) => file.excerpt !== undefined);
+
+	const withOmissions = () =>
+		shown.map(
+			(file, index): InlinedFile =>
+				index === firstIndex && file.excerpt !== undefined && skipped > 0
+					? {
+							...file,
+							excerpt: {
+								...file.excerpt,
+								capHit: file.excerpt.capHit || capHit,
+								skipped: (file.excerpt.skipped ?? 0) + skipped,
+							},
+						}
+					: file,
+		);
+
+	do {
+		selected.length = 0;
+		let dropped = 0;
+		let ceiling = false;
+
+		for (const helper of helpers) {
+			if (selected.length === 5) {
+				dropped++;
+				continue;
+			}
+
+			selected.push(helper);
+
+			if (
+				sourceFacts([...withOmissions(), ...selected]).bytes >
+				INLINE_TOTAL_BYTES
+			) {
+				selected.pop();
+				dropped++;
+				ceiling = true;
+			}
+		}
+
+		skipped = dropped;
+		capHit = ceiling;
+		// Omission labels can make a previously exact-fit helper too large.
+	} while (
+		selected.length > 0 &&
+		sourceFacts([...withOmissions(), ...selected]).bytes > INLINE_TOTAL_BYTES
+	);
+
+	return boundExcerpts([...withOmissions(), ...selected]);
 }
 
 /** Localize only in the prepared checkout. The immutable contract is never rewritten. */
@@ -1268,7 +1515,11 @@ export async function sourceExcerpts(input: {
 
 	if (sourceFacts(shown).bytes > INLINE_TOTAL_BYTES) shown = windows(0);
 
-	if (sourceFacts(shown).bytes <= INLINE_TOTAL_BYTES) return shown;
+	return boundExcerpts(shown);
+}
+
+function boundExcerpts(shown: readonly InlinedFile[]): InlinedFile[] {
+	if (sourceFacts(shown).bytes <= INLINE_TOTAL_BYTES) return [...shown];
 	const bounded: InlinedFile[] = [];
 	let remaining = INLINE_TOTAL_BYTES - 128;
 
@@ -1331,7 +1582,7 @@ export async function sourceExcerpts(input: {
 			excerpt: {
 				...first.excerpt,
 				capHit: true,
-				skipped: shown.length - bounded.length,
+				skipped: (first.excerpt.skipped ?? 0) + shown.length - bounded.length,
 			},
 		};
 

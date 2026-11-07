@@ -910,6 +910,396 @@ describe("evidence-first source excerpts", () => {
 });
 
 describe("accept source and existing-test pack", () => {
+	const helperPack = (text: string, start = 400, end = start) =>
+		sourceExcerpts({
+			files: ["test/cli.test.ts"],
+			evidence: [{ path: "test/cli.test.ts", start, end, fact: "status test" }],
+			checkout: {
+				files: ["test/cli.test.ts"],
+				read: async () => text,
+			},
+			identity: "repo@base",
+			accept: true,
+		});
+
+	it("includes the distant same-file cli helper used by a cited status test", async () => {
+		const lines = Array.from({ length: 500 }, () => "// padding");
+		lines[0] = "import { runCli } from '../server/cli.ts';";
+		lines[80] = "describe('unrelated', () => {});";
+		lines.splice(
+			180,
+			0,
+			"async function cli(argv: readonly string[]) {",
+			"  return runCli(argv, {",
+			"    runtime: { procs: table(4242, '100') },",
+			"  });",
+			"}",
+		);
+		lines[399] = "test('status', async () => { await cli(['status']); });";
+
+		const shown = await helperPack(lines.join("\n"));
+		const text = shown.map(renderInlined).join("\n\n");
+		assert.match(text, /await cli\(\['status'\]\)/);
+		assert.match(text, /async function cli/);
+		assert.match(text, /runtime: \{ procs: table\(4242, '100'\) \}/);
+		assert.equal(sourceFacts(shown).capHit, false);
+	});
+
+	it("takes at most five unique helpers in call order and reports the rest, deterministically", async () => {
+		const lines = Array.from({ length: 900 }, () => "// padding");
+
+		for (const [index, name] of [
+			"first",
+			"second",
+			"third",
+			"fourth",
+			"fifth",
+			"sixth",
+		].entries())
+			lines[100 + index * 100] = `function ${name}() { return 1; }`;
+
+		lines[699] =
+			"test('cited', () => { third(); first(); third(); second(); fourth(); fifth(); sixth(); });";
+		const text = lines.join("\n");
+		const shown = await helperPack(text, 700);
+		const helpers = shown.filter((file) => file.text.startsWith("function "));
+		assert.deepEqual(
+			helpers.map((file) => file.excerpt?.start),
+			[301, 101, 201, 401, 501],
+		);
+		assert.ok(helpers.every((file) => file.text.split("\n").length === 1));
+		assert.doesNotMatch(shown.map(renderInlined).join("\n"), /function sixth/);
+		assert.equal(shown[0]?.excerpt?.skipped, 1);
+		assert.equal(sourceFacts(shown).capHit, false);
+		assert.deepEqual(await helperPack(text, 700), shown);
+	});
+
+	it("caps a long helper at 40 exact base lines and labels the omitted remainder", async () => {
+		const lines = Array.from({ length: 500 }, () => "// padding");
+		lines.splice(
+			180,
+			0,
+			"async function cli(argv: string[]) {",
+			...Array.from({ length: 48 }, (_, n) => `  // HELPER_LINE_${n + 1}`),
+			"}",
+		);
+		lines[399] = "test('cited', () => cli(['status']));";
+		const original = lines.join("\n");
+		const shown = await helperPack(original);
+
+		const helper = shown.find((file) =>
+			file.text.startsWith("async function cli"),
+		);
+
+		assert.ok(helper?.excerpt);
+		assert.equal(helper.text.split("\n").length, 40);
+		assert.equal(helper.text, lines.slice(180, 220).join("\n"));
+		assert.equal(helper.excerpt.start, 181);
+		assert.equal(helper.excerpt.end, 220);
+		assert.equal(helper.excerpt.contentDigest, digestOf(original));
+		assert.equal(helper.excerpt.checkout, "repo@base");
+		assert.equal(helper.excerpt.selection, "test_harness");
+		assert.equal(helper.excerpt.omitted, true);
+		assert.equal(helper.excerpt.capHit, false);
+		assert.match(renderInlined(helper), /omitted lines 221-/);
+		assert.doesNotMatch(helper.text, /HELPER_LINE_40/);
+	});
+
+	it("includes multiline bindings and their one-level dependencies", async () => {
+		const lines = Array.from({ length: 900 }, () => "// padding");
+		lines.splice(
+			180,
+			0,
+			"async function cli(",
+			"  argv: readonly string[],",
+			") {",
+			"  return dependency(argv);",
+			"}",
+		);
+		lines.splice(
+			280,
+			0,
+			"const arrow = async (",
+			"  argv: readonly string[],",
+			") => {",
+			"  return dependency(argv);",
+			"};",
+		);
+		lines.splice(
+			380,
+			0,
+			"const expression = function(argv: string[]) {",
+			"  return dependency(argv);",
+			"};",
+		);
+		lines[500] = "function dependency(argv: string[]) { return argv; }";
+		lines[699] =
+			"test('cited', () => { cli([]); arrow([]); expression([]); });";
+		const shown = await helperPack(lines.join("\n"), 700);
+		const text = shown.map(renderInlined).join("\n");
+		assert.match(text, /async function cli/);
+		assert.match(text, /const arrow = async/);
+		assert.match(text, /const expression = function/);
+		assert.match(text, /function dependency/);
+		assert.deepEqual(
+			shown.slice(-4).map((file) => file.text.split("\n").length),
+			[5, 5, 3, 1],
+		);
+	});
+
+	it("orders direct helpers before one-level dependencies, without following cycles or a third level", async () => {
+		const lines = Array.from({ length: 900 }, () => "// padding");
+		lines[100] = "function cli() { return table(); }";
+		lines[200] = "function runOf() { return dependency(); }";
+		lines[300] = "function stateDir() { return 1; }";
+		lines[400] = "function table() { cli(); return tooDeep(); }";
+		lines[500] = "function dependency() { return 2; }";
+		lines[600] = "function tooDeep() { return 3; }";
+		lines[699] = "test('cited', () => { cli(); runOf(); stateDir(); });";
+		const shown = await helperPack(lines.join("\n"), 700);
+		assert.deepEqual(
+			shown.slice(-5).map((file) => file.excerpt?.start),
+			[101, 201, 301, 401, 501],
+		);
+		assert.doesNotMatch(
+			shown.map(renderInlined).join("\n"),
+			/function tooDeep/,
+		);
+		assert.equal(shown[0]?.excerpt?.skipped, undefined);
+	});
+
+	it("ends an unbraced multiline arrow at its expression, not the next declaration", async () => {
+		const lines = Array.from({ length: 500 }, () => "// padding");
+		lines.splice(
+			180,
+			0,
+			"const cli = (argv: string[]) => runCli(",
+			"  argv, { runtime: { procs: '}' } },",
+			")",
+			"function unrelated() { return 'NOT_HELPER_BODY'; }",
+		);
+		lines[399] = "test('cited', () => cli([]));";
+		const shown = await helperPack(lines.join("\n"));
+		const helper = shown.find((file) => file.text.startsWith("const cli"));
+		assert.equal(helper?.text, lines.slice(180, 183).join("\n"));
+		assert.equal(helper?.excerpt?.end, 183);
+		assert.doesNotMatch(shown.map(renderInlined).join("\n"), /NOT_HELPER_BODY/);
+	});
+
+	it("does not duplicate an already visible unbraced arrow", async () => {
+		const lines = Array.from({ length: 500 }, () => "// padding");
+		lines[430] = "const cli = (argv: string[]) => runCli(argv)";
+		lines[399] = "test('cited', () => cli([]));";
+		const shown = await helperPack(lines.join("\n"));
+		assert.equal(
+			shown.filter((file) => file.text.includes("const cli")).length,
+			1,
+		);
+	});
+
+	it("ignores string, template and comment calls, even when a comment starts outside the window", async () => {
+		const lines = Array.from({ length: 800 }, () => "// padding");
+
+		for (const [index, name] of [
+			"fake",
+			"other",
+			"third",
+			"fourth",
+			"fifth",
+			"real",
+		].entries())
+			lines[100 + index * 50] = `function ${name}() { return 1; }`;
+		lines[450] = "/*";
+		lines[480] = "fake(); other(); third(); fourth(); fifth();";
+		lines[485] = "*/";
+		lines[499] =
+			'test("fake(); other();", () => { const note = `third();`; /* fourth(); */ real(); }); // fifth();';
+		const shown = await helperPack(lines.join("\n"), 500);
+		assert.deepEqual(
+			shown
+				.filter((file) => file.text.startsWith("function "))
+				.map((file) => file.excerpt?.start),
+			[351],
+		);
+		assert.equal(sourceFacts(shown).capHit, false);
+		assert.equal(shown[0]?.excerpt?.skipped, undefined);
+	});
+
+	it("recognizes typed async arrows and exported default functions", async () => {
+		const lines = Array.from({ length: 700 }, () => "// padding");
+		lines[100] =
+			"const typed: Handler = async (argv: string[]): Promise<string> => { return 'TYPED_BINDING'; };";
+		lines[200] =
+			"const returned = async (argv: string[]): Promise<string> => { return 'TYPED_RETURN'; };";
+		lines[300] =
+			"export default function exported() { return 'DEFAULT_FUNCTION'; }";
+		lines[499] =
+			"test('cited', () => { typed([]); returned([]); exported(); });";
+		const shown = await helperPack(lines.join("\n"), 500);
+		assert.deepEqual(
+			shown.slice(-3).map((file) => file.excerpt?.start),
+			[101, 201, 301],
+		);
+		assert.match(shown.map(renderInlined).join("\n"), /TYPED_BINDING/);
+		assert.match(shown.map(renderInlined).join("\n"), /TYPED_RETURN/);
+		assert.match(shown.map(renderInlined).join("\n"), /DEFAULT_FUNCTION/);
+	});
+
+	it("uses a function implementation rather than its overload signature", async () => {
+		const lines = Array.from({ length: 500 }, () => "// padding");
+		lines[180] = "function cli(argv: string[]): string;";
+		lines[181] = "function cli(argv: string[]) { return 'IMPLEMENTATION'; }";
+		lines[399] = "test('cited', () => cli([]));";
+		const shown = await helperPack(lines.join("\n"));
+		assert.match(shown.map(renderInlined).join("\n"), /IMPLEMENTATION/);
+		assert.equal(shown.at(-1)?.excerpt?.start, 182);
+	});
+
+	it("greedily keeps later fitting helpers after oversized direct and dependent helpers", async () => {
+		const lines = Array.from({ length: 900 }, () => "// padding");
+		lines[100] = `function huge() { return '${"€".repeat(6000)}'; }`;
+		lines[200] = "function small() { return tooBig(); }";
+		lines[300] = `function tooBig() { return '${"€".repeat(6000)}'; }`;
+		lines[400] = "function later() { return tiny(); }";
+		lines[500] = "function tiny() { return 1; }";
+		lines[699] = "test('cited', () => { huge(); small(); later(); });";
+		const shown = await helperPack(lines.join("\n"), 700);
+		assert.deepEqual(
+			shown.slice(-3).map((file) => file.excerpt?.start),
+			[201, 401, 501],
+		);
+		assert.equal(shown[0]?.excerpt?.skipped, 2);
+		assert.equal(sourceFacts(shown).capHit, true);
+		assert.ok(sourceFacts(shown).bytes <= 16 * 1024);
+	});
+
+	it("fits omission labels with whole helpers instead of trimming a selected helper", async () => {
+		const lines = Array.from({ length: 700 }, () => "// padding");
+		lines[100] = "function tight() { return ''; }";
+		lines[200] = `function huge() { return '${"€".repeat(6000)}'; }`;
+		lines[300] = "function small() { return 1; }";
+		lines[499] = "test('cited', () => { tight(); huge(); small(); });";
+		const initial = await helperPack(lines.join("\n"), 500);
+
+		const withoutSmall = initial.flatMap((file) =>
+			file.text.startsWith("function small")
+				? []
+				: [
+						{
+							...file,
+							excerpt:
+								file.excerpt === undefined
+									? undefined
+									: { ...file.excerpt, capHit: false, skipped: undefined },
+						},
+					],
+		);
+
+		const padding = 16 * 1024 - sourceFacts(withoutSmall).bytes;
+		lines[100] = `function tight() { return '${"x".repeat(padding)}'; }`;
+		const shown = await helperPack(lines.join("\n"), 500);
+		assert.equal(shown.at(-1)?.text, lines[300]);
+		assert.doesNotMatch(
+			shown.map(renderInlined).join("\n"),
+			/function tight|function huge/,
+		);
+		assert.equal(shown[0]?.excerpt?.skipped, 2);
+		assert.ok(
+			shown.some((file) => file.text.includes(lines[499] ?? "MISSING")),
+		);
+		assert.ok(sourceFacts(shown).bytes <= 16 * 1024);
+	});
+
+	it("resolves direct helper calls only in the same eligible test file", async () => {
+		const lines = Array.from({ length: 500 }, () => "// padding");
+		lines[180] = "function member() { return 'NOT_A_DIRECT_CALL'; }";
+		lines[399] = "test('cited', () => { object.member(); external(); });";
+		const reads: string[] = [];
+
+		const tree = new Map([
+			["test/cli.test.ts", lines.join("\n")],
+			["test/helpers.ts", "function external() { return 'CROSS_FILE'; }"],
+		]);
+
+		const shown = await sourceExcerpts({
+			files: ["test/cli.test.ts"],
+			evidence: [
+				{ path: "test/cli.test.ts", start: 400, end: 400, fact: "cited" },
+			],
+			checkout: {
+				files: [...tree.keys()],
+				read: async (path) => {
+					reads.push(path);
+
+					return tree.get(path) ?? null;
+				},
+			},
+			identity: "repo@base",
+			accept: true,
+		});
+
+		assert.deepEqual(reads, ["test/cli.test.ts"]);
+		assert.doesNotMatch(
+			shown.map(renderInlined).join("\n"),
+			/NOT_A_DIRECT_CALL|CROSS_FILE/,
+		);
+	});
+
+	it("drops whole helpers before cited windows at the byte ceiling and counts their omission", async () => {
+		const lines = Array.from({ length: 500 }, () => "// padding");
+		lines.splice(
+			180,
+			0,
+			"async function cli() {",
+			`  return '${"€".repeat(6000)}';`,
+			"}",
+		);
+		lines[399] = "test('cited', () => cli());";
+		const shown = await helperPack(lines.join("\n"));
+		const text = shown.map(renderInlined).join("\n\n");
+		assert.match(text, /test\('cited', \(\) => cli\(\)\)/);
+		assert.doesNotMatch(text, /async function cli|€/);
+		assert.match(text, /source ceiling hit; 1 other excerpts omitted/);
+		assert.equal(sourceFacts(shown).capHit, true);
+		assert.equal(sourceFacts(shown).omissions, shown.length + 1);
+		assert.ok(sourceFacts(shown).bytes <= 16 * 1024);
+	});
+
+	it("preserves a near-ceiling cited line instead of adding its helper", async () => {
+		const lines = Array.from({ length: 500 }, () => "// padding");
+		lines.splice(
+			180,
+			0,
+			"function cli() {",
+			`  return '${"€".repeat(500)}';`,
+			"}",
+		);
+		lines[399] = `test('cited', () => cli('${"x".repeat(15_200)}END_OF_CITE'));`;
+		const shown = await helperPack(lines.join("\n"));
+		assert.ok(
+			shown.some((file) => file.text.includes(lines[399] ?? "MISSING")),
+		);
+		assert.doesNotMatch(shown.map(renderInlined).join("\n"), /function cli|€/);
+		assert.equal(sourceFacts(shown).capHit, true);
+		assert.ok(sourceFacts(shown).bytes <= 16 * 1024);
+	});
+
+	it("does not duplicate already visible helpers or follow an uncited entry point", async () => {
+		const lines = Array.from({ length: 500 }, () => "// padding");
+		lines[0] = "function cli() { return 1; }";
+		lines[399] = "test('cited', () => cli());";
+		const shown = await helperPack(lines.join("\n"));
+		assert.equal(
+			shown.filter((file) => file.text.includes("function cli")).length,
+			1,
+		);
+
+		lines[0] = "// padding";
+		lines[180] = "function cli() { return 1; }";
+		const stale = await helperPack(lines.join("\n"), 600);
+		assert.doesNotMatch(stale.map(renderInlined).join("\n"), /function cli/);
+	});
+
 	it("includes nearby public tests and their import/harness entry points without changing the contract evidence", async () => {
 		const evidence = [
 			{ path: "src/math/add.ts", start: 180, end: 180, fact: "add export" },
