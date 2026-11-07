@@ -257,6 +257,7 @@ function validated(
 	tamper?: (
 		read: import("../src/validation.ts").ReadAssessment,
 	) => import("../src/validation.ts").ReadAssessment,
+	now?: number,
 ) {
 	const request = pending(state, "validate");
 	const g = request.generation;
@@ -319,6 +320,7 @@ function validated(
 	return selected(
 		handoffCandidate(state, {
 			kind: "effect_completed",
+			now,
 			completion: {
 				kind: "validate",
 				request,
@@ -2764,8 +2766,10 @@ function rebuildingFeedback(
 	};
 }
 
-function feedbackReview() {
-	const build = rebuildingFeedback();
+function feedbackReview(
+	initial: ReturnType<typeof selected> = queuedFeedback(),
+) {
+	const build = rebuildingFeedback(initial);
 	const changed = { ...patch, round: 1, patchDigest: digestOf("round-ending") };
 
 	const built = handoffCandidate(build.state, {
@@ -2827,12 +2831,33 @@ const roundEndings = [
 	"resume_spend",
 	"closed",
 	"withdrawn",
+	"oracle",
+	"infrastructure",
+	"missing_evidence",
+	"assessment_binding",
+	"review_blocked",
+	"repeated_finding",
 ] as const;
 
 for (const ending of roundEndings)
 	test(`F10-2 every round ending settles and has one durable summary: ${ending}`, async () => {
 		const build = rebuildingFeedback();
-		const review = feedbackReview();
+		let review = feedbackReview();
+
+		if (ending === "repeated_finding") {
+			const initial = queuedFeedback();
+
+			const previous = initial.accounts.find(
+				(a) => a.execution.stage === "review",
+			)!.execution;
+
+			assert.ok(previous.stage === "review");
+			review = feedbackReview({
+				...initial,
+				current: { ...initial.current, review: blockingReceipt(previous) },
+			});
+		}
+
 		let state = build.state;
 
 		let event: CandidateEvent = {
@@ -2894,6 +2919,8 @@ for (const ending of roundEndings)
 				"missing_report",
 				"review_failed",
 				"certification",
+				"review_blocked",
+				"repeated_finding",
 			].includes(ending)
 		) {
 			state = review.state;
@@ -2903,7 +2930,12 @@ for (const ending of roundEndings)
 
 			if (ending === "missing_report")
 				state = { ...state, current: { ...state.current, report: null } };
-			const receiptValue = receipt(review.execution);
+
+			const receiptValue =
+				ending === "review_blocked" || ending === "repeated_finding"
+					? blockingReceipt(review.execution)
+					: receipt(review.execution);
+
 			event = {
 				kind: "review_settled",
 				execution: review.execution,
@@ -2935,14 +2967,41 @@ for (const ending of roundEndings)
 				},
 			};
 		} else if (
-			ending === "validation_failed" ||
-			ending === "validation_evidence"
+			[
+				"validation_failed",
+				"validation_evidence",
+				"oracle",
+				"infrastructure",
+				"missing_evidence",
+				"assessment_binding",
+			].includes(ending)
 		) {
 			state = selected(review.validating);
 			const request = pending(state, "validate");
 
-			if (ending === "validation_failed") {
-				const validation = validated(state, false);
+			if (ending !== "validation_evidence") {
+				const failure: import("../src/diagnosis.ts").FailureClass | undefined =
+					ending === "oracle"
+						? { kind: "oracle", cause: "unexpected_base", scenarios: ["S1"] }
+						: ending === "infrastructure"
+							? { kind: "infrastructure", reason: "runner_error" }
+							: ending === "missing_evidence"
+								? { kind: "missing_evidence", reason: "incomplete_ci" }
+								: undefined;
+
+				const validation = validated(
+					state,
+					ending === "assessment_binding",
+					failure,
+					ending === "assessment_binding"
+						? (read) => ({
+								...read,
+								binding: { ...read.binding, runId: digestOf("other-run") },
+							})
+						: undefined,
+					4321,
+				);
+
 				// The assessment callback itself ends the failed validation round.
 				state = selected(validation);
 				event = { ...roundObservation(state), now: 4321 };
@@ -3105,6 +3164,7 @@ for (const ending of roundEndings)
 
 		const summary = pending(stopped.state, "post_notice");
 		assert.equal(summary.notice.kind, "round_summary");
+		assert.equal(summary.at, 4321);
 		assert.equal(
 			selected(stopped.state).feedback?.batches.some(
 				(b) => b.status.kind === "applying",
