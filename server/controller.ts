@@ -74,6 +74,8 @@ import {
 	pumpLedger,
 	parseAttemptEnd,
 	parseRunStart,
+	contextPolicy,
+	legacyRunContext,
 	terminalFailureOf,
 	AUTONOMY_DIGEST,
 	type TerminalEvidence,
@@ -89,7 +91,7 @@ import {
 	type LedgerOutbox,
 	type OutboxJob,
 } from "../src/ledger.ts";
-import { isGitSha } from "../src/workflow.ts";
+import { isGitSha, isRepoSlug } from "../src/workflow.ts";
 import { FAMILY_MISSING, familyClaimsHold, reviewR8 } from "../src/review.ts";
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -2206,45 +2208,83 @@ export function fileRunFiles(
 				: async (input) => {
 						const accounting = fileRunAccounting(root);
 						const existing = await accounting.start(input.runId);
+						const manifest = await readVerificationContext(root);
 
-						if (existing === undefined) return false;
+						if (
+							existing === undefined ||
+							manifest.kind === "refused" ||
+							(manifest.kind === "pinned" && manifest.repo !== input.repo)
+						)
+							return false;
 
-						if (existing !== null)
+						const verification = manifest.kind === "pinned" ? manifest : null;
+
+						if (existing !== null) {
+							const pinned = contextPolicy(existing.context);
+							const context = existing.context;
+
+							const manifestDigest =
+								context.kind === "verification"
+									? context.manifestDigest
+									: context.kind === "legacy"
+										? (context.known.verification?.manifestDigest ?? null)
+										: null;
+
 							return (
-								existing.policy.workflowSha === input.workflowSha &&
-								existing.policy.workflowDigest === input.workflowDigest &&
-								existing.policy.gates.kind === "known"
+								pinned?.workflowSha === input.workflowSha &&
+								pinned.workflowDigest === input.workflowDigest &&
+								pinned.gates.kind === "known" &&
+								manifestDigest === (verification?.digest ?? null)
 							);
+						}
 
 						const begin = (gatesDigest: Digest) => {
-							const start = {
-								v: 1,
-								runId: input.runId,
-								startedAt: input.startedAt,
-								policy: {
-									workflowSha: input.workflowSha,
-									workflowDigest: input.workflowDigest,
-									gates: {
-										kind: "known",
-										value: {
-											sourceSha: input.workflowSha,
-											digest: gatesDigest,
-										},
+							const policy = {
+								workflowSha: input.workflowSha,
+								workflowDigest: input.workflowDigest,
+								gates: {
+									kind: "known",
+									value: {
+										sourceSha: input.workflowSha,
+										digest: gatesDigest,
 									},
-									autonomy: {
-										approveMerge: "always",
-										land: "propose",
-										digest: AUTONOMY_DIGEST,
-									},
+								},
+								autonomy: {
+									approveMerge: "always",
+									land: "propose",
+									digest: AUTONOMY_DIGEST,
 								},
 							} as const;
 
-							// An unloaded admitted workflow leaves the cap out; its rows say so.
-							return accounting.begin(
+							const context =
 								input.runTokenCap === null
-									? start
-									: { ...start, runTokenCap: input.runTokenCap },
-							);
+									? legacyRunContext(
+											{ ...policy, policy, verification },
+											"receipt_missing",
+										)
+									: verification === null
+										? ({
+												kind: "production",
+												policy,
+												trustedCap: input.runTokenCap,
+											} as const)
+										: ({
+												kind: "verification",
+												policy,
+												trustedCap: input.runTokenCap,
+												manifestDigest: verification.digest,
+												effectiveCap: Math.min(
+													input.runTokenCap,
+													verification.tokenCap,
+												),
+											} as const);
+
+							return accounting.begin({
+								v: 2,
+								runId: input.runId,
+								startedAt: input.startedAt,
+								context,
+							});
 						};
 
 						const cached = policyPins.get(input.workflowSha);
@@ -2549,10 +2589,20 @@ export function fileRunAccounting(stateDir: string): RunAccounting {
 	return {
 		async start(runId) {
 			try {
+				const value = parseJsonText(
+					await readFile(join(root, runId, "policy.json"), "utf8"),
+				);
+
+				const manifest =
+					jsonField(objectOf(value), "v") === 1
+						? await readVerificationContext(resolve(stateDir))
+						: null;
+
+				if (manifest?.kind === "refused") return undefined;
+
 				const parsed = parseRunStart(
-					parseJsonText(
-						await readFile(join(root, runId, "policy.json"), "utf8"),
-					),
+					value,
+					manifest?.kind === "pinned" ? manifest : null,
 				);
 
 				return parsed?.runId === runId ? parsed : undefined;
@@ -2635,6 +2685,37 @@ export function fileRunAccounting(stateDir: string): RunAccounting {
 
 /** The verification manifest's name in a verification state directory. */
 export const VERIFICATION_FILE = "verification.json";
+
+async function readVerificationContext(stateDir: string) {
+	const text = await readFile(join(stateDir, VERIFICATION_FILE), "utf8").catch(
+		(error: NodeJS.ErrnoException) =>
+			error.code === "ENOENT" ? null : undefined,
+	);
+
+	if (text === null) return { kind: "production" } as const;
+
+	if (text === undefined) return { kind: "refused" } as const;
+	const object = objectOf(parseJsonText(text));
+	const repo = textOf(jsonField(object, "repo"));
+	const tokenCap = countOf(jsonField(object, "tokenCap"));
+	const issues = arrayOf(jsonField(object, "issues"))?.map(countOf);
+
+	if (
+		object?.v !== 1 ||
+		repo === null ||
+		!isRepoSlug(repo) ||
+		tokenCap === null ||
+		tokenCap === 0 ||
+		issues === undefined ||
+		issues.length === 0 ||
+		issues.some((issue) => issue === null || issue === 0) ||
+		text !==
+			`${JSON.stringify({ v: 1, repo, issues: [...new Set(issues)].sort((a, b) => (a ?? 0) - (b ?? 0)), tokenCap })}\n`
+	)
+		return { kind: "refused" } as const;
+
+	return { kind: "pinned", repo, digest: digestOf(text), tokenCap } as const;
+}
 
 export type VerificationPin =
 	| { readonly kind: "production" }
@@ -3367,9 +3448,11 @@ export async function readTerminalEvidence(
 
 	const generationGates: Record<string, Digest> = {};
 
-	if (start?.policy.gates.kind === "known")
-		generationGates[start.policy.gates.value.sourceSha] =
-			start.policy.gates.value.digest;
+	const admittedPolicy = start == null ? null : contextPolicy(start.context);
+
+	if (admittedPolicy?.gates.kind === "known")
+		generationGates[admittedPolicy.gates.value.sourceSha] =
+			admittedPolicy.gates.value.digest;
 
 	for (const generation of candidate?.kind === "selected"
 		? candidateGenerations(candidate)

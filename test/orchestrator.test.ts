@@ -19,7 +19,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { EXIT, runCli } from "../server/cli.ts";
+import { EXIT, runCli, type ControllerRuntime } from "../server/cli.ts";
 import {
 	sandboxExecutor,
 	runStage,
@@ -41,6 +41,7 @@ import {
 	acquireLock,
 	fileLedgerOutbox,
 	fileRunFiles,
+	pinVerification,
 	controllerCandidatePort,
 	HOLDER_FILE,
 	type ProcessTable,
@@ -103,6 +104,7 @@ import {
 import { advance } from "../src/stages.ts";
 import {
 	AUTONOMY_DIGEST,
+	contextPolicy,
 	ledgerApiOf,
 	parseLedger,
 	pumpLedger,
@@ -991,22 +993,26 @@ function events(logs: { event: string }[]): string[] {
 async function instrument(files: RunFiles) {
 	assert.equal(
 		await files.accounting?.begin({
-			v: 1,
+			v: 2,
 			runId: runOf(14),
 			startedAt: new Date(START).toISOString(),
-			policy: {
-				workflowSha: sha(MAIN_SHA),
-				workflowDigest: digestOf(TRUSTED_WORKFLOW),
-				gates: {
-					kind: "known",
-					value: { sourceSha: sha(MAIN_SHA), digest: digestOf("gates") },
-				},
-				autonomy: {
-					approveMerge: "always",
-					land: "propose",
-					digest: digestOf(
-						JSON.stringify({ approveMerge: "always", land: "propose" }),
-					),
+			context: {
+				kind: "production",
+				trustedCap: TRUSTED_RUN_CAP,
+				policy: {
+					workflowSha: sha(MAIN_SHA),
+					workflowDigest: digestOf(TRUSTED_WORKFLOW),
+					gates: {
+						kind: "known",
+						value: { sourceSha: sha(MAIN_SHA), digest: digestOf("gates") },
+					},
+					autonomy: {
+						approveMerge: "always",
+						land: "propose",
+						digest: digestOf(
+							JSON.stringify({ approveMerge: "always", land: "propose" }),
+						),
+					},
 				},
 			},
 		}),
@@ -2223,7 +2229,7 @@ describe("Orchestrator base qualification", () => {
 		assert.equal(statuses(github, 14).at(-1)?.endsWith(":failed"), true);
 
 		const row = (await outbox.scan())?.[0]?.row?.row;
-		assert.ok(row?.v === 3);
+		assert.ok(row?.v === 4);
 		assert.deepEqual(row.acceptAttempts, {
 			kind: "known",
 			value: [
@@ -2274,7 +2280,7 @@ describe("Orchestrator base qualification", () => {
 		);
 
 		const row = (await outbox.scan())?.[0]?.row?.row;
-		assert.ok(row?.v === 3);
+		assert.ok(row?.v === 4);
 		assert.equal(row.outcome.kind, "budget_exhausted");
 		assert.ok(row.outcome.kind === "budget_exhausted");
 		assert.equal(row.outcome.cap.kind, "unavailable");
@@ -3473,6 +3479,7 @@ async function cli(
 	github: FakeGitHub,
 	signal = new AbortController(),
 	executor = new FakeExecutor(),
+	policySource?: ControllerRuntime["policySource"],
 ) {
 	let stdout = "";
 	let stderr = "";
@@ -3494,6 +3501,7 @@ async function cli(
 			},
 			signal: signal.signal,
 			executor: () => executor,
+			policySource,
 		},
 	});
 
@@ -3620,6 +3628,14 @@ describe("server/cli.ts controller commands", () => {
 		});
 
 		it("only lowers the trusted run cap and marks the terminal row as verification", async () => {
+			const archive = stateDir();
+			const tree = join(archive, "repo", ".github", "factory");
+			mkdirSync(join(tree, "gates"), { recursive: true });
+			writeFileSync(join(tree, "WORKFLOW.md"), TRUSTED_WORKFLOW);
+			writeFileSync(join(tree, "gates", "ci.sh"), "echo trusted\n");
+			const bytes = execFileSync("tar", ["-czf", "-", "-C", archive, "repo"]);
+			const policySource = { fetch: async () => bytes };
+
 			for (const [cap, effective] of [
 				[12_000, 12_000],
 				[TRUSTED_RUN_CAP + 400_000, TRUSTED_RUN_CAP],
@@ -3639,11 +3655,17 @@ describe("server/cli.ts controller commands", () => {
 					String(cap),
 				);
 
-				const run = await cli(argv, github, new AbortController(), executor);
+				const run = await cli(
+					argv,
+					github,
+					new AbortController(),
+					executor,
+					policySource,
+				);
 
 				assert.equal(run.code, EXIT.ok, run.stderr);
 				assert.equal(executor.launches[0]?.remainingRunTokens, effective);
-				await cli(argv, github, new AbortController(), executor);
+				await cli(argv, github, new AbortController(), executor, policySource);
 				assert.equal(statuses(github, 14).at(-1), "3:budget_exhausted");
 
 				const terminal = JSON.parse(
@@ -4507,8 +4529,17 @@ describe("admission accounting policy", () => {
 		assert.equal(await files.prepareRun?.(input), true);
 		const pinned = await files.accounting?.start(input.runId);
 		assert.ok(pinned);
-		assert.equal(pinned.policy.gates.kind, "known");
-		assert.equal(pinned.runTokenCap, TRUSTED_RUN_CAP);
+		assert.equal(pinned.v, 2);
+		assert.equal(pinned.context.kind, "production");
+		const policy = contextPolicy(pinned.context);
+
+		assert.ok(policy);
+		assert.equal(policy.gates.kind, "known");
+		assert.deepEqual(pinned.context, {
+			kind: "production",
+			policy,
+			trustedCap: TRUSTED_RUN_CAP,
+		});
 		assert.equal(
 			statSync(join(dir, "accounting", input.runId, "policy.json")).mode &
 				0o777,
@@ -4526,25 +4557,29 @@ describe("admission accounting policy", () => {
 			}),
 			true,
 		);
-		assert.equal(
-			Object.hasOwn(
-				(await files.accounting?.start(runOf(17))) ?? {},
-				"runTokenCap",
-			),
-			false,
-		);
+		const unknown = await files.accounting?.start(runOf(17));
+		assert.ok(unknown);
+		assert.equal(unknown.context.kind, "legacy");
+		assert.ok(unknown.context.kind === "legacy");
+		assert.deepEqual(unknown.context.known.trustedCap, {
+			kind: "unavailable",
+			reason: "receipt_missing",
+		});
 		assert.equal(fetched, 1);
 		assert.equal(
 			await files.accounting?.begin({
 				...pinned,
 				runId: runOf(16),
-				policy: {
-					...pinned.policy,
-					gates: {
-						kind: "known",
-						value: {
-							sourceSha: sha("f".repeat(40)),
-							digest: digestOf("gates"),
+				context: {
+					...pinned.context,
+					policy: {
+						...policy,
+						gates: {
+							kind: "known",
+							value: {
+								sourceSha: sha("f".repeat(40)),
+								digest: digestOf("gates"),
+							},
 						},
 					},
 				},
@@ -4555,11 +4590,11 @@ describe("admission accounting policy", () => {
 			await files.accounting?.begin({
 				...pinned,
 				runId: runOf(16),
-				policy: {
-					...pinned.policy,
-					autonomy: {
-						...pinned.policy.autonomy,
-						digest: digestOf("not autonomy"),
+				context: {
+					...pinned.context,
+					policy: {
+						...policy,
+						autonomy: { ...policy.autonomy, digest: digestOf("not autonomy") },
 					},
 				},
 			}),
@@ -4607,6 +4642,79 @@ describe("admission accounting policy", () => {
 		const refused = fileRunFiles(stateDir(), { fetch: async () => partial });
 		assert.equal(await refused.prepareRun?.(input), false);
 		assert.equal(await refused.accounting?.start(input.runId), null);
+	});
+
+	it("pins the verification manifest and caps at admission and refuses mixed manifests or scope", async () => {
+		const dir = stateDir();
+		const archive = stateDir();
+		const tree = join(archive, "repo", ".github", "factory");
+		mkdirSync(join(tree, "gates"), { recursive: true });
+		writeFileSync(join(tree, "WORKFLOW.md"), TRUSTED_WORKFLOW);
+		writeFileSync(join(tree, "gates", "ci.sh"), "echo trusted\n");
+		const bytes = execFileSync("tar", ["-czf", "-", "-C", archive, "repo"]);
+		const wanted = { repo, issues: [14], tokenCap: 12_000 };
+		const manifest = await pinVerification(dir, wanted);
+		assert.ok(manifest.kind === "pinned");
+		const files = fileRunFiles(dir, { fetch: async () => bytes });
+
+		const input = {
+			runId: runOf(14),
+			repo,
+			workflowSha: sha(MAIN_SHA),
+			workflowDigest: digestOf(TRUSTED_WORKFLOW),
+			startedAt: new Date(START).toISOString(),
+			runTokenCap: TRUSTED_RUN_CAP,
+		};
+
+		assert.equal(await files.prepareRun?.(input), true);
+		const pinned = await files.accounting?.start(input.runId);
+		assert.ok(pinned);
+		assert.deepEqual(pinned.context, {
+			kind: "verification",
+			policy: contextPolicy(pinned.context),
+			trustedCap: TRUSTED_RUN_CAP,
+			manifestDigest: manifest.digest,
+			effectiveCap: 12_000,
+		});
+
+		const before = readFileSync(
+			join(dir, "accounting", input.runId, "policy.json"),
+		);
+
+		assert.deepEqual(await pinVerification(dir, null), {
+			kind: "refused",
+			reason: "verification_state",
+		});
+
+		for (const mixed of [
+			{ ...wanted, issues: [15] },
+			{ ...wanted, tokenCap: 13_000 },
+			{ ...wanted, repo: slug("other/repo") },
+		])
+			assert.deepEqual(await pinVerification(dir, mixed), {
+				kind: "refused",
+				reason: "verification_manifest_mismatch",
+			});
+		assert.equal(
+			await files.prepareRun?.({ ...input, repo: slug("other/repo") }),
+			false,
+		);
+		assert.equal(
+			await files.prepareRun?.({
+				...input,
+				startedAt: new Date(START + 1_000).toISOString(),
+			}),
+			true,
+		);
+		assert.ok(
+			readFileSync(join(dir, "accounting", input.runId, "policy.json")).equals(
+				before,
+			),
+		);
+		assert.deepEqual(
+			(await fileRunFiles(dir).accounting?.start(input.runId))?.context,
+			pinned.context,
+		);
 	});
 
 	it("defers the first claim until its original workflow and gate policy are durably pinned", async () => {
@@ -9584,7 +9692,7 @@ describe("private build stage", () => {
 			await once(restarted);
 			await restarted.tick();
 			const row = (await outbox.scan())?.[0]?.row?.row;
-			assert.ok(row?.v === 3);
+			assert.ok(row?.v === 4);
 			assert.equal(row.outcome.kind, "failed");
 
 			const failure = {
@@ -10711,10 +10819,14 @@ describe("controller-only validate", () => {
 			const dir = stateDir();
 			const native = fileRunFiles(dir);
 
-			const pin = {
-				digest: digestOf("verification manifest"),
+			const manifest = await pinVerification(dir, {
+				repo,
+				issues: [14],
 				tokenCap: 12_000,
-			};
+			});
+
+			assert.ok(manifest.kind === "pinned");
+			const pin = manifest;
 
 			const f = await reviewingRun(undefined, (world) => {
 				world.options.verification = pin;
@@ -10750,7 +10862,20 @@ describe("controller-only validate", () => {
 
 					// A legacy pin is one an earlier build wrote, with no captured run cap.
 					return native.accounting!.begin(
-						captured ? { ...start, runTokenCap: input.runTokenCap } : start,
+						captured
+							? {
+									v: 2,
+									runId: input.runId,
+									startedAt: input.startedAt,
+									context: {
+										kind: "verification",
+										policy: start.policy,
+										trustedCap: input.runTokenCap,
+										manifestDigest: pin.digest,
+										effectiveCap: Math.min(input.runTokenCap!, pin.tokenCap),
+									},
+								}
+							: start,
 					);
 				};
 			});
@@ -10760,7 +10885,9 @@ describe("controller-only validate", () => {
 			await f.controller.tick();
 			await f.controller.tick();
 			assert.equal(f.files.claims.get(runOf(14))?.status, "waiting");
-			const policy = (await native.accounting?.start(runOf(14)))?.policy;
+			const admitted = await native.accounting?.start(runOf(14));
+			assert.ok(admitted);
+			const policy = contextPolicy(admitted.context);
 			assert.ok(policy);
 
 			const port = controllerCandidatePort({
@@ -10797,6 +10924,7 @@ describe("controller-only validate", () => {
 				args.some((arg) => arg.includes("WORKFLOW.md"))
 					? Promise.resolve({ code: 1, stdout: "", stderr: "HTTP 502" })
 					: f.github.exec(command, args);
+			f.options.verification = null;
 			const restarted = f.start();
 			const report = await restarted.tick();
 			assert.deepEqual(report.dispatch.reasons, ["workflow_unavailable"]);
@@ -10814,7 +10942,14 @@ describe("controller-only validate", () => {
 				trustedRunTokenCap: captured
 					? TRUSTED_RUN_CAP
 					: { kind: "unavailable", reason: "legacy_not_recorded" },
-				effectiveRunTokenCap: pin.tokenCap,
+				effectiveRunTokenCap: captured
+					? pin.tokenCap
+					: { kind: "unavailable", reason: "legacy_not_recorded" },
+			});
+			assert.deepEqual(terminal.runContext, admitted.context);
+			assert.deepEqual(terminal.terminalWorkflowObservation, {
+				kind: "unavailable",
+				reason: "receipt_missing",
 			});
 			await restarted.tick();
 			const row = (await native.ledger?.scan())?.[0]?.row?.row;
@@ -11888,7 +12023,7 @@ describe("controller-only validate", () => {
 		};
 
 		const row = (await outbox.scan())?.[0]?.row?.row;
-		assert.ok(row?.v === 3);
+		assert.ok(row?.v === 4);
 		assert.deepEqual(row.failure, failed);
 		assert.deepEqual(row.outcome, {
 			kind: "failed",
@@ -14602,6 +14737,73 @@ describe("ledger outbox enrollment", () => {
 		);
 	});
 
+	it("keeps the ordinary terminal path's admitted verification context when the workflow changes", async () => {
+		const dir = stateDir();
+		const native = fileRunFiles(dir);
+		const ctx = needsInfoWorld(native.ledger!);
+		ctx.files.accounting = native.accounting;
+
+		const context = {
+			kind: "verification",
+			policy: {
+				workflowSha: sha(MAIN_SHA),
+				workflowDigest: digestOf(TRUSTED_WORKFLOW),
+				gates: {
+					kind: "known",
+					value: { sourceSha: sha(MAIN_SHA), digest: digestOf("gates") },
+				},
+				autonomy: {
+					approveMerge: "always",
+					land: "propose",
+					digest: AUTONOMY_DIGEST,
+				},
+			},
+			trustedCap: TRUSTED_RUN_CAP,
+			manifestDigest: digestOf("admitted manifest"),
+			effectiveCap: 12_000,
+		} as const;
+
+		assert.equal(
+			await native.accounting?.begin({
+				v: 2,
+				runId: runOf(14),
+				startedAt: new Date(START).toISOString(),
+				context,
+			}),
+			true,
+		);
+		const stage = deferred();
+		ctx.executor.behaviors = [stage.behavior];
+		const controller = ctx.start();
+		await controller.tick();
+		const changed = `${TRUSTED_WORKFLOW}\nChanged guidance after admission.\n`;
+		ctx.github.workflow = changed;
+		await controller.tick();
+		const launch = ctx.executor.launches[0];
+		assert.ok(launch);
+		stage.finish(resultOf(launch, { kind: "passed" }, 300));
+		await once(controller);
+		const row = (await native.ledger?.scan())?.[0]?.row?.row;
+		assert.ok(row && row.v === 4);
+		assert.equal(row.outcome.kind, "needs_info");
+		assert.deepEqual(row.runContext, context);
+		assert.equal(row.provenance.kind, "verification");
+		assert.deepEqual(row.terminalWorkflowObservation, {
+			kind: "known",
+			value: { workflowSha: sha(MAIN_SHA), workflowDigest: digestOf(changed) },
+		});
+		assert.equal(
+			contextPolicy(row.runContext)?.workflowDigest,
+			digestOf(TRUSTED_WORKFLOW),
+		);
+		const before = readFileSync(join(dir, "ledger", runOf(14), "row.json"));
+		ctx.github.workflow = null;
+		await ctx.start().tick();
+		assert.ok(
+			readFileSync(join(dir, "ledger", runOf(14), "row.json")).equals(before),
+		);
+	});
+
 	it("makes accounting unavailable, never a known empty zero, when the stages directory cannot be read", async () => {
 		const dir = stateDir();
 		const native = fileRunFiles(dir);
@@ -14742,7 +14944,14 @@ describe("ledger outbox enrollment", () => {
 					? start
 					: {
 							...start,
-							policy: { ...start.policy, workflowDigest: digestOf("other") },
+							context: {
+								kind: "production" as const,
+								trustedCap: TRUSTED_RUN_CAP,
+								policy: {
+									...contextPolicy(start.context)!,
+									workflowDigest: digestOf("other"),
+								},
+							},
 						};
 			},
 		};
@@ -14895,7 +15104,7 @@ describe("terminal rows keep the real cause", () => {
 		}
 
 		const row = (await outbox.scan())?.[0]?.row?.row;
-		assert.ok(row?.v === 3, "a version 3 row");
+		assert.ok(row?.v === 4, "a version 4 row");
 
 		return { ...f, dir, row };
 	}
