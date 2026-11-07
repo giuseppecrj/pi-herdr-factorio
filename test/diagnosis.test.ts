@@ -16,6 +16,8 @@ import { test } from "node:test";
 import { acceptanceEntries, writeAcceptance } from "../src/accept.ts";
 import {
 	assessBase,
+	assessVisibleChecks,
+	assessCiFailure,
 	BASE_RETRY,
 	baseRefusalNotice,
 	baseRetryFeedback,
@@ -805,6 +807,169 @@ function unitInput(
 		...overrides,
 	};
 }
+
+test("check assessments preserve independent CI failures without relaxing dual-tree attribution", () => {
+	const input = unitInput({
+		receiptPatch: {
+			checks: [
+				"baseline_tests",
+				"typecheck",
+				"lint",
+				"format",
+				"main_tests",
+				"candidate_tests",
+				"heldout",
+			].map((name) => ({
+				name,
+				exitCode: ["typecheck", "lint", "heldout"].includes(name) ? 1 : 0,
+			})),
+		},
+	});
+	const replay = input.replay;
+	assert.ok(replay?.kind === "observed");
+	const assessed = assessCiFailure({
+		...input,
+		replay: {
+			...replay,
+			full: {
+				...replay.full,
+				projection: { ...replay.full.projection, passed: true },
+			},
+		},
+	});
+	assert.equal(assessed.kind, "unavailable");
+	assert.deepEqual(assessed.failure, {
+		kind: "missing_evidence",
+		reason: "tree_replays_disagree",
+	});
+	assert.deepEqual(
+		assessed.failedChecks.map((c) => c.name),
+		["typecheck", "lint", "heldout"],
+	);
+	assert.deepEqual(
+		assessed.failure,
+		classifyFailure({
+			...input,
+			replay: {
+				...replay,
+				full: {
+					...replay.full,
+					projection: { ...replay.full.projection, passed: true },
+				},
+			},
+		}),
+	);
+});
+
+test("check assessment gives a candidate-only CI check a reasoned control proof", () => {
+	const assessed = assessCiFailure(
+		unitInput({
+			receiptPatch: { reason: "npmrc_changed", checks: [] },
+			replay: null,
+		}),
+	);
+	assert.equal(assessed.kind, "candidate_failure");
+	if (assessed.kind !== "candidate_failure") return;
+	assert.equal(assessed.proof.kind, "candidate_only_check");
+	assert.ok(JSON.stringify(assessed.proof).includes("npmrc_changed"));
+});
+
+test("visible check assessments require comparable control identities before blame", () => {
+	const environment = {
+		dependenciesDigest: digestOf("lock"),
+		runtimeDigest: digestOf("bundle + sandbox"),
+	};
+	const result = {
+		command: "node --test test/*.ts",
+		exitCode: 1,
+		tail: "nested bwrap: EPERM",
+		wallMs: 1,
+		environment,
+	};
+	const receipt = {
+		runId: digestOf("assessment"),
+		baseSha: "a".repeat(40),
+		patchDigest: digestOf("patch"),
+		visibleTests: { ...result, base: { ...result, exitCode: 0 } },
+	};
+	const regression = assessVisibleChecks(receipt);
+	assert.equal(regression.kind, "candidate_failure");
+	if (regression.kind === "candidate_failure")
+		assert.equal(regression.proof.kind, "base_passed");
+	assert.deepEqual(regression.binding.candidate, {
+		kind: "patch",
+		digest: receipt.patchDigest,
+	});
+	assert.equal(
+		assessVisibleChecks({
+			...receipt,
+			visibleTests: { ...result, base: result },
+		}).kind,
+		"base_failure",
+	);
+	// A base-only failure is still a veto, not a green candidate.
+	assert.equal(
+		assessVisibleChecks({
+			...receipt,
+			visibleTests: { ...result, exitCode: 0, base: result },
+		}).kind,
+		"base_failure",
+	);
+	assert.equal(
+		assessVisibleChecks({
+			...receipt,
+			visibleTests: { ...result, exitCode: 0 },
+		}).kind,
+		"passed",
+	);
+	assert.equal(
+		assessVisibleChecks({ ...receipt, visibleTests: null }).kind,
+		"pending",
+	);
+	assert.equal(
+		assessVisibleChecks({ ...receipt, visibleTests: result }, "candidate").kind,
+		"pending",
+	);
+	for (const [base, reason] of [
+		[undefined, "base_missing"],
+		[{ ...result, exitCode: null, detail: "timeout" }, "timeout"],
+		[{ ...result, exitCode: 0, environment: undefined }, "identity_mismatch"],
+		[
+			{
+				...result,
+				exitCode: 0,
+				environment: {
+					...environment,
+					runtimeDigest: digestOf("another runtime"),
+				},
+			},
+			"identity_mismatch",
+		],
+		[
+			{
+				...result,
+				exitCode: 0,
+				environment: {
+					...environment,
+					dependenciesDigest: digestOf("another lock"),
+				},
+			},
+			"identity_mismatch",
+		],
+	] as const) {
+		const assessed = assessVisibleChecks({
+			...receipt,
+			visibleTests: { ...result, base },
+		});
+		assert.equal(assessed.kind, "unavailable");
+		if (assessed.kind === "unavailable") assert.equal(assessed.reason, reason);
+	}
+	const timedOut = assessVisibleChecks({
+		...receipt,
+		visibleTests: { ...result, exitCode: null, detail: "timeout" },
+	});
+	assert.equal(timedOut.kind, "unavailable");
+});
 
 test("classifier: agreeing replays after a qualified base blame the candidate", () => {
 	assert.deepEqual(classifyFailure(unitInput()), {
