@@ -19,6 +19,7 @@ import {
 	type GenerationRef,
 	type RepairCause,
 	type PrObservation,
+	type HandoffReason,
 } from "./handoff.ts";
 import {
 	REVIEW_TOOLS,
@@ -635,6 +636,7 @@ export type ActiveRun = {
 	/** The highest marker `seq` on the issue that this controller knows landed. */
 	seq: number;
 	marked: Marker | null;
+	markedHoldReason?: HandoffReason;
 	inflight: InflightMarker | null;
 	claimUnwritten: boolean;
 	workspaceMissing: boolean;
@@ -7137,6 +7139,11 @@ export class Orchestrator {
 		const status = desiredStatus(run.phase);
 		const marked = run.marked;
 
+		const holdReason =
+			run.handoff?.kind === "selected" && run.handoff.work.kind === "held"
+				? run.handoff.work.reason
+				: undefined;
+
 		const next = {
 			repo: this.#input.repo,
 			status,
@@ -7152,6 +7159,7 @@ export class Orchestrator {
 		if (
 			marked === null ||
 			marked.status !== status ||
+			run.markedHoldReason !== holdReason ||
 			marked.stage !== run.stage ||
 			marked.attempt !== run.attempt ||
 			marked.usage !== run.usage ||
@@ -7164,11 +7172,18 @@ export class Orchestrator {
 		) {
 			const post = await this.#writer.postComment(
 				run.issue,
-				formatMarker(marker),
+				formatMarker(
+					marker,
+					holdReason,
+					run.handoff === undefined
+						? marker.round
+						: candidateProjection(run.handoff).round,
+				),
 			);
 
 			if (post.kind === "posted") {
 				this.state.totals.markersPosted++;
+				run.markedHoldReason = holdReason;
 				this.#landed(run, marker);
 			} else {
 				run.inflight = { marker, outcome: post.kind, tick: this.#ticks };

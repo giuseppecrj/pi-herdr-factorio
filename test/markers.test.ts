@@ -227,7 +227,15 @@ const holdLabels = {
 describe("held marker text", () => {
 	for (const [reason, label] of Object.entries(holdLabels)) {
 		it(`explains ${reason} without changing the marker wire format`, () => {
-			const value = marker({ v: 2, status: "blocked", stage: "build", round: 1 });
+			const value = marker({
+				v: 2,
+				status: "blocked",
+				stage: "build",
+				round: 1,
+				candidate: null,
+				ciRun: null,
+			});
+
 			// SAFETY: holdLabels is exhaustively checked against HandoffReason above.
 			const body = formatMarker(value, reason as HandoffReason);
 

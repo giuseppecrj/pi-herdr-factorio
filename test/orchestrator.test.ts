@@ -12536,6 +12536,7 @@ describe("controller-only validate", () => {
 			assert.equal(result.work.kind, "held");
 			const heldMarker = f.github.markers(14).at(-1) ?? "";
 
+			assert.equal(parseMarker(heldMarker).kind, "marker");
 			assert.ok(heldMarker.includes(`(${result.work.reason})`));
 			assert.doesNotMatch(heldMarker, /the stage sandbox is unavailable/);
 
