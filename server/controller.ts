@@ -16,7 +16,6 @@ import {
 	type RoundReceipt,
 	type FeedbackDisposition,
 	type BuilderDisposition,
-	type BatchOutcome,
 	type FeedbackBatch,
 	type FeedbackEvent,
 	type FeedbackId,
@@ -6253,10 +6252,7 @@ export function controllerCandidatePort(config: {
 }
 
 function roundDisposition(
-	outcome: Extract<
-		BatchOutcome,
-		{ kind: "applied" | "merged" | "superseded" | "stopped" }
-	>,
+	outcome: RoundReceipt["outcome"],
 	item: Omit<BuilderDisposition, "event"> | undefined,
 ): FeedbackDisposition {
 	if (outcome.kind === "merged")
@@ -6265,7 +6261,7 @@ function roundDisposition(
 	if (outcome.kind === "superseded")
 		return { kind: "rejected", reason: "superseded" };
 
-	if (outcome.kind === "stopped")
+	if (outcome.kind === "stopped" || outcome.kind === "build_failed")
 		return { kind: "rejected", reason: "repair_stopped" };
 
 	return item?.kind === "adopted"
@@ -6278,6 +6274,7 @@ function feedbackRound(
 	state: Extract<CandidateState, { kind: "selected" }>,
 	ref: FeedbackBatchRef,
 	appliedHead?: import("../src/workflow.ts").GitSha,
+	failedAttempt?: number,
 ): Readonly<{ receipt: RoundReceipt; batchAvailable: boolean }> | null {
 	const read = readFeedbackBatch(stateDir, state.pin.runId, ref.digest);
 
@@ -6295,11 +6292,13 @@ function feedbackRound(
 	if (round === undefined) return null;
 
 	const outcome =
-		appliedHead === undefined
-			? ref.status.kind === "settled"
-				? ref.status.outcome
-				: null
-			: { kind: "applied" as const, head: appliedHead };
+		failedAttempt !== undefined
+			? { kind: "build_failed" as const }
+			: appliedHead === undefined
+				? ref.status.kind === "settled"
+					? ref.status.outcome
+					: null
+				: { kind: "applied" as const, head: appliedHead };
 
 	if (
 		outcome === null ||
@@ -6356,7 +6355,8 @@ function feedbackRound(
 		(a) =>
 			a.execution.stage === "build" &&
 			a.execution.cause.kind === "feedback" &&
-			a.execution.cause.batch === ref.digest,
+			a.execution.cause.batch === ref.digest &&
+			(failedAttempt === undefined || a.execution.attempt === failedAttempt),
 	)?.execution;
 
 	const prior =
@@ -6401,7 +6401,7 @@ function feedbackRound(
 	return {
 		receipt: {
 			round,
-			attempt: build?.attempt ?? ref.attempt ?? 1,
+			attempt: failedAttempt ?? build?.attempt ?? ref.attempt ?? 1,
 			outcome,
 			batch: ref.digest,
 			items,
@@ -6505,6 +6505,13 @@ async function keepFeedbackRounds(
 	state: Extract<CandidateState, { kind: "selected" }>,
 ): Promise<void> {
 	for (const ref of state.feedback?.batches ?? []) {
+		for (const attempt of ref.failedAttempts ?? []) {
+			const failed = feedbackRound(stateDir, state, ref, undefined, attempt);
+
+			if (failed !== null)
+				await keepRoundReceipt(stateDir, state.pin.runId, failed.receipt);
+		}
+
 		if (ref.status.kind !== "settled" || ref.round === undefined) continue;
 		const receipt = feedbackRound(stateDir, state, ref);
 

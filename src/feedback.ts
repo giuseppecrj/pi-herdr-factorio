@@ -121,6 +121,8 @@ export type FeedbackBatchRef = Readonly<{
 	/** Retained after settlement so round receipts can be recovered after a crash. */
 	round?: 1 | 2;
 	attempt?: number;
+	/** Failed build attempts that were automatically retried within this batch. */
+	failedAttempts?: readonly number[];
 	actionable: boolean;
 	reviews: readonly FeedbackId[];
 	notice: BatchNotice;
@@ -191,10 +193,12 @@ export type FindingDisposition = Readonly<{
 export type RoundReceipt = Readonly<{
 	round: 1 | 2;
 	attempt: number;
-	outcome: Extract<
-		BatchOutcome,
-		{ kind: "applied" | "stopped" | "merged" | "superseded" }
-	>;
+	outcome:
+		| Extract<
+				BatchOutcome,
+				{ kind: "applied" | "stopped" | "merged" | "superseded" }
+		  >
+		| Readonly<{ kind: "build_failed" }>;
 	batch: Digest;
 	items: readonly Readonly<{
 		event: FeedbackId;
@@ -689,6 +693,7 @@ export function wireFeedbackCursor(
 				...(b.binding === undefined ? [] : ["binding"]),
 				...(b.round === undefined ? [] : ["round"]),
 				...(b.attempt === undefined ? [] : ["attempt"]),
+				...(b.failedAttempts === undefined ? [] : ["failedAttempts"]),
 			]) ||
 			!text(b.digest) ||
 			!isDigest(b.digest) ||
@@ -713,6 +718,17 @@ export function wireFeedbackCursor(
 		if (
 			b.attempt !== undefined &&
 			(!count(b.attempt) || b.attempt < 1 || b.attempt > 3)
+		)
+			return false;
+
+		if (
+			b.failedAttempts !== undefined &&
+			(!Array.isArray(b.failedAttempts) ||
+				b.failedAttempts.length > 3 ||
+				new Set(b.failedAttempts).size !== b.failedAttempts.length ||
+				!b.failedAttempts.every(
+					(attempt) => count(attempt) && attempt >= 1 && attempt <= 3,
+				))
 		)
 			return false;
 

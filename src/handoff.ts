@@ -2384,6 +2384,24 @@ export function handoffCandidate(
 						reason === null
 							? {
 									...updated,
+									feedback:
+										updated.feedback === null
+											? null
+											: {
+													...updated.feedback,
+													batches: updated.feedback.batches.map((batch) =>
+														event.execution.cause.kind === "feedback" &&
+														batch.digest === event.execution.cause.batch
+															? {
+																	...batch,
+																	failedAttempts: [
+																		...(batch.failedAttempts ?? []),
+																		event.execution.attempt,
+																	],
+																}
+															: batch,
+													),
+												},
 									work: {
 										kind: "repair_due",
 										round: event.execution.round,
