@@ -4476,6 +4476,92 @@ describe("server/cli.ts controller commands", () => {
 		);
 	});
 
+	for (const coverage of ["exact", "missing", "unsettled"]) {
+		it(`status JSON aggregates runs with ${coverage} coverage`, async () => {
+			const state = stateDir();
+			const github = new FakeGitHub();
+
+			for (const issue of [14, 15]) {
+				const runGithub = new FakeGitHub();
+				runGithub.add(labeled(issue));
+				const executor = new FakeExecutor();
+				executor.behaviors = [{ kind: "refuse", usage: 40 }];
+				await cli(
+					["tick", "--once", "--json", ...base, "--state-dir", state],
+					runGithub,
+					new AbortController(),
+					executor,
+				);
+				const stage = join(state, "stages", runOf(issue), "specify-1");
+
+				mkdirSync(stage, { recursive: true });
+
+				if (issue === 14 || coverage === "exact") {
+					writeFileSync(
+						join(stage, "receipt.json"),
+						JSON.stringify({
+							version: 1,
+							runId: runOf(issue),
+							stage: "specify",
+							attempt: 1,
+							outcome: { kind: "passed" },
+							turns: 1,
+							wallMs: 10,
+							usage: {
+								total: 40,
+								parent: 40,
+								children: 0,
+								gateway: 40,
+								unreadChildren: 0,
+								byModel: {},
+							},
+						}),
+					);
+				} else if (coverage === "unsettled") {
+					writeFileSync(
+						join(stage, "egress.requests.jsonl"),
+						'{"kind":"result","req":1,"inputTokens":10,"outputTokens":0}\n{"kind":"dispatch","req":2,"inputTokenEstimate":20,"maxOutputTokens":50}\n',
+					);
+				}
+			}
+
+			const result = await cli(
+				["status", "--json", ...base, "--state-dir", state],
+				github,
+			);
+
+			const status = JSON.parse(result.stdout);
+
+			assert.deepEqual(
+				status.accounting.runs.map(
+					(run: { tokens: { kind: string } }) => run.tokens.kind,
+				),
+				[
+					"exact",
+					coverage === "exact"
+						? "exact"
+						: coverage === "missing"
+							? "lower_bound"
+							: "uncertain",
+				],
+			);
+			assert.deepEqual(
+				status.durableUsage,
+				coverage === "exact"
+					? { kind: "exact", unit: "tokens", total: 80 }
+					: {
+							kind: coverage === "missing" ? "lower_bound" : "uncertain",
+							unit: "tokens",
+							total: coverage === "unsettled" ? 120 : 80,
+							reason:
+								coverage === "missing"
+									? "receipt_missing"
+									: "request_unsettled",
+						},
+			);
+		});
+	}
+
 	it("status JSON classifies complete and missing receipt coverage", async () => {
 		const github = new FakeGitHub();
 		const state = stateDir();
@@ -4595,7 +4681,10 @@ describe("server/cli.ts controller commands", () => {
 
 		const unavailable = JSON.parse(missing.stdout);
 		assert.equal(unavailable.accounting.state, "unavailable");
-		assert.equal(unavailable.durableUsage.kind, "unavailable");
+		assert.deepEqual(unavailable.durableUsage, {
+			kind: "unavailable",
+			reason: "legacy_not_recorded",
+		});
 		assert.equal(unavailable.ledger.state, "unreadable");
 		assert.equal(unavailable.ledger.pending, null);
 	});
