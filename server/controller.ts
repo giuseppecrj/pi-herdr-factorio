@@ -3058,6 +3058,60 @@ function validLedgerInstant(value: string): boolean {
 const EXECUTION_NAME =
 	/^(specify|accept|build|review)(?:-r[0-9]+)?-[1-9][0-9]*(?:\.[1-9][0-9]*)?$/;
 
+/** Receipt coverage is independent of token splits and wall-time accounting. */
+async function tokenCoverage(stateDir: string, runId: Digest) {
+	const { readStageReceipt, executionCharge } = await import("./sandbox.ts");
+	const root = join(resolve(stateDir), "stages", runId);
+
+	const names = await readdir(root).catch((error: NodeJS.ErrnoException) =>
+		error.code === "ENOENT" ? [] : null,
+	);
+
+	const attempts = await fileRunAccounting(stateDir).attempts(runId);
+	const stages = new Map<string, boolean>();
+	const covered = new Set<string>();
+
+	for (const name of names ?? []) {
+		const stage = EXECUTION_NAME.exec(name)?.[1];
+
+		if (stage === undefined) continue;
+		const receipt = await readStageReceipt(join(root, name, "receipt.json"));
+		const charge = await executionCharge(join(root, name)).catch(() => null);
+
+		const valid =
+			receipt !== null &&
+			charge !== null &&
+			jsonField(receipt.record, "runId") === runId &&
+			jsonField(receipt.record, "stage") === stage &&
+			jsonField(receipt.record, "attempt") ===
+				Number(/-([1-9][0-9]*)(?:\.[1-9][0-9]*)?$/.exec(name)?.[1]) &&
+			jsonField(receipt.record, "version") === 1;
+
+		stages.set(stage, (stages.get(stage) ?? true) && valid);
+
+		if (valid) covered.add(name);
+	}
+
+	for (const attempt of attempts ?? []) {
+		const valid =
+			covered.has(`${attempt.stage}-r${attempt.round}-${attempt.attempt}`) ||
+			(attempt.round === 0 &&
+				covered.has(`${attempt.stage}-${attempt.attempt}`));
+
+		stages.set(attempt.stage, (stages.get(attempt.stage) ?? true) && valid);
+	}
+
+	return {
+		stages,
+		readable: names !== null && attempts !== null,
+		complete:
+			stages.size > 0 &&
+			names !== null &&
+			attempts !== null &&
+			[...stages.values()].every(Boolean),
+	};
+}
+
 /** Project only validated controller-private records; never scan a workspace. */
 export async function readTerminalEvidence(
 	stateDir: string,
@@ -3082,6 +3136,7 @@ export async function readTerminalEvidence(
 		.filter((name) => EXECUTION_NAME.test(name))
 		.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 
+	const coverage = await tokenCoverage(stateDir, runId);
 	const accounting = fileRunAccounting(stateDir);
 	const attempts = await accounting.attempts(runId);
 	const start = await accounting.start(runId);
@@ -3342,12 +3397,14 @@ export async function readTerminalEvidence(
 							total: data.total,
 							reason: "request_unsettled",
 						}
-					: {
-							kind: "lower_bound",
-							unit: "tokens",
-							total: data.total,
-							reason: "receipt_missing",
-						},
+					: coverage.readable && coverage.stages.get(stage) === true
+						? { kind: "exact", unit: "tokens", total: data.total }
+						: {
+								kind: "lower_bound",
+								unit: "tokens",
+								total: data.total,
+								reason: "receipt_missing",
+							},
 		});
 	}
 
@@ -3448,12 +3505,14 @@ export async function readTerminalEvidence(
 										total,
 										reason: "request_unsettled",
 									}
-								: {
-										kind: "lower_bound",
-										unit: "tokens",
-										total,
-										reason: "receipt_missing",
-									},
+								: coverage.complete && !uncovered
+									? { kind: "exact", unit: "tokens", total }
+									: {
+											kind: "lower_bound",
+											unit: "tokens",
+											total,
+											reason: "receipt_missing",
+										},
 						parentTokens: splitComplete ? known(parent) : missing,
 						childTokens: splitComplete ? known(children) : missing,
 						unattributedTokens:
@@ -3633,6 +3692,7 @@ export async function readRunCharges(
 	floor: number,
 ) {
 	const { executionCharge } = await import("./sandbox.ts");
+	const coverage = await tokenCoverage(stateDir, runId);
 	let readable = true;
 	let total = 0;
 	let uncertainRequests = 0;
@@ -3664,18 +3724,21 @@ export async function readRunCharges(
 		executions,
 		readable,
 		uncertainRequests,
-		tokens: {
-			kind:
-				uncertainRequests > 0
-					? ("uncertain" as const)
-					: ("lower_bound" as const),
-			unit: "tokens" as const,
-			total: Math.max(floor, total),
-			reason:
-				uncertainRequests > 0
-					? ("request_unsettled" as const)
-					: ("receipt_missing" as const),
-		},
+		tokens:
+			coverage.complete && readable && uncertainRequests === 0 && floor <= total
+				? { kind: "exact" as const, unit: "tokens" as const, total }
+				: {
+						kind:
+							uncertainRequests > 0
+								? ("uncertain" as const)
+								: ("lower_bound" as const),
+						unit: "tokens" as const,
+						total: Math.max(floor, total),
+						reason:
+							uncertainRequests > 0
+								? ("request_unsettled" as const)
+								: ("receipt_missing" as const),
+					},
 		money: {
 			kind: "unavailable" as const,
 			reason: "provider_not_reported" as const,
