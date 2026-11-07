@@ -136,9 +136,11 @@ describe("request settlement projection", () => {
 				inputTokens: null,
 				outputTokens: null,
 			});
+
 			const upstream = requestSettlements(
 				journalText([requestFixture(1), provider]),
 			).requests[0];
+
 			const transport = requestSettlements(
 				journalText([
 					requestFixture(1),

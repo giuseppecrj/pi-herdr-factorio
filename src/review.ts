@@ -1,4 +1,8 @@
 import { randomBytes } from "node:crypto";
+import {
+	requestSettlements,
+	settlementReply,
+} from "../server/sandbox/audit.ts";
 import { join } from "node:path";
 import { exclusive, present, privateDir, regularText } from "./artifacts.ts";
 import { checkChangedPaths } from "./policy.ts";
@@ -233,44 +237,30 @@ export function familyFromJournal(input: {
 	)
 		return { kind: "unavailable", reason: "unknown-model" };
 
-	const dispatched = new Set<number>();
-	const settled = new Map<number, Record<string, JsonValue>>();
-	let mixed = false;
+	const journal = requestSettlements(input.journal, { route });
 
-	for (const line of input.journal.split("\n")) {
-		const record = objectOf(parseJson(line));
-		const req = countOf(fieldOf(record, "req"));
-		const at = textOf(fieldOf(record, "route"));
-		const kind = fieldOf(record, "kind");
+	if (journal.routes.some((at) => at !== route && at !== input.superseded))
+		return { kind: "unavailable", reason: "mixed" };
 
-		if (record === null || req === null || at === null) continue;
-
-		if (at !== route) {
-			if (at !== input.superseded) mixed = true;
-
-			continue;
-		}
-
-		if (kind === "dispatch") dispatched.add(req);
-		else if (kind === "result" && !settled.has(req)) settled.set(req, record);
-	}
-
-	if (mixed) return { kind: "unavailable", reason: "mixed" };
-
+	const requests = journal.requests.filter((request) => request.req !== null);
 	let model: string | null = null;
 	let metered = 0;
 
-	if (anthropic && [...dispatched].some((req) => !settled.has(req)))
+	if (
+		anthropic &&
+		requests.some(
+			(request) => request.kind === "Uncertain" && request.result === null,
+		)
+	)
 		return { kind: "unavailable", reason: "unmetered" };
 
-	for (const record of settled.values()) {
-		if (fieldOf(record, "reason") === "provider_rejected") continue;
+	for (const request of requests) {
+		const result = settlementReply(request);
 
-		const tokens =
-			countOf(fieldOf(record, "inputTokens")) !== null &&
-			countOf(fieldOf(record, "outputTokens")) !== null;
+		if (result === null || result.kind === "ProviderRejected") continue;
 
-		const stated = fieldOf(record, "observedModel");
+		const tokens = result.usage.kind === "metered";
+		const stated = result.observedModel;
 
 		if (!anthropic) {
 			if (

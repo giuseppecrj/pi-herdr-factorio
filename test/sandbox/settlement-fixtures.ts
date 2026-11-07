@@ -320,6 +320,7 @@ export function legacyFamily(input: {
 
 	if (input.journal === null) return missing;
 	const anthropic = input.requested.startsWith("anthropic/");
+
 	const route = anthropic
 		? "model-anthropic"
 		: input.requested.startsWith("openai/")
@@ -361,9 +362,11 @@ export function legacyFamily(input: {
 
 	for (const record of settled.values()) {
 		if (fieldOf(record, "reason") === "provider_rejected") continue;
+
 		const tokens =
 			countOf(fieldOf(record, "inputTokens")) !== null &&
 			countOf(fieldOf(record, "outputTokens")) !== null;
+
 		const stated = fieldOf(record, "observedModel");
 
 		if (!anthropic) {

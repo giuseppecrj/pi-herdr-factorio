@@ -113,6 +113,8 @@ import {
 	AUDIT_CAP_BYTES,
 	JOURNAL_FILE,
 	journalCharge,
+	requestSettlements,
+	settlementReply,
 } from "./sandbox/audit.ts";
 import {
 	countOf,
@@ -869,40 +871,27 @@ const UNUSABLE: SessionOutcome = { kind: "failed", exit: "error" };
  * vetoed.
  */
 function anthropicUnmetered(journal: string, settled: boolean): boolean {
-	const dispatched = new Set<number>();
-	const results = new Set<number>();
+	for (const request of requestSettlements(journal, {
+		route: "model-anthropic",
+		stopped: settled,
+	}).requests) {
+		if (request.req === null) continue;
 
-	for (const line of journal.split("\n")) {
-		const record = objectOf(parseJson(line));
-		const req = countOf(fieldOf(record, "req"));
+		if (request.kind === "Uncertain" && request.result === null) return true;
 
-		if (
-			record === null ||
-			req === null ||
-			fieldOf(record, "route") !== "model-anthropic"
-		)
-			continue;
+		for (const result of [settlementReply(request), ...request.laterResults]) {
+			if (
+				result === null ||
+				result.kind === "Unreachable" ||
+				result.kind === "ProviderRejected"
+			)
+				continue;
 
-		if (fieldOf(record, "kind") === "dispatch") {
-			dispatched.add(req);
-			continue;
+			if (result.usage.kind !== "metered") return true;
 		}
-
-		if (fieldOf(record, "kind") !== "result") continue;
-
-		results.add(req);
-
-		if (fieldOf(record, "reason") === "upstream_unreachable") continue;
-
-		if (
-			fieldOf(record, "reason") !== "provider_rejected" &&
-			(countOf(fieldOf(record, "inputTokens")) === null ||
-				countOf(fieldOf(record, "outputTokens")) === null)
-		)
-			return true;
 	}
 
-	return settled && [...dispatched].some((req) => !results.has(req));
+	return false;
 }
 
 /**
@@ -911,18 +900,16 @@ function anthropicUnmetered(journal: string, settled: boolean): boolean {
  * model answered.
  */
 function anthropicMetered(journal: string): boolean {
-	return journal.split("\n").some((line) => {
-		const record = objectOf(parseJson(line));
-
-		return (
-			record !== null &&
-			fieldOf(record, "route") === "model-anthropic" &&
-			fieldOf(record, "kind") === "result" &&
-			fieldOf(record, "reason") !== "provider_rejected" &&
-			countOf(fieldOf(record, "inputTokens")) !== null &&
-			countOf(fieldOf(record, "outputTokens")) !== null
-		);
-	});
+	return requestSettlements(journal, {
+		route: "model-anthropic",
+	}).requests.some((request) =>
+		[settlementReply(request), ...request.laterResults].some(
+			(result) =>
+				result !== null &&
+				result.kind !== "ProviderRejected" &&
+				result.usage.kind === "metered",
+		),
+	);
 }
 
 /** The route a model id is served on in a stage table. */
