@@ -1479,8 +1479,13 @@ type Line = {
 	reason?: "provider_rejected";
 };
 
+import {
+	assertReaderParity,
+	SETTLEMENT_FIXTURES,
+} from "./sandbox/settlement-fixtures.ts";
+
 function journal(...lines: Line[]): string {
-	return lines
+	const text = lines
 		.map((line) =>
 			JSON.stringify({
 				v: 1,
@@ -1500,6 +1505,10 @@ function journal(...lines: Line[]): string {
 			}),
 		)
 		.join("\n");
+
+	assertReaderParity(text);
+
+	return text;
 }
 
 function metered(req: number, route: string, observedModel?: string): Line[] {
@@ -1520,6 +1529,10 @@ const ANTHROPIC = "anthropic/claude-sonnet-5-5";
 const OPENAI = "openai/gpt-6.1-sol";
 
 describe("family evidence", () => {
+	for (const [name, journal] of SETTLEMENT_FIXTURES)
+		it(`preserves journal reader parity: ${name}`, () =>
+			assertReaderParity(journal));
+
 	it("is anthropic-gateway only from metered model-anthropic lines with a table model", () => {
 		assert.deepEqual(
 			familyFromJournal({

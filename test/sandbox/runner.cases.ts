@@ -79,6 +79,11 @@ import {
 	withSkills,
 } from "../../server/sandbox.ts";
 import { AuditLog, type JournalRecord } from "../../server/sandbox/audit.ts";
+import {
+	assertReaderParity,
+	legacyUsability,
+	SETTLEMENT_FIXTURES,
+} from "./settlement-fixtures.ts";
 import type {
 	CloseReason,
 	ControlEvent,
@@ -3416,13 +3421,72 @@ describe("runStage on an Anthropic primary", () => {
 			},
 		);
 
-		h.host.readJournal = () => Promise.resolve(journal);
+		h.host.readJournal = () => {
+			if (journal !== null) assertReaderParity(journal);
+
+			return Promise.resolve(journal);
+		};
 
 		return h;
 	}
 
 	const anthropicInput = (fallback: ModelId | null = null) =>
 		input({ stage: "accept" }, { model: model(CLAUDE), fallback });
+
+	for (const [name, journal] of SETTLEMENT_FIXTURES)
+		it(`preserves the Anthropic usability veto through runStage: ${name}`, async () => {
+			const h = anthropicHarness(
+				[(gw) => gatewayScript(gw, [], PASSED_END)],
+				journal,
+			);
+
+			const expected = legacyUsability(journal, true);
+			const result = await runStage(anthropicInput(), h.host);
+
+			assert.equal(
+				result.kind,
+				!expected.veto && expected.metered ? "passed" : "failed",
+			);
+			assert.deepEqual(h.launches, [CLAUDE]);
+		});
+
+	for (const [name, journal] of SETTLEMENT_FIXTURES)
+		it(`preserves the active and stopped veto around a named fallback: ${name}`, async () => {
+			const h = anthropicHarness(
+				[
+					(gw) =>
+						gatewayScript(
+							gw,
+							[usageEvent("model-anthropic", "error")],
+							ERROR_END,
+						),
+					() =>
+						replayer([
+							started("x"),
+							OPENAI_PASS,
+							{ type: "agent_settled", aborted: false },
+						]),
+				],
+				journal,
+			);
+
+			const active = legacyUsability(journal, false);
+			const stopped = legacyUsability(journal, true);
+
+			const result = await runStage(
+				anthropicInput(model("openai/gpt-6.1-sol")),
+				h.host,
+			);
+
+			assert.deepEqual(
+				h.launches,
+				active.veto ? [CLAUDE] : [CLAUDE, "openai/gpt-6.1-sol"],
+			);
+			assert.equal(
+				result.kind,
+				!active.veto && !stopped.veto ? "passed" : "failed",
+			);
+		});
 
 	it("passes on a metered reply and records the gateway-observed family", async () => {
 		const h = anthropicHarness(

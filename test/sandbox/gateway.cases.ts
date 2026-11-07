@@ -58,6 +58,21 @@ import {
 import type { JsonValue } from "../../src/tickets.ts";
 import { anthropicTable, modelTable } from "./routes.cases.ts";
 
+import { assertReaderParity } from "./settlement-fixtures.ts";
+
+const journals: JournalRecord[][] = [];
+
+after(() => {
+	for (const records of journals)
+		for (let end = 0; end <= records.length; end += 1)
+			assertReaderParity(
+				records
+					.slice(0, end)
+					.map((record) => JSON.stringify(record))
+					.join("\n"),
+			);
+});
+
 const HOST = "127.0.0.1:18080";
 
 // Only root can listen below 1024, so unlike a freed ephemeral port no other
@@ -277,6 +292,9 @@ async function startHarness(
 	const audit: AuditRecord[] = [];
 	const failAudit = { on: false };
 	const journal: JournalRecord[] = [];
+
+	journals.push(journal);
+
 	const upstreamAt: number[] = [];
 	const failJournal = { on: false, upstreamAt };
 
@@ -1635,6 +1653,8 @@ describe("gateway anthropic route", () => {
 
 		const audit: AuditRecord[] = [];
 		const journal: JournalRecord[] = [];
+
+		journals.push(journal);
 		const events: ControlEvent[] = [];
 
 		const socketPath = join(
@@ -2567,6 +2587,9 @@ describe("echo fixture Anthropic replay through the gateway (lane 3, zero tokens
 					stream: true,
 				}),
 			);
+
+			for (let end = 0; end <= journal.length; end += 1)
+				assertReaderParity(journal.slice(0, end).join("\n"));
 
 			return {
 				reply,
