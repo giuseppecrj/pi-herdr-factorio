@@ -31,7 +31,12 @@ import type { Message, Model, Usage } from "@earendil-works/pi-ai";
 import { baseTestCommand, buildPrompt } from "../../src/build.ts";
 import { buildPrompt as baselineBuildPrompt } from "../fixtures/efficiency/baseline-build.ts";
 import { syncBuiltinESMExports } from "node:module";
-import { fileRunFiles, serveLoop } from "../../server/controller.ts";
+import {
+	fileRunFiles,
+	serveLoop,
+	storeFeedbackBatch,
+} from "../../server/controller.ts";
+import { feedbackId } from "../../src/feedback.ts";
 import { fileAdmissionStore, admitTicket } from "../../src/admission.ts";
 import { handoffCandidate, parseCandidateState } from "../../src/handoff.ts";
 import { candidateBranch } from "../../src/publication.ts";
@@ -2045,6 +2050,40 @@ describe("private build executor", () => {
 			"found",
 		);
 
+		const repo = "owner/repo";
+		assert.ok(isRepoSlug(repo));
+		const event = feedbackId(repo, "review", 1);
+
+		const declined = {
+			event,
+			kind: "declined",
+			reason: "builder_declined",
+			detail: "Contradicts the contract's exclusions",
+		} as const;
+
+		const batch = await storeFeedbackBatch(
+			stateDir,
+			{
+				version: 1,
+				runId: binding.runId,
+				pr: 1,
+				head: sha,
+				records: [],
+				cards: [
+					{
+						event,
+						head: sha,
+						path: null,
+						line: null,
+						excerpt: "Extract parsePort and add a unit test",
+						truncated: false,
+					},
+				],
+				full: null,
+			},
+			null,
+		);
+
 		for (const attempt of [1, 2]) {
 			mkdirSync(base, { recursive: true, mode: 0o700 });
 			writeFileSync(
@@ -2073,7 +2112,7 @@ describe("private build executor", () => {
 							id: command.id ?? "",
 							command: "get_last_assistant_text",
 							success: true,
-							data: { text: "{}" },
+							data: { text: JSON.stringify({ dispositions: [declined] }) },
 						});
 					replayer([
 						started("x"),
@@ -2097,7 +2136,30 @@ describe("private build executor", () => {
 					stdout: command === "bwrap" ? "bubblewrap 0.9.0\n" : "",
 					stderr: "",
 				}),
-				host: () => h.host,
+				host: (config) => {
+					assert.ok(config.stageDir);
+					const stageDir = config.stageDir;
+
+					return {
+						...h.host,
+						async writeOutput(text) {
+							writeFileSync(join(stageDir, "output.txt"), text, {
+								mode: 0o600,
+							});
+
+							return h.host.writeOutput(text);
+						},
+						async writeReceipt(receipt) {
+							writeFileSync(
+								join(stageDir, "receipt.json"),
+								JSON.stringify(receipt),
+								{ mode: 0o600 },
+							);
+
+							return h.host.writeReceipt(receipt);
+						},
+					};
+				},
 			});
 
 			assert.equal(await executor.preflight(), true);
@@ -2111,6 +2173,29 @@ describe("private build executor", () => {
 				...input({ stage: "build" }),
 				attempt,
 				round: 1,
+				execution: {
+					id: digestOf(`feedback-${attempt}`),
+					stage: "build",
+					runId: binding.runId,
+					round: 1,
+					attempt,
+					workflowSha: sha,
+					workflowDigest: digestOf("workflow"),
+					feedbackFrom: {
+						round: 0,
+						generation: 0,
+						digest: digestOf("generation"),
+					},
+					cause: {
+						kind: "feedback",
+						batch: batch.digest,
+						assessment: {
+							bindingDigest: digestOf("assessment"),
+							recordDigest: digestOf("record"),
+						},
+						review: null,
+					},
+				},
 				workspace,
 				tools: ["read", "bash", "write"],
 				skills: [],
@@ -2140,7 +2225,12 @@ describe("private build executor", () => {
 					}),
 					{
 						kind: "build",
-						result: { kind: "blocked", reason: "repair_no_change" },
+						result: {
+							kind: "blocked",
+							reason: "repair_no_change",
+							dispositions: [declined],
+							findingDispositions: [],
+						},
 					},
 				);
 			} else {
@@ -2166,7 +2256,12 @@ describe("private build executor", () => {
 					}),
 					{
 						kind: "build",
-						result: { kind: "blocked", reason: "repair_no_change" },
+						result: {
+							kind: "blocked",
+							reason: "repair_no_change",
+							dispositions: [declined],
+							findingDispositions: [],
+						},
 					},
 					"the first attempt's outcome remains readable after a later patch exists",
 				);
@@ -6597,11 +6692,13 @@ describe("stage skills", () => {
 					new URL("../../skills/address-pr-comments/SKILL.md", import.meta.url),
 				),
 			);
+
 			const feedback = await withSkills(
 				dir,
 				"build-playbook=feedback\nExtract parsePort plus a unit test.",
 				["build", "address-pr-comments"],
 			);
+
 			assert.ok(feedback);
 			assert.doesNotMatch(feedback, /Reproduce (?:the bug|a concrete defect)/);
 			assert.doesNotMatch(feedback, /Pstack (?:bug-fix|feature) playbook/);

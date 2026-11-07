@@ -852,10 +852,12 @@ for (const feedback of [false, true])
 				`build-playbook=${feedback ? "feedback" : "bug-fix"}\n`,
 			),
 		);
+
 		if (feedback) {
 			assert.doesNotMatch(prompt, /Reproduce a bug with a failing test/);
 			assert.match(prompt, /refactor|rename/);
 		}
+
 		assert.match(
 			prompt,
 			/Run npm ci --ignore-scripts once before the first test or lint run if dependencies are missing\./,

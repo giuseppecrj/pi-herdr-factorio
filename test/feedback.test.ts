@@ -139,6 +139,7 @@ test("F10-2 finding decisions are bounded and stored decision fields reject malf
 test("builder decline reasons are concrete, bounded and survive the wire codec", async () => {
 	const classified = await classify([review()]);
 	assert.ok(classified.kind === "read" && classified.batch);
+
 	const decisions = builderDispositions(
 		JSON.stringify({
 			dispositions: [
@@ -152,6 +153,7 @@ test("builder decline reasons are concrete, bounded and survive the wire codec",
 		}),
 		classified.batch.cards,
 	);
+
 	assert.equal(decisions.length, 1);
 	assert.equal(decisions[0]?.kind, "declined");
 	assert.equal(wireBuilderDecisions(decisions, "event"), true);
