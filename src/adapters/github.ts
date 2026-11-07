@@ -1,4 +1,9 @@
 import {
+	feedbackId,
+	type FeedbackEvent,
+	type InlineComment,
+} from "../feedback.ts";
+import {
 	hasWriteAccess,
 	type PermissionLevel,
 	parsePermissionLevel,
@@ -718,6 +723,122 @@ export class GitHubTicketAdapter implements TicketReader {
 		return { kind: "ok", value: records };
 	}
 
+	async readPullReviews(
+		pr: number,
+	): Promise<Read<Extract<FeedbackEvent, { kind: "review" }>[]>> {
+		const read = await this.#pages(`pulls/${pr}/reviews`);
+
+		if (read.kind === "failed") return read;
+		const reviews: Extract<FeedbackEvent, { kind: "review" }>[] = [];
+
+		for (const item of read.value) {
+			const v = objectOf(item);
+			const id = idOf(v?.id);
+			const state = stringOf(v?.state);
+
+			if (state === "PENDING") continue;
+			const actor = stringOf(pathOf(v?.user, ["login"]));
+			const at = timestampOf(v?.submitted_at);
+			const commit = stringOf(v?.commit_id);
+			const body = bodyTextOf(v?.body);
+
+			if (
+				id === null ||
+				actor === null ||
+				!isLogin(actor) ||
+				at === null ||
+				commit === null ||
+				!isGitSha(commit) ||
+				body === null ||
+				(state !== "CHANGES_REQUESTED" &&
+					state !== "APPROVED" &&
+					state !== "COMMENTED" &&
+					state !== "DISMISSED")
+			)
+				return MALFORMED;
+			reviews.push({
+				kind: "review",
+				id: feedbackId(this.repo, "review", Number(id)),
+				pr,
+				actor,
+				at,
+				state,
+				commit,
+				body,
+				comments: [],
+			});
+		}
+
+		return { kind: "ok", value: reviews };
+	}
+
+	async readReviewComments(
+		pr: number,
+		reviewId: number,
+	): Promise<Read<InlineComment[]>> {
+		const read = await this.#pages(`pulls/${pr}/reviews/${reviewId}/comments`);
+
+		if (read.kind === "failed") return read;
+		const comments: InlineComment[] = [];
+
+		for (const item of read.value) {
+			const v = objectOf(item);
+			const id = idOf(v?.id);
+			const path = stringOf(v?.path);
+			const line = v?.line === null ? null : countOf(v?.line);
+			const commit = stringOf(v?.commit_id);
+			const reply = v?.in_reply_to_id == null ? null : idOf(v.in_reply_to_id);
+			const body = bodyTextOf(v?.body);
+
+			if (
+				id === null ||
+				path === null ||
+				path.length === 0 ||
+				(v?.line !== null && (line === null || line === 0)) ||
+				commit === null ||
+				!isGitSha(commit) ||
+				(v?.in_reply_to_id != null && reply === null) ||
+				body === null
+			)
+				return MALFORMED;
+			comments.push({
+				id: feedbackId(this.repo, "review-comment", Number(id)),
+				path,
+				line,
+				commit,
+				inReplyTo:
+					reply === null
+						? null
+						: feedbackId(this.repo, "review-comment", Number(reply)),
+				body,
+			});
+		}
+
+		return { kind: "ok", value: comments };
+	}
+
+	async readProposedIssues(): Promise<
+		Read<readonly Readonly<{ number: number; body: string }>[]>
+	> {
+		const read = await this.#pages(
+			"issues?state=all&labels=factory%3Aproposed",
+		);
+
+		if (read.kind === "failed") return read;
+		const issues: { number: number; body: string }[] = [];
+
+		for (const item of read.value) {
+			const record = parseIssue(item);
+
+			if (record === null) return MALFORMED;
+
+			if (!record.pullRequest)
+				issues.push({ number: record.number, body: record.body });
+		}
+
+		return { kind: "ok", value: issues };
+	}
+
 	async readComments(issue: number): Promise<Read<IssueComment[]>> {
 		const read = await this.#pages(`issues/${issue}/comments`);
 
@@ -1003,6 +1124,42 @@ export class GitHubTicketWriter implements TicketWriter {
 	constructor(input: { exec: Exec; repo: RepoSlug }) {
 		this.repo = input.repo;
 		this.#exec = input.exec;
+	}
+
+	async createIssue(
+		title: string,
+		body: string,
+		labels: readonly string[],
+	): Promise<CommentPost> {
+		let result: ExecResult;
+
+		try {
+			result = await this.#exec("gh", [
+				"api",
+				"--method",
+				"POST",
+				`repos/${this.repo}/issues`,
+				"-f",
+				`title=${title}`,
+				"-f",
+				`body=${body}`,
+				...labels.flatMap((label) => ["-f", `labels[]=${label}`]),
+			]);
+		} catch {
+			return { kind: "rejected" };
+		}
+
+		if (result.code !== 0) {
+			const { status } = ghFailure(result);
+
+			return status !== null && status >= 400 && status < 500
+				? { kind: "rejected" }
+				: { kind: "unknown" };
+		}
+
+		const id = idOf(pathOf(parseJson(result.stdout), ["number"]));
+
+		return id === null ? { kind: "unknown" } : { kind: "posted", id };
 	}
 
 	async postComment(issue: number, body: string): Promise<CommentPost> {

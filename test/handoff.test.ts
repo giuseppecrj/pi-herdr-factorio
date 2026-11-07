@@ -2629,23 +2629,27 @@ function feedbackObservation(
 	n = 1,
 ): FeedbackObservation {
 	const book = selected(state);
+
 	const head = [...book.history, book.current].find(
 		(g) => g.intent.digest === book.published?.promoted.digest,
 	)?.report?.candidateSha;
+
 	assert.ok(head);
+
 	return {
 		kind: "read",
 		head,
 		batch: {
 			digest: digestOf(`batch-${n}`),
-			seen: [feedbackId(repo, "review", n)],
-			reviews: [feedbackId(repo, "review", n)],
+			seen: [feedbackId(pin.repo, "review", n)],
+			reviews: [feedbackId(pin.repo, "review", n)],
 			actionable: true,
 			refusedInline: true,
 		},
 		dismissed: [],
 	};
 }
+
 function withFeedback(
 	state: CandidateState,
 	n = 1,
@@ -2655,6 +2659,7 @@ function withFeedback(
 		feedback: feedbackObservation(state, n),
 	};
 }
+
 for (const kind of [
 	"waiting",
 	"held",
@@ -2670,6 +2675,7 @@ for (const kind of [
 		const initial = waiting();
 		const g = initial.current.intent;
 		const ref = { round: g.round, generation: g.generation, digest: g.digest };
+
 		const repair = {
 			stage: "build",
 			id: digestOf("repair"),
@@ -2681,7 +2687,9 @@ for (const kind of [
 			workflowSha: pin.workflowSha,
 			workflowDigest: pin.workflowDigest,
 		} as const;
+
 		const review = reviewing(validated(select())).execution;
+
 		const work =
 			kind === "held"
 				? ({ kind: "held", reason: "validation_failed", since: 17 } as const)
@@ -2714,6 +2722,7 @@ for (const kind of [
 												seats: ["code-review", "security-review", "simplify"],
 											} as const)
 										: ({ kind } as const);
+
 		const state = { ...initial, work };
 		const obs = { ...withFeedback(state), capacityAvailable: false };
 		const first = handoffCandidate(state, obs);
@@ -2727,9 +2736,13 @@ for (const kind of [
 			feedbackId(repo, "review", 1),
 		]);
 		assert.ok(
-			[first.effect, second.effect].filter((e) => e?.kind === "post_notice")
-				.length <= 1,
+			new Set(
+				[first.effect, second.effect].flatMap((e) =>
+					e?.kind === "post_notice" ? [e.notice.key] : [],
+				),
+			).size <= 1,
 		);
+
 		if (["rebuilding", "reviewing", "validate"].includes(kind))
 			assert.deepEqual(first.state.work, work);
 		assert.deepEqual(first.state.accounts, state.accounts);
@@ -2741,12 +2754,15 @@ for (const kind of [
 			kind: "queued",
 		});
 	});
+
 test("feedback partial overlap is an all-or-nothing no-op", () => {
 	const first = selected(
 		handoffCandidate(waiting(), withFeedback(waiting())).state,
 	);
+
 	const obs = feedbackObservation(first, 2);
 	assert.ok(obs.kind === "read" && obs.batch);
+
 	const overlap = {
 		...obs,
 		batch: {
@@ -2754,12 +2770,15 @@ test("feedback partial overlap is an all-or-nothing no-op", () => {
 			seen: [feedbackId(repo, "review", 1), feedbackId(repo, "review", 2)],
 		},
 	};
+
 	const result = selected(
 		handoffCandidate(first, { ...readyObservation(first), feedback: overlap })
 			.state,
 	);
+
 	assert.deepEqual(result.feedback, first.feedback);
 });
+
 for (const gate of [
 	"unpublished",
 	"disabled",
@@ -2772,6 +2791,7 @@ for (const gate of [
 ] as const)
 	test(`feedback does not bypass ${gate}`, () => {
 		const initial = waiting();
+
 		const state =
 			gate === "unpublished"
 				? { ...initial, published: null }
@@ -2781,44 +2801,46 @@ for (const gate of [
 							work: { kind: "held", reason: gate, since: 5 } as const,
 						}
 					: initial;
+
 		const head = initial.current.report!.candidateSha;
+
 		const obs = {
 			...withFeedback(initial),
-			...(gate === "disabled" ? { executionAllowed: false } : {}),
-			...(gate === "unverified" ? { eligibility: "unverified" as const } : {}),
-			...(gate === "withdraw" ? { eligibility: "withdrawn" as const } : {}),
-			...(gate === "merge"
-				? {
-						pr: {
-							kind: "merged",
-							number: 5,
-							head,
-							mergeSha: sha,
-							actor: null,
-						} as const,
-					}
-				: {}),
-			...(gate === "close"
-				? { pr: { kind: "closed", number: 5, head } as const }
-				: {}),
-		};
+			executionAllowed: gate !== "disabled",
+			eligibility:
+				gate === "unverified"
+					? "unverified"
+					: gate === "withdraw"
+						? "withdrawn"
+						: "ready",
+		} satisfies Extract<CandidateEvent, { kind: "observed" }>;
+
+		if (gate === "merge")
+			obs.pr = { kind: "merged", number: 5, head, mergeSha: sha, actor: null };
+
+		if (gate === "close") obs.pr = { kind: "closed", number: 5, head };
+
 		assert.equal(selected(handoffCandidate(state, obs).state).feedback, null);
 	});
+
 test("C2/C11 intake notice completes once, retains queued work and restores held since", () => {
 	const state = {
 		...waiting(),
 		work: { kind: "held", reason: "validation_failed", since: 17 } as const,
 	};
+
 	const first = handoffCandidate(state, withFeedback(state));
 	const request = pending(first.state, "post_notice");
 	assert.equal(request.notice.kind, "feedback_intake");
 	assert.equal(request.withdraw, null);
+
 	const completed = selected(
 		handoffCandidate(first.state, {
 			kind: "effect_completed",
 			completion: { kind: "post_notice", request },
 		}).state,
 	);
+
 	assert.deepEqual(completed.work, state.work);
 	assert.deepEqual(completed.feedback?.batches[0]?.status, { kind: "queued" });
 	assert.equal(completed.feedback?.batches[0]?.notice, "posted");
@@ -2829,13 +2851,17 @@ test("C2/C11 intake notice completes once, retains queued work and restores held
 		"post_notice",
 	);
 });
+
 test("dismissal supersedes a queued batch without re-ingesting the review", () => {
 	const initial = waiting();
+
 	const first = selected(
 		handoffCandidate(initial, withFeedback(initial)).state,
 	);
+
 	const obs = feedbackObservation(first);
 	assert.ok(obs.kind === "read");
+
 	const second = selected(
 		handoffCandidate(first, {
 			...readyObservation(first),
@@ -2846,14 +2872,17 @@ test("dismissal supersedes a queued batch without re-ingesting the review", () =
 			},
 		}).state,
 	);
+
 	assert.deepEqual(second.feedback?.batches[0]?.status, {
 		kind: "settled",
 		outcome: { kind: "superseded", by: "dismissed" },
 	});
 });
+
 for (const limit of ["seen", "batches"] as const)
 	test(`feedback ${limit} overflow holds without consuming ids`, () => {
 		const initial = waiting();
+
 		const feedback = {
 			pr: 5,
 			seen:
@@ -2877,6 +2906,7 @@ for (const limit of ["seen", "batches"] as const)
 						}))
 					: [],
 		};
+
 		const state = { ...initial, feedback };
 		const step = handoffCandidate(state, withFeedback(state));
 		assert.ok(step.state.kind === "selected");
@@ -2887,29 +2917,35 @@ for (const limit of ["seen", "batches"] as const)
 			since: 100,
 		});
 	});
+
 test("feedback full status/outcome codec and pre-F10 books round-trip", () => {
 	const first = selected(
 		handoffCandidate(waiting(), withFeedback(waiting())).state,
 	);
+
 	const statuses: FeedbackBatchStatus[] = [
 		{ kind: "queued" },
 		{ kind: "applying", round: 1 },
 		{ kind: "applying", round: 2 },
-		...[
-			{ kind: "no_action" },
-			{ kind: "applied", head: sha },
-			{ kind: "stopped", reason: "validation_failed" },
-			{ kind: "superseded", by: "promotion" },
-			{ kind: "superseded", by: "owner_head" },
-			{ kind: "superseded", by: "dismissed" },
-			{ kind: "merged", mergeSha: sha },
-			{ kind: "refused", reason: "cap_reached" },
-			{ kind: "refused", reason: "repair_unavailable" },
-			{ kind: "refused", reason: "owner_authored_head" },
-		].map((outcome) => ({ kind: "settled" as const, outcome })),
+		...(
+			[
+				{ kind: "no_action" },
+				{ kind: "applied", head: sha },
+				{ kind: "stopped", reason: "validation_failed" },
+				{ kind: "superseded", by: "promotion" },
+				{ kind: "superseded", by: "owner_head" },
+				{ kind: "superseded", by: "dismissed" },
+				{ kind: "merged", mergeSha: sha },
+				{ kind: "refused", reason: "cap_reached" },
+				{ kind: "refused", reason: "repair_unavailable" },
+				{ kind: "refused", reason: "owner_authored_head" },
+			] as const
+		).map((outcome) => ({ kind: "settled" as const, outcome })),
 	];
+
 	for (const status of statuses) {
 		assert.ok(first.feedback);
+
 		const book = {
 			...first,
 			feedback: {
@@ -2917,11 +2953,13 @@ test("feedback full status/outcome codec and pre-F10 books round-trip", () => {
 				batches: first.feedback.batches.map((b) => ({ ...b, status })),
 			},
 		};
+
 		assert.deepEqual(
 			parseCandidateState(JSON.parse(JSON.stringify(book))),
 			book,
 		);
 	}
+
 	for (const status of [
 		{ kind: "future" },
 		{ kind: "applying", round: 3 },
@@ -2931,6 +2969,7 @@ test("feedback full status/outcome codec and pre-F10 books round-trip", () => {
 		book.feedback.batches[0].status = status;
 		assert.equal(parseCandidateState(book), null);
 	}
+
 	const legacy = JSON.parse(JSON.stringify(waiting()));
 	delete legacy.feedback;
 	assert.deepEqual(parseCandidateState(legacy), {

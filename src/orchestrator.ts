@@ -258,6 +258,7 @@ export interface StageExecutor {
 	): Promise<import("./diagnosis.ts").BaseCheckProgress>;
 	stopBase?(runId: Digest): Promise<void>;
 	candidate?: {
+		sweep?(repo: RepoSlug, now: number): Promise<void>;
 		observeMissing?(marker: Marker): Promise<PrObservation>;
 		observe(
 			state: CandidateState,
@@ -1276,6 +1277,11 @@ export class Orchestrator {
 				}
 			}
 		}
+
+		if (open)
+			await this.#input.executor.candidate
+				?.sweep?.(this.#input.repo, now)
+				.catch(() => this.#input.log("feedback_sweep_failed", {}));
 
 		this.#input.log("tick", {
 			dispatch: open,

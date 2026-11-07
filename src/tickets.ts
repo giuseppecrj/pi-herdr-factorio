@@ -21,15 +21,6 @@ export type FactoryEvent =
 			at: string;
 			ref: TicketRef;
 			actor: string;
-	  }
-	| {
-			kind: "pr_feedback";
-			id: string;
-			at: string;
-			ref: TicketRef;
-			actor: string;
-			prUrl: string;
-			comment: string;
 	  };
 
 export type TicketState = {

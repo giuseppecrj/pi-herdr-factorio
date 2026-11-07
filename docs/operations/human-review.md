@@ -33,7 +33,19 @@ If status reports a blocked PR, inspect its reason and evidence gaps before acti
 - At most three issued review attempts per repair round, or the stricter configured value of one or two. Early-stage `retry.max_attempts: 5` remains valid without raising that review ceiling.
 - Review shares 120,000 tokens per round. Repair build shares 200,000. The configured run limit is currently 800,000 tokens. Failed, interrupted, fallback, and child usage remains charged. Existing wall and turn limits still apply per attempt.
 
-Before the first PR, complete failing CI or blocking review can use the shared repair allowance. After a PR exists, conflict, failure, or exhaustion leaves it open, not-ready, and observed. F09a does not implement F10's owner-comment repair loop. Do not delete private state or start a replacement run to reset the same handoff's budget. Escalate unresolved holds with the run ID, PR head, reason, and redacted evidence.
+Before the first PR, complete failing CI or blocking review can use the shared repair allowance. After a PR exists, conflict, failure, or exhaustion leaves it open, not-ready, and observed. F10-1 reads review feedback but does not implement repair. Do not delete private state or start a replacement run to reset the same handoff's budget. Escalate unresolved holds with the run ID, PR head, reason, and redacted evidence.
+
+## Submit review feedback
+
+On an open factory PR, the controller reads conversation comments, submitted reviews and each review's inline comments. It classifies each item once. Only a submitted **Request changes** review from an actor with repository write access, reviewing the promoted head, is actionable. Conversation comments, approvals, questions and dismissed reviews do not request repair. The factory ignores its own messages. A failed permission read defers intake rather than treating the author as unauthorized.
+
+Intake waits until the PR head, branch ref and promoted certified head agree. A review on a successor being promoted is not consumed as stale. A genuinely old-head review is refused. Inline comments under `test/acceptance/` are refused; their text and diff hunks never enter feedback cards or the private full-text file. The review body is the owner's own text and is forwarded when actionable.
+
+**This deploy is intake only.** An actionable review is kept as a `queued` immutable batch for F10-2. One intake notice goes on the issue at the next stage boundary, including any held-out inline refusals without quoting their text. A busy stage is never interrupted by that notice. No repair starts, no code under review changes, and readiness and budgets stay unchanged. The repair slice will recheck a queued batch; a new promoted head or dismissal of all its actionable reviews cancels it.
+
+Private batches and, when truncated, their digest-bound full-text JSON live under `handoff/<run>/feedback/`, mode 0600. Inline cards are capped at 8 KiB. The book's seen set and batch status survive restarts. Cursor overflow holds the run as `feedback_overflow` rather than forgetting feedback. Pre-F10 books still load with an empty feedback cursor; do not roll an older controller back over new feedback history.
+
+After merge, a model-free sweep checks landed ledger PRs at most once an hour per PR. A non-empty write-access review submitted after the merge files one deduplicated `factory:proposed` issue, regardless of review state. Conversation comments never file proposals. Held-out inline text is not quoted. The proposal has no `factory:ready` label and cannot be admitted automatically. Feedback never revives a terminal run.
 
 ## Merge or close as the owner
 

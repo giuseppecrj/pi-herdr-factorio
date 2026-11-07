@@ -32,10 +32,20 @@ import {
 } from "./fake-ticket-adapter.ts";
 
 const repo = FAKE_REPO;
-const head = "a".repeat(40);
-if (!isRepoSlug(repo) || !isGitSha(head)) throw new Error("fixture");
+
+function sha(value: string) {
+	if (!isGitSha(value)) throw new Error("fixture");
+
+	return value;
+}
+
+const head = sha("a".repeat(40));
+
+if (!isRepoSlug(repo)) throw new Error("fixture");
+
 const runId = digestOf("feedback run");
 const id = (n: number) => feedbackId(repo, "review", n);
+
 function review(
 	n = 1,
 	change: Partial<Extract<FeedbackEvent, { kind: "review" }>> = {},
@@ -53,6 +63,7 @@ function review(
 		...change,
 	};
 }
+
 const classify = (
 	events: readonly FeedbackEvent[],
 	seen: readonly import("../src/feedback.ts").FeedbackId[] = [],
@@ -71,13 +82,16 @@ test("feedback identities are provider- and source-qualified", () => {
 	for (const source of ["issue-comment", "review", "review-comment"] as const)
 		assert.equal(feedbackId(repo, source, 12), `github:${repo}:${source}:12`);
 });
+
 test("controller messages are dropped case-insensitively before intake", async () => {
 	const result = await classify([
 		review(1, { actor: BOT_LOGIN.toUpperCase() }),
 	]);
+
 	assert.equal(result.kind, "read");
 	assert.equal(result.kind === "read" && result.batch, null);
 });
+
 for (const state of [
 	"CHANGES_REQUESTED",
 	"APPROVED",
@@ -95,6 +109,7 @@ for (const state of [
 				: { kind: "ignored", reason: "not_change_request" },
 		);
 	});
+
 test("conversation is classified once but cannot request repair", async () => {
 	const result = await classify([
 		{
@@ -106,18 +121,21 @@ test("conversation is classified once but cannot request repair", async () => {
 			body: "fix",
 		},
 	]);
+
 	assert.ok(result.kind === "read" && result.batch);
 	assert.deepEqual(result.batch.records[0]?.intake, {
 		kind: "ignored",
 		reason: "not_change_request",
 	});
 });
+
 for (const [permission, expected] of [
 	["read", "unauthorized"],
 	["failed", "unavailable"],
 ] as const)
 	test(`permission ${permission} never grants feedback authority`, async () => {
 		const result = await classify([review()], [], permission);
+
 		if (expected === "unavailable")
 			assert.deepEqual(result, { kind: "unavailable" });
 		else {
@@ -128,16 +146,16 @@ for (const [permission, expected] of [
 			});
 		}
 	});
+
 test("review of a gone head is refused", async () => {
-	const result = await classify([
-		review(1, { commit: "b".repeat(40) as typeof head }),
-	]);
+	const result = await classify([review(1, { commit: sha("b".repeat(40)) })]);
 	assert.ok(result.kind === "read" && result.batch);
 	assert.deepEqual(result.batch.records[0]?.intake, {
 		kind: "refused",
 		reason: "stale_head",
 	});
 });
+
 test("held-out inline text and diff hunks never enter cards or full text", async () => {
 	const comment = {
 		id: feedbackId(repo, "review-comment", 7),
@@ -147,11 +165,14 @@ test("held-out inline text and diff hunks never enter cards or full text", async
 		inReplyTo: null,
 		body: "PRIVATE-HELDOUT",
 	};
+
+	const withHunk = { ...comment, diff_hunk: "PRIVATE-HUNK" };
+
 	const result = await classify([
 		review(1, {
 			body: "x".repeat(12000),
 			comments: [
-				{ ...comment, diff_hunk: "PRIVATE-HUNK" },
+				withHunk,
 				{
 					...comment,
 					id: feedbackId(repo, "review-comment", 8),
@@ -161,6 +182,7 @@ test("held-out inline text and diff hunks never enter cards or full text", async
 			],
 		}),
 	]);
+
 	assert.ok(result.kind === "read" && result.batch);
 	assert.deepEqual(result.batch.records[0]?.inline[0]?.intake, {
 		kind: "refused",
@@ -174,6 +196,7 @@ test("held-out inline text and diff hunks never enter cards or full text", async
 		result.batch.cards.every((c) => !c.path?.startsWith("test/acceptance/")),
 	);
 });
+
 test("a review with only refused inline text is empty", async () => {
 	const result = await classify([
 		review(1, {
@@ -190,17 +213,20 @@ test("a review with only refused inline text is empty", async () => {
 			],
 		}),
 	]);
+
 	assert.ok(result.kind === "read" && result.batch);
 	assert.deepEqual(result.batch.records[0]?.intake, {
 		kind: "refused",
 		reason: "empty",
 	});
 });
+
 test("seen set admits a lower-id review submitted later and observes dismissals", async () => {
 	const result = await classify(
 		[review(101, { state: "DISMISSED" }), review(100)],
 		[id(101)],
 	);
+
 	assert.ok(result.kind === "read" && result.batch);
 	assert.deepEqual(
 		result.batch.records.map((r) => r.event),
@@ -208,12 +234,14 @@ test("seen set admits a lower-id review submitted later and observes dismissals"
 	);
 	assert.deepEqual(result.dismissed, [id(101)]);
 });
+
 test("batch digest and bytes are independent of event read order", async () => {
 	assert.deepEqual(
 		await classify([review(2), review(1)]),
 		await classify([review(1), review(2)]),
 	);
 });
+
 test("8 KiB cards truncate UTF-8 safely and bind full-text bytes", async () => {
 	const result = await classify([review(1, { body: "😀".repeat(8000) })]);
 	assert.ok(result.kind === "read" && result.batch && result.full);
@@ -228,8 +256,10 @@ test("8 KiB cards truncate UTF-8 safely and bind full-text bytes", async () => {
 		bytes: Buffer.byteLength(result.full),
 	});
 });
+
 test("C1 batch files are exclusive, private and retryable before cursor commit", async () => {
 	const root = mkdtempSync(join(tmpdir(), "feedback-"));
+
 	try {
 		const result = await classify([review(1, { body: "long".repeat(4000) })]);
 		assert.ok(result.kind === "read" && result.batch && result.full);
@@ -240,6 +270,7 @@ test("C1 batch files are exclusive, private and retryable before cursor commit",
 		);
 		const dir = join(root, "handoff", runId, "feedback");
 		assert.equal(readdirSync(dir).length, 2);
+
 		for (const name of readdirSync(dir))
 			assert.equal(statSync(join(dir, name)).mode & 0o777, 0o600);
 		assert.deepEqual(
@@ -250,16 +281,19 @@ test("C1 batch files are exclusive, private and retryable before cursor commit",
 		rmSync(root, { recursive: true, force: true });
 	}
 });
+
 test("head binding defers without reading any feedback source or permission", async () => {
 	const github = new FakeGitHub();
 	const root = mkdtempSync(join(tmpdir(), "feedback-"));
+
 	try {
 		const adapter = new GitHubTicketAdapter({ exec: github.exec, repo });
+
 		for (const [prHead, refHead] of [
 			["b".repeat(40), head],
 			[head, "b".repeat(40)],
 			["b".repeat(40), "b".repeat(40)],
-		]) {
+		] as const) {
 			assert.deepEqual(
 				await observeFeedback({
 					stateDir: root,
@@ -274,16 +308,19 @@ test("head binding defers without reading any feedback source or permission", as
 				{ kind: "deferred" },
 			);
 		}
+
 		assert.equal(github.calls.length, 0);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
 });
+
 test("feedback transport failures are unavailable without files or cursor", async () => {
 	const github = new FakeGitHub();
 	github.add(fakeIssue(5));
 	github.failures.set(`repos/${repo}/pulls/5/reviews`, httpError(503));
 	const root = mkdtempSync(join(tmpdir(), "feedback-"));
+
 	try {
 		assert.deepEqual(
 			await observeFeedback({
@@ -344,6 +381,7 @@ test("C9 merged sweep deduplicates after an issue POST lost its response", async
 	);
 	github.posts.push("landed_unanswered");
 	const root = mkdtempSync(join(tmpdir(), "feedback-"));
+
 	try {
 		const input = {
 			stateDir: root,
@@ -352,12 +390,15 @@ test("C9 merged sweep deduplicates after an issue POST lost its response", async
 			now: 0,
 			landed: [{ runId, pr: 5 }],
 		};
+
 		await sweepMergedFeedback(input);
 		await sweepMergedFeedback({ ...input, now: 3_600_001 });
 		await sweepMergedFeedback({ ...input, now: 7_200_002 });
+
 		const proposals = [...github.issues.values()].filter((i) =>
 			i.labels.includes("factory:proposed"),
 		);
+
 		assert.equal(proposals.length, 1);
 		assert.ok(!proposals[0]?.labels.includes("factory:ready"));
 		assert.doesNotMatch(proposals[0]?.body ?? "", /@owner|other\/repo#1/);

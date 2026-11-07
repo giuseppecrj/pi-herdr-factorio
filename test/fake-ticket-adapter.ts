@@ -336,9 +336,12 @@ export class FakeGitHub {
 	#post(path: string, args: readonly string[]): ExecResult {
 		if (path === `repos/${FAKE_REPO}/issues`) {
 			const behavior = this.posts.shift() ?? "ok";
+
 			if (behavior === "rejected") return httpError(422);
+
 			if (behavior === "lost") return networkError();
 			const number = Math.max(100, ...this.issues.keys()) + 1;
+
 			const issue = this.add(
 				fakeIssue(number, {
 					title: args.find((a) => a.startsWith("title="))?.slice(6) ?? "",
@@ -348,10 +351,12 @@ export class FakeGitHub {
 					),
 				}),
 			);
+
 			return behavior === "landed_unanswered"
 				? networkError()
 				: ok(this.#rest(issue));
 		}
+
 		const match = /^repos\/[^/]+\/[^/]+\/issues\/(\d+)\/comments$/.exec(path);
 		const issue = this.issues.get(Number(match?.[1]));
 		const body = args.find((arg) => arg.startsWith("body="))?.slice(5);
@@ -420,10 +425,13 @@ export class FakeGitHub {
 		const pullRoute = /^pulls\/(\d+)(?:\/reviews(?:\/(\d+)\/comments)?)?$/.exec(
 			route,
 		);
+
 		if (pullRoute !== null) {
 			const number = Number(pullRoute[1]);
+
 			if (!route.includes("/reviews"))
 				return ok(this.pulls.get(number) ?? null);
+
 			return ok(
 				this.#page(
 					pullRoute[2] === undefined

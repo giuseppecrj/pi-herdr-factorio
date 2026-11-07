@@ -68,34 +68,41 @@ describe("PR feedback readers and proposal writer", () => {
 		);
 		assert.doesNotMatch(JSON.stringify(read), /PRIVATE|diff_hunk/);
 	});
+
 	for (const source of ["reviews", "comments"])
 		it(`caps ${source} at 1000 and rejects malformed input`, async () => {
 			const github = new FakeGitHub();
-			const entries = Array.from({ length: 1001 }, (_, n) =>
-				source === "reviews"
-					? {
-							id: n + 1,
-							state: "COMMENTED",
-							commit_id: MAIN_HEAD,
-							body: "text",
-							submitted_at: "2026-11-07T00:00:00Z",
-							user: { login: "writer" },
-						}
-					: {
-							id: n + 1,
-							path: "src/a",
-							line: null,
-							commit_id: MAIN_HEAD,
-							in_reply_to_id: null,
-							body: "text",
-						},
+
+			const entries: JsonValue[] = Array.from(
+				{ length: 1001 },
+				(_, n): JsonValue =>
+					source === "reviews"
+						? {
+								id: n + 1,
+								state: "COMMENTED",
+								commit_id: MAIN_HEAD,
+								body: "text",
+								submitted_at: "2026-11-07T00:00:00Z",
+								user: { login: "writer" },
+							}
+						: {
+								id: n + 1,
+								path: "src/a",
+								line: null,
+								commit_id: MAIN_HEAD,
+								in_reply_to_id: null,
+								body: "text",
+							},
 			);
+
 			if (source === "reviews") github.reviews.set(5, entries);
 			else github.reviewComments.set("5/1", entries);
 			const adapter = adapterFor(github);
+
 			const read = await (source === "reviews"
 				? adapter.readPullReviews(5)
 				: adapter.readReviewComments(5, 1));
+
 			assert.deepEqual(read, {
 				kind: "failed",
 				failure: { kind: "pagination_limit" },
@@ -114,11 +121,13 @@ describe("PR feedback readers and proposal writer", () => {
 	it("creates only the requested proposed issue using argument arrays", async () => {
 		const github = new FakeGitHub();
 		const writer = new GitHubTicketWriter({ exec: github.exec, repo });
+
 		const result = await writer.createIssue(
 			"literal $(touch /tmp/no)",
 			"body",
 			["factory:proposed"],
 		);
+
 		assert.equal(result.kind, "posted");
 		assert.equal(github.issues.size, 1);
 		assert.deepEqual([...github.issues.values()][0]?.labels, [
@@ -126,6 +135,7 @@ describe("PR feedback readers and proposal writer", () => {
 		]);
 	});
 });
+
 const MAIN_HEAD = "a".repeat(40);
 
 function slug(text: string): RepoSlug {

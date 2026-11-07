@@ -965,6 +965,9 @@ function world(scope: readonly number[] | null = null, ledger?: LedgerOutbox) {
 			if (request.kind === "void_readiness")
 				return { kind: "void_readiness", request };
 
+			if (request.kind === "post_notice")
+				return { kind: "post_notice", request };
+
 			return { kind: "finish_pr", request };
 		},
 	};
@@ -12269,11 +12272,13 @@ describe("controller-only validate", () => {
 		it(`F10 C1/C2/C11 durable feedback and one notice across callback double-apply and restart (busy=${busy})`, async () => {
 			const f = await reviewingRun();
 			f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+
 			if (!busy) {
 				await once(f.controller);
 				await f.controller.tick();
 				await f.controller.tick();
 			}
+
 			const port = f.executor.candidate;
 			assert.ok(port);
 			const observe = port.observe;
@@ -12282,8 +12287,10 @@ describe("controller-only validate", () => {
 			const execute = port.execute;
 			port.observe = async (state, now) => {
 				const obs = await observe(state, now);
+
 				if (state.kind !== "selected" || state.published === null) return obs;
 				const head = state.current.report!.candidateSha;
+
 				return {
 					...obs,
 					feedback: {
@@ -12300,16 +12307,22 @@ describe("controller-only validate", () => {
 					},
 				};
 			};
+
 			port.execute = async (state, request) => {
 				if (request.kind !== "post_notice") return execute(state, request);
 				assert.deepEqual(f.files.claims.get(runOf(14))?.handoff, state);
+
 				if (notices === 0) notices++;
+
 				if (lost) {
 					lost = false;
+
 					return null;
 				}
+
 				return { kind: "post_notice", request };
 			};
+
 			if (busy) {
 				await f.controller.tick();
 				await settle();
@@ -12317,6 +12330,7 @@ describe("controller-only validate", () => {
 				const claim = f.files.claims.get(runOf(14));
 				assert.ok(claim?.handoff?.kind === "selected");
 			}
+
 			for (let tick = 0; tick < 6 && notices === 0; tick++)
 				await once(f.controller);
 			assert.equal(notices, 1);
