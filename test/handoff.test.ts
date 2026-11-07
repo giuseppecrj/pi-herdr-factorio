@@ -64,7 +64,13 @@ import { controllerCandidatePort } from "../server/controller.ts";
 import { fileAdmissionStore } from "../src/admission.ts";
 import { CONTROLLER_LOGIN } from "../src/markers.ts";
 import { verdictAssessment, withLocalArtifactDownload } from "./helpers.ts";
-import { readFileSync, rmSync, statSync } from "node:fs";
+import {
+	readFileSync,
+	rmSync,
+	statSync,
+	mkdirSync,
+	writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { fieldOf, objectOf, parseJson } from "../server/sandbox/json.ts";
 
@@ -2767,6 +2773,50 @@ function rebuildingFeedback(
 	};
 }
 
+for (const remaining of [34_361, 59_999, 60_000])
+	for (const budget of ["round", "run"] as const)
+		test(`feedback launch floor: ${budget} remainder ${remaining}`, () => {
+			let state = queuedFeedback();
+			if (budget === "run")
+				state = {
+					...state,
+					priorTokens:
+						state.pin.maxTokens -
+						remaining -
+						(candidateUsage(state) - state.priorTokens),
+				};
+			else {
+				const built = rebuildingFeedback(state);
+				state = {
+					...state,
+					accounts: [
+						...state.accounts,
+						{
+							execution: built.execution,
+							settlement: "settled",
+							spend: {
+								kind: "known",
+								tokens: REPAIR_BUILD_MAX_TOKENS - remaining,
+							},
+						},
+					],
+				};
+			}
+			const next = handoffCandidate(state, readyObservation(state)).state;
+			const notice = pending(next, "post_notice");
+			if (remaining < 60_000) {
+				assert.equal(notice.notice.kind, "round_summary");
+				assert.equal(
+					notice.withdraw,
+					budget === "run" ? "run_tokens" : "repair_tokens",
+				);
+				assert.partialDeepStrictEqual(notice.then, {
+					kind: "held",
+					reason: budget === "run" ? "run_tokens" : "repair_tokens",
+				});
+			} else assert.equal(notice.notice.kind, "repair_started");
+		});
+
 test("a held feedback repair projects its real stage, round and attempt", () => {
 	const build = rebuildingFeedback();
 
@@ -4628,6 +4678,25 @@ for (const outcome of [
 					}).state,
 				);
 				request = pending(state, "post_notice");
+				if (outcome === "held") {
+					const resultPath = join(root, "stages", pin.runId);
+					mkdirSync(resultPath, { recursive: true });
+					writeFileSync(
+						join(resultPath, "build-r1-1-result.json"),
+						JSON.stringify({
+							reason: "repair_no_change",
+							dispositions: [
+								{
+									event: feedbackId(repo, "review", 1),
+									kind: "declined",
+									reason: "builder_declined",
+									detail:
+										"Contradicts the contract @owner other/repo#1 https://github.com/other/repo/issues/2\nnext line",
+								},
+							],
+						}),
+					);
+				}
 			}
 
 			if (outcome === "other_applying") {
@@ -4720,6 +4789,15 @@ for (const outcome of [
 				pr.comments[0]!.body,
 				/PRIVATE-HELDOUT|private\.ts|@owner|other\/repo/,
 			);
+			if (outcome === "held") {
+				assert.match(
+					summary.body,
+					/Builder declined: Contradicts the contract/,
+				);
+				const receipt = JSON.parse(readFileSync(firstReceiptPath, "utf8"));
+				assert.equal(receipt.items[0].builder.kind, "declined");
+				assert.equal(receipt.items[0].builder.reason, "builder_declined");
+			}
 			assert.equal(done.work.kind, success ? "waiting" : "held");
 
 			if (outcome === "other_applying") {
