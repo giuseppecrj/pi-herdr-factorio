@@ -476,7 +476,7 @@ test("head binding defers without reading any feedback source or permission", as
 					refHead,
 					seen: [],
 				}),
-				{ kind: "deferred" },
+				{ kind: "deferred", reason: "head_mismatch" },
 			);
 		}
 
@@ -535,6 +535,117 @@ test("overflow holds read only known-review dismissals, never classify the overf
 	}
 });
 
+test("feedback failures retain their source and failure kind without moving the cursor", async () => {
+	const github = new FakeGitHub();
+	github.add(fakeIssue(5));
+	github.reviews.set(5, [
+		{
+			id: 1,
+			state: "CHANGES_REQUESTED",
+			commit_id: head,
+			body: "fix",
+			submitted_at: "2026-11-07T00:00:00Z",
+			user: { login: "writer" },
+		},
+	]);
+	const root = mkdtempSync(join(tmpdir(), "feedback-"));
+
+	try {
+		for (const [path, reason] of [
+			["issues/5/comments", "comments"],
+			["pulls/5/reviews", "reviews"],
+			["pulls/5/reviews/1/comments", "review_comments"],
+			["collaborators/writer/permission", "permission"],
+		] as const) {
+			github.failures.set(`repos/${repo}/${path}`, httpError(503));
+			assert.deepEqual(
+				await observeFeedback({
+					stateDir: root,
+					adapter: new GitHubTicketAdapter({ exec: github.exec, repo }),
+					runId,
+					pr: 5,
+					head,
+					prHead: head,
+					refHead: head,
+					seen: [],
+				}),
+				{ kind: "unavailable", reason, failure: "gh_failed" },
+			);
+			assert.deepEqual(readdirSync(root), []);
+			github.failures.clear();
+		}
+
+		github.reviewComments.set("5/1", [{ invalid: true }]);
+		assert.deepEqual(
+			await observeFeedback({
+				stateDir: root,
+				adapter: new GitHubTicketAdapter({ exec: github.exec, repo }),
+				runId,
+				pr: 5,
+				head,
+				prHead: head,
+				refHead: head,
+				seen: [],
+			}),
+			{
+				kind: "unavailable",
+				reason: "review_comments",
+				failure: "malformed_response",
+			},
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("feedback storage errors and unexpected exceptions stay observable without leaking error text", async () => {
+	const github = new FakeGitHub();
+	github.add(fakeIssue(5));
+	github.reviews.set(5, [
+		{
+			id: 1,
+			state: "CHANGES_REQUESTED",
+			commit_id: head,
+			body: "fix",
+			submitted_at: "2026-11-07T00:00:00Z",
+			user: { login: "writer" },
+		},
+	]);
+	const root = mkdtempSync(join(tmpdir(), "feedback-"));
+	const adapter = new GitHubTicketAdapter({ exec: github.exec, repo });
+
+	const input = {
+		stateDir: root,
+		adapter,
+		runId,
+		pr: 5,
+		head,
+		prHead: head,
+		refHead: head,
+		seen: [],
+	};
+
+	try {
+		writeFileSync(join(root, "handoff"), "not a directory", { mode: 0o600 });
+		assert.deepEqual(await observeFeedback(input), {
+			kind: "unavailable",
+			reason: "storage",
+			failure: null,
+		});
+		adapter.readPullReviews = async () => {
+			throw new Error("PRIVATE ERROR");
+		};
+
+		assert.deepEqual(await observeFeedback(input), {
+			kind: "unavailable",
+			reason: "unexpected",
+			failure: null,
+		});
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("feedback transport failures are unavailable without files or cursor", async () => {
 	const github = new FakeGitHub();
 	github.add(fakeIssue(5));
@@ -553,9 +664,23 @@ test("feedback transport failures are unavailable without files or cursor", asyn
 				refHead: head,
 				seen: [],
 			}),
-			{ kind: "unavailable" },
+			{ kind: "unavailable", reason: "reviews", failure: "gh_failed" },
 		);
 		assert.deepEqual(readdirSync(root), []);
+		assert.deepEqual(
+			await observeFeedback({
+				stateDir: root,
+				adapter: new GitHubTicketAdapter({ exec: github.exec, repo }),
+				runId,
+				pr: 5,
+				head,
+				prHead: head,
+				refHead: head,
+				seen: [],
+				held: true,
+			}),
+			{ kind: "unavailable", reason: "reviews", failure: "gh_failed" },
+		);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

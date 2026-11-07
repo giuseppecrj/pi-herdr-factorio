@@ -30,6 +30,7 @@ import {
 	type ReviewReceipt,
 } from "./review.ts";
 import type { Verdict } from "./run.ts";
+import type { FeedbackObservation } from "./feedback.ts";
 import { PublicationError } from "./publication.ts";
 
 import {
@@ -751,6 +752,19 @@ export type RunView = {
 	readonly unverified: Unverified | null;
 };
 
+type FeedbackIntakeProblem = Readonly<{
+	issue: number;
+	runId: Digest;
+	eventId: string;
+	pr: number;
+	kind: "unavailable" | "deferred";
+	reason: NonNullable<
+		Extract<FeedbackObservation, { kind: "unavailable" | "deferred" }>["reason"]
+	>;
+	failure: GitHubFailure["kind"] | null;
+	since: number;
+}>;
+
 /** One tick's claim snapshot. Never carries issue text. */
 export type TickReport = {
 	readonly repo: RepoSlug;
@@ -765,6 +779,7 @@ export type TickReport = {
 	/** Runs holding a slot. Above `maxConcurrent` only after the cap was lowered while they ran. */
 	readonly active: number;
 	readonly runs: readonly RunView[];
+	readonly feedbackIntake: readonly FeedbackIntakeProblem[];
 	/** Includes owned holds discovered before a run can be adopted. */
 	readonly unverifiedClaims: readonly (Unverified & {
 		readonly issue: number;
@@ -1134,6 +1149,13 @@ export class Orchestrator {
 	readonly #readOpen = new Set<number>();
 	/** Log history only; ownership and dispatch come from #observations. */
 	readonly #foreignRuns = new Set<Digest>();
+	readonly #feedbackObservations = new Map<
+		Digest,
+		{
+			readonly tick: number;
+			readonly problem: FeedbackIntakeProblem;
+		}
+	>();
 	readonly #local = new Map<number, ConfirmedRecord>();
 	readonly #ended = new Map<Digest, EndedRecord>();
 	readonly #behind = new Map<number, TickReport["ledgerBehind"][number]>();
@@ -4825,6 +4847,70 @@ export class Orchestrator {
 		return true;
 	}
 
+	#observeFeedback(
+		run: ActiveRun,
+		feedback: FeedbackObservation | undefined,
+	): void {
+		const pr =
+			run.handoff?.kind === "selected"
+				? run.handoff.published?.number
+				: undefined;
+
+		if (
+			pr === undefined ||
+			(feedback?.kind !== "unavailable" && feedback?.kind !== "deferred")
+		) {
+			this.#feedbackObservations.delete(run.runId);
+
+			return;
+		}
+
+		const last = this.#feedbackObservations.get(run.runId);
+
+		const previous =
+			last !== undefined && last.tick >= this.#ticks - 1
+				? last.problem
+				: undefined;
+
+		const reason =
+			feedback.reason ??
+			(feedback.kind === "deferred" ? "head_mismatch" : "unexpected");
+
+		const failure =
+			feedback.kind === "unavailable" ? (feedback.failure ?? null) : null;
+
+		if (
+			previous?.kind !== feedback.kind ||
+			previous.reason !== reason ||
+			previous.failure !== failure ||
+			previous.pr !== pr
+		)
+			this.#input.log(`feedback_${feedback.kind}`, {
+				issue: run.issue,
+				runId: run.runId,
+				pr,
+				reason,
+				failure,
+			});
+
+		this.#feedbackObservations.set(run.runId, {
+			tick: this.#ticks,
+			problem: {
+				issue: run.issue,
+				runId: run.runId,
+				eventId: run.eventId,
+				pr,
+				kind: feedback.kind,
+				reason,
+				failure,
+				since:
+					previous?.kind === feedback.kind && previous.pr === pr
+						? previous.since
+						: this.#input.clock.now(),
+			},
+		});
+	}
+
 	async #observeCandidates(executionAllowed: boolean): Promise<void> {
 		const port = this.#input.executor.candidate;
 
@@ -4854,6 +4940,10 @@ export class Orchestrator {
 				.catch(() => null);
 
 			if (observation === null) continue;
+			this.#observeFeedback(
+				run,
+				observation.pr.kind === "open" ? observation.feedback : undefined,
+			);
 
 			let step = handoffCandidate(run.handoff, {
 				...observation,
@@ -7106,6 +7196,14 @@ export class Orchestrator {
 			maxConcurrent: input.limits?.maxConcurrent ?? 0,
 			active: this.#active(),
 			runs,
+			feedbackIntake: [...this.#feedbackObservations.values()]
+				.flatMap((entry) =>
+					entry.tick === this.#ticks &&
+					runs.some((run) => run.runId === entry.problem.runId)
+						? [entry.problem]
+						: [],
+				)
+				.sort((a, b) => a.issue - b.issue),
 			unverifiedClaims: [...this.#observations.entries()]
 				.flatMap(([runId, held]) => {
 					const unverified = claimProjection(

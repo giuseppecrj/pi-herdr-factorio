@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import {
 	actorText,
@@ -24,6 +25,88 @@ import {
 } from "./fake-ticket-adapter.ts";
 
 describe("PR feedback readers and proposal writer", () => {
+	it("accepts recorded per-review comments without modern location fields or reply ids", async () => {
+		const recorded: { reviews: JsonValue[]; comments: JsonValue[] } =
+			JSON.parse(
+				readFileSync(
+					new URL("./fixtures/feedback/github-review.json", import.meta.url),
+					"utf8",
+				),
+			);
+
+		const github = new FakeGitHub();
+		github.reviews.set(651, recorded.reviews);
+		github.reviewComments.set("651/5812783128", recorded.comments);
+
+		for (const item of recorded.comments)
+			for (const key of [
+				"line",
+				"original_line",
+				"side",
+				"start_line",
+				"subject_type",
+				"in_reply_to_id",
+			])
+				assert.ok(item instanceof Object && !Object.hasOwn(item, key));
+		const adapter = adapterFor(github);
+		const reviews = await adapter.readPullReviews(651);
+		assert.ok(reviews.kind === "ok");
+		assert.equal(reviews.value[0]?.state, "CHANGES_REQUESTED");
+		const read = await adapter.readReviewComments(651, 5812783128);
+		assert.ok(read.kind === "ok");
+		assert.deepEqual(
+			read.value.map(({ path, line, commit, inReplyTo }) => ({
+				path,
+				line,
+				commit,
+				inReplyTo,
+			})),
+			[
+				{
+					path: "server/viewer.ts",
+					line: null,
+					commit: "c3567a7adf9121bf6b4c08970fae524eef82d62e",
+					inReplyTo: null,
+				},
+				{
+					path: "test/acceptance/650/checks/invalid-port-spellings.test.ts",
+					line: null,
+					commit: "c3567a7adf9121bf6b4c08970fae524eef82d62e",
+					inReplyTo: null,
+				},
+			],
+		);
+		assert.doesNotMatch(JSON.stringify(read), /diff_hunk|REDACTED-HUNK/);
+	});
+
+	const invalidInline: Record<string, JsonValue>[] = [
+		{ line: 0 },
+		{ line: -1 },
+		{ line: 1.5 },
+		{ line: "5" },
+		{ path: "" },
+		{ commit_id: "invalid" },
+		{ in_reply_to_id: "invalid" },
+	];
+
+	for (const bad of invalidInline)
+		it(`still rejects invalid inline identity or location ${JSON.stringify(bad)}`, async () => {
+			const github = new FakeGitHub();
+			github.reviewComments.set("5/1", [
+				{
+					id: 1,
+					path: "src/a.ts",
+					line: null,
+					commit_id: MAIN_HEAD,
+					body: "fix",
+					...bad,
+				},
+			]);
+			assert.deepEqual(await adapterFor(github).readReviewComments(5, 1), {
+				kind: "failed",
+				failure: { kind: "malformed_response" },
+			});
+		});
 	it("parses paginated submitted reviews with qualified ids, without pending reviews", async () => {
 		const github = new FakeGitHub();
 		github.reviews.set(

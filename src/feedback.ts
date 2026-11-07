@@ -1,4 +1,5 @@
 import type { HandoffReason } from "./handoff.ts";
+import type { GitHubFailure } from "./adapters/github.ts";
 import type { JsonValue } from "./tickets.ts";
 import { CONTROLLER_LOGIN } from "./markers.ts";
 import { posix } from "node:path";
@@ -126,8 +127,23 @@ export type FeedbackCursor = Readonly<{
 	overflow?: Readonly<{ since: number; notice: "due" | "posted" }>;
 }>;
 
+export const FEEDBACK_UNAVAILABLE_REASONS = [
+	"comments",
+	"reviews",
+	"review_comments",
+	"permission",
+	"storage",
+	"unexpected",
+] as const;
+
 export type FeedbackObservation =
-	| Readonly<{ kind: "none" | "deferred" | "unavailable" }>
+	| Readonly<{ kind: "none" }>
+	| Readonly<{ kind: "deferred"; reason?: "head_mismatch" }>
+	| Readonly<{
+			kind: "unavailable";
+			reason?: (typeof FEEDBACK_UNAVAILABLE_REASONS)[number];
+			failure?: GitHubFailure["kind"] | null;
+	  }>
 	| Readonly<{
 			kind: "read";
 			head: GitSha;

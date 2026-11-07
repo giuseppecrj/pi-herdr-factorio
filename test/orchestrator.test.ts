@@ -27,6 +27,8 @@ import {
 } from "../server/sandbox.ts";
 import { PassThrough } from "node:stream";
 import type { JsonValue } from "../src/tickets.ts";
+import type { FeedbackObservation } from "../src/feedback.ts";
+import { readAttention } from "../src/attention.ts";
 import type { ControlEvent } from "../server/sandbox/control.ts";
 import { readViewerRun } from "../server/viewer.ts";
 import { manifestDigest } from "../server/sandbox/manifest.ts";
@@ -51,6 +53,7 @@ import {
 	readRunCharges,
 	serveLoop,
 	writeStatus,
+	observeFeedback,
 } from "../server/controller.ts";
 import { GitHubTicketAdapter } from "../src/adapters/github.ts";
 import {
@@ -12269,6 +12272,194 @@ describe("controller-only validate", () => {
 				2,
 			);
 		});
+
+	it("ingests recorded GitHub review shapes into one queued batch and one intake notice", async () => {
+		const f = await reviewingRun();
+		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+		await once(f.controller);
+		await f.controller.tick();
+		await f.controller.tick();
+		const port = f.executor.candidate;
+		assert.ok(port);
+		const observe = port.observe;
+		const execute = port.execute;
+		const dir = stateDir();
+
+		const recorded: {
+			reviews: Record<string, JsonValue>[];
+			comments: Record<string, JsonValue>[];
+		} = JSON.parse(
+			readFileSync(
+				new URL("./fixtures/feedback/github-review.json", import.meta.url),
+				"utf8",
+			),
+		);
+
+		const book = f.files.claims.get(runOf(14))?.handoff;
+		assert.ok(book?.kind === "selected");
+		const head = promotedHead(book);
+		assert.ok(head);
+		f.github.add(fakeIssue(99, { pullRequest: true }));
+		f.github.reviews.set(
+			99,
+			recorded.reviews.map((r) => ({ ...r, commit_id: head })),
+		);
+		f.github.reviewComments.set(
+			"99/5812783128",
+			recorded.comments.map((c) => ({ ...c, commit_id: head })),
+		);
+		let notices = 0;
+		port.observe = async (state, now) => {
+			const obs = await observe(state, now);
+
+			const feedback = await observeFeedback({
+				stateDir: dir,
+				adapter: new GitHubTicketAdapter({ exec: f.github.exec, repo }),
+				runId: state.pin.runId,
+				pr: 99,
+				head,
+				prHead: head,
+				refHead: head,
+				seen: state.kind === "selected" ? (state.feedback?.seen ?? []) : [],
+			});
+
+			assert.equal(feedback.kind, "read");
+
+			return { ...obs, feedback };
+		};
+
+		port.execute = async (state, request) => {
+			if (request.kind === "post_notice") {
+				assert.equal(request.notice.kind, "feedback_intake");
+				notices++;
+			}
+
+			return execute(state, request);
+		};
+
+		for (let tick = 0; tick < 4; tick++) await f.controller.tick();
+		const stored = f.files.claims.get(runOf(14))?.handoff;
+		assert.ok(stored?.kind === "selected");
+		assert.equal(stored.feedback?.batches.length, 1);
+		assert.equal(stored.feedback.batches[0]?.status.kind, "queued");
+		assert.equal(stored.feedback.batches[0]?.notice, "posted");
+		assert.equal(notices, 1);
+		assert.deepEqual(stored.published, book.published);
+		assert.deepEqual(stored.accounts, book.accounts);
+
+		const batch = readFileSync(
+			join(
+				dir,
+				"handoff",
+				runOf(14),
+				"feedback",
+				`${stored.feedback.batches[0]!.digest}.json`,
+			),
+			"utf8",
+		);
+
+		assert.match(batch, /heldout_path/);
+		assert.doesNotMatch(batch, /REDACTED-HUNK|REDACTED-HELDOUT-CONTENT/);
+		assert.equal(JSON.parse(batch).cards.length, 2);
+	});
+
+	it("logs feedback failures once per reason change and retains their age until recovery", async () => {
+		const f = await reviewingRun();
+		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+		await once(f.controller);
+		await f.controller.tick();
+		await f.controller.tick();
+		const port = f.executor.candidate;
+		assert.ok(port);
+		const observe = port.observe;
+
+		let feedback: FeedbackObservation = {
+			kind: "unavailable",
+			reason: "review_comments",
+			failure: "malformed_response",
+		};
+
+		port.observe = async (state, now) => ({
+			...(await observe(state, now)),
+			feedback,
+		});
+
+		const since = f.clock.now();
+		const first = await f.controller.tick();
+		assert.partialDeepStrictEqual(first, {
+			feedbackIntake: [
+				{
+					runId: runOf(14),
+					issue: 14,
+					eventId: "34537521397",
+					pr: 99,
+					kind: "unavailable",
+					reason: "review_comments",
+					failure: "malformed_response",
+					since,
+				},
+			],
+		});
+		const dir = stateDir();
+		const claim = f.files.claims.get(runOf(14));
+		assert.ok(claim);
+		assert.equal(await fileRunFiles(dir).writeClaim(claim), true);
+		assert.equal(await writeStatus(dir, first), true);
+
+		const attention = await readAttention({
+			stateDir: dir,
+			repo,
+			now: since + 60_000,
+		});
+
+		assert.ok(attention.kind === "available");
+		assert.partialDeepStrictEqual(attention.groups.blocked, [
+			{
+				runId: runOf(14),
+				ageMs: 60_000,
+				reason: "feedback_unavailable:review_comments:malformed_response",
+			},
+		]);
+		assert.equal(attention.groups.pr_review.length, 0);
+		f.clock.t += 60_000;
+		await f.controller.tick();
+		feedback = { kind: "unavailable", reason: "reviews", failure: "gh_failed" };
+		const changed = await f.controller.tick();
+		assert.partialDeepStrictEqual(changed, { feedbackIntake: [{ since }] });
+		await f.controller.tick();
+		const failures = f.logs.filter((l) => l.event === "feedback_unavailable");
+		assert.equal(failures.length, 2);
+		assert.partialDeepStrictEqual(
+			failures.map((l) => l.fields),
+			[
+				{ reason: "review_comments", failure: "malformed_response", pr: 99 },
+				{ reason: "reviews", failure: "gh_failed", pr: 99 },
+			],
+		);
+		feedback = { kind: "deferred", reason: "head_mismatch" };
+		await f.controller.tick();
+		await f.controller.tick();
+		assert.equal(
+			f.logs.filter((l) => l.event === "feedback_deferred").length,
+			1,
+		);
+		feedback = { kind: "none" };
+		assert.partialDeepStrictEqual(await f.controller.tick(), {
+			feedbackIntake: [],
+		});
+		feedback = {
+			kind: "unavailable",
+			reason: "review_comments",
+			failure: "malformed_response",
+		};
+		assert.partialDeepStrictEqual(await f.controller.tick(), {
+			feedbackIntake: [{ since: f.clock.now() }],
+		});
+		assert.equal(
+			f.logs.filter((l) => l.event === "feedback_unavailable").length,
+			3,
+		);
+	});
 
 	for (const busy of [false, true])
 		it(`F10 C1/C2/C11 durable feedback and one notice across callback double-apply and restart (busy=${busy})`, async () => {

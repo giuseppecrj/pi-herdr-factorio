@@ -299,6 +299,25 @@ test("feedback overflow attention uses the durable hold age during notice and af
 	const initial = parseCandidateState(prBook(42, 5, true));
 
 	assert.ok(initial?.kind === "selected");
+	writeFileSync(
+		join(root, "status.json"),
+		JSON.stringify({
+			repo,
+			feedbackIntake: [
+				{
+					runId: initial.pin.runId,
+					issue: 42,
+					eventId: "1",
+					pr: 5,
+					kind: "unavailable",
+					reason: "reviews",
+					failure: "gh_failed",
+					since: 50,
+				},
+			],
+		}),
+		{ mode: 0o600 },
+	);
 
 	for (const notice of ["due", "posted"] as const) {
 		const work =
@@ -345,6 +364,64 @@ test("feedback overflow attention uses the durable hold age during notice and af
 		assert.equal(attention.groups.blocked[0]?.reason, "feedback_overflow");
 		assert.equal(attention.groups.blocked[0]?.ageMs, 900);
 		assert.deepEqual(attention.gaps, []);
+	}
+});
+
+test("unavailable feedback stays blocked with its failure and age; deferred and recovered intake do not", async () => {
+	const root = fixture();
+
+	const runId = claim(root, 42, "waiting", {
+		stage: "land",
+		enteredAt: 900,
+		handoff: prBook(42, 5, true),
+	});
+
+	const snapshot = {
+		repo,
+		feedbackIntake: [
+			{
+				runId,
+				issue: 42,
+				eventId: "1",
+				pr: 5,
+				kind: "unavailable",
+				reason: "review_comments",
+				failure: "malformed_response",
+				since: 100,
+			},
+		],
+	};
+
+	const save = () =>
+		writeFileSync(join(root, "status.json"), JSON.stringify(snapshot), {
+			mode: 0o600,
+		});
+
+	save();
+
+	for (const now of [1000, 61_000]) {
+		const read = await readAttention({ stateDir: root, repo, now });
+		assert.ok(read.kind === "available");
+		assert.deepEqual(read.groups.pr_review, []);
+		assert.deepEqual(read.groups.blocked, [
+			{
+				runId,
+				issueUrl: `https://github.com/${repo}/issues/42`,
+				prUrl: `https://github.com/${repo}/pull/5`,
+				ageMs: now - 100,
+				reason: "feedback_unavailable:review_comments:malformed_response",
+			},
+		]);
+		assert.deepEqual(read.gaps, []);
+	}
+
+	for (const kind of ["deferred", "recovered"]) {
+		snapshot.feedbackIntake[0]!.kind = kind;
+		save();
+		const read = await readAttention({ stateDir: root, repo, now: 61_000 });
+		assert.ok(read.kind === "available");
+		assert.deepEqual(read.groups.blocked, []);
+		assert.equal(read.groups.pr_review.length, 1);
 	}
 });
 

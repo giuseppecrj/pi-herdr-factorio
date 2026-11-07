@@ -785,7 +785,7 @@ export class GitHubTicketAdapter implements TicketReader {
 			const v = objectOf(item);
 			const id = idOf(v?.id);
 			const path = stringOf(v?.path);
-			const line = v?.line === null ? null : countOf(v?.line);
+			const line = v?.line == null ? null : countOf(v.line);
 			const commit = stringOf(v?.commit_id);
 			const reply = v?.in_reply_to_id == null ? null : idOf(v.in_reply_to_id);
 			const body = bodyTextOf(v?.body);
@@ -794,7 +794,7 @@ export class GitHubTicketAdapter implements TicketReader {
 				id === null ||
 				path === null ||
 				path.length === 0 ||
-				(v?.line !== null && (line === null || line === 0)) ||
+				(v?.line != null && (line === null || line === 0)) ||
 				commit === null ||
 				!isGitSha(commit) ||
 				(v?.in_reply_to_id != null && reply === null) ||

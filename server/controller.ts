@@ -34,6 +34,7 @@ import {
 	GitHubTicketWriter,
 	parseOwnedPullRequest,
 	type OwnedPullRequest,
+	type GitHubFailure,
 	isLogin,
 } from "../src/adapters/github.ts";
 import { fileAdmissionStore, latestReadyEntry } from "../src/admission.ts";
@@ -6072,11 +6073,26 @@ async function feedbackEvents(
 	adapter: GitHubTicketAdapter,
 	pr: number,
 	seen: readonly FeedbackId[],
-): Promise<readonly FeedbackEvent[] | null> {
+): Promise<
+	| Readonly<{ kind: "read"; events: readonly FeedbackEvent[] }>
+	| Extract<FeedbackObservation, { kind: "unavailable" }>
+> {
 	const comments = await adapter.readComments(pr);
 	const reviews = await adapter.readPullReviews(pr);
 
-	if (comments.kind !== "ok" || reviews.kind !== "ok") return null;
+	if (comments.kind === "failed")
+		return {
+			kind: "unavailable",
+			reason: "comments",
+			failure: comments.failure.kind,
+		};
+
+	if (reviews.kind === "failed")
+		return {
+			kind: "unavailable",
+			reason: "reviews",
+			failure: reviews.failure.kind,
+		};
 	const events: FeedbackEvent[] = [];
 
 	for (const c of comments.value) {
@@ -6105,11 +6121,16 @@ async function feedbackEvents(
 			Number(r.id.split(":").at(-1)),
 		);
 
-		if (inline.kind !== "ok") return null;
+		if (inline.kind === "failed")
+			return {
+				kind: "unavailable",
+				reason: "review_comments",
+				failure: inline.failure.kind,
+			};
 		events.push({ ...r, comments: inline.value });
 	}
 
-	return events;
+	return { kind: "read", events };
 }
 
 export async function observeFeedback(input: {
@@ -6124,14 +6145,20 @@ export async function observeFeedback(input: {
 	held?: boolean;
 }): Promise<FeedbackObservation> {
 	if (input.prHead !== input.head || input.refHead !== input.head)
-		return { kind: "deferred" };
+		return { kind: "deferred", reason: "head_mismatch" };
+
+	let reason: "unexpected" | "storage" = "unexpected";
 
 	try {
 		if (input.held === true) {
 			const reviews = await input.adapter.readPullReviews(input.pr);
 
 			return reviews.kind !== "ok"
-				? { kind: "unavailable" }
+				? {
+						kind: "unavailable",
+						reason: "reviews",
+						failure: reviews.failure.kind,
+					}
 				: {
 						kind: "read",
 						head: input.head,
@@ -6144,16 +6171,20 @@ export async function observeFeedback(input: {
 					};
 		}
 
-		const events = await feedbackEvents(input.adapter, input.pr, input.seen);
+		const read = await feedbackEvents(input.adapter, input.pr, input.seen);
 
-		if (events === null) return { kind: "unavailable" };
+		if (read.kind === "unavailable") return read;
+		let permissionFailure: GitHubFailure["kind"] | null = null;
 
 		const classified = await classifyFeedback({
 			...input,
-			events,
+			events: read.events,
 			permission: async (actor) => {
 				if (!isLogin(actor)) return "read";
 				const permission = await input.adapter.readPermission(actor);
+
+				if (permission.kind === "failed")
+					permissionFailure = permission.failure.kind;
 
 				return permission.kind === "failed"
 					? "failed"
@@ -6163,7 +6194,14 @@ export async function observeFeedback(input: {
 			},
 		});
 
-		if (classified.kind === "unavailable") return classified;
+		if (classified.kind === "unavailable")
+			return {
+				kind: "unavailable",
+				reason: "permission",
+				failure: permissionFailure,
+			};
+
+		reason = "storage";
 
 		const batch =
 			classified.batch === null
@@ -6181,7 +6219,7 @@ export async function observeFeedback(input: {
 			dismissed: classified.dismissed,
 		};
 	} catch {
-		return { kind: "unavailable" };
+		return { kind: "unavailable", reason, failure: null };
 	}
 }
 
