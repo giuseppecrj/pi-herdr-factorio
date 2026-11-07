@@ -1067,7 +1067,7 @@ export type BoundControl = Readonly<{
 	scenarios?: readonly ScenarioBaseResult[];
 }>;
 
-export type ControlProof =
+type SingleControlProof =
 	| Readonly<{ kind: "base_passed"; control: BoundControl }>
 	| Readonly<{
 			kind: "candidate_only_check";
@@ -1088,6 +1088,16 @@ export type ControlProof =
 						control: BoundControl;
 				  }>;
 	  }>;
+
+type CheckControlProof = Readonly<{
+	name: string;
+	scenario?: string;
+	proof: SingleControlProof;
+}>;
+
+export type ControlProof =
+	| SingleControlProof
+	| Readonly<{ kind: "combined"; checks: readonly CheckControlProof[] }>;
 
 export type RequiredEvidence = "candidate_result" | "base_control";
 
@@ -1776,7 +1786,7 @@ export function assessCiFailure(
 			? base
 			: null;
 
-	const control: BoundControl = {
+	const controlOf = (qualifiedBase: BaseReceipt | null): BoundControl => ({
 		check: {
 			binding: {
 				...binding,
@@ -1811,7 +1821,9 @@ export function assessCiFailure(
 							(failure.kind === "candidate" || failure.kind === "oracle") &&
 							failure.scenarios.includes(s.scenario),
 					),
-	};
+	});
+
+	const control = controlOf(qualifiedBase);
 
 	if (failure.kind === "candidate") {
 		const reason = textOf(fieldOf(r, "reason"));
@@ -1835,28 +1847,59 @@ export function assessCiFailure(
 					receiptDigest,
 				},
 			};
-		else if (newBehavior.length > 0)
-			proof = {
-				kind: "candidate_only_check",
-				justification: {
-					kind: "qualified_new_behavior",
-					scenarios: newBehavior,
-					control,
+		else {
+			const proofs = common.failedChecks.flatMap(
+				(failed): CheckControlProof[] => {
+					if (failed.name === "heldout")
+						return failure.scenarios.map((scenario) => {
+							const scenarioControl = {
+								...control,
+								scenarios: control.scenarios?.filter(
+									(s) => s.scenario === scenario,
+								),
+							};
+
+							return {
+								name: failed.name,
+								scenario,
+								proof: newBehavior.includes(scenario)
+									? {
+											kind: "candidate_only_check",
+											justification: {
+												kind: "qualified_new_behavior",
+												scenarios: [scenario],
+												control: scenarioControl,
+											},
+										}
+									: { kind: "base_passed", control: scenarioControl },
+							};
+						});
+
+					return [
+						{
+							name: failed.name,
+							proof:
+								failed.name === "candidate_tests"
+									? {
+											kind: "candidate_only_check",
+											justification: {
+												kind: "new_visible_tests",
+												gateSha: input.identity.gateSha,
+												receiptDigest,
+											},
+										}
+									: { kind: "base_passed", control: controlOf(null) },
+						},
+					];
 				},
-			};
-		else if (
-			common.failedChecks.length === 1 &&
-			common.failedChecks[0]?.name === "candidate_tests"
-		)
-			proof = {
-				kind: "candidate_only_check",
-				justification: {
-					kind: "new_visible_tests",
-					gateSha: input.identity.gateSha,
-					receiptDigest,
-				},
-			};
-		else proof = { kind: "base_passed", control };
+			);
+
+			const [only] = proofs;
+			proof =
+				proofs.length === 1 && only !== undefined
+					? only.proof
+					: { kind: "combined", checks: proofs };
+		}
 
 		return { ...common, kind: "candidate_failure", check, proof, failure };
 	}
