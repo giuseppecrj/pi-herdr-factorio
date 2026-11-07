@@ -10492,7 +10492,13 @@ describe("controller-only validate", () => {
 	}
 
 	for (const recovery of [false, true])
-		for (const fault of ["none", "notice_response", "terminal_claim"] as const)
+		for (const fault of [
+			"none",
+			"notice_response",
+			"terminal_claim",
+			"programmer_enoent",
+			"disk_eio",
+		] as const)
 			it(`terminates oversized review input without crashing the tick (recovery=${recovery}, fault=${fault})`, async () => {
 				const outbox = fileLedgerOutbox(stateDir());
 
@@ -10634,7 +10640,14 @@ describe("controller-only validate", () => {
 					exec: f.github.exec,
 					log: () => {},
 					xdgRuntimeDir: join(root, "xdg"),
-					fetchTarball: async () => archive,
+					fetchTarball: async () => {
+						if (fault === "programmer_enoent" || fault === "disk_eio")
+							throw Object.assign(new Error("checkout defect"), {
+								code: fault === "programmer_enoent" ? "ENOENT" : "EIO",
+							});
+
+						return archive;
+					},
 				});
 
 				f.files.workspacePath = disk.workspacePath;
@@ -10649,7 +10662,29 @@ describe("controller-only validate", () => {
 				}
 
 				const launches = f.executor.launches.length;
+
+				if (fault === "programmer_enoent") {
+					await assert.rejects(active.tick(), {
+						message: "checkout defect",
+						code: "ENOENT",
+					});
+					assert.equal(f.executor.launches.length, launches);
+
+					return;
+				}
+
 				await active.tick();
+
+				if (fault === "disk_eio") {
+					await f.start().tick();
+					const held = f.files.claims.get(runOf(14))?.handoff;
+					assert.ok(held?.kind === "selected" && held.work.kind === "held");
+					assert.equal(held.work.reason, "evidence_unavailable");
+					assert.equal(f.executor.launches.length, launches);
+
+					return;
+				}
+
 				const resumed = fault === "none" ? active : f.start();
 				await resumed.tick();
 				const terminal = f.files.claims.get(runOf(14));
@@ -10796,12 +10831,7 @@ describe("controller-only validate", () => {
 			);
 		});
 
-	for (const reason of [
-		"evidence_unavailable",
-		"summary_too_large",
-		"pr_identity",
-		"pr_ambiguous",
-	])
+	for (const reason of ["evidence_unavailable"])
 		it(`holds a candidate effect's input refusal (${reason}) without crashing the tick`, async () => {
 			const f = await reviewingRun();
 			f.executor.behaviors = [{ kind: "pass", usage: 11 }];
@@ -10821,6 +10851,137 @@ describe("controller-only validate", () => {
 			await f.start().tick();
 			assert.equal(f.executor.launches.length, launches);
 		});
+
+	for (const target of ["open_pr", "complete_handoff"] as const)
+		for (const reason of ["pr_identity", "pr_ambiguous"] as const)
+			it(`retains an owner hold without retrying ${target} (${reason})`, async () => {
+				const f = await reviewingRun();
+				f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+				const port = f.executor.candidate;
+				assert.ok(port);
+				const execute = port.execute;
+				let calls = 0;
+				port.execute = async (state, request) => {
+					if (request.kind !== target) return execute(state, request);
+					calls++;
+					throw new PublicationError(reason);
+				};
+
+				await once(f.controller);
+				await f.controller.tick();
+				await f.controller.tick();
+				const book = f.files.claims.get(runOf(14))?.handoff;
+				assert.ok(book?.kind === "selected" && book.work.kind === "held");
+				assert.equal(book.work.reason, reason);
+				assert.equal(
+					book.published?.readiness.kind,
+					target === "open_pr" ? undefined : "not_ready",
+				);
+				assert.deepEqual(
+					parseCandidateState(JSON.parse(JSON.stringify(book))),
+					book,
+				);
+				const launches = f.executor.launches.length;
+				const restarted = f.start();
+				await restarted.tick();
+				await restarted.tick();
+				assert.deepEqual(f.files.claims.get(runOf(14))?.handoff, book);
+				assert.equal(calls, 1);
+				assert.equal(f.executor.launches.length, launches);
+			});
+
+	for (const target of ["open_pr", "complete_handoff"] as const)
+		for (const fault of ["none", "notice_response", "terminal_claim"] as const)
+			it(`ends a summary refusal at ${target} once across restart (${fault})`, async () => {
+				const outbox = fileLedgerOutbox(stateDir());
+
+				const f = await reviewingRun(undefined, (ctx) => {
+					Object.assign(ctx.files, { ledger: outbox });
+				});
+
+				f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+				const port = f.executor.candidate;
+				assert.ok(port);
+				const execute = port.execute;
+				let calls = 0;
+				port.execute = async (state, request) => {
+					if (request.kind !== target) return execute(state, request);
+					calls++;
+					throw new PublicationError("summary_too_large");
+				};
+
+				let faulted = false;
+				const write = f.files.writeClaim;
+				f.files.writeClaim = async (next) => {
+					if (
+						fault === "terminal_claim" &&
+						!faulted &&
+						next.handoff?.kind === "selected" &&
+						next.handoff.work.kind === "effect" &&
+						next.handoff.work.request.kind === "finish_pr"
+					) {
+						faulted = true;
+
+						return false;
+					}
+
+					return write(next);
+				};
+
+				f.github.beforeCall = (args) => {
+					if (
+						fault === "notice_response" &&
+						!faulted &&
+						args.some(
+							(arg) =>
+								arg.startsWith("body=") &&
+								arg.includes("<!-- factory-handoff-input "),
+						)
+					) {
+						faulted = true;
+						f.github.posts = ["landed_unanswered"];
+					}
+				};
+
+				await once(f.controller);
+				await f.controller.tick();
+				await f.start().tick();
+				await f.start().tick();
+				const terminal = f.files.claims.get(runOf(14));
+				assert.equal(terminal?.status, "failed");
+				assert.ok(
+					terminal?.handoff?.kind === "selected" &&
+						terminal.handoff.work.kind === "terminal",
+				);
+				assert.deepEqual(terminal.handoff.work.terminal, {
+					kind: "failed",
+					reason: "summary_too_large",
+				});
+				assert.ok(
+					parseCandidateState(JSON.parse(JSON.stringify(terminal.handoff))),
+				);
+				assert.equal(keyed(f.github, 14, "handoff-input").length, 1);
+				assert.match(
+					keyed(f.github, 14, "handoff-input")[0] ?? "",
+					/summary_too_large/,
+				);
+				const row = (await outbox.scan())?.[0]?.row?.row;
+				assert.ok(row?.v === 4);
+				assert.equal(row.outcome.kind, "failed");
+				assert.deepEqual(row.failure?.kind === "known" && row.failure.value, {
+					stage: "land",
+					class: "input",
+					reason: "summary_too_large",
+					failedVisibleChecks: [],
+					retainedPatch: null,
+				});
+				assert.equal(faulted, fault !== "none");
+				const launches = f.executor.launches.length;
+				const attempts = calls;
+				await f.start().tick();
+				assert.equal(calls, attempts);
+				assert.equal(f.executor.launches.length, launches);
+			});
 
 	it("keeps programming errors in review preparation visible", async () => {
 		const f = await reviewingRun();

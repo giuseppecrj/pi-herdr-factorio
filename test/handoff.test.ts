@@ -479,6 +479,78 @@ function waiting() {
 	);
 }
 
+for (const reason of ["pr_identity", "pr_ambiguous"] as const)
+	for (const hasPr of [false, true])
+		test(`owner hold ${reason} persists without retry or refresh (published=${hasPr})`, () => {
+			const state = hasPr ? published() : certified(select());
+			const issued = handoffCandidate(state, readyObservation(state)).state;
+
+			const held = selected(
+				handoffCandidate(issued, {
+					kind: "effect_held",
+					reason,
+					now: 200,
+				}).state,
+			);
+
+			assert.deepEqual(held.work, { kind: "held", reason, since: 200 });
+
+			if (hasPr)
+				assert.deepEqual(held.published?.readiness, {
+					kind: "not_ready",
+					reason,
+					since: 200,
+				});
+			const restored = parseCandidateState(JSON.parse(JSON.stringify(held)));
+			assert.deepEqual(restored, held);
+			assert.ok(restored);
+
+			for (const main of [sha, "b".repeat(40)]) {
+				const step = handoffCandidate(restored, {
+					...readyObservation(restored),
+					main: observed(main).main,
+					now: 1000,
+				});
+				assert.deepEqual(step.state, held);
+				assert.equal(step.effect, null);
+			}
+
+			const withdrawn = handoffCandidate(restored, {
+				...readyObservation(restored),
+				eligibility: "withdrawn",
+			});
+			assert.equal(withdrawn.effect?.kind, "finish_pr");
+
+			if (hasPr) {
+				const current = selected(restored);
+				const head = current.current.report!.candidateSha;
+
+				for (const pr of [
+					{ kind: "closed", number: 5, head },
+					{ kind: "merged", number: 5, head, mergeSha: sha, actor: null },
+				] as const) {
+					const step = handoffCandidate(restored, {
+						...readyObservation(restored),
+						pr,
+					});
+					assert.equal(step.effect?.kind, "finish_pr");
+				}
+			}
+		});
+
+for (const reason of ["review_input_too_large", "summary_too_large"] as const)
+	test(`terminal input reason ${reason} round-trips`, () => {
+		const state = certified(select());
+		const terminal: CandidateState = {
+			...state,
+			work: { kind: "terminal", terminal: { kind: "failed", reason } },
+		};
+		assert.deepEqual(
+			parseCandidateState(JSON.parse(JSON.stringify(terminal))),
+			terminal,
+		);
+	});
+
 test("actual observer promotes a certified successor before PR checks and waits for exact-head readiness", async () => {
 	await withLocalArtifactDownload(async (root) => {
 		const previous = waiting();
