@@ -6,7 +6,11 @@ import {
 	privateDir,
 	present,
 } from "../src/artifacts.ts";
-import { readPatch, publicationTree } from "../src/build.ts";
+import {
+	readPatch,
+	publicationTree,
+	readRepairBuildResult,
+} from "../src/build.ts";
 import {
 	canonicalJson,
 	classifyFeedback,
@@ -6316,17 +6320,35 @@ function feedbackRound(
 		round,
 	});
 
-	const reported =
-		patch.kind === "found" ? (patch.receipt.dispositions ?? []) : [];
+	const attempt = failedAttempt ?? ref.attempt ?? 1;
 
-	const findingReported =
-		patch.kind === "found" ? (patch.receipt.findingDispositions ?? []) : [];
+	const noChange = readRepairBuildResult(
+		stateDir,
+		state.pin.runId,
+		round,
+		attempt,
+	);
+
+	const decisions = noChange ?? (patch.kind === "found" ? patch.receipt : null);
+	const reported = decisions?.dispositions ?? [];
+	const findingReported = decisions?.findingDispositions ?? [];
 
 	const decision = (item: Omit<BuilderDisposition, "event"> | undefined) =>
 		roundDisposition(outcome, item);
 
 	const disposition = (event: FeedbackId) =>
 		decision(reported.find((d) => d.event === event));
+
+	const builderDecision = (event: FeedbackId, forwarded = true) => {
+		const item = forwarded
+			? reported.find((d) => d.event === event)
+			: undefined;
+
+		if (item === undefined) return {};
+		const { event: _event, ...builder } = item;
+
+		return { builder };
+	};
 
 	const records =
 		stored?.batch.records ??
@@ -6339,10 +6361,17 @@ function feedbackRound(
 
 	const items = records.flatMap((r) => [
 		...(r.intake.kind === "actionable"
-			? [{ event: r.event, disposition: disposition(r.event) }]
+			? [
+					{
+						event: r.event,
+						disposition: disposition(r.event),
+						...builderDecision(r.event),
+					},
+				]
 			: []),
 		...r.inline.map((c) => ({
 			event: c.id,
+			...builderDecision(c.id, c.intake.kind !== "refused"),
 			disposition:
 				c.intake.kind === "refused"
 					? ({ kind: "rejected", reason: "heldout_path" } as const)
@@ -6451,7 +6480,8 @@ async function roundSummary(
 			...attempts.flatMap((attempt) => [
 				`### Attempt ${attempt.attempt}\n\n${attempt.attempt === receipt.attempt ? result : attempt.outcome.kind === "stopped" ? `held: ${attempt.outcome.reason}` : attempt.outcome.kind}`,
 				...attempt.items.map(
-					(i) => `- \`${i.event}\`: ${describe(i.disposition)}`,
+					(i) =>
+						`- \`${i.event}\`: ${describe(i.disposition)}${i.builder === undefined ? "" : ` — Builder ${i.builder.kind === "rejected" && i.builder.reason === "builder_declined" ? "declined" : i.builder.kind}: ${inert(i.builder.detail ?? i.builder.reason ?? "builder-reported")}`}`,
 				),
 				...attempt.findings.map(
 					(f) =>

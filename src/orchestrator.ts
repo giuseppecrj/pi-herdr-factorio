@@ -6400,6 +6400,11 @@ export class Orchestrator {
 				prompt:
 					run.stage === "build"
 						? buildPrompt({
+								feedback:
+									run.handoff?.kind === "selected" &&
+									run.handoff.work.kind === "effect" &&
+									run.handoff.work.request.kind === "repair_build" &&
+									run.handoff.work.request.execution.cause.kind === "feedback",
 								contract: contract.contract,
 								guidance: parsed.guidance,
 								inlined: shown,

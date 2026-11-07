@@ -52,6 +52,7 @@ import {
 	finishPatch,
 	patchedTree,
 	readPatch,
+	readRepairBuildResult,
 	storePatch,
 	TEST_TAIL_BYTES,
 	type PatchRead,
@@ -2657,7 +2658,10 @@ export async function withSkills(
 
 		parts.push(`### Skill: ${name}\n\n${skillBody(text)}`);
 
-		if (name === "build") {
+		if (
+			name === "build" &&
+			!(prompt + "\n").startsWith("build-playbook=feedback\n")
+		) {
 			const playbook = (prompt + "\n").startsWith("build-playbook=bug-fix\n")
 				? "bug-fix"
 				: "feature";
@@ -4102,18 +4106,18 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 				);
 
 				if (existsSync(outcomePath)) {
-					const reason = textOf(
-						fieldOf(objectOf(parseJson(regularText(outcomePath))), "reason"),
+					const result = readRepairBuildResult(
+						config.stateDir,
+						runId,
+						round,
+						attempt,
 					);
 
 					return {
 						kind: "build",
 						result: {
 							kind: "blocked",
-							reason:
-								reason === "repair_no_change" || reason === "patch_missing"
-									? reason
-									: "patch_invalid",
+							...(result ?? { reason: "patch_invalid" }),
 						},
 					};
 				}
@@ -4872,7 +4876,11 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 											input.runId,
 											`${stageName("build", input.attempt, input.round)}-result.json`,
 										),
-										JSON.stringify({ reason }),
+										JSON.stringify({
+											reason,
+											dispositions,
+											findingDispositions,
+										}),
 									);
 
 									return saved

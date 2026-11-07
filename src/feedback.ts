@@ -203,14 +203,16 @@ export type RoundReceipt = Readonly<{
 	items: readonly Readonly<{
 		event: FeedbackId;
 		disposition: FeedbackDisposition;
+		builder?: Omit<BuilderDisposition, "event">;
 	}>[];
 	findings: readonly FindingDisposition[];
 }>;
 
 export type BuilderDisposition = Readonly<{
 	event: FeedbackId;
-	kind: "adopted" | "rejected";
+	kind: "adopted" | "rejected" | "declined";
 	reason?: "out_of_scope" | "forbidden_path" | "builder_declined";
+	detail?: string;
 }>;
 
 export type BuilderFindingDisposition = Readonly<
@@ -239,14 +241,24 @@ export function builderFindingDispositions(
 			)
 				continue;
 
-			if (d.kind === "adopted") result.push({ fingerprint, kind: "adopted" });
+			if (d.kind === "adopted")
+				result.push({
+					fingerprint,
+					kind: "adopted",
+					...decisionDetail(d.detail),
+				});
 			else if (
-				d.kind === "rejected" &&
+				(d.kind === "rejected" || d.kind === "declined") &&
 				(d.reason === "out_of_scope" ||
 					d.reason === "forbidden_path" ||
 					d.reason === "builder_declined")
 			)
-				result.push({ fingerprint, kind: "rejected", reason: d.reason });
+				result.push({
+					fingerprint,
+					kind: d.kind,
+					reason: d.reason,
+					...decisionDetail(d.detail),
+				});
 		}
 
 		return result;
@@ -279,11 +291,22 @@ export function wireBuilderDecisions(
 			return false;
 		seen.add(id);
 
-		if (d.kind === "adopted" && keys(d, [key, "kind"])) continue;
+		const detailKeys = d.detail === undefined ? [] : ["detail"];
 
 		if (
-			d.kind === "rejected" &&
-			keys(d, [key, "kind", "reason"]) &&
+			d.detail !== undefined &&
+			(!text(d.detail) ||
+				d.detail.length === 0 ||
+				d.detail.length > 600 ||
+				decisionDetail(d.detail).detail !== d.detail)
+		)
+			return false;
+
+		if (d.kind === "adopted" && keys(d, [key, "kind", ...detailKeys])) continue;
+
+		if (
+			(d.kind === "rejected" || d.kind === "declined") &&
+			keys(d, [key, "kind", "reason", ...detailKeys]) &&
 			["out_of_scope", "forbidden_path", "builder_declined"].includes(
 				String(d.reason),
 			)
@@ -294,6 +317,19 @@ export function wireBuilderDecisions(
 	}
 
 	return true;
+}
+
+function decisionDetail(
+	value: JsonValue | undefined,
+): Pick<BuilderDisposition, "detail"> {
+	if (!text(value)) return {};
+
+	const detail = value
+		.replace(/[\p{Cc}\p{Cf}\s]+/gu, " ")
+		.trim()
+		.slice(0, 600);
+
+	return detail ? { detail } : {};
 }
 
 export function builderDispositions(
@@ -319,14 +355,23 @@ export function builderDispositions(
 				continue;
 
 			if (d.kind === "adopted")
-				result.push({ event: d.event, kind: "adopted" });
+				result.push({
+					event: d.event,
+					kind: "adopted",
+					...decisionDetail(d.detail),
+				});
 			else if (
-				d.kind === "rejected" &&
+				(d.kind === "rejected" || d.kind === "declined") &&
 				(d.reason === "out_of_scope" ||
 					d.reason === "forbidden_path" ||
 					d.reason === "builder_declined")
 			)
-				result.push({ event: d.event, kind: "rejected", reason: d.reason });
+				result.push({
+					event: d.event,
+					kind: d.kind,
+					reason: d.reason,
+					...decisionDetail(d.detail),
+				});
 		}
 
 		return result;

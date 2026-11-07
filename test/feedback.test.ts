@@ -158,7 +158,7 @@ test("builder decline reasons are concrete, bounded and survive the wire codec",
 	assert.equal(decisions[0]?.kind, "declined");
 	assert.equal(wireBuilderDecisions(decisions, "event"), true);
 	assert.ok(JSON.stringify(decisions).length < 900);
-	assert.doesNotMatch(JSON.stringify(decisions), /\\\\n|\\\\u0000/);
+	assert.doesNotMatch(decisions[0]?.detail ?? "", /[\p{Cc}\p{Cf}]/u);
 });
 
 test("feedback identities are provider- and source-qualified", () => {
