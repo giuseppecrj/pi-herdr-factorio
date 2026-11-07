@@ -546,6 +546,7 @@ class FakeExecutor implements StageExecutor {
 	buildBehavior: Behavior = { kind: "unavailable" };
 	buildExitCode: number | null = 0;
 	buildBaseExitCode: number | null | undefined;
+	buildRuntime: "matching" | "legacy" | "different" = "matching";
 	missingBuildTests = false;
 	buildPolicy: "clean" | "forbidden" = "clean";
 	readonly builds = new Map<string, Extract<StageOutput, { kind: "build" }>>();
@@ -675,12 +676,31 @@ class FakeExecutor implements StageExecutor {
 								? null
 								: {
 										command: "npm test",
+										environment:
+											this.buildRuntime === "legacy"
+												? undefined
+												: {
+														dependenciesDigest: digestOf("dependencies"),
+														runtimeDigest: digestOf("runtime"),
+													},
 										exitCode: this.buildExitCode,
 										base:
 											this.buildBaseExitCode === undefined
 												? undefined
 												: {
 														command: "npm test",
+														environment:
+															this.buildRuntime === "legacy"
+																? undefined
+																: {
+																		dependenciesDigest:
+																			digestOf("dependencies"),
+																		runtimeDigest: digestOf(
+																			this.buildRuntime === "different"
+																				? "another runtime"
+																				: "runtime",
+																		),
+																	},
 														exitCode: this.buildBaseExitCode,
 														tail: "PRIVATE BASE",
 														wallMs: 1,
@@ -9812,8 +9832,15 @@ describe("private build stage", () => {
 			assert.equal((await controller.tick()).totals.failures, 1);
 		});
 
-	for (const baseExitCode of [0, 1, null, undefined])
-		it(`attributes visible failure only with a passing base control (${baseExitCode}) across restart and status`, async () => {
+	for (const [baseExitCode, runtime] of [
+		[0, "matching"],
+		[1, "matching"],
+		[null, "matching"],
+		[undefined, "matching"],
+		[0, "legacy"],
+		[0, "different"],
+	] as const)
+		it(`attributes visible failure only with a passing base control (${baseExitCode}, ${runtime}) across restart and status`, async () => {
 			const dir = stateDir();
 			const outbox = fileLedgerOutbox(dir);
 
@@ -9830,6 +9857,7 @@ describe("private build stage", () => {
 			executor.buildBehavior = { kind: "pass", usage: 12 };
 			executor.buildExitCode = 1;
 			executor.buildBaseExitCode = baseExitCode;
+			executor.buildRuntime = runtime;
 			wire.intercept = async (command, args) =>
 				args.some((a) => a.includes("<!-- factory-build "))
 					? networkError()
@@ -9852,9 +9880,12 @@ describe("private build stage", () => {
 				kind: "known",
 				value: {
 					stage: "build",
-					class: baseExitCode === 0 ? "candidate" : "missing_evidence",
+					class:
+						baseExitCode === 0 && runtime === "matching"
+							? "candidate"
+							: "missing_evidence",
 					reason:
-						baseExitCode === 0
+						baseExitCode === 0 && runtime === "matching"
 							? "visible_tests_failed"
 							: baseExitCode === 1
 								? "visible_base_failed"

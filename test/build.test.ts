@@ -8,6 +8,7 @@ import {
 	chmodSync,
 	rmSync,
 	readFileSync,
+	readdirSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +20,7 @@ import {
 	commandReceipts,
 	patchedTree,
 	trustedVisiblePlan,
+	visibleEnvironment,
 	checkBuildDisk,
 	PATCH_MAX_BYTES,
 	PATCH_RECEIPT_MAX_BYTES,
@@ -86,6 +88,176 @@ test("keeps immutable patch and visible-test stores separate for rounds zero to 
 		);
 		assert.equal(kept.receipt.visibleTests?.exitCode, round);
 	}
+});
+
+test("assessment writes replay all visible states without rewriting legacy receipt bytes", async (t) => {
+	const f = fixture(t);
+	writeFileSync(join(f.workspace, "test.js"), "new check\n");
+	const patch = await collectPatch(f);
+	assert.equal(patch.kind, "collected");
+
+	if (patch.kind !== "collected") return;
+
+	const environment = {
+		dependenciesDigest: digestOf("lock"),
+		runtimeDigest: digestOf("bundle"),
+	};
+
+	const candidate = {
+		command: "test",
+		exitCode: 1,
+		tail: "candidate",
+		wallMs: 1,
+		environment,
+	};
+
+	const cases = [
+		{ tests: candidate, phase: "candidate", kind: "pending" },
+		{ tests: { ...candidate, exitCode: 0 }, kind: "passed" },
+		{
+			tests: { ...candidate, base: { ...candidate, exitCode: 0 } },
+			kind: "candidate_failure",
+		},
+		{ tests: { ...candidate, base: candidate }, kind: "base_failure" },
+		{ tests: candidate, kind: "unavailable" },
+		{
+			tests: { ...candidate, exitCode: null, detail: "timeout" },
+			kind: "unavailable",
+		},
+	] as const;
+
+	for (const [index, entry] of cases.entries()) {
+		const binding = {
+			runId: digestOf(`assessment-${index}`),
+			baseSha: "a".repeat(40),
+			contractDigest: digestOf("contract"),
+			acceptanceDigest: digestOf("suite"),
+		};
+
+		storePatch(f.stateDir, binding, patch, {
+			model: "test",
+			observed: null,
+			commands: [],
+		});
+
+		const before = readFileSync(
+			join(f.stateDir, "patches", binding.runId, "collected.json"),
+		);
+
+		const phase = "phase" in entry ? entry.phase : "complete";
+		finishPatch(f.stateDir, binding, entry.tests, phase);
+		const dir = join(f.stateDir, "patches", binding.runId);
+
+		const name =
+			entry.tests.exitCode === null
+				? readdirSync(dir).find((name) => name.startsWith("unavailable-"))
+				: phase === "candidate"
+					? "candidate-tests.json"
+					: "tests.json";
+
+		assert.ok(name);
+		const bytes = readFileSync(join(dir, name), "utf8");
+		assert.equal(JSON.parse(bytes).assessment.kind, entry.kind);
+		const restarted = readPatch(f.stateDir, binding);
+		assert.equal(restarted.kind, "found");
+
+		if (restarted.kind !== "found") continue;
+
+		if (entry.tests.exitCode !== null)
+			assert.equal(
+				(phase === "candidate"
+					? restarted.receipt.candidateTests
+					: restarted.receipt.visibleTests
+				)?.assessment?.kind,
+				entry.kind,
+			);
+		finishPatch(f.stateDir, binding, entry.tests, phase);
+		assert.equal(readFileSync(join(dir, name), "utf8"), bytes);
+		assert.deepEqual(readFileSync(join(dir, "collected.json")), before);
+	}
+});
+
+test("legacy visible bytes stay readable and an altered assessment never authorizes progress", async (t) => {
+	const f = fixture(t);
+	writeFileSync(join(f.workspace, "test.js"), "bad\n");
+	const patch = await collectPatch(f);
+	assert.equal(patch.kind, "collected");
+
+	if (patch.kind !== "collected") return;
+
+	const binding = {
+		runId: digestOf("legacy-assessment"),
+		baseSha: "a".repeat(40),
+		contractDigest: digestOf("contract"),
+		acceptanceDigest: digestOf("suite"),
+	};
+
+	storePatch(f.stateDir, binding, patch, {
+		model: "test",
+		observed: null,
+		commands: [],
+	});
+	finishPatch(f.stateDir, binding, {
+		command: "test",
+		exitCode: 1,
+		tail: "bad",
+		wallMs: 1,
+		base: { command: "test", exitCode: 0, tail: "ok", wallMs: 1 },
+	});
+	const path = join(f.stateDir, "patches", binding.runId, "tests.json");
+	const record = JSON.parse(readFileSync(path, "utf8"));
+	record.assessment.kind = "passed";
+	writeFileSync(path, `${JSON.stringify(record)}\n`);
+	assert.deepEqual(readPatch(f.stateDir, binding), {
+		kind: "blocked",
+		reason: "patch_invalid",
+	});
+	delete record.assessment;
+	const legacy = `${JSON.stringify(record)}\n`;
+	writeFileSync(path, legacy);
+
+	for (let restart = 0; restart < 2; restart++) {
+		const read = readPatch(f.stateDir, binding);
+		assert.equal(read.kind, "found");
+
+		if (read.kind !== "found") return;
+		assert.equal(read.receipt.visibleTests?.base?.exitCode, 0);
+		assert.equal(read.receipt.visibleTests?.assessment, undefined);
+		assert.equal(readFileSync(path, "utf8"), legacy);
+	}
+});
+
+test("visible dependency identity follows the materialized manifest and lock, not scripts or caches", (t) => {
+	const f = fixture(t);
+	const runtime = digestOf("runtime bundle");
+	writeFileSync(
+		join(f.workspace, "package.json"),
+		JSON.stringify({
+			dependencies: { example: "1.0.0" },
+			scripts: { test: "first" },
+		}),
+	);
+	writeFileSync(join(f.workspace, "package-lock.json"), "lock-one");
+	const initial = visibleEnvironment(f.workspace, runtime);
+	writeFileSync(
+		join(f.workspace, "package.json"),
+		JSON.stringify({
+			dependencies: { example: "1.0.0" },
+			scripts: { test: "second" },
+		}),
+	);
+	mkdirSync(join(f.workspace, "node_modules"));
+	writeFileSync(join(f.workspace, "node_modules", "cache"), "not evidence");
+	assert.deepEqual(visibleEnvironment(f.workspace, runtime), initial);
+	writeFileSync(join(f.workspace, "package-lock.json"), "lock-two");
+	assert.notEqual(
+		visibleEnvironment(f.workspace, runtime).dependenciesDigest,
+		initial.dependenciesDigest,
+	);
+	assert.notEqual(
+		visibleEnvironment(f.workspace, digestOf("another runtime")).runtimeDigest,
+		initial.runtimeDigest,
+	);
 });
 
 test("collects deterministic exact bytes, deletions, binary files and executable modes", async (t) => {

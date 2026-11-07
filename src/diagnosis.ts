@@ -17,6 +17,7 @@ import {
 	textsOf,
 } from "../server/sandbox/json.ts";
 import type { JsonValue } from "./tickets.ts";
+import type { VisibleTests } from "./build.ts";
 
 export type AcceptanceBinding = Readonly<{
 	runId: Digest;
@@ -988,7 +989,8 @@ export type MissingEvidenceReason =
 	| "unsupported_materializer"
 	| "materialize_mismatch"
 	| "ci_replay_disagrees"
-	| "tree_replays_disagree";
+	| "tree_replays_disagree"
+	| "visible_base_failed";
 
 export type InfrastructureReason =
 	| "runner_unavailable"
@@ -1020,6 +1022,235 @@ export type FailureClass =
 			differing: number;
 	  }>
 	| Readonly<{ kind: "infrastructure"; reason: InfrastructureReason }>;
+
+export type CheckEnvironment = Readonly<{
+	dependenciesDigest: Digest;
+	runtimeDigest: Digest;
+}>;
+
+/** Visible checks precede publication: base + exact patch, not an invented commit SHA. */
+export type CheckBinding = Readonly<{
+	baseSha: string;
+	candidate:
+		| Readonly<{ kind: "patch"; digest: Digest }>
+		| Readonly<{ kind: "commit"; sha: string }>;
+	plan: string;
+	dependencies:
+		| Readonly<{ kind: "lock"; digest: Digest }>
+		| Readonly<{ kind: "trees"; baseSha: string; candidateSha: string }>
+		| Readonly<{ kind: "unknown" }>;
+	runtime:
+		| Readonly<{ kind: "bundle"; digest: Digest }>
+		| Readonly<{ kind: "gate"; sha: string; runner: string | null }>
+		| Readonly<{ kind: "execution"; identity: RuntimeIdentity }>
+		| Readonly<{ kind: "unknown" }>;
+	source:
+		| Readonly<{ kind: "visible"; runId: Digest }>
+		| Readonly<{ kind: "ci"; nonce: string; receiptDigest: Digest }>;
+}>;
+
+export type CheckFact = Readonly<{
+	name: string;
+	exitCode: number | null;
+	timedOut: boolean;
+}>;
+
+export type BoundCheck = Readonly<{
+	binding: CheckBinding;
+	checks: readonly CheckFact[];
+}>;
+
+export type BoundControl = Readonly<{
+	check: BoundCheck;
+	receiptDigest: Digest;
+	/** Qualified held-out outcomes, not a claim that expected-red checks passed. */
+	scenarios?: readonly ScenarioBaseResult[];
+}>;
+
+type SingleControlProof =
+	| Readonly<{ kind: "base_passed"; control: BoundControl }>
+	| Readonly<{
+			kind: "candidate_only_check";
+			justification:
+				| Readonly<{
+						kind: "candidate_policy";
+						rule: string;
+						receiptDigest: Digest;
+				  }>
+				| Readonly<{
+						kind: "new_visible_tests";
+						gateSha: string;
+						receiptDigest: Digest;
+				  }>
+				| Readonly<{
+						kind: "qualified_new_behavior";
+						scenarios: readonly string[];
+						control: BoundControl;
+				  }>;
+	  }>;
+
+type CheckControlProof = Readonly<{
+	name: string;
+	scenario?: string;
+	proof: SingleControlProof;
+}>;
+
+export type ControlProof =
+	| SingleControlProof
+	| Readonly<{ kind: "combined"; checks: readonly CheckControlProof[] }>;
+
+export type RequiredEvidence = "candidate_result" | "base_control";
+
+type CheckFacts = Readonly<{
+	binding: CheckBinding;
+	failedChecks: readonly CheckFact[];
+}>;
+
+export type CheckAssessment = CheckFacts &
+	(
+		| Readonly<{ kind: "pending"; required: readonly RequiredEvidence[] }>
+		| Readonly<{ kind: "passed"; check: BoundCheck }>
+		| Readonly<{
+				kind: "candidate_failure";
+				check: BoundCheck;
+				proof: ControlProof;
+				failure: Extract<FailureClass, { kind: "candidate" }>;
+		  }>
+		| Readonly<{
+				kind: "base_failure";
+				control: BoundControl;
+				failure: Exclude<FailureClass, { kind: "candidate" }>;
+		  }>
+		| Readonly<{
+				kind: "unavailable";
+				reason: MissingEvidenceReason | InfrastructureReason;
+				failure: Exclude<FailureClass, { kind: "candidate" }>;
+		  }>
+	);
+
+/** Adapt host receipts; a failed check vetoes progress even when its author is unknown. */
+export function assessVisibleChecks(
+	receipt: Readonly<{
+		runId: Digest;
+		baseSha: string;
+		patchDigest: Digest;
+		visibleTests: VisibleTests | null;
+	}>,
+	phase: "candidate" | "complete" = "complete",
+): CheckAssessment {
+	const tests = receipt.visibleTests;
+
+	const bindingOf = (result: VisibleTests | null): CheckBinding => ({
+		baseSha: receipt.baseSha,
+		candidate: { kind: "patch", digest: receipt.patchDigest },
+		plan: result?.command ?? "",
+		dependencies:
+			result?.environment === undefined
+				? { kind: "unknown" }
+				: { kind: "lock", digest: result.environment.dependenciesDigest },
+		runtime:
+			result?.environment === undefined
+				? { kind: "unknown" }
+				: { kind: "bundle", digest: result.environment.runtimeDigest },
+		source: { kind: "visible", runId: receipt.runId },
+	});
+
+	const binding = bindingOf(tests);
+
+	const facts = (
+		result: VisibleTests | null,
+		name = "visible_tests",
+	): CheckFact[] =>
+		result === null
+			? []
+			: [
+					{
+						name,
+						exitCode: result.exitCode,
+						timedOut: result.detail === "timeout",
+					},
+				];
+
+	const failedChecks = [
+		...facts(tests),
+		...facts(tests?.base ?? null, "visible_base_tests"),
+	].filter((c) => c.exitCode !== 0 || c.timedOut);
+
+	const common = { binding, failedChecks };
+
+	const unavailable = (
+		reason:
+			| Exclude<MissingEvidenceReason, "materialize_mismatch">
+			| "timeout"
+			| "runner_error",
+	): CheckAssessment => ({
+		...common,
+		kind: "unavailable",
+		reason,
+		failure:
+			reason === "timeout" || reason === "runner_error"
+				? infrastructure(reason)
+				: missing(reason),
+	});
+
+	if (tests === null)
+		return { ...common, kind: "pending", required: ["candidate_result"] };
+
+	if (tests.exitCode === null)
+		return unavailable(tests.detail === "timeout" ? "timeout" : "runner_error");
+	const check: BoundCheck = { binding, checks: facts(tests) };
+	const base = tests.base;
+
+	const control = (result: NonNullable<typeof base>): BoundControl => ({
+		check: {
+			binding: {
+				...bindingOf(result),
+				candidate: { kind: "commit", sha: receipt.baseSha },
+			},
+			checks: facts(result, "visible_base_tests"),
+		},
+		receiptDigest: digestOf(JSON.stringify(result)),
+	});
+
+	if (
+		base !== undefined &&
+		(base.command !== tests.command ||
+			(base.environment !== undefined &&
+				tests.environment !== undefined &&
+				base.environment.runtimeDigest !== tests.environment.runtimeDigest))
+	)
+		return unavailable("identity_mismatch");
+
+	// A control failure is independently meaningful, even if candidate tests passed.
+	if (base?.exitCode != null && base.exitCode !== 0)
+		return {
+			...common,
+			kind: "base_failure",
+			control: control(base),
+			failure: missing("visible_base_failed"),
+		};
+
+	if (tests.exitCode === 0) return { ...common, kind: "passed", check };
+
+	if (base === undefined)
+		return phase === "candidate"
+			? { ...common, kind: "pending", required: ["base_control"] }
+			: unavailable("base_missing");
+
+	if (base.exitCode === null)
+		return unavailable(base.detail === "timeout" ? "timeout" : "base_missing");
+
+	if (tests.environment === undefined || base.environment === undefined)
+		return unavailable("identity_mismatch");
+
+	return {
+		...common,
+		kind: "candidate_failure",
+		check,
+		proof: { kind: "base_passed", control: control(base) },
+		failure: { kind: "candidate", reason: "candidate_check", scenarios: [] },
+	};
+}
 
 export type HeldoutProjection = Readonly<{
 	counts: Readonly<Record<string, number>>;
@@ -1130,12 +1361,14 @@ type ReceiptCheck = Readonly<{
 
 const missing = (
 	reason: Exclude<MissingEvidenceReason, "materialize_mismatch">,
-): FailureClass => ({
+): Extract<FailureClass, { kind: "missing_evidence" }> => ({
 	kind: "missing_evidence",
 	reason,
 });
 
-const infrastructure = (reason: InfrastructureReason): FailureClass => ({
+const infrastructure = (
+	reason: InfrastructureReason,
+): Extract<FailureClass, { kind: "infrastructure" }> => ({
 	kind: "infrastructure",
 	reason,
 });
@@ -1407,7 +1640,7 @@ function heldoutClass(
 	};
 }
 
-export function classifyFailure(input: ClassifyInput): FailureClass {
+function classifyCiFailure(input: ClassifyInput): FailureClass {
 	const r = objectOf(input.receipt);
 	const id = input.identity;
 
@@ -1488,6 +1721,202 @@ export function classifyFailure(input: ClassifyInput): FailureClass {
 	return heldoutClass(input, r);
 }
 
+/** Pure projection of classifier v1. It does not grant repair or change precedence. */
+export function assessCiFailure(
+	input: ClassifyInput,
+): Extract<
+	CheckAssessment,
+	{ kind: "candidate_failure" | "base_failure" | "unavailable" }
+> {
+	const failure = classifyCiFailure(input);
+	const r = objectOf(input.receipt);
+
+	const checks: CheckFact[] = (arrayOf(fieldOf(r, "checks")) ?? []).flatMap(
+		(raw) => {
+			const c = objectOf(raw),
+				name = textOf(fieldOf(c, "name")),
+				exitCode = countOf(fieldOf(c, "exitCode"));
+
+			return name === null || exitCode === null
+				? []
+				: [{ name, exitCode, timedOut: fieldOf(c, "timedOut") === true }];
+		},
+	);
+
+	const receiptDigest = digestOf(JSON.stringify(input.receipt) ?? "null");
+
+	const binding: CheckBinding = {
+		baseSha: input.identity.gateSha,
+		candidate: { kind: "commit", sha: input.identity.candidateSha },
+		plan: JSON.stringify({
+			gateSha: input.identity.gateSha,
+			requiredChecks: fieldOf(r, "requiredChecks") ?? null,
+			heldoutDigest: input.identity.heldoutDigest,
+			replacementsDigest: input.identity.replacementsDigest,
+		}),
+		dependencies: {
+			kind: "trees",
+			baseSha: input.identity.gateSha,
+			candidateSha: input.identity.candidateSha,
+		},
+		runtime: {
+			kind: "gate",
+			sha: input.identity.gateSha,
+			runner: textOf(fieldOf(r, "runner")),
+		},
+		source: {
+			kind: "ci",
+			nonce: input.identity.nonce,
+			receiptDigest,
+		},
+	};
+
+	const common = {
+		binding,
+		failedChecks: checks.filter((c) => c.exitCode !== 0 || c.timedOut),
+	};
+
+	const check = { binding, checks };
+	const base = input.base;
+
+	const qualifiedBase =
+		base !== null &&
+		(failure.kind === "oracle" ||
+			(failure.kind === "candidate" && failure.reason === "candidate_heldout"))
+			? base
+			: null;
+
+	const controlOf = (qualifiedBase: BaseReceipt | null): BoundControl => ({
+		check: {
+			binding: {
+				...binding,
+				candidate: { kind: "commit", sha: binding.baseSha },
+				dependencies:
+					qualifiedBase?.evidence.source.kind === "ready"
+						? { kind: "lock", digest: qualifiedBase.evidence.source.lockDigest }
+						: {
+								kind: "trees",
+								baseSha: binding.baseSha,
+								candidateSha: binding.baseSha,
+							},
+				runtime:
+					qualifiedBase === null
+						? binding.runtime
+						: { kind: "execution", identity: qualifiedBase.evidence.runtime },
+			},
+			checks:
+				qualifiedBase === null
+					? checks.filter((c) => c.name === "baseline_tests")
+					: [],
+		},
+		receiptDigest:
+			qualifiedBase === null
+				? receiptDigest
+				: digestOf(JSON.stringify(qualifiedBase)),
+		scenarios:
+			qualifiedBase === null
+				? undefined
+				: qualifiedBase.results.filter(
+						(s) =>
+							(failure.kind === "candidate" || failure.kind === "oracle") &&
+							failure.scenarios.includes(s.scenario),
+					),
+	});
+
+	const control = controlOf(qualifiedBase);
+
+	if (failure.kind === "candidate") {
+		const reason = textOf(fieldOf(r, "reason"));
+
+		const newBehavior =
+			base?.results
+				.filter(
+					(s) =>
+						failure.scenarios.includes(s.scenario) && s.kind === "new_behavior",
+				)
+				.map((s) => s.scenario) ?? [];
+
+		let proof: ControlProof;
+
+		if (reason !== null)
+			proof = {
+				kind: "candidate_only_check",
+				justification: {
+					kind: "candidate_policy",
+					rule: reason,
+					receiptDigest,
+				},
+			};
+		else {
+			const proofs = common.failedChecks.flatMap(
+				(failed): CheckControlProof[] => {
+					if (failed.name === "heldout")
+						return failure.scenarios.map((scenario) => {
+							const scenarioControl = {
+								...control,
+								scenarios: control.scenarios?.filter(
+									(s) => s.scenario === scenario,
+								),
+							};
+
+							return {
+								name: failed.name,
+								scenario,
+								proof: newBehavior.includes(scenario)
+									? {
+											kind: "candidate_only_check",
+											justification: {
+												kind: "qualified_new_behavior",
+												scenarios: [scenario],
+												control: scenarioControl,
+											},
+										}
+									: { kind: "base_passed", control: scenarioControl },
+							};
+						});
+
+					return [
+						{
+							name: failed.name,
+							proof:
+								failed.name === "candidate_tests"
+									? {
+											kind: "candidate_only_check",
+											justification: {
+												kind: "new_visible_tests",
+												gateSha: input.identity.gateSha,
+												receiptDigest,
+											},
+										}
+									: { kind: "base_passed", control: controlOf(null) },
+						},
+					];
+				},
+			);
+
+			const [only] = proofs;
+			proof =
+				proofs.length === 1 && only !== undefined
+					? only.proof
+					: { kind: "combined", checks: proofs };
+		}
+
+		return { ...common, kind: "candidate_failure", check, proof, failure };
+	}
+
+	if (
+		failure.kind === "oracle" ||
+		(failure.kind === "infrastructure" && failure.reason === "baseline_failed")
+	)
+		return { ...common, kind: "base_failure", control, failure };
+
+	return { ...common, kind: "unavailable", reason: failure.reason, failure };
+}
+
+export function classifyFailure(input: ClassifyInput): FailureClass {
+	return assessCiFailure(input).failure;
+}
+
 export const FAILURE_SENTENCES: Readonly<Record<FailureClass["kind"], string>> =
 	{
 		candidate: "Hard CI failed for this candidate. A bounded repair is next.",
@@ -1509,6 +1938,7 @@ const MISSING_REASONS: readonly MissingEvidenceReason[] = [
 	"materialize_mismatch",
 	"ci_replay_disagrees",
 	"tree_replays_disagree",
+	"visible_base_failed",
 ];
 
 const INFRASTRUCTURE_REASONS: readonly InfrastructureReason[] = [
