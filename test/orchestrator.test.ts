@@ -12234,7 +12234,16 @@ describe("controller-only validate", () => {
 			}
 		});
 
-	for (const fault of ["batch", "inputs", "review_size", "no_change"] as const)
+	for (const fault of [
+		"batch",
+		"inputs",
+		"review_size",
+		"no_change",
+		"review_evidence",
+		"review_spend",
+		"build_spend",
+		"notice_error",
+	] as const)
 		it(`F10-2 published ${fault} stop holds with one summary instead of orphaning PR`, async () => {
 			const f = await reviewingRun();
 			f.executor.behaviors = [{ kind: "pass", usage: 11 }];
@@ -12270,7 +12279,15 @@ describe("controller-only validate", () => {
 			const port = f.executor.candidate!;
 			const execute = port.execute;
 			port.execute = async (state, request) => {
-				if (request.kind === "post_notice") notices.push(request.notice.kind);
+				if (request.kind === "post_notice") {
+					notices.push(request.notice.kind);
+
+					if (
+						fault === "notice_error" &&
+						request.notice.kind === "repair_started"
+					)
+						throw new PublicationError("evidence_unavailable");
+				}
 
 				return execute(state, request);
 			};
@@ -12306,6 +12323,22 @@ describe("controller-only validate", () => {
 					limit: 12288,
 				});
 
+			if (fault === "review_evidence")
+				f.executor.prepareReview = async () => {
+					throw new ReviewEvidenceUnavailable(
+						"review preparation lost its evidence",
+					);
+				};
+
+			if (fault === "review_spend" || fault === "build_spend") {
+				const spent = f.executor.spent.bind(f.executor);
+				f.executor.spent = async (input) =>
+					input.round === 1 &&
+					input.stage === (fault === "review_spend" ? "review" : "build")
+						? null
+						: spent(input);
+			}
+
 			if (fault === "no_change") {
 				const output = f.executor.output.bind(f.executor);
 				f.executor.output = async (input) =>
@@ -12330,7 +12363,25 @@ describe("controller-only validate", () => {
 				notices.filter((kind) => kind === "round_summary").length,
 				1,
 			);
+			assert.equal(
+				result.feedback?.batches.some((b) => b.status.kind === "applying"),
+				false,
+			);
+			assert.partialDeepStrictEqual(result.feedback?.batches[0]?.status, {
+				kind: "settled",
+				outcome: { kind: "stopped" },
+			});
 			assert.ok(restarted.state.runs.has(14));
+			const heldSince = result.published?.readiness.since;
+			assert.equal(heldSince, f.clock.now());
+			await drive(f.start(), f);
+			assert.equal(
+				notices.filter((kind) => kind === "round_summary").length,
+				1,
+			);
+			const restored = f.files.claims.get(runOf(14))?.handoff;
+			assert.ok(restored?.kind === "selected");
+			assert.equal(restored.published?.readiness.since, heldSince);
 		});
 
 	it("hops from CI to isolated review and waits for the owner with charged usage", async () => {

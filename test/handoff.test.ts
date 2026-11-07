@@ -2764,6 +2764,590 @@ function rebuildingFeedback(
 	};
 }
 
+function feedbackReview() {
+	const build = rebuildingFeedback();
+	const changed = { ...patch, round: 1, patchDigest: digestOf("round-ending") };
+
+	const built = handoffCandidate(build.state, {
+		kind: "repair_settled",
+		execution: build.execution,
+		tokens: 10,
+		result: { kind: "passed", patch: changed },
+	}).state;
+
+	const validating = handoffCandidate(built, readyObservation(built)).state;
+
+	return { ...reviewing(validated(validating)), changed, validating };
+}
+
+function roundObservation(
+	state: CandidateState,
+): Extract<CandidateEvent, { kind: "observed" }> {
+	const book = selected(state);
+
+	const promoted = [...book.history, book.current].find(
+		(g) => g.intent.digest === book.published?.promoted.digest,
+	);
+
+	const head = promoted?.report?.candidateSha;
+	assert.ok(head);
+	const report = book.current.report;
+
+	return {
+		...observed(book.current.intent.baseSha),
+		pr: { kind: "open", number: 5, head, refHead: head },
+		readiness:
+			report === null
+				? { kind: "unavailable" }
+				: { kind: "current", head: report.candidateSha, report },
+	};
+}
+
+const roundEndings = [
+	"repair_notice",
+	"review_launch",
+	"build_launch",
+	"review_spend",
+	"build_spend",
+	"missing_verdict",
+	"missing_report",
+	"review_failed",
+	"no_change",
+	"invalid_patch",
+	"validation_failed",
+	"validation_evidence",
+	"review_preflight",
+	"build_preflight",
+	"refresh_preflight",
+	"refresh_limit",
+	"generation_limit",
+	"repair_round",
+	"certification",
+	"checks",
+	"head_lag",
+	"promotion_lag",
+	"review_execution",
+	"resume_spend",
+] as const;
+
+for (const ending of roundEndings)
+	test(`F10-2 every round ending settles and has one durable summary: ${ending}`, async () => {
+		const build = rebuildingFeedback();
+		const review = feedbackReview();
+		let state = build.state;
+
+		let event: CandidateEvent = {
+			kind: "repair_settled",
+			execution: build.execution,
+			tokens: 10,
+			result: { kind: "no_change" },
+		};
+
+		const fault = {
+			kind: "effect_held",
+			reason: "evidence_unavailable",
+			now: 4321,
+		} as const;
+
+		if (ending === "repair_notice") {
+			state = selected(
+				handoffCandidate(queuedFeedback(), readyObservation(queuedFeedback()))
+					.state,
+			);
+			event = fault;
+		} else if (ending === "build_launch") {
+			state = selected(
+				handoffCandidate(startFeedback(), readyObservation(startFeedback()))
+					.state,
+			);
+			event = fault;
+		} else if (ending === "review_launch") {
+			state = {
+				...review.state,
+				work: {
+					kind: "effect",
+					request: { kind: "launch_review", execution: review.execution },
+				},
+			};
+			event = {
+				kind: "review_settled",
+				execution: review.execution,
+				tokens: null,
+				result: { kind: "failed" },
+			};
+		} else if (
+			[
+				"review_spend",
+				"missing_verdict",
+				"missing_report",
+				"review_failed",
+				"certification",
+			].includes(ending)
+		) {
+			state = review.state;
+
+			if (ending === "missing_verdict")
+				state = { ...state, current: { ...state.current, verdict: null } };
+
+			if (ending === "missing_report")
+				state = { ...state, current: { ...state.current, report: null } };
+			const receiptValue = receipt(review.execution);
+			event = {
+				kind: "review_settled",
+				execution: review.execution,
+				tokens: ending === "review_spend" ? null : 10,
+				result:
+					ending === "review_failed"
+						? { kind: "failed" }
+						: {
+								kind: "passed",
+								review:
+									ending === "certification"
+										? { ...receiptValue, patchDigest: digestOf("wrong") }
+										: receiptValue,
+								patch: {
+									kind: "found",
+									receipt: review.changed,
+									patch: "round-ending",
+								},
+							},
+			};
+		} else if (ending === "build_spend") event = { ...event, tokens: null };
+		else if (ending === "invalid_patch") {
+			state = { ...state, pin: { ...state.pin, maxReviewAttempts: 1 } };
+			event = {
+				...event,
+				result: {
+					kind: "passed",
+					patch: { ...patch, contractDigest: "wrong" },
+				},
+			};
+		} else if (
+			ending === "validation_failed" ||
+			ending === "validation_evidence"
+		) {
+			state = selected(review.validating);
+			const request = pending(state, "validate");
+
+			if (ending === "validation_failed") {
+				const validation = validated(state, false);
+				// The assessment callback itself ends the failed validation round.
+				state = selected(validation);
+				event = { ...roundObservation(state), now: 4321 };
+			} else
+				event = {
+					kind: "effect_completed",
+					completion: {
+						kind: "validate",
+						request,
+						result: {
+							kind: "failed",
+							validation: null,
+							reason: "evidence_unavailable",
+						},
+					},
+				};
+		} else if (ending === "resume_spend") {
+			state = {
+				...state,
+				accounts: state.accounts.map((a) =>
+					a.execution.id === build.execution.id
+						? { ...a, spend: { kind: "unknown", floor: 10 } }
+						: a,
+				),
+			};
+			event = {
+				kind: "resume_execution",
+				execution: build.execution,
+				tokens: 1,
+			};
+		} else if (
+			["build_preflight", "repair_round", "generation_limit"].includes(ending)
+		) {
+			state =
+				ending === "build_preflight"
+					? startFeedback()
+					: {
+							...state,
+							accounts: state.accounts.map((a) => ({
+								...a,
+								settlement: "settled" as const,
+							})),
+							work: {
+								kind: "repair_built",
+								patch:
+									ending === "repair_round" ? patch : { ...patch, round: 1 },
+								feedbackFrom: build.execution.feedbackFrom,
+							},
+						};
+
+			if (ending === "build_preflight")
+				state = {
+					...state,
+					pin: { ...state.pin, maxTokens: candidateUsage(state) },
+				};
+
+			if (ending === "generation_limit")
+				state = {
+					...state,
+					history: Array.from({ length: 5 }, (_, index) => {
+						const priorPatch = {
+							...patch,
+							patchDigest: digestOf(`history-${index}`),
+						};
+
+						return {
+							...state.current,
+							patch: priorPatch,
+							validation: null,
+							verdict: null,
+							report: null,
+							certification: null,
+							intent: generationIntent({
+								pin,
+								patch: priorPatch,
+								round: 0,
+								generation: 0,
+								baseSha: sha,
+								origin: { kind: "initial" },
+								publication: { kind: "initial" },
+							}),
+						};
+					}),
+				};
+			event = roundObservation(state);
+		} else if (
+			[
+				"review_preflight",
+				"refresh_preflight",
+				"refresh_limit",
+				"review_execution",
+			].includes(ending)
+		) {
+			state = {
+				...review.state,
+				accounts: review.state.accounts.map((a) => ({
+					...a,
+					settlement: "settled" as const,
+				})),
+				work: { kind: "review_due", seats: review.execution.seats },
+			};
+
+			if (ending.endsWith("preflight"))
+				state = {
+					...state,
+					pin: { ...state.pin, maxTokens: candidateUsage(state) },
+				};
+
+			if (ending === "review_execution")
+				state = { ...state, current: { ...state.current, verdict: null } };
+
+			if (ending === "refresh_limit")
+				state = {
+					...state,
+					current: {
+						...state.current,
+						validation: null,
+						verdict: null,
+						report: null,
+						certification: null,
+						intent: generationIntent({
+							pin,
+							patch: state.current.patch,
+							round: 1,
+							generation: 3,
+							baseSha: sha,
+							origin: { kind: "refresh", previous: state.current.intent },
+							publication: state.current.intent.publication,
+						}),
+					},
+				};
+			event = roundObservation(state);
+
+			if (ending.startsWith("refresh")) {
+				const main = "b".repeat(40);
+				assert.ok(isGitSha(main));
+				event = { ...event, main };
+			}
+		} else if (["checks", "head_lag", "promotion_lag"].includes(ending)) {
+			state = selected(
+				handoffCandidate(review.state, {
+					kind: "review_settled",
+					execution: review.execution,
+					tokens: 10,
+					result: {
+						kind: "passed",
+						review: receipt(review.execution),
+						patch: {
+							kind: "found",
+							receipt: review.changed,
+							patch: "round-ending",
+						},
+					},
+				}).state,
+			);
+			const head = state.current.report!.candidateSha;
+			const old = build.state.current.report!.candidateSha;
+			event = {
+				...readyObservation(state),
+				pr: { kind: "open", number: 5, head: old, refHead: head },
+			};
+
+			if (ending === "checks")
+				event = {
+					...readyObservation(state),
+					readiness: { kind: "not_ready", reason: "checks_incomplete" },
+				};
+
+			if (ending === "promotion_lag") {
+				state = selected(
+					handoffCandidate(state, {
+						...readyObservation(state),
+						pr: { kind: "open", number: 5, head: old, refHead: old },
+					}).state,
+				);
+				const request = pending(state, "promote_pr");
+				event = {
+					kind: "effect_completed",
+					completion: { kind: "promote_pr", request, head: old, refHead: old },
+				};
+			}
+		}
+
+		const timed = { ...event, now: 4321 };
+		const stopped = handoffCandidate(state, timed);
+		const summary = pending(stopped.state, "post_notice");
+		assert.equal(summary.notice.kind, "round_summary");
+		assert.equal(
+			selected(stopped.state).feedback?.batches.some(
+				(b) => b.status.kind === "applying",
+			),
+			false,
+		);
+
+		const persisted = parseCandidateState(
+			JSON.parse(JSON.stringify(stopped.state)),
+		);
+
+		assert.ok(persisted);
+
+		const retry = handoffCandidate(persisted, {
+			...roundObservation(persisted),
+			now: 9999,
+		});
+
+		assert.deepEqual(
+			retry.effect,
+			summary,
+			"restart must resume the same summary intent",
+		);
+
+		await withLocalArtifactDownload(async (root) => {
+			const github = new FakeGitHub();
+			github.add(fakeIssue(pin.issue));
+			const pr = github.add(fakeIssue(5, { pullRequest: true }));
+
+			const exec: import("../src/gh.ts").Exec = async (command, args) =>
+				args.includes("DELETE") &&
+				args.some((arg) => arg.endsWith("/labels/factory%3Areview"))
+					? { code: 0, stderr: "", stdout: "" }
+					: github.exec(command, args);
+
+			for (let attempt = 0; attempt < 2; attempt++) {
+				const port = controllerCandidatePort({ stateDir: root, exec });
+				assert.ok(await port.execute(retry.state, summary));
+			}
+
+			assert.equal(
+				pr.comments.filter((c) =>
+					c.body.split("\n").includes(summary.notice.key),
+				).length,
+				1,
+			);
+		});
+
+		const completed = handoffCandidate(retry.state, {
+			kind: "effect_completed",
+			completion: { kind: "post_notice", request: summary },
+		});
+
+		assert.equal(selected(completed.state).work.kind, "held");
+		assert.equal(
+			handoffCandidate(completed.state, roundObservation(completed.state))
+				.effect,
+			null,
+			"exactly one summary intent per ending",
+		);
+	});
+
+test("F10-2 complete_handoff settles only its repair batch, not another applying batch", () => {
+	const review = feedbackReview();
+
+	let state = handoffCandidate(review.state, {
+		kind: "review_settled",
+		execution: review.execution,
+		tokens: 10,
+		result: {
+			kind: "passed",
+			review: receipt(review.execution),
+			patch: { kind: "found", receipt: review.changed, patch: "round-ending" },
+		},
+	}).state;
+
+	state = handoffCandidate(state, readyObservation(state)).state;
+	const request = pending(state, "complete_handoff");
+	const book = selected(state);
+	assert.ok(book.feedback);
+
+	const unrelated = {
+		...book.feedback.batches[0]!,
+		digest: digestOf("unrepaired older batch"),
+		round: 2 as const,
+		status: { kind: "applying", round: 2 } as const,
+	};
+
+	const poisoned = {
+		...book,
+		feedback: {
+			...book.feedback,
+			batches: [unrelated, ...book.feedback.batches],
+		},
+	};
+
+	const completed = selected(
+		handoffCandidate(poisoned, {
+			kind: "effect_completed",
+			completion: { kind: "complete_handoff", request, now: 4321 },
+		}).state,
+	);
+
+	assert.deepEqual(completed.feedback?.batches[0], unrelated);
+	assert.deepEqual(completed.feedback?.batches[1]?.status, {
+		kind: "settled",
+		outcome: { kind: "applied", head: request.head },
+	});
+});
+
+test("F10-2 another queued request cannot start while an old batch is applying", () => {
+	const started = startFeedback();
+	assert.ok(started.feedback);
+	const obs = feedbackObservation(started, 88);
+	assert.ok(obs.kind === "read" && obs.batch);
+
+	const book = {
+		...started,
+		work: { kind: "held", reason: "evidence_unavailable", since: 100 } as const,
+	};
+
+	const result = handoffCandidate(book, {
+		...readyObservation(book),
+		feedback: { ...obs, batch: { ...obs.batch, refusedInline: false } },
+	});
+
+	assert.equal(
+		selected(result.state).feedback?.batches.filter(
+			(b) => b.status.kind === "applying",
+		).length,
+		1,
+	);
+	assert.notEqual(
+		result.effect?.kind === "post_notice" ? result.effect.notice.kind : null,
+		"repair_started",
+	);
+});
+
+test("F10-2 a failed summary effect retains its intent for retry", () => {
+	const build = rebuildingFeedback();
+
+	const stopped = handoffCandidate(build.state, {
+		kind: "repair_settled",
+		execution: build.execution,
+		tokens: 10,
+		result: { kind: "no_change" },
+	}).state;
+
+	const failed = handoffCandidate(stopped, {
+		kind: "effect_held",
+		reason: "evidence_unavailable",
+		now: 4321,
+	});
+
+	assert.deepEqual(failed.state, stopped);
+	assert.deepEqual(failed.effect, pending(stopped, "post_notice"));
+});
+
+test("F10-2 summary hold records observation time and keeps it across restart", () => {
+	const build = rebuildingFeedback();
+
+	const event = {
+		kind: "repair_settled",
+		execution: build.execution,
+		tokens: 10,
+		result: { kind: "no_change" },
+		now: 4321,
+	} as const;
+
+	const stopped = handoffCandidate(build.state, event);
+	const request = pending(stopped.state, "post_notice");
+	assert.equal(request.at, 4321);
+	const parsed = parseCandidateState(JSON.parse(JSON.stringify(stopped.state)));
+	assert.ok(parsed);
+
+	const held = handoffCandidate(parsed, {
+		kind: "effect_completed",
+		completion: { kind: "post_notice", request },
+	}).state;
+
+	assert.partialDeepStrictEqual(selected(held), {
+		work: { kind: "held", since: 4321 },
+		published: { readiness: { kind: "not_ready", since: 4321 } },
+	});
+
+	const later = handoffCandidate(held, {
+		...readyObservation(held),
+		now: 9999,
+	}).state;
+
+	assert.deepEqual(
+		selected(later).published?.readiness,
+		selected(held).published?.readiness,
+	);
+	assert.deepEqual(selected(later).work, selected(held).work);
+});
+
+test("F10-2 C2 merge before repair-start completion records durable withdrawal intent", () => {
+	const initial = queuedFeedback();
+
+	const started = handoffCandidate(initial, {
+		...readyObservation(initial),
+		now: 4321,
+	}).state;
+
+	const request = pending(started, "post_notice");
+	assert.equal(request.notice.kind, "repair_started");
+	// Label DELETE has landed, but the completion claim has not. Restart from intent.
+	const restored = parseCandidateState(JSON.parse(JSON.stringify(started)));
+	assert.ok(restored);
+
+	const merged = handoffCandidate(restored, {
+		...observed(),
+		pr: {
+			kind: "merged",
+			number: 5,
+			head: initial.current.report!.candidateSha,
+			mergeSha: sha,
+			actor: "owner",
+		},
+	});
+
+	const terminal = pending(merged.state, "finish_pr").terminal;
+	assert.partialDeepStrictEqual(terminal, {
+		kind: "merged",
+		assurance: { kind: "factory_verified" },
+		readiness: { kind: "not_ready", reason: "feedback_repair", since: 4321 },
+	});
+});
+
 test("F10-2 F10-1 queued book picks up exactly one repair with no new intake notice", () => {
 	const legacy = queuedFeedback();
 	const parsed = parseCandidateState(JSON.parse(JSON.stringify(legacy)));
