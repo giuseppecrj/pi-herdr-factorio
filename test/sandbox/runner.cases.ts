@@ -121,7 +121,7 @@ import {
 	classifyRefusal,
 	SessionTracker,
 } from "../../server/sandbox/settle.ts";
-import type { Digest } from "../../src/run.ts";
+import { type Digest, REVIEW_MAX_TOKENS } from "../../src/run.ts";
 import {
 	isGitSha,
 	isRepoSlug,
@@ -6789,7 +6789,7 @@ describe("multi-seat candidate review", () => {
 
 				if (mode === "resume") {
 					assert.equal(launches.length, 1);
-					assert.equal(launches[0]?.settings.maxTokens, 29_990);
+					assert.equal(launches[0]?.settings.maxTokens, REVIEW_MAX_TOKENS - 10);
 					assert.equal(launches[0]?.remainingRunTokens, TRUSTED_RUN_CAP - 30);
 					assert.equal(h.hosts.length, 3);
 					assert.equal(h.calls.length, 3);

@@ -134,6 +134,7 @@ import {
 	digestOf,
 	runIdOf,
 	REPAIR_BUILD_MAX_TOKENS,
+	REVIEW_MAX_TOKENS,
 } from "../src/run.ts";
 import {
 	type GitSha,
@@ -10849,7 +10850,7 @@ describe("controller-only validate", () => {
 		);
 
 		assert.deepEqual(review?.tools, ["read", "grep", "ls"]);
-		assert.equal(review?.settings.maxTokens, 30_000);
+		assert.equal(review?.settings.maxTokens, REVIEW_MAX_TOKENS);
 		await f.controller.tick();
 		await f.controller.tick();
 		assert.equal(f.files.claims.get(runOf(14))?.status, "waiting");
@@ -11273,7 +11274,8 @@ describe("controller-only validate", () => {
 				const spent =
 					stage === "build" ? REPAIR_BUILD_MAX_TOKENS / 2 + 169 : 12_000;
 
-				const cap = stage === "build" ? REPAIR_BUILD_MAX_TOKENS : 30_000;
+				const cap =
+					stage === "build" ? REPAIR_BUILD_MAX_TOKENS : REVIEW_MAX_TOKENS;
 
 				if (stage === "build")
 					f.executor.buildBehavior = { kind: "fail", usage: spent };
@@ -11344,14 +11346,17 @@ describe("controller-only validate", () => {
 			assert.equal(f.executor.launches.at(-1)?.attempt, 2);
 			assert.equal(
 				f.executor.launches.at(-1)?.settings.maxTokens,
-				(stage === "build" ? REPAIR_BUILD_MAX_TOKENS : 30_000) - interrupted,
+				(stage === "build" ? REPAIR_BUILD_MAX_TOKENS : REVIEW_MAX_TOKENS) -
+					interrupted,
 			);
 			assert.equal(f.files.claims.get(runOf(14))?.usage, 29 + interrupted + 11);
 		});
 
 		it(`does not launch or approve ${stage} after cumulative round exhaustion`, async () => {
 			const f = await cappedRun(stage);
-			const cap = stage === "build" ? REPAIR_BUILD_MAX_TOKENS : 30_000;
+
+			const cap =
+				stage === "build" ? REPAIR_BUILD_MAX_TOKENS : REVIEW_MAX_TOKENS;
 
 			if (stage === "build")
 				f.executor.buildBehavior = { kind: "fail", usage: cap / 2 };
@@ -11420,7 +11425,10 @@ describe("controller-only validate", () => {
 		const restarted = f.start();
 		await once(restarted);
 		assert.equal(f.executor.launches.at(-1)?.attempt, 2);
-		assert.equal(f.executor.launches.at(-1)?.settings.maxTokens, 14_000);
+		assert.equal(
+			f.executor.launches.at(-1)?.settings.maxTokens,
+			REVIEW_MAX_TOKENS - 12_000 - 4_000,
+		);
 		assert.equal(
 			f.executor.launches.at(-1)?.remainingRunTokens,
 			TRUSTED_RUN_CAP - 29 - 12_000 - 4_000,
