@@ -230,8 +230,16 @@ export function isGitSha(input: string): input is GitSha {
 	return GIT_SHA.test(input);
 }
 
+export function isRefSegment(segment: string): boolean {
+	return !segment.startsWith(".") && !segment.endsWith(".lock");
+}
+
 export function isBranchName(input: string): boolean {
-	return BRANCH_NAME.test(input);
+	return (
+		BRANCH_NAME.test(input) &&
+		!input.endsWith(".") &&
+		input.split("/").every(isRefSegment)
+	);
 }
 
 function isModelId(input: string): input is ModelId {
