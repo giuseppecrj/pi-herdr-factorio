@@ -186,6 +186,9 @@ describe("forbidden paths", () => {
 
 it("reserves the controller-owned repair feedback path and descendants", () => {
 	for (const path of [
+		".factory-feedback-full.json",
+		".factory-feedback-full.json/x.ts",
+		".FACTORY-FEEDBACK-FULL.JSON",
 		".factory-feedback.json",
 		"./.factory-feedback.json",
 		".FACTORY-FEEDBACK.JSON",

@@ -138,6 +138,7 @@ import {
 import type { Run } from "../src/run.ts";
 import {
 	blocksReview,
+	candidateReviewPrompt,
 	JUDGMENT_OUTCOMES,
 	ReviewEvidenceUnavailable,
 	REVIEW_DIFF_MAX_BYTES,
@@ -11175,8 +11176,11 @@ describe("controller-only validate", () => {
 						fault === "terminal_claim" &&
 						!faulted &&
 						next.handoff?.kind === "selected" &&
-						next.handoff.work.kind === "effect" &&
-						next.handoff.work.request.kind === "finish_pr"
+						((next.handoff.work.kind === "effect" &&
+							next.handoff.work.request.kind === "finish_pr") ||
+							(target === "complete_handoff" &&
+								next.handoff.work.kind === "held" &&
+								next.handoff.work.reason === "summary_too_large"))
 					) {
 						faulted = true;
 
@@ -11206,15 +11210,30 @@ describe("controller-only validate", () => {
 				await f.start().tick();
 				await f.start().tick();
 				const terminal = f.files.claims.get(runOf(14));
-				assert.equal(terminal?.status, "failed");
-				assert.ok(
-					terminal?.handoff?.kind === "selected" &&
-						terminal.handoff.work.kind === "terminal",
+				assert.equal(
+					terminal?.status,
+					target === "open_pr" ? "failed" : "blocked",
 				);
-				assert.deepEqual(terminal.handoff.work.terminal, {
-					kind: "failed",
-					reason: "summary_too_large",
-				});
+				assert.ok(terminal?.handoff?.kind === "selected");
+
+				if (target === "open_pr") {
+					assert.ok(terminal.handoff.work.kind === "terminal");
+					assert.deepEqual(terminal.handoff.work.terminal, {
+						kind: "failed",
+						reason: "summary_too_large",
+					});
+				} else {
+					assert.partialDeepStrictEqual(terminal.handoff.work, {
+						kind: "held",
+						reason: "summary_too_large",
+					});
+					assert.ok(f.controller.state.runs.has(14));
+					assert.partialDeepStrictEqual(terminal.handoff.published?.readiness, {
+						kind: "not_ready",
+						reason: "summary_too_large",
+					});
+				}
+
 				assert.ok(
 					parseCandidateState(JSON.parse(JSON.stringify(terminal.handoff))),
 				);
@@ -11224,15 +11243,18 @@ describe("controller-only validate", () => {
 					/summary_too_large/,
 				);
 				const row = (await outbox.scan())?.[0]?.row?.row;
-				assert.ok(row?.v === 4);
-				assert.equal(row.outcome.kind, "failed");
-				assert.deepEqual(row.failure?.kind === "known" && row.failure.value, {
-					stage: "land",
-					class: "input",
-					reason: "summary_too_large",
-					failedVisibleChecks: [],
-					retainedPatch: null,
-				});
+
+				if (target === "open_pr") {
+					assert.ok(row?.v === 4);
+					assert.equal(row.outcome.kind, "failed");
+					assert.deepEqual(row.failure?.kind === "known" && row.failure.value, {
+						stage: "land",
+						class: "input",
+						reason: "summary_too_large",
+						failedVisibleChecks: [],
+						retainedPatch: null,
+					});
+				} else assert.equal(row, undefined);
 				assert.equal(faulted, fault !== "none");
 				const launches = f.executor.launches.length;
 				const attempts = calls;
@@ -12234,6 +12256,337 @@ describe("controller-only validate", () => {
 			}
 		});
 
+	const publishedStopFaults = [
+		"batch",
+		"inputs",
+		"review_size",
+		"review_size_callback",
+		"review_size_recovery",
+		"no_change",
+		"review_evidence",
+		"review_spend",
+		"build_spend",
+		"notice_error",
+		"summary_size",
+	] as const;
+
+	for (const { fault, tokens } of publishedStopFaults.flatMap((fault) =>
+		(fault.startsWith("review_size") ? [0, null] : [null]).map((tokens) => ({
+			fault,
+			tokens,
+		})),
+	))
+		it(`F10-2 published ${fault} stop holds with one summary instead of orphaning PR (tokens=${tokens})`, async () => {
+			const f = await reviewingRun();
+			f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+			await once(f.controller);
+			await f.controller.tick();
+			await f.controller.tick();
+			const claim = f.files.claims.get(runOf(14));
+			assert.ok(claim?.handoff?.kind === "selected" && claim.handoff.published);
+			const book = claim.handoff;
+			const batch = digestOf("feedback repair fixture");
+			const id = `github:${repo}:review:77` as const;
+
+			const queued = {
+				...book,
+				feedback: {
+					pr: 99,
+					seen: [id],
+					batches: [
+						{
+							digest: batch,
+							head: book.current.report!.candidateSha,
+							actionable: true,
+							reviews: [id],
+							notice: "posted" as const,
+							status: { kind: "queued" as const },
+						},
+					],
+				},
+			};
+
+			f.files.claims.set(runOf(14), { ...claim, handoff: queued });
+			const notices: string[] = [];
+			let summarySince: number | undefined;
+			const startedAt = f.clock.now();
+			const port = f.executor.candidate!;
+			const execute = port.execute;
+			port.execute = async (state, request) => {
+				if (request.kind === "complete_handoff" && fault === "summary_size")
+					throw new PublicationError("summary_too_large");
+
+				if (request.kind === "post_notice") {
+					notices.push(request.notice.kind);
+
+					if (request.notice.kind === "round_summary") {
+						summarySince = request.at;
+						assert.ok(
+							summarySince !== undefined &&
+								summarySince >= startedAt &&
+								summarySince <= f.clock.now(),
+						);
+					}
+
+					if (
+						fault === "notice_error" &&
+						request.notice.kind === "repair_started"
+					)
+						throw new PublicationError("evidence_unavailable");
+				}
+
+				return execute(state, request);
+			};
+
+			if (fault !== "batch")
+				Object.assign(f.executor, {
+					readFeedback: async () => ({
+						version: 1,
+						runId: book.pin.runId,
+						pr: 99,
+						head: book.current.report!.candidateSha,
+						records: [
+							{
+								event: id,
+								actor: "writer",
+								intake: { kind: "actionable" },
+								inline: [],
+							},
+						],
+						cards: [],
+						full: null,
+					}),
+				});
+
+			if (fault === "inputs")
+				f.executor.baseCheck = async () => ({
+					kind: "interrupted",
+					wallMs: 0,
+				});
+
+			if (fault.startsWith("review") || fault === "summary_size") {
+				f.executor.fallback = { kind: "pass", usage: 11 };
+				const validate = f.executor.validate;
+				f.executor.validate = async (input) => {
+					const result = await validate(input);
+					assert.ok(result.kind === "finished" && input.generation);
+
+					const verdict = {
+						...result.verdict,
+						patchDigest: input.generation.patchDigest,
+					};
+
+					return {
+						...result,
+						verdict,
+						report: reportOf(verdict),
+						assessment: f.executor.assess(input, verdict),
+					};
+				};
+			}
+
+			let preparations = 0;
+
+			const reviewLaunches = f.executor.launches.filter(
+				(l) => l.stage === "review",
+			).length;
+
+			if (fault.startsWith("review_size")) {
+				const diff = `diff --git a/server/cli.ts b/server/cli.ts\n--- a/server/cli.ts\n+++ b/server/cli.ts\n@@ -1 +1 @@\n-export const text = '';\n+export const text = '${"é".repeat(REVIEW_DIFF_MAX_BYTES)}';\n`;
+				assert.ok(Buffer.byteLength(diff) > REVIEW_DIFF_MAX_BYTES);
+				const contract = await f.files.readContract(runOf(14));
+				assert.ok(contract.kind === "found");
+				const output = f.executor.output.bind(f.executor);
+				const prepare = f.executor.prepareReview!;
+
+				const refuse = (verdict: import("../src/run.ts").Verdict) => {
+					const refusal = candidateReviewPrompt({
+						contract: contract.contract,
+						diff,
+						paths: ["server/cli.ts"],
+						judges: [],
+						guidance: "Review read-only",
+						verdict,
+					});
+
+					assert.ok(refusal.kind === "refused");
+
+					return refusal;
+				};
+
+				f.executor.output = async (input) => {
+					const result = await output(input);
+
+					if (
+						input.round === 1 &&
+						input.stage === "build" &&
+						result instanceof Object &&
+						result.kind === "build" &&
+						result.result.kind === "found"
+					) {
+						const built = {
+							kind: "build",
+							result: {
+								...result.result,
+								patch: diff,
+								receipt: {
+									...result.result.receipt,
+									patchDigest: digestOf(diff),
+								},
+							},
+						} as const;
+
+						f.executor.builds.set(
+							`${input.runId}/build-r1-${input.attempt}`,
+							built,
+						);
+
+						return built;
+					}
+
+					if (input.round === 1 && input.stage === "review") {
+						assert.ok(preparations > 0);
+						const current = f.files.claims.get(runOf(14))?.handoff;
+						assert.ok(current?.kind === "selected" && current.current.verdict);
+						const refusal = refuse(current.current.verdict);
+						assert.ok(refusal.kind === "refused");
+
+						return refusal;
+					}
+
+					return result;
+				};
+
+				f.executor.prepareReview = async (input) => {
+					preparations++;
+					const current = f.files.claims.get(runOf(14))?.handoff;
+					assert.ok(current?.kind === "selected" && current.current.verdict);
+					assert.equal(current.current.verdict.patchDigest, digestOf(diff));
+					assert.equal(current.current.verdict.pass, true);
+					assert.equal(current.current.intent.publication.kind, "successor");
+
+					return fault === "review_size"
+						? refuse(current.current.verdict)
+						: await prepare(input);
+				};
+
+				const spent = f.executor.spent.bind(f.executor);
+				f.executor.spent = async (input) =>
+					input.round === 1 && input.stage === "review" ? tokens : spent(input);
+
+				if (fault === "review_size_recovery") {
+					const launch = f.executor.launch.bind(f.executor);
+					f.executor.launch = async (input) => {
+						if (input.round === 1 && input.stage === "review")
+							throw new Error("crash before repair review launch");
+
+						return launch(input);
+					};
+				}
+			}
+
+			if (fault === "review_evidence")
+				f.executor.prepareReview = async () => {
+					throw new ReviewEvidenceUnavailable(
+						"review preparation lost its evidence",
+					);
+				};
+
+			if (fault === "review_spend" || fault === "build_spend") {
+				const spent = f.executor.spent.bind(f.executor);
+				f.executor.spent = async (input) =>
+					input.round === 1 &&
+					input.stage === (fault === "review_spend" ? "review" : "build")
+						? null
+						: spent(input);
+			}
+
+			if (fault === "no_change") {
+				const output = f.executor.output.bind(f.executor);
+				f.executor.output = async (input) =>
+					input.stage === "build" && input.round === 1
+						? {
+								kind: "build",
+								result: { kind: "blocked", reason: "repair_no_change" },
+							}
+						: output(input);
+			}
+
+			let restarted = f.start();
+
+			if (fault === "review_size_recovery") {
+				await assert.rejects(
+					drive(restarted, f),
+					/crash before repair review launch/,
+				);
+				restarted = f.start();
+			}
+
+			await drive(restarted, f);
+			await drive(restarted, f);
+			const result = f.files.claims.get(runOf(14))?.handoff;
+			assert.ok(result?.kind === "selected");
+
+			if (fault.startsWith("review_size"))
+				assert.equal(
+					preparations,
+					1,
+					"must reach review preparation after validation",
+				);
+			assert.equal(result.work.kind, "held");
+			assert.equal(
+				notices.filter((kind) => kind === "repair_started").length,
+				1,
+			);
+			assert.equal(
+				notices.filter((kind) => kind === "round_summary").length,
+				1,
+			);
+			assert.equal(
+				result.feedback?.batches.some((b) => b.status.kind === "applying"),
+				false,
+			);
+			assert.partialDeepStrictEqual(result.feedback?.batches[0]?.status, {
+				kind: "settled",
+				outcome: { kind: "stopped" },
+			});
+
+			if (fault.startsWith("review_size")) {
+				assert.deepEqual(result.feedback?.batches[0]?.status, {
+					kind: "settled",
+					outcome: { kind: "stopped", reason: "review_input_too_large" },
+				});
+				assert.equal(
+					result.work.kind === "held" && result.work.reason,
+					"review_input_too_large",
+				);
+				assert.equal(
+					f.executor.launches.filter((l) => l.stage === "review").length -
+						reviewLaunches,
+					fault === "review_size_callback" ? 1 : 0,
+				);
+				assert.equal(keyed(f.github, 14, "review-input").length, 1);
+			}
+
+			assert.ok(restarted.state.runs.has(14));
+			const heldSince = result.published?.readiness.since;
+			assert.equal(heldSince, summarySince);
+			await drive(f.start(), f);
+			assert.equal(
+				notices.filter((kind) => kind === "round_summary").length,
+				1,
+			);
+			const restored = f.files.claims.get(runOf(14))?.handoff;
+			assert.ok(restored?.kind === "selected");
+			assert.equal(restored.published?.readiness.since, heldSince);
+
+			if (fault.startsWith("review_size")) {
+				assert.equal(keyed(f.github, 14, "review-input").length, 1);
+				assert.deepEqual(restored.feedback, result.feedback);
+				assert.deepEqual(restored.work, result.work);
+			}
+		});
+
 	it("hops from CI to isolated review and waits for the owner with charged usage", async () => {
 		const f = await reviewingRun();
 		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
@@ -12386,7 +12739,7 @@ describe("controller-only validate", () => {
 			"99/5812783128",
 			recorded.comments.map((c) => ({ ...c, commit_id: head })),
 		);
-		let notices = 0;
+		const notices: string[] = [];
 		port.observe = async (state, now) => {
 			const obs = await observe(state, now);
 
@@ -12407,10 +12760,7 @@ describe("controller-only validate", () => {
 		};
 
 		port.execute = async (state, request) => {
-			if (request.kind === "post_notice") {
-				assert.equal(request.notice.kind, "feedback_intake");
-				notices++;
-			}
+			if (request.kind === "post_notice") notices.push(request.notice.kind);
 
 			return execute(state, request);
 		};
@@ -12419,11 +12769,23 @@ describe("controller-only validate", () => {
 		const stored = f.files.claims.get(runOf(14))?.handoff;
 		assert.ok(stored?.kind === "selected");
 		assert.equal(stored.feedback?.batches.length, 1);
-		assert.equal(stored.feedback.batches[0]?.status.kind, "queued");
+		assert.deepEqual(stored.feedback.batches[0]?.status, {
+			kind: "settled",
+			outcome: { kind: "stopped", reason: "diagnosis_missing_evidence" },
+		});
 		assert.equal(stored.feedback.batches[0]?.notice, "posted");
-		assert.equal(notices, 1);
-		assert.deepEqual(stored.published, book.published);
-		assert.deepEqual(stored.accounts, book.accounts);
+		assert.deepEqual(notices, [
+			"feedback_intake",
+			"repair_started",
+			"round_summary",
+		]);
+		assert.equal(stored.published?.number, book.published?.number);
+		assert.equal(stored.published?.readiness.kind, "not_ready");
+		assert.deepEqual(
+			stored.accounts.slice(0, book.accounts.length),
+			book.accounts,
+		);
+		assert.equal(stored.accounts.length, book.accounts.length + 1);
 
 		const batch = readFileSync(
 			join(
@@ -12608,7 +12970,10 @@ describe("controller-only validate", () => {
 			const saved = f.files.claims.get(runOf(14));
 			assert.ok(saved?.handoff?.kind === "selected");
 			assert.equal(saved.handoff.feedback?.batches.length, 1);
-			assert.equal(saved.handoff.feedback?.batches[0]?.status.kind, "queued");
+			assert.deepEqual(saved.handoff.feedback?.batches[0]?.status, {
+				kind: "applying",
+				round: 1,
+			});
 			const launches = f.executor.launches.length;
 			const restored = f.start();
 			await restored.tick();
@@ -12616,8 +12981,11 @@ describe("controller-only validate", () => {
 			const book = f.files.claims.get(runOf(14))?.handoff;
 			assert.ok(book?.kind === "selected");
 			assert.equal(book.feedback?.batches.length, 1);
-			assert.equal(book.feedback?.batches[0]?.notice, "posted");
-			assert.equal(book.feedback?.batches[0]?.status.kind, "queued");
+			assert.equal(book.feedback?.batches[0]?.notice, "none");
+			assert.deepEqual(book.feedback?.batches[0]?.status, {
+				kind: "settled",
+				outcome: { kind: "stopped", reason: "diagnosis_missing_evidence" },
+			});
 			assert.equal(notices, 1);
 			assert.equal(f.executor.launches.length, launches);
 		});
@@ -12800,10 +13168,12 @@ describe("controller-only validate", () => {
 			"the same observation crosses both candidate commits",
 		);
 		let notices = 0;
+		const noticeKinds: string[] = [];
 		const execute = port.execute;
 		port.execute = async (state, request) => {
 			if (request.kind !== "post_notice") return execute(state, request);
 			notices++;
+			noticeKinds.push(request.notice.kind);
 
 			return { kind: "post_notice", request };
 		};
@@ -12822,9 +13192,13 @@ describe("controller-only validate", () => {
 			capped
 				? restored.feedback?.overflow?.notice
 				: restored.feedback?.batches[0]?.notice,
-			"posted",
+			capped ? "posted" : "none",
 		);
-		assert.equal(notices, 1);
+		assert.deepEqual(
+			noticeKinds,
+			capped ? ["feedback_overflow"] : ["repair_started", "round_summary"],
+		);
+		assert.equal(notices, capped ? 1 : 2);
 		assert.equal(
 			f.executor.launches.filter((l) => l.stage === "build").length,
 			1,

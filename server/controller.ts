@@ -11,6 +11,11 @@ import {
 	canonicalJson,
 	classifyFeedback,
 	feedbackId,
+	readFeedbackBatch,
+	type FeedbackBatchRef,
+	type RoundReceipt,
+	type FeedbackDisposition,
+	type BuilderDisposition,
 	type FeedbackBatch,
 	type FeedbackEvent,
 	type FeedbackId,
@@ -22,6 +27,7 @@ import {
 	parseCandidateState,
 	candidateUsage,
 	candidateGenerations,
+	completingFeedbackBatch,
 	migrateCertificationValue,
 	migrateEvidenceValue,
 	notProven,
@@ -109,7 +115,12 @@ import {
 	type OutboxJob,
 } from "../src/ledger.ts";
 import { isGitSha, isRepoSlug, parseWorkflow } from "../src/workflow.ts";
-import { FAMILY_MISSING, familyClaimsHold, reviewR8 } from "../src/review.ts";
+import {
+	FAMILY_MISSING,
+	familyClaimsHold,
+	reviewR8,
+	findingFingerprints,
+} from "../src/review.ts";
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
@@ -5342,6 +5353,73 @@ export function controllerCandidatePort(config: {
 		);
 	};
 
+	const postNotice = async (
+		state: CandidateState,
+		number: number,
+		key: string,
+		body: string,
+		update = false,
+	): Promise<boolean> => {
+		const adapter = new GitHubTicketAdapter({
+			exec: config.exec,
+			repo: state.pin.repo,
+		});
+
+		const comments = await adapter.readComments(number);
+
+		if (comments.kind !== "ok") return false;
+
+		const matching = comments.value.filter(
+			(c) =>
+				c.author?.login.toLowerCase() === CONTROLLER_LOGIN.toLowerCase() &&
+				c.author.type === "Bot" &&
+				c.body.split("\n").includes(key),
+		);
+
+		if (matching.length > 1) return false;
+
+		if (matching.length === 1) {
+			const comment = matching[0]!;
+
+			if (!update || comment.body === body) return true;
+
+			if (!(await allowed(state))) return false;
+
+			return (
+				(
+					await new GitHubTicketWriter({
+						exec: config.exec,
+						repo: state.pin.repo,
+					}).editComment(comment.id, body)
+				).kind === "posted"
+			);
+		}
+
+		const dir = join(config.stateDir, "handoff", state.pin.runId, "feedback");
+		privateDir(dir);
+		const intent = join(dir, `notice-${digestOf(key)}.json`);
+		const bytes = JSON.stringify({ key });
+
+		if (present(intent)) {
+			if (regularText(intent) !== bytes) return false;
+		} else exclusive(intent, bytes);
+
+		if (!(await allowed(state))) {
+			await retireUnissuedIntent(intent, bytes);
+
+			return false;
+		}
+
+		const posted = await new GitHubTicketWriter({
+			exec: config.exec,
+			repo: state.pin.repo,
+		}).postComment(number, body);
+
+		if (posted.kind === "rejected") await retireUnissuedIntent(intent, bytes);
+
+		return posted.kind === "posted";
+	};
+
 	const apiOf = (state: CandidateState) =>
 		new GitHubPublicationApi(config.exec, state.pin.repo);
 
@@ -5430,6 +5508,8 @@ export function controllerCandidatePort(config: {
 			"executionAllowed" | "capacityAvailable"
 		>
 	> => {
+		if (state.kind === "selected")
+			await keepFeedbackRounds(config.stateDir, state);
 		const api = apiOf(state);
 
 		let pr: Extract<CandidateEvent, { kind: "observed" }>["pr"] = {
@@ -5789,6 +5869,7 @@ export function controllerCandidatePort(config: {
 		},
 		async execute(state, request) {
 			if (state.kind !== "selected") return null;
+			await keepFeedbackRounds(config.stateDir, state);
 			const api = apiOf(state);
 
 			const writer = new GitHubTicketWriter({
@@ -5835,10 +5916,15 @@ export function controllerCandidatePort(config: {
 			if (!(await allowed(state))) return null;
 
 			if (request.kind === "post_notice") {
-				const batch = state.feedback?.batches.find(
-					(b) =>
-						request.notice.key ===
-						`<!-- factory:notice ${state.pin.runId} feedback_intake ${b.digest} -->`,
+				const batch = state.feedback?.batches.findLast((b) =>
+					request.notice.kind === "round_summary"
+						? b.round !== undefined &&
+							b.status.kind === "settled" &&
+							b.status.outcome.kind === "stopped" &&
+							request.notice.key ===
+								`<!-- factory:notice ${state.pin.runId} round_summary ${b.round} -->`
+						: request.notice.key ===
+							`<!-- factory:notice ${state.pin.runId} ${request.notice.kind} ${b.digest} -->`,
 				);
 
 				if (request.number !== state.published?.number) return null;
@@ -5850,9 +5936,36 @@ export function controllerCandidatePort(config: {
 					"feedback",
 				);
 
-				let body: string;
+				if (
+					request.withdraw !== null &&
+					(await writer.removeLabel(request.number, "factory:review")).kind !==
+						"posted"
+				)
+					return null;
+				let body: string | null;
 
-				if (request.notice.kind === "feedback_overflow") {
+				if (request.notice.kind === "round_summary") {
+					if (batch === undefined) return null;
+					const receipt = feedbackRound(config.stateDir, state, batch);
+
+					if (receipt === null) return null;
+					body = await roundSummary(
+						config.stateDir,
+						state.pin.runId,
+						receipt.receipt,
+						request.notice.key,
+						batch.status.kind === "settled" &&
+							batch.status.outcome.kind === "stopped"
+							? `held: ${batch.status.outcome.reason}`
+							: "held",
+						state.current.intent.round === receipt.receipt.round
+							? (state.current.verdict?.candidateSha ??
+									state.current.validation?.publication?.candidateSha ??
+									null)
+							: null,
+						!receipt.batchAvailable,
+					);
+				} else if (request.notice.kind === "feedback_overflow") {
 					if (state.feedback?.overflow === undefined) return null;
 					body = [
 						"## Factory feedback overflow",
@@ -5887,12 +6000,24 @@ export function controllerCandidatePort(config: {
 						).length;
 
 					body = [
-						"## Factory feedback intake",
-						...(batch.actionable
+						request.notice.kind === "repair_started"
+							? "## Factory feedback repair started"
+							: request.notice.kind === "repair_unavailable"
+								? "## Factory feedback repair unavailable"
+								: "## Factory feedback intake",
+						...(request.notice.kind === "repair_started"
 							? [
-									"Your change request is kept in the queue. Repair is not in this deploy; the repair slice will pick it up. Dismissing the review or pushing a new head cancels this batch. Readiness and budgets are unchanged.",
+									"Readiness is withdrawn: factory:review was removed. One repair round will run on this same PR, with fresh validation and review before readiness can return. The shared two-round cap and cumulative budgets are unchanged. Owner commits will never be overwritten.",
 								]
-							: []),
+							: request.notice.kind === "repair_unavailable"
+								? [
+										`No repair starts: ${request.detail ?? (batch.status.kind === "settled" && batch.status.outcome.kind === "refused" ? batch.status.outcome.reason : "repair_unavailable")}.  Readiness and budgets are unchanged. Current round ${state.current.intent.round}; the shared cap is two rounds. Budget usage ${candidateUsage(state)} of ${state.pin.maxTokens} tokens; the current assessment and remaining attempt/round allowance must also authorize a repair.`,
+									]
+								: batch.actionable && batch.status.kind === "queued"
+									? [
+											"Your change request is queued for the next stage boundary. Dismissing the review or pushing an owner head cancels it. A controller refresh of the unchanged patch carries it forward. Readiness and budgets are unchanged until repair starts.",
+										]
+									: []),
 						...(refused > 0
 							? [
 									`Refused ${refused} inline comment(s) on held-out acceptance files. Their text is not forwarded.`,
@@ -5902,51 +6027,21 @@ export function controllerCandidatePort(config: {
 					].join("\n\n");
 				}
 
-				const adapter = new GitHubTicketAdapter({
-					exec: config.exec,
-					repo: state.pin.repo,
-				});
+				if (body === null) return null;
 
-				const comments = await adapter.readComments(state.pin.issue);
+				const number =
+					request.notice.place === "pr" ? request.number : state.pin.issue;
 
-				if (comments.kind !== "ok") return null;
-
-				const matching = comments.value.filter(
-					(c) =>
-						c.author?.login.toLowerCase() === CONTROLLER_LOGIN.toLowerCase() &&
-						c.author.type === "Bot" &&
-						c.body.split("\n").includes(request.notice.key),
-				);
-
-				if (matching.length > 1) return null;
-
-				if (matching.length === 0) {
-					const intent = join(
-						dir,
-						request.notice.kind === "feedback_overflow"
-							? "notice-feedback-overflow.json"
-							: `notice-${batch?.digest}.json`,
-					);
-
-					const intentBytes = JSON.stringify({ key: request.notice.key });
-
-					if (present(intent)) {
-						if (regularText(intent) !== intentBytes) return null;
-					} else exclusive(intent, intentBytes);
-
-					if (!(await allowed(state))) {
-						await retireUnissuedIntent(intent, intentBytes);
-
-						return null;
-					}
-
-					const posted = await writer.postComment(state.pin.issue, body);
-
-					if (posted.kind === "rejected")
-						await retireUnissuedIntent(intent, intentBytes);
-
-					if (posted.kind !== "posted") return null;
-				}
+				if (
+					!(await postNotice(
+						state,
+						number,
+						request.notice.key,
+						body,
+						request.notice.kind === "round_summary",
+					))
+				)
+					return null;
 
 				return { kind: "post_notice", request };
 			}
@@ -6049,6 +6144,15 @@ export function controllerCandidatePort(config: {
 					: null;
 			}
 
+			const applying = completingFeedbackBatch(state, request.certification);
+
+			const receipt =
+				applying === null
+					? null
+					: feedbackRound(config.stateDir, state, applying, request.head);
+
+			if (applying !== null && receipt === null) return null;
+
 			const pr = await ownedPr(state);
 
 			if (
@@ -6120,9 +6224,299 @@ export function controllerCandidatePort(config: {
 				if (comment.kind !== "posted") return null;
 			}
 
+			if (receipt !== null) {
+				const summaryKey = `<!-- factory:notice ${state.pin.runId} round_summary ${receipt.receipt.round} -->`;
+
+				const summary = await roundSummary(
+					config.stateDir,
+					state.pin.runId,
+					receipt.receipt,
+					summaryKey,
+					"ready after fresh validation and review",
+					request.head,
+					!receipt.batchAvailable,
+				);
+
+				if (summary === null) return null;
+
+				if (
+					!(await postNotice(state, request.number, summaryKey, summary, true))
+				)
+					return null;
+			}
+
 			return { kind: "complete_handoff", request, now: Date.now() };
 		},
 	};
+}
+
+function roundDisposition(
+	outcome: RoundReceipt["outcome"],
+	item: Omit<BuilderDisposition, "event"> | undefined,
+): FeedbackDisposition {
+	if (outcome.kind === "merged")
+		return { kind: "merged", mergeSha: outcome.mergeSha };
+
+	if (outcome.kind === "superseded")
+		return { kind: "rejected", reason: "superseded" };
+
+	if (outcome.kind === "stopped" || outcome.kind === "build_failed")
+		return { kind: "rejected", reason: "repair_stopped" };
+
+	return item?.kind === "adopted"
+		? { kind: "adopted", head: outcome.head, source: "builder_reported" }
+		: { kind: "rejected", reason: item?.reason ?? "builder_declined" };
+}
+
+function feedbackRound(
+	stateDir: string,
+	state: Extract<CandidateState, { kind: "selected" }>,
+	ref: FeedbackBatchRef,
+	appliedHead?: import("../src/workflow.ts").GitSha,
+	failedAttempt?: number,
+): Readonly<{ receipt: RoundReceipt; batchAvailable: boolean }> | null {
+	const read = readFeedbackBatch(stateDir, state.pin.runId, ref.digest);
+
+	const stored =
+		read !== null &&
+		read.batch.pr === state.published?.number &&
+		read.batch.head === ref.head
+			? read
+			: null;
+
+	const round =
+		ref.round ??
+		(ref.status.kind === "applying" ? ref.status.round : undefined);
+
+	if (round === undefined) return null;
+
+	const outcome =
+		failedAttempt !== undefined
+			? { kind: "build_failed" as const }
+			: appliedHead === undefined
+				? ref.status.kind === "settled"
+					? ref.status.outcome
+					: null
+				: { kind: "applied" as const, head: appliedHead };
+
+	if (
+		outcome === null ||
+		outcome.kind === "no_action" ||
+		outcome.kind === "refused"
+	)
+		return null;
+
+	if (stored === null && outcome.kind === "applied") return null;
+
+	const patch = readPatch(stateDir, {
+		runId: state.pin.runId,
+		baseSha: state.pin.originalBase,
+		contractDigest: state.pin.contractDigest,
+		acceptanceDigest: state.pin.acceptanceDigest,
+		round,
+	});
+
+	const reported =
+		patch.kind === "found" ? (patch.receipt.dispositions ?? []) : [];
+
+	const findingReported =
+		patch.kind === "found" ? (patch.receipt.findingDispositions ?? []) : [];
+
+	const decision = (item: Omit<BuilderDisposition, "event"> | undefined) =>
+		roundDisposition(outcome, item);
+
+	const disposition = (event: FeedbackId) =>
+		decision(reported.find((d) => d.event === event));
+
+	const records =
+		stored?.batch.records ??
+		ref.reviews.map((event) => ({
+			event,
+			actor: "",
+			intake: { kind: "actionable" } as const,
+			inline: [],
+		}));
+
+	const items = records.flatMap((r) => [
+		...(r.intake.kind === "actionable"
+			? [{ event: r.event, disposition: disposition(r.event) }]
+			: []),
+		...r.inline.map((c) => ({
+			event: c.id,
+			disposition:
+				c.intake.kind === "refused"
+					? ({ kind: "rejected", reason: "heldout_path" } as const)
+					: disposition(c.id),
+		})),
+	]);
+
+	const build = state.accounts.findLast(
+		(a) =>
+			a.execution.stage === "build" &&
+			a.execution.cause.kind === "feedback" &&
+			a.execution.cause.batch === ref.digest &&
+			(failedAttempt === undefined || a.execution.attempt === failedAttempt),
+	)?.execution;
+
+	const prior =
+		build?.stage === "build"
+			? candidateGenerations(state).find(
+					(g) => g.intent.digest === build.feedbackFrom.digest,
+				)
+			: state.current;
+
+	const reviews = [
+		prior?.review ?? prior?.certification?.review,
+		...candidateGenerations(state)
+			.filter((g) => g.intent.round === round)
+			.map((g) => g.review ?? g.certification?.review),
+	];
+
+	const findings = [
+		...new Map(
+			reviews.flatMap(
+				(r) =>
+					r?.seats.flatMap((seat) =>
+						findingFingerprints({ seats: [seat] }).map(
+							(fingerprint) =>
+								[
+									fingerprint,
+									{
+										fingerprint,
+										seat: seat.seat,
+										disposition: decision(
+											findingReported.find(
+												(f) => f.fingerprint === fingerprint,
+											),
+										),
+									},
+								] as const,
+						),
+					) ?? [],
+			),
+		).values(),
+	];
+
+	return {
+		receipt: {
+			round,
+			attempt: failedAttempt ?? build?.attempt ?? ref.attempt ?? 1,
+			outcome,
+			batch: ref.digest,
+			items,
+			findings,
+		},
+		batchAvailable: stored !== null,
+	};
+}
+
+async function roundSummary(
+	stateDir: string,
+	runId: Digest,
+	receipt: RoundReceipt,
+	key: string,
+	result: string,
+	head: string | null,
+	batchUnavailable = false,
+): Promise<string | null> {
+	try {
+		if (!(await keepRoundReceipt(stateDir, runId, receipt))) return null;
+		const dir = join(stateDir, "handoff", runId, "feedback");
+		const attempts: RoundReceipt[] = [];
+
+		for (let attempt = 1; attempt <= receipt.attempt; attempt++) {
+			const path = join(dir, `round-${receipt.round}-a${attempt}.json`);
+
+			if (!present(path)) continue;
+			// SAFETY: controller-written immutable attempt artifact, never candidate input.
+			attempts.push(JSON.parse(regularText(path)) as RoundReceipt);
+		}
+
+		const describe = (d: FeedbackDisposition) =>
+			d.kind === "adopted"
+				? `adopted (builder-reported), head ${d.head}`
+				: d.kind === "merged"
+					? `merged at ${d.mergeSha}`
+					: `rejected: ${d.reason}`;
+
+		return [
+			`## Factory feedback round ${receipt.round}`,
+			`Result: ${result}. Head: ${head ?? "no new candidate head"}.`,
+			...(batchUnavailable
+				? [
+						"Original batch text is unavailable. Only review IDs retained in the book can be listed; inline details are not reconstructed.",
+					]
+				: []),
+			"Adoption is builder-reported, not controller proof. Readiness requires fresh validation and review. No owner commits were rewritten.",
+			...attempts.flatMap((attempt) => [
+				`### Attempt ${attempt.attempt}\n\n${attempt.attempt === receipt.attempt ? result : attempt.outcome.kind === "stopped" ? `held: ${attempt.outcome.reason}` : attempt.outcome.kind}`,
+				...attempt.items.map(
+					(i) => `- \`${i.event}\`: ${describe(i.disposition)}`,
+				),
+				...attempt.findings.map(
+					(f) =>
+						`- Finding \`${f.fingerprint}\` (${f.seat}): ${describe(f.disposition)}`,
+				),
+			]),
+			key,
+		].join("\n\n");
+	} catch {
+		return null;
+	}
+}
+
+/** Attempt evidence is immutable; the per-round index always names its latest attempt. */
+async function keepRoundReceipt(
+	stateDir: string,
+	runId: Digest,
+	receipt: RoundReceipt,
+): Promise<boolean> {
+	try {
+		const dir = join(stateDir, "handoff", runId, "feedback");
+		const name = `round-${receipt.round}-a${receipt.attempt}.json`;
+		const path = join(dir, name);
+
+		if (!present(path)) exclusive(path, `${JSON.stringify(receipt)}\n`);
+		// SAFETY: controller-authored write-once artifact, not model output.
+		const stored = JSON.parse(regularText(path)) as RoundReceipt;
+		const index = join(dir, `round-${receipt.round}.json`);
+
+		const previous = present(index)
+			? countOf(
+					fieldOf(objectOf(parseJson(regularText(index))), "latestAttempt"),
+				)
+			: null;
+
+		if (previous !== null && previous > stored.attempt) return true;
+		const bytes = `${JSON.stringify({ round: stored.round, latestAttempt: stored.attempt, outcome: stored.outcome, receipt: name })}\n`;
+
+		if (present(index) && regularText(index) === bytes) return true;
+
+		return await writeAtomic(index, bytes);
+	} catch {
+		return false;
+	}
+}
+
+/** Recreate missing receipts and indices from the book, without a model replay. */
+async function keepFeedbackRounds(
+	stateDir: string,
+	state: Extract<CandidateState, { kind: "selected" }>,
+): Promise<void> {
+	for (const ref of state.feedback?.batches ?? []) {
+		for (const attempt of ref.failedAttempts ?? []) {
+			const failed = feedbackRound(stateDir, state, ref, undefined, attempt);
+
+			if (failed !== null)
+				await keepRoundReceipt(stateDir, state.pin.runId, failed.receipt);
+		}
+
+		if (ref.status.kind !== "settled" || ref.round === undefined) continue;
+		const receipt = feedbackRound(stateDir, state, ref);
+
+		if (receipt !== null)
+			await keepRoundReceipt(stateDir, state.pin.runId, receipt.receipt);
+	}
 }
 
 export async function storeFeedbackBatch(

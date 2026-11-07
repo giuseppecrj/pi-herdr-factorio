@@ -86,6 +86,7 @@ function isForbidden(changed: string, acceptanceDir: string): boolean {
 		path.startsWith("../") ||
 		path.startsWith("/") ||
 		isAtOrUnder(path, ".factory-feedback.json") ||
+		isAtOrUnder(path, ".factory-feedback-full.json") ||
 		isAtOrUnder(path, CONTROL_PLANE_DIR) ||
 		isAtOrUnder(path, posix.normalize(acceptanceDir).toLowerCase())
 	);

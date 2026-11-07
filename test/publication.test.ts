@@ -58,11 +58,22 @@ import {
 	fileRunFiles,
 	downloadGateReceipt,
 } from "../server/controller.ts";
-import { type ValidationState, readFeedbackBytes } from "../src/validation.ts";
+import {
+	type ValidationState,
+	readFeedbackBytes,
+	feedbackBytes,
+} from "../src/validation.ts";
 import { baseTreeDigest, replacementDigest } from "../server/gates.ts";
 import { CONTROLLER_LOGIN } from "../src/markers.ts";
 import { LedgerGit } from "./ledger-git.ts";
-import { withLocalArtifactDownload } from "./helpers.ts";
+import {
+	withLocalArtifactDownload,
+	preparedReviewFixture,
+	storedAssessment,
+} from "./helpers.ts";
+import { classifyFeedback } from "../src/feedback.ts";
+import { storeFeedbackBatch } from "../server/controller.ts";
+import { sandboxExecutor } from "../server/sandbox.ts";
 
 const repo = "giuseppecrj/pi-herdr-factorio";
 const baseSha = "a".repeat(40);
@@ -82,6 +93,173 @@ const fresh = () => {
 
 after(() => {
 	for (const dir of roots) rmSync(dir, { recursive: true, force: true });
+});
+
+it("F10-2 feedback checkout binds batch, full text and passed or candidate assessment", async () => {
+	const f = await preparedReviewFixture();
+
+	try {
+		const { pin } = f.book;
+		const head = f.book.current.verdict!.candidateSha;
+		assert.ok(isGitSha(head));
+
+		const classified = await classifyFeedback({
+			runId: pin.runId,
+			pr: 5,
+			head,
+			seen: [],
+			permission: async () => "write",
+			events: [
+				{
+					kind: "review",
+					id: `github:${pin.repo}:review:1`,
+					pr: 5,
+					actor: "writer",
+					at: "2026-11-07T00:00:00Z",
+					state: "CHANGES_REQUESTED",
+					commit: head,
+					body: "fix this ".repeat(3000),
+					comments: [],
+				},
+			],
+		});
+
+		assert.ok(
+			classified.kind === "read" && classified.batch && classified.full,
+		);
+
+		const batch = await storeFeedbackBatch(
+			f.state,
+			classified.batch,
+			classified.full,
+		);
+
+		for (const candidate of [false, true]) {
+			const assessment = storedAssessment({
+				runId: pin.runId,
+				round: 0,
+				generation: 0,
+				verdict: f.book.current.verdict!,
+				assessment: candidate
+					? {
+							kind: "failed",
+							failure: {
+								kind: "candidate",
+								reason: "candidate_heldout",
+								scenarios: ["S1"],
+							},
+						}
+					: { kind: "passed" },
+			});
+
+			const dir = join(f.state, "validation", pin.runId);
+			writeFileSync(join(dir, "assessment.json"), assessment.text, {
+				mode: 0o600,
+			});
+
+			if (candidate)
+				writeFileSync(
+					join(dir, "feedback.json"),
+					feedbackBytes(assessment.read.ref, [
+						{ scenario: "S1", criteria: [{ id: "A1", text: "Value is one" }] },
+					]),
+					{ mode: 0o600 },
+				);
+			const workspace = join(f.root, `feedback-${candidate}`);
+
+			const input = {
+				runId: pin.runId,
+				repo: pin.repo,
+				sha: pin.originalBase,
+				workspace,
+				build: true,
+				round: 1,
+				feedbackFrom: f.book.current.intent,
+				cause: {
+					kind: "feedback" as const,
+					batch: batch.digest,
+					assessment: assessment.read.ref,
+					review: null,
+				},
+			};
+
+			const checked = await f.executor.checkout(input);
+			assert.equal(checked.kind, "ready", JSON.stringify(checked));
+
+			const data = JSON.parse(
+				readFileSync(join(workspace, ".factory-feedback.json"), "utf8"),
+			);
+
+			assert.equal(data.version, 2);
+			assert.deepEqual(data.owner, classified.batch.cards);
+			assert.equal(data.truncated, true);
+			assert.deepEqual(data.full, classified.batch.full);
+			assert.equal(
+				readFileSync(join(workspace, ".factory-feedback-full.json"), "utf8"),
+				classified.full,
+			);
+			assert.equal(
+				lstatSync(join(workspace, ".factory-feedback-full.json")).mode & 0o777,
+				0o600,
+			);
+			assert.deepEqual(
+				await f.executor.checkout({
+					...input,
+					workspace: `${workspace}-bad`,
+					cause: { ...input.cause, batch: digestOf("mismatch") },
+				}),
+				{ kind: "refused", reason: "repair_inputs_invalid" },
+			);
+		}
+	} finally {
+		f.close();
+	}
+});
+
+it("F10-2 missing previous patch is patch_missing, not no progress", async () => {
+	const f = await preparedReviewFixture();
+
+	try {
+		const binding = {
+			runId: f.book.pin.runId,
+			baseSha: f.book.pin.originalBase,
+			contractDigest: f.book.pin.contractDigest,
+			acceptanceDigest: f.book.pin.acceptanceDigest,
+			round: 1,
+		};
+
+		storePatch(
+			f.state,
+			binding,
+			{
+				kind: "collected",
+				patch: f.kept.patch,
+				patchDigest: f.kept.receipt.patchDigest,
+				changedPaths: f.kept.receipt.changedPaths,
+				policy: "clean",
+			},
+			{ model: f.kept.receipt.model, observed: null, commands: [] },
+		);
+		rmSync(join(f.state, "patches", `${binding.runId}.json`));
+		rmSync(join(f.state, "patches", binding.runId), {
+			recursive: true,
+			force: true,
+		});
+
+		const result = await sandboxExecutor(f.config).output({
+			runId: binding.runId,
+			stage: "build",
+			attempt: 1,
+			round: 1,
+		});
+
+		assert.deepEqual(result, {
+			kind: "build",
+			result: { kind: "blocked", reason: "patch_missing" },
+		});
+	} finally {
+		f.close();
+	}
 });
 
 class GitData {

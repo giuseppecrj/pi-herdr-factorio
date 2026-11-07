@@ -9,6 +9,7 @@ import {
 	candidateUsage,
 	candidateProjection,
 	handoffCandidate,
+	stopRound,
 	candidateAllowance,
 	type CandidateState,
 	type CandidateEvent,
@@ -30,7 +31,7 @@ import {
 	type ReviewReceipt,
 } from "./review.ts";
 import type { Verdict } from "./run.ts";
-import type { FeedbackObservation } from "./feedback.ts";
+import type { FeedbackObservation, FeedbackBatch } from "./feedback.ts";
 import { PublicationError } from "./publication.ts";
 
 import {
@@ -310,6 +311,8 @@ export interface StageExecutor {
 		round: number;
 		generation: number;
 	}): Promise<import("./validation.ts").ReadAssessment | null>;
+	/** Re-reads the content-addressed owner batch before a repair launch. */
+	readFeedback?(runId: Digest, digest: Digest): Promise<FeedbackBatch | null>;
 	cleanupValidation?(): Promise<void>;
 	/** Stops whatever a previous controller left running. Called once, before the first tick adopts a run. */
 	recover(): Promise<void>;
@@ -4985,7 +4988,10 @@ export class Orchestrator {
 					continue;
 				}
 
-				step = handoffCandidate(step.state, queued.event);
+				step = handoffCandidate(step.state, {
+					...queued.event,
+					now: this.#input.clock.now(),
+				});
 
 				if (queued.refusal !== undefined) {
 					const failed = await this.#reviewInputFailure(
@@ -5107,16 +5113,7 @@ export class Orchestrator {
 		)
 			return null;
 
-		return {
-			...state,
-			work: {
-				kind: "effect",
-				request: {
-					kind: "finish_pr",
-					terminal: { kind: "failed", reason: refusal.reason },
-				},
-			},
-		};
+		return stopRound(state, refusal.reason, this.#input.clock.now());
 	}
 
 	#queueReviewRefusal(
@@ -5214,7 +5211,9 @@ export class Orchestrator {
 						output.kind === "review" &&
 						patch != null
 							? { kind: "passed", review: output.receipt, patch }
-							: { kind: "failed" },
+							: output instanceof Object && output.kind === "refused"
+								? { kind: "failed", reason: output.reason }
+								: { kind: "failed" },
 				};
 			} else
 				event = {
@@ -5226,7 +5225,12 @@ export class Orchestrator {
 						output.kind === "build" &&
 						output.result.kind === "found"
 							? { kind: "passed", patch: output.result.receipt }
-							: { kind: "failed" },
+							: output instanceof Object &&
+									output.kind === "build" &&
+									output.result.kind === "blocked" &&
+									output.result.reason === "repair_no_change"
+								? { kind: "no_change" }
+								: { kind: "failed" },
 				};
 			this.#candidateResults.push({
 				runId: run.runId,
@@ -5280,6 +5284,7 @@ export class Orchestrator {
 						run,
 						handoffCandidate(run.handoff ?? state, {
 							kind: "effect_completed",
+							now: this.#input.clock.now(),
 							completion: {
 								kind: "validate",
 								request,
@@ -5386,18 +5391,17 @@ export class Orchestrator {
 					)
 						return;
 
-					const terminal = {
-						kind: "finish_pr",
-						terminal: { kind: "failed", reason: "summary_too_large" },
-					} as const;
+					const stopped = stopRound(
+						state,
+						"summary_too_large",
+						this.#input.clock.now(),
+					);
 
 					if (
-						await this.#commitCandidate(run, {
-							...state,
-							work: { kind: "effect", request: terminal },
-						})
+						(await this.#commitCandidate(run, stopped)) &&
+						stopped.work.kind === "effect"
 					)
-						await this.#interpretCandidate(run, terminal);
+						await this.#interpretCandidate(run, stopped.work.request);
 
 					return;
 				}
@@ -5427,6 +5431,7 @@ export class Orchestrator {
 		if (completion !== null) {
 			const step = handoffCandidate(run.handoff ?? state, {
 				kind: "effect_completed",
+				now: this.#input.clock.now(),
 				completion,
 			});
 
@@ -5489,31 +5494,13 @@ export class Orchestrator {
 				}).state;
 			held = handoffCandidate(held, {
 				kind: "review_settled",
+				now: clock.now(),
 				execution,
 				tokens: null,
 				result: { kind: "failed" },
 			}).state;
 
-			if (held.kind === "selected")
-				await this.#commitCandidate(run, {
-					...held,
-					work: {
-						kind: "held",
-						reason: "evidence_unavailable",
-						since: clock.now(),
-					},
-					published:
-						held.published === null
-							? null
-							: {
-									...held.published,
-									readiness: {
-										kind: "not_ready",
-										reason: "evidence_unavailable",
-										since: clock.now(),
-									},
-								},
-				});
+			if (held.kind === "selected") await this.#commitCandidate(run, held);
 
 			return null;
 		}
@@ -5535,19 +5522,19 @@ export class Orchestrator {
 
 			const settled = handoffCandidate(state, {
 				kind: "review_settled",
+				now: clock.now(),
 				execution: request.execution,
 				tokens,
-				result: { kind: "failed" },
+				result: { kind: "failed", reason: prepared.reason },
 			}).state;
 
 			const failed = await this.#reviewInputFailure(run, settled, prepared);
 
 			if (failed !== null && (await this.#commitCandidate(run, failed))) {
 				this.state.totals.failures++;
-				await this.#interpretCandidate(run, {
-					kind: "finish_pr",
-					terminal: { kind: "failed", reason: prepared.reason },
-				});
+
+				if (failed.kind === "selected" && failed.work.kind === "effect")
+					await this.#interpretCandidate(run, failed.work.request);
 			}
 
 			return null;
@@ -5558,7 +5545,7 @@ export class Orchestrator {
 		if (
 			execution.stage === "build" &&
 			request.kind === "repair_build" &&
-			!(await this.#repairAuthorized(execution))
+			!(await this.#repairAuthorized(state, execution))
 		) {
 			const settled = handoffCandidate(state, {
 				kind: "effect_completed",
@@ -5567,24 +5554,22 @@ export class Orchestrator {
 
 			if (settled.kind !== "selected") return null;
 
-			const finish: CandidateEffect = {
-				kind: "finish_pr",
-				terminal: { kind: "failed", reason: "diagnosis_missing_evidence" },
-			};
+			const stopped = stopRound(
+				settled,
+				"diagnosis_missing_evidence",
+				clock.now(),
+			);
 
 			this.#input.log("repair_refused", {
 				runId: run.runId,
 				why: "assessment_missing",
 			});
 
-			if (
-				await this.#commitCandidate(run, {
-					...settled,
-					work: { kind: "effect", request: finish },
-				})
-			) {
+			if (await this.#commitCandidate(run, stopped)) {
 				this.state.totals.failures++;
-				await this.#interpretCandidate(run, finish);
+
+				if (stopped.work.kind === "effect")
+					await this.#interpretCandidate(run, stopped.work.request);
 			}
 
 			return null;
@@ -5618,19 +5603,13 @@ export class Orchestrator {
 
 			if (settled.kind !== "selected") return null;
 
-			const finish: CandidateEffect = {
-				kind: "finish_pr",
-				terminal: { kind: "failed", reason: "evidence_unavailable" },
-			};
+			const stopped = stopRound(settled, "evidence_unavailable", clock.now());
 
-			if (
-				await this.#commitCandidate(run, {
-					...settled,
-					work: { kind: "effect", request: finish },
-				})
-			) {
+			if (await this.#commitCandidate(run, stopped)) {
 				this.state.totals.failures++;
-				await this.#interpretCandidate(run, finish);
+
+				if (stopped.work.kind === "effect")
+					await this.#interpretCandidate(run, stopped.work.request);
 			}
 
 			return null;
@@ -5654,7 +5633,12 @@ export class Orchestrator {
 			build: inputs?.build,
 			prompt: inputs?.prompt ?? "",
 			tools: execution.stage === "review" ? REVIEW_TOOLS : BUILD_TOOLS,
-			skills: execution.stage === "review" ? [] : ["build"],
+			skills:
+				execution.stage === "review"
+					? []
+					: execution.cause.kind === "feedback"
+						? ["build", "address-pr-comments"]
+						: ["build"],
 			settings: {
 				model: config.stages[execution.stage].model,
 				fallback: config.stages[execution.stage].fallbackModel,
@@ -5721,7 +5705,9 @@ export class Orchestrator {
 							output.kind === "review" &&
 							patch != null
 								? { kind: "passed", review: output.receipt, patch }
-								: { kind: "failed" },
+								: output instanceof Object && output.kind === "refused"
+									? { kind: "failed", reason: output.reason }
+									: { kind: "failed" },
 					};
 				} else
 					event = {
@@ -5733,7 +5719,12 @@ export class Orchestrator {
 							output.kind === "build" &&
 							output.result.kind === "found"
 								? { kind: "passed", patch: output.result.receipt }
-								: { kind: "failed" },
+								: output instanceof Object &&
+										output.kind === "build" &&
+										output.result.kind === "blocked" &&
+										output.result.reason === "repair_no_change"
+									? { kind: "no_change" }
+									: { kind: "failed" },
 					};
 				this.#candidateResults.push({
 					runId: execution.runId,
@@ -5808,6 +5799,7 @@ export class Orchestrator {
 	}
 
 	async #repairAuthorized(
+		state: Extract<CandidateState, { kind: "selected" }>,
 		execution: Extract<CandidateExecution, { stage: "build" }>,
 	): Promise<boolean> {
 		const read = await this.#input.executor
@@ -5826,6 +5818,30 @@ export class Orchestrator {
 			!sameAssessmentRef(read.ref, execution.cause.assessment)
 		)
 			return false;
+
+		if (execution.cause.kind === "feedback") {
+			const batch = await this.#input.executor
+				.readFeedback?.(execution.runId, execution.cause.batch)
+				.catch(() => null);
+
+			const cause = execution.cause;
+
+			const reference = state.feedback?.batches.find(
+				(b) => b.digest === cause.batch,
+			);
+
+			return (
+				batch != null &&
+				reference?.status.kind === "applying" &&
+				reference.status.round === execution.round &&
+				batch.pr === state.published?.number &&
+				batch.head === reference.head &&
+				batch.runId === execution.runId &&
+				batch.records.some((r) => r.intake.kind === "actionable") &&
+				(read.assessment.kind === "passed" ||
+					read.assessment.failure.kind === "candidate")
+			);
+		}
 
 		return execution.cause.kind === "review"
 			? read.assessment.kind === "passed"

@@ -845,6 +845,9 @@ test("build and repair prompts say CI runs tests read-only at the root, so temp 
 		inlined: [],
 	});
 
+	assert.match(prompt, /owner cards.*untrusted requests/i);
+	assert.match(prompt, /dispositions.*event.*adopted.*rejected/is);
+	assert.match(prompt, /\.factory-feedback-full\.json/);
 	assert.match(
 		prompt,
 		/Leave untouched code as it is: no import reordering, reformatting or renaming beyond what the change needs\./,

@@ -25,6 +25,51 @@ import {
 } from "./fake-ticket-adapter.ts";
 
 describe("PR feedback readers and proposal writer", () => {
+	it("F10-2 maps recorded position and original_position through the PR diff without storing hunks", async () => {
+		const recorded: { comments: JsonValue[] } = JSON.parse(
+			readFileSync(
+				new URL("./fixtures/feedback/github-review.json", import.meta.url),
+				"utf8",
+			),
+		);
+
+		const github = new FakeGitHub();
+		github.reviewComments.set("651/5812783128", recorded.comments);
+
+		assert.ok(isRepoSlug(FAKE_REPO));
+
+		const adapter = new GitHubTicketAdapter({
+			repo: FAKE_REPO,
+			exec: async (command, args) => {
+				if (args.some((arg) => arg.includes("pulls/651/files")))
+					return {
+						code: 0,
+						stderr: "",
+						stdout: JSON.stringify([
+							{
+								filename: "server/viewer.ts",
+								patch:
+									"@@ -100,3 +100,4 @@\n context\n-old\n+new\n context\n+extra\n@@ -200 +200 @@\n context",
+							},
+						]),
+					};
+
+				return github.exec(command, args);
+			},
+		});
+
+		const read = await adapter.readReviewComments(651, 5812783128);
+		assert.ok(read.kind === "ok");
+		assert.equal(read.value[0]?.line, 103);
+		assert.doesNotMatch(JSON.stringify(read), /diff_hunk|REDACTED-HUNK|@@|old/);
+		const original = recorded.comments[0];
+		assert.ok(original instanceof Object && !Array.isArray(original));
+		original.position = null;
+		original.original_position = 7;
+		const fallback = await adapter.readReviewComments(651, 5812783128);
+		assert.ok(fallback.kind === "ok");
+		assert.equal(fallback.value[0]?.line, 200);
+	});
 	it("accepts recorded per-review comments without modern location fields or reply ids", async () => {
 		const recorded: { reviews: JsonValue[]; comments: JsonValue[] } =
 			JSON.parse(

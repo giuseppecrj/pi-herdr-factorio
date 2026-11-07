@@ -1994,6 +1994,186 @@ describe("private build executor", () => {
 		assert.deepEqual(delegated.slice(3), ordinary.slice(1));
 	});
 
+	it("F10-2 a no-change build leaves the round patch slot free for a successful second attempt", async (t) => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-feedback-attempt-"));
+		t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+		const root = join(dir, "root"),
+			stateDir = join(dir, "state"),
+			staging = join(root, "staging");
+
+		mkdirSync(staging, { recursive: true });
+		writeFileSync(join(staging, "marker"), "bundle");
+		const hash = await manifestDigest(staging);
+		assert.ok(hash);
+		fs.renameSync(staging, join(root, `assets-${hash}`));
+		symlinkSync(`assets-${hash}`, join(root, "current"));
+
+		const base = join(stateDir, "pristine", RUN),
+			workspace = join(dir, "workspace");
+
+		mkdirSync(base, { recursive: true, mode: 0o700 });
+		mkdirSync(workspace);
+		writeFileSync(
+			join(base, "package.json"),
+			JSON.stringify({ scripts: { test: "node --test" } }),
+		);
+		writeFileSync(
+			join(workspace, "package.json"),
+			readFileSync(join(base, "package.json")),
+		);
+		writeFileSync(join(base, "value.txt"), "base\n");
+		writeFileSync(join(workspace, "value.txt"), "first\n");
+		const initial = await collectPatch({ base, workspace });
+		assert.ok(initial.kind === "collected");
+		const sha = "a".repeat(40);
+		assert.ok(isGitSha(sha));
+
+		const binding = {
+			runId: digest(RUN),
+			baseSha: sha,
+			contractDigest: contractDigestOf("contract"),
+			acceptanceDigest: digestOf("suite"),
+		};
+
+		assert.equal(
+			storePatch(stateDir, binding, initial, {
+				model: "openai/gpt-6.1-sol",
+				observed: null,
+				commands: [],
+			}).kind,
+			"found",
+		);
+
+		for (const attempt of [1, 2]) {
+			mkdirSync(base, { recursive: true, mode: 0o700 });
+			writeFileSync(
+				join(base, "package.json"),
+				JSON.stringify({ scripts: { test: "node --test" } }),
+			);
+			writeFileSync(join(base, "value.txt"), "base\n");
+			mkdirSync(workspace, { recursive: true });
+			writeFileSync(
+				join(workspace, "package.json"),
+				readFileSync(join(base, "package.json")),
+			);
+			writeFileSync(join(workspace, "value.txt"), "first\n");
+			writeFileSync(join(workspace, ".factory-feedback.json"), "{}", {
+				mode: 0o600,
+			});
+
+			const h = harness([
+				(command, pi) => {
+					if (command.type === "prompt" && attempt === 2)
+						writeFileSync(join(workspace, "value.txt"), "second\n");
+
+					if (command.type === "get_last_assistant_text")
+						pi.emit({
+							type: "response",
+							id: command.id ?? "",
+							command: "get_last_assistant_text",
+							success: true,
+							data: { text: "{}" },
+						});
+					replayer([
+						started("x"),
+						{ type: "agent_start" },
+						{ type: "turn_start" },
+						assistant({ tokens: 12 }),
+						{ type: "agent_settled", aborted: false },
+					])(command, pi);
+				},
+			]);
+
+			const executor = sandboxModule.sandboxExecutor({
+				stateDir,
+				root,
+				arch: "x64",
+				usernsLimit: async () => "15000",
+				xdgRuntimeDir: "/run/user/1000",
+				log: () => {},
+				exec: async (command) => ({
+					code: 0,
+					stdout: command === "bwrap" ? "bubblewrap 0.9.0\n" : "",
+					stderr: "",
+				}),
+				host: () => h.host,
+			});
+
+			assert.equal(await executor.preflight(), true);
+
+			mkdirSync(join(stateDir, "stages", RUN), {
+				recursive: true,
+				mode: 0o700,
+			});
+
+			const launch = await executor.launch({
+				...input({ stage: "build" }),
+				attempt,
+				round: 1,
+				workspace,
+				tools: ["read", "bash", "write"],
+				skills: [],
+				build: {
+					binding: { ...binding, round: 1 },
+					command: "npm test",
+					allowNoChange: true,
+				},
+			});
+
+			assert.ok(launch.kind === "started");
+			assert.equal((await launch.done).kind, "passed");
+			const patch = readPatch(stateDir, { ...binding, round: 1 });
+
+			if (attempt === 1) {
+				assert.equal(
+					patch.kind,
+					"absent",
+					"no progress must not freeze the round's immutable patch",
+				);
+				assert.deepEqual(
+					await executor.output({
+						runId: binding.runId,
+						stage: "build",
+						attempt,
+						round: 1,
+					}),
+					{
+						kind: "build",
+						result: { kind: "blocked", reason: "repair_no_change" },
+					},
+				);
+			} else {
+				assert.ok(patch.kind === "found");
+				assert.notEqual(patch.receipt.patchDigest, initial.patchDigest);
+
+				const restarted = sandboxModule.sandboxExecutor({
+					stateDir,
+					root,
+					arch: "x64",
+					usernsLimit: async () => "15000",
+					xdgRuntimeDir: "/run/user/1000",
+					exec: async () => ({ code: 0, stdout: "", stderr: "" }),
+					log: () => {},
+				});
+
+				assert.deepEqual(
+					await restarted.output({
+						runId: binding.runId,
+						stage: "build",
+						attempt: 1,
+						round: 1,
+					}),
+					{
+						kind: "build",
+						result: { kind: "blocked", reason: "repair_no_change" },
+					},
+					"the first attempt's outcome remains readable after a later patch exists",
+				);
+			}
+		}
+	});
+
 	for (const scenario of ["clean", "oversized", "refused", "truncated"])
 		it(
 			scenario === "oversized"

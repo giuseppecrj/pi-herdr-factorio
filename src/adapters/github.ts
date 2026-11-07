@@ -527,6 +527,32 @@ function parseBodyHistory(value: JsonValue | undefined): BodyHistory | null {
 	};
 }
 
+/** GitHub positions count diff lines after the first hunk header, not file lines. */
+function reviewLineAtPosition(patch: string, target: number): number | null {
+	let position = 0;
+	let line: number | null = null;
+
+	for (const text of patch.split("\n")) {
+		const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(text);
+
+		if (hunk !== null) {
+			if (line !== null) position++;
+			line = Number(hunk[1]);
+			continue;
+		}
+
+		if (line === null) continue;
+		position++;
+
+		if (position === target)
+			return /^[ +-]/.test(text) ? Math.max(1, line) : null;
+
+		if (text.startsWith(" ") || text.startsWith("+")) line++;
+	}
+
+	return null;
+}
+
 /**
  * Reads one repository through `gh` with argument arrays. Every request names
  * `repos/<owner>/<name>/...` or GraphQL, and pages are requested by number:
@@ -781,11 +807,46 @@ export class GitHubTicketAdapter implements TicketReader {
 		if (read.kind === "failed") return read;
 		const comments: InlineComment[] = [];
 
+		const needsDiff = read.value.some((item) => {
+			const v = objectOf(item);
+
+			return (
+				v?.line == null &&
+				(countOf(v?.position) ?? countOf(v?.original_position) ?? 0) > 0
+			);
+		});
+
+		const files = needsDiff ? await this.#pages(`pulls/${pr}/files`) : null;
+		const patches = new Map<string, string>();
+
+		if (files?.kind === "ok")
+			for (const item of files.value) {
+				const v = objectOf(item);
+
+				const name = stringOf(v?.filename),
+					patch = stringOf(v?.patch);
+
+				if (
+					name !== null &&
+					patch !== null &&
+					!name.toLowerCase().startsWith("test/acceptance/")
+				)
+					patches.set(name, patch);
+			}
+
 		for (const item of read.value) {
 			const v = objectOf(item);
 			const id = idOf(v?.id);
 			const path = stringOf(v?.path);
-			const line = v?.line == null ? null : countOf(v.line);
+			const explicit = v?.line == null ? null : countOf(v.line);
+			const position = countOf(v?.position) ?? countOf(v?.original_position);
+
+			const line =
+				explicit ??
+				(path === null || position === null
+					? null
+					: reviewLineAtPosition(patches.get(path) ?? "", position));
+
 			const commit = stringOf(v?.commit_id);
 			const reply = v?.in_reply_to_id == null ? null : idOf(v.in_reply_to_id);
 			const body = bodyTextOf(v?.body);
@@ -794,7 +855,7 @@ export class GitHubTicketAdapter implements TicketReader {
 				id === null ||
 				path === null ||
 				path.length === 0 ||
-				(v?.line != null && (line === null || line === 0)) ||
+				(v?.line != null && (explicit === null || explicit === 0)) ||
 				commit === null ||
 				!isGitSha(commit) ||
 				(v?.in_reply_to_id != null && reply === null) ||
@@ -1189,6 +1250,20 @@ export class GitHubTicketWriter implements TicketWriter {
 		const id = idOf(pathOf(parseJson(result.stdout), ["id"]));
 
 		return id === null ? { kind: "unknown" } : { kind: "posted", id };
+	}
+
+	async editComment(id: string, body: string): Promise<LabelWrite> {
+		return this.#write(
+			[
+				"api",
+				"--method",
+				"PATCH",
+				`repos/${this.repo}/issues/comments/${id}`,
+				"-f",
+				`body=${body}`,
+			],
+			false,
+		);
 	}
 
 	async #write(
