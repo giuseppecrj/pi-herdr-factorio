@@ -466,6 +466,27 @@ describe("immutable run context", () => {
 });
 
 describe("ledger row codec", () => {
+	it("F10-3 v5 records authorship, keeps v1-v4 canonical bytes and rejects version 6 as unknown", () => {
+		const legacy = rowInput(42);
+		assert.ok(legacy.provenance.kind === "production");
+		const snapshot = terminalSnapshot({ repo, runId: legacy.runId, issue: legacy.issue, eventId: legacy.eventId, eventAt: legacy.eventAt, snapshotDigest: legacy.snapshotDigest, workflowSha: sha("1"), workflowDigest: digestOf("workflow"), status: "needs_info", stage: "specify", usage: 0, observedAt: date, candidate: null, context: legacyRunContext(legacy.provenance.policy, "receipt_missing"), terminalWorkflowObservation: null });
+		assert.ok(objectOf(snapshot));
+		assert.equal(objectOf(snapshot)?.v, 5);
+		const v5 = ledgerRowOf({ ...objectOf(snapshot), terminalMarker: legacy.terminalMarker });
+		assert.equal(v5.row.v, 5);
+		const old4 = ledgerRowOf({ ...objectOf(snapshot), v: 4, terminalMarker: legacy.terminalMarker });
+		for (const frozen of [ledgerRow(legacy), old4]) assert.ok(frozenRowOf(frozen.bytes)?.bytes.equals(frozen.bytes));
+		for (const authored of ["factory", "owner"] as const) {
+			const landed = landedInput(42);
+			assert.equal(landed.outcome.kind, "landed");
+			const row = ledgerRowOf({ ...v5.row, outcome: { ...landed.outcome, assurance: { kind: "factory_verified", generationDigest: digestOf("intent-42"), authored } }, artifacts: landed.artifacts, pr: landed.pr, evidence: landed.evidence });
+			assert.ok(row.row.outcome.kind === "landed" && row.row.outcome.assurance.kind === "factory_verified");
+			assert.equal(row.row.v, 5);
+			assert.equal("authored" in row.row.outcome.assurance && row.row.outcome.assurance.authored, authored);
+			assert.ok(frozenRowOf(row.bytes)?.bytes.equals(row.bytes));
+		}
+		assert.equal(parseLedger(Buffer.from('{"v":6}\n'))[0]?.kind, "unknown_version");
+	});
 	it("round-trips every terminal kind as one canonical LF-terminated line", () => {
 		const base = rowInput(1);
 

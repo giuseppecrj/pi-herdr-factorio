@@ -39,7 +39,7 @@ import {
 import { feedbackId } from "../../src/feedback.ts";
 import { fileAdmissionStore, admitTicket } from "../../src/admission.ts";
 import { handoffCandidate, parseCandidateState } from "../../src/handoff.ts";
-import { candidateBranch } from "../../src/publication.ts";
+import { candidateBranch, storeOwnerPatch } from "../../src/publication.ts";
 import {
 	certifyR8,
 	type FamilyInput,
@@ -6775,6 +6775,27 @@ const CRITIQUE = JSON.stringify({
 	ambiguities: [
 		"Does --version alone or combined with a command print the version? This changes A1.",
 	],
+});
+
+describe("F10-3 owner review preparation harness", () => {
+	for (const mismatch of [false, true]) it(`uses private owner patch with unavailable builder (mismatch=${mismatch})`, async () => {
+		const f = await preparedReviewFixture();
+		try {
+			assert.ok(isGitSha(f.prepared.verdict.candidateSha));
+			const patch = f.kept.patch + (mismatch ? "\n" : "");
+			storeOwnerPatch(f.state, { version: 1, kind: "owner", runId: f.execution.runId, head: f.prepared.verdict.candidateSha, baseSha: f.book.pin.originalBase, contractDigest: f.book.pin.contractDigest, acceptanceDigest: f.book.pin.acceptanceDigest, heldoutDigest: f.prepared.verdict.heldoutDigest, patchDigest: digestOf(patch), changedPaths: f.kept.receipt.changedPaths, policy: "clean" }, patch);
+			rmSync(join(f.dir, "review.json"));
+			rmSync(join(f.state, "patches"), { recursive: true });
+			if (mismatch) await assert.rejects(f.executor.prepareReview!(f.args), /review_binding/);
+			else {
+				const prepared = await f.executor.prepareReview!(f.args);
+				assert.ok(!("kind" in prepared));
+				assert.deepEqual(prepared.families.builder, { kind: "unavailable", reason: "missing" });
+				assert.equal(existsSync(join(prepared.workspace, "test/acceptance")), false);
+				assert.doesNotMatch(prepared.input.prompt, /PRIVATE-SUITE/);
+			}
+		} finally { f.close(); }
+	});
 });
 
 describe("multi-seat candidate review", () => {

@@ -9,6 +9,8 @@ import {
 import { test } from "node:test";
 import {
 	beginCandidate,
+	authoredOf,
+	type OwnerPatchReceipt,
 	stopRound,
 	candidateUsage,
 	handoffCandidate as reduceCandidate,
@@ -268,7 +270,7 @@ function validated(
 ) {
 	const request = pending(state, "validate");
 	const g = request.generation;
-	const head = digestOf(JSON.stringify(g)).slice(0, 40);
+	const head = g.origin.kind === "owner" ? g.origin.head : digestOf(JSON.stringify(g)).slice(0, 40);
 	assert.ok(isGitSha(head));
 
 	const validation: ValidationState = {
@@ -489,6 +491,108 @@ function published(state = certified(select())) {
 		).state,
 	);
 }
+
+function ownerObservation(state = waiting(), head = "b".repeat(40)) {
+	assert.ok(isGitSha(head));
+	return { ...readyObservation(state), now: 200, pr: { kind: "open", number: 5, head, refHead: head } } as const;
+}
+
+function ownerSelected() {
+	const start = waiting();
+	const noticeState = handoffCandidate(start, ownerObservation(start)).state;
+	const notice = pending(noticeState, "post_notice");
+	assert.equal(notice.notice.kind, "owner_head");
+	assert.equal(notice.withdraw, "owner_head");
+	assert.ok(notice.notice.key.includes("b".repeat(40)));
+	const due = handoffCandidate(noticeState, { kind: "effect_completed", now: 200, completion: { kind: "post_notice", request: notice } }).state;
+	const deriving = handoffCandidate(due, ownerObservation(start)).state;
+	const request = pending(deriving, "derive_owner_patch");
+	const receipt: OwnerPatchReceipt = { version: 1, kind: "owner", runId: pin.runId, head: request.head, baseSha: request.baseSha, contractDigest: pin.contractDigest, acceptanceDigest: pin.acceptanceDigest, heldoutDigest: digestOf("heldout"), patchDigest: digestOf("owner patch"), changedPaths: ["src/example.ts"], policy: "clean" };
+	const state = selected(handoffCandidate(deriving, { kind: "effect_completed", completion: { kind: "derive_owner_patch", request, result: { kind: "found", patch: receipt } } }).state);
+	return { state, receipt, deriving, request, start, due, notice };
+}
+
+test("F10-3 drift withdraws once per head before spend, stable holds, and reset resumes", () => {
+	const f = ownerSelected();
+	assert.equal(f.state.current.intent.origin.kind, "owner");
+	assert.equal(f.state.current.intent.publication.kind, "owner");
+	assert.equal(f.state.current.intent.generation, 1);
+	assert.deepEqual(f.state.current.ownerPatch, f.receipt);
+	assert.equal(candidateUsage(f.state), candidateUsage(f.start));
+	assert.ok(parseCandidateState(JSON.parse(JSON.stringify(f.state))));
+	const missing = JSON.parse(JSON.stringify(f.state)); delete missing.current.ownerPatch;
+	assert.equal(parseCandidateState(missing), null);
+	for (const reason of ["heldout_changed", "forbidden_path", "behind_main", "too_large", "unreadable"] as const) {
+		const stopped = handoffCandidate(f.deriving, { kind: "effect_completed", now: 300, completion: { kind: "derive_owner_patch", request: f.request, result: { kind: "refused", reason } } }).state;
+		const notice = pending(stopped, "post_notice");
+		assert.equal(notice.notice.kind, "owner_head_failed");
+		const held = selected(handoffCandidate(stopped, { kind: "effect_completed", now: 300, completion: { kind: "post_notice", request: notice } }).state);
+		assert.deepEqual(held.work, { kind: "held", reason: "owner_head_refused", since: 300 });
+		assert.deepEqual(handoffCandidate(held, { ...ownerObservation(f.start), now: 400 }).state.work, held.work);
+		assert.equal(pending(handoffCandidate(held, ownerObservation(f.start, "d".repeat(40))).state, "post_notice").notice.kind, "owner_head");
+		assert.equal(handoffCandidate(held, readyObservation(f.start)).state.work.kind, "waiting");
+	}
+	const legacy = JSON.parse(JSON.stringify(f.start)); delete legacy.published.ownerHead;
+	assert.ok(parseCandidateState(legacy));
+});
+
+test("F10-3 owner certification, readiness and truthful merge authorship", () => {
+	const f = ownerSelected();
+	const validatedOwner = validated(f.state);
+	const issued = handoffCandidate(validatedOwner, ownerObservation(f.start)).state;
+	const launch = pending(issued, "launch_review");
+	const running = handoffCandidate(issued, { kind: "effect_completed", completion: { kind: "launch_review", request: launch, started: true } }).state;
+	const baseReview = receipt(launch.execution);
+	const review: ReviewReceipt = { ...baseReview, version: 3, builder: { kind: "unavailable", reason: "missing" }, accept: { kind: "unavailable", reason: "missing" }, seats: baseReview.seats.map(s => ({ ...s, family: { kind: "unavailable", reason: "missing" }, label: "context-isolated, unknown family, not cross-family" })) };
+	const ownerPatch = { kind: "found" as const, receipt: f.receipt, patch: "owner patch" };
+	const args = { pin, generation: f.state.current.intent, execution: launch.execution, patch: ownerPatch, verdict: validatedOwner.current.verdict!, review, report: validatedOwner.current.report! };
+	assert.doesNotThrow(() => certifyGeneration(args));
+	for (const receipt of [{ ...f.receipt, patchDigest: digestOf("wrong") }, { ...f.receipt, head: sha }, { ...f.receipt, changedPaths: ["test/acceptance/x.ts"] }])
+		assert.throws(() => certifyGeneration({ ...args, patch: { ...ownerPatch, receipt } }), /certification_binding/);
+	const done = selected(handoffCandidate(running, { kind: "review_settled", execution: launch.execution, tokens: 20, result: { kind: "passed", review, patch: ownerPatch } }).state);
+	const completing = handoffCandidate(done, readyObservation(done)).state;
+	const complete = pending(completing, "complete_handoff");
+	const ready = selected(handoffCandidate(completing, { kind: "effect_completed", completion: { kind: "complete_handoff", request: complete, now: 400 } }).state);
+	assert.equal(ready.published?.readiness.kind, "ready");
+	assert.equal(authoredOf(ready, ready.current.intent), "owner");
+	const merge = pending(handoffCandidate(ready, { ...ownerObservation(f.start), pr: { kind: "merged", number: 5, head: f.receipt.head, mergeSha: sha, actor: "owner" } }).state, "finish_pr");
+	assert.ok(merge.terminal.kind === "merged" && merge.terminal.assurance.kind === "factory_verified");
+	assert.equal(authoredOf(ready, merge.terminal.assurance.certification), "owner");
+	for (const current of [f.state, validatedOwner, running, ready]) {
+		const behind = handoffCandidate(current, { ...ownerObservation(f.start), main: "d".repeat(40) as typeof sha }).state;
+		const request = pending(behind, current === running ? "stop_execution" : "post_notice");
+		assert.ok(request.kind !== "post_notice" || request.then.kind === "held" && request.then.reason === "owner_head_behind");
+	}
+});
+
+test("F10-3 failing gates and failed or blocking review hold with one head notice", () => {
+	const f = ownerSelected();
+	assert.equal(pending(validated(f.state, false), "post_notice").notice.kind, "owner_head_failed");
+	const v = validated(f.state);
+	const issued = handoffCandidate(v, ownerObservation(f.start)).state;
+	const request = pending(issued, "launch_review");
+	for (const result of [{ kind: "failed" } as const, { kind: "passed", review: blockingReceipt(request.execution), patch: { kind: "found", receipt: f.receipt, patch: "owner patch" } } as const]) {
+		const stopped = handoffCandidate(issued, { kind: "review_settled", execution: request.execution, tokens: 20, result }).state;
+		assert.equal(pending(stopped, "post_notice").then.kind, "held");
+	}
+	const check = handoffCandidate(f.start, { ...readyObservation(f.start), readiness: { kind: "not_ready", reason: "checks_failed" } }).state;
+	const notice = pending(check, "post_notice");
+	assert.equal(notice.notice.kind, "checks_failed");
+	const held = handoffCandidate(check, { kind: "effect_completed", completion: { kind: "post_notice", request: notice } }).state;
+	assert.equal(handoffCandidate(held, { ...readyObservation(f.start), readiness: { kind: "not_ready", reason: "checks_failed" } }).effect, null);
+});
+
+test("F10-3 drift during effects waits, generation three refuses before derivation", () => {
+	const f = ownerSelected();
+	assert.deepEqual(handoffCandidate(f.state, ownerObservation(f.start, "d".repeat(40))).state, f.state);
+	const capped = { ...f.start, current: { ...f.start.current, intent: { ...f.start.current.intent, generation: 3 as const } } };
+	const n = handoffCandidate(capped, ownerObservation(f.start)).state;
+	const notice = pending(n, "post_notice");
+	const due = handoffCandidate(n, { kind: "effect_completed", completion: { kind: "post_notice", request: notice } }).state;
+	const held = selected(handoffCandidate(due, ownerObservation(f.start)).state);
+	assert.equal(held.work.kind, "held");
+	assert.ok(held.work.kind === "held" && held.work.reason === "refresh_limit");
+});
 
 function waiting() {
 	const state = published();

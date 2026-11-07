@@ -41,6 +41,7 @@ import {
 } from "./helpers.ts";
 import {
 	controllerValidator,
+	ownerValidator,
 	fileRunFiles,
 	sweepValidation,
 } from "../server/controller.ts";
@@ -62,7 +63,7 @@ import {
 	candidateGenerations,
 	candidateUsage,
 } from "../src/handoff.ts";
-import { candidateBranch } from "../src/publication.ts";
+import { candidateBranch, storeOwnerPatch } from "../src/publication.ts";
 import type { Exec } from "../src/gh.ts";
 
 const candidateSha = "c".repeat(40);
@@ -455,7 +456,7 @@ globalThis.fetch = async (url, init) => {
 		});
 });
 
-async function reportDeadlineFixture(root: string) {
+async function reportDeadlineFixture(root: string, owner = false) {
 	assert.ok(isGitSha(gateSha) && isGitSha(candidateSha));
 	const repo = "giuseppecrj/pi-herdr-factorio";
 	assert.ok(isRepoSlug(repo));
@@ -568,10 +569,10 @@ async function reportDeadlineFixture(root: string) {
 		},
 		patch: patch.receipt,
 		round: 0,
-		generation: 0,
+		generation: owner ? 1 : 0,
 		baseSha: gateSha,
-		origin: { kind: "initial" },
-		publication: { kind: "initial" },
+		origin: owner ? { kind: "owner", head: candidateSha, previous: { round: 0, generation: 0, digest: digestOf("previous") } } : { kind: "initial" },
+		publication: owner ? { kind: "owner", head: candidateSha } : { kind: "initial" },
 	});
 
 	const heldout = publishedSuite({
@@ -584,7 +585,11 @@ async function reportDeadlineFixture(root: string) {
 		acceptanceDigest: stored.receipt.acceptanceDigest,
 	});
 
-	const nonce = dispatchNonce(runId, 0, 1);
+	if (owner) {
+		storeOwnerPatch(root, { version: 1, kind: "owner", runId, head: candidateSha, baseSha: gateSha, contractDigest, acceptanceDigest: stored.receipt.acceptanceDigest, heldoutDigest: heldout.digest, patchDigest: patch.receipt.patchDigest, changedPaths: patch.receipt.changedPaths, policy: "clean" }, patch.patch);
+		rmSync(join(root, "patches"), { recursive: true });
+	}
+	const nonce = dispatchNonce(runId, 0, 1, generation.generation);
 
 	const hardReceipt = {
 		...receipt,
@@ -596,14 +601,14 @@ async function reportDeadlineFixture(root: string) {
 
 	let state: ValidationState = {
 		version: 2,
-		generation: { index: 0, digest: generation.digest, previousHead: null },
+		generation: { index: generation.generation, digest: generation.digest, previousHead: null },
 		startedAt: start,
 		deadline: start + 1_200_000,
 		round: 0,
 		originalBase: gateSha,
 		baseSha: gateSha,
 		baseResolved: true,
-		publication: {
+		publication: owner ? null : {
 			branch: candidateBranch(42, runId, 0),
 			patchSha: gateSha,
 			candidateSha,
@@ -614,7 +619,7 @@ async function reportDeadlineFixture(root: string) {
 		counters: {},
 	};
 
-	let ref: string | null = candidateSha;
+	let ref: string | null = owner ? null : candidateSha;
 	let report: "missing" | "rejected" | "valid" = "missing";
 	const writes: string[] = [];
 
@@ -656,6 +661,12 @@ async function reportDeadlineFixture(root: string) {
 			return ok(null);
 		}
 
+		if (owner && args.includes("POST") && path === "git/refs") {
+			const body = JSON.parse(readFileSync(args[args.indexOf("--input") + 1]!, "utf8"));
+			assert.equal(body.ref, `refs/heads/${candidateBranch(42, runId, 0, 1)}`);
+			assert.equal(body.sha, candidateSha); writes.push("PIN"); ref = candidateSha;
+			return ok({ ref: body.ref, object: { sha: candidateSha } });
+		}
 		assert.ok(!args.includes("POST") && !args.includes("PATCH"));
 
 		if (path?.startsWith("git/ref/heads/factory/run/"))
@@ -709,7 +720,7 @@ async function reportDeadlineFixture(root: string) {
 		const restored = parseValidationState(JSON.parse(JSON.stringify(state)));
 		assert.ok(restored);
 
-		return controllerValidator({
+		return (owner ? ownerValidator : controllerValidator)({
 			stateDir: root,
 			exec,
 			receipt: async () => JSON.stringify(hardReceipt),
@@ -735,7 +746,7 @@ async function reportDeadlineFixture(root: string) {
 		start,
 		deadline: state.deadline,
 		writes,
-		dir: validationDir(root, runId),
+		dir: validationDir(root, runId, 0, generation.generation),
 		setReport: (next: typeof report) => {
 			report = next;
 		},
@@ -745,6 +756,31 @@ async function reportDeadlineFixture(root: string) {
 		ref: () => ref,
 	};
 }
+
+describe("F10-3 owner validator integrated harness", () => {
+	it("pins H, adopts the pin after restart, certifies exact H and deletes only the pin without builder bytes", async () => {
+		await withLocalArtifactDownload(async root => {
+			const f = await reportDeadlineFixture(root, true);
+			assert.equal((await f.step(f.start + 60_000)).kind, "waiting");
+			f.setReport("valid");
+			const result = await f.step(f.start + 70_000);
+			assert.equal(result.kind, "finished");
+			assert.ok(result.kind === "finished" && result.report);
+			assert.equal(result.verdict.candidateSha, candidateSha);
+			assert.deepEqual(f.writes, ["PIN", "DELETE"]);
+			assert.equal(f.ref(), null);
+		});
+	});
+	it("refuses a pin moved away from H without deleting it", async () => {
+		await withLocalArtifactDownload(async root => {
+			const f = await reportDeadlineFixture(root, true);
+			await f.step(f.start + 60_000); f.moveBranch();
+			const result = await f.step(f.start + 70_000);
+			assert.ok(result.kind === "failed" && result.reason === "branch_moved");
+			assert.deepEqual(f.writes, ["PIN", "DELETE"]);
+		});
+	});
+});
 
 describe("report evidence uses the fixed CI deadline", () => {
 	for (const cached of [false, true])
