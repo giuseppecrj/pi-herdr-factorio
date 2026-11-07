@@ -470,9 +470,12 @@ describe("accept same-session draft checks", () => {
 		files: [],
 		omitted: 0,
 	};
+
 	const budget = { maxTurns: 20, wallMs: 900000, stallMs: 300000 };
+
 	function draftHost(stopReason = "stop") {
 		let prompts = 0;
+
 		const h = harness([
 			(command, pi) => {
 				if (command.type === "prompt") {
@@ -487,14 +490,16 @@ describe("accept same-session draft checks", () => {
 						{ type: "agent_settled", aborted: false },
 					);
 				}
+
 				if (command.type === "get_last_assistant_text")
 					pi.emit({
 						type: "response",
-						id: command.id,
+						id: command.id ?? null,
 						command: "get_last_assistant_text",
 						success: true,
 						data: { text: `suite-${prompts}` },
 					});
+
 				if (command.type === "abort")
 					pi.emit({ type: "agent_settled", aborted: true });
 			},
@@ -502,15 +507,18 @@ describe("accept same-session draft checks", () => {
 
 		return h;
 	}
+
 	it("runs at most two drafts, keeps final revision in one session and charges revision tokens", async () => {
 		const h = draftHost();
 		let checks = 0;
+
 		const result = await runStage(
 			input(
 				{
 					stage: "accept",
 					draftCheck: async () => {
 						checks++;
+
 						return feedback;
 					},
 				},
@@ -518,6 +526,7 @@ describe("accept same-session draft checks", () => {
 			),
 			h.host,
 		);
+
 		assert.equal(result.kind, "passed");
 		assert.equal(checks, 2);
 		assert.deepEqual(h.outputs, ["suite-3"]);
@@ -537,12 +546,14 @@ describe("accept same-session draft checks", () => {
 		] as const) {
 			const h = draftHost();
 			let checks = 0;
+
 			const result = await runStage(
 				input(
 					{
 						stage: "accept",
 						draftCheck: async () => {
 							checks++;
+
 							return null;
 						},
 					},
@@ -550,14 +561,71 @@ describe("accept same-session draft checks", () => {
 				),
 				h.host,
 			);
+
 			assert.equal(result.kind, "passed");
 			assert.equal(checks, skip === null ? 1 : 0);
 			assert.deepEqual(h.outputs, ["suite-1"]);
 			assert.deepEqual(result.receipt.draftSkips, skip === null ? [] : [skip]);
 		}
 	});
+	it("a clean or infrastructure draft costs no revision tokens", async () => {
+		for (const outcome of [
+			{
+				...feedback,
+				verdict: "would_qualify" as const,
+				reason: null,
+				sentence: null,
+			},
+			{ ...feedback, reason: "base_timeout" as const },
+		]) {
+			const h = draftHost();
+
+			const result = await runStage(
+				input(
+					{ stage: "accept", draftCheck: async () => outcome },
+					{ budget, maxTokens: 100000 },
+				),
+				h.host,
+			);
+
+			assert.equal(result.kind, "passed");
+			assert.deepEqual(h.outputs, ["suite-1"]);
+			assert.equal(result.receipt.draftRuns, 1);
+			assert.equal(result.receipt.draftRevisionTokens, 0);
+		}
+	});
+	it("the live stage deadline stays armed during a draft and aborts its job", async (t) => {
+		t.mock.timers.enable({ apis: ["setTimeout"] });
+		const h = draftHost();
+		let stopped = false;
+
+		const result = await runStage(
+			input(
+				{
+					stage: "accept",
+					draftCheck: async (_text, context) =>
+						new Promise((done) => {
+							context.signal.addEventListener("abort", () => {
+								stopped = true;
+								done(null);
+							});
+							t.mock.timers.tick(900000);
+						}),
+				},
+				{ budget, maxTokens: 100000 },
+			),
+			h.host,
+		);
+
+		assert.equal(result.kind, "budget_exhausted");
+
+		if (result.kind === "budget_exhausted") assert.equal(result.cap, "wall");
+		assert.equal(stopped, true);
+	});
+
 	it("length on a revision still fails accept_length", async () => {
 		const h = draftHost("length");
+
 		const result = await runStage(
 			input(
 				{ stage: "accept", draftCheck: async () => feedback },
@@ -565,6 +633,7 @@ describe("accept same-session draft checks", () => {
 			),
 			h.host,
 		);
+
 		assert.equal(result.kind, "failed");
 		assert.equal(result.receipt.guardStop, "accept_length");
 		assert.deepEqual(h.outputs, []);
@@ -572,7 +641,9 @@ describe("accept same-session draft checks", () => {
 	it("abort during a draft aborts the check and returns wall exhaustion", async () => {
 		const h = draftHost(),
 			abort = new AbortController();
+
 		let stopped = false;
+
 		const result = await runStage(
 			input(
 				{
@@ -581,8 +652,10 @@ describe("accept same-session draft checks", () => {
 					draftCheck: async (_text, context) =>
 						new Promise((done) => {
 							context.signal.addEventListener("abort", () => {
-								stopped = true;
-								done(null);
+								setTimeout(() => {
+									stopped = true;
+									done(null);
+								}, 20);
 							});
 							abort.abort();
 						}),
@@ -591,7 +664,9 @@ describe("accept same-session draft checks", () => {
 			),
 			h.host,
 		);
+
 		assert.equal(result.kind, "budget_exhausted");
+
 		if (result.kind === "budget_exhausted") assert.equal(result.cap, "wall");
 		assert.equal(stopped, true);
 	});
@@ -1036,6 +1111,52 @@ describe("Pi RPC framing and records", () => {
 });
 
 describe("settlement predicate", () => {
+	it("settles a follow-up prompt without resetting the session-wide tool guards", () => {
+		for (const duplicate of [false, true]) {
+			const tracker = new SessionTracker("first", 20, 0, {
+				ids: new Set(),
+				args: new Set(),
+			});
+
+			tracker.apply(parsePiRecord(JSON.stringify(started("first"))));
+			tracker.apply(
+				parsePiRecord(JSON.stringify(toolStart("a", "read", { path: "x" }))),
+			);
+
+			if (!duplicate)
+				tracker.apply(
+					parsePiRecord(JSON.stringify(toolStart("b", "read", { path: "y" }))),
+				);
+			assert.equal(
+				tracker.apply({ type: "agent_settled", aborted: false }).kind,
+				"settled",
+			);
+			tracker.expect("second");
+			assert.equal(tracker.settled(), false);
+			assert.equal(
+				tracker.apply(parsePiRecord(JSON.stringify(started("second")))).kind,
+				"none",
+			);
+
+			const bad = tracker.apply(
+				parsePiRecord(
+					JSON.stringify(
+						toolStart("c", "read", { path: duplicate ? "x" : "z" }),
+					),
+				),
+			);
+
+			assert.deepEqual(bad, {
+				kind: "failed",
+				exit: "error",
+				diagnostic: "accept_tool_limit",
+			});
+			assert.equal(
+				tracker.apply({ type: "agent_settled", aborted: false }).kind,
+				"settled",
+			);
+		}
+	});
 	it("waits past the first agent_settled until the child result and a later settle (exp5)", () => {
 		const tracker = new SessionTracker("p1", 10, 0);
 		const states: string[] = [];
@@ -4634,7 +4755,7 @@ describe("pinned zero-token accept replay", () => {
 			assert.equal(bodies.length, pin.expectedRequests[variant]);
 			assert.equal(result.receipt.efficiency?.modelRequests, bodies.length);
 			assert.equal(calls, variant === "fixed" ? 0 : 1);
-			assert.equal(h.tables[0]?.ceiling.modelRequests, 3);
+			assert.equal(h.tables[0]?.ceiling.modelRequests, 5);
 			const sent = forwarded.slice(offset);
 			assert.equal(sent.length, bodies.length);
 
@@ -4687,7 +4808,11 @@ describe("pinned zero-token accept replay", () => {
 						request.argv
 							.slice(1)
 							.map((arg) =>
-								arg.startsWith("/g/") ? join(request.gates, arg.slice(3)) : arg,
+								arg.startsWith("/g/")
+									? join(request.gates, arg.slice(3))
+									: arg.startsWith("/d/")
+										? join(request.detailReporter ?? "", arg.slice(3))
+										: arg,
 							),
 						{
 							cwd: request.tree,
@@ -5414,16 +5539,16 @@ describe("budget stops before the next request, through the gate", () => {
 		);
 	});
 
-	it("never forwards a fourth accept request and treats the backstop as a charged failure", async () => {
+	it("allows five accept requests and never forwards a sixth; the backstop is a charged failure", async () => {
 		const { result, forwarded, events, h } = await capped(
 			{ stage: "accept" },
 			{},
 		);
 
 		assert.equal(result.kind === "failed" && result.exit, "error");
-		assert.equal(forwarded, 3);
-		assert.equal(result.usage, 48);
-		assert.equal(h.tables[0]?.ceiling.modelRequests, 3);
+		assert.equal(forwarded, 5);
+		assert.equal(result.usage, 80);
+		assert.equal(h.tables[0]?.ceiling.modelRequests, 5);
 		assert.match(
 			JSON.stringify(result.receipt),
 			/"diagnostic":"accept_request_limit"/,

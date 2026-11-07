@@ -2607,6 +2607,23 @@ describe("Orchestrator base qualification", () => {
 			"build-1",
 		]);
 		const [, first, retry, build] = executor.launches;
+		assert.ok(first?.acceptDraft);
+		assert.deepEqual(
+			retry?.acceptDraft,
+			first.acceptDraft,
+			"both attempts get the same immutable contract for private drafts",
+		);
+		assert.equal(first.acceptDraft.contract.runId, runOf(14));
+		assert.equal(first.acceptDraft.issue, 14);
+		assert.equal(
+			first.acceptDraft.baseSha,
+			first.acceptDraft.contract.base.sha,
+		);
+		assert.equal(
+			build?.acceptDraft,
+			undefined,
+			"held-out draft inputs never reach build",
+		);
 		assert.doesNotMatch(first?.prompt ?? "", /base-refusal/);
 
 		const block =
@@ -2918,6 +2935,7 @@ describe("Orchestrator base qualification", () => {
 		executor.acceptBehavior = { kind: "pass", usage: 20 };
 		executor.baseOutcomes = ["preservation_failed", "ready"];
 		executor.baseReceipt = (binding) => refusedReceipt(binding, FEEDBACK);
+		// Receipt usage includes the original generation plus same-session revisions.
 		executor.spentBy.set("accept-1", 18_000);
 		await drive(start(), clock);
 

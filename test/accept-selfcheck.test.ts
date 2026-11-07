@@ -57,9 +57,11 @@ test("pinned Pi 1.4.0 accepts a second prompt after settlement (scripted local t
 			},
 		}),
 	);
+
 	const cli = resolve(
 		"node_modules/@earendil-works/pi-coding-agent/dist/cli.js",
 	);
+
 	const pi = spawn(
 		process.execPath,
 		[
@@ -86,6 +88,7 @@ test("pinned Pi 1.4.0 accepts a second prompt after settlement (scripted local t
 			stdio: ["pipe", "pipe", "pipe"],
 		},
 	);
+
 	t.after(() => pi.kill());
 	let stderr = "";
 	pi.stderr.on("data", (chunk) => {

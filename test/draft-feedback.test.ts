@@ -18,6 +18,7 @@ import {
 	BASE_PROTOCOL_VERSION,
 	type BaseEvidence,
 	type TestFailure,
+	type DraftDetail,
 } from "../src/diagnosis.ts";
 import { parseDraftDetails } from "../server/gates.ts";
 import { controllerBaseChecker } from "../server/controller.ts";
@@ -32,8 +33,10 @@ function evidence(
 ): BaseEvidence {
 	const sha = "a".repeat(40),
 		repo = "owner/repo";
+
 	assert.ok(isGitSha(sha) && isRepoSlug(repo));
 	const file = "test/acceptance/7/checks/exact.test.mjs";
+
 	const execution = {
 		kind: "observed" as const,
 		exitCode: 1,
@@ -46,9 +49,9 @@ function evidence(
 					{
 						file,
 						name: "own test",
-						kind,
-						code: kind === "assertion" ? "ERR_ASSERTION" : null,
 						message,
+						code: kind === "assertion" ? "ERR_ASSERTION" : null,
+						kind,
 					},
 				],
 			},
@@ -118,6 +121,7 @@ test("P6 literal and missing procs failures reach draft feedback; P7 silent pass
 			[],
 			7,
 		);
+
 		assert.equal(feedback.reason, reason);
 		assert.equal(feedback.verdict, "would_refuse");
 		assert.match(
@@ -133,16 +137,19 @@ test("P6 literal and missing procs failures reach draft feedback; P7 silent pass
 		false,
 	);
 	assert.ok(e.execution.kind === "observed");
+
 	const passed = {
 		...e.execution,
 		exitCode: 0,
 		files: e.execution.files.map((f) => ({ ...f, failures: [] })),
 	};
+
 	const silent = draftCheckFeedback(
 		assessBase({ ...e, execution: passed, repeat: passed }).receipt,
 		[],
 		7,
 	);
+
 	assert.equal(silent.reason, "acceptance_not_reproduced");
 	assert.equal(silent.files[0]?.registered, 1);
 	assert.deepEqual(silent.files[0]?.failures, []);
@@ -153,6 +160,7 @@ test("draft feedback keeps all files, bounds and sanitizes private text and fram
 	const e = evidence("assertion", "red");
 	assert.ok(e.execution.kind === "observed");
 	const file = e.execution.files[0]!.file;
+
 	const details = Array.from({ length: 4 }, () => ({
 		file,
 		name: "own test",
@@ -171,6 +179,7 @@ test("draft feedback keeps all files, bounds and sanitizes private text and fram
 			"node:internal:1:1",
 		],
 	}));
+
 	const feedback = draftCheckFeedback(assessBase(e).receipt, details, 7);
 	const failure = feedback.files[0]?.failures[0];
 	assert.ok(failure);
@@ -182,6 +191,7 @@ test("draft feedback keeps all files, bounds and sanitizes private text and fram
 	assert.equal(feedback.files[0]?.suspect, true);
 	assert.equal(draftNeedsRevision(feedback), true);
 	assert.doesNotMatch(JSON.stringify(feedback), /\/home\/|\/tmp\/|\/w\//);
+
 	const many = {
 		...e,
 		scenarios: Array.from({ length: 30 }, (_, i) => ({
@@ -189,6 +199,7 @@ test("draft feedback keeps all files, bounds and sanitizes private text and fram
 			scenario: `S${i + 1}`,
 		})),
 	};
+
 	const bounded = draftCheckFeedback(assessBase(many).receipt, details, 7);
 	assert.ok(
 		Buffer.byteLength(JSON.stringify(bounded).replaceAll("<", "\\u003c")) <=
@@ -199,6 +210,7 @@ test("draft feedback keeps all files, bounds and sanitizes private text and fram
 
 test("detail parser fails closed on missing, oversized, malformed, duplicate and unknown-kind reports", () => {
 	const file = "test/acceptance/7/checks/exact.test.mjs";
+
 	const good = {
 		complete: true,
 		invalid: false,
@@ -215,6 +227,7 @@ test("detail parser fails closed on missing, oversized, malformed, duplicate and
 			},
 		],
 	};
+
 	assert.ok(parseDraftDetails(JSON.stringify(good), [file]) !== null);
 
 	for (const text of [
@@ -245,6 +258,7 @@ test("P7 minimal wrapped ReferenceError beyond the trusted head reaches detail f
 		file,
 		`import {test} from 'node:test'; import assert from 'node:assert/strict'; test('own test',()=>assert.fail('noise'.repeat(150)+'\\nReferenceError: readDurableAccounting is not defined\\n    at /w/test/acceptance/7/checks/exact.test.mjs:68:9'));`,
 	);
+
 	let stdout = "",
 		stderr = "";
 
@@ -263,7 +277,11 @@ test("P7 minimal wrapped ReferenceError beyond the trusted head reaches detail f
 				"stderr",
 				file,
 			],
-			{ encoding: "utf8", env: { PATH: process.env.PATH } },
+			{
+				encoding: "utf8",
+				env: { PATH: process.env.PATH },
+				stdio: ["ignore", "pipe", "pipe"],
+			},
 		);
 	} catch (e) {
 		assert.ok(e instanceof Error && "stdout" in e && "stderr" in e);
@@ -280,28 +298,73 @@ test("P7 minimal wrapped ReferenceError beyond the trusted head reaches detail f
 		/ReferenceError: readDurableAccounting is not defined/,
 	);
 	const e = evidence("assertion", trusted.failures[0].message);
+
 	const feedback = draftCheckFeedback(
 		assessBase(e).receipt,
-		detail.failures.map((f: object) => ({
+		detail.failures.map((f: DraftDetail) => ({
 			...f,
 			file: "test/acceptance/7/checks/exact.test.mjs",
 		})),
 		7,
 	);
+
 	assert.match(
 		JSON.stringify(feedback),
 		/ReferenceError.*readDurableAccounting/,
 	);
 });
 
+test("detail reporter classification stays in parity with the unchanged trusted reporter", () => {
+	const file = "/w/test/acceptance/7/checks/exact.test.mjs";
+
+	const rows = [
+		{
+			name: "assertion",
+			error: { cause: { code: "ERR_ASSERTION", message: "red" } },
+		},
+		{
+			name: "runtime",
+			error: { cause: { message: "broken", stack: "TypeError: broken" } },
+		},
+		{ name: file, line: 1, column: 1, error: { cause: { message: "load" } } },
+		{ name: "timeout", error: { failureType: "testTimeoutFailure" } },
+		{ name: "skip", skip: true },
+		{ name: "todo", todo: true },
+		{ name: "cancelled", error: { failureType: "cancelledByParent" } },
+		{ name: "parent", error: { failureType: "subtestsFailed" } },
+	];
+
+	const events = rows.map((r) => ({
+		type: "test:fail",
+		data: { file, line: 2, column: 1, ...r, details: { error: r.error } },
+	}));
+
+	const script = `const {default:trusted}=await import(${JSON.stringify(resolve(".github/factory/gates/reporter.mjs"))});const {default:detail}=await import(${JSON.stringify(resolve("server/gates/draft-reporter.mjs"))});const events=${JSON.stringify([...events, { type: "test:summary", data: { success: false } }])};const out=[];for(const r of [trusted,detail]){let s='';for await(const chunk of r(events))s+=chunk;out.push(JSON.parse(s));}console.log(JSON.stringify(out));`;
+
+	const [trusted, detail] = JSON.parse(
+		execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+			encoding: "utf8",
+		}),
+	);
+
+	assert.deepEqual(
+		detail.failures.map((f: DraftDetail) => [f.name, f.kind, f.code]),
+		trusted.failures.map((f: DraftDetail) => [f.name, f.kind, f.code]),
+	);
+	assert.equal(detail.failures.length, 7);
+});
+
 test("old protocol qualified receipt stays readable and controller never reruns it", async (t) => {
 	const root = mkdtempSync(join(tmpdir(), "legacy-base-"));
 	t.after(() => rmSync(root, { recursive: true, force: true }));
 	const e = evidence("assertion", "legacy red");
+
 	const receipt = assessBase(e).receipt,
 		text = JSON.stringify(receipt);
+
 	assert.deepEqual(parseBaseReceipt(text), receipt);
 	assert.notEqual(BASE_PROTOCOL_VERSION, "heldout-base-v2-3");
+
 	const dir = join(
 		root,
 		"base-check",
@@ -309,10 +372,12 @@ test("old protocol qualified receipt stays readable and controller never reruns 
 		digestOf(JSON.stringify(e.binding)),
 		"a1",
 	);
-	mkdirSync(dir, { recursive: true });
-	writeFileSync(join(dir, "result.json"), text);
-	writeFileSync(join(dir, "result.digest"), digestOf(text));
+
+	mkdirSync(dir, { recursive: true, mode: 0o700 });
+	writeFileSync(join(dir, "result.json"), text, { mode: 0o600 });
+	writeFileSync(join(dir, "result.digest"), digestOf(text), { mode: 0o600 });
 	let fetches = 0;
+
 	const checker = controllerBaseChecker({
 		stateDir: root,
 		fetch: async () => {
@@ -321,12 +386,14 @@ test("old protocol qualified receipt stays readable and controller never reruns 
 			return null;
 		},
 	});
+
 	const result = await checker.check({
 		binding: e.binding,
 		acceptAttempt: 1,
 		remainingAcceptMs: 900000,
 		signal: new AbortController().signal,
 	});
+
 	assert.equal(result.kind, "ready");
 	assert.equal(fetches, 0);
 	assert.equal(readFileSync(join(dir, "result.json"), "utf8"), text);
