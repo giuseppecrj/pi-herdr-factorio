@@ -941,6 +941,7 @@ test("controller draft checks are private, reuse a fresh tarball and never use t
 	const check = controllerDraftChecker({
 		stateDir: w.state,
 		stageDir,
+		attempt: 2,
 		input: {
 			contract: w.contract,
 			digest: w.binding.contractDigest,
@@ -953,7 +954,7 @@ test("controller draft checks are private, reuse a fresh tarball and never use t
 			kind: "draft-inspect",
 			async run(input) {
 				assert.ok(input.argv.includes("/d/draft-reporter.mjs"));
-				assert.match(input.scope ?? "", /-draftcheck-/);
+				assert.match(input.scope ?? "", /-draftcheck-2-/);
 				assert.ok(input.detailReporter?.endsWith("server/gates/"));
 
 				const file = "test/acceptance/7/checks/one.test.mjs",

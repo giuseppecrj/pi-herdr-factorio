@@ -165,6 +165,7 @@ test("draft feedback keeps all files, bounds and sanitizes private text and fram
 		file,
 		name: "own test",
 		kind: "assertion" as const,
+		code: "/home/private/code",
 		message: "<" + "x".repeat(500),
 		causes: [
 			"ReferenceError: missing /home/private/file",
@@ -176,6 +177,7 @@ test("draft feedback keeps all files, bounds and sanitizes private text and fram
 			"/w/test/acceptance/7/checks/exact.test.mjs:68:9",
 			"/tmp/private.mjs:1:1",
 			"/w/src/private.ts:1:1",
+			"/w/test/acceptance/7/checks/not-authored.test.mjs:1:1",
 			"node:internal:1:1",
 		],
 	}));
