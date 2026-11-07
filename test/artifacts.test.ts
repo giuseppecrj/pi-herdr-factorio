@@ -627,6 +627,104 @@ describe("private acceptance artifacts", () => {
 		walk(acceptance);
 	});
 
+	it("reads only the digest-bound retired suite for its author's retry, even after replacement", async () => {
+		const root = fresh();
+		const store = fileArtifacts(root);
+		const first = await store.store(input);
+		assert.equal(first.kind, "found");
+
+		if (first.kind !== "found") return;
+		const d1 = first.receipt.acceptanceDigest;
+		assert.notEqual(
+			(await store.readRetired(contract.runId, contract, digest, d1)).kind,
+			"found",
+		);
+		assert.equal(
+			await store.retire(contract.runId, contract, digest, d1),
+			"retired",
+		);
+		assert.deepEqual(
+			await store.readRetired(contract.runId, contract, digest, d1),
+			first,
+		);
+		assert.deepEqual(await store.read(contract.runId, contract, digest), {
+			kind: "absent",
+		});
+
+		const replacement = await store.store({
+			...input,
+			suite: {
+				...suite,
+				files: suite.files.map((file) => ({
+					...file,
+					content: `${file.content}// replacement\n`,
+				})),
+			},
+		});
+
+		assert.equal(replacement.kind, "found");
+		assert.deepEqual(
+			await store.readRetired(contract.runId, contract, digest, d1),
+			first,
+		);
+		assert.notEqual(
+			(
+				await store.readRetired(
+					contract.runId,
+					contract,
+					digest,
+					digestOf("wrong"),
+				)
+			).kind,
+			"found",
+		);
+		assert.notEqual(
+			(
+				await store.readRetired(
+					contract.runId,
+					contract,
+					contractDigestOf("wrong"),
+					d1,
+				)
+			).kind,
+			"found",
+		);
+	});
+
+	for (const changed of [
+		"checks/a.test.ts",
+		"suite.json",
+		"manifest.json",
+		"receipt.json",
+		"canary.txt",
+		"guard.json",
+	])
+		it(`never serves a retired suite with changed ${changed}`, async () => {
+			const root = fresh();
+			const store = fileArtifacts(root);
+			const first = await store.store(input);
+			assert.equal(first.kind, "found");
+
+			if (first.kind !== "found") return;
+			const d1 = first.receipt.acceptanceDigest;
+			assert.equal(
+				await store.retire(contract.runId, contract, digest, d1),
+				"retired",
+			);
+			const aside = join(root, "acceptance", `${contract.runId}.retired`);
+
+			const path =
+				changed === "guard.json"
+					? join(aside, changed)
+					: join(aside, "suite", changed);
+
+			writeFileSync(path, "tampered", { mode: 0o600 });
+			assert.notEqual(
+				(await store.readRetired(contract.runId, contract, digest, d1)).kind,
+				"found",
+			);
+		});
+
 	it("serves the replacement suite past an unreadable retirement marker, and fails closed without a retired copy", async () => {
 		const root = fresh();
 		const store = fileArtifacts(root);

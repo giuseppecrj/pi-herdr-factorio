@@ -2540,66 +2540,6 @@ describe("Orchestrator base qualification", () => {
 		);
 	});
 
-	function refusedReceipt(
-		binding: BaseCheckInput["binding"],
-		message: string,
-	): BaseReceipt {
-		const execution = {
-			kind: "observed" as const,
-			exitCode: 1,
-			wallMs: 5,
-			files: [
-				{
-					file: "checks/version.test.ts",
-					registered: 1,
-					failures: [
-						{
-							file: "checks/version.test.ts",
-							name: "PRIVATE-TEST-NAME",
-							message,
-							code: "ERR_ASSERTION",
-							kind: "assertion" as const,
-						},
-					],
-				},
-			],
-		};
-
-		return assessBase({
-			binding,
-			runtime: {
-				runner: "fixture",
-				node: process.version,
-				platform: process.platform,
-				bwrap: "fixture",
-				protocolDigest: digestOf("protocol"),
-			},
-			startedAt: 0,
-			finishedAt: 4_000,
-			source: {
-				kind: "ready",
-				treeDigest: digestOf("tree"),
-				lockDigest: digestOf("lock"),
-				gatesDigest: digestOf("gates"),
-			},
-			execution,
-			repeat: execution,
-			scenarios: [
-				{
-					scenario: "S1",
-					kind: "preservation",
-					mode: "checked",
-					file: "checks/version.test.ts",
-					oracleKey: {
-						contractScopeDigest: digestOf("scope"),
-						criteriaDigest: digestOf("criteria"),
-						sourceDigest: digestOf("source"),
-					},
-				},
-			],
-		}).receipt;
-	}
-
 	const FEEDBACK = "Expected PRIVATE-FEEDBACK-MESSAGE to equal 'v0.1.0'";
 
 	/** Ticks a controller; `pending` leaves a checking base check undrained. */
@@ -2685,6 +2625,34 @@ describe("Orchestrator base qualification", () => {
 			omitted: 0,
 		});
 		assert.doesNotMatch(retry?.prompt ?? "", /PRIVATE-TEST-NAME/);
+
+		const previous =
+			/<previous-suite-([0-9a-f]{32})>\n(.*)\n<\/previous-suite-\1>/.exec(
+				retry?.prompt ?? "",
+			);
+
+		assert.ok(previous, "the retry receives its own refused check files");
+		assert.equal(previous[1], block[1]);
+		const supplied = JSON.parse(previous[2] ?? "");
+		assert.equal(supplied.truncated, false);
+		assert.equal(supplied.files[0].path, "suite.json");
+		assert.deepEqual(JSON.parse(supplied.files[0].content), {
+			version: 2,
+			scenarios: [
+				{ ...JSON.parse(ACCEPTANCE_TEXT).scenarios[0], kind: "new_behavior" },
+			],
+		});
+		assert.deepEqual(supplied.files.slice(1), [
+			{
+				path: "checks/version.test.ts",
+				content: JSON.parse(ACCEPTANCE_TEXT).files[0].content,
+			},
+		]);
+		assert.doesNotMatch(retry?.prompt ?? "", /Write a new suite/);
+		assert.match(
+			retry?.prompt ?? "",
+			/fix it rather than rewrite unless the feedback requires it/i,
+		);
 		assert.equal(retry?.settings.maxTokens, ACCEPTANCE_MAX_TOKENS - 20);
 		// The retry runs in what is left of the one accept wall.
 		assert.equal(first?.settings.budget.wallMs, 900_000);
@@ -2746,6 +2714,61 @@ describe("Orchestrator base qualification", () => {
 						c.acceptAttempt === 1,
 				),
 		);
+	});
+
+	it("omits all refused files if their retired bytes fail verification", async () => {
+		const { github, executor, files, clock, start } = world();
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "pass", usage: 20 };
+		executor.baseOutcomes = ["preservation_failed", "ready"];
+		executor.baseReceipt = (binding) => refusedReceipt(binding, FEEDBACK);
+		executor.spentBy.set("accept-1", 20);
+		const retire = files.artifacts.retire.bind(files.artifacts);
+		files.artifacts.retire = async (...args) => {
+			const result = await retire(...args);
+
+			if (result === "retired")
+				writeFileSync(
+					join(
+						files.artifactRoot,
+						"acceptance",
+						`${runOf(14)}.retired`,
+						"suite",
+						"checks",
+						"version.test.ts",
+					),
+					"PRIVATE-TAMPERED-CHECK",
+				);
+
+			return result;
+		};
+
+		await drive(start(), clock);
+
+		const retry = executor.launches.find(
+			(entry) => entry.stage === "accept" && entry.attempt === 2,
+		);
+
+		assert.ok(retry);
+		assert.match(
+			retry.prompt,
+			/Previous suite unavailable:.*failed digest verification; no refused files are included/,
+		);
+
+		const block =
+			/<previous-suite-([0-9a-f]{32})>\n(.*)\n<\/previous-suite-\1>/.exec(
+				retry.prompt,
+			);
+
+		assert.ok(block);
+		assert.deepEqual(JSON.parse(block[2] ?? ""), {
+			files: [],
+			truncated: false,
+			unavailable: true,
+		});
+		assert.doesNotMatch(retry.prompt, /PRIVATE-TAMPERED-CHECK/);
+		assert.match(retry.prompt, /PRIVATE-FEEDBACK-MESSAGE/);
 	});
 
 	it("retries a tampered suite once with the scan's file, line and rule as feedback", async () => {
@@ -10425,6 +10448,66 @@ function reportOf(verdict: import("../src/run.ts").Verdict) {
 	};
 }
 
+function refusedReceipt(
+	binding: BaseCheckInput["binding"],
+	message: string,
+): BaseReceipt {
+	const execution = {
+		kind: "observed" as const,
+		exitCode: 1,
+		wallMs: 5,
+		files: [
+			{
+				file: "checks/version.test.ts",
+				registered: 1,
+				failures: [
+					{
+						file: "checks/version.test.ts",
+						name: "PRIVATE-TEST-NAME",
+						message,
+						code: "ERR_ASSERTION",
+						kind: "assertion" as const,
+					},
+				],
+			},
+		],
+	};
+
+	return assessBase({
+		binding,
+		runtime: {
+			runner: "fixture",
+			node: process.version,
+			platform: process.platform,
+			bwrap: "fixture",
+			protocolDigest: digestOf("protocol"),
+		},
+		startedAt: 0,
+		finishedAt: 4_000,
+		source: {
+			kind: "ready",
+			treeDigest: digestOf("tree"),
+			lockDigest: digestOf("lock"),
+			gatesDigest: digestOf("gates"),
+		},
+		execution,
+		repeat: execution,
+		scenarios: [
+			{
+				scenario: "S1",
+				kind: "preservation",
+				mode: "checked",
+				file: "checks/version.test.ts",
+				oracleKey: {
+					contractScopeDigest: digestOf("scope"),
+					criteriaDigest: digestOf("criteria"),
+					sourceDigest: digestOf("source"),
+				},
+			},
+		],
+	}).receipt;
+}
+
 describe("controller-only validate", () => {
 	async function waitingRun(
 		setup: (f: ReturnType<typeof world>) => void = () => {},
@@ -12003,6 +12086,67 @@ describe("controller-only validate", () => {
 		assert.equal(record?.disposition, "completed");
 		assert.equal(record?.usage, 40);
 	});
+
+	for (const repair of [false, true])
+		it(`keeps the refused author's files out of every build and review input (${repair ? "repair" : "initial"})`, async () => {
+			const secret = "PRIVATE-REFUSED-AUTHOR-SOURCE";
+
+			const f = await reviewingRun(
+				repair ? "fail" : undefined,
+				({ executor }) => {
+					executor.acceptText = ACCEPTANCE_TEXT.replace(
+						"test('version'",
+						`/* ${secret} */ test('version'`,
+					);
+					executor.baseOutcomes = ["preservation_failed", "ready"];
+					executor.spentBy.set("accept-1", 7);
+					executor.baseReceipt = (binding) => {
+						executor.acceptText = ACCEPTANCE_TEXT;
+
+						return refusedReceipt(binding, "PRIVATE-RETRY-FEEDBACK");
+					};
+				},
+			);
+
+			f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+			await once(f.controller);
+
+			const retry = f.executor.launches.find(
+				(entry) => entry.stage === "accept" && entry.attempt === 2,
+			);
+
+			assert.ok(retry);
+			assert.ok(retry.prompt.includes(secret));
+			assert.ok(retry.prompt.includes("PRIVATE-RETRY-FEEDBACK"));
+
+			if (repair) {
+				await f.controller.tick();
+				await once(f.controller);
+			}
+
+			const downstream = f.executor.launches.filter(
+				(entry) => entry.stage === "build" || entry.stage === "review",
+			);
+
+			assert.ok(downstream.some((entry) => entry.stage === "build"));
+			assert.ok(downstream.some((entry) => entry.stage === "review"));
+
+			if (repair)
+				assert.ok(
+					downstream.some(
+						(entry) => entry.stage === "build" && entry.round === 1,
+					),
+				);
+
+			for (const input of downstream) {
+				const serialized = JSON.stringify(input);
+				assert.ok(!serialized.includes(secret));
+				assert.doesNotMatch(
+					serialized,
+					/PRIVATE-RETRY-FEEDBACK|previous-suite-|base-refusal-/,
+				);
+			}
+		});
 
 	it("hops from CI to isolated review and waits for the owner with charged usage", async () => {
 		const f = await reviewingRun();

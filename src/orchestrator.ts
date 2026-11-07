@@ -2264,6 +2264,26 @@ export class Orchestrator {
 		return true;
 	}
 
+	async #retrySuite(
+		run: ActiveRun,
+		contract: Extract<ContractRead, { kind: "found" }>,
+	) {
+		const reference = run.baseCheck;
+
+		if (reference === undefined || !retryPending(reference)) return undefined;
+
+		const stored = await this.#input.files.artifacts
+			.readRetired(
+				run.runId,
+				contract.contract,
+				contract.digest,
+				reference.retry.refused.acceptanceDigest,
+			)
+			.catch(() => null);
+
+		return stored?.kind === "found" ? stored.suite : null;
+	}
+
 	/** The pending retry's private feedback, from the refused suite's stored receipt. */
 	async #retryFeedback(run: ActiveRun): Promise<RetryFeedback | undefined> {
 		const reference = run.baseCheck;
@@ -6261,6 +6281,7 @@ export class Orchestrator {
 								inlined: shown,
 								guidance: parsed.guidance,
 								feedback: await this.#retryFeedback(run),
+								previousSuite: await this.#retrySuite(run, contract),
 							}),
 			};
 		}
