@@ -2828,6 +2828,8 @@ const roundEndings = [
 	"promotion_lag",
 	"review_execution",
 	"resume_spend",
+	"closed",
+	"withdrawn",
 ] as const;
 
 for (const ending of roundEndings)
@@ -2849,7 +2851,20 @@ for (const ending of roundEndings)
 			now: 4321,
 		} as const;
 
-		if (ending === "repair_notice") {
+		if (ending === "closed" || ending === "withdrawn") {
+			event = {
+				...roundObservation(state),
+				...(ending === "closed"
+					? {
+							pr: {
+								kind: "closed" as const,
+								number: 5,
+								head: build.state.current.report!.candidateSha,
+							},
+						}
+					: { eligibility: "withdrawn" as const }),
+			};
+		} else if (ending === "repair_notice") {
 			state = selected(
 				handoffCandidate(queuedFeedback(), readyObservation(queuedFeedback()))
 					.state,
@@ -3115,7 +3130,25 @@ for (const ending of roundEndings)
 		}
 
 		const timed = { ...event, now: 4321 };
-		const stopped = handoffCandidate(state, timed);
+		let stopped = handoffCandidate(state, timed);
+
+		if (ending === "closed" || ending === "withdrawn") {
+			const request = pending(stopped.state, "stop_execution");
+
+			const completion = {
+				kind: "effect_completed",
+				now: 4321,
+				completion: {
+					kind: "stop_execution",
+					request,
+					stopped: true,
+					tokens: 10,
+				},
+			} as const;
+
+			stopped = handoffCandidate(stopped.state, completion);
+		}
+
 		const summary = pending(stopped.state, "post_notice");
 		assert.equal(summary.notice.kind, "round_summary");
 		assert.equal(
@@ -3174,6 +3207,17 @@ for (const ending of roundEndings)
 			kind: "effect_completed",
 			completion: { kind: "post_notice", request: summary },
 		});
+
+		if (ending === "closed" || ending === "withdrawn") {
+			const request = pending(completed.state, "finish_pr");
+			assert.deepEqual(request.terminal, {
+				kind: "cancelled",
+				number: 5,
+				reason: ending,
+			});
+
+			return;
+		}
 
 		assert.equal(selected(completed.state).work.kind, "held");
 		assert.equal(
@@ -3278,6 +3322,40 @@ test("F10-2 a failed summary effect retains its intent for retry", () => {
 
 	assert.deepEqual(failed.state, stopped);
 	assert.deepEqual(failed.effect, pending(stopped, "post_notice"));
+});
+
+test("F10-2 stopped-round recovery can charge but cannot relaunch over its summary or hold", () => {
+	const build = rebuildingFeedback();
+
+	let state = handoffCandidate(build.state, {
+		kind: "repair_settled",
+		execution: build.execution,
+		tokens: null,
+		result: { kind: "failed" },
+	}).state;
+
+	const request = pending(state, "post_notice");
+
+	const recovering = handoffCandidate(state, {
+		kind: "resume_execution",
+		execution: build.execution,
+		tokens: 10,
+	});
+
+	assert.deepEqual(recovering.effect, request);
+	state = handoffCandidate(recovering.state, {
+		kind: "effect_completed",
+		completion: { kind: "post_notice", request },
+	}).state;
+
+	const held = handoffCandidate(state, {
+		kind: "resume_execution",
+		execution: build.execution,
+		tokens: 10,
+	});
+
+	assert.equal(held.effect, null);
+	assert.equal(selected(held.state).work.kind, "held");
 });
 
 test("F10-2 summary hold records observation time and keeps it across restart", () => {
