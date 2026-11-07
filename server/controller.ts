@@ -5999,7 +5999,8 @@ export async function storeFeedbackBatch(
 
 	const put = (path: string, bytes: string) => {
 		if (present(path)) {
-			if (regularText(path) !== bytes) throw new Error("feedback_conflict");
+			if (regularText(path, Buffer.byteLength(bytes)) !== bytes)
+				throw new Error("feedback_conflict");
 		} else exclusive(path, bytes);
 	};
 
@@ -6173,12 +6174,20 @@ async function proposeMergedReview(
 		`${review.pr}-${review.id.split(":").at(-1)}.json`,
 	);
 
-	const body = proposalBody(input.repo, review, key);
-	const bytes = JSON.stringify({ key, body });
+	let body = proposalBody(input.repo, review, key);
 
 	if (present(path)) {
-		if (regularText(path) !== bytes) return false;
-	} else exclusive(path, bytes);
+		const intent = objectOf(parseJson(regularText(path)));
+		const savedBody = textOf(jsonField(intent, "body"));
+
+		if (
+			jsonField(intent, "key") !== key ||
+			savedBody === null ||
+			!savedBody.endsWith(`\n\n${key}`)
+		)
+			return false;
+		body = savedBody;
+	} else exclusive(path, JSON.stringify({ key, body }));
 	const proposals = await adapter.readProposedIssues();
 
 	if (proposals.kind !== "ok") return false;
