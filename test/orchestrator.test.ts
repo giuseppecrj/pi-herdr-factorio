@@ -27,6 +27,8 @@ import {
 } from "../server/sandbox.ts";
 import { PassThrough } from "node:stream";
 import type { JsonValue } from "../src/tickets.ts";
+import type { FeedbackObservation } from "../src/feedback.ts";
+import { readAttention } from "../src/attention.ts";
 import type { ControlEvent } from "../server/sandbox/control.ts";
 import { readViewerRun } from "../server/viewer.ts";
 import { manifestDigest } from "../server/sandbox/manifest.ts";
@@ -12357,7 +12359,7 @@ describe("controller-only validate", () => {
 		);
 
 		assert.match(batch, /heldout_path/);
-		assert.doesNotMatch(batch, /REDACTED-HUNK/);
+		assert.doesNotMatch(batch, /REDACTED-HUNK|REDACTED-HELDOUT-CONTENT/);
 		assert.equal(JSON.parse(batch).cards.length, 2);
 	});
 
@@ -12371,13 +12373,7 @@ describe("controller-only validate", () => {
 		assert.ok(port);
 		const observe = port.observe;
 
-		type FeedbackProbe = {
-			kind: "unavailable" | "deferred" | "none";
-			reason?: "review_comments" | "reviews" | "head_mismatch";
-			failure?: "malformed_response" | "gh_failed";
-		};
-
-		let feedback: FeedbackProbe = {
+		let feedback: FeedbackObservation = {
 			kind: "unavailable",
 			reason: "review_comments",
 			failure: "malformed_response",
@@ -12404,6 +12400,27 @@ describe("controller-only validate", () => {
 				},
 			],
 		});
+		const dir = stateDir();
+		const claim = f.files.claims.get(runOf(14));
+		assert.ok(claim);
+		assert.equal(await fileRunFiles(dir).writeClaim(claim), true);
+		assert.equal(await writeStatus(dir, first), true);
+
+		const attention = await readAttention({
+			stateDir: dir,
+			repo,
+			now: since + 60_000,
+		});
+
+		assert.ok(attention.kind === "available");
+		assert.partialDeepStrictEqual(attention.groups.blocked, [
+			{
+				runId: runOf(14),
+				ageMs: 60_000,
+				reason: "feedback_unavailable:review_comments:malformed_response",
+			},
+		]);
+		assert.equal(attention.groups.pr_review.length, 0);
 		f.clock.t += 60_000;
 		await f.controller.tick();
 		feedback = { kind: "unavailable", reason: "reviews", failure: "gh_failed" };

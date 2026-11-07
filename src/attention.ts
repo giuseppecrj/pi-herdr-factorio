@@ -5,6 +5,7 @@ import { isRepoSlug, type RepoSlug } from "./workflow.ts";
 import type { JsonValue } from "./tickets.ts";
 import { parseCandidateState, candidateProjection } from "./handoff.ts";
 import { parseMarker, MARKER_PREFIX } from "./markers.ts";
+import { FEEDBACK_UNAVAILABLE_REASONS } from "./feedback.ts";
 
 export const ATTENTION_KINDS = [
 	"question_asked",
@@ -343,6 +344,64 @@ function unverifiedHolds(
 	return holds;
 }
 
+function feedbackHolds(
+	snapshot: JsonValue | undefined,
+	repo: RepoSlug,
+): Map<Digest, ClaimHold & { readonly pr: number }> {
+	const status = objectOf(snapshot);
+	const holds = new Map<Digest, ClaimHold & { readonly pr: number }>();
+
+	if (status?.repo !== repo || !Array.isArray(status.feedbackIntake))
+		return holds;
+
+	for (const value of status.feedbackIntake) {
+		const entry = objectOf(value);
+		const runId = stringOf(entry?.runId);
+		const issue = countOf(entry?.issue);
+		const eventId = stringOf(entry?.eventId);
+		const pr = countOf(entry?.pr);
+		const since = countOf(entry?.since);
+		const reason = stringOf(entry?.reason);
+		const failure = stringOf(entry?.failure);
+
+		if (
+			entry?.kind !== "unavailable" ||
+			runId === null ||
+			!isDigest(runId) ||
+			issue === null ||
+			issue < 1 ||
+			eventId === null ||
+			!/^[1-9][0-9]{0,19}$/.test(eventId) ||
+			runIdOf({ repo, issue, eventId }) !== runId ||
+			pr === null ||
+			pr < 1 ||
+			since === null ||
+			reason === null ||
+			!FEEDBACK_UNAVAILABLE_REASONS.some((r) => r === reason) ||
+			!(
+				entry.failure === null ||
+				(failure !== null &&
+					[
+						"gh_failed",
+						"cannot_run_gh",
+						"malformed_response",
+						"pagination_limit",
+					].includes(failure))
+			)
+		)
+			continue;
+		holds.set(runId, {
+			runId,
+			issue,
+			pr,
+			since,
+			reason: `feedback_unavailable:${reason}${failure === null ? "" : `:${failure}`}`,
+		});
+	}
+
+	return holds;
+}
+
 export async function readAttention(input: {
 	stateDir: string | null;
 	repo: RepoSlug | null;
@@ -378,10 +437,9 @@ export async function readAttention(input: {
 			return { kind: "unavailable", reason: "state_unavailable" };
 		const newest = new Map<number, AttentionClaim>();
 
-		const holds = unverifiedHolds(
-			await privateJson(join(root, "status.json")),
-			input.repo,
-		);
+		const snapshot = await privateJson(join(root, "status.json"));
+		const holds = unverifiedHolds(snapshot, input.repo);
+		const intakeHolds = feedbackHolds(snapshot, input.repo);
 
 		for (const name of names.sort()) {
 			if (!/^[a-f0-9]{64}\.json$/.test(name)) {
@@ -443,7 +501,15 @@ export async function readAttention(input: {
 				}
 			}
 
-			const hold = claim.terminal ? undefined : holds.get(claim.runId);
+			const intake = intakeHolds.get(claim.runId);
+
+			const hold = claim.terminal
+				? undefined
+				: (holds.get(claim.runId) ??
+					(intake?.pr === claim.pr && claim.reason !== "feedback_overflow"
+						? intake
+						: undefined));
+
 			holds.delete(claim.runId);
 			const kind = hold === undefined ? groupOf(claim, answered) : "blocked";
 

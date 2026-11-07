@@ -894,7 +894,10 @@ test("actual observer promotes a certified successor before PR checks and waits 
 		feedbackReads.length = 0;
 		const promotionWindow = await observe();
 
-		assert.deepEqual(promotionWindow.feedback, { kind: "deferred" });
+		assert.deepEqual(promotionWindow.feedback, {
+			kind: "deferred",
+			reason: "head_mismatch",
+		});
 		assert.deepEqual(feedbackReads, []);
 		assert.equal(
 			selected(handoffCandidate(state, promotionWindow).state).feedback,

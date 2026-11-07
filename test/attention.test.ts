@@ -299,6 +299,25 @@ test("feedback overflow attention uses the durable hold age during notice and af
 	const initial = parseCandidateState(prBook(42, 5, true));
 
 	assert.ok(initial?.kind === "selected");
+	writeFileSync(
+		join(root, "status.json"),
+		JSON.stringify({
+			repo,
+			feedbackIntake: [
+				{
+					runId: initial.pin.runId,
+					issue: 42,
+					eventId: "1",
+					pr: 5,
+					kind: "unavailable",
+					reason: "reviews",
+					failure: "gh_failed",
+					since: 50,
+				},
+			],
+		}),
+		{ mode: 0o600 },
+	);
 
 	for (const notice of ["due", "posted"] as const) {
 		const work =
