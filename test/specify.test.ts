@@ -945,7 +945,7 @@ describe("accept source and existing-test pack", () => {
 		assert.equal(sourceFacts(shown).capHit, false);
 	});
 
-	it("takes at most three unique helpers in call order, deterministically", async () => {
+	it("takes at most five unique helpers in call order and reports the rest, deterministically", async () => {
 		const lines = Array.from({ length: 900 }, () => "// padding");
 
 		for (const [index, name] of [
@@ -953,20 +953,24 @@ describe("accept source and existing-test pack", () => {
 			"second",
 			"third",
 			"fourth",
+			"fifth",
+			"sixth",
 		].entries())
 			lines[100 + index * 100] = `function ${name}() { return 1; }`;
 
 		lines[699] =
-			"test('cited', () => { third(); first(); third(); second(); fourth(); });";
+			"test('cited', () => { third(); first(); third(); second(); fourth(); fifth(); sixth(); });";
 		const text = lines.join("\n");
 		const shown = await helperPack(text, 700);
 		const helpers = shown.filter((file) => file.text.startsWith("function "));
 		assert.deepEqual(
 			helpers.map((file) => file.excerpt?.start),
-			[301, 101, 201],
+			[301, 101, 201, 401, 501],
 		);
 		assert.ok(helpers.every((file) => file.text.split("\n").length === 1));
-		assert.doesNotMatch(shown.map(renderInlined).join("\n"), /function fourth/);
+		assert.doesNotMatch(shown.map(renderInlined).join("\n"), /function sixth/);
+		assert.equal(shown[0]?.excerpt?.skipped, 1);
+		assert.equal(sourceFacts(shown).capHit, false);
 		assert.deepEqual(await helperPack(text, 700), shown);
 	});
 
@@ -1001,7 +1005,7 @@ describe("accept source and existing-test pack", () => {
 		assert.doesNotMatch(helper.text, /HELPER_LINE_40/);
 	});
 
-	it("includes multiline function, arrow and function-expression bindings without following their dependencies", async () => {
+	it("includes multiline bindings and their one-level dependencies", async () => {
 		const lines = Array.from({ length: 900 }, () => "// padding");
 		lines.splice(
 			180,
@@ -1036,11 +1040,174 @@ describe("accept source and existing-test pack", () => {
 		assert.match(text, /async function cli/);
 		assert.match(text, /const arrow = async/);
 		assert.match(text, /const expression = function/);
-		assert.doesNotMatch(text, /function dependency/);
+		assert.match(text, /function dependency/);
 		assert.deepEqual(
-			shown.slice(-3).map((file) => file.text.split("\n").length),
-			[5, 5, 3],
+			shown.slice(-4).map((file) => file.text.split("\n").length),
+			[5, 5, 3, 1],
 		);
+	});
+
+	it("orders direct helpers before one-level dependencies, without following cycles or a third level", async () => {
+		const lines = Array.from({ length: 900 }, () => "// padding");
+		lines[100] = "function cli() { return table(); }";
+		lines[200] = "function runOf() { return dependency(); }";
+		lines[300] = "function stateDir() { return 1; }";
+		lines[400] = "function table() { cli(); return tooDeep(); }";
+		lines[500] = "function dependency() { return 2; }";
+		lines[600] = "function tooDeep() { return 3; }";
+		lines[699] = "test('cited', () => { cli(); runOf(); stateDir(); });";
+		const shown = await helperPack(lines.join("\n"), 700);
+		assert.deepEqual(
+			shown.slice(-5).map((file) => file.excerpt?.start),
+			[101, 201, 301, 401, 501],
+		);
+		assert.doesNotMatch(
+			shown.map(renderInlined).join("\n"),
+			/function tooDeep/,
+		);
+		assert.equal(shown[0]?.excerpt?.skipped, undefined);
+	});
+
+	it("ends an unbraced multiline arrow at its expression, not the next declaration", async () => {
+		const lines = Array.from({ length: 500 }, () => "// padding");
+		lines.splice(
+			180,
+			0,
+			"const cli = (argv: string[]) => runCli(",
+			"  argv, { runtime: { procs: '}' } },",
+			")",
+			"function unrelated() { return 'NOT_HELPER_BODY'; }",
+		);
+		lines[399] = "test('cited', () => cli([]));";
+		const shown = await helperPack(lines.join("\n"));
+		const helper = shown.find((file) => file.text.startsWith("const cli"));
+		assert.equal(helper?.text, lines.slice(180, 183).join("\n"));
+		assert.equal(helper?.excerpt?.end, 183);
+		assert.doesNotMatch(shown.map(renderInlined).join("\n"), /NOT_HELPER_BODY/);
+	});
+
+	it("does not duplicate an already visible unbraced arrow", async () => {
+		const lines = Array.from({ length: 500 }, () => "// padding");
+		lines[430] = "const cli = (argv: string[]) => runCli(argv)";
+		lines[399] = "test('cited', () => cli([]));";
+		const shown = await helperPack(lines.join("\n"));
+		assert.equal(
+			shown.filter((file) => file.text.includes("const cli")).length,
+			1,
+		);
+	});
+
+	it("ignores string, template and comment calls, even when a comment starts outside the window", async () => {
+		const lines = Array.from({ length: 800 }, () => "// padding");
+
+		for (const [index, name] of [
+			"fake",
+			"other",
+			"third",
+			"fourth",
+			"fifth",
+			"real",
+		].entries())
+			lines[100 + index * 50] = `function ${name}() { return 1; }`;
+		lines[450] = "/*";
+		lines[480] = "fake(); other(); third(); fourth(); fifth();";
+		lines[485] = "*/";
+		lines[499] =
+			'test("fake(); other();", () => { const note = `third();`; /* fourth(); */ real(); }); // fifth();';
+		const shown = await helperPack(lines.join("\n"), 500);
+		assert.deepEqual(
+			shown
+				.filter((file) => file.text.startsWith("function "))
+				.map((file) => file.excerpt?.start),
+			[351],
+		);
+		assert.equal(sourceFacts(shown).capHit, false);
+		assert.equal(shown[0]?.excerpt?.skipped, undefined);
+	});
+
+	it("recognizes typed async arrows and exported default functions", async () => {
+		const lines = Array.from({ length: 700 }, () => "// padding");
+		lines[100] =
+			"const typed: Handler = async (argv: string[]): Promise<string> => { return 'TYPED_BINDING'; };";
+		lines[200] =
+			"const returned = async (argv: string[]): Promise<string> => { return 'TYPED_RETURN'; };";
+		lines[300] =
+			"export default function exported() { return 'DEFAULT_FUNCTION'; }";
+		lines[499] =
+			"test('cited', () => { typed([]); returned([]); exported(); });";
+		const shown = await helperPack(lines.join("\n"), 500);
+		assert.deepEqual(
+			shown.slice(-3).map((file) => file.excerpt?.start),
+			[101, 201, 301],
+		);
+		assert.match(shown.map(renderInlined).join("\n"), /TYPED_BINDING/);
+		assert.match(shown.map(renderInlined).join("\n"), /TYPED_RETURN/);
+		assert.match(shown.map(renderInlined).join("\n"), /DEFAULT_FUNCTION/);
+	});
+
+	it("uses a function implementation rather than its overload signature", async () => {
+		const lines = Array.from({ length: 500 }, () => "// padding");
+		lines[180] = "function cli(argv: string[]): string;";
+		lines[181] = "function cli(argv: string[]) { return 'IMPLEMENTATION'; }";
+		lines[399] = "test('cited', () => cli([]));";
+		const shown = await helperPack(lines.join("\n"));
+		assert.match(shown.map(renderInlined).join("\n"), /IMPLEMENTATION/);
+		assert.equal(shown.at(-1)?.excerpt?.start, 182);
+	});
+
+	it("greedily keeps later fitting helpers after oversized direct and dependent helpers", async () => {
+		const lines = Array.from({ length: 900 }, () => "// padding");
+		lines[100] = `function huge() { return '${"€".repeat(6000)}'; }`;
+		lines[200] = "function small() { return tooBig(); }";
+		lines[300] = `function tooBig() { return '${"€".repeat(6000)}'; }`;
+		lines[400] = "function later() { return tiny(); }";
+		lines[500] = "function tiny() { return 1; }";
+		lines[699] = "test('cited', () => { huge(); small(); later(); });";
+		const shown = await helperPack(lines.join("\n"), 700);
+		assert.deepEqual(
+			shown.slice(-3).map((file) => file.excerpt?.start),
+			[201, 401, 501],
+		);
+		assert.equal(shown[0]?.excerpt?.skipped, 2);
+		assert.equal(sourceFacts(shown).capHit, true);
+		assert.ok(sourceFacts(shown).bytes <= 16 * 1024);
+	});
+
+	it("fits omission labels with whole helpers instead of trimming a selected helper", async () => {
+		const lines = Array.from({ length: 700 }, () => "// padding");
+		lines[100] = "function tight() { return ''; }";
+		lines[200] = `function huge() { return '${"€".repeat(6000)}'; }`;
+		lines[300] = "function small() { return 1; }";
+		lines[499] = "test('cited', () => { tight(); huge(); small(); });";
+		const initial = await helperPack(lines.join("\n"), 500);
+
+		const withoutSmall = initial.flatMap((file) =>
+			file.text.startsWith("function small")
+				? []
+				: [
+						{
+							...file,
+							excerpt:
+								file.excerpt === undefined
+									? undefined
+									: { ...file.excerpt, capHit: false, skipped: undefined },
+						},
+					],
+		);
+
+		const padding = 16 * 1024 - sourceFacts(withoutSmall).bytes;
+		lines[100] = `function tight() { return '${"x".repeat(padding)}'; }`;
+		const shown = await helperPack(lines.join("\n"), 500);
+		assert.equal(shown.at(-1)?.text, lines[300]);
+		assert.doesNotMatch(
+			shown.map(renderInlined).join("\n"),
+			/function tight|function huge/,
+		);
+		assert.equal(shown[0]?.excerpt?.skipped, 2);
+		assert.ok(
+			shown.some((file) => file.text.includes(lines[499] ?? "MISSING")),
+		);
+		assert.ok(sourceFacts(shown).bytes <= 16 * 1024);
 	});
 
 	it("resolves direct helper calls only in the same eligible test file", async () => {
