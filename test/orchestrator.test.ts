@@ -12246,29 +12246,90 @@ describe("controller-only validate", () => {
 			const book = claim.handoff;
 			const batch = digestOf("feedback repair fixture");
 			const id = `github:${repo}:review:77` as const;
-			const queued = { ...book, feedback: { pr: 99, seen: [id], batches: [{ digest: batch, head: book.current.report!.candidateSha, actionable: true, reviews: [id], notice: "posted" as const, status: { kind: "queued" as const } }] } };
+
+			const queued = {
+				...book,
+				feedback: {
+					pr: 99,
+					seen: [id],
+					batches: [
+						{
+							digest: batch,
+							head: book.current.report!.candidateSha,
+							actionable: true,
+							reviews: [id],
+							notice: "posted" as const,
+							status: { kind: "queued" as const },
+						},
+					],
+				},
+			};
+
 			f.files.claims.set(runOf(14), { ...claim, handoff: queued });
 			const notices: string[] = [];
 			const port = f.executor.candidate!;
 			const execute = port.execute;
 			port.execute = async (state, request) => {
 				if (request.kind === "post_notice") notices.push(request.notice.kind);
+
 				return execute(state, request);
 			};
-			if (fault !== "batch") Object.assign(f.executor, { readFeedback: async () => ({ version: 1, runId: book.pin.runId, pr: 99, head: book.current.report!.candidateSha, records: [{ event: id, actor: "writer", intake: { kind: "actionable" }, inline: [] }], cards: [], full: null }) });
-			if (fault === "inputs") f.executor.baseCheck = async () => ({ kind: "interrupted" });
-			if (fault === "review_size") f.executor.prepareReview = async () => ({ kind: "refused", reason: "review_input_too_large", bytes: 20000, limit: 12288 });
+
+			if (fault !== "batch")
+				Object.assign(f.executor, {
+					readFeedback: async () => ({
+						version: 1,
+						runId: book.pin.runId,
+						pr: 99,
+						head: book.current.report!.candidateSha,
+						records: [
+							{
+								event: id,
+								actor: "writer",
+								intake: { kind: "actionable" },
+								inline: [],
+							},
+						],
+						cards: [],
+						full: null,
+					}),
+				});
+
+			if (fault === "inputs")
+				f.executor.baseCheck = async () => ({ kind: "interrupted", wallMs: 0 });
+
+			if (fault === "review_size")
+				f.executor.prepareReview = async () => ({
+					kind: "refused",
+					reason: "review_input_too_large",
+					bytes: 20000,
+					limit: 12288,
+				});
+
 			if (fault === "no_change") {
 				const output = f.executor.output.bind(f.executor);
-				f.executor.output = async (input) => input.stage === "build" && input.round === 1 ? { kind: "build", result: { kind: "blocked", reason: "repair_no_change" } } : output(input);
+				f.executor.output = async (input) =>
+					input.stage === "build" && input.round === 1
+						? {
+								kind: "build",
+								result: { kind: "blocked", reason: "repair_no_change" },
+							}
+						: output(input);
 			}
+
 			const restarted = f.start();
 			await drive(restarted, f);
 			const result = f.files.claims.get(runOf(14))?.handoff;
 			assert.ok(result?.kind === "selected");
 			assert.equal(result.work.kind, "held");
-			assert.equal(notices.filter((kind) => kind === "repair_started").length, 1);
-			assert.equal(notices.filter((kind) => kind === "round_summary").length, 1);
+			assert.equal(
+				notices.filter((kind) => kind === "repair_started").length,
+				1,
+			);
+			assert.equal(
+				notices.filter((kind) => kind === "round_summary").length,
+				1,
+			);
 			assert.ok(restarted.state.runs.has(14));
 		});
 
@@ -12424,7 +12485,7 @@ describe("controller-only validate", () => {
 			"99/5812783128",
 			recorded.comments.map((c) => ({ ...c, commit_id: head })),
 		);
-		let notices = 0;
+		const notices: string[] = [];
 		port.observe = async (state, now) => {
 			const obs = await observe(state, now);
 
@@ -12445,10 +12506,7 @@ describe("controller-only validate", () => {
 		};
 
 		port.execute = async (state, request) => {
-			if (request.kind === "post_notice") {
-				assert.equal(request.notice.kind, "feedback_intake");
-				notices++;
-			}
+			if (request.kind === "post_notice") notices.push(request.notice.kind);
 
 			return execute(state, request);
 		};
@@ -12457,11 +12515,23 @@ describe("controller-only validate", () => {
 		const stored = f.files.claims.get(runOf(14))?.handoff;
 		assert.ok(stored?.kind === "selected");
 		assert.equal(stored.feedback?.batches.length, 1);
-		assert.equal(stored.feedback.batches[0]?.status.kind, "queued");
+		assert.deepEqual(stored.feedback.batches[0]?.status, {
+			kind: "settled",
+			outcome: { kind: "stopped", reason: "diagnosis_missing_evidence" },
+		});
 		assert.equal(stored.feedback.batches[0]?.notice, "posted");
-		assert.equal(notices, 1);
-		assert.deepEqual(stored.published, book.published);
-		assert.deepEqual(stored.accounts, book.accounts);
+		assert.deepEqual(notices, [
+			"feedback_intake",
+			"repair_started",
+			"round_summary",
+		]);
+		assert.equal(stored.published?.number, book.published?.number);
+		assert.equal(stored.published?.readiness.kind, "not_ready");
+		assert.deepEqual(
+			stored.accounts.slice(0, book.accounts.length),
+			book.accounts,
+		);
+		assert.equal(stored.accounts.length, book.accounts.length + 1);
 
 		const batch = readFileSync(
 			join(
@@ -12646,7 +12716,10 @@ describe("controller-only validate", () => {
 			const saved = f.files.claims.get(runOf(14));
 			assert.ok(saved?.handoff?.kind === "selected");
 			assert.equal(saved.handoff.feedback?.batches.length, 1);
-			assert.equal(saved.handoff.feedback?.batches[0]?.status.kind, "queued");
+			assert.deepEqual(saved.handoff.feedback?.batches[0]?.status, {
+				kind: "applying",
+				round: 1,
+			});
 			const launches = f.executor.launches.length;
 			const restored = f.start();
 			await restored.tick();
@@ -12654,8 +12727,11 @@ describe("controller-only validate", () => {
 			const book = f.files.claims.get(runOf(14))?.handoff;
 			assert.ok(book?.kind === "selected");
 			assert.equal(book.feedback?.batches.length, 1);
-			assert.equal(book.feedback?.batches[0]?.notice, "posted");
-			assert.equal(book.feedback?.batches[0]?.status.kind, "queued");
+			assert.equal(book.feedback?.batches[0]?.notice, "none");
+			assert.deepEqual(book.feedback?.batches[0]?.status, {
+				kind: "settled",
+				outcome: { kind: "stopped", reason: "diagnosis_missing_evidence" },
+			});
 			assert.equal(notices, 1);
 			assert.equal(f.executor.launches.length, launches);
 		});
@@ -12838,10 +12914,12 @@ describe("controller-only validate", () => {
 			"the same observation crosses both candidate commits",
 		);
 		let notices = 0;
+		const noticeKinds: string[] = [];
 		const execute = port.execute;
 		port.execute = async (state, request) => {
 			if (request.kind !== "post_notice") return execute(state, request);
 			notices++;
+			noticeKinds.push(request.notice.kind);
 
 			return { kind: "post_notice", request };
 		};
@@ -12860,9 +12938,13 @@ describe("controller-only validate", () => {
 			capped
 				? restored.feedback?.overflow?.notice
 				: restored.feedback?.batches[0]?.notice,
-			"posted",
+			capped ? "posted" : "none",
 		);
-		assert.equal(notices, 1);
+		assert.deepEqual(
+			noticeKinds,
+			capped ? ["feedback_overflow"] : ["repair_started", "round_summary"],
+		);
+		assert.equal(notices, capped ? 1 : 2);
 		assert.equal(
 			f.executor.launches.filter((l) => l.stage === "build").length,
 			1,

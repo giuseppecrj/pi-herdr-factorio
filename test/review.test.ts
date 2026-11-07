@@ -1152,13 +1152,80 @@ for (const mode of [
 
 describe("F10-2 feedback review", () => {
 	it("fingerprints ignore lines, digits, claim case and whitespace but bind seat, category and path", () => {
-		const withFinding = (seat = "code-review", path = "src/a.ts", category = "bug", claim = "Missing guard at 123", line = 2) => ({ seats: [{ seat, findings: [{ severity: "blocking", category, path, startLine: line, endLine: line, claim }], judgments: [] }] });
+		const withFinding = (
+			seat = "code-review",
+			path = "src/a.ts",
+			category = "bug",
+			claim = "Missing guard at 123",
+			line = 2,
+		) => ({
+			seats: [
+				{
+					seat,
+					findings: [
+						{
+							severity: "blocking",
+							category,
+							path,
+							startLine: line,
+							endLine: line,
+							claim,
+						},
+					],
+					judgments: [],
+				},
+			],
+		});
+
 		const a = findingFingerprints(withFinding());
 		assert.equal(a.length, 1);
-		assert.deepEqual(a, findingFingerprints(withFinding("code-review", "src/a.ts", "bug", " MISSING  guard at 999 ", 50)));
-		for (const changed of [withFinding("security-review"), withFinding("code-review", "src/b.ts"), withFinding("code-review", "src/a.ts", "security")])
+		assert.deepEqual(
+			a,
+			findingFingerprints(
+				withFinding(
+					"code-review",
+					"src/a.ts",
+					"bug",
+					" MISSING  guard at 999 ",
+					50,
+				),
+			),
+		);
+
+		for (const changed of [
+			withFinding("security-review"),
+			withFinding("code-review", "src/b.ts"),
+			withFinding("code-review", "src/a.ts", "security"),
+		])
 			assert.notDeepEqual(a, findingFingerprints(changed));
 	});
+	it("later-round review blocks only on earlier findings or defects in the repair diff", async () => {
+		const f = await preparedReviewFixture();
+
+		try {
+			const prompt = candidateReviewPrompt({
+				contract: f.contract,
+				diff: f.kept.patch,
+				paths: f.kept.receipt.changedPaths,
+				judges: [],
+				guidance: "",
+				verdict: f.prepared.verdict,
+				repairDiff: "repair delta",
+				previousFindings: [{ claim: "earlier finding" }],
+			});
+
+			assert.ok(prompt.kind === "ready");
+			assert.match(
+				prompt.prompt,
+				/block only on an unfixed earlier finding or a defect inside the repair diff/i,
+			);
+			assert.match(prompt.prompt, /repair delta/);
+			assert.match(prompt.prompt, /earlier finding/);
+		} finally {
+			f.close();
+		}
+	});
+
 	it("owner cards are requests, not CI facts; full text is protected", () => {
 		const prompt = feedbackPrompt('{"owner":[]}');
 		assert.match(prompt, /owner cards.*untrusted requests/i);

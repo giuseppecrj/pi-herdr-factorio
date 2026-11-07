@@ -1,4 +1,10 @@
 import { randomBytes } from "node:crypto";
+import {
+	readFeedbackBatch,
+	renderFeedbackCards,
+	builderDispositions,
+	builderFindingDispositions,
+} from "../src/feedback.ts";
 import { draftFeedbackPrompt } from "../src/accept.ts";
 import { draftNeedsRevision, type DraftFeedback } from "../src/diagnosis.ts";
 import { fileArtifacts, regularText } from "../src/artifacts.ts";
@@ -9,6 +15,8 @@ import {
 	parseSeat,
 	reviewCandidate,
 	reviewFeedback,
+	findingFingerprint,
+	findingFingerprints,
 	FAMILY_MISSING,
 	type FamilyInput,
 	familyFromJournal,
@@ -3489,6 +3497,7 @@ async function candidateReviewInputs(
 	}
 
 	rmSync(join(workspace, ".factory-feedback.json"));
+	rmSync(join(workspace, ".factory-feedback-full.json"), { force: true });
 	const reviewedFiles = new Map<string, number>();
 
 	const walk = (root: string, prefix = "") => {
@@ -3566,7 +3575,87 @@ async function candidateReviewInputs(
 		if (readdirSync(stageDir).some((name) => name !== "execution.json"))
 			throw new ReviewEvidenceUnavailable("review_execution_binding");
 
+		let owner = "";
+		let repairDiff: string | null = null;
+		let previousFindings: ReturnType<typeof reviewFeedback> = [];
+
+		if (round > 0) {
+			const book = (await files.listClaims()).find(
+				(claim) => claim.runId === runId,
+			)?.handoff;
+
+			if (book?.kind !== "selected")
+				throw new ReviewEvidenceUnavailable("repair_book_missing");
+
+			const build = book.accounts.find(
+				(a) => a.execution.stage === "build" && a.execution.round === round,
+			)?.execution;
+
+			if (build?.stage === "build" && build.cause.kind === "feedback") {
+				const batch = readFeedbackBatch(
+					config.stateDir,
+					runId,
+					build.cause.batch,
+				);
+
+				if (batch === null)
+					throw new ReviewEvidenceUnavailable("feedback_batch_missing");
+
+				owner = renderFeedbackCards(batch.batch.cards);
+			}
+
+			const from = build?.stage === "build" ? build.feedbackFrom : null;
+
+			const prior = [...book.history, book.current].find(
+				(g) => g.intent.digest === from?.digest,
+			);
+
+			if (
+				prior?.review !== undefined ||
+				(prior?.certification !== null && prior?.certification !== undefined)
+			)
+				previousFindings = reviewFeedback(
+					prior.review ?? prior.certification!.review,
+				);
+
+			const previous = readRunPatch(config.stateDir, runId, round - 1);
+
+			if (previous.kind !== "found")
+				throw new ReviewEvidenceUnavailable("repair_patch_missing");
+
+			const before = `${workspace}-before`;
+			rmSync(before, { recursive: true, force: true });
+
+			try {
+				await prepareRepairTree(
+					base,
+					before,
+					previous.patch,
+					previous.receipt.changedPaths,
+					"{}",
+				);
+				rmSync(join(before, ".factory-feedback.json"));
+
+				const delta = await collectPatch({
+					base: before,
+					workspace,
+					allowNoChange: true,
+					repairTree: true,
+				});
+
+				if (delta.kind !== "collected")
+					throw new ReviewEvidenceUnavailable("repair_diff_missing");
+
+				repairDiff = Buffer.from(delta.patch).toString("utf8");
+			} finally {
+				rmSync(before, { recursive: true, force: true });
+			}
+		}
+
 		const prompt = candidateReviewPrompt({
+			owner,
+			repairDiff,
+			previousFindings,
 			contract: bound.contract,
 			diff: patch.patch,
 			paths: patch.receipt.changedPaths,
@@ -3954,6 +4043,10 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 			fetch: config.fetchTarball,
 			diagnosis,
 		}),
+		async readFeedback(runId, digest) {
+			return readFeedbackBatch(config.stateDir, runId, digest)?.batch ?? null;
+		},
+
 		async readAssessment({ runId, round, generation }) {
 			return readStoredAssessment(
 				validationDir(config.stateDir, runId, round, generation),
@@ -4012,7 +4105,13 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 					)
 						return {
 							kind: "build",
-							result: { kind: "blocked", reason: "repair_no_change" },
+							result: {
+								kind: "blocked",
+								reason:
+									previous.kind === "found"
+										? "repair_no_change"
+										: "patch_missing",
+							},
 						};
 				}
 
@@ -4282,12 +4381,15 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 					let validation: ReturnType<typeof readFeedbackBytes> = null;
 
 					if (assessed.assessment.kind === "passed") {
-						if (existsSync(feedbackPath) || cause.kind !== "review")
+						if (
+							existsSync(feedbackPath) ||
+							(cause.kind !== "review" && cause.kind !== "feedback")
+						)
 							throw new Error("feedback_unexpected");
 						validation = [];
 					} else if (
 						assessed.assessment.failure.kind === "candidate" &&
-						cause.kind === "validation"
+						(cause.kind === "validation" || cause.kind === "feedback")
 					)
 						validation = readFeedbackBytes(
 							regularText(feedbackPath),
@@ -4313,7 +4415,8 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 					if (stored === null) throw new Error("review_receipt_invalid");
 
 					if (
-						cause.kind === "review" &&
+						(cause.kind === "review" ||
+							(cause.kind === "feedback" && cause.review !== null)) &&
 						(stored === undefined ||
 							reviewReceiptDigest(stored) !== cause.review ||
 							stored.runId !== runId ||
@@ -4330,12 +4433,40 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 					if (cause.kind === "review" && review.length === 0)
 						throw new Error("review_feedback_empty");
 
-					const feedback = JSON.stringify({
-						version: 1,
-						round,
-						validation,
-						review,
-					});
+					const owner =
+						cause.kind === "feedback"
+							? readFeedbackBatch(config.stateDir, runId, cause.batch)
+							: null;
+
+					if (
+						cause.kind === "feedback" &&
+						(owner === null ||
+							!owner.batch.records.some((r) => r.intake.kind === "actionable"))
+					)
+						throw new Error("feedback_batch_missing");
+
+					const content = { version: 1, round, validation, review };
+
+					const feedback = JSON.stringify(
+						owner === null
+							? content
+							: {
+									...content,
+									version: 2,
+									review: review.map((f) => ({
+										...f,
+										fingerprint: findingFingerprint(
+											f.seat,
+											f.category,
+											"path" in f ? f.path : f.scenario,
+											f.claim,
+										),
+									})),
+									owner: owner.batch.cards,
+									truncated: owner.batch.cards.some((c) => c.truncated),
+									full: owner.batch.full,
+								},
+					);
 
 					rmSync(workspace, { recursive: true, force: true });
 					await prepareRepairTree(
@@ -4345,6 +4476,13 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 						previous.receipt.changedPaths,
 						feedback,
 					);
+
+					if (owner?.full != null)
+						writeFileSync(
+							join(workspace, ".factory-feedback-full.json"),
+							owner.full,
+							{ flag: "wx", mode: 0o600 },
+						);
 
 					const paths = [
 						...new Set([
@@ -4593,10 +4731,67 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 						if (kept.kind === "absent") {
 							const collectionStart = Date.now();
 
-							if ((input.round ?? 0) > 0)
+							const cause =
+								input.execution?.stage === "build"
+									? input.execution.cause
+									: null;
+
+							const owner =
+								cause?.kind === "feedback"
+									? readFeedbackBatch(config.stateDir, input.runId, cause.batch)
+									: null;
+
+							const text = await attemptOutput(
+								config.stateDir,
+								input.runId,
+								"build",
+								input.attempt,
+								input.round,
+							);
+
+							const dispositions =
+								owner === null
+									? undefined
+									: builderDispositions(
+											text === null || text instanceof Object ? "" : text,
+											owner.batch.cards,
+										);
+
+							let findingDispositions:
+								| ReturnType<typeof builderFindingDispositions>
+								| undefined;
+
+							if (owner !== null && input.execution?.stage === "build") {
+								const from = input.execution.feedbackFrom;
+
+								const path = join(
+									reviewDir(
+										config.stateDir,
+										input.runId,
+										from.round,
+										from.generation,
+									),
+									"receipt.json",
+								);
+
+								const review = existsSync(path)
+									? parseReviewReceipt(parseJson(regularText(path)))
+									: null;
+
+								findingDispositions = builderFindingDispositions(
+									text === null || text instanceof Object ? "" : text,
+									findingFingerprints(review ?? { seats: [] }),
+								);
+							}
+
+							if ((input.round ?? 0) > 0) {
 								rmSync(join(input.workspace, ".factory-feedback.json"), {
 									force: true,
 								});
+								rmSync(join(input.workspace, ".factory-feedback-full.json"), {
+									force: true,
+								});
+							}
 
 							const patch = await collectPatch({
 								base,
@@ -4639,6 +4834,8 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 									result.receipt.fallback?.observed ??
 									result.receipt.models.observed,
 								commands,
+								dispositions,
+								findingDispositions,
 								testCommand: baseTestCommand(base, input.build.command),
 							});
 
