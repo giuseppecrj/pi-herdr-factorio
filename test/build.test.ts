@@ -847,6 +847,10 @@ test("build and repair prompts say CI runs tests read-only at the root, so temp 
 
 	assert.match(
 		prompt,
+		/Leave untouched code as it is: no import reordering, reformatting or renaming beyond what the change needs\./,
+	);
+	assert.match(
+		prompt,
 		/CI runs the candidate tree read-only at the repository root[^\n]*os\.tmpdir\(\)[^\n]*never inside the checkout/,
 	);
 

@@ -6413,6 +6413,7 @@ describe("multi-seat candidate review", () => {
 
 			const executor = sandboxModule.sandboxExecutor(config);
 			const prepared = await executor.prepareReview!(f.args);
+			assert.ok(!("kind" in prepared));
 			const captured = readFileSync(capturePath);
 			const record = objectOf(parseJson(captured.toString()));
 			assert.ok(record);
@@ -6535,6 +6536,7 @@ describe("multi-seat candidate review", () => {
 			});
 
 			const restored = await restarted.prepareReview!(f.args);
+			assert.ok(!("kind" in restored));
 			assert.deepEqual(restored, prepared);
 			assert.deepEqual(readFileSync(capturePath), captured);
 			assert.equal(await restarted.preflight(), true);
@@ -6559,6 +6561,7 @@ describe("multi-seat candidate review", () => {
 			rmSync(join(h.dir, "receipt.json"));
 			const settled = sandboxModule.sandboxExecutor(config);
 			const settledInput = await settled.prepareReview!(f.args);
+			assert.ok(!("kind" in settledInput));
 			assert.equal(await settled.preflight(), true);
 
 			const replay = await settled.launch({

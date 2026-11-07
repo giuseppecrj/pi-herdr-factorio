@@ -638,6 +638,7 @@ export async function preparedReviewFixture(
 	};
 
 	const prepared = await executor.prepareReview!(args);
+	assert.ok(!("kind" in prepared));
 
 	return {
 		root,

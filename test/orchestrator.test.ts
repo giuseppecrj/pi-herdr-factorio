@@ -113,7 +113,11 @@ import {
 	pumpLedger,
 	type LedgerOutbox,
 } from "../src/ledger.ts";
-import { GitHubPublicationApi, readLedgerFile } from "../src/publication.ts";
+import {
+	GitHubPublicationApi,
+	readLedgerFile,
+	PublicationError,
+} from "../src/publication.ts";
 import { LedgerGit, repo as ledgerRepo } from "./ledger-git.ts";
 import {
 	assessmentBinding,
@@ -10488,165 +10492,224 @@ describe("controller-only validate", () => {
 	}
 
 	for (const recovery of [false, true])
-		it(`terminates oversized review input without crashing the tick (recovery=${recovery})`, async () => {
-			const outbox = fileLedgerOutbox(stateDir());
+		for (const fault of ["none", "notice_response", "terminal_claim"] as const)
+			it(`terminates oversized review input without crashing the tick (recovery=${recovery}, fault=${fault})`, async () => {
+				const outbox = fileLedgerOutbox(stateDir());
 
-			const f = await reviewingRun(undefined, (ctx) => {
-				Object.assign(ctx.files, { ledger: outbox });
+				const f = await reviewingRun(undefined, (ctx) => {
+					Object.assign(ctx.files, { ledger: outbox });
+				});
+
+				const root = stateDir();
+				const disk = fileRunFiles(root);
+				const bound = await f.files.readContract(runOf(14));
+				assert.ok(bound.kind === "found");
+				const bytes = f.files.contracts.get(runOf(14))?.bytes;
+				assert.ok(bytes);
+				assert.ok(await disk.writeContract({ ...bound, bytes }));
+				cpSync(
+					join(f.files.artifactRoot, "acceptance"),
+					join(root, "acceptance"),
+					{ recursive: true },
+				);
+				const claim = f.files.claims.get(runOf(14));
+				assert.ok(claim?.handoff?.kind === "selected");
+
+				const base = join(root, "base"),
+					work = join(root, "work");
+
+				mkdirSync(join(base, ".github/factory"), { recursive: true });
+				mkdirSync(join(base, "src"));
+				writeFileSync(
+					join(base, ".github/factory/WORKFLOW.md"),
+					TRUSTED_WORKFLOW,
+				);
+				writeFileSync(join(base, "src/a.ts"), "export const value = 0;\n");
+				cpSync(base, work, { recursive: true });
+				writeFileSync(
+					join(work, "src/a.ts"),
+					`export const value = '${"é".repeat(REVIEW_DIFF_MAX_BYTES)}';\n`,
+				);
+				const patch = await collectPatch({ base, workspace: work });
+				assert.ok(patch.kind === "collected");
+				assert.ok(Buffer.byteLength(patch.patch) > REVIEW_DIFF_MAX_BYTES);
+
+				const binding = {
+					runId: runOf(14),
+					baseSha: MAIN_SHA,
+					contractDigest: bound.digest,
+					acceptanceDigest: claim.handoff.pin.acceptanceDigest,
+				};
+
+				storePatch(root, binding, patch, {
+					model: "openai/gpt-6.1-sol",
+					observed: null,
+					commands: [],
+				});
+
+				const kept = finishPatch(root, binding, {
+					command: "test",
+					exitCode: 0,
+					tail: "",
+					wallMs: 0,
+				});
+
+				assert.ok(kept.kind === "found");
+
+				const verdict = {
+					...passingVerdict(patch.patchDigest),
+					originalBase: MAIN_SHA,
+					baseSha: MAIN_SHA,
+					gateSha: MAIN_SHA,
+					acceptanceDigest: binding.acceptanceDigest,
+				};
+
+				const { book, execution } = issuedReviewFixture(
+					claim.handoff.pin,
+					kept.receipt,
+					verdict,
+				);
+
+				const stored = {
+					...claim,
+					handoff: { ...book, priorTokens: claim.usage ?? 0 },
+				};
+
+				assert.ok(await disk.writeClaim(stored));
+				f.files.claims.set(runOf(14), stored);
+				let faulted = false;
+				const write = f.files.writeClaim;
+
+				f.files.writeClaim = async (next) => {
+					if (
+						fault === "terminal_claim" &&
+						!faulted &&
+						next.handoff?.kind === "selected" &&
+						next.handoff.work.kind === "effect" &&
+						next.handoff.work.request.kind === "finish_pr"
+					) {
+						faulted = true;
+
+						return false;
+					}
+
+					return (await disk.writeClaim(next)) && write(next);
+				};
+
+				f.files.listClaims = disk.listClaims;
+				f.github.beforeCall = (args) => {
+					if (
+						fault === "notice_response" &&
+						!faulted &&
+						args.some(
+							(arg) =>
+								arg.startsWith("body=") &&
+								arg.includes("<!-- factory-review-input "),
+						)
+					) {
+						faulted = true;
+						f.github.posts = ["landed_unanswered"];
+					}
+				};
+
+				const dir = validationDir(root, runOf(14), 0);
+				mkdirSync(dir, { recursive: true });
+				writeFileSync(join(dir, "verdict.json"), JSON.stringify(verdict), {
+					mode: 0o600,
+				});
+				writeFileSync(
+					join(dir, "receipt.json"),
+					JSON.stringify({ modelCalls: 0, candidateSha: verdict.candidateSha }),
+					{ mode: 0o600 },
+				);
+
+				const archive = execFileSync(
+					"tar",
+					["-czf", "-", "--transform=s,^,repo/,", ".github", "src"],
+					{ cwd: base },
+				);
+
+				const native = sandboxExecutor({
+					stateDir: root,
+					exec: f.github.exec,
+					log: () => {},
+					xdgRuntimeDir: join(root, "xdg"),
+					fetchTarball: async () => archive,
+				});
+
+				f.files.workspacePath = disk.workspacePath;
+				f.executor.prepareReview = native.prepareReview;
+				f.executor.output = native.output;
+				f.executor.spentBy.set("review-1", 0);
+				const active = f.start();
+
+				if (!recovery) {
+					// Skip account recovery only in the fresh preparation case.
+					f.executor.output = async () => ({ kind: "pending" });
+				}
+
+				const launches = f.executor.launches.length;
+				await active.tick();
+				const resumed = fault === "none" ? active : f.start();
+				await resumed.tick();
+				const terminal = f.files.claims.get(runOf(14));
+				assert.equal(terminal?.status, "failed");
+				assert.ok(
+					terminal?.handoff?.kind === "selected" &&
+						terminal.handoff.work.kind === "terminal",
+				);
+				assert.deepEqual(terminal.handoff.work.terminal, {
+					kind: "failed",
+					reason: "review_input_too_large",
+				});
+				assert.ok(
+					parseCandidateState(JSON.parse(JSON.stringify(terminal.handoff))),
+				);
+				assert.equal(f.executor.launches.length, launches);
+
+				const notices = () =>
+					f.github
+						.markers(14)
+						.filter((body) => body.includes("<!-- factory-review-input "));
+
+				assert.equal(notices().length, 1);
+				assert.match(
+					notices()[0] ?? "",
+					new RegExp(
+						`${Buffer.byteLength(patch.patch)} bytes.*${REVIEW_DIFF_MAX_BYTES} bytes`,
+					),
+				);
+				await f.start().tick();
+				assert.equal(f.files.claims.get(runOf(14))?.status, "failed");
+				assert.equal(f.executor.launches.length, launches);
+				assert.equal(notices().length, 1);
+				const row = (await outbox.scan())?.[0]?.row?.row;
+				assert.ok(row?.v === 4);
+				assert.equal(row.outcome.kind, "failed");
+				assert.deepEqual(row.failure?.kind === "known" && row.failure.value, {
+					stage: "review",
+					class: "input",
+					reason: "review_input_too_large",
+					failedVisibleChecks: [],
+					retainedPatch: null,
+				});
+				assert.equal(execution.attempt, 1);
+				assert.equal(faulted, fault !== "none");
+				f.github.add(labeled(15));
+				f.executor.behaviors = [{ kind: "pass", usage: 1 }];
+				await f.start().tick();
+				assert.ok(
+					f.executor.launches.some(
+						(launch) =>
+							launch.runId === runOf(15) && launch.stage === "specify",
+					),
+				);
+				assert.equal(
+					f.executor.launches.filter((launch) => launch.runId === runOf(14))
+						.length,
+					launches,
+				);
 			});
-
-			const root = stateDir();
-			const disk = fileRunFiles(root);
-			const bound = await f.files.readContract(runOf(14));
-			assert.ok(bound.kind === "found");
-			const bytes = f.files.contracts.get(runOf(14))?.bytes;
-			assert.ok(bytes);
-			assert.ok(await disk.writeContract({ ...bound, bytes }));
-			cpSync(
-				join(f.files.artifactRoot, "acceptance"),
-				join(root, "acceptance"),
-				{ recursive: true },
-			);
-			const claim = f.files.claims.get(runOf(14));
-			assert.ok(claim?.handoff?.kind === "selected");
-
-			const base = join(root, "base"),
-				work = join(root, "work");
-
-			mkdirSync(join(base, ".github/factory"), { recursive: true });
-			mkdirSync(join(base, "src"));
-			writeFileSync(
-				join(base, ".github/factory/WORKFLOW.md"),
-				TRUSTED_WORKFLOW,
-			);
-			writeFileSync(join(base, "src/a.ts"), "export const value = 0;\n");
-			cpSync(base, work, { recursive: true });
-			writeFileSync(
-				join(work, "src/a.ts"),
-				`export const value = '${"é".repeat(REVIEW_DIFF_MAX_BYTES)}';\n`,
-			);
-			const patch = await collectPatch({ base, workspace: work });
-			assert.ok(patch.kind === "collected");
-			assert.ok(Buffer.byteLength(patch.patch) > REVIEW_DIFF_MAX_BYTES);
-
-			const binding = {
-				runId: runOf(14),
-				baseSha: MAIN_SHA,
-				contractDigest: bound.digest,
-				acceptanceDigest: claim.handoff.pin.acceptanceDigest,
-			};
-
-			storePatch(root, binding, patch, {
-				model: "openai/gpt-6.1-sol",
-				observed: null,
-				commands: [],
-			});
-
-			const kept = finishPatch(root, binding, {
-				command: "test",
-				exitCode: 0,
-				tail: "",
-				wallMs: 0,
-			});
-
-			assert.ok(kept.kind === "found");
-
-			const verdict = {
-				...passingVerdict(patch.patchDigest),
-				originalBase: MAIN_SHA,
-				baseSha: MAIN_SHA,
-				gateSha: MAIN_SHA,
-				acceptanceDigest: binding.acceptanceDigest,
-			};
-
-			const { book, execution } = issuedReviewFixture(
-				claim.handoff.pin,
-				kept.receipt,
-				verdict,
-			);
-
-			const stored = { ...claim, handoff: book };
-			assert.ok(await disk.writeClaim(stored));
-			f.files.claims.set(runOf(14), stored);
-			const dir = validationDir(root, runOf(14), 0);
-			mkdirSync(dir, { recursive: true });
-			writeFileSync(join(dir, "verdict.json"), JSON.stringify(verdict), {
-				mode: 0o600,
-			});
-			writeFileSync(
-				join(dir, "receipt.json"),
-				JSON.stringify({ modelCalls: 0, candidateSha: verdict.candidateSha }),
-				{ mode: 0o600 },
-			);
-
-			const archive = execFileSync(
-				"tar",
-				["-czf", "-", "--transform=s,^,repo/,", ".github", "src"],
-				{ cwd: base },
-			);
-
-			const native = sandboxExecutor({
-				stateDir: root,
-				exec: f.github.exec,
-				log: () => {},
-				xdgRuntimeDir: join(root, "xdg"),
-				fetchTarball: async () => archive,
-			});
-
-			f.files.workspacePath = disk.workspacePath;
-			f.executor.prepareReview = native.prepareReview;
-			f.executor.output = native.output;
-			f.executor.spentBy.set("review-1", 0);
-			const active = f.start();
-
-			if (!recovery) {
-				// Skip account recovery only in the fresh preparation case.
-				f.executor.output = async () => ({ kind: "pending" });
-			}
-
-			const launches = f.executor.launches.length;
-			await active.tick();
-			await active.tick();
-			const terminal = f.files.claims.get(runOf(14));
-			assert.equal(terminal?.status, "failed");
-			assert.ok(
-				terminal?.handoff?.kind === "selected" &&
-					terminal.handoff.work.kind === "terminal",
-			);
-			assert.deepEqual(terminal.handoff.work.terminal, {
-				kind: "failed",
-				reason: "review_input_too_large",
-			});
-			assert.ok(
-				parseCandidateState(JSON.parse(JSON.stringify(terminal.handoff))),
-			);
-			assert.equal(f.executor.launches.length, launches);
-
-			const notices = () =>
-				f.github
-					.markers(14)
-					.filter((body) => body.includes("<!-- factory-review-input "));
-
-			assert.equal(notices().length, 1);
-			assert.match(
-				notices()[0] ?? "",
-				new RegExp(
-					`${Buffer.byteLength(patch.patch)} bytes.*${REVIEW_DIFF_MAX_BYTES} bytes`,
-				),
-			);
-			await f.start().tick();
-			assert.equal(f.files.claims.get(runOf(14))?.status, "failed");
-			assert.equal(f.executor.launches.length, launches);
-			assert.equal(notices().length, 1);
-			const row = (await outbox.scan())?.[0]?.row?.row;
-			assert.ok(row?.v === 4);
-			assert.equal(row.outcome.kind, "failed");
-			assert.equal(
-				row.failure?.kind === "known" && row.failure.value.reason,
-				"review_input_too_large",
-			);
-			assert.equal(execution.attempt, 1);
-		});
 
 	for (const restart of [false, true])
 		it(`holds unavailable review evidence on the same known-spend account (restart=${restart})`, async () => {
@@ -10731,6 +10794,32 @@ describe("controller-only validate", () => {
 						book.current.intent.digest,
 				JSON.stringify(book.work),
 			);
+		});
+
+	for (const reason of [
+		"evidence_unavailable",
+		"summary_too_large",
+		"pr_identity",
+		"pr_ambiguous",
+	])
+		it(`holds a candidate effect's input refusal (${reason}) without crashing the tick`, async () => {
+			const f = await reviewingRun();
+			f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+			const port = f.executor.candidate;
+			assert.ok(port);
+			port.execute = async () => {
+				throw new PublicationError(reason);
+			};
+
+			await once(f.controller);
+			await f.controller.tick();
+			const book = f.files.claims.get(runOf(14))?.handoff;
+			assert.ok(book?.kind === "selected");
+			assert.equal(book.work.kind, "held");
+			assert.equal(book.work.reason, "evidence_unavailable");
+			const launches = f.executor.launches.length;
+			await f.start().tick();
+			assert.equal(f.executor.launches.length, launches);
 		});
 
 	it("keeps programming errors in review preparation visible", async () => {
