@@ -43,7 +43,7 @@ import { viewerClaim } from "../server/viewer/claim.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { readViewerRun, startViewer } from "../server/viewer.ts";
+import { readViewerRun, runViewerCli, startViewer } from "../server/viewer.ts";
 import { runIdOf, digestOf } from "../src/run.ts";
 import { formatMarker, parseMarker, type Marker } from "../src/markers.ts";
 import { isRepoSlug, isGitSha, parseWorkflow } from "../src/workflow.ts";
@@ -1248,6 +1248,70 @@ test("HTML is escaped, four JSON views exist and requests do not mutate evidence
 		assert.deepEqual(await inventory(root), before);
 	} finally {
 		await viewer.close();
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("viewer CLI port validation accepts only decimal digits in range", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "factory-viewer-cli-"));
+	const stateDir = join(root, "missing");
+
+	const usage =
+		"Usage: node server/cli.ts viewer --state-dir <dir> [--run <id>] [--port <1-65535>] [--allowed-host <authorized.ts.net>] [--base-path </prefix>]\n";
+
+	try {
+		for (const port of [
+			"0x1F90",
+			"1e4",
+			" 8080 ",
+			"8080.0",
+			"+8080",
+			"",
+			"abc",
+			"0",
+			"-1",
+			"65536",
+		]) {
+			await t.test(`rejects ${JSON.stringify(port)}`, async () => {
+				const stdout: string[] = [];
+				const stderr: string[] = [];
+
+				const code = await runViewerCli(
+					["--state-dir", stateDir, `--port=${port}`],
+					{
+						stdout: (text) => stdout.push(text),
+						stderr: (text) => stderr.push(text),
+					},
+				);
+
+				assert.equal(code, 2);
+				assert.deepEqual(stderr, [usage]);
+				assert.deepEqual(stdout, []);
+			});
+		}
+
+		for (const port of [undefined, "1", "8080", "65535", "08080"]) {
+			await t.test(`accepts ${port ?? "default"}`, async () => {
+				const stdout: string[] = [];
+				const stderr: string[] = [];
+				const args = ["--state-dir", stateDir];
+
+				if (port !== undefined) args.push(`--port=${port}`);
+
+				const code = await runViewerCli(args, {
+					stdout: (text) => stdout.push(text),
+					stderr: (text) => stderr.push(text),
+				});
+
+				// A missing state directory fails startup, not port validation.
+				assert.equal(code, 1);
+				assert.deepEqual(stderr, [
+					"viewer refused: state unavailable, invalid host, or port in use\n",
+				]);
+				assert.deepEqual(stdout, []);
+			});
+		}
+	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
 });

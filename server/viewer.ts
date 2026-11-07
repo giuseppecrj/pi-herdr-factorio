@@ -211,6 +211,9 @@ export async function runViewerCli(
 		});
 
 		const stateDir = values["state-dir"];
+
+		if (values.port !== undefined && !/^[0-9]+$/.test(values.port))
+			throw new Error("usage");
 		const port = values.port === undefined ? 8080 : Number(values.port);
 
 		if (
