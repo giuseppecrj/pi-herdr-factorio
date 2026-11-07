@@ -12330,48 +12330,49 @@ describe("held-out acceptance stage", () => {
 		assert.deepEqual(report.corrupt, []);
 	});
 
-	it("launches accept once the issue carries more than 50 controller comments", async () => {
-		const { github, executor, logs, wire, start } = world();
-		const issue = github.add(labeled(14));
+	for (const comments of [50, 51])
+		it(`launches accept once the issue carries ${comments} controller comments`, async () => {
+			const { github, executor, logs, wire, start } = world();
+			const issue = github.add(labeled(14));
 
-		// 48 bot comments plus markers 1-3 make 51 before accept's ledger read.
-		for (let i = 0; i < 48; i++) github.comment(issue, `old ${i}`);
+			// Markers 1-3 also count before accept's ledger read.
+			for (let i = 0; i < comments - 3; i++) github.comment(issue, `old ${i}`);
 
-		const ids = (args: readonly string[]) =>
-			args.filter((arg) => arg.startsWith("ids[]=")).length;
+			const ids = (args: readonly string[]) =>
+				args.filter((arg) => arg.startsWith("ids[]=")).length;
 
-		let largest = 0;
+			let largest = 0;
 
-		wire.intercept = async (command, args) => {
-			largest = Math.max(largest, ids(args));
-			advanceOnPost(github, args);
+			wire.intercept = async (command, args) => {
+				largest = Math.max(largest, ids(args));
+				advanceOnPost(github, args);
 
-			return ids(args) > 50
-				? httpError(
-						403,
-						"GitHub GraphQL request rejected: document references 51 node IDs, more than the 50 the proxy will resolve",
-					)
-				: github.exec(command, args);
-		};
+				return ids(args) > 50
+					? httpError(
+							403,
+							"GitHub GraphQL request rejected: document references 51 node IDs, more than the 50 the proxy will resolve",
+						)
+					: github.exec(command, args);
+			};
 
-		executor.behaviors = [{ kind: "pass", usage: 100 }];
-		executor.acceptBehavior = { kind: "pass", usage: 20 };
+			executor.behaviors = [{ kind: "pass", usage: 100 }];
+			executor.acceptBehavior = { kind: "pass", usage: 20 };
 
-		// Ticks, as `serve` runs them: the next tick sees specify's markers.
-		const controller = start();
-		await controller.tick();
-		await settle();
-		await controller.tick();
-		assert.deepEqual(
-			executor.launches.map((l) => [l.stage, l.attempt]),
-			[
-				["specify", 1],
-				["accept", 1],
-			],
-		);
-		assert.equal(largest, 50);
-		assert.ok(!logs.some((l) => l.event === "claim_unverified"));
-	});
+			// Ticks, as `serve` runs them: the next tick sees specify's markers.
+			const controller = start();
+			await controller.tick();
+			await settle();
+			await controller.tick();
+			assert.deepEqual(
+				executor.launches.map((l) => [l.stage, l.attempt]),
+				[
+					["specify", 1],
+					["accept", 1],
+				],
+			);
+			assert.equal(largest, 50);
+			assert.ok(!logs.some((l) => l.event === "claim_unverified"));
+		});
 
 	it("logs a claim whose ledger read keeps failing once, and shows why in status", async () => {
 		const { github, executor, logs, wire, start } = world();
@@ -12417,6 +12418,7 @@ describe("held-out acceptance stage", () => {
 		assert.deepEqual(stalled.runs[0]?.unverified, {
 			why: "ledger",
 			failure: "gh_failed",
+			since: START,
 		});
 
 		wire.intercept = null;
@@ -12427,6 +12429,211 @@ describe("held-out acceptance stage", () => {
 		);
 		assert.equal(healed.runs[0]?.unverified, null);
 		assert.equal(logs.filter((l) => l.event === "claim_unverified").length, 1);
+	});
+
+	for (const read of ["ledger", "timeline"] as const)
+		for (const keepClaim of [true, false])
+			it(`logs a discovery ${read} failure before adoption (${keepClaim ? "claim kept" : "claim lost"}), once until a clean tick`, async () => {
+				const { github, executor, files, logs, wire, start, clock } = world();
+				github.add(labeled(14));
+				await start().tick();
+				assert.equal(executor.launches.length, 1);
+
+				if (!keepClaim) files.claims.clear();
+				const controller = start();
+				wire.intercept = async (command, args) =>
+					args.some((arg) =>
+						read === "ledger"
+							? arg.includes("nodes(ids:")
+							: arg.includes("/timeline"),
+					)
+						? httpError(403, "rejected")
+						: github.exec(command, args);
+				const discovered = await controller.tick();
+				assert.deepEqual(discovered.unverifiedClaims, [
+					{
+						issue: 14,
+						runId: runOf(14),
+						eventId: String(EVENT_ID + 14),
+						why: read,
+						failure: "gh_failed",
+						since: START,
+					},
+				]);
+				assert.equal(
+					logs.filter((log) => log.event === "claim_unverified").length,
+					1,
+				);
+
+				if (read === "ledger") assert.equal(controller.state.runs.size, 0);
+				clock.t += 3_600_000;
+				await controller.tick();
+				assert.deepEqual(
+					logs.filter((log) => log.event === "claim_unverified"),
+					[
+						{
+							event: "claim_unverified",
+							fields: {
+								issue: 14,
+								runId: runOf(14),
+								why: read,
+								failure: "gh_failed",
+							},
+						},
+					],
+				);
+				assert.equal(executor.launches.length, 1);
+				assert.ok(!events(logs).includes("claim_released"));
+				wire.intercept = null;
+				executor.fallback = { kind: "hang" };
+				const healed = await controller.tick();
+				assert.equal(healed.runs[0]?.unverified, null);
+				assert.equal(executor.launches.length, 2);
+				assert.equal(healed.runs[0]?.status, "running");
+			});
+
+	it("keeps a discovered unadopted marker visible when a later comments read fails", async () => {
+		const { github, executor, files, logs, wire, start, clock } = world();
+		github.add(labeled(14));
+		executor.fallback = { kind: "hang" };
+		await start().tick();
+		files.claims.clear();
+		let read = "timeline";
+		wire.intercept = async (command, args) =>
+			args.some((arg) => arg.includes(`/issues/14/${read}`))
+				? httpError(403)
+				: github.exec(command, args);
+		const controller = start();
+		const first = await controller.tick();
+		assert.deepEqual(first.runs, []);
+		assert.equal(first.unverifiedClaims[0]?.why, "timeline");
+		clock.t += 60_000;
+		read = "comments";
+		const held = await controller.tick();
+		assert.deepEqual(held.runs, []);
+		assert.deepEqual(held.unverifiedClaims, [
+			{
+				issue: 14,
+				runId: runOf(14),
+				eventId: String(EVENT_ID + 14),
+				why: "ledger",
+				failure: "gh_failed",
+				since: START,
+			},
+		]);
+		await controller.tick();
+		assert.deepEqual(
+			logs
+				.filter((log) => log.event === "claim_unverified")
+				.map((log) => log.fields.why),
+			["timeline", "ledger"],
+		);
+		assert.equal(executor.launches.length, 1);
+	});
+
+	it("projects a failed final issue read from the same observation that prevents launch", async () => {
+		const { github, executor, logs, wire, start, clock } = world();
+		github.add(labeled(14));
+		const controller = start();
+		await controller.tick();
+		executor.fallback = { kind: "hang" };
+		wire.intercept = async (command, args) =>
+			args.includes(`repos/${repo}/issues/14`)
+				? httpError(403)
+				: github.exec(command, args);
+		const held = await controller.tick();
+		assert.deepEqual(held.runs[0]?.unverified, {
+			why: "issue",
+			failure: "gh_failed",
+			since: START,
+		});
+		clock.t += 60_000;
+		assert.deepEqual(
+			(await controller.tick()).runs[0]?.unverified,
+			held.runs[0]?.unverified,
+		);
+		await controller.tick();
+		assert.equal(executor.launches.length, 1);
+		assert.equal(
+			events(logs).filter((event) => event === "claim_unverified").length,
+			1,
+		);
+		wire.intercept = null;
+		const healed = await controller.tick();
+		assert.equal(healed.runs[0]?.unverified, null);
+		assert.equal(executor.launches.length, 2);
+	});
+
+	it("reacquires ownership after restart and never launches a marker whose local admission was lost", async () => {
+		const { github, executor, store, logs, start } = world();
+		github.add(labeled(14));
+		await start().tick();
+		store.records.clear();
+		executor.fallback = { kind: "hang" };
+		const controller = start();
+		const report = await controller.tick();
+		await controller.tick();
+		assert.deepEqual(report.runs, []);
+		assert.equal(executor.launches.length, 1);
+		assert.equal(
+			events(logs).filter((event) => event === "claim_foreign").length,
+			1,
+		);
+		assert.ok(!events(logs).includes("claim_released"));
+	});
+
+	it("logs reason changes and clean-tick resets while preserving the unverified age", async () => {
+		const { github, logs, wire, start, clock } = world();
+		const issue = github.add(labeled(14));
+		const controller = start();
+		await controller.tick();
+		let read = "ledger";
+		wire.intercept = async (command, args) =>
+			args.some((arg) =>
+				read === "ledger"
+					? arg.includes("nodes(ids:")
+					: arg.includes("/timeline"),
+			)
+				? httpError(403, "rejected")
+				: github.exec(command, args);
+		issue.updatedAt = new Date(clock.t + 1000)
+			.toISOString()
+			.replace(".000Z", "Z");
+		clock.t += 1000;
+		const first = await controller.tick();
+		const since = clock.t;
+		assert.deepEqual(first.runs[0]?.unverified, {
+			why: "ledger",
+			failure: "gh_failed",
+			since,
+		});
+		clock.t += 60_000;
+		read = "timeline";
+		const changed = await controller.tick();
+		assert.deepEqual(changed.runs[0]?.unverified, {
+			why: "timeline",
+			failure: "gh_failed",
+			since,
+		});
+		await controller.tick();
+		wire.intercept = null;
+		await controller.tick();
+		issue.updatedAt = new Date(clock.t + 1000)
+			.toISOString()
+			.replace(".000Z", "Z");
+		clock.t += 1000;
+		wire.intercept = async (command, args) =>
+			args.some((arg) => arg.includes("/timeline"))
+				? httpError(403)
+				: github.exec(command, args);
+		const again = await controller.tick();
+		assert.equal(again.runs[0]?.unverified?.since, clock.t);
+		assert.deepEqual(
+			logs
+				.filter((log) => log.event === "claim_unverified")
+				.map((log) => log.fields.why),
+			["ledger", "timeline", "timeline"],
+		);
 	});
 
 	it("counts an acceptance store failure once", async () => {

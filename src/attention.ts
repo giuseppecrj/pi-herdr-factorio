@@ -267,6 +267,67 @@ function groupOf(
 	return null;
 }
 
+type ClaimHold = Readonly<{
+	runId: Digest;
+	issue: number;
+	since: number;
+	reason: string;
+}>;
+
+function unverifiedHolds(
+	snapshot: JsonValue | undefined,
+	repo: RepoSlug,
+): Map<Digest, ClaimHold> {
+	const status = objectOf(snapshot);
+	const holds = new Map<Digest, ClaimHold>();
+
+	if (status?.repo !== repo || !Array.isArray(status.unverifiedClaims))
+		return holds;
+
+	for (const value of status.unverifiedClaims) {
+		const held = objectOf(value);
+		const runId = stringOf(held?.runId);
+		const issue = countOf(held?.issue);
+		const eventId = stringOf(held?.eventId);
+		const since = countOf(held?.since);
+		const why = stringOf(held?.why);
+		const failure = stringOf(held?.failure);
+
+		if (
+			runId === null ||
+			!isDigest(runId) ||
+			issue === null ||
+			issue < 1 ||
+			eventId === null ||
+			!/^[1-9][0-9]{0,19}$/.test(eventId) ||
+			runIdOf({ repo, issue, eventId }) !== runId ||
+			since === null ||
+			why === null ||
+			!["issue", "timeline", "ledger", "timeline_entry"].includes(why) ||
+			!(
+				held?.failure === null ||
+				(failure !== null &&
+					[
+						"gh_failed",
+						"cannot_run_gh",
+						"malformed_response",
+						"pagination_limit",
+					].includes(failure))
+			)
+		)
+			continue;
+
+		holds.set(runId, {
+			runId,
+			issue,
+			since,
+			reason: `claim_unverified:${why}${failure === null ? "" : `:${failure}`}`,
+		});
+	}
+
+	return holds;
+}
+
 export async function readAttention(input: {
 	stateDir: string | null;
 	repo: RepoSlug | null;
@@ -326,6 +387,11 @@ export async function readAttention(input: {
 				gaps.push(`ambiguous_issue:${claim.issue}`);
 		}
 
+		const holds = unverifiedHolds(
+			await privateJson(join(root, "status.json")),
+			input.repo,
+		);
+
 		for (const claim of newest.values()) {
 			if (claim.evidenceMissing)
 				gaps.push(`candidate_book_unavailable:${claim.runId.slice(0, 12)}`);
@@ -361,10 +427,13 @@ export async function readAttention(input: {
 				}
 			}
 
-			const kind = groupOf(claim, answered);
+			const hold = claim.terminal ? undefined : holds.get(claim.runId);
+			holds.delete(claim.runId);
+			const kind = hold === undefined ? groupOf(claim, answered) : "blocked";
 
 			if (kind === null) continue;
 			const issueUrl = `https://github.com/${claim.repo}/issues/${claim.issue}`;
+			const since = hold?.since ?? claim.enteredAt;
 			groups[kind].push({
 				runId: claim.runId,
 				issueUrl,
@@ -372,11 +441,19 @@ export async function readAttention(input: {
 					claim.pr === null
 						? null
 						: `https://github.com/${claim.repo}/pull/${claim.pr}`,
-				ageMs:
-					claim.enteredAt === null || claim.enteredAt > input.now
-						? null
-						: input.now - claim.enteredAt,
-				reason: claim.reason,
+				ageMs: since === null || since > input.now ? null : input.now - since,
+				reason: hold?.reason ?? claim.reason,
+			});
+		}
+
+		for (const hold of holds.values()) {
+			if (newest.has(hold.issue)) continue;
+			groups.blocked.push({
+				runId: hold.runId,
+				issueUrl: `https://github.com/${input.repo}/issues/${hold.issue}`,
+				prUrl: null,
+				ageMs: hold.since > input.now ? null : input.now - hold.since,
+				reason: hold.reason,
 			});
 		}
 
