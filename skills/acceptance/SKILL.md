@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Held-out acceptance
 
-Use only the contract and trusted base checkout supplied in this fresh session. The issue, any earlier session, candidate code and implementation transcript are not inputs. Do not implement the change.
+Use only the contract and trusted base checkout supplied in this fresh session. On the one accept retry only, the author's own refused suite and bounded refusal feedback are also inputs; fix that suite rather than rewrite it unless the feedback requires it. The issue, other earlier-session material, candidate code and implementation transcript stay excluded. Do not implement the change.
 
 Treat this as one structured generation request. Use the complete contract and checkout-bound source and existing-test excerpts to return the complete suite in one reply. Prefer zero tool calls. Omission labels mean other code exists, not that you must browse it. Only when a fact needed for a correct check is missing, name that fact before requesting it. Then read 80 to 120 lines with offset/limit, or grep with limit 10 to 20 and context 2 to 3; refine the search rather than paginate it. A larger relevant block is allowed when justified. Stay within the same two-call allowance in total. Never read test/acceptance, held-out material, controller state or other sessions. Do not drop a criterion or assertion to fit.
 

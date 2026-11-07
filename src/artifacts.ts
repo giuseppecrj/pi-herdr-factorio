@@ -111,6 +111,13 @@ export interface ArtifactStore {
 		contract: Contract,
 		digest: ContractDigest,
 	): Promise<AcceptanceRead>;
+	/** Accept retry only: verifies the retired suite against its refused digest. */
+	readRetired(
+		runId: Digest,
+		contract: Contract,
+		digest: ContractDigest,
+		acceptanceDigest: Digest,
+	): Promise<AcceptanceRead>;
 	store(input: {
 		readonly contract: Contract;
 		readonly contractDigest: ContractDigest;
@@ -477,15 +484,36 @@ function parseAcceptanceReceipt(
 export function fileArtifacts(stateDir: string): ArtifactStore {
 	const root = join(resolve(stateDir), "acceptance");
 
-	const read: ArtifactStore["read"] = async (runId, contract, digest) => {
-		const dir = join(root, runId);
+	const readVerified = async (
+		runId: Digest,
+		contract: Contract,
+		digest: ContractDigest,
+		expectedRetired?: Digest,
+	): Promise<AcceptanceRead> => {
+		const aside = join(root, `${runId}.retired`);
+
+		const dir =
+			expectedRetired === undefined ? join(root, runId) : join(aside, "suite");
+
+		const guard =
+			expectedRetired === undefined
+				? regenerationGuard(root, runId)
+				: join(aside, "guard.json");
 
 		try {
 			if (present(root)) checkPrivateDir(root);
 
-			if (!present(dir)) {
-				const guard = regenerationGuard(root, runId);
+			if (expectedRetired !== undefined) {
+				checkPrivateDir(aside);
 
+				if (
+					contract.runId !== runId ||
+					retiredDigest(root, runId) !== expectedRetired
+				)
+					return { kind: "blocked", reason: "acceptance_changed" };
+			}
+
+			if (!present(dir)) {
 				if (!present(guard)) return { kind: "absent" };
 				regularText(guard);
 
@@ -495,7 +523,7 @@ export function fileArtifacts(stateDir: string): ArtifactStore {
 			checkPrivateDir(dir);
 			const receiptText = regularText(join(dir, "receipt.json"));
 
-			if (regularText(regenerationGuard(root, runId)) !== receiptText)
+			if (regularText(guard) !== receiptText)
 				return { kind: "blocked", reason: "acceptance_changed" };
 			const receipt = parseAcceptanceReceipt(receiptText, runId);
 
@@ -506,6 +534,9 @@ export function fileArtifacts(stateDir: string): ArtifactStore {
 			)
 				return { kind: "blocked", reason: "acceptance_invalid" };
 			const { acceptanceDigest } = receipt;
+
+			if (expectedRetired !== undefined && acceptanceDigest !== expectedRetired)
+				return { kind: "blocked", reason: "acceptance_changed" };
 			const canary = regularText(join(dir, "canary.txt")).trimEnd();
 
 			const kept = objectOf(
@@ -557,7 +588,8 @@ export function fileArtifacts(stateDir: string): ArtifactStore {
 				!walk("") ||
 				acceptanceDigestOf(parsed.suite, canary) !== acceptanceDigest ||
 				// A retirement interrupted before its move never serves the old suite.
-				retiredDigest(root, runId) === acceptanceDigest
+				(expectedRetired === undefined &&
+					retiredDigest(root, runId) === acceptanceDigest)
 			)
 				return { kind: "blocked", reason: "acceptance_changed" };
 
@@ -577,8 +609,13 @@ export function fileArtifacts(stateDir: string): ArtifactStore {
 		}
 	};
 
+	const read: ArtifactStore["read"] = (runId, contract, digest) =>
+		readVerified(runId, contract, digest);
+
 	return {
 		read,
+		readRetired: (runId, contract, digest, acceptanceDigest) =>
+			readVerified(runId, contract, digest, acceptanceDigest),
 		async receipt(runId, acceptanceDigest) {
 			const retired = join(root, `${runId}.retired`);
 
