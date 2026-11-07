@@ -348,6 +348,64 @@ test("feedback overflow attention uses the durable hold age during notice and af
 	}
 });
 
+test("unavailable feedback stays blocked with its failure and age; deferred and recovered intake do not", async () => {
+	const root = fixture();
+
+	const runId = claim(root, 42, "waiting", {
+		stage: "land",
+		enteredAt: 900,
+		handoff: prBook(42, 5, true),
+	});
+
+	const snapshot = {
+		repo,
+		feedbackIntake: [
+			{
+				runId,
+				issue: 42,
+				eventId: "1",
+				pr: 5,
+				kind: "unavailable",
+				reason: "review_comments",
+				failure: "malformed_response",
+				since: 100,
+			},
+		],
+	};
+
+	const save = () =>
+		writeFileSync(join(root, "status.json"), JSON.stringify(snapshot), {
+			mode: 0o600,
+		});
+
+	save();
+
+	for (const now of [1000, 61_000]) {
+		const read = await readAttention({ stateDir: root, repo, now });
+		assert.ok(read.kind === "available");
+		assert.deepEqual(read.groups.pr_review, []);
+		assert.deepEqual(read.groups.blocked, [
+			{
+				runId,
+				issueUrl: `https://github.com/${repo}/issues/42`,
+				prUrl: `https://github.com/${repo}/pull/5`,
+				ageMs: now - 100,
+				reason: "feedback_unavailable:review_comments:malformed_response",
+			},
+		]);
+		assert.deepEqual(read.gaps, []);
+	}
+
+	for (const kind of ["deferred", "recovered"]) {
+		snapshot.feedbackIntake[0]!.kind = kind;
+		save();
+		const read = await readAttention({ stateDir: root, repo, now: 61_000 });
+		assert.ok(read.kind === "available");
+		assert.deepEqual(read.groups.blocked, []);
+		assert.equal(read.groups.pr_review.length, 1);
+	}
+});
+
 test("six groups distinguish unknown legacy ages and never duplicate a not-ready PR", async () => {
 	const root = fixture();
 	claim(root, 1, "needs_info");
