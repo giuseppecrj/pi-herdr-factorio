@@ -121,11 +121,13 @@ import {
 import { LedgerGit, repo as ledgerRepo } from "./ledger-git.ts";
 import {
 	assessmentBinding,
+	dispatchNonce,
 	readAssessmentBytes,
 	validationDir,
 } from "../src/validation.ts";
 import {
 	candidateProjection,
+	promotedHead,
 	handoffCandidate,
 	parseCandidateState,
 	type CandidateState,
@@ -12351,6 +12353,281 @@ describe("controller-only validate", () => {
 			assert.equal(f.executor.launches.length, launches);
 		});
 
+	it("F10 ingests once when a published refresh review callback settles inside the second observation", async () => {
+		const f = await reviewingRun();
+		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+		await once(f.controller);
+		await f.controller.tick();
+		await f.controller.tick();
+		const initial = f.files.claims.get(runOf(14))?.handoff;
+		const port = f.executor.candidate;
+
+		assert.ok(
+			initial?.kind === "selected" &&
+				initial.current.verdict &&
+				initial.current.validation &&
+				port,
+		);
+		const template = initial.current.validation;
+		const oldHead = promotedHead(initial);
+
+		assert.ok(oldHead);
+		const main = sha("d".repeat(40));
+		const head = sha("e".repeat(40));
+
+		const verdict = {
+			...initial.current.verdict,
+			candidateSha: head,
+			baseSha: main,
+			gateSha: main,
+		};
+
+		const prepare = f.executor.prepareReview;
+
+		assert.ok(prepare);
+		f.executor.prepareReview = async (input) => {
+			const prepared = await prepare(input);
+
+			assert.ok("verdict" in prepared);
+
+			return { ...prepared, verdict };
+		};
+
+		f.executor.validate = async (input) => {
+			assert.ok(input.generation);
+			const generation = input.generation;
+			const nonce = dispatchNonce(input.runId, 0, 1, generation.generation);
+
+			const state = {
+				...template,
+				baseSha: main,
+				generation: {
+					index: generation.generation,
+					digest: generation.digest,
+					previousHead: oldHead,
+				},
+				publication: {
+					branch: `factory/run/14-${input.runId.slice(0, 12)}-r0-g1`,
+					patchSha: head,
+					candidateSha: head,
+				},
+			};
+
+			return {
+				kind: "finished",
+				state,
+				verdict,
+				report: {
+					...reportOf(verdict),
+					nonce,
+					externalId: `factory-gates:123:${nonce}`,
+				},
+				assessment: f.executor.assess(input, verdict),
+			};
+		};
+
+		let finish: (result: StageResult) => void = () => {
+			throw new Error("review not launched");
+		};
+
+		const result = new Promise<StageResult>((resolve) => {
+			finish = resolve;
+		});
+
+		f.executor.behaviors = [{ kind: "later", result }];
+		f.executor.ready = true;
+		const observe = port.observe;
+		let reads = 0;
+		let release: (() => void) | null = null;
+		let feedback = false;
+
+		port.observe = async (state, now) => {
+			const observation = await observe(state, now);
+			reads++;
+
+			if (release !== null && reads === 2) {
+				release();
+				release = null;
+				await settle();
+				feedback = true;
+			}
+
+			return {
+				...observation,
+				main,
+				feedback: feedback
+					? {
+							kind: "read",
+							head: oldHead,
+							batch: {
+								digest: digestOf("interleaved-batch"),
+								seen: [`github:${repo}:review:5`],
+								reviews: [`github:${repo}:review:5`],
+								actionable: true,
+								refusedInline: false,
+							},
+							dismissed: [],
+						}
+					: { kind: "none" },
+			};
+		};
+
+		await f.controller.tick();
+		await f.controller.tick();
+		const launched = f.executor.launches.at(-1);
+
+		assert.ok(
+			launched?.stage === "review" && launched.execution?.stage === "review",
+		);
+		assert.equal(launched.execution.generation.generation, 1);
+		assert.equal(f.files.claims.get(runOf(14))?.handoff?.kind, "selected");
+		reads = 0;
+		release = () => finish(resultOf(launched, { kind: "passed" }, 11));
+		const writes: CandidateState[] = [];
+		const write = f.files.writeClaim;
+		f.files.writeClaim = async (claim) => {
+			if (claim.handoff) writes.push(claim.handoff);
+
+			return write(claim);
+		};
+
+		await f.controller.tick();
+		const book = f.files.claims.get(runOf(14))?.handoff;
+
+		assert.ok(book?.kind === "selected");
+		assert.equal(book.feedback?.batches.length, 1);
+		assert.deepEqual(book.feedback?.seen, [`github:${repo}:review:5`]);
+		assert.equal(
+			book.current.certification?.execution.id,
+			launched.execution.id,
+		);
+		assert.ok(
+			writes.some(
+				(s) =>
+					s.kind === "selected" &&
+					s.work.kind === "reviewing" &&
+					s.feedback?.batches.length === 1,
+			),
+			"batch commit precedes consuming the queued review callback",
+		);
+		assert.ok(
+			writes.filter(
+				(s) => s.kind === "selected" && s.feedback?.batches.length === 1,
+			).length >= 2,
+			"the same observation crosses both candidate commits",
+		);
+		let notices = 0;
+		const execute = port.execute;
+		port.execute = async (state, request) => {
+			if (request.kind !== "post_notice") return execute(state, request);
+			notices++;
+
+			return { kind: "post_notice", request };
+		};
+
+		for (let tick = 0; tick < 4 && notices === 0; tick++)
+			await f.controller.tick();
+		assert.equal(notices, 1);
+		const restarted = f.start();
+		await restarted.tick();
+		await restarted.tick();
+		const restored = f.files.claims.get(runOf(14))?.handoff;
+
+		assert.ok(restored?.kind === "selected");
+		assert.equal(restored.feedback?.batches.length, 1);
+		assert.equal(restored.feedback?.batches[0]?.notice, "posted");
+		assert.equal(notices, 1);
+		assert.equal(
+			f.executor.launches.filter((l) => l.stage === "build").length,
+			1,
+		);
+	});
+
+	it("F10 tick sweeps landed ledger PRs hourly, survives a lost proposal POST and never admits proposals", async () => {
+		const dir = stateDir();
+		const outbox = fileLedgerOutbox(dir);
+
+		const f = await reviewingRun(undefined, (ctx) =>
+			Object.assign(ctx.files, { ledger: outbox }),
+		);
+
+		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+		await once(f.controller);
+		await f.controller.tick();
+		await f.controller.tick();
+		const port = f.executor.candidate;
+		const book = f.files.claims.get(runOf(14))?.handoff;
+
+		assert.ok(port && book?.kind === "selected" && book.current.report);
+		const observe = port.observe;
+		port.observe = async (state, now) => ({
+			...(await observe(state, now)),
+			pr: {
+				kind: "merged",
+				number: 99,
+				head: book.current.report!.candidateSha,
+				mergeSha: sha("f".repeat(40)),
+				actor: "giuseppecrj",
+			},
+		});
+		await f.controller.tick();
+		const jobs = await outbox.scan();
+
+		assert.equal(jobs?.[0]?.row?.row.outcome.kind, "landed");
+		const remote = new LedgerGit();
+		const api = ledgerApiOf(new GitHubPublicationApi(remote.exec, repo));
+
+		assert.equal((await pumpLedger(outbox, api, f.clock.now())).published, 1);
+		f.github.pulls.set(99, { merged_at: "2026-10-29T01:00:00Z" });
+		f.github.reviews.set(99, [
+			{
+				id: 71,
+				state: "APPROVED",
+				commit_id: book.current.report.candidateSha,
+				body: "Follow up on this",
+				submitted_at: "2026-10-29T02:00:00Z",
+				user: { login: "writer" },
+			},
+		]);
+		f.github.posts.push("landed_unanswered");
+
+		const exec: Exec = (command, args) =>
+			args.some((a) => a.startsWith(`repos/${repo}/git/`))
+				? remote.exec(command, args)
+				: f.github.exec(command, args);
+
+		port.sweep = controllerCandidatePort({ stateDir: dir, exec }).sweep;
+		const launches = f.executor.launches.length;
+
+		await f.controller.tick();
+		await f.controller.tick();
+
+		const polls = () =>
+			f.github.calls.filter((c) => c.includes(`repos/${repo}/pulls/99`)).length;
+
+		assert.equal(polls(), 1);
+		f.clock.t += 3_600_001;
+		const restarted = f.start();
+		await restarted.tick();
+		await restarted.tick();
+
+		const proposals = [...f.github.issues.values()].filter((i) =>
+			i.labels.includes("factory:proposed"),
+		);
+
+		assert.equal(polls(), 2);
+		assert.equal(proposals.length, 1);
+		assert.ok(!proposals[0]?.labels.includes("factory:ready"));
+		assert.equal(f.executor.launches.length, launches);
+
+		const cursor = JSON.parse(
+			readFileSync(join(dir, "feedback-sweep", "99.json"), "utf8"),
+		);
+
+		assert.deepEqual(cursor.seen, [`github:${repo}:review:71`]);
+		assert.equal(restarted.state.runs.size, 0);
+	});
+
 	it("holds certified handoff while disabled and resumes the same book without new model spend", async () => {
 		const f = await reviewingRun();
 		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
@@ -16113,6 +16390,50 @@ describe("ledger outbox enrollment", () => {
 		assert.ok(row);
 		assert.deepEqual(row.interruptedAttempts, { kind: "known", value: 1 });
 		assert.equal(row.usage.tokens.total, 20);
+	});
+
+	it("F10 feedback cannot revive a needs_info terminal run", async () => {
+		const outbox = fileLedgerOutbox(stateDir());
+		const ctx = needsInfoWorld(outbox);
+		const controller = ctx.start();
+		await once(controller);
+		assert.equal(
+			(await outbox.scan())?.[0]?.row?.row.outcome.kind,
+			"needs_info",
+		);
+		const launches = ctx.executor.launches.length;
+		const issue = ctx.github.issues.get(14);
+
+		assert.ok(issue && ctx.executor.candidate);
+		ctx.github.comment(issue, "Please fix", {
+			login: "giuseppecrj",
+			type: "User",
+		});
+		ctx.github.reviews.set(99, [
+			{
+				id: 3,
+				state: "CHANGES_REQUESTED",
+				commit_id: MAIN_SHA,
+				body: "fix",
+				submitted_at: "2026-11-07T00:00:00Z",
+				user: { login: "writer" },
+			},
+		]);
+		let observations = 0;
+		ctx.executor.candidate.observe = async () => {
+			observations++;
+			throw new Error("terminal run must not be observed for feedback");
+		};
+
+		await ctx.start().tick();
+		await ctx.start().tick();
+
+		assert.equal(observations, 0);
+		assert.equal(ctx.executor.launches.length, launches);
+		assert.equal(
+			statuses(ctx.github, 14).at(-1)?.endsWith(":needs_info"),
+			true,
+		);
 	});
 
 	it("keeps the terminal snapshot before the needs_info marker and freezes one row after it", async () => {

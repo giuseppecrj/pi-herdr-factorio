@@ -14,6 +14,7 @@ import {
 	feedbackId,
 	FEEDBACK_CARD_BYTES,
 	type FeedbackEvent,
+	type FeedbackId,
 } from "../src/feedback.ts";
 import {
 	storeFeedbackBatch,
@@ -66,7 +67,7 @@ function review(
 
 const classify = (
 	events: readonly FeedbackEvent[],
-	seen: readonly import("../src/feedback.ts").FeedbackId[] = [],
+	seen: readonly FeedbackId[] = [],
 	permission: "write" | "read" | "failed" = "write",
 ) =>
 	classifyFeedback({
@@ -276,6 +277,76 @@ test("C1 batch files are exclusive, private and retryable before cursor commit",
 		assert.deepEqual(
 			JSON.parse(readFileSync(join(dir, `${first.digest}.json`), "utf8")),
 			result.batch,
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("C1 a legal multi-review full-text file larger than the acceptance-file cap remains replayable", async () => {
+	const root = mkdtempSync(join(tmpdir(), "feedback-"));
+
+	try {
+		const result = await classify(
+			Array.from({ length: 5 }, (_, n) =>
+				review(n + 1, { body: "x".repeat(65000) }),
+			),
+		);
+
+		assert.ok(result.kind === "read" && result.batch && result.full);
+		assert.ok(Buffer.byteLength(result.full) > 256 * 1024);
+		const first = await storeFeedbackBatch(root, result.batch, result.full);
+
+		assert.deepEqual(
+			await storeFeedbackBatch(root, result.batch, result.full),
+			first,
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("C9 a review edit after an uncertain proposal POST reuses the original intent", async () => {
+	const github = new FakeGitHub();
+	github.pulls.set(5, { merged_at: "2026-11-06T00:00:00Z" });
+
+	const reviews = [
+		{
+			id: 3,
+			state: "COMMENTED",
+			commit_id: head,
+			body: "original request",
+			submitted_at: "2026-11-07T00:00:00Z",
+			user: { login: "writer" },
+		},
+	];
+
+	github.reviews.set(5, reviews);
+	github.posts.push("landed_unanswered");
+	const root = mkdtempSync(join(tmpdir(), "feedback-"));
+
+	try {
+		const input = {
+			stateDir: root,
+			repo,
+			exec: github.exec,
+			now: 0,
+			landed: [{ runId, pr: 5 }],
+		};
+
+		await sweepMergedFeedback(input);
+		reviews[0]!.body = "edited after posting";
+		await sweepMergedFeedback({ ...input, now: 3_600_001 });
+
+		const cursor = JSON.parse(
+			readFileSync(join(root, "feedback-sweep", "5.json"), "utf8"),
+		);
+
+		assert.deepEqual(cursor.seen, [id(3)]);
+		assert.equal(github.issues.size, 1);
+		assert.match(
+			[...github.issues.values()][0]?.body ?? "",
+			/original request/,
 		);
 	} finally {
 		rmSync(root, { recursive: true, force: true });

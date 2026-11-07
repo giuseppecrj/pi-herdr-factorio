@@ -36,7 +36,14 @@ import {
 	type Run,
 } from "../src/run.ts";
 import { advance } from "../src/stages.ts";
-import { TRUSTED_RUN_CAP } from "./fake-ticket-adapter.ts";
+import {
+	TRUSTED_RUN_CAP,
+	FakeGitHub,
+	fakeIssue,
+	BOT_LOGIN,
+} from "./fake-ticket-adapter.ts";
+import { classifyFeedback } from "../src/feedback.ts";
+import { storeFeedbackBatch } from "../server/controller.ts";
 import {
 	type FamilyInput,
 	familyLabel,
@@ -587,6 +594,7 @@ test("actual observer promotes a certified successor before PR checks and waits 
 		let refHead = predecessor;
 		let reportAvailable = true;
 		let reportValid = true;
+		const feedbackReads: string[] = [];
 		const patches: JsonValue[] = [];
 
 		const factoryCheck = {
@@ -676,6 +684,40 @@ test("actual observer promotes a certified successor before PR checks and waits 
 						merged: false,
 						draft: false,
 					});
+
+				if (path?.startsWith("issues/5/comments")) {
+					feedbackReads.push(path);
+
+					return ok([]);
+				}
+
+				if (path?.startsWith("pulls/5/reviews/8/comments")) {
+					feedbackReads.push(path);
+
+					return ok([]);
+				}
+
+				if (path?.startsWith("pulls/5/reviews")) {
+					feedbackReads.push(path);
+
+					return ok(
+						prHead === head
+							? [
+									{
+										id: 8,
+										state: "CHANGES_REQUESTED",
+										commit_id: head,
+										body: "Fix on the new head",
+										submitted_at: "2026-11-07T00:00:00Z",
+										user: { login: "writer" },
+									},
+								]
+							: [],
+					);
+				}
+
+				if (path === "collaborators/writer/permission")
+					return ok({ permission: "write", user: { login: "writer" } });
 
 				if (path === `git/ref/heads/${branch}`)
 					return ok({ object: { sha: refHead } });
@@ -849,6 +891,15 @@ test("actual observer promotes a certified successor before PR checks and waits 
 		assert.equal(patches.length, 1);
 		prHead = head;
 		refHead = head;
+		feedbackReads.length = 0;
+		const promotionWindow = await observe();
+
+		assert.deepEqual(promotionWindow.feedback, { kind: "deferred" });
+		assert.deepEqual(feedbackReads, []);
+		assert.equal(
+			selected(handoffCandidate(state, promotionWindow).state).feedback,
+			null,
+		);
 
 		const badOrdinary = [
 			[],
@@ -890,6 +941,15 @@ test("actual observer promotes a certified successor before PR checks and waits 
 		assert.equal(selected(ready).work.kind, "waiting");
 		assert.equal(selected(ready).published?.readiness.kind, "ready");
 		assert.equal(candidateUsage(ready), candidateUsage(state));
+		const intake = await observe(selected(ready));
+
+		assert.ok(
+			intake.feedback?.kind === "read" && intake.feedback.batch?.actionable,
+		);
+		assert.ok(feedbackReads.length > 0);
+		const ingested = selected(handoffCandidate(ready, intake).state);
+
+		assert.deepEqual(ingested.feedback?.batches[0]?.status, { kind: "queued" });
 	});
 });
 
@@ -2752,6 +2812,100 @@ for (const kind of [
 		);
 		assert.deepEqual(first.state.feedback?.batches[0]?.status, {
 			kind: "queued",
+		});
+	});
+
+for (const fault of ["landed_unanswered", "rejected"] as const)
+	test(`C2 actual intake notice reconciles ${fault} without duplicating the comment or settling the batch`, async () => {
+		await withLocalArtifactDownload(async (root) => {
+			const github = new FakeGitHub();
+			const issue = github.add(fakeIssue(pin.issue));
+			const initial = waiting();
+			const head = initial.current.report!.candidateSha;
+
+			const classified = await classifyFeedback({
+				runId: pin.runId,
+				pr: 5,
+				head,
+				seen: [],
+				permission: async () => "write",
+				events: [
+					{
+						kind: "review",
+						id: feedbackId(pin.repo, "review", 9),
+						pr: 5,
+						actor: "writer",
+						at: "2026-11-07T00:00:00Z",
+						state: "CHANGES_REQUESTED",
+						commit: head,
+						body: "fix",
+						comments: [
+							{
+								id: feedbackId(pin.repo, "review-comment", 10),
+								path: "test/acceptance/a",
+								line: 1,
+								commit: head,
+								inReplyTo: null,
+								body: "PRIVATE-REFUSED-TEXT",
+							},
+						],
+					},
+				],
+			});
+
+			assert.ok(classified.kind === "read" && classified.batch);
+
+			const batch = await storeFeedbackBatch(
+				root,
+				classified.batch,
+				classified.full,
+			);
+
+			const step = handoffCandidate(initial, {
+				...readyObservation(initial),
+				feedback: { kind: "read", head, batch, dismissed: [] },
+			});
+
+			const request = pending(step.state, "post_notice");
+
+			github.posts.push(fault);
+			assert.equal(
+				await controllerCandidatePort({
+					stateDir: root,
+					exec: github.exec,
+				}).execute(step.state, request),
+				null,
+			);
+
+			const completion = await controllerCandidatePort({
+				stateDir: root,
+				exec: github.exec,
+			}).execute(step.state, request);
+
+			assert.ok(completion?.kind === "post_notice");
+			assert.equal(
+				issue.comments.filter((c) => c.login === BOT_LOGIN).length,
+				1,
+			);
+			assert.match(
+				issue.comments[0]?.body ?? "",
+				/Repair is not in this deploy/,
+			);
+			assert.match(issue.comments[0]?.body ?? "", /Refused 1 inline comment/);
+			assert.doesNotMatch(
+				issue.comments[0]?.body ?? "",
+				/PRIVATE-REFUSED-TEXT/,
+			);
+
+			const done = selected(
+				handoffCandidate(step.state, { kind: "effect_completed", completion })
+					.state,
+			);
+
+			assert.deepEqual(done.feedback?.batches[0]?.status, { kind: "queued" });
+			assert.equal(done.feedback?.batches[0]?.notice, "posted");
+			assert.deepEqual(done.accounts, initial.accounts);
+			assert.deepEqual(done.published?.readiness, initial.published?.readiness);
 		});
 	});
 
