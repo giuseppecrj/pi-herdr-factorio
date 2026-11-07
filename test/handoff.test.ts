@@ -9,6 +9,7 @@ import {
 import { test } from "node:test";
 import {
 	beginCandidate,
+	stopRound,
 	candidateUsage,
 	handoffCandidate as reduceCandidate,
 	candidateProjection,
@@ -3172,6 +3173,12 @@ for (const ending of roundEndings)
 			false,
 		);
 
+		assert.deepEqual(
+			stopRound(selected(stopped.state), "review_input_too_large", 5000),
+			stopped.state,
+			"a second stop must retain the first reason and pending summary",
+		);
+
 		const persisted = parseCandidateState(
 			JSON.parse(JSON.stringify(stopped.state)),
 		);
@@ -3234,6 +3241,11 @@ for (const ending of roundEndings)
 		}
 
 		assert.equal(selected(completed.state).work.kind, "held");
+		assert.deepEqual(
+			stopRound(selected(completed.state), "review_input_too_large", 9999),
+			completed.state,
+			"a completed round must keep its first stop reason without another summary",
+		);
 		assert.equal(
 			handoffCandidate(completed.state, roundObservation(completed.state))
 				.effect,

@@ -138,6 +138,7 @@ import {
 import type { Run } from "../src/run.ts";
 import {
 	blocksReview,
+	candidateReviewPrompt,
 	JUDGMENT_OUTCOMES,
 	ReviewEvidenceUnavailable,
 	REVIEW_DIFF_MAX_BYTES,
@@ -12255,18 +12256,27 @@ describe("controller-only validate", () => {
 			}
 		});
 
-	for (const fault of [
+	const publishedStopFaults = [
 		"batch",
 		"inputs",
 		"review_size",
+		"review_size_callback",
+		"review_size_recovery",
 		"no_change",
 		"review_evidence",
 		"review_spend",
 		"build_spend",
 		"notice_error",
 		"summary_size",
-	] as const)
-		it(`F10-2 published ${fault} stop holds with one summary instead of orphaning PR`, async () => {
+	] as const;
+
+	for (const { fault, tokens } of publishedStopFaults.flatMap((fault) =>
+		(fault.startsWith("review_size") ? [0, null] : [null]).map((tokens) => ({
+			fault,
+			tokens,
+		})),
+	))
+		it(`F10-2 published ${fault} stop holds with one summary instead of orphaning PR (tokens=${tokens})`, async () => {
 			const f = await reviewingRun();
 			f.executor.behaviors = [{ kind: "pass", usage: 11 }];
 			await once(f.controller);
@@ -12349,15 +12359,133 @@ describe("controller-only validate", () => {
 				});
 
 			if (fault === "inputs")
-				f.executor.baseCheck = async () => ({ kind: "interrupted", wallMs: 0 });
-
-			if (fault === "review_size")
-				f.executor.prepareReview = async () => ({
-					kind: "refused",
-					reason: "review_input_too_large",
-					bytes: 20000,
-					limit: 12288,
+				f.executor.baseCheck = async () => ({
+					kind: "interrupted",
+					wallMs: 0,
 				});
+
+			if (fault.startsWith("review") || fault === "summary_size") {
+				f.executor.fallback = { kind: "pass", usage: 11 };
+				const validate = f.executor.validate;
+				f.executor.validate = async (input) => {
+					const result = await validate(input);
+					assert.ok(result.kind === "finished" && input.generation);
+
+					const verdict = {
+						...result.verdict,
+						patchDigest: input.generation.patchDigest,
+					};
+
+					return {
+						...result,
+						verdict,
+						report: reportOf(verdict),
+						assessment: f.executor.assess(input, verdict),
+					};
+				};
+			}
+
+			let preparations = 0;
+			let recovering = false;
+
+			const reviewLaunches = f.executor.launches.filter(
+				(l) => l.stage === "review",
+			).length;
+
+			if (fault.startsWith("review_size")) {
+				const diff = `diff --git a/server/cli.ts b/server/cli.ts\n--- a/server/cli.ts\n+++ b/server/cli.ts\n@@ -1 +1 @@\n-export const text = '';\n+export const text = '${"é".repeat(REVIEW_DIFF_MAX_BYTES)}';\n`;
+				assert.ok(Buffer.byteLength(diff) > REVIEW_DIFF_MAX_BYTES);
+				const contract = await f.files.readContract(runOf(14));
+				assert.ok(contract.kind === "found");
+				const output = f.executor.output.bind(f.executor);
+				const prepare = f.executor.prepareReview!;
+
+				const refuse = (verdict: import("../src/run.ts").Verdict) => {
+					const refusal = candidateReviewPrompt({
+						contract: contract.contract,
+						diff,
+						paths: ["server/cli.ts"],
+						judges: [],
+						guidance: "Review read-only",
+						verdict,
+					});
+
+					assert.ok(refusal.kind === "refused");
+
+					return refusal;
+				};
+
+				f.executor.output = async (input) => {
+					const result = await output(input);
+
+					if (
+						input.round === 1 &&
+						input.stage === "build" &&
+						result instanceof Object &&
+						result.kind === "build" &&
+						result.result.kind === "found"
+					) {
+						const built = {
+							kind: "build",
+							result: {
+								...result.result,
+								patch: diff,
+								receipt: {
+									...result.result.receipt,
+									patchDigest: digestOf(diff),
+								},
+							},
+						} as const;
+
+						f.executor.builds.set(
+							`${input.runId}/build-r1-${input.attempt}`,
+							built,
+						);
+
+						return built;
+					}
+
+					if (input.round === 1 && input.stage === "review") {
+						assert.ok(preparations > 0);
+						assert.ok(fault === "review_size_callback" || recovering);
+						const current = f.files.claims.get(runOf(14))?.handoff;
+						assert.ok(current?.kind === "selected" && current.current.verdict);
+						const refusal = refuse(current.current.verdict);
+						assert.ok(refusal.kind === "refused");
+
+						return refusal;
+					}
+
+					return result;
+				};
+
+				f.executor.prepareReview = async (input) => {
+					preparations++;
+					const current = f.files.claims.get(runOf(14))?.handoff;
+					assert.ok(current?.kind === "selected" && current.current.verdict);
+					assert.equal(current.current.verdict.patchDigest, digestOf(diff));
+					assert.equal(current.current.verdict.pass, true);
+					assert.equal(current.current.intent.publication.kind, "successor");
+
+					return fault === "review_size"
+						? refuse(current.current.verdict)
+						: await prepare(input);
+				};
+
+				const spent = f.executor.spent.bind(f.executor);
+				f.executor.spent = async (input) =>
+					input.round === 1 && input.stage === "review" ? tokens : spent(input);
+
+				if (fault === "review_size_recovery") {
+					const launch = f.executor.launch.bind(f.executor);
+					f.executor.launch = async (input) => {
+						if (input.round === 1 && input.stage === "review")
+							throw new Error("crash before repair review launch");
+
+						return launch(input);
+					};
+				}
+			}
 
 			if (fault === "review_evidence")
 				f.executor.prepareReview = async () => {
@@ -12386,7 +12514,18 @@ describe("controller-only validate", () => {
 						: output(input);
 			}
 
-			const restarted = f.start();
+			let restarted = f.start();
+
+			if (fault === "review_size_recovery") {
+				await assert.rejects(
+					drive(restarted, f),
+					/crash before repair review launch/,
+				);
+				recovering = true;
+				restarted = f.start();
+			}
+
+			await drive(restarted, f);
 			await drive(restarted, f);
 			const result = f.files.claims.get(runOf(14))?.handoff;
 			assert.ok(result?.kind === "selected");
@@ -12407,6 +12546,29 @@ describe("controller-only validate", () => {
 				kind: "settled",
 				outcome: { kind: "stopped" },
 			});
+
+			if (fault.startsWith("review_size")) {
+				assert.equal(
+					preparations,
+					1,
+					"must reach review preparation after validation",
+				);
+				assert.deepEqual(result.feedback?.batches[0]?.status, {
+					kind: "settled",
+					outcome: { kind: "stopped", reason: "review_input_too_large" },
+				});
+				assert.equal(
+					result.work.kind === "held" && result.work.reason,
+					"review_input_too_large",
+				);
+				assert.equal(
+					f.executor.launches.filter((l) => l.stage === "review").length -
+						reviewLaunches,
+					fault === "review_size_callback" ? 1 : 0,
+				);
+				assert.equal(keyed(f.github, 14, "review-input").length, 1);
+			}
+
 			assert.ok(restarted.state.runs.has(14));
 			const heldSince = result.published?.readiness.since;
 			assert.equal(heldSince, summarySince);
@@ -12418,6 +12580,9 @@ describe("controller-only validate", () => {
 			const restored = f.files.claims.get(runOf(14))?.handoff;
 			assert.ok(restored?.kind === "selected");
 			assert.equal(restored.published?.readiness.since, heldSince);
+
+			if (fault.startsWith("review_size"))
+				assert.equal(keyed(f.github, 14, "review-input").length, 1);
 		});
 
 	it("hops from CI to isolated review and waits for the owner with charged usage", async () => {
