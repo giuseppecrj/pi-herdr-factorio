@@ -162,6 +162,7 @@ describe("isBranchName", () => {
 		const cases: [string, boolean][] = [
 			["main", true],
 			["feature/x-1", true],
+			["release/v2", true],
 			["v1.2.3", true],
 			["feature/a.b", true],
 			["a.locked/b", true],
