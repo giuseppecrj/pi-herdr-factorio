@@ -225,6 +225,19 @@ const holdLabels = {
 } satisfies Record<HandoffReason, string>;
 
 describe("held marker text", () => {
+	it("retains the authenticated comment body for restart-stable comparison", () => {
+		const body = formatMarker(
+			marker({ status: "blocked", stage: "build" }),
+			"repair_tokens",
+			2,
+		);
+
+		const ledger = ledgerOf([comment(body)]);
+
+		assert.ok(ledger.kind === "clean");
+		assert.partialDeepStrictEqual(ledger.markers[0], { body });
+	});
+
 	for (const [reason, label] of Object.entries(holdLabels)) {
 		it(`explains ${reason} without changing the marker wire format`, () => {
 			const value = marker({
