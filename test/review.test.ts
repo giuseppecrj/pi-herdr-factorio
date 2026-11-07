@@ -954,13 +954,23 @@ it("projects actual verdict values as escaped data without inferring criterion s
 			},
 		]);
 		assert.equal(untrusted.diff, diff);
-		assert.throws(
-			() =>
-				candidateReviewPrompt({
-					...args,
-					diff: "x".repeat(REVIEW_DIFF_MAX_BYTES + 1),
-				}),
-			/review_input_too_large/,
+
+		for (const diff of [
+			"x".repeat(REVIEW_DIFF_MAX_BYTES + 1),
+			"é".repeat(REVIEW_DIFF_MAX_BYTES / 2 + 1),
+			Buffer.alloc(REVIEW_DIFF_MAX_BYTES + 1),
+		])
+			assert.deepEqual(candidateReviewPrompt({ ...args, diff }), {
+				kind: "refused",
+				reason: "review_input_too_large",
+				bytes: Buffer.byteLength(diff),
+				limit: REVIEW_DIFF_MAX_BYTES,
+			});
+		assert.ok(
+			candidateReviewPrompt({
+				...args,
+				diff: Buffer.alloc(REVIEW_DIFF_MAX_BYTES),
+			}),
 		);
 	} finally {
 		f.close();
