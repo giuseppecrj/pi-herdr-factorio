@@ -17,6 +17,8 @@ import {
 	type Exec,
 	type ExecResult,
 	githubRepoFromRemote,
+	isBranchName,
+	isRefSegment,
 	isRepoSlug,
 	type LoadView,
 	loadView,
@@ -138,6 +140,55 @@ async function load(
 ): Promise<WorkflowLoad> {
 	return loadWorkflow({ exec: fakeGh(branches).exec, repo, ref, env });
 }
+
+describe("isRefSegment", () => {
+	it("rejects dot-prefixed and .lock-suffixed segments", () => {
+		const cases: [string, boolean][] = [
+			["a", true],
+			[".a", false],
+			["a.lock", false],
+			["x.y", true],
+			["lock", true],
+		];
+
+		for (const [segment, expected] of cases) {
+			assert.equal(isRefSegment(segment), expected, segment);
+		}
+	});
+});
+
+describe("isBranchName", () => {
+	it("preserves accepted forms and rejects invalid branch names", () => {
+		const cases: [string, boolean][] = [
+			["main", true],
+			["feature/x-1", true],
+			["v1.2.3", true],
+			["feature/a.b", true],
+			["a.locked/b", true],
+			["a./b", true],
+			["release.lock", false],
+			["a/b.lock", false],
+			["a.lock/b", false],
+			["a.", false],
+			[".hidden", false],
+			["a/.b", false],
+			["a/.hidden/b", false],
+			["", false],
+			["-main", false],
+			["/main", false],
+			["main/", false],
+			["a//b", false],
+			["a..b", false],
+			["a b", false],
+			["a~b", false],
+			["a@b", false],
+		];
+
+		for (const [name, expected] of cases) {
+			assert.equal(isBranchName(name), expected, name);
+		}
+	});
+});
 
 describe("parseWorkflow", () => {
 	it("accepts the committed production WORKFLOW.md", () => {
@@ -1256,6 +1307,32 @@ describe("server/cli.ts", () => {
 				inForce: { ref: "main", sha: mainSha, digest: digestOf(valid) },
 			},
 		});
+	});
+
+	it("rejects invalid branch forms before source resolution", async () => {
+		for (const flag of ["--ref", "--reload-ref"]) {
+			for (const name of [
+				"release.lock",
+				"a/b.lock",
+				"a.lock/b",
+				"a.",
+				".hidden",
+				"a/.b",
+				"a/.hidden/b",
+			]) {
+				const gh = fakeGh(trusted);
+
+				const run = await runRaw(
+					["workflow-check", ...repoArgs, flag, name],
+					gh.exec,
+				);
+
+				assert.equal(run.code, EXIT.usage, `${flag} ${name}`);
+				assert.match(run.stderr, /--ref and --reload-ref must be branch names/);
+				assert.equal(run.stdout, "");
+				assert.deepEqual(gh.calls, []);
+			}
+		}
 	});
 
 	it("exits 2 on usage errors", async () => {
