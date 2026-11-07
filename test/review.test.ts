@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+	findingFingerprints,
+	feedbackPrompt,
 	parseSeat,
 	reviewSeats,
 	blocksReview,
@@ -1147,6 +1149,22 @@ for (const mode of [
 ])
 	it(`prepares review from the certified base (${mode}) while preserving the repair base`, () =>
 		checkReviewTree(mode));
+
+describe("F10-2 feedback review", () => {
+	it("fingerprints ignore lines, digits, claim case and whitespace but bind seat, category and path", () => {
+		const withFinding = (seat = "code-review", path = "src/a.ts", category = "bug", claim = "Missing guard at 123", line = 2) => ({ seats: [{ seat, findings: [{ severity: "blocking", category, path, startLine: line, endLine: line, claim }], judgments: [] }] });
+		const a = findingFingerprints(withFinding());
+		assert.equal(a.length, 1);
+		assert.deepEqual(a, findingFingerprints(withFinding("code-review", "src/a.ts", "bug", " MISSING  guard at 999 ", 50)));
+		for (const changed of [withFinding("security-review"), withFinding("code-review", "src/b.ts"), withFinding("code-review", "src/a.ts", "security")])
+			assert.notDeepEqual(a, findingFingerprints(changed));
+	});
+	it("owner cards are requests, not CI facts; full text is protected", () => {
+		const prompt = feedbackPrompt('{"owner":[]}');
+		assert.match(prompt, /owner cards.*untrusted requests/i);
+		assert.match(prompt, /\.factory-feedback-full\.json/);
+	});
+});
 
 describe("candidate review", () => {
 	const files = new Map([["src/a.ts", 10]]);

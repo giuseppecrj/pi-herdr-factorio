@@ -2687,6 +2687,207 @@ test("a version 1 review that fails migration keeps its bytes, not an explicit n
 	});
 });
 
+// F10-2 contract tests. Drive the public advance surface through handoffCandidate.
+function queuedFeedback() {
+	const initial = waiting();
+	const obs = feedbackObservation(initial);
+	assert.ok(obs.kind === "read" && obs.batch);
+	return {
+		...initial,
+		feedback: {
+			pr: initial.published!.number,
+			seen: [...obs.batch.seen],
+			batches: [{ digest: obs.batch.digest, head: obs.head, actionable: true,
+				reviews: obs.batch.reviews, notice: "posted" as const,
+				status: { kind: "queued" as const } }],
+		},
+	};
+}
+
+function startFeedback(state = queuedFeedback()) {
+	const step = handoffCandidate(state, readyObservation(state));
+	const request = pending(step.state, "post_notice");
+	assert.equal(request.notice.kind, "repair_started");
+	assert.equal(request.withdraw, "feedback_repair");
+	assert.equal(request.notice.place, "issue");
+	const started = selected(handoffCandidate(step.state, {
+		kind: "effect_completed", completion: { kind: "post_notice", request },
+	}).state);
+	assert.equal(started.work.kind, "repair_due");
+	assert.deepEqual(started.published?.readiness, { kind: "not_ready", reason: "feedback_repair", since: 100 });
+	assert.equal(candidateUsage(started), candidateUsage(state));
+	return started;
+}
+
+function rebuildingFeedback() {
+	const started = startFeedback();
+	const issued = handoffCandidate(started, readyObservation(started)).state;
+	const request = pending(issued, "repair_build");
+	assert.equal(request.execution.cause.kind, "feedback");
+	return { execution: request.execution, state: selected(handoffCandidate(issued, {
+		kind: "effect_completed", completion: { kind: "repair_build", request, started: true },
+	}).state) };
+}
+
+test("F10-2 F10-1 queued book picks up exactly one repair with no new intake notice", () => {
+	const legacy = queuedFeedback();
+	const parsed = parseCandidateState(JSON.parse(JSON.stringify(legacy)));
+	assert.deepEqual(parsed, legacy);
+	const step = handoffCandidate(parsed!, readyObservation(legacy));
+	const request = pending(step.state, "post_notice");
+	assert.equal(request.notice.kind, "repair_started");
+	const twice = handoffCandidate(step.state, readyObservation(legacy));
+	assert.deepEqual(twice.state, step.state);
+	assert.deepEqual(pending(twice.state, "post_notice"), request);
+	assert.ok(parseCandidateState(JSON.parse(JSON.stringify(step.state))));
+	startFeedback(legacy);
+});
+
+for (const fault of ["cap", "budget", "assessment"] as const)
+	test(`F10-2 ${fault} refuses with notice and no budget reset`, () => {
+		const initial = queuedFeedback();
+		const state = fault === "cap" ? { ...initial, current: { ...initial.current, intent: { ...initial.current.intent, round: 2 as const } } }
+			: fault === "budget" ? { ...initial, pin: { ...initial.pin, maxTokens: candidateUsage(initial) } }
+			: { ...initial, current: { ...initial.current, assessment: undefined } };
+		const step = handoffCandidate(state, readyObservation(state));
+		const notice = pending(step.state, "post_notice");
+		assert.equal(notice.notice.kind, "repair_unavailable");
+		assert.equal(notice.withdraw, null);
+		assert.deepEqual(selected(step.state).accounts, state.accounts);
+		assert.deepEqual(selected(step.state).published?.readiness, state.published?.readiness);
+		assert.partialDeepStrictEqual(selected(step.state).feedback?.batches[0]?.status, {
+			kind: "settled", outcome: { kind: "refused", reason: fault === "cap" ? "cap_reached" : "repair_unavailable" },
+		});
+	});
+
+test("F10-2 dismissal and owner push supersede queued feedback without spending", () => {
+	for (const owner of [false, true]) {
+		const state = queuedFeedback();
+		const obs = feedbackObservation(state);
+		assert.ok(obs.kind === "read");
+		const moved = "f".repeat(40);
+		assert.ok(isGitSha(moved));
+		const result = selected(handoffCandidate(state, { ...readyObservation(state),
+			...(owner ? { pr: { kind: "open" as const, number: 5, head: moved, refHead: moved }, feedback: { kind: "deferred" as const } }
+				: { feedback: { ...obs, batch: null, dismissed: state.feedback.seen } }),
+		}).state);
+		assert.partialDeepStrictEqual(result.feedback?.batches[0]?.status, { kind: "settled", outcome: { kind: "superseded", by: owner ? "owner_head" : "dismissed" } });
+		assert.deepEqual(result.accounts, state.accounts);
+	}
+});
+
+test("F10-2 controller refresh carries F10-1 queued feedback to one repair", () => {
+	const initial = queuedFeedback();
+	const moved = "b".repeat(40);
+	assert.ok(isGitSha(moved));
+	const refreshing = handoffCandidate({ ...initial, work: { kind: "handoff" } }, { ...readyObservation(initial), main: moved }).state;
+	const reviewed = certified(refreshing);
+	const old = initial.current.report!.candidateSha;
+	const promoting = handoffCandidate(reviewed, { ...readyObservation(reviewed), pr: { kind: "open", number: 5, head: old, refHead: old } }).state;
+	const promote = pending(promoting, "promote_pr");
+	const promoted = handoffCandidate(promoting, { kind: "effect_completed", completion: { kind: "promote_pr", request: promote, head: promote.head, refHead: promote.head } }).state;
+	const completing = handoffCandidate(promoted, readyObservation(promoted)).state;
+	const complete = pending(completing, "complete_handoff");
+	const ready = selected(handoffCandidate(completing, { kind: "effect_completed", completion: { kind: "complete_handoff", request: complete, now: 100 } }).state);
+	assert.deepEqual(ready.feedback?.batches[0]?.status, { kind: "queued" });
+	const next = handoffCandidate(ready, readyObservation(ready));
+	assert.equal(pending(next.state, "post_notice").notice.kind, "repair_started");
+	assert.equal(selected(next.state).feedback?.batches.length, 1);
+});
+
+for (const digestBackstop of [false, true])
+	for (const published of [false, true])
+		test(`F10-2 no progress stops immediately, published=${published}, digest=${digestBackstop}`, () => {
+			const rebuilding = rebuildingFeedback();
+			const state = { ...rebuilding.state, published: published ? rebuilding.state.published : null };
+			const result = handoffCandidate(state, { kind: "repair_settled", execution: rebuilding.execution, tokens: 50,
+				result: digestBackstop ? { kind: "passed", patch: { ...patch, round: 1 } } : { kind: "no_change" },
+			});
+			const effect = result.effect;
+			if (published) {
+				assert.ok(effect?.kind === "post_notice");
+				assert.equal(effect.notice.kind, "round_summary");
+				assert.equal(effect.notice.place, "pr");
+				assert.deepEqual(effect.then, { kind: "held", reason: "repair_no_progress" });
+			} else {
+				assert.ok(effect?.kind === "finish_pr");
+				assert.deepEqual(effect.terminal, { kind: "failed", reason: "repair_no_progress" });
+			}
+			assert.equal(candidateUsage(result.state), candidateUsage(state) + 50);
+			assert.ok(parseCandidateState(JSON.parse(JSON.stringify(result.state))));
+		});
+
+test("F10-2 failed patches keep attempt cap but a published run never fails", () => {
+	const rebuilding = rebuildingFeedback();
+	const state = { ...rebuilding.state, pin: { ...rebuilding.state.pin, maxReviewAttempts: 1 } };
+	const step = handoffCandidate(state, { kind: "repair_settled", execution: rebuilding.execution, tokens: 1, result: { kind: "failed" } });
+	const summary = pending(step.state, "post_notice");
+	assert.deepEqual(summary.then, { kind: "held", reason: "review_attempts" });
+	assert.equal(summary.notice.kind, "round_summary");
+});
+
+test("F10-2 published repair is a successor and fresh proof applies the batch", () => {
+	const rebuilding = rebuildingFeedback();
+	const changed = { ...patch, round: 1, patchDigest: digestOf("repaired") };
+	const built = handoffCandidate(rebuilding.state, { kind: "repair_settled", execution: rebuilding.execution, tokens: 10, result: { kind: "passed", patch: changed } }).state;
+	const validating = selected(handoffCandidate(built, readyObservation(built)).state);
+	assert.deepEqual(validating.current.intent.publication, { kind: "successor", expectedHead: rebuilding.state.current.report!.candidateSha });
+	const review = reviewing(validated(validating));
+	const certified = handoffCandidate(review.state, { kind: "review_settled", execution: review.execution, tokens: 10,
+		result: { kind: "passed", review: receipt(review.execution), patch: { kind: "found", receipt: changed, patch: "repaired" } },
+	}).state;
+	const old = rebuilding.state.current.report!.candidateSha;
+	const promoting = handoffCandidate(certified, { ...readyObservation(certified), pr: { kind: "open", number: 5, head: old, refHead: old } }).state;
+	const promote = pending(promoting, "promote_pr");
+	const promoted = handoffCandidate(promoting, { kind: "effect_completed", completion: { kind: "promote_pr", request: promote, head: promote.head, refHead: promote.head } }).state;
+	const completeState = handoffCandidate(promoted, readyObservation(promoted)).state;
+	const complete = pending(completeState, "complete_handoff");
+	const ready = selected(handoffCandidate(completeState, { kind: "effect_completed", completion: { kind: "complete_handoff", request: complete, now: 200 } }).state);
+	assert.deepEqual(ready.feedback?.batches[0]?.status, { kind: "settled", outcome: { kind: "applied", head: promote.head } });
+	assert.equal(ready.published?.readiness.kind, "ready");
+	assert.ok(parseCandidateState(JSON.parse(JSON.stringify(ready))));
+});
+
+for (const phase of ["repair_due", "rebuilding", "repair_built", "validate", "reviewing", "promote_pr"] as const)
+	test(`F10-2 merge during ${phase} retains old certification and marks batch merged`, () => {
+		const rebuilding = rebuildingFeedback();
+		let state = rebuilding.state;
+		if (phase === "repair_due") state = startFeedback();
+		else if (phase !== "rebuilding") {
+			const changed = { ...patch, round: 1, patchDigest: digestOf("repair-merge") };
+			state = selected(handoffCandidate(state, { kind: "repair_settled", execution: rebuilding.execution, tokens: 10, result: { kind: "passed", patch: changed } }).state);
+			if (phase !== "repair_built") state = selected(handoffCandidate(state, readyObservation(state)).state);
+			if (phase === "reviewing" || phase === "promote_pr") {
+				const review = reviewing(validated(state));
+				state = review.state;
+				if (phase === "promote_pr") {
+					state = selected(handoffCandidate(state, { kind: "review_settled", execution: review.execution, tokens: 10, result: { kind: "passed", review: receipt(review.execution), patch: { kind: "found", receipt: changed, patch: "repair-merge" } } }).state);
+					const old = rebuilding.state.current.report!.candidateSha;
+					state = selected(handoffCandidate(state, { ...readyObservation(state), pr: { kind: "open", number: 5, head: old, refHead: old } }).state);
+				}
+			}
+		}
+		const head = rebuilding.state.current.report!.candidateSha;
+		const merged = handoffCandidate(state, { ...observed(), pr: { kind: "merged", number: 5, head, mergeSha: sha, actor: "owner" } });
+		assert.ok(merged.effect?.kind === "finish_pr" || merged.effect?.kind === "stop_execution");
+		assert.partialDeepStrictEqual(merged.effect.terminal, { kind: "merged", assurance: { kind: "factory_verified" }, readiness: { kind: "not_ready", reason: "feedback_repair" } });
+		assert.deepEqual(selected(merged.state).feedback?.batches[0]?.status, { kind: "settled", outcome: { kind: "merged", mergeSha: sha } });
+	});
+
+test("F10-2 promotion window permits a main refresh at the new certified head", () => {
+	const initial = waiting();
+	const b = "b".repeat(40), c = "c".repeat(40);
+	assert.ok(isGitSha(b) && isGitSha(c));
+	const fresh = certified(handoffCandidate(initial, { ...readyObservation(initial), main: b }).state);
+	const old = initial.current.report!.candidateSha;
+	const promoting = handoffCandidate(fresh, { ...readyObservation(fresh), pr: { kind: "open", number: 5, head: old, refHead: old } }).state;
+	const promote = pending(promoting, "promote_pr");
+	const promoted = handoffCandidate(promoting, { kind: "effect_completed", completion: { kind: "promote_pr", request: promote, head: promote.head, refHead: promote.head } }).state;
+	const next = handoffCandidate(promoted, { ...readyObservation(promoted), main: c });
+	const validate = pending(next.state, "validate");
+	assert.deepEqual(validate.generation.publication, { kind: "successor", expectedHead: promote.head });
+});
+
 function feedbackObservation(
 	state: CandidateState,
 	n = 1,

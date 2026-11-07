@@ -12234,6 +12234,44 @@ describe("controller-only validate", () => {
 			}
 		});
 
+	for (const fault of ["batch", "inputs", "review_size", "no_change"] as const)
+		it(`F10-2 published ${fault} stop holds with one summary instead of orphaning PR`, async () => {
+			const f = await reviewingRun();
+			f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+			await once(f.controller);
+			await f.controller.tick();
+			await f.controller.tick();
+			const claim = f.files.claims.get(runOf(14));
+			assert.ok(claim?.handoff?.kind === "selected" && claim.handoff.published);
+			const book = claim.handoff;
+			const batch = digestOf("feedback repair fixture");
+			const id = `github:${repo}:review:77` as const;
+			const queued = { ...book, feedback: { pr: 99, seen: [id], batches: [{ digest: batch, head: book.current.report!.candidateSha, actionable: true, reviews: [id], notice: "posted" as const, status: { kind: "queued" as const } }] } };
+			f.files.claims.set(runOf(14), { ...claim, handoff: queued });
+			const notices: string[] = [];
+			const port = f.executor.candidate!;
+			const execute = port.execute;
+			port.execute = async (state, request) => {
+				if (request.kind === "post_notice") notices.push(request.notice.kind);
+				return execute(state, request);
+			};
+			if (fault !== "batch") Object.assign(f.executor, { readFeedback: async () => ({ version: 1, runId: book.pin.runId, pr: 99, head: book.current.report!.candidateSha, records: [{ event: id, actor: "writer", intake: { kind: "actionable" }, inline: [] }], cards: [], full: null }) });
+			if (fault === "inputs") f.executor.baseCheck = async () => ({ kind: "interrupted" });
+			if (fault === "review_size") f.executor.prepareReview = async () => ({ kind: "refused", reason: "review_input_too_large", bytes: 20000, limit: 12288 });
+			if (fault === "no_change") {
+				const output = f.executor.output.bind(f.executor);
+				f.executor.output = async (input) => input.stage === "build" && input.round === 1 ? { kind: "build", result: { kind: "blocked", reason: "repair_no_change" } } : output(input);
+			}
+			const restarted = f.start();
+			await drive(restarted, f);
+			const result = f.files.claims.get(runOf(14))?.handoff;
+			assert.ok(result?.kind === "selected");
+			assert.equal(result.work.kind, "held");
+			assert.equal(notices.filter((kind) => kind === "repair_started").length, 1);
+			assert.equal(notices.filter((kind) => kind === "round_summary").length, 1);
+			assert.ok(restarted.state.runs.has(14));
+		});
+
 	it("hops from CI to isolated review and waits for the owner with charged usage", async () => {
 		const f = await reviewingRun();
 		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
