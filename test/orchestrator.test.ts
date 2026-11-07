@@ -4497,6 +4497,120 @@ describe("Orchestrator runs of another state directory", () => {
 });
 
 describe("admission accounting policy", () => {
+	for (const verification of [false, true])
+		it(`recovers the admitted cap after workflow drift before policy pinning (${verification ? "verification" : "production"})`, async () => {
+			const state = stateDir();
+			const archive = stateDir();
+			const tree = join(archive, "repo", ".github", "factory");
+			mkdirSync(join(tree, "gates"), { recursive: true });
+			writeFileSync(join(tree, "WORKFLOW.md"), TRUSTED_WORKFLOW);
+			writeFileSync(join(tree, "gates", "ci.sh"), "echo trusted\n");
+			const bytes = execFileSync("tar", ["-czf", "-", "-C", archive, "repo"]);
+			const github = new FakeGitHub();
+			github.add(labeled(14));
+			let available = false;
+
+			const policySource = {
+				fetch: async (requestedRepo: RepoSlug, requestedSha: GitSha) => {
+					assert.equal(requestedRepo, repo);
+					assert.equal(requestedSha, MAIN_SHA);
+
+					if (!available) throw new Error("checkout unavailable before pin");
+
+					return bytes;
+				},
+			};
+
+			const argv = [
+				"tick",
+				"--once",
+				"--json",
+				"--repo",
+				repo,
+				"--state-dir",
+				state,
+				"--issue",
+				"14",
+				...(verification ? ["--verification-token-cap", "12000"] : []),
+			];
+
+			const first = await cli(
+				argv,
+				github,
+				new AbortController(),
+				undefined,
+				policySource,
+			);
+
+			assert.equal(first.code, EXIT.ok, first.stderr);
+			const files = fileRunFiles(state);
+			assert.equal(await files.accounting?.start(runOf(14)), null);
+			assert.deepEqual(await files.listClaims(), []);
+			assert.deepEqual(statuses(github, 14), []);
+
+			available = true;
+			github.workflow = TRUSTED_WORKFLOW.replace(
+				`max_tokens_per_run: ${TRUSTED_RUN_CAP}`,
+				`max_tokens_per_run: ${TRUSTED_RUN_CAP + 400_000}`,
+			);
+
+			const recovered = await cli(
+				argv,
+				github,
+				new AbortController(),
+				undefined,
+				policySource,
+			);
+
+			assert.equal(recovered.code, EXIT.ok, recovered.stderr);
+			const pinned = await files.accounting?.start(runOf(14));
+			assert.ok(pinned);
+			assert.partialDeepStrictEqual(pinned.context, {
+				kind: verification ? "verification" : "production",
+				policy: {
+					workflowSha: MAIN_SHA,
+					workflowDigest: digestOf(TRUSTED_WORKFLOW),
+				},
+				trustedCap: TRUSTED_RUN_CAP,
+			});
+
+			if (verification)
+				assert.partialDeepStrictEqual(pinned.context, { effectiveCap: 12_000 });
+			assert.equal((await files.listClaims()).length, 1);
+
+			const before = readFileSync(
+				join(state, "accounting", runOf(14), "policy.json"),
+			);
+
+			await cli(argv, github, new AbortController(), undefined, policySource);
+			assert.ok(
+				readFileSync(
+					join(state, "accounting", runOf(14), "policy.json"),
+				).equals(before),
+			);
+
+			const issue = github.issues.get(14);
+			assert.ok(issue);
+			issue.state = "closed";
+			issue.updatedAt = "2026-10-29T03:00:00Z";
+			await cli(argv, github, new AbortController(), undefined, policySource);
+
+			const terminal = JSON.parse(
+				readFileSync(join(state, "ledger", runOf(14), "terminal.json"), "utf8"),
+			);
+
+			assert.deepEqual(terminal.runContext, pinned.context);
+			assert.equal(
+				terminal.provenance.kind,
+				verification ? "verification" : "production",
+			);
+
+			if (verification) {
+				assert.equal(terminal.provenance.trustedRunTokenCap, TRUSTED_RUN_CAP);
+				assert.equal(terminal.provenance.effectiveRunTokenCap, 12_000);
+			}
+		});
+
 	it("pins policy bytes from the original SHA once, caches its gates and retains start time across restart", async () => {
 		const dir = stateDir();
 		const archive = stateDir();
@@ -4546,7 +4660,11 @@ describe("admission accounting policy", () => {
 			0o600,
 		);
 		assert.equal(
-			await files.prepareRun?.({ ...input, runId: runOf(15) }),
+			await files.prepareRun?.({
+				...input,
+				runId: runOf(15),
+				runTokenCap: TRUSTED_RUN_CAP + 400_000,
+			}),
 			true,
 		);
 		assert.equal(
@@ -4557,13 +4675,16 @@ describe("admission accounting policy", () => {
 			}),
 			true,
 		);
+		assert.deepEqual(
+			(await files.accounting?.start(runOf(15)))?.context,
+			pinned.context,
+		);
 		const unknown = await files.accounting?.start(runOf(17));
 		assert.ok(unknown);
-		assert.equal(unknown.context.kind, "legacy");
-		assert.ok(unknown.context.kind === "legacy");
-		assert.deepEqual(unknown.context.known.trustedCap, {
-			kind: "unavailable",
-			reason: "receipt_missing",
+		assert.deepEqual(unknown.context, {
+			kind: "production",
+			policy,
+			trustedCap: TRUSTED_RUN_CAP,
 		});
 		assert.equal(fetched, 1);
 		assert.equal(
@@ -4643,6 +4764,38 @@ describe("admission accounting policy", () => {
 		assert.equal(await refused.prepareRun?.(input), false);
 		assert.equal(await refused.accounting?.start(input.runId), null);
 	});
+
+	for (const workflow of [
+		null,
+		TRUSTED_WORKFLOW.replace(
+			`max_tokens_per_run: ${TRUSTED_RUN_CAP}`,
+			"max_tokens_per_run: 1",
+		),
+	])
+		it(`refuses to pin a cap from ${workflow === null ? "missing" : "digest-mismatched"} admitted workflow bytes`, async () => {
+			const dir = stateDir();
+			const archive = stateDir();
+			const tree = join(archive, "repo", ".github", "factory");
+			mkdirSync(join(tree, "gates"), { recursive: true });
+			writeFileSync(join(tree, "gates", "ci.sh"), "echo trusted\n");
+
+			if (workflow !== null) writeFileSync(join(tree, "WORKFLOW.md"), workflow);
+
+			const bytes = execFileSync("tar", ["-czf", "-", "-C", archive, "repo"]);
+			const files = fileRunFiles(dir, { fetch: async () => bytes });
+			assert.equal(
+				await files.prepareRun?.({
+					runId: runOf(14),
+					repo,
+					workflowSha: sha(MAIN_SHA),
+					workflowDigest: digestOf(TRUSTED_WORKFLOW),
+					startedAt: new Date(START).toISOString(),
+					runTokenCap: TRUSTED_RUN_CAP,
+				}),
+				false,
+			);
+			assert.equal(await files.accounting?.start(runOf(14)), null);
+		});
 
 	it("pins the verification manifest and caps at admission and refuses mixed manifests or scope", async () => {
 		const dir = stateDir();

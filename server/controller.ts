@@ -75,7 +75,6 @@ import {
 	parseAttemptEnd,
 	parseRunStart,
 	contextPolicy,
-	legacyRunContext,
 	terminalFailureOf,
 	AUTONOMY_DIGEST,
 	type TerminalEvidence,
@@ -91,7 +90,7 @@ import {
 	type LedgerOutbox,
 	type OutboxJob,
 } from "../src/ledger.ts";
-import { isGitSha, isRepoSlug } from "../src/workflow.ts";
+import { isGitSha, isRepoSlug, parseWorkflow } from "../src/workflow.ts";
 import { FAMILY_MISSING, familyClaimsHold, reviewR8 } from "../src/review.ts";
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -2180,7 +2179,7 @@ export function fileRunFiles(
 
 	const policyPins = new Map<
 		GitSha,
-		{ workflowDigest: Digest; gatesDigest: Digest }
+		{ workflowDigest: Digest; gatesDigest: Digest; runTokenCap: number }
 	>();
 
 	const workspacePath = (runId: string) => join(workspaces, runId);
@@ -2238,7 +2237,7 @@ export function fileRunFiles(
 							);
 						}
 
-						const begin = (gatesDigest: Digest) => {
+						const begin = (gatesDigest: Digest, runTokenCap: number) => {
 							const policy = {
 								workflowSha: input.workflowSha,
 								workflowDigest: input.workflowDigest,
@@ -2257,27 +2256,22 @@ export function fileRunFiles(
 							} as const;
 
 							const context =
-								input.runTokenCap === null
-									? legacyRunContext(
-											{ ...policy, policy, verification },
-											"receipt_missing",
-										)
-									: verification === null
-										? ({
-												kind: "production",
-												policy,
-												trustedCap: input.runTokenCap,
-											} as const)
-										: ({
-												kind: "verification",
-												policy,
-												trustedCap: input.runTokenCap,
-												manifestDigest: verification.digest,
-												effectiveCap: Math.min(
-													input.runTokenCap,
-													verification.tokenCap,
-												),
-											} as const);
+								verification === null
+									? ({
+											kind: "production",
+											policy,
+											trustedCap: runTokenCap,
+										} as const)
+									: ({
+											kind: "verification",
+											policy,
+											trustedCap: runTokenCap,
+											manifestDigest: verification.digest,
+											effectiveCap: Math.min(
+												runTokenCap,
+												verification.tokenCap,
+											),
+										} as const);
 
 							return accounting.begin({
 								v: 2,
@@ -2292,7 +2286,7 @@ export function fileRunFiles(
 						if (cached !== undefined)
 							return (
 								cached.workflowDigest === input.workflowDigest &&
-								(await begin(cached.gatesDigest))
+								(await begin(cached.gatesDigest, cached.runTokenCap))
 							);
 						let scratch: string | null = null;
 
@@ -2311,16 +2305,24 @@ export function fileRunFiles(
 								fetch: policySource.fetch ?? ghTarball,
 							});
 
-							if (
-								checked.kind !== "ready" ||
-								checked.omitted !== 0 ||
-								digestOf(
-									await readFile(
-										join(workspace, ".github/factory/WORKFLOW.md"),
-									),
-								) !== input.workflowDigest
-							)
+							if (checked.kind !== "ready" || checked.omitted !== 0)
 								return false;
+
+							const workflow = await readFile(
+								join(workspace, ".github/factory/WORKFLOW.md"),
+							);
+
+							if (digestOf(workflow) !== input.workflowDigest) return false;
+
+							const parsed = parseWorkflow({
+								text: workflow.toString("utf8"),
+								repo: input.repo,
+								env: (name) => process.env[name],
+							});
+
+							if (parsed.kind !== "valid") return false;
+
+							const runTokenCap = parsed.config.usage.maxTokensPerRun;
 
 							const gatesDigest = baseTreeDigest(
 								join(workspace, ".github/factory/gates"),
@@ -2329,9 +2331,10 @@ export function fileRunFiles(
 							policyPins.set(input.workflowSha, {
 								workflowDigest: input.workflowDigest,
 								gatesDigest,
+								runTokenCap,
 							});
 
-							return begin(gatesDigest);
+							return begin(gatesDigest, runTokenCap);
 						} catch {
 							return false;
 						} finally {
