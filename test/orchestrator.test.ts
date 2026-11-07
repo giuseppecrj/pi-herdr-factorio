@@ -2016,10 +2016,13 @@ describe("Orchestrator retries and stalls", () => {
 	});
 });
 
-async function replayAcceptGuard(
+async function replayAcceptStop(
 	input: StageLaunchInput,
-	guard: "tools" | "length" | "requests",
+	guard: "tools" | "length" | "requests" | "abort_model" | "abort_draft",
 ) {
+	const stop = new AbortController();
+	const interrupted = guard === "abort_model" || guard === "abort_draft";
+	let wallMs = 0;
 	const stdin = new PassThrough();
 	const stdout = new PassThrough();
 	let exit = (_code: number | null) => {};
@@ -2039,6 +2042,15 @@ async function replayAcceptGuard(
 		if (command.type === "abort")
 			emit({ type: "agent_settled", aborted: true });
 
+		if (command.type === "get_last_assistant_text")
+			emit({
+				type: "response",
+				id: command.id,
+				command: command.type,
+				success: true,
+				data: { text: ACCEPTANCE_TEXT },
+			});
+
 		if (command.type !== "prompt") return;
 
 		emit({
@@ -2052,12 +2064,23 @@ async function replayAcceptGuard(
 			type: "message_end",
 			message: {
 				role: "assistant",
-				stopReason: guard === "length" ? "length" : "toolUse",
+				stopReason:
+					guard === "length"
+						? "length"
+						: guard === "abort_draft"
+							? "stop"
+							: "toolUse",
 				provider: "openai",
 				model: "gpt-6.1-sol",
 				usage: { totalTokens: 70 },
 			},
 		});
+
+		if (guard === "abort_model") {
+			wallMs = 25;
+			stop.abort();
+		} else if (guard === "abort_draft")
+			emit({ type: "agent_settled", aborted: false });
 
 		if (guard === "tools")
 			for (const id of ["a", "b"])
@@ -2086,7 +2109,7 @@ async function replayAcceptGuard(
 	stdin.on("end", () => exit(0));
 
 	const host: StageHost = {
-		now: Date.now,
+		now: interrupted ? () => wallMs : Date.now,
 		cleanupReserveMs: 100,
 		assetsDigest: "a".repeat(64),
 		versions: { pi: "1.4.0", piHerdrAgents: "3.3.1", piHerdrPstack: "0.5.0" },
@@ -2121,7 +2144,22 @@ async function replayAcceptGuard(
 		stderrLog: async () => null,
 	};
 
-	return runStage(input, host);
+	return runStage(
+		{
+			...input,
+			signal: AbortSignal.any([input.signal, stop.signal]),
+			draftCheck:
+				guard !== "abort_draft"
+					? undefined
+					: async (_text, context) =>
+							new Promise((done) => {
+								context.signal.addEventListener("abort", () => done(null));
+								wallMs = 25;
+								stop.abort();
+							}),
+		},
+		host,
+	);
 }
 
 describe("Orchestrator base qualification", () => {
@@ -2349,10 +2387,16 @@ describe("Orchestrator base qualification", () => {
 
 	const refusals = (github: FakeGitHub) => keyed(github, 14, "base-refusal");
 
-	for (const guard of ["tools", "length", "requests"] as const)
+	for (const guard of [
+		"tools",
+		"length",
+		"requests",
+		"abort_model",
+		"abort_draft",
+	] as const)
 		for (const beforeFeedback of [true, false])
 			it(`retries a charged ${guard} stop ${beforeFeedback ? "before" : "during"} base feedback, preserving attempts across restart and the one-shot`, async () => {
-				const { github, executor, files, clock, start } = world();
+				const { github, executor, files, clock, start, logs } = world();
 				github.add(labeled(14));
 				executor.behaviors = [{ kind: "pass", usage: 10 }];
 				executor.acceptBehavior = { kind: "pass", usage: 20 };
@@ -2368,7 +2412,7 @@ describe("Orchestrator base qualification", () => {
 						executor.launches.push(input);
 						attempt = {
 							kind: "started",
-							done: replayAcceptGuard(input, guard),
+							done: replayAcceptStop(input, guard),
 						};
 					} else attempt = await launch(input);
 
@@ -2425,6 +2469,22 @@ describe("Orchestrator base qualification", () => {
 				const last = executor.launches.at(-1);
 				assert.equal(last?.remainingRunTokens, TRUSTED_RUN_CAP - 100);
 				assert.equal(last?.settings.maxTokens, ACCEPTANCE_MAX_TOKENS - 90);
+
+				if (guard === "abort_model" || guard === "abort_draft") {
+					assert.equal(
+						last?.settings.budget.wallMs,
+						900_000 - (beforeFeedback ? 1 : 26) - 4_000,
+					);
+					assert.equal(
+						logs.filter((log) => log.event === "accept_retry").length,
+						1,
+					);
+					assert.ok(
+						!statuses(github, 14).some((status) =>
+							status.endsWith(":budget_exhausted"),
+						),
+					);
+				}
 			});
 
 	it("refuses a broken suite twice before build with only the final keyed public reason", async () => {
@@ -2607,6 +2667,23 @@ describe("Orchestrator base qualification", () => {
 			"build-1",
 		]);
 		const [, first, retry, build] = executor.launches;
+		assert.ok(first?.acceptDraft);
+		assert.deepEqual(
+			retry?.acceptDraft,
+			first.acceptDraft,
+			"both attempts get the same immutable contract for private drafts",
+		);
+		assert.equal(first.acceptDraft.contract.runId, runOf(14));
+		assert.equal(first.acceptDraft.issue, 14);
+		assert.equal(
+			first.acceptDraft.baseSha,
+			first.acceptDraft.contract.base.sha,
+		);
+		assert.equal(
+			build?.acceptDraft,
+			undefined,
+			"held-out draft inputs never reach build",
+		);
 		assert.doesNotMatch(first?.prompt ?? "", /base-refusal/);
 
 		const block =
@@ -2918,6 +2995,7 @@ describe("Orchestrator base qualification", () => {
 		executor.acceptBehavior = { kind: "pass", usage: 20 };
 		executor.baseOutcomes = ["preservation_failed", "ready"];
 		executor.baseReceipt = (binding) => refusedReceipt(binding, FEEDBACK);
+		// Receipt usage includes the original generation plus same-session revisions.
 		executor.spentBy.set("accept-1", 18_000);
 		await drive(start(), clock);
 

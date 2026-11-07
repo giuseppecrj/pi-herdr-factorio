@@ -14,6 +14,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { scanSource, type Signal } from "../.github/factory/gates/scan.ts";
@@ -22,6 +23,8 @@ import { isDigest, digestOf } from "../src/run.ts";
 import { acceptanceEntries, type AcceptanceSuite } from "../src/accept.ts";
 import {
 	BASE_PROTOCOL_VERSION,
+	runtimeCause,
+	type DraftDetail,
 	oracleKey,
 	SCAN_RULES,
 	type SuiteSignal,
@@ -103,6 +106,7 @@ type RunInput = {
 	readonly cache?: string;
 	readonly archives?: string;
 	readonly dependencies?: string;
+	readonly detailReporter?: string;
 	readonly scope?: string;
 	readonly signal?: AbortSignal;
 };
@@ -872,6 +876,9 @@ export const localRunner: GateRunner = {
 		if (input.dependencies)
 			binds.push("--ro-bind", input.dependencies, "/w/node_modules");
 
+		if (input.detailReporter)
+			binds.push("--ro-bind", input.detailReporter, "/d");
+
 		const args = [
 			"--die-with-parent",
 			"--new-session",
@@ -1037,7 +1044,7 @@ async function install(
 	});
 }
 
-function testArgv(files: readonly string[]): string[] {
+function testArgv(files: readonly string[], details = false): string[] {
 	return [
 		"node",
 		"--import",
@@ -1048,6 +1055,16 @@ function testArgv(files: readonly string[]): string[] {
 		"--test-timeout=60000",
 		"--test-reporter",
 		"/g/reporter.mjs",
+		...(details
+			? [
+					"--test-reporter-destination",
+					"stdout",
+					"--test-reporter",
+					"/d/draft-reporter.mjs",
+					"--test-reporter-destination",
+					"stderr",
+				]
+			: []),
 		...files,
 	];
 }
@@ -1334,6 +1351,72 @@ function privateExecution(
 	};
 }
 
+export function parseDraftDetails(
+	text: string,
+	files: readonly string[],
+): readonly DraftDetail[] | null {
+	if (Buffer.byteLength(text) > 1024 * 1024) return null;
+	const value = objectOf(parseJson(text.trim()));
+	const raw = arrayOf(fieldOf(value, "failures"));
+
+	if (
+		fieldOf(value, "complete") !== true ||
+		fieldOf(value, "invalid") !== false ||
+		fieldOf(value, "truncated") !== false ||
+		raw === null ||
+		raw.length > 1000
+	)
+		return null;
+	const details: DraftDetail[] = [];
+
+	for (const item of raw) {
+		const v = objectOf(item),
+			file = textOf(fieldOf(v, "file")),
+			name = textOf(fieldOf(v, "name")),
+			message = textOf(fieldOf(v, "message")),
+			kind = fieldOf(v, "kind"),
+			code = fieldOf(v, "code"),
+			causes = textsOf(fieldOf(v, "causes")),
+			at = textsOf(fieldOf(v, "at"));
+
+		if (
+			file === null ||
+			!files.includes(file) ||
+			name === null ||
+			name.length > 300 ||
+			message === null ||
+			message.length > 300 ||
+			(code !== null &&
+				(textOf(code) === null || (textOf(code)?.length ?? 0) > 100)) ||
+			causes === null ||
+			causes.length > 3 ||
+			causes.some(
+				(c) => c.length > 200 || !/^(?:[A-Z][A-Za-z]*Error\b|Error:)/.test(c),
+			) ||
+			at === null ||
+			at.length > 3 ||
+			at.some(
+				(f) =>
+					f.length > 400 ||
+					!/^\/w\/test\/acceptance\/[A-Za-z0-9_-]+\/checks\/[A-Za-z0-9_./-]+:\d+:\d+$/.test(
+						f,
+					),
+			) ||
+			(kind !== "assertion" &&
+				kind !== "runtime_error" &&
+				kind !== "load_error" &&
+				kind !== "timeout" &&
+				kind !== "skip" &&
+				kind !== "todo" &&
+				kind !== "cancelled")
+		)
+			return null;
+		details.push({ file, name, kind, code: textOf(code), message, causes, at });
+	}
+
+	return details;
+}
+
 function publicFailurePaths(
 	summary: JsonObject | null,
 	files: readonly string[],
@@ -1466,7 +1549,7 @@ async function dependencyCache(
 	return job;
 }
 
-export async function runHeldoutBase(input: {
+type BaseRunInput = {
 	readonly tree: string;
 	readonly refused?: "tree_partial" | "tree_refused" | "tree_unavailable";
 	readonly workDir: string;
@@ -1480,8 +1563,35 @@ export async function runHeldoutBase(input: {
 	readonly scope?: string;
 	readonly signal?: AbortSignal;
 	readonly runner?: GateRunner;
-}): Promise<BaseEvidence> {
+};
+
+export async function runHeldoutBase(
+	input: BaseRunInput,
+): Promise<BaseEvidence> {
+	return runBase(input, []);
+}
+
+export async function runDraftBase(
+	input: BaseRunInput,
+): Promise<{ evidence: BaseEvidence; details: readonly DraftDetail[] }> {
+	const details: DraftDetail[] = [];
+	const evidence = await runBase(input, details);
+
+	return { evidence, details };
+}
+
+async function runBase(
+	input: BaseRunInput,
+	details: DraftDetail[],
+): Promise<BaseEvidence> {
 	const runner = input.runner ?? localRunner;
+	const detailReporter = fileURLToPath(new URL("./gates/", import.meta.url));
+
+	const detailBytes = readFileSync(
+		join(detailReporter, "draft-reporter.mjs"),
+		"utf8",
+	);
+
 	const gates = join(input.tree, ".github/factory/gates");
 
 	const gateBytes = ["reporter.mjs", "freeze.mjs", "scan-rules.json"].map(
@@ -1501,7 +1611,9 @@ export async function runHeldoutBase(input: {
 		node: process.version,
 		platform: `${process.platform}/${process.arch}`,
 		bwrap: "unavailable",
-		protocolDigest: digestOf(BASE_PROTOCOL_VERSION + JSON.stringify(gateBytes)),
+		protocolDigest: digestOf(
+			BASE_PROTOCOL_VERSION + JSON.stringify(gateBytes) + detailBytes,
+		),
 	};
 
 	const scenarios = input.suite.scenarios.map((s) => {
@@ -1652,10 +1764,58 @@ export async function runHeldoutBase(input: {
 				tree,
 				gates,
 				dependencies: dependency,
-				argv: testArgv(files),
+				detailReporter,
+				argv: testArgv(files, true),
 			});
 
-			return privateExecution(result, files, Date.now() - started);
+			const execution = privateExecution(result, files, Date.now() - started);
+
+			if (execution.kind !== "observed") return execution;
+			const parsed = parseDraftDetails(result.stderr, files);
+			const failures = execution.files.flatMap((f) => f.failures);
+
+			const identity = (
+				f: Pick<DraftDetail, "file" | "name" | "kind" | "code" | "message">,
+			) =>
+				JSON.stringify([
+					f.file,
+					f.name,
+					f.kind,
+					f.code,
+					f.message.slice(0, 200),
+				]);
+
+			if (
+				parsed === null ||
+				JSON.stringify(parsed.map(identity).sort()) !==
+					JSON.stringify(failures.map(identity).sort())
+			)
+				return {
+					kind: "unavailable",
+					reason: "invalid_report",
+					wallMs: execution.wallMs,
+				};
+			details.push(...parsed);
+
+			// A wrapped runtime error is never an expected assertion red. All other
+			// refusal facts stay intact: the companion can only strengthen this gate.
+			return {
+				...execution,
+				files: execution.files.map((f) => ({
+					...f,
+					failures: f.failures.map((failure) =>
+						failure.kind === "assertion" &&
+						parsed.some(
+							(d) =>
+								d.file === failure.file &&
+								d.name === failure.name &&
+								d.causes.some(runtimeCause),
+						)
+							? { ...failure, kind: "runtime_error" as const }
+							: failure,
+					),
+				})),
+			};
 		};
 
 		execution = await once();

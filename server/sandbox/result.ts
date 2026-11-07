@@ -356,6 +356,9 @@ export type StageReceipt = {
 	/** Absent on legacy receipts; null fields mean unavailable, never zero. */
 	readonly efficiency?: EfficiencyFacts;
 	readonly guardStop?: GuardStop | null;
+	readonly draftRuns?: number;
+	readonly draftRevisionTokens?: number;
+	readonly draftSkips?: readonly ("tokens" | "wall")[];
 	/**
 	 * The answering session's family, from this attempt's request journal when
 	 * the host wrote the receipt. Absent on receipts written before F10c and

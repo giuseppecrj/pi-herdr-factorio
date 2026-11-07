@@ -283,6 +283,27 @@ describe("held-out acceptance output", () => {
 			assert.ok(prompt.includes(`"${field}":`), field);
 	});
 
+	it("prompt and acceptance skill agree on controller draft revisions and no nested runners", () => {
+		const prompt = acceptancePrompt({
+			contract,
+			files: [],
+			inlined: [],
+			guidance: { general: "", stages: {} },
+		});
+
+		const skill = readFileSync("skills/acceptance/SKILL.md", "utf8");
+
+		for (const text of [prompt, skill]) {
+			assert.match(text, /controller may run/i);
+			assert.match(text, /same session/);
+			assert.match(text, /complete suite, not a patch/);
+			assert.match(text, /do not spawn a nested test runner/);
+		}
+
+		assert.match(skill, /Do not run tests or write files/);
+		assert.ok(prompt.includes(SCAN_SENTENCE));
+	});
+
 	it("states the process.cwd() repository-root rule and the exact four-level depth from checks/", () => {
 		const prompt = acceptancePrompt({
 			contract,

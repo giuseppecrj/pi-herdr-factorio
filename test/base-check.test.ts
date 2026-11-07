@@ -22,10 +22,16 @@ import {
 	contractDigestOf,
 	type Contract,
 } from "../src/specify.ts";
-import { baseTreeDigest, exportTree, runHeldoutBase } from "../server/gates.ts";
+import {
+	baseTreeDigest,
+	exportTree,
+	runHeldoutBase,
+	runDraftBase,
+} from "../server/gates.ts";
 import {
 	checkoutWorkspace,
 	controllerBaseChecker,
+	controllerDraftChecker,
 	fileRunFiles,
 } from "../server/controller.ts";
 import {
@@ -35,6 +41,7 @@ import {
 	parseBaseReceipt,
 	retryableBaseReason,
 	type BaseReason,
+	draftCheckFeedback,
 } from "../src/diagnosis.ts";
 import { digestOf } from "../src/run.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
@@ -439,8 +446,52 @@ export async function baseFixture(
 		deadline: startedAt + timeout,
 	});
 
-	return { root, tree, contract, binding, evidence, ...assessBase(evidence) };
+	return {
+		root,
+		tree,
+		contract,
+		binding,
+		evidence,
+		suite: parsed.suite,
+		...assessBase(evidence),
+	};
 }
+
+where(
+	bwrap,
+	"P7 draft and official base veto a wrapped runtime cause, not expected red",
+	async (t) => {
+		const f = await baseFixture(
+			t,
+			`${prefix}test('wrapped',()=>assert.fail('noise'.repeat(150)+'\\nReferenceError: readDurableAccounting is not defined'));`,
+		);
+
+		assert.equal(f.receipt.results[0]?.result, "base_non_assertion_failure");
+
+		const draft = await runDraftBase({
+			tree: f.tree,
+			workDir: join(f.root, "draft-1"),
+			cacheDir: join(f.root, "dependencies"),
+			binding: f.binding,
+			contract: f.contract,
+			suite: f.suite,
+			canary: `factory-holdout-${"1".repeat(64)}`,
+			startedAt: Date.now(),
+			deadline: Date.now() + 10000,
+		});
+
+		assert.deepEqual(
+			assessBase(draft.evidence).receipt.results,
+			f.receipt.results,
+		);
+		assert.match(
+			JSON.stringify(draft.details),
+			/ReferenceError.*readDurableAccounting/,
+		);
+		assert.equal(existsSync(join(f.root, "acceptance")), false);
+		assert.equal(existsSync(join(f.root, "base-check")), false);
+	},
+);
 
 for (const [name, source, want, kind] of cases)
 	where(bwrap, `isolated base: ${name}`, async (t) => {
@@ -856,6 +907,311 @@ async function controllerWorld(
 		fetch,
 	};
 }
+
+test("controller draft checks are private, reuse a fresh tarball and never use the stored canary or official receipt store", async (t) => {
+	const w = await controllerWorld(t);
+	const stageDir = join(w.state, "stages", w.contract.runId, "accept-2");
+	const canaries: string[] = [];
+
+	const storedCanary = readFileSync(
+		join(w.state, "acceptance", w.contract.runId, "canary.txt"),
+		"utf8",
+	).trim();
+
+	const text = JSON.stringify({
+		version: 2,
+		scenarios: [
+			{ id: "S1", criteria: ["A1"], checks: ["one.test.mjs"], judge: null },
+			{ id: "S2", criteria: ["A2"], checks: ["two.test.mjs"], judge: null },
+		],
+		files: [
+			{
+				path: "one.test.mjs",
+				type: "node:test",
+				content: `${prefix}test('red',()=>assert.equal(1,2));`,
+			},
+			{
+				path: "two.test.mjs",
+				type: "node:test",
+				content: `${prefix}test('kept',()=>{});`,
+			},
+		],
+	});
+
+	const check = controllerDraftChecker({
+		stateDir: w.state,
+		stageDir,
+		attempt: 2,
+		input: {
+			contract: w.contract,
+			digest: w.binding.contractDigest,
+			repo: w.binding.repo,
+			issue: w.binding.issue,
+			baseSha: w.sha,
+		},
+		fetch: w.fetch,
+		runner: {
+			kind: "draft-inspect",
+			async run(input) {
+				assert.ok(input.argv.includes("/d/draft-reporter.mjs"));
+				assert.match(input.scope ?? "", /-draftcheck-2-/);
+				assert.ok(input.detailReporter?.endsWith("server/gates/"));
+
+				const file = "test/acceptance/7/checks/one.test.mjs",
+					other = "test/acceptance/7/checks/two.test.mjs";
+
+				const source = readFileSync(join(input.tree, file), "utf8");
+				const canary = /factory-holdout-[a-f0-9]{64}/.exec(source)?.[0];
+				assert.ok(canary);
+				canaries.push(canary);
+
+				const failure = {
+					file,
+					name: "red",
+					message: `assertion ${canary}`,
+					code: "ERR_ASSERTION",
+					kind: "assertion",
+				};
+
+				return {
+					exitCode: 1,
+					stdout: JSON.stringify({
+						complete: true,
+						bad: true,
+						invalid: false,
+						truncated: false,
+						counts: { [file]: 1, [other]: 1 },
+						failures: [failure],
+					}),
+					stderr: JSON.stringify({
+						complete: true,
+						invalid: false,
+						truncated: false,
+						failures: [{ ...failure, causes: [], at: [] }],
+					}),
+				};
+			},
+		},
+	});
+
+	assert.equal(
+		await check("malformed", {
+			signal: w.signal,
+			deadline: Date.now() + 60000,
+			run: 1,
+		}),
+		null,
+	);
+	assert.equal(w.counter.fetches, 0);
+
+	for (const run of [1, 2] as const) {
+		const feedback = await check(text, {
+			signal: w.signal,
+			deadline: Date.now() + 60000,
+			run,
+		});
+
+		assert.equal(feedback?.verdict, "would_qualify");
+		assert.doesNotMatch(JSON.stringify(feedback), /factory-holdout-/);
+		assert.equal(
+			statSync(join(stageDir, `draft-${run}.json`)).mode & 0o777,
+			0o600,
+		);
+		assert.equal(existsSync(join(stageDir, `draft-${run}`)), false);
+	}
+
+	assert.equal(w.counter.fetches, 1);
+	assert.equal(canaries.length, 4);
+	assert.equal(canaries.includes(storedCanary), false);
+	assert.notEqual(canaries[0], canaries[2]);
+	assert.equal(existsSync(join(w.state, "base-check")), false);
+	assert.equal(
+		readFileSync(
+			join(w.state, "acceptance", w.contract.runId, "canary.txt"),
+			"utf8",
+		).trim(),
+		storedCanary,
+	);
+});
+
+where(
+	bwrap,
+	"official base refuses missing or malformed detail evidence rather than qualifying a truncated stdout assertion",
+	async (t) => {
+		const f = await baseFixture(
+			t,
+			`${prefix}test('red',()=>assert.equal(1,2));`,
+		);
+
+		const file = "test/acceptance/1/checks/shape.test.mjs";
+
+		const failure = {
+			file,
+			name: "red",
+			message: "red",
+			code: "ERR_ASSERTION",
+			kind: "assertion",
+		};
+
+		for (const stderr of [
+			"",
+			"{}",
+			JSON.stringify({
+				complete: true,
+				invalid: false,
+				truncated: true,
+				failures: [],
+			}),
+			JSON.stringify({
+				complete: true,
+				invalid: false,
+				truncated: false,
+				failures: [],
+			}),
+		]) {
+			const evidence = await runHeldoutBase({
+				tree: f.tree,
+				workDir: join(f.root, "invalid"),
+				cacheDir: join(f.root, "dependencies"),
+				binding: f.binding,
+				contract: f.contract,
+				suite: f.suite,
+				canary: `factory-holdout-${"1".repeat(64)}`,
+				startedAt: Date.now(),
+				deadline: Date.now() + 10000,
+				runner: {
+					kind: "missing-detail",
+					async run() {
+						return {
+							exitCode: 1,
+							stdout: JSON.stringify({
+								complete: true,
+								bad: true,
+								invalid: false,
+								truncated: false,
+								counts: { [file]: 1 },
+								failures: [failure],
+							}),
+							stderr,
+						};
+					},
+				},
+			});
+
+			assert.equal(
+				assessBase(evidence).receipt.results[0]?.result,
+				"base_evidence_missing",
+			);
+		}
+	},
+);
+
+test("detail correlation follows trusted failures by identity, not scenario enumeration order", async (t) => {
+	const w = await controllerWorld(t);
+
+	const files = fileRunFiles(w.state),
+		stored = await files.artifacts.read(
+			w.contract.runId,
+			w.contract,
+			w.binding.contractDigest,
+		);
+
+	assert.ok(stored.kind === "found");
+
+	const failures = ["loads.test.mjs", "two.test.mjs"].map((name) => ({
+		file: `test/acceptance/7/checks/${name}`,
+		name: "failure",
+		message: "red",
+		kind: "assertion",
+		code: "ERR_ASSERTION",
+	}));
+
+	const tree = join(w.root, "order-source");
+	await exportTree(w.source, w.sha, tree);
+
+	const evidence = await runHeldoutBase({
+		tree,
+		workDir: join(w.root, "order"),
+		cacheDir: join(w.root, "deps"),
+		binding: w.binding,
+		contract: w.contract,
+		suite: stored.suite,
+		canary: `factory-holdout-${"3".repeat(64)}`,
+		startedAt: Date.now(),
+		deadline: Date.now() + 10000,
+		runner: {
+			kind: "ordered-events",
+			async run() {
+				return {
+					exitCode: 1,
+					stdout: JSON.stringify({
+						complete: true,
+						bad: true,
+						invalid: false,
+						truncated: false,
+						counts: Object.fromEntries(failures.map((f) => [f.file, 1])),
+						failures,
+					}),
+					stderr: JSON.stringify({
+						complete: true,
+						invalid: false,
+						truncated: false,
+						failures: failures.map((f) => ({ ...f, causes: [], at: [] })),
+					}),
+				};
+			},
+		},
+	});
+
+	assert.deepEqual(
+		assessBase(evidence).receipt.results.map((r) => r.result),
+		["expected_red", "preservation_failed"],
+	);
+});
+
+where(
+	bwrap,
+	"P6 native literal and procs replay feedback keeps both root causes",
+	async (t) => {
+		for (const [source, kind, reason, pattern] of [
+			[
+				"test('literal',()=>assert.equal('readable','available'));",
+				"preservation",
+				"preservation_failed",
+				/readable.*available/s,
+			],
+			[
+				"test('procs',()=>{const input={};const {self}=input.procs;assert.ok(self);});",
+				"new_behavior",
+				"base_non_assertion_failure",
+				/input.procs/,
+			],
+		] as const) {
+			const f = await baseFixture(t, prefix + source, kind);
+
+			const draft = await runDraftBase({
+				tree: f.tree,
+				workDir: join(f.root, "draft"),
+				cacheDir: join(f.root, "dependencies"),
+				binding: f.binding,
+				contract: f.contract,
+				suite: f.suite,
+				canary: `factory-holdout-${"2".repeat(64)}`,
+				startedAt: Date.now(),
+				deadline: Date.now() + 10000,
+			});
+
+			const feedback = draftCheckFeedback(
+				assessBase(draft.evidence).receipt,
+				draft.details,
+				1,
+			);
+
+			assert.equal(feedback.reason, reason);
+			assert.match(feedback.files[0]?.failures[0]?.message ?? "", pattern);
+		}
+	},
+);
 
 async function settled(
 	checker: ReturnType<typeof controllerBaseChecker>,

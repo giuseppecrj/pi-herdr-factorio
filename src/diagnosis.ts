@@ -439,7 +439,7 @@ export function oracleKey(
 	};
 }
 
-export const BASE_PROTOCOL_VERSION = "heldout-base-v2-3";
+export const BASE_PROTOCOL_VERSION = "heldout-base-v2-4";
 
 const UNSUPPORTED_TREE: ReadonlySet<string> = new Set([
 	"tree_partial",
@@ -1061,6 +1061,224 @@ export function baseRetryFeedback(
 		kept++;
 
 	return feedback(kept, entries.length - kept);
+}
+
+export const DRAFT_FEEDBACK_BYTES = 6144;
+export const DRAFT_MESSAGE_CHARS = 300;
+export const DRAFT_CAUSE_CHARS = 200;
+
+export type DraftDetail = Readonly<{
+	file: string;
+	name: string;
+	kind: TestFailure["kind"];
+	code?: string | null;
+	message: string;
+	causes: readonly string[];
+	at: readonly string[];
+}>;
+
+export type DraftFailure = Readonly<{
+	test: string;
+	kind: TestFailure["kind"];
+	code: string | null;
+	message: string;
+	causes: readonly string[];
+	at: readonly string[];
+}>;
+
+export type DraftFileFeedback = Readonly<{
+	scenario: string;
+	file: string;
+	kind: CriterionKind;
+	result: ScenarioBaseResult["result"];
+	qualifies: boolean;
+	suspect: boolean;
+	registered: number;
+	failedIn: "both" | "first" | "repeat" | "neither";
+	failures: readonly DraftFailure[];
+	omittedFailures: number;
+}>;
+
+export type DraftFeedback = Readonly<{
+	run: 1 | 2;
+	verdict: "would_qualify" | "would_refuse";
+	reason: BaseReason | null;
+	sentence: string | null;
+	files: readonly DraftFileFeedback[];
+	signals?: readonly SuiteSignal[];
+	omitted: number;
+}>;
+
+export function runtimeCause(cause: string): boolean {
+	return (
+		/^(?:[A-Z][A-Za-z]*Error\b|Error:)/.test(cause.trim()) &&
+		!/^AssertionError\b/.test(cause.trim())
+	);
+}
+
+function draftText(text: string, limit: number): string {
+	return text
+		.replace(
+			new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "g"),
+			"",
+		)
+		.replace(/factory-holdout-[a-f0-9]+/g, "[canary]")
+		.split("\n")
+		.filter((line) => !/^\s*at\s/.test(line))
+		.join("\n")
+		.replace(/(?:file:\/\/)?\/(?:[A-Za-z0-9_.%:@+-]+\/?)+/g, "[path]")
+		.slice(0, limit);
+}
+
+/** Private facts about the author's own draft, never a qualification proof. */
+export function draftCheckFeedback(
+	receipt: BaseReceipt,
+	details: readonly DraftDetail[],
+	issue: number,
+): DraftFeedback {
+	const { assessment } = assessBase(receipt.evidence);
+
+	const reason =
+		assessment.kind === "refused" ? assessment.failure.reason : null;
+
+	const prefix = `test/acceptance/${issue}/checks/`;
+
+	const checkFiles = new Set(
+		receipt.evidence.scenarios.flatMap((s) =>
+			s.mode === "checked" ? [s.file] : [],
+		),
+	);
+
+	const observe = (run: PrivateExecution, file: string) =>
+		run.kind === "observed"
+			? run.files.find((f) => f.file === file)
+			: undefined;
+
+	const candidates: DraftFileFeedback[] = receipt.evidence.scenarios.flatMap(
+		(s) => {
+			if (s.mode !== "checked") return [];
+
+			const first = observe(receipt.evidence.execution, s.file),
+				repeat = observe(receipt.evidence.repeat, s.file);
+
+			const result =
+				receipt.results.find((r) => r.scenario === s.scenario)?.result ??
+				"base_evidence_missing";
+
+			const raw: readonly DraftDetail[] = details.some((d) => d.file === s.file)
+				? details.filter((d) => d.file === s.file)
+				: [...(first?.failures ?? []), ...(repeat?.failures ?? [])].map(
+						(f) => ({ ...f, causes: [], at: [] }),
+					);
+
+			const unique = [
+				...new Map(raw.map((f) => [JSON.stringify(f), f])).values(),
+			];
+
+			const failures: DraftFailure[] = unique.slice(0, 2).map((f) => ({
+				test: draftText(f.name, 120),
+				kind: f.kind,
+				code:
+					draftText(
+						f.code ??
+							first?.failures.find((x) => x.name === f.name)?.code ??
+							"",
+						40,
+					) || null,
+				message: draftText(f.message, DRAFT_MESSAGE_CHARS),
+				causes: [
+					...new Set(f.causes.map((c) => draftText(c, DRAFT_CAUSE_CHARS))),
+				].slice(0, 3),
+				at: [
+					...new Set(
+						f.at.flatMap((frame) => {
+							const relative = frame.replace(/^\/w\//, "");
+
+							const own =
+								relative.startsWith(prefix) &&
+								checkFiles.has(relative.replace(/:\d+:\d+$/, ""))
+									? relative.slice(prefix.length)
+									: "";
+
+							return /^(?!.*(?:^|\/)\.\.?\/)[A-Za-z0-9_./-]+:\d+:\d+$/.test(own)
+								? [own]
+								: [];
+						}),
+					),
+				].slice(0, 3),
+			}));
+
+			const a = (first?.failures.length ?? 0) > 0,
+				b = (repeat?.failures.length ?? 0) > 0;
+
+			return [
+				{
+					scenario: s.scenario,
+					file: s.file.startsWith(prefix)
+						? s.file.slice(prefix.length)
+						: draftText(s.file, 300),
+					kind: s.kind,
+					result,
+					qualifies: result === "expected_red" || result === "preserved",
+					suspect:
+						result === "expected_red" &&
+						raw.some((f) => f.causes.some(runtimeCause)),
+					registered: first?.registered ?? repeat?.registered ?? 0,
+					failedIn: a ? (b ? "both" : "first") : b ? "repeat" : "neither",
+					failures,
+					omittedFailures: Math.max(0, unique.length - failures.length),
+				},
+			];
+		},
+	);
+
+	const signals = (receipt.evidence.tamper ?? []).map((s) => ({
+		...s,
+		file: s.file.startsWith(prefix)
+			? s.file.slice(prefix.length)
+			: draftText(s.file, 300),
+	}));
+
+	const feedback = (files: number, hits: number): DraftFeedback => {
+		const value: DraftFeedback = {
+			run: 1,
+			verdict: reason === null ? "would_qualify" : "would_refuse",
+			reason,
+			sentence: reason === null ? null : BASE_REASON_SENTENCES[reason],
+			files: candidates.slice(0, files),
+			omitted: candidates.length - files + signals.length - hits,
+		};
+
+		return signals.length > 0
+			? { ...value, signals: signals.slice(0, hits) }
+			: value;
+	};
+
+	const size = (f: DraftFeedback) =>
+		Buffer.byteLength(JSON.stringify(f).replaceAll("<", "\\u003c"));
+
+	let files = 0,
+		hits = 0;
+
+	while (
+		files < candidates.length &&
+		size(feedback(files + 1, hits)) <= DRAFT_FEEDBACK_BYTES
+	)
+		files++;
+
+	while (
+		hits < signals.length &&
+		size(feedback(files, hits + 1)) <= DRAFT_FEEDBACK_BYTES
+	)
+		hits++;
+
+	return feedback(files, hits);
+}
+
+export function draftNeedsRevision(feedback: DraftFeedback): boolean {
+	return feedback.reason === null
+		? feedback.files.some((f) => f.suspect)
+		: retryableBaseReason(feedback.reason);
 }
 
 export function baseRefusalNotice(failure: BaseRefusal) {

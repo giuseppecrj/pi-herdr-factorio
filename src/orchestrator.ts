@@ -191,6 +191,13 @@ export type StageLaunchInput = {
 	readonly prompt: string;
 	readonly source?: SourceFacts;
 	readonly specify?: SpecifyReviewInput;
+	readonly acceptDraft?: {
+		readonly contract: Contract;
+		readonly digest: ContractDigest;
+		readonly repo: RepoSlug;
+		readonly issue: number;
+		readonly baseSha: GitSha;
+	};
 	readonly round?: number;
 	readonly review?: ReviewPreparation;
 	readonly build?: {
@@ -4694,6 +4701,16 @@ export class Orchestrator {
 			prompt: prepared.prompt,
 			source: prepared.source,
 			specify: prepared.specify,
+			acceptDraft:
+				stage === "accept" && prepared.inputs?.contract !== undefined
+					? {
+							contract: prepared.inputs.contract.contract,
+							digest: prepared.inputs.contract.digest,
+							repo: prepared.inputs.contract.contract.base.repo,
+							issue: run.issue,
+							baseSha: prepared.inputs.contract.contract.base.sha,
+						}
+					: undefined,
 			tools:
 				prepared.inputs === null
 					? []
