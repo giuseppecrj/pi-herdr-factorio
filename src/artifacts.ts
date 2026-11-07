@@ -33,6 +33,7 @@ import {
 	type ContractDigest,
 	contractBytes,
 	contractDigestOf,
+	isContractDigest,
 	parseSpecifyOutput,
 	isAnswersDigest,
 	isQuestionsDigest,
@@ -65,6 +66,8 @@ export type ContractRead =
 
 export type AcceptanceReceipt = {
 	readonly version: 1;
+	/** Absent only on legacy receipts; never inferred from a later check attempt. */
+	readonly storedAttempt?: number;
 	readonly runId: Digest;
 	readonly acceptanceDigest: Digest;
 	readonly contractDigest: ContractDigest;
@@ -98,6 +101,11 @@ export type AcceptanceRead =
 	  };
 
 export interface ArtifactStore {
+	/** Reads the bound receipt, including a retired suite's receipt, without serving its tests. */
+	receipt(
+		runId: Digest,
+		acceptanceDigest: Digest,
+	): Promise<AcceptanceReceipt | null>;
 	read(
 		runId: Digest,
 		contract: Contract,
@@ -109,6 +117,7 @@ export interface ArtifactStore {
 		readonly suite: AcceptanceSuite;
 		readonly model: string;
 		readonly observed: string | null;
+		readonly storedAttempt?: number;
 		/** Absent writes the legacy receipt shape, with no family evidence. */
 		readonly family?: FamilyInput;
 	}): Promise<AcceptanceRead>;
@@ -412,6 +421,59 @@ export function readStoredContract(
 	}
 }
 
+function parseAcceptanceReceipt(
+	text: string,
+	runId: Digest,
+): AcceptanceReceipt | null {
+	const record = objectOf(parseJson(text));
+	const acceptanceDigest = textOf(fieldOf(record, "acceptanceDigest")) ?? "";
+	const contractDigest = textOf(fieldOf(record, "contractDigest")) ?? "";
+	const baseSha = textOf(fieldOf(record, "baseSha")) ?? "";
+	const model = textOf(fieldOf(record, "model"));
+	const provider = textOf(fieldOf(record, "provider"));
+	const observed = fieldOf(record, "observed");
+	const stored = fieldOf(record, "family");
+	const family = stored === undefined ? null : parseFamily(stored);
+
+	const isolation =
+		family === null ? ACCEPTANCE_ISOLATION : familyLabel(family);
+
+	const rawAttempt = fieldOf(record, "storedAttempt");
+	const storedAttempt = countOf(rawAttempt);
+
+	if (
+		!isDigest(acceptanceDigest) ||
+		!isContractDigest(contractDigest) ||
+		!isGitSha(baseSha) ||
+		fieldOf(record, "version") !== 1 ||
+		fieldOf(record, "runId") !== runId ||
+		(stored !== undefined && family === null) ||
+		fieldOf(record, "isolation") !== isolation ||
+		model === null ||
+		provider !== model.split("/")[0] ||
+		(observed !== null && textOf(observed) === null) ||
+		(rawAttempt !== undefined && (storedAttempt === null || storedAttempt < 1))
+	)
+		return null;
+
+	const receipt: AcceptanceReceipt = withFamily(
+		{
+			version: 1,
+			runId,
+			acceptanceDigest,
+			contractDigest,
+			baseSha,
+			model,
+			provider,
+			observed: textOf(observed),
+			isolation,
+		},
+		family,
+	);
+
+	return storedAttempt === null ? receipt : { ...receipt, storedAttempt };
+}
+
 export function fileArtifacts(stateDir: string): ArtifactStore {
 	const root = join(resolve(stateDir), "acceptance");
 
@@ -435,33 +497,15 @@ export function fileArtifacts(stateDir: string): ArtifactStore {
 
 			if (regularText(regenerationGuard(root, runId)) !== receiptText)
 				return { kind: "blocked", reason: "acceptance_changed" };
-			const record = objectOf(parseJson(receiptText));
-
-			const acceptanceDigest =
-				textOf(fieldOf(record, "acceptanceDigest")) ?? "";
-
-			const model = textOf(fieldOf(record, "model"));
-			const provider = textOf(fieldOf(record, "provider"));
-			const observed = fieldOf(record, "observed");
-			const stored = fieldOf(record, "family");
-			const family = stored === undefined ? null : parseFamily(stored);
-
-			const isolation =
-				family === null ? ACCEPTANCE_ISOLATION : familyLabel(family);
+			const receipt = parseAcceptanceReceipt(receiptText, runId);
 
 			if (
-				!isDigest(acceptanceDigest) ||
-				fieldOf(record, "version") !== 1 ||
-				fieldOf(record, "runId") !== runId ||
-				fieldOf(record, "contractDigest") !== digest ||
-				fieldOf(record, "baseSha") !== contract.base.sha ||
-				(stored !== undefined && family === null) ||
-				fieldOf(record, "isolation") !== isolation ||
-				model === null ||
-				provider !== model.split("/")[0] ||
-				(observed !== null && textOf(observed) === null)
+				receipt === null ||
+				receipt.contractDigest !== digest ||
+				receipt.baseSha !== contract.base.sha
 			)
 				return { kind: "blocked", reason: "acceptance_invalid" };
+			const { acceptanceDigest } = receipt;
 			const canary = regularText(join(dir, "canary.txt")).trimEnd();
 
 			const kept = objectOf(
@@ -520,20 +564,7 @@ export function fileArtifacts(stateDir: string): ArtifactStore {
 			return {
 				kind: "found",
 				suite: parsed.suite,
-				receipt: withFamily(
-					{
-						version: 1,
-						runId,
-						acceptanceDigest,
-						contractDigest: digest,
-						baseSha: contract.base.sha,
-						model,
-						provider,
-						observed: textOf(observed),
-						isolation,
-					},
-					family,
-				),
+				receipt,
 			};
 		} catch (error) {
 			return {
@@ -548,6 +579,31 @@ export function fileArtifacts(stateDir: string): ArtifactStore {
 
 	return {
 		read,
+		async receipt(runId, acceptanceDigest) {
+			const retired = join(root, `${runId}.retired`);
+
+			for (const { dir, guard } of [
+				{ dir: join(root, runId), guard: regenerationGuard(root, runId) },
+				{ dir: join(retired, "suite"), guard: join(retired, "guard.json") },
+				// Retirement moves the suite before its guard; either location attests it.
+				{ dir: join(retired, "suite"), guard: regenerationGuard(root, runId) },
+			]) {
+				try {
+					checkPrivateDir(root);
+					checkPrivateDir(dir);
+					const text = regularText(join(dir, "receipt.json"));
+
+					if (text !== regularText(guard)) continue;
+					const receipt = parseAcceptanceReceipt(text, runId);
+
+					if (receipt?.acceptanceDigest === acceptanceDigest) return receipt;
+				} catch {
+					/* Missing or damaged evidence never attests an attempt. */
+				}
+			}
+
+			return null;
+		},
 		async retire(runId, contract, digest, acceptanceDigest) {
 			const marker = retirementMarker(root, runId);
 			const aside = join(root, `${runId}.retired`);
@@ -608,8 +664,21 @@ export function fileArtifacts(stateDir: string): ArtifactStore {
 			}
 		},
 		async store(input) {
-			const { contract, contractDigest, suite, model, observed, family } =
-				input;
+			const {
+				contract,
+				contractDigest,
+				suite,
+				model,
+				observed,
+				family,
+				storedAttempt,
+			} = input;
+
+			if (
+				storedAttempt !== undefined &&
+				(!Number.isSafeInteger(storedAttempt) || storedAttempt < 1)
+			)
+				return { kind: "blocked", reason: "acceptance_invalid" };
 
 			const previous = await read(contract.runId, contract, contractDigest);
 
@@ -634,7 +703,7 @@ export function fileArtifacts(stateDir: string): ArtifactStore {
 			)
 				return { kind: "blocked", reason: "acceptance_invalid" };
 
-			const receipt: AcceptanceReceipt = withFamily(
+			const baseReceipt: AcceptanceReceipt = withFamily(
 				{
 					version: 1,
 					runId: contract.runId,
@@ -649,6 +718,11 @@ export function fileArtifacts(stateDir: string): ArtifactStore {
 				},
 				family,
 			);
+
+			const receipt: AcceptanceReceipt =
+				storedAttempt === undefined
+					? baseReceipt
+					: { ...baseReceipt, storedAttempt };
 
 			try {
 				privateDir(root);

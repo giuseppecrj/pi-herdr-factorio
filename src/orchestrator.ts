@@ -244,7 +244,7 @@ import {
 	retryableBaseReason,
 	retryPending,
 	type BaseCheckProgress,
-	type BaseCheckReference,
+	type AcceptanceQualification,
 	type BaseRefusal,
 	type RetryFeedback,
 } from "./diagnosis.ts";
@@ -375,7 +375,7 @@ function isModelStage(stage: Stage): stage is ModelStage {
  * `null` in a record written before it existed.
  */
 export type ClaimRecord = {
-	readonly baseCheck?: import("./diagnosis.ts").BaseCheckReference;
+	readonly baseCheck?: AcceptanceQualification;
 	readonly acceptWallMs?: number;
 	readonly runId: Digest;
 	readonly issue: number;
@@ -603,10 +603,8 @@ type Unsettled = {
 /** One claimed run. The identity fields never change; the rest moves only inside a tick. */
 export type ActiveRun = {
 	attemptEnd?: AttemptEnd;
-	baseCheck?: import("./diagnosis.ts").BaseCheckReference;
+	baseCheck?: AcceptanceQualification;
 	acceptWallMs?: number;
-	/** A base refusal notice was posted in this process, so it is the final one. */
-	refusalPosted?: boolean;
 	/** Why the run is ending failed or budget-exhausted, kept for its ledger row. */
 	cause?: TerminalCause;
 	readonly runId: Digest;
@@ -2096,14 +2094,23 @@ export class Orchestrator {
 	 */
 	async #acceptSpent(
 		run: ActiveRun,
-		reference: BaseCheckReference,
+		reference: AcceptanceQualification,
 		through: number,
 	): Promise<number | null> {
-		const stored = reference.storedAttempt ?? reference.acceptAttempt;
+		const receipt = await this.#acceptanceReceipt(reference);
+
+		if (receipt === null) return null;
+		// Legacy receipts still read, but cannot attest a check-only interval.
+		const stored = receipt.storedAttempt;
 		let total = 0;
 
 		for (let attempt = 1; attempt <= through; attempt++) {
-			if (attempt > stored && attempt <= reference.acceptAttempt) continue;
+			if (
+				stored !== undefined &&
+				attempt > stored &&
+				attempt <= reference.acceptAttempt
+			)
+				continue;
 
 			const spent = await this.#input.executor
 				.spent({ runId: run.runId, stage: "accept", attempt, round: 0 })
@@ -2116,10 +2123,26 @@ export class Orchestrator {
 		return total;
 	}
 
+	/** A check-only interval is usable only with the suite's own attempt evidence. */
+	async #acceptanceReceipt(reference: AcceptanceQualification) {
+		const receipt = await this.#input.files.artifacts.receipt(
+			reference.binding.runId,
+			reference.binding.acceptanceDigest,
+		);
+
+		return receipt !== null &&
+			receipt.contractDigest === reference.binding.contractDigest &&
+			receipt.baseSha === reference.binding.baseSha &&
+			(receipt.storedAttempt === undefined ||
+				receipt.storedAttempt === reference.storedAttempt)
+			? receipt
+			: null;
+	}
+
 	/** Retires the refused first suite again; the store makes this idempotent. */
 	async #retireRefused(
 		run: ActiveRun,
-		reference: BaseCheckReference,
+		reference: AcceptanceQualification,
 	): Promise<boolean> {
 		const refused = reference.retry?.refused ?? reference.binding;
 		const read = () => this.#input.files.readContract(run.runId);
@@ -2155,7 +2178,7 @@ export class Orchestrator {
 	 */
 	async #retryAccept(
 		run: ActiveRun,
-		reference: BaseCheckReference,
+		reference: AcceptanceQualification,
 		progress: Extract<BaseCheckProgress, { kind: "refused" }>,
 	): Promise<boolean> {
 		const limits = this.#limits();
@@ -2163,7 +2186,7 @@ export class Orchestrator {
 		const reason = progress.failure.reason;
 
 		if (
-			reference.retry !== undefined ||
+			reference.kind !== "checking" ||
 			!retryableBaseReason(reason) ||
 			limits === null ||
 			config === null
@@ -2212,6 +2235,7 @@ export class Orchestrator {
 
 		run.baseCheck = {
 			...reference,
+			kind: "retry_pending",
 			retry: {
 				refused: reference.binding,
 				reason,
@@ -2254,6 +2278,7 @@ export class Orchestrator {
 			.baseCheck?.({
 				binding: refused,
 				acceptAttempt: reference.acceptAttempt,
+				storedAttempt: reference.storedAttempt,
 				remainingAcceptMs: 0,
 				signal: new AbortController().signal,
 				readOnly: true,
@@ -5533,10 +5558,27 @@ export class Orchestrator {
 			return;
 		const reference = run.baseCheck;
 
-		const progress = await this.#input.executor.baseCheck?.({
-			...reference,
-			signal: run.phase.abort.signal,
-		});
+		if (reference.kind === "retry_pending") return;
+
+		if (
+			reference.kind !== "refused" &&
+			(await this.#acceptanceReceipt(reference)) === null
+		) {
+			this.#stop(run, inputCause("accept", "acceptance_changed"));
+
+			return;
+		}
+
+		const progress: BaseCheckProgress | undefined =
+			reference.kind === "refused"
+				? { kind: "refused", failure: reference.failure }
+				: await this.#input.executor.baseCheck?.({
+						binding: reference.binding,
+						acceptAttempt: reference.acceptAttempt,
+						storedAttempt: reference.storedAttempt,
+						remainingAcceptMs: reference.remainingAcceptMs,
+						signal: run.phase.abort.signal,
+					});
 
 		run.phase.checking = progress?.kind === "checking";
 
@@ -5594,8 +5636,19 @@ export class Orchestrator {
 
 			const notice = baseRefusalNotice(failure);
 
-			if (!(await this.#postKeyed(run, notice.key, notice.body))) return;
-			run.refusalPosted = true;
+			run.baseCheck = {
+				...reference,
+				kind: "refused",
+				failure,
+				noticeKey: notice.key,
+			};
+			await this.#writeClaim(run);
+
+			if (
+				run.claimUnwritten ||
+				!(await this.#postKeyed(run, notice.key, notice.body))
+			)
+				return;
 			this.#stop(run, {
 				stage: "accept",
 				class: "base",
@@ -5616,6 +5669,7 @@ export class Orchestrator {
 			return;
 		}
 
+		run.baseCheck = { ...reference, kind: "qualified", proof: progress.proof };
 		const contract = await this.#input.files.readContract(run.runId);
 
 		const stored =
@@ -5694,19 +5748,33 @@ export class Orchestrator {
 	 * first notice, keyed, so exactly once. False until it is posted.
 	 */
 	async #postRetriedRefusal(run: ActiveRun): Promise<boolean> {
-		const retry = run.baseCheck?.retry;
+		const reference = run.baseCheck;
 
 		if (
 			run.phase.kind !== "ending" ||
 			run.stage !== "accept" ||
-			retry === undefined ||
-			run.refusalPosted === true
+			reference === undefined
 		)
 			return true;
-		const notice = baseRefusalNotice(retriedRefusal(retry));
+
+		const failure =
+			reference.kind === "refused"
+				? reference.failure
+				: reference.retry === undefined
+					? null
+					: retriedRefusal(reference.retry);
+
+		if (failure === null) return true;
+		const notice = baseRefusalNotice(failure);
 
 		if (!(await this.#postKeyed(run, notice.key, notice.body))) return false;
-		run.refusalPosted = true;
+
+		run.baseCheck = {
+			...reference,
+			kind: "refused",
+			failure,
+			noticeKey: notice.key,
+		};
 
 		return true;
 	}
@@ -5985,6 +6053,7 @@ export class Orchestrator {
 					.baseCheck?.({
 						binding,
 						acceptAttempt: run.baseCheck?.acceptAttempt ?? 1,
+						storedAttempt: run.baseCheck?.storedAttempt,
 						remainingAcceptMs: 0,
 						signal: new AbortController().signal,
 						readOnly: true,
@@ -6547,7 +6616,10 @@ export class Orchestrator {
 		}
 
 		if (effects.kind === "acceptance") {
-			const stored = await files.artifacts.store(effects);
+			const stored = await files.artifacts.store({
+				...effects,
+				storedAttempt: run.attempt,
+			});
 
 			if (stored.kind !== "found") {
 				this.#input.log("stage_inputs_refused", {
@@ -6574,7 +6646,7 @@ export class Orchestrator {
 				prior === undefined ||
 				(retryPending(prior) && prior.binding.acceptanceDigest !== digest)
 			) {
-				const reference: BaseCheckReference = {
+				const reference = {
 					binding: {
 						runId: run.runId,
 						repo: this.#input.repo,
@@ -6585,7 +6657,7 @@ export class Orchestrator {
 						gateSha: run.workflowSha,
 					},
 					acceptAttempt: run.attempt,
-					storedAttempt: run.attempt,
+					storedAttempt: stored.receipt.storedAttempt ?? run.attempt,
 					remainingAcceptMs: Math.max(
 						0,
 						(this.#config?.stages.accept.budget.wallMs ?? 0) -
@@ -6595,9 +6667,13 @@ export class Orchestrator {
 				};
 
 				run.baseCheck =
-					prior?.retry === undefined
-						? reference
-						: { ...reference, retry: prior.retry };
+					prior === undefined
+						? { ...reference, kind: "checking" }
+						: {
+								...reference,
+								kind: "rechecking_replacement",
+								retry: prior.retry!,
+							};
 			}
 
 			run.phase = {

@@ -144,11 +144,19 @@ function tree(
 describe("private acceptance artifacts", () => {
 	it("binds the stored model attempt in new receipts and reads legacy bytes unchanged", async () => {
 		const root = fresh();
-		const stored = await fileArtifacts(root).store({ ...input, storedAttempt: 2 });
+
+		const stored = await fileArtifacts(root).store({
+			...input,
+			storedAttempt: 2,
+		});
+
 		assert.ok(stored.kind === "found");
 		assert.equal(stored.receipt.storedAttempt, 2);
 		const before = tree(root);
-		assert.deepEqual(await fileArtifacts(root).read(contract.runId, contract, digest), stored);
+		assert.deepEqual(
+			await fileArtifacts(root).read(contract.runId, contract, digest),
+			stored,
+		);
 		assert.deepEqual(tree(root), before);
 
 		const legacyRoot = fresh();
@@ -156,14 +164,76 @@ describe("private acceptance artifacts", () => {
 		assert.ok(legacy.kind === "found");
 		assert.equal(legacy.receipt.storedAttempt, undefined);
 		const legacyBytes = tree(legacyRoot);
-		assert.deepEqual(await fileArtifacts(legacyRoot).read(contract.runId, contract, digest), legacy);
+		assert.deepEqual(
+			await fileArtifacts(legacyRoot).read(contract.runId, contract, digest),
+			legacy,
+		);
 		assert.deepEqual(tree(legacyRoot), legacyBytes);
 	});
 
 	for (const storedAttempt of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])
 		it(`rejects invalid stored attempt ${storedAttempt}`, async () => {
 			const root = fresh();
-			assert.deepEqual(await fileArtifacts(root).store({ ...input, storedAttempt }), { kind: "blocked", reason: "acceptance_invalid" });
+			assert.deepEqual(
+				await fileArtifacts(root).store({ ...input, storedAttempt }),
+				{ kind: "blocked", reason: "acceptance_invalid" },
+			);
+		});
+
+	it("keeps each receipt's attempt bound through retirement and replacement", async () => {
+		const root = fresh();
+		const store = fileArtifacts(root);
+		const first = await store.store({ ...input, storedAttempt: 2 });
+		assert.ok(first.kind === "found");
+		assert.deepEqual(
+			await store.receipt(contract.runId, first.receipt.acceptanceDigest),
+			first.receipt,
+		);
+		assert.equal(
+			await store.retire(
+				contract.runId,
+				contract,
+				digest,
+				first.receipt.acceptanceDigest,
+			),
+			"retired",
+		);
+		const second = await store.store({ ...input, storedAttempt: 3 });
+		assert.ok(second.kind === "found");
+		assert.deepEqual(
+			await store.receipt(contract.runId, first.receipt.acceptanceDigest),
+			first.receipt,
+		);
+		assert.deepEqual(
+			await store.receipt(contract.runId, second.receipt.acceptanceDigest),
+			second.receipt,
+		);
+		assert.equal(
+			await store.receipt(contract.runId, digestOf("wrong suite")),
+			null,
+		);
+	});
+
+	for (const storedAttempt of [0, "2", null])
+		it(`rejects an invalid stored receipt attempt ${JSON.stringify(storedAttempt)}`, async () => {
+			const root = fresh();
+			const store = fileArtifacts(root);
+			const stored = await store.store({ ...input, storedAttempt: 2 });
+			assert.ok(stored.kind === "found");
+			const bytes = JSON.stringify({ ...stored.receipt, storedAttempt });
+			writeFileSync(
+				join(root, "acceptance", contract.runId, "receipt.json"),
+				bytes,
+			);
+			writeFileSync(join(root, "acceptance", `${contract.runId}.json`), bytes);
+			assert.deepEqual(await store.read(contract.runId, contract, digest), {
+				kind: "blocked",
+				reason: "acceptance_invalid",
+			});
+			assert.equal(
+				await store.receipt(contract.runId, stored.receipt.acceptanceDigest),
+				null,
+			);
 		});
 
 	it("hashes the exact named bytes in a stable order, including manifest and canary", () => {

@@ -1506,6 +1506,22 @@ export function controllerBaseChecker(config: {
 			if (input.binding.gateSha !== input.binding.baseSha)
 				return fail(input, "base_evidence_missing");
 
+			if (input.storedAttempt !== undefined) {
+				const receipt = await files.artifacts.receipt(
+					input.binding.runId,
+					input.binding.acceptanceDigest,
+				);
+
+				if (
+					receipt === null ||
+					receipt.contractDigest !== input.binding.contractDigest ||
+					receipt.baseSha !== input.binding.baseSha ||
+					(receipt.storedAttempt !== undefined &&
+						receipt.storedAttempt !== input.storedAttempt)
+				)
+					return fail(input, "base_evidence_missing");
+			}
+
 			if (present(resultPath)) {
 				const text = regularText(resultPath, 2 * 1024 * 1024);
 				const receipt = parseBaseReceipt(text);
