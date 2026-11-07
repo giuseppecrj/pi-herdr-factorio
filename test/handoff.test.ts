@@ -3989,6 +3989,7 @@ for (const outcome of [
 	"deleted_summary",
 	"foreign_key",
 	"build_retry",
+	"other_applying",
 ] as const)
 	test(`F10-2 actual ${outcome} summary reconciles a lost POST and recovers its receipt without a rebuild`, async () => {
 		const retry = [
@@ -3999,7 +4000,12 @@ for (const outcome of [
 		].includes(outcome);
 
 		const secondAttempt = retry || outcome === "build_retry";
-		const success = outcome === "complete_handoff" || secondAttempt;
+
+		const success =
+			outcome === "complete_handoff" ||
+			outcome === "other_applying" ||
+			secondAttempt;
+
 		await withLocalArtifactDownload(async (root) => {
 			const github = new FakeGitHub();
 			const issue = github.add(fakeIssue(pin.issue));
@@ -4394,6 +4400,24 @@ for (const outcome of [
 				request = pending(state, "post_notice");
 			}
 
+			if (outcome === "other_applying") {
+				assert.ok(state.feedback);
+				state = {
+					...state,
+					feedback: {
+						...state.feedback,
+						batches: [
+							{
+								...state.feedback.batches[0]!,
+								digest: digestOf("unrepaired-other-batch"),
+								status: { kind: "applying", round: 1 },
+							},
+							...state.feedback.batches,
+						],
+					},
+				};
+			}
+
 			currentHead = request.kind === "complete_handoff" ? request.head : head;
 
 			if (outcome === "missing_batch")
@@ -4467,6 +4491,18 @@ for (const outcome of [
 				/PRIVATE-HELDOUT|private\.ts|@owner|other\/repo/,
 			);
 			assert.equal(done.work.kind, success ? "waiting" : "held");
+
+			if (outcome === "other_applying") {
+				assert.deepEqual(done.feedback?.batches[0]?.status, {
+					kind: "applying",
+					round: 1,
+				});
+				assert.partialDeepStrictEqual(done.feedback?.batches[1]?.status, {
+					kind: "settled",
+					outcome: { kind: "applied" },
+				});
+			}
+
 			await controllerCandidatePort({ stateDir: root, exec }).observe(
 				done,
 				300,

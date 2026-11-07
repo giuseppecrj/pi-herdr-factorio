@@ -11175,8 +11175,11 @@ describe("controller-only validate", () => {
 						fault === "terminal_claim" &&
 						!faulted &&
 						next.handoff?.kind === "selected" &&
-						next.handoff.work.kind === "effect" &&
-						next.handoff.work.request.kind === "finish_pr"
+						((next.handoff.work.kind === "effect" &&
+							next.handoff.work.request.kind === "finish_pr") ||
+							(target === "complete_handoff" &&
+								next.handoff.work.kind === "held" &&
+								next.handoff.work.reason === "summary_too_large"))
 					) {
 						faulted = true;
 
@@ -11206,15 +11209,30 @@ describe("controller-only validate", () => {
 				await f.start().tick();
 				await f.start().tick();
 				const terminal = f.files.claims.get(runOf(14));
-				assert.equal(terminal?.status, "failed");
-				assert.ok(
-					terminal?.handoff?.kind === "selected" &&
-						terminal.handoff.work.kind === "terminal",
+				assert.equal(
+					terminal?.status,
+					target === "open_pr" ? "failed" : "blocked",
 				);
-				assert.deepEqual(terminal.handoff.work.terminal, {
-					kind: "failed",
-					reason: "summary_too_large",
-				});
+				assert.ok(terminal?.handoff?.kind === "selected");
+
+				if (target === "open_pr") {
+					assert.ok(terminal.handoff.work.kind === "terminal");
+					assert.deepEqual(terminal.handoff.work.terminal, {
+						kind: "failed",
+						reason: "summary_too_large",
+					});
+				} else {
+					assert.partialDeepStrictEqual(terminal.handoff.work, {
+						kind: "held",
+						reason: "summary_too_large",
+					});
+					assert.ok(f.controller.state.runs.has(14));
+					assert.partialDeepStrictEqual(terminal.handoff.published?.readiness, {
+						kind: "not_ready",
+						reason: "summary_too_large",
+					});
+				}
+
 				assert.ok(
 					parseCandidateState(JSON.parse(JSON.stringify(terminal.handoff))),
 				);
@@ -11224,15 +11242,18 @@ describe("controller-only validate", () => {
 					/summary_too_large/,
 				);
 				const row = (await outbox.scan())?.[0]?.row?.row;
-				assert.ok(row?.v === 4);
-				assert.equal(row.outcome.kind, "failed");
-				assert.deepEqual(row.failure?.kind === "known" && row.failure.value, {
-					stage: "land",
-					class: "input",
-					reason: "summary_too_large",
-					failedVisibleChecks: [],
-					retainedPatch: null,
-				});
+
+				if (target === "open_pr") {
+					assert.ok(row?.v === 4);
+					assert.equal(row.outcome.kind, "failed");
+					assert.deepEqual(row.failure?.kind === "known" && row.failure.value, {
+						stage: "land",
+						class: "input",
+						reason: "summary_too_large",
+						failedVisibleChecks: [],
+						retainedPatch: null,
+					});
+				} else assert.equal(row, undefined);
 				assert.equal(faulted, fault !== "none");
 				const launches = f.executor.launches.length;
 				const attempts = calls;
@@ -12243,6 +12264,7 @@ describe("controller-only validate", () => {
 		"review_spend",
 		"build_spend",
 		"notice_error",
+		"summary_size",
 	] as const)
 		it(`F10-2 published ${fault} stop holds with one summary instead of orphaning PR`, async () => {
 			const f = await reviewingRun();
@@ -12276,11 +12298,25 @@ describe("controller-only validate", () => {
 
 			f.files.claims.set(runOf(14), { ...claim, handoff: queued });
 			const notices: string[] = [];
+			let summarySince: number | undefined;
+			const startedAt = f.clock.now();
 			const port = f.executor.candidate!;
 			const execute = port.execute;
 			port.execute = async (state, request) => {
+				if (request.kind === "complete_handoff" && fault === "summary_size")
+					throw new PublicationError("summary_too_large");
+
 				if (request.kind === "post_notice") {
 					notices.push(request.notice.kind);
+
+					if (request.notice.kind === "round_summary") {
+						summarySince = request.at;
+						assert.ok(
+							summarySince !== undefined &&
+								summarySince >= startedAt &&
+								summarySince <= f.clock.now(),
+						);
+					}
 
 					if (
 						fault === "notice_error" &&
@@ -12373,7 +12409,7 @@ describe("controller-only validate", () => {
 			});
 			assert.ok(restarted.state.runs.has(14));
 			const heldSince = result.published?.readiness.since;
-			assert.equal(heldSince, f.clock.now());
+			assert.equal(heldSince, summarySince);
 			await drive(f.start(), f);
 			assert.equal(
 				notices.filter((kind) => kind === "round_summary").length,
