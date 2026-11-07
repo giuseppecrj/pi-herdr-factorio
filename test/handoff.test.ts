@@ -64,7 +64,13 @@ import { controllerCandidatePort } from "../server/controller.ts";
 import { fileAdmissionStore } from "../src/admission.ts";
 import { CONTROLLER_LOGIN } from "../src/markers.ts";
 import { verdictAssessment, withLocalArtifactDownload } from "./helpers.ts";
-import { readFileSync, rmSync, statSync } from "node:fs";
+import {
+	readFileSync,
+	rmSync,
+	statSync,
+	mkdirSync,
+	writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { fieldOf, objectOf, parseJson } from "../server/sandbox/json.ts";
 
@@ -1673,6 +1679,8 @@ for (const prior of [TRUSTED_RUN_CAP - 1, TRUSTED_RUN_CAP, TRUSTED_RUN_CAP + 1])
 	});
 
 for (const spent of [
+	REPAIR_BUILD_MAX_TOKENS - 60_000,
+	REPAIR_BUILD_MAX_TOKENS - 59_999,
 	REPAIR_BUILD_MAX_TOKENS - 1,
 	REPAIR_BUILD_MAX_TOKENS,
 	REPAIR_BUILD_MAX_TOKENS + 1,
@@ -1697,12 +1705,12 @@ for (const spent of [
 		assert.equal(candidateUsage(paid), 1234 + spent);
 		const next = handoffCandidate(paid, observed());
 
-		if (spent < REPAIR_BUILD_MAX_TOKENS) {
+		if (REPAIR_BUILD_MAX_TOKENS - spent >= 60_000) {
 			const retry = pending(next.state, "repair_build");
 			assert.equal(retry.execution.attempt, 2);
 			assert.equal(
 				candidateAllowance(selected(next.state), retry.execution),
-				1,
+				REPAIR_BUILD_MAX_TOKENS - spent,
 			);
 		} else assert.notEqual(next.effect?.kind, "repair_build");
 	});
@@ -2767,6 +2775,78 @@ function rebuildingFeedback(
 	};
 }
 
+for (const remaining of [34_361, 59_999, 60_000])
+	for (const budget of ["round", "run"] as const)
+		test(`feedback launch floor: ${budget} remainder ${remaining}`, () => {
+			let state = queuedFeedback();
+
+			if (budget === "run")
+				state = {
+					...state,
+					priorTokens:
+						state.pin.maxTokens -
+						remaining -
+						(candidateUsage(state) - state.priorTokens),
+				};
+			else {
+				const built = rebuildingFeedback(state);
+				state = {
+					...state,
+					accounts: [
+						...state.accounts,
+						{
+							execution: built.execution,
+							settlement: "settled",
+							spend: {
+								kind: "known",
+								tokens: REPAIR_BUILD_MAX_TOKENS - remaining,
+							},
+						},
+					],
+				};
+			}
+
+			const next = handoffCandidate(state, readyObservation(state)).state;
+			const notice = pending(next, "post_notice");
+
+			if (remaining < 60_000) {
+				assert.equal(notice.notice.kind, "round_summary");
+				assert.equal(
+					notice.withdraw,
+					budget === "run" ? "run_tokens" : "repair_tokens",
+				);
+				assert.partialDeepStrictEqual(notice.then, {
+					kind: "held",
+					reason: budget === "run" ? "run_tokens" : "repair_tokens",
+				});
+			} else assert.equal(notice.notice.kind, "repair_started");
+		});
+
+test("feedback launch floor does not override the shared repair cap", () => {
+	const initial = queuedFeedback();
+
+	const state = {
+		...initial,
+		pin: { ...initial.pin, maxTokens: candidateUsage(initial) },
+		current: {
+			...initial.current,
+			intent: { ...initial.current.intent, round: 2 as const },
+		},
+		published: {
+			...initial.published!,
+			promoted: { ...initial.published!.promoted, round: 2 as const },
+		},
+	};
+
+	const notice = pending(
+		handoffCandidate(state, readyObservation(state)).state,
+		"post_notice",
+	);
+
+	assert.equal(notice.notice.kind, "repair_unavailable");
+	assert.partialDeepStrictEqual(notice.then, { kind: "resume" });
+});
+
 test("a held feedback repair projects its real stage, round and attempt", () => {
 	const build = rebuildingFeedback();
 
@@ -3588,6 +3668,23 @@ for (const fault of ["cap", "budget", "assessment"] as const)
 
 		const step = handoffCandidate(state, readyObservation(state));
 		const notice = pending(step.state, "post_notice");
+
+		if (fault === "budget") {
+			assert.equal(notice.notice.kind, "round_summary");
+			assert.equal(notice.withdraw, "run_tokens");
+			assert.partialDeepStrictEqual(notice.then, {
+				kind: "held",
+				reason: "run_tokens",
+			});
+			assert.deepEqual(selected(step.state).accounts, state.accounts);
+			assert.partialDeepStrictEqual(
+				selected(step.state).feedback?.batches[0]?.status,
+				{ kind: "settled", outcome: { kind: "stopped", reason: "run_tokens" } },
+			);
+
+			return;
+		}
+
 		assert.equal(notice.notice.kind, "repair_unavailable");
 		assert.equal(notice.withdraw, null);
 		assert.deepEqual(selected(step.state).accounts, state.accounts);
@@ -4628,6 +4725,27 @@ for (const outcome of [
 					}).state,
 				);
 				request = pending(state, "post_notice");
+
+				if (outcome === "held") {
+					const resultPath = join(root, "stages", pin.runId);
+					mkdirSync(resultPath, { recursive: true });
+					writeFileSync(
+						join(resultPath, "build-r1-1-result.json"),
+						JSON.stringify({
+							reason: "repair_no_change",
+							dispositions: [
+								{
+									event: feedbackId(repo, "review", 1),
+									kind: "declined",
+									reason: "builder_declined",
+									detail:
+										"Contradicts the contract @owner other/repo#1 https://github.com/other/repo/issues/2 next line",
+								},
+							],
+						}),
+						{ mode: 0o600 },
+					);
+				}
 			}
 
 			if (outcome === "other_applying") {
@@ -4718,8 +4836,19 @@ for (const outcome of [
 
 			assert.doesNotMatch(
 				pr.comments[0]!.body,
-				/PRIVATE-HELDOUT|private\.ts|@owner|other\/repo/,
+				/PRIVATE-HELDOUT|private\.ts|@owner|other\/repo#1|https:\/\/github\.com\/other\/repo/,
 			);
+
+			if (outcome === "held") {
+				assert.match(
+					summary.body,
+					/Builder declined: Contradicts the contract/,
+				);
+				const receipt = JSON.parse(readFileSync(firstReceiptPath, "utf8"));
+				assert.equal(receipt.items[0].builder.kind, "declined");
+				assert.equal(receipt.items[0].builder.reason, "builder_declined");
+			}
+
 			assert.equal(done.work.kind, success ? "waiting" : "held");
 
 			if (outcome === "other_applying") {

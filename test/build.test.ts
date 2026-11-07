@@ -813,66 +813,79 @@ test("command receipts use tool calls and results rather than final prose", () =
 	]);
 });
 
-test("build and repair prompts say CI runs tests read-only at the root, so temp files go under os.tmpdir()", () => {
-	const repo = "o/r",
-		sha = "a".repeat(40);
+for (const feedback of [false, true])
+	test(`build prompt selects ${feedback ? "feedback" : "bug-fix"} for a regression contract`, () => {
+		const repo = "o/r",
+			sha = "a".repeat(40);
 
-	assert.ok(isRepoSlug(repo) && isGitSha(sha));
+		assert.ok(isRepoSlug(repo) && isGitSha(sha));
 
-	const prompt = buildPrompt({
-		contract: {
-			version: 2,
-			runId: digestOf("prompt"),
-			issue: 1,
-			base: { repo, sha },
-			snapshot: {
-				digest: digestOf("snapshot"),
-				source: "unedited",
-				eventId: "1",
-				eventAt: "2026-11-05T00:00:00Z",
+		const prompt = buildPrompt({
+			feedback,
+			contract: {
+				version: 2,
+				runId: digestOf("prompt"),
+				issue: 1,
+				base: { repo, sha },
+				snapshot: {
+					digest: digestOf("snapshot"),
+					source: "unedited",
+					eventId: "1",
+					eventAt: "2026-11-05T00:00:00Z",
+				},
+				link: null,
+				summary: "Port validation with regression tests",
+				behavior: ["Return 2"],
+				acceptance: [{ id: "A1", kind: "new_behavior", text: "Return 2" }],
+				exclusions: [],
+				compatibility: [],
+				limits: [],
+				files: ["src/a.ts"],
+				evidence: [],
 			},
-			link: null,
-			summary: "Fix a bug",
-			behavior: ["Return 2"],
-			acceptance: [{ id: "A1", kind: "new_behavior", text: "Return 2" }],
-			exclusions: [],
-			compatibility: [],
-			limits: [],
-			files: ["src/a.ts"],
-			evidence: [],
-		},
-		guidance: { general: "", stages: {} },
-		inlined: [],
-	});
+			guidance: { general: "", stages: {} },
+			inlined: [],
+		});
 
-	assert.match(
-		prompt,
-		/Run npm ci --ignore-scripts once before the first test or lint run if dependencies are missing\./,
-	);
-	assert.match(
-		prompt,
-		/Run lint and format checks after each edit batch, not only at the end\./,
-	);
-	assert.match(
-		prompt,
-		/Do not re-read \.factory-feedback\.json once you have read it\./,
-	);
-	assert.match(prompt, /owner cards.*untrusted requests/i);
-	assert.match(prompt, /dispositions.*event.*adopted.*rejected/is);
-	assert.match(prompt, /\.factory-feedback-full\.json/);
-	assert.match(
-		prompt,
-		/Leave untouched code as it is: no import reordering, reformatting or renaming beyond what the change needs\./,
-	);
-	assert.match(
-		prompt,
-		/CI runs the candidate tree read-only at the repository root[^\n]*os\.tmpdir\(\)[^\n]*never inside the checkout/,
-	);
-
-	// Static-check entries name only a file, so repair reruns the checks.
-	for (const text of [prompt, feedbackPrompt("{}")])
-		assert.match(
-			text,
-			/lint, format or typecheck entry[^\n]*npm run lint, npm run format:check or npm run typecheck[^\n]*to see the details[^\n]*base copies of \.oxlintrc\.json, tsconfig\.json and biome\.json[^\n]*never change them to make a check pass/,
+		assert.ok(
+			prompt.startsWith(
+				`build-playbook=${feedback ? "feedback" : "bug-fix"}\n`,
+			),
 		);
-});
+
+		if (feedback) {
+			assert.doesNotMatch(prompt, /Reproduce a bug with a failing test/);
+			assert.match(prompt, /refactor|rename/);
+		}
+
+		assert.match(
+			prompt,
+			/Run npm ci --ignore-scripts once before the first test or lint run if dependencies are missing\./,
+		);
+		assert.match(
+			prompt,
+			/Run lint and format checks after each edit batch, not only at the end\./,
+		);
+		assert.match(
+			prompt,
+			/Do not re-read \.factory-feedback\.json once you have read it\./,
+		);
+		assert.match(prompt, /owner cards.*untrusted requests/i);
+		assert.match(prompt, /dispositions.*event.*adopted.*rejected/is);
+		assert.match(prompt, /\.factory-feedback-full\.json/);
+		assert.match(
+			prompt,
+			/Leave untouched code as it is: no import reordering, reformatting or renaming beyond what the change needs\./,
+		);
+		assert.match(
+			prompt,
+			/CI runs the candidate tree read-only at the repository root[^\n]*os\.tmpdir\(\)[^\n]*never inside the checkout/,
+		);
+
+		// Static-check entries name only a file, so repair reruns the checks.
+		for (const text of [prompt, feedbackPrompt("{}")])
+			assert.match(
+				text,
+				/lint, format or typecheck entry[^\n]*npm run lint, npm run format:check or npm run typecheck[^\n]*to see the details[^\n]*base copies of \.oxlintrc\.json, tsconfig\.json and biome\.json[^\n]*never change them to make a check pass/,
+			);
+	});

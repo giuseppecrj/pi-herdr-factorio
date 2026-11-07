@@ -136,6 +136,31 @@ test("F10-2 finding decisions are bounded and stored decision fields reject malf
 		assert.equal(wireBuilderDecisions(invalid, "event"), false);
 });
 
+test("builder decline reasons are concrete, bounded and survive the wire codec", async () => {
+	const classified = await classify([review()]);
+	assert.ok(classified.kind === "read" && classified.batch);
+
+	const decisions = builderDispositions(
+		JSON.stringify({
+			dispositions: [
+				{
+					event: id(1),
+					kind: "declined",
+					reason: "builder_declined",
+					detail: "Outside contract\n\u0000 @owner " + "x".repeat(900),
+				},
+			],
+		}),
+		classified.batch.cards,
+	);
+
+	assert.equal(decisions.length, 1);
+	assert.equal(decisions[0]?.kind, "declined");
+	assert.equal(wireBuilderDecisions(decisions, "event"), true);
+	assert.ok(JSON.stringify(decisions).length < 900);
+	assert.doesNotMatch(decisions[0]?.detail ?? "", /[\p{Cc}\p{Cf}]/u);
+});
+
 test("feedback identities are provider- and source-qualified", () => {
 	for (const source of ["issue-comment", "review", "review-comment"] as const)
 		assert.equal(feedbackId(repo, source, 12), `github:${repo}:${source}:12`);

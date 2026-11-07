@@ -12602,6 +12602,16 @@ describe("controller-only validate", () => {
 			}
 
 			if (fault === "no_change") {
+				const repair = f.executor.launches.find(
+					(launch) => launch.stage === "build" && launch.round === 1,
+				);
+
+				assert.ok(repair);
+				assert.ok(repair.prompt.startsWith("build-playbook=feedback\n"));
+				assert.doesNotMatch(
+					repair.prompt,
+					/Reproduce a bug with a failing test/,
+				);
 				const saved = f.files.claims.get(runOf(14));
 				assert.ok(saved && restored.work.kind === "held");
 				f.files.claims.set(runOf(14), {

@@ -771,6 +771,9 @@ function nextAttempt(
 	);
 }
 
+// Attempt 2 of F10-2 used 55,620 tokens even without edits. Keep a small margin.
+const REPAIR_LAUNCH_MIN_TOKENS = 60_000;
+
 function preflight(
 	state: Selected,
 	stage: "review" | "build",
@@ -783,7 +786,10 @@ function preflight(
 	)
 		return "evidence_unavailable";
 
-	if (candidateUsage(state) >= state.pin.maxTokens) return "run_tokens";
+	const minimum = stage === "build" ? REPAIR_LAUNCH_MIN_TOKENS : 1;
+
+	if (state.pin.maxTokens - candidateUsage(state) < minimum)
+		return "run_tokens";
 
 	if (nextAttempt(state, stage, round) > state.pin.maxReviewAttempts)
 		return "review_attempts";
@@ -792,8 +798,9 @@ function preflight(
 		.filter((a) => a.execution.stage === stage && a.execution.round === round)
 		.reduce((sum, a) => sum + tokensOf(a), 0);
 
-	return spent >=
-		(stage === "review" ? REVIEW_MAX_TOKENS : REPAIR_BUILD_MAX_TOKENS)
+	return (stage === "review" ? REVIEW_MAX_TOKENS : REPAIR_BUILD_MAX_TOKENS) -
+		spent <
+		minimum
 		? stage === "review"
 			? "review_tokens"
 			: "repair_tokens"
@@ -1418,9 +1425,15 @@ function startQueuedFeedback(
 							state.work.reason === "validation_failed"
 						))
 				? "repair_unavailable"
-				: budgetReason !== null
+				: budgetReason !== null &&
+						budgetReason !== "repair_tokens" &&
+						budgetReason !== "run_tokens"
 					? "repair_unavailable"
 					: null;
+
+	const budgetStop =
+		reason === null &&
+		(budgetReason === "repair_tokens" || budgetReason === "run_tokens");
 
 	const updated = {
 		...state,
@@ -1451,6 +1464,8 @@ function startQueuedFeedback(
 						}),
 					},
 	};
+
+	if (budgetStop) return stopRound(updated, budgetReason, now);
 
 	const review = current.review ?? current.certification?.review;
 
