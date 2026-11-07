@@ -142,6 +142,30 @@ function tree(
 }
 
 describe("private acceptance artifacts", () => {
+	it("binds the stored model attempt in new receipts and reads legacy bytes unchanged", async () => {
+		const root = fresh();
+		const stored = await fileArtifacts(root).store({ ...input, storedAttempt: 2 });
+		assert.ok(stored.kind === "found");
+		assert.equal(stored.receipt.storedAttempt, 2);
+		const before = tree(root);
+		assert.deepEqual(await fileArtifacts(root).read(contract.runId, contract, digest), stored);
+		assert.deepEqual(tree(root), before);
+
+		const legacyRoot = fresh();
+		const legacy = await fileArtifacts(legacyRoot).store(input);
+		assert.ok(legacy.kind === "found");
+		assert.equal(legacy.receipt.storedAttempt, undefined);
+		const legacyBytes = tree(legacyRoot);
+		assert.deepEqual(await fileArtifacts(legacyRoot).read(contract.runId, contract, digest), legacy);
+		assert.deepEqual(tree(legacyRoot), legacyBytes);
+	});
+
+	for (const storedAttempt of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])
+		it(`rejects invalid stored attempt ${storedAttempt}`, async () => {
+			const root = fresh();
+			assert.deepEqual(await fileArtifacts(root).store({ ...input, storedAttempt }), { kind: "blocked", reason: "acceptance_invalid" });
+		});
+
 	it("hashes the exact named bytes in a stable order, including manifest and canary", () => {
 		const reversed: AcceptanceSuite = {
 			...suite,

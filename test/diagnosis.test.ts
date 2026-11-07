@@ -3018,6 +3018,28 @@ test("accept retry: feedback carries the refusal facts, bounded per file and in 
 	assert.equal(bounded.scenarios.length, 30);
 });
 
+test("accept qualification: legacy claims acquire named states without changing the input", () => {
+	const sha = "a".repeat(40);
+	const repo = "o/r";
+	if (!isGitSha(sha) || !isRepoSlug(repo)) throw new Error("fixture");
+	const binding = {
+		runId: digestOf("r"), repo, issue: 9, contractDigest,
+		acceptanceDigest: digestOf("first suite"), baseSha: sha, gateSha: sha,
+	};
+	const legacy = { binding, acceptAttempt: 2, storedAttempt: 1, remainingAcceptMs: 9 };
+	const bytes = JSON.stringify(legacy);
+	const checking = parseBaseCheckReference(JSON.parse(bytes));
+	assert.equal(checking?.kind, "checking");
+	const retry = { refused: binding, reason: "preservation_failed", receiptDigest: digestOf("receipt"), scenarios: ["S1"], baseWallMs: 4_000 };
+	const pending = parseBaseCheckReference(JSON.parse(JSON.stringify({ ...legacy, retry })));
+	assert.equal(pending?.kind, "retry_pending");
+	const replacement = parseBaseCheckReference(JSON.parse(JSON.stringify({ ...legacy, binding: { ...binding, acceptanceDigest: digestOf("replacement") }, retry })));
+	assert.equal(replacement?.kind, "rechecking_replacement");
+	assert.equal(JSON.stringify(legacy), bytes);
+	assert.equal(parseBaseCheckReference(JSON.parse(JSON.stringify({ ...legacy, kind: "checking", retry }))), null);
+	assert.equal(parseBaseCheckReference(JSON.parse(JSON.stringify({ ...legacy, kind: "retry_pending", retry, binding: { ...binding, acceptanceDigest: digestOf("replacement") } }))), null);
+});
+
 test("accept retry: the claim's retry record round-trips and binds to the same run and contract", () => {
 	const sha = "a".repeat(40);
 	const repo = "o/r";

@@ -2109,6 +2109,28 @@ async function replayAcceptGuard(
 }
 
 describe("Orchestrator base qualification", () => {
+	it("rejects a hand-edited storedAttempt before it can skip charged accept attempts", async () => {
+		const { github, executor, files, clock, start } = world();
+		github.add(labeled(14));
+		executor.behaviors = [{ kind: "pass", usage: 10 }];
+		executor.acceptBehavior = { kind: "pass", usage: 20 };
+		executor.baseOutcome = "interrupted";
+		await once(start());
+		const claim = files.claims.get(runOf(14));
+		assert.ok(claim?.baseCheck);
+		assert.equal(claim.baseCheck.acceptAttempt, 2);
+		files.claims.set(runOf(14), {
+			...claim,
+			baseCheck: { ...claim.baseCheck, storedAttempt: 2 },
+		});
+		executor.baseOutcome = "ready";
+		clock.t += 60_000;
+		await once(start());
+		assert.ok(!executor.launches.some((l) => l.stage === "build"));
+		assert.notEqual(files.claims.get(runOf(14))?.stage, "build");
+		assert.equal(statuses(github, 14).at(-1)?.endsWith(":failed"), true);
+	});
+
 	const refusals = (github: FakeGitHub) => keyed(github, 14, "base-refusal");
 
 	for (const guard of ["tools", "length", "requests"] as const)
