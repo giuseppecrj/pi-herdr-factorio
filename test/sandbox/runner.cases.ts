@@ -461,6 +461,142 @@ function input(
 	};
 }
 
+describe("accept same-session draft checks", () => {
+	const feedback = {
+		run: 1 as const,
+		verdict: "would_refuse" as const,
+		reason: "acceptance_not_reproduced" as const,
+		sentence: "Fix own draft",
+		files: [],
+		omitted: 0,
+	};
+	const budget = { maxTurns: 20, wallMs: 900000, stallMs: 300000 };
+	function draftHost(stopReason = "stop") {
+		let prompts = 0;
+		const h = harness([
+			(command, pi) => {
+				if (command.type === "prompt") {
+					prompts++;
+					pi.emit(
+						started(String(command.id)),
+						{ type: "turn_start" },
+						assistant({
+							tokens: 100,
+							stopReason: prompts > 1 ? stopReason : "stop",
+						}),
+						{ type: "agent_settled", aborted: false },
+					);
+				}
+				if (command.type === "get_last_assistant_text")
+					pi.emit({
+						type: "response",
+						id: command.id,
+						command: "get_last_assistant_text",
+						success: true,
+						data: { text: `suite-${prompts}` },
+					});
+				if (command.type === "abort")
+					pi.emit({ type: "agent_settled", aborted: true });
+			},
+		]);
+
+		return h;
+	}
+	it("runs at most two drafts, keeps final revision in one session and charges revision tokens", async () => {
+		const h = draftHost();
+		let checks = 0;
+		const result = await runStage(
+			input(
+				{
+					stage: "accept",
+					draftCheck: async () => {
+						checks++;
+						return feedback;
+					},
+				},
+				{ budget, maxTokens: 100000 },
+			),
+			h.host,
+		);
+		assert.equal(result.kind, "passed");
+		assert.equal(checks, 2);
+		assert.deepEqual(h.outputs, ["suite-3"]);
+		assert.equal(h.launches.length, 1);
+		assert.equal(result.usage, 300);
+		assert.equal(result.receipt.draftRuns, 2);
+		assert.equal(result.receipt.draftRevisionTokens, 200);
+		const prompts = h.pis[0]?.received.filter((c) => c.type === "prompt") ?? [];
+		assert.equal(prompts.length, 3);
+		assert.match(String(prompts[1]?.message), /<draft-feedback-[a-f0-9]+>/);
+	});
+	it("null hook leaves one prompt; low token or wall reserves record a skip", async () => {
+		for (const [maxTokens, wallMs, skip] of [
+			[100000, 900000, null],
+			[35000, 900000, "tokens"],
+			[100000, 179000, "wall"],
+		] as const) {
+			const h = draftHost();
+			let checks = 0;
+			const result = await runStage(
+				input(
+					{
+						stage: "accept",
+						draftCheck: async () => {
+							checks++;
+							return null;
+						},
+					},
+					{ budget: { ...budget, wallMs }, maxTokens },
+				),
+				h.host,
+			);
+			assert.equal(result.kind, "passed");
+			assert.equal(checks, skip === null ? 1 : 0);
+			assert.deepEqual(h.outputs, ["suite-1"]);
+			assert.deepEqual(result.receipt.draftSkips, skip === null ? [] : [skip]);
+		}
+	});
+	it("length on a revision still fails accept_length", async () => {
+		const h = draftHost("length");
+		const result = await runStage(
+			input(
+				{ stage: "accept", draftCheck: async () => feedback },
+				{ budget, maxTokens: 100000 },
+			),
+			h.host,
+		);
+		assert.equal(result.kind, "failed");
+		assert.equal(result.receipt.guardStop, "accept_length");
+		assert.deepEqual(h.outputs, []);
+	});
+	it("abort during a draft aborts the check and returns wall exhaustion", async () => {
+		const h = draftHost(),
+			abort = new AbortController();
+		let stopped = false;
+		const result = await runStage(
+			input(
+				{
+					stage: "accept",
+					signal: abort.signal,
+					draftCheck: async (_text, context) =>
+						new Promise((done) => {
+							context.signal.addEventListener("abort", () => {
+								stopped = true;
+								done(null);
+							});
+							abort.abort();
+						}),
+				},
+				{ budget, maxTokens: 100000 },
+			),
+			h.host,
+		);
+		assert.equal(result.kind, "budget_exhausted");
+		if (result.kind === "budget_exhausted") assert.equal(result.cap, "wall");
+		assert.equal(stopped, true);
+	});
+});
+
 describe("execution efficiency facts", () => {
 	const journal = (records: JsonValue[]) =>
 		records.map((record) => JSON.stringify(record)).join("\n") + "\n";

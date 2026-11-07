@@ -22,7 +22,12 @@ import {
 	contractDigestOf,
 	type Contract,
 } from "../src/specify.ts";
-import { baseTreeDigest, exportTree, runHeldoutBase } from "../server/gates.ts";
+import {
+	baseTreeDigest,
+	exportTree,
+	runHeldoutBase,
+	runDraftBase,
+} from "../server/gates.ts";
 import {
 	checkoutWorkspace,
 	controllerBaseChecker,
@@ -439,8 +444,49 @@ export async function baseFixture(
 		deadline: startedAt + timeout,
 	});
 
-	return { root, tree, contract, binding, evidence, ...assessBase(evidence) };
+	return {
+		root,
+		tree,
+		contract,
+		binding,
+		evidence,
+		suite: parsed.suite,
+		...assessBase(evidence),
+	};
 }
+
+where(
+	bwrap,
+	"P7 draft and official base veto a wrapped runtime cause, not expected red",
+	async (t) => {
+		const f = await baseFixture(
+			t,
+			`${prefix}test('wrapped',()=>assert.fail('noise'.repeat(150)+'\\nReferenceError: readDurableAccounting is not defined'));`,
+		);
+		assert.equal(f.receipt.results[0]?.result, "base_non_assertion_failure");
+		const draft = await runDraftBase({
+			tree: f.tree,
+			workDir: join(f.root, "draft-1"),
+			cacheDir: join(f.root, "dependencies"),
+			binding: f.binding,
+			contract: f.contract,
+			suite: f.suite,
+			canary: `factory-holdout-${"1".repeat(64)}`,
+			startedAt: Date.now(),
+			deadline: Date.now() + 10000,
+		});
+		assert.deepEqual(
+			assessBase(draft.evidence).receipt.results,
+			f.receipt.results,
+		);
+		assert.match(
+			JSON.stringify(draft.details),
+			/ReferenceError.*readDurableAccounting/,
+		);
+		assert.equal(existsSync(join(f.root, "acceptance")), false);
+		assert.equal(existsSync(join(f.root, "base-check")), false);
+	},
+);
 
 for (const [name, source, want, kind] of cases)
 	where(bwrap, `isolated base: ${name}`, async (t) => {
