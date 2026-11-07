@@ -638,9 +638,11 @@ where(
 
 function observedReplay(
 	files: string[],
-	failing: string,
+	failing: string | string[],
 	kind: "assertion" | "load_error" = "assertion",
 ): HeldoutReplay {
+	const failed = Array.isArray(failing) ? failing : [failing];
+
 	const tree = {
 		execution: {
 			kind: "observed" as const,
@@ -648,26 +650,28 @@ function observedReplay(
 			wallMs: 1,
 			files: files.map((file) => ({
 				file,
-				registered: file === failing && kind === "load_error" ? 0 : 1,
-				failures:
-					file === failing
-						? [
-								{
-									file,
-									name: "check",
-									message: "m",
-									code: kind === "assertion" ? "ERR_ASSERTION" : null,
-									kind,
-								},
-							]
-						: [],
+				registered: failed.includes(file) && kind === "load_error" ? 0 : 1,
+				failures: failed.includes(file)
+					? [
+							{
+								file,
+								name: "check",
+								message: "m",
+								code: kind === "assertion" ? "ERR_ASSERTION" : null,
+								kind,
+							},
+						]
+					: [],
 			})),
 		},
 		projection: {
 			counts: Object.fromEntries(
-				files.map((f) => [f, f === failing && kind === "load_error" ? 0 : 1]),
+				files.map((f) => [
+					f,
+					failed.includes(f) && kind === "load_error" ? 0 : 1,
+				]),
 			),
-			failed: [failing],
+			failed,
 			passed: false,
 		},
 	};
@@ -908,6 +912,146 @@ test("a failing check that exists only in the candidate has a candidate-only pro
 	if (assessed.proof.kind !== "candidate_only_check") return;
 	assert.equal(assessed.proof.justification.kind, "new_visible_tests");
 });
+
+test("single held-out failures keep their own new-behavior or base-passed proof", () => {
+	for (const [file, scenario, kind] of [
+		[first, "S1", "candidate_only_check"],
+		[second, "S2", "base_passed"],
+	] as const) {
+		const assessed = assessCiFailure(
+			unitInput({
+				receiptPatch: { heldoutFailures: [file] },
+				replay: observedReplay(E, file),
+			}),
+		);
+
+		assert.ok(assessed.kind === "candidate_failure");
+		assert.deepEqual(assessed.failure, {
+			kind: "candidate",
+			reason: "candidate_heldout",
+			scenarios: [scenario],
+		});
+		assert.equal(assessed.proof.kind, kind);
+
+		if (assessed.proof.kind === "candidate_only_check") {
+			assert.equal(assessed.proof.justification.kind, "qualified_new_behavior");
+
+			if (assessed.proof.justification.kind === "qualified_new_behavior")
+				assert.deepEqual(assessed.proof.justification.scenarios, [scenario]);
+		}
+	}
+});
+
+for (const otherChecks of [[], ["typecheck", "lint", "candidate_tests"]])
+	test(`mixed held-out failures justify both new behavior and preservation${otherChecks.length ? " alongside other failed checks" : ""}`, () => {
+		const input = unitInput({
+			receiptPatch: {
+				heldoutFailures: E,
+				checks: [
+					"baseline_tests",
+					"typecheck",
+					"lint",
+					"format",
+					"main_tests",
+					"candidate_tests",
+					"heldout",
+				].map((name) => ({
+					name,
+					exitCode: name === "heldout" || otherChecks.includes(name) ? 1 : 0,
+				})),
+			},
+			replay: observedReplay(E, E),
+		});
+
+		const assessed = assessCiFailure(input);
+		assert.equal(assessed.kind, "candidate_failure");
+		assert.deepEqual(assessed.failure, {
+			kind: "candidate",
+			reason: "candidate_heldout",
+			scenarios: ["S1", "S2"],
+		});
+		assert.deepEqual(assessed.failure, classifyFailure(input));
+		assert.deepEqual(
+			assessed.failedChecks.map((c) => c.name),
+			[...otherChecks, "heldout"],
+		);
+		assert.ok(assessed.kind === "candidate_failure");
+		const base = input.base;
+		assert.ok(base?.evidence.source.kind === "ready");
+		const receiptDigest = digestOf(JSON.stringify(input.receipt));
+
+		const baseBinding = {
+			...assessed.binding,
+			candidate: { kind: "commit", sha },
+		};
+
+		const control = {
+			check: {
+				binding: {
+					...baseBinding,
+					dependencies: {
+						kind: "lock",
+						digest: base.evidence.source.lockDigest,
+					},
+					runtime: { kind: "execution", identity: base.evidence.runtime },
+				},
+				checks: [],
+			},
+			receiptDigest: digestOf(JSON.stringify(base)),
+		};
+
+		const baselineControl = {
+			check: {
+				binding: {
+					...baseBinding,
+					dependencies: { kind: "trees", baseSha: sha, candidateSha: sha },
+				},
+				checks: [{ name: "baseline_tests", exitCode: 0, timedOut: false }],
+			},
+			receiptDigest,
+			scenarios: undefined,
+		};
+
+		assert.deepEqual(assessed.proof, {
+			kind: "combined",
+			checks: [
+				...otherChecks.map((name) => ({
+					name,
+					proof:
+						name === "candidate_tests"
+							? {
+									kind: "candidate_only_check",
+									justification: {
+										kind: "new_visible_tests",
+										gateSha: sha,
+										receiptDigest,
+									},
+								}
+							: { kind: "base_passed", control: baselineControl },
+				})),
+				{
+					name: "heldout",
+					scenario: "S1",
+					proof: {
+						kind: "candidate_only_check",
+						justification: {
+							kind: "qualified_new_behavior",
+							scenarios: ["S1"],
+							control: { ...control, scenarios: [base.results[0]] },
+						},
+					},
+				},
+				{
+					name: "heldout",
+					scenario: "S2",
+					proof: {
+						kind: "base_passed",
+						control: { ...control, scenarios: [base.results[1]] },
+					},
+				},
+			],
+		});
+	});
 
 test("visible check assessments require comparable control identities before blame", () => {
 	const environment = {
