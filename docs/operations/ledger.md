@@ -12,7 +12,7 @@ Ruleset `26531115`, "Factory ledger append-only", forbids deletion and non-fast-
 
 ## What a row says
 
-A row is one canonical JSON line with `v: 1`, `v: 2` or `v: 3`. Its keys come in a fixed order, it ends in one LF, and its digest is SHA-256 over those exact bytes. It holds:
+A row is one canonical JSON line with `v: 1`, `v: 2`, `v: 3` or `v: 4`. Its keys come in a fixed order, it ends in one LF, and its digest is SHA-256 over those exact bytes. It holds:
 
 - the run's identity;
 - the frozen workflow pin and autonomy policy;
@@ -41,11 +41,11 @@ With a recorded cause, version 2 also fills the version 1 fields. `outcome.cap` 
 
 The controller records a candidate stop from the durable handoff terminal and the current generation's stored assessment, so a restart keeps it. Every other stop it records when it decides it.
 
-Version 1 and 2 rows and stored terminal snapshots still parse and freeze to the same bytes; no shipped row is rewritten. An older controller that does not recognize a row version blocks appends as `ledger_version_unsupported`. Roll forward rather than back after publishing a new row version.
+Version 1, 2 and 3 rows and stored terminal snapshots still parse and freeze to the same bytes; no shipped row is rewritten. An older controller that does not recognize a row version blocks appends as `ledger_version_unsupported`. Roll forward rather than back after publishing a new row version.
 
 ### Version 3: execution cost facts
 
-New terminal snapshots and rows use version 3. Each stage summary and the run have an `efficiency` object with these numeric fields:
+Version 3 introduced execution cost facts, retained in version 4. Each stage summary and the run have an `efficiency` object with these numeric fields:
 
 - `assistantTurns`, assistant messages completed by the parent and readable children, distinct from the existing turn-budget counter;
 - `modelRequests`, unique dispatched requests from the execution journal, including children, fallbacks and internal requests;
@@ -64,7 +64,19 @@ When all source observations are available, `contextPressure.truncated` means at
 
 A fact the controller did not record is `{"kind":"unavailable","reason":...}`, never zero. Every reason also appears in `gaps`. Money is always unavailable, including deterministic zero-token work, because no validated price source exists.
 
-Before the first native claim, `accounting/<runId>/policy.json` freezes the start time, workflow SHA/digest, gate-set digest from that same SHA, and canonical autonomy digest. It also records `runTokenCap`, the admitted workflow's trusted `maxTokensPerRun`, when the controller has loaded those exact workflow bytes; older pins lack it. The controller requires a complete safe export, hashes gate paths/modes/content with the base-check algorithm, and caches the result by trusted SHA. A missing source or unwritable pin defers the claim and dispatch. Recovery reuses the original pin, not current main.
+### Version 4: admitted context, not inferred provenance
+
+New terminal snapshots and rows use version 4. `runContext` is the admission-time `RunContextV2`, and `provenance` is its validated projection. Both ordinary and candidate terminal construction require that context.
+
+Before the first native claim, `accounting/<runId>/policy.json` writes a version 2 start record containing `runId`, `startedAt` and `context`. The context is one of:
+
+- `production`, with the admitted `policy` and positive `trustedCap`;
+- `verification`, with that policy and trusted cap, the pinned `manifestDigest`, and `effectiveCap`, the smaller of the trusted cap and manifest cap;
+- `legacy`, with `known` facts and explicit `gaps`. Unknown caps are unavailable facts, never omitted arguments or a reason to select production.
+
+The policy freezes the workflow SHA/digest, gate-set digest from that same SHA, and canonical autonomy digest. The controller requires a complete safe export, hashes gate paths/modes/content with the base-check algorithm, and caches the result by trusted SHA. A missing source or unwritable pin defers the claim and dispatch. The verification manifest is read at this boundary, not inferred later from process options. Mixed manifest bytes, scope or production reuse are refused. Recovery reuses the original pin, not current main.
+
+`terminalWorkflowObservation` separately records the last successfully loaded workflow SHA/digest available when the terminal snapshot was collected, or an unavailable fact if none was loaded. It is only an observation. It does not prove which policy governed any earlier attempt. Per-attempt execution-policy recording is deferred; hot-loaded safety tightening remains unchanged.
 
 Rows project validated stage receipts and write-once attempt dispositions into stage summaries; requested and observed model identities stay separate. Aggregate receipts cover their child sessions for usage, while model observations come from the leaves and retain fallbacks and available runtime/assets versions. Provider versions stay unavailable. Each validation export also retains `gate-policy.json` for its exact base SHA when the export is complete and safe; generation rows use that pin or their bound diagnosis base receipt. Interrupted attempts consume attempts but do not add tokens a second time. Linked runs retain `previousRunId` without adding the predecessor's usage again.
 
@@ -72,9 +84,9 @@ Token totals are charged amounts, not necessarily measured spend. They are `lowe
 
 At landing, the existing repository-scoped PR read retains valid `merged_at` metadata bound to repository, run, PR number, head and merge SHA. Missing or invalid merge time remains unavailable, never the observation time. Omitted checkout paths do not prove prompt truncation; v3 source observations supply context-pressure flags separately. Repair-round aggregate counts remain unavailable where authorization/start/completion coverage is not established.
 
-Runs lacking an admission-time accounting pin are distinguishable as `legacy_import` (verification state remains explicitly verification). Their unrecorded start and interruption histories remain unavailable; an attempt number never proves zero interruptions.
+Version 1 start records decode as explicit `legacy` contexts without rewriting their bytes. They retain their recorded policy and optional `runTokenCap`; a pinned state-directory manifest can identify legacy verification, but cannot supply a missing trusted or effective cap. Without recorded mode evidence the projection is `legacy_import`, never production. Missing start records also require an explicit legacy context; start and interruption histories remain unavailable, and an attempt number never proves zero interruptions.
 
-A state directory pinned by `verification.json` writes only `verification` rows, including a row built before the process's first workflow load. The row's `trustedRunTokenCap` comes from the run's `runTokenCap`, or from a load of the exact workflow bytes the run was admitted under. Its `effectiveRunTokenCap` is the smaller of that and the verification cap, or the candidate's captured run cap. A cap none of these records is `{"kind":"unavailable","reason":...}`, never a `production` row. The reason is `legacy_not_recorded` for a pin written before `runTokenCap` existed, and `receipt_missing` when the run has no pin. Rows written before this fix hold plain numbers.
+An admitted verification context keeps `verification` provenance even before the process's first workflow load, after a failed load, or when process verification options are absent on recovery. Neither a later workflow load nor a candidate's captured cap fills historical gaps. The gap is `legacy_not_recorded` for version 1 pins, and `receipt_missing` for missing evidence. Stored terminal snapshots and frozen rows retain their exact original provenance on every retry.
 
 One published row says `production` by mistake: `factory/ledger` line 13, commit `8785f92`, run `199df6dc85d53522b12bded884ebe6351dffcb80f7e456d42124ab39e994489f` (issue #621, PR #622, `landed`). It is an F10c verification run whose landed row was built before its controller's first workflow load, and F12a must exclude it from every production cohort. The ledger is append-only, so the row is not rewritten.
 

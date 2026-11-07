@@ -250,43 +250,6 @@ const policy = record({
 	}),
 });
 
-const startFields = {
-	v: literal(1),
-	runId: digest,
-	startedAt: instant,
-	policy,
-};
-
-/** A pin written before the run's trusted token cap was captured. */
-const legacyRunStartCodec = record(startFields);
-
-const runStartCodec = record({ ...startFields, runTokenCap: positive });
-
-/** `runTokenCap` is the trusted `maxTokensPerRun` of the admitted workflow, absent in older pins. */
-export type RunStart = Out<typeof legacyRunStartCodec> & {
-	readonly runTokenCap?: number;
-};
-
-export function parseRunStart(value: JsonValue | undefined): RunStart | null {
-	try {
-		const start: RunStart = Object.hasOwn(objectOf(value) ?? {}, "runTokenCap")
-			? runStartCodec(value)
-			: legacyRunStartCodec(value);
-
-		if (
-			(start.policy.gates.kind === "known" &&
-				start.policy.gates.value.sourceSha !== start.policy.workflowSha) ||
-			start.policy.autonomy.digest !== AUTONOMY_DIGEST
-		)
-			return null;
-
-		return start;
-	} catch (error) {
-		if (error instanceof LedgerRowError) return null;
-		throw error;
-	}
-}
-
 const unavailableCap = record({ kind: literal("unavailable"), reason: gap });
 
 /** A run token cap, or why it was not recorded. Older rows hold only numbers. */
@@ -298,6 +261,172 @@ export function isKnownCap(cap: RunCap): cap is number {
 
 const runCap: Codec<RunCap> = (value) =>
 	objectOf(value) === null ? positive(value) : unavailableCap(value);
+
+export type RunPolicy = Out<typeof policy>;
+
+export type VerificationContextPin = {
+	readonly digest: Digest;
+	readonly tokenCap: number;
+};
+
+const contextCodec = tagged({
+	production: { policy, trustedCap: positive },
+	verification: {
+		policy,
+		trustedCap: positive,
+		manifestDigest: digest,
+		effectiveCap: positive,
+	},
+	legacy: {
+		known: record({
+			workflowSha: sha,
+			workflowDigest: digest,
+			policy: nullable(policy),
+			trustedCap: runCap,
+			verification: nullable(
+				record({ manifestDigest: digest, effectiveCap: runCap }),
+			),
+		}),
+		gaps: list(gap, 1),
+	},
+});
+
+/** Admission identity, not the policy used by any later attempt. */
+export type RunContextV2 = Out<typeof contextCodec>;
+
+export function contextPolicy(context: RunContextV2): RunPolicy | null {
+	return context.kind === "legacy" ? context.known.policy : context.policy;
+}
+
+/** Compatibility facts only. Neither a workflow load nor a candidate cap fills gaps. */
+export function legacyRunContext(
+	input: {
+		readonly workflowSha: GitSha;
+		readonly workflowDigest: Digest;
+		readonly policy?: RunPolicy;
+		readonly trustedCap?: number;
+		readonly verification?: VerificationContextPin | null;
+	},
+	reason: GapCode,
+): Extract<RunContextV2, { kind: "legacy" }> {
+	const missing = { kind: "unavailable", reason } as const;
+
+	return {
+		kind: "legacy",
+		known: {
+			workflowSha: input.workflowSha,
+			workflowDigest: input.workflowDigest,
+			policy: input.policy ?? null,
+			trustedCap: input.trustedCap ?? missing,
+			verification:
+				input.verification == null
+					? null
+					: {
+							manifestDigest: input.verification.digest,
+							effectiveCap:
+								input.trustedCap === undefined
+									? missing
+									: Math.min(input.trustedCap, input.verification.tokenCap),
+						},
+		},
+		gaps: [reason],
+	};
+}
+
+const runContext: Codec<RunContextV2> = (value) => {
+	const context = contextCodec(value);
+	const pinned = contextPolicy(context);
+
+	if (
+		pinned !== null &&
+		((pinned.gates.kind === "known" &&
+			pinned.gates.value.sourceSha !== pinned.workflowSha) ||
+			pinned.autonomy.digest !== AUTONOMY_DIGEST)
+	)
+		fail("policy_binding");
+
+	if (
+		context.kind === "verification" &&
+		context.effectiveCap > context.trustedCap
+	)
+		fail("verification_cap_raised");
+
+	if (
+		context.kind === "legacy" &&
+		pinned !== null &&
+		(pinned.workflowSha !== context.known.workflowSha ||
+			pinned.workflowDigest !== context.known.workflowDigest)
+	)
+		fail("policy_binding");
+
+	return context;
+};
+
+const legacyStartFields = {
+	v: literal(1),
+	runId: digest,
+	startedAt: instant,
+	policy,
+};
+
+const legacyStartCodec = record(legacyStartFields);
+
+const cappedLegacyStartCodec = record({
+	...legacyStartFields,
+	runTokenCap: positive,
+});
+
+const runStartCodec = record({
+	v: literal(2),
+	runId: digest,
+	startedAt: instant,
+	context: runContext,
+});
+
+export type RunStart = Out<typeof runStartCodec>;
+
+export type RunStartRecord =
+	| RunStart
+	| (Out<typeof legacyStartCodec> & {
+			readonly runTokenCap?: number;
+	  });
+
+/** Old pins are decoded as Legacy; their on-disk bytes are never upgraded. */
+export function parseRunStart(
+	value: JsonValue | undefined,
+	verification?: VerificationContextPin | null,
+): RunStart | null {
+	try {
+		if (fieldOf(objectOf(value), "v") === 2) return runStartCodec(value);
+
+		const start: Exclude<RunStartRecord, RunStart> = Object.hasOwn(
+			objectOf(value) ?? {},
+			"runTokenCap",
+		)
+			? cappedLegacyStartCodec(value)
+			: legacyStartCodec(value);
+
+		const context = legacyRunContext(
+			{
+				...start.policy,
+				policy: start.policy,
+				trustedCap: start.runTokenCap,
+				verification,
+			},
+			"legacy_not_recorded",
+		);
+
+		return runStartCodec({
+			v: 2,
+			runId: start.runId,
+			startedAt: start.startedAt,
+			context,
+		});
+	} catch (error) {
+		if (error instanceof LedgerRowError) return null;
+		throw error;
+	}
+}
 
 const provenance = tagged({
 	production: { policy },
@@ -608,30 +737,55 @@ const rowV3Codec = record({
 	gaps: list(gap),
 });
 
+const rowV4Codec = record({
+	v: literal(4),
+	...sharedFields,
+	runContext,
+	terminalWorkflowObservation: fact(
+		record({ workflowSha: sha, workflowDigest: digest }),
+	),
+	stages: fact(
+		list(record({ ...stageSummaryFields, efficiency: efficiencyCodec })),
+	),
+	failure: nullable(failureFact),
+	acceptAttempts: fact(
+		list(
+			record({ attempt: positive, disposition: oneOf(...ACCEPT_DISPOSITIONS) }),
+		),
+	),
+	efficiency: efficiencyCodec,
+	gaps: list(gap),
+});
+
 export type LedgerRowV1 = Out<typeof rowCodec>;
 
 export type LedgerRowV2 = Out<typeof rowV2Codec>;
 
 export type LedgerRowV3 = Out<typeof rowV3Codec>;
 
-export type LedgerRow = LedgerRowV1 | LedgerRowV2 | LedgerRowV3;
+export type LedgerRowV4 = Out<typeof rowV4Codec>;
+
+export type LedgerRow = LedgerRowV1 | LedgerRowV2 | LedgerRowV3 | LedgerRowV4;
 
 /** Old immutable rows expose unknown facts without adding fields to their bytes. */
 export function ledgerEfficiency(row: LedgerRow): EfficiencyFacts {
-	return row.v === 3 ? row.efficiency : unknownEfficiency();
+	return row.v === 1 || row.v === 2 ? unknownEfficiency() : row.efficiency;
 }
 
 export type LedgerRowInput =
 	| Omit<LedgerRowV1, "gaps">
 	| Omit<LedgerRowV2, "gaps">
-	| Omit<LedgerRowV3, "gaps">;
+	| Omit<LedgerRowV3, "gaps">
+	| Omit<LedgerRowV4, "gaps">;
 
 const codecOf = (value: JsonValue): Codec<LedgerRow> =>
-	fieldOf(objectOf(value), "v") === 3
-		? rowV3Codec
-		: fieldOf(objectOf(value), "v") === 2
-			? rowV2Codec
-			: rowCodec;
+	fieldOf(objectOf(value), "v") === 4
+		? rowV4Codec
+		: fieldOf(objectOf(value), "v") === 3
+			? rowV3Codec
+			: fieldOf(objectOf(value), "v") === 2
+				? rowV2Codec
+				: rowCodec;
 
 export type LedgerOutcome = LedgerRow["outcome"];
 
@@ -657,6 +811,10 @@ function gapsOf(value: JsonValue, into: Set<GapCode>): Set<GapCode> {
 		reason !== undefined
 	)
 		into.add(reason);
+
+	if (kind === "legacy")
+		for (const code of GAP_CODES)
+			if (arrayOf(object.gaps)?.includes(code)) into.add(code);
 
 	for (const [key, item] of Object.entries(object))
 		if (key !== "gaps") gapsOf(item, into);
@@ -704,6 +862,13 @@ function invariant(row: LedgerRow): string | null {
 		)
 			return "landing_unverified";
 	}
+
+	if (
+		row.v === 4 &&
+		JSON.stringify(row.provenance) !==
+			JSON.stringify(provenance(provenanceOf(row.runContext)))
+	)
+		return "context_provenance_mismatch";
 
 	if (row.provenance.kind === "verification") {
 		const { trustedRunTokenCap: trusted, effectiveRunTokenCap: effective } =
@@ -865,7 +1030,8 @@ function lineOf(bytes: Buffer): LedgerLine {
 
 	if (v === null) return { kind: "corrupt", bytes, code: "missing_version" };
 
-	if (v !== 1 && v !== 2 && v !== 3) return { kind: "unknown_version", bytes };
+	if (v !== 1 && v !== 2 && v !== 3 && v !== 4)
+		return { kind: "unknown_version", bytes };
 
 	try {
 		const row = frozen(codecOf(value)(value));
@@ -1266,12 +1432,13 @@ export type TerminalFacts = {
 	readonly cause?: TerminalCause | null;
 	readonly evidence?: TerminalEvidence;
 	readonly start?: RunStart | null;
-	readonly previousRunId?: Digest | null;
-	readonly verification?: {
-		readonly digest: Digest;
-		readonly trustedRunTokenCap: RunCap;
-		readonly effectiveRunTokenCap: RunCap;
+	readonly context: RunContextV2;
+	/** A load observed at collection, never evidence of an earlier execution policy. */
+	readonly terminalWorkflowObservation: {
+		readonly workflowSha: GitSha;
+		readonly workflowDigest: Digest;
 	} | null;
+	readonly previousRunId?: Digest | null;
 };
 
 export type TerminalEvidence = Partial<
@@ -1514,7 +1681,7 @@ export function terminalFailureOf(value: JsonValue | undefined): JsonValue {
 		return {
 			outcome: stopped,
 			failure:
-				object.v === 2 || object.v === 3
+				object.v === 2 || object.v === 3 || object.v === 4
 					? nullable(failureFact)(object.failure)
 					: stopped.kind === "failed" || stopped.kind === "budget_exhausted"
 						? unavailable("legacy_not_recorded")
@@ -1594,46 +1761,52 @@ function artifactsOf(facts: TerminalFacts): JsonValue {
  * without its marker proof. Facts this build does not yet record are
  * unavailable, never zero.
  */
-function provenanceOf(facts: TerminalFacts): JsonValue {
-	const policy = facts.start?.policy ?? {
-		workflowSha: facts.workflowSha,
-		workflowDigest: facts.workflowDigest,
-		gates: unavailable("not_instrumented"),
-		autonomy: {
-			approveMerge: "always",
-			land: "propose",
-			digest: AUTONOMY_DIGEST,
-		},
-	};
+function provenanceOf(context: RunContextV2): JsonValue {
+	if (context.kind === "production")
+		return { kind: "production", policy: context.policy };
 
-	const verification = facts.verification ?? null;
-
-	if (facts.start == null && verification === null)
+	if (context.kind === "verification")
 		return {
-			kind: "legacy_import",
-			workflowSha: facts.workflowSha,
-			workflowDigest: facts.workflowDigest,
-			gates: unavailable("receipt_missing"),
-			autonomy: unavailable("receipt_missing"),
+			kind: "verification",
+			policy: context.policy,
+			verificationDigest: context.manifestDigest,
+			trustedRunTokenCap: context.trustedCap,
+			effectiveRunTokenCap: context.effectiveCap,
 		};
 
-	return verification === null
-		? { kind: "production", policy }
-		: {
-				kind: "verification",
-				policy,
-				verificationDigest: verification.digest,
-				trustedRunTokenCap: verification.trustedRunTokenCap,
-				effectiveRunTokenCap: verification.effectiveRunTokenCap,
-			};
+	const { known: old } = context;
+
+	if (old.verification !== null && old.policy !== null)
+		return {
+			kind: "verification",
+			policy: old.policy,
+			verificationDigest: old.verification.manifestDigest,
+			trustedRunTokenCap: old.trustedCap,
+			effectiveRunTokenCap: old.verification.effectiveCap,
+		};
+
+	return {
+		kind: "legacy_import",
+		workflowSha: old.workflowSha,
+		workflowDigest: old.workflowDigest,
+		gates: old.policy?.gates ?? unavailable("receipt_missing"),
+		autonomy:
+			old.policy == null
+				? unavailable("receipt_missing")
+				: known(old.policy.autonomy),
+	};
 }
 
 export function terminalSnapshot(facts: TerminalFacts): JsonValue {
+	const context = runContext(facts.context);
+	const identity = context.kind === "legacy" ? context.known : context.policy;
+
 	if (
-		facts.start != null &&
-		(facts.start.runId !== facts.runId ||
-			facts.start.policy.workflowSha !== facts.workflowSha ||
-			facts.start.policy.workflowDigest !== facts.workflowDigest)
+		identity.workflowSha !== facts.workflowSha ||
+		identity.workflowDigest !== facts.workflowDigest ||
+		(facts.start != null &&
+			(facts.start.runId !== facts.runId ||
+				JSON.stringify(facts.start.context) !== JSON.stringify(context)))
 	)
 		fail("policy_binding");
 	const base = `https://github.com/${facts.repo}`;
@@ -1654,7 +1827,7 @@ export function terminalSnapshot(facts: TerminalFacts): JsonValue {
 			: [];
 
 	return {
-		v: 3,
+		v: 4,
 		runId: facts.runId,
 		repo: facts.repo,
 		issue: facts.issue,
@@ -1671,7 +1844,12 @@ export function terminalSnapshot(facts: TerminalFacts): JsonValue {
 				? unavailable("receipt_missing")
 				: known(facts.start.startedAt),
 		terminalObservedAt: facts.observedAt,
-		provenance: provenanceOf(facts),
+		runContext: context,
+		terminalWorkflowObservation:
+			facts.terminalWorkflowObservation === null
+				? unavailable("receipt_missing")
+				: known(facts.terminalWorkflowObservation),
+		provenance: provenanceOf(context),
 		outcome: outcomeOf(facts),
 		pr:
 			published === null
@@ -1770,7 +1948,7 @@ export function parseAttemptEnd(
 
 export interface RunAccounting {
 	start(runId: Digest): Promise<RunStart | null | undefined>;
-	begin(record: RunStart): Promise<boolean>;
+	begin(record: RunStartRecord): Promise<boolean>;
 	readAttempt(
 		runId: Digest,
 		stage: Stage,

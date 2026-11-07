@@ -13,6 +13,11 @@ import {
 	ledgerRowOf,
 	pumpLedger,
 	terminalFailureOf,
+	terminalSnapshot,
+	parseRunStart,
+	legacyRunContext,
+	type RunContextV2,
+	type TerminalFacts,
 	ledgerEfficiency,
 	type LedgerOutbox,
 	indexLedger,
@@ -27,11 +32,13 @@ import {
 } from "../src/ledger.ts";
 import { digestOf, runIdOf } from "../src/run.ts";
 import { unknownEfficiency } from "../server/sandbox/result.ts";
+import { objectOf } from "../server/sandbox/json.ts";
 import { isGitSha, type GitSha } from "../src/workflow.ts";
 import { LedgerGit, repo } from "./ledger-git.ts";
 import { TRUSTED_RUN_CAP } from "./fake-ticket-adapter.ts";
 import {
 	fileLedgerOutbox,
+	fileRunAccounting,
 	pumpLedgerOutbox,
 	readTerminalEvidence,
 } from "../server/controller.ts";
@@ -250,6 +257,213 @@ async function probeHistory(fake: LedgerGit): Promise<GitSha> {
 
 	return d.sha;
 }
+
+describe("immutable run context", () => {
+	const dirs: string[] = [];
+
+	after(() => {
+		for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+	});
+
+	function temp() {
+		const dir = mkdtempSync(join(tmpdir(), "ledger-context-"));
+		dirs.push(dir);
+
+		return dir;
+	}
+
+	const base = rowInput(7);
+
+	const policy =
+		base.provenance.kind === "production"
+			? base.provenance.policy
+			: assert.fail("policy");
+
+	const production = {
+		kind: "production",
+		policy,
+		trustedCap: TRUSTED_RUN_CAP,
+	} as const;
+
+	const verification = {
+		kind: "verification",
+		policy,
+		trustedCap: TRUSTED_RUN_CAP,
+		manifestDigest: digestOf("manifest"),
+		effectiveCap: 12_000,
+	} as const;
+
+	function facts(context: RunContextV2): TerminalFacts {
+		return {
+			repo,
+			runId: base.runId,
+			issue: base.issue,
+			eventId: base.eventId,
+			eventAt: base.eventAt,
+			snapshotDigest: base.snapshotDigest,
+			workflowSha: policy.workflowSha,
+			workflowDigest: policy.workflowDigest,
+			status: "needs_info",
+			stage: "specify",
+			usage: 0,
+			observedAt: date,
+			candidate: null,
+			context,
+			terminalWorkflowObservation: null,
+			start: { v: 2, runId: base.runId, startedAt: date, context },
+		};
+	}
+
+	it("requires context; a policy or an omitted verification argument cannot select production", () => {
+		assert.throws(
+			() => {
+				// @ts-expect-error Terminal construction requires context even with a policy pin.
+				terminalSnapshot({ ...facts(production), context: undefined });
+			},
+			{ code: "invalid_kind" },
+		);
+		assert.equal(
+			parseRunStart({
+				v: 2,
+				runId: base.runId,
+				startedAt: date,
+				context: { ...verification, effectiveCap: TRUSTED_RUN_CAP + 1 },
+			}),
+			null,
+		);
+	});
+
+	it("keeps admitted provenance under absent, failed or changed terminal workflow observations", () => {
+		for (const context of [production, verification]) {
+			const rows = [
+				null,
+				{ workflowSha: sha("9"), workflowDigest: digestOf("changed") },
+			].map((observation) => {
+				const snapshot =
+					objectOf(
+						terminalSnapshot({
+							...facts(context),
+							terminalWorkflowObservation: observation,
+						}),
+					) ?? assert.fail("snapshot");
+
+				return ledgerRowOf({
+					...snapshot,
+					terminalMarker: base.terminalMarker,
+				});
+			});
+
+			assert.deepEqual(rows[0]?.row.provenance, rows[1]?.row.provenance);
+
+			for (const row of rows) {
+				assert.equal(row.row.v, 4);
+				assert.ok(row.row.v === 4);
+				assert.deepEqual(row.row.runContext, context);
+				assert.equal(row.row.provenance.kind, context.kind);
+				assert.ok(frozenRowOf(row.bytes)?.bytes.equals(row.bytes));
+			}
+		}
+	});
+
+	it("decodes a missing legacy cap explicitly and never fills it from delayed workflow collection", async () => {
+		const dir = temp();
+		const accounting = fileRunAccounting(dir);
+		const old = { v: 1, runId: base.runId, startedAt: date, policy } as const;
+		assert.equal(await accounting.begin(old), true);
+
+		const path = join(dir, "accounting", base.runId, "policy.json");
+		const before = readFileSync(path);
+		const start = await accounting.start(base.runId);
+		assert.ok(start);
+		assert.equal(start.context.kind, "legacy");
+		assert.ok(start.context.kind === "legacy");
+		assert.deepEqual(start.context.known.trustedCap, {
+			kind: "unavailable",
+			reason: "legacy_not_recorded",
+		});
+		assert.deepEqual(start.context, parseRunStart(old)?.context);
+
+		const snapshot = terminalSnapshot({
+			...facts(start.context),
+			start,
+			terminalWorkflowObservation: {
+				workflowSha: policy.workflowSha,
+				workflowDigest: policy.workflowDigest,
+			},
+		});
+
+		const row = ledgerRowOf({
+			...(objectOf(snapshot) ?? assert.fail("snapshot")),
+			terminalMarker: base.terminalMarker,
+		});
+
+		assert.equal(row.row.provenance.kind, "legacy_import");
+		assert.ok(row.row.gaps.includes("legacy_not_recorded"));
+		assert.deepEqual(await fileRunAccounting(dir).start(base.runId), start);
+		assert.ok(readFileSync(path).equals(before));
+		assert.equal(
+			await accounting.begin({ ...start, context: production }),
+			false,
+		);
+		assert.ok(readFileSync(path).equals(before));
+	});
+
+	it("uses explicit Legacy for a missing record, not an implicit production context", () => {
+		const context = legacyRunContext(policy, "receipt_missing");
+
+		const snapshot =
+			objectOf(terminalSnapshot({ ...facts(context), start: null })) ??
+			assert.fail("snapshot");
+
+		const row = ledgerRowOf({
+			...snapshot,
+			terminalMarker: base.terminalMarker,
+		});
+
+		assert.equal(row.row.provenance.kind, "legacy_import");
+		assert.ok(row.row.v === 4);
+		assert.deepEqual(row.row.runContext, context);
+	});
+
+	it("keeps a frozen verification row and observation unchanged across delayed retries and restart", async () => {
+		const dir = temp();
+		const outbox = fileLedgerOutbox(dir);
+		const first = terminalSnapshot(facts(verification));
+
+		assert.equal(await outbox.prepare(base.runId, first), true);
+		assert.equal(
+			await outbox.freeze(base.runId, base.terminalMarker),
+			"frozen",
+		);
+		const before = readFileSync(join(dir, "ledger", base.runId, "row.json"));
+		const restarted = fileLedgerOutbox(dir);
+		assert.equal(
+			await restarted.prepare(
+				base.runId,
+				terminalSnapshot({
+					...facts(production),
+					observedAt: "2026-11-05T12:00:00Z",
+					terminalWorkflowObservation: {
+						workflowSha: sha("9"),
+						workflowDigest: digestOf("changed"),
+					},
+				}),
+			),
+			true,
+		);
+		assert.equal(
+			await restarted.freeze(base.runId, base.terminalMarker),
+			"frozen",
+		);
+		assert.ok(
+			readFileSync(join(dir, "ledger", base.runId, "row.json")).equals(before),
+		);
+		assert.equal(
+			(await restarted.scan())?.[0]?.row?.row.provenance.kind,
+			"verification",
+		);
+	});
+});
 
 describe("ledger row codec", () => {
 	it("round-trips every terminal kind as one canonical LF-terminated line", () => {
@@ -477,7 +691,7 @@ describe("ledger row codec", () => {
 
 		const lines = [
 			good.bytes,
-			Buffer.from('{"v":4,"future":true}\n'),
+			Buffer.from('{"v":5,"future":true}\n'),
 			Buffer.from("{not json\n"),
 			Buffer.from(
 				`${good.bytes.toString().slice(0, -1).replace('"v":1,', "")}\n`,

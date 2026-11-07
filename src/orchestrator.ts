@@ -156,12 +156,12 @@ import {
 	LedgerRowError,
 	candidateCause,
 	terminalSnapshot,
+	legacyRunContext,
 	type BudgetCapName,
 	type TerminalCause,
 	type LedgerOutbox,
 	type AttemptEnd,
 	type RunAccounting,
-	type RunStart,
 } from "./ledger.ts";
 import type { JsonValue } from "./tickets.ts";
 
@@ -2519,39 +2519,6 @@ export class Orchestrator {
 				};
 	}
 
-	/**
-	 * A verification state dir's pin always makes a verification row. The caps
-	 * are the run's own, never whatever workflow this process loaded: the
-	 * trusted cap from its admission pin, or from a load of the very bytes it
-	 * was admitted under; the effective cap from that or from the candidate's
-	 * captured run cap. A cap none of these records is unavailable.
-	 */
-	#verificationFacts(run: ActiveRun, start: RunStart | null | undefined) {
-		const verification = this.#input.verification ?? null;
-
-		if (verification === null) return null;
-
-		const trusted =
-			start?.runTokenCap ??
-			(this.#trustedRun?.digest === run.workflowDigest
-				? this.#trustedRun.tokens
-				: undefined);
-
-		const missing = {
-			kind: "unavailable",
-			reason: start == null ? "receipt_missing" : "legacy_not_recorded",
-		} as const;
-
-		return {
-			digest: verification.digest,
-			trustedRunTokenCap: trusted ?? missing,
-			effectiveRunTokenCap:
-				trusted === undefined
-					? (run.handoff?.pin.maxTokens ?? missing)
-					: Math.min(verification.tokenCap, trusted),
-		};
-	}
-
 	async #previousRunId(runId: Digest): Promise<Digest | null | undefined> {
 		const link = await this.#input.files.readLink(runId);
 
@@ -2594,6 +2561,9 @@ export class Orchestrator {
 
 		try {
 			const start = await this.#input.files.accounting?.start(run.runId);
+
+			if (this.#input.files.accounting !== undefined && start === undefined)
+				throw new LedgerRowError("run_context_unreadable");
 			snapshot = terminalSnapshot({
 				repo: this.#input.repo,
 				runId: run.runId,
@@ -2623,7 +2593,22 @@ export class Orchestrator {
 					run.usage,
 					run.handoff ?? null,
 				),
-				verification: this.#verificationFacts(run, start),
+				context:
+					start?.context ??
+					legacyRunContext(
+						{
+							workflowSha: run.workflowSha,
+							workflowDigest: run.workflowDigest,
+						},
+						"receipt_missing",
+					),
+				terminalWorkflowObservation:
+					this.#workflowSha === null || this.#trustedRun === null
+						? null
+						: {
+								workflowSha: this.#workflowSha,
+								workflowDigest: this.#trustedRun.digest,
+							},
 			});
 		} catch (error) {
 			if (!(error instanceof LedgerRowError)) throw error;
