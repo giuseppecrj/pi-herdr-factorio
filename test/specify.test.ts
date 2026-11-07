@@ -910,6 +910,229 @@ describe("evidence-first source excerpts", () => {
 });
 
 describe("accept source and existing-test pack", () => {
+	const helperPack = (text: string, start = 400, end = start) =>
+		sourceExcerpts({
+			files: ["test/cli.test.ts"],
+			evidence: [{ path: "test/cli.test.ts", start, end, fact: "status test" }],
+			checkout: {
+				files: ["test/cli.test.ts"],
+				read: async () => text,
+			},
+			identity: "repo@base",
+			accept: true,
+		});
+
+	it("includes the distant same-file cli helper used by a cited status test", async () => {
+		const lines = Array.from({ length: 500 }, () => "// padding");
+		lines[0] = "import { runCli } from '../server/cli.ts';";
+		lines[80] = "describe('unrelated', () => {});";
+		lines.splice(
+			180,
+			0,
+			"async function cli(argv: readonly string[]) {",
+			"  return runCli(argv, {",
+			"    runtime: { procs: table(4242, '100') },",
+			"  });",
+			"}",
+		);
+		lines[399] = "test('status', async () => { await cli(['status']); });";
+
+		const shown = await helperPack(lines.join("\n"));
+		const text = shown.map(renderInlined).join("\n\n");
+		assert.match(text, /await cli\(\['status'\]\)/);
+		assert.match(text, /async function cli/);
+		assert.match(text, /runtime: \{ procs: table\(4242, '100'\) \}/);
+		assert.equal(sourceFacts(shown).capHit, false);
+	});
+
+	it("takes at most three unique helpers in call order, deterministically", async () => {
+		const lines = Array.from({ length: 900 }, () => "// padding");
+
+		for (const [index, name] of [
+			"first",
+			"second",
+			"third",
+			"fourth",
+		].entries())
+			lines[100 + index * 100] = `function ${name}() { return 1; }`;
+
+		lines[699] =
+			"test('cited', () => { third(); first(); third(); second(); fourth(); });";
+		const text = lines.join("\n");
+		const shown = await helperPack(text, 700);
+		const helpers = shown.filter((file) => file.text.startsWith("function "));
+		assert.deepEqual(
+			helpers.map((file) => file.excerpt?.start),
+			[301, 101, 201],
+		);
+		assert.ok(helpers.every((file) => file.text.split("\n").length === 1));
+		assert.doesNotMatch(shown.map(renderInlined).join("\n"), /function fourth/);
+		assert.deepEqual(await helperPack(text, 700), shown);
+	});
+
+	it("caps a long helper at 40 exact base lines and labels the omitted remainder", async () => {
+		const lines = Array.from({ length: 500 }, () => "// padding");
+		lines.splice(
+			180,
+			0,
+			"async function cli(argv: string[]) {",
+			...Array.from({ length: 48 }, (_, n) => `  // HELPER_LINE_${n + 1}`),
+			"}",
+		);
+		lines[399] = "test('cited', () => cli(['status']));";
+		const original = lines.join("\n");
+		const shown = await helperPack(original);
+
+		const helper = shown.find((file) =>
+			file.text.startsWith("async function cli"),
+		);
+
+		assert.ok(helper?.excerpt);
+		assert.equal(helper.text.split("\n").length, 40);
+		assert.equal(helper.text, lines.slice(180, 220).join("\n"));
+		assert.equal(helper.excerpt.start, 181);
+		assert.equal(helper.excerpt.end, 220);
+		assert.equal(helper.excerpt.contentDigest, digestOf(original));
+		assert.equal(helper.excerpt.checkout, "repo@base");
+		assert.equal(helper.excerpt.selection, "test_harness");
+		assert.equal(helper.excerpt.omitted, true);
+		assert.equal(helper.excerpt.capHit, false);
+		assert.match(renderInlined(helper), /omitted lines 221-/);
+		assert.doesNotMatch(helper.text, /HELPER_LINE_40/);
+	});
+
+	it("includes multiline function, arrow and function-expression bindings without following their dependencies", async () => {
+		const lines = Array.from({ length: 900 }, () => "// padding");
+		lines.splice(
+			180,
+			0,
+			"async function cli(",
+			"  argv: readonly string[],",
+			") {",
+			"  return dependency(argv);",
+			"}",
+		);
+		lines.splice(
+			280,
+			0,
+			"const arrow = async (",
+			"  argv: readonly string[],",
+			") => {",
+			"  return dependency(argv);",
+			"};",
+		);
+		lines.splice(
+			380,
+			0,
+			"const expression = function(argv: string[]) {",
+			"  return dependency(argv);",
+			"};",
+		);
+		lines[500] = "function dependency(argv: string[]) { return argv; }";
+		lines[699] =
+			"test('cited', () => { cli([]); arrow([]); expression([]); });";
+		const shown = await helperPack(lines.join("\n"), 700);
+		const text = shown.map(renderInlined).join("\n");
+		assert.match(text, /async function cli/);
+		assert.match(text, /const arrow = async/);
+		assert.match(text, /const expression = function/);
+		assert.doesNotMatch(text, /function dependency/);
+		assert.deepEqual(
+			shown.slice(-3).map((file) => file.text.split("\n").length),
+			[5, 5, 3],
+		);
+	});
+
+	it("resolves direct helper calls only in the same eligible test file", async () => {
+		const lines = Array.from({ length: 500 }, () => "// padding");
+		lines[180] = "function member() { return 'NOT_A_DIRECT_CALL'; }";
+		lines[399] = "test('cited', () => { object.member(); external(); });";
+		const reads: string[] = [];
+
+		const tree = new Map([
+			["test/cli.test.ts", lines.join("\n")],
+			["test/helpers.ts", "function external() { return 'CROSS_FILE'; }"],
+		]);
+
+		const shown = await sourceExcerpts({
+			files: ["test/cli.test.ts"],
+			evidence: [
+				{ path: "test/cli.test.ts", start: 400, end: 400, fact: "cited" },
+			],
+			checkout: {
+				files: [...tree.keys()],
+				read: async (path) => {
+					reads.push(path);
+
+					return tree.get(path) ?? null;
+				},
+			},
+			identity: "repo@base",
+			accept: true,
+		});
+
+		assert.deepEqual(reads, ["test/cli.test.ts"]);
+		assert.doesNotMatch(
+			shown.map(renderInlined).join("\n"),
+			/NOT_A_DIRECT_CALL|CROSS_FILE/,
+		);
+	});
+
+	it("drops whole helpers before cited windows at the byte ceiling and counts their omission", async () => {
+		const lines = Array.from({ length: 500 }, () => "// padding");
+		lines.splice(
+			180,
+			0,
+			"async function cli() {",
+			`  return '${"€".repeat(6000)}';`,
+			"}",
+		);
+		lines[399] = "test('cited', () => cli());";
+		const shown = await helperPack(lines.join("\n"));
+		const text = shown.map(renderInlined).join("\n\n");
+		assert.match(text, /test\('cited', \(\) => cli\(\)\)/);
+		assert.doesNotMatch(text, /async function cli|€/);
+		assert.match(text, /source ceiling hit; 1 other excerpts omitted/);
+		assert.equal(sourceFacts(shown).capHit, true);
+		assert.equal(sourceFacts(shown).omissions, shown.length + 1);
+		assert.ok(sourceFacts(shown).bytes <= 16 * 1024);
+	});
+
+	it("preserves a near-ceiling cited line instead of adding its helper", async () => {
+		const lines = Array.from({ length: 500 }, () => "// padding");
+		lines.splice(
+			180,
+			0,
+			"function cli() {",
+			`  return '${"€".repeat(500)}';`,
+			"}",
+		);
+		lines[399] = `test('cited', () => cli('${"x".repeat(15_200)}END_OF_CITE'));`;
+		const shown = await helperPack(lines.join("\n"));
+		assert.ok(
+			shown.some((file) => file.text.includes(lines[399] ?? "MISSING")),
+		);
+		assert.doesNotMatch(shown.map(renderInlined).join("\n"), /function cli|€/);
+		assert.equal(sourceFacts(shown).capHit, true);
+		assert.ok(sourceFacts(shown).bytes <= 16 * 1024);
+	});
+
+	it("does not duplicate already visible helpers or follow an uncited entry point", async () => {
+		const lines = Array.from({ length: 500 }, () => "// padding");
+		lines[0] = "function cli() { return 1; }";
+		lines[399] = "test('cited', () => cli());";
+		const shown = await helperPack(lines.join("\n"));
+		assert.equal(
+			shown.filter((file) => file.text.includes("function cli")).length,
+			1,
+		);
+
+		lines[0] = "// padding";
+		lines[180] = "function cli() { return 1; }";
+		const stale = await helperPack(lines.join("\n"), 600);
+		assert.doesNotMatch(stale.map(renderInlined).join("\n"), /function cli/);
+	});
+
 	it("includes nearby public tests and their import/harness entry points without changing the contract evidence", async () => {
 		const evidence = [
 			{ path: "src/math/add.ts", start: 180, end: 180, fact: "add export" },

@@ -1019,6 +1019,54 @@ export function acceptanceSourcePath(path: string): boolean {
 	);
 }
 
+function localTestHelpers(lines: readonly string[]) {
+	const helpers = new Map<string, { start: number; end: number }>();
+
+	for (const [index, line] of lines.entries()) {
+		const declaration =
+			/^(?:export\s+)?(?:async\s+)?function\s+([\w$]+)\s*[(<]/.exec(line);
+
+		const binding = /^(?:export\s+)?(?:const|let|var)\s+([\w$]+)\s*=\s*/.exec(
+			line,
+		);
+
+		const name = declaration?.[1] ?? binding?.[1];
+
+		if (name === undefined) continue;
+
+		if (declaration === null && binding !== null) {
+			const head = lines
+				.slice(index, index + 40)
+				.join("\n")
+				.slice(binding[0].length);
+
+			if (
+				!/^(?:async\s+)?(?:function\b|(?:\([\s\S]*?\)|[\w$]+)\s*(?::[^=]+)?=>)/.test(
+					head,
+				)
+			)
+				continue;
+		}
+
+		let end = Math.min(lines.length, index + 40);
+
+		for (let i = index; i < end; i++) {
+			if (
+				i === index
+					? /[};]\s*(?:\/\/.*)?$/.test(line)
+					: /^}(?:[);,]*)\s*(?:\/\/.*)?$/.test(lines[i] ?? "")
+			) {
+				end = i + 1;
+				break;
+			}
+		}
+
+		if (!helpers.has(name)) helpers.set(name, { start: index + 1, end });
+	}
+
+	return helpers;
+}
+
 async function acceptExcerpts(
 	input: Parameters<typeof sourceExcerpts>[0],
 ): Promise<InlinedFile[]> {
@@ -1126,19 +1174,117 @@ async function acceptExcerpts(
 			});
 	}
 
-	const shown = await sourceExcerpts({
-		...input,
-		files: [...named, ...harness],
-		evidence: [...evidence, ...hints],
-		checkout,
-		accept: false,
-	});
-
-	return shown.map((file) =>
-		harness.has(file.path) && file.excerpt?.selection === "evidence"
-			? { ...file, excerpt: { ...file.excerpt, selection: "test_harness" } }
-			: file,
+	const shown = (
+		await sourceExcerpts({
+			...input,
+			files: [...named, ...harness],
+			evidence: [...evidence, ...hints],
+			checkout,
+			accept: false,
+		})
+	).map(
+		(file): InlinedFile =>
+			harness.has(file.path) && file.excerpt?.selection === "evidence"
+				? { ...file, excerpt: { ...file.excerpt, selection: "test_harness" } }
+				: file,
 	);
+
+	const helpers: InlinedFile[] = [];
+
+	for (const path of harness) {
+		if (!tests.includes(path)) continue;
+		const text = cached.get(path);
+
+		if (text === null || text === undefined) continue;
+		const lines = text.split("\n");
+		const definitions = localTestHelpers(lines);
+		const windows = shown.filter((file) => file.path === path);
+
+		for (const file of windows) {
+			const e = file.excerpt;
+
+			if (
+				e === undefined ||
+				!evidence.some(
+					(cite) =>
+						cite.path === path &&
+						Number.isSafeInteger(cite.start) &&
+						Number.isSafeInteger(cite.end) &&
+						cite.start >= 1 &&
+						cite.end <= lines.length &&
+						cite.start <= cite.end &&
+						cite.start <= e.end &&
+						cite.end >= e.start,
+				)
+			)
+				continue;
+
+			for (const call of file.text.matchAll(
+				/(?<![\w$.])([\w$]+)\s*(?:<[^;\n]+>)?\s*\(/g,
+			)) {
+				const name = call[1] ?? "";
+				const range = definitions.get(name);
+
+				if (range === undefined) continue;
+				definitions.delete(name);
+
+				if (
+					helpers.length === 3 ||
+					windows.some(
+						(window) =>
+							window.excerpt !== undefined &&
+							window.excerpt.start <= range.start &&
+							window.excerpt.end >= range.end,
+					)
+				)
+					continue;
+
+				helpers.push({
+					...file,
+					text: lines.slice(range.start - 1, range.end).join("\n"),
+					excerpt: {
+						...e,
+						...range,
+						selection: "test_harness",
+						omitted: range.start > 1 || range.end < lines.length,
+						capHit: false,
+						skipped: undefined,
+					},
+				});
+			}
+		}
+	}
+
+	const selected = [...helpers];
+	const firstIndex = shown.findIndex((file) => file.excerpt !== undefined);
+
+	const withOmissions = () =>
+		shown.map(
+			(file, index): InlinedFile =>
+				index === firstIndex &&
+				file.excerpt !== undefined &&
+				selected.length < helpers.length
+					? {
+							...file,
+							excerpt: {
+								...file.excerpt,
+								capHit: true,
+								skipped:
+									(file.excerpt.skipped ?? 0) +
+									helpers.length -
+									selected.length,
+							},
+						}
+					: file,
+		);
+
+	while (
+		selected.length > 0 &&
+		sourceFacts([...withOmissions(), ...selected]).bytes > INLINE_TOTAL_BYTES
+	)
+		selected.pop();
+
+	return boundExcerpts([...withOmissions(), ...selected]);
 }
 
 /** Localize only in the prepared checkout. The immutable contract is never rewritten. */
@@ -1268,7 +1414,11 @@ export async function sourceExcerpts(input: {
 
 	if (sourceFacts(shown).bytes > INLINE_TOTAL_BYTES) shown = windows(0);
 
-	if (sourceFacts(shown).bytes <= INLINE_TOTAL_BYTES) return shown;
+	return boundExcerpts(shown);
+}
+
+function boundExcerpts(shown: readonly InlinedFile[]): InlinedFile[] {
+	if (sourceFacts(shown).bytes <= INLINE_TOTAL_BYTES) return [...shown];
 	const bounded: InlinedFile[] = [];
 	let remaining = INLINE_TOTAL_BYTES - 128;
 
@@ -1331,7 +1481,7 @@ export async function sourceExcerpts(input: {
 			excerpt: {
 				...first.excerpt,
 				capHit: true,
-				skipped: shown.length - bounded.length,
+				skipped: (first.excerpt.skipped ?? 0) + shown.length - bounded.length,
 			},
 		};
 
