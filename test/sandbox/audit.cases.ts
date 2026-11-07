@@ -16,6 +16,7 @@ import {
 	JOURNAL_FILE,
 	type JournalRecord,
 	journalCharge,
+	requestSettlements,
 	openAuditFile,
 	redactMethod,
 	redactPath,
@@ -57,6 +58,104 @@ function record(overrides: Partial<AuditRecord> = {}): AuditRecord {
 const OPENAI = "model-openai" as RouteId;
 
 const NO_JOURNAL = { write: () => {}, sync: () => {} };
+
+import {
+	assertReaderParity,
+	SETTLEMENT_FIXTURES,
+	journalText,
+	requestFixture,
+	replyFixture,
+} from "./settlement-fixtures.ts";
+
+describe("request settlement projection", () => {
+	it("projects all seven variants without rewriting journal bytes", () => {
+		const cases = [
+			["Admitted", [{ ...requestFixture(1), kind: "admitted" }], true],
+			["Dispatched", [requestFixture(1)], false],
+			["Uncertain", [requestFixture(1)], true],
+			[
+				"Unreachable",
+				[
+					requestFixture(1),
+					replyFixture(1, {
+						status: 502,
+						decision: "error",
+						reason: "upstream_unreachable",
+						inputTokens: null,
+						outputTokens: null,
+					}),
+				],
+				true,
+			],
+			[
+				"ProviderRejected",
+				[
+					requestFixture(1),
+					replyFixture(1, {
+						status: 529,
+						reason: "provider_rejected",
+						inputTokens: 0,
+						outputTokens: 0,
+					}),
+				],
+				true,
+			],
+			["Metered", [requestFixture(1), replyFixture(1)], true],
+			[
+				"Unmetered",
+				[
+					requestFixture(1, "model-anthropic", {}),
+					replyFixture(1, { inputTokens: null, outputTokens: null }),
+				],
+				true,
+			],
+		] as const;
+
+		for (const [kind, records, stopped] of cases) {
+			const journal = journalText(records);
+			const projected = requestSettlements(journal, { stopped });
+
+			assert.equal(projected.requests.length, 1, kind);
+			assert.equal(projected.requests[0]?.kind, kind);
+			assert.equal(journal, journalText(records));
+		}
+	});
+
+	it("keeps the lost result input-plus-output bound and the #613 transport origin", () => {
+		const lost = requestSettlements(journalText([requestFixture(1)]))
+			.requests[0];
+
+		assert.ok(lost?.kind === "Uncertain");
+		assert.deepEqual(lost.bound, { inputTokens: 100, maxOutputTokens: 1000 });
+		assert.equal(lost.result, null);
+
+		for (const status of [502, 504]) {
+			const provider = replyFixture(1, {
+				status,
+				decision: "error",
+				inputTokens: null,
+				outputTokens: null,
+			});
+			const upstream = requestSettlements(
+				journalText([requestFixture(1), provider]),
+			).requests[0];
+			const transport = requestSettlements(
+				journalText([
+					requestFixture(1),
+					{ ...provider, reason: "upstream_unreachable" },
+				]),
+			).requests[0];
+
+			assert.equal(upstream?.kind, "Uncertain");
+			assert.ok(transport?.kind === "Unreachable");
+			assert.equal(transport.origin, "gateway-before-headers");
+		}
+	});
+
+	for (const [name, journal] of SETTLEMENT_FIXTURES)
+		it(`preserves charge and family readers: ${name}`, () =>
+			assertReaderParity(journal));
+});
 
 function dispatch(req: number): JournalRecord {
 	return {
