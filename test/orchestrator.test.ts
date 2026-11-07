@@ -12386,7 +12386,6 @@ describe("controller-only validate", () => {
 			}
 
 			let preparations = 0;
-			let recovering = false;
 
 			const reviewLaunches = f.executor.launches.filter(
 				(l) => l.stage === "review",
@@ -12447,7 +12446,6 @@ describe("controller-only validate", () => {
 
 					if (input.round === 1 && input.stage === "review") {
 						assert.ok(preparations > 0);
-						assert.ok(fault === "review_size_callback" || recovering);
 						const current = f.files.claims.get(runOf(14))?.handoff;
 						assert.ok(current?.kind === "selected" && current.current.verdict);
 						const refusal = refuse(current.current.verdict);
@@ -12521,7 +12519,6 @@ describe("controller-only validate", () => {
 					drive(restarted, f),
 					/crash before repair review launch/,
 				);
-				recovering = true;
 				restarted = f.start();
 			}
 
@@ -12529,6 +12526,13 @@ describe("controller-only validate", () => {
 			await drive(restarted, f);
 			const result = f.files.claims.get(runOf(14))?.handoff;
 			assert.ok(result?.kind === "selected");
+
+			if (fault.startsWith("review_size"))
+				assert.equal(
+					preparations,
+					1,
+					"must reach review preparation after validation",
+				);
 			assert.equal(result.work.kind, "held");
 			assert.equal(
 				notices.filter((kind) => kind === "repair_started").length,
@@ -12548,11 +12552,6 @@ describe("controller-only validate", () => {
 			});
 
 			if (fault.startsWith("review_size")) {
-				assert.equal(
-					preparations,
-					1,
-					"must reach review preparation after validation",
-				);
 				assert.deepEqual(result.feedback?.batches[0]?.status, {
 					kind: "settled",
 					outcome: { kind: "stopped", reason: "review_input_too_large" },
@@ -12581,8 +12580,11 @@ describe("controller-only validate", () => {
 			assert.ok(restored?.kind === "selected");
 			assert.equal(restored.published?.readiness.since, heldSince);
 
-			if (fault.startsWith("review_size"))
+			if (fault.startsWith("review_size")) {
 				assert.equal(keyed(f.github, 14, "review-input").length, 1);
+				assert.deepEqual(restored.feedback, result.feedback);
+				assert.deepEqual(restored.work, result.work);
+			}
 		});
 
 	it("hops from CI to isolated review and waits for the owner with charged usage", async () => {

@@ -5211,7 +5211,9 @@ export class Orchestrator {
 						output.kind === "review" &&
 						patch != null
 							? { kind: "passed", review: output.receipt, patch }
-							: { kind: "failed" },
+							: output instanceof Object && output.kind === "refused"
+								? { kind: "failed", reason: output.reason }
+								: { kind: "failed" },
 				};
 			} else
 				event = {
@@ -5523,7 +5525,7 @@ export class Orchestrator {
 				now: clock.now(),
 				execution: request.execution,
 				tokens,
-				result: { kind: "failed" },
+				result: { kind: "failed", reason: prepared.reason },
 			}).state;
 
 			const failed = await this.#reviewInputFailure(run, settled, prepared);
@@ -5703,7 +5705,9 @@ export class Orchestrator {
 							output.kind === "review" &&
 							patch != null
 								? { kind: "passed", review: output.receipt, patch }
-								: { kind: "failed" },
+								: output instanceof Object && output.kind === "refused"
+									? { kind: "failed", reason: output.reason }
+									: { kind: "failed" },
 					};
 				} else
 					event = {

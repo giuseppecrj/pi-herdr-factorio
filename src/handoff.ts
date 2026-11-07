@@ -18,6 +18,7 @@ import {
 	parseFamily,
 	type ReviewBinding,
 	type ReviewReceipt,
+	type ReviewInputRefusal,
 	type ReviewSeat,
 } from "./review.ts";
 import {
@@ -472,7 +473,10 @@ type CandidateEventData =
 						readonly review: ReviewReceipt;
 						readonly patch: Extract<PatchRead, { kind: "found" }>;
 				  }
-				| { readonly kind: "failed" };
+				| {
+						readonly kind: "failed";
+						readonly reason?: ReviewInputRefusal["reason"];
+				  };
 	  }
 	| {
 			readonly kind: "repair_settled";
@@ -938,8 +942,25 @@ export function stopRound(
 		(b) => b.status.kind === "applying",
 	);
 
-	if (applying === undefined || applying.status.kind !== "applying")
+	if (applying === undefined || applying.status.kind !== "applying") {
+		if (
+			(state.work.kind === "effect" &&
+				state.work.request.kind === "post_notice" &&
+				state.work.request.notice.kind === "round_summary") ||
+			(state.work.kind === "held" &&
+				state.feedback?.batches.some(
+					(b) =>
+						b.status.kind === "settled" &&
+						b.status.outcome.kind === "stopped" &&
+						state.work.kind === "held" &&
+						b.status.outcome.reason === state.work.reason,
+				))
+		)
+			return state;
+
 		return hold(state, reason, now);
+	}
+
 	const round = applying.status.round;
 
 	const stopped = {
@@ -2395,6 +2416,14 @@ export function handoffCandidate(
 					!sameGeneration(state.current.intent, event.execution.generation)
 				)
 					break;
+
+				if (
+					event.result.kind === "failed" &&
+					event.result.reason !== undefined
+				) {
+					next = stopRound(updated, event.result.reason, now);
+					break;
+				}
 
 				if (accountFor(updated, event.execution)?.settlement !== "settled") {
 					next = hold(updated, "evidence_unavailable", now);
