@@ -1616,7 +1616,8 @@ describe("candidate review", () => {
 				outcome,
 			);
 		assert.equal(blocksReview([seat]), false);
-		assert.equal(REVIEW_MAX_TOKENS + REPAIR_BUILD_MAX_TOKENS, 320_000);
+		assert.equal(REPAIR_BUILD_MAX_TOKENS, 300_000);
+		assert.equal(REVIEW_MAX_TOKENS + REPAIR_BUILD_MAX_TOKENS, 420_000);
 	});
 });
 

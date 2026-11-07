@@ -845,6 +845,9 @@ test("build and repair prompts say CI runs tests read-only at the root, so temp 
 		inlined: [],
 	});
 
+	assert.match(prompt, /Run npm ci --ignore-scripts once before the first test or lint run if dependencies are missing\./);
+	assert.match(prompt, /Run lint and format checks after each edit batch, not only at the end\./);
+	assert.match(prompt, /Do not re-read \.factory-feedback\.json once you have read it\./);
 	assert.match(prompt, /owner cards.*untrusted requests/i);
 	assert.match(prompt, /dispositions.*event.*adopted.*rejected/is);
 	assert.match(prompt, /\.factory-feedback-full\.json/);

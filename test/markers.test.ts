@@ -14,6 +14,7 @@ import {
 	RUN_STATUSES,
 } from "../src/markers.ts";
 import { digestOf, runIdOf } from "../src/run.ts";
+import type { HandoffReason } from "../src/handoff.ts";
 import type { JsonValue } from "../src/tickets.ts";
 import {
 	type GitSha,
@@ -191,6 +192,51 @@ describe("keyed specify comments in the ledger", () => {
 
 		assert.equal(ledger.kind === "corrupt" && ledger.defect, "edited");
 	});
+});
+
+const holdLabels = {
+	disabled: "factory execution is disabled",
+	main_moving: "the base branch keeps changing",
+	refresh_limit: "the base refresh allowance is used",
+	review_attempts: "the review attempt allowance is used",
+	review_tokens: "a review round used its token allowance",
+	repair_tokens: "a repair round used its token allowance",
+	run_tokens: "the run used its token allowance",
+	head_drift: "the PR head changed unexpectedly",
+	head_lag: "the PR head has not caught up",
+	checks_incomplete: "waiting for required checks",
+	review_failed: "the review did not pass",
+	review_input_too_large: "the review input is too large",
+	summary_too_large: "the PR summary is too large",
+	pr_identity: "the PR identity could not be verified",
+	pr_ambiguous: "more than one PR matches this run",
+	validation_failed: "validation did not pass",
+	evidence_unavailable: "required evidence is unavailable",
+	repair_limit: "the repair round allowance is used",
+	diagnosis_oracle: "the acceptance checks need attention",
+	diagnosis_missing_evidence: "diagnosis is missing required evidence",
+	diagnosis_infrastructure: "diagnosis found an infrastructure problem",
+	feedback_overflow: "owner feedback exceeds the intake limit",
+	feedback_repair: "owner feedback requires a repair",
+	repair_no_progress: "the repair made no progress",
+	repair_repeated_finding: "the repair repeated a blocking finding",
+	closed: "the PR is closed",
+	withdrawn: "authorization was withdrawn",
+} satisfies Record<HandoffReason, string>;
+
+describe("held marker text", () => {
+	for (const [reason, label] of Object.entries(holdLabels)) {
+		it(`explains ${reason} without changing the marker wire format`, () => {
+			const value = marker({ v: 2, status: "blocked", stage: "build", round: 1 });
+			// SAFETY: holdLabels is exhaustively checked against HandoffReason above.
+			const body = formatMarker(value, reason as HandoffReason);
+
+			assert.ok(body.includes(`blocked: ${label} (${reason})`));
+			assert.match(body, /Stage build, round 1, attempt 1\./);
+			assert.equal(body.split("\n")[0], formatMarker(value).split("\n")[0]);
+			assert.deepEqual(parseMarker(body), { kind: "marker", marker: value });
+		});
+	}
 });
 
 describe("marker format", () => {
