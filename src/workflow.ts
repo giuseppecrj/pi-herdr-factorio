@@ -231,7 +231,15 @@ export function isGitSha(input: string): input is GitSha {
 }
 
 export function isBranchName(input: string): boolean {
-	return BRANCH_NAME.test(input);
+	return (
+		BRANCH_NAME.test(input) &&
+		!input.endsWith(".") &&
+		input
+			.split("/")
+			.every(
+				(segment) => !segment.startsWith(".") && !segment.endsWith(".lock"),
+			)
+	);
 }
 
 function isModelId(input: string): input is ModelId {
