@@ -4094,6 +4094,30 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 			const { runId, stage, attempt, round = 0 } = input;
 
 			if (stage === "build") {
+				const outcomePath = join(
+					config.stateDir,
+					"stages",
+					runId,
+					`${stageName(stage, attempt, round)}-result.json`,
+				);
+
+				if (existsSync(outcomePath)) {
+					const reason = textOf(
+						fieldOf(objectOf(parseJson(regularText(outcomePath))), "reason"),
+					);
+
+					return {
+						kind: "build",
+						result: {
+							kind: "blocked",
+							reason:
+								reason === "repair_no_change" || reason === "patch_missing"
+									? reason
+									: "patch_invalid",
+						},
+					};
+				}
+
 				let kept = readRunPatch(config.stateDir, runId, round);
 
 				if (round > 0 && kept.kind === "found") {
@@ -4825,6 +4849,40 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 								input.attempt,
 								input.round,
 							);
+
+							if ((input.round ?? 0) > 0) {
+								const previous = readRunPatch(
+									config.stateDir,
+									input.runId,
+									input.round! - 1,
+								);
+
+								const reason =
+									previous.kind !== "found"
+										? "patch_missing"
+										: previous.receipt.patchDigest === patch.patchDigest
+											? "repair_no_change"
+											: null;
+
+								if (reason !== null) {
+									const saved = publishFile(
+										join(
+											config.stateDir,
+											"stages",
+											input.runId,
+											`${stageName("build", input.attempt, input.round)}-result.json`,
+										),
+										JSON.stringify({ reason }),
+									);
+
+									return saved
+										? result
+										: stageResult({
+												...result.receipt,
+												outcome: { kind: "failed", exit: "crashed" },
+											});
+								}
+							}
 
 							kept = storePatch(config.stateDir, binding, patch, {
 								model:
