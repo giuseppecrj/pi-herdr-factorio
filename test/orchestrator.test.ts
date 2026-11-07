@@ -4366,6 +4366,88 @@ describe("server/cli.ts controller commands", () => {
 		);
 	});
 
+	it("status JSON classifies complete and missing receipt coverage", async () => {
+		const github = new FakeGitHub();
+		const state = stateDir();
+		github.add(labeled(14));
+		const executor = new FakeExecutor();
+		executor.behaviors = [{ kind: "refuse", usage: 40 }];
+		await cli(
+			["tick", "--once", "--json", ...base, "--state-dir", state],
+			github,
+			new AbortController(),
+			executor,
+		);
+		const stage = join(state, "stages", runOf(14), "specify-1");
+		mkdirSync(stage, { recursive: true });
+		writeFileSync(
+			join(stage, "receipt.json"),
+			JSON.stringify({
+				version: 1,
+				runId: runOf(14),
+				stage: "specify",
+				attempt: 1,
+				outcome: { kind: "passed" },
+				turns: 1,
+				wallMs: 10,
+				usage: {
+					total: 40,
+					parent: 40,
+					children: 0,
+					gateway: 40,
+					unreadChildren: 0,
+					byModel: {},
+				},
+			}),
+		);
+
+		const result = await cli(
+			["status", "--json", ...base, "--state-dir", state],
+			github,
+		);
+
+		assert.deepEqual(JSON.parse(result.stdout).accounting.runs[0].tokens, {
+			kind: "exact",
+			unit: "tokens",
+			total: 40,
+		});
+		const receiptPath = join(stage, "receipt.json");
+		const receipt = JSON.parse(readFileSync(receiptPath, "utf8"));
+		writeFileSync(receiptPath, JSON.stringify({ ...receipt, attempt: 2 }));
+
+		const mismatched = await cli(
+			["status", "--json", ...base, "--state-dir", state],
+			github,
+		);
+
+		assert.deepEqual(JSON.parse(mismatched.stdout).accounting.runs[0].tokens, {
+			kind: "lower_bound",
+			unit: "tokens",
+			total: 40,
+			reason: "receipt_missing",
+		});
+		writeFileSync(receiptPath, JSON.stringify(receipt));
+		assert.deepEqual((await readRunCharges(state, runOf(14), 50)).tokens, {
+			kind: "lower_bound",
+			unit: "tokens",
+			total: 50,
+			reason: "receipt_missing",
+		});
+		rmSync(join(stage, "receipt.json"));
+
+		const missing = await cli(
+			["status", "--json", ...base, "--state-dir", state],
+			github,
+		);
+
+		assert.deepEqual(JSON.parse(missing.stdout).accounting.runs[0].tokens, {
+			kind: "lower_bound",
+			unit: "tokens",
+			total: 40,
+			reason: "receipt_missing",
+		});
+	});
+
 	it("status marks upper-bound charges uncertain and never calls missing state an empty backlog", async () => {
 		const github = new FakeGitHub();
 		const state = stateDir();
@@ -4392,6 +4474,7 @@ describe("server/cli.ts controller commands", () => {
 
 		const status = JSON.parse(result.stdout);
 		assert.equal(status.accounting.runs[0].tokens.kind, "uncertain");
+		assert.equal(status.accounting.runs[0].tokens.reason, "request_unsettled");
 		assert.equal(status.durableUsage.kind, "uncertain");
 		assert.equal(status.durableUsage.total, 80);
 

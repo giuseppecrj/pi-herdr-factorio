@@ -985,6 +985,90 @@ describe("ledger row codec", () => {
 		);
 	});
 
+	it("classifies receipt token coverage without changing totals", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-token-coverage-"));
+		const runId = rowInput(41).runId;
+		const stage = join(dir, "stages", runId, "specify-1");
+		mkdirSync(stage, { recursive: true });
+
+		try {
+			writeFileSync(
+				join(stage, "receipt.json"),
+				JSON.stringify({
+					version: 1,
+					runId,
+					stage: "specify",
+					attempt: 1,
+					outcome: { kind: "passed" },
+					turns: 1,
+					wallMs: 10,
+					usage: {
+						total: 11,
+						parent: 11,
+						children: 0,
+						gateway: 11,
+						unreadChildren: 0,
+						byModel: {},
+					},
+				}),
+			);
+			const complete = await readTerminalEvidence(dir, runId, 0, null);
+			assert.deepEqual(complete.usage?.tokens, {
+				kind: "exact",
+				unit: "tokens",
+				total: 11,
+			});
+			assert.equal(complete.stages?.kind, "known");
+
+			if (complete.stages?.kind === "known")
+				assert.deepEqual(
+					complete.stages.value[0]?.tokens,
+					complete.usage?.tokens,
+				);
+			const receiptPath = join(stage, "receipt.json");
+			const receipt = JSON.parse(readFileSync(receiptPath, "utf8"));
+			writeFileSync(receiptPath, JSON.stringify({ ...receipt, attempt: 2 }));
+			const mismatched = await readTerminalEvidence(dir, runId, 0, null);
+			assert.deepEqual(mismatched.usage?.tokens, {
+				kind: "lower_bound",
+				unit: "tokens",
+				total: 11,
+				reason: "receipt_missing",
+			});
+
+			if (mismatched.stages?.kind === "known")
+				assert.deepEqual(
+					mismatched.stages.value[0]?.tokens,
+					mismatched.usage?.tokens,
+				);
+			writeFileSync(receiptPath, JSON.stringify(receipt));
+			const floor = await readTerminalEvidence(dir, runId, 20, null);
+			assert.deepEqual(floor.usage?.tokens, {
+				kind: "lower_bound",
+				unit: "tokens",
+				total: 20,
+				reason: "receipt_missing",
+			});
+			rmSync(join(stage, "receipt.json"));
+			const missing = await readTerminalEvidence(dir, runId, 11, null);
+			assert.deepEqual(missing.usage?.tokens, {
+				kind: "lower_bound",
+				unit: "tokens",
+				total: 11,
+				reason: "receipt_missing",
+			});
+			writeFileSync(
+				join(stage, "egress.requests.jsonl"),
+				'{"kind":"dispatch","req":1,"inputTokenEstimate":10,"maxOutputTokens":5}\n',
+			);
+			const unsettled = await readTerminalEvidence(dir, runId, 0, null);
+			assert.equal(unsettled.usage?.tokens.kind, "uncertain");
+			assert.equal(unsettled.usage?.tokens.reason, "request_unsettled");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("reconciles receipts, failed retries and interrupted journals into v3 without adding aggregate leaves twice", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "factory-efficiency-ledger-"));
 		const base = rowInput(41);
