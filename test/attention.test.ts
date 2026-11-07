@@ -329,6 +329,210 @@ test("six groups distinguish unknown legacy ages and never duplicate a not-ready
 	assert.equal(read.groups.spec_review.length, 0);
 });
 
+test("an unverified claim appears once in blocked with the observation's age, and clears on recovery", async () => {
+	const root = fixture();
+	const runId = claim(root, 14, "claimed", { enteredAt: 10 });
+
+	const status = {
+		repo,
+		unverifiedClaims: [
+			{
+				issue: 14,
+				runId,
+				eventId: "1",
+				why: "ledger",
+				failure: "gh_failed",
+				since: 200,
+			},
+		],
+	};
+
+	const path = join(root, "status.json");
+	writeFileSync(path, JSON.stringify(status), { mode: 0o600 });
+	const read = await readAttention({ stateDir: root, repo, now: 1000 });
+	assert.equal(read.kind, "available");
+	assert.deepEqual(read.groups.blocked, [
+		{
+			runId,
+			issueUrl: `https://github.com/${repo}/issues/14`,
+			prUrl: null,
+			ageMs: 800,
+			reason: "claim_unverified:ledger:gh_failed",
+		},
+	]);
+	assert.equal(Object.values(read.groups).flat().length, 1);
+	writeFileSync(
+		path,
+		JSON.stringify({
+			...status,
+			unverifiedClaims: [],
+		}),
+	);
+	const healed = await readAttention({ stateDir: root, repo, now: 2000 });
+	assert.equal(healed.kind, "available");
+	assert.equal(healed.groups.blocked.length, 0);
+});
+
+test("attention includes an unverified discovery before any claim file or active run exists", async () => {
+	const root = fixture();
+	const runId = runIdOf({ repo, issue: 14, eventId: "1" });
+	writeFileSync(
+		join(root, "status.json"),
+		JSON.stringify({
+			repo,
+			runs: [],
+			unverifiedClaims: [
+				{
+					issue: 14,
+					runId,
+					eventId: "1",
+					why: "ledger",
+					failure: "gh_failed",
+					since: 200,
+				},
+			],
+		}),
+		{ mode: 0o600 },
+	);
+	const read = await readAttention({ stateDir: root, repo, now: 1000 });
+	assert.equal(read.kind, "available");
+	assert.deepEqual(read.groups.blocked, [
+		{
+			runId,
+			issueUrl: `https://github.com/${repo}/issues/14`,
+			prUrl: null,
+			ageMs: 800,
+			reason: "claim_unverified:ledger:gh_failed",
+		},
+	]);
+});
+
+for (const predecessorStatus of ["released", "needs_info", "claimed"])
+	test(`an unverified discovery is visible beside a ${predecessorStatus} predecessor for the same issue`, async () => {
+		const root = fixture();
+		claim(root, 14, predecessorStatus);
+		claim(root, 15, "failed");
+		const before = await readAttention({ stateDir: root, repo, now: 1000 });
+		assert.equal(before.kind, "available");
+		const runId = runIdOf({ repo, issue: 14, eventId: "2" });
+		writeFileSync(
+			join(root, "status.json"),
+			JSON.stringify({
+				repo,
+				runs: [],
+				unverifiedClaims: [
+					{
+						issue: 14,
+						runId,
+						eventId: "2",
+						why: "ledger",
+						failure: "gh_failed",
+						since: 200,
+					},
+				],
+			}),
+			{ mode: 0o600 },
+		);
+		const read = await readAttention({ stateDir: root, repo, now: 1000 });
+		assert.equal(read.kind, "available");
+		assert.deepEqual(read.groups, {
+			...before.groups,
+			blocked: [
+				{
+					runId,
+					issueUrl: `https://github.com/${repo}/issues/14`,
+					prUrl: null,
+					ageMs: 800,
+					reason: "claim_unverified:ledger:gh_failed",
+				},
+			],
+		});
+		assert.deepEqual(read.gaps, before.gaps);
+	});
+
+for (const mismatch of [
+	"repo",
+	"runId",
+	"issue",
+	"eventId",
+	"since",
+	"permissions",
+	"terminal",
+])
+	test(`attention ignores an unverified status with mismatched ${mismatch}`, async () => {
+		const root = fixture();
+
+		const runId = claim(
+			root,
+			14,
+			mismatch === "terminal" ? "released" : "claimed",
+		);
+
+		const path = join(root, "status.json");
+		writeFileSync(
+			path,
+			JSON.stringify({
+				repo: mismatch === "repo" ? "other/repo" : repo,
+				unverifiedClaims: [
+					{
+						runId: mismatch === "runId" ? digestOf("other") : runId,
+						issue: mismatch === "issue" ? 15 : 14,
+						eventId: mismatch === "eventId" ? "2" : "1",
+						why: "ledger",
+						failure: "gh_failed",
+						since: mismatch === "since" ? -1 : 200,
+					},
+				],
+			}),
+			{ mode: mismatch === "permissions" ? 0o644 : 0o600 },
+		);
+		const read = await readAttention({ stateDir: root, repo, now: 1000 });
+		assert.equal(read.kind, "available");
+		assert.equal(read.groups.blocked.length, 0);
+	});
+
+test("a terminal run's stale hold stays hidden when another run has the newest claim", async () => {
+	const root = fixture();
+	const released = claim(root, 14, "released");
+	const newest = runIdOf({ repo, issue: 14, eventId: "2" });
+	writeFileSync(
+		join(root, "claims", `${newest}.json`),
+		JSON.stringify({
+			runId: newest,
+			issue: 14,
+			eventId: "2",
+			seq: 2,
+			status: "needs_info",
+			stage: "specify",
+		}),
+		{ mode: 0o600 },
+	);
+	const before = await readAttention({ stateDir: root, repo, now: 1000 });
+	assert.equal(before.kind, "available");
+	assert.equal(before.groups.question_asked[0]?.runId, newest);
+	writeFileSync(
+		join(root, "status.json"),
+		JSON.stringify({
+			repo,
+			unverifiedClaims: [
+				{
+					issue: 14,
+					runId: released,
+					eventId: "1",
+					why: "ledger",
+					failure: "gh_failed",
+					since: 200,
+				},
+			],
+		}),
+		{ mode: 0o600 },
+	);
+	assert.deepEqual(
+		await readAttention({ stateDir: root, repo, now: 1000 }),
+		before,
+	);
+});
+
 test("legacy attention ignores private ledger accounting and request journals without rewriting claims", async () => {
 	const root = fixture();
 	const id = claim(root, 1, "needs_info");
@@ -536,6 +740,24 @@ test("real CLI status and registered extension compose the same local attention 
 	const root = fixture();
 	claim(root, 1, "needs_info");
 	claim(root, 2, "waiting", { stage: "land" });
+	const held = claim(root, 3, "claimed");
+	writeFileSync(
+		join(root, "status.json"),
+		JSON.stringify({
+			repo,
+			unverifiedClaims: [
+				{
+					issue: 3,
+					runId: held,
+					eventId: "1",
+					why: "ledger",
+					failure: "gh_failed",
+					since: Date.now() - 60_000,
+				},
+			],
+		}),
+		{ mode: 0o600 },
+	);
 	const requests: string[] = [];
 
 	const exec = async (command: string, args: readonly string[]) => {
@@ -576,6 +798,16 @@ test("real CLI status and registered extension compose the same local attention 
 		attention: { kind: "available", specReview: "not_enabled_in_v1" },
 	});
 	assert.match(output, /question_asked/);
+	assert.partialDeepStrictEqual(JSON.parse(output), {
+		attention: {
+			groups: {
+				blocked: [
+					{ reason: "candidate_book_unavailable" },
+					{ runId: held, reason: "claim_unverified:ledger:gh_failed" },
+				],
+			},
+		},
+	});
 	const previous = process.env.FACTORY_STATE_DIR;
 	process.env.FACTORY_STATE_DIR = root;
 	const handlers: (() => Promise<void>)[] = [];
@@ -606,7 +838,8 @@ test("real CLI status and registered extension compose the same local attention 
 
 	assert.match(sent, /question_asked: 1/);
 	assert.match(sent, /spec_review: not enabled in v1/);
-	assert.match(sent, /blocked: 1/);
+	assert.match(sent, /blocked: 2/);
+	assert.match(sent, /age \d+s \(claim_unverified:ledger:gh_failed\)/);
 	assert.match(sent, /pr_review: 0/);
 	assert.match(sent, /candidate_book_unavailable/);
 	assert.ok(requests.length > 0);

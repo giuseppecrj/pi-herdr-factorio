@@ -85,6 +85,7 @@ import {
 	type MarkerDefect,
 	type MarkerLedger,
 	markerLedger,
+	parseMarker,
 	type RunStatus,
 	type TerminalStatus,
 } from "./markers.ts";
@@ -708,7 +709,28 @@ export type GateReason =
 export type Unverified = {
 	readonly why: "issue" | "timeline" | "ledger" | "timeline_entry";
 	readonly failure: GitHubFailure["kind"] | null;
+	/** First failed observation in this uninterrupted hold, on the controller clock. */
+	readonly since: number;
 };
+
+/** Ephemeral evidence about a claim, never restored as launch permission. */
+export type ClaimObservation =
+	| {
+			readonly kind: "owned_confirmed";
+			readonly tick: number;
+			readonly event: string;
+			readonly ledgerSeq: number;
+	  }
+	| {
+			readonly kind: "owned_unverified";
+			readonly read: Unverified["why"];
+			readonly failure: Unverified["failure"];
+			readonly since: number;
+	  }
+	| { readonly kind: "foreign"; readonly runId: Digest }
+	| { readonly kind: "corrupt"; readonly defect: MarkerDefect }
+	| { readonly kind: "released"; readonly reason: ReleaseReason }
+	| { readonly kind: "unclaimed" };
 
 export type RunView = {
 	readonly issue: number;
@@ -740,6 +762,12 @@ export type TickReport = {
 	/** Runs holding a slot. Above `maxConcurrent` only after the cap was lowered while they ran. */
 	readonly active: number;
 	readonly runs: readonly RunView[];
+	/** Includes owned holds discovered before a run can be adopted. */
+	readonly unverifiedClaims: readonly (Unverified & {
+		readonly issue: number;
+		readonly runId: Digest;
+		readonly eventId: string;
+	})[];
 	readonly queued: readonly number[];
 	/** Scoped issues that are not open `factory:ready` issues and hold no claim. */
 	readonly absent: readonly number[];
@@ -773,38 +801,27 @@ type Limits = {
 	stallMs(stage: Stage): number;
 };
 
-type Eligibility = "confirmed" | "unverified" | "released" | "dropped";
-
 type ReleaseReason = "closed" | "unlabeled" | "new_event";
 
-type Replacement = "current" | "unverified" | "unlabeled" | "new_event";
-
-function unverifiedView(
-	held: (Unverified & { readonly runId: Digest }) | undefined,
-	run: ActiveRun,
-): Unverified | null {
-	return held?.runId === run.runId
-		? { why: held.why, failure: held.failure }
-		: null;
-}
-
-function replacedBy(
-	timeline: readonly TimelineEntry[],
-	event: { readonly eventId: string; readonly eventAt: string },
-): Replacement {
-	const latest = latestReadyEntry(timeline);
-
-	if (latest.kind === "tied") return "new_event";
-
-	if (latest.kind === "none") return "unverified";
-
-	const { entry } = latest;
-
-	if (entry.kind === "labeled" && entry.id === event.eventId) return "current";
-
-	if (entry.at <= event.eventAt) return "unverified";
-
-	return entry.kind === "unlabeled" ? "unlabeled" : "new_event";
+function claimProjection(
+	observation: ClaimObservation,
+	tick: number,
+	event: string,
+) {
+	return {
+		launch:
+			observation.kind === "owned_confirmed" &&
+			observation.tick === tick &&
+			observation.event === event,
+		unverified:
+			observation.kind === "owned_unverified"
+				? {
+						why: observation.read,
+						failure: observation.failure,
+						since: observation.since,
+					}
+				: null,
+	};
 }
 
 const SETTLE_MS = 1000;
@@ -1111,17 +1128,22 @@ export class Orchestrator {
 	#tickAt = 0;
 	readonly #recover = new Set<number>();
 	readonly #reserved = new Set<number>();
-	/** Issues whose claim this tick confirmed eligible. Only these launch. */
-	readonly #confirmed = new Set<number>();
 	readonly #readOpen = new Set<number>();
+	/** Log history only; ownership and dispatch come from #observations. */
 	readonly #foreignRuns = new Set<Digest>();
 	readonly #local = new Map<number, ConfirmedRecord>();
 	readonly #ended = new Map<Digest, EndedRecord>();
 	readonly #behind = new Map<number, TickReport["ledgerBehind"][number]>();
-	/** Claims whose last check failed a read, with the tick that saw it. */
-	readonly #unverified = new Map<
-		number,
-		Unverified & { readonly runId: Digest; readonly tick: number }
+	readonly #observations = new Map<
+		Digest,
+		{
+			readonly issue: number;
+			readonly eventId: string;
+			readonly tick: number;
+			readonly observation: ClaimObservation;
+			/** The preceding tick, before this tick's provisional confirmations. */
+			readonly previous: ClaimObservation | undefined;
+		}
 	>();
 	readonly #stages = new Set<Promise<void>>();
 	readonly #draining = new Set<Draining>();
@@ -1187,8 +1209,12 @@ export class Orchestrator {
 
 		this.#ticks++;
 		this.#tickAt = now;
-		this.#confirmed.clear();
 		this.#readOpen.clear();
+
+		for (const [runId, held] of this.#observations) {
+			if (held.tick < this.#ticks - 1) this.#observations.delete(runId);
+		}
+
 		const refused: { issue: number; reasons: RefusalReason["kind"][] }[] = [];
 
 		if (!this.#claimsLoaded) {
@@ -1554,52 +1580,139 @@ export class Orchestrator {
 
 			if (run.claimUnwritten) await this.#writeClaim(run);
 
-			const eligibility =
+			const observation = this.#observeClaim(
+				run,
 				candidates.kind === "ok"
 					? await this.#checkEligible(run, candidates.value)
-					: "unverified";
+					: { kind: "unclaimed" },
+			);
 
-			if (eligibility !== "dropped") await this.#sync(run);
-		}
-
-		for (const [issue, held] of this.#unverified) {
-			if (
-				held.tick !== this.#ticks ||
-				this.state.runs.get(issue)?.runId !== held.runId
-			)
-				this.#unverified.delete(issue);
+			if (observation.kind !== "corrupt") await this.#sync(run);
 		}
 	}
 
-	/**
-	 * Records a claim left unverified by a failed read. It logs
-	 * `claim_unverified` once per run until the reason changes or the claim is
-	 * confirmed, not on every tick.
-	 */
-	#unverifiedBy(
-		run: ActiveRun,
-		why: Unverified["why"],
-		failure: GitHubFailure | null,
-	): "unverified" {
-		const kind = failure?.kind ?? null;
-		const last = this.#unverified.get(run.issue);
+	/** The only observation writer: deduplicate reasons and keep a continuous hold's age. */
+	#observeClaim(
+		claim: {
+			readonly issue: number;
+			readonly runId: Digest;
+			readonly eventId: string;
+			readonly status?: RunStatus | null;
+			readonly seq?: number | null;
+		},
+		next: ClaimObservation,
+	): ClaimObservation {
+		const last = this.#observations.get(claim.runId);
 
-		if (last?.runId !== run.runId || last.why !== why || last.failure !== kind)
-			this.#input.log("claim_unverified", {
-				issue: run.issue,
-				runId: run.runId,
-				why,
-				failure: kind,
+		const prior =
+			last?.tick === this.#ticks
+				? last.previous
+				: last?.tick === this.#ticks - 1
+					? last.observation
+					: undefined;
+
+		const previous =
+			last?.tick === this.#ticks && last.observation.kind === "owned_unverified"
+				? last.observation
+				: prior;
+
+		if (next.kind === "owned_unverified") {
+			if (
+				previous?.kind !== "owned_unverified" ||
+				previous.read !== next.read ||
+				previous.failure !== next.failure
+			)
+				this.#input.log("claim_unverified", {
+					issue: claim.issue,
+					runId: claim.runId,
+					why: next.read,
+					failure: next.failure,
+				});
+
+			if (previous?.kind === "owned_unverified")
+				next = { ...next, since: previous.since };
+		} else if (next.kind === "foreign" && !this.#foreignRuns.has(claim.runId)) {
+			this.#foreignRuns.add(claim.runId);
+			this.#input.log("claim_foreign", {
+				issue: claim.issue,
+				runId: claim.runId,
+				status: claim.status ?? null,
+				seq: claim.seq ?? null,
 			});
+		}
 
-		this.#unverified.set(run.issue, {
-			runId: run.runId,
-			why,
-			failure: kind,
+		this.#observations.set(claim.runId, {
+			issue: claim.issue,
+			eventId: claim.eventId,
 			tick: this.#ticks,
+			observation: next,
+			previous: prior,
 		});
 
-		return "unverified";
+		return next;
+	}
+
+	#claimView(run: ActiveRun): ReturnType<typeof claimProjection> {
+		const held = this.#observations.get(run.runId);
+
+		return claimProjection(
+			held?.tick === this.#ticks ? held.observation : { kind: "unclaimed" },
+			this.#ticks,
+			run.eventId,
+		);
+	}
+
+	#unverifiedBy(
+		read: Unverified["why"],
+		failure: GitHubFailure | null,
+	): ClaimObservation {
+		return {
+			kind: "owned_unverified",
+			read,
+			failure: failure?.kind ?? null,
+			since: this.#tickAt,
+		};
+	}
+
+	#confirmedBy(event: {
+		readonly eventId: string;
+		readonly seq: number;
+	}): ClaimObservation {
+		return {
+			kind: "owned_confirmed",
+			tick: this.#ticks,
+			event: event.eventId,
+			ledgerSeq: event.seq,
+		};
+	}
+
+	#timelineObservation(
+		timeline: readonly TimelineEntry[],
+		event: {
+			readonly eventId: string;
+			readonly eventAt: string;
+			readonly seq: number;
+		},
+	): ClaimObservation {
+		const latest = latestReadyEntry(timeline);
+
+		if (latest.kind === "tied")
+			return { kind: "released", reason: "new_event" };
+
+		if (latest.kind === "none")
+			return this.#unverifiedBy("timeline_entry", null);
+		const { entry } = latest;
+
+		if (entry.kind === "labeled" && entry.id === event.eventId)
+			return this.#confirmedBy(event);
+
+		if (entry.at <= event.eventAt)
+			return this.#unverifiedBy("timeline_entry", null);
+
+		return {
+			kind: "released",
+			reason: entry.kind === "unlabeled" ? "unlabeled" : "new_event",
+		};
 	}
 
 	/**
@@ -1611,20 +1724,20 @@ export class Orchestrator {
 	async #checkEligible(
 		run: ActiveRun,
 		candidates: readonly IssueRecord[],
-	): Promise<Eligibility> {
+	): Promise<ClaimObservation> {
 		if (run.phase.kind === "recovering") {
 			const issue = await this.#adapter.readIssue(run.issue);
 
 			if (issue.kind === "failed")
-				return this.#unverifiedBy(run, "issue", issue.failure);
+				return this.#unverifiedBy("issue", issue.failure);
 
 			if (!issue.value.open) {
 				this.#release(run, "closed");
 
-				return "released";
+				return { kind: "released", reason: "closed" };
 			}
 
-			if (run.stage === "build" && !this.#enabled) return "unverified";
+			if (run.stage === "build" && !this.#enabled) return { kind: "unclaimed" };
 
 			const output =
 				run.stage === "build"
@@ -1642,11 +1755,11 @@ export class Orchestrator {
 			if (!recovered && limits !== null)
 				this.#endStage(run, "interrupted", 0, limits);
 
-			return "unverified";
+			return { kind: "unclaimed" };
 		}
 
 		if (run.phase.kind === "ending" || run.phase.kind === "reporting") {
-			return "unverified";
+			return { kind: "unclaimed" };
 		}
 
 		let record = candidates.find((item) => item.number === run.issue);
@@ -1655,14 +1768,17 @@ export class Orchestrator {
 			const read = await this.#adapter.readIssue(run.issue);
 
 			if (read.kind === "failed")
-				return this.#unverifiedBy(run, "issue", read.failure);
+				return this.#unverifiedBy("issue", read.failure);
 
 			const issue = read.value;
 
 			if (!isReady(issue)) {
 				this.#release(run, issue.open ? "unlabeled" : "closed");
 
-				return "released";
+				return {
+					kind: "released",
+					reason: issue.open ? "unlabeled" : "closed",
+				};
 			}
 
 			this.#readOpen.add(run.issue);
@@ -1670,54 +1786,47 @@ export class Orchestrator {
 		}
 
 		if (!this.#unchanged(run.issue, record.updatedAt)) {
-			const changed = await this.#recheckChanged(run, record.updatedAt);
-
-			if (changed !== "confirmed") return changed;
+			return this.#recheckChanged(run, record.updatedAt);
 		}
 
-		this.#confirmed.add(run.issue);
-
-		return "confirmed";
+		return this.#confirmedBy(run);
 	}
 
 	async #recheckChanged(
 		run: ActiveRun,
 		updatedAt: string,
-	): Promise<Eligibility> {
+	): Promise<ClaimObservation> {
 		const timeline = await this.#adapter.readTimeline(run.issue);
 
 		if (timeline.kind === "failed")
-			return this.#unverifiedBy(run, "timeline", timeline.failure);
+			return this.#unverifiedBy("timeline", timeline.failure);
 
 		const ledger = await this.#readLedger(run.issue);
 
 		if (ledger.kind === "failed")
-			return this.#unverifiedBy(run, "ledger", ledger.failure);
+			return this.#unverifiedBy("ledger", ledger.failure);
 
 		if (ledger.value.kind === "corrupt") {
 			this.#markCorrupt(run.issue, ledger.value, updatedAt);
 			this.#drop(run);
 
-			return "dropped";
+			return { kind: "corrupt", defect: ledger.value.defect };
 		}
 
 		this.#localAhead(run.issue, ledger.value);
 		await this.#confirmEnd(run.issue, ledger.value);
 
-		const replaced = replacedBy(timeline.value, run);
+		const observation = this.#timelineObservation(timeline.value, {
+			...run,
+			seq: ledger.value.markers.at(-1)?.marker.seq ?? 0,
+		});
 
-		if (replaced === "unverified")
-			return this.#unverifiedBy(run, "timeline_entry", null);
+		if (observation.kind === "released") this.#release(run, observation.reason);
 
-		if (replaced !== "current") {
-			this.#release(run, replaced);
+		if (observation.kind === "owned_confirmed")
+			this.#see(run.issue, updatedAt, { kind: "claimed" });
 
-			return "released";
-		}
-
-		this.#see(run.issue, updatedAt, { kind: "claimed" });
-
-		return "confirmed";
+		return observation;
 	}
 
 	/** Stops tracking a run whose ledger turned corrupt. Its claim record stays as evidence. */
@@ -2590,10 +2699,18 @@ export class Orchestrator {
 		);
 	}
 
-	async #readLedger(issue: number): Promise<Read<MarkerLedger>> {
+	async #readLedger(
+		issue: number,
+		discovering = false,
+	): Promise<Read<MarkerLedger>> {
 		const comments = await this.#adapter.readComments(issue);
 
-		if (comments.kind === "failed") return comments;
+		if (comments.kind === "failed") {
+			if (discovering)
+				await this.#observeUnreadLedger(issue, comments.failure, []);
+
+			return comments;
+		}
 
 		const controller = comments.value.filter(isControllerComment);
 
@@ -2601,7 +2718,12 @@ export class Orchestrator {
 			controller.map((comment) => comment.nodeId),
 		);
 
-		if (edits.kind === "failed") return edits;
+		if (edits.kind === "failed") {
+			if (discovering)
+				await this.#observeUnreadLedger(issue, edits.failure, controller);
+
+			return edits;
+		}
 
 		return {
 			kind: "ok",
@@ -2612,6 +2734,66 @@ export class Orchestrator {
 				edits: edits.value,
 			}),
 		};
+	}
+
+	/** Unchecked marker bodies are identity hints for a diagnostic, never permission to adopt. */
+	async #observeUnreadLedger(
+		issue: number,
+		failure: GitHubFailure,
+		comments: readonly IssueComment[],
+	): Promise<void> {
+		const local = this.#local.get(issue);
+
+		if (
+			local !== undefined &&
+			(local.status === null || !isTerminal(local.status)) &&
+			!(await this.#unadmitted(issue, local.eventId))
+		)
+			this.#observeClaim(local, this.#unverifiedBy("ledger", failure));
+
+		if (local === undefined) {
+			for (const [runId, known] of this.#observations) {
+				if (
+					known.issue === issue &&
+					!this.#ended.has(runId) &&
+					(known.observation.kind === "owned_confirmed" ||
+						known.observation.kind === "owned_unverified") &&
+					!(await this.#unadmitted(issue, known.eventId))
+				)
+					this.#observeClaim(
+						{ issue, runId, eventId: known.eventId },
+						this.#unverifiedBy("ledger", failure),
+					);
+			}
+		}
+
+		const newest = comments
+			.flatMap((comment) => {
+				const parsed = parseMarker(comment.body);
+
+				return parsed.kind === "marker" &&
+					parsed.marker.repo === this.#input.repo &&
+					parsed.marker.issue === issue
+					? [parsed.marker]
+					: [];
+			})
+			.sort((a, b) => b.seq - a.seq)[0];
+
+		if (
+			newest === undefined ||
+			isTerminal(newest.status) ||
+			newest.runId === local?.runId
+		)
+			return;
+
+		const admission = await this.#input.store.read({
+			repo: this.#input.repo,
+			issue,
+			eventId: newest.eventId,
+		});
+
+		if (admission.kind === "found" && matchesRecord(newest, admission.receipt))
+			this.#observeClaim(newest, this.#unverifiedBy("ledger", failure));
 	}
 
 	#markCorrupt(
@@ -2720,7 +2902,13 @@ export class Orchestrator {
 
 			const read = await this.#adapter.readIssue(issue);
 
-			if (read.kind !== "ok") continue;
+			if (read.kind !== "ok") {
+				const local = this.#local.get(issue);
+
+				if (local !== undefined)
+					this.#observeClaim(local, this.#unverifiedBy("issue", read.failure));
+				continue;
+			}
 
 			records.set(issue, read.value);
 
@@ -2739,11 +2927,18 @@ export class Orchestrator {
 				continue;
 			}
 
-			const ledger = await this.#readLedger(issue);
+			const ledger = await this.#readLedger(issue, true);
 
 			if (ledger.kind === "failed") continue;
 
 			if (ledger.value.kind === "corrupt") {
+				const local = this.#local.get(issue);
+
+				if (local !== undefined)
+					this.#observeClaim(local, {
+						kind: "corrupt",
+						defect: ledger.value.defect,
+					});
 				this.#resolve(issue);
 				this.#markCorrupt(issue, ledger.value, record.updatedAt);
 				continue;
@@ -2768,10 +2963,12 @@ export class Orchestrator {
 			const candidate =
 				isReady(record) || (record.open && candidates.includes(record));
 
-			const foreign =
-				current !== null &&
-				!isTerminal(current.status) &&
-				(await this.#foreign(current));
+			const ownership =
+				current !== null && !isTerminal(current.status)
+					? await this.#ownershipOf(current)
+					: { kind: "unclaimed" };
+
+			const foreign = ownership.kind === "foreign";
 
 			if (current !== null && !isTerminal(current.status) && !foreign) {
 				const eligibility = await this.#eligibilityOf(
@@ -2856,20 +3053,10 @@ export class Orchestrator {
 	 * adopted for it, no release is posted, and neither a new event nor an own
 	 * unmarked admission is claimed while it is the newest marker.
 	 */
-	async #foreign(marker: Marker): Promise<boolean> {
-		if (!(await this.#unadmitted(marker.issue, marker.eventId))) return false;
-
-		if (!this.#foreignRuns.has(marker.runId)) {
-			this.#foreignRuns.add(marker.runId);
-			this.#input.log("claim_foreign", {
-				issue: marker.issue,
-				runId: marker.runId,
-				status: marker.status,
-				seq: marker.seq,
-			});
-		}
-
-		return true;
+	async #ownershipOf(marker: Marker): Promise<ClaimObservation> {
+		return (await this.#unadmitted(marker.issue, marker.eventId))
+			? this.#observeClaim(marker, { kind: "foreign", runId: marker.runId })
+			: { kind: "unclaimed" };
 	}
 
 	async #unadmitted(issue: number, eventId: string): Promise<boolean> {
@@ -2903,10 +3090,10 @@ export class Orchestrator {
 		return !holdsSlotAs(status) || this.#active() < limits.maxConcurrent;
 	}
 
-	#waits(status: RunStatus, eligibility: Replacement | ReleaseReason): boolean {
-		if (eligibility === "current") return !this.#fits(status);
+	#waits(status: RunStatus, eligibility: ClaimObservation): boolean {
+		if (eligibility.kind === "owned_confirmed") return !this.#fits(status);
 
-		if (eligibility === "unverified") {
+		if (eligibility.kind === "owned_unverified") {
 			return !holdsSlotAs(status) || !this.#fits(status);
 		}
 
@@ -2917,14 +3104,25 @@ export class Orchestrator {
 		marker: Marker,
 		record: IssueRecord,
 		candidate: boolean,
-	): Promise<Replacement | ReleaseReason> {
-		if (!candidate) return record.open ? "unlabeled" : "closed";
+	): Promise<ClaimObservation> {
+		if (!candidate)
+			return this.#observeClaim(marker, {
+				kind: "released",
+				reason: record.open ? "unlabeled" : "closed",
+			});
 
 		const timeline = await this.#adapter.readTimeline(marker.issue);
 
-		return timeline.kind === "failed"
-			? "unverified"
-			: replacedBy(timeline.value, marker);
+		if (timeline.kind === "failed")
+			return this.#observeClaim(
+				marker,
+				this.#unverifiedBy("timeline", timeline.failure),
+			);
+
+		return this.#observeClaim(
+			marker,
+			this.#timelineObservation(timeline.value, marker),
+		);
 	}
 
 	async #settleClaims(
@@ -2971,20 +3169,31 @@ export class Orchestrator {
 			if (candidate && latest === null) {
 				timeline ??= await this.#adapter.readTimeline(record.number);
 
-				if (timeline.kind === "failed") return "undecided";
+				if (timeline.kind === "failed") {
+					this.#observeClaim(
+						claim,
+						this.#unverifiedBy("timeline", timeline.failure),
+					);
+
+					return "undecided";
+				}
 
 				const admitted = await this.#admittedFields(claim);
 
 				if (admitted === null) return "undecided";
 
-				const replaced = replacedBy(timeline.value, {
-					eventId: claim.eventId,
-					eventAt: admitted.eventAt,
-				});
+				const observation = this.#observeClaim(
+					claim,
+					this.#timelineObservation(timeline.value, {
+						eventId: claim.eventId,
+						eventAt: admitted.eventAt,
+						seq: this.#seqFloor(claim.issue, ledger),
+					}),
+				);
 
-				if (replaced === "unverified") return "undecided";
+				if (observation.kind === "owned_unverified") return "undecided";
 
-				why = replaced === "current" ? null : replaced;
+				why = observation.kind === "released" ? observation.reason : null;
 			} else if (candidate) {
 				why = null;
 			}
@@ -3135,7 +3344,7 @@ export class Orchestrator {
 		marker: Marker;
 		ledger: CleanLedger;
 		issue: IssueRecord;
-		eligibility: Replacement | ReleaseReason;
+		eligibility: ClaimObservation;
 	}): Promise<ActiveRun | null> {
 		const { marker, ledger, eligibility } = input;
 
@@ -3246,9 +3455,8 @@ export class Orchestrator {
 
 					this.state.runs.set(run.issue, run);
 
-					if (eligibility !== "current" && eligibility !== "unverified")
-						this.#release(run, eligibility);
-					else if (eligibility === "current") this.#confirmed.add(run.issue);
+					if (eligibility.kind === "released")
+						this.#release(run, eligibility.reason);
 					await this.#writeClaim(run);
 					await this.#sync(run);
 
@@ -3280,9 +3488,8 @@ export class Orchestrator {
 				};
 				this.state.runs.set(run.issue, run);
 
-				if (eligibility !== "current" && eligibility !== "unverified")
-					this.#release(run, eligibility);
-				else if (eligibility === "current") this.#confirmed.add(run.issue);
+				if (eligibility.kind === "released")
+					this.#release(run, eligibility.reason);
 				await this.#sync(run);
 
 				return run;
@@ -3302,7 +3509,7 @@ export class Orchestrator {
 		});
 
 		const limits = this.#limits();
-		const releasing = eligibility !== "current" && eligibility !== "unverified";
+		const releasing = eligibility.kind === "released";
 
 		const ended = await this.#input.files.accounting?.readAttempt(
 			run.runId,
@@ -3349,7 +3556,6 @@ export class Orchestrator {
 					run.phase = { kind: "evidence_missing" };
 			}
 
-			if (eligibility === "current") this.#confirmed.add(run.issue);
 			await this.#sync(run);
 
 			return run;
@@ -3385,8 +3591,10 @@ export class Orchestrator {
 		const recovered =
 			limits !== null &&
 			marker.status === "running" &&
-			eligibility !== "closed" &&
-			eligibility !== "new_event" &&
+			!(
+				eligibility.kind === "released" &&
+				(eligibility.reason === "closed" || eligibility.reason === "new_event")
+			) &&
 			(await this.#recoverOutput(run, output));
 
 		if (recovered) {
@@ -3401,8 +3609,8 @@ export class Orchestrator {
 					next: desiredStatus(run.phase),
 				},
 			);
-		} else if (eligibility !== "current" && eligibility !== "unverified") {
-			this.#release(run, eligibility);
+		} else if (eligibility.kind === "released") {
+			this.#release(run, eligibility.reason);
 		} else if (
 			limits !== null &&
 			marker.status === "running" &&
@@ -3425,8 +3633,7 @@ export class Orchestrator {
 			};
 		}
 
-		if (eligibility === "current") {
-			this.#confirmed.add(run.issue);
+		if (eligibility.kind === "owned_confirmed") {
 			this.#see(run.issue, input.issue.updatedAt, { kind: "claimed" });
 		}
 
@@ -3475,7 +3682,7 @@ export class Orchestrator {
 		}
 
 		for (const run of runs) {
-			if (run.phase.kind === "base_check" && this.#confirmed.has(run.issue)) {
+			if (run.phase.kind === "base_check" && this.#claimView(run).launch) {
 				await this.#pollBase(run);
 				await this.#sync(run);
 				continue;
@@ -3483,7 +3690,7 @@ export class Orchestrator {
 
 			if (
 				run.inflight === null &&
-				this.#confirmed.has(run.issue) &&
+				this.#claimView(run).launch &&
 				(run.phase.kind === "claimed" ||
 					(run.phase.kind === "blocked" && (run.replay || this.#enabled)))
 			) {
@@ -3502,7 +3709,7 @@ export class Orchestrator {
 				run.phase.kind !== "retry_queued" ||
 				run.phase.dueAt > now ||
 				run.inflight !== null ||
-				!this.#confirmed.has(run.issue) ||
+				!this.#claimView(run).launch ||
 				this.#settling(run)
 			) {
 				continue;
@@ -3733,7 +3940,11 @@ export class Orchestrator {
 
 		const top = currentMarker(ledger);
 
-		if (top !== null && !isTerminal(top.status) && (await this.#foreign(top))) {
+		if (
+			top !== null &&
+			!isTerminal(top.status) &&
+			(await this.#ownershipOf(top)).kind === "foreign"
+		) {
 			this.#see(issue, record.updatedAt, { kind: "decided" });
 
 			return null;
@@ -3858,6 +4069,7 @@ export class Orchestrator {
 		}
 
 		this.state.runs.set(issue, run);
+		this.#observeClaim(run, this.#confirmedBy(run));
 		this.state.totals.claims++;
 		this.#see(issue, record.updatedAt, { kind: "claimed" });
 		this.#input.log("claim_taken", {
@@ -4195,26 +4407,32 @@ export class Orchestrator {
 		return { kind: "fresh" };
 	}
 
-	async #stillReady(run: ActiveRun): Promise<boolean> {
-		if (this.#readOpen.has(run.issue)) return true;
+	async #stillReady(run: ActiveRun): Promise<ClaimObservation> {
+		if (this.#readOpen.has(run.issue)) return this.#confirmedBy(run);
 
 		const read = await this.#adapter.readIssue(run.issue);
 
-		if (read.kind === "failed") return false;
+		if (read.kind === "failed")
+			return this.#unverifiedBy("issue", read.failure);
 
 		if (!isReady(read.value)) {
 			this.#release(run, read.value.open ? "unlabeled" : "closed");
 			await this.#sync(run);
 
-			return false;
+			return {
+				kind: "released",
+				reason: read.value.open ? "unlabeled" : "closed",
+			};
 		}
 
 		this.#readOpen.add(run.issue);
 
-		return true;
+		return this.#confirmedBy(run);
 	}
 
 	async #launch(run: ActiveRun): Promise<boolean> {
+		if (!this.#claimView(run).launch) return false;
+
 		if (
 			run.claimUnwritten ||
 			run.handoff !== undefined ||
@@ -4222,7 +4440,9 @@ export class Orchestrator {
 		)
 			return false;
 
-		if (!(await this.#stillReady(run))) return false;
+		this.#observeClaim(run, await this.#stillReady(run));
+
+		if (!this.#claimView(run).launch) return false;
 
 		if (
 			run.stage === "validate" ||
@@ -6627,7 +6847,7 @@ export class Orchestrator {
 							? new Date(run.phase.dueAt).toISOString()
 							: null,
 					usage: run.usage,
-					unverified: unverifiedView(this.#unverified.get(run.issue), run),
+					unverified: this.#claimView(run).unverified,
 				}),
 			);
 
@@ -6640,6 +6860,26 @@ export class Orchestrator {
 			maxConcurrent: input.limits?.maxConcurrent ?? 0,
 			active: this.#active(),
 			runs,
+			unverifiedClaims: [...this.#observations.entries()]
+				.flatMap(([runId, held]) => {
+					const unverified = claimProjection(
+						held.observation,
+						this.#ticks,
+						held.eventId,
+					).unverified;
+
+					return held.tick === this.#ticks && unverified !== null
+						? [
+								{
+									issue: held.issue,
+									runId,
+									eventId: held.eventId,
+									...unverified,
+								},
+							]
+						: [];
+				})
+				.sort((a, b) => a.issue - b.issue),
 			queued: input.queued,
 			absent: input.absent,
 			refused: [
