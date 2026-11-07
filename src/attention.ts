@@ -363,6 +363,11 @@ export async function readAttention(input: {
 			return { kind: "unavailable", reason: "state_unavailable" };
 		const newest = new Map<number, AttentionClaim>();
 
+		const holds = unverifiedHolds(
+			await privateJson(join(root, "status.json")),
+			input.repo,
+		);
+
 		for (const name of names.sort()) {
 			if (!/^[a-f0-9]{64}\.json$/.test(name)) {
 				gaps.push("unrecognized_claim");
@@ -379,6 +384,7 @@ export async function readAttention(input: {
 				continue;
 			}
 
+			if (claim.terminal) holds.delete(claim.runId);
 			const previous = newest.get(claim.issue);
 
 			if (previous === undefined || claim.seq > previous.seq)
@@ -386,11 +392,6 @@ export async function readAttention(input: {
 			else if (claim.seq === previous.seq)
 				gaps.push(`ambiguous_issue:${claim.issue}`);
 		}
-
-		const holds = unverifiedHolds(
-			await privateJson(join(root, "status.json")),
-			input.repo,
-		);
 
 		for (const claim of newest.values()) {
 			if (claim.evidenceMissing)
@@ -447,7 +448,6 @@ export async function readAttention(input: {
 		}
 
 		for (const hold of holds.values()) {
-			if (newest.has(hold.issue)) continue;
 			groups.blocked.push({
 				runId: hold.runId,
 				issueUrl: `https://github.com/${input.repo}/issues/${hold.issue}`,
