@@ -28,7 +28,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { streamSimple } from "@earendil-works/pi-ai/compat";
 import type { Message, Model, Usage } from "@earendil-works/pi-ai";
-import { buildPrompt } from "../../src/build.ts";
+import { baseTestCommand, buildPrompt } from "../../src/build.ts";
 import { buildPrompt as baselineBuildPrompt } from "../fixtures/efficiency/baseline-build.ts";
 import { syncBuiltinESMExports } from "node:module";
 import { fileRunFiles, serveLoop } from "../../server/controller.ts";
@@ -2247,6 +2247,204 @@ describe("private build executor", () => {
 		assert.equal(existsSync(base), false);
 	});
 
+	for (const outcome of [
+		"failed",
+		"passed",
+		"unavailable",
+		"restart",
+		"base_missing",
+	] as const)
+		it(`compares failed visible tests with unchanged base once (${outcome})`, async (t) => {
+			const dir = mkdtempSync(join(tmpdir(), "factory-visible-control-"));
+			t.after(() => rmSync(dir, { recursive: true, force: true }));
+			const stateDir = join(dir, "state");
+			const base = join(stateDir, "pristine", RUN);
+			const workspace = join(dir, "candidate");
+			mkdirSync(base, { recursive: true });
+			writeFileSync(
+				join(base, "package.json"),
+				'{"scripts":{"test":"npm run outer","outer":"npm run inner","inner":"node --test"}}\n',
+			);
+			writeFileSync(join(base, "value"), "base\n");
+			cpSync(base, workspace, { recursive: true });
+			writeFileSync(join(workspace, "value"), "candidate\n");
+
+			const repo = "owner/repo",
+				sha = "a".repeat(40);
+
+			assert.ok(isRepoSlug(repo) && isGitSha(sha));
+
+			const contract: Contract = {
+				version: 2,
+				runId: digest(RUN),
+				issue: 1,
+				base: { repo, sha },
+				snapshot: {
+					digest: digestOf("snapshot"),
+					source: "unedited",
+					eventId: "1",
+					eventAt: "2026-10-30T00:00:00Z",
+				},
+				link: null,
+				summary: "Change value",
+				behavior: ["Change value"],
+				acceptance: [{ id: "A1", kind: "new_behavior", text: "Value changes" }],
+				exclusions: [],
+				compatibility: [],
+				limits: [],
+				files: ["value"],
+				evidence: [],
+			};
+
+			const bytes = contractBytes(contract),
+				contractDigest = contractDigestOf(bytes);
+
+			assert.equal(
+				await fileRunFiles(stateDir).writeContract({
+					contract,
+					bytes,
+					digest: contractDigest,
+				}),
+				true,
+			);
+			mkdirSync(join(stateDir, "build-base", "checkouts"), { recursive: true });
+			writeFileSync(
+				join(stateDir, "build-base", "checkouts", `${RUN}.json`),
+				JSON.stringify({ sha, files: ["package.json", "value"] }),
+			);
+			const patch = await collectPatch({ base, workspace });
+			assert.ok(patch.kind === "collected");
+
+			const binding = {
+				runId: digest(RUN),
+				baseSha: sha,
+				contractDigest,
+				acceptanceDigest: digestOf("suite"),
+			};
+
+			storePatch(stateDir, binding, patch, {
+				model: "m",
+				observed: null,
+				commands: [],
+				testCommand: "npm run outer",
+			});
+
+			const root = join(dir, "bundle"),
+				staging = join(root, "staging");
+
+			mkdirSync(staging, { recursive: true });
+			writeFileSync(join(staging, "marker"), "bundle");
+			const hash = await manifestDigest(staging);
+			assert.ok(hash);
+			fs.renameSync(staging, join(root, `assets-${hash}`));
+			symlinkSync(`assets-${hash}`, join(root, "current"));
+			const calls: (string | Uint8Array)[] = [];
+			let interrupted = false;
+
+			const config: sandboxModule.SandboxExecutorConfig = {
+				stateDir,
+				root,
+				arch: "x64",
+				usernsLimit: async () => "15000",
+				xdgRuntimeDir: "/run/user/1000",
+				log: () => {},
+				fetchTarball: async () => null,
+				exec: async (command) => ({
+					code: 0,
+					stdout: command === "bwrap" ? "bubblewrap 0.9.0\n" : "",
+					stderr: "",
+				}),
+				visibleTests: async (
+					config,
+					pristine,
+					patchBytes,
+					command,
+					replacements,
+				) => {
+					assert.equal(config.bundleDir, join(root, `assets-${hash}`));
+					assert.equal(readFileSync(join(pristine, "value"), "utf8"), "base\n");
+					assert.equal(command, "npm run outer");
+					assert.deepEqual(replacements ?? [], []);
+
+					if (
+						patchBytes.length === 0 &&
+						(outcome === "restart" || outcome === "base_missing") &&
+						!interrupted
+					) {
+						interrupted = true;
+						throw new Error("restart before base run");
+					}
+
+					calls.push(patchBytes);
+
+					return {
+						command: baseTestCommand(pristine, command),
+						exitCode:
+							patchBytes.length > 0
+								? 1
+								: outcome === "unavailable"
+									? null
+									: outcome === "passed"
+										? 0
+										: 1,
+						tail: patchBytes.length > 0 ? "candidate failed" : "base result",
+						wallMs: 1,
+					};
+				},
+			};
+
+			const first = sandboxModule.sandboxExecutor(config);
+			assert.equal(await first.preflight(), true);
+
+			const request = {
+				runId: digest(RUN),
+				stage: "build" as const,
+				attempt: 1,
+			};
+
+			if (outcome === "restart" || outcome === "base_missing") {
+				await assert.rejects(first.output(request), /restart before base run/);
+				assert.equal(
+					existsSync(join(stateDir, "patches", RUN, "tests.json")),
+					false,
+				);
+			} else {
+				await first.output(request);
+			}
+
+			if (outcome === "base_missing") {
+				rmSync(base, { recursive: true });
+				rmSync(join(stateDir, "build-base", "checkouts", `${RUN}.json`));
+			}
+
+			const restarted = sandboxModule.sandboxExecutor(config);
+			assert.equal(await restarted.preflight(), true);
+			await restarted.output(request);
+			await restarted.output(request);
+			assert.equal(calls.length, outcome === "base_missing" ? 1 : 2);
+			assert.equal(digestOf(calls[0] ?? ""), patch.patchDigest);
+
+			if (outcome !== "base_missing") assert.equal(calls[1]?.length, 0);
+			const kept = readPatch(stateDir, binding);
+			assert.ok(kept.kind === "found");
+			assert.equal(kept.receipt.visibleTests?.exitCode, 1);
+
+			if (outcome === "base_missing") {
+				assert.equal(kept.receipt.visibleTests.base?.exitCode, null);
+				assert.equal(kept.receipt.visibleTests.base?.command, "npm run inner");
+
+				return;
+			}
+
+			assert.deepEqual(kept.receipt.visibleTests?.base, {
+				command: "npm run inner",
+				exitCode:
+					outcome === "unavailable" ? null : outcome === "passed" ? 0 : 1,
+				tail: "base result",
+				wallMs: 1,
+			});
+		});
+
 	it("keeps unavailable tests typed and retryable without a write-once success record", async (t) => {
 		const dir = mkdtempSync(join(tmpdir(), "factory-build-unavailable-"));
 		t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -4272,8 +4470,68 @@ describe("pinned zero-token accept replay", () => {
 			{ recursive: true },
 		);
 		const startedAt = Date.now();
+		const exits: number[] = [];
 
 		const evidence = await runHeldoutBase({
+			runner: {
+				kind: "public-fixture-process",
+				async run(request) {
+					assert.equal(request.install, undefined);
+					assert.equal(request.argv[0], "node");
+					const marker = join(request.tree, ".replay-process-ran");
+					assert.equal(existsSync(marker), false, "each run uses a fresh tree");
+					writeFileSync(marker, "ran");
+
+					const child = spawn(
+						process.execPath,
+						request.argv
+							.slice(1)
+							.map((arg) =>
+								arg.startsWith("/g/") ? join(request.gates, arg.slice(3)) : arg,
+							),
+						{
+							cwd: request.tree,
+							env: {
+								PATH: "/usr/bin:/bin",
+								HOME: tmpdir(),
+								TMPDIR: tmpdir(),
+								LANG: "C.UTF-8",
+								CI: "true",
+							},
+							stdio: ["ignore", "pipe", "pipe"],
+							timeout: request.deadlineMs,
+							killSignal: "SIGKILL",
+							signal: request.signal,
+						},
+					);
+
+					let stdout = "",
+						stderr = "";
+
+					child.stdout.on("data", (chunk) => {
+						stdout += chunk;
+					});
+					child.stderr.on("data", (chunk) => {
+						stderr += chunk;
+					});
+
+					return new Promise((resolve) => {
+						child.once("error", () =>
+							resolve({ exitCode: 1, stdout, stderr, runnerError: true }),
+						);
+						child.once("close", (code, signal) => {
+							exits.push(code ?? 1);
+							resolve({
+								exitCode: code ?? 1,
+								stdout,
+								stderr,
+								signal,
+								timedOut: signal === "SIGKILL",
+							});
+						});
+					});
+				},
+			},
 			tree,
 			workDir: join(root, "base-check"),
 			cacheDir: join(root, "dependencies"),
@@ -4298,6 +4556,7 @@ describe("pinned zero-token accept replay", () => {
 			"ready",
 			JSON.stringify(evidence),
 		);
+		assert.deepEqual(exits, [1, 1]);
 		assert.equal(contractDigestOf(contractBytes(contract)), unchanged);
 		assert.equal(upstream.arrivals("/openai/v1/responses"), 5);
 		assert.equal(upstream.strays, 0);

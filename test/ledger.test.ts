@@ -667,6 +667,52 @@ describe("ledger row codec", () => {
 		);
 	});
 
+	for (const reason of ["visible_base_unavailable", "visible_base_failed"])
+		it(`round-trips ${reason} as missing evidence in v2 and v3`, () => {
+			const base = rowInput(10);
+
+			const failure = {
+				kind: "known" as const,
+				value: {
+					stage: "build" as const,
+					class: "missing_evidence" as const,
+					reason,
+					failedVisibleChecks: [],
+					retainedPatch: null,
+				},
+			};
+
+			const v2 = ledgerRow({
+				...base,
+				v: 2,
+				outcome: {
+					kind: "failed",
+					stage: "build",
+					cause: { kind: "known", value: "evidence_missing" },
+				},
+				failure,
+				acceptAttempts: { kind: "unavailable", reason: "not_instrumented" },
+			});
+
+			const v3 = ledgerRowOf({
+				...v2.row,
+				v: 3,
+				efficiency: unknownEfficiency(),
+				stages: { kind: "unavailable", reason: "not_instrumented" },
+			});
+
+			for (const row of [v2, v3]) {
+				const frozen = frozenRowOf(row.bytes);
+				assert.ok(frozen?.row.v === 2 || frozen?.row.v === 3);
+				assert.deepEqual(frozen.row.failure, failure);
+				assert.deepEqual(frozen.bytes, row.bytes);
+				assert.deepEqual(terminalFailureOf(frozen.row), {
+					outcome: v2.row.outcome,
+					failure,
+				});
+			}
+		});
+
 	it("round-trips v3 efficiency, while v1/v2 bytes and unknown facts stay unchanged", () => {
 		const base = rowInput(10);
 

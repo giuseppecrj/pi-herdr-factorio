@@ -23,6 +23,7 @@ import {
 	PATCH_MAX_BYTES,
 	PATCH_RECEIPT_MAX_BYTES,
 	COMMAND_MAX_BYTES,
+	TEST_TAIL_BYTES,
 	buildPrompt,
 } from "../src/build.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
@@ -201,12 +202,24 @@ test("private collection survives restart, retains test failures, never regenera
 		exitCode: 1,
 		tail: "FAILED",
 		wallMs: 1,
+		base: {
+			command: "npm test",
+			exitCode: 1,
+			tail: "b".repeat(TEST_TAIL_BYTES + 1),
+			wallMs: 2,
+		},
 	});
 
 	assert.equal(failed.kind, "found");
 
 	if (failed.kind !== "found") return;
 	assert.equal(failed.receipt.visibleTests?.exitCode, 1);
+	assert.deepEqual(failed.receipt.visibleTests?.base, {
+		command: "npm test",
+		exitCode: 1,
+		tail: "b".repeat(TEST_TAIL_BYTES),
+		wallMs: 2,
+	});
 	finishPatch(f.stateDir, binding, {
 		command: "npm test",
 		exitCode: 0,
