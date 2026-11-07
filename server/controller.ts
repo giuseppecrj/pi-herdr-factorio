@@ -27,6 +27,7 @@ import {
 	parseCandidateState,
 	candidateUsage,
 	candidateGenerations,
+	completingFeedbackBatch,
 	migrateCertificationValue,
 	migrateEvidenceValue,
 	notProven,
@@ -6143,16 +6144,14 @@ export function controllerCandidatePort(config: {
 					: null;
 			}
 
-			const applying = state.feedback?.batches.find(
-				(b) => b.status.kind === "applying",
-			);
+			const applying = completingFeedbackBatch(state, request.certification);
 
 			const receipt =
-				applying === undefined
+				applying === null
 					? null
 					: feedbackRound(config.stateDir, state, applying, request.head);
 
-			if (applying !== undefined && receipt === null) return null;
+			if (applying !== null && receipt === null) return null;
 
 			const pr = await ownedPr(state);
 

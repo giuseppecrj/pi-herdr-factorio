@@ -186,7 +186,9 @@ export type HandoffReason =
 	| "feedback_overflow"
 	| "feedback_repair"
 	| "repair_no_progress"
-	| "repair_repeated_finding";
+	| "repair_repeated_finding"
+	| "closed"
+	| "withdrawn";
 
 export type PublishedPr = Readonly<{
 	number: number;
@@ -259,7 +261,11 @@ export type NoticeNext =
 			work: Extract<CandidateWork, { kind: "waiting" | "held" }>;
 	  }>
 	| Extract<CandidateWork, { kind: "repair_due" }>
-	| Readonly<{ kind: "held"; reason: HandoffReason }>;
+	| Readonly<{ kind: "held"; reason: HandoffReason }>
+	| Readonly<{
+			kind: "finish";
+			terminal: Extract<TerminalObservation, { kind: "cancelled" }>;
+	  }>;
 
 export type CandidateEffect =
 	| { readonly kind: "validate"; readonly generation: GenerationIntent }
@@ -418,7 +424,7 @@ export type CandidateEffectResult =
 			readonly request: Extract<CandidateEffect, { kind: "finish_pr" }>;
 	  };
 
-export type CandidateEvent =
+type CandidateEventData =
 	| {
 			readonly kind: "resume_execution";
 			readonly execution: CandidateExecution;
@@ -477,6 +483,8 @@ export type CandidateEvent =
 				| { readonly kind: "no_change" }
 				| { readonly kind: "failed" };
 	  };
+
+export type CandidateEvent = CandidateEventData & Readonly<{ now?: number }>;
 
 export type CandidateStep = Readonly<{
 	state: CandidateState;
@@ -803,6 +811,19 @@ function effect(state: Selected, request: CandidateEffect): Selected {
 }
 
 function hold(state: Selected, reason: HandoffReason, now: number): Selected {
+	const awaitingForge =
+		reason === "checks_incomplete" ||
+		reason === "head_lag" ||
+		reason === "head_drift";
+
+	return !awaitingForge &&
+		state.published !== null &&
+		state.feedback?.batches.some((b) => b.status.kind === "applying")
+		? stopRound(state, reason, now)
+		: held(state, reason, now);
+}
+
+function held(state: Selected, reason: HandoffReason, now: number): Selected {
 	const since =
 		state.work.kind === "held" && state.work.reason === reason
 			? state.work.since
@@ -844,9 +865,10 @@ function selectGeneration(
 	state: Selected,
 	intent: GenerationIntent,
 	patch: PatchReceipt,
+	now: number,
 ): Selected {
 	if (state.history.length + 2 > MAX_GENERATIONS)
-		return hold(state, "refresh_limit", 0);
+		return hold(state, "refresh_limit", now);
 
 	return effect(
 		{
@@ -880,8 +902,19 @@ function terminalFor(
 	};
 }
 
-function finish(state: Selected, terminal: TerminalObservation): Selected {
+function finish(
+	state: Selected,
+	terminal: TerminalObservation,
+	now = 0,
+): Selected {
 	const execution = activeExecution(state);
+
+	if (
+		execution === null &&
+		terminal.kind === "cancelled" &&
+		state.feedback?.batches.some((b) => b.status.kind === "applying")
+	)
+		return stopRound(state, terminal.reason, now, terminal);
 
 	return effect(
 		state,
@@ -895,7 +928,8 @@ function finish(state: Selected, terminal: TerminalObservation): Selected {
 export function stopRound(
 	state: Selected,
 	reason: HandoffReason,
-	now = 0,
+	now: number,
+	terminal: Extract<TerminalObservation, { kind: "cancelled" }> | null = null,
 ): Selected {
 	if (state.published === null)
 		return finish(state, { kind: "failed", reason });
@@ -929,9 +963,12 @@ export function stopRound(
 					},
 	};
 
-	return effect(stopped, {
+	const stoppedHold = held(stopped, reason, now);
+
+	return effect(stoppedHold, {
 		kind: "post_notice",
 		number: state.published.number,
+		at: stoppedHold.work.kind === "held" ? stoppedHold.work.since : now,
 		notice: {
 			kind: "round_summary",
 			place: "pr",
@@ -940,7 +977,10 @@ export function stopRound(
 		withdraw: reason,
 		// Persisted transition data, not a Promise callback.
 		// oxlint-disable-next-line unicorn/no-thenable
-		then: { kind: "held", reason },
+		then:
+			terminal === null
+				? { kind: "held", reason }
+				: { kind: "finish", terminal },
 	});
 }
 
@@ -972,12 +1012,16 @@ function failOrRepair(
 	};
 }
 
-function stopDiagnosed(state: Selected, reason: HandoffReason): Selected {
+function stopDiagnosed(
+	state: Selected,
+	reason: HandoffReason,
+	now: number,
+): Selected {
 	return state.published === null
 		? reason === "diagnosis_infrastructure"
-			? hold(state, reason, 0)
+			? hold(state, reason, now)
 			: finish(state, { kind: "failed", reason })
-		: stopRound(state, reason, 0);
+		: stopRound(state, reason, now);
 }
 
 function assessedValidation(
@@ -985,6 +1029,7 @@ function assessedValidation(
 	current: GenerationEvidence,
 	verdict: Verdict,
 	read: ReadAssessment,
+	now: number,
 ): Selected {
 	const intent = current.intent;
 	const b = read.binding;
@@ -1013,7 +1058,7 @@ function assessedValidation(
 		b.verdictDigest !== digestOf(JSON.stringify(verdict)) ||
 		(read.assessment.kind === "passed") !== verdictPasses(verdict)
 	)
-		return stopDiagnosed(assessed, "diagnosis_missing_evidence");
+		return stopDiagnosed(assessed, "diagnosis_missing_evidence", now);
 
 	if (read.assessment.kind === "passed") return assessed;
 
@@ -1022,14 +1067,14 @@ function assessedValidation(
 			return failOrRepair(
 				assessed,
 				{ kind: "validation", assessment: read.ref },
-				0,
+				now,
 			);
 		case "oracle":
-			return stopDiagnosed(assessed, "diagnosis_oracle");
+			return stopDiagnosed(assessed, "diagnosis_oracle", now);
 		case "missing_evidence":
-			return stopDiagnosed(assessed, "diagnosis_missing_evidence");
+			return stopDiagnosed(assessed, "diagnosis_missing_evidence", now);
 		case "infrastructure":
-			return stopDiagnosed(assessed, "diagnosis_infrastructure");
+			return stopDiagnosed(assessed, "diagnosis_infrastructure", now);
 		default: {
 			const exhaustive: never = read.assessment.failure;
 
@@ -1210,6 +1255,43 @@ export function promotedHead(state: CandidateState): GitSha | null {
 			)?.certification?.report.candidateSha ?? null);
 }
 
+/** The completed generation owns only the feedback cause that built its repair lineage. */
+export function completingFeedbackBatch(
+	state: Selected,
+	ref: GenerationRef,
+): FeedbackBatchRef | null {
+	const generations = candidateGenerations(state);
+	let generation = generations.find((g) => sameGeneration(g.intent, ref));
+
+	while (generation?.intent.origin.kind === "refresh") {
+		const previous = generation.intent.origin.previous;
+		generation = generations.find((g) => sameGeneration(g.intent, previous));
+	}
+
+	if (generation?.intent.origin.kind !== "repair") return null;
+	const origin = generation.intent.origin;
+	const round = generation.intent.round;
+
+	const build = state.accounts.findLast(
+		(a) =>
+			a.execution.stage === "build" &&
+			a.execution.round === round &&
+			sameGeneration(a.execution.feedbackFrom, origin.feedbackFrom),
+	);
+
+	const execution = build?.execution;
+
+	return execution?.stage === "build" && execution.cause.kind === "feedback"
+		? (state.feedback?.batches.find(
+				(b) =>
+					execution.cause.kind === "feedback" &&
+					b.digest === execution.cause.batch &&
+					b.status.kind === "applying" &&
+					b.status.round === round,
+			) ?? null)
+		: null;
+}
+
 export function allowedHeads(state: Selected): readonly GitSha[] {
 	const head = promotedHead(state);
 	const heads: GitSha[] = head === null ? [] : [head];
@@ -1273,7 +1355,8 @@ function startQueuedFeedback(
 ): Selected {
 	if (
 		state.published === null ||
-		(state.work.kind !== "waiting" && state.work.kind !== "held")
+		(state.work.kind !== "waiting" && state.work.kind !== "held") ||
+		state.feedback?.batches.some((b) => b.status.kind === "applying")
 	)
 		return state;
 	const current = state.current;
@@ -1329,7 +1412,10 @@ function startQueuedFeedback(
 
 	const review = current.review ?? current.certification?.review;
 
-	return effect(updated, {
+	const withdrawing =
+		reason === null ? held(updated, "feedback_repair", now) : updated;
+
+	return effect(withdrawing, {
 		kind: "post_notice",
 		number: state.published.number,
 		notice: {
@@ -1496,16 +1582,23 @@ function observed(
 		state.work.kind === "effect" &&
 		(state.work.request.kind === "finish_pr" ||
 			(state.work.request.kind === "stop_execution" &&
-				state.work.request.terminal !== null))
+				state.work.request.terminal !== null) ||
+			(state.work.request.kind === "post_notice" &&
+				state.work.request.notice.kind === "round_summary" &&
+				state.work.request.then.kind === "finish"))
 	)
 		return state;
 
 	if (event.pr.kind === "closed")
-		return finish(state, {
-			kind: "cancelled",
-			number: event.pr.number,
-			reason: "closed",
-		});
+		return finish(
+			state,
+			{
+				kind: "cancelled",
+				number: event.pr.number,
+				reason: "closed",
+			},
+			event.now,
+		);
 
 	const possiblePr =
 		state.published !== null ||
@@ -1521,11 +1614,15 @@ function observed(
 	if (event.eligibility === "withdrawn") {
 		return state.published === null
 			? finish(state, { kind: "released" })
-			: finish(state, {
-					kind: "cancelled",
-					number: state.published.number,
-					reason: "withdrawn",
-				});
+			: finish(
+					state,
+					{
+						kind: "cancelled",
+						number: state.published.number,
+						reason: "withdrawn",
+					},
+					event.now,
+				);
 	}
 
 	if (!event.executionAllowed || event.eligibility === "unverified")
@@ -1534,7 +1631,8 @@ function observed(
 	if (
 		state.work.kind === "held" &&
 		(state.work.reason === "pr_identity" ||
-			state.work.reason === "pr_ambiguous")
+			state.work.reason === "pr_ambiguous" ||
+			state.work.reason === "summary_too_large")
 	)
 		return state;
 
@@ -1600,6 +1698,13 @@ function observed(
 			},
 		};
 	const work = state.work;
+
+	if (
+		work.kind === "effect" &&
+		work.request.kind === "post_notice" &&
+		work.request.notice.kind === "round_summary"
+	)
+		return state;
 
 	if (
 		state.published !== null &&
@@ -1715,7 +1820,7 @@ function observed(
 					: { kind: "successor", expectedHead: promotedHead(state)! },
 		});
 
-		return selectGeneration(state, intent, work.patch);
+		return selectGeneration(state, intent, work.patch, event.now);
 	}
 
 	if (event.main !== null && event.main !== state.current.intent.baseSha) {
@@ -1794,6 +1899,7 @@ function observed(
 					},
 			intent,
 			state.current.patch,
+			event.now,
 		);
 	}
 
@@ -1827,9 +1933,11 @@ function observed(
 				? event.readiness.reason
 				: "checks_incomplete";
 
-		return state.published === null
-			? hold(state, reason, event.now)
-			: effect(hold(state, reason, event.now), {
+		const stopped = hold(state, reason, event.now);
+
+		return state.published === null || stopped.work.kind === "effect"
+			? stopped
+			: effect(stopped, {
 					kind: "void_readiness",
 					number: state.published.number,
 					reason,
@@ -1907,7 +2015,11 @@ function updateAccount(
 	};
 }
 
-function complete(state: Selected, c: CandidateEffectResult): Selected {
+function complete(
+	state: Selected,
+	c: CandidateEffectResult,
+	now: number,
+): Selected {
 	if (
 		state.work.kind !== "effect" ||
 		state.work.request.kind !== c.kind ||
@@ -1922,7 +2034,7 @@ function complete(state: Selected, c: CandidateEffectResult): Selected {
 			if (c.result.kind === "waiting") return { ...state, current };
 
 			if (c.result.kind === "failed")
-				return stopRound({ ...state, current }, c.result.reason, 0);
+				return stopRound({ ...state, current }, c.result.reason, now);
 			const { verdict, report, seats } = c.result;
 
 			const assessed = assessedValidation(
@@ -1930,6 +2042,7 @@ function complete(state: Selected, c: CandidateEffectResult): Selected {
 				current,
 				verdict,
 				c.result.assessment,
+				now,
 			);
 
 			if (
@@ -1949,7 +2062,7 @@ function complete(state: Selected, c: CandidateEffectResult): Selected {
 				report.gateSha !== verdict.gateSha ||
 				report.ciRunId !== verdict.ciRunId
 			)
-				return stopRound(state, "evidence_unavailable", 0);
+				return stopRound(state, "evidence_unavailable", now);
 
 			return {
 				...state,
@@ -2009,7 +2122,7 @@ function complete(state: Selected, c: CandidateEffectResult): Selected {
 
 			return c.request.terminal === null
 				? { ...updated, work: { kind: "handoff" } }
-				: finish(updated, c.request.terminal);
+				: finish(updated, c.request.terminal, now);
 		}
 
 		case "open_pr": {
@@ -2030,15 +2143,17 @@ function complete(state: Selected, c: CandidateEffectResult): Selected {
 		case "promote_pr":
 			return c.head === c.request.head && c.refHead === c.request.head
 				? { ...state, work: { kind: "handoff" } }
-				: hold(state, "head_lag", 0);
+				: hold(state, "head_lag", now);
 		case "complete_handoff": {
+			const applying = completingFeedbackBatch(state, c.request.certification);
+
 			const feedback =
 				state.feedback === null
 					? null
 					: {
 							...state.feedback,
 							batches: state.feedback.batches.map((b) =>
-								b.status.kind === "applying"
+								b.digest === applying?.digest
 									? {
 											...b,
 											status: {
@@ -2110,13 +2225,15 @@ function complete(state: Selected, c: CandidateEffectResult): Selected {
 								readiness: {
 									kind: "not_ready",
 									reason: c.request.withdraw,
-									since: c.request.at ?? 0,
+									since: c.request.at ?? now,
 								} as const,
 							},
 			};
 
+			if (next.kind === "finish") return finish(updated, next.terminal, now);
+
 			return next.kind === "held"
-				? hold(updated, next.reason, c.request.at ?? 0)
+				? hold(updated, next.reason, c.request.at ?? now)
 				: { ...updated, work: next.kind === "resume" ? next.work : next };
 		}
 
@@ -2138,6 +2255,13 @@ export function handoffCandidate(
 	event: CandidateEvent,
 ): CandidateStep {
 	let next: CandidateState = state;
+
+	const now =
+		event.now ??
+		(event.kind === "effect_completed" &&
+		event.completion.kind === "complete_handoff"
+			? event.completion.now
+			: 0);
 
 	if (state.kind === "unprepared") {
 		if (
@@ -2198,8 +2322,23 @@ export function handoffCandidate(
 					false,
 				);
 
+				if (
+					(state.work.kind === "effect" &&
+						state.work.request.kind === "post_notice" &&
+						state.work.request.notice.kind === "round_summary") ||
+					(state.work.kind === "held" &&
+						state.feedback?.batches.some(
+							(b) =>
+								b.status.kind === "settled" &&
+								b.status.outcome.kind === "stopped",
+						))
+				) {
+					next = updated;
+					break;
+				}
+
 				if (accountFor(updated, event.execution)?.spend.kind !== "known") {
-					next = hold(updated, "evidence_unavailable", 0);
+					next = hold(updated, "evidence_unavailable", now);
 					break;
 				}
 
@@ -2223,11 +2362,17 @@ export function handoffCandidate(
 				next = observed(state, event);
 				break;
 			case "effect_held":
-				if (state.work.kind === "effect")
+				if (
+					state.work.kind === "effect" &&
+					!(
+						state.work.request.kind === "post_notice" &&
+						state.work.request.notice.kind === "round_summary"
+					)
+				)
 					next = hold(state, event.reason, event.now);
 				break;
 			case "effect_completed":
-				next = complete(state, event.completion);
+				next = complete(state, event.completion, now);
 				break;
 			case "execution_progress":
 				next = updateAccount(state, event.execution, event.tokens, false);
@@ -2240,14 +2385,19 @@ export function handoffCandidate(
 				next = updated;
 
 				if (
-					state.work.kind !== "reviewing" ||
-					!executionEqual(state.work.execution, event.execution) ||
+					!(
+						(state.work.kind === "reviewing" &&
+							executionEqual(state.work.execution, event.execution)) ||
+						(state.work.kind === "effect" &&
+							state.work.request.kind === "launch_review" &&
+							executionEqual(state.work.request.execution, event.execution))
+					) ||
 					!sameGeneration(state.current.intent, event.execution.generation)
 				)
 					break;
 
 				if (accountFor(updated, event.execution)?.settlement !== "settled") {
-					next = hold(updated, "evidence_unavailable", 0);
+					next = hold(updated, "evidence_unavailable", now);
 					break;
 				}
 
@@ -2255,7 +2405,7 @@ export function handoffCandidate(
 					const reason = preflight(updated, "review", event.execution.round);
 					next =
 						state.published !== null
-							? stopRound(updated, "review_failed", 0)
+							? stopRound(updated, "review_failed", now)
 							: reason === null
 								? {
 										...updated,
@@ -2266,7 +2416,7 @@ export function handoffCandidate(
 				}
 
 				if (state.current.verdict === null || state.current.report === null) {
-					next = hold(updated, "evidence_unavailable", 0);
+					next = hold(updated, "evidence_unavailable", now);
 					break;
 				}
 
@@ -2287,7 +2437,7 @@ export function handoffCandidate(
 							).some((f) => fingerprints.includes(f)),
 					)
 				) {
-					next = stopRound(updated, "repair_repeated_finding");
+					next = stopRound(updated, "repair_repeated_finding", now);
 					break;
 				}
 
@@ -2316,8 +2466,8 @@ export function handoffCandidate(
 						!review.blocking ||
 						!blocksReview(review.seats)
 							? state.published === null
-								? hold(updated, "evidence_unavailable", 0)
-								: stopRound(updated, "evidence_unavailable", 0)
+								? hold(updated, "evidence_unavailable", now)
+								: stopRound(updated, "evidence_unavailable", now)
 							: failOrRepair(
 									updated,
 									{
@@ -2325,7 +2475,7 @@ export function handoffCandidate(
 										assessment: passed,
 										review: reviewReceiptDigest(review),
 									},
-									0,
+									now,
 								);
 				}
 
@@ -2351,7 +2501,7 @@ export function handoffCandidate(
 					break;
 
 				if (accountFor(updated, event.execution)?.settlement !== "settled") {
-					next = hold(updated, "evidence_unavailable", 0);
+					next = hold(updated, "evidence_unavailable", now);
 					break;
 				}
 
@@ -2361,7 +2511,7 @@ export function handoffCandidate(
 						validPatch(state.pin, event.result.patch, event.execution.round) &&
 						event.result.patch.patchDigest === state.current.patch.patchDigest)
 				) {
-					next = stopRound(updated, "repair_no_progress");
+					next = stopRound(updated, "repair_no_progress", now);
 					break;
 				}
 
@@ -2414,7 +2564,7 @@ export function handoffCandidate(
 										cause: event.execution.cause,
 									},
 								}
-							: stopRound(updated, reason);
+							: stopRound(updated, reason, now);
 				}
 
 				break;
@@ -3032,6 +3182,8 @@ function wireReason(value: JsonValue | undefined): value is HandoffReason {
 			"feedback_repair",
 			"repair_no_progress",
 			"repair_repeated_finding",
+			"closed",
+			"withdrawn",
 		].includes(value)
 	);
 }
@@ -3137,6 +3289,9 @@ function wireEffect(
 							wireReason(work.reason) &&
 							wireCount(work.since)))) ||
 					(then?.kind === "held" && wireReason(then.reason)) ||
+					(then?.kind === "finish" &&
+						wireTerminal(then.terminal) &&
+						then.terminal.kind === "cancelled") ||
 					(then?.kind === "repair_due" && wireWork(then, pin, patch)))
 			);
 		}

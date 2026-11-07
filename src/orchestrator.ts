@@ -4988,7 +4988,10 @@ export class Orchestrator {
 					continue;
 				}
 
-				step = handoffCandidate(step.state, queued.event);
+				step = handoffCandidate(step.state, {
+					...queued.event,
+					now: this.#input.clock.now(),
+				});
 
 				if (queued.refusal !== undefined) {
 					const failed = await this.#reviewInputFailure(
@@ -5279,6 +5282,7 @@ export class Orchestrator {
 						run,
 						handoffCandidate(run.handoff ?? state, {
 							kind: "effect_completed",
+							now: this.#input.clock.now(),
 							completion: {
 								kind: "validate",
 								request,
@@ -5385,18 +5389,17 @@ export class Orchestrator {
 					)
 						return;
 
-					const terminal = {
-						kind: "finish_pr",
-						terminal: { kind: "failed", reason: "summary_too_large" },
-					} as const;
+					const stopped = stopRound(
+						state,
+						"summary_too_large",
+						this.#input.clock.now(),
+					);
 
 					if (
-						await this.#commitCandidate(run, {
-							...state,
-							work: { kind: "effect", request: terminal },
-						})
+						(await this.#commitCandidate(run, stopped)) &&
+						stopped.work.kind === "effect"
 					)
-						await this.#interpretCandidate(run, terminal);
+						await this.#interpretCandidate(run, stopped.work.request);
 
 					return;
 				}
@@ -5426,6 +5429,7 @@ export class Orchestrator {
 		if (completion !== null) {
 			const step = handoffCandidate(run.handoff ?? state, {
 				kind: "effect_completed",
+				now: this.#input.clock.now(),
 				completion,
 			});
 
@@ -5488,31 +5492,13 @@ export class Orchestrator {
 				}).state;
 			held = handoffCandidate(held, {
 				kind: "review_settled",
+				now: clock.now(),
 				execution,
 				tokens: null,
 				result: { kind: "failed" },
 			}).state;
 
-			if (held.kind === "selected")
-				await this.#commitCandidate(run, {
-					...held,
-					work: {
-						kind: "held",
-						reason: "evidence_unavailable",
-						since: clock.now(),
-					},
-					published:
-						held.published === null
-							? null
-							: {
-									...held.published,
-									readiness: {
-										kind: "not_ready",
-										reason: "evidence_unavailable",
-										since: clock.now(),
-									},
-								},
-				});
+			if (held.kind === "selected") await this.#commitCandidate(run, held);
 
 			return null;
 		}
@@ -5534,6 +5520,7 @@ export class Orchestrator {
 
 			const settled = handoffCandidate(state, {
 				kind: "review_settled",
+				now: clock.now(),
 				execution: request.execution,
 				tokens,
 				result: { kind: "failed" },
