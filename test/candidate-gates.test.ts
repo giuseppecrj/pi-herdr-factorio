@@ -1026,6 +1026,32 @@ test("candidate-added tests pass without a manifest edit and join the next main 
 	assert.equal(main.candidateCounts["test/new-thing.test.ts"], 1);
 });
 
+test("main integration suites run on the baseline and candidate even when the candidate deletes them", async (t) => {
+	const f = repo(t);
+	const path = ".github/factory/gates/gates.json";
+	const manifest = JSON.parse(readFileSync(join(f.root, path), "utf8"));
+	f.put(
+		path,
+		JSON.stringify({
+			...manifest,
+			testGlobs: ["test/*.test.ts", "test/integration/*.test.ts"],
+		}),
+	);
+	f.put(
+		"test/integration/driver.test.ts",
+		'import {test} from "node:test"; test("driver scenario",()=>{});',
+	);
+	const gateSha = f.commit();
+	f.git("rm", "test/integration/driver.test.ts");
+	f.put(path, JSON.stringify(manifest));
+	const candidateSha = f.commit();
+	const r = await checkCandidate({ ...gateInput(f, candidateSha), gateSha });
+	assert.equal(r.status, "passed");
+	assert.equal(r.baselineCounts["test/integration/driver.test.ts"], 1);
+	assert.equal(r.candidateCounts["test/integration/driver.test.ts"], 1);
+	assert.ok(r.ignoredChanges.includes("test/integration/driver.test.ts"));
+});
+
 test("new main sandbox cases are discovered through the main aggregator", async (t) => {
 	const f = repo(t);
 	const path = ".github/factory/gates/gates.json";
