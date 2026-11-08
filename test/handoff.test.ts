@@ -707,6 +707,16 @@ test("F10-3 owner certification, readiness and truthful merge authorship", () =>
 	const completing = handoffCandidate(done, readyObservation(done)).state;
 	const complete = pending(completing, "complete_handoff");
 
+	const resetBeforeCompletion = handoffCandidate(
+		completing,
+		readyObservation(f.start),
+	).state;
+
+	assert.equal(
+		pending(resetBeforeCompletion, "complete_handoff").head,
+		f.start.current.report!.candidateSha,
+	);
+
 	const ready = selected(
 		handoffCandidate(completing, {
 			kind: "effect_completed",
@@ -847,6 +857,73 @@ test("F10-3 reset after owner validation failure restores the historical certifi
 		"owner_head",
 	);
 	assert.ok(parseCandidateState(JSON.parse(JSON.stringify(ready))));
+
+	const failedCheck: Extract<CandidateEvent, { kind: "observed" }> = {
+		...readyObservation(f.start),
+		now: 600,
+		readiness: { kind: "not_ready", reason: "checks_failed" },
+	};
+
+	const withdrawing = handoffCandidate(ready, failedCheck).state;
+	const checkNotice = pending(withdrawing, "post_notice");
+
+	const checkHeld = selected(
+		handoffCandidate(withdrawing, {
+			kind: "effect_completed",
+			now: 700,
+			completion: { kind: "post_notice", request: checkNotice },
+		}).state,
+	);
+
+	const repeated = handoffCandidate(checkHeld, { ...failedCheck, now: 900 });
+	assert.equal(repeated.effect, null);
+	assert.deepEqual(selected(repeated.state).work, {
+		kind: "held",
+		reason: "checks_failed",
+		since: 600,
+	});
+});
+
+test("F10-3 resetting a running owner review stops and charges it before restoring the historical head", () => {
+	const f = ownerSelected();
+	const due = validated(f.state);
+	const issued = handoffCandidate(due, ownerObservation(f.start)).state;
+	const launch = pending(issued, "launch_review");
+
+	const running = handoffCandidate(issued, {
+		kind: "effect_completed",
+		completion: { kind: "launch_review", request: launch, started: true },
+	}).state;
+
+	const stopping = handoffCandidate(running, readyObservation(f.start)).state;
+	const stop = pending(stopping, "stop_execution");
+
+	const charged = handoffCandidate(stopping, {
+		kind: "effect_completed",
+		completion: {
+			kind: "stop_execution",
+			request: stop,
+			tokens: 13,
+			stopped: true,
+		},
+	}).state;
+
+	const resetting = handoffCandidate(charged, readyObservation(f.start)).state;
+	assert.equal(
+		pending(resetting, "complete_handoff").head,
+		f.start.current.report!.candidateSha,
+	);
+	assert.equal(candidateUsage(resetting), candidateUsage(f.start) + 13);
+	const main = "d".repeat(40);
+	assert.ok(isGitSha(main));
+
+	const refresh = pending(
+		handoffCandidate(resetting, { ...readyObservation(f.start), main }).state,
+		"validate",
+	);
+
+	assert.equal(refresh.generation.origin.kind, "refresh");
+	assert.equal(refresh.generation.generation, 2);
 });
 
 test("F10-3 failing gates and failed or blocking review hold with one head notice", () => {

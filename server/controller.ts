@@ -28,6 +28,9 @@ import {
 import { CONTROLLER_LOGIN } from "../src/markers.ts";
 import {
 	promotedHead,
+	handoffGeneration,
+	sameGeneration,
+	type GenerationRef,
 	parseCandidateState,
 	candidateUsage,
 	candidateGenerations,
@@ -5691,19 +5694,22 @@ export function controllerCandidatePort(config: {
 		let readiness: Extract<CandidateEvent, { kind: "observed" }>["readiness"] =
 			{ kind: "unavailable" };
 
+		const candidate =
+			state.kind === "selected" ? handoffGeneration(state, pr) : null;
+
 		if (
 			state.kind === "selected" &&
-			state.current.certification !== null &&
-			state.current.validation !== null
+			candidate?.certification != null &&
+			candidate.validation !== null
 		) {
-			const certificate = state.current.certification;
+			const certificate = candidate.certification;
 
 			try {
 				const report = await controllerReport(
 					config,
 					state.pin.repo,
 					state.pin.runId,
-					state.current.validation,
+					candidate.validation,
 					certificate.verdict,
 				);
 
@@ -5781,9 +5787,16 @@ export function controllerCandidatePort(config: {
 
 	const publicBody = async (
 		state: Extract<CandidateState, { kind: "selected" }>,
+		ref?: GenerationRef,
 	) => {
 		const contract = await files.readContract(state.pin.runId);
-		const certificate = state.current.certification;
+
+		const certificate =
+			ref === undefined
+				? state.current.certification
+				: (candidateGenerations(state).find((g) =>
+						sameGeneration(g.intent, ref),
+					)?.certification ?? null);
 
 		if (contract.kind !== "found" || certificate === null)
 			throw new PublicationError("evidence_unavailable");
@@ -6398,7 +6411,7 @@ export function controllerCandidatePort(config: {
 
 				const comment = await writer.postComment(
 					state.pin.issue,
-					`${await publicBody(state)}\n\nPR: https://github.com/${state.pin.repo}/pull/${pr.number}\n${key}`,
+					`${await publicBody(state, request.certification)}\n\nPR: https://github.com/${state.pin.repo}/pull/${pr.number}\n${key}`,
 				);
 
 				if (comment.kind !== "posted") return null;

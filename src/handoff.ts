@@ -1421,6 +1421,27 @@ export function certifyGeneration(input: {
 	});
 }
 
+export function handoffGeneration(
+	state: Selected,
+	pr: PrObservation,
+): GenerationEvidence {
+	if (
+		state.current.intent.origin.kind === "owner" &&
+		pr.kind === "open" &&
+		pr.refHead === promotedHead(state)
+	) {
+		return (
+			candidateGenerations(state).find(
+				(g) =>
+					state.published !== null &&
+					sameGeneration(g.intent, state.published.promoted),
+			) ?? state.current
+		);
+	}
+
+	return state.current;
+}
+
 export function promotedHead(state: CandidateState): GitSha | null {
 	return state.kind !== "selected" || state.published === null
 		? null
@@ -1484,7 +1505,10 @@ export function allowedHeads(state: Selected): readonly GitSha[] {
 			heads.push(certified);
 	}
 
-	if (state.current.intent.publication.kind === "owner")
+	if (
+		state.current.intent.publication.kind === "owner" &&
+		state.published?.ownerHead === state.current.intent.publication.head
+	)
 		heads.push(state.current.intent.publication.head);
 
 	return heads;
@@ -1546,7 +1570,8 @@ function startQueuedFeedback(
 	);
 
 	const reason =
-		promoted?.intent.origin.kind === "owner"
+		promoted?.intent.origin.kind === "owner" ||
+		current.intent.origin.kind === "owner"
 			? "owner_authored_head"
 			: current.intent.round === MAX_REPAIR_ROUNDS
 				? "cap_reached"
@@ -1862,6 +1887,44 @@ function observed(
 		return state;
 
 	if (
+		state.work.kind === "effect" &&
+		state.work.request.kind === "complete_handoff" &&
+		event.pr.kind === "open" &&
+		event.pr.refHead !== state.work.request.head
+	)
+		state = held(state, "head_drift", event.now);
+
+	if (
+		handoffGeneration(state, event.pr).intent.digest !==
+			state.current.intent.digest &&
+		state.work.kind !== "effect"
+	) {
+		const execution = activeExecution(state);
+
+		if (execution !== null)
+			return effect(state, {
+				kind: "stop_execution",
+				execution,
+				terminal: null,
+			});
+		state = {
+			...state,
+			published:
+				state.published === null
+					? null
+					: { ...state.published, ownerHead: null },
+			work:
+				state.work.kind === "waiting" ||
+				(state.work.kind === "held" &&
+					["checks_failed", "checks_incomplete", "head_lag"].includes(
+						state.work.reason,
+					))
+					? state.work
+					: { kind: "handoff" },
+		};
+	}
+
+	if (
 		state.published !== null &&
 		event.pr.kind === "open" &&
 		!allowedHeads(state).includes(event.pr.refHead) &&
@@ -2090,7 +2153,10 @@ function observed(
 	)
 		return state;
 
-	if (event.main !== null && event.main !== state.current.intent.baseSha) {
+	if (
+		event.main !== null &&
+		event.main !== handoffGeneration(state, event.pr).intent.baseSha
+	) {
 		const execution = activeExecution(state);
 
 		if (execution !== null)
@@ -2100,14 +2166,16 @@ function observed(
 				terminal: null,
 			});
 
+		const active = handoffGeneration(state, event.pr);
+
 		if (
-			state.current.intent.origin.kind === "owner" ||
+			active.intent.origin.kind === "owner" ||
 			(state.published !== null &&
 				authoredOf(state, state.published.promoted) === "owner")
 		) {
 			const head =
-				state.current.intent.origin.kind === "owner"
-					? state.current.intent.origin.head
+				active.intent.origin.kind === "owner"
+					? active.intent.origin.head
 					: promotedHead(state)!;
 
 			return headNotice(
@@ -2204,7 +2272,8 @@ function observed(
 			: issueExecution(state, execution);
 	}
 
-	const certificate = state.current.certification;
+	const handoff = handoffGeneration(state, event.pr);
+	const certificate = handoff.certification;
 
 	if (certificate === null || event.main === null) return state;
 	const head = certificate.report.candidateSha;
@@ -2265,12 +2334,12 @@ function observed(
 	}
 
 	return state.published.readiness.kind === "ready" &&
-		sameGeneration(state.published.promoted, state.current.intent)
+		sameGeneration(state.published.promoted, handoff.intent)
 		? { ...state, work: { kind: "waiting" } }
 		: effect(state, {
 				kind: "complete_handoff",
 				number: state.published.number,
-				certification: refOf(state.current.intent),
+				certification: refOf(handoff.intent),
 				head,
 			});
 }
