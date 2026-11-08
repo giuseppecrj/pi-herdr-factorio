@@ -298,6 +298,7 @@ esac
 					: new Promise((r) => child.on("close", r)),
 			),
 		);
+
 		const pid = Number(
 			await readFile(join(lane, "serve.pid"), "utf8").catch(() => "0"),
 		);
@@ -401,7 +402,15 @@ esac
 	});
 
 	it("refuses missing/stale bundles and failed preflight before reserving", async () => {
-		await writeFile(join(dir, "sandbox/current/sandbox/pi.ts"), "stale");
+		await writeFile(
+			join(
+				dir,
+				"sandbox",
+				`assets-${env.REPLAY_PREVIOUS_ASSETS}`,
+				"sandbox/pi.ts",
+			),
+			"stale",
+		);
 		assert.notEqual((await drive().done).code, 0);
 		await missingBudget();
 	});
@@ -547,7 +556,7 @@ esac
 		const next = await drive().done;
 		assert.notEqual(next.code, 0);
 		assert.match(next.text, /WARNING.*unfinished production restoration/);
-		assert.match(next.text, /F12a-replay-c3 1 stop/);
+		assert.match(next.text, /'F12a-replay-c3' '1' stop/);
 		assert.equal((await drive("stop").done).code, 0);
 		await restored();
 		assert.equal(

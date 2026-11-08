@@ -30,6 +30,7 @@ out="${REPLAY_OUTPUT_ROOT:-/tmp/swarm-$pr/worker-$n}"
 budget="$root/replay-budget.json"
 pidfile="$lane/serve.pid"
 record="$lane/replay.json"
+recovery="$root/replay-restore.json"
 production="$HOME/factory-state"
 sandbox="${REPLAY_SANDBOX_ROOT:-/var/lib/factory-sandbox}"
 cd "$control"
@@ -126,6 +127,83 @@ console.log(`replay=${status} reason=${reason}`);
 NODE
 }
 
+warn_hold() {
+  if [[ -e "$production/disabled" || -L "$production/disabled" ]]; then
+    echo "WARNING: production is still on hold at $production/disabled; confirm the original bundle and fixture disarming before changing it" >&2
+  fi
+}
+recovery_warning() {
+  echo "WARNING: unfinished production restoration; refusing a new replay. Recovery file: $recovery" >&2
+  node --input-type=module - "$recovery" <<'NODE'
+import { readFileSync } from 'node:fs';
+const r = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+const q = s => "'" + String(s).replaceAll("'", "'\\''") + "'";
+const vars = { FIXTURE_GRANT:r.grant, REPLAY_CONTROL_CHECKOUT:r.control, REPLAY_MAIN_SHA:r.mainSha, REPLAY_CANDIDATE_SHA:r.trusted, REPLAY_ROOT:r.root, REPLAY_SANDBOX_ROOT:r.sandbox, REPLAY_OUTPUT_ROOT:r.out };
+console.error('Keep the hold in place. Run: ' + Object.entries(vars).map(([k,v]) => k + '=' + q(v)).join(' ') + ' bash ' + q(r.control + '/.pi/skills/verify-factory/scripts/drive-replay.sh') + ' ' + q(r.pr) + ' ' + q(r.n) + ' stop' + (r.bootstrap ? ' --bootstrap-candidate' : ''));
+NODE
+  warn_hold
+}
+restore_window() {
+  local original settled=true safe=true code=0
+  original="$(node --input-type=module - "$recovery" "$lane" "$production" "$sandbox" <<'NODE'
+import { readFileSync } from 'node:fs';
+const [path, lane, production, sandbox] = process.argv.slice(2);
+const r = JSON.parse(readFileSync(path, 'utf8'));
+if (r.v !== 1 || r.lane !== lane || r.production !== production || r.sandbox !== sandbox || !/^assets-[a-f0-9]{64}$/.test(r.oldBundle) || !['active','inactive','failed'].includes(r.serviceState) || typeof r.hadHold !== 'boolean' || !Number.isSafeInteger(r.issue) || r.issue < 1 || r.fixtureLabel !== 'factory:ready' || typeof r.out !== 'string' || r.out.includes('\n')) throw Error('restore_record_mismatch');
+console.log([r.oldBundle, r.serviceState, r.hadHold, r.issue, r.out].join('\n'));
+NODE
+)" || return 1
+  local -a saved
+  mapfile -t saved <<<"$original"
+  local old_bundle="${saved[0]}" service_state="${saved[1]}" had_hold="${saved[2]}" issue="${saved[3]}"
+  out="${saved[4]}"
+  # Recovery may run after a manual service restart. Hold and stop it first.
+  if [[ ! -e "$production/disabled" && ! -L "$production/disabled" ]]; then touch "$production/disabled" || return 1; fi
+  sudo systemctl stop factory.service || return 1
+  case "$(systemctl is-active factory.service || true)" in inactive|failed) ;; *) return 1;; esac
+  if stop_child; then
+    if [[ -f "$record" ]]; then settle || { settled=false; code=1; }; fi
+    if $settled; then rm -f "$pidfile" || code=1; fi
+    gh issue edit "$issue" --repo "$repo" --remove-label factory:ready >"$out/disarm.log" 2>&1 || safe=false
+    gh issue view "$issue" --repo "$repo" --json labels >"$out/stopped-fixture.json" || safe=false
+    node --input-type=module - "$out/stopped-fixture.json" <<'NODE' || safe=false
+import { readFile } from 'node:fs/promises';
+const issue = JSON.parse(await readFile(process.argv[2], 'utf8'));
+if (!Array.isArray(issue.labels) || issue.labels.some(l => l.name === 'factory:ready')) throw Error('fixture_still_ready');
+NODE
+    if [[ "$(readlink "$sandbox/current")" != "$old_bundle" ]]; then
+      sudo ln -sfn "$old_bundle" "$sandbox/current" || safe=false
+    fi
+    if $safe; then
+      if ! $had_hold; then rm -f "$production/disabled" || code=1; fi
+      if [[ "$service_state" == active ]]; then
+        sudo systemctl start factory.service || { touch "$production/disabled"; code=1; }
+      fi
+    else
+      echo "production restoration blocked: fixture or bundle could not be restored; hold retained" >&2
+      code=1
+    fi
+  else
+    echo "replay stop failed; production held for safety" >&2
+    code=1
+  fi
+  if [[ "$code" == 0 ]]; then
+    rm "$recovery" || return 1
+    echo "replay=window_closed grant=$FIXTURE_GRANT bootstrap=$bootstrap"
+  fi
+  warn_hold
+  return "$code"
+}
+restore() {
+  local code=$?
+  trap - EXIT
+  trap '' INT TERM HUP
+  restore_window || { recovery_warning; code=1; }
+  exit "$code"
+}
+
+if [[ -e "$recovery" && "$mode" != stop ]]; then recovery_warning; exit 2; fi
+
 case "$mode" in
   start)
     : "${REPLAY_CASE:?name a pinned case}"
@@ -162,39 +240,18 @@ NODE
     [[ "$old_bundle" =~ ^assets-[a-f0-9]{64}$ ]] || exit 2
     had_hold=false
     [[ -e "$production/disabled" || -L "$production/disabled" ]] && had_hold=true
-    restore() {
-      local code=$? settled=true safe=true
-      trap - EXIT INT TERM HUP
-      if stop_child; then
-        if [[ -f "$record" ]]; then settle || { settled=false; code=1; }; fi
-        if $settled; then rm -f "$pidfile"; fi
-        # A refused or interrupted fixture must not become an unbudgeted production ticket.
-        gh issue edit "$issue" --repo "$repo" --remove-label factory:ready >"$out/disarm.log" 2>&1 || safe=false
-        gh issue view "$issue" --repo "$repo" --json labels >"$out/stopped-fixture.json" || safe=false
-        node --input-type=module - "$out/stopped-fixture.json" <<'NODE' || safe=false
-import { readFile } from 'node:fs/promises';
-const issue = JSON.parse(await readFile(process.argv[2], 'utf8'));
-if (!Array.isArray(issue.labels) || issue.labels.some(l => l.name === 'factory:ready')) throw Error('fixture_still_ready');
+    # Sync original state before any hold, stop or bundle mutation. Keep it until recovery completes.
+    node --input-type=module - "$recovery" "$old_bundle" "$service_state" "$had_hold" "$issue" "$lane" "$production" "$sandbox" "$out" "$pr" "$n" "$trusted" "$bootstrap" <<'NODE'
+import { open, rename } from 'node:fs/promises';
+import { dirname } from 'node:path';
+const [path, oldBundle, serviceState, hadHold, issue, lane, production, sandbox, out, pr, n, trusted, bootstrap] = process.argv.slice(2);
+const r = {v:1, oldBundle, serviceState, hadHold:hadHold === 'true', issue:Number(issue), fixtureLabel:'factory:ready', lane, production, sandbox, out, pr, n, trusted, bootstrap:bootstrap === 'true', control:process.cwd(), mainSha:process.env.REPLAY_MAIN_SHA, grant:process.env.FIXTURE_GRANT, root:dirname(path)};
+const file = await open(`${path}.tmp`, 'w', 0o600);
+try { await file.writeFile(JSON.stringify(r, null, 2) + '\n'); await file.sync(); } finally { await file.close(); }
+await rename(`${path}.tmp`, path);
+const dir = await open(dirname(path), 'r');
+try { await dir.sync(); } finally { await dir.close(); }
 NODE
-        if [[ "$(readlink "$sandbox/current")" != "$old_bundle" ]]; then
-          sudo ln -sfn "$old_bundle" "$sandbox/current" || safe=false
-        fi
-        if $safe; then
-          if ! $had_hold; then rm -f "$production/disabled" || code=1; fi
-          if [[ "$service_state" == active ]]; then
-            sudo systemctl start factory.service || { touch "$production/disabled"; code=1; }
-          fi
-        else
-          echo "production restoration blocked: fixture or bundle could not be restored; hold retained" >&2
-          code=1
-        fi
-      else
-        echo "replay stop failed; production held for safety" >&2
-        code=1
-      fi
-      echo "replay=window_closed grant=$FIXTURE_GRANT bootstrap=$bootstrap"
-      exit "$code"
-    }
     trap restore EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM HUP
@@ -257,12 +314,17 @@ NODE
     exit 1
     ;;
   stop)
-    [[ -s "$pidfile" ]] || { echo "no recorded replay PID" >&2; exit 2; }
-    stop_child
+    trap warn_hold EXIT
+    [[ -s "$pidfile" || -e "$recovery" ]] || { echo "no recorded replay PID" >&2; exit 2; }
+    stop_child || { if [[ -e "$recovery" ]]; then recovery_warning; fi; exit 1; }
     exec 9>"$root/replay-driver.lock"
     flock -w 150 9 || { echo "another replay holds the budget; retry stop" >&2; exit 2; }
-    # The supervising start settles before releasing this lock. Retry on failure.
-    if [[ -s "$pidfile" ]]; then settle; rm "$pidfile"; fi
+    if [[ -e "$recovery" ]]; then
+      trap '' INT TERM HUP
+      restore_window || { recovery_warning; exit 1; }
+    elif [[ -s "$pidfile" ]]; then
+      settle; rm "$pidfile"
+    fi
     echo "replay=stopped budget=$budget"
     ;;
   *) echo "usage: drive-replay.sh <F12a-replay-id> <n> start <issue> [--bootstrap-candidate] | stop" >&2; exit 2;;

@@ -89,9 +89,12 @@ bash "$S/drive-replay.sh" F12a-replay-c3-previous 1 start '<fixture issue>'
 # Only for the first pre-merge lane, append: --bootstrap-candidate
 ```
 
-The driver takes the shared replay lock, pins the fixture, places the production
-hold **before** `systemctl stop factory.service`, and verifies no production
-controller process or bound socket remains. Explicit stop cancels the service's
+The driver takes the shared replay lock and pins the fixture. Before changing
+production it syncs `replay-restore.json` under `REPLAY_ROOT`, recording the
+original bundle, service and hold state, fixture issue and readiness label, plus
+the lane and recovery command inputs. It places the production hold **before**
+`systemctl stop factory.service` and verifies no production controller process
+or bound socket remains. Explicit stop cancels the service's
 `Restart=on-failure` restart. It checks both bundles and runs trusted sandbox
 preflight before reserving anything. It re-checks production's lock and remote
 main immediately before reservation and launch. `serve` gets only the named
@@ -129,10 +132,16 @@ control SHA, grant, stage caps and stop disposition. Preserve it with the row.
    and releases the replay lock. Before production resumes it removes the
    fixture's `factory:ready` label and verifies removal, including after preflight
    refusal, so production cannot pick up an unbudgeted replay fixture. The same
-   trap runs on errors and catchable signals. If disarming or restoring the
-   bundle fails, or the child cannot be stopped, production stays held for safety;
-   treat that as a failed window, not successful restoration. SIGKILL or host
-   loss cannot run a shell trap and needs operator recovery.
+   trap runs on errors and catchable signals; INT, TERM and HUP are ignored while
+   restoration runs, including by its subprocesses. If disarming or restoring the
+   bundle fails, or the child cannot be stopped, production stays held for safety.
+   The recovery file remains until restoration and accounting finish successfully.
+   SIGKILL or host loss cannot run a shell trap. The next start refuses with a
+   loud warning and the exact environment and `stop` command for the recorded
+   lane. Run that command to stop any remaining replay child and recover from
+   the durable file. Do not delete the file or release the hold by hand. A failed
+   recovery retains the file and prints the command again. `stop` also warns if
+   production remains on hold, including an intentionally preserved owner hold.
 
    One terminal verification row settles only when its fixture and verification
    manifest match. Without a row, unreadable accounting or any stage/usage
@@ -154,7 +163,8 @@ control SHA, grant, stage caps and stop disposition. Preserve it with the row.
    ```
 
    The report shows each side's own recorded corpus digest. It will not compare
-   a row with itself, attach a row to another fixture or case, mix corpus pins
+   a row with itself or two runs on the same fixture issue, attach a row to
+   another fixture or case, mix corpus pins
    or sides, or call different model/run-cap/stage-cap/policy/base/asset evidence
    comparable. Main movement during either side is incomparable. Declare both
    expected asset digests only for an authorized bundle switch. An incomparable

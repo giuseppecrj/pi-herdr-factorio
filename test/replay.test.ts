@@ -197,7 +197,10 @@ describe("replay corpus and read-only check", () => {
 
 				return {
 					code: 0,
-					stdout: args.includes("src/workflow.ts") ? "src/workflow.ts\n" : "",
+					stdout:
+						args[0] === "show"
+							? `const BRANCH_NAME = /ok/;\nexport function isBranchName(input: string): boolean {\nreturn ${args[1]?.startsWith(sha) ? "false" : "true"};\n}`
+							: "",
 					stderr: "",
 				};
 			},
@@ -208,7 +211,11 @@ describe("replay corpus and read-only check", () => {
 		assert.equal(result.cases[4]?.status, "offline_only");
 		assert.ok(calls.every((c) => c[0] === "git"));
 		assert.ok(
-			calls.some((c) => c.includes("--") && c.includes("src/workflow.ts")),
+			calls.some(
+				(c) =>
+					c.includes("show") &&
+					c.some((arg) => arg.endsWith(":src/workflow.ts")),
+			),
 		);
 	});
 
@@ -257,10 +264,15 @@ describe("replay corpus and read-only check", () => {
 				"--candidate-sha",
 				otherSha,
 			],
-			async (cmd) => {
+			async (cmd, args) => {
 				calls.push(cmd);
 
-				return { code: 0, stdout: "", stderr: "" };
+				return {
+					code: 0,
+					stdout:
+						args[0] === "show" ? await readFile("src/workflow.ts", "utf8") : "",
+					stderr: "",
+				};
 			},
 		);
 
@@ -278,7 +290,11 @@ describe("replay CLI boundaries", () => {
 
 		const execute: Exec = async (_cmd, args) => ({
 			code: 0,
-			stdout: args[0] === "show" ? text : "",
+			stdout: args[1]?.endsWith(":src/workflow.ts")
+				? await readFile("src/workflow.ts", "utf8")
+				: args[0] === "show"
+					? text
+					: "",
 			stderr: "",
 		});
 
@@ -648,11 +664,13 @@ describe("review regressions: comparison identity and caps", () => {
 		const candidate = await side("cand");
 		candidate.row.issue = previous.row.issue;
 		candidate.record.issue = previous.record.issue;
+
 		const result = replayReport({
 			previous,
 			candidate,
 			expected: "needs_info",
 		});
+
 		assert.equal(result.comparability, "incomparable");
 		assert.ok(result.reasons.includes("same_fixture_issue"));
 	});
@@ -689,7 +707,7 @@ describe("review regressions: comparison identity and caps", () => {
 			const base = git("rev-parse", "HEAD");
 			await writeFile(
 				join(dir, "src/workflow.ts"),
-				`${source}\n// unrelated parser edit\n`,
+				`${source}\n// unrelated parser edit mentioning BRANCH_NAME and isBranchName\n`,
 			);
 			git("add", ".");
 			git(
@@ -755,6 +773,47 @@ describe("review regressions: comparison identity and caps", () => {
 			});
 
 			assert.equal(changed.cases[0]?.status, "stale");
+
+			for (const [text, status] of [
+				[
+					source.replace(
+						"const BRANCH_NAME = /",
+						"const BRANCH_NAME = /(?=.{1,100}$)",
+					),
+					"stale",
+				],
+				[
+					source.replace(
+						"export function isBranchName",
+						"export function renamedBranchName",
+					),
+					"unavailable",
+				],
+			] as const) {
+				await writeFile(join(dir, "src/workflow.ts"), text);
+				git("add", ".");
+				git(
+					"-c",
+					"user.name=Fixture",
+					"-c",
+					"user.email=fixture@example.invalid",
+					"-c",
+					"core.hooksPath=/dev/null",
+					"commit",
+					"-qm",
+					"guarded declaration change",
+				);
+
+				const result = await checkReplay({
+					corpus: { ...corpus, cases: [{ ...c1, baseSha: base }] },
+					mainSha: git("rev-parse", "HEAD"),
+					previousSha: base,
+					candidateSha: base,
+					exec: execute,
+				});
+
+				assert.equal(result.cases[0]?.status, status);
+			}
 		} finally {
 			await rm(dir, { recursive: true, force: true });
 		}

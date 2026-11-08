@@ -154,6 +154,30 @@ export async function loadReplayCorpus(dir: string): Promise<ReplayCorpus> {
 	return { v: 1, digest, cases: result };
 }
 
+// Symbol guards compare whole top-level declarations, not just changed lines.
+// Unsupported layouts fail closed rather than silently dropping part of a symbol.
+function guardedSource(source: string, pattern: string): string | null {
+	const declarations: string[] = [];
+
+	for (const name of pattern.split("|")) {
+		if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return null;
+
+		const matches = [
+			...source.matchAll(
+				new RegExp(
+					`^(?:export )?(?:function ${name}\\b[^\\n]*\\{[\\s\\S]*?^}|const ${name} = [^\\n]+;)$`,
+					"gm",
+				),
+			),
+		];
+
+		if (matches.length !== 1 || matches[0] === undefined) return null;
+		declarations.push(matches[0][0]);
+	}
+
+	return JSON.stringify(declarations);
+}
+
 export async function checkReplay(input: {
 	readonly corpus: ReplayCorpus;
 	readonly mainSha: string;
@@ -164,18 +188,12 @@ export async function checkReplay(input: {
 	if (![input.mainSha, input.previousSha, input.candidateSha].every(isGitSha))
 		refuse("replay_sha_required");
 
-	const diff = async (
-		a: string,
-		b: string,
-		paths: readonly string[],
-		pattern: string | null = null,
-	) => {
+	const diff = async (a: string, b: string, paths: readonly string[]) => {
 		try {
 			return await input.exec("git", [
 				"--literal-pathspecs",
 				"diff",
 				"--name-only",
-				...(pattern === null ? [] : [`-G${pattern}`]),
 				a,
 				b,
 				"--",
@@ -186,11 +204,43 @@ export async function checkReplay(input: {
 		}
 	};
 
+	const symbolDiff = async (c: ReplayCase) => {
+		try {
+			const regions = await Promise.all(
+				[c.baseSha, input.mainSha].map(async (sha) => {
+					const parts = await Promise.all(
+						c.paths.map(async (path) => {
+							const result = await input.exec("git", [
+								"show",
+								`${sha}:${path}`,
+							]);
+
+							if (result.code !== 0 || c.guardPattern === null) return null;
+
+							return guardedSource(result.stdout, c.guardPattern);
+						}),
+					);
+
+					return parts.some((p) => p === null) ? null : JSON.stringify(parts);
+				}),
+			);
+
+			return {
+				code: regions.some((r) => r === null) ? 1 : 0,
+				stdout: regions[0] === regions[1] ? "" : "symbols_changed",
+			};
+		} catch {
+			return { code: 1, stdout: "" };
+		}
+	};
+
 	const cases = await Promise.all(
 		input.corpus.cases.map(async (c) => {
-			const change = c.liveReplayable
-				? await diff(c.baseSha, input.mainSha, c.paths, c.guardPattern)
-				: null;
+			const change = !c.liveReplayable
+				? null
+				: c.guardPattern === null
+					? await diff(c.baseSha, input.mainSha, c.paths)
+					: await symbolDiff(c);
 
 			const status =
 				change === null
@@ -440,6 +490,9 @@ export function replayReport(input: {
 		reasons.push("side_mismatch");
 
 	if (p.row.runId === c.row.runId) reasons.push("same_run");
+
+	if (p.row.repo === c.row.repo && p.row.issue === c.row.issue)
+		reasons.push("same_fixture_issue");
 
 	if (
 		[p, c].some(
