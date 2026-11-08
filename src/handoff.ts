@@ -844,15 +844,7 @@ export function candidateGenerations(
 }
 
 function latestRepairRound(state: Selected): RepairRound {
-	const rounds = [
-		...candidateGenerations(state).map((g) => g.intent.round),
-		...state.accounts.map((a) => a.execution.round),
-		...(state.feedback?.batches ?? []).flatMap((b) =>
-			b.status.kind === "settled" && b.status.outcome.kind === "refused"
-				? []
-				: [b.round ?? (b.status.kind === "applying" ? b.status.round : 0)],
-		),
-	];
+	const rounds = candidateGenerations(state).map((g) => g.intent.round);
 
 	return rounds.includes(2) ? 2 : rounds.includes(1) ? 1 : 0;
 }
