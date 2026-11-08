@@ -4131,6 +4131,7 @@ async function cleanupPublication(
 type ValidatorConfig = {
 	readonly stateDir: string;
 	readonly exec: Exec;
+	readonly sleep?: (ms: number) => Promise<void>;
 	readonly fetch?: TarballFetch;
 	readonly receipt?: GateReceiptSource;
 	readonly diagnosis?: ReturnType<typeof controllerDiagnosis>;
@@ -4218,7 +4219,13 @@ function candidateValidator(
 
 				if (reason !== "branch_moved") {
 					const cleanup = await cleanupPublication(
-						new GitHubPublicationApi(config.exec, repository),
+						new GitHubPublicationApi(
+							config.exec,
+							repository,
+							{},
+							undefined,
+							config.sleep,
+						),
 						dir,
 						publication,
 					);
@@ -4337,6 +4344,7 @@ function candidateValidator(
 				repo,
 				state.counters,
 				save,
+				config.sleep,
 			);
 
 			const dir = validationDir(

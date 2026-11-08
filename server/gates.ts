@@ -753,7 +753,10 @@ function manifestOf(tree: string): GateManifest {
 		testGlobs.length === 0 ||
 		new Set(testGlobs).size !== testGlobs.length ||
 		testGlobs.some(
-			(p) => !/^test\/(?:\*\.test\.ts|sandbox\/\*\.cases\.ts)$/.test(p),
+			(p) =>
+				!/^test\/(?:\*\.test\.ts|sandbox\/\*\.cases\.ts|integration\/\*\.test\.ts)$/.test(
+					p,
+				),
 		)
 	)
 		throw new Error("invalid_gate_manifest");

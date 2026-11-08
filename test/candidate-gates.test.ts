@@ -1049,7 +1049,7 @@ test("main integration suites run on the baseline and candidate even when the ca
 	assert.equal(r.status, "passed");
 	assert.equal(r.baselineCounts["test/integration/driver.test.ts"], 1);
 	assert.equal(r.candidateCounts["test/integration/driver.test.ts"], 1);
-	assert.ok(r.ignoredChanges.includes("test/integration/driver.test.ts"));
+	assert.ok(r.ignoredChanges.includes(".github/factory/gates/gates.json"));
 });
 
 test("new main sandbox cases are discovered through the main aggregator", async (t) => {

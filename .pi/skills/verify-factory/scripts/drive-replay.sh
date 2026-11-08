@@ -58,7 +58,8 @@ stop_child() {
   if alive "$pid"; then
     owned "$pid" || { echo "recorded PID is not this lane's serve; refusing signal" >&2; return 1; }
     kill -TERM "$pid"
-    for _ in $(seq 1 1200); do alive "$pid" || return 0; sleep 0.1; done
+    # The visible-test hard deadline is 180 s; allow another 60 s for cleanup.
+    for _ in $(seq 1 2400); do alive "$pid" || return 0; sleep 0.1; done
     echo "replay=still_running pid=$pid" >&2
     return 1
   fi

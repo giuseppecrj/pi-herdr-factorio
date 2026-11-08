@@ -13,12 +13,12 @@ import {
 } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { afterEach, beforeEach, describe, it } from "node:test";
-import { acquireLock, procTable } from "../server/controller.ts";
-import { manifestDigest } from "../server/sandbox/manifest.ts";
-import { readReplayBudget, replayRow } from "../src/replay.ts";
-import { digestOf, runIdOf } from "../src/run.ts";
-import { ledgerRowOf } from "../src/ledger.ts";
+import { after, afterEach, before, beforeEach, describe, it } from "node:test";
+import { acquireLock, procTable } from "../../server/controller.ts";
+import { manifestDigest } from "../../server/sandbox/manifest.ts";
+import { readReplayBudget, replayRow } from "../../src/replay.ts";
+import { digestOf, runIdOf } from "../../src/run.ts";
+import { ledgerRowOf } from "../../src/ledger.ts";
 
 // The reviewer's fake gh/serve + real socket-lock harness, made hermetic.
 const script = ".pi/skills/verify-factory/scripts/drive-replay.sh";
@@ -28,6 +28,8 @@ let root: string;
 let lane: string;
 let env: NodeJS.ProcessEnv;
 let active: ChildProcess[];
+let template: string;
+let templateSha: string;
 
 const git = (cwd: string, ...args: string[]) =>
 	execFileSync("git", ["-C", cwd, ...args], {
@@ -98,11 +100,15 @@ it("waits for the visible-test deadline plus 60 seconds after signaling stop", a
 	const source = await readFile(script, "utf8");
 	const stop = source.match(/stop_child\(\) \{[\s\S]*?\n\}/)?.[0];
 	assert.ok(stop);
+
 	const sandbox = await readFile("server/sandbox.ts", "utf8");
+
 	const limit = sandbox.match(
 		/timer = setTimeout\(\(\) => \{\s*timedOut = true;[\s\S]*?\}, ([\d_]+)\);/,
 	)?.[1];
+
 	assert.ok(limit);
+
 	const polls = Math.ceil((Number(limit.replaceAll("_", "")) / 1000 + 60) * 10);
 	const pidfile = join(await mkdtemp(join(tmpdir(), "stop-wait-")), "pid");
 
@@ -142,12 +148,9 @@ printf '%s' "$polls"
 describe("replay driver with fake GitHub/controller and real guards", {
 	concurrency: false,
 }, () => {
-	beforeEach(async () => {
-		dir = await mkdtemp(join(tmpdir(), "replay-driver-"));
-		control = join(dir, "control");
-		root = join(dir, "root");
-		lane = join(root, "F12a-replay-c3-w1");
-		active = [];
+	before(async () => {
+		template = await mkdtemp(join(tmpdir(), "replay-driver-template-"));
+		control = join(template, "control");
 		await mkdir(control);
 
 		for (const path of [
@@ -201,8 +204,23 @@ describe("replay driver with fake GitHub/controller and real guards", {
 			"-qm",
 			"local trusted replay fixture",
 		);
-		const sha = git(control, "rev-parse", "HEAD");
-		git(control, "update-ref", "refs/remotes/origin/main", sha);
+		templateSha = git(control, "rev-parse", "HEAD");
+		git(control, "update-ref", "refs/remotes/origin/main", templateSha);
+	});
+
+	after(async () => {
+		await rm(template, { recursive: true, force: true });
+	});
+
+	beforeEach(async () => {
+		dir = await mkdtemp(join(tmpdir(), "replay-driver-"));
+		control = join(dir, "control");
+		root = join(dir, "root");
+		lane = join(root, "F12a-replay-c3-w1");
+		active = [];
+		await cp(join(template, "control"), control, { recursive: true });
+		const sha = templateSha;
+
 		await mkdir(join(lane, "state"), { recursive: true });
 		await mkdir(join(lane, "ws/server"), { recursive: true });
 		await mkdir(join(dir, "home/factory-state"), { recursive: true });
