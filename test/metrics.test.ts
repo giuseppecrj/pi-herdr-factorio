@@ -933,6 +933,294 @@ describe("review regressions", () => {
 	});
 });
 
+describe("dismissed review intervention", () => {
+	const dismissed = (state = "changes_requested", review_id = 1) => ({
+		event: "review_dismissed",
+		actor: { login: "exe-dev-github-integration[bot]", type: "Bot" },
+		dismissed_review: { review_id, state },
+	});
+
+	const reviews = [
+		{
+			id: 1,
+			state: "DISMISSED",
+			submitted_at: "2026-10-31T23:00:00Z",
+			user: { login: "giuseppecrj", type: "User" },
+		},
+	];
+
+	it("reproduces dismissed-pre-merge through the real command without counting it clean", async () => {
+		await withLedger(async (path, dir) => {
+			const bin = join(dir, "bin");
+			mkdirSync(bin);
+			const calls = join(dir, "calls.jsonl");
+			writeFileSync(
+				join(bin, "gh"),
+				`#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n");
+let result;
+if (args[0] === "api" && args[1].includes("/labels/")) result = {name:"factory:defect"};
+else if (args[0] === "issue" && args[1] === "list") result = [];
+else if (args[0] === "api" && /\\/reviews\\?per_page=100&page=1$/.test(args[1])) result = ${JSON.stringify(reviews)};
+else if (args[0] === "api" && /\\/timeline\\?per_page=100&page=1$/.test(args[1])) result = ${JSON.stringify([dismissed()])};
+else process.exit(3);
+process.stdout.write(JSON.stringify(result));
+`,
+				{ mode: 0o755 },
+			);
+
+			const result = spawnSync(
+				process.execPath,
+				[
+					new URL("../server/cli.ts", import.meta.url).pathname,
+					...cliArgs(path),
+				],
+				{
+					encoding: "utf8",
+					env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+				},
+			);
+
+			assert.equal(result.status, 0, result.stderr);
+			const output = JSON.parse(result.stdout);
+			assert.equal(
+				output.tickets[0].landings[0].intervention.value,
+				true,
+				`dismissed-pre-merge: ${output.tickets[0].status}, numerator=${output.primary.numerator}`,
+			);
+			assert.equal(output.tickets[0].status, "landed_not_clean");
+			assert.equal(output.primary.numerator, 0);
+			assert.equal(readFileSync(calls, "utf8").trim().split("\n").length, 4);
+		});
+	});
+
+	for (const [name, state, submittedAt, user, expected] of [
+		[
+			"lowercase change request",
+			"changes_requested",
+			"2026-10-31T23:00:00Z",
+			{ login: "owner", type: "User" },
+			true,
+		],
+		[
+			"uppercase change request",
+			"CHANGES_REQUESTED",
+			"2026-10-31T23:00:00Z",
+			{ login: "owner", type: "User" },
+			true,
+		],
+		[
+			"dismissed approval",
+			"approved",
+			"2026-10-31T23:00:00Z",
+			{ login: "owner", type: "User" },
+			false,
+		],
+		[
+			"dismissed comment",
+			"commented",
+			"2026-10-31T23:00:00Z",
+			{ login: "owner", type: "User" },
+			false,
+		],
+		[
+			"request at merge",
+			"changes_requested",
+			mergedAt,
+			{ login: "owner", type: "User" },
+			false,
+		],
+		[
+			"request after merge",
+			"changes_requested",
+			"2026-11-01T00:00:01Z",
+			{ login: "owner", type: "User" },
+			false,
+		],
+		[
+			"bot request",
+			"changes_requested",
+			"2026-10-31T23:00:00Z",
+			{ login: "github-actions[bot]", type: "Bot" },
+			false,
+		],
+	] as const) {
+		it(`measures ${name} from the original review, not the dismissal actor`, async () => {
+			await withLedger(async (path) => {
+				const value = await cli(cliArgs(path), async (_command, args) => ({
+					code: 0,
+					stderr: "",
+					stdout: JSON.stringify(
+						args[1]?.includes("/labels/")
+							? { name: "factory:defect" }
+							: args[1]?.includes("/reviews?")
+								? [{ ...reviews[0], submitted_at: submittedAt, user }]
+								: args[1]?.includes("/timeline?")
+									? [dismissed(state)]
+									: [],
+					),
+				}));
+
+				const output = JSON.parse(value.stdout);
+				assert.equal(
+					output.tickets[0].landings[0].intervention.value,
+					expected,
+				);
+				assert.equal(output.primary.numerator, expected ? 0 : 1);
+			});
+		});
+	}
+
+	for (const scenario of [
+		"page-two",
+		"exact-page",
+		"failed",
+		"partial",
+		"saturated",
+		"malformed",
+		"unmatched-review",
+	] as const) {
+		it(`bounds and validates timeline reads: ${scenario}`, async () => {
+			await withLedger(async (path) => {
+				let pages = 0;
+
+				const value = await cli(
+					cliArgs(path),
+					async (_command, args, options) => {
+						let stdout = "[]";
+
+						if (args[1]?.includes("/labels/"))
+							stdout = '{"name":"factory:defect"}';
+
+						if (args[1]?.includes("/reviews?"))
+							stdout = JSON.stringify(reviews);
+
+						if (args[1]?.includes("/timeline?")) {
+							pages++;
+							assert.deepEqual(args, [
+								"api",
+								`repos/${repo}/issues/622/timeline?per_page=100&page=${pages}`,
+							]);
+							assert.ok(
+								options && options.timeoutMs > 0 && options.timeoutMs <= 30_000,
+							);
+
+							if (
+								scenario === "failed" ||
+								(scenario === "partial" && pages === 2)
+							)
+								return { code: 1, stdout: "[]", stderr: "private failure" };
+
+							if (scenario === "malformed")
+								stdout = JSON.stringify([
+									{ event: "review_dismissed", dismissed_review: {} },
+								]);
+							else if (scenario === "unmatched-review")
+								stdout = JSON.stringify([dismissed("changes_requested", 99)]);
+							else if (scenario === "saturated" || pages === 1)
+								stdout = JSON.stringify(
+									Array.from({ length: 100 }, (_, at) =>
+										scenario === "partial" && at === 0
+											? dismissed()
+											: { event: "labeled" },
+									),
+								);
+							else
+								stdout = JSON.stringify(
+									scenario === "page-two" ? [dismissed()] : [],
+								);
+						}
+
+						return { code: 0, stdout, stderr: "" };
+					},
+				);
+
+				const output = JSON.parse(value.stdout);
+
+				if (scenario === "page-two" || scenario === "exact-page") {
+					assert.equal(
+						output.tickets[0].landings[0].intervention.value,
+						scenario === "page-two",
+					);
+					assert.equal(pages, 2);
+				} else {
+					assert.deepEqual(output.tickets[0].landings[0].intervention, {
+						kind: "unknown",
+						reason: "intervention_unreadable",
+					});
+					assert.equal(output.tickets[0].status, "unknown");
+					assert.equal(output.primary.numerator, 0);
+					assert.ok(pages > 0 && pages <= 10);
+				}
+			});
+		});
+	}
+
+	for (const expireDuringDefects of [false, true]) {
+		it(`limits all GitHub reads to 120 seconds, including defects=${expireDuringDefects}`, async (context) => {
+			await withLedger(async (path) => {
+				writeFileSync(
+					path,
+					bytesOf(
+						Array.from({ length: 6 }, (_, at) => ({
+							...synthetic(100 + at),
+							pr: {
+								number: 1000 + at,
+								url: `https://github.com/${repo}/pull/${1000 + at}`,
+							},
+						})),
+					),
+				);
+				let now = Date.parse(matureAt),
+					calls = 0;
+				context.mock.method(Date, "now", () => now);
+
+				const value = await cli(
+					cliArgs(path),
+					async (_command, args, options) => {
+						calls++;
+						assert.ok(
+							options && options.timeoutMs > 0 && options.timeoutMs <= 30_000,
+						);
+
+						if (expireDuringDefects) now += 60_000;
+						else if (
+							args[1]?.includes("/reviews?") ||
+							args[1]?.includes("/timeline?")
+						)
+							now += 20_000;
+
+						return {
+							code: 0,
+							stdout: args[1]?.includes("/labels/")
+								? '{"name":"factory:defect"}'
+								: "[]",
+							stderr: "",
+						};
+					},
+				);
+
+				const output = JSON.parse(value.stdout);
+				assert.ok(
+					calls <= (expireDuringDefects ? 2 : 8),
+					`${calls} GitHub reads exceed the report deadline`,
+				);
+				assert.equal(
+					output.tickets.at(-1).landings[0].intervention.reason,
+					"intervention_unreadable",
+				);
+				assert.equal(output.tickets.at(-1).status, "unknown");
+
+				if (!expireDuringDefects)
+					assert.equal(output.tickets[0].status, "clean");
+				context.mock.restoreAll();
+			});
+		});
+	}
+});
+
 describe("measured owner intervention", () => {
 	const review = (
 		state = "APPROVED",
