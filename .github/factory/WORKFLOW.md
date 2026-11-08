@@ -21,7 +21,7 @@ usage:
   max_tokens_per_run: 800000
 
 replay:
-  max_tokens: 1100000
+  max_tokens: 1650000
 
 stages:
   admit:
