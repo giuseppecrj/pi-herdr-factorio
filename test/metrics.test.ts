@@ -756,13 +756,23 @@ describe("review regressions", () => {
 			},
 		}).row;
 
-		for (const row of [
-			synthetic(),
-			ledgerRow({ ...roundZero, v: 2 }).row,
-			ledgerRow({ ...roundZero, v: 3 }).row,
-			roundZero,
-			v5,
-		]) {
+		const v2 = ledgerRow({
+			...synthetic(),
+			v: 2,
+			failure: null,
+			acceptAttempts: { kind: "unavailable", reason: "not_instrumented" },
+		}).row;
+
+		assert.ok(v2.v === 2);
+
+		const v3 = ledgerRow({
+			...v2,
+			v: 3,
+			stages: { kind: "unavailable", reason: "not_instrumented" },
+			efficiency: v4.efficiency,
+		}).row;
+
+		for (const row of [synthetic(), v2, v3, roundZero, v5]) {
 			const value = report([row], none, "2026-12-01T00:00:00Z");
 			assert.equal(value.tickets[0]?.status, "unknown");
 			assert.ok(
@@ -917,10 +927,11 @@ describe("metrics CLI", () => {
 			mkdirSync(join(dir, "ledger"));
 			writeFileSync(
 				join(dir, "ledger/runs.jsonl"),
-				Buffer.concat([
-					Buffer.from("\n".repeat(5 * 1024 * 1024)),
-					bytesOf([synthetic()]),
-				]),
+				bytesOf(Array.from({ length: 2500 }, (_, at) => synthetic(at + 1000))),
+			);
+
+			assert.ok(
+				readFileSync(join(dir, "ledger/runs.jsonl")).length > 4 * 1024 * 1024,
 			);
 
 			for (const args of [
@@ -951,11 +962,11 @@ describe("metrics CLI", () => {
 					repo,
 					"--offline",
 				],
-				{ cwd: dir, encoding: "utf8" },
+				{ cwd: dir, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 },
 			);
 
 			assert.equal(result.status, 0, result.stdout + result.stderr);
-			assert.equal(JSON.parse(result.stdout).runs, 1);
+			assert.equal(JSON.parse(result.stdout).runs, 2500);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -1008,12 +1019,14 @@ describe("metrics CLI", () => {
 	it("labels constructed ledger input as source file, with no mutation", async () => {
 		await withLedger(async (path) => {
 			const before = readFileSync(path);
+
 			const value = await cli([
 				...cliArgs(path).map((arg) =>
 					arg === "--ledger" ? "--ledger-file" : arg,
 				),
 				"--offline",
 			]);
+
 			assert.equal(value.code, EXIT.ok);
 			assert.equal(JSON.parse(value.stdout).source, "file");
 			assert.deepEqual(readFileSync(path), before);
@@ -1080,10 +1093,20 @@ describe("metrics CLI", () => {
 					stderr: "",
 				}),
 			]) {
-				const value = await cli(cliArgs(path), exec);
+				const value = await cli(cliArgs(path), async (command, args) =>
+					args[0] === "api"
+						? { code: 0, stdout: '{"name":"factory:defect"}', stderr: "" }
+						: exec(command, args),
+				);
+
 				assert.equal(value.code, EXIT.ok);
 				assert.equal(JSON.parse(value.stdout).primary.numerator, 0);
 				assert.equal(JSON.parse(value.stdout).status, "unknown");
+				assert.equal(JSON.parse(value.stdout).defectRead.kind, "unknown");
+				assert.notEqual(
+					JSON.parse(value.stdout).defectRead.reason,
+					"label_missing",
+				);
 				assert.doesNotMatch(value.stdout, /private error/);
 			}
 		});
@@ -1214,11 +1237,36 @@ describe("metrics CLI", () => {
 			["metrics", "--json", "--repo", repo, "--now", "invalid"],
 			["metrics", "--json", "--repo", repo, "--cohort", "verification"],
 			["metrics", "--json", "--repo", repo, "--issue", "100"],
+			[
+				"metrics",
+				"--json",
+				"--repo",
+				repo,
+				"--ledger",
+				"one",
+				"--ledger-file",
+				"two",
+			],
+			["metrics", "--json", "--repo", repo, "--ledger-file", ""],
 		]) {
 			const value = await cli(args);
 			assert.equal(value.code, EXIT.usage);
 			assert.deepEqual(value.calls, []);
 		}
+	});
+
+	it("reports an explicit large-ledger limit error instead of using a partial read", async () => {
+		const value = await cli(
+			["metrics", "--json", "--repo", repo, "--offline"],
+			async () => ({
+				code: 1,
+				stdout: bytesOf([synthetic()]).toString(),
+				stderr: "metric_ledger_too_large",
+			}),
+		);
+
+		assert.equal(value.code, EXIT.invalid);
+		assert.deepEqual(JSON.parse(value.stdout), { error: "ledger_too_large" });
 	});
 
 	it("reports unreadable ledger as an error, not an empty success", async () => {

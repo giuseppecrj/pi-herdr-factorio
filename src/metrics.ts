@@ -98,32 +98,59 @@ export function excludedRunReason(row: {
 	return null;
 }
 
-function hasReference(
-	text: string,
+function indexDefects(
+	rows: readonly LedgerRow[],
 	repo: string,
-	issue: number,
-	pr: number | null,
-): boolean {
-	const escapedRepo = repo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-	const numbers = pr === null ? [issue] : [issue, pr];
-
-	return numbers.some(
-		(number) =>
-			new RegExp(
-				`(?<![\\w/#.-])(?:${escapedRepo})?#${number}(?![\\w])`,
-				"i",
-			).test(text) ||
-			new RegExp(
-				`(?<![\\w/.-])https://github\\.com/${escapedRepo}/(?:issues|pull)/${number}(?![\\w])`,
-				"i",
-			).test(text),
+	defects: DefectRead,
+) {
+	const targets = new Set(
+		rows.flatMap((row) =>
+			row.pr === null ? [row.issue] : [row.issue, row.pr.number],
+		),
 	);
+
+	const byReference = new Map<number, DefectIssue[]>();
+	const unmatched = new Set<number>();
+
+	if (defects.kind === "unknown") return { byReference, unmatched: [] };
+
+	const reference =
+		/(?<![\w/.-])(?:(?:https?:\/\/)?(?:www\.)?github\.com\/([\w.-]+\/[\w.-]+)\/(?:issues|pull)\/([1-9]\d*)|([\w.-]+\/[\w.-]+)#([1-9]\d*)|(?:GH-|PR#|#)([1-9]\d*))(?![\w])/gi;
+
+	for (const issue of defects.issues) {
+		if (!issue.labels.includes(METRIC_POLICY.defect.label)) continue;
+		const numbers = new Set<number>();
+
+		for (const match of `${issue.title}\n${issue.body}`.matchAll(reference)) {
+			const qualifiedRepo = match[1] ?? match[3];
+
+			if (
+				qualifiedRepo !== undefined &&
+				qualifiedRepo.toLowerCase() !== repo.toLowerCase()
+			)
+				continue;
+			const number = Number(match[2] ?? match[4] ?? match[5]);
+
+			if (targets.has(number)) numbers.add(number);
+		}
+
+		if (numbers.size === 0) unmatched.add(issue.number);
+
+		for (const number of numbers) {
+			const entries = byReference.get(number) ?? [];
+			entries.push(issue);
+			byReference.set(number, entries);
+		}
+	}
+
+	return { byReference, unmatched: [...unmatched].sort((a, b) => a - b) };
 }
 
 function landingOf(
 	row: LedgerRow,
 	now: number,
 	defects: DefectRead,
+	byReference: ReadonlyMap<number, readonly DefectIssue[]>,
 	unknowns: Unknown[],
 ): Landing | null {
 	if (row.outcome.kind !== "landed") return null;
@@ -166,6 +193,9 @@ function landingOf(
 
 	if (authored === "owner" && METRIC_POLICY.excludeOwnerAuthoredHeads)
 		reasons.push("owner_authored");
+
+	if (row.repairRounds.kind === "known" && row.repairRounds.value.started > 0)
+		reasons.push("repair_started");
 	const knownNotClean = reasons.length > 0;
 
 	if (mergedAt === null) reasons.push("merged_at_unavailable");
@@ -177,26 +207,23 @@ function landingOf(
 
 	if (mergedAt === null)
 		defect = { kind: "unknown", reason: "merged_at_unavailable" };
-	else if (pending) defect = { kind: "pending" };
 	else if (defects.kind === "unknown") defect = defects;
+	else if (pending) defect = { kind: "pending" };
 	else {
 		const start = Date.parse(mergedAt);
 
-		const issues = defects.issues
-			.filter(
-				(item) =>
-					item.number !== row.issue &&
-					item.labels.includes(METRIC_POLICY.defect.label) &&
-					Date.parse(item.createdAt) > start &&
-					Date.parse(item.createdAt) <= start + WINDOW_MS &&
-					hasReference(
-						`${item.title}\n${item.body}`,
-						row.repo,
-						row.issue,
-						row.pr?.number ?? null,
-					),
-			)
-			.map((item) => item.number);
+		const candidates = [
+			...(byReference.get(row.issue) ?? []),
+			...(row.pr === null ? [] : (byReference.get(row.pr.number) ?? [])),
+		];
+
+		const issues = candidates.flatMap((item) =>
+			item.number !== row.issue &&
+			Date.parse(item.createdAt) > start &&
+			Date.parse(item.createdAt) <= start + WINDOW_MS
+				? [item.number]
+				: [],
+		);
 
 		defect =
 			issues.length > 0
@@ -206,6 +233,11 @@ function landingOf(
 
 	if (defect.kind === "linked") reasons.push("follow_up_defect");
 
+	// v1–v5 omit actionable feedback history; round zero cannot prove no intervention.
+	const interventionUnknown = !knownNotClean && defect.kind !== "linked";
+
+	if (interventionUnknown) reasons.push("intervention_not_recorded");
+
 	if (defect.kind === "unknown" && !reasons.includes(defect.reason))
 		reasons.push(defect.reason);
 
@@ -213,6 +245,7 @@ function landingOf(
 		if (
 			reason === "merged_at_unavailable" ||
 			reason === "certified_generation_unavailable" ||
+			reason === "intervention_not_recorded" ||
 			(defect.kind === "unknown" && reason === defect.reason)
 		)
 			unknowns.push({
@@ -230,7 +263,9 @@ function landingOf(
 				? "pending"
 				: knownNotClean || defect.kind === "linked"
 					? "landed_not_clean"
-					: certifiedRound === null || defect.kind === "unknown"
+					: certifiedRound === null ||
+							defect.kind === "unknown" ||
+							interventionUnknown
 						? "unknown"
 						: "clean";
 
@@ -265,6 +300,7 @@ function signal(
 		...share(count, denominator),
 		threshold,
 		matureCount,
+		flagBasis: "includes immature runs",
 		belowThreshold: denominator === 0 ? null : count / denominator < threshold,
 		insufficientData: denominator === 0,
 	};
@@ -395,6 +431,7 @@ export function computeMetrics(input: {
 	readonly now: string;
 	readonly defects: DefectRead;
 	readonly receiptDigests?: ReceiptDigests;
+	readonly source?: "file" | "ledger";
 }) {
 	const now = Date.parse(input.now);
 
@@ -403,6 +440,7 @@ export function computeMetrics(input: {
 	const excluded: { runId: string; reason: string }[] = [];
 	const rows: LedgerRow[] = [];
 	const seen = new Set<string>();
+	const excludedRowCounts = { otherRepo: 0, repoCasingMismatch: 0 };
 
 	for (const [at, line] of parseLedger(input.ledger).entries()) {
 		if (line.kind !== "known") {
@@ -416,7 +454,13 @@ export function computeMetrics(input: {
 
 		const row = line.row;
 
-		if (row.repo !== input.repo) continue;
+		if (row.repo !== input.repo) {
+			if (row.repo.toLowerCase() === input.repo.toLowerCase())
+				excludedRowCounts.repoCasingMismatch += 1;
+			else excludedRowCounts.otherRepo += 1;
+			continue;
+		}
+
 		const reason = excludedRunReason(row);
 
 		if (reason !== null) {
@@ -433,6 +477,7 @@ export function computeMetrics(input: {
 		rows.push(row);
 	}
 
+	const indexed = indexDefects(rows, input.repo, input.defects);
 	const groups = new Map<number, LedgerRow[]>();
 
 	for (const row of rows) {
@@ -451,7 +496,9 @@ export function computeMetrics(input: {
 			);
 
 			const landings = ordered
-				.map((row) => landingOf(row, now, input.defects, unknowns))
+				.map((row) =>
+					landingOf(row, now, input.defects, indexed.byReference, unknowns),
+				)
 				.filter((landing) => landing !== null);
 
 			const lastObserved = Math.max(
@@ -461,9 +508,10 @@ export function computeMetrics(input: {
 			const missingReceipts = ordered.filter(
 				(row) =>
 					input.receiptDigests !== undefined &&
-					row.redactedReceiptDigests.some(
-						(digest) => !input.receiptDigests?.get(row.runId)?.has(digest),
-					),
+					(row.redactedReceiptDigests.length === 0 ||
+						row.redactedReceiptDigests.some(
+							(digest) => !input.receiptDigests?.get(row.runId)?.has(digest),
+						)),
 			);
 
 			for (const row of missingReceipts)
@@ -552,6 +600,7 @@ export function computeMetrics(input: {
 
 	return {
 		schemaVersion: 1,
+		source: input.source ?? "ledger",
 		repo: input.repo,
 		now: new Date(now).toISOString(),
 		cohort: "production",
@@ -578,8 +627,16 @@ export function computeMetrics(input: {
 				row.usage.tokens.kind === "uncertain" ? [row.runId] : [],
 			),
 		},
-		tokensPerCleanLanding: numerator === 0 ? null : total / numerator,
-		tokensPerCleanLandingReason: numerator === 0 ? "no_clean_landings" : null,
+		tokensPerCleanLanding:
+			status !== "complete" || numerator === 0 ? null : total / numerator,
+		tokensPerCleanLandingReason:
+			status === "pending"
+				? "cohort_pending"
+				: status === "unknown"
+					? "cohort_unknown"
+					: numerator === 0
+						? "no_clean_landings"
+						: null,
 		spend: { kind: "unavailable", reason: "provider_not_reported" },
 		defectRead:
 			input.defects.kind === "known"
@@ -589,7 +646,9 @@ export function computeMetrics(input: {
 			input.receiptDigests === undefined ? "not_requested" : "checked",
 		tickets,
 		unknowns,
+		unmatchedDefects: indexed.unmatched,
 		excluded,
+		excludedRowCounts,
 		legacyRuns: rows.flatMap((row) =>
 			row.provenance.kind === "legacy_import" ? [row.runId] : [],
 		),

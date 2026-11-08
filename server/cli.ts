@@ -1,4 +1,7 @@
-import { execFile as execFileCallback } from "node:child_process";
+import {
+	execFile as execFileCallback,
+	type ExecFileOptionsWithStringEncoding,
+} from "node:child_process";
 import { lstat, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -75,7 +78,7 @@ import {
 } from "../src/metrics.ts";
 
 export const USAGE = `Usage:
-  node server/cli.ts metrics --json --repo <owner/name> [--ledger <file>] [--state-dir <dir>] [--now <instant>] [--cohort production] [--offline]
+  node server/cli.ts metrics --json --repo <owner/name> [--ledger-file <path>] [--state-dir <dir>] [--now <instant>] [--cohort production] [--offline]
   node server/cli.ts viewer --state-dir <dir> [--run <id>] [--port <n>] [--allowed-host <authorized.ts.net>] [--base-path </prefix>]
   node server/cli.ts gates --repository <dir> --gate-sha <sha> --candidate-sha <sha> --nonce <id> --output <dir> [--runner docker|local]
   node server/cli.ts workflow-check --json --repo <owner/name> [--ref <branch>] [--reload-ref <branch>]
@@ -386,7 +389,12 @@ type Printable =
 	| StatusOutput
 	| CheckReport
 	| ReturnType<typeof computeMetrics>
-	| { readonly error: "ledger_unavailable" }
+	| {
+			readonly error:
+				| "ledger_unavailable"
+				| "ledger_too_large"
+				| "now_after_defect_read";
+	  }
 	| AdmissionReceipt
 	| TickReport
 	| { readonly error: "controller_running"; readonly pid: number | null };
@@ -657,6 +665,26 @@ function validMetricInstant(value: string): boolean {
 
 async function readMetricDefects(repo: string, io: CliIo): Promise<DefectRead> {
 	try {
+		const label = await io.exec(
+			"gh",
+			[
+				"api",
+				`repos/${repo}/labels/${encodeURIComponent(METRIC_POLICY.defect.label)}`,
+			],
+			{ timeoutMs: FETCH_TIMEOUT_MS },
+		);
+
+		if (
+			label.code !== 0 ||
+			textOf(fieldOf(objectOf(parseJson(label.stdout)), "name")) !==
+				METRIC_POLICY.defect.label
+		)
+			return { kind: "unknown", reason: "label_missing" };
+	} catch {
+		return { kind: "unknown", reason: "label_missing" };
+	}
+
+	try {
 		const result = await io.exec(
 			"gh",
 			[
@@ -716,6 +744,7 @@ async function runMetricsCli(
 				json: { type: "boolean" },
 				repo: { type: "string" },
 				ledger: { type: "string" },
+				"ledger-file": { type: "string" },
 				"state-dir": { type: "string" },
 				now: { type: "string" },
 				cohort: { type: "string" },
@@ -737,7 +766,9 @@ async function runMetricsCli(
 		!isRepoSlug(values.repo) ||
 		(values.now !== undefined && !validMetricInstant(values.now)) ||
 		(values.cohort !== undefined && values.cohort !== "production") ||
+		(values.ledger !== undefined && values["ledger-file"] !== undefined) ||
 		values.ledger === "" ||
+		values["ledger-file"] === "" ||
 		values["state-dir"] === ""
 	) {
 		io.stderr(
@@ -749,9 +780,13 @@ async function runMetricsCli(
 
 	let ledger: Buffer;
 
+	let ledgerError: "ledger_unavailable" | "ledger_too_large" =
+		"ledger_unavailable";
+
+	const ledgerFile = values["ledger-file"] ?? values.ledger;
+
 	try {
-		if (values.ledger !== undefined)
-			ledger = await readFile(resolve(values.ledger));
+		if (ledgerFile !== undefined) ledger = await readFile(resolve(ledgerFile));
 		else {
 			const result = await io.exec(
 				"git",
@@ -759,11 +794,16 @@ async function runMetricsCli(
 				{ timeoutMs: FETCH_TIMEOUT_MS },
 			);
 
-			if (result.code !== 0) throw new Error("ledger_unavailable");
+			if (result.code !== 0) {
+				if (result.stderr === "metric_ledger_too_large")
+					ledgerError = "ledger_too_large";
+				throw new Error(ledgerError);
+			}
+
 			ledger = Buffer.from(result.stdout);
 		}
 	} catch {
-		io.stdout(json({ error: "ledger_unavailable" }));
+		io.stdout(json({ error: ledgerError }));
 
 		return EXIT.invalid;
 	}
@@ -772,6 +812,18 @@ async function runMetricsCli(
 		values.offline === true
 			? { kind: "unknown", reason: "offline" }
 			: await readMetricDefects(values.repo, io);
+
+	const defectReadAt = Date.now();
+
+	if (
+		values.offline !== true &&
+		values.now !== undefined &&
+		Date.parse(values.now) > defectReadAt
+	) {
+		io.stdout(json({ error: "now_after_defect_read" }));
+
+		return EXIT.invalid;
+	}
 
 	const receiptDigests =
 		values["state-dir"] === undefined
@@ -787,11 +839,10 @@ async function runMetricsCli(
 			computeMetrics({
 				ledger,
 				repo: values.repo,
-				now:
-					values.now ??
-					new Date(io.runtime?.clock.now() ?? Date.now()).toISOString(),
+				now: values.now ?? new Date(defectReadAt).toISOString(),
 				defects,
 				receiptDigests,
+				source: ledgerFile === undefined ? "ledger" : "file",
 			}),
 		),
 	);
@@ -936,16 +987,26 @@ export async function execFile(
 	args: readonly string[],
 	timeoutMs: number,
 ): Promise<ExecResult> {
+	const metricLedger =
+		command === "git" &&
+		args.length === 2 &&
+		args[0] === "show" &&
+		args[1] === "refs/remotes/origin/factory/ledger:ledger/runs.jsonl";
+
+	const options: ExecFileOptionsWithStringEncoding = {
+		encoding: "utf8",
+		timeout: timeoutMs,
+		maxBuffer: 4 * 1024 * 1024,
+		killSignal: "SIGKILL",
+	};
+
+	if (metricLedger) options.maxBuffer = 256 * 1024 * 1024;
+
 	return new Promise((done, fail) => {
 		const child = execFileCallback(
 			command,
 			[...args],
-			{
-				encoding: "utf8",
-				timeout: timeoutMs,
-				maxBuffer: 4 * 1024 * 1024,
-				killSignal: "SIGKILL",
-			},
+			options,
 			(error, stdout, stderr) => {
 				if (error === null) {
 					done({ stdout, stderr, code: 0 });
@@ -963,7 +1024,12 @@ export async function execFile(
 
 				done({
 					stdout,
-					stderr: timedOut ? `${command} timed out` : stderr || error.message,
+					stderr:
+						metricLedger && error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
+							? "metric_ledger_too_large"
+							: timedOut
+								? `${command} timed out`
+								: stderr || error.message,
 					code: Number.isSafeInteger(error.code) ? Number(error.code) || 1 : 1,
 				});
 			},

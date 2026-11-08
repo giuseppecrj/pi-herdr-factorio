@@ -150,6 +150,16 @@ Each pump that has work logs `ledger_backlog`, with the published, pending and b
 
 A blocked job needs the owner. Fix the cause outside the controller, then delete that run's `retry.json` to retry it at once. Never edit `row.json` or the branch to make a row fit.
 
+## Outcome metrics
+
+Use the read-only [`metrics --json` command](factory-cli.md#ticket-outcome-metrics)
+to report cohort outcomes and charged token totals. [Factory ticket metrics](metrics.md)
+defines the seven-day window, exclusions and unknowns. Versions 1–5 do not
+record complete actionable owner-feedback history, so otherwise-clean landings
+are `unknown: intervention_not_recorded`, even when certified at round 0.
+The owner must create `factory:defect` before no-defect evidence is available.
+The report neither edits the ledger nor dispatches work.
+
 ## Not yet built
 
-Retrospective backfill of runs that ended before this build is not implemented. Historical context pressure and complete repair-round aggregates remain unavailable where they were not recorded, rather than inferred. F12a cohort metrics and money pricing are not part of this build.
+Retrospective backfill of runs that ended before this build is not implemented. Historical context pressure and complete repair-round aggregates remain unavailable where they were not recorded, rather than inferred. Complete intervention history and money pricing remain unimplemented.
