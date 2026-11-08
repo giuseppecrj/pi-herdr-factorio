@@ -32,6 +32,7 @@ import {
 	candidateUsage,
 	candidateGenerations,
 	completingFeedbackBatch,
+	ownerPatchValid,
 	migrateCertificationValue,
 	migrateEvidenceValue,
 	notProven,
@@ -57,6 +58,9 @@ import {
 	GitHubPublicationApi,
 	PublicationError,
 	publishCandidate,
+	deriveOwnerPatch,
+	pinOwnerCandidate,
+	readOwnerPatch,
 	candidateBranch,
 } from "../src/publication.ts";
 import {
@@ -4121,13 +4125,27 @@ async function cleanupPublication(
 	}
 }
 
-export function controllerValidator(config: {
+type ValidatorConfig = {
 	readonly stateDir: string;
 	readonly exec: Exec;
 	readonly fetch?: TarballFetch;
 	readonly receipt?: GateReceiptSource;
 	readonly diagnosis?: ReturnType<typeof controllerDiagnosis>;
-}): Validator {
+};
+
+export function controllerValidator(config: ValidatorConfig): Validator {
+	return candidateValidator(config, false);
+}
+
+export function ownerValidator(config: ValidatorConfig): Validator {
+	return candidateValidator(config, true);
+}
+
+// Both paths use the same dispatch, identity, diagnosis, report and cleanup code.
+function candidateValidator(
+	config: ValidatorConfig,
+	owner: boolean,
+): Validator {
 	return async (input) => {
 		const initial: ValidationState = {
 			version: input.generation === undefined ? 1 : 2,
@@ -4243,20 +4261,41 @@ export function controllerValidator(config: {
 					suite.kind === "blocked" ? suite.reason : "acceptance_missing",
 				);
 
-			const patch = readPatch(config.stateDir, {
-				round: state.round,
-				runId: input.runId,
-				baseSha: input.baseSha,
-				contractDigest: contract.digest,
-				acceptanceDigest: suite.receipt.acceptanceDigest,
-			});
+			const patch =
+				owner && generation?.origin.kind === "owner"
+					? readOwnerPatch(config.stateDir, input.runId, generation.origin.head)
+					: owner
+						? null
+						: readPatch(config.stateDir, {
+								round: state.round,
+								runId: input.runId,
+								baseSha: input.baseSha,
+								contractDigest: contract.digest,
+								acceptanceDigest: suite.receipt.acceptanceDigest,
+							});
 
-			if (patch.kind !== "found")
+			if (patch === null || patch.kind !== "found")
 				return failed(
-					patch.kind === "blocked" ? patch.reason : "patch_missing",
+					patch?.kind === "blocked" ? patch.reason : "patch_missing",
 				);
 
-			if (
+			if (owner) {
+				if (
+					!("kind" in patch.receipt) ||
+					generation === undefined ||
+					!ownerPatchValid(
+						{
+							runId: input.runId,
+							contractDigest: contract.digest,
+							acceptanceDigest: suite.receipt.acceptanceDigest,
+						},
+						generation,
+						patch.receipt,
+					)
+				)
+					return failed("owner_patch_binding");
+			} else if (
+				"kind" in patch.receipt ||
 				patch.receipt.policy !== "clean" ||
 				patch.receipt.visibleTests?.exitCode !== 0
 			)
@@ -4273,6 +4312,12 @@ export function controllerValidator(config: {
 				acceptanceDigest: suite.receipt.acceptanceDigest,
 			});
 
+			if (
+				owner &&
+				"heldoutDigest" in patch.receipt &&
+				patch.receipt.heldoutDigest !== heldout.digest
+			)
+				return failed("owner_patch_binding");
 			identities = {
 				patchDigest: patch.receipt.patchDigest,
 				acceptanceDigest: suite.receipt.acceptanceDigest,
@@ -4598,83 +4643,98 @@ export function controllerValidator(config: {
 					if (!(await save())) return failed("claim_unwritable");
 				}
 
-				const scratch = await mkdtemp(join(dir, "tree-"));
+				if (owner && generation?.publication.kind === "owner") {
+					state.publication = await pinOwnerCandidate(
+						api,
+						candidateBranch(
+							input.issue,
+							input.runId,
+							state.round,
+							generation.generation,
+						),
+						generation.publication.head,
+					);
+				} else {
+					const scratch = await mkdtemp(join(dir, "tree-"));
 
-				try {
-					const base = join(scratch, "base");
-					await mkdir(base);
+					try {
+						const base = join(scratch, "base");
+						await mkdir(base);
 
-					const checked = await checkoutWorkspace({
-						stateDir: scratch,
-						runId: input.runId,
-						workspace: base,
-						repo,
-						sha: state.baseSha,
-						fetch: config.fetch ?? ghTarball,
-					});
+						const checked = await checkoutWorkspace({
+							stateDir: scratch,
+							runId: input.runId,
+							workspace: base,
+							repo,
+							sha: state.baseSha,
+							fetch: config.fetch ?? ghTarball,
+						});
 
-					if (checked.kind !== "ready") return failed("base_unavailable");
-					let gatesDigest: Digest | null = null;
+						if (checked.kind !== "ready") return failed("base_unavailable");
+						let gatesDigest: Digest | null = null;
 
-					if (checked.omitted === 0) {
-						try {
-							gatesDigest = baseTreeDigest(join(base, ".github/factory/gates"));
-						} catch {
-							/* A missing or unsafe historical gate tree is not a digest. */
+						if (checked.omitted === 0) {
+							try {
+								gatesDigest = baseTreeDigest(
+									join(base, ".github/factory/gates"),
+								);
+							} catch {
+								/* A missing or unsafe historical gate tree is not a digest. */
+							}
 						}
-					}
 
-					if (gatesDigest !== null)
-						keepValidationFile(
-							join(dir, "gate-policy.json"),
-							`${JSON.stringify({
-								v: 1,
-								runId: input.runId,
-								round: state.round,
-								generation: state.generation?.index ?? 0,
-								sourceSha: state.baseSha,
-								digest: gatesDigest,
-							})}\n`,
+						if (gatesDigest !== null)
+							keepValidationFile(
+								join(dir, "gate-policy.json"),
+								`${JSON.stringify({
+									v: 1,
+									runId: input.runId,
+									round: state.round,
+									generation: state.generation?.index ?? 0,
+									sourceSha: state.baseSha,
+									digest: gatesDigest,
+								})}\n`,
+							);
+
+						if (
+							checked.checkout.files.some(
+								(path) =>
+									path === heldout.directory ||
+									path.startsWith(`${heldout.directory}/`),
+							)
+						)
+							return failed("stale_base");
+
+						const files = await publicationTree(
+							base,
+							join(scratch, "patched"),
+							patch.patch,
+							patch.receipt.changedPaths,
 						);
 
-					if (
-						checked.checkout.files.some(
-							(path) =>
-								path === heldout.directory ||
-								path.startsWith(`${heldout.directory}/`),
-						)
-					)
-						return failed("stale_base");
-
-					const files = await publicationTree(
-						base,
-						join(scratch, "patched"),
-						patch.patch,
-						patch.receipt.changedPaths,
-					);
-
-					state.publication = await publishCandidate(api, {
-						issue: input.issue,
-						runId: input.runId,
-						round: state.round,
-						generation: state.generation?.index,
-						ancestry:
-							state.generation?.previousHead == null
-								? undefined
-								: {
-										kind: "successor",
-										previousHead: state.generation.previousHead,
-									},
-						eventAt: input.eventAt,
-						baseSha: state.baseSha,
-						patchDigest: patch.receipt.patchDigest,
-						acceptanceDigest: suite.receipt.acceptanceDigest,
-						heldoutDigest: heldout.digest,
-						patch: files,
-						suite: heldout.files,
-					});
-				} finally {
-					await rm(scratch, { recursive: true, force: true });
+						state.publication = await publishCandidate(api, {
+							issue: input.issue,
+							runId: input.runId,
+							round: state.round,
+							generation: state.generation?.index,
+							ancestry:
+								state.generation?.previousHead == null
+									? undefined
+									: {
+											kind: "successor",
+											previousHead: state.generation.previousHead,
+										},
+							eventAt: input.eventAt,
+							baseSha: state.baseSha,
+							patchDigest: patch.receipt.patchDigest,
+							acceptanceDigest: suite.receipt.acceptanceDigest,
+							heldoutDigest: heldout.digest,
+							patch: files,
+							suite: heldout.files,
+						});
+					} finally {
+						await rm(scratch, { recursive: true, force: true });
+					}
 				}
 
 				if (!(await save())) return failed("claim_unwritable");
@@ -5167,7 +5227,9 @@ export async function sweepValidation(config: {
 					continue;
 
 				if (runs.length === 1) state.ciRunId = runs[0]?.id ?? null;
-				await controllerValidator(config)({
+				await (entry.generation?.origin.kind === "owner"
+					? ownerValidator
+					: controllerValidator)(config)({
 					runId: claim.runId,
 					issue: claim.issue,
 					eventAt: contract.contract.snapshot.eventAt,
@@ -5676,7 +5738,19 @@ export function controllerCandidatePort(config: {
 							jsonField(objectOf(jsonField(check, "app")), "id") === 15368))
 				)
 					readiness = { kind: "current", head: report.candidateSha, report };
-				else readiness = { kind: "not_ready", reason: "checks_incomplete" };
+				else
+					readiness = {
+						kind: "not_ready",
+						reason:
+							mandatory.length === 1 &&
+							jsonField(check, "head_sha") ===
+								certificate.verdict.candidateSha &&
+							jsonField(check, "status") === "completed" &&
+							jsonField(check, "conclusion") !== "success" &&
+							jsonField(objectOf(jsonField(check, "app")), "id") === 15368
+								? "checks_failed"
+								: "checks_incomplete",
+					};
 			} catch {
 				readiness = { kind: "unavailable" };
 			}
@@ -5861,6 +5935,16 @@ export function controllerCandidatePort(config: {
 				await sweepMergedFeedback({ ...config, repo, now, landed });
 		},
 		async patch(state, round) {
+			if (
+				state.kind === "selected" &&
+				state.current.intent.origin.kind === "owner"
+			)
+				return readOwnerPatch(
+					config.stateDir,
+					state.pin.runId,
+					state.current.intent.origin.head,
+				);
+
 			const patch = readPatch(config.stateDir, {
 				runId: state.pin.runId,
 				round,
@@ -5919,6 +6003,83 @@ export function controllerCandidatePort(config: {
 
 			if (!(await allowed(state))) return null;
 
+			if (request.kind === "derive_owner_patch") {
+				const contract = await files.readContract(state.pin.runId);
+
+				if (
+					contract.kind !== "found" ||
+					contract.digest !== state.pin.contractDigest
+				)
+					return {
+						kind: "derive_owner_patch",
+						request,
+						result: { kind: "refused", reason: "unreadable" },
+					};
+
+				const suite = await files.artifacts.read(
+					state.pin.runId,
+					contract.contract,
+					contract.digest,
+				);
+
+				if (
+					suite.kind !== "found" ||
+					suite.receipt.acceptanceDigest !== state.pin.acceptanceDigest
+				)
+					return {
+						kind: "derive_owner_patch",
+						request,
+						result: { kind: "refused", reason: "unreadable" },
+					};
+
+				try {
+					const heldout = publishedSuite({
+						issue: state.pin.issue,
+						suite: suite.suite,
+						canary: regularText(
+							join(
+								config.stateDir,
+								"acceptance",
+								state.pin.runId,
+								"canary.txt",
+							),
+						).trimEnd(),
+						acceptanceDigest: state.pin.acceptanceDigest,
+					});
+
+					const result = await deriveOwnerPatch(api, {
+						stateDir: config.stateDir,
+						runId: state.pin.runId,
+						head: request.head,
+						baseSha: request.baseSha,
+						contractDigest: state.pin.contractDigest,
+						acceptanceDigest: state.pin.acceptanceDigest,
+						heldoutDigest: heldout.digest,
+						suite: heldout.files,
+						checkout: async (sha, workspace) => {
+							const checked = await checkoutWorkspace({
+								stateDir: join(workspace, "..", `checkout-${sha}`),
+								workspace,
+								runId: state.pin.runId,
+								repo: state.pin.repo,
+								sha,
+								fetch: ghTarball,
+							});
+
+							return checked.kind === "ready" && checked.omitted === 0;
+						},
+					});
+
+					return { kind: "derive_owner_patch", request, result };
+				} catch {
+					return {
+						kind: "derive_owner_patch",
+						request,
+						result: { kind: "refused", reason: "unreadable" },
+					};
+				}
+			}
+
 			if (request.kind === "post_notice") {
 				const batch = state.feedback?.batches.findLast((b) =>
 					request.notice.kind === "round_summary"
@@ -5969,6 +6130,21 @@ export function controllerCandidatePort(config: {
 							: null,
 						!receipt.batchAvailable,
 					);
+				} else if (
+					["owner_head", "owner_head_failed", "checks_failed"].includes(
+						request.notice.kind,
+					)
+				) {
+					body = [
+						"## Factory owner-head review",
+						request.notice.kind === "owner_head"
+							? "An owner push withdrew readiness. The factory will run trusted gates and review on this exact head, without building or rewriting owner commits."
+							: request.detail === "owner_head_behind"
+								? "Readiness is withdrawn. Main moved under the owner head. Please update the branch; the factory will not refresh or build on owner commits."
+								: `Readiness is withdrawn. Owner-head certification is held: ${request.detail ?? request.notice.kind}. No owner commit was rewritten.`,
+						`Head: ${request.notice.key.split(" ").at(-2)}`,
+						request.notice.key,
+					].join("\n\n");
 				} else if (request.notice.kind === "feedback_overflow") {
 					if (state.feedback?.overflow === undefined) return null;
 					body = [

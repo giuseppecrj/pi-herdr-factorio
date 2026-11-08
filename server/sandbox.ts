@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { readOwnerPatch, ownerPatchPath } from "../src/publication.ts";
 import {
 	readFeedbackBatch,
 	renderFeedbackCards,
@@ -111,6 +112,7 @@ import {
 	checkoutBuildWorkspace,
 	checkoutOf,
 	controllerValidator,
+	ownerValidator,
 	controllerCandidatePort,
 	controllerBaseChecker,
 	controllerDraftChecker,
@@ -3380,11 +3382,6 @@ async function candidateReviewInputs(
 		bound.digest,
 	);
 
-	const patch = readRunPatch(config.stateDir, runId, round);
-
-	if (suite.kind !== "found" || patch.kind !== "found")
-		throw new ReviewEvidenceUnavailable("review_inputs_missing");
-
 	const dir = validationDir(
 		config.stateDir,
 		runId,
@@ -3393,6 +3390,28 @@ async function candidateReviewInputs(
 	);
 
 	const verdict = reviewVerdict(join(dir, "verdict.json"));
+
+	if (!isGitSha(verdict.candidateSha))
+		throw new ReviewEvidenceUnavailable("review_binding");
+
+	const isOwner = existsSync(
+		ownerPatchPath(config.stateDir, runId, verdict.candidateSha),
+	);
+
+	const patch = isOwner
+		? readOwnerPatch(config.stateDir, runId, verdict.candidateSha)
+		: readRunPatch(config.stateDir, runId, round);
+
+	if (suite.kind !== "found" || patch === null || patch.kind !== "found")
+		throw new ReviewEvidenceUnavailable("review_inputs_missing");
+
+	if (
+		"kind" in patch.receipt &&
+		(patch.receipt.head !== verdict.candidateSha ||
+			patch.receipt.baseSha !== verdict.baseSha ||
+			patch.receipt.heldoutDigest !== verdict.heldoutDigest)
+	)
+		throw new ReviewEvidenceUnavailable("review_binding");
 
 	if (
 		!verdictPasses(verdict) ||
@@ -3583,7 +3602,7 @@ async function candidateReviewInputs(
 		let repairDiff: string | null = null;
 		let previousFindings: ReturnType<typeof reviewFeedback> = [];
 
-		if (round > 0) {
+		if (round > 0 && !isOwner) {
 			const book = (await files.listClaims()).find(
 				(claim) => claim.runId === runId,
 			)?.handoff;
@@ -3691,14 +3710,17 @@ async function candidateReviewInputs(
 	return {
 		workspace,
 		verdict,
-		builder: patch.receipt.model,
+		builder: "model" in patch.receipt ? patch.receipt.model : "unavailable",
 		families: {
-			builder: await builderFamily(
-				config.stateDir,
-				runId,
-				round,
-				patch.receipt.model,
-			),
+			builder:
+				"model" in patch.receipt
+					? await builderFamily(
+							config.stateDir,
+							runId,
+							round,
+							patch.receipt.model,
+						)
+					: FAMILY_MISSING,
 			accept: suite.receipt.family ?? FAMILY_MISSING,
 		},
 		input: readCapturedReview(stageDir, execution, expected),
@@ -4042,6 +4064,12 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 			exec: config.exec,
 		}),
 		validate: controllerValidator({
+			stateDir: config.stateDir,
+			exec: config.exec,
+			fetch: config.fetchTarball,
+			diagnosis,
+		}),
+		ownerValidate: ownerValidator({
 			stateDir: config.stateDir,
 			exec: config.exec,
 			fetch: config.fetchTarball,
