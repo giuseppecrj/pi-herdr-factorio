@@ -83,10 +83,16 @@ export type GenerationIntent = GenerationRef &
 		origin:
 			| { readonly kind: "initial" }
 			| { readonly kind: "repair"; readonly feedbackFrom: GenerationRef }
-			| { readonly kind: "refresh"; readonly previous: GenerationRef };
+			| { readonly kind: "refresh"; readonly previous: GenerationRef }
+			| {
+					readonly kind: "owner";
+					readonly head: GitSha;
+					readonly previous: GenerationRef;
+			  };
 		publication:
 			| { readonly kind: "initial" }
-			| { readonly kind: "successor"; readonly expectedHead: GitSha };
+			| { readonly kind: "successor"; readonly expectedHead: GitSha }
+			| { readonly kind: "owner"; readonly head: GitSha };
 	}>;
 
 export type ReviewExecution = Readonly<{
@@ -149,9 +155,37 @@ export type Certification = Readonly<{
 	report: TrustedReport;
 }>;
 
+export type OwnerHeadRefusal =
+	| "heldout_changed"
+	| "forbidden_path"
+	| "behind_main"
+	| "too_large"
+	| "unreadable";
+
+export type OwnerPatchReceipt = Readonly<{
+	version: 1;
+	kind: "owner";
+	runId: Digest;
+	head: GitSha;
+	baseSha: GitSha;
+	contractDigest: Digest;
+	acceptanceDigest: Digest;
+	heldoutDigest: Digest;
+	patchDigest: Digest;
+	changedPaths: readonly string[];
+	policy: "clean";
+}>;
+
+export type OwnerPatchRead = Readonly<{
+	kind: "found";
+	receipt: OwnerPatchReceipt;
+	patch: string;
+}>;
+
 export type GenerationEvidence = Readonly<{
 	intent: GenerationIntent;
 	patch: PatchReceipt;
+	ownerPatch?: OwnerPatchReceipt | null;
 	validation: ValidationState | null;
 	verdict: Verdict | null;
 	report: TrustedReport | null;
@@ -171,6 +205,11 @@ export type HandoffReason =
 	| "repair_tokens"
 	| "run_tokens"
 	| "head_drift"
+	| "owner_head"
+	| "owner_head_refused"
+	| "owner_head_failed"
+	| "owner_head_behind"
+	| "checks_failed"
 	| "head_lag"
 	| "checks_incomplete"
 	| "review_failed"
@@ -192,6 +231,7 @@ export type HandoffReason =
 	| "withdrawn";
 
 export type PublishedPr = Readonly<{
+	ownerHead?: GitSha | null;
 	number: number;
 	branch: string;
 	promoted: GenerationRef;
@@ -251,12 +291,16 @@ export type HandoffNotice = Readonly<{
 		| "feedback_overflow"
 		| "repair_started"
 		| "repair_unavailable"
-		| "round_summary";
+		| "round_summary"
+		| "owner_head"
+		| "owner_head_failed"
+		| "checks_failed";
 	place: "issue" | "pr";
 	key: `<!-- factory:notice ${string} -->`;
 }>;
 
 export type NoticeNext =
+	| Readonly<{ kind: "owner_due"; head: GitSha; since: number }>
 	| Readonly<{
 			kind: "resume";
 			work: Extract<CandidateWork, { kind: "waiting" | "held" }>;
@@ -269,6 +313,12 @@ export type NoticeNext =
 	  }>;
 
 export type CandidateEffect =
+	| {
+			readonly kind: "derive_owner_patch";
+			readonly head: GitSha;
+			readonly baseSha: GitSha;
+			readonly attempt?: 1 | 2 | 3;
+	  }
 	| { readonly kind: "validate"; readonly generation: GenerationIntent }
 	| { readonly kind: "launch_review"; readonly execution: ReviewExecution }
 	| { readonly kind: "repair_build"; readonly execution: RepairExecution }
@@ -307,12 +357,19 @@ export type CandidateEffect =
 			readonly notice: HandoffNotice;
 			readonly at?: number;
 			readonly detail?: HandoffReason | null;
+			readonly refusal?: OwnerHeadRefusal;
 			readonly withdraw: HandoffReason | null;
 			readonly then: NoticeNext;
 	  }
 	| { readonly kind: "finish_pr"; readonly terminal: TerminalObservation };
 
 export type CandidateWork =
+	| {
+			readonly kind: "owner_due";
+			readonly head: GitSha;
+			readonly since: number;
+			readonly attempt?: 1 | 2 | 3;
+	  }
 	| { readonly kind: "effect"; readonly request: CandidateEffect }
 	| { readonly kind: "review_due"; readonly seats: readonly ReviewSeat[] }
 	| { readonly kind: "reviewing"; readonly execution: ReviewExecution }
@@ -359,6 +416,16 @@ export type CandidateState =
 type Selected = Extract<CandidateState, { kind: "selected" }>;
 
 export type CandidateEffectResult =
+	| {
+			readonly kind: "derive_owner_patch";
+			readonly request: Extract<
+				CandidateEffect,
+				{ kind: "derive_owner_patch" }
+			>;
+			readonly result:
+				| { readonly kind: "found"; readonly patch: OwnerPatchReceipt }
+				| { readonly kind: "refused"; readonly reason: OwnerHeadRefusal };
+	  }
 	| {
 			readonly kind: "validate";
 			readonly request: Extract<CandidateEffect, { kind: "validate" }>;
@@ -471,7 +538,9 @@ type CandidateEventData =
 				| {
 						readonly kind: "passed";
 						readonly review: ReviewReceipt;
-						readonly patch: Extract<PatchRead, { kind: "found" }>;
+						readonly patch:
+							| Extract<PatchRead, { kind: "found" }>
+							| OwnerPatchRead;
 				  }
 				| {
 						readonly kind: "failed";
@@ -655,7 +724,7 @@ export function sameGeneration(
 
 export function generationIntent(input: {
 	pin: AdmissionPin;
-	patch: PatchReceipt;
+	patch: Pick<PatchReceipt, "patchDigest">;
 	round: RepairRound;
 	generation: GenerationNumber;
 	baseSha: GitSha;
@@ -675,6 +744,40 @@ export function generationIntent(input: {
 	};
 
 	return snapshot({ ...body, digest: digestOf(JSON.stringify(body)) });
+}
+
+export function ownerPatchValid(
+	pin: Pick<AdmissionPin, "runId" | "contractDigest" | "acceptanceDigest">,
+	g: GenerationIntent,
+	patch: OwnerPatchReceipt,
+): boolean {
+	return (
+		g.origin.kind === "owner" &&
+		g.publication.kind === "owner" &&
+		patch.runId === pin.runId &&
+		patch.head === g.origin.head &&
+		patch.head === g.publication.head &&
+		patch.baseSha === g.baseSha &&
+		patch.patchDigest === g.patchDigest &&
+		patch.contractDigest === pin.contractDigest &&
+		patch.acceptanceDigest === pin.acceptanceDigest &&
+		patch.policy === "clean" &&
+		checkChangedPaths({ changedPaths: [...patch.changedPaths] }).kind ===
+			"clean"
+	);
+}
+
+export function authoredOf(
+	state: Selected,
+	ref: GenerationRef,
+): "factory" | "owner" {
+	const g = candidateGenerations(state).find((g) =>
+		sameGeneration(g.intent, ref),
+	);
+
+	if (g === undefined) throw new Error("certification_missing");
+
+	return g.intent.origin.kind === "owner" ? "owner" : "factory";
 }
 
 function validPatch(
@@ -738,6 +841,22 @@ export function candidateGenerations(
 	state: Selected,
 ): readonly GenerationEvidence[] {
 	return [...state.history, state.current];
+}
+
+function latestRepairRound(state: Selected): RepairRound {
+	const rounds = candidateGenerations(state).map((g) => g.intent.round);
+
+	return rounds.includes(2) ? 2 : rounds.includes(1) ? 1 : 0;
+}
+
+function latestGeneration(state: Selected): GenerationNumber {
+	return candidateGenerations(state)
+		.filter((g) => g.intent.round === state.current.intent.round)
+		.reduce<GenerationNumber>(
+			(latest, g) =>
+				g.intent.generation > latest ? g.intent.generation : latest,
+			0,
+		);
 }
 
 function executionEqual(a: CandidateExecution, b: CandidateExecution): boolean {
@@ -966,11 +1085,29 @@ export function stopRound(
 	if (state.published === null)
 		return finish(state, { kind: "failed", reason });
 
+	if (state.current.intent.origin.kind === "owner" && terminal === null) {
+		const why =
+			reason === "main_moving" || reason === "owner_head_behind"
+				? "owner_head_behind"
+				: "owner_head_failed";
+
+		return headNotice(
+			state,
+			"owner_head_failed",
+			why,
+			state.current.intent.origin.head,
+			now,
+			{ kind: "held", reason: why },
+		);
+	}
+
 	const applying = state.feedback?.batches.find(
 		(b) => b.status.kind === "applying",
 	);
 
 	if (applying === undefined || applying.status.kind !== "applying") {
+		if (terminal !== null) return finish(state, terminal, now);
+
 		if (
 			(state.work.kind === "effect" &&
 				state.work.request.kind === "post_notice" &&
@@ -1201,7 +1338,7 @@ export function certifyGeneration(input: {
 	pin: AdmissionPin;
 	generation: GenerationIntent;
 	execution: ReviewExecution;
-	patch: Extract<PatchRead, { kind: "found" }>;
+	patch: Extract<PatchRead, { kind: "found" }> | OwnerPatchRead;
 	verdict: Verdict;
 	review: ReviewReceipt;
 	report: TrustedReport;
@@ -1217,7 +1354,13 @@ export function certifyGeneration(input: {
 	} = input;
 
 	if (
-		!validPatch(pin, patch.receipt, g.round) ||
+		(g.origin.kind === "owner"
+			? !("kind" in patch.receipt) ||
+				patch.receipt.kind !== "owner" ||
+				!ownerPatchValid(pin, g, patch.receipt) ||
+				patch.receipt.head !== v.candidateSha ||
+				patch.receipt.heldoutDigest !== v.heldoutDigest
+			: "kind" in patch.receipt || !validPatch(pin, patch.receipt, g.round)) ||
 		digestOf(patch.patch) !== g.patchDigest ||
 		patch.receipt.patchDigest !== g.patchDigest ||
 		!sameGeneration(g, e.generation) ||
@@ -1258,10 +1401,13 @@ export function certifyGeneration(input: {
 		blocksReview(r.seats) ||
 		!familyClaimsHold(r) ||
 		// Any builder family present must be the patch's own OpenAI request.
-		(r.version === 3 &&
-			r.builder.kind !== "unavailable" &&
-			(r.builder.kind !== "openai-request" ||
-				r.builder.model !== patch.receipt.model)) ||
+		(g.origin.kind === "owner"
+			? r.version !== 3 || r.builder.kind !== "unavailable"
+			: r.version === 3 &&
+				r.builder.kind !== "unavailable" &&
+				(r.builder.kind !== "openai-request" ||
+					!("model" in patch.receipt) ||
+					r.builder.model !== patch.receipt.model)) ||
 		r.seats.length !== e.seats.length ||
 		e.seats.some(
 			(seat) => r.seats.filter((s) => s.seat === seat).length !== 1,
@@ -1294,6 +1440,27 @@ export function certifyGeneration(input: {
 		review: r,
 		report,
 	});
+}
+
+export function handoffGeneration(
+	state: Selected,
+	pr: PrObservation,
+): GenerationEvidence {
+	if (
+		state.current.intent.origin.kind === "owner" &&
+		pr.kind === "open" &&
+		pr.refHead === promotedHead(state)
+	) {
+		return (
+			candidateGenerations(state).find(
+				(g) =>
+					state.published !== null &&
+					sameGeneration(g.intent, state.published.promoted),
+			) ?? state.current
+		);
+	}
+
+	return state.current;
 }
 
 export function promotedHead(state: CandidateState): GitSha | null {
@@ -1359,6 +1526,12 @@ export function allowedHeads(state: Selected): readonly GitSha[] {
 			heads.push(certified);
 	}
 
+	if (
+		state.current.intent.publication.kind === "owner" &&
+		state.published?.ownerHead === state.current.intent.publication.head
+	)
+		heads.push(state.current.intent.publication.head);
+
 	return heads;
 }
 
@@ -1409,27 +1582,35 @@ function startQueuedFeedback(
 	)
 		return state;
 	const current = state.current;
-	const round: 1 | 2 = current.intent.round === 0 ? 1 : 2;
+	const latestRound = latestRepairRound(state);
+	const round: 1 | 2 = latestRound === 0 ? 1 : 2;
 	const assessment = current.assessment;
 	const budgetReason = preflight(state, "build", round);
 
+	const promoted = candidateGenerations(state).find((g) =>
+		sameGeneration(g.intent, state.published!.promoted),
+	);
+
 	const reason =
-		current.intent.round === MAX_REPAIR_ROUNDS
-			? "cap_reached"
-			: assessment === undefined ||
-					current.assessmentKind === "unusable" ||
-					(current.assessmentKind === undefined &&
-						current.verdict?.pass !== true &&
-						!(
-							state.work.kind === "held" &&
-							state.work.reason === "validation_failed"
-						))
-				? "repair_unavailable"
-				: budgetReason !== null &&
-						budgetReason !== "repair_tokens" &&
-						budgetReason !== "run_tokens"
+		promoted?.intent.origin.kind === "owner" ||
+		current.intent.origin.kind === "owner"
+			? "owner_authored_head"
+			: latestRound === MAX_REPAIR_ROUNDS
+				? "cap_reached"
+				: assessment === undefined ||
+						current.assessmentKind === "unusable" ||
+						(current.assessmentKind === undefined &&
+							current.verdict?.pass !== true &&
+							!(
+								state.work.kind === "held" &&
+								state.work.reason === "validation_failed"
+							))
 					? "repair_unavailable"
-					: null;
+					: budgetReason !== null &&
+							budgetReason !== "repair_tokens" &&
+							budgetReason !== "run_tokens"
+						? "repair_unavailable"
+						: null;
 
 	const budgetStop =
 		reason === null &&
@@ -1602,6 +1783,44 @@ function ingest(
 	return { ...updated, feedback: next };
 }
 
+function headNotice(
+	state: Selected,
+	kind: "owner_head" | "owner_head_failed" | "checks_failed",
+	reason: HandoffReason,
+	head: GitSha,
+	now: number,
+	next: NoticeNext,
+	refusal?: OwnerHeadRefusal,
+): Selected {
+	if (state.published === null) return held(state, reason, now);
+
+	if (
+		next.kind === "held" &&
+		state.work.kind === "held" &&
+		state.work.reason === reason
+	)
+		return state;
+
+	const detail =
+		refusal === undefined ? { detail: reason } : { detail: reason, refusal };
+
+	return effect(held(state, reason, now), {
+		kind: "post_notice",
+		number: state.published.number,
+		notice: {
+			kind,
+			place: "issue",
+			key: `<!-- factory:notice ${state.pin.runId} ${kind} ${reason}${refusal === undefined ? "" : ` ${refusal}`} ${head} -->`,
+		},
+		at: now,
+		...detail,
+		withdraw: reason,
+		// Persisted transition data, not a Promise callback.
+		// oxlint-disable-next-line unicorn/no-thenable
+		then: next,
+	});
+}
+
 function observed(
 	state: Selected,
 	event: Extract<CandidateEvent, { kind: "observed" }>,
@@ -1694,9 +1913,55 @@ function observed(
 		return state;
 
 	if (
+		state.work.kind === "effect" &&
+		state.work.request.kind === "complete_handoff" &&
+		event.pr.kind === "open" &&
+		event.pr.refHead !== state.work.request.head
+	)
+		state = held(state, "head_drift", event.now);
+
+	if (
+		handoffGeneration(state, event.pr).intent.digest !==
+			state.current.intent.digest &&
+		state.work.kind !== "effect"
+	) {
+		const execution = activeExecution(state);
+
+		if (execution !== null)
+			return effect(state, {
+				kind: "stop_execution",
+				execution,
+				terminal: null,
+			});
+		const restored = handoffGeneration(state, event.pr);
+
+		state = {
+			...state,
+			current: restored,
+			history: state.history.map((g) =>
+				g.intent.digest === restored.intent.digest ? state.current : g,
+			),
+			published:
+				state.published === null
+					? null
+					: { ...state.published, ownerHead: null },
+			work:
+				state.work.kind === "waiting" ||
+				(state.work.kind === "held" &&
+					["checks_failed", "checks_incomplete", "head_lag"].includes(
+						state.work.reason,
+					))
+					? state.work
+					: { kind: "handoff" },
+		};
+	}
+
+	if (
 		state.published !== null &&
 		event.pr.kind === "open" &&
-		!allowedHeads(state).includes(event.pr.refHead)
+		!allowedHeads(state).includes(event.pr.refHead) &&
+		event.pr.refHead !== state.published.ownerHead &&
+		state.work.kind !== "effect"
 	) {
 		state = {
 			...state,
@@ -1727,11 +1992,14 @@ function observed(
 				terminal: null,
 			});
 
-		return effect(hold(state, "head_drift", event.now), {
-			kind: "void_readiness",
-			number: state.published!.number,
-			reason: "head_drift",
-		});
+		return headNotice(
+			state,
+			"owner_head",
+			"owner_head",
+			event.pr.refHead,
+			event.now,
+			{ kind: "owner_due", head: event.pr.refHead, since: event.now },
+		);
 	}
 
 	state = ingest(state, event.feedback ?? { kind: "none" }, event.now);
@@ -1823,6 +2091,49 @@ function observed(
 			return startQueuedFeedback(state, queued, event.now);
 	}
 
+	if (work.kind === "owner_due") {
+		if (event.pr.kind === "open" && event.pr.refHead !== work.head)
+			return observed(
+				{
+					...state,
+					published:
+						state.published === null
+							? null
+							: { ...state.published, ownerHead: null },
+					work: { kind: "handoff" },
+				},
+				event,
+			);
+
+		if (
+			latestGeneration(state) === 3 ||
+			state.history.length + 2 > MAX_GENERATIONS
+		)
+			return held(state, "refresh_limit", event.now);
+
+		if (event.main === null) return state;
+
+		return effect(state, {
+			kind: "derive_owner_patch",
+			head: work.head,
+			baseSha: event.main,
+			attempt: work.attempt ?? 1,
+		});
+	}
+
+	if (
+		work.kind === "held" &&
+		[
+			"owner_head_refused",
+			"owner_head_failed",
+			"owner_head_behind",
+			"refresh_limit",
+		].includes(work.reason) &&
+		event.pr.kind === "open" &&
+		event.pr.refHead === state.published?.ownerHead
+	)
+		return state;
+
 	// A stopped feedback round needs a new owner request, not the old certificate.
 	if (
 		work.kind === "held" &&
@@ -1880,7 +2191,18 @@ function observed(
 		return selectGeneration(state, intent, work.patch, event.now);
 	}
 
-	if (event.main !== null && event.main !== state.current.intent.baseSha) {
+	if (
+		work.kind === "effect" &&
+		(work.request.kind === "derive_owner_patch" ||
+			(work.request.kind === "post_notice" &&
+				work.request.notice.kind === "owner_head"))
+	)
+		return state;
+
+	if (
+		event.main !== null &&
+		event.main !== handoffGeneration(state, event.pr).intent.baseSha
+	) {
 		const execution = activeExecution(state);
 
 		if (execution !== null)
@@ -1890,6 +2212,28 @@ function observed(
 				terminal: null,
 			});
 
+		const active = handoffGeneration(state, event.pr);
+
+		if (
+			active.intent.origin.kind === "owner" ||
+			(state.published !== null &&
+				authoredOf(state, state.published.promoted) === "owner")
+		) {
+			const head =
+				active.intent.origin.kind === "owner"
+					? active.intent.origin.head
+					: promotedHead(state)!;
+
+			return headNotice(
+				state,
+				"owner_head_failed",
+				"owner_head_behind",
+				head,
+				event.now,
+				{ kind: "held", reason: "owner_head_behind" },
+			);
+		}
+
 		const refreshes = candidateGenerations(state).filter(
 			(g) => g.intent.origin.kind === "refresh",
 		).length;
@@ -1898,15 +2242,11 @@ function observed(
 
 		if (reason !== null) return hold(state, reason, event.now);
 
-		if (refreshes >= MAX_REFRESHES || state.current.intent.generation === 3)
+		if (refreshes >= MAX_REFRESHES || latestGeneration(state) === 3)
 			return hold(state, "refresh_limit", event.now);
 
 		const generation =
-			state.current.intent.generation === 0
-				? 1
-				: state.current.intent.generation === 1
-					? 2
-					: 3;
+			latestGeneration(state) === 0 ? 1 : latestGeneration(state) === 1 ? 2 : 3;
 
 		const head =
 			state.published === null
@@ -1974,7 +2314,8 @@ function observed(
 			: issueExecution(state, execution);
 	}
 
-	const certificate = state.current.certification;
+	const handoff = handoffGeneration(state, event.pr);
+	const certificate = handoff.certification;
 
 	if (certificate === null || event.main === null) return state;
 	const head = certificate.report.candidateSha;
@@ -1990,6 +2331,11 @@ function observed(
 				? event.readiness.reason
 				: "checks_incomplete";
 
+		if (reason === "checks_failed")
+			return headNotice(state, "checks_failed", reason, head, event.now, {
+				kind: "held",
+				reason,
+			});
 		const stopped = hold(state, reason, event.now);
 
 		return state.published === null || stopped.work.kind === "effect"
@@ -2030,12 +2376,12 @@ function observed(
 	}
 
 	return state.published.readiness.kind === "ready" &&
-		sameGeneration(state.published.promoted, state.current.intent)
+		sameGeneration(state.published.promoted, handoff.intent)
 		? { ...state, work: { kind: "waiting" } }
 		: effect(state, {
 				kind: "complete_handoff",
 				number: state.published.number,
-				certification: refOf(state.current.intent),
+				certification: refOf(handoff.intent),
 				head,
 			});
 }
@@ -2085,6 +2431,74 @@ function complete(
 		return state;
 
 	switch (c.kind) {
+		case "derive_owner_patch": {
+			if (c.result.kind === "refused") {
+				const attempt = c.request.attempt ?? 1;
+
+				if (c.result.reason === "unreadable" && attempt < 3)
+					return {
+						...state,
+						work: {
+							kind: "owner_due",
+							head: c.request.head,
+							since: now,
+							attempt: attempt === 1 ? 2 : 3,
+						},
+					};
+
+				return headNotice(
+					state,
+					"owner_head_failed",
+					"owner_head_refused",
+					c.request.head,
+					now,
+					{ kind: "held", reason: "owner_head_refused" },
+					c.result.reason,
+				);
+			}
+
+			const generation = latestGeneration(state);
+
+			if (generation === 3 || state.history.length + 2 > MAX_GENERATIONS)
+				return held(state, "refresh_limit", now);
+
+			const intent = generationIntent({
+				pin: state.pin,
+				patch: c.result.patch,
+				round: state.current.intent.round,
+				generation: generation === 0 ? 1 : generation === 1 ? 2 : 3,
+				baseSha: c.request.baseSha,
+				origin: {
+					kind: "owner",
+					head: c.request.head,
+					previous: refOf(state.current.intent),
+				},
+				publication: { kind: "owner", head: c.request.head },
+			});
+
+			if (!ownerPatchValid(state.pin, intent, c.result.patch))
+				return headNotice(
+					state,
+					"owner_head_failed",
+					"owner_head_refused",
+					c.request.head,
+					now,
+					{ kind: "held", reason: "owner_head_refused" },
+				);
+
+			const selected = selectGeneration(
+				state,
+				intent,
+				state.current.patch,
+				now,
+			);
+
+			return {
+				...selected,
+				current: { ...selected.current, ownerPatch: c.result.patch },
+			};
+		}
+
 		case "validate": {
 			const current = { ...state.current, validation: c.result.validation };
 
@@ -2287,6 +2701,9 @@ function complete(
 							},
 			};
 
+			if (next.kind === "owner_due" && updated.published !== null)
+				updated.published = { ...updated.published, ownerHead: next.head };
+
 			if (next.kind === "finish") return finish(updated, next.terminal, now);
 
 			return next.kind === "held"
@@ -2462,7 +2879,10 @@ export function handoffCandidate(
 				}
 
 				if (accountFor(updated, event.execution)?.settlement !== "settled") {
-					next = hold(updated, "evidence_unavailable", now);
+					next =
+						state.current.intent.origin.kind === "owner"
+							? stopRound(updated, "evidence_unavailable", now)
+							: hold(updated, "evidence_unavailable", now);
 					break;
 				}
 
@@ -2866,8 +3286,10 @@ function wireExecution(
 		return (
 			(v.round === 1 || v.round === 2) &&
 			wireRef(v.feedbackFrom) &&
-			v.feedbackFrom.round + 1 === v.round &&
-			wireCause(v.cause)
+			wireCause(v.cause) &&
+			(v.cause.kind === "feedback"
+				? v.feedbackFrom.round < v.round
+				: v.feedbackFrom.round + 1 === v.round)
 		);
 	const seats = v.seats;
 
@@ -3154,10 +3576,48 @@ function wireValidation(
 	);
 }
 
+export function parseOwnerPatchReceipt(
+	value: JsonValue | undefined,
+): OwnerPatchReceipt | null {
+	const v = wireObject(value);
+
+	if (
+		v === null ||
+		v.version !== 1 ||
+		v.kind !== "owner" ||
+		!wireDigest(v.runId) ||
+		!wireSha(v.head) ||
+		!wireSha(v.baseSha) ||
+		!wireDigest(v.contractDigest) ||
+		!wireDigest(v.acceptanceDigest) ||
+		!wireDigest(v.heldoutDigest) ||
+		!wireDigest(v.patchDigest) ||
+		!wireStrings(v.changedPaths) ||
+		v.policy !== "clean" ||
+		checkChangedPaths({ changedPaths: v.changedPaths }).kind !== "clean"
+	)
+		return null;
+
+	return {
+		version: 1,
+		kind: "owner",
+		runId: v.runId,
+		head: v.head,
+		baseSha: v.baseSha,
+		contractDigest: v.contractDigest,
+		acceptanceDigest: v.acceptanceDigest,
+		heldoutDigest: v.heldoutDigest,
+		patchDigest: v.patchDigest,
+		changedPaths: v.changedPaths,
+		policy: "clean",
+	};
+}
+
 function wireIntent(
 	value: JsonValue | undefined,
 	pin: AdmissionPin,
 	patch: PatchReceipt,
+	ownerPatch?: OwnerPatchReceipt | null,
 ): value is GenerationIntent & JsonValue {
 	const v = wireObject(value);
 	const origin = wireObject(v?.origin);
@@ -3169,7 +3629,10 @@ function wireIntent(
 		v.runId !== pin.runId ||
 		v.originalBase !== pin.originalBase ||
 		!wireSha(v.baseSha) ||
-		v.patchDigest !== patch.patchDigest ||
+		v.patchDigest !==
+			(origin?.kind === "owner"
+				? ownerPatch?.patchDigest
+				: patch.patchDigest) ||
 		v.acceptanceDigest !== pin.acceptanceDigest ||
 		origin === null ||
 		publication === null ||
@@ -3182,11 +3645,26 @@ function wireIntent(
 				wireRef(origin.feedbackFrom)) ||
 			(origin.kind === "refresh" &&
 				value.generation > 0 &&
-				wireRef(origin.previous))
+				wireRef(origin.previous)) ||
+			(origin.kind === "owner" &&
+				value.generation > 0 &&
+				wireSha(origin.head) &&
+				wireRef(origin.previous) &&
+				publication.kind === "owner" &&
+				publication.head === origin.head &&
+				ownerPatch != null &&
+				ownerPatch.head === origin.head &&
+				ownerPatch.baseSha === v.baseSha &&
+				ownerPatch.runId === pin.runId &&
+				ownerPatch.contractDigest === pin.contractDigest &&
+				ownerPatch.acceptanceDigest === pin.acceptanceDigest)
 		) ||
 		!(
 			publication.kind === "initial" ||
-			(publication.kind === "successor" && wireSha(publication.expectedHead))
+			(publication.kind === "successor" && wireSha(publication.expectedHead)) ||
+			(publication.kind === "owner" &&
+				origin.kind === "owner" &&
+				wireSha(publication.head))
 		)
 	)
 		return false;
@@ -3230,6 +3708,11 @@ function wireReason(value: JsonValue | undefined): value is HandoffReason {
 			"repair_tokens",
 			"run_tokens",
 			"head_drift",
+			"owner_head",
+			"owner_head_refused",
+			"owner_head_failed",
+			"owner_head_behind",
+			"checks_failed",
 			"head_lag",
 			"checks_incomplete",
 			"review_failed",
@@ -3287,14 +3770,21 @@ function wireEffect(
 	value: JsonValue | undefined,
 	pin: AdmissionPin,
 	patch: PatchReceipt,
+	ownerPatch?: OwnerPatchReceipt | null,
 ): value is CandidateEffect & JsonValue {
 	const v = wireObject(value);
 
 	if (v === null) return false;
 
 	switch (v.kind) {
+		case "derive_owner_patch":
+			return (
+				wireSha(v.head) &&
+				wireSha(v.baseSha) &&
+				(v.attempt === undefined || (wireCount(v.attempt, 1) && v.attempt <= 3))
+			);
 		case "validate":
-			return wireIntent(v.generation, pin, patch);
+			return wireIntent(v.generation, pin, patch, ownerPatch);
 		case "launch_review":
 			return wireExecution(v.execution) && v.execution.stage === "review";
 		case "repair_build":
@@ -3333,11 +3823,22 @@ function wireEffect(
 				(v.withdraw === null || wireReason(v.withdraw)) &&
 				(v.at === undefined || wireCount(v.at)) &&
 				(v.detail === undefined || v.detail === null || wireReason(v.detail)) &&
+				(v.refusal === undefined ||
+					[
+						"heldout_changed",
+						"forbidden_path",
+						"behind_main",
+						"too_large",
+						"unreadable",
+					].includes(String(v.refusal))) &&
 				(notice?.kind === "feedback_intake" ||
 					notice?.kind === "feedback_overflow" ||
 					notice?.kind === "repair_started" ||
 					notice?.kind === "repair_unavailable" ||
-					notice?.kind === "round_summary") &&
+					notice?.kind === "round_summary" ||
+					notice?.kind === "owner_head" ||
+					notice?.kind === "owner_head_failed" ||
+					notice?.kind === "checks_failed") &&
 				notice.place === (notice.kind === "round_summary" ? "pr" : "issue") &&
 				wireText(notice.key) &&
 				new RegExp(
@@ -3345,7 +3846,11 @@ function wireEffect(
 						? `^<!-- factory:notice ${pin.runId} feedback_overflow -->$`
 						: notice.kind === "round_summary"
 							? `^<!-- factory:notice ${pin.runId} round_summary [12] -->$`
-							: `^<!-- factory:notice ${pin.runId} ${notice.kind} [0-9a-f]{64} -->$`,
+							: ["owner_head", "owner_head_failed", "checks_failed"].includes(
+										String(notice.kind),
+									) && wireReason(v.detail)
+								? `^<!-- factory:notice ${pin.runId} ${notice.kind} (?:${v.detail}${v.refusal === undefined ? "" : ` ${v.refusal}`} )?[0-9a-f]{40} -->$`
+								: `^<!-- factory:notice ${pin.runId} ${notice.kind} [0-9a-f]{${["owner_head", "owner_head_failed", "checks_failed"].includes(String(notice.kind)) ? 40 : 64}} -->$`,
 				).test(notice.key) &&
 				((then?.kind === "resume" &&
 					work !== null &&
@@ -3357,7 +3862,11 @@ function wireEffect(
 					(then?.kind === "finish" &&
 						wireTerminal(then.terminal) &&
 						then.terminal.kind === "cancelled") ||
-					(then?.kind === "repair_due" && wireWork(then, pin, patch)))
+					(then?.kind === "owner_due" &&
+						wireSha(then.head) &&
+						wireCount(then.since)) ||
+					(then?.kind === "repair_due" &&
+						wireWork(then, pin, patch, ownerPatch)))
 			);
 		}
 
@@ -3372,14 +3881,21 @@ function wireWork(
 	value: JsonValue | undefined,
 	pin: AdmissionPin,
 	patch: PatchReceipt,
+	ownerPatch?: OwnerPatchReceipt | null,
 ): value is CandidateWork & JsonValue {
 	const v = wireObject(value);
 
 	if (v === null) return false;
 
 	switch (v.kind) {
+		case "owner_due":
+			return (
+				wireSha(v.head) &&
+				wireCount(v.since) &&
+				(v.attempt === undefined || (wireCount(v.attempt, 1) && v.attempt <= 3))
+			);
 		case "effect":
-			return wireEffect(v.request, pin, patch);
+			return wireEffect(v.request, pin, patch, ownerPatch);
 		case "review_due":
 			return (
 				wireStrings(v.seats) &&
@@ -3429,7 +3945,10 @@ function wireEvidence(
 		v === null ||
 		!wirePatch(v.patch) ||
 		!validPatch(pin, v.patch, v.patch.round ?? 0) ||
-		!wireIntent(v.intent, pin, v.patch) ||
+		!wireIntent(v.intent, pin, v.patch, parseOwnerPatchReceipt(v.ownerPatch)) ||
+		(wireObject(v.intent)?.origin !== undefined &&
+			wireObject(wireObject(v.intent)?.origin)?.kind !== "owner" &&
+			v.ownerPatch != null) ||
 		(v.review !== undefined && !wireReview(v.review)) ||
 		(v.assessmentKind !== undefined &&
 			!["passed", "candidate", "unusable"].includes(
@@ -3526,7 +4045,7 @@ function wireCandidate(
 		v.history.length >= MAX_GENERATIONS ||
 		!v.history.every((g) => wireEvidence(g, pin)) ||
 		!wireEvidence(v.current, v.pin) ||
-		!wireWork(v.work, v.pin, v.current.patch) ||
+		!wireWork(v.work, v.pin, v.current.patch, v.current.ownerPatch) ||
 		(v.feedback !== null &&
 			!wireFeedbackCursor(v.feedback, v.pin.repo, wireReason))
 	)
@@ -3554,6 +4073,7 @@ function wireCandidate(
 		wireCount(published.number, 1) &&
 		published.branch === `factory/pr/${pin.issue}-${pin.runId.slice(0, 12)}` &&
 		wireReadiness(published.readiness) &&
+		(published.ownerHead == null || wireSha(published.ownerHead)) &&
 		generations.some((g) => {
 			const evidence = wireObject(g);
 

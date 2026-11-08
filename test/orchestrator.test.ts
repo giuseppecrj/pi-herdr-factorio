@@ -54,6 +54,7 @@ import {
 	serveLoop,
 	writeStatus,
 	observeFeedback,
+	storeFeedbackBatch,
 } from "../server/controller.ts";
 import { GitHubTicketAdapter } from "../src/adapters/github.ts";
 import {
@@ -118,8 +119,12 @@ import {
 } from "../src/ledger.ts";
 import {
 	GitHubPublicationApi,
+	storeOwnerPatch,
+	readOwnerPatch,
+	ownerPatchPath,
 	readLedgerFile,
 	PublicationError,
+	candidateBranch,
 } from "../src/publication.ts";
 import { LedgerGit, repo as ledgerRepo } from "./ledger-git.ts";
 import {
@@ -130,6 +135,7 @@ import {
 } from "../src/validation.ts";
 import {
 	candidateProjection,
+	candidateUsage,
 	promotedHead,
 	handoffCandidate,
 	parseCandidateState,
@@ -532,6 +538,7 @@ class FakeExecutor implements StageExecutor {
 	candidate?: StageExecutor["candidate"];
 	readonly candidateSpent = new Map<string, number>();
 	prepareReview?: StageExecutor["prepareReview"];
+	ownerValidate?: import("../src/validation.ts").Validator;
 	readonly validations: import("../src/validation.ts").ValidationInput[] = [];
 	validate: import("../src/validation.ts").Validator = async (input) => {
 		this.validations.push(input);
@@ -939,6 +946,8 @@ function world(scope: readonly number[] | null = null, ledger?: LedgerOutbox) {
 			return output?.result.kind === "found" ? output.result : null;
 		},
 		async execute(state, request) {
+			if (request.kind === "derive_owner_patch") return null;
+
 			if (request.kind === "open_pr") {
 				published.set(state.pin.runId, { number: 99, head: request.head });
 
@@ -2548,7 +2557,7 @@ describe("Orchestrator base qualification", () => {
 		assert.equal(statuses(github, 14).at(-1)?.endsWith(":failed"), true);
 
 		const row = (await outbox.scan())?.[0]?.row?.row;
-		assert.ok(row?.v === 4);
+		assert.ok(row?.v === 5);
 		assert.deepEqual(row.acceptAttempts, {
 			kind: "known",
 			value: [
@@ -2599,7 +2608,7 @@ describe("Orchestrator base qualification", () => {
 		);
 
 		const row = (await outbox.scan())?.[0]?.row?.row;
-		assert.ok(row?.v === 4);
+		assert.ok(row?.v === 5);
 		assert.equal(row.outcome.kind, "budget_exhausted");
 		assert.ok(row.outcome.kind === "budget_exhausted");
 		assert.equal(row.outcome.cap.kind, "unavailable");
@@ -4476,6 +4485,130 @@ describe("server/cli.ts controller commands", () => {
 		);
 	});
 
+	for (const coverage of ["exact", "missing", "unsettled", "incomplete"]) {
+		it(`status JSON aggregates runs with ${coverage} coverage`, async () => {
+			const state = stateDir();
+			const github = new FakeGitHub();
+
+			for (const issue of [14, 15]) {
+				const runGithub = new FakeGitHub();
+				runGithub.add(labeled(issue));
+				const executor = new FakeExecutor();
+				executor.behaviors = [{ kind: "refuse", usage: 40 }];
+				await cli(
+					["tick", "--once", "--json", ...base, "--state-dir", state],
+					runGithub,
+					new AbortController(),
+					executor,
+				);
+				const stage = join(state, "stages", runOf(issue), "specify-1");
+
+				mkdirSync(stage, { recursive: true });
+
+				if (issue === 14 || coverage === "exact" || coverage === "incomplete") {
+					writeFileSync(
+						join(stage, "receipt.json"),
+						JSON.stringify({
+							version: 1,
+							runId: runOf(issue),
+							stage: "specify",
+							attempt: 1,
+							outcome: { kind: "passed" },
+							turns: 1,
+							wallMs: 10,
+							usage: {
+								total: 40,
+								parent: 40,
+								children: 0,
+								gateway: 40,
+								unreadChildren: 0,
+								byModel: {},
+							},
+						}),
+					);
+				} else if (coverage === "unsettled") {
+					writeFileSync(
+						join(stage, "egress.requests.jsonl"),
+						'{"kind":"result","req":1,"inputTokens":10,"outputTokens":0}\n{"kind":"dispatch","req":2,"inputTokenEstimate":20,"maxOutputTokens":50}\n',
+					);
+				}
+			}
+
+			if (coverage === "incomplete") {
+				writeFileSync(join(state, "claims", `${"0".repeat(64)}.json`), "{");
+			}
+
+			const result = await cli(
+				["status", "--json", ...base, "--state-dir", state],
+				github,
+			);
+
+			const status = JSON.parse(result.stdout);
+
+			assert.deepEqual(
+				status.accounting.runs.map(
+					(run: { tokens: { kind: string } }) => run.tokens.kind,
+				),
+				[
+					"exact",
+					coverage === "exact" || coverage === "incomplete"
+						? "exact"
+						: coverage === "missing"
+							? "lower_bound"
+							: "uncertain",
+				],
+			);
+			assert.deepEqual(
+				status.durableUsage,
+				coverage === "exact"
+					? { kind: "exact", unit: "tokens", total: 80 }
+					: {
+							kind: coverage === "unsettled" ? "uncertain" : "lower_bound",
+							unit: "tokens",
+							total: coverage === "unsettled" ? 120 : 80,
+							reason:
+								coverage === "unsettled"
+									? "request_unsettled"
+									: "receipt_missing",
+						},
+			);
+		});
+	}
+
+	for (const incomplete of [false, true]) {
+		it(`status JSON classifies empty accounting with incomplete=${incomplete}`, async () => {
+			const state = stateDir();
+
+			if (incomplete) {
+				mkdirSync(join(state, "claims"));
+				writeFileSync(join(state, "claims", `${"0".repeat(64)}.json`), "{");
+			}
+
+			const result = await cli(
+				["status", "--json", ...base, "--state-dir", state],
+				new FakeGitHub(),
+			);
+
+			const status = JSON.parse(result.stdout);
+			assert.equal(
+				status.accounting.state,
+				incomplete ? "incomplete" : "readable",
+			);
+			assert.deepEqual(status.accounting.runs, []);
+			assert.deepEqual(
+				status.durableUsage,
+				incomplete
+					? {
+							kind: "lower_bound",
+							unit: "tokens",
+							total: 0,
+							reason: "receipt_missing",
+						}
+					: { kind: "exact", unit: "tokens", total: 0 },
+			);
+		});
+	}
+
 	it("status JSON classifies complete and missing receipt coverage", async () => {
 		const github = new FakeGitHub();
 		const state = stateDir();
@@ -4595,7 +4728,10 @@ describe("server/cli.ts controller commands", () => {
 
 		const unavailable = JSON.parse(missing.stdout);
 		assert.equal(unavailable.accounting.state, "unavailable");
-		assert.equal(unavailable.durableUsage.kind, "unavailable");
+		assert.deepEqual(unavailable.durableUsage, {
+			kind: "unavailable",
+			reason: "legacy_not_recorded",
+		});
 		assert.equal(unavailable.ledger.state, "unreadable");
 		assert.equal(unavailable.ledger.pending, null);
 	});
@@ -10415,7 +10551,7 @@ describe("private build stage", () => {
 			await once(restarted);
 			await restarted.tick();
 			const row = (await outbox.scan())?.[0]?.row?.row;
-			assert.ok(row?.v === 4);
+			assert.ok(row?.v === 5);
 			assert.equal(row.outcome.kind, "failed");
 
 			const failure = {
@@ -10975,7 +11111,7 @@ describe("controller-only validate", () => {
 				assert.equal(f.executor.launches.length, launches);
 				assert.equal(notices().length, 1);
 				const row = (await outbox.scan())?.[0]?.row?.row;
-				assert.ok(row?.v === 4);
+				assert.ok(row?.v === 5);
 				assert.equal(row.outcome.kind, "failed");
 				assert.deepEqual(row.failure?.kind === "known" && row.failure.value, {
 					stage: "review",
@@ -11245,7 +11381,7 @@ describe("controller-only validate", () => {
 				const row = (await outbox.scan())?.[0]?.row?.row;
 
 				if (target === "open_pr") {
-					assert.ok(row?.v === 4);
+					assert.ok(row?.v === 5);
 					assert.equal(row.outcome.kind, "failed");
 					assert.deepEqual(row.failure?.kind === "known" && row.failure.value, {
 						stage: "land",
@@ -11443,6 +11579,560 @@ describe("controller-only validate", () => {
 			);
 			assert.equal(window === "create" ? creates : comments, 1);
 		});
+
+	it("F10-3 N1 reset after a failed repair never reuses spent rounds or their controller artifacts", async () => {
+		const f = await reviewingRun();
+		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+		await once(f.controller);
+		await f.controller.tick();
+		await f.controller.tick();
+		const initial = f.files.claims.get(runOf(14))?.handoff;
+		const port = f.executor.candidate;
+		assert.ok(initial?.kind === "selected" && initial.published && port);
+		const root = stateDir();
+
+		const native = controllerCandidatePort({
+			stateDir: root,
+			exec: f.github.exec,
+		});
+
+		const pr = f.github.add(fakeIssue(99, { pullRequest: true }));
+		const factoryHead = initial.current.report!.candidateSha;
+		let head = factoryHead;
+		let feedback: FeedbackObservation = { kind: "unavailable" };
+		const observe = port.observe;
+		port.observe = async (state, now) => ({
+			...(await observe(state, now)),
+			pr: { kind: "open", number: 99, head, refHead: head },
+			readiness:
+				head === factoryHead
+					? { kind: "current", head, report: initial.current.report! }
+					: { kind: "unavailable" },
+			feedback,
+		});
+		const execute = port.execute;
+		port.execute = async (state, request) => {
+			if (request.kind === "post_notice") return native.execute(state, request);
+
+			if (request.kind === "derive_owner_patch")
+				return {
+					kind: "derive_owner_patch",
+					request,
+					result: {
+						kind: "found",
+						patch: {
+							version: 1,
+							kind: "owner",
+							runId: state.pin.runId,
+							head: request.head,
+							baseSha: request.baseSha,
+							contractDigest: state.pin.contractDigest,
+							acceptanceDigest: state.pin.acceptanceDigest,
+							heldoutDigest: initial.current.verdict!.heldoutDigest,
+							patchDigest: digestOf("owner patch"),
+							changedPaths: ["src/example.ts"],
+							policy: "clean",
+						},
+					},
+				};
+
+			return execute(state, request);
+		};
+
+		port.patch = native.patch;
+
+		const batches = new Map<
+			string,
+			import("../src/feedback.ts").FeedbackBatch
+		>();
+
+		Object.assign(f.executor, {
+			readFeedback: async (_run: Digest, digest: Digest) =>
+				batches.get(digest) ?? null,
+		});
+		const output = f.executor.output.bind(f.executor);
+		f.executor.output = async (input) => {
+			const built = await output(input);
+
+			if (
+				input.stage !== "build" ||
+				!(built instanceof Object) ||
+				built.kind !== "build" ||
+				built.result.kind !== "found"
+			)
+				return built;
+
+			const binding = {
+				runId: initial.pin.runId,
+				round: input.round,
+				baseSha: initial.pin.originalBase,
+				contractDigest: initial.pin.contractDigest,
+				acceptanceDigest: initial.pin.acceptanceDigest,
+			};
+
+			const stored = storePatch(
+				root,
+				binding,
+				{
+					kind: "collected",
+					patch: built.result.patch,
+					patchDigest: built.result.receipt.patchDigest,
+					changedPaths: built.result.receipt.changedPaths,
+					policy: "clean",
+				},
+				{ model: built.result.receipt.model, observed: null, commands: [] },
+			);
+
+			assert.ok(stored.kind === "found");
+			assert.equal(
+				digestOf(stored.patch),
+				digestOf(built.result.patch),
+				"paid-for builder output must not be replaced by an older round",
+			);
+
+			return {
+				kind: "build",
+				result: finishPatch(root, binding, built.result.receipt.visibleTests!),
+			};
+		};
+
+		const validationKeys: string[] = [];
+		f.executor.validate = async (input) => {
+			assert.ok(input.generation);
+			const generation = input.generation;
+
+			const branch = candidateBranch(
+				14,
+				input.runId,
+				generation.round,
+				generation.generation,
+			);
+
+			const candidateSha =
+				generation.origin.kind === "owner"
+					? generation.origin.head
+					: sha(digestOf(branch).slice(0, 40));
+
+			const state = {
+				...initial.current.validation!,
+				round: generation.round,
+				generation: {
+					index: generation.generation,
+					digest: generation.digest,
+					previousHead: factoryHead,
+				},
+				publication: { branch, patchSha: candidateSha, candidateSha },
+			};
+
+			await input.save(state);
+
+			const verdict = {
+				...initial.current.verdict!,
+				candidateSha,
+				pass: false,
+				patchDigest: input.generation.patchDigest,
+				checks: initial.current.verdict!.checks.map((c) => ({
+					...c,
+					passed: c.name !== "heldout",
+				})),
+			};
+
+			const nonce = dispatchNonce(
+				input.runId,
+				generation.round,
+				1,
+				generation.generation,
+			);
+
+			validationKeys.push(nonce);
+
+			return {
+				kind: "finished",
+				state,
+				verdict,
+				report: {
+					...reportOf(verdict),
+					nonce,
+					externalId: `factory-gates:123:${nonce}`,
+				},
+				assessment: f.executor.assess(input, verdict),
+			};
+		};
+
+		f.executor.ownerValidate = f.executor.validate;
+
+		const book = () => {
+			const state = f.files.claims.get(runOf(14))?.handoff;
+			assert.ok(state?.kind === "selected");
+			assert.ok(
+				parseCandidateState(JSON.parse(JSON.stringify(state))),
+				"saved book must load",
+			);
+
+			return state;
+		};
+
+		let controller = f.controller;
+
+		const until = async (done: () => boolean) => {
+			for (let tick = 0; tick < 20 && !done(); tick++) await once(controller);
+			assert.ok(
+				done(),
+				JSON.stringify({
+					work: book().work,
+					current: book().current.intent,
+					logs: f.logs.filter((l) => l.event !== "tick").slice(-4),
+				}),
+			);
+		};
+
+		const requestChanges = async (id: number) => {
+			const event = `github:${repo}:review:${id}` as const;
+
+			const batch = {
+				version: 1,
+				runId: initial.pin.runId,
+				pr: 99,
+				head: factoryHead,
+				records: [
+					{
+						event,
+						actor: "writer",
+						intake: { kind: "actionable" },
+						inline: [],
+					},
+				],
+				cards: [
+					{
+						event,
+						head: factoryHead,
+						path: null,
+						line: null,
+						excerpt: "fix it",
+						truncated: false,
+					},
+				],
+				full: null,
+			} as const;
+
+			const stored = await storeFeedbackBatch(root, batch, null);
+			batches.set(stored.digest, batch);
+			feedback = {
+				kind: "read",
+				head: factoryHead,
+				dismissed: [],
+				batch: stored,
+			};
+		};
+
+		const failedRound = async (round: number) => {
+			await until(
+				() =>
+					book().work.kind === "held" && book().current.intent.round === round,
+			);
+			assert.equal(book().current.intent.round, round);
+			const state = book();
+			const patch = await native.patch(state, round);
+			assert.ok(patch && !("kind" in patch.receipt));
+			assert.equal(patch.receipt.patchDigest, state.current.intent.patchDigest);
+
+			return state;
+		};
+
+		await requestChanges(701);
+		const first = await failedRound(1);
+		const firstUsage = candidateUsage(first);
+		head = sha("b".repeat(40));
+		feedback = { kind: "unavailable" };
+		await until(
+			() =>
+				book().work.kind === "held" &&
+				book().current.intent.origin.kind === "owner",
+		);
+		assert.equal(
+			f.executor.launches.filter(
+				(l) => l.stage === "build" && (l.round ?? 0) > 0,
+			).length,
+			1,
+		);
+		head = factoryHead;
+		await until(() => book().published?.readiness.kind === "ready");
+		assert.equal(book().current.intent.digest, initial.current.intent.digest);
+		assert.equal(candidateUsage(book()), firstUsage);
+		controller = f.start();
+		await requestChanges(702);
+		await until(
+			() =>
+				f.executor.launches.filter(
+					(l) => l.stage === "build" && (l.round ?? 0) > 0,
+				).length === 2,
+		);
+
+		const launches = f.executor.launches.filter(
+			(l) => l.stage === "build" && (l.round ?? 0) > 0,
+		);
+
+		assert.deepEqual(
+			launches.map((l) => [l.round, l.attempt]),
+			[
+				[1, 1],
+				[2, 1],
+			],
+		);
+		const second = await failedRound(2);
+		assert.notEqual(second.current.intent.digest, first.current.intent.digest);
+		assert.notEqual(
+			second.current.validation!.publication!.branch,
+			first.current.validation!.publication!.branch,
+		);
+		assert.equal(new Set(validationKeys).size, validationKeys.length);
+		assert.deepEqual(
+			pr.comments.map((c) => c.body.match(/round_summary [12]/)?.[0]),
+			["round_summary 1", "round_summary 2"],
+		);
+		assert.ok(
+			existsSync(
+				join(root, "handoff", initial.pin.runId, "feedback", "round-1-a1.json"),
+			),
+		);
+		assert.ok(
+			existsSync(
+				join(root, "handoff", initial.pin.runId, "feedback", "round-2-a1.json"),
+			),
+		);
+		head = sha("d".repeat(40));
+		feedback = { kind: "unavailable" };
+		await until(
+			() =>
+				book().work.kind === "held" &&
+				book().current.intent.origin.kind === "owner",
+		);
+		head = factoryHead;
+		await until(() => book().published?.readiness.kind === "ready");
+		const usage = candidateUsage(book());
+		await requestChanges(703);
+		await until(
+			() =>
+				book().feedback?.batches.length === 3 &&
+				book().feedback?.batches.at(-1)?.status.kind === "settled",
+		);
+		assert.partialDeepStrictEqual(book().feedback?.batches.at(-1)?.status, {
+			kind: "settled",
+			outcome: { kind: "refused", reason: "cap_reached" },
+		});
+		await once(controller);
+		assert.ok(
+			f.github
+				.markers(14)
+				.some((body) => body.includes("No repair starts: cap_reached")),
+		);
+		assert.equal(candidateUsage(book()), usage);
+		assert.equal(
+			f.executor.launches.filter(
+				(l) => l.stage === "build" && (l.round ?? 0) > 0,
+			).length,
+			2,
+		);
+	});
+
+	it("F10-3 crashes after the C8 owner file write, adopts it after restart and settles owner review without a build (review R8)", async () => {
+		const f = await reviewingRun();
+		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+		await once(f.controller);
+		await f.controller.tick();
+		await f.controller.tick();
+		const initial = f.files.claims.get(runOf(14))?.handoff;
+		const port = f.executor.candidate;
+		assert.ok(initial?.kind === "selected" && initial.published && port);
+		const head = sha("b".repeat(40));
+		const observe = port.observe;
+		port.observe = async (state, now) => ({
+			...(await observe(state, now)),
+			pr: {
+				kind: "open",
+				number: initial.published!.number,
+				head,
+				refHead: head,
+			},
+		});
+		const execute = port.execute;
+		const root = stateDir();
+		let attempts = 0;
+		let patchReads = 0;
+
+		const ownerPort = controllerCandidatePort({
+			stateDir: root,
+			exec: f.github.exec,
+		});
+
+		port.patch = async (state, round) => {
+			patchReads++;
+
+			return ownerPort.patch(state, round);
+		};
+
+		port.execute = async (state, request) => {
+			if (request.kind === "post_notice")
+				return { kind: "post_notice", request };
+
+			if (request.kind !== "derive_owner_patch") return execute(state, request);
+			attempts++;
+
+			if (attempts === 1) {
+				storeOwnerPatch(
+					root,
+					{
+						version: 1,
+						kind: "owner",
+						runId: state.pin.runId,
+						head,
+						baseSha: request.baseSha,
+						contractDigest: state.pin.contractDigest,
+						acceptanceDigest: state.pin.acceptanceDigest,
+						heldoutDigest: initial.current.verdict!.heldoutDigest,
+						patchDigest: digestOf("owner"),
+						changedPaths: ["src/example.ts"],
+						policy: "clean",
+					},
+					"owner",
+				);
+
+				throw new Error(
+					"C8 crash after durable owner file, before book completion",
+				);
+			}
+
+			const stored = readOwnerPatch(
+				root,
+				state.pin.runId,
+				head,
+				request.baseSha,
+			);
+
+			assert.ok(stored);
+
+			return {
+				kind: "derive_owner_patch",
+				request,
+				result: { kind: "found", patch: stored.receipt },
+			};
+		};
+
+		let ownerCalls = 0;
+
+		const verdict = {
+			...initial.current.verdict!,
+			candidateSha: head,
+			patchDigest: digestOf("owner"),
+		};
+
+		f.executor.ownerValidate = async (input) => {
+			ownerCalls++;
+			assert.equal(input.generation?.origin.kind, "owner");
+
+			const state = {
+				...initial.current.validation!,
+				publication: {
+					branch: `factory/run/14-${input.runId.slice(0, 12)}-r0-g1`,
+					patchSha: head,
+					candidateSha: head,
+				},
+			};
+
+			await input.save(state);
+
+			return {
+				kind: "finished",
+				state,
+				verdict,
+				report: reportOf(verdict),
+				assessment: f.executor.assess(input, verdict),
+			};
+		};
+
+		f.executor.prepareReview = async ({ workspace, execution }) => ({
+			workspace,
+			verdict,
+			builder: "unavailable",
+			input: {
+				binding: execution!.binding,
+				seats: ["code-review", "security-review", "simplify"],
+				files: new Map(),
+				scenarios: [],
+				prompt: "review owner",
+			},
+		});
+		f.executor.output = async ({ execution }) => {
+			assert.ok(execution?.stage === "review");
+
+			return {
+				kind: "review",
+				receipt: {
+					...initial.current.certification!.review,
+					...execution.binding,
+					version: 3,
+					builder: { kind: "unavailable", reason: "missing" },
+					accept: { kind: "unavailable", reason: "missing" },
+					seats: initial.current.certification!.review.seats.map((s) => ({
+						...s,
+						family: { kind: "unavailable", reason: "missing" },
+						label: "context-isolated, unknown family, not cross-family",
+					})),
+				},
+			};
+		};
+
+		f.executor.behaviors = [{ kind: "pass", usage: 19 }];
+
+		f.executor.validate = async () => {
+			throw new Error("factory validator reached");
+		};
+
+		const launches = f.executor.launches.length;
+
+		await assert.rejects(async () => {
+			for (let tick = 0; tick < 8 && attempts === 0; tick++)
+				await f.controller.tick();
+		}, /C8 crash/);
+		assert.equal(attempts, 1);
+		assert.ok(
+			existsSync(
+				ownerPatchPath(
+					root,
+					initial.pin.runId,
+					head,
+					initial.current.intent.baseSha,
+				),
+			),
+		);
+		const saved = f.files.claims.get(runOf(14))?.handoff;
+		assert.ok(
+			saved?.kind === "selected" &&
+				saved.work.kind === "effect" &&
+				saved.work.request.kind === "derive_owner_patch",
+		);
+		const restarted = f.start();
+
+		for (let tick = 0; tick < 8 && ownerCalls === 0; tick++)
+			await restarted.tick();
+		assert.equal(ownerCalls, 1);
+		assert.equal(attempts, 2);
+		assert.equal(f.executor.launches.length, launches);
+
+		for (let tick = 0; tick < 12; tick++) {
+			await restarted.tick();
+			await new Promise((resolve) => setImmediate(resolve));
+		}
+
+		const completed = f.files.claims.get(runOf(14))?.handoff;
+		assert.ok(completed?.kind === "selected");
+		assert.ok(completed.current.certification);
+		assert.equal(completed.current.intent.origin.kind, "owner");
+		assert.equal(completed.published?.readiness.kind, "ready");
+		assert.equal(patchReads, 1);
+		assert.equal(f.executor.launches.length, launches + 1);
+		assert.equal(f.executor.launches.at(-1)?.stage, "review");
+	});
 
 	for (const restart of [false, true])
 		it(`passes the admitted workflow pin to review preparation and output (restart=${restart})`, async () => {
@@ -14294,7 +14984,7 @@ describe("controller-only validate", () => {
 		};
 
 		const row = (await outbox.scan())?.[0]?.row?.row;
-		assert.ok(row?.v === 4);
+		assert.ok(row?.v === 5);
 		assert.deepEqual(row.failure, failed);
 		assert.deepEqual(row.outcome, {
 			kind: "failed",
@@ -17055,7 +17745,7 @@ describe("ledger outbox enrollment", () => {
 		stage.finish(resultOf(launch, { kind: "passed" }, 300));
 		await once(controller);
 		const row = (await native.ledger?.scan())?.[0]?.row?.row;
-		assert.ok(row && row.v === 4);
+		assert.ok(row && row.v === 5);
 		assert.equal(row.outcome.kind, "needs_info");
 		assert.deepEqual(row.runContext, context);
 		assert.equal(row.provenance.kind, "verification");
@@ -17419,7 +18109,7 @@ describe("terminal rows keep the real cause", () => {
 		}
 
 		const row = (await outbox.scan())?.[0]?.row?.row;
-		assert.ok(row?.v === 4, "a version 4 row");
+		assert.ok(row?.v === 5, "a version 5 row");
 
 		return { ...f, dir, row };
 	}

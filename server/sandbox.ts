@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { readOwnerPatch, ownerPatchPath } from "../src/publication.ts";
 import {
 	readFeedbackBatch,
 	renderFeedbackCards,
@@ -111,6 +112,7 @@ import {
 	checkoutBuildWorkspace,
 	checkoutOf,
 	controllerValidator,
+	ownerValidator,
 	controllerCandidatePort,
 	controllerBaseChecker,
 	controllerDraftChecker,
@@ -3380,11 +3382,6 @@ async function candidateReviewInputs(
 		bound.digest,
 	);
 
-	const patch = readRunPatch(config.stateDir, runId, round);
-
-	if (suite.kind !== "found" || patch.kind !== "found")
-		throw new ReviewEvidenceUnavailable("review_inputs_missing");
-
 	const dir = validationDir(
 		config.stateDir,
 		runId,
@@ -3393,6 +3390,40 @@ async function candidateReviewInputs(
 	);
 
 	const verdict = reviewVerdict(join(dir, "verdict.json"));
+
+	if (!isGitSha(verdict.candidateSha) || !isGitSha(verdict.baseSha))
+		throw new ReviewEvidenceUnavailable("review_binding");
+
+	const isOwner =
+		existsSync(
+			ownerPatchPath(
+				config.stateDir,
+				runId,
+				verdict.candidateSha,
+				verdict.baseSha,
+			),
+		) ||
+		existsSync(ownerPatchPath(config.stateDir, runId, verdict.candidateSha));
+
+	const patch = isOwner
+		? readOwnerPatch(
+				config.stateDir,
+				runId,
+				verdict.candidateSha,
+				verdict.baseSha,
+			)
+		: readRunPatch(config.stateDir, runId, round);
+
+	if (suite.kind !== "found" || patch === null || patch.kind !== "found")
+		throw new ReviewEvidenceUnavailable("review_inputs_missing");
+
+	if (
+		"kind" in patch.receipt &&
+		(patch.receipt.head !== verdict.candidateSha ||
+			patch.receipt.baseSha !== verdict.baseSha ||
+			patch.receipt.heldoutDigest !== verdict.heldoutDigest)
+	)
+		throw new ReviewEvidenceUnavailable("review_binding");
 
 	if (
 		!verdictPasses(verdict) ||
@@ -3583,7 +3614,7 @@ async function candidateReviewInputs(
 		let repairDiff: string | null = null;
 		let previousFindings: ReturnType<typeof reviewFeedback> = [];
 
-		if (round > 0) {
+		if (round > 0 && !isOwner) {
 			const book = (await files.listClaims()).find(
 				(claim) => claim.runId === runId,
 			)?.handoff;
@@ -3622,7 +3653,11 @@ async function candidateReviewInputs(
 					prior.review ?? prior.certification!.review,
 				);
 
-			const previous = readRunPatch(config.stateDir, runId, round - 1);
+			const previous = readRunPatch(
+				config.stateDir,
+				runId,
+				from?.round ?? round - 1,
+			);
 
 			if (previous.kind !== "found")
 				throw new ReviewEvidenceUnavailable("repair_patch_missing");
@@ -3691,14 +3726,17 @@ async function candidateReviewInputs(
 	return {
 		workspace,
 		verdict,
-		builder: patch.receipt.model,
+		builder: "model" in patch.receipt ? patch.receipt.model : "unavailable",
 		families: {
-			builder: await builderFamily(
-				config.stateDir,
-				runId,
-				round,
-				patch.receipt.model,
-			),
+			builder:
+				"model" in patch.receipt
+					? await builderFamily(
+							config.stateDir,
+							runId,
+							round,
+							patch.receipt.model,
+						)
+					: FAMILY_MISSING,
 			accept: suite.receipt.family ?? FAMILY_MISSING,
 		},
 		input: readCapturedReview(stageDir, execution, expected),
@@ -4047,6 +4085,12 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 			fetch: config.fetchTarball,
 			diagnosis,
 		}),
+		ownerValidate: ownerValidator({
+			stateDir: config.stateDir,
+			exec: config.exec,
+			fetch: config.fetchTarball,
+			diagnosis,
+		}),
 		async readFeedback(runId, digest) {
 			return readFeedbackBatch(config.stateDir, runId, digest)?.batch ?? null;
 		},
@@ -4125,7 +4169,13 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 				let kept = readRunPatch(config.stateDir, runId, round);
 
 				if (round > 0 && kept.kind === "found") {
-					const previous = readRunPatch(config.stateDir, runId, round - 1);
+					const previous = readRunPatch(
+						config.stateDir,
+						runId,
+						input.execution?.stage === "build"
+							? input.execution.feedbackFrom.round
+							: round - 1,
+					);
 
 					if (
 						previous.kind !== "found" ||
@@ -4381,7 +4431,11 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 
 			if (build && round > 0 && checked.kind === "ready") {
 				try {
-					const previous = readRunPatch(config.stateDir, runId, round - 1);
+					const previous = readRunPatch(
+						config.stateDir,
+						runId,
+						feedbackFrom?.round ?? round - 1,
+					);
 
 					if (previous.kind !== "found")
 						return { kind: "refused", reason: "repair_patch_missing" };
@@ -4858,7 +4912,9 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 								const previous = readRunPatch(
 									config.stateDir,
 									input.runId,
-									input.round! - 1,
+									input.execution?.stage === "build"
+										? input.execution.feedbackFrom.round
+										: input.round! - 1,
 								);
 
 								const reason =

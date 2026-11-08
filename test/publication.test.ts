@@ -17,6 +17,9 @@ import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import {
 	GitHubPublicationApi,
+	deriveOwnerPatch,
+	readOwnerPatch,
+	ownerPatchPath,
 	candidateBranch,
 	publishCandidate,
 	gitObjectSha,
@@ -93,6 +96,208 @@ const fresh = () => {
 
 after(() => {
 	for (const dir of roots) rmSync(dir, { recursive: true, force: true });
+});
+
+describe("F10-3 owner derivation", () => {
+	async function derive(
+		options: {
+			status?: string;
+			forbidden?: boolean;
+			heldout?: boolean;
+			truncated?: boolean;
+			large?: boolean;
+			omitted?: boolean;
+			symlink?: boolean;
+		} = {},
+	) {
+		assert.ok(isRepoSlug(repo) && isGitSha(baseSha));
+		const stateDir = fresh();
+		const head = "b".repeat(40);
+		assert.ok(isGitSha(head));
+
+		const suite = [
+			{
+				path: "test/acceptance/42/checks/a.ts",
+				mode: "100644" as const,
+				bytes: Buffer.from("PRIVATE-SUITE\n"),
+			},
+		];
+
+		const source = options.forbidden ? ".github/evil.yml" : "src/a.ts";
+		const content = options.large ? "a".repeat(20_000) : "owner\n";
+
+		const base = [
+			{
+				path: source,
+				type: "blob",
+				mode: "100644",
+				sha: gitObjectSha("blob", Buffer.from("base\n")),
+			},
+		];
+
+		if (options.symlink)
+			base.push({
+				path: "test/acceptance/link.ts",
+				type: "blob",
+				mode: "120000",
+				sha: gitObjectSha("blob", Buffer.from("./existing.ts")),
+			});
+
+		const owner = [
+			...base.slice(1),
+			{ ...base[0], sha: gitObjectSha("blob", Buffer.from(content)) },
+			{
+				path: suite[0]!.path,
+				type: "blob",
+				mode: "100644",
+				sha: gitObjectSha(
+					"blob",
+					Buffer.from(options.heldout ? "TAMPER" : "PRIVATE-SUITE\n"),
+				),
+			},
+		];
+
+		const api = new GitHubPublicationApi(async (_command, args) => {
+			assert.ok(!args.includes("POST") && !args.includes("PATCH"));
+			const path = args.at(-1)!;
+
+			const value = path.includes("compare/")
+				? { status: options.status ?? "ahead" }
+				: {
+						truncated: options.truncated ?? false,
+						tree: path.includes(head) ? owner : base,
+					};
+
+			return { code: 0, stdout: JSON.stringify(value), stderr: "" };
+		}, repo);
+
+		const input = {
+			stateDir,
+			runId,
+			head,
+			baseSha,
+			contractDigest: digestOf("contract"),
+			acceptanceDigest: digestOf("acceptance"),
+			heldoutDigest: digestOf("heldout"),
+			suite,
+			checkout: async (sha: GitSha, workspace: string) => {
+				mkdirSync(join(workspace, source, ".."), { recursive: true });
+				writeFileSync(
+					join(workspace, source),
+					sha === head ? content : "base\n",
+				);
+
+				if (sha === head) {
+					mkdirSync(join(workspace, "test/acceptance/42/checks"), {
+						recursive: true,
+					});
+					writeFileSync(join(workspace, suite[0]!.path), "PRIVATE-SUITE\n");
+				}
+
+				if (options.symlink) {
+					mkdirSync(join(workspace, "test/acceptance"), { recursive: true });
+					symlinkSync(
+						"./existing.ts",
+						join(workspace, "test/acceptance/link.ts"),
+					);
+				}
+
+				return !options.omitted;
+			},
+		};
+
+		return { result: await deriveOwnerPatch(api, input), input, api };
+	}
+
+	it("strips heldout at tree level, persists private bytes and adopts C8 replay", async () => {
+		const f = await derive();
+		assert.equal(f.result.kind, "found");
+
+		const read = readOwnerPatch(
+			f.input.stateDir,
+			runId,
+			f.input.head,
+			f.input.baseSha,
+		);
+
+		assert.ok(read);
+		assert.doesNotMatch(read.patch, /PRIVATE-SUITE|test\/acceptance/);
+		assert.deepEqual(read.receipt.changedPaths, ["src/a.ts"]);
+		assert.deepEqual(await deriveOwnerPatch(f.api, f.input), f.result);
+	});
+
+	it("adopts a legacy head-only file only on its recorded base", async () => {
+		const f = await derive();
+
+		const keyed = ownerPatchPath(
+			f.input.stateDir,
+			runId,
+			f.input.head,
+			f.input.baseSha,
+		);
+
+		const legacy = ownerPatchPath(f.input.stateDir, runId, f.input.head);
+		cpSync(keyed, legacy);
+		rmSync(keyed);
+		assert.deepEqual(await deriveOwnerPatch(f.api, f.input), f.result);
+
+		const baseSha = "c".repeat(40);
+		assert.ok(isGitSha(baseSha));
+		assert.equal(
+			readOwnerPatch(f.input.stateDir, runId, f.input.head, baseSha),
+			null,
+		);
+		assert.equal(
+			(await deriveOwnerPatch(f.api, { ...f.input, baseSha })).kind,
+			"found",
+		);
+		assert.deepEqual(await deriveOwnerPatch(f.api, f.input), f.result);
+	});
+
+	it("preserves base acceptance symlink bytes when stripping the suite (review R6)", async () => {
+		const f = await derive({ symlink: true });
+		assert.equal(f.result.kind, "found");
+	});
+
+	it("recertifies a stored head on a new base without losing either patch (review R4)", async () => {
+		const f = await derive();
+		assert.equal(f.result.kind, "found");
+
+		const baseSha = "c".repeat(40);
+		assert.ok(isGitSha(baseSha));
+		const result = await deriveOwnerPatch(f.api, { ...f.input, baseSha });
+		assert.equal(result.kind, "found");
+
+		if (result.kind === "found") assert.equal(result.patch.baseSha, baseSha);
+		assert.equal(
+			readOwnerPatch(f.input.stateDir, runId, f.input.head, baseSha)?.receipt
+				.baseSha,
+			baseSha,
+		);
+		assert.equal(
+			readOwnerPatch(f.input.stateDir, runId, f.input.head, f.input.baseSha)
+				?.receipt.baseSha,
+			f.input.baseSha,
+		);
+		assert.deepEqual(await deriveOwnerPatch(f.api, f.input), f.result);
+	});
+
+	for (const [options, reason] of [
+		[{ heldout: true }, "heldout_changed"],
+		[{ forbidden: true }, "forbidden_path"],
+		[{ status: "behind" }, "behind_main"],
+		[{ status: "diverged" }, "behind_main"],
+		[{ status: "identical" }, "behind_main"],
+		[{ truncated: true }, "unreadable"],
+		[{ omitted: true }, "unreadable"],
+		[{ large: true }, "too_large"],
+	] as const)
+		it(`refuses ${JSON.stringify(options)} as ${reason}`, async () => {
+			assert.deepEqual((await derive(options)).result, {
+				kind: "refused",
+				reason,
+			});
+		});
 });
 
 it("F10-2 feedback checkout binds batch, full text and passed or candidate assessment", async () => {
