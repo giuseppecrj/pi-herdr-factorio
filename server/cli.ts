@@ -1,5 +1,8 @@
-import { execFile as execFileCallback } from "node:child_process";
-import { lstat } from "node:fs/promises";
+import {
+	execFile as execFileCallback,
+	type ExecFileOptionsWithStringEncoding,
+} from "node:child_process";
+import { lstat, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
@@ -58,8 +61,29 @@ import {
 import { sandboxExecutor } from "./sandbox.ts";
 import { runGatesCli } from "./gates.ts";
 import { runViewerCli } from "./viewer.ts";
+import {
+	arrayOf,
+	boolOf,
+	countOf,
+	fieldOf,
+	objectOf,
+	parseJson,
+	textOf,
+} from "./sandbox/json.ts";
+import { parseLedger } from "../src/ledger.ts";
+import {
+	computeMetrics,
+	excludedRunReason,
+	METRIC_POLICY,
+	type Interventions,
+	type InterventionRead,
+	readReceiptDigests,
+	type DefectIssue,
+	type DefectRead,
+} from "../src/metrics.ts";
 
 export const USAGE = `Usage:
+  node server/cli.ts metrics --json --repo <owner/name> [--ledger-file <path>] [--state-dir <dir>] [--now <instant>] [--cohort production] [--offline] [--intervention-file <fixture>]
   node server/cli.ts viewer --state-dir <dir> [--run <id>] [--port <n>] [--allowed-host <authorized.ts.net>] [--base-path </prefix>]
   node server/cli.ts gates --repository <dir> --gate-sha <sha> --candidate-sha <sha> --nonce <id> --output <dir> [--runner docker|local]
   node server/cli.ts workflow-check --json --repo <owner/name> [--ref <branch>] [--reload-ref <branch>]
@@ -369,6 +393,14 @@ type StatusOutput = Omit<StatusReport, "controller"> & {
 type Printable =
 	| StatusOutput
 	| CheckReport
+	| ReturnType<typeof computeMetrics>
+	| {
+			readonly error:
+				| "ledger_unavailable"
+				| "ledger_too_large"
+				| "intervention_fixture_invalid"
+				| "now_after_defect_read";
+	  }
 	| AdmissionReceipt
 	| TickReport
 	| { readonly error: "controller_running"; readonly pid: number | null };
@@ -597,6 +629,492 @@ async function runController(
 	}
 }
 
+function defectIssueOf(value: JsonValue): DefectIssue | null {
+	const record = objectOf(value);
+	const number = countOf(fieldOf(record, "number"));
+	const title = textOf(fieldOf(record, "title"));
+	const body = textOf(fieldOf(record, "body"));
+	const createdAt = textOf(fieldOf(record, "createdAt"));
+	const rawLabels = arrayOf(fieldOf(record, "labels"));
+
+	if (
+		number === null ||
+		number === 0 ||
+		title === null ||
+		body === null ||
+		createdAt === null ||
+		!validMetricInstant(createdAt) ||
+		rawLabels === null
+	)
+		return null;
+	const labels: string[] = [];
+
+	for (const label of rawLabels) {
+		const name = textOf(fieldOf(objectOf(label), "name"));
+
+		if (name === null) return null;
+		labels.push(name);
+	}
+
+	return { number, title, body, createdAt, labels };
+}
+
+function validMetricInstant(value: string): boolean {
+	const time = Date.parse(value);
+
+	return (
+		/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value) &&
+		Number.isFinite(time) &&
+		new Date(time).toISOString() === value.replace(/(?<!\.\d{3})Z$/, ".000Z")
+	);
+}
+
+async function readMetricDefects(repo: string, io: CliIo): Promise<DefectRead> {
+	try {
+		const label = await io.exec(
+			"gh",
+			[
+				"api",
+				`repos/${repo}/labels/${encodeURIComponent(METRIC_POLICY.defect.label)}`,
+			],
+			{ timeoutMs: FETCH_TIMEOUT_MS },
+		);
+
+		if (
+			label.code !== 0 ||
+			textOf(fieldOf(objectOf(parseJson(label.stdout)), "name")) !==
+				METRIC_POLICY.defect.label
+		)
+			return { kind: "unknown", reason: "label_missing" };
+	} catch {
+		return { kind: "unknown", reason: "label_missing" };
+	}
+
+	try {
+		const result = await io.exec(
+			"gh",
+			[
+				"issue",
+				"list",
+				"--repo",
+				repo,
+				"--label",
+				METRIC_POLICY.defect.label,
+				"--state",
+				"all",
+				"--limit",
+				String(METRIC_POLICY.defect.queryLimit),
+				"--json",
+				"number,title,body,createdAt,labels",
+			],
+			{ timeoutMs: FETCH_TIMEOUT_MS },
+		);
+
+		if (result.code !== 0)
+			return { kind: "unknown", reason: "defect_query_failed" };
+		const value = arrayOf(parseJson(result.stdout));
+
+		if (value === null)
+			return { kind: "unknown", reason: "defect_query_invalid" };
+
+		if (value.length >= METRIC_POLICY.defect.queryLimit)
+			return { kind: "unknown", reason: "defect_query_incomplete" };
+		const issues: DefectIssue[] = [];
+
+		for (const item of value) {
+			const issue = defectIssueOf(item);
+
+			if (issue === null)
+				return { kind: "unknown", reason: "defect_query_invalid" };
+			issues.push(issue);
+		}
+
+		return { kind: "known", issues };
+	} catch {
+		return { kind: "unknown", reason: "defect_query_failed" };
+	}
+}
+
+type MetricReview = {
+	id: number | null;
+	state: string;
+	actor: string;
+	bot: boolean;
+	submittedAt: number;
+};
+
+const INTERVENTION_UNREADABLE = {
+	kind: "unknown",
+	reason: "intervention_unreadable",
+} as const;
+
+async function readMetricPages(
+	path: string,
+	io: CliIo,
+): Promise<JsonValue[] | null> {
+	const deadline = Date.now() + FETCH_TIMEOUT_MS;
+	const entries: JsonValue[] = [];
+
+	try {
+		for (let page = 1; page <= 10; page++) {
+			const remaining = deadline - Date.now();
+
+			if (remaining <= 0) return null;
+
+			const result = await io.exec(
+				"gh",
+				["api", `${path}?per_page=100&page=${page}`],
+				{ timeoutMs: remaining },
+			);
+
+			if (result.code !== 0 || Date.now() >= deadline) return null;
+			const items = arrayOf(parseJson(result.stdout));
+
+			if (items === null || items.length > 100) return null;
+			entries.push(...items);
+
+			if (items.length < 100) return entries;
+		}
+	} catch {
+		return null;
+	}
+
+	return null;
+}
+
+async function readMetricReviews(
+	repo: string,
+	pr: number,
+	io: CliIo,
+): Promise<MetricReview[] | null> {
+	const items = await readMetricPages(`repos/${repo}/pulls/${pr}/reviews`, io);
+
+	if (items === null) return null;
+	const reviews: MetricReview[] = [];
+
+	for (const item of items) {
+		const record = objectOf(item);
+		const state = textOf(fieldOf(record, "state"));
+
+		const actor = textOf(fieldOf(objectOf(fieldOf(record, "user")), "login"));
+
+		const submitted = fieldOf(record, "submitted_at");
+
+		if (
+			state === null ||
+			![
+				"APPROVED",
+				"CHANGES_REQUESTED",
+				"COMMENTED",
+				"DISMISSED",
+				"PENDING",
+			].includes(state) ||
+			actor === null ||
+			actor === ""
+		)
+			return null;
+
+		if (state === "PENDING" && submitted === null) continue;
+		const submittedAt = textOf(submitted);
+
+		if (submittedAt === null || !validMetricInstant(submittedAt)) return null;
+		reviews.push({
+			id: countOf(fieldOf(record, "id")),
+			state,
+			actor,
+			bot:
+				actor.toLowerCase().endsWith("[bot]") ||
+				textOf(fieldOf(objectOf(fieldOf(record, "user")), "type")) === "Bot",
+			submittedAt: Date.parse(submittedAt),
+		});
+	}
+
+	const timeline = await readMetricPages(
+		`repos/${repo}/issues/${pr}/timeline`,
+		io,
+	);
+
+	if (timeline === null) return null;
+
+	for (const item of timeline) {
+		const record = objectOf(item);
+		const event = textOf(fieldOf(record, "event"));
+
+		if (event === null) return null;
+
+		if (event !== "review_dismissed") continue;
+		const dismissed = objectOf(fieldOf(record, "dismissed_review"));
+		const state = textOf(fieldOf(dismissed, "state"))?.toUpperCase();
+
+		if (
+			state === undefined ||
+			!["APPROVED", "COMMENTED", "CHANGES_REQUESTED"].includes(state)
+		)
+			return null;
+
+		if (state !== "CHANGES_REQUESTED") continue;
+		const id = countOf(fieldOf(dismissed, "review_id"));
+
+		const original =
+			id === null ? undefined : reviews.find((review) => review.id === id);
+
+		if (original === undefined) return null;
+
+		if (!original.bot) reviews.push({ ...original, state });
+	}
+
+	return reviews;
+}
+
+async function readMetricInterventions(
+	ledger: Uint8Array,
+	repo: string,
+	io: CliIo,
+): Promise<Interventions> {
+	const byPr = new Map<number, MetricReview[] | null>();
+	const result = new Map<string, InterventionRead>();
+
+	for (const line of parseLedger(ledger)) {
+		if (
+			line.kind !== "known" ||
+			line.row.repo !== repo ||
+			excludedRunReason(line.row) !== null ||
+			result.has(line.row.runId)
+		)
+			continue;
+		const row = line.row;
+		const outcome = row.outcome;
+
+		if (outcome.kind !== "landed") continue;
+
+		if (row.pr === null || outcome.mergedAt.kind !== "known") {
+			result.set(row.runId, INTERVENTION_UNREADABLE);
+			continue;
+		}
+
+		const pr = row.pr.number;
+
+		if (!byPr.has(pr)) byPr.set(pr, await readMetricReviews(repo, pr, io));
+		const reviews = byPr.get(pr);
+		const mergedAt = Date.parse(outcome.mergedAt.value);
+		result.set(
+			row.runId,
+			reviews === null || reviews === undefined
+				? INTERVENTION_UNREADABLE
+				: {
+						kind: "known",
+						source: "github_reviews",
+						value: reviews.some(
+							(review) =>
+								review.state === "CHANGES_REQUESTED" &&
+								review.submittedAt < mergedAt &&
+								review.actor.toLowerCase() !==
+									"exe-dev-github-integration[bot]",
+						),
+					},
+		);
+	}
+
+	return result;
+}
+
+async function readInterventionFixture(
+	path: string,
+): Promise<Interventions | null> {
+	try {
+		const value = objectOf(parseJson(await readFile(resolve(path), "utf8")));
+		const landings = arrayOf(fieldOf(value, "landings"));
+
+		if (fieldOf(value, "version") !== 1 || landings === null) return null;
+		const result = new Map<string, InterventionRead>();
+
+		for (const landing of landings) {
+			const entry = objectOf(landing);
+			const runId = textOf(fieldOf(entry, "runId"));
+			const intervention = boolOf(fieldOf(entry, "intervention"));
+
+			if (
+				runId === null ||
+				!/^[a-f0-9]{64}$/.test(runId) ||
+				intervention === null ||
+				result.has(runId)
+			)
+				return null;
+			result.set(runId, {
+				kind: "known",
+				value: intervention,
+				source: "fixture",
+			});
+		}
+
+		return result;
+	} catch {
+		return null;
+	}
+}
+
+async function runMetricsCli(
+	argv: readonly string[],
+	io: CliIo,
+): Promise<number> {
+	let parsed;
+
+	try {
+		parsed = parseArgs({
+			args: [...argv],
+			allowPositionals: true,
+			strict: true,
+			options: {
+				json: { type: "boolean" },
+				repo: { type: "string" },
+				ledger: { type: "string" },
+				"ledger-file": { type: "string" },
+				"intervention-file": { type: "string" },
+				"state-dir": { type: "string" },
+				now: { type: "string" },
+				cohort: { type: "string" },
+				offline: { type: "boolean" },
+			},
+		});
+	} catch {
+		io.stderr(`unrecognized or incomplete metrics options\n${USAGE}\n`);
+
+		return EXIT.usage;
+	}
+
+	const { values, positionals } = parsed;
+
+	if (
+		positionals.length > 0 ||
+		values.json !== true ||
+		values.repo === undefined ||
+		!isRepoSlug(values.repo) ||
+		(values.now !== undefined && !validMetricInstant(values.now)) ||
+		(values.cohort !== undefined && values.cohort !== "production") ||
+		(values.ledger !== undefined && values["ledger-file"] !== undefined) ||
+		values.ledger === "" ||
+		values["ledger-file"] === "" ||
+		values["intervention-file"] === "" ||
+		(values["intervention-file"] !== undefined &&
+			(values.offline !== true ||
+				(values.ledger === undefined &&
+					values["ledger-file"] === undefined))) ||
+		values["state-dir"] === ""
+	) {
+		io.stderr(
+			`metrics requires --json --repo <owner/name>, a UTC --now instant and the production cohort\n${USAGE}\n`,
+		);
+
+		return EXIT.usage;
+	}
+
+	let ledger: Buffer;
+
+	let ledgerError: "ledger_unavailable" | "ledger_too_large" =
+		"ledger_unavailable";
+
+	const ledgerFile = values["ledger-file"] ?? values.ledger;
+
+	try {
+		if (ledgerFile !== undefined) ledger = await readFile(resolve(ledgerFile));
+		else {
+			const result = await io.exec(
+				"git",
+				["show", "refs/remotes/origin/factory/ledger:ledger/runs.jsonl"],
+				{ timeoutMs: FETCH_TIMEOUT_MS },
+			);
+
+			if (result.code !== 0) {
+				if (result.stderr === "metric_ledger_too_large")
+					ledgerError = "ledger_too_large";
+				throw new Error(ledgerError);
+			}
+
+			ledger = Buffer.from(result.stdout);
+		}
+	} catch {
+		io.stdout(json({ error: ledgerError }));
+
+		return EXIT.invalid;
+	}
+
+	const githubDeadline = Date.now() + 120_000;
+
+	const githubIo: CliIo = {
+		...io,
+		exec: async (command, args, options) => {
+			const remaining = githubDeadline - Date.now();
+
+			if (remaining <= 0) throw new Error("metric_github_deadline");
+
+			const result = await io.exec(command, args, {
+				...options,
+				timeoutMs: Math.min(options?.timeoutMs ?? FETCH_TIMEOUT_MS, remaining),
+			});
+
+			if (Date.now() >= githubDeadline)
+				throw new Error("metric_github_deadline");
+
+			return result;
+		},
+	};
+
+	const defects: DefectRead =
+		values.offline === true
+			? { kind: "unknown", reason: "offline" }
+			: await readMetricDefects(values.repo, githubIo);
+
+	const defectReadAt = Date.now();
+
+	if (
+		values.offline !== true &&
+		values.now !== undefined &&
+		Date.parse(values.now) > defectReadAt
+	) {
+		io.stdout(json({ error: "now_after_defect_read" }));
+
+		return EXIT.invalid;
+	}
+
+	const interventions =
+		values["intervention-file"] !== undefined
+			? await readInterventionFixture(values["intervention-file"])
+			: values.offline === true
+				? undefined
+				: await readMetricInterventions(ledger, values.repo, githubIo);
+
+	if (interventions === null) {
+		io.stdout(json({ error: "intervention_fixture_invalid" }));
+
+		return EXIT.invalid;
+	}
+
+	const receiptDigests =
+		values["state-dir"] === undefined
+			? undefined
+			: await readReceiptDigests(
+					resolve(values["state-dir"]),
+					ledger,
+					values.repo,
+				);
+
+	io.stdout(
+		json(
+			computeMetrics({
+				ledger,
+				repo: values.repo,
+				now: values.now ?? new Date(defectReadAt).toISOString(),
+				defects,
+				interventions,
+				receiptDigests,
+				source: ledgerFile === undefined ? "ledger" : "file",
+			}),
+		),
+	);
+
+	return EXIT.ok;
+}
+
 export async function runCli(
 	argv: readonly string[],
 	caller: CliIo,
@@ -605,6 +1123,8 @@ export async function runCli(
 		...caller,
 		stderr: (text) => caller.stderr(redactCredentials(text)),
 	};
+
+	if (argv[0] === "metrics") return runMetricsCli(argv.slice(1), io);
 
 	if (argv[0] === "viewer") return runViewerCli(argv.slice(1), io);
 
@@ -732,16 +1252,26 @@ export async function execFile(
 	args: readonly string[],
 	timeoutMs: number,
 ): Promise<ExecResult> {
+	const metricLedger =
+		command === "git" &&
+		args.length === 2 &&
+		args[0] === "show" &&
+		args[1] === "refs/remotes/origin/factory/ledger:ledger/runs.jsonl";
+
+	const options: ExecFileOptionsWithStringEncoding = {
+		encoding: "utf8",
+		timeout: timeoutMs,
+		maxBuffer: 4 * 1024 * 1024,
+		killSignal: "SIGKILL",
+	};
+
+	if (metricLedger) options.maxBuffer = 256 * 1024 * 1024;
+
 	return new Promise((done, fail) => {
 		const child = execFileCallback(
 			command,
 			[...args],
-			{
-				encoding: "utf8",
-				timeout: timeoutMs,
-				maxBuffer: 4 * 1024 * 1024,
-				killSignal: "SIGKILL",
-			},
+			options,
 			(error, stdout, stderr) => {
 				if (error === null) {
 					done({ stdout, stderr, code: 0 });
@@ -759,7 +1289,12 @@ export async function execFile(
 
 				done({
 					stdout,
-					stderr: timedOut ? `${command} timed out` : stderr || error.message,
+					stderr:
+						metricLedger && error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
+							? "metric_ledger_too_large"
+							: timedOut
+								? `${command} timed out`
+								: stderr || error.message,
 					code: Number.isSafeInteger(error.code) ? Number(error.code) || 1 : 1,
 				});
 			},

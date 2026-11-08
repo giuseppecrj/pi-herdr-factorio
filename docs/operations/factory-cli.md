@@ -7,9 +7,9 @@ node server/cli.ts <command> --json --repo <owner/name> [options]
 node server/cli.ts serve --repo <owner/name> --state-dir <dir> [--issue <number>]...
 ```
 
-Except for `gates` and `viewer`, every command reads `.github/factory/WORKFLOW.md` from GitHub through `gh`, never from the local checkout. It first resolves the branch to a SHA with `gh api repos/<repo>/git/ref/heads/<branch> --jq .object.sha`, then fetches the file at that SHA with `gh api -H 'Accept: application/vnd.github.raw' repos/<repo>/contents/.github/factory/WORKFLOW.md?ref=<sha>`. Ordinary `gh` calls have a 30-second timeout. Ledger publication uses a separate 20-second job slice, with each call capped at the smaller of 5 seconds and the remaining slice. `gh` inherits the environment, including `GH_HOST`. On the VM, set `GH_HOST=github.int.exe.xyz`.
+Except for `metrics`, `gates` and `viewer`, every command reads `.github/factory/WORKFLOW.md` from GitHub through `gh`, never from the local checkout. It first resolves the branch to a SHA with `gh api repos/<repo>/git/ref/heads/<branch> --jq .object.sha`, then fetches the file at that SHA with `gh api -H 'Accept: application/vnd.github.raw' repos/<repo>/contents/.github/factory/WORKFLOW.md?ref=<sha>`. Ordinary `gh` calls have a 30-second timeout. Ledger publication uses a separate 20-second job slice, with each call capped at the smaller of 5 seconds and the remaining slice. `gh` inherits the environment, including `GH_HOST`. On the VM, set `GH_HOST=github.int.exe.xyz`.
 
-`admit` makes more `gh` reads, described below. `tick`, `run`, and `serve` run the controller. They can write markers, summaries, labels, Git objects and refs, dispatch CI, open a PR, request review, and close an issue after an observed merge. They never merge or arm auto-merge. Only these controller commands launch models, inside the stage sandbox. `admit` and the controller write private state under `--state-dir`; `gates` writes its own receipt output directory. The viewer is read-only. See [Review and merge a factory PR](human-review.md) for the owner procedure.
+`admit` makes more `gh` reads, described below. `tick`, `run`, and `serve` run the controller. They can write markers, summaries, labels, Git objects and refs, dispatch CI, open a PR, request review, and close an issue after an observed merge. They never merge or arm auto-merge. Only these controller commands launch models, inside the stage sandbox. `admit` and the controller write private state under `--state-dir`; `gates` writes its own receipt output directory. The viewer and metrics report are read-only. See [Review and merge a factory PR](human-review.md) for the owner procedure.
 
 Errors and warnings carry only text the factory builds itself. They never quote `gh` output, an exec failure, a YAML error message, a key or value from `WORKFLOW.md` or a command-line argument. A second layer still redacts credentials in stdout, stderr and `/factory status` text. Anything shaped like `scheme://user:secret@` is printed as `scheme://<redacted>@`, and the value of a query parameter named `token`, `access_token`, `auth`, `key`, `password`, `secret`, `sig`, `signature` or `code`, in any case, is printed as `<redacted>`. In JSON output this applies to each string value before it is encoded, so it never spans two lines of one value.
 
@@ -23,10 +23,48 @@ node server/cli.ts viewer --state-dir "$STATE" [--run <64-character-id>] [--port
 
 See [Inspect one run's local evidence](viewer.md) for the routes, source limits, session-retention gaps, and owner-authorized Tailscale exposure. `--allowed-host` permits an explicitly authorized Tailscale hostname without changing the loopback bind. `--base-path` prefixes rendered links for a `tailscale serve --set-path` mount. No exposure is enabled by default.
 
+## Ticket outcome metrics
+
+```bash
+node server/cli.ts metrics --json --repo giuseppecrj/pi-herdr-factorio [--ledger-file <path>] [--state-dir <dir>] [--now <instant>] [--cohort production] [--offline] [--intervention-file <fixture>]
+```
+
+`metrics` reads the locally fetched `origin/factory/ledger` ref without loading
+workflow settings or calling a model. `--ledger-file` selects a read-only frozen
+or constructed JSONL input and labels the report `source: file`; `--ledger` is
+an alias. `--state-dir` checks listed receipt digests, with missing or zero
+listed digests unknown. The real ledger never admits a verification cohort.
+
+Online mode confirms that `factory:defect` exists before querying labeled
+issues. The owner must create the label; missing or unconfirmed labels give
+`unknown: label_missing`. A future online `--now` is refused against the actual
+defect-read time. Online mode also reads the landed PR's submitted reviews
+and timeline, once per distinct PR with bounded numbered pagination. A
+non-factory-bot `CHANGES_REQUESTED` review submitted before merge establishes
+intervention. A timeline dismissal of a change request originally submitted
+before merge by a non-bot reviewer still counts; dismissed approvals and
+comments do not. Write permission is deliberately not checked. All GitHub
+reads share a 120-second deadline; unfinished and remaining intervention
+reads become unknown. Owner-authored heads and owner overrides also count.
+`--offline` skips GitHub and keeps review intervention and defect evidence
+unknown unless the ledger itself proves intervention.
+`--intervention-file` supplies labeled fixture facts for tests and verification
+lanes only, with `--offline` and `--ledger-file`; it cannot establish no defects.
+Pending and unknown cohorts have no headline cost per clean landing. Threshold
+flags say "includes immature runs".
+
+Exit 0 prints a report, including pending or unknown. Exit 1 reports an
+unreadable ledger, a ledger over the default 256 MiB read limit, a future
+online evaluation instant or an invalid intervention fixture. Exit 2 is a
+usage error. See [Factory ticket metrics](metrics.md) for maturity, defect
+matching, exclusions, accounting and
+evidence limitations. This command writes no state and takes no action.
+
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
+| `metrics` | Report ticket outcomes and charged tokens; see its separate flags above. |
 | `workflow-check` | Load and validate the workflow. Print the snapshot or the error. |
 | `status` | Print the factory status: package, workflow, models, limits and execution state. |
 | `admit` | Decide whether one issue's latest `factory:ready` label event is admitted. Print the receipt. |
@@ -38,7 +76,7 @@ See [Inspect one run's local evidence](viewer.md) for the routes, source limits,
 
 ## Flags
 
-The flags below describe the workflow and controller commands. `viewer` has its own flags in [Local run viewer](#local-run-viewer).
+The flags below describe the workflow and controller commands. `viewer` has its own flags in [Local run viewer](#local-run-viewer); `metrics` has its own flags in [Ticket outcome metrics](#ticket-outcome-metrics).
 
 | Flag | Commands | Required | Default | Meaning |
 | --- | --- | --- | --- | --- |
