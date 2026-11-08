@@ -9,7 +9,8 @@ import { manifestDigest } from "../server/sandbox/manifest.ts";
 import { join } from "node:path";
 import { digestOf } from "./run.ts";
 import { parseLedger, type LedgerRow } from "./ledger.ts";
-import { isGitSha, type Exec } from "./workflow.ts";
+import { isGitSha, isRepoSlug, parseWorkflow, type Exec } from "./workflow.ts";
+import { execFileSync } from "node:child_process";
 import {
 	arrayOf,
 	boolOf,
@@ -583,8 +584,19 @@ type Reservation = {
 	runId: string | null;
 };
 
+type ReplayPolicyChange = {
+	from: number;
+	to: number;
+	at: number;
+	workflowDigest: string;
+	mainSha: string;
+};
+
+type ReplayPolicySource = { mainSha: string; workflowText: string };
+
 export type ReplayBudget = {
 	v: 1;
+	policyChanges: ReplayPolicyChange[];
 	maxTokens: number | null;
 	reservations: Reservation[];
 	chargedTokens: number;
@@ -601,6 +613,7 @@ export async function readReplayBudget(path: string): Promise<ReplayBudget> {
 			return {
 				v: 1,
 				maxTokens: null,
+				policyChanges: [],
 				reservations: [],
 				chargedTokens: 0,
 				wallMs: 0,
@@ -618,6 +631,38 @@ export async function readReplayBudget(path: string): Promise<ReplayBudget> {
 		maxTokens === 0 ||
 		entries === null
 	)
+		refuse("replay_budget_invalid");
+	const changes = fieldOf(raw, "policyChanges");
+	const policyChanges: ReplayPolicyChange[] = [];
+	const history = changes === undefined ? [] : arrayOf(changes);
+
+	if (history === null) refuse("replay_budget_invalid");
+
+	for (const item of history) {
+		const change = objectOf(item);
+		const from = countOf(fieldOf(change, "from"));
+		const to = countOf(fieldOf(change, "to"));
+		const at = countOf(fieldOf(change, "at"));
+		const workflowDigest = textOf(fieldOf(change, "workflowDigest"));
+		const mainSha = textOf(fieldOf(change, "mainSha"));
+
+		if (
+			from === null ||
+			from < 1 ||
+			to === null ||
+			to <= from ||
+			at === null ||
+			workflowDigest === null ||
+			!DIGEST.test(workflowDigest) ||
+			mainSha === null ||
+			!isGitSha(mainSha) ||
+			(policyChanges.length > 0 && policyChanges.at(-1)?.to !== from)
+		)
+			refuse("replay_budget_invalid");
+		policyChanges.push({ from, to, at, workflowDigest, mainSha });
+	}
+
+	if (policyChanges.length > 0 && policyChanges.at(-1)?.to !== maxTokens)
 		refuse("replay_budget_invalid");
 	const reservations: Reservation[] = [];
 
@@ -645,6 +690,7 @@ export async function readReplayBudget(path: string): Promise<ReplayBudget> {
 	return {
 		v: 1,
 		maxTokens,
+		policyChanges,
 		reservations,
 		chargedTokens: reservations.reduce((n, r) => n + r.tokens, 0),
 		wallMs: reservations.reduce(
@@ -662,10 +708,76 @@ async function saveBudget(path: string, budget: ReplayBudget): Promise<void> {
 	const temp = `${path}.${process.pid}.tmp`;
 	await writeFile(
 		temp,
-		`${JSON.stringify({ v: 1, maxTokens: budget.maxTokens, reservations: budget.reservations })}\n`,
+		`${JSON.stringify({ v: 1, maxTokens: budget.maxTokens, policyChanges: budget.policyChanges, reservations: budget.reservations })}\n`,
 		{ mode: 0o600 },
 	);
 	await rename(temp, path);
+}
+
+export function decideReplayBudget(
+	budget: ReplayBudget,
+	maxTokens: number | null,
+	key?: string,
+) {
+	const reasons: string[] = [];
+
+	const valid =
+		maxTokens !== null && Number.isSafeInteger(maxTokens) && maxTokens > 0;
+
+	const changed = budget.maxTokens !== null && budget.maxTokens !== maxTokens;
+
+	if (
+		changed &&
+		(!valid || (budget.maxTokens !== null && maxTokens < budget.maxTokens))
+	)
+		reasons.push("replay_policy_changed");
+	else if (!valid) reasons.push("replay_disabled");
+
+	if (key !== undefined && budget.reservations.some((r) => r.key === key))
+		reasons.push("replay_already_reserved");
+
+	const remainingTokens = valid
+		? Math.max(0, maxTokens - budget.chargedTokens)
+		: null;
+
+	if (remainingTokens !== null && remainingTokens < REPLAY_RUN_CAP)
+		reasons.push("replay_cap");
+
+	return {
+		reasons,
+		remainingTokens,
+		pendingPolicyChange:
+			valid && budget.maxTokens !== null && maxTokens > budget.maxTokens
+				? { from: budget.maxTokens, to: maxTokens }
+				: null,
+	};
+}
+
+function replayPolicySource(): ReplayPolicySource {
+	try {
+		const mainSha = execFileSync(
+			"git",
+			[
+				"rev-parse",
+				"--verify",
+				`${process.env.REPLAY_MAIN_SHA ?? "refs/remotes/origin/main"}^{commit}`,
+			],
+			{ encoding: "utf8" },
+		).trim();
+
+		if (!isGitSha(mainSha)) refuse("replay_policy_changed");
+
+		return {
+			mainSha,
+			workflowText: execFileSync(
+				"git",
+				["show", `${mainSha}:.github/factory/WORKFLOW.md`],
+				{ encoding: "utf8" },
+			),
+		};
+	} catch {
+		return refuse("replay_policy_changed");
+	}
 }
 
 /** The driver serializes pairs with flock. A retained reservation is a charge, not a refund. */
@@ -673,19 +785,40 @@ export async function reserveReplay(
 	path: string,
 	maxTokens: number,
 	key: string,
+	policySource?: ReplayPolicySource,
 ): Promise<void> {
 	const budget = await readReplayBudget(path);
+	const decision = decideReplayBudget(budget, maxTokens, key);
 
-	if (!Number.isSafeInteger(maxTokens) || maxTokens < 1)
-		refuse("replay_disabled");
+	if (decision.reasons.length > 0)
+		refuse(decision.reasons[0] ?? "replay_policy_changed");
 
-	if (budget.maxTokens !== null && budget.maxTokens !== maxTokens)
-		refuse("replay_policy_changed");
+	if (decision.pendingPolicyChange !== null) {
+		const source = policySource ?? replayPolicySource();
+		const repo = "giuseppecrj/pi-herdr-factorio";
 
-	if (budget.reservations.some((r) => r.key === key))
-		refuse("replay_already_reserved");
+		if (!isGitSha(source.mainSha) || !isRepoSlug(repo))
+			refuse("replay_policy_changed");
 
-	if (maxTokens - budget.chargedTokens < REPLAY_RUN_CAP) refuse("replay_cap");
+		const policy = parseWorkflow({
+			text: source.workflowText,
+			repo,
+			env: (name) => process.env[name],
+		});
+
+		if (
+			policy.kind !== "valid" ||
+			policy.config.replay?.maxTokens !== maxTokens
+		)
+			refuse("replay_policy_changed");
+		budget.policyChanges.push({
+			...decision.pendingPolicyChange,
+			at: Date.now(),
+			mainSha: source.mainSha,
+			workflowDigest: digestOf(source.workflowText),
+		});
+	}
+
 	budget.maxTokens = maxTokens;
 	budget.reservations.push({
 		key,

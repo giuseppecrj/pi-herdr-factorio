@@ -904,6 +904,284 @@ describe("review regressions: comparison identity and caps", () => {
 	});
 });
 
+describe("approved replay cap raises", () => {
+	const text = `---\nrepository: ${repo}\nreplay:\n  max_tokens: 1650000\n---\n`;
+	const policy = { mainSha: sha, workflowText: text };
+
+	async function fixture() {
+		const dir = await mkdtemp(join(tmpdir(), "replay-raise-"));
+		const path = join(dir, "budget.json");
+
+		const reservations = [
+			{
+				key: "settled",
+				status: "settled",
+				tokens: 43274,
+				wallMs: 100,
+				startedAt: 1,
+				outcome: "needs_info",
+				runId: "old",
+			},
+			{
+				key: "retained",
+				status: "reserved",
+				tokens: 540000,
+				wallMs: 0,
+				startedAt: Date.now(),
+				outcome: null,
+				runId: null,
+			},
+		];
+
+		await writeFile(
+			path,
+			JSON.stringify({ v: 1, maxTokens: 1100000, reservations }),
+		);
+
+		return { dir, path, reservations };
+	}
+
+	it("accepts and audits a raise without changing existing charges or reservations", async () => {
+		const { dir, path, reservations } = await fixture();
+
+		try {
+			const before = Date.now();
+			await reserveReplay(path, 1650000, "next", policy);
+			const budget = await readReplayBudget(path);
+			assert.equal(budget.maxTokens, 1650000);
+			assert.deepEqual(budget.reservations.slice(0, 2), reservations);
+			assert.equal(budget.chargedTokens, 1123274);
+			assert.deepEqual(
+				budget.policyChanges?.map(({ at, ...change }) => {
+					assert.ok(at >= before && at <= Date.now());
+
+					return change;
+				}),
+				[
+					{
+						from: 1100000,
+						to: 1650000,
+						mainSha: sha,
+						workflowDigest: digestOf(text),
+					},
+				],
+			);
+			await replay.voidReplay(
+				path,
+				"next",
+				{ complete: true, stages: 0, tokens: 0 },
+				"no_work",
+			);
+			assert.deepEqual(
+				(await readReplayBudget(path)).policyChanges,
+				budget.policyChanges,
+			);
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("refuses lower and malformed caps without writes; equal caps add no audit", async () => {
+		const { dir, path } = await fixture();
+
+		try {
+			const bytes = await readFile(path, "utf8");
+
+			for (const cap of [1000000, NaN, Infinity, 1650000.5]) {
+				await assert.rejects(
+					reserveReplay(path, cap, "next", policy),
+					/replay_policy_changed/,
+				);
+				assert.equal(await readFile(path, "utf8"), bytes);
+			}
+
+			await replay.voidReplay(
+				path,
+				"retained",
+				{ complete: true, stages: 0, tokens: 0 },
+				"no_work",
+			);
+			await reserveReplay(path, 1100000, "equal");
+			assert.deepEqual((await readReplayBudget(path)).policyChanges, []);
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("check previews the real raise without writes and agrees with reserve", async () => {
+		const { dir, path } = await fixture();
+
+		const execute: Exec = async (_cmd, args) => ({
+			code: 0,
+			stdout: args[1]?.endsWith(":src/workflow.ts")
+				? await readFile("src/workflow.ts", "utf8")
+				: args[0] === "show"
+					? text
+					: "",
+			stderr: "",
+		});
+
+		const args = [
+			"replay",
+			"check",
+			"--json",
+			"--corpus",
+			corpusDir,
+			"--main-sha",
+			sha,
+			"--previous-sha",
+			sha,
+			"--candidate-sha",
+			otherSha,
+			"--case",
+			"c3",
+			"--production-state-dir",
+			dir,
+			"--budget-file",
+			path,
+		];
+
+		try {
+			const bytes = await readFile(path, "utf8");
+			const checked = await cli(args, execute);
+			assert.equal(checked.code, EXIT.ok, checked.stdout);
+			const report = JSON.parse(checked.stdout);
+			assert.equal(report.allowed, true);
+			assert.equal(report.budget.remainingTokens, 1066726);
+			assert.deepEqual(report.budget.pendingPolicyChange, {
+				from: 1100000,
+				to: 1650000,
+				mainSha: sha,
+				workflowDigest: digestOf(text),
+			});
+			assert.equal(await readFile(path, "utf8"), bytes);
+			await reserveReplay(path, 1650000, "next", policy);
+			const exhausted = await cli(args, execute);
+			assert.equal(exhausted.code, EXIT.invalid, exhausted.stdout);
+			assert.match(exhausted.stdout, /replay_cap/);
+			await assert.rejects(
+				reserveReplay(path, 1650000, "another", policy),
+				/replay_cap/,
+			);
+
+			const lowerExec: Exec = async (_cmd, argv) => {
+				const result = await execute(_cmd, argv);
+
+				return {
+					...result,
+					stdout: result.stdout.replace("1650000", "1100000"),
+				};
+			};
+
+			const lower = await cli(args, lowerExec);
+			assert.match(lower.stdout, /replay_policy_changed/);
+			await assert.rejects(
+				reserveReplay(path, 1100000, "lower", policy),
+				/replay_policy_changed/,
+			);
+			await writeFile(
+				path,
+				bytes.replace('"maxTokens":1100000', '"maxTokens":"1100000"'),
+			);
+			const malformed = await readFile(path, "utf8");
+			assert.equal((await cli(args, execute)).code, EXIT.invalid);
+			await assert.rejects(
+				reserveReplay(path, 1650000, "bad", policy),
+				/replay_budget_invalid/,
+			);
+			assert.equal(await readFile(path, "utf8"), malformed);
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("uses the driver's frozen main for the existing three-argument reserve call", async () => {
+		const { dir, path } = await fixture();
+
+		try {
+			const git = (args: string[]) =>
+				execFileSync("git", args, { cwd: dir, encoding: "utf8" }).trim();
+
+			git(["init", "--quiet"]);
+			await mkdir(join(dir, ".github/factory"), { recursive: true });
+			await writeFile(join(dir, ".github/factory/WORKFLOW.md"), text);
+			git(["add", ".github/factory/WORKFLOW.md"]);
+			git([
+				"-c",
+				"user.name=Replay Test",
+				"-c",
+				"user.email=replay@example.invalid",
+				"-c",
+				"commit.gpgsign=false",
+				"commit",
+				"--quiet",
+				"-m",
+				"frozen policy",
+			]);
+			const mainSha = git(["rev-parse", "HEAD"]);
+			const script = `import { reserveReplay } from ${JSON.stringify(new URL("../src/replay.ts", import.meta.url).href)}; await reserveReplay(${JSON.stringify(path)}, 1650000, 'next');`;
+			execFileSync(
+				process.execPath,
+				["--experimental-strip-types", "--input-type=module", "-e", script],
+				{ cwd: dir, env: { ...process.env, REPLAY_MAIN_SHA: mainSha } },
+			);
+			assert.deepEqual(
+				(await readReplayBudget(path)).policyChanges.map(
+					({ at, ...change }) => {
+						assert.ok(at > 0);
+
+						return change;
+					},
+				),
+				[
+					{
+						from: 1100000,
+						to: 1650000,
+						mainSha,
+						workflowDigest: digestOf(text),
+					},
+				],
+			);
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("refuses unproven raises and malformed audit history without writes", async () => {
+		const { dir, path } = await fixture();
+
+		try {
+			const bytes = await readFile(path, "utf8");
+			await assert.rejects(
+				reserveReplay(path, 1650000, "next", {
+					...policy,
+					workflowText: text.replace("1650000", "1100000"),
+				}),
+				/replay_policy_changed/,
+			);
+			assert.equal(await readFile(path, "utf8"), bytes);
+			await writeFile(
+				path,
+				JSON.stringify({
+					...JSON.parse(bytes),
+					policyChanges: [
+						{
+							from: 1650000,
+							to: 1100000,
+							at: 1,
+							mainSha: sha,
+							workflowDigest: digestOf(text),
+						},
+					],
+				}),
+			);
+			await assert.rejects(readReplayBudget(path), /replay_budget_invalid/);
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+});
+
 describe("capped replay budget", () => {
 	it("reserves a full run, charges failures, retains interrupted reservations and refuses insufficient room", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "replay-budget-"));
@@ -984,7 +1262,7 @@ describe("capped replay budget", () => {
 			assert.equal(b.chargedTokens, 567000);
 			assert.ok(b.wallMs >= 0);
 			await assert.rejects(
-				reserveReplay(path, 1100001, "changed-cap"),
+				reserveReplay(path, 1099999, "changed-cap"),
 				/replay_policy_changed/,
 			);
 		} finally {
