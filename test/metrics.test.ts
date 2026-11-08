@@ -28,6 +28,7 @@ import { digestOf, runIdOf } from "../src/run.ts";
 import { isRepoSlug, type Exec } from "../src/workflow.ts";
 
 const repo = "giuseppecrj/pi-herdr-factorio";
+
 const fixture = readFileSync(
 	new URL("./fixtures/metrics/runs-2026-11-08.jsonl", import.meta.url),
 );
@@ -89,8 +90,12 @@ function synthetic(issue = 100, eventId = "100"): LedgerRowV1 {
 
 const bytesOf = (input: readonly LedgerRow[]) =>
 	Buffer.concat(input.map((row) => ledgerRow(row).bytes));
-const report = (input: readonly LedgerRow[], defects = none, now = matureAt) =>
-	computeMetrics({ ledger: bytesOf(input), repo, now, defects });
+
+const report = (
+	input: readonly LedgerRow[],
+	defects: DefectRead = none,
+	now = matureAt,
+) => computeMetrics({ ledger: bytesOf(input), repo, now, defects });
 
 const ticketOf = (value: ReturnType<typeof computeMetrics>, issue = 100) => {
 	const ticket = value.tickets.find((item) => item.issue === issue);
@@ -113,6 +118,7 @@ const defect = (
 async function cli(args: string[], exec?: Exec) {
 	let stdout = "",
 		stderr = "";
+
 	const calls: string[][] = [];
 
 	const code = await runCli(args, {
@@ -161,12 +167,14 @@ describe("factory metrics", () => {
 	it("pins all 26 canonical public rows and excludes verification plus all three fixture IDs", () => {
 		assert.equal(rows.length, 26);
 		assert.equal(EXCLUDED_RUNS.length, 3);
+
 		const value = computeMetrics({
 			ledger: fixture,
 			repo,
 			now: "2026-11-08T06:00:00Z",
 			defects: none,
 		});
+
 		assert.equal(value.primary.denominator, 2);
 		assert.equal(value.runs, 12);
 		assert.equal(value.excluded.length, 14);
@@ -182,6 +190,28 @@ describe("factory metrics", () => {
 		}
 	});
 
+	it("excludes a legacy verification manifest but keeps unmarked legacy imports flagged", () => {
+		const legacy = rows[21];
+		assert.ok(legacy?.v === 4 && legacy.runContext.kind === "legacy");
+		assert.equal(excludedRunReason(legacy), null);
+		assert.equal(
+			excludedRunReason({
+				...legacy,
+				runContext: {
+					...legacy.runContext,
+					known: {
+						...legacy.runContext.known,
+						verification: {
+							manifestDigest: digestOf("verification"),
+							effectiveCap: 800_000,
+						},
+					},
+				},
+			}),
+			"verification_manifest",
+		);
+	});
+
 	it("groups all nine attempts of 625 once and charges repaired and owner-feedback landings", () => {
 		const value = computeMetrics({
 			ledger: fixture,
@@ -189,6 +219,7 @@ describe("factory metrics", () => {
 			now: "2026-11-20T00:00:00Z",
 			defects: none,
 		});
+
 		assert.equal(ticketOf(value, 625).attempts.length, 9);
 		assert.equal(ticketOf(value, 625).tokens, 3_488_382);
 		assert.equal(ticketOf(value, 645).tokens, 664_554);
@@ -205,16 +236,20 @@ describe("factory metrics", () => {
 		assert.ok(
 			value.tickets.every((ticket) => ticket.landings[0]?.certifiedRound === 1),
 		);
-		assert.ok(value.legacyRuns.includes(rows[21]?.runId ?? ""));
+		const legacy = rows[21];
+		assert.ok(legacy);
+		assert.ok(value.legacyRuns.includes(legacy.runId));
 	});
 
 	it("counts a previousRunId clarification chain once, but keeps all tokens", () => {
 		const first = synthetic();
 		const next = synthetic(100, "101");
+
 		const value = report([
 			{ ...first, outcome: { kind: "needs_info", stage: "specify" } },
 			{ ...next, previousRunId: { kind: "known", value: first.runId } },
 		]);
+
 		assert.equal(value.primary.denominator, 1);
 		assert.equal(value.primary.numerator, 1);
 		assert.equal(value.tokensPerCleanLanding, 200);
@@ -225,6 +260,7 @@ describe("factory metrics", () => {
 		const row = synthetic();
 		const otherRepo = "someone/else";
 		assert.ok(isRepoSlug(otherRepo));
+
 		const other = {
 			...row,
 			repo: otherRepo,
@@ -239,6 +275,7 @@ describe("factory metrics", () => {
 				ciUrls: [],
 			},
 		};
+
 		const value = report([row, other]);
 		assert.equal(value.primary.denominator, 1);
 		assert.equal(value.tokens.total, 100);
@@ -249,6 +286,7 @@ describe("factory metrics", () => {
 		assert.ok(row.artifacts.kind === "candidate");
 		const generation = row.artifacts.generations[0];
 		assert.ok(generation);
+
 		const value = report([
 			{
 				...row,
@@ -262,6 +300,7 @@ describe("factory metrics", () => {
 				},
 			},
 		]);
+
 		assert.equal(value.primary.numerator, 1);
 		assert.equal(ticketOf(value).landings[0]?.certifiedRound, 0);
 	});
@@ -269,12 +308,14 @@ describe("factory metrics", () => {
 	it("does not count owner overrides as clean", () => {
 		const row = synthetic();
 		assert.ok(row.outcome.kind === "landed");
+
 		const value = report([
 			{
 				...row,
 				outcome: { ...row.outcome, assurance: { kind: "owner_override" } },
 			},
 		]);
+
 		assert.equal(value.primary.numerator, 0);
 		assert.equal(ticketOf(value).status, "landed_not_clean");
 	});
@@ -287,6 +328,7 @@ describe("factory metrics", () => {
 				row.outcome.assurance.kind === "factory_verified" &&
 				row.artifacts.kind === "candidate",
 		);
+
 		const owner = ledgerRow({
 			...row,
 			v: 5,
@@ -299,9 +341,52 @@ describe("factory metrics", () => {
 				assurance: { ...row.outcome.assurance, authored: "owner" },
 			},
 		}).row;
+
 		assert.equal(
 			report([owner], none, "2026-11-20T00:00:00Z").primary.numerator,
 			0,
+		);
+	});
+
+	it("counts a ticket clean when any mature landing is clean, charging every landing", () => {
+		const first = synthetic();
+		assert.ok(first.outcome.kind === "landed");
+
+		const value = report([
+			{
+				...first,
+				outcome: { ...first.outcome, assurance: { kind: "owner_override" } },
+			},
+			synthetic(100, "101"),
+		]);
+
+		assert.equal(value.primary.numerator, 1);
+		assert.equal(value.primary.denominator, 1);
+		assert.equal(value.tokensPerCleanLanding, 200);
+	});
+
+	it("reports ambiguous certified generations as unknown", () => {
+		const row = synthetic();
+		assert.ok(row.artifacts.kind === "candidate");
+		const generation = row.artifacts.generations[0];
+		assert.ok(generation);
+
+		const value = report([
+			{
+				...row,
+				artifacts: {
+					...row.artifacts,
+					generations: [generation, { ...generation, round: 1 }],
+				},
+			},
+		]);
+
+		assert.equal(ticketOf(value).status, "unknown");
+		assert.equal(value.primary.numerator, 0);
+		assert.ok(
+			value.unknowns.some(
+				(entry) => entry.reason === "certified_generation_unavailable",
+			),
 		);
 	});
 
@@ -332,6 +417,7 @@ describe("factory metrics", () => {
 				outcome,
 			})),
 		);
+
 		assert.equal(value.tokens.total, 500);
 		assert.equal(value.primary.denominator, 1);
 		assert.equal(value.primary.numerator, 0);
@@ -353,6 +439,7 @@ describe("factory metrics", () => {
 
 	it("reports the cohort pending if any ticket is immature", () => {
 		const row = synthetic(101);
+
 		const value = report([
 			synthetic(),
 			{
@@ -361,6 +448,7 @@ describe("factory metrics", () => {
 				outcome: { kind: "needs_info", stage: "specify" },
 			},
 		]);
+
 		assert.equal(value.status, "pending");
 		assert.equal(value.primary.matureTickets, 1);
 		assert.equal(value.primary.pendingTickets, 1);
@@ -369,17 +457,20 @@ describe("factory metrics", () => {
 
 	it("uses the last terminal observation to mature not-landed tickets", () => {
 		const row = synthetic();
+
 		const value = report(
 			[{ ...row, outcome: { kind: "needs_info", stage: "specify" } }],
 			none,
 			"2026-11-07T23:59:59Z",
 		);
+
 		assert.equal(ticketOf(value).status, "pending");
 	});
 
 	it("missing merge time is unknown and never clean", () => {
 		const row = synthetic();
 		assert.ok(row.outcome.kind === "landed");
+
 		const value = report([
 			{
 				...row,
@@ -392,6 +483,7 @@ describe("factory metrics", () => {
 				},
 			},
 		]);
+
 		assert.equal(ticketOf(value).status, "unknown");
 		assert.equal(value.primary.numerator, 0);
 		assert.ok(
@@ -412,6 +504,7 @@ describe("factory metrics", () => {
 				kind: "known",
 				issues: [defect(`Regression in ${reference}.`)],
 			});
+
 			assert.equal(value.primary.numerator, 0);
 			assert.deepEqual(ticketOf(value).landings[0]?.defect, {
 				kind: "linked",
@@ -463,6 +556,7 @@ describe("factory metrics", () => {
 			now: matureAt,
 			defects: none,
 		});
+
 		assert.equal(value.status, "unknown");
 		assert.equal(
 			value.unknowns.filter((entry) => entry.kind === "ledger").length,
@@ -477,6 +571,29 @@ describe("factory metrics", () => {
 		const value = report([row, row]);
 		assert.equal(value.tokens.total, 100);
 		assert.ok(value.unknowns.some((entry) => entry.reason === "duplicate_run"));
+	});
+
+	it("lists uncertain charged tokens without calling them exact", () => {
+		const row = synthetic();
+
+		const value = report([
+			{
+				...row,
+				usage: {
+					...row.usage,
+					tokens: {
+						kind: "uncertain",
+						unit: "tokens",
+						total: 100,
+						reason: "request_unsettled",
+					},
+				},
+			},
+		]);
+
+		assert.equal(value.tokens.total, 100);
+		assert.equal(value.tokens.coverage, "uncertain");
+		assert.deepEqual(value.tokens.uncertainRuns, [row.runId]);
 	});
 
 	it("reports insufficient data for an empty cohort", () => {
@@ -500,6 +617,7 @@ describe("factory metrics", () => {
 			now: "2026-11-08T06:00:00Z",
 			defects: none,
 		});
+
 		const pressure = value.deferred.contextPressure;
 		assert.equal(pressure.promptCapHit.count, 4);
 		assert.equal(pressure.promptCapHit.denominator, 4);
@@ -533,6 +651,7 @@ describe("factory metrics", () => {
 				value: { promptCapHit: at === 0, truncated: true },
 			},
 		}));
+
 		const at = report(input).deferred.contextPressure;
 		assert.equal(at.promptCapHit.share, 0.1);
 		assert.equal(at.promptCapHit.belowThreshold, false);
@@ -553,13 +672,16 @@ describe("factory metrics", () => {
 		const ledger = bytesOf(
 			Array.from({ length: 1000 }, (_, at) => synthetic(at + 1000)),
 		);
+
 		const start = performance.now();
+
 		const value = computeMetrics({
 			ledger,
 			repo,
 			now: matureAt,
 			defects: none,
 		});
+
 		const elapsed = performance.now() - start;
 		context.diagnostic(`1000 rows: ${elapsed.toFixed(2)} ms`);
 		assert.equal(value.primary.denominator, 1000);
@@ -594,6 +716,7 @@ describe("metrics CLI", () => {
 					stdout,
 					stderr: "",
 				}));
+
 				assert.equal(value.code, EXIT.ok);
 				assert.equal(value.calls.length, 1);
 				assert.deepEqual(value.calls[0]?.slice(0, 3), ["gh", "issue", "list"]);
@@ -662,10 +785,12 @@ describe("metrics CLI", () => {
 			const receipt = Buffer.from(
 				'{"version":1,"runId":"public","stage":"build"}\n',
 			);
+
 			const row = {
 				...synthetic(),
 				redactedReceiptDigests: [digestOf(receipt)],
 			};
+
 			writeFileSync(path, bytesOf([row]));
 			const args = [...cliArgs(path), "--state-dir", dir];
 			const exec: Exec = async () => ({ code: 0, stdout: "[]", stderr: "" });
@@ -693,6 +818,54 @@ describe("metrics CLI", () => {
 		});
 	});
 
+	it("keeps an immature cohort pending even when a receipt is unknown", async () => {
+		await withLedger(async (path, dir) => {
+			writeFileSync(
+				path,
+				bytesOf([
+					{ ...synthetic(), redactedReceiptDigests: [digestOf("missing")] },
+				]),
+			);
+
+			const value = await cli([
+				...cliArgs(path),
+				"--now",
+				"2026-11-07T00:00:00Z",
+				"--offline",
+				"--state-dir",
+				dir,
+			]);
+
+			assert.equal(value.code, EXIT.ok);
+			const output = JSON.parse(value.stdout);
+			assert.equal(output.status, "pending");
+			assert.equal(output.tickets[0].status, "unknown");
+			assert.equal(output.primary.numerator, 0);
+		});
+	});
+
+	it("queries defects through the CLI without exporting issue text", async () => {
+		await withLedger(async (path) => {
+			const value = await cli(cliArgs(path), async () => ({
+				code: 0,
+				stdout: JSON.stringify([
+					{
+						...defect("private words #100"),
+						labels: [{ name: "factory:defect" }],
+					},
+				]),
+				stderr: "",
+			}));
+
+			assert.equal(value.code, EXIT.ok);
+			assert.equal(
+				JSON.parse(value.stdout).tickets[0].status,
+				"landed_not_clean",
+			);
+			assert.doesNotMatch(value.stdout, /private words/);
+		});
+	});
+
 	it("rejects wrong options and does not fetch or execute on usage errors", async () => {
 		for (const args of [
 			["metrics", "--repo", repo],
@@ -712,6 +885,7 @@ describe("metrics CLI", () => {
 			...cliArgs("/missing/metrics-ledger"),
 			"--offline",
 		]);
+
 		assert.equal(value.code, EXIT.invalid);
 		assert.equal(JSON.parse(value.stdout).error, "ledger_unavailable");
 	});

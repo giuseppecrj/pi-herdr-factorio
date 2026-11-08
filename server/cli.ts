@@ -1,5 +1,5 @@
 import { execFile as execFileCallback } from "node:child_process";
-import { lstat } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
@@ -58,8 +58,24 @@ import {
 import { sandboxExecutor } from "./sandbox.ts";
 import { runGatesCli } from "./gates.ts";
 import { runViewerCli } from "./viewer.ts";
+import {
+	arrayOf,
+	countOf,
+	fieldOf,
+	objectOf,
+	parseJson,
+	textOf,
+} from "./sandbox/json.ts";
+import {
+	computeMetrics,
+	METRIC_POLICY,
+	readReceiptDigests,
+	type DefectIssue,
+	type DefectRead,
+} from "../src/metrics.ts";
 
 export const USAGE = `Usage:
+  node server/cli.ts metrics --json --repo <owner/name> [--ledger <file>] [--state-dir <dir>] [--now <instant>] [--cohort production] [--offline]
   node server/cli.ts viewer --state-dir <dir> [--run <id>] [--port <n>] [--allowed-host <authorized.ts.net>] [--base-path </prefix>]
   node server/cli.ts gates --repository <dir> --gate-sha <sha> --candidate-sha <sha> --nonce <id> --output <dir> [--runner docker|local]
   node server/cli.ts workflow-check --json --repo <owner/name> [--ref <branch>] [--reload-ref <branch>]
@@ -369,6 +385,8 @@ type StatusOutput = Omit<StatusReport, "controller"> & {
 type Printable =
 	| StatusOutput
 	| CheckReport
+	| ReturnType<typeof computeMetrics>
+	| { readonly error: "ledger_unavailable" }
 	| AdmissionReceipt
 	| TickReport
 	| { readonly error: "controller_running"; readonly pid: number | null };
@@ -597,6 +615,190 @@ async function runController(
 	}
 }
 
+function defectIssueOf(value: JsonValue): DefectIssue | null {
+	const record = objectOf(value);
+	const number = countOf(fieldOf(record, "number"));
+	const title = textOf(fieldOf(record, "title"));
+	const body = textOf(fieldOf(record, "body"));
+	const createdAt = textOf(fieldOf(record, "createdAt"));
+	const rawLabels = arrayOf(fieldOf(record, "labels"));
+
+	if (
+		number === null ||
+		number === 0 ||
+		title === null ||
+		body === null ||
+		createdAt === null ||
+		!validMetricInstant(createdAt) ||
+		rawLabels === null
+	)
+		return null;
+	const labels: string[] = [];
+
+	for (const label of rawLabels) {
+		const name = textOf(fieldOf(objectOf(label), "name"));
+
+		if (name === null) return null;
+		labels.push(name);
+	}
+
+	return { number, title, body, createdAt, labels };
+}
+
+function validMetricInstant(value: string): boolean {
+	const time = Date.parse(value);
+
+	return (
+		/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value) &&
+		Number.isFinite(time) &&
+		new Date(time).toISOString() === value.replace(/(?<!\.\d{3})Z$/, ".000Z")
+	);
+}
+
+async function readMetricDefects(repo: string, io: CliIo): Promise<DefectRead> {
+	try {
+		const result = await io.exec(
+			"gh",
+			[
+				"issue",
+				"list",
+				"--repo",
+				repo,
+				"--label",
+				METRIC_POLICY.defect.label,
+				"--state",
+				"all",
+				"--limit",
+				String(METRIC_POLICY.defect.queryLimit),
+				"--json",
+				"number,title,body,createdAt,labels",
+			],
+			{ timeoutMs: FETCH_TIMEOUT_MS },
+		);
+
+		if (result.code !== 0)
+			return { kind: "unknown", reason: "defect_query_failed" };
+		const value = arrayOf(parseJson(result.stdout));
+
+		if (value === null)
+			return { kind: "unknown", reason: "defect_query_invalid" };
+
+		if (value.length >= METRIC_POLICY.defect.queryLimit)
+			return { kind: "unknown", reason: "defect_query_incomplete" };
+		const issues: DefectIssue[] = [];
+
+		for (const item of value) {
+			const issue = defectIssueOf(item);
+
+			if (issue === null)
+				return { kind: "unknown", reason: "defect_query_invalid" };
+			issues.push(issue);
+		}
+
+		return { kind: "known", issues };
+	} catch {
+		return { kind: "unknown", reason: "defect_query_failed" };
+	}
+}
+
+async function runMetricsCli(
+	argv: readonly string[],
+	io: CliIo,
+): Promise<number> {
+	let parsed;
+
+	try {
+		parsed = parseArgs({
+			args: [...argv],
+			allowPositionals: true,
+			strict: true,
+			options: {
+				json: { type: "boolean" },
+				repo: { type: "string" },
+				ledger: { type: "string" },
+				"state-dir": { type: "string" },
+				now: { type: "string" },
+				cohort: { type: "string" },
+				offline: { type: "boolean" },
+			},
+		});
+	} catch {
+		io.stderr(`unrecognized or incomplete metrics options\n${USAGE}\n`);
+
+		return EXIT.usage;
+	}
+
+	const { values, positionals } = parsed;
+
+	if (
+		positionals.length > 0 ||
+		values.json !== true ||
+		values.repo === undefined ||
+		!isRepoSlug(values.repo) ||
+		(values.now !== undefined && !validMetricInstant(values.now)) ||
+		(values.cohort !== undefined && values.cohort !== "production") ||
+		values.ledger === "" ||
+		values["state-dir"] === ""
+	) {
+		io.stderr(
+			`metrics requires --json --repo <owner/name>, a UTC --now instant and the production cohort\n${USAGE}\n`,
+		);
+
+		return EXIT.usage;
+	}
+
+	let ledger: Buffer;
+
+	try {
+		if (values.ledger !== undefined)
+			ledger = await readFile(resolve(values.ledger));
+		else {
+			const result = await io.exec(
+				"git",
+				["show", "refs/remotes/origin/factory/ledger:ledger/runs.jsonl"],
+				{ timeoutMs: FETCH_TIMEOUT_MS },
+			);
+
+			if (result.code !== 0) throw new Error("ledger_unavailable");
+			ledger = Buffer.from(result.stdout);
+		}
+	} catch {
+		io.stdout(json({ error: "ledger_unavailable" }));
+
+		return EXIT.invalid;
+	}
+
+	const defects: DefectRead =
+		values.offline === true
+			? { kind: "unknown", reason: "offline" }
+			: await readMetricDefects(values.repo, io);
+
+	const receiptDigests =
+		values["state-dir"] === undefined
+			? undefined
+			: await readReceiptDigests(
+					resolve(values["state-dir"]),
+					ledger,
+					values.repo,
+				);
+
+	io.stdout(
+		json(
+			computeMetrics({
+				ledger,
+				repo: values.repo,
+				now:
+					values.now ??
+					new Date(io.runtime?.clock.now() ?? Date.now()).toISOString(),
+				defects,
+				receiptDigests,
+			}),
+		),
+	);
+
+	return EXIT.ok;
+}
+
 export async function runCli(
 	argv: readonly string[],
 	caller: CliIo,
@@ -605,6 +807,8 @@ export async function runCli(
 		...caller,
 		stderr: (text) => caller.stderr(redactCredentials(text)),
 	};
+
+	if (argv[0] === "metrics") return runMetricsCli(argv.slice(1), io);
 
 	if (argv[0] === "viewer") return runViewerCli(argv.slice(1), io);
 
