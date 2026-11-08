@@ -118,6 +118,9 @@ import {
 } from "../src/ledger.ts";
 import {
 	GitHubPublicationApi,
+	storeOwnerPatch,
+	readOwnerPatch,
+	ownerPatchPath,
 	readLedgerFile,
 	PublicationError,
 } from "../src/publication.ts";
@@ -11574,7 +11577,7 @@ describe("controller-only validate", () => {
 			assert.equal(window === "create" ? creates : comments, 1);
 		});
 
-	it("F10-3 restarts C8 derivation and routes owner generations to the owner validator without a build", async () => {
+	it("F10-3 crashes after the C8 owner file write, adopts it after restart and settles owner review without a build (review R8)", async () => {
 		const f = await reviewingRun();
 		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
 		await once(f.controller);
@@ -11595,7 +11598,21 @@ describe("controller-only validate", () => {
 			},
 		});
 		const execute = port.execute;
+		const root = stateDir();
 		let attempts = 0;
+		let patchReads = 0;
+
+		const ownerPort = controllerCandidatePort({
+			stateDir: root,
+			exec: f.github.exec,
+		});
+
+		port.patch = async (state, round) => {
+			patchReads++;
+
+			return ownerPort.patch(state, round);
+		};
+
 		port.execute = async (state, request) => {
 			if (request.kind === "post_notice")
 				return { kind: "post_notice", request };
@@ -11603,14 +11620,10 @@ describe("controller-only validate", () => {
 			if (request.kind !== "derive_owner_patch") return execute(state, request);
 			attempts++;
 
-			if (attempts === 1) return null;
-
-			return {
-				kind: "derive_owner_patch",
-				request,
-				result: {
-					kind: "found",
-					patch: {
+			if (attempts === 1) {
+				storeOwnerPatch(
+					root,
+					{
 						version: 1,
 						kind: "owner",
 						runId: state.pin.runId,
@@ -11623,18 +11636,88 @@ describe("controller-only validate", () => {
 						changedPaths: ["src/example.ts"],
 						policy: "clean",
 					},
-				},
+					"owner",
+				);
+				throw new Error(
+					"C8 crash after durable owner file, before book completion",
+				);
+			}
+
+			const stored = readOwnerPatch(root, state.pin.runId, head);
+			assert.ok(stored);
+
+			return {
+				kind: "derive_owner_patch",
+				request,
+				result: { kind: "found", patch: stored.receipt },
 			};
 		};
 
 		let ownerCalls = 0;
-		const validate = f.executor.validate;
+
+		const verdict = {
+			...initial.current.verdict!,
+			candidateSha: head,
+			patchDigest: digestOf("owner"),
+		};
+
 		f.executor.ownerValidate = async (input) => {
 			ownerCalls++;
 			assert.equal(input.generation?.origin.kind, "owner");
 
-			return validate(input);
+			const state = {
+				...initial.current.validation!,
+				publication: {
+					branch: `factory/run/14-${input.runId.slice(0, 12)}-r0-g1`,
+					patchSha: head,
+					candidateSha: head,
+				},
+			};
+
+			await input.save(state);
+
+			return {
+				kind: "finished",
+				state,
+				verdict,
+				report: reportOf(verdict),
+				assessment: f.executor.assess(input, verdict),
+			};
 		};
+
+		f.executor.prepareReview = async ({ workspace, execution }) => ({
+			workspace,
+			verdict,
+			builder: "unavailable",
+			input: {
+				binding: execution!.binding,
+				seats: ["code-review", "security-review", "simplify"],
+				files: new Map(),
+				scenarios: [],
+				prompt: "review owner",
+			},
+		});
+		f.executor.output = async ({ execution }) => {
+			assert.ok(execution?.stage === "review");
+
+			return {
+				kind: "review",
+				receipt: {
+					...initial.current.certification!.review,
+					...execution.binding,
+					version: 3,
+					builder: { kind: "unavailable", reason: "missing" },
+					accept: { kind: "unavailable", reason: "missing" },
+					seats: initial.current.certification!.review.seats.map((s) => ({
+						...s,
+						family: { kind: "unavailable", reason: "missing" },
+						label: "context-isolated, unknown family, not cross-family",
+					})),
+				},
+			};
+		};
+
+		f.executor.behaviors = [{ kind: "pass", usage: 19 }];
 
 		f.executor.validate = async () => {
 			throw new Error("factory validator reached");
@@ -11642,9 +11725,18 @@ describe("controller-only validate", () => {
 
 		const launches = f.executor.launches.length;
 
-		for (let tick = 0; tick < 8 && attempts === 0; tick++)
-			await f.controller.tick();
+		await assert.rejects(async () => {
+			for (let tick = 0; tick < 8 && attempts === 0; tick++)
+				await f.controller.tick();
+		}, /C8 crash/);
 		assert.equal(attempts, 1);
+		assert.ok(existsSync(ownerPatchPath(root, initial.pin.runId, head)));
+		const saved = f.files.claims.get(runOf(14))?.handoff;
+		assert.ok(
+			saved?.kind === "selected" &&
+				saved.work.kind === "effect" &&
+				saved.work.request.kind === "derive_owner_patch",
+		);
 		const restarted = f.start();
 
 		for (let tick = 0; tick < 8 && ownerCalls === 0; tick++)
@@ -11652,6 +11744,20 @@ describe("controller-only validate", () => {
 		assert.equal(ownerCalls, 1);
 		assert.equal(attempts, 2);
 		assert.equal(f.executor.launches.length, launches);
+
+		for (let tick = 0; tick < 12; tick++) {
+			await restarted.tick();
+			await new Promise((resolve) => setImmediate(resolve));
+		}
+
+		const completed = f.files.claims.get(runOf(14))?.handoff;
+		assert.ok(completed?.kind === "selected");
+		assert.ok(completed.current.certification);
+		assert.equal(completed.current.intent.origin.kind, "owner");
+		assert.equal(completed.published?.readiness.kind, "ready");
+		assert.equal(patchReads, 1);
+		assert.equal(f.executor.launches.length, launches + 1);
+		assert.equal(f.executor.launches.at(-1)?.stage, "review");
 	});
 
 	for (const restart of [false, true])

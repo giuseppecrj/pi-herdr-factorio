@@ -845,8 +845,8 @@ test("F10-3 reset after owner validation failure restores the historical certifi
 	);
 
 	assert.equal(ready.published?.readiness.kind, "ready");
-	assert.deepEqual(ready.history, held.history);
-	assert.deepEqual(ready.current, held.current);
+	assert.deepEqual(ready.current, f.start.current);
+	assert.deepEqual(ready.history, [held.current]);
 	assert.equal(candidateUsage(ready), candidateUsage(held));
 	assert.equal(handoffCandidate(ready, readyObservation(f.start)).effect, null);
 	assert.equal(
@@ -974,6 +974,268 @@ test("F10-3 failing gates and failed or blocking review hold with one head notic
 		}).effect,
 		null,
 	);
+});
+
+test("F10-3 reset feedback repairs the restored factory generation (review R1)", () => {
+	const f = ownerSelected();
+	const failed = validated(f.state, false);
+	const notice = pending(failed, "post_notice");
+
+	const held = handoffCandidate(failed, {
+		kind: "effect_completed",
+		completion: { kind: "post_notice", request: notice },
+	}).state;
+
+	const resetting = handoffCandidate(held, readyObservation(f.start)).state;
+	const complete = pending(resetting, "complete_handoff");
+
+	const ready = handoffCandidate(resetting, {
+		kind: "effect_completed",
+		completion: { kind: "complete_handoff", request: complete, now: 500 },
+	}).state;
+
+	const intake = handoffCandidate(ready, {
+		...readyObservation(f.start),
+		feedback: feedbackObservation(ready),
+	}).state;
+
+	const intakeNotice = pending(intake, "post_notice");
+
+	const boundary = handoffCandidate(intake, {
+		kind: "effect_completed",
+		completion: { kind: "post_notice", request: intakeNotice },
+	}).state;
+
+	const repair = handoffCandidate(boundary, readyObservation(f.start)).state;
+	const started = pending(repair, "post_notice");
+	assert.equal(started.notice.kind, "repair_started");
+	assert.ok(started.then.kind === "repair_due");
+	assert.equal(started.then.feedbackFrom.digest, f.start.current.intent.digest);
+	assert.deepEqual(started.then.cause, {
+		kind: "feedback",
+		batch: selected(repair).feedback!.batches[0]!.digest,
+		assessment: f.start.current.assessment,
+		review: null,
+	});
+
+	const due = handoffCandidate(repair, {
+		kind: "effect_completed",
+		completion: { kind: "post_notice", request: started },
+	}).state;
+
+	const build = pending(
+		handoffCandidate(due, readyObservation(f.start)).state,
+		"repair_build",
+	);
+
+	assert.equal(
+		build.execution.feedbackFrom.digest,
+		f.start.current.intent.digest,
+	);
+	assert.equal(candidateUsage(due), candidateUsage(held));
+	assert.ok(parseCandidateState(JSON.parse(JSON.stringify(due))));
+});
+
+test("F10-3 reset before derivation skips the abandoned head without CI or failure (review R2)", () => {
+	const f = ownerSelected();
+	const reset = handoffCandidate(f.due, readyObservation(f.start));
+
+	assert.equal(reset.effect?.kind, "complete_handoff");
+	assert.equal(
+		selected(reset.state).current.intent.digest,
+		f.start.current.intent.digest,
+	);
+	assert.equal(candidateUsage(reset.state), candidateUsage(f.start));
+
+	const other = handoffCandidate(
+		f.due,
+		ownerObservation(f.start, "d".repeat(40)),
+	);
+
+	assert.equal(pending(other.state, "post_notice").notice.kind, "owner_head");
+});
+
+test("F10-3 notices distinguish refusal, failed gates and behind for the same head (review R3)", () => {
+	const f = ownerSelected();
+
+	const refused = handoffCandidate(f.deriving, {
+		kind: "effect_completed",
+		completion: {
+			kind: "derive_owner_patch",
+			request: f.request,
+			result: { kind: "refused", reason: "forbidden_path" },
+		},
+	}).state;
+
+	const failed = validated(f.state, false);
+	const moved = "d".repeat(40);
+	assert.ok(isGitSha(moved));
+
+	const actualBehind = handoffCandidate(f.state, {
+		...ownerObservation(f.start),
+		main: moved,
+	}).state;
+
+	const notices = [refused, failed, actualBehind].map((s) =>
+		pending(s, "post_notice"),
+	);
+
+	assert.equal(new Set(notices.map((n) => n.notice.key)).size, 3);
+
+	for (const s of [refused, failed, actualBehind])
+		assert.ok(parseCandidateState(JSON.parse(JSON.stringify(s))));
+});
+
+test("F10-3 unreadable derivation retries on later ticks, survives restart and stops visibly (review R4)", () => {
+	const f = ownerSelected();
+	let state: CandidateState = f.deriving;
+
+	for (let attempt = 1; attempt <= 3; attempt++) {
+		const request = pending(state, "derive_owner_patch");
+
+		state = handoffCandidate(state, {
+			kind: "effect_completed",
+			completion: {
+				kind: "derive_owner_patch",
+				request,
+				result: { kind: "refused", reason: "unreadable" },
+			},
+		}).state;
+
+		if (attempt < 3) {
+			assert.equal(selected(state).work.kind, "owner_due");
+
+			const restored = parseCandidateState(JSON.parse(JSON.stringify(state)));
+			assert.ok(restored);
+
+			state = handoffCandidate(restored, ownerObservation(f.start)).state;
+		} else
+			assert.equal(pending(state, "post_notice").detail, "owner_head_refused");
+	}
+
+	const request = pending(state, "post_notice");
+
+	const held = handoffCandidate(state, {
+		kind: "effect_completed",
+		completion: { kind: "post_notice", request },
+	}).state;
+
+	assert.equal(handoffCandidate(held, ownerObservation(f.start)).effect, null);
+
+	const retry = handoffCandidate(f.deriving, {
+		kind: "effect_completed",
+		completion: {
+			kind: "derive_owner_patch",
+			request: f.request,
+			result: { kind: "refused", reason: "unreadable" },
+		},
+	}).state;
+
+	const deriving = handoffCandidate(retry, ownerObservation(f.start)).state;
+	const next = pending(deriving, "derive_owner_patch");
+
+	assert.equal(
+		pending(
+			handoffCandidate(deriving, {
+				kind: "effect_completed",
+				completion: {
+					kind: "derive_owner_patch",
+					request: next,
+					result: { kind: "found", patch: f.receipt },
+				},
+			}).state,
+			"validate",
+		).generation.origin.kind,
+		"owner",
+	);
+});
+
+for (const reason of ["closed", "withdrawn"] as const)
+	test(`F10-3 latent owner applying batch still finishes on ${reason} (review R5)`, () => {
+		const f = ownerSelected();
+		const feedback = queuedFeedback().feedback;
+
+		const state = {
+			...f.state,
+			work: { kind: "waiting" as const },
+			feedback: {
+				...feedback,
+				batches: feedback.batches.map((b) => ({
+					...b,
+					status: { kind: "applying" as const, round: 1 as const },
+				})),
+			},
+		};
+
+		const result = handoffCandidate(state, {
+			...ownerObservation(f.start),
+			...(reason === "closed"
+				? { pr: { kind: "closed" as const, number: 5, head: f.receipt.head } }
+				: { eligibility: "withdrawn" as const }),
+		});
+
+		const finish = pending(result.state, "finish_pr");
+
+		assert.deepEqual(finish.terminal, { kind: "cancelled", number: 5, reason });
+	});
+
+test("F10-3 uncertain owner review settlement posts a head-bound hold notice (review R7)", () => {
+	const f = ownerSelected();
+
+	const issued = handoffCandidate(
+		validated(f.state),
+		ownerObservation(f.start),
+	).state;
+
+	const launch = pending(issued, "launch_review");
+
+	const result = handoffCandidate(issued, {
+		kind: "review_settled",
+		execution: launch.execution,
+		tokens: null,
+		result: { kind: "failed" },
+	});
+
+	assert.equal(
+		pending(result.state, "post_notice").detail,
+		"owner_head_failed",
+	);
+	assert.equal(selected(result.state).accounts.at(-1)?.settlement, "uncertain");
+});
+
+test("F10-3 owner push during rebuilding stops and charges before recertification, never builds again (review R8)", () => {
+	const f = rebuildingFeedback();
+	const drift = ownerObservation(f.state);
+	const stopping = handoffCandidate(f.state, drift).state;
+	const stop = pending(stopping, "stop_execution");
+	assert.equal(stop.execution.id, f.execution.id);
+
+	const charged = handoffCandidate(stopping, {
+		kind: "effect_completed",
+		completion: {
+			kind: "stop_execution",
+			request: stop,
+			tokens: 17,
+			stopped: true,
+		},
+	}).state;
+
+	const noticeState = handoffCandidate(charged, drift).state;
+	const notice = pending(noticeState, "post_notice");
+
+	assert.equal(notice.notice.kind, "owner_head");
+
+	const due = handoffCandidate(noticeState, {
+		kind: "effect_completed",
+		completion: { kind: "post_notice", request: notice },
+	}).state;
+
+	assert.equal(
+		pending(handoffCandidate(due, drift).state, "derive_owner_patch").head,
+		drift.pr.head,
+	);
+	assert.equal(candidateUsage(due), candidateUsage(f.state) + 17);
+	assert.equal(selected(due).feedback?.batches[0]?.status.kind, "settled");
 });
 
 test("F10-3 drift during effects waits, generation three refuses before derivation", () => {

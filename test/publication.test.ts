@@ -106,6 +106,7 @@ describe("F10-3 owner derivation", () => {
 			truncated?: boolean;
 			large?: boolean;
 			omitted?: boolean;
+			symlink?: boolean;
 		} = {},
 	) {
 		assert.ok(isRepoSlug(repo) && isGitSha(baseSha));
@@ -133,7 +134,16 @@ describe("F10-3 owner derivation", () => {
 			},
 		];
 
+		if (options.symlink)
+			base.push({
+				path: "test/acceptance/link.ts",
+				type: "blob",
+				mode: "120000",
+				sha: gitObjectSha("blob", Buffer.from("./existing.ts")),
+			});
+
 		const owner = [
+			...base.slice(1),
 			{ ...base[0], sha: gitObjectSha("blob", Buffer.from(content)) },
 			{
 				path: suite[0]!.path,
@@ -183,6 +193,14 @@ describe("F10-3 owner derivation", () => {
 					writeFileSync(join(workspace, suite[0]!.path), "PRIVATE-SUITE\n");
 				}
 
+				if (options.symlink) {
+					mkdirSync(join(workspace, "test/acceptance"), { recursive: true });
+					symlinkSync(
+						"./existing.ts",
+						join(workspace, "test/acceptance/link.ts"),
+					);
+				}
+
 				return !options.omitted;
 			},
 		};
@@ -197,6 +215,23 @@ describe("F10-3 owner derivation", () => {
 		assert.ok(read);
 		assert.doesNotMatch(read.patch, /PRIVATE-SUITE|test\/acceptance/);
 		assert.deepEqual(read.receipt.changedPaths, ["src/a.ts"]);
+		assert.deepEqual(await deriveOwnerPatch(f.api, f.input), f.result);
+	});
+
+	it("preserves base acceptance symlink bytes when stripping the suite (review R6)", async () => {
+		const f = await derive({ symlink: true });
+		assert.equal(f.result.kind, "found");
+	});
+
+	it("recertifies a stored head on a new base without losing either patch (review R4)", async () => {
+		const f = await derive();
+		assert.equal(f.result.kind, "found");
+		const baseSha = "c".repeat(40);
+		assert.ok(isGitSha(baseSha));
+		const result = await deriveOwnerPatch(f.api, { ...f.input, baseSha });
+		assert.equal(result.kind, "found");
+
+		if (result.kind === "found") assert.equal(result.patch.baseSha, baseSha);
 		assert.deepEqual(await deriveOwnerPatch(f.api, f.input), f.result);
 	});
 
