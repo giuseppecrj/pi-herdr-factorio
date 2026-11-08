@@ -569,7 +569,6 @@ test("F10-3 drift withdraws once per head before spend, stable holds, and reset 
 		"forbidden_path",
 		"behind_main",
 		"too_large",
-		"unreadable",
 	] as const) {
 		const stopped = handoffCandidate(f.deriving, {
 			kind: "effect_completed",
@@ -849,6 +848,29 @@ test("F10-3 reset after owner validation failure restores the historical certifi
 	assert.deepEqual(ready.history, [held.current]);
 	assert.equal(candidateUsage(ready), candidateUsage(held));
 	assert.equal(handoffCandidate(ready, readyObservation(f.start)).effect, null);
+
+	const repush = handoffCandidate(ready, ownerObservation(f.start)).state;
+	const renotice = pending(repush, "post_notice");
+
+	const redue = handoffCandidate(repush, {
+		kind: "effect_completed",
+		completion: { kind: "post_notice", request: renotice },
+	}).state;
+
+	const rederive = handoffCandidate(redue, ownerObservation(f.start)).state;
+	const request = pending(rederive, "derive_owner_patch");
+
+	const selectedAgain = handoffCandidate(rederive, {
+		kind: "effect_completed",
+		completion: {
+			kind: "derive_owner_patch",
+			request,
+			result: { kind: "found", patch: f.receipt },
+		},
+	}).state;
+
+	assert.equal(selected(selectedAgain).current.intent.generation, 2);
+	assert.ok(parseCandidateState(JSON.parse(JSON.stringify(selectedAgain))));
 	assert.equal(
 		pending(
 			handoffCandidate(ready, ownerObservation(f.start)).state,
@@ -1055,7 +1077,7 @@ test("F10-3 reset before derivation skips the abandoned head without CI or failu
 	assert.equal(pending(other.state, "post_notice").notice.kind, "owner_head");
 });
 
-test("F10-3 notices distinguish refusal, failed gates and behind for the same head (review R3)", () => {
+test("F10-3 notices distinguish refusal, failed gates and behind for the same head (review R3)", async () => {
 	const f = ownerSelected();
 
 	const refused = handoffCandidate(f.deriving, {
@@ -1082,8 +1104,42 @@ test("F10-3 notices distinguish refusal, failed gates and behind for the same he
 
 	assert.equal(new Set(notices.map((n) => n.notice.key)).size, 3);
 
-	for (const s of [refused, failed, actualBehind])
+	for (const s of [refused, failed, actualBehind]) {
 		assert.ok(parseCandidateState(JSON.parse(JSON.stringify(s))));
+		const legacy = JSON.parse(JSON.stringify(s));
+		legacy.work.request.notice.key = `<!-- factory:notice ${pin.runId} owner_head_failed ${f.receipt.head} -->`;
+		assert.ok(parseCandidateState(legacy));
+	}
+
+	await withLocalArtifactDownload(async (root) => {
+		const github = new FakeGitHub();
+		const issue = github.add(fakeIssue(pin.issue));
+		github.add(fakeIssue(5));
+
+		for (const state of [refused, failed, actualBehind]) {
+			const request = pending(state, "post_notice");
+
+			for (let replay = 0; replay < 2; replay++) {
+				const completion = await controllerCandidatePort({
+					stateDir: root,
+					exec: github.exec,
+				}).execute(state, request);
+
+				assert.equal(completion?.kind, "post_notice");
+			}
+		}
+
+		assert.equal(issue.comments.length, 3);
+		assert.match(
+			issue.comments[0]!.body,
+			/owner_head_refused \(forbidden_path\)/,
+		);
+		assert.match(issue.comments[1]!.body, /owner_head_failed/);
+		assert.match(issue.comments[2]!.body, /Main moved/);
+
+		for (const comment of issue.comments)
+			assert.ok(comment.body.includes(`Head: ${f.receipt.head}`));
+	});
 });
 
 test("F10-3 unreadable derivation retries on later ticks, survives restart and stops visibly (review R4)", () => {
@@ -1174,8 +1230,16 @@ for (const reason of ["closed", "withdrawn"] as const)
 				: { eligibility: "withdrawn" as const }),
 		});
 
-		const finish = pending(result.state, "finish_pr");
+		const summary = pending(result.state, "post_notice");
+		assert.equal(summary.notice.kind, "round_summary");
+		assert.equal(summary.then.kind, "finish");
 
+		const finishing = handoffCandidate(result.state, {
+			kind: "effect_completed",
+			completion: { kind: "post_notice", request: summary },
+		}).state;
+
+		const finish = pending(finishing, "finish_pr");
 		assert.deepEqual(finish.terminal, { kind: "cancelled", number: 5, reason });
 	});
 
@@ -5824,7 +5888,7 @@ for (const kind of [
 
 		const review = reviewing(validated(select())).execution;
 
-		const work =
+		const work: Extract<CandidateState, { kind: "selected" }>["work"] =
 			kind === "held"
 				? ({ kind: "held", reason: "validation_failed", since: 17 } as const)
 				: kind === "rebuilding"

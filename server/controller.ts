@@ -4266,7 +4266,12 @@ function candidateValidator(
 
 			const patch =
 				owner && generation?.origin.kind === "owner"
-					? readOwnerPatch(config.stateDir, input.runId, generation.origin.head)
+					? readOwnerPatch(
+							config.stateDir,
+							input.runId,
+							generation.origin.head,
+							generation.baseSha,
+						)
 					: owner
 						? null
 						: readPatch(config.stateDir, {
@@ -5956,6 +5961,7 @@ export function controllerCandidatePort(config: {
 					config.stateDir,
 					state.pin.runId,
 					state.current.intent.origin.head,
+					state.current.intent.baseSha,
 				);
 
 			const patch = readPatch(config.stateDir, {
@@ -6154,7 +6160,7 @@ export function controllerCandidatePort(config: {
 							? "An owner push withdrew readiness. The factory will run trusted gates and review on this exact head, without building or rewriting owner commits."
 							: request.detail === "owner_head_behind"
 								? "Readiness is withdrawn. Main moved under the owner head. Please update the branch; the factory will not refresh or build on owner commits."
-								: `Readiness is withdrawn. Owner-head certification is held: ${request.detail ?? request.notice.kind}. No owner commit was rewritten.`,
+								: `Readiness is withdrawn. Owner-head certification is held: ${request.detail ?? request.notice.kind}${request.refusal === undefined ? "" : ` (${request.refusal})`}. No owner commit was rewritten.`,
 						`Head: ${request.notice.key.split(" ").at(-2)}`,
 						request.notice.key,
 					].join("\n\n");

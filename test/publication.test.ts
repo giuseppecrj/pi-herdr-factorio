@@ -19,6 +19,7 @@ import {
 	GitHubPublicationApi,
 	deriveOwnerPatch,
 	readOwnerPatch,
+	ownerPatchPath,
 	candidateBranch,
 	publishCandidate,
 	gitObjectSha,
@@ -211,10 +212,45 @@ describe("F10-3 owner derivation", () => {
 	it("strips heldout at tree level, persists private bytes and adopts C8 replay", async () => {
 		const f = await derive();
 		assert.equal(f.result.kind, "found");
-		const read = readOwnerPatch(f.input.stateDir, runId, f.input.head);
+
+		const read = readOwnerPatch(
+			f.input.stateDir,
+			runId,
+			f.input.head,
+			f.input.baseSha,
+		);
+
 		assert.ok(read);
 		assert.doesNotMatch(read.patch, /PRIVATE-SUITE|test\/acceptance/);
 		assert.deepEqual(read.receipt.changedPaths, ["src/a.ts"]);
+		assert.deepEqual(await deriveOwnerPatch(f.api, f.input), f.result);
+	});
+
+	it("adopts a legacy head-only file only on its recorded base", async () => {
+		const f = await derive();
+
+		const keyed = ownerPatchPath(
+			f.input.stateDir,
+			runId,
+			f.input.head,
+			f.input.baseSha,
+		);
+
+		const legacy = ownerPatchPath(f.input.stateDir, runId, f.input.head);
+		cpSync(keyed, legacy);
+		rmSync(keyed);
+		assert.deepEqual(await deriveOwnerPatch(f.api, f.input), f.result);
+
+		const baseSha = "c".repeat(40);
+		assert.ok(isGitSha(baseSha));
+		assert.equal(
+			readOwnerPatch(f.input.stateDir, runId, f.input.head, baseSha),
+			null,
+		);
+		assert.equal(
+			(await deriveOwnerPatch(f.api, { ...f.input, baseSha })).kind,
+			"found",
+		);
 		assert.deepEqual(await deriveOwnerPatch(f.api, f.input), f.result);
 	});
 
@@ -226,12 +262,23 @@ describe("F10-3 owner derivation", () => {
 	it("recertifies a stored head on a new base without losing either patch (review R4)", async () => {
 		const f = await derive();
 		assert.equal(f.result.kind, "found");
+
 		const baseSha = "c".repeat(40);
 		assert.ok(isGitSha(baseSha));
 		const result = await deriveOwnerPatch(f.api, { ...f.input, baseSha });
 		assert.equal(result.kind, "found");
 
 		if (result.kind === "found") assert.equal(result.patch.baseSha, baseSha);
+		assert.equal(
+			readOwnerPatch(f.input.stateDir, runId, f.input.head, baseSha)?.receipt
+				.baseSha,
+			baseSha,
+		);
+		assert.equal(
+			readOwnerPatch(f.input.stateDir, runId, f.input.head, f.input.baseSha)
+				?.receipt.baseSha,
+			f.input.baseSha,
+		);
 		assert.deepEqual(await deriveOwnerPatch(f.api, f.input), f.result);
 	});
 

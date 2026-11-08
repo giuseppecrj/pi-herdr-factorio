@@ -72,19 +72,28 @@ export function ownerPatchPath(
 	stateDir: string,
 	runId: Digest,
 	head: GitSha,
+	baseSha?: GitSha,
 ): string {
-	return join(stateDir, "handoff", runId, "owner", `${head}.json`);
+	return join(
+		stateDir,
+		"handoff",
+		runId,
+		"owner",
+		`${head}${baseSha === undefined ? "" : `-${baseSha}`}.json`,
+	);
 }
 
 export function readOwnerPatch(
 	stateDir: string,
 	runId: Digest,
 	head: GitSha,
+	baseSha: GitSha,
 ): OwnerPatchRead | null {
 	try {
-		const value = objectOf(
-			parseJson(regularText(ownerPatchPath(stateDir, runId, head), 256 * 1024)),
-		);
+		const keyed = ownerPatchPath(stateDir, runId, head, baseSha);
+		const path = present(keyed) ? keyed : ownerPatchPath(stateDir, runId, head);
+
+		const value = objectOf(parseJson(regularText(path, 256 * 1024)));
 
 		const receipt = parseOwnerPatchReceipt(value?.receipt);
 		const patch = textOf(value?.patch);
@@ -93,6 +102,7 @@ export function readOwnerPatch(
 			patch !== null &&
 			receipt.runId === runId &&
 			receipt.head === head &&
+			receipt.baseSha === baseSha &&
 			digestOf(patch) === receipt.patchDigest &&
 			Buffer.byteLength(patch) <= REVIEW_DIFF_MAX_BYTES
 			? { kind: "found", receipt, patch }
@@ -112,7 +122,14 @@ export function storeOwnerPatch(
 		Buffer.byteLength(patch) > REVIEW_DIFF_MAX_BYTES
 	)
 		throw new Error("owner_patch_binding");
-	const path = ownerPatchPath(stateDir, receipt.runId, receipt.head);
+
+	const path = ownerPatchPath(
+		stateDir,
+		receipt.runId,
+		receipt.head,
+		receipt.baseSha,
+	);
+
 	privateDir(join(path, ".."));
 	const bytes = `${JSON.stringify({ receipt, patch })}\n`;
 
@@ -146,17 +163,27 @@ export async function deriveOwnerPatch(
 	let scratch: string | null = null;
 
 	try {
-		if (present(ownerPatchPath(input.stateDir, input.runId, input.head))) {
-			const existing = readOwnerPatch(input.stateDir, input.runId, input.head);
+		const existing = readOwnerPatch(
+			input.stateDir,
+			input.runId,
+			input.head,
+			input.baseSha,
+		);
 
-			return existing !== null &&
-				existing.receipt.baseSha === input.baseSha &&
-				existing.receipt.contractDigest === input.contractDigest &&
+		if (existing !== null) {
+			return existing.receipt.contractDigest === input.contractDigest &&
 				existing.receipt.acceptanceDigest === input.acceptanceDigest &&
 				existing.receipt.heldoutDigest === input.heldoutDigest
 				? { kind: "found", patch: existing.receipt }
 				: refused("unreadable");
 		}
+
+		if (
+			present(
+				ownerPatchPath(input.stateDir, input.runId, input.head, input.baseSha),
+			)
+		)
+			return refused("unreadable");
 
 		const compare = objectOf(
 			await api.request("GET", `compare/${input.baseSha}...${input.head}`),
@@ -258,7 +285,7 @@ export async function deriveOwnerPatch(
 			cpSync(
 				join(base, "test/acceptance"),
 				join(workspace, "test/acceptance"),
-				{ recursive: true },
+				{ recursive: true, verbatimSymlinks: true },
 			);
 		}
 

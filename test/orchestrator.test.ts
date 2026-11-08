@@ -11638,12 +11638,19 @@ describe("controller-only validate", () => {
 					},
 					"owner",
 				);
+
 				throw new Error(
 					"C8 crash after durable owner file, before book completion",
 				);
 			}
 
-			const stored = readOwnerPatch(root, state.pin.runId, head);
+			const stored = readOwnerPatch(
+				root,
+				state.pin.runId,
+				head,
+				request.baseSha,
+			);
+
 			assert.ok(stored);
 
 			return {
@@ -11730,7 +11737,16 @@ describe("controller-only validate", () => {
 				await f.controller.tick();
 		}, /C8 crash/);
 		assert.equal(attempts, 1);
-		assert.ok(existsSync(ownerPatchPath(root, initial.pin.runId, head)));
+		assert.ok(
+			existsSync(
+				ownerPatchPath(
+					root,
+					initial.pin.runId,
+					head,
+					initial.current.intent.baseSha,
+				),
+			),
+		);
 		const saved = f.files.claims.get(runOf(14))?.handoff;
 		assert.ok(
 			saved?.kind === "selected" &&

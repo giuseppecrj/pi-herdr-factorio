@@ -3391,15 +3391,27 @@ async function candidateReviewInputs(
 
 	const verdict = reviewVerdict(join(dir, "verdict.json"));
 
-	if (!isGitSha(verdict.candidateSha))
+	if (!isGitSha(verdict.candidateSha) || !isGitSha(verdict.baseSha))
 		throw new ReviewEvidenceUnavailable("review_binding");
 
-	const isOwner = existsSync(
-		ownerPatchPath(config.stateDir, runId, verdict.candidateSha),
-	);
+	const isOwner =
+		existsSync(
+			ownerPatchPath(
+				config.stateDir,
+				runId,
+				verdict.candidateSha,
+				verdict.baseSha,
+			),
+		) ||
+		existsSync(ownerPatchPath(config.stateDir, runId, verdict.candidateSha));
 
 	const patch = isOwner
-		? readOwnerPatch(config.stateDir, runId, verdict.candidateSha)
+		? readOwnerPatch(
+				config.stateDir,
+				runId,
+				verdict.candidateSha,
+				verdict.baseSha,
+			)
 		: readRunPatch(config.stateDir, runId, round);
 
 	if (suite.kind !== "found" || patch === null || patch.kind !== "found")
