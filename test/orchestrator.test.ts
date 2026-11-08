@@ -54,6 +54,7 @@ import {
 	serveLoop,
 	writeStatus,
 	observeFeedback,
+	storeFeedbackBatch,
 } from "../server/controller.ts";
 import { GitHubTicketAdapter } from "../src/adapters/github.ts";
 import {
@@ -123,6 +124,7 @@ import {
 	ownerPatchPath,
 	readLedgerFile,
 	PublicationError,
+	candidateBranch,
 } from "../src/publication.ts";
 import { LedgerGit, repo as ledgerRepo } from "./ledger-git.ts";
 import {
@@ -133,6 +135,7 @@ import {
 } from "../src/validation.ts";
 import {
 	candidateProjection,
+	candidateUsage,
 	promotedHead,
 	handoffCandidate,
 	parseCandidateState,
@@ -11576,6 +11579,367 @@ describe("controller-only validate", () => {
 			);
 			assert.equal(window === "create" ? creates : comments, 1);
 		});
+
+	it("F10-3 N1 reset after a failed repair never reuses spent rounds or their controller artifacts", async () => {
+		const f = await reviewingRun();
+		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+		await once(f.controller);
+		await f.controller.tick();
+		await f.controller.tick();
+		const initial = f.files.claims.get(runOf(14))?.handoff;
+		const port = f.executor.candidate;
+		assert.ok(initial?.kind === "selected" && initial.published && port);
+		const root = stateDir();
+
+		const native = controllerCandidatePort({
+			stateDir: root,
+			exec: f.github.exec,
+		});
+
+		const pr = f.github.add(fakeIssue(99, { pullRequest: true }));
+		const factoryHead = initial.current.report!.candidateSha;
+		let head = factoryHead;
+		let feedback: FeedbackObservation = { kind: "unavailable" };
+		const observe = port.observe;
+		port.observe = async (state, now) => ({
+			...(await observe(state, now)),
+			pr: { kind: "open", number: 99, head, refHead: head },
+			readiness:
+				head === factoryHead
+					? { kind: "current", head, report: initial.current.report! }
+					: { kind: "unavailable" },
+			feedback,
+		});
+		const execute = port.execute;
+		port.execute = async (state, request) => {
+			if (request.kind === "post_notice") return native.execute(state, request);
+
+			if (request.kind === "derive_owner_patch")
+				return {
+					kind: "derive_owner_patch",
+					request,
+					result: {
+						kind: "found",
+						patch: {
+							version: 1,
+							kind: "owner",
+							runId: state.pin.runId,
+							head: request.head,
+							baseSha: request.baseSha,
+							contractDigest: state.pin.contractDigest,
+							acceptanceDigest: state.pin.acceptanceDigest,
+							heldoutDigest: initial.current.verdict!.heldoutDigest,
+							patchDigest: digestOf("owner patch"),
+							changedPaths: ["src/example.ts"],
+							policy: "clean",
+						},
+					},
+				};
+
+			return execute(state, request);
+		};
+
+		port.patch = native.patch;
+
+		const batches = new Map<
+			string,
+			import("../src/feedback.ts").FeedbackBatch
+		>();
+
+		Object.assign(f.executor, {
+			readFeedback: async (_run: Digest, digest: Digest) =>
+				batches.get(digest) ?? null,
+		});
+		const output = f.executor.output.bind(f.executor);
+		const failures: unknown[] = [];
+		f.executor.output = async (input) => {
+			const built = await output(input);
+
+			if (
+				input.stage !== "build" ||
+				!(built instanceof Object) ||
+				built.kind !== "build" ||
+				built.result.kind !== "found"
+			)
+				return built;
+
+			const binding = {
+				runId: initial.pin.runId,
+				round: input.round,
+				baseSha: initial.pin.originalBase,
+				contractDigest: initial.pin.contractDigest,
+				acceptanceDigest: initial.pin.acceptanceDigest,
+			};
+
+			const stored = storePatch(
+				root,
+				binding,
+				{
+					kind: "collected",
+					patch: built.result.patch,
+					patchDigest: built.result.receipt.patchDigest,
+					changedPaths: built.result.receipt.changedPaths,
+					policy: "clean",
+				},
+				{ model: built.result.receipt.model, observed: null, commands: [] },
+			);
+
+			assert.ok(stored.kind === "found");
+			assert.equal(
+				digestOf(stored.patch),
+				digestOf(built.result.patch),
+				"paid-for builder output must not be replaced by an older round",
+			);
+
+			return {
+				kind: "build",
+				result: finishPatch(root, binding, built.result.receipt.visibleTests!),
+			};
+		};
+
+		f.executor.validate = async (input) => {
+			assert.ok(input.generation);
+			const generation = input.generation;
+
+			const branch = candidateBranch(
+				14,
+				input.runId,
+				generation.round,
+				generation.generation,
+			);
+
+			const candidateSha =
+				generation.origin.kind === "owner"
+					? generation.origin.head
+					: sha(digestOf(branch).slice(0, 40));
+
+			const state = {
+				...initial.current.validation!,
+				round: generation.round,
+				generation: {
+					index: generation.generation,
+					digest: generation.digest,
+					previousHead: factoryHead,
+				},
+				publication: { branch, patchSha: candidateSha, candidateSha },
+			};
+
+			await input.save(state);
+
+			const verdict = {
+				...initial.current.verdict!,
+				candidateSha,
+				pass: false,
+				patchDigest: input.generation.patchDigest,
+				checks: initial.current.verdict!.checks.map((c) => ({
+					...c,
+					passed: c.name !== "heldout",
+				})),
+			};
+
+			const nonce = dispatchNonce(
+				input.runId,
+				generation.round,
+				1,
+				generation.generation,
+			);
+
+			return {
+				kind: "finished",
+				state,
+				verdict,
+				report: {
+					...reportOf(verdict),
+					nonce,
+					externalId: `factory-gates:123:${nonce}`,
+				},
+				assessment: f.executor.assess(input, verdict),
+			};
+		};
+
+		f.executor.ownerValidate = f.executor.validate;
+		const collect = f.executor.output;
+		f.executor.output = async (input) => {
+			try {
+				return await collect(input);
+			} catch (error) {
+				failures.push(String(error));
+				throw error;
+			}
+		};
+
+		const book = () => {
+			const state = f.files.claims.get(runOf(14))?.handoff;
+			assert.ok(state?.kind === "selected");
+			assert.ok(
+				parseCandidateState(JSON.parse(JSON.stringify(state))),
+				"saved book must load",
+			);
+
+			return state;
+		};
+
+		let controller = f.controller;
+
+		const until = async (done: () => boolean) => {
+			for (let tick = 0; tick < 20 && !done(); tick++) await once(controller);
+			assert.ok(
+				done(),
+				JSON.stringify({
+					work: book().work,
+					current: book().current.intent,
+					failures,
+					logs: f.logs.filter((l) => l.event !== "tick").slice(-4),
+				}),
+			);
+		};
+
+		const requestChanges = async (id: number) => {
+			const event = `github:${repo}:review:${id}` as const;
+
+			const batch = {
+				version: 1,
+				runId: initial.pin.runId,
+				pr: 99,
+				head: factoryHead,
+				records: [
+					{
+						event,
+						actor: "writer",
+						intake: { kind: "actionable" },
+						inline: [],
+					},
+				],
+				cards: [
+					{
+						event,
+						head: factoryHead,
+						path: null,
+						line: null,
+						excerpt: "fix it",
+						truncated: false,
+					},
+				],
+				full: null,
+			} as const;
+
+			const stored = await storeFeedbackBatch(root, batch, null);
+			batches.set(stored.digest, batch);
+			feedback = {
+				kind: "read",
+				head: factoryHead,
+				dismissed: [],
+				batch: stored,
+			};
+		};
+
+		const failedRound = async (round: number) => {
+			await until(
+				() =>
+					book().work.kind === "held" && book().current.intent.round === round,
+			);
+			assert.equal(book().current.intent.round, round);
+			const state = book();
+			const patch = await native.patch(state, round);
+			assert.ok(patch && !("kind" in patch.receipt));
+			assert.equal(patch.receipt.patchDigest, state.current.intent.patchDigest);
+
+			return state;
+		};
+
+		await requestChanges(701);
+		const first = await failedRound(1);
+		const firstUsage = candidateUsage(first);
+		head = sha("b".repeat(40));
+		feedback = { kind: "unavailable" };
+		await until(
+			() =>
+				book().work.kind === "held" &&
+				book().current.intent.origin.kind === "owner",
+		);
+		assert.equal(
+			f.executor.launches.filter(
+				(l) => l.stage === "build" && (l.round ?? 0) > 0,
+			).length,
+			1,
+		);
+		head = factoryHead;
+		await until(() => book().published?.readiness.kind === "ready");
+		assert.equal(book().current.intent.digest, initial.current.intent.digest);
+		assert.equal(candidateUsage(book()), firstUsage);
+		controller = f.start();
+		await requestChanges(702);
+		await until(
+			() =>
+				f.executor.launches.filter(
+					(l) => l.stage === "build" && (l.round ?? 0) > 0,
+				).length === 2,
+		);
+
+		const launches = f.executor.launches.filter(
+			(l) => l.stage === "build" && (l.round ?? 0) > 0,
+		);
+
+		assert.deepEqual(
+			launches.map((l) => [l.round, l.attempt]),
+			[
+				[1, 1],
+				[2, 1],
+			],
+		);
+		const second = await failedRound(2);
+		assert.notEqual(second.current.intent.digest, first.current.intent.digest);
+		assert.notEqual(
+			second.current.validation!.publication!.branch,
+			first.current.validation!.publication!.branch,
+		);
+		assert.notEqual(second.current.report!.nonce, first.current.report!.nonce);
+		assert.deepEqual(
+			pr.comments.map((c) => c.body.match(/round_summary [12]/)?.[0]),
+			["round_summary 1", "round_summary 2"],
+		);
+		assert.ok(
+			existsSync(
+				join(root, "handoff", initial.pin.runId, "feedback", "round-1-a1.json"),
+			),
+		);
+		assert.ok(
+			existsSync(
+				join(root, "handoff", initial.pin.runId, "feedback", "round-2-a1.json"),
+			),
+		);
+		head = sha("d".repeat(40));
+		feedback = { kind: "unavailable" };
+		await until(
+			() =>
+				book().work.kind === "held" &&
+				book().current.intent.origin.kind === "owner",
+		);
+		head = factoryHead;
+		await until(() => book().published?.readiness.kind === "ready");
+		const usage = candidateUsage(book());
+		await requestChanges(703);
+		await until(
+			() => book().feedback?.batches.at(-1)?.status.kind === "settled",
+		);
+		assert.partialDeepStrictEqual(book().feedback?.batches.at(-1)?.status, {
+			kind: "settled",
+			outcome: { kind: "refused", reason: "cap_reached" },
+		});
+		await once(controller);
+		assert.ok(
+			f.github
+				.markers(14)
+				.some((body) => body.includes("No repair starts: cap_reached")),
+		);
+		assert.equal(candidateUsage(book()), usage);
+		assert.equal(
+			f.executor.launches.filter(
+				(l) => l.stage === "build" && (l.round ?? 0) > 0,
+			).length,
+			2,
+		);
+	});
 
 	it("F10-3 crashes after the C8 owner file write, adopts it after restart and settles owner review without a build (review R8)", async () => {
 		const f = await reviewingRun();
