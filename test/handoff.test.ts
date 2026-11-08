@@ -3769,9 +3769,290 @@ test("a version 1 review that fails migration keeps its bytes, not an explicit n
 	});
 });
 
+function formalWitnessHeld() {
+	const initial = published();
+
+	const obs = {
+		...readyObservation(initial),
+		readiness: { kind: "unavailable" as const },
+	};
+
+	const state = handoffCandidate(initial, obs).state;
+	const request = pending(state, "void_readiness");
+
+	const held = selected(
+		handoffCandidate(state, {
+			kind: "effect_completed",
+			completion: { kind: "void_readiness", request },
+		}).state,
+	);
+
+	assert.equal(held.work.kind, "held");
+	assert.ok(held.current.certification);
+
+	return held;
+}
+
+test("formal F10 published repair witness withdraws readiness before issuing shared-budget work", () => {
+	const initial = queuedFeedback(formalWitnessHeld());
+	const started = startFeedback(initial);
+	assert.equal(started.work.kind, "repair_due");
+	assert.equal(started.published?.number, initial.published!.number);
+	assert.deepEqual(started.history, initial.history);
+	assert.deepEqual(started.accounts, initial.accounts);
+
+	const issued = handoffCandidate(started, readyObservation(started)).state;
+	const request = pending(issued, "repair_build");
+	assert.equal(request.execution.round, 1);
+	assert.equal(request.execution.attempt, 1);
+	assert.equal(request.execution.cause.kind, "feedback");
+	assert.equal(
+		candidateAllowance(selected(issued), request.execution),
+		REPAIR_BUILD_MAX_TOKENS,
+	);
+
+	const repairing = selected(
+		handoffCandidate(issued, {
+			kind: "effect_completed",
+			completion: { kind: "repair_build", request, started: true },
+		}).state,
+	);
+
+	assert.equal(repairing.work.kind, "rebuilding");
+	assert.equal(repairing.published?.readiness.kind, "not_ready");
+	assert.equal(candidateUsage(repairing), candidateUsage(initial));
+	assert.ok(parseCandidateState(JSON.parse(JSON.stringify(repairing))));
+});
+
+test("formal F10 shortest merge-mid-repair witness merges before the build is issued", () => {
+	const initial = queuedFeedback(formalWitnessHeld());
+	const due = startFeedback(initial);
+	const head = initial.current.report!.candidateSha;
+
+	const merged = handoffCandidate(due, {
+		...observed(),
+		pr: { kind: "merged", number: 5, head, mergeSha: sha, actor: "owner" },
+	}).state;
+
+	const finish = pending(merged, "finish_pr");
+	assert.partialDeepStrictEqual(finish.terminal, {
+		kind: "merged",
+		head,
+		mergeSha: sha,
+		assurance: { kind: "factory_verified" },
+		readiness: { kind: "not_ready", reason: "feedback_repair" },
+	});
+	assert.deepEqual(selected(merged).accounts, initial.accounts);
+	assert.equal(candidateUsage(merged), candidateUsage(initial));
+});
+
+test("formal F10 merge-mid-repair witness drains work and retains historical certification", () => {
+	const initial = queuedFeedback();
+	const repair = rebuildingFeedback(initial);
+	const head = initial.current.report!.candidateSha;
+
+	const merged = handoffCandidate(repair.state, {
+		...observed(),
+		pr: { kind: "merged", number: 5, head, mergeSha: sha, actor: "owner" },
+	}).state;
+
+	const stop = pending(merged, "stop_execution");
+	assert.equal(stop.execution.id, repair.execution.id);
+	assert.partialDeepStrictEqual(stop.terminal, {
+		kind: "merged",
+		head,
+		mergeSha: sha,
+		assurance: { kind: "factory_verified" },
+		readiness: { kind: "not_ready", reason: "feedback_repair" },
+	});
+
+	const settled = handoffCandidate(merged, {
+		kind: "effect_completed",
+		completion: {
+			kind: "stop_execution",
+			request: stop,
+			tokens: 17,
+			stopped: true,
+		},
+	}).state;
+
+	const finish = pending(settled, "finish_pr");
+	assert.deepEqual(finish.terminal, stop.terminal);
+	assert.equal(candidateUsage(settled), candidateUsage(initial) + 17);
+	assert.ok(
+		selected(settled).accounts.every((a) => a.settlement === "settled"),
+	);
+
+	const terminal = handoffCandidate(settled, {
+		kind: "effect_completed",
+		completion: { kind: "finish_pr", request: finish },
+	}).state;
+
+	assert.equal(selected(terminal).work.kind, "terminal");
+	assert.deepEqual(
+		selected(terminal).current.certification,
+		initial.current.certification,
+	);
+});
+
+function formalOwnerReady(restoreReadiness = true) {
+	const initial = published();
+	const head = "e".repeat(40);
+	assert.ok(isGitSha(head));
+
+	const observation = {
+		...observed(),
+		pr: { kind: "open" as const, number: 5, head, refHead: head },
+	};
+
+	let state = handoffCandidate(initial, observation).state;
+	const notice = pending(state, "post_notice");
+	assert.equal(notice.notice.kind, "owner_head");
+	state = handoffCandidate(state, {
+		kind: "effect_completed",
+		completion: { kind: "post_notice", request: notice },
+	}).state;
+	assert.partialDeepStrictEqual(selected(state).work, {
+		kind: "owner_due",
+		head,
+	});
+	state = handoffCandidate(state, observation).state;
+	const work = selected(state).work;
+	assert.ok(work.kind === "effect");
+	assert.partialDeepStrictEqual(work.request, {
+		kind: "derive_owner_patch",
+		head,
+		baseSha: sha,
+	});
+	const bytes = "owner patch";
+
+	const ownerPatch = {
+		version: 1,
+		kind: "owner",
+		runId: pin.runId,
+		head,
+		baseSha: sha,
+		contractDigest: pin.contractDigest,
+		acceptanceDigest: pin.acceptanceDigest,
+		heldoutDigest: initial.current.verdict!.heldoutDigest,
+		patchDigest: digestOf(bytes),
+		changedPaths: ["src/example.ts"],
+		policy: "clean",
+	};
+
+	state = handoffCandidate(
+		state,
+		JSON.parse(
+			JSON.stringify({
+				kind: "effect_completed",
+				completion: {
+					kind: "derive_owner_patch",
+					request: work.request,
+					result: { kind: "found", patch: ownerPatch },
+				},
+			}),
+		),
+	).state;
+	assert.partialDeepStrictEqual(pending(state, "validate").generation, {
+		round: 0,
+		generation: 1,
+		origin: { kind: "owner", head },
+		publication: { kind: "owner", head },
+	});
+	state = validated(state);
+	const issued = handoffCandidate(state, observation).state;
+	const launch = pending(issued, "launch_review");
+	state = handoffCandidate(issued, {
+		kind: "effect_completed",
+		completion: { kind: "launch_review", request: launch, started: true },
+	}).state;
+	const missing = { kind: "unavailable", reason: "missing" } as const;
+	const r = receipt(launch.execution);
+	assert.ok(r.version === 2);
+	state = handoffCandidate(
+		state,
+		JSON.parse(
+			JSON.stringify({
+				kind: "review_settled",
+				execution: launch.execution,
+				tokens: 10,
+				result: {
+					kind: "passed",
+					patch: { kind: "found", receipt: ownerPatch, patch: bytes },
+					review: {
+						...r,
+						version: 3,
+						builder: missing,
+						accept: missing,
+						seats: r.seats.map((s) => ({
+							...s,
+							family: missing,
+							label: familyLabel(missing, missing),
+						})),
+					},
+				},
+			}),
+		),
+	).state;
+	assert.ok(selected(state).current.certification);
+	assert.equal(selected(state).current.report?.candidateSha, head);
+	assert.equal(
+		selected(state).accounts.filter((a) => a.execution.stage === "build")
+			.length,
+		0,
+	);
+
+	if (!restoreReadiness) return { state, head };
+
+	state = handoffCandidate(state, {
+		...readyObservation(state),
+		pr: observation.pr,
+	}).state;
+	const complete = pending(state, "complete_handoff");
+	state = handoffCandidate(state, {
+		kind: "effect_completed",
+		completion: { kind: "complete_handoff", request: complete, now: 200 },
+	}).state;
+	assert.equal(selected(state).published?.readiness.kind, "ready");
+	assert.partialDeepStrictEqual(selected(state).current.intent.origin, {
+		kind: "owner",
+		head,
+	});
+
+	return { state, head };
+}
+
+test("formal F10 owner-ready witness recertifies the exact head without a build or promotion", () => {
+	formalOwnerReady();
+});
+
+test("formal F10 owner-authored merge witness points to the owner certification", () => {
+	const { state, head } = formalOwnerReady(false);
+
+	const merged = handoffCandidate(state, {
+		...observed(),
+		pr: { kind: "merged", number: 5, head, mergeSha: sha, actor: "owner" },
+	}).state;
+
+	const terminal = pending(merged, "finish_pr").terminal;
+	assert.partialDeepStrictEqual(terminal, {
+		kind: "merged",
+		head,
+		assurance: { kind: "factory_verified" },
+		readiness: { kind: "not_ready" },
+	});
+	assert.ok(
+		terminal.kind === "merged" &&
+			terminal.assurance.kind === "factory_verified",
+	);
+	assert.equal(
+		terminal.assurance.certification.digest,
+		selected(state).current.intent.digest,
+	);
+});
+
 // F10-2 contract tests. Drive the public advance surface through handoffCandidate.
-function queuedFeedback() {
-	const initial = waiting();
+function queuedFeedback(initial = waiting()) {
 	const obs = feedbackObservation(initial);
 	assert.ok(obs.kind === "read" && obs.batch);
 

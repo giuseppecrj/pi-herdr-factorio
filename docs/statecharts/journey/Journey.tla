@@ -7,6 +7,8 @@ VARIABLES b, env
 vars == <<b, env>>
 
 None == "none"
+FeedbackProfile == Profile \in {"feedback", "feedback_no_main"}
+RepairPhases == {"repair_due", "repairing", "repair_built"}
 Max(a, c) == IF a > c THEN a ELSE c
 Min(a, c) == IF a < c THEN a ELSE c
 Indices(s) == 1..Len(s)
@@ -28,32 +30,39 @@ Active(s) == IF \E i \in Indices(s.accounts) : ~s.accounts[i].settled
     THEN CHOOSE i \in Indices(s.accounts) : ~s.accounts[i].settled ELSE 0
 Current(s) == Len(s.history) + 1
 Generations(s) == Append(s.history, s.current)
-Certified(s, head) == head \in Indices(Generations(s)) /\ Generations(s)[head].cert
+HeadOf(s, i) == IF i = 0 THEN 0 ELSE IF Generations(s)[i].owner THEN 99 ELSE i
+Certified(s, head) == \E i \in Indices(Generations(s)) :
+    Generations(s)[i].cert /\ HeadOf(s, i) = head
+OwnerCertifiedCurrent == b.current.owner /\ env.ref = 99
+OwnerDrifting == FeedbackProfile /\ env.pr = "open" /\ b.published # 0
+    /\ env.ref = 99 /\ ~OwnerCertifiedCurrent
 CertificateFields(g, generation, execution, attempt) ==
     [generation |-> generation, execution |-> execution, attempt |-> attempt,
-     source |-> g.base, workflow |-> 0, candidate |-> generation, patch |-> g.patch,
-     ci |-> generation, gate |-> g.base, acceptance |-> 0, original |-> 0]
+     source |-> g.base, workflow |-> 0, candidate |-> IF g.owner THEN 99 ELSE generation, patch |-> g.patch,
+     ci |-> IF g.owner THEN 99 ELSE generation, gate |-> g.base, acceptance |-> 0, original |-> 0]
 IncomingBinding(s, execution, mismatch) ==
     LET exact == CertificateFields(s.current, Current(s), execution, s.accounts[execution].attempt)
     IN IF mismatch = "exact" THEN exact ELSE [exact EXCEPT ![mismatch] = 99]
 Gen(round, generation, base, expected) ==
     [round |-> round, generation |-> generation, base |-> base,
      original |-> 0, pin |-> 0, patch |-> round, expected |-> expected,
-     cert |-> FALSE, certBinding |-> None, ci |-> FALSE]
+     cert |-> FALSE, certBinding |-> None, ci |-> FALSE, owner |-> FALSE]
 InitialBook == [phase |-> "admit", earlyAttempt |-> 1, history |-> <<>>,
     current |-> Gen(0, 0, 0, 0), refreshes |-> 0, accounts |-> <<>>,
     active |-> 0, published |-> 0, promoted |-> 0, ready |-> FALSE,
     pending |-> None, terminal |-> None, mergedHead |-> 0, mergeSha |-> 0, assurance |-> None,
-    launchAllowance |-> 0, issuedAtUsage |-> 0, issuedAtSpent |-> 0]
+    launchAllowance |-> 0, issuedAtUsage |-> 0, issuedAtSpent |-> 0,
+    cause |-> None, batches |-> 0, authored |-> None]
 InitialEnv == [enabled |-> TRUE, capacity |-> TRUE, main |-> 0,
-    pr |-> "none", ref |-> 0, head |-> 0, ordinary |-> 0, mergeHead |-> 0, mergeSha |-> 0]
+    pr |-> "none", ref |-> 0, head |-> 0, ordinary |-> 0, mergeHead |-> 0, mergeSha |-> 0,
+    feedbacks |-> 0]
 Init == b = InitialBook /\ env = InitialEnv
 
 Effect(s, kind) == [s EXCEPT !.pending = kind]
 Hold(s) == [s EXCEPT !.phase = "held", !.ready = FALSE, !.pending = None]
 Select(s, round, generation, refresh) ==
     [s EXCEPT !.history = Append(@, s.current),
-     !.current = Gen(round, generation, env.main, IF s.published = 0 THEN 0 ELSE s.promoted),
+     !.current = Gen(round, generation, env.main, IF s.published = 0 THEN 0 ELSE HeadOf(s, s.promoted)),
      !.refreshes = @ + refresh, !.phase = "validate", !.pending = "validate", !.ready = FALSE]
 Issue(s, stage, round) == LET id == Len(s.accounts) + 1 IN
     [s EXCEPT !.accounts = Append(@,
@@ -69,9 +78,10 @@ Account(s, id, tokens, known, settled) == [s EXCEPT
 Finish(s, kind, head) == [s EXCEPT !.terminal = kind, !.mergedHead = head,
     !.mergeSha = IF kind = "merged" THEN env.mergeSha ELSE 0,
     !.assurance = IF kind = "merged" THEN IF Certified(s, head) THEN "factory_verified" ELSE "owner_override" ELSE None,
+    !.authored = IF kind = "merged" /\ Certified(s, head) THEN IF head = 99 THEN "owner" ELSE "factory" ELSE None,
     !.pending = IF Active(s) = 0 THEN "finish_pr" ELSE "stop_execution",
     !.active = Active(s), !.phase = "finishing"]
-FailOrRepair(s) == IF s.published # 0 THEN Hold(s)
+FailOrRepair(s) == IF s.published # 0 THEN [Hold(s) EXCEPT !.cause = None]
     ELSE IF s.current.round = MaxRepairs THEN Finish(s, "failed", 0)
     ELSE [s EXCEPT !.phase = "repair_due", !.pending = None]
 
@@ -95,7 +105,9 @@ Refresh == /\ b.phase \notin {"admit", "specify", "accept", "build", "terminal"}
     /\ b' = (IF Active(b) # 0 THEN [b EXCEPT !.pending = "stop_execution", !.active = Active(b), !.phase = "stopping"]
        ELSE IF ~CanIssue(b, "review", b.current.round) \/ b.refreshes >= MaxRefreshes
                   \/ Len(b.history) + 1 >= MaxGenerations \/ b.current.generation >= 3
-                  \/ (b.published # 0 /\ (env.head # b.promoted \/ env.ref # b.promoted))
+                  \/ b.current.owner
+                  \/ (b.published # 0 /\ (env.head # HeadOf(b, b.promoted) \/ env.ref # HeadOf(b, b.promoted)
+                                             \/ Generations(b)[b.promoted].owner))
             THEN Hold(b) ELSE Select(b, b.current.round, b.current.generation + 1, 1))
     /\ UNCHANGED env
 ReviewDue == /\ b.phase = "review_due" /\ b.pending = None /\ b.terminal = None
@@ -103,7 +115,7 @@ ReviewDue == /\ b.phase = "review_due" /\ b.pending = None /\ b.terminal = None
     /\ b' = (IF CanIssue(b, "review", b.current.round) THEN Issue(b, "review", b.current.round) ELSE Hold(b))
     /\ UNCHANGED env
 RepairDue == /\ b.phase = "repair_due" /\ b.pending = None /\ env.enabled /\ env.capacity
-    /\ b.terminal = None /\ b.published = 0
+    /\ b.terminal = None /\ (b.published = 0 \/ b.cause = "feedback")
     /\ b' = (IF CanIssue(b, "build", b.current.round + 1) THEN Issue(b, "build", b.current.round + 1) ELSE Hold(b))
     /\ UNCHANGED env
 RepairBuilt == /\ b.phase = "repair_built" /\ env.enabled /\ b.terminal = None
@@ -113,19 +125,43 @@ Handoff == /\ b.phase \in {"handoff", "waiting", "held"} /\ b.pending = None /\ 
     /\ b.current.cert /\ env.enabled /\ env.main = b.current.base /\ env.pr \notin {"merged", "closed"}
     /\ b' = (IF b.published = 0 THEN Effect(b, "open_pr")
        ELSE IF env.head # env.ref THEN Hold(b)
-       ELSE IF env.head # Current(b)
+       ELSE IF env.head # HeadOf(b, Current(b))
             THEN IF b.current.expected # 0 /\ env.head = b.current.expected
                  THEN Effect(b, "promote_pr") ELSE Hold(b)
-       ELSE IF env.ordinary # Current(b) THEN Effect(Hold(b), "void_readiness")
+       ELSE IF env.ordinary # HeadOf(b, Current(b)) THEN Effect(Hold(b), "void_readiness")
        ELSE IF b.ready /\ b.promoted = Current(b) THEN [b EXCEPT !.phase = "waiting"]
        ELSE Effect(b, "complete_handoff"))
     /\ UNCHANGED env
-Policy == Early \/ EarlyRetry \/ ObserveMerge \/ ObserveClose \/ Refresh \/ ReviewDue \/ RepairDue \/ RepairBuilt \/ Handoff
+FeedbackRepair == /\ FeedbackProfile /\ env.pr = "open" /\ env.enabled
+    /\ b.published # 0 /\ b.phase \in {"waiting", "held"} /\ b.pending = None /\ b.terminal = None
+    /\ b.batches < env.feedbacks /\ env.head = HeadOf(b, b.promoted) /\ env.ref = env.head
+    /\ ~Generations(b)[b.promoted].owner
+    /\ b' = (LET consumed == [b EXCEPT !.batches = @ + 1] IN
+        IF b.current.round = MaxRepairs \/ ~CanIssue(b, "build", b.current.round + 1)
+        THEN consumed ELSE [consumed EXCEPT !.phase = "repair_due", !.cause = "feedback", !.ready = FALSE])
+    /\ UNCHANGED env
+OwnerDrift == /\ OwnerDrifting /\ env.enabled /\ b.terminal = None /\ b.pending = None
+    /\ b.phase \notin {"terminal", "finishing", "owner_due"}
+    /\ b' = (IF Active(b) # 0
+        THEN [b EXCEPT !.pending = "stop_execution", !.active = Active(b), !.phase = "stopping", !.ready = FALSE]
+        ELSE [b EXCEPT !.phase = "owner_due", !.ready = FALSE, !.cause = None])
+    /\ UNCHANGED env
+OwnerRecert == /\ FeedbackProfile /\ env.pr = "open" /\ env.enabled /\ b.terminal = None
+    /\ b.phase = "owner_due" /\ b.pending = None /\ env.head = 99 /\ env.ref = 99
+    /\ b' = (IF b.current.generation >= 3 \/ Len(b.history) + 1 >= MaxGenerations
+        THEN Hold(b) ELSE [b EXCEPT !.history = Append(@, b.current),
+            !.current = [Gen(b.current.round, b.current.generation + 1, env.main, 0) EXCEPT !.owner = TRUE],
+            !.phase = "validate", !.pending = "validate", !.ready = FALSE])
+    /\ UNCHANGED env
+Policy == ObserveMerge \/ ObserveClose
+    \/ (env.pr \notin {"merged", "closed"} /\
+        (IF OwnerDrifting /\ b.phase # "owner_due" THEN OwnerDrift
+         ELSE Early \/ EarlyRetry \/ Refresh \/ ReviewDue \/ RepairDue \/ RepairBuilt \/ Handoff \/ FeedbackRepair \/ OwnerRecert))
 
 Validate == /\ b.pending = "validate" /\ b.terminal = None
-    /\ \E outcome \in (IF Presentation \/ Profile = "late" THEN {"pass"} ELSE IF Profile = "transport" THEN {"pass", "fail"} ELSE {"pass", "fail", "missing"}) :
+    /\ \E outcome \in (IF Presentation \/ Profile = "late" THEN {"pass"} ELSE IF Profile = "transport" \/ FeedbackProfile THEN {"pass", "fail"} ELSE {"pass", "fail", "missing"}) :
        b' = (CASE outcome = "pass" -> [b EXCEPT !.current.ci = TRUE, !.pending = None, !.phase = "review_due"]
-             [] outcome = "fail" -> FailOrRepair([b EXCEPT !.pending = None])
+             [] outcome = "fail" -> FailOrRepair([b EXCEPT !.pending = None, !.cause = "ci"])
              [] OTHER -> Hold(b))
     /\ UNCHANGED env
 Launch == /\ b.pending \in {"launch_review", "repair_build"}
@@ -142,25 +178,30 @@ ReviewResult(s, id, outcome, known, binding) == LET paid == Account(s, id, Usage
     ELSE IF ~known THEN Hold(paid)
     ELSE IF outcome = "pass" /\ binding = IncomingBinding(s, id, "exact")
          THEN [paid EXCEPT !.current.cert = TRUE, !.current.certBinding = binding, !.phase = "handoff", !.active = 0]
-    ELSE IF outcome \in {"blocking", "pass"} THEN FailOrRepair([paid EXCEPT !.active = 0])
-    ELSE IF s.published # 0 THEN Hold([paid EXCEPT !.active = 0])
+    ELSE IF outcome \in {"blocking", "pass"} THEN FailOrRepair([paid EXCEPT !.active = 0, !.cause = "review"])
+    ELSE IF s.published # 0 THEN [Hold(paid) EXCEPT !.active = 0, !.cause = None]
     ELSE IF CanIssue(paid, "review", s.current.round)
          THEN [paid EXCEPT !.phase = "review_due", !.active = 0] ELSE Finish(paid, "failed", 0)
 SettleReview == /\ b.phase = "reviewing" /\ b.pending = None /\ b.terminal = None
-    /\ \E outcome \in (IF Presentation \/ Profile \in {"transport", "late"} THEN {"pass"} ELSE IF Profile = "structural" THEN {"pass", "failed"} ELSE {"pass", "blocking", "failed"}),
-          known \in (IF Presentation \/ Profile \in {"structural", "late"} THEN {TRUE} ELSE BOOLEAN),
+    /\ \E outcome \in (IF Presentation \/ Profile \in {"transport", "late"} THEN {"pass"} ELSE IF Profile = "structural" THEN {"pass", "failed"} ELSE IF FeedbackProfile THEN {"pass", "blocking"} ELSE {"pass", "blocking", "failed"}),
+          known \in (IF Presentation \/ Profile \in {"structural", "late"} \/ FeedbackProfile THEN {TRUE} ELSE BOOLEAN),
           mismatch \in (IF Profile \in {"accounting", "combined"} THEN
               {"exact", "generation", "execution", "attempt", "source", "workflow", "candidate", "patch", "ci", "gate", "acceptance", "original"}
               ELSE {"exact"}) : b' = ReviewResult(b, b.active, outcome, known, IncomingBinding(b, b.active, mismatch))
     /\ UNCHANGED env
 SettleRepair == /\ b.phase = "repairing" /\ b.pending = None /\ b.terminal = None
-    /\ \E known \in (IF Profile \in {"structural", "transport"} THEN {TRUE} ELSE BOOLEAN),
-          passed \in (IF Profile \in {"structural", "transport"} THEN {TRUE} ELSE BOOLEAN) :
+    /\ \E known \in (IF Profile \in {"structural", "transport"} \/ FeedbackProfile THEN {TRUE} ELSE BOOLEAN),
+          passed \in (IF Profile \in {"structural", "transport"} THEN {TRUE} ELSE BOOLEAN),
+          progress \in (IF FeedbackProfile THEN BOOLEAN ELSE {TRUE}) :
        LET paid == Account(b, b.active, UsageClass, known, known) IN
-       b' = (IF ~known THEN Hold(paid) ELSE IF passed
-            THEN [paid EXCEPT !.phase = "repair_built", !.active = 0]
+       b' = (IF ~known THEN Hold(paid)
+            ELSE IF ~progress THEN IF b.published # 0 THEN [Hold(paid) EXCEPT !.active = 0, !.cause = None]
+                                  ELSE Finish(paid, "failed", 0)
+            ELSE IF passed THEN [paid EXCEPT !.phase = "repair_built", !.active = 0]
             ELSE IF CanIssue(paid, "build", b.current.round + 1)
-                 THEN [paid EXCEPT !.phase = "repair_due", !.active = 0] ELSE Finish(paid, "failed", 0))
+                 THEN [paid EXCEPT !.phase = "repair_due", !.active = 0]
+                 ELSE IF b.published # 0 THEN [Hold(paid) EXCEPT !.active = 0, !.cause = None]
+                 ELSE Finish(paid, "failed", 0))
     /\ UNCHANGED env
 LateResult == /\ ~Presentation /\ Profile \in {"combined", "accounting", "late"}
     /\ \E id \in Indices(b.accounts), known \in (IF LateUnknown THEN BOOLEAN ELSE {TRUE}) :
@@ -168,7 +209,7 @@ LateResult == /\ ~Presentation /\ Profile \in {"combined", "accounting", "late"}
        /\ b' = Account(b, id, IF known THEN UsageClass ELSE b.accounts[id].tokens, known, known)
     /\ UNCHANGED env
 Stop == /\ b.pending = "stop_execution"
-    /\ \E known \in (IF Presentation \/ Profile = "structural" THEN {TRUE} ELSE BOOLEAN) :
+    /\ \E known \in (IF Presentation \/ Profile = "structural" \/ FeedbackProfile THEN {TRUE} ELSE BOOLEAN) :
        LET paid == Account(b, b.active, UsageClass, known, known) IN
        b' = (IF ~known THEN paid ELSE [paid EXCEPT !.active = IF b.terminal = None THEN 0 ELSE Active(paid),
             !.pending = IF b.terminal = None THEN None ELSE IF Active(paid) = 0 THEN "finish_pr" ELSE "stop_execution",
@@ -177,11 +218,11 @@ Stop == /\ b.pending = "stop_execution"
 Open == /\ b.pending = "open_pr" /\ env.pr = "open"
     /\ b' = [b EXCEPT !.published = 1, !.promoted = Current(b), !.pending = None, !.phase = "handoff"]
     /\ UNCHANGED env
-Promote == /\ b.pending = "promote_pr" /\ env.ref = Current(b)
-    /\ b' = (IF env.head = Current(b) THEN [b EXCEPT !.pending = None, !.phase = "handoff"] ELSE Hold(b))
+Promote == /\ b.pending = "promote_pr" /\ env.ref = HeadOf(b, Current(b))
+    /\ b' = (IF env.head = HeadOf(b, Current(b)) THEN [b EXCEPT !.pending = None, !.phase = "handoff"] ELSE Hold(b))
     /\ UNCHANGED env
 CompleteHandoff == /\ b.pending = "complete_handoff"
-    /\ b' = [b EXCEPT !.pending = None, !.phase = "waiting", !.ready = TRUE, !.promoted = Current(b)]
+    /\ b' = [b EXCEPT !.pending = None, !.phase = "waiting", !.ready = TRUE, !.promoted = Current(b), !.cause = None]
     /\ UNCHANGED env
 Void == /\ b.pending = "void_readiness" /\ b' = Hold(b) /\ UNCHANGED env
 FinishPr == /\ b.pending = "finish_pr"
@@ -198,20 +239,23 @@ HeadConverges == /\ env.pr = "open" /\ env.head # env.ref
     /\ env' = [env EXCEPT !.head = env.ref] /\ UNCHANGED b
 OrdinaryPass == /\ env.pr = "open" /\ env.head = env.ref /\ env.ordinary # env.head
     /\ env' = [env EXCEPT !.ordinary = env.head] /\ UNCHANGED b
-MainMoves == /\ ~Presentation /\ Profile \in {"combined", "structural", "transport", "late"}
+MainMoves == /\ ~Presentation /\ Profile \in {"combined", "structural", "transport", "late", "feedback"}
+    /\ (Profile # "feedback" \/ b.phase \in {"waiting", "held"})
     /\ b.phase \notin {"admit", "specify", "accept", "build", "terminal"}
     /\ (Profile # "structural" \/ b.phase \in {"validate", "review_due", "waiting", "stopping"})
     /\ env.main <= MaxRefreshes
     /\ env' = [env EXCEPT !.main = @ + 1] /\ UNCHANGED b
 Switch == /\ ~Presentation /\ Profile \in {"combined", "transport"} /\ env' = [env EXCEPT !.enabled = ~@] /\ UNCHANGED b
 Capacity == /\ ~Presentation /\ Profile = "combined" /\ env' = [env EXCEPT !.capacity = ~@] /\ UNCHANGED b
-OwnerHead == /\ ~Presentation /\ Profile \in {"combined", "transport"} /\ env.pr = "open" /\ env.ref # 99
+OwnerHead == /\ ~Presentation /\ (Profile \in {"combined", "transport"} \/ FeedbackProfile) /\ env.pr = "open" /\ env.ref # 99
     /\ env' = [env EXCEPT !.ref = 99, !.ordinary = 0] /\ UNCHANGED b
 OwnerMerge == /\ env.pr = "open"
     /\ env' = [env EXCEPT !.pr = "merged", !.mergeHead = env.head, !.mergeSha = 100 + env.head] /\ UNCHANGED b
-OwnerClose == /\ ~Presentation /\ Profile \in {"combined", "transport"} /\ env.pr = "open"
+OwnerFeedback == /\ ~Presentation /\ FeedbackProfile /\ env.pr = "open" /\ env.feedbacks < 2
+    /\ env' = [env EXCEPT !.feedbacks = @ + 1] /\ UNCHANGED b
+OwnerClose == /\ ~Presentation /\ (Profile \in {"combined", "transport"} \/ FeedbackProfile) /\ env.pr = "open"
     /\ env' = [env EXCEPT !.pr = "closed"] /\ UNCHANGED b
-Environment == MainMoves \/ Switch \/ Capacity \/ OwnerHead \/ OwnerMerge \/ OwnerClose \/ HeadConverges \/ OrdinaryPass
+Environment == MainMoves \/ Switch \/ Capacity \/ OwnerHead \/ OwnerFeedback \/ OwnerMerge \/ OwnerClose \/ HeadConverges \/ OrdinaryPass
 Remote == RemoteOpen \/ RemotePromote
 Idle == /\ (b.phase \in {"waiting", "held", "terminal"} \/ ~env.enabled \/ ~env.capacity)
     /\ UNCHANGED vars
@@ -219,13 +263,16 @@ Next == Policy \/ Completion \/ Callback \/ Remote \/ Environment \/ Idle
 Spec == Init /\ [][Next]_vars
 
 TypeOK == /\ b.phase \in {"admit", "specify", "accept", "build", "validate", "review_due", "reviewing",
-                           "repair_due", "repairing", "repair_built", "handoff", "waiting", "held", "stopping", "finishing", "terminal"}
+                           "repair_due", "repairing", "repair_built", "handoff", "waiting", "held", "stopping", "finishing", "terminal", "owner_due"}
     /\ b.pending \in {None, "validate", "launch_review", "repair_build", "stop_execution", "open_pr",
                        "promote_pr", "complete_handoff", "void_readiness", "finish_pr"}
     /\ env.pr \in {"none", "open", "closed", "merged"}
     /\ b.active \in 0..Len(b.accounts) /\ b.promoted \in 0..MaxGenerations /\ b.published \in {0, 1}
     /\ env.main \in 0..(MaxRefreshes + 1) /\ env.head \in (0..MaxGenerations) \cup {99}
     /\ env.ref \in (0..MaxGenerations) \cup {99}
+    /\ b.cause \in {None, "ci", "review", "feedback"} /\ b.batches \in 0..2
+    /\ b.authored \in {None, "factory", "owner"} /\ env.feedbacks \in 0..2
+    /\ (\A i \in Indices(Generations(b)) : Generations(b)[i].owner \in BOOLEAN)
     /\ \A i \in Indices(b.accounts) :
            /\ b.accounts[i].stage \in {"review", "build"}
            /\ b.accounts[i].known \in BOOLEAN /\ b.accounts[i].settled \in BOOLEAN /\ b.accounts[i].live \in BOOLEAN
@@ -240,13 +287,23 @@ CertificateSound == \A g \in Indices(Generations(b)) : (Generations(b)[g].cert =
     (Generations(b)[g].ci /\ \E i \in Indices(b.accounts) :
         b.accounts[i].stage = "review" /\ b.accounts[i].generation = g
         /\ Generations(b)[g].certBinding = CertificateFields(Generations(b)[g], g, i, b.accounts[i].attempt)))
-ReadyHasCertificate == b.ready => Certified(b, b.promoted)
+ReadyHasCertificate == b.ready => Certified(b, HeadOf(b, b.promoted))
 MergeAssuranceTruthful == b.terminal = "merged" =>
     /\ b.mergeSha = 100 + b.mergedHead
     /\ (b.assurance = "factory_verified" <=> Certified(b, b.mergedHead))
 NoLiveTerminal == b.phase = "terminal" => (\A i \in Indices(b.accounts) : ~b.accounts[i].live)
 FinishOnlyAfterSettlement == [][(b.pending = "stop_execution" /\ b'.pending = "finish_pr") => Drained(b')]_vars
-NoPostPrRepair == b.published # 0 => b.phase \notin {"repair_due", "repairing", "repair_built"}
+PostPrRepairOnlyFeedback == b.published # 0 /\ b.phase \in RepairPhases => b.cause = "feedback"
+PostPrRepairNotReady == b.published # 0 /\ b.phase \in RepairPhases => ~b.ready
+NoOwnerAuthoredRepair == b.phase \in RepairPhases =>
+    ~b.current.owner /\ (b.promoted = 0 \/ ~Generations(b)[b.promoted].owner)
+NoFactoryCommitOnOwnerHead == \A i \in Indices(Generations(b)) : Generations(b)[i].expected # 99
+MergeAuthorTruthful == b.terminal = "merged" /\ b.assurance = "factory_verified" =>
+    (b.authored = "owner" <=> b.mergedHead = 99)
+NoPublishedRepairWitness == ~(b.published # 0 /\ b.phase = "repairing")
+NoOwnerReadyWitness == ~(b.ready /\ HeadOf(b, b.promoted) = 99)
+NoMergeMidRepairWitness == ~(b.terminal = "merged" /\ b.assurance = "factory_verified" /\ b.cause = "feedback")
+NoOwnerAuthoredMergeWitness == ~(b.terminal = "merged" /\ b.authored = "owner")
 OneExecution == Cardinality({i \in Indices(b.accounts) : b.accounts[i].live}) <= 1
 WaitingSlotFree == b.phase = "waiting" =>
     (\A i \in Indices(b.accounts) : ~b.accounts[i].live) /\ b.pending = None
@@ -260,7 +317,13 @@ HistoryImmutable == [][SubSeq(b'.history, 1, Len(b.history)) = b.history]_vars
 UsageMonotonic == [][Usage(b') >= Usage(b)]_vars
 IssuedMonotonic == [][Len(b'.accounts) >= Len(b.accounts)]_vars
 HandoffDecisionExact == [][(b'.pending = "complete_handoff" /\ b.pending # "complete_handoff") =>
-    (b.current.cert /\ env.head = Current(b) /\ env.ref = Current(b) /\ env.ordinary = Current(b))]_vars
+    (b.current.cert /\ env.head = HeadOf(b, Current(b)) /\ env.ref = HeadOf(b, Current(b)) /\ env.ordinary = HeadOf(b, Current(b)))]_vars
 PromotionDecisionExact == [][(b'.pending = "promote_pr" /\ b.pending # "promote_pr") =>
     (b.current.cert /\ b.current.expected # 0 /\ env.head = b.current.expected /\ env.ref = b.current.expected)]_vars
+PublishedNeverFails == b.published # 0 => b.terminal # "failed"
+OwnerHeadNotReady == (b.phase = "owner_due" \/ (b.current.owner /\ ~b.current.cert)) => ~b.ready
+OwnerPushStopsLiveWork == b.phase = "owner_due" =>
+    (\A i \in Indices(b.accounts) : ~b.accounts[i].live)
+FeedbackRepairAtBoundary == [][(b'.batches > b.batches) =>
+    (b.phase \in {"waiting", "held"} /\ (\A i \in Indices(b.accounts) : ~b.accounts[i].live))]_vars
 ====
