@@ -72,10 +72,11 @@ A clean landing needs all of these facts:
    refreshes at round 0 are not repairs. An unavailable `repairRounds`
    aggregate never means zero; a known positive started count disqualifies
    a landing. Owner-feedback rounds count as repairs too.
-3. No submitted `CHANGES_REQUESTED` review from an actor other than the
-   factory bot arrived on the landed PR before its merge time. This counts
-   even if no repair started or the original round-0 head remained certified.
-   See the intervention rule below.
+3. No review intervention before merge under the rule below: a submitted
+   `CHANGES_REQUESTED` review from an actor other than the factory bot, or a
+   dismissed change request originally submitted by a non-bot actor. Dismissal
+   does not erase intervention, even if no repair started or the original
+   round-0 head remained certified.
 4. A v5 landing is not `authored: owner`. Older rows lack that field and use
    their recorded assurance and generation. An `owner_override` is landed but
    never clean.
@@ -95,35 +96,49 @@ follow-up is still listed; it can never turn that landing into a clean one.
 
 ### Intervention rule
 
-Online mode reads submitted reviews of each included landed row's `pr`,
-independently of the defect query and whether the landing already needed a
-repair. One bounded paginated read per distinct PR uses repository-scoped
+Online mode reads submitted reviews and the timeline of each included landed
+row's `pr`, independently of the defect query and whether the landing already
+needed a repair. Each distinct PR is read once using repository-scoped
 `gh api` GET requests, with no write or permission lookup:
 
 ```sh
 gh api 'repos/<repo>/pulls/<n>/reviews?per_page=100&page=1'
+gh api 'repos/<repo>/issues/<n>/timeline?per_page=100&page=1'
 ```
 
-Numbered pages keep reads on the same `gh` path as the defect query. The read
-allows at most ten pages of 100 reviews within 30 seconds per PR. A short page
-proves completion; ten full pages, a failed page, invalid data or truncated
-output gives `unknown: intervention_unreadable`. Partial results never prove
-absence, even if an earlier page contained a change request. Offline reads
-are unknown too. Ledger versions 1–5 need no new field: the online read can
-establish absence of review intervention for any of them.
+Each endpoint allows at most ten numbered pages of 100 items within 30 seconds.
+A short page proves completion; ten full pages, a failed page, invalid data or
+truncated output gives `unknown: intervention_unreadable`. Both reads must
+complete, even if an earlier page contained a change request. Offline reads
+are unknown too. All GitHub reads for the report, including the defect-label
+check and defect query, share a 120-second overall deadline. Each request is
+limited to the time remaining. When the deadline is hit, unfinished and
+remaining landings have `unknown: intervention_unreadable`; completed reads
+remain usable. Ledger-proven intervention still takes precedence. Ledger
+versions 1–5 need no new field.
 
 A review counts when its current returned `state` is `CHANGES_REQUESTED`, its
 `submitted_at` is strictly before the row's merge time, and `user.login` is not
-`exe-dev-github-integration[bot]` (case-insensitive). Approvals, comments,
-pending or dismissed reviews, and reviews at or after merge do not count.
+`exe-dev-github-integration[bot]` (case-insensitive).
+
+A timeline `review_dismissed` event also counts when `dismissed_review.state`
+is `changes_requested` or `CHANGES_REQUESTED` and the original review was
+submitted strictly before merge by a non-bot reviewer. The event's `review_id`
+is matched to the reviews list for the original `submitted_at` and reviewer,
+not the actor who dismissed it. A reviewer with `user.type: Bot` or a login
+ending in `[bot]` (case-insensitive) is a bot. An unmatchable dismissed change
+request makes intervention unreadable. Dismissed approvals and comment reviews
+do not count. Pending reviews and reviews submitted at or after merge do not
+count either. Dismissal never cancels a human change request for this metric.
+
 The metric deliberately does **not** check write permission. The owner is the
 only writer today, but a non-writer's change request still means a human had
-to step in. This uses F10's submitted-change-request signal, not its repair
-authorization gate. It observes current review state, not a reconstructed
-history of dismissed or deleted requests.
+to step in. This measures intervention, not F10's repair authorization gate.
+Deleted reviews are not reconstructed.
 
 Each landing reports `intervention` as `{kind: known, value: true|false,
-source: github_reviews}` or an unknown with reason `intervention_unreadable`.
+source: github_reviews}` (covering both reviews and timeline) or an unknown
+with reason `intervention_unreadable`.
 Owner-authored v5 heads and owner overrides always report true with
 `source: ledger`, even offline or with a false fixture. True intervention adds
 `owner_intervention` to the landing's reasons. A validation repair alone does

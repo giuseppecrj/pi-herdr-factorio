@@ -1173,8 +1173,10 @@ process.stdout.write(JSON.stringify(result));
 						})),
 					),
 				);
+
 				let now = Date.parse(matureAt),
 					calls = 0;
+
 				context.mock.method(Date, "now", () => now);
 
 				const value = await cli(
@@ -1248,12 +1250,14 @@ describe("measured owner intervention", () => {
 				return { code: 0, stdout: '{"name":"factory:defect"}', stderr: "" };
 			assert.match(
 				args[1] ?? "",
-				/^repos\/giuseppecrj\/pi-herdr-factorio\/pulls\/\d+\/reviews\?per_page=100&page=\d+$/,
+				/^repos\/giuseppecrj\/pi-herdr-factorio\/(?:pulls\/\d+\/reviews|issues\/\d+\/timeline)\?per_page=100&page=\d+$/,
 			);
 			assert.deepEqual(args.slice(0, 1), ["api"]);
 			assert.equal(args.length, 2);
 
-			return read(args);
+			return args[1]?.includes("/timeline?")
+				? { code: 0, stdout: "[]", stderr: "" }
+				: read(args);
 		};
 
 	for (const [name, reviews, intervention] of [
@@ -1576,6 +1580,9 @@ describe("measured owner intervention", () => {
 				async (_command, args) => {
 					if (args[1]?.includes("/labels/"))
 						return { code: 1, stdout: "", stderr: "missing label" };
+
+					if (args[1]?.includes("/timeline?"))
+						return { code: 0, stdout: "[]", stderr: "" };
 					assert.match(args[1] ?? "", /\/pulls\/(644|654)\/reviews\?/);
 
 					return {
@@ -1598,7 +1605,7 @@ describe("measured owner intervention", () => {
 			assert.ok(
 				output.tickets[1].landings[0].reasons.includes("owner_intervention"),
 			);
-			assert.equal(value.calls.length, 3);
+			assert.equal(value.calls.length, 5);
 		});
 	});
 
@@ -1660,7 +1667,7 @@ describe("measured owner intervention", () => {
 			assert.equal(output.primary.numerator, 1000);
 			assert.equal(output.primary.denominator, 1000);
 			assert.equal(output.tokensPerCleanLanding, 100);
-			assert.equal(value.calls.length, 1002);
+			assert.equal(value.calls.length, 2002);
 			assert.ok(elapsed < 2000, `${elapsed} ms exceeds 2 s`);
 		});
 	});
@@ -1750,6 +1757,15 @@ describe("metrics CLI", () => {
 				assert.deepEqual(value.calls, [
 					["gh", "api", `repos/${repo}/labels/factory%3Adefect`],
 					["gh", "api", `repos/${repo}/pulls/622/reviews?per_page=100&page=1`],
+					...(result.stdout === "[]"
+						? [
+								[
+									"gh",
+									"api",
+									`repos/${repo}/issues/622/timeline?per_page=100&page=1`,
+								],
+							]
+						: []),
 				]);
 			}
 

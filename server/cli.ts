@@ -735,20 +735,25 @@ async function readMetricDefects(repo: string, io: CliIo): Promise<DefectRead> {
 	}
 }
 
-type MetricReview = { state: string; actor: string; submittedAt: number };
+type MetricReview = {
+	id: number | null;
+	state: string;
+	actor: string;
+	bot: boolean;
+	submittedAt: number;
+};
 
 const INTERVENTION_UNREADABLE = {
 	kind: "unknown",
 	reason: "intervention_unreadable",
 } as const;
 
-async function readMetricReviews(
-	repo: string,
-	pr: number,
+async function readMetricPages(
+	path: string,
 	io: CliIo,
-): Promise<MetricReview[] | null> {
+): Promise<JsonValue[] | null> {
 	const deadline = Date.now() + FETCH_TIMEOUT_MS;
-	const reviews: MetricReview[] = [];
+	const entries: JsonValue[] = [];
 
 	try {
 		for (let page = 1; page <= 10; page++) {
@@ -758,54 +763,107 @@ async function readMetricReviews(
 
 			const result = await io.exec(
 				"gh",
-				["api", `repos/${repo}/pulls/${pr}/reviews?per_page=100&page=${page}`],
+				["api", `${path}?per_page=100&page=${page}`],
 				{ timeoutMs: remaining },
 			);
 
-			if (result.code !== 0) return null;
+			if (result.code !== 0 || Date.now() >= deadline) return null;
 			const items = arrayOf(parseJson(result.stdout));
 
 			if (items === null || items.length > 100) return null;
+			entries.push(...items);
 
-			for (const item of items) {
-				const record = objectOf(item);
-				const state = textOf(fieldOf(record, "state"));
-
-				const actor = textOf(
-					fieldOf(objectOf(fieldOf(record, "user")), "login"),
-				);
-
-				const submitted = fieldOf(record, "submitted_at");
-
-				if (
-					state === null ||
-					![
-						"APPROVED",
-						"CHANGES_REQUESTED",
-						"COMMENTED",
-						"DISMISSED",
-						"PENDING",
-					].includes(state) ||
-					actor === null ||
-					actor === ""
-				)
-					return null;
-
-				if (state === "PENDING" && submitted === null) continue;
-				const submittedAt = textOf(submitted);
-
-				if (submittedAt === null || !validMetricInstant(submittedAt))
-					return null;
-				reviews.push({ state, actor, submittedAt: Date.parse(submittedAt) });
-			}
-
-			if (items.length < 100) return reviews;
+			if (items.length < 100) return entries;
 		}
 	} catch {
 		return null;
 	}
 
 	return null;
+}
+
+async function readMetricReviews(
+	repo: string,
+	pr: number,
+	io: CliIo,
+): Promise<MetricReview[] | null> {
+	const items = await readMetricPages(`repos/${repo}/pulls/${pr}/reviews`, io);
+
+	if (items === null) return null;
+	const reviews: MetricReview[] = [];
+
+	for (const item of items) {
+		const record = objectOf(item);
+		const state = textOf(fieldOf(record, "state"));
+
+		const actor = textOf(fieldOf(objectOf(fieldOf(record, "user")), "login"));
+
+		const submitted = fieldOf(record, "submitted_at");
+
+		if (
+			state === null ||
+			![
+				"APPROVED",
+				"CHANGES_REQUESTED",
+				"COMMENTED",
+				"DISMISSED",
+				"PENDING",
+			].includes(state) ||
+			actor === null ||
+			actor === ""
+		)
+			return null;
+
+		if (state === "PENDING" && submitted === null) continue;
+		const submittedAt = textOf(submitted);
+
+		if (submittedAt === null || !validMetricInstant(submittedAt)) return null;
+		reviews.push({
+			id: countOf(fieldOf(record, "id")),
+			state,
+			actor,
+			bot:
+				actor.toLowerCase().endsWith("[bot]") ||
+				textOf(fieldOf(objectOf(fieldOf(record, "user")), "type")) === "Bot",
+			submittedAt: Date.parse(submittedAt),
+		});
+	}
+
+	const timeline = await readMetricPages(
+		`repos/${repo}/issues/${pr}/timeline`,
+		io,
+	);
+
+	if (timeline === null) return null;
+
+	for (const item of timeline) {
+		const record = objectOf(item);
+		const event = textOf(fieldOf(record, "event"));
+
+		if (event === null) return null;
+
+		if (event !== "review_dismissed") continue;
+		const dismissed = objectOf(fieldOf(record, "dismissed_review"));
+		const state = textOf(fieldOf(dismissed, "state"))?.toUpperCase();
+
+		if (
+			state === undefined ||
+			!["APPROVED", "COMMENTED", "CHANGES_REQUESTED"].includes(state)
+		)
+			return null;
+
+		if (state !== "CHANGES_REQUESTED") continue;
+		const id = countOf(fieldOf(dismissed, "review_id"));
+
+		const original =
+			id === null ? undefined : reviews.find((review) => review.id === id);
+
+		if (original === undefined) return null;
+
+		if (!original.bot) reviews.push({ ...original, state });
+	}
+
+	return reviews;
 }
 
 async function readMetricInterventions(
@@ -980,10 +1038,31 @@ async function runMetricsCli(
 		return EXIT.invalid;
 	}
 
+	const githubDeadline = Date.now() + 120_000;
+
+	const githubIo: CliIo = {
+		...io,
+		exec: async (command, args, options) => {
+			const remaining = githubDeadline - Date.now();
+
+			if (remaining <= 0) throw new Error("metric_github_deadline");
+
+			const result = await io.exec(command, args, {
+				...options,
+				timeoutMs: Math.min(options?.timeoutMs ?? FETCH_TIMEOUT_MS, remaining),
+			});
+
+			if (Date.now() >= githubDeadline)
+				throw new Error("metric_github_deadline");
+
+			return result;
+		},
+	};
+
 	const defects: DefectRead =
 		values.offline === true
 			? { kind: "unknown", reason: "offline" }
-			: await readMetricDefects(values.repo, io);
+			: await readMetricDefects(values.repo, githubIo);
 
 	const defectReadAt = Date.now();
 
@@ -1002,7 +1081,7 @@ async function runMetricsCli(
 			? await readInterventionFixture(values["intervention-file"])
 			: values.offline === true
 				? undefined
-				: await readMetricInterventions(ledger, values.repo, io);
+				: await readMetricInterventions(ledger, values.repo, githubIo);
 
 	if (interventions === null) {
 		io.stdout(json({ error: "intervention_fixture_invalid" }));

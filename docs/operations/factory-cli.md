@@ -38,12 +38,16 @@ listed digests unknown. The real ledger never admits a verification cohort.
 Online mode confirms that `factory:defect` exists before querying labeled
 issues. The owner must create the label; missing or unconfirmed labels give
 `unknown: label_missing`. A future online `--now` is refused against the actual
-defect-read time. Online mode also reads the landed PR's submitted reviews,
-once per distinct PR with bounded numbered pagination. A non-factory-bot
-`CHANGES_REQUESTED` review submitted before merge establishes intervention;
-write permission is deliberately not checked. Owner-authored heads and owner
-overrides also count. `--offline` skips GitHub and keeps review intervention
-and defect evidence unknown unless the ledger itself proves intervention.
+defect-read time. Online mode also reads the landed PR's submitted reviews
+and timeline, once per distinct PR with bounded numbered pagination. A
+non-factory-bot `CHANGES_REQUESTED` review submitted before merge establishes
+intervention. A timeline dismissal of a change request originally submitted
+before merge by a non-bot reviewer still counts; dismissed approvals and
+comments do not. Write permission is deliberately not checked. All GitHub
+reads share a 120-second deadline; unfinished and remaining intervention
+reads become unknown. Owner-authored heads and owner overrides also count.
+`--offline` skips GitHub and keeps review intervention and defect evidence
+unknown unless the ledger itself proves intervention.
 `--intervention-file` supplies labeled fixture facts for tests and verification
 lanes only, with `--offline` and `--ledger-file`; it cannot establish no defects.
 Pending and unknown cohorts have no headline cost per clean landing. Threshold

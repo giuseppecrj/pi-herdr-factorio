@@ -156,9 +156,13 @@ Use the read-only [`metrics --json` command](factory-cli.md#ticket-outcome-metri
 to report cohort outcomes and charged token totals. [Factory ticket metrics](metrics.md)
 defines the seven-day window, exclusions and unknowns. Versions 1–5 do not
 record complete owner-feedback history. The metric instead reads the landed
-PR's submitted reviews online: a non-factory-bot `CHANGES_REQUESTED` review
-before merge counts as intervention, deliberately without a permission check.
-Offline, failed or incomplete reads give `unknown: intervention_unreadable`.
+PR's submitted reviews and timeline online: a non-factory-bot
+`CHANGES_REQUESTED` review before merge counts as intervention, deliberately
+without a permission check. A dismissed change request originally submitted
+before merge by a non-bot reviewer still counts; dismissed approvals and
+comments do not. Offline, failed or incomplete reads give
+`unknown: intervention_unreadable`. All GitHub reads share a 120-second report
+deadline; unfinished and remaining intervention reads become unknown.
 Owner-authored heads and owner overrides still establish intervention from
 the ledger.
 The owner must create `factory:defect` before no-defect evidence is available.
