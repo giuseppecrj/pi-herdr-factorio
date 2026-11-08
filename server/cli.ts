@@ -63,22 +63,27 @@ import { runGatesCli } from "./gates.ts";
 import { runViewerCli } from "./viewer.ts";
 import {
 	arrayOf,
+	boolOf,
 	countOf,
 	fieldOf,
 	objectOf,
 	parseJson,
 	textOf,
 } from "./sandbox/json.ts";
+import { parseLedger } from "../src/ledger.ts";
 import {
 	computeMetrics,
+	excludedRunReason,
 	METRIC_POLICY,
+	type Interventions,
+	type InterventionRead,
 	readReceiptDigests,
 	type DefectIssue,
 	type DefectRead,
 } from "../src/metrics.ts";
 
 export const USAGE = `Usage:
-  node server/cli.ts metrics --json --repo <owner/name> [--ledger-file <path>] [--state-dir <dir>] [--now <instant>] [--cohort production] [--offline]
+  node server/cli.ts metrics --json --repo <owner/name> [--ledger-file <path>] [--state-dir <dir>] [--now <instant>] [--cohort production] [--offline] [--intervention-file <fixture>]
   node server/cli.ts viewer --state-dir <dir> [--run <id>] [--port <n>] [--allowed-host <authorized.ts.net>] [--base-path </prefix>]
   node server/cli.ts gates --repository <dir> --gate-sha <sha> --candidate-sha <sha> --nonce <id> --output <dir> [--runner docker|local]
   node server/cli.ts workflow-check --json --repo <owner/name> [--ref <branch>] [--reload-ref <branch>]
@@ -393,6 +398,7 @@ type Printable =
 			readonly error:
 				| "ledger_unavailable"
 				| "ledger_too_large"
+				| "intervention_fixture_invalid"
 				| "now_after_defect_read";
 	  }
 	| AdmissionReceipt
@@ -729,6 +735,166 @@ async function readMetricDefects(repo: string, io: CliIo): Promise<DefectRead> {
 	}
 }
 
+type MetricReview = { state: string; actor: string; submittedAt: number };
+
+const INTERVENTION_UNREADABLE = {
+	kind: "unknown",
+	reason: "intervention_unreadable",
+} as const;
+
+async function readMetricReviews(
+	repo: string,
+	pr: number,
+	io: CliIo,
+): Promise<MetricReview[] | null> {
+	const deadline = Date.now() + FETCH_TIMEOUT_MS;
+	const reviews: MetricReview[] = [];
+
+	try {
+		for (let page = 1; page <= 10; page++) {
+			const remaining = deadline - Date.now();
+
+			if (remaining <= 0) return null;
+
+			const result = await io.exec(
+				"gh",
+				["api", `repos/${repo}/pulls/${pr}/reviews?per_page=100&page=${page}`],
+				{ timeoutMs: remaining },
+			);
+
+			if (result.code !== 0) return null;
+			const items = arrayOf(parseJson(result.stdout));
+
+			if (items === null || items.length > 100) return null;
+
+			for (const item of items) {
+				const record = objectOf(item);
+				const state = textOf(fieldOf(record, "state"));
+
+				const actor = textOf(
+					fieldOf(objectOf(fieldOf(record, "user")), "login"),
+				);
+
+				const submitted = fieldOf(record, "submitted_at");
+
+				if (
+					state === null ||
+					![
+						"APPROVED",
+						"CHANGES_REQUESTED",
+						"COMMENTED",
+						"DISMISSED",
+						"PENDING",
+					].includes(state) ||
+					actor === null ||
+					actor === ""
+				)
+					return null;
+
+				if (state === "PENDING" && submitted === null) continue;
+				const submittedAt = textOf(submitted);
+
+				if (submittedAt === null || !validMetricInstant(submittedAt))
+					return null;
+				reviews.push({ state, actor, submittedAt: Date.parse(submittedAt) });
+			}
+
+			if (items.length < 100) return reviews;
+		}
+	} catch {
+		return null;
+	}
+
+	return null;
+}
+
+async function readMetricInterventions(
+	ledger: Uint8Array,
+	repo: string,
+	io: CliIo,
+): Promise<Interventions> {
+	const byPr = new Map<number, MetricReview[] | null>();
+	const result = new Map<string, InterventionRead>();
+
+	for (const line of parseLedger(ledger)) {
+		if (
+			line.kind !== "known" ||
+			line.row.repo !== repo ||
+			excludedRunReason(line.row) !== null ||
+			result.has(line.row.runId)
+		)
+			continue;
+		const row = line.row;
+		const outcome = row.outcome;
+
+		if (outcome.kind !== "landed") continue;
+
+		if (row.pr === null || outcome.mergedAt.kind !== "known") {
+			result.set(row.runId, INTERVENTION_UNREADABLE);
+			continue;
+		}
+
+		const pr = row.pr.number;
+
+		if (!byPr.has(pr)) byPr.set(pr, await readMetricReviews(repo, pr, io));
+		const reviews = byPr.get(pr);
+		const mergedAt = Date.parse(outcome.mergedAt.value);
+		result.set(
+			row.runId,
+			reviews === null || reviews === undefined
+				? INTERVENTION_UNREADABLE
+				: {
+						kind: "known",
+						source: "github_reviews",
+						value: reviews.some(
+							(review) =>
+								review.state === "CHANGES_REQUESTED" &&
+								review.submittedAt < mergedAt &&
+								review.actor.toLowerCase() !==
+									"exe-dev-github-integration[bot]",
+						),
+					},
+		);
+	}
+
+	return result;
+}
+
+async function readInterventionFixture(
+	path: string,
+): Promise<Interventions | null> {
+	try {
+		const value = objectOf(parseJson(await readFile(resolve(path), "utf8")));
+		const landings = arrayOf(fieldOf(value, "landings"));
+
+		if (fieldOf(value, "version") !== 1 || landings === null) return null;
+		const result = new Map<string, InterventionRead>();
+
+		for (const landing of landings) {
+			const entry = objectOf(landing);
+			const runId = textOf(fieldOf(entry, "runId"));
+			const intervention = boolOf(fieldOf(entry, "intervention"));
+
+			if (
+				runId === null ||
+				!/^[a-f0-9]{64}$/.test(runId) ||
+				intervention === null ||
+				result.has(runId)
+			)
+				return null;
+			result.set(runId, {
+				kind: "known",
+				value: intervention,
+				source: "fixture",
+			});
+		}
+
+		return result;
+	} catch {
+		return null;
+	}
+}
+
 async function runMetricsCli(
 	argv: readonly string[],
 	io: CliIo,
@@ -745,6 +911,7 @@ async function runMetricsCli(
 				repo: { type: "string" },
 				ledger: { type: "string" },
 				"ledger-file": { type: "string" },
+				"intervention-file": { type: "string" },
 				"state-dir": { type: "string" },
 				now: { type: "string" },
 				cohort: { type: "string" },
@@ -769,6 +936,11 @@ async function runMetricsCli(
 		(values.ledger !== undefined && values["ledger-file"] !== undefined) ||
 		values.ledger === "" ||
 		values["ledger-file"] === "" ||
+		values["intervention-file"] === "" ||
+		(values["intervention-file"] !== undefined &&
+			(values.offline !== true ||
+				(values.ledger === undefined &&
+					values["ledger-file"] === undefined))) ||
 		values["state-dir"] === ""
 	) {
 		io.stderr(
@@ -825,6 +997,19 @@ async function runMetricsCli(
 		return EXIT.invalid;
 	}
 
+	const interventions =
+		values["intervention-file"] !== undefined
+			? await readInterventionFixture(values["intervention-file"])
+			: values.offline === true
+				? undefined
+				: await readMetricInterventions(ledger, values.repo, io);
+
+	if (interventions === null) {
+		io.stdout(json({ error: "intervention_fixture_invalid" }));
+
+		return EXIT.invalid;
+	}
+
 	const receiptDigests =
 		values["state-dir"] === undefined
 			? undefined
@@ -841,6 +1026,7 @@ async function runMetricsCli(
 				repo: values.repo,
 				now: values.now ?? new Date(defectReadAt).toISOString(),
 				defects,
+				interventions,
 				receiptDigests,
 				source: ledgerFile === undefined ? "ledger" : "file",
 			}),

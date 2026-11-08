@@ -155,11 +155,15 @@ A blocked job needs the owner. Fix the cause outside the controller, then delete
 Use the read-only [`metrics --json` command](factory-cli.md#ticket-outcome-metrics)
 to report cohort outcomes and charged token totals. [Factory ticket metrics](metrics.md)
 defines the seven-day window, exclusions and unknowns. Versions 1–5 do not
-record complete actionable owner-feedback history, so otherwise-clean landings
-are `unknown: intervention_not_recorded`, even when certified at round 0.
+record complete owner-feedback history. The metric instead reads the landed
+PR's submitted reviews online: a non-factory-bot `CHANGES_REQUESTED` review
+before merge counts as intervention, deliberately without a permission check.
+Offline, failed or incomplete reads give `unknown: intervention_unreadable`.
+Owner-authored heads and owner overrides still establish intervention from
+the ledger.
 The owner must create `factory:defect` before no-defect evidence is available.
 The report neither edits the ledger nor dispatches work.
 
 ## Not yet built
 
-Retrospective backfill of runs that ended before this build is not implemented. Historical context pressure and complete repair-round aggregates remain unavailable where they were not recorded, rather than inferred. Complete intervention history and money pricing remain unimplemented.
+Retrospective backfill of runs that ended before this build is not implemented. Historical context pressure and complete repair-round aggregates remain unavailable where they were not recorded, rather than inferred. Complete intervention history on the ledger and money pricing remain unimplemented.

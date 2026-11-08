@@ -42,13 +42,18 @@ Options:
   to an earlier failed run.
   Without this option, `receiptVerification` is `not_requested`; the ledger
   facts are used without claiming a local receipt audit.
-- `--offline` makes no GitHub call. Defect follow-up is unknown, never assumed
-  absent.
+- `--offline` makes no GitHub call. Defect follow-up and review intervention
+  are unknown, never assumed absent. Ledger-proven owner authorship or an
+  owner override still establishes intervention.
+- `--intervention-file <fixture>` is a test/verification-lane override, permitted
+  only with `--offline` and `--ledger-file` (or its `--ledger` alias). Its shape
+  is described below. It is not a production evidence source.
 - `--cohort production` is the only supported cohort. Verification runs are
   excluded from every report. There is no verification-cohort escape hatch.
 
 Exit codes are 0 for a report (including pending or unknown), 1 for an unreadable
-ledger and 2 for invalid arguments. An empty ledger is insufficient data, not a
+ledger, an invalid intervention fixture or a future online evaluation instant,
+and 2 for invalid arguments. An empty ledger is insufficient data, not a
 successful zero-defect history. Corrupt or unsupported rows are reported under
 `unknowns`, not silently discarded.
 
@@ -67,26 +72,15 @@ A clean landing needs all of these facts:
    refreshes at round 0 are not repairs. An unavailable `repairRounds`
    aggregate never means zero; a known positive started count disqualifies
    a landing. Owner-feedback rounds count as repairs too.
-3. No actionable owner change request ever arrived, even if its repair made
-   no change and the original round-0 head remained certified. Owner
-   intervention disqualifies a landing regardless of the eventual disposition.
+3. No submitted `CHANGES_REQUESTED` review from an actor other than the
+   factory bot arrived on the landed PR before its merge time. This counts
+   even if no repair started or the original round-0 head remained certified.
+   See the intervention rule below.
 4. A v5 landing is not `authored: owner`. Older rows lack that field and use
    their recorded assurance and generation. An `owner_override` is landed but
    never clean.
 5. Seven days have elapsed since the merge, and the defect query found no
    linked follow-up defect in that window.
-
-**Intervention evidence limitation.** Ledger versions 1–5 do not record the
-history of actionable feedback. A certifying round of 0, a zero repair count,
-or factory authorship cannot prove that the owner never requested changes.
-Otherwise-clean landings in these versions are therefore
-`unknown: intervention_not_recorded`, never clean by default. Known started
-repairs also disqualify a landing. The metric reads no private feedback text
-and adds no ledger field in this slice. Instrumenting a complete, durable
-intervention fact is separate work; until then these versions cannot establish
-a positive clean numerator. This applies to v5 too: it added authorship, not
-feedback history. The source is the versioned ledger codec, not current PR
-review state, which could have lost dismissed requests.
 
 A ticket is clean if any of its mature landings is clean. Otherwise a mature
 landing is landed-not-clean or unknown. A missing merge time or ambiguous
@@ -98,6 +92,66 @@ Any immature ticket makes the cohort `pending`, even if it also lacks a receipt.
 Unknowns are listed separately. A known repair or owner override proves a
 landing is not clean even when its defect follow-up is unknown. The unknown
 follow-up is still listed; it can never turn that landing into a clean one.
+
+### Intervention rule
+
+Online mode reads submitted reviews of each included landed row's `pr`,
+independently of the defect query and whether the landing already needed a
+repair. One bounded paginated read per distinct PR uses repository-scoped
+`gh api` GET requests, with no write or permission lookup:
+
+```sh
+gh api 'repos/<repo>/pulls/<n>/reviews?per_page=100&page=1'
+```
+
+Numbered pages keep reads on the same `gh` path as the defect query. The read
+allows at most ten pages of 100 reviews within 30 seconds per PR. A short page
+proves completion; ten full pages, a failed page, invalid data or truncated
+output gives `unknown: intervention_unreadable`. Partial results never prove
+absence, even if an earlier page contained a change request. Offline reads
+are unknown too. Ledger versions 1–5 need no new field: the online read can
+establish absence of review intervention for any of them.
+
+A review counts when its current returned `state` is `CHANGES_REQUESTED`, its
+`submitted_at` is strictly before the row's merge time, and `user.login` is not
+`exe-dev-github-integration[bot]` (case-insensitive). Approvals, comments,
+pending or dismissed reviews, and reviews at or after merge do not count.
+The metric deliberately does **not** check write permission. The owner is the
+only writer today, but a non-writer's change request still means a human had
+to step in. This uses F10's submitted-change-request signal, not its repair
+authorization gate. It observes current review state, not a reconstructed
+history of dismissed or deleted requests.
+
+Each landing reports `intervention` as `{kind: known, value: true|false,
+source: github_reviews}` or an unknown with reason `intervention_unreadable`.
+Owner-authored v5 heads and owner overrides always report true with
+`source: ledger`, even offline or with a false fixture. True intervention adds
+`owner_intervention` to the landing's reasons. A validation repair alone does
+not establish human intervention; it still disqualifies the landing separately
+as `repair_round`. Unknown review evidence cannot make an otherwise-clean
+landing clean; a known repair still proves it not clean.
+
+#### Fixture override for tests and verification lanes only
+
+An optional JSON file supplies explicit review-intervention facts for a frozen
+or constructed ledger, keyed by run ID:
+
+```json
+{
+  "version": 1,
+  "landings": [
+    { "runId": "<64-character run ID>", "intervention": false }
+  ]
+}
+```
+
+Use `--ledger-file <ledger.jsonl> --offline --intervention-file <fixture.json>`.
+Every override is labeled `source: fixture` on the landing. Omitted runs stay
+unknown. Invalid files exit 1 with `intervention_fixture_invalid`; online use
+or use with the real default ledger is a usage error. This does not override
+owner authorship, owner overrides, defect evidence, maturity or repairs.
+In particular, offline defects remain unknown, so a false intervention fixture
+alone cannot establish a clean landing.
 
 ### Defect rule
 
@@ -166,7 +220,8 @@ The version-1 report contains:
   observed. Otherwise a zero numerator gives `no_clean_landings`. A number
   inherits token coverage. `spend` is unavailable, not zero dollars.
 - `tickets`: attempts, tokens, maturity, landings, certified rounds, authorship,
-  defect results and reasons. Ticket unknowns never enter the clean numerator.
+  intervention and defect results and reasons. Ticket unknowns never enter the
+  clean numerator.
 - `unknowns`, `excluded`, `legacyRuns`, `defectRead` and `receiptVerification`:
   the evidence and coverage limitations.
 - `deferred`: the measurements below. None causes an action.
@@ -210,7 +265,9 @@ at ledger commit `48c885d`. Under these rules, 14 rows are excluded. The remaini
 
 At 2026-11-08 the cohort is pending, with zero clean landings so far,
 4,152,936 lower-bound charged tokens and undefined tokens per clean landing.
-Both landed tickets required a repair. This is not mature seven-day evidence.
+Both landed tickets required a repair. Online review evidence reports no
+intervention on #644 (no pre-merge change request) and intervention on #654 (owner change
+request 5815738464). This is not mature seven-day evidence.
 The unit suite includes synthetic clarification chains, defect windows, missing
 receipts, owner heads, intervention unknowns and a two-second computation
 budget for 1,000 landings with 1,000 in-window labeled defects.

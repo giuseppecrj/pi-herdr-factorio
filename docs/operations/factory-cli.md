@@ -26,7 +26,7 @@ See [Inspect one run's local evidence](viewer.md) for the routes, source limits,
 ## Ticket outcome metrics
 
 ```bash
-node server/cli.ts metrics --json --repo giuseppecrj/pi-herdr-factorio [--ledger-file <path>] [--state-dir <dir>] [--now <instant>] [--cohort production] [--offline]
+node server/cli.ts metrics --json --repo giuseppecrj/pi-herdr-factorio [--ledger-file <path>] [--state-dir <dir>] [--now <instant>] [--cohort production] [--offline] [--intervention-file <fixture>]
 ```
 
 `metrics` reads the locally fetched `origin/factory/ledger` ref without loading
@@ -38,15 +38,22 @@ listed digests unknown. The real ledger never admits a verification cohort.
 Online mode confirms that `factory:defect` exists before querying labeled
 issues. The owner must create the label; missing or unconfirmed labels give
 `unknown: label_missing`. A future online `--now` is refused against the actual
-defect-read time. `--offline` skips GitHub and keeps defect evidence unknown.
-Pending and unknown cohorts have no headline cost per clean landing. Existing
-v1–v5 rows cannot establish a clean landing without recorded intervention
-history. Threshold flags say "includes immature runs".
+defect-read time. Online mode also reads the landed PR's submitted reviews,
+once per distinct PR with bounded numbered pagination. A non-factory-bot
+`CHANGES_REQUESTED` review submitted before merge establishes intervention;
+write permission is deliberately not checked. Owner-authored heads and owner
+overrides also count. `--offline` skips GitHub and keeps review intervention
+and defect evidence unknown unless the ledger itself proves intervention.
+`--intervention-file` supplies labeled fixture facts for tests and verification
+lanes only, with `--offline` and `--ledger-file`; it cannot establish no defects.
+Pending and unknown cohorts have no headline cost per clean landing. Threshold
+flags say "includes immature runs".
 
-Exit 0 prints a report, including pending or unknown; exit 1 reports an
-unreadable ledger, a ledger over the default 256 MiB read limit, or a future
-online evaluation instant; exit 2 is a usage error. See [Factory ticket
-metrics](metrics.md) for maturity, defect matching, exclusions, accounting and
+Exit 0 prints a report, including pending or unknown. Exit 1 reports an
+unreadable ledger, a ledger over the default 256 MiB read limit, a future
+online evaluation instant or an invalid intervention fixture. Exit 2 is a
+usage error. See [Factory ticket metrics](metrics.md) for maturity, defect
+matching, exclusions, accounting and
 evidence limitations. This command writes no state and takes no action.
 
 ## Commands

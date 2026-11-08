@@ -46,6 +46,16 @@ export type DefectRead =
 	| { readonly kind: "known"; readonly issues: readonly DefectIssue[] }
 	| { readonly kind: "unknown"; readonly reason: string };
 
+export type InterventionRead =
+	| {
+			readonly kind: "known";
+			readonly value: boolean;
+			readonly source: "github_reviews" | "fixture" | "ledger";
+	  }
+	| { readonly kind: "unknown"; readonly reason: "intervention_unreadable" };
+
+export type Interventions = ReadonlyMap<string, InterventionRead>;
+
 type DefectResult =
 	| { kind: "none" }
 	| { kind: "linked"; issues: number[] }
@@ -70,6 +80,7 @@ type Landing = {
 	maturesAt: string | null;
 	certifiedRound: number | null;
 	authored: "factory" | "owner" | "not_recorded";
+	intervention: InterventionRead;
 	defect: DefectResult;
 	status: TicketStatus;
 	reasons: string[];
@@ -151,6 +162,7 @@ function landingOf(
 	now: number,
 	defects: DefectRead,
 	byReference: ReadonlyMap<number, readonly DefectIssue[]>,
+	interventions: Interventions | undefined,
 	unknowns: Unknown[],
 ): Landing | null {
 	if (row.outcome.kind !== "landed") return null;
@@ -196,6 +208,17 @@ function landingOf(
 
 	if (row.repairRounds.kind === "known" && row.repairRounds.value.started > 0)
 		reasons.push("repair_started");
+
+	const intervention: InterventionRead =
+		assurance.kind === "owner_override" || authored === "owner"
+			? { kind: "known", value: true, source: "ledger" }
+			: (interventions?.get(row.runId) ?? {
+					kind: "unknown",
+					reason: "intervention_unreadable",
+				});
+
+	if (intervention.kind === "known" && intervention.value)
+		reasons.push("owner_intervention");
 	const knownNotClean = reasons.length > 0;
 
 	if (mergedAt === null) reasons.push("merged_at_unavailable");
@@ -233,10 +256,9 @@ function landingOf(
 
 	if (defect.kind === "linked") reasons.push("follow_up_defect");
 
-	// v1–v5 omit actionable feedback history; round zero cannot prove no intervention.
-	const interventionUnknown = !knownNotClean && defect.kind !== "linked";
+	const interventionUnknown = intervention.kind === "unknown";
 
-	if (interventionUnknown) reasons.push("intervention_not_recorded");
+	if (interventionUnknown) reasons.push(intervention.reason);
 
 	if (defect.kind === "unknown" && !reasons.includes(defect.reason))
 		reasons.push(defect.reason);
@@ -245,7 +267,7 @@ function landingOf(
 		if (
 			reason === "merged_at_unavailable" ||
 			reason === "certified_generation_unavailable" ||
-			reason === "intervention_not_recorded" ||
+			reason === "intervention_unreadable" ||
 			(defect.kind === "unknown" && reason === defect.reason)
 		)
 			unknowns.push({
@@ -276,6 +298,7 @@ function landingOf(
 		maturesAt: matures === null ? null : new Date(matures).toISOString(),
 		certifiedRound,
 		authored,
+		intervention,
 		defect,
 		status,
 		reasons,
@@ -430,6 +453,7 @@ export function computeMetrics(input: {
 	readonly repo: string;
 	readonly now: string;
 	readonly defects: DefectRead;
+	readonly interventions?: Interventions;
 	readonly receiptDigests?: ReceiptDigests;
 	readonly source?: "file" | "ledger";
 }) {
@@ -497,7 +521,14 @@ export function computeMetrics(input: {
 
 			const landings = ordered
 				.map((row) =>
-					landingOf(row, now, input.defects, indexed.byReference, unknowns),
+					landingOf(
+						row,
+						now,
+						input.defects,
+						indexed.byReference,
+						input.interventions,
+						unknowns,
+					),
 				)
 				.filter((landing) => landing !== null);
 

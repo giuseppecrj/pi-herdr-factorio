@@ -307,9 +307,7 @@ describe("factory metrics", () => {
 		assert.equal(value.primary.numerator, 0);
 		assert.equal(ticketOf(value).landings[0]?.certifiedRound, 0);
 		assert.ok(
-			ticketOf(value).landings[0]?.reasons.includes(
-				"intervention_not_recorded",
-			),
+			ticketOf(value).landings[0]?.reasons.includes("intervention_unreadable"),
 		);
 	});
 
@@ -777,10 +775,26 @@ describe("review regressions", () => {
 			assert.equal(value.tickets[0]?.status, "unknown");
 			assert.ok(
 				value.unknowns.some(
-					(entry) => entry.reason === "intervention_not_recorded",
+					(entry) => entry.reason === "intervention_unreadable",
 				),
 			);
 			assert.equal(value.primary.numerator, 0);
+
+			const measured = computeMetrics({
+				ledger: bytesOf([row]),
+				repo,
+				now: "2026-12-01T00:00:00Z",
+				defects: none,
+				interventions: new Map([
+					[
+						row.runId,
+						{ kind: "known", value: false, source: "github_reviews" },
+					],
+				]),
+			});
+
+			assert.equal(measured.primary.numerator, 1);
+			assert.equal(measured.tickets[0]?.status, "clean");
 		}
 	});
 
@@ -1103,6 +1117,93 @@ describe("measured owner intervention", () => {
 		});
 	});
 
+	it("keeps ledger-proven owner authorship and overrides as intervention despite a false fixture", () => {
+		const v4 = rows[25];
+		assert.ok(
+			v4?.v === 4 &&
+				v4.outcome.kind === "landed" &&
+				v4.outcome.assurance.kind === "factory_verified",
+		);
+
+		const owner = ledgerRow({
+			...v4,
+			v: 5,
+			outcome: {
+				...v4.outcome,
+				assurance: { ...v4.outcome.assurance, authored: "owner" },
+			},
+		}).row;
+
+		const overridden = synthetic();
+		assert.ok(overridden.outcome.kind === "landed");
+
+		for (const row of [
+			owner,
+			{
+				...overridden,
+				outcome: {
+					...overridden.outcome,
+					assurance: { kind: "owner_override" as const },
+				},
+			},
+		]) {
+			const output = computeMetrics({
+				ledger: bytesOf([row]),
+				repo,
+				now: "2026-12-01T00:00:00Z",
+				defects: none,
+				interventions: new Map([
+					[row.runId, { kind: "known", value: false, source: "fixture" }],
+				]),
+			});
+
+			assert.deepEqual(output.tickets[0]?.landings[0]?.intervention, {
+				kind: "known",
+				value: true,
+				source: "ledger",
+			});
+			assert.equal(output.tickets[0]?.status, "landed_not_clean");
+			assert.equal(output.primary.numerator, 0);
+		}
+	});
+
+	it("withholds clean status when the merge time is unavailable", async () => {
+		await withLedger(async (path) => {
+			const row = synthetic();
+			assert.ok(row.outcome.kind === "landed");
+
+			for (const landing of [
+				{
+					...row,
+					outcome: {
+						...row.outcome,
+						mergedAt: {
+							kind: "unavailable" as const,
+							reason: "public_metadata_unavailable" as const,
+						},
+					},
+				},
+			]) {
+				writeFileSync(path, bytesOf([landing]));
+
+				const value = await cli(
+					cliArgs(path),
+					execWithReviews(() => {
+						throw new Error("must not read");
+					}),
+				);
+
+				const output = JSON.parse(value.stdout);
+				assert.deepEqual(output.tickets[0].landings[0].intervention, {
+					kind: "unknown",
+					reason: "intervention_unreadable",
+				});
+				assert.equal(output.primary.numerator, 0);
+				assert.equal(value.calls.length, 2);
+			}
+		});
+	});
+
 	it("keeps intervention unknown offline, including file ledgers without a fixture override", async () => {
 		await withLedger(async (path) => {
 			const value = await cli([...cliArgs(path), "--offline"]);
@@ -1360,6 +1461,7 @@ describe("metrics CLI", () => {
 				});
 				assert.deepEqual(value.calls, [
 					["gh", "api", `repos/${repo}/labels/factory%3Adefect`],
+					["gh", "api", `repos/${repo}/pulls/622/reviews?per_page=100&page=1`],
 				]);
 			}
 
@@ -1414,7 +1516,12 @@ describe("metrics CLI", () => {
 				}));
 
 				assert.equal(value.code, EXIT.ok);
-				assert.equal(value.calls.length, 2);
+				assert.equal(value.calls.length, 3);
+				assert.deepEqual(value.calls[2], [
+					"gh",
+					"api",
+					`repos/${repo}/pulls/622/reviews?per_page=100&page=1`,
+				]);
 				assert.deepEqual(value.calls[0], [
 					"gh",
 					"api",
