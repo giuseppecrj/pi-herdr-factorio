@@ -1,8 +1,8 @@
 # Bounded factory state models
 
-The F10-4 model covers published-PR feedback repair and owner-head recertification. Its runtime basis is merged F10-2 at `484a6ab`; owner paths follow the settled F10 design, sections 3.6, 3.7 and 6.1. F10-3 is not on that base. Two owner-path correspondence tests are explicitly skipped until it merges; model reachability is not runtime qualification of that unmerged implementation.
+The F10-4 model covers published-PR feedback repair and owner-head recertification. Its runtime correspondence is checked on merged F10-3 plus the owner-notice fix, `3c62fc7`. Both owner-path replays are enabled and pass through the real `handoffCandidate` and public `advance`; none remain pending. The TLA model and configs are unchanged from the earlier F10-2-based qualification.
 
-On 2026-11-08, **tla-ts 0.0.8** completed F1 structural and F2 feedback with all configured properties holding and empty queues. All four F3 reachability witnesses failed their deliberately false invariants with traces and exit 12. Four reviewer mutants also fail the new safety checks with traces (exits 12 or 13). F4 passed 38 runtime tests, with two F10-3 cases pending. No safety counterexample was found. Unrestricted accounting, substantive controller checking and composition of faults remain incomplete. These bounded checks are not a proof of the whole factory or permission to merge a PR.
+On 2026-11-08, **tla-ts 0.0.8** completed F1 structural and F2 feedback with all configured properties holding and empty queues. All four F3 reachability witnesses failed their deliberately false invariants with traces and exit 12. Four reviewer mutants also fail the new safety checks with traces (exits 12 or 13). After rebasing onto `3c62fc7`, F1 and all four witnesses reproduced their state counts; the unchanged-model F2 and mutation evidence carries forward. F4 now passes all 40 runtime tests with zero skips. No safety counterexample was found. Unrestricted accounting, substantive controller checking and composition of faults remain incomplete. These bounded checks are not a proof of the whole factory or permission to merge a PR.
 
 `Journey.tla` describes the shared `handoffCandidate` policy. `Controller.tla` instantiates Journey and adds claim persistence, external effects, captured callbacks, one restart and conditional validation-ref cleanup. It does not introduce another runtime candidate policy. Its legacy property name `NoPostPrRepair` now delegates to the five F10 replacement invariants, not the obsolete prohibition. `journey/Chart.cfg` also needed the replacement property list to keep the presentation check runnable.
 
@@ -78,8 +78,14 @@ Journey has no fairness assumptions. Controller weak fairness covers `Persist`, 
 
 The new owner-head properties concern the controller's observation, not instantaneous knowledge of a remote push. `OwnerHead` changes the remote ref before `OwnerDrift` observes it; head convergence is separate. `b.ready` abstracts published readiness and the `factory:review` label, not two independently written GitHub fields. `HandoffDecisionExact` checks the head and ordinary check when readiness is chosen. The model does not prove atomic withdrawal on GitHub at the instant of a push.
 
+Correspondence checked against `3c62fc7`:
+
+- **Generated rounds, not requests or attempts.** Runtime `latestRepairRound` reads retained generation intents. A no-change repair or a stop before build creates no generation, so a fresh owner request retries the same round with the existing attempt/usage floors. The model agrees on represented paths: only `RepairBuilt` selects `current.round + 1`; `FeedbackRepair`, `Issue`, failure, no progress and stop leave it unchanged. F2 covers no progress but not a pre-build refusal followed by a new request; it has only two submitted reviews. The runtime tests `F10-2 three no-progress attempts reuse one round, then refuse without corrupting the book` and `F10-3 a stop before any build retries the same feedback round after restart` cover these details, including codec recovery. Both pass in the merged full suite.
+
 Behaviour outside this model includes:
 
+- **Reset to a factory head.** Runtime `handoffGeneration` plus `observed` restores the matching factory generation as `current`, moves the abandoned owner evidence into history, and preserves accounts before considering feedback or main movement. The model's `OwnerHead` only moves to `99`; it has no reset action or current/history swap. Therefore it does not qualify readiness or repair after a reset, and its append-only `HistoryImmutable` property applies only to modeled paths, not this runtime swap. The merged tests `F10-3 reset feedback repairs the restored factory generation (review R1)`, reset before derivation, reset after failed validation and reset during a running owner review pass in the full suite. No reset proof is claimed.
+- **Protected pending notices.** The merged reducer preserves pending `derive_owner_patch`, `post_notice` and `void_readiness` effects before processing main movement; merge and close observation still take precedence. The model omits durable notice/summary effects and treats their transitions atomically. Its `Refresh` does not encode this protected-effect guard, so it cannot establish notice delivery or preservation of a pending readiness withdrawal. All eight `main movement preserves pending … until completion` notice cases and the separate readiness-withdrawal case pass in the merged full suite. No notice-delivery proof is claimed.
 - **Promotion window and `allowedHeads`.** Refresh compares only the promoted head; it does not model the runtime's accepted chain of certified successors between `promote_pr` and `complete_handoff`. F2 does not move main in that window.
 - **Main movement during owner checking.** F2 moves main only while waiting or held, not while an owner generation is validating or reviewing. Holding that in-flight owner generation needs runtime verification; the two owner clauses in `Refresh` are not independently qualified by F2.
 - **Token-exhaustion holds.** F10-2 turns a `repair_tokens` or `run_tokens` feedback preflight refusal into a hold with readiness withdrawn. `FeedbackRepair` instead consumes a refused batch and leaves phase/readiness unchanged for any `~CanIssue`. Abstract quotas and launch floors do not qualify that runtime hold or its label withdrawal.
@@ -111,7 +117,7 @@ The Journey `Stop` decision mirrors helper reuse without adding a source-absent 
 | `ReviewResult`, `Validate`, `FailOrRepair` | `handoffCandidate`, `complete`, `certifyGeneration`; full review/report validation is a boundary assumption backed by runtime tests |
 | `Refresh`, `Handoff`, `ObserveMerge`, `Finish`, `Stop`, `FinishPr` | `src/handoff.ts`: `observed`, `terminalFor`, `finish`, `complete` |
 | `OwnerFeedback`, `FeedbackRepair`, `SettleRepair` | Merged F10-2: `ingest`, `startQueuedFeedback`, `repair_settled` and `stopRound`. The model abstracts batch bytes, intake notices and summaries to a submitted/consumed counter; permission, head binding, dismissal, cursor durability, launch floors and dispositions remain runtime boundaries. The token-refusal hold/readiness difference is listed under proof limits. |
-| `OwnerDrift`, `OwnerRecert`, `HeadOf`, merge `authored` | Settled F10-3 design, not merged F10-2 implementation. Derivation success and its clean tree/suite binding are abstracted; derivation refusals, forbidden paths, the pin ref, no-commit interpreter behavior and v5 ledger authorship need F10-3 runtime tests. `OwnerCertifiedCurrent` denotes the selected owner head, even before certification, so validation/review can finish without re-entering drift. |
+| `OwnerDrift`, `OwnerRecert`, `HeadOf`, merge `authored` | Merged F10-3: `observed`, `derive_owner_patch` completion, `ownerPatchValid` and `authoredOf`. Owner-ready and owner-authored merge replays now pass against `3c62fc7`. Derivation success and its clean tree/suite binding are abstracted; derivation refusals, forbidden paths, the pin ref, no-commit interpreter behavior and v5 ledger authorship remain runtime boundaries. Reset and protected notices are explicit limits above. `OwnerCertifiedCurrent` denotes the selected owner head, even before certification, so validation/review can finish without re-entering drift. |
 | Shared public policy | `src/stages.ts`: `advance`; it delegates candidate events to `handoffCandidate` |
 | `Decide`, `Persist`, effect/response separation | `src/orchestrator.ts`: `#observeCandidates`, `#commitCandidate`, `#interpretCandidate` |
 | Process/captured callback/recovery actions | `#launchCandidate`, `#recoverCandidate`; callbacks capture their execution, and a new Orchestrator starts with an empty volatile result queue |
@@ -122,9 +128,47 @@ Accounting records distinguish issued/running ownership from uncertain final cos
 
 The earlier controller counterexample retained a volatile callback across a crash, then used it to certify a resumed live process. That step cannot occur in a new Orchestrator: `#candidateResults` is initialized per instance. The model was corrected to discard that queue on `Crash`; `NoTerminalProcess` was not weakened. No runtime bug is claimed from that trace.
 
-## F10-4 results (2026-11-08)
+## Merged F10 integration (2026-11-08)
 
-Checker **tla-ts 0.0.8**, Node **26.13.0**, eight workers, fingerprint polynomial `0`, 24,000 MiB Node old-space ceiling. The owner approved this checker after its baseline probe reproduced Java TLC's 1,670,069 structural states. No Java checker was used for F10-4. This approved command supersedes design §6.2's Java heap and four-worker parameters; its time bounds and structural constants are unchanged. The commands are below; wall times are `/usr/bin/time` measurements, not the checker's rounded clock. The following hashes and results are the gap-closing rerun, after adding the four properties without changing any transition.
+Rebased the three F10-4 commits onto `origin/main` at `3c62fc7` (F10-3 `c39c3e5`, notice fix `3c62fc7`). The only conflict was `test/handoff.test.ts` at `validated()`: kept F10-3's origin-derived owner head, removed F10-4's redundant head parameter and argument, and retained both sets of tests.
+
+Enabled `formal F10 owner-ready witness recertifies the exact head without a build or promotion` and `formal F10 owner-authored merge witness points to the owner certification`. Both use the shared real-reducer/parity helper, not a restatement of the model. Before correction both failed at the expected fixture mismatch (`post_notice` instead of `validate`, exit 1, 0/2 passed). The derivation completion must be `result: { kind: "found", patch: ownerPatch }`, not a receipt plus patch bytes. After that one-line fix, both passed (exit 0, 2/2). The review-settlement event still correctly carries its separate receipt and patch bytes. The replay runner now requires all five F10 cases to pass, all selected tests to pass and zero skips.
+
+No TLA action, invariant, constant or config changed. Round counting matches on modeled paths; reset and protected-effect differences are recorded under proof limits rather than adding unqualified transitions. The model/config SHA-256 values below still match. F2 and the four mutation proofs carry forward from the gap-closing run; they were not rerun for this unchanged model. As required for this case, F1 and all four witnesses were rerun with tla-ts 0.0.8, Node 26.13.0, eight workers, `-fp 0` and 24,000 MiB old space. All four final witness states were inspected; no new counterexample appeared.
+
+| Run | Wall seconds | Distinct | Queued | Exit and result |
+| --- | ---: | ---: | ---: | --- |
+| F1, 1200-second bound | 12.21 | 1,670,069 | 0 | 0, all configured properties hold |
+| F3 PublishedRepair, 300-second bound | 0.50 | 614 | 244 | 12, intended invariant violation, 18 states |
+| F3 OwnerReady, 300-second bound | 0.60 | 9,188 | 3,316 | 12, intended invariant violation, 23 states |
+| F3 MergeMidRepair, 300-second bound | 0.50 | 628 | 255 | 12, intended invariant violation, 18 states |
+| F3 OwnerAuthoredMerge, 300-second bound | 0.60 | 5,869 | 2,186 | 12, intended invariant violation, 22 states |
+| F4 replay runner | 1.12 | — | — | 0, 40/40 passed, 0 skipped |
+| Required full `npm run check` | 159.25 | — | — | 0, 2,382/2,382 passed, 0 skipped; typecheck, lint and format passed |
+| Trusted reporter | 152.34 | — | — | 0, 2,382 tests, `complete:true`, `bad:false`, `failures:[]` |
+
+The full gate used `TMPDIR=/home/g/.cache/f10-4-tmp FACTORY_REQUIRE_SANDBOX_TESTS=1 npm run check`. The trusted reporter used the same two environment variables and the exact command under the verify-factory skill's **Trusted reporter gate**, with umask 022 and only `test/*.test.ts`. Its handoff file count is 201. No checks were weakened; no product code, VM, model calls or external publication were involved. Independent review was not rerun under this bounded task's no-agent/no-model constraint.
+
+**Decisions note.** Fetched `origin/main` at `3c62fc7` does **not** contain `owner-yes-four` or `f10-4-tlats` in `docs/decisions.tsv` (the file still ends at `p6fix-merged`). The approvals exist in the coordinator checkout's decision trail and ship with the next docs PR. This task does not edit that file.
+
+New evidence is in `/home/g/.cache/f10-4-tmp/merged/`: full logs/traces, `.command`, `.exit` and `.time` files for the formal runs, plus runtime logs and timings. These are local evidence, not shipped artifacts.
+
+| Log | SHA-256 |
+| --- | --- |
+| `F1.log` | `b74f43878248aa7f0833b0653f2449775276c794cb9e4736001b0f2330a0b475` |
+| `F3-PublishedRepair.log` | `2a9d17ae718a52b7d7317accbc5d0a0107affe90f2465fdc4d76710b1254cbb9` |
+| `F3-OwnerReady.log` | `ed0422ecc1a8966697e1b1156d12ba85766fb8ff657be3b433d4711d64cb6641` |
+| `F3-MergeMidRepair.log` | `bdd7c52de825fef922c3696d4e2ef6bff04b63c6dc5e559f06ca4d2db75e6ee7` |
+| `F3-OwnerAuthoredMerge.log` | `ea151f912656ac4bf322877181342a2b6a9e4395106357f15ce9160c7347a8c9` |
+| `F4.tap` | `cccd3c5764a1890a1b1e0ba0bc53ea50058df3e4c38390f42118539a3e746493` |
+| `owner-red.tap` | `c7d337c37d3ef35afa81fd511dae591ace6a6878e60638b710f157139f1b0812` |
+| `owner-green.tap` | `d412be14e67144466bd060abc634cd8a3ef2af548839c6706a886d3af10dcb8d` |
+| `check.log` | `e0b6ad8c3b511060f6c7ef2c2dbd573742c3776f198d0356c6f9824725c30fd8` |
+| `reporter.json` | `b8d091df3d15428418d0ca380b8cf7925547d18e99e562155d408eba947fc50e` |
+
+## Initial F10-4 qualification (2026-11-08, before F10-3 integration)
+
+The pending-test counts in this section are historical; the merged integration above supersedes them. Checker **tla-ts 0.0.8**, Node **26.13.0**, eight workers, fingerprint polynomial `0`, 24,000 MiB Node old-space ceiling. The owner approved this checker after its baseline probe reproduced Java TLC's 1,670,069 structural states. No Java checker was used for F10-4. This approved command supersedes design §6.2's Java heap and four-worker parameters; its time bounds and structural constants are unchanged. The commands are below; wall times are `/usr/bin/time` measurements, not the checker's rounded clock. The following hashes and results are the gap-closing rerun, after adding the four properties without changing any transition.
 
 | File | SHA-256 |
 | --- | --- |
@@ -159,11 +203,11 @@ The witness configs use exactly Feedback's constants and **only their named inva
 - **Merge mid-repair (18 states):** the published/held prefix → owner review → feedback `repair_due` → owner merges the old certified head before a build is issued → observed merge, `factory_verified`, authored `factory`, readiness false. F4 also checks the longer path with a live build, stop, charge and terminal completion.
 - **Owner-authored merge (22 states):** the owner selection/CI/review prefix → owner merges `99` immediately after certification, before readiness → observed merge, `factory_verified`, authored `owner`. It does not depend on the owner-ready witness.
 
-F4's TAP selection passed **38 of 40 tests, zero failures, two explicit F10-3 skips**. Three new active replays check published repair, the shortest merge-before-launch trace and the longer stop/charge trace through both `handoffCandidate` and public `advance`. The owner-ready and owner-authored merge design replays are pending because their reducer paths are not in `484a6ab`; enable and bind their wire fixtures after F10-3 merges. The runtime replays seed the queued feedback batch and its already-posted intake notice; they do not replay owner-review ingestion. Later notice, readiness withdrawal, build, merge, stop/charge and terminal steps go through the real reducer and public `advance`. Numeric token classes expand to the real cumulative accounting. They are named correspondence replays, not a generic trace decoder. The F3 traces themselves were inspected for the states above.
+F4's TAP selection passed **38 of 40 tests, zero failures, two explicit F10-3 skips**. Three new active replays check published repair, the shortest merge-before-launch trace and the longer stop/charge trace through both `handoffCandidate` and public `advance`. At that revision the owner-ready and owner-authored merge design replays were pending because their reducer paths were not in `484a6ab`. The merged integration above enables and corrects both fixtures. The runtime replays seed the queued feedback batch and its already-posted intake notice; they do not replay owner-review ingestion. Later notice, readiness withdrawal, build, merge, stop/charge and terminal steps go through the real reducer and public `advance`. Numeric token classes expand to the real cumulative accounting. They are named correspondence replays, not a generic trace decoder. The F3 traces themselves were inspected for the states above.
 
 `TMPDIR=/home/g/.cache/f10-4-tmp FACTORY_REQUIRE_SANDBOX_TESTS=1 npm run check` passed in **167.47 seconds**: **2,315 passed, 2 skipped, 2,317 total**, zero failures; typecheck, lint and format checks passed. F4's command below exited 0 in **1.15 seconds** (40 tests, 38 passed, 2 skipped). The two skips are only the F10-3 design cases. No product code was changed; no VM or model calls were used. The plan was unchanged.
 
-Gap-closing logs, full traces, exact commands, exits, timing files and scratch mutants are retained in `/home/g/.cache/f10-4-tmp/gaps/`; the original qualification remains in `/home/g/.cache/f10-4-tmp/formal/`. The new project gate is `gaps/check.log`. These are local evidence, not shipped artifacts.
+Gap-closing logs, full traces, exact commands, exits, timing files and scratch mutants are retained in `/home/g/.cache/f10-4-tmp/gaps/`; the original qualification remains in `/home/g/.cache/f10-4-tmp/formal/`. That revision's project gate is `gaps/check.log`; the merged integration gate is `merged/check.log`. These are local evidence, not shipped artifacts.
 
 | Log | SHA-256 |
 | --- | --- |
@@ -235,7 +279,7 @@ The runtime correspondence entry point is a named-test runner, not a generic TLC
 node --experimental-strip-types docs/statecharts/journey/replay-merge-mid-repair.ts
 ```
 
-It now requires at least 40 selected tests and 38 passes, including the three active F10 replays, six-generation, real Orchestrator restart and actual promotion cases. The historical F09a fixed-revision selection ran 33 tests, including the seven terminal-drain regressions. At the preceding revision, a six-entry TLC witness matched 14 actual intermediate candidate states through the exported reducer and public `advance`. Five isolated TypeScript mutations failed behavior assertions: reset attempts on refresh, accept a stale generation, lower a usage floor, finish before stop and promote from an unexpected predecessor. Restoration passed. Those retained receipts are not new fixed-model trace or mutation qualification. Unchanged TLC alone is not evidence against mutated TypeScript.
+It now requires at least 40 selected tests, all passing with zero skips, including all five F10 replays, six-generation, real Orchestrator restart and actual promotion cases. The historical F09a fixed-revision selection ran 33 tests, including the seven terminal-drain regressions. At the preceding revision, a six-entry TLC witness matched 14 actual intermediate candidate states through the exported reducer and public `advance`. Five isolated TypeScript mutations failed behavior assertions: reset attempts on refresh, accept a stale generation, lower a usage floor, finish before stop and promote from an unexpected predecessor. Restoration passed. Those retained receipts are not new fixed-model trace or mutation qualification. Unchanged TLC alone is not evidence against mutated TypeScript.
 
 The final project gate includes all existing runtime tests. Formal checks, this runner and view compilation are separate from `npm run check`. Independent formal review, Comment Sicko, the complete crash/manifest/maximal-marker matrix, operator/rollout documentation, main-backed reporter bootstrap/P4, production protection, real owner actions and live/performance qualification remain separate gates. No full-feature or merge-ready verdict is implied.
 

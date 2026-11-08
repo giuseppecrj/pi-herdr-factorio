@@ -3895,8 +3895,6 @@ test("formal F10 merge-mid-repair witness drains work and retains historical cer
 	);
 });
 
-// F10-3 is not on the F10-4 base. Wire events keep its settled design executable
-// without pretending that main's CandidateEvent union already supports it.
 function formalOwnerReady(restoreReadiness = true) {
 	const initial = published();
 	const head = "e".repeat(40);
@@ -3950,7 +3948,7 @@ function formalOwnerReady(restoreReadiness = true) {
 				completion: {
 					kind: "derive_owner_patch",
 					request: work.request,
-					result: { kind: "found", receipt: ownerPatch, patch: bytes },
+					result: { kind: "found", patch: ownerPatch },
 				},
 			}),
 		),
@@ -4024,15 +4022,11 @@ function formalOwnerReady(restoreReadiness = true) {
 	return { state, head };
 }
 
-test("formal F10 owner-ready witness recertifies the exact head without a build or promotion", {
-	skip: "Pending F10-3: owner derivation, validation and certification are not on main 484a6ab; enable and bind wire fixtures after it merges",
-}, () => {
+test("formal F10 owner-ready witness recertifies the exact head without a build or promotion", () => {
 	formalOwnerReady();
 });
 
-test("formal F10 owner-authored merge witness points to the owner certification", {
-	skip: "Pending F10-3: owner generation and authorship are not on main 484a6ab; enable after F10-3 merges",
-}, () => {
+test("formal F10 owner-authored merge witness points to the owner certification", () => {
 	const { state, head } = formalOwnerReady(false);
 
 	const merged = handoffCandidate(state, {

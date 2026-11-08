@@ -36,14 +36,16 @@ assert.ok(
 	count !== undefined &&
 		Number(count) >= 40 &&
 		passed !== undefined &&
-		Number(passed) >= 38,
-	"expected the 35 existing correspondence tests plus three passing F10 replays and two F10-3 design cases",
+		Number(passed) === Number(count),
+	"expected at least 40 passing correspondence tests, including all five F10 replays",
 );
 
 for (const witness of [
 	"published repair witness",
 	"shortest merge-mid-repair witness",
 	"merge-mid-repair witness drains work",
+	"owner-ready witness",
+	"owner-authored merge witness",
 ]) {
 	const line = result.stdout
 		.split("\n")
@@ -59,6 +61,8 @@ for (const witness of [
 }
 
 assert.match(result.stdout, /^# fail 0$/m);
+
+assert.match(result.stdout, /^# skipped 0$/m);
 
 assert.match(result.stdout, /formal trace reaches all six generations/);
 
