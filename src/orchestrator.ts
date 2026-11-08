@@ -294,7 +294,11 @@ export interface StageExecutor {
 		patch(
 			state: CandidateState,
 			round: number,
-		): Promise<Extract<PatchRead, { kind: "found" }> | null>;
+		): Promise<
+			| Extract<PatchRead, { kind: "found" }>
+			| import("./handoff.ts").OwnerPatchRead
+			| null
+		>;
 	};
 	prepareReview?(
 		input: WorkflowPin & {
@@ -305,6 +309,7 @@ export interface StageExecutor {
 		},
 	): Promise<ReviewPreparation | ReviewInputRefusal>;
 	readonly validate?: Validator;
+	readonly ownerValidate?: Validator;
 	/** Re-reads a stored validation assessment; null when absent or unreadable. */
 	readAssessment(input: {
 		runId: Digest;
@@ -5264,9 +5269,14 @@ export class Orchestrator {
 		let completion: CandidateEffectResult | null = null;
 
 		if (request.kind === "validate") {
-			if (executor.validate === undefined) return;
+			const validate =
+				request.generation.publication.kind === "owner"
+					? executor.ownerValidate
+					: executor.validate;
 
-			const result = await executor.validate({
+			if (validate === undefined) return;
+
+			const result = await validate({
 				runId: run.runId,
 				issue: run.issue,
 				eventAt: run.eventAt,
@@ -5333,7 +5343,10 @@ export class Orchestrator {
 						validation: result.state,
 						verdict: result.verdict,
 						report: result.report ?? null,
-						seats: reviewSeats(state.current.patch.changedPaths),
+						seats: reviewSeats(
+							state.current.ownerPatch?.changedPaths ??
+								state.current.patch.changedPaths,
+						),
 						assessment: result.assessment,
 					},
 				};

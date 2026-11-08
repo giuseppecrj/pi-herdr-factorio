@@ -166,7 +166,7 @@ function rowInput(issue: number, eventId = "100"): V1Input {
 	};
 }
 
-function landedInput(issue: number): LedgerRowInput {
+function landedInput(issue: number): V1Input {
 	const base = rowInput(issue);
 	const intent = digestOf(`intent-${issue}`);
 
@@ -356,8 +356,8 @@ describe("immutable run context", () => {
 			assert.deepEqual(rows[0]?.row.provenance, rows[1]?.row.provenance);
 
 			for (const row of rows) {
-				assert.equal(row.row.v, 4);
-				assert.ok(row.row.v === 4);
+				assert.equal(row.row.v, 5);
+				assert.ok(row.row.v === 5);
 				assert.deepEqual(row.row.runContext, context);
 				assert.equal(row.row.provenance.kind, context.kind);
 				assert.ok(frozenRowOf(row.bytes)?.bytes.equals(row.bytes));
@@ -421,7 +421,7 @@ describe("immutable run context", () => {
 		});
 
 		assert.equal(row.row.provenance.kind, "legacy_import");
-		assert.ok(row.row.v === 4);
+		assert.ok(row.row.v === 5);
 		assert.deepEqual(row.row.runContext, context);
 	});
 
@@ -466,6 +466,219 @@ describe("immutable run context", () => {
 });
 
 describe("ledger row codec", () => {
+	it("F10-3 preserves 484a6ab's exact v1-v4 landed bytes, including the old assurance shape", () => {
+		const base = landedInput(42);
+		assert.ok(base.provenance.kind === "production");
+		const v1 = ledgerRow(base);
+
+		const v2 = ledgerRowOf({
+			...base,
+			v: 2,
+			failure: null,
+			acceptAttempts: { kind: "unavailable", reason: "not_instrumented" },
+		});
+
+		const v3 = ledgerRowOf({
+			...v2.row,
+			v: 3,
+			efficiency: unknownEfficiency(),
+			stages: { kind: "unavailable", reason: "not_instrumented" },
+		});
+
+		const snapshot = terminalSnapshot({
+			repo,
+			runId: base.runId,
+			issue: base.issue,
+			eventId: base.eventId,
+			eventAt: base.eventAt,
+			snapshotDigest: base.snapshotDigest,
+			workflowSha: sha("1"),
+			workflowDigest: digestOf("workflow"),
+			status: "needs_info",
+			stage: "specify",
+			usage: 0,
+			observedAt: date,
+			candidate: null,
+			context: legacyRunContext(base.provenance.policy, "receipt_missing"),
+			terminalWorkflowObservation: null,
+		});
+
+		const v4 = ledgerRowOf({
+			...objectOf(snapshot),
+			v: 4,
+			terminalMarker: base.terminalMarker,
+			outcome: base.outcome,
+			pr: base.pr,
+			artifacts: base.artifacts,
+			evidence: base.evidence,
+		});
+
+		const rows = [v1, v2, v3, v4];
+		assert.deepEqual(
+			rows.map((r) => r.digest),
+			[
+				"7ea1c6c847ba10804925ea8c693f3555b9f67d1edf69c1965ff0ab518a823e73",
+				"f92d08676eccb2e31d72db6da286aac48a27814e7aeaa2d4a674fea5ba4f363c",
+				"6899fd700f2f9fe3de26756b871b14a053b801782f6ad09ce9795d259d9947b9",
+				"5f29230080c5a3d6f78ce0206a2e4af572356626cdc4ce9fcc3dc43a11b6b252",
+			],
+		);
+
+		for (const row of rows) {
+			assert.ok(frozenRowOf(row.bytes)?.bytes.equals(row.bytes));
+			assert.equal(parseLedger(row.bytes)[0]?.kind, "known");
+		}
+	});
+
+	it("F10-3 v5 writer derives authorship from the historical certifying origin, not current work", async () => {
+		const { candidateLifecycleFixture } = await import("./helpers.ts");
+
+		for (const authored of ["factory", "owner"] as const) {
+			const state = candidateLifecycleFixture();
+			const certified = state.history[0]!;
+			const head = certified.certification!.report.candidateSha;
+
+			const candidate = {
+				...state,
+				history: state.history.map((g, index) =>
+					index === 0 && authored === "owner"
+						? {
+								...g,
+								intent: {
+									...g.intent,
+									origin: { kind: "owner" as const, head, previous: g.intent },
+								},
+							}
+						: g,
+				),
+				work: {
+					kind: "terminal" as const,
+					terminal: {
+						kind: "merged" as const,
+						number: 5,
+						head,
+						mergeSha: sha("d"),
+						actor: "owner",
+						assurance: {
+							kind: "factory_verified" as const,
+							certification: certified.intent,
+						},
+						readiness: state.published!.readiness,
+					},
+				},
+			};
+
+			const pin = state.pin;
+
+			const snapshot = terminalSnapshot({
+				repo: pin.repo,
+				runId: pin.runId,
+				issue: pin.issue,
+				eventId: "1",
+				eventAt: date,
+				snapshotDigest: digestOf("snapshot"),
+				workflowSha: pin.workflowSha,
+				workflowDigest: pin.workflowDigest,
+				status: "landed",
+				stage: "land",
+				usage: 40,
+				observedAt: date,
+				candidate,
+				context: legacyRunContext(pin, "receipt_missing"),
+				terminalWorkflowObservation: null,
+			});
+
+			const row = ledgerRowOf({
+				...objectOf(snapshot),
+				terminalMarker: { seq: 4, digest: digestOf("marker") },
+			});
+
+			assert.ok(
+				row.row.v === 5 &&
+					row.row.outcome.kind === "landed" &&
+					row.row.outcome.assurance.kind === "factory_verified",
+			);
+			assert.equal(row.row.outcome.assurance.authored, authored);
+		}
+	});
+	it("F10-3 v5 records authorship, keeps v1-v4 canonical bytes and rejects version 6 as unknown", () => {
+		const legacy = rowInput(42);
+		assert.ok(legacy.provenance.kind === "production");
+
+		const snapshot = terminalSnapshot({
+			repo,
+			runId: legacy.runId,
+			issue: legacy.issue,
+			eventId: legacy.eventId,
+			eventAt: legacy.eventAt,
+			snapshotDigest: legacy.snapshotDigest,
+			workflowSha: sha("1"),
+			workflowDigest: digestOf("workflow"),
+			status: "needs_info",
+			stage: "specify",
+			usage: 0,
+			observedAt: date,
+			candidate: null,
+			context: legacyRunContext(legacy.provenance.policy, "receipt_missing"),
+			terminalWorkflowObservation: null,
+		});
+
+		assert.ok(objectOf(snapshot));
+		assert.equal(objectOf(snapshot)?.v, 5);
+
+		const v5 = ledgerRowOf({
+			...objectOf(snapshot),
+			terminalMarker: legacy.terminalMarker,
+		});
+
+		assert.equal(v5.row.v, 5);
+
+		const old4 = ledgerRowOf({
+			...objectOf(snapshot),
+			v: 4,
+			terminalMarker: legacy.terminalMarker,
+		});
+
+		for (const frozen of [ledgerRow(legacy), old4])
+			assert.ok(frozenRowOf(frozen.bytes)?.bytes.equals(frozen.bytes));
+
+		for (const authored of ["factory", "owner"] as const) {
+			const landed = landedInput(42);
+			assert.equal(landed.outcome.kind, "landed");
+
+			const row = ledgerRowOf({
+				...v5.row,
+				outcome: {
+					...landed.outcome,
+					assurance: {
+						kind: "factory_verified",
+						generationDigest: digestOf("intent-42"),
+						authored,
+					},
+				},
+				artifacts: landed.artifacts,
+				pr: landed.pr,
+				evidence: landed.evidence,
+			});
+
+			assert.ok(
+				row.row.outcome.kind === "landed" &&
+					row.row.outcome.assurance.kind === "factory_verified",
+			);
+			assert.equal(row.row.v, 5);
+			assert.equal(
+				"authored" in row.row.outcome.assurance &&
+					row.row.outcome.assurance.authored,
+				authored,
+			);
+			assert.ok(frozenRowOf(row.bytes)?.bytes.equals(row.bytes));
+		}
+
+		assert.equal(
+			parseLedger(Buffer.from('{"v":6}\n'))[0]?.kind,
+			"unknown_version",
+		);
+	});
 	it("round-trips every terminal kind as one canonical LF-terminated line", () => {
 		const base = rowInput(1);
 
@@ -691,7 +904,7 @@ describe("ledger row codec", () => {
 
 		const lines = [
 			good.bytes,
-			Buffer.from('{"v":5,"future":true}\n'),
+			Buffer.from('{"v":6,"future":true}\n'),
 			Buffer.from("{not json\n"),
 			Buffer.from(
 				`${good.bytes.toString().slice(0, -1).replace('"v":1,', "")}\n`,
@@ -1233,7 +1446,7 @@ describe("ledger row codec", () => {
 		for (let issue = 1; issue <= 1_000; issue++) {
 			const input = issue % 3 === 0 ? landedInput(issue) : rowInput(issue);
 
-			const outcome: LedgerRowInput["outcome"] =
+			const outcome: V1Input["outcome"] =
 				issue % 3 === 1
 					? {
 							kind: "failed",

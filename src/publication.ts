@@ -1,5 +1,22 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+	mkdtempSync,
+	rmSync,
+	writeFileSync,
+	mkdirSync,
+	cpSync,
+	existsSync,
+} from "node:fs";
+import { collectPatch } from "./build.ts";
+import { exclusive, privateDir, regularText, present } from "./artifacts.ts";
+import { checkChangedPaths } from "./policy.ts";
+import { REVIEW_DIFF_MAX_BYTES } from "./review.ts";
+import {
+	parseOwnerPatchReceipt,
+	type OwnerPatchReceipt,
+	type OwnerPatchRead,
+	type OwnerHeadRefusal,
+} from "./handoff.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ghFailure, type Exec, type ExecResult } from "./gh.ts";
@@ -49,6 +66,295 @@ export function candidateBranch(
 		throw new Error("invalid_branch");
 
 	return `factory/run/${issue}-${runId.slice(0, 12)}-r${round}${generation === 0 ? "" : `-g${generation}`}`;
+}
+
+export function ownerPatchPath(
+	stateDir: string,
+	runId: Digest,
+	head: GitSha,
+	baseSha?: GitSha,
+): string {
+	return join(
+		stateDir,
+		"handoff",
+		runId,
+		"owner",
+		`${head}${baseSha === undefined ? "" : `-${baseSha}`}.json`,
+	);
+}
+
+export function readOwnerPatch(
+	stateDir: string,
+	runId: Digest,
+	head: GitSha,
+	baseSha: GitSha,
+): OwnerPatchRead | null {
+	try {
+		const keyed = ownerPatchPath(stateDir, runId, head, baseSha);
+		const path = present(keyed) ? keyed : ownerPatchPath(stateDir, runId, head);
+
+		const value = objectOf(parseJson(regularText(path, 256 * 1024)));
+
+		const receipt = parseOwnerPatchReceipt(value?.receipt);
+		const patch = textOf(value?.patch);
+
+		return receipt !== null &&
+			patch !== null &&
+			receipt.runId === runId &&
+			receipt.head === head &&
+			receipt.baseSha === baseSha &&
+			digestOf(patch) === receipt.patchDigest &&
+			Buffer.byteLength(patch) <= REVIEW_DIFF_MAX_BYTES
+			? { kind: "found", receipt, patch }
+			: null;
+	} catch {
+		return null;
+	}
+}
+
+export function storeOwnerPatch(
+	stateDir: string,
+	receipt: OwnerPatchReceipt,
+	patch: string,
+): void {
+	if (
+		digestOf(patch) !== receipt.patchDigest ||
+		Buffer.byteLength(patch) > REVIEW_DIFF_MAX_BYTES
+	)
+		throw new Error("owner_patch_binding");
+
+	const path = ownerPatchPath(
+		stateDir,
+		receipt.runId,
+		receipt.head,
+		receipt.baseSha,
+	);
+
+	privateDir(join(path, ".."));
+	const bytes = `${JSON.stringify({ receipt, patch })}\n`;
+
+	if (present(path)) {
+		if (regularText(path, 256 * 1024) !== bytes)
+			throw new Error("owner_patch_changed");
+	} else exclusive(path, bytes);
+}
+
+/** Derive only reviewable owner bytes. Acceptance is replaced before collecting a diff. */
+export async function deriveOwnerPatch(
+	api: GitHubPublicationApi,
+	input: {
+		stateDir: string;
+		runId: Digest;
+		head: GitSha;
+		baseSha: GitSha;
+		contractDigest: Digest;
+		acceptanceDigest: Digest;
+		heldoutDigest: Digest;
+		suite: readonly PublishedFile[];
+		checkout: (sha: GitSha, workspace: string) => Promise<boolean>;
+	},
+): Promise<
+	| { kind: "found"; patch: OwnerPatchReceipt }
+	| { kind: "refused"; reason: OwnerHeadRefusal }
+> {
+	const refused = (reason: OwnerHeadRefusal) =>
+		({ kind: "refused", reason }) as const;
+
+	let scratch: string | null = null;
+
+	try {
+		const existing = readOwnerPatch(
+			input.stateDir,
+			input.runId,
+			input.head,
+			input.baseSha,
+		);
+
+		if (existing !== null) {
+			return existing.receipt.contractDigest === input.contractDigest &&
+				existing.receipt.acceptanceDigest === input.acceptanceDigest &&
+				existing.receipt.heldoutDigest === input.heldoutDigest
+				? { kind: "found", patch: existing.receipt }
+				: refused("unreadable");
+		}
+
+		if (
+			present(
+				ownerPatchPath(input.stateDir, input.runId, input.head, input.baseSha),
+			)
+		)
+			return refused("unreadable");
+
+		const compare = objectOf(
+			await api.request("GET", `compare/${input.baseSha}...${input.head}`),
+		);
+
+		if (compare?.status !== "ahead")
+			return compare?.status === "behind" ||
+				compare?.status === "diverged" ||
+				compare?.status === "identical"
+				? refused("behind_main")
+				: refused("unreadable");
+		const trees: Map<string, string>[] = [];
+
+		for (const sha of [input.baseSha, input.head]) {
+			const raw = objectOf(
+				await api.request("GET", `git/trees/${sha}?recursive=1`),
+			);
+
+			const entries = arrayOf(raw?.tree);
+
+			if (raw?.truncated !== false || entries === null)
+				return refused("unreadable");
+			const files = new Map<string, string>();
+
+			for (const entry of entries) {
+				const e = objectOf(entry);
+
+				if (e?.type === "tree") continue;
+
+				const path = textOf(e?.path),
+					blob = textOf(e?.sha);
+
+				if (
+					e?.type !== "blob" ||
+					path === null ||
+					blob === null ||
+					!isGitSha(blob) ||
+					!["100644", "100755", "120000"].includes(String(e.mode)) ||
+					files.has(path)
+				)
+					return refused("unreadable");
+				files.set(path, `${e.mode}:${blob}`);
+			}
+
+			trees.push(files);
+		}
+
+		const baseTree = trees[0]!,
+			ownerTree = trees[1]!;
+
+		const isHeldout = (path: string) =>
+			path === "test/acceptance" || path.startsWith("test/acceptance/");
+
+		const expected = new Map([...baseTree].filter(([p]) => isHeldout(p)));
+
+		for (const file of input.suite) {
+			if (file.bytes === null) expected.delete(file.path);
+			else
+				expected.set(
+					file.path,
+					`${file.mode}:${gitObjectSha("blob", file.bytes)}`,
+				);
+		}
+
+		const actual = new Map([...ownerTree].filter(([p]) => isHeldout(p)));
+
+		if (
+			actual.size !== expected.size ||
+			[...expected].some(([p, v]) => actual.get(p) !== v)
+		)
+			return refused("heldout_changed");
+
+		const changedPaths = [...new Set([...baseTree.keys(), ...ownerTree.keys()])]
+			.filter((p) => !isHeldout(p) && baseTree.get(p) !== ownerTree.get(p))
+			.sort();
+
+		if (checkChangedPaths({ changedPaths }).kind !== "clean")
+			return refused("forbidden_path");
+		scratch = mkdtempSync(join(tmpdir(), "factory-owner-"));
+
+		const base = join(scratch, "base"),
+			workspace = join(scratch, "owner");
+
+		mkdirSync(base);
+		mkdirSync(workspace);
+
+		if (
+			!(await input.checkout(input.baseSha, base)) ||
+			!(await input.checkout(input.head, workspace))
+		)
+			return refused("unreadable");
+		rmSync(join(workspace, "test/acceptance"), {
+			recursive: true,
+			force: true,
+		});
+
+		if (existsSync(join(base, "test/acceptance"))) {
+			mkdirSync(join(workspace, "test"), { recursive: true });
+			cpSync(
+				join(base, "test/acceptance"),
+				join(workspace, "test/acceptance"),
+				{ recursive: true, verbatimSymlinks: true },
+			);
+		}
+
+		const collected = await collectPatch({
+			base,
+			workspace,
+			allowNoChange: true,
+		});
+
+		if (
+			collected.kind !== "collected" ||
+			JSON.stringify(collected.changedPaths) !== JSON.stringify(changedPaths)
+		)
+			return refused("unreadable");
+		const patch = Buffer.from(collected.patch).toString("utf8");
+
+		if (Buffer.byteLength(patch) > REVIEW_DIFF_MAX_BYTES)
+			return refused("too_large");
+
+		const receipt: OwnerPatchReceipt = {
+			version: 1,
+			kind: "owner",
+			runId: input.runId,
+			head: input.head,
+			baseSha: input.baseSha,
+			contractDigest: input.contractDigest,
+			acceptanceDigest: input.acceptanceDigest,
+			heldoutDigest: input.heldoutDigest,
+			patchDigest: collected.patchDigest,
+			changedPaths,
+			policy: "clean",
+		};
+
+		storeOwnerPatch(input.stateDir, receipt, patch);
+
+		return { kind: "found", patch: receipt };
+	} catch {
+		return refused("unreadable");
+	} finally {
+		if (scratch !== null) rmSync(scratch, { recursive: true, force: true });
+	}
+}
+
+export async function pinOwnerCandidate(
+	api: GitHubPublicationApi,
+	branch: string,
+	head: GitSha,
+): Promise<Publication> {
+	if (!isCandidateBranch(branch)) throw new PublicationError("invalid_branch");
+	const tip = await api.ref(branch);
+
+	if (tip !== null && tip !== head) throw new PublicationError("branch_moved");
+
+	if (tip === null) {
+		try {
+			await api.request("POST", "git/refs", {
+				ref: `refs/heads/${branch}`,
+				sha: head,
+			});
+		} catch (error) {
+			if (!(error instanceof PublicationError) || error.reason !== "conflict")
+				throw error;
+		}
+
+		if ((await api.ref(branch)) !== head)
+			throw new PublicationError("branch_moved");
+	}
+
+	return { branch, patchSha: head, candidateSha: head };
 }
 
 const LEDGER_BRANCH = "factory/ledger";

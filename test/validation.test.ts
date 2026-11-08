@@ -41,6 +41,7 @@ import {
 } from "./helpers.ts";
 import {
 	controllerValidator,
+	ownerValidator,
 	fileRunFiles,
 	sweepValidation,
 } from "../server/controller.ts";
@@ -62,7 +63,7 @@ import {
 	candidateGenerations,
 	candidateUsage,
 } from "../src/handoff.ts";
-import { candidateBranch } from "../src/publication.ts";
+import { candidateBranch, storeOwnerPatch } from "../src/publication.ts";
 import type { Exec } from "../src/gh.ts";
 
 const candidateSha = "c".repeat(40);
@@ -455,7 +456,11 @@ globalThis.fetch = async (url, init) => {
 		});
 });
 
-async function reportDeadlineFixture(root: string) {
+async function reportDeadlineFixture(
+	root: string,
+	owner = false,
+	dispatch = false,
+) {
 	assert.ok(isGitSha(gateSha) && isGitSha(candidateSha));
 	const repo = "giuseppecrj/pi-herdr-factorio";
 	assert.ok(isRepoSlug(repo));
@@ -568,10 +573,18 @@ async function reportDeadlineFixture(root: string) {
 		},
 		patch: patch.receipt,
 		round: 0,
-		generation: 0,
+		generation: owner ? 1 : 0,
 		baseSha: gateSha,
-		origin: { kind: "initial" },
-		publication: { kind: "initial" },
+		origin: owner
+			? {
+					kind: "owner",
+					head: candidateSha,
+					previous: { round: 0, generation: 0, digest: digestOf("previous") },
+				}
+			: { kind: "initial" },
+		publication: owner
+			? { kind: "owner", head: candidateSha }
+			: { kind: "initial" },
 	});
 
 	const heldout = publishedSuite({
@@ -584,7 +597,28 @@ async function reportDeadlineFixture(root: string) {
 		acceptanceDigest: stored.receipt.acceptanceDigest,
 	});
 
-	const nonce = dispatchNonce(runId, 0, 1);
+	if (owner) {
+		storeOwnerPatch(
+			root,
+			{
+				version: 1,
+				kind: "owner",
+				runId,
+				head: candidateSha,
+				baseSha: gateSha,
+				contractDigest,
+				acceptanceDigest: stored.receipt.acceptanceDigest,
+				heldoutDigest: heldout.digest,
+				patchDigest: patch.receipt.patchDigest,
+				changedPaths: patch.receipt.changedPaths,
+				policy: "clean",
+			},
+			Buffer.from(patch.patch).toString("utf8"),
+		);
+		rmSync(join(root, "patches"), { recursive: true });
+	}
+
+	const nonce = dispatchNonce(runId, 0, 1, generation.generation);
 
 	const hardReceipt = {
 		...receipt,
@@ -596,25 +630,31 @@ async function reportDeadlineFixture(root: string) {
 
 	let state: ValidationState = {
 		version: 2,
-		generation: { index: 0, digest: generation.digest, previousHead: null },
+		generation: {
+			index: generation.generation,
+			digest: generation.digest,
+			previousHead: null,
+		},
 		startedAt: start,
 		deadline: start + 1_200_000,
 		round: 0,
 		originalBase: gateSha,
 		baseSha: gateSha,
 		baseResolved: true,
-		publication: {
-			branch: candidateBranch(42, runId, 0),
-			patchSha: gateSha,
-			candidateSha,
-		},
-		dispatchTry: 1,
-		dispatchedAt: start,
-		ciRunId: run.id,
+		publication: owner
+			? null
+			: {
+					branch: candidateBranch(42, runId, 0),
+					patchSha: gateSha,
+					candidateSha,
+				},
+		dispatchTry: dispatch ? 0 : 1,
+		dispatchedAt: dispatch ? null : start,
+		ciRunId: dispatch ? null : run.id,
 		counters: {},
 	};
 
-	let ref: string | null = candidateSha;
+	let ref: string | null = owner ? null : candidateSha;
 	let report: "missing" | "rejected" | "valid" = "missing";
 	const writes: string[] = [];
 
@@ -649,14 +689,58 @@ async function reportDeadlineFixture(root: string) {
 			.find((arg) => arg.startsWith(`repos/${repo}/`))
 			?.slice(`repos/${repo}/`.length);
 
+		if (owner && path?.includes("factory/pr/"))
+			assert.fail("owner validator touched the PR branch");
+
 		if (args.includes("DELETE")) {
+			assert.ok(path?.startsWith("git/refs/heads/factory/run/"));
 			writes.push("DELETE");
 			ref = null;
 
 			return ok(null);
 		}
 
+		if (owner && args.includes("POST") && path === "git/refs") {
+			const body = JSON.parse(
+				readFileSync(args[args.indexOf("--input") + 1]!, "utf8"),
+			);
+
+			assert.equal(body.ref, `refs/heads/${candidateBranch(42, runId, 0, 1)}`);
+			assert.equal(body.sha, candidateSha);
+			writes.push("PIN");
+			ref = candidateSha;
+
+			return ok({ ref: body.ref, object: { sha: candidateSha } });
+		}
+
+		if (
+			owner &&
+			args.includes("POST") &&
+			path === "actions/workflows/ci.yml/dispatches"
+		) {
+			const body = JSON.parse(
+				readFileSync(args[args.indexOf("--input") + 1]!, "utf8"),
+			);
+
+			assert.deepEqual(body, {
+				ref: "main",
+				inputs: {
+					candidate_sha: candidateSha,
+					nonce,
+					replacements: "[]",
+					replacements_digest: digestOf("[]"),
+					heldout_dir: heldout.directory,
+					heldout_digest: heldout.digest,
+				},
+			});
+			writes.push("DISPATCH");
+
+			return ok({ workflow_run_id: run.id });
+		}
+
 		assert.ok(!args.includes("POST") && !args.includes("PATCH"));
+
+		if (path === "git/ref/heads/main") return ok({ object: { sha: gateSha } });
 
 		if (path?.startsWith("git/ref/heads/factory/run/"))
 			return ref === null
@@ -709,7 +793,7 @@ async function reportDeadlineFixture(root: string) {
 		const restored = parseValidationState(JSON.parse(JSON.stringify(state)));
 		assert.ok(restored);
 
-		return controllerValidator({
+		return (owner ? ownerValidator : controllerValidator)({
 			stateDir: root,
 			exec,
 			receipt: async () => JSON.stringify(hardReceipt),
@@ -735,18 +819,106 @@ async function reportDeadlineFixture(root: string) {
 		start,
 		deadline: state.deadline,
 		writes,
-		dir: validationDir(root, runId),
+		dir: validationDir(root, runId, 0, generation.generation),
 		setReport: (next: typeof report) => {
 			report = next;
 		},
 		moveBranch: () => {
 			ref = gateSha;
 		},
+		pinAt: (head: string) => {
+			ref = head;
+		},
 		ref: () => ref,
 	};
 }
 
+describe("F10-3 owner validator integrated harness", () => {
+	it("dispatches main with only the real workflow inputs and H, without any commit or PR ref write", async () => {
+		await withLocalArtifactDownload(async (root) => {
+			const f = await reportDeadlineFixture(root, true, true);
+			assert.equal((await f.step(f.start + 1000)).kind, "waiting");
+			f.setReport("valid");
+			const result = await f.step(f.start + 60_000);
+			assert.ok(
+				result.kind === "finished" &&
+					result.verdict.candidateSha === candidateSha,
+			);
+			assert.deepEqual(f.writes, ["PIN", "DISPATCH", "DELETE"]);
+		});
+	});
+
+	for (const collision of [false, true])
+		it(`C10 adopts an existing H pin or refuses a foreign pin (${collision})`, async () => {
+			await withLocalArtifactDownload(async (root) => {
+				const f = await reportDeadlineFixture(root, true);
+				f.pinAt(collision ? gateSha : candidateSha);
+				f.setReport("valid");
+				const result = await f.step(f.start + 60_000);
+				assert.equal(result.kind, collision ? "failed" : "finished");
+
+				if (result.kind === "failed")
+					assert.equal(result.reason, "branch_moved");
+				assert.deepEqual(f.writes, collision ? [] : ["DELETE"]);
+			});
+		});
+	it("pins H, adopts the pin after restart, certifies exact H and deletes only the pin without builder bytes", async () => {
+		await withLocalArtifactDownload(async (root) => {
+			const f = await reportDeadlineFixture(root, true);
+			assert.equal((await f.step(f.start + 60_000)).kind, "waiting");
+			f.setReport("valid");
+			const result = await f.step(f.start + 70_000);
+			assert.equal(result.kind, "finished");
+			assert.ok(result.kind === "finished" && result.report);
+			assert.equal(result.verdict.candidateSha, candidateSha);
+			assert.deepEqual(f.writes, ["PIN", "DELETE"]);
+			assert.equal(f.ref(), null);
+		});
+	});
+	it("refuses a pin moved away from H without deleting it", async () => {
+		await withLocalArtifactDownload(async (root) => {
+			const f = await reportDeadlineFixture(root, true);
+			await f.step(f.start + 60_000);
+			f.moveBranch();
+			const result = await f.step(f.start + 70_000);
+			assert.ok(result.kind === "failed" && result.reason === "branch_moved");
+			assert.deepEqual(f.writes, ["PIN", "DELETE"]);
+		});
+	});
+});
+
 describe("report evidence uses the fixed CI deadline", () => {
+	it("F10-3 keeps the factory validator result and verdict bytes identical to 484a6ab", async () => {
+		const crypto = (await import("node:crypto")).default;
+		const { syncBuiltinESMExports } = await import("node:module");
+		const random = crypto.randomBytes;
+		// Pin the fixture's private canary, not production entropy or its validation.
+		Object.defineProperty(crypto, "randomBytes", {
+			value: (size: number) => Buffer.alloc(size, 0xab),
+		});
+		syncBuiltinESMExports();
+
+		try {
+			await withLocalArtifactDownload(async (root) => {
+				const f = await reportDeadlineFixture(root);
+				await f.step(f.start + 60_000);
+				f.setReport("valid");
+				const result = await f.step(f.start + 70_000);
+				assert.equal(
+					digestOf(JSON.stringify(result)),
+					"d19258f591c957638abc1f96d88c085647086a51b137385559a05aba7ee6e118",
+				);
+				assert.equal(
+					digestOf(readFileSync(join(f.dir, "verdict.json"))),
+					"fb163235c620c3d826bfe04a36cebff03431a181e6d39c8295d4a025a1e358cd",
+				);
+			});
+		} finally {
+			Object.defineProperty(crypto, "randomBytes", { value: random });
+			syncBuiltinESMExports();
+		}
+	});
+
 	for (const cached of [false, true])
 		for (const report of ["missing", "rejected"] as const)
 			for (const offset of [-1, 0, 1])
