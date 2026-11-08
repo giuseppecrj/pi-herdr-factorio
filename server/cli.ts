@@ -87,6 +87,7 @@ import {
 
 import {
 	checkReplay,
+	decideReplayBudget,
 	loadReplayCorpus,
 	readReplayBudget,
 	replayReport,
@@ -1316,23 +1317,29 @@ async function runReplayCli(
 				? null
 				: await readReplayBudget(resolve(v["budget-file"]));
 
-		if (
-			budget?.maxTokens !== null &&
-			budget?.maxTokens !== undefined &&
-			budget.maxTokens !== cap
-		)
-			reasons.push("replay_policy_changed");
+		const budgetDecision = decideReplayBudget(
+			budget ?? {
+				v: 1,
+				maxTokens: null,
+				policyChanges: [],
+				reservations: [],
+				chargedTokens: 0,
+				wallMs: 0,
+			},
+			cap,
+		);
 
-		if (cap !== null && cap - (budget?.chargedTokens ?? 0) < REPLAY_RUN_CAP)
-			reasons.push("replay_cap");
+		reasons.push(
+			...budgetDecision.reasons.filter(
+				(reason) => reason !== "replay_disabled" || selected !== null,
+			),
+		);
 
 		if (selected !== null) {
 			const c = report.cases.find((entry) => entry.id === selected.id);
 
 			if (c?.status !== "ready")
 				reasons.push(c?.status ?? "replay_case_unknown");
-
-			if (cap === null) reasons.push("replay_disabled");
 
 			if (v["budget-file"] === undefined)
 				reasons.push("replay_budget_required");
@@ -1362,7 +1369,7 @@ async function runReplayCli(
 		}
 
 		io.stdout(
-			`${JSON.stringify({ ...report, production, policy: policy?.kind === "valid" ? { workflowSha: mainSha, workflowDigest: digestOf(source.stdout) } : null, budget: { maxTokens: cap, perRunCap: REPLAY_RUN_CAP, chargedTokens: budget?.chargedTokens ?? null, remainingTokens: cap === null || budget === null ? null : Math.max(0, cap - budget.chargedTokens), wallMs: budget?.wallMs ?? null }, reasons, allowed: selected === null ? null : reasons.length === 0 }, null, 2)}\n`,
+			`${JSON.stringify({ ...report, production, policy: policy?.kind === "valid" ? { workflowSha: mainSha, workflowDigest: digestOf(source.stdout) } : null, budget: { maxTokens: cap, perRunCap: REPLAY_RUN_CAP, chargedTokens: budget?.chargedTokens ?? null, remainingTokens: budget === null ? null : budgetDecision.remainingTokens, pendingPolicyChange: budgetDecision.pendingPolicyChange === null ? null : { ...budgetDecision.pendingPolicyChange, workflowDigest: digestOf(source.stdout), mainSha }, wallMs: budget?.wallMs ?? null }, reasons, allowed: selected === null ? null : reasons.length === 0 }, null, 2)}\n`,
 		);
 
 		return reasons.length === 0 &&

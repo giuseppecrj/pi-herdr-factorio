@@ -397,9 +397,28 @@ in addition. A heavy replay can therefore exhaust its budget at review where
 production's 800k run limit would continue. This is a known comparability limit,
 even when both replay sides use the same limit. A run cannot start with less
 than 540k room.
-Two outstanding reservations charge 1,080,000 tokens. The next run refuses.
+Two outstanding reservations charge 1,080,000 tokens. Further runs still require
+at least 540,000 tokens of remaining room under the configured cap.
 The budget path is shared across both sides and subsequent replay pairs.
 Deleting it would reset accounting and is not part of the replay procedure.
+
+An owner-approved workflow cap raise takes effect on the next successful
+reservation. The ledger keeps all existing reservations and charges, appends
+`policyChanges: [{ from, to, at, workflowDigest, mainSha }]`, and updates
+`maxTokens` atomically with the new reservation. `at` is Unix time in
+milliseconds; the digest covers the frozen main workflow bytes. The existing
+three-argument reserve call reads those bytes from `REPLAY_MAIN_SHA` (or local
+`origin/main` when unset) and verifies that their cap matches the requested
+raise. Older ledgers without `policyChanges` remain readable. Equal caps add
+no policy-change record. Lower caps, malformed ledgers, and unproven raises
+refuse; never hand-edit the budget to change its cap.
+
+Read-only `replay check` uses the same budget decision as reservation and shows
+`budget.pendingPolicyChange` (or `null`) and remaining tokens under the workflow
+cap without writing the ledger. For example, 583,274 charged or reserved tokens
+with a raise from 1,100,000 to 1,650,000 leave 1,066,726 tokens, enough for the
+next 540,000-token reservation. A check is only a preview; the serialized
+reservation rechecks the budget before writing.
 
 After stop, one terminal verification row with a matching verification-manifest
 digest settles the reservation. Exact usage replaces the reserved token amount,
@@ -410,7 +429,7 @@ zero stage executions and zero usage with readable accounting. Only that case
 is `voided`, releases its reservation and records the reason. Any stage evidence,
 usage, or accounting uncertainty forbids voiding. Repeated settlement of the same
 run is idempotent. PID metadata remains until settlement or a retained decision
-succeeds, so a failed settlement can be retried. A changed cap, duplicate
+succeeds, so a failed settlement can be retried. A cap decrease, duplicate
 reservation, or duplicate run refuses. Fresh state does not erase public claim
 ownership: the driver refuses a fixture with any prior factory run marker and
 requires a fresh fixture issue.
