@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import * as replay from "../src/replay.ts";
 import { mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -56,14 +58,34 @@ async function fixtureRow(): Promise<LedgerRow> {
 	return line.row;
 }
 
-async function side() {
+async function side(which: "prev" | "cand" = "prev") {
 	const row = await fixtureRow();
 	assert.equal(row.provenance.kind, "verification");
 
 	return {
 		headSha: sha,
+		record: {
+			v: 1,
+			caseId: "c3",
+			corpusDigest: digestOf("frozen corpus"),
+			issueDigest: digestOf("frozen issue"),
+			side: which,
+			issue: which === "prev" ? 900 : 901,
+			headSha: sha,
+			mainSha: row.provenance.policy.workflowSha,
+			terminalMainSha: row.provenance.policy.workflowSha,
+			runId: which === "prev" ? row.runId : digestOf("candidate run"),
+			stageCaps: {
+				accept: 100000,
+				build: 400000,
+				review: 120000,
+				repair: 300000,
+			},
+		},
 		row: {
 			...row,
+			issue: which === "prev" ? 900 : 901,
+			runId: which === "prev" ? row.runId : digestOf("candidate run"),
 			originalBase: sha,
 			models: {
 				kind: "known",
@@ -369,7 +391,11 @@ describe("replay comparison", () => {
 
 		const result = replayReport({
 			previous: a,
-			candidate: { ...a, headSha: otherSha },
+			candidate: {
+				...(await side("cand")),
+				headSha: otherSha,
+				record: { ...(await side("cand")).record, headSha: otherSha },
+			},
 			expected: "needs_info",
 		});
 
@@ -463,6 +489,255 @@ describe("replay comparison", () => {
 			}).previous.matchesExpected,
 			"unknown",
 		);
+	});
+});
+
+describe("review regressions: comparison identity and caps", () => {
+	it("binds each row to its durable fixture, case, corpus and side; never pairs a run with itself", async () => {
+		const previous = await side();
+		const candidate = await side("cand");
+		for (const changed of [
+			{ ...candidate, record: { ...candidate.record, caseId: "c2" } },
+			{
+				...candidate,
+				record: { ...candidate.record, corpusDigest: digestOf("new corpus") },
+			},
+			{
+				...candidate,
+				record: { ...candidate.record, issueDigest: digestOf("other issue") },
+			},
+			{ ...candidate, row: { ...candidate.row, issue: 902 } },
+			{ ...candidate, record: { ...candidate.record, side: "prev" } },
+			previous,
+		]) {
+			assert.equal(
+				replayReport({ previous, candidate: changed, expected: "needs_info" })
+					.comparability,
+				"incomparable",
+				JSON.stringify(changed.record),
+			);
+		}
+		const result = replayReport({
+			previous,
+			candidate,
+			expected: "needs_info",
+		});
+		assert.equal(result.previous.corpusDigest, previous.record.corpusDigest);
+		assert.equal(result.candidate.corpusDigest, candidate.record.corpusDigest);
+	});
+
+	for (const field of ["requested", "observed"] as const)
+		it(`rejects different ${field} models from receipts`, async () => {
+			const previous = await side();
+			const candidate = await side("cand");
+			assert.ok(candidate.row.models.kind === "known");
+			const model = candidate.row.models.value[0];
+			assert.ok(model);
+			candidate.row.models = {
+				kind: "known",
+				value: [
+					{
+						...model,
+						[field]:
+							field === "observed"
+								? { kind: "known", value: "fallback" }
+								: "openai/fallback",
+					},
+				],
+			};
+			assert.ok(
+				replayReport({
+					previous,
+					candidate,
+					expected: "needs_info",
+				}).reasons.includes("model_mismatch"),
+			);
+		});
+
+	for (const field of ["trustedRunTokenCap", "effectiveRunTokenCap"] as const)
+		it(`rejects different ${field}`, async () => {
+			const previous = await side();
+			const candidate = await side("cand");
+			assert.ok(candidate.row.provenance.kind === "verification");
+			candidate.row.provenance = {
+				...candidate.row.provenance,
+				[field]: 539999,
+			};
+			assert.ok(
+				replayReport({
+					previous,
+					candidate,
+					expected: "needs_info",
+				}).reasons.includes("run_cap_mismatch"),
+			);
+		});
+
+	it("rejects different stage caps and any main movement, even identical terminal observations", async () => {
+		const previous = await side();
+		const candidate = await side("cand");
+		assert.ok(
+			replayReport({
+				previous,
+				candidate: {
+					...candidate,
+					record: {
+						...candidate.record,
+						stageCaps: { ...candidate.record.stageCaps, build: 200000 },
+					},
+				},
+				expected: "needs_info",
+			}).reasons.includes("stage_cap_mismatch"),
+		);
+		assert.ok(
+			replayReport({
+				previous,
+				candidate: {
+					...candidate,
+					record: { ...candidate.record, terminalMainSha: otherSha },
+				},
+				expected: "needs_info",
+			}).reasons.includes("main_moved"),
+		);
+		const row = previous.row;
+		assert.ok(row.v >= 4 && "terminalWorkflowObservation" in row);
+		const moved = {
+			...row,
+			terminalWorkflowObservation: {
+				kind: "known",
+				value: { workflowSha: otherSha, workflowDigest: digestOf("moved") },
+			},
+		} satisfies LedgerRow;
+		assert.ok(
+			replayReport({
+				previous: { ...previous, row: moved },
+				candidate,
+				expected: "needs_info",
+			}).reasons.includes("main_moved"),
+		);
+	});
+
+	it("c1 stays ready for parser edits but a real isBranchName change is stale", async () => {
+		const corpus = await loadReplayCorpus(corpusDir);
+		const execute: Exec = async (cmd, args) => {
+			try {
+				return {
+					code: 0,
+					stdout: execFileSync(cmd, [...args], { encoding: "utf8" }),
+					stderr: "",
+				};
+			} catch {
+				return { code: 1, stdout: "", stderr: "" };
+			}
+		};
+		const head = execFileSync("git", ["rev-parse", "HEAD"], {
+			encoding: "utf8",
+		}).trim();
+		assert.equal(
+			(
+				await checkReplay({
+					corpus,
+					mainSha: head,
+					previousSha: head,
+					candidateSha: head,
+					exec: execute,
+				})
+			).cases[0]?.status,
+			"ready",
+		);
+		const c1 = corpus.cases[0];
+		assert.ok(c1);
+		assert.equal(c1.guardPattern, "BRANCH_NAME|isBranchName");
+		const changed = await checkReplay({
+			corpus,
+			mainSha: head,
+			previousSha: head,
+			candidateSha: head,
+			exec: async (cmd, args) =>
+				args.some((a) => a === "-GBRANCH_NAME|isBranchName")
+					? { code: 0, stdout: "src/workflow.ts\n", stderr: "" }
+					: execute(cmd, args),
+		});
+		assert.equal(changed.cases[0]?.status, "stale");
+	});
+
+	it("bundle inputs include the recipe, not dead paths or the echo fixture", async () => {
+		const corpus = await loadReplayCorpus(corpusDir);
+		let paths: readonly string[] = [];
+		const result = await checkReplay({
+			corpus,
+			mainSha: sha,
+			previousSha: sha,
+			candidateSha: otherSha,
+			exec: async (_cmd, args) => {
+				if (args.includes("skills")) paths = args.slice(args.indexOf("--") + 1);
+				return {
+					code: 0,
+					stdout: args.includes("server/provision.sh")
+						? "server/provision.sh\n"
+						: "",
+					stderr: "",
+				};
+			},
+		});
+		assert.deepEqual(paths, [
+			"skills",
+			"server/sandbox/assets",
+			"server/provision.sh",
+		]);
+		assert.equal(result.bundle, "bundle_switch_required");
+	});
+
+	it("voids only proven zero-execution, zero-usage reservations, recording the reason", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "replay-void-"));
+		const path = join(dir, "budget.json");
+		try {
+			await reserveReplay(path, 1100000, "empty");
+			await replay
+				.voidReplay(
+					path,
+					"empty",
+					{ stages: 1, tokens: 0, complete: true },
+					"stage_was_started",
+				)
+				.then(
+					() => assert.fail("stage must retain charge"),
+					() => {},
+				);
+			await replay
+				.voidReplay(
+					path,
+					"empty",
+					{ stages: 0, tokens: 1, complete: true },
+					"usage",
+				)
+				.then(
+					() => assert.fail("usage must retain charge"),
+					() => {},
+				);
+			await replay
+				.voidReplay(
+					path,
+					"empty",
+					{ stages: 0, tokens: 0, complete: false },
+					"uncertain",
+				)
+				.then(
+					() => assert.fail("uncertainty must retain charge"),
+					() => {},
+				);
+			await replay.voidReplay(
+				path,
+				"empty",
+				{ stages: 0, tokens: 0, complete: true },
+				"no_stage_executed",
+			);
+			const budget = await readReplayBudget(path);
+			assert.equal(budget.chargedTokens, 0);
+			assert.equal(budget.reservations[0]?.status, "voided");
+			assert.equal(budget.reservations[0]?.outcome, "no_stage_executed");
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
 	});
 });
 
