@@ -487,7 +487,7 @@ const cipher=createCipheriv("aes-256-gcm",Buffer.alloc(32),Buffer.alloc(12)); ci
 	]);
 });
 
-test("main-owned test globs match npm test and include sandbox cases", () => {
+test("visible suite excludes heavy integration tests without losing CI or gate coverage", () => {
 	const root = existsSync("/g/tooling/.github/factory/gates/gates.json")
 		? "/g/tooling"
 		: ".";
@@ -499,6 +499,7 @@ test("main-owned test globs match npm test and include sandbox cases", () => {
 	assert.deepEqual(manifest.testGlobs, [
 		"test/*.test.ts",
 		"test/sandbox/*.cases.ts",
+		"test/integration/*.test.ts",
 	]);
 	const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 	assert.equal(
@@ -508,6 +509,24 @@ test("main-owned test globs match npm test and include sandbox cases", () => {
 
 	for (const pattern of manifest.testGlobs)
 		assert.ok(globSync(pattern, { cwd: root }).length > 0);
+
+	const visible = globSync(manifest.testGlobs[0], { cwd: root });
+	assert.ok(!visible.some((path) => path.endsWith("replay-driver.test.ts")));
+	const integration = globSync("test/integration/*.test.ts", { cwd: root });
+	assert.ok(integration.includes("test/integration/replay-driver.test.ts"));
+	assert.equal(
+		pkg.scripts["test:integration"],
+		"node --experimental-strip-types --test --test-concurrency=1 test/integration/*.test.ts",
+	);
+	assert.match(pkg.scripts.check, /npm test && npm run test:integration$/);
+	assert.match(
+		readFileSync(join(root, ".github/workflows/check.yml"), "utf8"),
+		/run: npm run check/,
+	);
+	assert.match(
+		readFileSync(join(root, ".github/workflows/ci.yml"), "utf8"),
+		/node --experimental-strip-types server\/cli\.ts gates/,
+	);
 });
 
 test("removes nested ignore files and candidate-deleted source", async (t) => {

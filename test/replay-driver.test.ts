@@ -94,6 +94,51 @@ async function restored() {
 	);
 }
 
+it("waits for the visible-test deadline plus 60 seconds after signaling stop", async () => {
+	const source = await readFile(script, "utf8");
+	const stop = source.match(/stop_child\(\) \{[\s\S]*?\n\}/)?.[0];
+	assert.ok(stop);
+	const sandbox = await readFile("server/sandbox.ts", "utf8");
+	const limit = sandbox.match(
+		/timer = setTimeout\(\(\) => \{\s*timedOut = true;[\s\S]*?\}, ([\d_]+)\);/,
+	)?.[1];
+	assert.ok(limit);
+	const polls = Math.ceil((Number(limit.replaceAll("_", "")) / 1000 + 60) * 10);
+	const pidfile = join(await mkdtemp(join(tmpdir(), "stop-wait-")), "pid");
+
+	try {
+		await writeFile(pidfile, "123");
+
+		const output = execFileSync(
+			"bash",
+			[
+				"-c",
+				`
+set -euo pipefail
+pidfile="$1"
+polls=0
+target="$2"
+alive() { polls=$((polls + 1)); (( polls <= target )); }
+owned() { return 0; }
+kill() { [[ "$*" == "-TERM 123" ]]; }
+sleep() { [[ "$1" == 0.1 ]]; }
+${stop}
+stop_child
+printf '%s' "$polls"
+`,
+				"stop-wait",
+				pidfile,
+				String(polls),
+			],
+			{ encoding: "utf8" },
+		);
+
+		assert.equal(Number(output), polls + 1);
+	} finally {
+		await rm(join(pidfile, ".."), { recursive: true, force: true });
+	}
+});
+
 describe("replay driver with fake GitHub/controller and real guards", {
 	concurrency: false,
 }, () => {
