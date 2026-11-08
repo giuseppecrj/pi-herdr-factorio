@@ -843,6 +843,20 @@ export function candidateGenerations(
 	return [...state.history, state.current];
 }
 
+function latestRepairRound(state: Selected): RepairRound {
+	const rounds = [
+		...candidateGenerations(state).map((g) => g.intent.round),
+		...state.accounts.map((a) => a.execution.round),
+		...(state.feedback?.batches ?? []).flatMap((b) =>
+			b.status.kind === "settled" && b.status.outcome.kind === "refused"
+				? []
+				: [b.round ?? (b.status.kind === "applying" ? b.status.round : 0)],
+		),
+	];
+
+	return rounds.includes(2) ? 2 : rounds.includes(1) ? 1 : 0;
+}
+
 function latestGeneration(state: Selected): GenerationNumber {
 	return candidateGenerations(state)
 		.filter((g) => g.intent.round === state.current.intent.round)
@@ -1576,7 +1590,8 @@ function startQueuedFeedback(
 	)
 		return state;
 	const current = state.current;
-	const round: 1 | 2 = current.intent.round === 0 ? 1 : 2;
+	const latestRound = latestRepairRound(state);
+	const round: 1 | 2 = latestRound === 0 ? 1 : 2;
 	const assessment = current.assessment;
 	const budgetReason = preflight(state, "build", round);
 
@@ -1588,7 +1603,7 @@ function startQueuedFeedback(
 		promoted?.intent.origin.kind === "owner" ||
 		current.intent.origin.kind === "owner"
 			? "owner_authored_head"
-			: current.intent.round === MAX_REPAIR_ROUNDS
+			: latestRound === MAX_REPAIR_ROUNDS
 				? "cap_reached"
 				: assessment === undefined ||
 						current.assessmentKind === "unusable" ||
@@ -3279,8 +3294,10 @@ function wireExecution(
 		return (
 			(v.round === 1 || v.round === 2) &&
 			wireRef(v.feedbackFrom) &&
-			v.feedbackFrom.round + 1 === v.round &&
-			wireCause(v.cause)
+			wireCause(v.cause) &&
+			(v.cause.kind === "feedback"
+				? v.feedbackFrom.round < v.round
+				: v.feedbackFrom.round + 1 === v.round)
 		);
 	const seats = v.seats;
 

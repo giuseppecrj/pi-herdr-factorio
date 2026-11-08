@@ -3618,7 +3618,7 @@ function rebuildingFeedback(
 for (const remaining of [34_361, 59_999, 60_000])
 	for (const budget of ["round", "run"] as const)
 		test(`feedback launch floor: ${budget} remainder ${remaining}`, () => {
-			let state = queuedFeedback();
+			let state: ReturnType<typeof selected> = queuedFeedback();
 
 			if (budget === "run")
 				state = {
@@ -3631,25 +3631,33 @@ for (const remaining of [34_361, 59_999, 60_000])
 			else {
 				const built = rebuildingFeedback(state);
 				state = {
-					...state,
-					accounts: [
-						...state.accounts,
-						{
-							execution: built.execution,
-							settlement: "settled",
-							spend: {
-								kind: "known",
-								tokens: REPAIR_BUILD_MAX_TOKENS - remaining,
-							},
-						},
-					],
+					...built.state,
+					work: {
+						kind: "repair_due",
+						round: 1,
+						attempt: 2,
+						feedbackFrom: built.execution.feedbackFrom,
+						cause: built.execution.cause,
+					},
+					accounts: built.state.accounts.map((a) =>
+						a.execution.id !== built.execution.id
+							? a
+							: {
+									...a,
+									settlement: "settled",
+									spend: {
+										kind: "known",
+										tokens: REPAIR_BUILD_MAX_TOKENS - remaining,
+									},
+								},
+					),
 				};
 			}
 
 			const next = handoffCandidate(state, readyObservation(state)).state;
-			const notice = pending(next, "post_notice");
 
 			if (remaining < 60_000) {
+				const notice = pending(next, "post_notice");
 				assert.equal(notice.notice.kind, "round_summary");
 				assert.equal(
 					notice.withdraw,
@@ -3659,7 +3667,13 @@ for (const remaining of [34_361, 59_999, 60_000])
 					kind: "held",
 					reason: budget === "run" ? "run_tokens" : "repair_tokens",
 				});
-			} else assert.equal(notice.notice.kind, "repair_started");
+			} else if (budget === "round")
+				assert.equal(pending(next, "repair_build").execution.attempt, 2);
+			else
+				assert.equal(
+					pending(next, "post_notice").notice.kind,
+					"repair_started",
+				);
 		});
 
 test("feedback launch floor does not override the shared repair cap", () => {
@@ -4693,13 +4707,13 @@ test("F10-2 failed patches keep attempt cap but a published run never fails", ()
 	assert.equal(summary.notice.kind, "round_summary");
 });
 
-test("F10-2 three no-progress attempts reuse one round, then refuse without corrupting the book", () => {
+test("F10-3 N1 no-progress rounds count toward the cap even without a generation", () => {
 	let state: ReturnType<typeof selected> = queuedFeedback();
 
-	for (let attempt = 1; attempt <= 3; attempt++) {
+	for (let round = 1; round <= 2; round++) {
 		const building = rebuildingFeedback(state);
-		assert.equal(building.execution.round, 1);
-		assert.equal(building.execution.attempt, attempt);
+		assert.equal(building.execution.round, round);
+		assert.equal(building.execution.attempt, 1);
 
 		const stopped = handoffCandidate(building.state, {
 			kind: "repair_settled",
@@ -4718,10 +4732,10 @@ test("F10-2 three no-progress attempts reuse one round, then refuse without corr
 		assert.equal(state.current.intent.round, 0);
 		assert.equal(
 			state.accounts.filter((a) => a.execution.stage === "build").length,
-			attempt,
+			round,
 		);
 		assert.ok(parseCandidateState(JSON.parse(JSON.stringify(state))));
-		const incoming = feedbackObservation(state, attempt + 10);
+		const incoming = feedbackObservation(state, round + 10);
 		assert.ok(incoming.kind === "read" && incoming.batch);
 		state = {
 			...state,
@@ -4748,12 +4762,18 @@ test("F10-2 three no-progress attempts reuse one round, then refuse without corr
 		pending(refusal.state, "post_notice").notice.kind,
 		"repair_unavailable",
 	);
-	assert.equal(pending(refusal.state, "post_notice").detail, "review_attempts");
+	assert.partialDeepStrictEqual(
+		selected(refusal.state).feedback?.batches.at(-1)?.status,
+		{
+			kind: "settled",
+			outcome: { kind: "refused", reason: "cap_reached" },
+		},
+	);
 	assert.deepEqual(selected(refusal.state).accounts, state.accounts);
 	assert.equal(candidateUsage(refusal.state), candidateUsage(state));
 	assert.ok(
 		parseCandidateState(JSON.parse(JSON.stringify(refusal.state))),
-		"a refused fourth attempt must still be a readable durable book",
+		"a refused third round must still be a readable durable book",
 	);
 });
 
@@ -5134,9 +5154,11 @@ for (const outcome of [
 			"foreign_key",
 		].includes(outcome);
 
-		const secondAttempt = retry || outcome === "build_retry";
+		const secondAttempt = outcome === "build_retry";
+		const finalRound = retry ? 2 : 1;
 
 		const success =
+			retry ||
 			outcome === "complete_handoff" ||
 			outcome === "other_applying" ||
 			secondAttempt;
@@ -5244,12 +5266,18 @@ for (const outcome of [
 
 					const latest = JSON.parse(
 						readFileSync(
-							join(root, "handoff", pin.runId, "feedback", "round-1-a2.json"),
+							join(
+								root,
+								"handoff",
+								pin.runId,
+								"feedback",
+								`round-${finalRound}-a${secondAttempt ? 2 : 1}.json`,
+							),
 							"utf8",
 						),
 					);
 
-					assert.equal(latest.attempt, 2);
+					assert.equal(latest.attempt, secondAttempt ? 2 : 1);
 					assert.equal(latest.outcome.kind, "applied");
 					assert.equal(statSync(firstReceiptPath).mode & 0o777, 0o600);
 
@@ -5449,8 +5477,8 @@ for (const outcome of [
 				const start = pending(state, "post_notice");
 				assert.partialDeepStrictEqual(start.then, {
 					kind: "repair_due",
-					round: 1,
-					attempt: 2,
+					round: 2,
+					attempt: 1,
 				});
 				const startedAgain = await port.execute(state, start);
 				assert.ok(startedAgain);
@@ -5477,7 +5505,12 @@ for (const outcome of [
 
 			if (success) {
 				const bytes = "actual-repair";
-				const changed = { ...patch, round: 1, patchDigest: digestOf(bytes) };
+
+				const changed = {
+					...patch,
+					round: finalRound,
+					patchDigest: digestOf(bytes),
+				};
 
 				const built = handoffCandidate(state, {
 					kind: "repair_settled",
@@ -5515,7 +5548,7 @@ for (const outcome of [
 						baseSha: pin.originalBase,
 						contractDigest: pin.contractDigest,
 						acceptanceDigest: pin.acceptanceDigest,
-						round: 1,
+						round: finalRound,
 					},
 					{
 						kind: "collected",
@@ -5613,9 +5646,13 @@ for (const outcome of [
 					join(root, "handoff", pin.runId, "feedback", `${saved.digest}.json`),
 				);
 
-			if (outcome === "crash_edit") crashEdit = true;
-			else if (retry && outcome !== "deleted_summary") crashEdit = true;
-			else github.posts.push("landed_unanswered");
+			if (retry && outcome !== "deleted_summary") {
+				github.comment(
+					pr,
+					`outdated summary\n<!-- factory:notice ${pin.runId} round_summary ${finalRound} -->`,
+				);
+				crashEdit = true;
+			} else github.posts.push("landed_unanswered");
 			assert.equal(
 				await controllerCandidatePort({ stateDir: root, exec }).execute(
 					state,
@@ -5638,8 +5675,12 @@ for (const outcome of [
 				}).state,
 			);
 
-			assert.equal(pr.comments.length, outcome === "foreign_key" ? 2 : 1);
-			const summary = pr.comments.find((c) => c.login === BOT_LOGIN)!;
+			const expectedComments =
+				(retry && outcome !== "deleted_summary" ? 2 : 1) +
+				(outcome === "foreign_key" ? 1 : 0);
+
+			assert.equal(pr.comments.length, expectedComments);
+			const summary = pr.comments.findLast((c) => c.login === BOT_LOGIN)!;
 			assert.match(
 				summary.body,
 				success ? /adopted \(builder-reported\)/ : /repair_no_progress/,
@@ -5648,7 +5689,7 @@ for (const outcome of [
 			if (retry) {
 				assert.match(
 					summary.body,
-					/Attempt 1[\s\S]*repair_no_progress[\s\S]*Attempt 2[\s\S]*ready after fresh validation and review/,
+					/Factory feedback round 2[\s\S]*Attempt 1[\s\S]*ready after fresh validation and review/,
 				);
 				assert.equal(readFileSync(firstReceiptPath, "utf8"), firstReceipt);
 				assert.equal(edits, outcome === "deleted_summary" ? 0 : 1);
@@ -5706,7 +5747,15 @@ for (const outcome of [
 				done,
 				300,
 			);
-			const path = join(root, "handoff", pin.runId, "feedback", "round-1.json");
+
+			const path = join(
+				root,
+				"handoff",
+				pin.runId,
+				"feedback",
+				`round-${finalRound}.json`,
+			);
+
 			const bytes = readFileSync(path, "utf8");
 			assert.equal(statSync(path).mode & 0o777, 0o600);
 			rmSync(path);
@@ -5717,9 +5766,12 @@ for (const outcome of [
 			assert.equal(readFileSync(path, "utf8"), bytes);
 			const index = JSON.parse(bytes);
 			assert.equal(index.latestAttempt, secondAttempt ? 2 : 1);
-			assert.equal(index.receipt, `round-1-a${secondAttempt ? 2 : 1}.json`);
+			assert.equal(
+				index.receipt,
+				`round-${finalRound}-a${secondAttempt ? 2 : 1}.json`,
+			);
 			assert.equal(index.outcome.kind, success ? "applied" : "stopped");
-			assert.equal(pr.comments.length, outcome === "foreign_key" ? 2 : 1);
+			assert.equal(pr.comments.length, expectedComments);
 		});
 	});
 

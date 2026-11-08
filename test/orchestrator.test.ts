@@ -11651,7 +11651,6 @@ describe("controller-only validate", () => {
 				batches.get(digest) ?? null,
 		});
 		const output = f.executor.output.bind(f.executor);
-		const failures: unknown[] = [];
 		f.executor.output = async (input) => {
 			const built = await output(input);
 
@@ -11697,6 +11696,7 @@ describe("controller-only validate", () => {
 			};
 		};
 
+		const validationKeys: string[] = [];
 		f.executor.validate = async (input) => {
 			assert.ok(input.generation);
 			const generation = input.generation;
@@ -11744,6 +11744,8 @@ describe("controller-only validate", () => {
 				generation.generation,
 			);
 
+			validationKeys.push(nonce);
+
 			return {
 				kind: "finished",
 				state,
@@ -11758,15 +11760,6 @@ describe("controller-only validate", () => {
 		};
 
 		f.executor.ownerValidate = f.executor.validate;
-		const collect = f.executor.output;
-		f.executor.output = async (input) => {
-			try {
-				return await collect(input);
-			} catch (error) {
-				failures.push(String(error));
-				throw error;
-			}
-		};
 
 		const book = () => {
 			const state = f.files.claims.get(runOf(14))?.handoff;
@@ -11788,7 +11781,6 @@ describe("controller-only validate", () => {
 				JSON.stringify({
 					work: book().work,
 					current: book().current.intent,
-					failures,
 					logs: f.logs.filter((l) => l.event !== "tick").slice(-4),
 				}),
 			);
@@ -11893,7 +11885,7 @@ describe("controller-only validate", () => {
 			second.current.validation!.publication!.branch,
 			first.current.validation!.publication!.branch,
 		);
-		assert.notEqual(second.current.report!.nonce, first.current.report!.nonce);
+		assert.equal(new Set(validationKeys).size, validationKeys.length);
 		assert.deepEqual(
 			pr.comments.map((c) => c.body.match(/round_summary [12]/)?.[0]),
 			["round_summary 1", "round_summary 2"],
@@ -11920,7 +11912,9 @@ describe("controller-only validate", () => {
 		const usage = candidateUsage(book());
 		await requestChanges(703);
 		await until(
-			() => book().feedback?.batches.at(-1)?.status.kind === "settled",
+			() =>
+				book().feedback?.batches.length === 3 &&
+				book().feedback?.batches.at(-1)?.status.kind === "settled",
 		);
 		assert.partialDeepStrictEqual(book().feedback?.batches.at(-1)?.status, {
 			kind: "settled",

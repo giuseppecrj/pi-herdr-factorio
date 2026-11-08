@@ -3653,7 +3653,11 @@ async function candidateReviewInputs(
 					prior.review ?? prior.certification!.review,
 				);
 
-			const previous = readRunPatch(config.stateDir, runId, round - 1);
+			const previous = readRunPatch(
+				config.stateDir,
+				runId,
+				from?.round ?? round - 1,
+			);
 
 			if (previous.kind !== "found")
 				throw new ReviewEvidenceUnavailable("repair_patch_missing");
@@ -4165,7 +4169,13 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 				let kept = readRunPatch(config.stateDir, runId, round);
 
 				if (round > 0 && kept.kind === "found") {
-					const previous = readRunPatch(config.stateDir, runId, round - 1);
+					const previous = readRunPatch(
+						config.stateDir,
+						runId,
+						input.execution?.stage === "build"
+							? input.execution.feedbackFrom.round
+							: round - 1,
+					);
 
 					if (
 						previous.kind !== "found" ||
@@ -4421,7 +4431,11 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 
 			if (build && round > 0 && checked.kind === "ready") {
 				try {
-					const previous = readRunPatch(config.stateDir, runId, round - 1);
+					const previous = readRunPatch(
+						config.stateDir,
+						runId,
+						feedbackFrom?.round ?? round - 1,
+					);
 
 					if (previous.kind !== "found")
 						return { kind: "refused", reason: "repair_patch_missing" };
@@ -4898,7 +4912,9 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 								const previous = readRunPatch(
 									config.stateDir,
 									input.runId,
-									input.round! - 1,
+									input.execution?.stage === "build"
+										? input.execution.feedbackFrom.round
+										: input.round! - 1,
 								);
 
 								const reason =
