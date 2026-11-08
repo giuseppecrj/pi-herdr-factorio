@@ -643,6 +643,20 @@ describe("review regressions: comparison identity and caps", () => {
 		);
 	});
 
+	it("refuses distinct runs on the same fixture issue", async () => {
+		const previous = await side();
+		const candidate = await side("cand");
+		candidate.row.issue = previous.row.issue;
+		candidate.record.issue = previous.record.issue;
+		const result = replayReport({
+			previous,
+			candidate,
+			expected: "needs_info",
+		});
+		assert.equal(result.comparability, "incomparable");
+		assert.ok(result.reasons.includes("same_fixture_issue"));
+	});
+
 	it("c1 stays ready for parser edits but a real isBranchName change is stale", async () => {
 		const corpus = await loadReplayCorpus(corpusDir);
 
@@ -712,7 +726,7 @@ describe("review regressions: comparison identity and caps", () => {
 				join(dir, "src/workflow.ts"),
 				source.replace(
 					"return BRANCH_NAME.test(input);",
-					"return BRANCH_NAME.test(input) && !input.endsWith('.lock');",
+					"if (input.endsWith('.lock')) return false;\n\treturn BRANCH_NAME.test(input);",
 				),
 			);
 			git("add", ".");

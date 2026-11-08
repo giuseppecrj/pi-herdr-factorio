@@ -6,6 +6,7 @@ import {
 	mkdtemp,
 	readFile,
 	readdir,
+	readlink,
 	rm,
 	symlink,
 	writeFile,
@@ -46,7 +47,7 @@ function drive(mode = "start", extra: string[] = []) {
 			mode,
 			...(mode === "start" ? ["900", ...extra] : extra),
 		],
-		{ env, stdio: ["ignore", "pipe", "pipe"] },
+		{ env, stdio: ["ignore", "pipe", "pipe"], detached: true },
 	);
 
 	active.push(child);
@@ -169,7 +170,8 @@ const state = process.argv[process.argv.indexOf('--state-dir') + 1];
 writeFileSync(process.env.FAKE_ARGS, JSON.stringify(process.argv.slice(2)));
 if (process.env.FAKE_STAGE) { mkdirSync(state + '/stages/run/specify-1', {recursive:true}); writeFileSync(state + '/stages/run/specify-1/usage.json', '{"total":1}'); }
 process.stderr.write('event=controller_ready pid=' + process.pid + ' \\n');
-process.on('SIGTERM', () => process.exit(0));
+process.on('SIGINT', () => {});
+process.on('SIGTERM', () => { writeFileSync(process.env.FAKE_TERM_SEEN, 'yes'); setTimeout(() => process.exit(0), Number(process.env.FAKE_TERM_WAIT ?? 0)); });
 if (process.env.FAKE_EXIT) setTimeout(() => process.exit(7), 100);
 setInterval(() => {}, 1000);
 `,
@@ -180,7 +182,7 @@ setInterval(() => {}, 1000);
 			`#!/usr/bin/env bash
 case "$*" in
   *"commits/main"*) echo "$FAKE_MAIN";;
-  *"issue edit"*) touch "$FAKE_DISARMED";;
+  *"issue edit"*) [[ -n "\${FAKE_DISARM_FAIL:-}" ]] && exit 1; touch "$FAKE_DISARMED";;
   *"issue view"*) if [[ -e "$FAKE_DISARMED" ]]; then node -e 'const x=JSON.parse(process.env.FAKE_ISSUE);x.labels=[];console.log(JSON.stringify(x))'; else printf '%s\\n' "$FAKE_ISSUE"; fi;;
   *) echo "unexpected gh $*" >&2; exit 9;;
 esac
@@ -246,7 +248,8 @@ esac
 		await cp(bundle, join(dir, "sandbox", `assets-${digest}`), {
 			recursive: true,
 		});
-		await symlink(`assets-${digest}`, join(dir, "sandbox/current"));
+		await mkdir(join(dir, "sandbox", `assets-${"e".repeat(64)}`));
+		await symlink(`assets-${"e".repeat(64)}`, join(dir, "sandbox/current"));
 
 		const body = await readFile(
 			join(control, "test/fixtures/replay/cases/c3/issue.md"),
@@ -272,6 +275,7 @@ esac
 			FAKE_SERVICE: join(dir, "service"),
 			FAKE_DISARMED: join(dir, "disarmed"),
 			FAKE_ARGS: join(dir, "args.json"),
+			FAKE_TERM_SEEN: join(dir, "term-seen"),
 			FAKE_SYSTEMCTL_LOG: join(dir, "systemctl.log"),
 			FAKE_ISSUE: JSON.stringify({
 				title: `[F12a-replay-c3] ${body.split("\n")[0]?.slice(2)}`,
@@ -285,14 +289,32 @@ esac
 
 	afterEach(async () => {
 		for (const child of active)
-			if (child.exitCode === null) child.kill("SIGTERM");
+			if (child.exitCode === null && child.signalCode === null)
+				child.kill("SIGTERM");
 		await Promise.all(
 			active.map((child) =>
-				child.exitCode !== null
+				child.exitCode !== null || child.signalCode !== null
 					? undefined
 					: new Promise((r) => child.on("close", r)),
 			),
 		);
+		const pid = Number(
+			await readFile(join(lane, "serve.pid"), "utf8").catch(() => "0"),
+		);
+
+		if (pid > 0) {
+			try {
+				process.kill(pid, "SIGTERM");
+			} catch (error) {
+				if (
+					!(error instanceof Error) ||
+					!("code" in error) ||
+					error.code !== "ESRCH"
+				)
+					throw error;
+			}
+		}
+
 		await rm(dir, { recursive: true, force: true });
 	});
 
@@ -467,6 +489,107 @@ esac
 			540000,
 		);
 		await restored();
+	});
+
+	it("ignores a second terminal Ctrl-C while restoring", async () => {
+		env.FAKE_TERM_WAIT = "1500";
+		const run = drive();
+		await ready(run);
+		assert.ok(run.child.pid);
+		process.kill(-run.child.pid, "SIGINT");
+
+		for (let i = 0; i < 100; i++) {
+			if (
+				await readFile(join(dir, "term-seen")).then(
+					() => true,
+					() => false,
+				)
+			)
+				break;
+			await pause();
+		}
+
+		assert.equal(await readFile(join(dir, "term-seen"), "utf8"), "yes");
+		process.kill(-run.child.pid, "SIGINT");
+		await run.done;
+		await restored();
+		await assert.rejects(readFile(join(root, "replay-restore.json")), /ENOENT/);
+	});
+
+	it("detects a mid-restore SIGKILL on the next run and recovers via stop", async () => {
+		env.FAKE_STAGE = "1";
+		env.FAKE_TERM_WAIT = "1500";
+		const run = drive();
+		await ready(run);
+		const path = join(root, "replay-restore.json");
+		run.child.kill("SIGTERM");
+
+		for (let i = 0; i < 100; i++) {
+			if (
+				await readFile(join(dir, "term-seen")).then(
+					() => true,
+					() => false,
+				)
+			)
+				break;
+			await pause();
+		}
+
+		assert.equal(await readFile(join(dir, "term-seen"), "utf8"), "yes");
+		run.child.kill("SIGKILL");
+		await run.done;
+		const journal = JSON.parse(await readFile(path, "utf8"));
+		assert.equal(journal.oldBundle, `assets-${"e".repeat(64)}`);
+		assert.equal(journal.serviceState, "active");
+		assert.equal(journal.hadHold, false);
+		assert.equal(journal.issue, 900);
+		assert.equal(journal.fixtureLabel, "factory:ready");
+		const next = await drive().done;
+		assert.notEqual(next.code, 0);
+		assert.match(next.text, /WARNING.*unfinished production restoration/);
+		assert.match(next.text, /F12a-replay-c3 1 stop/);
+		assert.equal((await drive("stop").done).code, 0);
+		await restored();
+		assert.equal(
+			await readlink(join(dir, "sandbox/current")),
+			journal.oldBundle,
+		);
+		await assert.rejects(readFile(path), /ENOENT/);
+		assert.equal(
+			(await readReplayBudget(join(root, "replay-budget.json"))).chargedTokens,
+			540000,
+		);
+	});
+
+	it("retains recovery evidence on a disarm failure and warns while held", async () => {
+		env.FAKE_DISARM_FAIL = "1";
+		const run = drive();
+		await ready(run);
+		run.child.kill("SIGTERM");
+		assert.notEqual((await run.done).code, 0);
+		assert.ok(await readFile(join(root, "replay-restore.json")));
+		const failed = await drive("stop").done;
+		assert.notEqual(failed.code, 0);
+		assert.match(failed.text, /WARNING.*production.*hold/);
+		delete env.FAKE_DISARM_FAIL;
+		assert.equal((await drive("stop").done).code, 0);
+		await restored();
+	});
+
+	it("preserves an original hold and inactive service and warns on stop", async () => {
+		await rm(join(dir, "service"));
+		await writeFile(join(dir, "home/factory-state/disabled"), "owner hold");
+		const run = drive();
+		await ready(run);
+		const stopped = await drive("stop").done;
+		assert.equal(stopped.code, 0);
+		assert.match(stopped.text, /WARNING.*production.*hold/);
+		await run.done;
+		assert.equal(
+			await readFile(join(dir, "home/factory-state/disabled"), "utf8"),
+			"owner hold",
+		);
+		await assert.rejects(readFile(join(dir, "service")), /ENOENT/);
 	});
 
 	it("restores production on controller failure", async () => {
