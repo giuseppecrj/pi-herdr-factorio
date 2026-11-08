@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import {
 	mkdirSync,
 	mkdtempSync,
@@ -16,6 +17,7 @@ import {
 	parseLedger,
 	type LedgerRow,
 	type LedgerRowV1,
+	type LedgerRowV4,
 } from "../src/ledger.ts";
 import {
 	computeMetrics,
@@ -251,8 +253,9 @@ describe("factory metrics", () => {
 		]);
 
 		assert.equal(value.primary.denominator, 1);
-		assert.equal(value.primary.numerator, 1);
-		assert.equal(value.tokensPerCleanLanding, 200);
+		assert.equal(value.primary.numerator, 0);
+		assert.equal(value.tokens.total, 200);
+		assert.equal(ticketOf(value).status, "unknown");
 		assert.equal(ticketOf(value).attempts[1]?.previousRunId, first.runId);
 	});
 
@@ -301,8 +304,13 @@ describe("factory metrics", () => {
 			},
 		]);
 
-		assert.equal(value.primary.numerator, 1);
+		assert.equal(value.primary.numerator, 0);
 		assert.equal(ticketOf(value).landings[0]?.certifiedRound, 0);
+		assert.ok(
+			ticketOf(value).landings[0]?.reasons.includes(
+				"intervention_not_recorded",
+			),
+		);
 	});
 
 	it("does not count owner overrides as clean", () => {
@@ -348,7 +356,7 @@ describe("factory metrics", () => {
 		);
 	});
 
-	it("counts a ticket clean when any mature landing is clean, charging every landing", () => {
+	it("charges every landing without presuming an unrecorded intervention was absent", () => {
 		const first = synthetic();
 		assert.ok(first.outcome.kind === "landed");
 
@@ -360,9 +368,11 @@ describe("factory metrics", () => {
 			synthetic(100, "101"),
 		]);
 
-		assert.equal(value.primary.numerator, 1);
+		assert.equal(value.primary.numerator, 0);
 		assert.equal(value.primary.denominator, 1);
-		assert.equal(value.tokensPerCleanLanding, 200);
+		assert.equal(value.tokens.total, 200);
+		assert.equal(value.tokensPerCleanLanding, null);
+		assert.equal(ticketOf(value).status, "unknown");
 	});
 
 	it("reports ambiguous certified generations as unknown", () => {
@@ -432,9 +442,10 @@ describe("factory metrics", () => {
 		assert.equal(before.primary.share, null);
 		assert.equal(ticketOf(before).status, "pending");
 		const boundary = report([row]);
-		assert.equal(boundary.status, "complete");
-		assert.equal(boundary.primary.numerator, 1);
-		assert.equal(boundary.primary.share, 1);
+		assert.equal(boundary.status, "unknown");
+		assert.equal(boundary.primary.matureTickets, 1);
+		assert.equal(ticketOf(boundary).landings[0]?.defect.kind, "none");
+		assert.equal(boundary.primary.share, null);
 	});
 
 	it("reports the cohort pending if any ticket is immature", () => {
@@ -523,9 +534,9 @@ describe("factory metrics", () => {
 			defect("#100", "2026-11-08T00:00:00.001Z"),
 		])
 			assert.equal(
-				report([synthetic()], { kind: "known", issues: [issue] }).primary
-					.numerator,
-				1,
+				ticketOf(report([synthetic()], { kind: "known", issues: [issue] }))
+					.landings[0]?.defect.kind,
+				"none",
 			);
 		assert.equal(
 			report([synthetic()], {
@@ -685,7 +696,8 @@ describe("factory metrics", () => {
 		const elapsed = performance.now() - start;
 		context.diagnostic(`1000 rows: ${elapsed.toFixed(2)} ms`);
 		assert.equal(value.primary.denominator, 1000);
-		assert.equal(value.primary.numerator, 1000);
+		assert.equal(value.primary.numerator, 0);
+		assert.equal(value.primary.unknownTickets, 1000);
 		assert.ok(elapsed < 2000, `${elapsed} ms exceeds 2 s`);
 		assert.doesNotMatch(
 			readFileSync(new URL("../src/metrics.ts", import.meta.url), "utf8"),
@@ -694,7 +706,320 @@ describe("factory metrics", () => {
 	});
 });
 
+describe("review regressions", () => {
+	it("withholds headline cost for pending and unknown cohorts (review probe)", () => {
+		const recent = synthetic(101);
+		assert.ok(recent.outcome.kind === "landed");
+
+		const pending = report([
+			synthetic(),
+			{
+				...recent,
+				outcome: {
+					...recent.outcome,
+					mergedAt: { kind: "known", value: "2026-11-07T00:00:00Z" },
+				},
+			},
+		]);
+
+		assert.equal(pending.status, "pending");
+		assert.equal(pending.tokensPerCleanLanding, null);
+		assert.equal(pending.tokensPerCleanLandingReason, "cohort_pending");
+		const unknown = report([synthetic()]);
+		assert.equal(unknown.tokensPerCleanLanding, null);
+		assert.equal(unknown.tokensPerCleanLandingReason, "cohort_unknown");
+	});
+
+	it("never infers absence of owner intervention from v1–v5 round-zero certifications", () => {
+		const v4 = rows[25];
+		assert.ok(
+			v4?.v === 4 &&
+				v4.artifacts.kind === "candidate" &&
+				v4.outcome.kind === "landed" &&
+				v4.outcome.assurance.kind === "factory_verified",
+		);
+
+		const roundZero: LedgerRowV4 = {
+			...v4,
+			artifacts: {
+				...v4.artifacts,
+				generations: v4.artifacts.generations.map((g) => ({ ...g, round: 0 })),
+			},
+		};
+
+		const v5 = ledgerRow({
+			...roundZero,
+			v: 5,
+			outcome: {
+				...v4.outcome,
+				assurance: { ...v4.outcome.assurance, authored: "factory" },
+			},
+		}).row;
+
+		for (const row of [
+			synthetic(),
+			ledgerRow({ ...roundZero, v: 2 }).row,
+			ledgerRow({ ...roundZero, v: 3 }).row,
+			roundZero,
+			v5,
+		]) {
+			const value = report([row], none, "2026-12-01T00:00:00Z");
+			assert.equal(value.tickets[0]?.status, "unknown");
+			assert.ok(
+				value.unknowns.some(
+					(entry) => entry.reason === "intervention_not_recorded",
+				),
+			);
+			assert.equal(value.primary.numerator, 0);
+		}
+	});
+
+	for (const reference of [
+		`github.com/${repo}/pull/622`,
+		`www.github.com/${repo}/pull/622`,
+		`http://github.com/${repo}/pull/622`,
+		`https://www.github.com/${repo}/pull/622`,
+		"GH-622",
+		"PR#622",
+		"#622",
+	])
+		it(`indexes the review's defect form ${reference}`, () => {
+			const value = report([synthetic()], {
+				kind: "known",
+				issues: [defect(reference)],
+			});
+
+			assert.deepEqual(ticketOf(value).landings[0]?.defect, {
+				kind: "linked",
+				issues: [999],
+			});
+		});
+
+	it("surfaces every labeled defect matching no included ticket without exporting text", () => {
+		const value = report([synthetic()], {
+			kind: "known",
+			issues: [
+				defect("private typo #99999"),
+				{ ...defect("#100"), number: 998, labels: ["bug"] },
+			],
+		});
+
+		const output = JSON.parse(JSON.stringify(value));
+		assert.deepEqual(output.unmatchedDefects, [999]);
+		assert.doesNotMatch(JSON.stringify(value), /private typo/);
+	});
+
+	it("reports casing and cross-repository exclusions separately (review probe)", () => {
+		const value = computeMetrics({
+			ledger: fixture,
+			repo: "GiuseppeCRJ/pi-herdr-factorio",
+			now: matureAt,
+			defects: none,
+		});
+
+		const output = JSON.parse(JSON.stringify(value));
+		assert.equal(output.excludedRowCounts.repoCasingMismatch, 26);
+		assert.equal(output.excludedRowCounts.otherRepo, 0);
+
+		const other = JSON.parse(
+			JSON.stringify(
+				computeMetrics({
+					ledger: fixture,
+					repo: "someone/else",
+					now: matureAt,
+					defects: none,
+				}),
+			),
+		);
+
+		assert.equal(other.excludedRowCounts.otherRepo, 26);
+	});
+
+	it("flags zero listed receipt digests instead of passing vacuously", () => {
+		const row = synthetic();
+
+		const value = computeMetrics({
+			ledger: bytesOf([row]),
+			repo,
+			now: matureAt,
+			defects: none,
+			receiptDigests: new Map([[row.runId, new Set()]]),
+		});
+
+		assert.ok(
+			value.unknowns.some(
+				(entry) => entry.reason === "receipt_missing_or_changed",
+			),
+		);
+		assert.equal(ticketOf(value).status, "unknown");
+	});
+
+	it("labels threshold flags includes immature runs without changing known-fact denominators", () => {
+		const value = computeMetrics({
+			ledger: fixture,
+			repo,
+			now: matureAt,
+			defects: none,
+		});
+
+		const output = JSON.parse(JSON.stringify(value));
+		assert.equal(
+			output.deferred.contextPressure.promptCapHit.flagBasis,
+			"includes immature runs",
+		);
+		assert.equal(
+			output.deferred.restartEnded.flagBasis,
+			"includes immature runs",
+		);
+		assert.equal(output.deferred.restartEnded.denominator, 12);
+		assert.equal(output.deferred.restartEnded.threshold, 0.1);
+	});
+
+	it("indexes 1,000 landings and 1,000 in-window defects under two seconds (review bench)", (context) => {
+		const ledger = bytesOf(
+			Array.from({ length: 1000 }, (_, at) => synthetic(at + 1000)),
+		);
+
+		const issues = Array.from({ length: 1000 }, (_, at) => ({
+			...defect(
+				`${"x ".repeat(2000)} https://github.com/${repo}/issues/${at + 1000}`,
+			),
+			number: 90000 + at,
+		}));
+
+		const start = performance.now();
+
+		const value = computeMetrics({
+			ledger,
+			repo,
+			now: matureAt,
+			defects: { kind: "known", issues },
+		});
+
+		const elapsed = performance.now() - start;
+		context.diagnostic(
+			`1000 landings + 1000 defects: ${elapsed.toFixed(2)} ms`,
+		);
+		assert.ok(elapsed < 2000, `${elapsed} ms exceeds 2 s`);
+		assert.ok(
+			value.tickets.every(
+				(ticket) => ticket.landings[0]?.defect.kind === "linked",
+			),
+		);
+	});
+});
+
 describe("metrics CLI", () => {
+	it("reads a real local ledger over 4 MiB without the old exec buffer failure", () => {
+		const dir = mkdtempSync(join(tmpdir(), "metrics-git-"));
+
+		try {
+			mkdirSync(join(dir, "ledger"));
+			writeFileSync(
+				join(dir, "ledger/runs.jsonl"),
+				Buffer.concat([
+					Buffer.from("\n".repeat(5 * 1024 * 1024)),
+					bytesOf([synthetic()]),
+				]),
+			);
+
+			for (const args of [
+				["init", "-q"],
+				["add", "ledger/runs.jsonl"],
+				[
+					"-c",
+					"user.name=Test",
+					"-c",
+					"user.email=test@example.invalid",
+					"-c",
+					"commit.gpgsign=false",
+					"commit",
+					"-qm",
+					"fixture",
+				],
+				["update-ref", "refs/remotes/origin/factory/ledger", "HEAD"],
+			])
+				assert.equal(spawnSync("git", args, { cwd: dir }).status, 0);
+
+			const result = spawnSync(
+				process.execPath,
+				[
+					new URL("../server/cli.ts", import.meta.url).pathname,
+					"metrics",
+					"--json",
+					"--repo",
+					repo,
+					"--offline",
+				],
+				{ cwd: dir, encoding: "utf8" },
+			);
+
+			assert.equal(result.status, 0, result.stdout + result.stderr);
+			assert.equal(JSON.parse(result.stdout).runs, 1);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("refuses future online --now while allowing offline historical calculations", async () => {
+		await withLedger(async (path) => {
+			const args = [...cliArgs(path), "--now", "2999-01-01T00:00:00Z"];
+
+			const value = await cli(args, async (_command, argv) => ({
+				code: 0,
+				stdout: argv[0] === "api" ? '{"name":"factory:defect"}' : "[]",
+				stderr: "",
+			}));
+
+			assert.equal(value.code, EXIT.invalid);
+			assert.equal(JSON.parse(value.stdout).error, "now_after_defect_read");
+			assert.equal((await cli([...args, "--offline"])).code, EXIT.ok);
+		});
+	});
+
+	it("requires read-only confirmation of the exact defect label, even on an immature cohort", async () => {
+		await withLedger(async (path) => {
+			for (const result of [
+				{ code: 0, stdout: "[]", stderr: "" },
+				{ code: 0, stdout: '{"name":"factory:defects"}', stderr: "" },
+				{ code: 1, stdout: "", stderr: "private" },
+			]) {
+				const value = await cli(cliArgs(path), async () => result);
+				assert.deepEqual(JSON.parse(value.stdout).defectRead, {
+					kind: "unknown",
+					reason: "label_missing",
+				});
+				assert.deepEqual(value.calls, [
+					["gh", "api", `repos/${repo}/labels/factory%3Adefect`],
+				]);
+			}
+
+			const thrown = await cli(cliArgs(path), async () => {
+				throw new Error("private");
+			});
+
+			assert.deepEqual(JSON.parse(thrown.stdout).defectRead, {
+				kind: "unknown",
+				reason: "label_missing",
+			});
+		});
+	});
+
+	it("labels constructed ledger input as source file, with no mutation", async () => {
+		await withLedger(async (path) => {
+			const before = readFileSync(path);
+			const value = await cli([
+				...cliArgs(path).map((arg) =>
+					arg === "--ledger" ? "--ledger-file" : arg,
+				),
+				"--offline",
+			]);
+			assert.equal(value.code, EXIT.ok);
+			assert.equal(JSON.parse(value.stdout).source, "file");
+			assert.deepEqual(readFileSync(path), before);
+			assert.deepEqual(value.calls, []);
+		});
+	});
 	it("serves JSON offline without exec, runtime, workflow or model calls", async () => {
 		await withLedger(async (path) => {
 			const value = await cli([...cliArgs(path), "--offline"]);
@@ -708,22 +1033,27 @@ describe("metrics CLI", () => {
 		});
 	});
 
-	it("uses one read-only labeled issue query and validates the JSON", async () => {
+	it("confirms the defect label before a read-only issue query and validates the JSON", async () => {
 		await withLedger(async (path) => {
 			for (const stdout of ["[]", "{}", "[{}]", "not json"]) {
-				const value = await cli(cliArgs(path), async () => ({
+				const value = await cli(cliArgs(path), async (_command, args) => ({
 					code: 0,
-					stdout,
+					stdout: args[0] === "api" ? '{"name":"factory:defect"}' : stdout,
 					stderr: "",
 				}));
 
 				assert.equal(value.code, EXIT.ok);
-				assert.equal(value.calls.length, 1);
-				assert.deepEqual(value.calls[0]?.slice(0, 3), ["gh", "issue", "list"]);
-				assert.ok(value.calls[0]?.includes("factory:defect"));
+				assert.equal(value.calls.length, 2);
+				assert.deepEqual(value.calls[0], [
+					"gh",
+					"api",
+					`repos/${repo}/labels/factory%3Adefect`,
+				]);
+				assert.deepEqual(value.calls[1]?.slice(0, 3), ["gh", "issue", "list"]);
+				assert.ok(value.calls[1]?.includes("factory:defect"));
 				assert.equal(
-					JSON.parse(value.stdout).primary.numerator,
-					stdout === "[]" ? 1 : 0,
+					JSON.parse(value.stdout).defectRead.kind,
+					stdout === "[]" ? "known" : "unknown",
 				);
 			}
 		});
@@ -793,7 +1123,13 @@ describe("metrics CLI", () => {
 
 			writeFileSync(path, bytesOf([row]));
 			const args = [...cliArgs(path), "--state-dir", dir];
-			const exec: Exec = async () => ({ code: 0, stdout: "[]", stderr: "" });
+
+			const exec: Exec = async (_command, args) => ({
+				code: 0,
+				stdout: args[0] === "api" ? '{"name":"factory:defect"}' : "[]",
+				stderr: "",
+			});
+
 			assert.equal(
 				JSON.parse((await cli(args, exec)).stdout).tickets[0].status,
 				"unknown",
@@ -801,9 +1137,11 @@ describe("metrics CLI", () => {
 			const stage = join(dir, "stages", row.runId, "build-1", "draft");
 			mkdirSync(stage, { recursive: true });
 			writeFileSync(join(stage, "receipt.json"), receipt);
-			assert.equal(
-				JSON.parse((await cli(args, exec)).stdout).primary.numerator,
-				1,
+			assert.ok(
+				!JSON.parse((await cli(args, exec)).stdout).unknowns.some(
+					(entry: { reason: string }) =>
+						entry.reason === "receipt_missing_or_changed",
+				),
 			);
 			writeFileSync(join(stage, "receipt.json"), "changed");
 			const missing = JSON.parse((await cli(args, exec)).stdout);
@@ -846,14 +1184,17 @@ describe("metrics CLI", () => {
 
 	it("queries defects through the CLI without exporting issue text", async () => {
 		await withLedger(async (path) => {
-			const value = await cli(cliArgs(path), async () => ({
+			const value = await cli(cliArgs(path), async (_command, args) => ({
 				code: 0,
-				stdout: JSON.stringify([
-					{
-						...defect("private words #100"),
-						labels: [{ name: "factory:defect" }],
-					},
-				]),
+				stdout:
+					args[0] === "api"
+						? '{"name":"factory:defect"}'
+						: JSON.stringify([
+								{
+									...defect("private words #100"),
+									labels: [{ name: "factory:defect" }],
+								},
+							]),
 				stderr: "",
 			}));
 
