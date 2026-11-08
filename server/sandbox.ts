@@ -2928,6 +2928,17 @@ function buildCommands(
 	return commands;
 }
 
+export const VISIBLE_LIMIT_MS = 180_000;
+const VISIBLE_WARN_MS = 150_000;
+
+function visibleBudget<T extends VisibleTests>(tests: T) {
+	return tests.exitCode !== null &&
+		tests.wallMs > VISIBLE_WARN_MS &&
+		tests.wallMs < VISIBLE_LIMIT_MS
+		? { ...tests, nearLimit: true }
+		: tests;
+}
+
 export async function runVisibleTests(
 	config: SandboxHostConfig,
 	base: string,
@@ -3026,7 +3037,7 @@ export async function runVisibleTests(
 			}
 
 			launched.child.kill("SIGKILL");
-		}, 180_000);
+		}, VISIBLE_LIMIT_MS);
 
 		const exitCode = await new Promise<number | null>((done) => {
 			launched.child.once("close", done);
@@ -3047,13 +3058,13 @@ export async function runVisibleTests(
 		if (checkBuildDisk([workspace, join(execution, "agent")]) !== null)
 			throw new Error("build_disk_limit");
 
-		return {
+		return visibleBudget({
 			command,
 			environment,
 			exitCode,
 			tail: tail.toString(),
 			wallMs: Date.now() - start,
-		};
+		});
 	} catch (error) {
 		const detail =
 			error instanceof Error &&
@@ -4286,7 +4297,23 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 						exec: config.exec,
 					};
 
-					const runTests = config.visibleTests ?? runVisibleTests;
+					const runTests = async (
+						...args: Parameters<typeof runVisibleTests>
+					) => {
+						const tests = visibleBudget(
+							await (config.visibleTests ?? runVisibleTests)(...args),
+						);
+
+						if ("nearLimit" in tests && tests.nearLimit === true)
+							config.log("visible_tests_near_limit", {
+								runId,
+								wallMs: tests.wallMs,
+								target: args[2].length > 0 ? "candidate" : "base",
+							});
+
+						return tests;
+					};
+
 					const binding = patchBinding(kept.receipt);
 
 					let tests: VisibleTests =
