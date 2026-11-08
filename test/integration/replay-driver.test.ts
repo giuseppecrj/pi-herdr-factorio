@@ -96,20 +96,25 @@ async function restored() {
 	);
 }
 
-it("waits for the visible-test deadline plus 60 seconds after signaling stop", async () => {
+it("waits for two visible-test deadlines plus 60 seconds after signaling stop", async () => {
 	const source = await readFile(script, "utf8");
 	const stop = source.match(/stop_child\(\) \{[\s\S]*?\n\}/)?.[0];
 	assert.ok(stop);
 
 	const sandbox = await readFile("server/sandbox.ts", "utf8");
 
-	const limit = sandbox.match(
-		/timer = setTimeout\(\(\) => \{\s*timedOut = true;[\s\S]*?\}, ([\d_]+)\);/,
-	)?.[1];
+	const limit =
+		sandbox.match(/export const VISIBLE_LIMIT_MS = ([\d_]+);/)?.[1] ??
+		sandbox.match(
+			/timer = setTimeout\(\(\) => \{\s*timedOut = true;[\s\S]*?\}, ([\d_]+)\);/,
+		)?.[1];
 
 	assert.ok(limit);
 
-	const polls = Math.ceil((Number(limit.replaceAll("_", "")) / 1000 + 60) * 10);
+	const polls = Math.ceil(
+		((2 * Number(limit.replaceAll("_", ""))) / 1000 + 60) * 10,
+	);
+
 	const pidfile = join(await mkdtemp(join(tmpdir(), "stop-wait-")), "pid");
 
 	try {
@@ -122,6 +127,7 @@ it("waits for the visible-test deadline plus 60 seconds after signaling stop", a
 				`
 set -euo pipefail
 pidfile="$1"
+control="$3"
 polls=0
 target="$2"
 alive() { polls=$((polls + 1)); (( polls <= target )); }
@@ -135,6 +141,7 @@ printf '%s' "$polls"
 				"stop-wait",
 				pidfile,
 				String(polls),
+				resolve("."),
 			],
 			{ encoding: "utf8" },
 		);

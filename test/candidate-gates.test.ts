@@ -510,6 +510,20 @@ test("visible suite excludes heavy integration tests without losing CI or gate c
 	for (const pattern of manifest.testGlobs)
 		assert.ok(globSync(pattern, { cwd: root }).length > 0);
 
+	const covered = new Set<string>(
+		manifest.testGlobs.flatMap((pattern: string) =>
+			globSync(pattern, { cwd: root }),
+		),
+	);
+
+	assert.deepEqual(
+		globSync("test/**/*.{test,cases}.ts", { cwd: root }).filter(
+			(path) => !path.startsWith("test/acceptance/") && !covered.has(path),
+		),
+		[],
+		"Every test file outside the separately dispatched held-out suite must match a trusted test glob",
+	);
+
 	const visible = globSync(manifest.testGlobs[0], { cwd: root });
 	assert.ok(!visible.some((path) => path.endsWith("replay-driver.test.ts")));
 	const integration = globSync("test/integration/*.test.ts", { cwd: root });

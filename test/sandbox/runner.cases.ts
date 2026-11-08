@@ -3106,14 +3106,22 @@ describe("private build executor", () => {
 		assert.equal(existsSync(base), false);
 	});
 
-	for (const outcome of [
-		"failed",
-		"passed",
-		"unavailable",
-		"restart",
-		"base_missing",
-	] as const)
-		it(`compares failed visible tests with unchanged base once (${outcome})`, async (t) => {
+	for (const { outcome, wallMs } of (
+		[
+			"failed",
+			"passed",
+			"candidate_passed",
+			"unavailable",
+			"restart",
+			"base_missing",
+		] as const
+	).flatMap((outcome) =>
+		[149_999, 150_000, 150_001, 179_999, 180_000].map((wallMs) => ({
+			outcome,
+			wallMs,
+		})),
+	))
+		it(`compares visible tests with unchanged base once (${outcome}, ${wallMs} ms)`, async (t) => {
 			const dir = mkdtempSync(join(tmpdir(), "factory-visible-control-"));
 			t.after(() => rmSync(dir, { recursive: true, force: true }));
 			const stateDir = join(dir, "state");
@@ -3166,7 +3174,9 @@ describe("private build executor", () => {
 				}),
 				true,
 			);
-			mkdirSync(join(stateDir, "build-base", "checkouts"), { recursive: true });
+			mkdirSync(join(stateDir, "build-base", "checkouts"), {
+				recursive: true,
+			});
 			writeFileSync(
 				join(stateDir, "build-base", "checkouts", `${RUN}.json`),
 				JSON.stringify({ sha, files: ["package.json", "value"] }),
@@ -3198,6 +3208,7 @@ describe("private build executor", () => {
 			fs.renameSync(staging, join(root, `assets-${hash}`));
 			symlinkSync(`assets-${hash}`, join(root, "current"));
 			const calls: (string | Uint8Array)[] = [];
+			const warnings: unknown[] = [];
 			let interrupted = false;
 
 			const config: sandboxModule.SandboxExecutorConfig = {
@@ -3206,7 +3217,9 @@ describe("private build executor", () => {
 				arch: "x64",
 				usernsLimit: async () => "15000",
 				xdgRuntimeDir: "/run/user/1000",
-				log: () => {},
+				log: (event, fields) => {
+					if (event === "visible_tests_near_limit") warnings.push(fields);
+				},
 				fetchTarball: async () => null,
 				exec: async (command) => ({
 					code: 0,
@@ -3240,14 +3253,16 @@ describe("private build executor", () => {
 						command: baseTestCommand(pristine, command),
 						exitCode:
 							patchBytes.length > 0
-								? 1
+								? outcome === "candidate_passed"
+									? 0
+									: 1
 								: outcome === "unavailable"
 									? null
 									: outcome === "passed"
 										? 0
 										: 1,
-						tail: patchBytes.length > 0 ? "candidate failed" : "base result",
-						wallMs: 1,
+						tail: patchBytes.length > 0 ? "candidate result" : "base result",
+						wallMs,
 					};
 				},
 			};
@@ -3280,13 +3295,43 @@ describe("private build executor", () => {
 			assert.equal(await restarted.preflight(), true);
 			await restarted.output(request);
 			await restarted.output(request);
-			assert.equal(calls.length, outcome === "base_missing" ? 1 : 2);
+			assert.equal(
+				calls.length,
+				outcome === "base_missing" || outcome === "candidate_passed" ? 1 : 2,
+			);
 			assert.equal(digestOf(calls[0] ?? ""), patch.patchDigest);
 
-			if (outcome !== "base_missing") assert.equal(calls[1]?.length, 0);
+			if (outcome !== "base_missing" && outcome !== "candidate_passed")
+				assert.equal(calls[1]?.length, 0);
 			const kept = readPatch(stateDir, binding);
 			assert.ok(kept.kind === "found");
-			assert.equal(kept.receipt.visibleTests?.exitCode, 1);
+			assert.equal(
+				kept.receipt.visibleTests?.exitCode,
+				outcome === "candidate_passed" ? 0 : 1,
+			);
+
+			const recorded = JSON.parse(
+				readFileSync(join(stateDir, "patches", RUN, "tests.json"), "utf8"),
+			);
+
+			const nearLimit = wallMs > 150_000 && wallMs < 180_000;
+			assert.equal(recorded.nearLimit === true, nearLimit);
+			assert.equal(recorded.wallMs, wallMs);
+			assert.deepEqual(
+				warnings,
+				nearLimit
+					? [
+							{ runId: RUN, wallMs, target: "candidate" },
+							...(outcome !== "base_missing" &&
+							outcome !== "candidate_passed" &&
+							outcome !== "unavailable"
+								? [{ runId: RUN, wallMs, target: "base" }]
+								: []),
+						]
+					: [],
+			);
+
+			if (outcome === "candidate_passed") return;
 
 			if (outcome === "base_missing") {
 				assert.equal(kept.receipt.visibleTests.base?.exitCode, null);
@@ -3295,12 +3340,17 @@ describe("private build executor", () => {
 				return;
 			}
 
-			assert.deepEqual(kept.receipt.visibleTests?.base, {
+			const { nearLimit: baseNearLimit, ...baseRecord } = recorded.base;
+			assert.equal(
+				baseNearLimit === true,
+				nearLimit && outcome !== "unavailable",
+			);
+			assert.deepEqual(baseRecord, {
 				command: "npm run inner",
 				exitCode:
 					outcome === "unavailable" ? null : outcome === "passed" ? 0 : 1,
 				tail: "base result",
-				wallMs: 1,
+				wallMs,
 			});
 		});
 
