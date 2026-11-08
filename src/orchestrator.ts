@@ -5442,6 +5442,18 @@ export class Orchestrator {
 		}
 
 		if (completion !== null) {
+			if (completion.kind === "derive_owner_patch")
+				this.#input.log("owner_derive_result", {
+					runId: run.runId,
+					head: completion.request.head,
+					baseSha: completion.request.baseSha,
+					result: completion.result.kind,
+					reason:
+						completion.result.kind === "refused"
+							? completion.result.reason
+							: null,
+				});
+
 			const step = handoffCandidate(run.handoff ?? state, {
 				kind: "effect_completed",
 				now: this.#input.clock.now(),
