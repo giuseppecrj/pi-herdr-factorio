@@ -145,7 +145,8 @@ AllowanceWithinRemaining == J!AllowanceWithinRemaining
 ExactBinding == J!ExactBinding
 CertificateSound == J!CertificateSound
 MergeAssuranceTruthful == J!MergeAssuranceTruthful
-NoPostPrRepair == J!NoPostPrRepair
+NoPostPrRepair == J!PostPrRepairOnlyFeedback /\ J!PostPrRepairNotReady
+    /\ J!NoOwnerAuthoredRepair /\ J!NoFactoryCommitOnOwnerHead /\ J!MergeAuthorTruthful
 WaitingSlotFree == J!WaitingSlotFree
 EffectHasDurableIntent == mode \in {"effect", "response", "promote_write"} => b = saved
 OneExecution == J!OneExecution

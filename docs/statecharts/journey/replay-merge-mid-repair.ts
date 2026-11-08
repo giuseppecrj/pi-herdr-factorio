@@ -13,7 +13,7 @@ const result = spawnSync(
 		"--test",
 		"--test-concurrency=1",
 		"--test-reporter=tap",
-		"--test-name-pattern=formal|merged observation drains|matching historical certificate|base movement stops active review|actual observer promotes",
+		"--test-name-pattern=\\bformal\\b|merged observation drains|matching historical certificate|base movement stops active review|actual observer promotes",
 		...files,
 	],
 	{ encoding: "utf8" },
@@ -30,11 +30,33 @@ assert.equal(
 );
 
 const count = /^# tests (\d+)$/m.exec(result.stdout)?.[1];
+const passed = /^# pass (\d+)$/m.exec(result.stdout)?.[1];
 
 assert.ok(
-	count !== undefined && Number(count) >= 22,
-	"no complete runtime trace selection",
+	count !== undefined &&
+		Number(count) >= 40 &&
+		passed !== undefined &&
+		Number(passed) >= 38,
+	"expected the 35 existing correspondence tests plus three passing F10 replays and two F10-3 design cases",
 );
+
+for (const witness of [
+	"published repair witness",
+	"shortest merge-mid-repair witness",
+	"merge-mid-repair witness drains work",
+]) {
+	const line = result.stdout
+		.split("\n")
+		.find(
+			(line) =>
+				line.startsWith("ok ") && line.includes(` - formal F10 ${witness}`),
+		);
+
+	assert.ok(
+		line !== undefined && !line.includes("# SKIP"),
+		`missing passing F10 replay: ${witness}`,
+	);
+}
 
 assert.match(result.stdout, /^# fail 0$/m);
 

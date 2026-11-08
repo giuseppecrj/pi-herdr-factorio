@@ -3769,8 +3769,32 @@ test("a version 1 review that fails migration keeps its bytes, not an explicit n
 	});
 });
 
+function formalWitnessHeld() {
+	const initial = published();
+
+	const obs = {
+		...readyObservation(initial),
+		readiness: { kind: "unavailable" as const },
+	};
+
+	const state = handoffCandidate(initial, obs).state;
+	const request = pending(state, "void_readiness");
+
+	const held = selected(
+		handoffCandidate(state, {
+			kind: "effect_completed",
+			completion: { kind: "void_readiness", request },
+		}).state,
+	);
+
+	assert.equal(held.work.kind, "held");
+	assert.ok(held.current.certification);
+
+	return held;
+}
+
 test("formal F10 published repair witness withdraws readiness before issuing shared-budget work", () => {
-	const initial = queuedFeedback();
+	const initial = queuedFeedback(formalWitnessHeld());
 	const started = startFeedback(initial);
 	assert.equal(started.work.kind, "repair_due");
 	assert.equal(started.published?.number, initial.published!.number);
@@ -3798,6 +3822,28 @@ test("formal F10 published repair witness withdraws readiness before issuing sha
 	assert.equal(repairing.published?.readiness.kind, "not_ready");
 	assert.equal(candidateUsage(repairing), candidateUsage(initial));
 	assert.ok(parseCandidateState(JSON.parse(JSON.stringify(repairing))));
+});
+
+test("formal F10 shortest merge-mid-repair witness merges before the build is issued", () => {
+	const initial = queuedFeedback(formalWitnessHeld());
+	const due = startFeedback(initial);
+	const head = initial.current.report!.candidateSha;
+
+	const merged = handoffCandidate(due, {
+		...observed(),
+		pr: { kind: "merged", number: 5, head, mergeSha: sha, actor: "owner" },
+	}).state;
+
+	const finish = pending(merged, "finish_pr");
+	assert.partialDeepStrictEqual(finish.terminal, {
+		kind: "merged",
+		head,
+		mergeSha: sha,
+		assurance: { kind: "factory_verified" },
+		readiness: { kind: "not_ready", reason: "feedback_repair" },
+	});
+	assert.deepEqual(selected(merged).accounts, initial.accounts);
+	assert.equal(candidateUsage(merged), candidateUsage(initial));
 });
 
 test("formal F10 merge-mid-repair witness drains work and retains historical certification", () => {
@@ -3851,8 +3897,8 @@ test("formal F10 merge-mid-repair witness drains work and retains historical cer
 
 // F10-3 is not on the F10-4 base. Wire events keep its settled design executable
 // without pretending that main's CandidateEvent union already supports it.
-function formalOwnerReady() {
-	const initial = waiting();
+function formalOwnerReady(restoreReadiness = true) {
+	const initial = published();
 	const head = "e".repeat(40);
 	assert.ok(isGitSha(head));
 
@@ -3950,6 +3996,16 @@ function formalOwnerReady() {
 			}),
 		),
 	).state;
+	assert.ok(selected(state).current.certification);
+	assert.equal(selected(state).current.report?.candidateSha, head);
+	assert.equal(
+		selected(state).accounts.filter((a) => a.execution.stage === "build")
+			.length,
+		0,
+	);
+
+	if (!restoreReadiness) return { state, head };
+
 	state = handoffCandidate(state, {
 		...readyObservation(state),
 		pr: observation.pr,
@@ -3960,12 +4016,6 @@ function formalOwnerReady() {
 		completion: { kind: "complete_handoff", request: complete, now: 200 },
 	}).state;
 	assert.equal(selected(state).published?.readiness.kind, "ready");
-	assert.equal(selected(state).current.report?.candidateSha, head);
-	assert.equal(
-		selected(state).accounts.filter((a) => a.execution.stage === "build")
-			.length,
-		0,
-	);
 	assert.partialDeepStrictEqual(selected(state).current.intent.origin, {
 		kind: "owner",
 		head,
@@ -3983,7 +4033,7 @@ test("formal F10 owner-ready witness recertifies the exact head without a build 
 test("formal F10 owner-authored merge witness points to the owner certification", {
 	skip: "Pending F10-3: owner generation and authorship are not on main 484a6ab; enable after F10-3 merges",
 }, () => {
-	const { state, head } = formalOwnerReady();
+	const { state, head } = formalOwnerReady(false);
 
 	const merged = handoffCandidate(state, {
 		...observed(),
@@ -3995,6 +4045,7 @@ test("formal F10 owner-authored merge witness points to the owner certification"
 		kind: "merged",
 		head,
 		assurance: { kind: "factory_verified" },
+		readiness: { kind: "not_ready" },
 	});
 	assert.ok(
 		terminal.kind === "merged" &&
@@ -4007,8 +4058,7 @@ test("formal F10 owner-authored merge witness points to the owner certification"
 });
 
 // F10-2 contract tests. Drive the public advance surface through handoffCandidate.
-function queuedFeedback() {
-	const initial = waiting();
+function queuedFeedback(initial = waiting()) {
 	const obs = feedbackObservation(initial);
 	assert.ok(obs.kind === "read" && obs.batch);
 
