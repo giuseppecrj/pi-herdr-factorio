@@ -919,6 +919,364 @@ describe("review regressions", () => {
 	});
 });
 
+describe("measured owner intervention", () => {
+	const review = (
+		state = "APPROVED",
+		submitted_at = "2026-10-31T23:00:00Z",
+		login = "a-non-writer",
+	) => ({ state, submitted_at, user: { login }, body: "private review text" });
+
+	const execWithReviews =
+		(
+			read: (args: readonly string[]) => {
+				code: number;
+				stdout: string;
+				stderr: string;
+			},
+		): Exec =>
+		async (command, args, options) => {
+			assert.equal(command, "gh");
+			assert.ok(
+				options && options.timeoutMs > 0 && options.timeoutMs <= 30_000,
+			);
+
+			if (args[0] === "issue") return { code: 0, stdout: "[]", stderr: "" };
+
+			if (args[1]?.includes("/labels/"))
+				return { code: 0, stdout: '{"name":"factory:defect"}', stderr: "" };
+			assert.match(
+				args[1] ?? "",
+				/^repos\/giuseppecrj\/pi-herdr-factorio\/pulls\/\d+\/reviews\?per_page=100&page=\d+$/,
+			);
+			assert.deepEqual(args.slice(0, 1), ["api"]);
+			assert.equal(args.length, 2);
+
+			return read(args);
+		};
+
+	for (const [name, reviews, intervention] of [
+		["zero reviews", [], false],
+		["one approval", [review()], false],
+		[
+			"a non-writer change request before merge",
+			[review("CHANGES_REQUESTED")],
+			true,
+		],
+		[
+			"a change request after merge",
+			[review("CHANGES_REQUESTED", "2026-11-01T00:00:01Z")],
+			false,
+		],
+		[
+			"a change request at merge",
+			[review("CHANGES_REQUESTED", mergedAt)],
+			false,
+		],
+		[
+			"the factory bot's change request",
+			[
+				review(
+					"CHANGES_REQUESTED",
+					"2026-10-31T23:00:00Z",
+					"exe-dev-github-integration[bot]",
+				),
+			],
+			false,
+		],
+		["a pending review", [{ ...review("PENDING"), submitted_at: null }], false],
+	] as const) {
+		it(`measures ${name} through the online CLI`, async () => {
+			await withLedger(async (path) => {
+				const value = await cli(
+					cliArgs(path),
+					execWithReviews(() => ({
+						code: 0,
+						stdout: JSON.stringify(reviews),
+						stderr: "",
+					})),
+				);
+
+				assert.equal(value.code, EXIT.ok, value.stderr);
+				const output = JSON.parse(value.stdout);
+				assert.deepEqual(output.tickets[0].landings[0].intervention, {
+					kind: "known",
+					value: intervention,
+					source: "github_reviews",
+				});
+				assert.equal(
+					output.tickets[0].status,
+					intervention ? "landed_not_clean" : "clean",
+				);
+				assert.equal(output.primary.numerator, intervention ? 0 : 1);
+				assert.equal(output.tokensPerCleanLanding, intervention ? null : 100);
+				assert.equal(
+					value.calls.filter((call) => call[2]?.includes("/reviews?")).length,
+					1,
+				);
+				assert.doesNotMatch(value.stdout, /private review text|a-non-writer/);
+			});
+		});
+	}
+
+	it("reads subsequent pages before declaring no intervention and finds requests on page two", async () => {
+		await withLedger(async (path) => {
+			for (const second of [[], [review("CHANGES_REQUESTED")]]) {
+				const value = await cli(
+					cliArgs(path),
+					execWithReviews((args) => ({
+						code: 0,
+						stdout: JSON.stringify(
+							args[1]?.endsWith("page=1")
+								? Array.from({ length: 100 }, () => review())
+								: second,
+						),
+						stderr: "",
+					})),
+				);
+
+				const output = JSON.parse(value.stdout);
+				assert.equal(
+					output.tickets[0].landings[0].intervention.value,
+					second.length > 0,
+				);
+				assert.equal(output.primary.numerator, second.length > 0 ? 0 : 1);
+				assert.equal(
+					value.calls.filter((call) => call[2]?.includes("/reviews?")).length,
+					2,
+				);
+			}
+		});
+	});
+
+	it("never marks a failed, malformed, incomplete or saturated review read clean", async () => {
+		await withLedger(async (path) => {
+			for (const read of [
+				() => ({ code: 1, stdout: "[]", stderr: "private failure" }),
+				() => {
+					throw new Error("private failure");
+				},
+				() => ({ code: 0, stdout: "[", stderr: "" }),
+				() => ({ code: 0, stdout: "{}", stderr: "" }),
+				() => ({
+					code: 0,
+					stdout: '[{"state":"CHANGES_REQUESTED"}]',
+					stderr: "",
+				}),
+				() => ({
+					code: 0,
+					stdout: JSON.stringify([
+						{ ...review("CHANGES_REQUESTED"), submitted_at: null },
+					]),
+					stderr: "",
+				}),
+				() => ({
+					code: 0,
+					stdout: JSON.stringify(Array.from({ length: 100 }, () => review())),
+					stderr: "",
+				}),
+				(args: readonly string[]) => ({
+					code: args[1]?.endsWith("page=1") ? 0 : 1,
+					stdout: JSON.stringify(
+						Array.from({ length: 100 }, () => review("CHANGES_REQUESTED")),
+					),
+					stderr: "private failure",
+				}),
+			]) {
+				const value = await cli(cliArgs(path), execWithReviews(read));
+				const output = JSON.parse(value.stdout);
+				assert.equal(value.code, EXIT.ok);
+				assert.deepEqual(output.tickets[0].landings[0].intervention, {
+					kind: "unknown",
+					reason: "intervention_unreadable",
+				});
+				assert.equal(output.tickets[0].status, "unknown");
+				assert.equal(output.primary.numerator, 0);
+				assert.ok(
+					output.unknowns.some(
+						(entry: { reason: string }) =>
+							entry.reason === "intervention_unreadable",
+					),
+				);
+				assert.ok(value.calls.length <= 12);
+				assert.doesNotMatch(value.stdout, /private failure/);
+			}
+		});
+	});
+
+	it("keeps intervention unknown offline, including file ledgers without a fixture override", async () => {
+		await withLedger(async (path) => {
+			const value = await cli([...cliArgs(path), "--offline"]);
+			assert.deepEqual(value.calls, []);
+			assert.deepEqual(
+				JSON.parse(value.stdout).tickets[0].landings[0].intervention,
+				{ kind: "unknown", reason: "intervention_unreadable" },
+			);
+		});
+	});
+
+	it("labels offline fixture overrides and refuses to use them with the real ledger or online", async () => {
+		await withLedger(async (path, dir) => {
+			const overrides = join(dir, "interventions.json");
+			const args = [...cliArgs(path), "--intervention-file", overrides];
+
+			for (const intervention of [false, true]) {
+				writeFileSync(
+					overrides,
+					JSON.stringify({
+						version: 1,
+						landings: [{ runId: synthetic().runId, intervention }],
+					}),
+				);
+				const value = await cli([...args, "--offline"]);
+				assert.equal(value.code, EXIT.ok, value.stderr);
+				const output = JSON.parse(value.stdout);
+				assert.deepEqual(output.tickets[0].landings[0].intervention, {
+					kind: "known",
+					value: intervention,
+					source: "fixture",
+				});
+				assert.equal(
+					output.primary.numerator,
+					0,
+					"offline defects remain unknown",
+				);
+				assert.deepEqual(value.calls, []);
+			}
+
+			assert.equal((await cli(args)).code, EXIT.usage);
+
+			const noFile = await cli([
+				"metrics",
+				"--json",
+				"--repo",
+				repo,
+				"--offline",
+				"--intervention-file",
+				overrides,
+			]);
+
+			assert.equal(noFile.code, EXIT.usage);
+			assert.deepEqual(noFile.calls, []);
+
+			for (const content of [
+				"not json",
+				'{"version":2,"landings":[]}',
+				'{"version":1,"landings":[{"runId":"bad","intervention":false}]}',
+				JSON.stringify({
+					version: 1,
+					landings: [{ runId: synthetic().runId, intervention: "false" }],
+				}),
+			]) {
+				writeFileSync(overrides, content);
+				const value = await cli([...args, "--offline"]);
+				assert.equal(value.code, EXIT.invalid);
+				assert.equal(
+					JSON.parse(value.stdout).error,
+					"intervention_fixture_invalid",
+				);
+			}
+		});
+	});
+
+	it("reads repaired landings independently of defect-query failure (real PR regressions)", async () => {
+		await withLedger(async (path) => {
+			writeFileSync(path, fixture);
+
+			const value = await cli(
+				["metrics", "--json", "--repo", repo, "--ledger-file", path],
+				async (_command, args) => {
+					if (args[1]?.includes("/labels/"))
+						return { code: 1, stdout: "", stderr: "missing label" };
+					assert.match(args[1] ?? "", /\/pulls\/(644|654)\/reviews\?/);
+
+					return {
+						code: 0,
+						stdout: JSON.stringify([
+							args[1]?.includes("/654/")
+								? review("CHANGES_REQUESTED")
+								: review(),
+						]),
+						stderr: "",
+					};
+				},
+			);
+
+			const output = JSON.parse(value.stdout);
+			assert.equal(value.code, EXIT.ok);
+			assert.equal(output.tickets[0].landings[0].intervention.value, false);
+			assert.equal(output.tickets[1].landings[0].intervention.value, true);
+			assert.ok(output.tickets[0].landings[0].reasons.includes("repair_round"));
+			assert.ok(
+				output.tickets[1].landings[0].reasons.includes("owner_intervention"),
+			);
+			assert.equal(value.calls.length, 3);
+		});
+	});
+
+	it("deduplicates PR reads and skips excluded and non-landed runs", async () => {
+		await withLedger(async (path) => {
+			writeFileSync(
+				path,
+				bytesOf([
+					synthetic(),
+					synthetic(100, "101"),
+					{
+						...synthetic(101),
+						outcome: { kind: "needs_info", stage: "specify" },
+					},
+					base,
+				]),
+			);
+
+			const value = await cli(
+				cliArgs(path),
+				execWithReviews(() => ({ code: 0, stdout: "[]", stderr: "" })),
+			);
+
+			assert.equal(
+				value.calls.filter((call) => call[2]?.includes("/reviews?")).length,
+				1,
+			);
+			assert.equal(JSON.parse(value.stdout).primary.numerator, 1);
+		});
+	});
+
+	it("reads and computes 1,000 distinct landed PRs with fake reads under two seconds", async (context) => {
+		await withLedger(async (path) => {
+			writeFileSync(
+				path,
+				bytesOf(
+					Array.from({ length: 1000 }, (_, at) => ({
+						...synthetic(at + 1000),
+						pr: {
+							number: at + 2000,
+							url: `https://github.com/${repo}/pull/${at + 2000}`,
+						},
+					})),
+				),
+			);
+			const start = performance.now();
+
+			const value = await cli(
+				cliArgs(path),
+				execWithReviews(() => ({ code: 0, stdout: "[]", stderr: "" })),
+			);
+
+			const elapsed = performance.now() - start;
+			context.diagnostic(
+				`1000 landings with fake review reads: ${elapsed.toFixed(2)} ms`,
+			);
+			assert.equal(value.code, EXIT.ok, value.stderr);
+			const output = JSON.parse(value.stdout);
+			assert.equal(output.primary.numerator, 1000);
+			assert.equal(output.primary.denominator, 1000);
+			assert.equal(output.tokensPerCleanLanding, 100);
+			assert.equal(value.calls.length, 1002);
+			assert.ok(elapsed < 2000, `${elapsed} ms exceeds 2 s`);
+		});
+	});
+});
+
 describe("metrics CLI", () => {
 	it("reads a real local ledger over 4 MiB without the old exec buffer failure", () => {
 		const dir = mkdtempSync(join(tmpdir(), "metrics-git-"));
