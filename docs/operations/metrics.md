@@ -1,8 +1,9 @@
 # Factory ticket metrics
 
 `metrics --json` measures outcomes. It does not dispatch work, call a model,
-change GitHub, gate a run or promote a factory revision. Replay is a separate
-F12a slice and is not implemented by this command.
+change GitHub, gate a run or promote a factory revision. The separate
+`replay check` and `replay report` commands compare pinned replay evidence.
+They make no GitHub or model calls.
 
 ## Run it
 
@@ -245,7 +246,7 @@ The version-1 report contains:
 
 The coordinator defaults are centralized in `METRIC_POLICY` in `src/metrics.ts`.
 The seven-day window and 0.10 revisit thresholds are reviewed constants, not
-`WORKFLOW.md` settings. These defaults await the owner's design-call approval.
+`WORKFLOW.md` settings. The owner approved these defaults for F12a.
 
 - **Context pressure:** `promptCapHit` is the decision signal. Report its share
   among all included runs with a known flag, the unknown-run count, and the
@@ -286,3 +287,135 @@ request 5815738464). This is not mature seven-day evidence.
 The unit suite includes synthetic clarification chains, defect windows, missing
 receipts, owner heads, intervention unknowns and a two-second computation
 budget for 1,000 landings with 1,000 in-window labeled defects.
+
+## Replay checks
+
+`replay check --json` reads the local pinned corpus and Git objects. It never
+fetches, creates a fixture, starts a controller, or writes a budget. From the
+repository root:
+
+```sh
+node server/cli.ts replay check --json
+```
+
+The defaults are `test/fixtures/replay/`, local `origin/main` for both the main
+and previous factory pins, and `HEAD` for the candidate factory. These defaults
+are an inventory check, not a claim about which revision is deployed. Live
+verification supplies explicit full 40-character SHAs:
+
+```sh
+node server/cli.ts replay check --json \
+  --main-sha "$MAIN_SHA" --previous-sha "$PREVIOUS_SHA" \
+  --candidate-sha "$CANDIDATE_SHA" --case c3 \
+  --production-state-dir "$PRODUCTION_STATE" --budget-file "$REPLAY_BUDGET"
+```
+
+`--corpus <dir>` selects another pinned corpus. Its manifest digest covers
+`JSON.stringify({v: 1, cases})`; each case also pins its issue text's SHA-256.
+A changed digest refuses the check. The issue text includes its title as a
+Markdown heading. It contains no active issue reference, GitHub URL, or mention.
+
+Each live case compares its guarded paths between `baseSha` and the main pin.
+Changed paths report `stale`, unavailable Git evidence reports `unavailable`,
+and an offline case reports `offline_only`. The check also compares the two
+factories' sandbox bundle inputs. Different inputs report
+`bundle_switch_required`, not permission to re-provision production.
+
+A selected case requires a readable production lock check, a budget path,
+and a positive `replay.max_tokens` in the frozen main workflow. A bound
+production socket refuses even when `controller.lock` is missing. A missing
+state directory or unreadable lock refuses too. The check does not take the
+production lock or stop the service. The operator must keep production stopped
+throughout the authorized replay window.
+
+Without `--case`, `allowed` is null and the output is an inventory, not launch
+permission. With `--case`, `allowed` reflects the preconditions. A grant and the
+operator's freeze of main remain separate requirements. Exit 0 means the check
+completed without a refusal or unavailable case. Exit 1 means refused or
+unreadable evidence, and exit 2 means invalid command syntax. A stale or offline
+case in an unselected inventory does not by itself cause exit 1.
+
+### Corpus version 1
+
+The manifest is `test/fixtures/replay/corpus.json`. Its digest is
+`22c4fd06d8f8f2c48ce592b68577bad071875db08f8cc53659a7ff6cb1945c81`.
+The live cases pin base `28e700f745d7dea0809651d7c9711ca085de55d0`.
+
+| Case | Historical issue | Guarded paths | Expected outcome | Mode |
+| --- | --- | --- | --- | --- |
+| c1 | 658 | `src/workflow.ts` | handoff, round 0 | live when unchanged |
+| c2 | 650 | `server/viewer.ts` | handoff, round 0 | live when unchanged |
+| c3 | 597 | `README.md` | `needs_info` | live when unchanged |
+| c4 | 605 family, including 608, 610, 612 | `scripts/provenance.sh` | handoff, round 0 | live when unchanged |
+| c5 | 645 | `server/cli.ts` | handoff | offline only |
+
+Case c5 pins historical base `07852698ebdd1281f3ad21975ddd5d13f1ff0fc3`.
+Its defect is already fixed on main. Replay does not add a historical-base
+controller mode. Case c4 records failed historical runs, but its expected
+successful result remains handoff. Historical token counts are corpus context,
+not new model spend.
+
+### Replay budget
+
+Trusted `.github/factory/WORKFLOW.md` sets `replay.max_tokens: 1100000`.
+An absent block disables live replay. A present block requires a positive safe
+integer. The ordinary run, stage, turn, time, retry, and repair caps do not change.
+Before this workflow change reaches main, a selected check against the older
+main reports `replay_disabled`; candidate workflow bytes cannot enable it.
+
+The VM driver serializes replay controllers and budget updates with `flock`.
+Before launch, `reserveReplay` writes a private reservation for 540,000 tokens,
+the per-run verification cap. A run cannot start with less than that much room.
+Two outstanding reservations charge 1,080,000 tokens. The next run refuses.
+The budget path is shared across both sides and subsequent replay pairs.
+Deleting it would reset accounting and is not part of the replay procedure.
+
+After stop, one terminal verification row with a matching verification-manifest
+digest settles the reservation. Exact usage replaces the reserved token amount,
+including failed runs. Lower-bound or uncertain usage retains at least 540,000,
+or more if the charged total exceeds it. An interruption without a terminal
+row retains the entire reservation. Repeated settlement of the same run is
+idempotent. A changed cap, duplicate reservation, or duplicate run refuses.
+
+The budget records elapsed wall time from reservation to settlement. An open
+reservation continues to accrue elapsed time when read. This includes controller
+waiting and is distinct from the report's sum of stage wall times. There is no
+new replay wall-time ceiling; existing controller time limits still apply.
+
+## Replay reports
+
+`replay report --json` reads two frozen terminal ledger rows. It starts no
+subprocess and calls neither GitHub nor a model:
+
+```sh
+node server/cli.ts replay report --json --case c3 \
+  --previous-sha "$PREVIOUS_SHA" --candidate-sha "$CANDIDATE_SHA" \
+  --previous-row "$PREVIOUS_ROW" --candidate-row "$CANDIDATE_ROW"
+```
+
+Each input must contain exactly one supported ledger row with verification
+provenance. Production and legacy rows refuse. The report carries the corpus
+digest, supplied factory SHAs, original base, workflow and gate pins, stage
+usage, requested and observed models, runtime versions, and asset digests.
+Factory SHAs are operator-supplied lane identities, not reconstructed from a row.
+
+Different repositories, original bases, or policy pins make a pair
+`incomparable`. Missing gate or asset evidence also makes it incomparable.
+Assets must match unless both `--previous-assets <digest>` and
+`--candidate-assets <digest>` declare the expected different bundle digests.
+Those options permit a recorded bundle switch, not a missing asset receipt.
+An incomparable report still exits 0; it is a measurement, never a gate.
+Unreadable inputs exit 1. Invalid command syntax exits 2.
+
+A `needs_info` outcome can match directly. A terminal cancelled fixture row
+cannot prove that its PR previously reached handoff. Handoff expectations
+therefore report `unknown`; keep the readiness receipt and PR evidence separately.
+`expectedRound`, `certifiedRound`, and `lastGenerationRound` remain separate facts,
+not an inferred handoff pass.
+
+The primary seven-day metric is unavailable for replay. Replay does not wait
+seven days or establish clean production landings. Spend remains unavailable,
+not zero, and same-family stages do not establish cross-family independence.
+Neither command gates, advances, or promotes a run. The authorized live driver
+and evidence procedure are in
+[Verify a replay pair](../../.pi/skills/verify-factory/features/replay.md).

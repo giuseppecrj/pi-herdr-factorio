@@ -20,6 +20,9 @@ retry:
 usage:
   max_tokens_per_run: 800000
 
+replay:
+  max_tokens: 1100000
+
 stages:
   admit:
     max_turns: 1

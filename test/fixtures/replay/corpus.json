@@ -1,0 +1,66 @@
+{
+	"v": 1,
+	"cases": [
+		{
+			"id": "c1",
+			"sourceIssues": [658],
+			"kind": "known_good",
+			"liveReplayable": true,
+			"baseSha": "28e700f745d7dea0809651d7c9711ca085de55d0",
+			"paths": ["src/workflow.ts"],
+			"issueDigest": "2e58fc68efbe39806282091dbb7ff947f16f3e3dcbec5a133718d2566e3dfd92",
+			"expected": "handoff",
+			"expectedRound": 0,
+			"historicalFacts": "F10 perf B1: 222237 tokens to first handoff"
+		},
+		{
+			"id": "c2",
+			"sourceIssues": [650],
+			"kind": "known_good",
+			"liveReplayable": true,
+			"baseSha": "28e700f745d7dea0809651d7c9711ca085de55d0",
+			"paths": ["server/viewer.ts"],
+			"issueDigest": "25d2293263930e040d4036dac01446dfa21399dfe8547fd82369561e07bc9e63",
+			"expected": "handoff",
+			"expectedRound": 0,
+			"historicalFacts": "F10 trunkBaseline: 257429 tokens, including main-move refreshes"
+		},
+		{
+			"id": "c3",
+			"sourceIssues": [597],
+			"kind": "vague",
+			"liveReplayable": true,
+			"baseSha": "28e700f745d7dea0809651d7c9711ca085de55d0",
+			"paths": ["README.md"],
+			"issueDigest": "82c4b4434613aac77abd8cdbb8d985f1d142f2dbfcabb6b72bace4b5b2018508",
+			"expected": "needs_info",
+			"expectedRound": null,
+			"historicalFacts": "ledger L1: needs_info, 27528 lower-bound tokens"
+		},
+		{
+			"id": "c4",
+			"sourceIssues": [605, 608, 610, 612],
+			"kind": "known_bad_history",
+			"liveReplayable": true,
+			"baseSha": "28e700f745d7dea0809651d7c9711ca085de55d0",
+			"paths": ["scripts/provenance.sh"],
+			"issueDigest": "7577eb6c21664dedc84d67c57289a5e87ad383ad5df42738b62c23e393148c3e",
+			"expected": "handoff",
+			"expectedRound": 0,
+			"historicalFacts": "ledger L6-L9: accept failures, land failure and budget exhaustion"
+		},
+		{
+			"id": "c5",
+			"sourceIssues": [645],
+			"kind": "known_bad_history",
+			"liveReplayable": false,
+			"baseSha": "07852698ebdd1281f3ad21975ddd5d13f1ff0fc3",
+			"paths": ["server/cli.ts"],
+			"issueDigest": "59a3912f0baa999f1579a3634228dc4cd4740d6acf245f485ff6576892d57056",
+			"expected": "handoff",
+			"expectedRound": null,
+			"historicalFacts": "ledger L24-L26: base refusals then landed with owner-feedback repair; 664554 tokens"
+		}
+	],
+	"digest": "22c4fd06d8f8f2c48ce592b68577bad071875db08f8cc53659a7ff6cb1945c81"
+}

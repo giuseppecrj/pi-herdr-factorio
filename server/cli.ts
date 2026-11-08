@@ -32,7 +32,9 @@ import {
 	type Exec,
 	type ExecResult,
 	isBranchName,
+	isGitSha,
 	isRepoSlug,
+	parseWorkflow,
 	loadWorkflow,
 	type RepoSlug,
 	redactCredentials,
@@ -71,6 +73,7 @@ import {
 	textOf,
 } from "./sandbox/json.ts";
 import { parseLedger } from "../src/ledger.ts";
+import { digestOf } from "../src/run.ts";
 import {
 	computeMetrics,
 	excludedRunReason,
@@ -82,7 +85,19 @@ import {
 	type DefectRead,
 } from "../src/metrics.ts";
 
+import {
+	checkReplay,
+	loadReplayCorpus,
+	readReplayBudget,
+	replayReport,
+	replayRow,
+	REPLAY_CORPUS,
+	REPLAY_RUN_CAP,
+} from "../src/replay.ts";
+
 export const USAGE = `Usage:
+  node server/cli.ts replay check --json [--corpus <dir>] [--main-sha <sha>] [--previous-sha <sha>] [--candidate-sha <sha>] [--case <id> --production-state-dir <dir> --budget-file <file>]
+  node server/cli.ts replay report --json --case <id> --previous-row <file> --candidate-row <file> --previous-sha <sha> --candidate-sha <sha> [--corpus <dir>] [--previous-assets <digest> --candidate-assets <digest>]
   node server/cli.ts metrics --json --repo <owner/name> [--ledger-file <path>] [--state-dir <dir>] [--now <instant>] [--cohort production] [--offline] [--intervention-file <fixture>]
   node server/cli.ts viewer --state-dir <dir> [--run <id>] [--port <n>] [--allowed-host <authorized.ts.net>] [--base-path </prefix>]
   node server/cli.ts gates --repository <dir> --gate-sha <sha> --candidate-sha <sha> --nonce <id> --output <dir> [--runner docker|local]
@@ -1115,6 +1130,219 @@ async function runMetricsCli(
 	return EXIT.ok;
 }
 
+async function runReplayCli(
+	argv: readonly string[],
+	io: CliIo,
+): Promise<number> {
+	let parsed;
+
+	try {
+		parsed = parseArgs({
+			args: [...argv],
+			allowPositionals: true,
+			strict: true,
+			options: {
+				json: { type: "boolean" },
+				corpus: { type: "string" },
+				case: { type: "string" },
+				"main-sha": { type: "string" },
+				"previous-sha": { type: "string" },
+				"candidate-sha": { type: "string" },
+				"production-state-dir": { type: "string" },
+				"budget-file": { type: "string" },
+				"previous-row": { type: "string" },
+				"candidate-row": { type: "string" },
+				"previous-assets": { type: "string" },
+				"candidate-assets": { type: "string" },
+			},
+		});
+	} catch {
+		io.stderr(`unrecognized replay options\n${USAGE}\n`);
+
+		return EXIT.usage;
+	}
+
+	const { values: v, positionals } = parsed;
+	const [action] = positionals;
+
+	if (
+		v.json !== true ||
+		positionals.length !== 1 ||
+		(action !== "check" && action !== "report")
+	) {
+		io.stderr(`replay requires check or report and --json\n${USAGE}\n`);
+
+		return EXIT.usage;
+	}
+
+	try {
+		const corpus = await loadReplayCorpus(resolve(v.corpus ?? REPLAY_CORPUS));
+
+		const selected =
+			v.case === undefined ? null : corpus.cases.find((c) => c.id === v.case);
+
+		if (selected === undefined) throw new Error("replay_case_unknown");
+
+		const pin = async (value: string | undefined, fallback: string) => {
+			if (value !== undefined) {
+				if (!isGitSha(value)) throw new Error("replay_sha_required");
+
+				return value;
+			}
+
+			const result = await io.exec("git", [
+				"rev-parse",
+				"--verify",
+				`${fallback}^{commit}`,
+			]);
+
+			const sha = result.stdout.trim();
+
+			if (result.code !== 0 || !isGitSha(sha))
+				throw new Error("replay_sha_unavailable");
+
+			return sha;
+		};
+
+		if (action === "report") {
+			if (
+				selected === null ||
+				v["previous-row"] === undefined ||
+				v["candidate-row"] === undefined ||
+				v["previous-sha"] === undefined ||
+				v["candidate-sha"] === undefined
+			)
+				throw new Error("replay_report_inputs_required");
+
+			const previous = {
+				headSha: await pin(v["previous-sha"], "HEAD"),
+				row: replayRow(await readFile(resolve(v["previous-row"]))),
+			};
+
+			const candidate = {
+				headSha: await pin(v["candidate-sha"], "HEAD"),
+				row: replayRow(await readFile(resolve(v["candidate-row"]))),
+			};
+
+			const previousAssets = v["previous-assets"];
+			const candidateAssets = v["candidate-assets"];
+
+			if (
+				(previousAssets === undefined) !== (candidateAssets === undefined) ||
+				[previousAssets, candidateAssets].some(
+					(d) => d !== undefined && !/^[a-f0-9]{64}$/.test(d),
+				)
+			)
+				throw new Error("replay_assets_invalid");
+			io.stdout(
+				`${JSON.stringify({ corpusDigest: corpus.digest, caseId: selected.id, expectedRound: selected.expectedRound, ...replayReport({ previous, candidate, expected: selected.expected, expectedAssets: previousAssets === undefined || candidateAssets === undefined ? undefined : { previous: previousAssets, candidate: candidateAssets } }) }, null, 2)}\n`,
+			);
+
+			return EXIT.ok;
+		}
+
+		const mainSha = await pin(v["main-sha"], "refs/remotes/origin/main");
+
+		const previousSha = await pin(
+			v["previous-sha"],
+			"refs/remotes/origin/main",
+		);
+
+		const candidateSha = await pin(v["candidate-sha"], "HEAD");
+
+		const report = await checkReplay({
+			corpus,
+			mainSha,
+			previousSha,
+			candidateSha,
+			exec: io.exec,
+		});
+
+		const reasons: string[] = [];
+		let production = "not_checked";
+
+		if (v["production-state-dir"] !== undefined) {
+			const lock = await readLock(resolve(v["production-state-dir"]));
+			production = lock.kind;
+
+			if (lock.kind === "socket_bound")
+				reasons.push("production_controller_running");
+
+			if (lock.kind === "unreadable")
+				reasons.push("production_lock_unavailable");
+		}
+
+		const source = await io.exec("git", [
+			"show",
+			`${mainSha}:.github/factory/WORKFLOW.md`,
+		]);
+
+		const repo = "giuseppecrj/pi-herdr-factorio";
+
+		if (!isRepoSlug(repo)) throw new Error("replay_repository_invalid");
+
+		const policy =
+			source.code === 0
+				? parseWorkflow({ text: source.stdout, repo, env: io.env })
+				: null;
+
+		const cap =
+			policy?.kind === "valid"
+				? (policy.config.replay?.maxTokens ?? null)
+				: null;
+
+		const budget =
+			v["budget-file"] === undefined
+				? null
+				: await readReplayBudget(resolve(v["budget-file"]));
+
+		if (
+			budget?.maxTokens !== null &&
+			budget?.maxTokens !== undefined &&
+			budget.maxTokens !== cap
+		)
+			reasons.push("replay_policy_changed");
+
+		if (cap !== null && cap - (budget?.chargedTokens ?? 0) < REPLAY_RUN_CAP)
+			reasons.push("replay_cap");
+
+		if (selected !== null) {
+			const c = report.cases.find((entry) => entry.id === selected.id);
+
+			if (c?.status !== "ready")
+				reasons.push(c?.status ?? "replay_case_unknown");
+
+			if (cap === null) reasons.push("replay_disabled");
+
+			if (v["budget-file"] === undefined)
+				reasons.push("replay_budget_required");
+
+			if (v["production-state-dir"] === undefined)
+				reasons.push("production_lock_required");
+
+			if (report.bundle === "unavailable") reasons.push("bundle_unavailable");
+		}
+
+		io.stdout(
+			`${JSON.stringify({ ...report, production, policy: policy?.kind === "valid" ? { workflowSha: mainSha, workflowDigest: digestOf(source.stdout) } : null, budget: { maxTokens: cap, perRunCap: REPLAY_RUN_CAP, chargedTokens: budget?.chargedTokens ?? null, remainingTokens: cap === null || budget === null ? null : Math.max(0, cap - budget.chargedTokens), wallMs: budget?.wallMs ?? null }, reasons, allowed: selected === null ? null : reasons.length === 0 }, null, 2)}\n`,
+		);
+
+		return reasons.length === 0 &&
+			!report.cases.some((c) => c.status === "unavailable")
+			? EXIT.ok
+			: EXIT.invalid;
+	} catch (error) {
+		const code =
+			error instanceof Error && /^[a-z_]+$/.test(error.message)
+				? error.message
+				: "replay_input_unavailable";
+
+		io.stdout(`${JSON.stringify({ error: code, promotes: false })}\n`);
+
+		return EXIT.invalid;
+	}
+}
+
 export async function runCli(
 	argv: readonly string[],
 	caller: CliIo,
@@ -1123,6 +1351,8 @@ export async function runCli(
 		...caller,
 		stderr: (text) => caller.stderr(redactCredentials(text)),
 	};
+
+	if (argv[0] === "replay") return runReplayCli(argv.slice(1), io);
 
 	if (argv[0] === "metrics") return runMetricsCli(argv.slice(1), io);
 
