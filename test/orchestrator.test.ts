@@ -940,6 +940,8 @@ function world(scope: readonly number[] | null = null, ledger?: LedgerOutbox) {
 			return output?.result.kind === "found" ? output.result : null;
 		},
 		async execute(state, request) {
+			if (request.kind === "derive_owner_patch") return null;
+
 			if (request.kind === "open_pr") {
 				published.set(state.pin.runId, { number: 99, head: request.head });
 
@@ -2549,7 +2551,7 @@ describe("Orchestrator base qualification", () => {
 		assert.equal(statuses(github, 14).at(-1)?.endsWith(":failed"), true);
 
 		const row = (await outbox.scan())?.[0]?.row?.row;
-		assert.ok(row?.v === 4);
+		assert.ok(row?.v === 5);
 		assert.deepEqual(row.acceptAttempts, {
 			kind: "known",
 			value: [
@@ -2600,7 +2602,7 @@ describe("Orchestrator base qualification", () => {
 		);
 
 		const row = (await outbox.scan())?.[0]?.row?.row;
-		assert.ok(row?.v === 4);
+		assert.ok(row?.v === 5);
 		assert.equal(row.outcome.kind, "budget_exhausted");
 		assert.ok(row.outcome.kind === "budget_exhausted");
 		assert.equal(row.outcome.cap.kind, "unavailable");
@@ -10543,7 +10545,7 @@ describe("private build stage", () => {
 			await once(restarted);
 			await restarted.tick();
 			const row = (await outbox.scan())?.[0]?.row?.row;
-			assert.ok(row?.v === 4);
+			assert.ok(row?.v === 5);
 			assert.equal(row.outcome.kind, "failed");
 
 			const failure = {
@@ -11103,7 +11105,7 @@ describe("controller-only validate", () => {
 				assert.equal(f.executor.launches.length, launches);
 				assert.equal(notices().length, 1);
 				const row = (await outbox.scan())?.[0]?.row?.row;
-				assert.ok(row?.v === 4);
+				assert.ok(row?.v === 5);
 				assert.equal(row.outcome.kind, "failed");
 				assert.deepEqual(row.failure?.kind === "known" && row.failure.value, {
 					stage: "review",
@@ -11373,7 +11375,7 @@ describe("controller-only validate", () => {
 				const row = (await outbox.scan())?.[0]?.row?.row;
 
 				if (target === "open_pr") {
-					assert.ok(row?.v === 4);
+					assert.ok(row?.v === 5);
 					assert.equal(row.outcome.kind, "failed");
 					assert.deepEqual(row.failure?.kind === "known" && row.failure.value, {
 						stage: "land",
@@ -11575,31 +11577,78 @@ describe("controller-only validate", () => {
 	it("F10-3 restarts C8 derivation and routes owner generations to the owner validator without a build", async () => {
 		const f = await reviewingRun();
 		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
-		await once(f.controller); await f.controller.tick(); await f.controller.tick();
+		await once(f.controller);
+		await f.controller.tick();
+		await f.controller.tick();
 		const initial = f.files.claims.get(runOf(14))?.handoff;
 		const port = f.executor.candidate;
 		assert.ok(initial?.kind === "selected" && initial.published && port);
 		const head = sha("b".repeat(40));
 		const observe = port.observe;
-		port.observe = async (state, now) => ({ ...await observe(state, now), pr: { kind: "open", number: initial.published!.number, head, refHead: head } });
+		port.observe = async (state, now) => ({
+			...(await observe(state, now)),
+			pr: {
+				kind: "open",
+				number: initial.published!.number,
+				head,
+				refHead: head,
+			},
+		});
 		const execute = port.execute;
 		let attempts = 0;
 		port.execute = async (state, request) => {
-			if (request.kind === "post_notice") return { kind: "post_notice", request };
+			if (request.kind === "post_notice")
+				return { kind: "post_notice", request };
+
 			if (request.kind !== "derive_owner_patch") return execute(state, request);
 			attempts++;
+
 			if (attempts === 1) return null;
-			return { kind: "derive_owner_patch", request, result: { kind: "found", patch: { version: 1, kind: "owner", runId: state.pin.runId, head, baseSha: request.baseSha, contractDigest: state.pin.contractDigest, acceptanceDigest: state.pin.acceptanceDigest, heldoutDigest: initial.current.verdict!.heldoutDigest, patchDigest: digestOf("owner"), changedPaths: ["src/example.ts"], policy: "clean" } } };
+
+			return {
+				kind: "derive_owner_patch",
+				request,
+				result: {
+					kind: "found",
+					patch: {
+						version: 1,
+						kind: "owner",
+						runId: state.pin.runId,
+						head,
+						baseSha: request.baseSha,
+						contractDigest: state.pin.contractDigest,
+						acceptanceDigest: state.pin.acceptanceDigest,
+						heldoutDigest: initial.current.verdict!.heldoutDigest,
+						patchDigest: digestOf("owner"),
+						changedPaths: ["src/example.ts"],
+						policy: "clean",
+					},
+				},
+			};
 		};
+
 		let ownerCalls = 0;
 		const validate = f.executor.validate;
-		f.executor.ownerValidate = async input => { ownerCalls++; assert.equal(input.generation?.origin.kind, "owner"); return validate(input); };
-		f.executor.validate = async () => { throw new Error("factory validator reached"); };
+		f.executor.ownerValidate = async (input) => {
+			ownerCalls++;
+			assert.equal(input.generation?.origin.kind, "owner");
+
+			return validate(input);
+		};
+
+		f.executor.validate = async () => {
+			throw new Error("factory validator reached");
+		};
+
 		const launches = f.executor.launches.length;
-		for (let tick = 0; tick < 8 && attempts === 0; tick++) await f.controller.tick();
+
+		for (let tick = 0; tick < 8 && attempts === 0; tick++)
+			await f.controller.tick();
 		assert.equal(attempts, 1);
 		const restarted = f.start();
-		for (let tick = 0; tick < 8 && ownerCalls === 0; tick++) await restarted.tick();
+
+		for (let tick = 0; tick < 8 && ownerCalls === 0; tick++)
+			await restarted.tick();
 		assert.equal(ownerCalls, 1);
 		assert.equal(attempts, 2);
 		assert.equal(f.executor.launches.length, launches);
@@ -14455,7 +14504,7 @@ describe("controller-only validate", () => {
 		};
 
 		const row = (await outbox.scan())?.[0]?.row?.row;
-		assert.ok(row?.v === 4);
+		assert.ok(row?.v === 5);
 		assert.deepEqual(row.failure, failed);
 		assert.deepEqual(row.outcome, {
 			kind: "failed",
@@ -17216,7 +17265,7 @@ describe("ledger outbox enrollment", () => {
 		stage.finish(resultOf(launch, { kind: "passed" }, 300));
 		await once(controller);
 		const row = (await native.ledger?.scan())?.[0]?.row?.row;
-		assert.ok(row && row.v === 4);
+		assert.ok(row && row.v === 5);
 		assert.equal(row.outcome.kind, "needs_info");
 		assert.deepEqual(row.runContext, context);
 		assert.equal(row.provenance.kind, "verification");
@@ -17580,7 +17629,7 @@ describe("terminal rows keep the real cause", () => {
 		}
 
 		const row = (await outbox.scan())?.[0]?.row?.row;
-		assert.ok(row?.v === 4, "a version 4 row");
+		assert.ok(row?.v === 5, "a version 5 row");
 
 		return { ...f, dir, row };
 	}

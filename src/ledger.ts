@@ -16,7 +16,11 @@ import {
 	type LedgerCommit,
 	type LedgerFile,
 } from "./publication.ts";
-import { candidateGenerations, type CandidateState } from "./handoff.ts";
+import {
+	authoredOf,
+	candidateGenerations,
+	type CandidateState,
+} from "./handoff.ts";
 import {
 	VISIBLE_CHECKS,
 	failedVisibleChecks,
@@ -511,7 +515,7 @@ export type TerminalCause = Readonly<{
 	retainedPatch?: Digest | null;
 }>;
 
-const outcome = tagged({
+const outcomeFields = {
 	needs_info: { stage },
 	released: { stage },
 	cancelled: { stage, reason: fact(oneOf("closed", "withdrawn")) },
@@ -548,7 +552,9 @@ const outcome = tagged({
 			owner_override: {},
 		}),
 	},
-});
+};
+
+const outcome = tagged(outcomeFields);
 
 const generation = record({
 	round: oneOf(0, 1, 2),
@@ -737,7 +743,7 @@ const rowV3Codec = record({
 	gaps: list(gap),
 });
 
-const rowV4Codec = record({
+const rowV4Fields = {
 	v: literal(4),
 	...sharedFields,
 	runContext,
@@ -755,6 +761,26 @@ const rowV4Codec = record({
 	),
 	efficiency: efficiencyCodec,
 	gaps: list(gap),
+};
+
+const rowV4Codec = record(rowV4Fields);
+
+const rowV5Codec = record({
+	...rowV4Fields,
+	v: literal(5),
+	outcome: tagged({
+		...outcomeFields,
+		landed: {
+			...outcomeFields.landed,
+			assurance: tagged({
+				factory_verified: {
+					generationDigest: digest,
+					authored: oneOf("factory", "owner"),
+				},
+				owner_override: {},
+			}),
+		},
+	}),
 });
 
 export type LedgerRowV1 = Out<typeof rowCodec>;
@@ -765,7 +791,14 @@ export type LedgerRowV3 = Out<typeof rowV3Codec>;
 
 export type LedgerRowV4 = Out<typeof rowV4Codec>;
 
-export type LedgerRow = LedgerRowV1 | LedgerRowV2 | LedgerRowV3 | LedgerRowV4;
+export type LedgerRowV5 = Out<typeof rowV5Codec>;
+
+export type LedgerRow =
+	| LedgerRowV1
+	| LedgerRowV2
+	| LedgerRowV3
+	| LedgerRowV4
+	| LedgerRowV5;
 
 /** Old immutable rows expose unknown facts without adding fields to their bytes. */
 export function ledgerEfficiency(row: LedgerRow): EfficiencyFacts {
@@ -776,16 +809,19 @@ export type LedgerRowInput =
 	| Omit<LedgerRowV1, "gaps">
 	| Omit<LedgerRowV2, "gaps">
 	| Omit<LedgerRowV3, "gaps">
-	| Omit<LedgerRowV4, "gaps">;
+	| Omit<LedgerRowV4, "gaps">
+	| Omit<LedgerRowV5, "gaps">;
 
 const codecOf = (value: JsonValue): Codec<LedgerRow> =>
-	fieldOf(objectOf(value), "v") === 4
-		? rowV4Codec
-		: fieldOf(objectOf(value), "v") === 3
-			? rowV3Codec
-			: fieldOf(objectOf(value), "v") === 2
-				? rowV2Codec
-				: rowCodec;
+	fieldOf(objectOf(value), "v") === 5
+		? rowV5Codec
+		: fieldOf(objectOf(value), "v") === 4
+			? rowV4Codec
+			: fieldOf(objectOf(value), "v") === 3
+				? rowV3Codec
+				: fieldOf(objectOf(value), "v") === 2
+					? rowV2Codec
+					: rowCodec;
 
 export type LedgerOutcome = LedgerRow["outcome"];
 
@@ -864,7 +900,7 @@ function invariant(row: LedgerRow): string | null {
 	}
 
 	if (
-		row.v === 4 &&
+		(row.v === 4 || row.v === 5) &&
 		JSON.stringify(row.provenance) !==
 			JSON.stringify(provenance(provenanceOf(row.runContext)))
 	)
@@ -1030,7 +1066,7 @@ function lineOf(bytes: Buffer): LedgerLine {
 
 	if (v === null) return { kind: "corrupt", bytes, code: "missing_version" };
 
-	if (v !== 1 && v !== 2 && v !== 3 && v !== 4)
+	if (v !== 1 && v !== 2 && v !== 3 && v !== 4 && v !== 5)
 		return { kind: "unknown_version", bytes };
 
 	try {
@@ -1521,6 +1557,10 @@ function outcomeOf(facts: TerminalFacts): JsonValue {
 						? {
 								kind: "factory_verified",
 								generationDigest: terminal.assurance.certification.digest,
+								authored:
+									candidate?.kind === "selected"
+										? authoredOf(candidate, terminal.assurance.certification)
+										: fail("landing_incomplete"),
 							}
 						: { kind: "owner_override" },
 			};
@@ -1681,7 +1721,7 @@ export function terminalFailureOf(value: JsonValue | undefined): JsonValue {
 		return {
 			outcome: stopped,
 			failure:
-				object.v === 2 || object.v === 3 || object.v === 4
+				object.v === 2 || object.v === 3 || object.v === 4 || object.v === 5
 					? nullable(failureFact)(object.failure)
 					: stopped.kind === "failed" || stopped.kind === "budget_exhausted"
 						? unavailable("legacy_not_recorded")
@@ -1827,7 +1867,7 @@ export function terminalSnapshot(facts: TerminalFacts): JsonValue {
 			: [];
 
 	return {
-		v: 4,
+		v: 5,
 		runId: facts.runId,
 		repo: facts.repo,
 		issue: facts.issue,

@@ -12,7 +12,7 @@ Ruleset `26531115`, "Factory ledger append-only", forbids deletion and non-fast-
 
 ## What a row says
 
-A row is one canonical JSON line with `v: 1`, `v: 2`, `v: 3` or `v: 4`. Its keys come in a fixed order, it ends in one LF, and its digest is SHA-256 over those exact bytes. It holds:
+A row is one canonical JSON line with `v: 1`, `v: 2`, `v: 3`, `v: 4` or `v: 5`. Its keys come in a fixed order, it ends in one LF, and its digest is SHA-256 over those exact bytes. It holds:
 
 - the run's identity;
 - the frozen workflow pin and autonomy policy;
@@ -41,11 +41,11 @@ With a recorded cause, version 2 also fills the version 1 fields. `outcome.cap` 
 
 The controller records a candidate stop from the durable handoff terminal and the current generation's stored assessment, so a restart keeps it. Every other stop it records when it decides it.
 
-Version 1, 2 and 3 rows and stored terminal snapshots still parse and freeze to the same bytes; no shipped row is rewritten. An older controller that does not recognize a row version blocks appends as `ledger_version_unsupported`. Roll forward rather than back after publishing a new row version.
+Version 1–4 rows and stored terminal snapshots still parse and freeze to the same bytes; no shipped row is rewritten. An older controller that does not recognize a row version blocks appends as `ledger_version_unsupported`. Roll forward rather than back after publishing a new row version.
 
 ### Version 3: execution cost facts
 
-Version 3 introduced execution cost facts, retained in version 4. Each stage summary and the run have an `efficiency` object with these numeric fields:
+Version 3 introduced execution cost facts, retained in later versions. Each stage summary and the run have an `efficiency` object with these numeric fields:
 
 - `assistantTurns`, assistant messages completed by the parent and readable children, distinct from the existing turn-budget counter;
 - `modelRequests`, unique dispatched requests from the execution journal, including children, fallbacks and internal requests;
@@ -66,7 +66,7 @@ A fact the controller did not record is `{"kind":"unavailable","reason":...}`, n
 
 ### Version 4: admitted context, not inferred provenance
 
-New terminal snapshots and rows use version 4. `runContext` is the admission-time `RunContextV2`, and `provenance` is its validated projection. Both ordinary and candidate terminal construction require that context.
+Version 4 introduced the admitted context retained in new rows. `runContext` is the admission-time `RunContextV2`, and `provenance` is its validated projection. Both ordinary and candidate terminal construction require that context.
 
 Before the first native claim, `accounting/<runId>/policy.json` writes a version 2 start record containing `runId`, `startedAt` and `context`. The context is one of:
 
@@ -91,6 +91,14 @@ An admitted verification context keeps `verification` provenance even before the
 One published row says `production` by mistake: `factory/ledger` line 13, commit `8785f92`, run `199df6dc85d53522b12bded884ebe6351dffcb80f7e456d42124ab39e994489f` (issue #621, PR #622, `landed`). It is an F10c verification run whose landed row was built before its controller's first workflow load, and F12a must exclude it from every production cohort. The ledger is append-only, so the row is not rewritten.
 
 The row holds no private test names, messages, paths, prompts or session content. Its only links are constructed issue, PR and Actions URLs.
+
+### Version 5: certified head authorship
+
+Every new terminal snapshot and row uses version 5. It equals version 4 except that a landed `factory_verified` assurance is `{kind: "factory_verified", generationDigest, authored: "factory" | "owner"}`. The controller derives `authored` from the origin of the generation that certified the actual merged head, including historical certifications. It does not infer authorship from readiness or the active generation. An owner head that passed trusted gates and fresh review without a build is therefore certified, not an override. `owner_override` and non-landed outcomes are unchanged.
+
+Owner validation records H as `publication.candidateSha` through a temporary controller-owned pin, so the existing landing check still binds the merged head to that generation. Versions 1–4 parse and re-freeze byte-identically, without adding an authorship field. Their absence of that field is not a claim about owner authorship.
+
+An older controller reports the first version 5 line as `unknown_version` and blocks appends with `ledger_version_unsupported`, rather than misreading it as a corrupt version 4 row. Roll forward only. Never rewrite older rows or lower their version to resume appends.
 
 ## Private state
 
