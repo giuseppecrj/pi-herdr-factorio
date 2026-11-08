@@ -738,10 +738,8 @@ for (const [kind, make] of [
 		() => {
 			const initial = queuedFeedback();
 
-			const state = {
-				...initial,
-				current: { ...initial.current, assessment: undefined },
-			};
+			const { assessment: _assessment, ...current } = initial.current;
+			const state = { ...initial, current };
 
 			return handoffCandidate(state, readyObservation(state)).state;
 		},

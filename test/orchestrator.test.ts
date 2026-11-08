@@ -11958,14 +11958,25 @@ describe("controller-only validate", () => {
 
 			const root = stateDir();
 
-			const native = controllerCandidatePort({
-				stateDir: root,
-				exec: f.github.exec,
-			});
-
 			const pr = f.github.add(
 				fakeIssue(99, { pullRequest: true, labels: ["factory:review"] }),
 			);
+
+			const native = controllerCandidatePort({
+				stateDir: root,
+				exec: async (command, args) => {
+					if (
+						args.includes("DELETE") &&
+						args.includes(`repos/${repo}/issues/99/labels/factory%3Areview`)
+					) {
+						pr.labels = pr.labels.filter((label) => label !== "factory:review");
+
+						return { code: 0, stdout: "", stderr: "" };
+					}
+
+					return f.github.exec(command, args);
+				},
+			});
 
 			const execute = port.execute;
 			let derivations = 0;

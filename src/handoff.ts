@@ -2194,8 +2194,8 @@ function observed(
 	if (
 		work.kind === "effect" &&
 		(work.request.kind === "derive_owner_patch" ||
-			(work.request.kind === "post_notice" &&
-				work.request.notice.kind === "owner_head"))
+			work.request.kind === "post_notice" ||
+			work.request.kind === "void_readiness")
 	)
 		return state;
 
