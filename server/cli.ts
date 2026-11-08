@@ -91,13 +91,15 @@ import {
 	readReplayBudget,
 	replayReport,
 	replayRow,
+	readReplayRecord,
+	checkReplayBundles,
 	REPLAY_CORPUS,
 	REPLAY_RUN_CAP,
 } from "../src/replay.ts";
 
 export const USAGE = `Usage:
   node server/cli.ts replay check --json [--corpus <dir>] [--main-sha <sha>] [--previous-sha <sha>] [--candidate-sha <sha>] [--case <id> --production-state-dir <dir> --budget-file <file>]
-  node server/cli.ts replay report --json --case <id> --previous-row <file> --candidate-row <file> --previous-sha <sha> --candidate-sha <sha> [--corpus <dir>] [--previous-assets <digest> --candidate-assets <digest>]
+  node server/cli.ts replay report --json --case <id> --previous-row <file> --candidate-row <file> --previous-record <file> --candidate-record <file> --previous-sha <sha> --candidate-sha <sha> [--corpus <dir>] [--previous-assets <digest> --candidate-assets <digest>]
   node server/cli.ts metrics --json --repo <owner/name> [--ledger-file <path>] [--state-dir <dir>] [--now <instant>] [--cohort production] [--offline] [--intervention-file <fixture>]
   node server/cli.ts viewer --state-dir <dir> [--run <id>] [--port <n>] [--allowed-host <authorized.ts.net>] [--base-path </prefix>]
   node server/cli.ts gates --repository <dir> --gate-sha <sha> --candidate-sha <sha> --nonce <id> --output <dir> [--runner docker|local]
@@ -1152,6 +1154,10 @@ async function runReplayCli(
 				"budget-file": { type: "string" },
 				"previous-row": { type: "string" },
 				"candidate-row": { type: "string" },
+				"previous-record": { type: "string" },
+				"candidate-record": { type: "string" },
+				"bundle-root": { type: "string" },
+				side: { type: "string" },
 				"previous-assets": { type: "string" },
 				"candidate-assets": { type: "string" },
 			},
@@ -1209,6 +1215,8 @@ async function runReplayCli(
 				selected === null ||
 				v["previous-row"] === undefined ||
 				v["candidate-row"] === undefined ||
+				v["previous-record"] === undefined ||
+				v["candidate-record"] === undefined ||
 				v["previous-sha"] === undefined ||
 				v["candidate-sha"] === undefined
 			)
@@ -1217,12 +1225,24 @@ async function runReplayCli(
 			const previous = {
 				headSha: await pin(v["previous-sha"], "HEAD"),
 				row: replayRow(await readFile(resolve(v["previous-row"]))),
+				record: readReplayRecord(
+					await readFile(resolve(v["previous-record"]), "utf8"),
+				),
 			};
 
 			const candidate = {
 				headSha: await pin(v["candidate-sha"], "HEAD"),
 				row: replayRow(await readFile(resolve(v["candidate-row"]))),
+				record: readReplayRecord(
+					await readFile(resolve(v["candidate-record"]), "utf8"),
+				),
 			};
+
+			if (
+				previous.record.caseId !== selected.id ||
+				candidate.record.caseId !== selected.id
+			)
+				throw new Error("replay_case_mismatch");
 
 			const previousAssets = v["previous-assets"];
 			const candidateAssets = v["candidate-assets"];
@@ -1235,7 +1255,7 @@ async function runReplayCli(
 			)
 				throw new Error("replay_assets_invalid");
 			io.stdout(
-				`${JSON.stringify({ corpusDigest: corpus.digest, caseId: selected.id, expectedRound: selected.expectedRound, ...replayReport({ previous, candidate, expected: selected.expected, expectedAssets: previousAssets === undefined || candidateAssets === undefined ? undefined : { previous: previousAssets, candidate: candidateAssets } }) }, null, 2)}\n`,
+				`${JSON.stringify({ caseId: selected.id, expectedRound: selected.expectedRound, ...replayReport({ previous, candidate, expected: selected.expected, expectedAssets: previousAssets === undefined || candidateAssets === undefined ? undefined : { previous: previousAssets, candidate: candidateAssets } }) }, null, 2)}\n`,
 			);
 
 			return EXIT.ok;
@@ -1321,6 +1341,24 @@ async function runReplayCli(
 				reasons.push("production_lock_required");
 
 			if (report.bundle === "unavailable") reasons.push("bundle_unavailable");
+
+			if (
+				v["bundle-root"] !== undefined &&
+				v["previous-assets"] !== undefined &&
+				v["candidate-assets"] !== undefined &&
+				v.side !== undefined
+			) {
+				await checkReplayBundles({
+					root: resolve(v["bundle-root"]),
+					previousSha,
+					candidateSha,
+					previousAssets: v["previous-assets"],
+					candidateAssets: v["candidate-assets"],
+					side: v.side,
+					exec: io.exec,
+				});
+			} else if (report.bundle === "bundle_switch_required")
+				reasons.push("bundle_switch_required");
 		}
 
 		io.stdout(

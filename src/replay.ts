@@ -1,4 +1,11 @@
-import { readFile, rename, writeFile } from "node:fs/promises";
+import {
+	readFile,
+	readlink,
+	readdir,
+	rename,
+	writeFile,
+} from "node:fs/promises";
+import { manifestDigest } from "../server/sandbox/manifest.ts";
 import { join } from "node:path";
 import { digestOf } from "./run.ts";
 import { parseLedger, type LedgerRow } from "./ledger.ts";
@@ -18,13 +25,7 @@ export const REPLAY_RUN_CAP = 540_000;
 export const REPLAY_CORPUS = "test/fixtures/replay";
 const DIGEST = /^[a-f0-9]{64}$/;
 
-const BUNDLE_PATHS = [
-	"skills",
-	"server/sandbox/assets",
-	"server/sandbox/pi.ts",
-	"server/sandbox/stage-init.ts",
-	"server/sandbox/echo-fixture.ts",
-];
+const BUNDLE_PATHS = ["skills", "server/sandbox/assets", "server/provision.sh"];
 
 export type ReplayCase = {
 	readonly id: string;
@@ -33,6 +34,8 @@ export type ReplayCase = {
 	readonly liveReplayable: boolean;
 	readonly baseSha: string;
 	readonly paths: readonly string[];
+	readonly guardPattern: string | null;
+	readonly title: string;
 	readonly issueDigest: string;
 	readonly expected: "handoff" | "needs_info";
 	readonly expectedRound: number | null;
@@ -106,6 +109,8 @@ export async function loadReplayCorpus(dir: string): Promise<ReplayCorpus> {
 				: countOf(fieldOf(c, "expectedRound"));
 
 		const issueDigest = required(textOf(fieldOf(c, "issueDigest")));
+		const title = required(textOf(fieldOf(c, "title")));
+		const guardPattern = textOf(fieldOf(c, "guardPattern"));
 
 		if (
 			!/^c[1-9][0-9]*$/.test(id) ||
@@ -125,12 +130,17 @@ export async function loadReplayCorpus(dir: string): Promise<ReplayCorpus> {
 
 		if (digestOf(text) !== issueDigest) refuse("issue_digest_mismatch");
 
+		if (title !== `[F12a-replay-${id}] ${text.split("\n")[0]?.slice(2)}`)
+			refuse("issue_title_mismatch");
+
 		if (/#\d+|@[\w-]+|https?:\/\/github\.com/i.test(text))
 			refuse("issue_not_sanitized");
 		result.push({
 			id,
 			baseSha,
 			paths,
+			guardPattern,
+			title,
 			sourceIssues,
 			liveReplayable,
 			expected,
@@ -154,12 +164,18 @@ export async function checkReplay(input: {
 	if (![input.mainSha, input.previousSha, input.candidateSha].every(isGitSha))
 		refuse("replay_sha_required");
 
-	const diff = async (a: string, b: string, paths: readonly string[]) => {
+	const diff = async (
+		a: string,
+		b: string,
+		paths: readonly string[],
+		pattern: string | null = null,
+	) => {
 		try {
 			return await input.exec("git", [
 				"--literal-pathspecs",
 				"diff",
 				"--name-only",
+				...(pattern === null ? [] : [`-G${pattern}`]),
 				a,
 				b,
 				"--",
@@ -173,7 +189,7 @@ export async function checkReplay(input: {
 	const cases = await Promise.all(
 		input.corpus.cases.map(async (c) => {
 			const change = c.liveReplayable
-				? await diff(c.baseSha, input.mainSha, c.paths)
+				? await diff(c.baseSha, input.mainSha, c.paths, c.guardPattern)
 				: null;
 
 			const status =
@@ -229,7 +245,101 @@ export function replayRow(bytes: Uint8Array): LedgerRow {
 	return line.row;
 }
 
-export type ReplaySide = { readonly headSha: string; readonly row: LedgerRow };
+export type ReplayRecord = {
+	readonly v: number;
+	readonly caseId: string;
+	readonly corpusDigest: string;
+	readonly issueDigest: string;
+	readonly side: string;
+	readonly issue: number;
+	readonly headSha: string;
+	readonly mainSha: string;
+	readonly terminalMainSha: string | null;
+	readonly runId: string | null;
+	readonly stageCaps: Readonly<Record<string, number>>;
+};
+
+export function readReplayRecord(text: string): ReplayRecord {
+	const raw = objectOf(parseJson(text));
+	const caps = objectOf(fieldOf(raw, "stageCaps"));
+	const stageCaps: Record<string, number> = {};
+
+	for (const key of ["accept", "build", "review", "repair"]) {
+		const value = countOf(fieldOf(caps, key));
+
+		if (value === null || value === 0) refuse("replay_record_invalid");
+		stageCaps[key] = value;
+	}
+
+	const result = {
+		v: natural(countOf(fieldOf(raw, "v"))),
+		caseId: required(textOf(fieldOf(raw, "caseId"))),
+		corpusDigest: required(textOf(fieldOf(raw, "corpusDigest"))),
+		issueDigest: required(textOf(fieldOf(raw, "issueDigest"))),
+		side: required(textOf(fieldOf(raw, "side"))),
+		issue: natural(countOf(fieldOf(raw, "issue"))),
+		headSha: required(textOf(fieldOf(raw, "headSha"))),
+		mainSha: required(textOf(fieldOf(raw, "mainSha"))),
+		terminalMainSha: textOf(fieldOf(raw, "terminalMainSha")),
+		runId: textOf(fieldOf(raw, "runId")),
+		stageCaps,
+	};
+
+	if (
+		result.v !== 1 ||
+		!/^c[1-9][0-9]*$/.test(result.caseId) ||
+		![result.corpusDigest, result.issueDigest].every((d) => DIGEST.test(d)) ||
+		![result.headSha, result.mainSha].every(isGitSha) ||
+		(result.terminalMainSha !== null && !isGitSha(result.terminalMainSha)) ||
+		(result.runId !== null && !DIGEST.test(result.runId)) ||
+		!["prev", "cand"].includes(result.side) ||
+		result.issue === 0
+	)
+		refuse("replay_record_invalid");
+
+	return result;
+}
+
+export type ReplaySide = {
+	readonly headSha: string;
+	readonly row: LedgerRow;
+	readonly record: ReplayRecord;
+};
+
+function modelsOf(row: LedgerRow): string[] | null {
+	if (row.models.kind !== "known" || row.models.value.length === 0) return null;
+
+	if (row.models.value.some((m) => m.observed.kind !== "known")) return null;
+
+	return [
+		...new Set(
+			row.models.value.map((m) => JSON.stringify([m.requested, m.observed])),
+		),
+	].sort();
+}
+
+function mainMoved(side: ReplaySide): boolean {
+	const { row, record } = side;
+
+	if (row.provenance.kind !== "verification") return true;
+
+	if (
+		record.mainSha !== row.provenance.policy.workflowSha ||
+		record.terminalMainSha !== record.mainSha
+	)
+		return true;
+
+	// Older factories have no terminal observation; the trusted driver's two remote pins still apply.
+	if (!("terminalWorkflowObservation" in row)) return false;
+
+	if (row.terminalWorkflowObservation.kind !== "known") return true;
+	const observation = row.terminalWorkflowObservation.value;
+
+	return (
+		observation.workflowSha !== record.mainSha ||
+		observation.workflowDigest !== row.provenance.policy.workflowDigest
+	);
+}
 
 function assetsOf(row: LedgerRow): string[] | null {
 	if (row.models.kind !== "known" || row.models.value.length === 0) return null;
@@ -264,6 +374,15 @@ function sideReport(side: ReplaySide, expected: ReplayCase["expected"]) {
 
 	return {
 		headSha: side.headSha,
+		caseId: side.record.caseId,
+		corpusDigest: side.record.corpusDigest,
+		issue: row.issue,
+		side: side.record.side,
+		stageCaps: side.record.stageCaps,
+		trustedRunTokenCap: row.provenance.trustedRunTokenCap,
+		effectiveRunTokenCap: row.provenance.effectiveRunTokenCap,
+		mainSha: side.record.mainSha,
+		terminalMainSha: side.record.terminalMainSha,
 		runId: row.runId,
 		originalBase: row.originalBase,
 		policy: row.provenance.policy,
@@ -306,6 +425,48 @@ export function replayReport(input: {
 	const previous = sideReport(input.previous, input.expected);
 	const candidate = sideReport(input.candidate, input.expected);
 	const reasons: string[] = [];
+	const p = input.previous;
+	const c = input.candidate;
+
+	if (p.record.caseId !== c.record.caseId) reasons.push("case_mismatch");
+
+	if (p.record.corpusDigest !== c.record.corpusDigest)
+		reasons.push("corpus_mismatch");
+
+	if (p.record.issueDigest !== c.record.issueDigest)
+		reasons.push("issue_text_mismatch");
+
+	if (p.record.side !== "prev" || c.record.side !== "cand")
+		reasons.push("side_mismatch");
+
+	if (p.row.runId === c.row.runId) reasons.push("same_run");
+
+	if (
+		[p, c].some(
+			(s) =>
+				s.record.issue !== s.row.issue ||
+				s.record.runId !== s.row.runId ||
+				s.record.headSha !== s.headSha,
+		)
+	)
+		reasons.push("fixture_binding_mismatch");
+
+	if (JSON.stringify(p.record.stageCaps) !== JSON.stringify(c.record.stageCaps))
+		reasons.push("stage_cap_mismatch");
+
+	if (
+		previous.trustedRunTokenCap !== candidate.trustedRunTokenCap ||
+		previous.effectiveRunTokenCap !== candidate.effectiveRunTokenCap
+	)
+		reasons.push("run_cap_mismatch");
+	const pm = modelsOf(p.row);
+	const cm = modelsOf(c.row);
+
+	if (pm === null || cm === null) reasons.push("models_unavailable");
+	else if (JSON.stringify(pm) !== JSON.stringify(cm))
+		reasons.push("model_mismatch");
+
+	if (mainMoved(p) || mainMoved(c)) reasons.push("main_moved");
 
 	if (input.previous.row.repo !== input.candidate.row.repo)
 		reasons.push("repository_mismatch");
@@ -350,6 +511,7 @@ export function replayReport(input: {
 		candidate,
 		promotes: false,
 		limitations: [
+			"The 540,000-token reservation equals the replay hard run limit. Heavy runs can exhaust at review or repair where production's larger run cap would continue.",
 			"Context-isolated same-family stages are not independent cross-family proof.",
 			"Provider versions and spend are unavailable unless recorded; unavailable is not zero.",
 			"Frozen main policy and gates judge both factories, not candidate WORKFLOW changes.",
@@ -360,7 +522,7 @@ export function replayReport(input: {
 
 type Reservation = {
 	key: string;
-	status: "reserved" | "settled";
+	status: "reserved" | "settled" | "voided";
 	tokens: number;
 	wallMs: number;
 	startedAt: number;
@@ -412,7 +574,7 @@ export async function readReplayBudget(path: string): Promise<ReplayBudget> {
 		const status = textOf(fieldOf(r, "status"));
 
 		if (
-			(status !== "reserved" && status !== "settled") ||
+			(status !== "reserved" && status !== "settled" && status !== "voided") ||
 			reservations.some((old) => old.key === key)
 		)
 			refuse("replay_budget_invalid");
@@ -495,6 +657,8 @@ export async function settleReplay(
 
 	if (reservation === undefined) refuse("replay_reservation_missing");
 
+	if (reservation.status === "voided") refuse("replay_settlement_conflict");
+
 	if (reservation.status === "settled") {
 		if (reservation.runId !== row.runId) refuse("replay_settlement_conflict");
 
@@ -512,4 +676,181 @@ export async function settleReplay(
 	reservation.outcome = row.outcome.kind;
 	reservation.runId = row.runId;
 	await saveBudget(path, budget);
+}
+
+export async function voidReplay(
+	path: string,
+	key: string,
+	evidence: {
+		readonly stages: number;
+		readonly tokens: number;
+		readonly complete: boolean;
+	},
+	reason: string,
+): Promise<void> {
+	if (
+		!evidence.complete ||
+		evidence.stages !== 0 ||
+		evidence.tokens !== 0 ||
+		!reason
+	)
+		refuse("replay_void_unproven");
+	const budget = await readReplayBudget(path);
+	const reservation = budget.reservations.find((r) => r.key === key);
+
+	if (reservation === undefined) refuse("replay_reservation_missing");
+
+	if (reservation.status === "voided") return;
+
+	if (reservation.status !== "reserved") refuse("replay_settlement_conflict");
+	reservation.status = "voided";
+	reservation.tokens = 0;
+	reservation.wallMs = Math.max(0, Date.now() - reservation.startedAt);
+	reservation.outcome = reason;
+	await saveBudget(path, budget);
+}
+
+export async function replayStageCaps(
+	sha: string,
+	exec: Exec,
+): Promise<Record<string, number>> {
+	const result: Record<string, number> = {};
+
+	for (const [key, file, name] of [
+		["accept", "src/accept.ts", "ACCEPTANCE_MAX_TOKENS"],
+		["build", "src/build.ts", "BUILD_MAX_TOKENS"],
+		["review", "src/run.ts", "REVIEW_MAX_TOKENS"],
+		["repair", "src/run.ts", "REPAIR_BUILD_MAX_TOKENS"],
+	]) {
+		const source = await exec("git", ["show", `${sha}:${file}`]);
+
+		const match = new RegExp(`export const ${name} = ([0-9_]+);`).exec(
+			source.stdout,
+		);
+
+		const value = Number(match?.[1]?.replaceAll("_", ""));
+
+		if (source.code !== 0 || !Number.isSafeInteger(value) || value <= 0)
+			refuse("replay_stage_caps_unavailable");
+		result[required(key ?? null)] = value;
+	}
+
+	return result;
+}
+
+/** Installed content is checked with trusted code, never by executing either factory. */
+export async function checkReplayBundles(input: {
+	readonly root: string;
+	readonly previousSha: string;
+	readonly candidateSha: string;
+	readonly previousAssets: string;
+	readonly candidateAssets: string;
+	readonly side: string;
+	readonly exec: Exec;
+}): Promise<void> {
+	for (const [sha, digest] of [
+		[input.previousSha, input.previousAssets],
+		[input.candidateSha, input.candidateAssets],
+	]) {
+		if (
+			sha === undefined ||
+			digest === undefined ||
+			!isGitSha(sha) ||
+			!DIGEST.test(digest)
+		)
+			refuse("replay_assets_invalid");
+		const bundle = join(input.root, `assets-${digest}`);
+
+		if ((await manifestDigest(bundle)) !== digest)
+			refuse("replay_bundle_unavailable");
+
+		const listed = await input.exec("git", [
+			"ls-tree",
+			"-r",
+			"--name-only",
+			sha,
+			"--",
+			"skills",
+			"server/sandbox/assets",
+		]);
+
+		if (listed.code !== 0 || listed.stdout.trim() === "")
+			refuse("replay_bundle_source_unavailable");
+
+		const sourceSkills = listed.stdout
+			.trim()
+			.split("\n")
+			.filter(
+				(path) => path.startsWith("skills/") && path.split("/").length === 3,
+			)
+			.sort();
+
+		const installedSkills: string[] = [];
+
+		for (const skill of await readdir(join(bundle, "skills"), {
+			withFileTypes: true,
+		})) {
+			if (!skill.isDirectory()) refuse("replay_stale_bundle");
+
+			for (const file of await readdir(join(bundle, "skills", skill.name), {
+				withFileTypes: true,
+			})) {
+				if (!file.isFile()) refuse("replay_stale_bundle");
+				installedSkills.push(`skills/${skill.name}/${file.name}`);
+			}
+		}
+
+		if (JSON.stringify(sourceSkills) !== JSON.stringify(installedSkills.sort()))
+			refuse("replay_stale_bundle");
+
+		const assets = new Map([
+			["server/sandbox/assets/pi.ts", "sandbox/pi.ts"],
+			["server/sandbox/assets/stage-init.ts", "sandbox/stage-init.ts"],
+			["server/sandbox/assets/package.json", "pkg/package.json"],
+			["server/sandbox/assets/package-lock.json", "pkg/package-lock.json"],
+		]);
+
+		for (const path of listed.stdout.trim().split("\n")) {
+			const asset =
+				path.startsWith("skills/") && path.split("/").length === 3
+					? path
+					: assets.get(path);
+
+			if (asset === undefined) continue;
+			const source = await input.exec("git", ["show", `${sha}:${path}`]);
+
+			if (
+				source.code !== 0 ||
+				digestOf(await readFile(join(bundle, asset))) !==
+					digestOf(source.stdout)
+			)
+				refuse("replay_stale_bundle");
+		}
+	}
+
+	const recipe = await input.exec("git", [
+		"diff",
+		"--name-only",
+		input.previousSha,
+		input.candidateSha,
+		"--",
+		"server/provision.sh",
+	]);
+
+	if (
+		recipe.code !== 0 ||
+		(recipe.stdout.trim() !== "" &&
+			input.previousAssets === input.candidateAssets)
+	)
+		refuse("replay_bundle_recipe_mismatch");
+
+	const expected =
+		input.side === "previous"
+			? input.previousAssets
+			: input.side === "candidate"
+				? input.candidateAssets
+				: refuse("replay_side_invalid");
+
+	if ((await readlink(join(input.root, "current"))) !== `assets-${expected}`)
+		refuse("replay_bundle_switch_required");
 }

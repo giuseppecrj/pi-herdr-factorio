@@ -8,6 +8,8 @@
 			"liveReplayable": true,
 			"baseSha": "28e700f745d7dea0809651d7c9711ca085de55d0",
 			"paths": ["src/workflow.ts"],
+			"guardPattern": "BRANCH_NAME|isBranchName",
+			"title": "[F12a-replay-c1] [F10-B] isBranchName accepts names git rejects",
 			"issueDigest": "2e58fc68efbe39806282091dbb7ff947f16f3e3dcbec5a133718d2566e3dfd92",
 			"expected": "handoff",
 			"expectedRound": 0,
@@ -20,6 +22,7 @@
 			"liveReplayable": true,
 			"baseSha": "28e700f745d7dea0809651d7c9711ca085de55d0",
 			"paths": ["server/viewer.ts"],
+			"title": "[F12a-replay-c2] [F10-A] viewer --port accepts values that are not plain port numbers",
 			"issueDigest": "25d2293263930e040d4036dac01446dfa21399dfe8547fd82369561e07bc9e63",
 			"expected": "handoff",
 			"expectedRound": 0,
@@ -32,6 +35,7 @@
 			"liveReplayable": true,
 			"baseSha": "28e700f745d7dea0809651d7c9711ca085de55d0",
 			"paths": ["README.md"],
+			"title": "[F12a-replay-c3] [F09b-lanes-N1] State the agreed default poll interval in the README",
 			"issueDigest": "82c4b4434613aac77abd8cdbb8d985f1d142f2dbfcabb6b72bace4b5b2018508",
 			"expected": "needs_info",
 			"expectedRound": null,
@@ -44,6 +48,7 @@
 			"liveReplayable": true,
 			"baseSha": "28e700f745d7dea0809651d7c9711ca085de55d0",
 			"paths": ["scripts/provenance.sh"],
+			"title": "[F12a-replay-c4] [F10c-lanes-H] Stop scripts/provenance.sh from wiping research/PROVENANCE.md in a fresh clone",
 			"issueDigest": "7577eb6c21664dedc84d67c57289a5e87ad383ad5df42738b62c23e393148c3e",
 			"expected": "handoff",
 			"expectedRound": 0,
@@ -56,11 +61,12 @@
 			"liveReplayable": false,
 			"baseSha": "07852698ebdd1281f3ad21975ddd5d13f1ff0fc3",
 			"paths": ["server/cli.ts"],
+			"title": "[F12a-replay-c5] status --json durableUsage says receipt_missing even when every run total is exact",
 			"issueDigest": "59a3912f0baa999f1579a3634228dc4cd4740d6acf245f485ff6576892d57056",
 			"expected": "handoff",
 			"expectedRound": null,
 			"historicalFacts": "ledger L24-L26: base refusals then landed with owner-feedback repair; 664554 tokens"
 		}
 	],
-	"digest": "22c4fd06d8f8f2c48ce592b68577bad071875db08f8cc53659a7ff6cb1945c81"
+	"digest": "faca85fa86e3e7ba7135b4eb1713babc951758df54c902d6ac8d903c2a40fbfd"
 }

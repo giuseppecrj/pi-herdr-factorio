@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import * as replay from "../src/replay.ts";
-import { mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	unlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -335,14 +342,28 @@ describe("replay CLI boundaries", () => {
 			path,
 			"--candidate-row",
 			path,
+			"--previous-record",
+			join(dir, "prev.json"),
+			"--candidate-record",
+			join(dir, "cand.json"),
 		];
 
 		try {
 			await writeFile(path, `${JSON.stringify(row)}\n`);
+			await writeFile(
+				join(dir, "prev.json"),
+				JSON.stringify((await side()).record),
+			);
+			await writeFile(
+				join(dir, "cand.json"),
+				JSON.stringify((await side("cand")).record),
+			);
 			const result = await cli(args, noExec);
 			assert.equal(result.code, EXIT.ok, result.stdout);
 			assert.match(result.stdout, /"matchesExpected": "yes"/);
 			assert.match(result.stdout, /"promotes": false/);
+			assert.match(result.stdout, /"comparability": "incomparable"/);
+			assert.match(result.stdout, /same_run/);
 			assert.ok(row.provenance.kind === "verification");
 			await writeFile(
 				path,
@@ -496,6 +517,7 @@ describe("review regressions: comparison identity and caps", () => {
 	it("binds each row to its durable fixture, case, corpus and side; never pairs a run with itself", async () => {
 		const previous = await side();
 		const candidate = await side("cand");
+
 		for (const changed of [
 			{ ...candidate, record: { ...candidate.record, caseId: "c2" } },
 			{
@@ -517,11 +539,13 @@ describe("review regressions: comparison identity and caps", () => {
 				JSON.stringify(changed.record),
 			);
 		}
+
 		const result = replayReport({
 			previous,
 			candidate,
 			expected: "needs_info",
 		});
+
 		assert.equal(result.previous.corpusDigest, previous.record.corpusDigest);
 		assert.equal(result.candidate.corpusDigest, candidate.record.corpusDigest);
 	});
@@ -599,14 +623,17 @@ describe("review regressions: comparison identity and caps", () => {
 			}).reasons.includes("main_moved"),
 		);
 		const row = previous.row;
-		assert.ok(row.v >= 4 && "terminalWorkflowObservation" in row);
-		const moved = {
-			...row,
-			terminalWorkflowObservation: {
-				kind: "known",
-				value: { workflowSha: otherSha, workflowDigest: digestOf("moved") },
-			},
-		} satisfies LedgerRow;
+
+		const observation: Extract<
+			LedgerRow,
+			{ v: 4 }
+		>["terminalWorkflowObservation"] = {
+			kind: "known",
+			value: { workflowSha: otherSha, workflowDigest: digestOf("moved") },
+		};
+
+		const moved = { ...row, terminalWorkflowObservation: observation };
+
 		assert.ok(
 			replayReport({
 				previous: { ...previous, row: moved },
@@ -618,51 +645,111 @@ describe("review regressions: comparison identity and caps", () => {
 
 	it("c1 stays ready for parser edits but a real isBranchName change is stale", async () => {
 		const corpus = await loadReplayCorpus(corpusDir);
-		const execute: Exec = async (cmd, args) => {
-			try {
-				return {
-					code: 0,
-					stdout: execFileSync(cmd, [...args], { encoding: "utf8" }),
-					stderr: "",
-				};
-			} catch {
-				return { code: 1, stdout: "", stderr: "" };
-			}
-		};
-		const head = execFileSync("git", ["rev-parse", "HEAD"], {
-			encoding: "utf8",
-		}).trim();
-		assert.equal(
-			(
-				await checkReplay({
-					corpus,
-					mainSha: head,
-					previousSha: head,
-					candidateSha: head,
-					exec: execute,
-				})
-			).cases[0]?.status,
-			"ready",
-		);
+
 		const c1 = corpus.cases[0];
 		assert.ok(c1);
 		assert.equal(c1.guardPattern, "BRANCH_NAME|isBranchName");
-		const changed = await checkReplay({
-			corpus,
-			mainSha: head,
-			previousSha: head,
-			candidateSha: head,
-			exec: async (cmd, args) =>
-				args.some((a) => a === "-GBRANCH_NAME|isBranchName")
-					? { code: 0, stdout: "src/workflow.ts\n", stderr: "" }
-					: execute(cmd, args),
-		});
-		assert.equal(changed.cases[0]?.status, "stale");
+
+		const dir = await mkdtemp(join(tmpdir(), "replay-symbol-"));
+
+		const git = (...args: string[]) =>
+			execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" }).trim();
+
+		try {
+			await mkdir(join(dir, "src"));
+			const source = await readFile("src/workflow.ts", "utf8");
+			await writeFile(join(dir, "src/workflow.ts"), source);
+			git("init", "-q");
+			git("add", ".");
+			git(
+				"-c",
+				"user.name=Fixture",
+				"-c",
+				"user.email=fixture@example.invalid",
+				"-c",
+				"core.hooksPath=/dev/null",
+				"commit",
+				"-qm",
+				"symbol baseline",
+			);
+			const base = git("rev-parse", "HEAD");
+			await writeFile(
+				join(dir, "src/workflow.ts"),
+				`${source}\n// unrelated parser edit\n`,
+			);
+			git("add", ".");
+			git(
+				"-c",
+				"user.name=Fixture",
+				"-c",
+				"user.email=fixture@example.invalid",
+				"-c",
+				"core.hooksPath=/dev/null",
+				"commit",
+				"-qm",
+				"unrelated parser change",
+			);
+
+			const execute: Exec = async (_cmd, args) => ({
+				code: 0,
+				stdout: git(...args),
+				stderr: "",
+			});
+
+			assert.equal(
+				(
+					await checkReplay({
+						corpus: { ...corpus, cases: [{ ...c1, baseSha: base }] },
+						mainSha: git("rev-parse", "HEAD"),
+						previousSha: base,
+						candidateSha: base,
+						exec: execute,
+					})
+				).cases[0]?.status,
+				"ready",
+			);
+			await writeFile(
+				join(dir, "src/workflow.ts"),
+				source.replace(
+					"return BRANCH_NAME.test(input);",
+					"return BRANCH_NAME.test(input) && !input.endsWith('.lock');",
+				),
+			);
+			git("add", ".");
+			git(
+				"-c",
+				"user.name=Fixture",
+				"-c",
+				"user.email=fixture@example.invalid",
+				"-c",
+				"core.hooksPath=/dev/null",
+				"commit",
+				"-qm",
+				"real symbol change",
+			);
+
+			const changed = await checkReplay({
+				corpus: { ...corpus, cases: [{ ...c1, baseSha: base }] },
+				mainSha: git("rev-parse", "HEAD"),
+				previousSha: base,
+				candidateSha: base,
+				exec: async (_cmd, args) => ({
+					code: 0,
+					stdout: git(...args),
+					stderr: "",
+				}),
+			});
+
+			assert.equal(changed.cases[0]?.status, "stale");
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
 	});
 
 	it("bundle inputs include the recipe, not dead paths or the echo fixture", async () => {
 		const corpus = await loadReplayCorpus(corpusDir);
 		let paths: readonly string[] = [];
+
 		const result = await checkReplay({
 			corpus,
 			mainSha: sha,
@@ -670,6 +757,7 @@ describe("review regressions: comparison identity and caps", () => {
 			candidateSha: otherSha,
 			exec: async (_cmd, args) => {
 				if (args.includes("skills")) paths = args.slice(args.indexOf("--") + 1);
+
 				return {
 					code: 0,
 					stdout: args.includes("server/provision.sh")
@@ -679,6 +767,7 @@ describe("review regressions: comparison identity and caps", () => {
 				};
 			},
 		});
+
 		assert.deepEqual(paths, [
 			"skills",
 			"server/sandbox/assets",
@@ -690,6 +779,7 @@ describe("review regressions: comparison identity and caps", () => {
 	it("voids only proven zero-execution, zero-usage reservations, recording the reason", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "replay-void-"));
 		const path = join(dir, "budget.json");
+
 		try {
 			await reserveReplay(path, 1100000, "empty");
 			await replay
@@ -898,7 +988,7 @@ describe("trusted replay policy and guards", () => {
 		}
 	});
 
-	it("keeps the replay core free of model/executor imports and driver guards ahead of launch (driver not executed)", async () => {
+	it("keeps the replay core free of model/executor imports and source guards ahead of launch (driver behavior tested separately)", async () => {
 		const source = await readFile(
 			new URL("../src/replay.ts", import.meta.url),
 			"utf8",
@@ -921,9 +1011,11 @@ describe("trusted replay policy and guards", () => {
 			"FIXTURE_GRANT",
 			"production-state-dir",
 			"reserveReplay",
-			"540000",
 		])
-			assert.ok(driver.indexOf(guard) < driver.indexOf("exec setsid"), guard);
+			assert.ok(
+				driver.indexOf(guard) < driver.indexOf("exec node server/cli.ts serve"),
+				guard,
+			);
 		assert.match(driver, /--issue/);
 		assert.match(driver, /--verification-token-cap/);
 	});

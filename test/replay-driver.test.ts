@@ -5,6 +5,7 @@ import {
 	mkdir,
 	mkdtemp,
 	readFile,
+	readdir,
 	rm,
 	symlink,
 	writeFile,
@@ -14,7 +15,9 @@ import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { acquireLock, procTable } from "../server/controller.ts";
 import { manifestDigest } from "../server/sandbox/manifest.ts";
-import { readReplayBudget } from "../src/replay.ts";
+import { readReplayBudget, replayRow } from "../src/replay.ts";
+import { digestOf, runIdOf } from "../src/run.ts";
+import { ledgerRowOf } from "../src/ledger.ts";
 
 // The reviewer's fake gh/serve + real socket-lock harness, made hermetic.
 const script = ".pi/skills/verify-factory/scripts/drive-replay.sh";
@@ -24,11 +27,13 @@ let root: string;
 let lane: string;
 let env: NodeJS.ProcessEnv;
 let active: ChildProcess[];
+
 const git = (cwd: string, ...args: string[]) =>
 	execFileSync("git", ["-C", cwd, ...args], {
 		encoding: "utf8",
 		stdio: ["ignore", "pipe", "pipe"],
 	}).trim();
+
 const pause = () => new Promise((r) => setTimeout(r, 50));
 
 function drive(mode = "start", extra: string[] = []) {
@@ -39,10 +44,11 @@ function drive(mode = "start", extra: string[] = []) {
 			"F12a-replay-c3",
 			"1",
 			mode,
-			...(mode === "start" ? ["900", ...extra] : []),
+			...(mode === "start" ? ["900", ...extra] : extra),
 		],
 		{ env, stdio: ["ignore", "pipe", "pipe"] },
 	);
+
 	active.push(child);
 	let text = "";
 	child.stdout.on("data", (b) => {
@@ -51,6 +57,7 @@ function drive(mode = "start", extra: string[] = []) {
 	child.stderr.on("data", (b) => {
 		text += b;
 	});
+
 	const done = new Promise<{ code: number | null; text: string }>((r) =>
 		child.on("close", (code) => r({ code, text })),
 	);
@@ -62,7 +69,10 @@ async function ready(run: ReturnType<typeof drive>) {
 	for (let i = 0; i < 200; i++) {
 		if (run.text().includes("replay=ready")) return;
 
-		if (run.child.exitCode !== null) assert.fail(run.text());
+		if (run.child.exitCode !== null)
+			assert.fail(
+				`${run.text()}\n${await readFile(join(dir, "output/replay-check.json"), "utf8").catch(() => "no check output")}`,
+			);
 		await pause();
 	}
 
@@ -76,7 +86,7 @@ async function missingBudget() {
 async function restored() {
 	const log = await readFile(join(dir, "systemctl.log"), "utf8");
 	assert.match(log, /stop factory.service hold=true/);
-	assert.match(log, /start factory.service hold=false/);
+	assert.match(log, /start factory.service hold=false disarmed=true/);
 	assert.ok(
 		log.indexOf("stop factory.service") <
 			log.lastIndexOf("start factory.service"),
@@ -92,25 +102,50 @@ describe("replay driver with fake GitHub/controller and real guards", {
 		root = join(dir, "root");
 		lane = join(root, "F12a-replay-c3-w1");
 		active = [];
-		execFileSync("git", [
-			"clone",
-			"--shared",
-			"--quiet",
-			"--no-hardlinks",
-			process.cwd(),
-			control,
-		]);
+		await mkdir(control);
 
 		for (const path of [
+			"src",
+			"server",
+			"skills",
+			"package.json",
+			"README.md",
+			"docs/decisions.tsv",
+			".github/factory",
+			"test/fixtures/replay",
 			script,
-			"src/replay.ts",
-			"server/cli.ts",
-			"test/fixtures/replay/corpus.json",
-		])
-			await cp(resolve(path), join(control, path));
+			".pi/skills/verify-factory/scripts/lane-id.sh",
+		]) {
+			const target = join(control, path);
+			await mkdir(join(target, ".."), { recursive: true });
+			await cp(resolve(path), target, { recursive: true });
+		}
+
+		git(control, "init", "-q");
 		await symlink(resolve("node_modules"), join(control, "node_modules"));
 		git(control, "config", "user.email", "fixture@example.invalid");
 		git(control, "config", "user.name", "Local fixture");
+		git(control, "add", ".");
+		git(
+			control,
+			"-c",
+			"core.hooksPath=/dev/null",
+			"commit",
+			"-qm",
+			"local factory baseline",
+		);
+		const baseline = git(control, "rev-parse", "HEAD");
+		const manifest = join(control, "test/fixtures/replay/corpus.json");
+		const corpus = JSON.parse(await readFile(manifest, "utf8"));
+
+		for (const c of corpus.cases) if (c.liveReplayable) c.baseSha = baseline;
+		corpus.digest = digestOf(JSON.stringify({ v: 1, cases: corpus.cases }));
+		await writeFile(manifest, JSON.stringify(corpus));
+		const decisions = join(control, "docs/decisions.tsv");
+		await writeFile(
+			decisions,
+			`${await readFile(decisions, "utf8")}\n2026-11-08T00:00:00Z\tlocal-test-grant\tOwner grants local fake replay fixture, model spend, production stop and bundle selection\tlocal tests only\tfixture\tnone\n`,
+		);
 		git(control, "add", ".");
 		git(
 			control,
@@ -145,7 +180,8 @@ setInterval(() => {}, 1000);
 			`#!/usr/bin/env bash
 case "$*" in
   *"commits/main"*) echo "$FAKE_MAIN";;
-  *"issue view"*) printf '%s\\n' "$FAKE_ISSUE";;
+  *"issue edit"*) touch "$FAKE_DISARMED";;
+  *"issue view"*) if [[ -e "$FAKE_DISARMED" ]]; then node -e 'const x=JSON.parse(process.env.FAKE_ISSUE);x.labels=[];console.log(JSON.stringify(x))'; else printf '%s\\n' "$FAKE_ISSUE"; fi;;
   *) echo "unexpected gh $*" >&2; exit 9;;
 esac
 `,
@@ -159,7 +195,8 @@ esac
 			`#!/usr/bin/env bash
 [[ "$*" == *"--user"* ]] && exit 0
 [[ -e "$HOME/factory-state/disabled" ]] && hold=true || hold=false
-echo "$* hold=$hold" >> "$FAKE_SYSTEMCTL_LOG"
+[[ -e "$FAKE_DISARMED" ]] && disarmed=true || disarmed=false
+echo "$* hold=$hold disarmed=$disarmed" >> "$FAKE_SYSTEMCTL_LOG"
 case "$1" in
   is-active) [[ -e "$FAKE_SERVICE" ]] && { echo active; exit 0; }; echo inactive; exit 3;;
   stop) rm -f "$FAKE_SERVICE";;
@@ -180,9 +217,17 @@ esac
 		const bundle = join(dir, "bundle");
 		await mkdir(join(bundle, "sandbox"), { recursive: true });
 		await mkdir(join(bundle, "pkg"), { recursive: true });
-		await cp(join(control, "skills"), join(bundle, "skills"), {
-			recursive: true,
-		});
+		await mkdir(join(bundle, "skills"));
+
+		for (const skill of await readdir(join(control, "skills"), {
+			withFileTypes: true,
+		}))
+			if (skill.isDirectory())
+				await cp(
+					join(control, "skills", skill.name),
+					join(bundle, "skills", skill.name),
+					{ recursive: true },
+				);
 
 		for (const [from, to] of [
 			["pi.ts", "sandbox/pi.ts"],
@@ -190,7 +235,11 @@ esac
 			["package.json", "pkg/package.json"],
 			["package-lock.json", "pkg/package-lock.json"],
 		])
-			await cp(join(control, "server/sandbox/assets", from), join(bundle, to));
+			if (from !== undefined && to !== undefined)
+				await cp(
+					join(control, "server/sandbox/assets", from),
+					join(bundle, to),
+				);
 		const digest = await manifestDigest(bundle);
 		assert.ok(digest);
 		await mkdir(join(dir, "sandbox"));
@@ -198,10 +247,12 @@ esac
 			recursive: true,
 		});
 		await symlink(`assets-${digest}`, join(dir, "sandbox/current"));
+
 		const body = await readFile(
 			join(control, "test/fixtures/replay/cases/c3/issue.md"),
 			"utf8",
 		);
+
 		env = {
 			...process.env,
 			HOME: join(dir, "home"),
@@ -219,6 +270,7 @@ esac
 			REPLAY_SANDBOX_ROOT: join(dir, "sandbox"),
 			FAKE_MAIN: sha,
 			FAKE_SERVICE: join(dir, "service"),
+			FAKE_DISARMED: join(dir, "disarmed"),
 			FAKE_ARGS: join(dir, "args.json"),
 			FAKE_SYSTEMCTL_LOG: join(dir, "systemctl.log"),
 			FAKE_ISSUE: JSON.stringify({
@@ -250,11 +302,42 @@ esac
 		await missingBudget();
 	});
 
-	it("verifies the control HEAD; bootstrap is explicit and logged", async () => {
+	it("verifies the control HEAD", async () => {
 		env.REPLAY_MAIN_SHA = "a".repeat(40);
 		const result = await drive().done;
 		assert.notEqual(result.code, 0);
 		assert.match(result.text, /control checkout.*pin/);
+		await missingBudget();
+	});
+
+	it("allows only explicit, logged bootstrap-candidate control code", async () => {
+		env.REPLAY_MAIN_SHA = git(control, "rev-parse", "HEAD^");
+		env.FAKE_MAIN = env.REPLAY_MAIN_SHA;
+		const denied = await drive().done;
+		assert.notEqual(denied.code, 0);
+		await missingBudget();
+		const run = drive("start", ["--bootstrap-candidate"]);
+		await ready(run);
+		assert.match(run.text(), /bootstrap=true/);
+		assert.equal((await drive("stop", ["--bootstrap-candidate"]).done).code, 0);
+		assert.equal((await run.done).code, 0);
+
+		const record = JSON.parse(
+			await readFile(join(lane, "replay.json"), "utf8"),
+		);
+
+		assert.equal(record.bootstrap, true);
+		assert.equal(record.controlSha, env.REPLAY_CANDIDATE_SHA);
+		await restored();
+	});
+
+	it("refuses unknown grants and dirty trusted code", async () => {
+		env.FIXTURE_GRANT = "not-an-owner-decision";
+		assert.match((await drive().done).text, /not a recorded owner decision/);
+		await missingBudget();
+		env.FIXTURE_GRANT = "local-test-grant";
+		await writeFile(join(control, "src/replay.ts"), "tampered");
+		assert.match((await drive().done).text, /dirty/);
 		await missingBudget();
 	});
 
@@ -264,6 +347,7 @@ esac
 			procs: procTable(),
 			now: Date.now,
 		});
+
 		assert.ok(lock.kind === "acquired");
 
 		try {
@@ -328,12 +412,48 @@ esac
 		assert.equal(budget.chargedTokens, 0);
 		assert.equal(budget.reservations[0]?.status, "voided");
 		await restored();
+
 		const record = JSON.parse(
 			await readFile(join(lane, "replay.json"), "utf8"),
 		);
+
 		assert.equal(record.caseId, "c3");
 		assert.equal(record.side, "prev");
 		assert.equal(record.issue, 900);
+	});
+
+	it("voids a terminal zero-stage, exact-zero-usage run too", async () => {
+		const run = drive();
+		await ready(run);
+
+		const fixture = (
+			await readFile("test/fixtures/metrics/runs-2026-11-08.jsonl", "utf8")
+		).split("\n")[0];
+
+		assert.ok(fixture);
+		const row = JSON.parse(fixture);
+		const manifest = '{"fixture":true}\n';
+		row.issue = 900;
+		row.runId = runIdOf(row);
+		row.evidence.issueUrl = `https://github.com/${row.repo}/issues/900`;
+		row.provenance.verificationDigest = digestOf(manifest);
+		row.usage.tokens = { kind: "exact", unit: "tokens", total: 0 };
+		row.usage.parentTokens = { kind: "known", value: 0 };
+		row.stages = { kind: "known", value: [] };
+		row.interruptedAttempts = { kind: "known", value: 0 };
+		const bytes = ledgerRowOf(row).bytes;
+		replayRow(bytes);
+		await mkdir(join(lane, "state/ledger", row.runId), { recursive: true });
+		await writeFile(join(lane, "state/ledger", row.runId, "row.json"), bytes);
+		await writeFile(join(lane, "state/verification.json"), manifest);
+		assert.equal((await drive("stop").done).code, 0);
+		assert.equal((await run.done).code, 0);
+		assert.equal(
+			(await readReplayBudget(join(root, "replay-budget.json"))).reservations[0]
+				?.status,
+			"voided",
+		);
+		await restored();
 	});
 
 	it("retains charges after any stage/usage and restores on a signal", async () => {
@@ -354,6 +474,21 @@ esac
 		const result = await drive().done;
 		assert.notEqual(result.code, 0);
 		await restored();
+	});
+
+	it("does not signal an unrelated reused PID", async () => {
+		const unrelated = spawn(
+			process.execPath,
+			["-e", "setInterval(() => {}, 1000)"],
+			{ stdio: "ignore" },
+		);
+
+		active.push(unrelated);
+		await writeFile(join(lane, "serve.pid"), String(unrelated.pid));
+		const result = await drive("stop").done;
+		assert.notEqual(result.code, 0);
+		assert.match(result.text, /not this lane/);
+		assert.equal(unrelated.exitCode, null);
 	});
 
 	it("keeps PID metadata after failed settlement so stop can retry", async () => {

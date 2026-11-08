@@ -1,140 +1,172 @@
 # Verify a replay pair
 
-Use this recipe only under a fixture, model-spend, and production-stop grant.
-The replay commands themselves are read-only. `drive-replay.sh start` launches
-a real scoped controller, spends model tokens, and writes fixture evidence to
-GitHub. This recipe does not authorize those actions.
+Use only under an owner grant for fixture writes, model spend, production stop
+and selection of installed bundles. Provisioning a missing bundle needs its own
+VM-change grant. This recipe grants none of those actions.
 
-Local unit tests and saved-row reports are not live isolation proof. Keep the
-F12a lanes 6, 7, and 10 and replay performance evidence pending until the
-corresponding live drives run.
+`replay check` and `replay report` are read-only. The driver launches a real
+scoped controller and can spend tokens and write fixture evidence to GitHub.
+Local fake-transport tests do not prove native isolation, production restoration
+or model quality. Keep F12a live lanes 6, 7, 10 and performance pending until
+those drives actually run.
 
-## Check the pins without a live run
-
-From the repository root, run:
+## Check the pins locally
 
 ```sh
 node server/cli.ts replay check --json \
   --main-sha "$MAIN_SHA" --previous-sha "$PREVIOUS_SHA" \
   --candidate-sha "$CANDIDATE_SHA" > replay-check.json
-```
-
-Use full SHAs whose Git objects exist locally. Inspect every case's status and
-`bundle`. The inventory does not grant launch permission. Case c5 is offline
-only. A live case with changed guarded paths is stale and must not run.
-See [Replay checks](../../../../docs/operations/metrics.md#replay-checks) for
-flags, corpus pins, budget accounting, and report limitations.
-
-Run the local tests and syntax check:
-
-```sh
 TMPDIR=/home/g/.cache/f12a2-tmp node --experimental-strip-types \
-  --test test/replay.test.ts
+  --test --test-concurrency=1 test/replay.test.ts test/replay-driver.test.ts
 bash -n .pi/skills/verify-factory/scripts/drive-replay.sh
 ```
 
-The tests cover the bound production socket through the public CLI, including
-when its holder file is absent. Driver guards are source-checked, not executed.
-The tests do not create fixture issues, start a live controller, or call models.
+Supply full SHAs with local Git objects. Inspect every case status and `bundle`.
+c5 is offline only. Stale or unavailable cases must not run. c1 uses
+`git diff -G'BRANCH_NAME|isBranchName'` on `src/workflow.ts`, not a whole-file
+workflow guard. The manifest pins both title and body. Copy its exact `title`
+for both sides; never add a side name or free-text suffix to the live title.
 
-## Prepare an authorized live window
+Tests reuse the reviewer's fake `gh` and fake controller harness, with real
+socket and file locks, local bundles and fake systemd commands. They exercise
+refusals, preflight, accounting, signals and restoration without a VM or model.
+See [Replay checks](../../../../docs/operations/metrics.md#replay-checks).
 
-1. Record the grant ID, deployed previous factory SHA, candidate SHA, frozen main
-   SHA, corpus digest, bundle digests, and permitted token spend.
-2. Run the doctor and take the before snapshot described in `SKILL.md`.
-3. Stop production under the explicit grant. A dispatch hold is insufficient
-   because a held controller still observes public markers. Keep production
-   stopped and main frozen through both sides.
-4. Create separate managed checkouts at the two factory SHAs. From each checkout,
-   run `lane-setup.sh` with a distinct `F12a-replay-...` lane ID. Use a fresh state
-   directory for every side, including after an interrupted run.
-5. Keep a separate candidate control checkout on the VM with the pinned Git
-   objects, dependencies, corpus, and `drive-replay.sh`. Set
-   `REPLAY_CONTROL_CHECKOUT` to that repository root. The lane archives alone do
-   not contain the history required by `replay check`.
-6. Under the fixture grant, create one issue per side. Start its title with
-   `[F12a-replay-<case>-previous]` or `[F12a-replay-<case>-candidate]`. Copy the
-   case's entire `issue.md` as its body without edits. Add `factory:ready` from
-   the authorized owner account. Never dispatch an ordinary production issue.
-7. If `bundle_switch_required` appears, provision the matching bundle under a
-   separate VM-change grant before that side. Plan restoration of production's
-   bundle before restarting production. Without a grant for a required switch,
-   stop here.
+## Prepare an authorized window
 
-Do not use the ordinary `drive-serve.sh` for replay. It does not reserve the
-replay budget or pass the verification cap.
+1. Record the grant ID, previous/candidate SHAs, frozen main SHA, corpus digest,
+   expected bundle digests and spend allowance. The grant ID must exist in the
+   control checkout's `docs/decisions.tsv`; confirm its actual scope yourself.
+2. Run the doctor and before snapshot in `SKILL.md`. Keep main frozen throughout
+   both sides. The driver reads GitHub main before launch and at stop, not just
+   the local tracking ref.
+3. Make separate managed lane checkouts at the two factory SHAs. Run
+   `lane-setup.sh` from each, with distinct `F12a-replay-...` lane IDs. Never reuse
+   state or a lane's durable `replay.json`.
+4. Prepare a **clean frozen-main control checkout** with dependencies, corpus,
+   Git history and this driver. Its `HEAD` must equal `REPLAY_MAIN_SHA`. Invoke
+   the driver from there: its trusted code enforces isolation, bundle checks,
+   preflight and budget accounting. Never invoke the candidate's driver after
+   this PR merges.
+5. For the first pre-merge lane only, `--bootstrap-candidate` permits control
+   `HEAD` at `REPLAY_CANDIDATE_SHA`. Pass it explicitly to start and stop. Output
+   and `replay.json` record `bootstrap=true`, control SHA and grant. This is the
+   one code-trust exception, not an enduring candidate bypass. It does not enable
+   replay when frozen main lacks the replay cap or omit the recorded grant.
+6. Under the fixture grant, create one **fresh issue per side**. Use the corpus
+   title exactly and copy the entire case `issue.md` as the body, including its
+   final newline. Add `factory:ready` from the authorized owner account. Missing
+   labels, a closed issue, changed text or any prior factory run marker refuse
+   before budget reservation. After an interruption use a fresh issue as well
+   as fresh state; a new state directory cannot adopt another lane's claim.
+7. Install both expected bundles under the VM-change grant before starting.
+   Record each authorized provision's full manifest digest. The driver verifies
+   both installed digests and all copied inputs against the pinned Git trees,
+   including deleted skills. A provisioning-recipe change requires distinct
+   expected bundle digests. It selects the side's installed bundle while
+   production is stopped, then restores the original `current` target on exit.
+   It does not build or download a bundle.
 
-## Start one side on the VM
+## Run one side on the VM
 
-Run these commands in the trusted VM environment, not locally. Use a unique
-lane for each side. The script supports direct VM invocation and also the
-existing `vm.sh` transport when an authorized wrapper supplies these variables.
-`vm.sh` does not forward local environment variables automatically.
+Run in the trusted VM environment, not locally. `vm.sh` does not forward local
+environment variables automatically. Keep the supervising process attached to
+an ordinary durable terminal; **start stays running** until the controller ends
+or you stop it. Do not detach it and forget it.
 
 ```sh
-export FIXTURE_GRANT='<owner decision ID>'
-export REPLAY_CONTROL_CHECKOUT='<candidate control repository on the VM>'
+export FIXTURE_GRANT='<recorded owner decision ID>'
+export REPLAY_CONTROL_CHECKOUT='<clean frozen-main control repository>'
 export REPLAY_CASE=c3
 export REPLAY_SIDE=previous
 export REPLAY_MAIN_SHA='<frozen main SHA>'
-export REPLAY_PREVIOUS_SHA='<deployed trusted factory SHA>'
+export REPLAY_PREVIOUS_SHA='<previous trusted factory SHA>'
 export REPLAY_CANDIDATE_SHA='<candidate factory SHA>'
+export REPLAY_PREVIOUS_ASSETS='<installed previous bundle digest>'
+export REPLAY_CANDIDATE_ASSETS='<installed candidate bundle digest>'
 S="$REPLAY_CONTROL_CHECKOUT/.pi/skills/verify-factory/scripts"
-bash "$S/drive-replay.sh" F12a-replay-c3-previous 1 start '<fixture issue number>'
+bash "$S/drive-replay.sh" F12a-replay-c3-previous 1 start '<fixture issue>'
+# Only for the first pre-merge lane, append: --bootstrap-candidate
 ```
 
-Require `replay=ready`, then inspect the scoped controller's marker and stage
-receipts. Capture timestamps, issue URL, label event, exact lane head, expected
-outcome, actual outcome, exit code, and charged tokens.
+The driver takes the shared replay lock, pins the fixture, places the production
+hold **before** `systemctl stop factory.service`, and verifies no production
+controller process or bound socket remains. Explicit stop cancels the service's
+`Restart=on-failure` restart. It checks both bundles and runs trusted sandbox
+preflight before reserving anything. It re-checks production's lock and remote
+main immediately before reservation and launch. `serve` gets only the named
+fixture, isolated lane state and `--verification-token-cap 540000`.
 
-The start path requires `FIXTURE_GRANT`, matching lane and factory pins, an
-unchanged local main pin, the fixture title and body, and empty isolated state.
-It holds `/home/exedev/factory-verification/replay-driver.lock` through the
-controller's lifetime. It checks production's real socket lock and the frozen
-main replay policy before reserving 540,000 tokens in the shared
-`/home/exedev/factory-verification/replay-budget.json`. Only then does it launch
-`serve --issue <fixture> --verification-token-cap 540000` from that side's lane.
+The 540k reservation **equals the run's hard limit**, including review and
+repair. Their full allowances are not reserved in addition. A heavy replay can
+exhaust at review where production's 800k cap would continue. This is a known
+comparability limit, even with equal replay caps. Overshoot is charged as used;
+uncertain usage retains at least the reservation. Never delete the shared
+`/home/exedev/factory-verification/replay-budget.json` to make room.
 
-A failed readiness wait keeps the PID and budget reservation. Inspect the saved
-log and stop that recorded process. Never launch another side to work around a
-failed start, and never delete the shared budget to make room.
+Require `replay=ready`, then inspect actual stage receipts and fixture markers;
+controller readiness alone is not proof a stage ran. Record issue/PR URLs,
+label-event ID, timestamps, factory SHA, outcome and tokens. `replay.json` beside
+state durably records case, corpus digest, issue digest, side, fixture, main,
+control SHA, grant, stage caps and stop disposition. Preserve it with the row.
 
-## Stop, settle, and compare
+## Stop, settle and compare
 
-1. Capture handoff evidence before closure if the expected outcome is handoff.
-   Do not merge a replay PR. Under the fixture grant, close the fixture PR
-   unmerged and close its issue. For `needs_info`, capture the questions and
-   terminal marker. Let the scoped controller publish its terminal row.
-2. With the same grant and control-checkout environment, stop only the recorded
-   replay process:
+1. Capture handoff evidence before closure. Do not merge replay PRs. Under the
+   fixture grant close the fixture PR unmerged and close its issue; for
+   `needs_info`, capture the questions and terminal marker. Let the controller
+   write its terminal row.
+2. From another terminal with the same environment, stop the recorded lane:
 
    ```sh
    bash "$S/drive-replay.sh" F12a-replay-c3-previous 1 stop
+   # First-lane bootstrap exception: append --bootstrap-candidate here too.
    ```
 
-   Require `replay=stopped`. A missing terminal row retains the full reservation.
-   Do not claim that a retained reservation measures actual usage. The script
-   settles only one terminal verification row whose manifest digest matches
-   that lane's `verification.json`.
-3. Repeat with `REPLAY_SIDE=candidate` and a separate candidate lane and issue.
-   Run the sides sequentially. Preserve both frozen
-   `<state>/ledger/<runId>/row.json` files.
-4. Run `replay report --json --case <id>` with both row paths and both factory
-   SHAs. Save `replay.json`. Require matching original bases and previous-policy
-   pins for a comparable result. Declare both expected asset digests only when
-   the authorized procedure deliberately switched bundles.
-5. Retain stage times, models, runtime versions, token coverage, and unavailable
-   spend. A cancelled terminal row is not proof of earlier readiness. Keep its
-   handoff receipts beside the report. Report the primary seven-day metric as
-   unavailable rather than inventing a clean landing.
-6. Audit the real GitHub effects. Confirm every issue and PR belongs to the named
-   fixtures, every fixture issue is closed, and no production dispatch occurred.
-   Compare the before and after snapshots and production state. Restore the
-   production bundle and restart production only under the corresponding grant.
-7. Stop every recorded lane process before authorized lane cleanup. Retain the
-   budget and `/tmp/swarm-<lane>/worker-<n>/` evidence.
+   The driver verifies the PID's actual `serve --state-dir` argv before sending
+   TERM. The supervisor's exit trap stops the child, settles or retains the
+   reservation, restores the bundle, original hold and original service state,
+   and releases the replay lock. Before production resumes it removes the
+   fixture's `factory:ready` label and verifies removal, including after preflight
+   refusal, so production cannot pick up an unbudgeted replay fixture. The same
+   trap runs on errors and catchable signals. If disarming or restoring the
+   bundle fails, or the child cannot be stopped, production stays held for safety;
+   treat that as a failed window, not successful restoration. SIGKILL or host
+   loss cannot run a shell trap and needs operator recovery.
 
-Lane 7 needs the real side-effect audit and isolated-state evidence. Lane 10
-needs exact policy, model, and runtime provenance for both sides. Lane 6 and the
-replay performance baseline need the authorized tiny-case pair. A read-only
-report on historical rows proves none of these live claims.
+   One terminal verification row settles only when its fixture and verification
+   manifest match. Without a row, unreadable accounting or any stage/usage
+   evidence retains the full reservation. Only proven zero stages and zero
+   usage is `voided`, releases the reservation and records the reason. A failed
+   settlement keeps the PID metadata: fix the evidence problem and retry stop.
+3. Require `replay=stopped` and the supervisor's `replay=window_closed`. Confirm
+   production's original state. Repeat on a separate candidate lane and fresh
+   fixture with `REPLAY_SIDE=candidate`. Each side is its own stopped-production
+   window. Keep main frozen between them.
+4. Compare both durable records and terminal rows:
+
+   ```sh
+   node server/cli.ts replay report --json --case c3 \
+     --previous-sha "$REPLAY_PREVIOUS_SHA" --candidate-sha "$REPLAY_CANDIDATE_SHA" \
+     --previous-row "$PREVIOUS_ROW" --candidate-row "$CANDIDATE_ROW" \
+     --previous-record "$PREVIOUS_LANE/replay.json" \
+     --candidate-record "$CANDIDATE_LANE/replay.json" > replay.json
+   ```
+
+   The report shows each side's own recorded corpus digest. It will not compare
+   a row with itself, attach a row to another fixture or case, mix corpus pins
+   or sides, or call different model/run-cap/stage-cap/policy/base/asset evidence
+   comparable. Main movement during either side is incomparable. Declare both
+   expected asset digests only for an authorized bundle switch. An incomparable
+   report exits 0 because measurement never gates or promotes a run.
+5. Retain handoff receipts separately; a cancelled terminal row does not prove
+   earlier readiness. Keep stage times, model and runtime identity, token
+   coverage and unavailable spend. The seven-day primary metric is unavailable.
+6. Audit real GitHub effects, confirm every fixture issue is closed, and diff
+   before/after snapshots. Verify no ordinary production dispatch or unrelated
+   issue/PR mutation. Stop all lane processes before authorized cleanup; retain
+   the budget, driver records and `/tmp/swarm-<lane>/worker-<n>/` evidence.
+
+`REPLAY_ROOT`, `REPLAY_OUTPUT_ROOT` and `REPLAY_SANDBOX_ROOT` exist for isolated
+local harness tests. Native lanes use the defaults. Fake-transport restoration
+and accounting passes are not native VM proof.

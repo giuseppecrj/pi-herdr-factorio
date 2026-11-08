@@ -312,21 +312,38 @@ node server/cli.ts replay check --json \
 
 `--corpus <dir>` selects another pinned corpus. Its manifest digest covers
 `JSON.stringify({v: 1, cases})`; each case also pins its issue text's SHA-256.
-A changed digest refuses the check. The issue text includes its title as a
-Markdown heading. It contains no active issue reference, GitHub URL, or mention.
+A changed digest refuses the check. Each case also pins the exact live title,
+identical on both sides; side names belong only in lane IDs. The body includes
+the historical title as a Markdown heading. Neither contains an active issue
+reference, GitHub URL, or mention.
 
 Each live case compares its guarded paths between `baseSha` and the main pin.
+Case c1 narrows that diff with `-G'BRANCH_NAME|isBranchName'`, so unrelated
+workflow parser edits do not stale the case; a change to either symbol does.
 Changed paths report `stale`, unavailable Git evidence reports `unavailable`,
 and an offline case reports `offline_only`. The check also compares the two
-factories' sandbox bundle inputs. Different inputs report
-`bundle_switch_required`, not permission to re-provision production.
+factories' sandbox bundle inputs (`skills`, `server/sandbox/assets`, and
+`server/provision.sh`). Different inputs report `bundle_switch_required`, not
+permission to re-provision production. A selected check refuses that switch
+unless `--bundle-root`, `--side previous|candidate`, `--previous-assets` and
+`--candidate-assets` prove both required bundles are installed, match their
+source inputs, and `current` selects the requested side. A changed provisioning
+recipe requires distinct expected bundle digests from the authorized build.
 
 A selected case requires a readable production lock check, a budget path,
 and a positive `replay.max_tokens` in the frozen main workflow. A bound
 production socket refuses even when `controller.lock` is missing. A missing
 state directory or unreadable lock refuses too. The check does not take the
-production lock or stop the service. The operator must keep production stopped
-throughout the authorized replay window.
+production lock or stop the service. The driver holds dispatch, explicitly
+stops `factory.service` (cancelling its automatic restart), checks the service,
+process table and real socket lock, then re-checks the lock before launch.
+It selects only an already-installed bundle and runs trusted sandbox preflight
+before reserving budget. Its foreground supervisor restores the original
+bundle, hold and service state on success, error and catchable signals. Before restarting
+production it removes the fixture's `factory:ready` label and verifies removal,
+so a preflight refusal cannot dispatch an unbudgeted production run. If fixture
+disarming or bundle restoration fails, or the replay process cannot be stopped, it leaves production held and reports failure
+rather than running two controllers.
 
 Without `--case`, `allowed` is null and the output is an inventory, not launch
 permission. With `--case`, `allowed` reflects the preconditions. A grant and the
@@ -338,12 +355,12 @@ case in an unselected inventory does not by itself cause exit 1.
 ### Corpus version 1
 
 The manifest is `test/fixtures/replay/corpus.json`. Its digest is
-`22c4fd06d8f8f2c48ce592b68577bad071875db08f8cc53659a7ff6cb1945c81`.
+`faca85fa86e3e7ba7135b4eb1713babc951758df54c902d6ac8d903c2a40fbfd`.
 The live cases pin base `28e700f745d7dea0809651d7c9711ca085de55d0`.
 
 | Case | Historical issue | Guarded paths | Expected outcome | Mode |
 | --- | --- | --- | --- | --- |
-| c1 | 658 | `src/workflow.ts` | handoff, round 0 | live when unchanged |
+| c1 | 658 | `src/workflow.ts`, symbol-scoped | handoff, round 0 | live when unchanged |
 | c2 | 650 | `server/viewer.ts` | handoff, round 0 | live when unchanged |
 | c3 | 597 | `README.md` | `needs_info` | live when unchanged |
 | c4 | 605 family, including 608, 610, 612 | `scripts/provenance.sh` | handoff, round 0 | live when unchanged |
@@ -363,9 +380,23 @@ integer. The ordinary run, stage, turn, time, retry, and repair caps do not chan
 Before this workflow change reaches main, a selected check against the older
 main reports `replay_disabled`; candidate workflow bytes cannot enable it.
 
+The VM driver must be invoked from a clean control checkout whose `HEAD` equals
+frozen main. It uses that checkout's code for isolation, preflight and accounting,
+not candidate code. `FIXTURE_GRANT` must name a decision in its `docs/decisions.tsv`;
+the operator must still verify that decision grants this window. For the first
+pre-merge lane only, explicit `--bootstrap-candidate` permits control code at the
+candidate SHA and records the exception, control SHA and grant in `replay.json`.
+This does not bypass the frozen-main replay policy or grant requirement. After
+merge, use main control code without that flag.
+
 The VM driver serializes replay controllers and budget updates with `flock`.
 Before launch, `reserveReplay` writes a private reservation for 540,000 tokens,
-the per-run verification cap. A run cannot start with less than that much room.
+which equals the run's hard verification limit, not just an accounting allowance.
+The 540k includes review and repair; their full stage allowances are not reserved
+in addition. A heavy replay can therefore exhaust its budget at review where
+production's 800k run limit would continue. This is a known comparability limit,
+even when both replay sides use the same limit. A run cannot start with less
+than 540k room.
 Two outstanding reservations charge 1,080,000 tokens. The next run refuses.
 The budget path is shared across both sides and subsequent replay pairs.
 Deleting it would reset accounting and is not part of the replay procedure.
@@ -374,8 +405,15 @@ After stop, one terminal verification row with a matching verification-manifest
 digest settles the reservation. Exact usage replaces the reserved token amount,
 including failed runs. Lower-bound or uncertain usage retains at least 540,000,
 or more if the charged total exceeds it. An interruption without a terminal
-row retains the entire reservation. Repeated settlement of the same run is
-idempotent. A changed cap, duplicate reservation, or duplicate run refuses.
+row retains the entire reservation unless trusted stop-time inspection proves
+zero stage executions and zero usage with readable accounting. Only that case
+is `voided`, releases its reservation and records the reason. Any stage evidence,
+usage, or accounting uncertainty forbids voiding. Repeated settlement of the same
+run is idempotent. PID metadata remains until settlement or a retained decision
+succeeds, so a failed settlement can be retried. A changed cap, duplicate
+reservation, or duplicate run refuses. Fresh state does not erase public claim
+ownership: the driver refuses a fixture with any prior factory run marker and
+requires a fresh fixture issue.
 
 The budget records elapsed wall time from reservation to settlement. An open
 reservation continues to accrue elapsed time when read. This includes controller
@@ -390,17 +428,29 @@ subprocess and calls neither GitHub nor a model:
 ```sh
 node server/cli.ts replay report --json --case c3 \
   --previous-sha "$PREVIOUS_SHA" --candidate-sha "$CANDIDATE_SHA" \
-  --previous-row "$PREVIOUS_ROW" --candidate-row "$CANDIDATE_ROW"
+  --previous-row "$PREVIOUS_ROW" --candidate-row "$CANDIDATE_ROW" \
+  --previous-record "$PREVIOUS_LANE/replay.json" \
+  --candidate-record "$CANDIDATE_LANE/replay.json"
 ```
 
 Each input must contain exactly one supported ledger row with verification
-provenance. Production and legacy rows refuse. The report carries the corpus
-digest, supplied factory SHAs, original base, workflow and gate pins, stage
-usage, requested and observed models, runtime versions, and asset digests.
-Factory SHAs are operator-supplied lane identities, not reconstructed from a row.
+provenance, plus its own durable driver record. Production and legacy rows
+refuse. The record binds case, corpus and issue-text digests, side (`prev` or
+`cand`), fixture issue, factory SHA and terminal run ID. The report shows each
+run's recorded corpus digest, never substitutes today's corpus, and rejects
+`--case` if it disagrees with either record. Self-pairs, wrong fixture issues,
+wrong sides and mismatched case/corpus pins are incomparable. The two authorized
+sides use separate fixture issues; each row must match its own recorded issue.
+The report also carries original base, workflow/gate pins, stage usage and caps,
+requested and receipt-observed models, runtime versions, and asset digests.
 
-Different repositories, original bases, or policy pins make a pair
-`incomparable`. Missing gate or asset evidence also makes it incomparable.
+Different repositories, original bases, policy pins, requested or observed model
+sets, trusted/effective run caps, or stage caps make a pair `incomparable`.
+Main moving during either side also makes it incomparable, using the driver's
+remote start/stop pins and any recorded terminal workflow observation. Unavailable
+terminal observations on newer rows, model, gate or asset evidence are not equal
+evidence and make it incomparable. Older rows lack the terminal observation;
+their trusted driver pins are still required.
 Assets must match unless both `--previous-assets <digest>` and
 `--candidate-assets <digest>` declare the expected different bundle digests.
 Those options permit a recorded bundle switch, not a missing asset receipt.
