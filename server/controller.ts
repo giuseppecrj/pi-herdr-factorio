@@ -6160,7 +6160,7 @@ export function controllerCandidatePort(config: {
 							? "An owner push withdrew readiness. The factory will run trusted gates and review on this exact head, without building or rewriting owner commits."
 							: request.detail === "owner_head_behind"
 								? "Readiness is withdrawn. Main moved under the owner head. Please update the branch; the factory will not refresh or build on owner commits."
-								: `Readiness is withdrawn. Owner-head certification is held: ${request.detail ?? request.notice.kind}${request.refusal === undefined ? "" : ` (${request.refusal})`}. No owner commit was rewritten.`,
+								: `Readiness is withdrawn. Owner-head certification is held: ${request.detail ?? request.notice.kind}${request.refusal === undefined ? "" : ` (${request.refusal})`}. No owner commit was rewritten.${request.refusal === "behind_main" ? " Please update the branch with main before certification can continue." : ""}`,
 						`Head: ${request.notice.key.split(" ").at(-2)}`,
 						request.notice.key,
 					].join("\n\n");
