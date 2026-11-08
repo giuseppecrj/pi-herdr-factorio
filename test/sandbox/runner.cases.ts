@@ -5502,15 +5502,14 @@ describe("pinned zero-token source replay", () => {
 			),
 		);
 
-		const upstream = await startEchoFixture(0);
-		const root = mkdtempSync(join(tmpdir(), "factory-eff2-replay-"));
-
 		const workflow = readFileSync(
 			new URL("../../.github/factory/WORKFLOW.md", import.meta.url),
 			"utf8",
 		);
 
 		assert.equal(digestOf(workflow), pin.workflowDigest);
+		const upstream = await startEchoFixture(0);
+		const root = mkdtempSync(join(tmpdir(), "factory-eff2-replay-"));
 		const repo = "giuseppecrj/pi-herdr-factorio";
 		assert.ok(isRepoSlug(repo));
 		assert.ok(isGitSha(pin.baseline));

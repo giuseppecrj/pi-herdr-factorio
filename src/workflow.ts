@@ -93,6 +93,7 @@ export type WorkflowConfig = {
 		readonly maxBackoffMs: number;
 	};
 	readonly usage: { readonly maxTokensPerRun: number };
+	readonly replay?: { readonly maxTokens: number } | null;
 	readonly stages: StageSettings;
 	readonly checkpoints: { readonly approveMerge: { readonly mode: "always" } };
 };
@@ -778,6 +779,7 @@ const ROOT_KEYS = [
 	"workspace",
 	"retry",
 	"usage",
+	"replay",
 	"stages",
 	"checkpoints",
 ];
@@ -840,6 +842,11 @@ function readConfig(
 	]);
 
 	const usage = optionalEntries(root, "usage", "usage", ["max_tokens_per_run"]);
+	const replay = optionalEntries(root, "replay", "replay", ["max_tokens"]);
+
+	if (root.has("replay") && !replay.has("max_tokens")) {
+		fail("replay.max_tokens", "is required when replay is configured");
+	}
 
 	const config: WorkflowConfig = Object.freeze({
 		repository: repo,
@@ -880,6 +887,14 @@ function readConfig(
 				{ min: 1, fallback: DEFAULTS.maxTokensPerRun },
 			),
 		}),
+		replay: root.has("replay")
+			? Object.freeze({
+					maxTokens: integerOr(replay, "max_tokens", "replay.max_tokens", {
+						min: 1,
+						fallback: 0,
+					}),
+				})
+			: null,
 		stages: readStages(root, warnings),
 		checkpoints: readCheckpoints(root),
 	});
