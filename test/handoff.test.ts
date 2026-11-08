@@ -811,6 +811,44 @@ test("F10-3 owner certification, readiness and truthful merge authorship", () =>
 	}
 });
 
+test("F10-3 reset after owner validation failure restores the historical certificate without losing history or charges", () => {
+	const f = ownerSelected();
+	const failing = validated(f.state, false);
+	const notice = pending(failing, "post_notice");
+
+	const held = selected(
+		handoffCandidate(failing, {
+			kind: "effect_completed",
+			completion: { kind: "post_notice", request: notice },
+		}).state,
+	);
+
+	const resetting = handoffCandidate(held, readyObservation(f.start)).state;
+	const complete = pending(resetting, "complete_handoff");
+	assert.equal(complete.certification.digest, f.start.current.intent.digest);
+
+	const ready = selected(
+		handoffCandidate(resetting, {
+			kind: "effect_completed",
+			completion: { kind: "complete_handoff", request: complete, now: 500 },
+		}).state,
+	);
+
+	assert.equal(ready.published?.readiness.kind, "ready");
+	assert.deepEqual(ready.history, held.history);
+	assert.deepEqual(ready.current, held.current);
+	assert.equal(candidateUsage(ready), candidateUsage(held));
+	assert.equal(handoffCandidate(ready, readyObservation(f.start)).effect, null);
+	assert.equal(
+		pending(
+			handoffCandidate(ready, ownerObservation(f.start)).state,
+			"post_notice",
+		).notice.kind,
+		"owner_head",
+	);
+	assert.ok(parseCandidateState(JSON.parse(JSON.stringify(ready))));
+});
+
 test("F10-3 failing gates and failed or blocking review hold with one head notice", () => {
 	const f = ownerSelected();
 	assert.equal(
