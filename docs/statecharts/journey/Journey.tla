@@ -320,4 +320,10 @@ HandoffDecisionExact == [][(b'.pending = "complete_handoff" /\ b.pending # "comp
     (b.current.cert /\ env.head = HeadOf(b, Current(b)) /\ env.ref = HeadOf(b, Current(b)) /\ env.ordinary = HeadOf(b, Current(b)))]_vars
 PromotionDecisionExact == [][(b'.pending = "promote_pr" /\ b.pending # "promote_pr") =>
     (b.current.cert /\ b.current.expected # 0 /\ env.head = b.current.expected /\ env.ref = b.current.expected)]_vars
+PublishedNeverFails == b.published # 0 => b.terminal # "failed"
+OwnerHeadNotReady == (b.phase = "owner_due" \/ (b.current.owner /\ ~b.current.cert)) => ~b.ready
+OwnerPushStopsLiveWork == b.phase = "owner_due" =>
+    (\A i \in Indices(b.accounts) : ~b.accounts[i].live)
+FeedbackRepairAtBoundary == [][(b'.batches > b.batches) =>
+    (b.phase \in {"waiting", "held"} /\ (\A i \in Indices(b.accounts) : ~b.accounts[i].live))]_vars
 ====

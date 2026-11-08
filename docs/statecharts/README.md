@@ -2,7 +2,7 @@
 
 The F10-4 model covers published-PR feedback repair and owner-head recertification. Its runtime basis is merged F10-2 at `484a6ab`; owner paths follow the settled F10 design, sections 3.6, 3.7 and 6.1. F10-3 is not on that base. Two owner-path correspondence tests are explicitly skipped until it merges; model reachability is not runtime qualification of that unmerged implementation.
 
-On 2026-11-08, **tla-ts 0.0.8** completed F1 structural and F2 feedback with all configured properties holding and empty queues. All four F3 reachability witnesses failed their deliberately false invariants with traces and exit 12. F4 passed 38 runtime tests, with two F10-3 cases pending. No safety counterexample was found. Unrestricted accounting, substantive controller checking and composition of faults remain incomplete. These bounded checks are not a proof of the whole factory or permission to merge a PR.
+On 2026-11-08, **tla-ts 0.0.8** completed F1 structural and F2 feedback with all configured properties holding and empty queues. All four F3 reachability witnesses failed their deliberately false invariants with traces and exit 12. Four reviewer mutants also fail the new safety checks with traces (exits 12 or 13). F4 passed 38 runtime tests, with two F10-3 cases pending. No safety counterexample was found. Unrestricted accounting, substantive controller checking and composition of faults remain incomplete. These bounded checks are not a proof of the whole factory or permission to merge a PR.
 
 `Journey.tla` describes the shared `handoffCandidate` policy. `Controller.tla` instantiates Journey and adds claim persistence, external effects, captured callbacks, one restart and conditional validation-ref cleanup. It does not introduce another runtime candidate policy. Its legacy property name `NoPostPrRepair` now delegates to the five F10 replacement invariants, not the obsolete prohibition. `journey/Chart.cfg` also needed the replacement property list to keep the presentation check runnable.
 
@@ -57,6 +57,10 @@ The configs are the exact property lists. These names replace the old F08 promis
 | `FinishOnlyAfterSettlement` | A stop completion that emits `finish_pr` must have reconciled every account. It holds in the completed fixed-model Journey partitions; unrestricted accounting remains incomplete. |
 | `NoLiveTerminal`, `OneExecution`, `WaitingSlotFree` | No issued/running execution at termination, at most one issued/running execution and slot-free waiting. Uncertain cost is distinct from a live execution. |
 | `PostPrRepairOnlyFeedback`, `PostPrRepairNotReady` | Published repair phases require an owner-feedback cause and withdrawn readiness. These replace `NoPostPrRepair`. |
+| `PublishedNeverFails` | A run with a published PR never ends `failed` at a repair stop; it holds so the PR can still be observed. |
+| `OwnerHeadNotReady` | Once an owner push is observed (`owner_due`), readiness is withdrawn. It stays withdrawn while the selected owner head lacks certification. Together with `HandoffDecisionExact`, this checks withdrawing and granting readiness, including the abstract `factory:review` label. |
+| `OwnerPushStopsLiveWork` | The owner-head path cannot reach `owner_due` with a live build or review account. A live execution must go through `stop_execution` first. |
+| `FeedbackRepairAtBoundary` | Act on a queued owner request only from waiting or held, with no live stage. Consuming the batch, even to refuse it, must wait for that boundary. This is an action property, not just a check after entering repair. |
 | `NoOwnerAuthoredRepair`, `NoFactoryCommitOnOwnerHead` | No repair of an owner-derived current or promoted generation, and no factory successor/refresh whose expected predecessor is the owner head. |
 | `AllowanceWithinRemaining`, `NoFreshBudget`, `HistoryImmutable`, `UsageMonotonic`, `IssuedMonotonic` | Derived allowances, retained prior usage, immutable archives and monotonic account/attempt history. |
 | `EffectHasDurableIntent`, `ProcessHasAccount`, `OneSandbox`, `NoTerminalProcess` | The controller persists before external work, binds the process to a saved account and never finalizes a live process. One process is represented explicitly; launch guards prevent another owner from reusing it. |
@@ -64,11 +68,22 @@ The configs are the exact property lists. These names replace the old F08 promis
 | `SavedUsageMonotonic`, `SavedAttemptsMonotonic`, `SavedHistoryImmutable` | Atomic saved books retain their floors and archives across the modeled restart. |
 | `ObservedMergeSettles` | An observed merge with known settled accounts and no live process eventually finishes, or visibly blocks on lost private evidence, under the scheduling/read assumptions below. |
 
+All four new safety checks are configured in both F1 and F2. F1 does not enable owner feedback or owner recertification, so F2 supplies the substantive coverage of those paths; the unchanged F3 witnesses establish reachability.
+
 The old `LandOnlyVerified` promise is false because an owner can merge an uncertified head. The replacement reports assurance honestly. The old instantaneous `MergeEndsRun` is replaced by observation, stop/account settlement and terminal bookkeeping. Clean review now leads to nonterminal waiting, not terminal `stage_passed`. Successful CI does not require an eventual owner merge.
 
 ### Fairness and proof limits
 
 Journey has no fairness assumptions. Controller weak fairness covers `Persist`, `OtherResponse`, `RecoverStop`, `Recover`, `Decide` and `ObserveTerminal`. This assumes scheduled controller ticks and eventually successful required claim writes, owned-process reconciliation and response reads/effects when they remain enabled. The progress property starts after known settlement. It does not prove a permanently unresponsive process will stop or that unknown spend becomes known.
+
+The new owner-head properties concern the controller's observation, not instantaneous knowledge of a remote push. `OwnerHead` changes the remote ref before `OwnerDrift` observes it; head convergence is separate. `b.ready` abstracts published readiness and the `factory:review` label, not two independently written GitHub fields. `HandoffDecisionExact` checks the head and ordinary check when readiness is chosen. The model does not prove atomic withdrawal on GitHub at the instant of a push.
+
+Behaviour outside this model includes:
+
+- **Promotion window and `allowedHeads`.** Refresh compares only the promoted head; it does not model the runtime's accepted chain of certified successors between `promote_pr` and `complete_handoff`. F2 does not move main in that window.
+- **Main movement during owner checking.** F2 moves main only while waiting or held, not while an owner generation is validating or reviewing. Holding that in-flight owner generation needs runtime verification; the two owner clauses in `Refresh` are not independently qualified by F2.
+- **Token-exhaustion holds.** F10-2 turns a `repair_tokens` or `run_tokens` feedback preflight refusal into a hold with readiness withdrawn. `FeedbackRepair` instead consumes a refused batch and leaves phase/readiness unchanged for any `~CanIssue`. Abstract quotas and launch floors do not qualify that runtime hold or its label withdrawal.
+- **Smaller safe abstractions.** A stopped feedback round does not require a new owner request before `Handoff` can restore the old certificate's readiness. Owner-head notice deduplication is omitted, allowing a harmless `owner_due`/held loop after a guarded refusal. Feedback on a promoted owner head is disabled rather than consumed with a refusal notice. These abstractions do not establish the runtime's sticky-hold, deduplication or refusal behaviour.
 
 There is no fairness for owner merge, successful review, switch re-enable, capacity becoming free or restoration of private evidence. Missing-book PR observation remains visible, but cannot finalize without private accounting/certification. Private recovery represents a validated saved intent, not reconstruction from GitHub. Repeated arbitrary crashes are outside the one-restart bound.
 
@@ -95,7 +110,7 @@ The Journey `Stop` decision mirrors helper reuse without adding a source-absent 
 | `Gen`, `Select`, `Issue`, `CanIssue`, `Account`, `Usage` | `src/handoff.ts`: `generationIntent`, `selectGeneration`, `issueExecution`, `preflight`, `updateAccount`, `candidateUsage` |
 | `ReviewResult`, `Validate`, `FailOrRepair` | `handoffCandidate`, `complete`, `certifyGeneration`; full review/report validation is a boundary assumption backed by runtime tests |
 | `Refresh`, `Handoff`, `ObserveMerge`, `Finish`, `Stop`, `FinishPr` | `src/handoff.ts`: `observed`, `terminalFor`, `finish`, `complete` |
-| `OwnerFeedback`, `FeedbackRepair`, `SettleRepair` | Merged F10-2: `ingest`, `startQueuedFeedback`, `repair_settled` and `stopRound`. The model abstracts batch bytes, intake notices and summaries to a submitted/consumed counter; permission, head binding, dismissal, cursor durability, launch floors and dispositions remain runtime boundaries. |
+| `OwnerFeedback`, `FeedbackRepair`, `SettleRepair` | Merged F10-2: `ingest`, `startQueuedFeedback`, `repair_settled` and `stopRound`. The model abstracts batch bytes, intake notices and summaries to a submitted/consumed counter; permission, head binding, dismissal, cursor durability, launch floors and dispositions remain runtime boundaries. The token-refusal hold/readiness difference is listed under proof limits. |
 | `OwnerDrift`, `OwnerRecert`, `HeadOf`, merge `authored` | Settled F10-3 design, not merged F10-2 implementation. Derivation success and its clean tree/suite binding are abstracted; derivation refusals, forbidden paths, the pin ref, no-commit interpreter behavior and v5 ledger authorship need F10-3 runtime tests. `OwnerCertifiedCurrent` denotes the selected owner head, even before certification, so validation/review can finish without re-entering drift. |
 | Shared public policy | `src/stages.ts`: `advance`; it delegates candidate events to `handoffCandidate` |
 | `Decide`, `Persist`, effect/response separation | `src/orchestrator.ts`: `#observeCandidates`, `#commitCandidate`, `#interpretCandidate` |
@@ -109,13 +124,13 @@ The earlier controller counterexample retained a volatile callback across a cras
 
 ## F10-4 results (2026-11-08)
 
-Checker **tla-ts 0.0.8**, Node **26.13.0**, eight workers, fingerprint polynomial `0`, 24,000 MiB Node old-space ceiling. The owner approved this checker after its baseline probe reproduced Java TLC's 1,670,069 structural states. No Java checker was used for F10-4. The commands are below; wall times are `/usr/bin/time` measurements, not the checker's rounded clock. Every completed qualification run used the following model/config hashes; the semantic-error preflight predates the quantifier fix.
+Checker **tla-ts 0.0.8**, Node **26.13.0**, eight workers, fingerprint polynomial `0`, 24,000 MiB Node old-space ceiling. The owner approved this checker after its baseline probe reproduced Java TLC's 1,670,069 structural states. No Java checker was used for F10-4. This approved command supersedes design §6.2's Java heap and four-worker parameters; its time bounds and structural constants are unchanged. The commands are below; wall times are `/usr/bin/time` measurements, not the checker's rounded clock. The following hashes and results are the gap-closing rerun, after adding the four properties without changing any transition.
 
 | File | SHA-256 |
 | --- | --- |
-| `journey/Journey.tla` | `2cf79b05731caf5196b03b31de64a1efadc5c4ece0ffa03db7bee54309d7892b` |
-| `journey/Journey.cfg` | `b0bd3dfc132d1eadaaa2def23576e76638bd519bf17593101edbf75b97ffe64f` |
-| `journey/Feedback.cfg` | `b07e6e16497c1630f74c549da07acb4af35f5d70f9752a8812b8737d5d91ce9f` |
+| `journey/Journey.tla` | `d01519d194898cbdf272fb7a214aeb503bd8ea0d8055c655ba0c6f8ffa9ab845` |
+| `journey/Journey.cfg` | `527ce37abb50939091de41d9ad141edcc6e62ce3805cd19f1bb0aff3603236f5` |
+| `journey/Feedback.cfg` | `6cff4baa68a65f5106efd41c7f5d023f09c3295f2ea0c82343ed25753ca74103` |
 | `journey/PublishedRepairWitness.cfg` | `a7fcacaad4c12a4c48f4c61b531191cf8ca532ac6b6daabc827eb6ef58e9f8c0` |
 | `journey/OwnerReadyWitness.cfg` | `a4ff583a5df053551b27d79492b7ca015a21c0108a5e7a908938282f6b1e10e8` |
 | `journey/MergeMidRepairWitness.cfg` | `f257d8eb6eb3c656f3c09feec5d74bb91f0104bf8536227680c63384f7b7f6ce` |
@@ -126,9 +141,8 @@ Checker **tla-ts 0.0.8**, Node **26.13.0**, eight workers, fingerprint polynomia
 
 | Run and config | Bound | Wall seconds | Distinct states | Queued | Exit and result |
 | --- | ---: | ---: | ---: | ---: | --- |
-| Development F1 `Journey.cfg` (before quantifier fix) | 1200 s | 0.20 | not reported | not reported | 150, semantic error before initialization; not run |
-| F1 `Journey.cfg` | 1200 s | 12.11 | 1,670,069 | 0 | 0, all configured invariants/action properties hold |
-| F2 `Feedback.cfg` | 1800 s | 456.00 | 69,051,765 | 0 | 0, all configured invariants/action properties hold |
+| F1 `Journey.cfg` | 1200 s | 17.11 | 1,670,069 | 0 | 0, all configured invariants/action properties hold |
+| F2 `Feedback.cfg` | 1800 s | 468.99 | 69,051,765 | 0 | 0, all configured invariants/action properties hold |
 | F3 `PublishedRepairWitness.cfg` | 300 s | 0.50 | 614 | 244 | 12, `NoPublishedRepairWitness` violated; 18-state trace |
 | F3 `OwnerReadyWitness.cfg` | 300 s | 0.60 | 9,188 | 3,316 | 12, `NoOwnerReadyWitness` violated; 23-state trace |
 | F3 `MergeMidRepairWitness.cfg` | 300 s | 0.50 | 628 | 255 | 12, `NoMergeMidRepairWitness` violated; 18-state trace |
@@ -145,24 +159,50 @@ The witness configs use exactly Feedback's constants and **only their named inva
 - **Merge mid-repair (18 states):** the published/held prefix → owner review → feedback `repair_due` → owner merges the old certified head before a build is issued → observed merge, `factory_verified`, authored `factory`, readiness false. F4 also checks the longer path with a live build, stop, charge and terminal completion.
 - **Owner-authored merge (22 states):** the owner selection/CI/review prefix → owner merges `99` immediately after certification, before readiness → observed merge, `factory_verified`, authored `owner`. It does not depend on the owner-ready witness.
 
-F4's TAP selection passed **38 of 40 tests, zero failures, two explicit F10-3 skips**. Three new active replays check published repair, the shortest merge-before-launch trace and the longer stop/charge trace through both `handoffCandidate` and public `advance`. The owner-ready and owner-authored merge design replays are pending because their reducer paths are not in `484a6ab`; enable and bind their wire fixtures after F10-3 merges. Runtime tests expand the model's abstract review event into durable batch/notice steps and its numeric token classes into the real cumulative accounting. They are named correspondence replays, not a generic trace decoder. The F3 traces themselves were inspected for the states above.
+F4's TAP selection passed **38 of 40 tests, zero failures, two explicit F10-3 skips**. Three new active replays check published repair, the shortest merge-before-launch trace and the longer stop/charge trace through both `handoffCandidate` and public `advance`. The owner-ready and owner-authored merge design replays are pending because their reducer paths are not in `484a6ab`; enable and bind their wire fixtures after F10-3 merges. The runtime replays seed the queued feedback batch and its already-posted intake notice; they do not replay owner-review ingestion. Later notice, readiness withdrawal, build, merge, stop/charge and terminal steps go through the real reducer and public `advance`. Numeric token classes expand to the real cumulative accounting. They are named correspondence replays, not a generic trace decoder. The F3 traces themselves were inspected for the states above.
 
-`TMPDIR=/home/g/.cache/f10-4-tmp FACTORY_REQUIRE_SANDBOX_TESTS=1 npm run check` passed: **2,315 passed, 2 skipped, 2,317 total**, zero failures. The two skips are only the F10-3 design cases. No product code was changed; no VM or model calls were used. The plan was unchanged.
+`TMPDIR=/home/g/.cache/f10-4-tmp FACTORY_REQUIRE_SANDBOX_TESTS=1 npm run check` passed in **167.47 seconds**: **2,315 passed, 2 skipped, 2,317 total**, zero failures; typecheck, lint and format checks passed. F4's command below exited 0 in **1.15 seconds** (40 tests, 38 passed, 2 skipped). The two skips are only the F10-3 design cases. No product code was changed; no VM or model calls were used. The plan was unchanged.
 
-Local logs and full traces are retained in `/home/g/.cache/f10-4-tmp/formal/`, with the final project gate in `/home/g/.cache/f10-4-tmp/check-final.log`. These are local evidence, not shipped artifacts.
+Gap-closing logs, full traces, exact commands, exits, timing files and scratch mutants are retained in `/home/g/.cache/f10-4-tmp/gaps/`; the original qualification remains in `/home/g/.cache/f10-4-tmp/formal/`. The new project gate is `gaps/check.log`. These are local evidence, not shipped artifacts.
 
 | Log | SHA-256 |
 | --- | --- |
-| `F1-v2.log` | `968e188e6412a0c228175bd2354e27ffeac5cb40789f56c031723574c1843072` |
-| `F2.log` | `b52581392a966e4aa8d559776a7ab947097fe35b3a9213c51c3374c86b7665a5` |
-| `F3-PublishedRepair.log` | `82220fd27669774c246587a20104b9c00459e0f70cec849bbad0e4b844c6bbf7` |
-| `F3-OwnerReady.log` | `be34acb70340d18ff05d956828dc6637a58d99d0d1dc341744cb859e2d3fd21c` |
-| `F3-MergeMidRepair.log` | `89384f5f77fed6b917a639fd72f2c234c650d0c7a2fe75cceb7be97c4b7b3624` |
-| `F3-OwnerAuthoredMerge.log` | `026ef56fe5120f767ac960427c5298404b67613d992fd2490ddc1ac91f528f7b` |
-| `journey-chart.log` | `a174196a122ff0581dd0d15f3626b518f05caf232a90984de646d30769d3758c` |
-| `controller-chart.log` | `debb6b8a65f80504b33f5256f455412f25a23099b91d2cf4a6499a110f2cdf13` |
-| `F4-final.tap` | `9fed0ed0ebd06cb7ccd8c62e490c6d9a45f48169e8584cb429b7fb759bfb19cb` |
-| `../check-final.log` | `4b53f5f5f3ef7b26951c6445471f33ca481f5dbdb4ec0a2eed12d7f658d79d9a` |
+| `F1.log` | `b50c502670b4450a88a0c068f5d3b3fe7b80123071dee5baff96777df79c9444` |
+| `F2.log` | `15e665a3dbb78ba8db849359f82909432260996c7f0d550a169f069d30d63d97` |
+| `F3-PublishedRepair.log` | `fcaab84b322f93a8621bfe4ec386a5e11c67e19326586ad7848d7c0308cf16b4` |
+| `F3-OwnerReady.log` | `392d6e3ef24f84167e9f0104ba6fc5002af2375a6c23f3cebf6e3da021c3f5ee` |
+| `F3-MergeMidRepair.log` | `1c65f32eda41ba5aedb134c8ac242f2d3b578e58aac6ad54ed026922a2d35c50` |
+| `F3-OwnerAuthoredMerge.log` | `53d4b10d7f03eca7bc39f6ccdb9635339cce61f9ce6d2d994a9fad97b536f14e` |
+| `journey-chart.log` | `2d0c1d6da1550e3d9b58079e3eec431462f9ca0f5faadde1d7476c7789dc9d9c` |
+| `controller-chart.log` | `d5d176ce360f89faa18291aa6850e78869fd93125abb2c01bf84401fc44f316c` |
+| `F4.tap` | `82f2bf6723f43e2c362da58c880e34d2e71b6b7c48cec345aaa4ab78621adf2f` |
+| `check.log` | `c5c897790d4047c5283c68dee1164d4598297a969e8e99bdb351abf276577959` |
+| `mutation-M14_published_noprogress_fails.log` | `3f0c3d0a14129ea538d8b78de06d000e99b20644e3e2e1826d0812e2997715e4` |
+| `mutation-M12_drift_keeps_ready.log` | `aeb21d5623608154b2248ac2f668834433f0f1e73b9af148a0e4514f97745045` |
+| `mutation-M11_drift_ignores_live.log` | `ff4795f451df432d9ca81134c8d8ff513baad7670f7d21d33fa53c6ed3ec6885` |
+| `mutation-M17_feedback_from_reviewing.log` | `f7b77c92d3ee7ba520e6246ce555cb64c846af570ca59f86f683d6d2a3d66f74` |
+
+### New safety-rule mutation checks
+
+Test-first: the four new properties were first added to scratch copies of the reviewer's mutants, before editing the repository model or configs. Each failed with a trace. The same properties were then added to Journey, and the unmutated F1/F2 checks above completed. The final mutant rerun uses the final `Feedback.cfg` unchanged, including every old and new property, with the same checker/heap/workers/fingerprint and a 300-second bound each. No model action, guard or structural bound was changed in the repository.
+
+Each behavioral edit exactly matches `/home/g/.cache/f10-4-rv/r2/mut/mk.py` applied to the reviewed model. Copies, exact `mutation.patch` diffs and commands are under `gaps/mutations-final/<mutant>/` and `gaps/mutation-<mutant>.command`. Reproduction: copy the final Journey and Feedback config outside the repository, apply only the indicated behavioral edit, then run the same command as F2 with a 300-second timeout. The source hashes below include the new properties; every mutant's config hash is the final Feedback hash above.
+
+| Mutant and exact behavioral edit | Caught by | Exit | Distinct | Queued | Trace states | Wall seconds |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| M14 `published_noprogress_fails`: in `SettleRepair`'s `~progress` branch, replace `IF b.published # 0` with `IF FALSE`, taking `Finish(paid, "failed", 0)` | `PublishedNeverFails` | 12 | 1,003 | 388 | 19 | 0.60 |
+| M12 `drift_keeps_ready`: remove `!.ready = FALSE` from `OwnerDrift`'s `owner_due` branch | `OwnerHeadNotReady` | 12 | 515 | 213 | 17 | 0.50 |
+| M11 `drift_ignores_live`: replace `IF Active(b) # 0` with `IF FALSE` in `OwnerDrift`, skipping its stop arm | `OwnerPushStopsLiveWork` | 12 | 1,659 | 652 | 20 | 0.60 |
+| M17 `feedback_from_reviewing`: add `"reviewing", "repairing"` to `FeedbackRepair`'s allowed phases | `FeedbackRepairAtBoundary` (action property) | 13 | 1,664 | 656 | 20 | 0.60 |
+
+The final bad states were inspected: M14 has `published = 1` and `terminal = failed`; M12 has `owner_due`, owner ref `99` and readiness still true; M11 reaches `owner_due` with a live build and no stop request. M17 consumes the second batch while a repair build is live (`batches` changes from 1 to 2 in `repairing`). `CanIssue` refuses a second launch, but acting on that queued request mid-stage is itself forbidden. An initial prototype checked only batches that entered `repair_due`; it missed this refusal path and its exploratory run was not completed. The final action property checks **every** consumed batch, including refusals. This was a property-design correction, not an unmutated-model counterexample.
+
+| Mutated `Journey.tla` | SHA-256 |
+| --- | --- |
+| M14 | `5ffe92db66850c8c368f219595743d4c98fcb1622b2f5b287bf78a48059e63f5` |
+| M12 | `2d7db6a111d4e199130c2e0693b307df19aafac72af83eebdba8babfb4824d57` |
+| M11 | `b4f1d6b5647f5cc84dda70e4c6c6aec5a5dcebdd81c9b72b20634c26d343d636` |
+| M17 | `29b128116bb6a8d533569c96840c999d79b5cbdc77bb69e3dd6b6f8d49693ead` |
 
 ### Historical F09a results (not rerun for F10-4)
 
