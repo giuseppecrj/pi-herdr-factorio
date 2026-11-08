@@ -2003,6 +2003,276 @@ describe("private build executor", () => {
 		assert.deepEqual(delegated.slice(3), ordinary.slice(1));
 	});
 
+	it("F10-2 a no-change build leaves the round patch slot free for a successful second attempt", async (t) => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-feedback-attempt-"));
+		t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+		const root = join(dir, "root"),
+			stateDir = join(dir, "state"),
+			staging = join(root, "staging");
+
+		mkdirSync(staging, { recursive: true });
+		writeFileSync(join(staging, "marker"), "bundle");
+		const hash = await manifestDigest(staging);
+		assert.ok(hash);
+		fs.renameSync(staging, join(root, `assets-${hash}`));
+		symlinkSync(`assets-${hash}`, join(root, "current"));
+
+		const base = join(stateDir, "pristine", RUN),
+			workspace = join(dir, "workspace");
+
+		mkdirSync(base, { recursive: true, mode: 0o700 });
+		mkdirSync(workspace);
+		writeFileSync(
+			join(base, "package.json"),
+			JSON.stringify({ scripts: { test: "node --test" } }),
+		);
+		writeFileSync(
+			join(workspace, "package.json"),
+			readFileSync(join(base, "package.json")),
+		);
+		writeFileSync(join(base, "value.txt"), "base\n");
+		writeFileSync(join(workspace, "value.txt"), "first\n");
+		const initial = await collectPatch({ base, workspace });
+		assert.ok(initial.kind === "collected");
+		const sha = "a".repeat(40);
+		assert.ok(isGitSha(sha));
+
+		const binding = {
+			runId: digest(RUN),
+			baseSha: sha,
+			contractDigest: contractDigestOf("contract"),
+			acceptanceDigest: digestOf("suite"),
+		};
+
+		assert.equal(
+			storePatch(stateDir, binding, initial, {
+				model: "openai/gpt-6.1-sol",
+				observed: null,
+				commands: [],
+			}).kind,
+			"found",
+		);
+
+		const repo = "owner/repo";
+		assert.ok(isRepoSlug(repo));
+		const event = feedbackId(repo, "review", 1);
+
+		const declined = {
+			event,
+			kind: "declined",
+			reason: "builder_declined",
+			detail: "Contradicts the contract's exclusions",
+		} as const;
+
+		const batch = await storeFeedbackBatch(
+			stateDir,
+			{
+				version: 1,
+				runId: binding.runId,
+				pr: 1,
+				head: sha,
+				records: [],
+				cards: [
+					{
+						event,
+						head: sha,
+						path: null,
+						line: null,
+						excerpt: "Extract parsePort and add a unit test",
+						truncated: false,
+					},
+				],
+				full: null,
+			},
+			null,
+		);
+
+		for (const attempt of [1, 2]) {
+			mkdirSync(base, { recursive: true, mode: 0o700 });
+			writeFileSync(
+				join(base, "package.json"),
+				JSON.stringify({ scripts: { test: "node --test" } }),
+			);
+			writeFileSync(join(base, "value.txt"), "base\n");
+			mkdirSync(workspace, { recursive: true });
+			writeFileSync(
+				join(workspace, "package.json"),
+				readFileSync(join(base, "package.json")),
+			);
+			writeFileSync(join(workspace, "value.txt"), "first\n");
+			writeFileSync(join(workspace, ".factory-feedback.json"), "{}", {
+				mode: 0o600,
+			});
+
+			const h = harness([
+				(command, pi) => {
+					if (command.type === "prompt" && attempt === 2)
+						writeFileSync(join(workspace, "value.txt"), "second\n");
+
+					if (command.type === "get_last_assistant_text")
+						pi.emit({
+							type: "response",
+							id: command.id ?? "",
+							command: "get_last_assistant_text",
+							success: true,
+							data: { text: JSON.stringify({ dispositions: [declined] }) },
+						});
+					replayer([
+						started("x"),
+						{ type: "agent_start" },
+						{ type: "turn_start" },
+						assistant({ tokens: 12 }),
+						{ type: "agent_settled", aborted: false },
+					])(command, pi);
+				},
+			]);
+
+			const executor = sandboxModule.sandboxExecutor({
+				stateDir,
+				root,
+				arch: "x64",
+				usernsLimit: async () => "15000",
+				xdgRuntimeDir: "/run/user/1000",
+				log: () => {},
+				exec: async (command) => ({
+					code: 0,
+					stdout: command === "bwrap" ? "bubblewrap 0.9.0\n" : "",
+					stderr: "",
+				}),
+				host: (config) => {
+					assert.ok(config.stageDir);
+					const stageDir = config.stageDir;
+
+					return {
+						...h.host,
+						async writeOutput(text) {
+							writeFileSync(join(stageDir, "output.txt"), text, {
+								mode: 0o600,
+							});
+
+							return h.host.writeOutput(text);
+						},
+						async writeReceipt(receipt) {
+							writeFileSync(
+								join(stageDir, "receipt.json"),
+								JSON.stringify(receipt),
+								{ mode: 0o600 },
+							);
+
+							return h.host.writeReceipt(receipt);
+						},
+					};
+				},
+			});
+
+			assert.equal(await executor.preflight(), true);
+
+			mkdirSync(join(stateDir, "stages", RUN), {
+				recursive: true,
+				mode: 0o700,
+			});
+
+			const launch = await executor.launch({
+				...input({ stage: "build" }),
+				attempt,
+				round: 1,
+				execution: {
+					id: digestOf(`feedback-${attempt}`),
+					stage: "build",
+					runId: binding.runId,
+					round: 1,
+					attempt,
+					workflowSha: sha,
+					workflowDigest: digestOf("workflow"),
+					feedbackFrom: {
+						round: 0,
+						generation: 0,
+						digest: digestOf("generation"),
+					},
+					cause: {
+						kind: "feedback",
+						batch: batch.digest,
+						assessment: {
+							bindingDigest: digestOf("assessment"),
+							recordDigest: digestOf("record"),
+						},
+						review: null,
+					},
+				},
+				workspace,
+				tools: ["read", "bash", "write"],
+				skills: [],
+				build: {
+					binding: { ...binding, round: 1 },
+					command: "npm test",
+					allowNoChange: true,
+				},
+			});
+
+			assert.ok(launch.kind === "started");
+			assert.equal((await launch.done).kind, "passed");
+			const patch = readPatch(stateDir, { ...binding, round: 1 });
+
+			if (attempt === 1) {
+				assert.equal(
+					patch.kind,
+					"absent",
+					"no progress must not freeze the round's immutable patch",
+				);
+				assert.deepEqual(
+					await executor.output({
+						runId: binding.runId,
+						stage: "build",
+						attempt,
+						round: 1,
+					}),
+					{
+						kind: "build",
+						result: {
+							kind: "blocked",
+							reason: "repair_no_change",
+							dispositions: [declined],
+							findingDispositions: [],
+						},
+					},
+				);
+			} else {
+				assert.ok(patch.kind === "found");
+				assert.notEqual(patch.receipt.patchDigest, initial.patchDigest);
+
+				const restarted = sandboxModule.sandboxExecutor({
+					stateDir,
+					root,
+					arch: "x64",
+					usernsLimit: async () => "15000",
+					xdgRuntimeDir: "/run/user/1000",
+					exec: async () => ({ code: 0, stdout: "", stderr: "" }),
+					log: () => {},
+				});
+
+				assert.deepEqual(
+					await restarted.output({
+						runId: binding.runId,
+						stage: "build",
+						attempt: 1,
+						round: 1,
+					}),
+					{
+						kind: "build",
+						result: {
+							kind: "blocked",
+							reason: "repair_no_change",
+							dispositions: [declined],
+							findingDispositions: [],
+						},
+					},
+					"the first attempt's outcome remains readable after a later patch exists",
+				);
+			}
+		}
+	});
+
 	for (const round of [1, 2] as const)
 		it(`F10-3 N1 round ${round} uses restored patch bytes for no-change and retained output`, async (t) => {
 			const dir = mkdtempSync(join(tmpdir(), "factory-feedback-attempt-"));
