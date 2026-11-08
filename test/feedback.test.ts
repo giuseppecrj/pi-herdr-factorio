@@ -230,6 +230,53 @@ for (const [permission, expected] of [
 		}
 	});
 
+for (const source of [
+	"review",
+	"conversation",
+	"inline",
+	"heldout inline",
+] as const)
+	test(`non-writer ${source} is unauthorized and creates no card`, async () => {
+		const event: FeedbackEvent =
+			source === "conversation"
+				? {
+						kind: "conversation",
+						id: feedbackId(repo, "issue-comment", 1),
+						pr: 5,
+						actor: "writer",
+						at: "2026-11-07T00:00:00Z",
+						body: "Please fix this",
+					}
+				: review(1, {
+						body: source === "review" ? "Please fix this" : "",
+						comments:
+							source === "review"
+								? []
+								: [
+										{
+											id: feedbackId(repo, "review-comment", 7),
+											path:
+												source === "inline"
+													? "src/a.ts"
+													: "test/acceptance/a.test.ts",
+											line: 1,
+											commit: head,
+											inReplyTo: null,
+											body: "Please fix this",
+										},
+									],
+					});
+
+		const result = await classify([event], [], "read");
+		assert.ok(result.kind === "read" && result.batch);
+		assert.deepEqual(result.batch.records[0]?.intake, {
+			kind: "refused",
+			reason: "unauthorized",
+		});
+		assert.deepEqual(result.batch.cards, []);
+		assert.equal(result.full, null);
+	});
+
 test("review of a gone head is refused", async () => {
 	const result = await classify([review(1, { commit: sha("b".repeat(40)) })]);
 	assert.ok(result.kind === "read" && result.batch);

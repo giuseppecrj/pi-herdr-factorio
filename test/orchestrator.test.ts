@@ -13579,6 +13579,173 @@ describe("controller-only validate", () => {
 			);
 		});
 
+	for (const permission of ["read", "triage", "none", "failed"] as const)
+		for (const source of [
+			"review",
+			"conversation",
+			"inline",
+			"heldout inline",
+		] as const)
+			it(`feedback authority: ${permission} ${source} adds no card, queued batch or repair_started`, async () => {
+				const f = await reviewingRun();
+				f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+				await once(f.controller);
+				await f.controller.tick();
+				await f.controller.tick();
+				const port = f.executor.candidate;
+				assert.ok(port);
+				const observe = port.observe;
+				const execute = port.execute;
+				const dir = stateDir();
+				const book = f.files.claims.get(runOf(14))?.handoff;
+				assert.ok(book?.kind === "selected");
+				const head = promotedHead(book);
+				assert.ok(head);
+				const issue = f.github.add(fakeIssue(99, { pullRequest: true }));
+				f.github.permissions.set("writer", permission);
+
+				if (permission === "failed")
+					f.github.failures.set(
+						`repos/${repo}/collaborators/writer/permission`,
+						httpError(503),
+					);
+
+				if (source === "conversation")
+					f.github.comment(issue, "Please fix this", {
+						login: "writer",
+						type: "User",
+						appSlug: null,
+					});
+				else {
+					const recorded: {
+						reviews: Record<string, JsonValue>[];
+						comments: Record<string, JsonValue>[];
+					} = JSON.parse(
+						readFileSync(
+							new URL(
+								"./fixtures/feedback/github-review.json",
+								import.meta.url,
+							),
+							"utf8",
+						),
+					);
+
+					f.github.reviews.set(
+						99,
+						recorded.reviews.map((r) => ({
+							...r,
+							commit_id: head,
+							body: source === "review" ? "Please fix this" : "",
+						})),
+					);
+					f.github.reviewComments.set(
+						"99/5812783128",
+						source === "review"
+							? []
+							: recorded.comments
+									.filter((c) =>
+										source === "inline"
+											? c.path === "server/viewer.ts"
+											: String(c.path).startsWith("test/acceptance/"),
+									)
+									.map((c) => ({ ...c, commit_id: head })),
+					);
+				}
+
+				let observations = 0;
+				port.observe = async (state, now) => {
+					const obs = await observe(state, now);
+
+					const feedback = await observeFeedback({
+						stateDir: dir,
+						adapter: new GitHubTicketAdapter({ exec: f.github.exec, repo }),
+						runId: state.pin.runId,
+						pr: 99,
+						head,
+						prHead: head,
+						refHead: head,
+						seen: state.kind === "selected" ? (state.feedback?.seen ?? []) : [],
+					});
+
+					observations++;
+
+					if (permission === "failed")
+						assert.partialDeepStrictEqual(feedback, {
+							kind: "unavailable",
+							reason: "permission",
+						});
+					else {
+						assert.ok(feedback.kind === "read");
+
+						if (observations === 1) assert.ok(feedback.batch);
+
+						if (feedback.batch !== null) {
+							assert.equal(feedback.batch.actionable, false);
+
+							const batch = JSON.parse(
+								readFileSync(
+									join(
+										dir,
+										"handoff",
+										runOf(14),
+										"feedback",
+										`${feedback.batch.digest}.json`,
+									),
+									"utf8",
+								),
+							);
+
+							assert.deepEqual(batch.cards, []);
+							assert.equal(batch.records.length, 1);
+							assert.deepEqual(batch.records[0].intake, {
+								kind: "refused",
+								reason: "unauthorized",
+							});
+						}
+					}
+
+					return { ...obs, feedback };
+				};
+
+				const notices: string[] = [];
+				port.execute = async (state, request) => {
+					if (request.kind === "post_notice") notices.push(request.notice.kind);
+
+					return execute(state, request);
+				};
+
+				const launches = f.executor.launches.length;
+
+				for (let tick = 0; tick < 4; tick++) await f.controller.tick();
+				assert.ok(observations > 1);
+				const stored = f.files.claims.get(runOf(14))?.handoff;
+				assert.ok(stored?.kind === "selected");
+				assert.equal(
+					stored.feedback?.batches.some(
+						(b) => b.status.kind === "queued" || b.status.kind === "applying",
+					) ?? false,
+					false,
+				);
+				assert.equal(notices.includes("repair_started"), false);
+				assert.equal(f.executor.launches.length, launches);
+				assert.deepEqual(stored.accounts, book.accounts);
+				assert.deepEqual(stored.current.intent, book.current.intent);
+
+				if (permission === "failed") {
+					assert.deepEqual(stored.feedback, book.feedback);
+					assert.equal(
+						existsSync(join(dir, "handoff", runOf(14), "feedback")),
+						false,
+					);
+				} else {
+					assert.equal(stored.feedback?.batches.length, 1);
+					assert.deepEqual(stored.feedback.batches[0]?.status, {
+						kind: "settled",
+						outcome: { kind: "no_action" },
+					});
+				}
+			});
+
 	it("ingests recorded GitHub review shapes into one queued batch and one intake notice", async () => {
 		const f = await reviewingRun();
 		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
