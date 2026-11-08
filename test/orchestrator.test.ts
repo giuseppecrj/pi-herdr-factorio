@@ -11935,6 +11935,97 @@ describe("controller-only validate", () => {
 		);
 	});
 
+	for (const reason of ["behind_main", "unreadable"] as const)
+		it(`F10-3 posts and logs ${reason} before holding when main moved`, async () => {
+			const f = await reviewingRun();
+			f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+			await once(f.controller);
+			await f.controller.tick();
+			await f.controller.tick();
+			const initial = f.files.claims.get(runOf(14))?.handoff;
+			const port = f.executor.candidate;
+			assert.ok(initial?.kind === "selected" && initial.published && port);
+			const head = sha("b".repeat(40));
+			const main = sha("d".repeat(40));
+			assert.notEqual(main, initial.current.intent.baseSha);
+			const observe = port.observe;
+			port.observe = async (state, now) => ({
+				...(await observe(state, now)),
+				main,
+				pr: { kind: "open", number: 99, head, refHead: head },
+				readiness: { kind: "unavailable" },
+			});
+
+			const root = stateDir();
+
+			const native = controllerCandidatePort({
+				stateDir: root,
+				exec: f.github.exec,
+			});
+
+			const pr = f.github.add(
+				fakeIssue(99, { pullRequest: true, labels: ["factory:review"] }),
+			);
+
+			const execute = port.execute;
+			let derivations = 0;
+			port.execute = async (state, request) => {
+				if (request.kind === "post_notice")
+					return native.execute(state, request);
+
+				if (request.kind !== "derive_owner_patch")
+					return execute(state, request);
+				derivations++;
+				assert.equal(request.baseSha, main);
+
+				return {
+					kind: "derive_owner_patch",
+					request,
+					result: { kind: "refused", reason },
+				};
+			};
+
+			const launches = f.executor.launches.length;
+			const restarted = f.start();
+
+			for (let tick = 0; tick < 8; tick++) await restarted.tick();
+
+			const stopped = f.files.claims.get(runOf(14))?.handoff;
+			assert.ok(stopped?.kind === "selected" && stopped.work.kind === "held");
+			assert.equal(stopped.work.reason, "owner_head_refused");
+			assert.partialDeepStrictEqual(stopped.published?.readiness, {
+				kind: "not_ready",
+				reason: "owner_head_refused",
+			});
+
+			const notices = f.github.issues
+				.get(14)!
+				.comments.filter((c) =>
+					c.body.includes(`owner_head_refused (${reason})`),
+				);
+
+			assert.equal(notices.length, 1);
+			assert.ok(notices[0]!.body.includes(`Head: ${head}`));
+			assert.ok(!pr.labels.includes("factory:review"));
+			assert.equal(derivations, reason === "unreadable" ? 3 : 1);
+			assert.equal(f.executor.launches.length, launches);
+			assert.deepEqual(
+				f.logs
+					.filter((l) => l.event === "owner_derive_result")
+					.map((l) => l.fields),
+				Array.from({ length: derivations }, () => ({
+					runId: runOf(14),
+					head,
+					baseSha: main,
+					result: "refused",
+					reason,
+				})),
+			);
+			await f.start().tick();
+			assert.deepEqual(f.files.claims.get(runOf(14))?.handoff, stopped);
+			assert.equal(derivations, reason === "unreadable" ? 3 : 1);
+		});
+
 	it("F10-3 crashes after the C8 owner file write, adopts it after restart and settles owner review without a build (review R8)", async () => {
 		const f = await reviewingRun();
 		f.executor.behaviors = [{ kind: "pass", usage: 11 }];
@@ -12117,6 +12208,20 @@ describe("controller-only validate", () => {
 			await restarted.tick();
 		assert.equal(ownerCalls, 1);
 		assert.equal(attempts, 2);
+		assert.deepEqual(
+			f.logs
+				.filter((l) => l.event === "owner_derive_result")
+				.map((l) => l.fields),
+			[
+				{
+					runId: runOf(14),
+					head,
+					baseSha: initial.current.intent.baseSha,
+					result: "found",
+					reason: null,
+				},
+			],
+		);
 		assert.equal(f.executor.launches.length, launches);
 
 		for (let tick = 0; tick < 12; tick++) {

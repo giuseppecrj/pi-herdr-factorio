@@ -624,6 +624,220 @@ test("F10-3 drift withdraws once per head before spend, stable holds, and reset 
 	assert.ok(parseCandidateState(legacy));
 });
 
+test("a refused owner head whose base lags main keeps its notice (lane 8)", () => {
+	const start = waiting();
+	const moved = "d".repeat(40);
+	assert.ok(isGitSha(moved));
+	assert.notEqual(moved, start.current.intent.baseSha);
+	const obs = { ...ownerObservation(start), main: moved };
+	const noticeState = handoffCandidate(start, obs).state;
+	const notice = pending(noticeState, "post_notice");
+
+	const due = handoffCandidate(noticeState, {
+		kind: "effect_completed",
+		now: 200,
+		completion: { kind: "post_notice", request: notice },
+	}).state;
+
+	const deriving = handoffCandidate(due, obs).state;
+	const request = pending(deriving, "derive_owner_patch");
+	assert.equal(request.baseSha, moved);
+
+	const stopped = handoffCandidate(deriving, {
+		kind: "effect_completed",
+		now: 300,
+		completion: {
+			kind: "derive_owner_patch",
+			request,
+			result: { kind: "refused", reason: "behind_main" },
+		},
+	}).state;
+
+	assert.equal(pending(stopped, "post_notice").detail, "owner_head_refused");
+
+	const next = handoffCandidate(stopped, { ...obs, now: 400 }).state;
+	const refusal = pending(next, "post_notice");
+	assert.equal(refusal.detail, "owner_head_refused");
+	assert.equal(refusal.refusal, "behind_main");
+
+	const held = selected(
+		handoffCandidate(next, {
+			kind: "effect_completed",
+			now: 500,
+			completion: { kind: "post_notice", request: refusal },
+		}).state,
+	);
+
+	assert.deepEqual(held.work, {
+		kind: "held",
+		reason: "owner_head_refused",
+		since: 300,
+	});
+	assert.partialDeepStrictEqual(held.published?.readiness, {
+		kind: "not_ready",
+		reason: "owner_head_refused",
+	});
+	assert.deepEqual(
+		selected(handoffCandidate(held, { ...obs, now: 600 }).state).work,
+		held.work,
+	);
+});
+
+for (const [kind, make] of [
+	[
+		"owner_head",
+		() => {
+			const state = waiting();
+
+			return handoffCandidate(state, ownerObservation(state)).state;
+		},
+	],
+	["owner_head_failed", () => validated(ownerSelected().state, false)],
+	[
+		"checks_failed",
+		() => {
+			const state = waiting();
+
+			return handoffCandidate(state, {
+				...readyObservation(state),
+				readiness: { kind: "not_ready", reason: "checks_failed" },
+			}).state;
+		},
+	],
+	[
+		"feedback_intake",
+		() => {
+			const state = waiting();
+
+			return handoffCandidate(state, withFeedback(state)).state;
+		},
+	],
+	[
+		"feedback_overflow",
+		() => {
+			const state = waiting();
+			const feedback = feedbackObservation(state);
+			assert.ok(feedback.kind === "read" && feedback.batch);
+
+			return handoffCandidate(state, {
+				...readyObservation(state),
+				feedback: { ...feedback, batch: { ...feedback.batch, overflow: true } },
+			}).state;
+		},
+	],
+	[
+		"repair_started",
+		() => {
+			const state = queuedFeedback();
+
+			return handoffCandidate(state, readyObservation(state)).state;
+		},
+	],
+	[
+		"repair_unavailable",
+		() => {
+			const initial = queuedFeedback();
+
+			const state = {
+				...initial,
+				current: { ...initial.current, assessment: undefined },
+			};
+
+			return handoffCandidate(state, readyObservation(state)).state;
+		},
+	],
+	[
+		"round_summary",
+		() => {
+			const build = rebuildingFeedback();
+
+			return handoffCandidate(build.state, {
+				kind: "repair_settled",
+				execution: build.execution,
+				tokens: 10,
+				result: { kind: "no_change" },
+				now: 300,
+			}).state;
+		},
+	],
+] as const)
+	test(`main movement preserves pending ${kind} until completion`, () => {
+		const state = selected(make());
+		const request = pending(state, "post_notice");
+		assert.equal(request.notice.kind, kind);
+		const main = "d".repeat(40);
+		assert.ok(isGitSha(main));
+		assert.notEqual(main, state.current.intent.baseSha);
+
+		const obs = {
+			...(kind === "owner_head" || kind === "owner_head_failed"
+				? ownerObservation(waiting())
+				: readyObservation(waiting())),
+			main,
+			now: 400,
+		};
+
+		const restored = parseCandidateState(JSON.parse(JSON.stringify(state)));
+		assert.ok(restored);
+		const next = handoffCandidate(restored, obs);
+		assert.deepEqual(next.effect, request);
+		assert.deepEqual(next.state, state);
+		assert.deepEqual(handoffCandidate(next.state, obs), next);
+
+		const done = selected(
+			handoffCandidate(next.state, {
+				kind: "effect_completed",
+				now: 500,
+				completion: { kind: "post_notice", request },
+			}).state,
+		);
+
+		assert.notEqual(done.work.kind, "effect");
+		assert.deepEqual(done.accounts, state.accounts);
+
+		if (request.then.kind === "held")
+			assert.partialDeepStrictEqual(done.work, {
+				kind: "held",
+				reason: request.then.reason,
+			});
+		else if (request.then.kind === "resume")
+			assert.deepEqual(done.work, request.then.work);
+		else assert.equal(done.work.kind, request.then.kind);
+
+		if (kind === "feedback_intake")
+			assert.equal(done.feedback?.batches[0]?.notice, "posted");
+
+		if (kind === "feedback_overflow")
+			assert.equal(done.feedback?.overflow?.notice, "posted");
+	});
+
+test("main movement preserves pending readiness withdrawal until completion", () => {
+	const initial = waiting();
+
+	const state = handoffCandidate(initial, {
+		...readyObservation(initial),
+		readiness: { kind: "not_ready", reason: "checks_incomplete" },
+	}).state;
+
+	const request = pending(state, "void_readiness");
+	const main = "d".repeat(40);
+	assert.ok(isGitSha(main));
+	const next = handoffCandidate(state, { ...readyObservation(initial), main });
+	assert.deepEqual(next.effect, request);
+
+	const done = selected(
+		handoffCandidate(next.state, {
+			kind: "effect_completed",
+			completion: { kind: "void_readiness", request },
+		}).state,
+	);
+
+	assert.partialDeepStrictEqual(done.work, {
+		kind: "held",
+		reason: "checks_incomplete",
+	});
+});
+
 test("F10-3 owner certification, readiness and truthful merge authorship", () => {
 	const f = ownerSelected();
 	const validatedOwner = validated(f.state);
@@ -1089,6 +1303,15 @@ test("F10-3 notices distinguish refusal, failed gates and behind for the same he
 		},
 	}).state;
 
+	const behindMain = handoffCandidate(f.deriving, {
+		kind: "effect_completed",
+		completion: {
+			kind: "derive_owner_patch",
+			request: f.request,
+			result: { kind: "refused", reason: "behind_main" },
+		},
+	}).state;
+
 	const failed = validated(f.state, false);
 	const moved = "d".repeat(40);
 	assert.ok(isGitSha(moved));
@@ -1098,13 +1321,13 @@ test("F10-3 notices distinguish refusal, failed gates and behind for the same he
 		main: moved,
 	}).state;
 
-	const notices = [refused, failed, actualBehind].map((s) =>
+	const notices = [refused, failed, actualBehind, behindMain].map((s) =>
 		pending(s, "post_notice"),
 	);
 
-	assert.equal(new Set(notices.map((n) => n.notice.key)).size, 3);
+	assert.equal(new Set(notices.map((n) => n.notice.key)).size, 4);
 
-	for (const s of [refused, failed, actualBehind]) {
+	for (const s of [refused, failed, actualBehind, behindMain]) {
 		assert.ok(parseCandidateState(JSON.parse(JSON.stringify(s))));
 		const legacy = JSON.parse(JSON.stringify(s));
 		legacy.work.request.notice.key = `<!-- factory:notice ${pin.runId} owner_head_failed ${f.receipt.head} -->`;
@@ -1116,7 +1339,7 @@ test("F10-3 notices distinguish refusal, failed gates and behind for the same he
 		const issue = github.add(fakeIssue(pin.issue));
 		github.add(fakeIssue(5));
 
-		for (const state of [refused, failed, actualBehind]) {
+		for (const state of [refused, failed, actualBehind, behindMain]) {
 			const request = pending(state, "post_notice");
 
 			for (let replay = 0; replay < 2; replay++) {
@@ -1129,13 +1352,15 @@ test("F10-3 notices distinguish refusal, failed gates and behind for the same he
 			}
 		}
 
-		assert.equal(issue.comments.length, 3);
+		assert.equal(issue.comments.length, 4);
 		assert.match(
 			issue.comments[0]!.body,
 			/owner_head_refused \(forbidden_path\)/,
 		);
 		assert.match(issue.comments[1]!.body, /owner_head_failed/);
 		assert.match(issue.comments[2]!.body, /Main moved/);
+		assert.match(issue.comments[3]!.body, /owner_head_refused \(behind_main\)/);
+		assert.match(issue.comments[3]!.body, /Please update the branch with main/);
 
 		for (const comment of issue.comments)
 			assert.ok(comment.body.includes(`Head: ${f.receipt.head}`));
