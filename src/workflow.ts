@@ -231,7 +231,7 @@ export function isGitSha(input: string): input is GitSha {
 }
 
 export function isRefSegment(segment: string): boolean {
-	return !segment.startsWith(".") && !segment.endsWith(".lock");
+	return !segment.startsWith(".");
 }
 
 export function isBranchName(input: string): boolean {
