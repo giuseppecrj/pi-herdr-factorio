@@ -487,7 +487,7 @@ const cipher=createCipheriv("aes-256-gcm",Buffer.alloc(32),Buffer.alloc(12)); ci
 	]);
 });
 
-test("main-owned test globs match npm test and include sandbox cases", () => {
+test("visible suite excludes heavy integration tests without losing CI or gate coverage", () => {
 	const root = existsSync("/g/tooling/.github/factory/gates/gates.json")
 		? "/g/tooling"
 		: ".";
@@ -499,6 +499,7 @@ test("main-owned test globs match npm test and include sandbox cases", () => {
 	assert.deepEqual(manifest.testGlobs, [
 		"test/*.test.ts",
 		"test/sandbox/*.cases.ts",
+		"test/integration/*.test.ts",
 	]);
 	const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 	assert.equal(
@@ -508,6 +509,38 @@ test("main-owned test globs match npm test and include sandbox cases", () => {
 
 	for (const pattern of manifest.testGlobs)
 		assert.ok(globSync(pattern, { cwd: root }).length > 0);
+
+	const covered = new Set<string>(
+		manifest.testGlobs.flatMap((pattern: string) =>
+			globSync(pattern, { cwd: root }),
+		),
+	);
+
+	assert.deepEqual(
+		globSync("test/**/*.{test,cases}.ts", { cwd: root }).filter(
+			(path) => !path.startsWith("test/acceptance/") && !covered.has(path),
+		),
+		[],
+		"Every test file outside the separately dispatched held-out suite must match a trusted test glob",
+	);
+
+	const visible = globSync(manifest.testGlobs[0], { cwd: root });
+	assert.ok(!visible.some((path) => path.endsWith("replay-driver.test.ts")));
+	const integration = globSync("test/integration/*.test.ts", { cwd: root });
+	assert.ok(integration.includes("test/integration/replay-driver.test.ts"));
+	assert.equal(
+		pkg.scripts["test:integration"],
+		"node --experimental-strip-types --test --test-concurrency=1 test/integration/*.test.ts",
+	);
+	assert.match(pkg.scripts.check, /npm test && npm run test:integration$/);
+	assert.match(
+		readFileSync(join(root, ".github/workflows/check.yml"), "utf8"),
+		/run: npm run check/,
+	);
+	assert.match(
+		readFileSync(join(root, ".github/workflows/ci.yml"), "utf8"),
+		/node --experimental-strip-types server\/cli\.ts gates/,
+	);
 });
 
 test("removes nested ignore files and candidate-deleted source", async (t) => {
@@ -1005,6 +1038,32 @@ test("candidate-added tests pass without a manifest edit and join the next main 
 	assert.equal(main.status, "passed");
 	assert.equal(main.baselineCounts["test/new-thing.test.ts"], 1);
 	assert.equal(main.candidateCounts["test/new-thing.test.ts"], 1);
+});
+
+test("main integration suites run on the baseline and candidate even when the candidate deletes them", async (t) => {
+	const f = repo(t);
+	const path = ".github/factory/gates/gates.json";
+	const manifest = JSON.parse(readFileSync(join(f.root, path), "utf8"));
+	f.put(
+		path,
+		JSON.stringify({
+			...manifest,
+			testGlobs: ["test/*.test.ts", "test/integration/*.test.ts"],
+		}),
+	);
+	f.put(
+		"test/integration/driver.test.ts",
+		'import {test} from "node:test"; test("driver scenario",()=>{});',
+	);
+	const gateSha = f.commit();
+	f.git("rm", "test/integration/driver.test.ts");
+	f.put(path, JSON.stringify(manifest));
+	const candidateSha = f.commit();
+	const r = await checkCandidate({ ...gateInput(f, candidateSha), gateSha });
+	assert.equal(r.status, "passed");
+	assert.equal(r.baselineCounts["test/integration/driver.test.ts"], 1);
+	assert.equal(r.candidateCounts["test/integration/driver.test.ts"], 1);
+	assert.ok(r.ignoredChanges.includes(".github/factory/gates/gates.json"));
 });
 
 test("new main sandbox cases are discovered through the main aggregator", async (t) => {

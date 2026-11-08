@@ -1075,12 +1075,16 @@ async function validationFixture(withGates = false) {
 		wallMs: 1,
 	});
 	const fake = new GitData();
+	const sleeps: number[] = [];
 	let state: ValidationState | null = null;
 
 	const step = (now = Date.parse("2026-10-31T00:00:00Z"), fetch = archive) =>
 		controllerValidator({
 			stateDir: root,
 			exec: fake.exec,
+			sleep: async (ms: number) => {
+				sleeps.push(ms);
+			},
 			fetch: async () => fetch,
 			receipt: async (_repo, _id, logs) => {
 				for (const [name, text] of fake.logs) logs?.set(name, text);
@@ -1109,6 +1113,7 @@ async function validationFixture(withGates = false) {
 		workspace,
 		patch,
 		fake,
+		sleeps,
 		step,
 		state: () => state,
 		archive,
@@ -1199,6 +1204,7 @@ describe("fix round 1 recovery regressions", () => {
 			await f.step(start);
 			f.fake.failure = 502;
 			assert.equal((await f.step(start + 30_000)).kind, "waiting");
+			assert.deepEqual(f.sleeps, [1000, 2000]);
 			assert.equal(
 				existsSync(join(f.root, "validation", runId, "failure.json")),
 				false,
@@ -1283,6 +1289,7 @@ describe("fix round 1 recovery regressions", () => {
 		f.fake.failure = 502;
 		const result = await f.step(start + 1_200_000);
 		assert.equal(result.kind, "failed");
+		assert.deepEqual(f.sleeps, [1000, 2000, 1000, 2000]);
 
 		if (result.kind === "failed") assert.equal(result.reason, "ci_timeout");
 		const validation = f.state();
