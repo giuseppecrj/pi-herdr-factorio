@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -25,10 +25,15 @@ import {
 
 const corpusDir = new URL("./fixtures/replay/", import.meta.url).pathname;
 const repo = "giuseppecrj/pi-herdr-factorio";
-const sha = "a".repeat(40);
-const otherSha = "b".repeat(40);
-assert.ok(isGitSha(sha));
-assert.ok(isGitSha(otherSha));
+
+function pinnedSha(text: string) {
+	if (!isGitSha(text)) throw new Error("sha");
+
+	return text;
+}
+
+const sha = pinnedSha("a".repeat(40));
+const otherSha = pinnedSha("b".repeat(40));
 const digest = digestOf("assets");
 const exec: Exec = async () => ({ code: 0, stdout: "", stderr: "" });
 
@@ -44,6 +49,7 @@ async function fixtureRow(): Promise<LedgerRow> {
 			new URL("./fixtures/metrics/runs-2026-11-08.jsonl", import.meta.url),
 		),
 	);
+
 	const line = lines[0];
 	assert.ok(line?.kind === "known");
 
@@ -89,9 +95,10 @@ async function side() {
 async function cli(args: string[], execute: Exec = exec) {
 	let stdout = "";
 	let stderr = "";
+
 	const code = await runCli(args, {
 		exec: execute,
-		env: () => undefined,
+		env: (name) => (name === "HOME" ? tmpdir() : undefined),
 		stdout: (s) => {
 			stdout += s;
 		},
@@ -121,6 +128,7 @@ describe("replay corpus and read-only check", () => {
 				join(corpusDir, "cases", c.id, "issue.md"),
 				"utf8",
 			);
+
 			assert.equal(digestOf(issue), c.issueDigest);
 			assert.doesNotMatch(issue, /#\d+|@[\w-]+|https?:\/\/github\.com/i);
 		}
@@ -177,6 +185,7 @@ describe("replay corpus and read-only check", () => {
 
 	it("fails closed on unavailable git evidence, and reports bundle switches", async () => {
 		const corpus = await loadReplayCorpus(corpusDir);
+
 		const result = await checkReplay({
 			corpus,
 			mainSha: sha,
@@ -188,7 +197,9 @@ describe("replay corpus and read-only check", () => {
 				stderr: "",
 			}),
 		});
+
 		assert.equal(result.bundle, "bundle_switch_required");
+
 		const failed = await checkReplay({
 			corpus,
 			mainSha: sha,
@@ -196,6 +207,7 @@ describe("replay corpus and read-only check", () => {
 			candidateSha: otherSha,
 			exec: async () => ({ code: 128, stdout: "", stderr: "missing object" }),
 		});
+
 		assert.equal(failed.cases[0]?.status, "unavailable");
 	});
 
@@ -229,10 +241,110 @@ describe("replay corpus and read-only check", () => {
 	});
 });
 
+describe("replay CLI boundaries", () => {
+	it("refuses offline and exhausted live requests through the public command", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "replay-live-check-"));
+		const path = join(dir, "budget.json");
+		const text = `---\nrepository: ${repo}\nreplay:\n  max_tokens: 1100000\n---\n`;
+
+		const execute: Exec = async (_cmd, args) => ({
+			code: 0,
+			stdout: args[0] === "show" ? text : "",
+			stderr: "",
+		});
+
+		const args = [
+			"replay",
+			"check",
+			"--json",
+			"--corpus",
+			corpusDir,
+			"--main-sha",
+			sha,
+			"--previous-sha",
+			sha,
+			"--candidate-sha",
+			otherSha,
+			"--production-state-dir",
+			dir,
+			"--budget-file",
+			path,
+		];
+
+		try {
+			const offline = await cli([...args, "--case", "c5"], execute);
+			assert.equal(offline.code, EXIT.invalid);
+			assert.match(offline.stdout, /offline_only/);
+			const ready = await cli([...args, "--case", "c3"], execute);
+			assert.equal(ready.code, EXIT.ok, ready.stdout);
+			assert.match(ready.stdout, /"allowed": true/);
+			await reserveReplay(path, 1100000, "first");
+			await reserveReplay(path, 1100000, "second");
+			const exhausted = await cli([...args, "--case", "c3"], execute);
+			assert.equal(exhausted.code, EXIT.invalid);
+			assert.match(exhausted.stdout, /replay_cap/);
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("reports frozen verification rows with no subprocess, and rejects production or corrupt rows", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "replay-cli-report-"));
+		const path = join(dir, "row.json");
+		const row = await fixtureRow();
+
+		const noExec: Exec = async () => {
+			throw new Error("no subprocess permitted");
+		};
+
+		const args = [
+			"replay",
+			"report",
+			"--json",
+			"--case",
+			"c3",
+			"--corpus",
+			corpusDir,
+			"--previous-sha",
+			sha,
+			"--candidate-sha",
+			otherSha,
+			"--previous-row",
+			path,
+			"--candidate-row",
+			path,
+		];
+
+		try {
+			await writeFile(path, `${JSON.stringify(row)}\n`);
+			const result = await cli(args, noExec);
+			assert.equal(result.code, EXIT.ok, result.stdout);
+			assert.match(result.stdout, /"matchesExpected": "yes"/);
+			assert.match(result.stdout, /"promotes": false/);
+			assert.ok(row.provenance.kind === "verification");
+			await writeFile(
+				path,
+				`${JSON.stringify({
+					...row,
+					provenance: { kind: "production", policy: row.provenance.policy },
+				})}\n`,
+			);
+			const production = await cli(args, noExec);
+			assert.equal(production.code, EXIT.invalid);
+			assert.match(production.stdout, /replay_not_verification/);
+			await writeFile(path, "{}");
+			assert.equal((await cli(args, noExec)).code, EXIT.invalid);
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+});
+
 describe("replay comparison", () => {
 	it("refuses non-verification rows", async () => {
 		const a = await side();
 		assert.ok(a.row.provenance.kind === "verification");
+
 		const production = {
 			...a,
 			row: {
@@ -240,6 +352,7 @@ describe("replay comparison", () => {
 				provenance: { kind: "production", policy: a.row.provenance.policy },
 			} satisfies LedgerRow,
 		};
+
 		assert.throws(
 			() =>
 				replayReport({
@@ -253,11 +366,13 @@ describe("replay comparison", () => {
 
 	it("compares identical pins and reports stages, versions, limitations and unavailable spend", async () => {
 		const a = await side();
+
 		const result = replayReport({
 			previous: a,
 			candidate: { ...a, headSha: otherSha },
 			expected: "needs_info",
 		});
+
 		assert.equal(result.comparability, "comparable");
 		assert.equal(result.previous.matchesExpected, "yes");
 		assert.equal(result.previous.spend.kind, "unavailable");
@@ -276,16 +391,25 @@ describe("replay comparison", () => {
 		];
 
 		assert.ok(a.row.provenance.kind === "verification");
-		changes.push({
-			...a.row,
-			provenance: {
-				...a.row.provenance,
-				policy: {
-					...a.row.provenance.policy,
-					workflowDigest: digestOf("other"),
+
+		for (const policy of [
+			{ ...a.row.provenance.policy, workflowDigest: digestOf("other") },
+			{
+				...a.row.provenance.policy,
+				gates: {
+					kind: "known",
+					value: { sourceSha: sha, digest: digestOf("other gates") },
 				},
 			},
-		});
+			{
+				...a.row.provenance.policy,
+				gates: { kind: "unavailable", reason: "receipt_missing" },
+			},
+		] satisfies (typeof a.row.provenance.policy)[])
+			changes.push({
+				...a.row,
+				provenance: { ...a.row.provenance, policy },
+			});
 		assert.ok(a.row.models.kind === "known");
 		const model = a.row.models.value[0];
 		assert.ok(model?.runtime.kind === "known");
@@ -321,6 +445,7 @@ describe("replay comparison", () => {
 
 	it("does not mistake a cancelled candidate or a landing for proven handoff", async () => {
 		const a = await side();
+
 		const row: LedgerRow = {
 			...a.row,
 			outcome: {
@@ -329,6 +454,7 @@ describe("replay comparison", () => {
 				reason: { kind: "known", value: "closed" },
 			},
 		};
+
 		assert.equal(
 			replayReport({
 				previous: { ...a, row },
@@ -348,6 +474,10 @@ describe("capped replay budget", () => {
 		try {
 			assert.equal(REPLAY_RUN_CAP, 540000);
 			await reserveReplay(path, 1100000, "previous");
+			await assert.rejects(
+				reserveReplay(path, 1100000, "previous"),
+				/replay_already_reserved/,
+			);
 			await reserveReplay(path, 1100000, "candidate");
 			await assert.rejects(reserveReplay(path, 1100000, "third"), /replay_cap/);
 			const row = await fixtureRow();
@@ -377,6 +507,7 @@ describe("capped replay budget", () => {
 		try {
 			await reserveReplay(path, 1100000, "failed");
 			const row = await fixtureRow();
+
 			const failed: LedgerRow = {
 				...row,
 				outcome: {
@@ -389,13 +520,18 @@ describe("capped replay budget", () => {
 					tokens: { kind: "exact", unit: "tokens", total: 27000 },
 				},
 			};
+
 			await settleReplay(path, "failed", failed);
+			const settledBytes = await readFile(path, "utf8");
+			await settleReplay(path, "failed", failed);
+			assert.equal(await readFile(path, "utf8"), settledBytes);
 			let b = await readReplayBudget(path);
 			assert.equal(b.chargedTokens, 27000);
 			assert.equal(b.reservations[0]?.outcome, "failed");
 			await reserveReplay(path, 1100000, "interrupted");
 			await settleReplay(path, "interrupted", {
 				...row,
+				runId: digestOf("interrupted run"),
 				usage: {
 					...row.usage,
 					tokens: {
@@ -425,16 +561,22 @@ describe("trusted replay policy and guards", () => {
 			const r = workflow(
 				`---\nrepository: ${repo}\nreplay:\n  max_tokens: ${cap}\n---\n`,
 			);
+
 			assert.equal(r.kind, "invalid", cap);
 		}
 
 		const valid = workflow(
 			`---\nrepository: ${repo}\nreplay:\n  max_tokens: 1100000\n---\n`,
 		);
+
 		assert.equal(valid.kind, "valid");
 
 		if (valid.kind === "valid")
 			assert.deepEqual(valid.config.replay, { maxTokens: 1100000 });
+		assert.equal(
+			workflow(`---\nrepository: ${repo}\nreplay: {}\n---\n`).kind,
+			"invalid",
+		);
 		const absent = workflow(`---\nrepository: ${repo}\n---\n`);
 
 		if (absent.kind !== "valid") throw new Error("invalid");
@@ -443,14 +585,18 @@ describe("trusted replay policy and guards", () => {
 
 	it("the CLI refuses a bound production lock, including without a holder file", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "replay-production-"));
+
 		const lock = await acquireLock({
 			stateDir: dir,
 			procs: procTable(),
 			now: Date.now,
 		});
+
 		assert.equal(lock.kind, "acquired");
 
 		if (lock.kind !== "acquired") throw new Error("lock");
+
+		await unlink(join(dir, "controller.lock"));
 
 		try {
 			const result = await cli([
@@ -468,6 +614,7 @@ describe("trusted replay policy and guards", () => {
 				"--production-state-dir",
 				dir,
 			]);
+
 			assert.equal(result.code, EXIT.invalid);
 			assert.match(result.stdout, /production_controller_running/);
 		} finally {
@@ -481,10 +628,12 @@ describe("trusted replay policy and guards", () => {
 			new URL("../src/replay.ts", import.meta.url),
 			"utf8",
 		);
+
 		assert.doesNotMatch(
 			source,
 			/from ["'][^"']*(?:sandbox\.ts|orchestrator|controller|executor)["']/,
 		);
+
 		const driver = await readFile(
 			new URL(
 				"../.pi/skills/verify-factory/scripts/drive-replay.sh",
