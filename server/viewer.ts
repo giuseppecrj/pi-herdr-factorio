@@ -28,10 +28,13 @@ export async function startViewer(options: ViewerOptions) {
 		throw new Error("invalid run id");
 	const stateDir = await realpath(options.stateDir);
 
-	const css = await readFile(
-		new URL("./viewer/style.css", import.meta.url),
-		"utf8",
-	);
+	const css = (
+		await Promise.all(
+			["./viewer/design/tokens.css", "./viewer/style.css"].map((path) =>
+				readFile(new URL(path, import.meta.url), "utf8"),
+			),
+		)
+	).join("\n");
 
 	if (
 		options.allowedHost !== undefined &&

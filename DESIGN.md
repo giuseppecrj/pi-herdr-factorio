@@ -8,7 +8,7 @@ Citations name `shep/design/system/<path>` in `git@github.com:giuseppecrj/shep.g
 
 - **Shep governs the viewer and dashboard.** _Why:_ Factorio, exmach and Shep should look and speak like one product.
 - **Dark only.** No light theme or `prefers-color-scheme` switch. _Why:_ Shep is dark only (`shep/design/system/principles.md`, “Out of scope”), and one theme keeps the states small.
-- **This PR lays the foundation only. The viewer is not on the tokens yet.** The next PR, the viewer restyle, moves it onto them. No UI changes ship here. _Why:_ the shared rules and drift check should land before the dashboard is built.
+- **The viewer is on the vendored tokens.** Its existing pages use the shared type, surfaces, links and Notices. F09c adds the owner dashboard later. _Why:_ the dashboard should build on the shared system, not need a restyle.
 - **Pages stay server-rendered, with no client script.** Use native disclosures. _Why:_ the viewer's CSP and small runtime remain useful constraints.
 
 ## The four principles on the viewer and dashboard
@@ -69,7 +69,7 @@ The table uses Shep token names. CSS uses their kebab-case form, such as `attent
 - Names are `--<tier>-<kebab-name>`. Prefer semantic tokens in page CSS and component tokens where Shep has one, such as `--component-card-*` and `--component-notice-*`.
 - Use tokens only, never raw colours in UI CSS. `transparent`, `currentColor` and `inherit` are fine. Never hand-edit `tokens.css`.
 - Translucent colours use `color-mix` with palette references. Motion maps to CSS easing; unknown shapes or curves fail generation. Honour `prefers-reduced-motion` if motion is added later.
-- `test/design-tokens.test.ts` checks exact generated output and that every variable used by `tokens.css` is defined there. It does not yet enforce the old viewer stylesheet.
+- `test/design-tokens.test.ts` checks exact generated output and that every variable used by `tokens.css` is defined there. `test/viewer-style.test.ts` guards the viewer stylesheet against raw colours, unknown variables, light-theme switches and uppercase transforms, checks text contrast, and verifies that `/style.css` starts with the tokens.
 - Biome skips these two files because `tokens.json` is a byte copy of Shep and `tokens.css` is generated; the drift test guards them instead.
 
 ## Typography on the web
@@ -87,7 +87,7 @@ Follow `shep/design/system/foundations/typography.md`.
 ## Icons
 
 - **Words first.** Glyphs never replace labels. _Why:_ words work without colour or an icon.
-- **Use Tabler Icons outline, pinned at `v3.50.0`, under MIT.** Vendor the used SVGs and MIT notice with the viewer restyle PR, not this foundation. No runtime dependency, CDN or icon font. _Why:_ one family keeps one voice and leaves the CSP alone.
+- **Use Tabler Icons outline, pinned at `v3.50.0`, under MIT.** The SVG strings live in `server/viewer/design/icons/icons.ts`, with the MIT licence and source in its sibling `NOTICE`. No runtime dependency, CDN or icon font. _Why:_ one family keeps one voice and leaves the CSP alone.
 - **Do not ship SF Symbols or Shep's exported SVGs.** Map roles from `shep/design/system/symbols.json` instead. _Why:_ the web needs its own licensed assets.
 - **Use outlined glyphs, `aria-hidden="true"`, `stroke="currentColor"` and em sizing.** _Why:_ words carry accessibility and glyphs scale with them. See `shep/design/system/foundations/iconography.md`.
 
@@ -163,10 +163,10 @@ These rules supersede the v2 mockup where it differs.
 
 - **A. “Working” and “Done recently” are display groups, not attention kinds. Keep seven attention kinds.** _Why:_ grouping the page must not change the attention model.
 - **B. The “no rendered link leaves `/factory/`” rule applies only to internal navigation. GitHub action links are required.** _Why:_ review and answers still happen on GitHub.
-- **C. F09c's file scope includes `server/viewer/style.css`, the web-app manifest and icons, and vendored design files.** _Why:_ the dashboard needs these assets to follow the system from day one. This foundation PR still changes no UI files.
+- **C. F09c's file scope includes `server/viewer/style.css`, the web-app manifest and icons, and vendored design files.** _Why:_ the dashboard needs these assets to follow the system from day one. The original foundation PR changed no UI files.
 - **D. The hold form requires CSP `form-action 'self'` and a per-process token in a hidden field. This is the only security-posture change.** _Why:_ the one owner control needs same-origin submission and forgery protection without widening other access.
 - **E. Read the clean-landing metric from a local controller-written snapshot. Never call GitHub during a page request.** _Why:_ rendering stays local and predictable.
-- **F. Dark only. Vendor Shep tokens at `df02576` and Tabler outline glyphs at `v3.50.0` with their MIT notice in this public repo.** _Why:_ reviewed pins make the shared look reproducible without runtime fetches. Glyphs arrive with the restyle.
+- **F. Dark only. Vendor Shep tokens at `df02576` and Tabler outline glyphs at `v3.50.0` with their MIT notice in this public repo.** _Why:_ reviewed pins make the shared look reproducible without runtime fetches. The viewer restyle vendors the glyphs in `server/viewer/design/icons/`.
 - **G. Stale is an age, not a state. Put a run on hold and an out-of-budget run under Needs you, with distinct reasons. Order groups Needs you, Failed, Working, Done recently; fold the last.** _Why:_ the owner sees obligations first, then failures, then ongoing and completed work.
 - **H. Bundle `tokens.css` into the served `/style.css`. Add no route and leave the CSP unchanged for tokens.** _Why:_ the shared styles need no new serving or trust surface. The restyle PR wires this up.
 
@@ -180,4 +180,4 @@ These rules supersede the v2 mockup where it differs.
 
 ## Follow-ups
 
-These are plans, not shipped behaviour: the viewer restyle consumes the tokens, vendors the glyphs and checks the page stylesheet. F09c then builds the owner dashboard on that foundation.
+F09c builds the owner dashboard on the restyled viewer. Its dashboard content, controls and stage glyphs remain planned, not shipped behaviour.
