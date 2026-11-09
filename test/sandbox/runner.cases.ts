@@ -3106,22 +3106,26 @@ describe("private build executor", () => {
 		assert.equal(existsSync(base), false);
 	});
 
-	for (const { outcome, wallMs } of (
-		[
-			"failed",
-			"passed",
-			"candidate_passed",
-			"unavailable",
-			"restart",
-			"base_missing",
-		] as const
-	).flatMap((outcome) =>
-		[149_999, 150_000, 150_001, 179_999, 180_000].map((wallMs) => ({
-			outcome,
-			wallMs,
-		})),
-	))
-		it(`compares visible tests with unchanged base once (${outcome}, ${wallMs} ms)`, async (t) => {
+	for (const { outcome, wallMs, timeout } of [
+		...(
+			[
+				"failed",
+				"passed",
+				"candidate_passed",
+				"unavailable",
+				"restart",
+				"base_missing",
+			] as const
+		).flatMap((outcome) =>
+			[149_999, 150_000, 150_001, 179_999, 180_000].map((wallMs) => ({
+				outcome,
+				wallMs,
+				timeout: false,
+			})),
+		),
+		{ outcome: "unavailable" as const, wallMs: 150_001, timeout: true },
+	])
+		it(`compares visible tests with unchanged base once (${outcome}, ${wallMs} ms${timeout ? ", timeout" : ""})`, async (t) => {
 			const dir = mkdtempSync(join(tmpdir(), "factory-visible-control-"));
 			t.after(() => rmSync(dir, { recursive: true, force: true }));
 			const stateDir = join(dir, "state");
@@ -3249,6 +3253,16 @@ describe("private build executor", () => {
 
 					calls.push(patchBytes);
 
+					if (timeout && patchBytes.length === 0)
+						return {
+							command: baseTestCommand(pristine, command),
+							exitCode: null,
+							reason: "visible_tests_unavailable",
+							detail: "timeout",
+							tail: "base result",
+							wallMs,
+						};
+
 					return {
 						command: baseTestCommand(pristine, command),
 						exitCode:
@@ -3340,7 +3354,15 @@ describe("private build executor", () => {
 				return;
 			}
 
-			const { nearLimit: baseNearLimit, ...baseRecord } = recorded.base;
+			const {
+				nearLimit: baseNearLimit,
+				reason,
+				detail,
+				...baseRecord
+			} = recorded.base;
+
+			assert.equal(reason, timeout ? "visible_tests_unavailable" : undefined);
+			assert.equal(detail, timeout ? "timeout" : undefined);
 			assert.equal(
 				baseNearLimit === true,
 				nearLimit && outcome !== "unavailable",

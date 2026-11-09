@@ -1989,7 +1989,7 @@ describe("tarball checkout", () => {
 		});
 	});
 
-	for (const mask of [0o022, 0o077])
+	for (const mask of [0o000, 0o022, 0o077])
 		it(`extracts once into the workspace, records the list and reuses it without a fetch (umask ${mask.toString(8)})`, () =>
 			withUmask(mask, async () => {
 				const state = fresh(`checkout-${mask}`);
