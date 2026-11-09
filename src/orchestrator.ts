@@ -790,6 +790,7 @@ export type TickReport = {
 		readonly reasons: readonly GateReason[];
 	};
 	readonly workflowSha: GitSha | null;
+	readonly attentionThresholds?: WorkflowConfig["attention"];
 	readonly maxConcurrent: number;
 	/** Runs holding a slot. Above `maxConcurrent` only after the cap was lowered while they ran. */
 	readonly active: number;
@@ -7285,6 +7286,7 @@ export class Orchestrator {
 			executionEnabled: this.#enabled,
 			dispatch: { enabled: input.enabled, reasons: input.reasons },
 			workflowSha: this.#workflowSha,
+			attentionThresholds: this.#config?.attention,
 			maxConcurrent: input.limits?.maxConcurrent ?? 0,
 			active: this.#active(),
 			runs,

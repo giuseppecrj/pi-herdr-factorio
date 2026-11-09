@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import {
 	mkdtemp,
 	rm,
@@ -25,7 +27,7 @@ import {
 	stateWord,
 } from "../server/viewer/dashboard.ts";
 import { startViewer } from "../server/viewer.ts";
-import { collectOwnerMetrics } from "../server/cli.ts";
+import { collectOwnerMetrics, runCli } from "../server/cli.ts";
 import { parseLedger, ledgerRow } from "../src/ledger.ts";
 import { gitObjectSha } from "../src/publication.ts";
 import type { InterventionRead } from "../src/metrics.ts";
@@ -41,16 +43,28 @@ import {
 	fileRunFiles,
 	serveLoop,
 	startMetricSnapshots,
+	startDurableUsage,
 	systemdNotify,
+	writeStatus,
 } from "../server/controller.ts";
 import { digestOf, runIdOf } from "../src/run.ts";
-import { addRun, now, ownerState, repo } from "./fixtures/owner-feed/state.ts";
+import {
+	addRun,
+	now,
+	ownerState,
+	repo,
+	save,
+} from "./fixtures/owner-feed/state.ts";
 
 async function state<T>(body: (root: string) => Promise<T>) {
 	const root = await mkdtemp(join(tmpdir(), "owner-dashboard-"));
 
 	try {
 		await ownerState(root);
+		await save(root, ["status.json"], {
+			...JSON.parse(await readFile(join(root, "status.json"), "utf8")),
+			durableUsage: { kind: "lower_bound", total: 5200000 },
+		});
 
 		return await body(root);
 	} finally {
@@ -600,6 +614,7 @@ test("READY precedes the first tick; tick start and failed status writes still f
 				pollIntervalMs: 1,
 				tick: async () => {
 					ticks++;
+					await new Promise<void>((done) => setImmediate(done));
 
 					assert.equal(sent[0], "READY=1");
 					assert.equal(sent.at(-1), "WATCHDOG=1");
@@ -618,6 +633,8 @@ test("READY precedes the first tick; tick start and failed status writes still f
 				sent.push(message);
 			},
 			sleep: async () => {
+				await new Promise<void>((done) => setImmediate(done));
+
 				if (ticks === 2) signal.abort();
 			},
 		});
@@ -629,6 +646,78 @@ test("READY precedes the first tick; tick start and failed status writes still f
 			"WATCHDOG=1",
 		]);
 		assert.ok(log.includes("status_unwritable"));
+	});
+});
+
+test("watchdog child settlement stays off the tick path, with at most one in flight", async (context) => {
+	await state(async (root) => {
+		const tickState = join(root, "tick-state");
+		await mkdir(tickState, { mode: 0o700 });
+		const stop = new AbortController();
+		let release: () => void = () => undefined;
+		let calls = 0;
+		let ticks = 0;
+		let started = 0;
+		let ready = false;
+
+		const done = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+
+		const loop = serveLoop({
+			stateDir: tickState,
+			signal: stop.signal,
+			orchestrator: {
+				pollIntervalMs: 1,
+				tick: async () => {
+					assert.equal(ready, true, "READY must settle before the first tick");
+					ticks++;
+
+					return report;
+				},
+			},
+			notify: async (message) => {
+				if (message === "READY=1") {
+					await new Promise<void>((resolve) => setImmediate(resolve));
+					ready = true;
+					started = performance.now();
+
+					return;
+				}
+
+				calls++;
+				await done;
+			},
+			log: (event) => assert.equal(event, "controller_stopping"),
+			sleep: async () => {
+				await new Promise<void>((resolve) => setImmediate(resolve));
+
+				if (ticks === 30) stop.abort();
+			},
+		});
+
+		const timeout = setTimeout(() => {
+			stop.abort();
+			release();
+		}, 3000);
+
+		try {
+			await loop;
+			const perTickMs = (performance.now() - started) / ticks;
+			assert.equal(ticks, 30);
+			assert.equal(
+				calls,
+				1,
+				"ticks must neither wait nor launch overlapping children",
+			);
+			assert.ok(perTickMs < 10, `${perTickMs} ms per tick exceeds 10 ms`);
+			context.diagnostic(
+				`notify scheduling plus local status I/O: ${perTickMs.toFixed(3)} ms/tick; 30 ticks finished with child still pending`,
+			);
+		} finally {
+			clearTimeout(timeout);
+			release();
+		}
 	});
 });
 
@@ -695,6 +784,38 @@ test("systemd-notify uses the inherited socket and a bounded child, proved with 
 	});
 });
 
+test("a detached watchdog child that hangs is killed within its one-second bound", async () => {
+	await state(async (root) => {
+		const bin = join(root, "bin");
+		await mkdir(bin, { mode: 0o700 });
+		await writeFile(
+			join(bin, "systemd-notify"),
+			`#!${process.execPath}\nsetInterval(() => {}, 10000);\n`,
+			{ mode: 0o700 },
+		);
+		const previousPath = process.env.PATH;
+		const previousSocket = process.env.NOTIFY_SOCKET;
+
+		try {
+			process.env.PATH = `${bin}:${previousPath}`;
+			process.env.NOTIFY_SOCKET = "@fake-notify-socket";
+			const started = performance.now();
+			await assert.rejects(systemdNotify("WATCHDOG=1"), /notify_exit/);
+			const elapsed = performance.now() - started;
+			assert.ok(
+				elapsed >= 900 && elapsed < 3000,
+				`hung notify bounded at ${elapsed} ms`,
+			);
+		} finally {
+			if (previousPath === undefined) delete process.env.PATH;
+			else process.env.PATH = previousPath;
+
+			if (previousSocket === undefined) delete process.env.NOTIFY_SOCKET;
+			else process.env.NOTIFY_SOCKET = previousSocket;
+		}
+	});
+});
+
 test("metric collection is private and independent of tick and watchdog, with no overlapping refresh", async () => {
 	await state(async (root) => {
 		let release: () => void = () => undefined;
@@ -725,13 +846,21 @@ test("metric collection is private and independent of tick and watchdog, with no
 		const sent: string[] = [];
 		await serveLoop({
 			stateDir: root,
-			orchestrator: { tick: async () => report, pollIntervalMs: 1 },
+			orchestrator: {
+				tick: async () => {
+					await new Promise<void>((done) => setImmediate(done));
+
+					return report;
+				},
+				pollIntervalMs: 1,
+			},
 			signal: stop.signal,
 			log: () => undefined,
 			notify: async (message) => {
 				sent.push(message);
 			},
 			sleep: async () => {
+				await new Promise<void>((done) => setImmediate(done));
 				stop.abort();
 			},
 		});
@@ -744,6 +873,151 @@ test("metric collection is private and independent of tick and watchdog, with no
 			JSON.parse(await readFile(join(root, "metrics.json"), "utf8")).version,
 			1,
 		);
+	});
+});
+
+test("repo-scoped fake gh writes a metric snapshot despite forbidden global search, paginates defects and skips PRs", async () => {
+	await state(async (root) => {
+		const bin = join(root, "bin");
+		await mkdir(bin, { mode: 0o700 });
+		const ledger = Buffer.from("");
+		const sha = "a".repeat(40);
+		const treeSha = "b".repeat(40);
+
+		const issue = {
+			number: 999,
+			title: "Defect",
+			body: null,
+			created_at: "2026-11-01T00:00:00Z",
+			labels: [{ name: "factory:defect" }],
+		};
+
+		const route = `repos/${repo}/issues?labels=factory%3Adefect&state=all&sort=created&direction=asc&per_page=100`;
+
+		const responses = {
+			[`repos/${repo}/git/ref/heads/factory/ledger`]: {
+				ref: "refs/heads/factory/ledger",
+				object: { sha },
+			},
+			[`repos/${repo}/git/commits/${sha}`]: {
+				sha,
+				tree: { sha: treeSha },
+				parents: [],
+			},
+			[`repos/${repo}/git/trees/${treeSha}?recursive=1`]: {
+				truncated: false,
+				tree: [
+					{
+						path: "ledger/runs.jsonl",
+						mode: "100644",
+						type: "blob",
+						sha: gitObjectSha("blob", ledger),
+					},
+				],
+			},
+			[`repos/${repo}/git/blobs/${gitObjectSha("blob", ledger)}`]: {
+				encoding: "base64",
+				content: ledger.toString("base64"),
+			},
+			[`repos/${repo}/labels/factory%3Adefect`]: { name: "factory:defect" },
+			[`${route}&page=1`]: [
+				{ pull_request: {} },
+				...Array.from({ length: 99 }, (_, n) => ({ ...issue, number: n + 1 })),
+			],
+			[`${route}&page=2`]: [issue],
+		};
+
+		await writeFile(
+			join(bin, "gh"),
+			`#!${process.execPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(join(root, "gh-calls.jsonl"))}, JSON.stringify(args) + "\\n");
+const responses = ${JSON.stringify(responses)};
+const path = args.find(arg => arg.startsWith("repos/"));
+if (args[0] !== "api" || !(path in responses)) {
+ process.stderr.write("HTTP 403: global search forbidden (private diagnostic)");
+ process.exit(1);
+}
+process.stdout.write(JSON.stringify(responses[path]));
+`,
+			{ mode: 0o700 },
+		);
+
+		const io = {
+			env: () => undefined,
+			stdout: assert.fail,
+			stderr: assert.fail,
+			exec: async (
+				command: string,
+				args: readonly string[],
+				options?: { timeoutMs?: number },
+			) => {
+				try {
+					const result = await promisify(execFile)(command, [...args], {
+						env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+						timeout: options?.timeoutMs,
+					});
+
+					return { code: 0, ...result };
+				} catch {
+					return {
+						code: 1,
+						stdout: "",
+						stderr: "HTTP 403: global search forbidden",
+					};
+				}
+			},
+		};
+
+		await unlink(join(root, "metrics.json"));
+		const logs: string[] = [];
+
+		const snapshots = startMetricSnapshots({
+			stateDir: root,
+			collect: () => collectOwnerMetrics(root, repo, io, new Map()),
+			log: (event, fields) => logs.push(`${event}:${fields.reason}`),
+		});
+
+		await snapshots.stop();
+		assert.deepEqual(
+			logs,
+			[],
+			"REST collection must write, not report metrics_unavailable",
+		);
+
+		const saved = JSON.parse(
+			await readFile(join(root, "metrics.json"), "utf8"),
+		);
+
+		assert.deepEqual(saved.report.defectRead, { kind: "known", issues: 100 });
+		await writeFile(join(root, "ledger.jsonl"), ledger);
+		let output = "";
+		assert.equal(
+			await runCli(
+				[
+					"metrics",
+					"--json",
+					"--repo",
+					repo,
+					"--ledger-file",
+					join(root, "ledger.jsonl"),
+				],
+				{
+					...io,
+					stdout: (text) => {
+						output += text;
+					},
+				},
+			),
+			0,
+		);
+		assert.deepEqual(JSON.parse(output).defectRead, {
+			kind: "known",
+			issues: 100,
+		});
+		const calls = await readFile(join(root, "gh-calls.jsonl"), "utf8");
+		assert.doesNotMatch(calls, /"issue","list"|search|graphql/);
 	});
 });
 
@@ -810,7 +1084,7 @@ test("metric refreshes query defects once and cache merged interventions by PR a
 				else if (path.includes("/git/blobs/"))
 					value = { encoding: "base64", content: ledger.toString("base64") };
 				else if (path.includes("/labels/")) value = { name: "factory:defect" };
-				else if (args[0] === "issue" || /\/(?:reviews|timeline)\?/.test(path))
+				else if (/\/(?:issues\?labels=|reviews\?|timeline\?)/.test(path))
 					value = [];
 				else
 					return {
@@ -828,8 +1102,9 @@ test("metric refreshes query defects once and cache merged interventions by PR a
 			const snapshot = await collectOwnerMetrics(root, repo, io, cache);
 			assert.ok(snapshot !== null);
 			assert.equal(
-				calls.filter((args) => args[0] === "issue" && args[1] === "list")
-					.length,
+				calls.filter((args) =>
+					args.some((arg) => arg.includes("/issues?labels=")),
+				).length,
 				1,
 			);
 			assert.equal(
@@ -888,15 +1163,184 @@ test("metric collection stops remote reads at the 120 second deadline", async (c
 						assert.ok(timeout <= 120000 - elapsed);
 						elapsed += timeout;
 
-						return { code: 1, stdout: "", stderr: "connection reset" };
+						return calls === 1
+							? {
+									code: 0,
+									stdout: JSON.stringify({
+										ref: "refs/heads/factory/ledger",
+										object: { sha: "a".repeat(40) },
+									}),
+									stderr: "",
+								}
+							: { code: 1, stdout: "", stderr: "connection reset" };
 					},
 				},
 				new Map(),
 			),
-			/ledger_or_collection_unavailable/,
+			/metric_deadline/,
 		);
 		assert.ok(calls > 0);
 		assert.equal(elapsed, 120000);
+	});
+});
+
+test("status writes use cached tokens without recomputing local accounting", async () => {
+	await state(async (root) => {
+		const usage = { kind: "exact", unit: "tokens", total: 123456 };
+
+		assert.equal(await writeStatus(root, report, usage), true);
+
+		const stored = JSON.parse(
+			await readFile(join(root, "status.json"), "utf8"),
+		);
+
+		assert.deepEqual(stored.durableUsage, usage);
+	});
+});
+
+test("durable usage refreshes at startup and every five minutes on its own timer", async (context) => {
+	context.mock.timers.enable({ apis: ["setInterval"] });
+	await state(async (root) => {
+		const usage = await startDurableUsage({
+			stateDir: root,
+			repo,
+			log: assert.fail,
+		});
+
+		try {
+			assert.deepEqual(usage.current(), {
+				kind: "lower_bound",
+				unit: "tokens",
+				total: 9912,
+				reason: "receipt_missing",
+			});
+			await rm(join(root, "claims"), { recursive: true });
+			context.mock.timers.tick(299_999);
+			await writeStatus(root, report, usage.current());
+			assert.equal(
+				JSON.parse(await readFile(join(root, "status.json"), "utf8"))
+					.durableUsage.total,
+				9912,
+			);
+			context.mock.timers.tick(1);
+		} finally {
+			await usage.stop();
+		}
+
+		assert.deepEqual(usage.current(), {
+			kind: "exact",
+			unit: "tokens",
+			total: 0,
+		});
+	});
+});
+
+test("local durable tokens and workflow thresholds survive absent, failed and stale GitHub snapshots", async () => {
+	await state(async (root) => {
+		const thresholds = { waitingMs: 5 * 86_400_000, blockedMs: 8 * 3_600_000 };
+
+		const usage = await startDurableUsage({
+			stateDir: root,
+			repo,
+			log: assert.fail,
+		});
+
+		await usage.stop();
+		assert.equal(
+			await writeStatus(
+				root,
+				{ ...report, attentionThresholds: thresholds },
+				usage.current(),
+			),
+			true,
+		);
+		await unlink(join(root, "metrics.json"));
+
+		const check = async () => {
+			const feed = await readOwnerFeed({ stateDir: root, repo, now });
+			assert.deepEqual(feed.durableUsage, { kind: "lower_bound", total: 9912 });
+			assert.equal(
+				feed.entries.find((entry) => entry.issue === 1)?.stale,
+				false,
+			);
+			assert.equal(
+				feed.entries.find((entry) => entry.issue === 2)?.stale,
+				false,
+			);
+			const waiting = feed.entries.find((entry) => entry.issue === 1);
+			assert.ok(waiting);
+			assert.equal(
+				(
+					await readOwnerRun(root, waiting.runId, {
+						repo,
+						at: now,
+						controller: feed.controller,
+					})
+				)?.stale,
+				false,
+			);
+			assert.match(
+				renderDashboard(feed, "", "token"),
+				/At least 9.9K tokens recorded/,
+			);
+		};
+
+		await check();
+		const logs: { event: string; reason: unknown }[] = [];
+
+		const failed = () =>
+			startMetricSnapshots({
+				stateDir: root,
+				collect: async () => {
+					throw new Error("defect_query_failed");
+				},
+				log: (event, fields) => {
+					logs.push({ event, reason: fields.reason });
+				},
+			});
+
+		await failed().stop();
+		await check();
+		await save(root, ["metrics.json"], {
+			attentionThresholds: { waitingMs: 1, blockedMs: 1 },
+			durableUsage: { kind: "exact", total: 0 },
+			report: {
+				repo,
+				status: "complete",
+				primary: { numerator: 1, denominator: 2, share: 0.5 },
+			},
+		});
+		await failed().stop();
+		await check();
+		assert.deepEqual(
+			logs,
+			Array.from({ length: 2 }, () => ({
+				event: "metrics_unavailable",
+				reason: "defect_query_failed",
+			})),
+		);
+		const feed = await readOwnerFeed({ stateDir: root, repo, now });
+		assert.equal(feed.metrics.stale, true);
+		assert.equal(feed.metrics.share, 0.5);
+	});
+});
+
+test("metrics_unavailable reasons are bounded and never include transport text or paths", async () => {
+	await state(async (root) => {
+		const logs: unknown[] = [];
+
+		const snapshots = startMetricSnapshots({
+			stateDir: root,
+			collect: async () => {
+				throw new Error(`private /home/account/token=${"secret".repeat(1000)}`);
+			},
+			log: (event, fields) => logs.push({ event, ...fields }),
+		});
+
+		await snapshots.stop();
+		assert.deepEqual(logs, [
+			{ event: "metrics_unavailable", reason: "collection_failed" },
+		]);
 	});
 });
 
@@ -994,6 +1438,7 @@ test("a real orchestrator tick measures hung GitHub calls to their timeouts on a
 				else pings.push(elapsed);
 			},
 			pump: async () => {
+				await new Promise<void>((done) => setImmediate(done));
 				elapsed += 20_000;
 
 				return null;

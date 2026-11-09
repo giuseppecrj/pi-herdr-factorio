@@ -166,9 +166,9 @@ const cliArgs = (path: string) => [
 ];
 
 describe("factory metrics", () => {
-	it("pins all 26 canonical public rows and excludes verification plus all three fixture IDs", () => {
+	it("pins all 26 canonical public rows and excludes verification plus all eight fixture IDs", () => {
 		assert.equal(rows.length, 26);
-		assert.equal(EXCLUDED_RUNS.length, 3);
+		assert.equal(EXCLUDED_RUNS.length, 8);
 
 		const value = computeMetrics({
 			ledger: fixture,
@@ -182,7 +182,7 @@ describe("factory metrics", () => {
 		assert.equal(value.excluded.length, 14);
 		assert.equal(value.status, "pending");
 
-		for (const exclusion of EXCLUDED_RUNS.slice(1)) {
+		for (const exclusion of EXCLUDED_RUNS.slice(1, 3)) {
 			const issue = exclusion.runId.startsWith("bd3") ? 650 : 658;
 			const row = { ...synthetic(issue), runId: digestOf("placeholder") };
 			assert.equal(
@@ -190,6 +190,42 @@ describe("factory metrics", () => {
 				exclusion.reason,
 			);
 		}
+	});
+
+	it("excludes all five F09c live-lane production rows from every cohort and token denominator", () => {
+		const ids = [
+			"eb9f779fac14baf331d29350a37eb42b9d10530323de70a687230da49ab6c7d9",
+			"d22f122bd8d318610b24a808e38fbd290b82b67d04ef5f01bea5158117be0c31",
+			"4086ee6e567860b7cdad114fe033cc12fc234c3387081cdeb304d55434dbbfa3",
+			"141e0640c8d6f4fdc564354342b898bb4d55f1ca04b19824fec18932ec4cda4d",
+			"3920f5ed4fab622b1edc5f114a728763343e1da8402a18052e58047a5ece4423",
+		];
+
+		const input = [
+			synthetic(689, "35615364244"),
+			synthetic(688, "35615271933"),
+			synthetic(690, "35616783706"),
+			synthetic(689, "35622018082"),
+			synthetic(692, "35622451614"),
+		];
+
+		assert.deepEqual(
+			input.map((row) => row.runId),
+			ids,
+		);
+
+		for (const row of input)
+			assert.equal(excludedRunReason(row), "F09c live-lane fixture");
+		const clean = synthetic();
+		const value = report([clean, ...input]);
+		assert.equal(value.runs, 1);
+		assert.equal(value.primary.denominator, 1);
+		assert.equal(value.tokens.total, 100);
+		assert.equal(value.excluded.length, 5);
+		assert.deepEqual(
+			value.tickets.map((ticket) => ticket.issue),
+			[100],
+		);
 	});
 
 	it("excludes a legacy verification manifest but keeps unmarked legacy imports flagged", () => {
@@ -962,7 +998,7 @@ const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n");
 let result;
 if (args[0] === "api" && args[1].includes("/labels/")) result = {name:"factory:defect"};
-else if (args[0] === "issue" && args[1] === "list") result = [];
+else if (args[0] === "api" && args[1].includes("/issues?labels=")) result = [];
 else if (args[0] === "api" && /\\/reviews\\?per_page=100&page=1$/.test(args[1])) result = ${JSON.stringify(reviews)};
 else if (args[0] === "api" && /\\/timeline\\?per_page=100&page=1$/.test(args[1])) result = ${JSON.stringify([dismissed()])};
 else process.exit(3);
@@ -1244,7 +1280,8 @@ describe("measured owner intervention", () => {
 				options && options.timeoutMs > 0 && options.timeoutMs <= 30_000,
 			);
 
-			if (args[0] === "issue") return { code: 0, stdout: "[]", stderr: "" };
+			if (args[1]?.includes("/issues?labels="))
+				return { code: 0, stdout: "[]", stderr: "" };
 
 			if (args[1]?.includes("/labels/"))
 				return { code: 0, stdout: '{"name":"factory:defect"}', stderr: "" };
@@ -1752,7 +1789,7 @@ describe("metrics CLI", () => {
 				const value = await cli(cliArgs(path), async () => result);
 				assert.deepEqual(JSON.parse(value.stdout).defectRead, {
 					kind: "unknown",
-					reason: "label_missing",
+					reason: result.code === 0 ? "label_missing" : "label_unreadable",
 				});
 				assert.deepEqual(value.calls, [
 					["gh", "api", `repos/${repo}/labels/factory%3Adefect`],
@@ -1775,7 +1812,7 @@ describe("metrics CLI", () => {
 
 			assert.deepEqual(JSON.parse(thrown.stdout).defectRead, {
 				kind: "unknown",
-				reason: "label_missing",
+				reason: "label_unreadable",
 			});
 		});
 	});
@@ -1815,12 +1852,14 @@ describe("metrics CLI", () => {
 			for (const stdout of ["[]", "{}", "[{}]", "not json"]) {
 				const value = await cli(cliArgs(path), async (_command, args) => ({
 					code: 0,
-					stdout: args[0] === "api" ? '{"name":"factory:defect"}' : stdout,
+					stdout: args[1]?.includes("/labels/")
+						? '{"name":"factory:defect"}'
+						: stdout,
 					stderr: "",
 				}));
 
 				assert.equal(value.code, EXIT.ok);
-				assert.equal(value.calls.length, 3);
+				assert.equal(value.calls.length, stdout === "[]" ? 4 : 3);
 				assert.deepEqual(value.calls[2], [
 					"gh",
 					"api",
@@ -1831,8 +1870,11 @@ describe("metrics CLI", () => {
 					"api",
 					`repos/${repo}/labels/factory%3Adefect`,
 				]);
-				assert.deepEqual(value.calls[1]?.slice(0, 3), ["gh", "issue", "list"]);
-				assert.ok(value.calls[1]?.includes("factory:defect"));
+				assert.deepEqual(value.calls[1], [
+					"gh",
+					"api",
+					`repos/${repo}/issues?labels=factory%3Adefect&state=all&sort=created&direction=asc&per_page=100&page=1`,
+				]);
 				assert.equal(
 					JSON.parse(value.stdout).defectRead.kind,
 					stdout === "[]" ? "known" : "unknown",
@@ -1848,22 +1890,20 @@ describe("metrics CLI", () => {
 				async () => {
 					throw new Error("private error");
 				},
-				async (_command: string, args: readonly string[]) => ({
+				async (_command: string, _args: readonly string[]) => ({
 					code: 0,
 					stdout: JSON.stringify(
-						Array.from(
-							{ length: Number(args[args.indexOf("--limit") + 1]) },
-							() => ({
-								...defect("#100"),
-								labels: [{ name: "factory:defect" }],
-							}),
-						),
+						Array.from({ length: 100 }, () => ({
+							...defect("#100"),
+							created_at: defect("#100").createdAt,
+							labels: [{ name: "factory:defect" }],
+						})),
 					),
 					stderr: "",
 				}),
 			]) {
 				const value = await cli(cliArgs(path), async (command, args) =>
-					args[0] === "api"
+					args[1]?.includes("/labels/")
 						? { code: 0, stdout: '{"name":"factory:defect"}', stderr: "" }
 						: exec(command, args),
 				);
@@ -1918,7 +1958,9 @@ describe("metrics CLI", () => {
 
 			const exec: Exec = async (_command, args) => ({
 				code: 0,
-				stdout: args[0] === "api" ? '{"name":"factory:defect"}' : "[]",
+				stdout: args[1]?.includes("/labels/")
+					? '{"name":"factory:defect"}'
+					: "[]",
 				stderr: "",
 			});
 
@@ -1978,15 +2020,17 @@ describe("metrics CLI", () => {
 		await withLedger(async (path) => {
 			const value = await cli(cliArgs(path), async (_command, args) => ({
 				code: 0,
-				stdout:
-					args[0] === "api"
-						? '{"name":"factory:defect"}'
-						: JSON.stringify([
+				stdout: args[1]?.includes("/labels/")
+					? '{"name":"factory:defect"}'
+					: args[1]?.includes("/issues?labels=")
+						? JSON.stringify([
 								{
 									...defect("private words #100"),
+									created_at: defect("private words #100").createdAt,
 									labels: [{ name: "factory:defect" }],
 								},
-							]),
+							])
+						: "[]",
 				stderr: "",
 			}));
 

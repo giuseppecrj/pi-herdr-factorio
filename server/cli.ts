@@ -8,11 +8,7 @@ import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import manifest from "../package.json" with { type: "json" };
-import {
-	readAttention,
-	ATTENTION_THRESHOLDS,
-	type AttentionRead,
-} from "../src/attention.ts";
+import { readAttention, type AttentionRead } from "../src/attention.ts";
 import {
 	type AdmissionReceipt,
 	admitTicket,
@@ -64,6 +60,8 @@ import {
 	serveLoop,
 	writeStatus,
 	startMetricSnapshots,
+	startDurableUsage,
+	durableUsageOf,
 } from "./controller.ts";
 import { readOwnerFeed } from "../src/feed.ts";
 import { GitHubPublicationApi } from "../src/publication.ts";
@@ -621,6 +619,12 @@ async function runController(
 
 			const interventionCache = new Map<string, InterventionRead>();
 
+			const usage = await startDurableUsage({
+				stateDir: parsed.stateDir,
+				repo: parsed.repo,
+				log,
+			});
+
 			const metrics = startMetricSnapshots({
 				stateDir: parsed.stateDir,
 				collect: () =>
@@ -641,9 +645,10 @@ async function runController(
 					signal: runtime.signal,
 					log,
 					pump,
+					durableUsage: usage.current,
 				});
 			} finally {
-				await metrics.stop();
+				await Promise.all([metrics.stop(), usage.stop()]);
 			}
 
 			return EXIT.ok;
@@ -656,7 +661,15 @@ async function runController(
 				runtime.sleep(ms, new AbortController().signal),
 			)) ?? ticked;
 
-		if (!(await writeStatus(parsed.stateDir, report))) {
+		if (
+			!(await writeStatus(
+				parsed.stateDir,
+				report,
+				durableUsageOf(
+					await readDurableAccounting(parsed.stateDir, parsed.repo),
+				),
+			))
+		) {
 			log("status_unwritable", {});
 		}
 
@@ -677,8 +690,9 @@ function defectIssueOf(value: JsonValue): DefectIssue | null {
 	const record = objectOf(value);
 	const number = countOf(fieldOf(record, "number"));
 	const title = textOf(fieldOf(record, "title"));
-	const body = textOf(fieldOf(record, "body"));
-	const createdAt = textOf(fieldOf(record, "createdAt"));
+	const rawBody = fieldOf(record, "body");
+	const body = rawBody === null ? "" : textOf(rawBody);
+	const createdAt = textOf(fieldOf(record, "created_at"));
 	const rawLabels = arrayOf(fieldOf(record, "labels"));
 
 	if (
@@ -724,56 +738,57 @@ async function readMetricDefects(repo: string, io: CliIo): Promise<DefectRead> {
 			{ timeoutMs: FETCH_TIMEOUT_MS },
 		);
 
+		if (label.code !== 0)
+			return { kind: "unknown", reason: "label_unreadable" };
+
 		if (
-			label.code !== 0 ||
 			textOf(fieldOf(objectOf(parseJson(label.stdout)), "name")) !==
-				METRIC_POLICY.defect.label
+			METRIC_POLICY.defect.label
 		)
 			return { kind: "unknown", reason: "label_missing" };
 	} catch {
-		return { kind: "unknown", reason: "label_missing" };
+		return { kind: "unknown", reason: "label_unreadable" };
 	}
 
+	const deadline = Date.now() + FETCH_TIMEOUT_MS;
+	const issues: DefectIssue[] = [];
+
 	try {
-		const result = await io.exec(
-			"gh",
-			[
-				"issue",
-				"list",
-				"--repo",
-				repo,
-				"--label",
-				METRIC_POLICY.defect.label,
-				"--state",
-				"all",
-				"--limit",
-				String(METRIC_POLICY.defect.queryLimit),
-				"--json",
-				"number,title,body,createdAt,labels",
-			],
-			{ timeoutMs: FETCH_TIMEOUT_MS },
-		);
+		for (let page = 1; page <= METRIC_POLICY.defect.queryLimit / 100; page++) {
+			const remaining = deadline - Date.now();
 
-		if (result.code !== 0)
-			return { kind: "unknown", reason: "defect_query_failed" };
-		const value = arrayOf(parseJson(result.stdout));
+			if (remaining <= 0)
+				return { kind: "unknown", reason: "defect_query_failed" };
 
-		if (value === null)
-			return { kind: "unknown", reason: "defect_query_invalid" };
+			const result = await io.exec(
+				"gh",
+				[
+					"api",
+					`repos/${repo}/issues?labels=${encodeURIComponent(METRIC_POLICY.defect.label)}&state=all&sort=created&direction=asc&per_page=100&page=${page}`,
+				],
+				{ timeoutMs: remaining },
+			);
 
-		if (value.length >= METRIC_POLICY.defect.queryLimit)
-			return { kind: "unknown", reason: "defect_query_incomplete" };
-		const issues: DefectIssue[] = [];
+			if (result.code !== 0 || Date.now() >= deadline)
+				return { kind: "unknown", reason: "defect_query_failed" };
+			const value = arrayOf(parseJson(result.stdout));
 
-		for (const item of value) {
-			const issue = defectIssueOf(item);
-
-			if (issue === null)
+			if (value === null || value.length > 100)
 				return { kind: "unknown", reason: "defect_query_invalid" };
-			issues.push(issue);
+
+			for (const item of value) {
+				if (fieldOf(objectOf(item), "pull_request") !== undefined) continue;
+				const issue = defectIssueOf(item);
+
+				if (issue === null)
+					return { kind: "unknown", reason: "defect_query_invalid" };
+				issues.push(issue);
+			}
+
+			if (value.length < 100) return { kind: "known", issues };
 		}
 
-		return { kind: "known", issues };
+		return { kind: "unknown", reason: "defect_query_incomplete" };
 	} catch {
 		return { kind: "unknown", reason: "defect_query_failed" };
 	}
@@ -1008,29 +1023,6 @@ async function readInterventionFixture(
 	}
 }
 
-function durableUsageOf(
-	accounting: Awaited<ReturnType<typeof readDurableAccounting>>,
-): JsonValue {
-	const uncertain = accounting.runs.some((run) => run.uncertainRequests > 0);
-
-	const exact =
-		accounting.state === "readable" &&
-		accounting.runs.every((run) => run.tokens.kind === "exact");
-
-	return accounting.state === "unavailable"
-		? { kind: "unavailable", reason: "legacy_not_recorded" }
-		: {
-				kind: uncertain ? "uncertain" : exact ? "exact" : "lower_bound",
-				unit: "tokens",
-				total: accounting.runs.reduce((sum, run) => sum + run.tokens.total, 0),
-				...(uncertain
-					? { reason: "request_unsettled" }
-					: exact
-						? {}
-						: { reason: "receipt_missing" }),
-			};
-}
-
 export async function collectOwnerMetrics(
 	stateDir: string,
 	repo: RepoSlug,
@@ -1038,51 +1030,62 @@ export async function collectOwnerMetrics(
 	cache: Map<string, InterventionRead>,
 ): Promise<JsonValue> {
 	const deadline = Date.now() + 120_000;
+	let deadlineExpired = false;
 
 	const bounded: CliIo = {
 		...io,
 		exec: async (command, args, options) => {
 			const remaining = deadline - Date.now();
 
-			if (remaining <= 0) throw new Error("metric_deadline");
+			if (remaining <= 0) {
+				deadlineExpired = true;
+				throw new Error("metric_deadline");
+			}
 
 			const result = await io.exec(command, args, {
 				...options,
 				timeoutMs: Math.min(options?.timeoutMs ?? FETCH_TIMEOUT_MS, remaining),
 			});
 
-			if (Date.now() >= deadline) throw new Error("metric_deadline");
+			if (Date.now() >= deadline) {
+				deadlineExpired = true;
+				throw new Error("metric_deadline");
+			}
 
 			return result;
 		},
 	};
 
-	const workflow = await loadWorkflow({
-		exec: bounded.exec,
-		env: io.env,
-		repo,
-		ref: TRUSTED_REF,
-	});
-
-	const attentionThresholds =
-		workflow.kind === "loaded"
-			? (workflow.snapshot.config.attention ?? ATTENTION_THRESHOLDS)
-			: ATTENTION_THRESHOLDS;
-
 	let report: ReturnType<typeof computeMetrics> | null = null;
 	let ledgerIdentity: string | null = null;
 	const gaps: string[] = [];
+	let failure = "ledger_ref_unavailable";
 
 	try {
 		const api = ledgerApiOf(new GitHubPublicationApi(bounded.exec, repo));
 		const tip = await api.ref();
 
-		if (tip === null) throw new Error("ledger_missing");
+		if (tip === null) {
+			failure = "ledger_missing";
+			throw new Error(failure);
+		}
+
+		failure = "ledger_commit_unavailable";
 		const commit = await api.commit(tip);
+		failure = "ledger_file_unavailable";
 		const ledger = (await api.file(commit.tree)).bytes;
 		ledgerIdentity = tip;
+		failure = "defect_query_failed";
 		const defects = await readMetricDefects(repo, bounded);
+
+		if (defects.kind !== "known") {
+			failure = defects.reason;
+			throw new Error(failure);
+		}
+
 		const evaluatedAt = new Date().toISOString();
+
+		failure = "intervention_unreadable";
 
 		const interventions = await readMetricInterventions(
 			ledger,
@@ -1091,12 +1094,11 @@ export async function collectOwnerMetrics(
 			cache,
 		);
 
-		if (
-			defects.kind !== "known" ||
-			[...interventions.values()].some((read) => read.kind !== "known")
-		)
-			throw new Error("metric_collection_incomplete");
+		if ([...interventions.values()].some((read) => read.kind !== "known"))
+			throw new Error(failure);
+		failure = "receipt_read_unavailable";
 		const receiptDigests = await readReceiptDigests(stateDir, ledger, repo);
+		failure = "metric_compute_unavailable";
 		report = computeMetrics({
 			ledger,
 			repo,
@@ -1108,17 +1110,21 @@ export async function collectOwnerMetrics(
 		});
 
 		if (report.status !== "complete") gaps.push(`report_${report.status}`);
-	} catch {
-		throw new Error("ledger_or_collection_unavailable");
+	} catch (error) {
+		throw new Error(
+			deadlineExpired ||
+				Date.now() >= deadline ||
+				(error instanceof Error && error.message === "metric_deadline")
+				? "metric_deadline"
+				: failure,
+		);
 	}
 
 	return {
 		version: 1,
 		stale: false,
-		durableUsage: durableUsageOf(await readDurableAccounting(stateDir, repo)),
 		computedAt: new Date().toISOString(),
 		ledgerIdentity,
-		attentionThresholds,
 		report,
 		gaps,
 	};

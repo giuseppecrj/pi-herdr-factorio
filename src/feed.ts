@@ -125,9 +125,9 @@ export async function feedRepo(stateDir: string): Promise<RepoSlug | null> {
 }
 
 function thresholdsOf(
-	snapshot: JsonValue | undefined,
+	status: JsonValue | null,
 ): AttentionThresholds | undefined {
-	const value = objectOf(fieldOf(objectOf(snapshot), "attentionThresholds"));
+	const value = objectOf(fieldOf(objectOf(status), "attentionThresholds"));
 	const waitingMs = countOf(value?.waitingMs);
 	const blockedMs = countOf(value?.blockedMs);
 
@@ -422,13 +422,13 @@ export async function readOwnerRun(
 
 	if (feed.repo === null || !isDigest(runId)) return null;
 	const root = resolve(stateDir);
-	const snapshot = await localJson(root, "metrics.json");
+	const status = await readStatus(root);
 
 	const attention = await readAttention({
 		stateDir: root,
 		repo: feed.repo,
 		now: feed.at,
-		thresholds: thresholdsOf(snapshot),
+		thresholds: thresholdsOf(status),
 		runId,
 	});
 
@@ -496,7 +496,7 @@ export async function readOwnerFeed(input: {
 		stateDir: root,
 		repo,
 		now,
-		thresholds: thresholdsOf(snapshot),
+		thresholds: thresholdsOf(status),
 		terminalSince: now - 7 * 86_400_000,
 	});
 
@@ -582,7 +582,7 @@ export async function readOwnerFeed(input: {
 		repo,
 		at: now,
 		controller: header.controller,
-		durableUsage: durableUsageOf(objectOf(snapshot)?.durableUsage),
+		durableUsage: durableUsageOf(status?.durableUsage),
 		entries,
 		counts: typedCounts,
 		workingRunCount,
