@@ -4037,14 +4037,59 @@ export function durableUsageOf(
 			};
 }
 
-/** Writes the last tick's report for `status --json`. */
+export async function startDurableUsage(input: {
+	stateDir: string;
+	repo: RepoSlug;
+	log: Log;
+}) {
+	let current: JsonValue = {
+		kind: "unavailable",
+		reason: "legacy_not_recorded",
+	};
+
+	let pending: Promise<void> | null = null;
+
+	const refresh = () => {
+		pending ??= (async () => {
+			try {
+				current = durableUsageOf(
+					await readDurableAccounting(input.stateDir, input.repo),
+				);
+			} catch {
+				input.log("accounting_unavailable", {});
+			}
+		})().finally(() => {
+			pending = null;
+		});
+
+		return pending;
+	};
+
+	await refresh();
+	const timer = setInterval(() => void refresh(), 300_000);
+	timer.unref();
+
+	return {
+		current: () => current,
+		stop: async () => {
+			clearInterval(timer);
+			await pending;
+		},
+	};
+}
+
+/** Writes the last tick's report and cached local usage for `status --json`. */
 export async function writeStatus(
 	stateDir: string,
 	report: TickReport,
+	durableUsage: JsonValue = {
+		kind: "unavailable",
+		reason: "legacy_not_recorded",
+	},
 ): Promise<boolean> {
 	return writeAtomic(
 		join(resolve(stateDir), STATUS_FILE),
-		`${JSON.stringify({ ...report, durableUsage: durableUsageOf(await readDurableAccounting(stateDir, report.repo)) }, null, 2)}\n`,
+		`${JSON.stringify({ ...report, durableUsage }, null, 2)}\n`,
 	);
 }
 
@@ -7263,6 +7308,7 @@ export function startMetricSnapshots(input: {
 						"ledger_commit_unavailable",
 						"ledger_file_unavailable",
 						"label_missing",
+						"label_unreadable",
 						"defect_query_failed",
 						"defect_query_invalid",
 						"defect_query_incomplete",
@@ -7313,6 +7359,7 @@ export async function serveLoop(input: {
 	signal: AbortSignal;
 	log: Log;
 	pump?: () => Promise<LedgerBacklog | null>;
+	durableUsage?: () => JsonValue;
 	notify?: (message: "READY=1" | "WATCHDOG=1") => Promise<void>;
 }): Promise<void> {
 	const { orchestrator, signal, log } = input;
@@ -7352,7 +7399,11 @@ export async function serveLoop(input: {
 		watchdog();
 		const report = await orchestrator.tick();
 
-		const written = await writeStatus(input.stateDir, report);
+		const written = await writeStatus(
+			input.stateDir,
+			report,
+			input.durableUsage?.(),
+		);
 
 		if (!written) log("status_unwritable", {});
 

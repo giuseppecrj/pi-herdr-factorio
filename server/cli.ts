@@ -60,6 +60,7 @@ import {
 	serveLoop,
 	writeStatus,
 	startMetricSnapshots,
+	startDurableUsage,
 	durableUsageOf,
 } from "./controller.ts";
 import { readOwnerFeed } from "../src/feed.ts";
@@ -618,6 +619,12 @@ async function runController(
 
 			const interventionCache = new Map<string, InterventionRead>();
 
+			const usage = await startDurableUsage({
+				stateDir: parsed.stateDir,
+				repo: parsed.repo,
+				log,
+			});
+
 			const metrics = startMetricSnapshots({
 				stateDir: parsed.stateDir,
 				collect: () =>
@@ -638,9 +645,10 @@ async function runController(
 					signal: runtime.signal,
 					log,
 					pump,
+					durableUsage: usage.current,
 				});
 			} finally {
-				await metrics.stop();
+				await Promise.all([metrics.stop(), usage.stop()]);
 			}
 
 			return EXIT.ok;
@@ -653,7 +661,15 @@ async function runController(
 				runtime.sleep(ms, new AbortController().signal),
 			)) ?? ticked;
 
-		if (!(await writeStatus(parsed.stateDir, report))) {
+		if (
+			!(await writeStatus(
+				parsed.stateDir,
+				report,
+				durableUsageOf(
+					await readDurableAccounting(parsed.stateDir, parsed.repo),
+				),
+			))
+		) {
 			log("status_unwritable", {});
 		}
 
@@ -722,14 +738,16 @@ async function readMetricDefects(repo: string, io: CliIo): Promise<DefectRead> {
 			{ timeoutMs: FETCH_TIMEOUT_MS },
 		);
 
+		if (label.code !== 0)
+			return { kind: "unknown", reason: "label_unreadable" };
+
 		if (
-			label.code !== 0 ||
 			textOf(fieldOf(objectOf(parseJson(label.stdout)), "name")) !==
-				METRIC_POLICY.defect.label
+			METRIC_POLICY.defect.label
 		)
 			return { kind: "unknown", reason: "label_missing" };
 	} catch {
-		return { kind: "unknown", reason: "label_missing" };
+		return { kind: "unknown", reason: "label_unreadable" };
 	}
 
 	const deadline = Date.now() + FETCH_TIMEOUT_MS;
@@ -746,7 +764,7 @@ async function readMetricDefects(repo: string, io: CliIo): Promise<DefectRead> {
 				"gh",
 				[
 					"api",
-					`repos/${repo}/issues?labels=${encodeURIComponent(METRIC_POLICY.defect.label)}&state=all&per_page=100&page=${page}`,
+					`repos/${repo}/issues?labels=${encodeURIComponent(METRIC_POLICY.defect.label)}&state=all&sort=created&direction=asc&per_page=100&page=${page}`,
 				],
 				{ timeoutMs: remaining },
 			);
@@ -1012,20 +1030,27 @@ export async function collectOwnerMetrics(
 	cache: Map<string, InterventionRead>,
 ): Promise<JsonValue> {
 	const deadline = Date.now() + 120_000;
+	let deadlineExpired = false;
 
 	const bounded: CliIo = {
 		...io,
 		exec: async (command, args, options) => {
 			const remaining = deadline - Date.now();
 
-			if (remaining <= 0) throw new Error("metric_deadline");
+			if (remaining <= 0) {
+				deadlineExpired = true;
+				throw new Error("metric_deadline");
+			}
 
 			const result = await io.exec(command, args, {
 				...options,
 				timeoutMs: Math.min(options?.timeoutMs ?? FETCH_TIMEOUT_MS, remaining),
 			});
 
-			if (Date.now() >= deadline) throw new Error("metric_deadline");
+			if (Date.now() >= deadline) {
+				deadlineExpired = true;
+				throw new Error("metric_deadline");
+			}
 
 			return result;
 		},
@@ -1087,7 +1112,9 @@ export async function collectOwnerMetrics(
 		if (report.status !== "complete") gaps.push(`report_${report.status}`);
 	} catch (error) {
 		throw new Error(
-			error instanceof Error && error.message === "metric_deadline"
+			deadlineExpired ||
+				Date.now() >= deadline ||
+				(error instanceof Error && error.message === "metric_deadline")
 				? "metric_deadline"
 				: failure,
 		);

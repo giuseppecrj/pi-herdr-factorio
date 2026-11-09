@@ -1789,7 +1789,7 @@ describe("metrics CLI", () => {
 				const value = await cli(cliArgs(path), async () => result);
 				assert.deepEqual(JSON.parse(value.stdout).defectRead, {
 					kind: "unknown",
-					reason: "label_missing",
+					reason: result.code === 0 ? "label_missing" : "label_unreadable",
 				});
 				assert.deepEqual(value.calls, [
 					["gh", "api", `repos/${repo}/labels/factory%3Adefect`],
@@ -1812,7 +1812,7 @@ describe("metrics CLI", () => {
 
 			assert.deepEqual(JSON.parse(thrown.stdout).defectRead, {
 				kind: "unknown",
-				reason: "label_missing",
+				reason: "label_unreadable",
 			});
 		});
 	});
@@ -1873,7 +1873,7 @@ describe("metrics CLI", () => {
 				assert.deepEqual(value.calls[1], [
 					"gh",
 					"api",
-					`repos/${repo}/issues?labels=factory%3Adefect&state=all&per_page=100&page=1`,
+					`repos/${repo}/issues?labels=factory%3Adefect&state=all&sort=created&direction=asc&per_page=100&page=1`,
 				]);
 				assert.equal(
 					JSON.parse(value.stdout).defectRead.kind,

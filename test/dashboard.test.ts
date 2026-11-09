@@ -43,6 +43,7 @@ import {
 	fileRunFiles,
 	serveLoop,
 	startMetricSnapshots,
+	startDurableUsage,
 	systemdNotify,
 	writeStatus,
 } from "../server/controller.ts";
@@ -891,7 +892,7 @@ test("repo-scoped fake gh writes a metric snapshot despite forbidden global sear
 			labels: [{ name: "factory:defect" }],
 		};
 
-		const route = `repos/${repo}/issues?labels=factory%3Adefect&state=all&per_page=100`;
+		const route = `repos/${repo}/issues?labels=factory%3Adefect&state=all&sort=created&direction=asc&per_page=100`;
 
 		const responses = {
 			[`repos/${repo}/git/ref/heads/factory/ledger`]: {
@@ -1176,18 +1177,81 @@ test("metric collection stops remote reads at the 120 second deadline", async (c
 				},
 				new Map(),
 			),
-			/ledger_commit_unavailable/,
+			/metric_deadline/,
 		);
 		assert.ok(calls > 0);
 		assert.equal(elapsed, 120000);
 	});
 });
 
+test("status writes use cached tokens without recomputing local accounting", async () => {
+	await state(async (root) => {
+		const usage = { kind: "exact", unit: "tokens", total: 123456 };
+
+		assert.equal(await writeStatus(root, report, usage), true);
+
+		const stored = JSON.parse(
+			await readFile(join(root, "status.json"), "utf8"),
+		);
+
+		assert.deepEqual(stored.durableUsage, usage);
+	});
+});
+
+test("durable usage refreshes at startup and every five minutes on its own timer", async (context) => {
+	context.mock.timers.enable({ apis: ["setInterval"] });
+	await state(async (root) => {
+		const usage = await startDurableUsage({
+			stateDir: root,
+			repo,
+			log: assert.fail,
+		});
+
+		try {
+			assert.deepEqual(usage.current(), {
+				kind: "lower_bound",
+				unit: "tokens",
+				total: 9912,
+				reason: "receipt_missing",
+			});
+			await rm(join(root, "claims"), { recursive: true });
+			context.mock.timers.tick(299_999);
+			await writeStatus(root, report, usage.current());
+			assert.equal(
+				JSON.parse(await readFile(join(root, "status.json"), "utf8"))
+					.durableUsage.total,
+				9912,
+			);
+			context.mock.timers.tick(1);
+		} finally {
+			await usage.stop();
+		}
+
+		assert.deepEqual(usage.current(), {
+			kind: "exact",
+			unit: "tokens",
+			total: 0,
+		});
+	});
+});
+
 test("local durable tokens and workflow thresholds survive absent, failed and stale GitHub snapshots", async () => {
 	await state(async (root) => {
 		const thresholds = { waitingMs: 5 * 86_400_000, blockedMs: 8 * 3_600_000 };
+
+		const usage = await startDurableUsage({
+			stateDir: root,
+			repo,
+			log: assert.fail,
+		});
+
+		await usage.stop();
 		assert.equal(
-			await writeStatus(root, { ...report, attentionThresholds: thresholds }),
+			await writeStatus(
+				root,
+				{ ...report, attentionThresholds: thresholds },
+				usage.current(),
+			),
 			true,
 		);
 		await unlink(join(root, "metrics.json"));
