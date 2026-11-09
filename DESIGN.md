@@ -101,7 +101,7 @@ Follow `shep/design/system/foundations/typography.md`.
 | `circle`, idle | `circle` | Step not reached, in `textSecondary` like its word |
 | `info.circle`, info | `info-circle` | The info Notice for the factory-wide hold, in `textSecondary`. The header's “On hold” word has no glyph. |
 | `chevron.right`, `chevron.down`, `chevron.left` | `chevron-right`, `chevron-down`, `chevron-left` | Closed/open disclosure; back to All runs |
-| none, web-only | `external-link` | GitHub link, in `textTertiary` |
+| none, web-only | `external-link` | GitHub links. It takes the link's colour, as every glyph takes its line's colour |
 
 Passed steps use `circle-check` in `textSecondary`. Waiting steps use `alert-circle` in `attentionText` with “Waiting for your review”. Failed steps use `alert-triangle` in `error`. A running step has no glyph, only “Running”.
 
