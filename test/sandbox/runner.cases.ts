@@ -161,7 +161,7 @@ import {
 	acceptancePrompt,
 	writeAcceptance,
 } from "../../src/accept.ts";
-import { preparedReviewFixture } from "../helpers.ts";
+import { preparedReviewFixture, withUmask } from "../helpers.ts";
 import { manifestDigest } from "../../server/sandbox/manifest.ts";
 import { wrapPiArgv } from "../../server/sandbox/assets/pi.ts";
 
@@ -3106,22 +3106,25 @@ describe("private build executor", () => {
 		assert.equal(existsSync(base), false);
 	});
 
-	for (const { outcome, wallMs } of (
-		[
-			"failed",
-			"passed",
-			"candidate_passed",
-			"unavailable",
-			"restart",
-			"base_missing",
-		] as const
-	).flatMap((outcome) =>
-		[149_999, 150_000, 150_001, 179_999, 180_000].map((wallMs) => ({
-			outcome,
-			wallMs,
-		})),
-	))
-		it(`compares visible tests with unchanged base once (${outcome}, ${wallMs} ms)`, async (t) => {
+	for (const { outcome, wallMs, timeout } of [
+		...(
+			[
+				"failed",
+				"passed",
+				"candidate_passed",
+				"unavailable",
+				"restart",
+				"base_missing",
+			] as const
+		).flatMap((outcome) =>
+			(outcome === "failed"
+				? [149_999, 150_000, 150_001, 179_999, 180_000]
+				: [149_999, 150_001]
+			).map((wallMs) => ({ outcome, wallMs, timeout: false })),
+		),
+		{ outcome: "unavailable" as const, wallMs: 150_001, timeout: true },
+	])
+		it(`compares visible tests with unchanged base once (${outcome}, ${wallMs} ms${timeout ? ", timeout" : ""})`, async (t) => {
 			const dir = mkdtempSync(join(tmpdir(), "factory-visible-control-"));
 			t.after(() => rmSync(dir, { recursive: true, force: true }));
 			const stateDir = join(dir, "state");
@@ -3249,6 +3252,16 @@ describe("private build executor", () => {
 
 					calls.push(patchBytes);
 
+					if (timeout && patchBytes.length === 0)
+						return {
+							command: baseTestCommand(pristine, command),
+							exitCode: null,
+							reason: "visible_tests_unavailable",
+							detail: "timeout",
+							tail: "base result",
+							wallMs,
+						};
+
 					return {
 						command: baseTestCommand(pristine, command),
 						exitCode:
@@ -3340,7 +3353,15 @@ describe("private build executor", () => {
 				return;
 			}
 
-			const { nearLimit: baseNearLimit, ...baseRecord } = recorded.base;
+			const {
+				nearLimit: baseNearLimit,
+				reason,
+				detail,
+				...baseRecord
+			} = recorded.base;
+
+			assert.equal(reason, timeout ? "visible_tests_unavailable" : undefined);
+			assert.equal(detail, timeout ? "timeout" : undefined);
 			assert.equal(
 				baseNearLimit === true,
 				nearLimit && outcome !== "unavailable",
@@ -3455,79 +3476,81 @@ describe("controller-run visible tests", () => {
 		assert.equal(result.reason, "visible_tests_unavailable");
 	});
 
-	for (const code of [0, 7])
-		it(`records the real child exit ${code} and waits for the output tail`, async (t) => {
-			const root = mkdtempSync(join(tmpdir(), "factory-visible-child-"));
-			t.after(() => rmSync(root, { recursive: true, force: true }));
-			const base = join(root, "base");
-			mkdirSync(base);
-			writeFileSync(
-				join(base, "package.json"),
-				JSON.stringify({
-					scripts: {
-						test: `node -e 'const fs=require("node:fs"); fs.writeFileSync("exec-file","",{mode:0o755}); process.stdout.write("LAST-CHUNK"); process.exitCode=(fs.statSync("exec-file").mode&0o777)===0o755?${code}:99'`,
-					},
-				}),
-			);
+	for (const mask of [0o022, 0o077])
+		for (const code of [0, 7])
+			it(`records the real child exit ${code} and waits for the output tail (umask ${mask.toString(8)})`, (t) =>
+				withUmask(mask, async () => {
+					const root = mkdtempSync(join(tmpdir(), "factory-visible-child-"));
+					t.after(() => rmSync(root, { recursive: true, force: true }));
+					const base = join(root, "base");
+					mkdirSync(base);
+					writeFileSync(
+						join(base, "package.json"),
+						JSON.stringify({
+							scripts: {
+								test: `node -e 'const fs=require("node:fs"); fs.writeFileSync("exec-file","",{mode:0o755}); process.stdout.write("LAST-CHUNK"); process.exitCode=(fs.statSync("exec-file").mode&0o777)===${0o755 & ~mask}?${code}:99'`,
+							},
+						}),
+					);
 
-			const result = await runVisibleTests(
-				{
-					stateDir: root,
-					bundleDir: "unused",
-					workspace: "",
-					runId: digest(RUN),
-					stage: "build",
-					attempt: 1,
-					tools: [],
-					arch: "x86_64",
-					xdgRuntimeDir: "/run/user/1000",
-					assetsDigest: "e".repeat(64),
-					versions: {
-						pi: "1.4.0",
-						piHerdrAgents: "3.3.1",
-						piHerdrPstack: "0.5.0",
-					},
-					exec: async () => ({ code: 0, stdout: "", stderr: "" }),
-					launch: (config) => {
-						assert.deepEqual(config.tools, []);
-						mkdirSync(config.agentDir);
+					const result = await runVisibleTests(
+						{
+							stateDir: root,
+							bundleDir: "unused",
+							workspace: "",
+							runId: digest(RUN),
+							stage: "build",
+							attempt: 1,
+							tools: [],
+							arch: "x86_64",
+							xdgRuntimeDir: "/run/user/1000",
+							assetsDigest: "e".repeat(64),
+							versions: {
+								pi: "1.4.0",
+								piHerdrAgents: "3.3.1",
+								piHerdrPstack: "0.5.0",
+							},
+							exec: async () => ({ code: 0, stdout: "", stderr: "" }),
+							launch: (config) => {
+								assert.deepEqual(config.tools, []);
+								mkdirSync(config.agentDir);
 
-						return {
-							unit: "fixture.scope",
-							child: spawn(
-								config.command[0] ?? "",
-								config.command
-									.slice(1)
-									.map((arg) =>
-										arg.replaceAll("/run/pi-agent", config.agentDir),
+								return {
+									unit: "fixture.scope",
+									child: spawn(
+										config.command[0] ?? "",
+										config.command
+											.slice(1)
+											.map((arg) =>
+												arg.replaceAll("/run/pi-agent", config.agentDir),
+											),
+										{
+											cwd: config.workspace,
+											env: {
+												PATH: process.env.PATH ?? "/usr/bin:/bin",
+												HOME: root,
+											},
+										},
 									),
-								{
-									cwd: config.workspace,
-									env: {
-										PATH: process.env.PATH ?? "/usr/bin:/bin",
-										HOME: root,
-									},
-								},
-							),
-						};
-					},
-				},
-				base,
-				"",
-				"npm test",
-			);
+								};
+							},
+						},
+						base,
+						"",
+						"npm test",
+					);
 
-			assert.equal(result.exitCode, code);
-			assert.match(result.tail, /LAST-CHUNK/);
-			assert.equal(
-				existsSync(join(root, "visible-tests", RUN, "execution", "tree")),
-				false,
-			);
-			assert.equal(
-				existsSync(join(root, "visible-tests", RUN, "execution", "agent")),
-				false,
-			);
-		});
+					assert.equal(result.exitCode, code);
+					assert.match(result.tail, /LAST-CHUNK/);
+					assert.equal(
+						existsSync(join(root, "visible-tests", RUN, "execution", "tree")),
+						false,
+					);
+					assert.equal(
+						existsSync(join(root, "visible-tests", RUN, "execution", "agent")),
+						false,
+					);
+				}));
 
 	it("does not let candidate scripts or deleted base tests manufacture a pass", async (t) => {
 		const root = mkdtempSync(join(tmpdir(), "factory-visible-trusted-"));

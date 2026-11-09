@@ -9,6 +9,7 @@ import {
 	readlink,
 	rm,
 	symlink,
+	stat,
 	writeFile,
 } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -238,6 +239,7 @@ describe("replay driver with fake GitHub/controller and real guards", {
 			`import { writeFileSync, mkdirSync } from 'node:fs';
 const state = process.argv[process.argv.indexOf('--state-dir') + 1];
 writeFileSync(process.env.FAKE_ARGS, JSON.stringify(process.argv.slice(2)));
+writeFileSync(process.env.FAKE_UMASK, String(process.umask()));
 if (process.env.FAKE_STAGE) { mkdirSync(state + '/stages/run/specify-1', {recursive:true}); writeFileSync(state + '/stages/run/specify-1/usage.json', '{"total":1}'); }
 process.stderr.write('event=controller_ready pid=' + process.pid + ' \\n');
 process.on('SIGINT', () => {});
@@ -270,6 +272,7 @@ esac
 [[ -e "$FAKE_DISARMED" ]] && disarmed=true || disarmed=false
 echo "$* hold=$hold disarmed=$disarmed" >> "$FAKE_SYSTEMCTL_LOG"
 case "$1" in
+  show) [[ "$*" == "show factory.service --property=UMask --value" ]] || exit 9; [[ "$FAKE_UNIT_UMASK" == unavailable ]] && exit 1; printf '%s\\n' "$FAKE_UNIT_UMASK";;
   is-active) [[ -e "$FAKE_SERVICE" ]] && { echo active; exit 0; }; echo inactive; exit 3;;
   stop) rm -f "$FAKE_SERVICE";;
   start) touch "$FAKE_SERVICE";;
@@ -345,6 +348,8 @@ esac
 			FAKE_SERVICE: join(dir, "service"),
 			FAKE_DISARMED: join(dir, "disarmed"),
 			FAKE_ARGS: join(dir, "args.json"),
+			FAKE_UMASK: join(dir, "serve-umask"),
+			FAKE_UNIT_UMASK: "0022",
 			FAKE_TERM_SEEN: join(dir, "term-seen"),
 			FAKE_SYSTEMCTL_LOG: join(dir, "systemctl.log"),
 			FAKE_ISSUE: JSON.stringify({
@@ -522,6 +527,39 @@ esac
 		assert.equal(record.side, "prev");
 		assert.equal(record.issue, 900);
 	});
+
+	for (const [unitMask, expected] of [
+		["0022", 0o022],
+		["0027", 0o027],
+		["", 0o022],
+		["unavailable", 0o022],
+	] as const)
+		it(`uses the production unit umask for serve, keeping driver files private (${unitMask || "empty"})`, async () => {
+			env.FAKE_UNIT_UMASK = unitMask;
+			const run = drive();
+			await ready(run);
+			assert.equal(
+				Number(await readFile(join(dir, "serve-umask"), "utf8")),
+				expected,
+			);
+
+			for (const path of [
+				join(root, "replay-restore.json"),
+				join(root, "replay-budget.json"),
+				join(lane, "replay.json"),
+				join(dir, "output/serve.log"),
+				join(dir, "output/replay-check.json"),
+			])
+				assert.equal((await stat(path)).mode & 0o777, 0o600, path);
+
+			assert.equal((await drive("stop").done).code, 0);
+			assert.equal((await run.done).code, 0);
+			assert.equal(
+				(await stat(join(dir, "output/disarm.log"))).mode & 0o777,
+				0o600,
+			);
+			await restored();
+		});
 
 	it("voids a terminal zero-stage, exact-zero-usage run too", async () => {
 		const run = drive();

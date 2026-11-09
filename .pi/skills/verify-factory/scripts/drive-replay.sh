@@ -310,7 +310,12 @@ await writeFile(record, `${JSON.stringify({v:1, caseId:c.id, corpusDigest:corpus
 await reserveReplay(path, parsed.config.replay.maxTokens, key);
 NODE
     chmod 700 "$lane/state"
-    (cd "$lane/ws" && exec node server/cli.ts serve --repo "$repo" --state-dir "$lane/state" --issue "$issue" --verification-token-cap 540000 9>&9 >/dev/null 2>>"$out/serve.log" </dev/null) &
+    serve_umask="$(systemctl show factory.service --property=UMask --value 2>/dev/null)" || serve_umask=0022
+    # Open the log under the driver's private umask before matching production in the child.
+    (
+      umask "${serve_umask:-0022}"
+      cd "$lane/ws" && exec node server/cli.ts serve --repo "$repo" --state-dir "$lane/state" --issue "$issue" --verification-token-cap 540000 9>&9
+    ) >/dev/null 2>>"$out/serve.log" </dev/null &
     pid=$!
     echo "$pid" >"$pidfile"
     for _ in $(seq 1 120); do

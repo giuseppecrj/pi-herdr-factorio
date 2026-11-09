@@ -30,7 +30,11 @@ import { REQUIRED_CI_CHECKS } from "../src/run.ts";
 import { isGitSha } from "../src/workflow.ts";
 import type { PatchReceipt } from "../src/build.ts";
 import { execFileSync } from "node:child_process";
-import { candidateLifecycleFixture, verdictAssessment } from "./helpers.ts";
+import {
+	candidateLifecycleFixture,
+	verdictAssessment,
+	withUmask,
+} from "./helpers.ts";
 import { TRUSTED_RUN_CAP, TRUSTED_WORKFLOW } from "./fake-ticket-adapter.ts";
 import { fileRunFiles } from "../server/controller.ts";
 import type { AnswersDigest } from "../src/specify.ts";
@@ -617,46 +621,50 @@ for (const predecessorStatus of ["released", "needs_info", "claimed"])
 		assert.deepEqual(read.gaps, before.gaps);
 	});
 
-for (const mismatch of [
-	"repo",
-	"runId",
-	"issue",
-	"eventId",
-	"since",
-	"permissions",
-	"terminal",
-])
-	test(`attention ignores an unverified status with mismatched ${mismatch}`, async () => {
-		const root = fixture();
+for (const mask of [0o022, 0o077])
+	for (const mismatch of [
+		"repo",
+		"runId",
+		"issue",
+		"eventId",
+		"since",
+		"permissions",
+		"terminal",
+	])
+		test(`attention ignores an unverified status with mismatched ${mismatch} (umask ${mask.toString(8)})`, () =>
+			withUmask(mask, async () => {
+				const root = fixture();
 
-		const runId = claim(
-			root,
-			14,
-			mismatch === "terminal" ? "released" : "claimed",
-		);
+				const runId = claim(
+					root,
+					14,
+					mismatch === "terminal" ? "released" : "claimed",
+				);
 
-		const path = join(root, "status.json");
-		writeFileSync(
-			path,
-			JSON.stringify({
-				repo: mismatch === "repo" ? "other/repo" : repo,
-				unverifiedClaims: [
-					{
-						runId: mismatch === "runId" ? digestOf("other") : runId,
-						issue: mismatch === "issue" ? 15 : 14,
-						eventId: mismatch === "eventId" ? "2" : "1",
-						why: "ledger",
-						failure: "gh_failed",
-						since: mismatch === "since" ? -1 : 200,
-					},
-				],
-			}),
-			{ mode: mismatch === "permissions" ? 0o644 : 0o600 },
-		);
-		const read = await readAttention({ stateDir: root, repo, now: 1000 });
-		assert.equal(read.kind, "available");
-		assert.equal(read.groups.blocked.length, 0);
-	});
+				const path = join(root, "status.json");
+				writeFileSync(
+					path,
+					JSON.stringify({
+						repo: mismatch === "repo" ? "other/repo" : repo,
+						unverifiedClaims: [
+							{
+								runId: mismatch === "runId" ? digestOf("other") : runId,
+								issue: mismatch === "issue" ? 15 : 14,
+								eventId: mismatch === "eventId" ? "2" : "1",
+								why: "ledger",
+								failure: "gh_failed",
+								since: mismatch === "since" ? -1 : 200,
+							},
+						],
+					}),
+					{ mode: 0o600 },
+				);
+
+				if (mismatch === "permissions") chmodSync(path, 0o644);
+				const read = await readAttention({ stateDir: root, repo, now: 1000 });
+				assert.equal(read.kind, "available");
+				assert.equal(read.groups.blocked.length, 0);
+			}));
 
 test("a terminal run's stale hold stays hidden when another run has the newest claim", async () => {
 	const root = fixture();

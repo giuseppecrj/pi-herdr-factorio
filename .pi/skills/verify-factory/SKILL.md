@@ -113,10 +113,10 @@ Copy evidence into `docs/plans/media/<pr-id>/` only when the task authorizes it.
 Before merging any factory source PR, run main's gate tests locally through the trusted reporter, the same way `testArgv` in `server/gates.ts` does:
 
 ```bash
-(umask 022; node --import ./.github/factory/gates/freeze.mjs --experimental-strip-types --test --test-concurrency=1 --test-timeout=60000 --test-reporter ./.github/factory/gates/reporter.mjs test/*.test.ts)
+node --import ./.github/factory/gates/freeze.mjs --experimental-strip-types --test --test-concurrency=1 --test-timeout=60000 --test-reporter ./.github/factory/gates/reporter.mjs test/*.test.ts
 ```
 
-Pass only `test/*.test.ts`. The gate drops `test/sandbox/*.cases.ts` from its file list because `test/sandbox.test.ts` imports them, so passing both globs runs each sandbox case twice. A looser umask such as 077 makes the mode assertions in `test/sandbox/assets.cases.ts` fail.
+Pass only `test/*.test.ts`. The gate drops `test/sandbox/*.cases.ts` from its file list because `test/sandbox.test.ts` imports them, so passing both globs runs each sandbox case twice. Keep the caller's umask; tests must pass under both 022 and the stricter 077. The replay driver keeps its own files private under 077 and launches `serve` with the factory unit's effective `UMask`, falling back to 022.
 
 Require `"complete":true`, `"bad":false` and `"failures":[]` in the final JSON line. `npm run check` uses Node's default reporter and does not exercise the trusted reporter.
 
