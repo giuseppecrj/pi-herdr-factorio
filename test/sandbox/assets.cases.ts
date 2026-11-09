@@ -13,6 +13,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
+import { closeHttpServer } from "./http-fixtures.ts";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -322,7 +323,7 @@ describe("asset lock integrity against downloaded bytes", () => {
 			assert.match(refused.stderr, /EINTEGRITY/);
 			assert.equal((await ci(right, "right")).code, 0);
 		} finally {
-			server.close();
+			await closeHttpServer(server);
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});

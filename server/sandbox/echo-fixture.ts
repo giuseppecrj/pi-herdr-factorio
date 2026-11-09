@@ -18,6 +18,8 @@ export type Received = {
 
 export type EchoFixture = {
 	readonly port: number;
+	readonly host: string;
+	readonly foreign: { method: string; path: string; source: string | null }[];
 	readonly received: Received[];
 	readonly strays: number;
 	waitFor(path: string, count: number): Promise<void>;
@@ -282,15 +284,20 @@ function respond(
  * gateway's scrubbing and fail-closed paths have something to catch.
  *
  * Its loopback port is open to every local process, so it records only
- * requests carrying the gateway's own User-Agent. Any other client gets a
- * 421 and is only counted in `strays`.
+ * requests carrying the gateway's own User-Agent. Tests supply a unique
+ * Host token as well: requests without it get 421 and are recorded in
+ * `foreign`, never attributed to this test's strict `strays` count.
  */
 export async function startEchoFixture(
 	port: number,
-	options: { readonly anthropic?: AnthropicReplay } = {},
+	options: {
+		readonly anthropic?: AnthropicReplay;
+		readonly host?: string;
+	} = {},
 ): Promise<EchoFixture> {
 	const anthropic = options.anthropic ?? "usage";
 	const received: Received[] = [];
+	const foreign: EchoFixture["foreign"] = [];
 	const waiters: { path: string; count: number; done: () => void }[] = [];
 
 	const arrivals = (path: string) =>
@@ -300,6 +307,19 @@ export async function startEchoFixture(
 
 	const server = createServer((req, res) => {
 		const path = (req.url ?? "/").split("?")[0] ?? "/";
+
+		if (options.host !== undefined && headerOf(req, "host") !== options.host) {
+			foreign.push({
+				method: req.method ?? "",
+				path: req.url ?? "/",
+				source: req.socket.remoteAddress ?? null,
+			});
+			req.resume();
+			res.writeHead(421, { "Content-Type": "text/plain" });
+			res.end("not this fixture");
+
+			return;
+		}
 
 		if (headerOf(req, "user-agent") !== GATEWAY_USER_AGENT) {
 			strays += 1;
@@ -338,6 +358,8 @@ export async function startEchoFixture(
 
 	return {
 		port: bound,
+		host: options.host ?? "llm.test",
+		foreign,
 		received,
 		get strays() {
 			return strays;

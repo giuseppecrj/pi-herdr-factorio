@@ -1334,7 +1334,7 @@ test("main's baseline test run gets 180 seconds and candidates three times its m
 		);
 });
 
-test("trusted test concurrency is step-specific and preserves counts across differently scheduled files", async (t) => {
+test("trusted test concurrency is step-specific and preserves baseline/main counts at concurrency 2", async (t) => {
 	const f = repo(t);
 	f.put(
 		"test/slow.test.ts",
