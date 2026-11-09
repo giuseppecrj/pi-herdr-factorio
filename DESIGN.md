@@ -18,7 +18,7 @@ The order comes from `shep/design/system/principles.md`. A higher principle wins
 ### 1. Calm until it needs you
 
 - **Healthy draws no warning.** “Running · last tick 12s ago” is plain `textSecondary`, with no dot or badge. _Why:_ no warning is the reassurance.
-- **Only needs-you orange and error red signal problems.** A stopped controller gets an error Notice. An owner hold gets a neutral info Notice. _Why:_ failure and a deliberate pause are different facts.
+- **Only needs-you orange and error red signal problems.** A stopped controller gets an error Notice. The factory-wide hold gets a neutral info Notice. _Why:_ failure and a deliberate pause are different facts.
 - **Token bars stay neutral.** They answer how much of the cap is used, without changing hue as they fill. _Why:_ usage is not a state.
 - **Nothing animates.** A running step has a word, not a spinner. _Why:_ the record should be calm to read.
 
@@ -26,7 +26,7 @@ The order comes from `shep/design/system/principles.md`. A higher principle wins
 
 - **Use native HTML.** Use `a`, `button`, `form`, `details`, `summary` and `table`, styled with tokens. No component library or CSS framework. _Why:_ native controls bring keyboard, focus and mobile behaviour.
 - **Keep 44 px targets, a visible focus ring and text labels.** Use `--space-hit-target`. _Why:_ a phone and a keyboard must both work.
-- **The Hold control is one form with one button.** _Why:_ it needs no client script or custom control.
+- **The hold switch is one form with one button.** _Why:_ it needs no client script or custom control.
 
 ### 3. One meaning per colour
 
@@ -37,9 +37,9 @@ The table uses Shep token names. CSS uses their kebab-case form, such as `attent
 | F09c state | Shep meaning | Colour | Word | Glyph |
 | --- | --- | --- | --- | --- |
 | `pr_review` | Needs you | `attentionText` | "Your review" | `alert-circle` |
-| `question_asked` | Needs you | `attentionText` | "Your answer" | `help-circle` |
+| `question_asked` | Needs you | `attentionText` | "Your answer" | `message-question` (Shep `questionmark.bubble`) |
 | `spec_review` (not enabled in v1) | Needs you | `attentionText` | "Approve spec" | `alert-circle` |
-| `blocked` (owner hold) | Needs you | `attentionText` | "On hold: reason" | `alert-circle` |
+| `blocked` (a run on hold) | Needs you | `attentionText` | "On hold: reason" | `alert-circle` |
 | `budget` | Needs you | `attentionText` | "Out of budget" | `alert-circle` |
 | `failed` | Not done | `error` | "Failed: class in plain words" | `alert-triangle` |
 | `question_answered` | Working, the factory's move | `textSecondary` | "Answered, resuming" | none |
@@ -47,7 +47,7 @@ The table uses Shep token names. CSS uses their kebab-case form, such as `attent
 | done (landed or closed) | Finished | `textSecondary` | "Landed", "Closed" | `circle-check` |
 | stale (an age, not a state) | n/a | the row's own colour | "Waiting 3 days", "No progress for 6 hours" | none |
 | controller stopped | Not done | `error` Notice | "Stopped since 13:02" | `alert-triangle` |
-| local hold on | Owner's choice, neutral | Notice in `textSecondary` | "On hold" | none |
+| local hold on | Owner's choice, neutral | Notice in `textSecondary` | "On hold" | `info-circle` in `textSecondary` (Shep Notice) |
 | controller healthy | Draws nothing | plain `textSecondary` text | "Running · last tick 12s ago" | none |
 
 - **Stale is an age, not faded data.** Do not use `--opacity-stale` for an old wait. _Why:_ Shep reserves it for data too old to act on.
@@ -78,7 +78,8 @@ Follow `shep/design/system/foundations/typography.md`.
 
 - **Use system fonts, with no web fonts.** `--font-sans` for reading and chrome; `--font-mono` for machine text. _Why:_ nothing needs to load from the network.
 - **Map Shep's type scale through `--type-*`.** Each role has size, leading, weight and family. Regular is 400, medium 500, semibold 600 and bold 700. _Why:_ the hierarchy stays shared.
-- **Use `largeTitle` only for “Factory” on home.** Run-page issue titles use `title`. Row titles and step names use `headline`; run sentences use `body`; button labels use `bodyStrong`. Section headers use `label`, times and metadata use `footnote`, count badges use `badge`, and the “Sample” chip uses `caption`. _Why:_ run pages should not compete with the home title.
+- **Use `largeTitle` only for “Factory” on home.** Run-page issue titles use `title`. _Why:_ run pages should not compete with the home title.
+- **Map the other roles one to one.** Row titles and step names use `headline`. Run sentences use `body`. Button labels use `bodyStrong`. Section headers use `label`. Times and metadata use `footnote`. Count badges use `badge`. The “Sample” chip uses `caption`.
 - **Keep form controls at least 16 px.** `body` is 17 px. Never block browser zoom. _Why:_ small inputs trigger iOS focus zoom; browser zoom is the web's Dynamic Type.
 - **Use sentence case, never uppercase transforms.** _Why:_ capitals shout.
 - **Use tabular numbers for tokens, ages, times and counts.** _Why:_ ticking values must not move the line.
@@ -92,12 +93,13 @@ Follow `shep/design/system/foundations/typography.md`.
 
 | Shep role | Tabler glyph | Viewer role |
 | --- | --- | --- |
-| `exclamationmark.circle`, needs you | `alert-circle` | Review, hold, budget, spec approval; a step waiting on you |
-| `questionmark.circle`, question | `help-circle` | Your answer |
+| `exclamationmark.circle`, needs you | `alert-circle` | Review, a run on hold, budget, spec approval; a step waiting on you |
+| `questionmark.bubble`, pi asks | `message-question` | Your answer |
+| `questionmark.circle`, Not confirmed | `help-circle` | Not confirmed, as in exmach |
 | `exclamationmark.triangle`, error | `alert-triangle` | Failed, Stopped, Can't be read; error Notices; the failed step |
 | `checkmark.circle`, done | `circle-check` | Landed, Closed, passed step, Proven |
-| `circle`, idle | `circle` | Step not reached, in `textTertiary` |
-| `info.circle`, info | `info-circle` | Neutral on-hold Notice |
+| `circle`, idle | `circle` | Step not reached, in `textSecondary` like its word |
+| `info.circle`, info | `info-circle` | The info Notice for the factory-wide hold, in `textSecondary`. The header's “On hold” word has no glyph. |
 | `chevron.right`, `chevron.down`, `chevron.left` | `chevron-right`, `chevron-down`, `chevron-left` | Closed/open disclosure; back to All runs |
 | none, web-only | `external-link` | GitHub link, in `textTertiary` |
 
@@ -105,19 +107,17 @@ Passed steps use `circle-check` in `textSecondary`. Waiting steps use `alert-cir
 
 ## Components
 
-All pages in this map are at `df02576`.
-
 | Viewer piece | Shep page | On the web |
 | --- | --- | --- |
 | Run row | `shep/design/system/components/machine-row.md`, `shep/design/system/status.md` | List item with headline, metadata, state, age, neutral token bar and GitHub action. Selection uses `surfaceSelected`. |
 | Row state | `shep/design/system/components/status-indicators.md` | Glyph and word, no tinted pill. |
 | Needs-you count | `shep/design/system/patterns/needs-you.md`, `shep/design/system/components/status-indicators.md` | Neutral tile; orange count badge only here. |
 | Group header | `shep/design/system/components/section-header.md` | Sentence-case `label`, `textSecondary`, no counts. |
-| Notice | `shep/design/system/components/notice.md` | Component fill and radius; error or neutral glyph, `textPrimary` message in `footnote`. |
+| Notice | `shep/design/system/components/notice.md` | Component fill and radius; `alert-triangle` in `error` for error Notices, `info-circle` in `textSecondary` for the factory-wide hold; `textPrimary` message in `footnote`. |
 | Buttons | `shep/design/system/components/buttons.md` | One primary accent capsule for the main needs-you action; secondary outline. |
-| Hold form | `shep/design/system/components/form-field.md` | Native form and button, with same-origin action and hidden process token. |
+| Hold form | `shep/design/system/components/buttons.md` | Native form and button, with same-origin action and hidden process token. |
 | Empty and error states | `shep/design/system/patterns/states.md`, `shep/design/system/components/empty-state.md` | Keep known content. Unreadable runs get a Notice above the list. Empty problem groups are absent. |
-| Cards and evidence | `shep/design/system/principles.md`, `shep/design/system/components/command-block.md` | Component card tokens; native Details keeps evidence readable. |
+| Cards and evidence | `shep/design/system/principles.md` (principle 4) | Component card tokens; native Details keeps evidence readable. |
 
 ## The colour legend
 
@@ -128,11 +128,19 @@ This legend belongs here, or behind a small help link, never on the dashboard.
 | Orange `attentionText` | Needs your review, answer or intervention; glyph and word, not a row fill |
 | Orange `attention` | The needs-you count badge; not an action colour |
 | Red `error` | Not done: a failed run, failed stage or stopped controller |
-| Neutral `textSecondary` | Working, done, ages, metadata, healthy status and an owner's deliberate hold |
+| Neutral `textSecondary` | Working, done, metadata, healthy status and the factory-wide hold. Ages take their row's colour. |
 | Lilac `textAccent` | Links |
 | Lavender `accent`, `surfaceSelected` | Primary action, selected control or row, focus ring; never a run state |
 
 Green is not used for working, passed or healthy factory states. Shep reserves it for Connected in a machine list (`shep/design/system/status.md`).
+
+## Where Factorio departs from Shep
+
+These follow owner rulings. Everything else follows Shep.
+
+- **Orange covers review, answer, spec approval, a run on hold and budget.** Shep keeps orange for an agent waiting for an answer (`shep/design/system/status.md`, “The colour of a status”). _Source:_ decision G and the state table.
+- **The “need you” tile has a count badge.** Shep's one badge holds `exclamationmark` and sits on a row (`shep/design/system/components/status-indicators.md`, “Badge”). _Source:_ rulings 2 and 9.
+- **Working has no glyph, and nothing animates.** Shep's Working is an animated `ellipsis` (`shep/design/system/status.md`, section 1). _Source:_ the state table and the approved v2 mockup.
 
 ## The twelve owner rulings
 
@@ -159,7 +167,7 @@ These rules supersede the v2 mockup where it differs.
 - **D. The hold form requires CSP `form-action 'self'` and a per-process token in a hidden field. This is the only security-posture change.** _Why:_ the one owner control needs same-origin submission and forgery protection without widening other access.
 - **E. Read the clean-landing metric from a local controller-written snapshot. Never call GitHub during a page request.** _Why:_ rendering stays local and predictable.
 - **F. Dark only. Vendor Shep tokens at `df02576` and Tabler outline glyphs at `v3.50.0` with their MIT notice in this public repo.** _Why:_ reviewed pins make the shared look reproducible without runtime fetches. Glyphs arrive with the restyle.
-- **G. Stale is an age, not a state. Put owner-held and out-of-budget runs under Needs you, with distinct reasons. Order groups Needs you, Failed, Working, Done recently; fold the last.** _Why:_ the owner sees obligations first, then failures, then ongoing and completed work.
+- **G. Stale is an age, not a state. Put a run on hold and an out-of-budget run under Needs you, with distinct reasons. Order groups Needs you, Failed, Working, Done recently; fold the last.** _Why:_ the owner sees obligations first, then failures, then ongoing and completed work.
 - **H. Bundle `tokens.css` into the served `/style.css`. Add no route and leave the CSP unchanged for tokens.** _Why:_ the shared styles need no new serving or trust surface. The restyle PR wires this up.
 
 ## Updating the tokens
