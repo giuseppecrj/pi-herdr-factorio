@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Server } from "node:http";
 import type { TestContext, SuiteContext } from "node:test";
 import {
@@ -28,9 +28,24 @@ export async function startEchoFixture(
 
 export function assertNoStrays(
 	fixture: EchoFixture,
-	_expectedBodies: readonly string[],
+	expectedBodies: readonly string[],
 ): void {
 	assert.equal(fixture.strays, 0);
+
+	const digests = new Set(
+		expectedBodies.map((body) =>
+			createHash("sha256").update(body).digest("hex"),
+		),
+	);
+
+	assert.deepEqual(
+		fixture.foreign.filter(
+			(seen) =>
+				!seen.host?.endsWith(".fixture") && digests.has(seen.bodyDigest),
+		),
+		[],
+		"this test's request bypassed the gateway",
+	);
 }
 
 export function closeHttpServer(server: Server): Promise<void> {

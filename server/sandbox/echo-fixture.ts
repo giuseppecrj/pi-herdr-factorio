@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
 	createServer,
 	type IncomingMessage,
@@ -19,7 +20,13 @@ export type Received = {
 export type EchoFixture = {
 	readonly port: number;
 	readonly host: string;
-	readonly foreign: { method: string; path: string; source: string | null }[];
+	readonly foreign: {
+		method: string;
+		path: string;
+		host: string | null;
+		source: string | null;
+		bodyDigest: string;
+	}[];
 	readonly received: Received[];
 	readonly strays: number;
 	waitFor(path: string, count: number): Promise<void>;
@@ -309,14 +316,21 @@ export async function startEchoFixture(
 		const path = (req.url ?? "/").split("?")[0] ?? "/";
 
 		if (options.host !== undefined && headerOf(req, "host") !== options.host) {
-			foreign.push({
-				method: req.method ?? "",
-				path: req.url ?? "/",
-				source: req.socket.remoteAddress ?? null,
+			const hash = createHash("sha256");
+			const source = req.socket.remoteAddress ?? null;
+
+			req.on("data", (chunk: Buffer) => hash.update(chunk));
+			req.on("end", () => {
+				foreign.push({
+					method: req.method ?? "",
+					path: req.url ?? "/",
+					host: headerOf(req, "host"),
+					source,
+					bodyDigest: hash.digest("hex"),
+				});
+				res.writeHead(421, { "Content-Type": "text/plain" });
+				res.end("not this fixture");
 			});
-			req.resume();
-			res.writeHead(421, { "Content-Type": "text/plain" });
-			res.end("not this fixture");
 
 			return;
 		}

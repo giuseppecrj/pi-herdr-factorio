@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
 	assertNoStrays,
 	closeHttpServer,
@@ -451,22 +452,32 @@ describe("echo fixture", () => {
 					? "HTTP/1.1\r\nHost: 127.0.0.1:18080\r\nUser-Agent: pi-direct\r\n"
 					: "HTTP/1.0\r\n";
 
-			const reply = await new Promise<string>((done, fail) => {
-				const chunks: Buffer[] = [];
+			const send = (body: string) =>
+				new Promise<string>((done, fail) => {
+					const chunks: Buffer[] = [];
 
-				const socket = connect(fixture.port, "127.0.0.1", () => {
-					socket.end(
-						`POST ${path} ${headers}Content-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`,
-					);
+					const socket = connect(fixture.port, "127.0.0.1", () => {
+						socket.end(
+							`POST ${path} ${headers}Content-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`,
+						);
+					});
+
+					socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+					socket.on("error", fail);
+					socket.on("close", () => done(Buffer.concat(chunks).toString()));
 				});
 
-				socket.on("data", (chunk: Buffer) => chunks.push(chunk));
-				socket.on("error", fail);
-				socket.on("close", () => done(Buffer.concat(chunks).toString()));
+			assert.match(await send("another test's body"), /^HTTP\/1\.1 421/);
+			assertNoStrays(fixture, [body]);
+			assert.match(await send(body), /^HTTP\/1\.1 421/);
+			assert.equal(fixture.foreign.length, 2);
+			assert.deepEqual(fixture.foreign[1], {
+				method: "POST",
+				path,
+				host: mode === "Pi Host" ? "127.0.0.1:18080" : null,
+				source: "127.0.0.1",
+				bodyDigest: createHash("sha256").update(body).digest("hex"),
 			});
-
-			assert.match(reply, /^HTTP\/1\.1 421/);
-			assert.equal(fixture.foreign.length, 1);
 			assert.throws(
 				() => assertNoStrays(fixture, [body]),
 				{ code: "ERR_ASSERTION" },
@@ -484,6 +495,7 @@ describe("echo fixture", () => {
 			path: string,
 			token: string,
 			agent = "not-the-gateway",
+			body = "",
 		) =>
 			new Promise<number>((done, fail) => {
 				request(
@@ -500,7 +512,7 @@ describe("echo fixture", () => {
 					},
 				)
 					.on("error", fail)
-					.end();
+					.end(body);
 			});
 
 		assert.equal(
@@ -510,8 +522,28 @@ describe("echo fixture", () => {
 		assert.equal(fixture.strays, 0);
 		assert.deepEqual(fixture.received, []);
 		assert.deepEqual(fixture.foreign, [
-			{ method: "GET", path: "/unrelated", source: "127.0.0.1" },
+			{
+				method: "GET",
+				path: "/unrelated",
+				host: "foreign.fixture",
+				source: "127.0.0.1",
+				bodyDigest: createHash("sha256").update("").digest("hex"),
+			},
 		]);
+
+		const body = JSON.stringify({ input: `own request ${host}` });
+
+		assert.equal(
+			await send(
+				"POST",
+				"/openai/v1/responses",
+				"other-test.fixture",
+				GATEWAY_USER_AGENT,
+				body,
+			),
+			421,
+		);
+		assertNoStrays(fixture, [body]);
 		assert.equal(await send("POST", "/openai/v1/responses", host), 421);
 		assert.equal(
 			fixture.strays,
