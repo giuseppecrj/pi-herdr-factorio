@@ -20,6 +20,10 @@ retry:
 usage:
   max_tokens_per_run: 800000
 
+attention:
+  waiting_ms: 259200000
+  blocked_ms: 21600000
+
 replay:
   max_tokens: 1650000
 

@@ -4,6 +4,57 @@ import {
 	type ViewerRun,
 } from "./evidence.ts";
 import { icons } from "./design/icons/icons.ts";
+import { objectOf, textOf } from "../sandbox/json.ts";
+import { plainTitle } from "../../src/attention.ts";
+
+export function expectedGap(
+	gap: ViewerRun["gaps"][number],
+	status: string,
+): boolean {
+	if (gap.reason === markerHistoryGap) return true;
+
+	if (
+		/pi-stderr-\d+\.log$/.test(gap.source) &&
+		gap.reason === "missing, unsafe, unreadable or over size limit"
+	)
+		return true;
+
+	const old = [
+		"landed",
+		"released",
+		"cancelled",
+		"needs_info",
+		"stage_passed",
+	].includes(status);
+
+	return (
+		old &&
+		[
+			"Pi session JSONL files missing",
+			"gateway audit missing",
+			"child result has no session file",
+		].includes(gap.reason)
+	);
+}
+
+function gapSentence(gap: ViewerRun["gaps"][number], status: string): string {
+	if (gap.reason === markerHistoryGap)
+		return "Earlier GitHub run updates are not kept on this machine. The latest run record is retained.";
+
+	if (expectedGap(gap, status))
+		return "This older run does not retain this optional log. That does not change its recorded outcome.";
+
+	if (/receipt/.test(gap.source + gap.reason))
+		return "A required execution record is missing or unreadable, so this step cannot be verified.";
+
+	if (/claim/.test(gap.source + gap.reason))
+		return "The saved run record is missing or unreadable.";
+
+	if (/verdict/.test(gap.source + gap.reason))
+		return "The saved check result is missing or unreadable; it is not a pass.";
+
+	return "This part of the local record could not be verified. See the exact detail below.";
+}
 
 export function escapeHtml(value: string): string {
 	return value.replace(
@@ -15,8 +66,13 @@ export function escapeHtml(value: string): string {
 	);
 }
 
-function page(title: string, body: string, base: string): string {
-	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · Factory</title><link rel="stylesheet" href="${base}/style.css"></head><body><header><a href="${base}/">Factory <span>/ run evidence</span></a><span class="local">Read only · local</span></header><main>${body}</main><footer>Local evidence only. No GitHub requests. No model calls. Missing evidence is never a pass.</footer></body></html>`;
+export function page(
+	title: string,
+	body: string,
+	base: string,
+	header?: string,
+): string {
+	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · Factory</title><link rel="stylesheet" href="${base}/style.css"><link rel="manifest" href="${base}/manifest.webmanifest"><link rel="apple-touch-icon" href="${base}/icon-192.png"></head><body>${header ?? `<header><div class="heading"><a href="${base}/">Factory</a><span class="local">Local evidence</span></div></header>`}<main>${body}</main><footer>Local evidence only. No GitHub requests. No model calls. Missing evidence is never a pass.</footer></body></html>`;
 }
 
 function table(headers: string[], rows: string[][]): string {
@@ -46,22 +102,44 @@ function timeline(events: TimelineEvent[]) {
 	);
 }
 
-export function renderIndex(ids: string[], base: string): string {
-	return page(
-		"Runs",
-		`<h1>Run evidence</h1><p class="muted">Select one run from the local controller state.</p><ul class="runs">${ids.map((id) => `<li><a href="${base}/run/${id}/timeline"><code>${escapeHtml(id)}</code><span>View run →</span></a></li>`).join("")}</ul>${ids.length === 0 ? "<p>No runs found. This does not establish a completed run.</p>" : ""}`,
+export function renderRun(
+	run: ViewerRun,
+	view: string,
+	base: string,
+	owner?: {
+		header: string;
+		issue: number | null;
+		title: string;
+		summary: string;
+		steps: string;
+		links: string;
+	},
+): string {
+	const problemGaps = run.gaps.some((gap) => !expectedGap(gap, run.status));
 
-		base,
-	);
-}
+	const gapList = (expected: boolean) => {
+		const items = run.gaps.filter(
+			(gap) => expectedGap(gap, run.status) === expected,
+		);
 
-export function renderRun(run: ViewerRun, view: string, base: string): string {
-	const problemGaps = run.gaps.some((gap) => gap.reason !== markerHistoryGap);
+		const grouped = new Map<string, typeof items>();
+
+		for (const gap of items) {
+			const sentence = gapSentence(gap, run.status);
+			const group = grouped.get(sentence) ?? [];
+			group.push(gap);
+			grouped.set(sentence, group);
+		}
+
+		return items.length === 0
+			? ""
+			: `<h3>${expected ? "Expected" : "Problems"} <span class="count">${items.length}</span></h3><ul>${[...grouped].map(([sentence, records]) => `<li>${escapeHtml(sentence)}${records.length === 1 ? "" : ` (${records.length} records)`}<details><summary>Exact detail</summary><ul>${records.map((gap) => `<li><code>${escapeHtml(gap.source)}</code> — ${escapeHtml(gap.reason)}</li>`).join("")}</ul></details></li>`).join("")}</ul>`;
+	};
 
 	const gaps =
 		run.gaps.length === 0
 			? ""
-			: `<details class="gaps notice${problemGaps ? " notice-error" : ""}" open><summary>${problemGaps ? icons["alert-triangle"] : icons["info-circle"]}${run.gaps.length} evidence gaps · not complete</summary><ul>${run.gaps.map((gap) => `<li><code>${escapeHtml(gap.source)}</code> — ${escapeHtml(gap.reason)}</li>`).join("")}</ul></details>`;
+			: `<details class="gaps notice${problemGaps ? " notice-error" : ""}" open><summary>${problemGaps ? icons["alert-triangle"] : icons["info-circle"]}Evidence gaps</summary>${gapList(false)}${gapList(true)}</details>`;
 
 	const tabs = ["timeline", "usage", "children", "gateway"]
 		.map(
@@ -138,12 +216,17 @@ export function renderRun(run: ViewerRun, view: string, base: string): string {
 			]),
 		)}`;
 	else
-		content = `<h2>Timeline</h2><p class="muted">Timestamped events are chronological. Events without timestamps follow in round, generation, stage and attempt order. Selected evidence generation and active execution round are separate. Historical certification does not imply current readiness. Receipt settlement is not a fabricated session event.</p>${timeline(run.timeline)}<h2>Issue snapshot (untrusted text)</h2><pre>${escapeHtml(JSON.stringify(run.issue, null, 2))}</pre>`;
+		content = `<div class="run-grid"><section class="evidence-card"><h2>Stage timeline</h2>${owner?.steps ?? "<p class=muted>Stage summary unavailable. The retained events are below.</p>"}</section>${gaps === "" ? "" : `<aside>${gaps}</aside>`}</div><details class="raw-events"><summary>Raw session events and execution details</summary><p class="muted">Events with times are chronological. Records without times follow by attempt. A passed check on an earlier change does not prove the current change.</p>${timeline(run.timeline)}<h2>Issue snapshot (untrusted text)</h2><pre>${escapeHtml(JSON.stringify(run.issue, null, 2))}</pre></details><details class="glossary"><summary>Technical glossary</summary><dl><dt>Generation</dt><dd>One version of the proposed change.</dd><dt>Certification</dt><dd>Checks and review bound to that exact change.</dd><dt>Settlement</dt><dd>The model and its helpers finished.</dd><dt>Evidence round</dt><dd>The repair attempt that produced these records.</dd></dl></details>`;
+
+	const title =
+		owner?.title ??
+		plainTitle(textOf(objectOf(run.issue)?.title) ?? "Title unavailable");
 
 	return page(
-		"Run",
-		`<p class="eyebrow">Run / <span class="status${run.status === "failed" ? " status-error" : ""}">${run.status === "failed" ? icons["alert-triangle"] : ""}${escapeHtml(run.status)}</span></p><h1 class="run-title"><code>${escapeHtml(run.runId.slice(0, 16))}</code><span class="muted">…</span></h1><p><code>${escapeHtml(run.runId)}</code></p><p class="completeness">${run.complete ? "Evidence complete" : "Evidence incomplete"}</p>${gaps}<nav aria-label="Run views">${tabs}<a class="json" href="${base}/run/${run.runId}/${escapeHtml(view)}.json">JSON ↗</a></nav>${content}`,
+		title,
+		`<p><a href="${base}/">All runs</a></p><p class="eyebrow">${owner?.issue == null ? "Run" : `Issue #${owner.issue}`} · run <code>${escapeHtml(run.runId.slice(0, 12))}</code></p><h1 class="run-title">${escapeHtml(title)}</h1>${owner?.summary ?? ""}${owner?.links ?? ""}${view === "timeline" ? "" : gaps}<nav aria-label="Run views">${tabs}<a class="json" href="${base}/run/${run.runId}/${escapeHtml(view)}.json">JSON ↗</a></nav>${content}`,
 
 		base,
+		owner?.header,
 	);
 }

@@ -7188,22 +7188,112 @@ export async function pumpLedgerOutbox(input: {
 	}
 }
 
+export async function systemdNotify(
+	message: "READY=1" | "WATCHDOG=1",
+): Promise<void> {
+	if (!process.env.NOTIFY_SOCKET) return;
+	await new Promise<void>((done, reject) => {
+		execFile(
+			"systemd-notify",
+			[message],
+			{ timeout: 1000, killSignal: "SIGKILL" },
+			(error) => (error === null ? done() : reject(error)),
+		);
+	});
+}
+
+export function startMetricSnapshots(input: {
+	stateDir: string;
+	collect: () => Promise<JsonValue>;
+	log: Log;
+	intervalMs?: number;
+}) {
+	let pending: Promise<void> | null = null;
+
+	const refresh = () => {
+		if (pending !== null) return;
+		pending = (async () => {
+			try {
+				const snapshot = await input.collect();
+
+				if (
+					!(await writeAtomic(
+						join(input.stateDir, "metrics.json"),
+						`${JSON.stringify(snapshot)}\n`,
+					))
+				)
+					input.log("metrics_unwritable", {});
+			} catch {
+				input.log("metrics_unavailable", {});
+
+				const previous = objectOf(
+					parseJson(
+						await readFile(join(input.stateDir, "metrics.json"), "utf8").catch(
+							() => "null",
+						),
+					),
+				);
+
+				if (previous !== null)
+					await writeAtomic(
+						join(input.stateDir, "metrics.json"),
+						`${JSON.stringify({ ...previous, stale: true, lastAttemptAt: new Date().toISOString() })}\n`,
+					);
+			}
+		})().finally(() => {
+			pending = null;
+		});
+	};
+
+	refresh();
+	const timer = setInterval(refresh, input.intervalMs ?? 300_000);
+	timer.unref();
+
+	return {
+		stop: async () => {
+			clearInterval(timer);
+			await pending;
+		},
+	};
+}
+
 export async function serveLoop(input: {
-	orchestrator: Orchestrator;
+	orchestrator: Pick<Orchestrator, "tick" | "pollIntervalMs">;
 	stateDir: string;
 	sleep: Sleep;
 	signal: AbortSignal;
 	log: Log;
 	pump?: () => Promise<LedgerBacklog | null>;
+	notify?: (message: "READY=1" | "WATCHDOG=1") => Promise<void>;
 }): Promise<void> {
 	const { orchestrator, signal, log } = input;
+	const notify = input.notify ?? systemdNotify;
+	let notifyMissing = false;
+
+	const ping = async (message: "READY=1" | "WATCHDOG=1") => {
+		if (notifyMissing) return;
+
+		try {
+			await notify(message);
+		} catch (error) {
+			if (error instanceof Error && "code" in error && error.code === "ENOENT")
+				notifyMissing = true;
+
+			log("notify_failed", { message });
+		}
+	};
+
+	await ping("READY=1");
 
 	while (!signal.aborted) {
+		await ping("WATCHDOG=1");
 		const report = await orchestrator.tick();
 
-		if (!(await writeStatus(input.stateDir, report))) {
-			log("status_unwritable", {});
-		}
+		const written = await writeStatus(input.stateDir, report);
+
+		if (!written) log("status_unwritable", {});
+
+		await ping("WATCHDOG=1");
 
 		await input.pump?.();
 

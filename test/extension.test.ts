@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { mkdtemp, rm, mkdir } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { addRun } from "./fixtures/owner-feed/state.ts";
 import { describe, it } from "node:test";
 import {
 	factoryCommandText,
@@ -127,6 +131,31 @@ describe("/factory command", () => {
 			/^controller +unavailable: the controller runs on the VM/m,
 		);
 		assert.match(text, /^execution +disabled$/m);
+	});
+
+	it("keeps offline attention statuses and budget kind without putting untrusted titles in context", async () => {
+		const root = await mkdtemp(join(tmpdir(), "offline-attention-"));
+
+		try {
+			await mkdir(join(root, "claims"), { mode: 0o700 });
+			await addRun(root, 3, "budget_exhausted", {
+				title: "Bound the token spend",
+			});
+			const offlineSources = sources(ok(remote), () => offline);
+
+			const text = await factoryCommandText("status", {
+				...offlineSources,
+				env: (name) => (name === "FACTORY_STATE_DIR" ? root : undefined),
+			});
+
+			assert.match(text, /workflow +unavailable/);
+			assert.match(text, /budget: 1/);
+			assert.match(text, /blocked: 0/);
+			assert.match(text, /issues\/3 age \d+s budget_exhausted/);
+			assert.doesNotMatch(text, /Bound the token spend/);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
 	});
 
 	it("works offline and says the workflow is unavailable", async () => {

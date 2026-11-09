@@ -145,10 +145,10 @@ test("the served style.css starts with the exact token sheet and keeps the secur
 		);
 		assert.equal(response.headers.get("cache-control"), "no-store");
 		assert.equal(response.headers.get("x-content-type-options"), "nosniff");
-		assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+		assert.equal(response.headers.get("referrer-policy"), "same-origin");
 		assert.equal(
 			response.headers.get("content-security-policy"),
-			"default-src 'none'; style-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+			"default-src 'none'; style-src 'self'; img-src 'self'; manifest-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
 		);
 	} finally {
 		await viewer.close();
@@ -235,42 +235,92 @@ function ratio(fg: string, bg: string, backdrop?: string): number {
 	return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 }
 
-test("viewer text pairs meet Shep's contrast minimums", () => {
-	const foregrounds = [
-		"textPrimary",
-		"textSecondary",
-		"textAccent",
-		"error",
-		"accent",
-	];
+function coloursUsed(sheet: string, properties: string[]): Set<string> {
+	const names = new Map(
+		Object.keys(json.color).map((name) => [
+			`--color-${name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`,
+			name,
+		]),
+	);
 
-	const backgrounds = [
-		"background",
-		"surface",
-		"surfaceRaised",
-		"surfaceSelected",
-	];
+	const definitions = new Map(
+		[...tokens.matchAll(/(--[a-z0-9-]+):\s*([^;]+);/g)].map((match) => [
+			match[1] ?? "",
+			match[2] ?? "",
+		]),
+	);
 
+	const resolve = (variable: string): string[] => {
+		const name = names.get(variable);
+
+		if (name !== undefined) return [name];
+
+		return [
+			...(definitions.get(variable) ?? "").matchAll(/var\((--[a-z0-9-]+)\)/g),
+		].flatMap((match) => resolve(match[1] ?? ""));
+	};
+
+	return new Set(
+		declarations(sheet)
+			.filter((declaration) => properties.includes(declaration.prop))
+			.flatMap(({ value }) =>
+				[...value.matchAll(/var\((--[a-z0-9-]+)\)/g)].flatMap((match) =>
+					resolve(match[1] ?? ""),
+				),
+			),
+	);
+}
+
+test("contrast coverage is discovered from the stylesheet, including component token aliases", () => {
+	assert.deepEqual(
+		[
+			...coloursUsed(
+				"a { color: var(--color-attention-text); background: var(--component-card-fill); }",
+				["color"],
+			),
+		],
+		["attentionText"],
+	);
+	assert.deepEqual(
+		[
+			...coloursUsed("a { background: var(--component-card-fill); }", [
+				"background",
+			]),
+		],
+		["surface"],
+	);
+});
+
+test("every stylesheet text colour meets Shep's contrast minimums on its declared surfaces", () => {
+	const foregrounds = coloursUsed(css, ["color"]);
+	const backgrounds = coloursUsed(css, ["background", "background-color"]);
+	const covered = new Set<string>();
 	let checks = 0;
 
 	for (const pair of json.contrast.pairs) {
-		if (pair.kind === "decorative" || !foregrounds.includes(pair.fg)) continue;
+		if (pair.kind === "decorative" || !foregrounds.has(pair.fg)) continue;
 
-		for (const bg of pair.bg.filter((name) => backgrounds.includes(name))) {
+		for (const bg of pair.bg.filter((name) => backgrounds.has(name))) {
 			assert.ok(
 				ratio(pair.fg, bg) >= (json.contrast.minimums[pair.kind] ?? Number.NaN),
 				`${pair.fg} on ${bg}`,
 			);
+			covered.add(pair.fg);
 			checks++;
 		}
+
+		if (pair.bg.includes("surface") && backgrounds.has("overlayFaint"))
+			assert.ok(
+				ratio(pair.fg, "overlayFaint", "surface") >=
+					(json.contrast.minimums[pair.kind] ?? Number.NaN),
+				`${pair.fg} on a hovered row`,
+			);
 	}
 
 	assert.ok(checks >= 12, `found ${checks} contrast pairs`);
-
-	for (const fg of ["textPrimary", "textSecondary"])
-		assert.ok(
-			ratio(fg, "overlayFaint", "surface") >=
-				(json.contrast.minimums.text ?? Number.NaN),
-			`${fg} on a hovered table row`,
-		);
+	assert.deepEqual(
+		[...foregrounds].filter((name) => !covered.has(name)),
+		[],
+		"a stylesheet text colour has no checked contrast pair",
+	);
 });

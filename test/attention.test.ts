@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { after, test } from "node:test";
 import { readAttention, ATTENTION_KINDS } from "../src/attention.ts";
 import { digestOf, runIdOf } from "../src/run.ts";
-import { isRepoSlug } from "../src/workflow.ts";
+import { isRepoSlug, parseWorkflow } from "../src/workflow.ts";
 import { runCli } from "../server/cli.ts";
 import { registerFactory } from "../extension/index.ts";
 import type { JsonValue } from "../src/tickets.ts";
@@ -38,6 +38,36 @@ import {
 import { TRUSTED_RUN_CAP, TRUSTED_WORKFLOW } from "./fake-ticket-adapter.ts";
 import { fileRunFiles } from "../server/controller.ts";
 import type { AnswersDigest } from "../src/specify.ts";
+
+test("trusted attention thresholds default, validate positive integers, and reject unknown fields", () => {
+	const parse = (section: string) =>
+		parseWorkflow({
+			text: `---\nrepository: giuseppecrj/pi-herdr-factorio\n${section}\n---\n`,
+			repo,
+			env: (name) => (name === "HOME" ? "/tmp/factory" : undefined),
+		});
+
+	const defaults = parse("");
+	assert.equal(defaults.kind, "valid");
+	assert.deepEqual(defaults.config.attention, {
+		waitingMs: 259_200_000,
+		blockedMs: 21_600_000,
+	});
+	const custom = parse("attention: { waiting_ms: 3000, blocked_ms: 2000 }");
+	assert.equal(custom.kind, "valid");
+	assert.deepEqual(custom.config.attention, {
+		waitingMs: 3000,
+		blockedMs: 2000,
+	});
+
+	for (const section of [
+		"attention: { waiting_ms: 0 }",
+		"attention: { blocked_ms: -1 }",
+		"attention: { waiting_ms: 1.2 }",
+		"attention: { surprise: 1 }",
+	])
+		assert.equal(parse(section).kind, "invalid");
+});
 
 type ClaimExtra = {
 	readonly stage?: string;
@@ -414,6 +444,9 @@ test("unavailable feedback stays blocked with its failure and age; deferred and 
 				prUrl: `https://github.com/${repo}/pull/5`,
 				ageMs: now - 100,
 				reason: "feedback_unavailable:review_comments:malformed_response",
+				title: "Title unavailable",
+				status: "waiting",
+				stale: false,
 			},
 		]);
 		assert.deepEqual(read.gaps, []);
@@ -429,7 +462,7 @@ test("unavailable feedback stays blocked with its failure and age; deferred and 
 	}
 });
 
-test("six groups distinguish unknown legacy ages and never duplicate a not-ready PR", async () => {
+test("seven groups distinguish unknown legacy ages and never duplicate a not-ready PR", async () => {
 	const root = fixture();
 	claim(root, 1, "needs_info");
 	const answered = claim(root, 2, "running", { enteredAt: 100 });
@@ -497,6 +530,9 @@ for (const reason of ["pr_identity", "pr_ambiguous"] as const)
 				prUrl: published ? `https://github.com/${repo}/pull/99` : null,
 				reason,
 				ageMs: 800,
+				title: "Title unavailable",
+				status: "blocked",
+				stale: false,
 			});
 		});
 
@@ -529,6 +565,9 @@ test("an unverified claim appears once in blocked with the observation's age, an
 			prUrl: null,
 			ageMs: 800,
 			reason: "claim_unverified:ledger:gh_failed",
+			title: "Title unavailable",
+			status: "claimed",
+			stale: false,
 		},
 	]);
 	assert.equal(Object.values(read.groups).flat().length, 1);
@@ -574,6 +613,9 @@ test("attention includes an unverified discovery before any claim file or active
 			prUrl: null,
 			ageMs: 800,
 			reason: "claim_unverified:ledger:gh_failed",
+			title: "Title unavailable",
+			status: "blocked",
+			stale: false,
 		},
 	]);
 });
@@ -615,6 +657,9 @@ for (const predecessorStatus of ["released", "needs_info", "claimed"])
 					prUrl: null,
 					ageMs: 800,
 					reason: "claim_unverified:ledger:gh_failed",
+					title: "Title unavailable",
+					status: "blocked",
+					stale: false,
 				},
 			],
 		});
@@ -1014,7 +1059,10 @@ test("real CLI status and registered extension compose the same local attention 
 	assert.match(sent, /question_asked: 1/);
 	assert.match(sent, /spec_review: not enabled in v1/);
 	assert.match(sent, /blocked: 2/);
-	assert.match(sent, /age \d+s \(claim_unverified:ledger:gh_failed\)/);
+	assert.match(
+		sent,
+		/age \d+s(?: stale)? claimed \(claim_unverified:ledger:gh_failed\)/,
+	);
 	assert.match(sent, /pr_review: 0/);
 	assert.match(sent, /candidate_book_unavailable/);
 	assert.ok(requests.length > 0);

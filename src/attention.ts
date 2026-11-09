@@ -6,6 +6,29 @@ import type { JsonValue } from "./tickets.ts";
 import { parseCandidateState, candidateProjection } from "./handoff.ts";
 import { parseMarker, MARKER_PREFIX } from "./markers.ts";
 import { FEEDBACK_UNAVAILABLE_REASONS } from "./feedback.ts";
+import { fileAdmissionStore } from "./admission.ts";
+
+export const ATTENTION_THRESHOLDS = {
+	waitingMs: 3 * 24 * 60 * 60 * 1000,
+	blockedMs: 6 * 60 * 60 * 1000,
+} as const;
+
+export type AttentionThresholds = { waitingMs: number; blockedMs: number };
+
+export function plainTitle(title: string): string {
+	return [...title]
+		.map((char) => {
+			const code = char.codePointAt(0) ?? 0;
+
+			return code < 32 ||
+				(code >= 127 && code <= 159) ||
+				/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/.test(char)
+				? " "
+				: char;
+		})
+		.slice(0, 120)
+		.join("");
+}
 
 export const ATTENTION_KINDS = [
 	"question_asked",
@@ -13,6 +36,7 @@ export const ATTENTION_KINDS = [
 	"spec_review",
 	"pr_review",
 	"blocked",
+	"budget",
 	"failed",
 ] as const;
 
@@ -24,7 +48,20 @@ export type AttentionEntry = Readonly<{
 	prUrl: string | null;
 	ageMs: number | null;
 	reason: string | null;
+	title: string;
+	status: string;
+	stale: boolean;
 }>;
+
+export type AttentionRun = AttentionEntry &
+	Readonly<{
+		issue: number;
+		eventId: string;
+		stage: string;
+		since: number | null;
+		terminal: boolean;
+		kind: AttentionKind | null;
+	}>;
 
 export type AttentionRead =
 	| {
@@ -37,6 +74,7 @@ export type AttentionRead =
 			readonly groups: Readonly<
 				Record<AttentionKind, readonly AttentionEntry[]>
 			>;
+			readonly runs: readonly AttentionRun[];
 			readonly specReview: "not_enabled_in_v1";
 			readonly gaps: readonly string[];
 	  };
@@ -44,6 +82,7 @@ export type AttentionRead =
 type AttentionClaim = Readonly<{
 	runId: Digest;
 	issue: number;
+	eventId: string;
 	repo: RepoSlug;
 	seq: number;
 	status: string;
@@ -210,16 +249,20 @@ function parseClaim(
 
 	const ready = readiness?.kind;
 
-	const enteredAt = evidenceMissing
-		? null
-		: overflow !== undefined
-			? overflow.since
-			: work?.kind === "held" &&
-					(work.reason === "pr_identity" ||
-						work.reason === "pr_ambiguous" ||
-						work.reason === "feedback_overflow")
-				? work.since
-				: (countOf(claim?.enteredAt) ?? readiness?.since ?? null);
+	const enteredAt =
+		evidenceMissing &&
+		!["released", "stage_passed", "landed", "cancelled"].includes(
+			projection?.status ?? status,
+		)
+			? null
+			: overflow !== undefined
+				? overflow.since
+				: work?.kind === "held" &&
+						(work.reason === "pr_identity" ||
+							work.reason === "pr_ambiguous" ||
+							work.reason === "feedback_overflow")
+					? work.since
+					: (countOf(claim?.enteredAt) ?? readiness?.since ?? null);
 
 	const reason = evidenceMissing
 		? "candidate_book_unavailable"
@@ -236,6 +279,7 @@ function parseClaim(
 	return {
 		runId,
 		issue,
+		eventId,
 		repo,
 		seq,
 		status: projection?.status ?? status,
@@ -257,6 +301,8 @@ function groupOf(
 ): AttentionKind | null {
 	if (claim.terminal) return null;
 
+	if (claim.status === "budget_exhausted") return "budget";
+
 	if (
 		claim.pr !== null &&
 		(claim.readiness === "not_ready" ||
@@ -270,8 +316,7 @@ function groupOf(
 
 	if (claim.status === "waiting" && claim.pr !== null) return "pr_review";
 
-	if (claim.status === "blocked" || claim.status === "budget_exhausted")
-		return "blocked";
+	if (claim.status === "blocked") return "blocked";
 
 	if (claim.status === "failed") return "failed";
 
@@ -406,6 +451,9 @@ export async function readAttention(input: {
 	stateDir: string | null;
 	repo: RepoSlug | null;
 	now: number;
+	thresholds?: AttentionThresholds;
+	terminalSince?: number;
+	runId?: Digest;
 }): Promise<AttentionRead> {
 	if (input.stateDir === null)
 		return { kind: "unavailable", reason: "state_not_configured" };
@@ -425,13 +473,20 @@ export async function readAttention(input: {
 		spec_review: [],
 		pr_review: [],
 		blocked: [],
+		budget: [],
 		failed: [],
 	};
 
 	const gaps: string[] = [];
+	const runs: AttentionRun[] = [];
+	const thresholds = input.thresholds ?? ATTENTION_THRESHOLDS;
+	const admissions = fileAdmissionStore(root);
 
 	try {
-		const names = await readdir(join(root, "claims"));
+		const names =
+			input.runId === undefined
+				? await readdir(join(root, "claims"))
+				: [`${input.runId}.json`];
 
 		if (names.length > 10_000)
 			return { kind: "unavailable", reason: "state_unavailable" };
@@ -460,13 +515,39 @@ export async function readAttention(input: {
 			if (claim.terminal) holds.delete(claim.runId);
 			const previous = newest.get(claim.issue);
 
-			if (previous === undefined || claim.seq > previous.seq)
+			if (
+				previous === undefined ||
+				BigInt(claim.eventId) > BigInt(previous.eventId) ||
+				(claim.eventId === previous.eventId && claim.seq > previous.seq)
+			)
 				newest.set(claim.issue, claim);
-			else if (claim.seq === previous.seq)
+			else if (claim.eventId === previous.eventId && claim.seq === previous.seq)
 				gaps.push(`ambiguous_issue:${claim.issue}`);
 		}
 
 		for (const claim of newest.values()) {
+			if (claim.terminal && input.terminalSince !== undefined) {
+				const row = objectOf(
+					await privateJson(join(root, "ledger", claim.runId, "row.json")),
+				);
+
+				const terminal =
+					row ??
+					objectOf(
+						await privateJson(
+							join(root, "ledger", claim.runId, "terminal.json"),
+						),
+					);
+
+				const observed = Date.parse(
+					stringOf(terminal?.terminalObservedAt) ?? "",
+				);
+
+				const since = Number.isFinite(observed) ? observed : claim.enteredAt;
+
+				if (since === null || since < input.terminalSince) continue;
+			}
+
 			if (claim.evidenceMissing)
 				gaps.push(`candidate_book_unavailable:${claim.runId.slice(0, 12)}`);
 			let answered = false;
@@ -513,19 +594,61 @@ export async function readAttention(input: {
 			holds.delete(claim.runId);
 			const kind = hold === undefined ? groupOf(claim, answered) : "blocked";
 
-			if (kind === null) continue;
 			const issueUrl = `https://github.com/${claim.repo}/issues/${claim.issue}`;
 			const since = hold?.since ?? claim.enteredAt;
-			groups[kind].push({
+
+			const snapshot = await admissions.readSnapshot({
+				repo: input.repo,
+				issue: claim.issue,
+				eventId: claim.eventId,
+			});
+
+			const ageMs =
+				since === null || since > input.now ? null : input.now - since;
+
+			const entry: AttentionRun = {
+				issue: claim.issue,
+				eventId: claim.eventId,
+				stage: claim.stage,
+				since,
+				terminal: claim.terminal,
+				kind,
+				title:
+					snapshot.kind === "found"
+						? plainTitle(snapshot.snapshot.title)
+						: "Title unavailable",
+				status: claim.status,
+				stale:
+					ageMs !== null &&
+					((kind === "pr_review" && ageMs >= thresholds.waitingMs) ||
+						(kind === "blocked" && ageMs >= thresholds.blockedMs)),
 				runId: claim.runId,
 				issueUrl,
 				prUrl:
 					claim.pr === null
 						? null
 						: `https://github.com/${claim.repo}/pull/${claim.pr}`,
-				ageMs: since === null || since > input.now ? null : input.now - since,
+				ageMs,
 				reason: hold?.reason ?? claim.reason,
-			});
+			};
+
+			runs.push(entry);
+
+			if (kind !== null) {
+				const { runId, issueUrl, prUrl, ageMs, reason, title, status, stale } =
+					entry;
+
+				groups[kind].push({
+					runId,
+					issueUrl,
+					prUrl,
+					ageMs,
+					reason,
+					title,
+					status,
+					stale,
+				});
+			}
 		}
 
 		for (const hold of holds.values()) {
@@ -535,6 +658,9 @@ export async function readAttention(input: {
 				prUrl: null,
 				ageMs: hold.since > input.now ? null : input.now - hold.since,
 				reason: hold.reason,
+				title: "Title unavailable",
+				status: "blocked",
+				stale: input.now - hold.since >= thresholds.blockedMs,
 			});
 		}
 
@@ -542,6 +668,7 @@ export async function readAttention(input: {
 			kind: "available",
 			at: input.now,
 			groups,
+			runs,
 			specReview: "not_enabled_in_v1",
 			gaps,
 		};
@@ -563,7 +690,7 @@ export function formatAttention(attention: AttentionRead): string {
 		...ATTENTION_KINDS.flatMap((kind) =>
 			attention.groups[kind].map(
 				(entry) =>
-					`    ${kind} ${entry.prUrl ?? entry.issueUrl} age ${entry.ageMs === null ? "unknown" : `${Math.floor(entry.ageMs / 1000)}s`}${entry.reason === null ? "" : ` (${entry.reason})`}`,
+					`    ${kind} ${entry.prUrl ?? entry.issueUrl} age ${entry.ageMs === null ? "unknown" : `${Math.floor(entry.ageMs / 1000)}s`}${entry.stale ? " stale" : ""} ${entry.status}${entry.reason === null ? "" : ` (${entry.reason})`}`,
 			),
 		),
 		...(attention.gaps.length === 0
