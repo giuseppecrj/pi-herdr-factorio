@@ -657,8 +657,10 @@ for (const mask of [0o022, 0o077])
 							},
 						],
 					}),
-					{ mode: mismatch === "permissions" ? 0o644 : 0o600 },
+					{ mode: 0o600 },
 				);
+
+				if (mismatch === "permissions") chmodSync(path, 0o644);
 				const read = await readAttention({ stateDir: root, repo, now: 1000 });
 				assert.equal(read.kind, "available");
 				assert.equal(read.groups.blocked.length, 0);

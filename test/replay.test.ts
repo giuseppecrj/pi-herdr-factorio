@@ -689,7 +689,18 @@ describe("review regressions: comparison identity and caps", () => {
 
 		try {
 			await mkdir(join(dir, "src"));
-			const source = await readFile("src/workflow.ts", "utf8");
+
+			const source = `const BRANCH_NAME = /^[A-Za-z0-9._/-]+$/;
+
+export function isBranchName(input: string): boolean {
+	return BRANCH_NAME.test(input);
+}
+
+export function parseWorkflow(input: string): string {
+	return input.trim();
+}
+`;
+
 			await writeFile(join(dir, "src/workflow.ts"), source);
 			git("init", "-q");
 			git("add", ".");
@@ -705,9 +716,16 @@ describe("review regressions: comparison identity and caps", () => {
 				"symbol baseline",
 			);
 			const base = git("rev-parse", "HEAD");
+
+			const parserEdit = source.replace(
+				"return input.trim();",
+				"return input.trimStart();",
+			);
+
+			assert.notEqual(parserEdit, source);
 			await writeFile(
 				join(dir, "src/workflow.ts"),
-				`${source}\n// unrelated parser edit mentioning BRANCH_NAME and isBranchName\n`,
+				`${parserEdit}\n// unrelated parser edit mentioning BRANCH_NAME and isBranchName\n`,
 			);
 			git("add", ".");
 			git(
@@ -740,13 +758,14 @@ describe("review regressions: comparison identity and caps", () => {
 				).cases[0]?.status,
 				"ready",
 			);
-			await writeFile(
-				join(dir, "src/workflow.ts"),
-				source.replace(
-					"return BRANCH_NAME.test(input);",
-					"if (input.endsWith('.lock')) return false;\n\treturn BRANCH_NAME.test(input);",
-				),
+
+			const branchEdit = source.replace(
+				"return BRANCH_NAME.test(input);",
+				"if (input.endsWith('.lock')) return false;\n\treturn BRANCH_NAME.test(input);",
 			);
+
+			assert.notEqual(branchEdit, source);
+			await writeFile(join(dir, "src/workflow.ts"), branchEdit);
 			git("add", ".");
 			git(
 				"-c",

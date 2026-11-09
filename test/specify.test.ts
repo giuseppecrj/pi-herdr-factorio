@@ -2013,6 +2013,7 @@ describe("tarball checkout", () => {
 					sha: base,
 					fetch,
 				};
+
 				const first = await checkoutWorkspace(input);
 
 				assert.ok(first.kind === "ready");
@@ -2022,10 +2023,13 @@ describe("tarball checkout", () => {
 					`${"d".repeat(120)}/file.txt`,
 				]);
 				assert.equal(existsSync(join(workspace, "partial.txt")), false);
-				assert.equal(statSync(join(workspace, "bin/run")).mode & 0o777, 0o755);
+				assert.equal(
+					statSync(join(workspace, "bin/run")).mode & 0o777,
+					0o755 & ~mask,
+				);
 				assert.equal(
 					statSync(join(workspace, "README.md")).mode & 0o777,
-					0o644,
+					0o644 & ~mask,
 				);
 				assert.equal(existsSync(join(workspace, "docs/link.md")), false);
 				assert.equal(await first.checkout.read("README.md", 100), "# readme\n");
