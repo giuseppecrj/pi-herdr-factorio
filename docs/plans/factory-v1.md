@@ -1116,7 +1116,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [ ] Build the dashboard on the design system, using the rulings the owner settled on 2026-11-09.
   - [ ] Bundle `server/viewer/design/tokens.css` into the existing `/style.css`. Add no route, so the CSP does not change. Style only through tokens, with dark only and no `prefers-color-scheme`.
   - [ ] Map states as the `DESIGN.md` state table does. Blocked by an owner hold and out of budget go under Needs you, each with its own reason word. Stale is an age shown on the row, such as "Waiting 3 days", and never a group. Working is neutral and never green. Failed uses the `error` colour with `alert-triangle`.
-  - [ ] Draw Needs you rows as the orange glyph plus the word in `attentionText`, with no tinted pill. Use `alert-circle` for "Your review", "Out of budget" and "On hold", and `help-circle` for "Your answer".
+  - [ ] Draw Needs you rows as the orange glyph plus the word in `attentionText`, with no tinted pill. Use `alert-circle` for "Your review", "Out of budget" and "On hold", and `message-question` (Shep `questionmark.bubble`) for "Your answer". `help-circle` keeps Shep's "Not confirmed" meaning, as in exmach.
   - [ ] Show the count badge on the "need you" tile only, and never repeat it on rows. Give that tile a neutral surface, not `attentionTint`, and keep the orange badge and the word.
   - [ ] Draw links in `textAccent`. Keep the `external-link` glyph on links to GitHub.
   - [ ] Put no counts in group headers. Order each group newest first, and let the age words flag old waits.
