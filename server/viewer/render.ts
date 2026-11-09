@@ -1,4 +1,8 @@
-import type { TimelineEvent, ViewerRun } from "./evidence.ts";
+import {
+	markerHistoryGap,
+	type TimelineEvent,
+	type ViewerRun,
+} from "./evidence.ts";
 import { icons } from "./design/icons/icons.ts";
 
 export function escapeHtml(value: string): string {
@@ -52,11 +56,7 @@ export function renderIndex(ids: string[], base: string): string {
 }
 
 export function renderRun(run: ViewerRun, view: string, base: string): string {
-	const problemGaps = run.gaps.some(
-		(gap) =>
-			gap.reason !==
-			"marker comment history is not retained locally; claim is only the latest state",
-	);
+	const problemGaps = run.gaps.some((gap) => gap.reason !== markerHistoryGap);
 
 	const gaps =
 		run.gaps.length === 0

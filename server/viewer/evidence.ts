@@ -40,6 +40,9 @@ import {
 import { reviewDir, type ReviewReceipt } from "../../src/review.ts";
 import { blocksReview, type Verdict } from "../../src/run.ts";
 
+export const markerHistoryGap =
+	"marker comment history is not retained locally; claim is only the latest state";
+
 export type Gap = { source: string; reason: string };
 
 export type TimelineEvent = {
@@ -1216,10 +1219,7 @@ export async function readViewerRun(
 			);
 		}
 	} catch {
-		io.gap(
-			markerPath,
-			"marker comment history is not retained locally; claim is only the latest state",
-		);
+		io.gap(markerPath, markerHistoryGap);
 	}
 
 	for (const key of required)

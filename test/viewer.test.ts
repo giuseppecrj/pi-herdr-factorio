@@ -13,7 +13,7 @@ import { request } from "node:http";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
-import { Evidence } from "../server/viewer/evidence.ts";
+import { Evidence, markerHistoryGap } from "../server/viewer/evidence.ts";
 import {
 	arrayOf,
 	fieldOf,
@@ -1142,6 +1142,27 @@ test("receipt and verdict reader extractions preserve their existing parse contr
 	}
 });
 
+test("missing marker history alone renders a neutral info Notice", async () => {
+	const { root } = await fixtureState();
+
+	try {
+		await rm(join(root, "markers", `${runId}.jsonl`));
+		const run = await readViewerRun(root, runId);
+		assert.deepEqual(run.gaps, [
+			{ source: `markers/${runId}.jsonl`, reason: markerHistoryGap },
+		]);
+		assert.equal(run.complete, false);
+
+		const html = renderRun(run, "timeline", "/factory");
+		assert.match(html, /class="gaps notice"/);
+		assert.ok(html.includes(icons["info-circle"]));
+		assert.ok(!html.includes(icons["alert-triangle"]));
+		assert.doesNotMatch(html, /notice-error/);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
 test("restyled runs keep state words and evidence, with error glyphs only for failures and problem gaps", async () => {
 	const { root } = await fixtureState();
 
@@ -1150,8 +1171,7 @@ test("restyled runs keep state words and evidence, with error glyphs only for fa
 
 		const expected = {
 			source: `markers/${runId}.jsonl`,
-			reason:
-				"marker comment history is not retained locally; claim is only the latest state",
+			reason: markerHistoryGap,
 		};
 
 		const neutral = renderRun(

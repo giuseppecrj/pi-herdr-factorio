@@ -185,7 +185,7 @@ a:hover {
 	margin-left: auto;
 	font:
 		var(--type-footnote-weight) var(--type-footnote-size) /
-		var(--type-footnote-leading) var(--font-mono);
+		var(--type-footnote-leading) var(--font-sans);
 }
 .scroll {
 	overflow: auto;
@@ -238,7 +238,7 @@ tr:hover {
 	text-decoration: none;
 }
 .runs a:hover {
-	background: var(--color-surface-selected);
+	background: var(--color-overlay-faint);
 }
 .runs code {
 	min-width: 0;
