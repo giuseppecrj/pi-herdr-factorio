@@ -132,7 +132,7 @@ import {
 	reviewR8,
 	findingFingerprints,
 } from "../src/review.ts";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
 	readFileSync,
@@ -4014,6 +4014,29 @@ export async function readLedgerBacklog(stateDir: string | null, now: number) {
 	};
 }
 
+export function durableUsageOf(
+	accounting: Awaited<ReturnType<typeof readDurableAccounting>>,
+): JsonValue {
+	const uncertain = accounting.runs.some((run) => run.uncertainRequests > 0);
+
+	const exact =
+		accounting.state === "readable" &&
+		accounting.runs.every((run) => run.tokens.kind === "exact");
+
+	return accounting.state === "unavailable"
+		? { kind: "unavailable", reason: "legacy_not_recorded" }
+		: {
+				kind: uncertain ? "uncertain" : exact ? "exact" : "lower_bound",
+				unit: "tokens",
+				total: accounting.runs.reduce((sum, run) => sum + run.tokens.total, 0),
+				...(uncertain
+					? { reason: "request_unsettled" }
+					: exact
+						? {}
+						: { reason: "receipt_missing" }),
+			};
+}
+
 /** Writes the last tick's report for `status --json`. */
 export async function writeStatus(
 	stateDir: string,
@@ -4021,7 +4044,7 @@ export async function writeStatus(
 ): Promise<boolean> {
 	return writeAtomic(
 		join(resolve(stateDir), STATUS_FILE),
-		`${JSON.stringify(report, null, 2)}\n`,
+		`${JSON.stringify({ ...report, durableUsage: durableUsageOf(await readDurableAccounting(stateDir, report.repo)) }, null, 2)}\n`,
 	);
 }
 
@@ -7193,12 +7216,19 @@ export async function systemdNotify(
 ): Promise<void> {
 	if (!process.env.NOTIFY_SOCKET) return;
 	await new Promise<void>((done, reject) => {
-		execFile(
-			"systemd-notify",
-			[message],
-			{ timeout: 1000, killSignal: "SIGKILL" },
-			(error) => (error === null ? done() : reject(error)),
+		const child = spawn("systemd-notify", [message], {
+			detached: message === "WATCHDOG=1",
+			stdio: "ignore",
+			timeout: 1000,
+			killSignal: "SIGKILL",
+		});
+
+		child.once("error", reject);
+		child.once("close", (code) =>
+			code === 0 ? done() : reject(new Error("notify_exit")),
 		);
+
+		if (message === "WATCHDOG=1") child.unref();
 	});
 }
 
@@ -7223,8 +7253,27 @@ export function startMetricSnapshots(input: {
 					))
 				)
 					input.log("metrics_unwritable", {});
-			} catch {
-				input.log("metrics_unavailable", {});
+			} catch (error) {
+				const reason =
+					error instanceof Error &&
+					[
+						"metric_deadline",
+						"ledger_missing",
+						"ledger_ref_unavailable",
+						"ledger_commit_unavailable",
+						"ledger_file_unavailable",
+						"label_missing",
+						"defect_query_failed",
+						"defect_query_invalid",
+						"defect_query_incomplete",
+						"intervention_unreadable",
+						"receipt_read_unavailable",
+						"metric_compute_unavailable",
+					].includes(error.message)
+						? error.message
+						: "collection_failed";
+
+				input.log("metrics_unavailable", { reason });
 
 				const previous = objectOf(
 					parseJson(
@@ -7284,16 +7333,30 @@ export async function serveLoop(input: {
 	};
 
 	await ping("READY=1");
+	let watchdogPending = false;
+	let scheduled: NodeJS.Immediate | null = null;
+
+	const watchdog = () => {
+		if (notifyMissing || watchdogPending) return;
+		watchdogPending = true;
+		scheduled = setImmediate(() => {
+			scheduled = null;
+			void ping("WATCHDOG=1").finally(() => {
+				watchdogPending = false;
+			});
+		});
+		scheduled.unref();
+	};
 
 	while (!signal.aborted) {
-		await ping("WATCHDOG=1");
+		watchdog();
 		const report = await orchestrator.tick();
 
 		const written = await writeStatus(input.stateDir, report);
 
 		if (!written) log("status_unwritable", {});
 
-		await ping("WATCHDOG=1");
+		watchdog();
 
 		await input.pump?.();
 
@@ -7302,5 +7365,6 @@ export async function serveLoop(input: {
 		await input.sleep(orchestrator.pollIntervalMs, signal);
 	}
 
+	if (scheduled !== null) clearImmediate(scheduled);
 	log("controller_stopping", {});
 }

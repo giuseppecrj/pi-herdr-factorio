@@ -30,6 +30,26 @@ export const EXCLUDED_RUNS = [
 		runId: "89290787949a04cdbdc956f3b57356fa48c57f604823d232acba61108b266783",
 		reason: "F10 fixture issue 658",
 	},
+	{
+		runId: "eb9f779fac14baf331d29350a37eb42b9d10530323de70a687230da49ab6c7d9",
+		reason: "F09c live-lane fixture",
+	},
+	{
+		runId: "d22f122bd8d318610b24a808e38fbd290b82b67d04ef5f01bea5158117be0c31",
+		reason: "F09c live-lane fixture",
+	},
+	{
+		runId: "4086ee6e567860b7cdad114fe033cc12fc234c3387081cdeb304d55434dbbfa3",
+		reason: "F09c live-lane fixture",
+	},
+	{
+		runId: "141e0640c8d6f4fdc564354342b898bb4d55f1ca04b19824fec18932ec4cda4d",
+		reason: "F09c live-lane fixture",
+	},
+	{
+		runId: "3920f5ed4fab622b1edc5f114a728763343e1da8402a18052e58047a5ece4423",
+		reason: "F09c live-lane fixture",
+	},
 ] as const;
 
 const WINDOW_MS = METRIC_POLICY.windowDays * 24 * 60 * 60 * 1000;

@@ -22,6 +22,10 @@ async function state<T>(body: (root: string) => Promise<T>) {
 
 	try {
 		await ownerState(root);
+		await save(root, ["status.json"], {
+			...JSON.parse(await readFile(join(root, "status.json"), "utf8")),
+			durableUsage: { kind: "lower_bound", total: 5200000 },
+		});
 
 		return await body(root);
 	} finally {
@@ -104,7 +108,8 @@ test("thresholds are local projections, inclusive at the boundary, with future a
 		assert.equal(read.kind, "available");
 		assert.equal(read.groups.pr_review[0]?.stale, true);
 		assert.equal(read.groups.blocked[0]?.stale, true);
-		await save(root, ["metrics.json"], {
+		await save(root, ["status.json"], {
+			repo,
 			attentionThresholds: {
 				waitingMs: 5 * 86_400_000,
 				blockedMs: 8 * 3_600_000,

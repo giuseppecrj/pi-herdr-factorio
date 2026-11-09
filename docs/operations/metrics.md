@@ -178,8 +178,7 @@ its existence read-only; a missing label or an unconfirmed existence gives
 
 ```sh
 gh api 'repos/<repo>/labels/factory%3Adefect'
-gh issue list --repo <repo> --label factory:defect --state all \
-  --limit 10000 --json number,title,body,createdAt,labels
+gh api 'repos/<repo>/issues?labels=factory%3Adefect&state=all&per_page=100&page=1'
 ```
 
 A follow-up must be another issue in that repository, carry `factory:defect`
@@ -193,8 +192,11 @@ Every labeled issue matching no included ticket is listed by number under
 `unmatchedDefects`, even if outside a landing window, so typos cannot disappear.
 Generic `bug` or `factory:proposed` labels alone do not count. Issue text is used for matching but never exported.
 
-The command may paginate internally. A nonzero exit, transport failure,
-invalid JSON or a saturated 10,000-issue limit makes the read unknown. It does
+The collector follows numbered repository REST pages until a short page,
+filtering out pull requests. Global search and GraphQL are not used; the VM's
+repository-scoped integration forbids them. Pagination has a 30-second bound.
+A nonzero exit, transport failure, invalid JSON or 100 full pages (10,000
+items including pull requests) makes the read unknown. It does
 not treat a truncated list as proof that no defect exists. No label is created
 by this command. Labels are current observations, not historical label events.
 
@@ -216,6 +218,11 @@ written with production provenance:
 | `199df6dc85d53522b12bded884ebe6351dffcb80f7e456d42124ab39e994489f` | F10c issue 621, PR 622, ledger line 13 |
 | `bd3db33b9ed3951db0800d381f3ea4a61eadcc1e615091eb4024dd9b4a465f22` | F10 fixture issue 650 |
 | `89290787949a04cdbdc956f3b57356fa48c57f604823d232acba61108b266783` | F10 fixture issue 658 |
+| `eb9f779fac14baf331d29350a37eb42b9d10530323de70a687230da49ab6c7d9` | F09c live-lane fixture |
+| `d22f122bd8d318610b24a808e38fbd290b82b67d04ef5f01bea5158117be0c31` | F09c live-lane fixture |
+| `4086ee6e567860b7cdad114fe033cc12fc234c3387081cdeb304d55434dbbfa3` | F09c live-lane fixture |
+| `141e0640c8d6f4fdc564354342b898bb4d55f1ca04b19824fec18932ec4cda4d` | F09c live-lane fixture |
+| `3920f5ed4fab622b1edc5f114a728763343e1da8402a18052e58047a5ece4423` | F09c live-lane fixture |
 
 ## Report fields
 

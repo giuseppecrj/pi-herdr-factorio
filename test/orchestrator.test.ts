@@ -7707,6 +7707,40 @@ describe("Orchestrator claims recorded before their first marker", () => {
 });
 
 describe("Orchestrator before the first workflow load", () => {
+	it("projects only the last valid workflow's attention thresholds through status", async () => {
+		const { github, start } = world();
+		const controller = start();
+		const trusted = github.workflow;
+		assert.ok(trusted !== null);
+		github.workflow = null;
+		assert.equal((await controller.tick()).attentionThresholds, undefined);
+		github.workflow = trusted
+			.replace("waiting_ms: 259200000", "waiting_ms: 432000000")
+			.replace("blocked_ms: 21600000", "blocked_ms: 28800000");
+		const thresholds = { waitingMs: 432000000, blockedMs: 28800000 };
+		assert.deepEqual((await controller.tick()).attentionThresholds, thresholds);
+		github.workflow = github.workflow.replace(
+			"waiting_ms: 432000000",
+			"waiting_ms: -1",
+		);
+		const invalid = await controller.tick();
+		assert.ok(invalid.dispatch.reasons.includes("workflow_unavailable"));
+		assert.deepEqual(invalid.attentionThresholds, thresholds);
+		github.workflow = null;
+		assert.deepEqual((await controller.tick()).attentionThresholds, thresholds);
+		const dir = mkdtempSync(join(tmpdir(), "threshold-status-"));
+
+		try {
+			assert.equal(await writeStatus(dir, invalid), true);
+			assert.deepEqual(
+				JSON.parse(readFileSync(join(dir, "status.json"), "utf8"))
+					.attentionThresholds,
+				thresholds,
+			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 	it("adopts no run into a slot until the process has loaded a workflow", async () => {
 		const { github, clock, files, start } = world();
 
