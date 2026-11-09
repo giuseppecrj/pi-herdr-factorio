@@ -1,20 +1,34 @@
-# Inspect one run's local evidence
+# Factory owner dashboard
 
 Start the viewer from a repository checkout on Node 26.12.1 or later:
 
 ```bash
-node server/cli.ts viewer --state-dir "$STATE" --run "$RUN_ID" --port 8080
+node server/cli.ts viewer --state-dir "$STATE" --port 8080
 ```
 
 Wait for `viewer_ready bind=127.0.0.1 port=8080`. Fetch the timeline on that machine with `curl`, or open it in a local browser. Stop the process with Ctrl+C or SIGTERM.
 
-Omit `--run` to select a run from the index. The ID is the full 64-character run digest. The default port is 8080. A missing state directory or occupied port exits 1. Invalid arguments exit 2. The viewer never creates the state directory.
+The home page groups tickets into **Needs you**, **Failed**, **Working**, and **Done recently**, in that order. Empty groups are absent. Each group is newest first. Done recently is folded and covers seven days, one row per ticket. Older runs remain reachable at `/run/<id>/timeline`; `--run <64-character-id>` opens one directly. The default port is 8080. A missing, non-private state directory or occupied port exits 1. Invalid arguments exit 2. The viewer never creates the state directory.
+
+Each row gives the issue title, a plain sentence, stage, saved status, repair round, tokens against the historical run cap, CI result, PR or issue link, and age. Unknown caps and results stay unknown. Published work being updated stays neutral **Working**, even though the attention feed counts it as blocked. A corrupt marker history gets one error Notice with issue links, not an invented working or failed run. Waiting PRs become old after three days, and blocked work after six hours. These trusted workflow thresholds flag age without changing groups or starting work.
+
+The clean-landing panel reads only `metrics.json`. The controller refreshes it at startup and every five minutes outside the tick/watchdog path. It reads the complete ledger branch and the existing defect, review and receipt collectors. Until the report is complete, the panel says **Pending**. Its timestamp shows the snapshot's age. No page request calls GitHub or a model.
+
+`GET /owner-feed.json` returns **OwnerFeed v1**, the same local projection as `node server/cli.ts owner-feed --json --state-dir "$STATE"`. It has seven attention counts and a separate working-run count. The golden example for clients is `test/fixtures/owner-feed/feed-v1.json`.
+
+## Hold or resume the factory
+
+The header has one form, **Hold factory** or **Resume factory**. It creates or removes only `$STATE/disabled`, the existing controller switch. It does not cancel work, reset a budget, restart a terminal run, or act as your GitHub identity. Ticket actions go to GitHub for answering, labeling, reviewing, merging and closing. The controller observes the local switch on its next tick.
+
+The POST requires the exact loopback Host or the one authorized Tailscale hostname, a matching Origin, and the hidden per-process token from the current page. Null and foreign Origins are refused. The same-origin referrer policy preserves the Origin on browser form submissions over loopback HTTP, while sending no referrer to GitHub or other sites. A page saved before a viewer restart needs reloading. The form targets the current prefix. Every successful hold request logs its time, source and setting, never the token. No other write route is accepted.
+
+The manifest and bundled PNG icons let a phone install the page as an app. There is no service worker, private-data cache or client script. All responses use `Cache-Control: no-store`.
 
 ## Read the four views
 
 Select **Timeline**, **Usage**, **Children**, or **Gateway**. Each view also has a JSON link at `/run/<id>/<view>.json`. JSON responses contain `runId`, `status`, `complete`, `gaps`, and `data`.
 
-The timeline combines stage receipts, observed settlement, the latest claim, recorded marker comments, parent session events, publication, and CI evidence. Receipts have no start timestamp. Timestamped events use parsed times, with stable source order for ties. Entries without timestamps follow them, showing their source in stage and attempt order. Repair rounds come from the claim's run-level counter, recorded markers, and round-qualified build/review execution directories. Claims retain the counter even before another validation exists. F09a enumerates every retained current and archived round/generation from the candidate book, never a round-zero or latest-evidence alias. `build-r<N>-<attempt>` and `review-r<N>-<attempt>` directories participate in named missing-receipt gaps. The timeline also shows private review seats, answering models, isolation labels, tokens, and blocking status. It binds review attempts to their captured generation and admitted instruction pin. A missing round/generation receipt is a gap, not clean review. Each failed CI verdict also shows a `diagnosis` entry read from its stored assessment: the class and subreason, the fixed disagreement sentence when there is one, scenario IDs for `candidate` and `oracle`, and whether one bounded repair was authorized or none was spent. It never shows private test names, messages or paths. An unreadable assessment is a gap, and a failed verdict with no assessment is a gap.
+The timeline leads with Spec, Tests, Build, CI, Review and PR, each with its saved result, time and tokens when retained. Failure glyphs use the ledger's failure stage, never the final PR projection. Raw session events sit behind a disclosure, and a glossary explains the exact technical terms. The retained event record combines stage receipts, observed settlement, the latest claim, recorded marker comments, parent session events, publication, and CI evidence. Receipts have no start timestamp. Timestamped events use parsed times, with stable source order for ties. Entries without timestamps follow them, showing their source in stage and attempt order. Repair rounds come from the claim's run-level counter, recorded markers, and round-qualified build/review execution directories. Claims retain the counter even before another validation exists. F09a enumerates every retained current and archived round/generation from the candidate book, never a round-zero or latest-evidence alias. `build-r<N>-<attempt>` and `review-r<N>-<attempt>` directories participate in named missing-receipt gaps. The timeline also shows private review seats, answering models, isolation labels, tokens, and blocking status. It binds review attempts to their captured generation and admitted instruction pin. A missing round/generation receipt is a gap, not clean review. Each failed CI verdict also shows a `diagnosis` entry read from its stored assessment: the class and subreason, the fixed disagreement sentence when there is one, scenario IDs for `candidate` and `oracle`, and whether one bounded repair was authorized or none was spent. It never shows private test names, messages or paths. An unreadable assessment is a gap, and a failed verdict with no assessment is a gap.
 
 Read **published PR** and **historical certification** separately from **selected generation** and **execution account**. The published row names the promoted certificate and recorded readiness; working validation, review, or repair can name a different round/generation. A selected round-zero marker can coexist with active round-one repair. Active generation is unknown for a repair execution rather than inferred from the selected marker.
 
@@ -26,7 +40,7 @@ Children come from retained Pi session JSONL files. The parent's top-level `cust
 
 ## Account for missing evidence
 
-A missing, corrupt, unsafe, or oversized source appears under **evidence gaps**. A run with any gap is never complete, even when the last claim says `stage_passed`. This describes evidence completeness, not approval to merge.
+The full gap list remains on the run page with plain explanations and exact details. Missing marker history, missing stderr logs, and missing sessions or gateway audits on finished runs are expected gaps, shown neutrally. Missing or corrupt receipts, claims and verdicts are problems and get an error Notice. A landed run does not open with “Evidence incomplete” merely because old marker history was not retained. The JSON `complete` flag still describes full evidence coverage, not approval to merge.
 
 Before deleting build `agent-*` directories, the runner moves parent and child session JSONL into the execution's private `sessions/` directory. It keeps the newest whole files within 8 MiB and records dropped paths as `session_truncated` in the receipt. These sessions stay on the VM, mode 0600 under 0700 directories. Older runs may lack sessions. The viewer reports missing linked children as `missing_child_session` and truncation as gaps, preserving receipt totals rather than reconstructing individual usage. Private archived state in the original `agent-*/sessions/` layout also remains readable.
 
@@ -44,10 +58,26 @@ The F09a tests exercise the real CLI processes, registered status handler, and l
 
 ## Keep the viewer private
 
-The server binds only to `127.0.0.1`. It accepts `GET` only. It checks Host and same-origin Origin headers, sends no CORS headers, and sets a strict Content-Security-Policy. It has no action route, model call, GitHub call, or ledger writer.
+The server binds only to `127.0.0.1`. Reads accept GET only; the hold route accepts POST only with the checks above. It checks Host and same-origin Origin headers, sends no CORS headers, and sets a strict Content-Security-Policy. The CSP permits same-origin forms, manifest and static icons, but no scripts, external assets or framing. There is no merge, approve, label, retry, stage or cap control, model call, GitHub call or ledger writer.
 
 Exposure requires the owner's explicit approval. Do not forward the port merely because the viewer is read-only. It contains private issue and session metadata.
 
 Only after approval, start it with `--allowed-host <machine>.<tailnet>.ts.net`, then publish that loopback port through `tailscale serve`. Verify the HTTPS Tailscale URL before sharing it. The explicit hostname flag permits only that additional Host and its matching HTTPS Origin. It never changes the loopback bind. The factory has no Tailscale dependency, and the viewer does not invoke Tailscale.
 
-To keep the host's root free for other services, serve the viewer under a path. Start it with `--base-path /factory` and publish it with `tailscale serve --bg --https=443 --set-path=/factory/ http://127.0.0.1:<port>`. Tailscale strips the mount path before proxying, so the viewer's routes stay unprefixed. `--base-path` changes only the links and the pinned-run redirect the viewer renders. It must be one or more lowercase `/segment` parts with no trailing slash.
+To keep the host's root free for other services, serve the viewer under a path. Start it with `--base-path /factory` and publish it with `tailscale serve --bg --https=443 --set-path=/factory/ http://127.0.0.1:<port>`. Tailscale strips the mount path before proxying. Both stripped routes and direct prefixed loopback routes work. Links, redirects, assets and the hold form all carry the prefix. `--base-path` must be one or more lowercase `/segment` parts with no trailing slash.
+
+The VM has no tailnet. On a tailnet machine, keep an SSH tunnel to the VM's loopback viewer, then publish that local tunnel port. Under the owner's exposure grant:
+
+```bash
+# VM, with the tailnet machine's one authorized hostname
+node server/cli.ts viewer --state-dir /home/exedev/factory-state --port 8090 \
+  --allowed-host <machine>.<tailnet>.ts.net --base-path /factory
+
+# Tailnet machine; keep this process running
+SSH_AUTH_SOCK=$HOME/.ssh/headless-agent.sock ssh -N \
+  -L 127.0.0.1:8090:127.0.0.1:8090 exedev@pi-factorio.exe.xyz
+
+tailscale serve --bg --https=443 --set-path=/factory/ http://127.0.0.1:8090
+```
+
+Open `https://<machine>.<tailnet>.ts.net/factory/` yourself before sharing it. Only that hostname is allowed; adding a second machine requires changing the viewer's single `--allowed-host`, not a wildcard. To stop exposure without touching other services, remove only this mount with `tailscale serve --https=443 --set-path=/factory/ off`, then stop the SSH tunnel and viewer. Do not use `tailscale serve reset`, public Funnel, VM public ingress or the exe.dev integration to expose private state.

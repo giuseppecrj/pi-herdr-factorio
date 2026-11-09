@@ -7,9 +7,9 @@ node server/cli.ts <command> --json --repo <owner/name> [options]
 node server/cli.ts serve --repo <owner/name> --state-dir <dir> [--issue <number>]...
 ```
 
-Except for `metrics`, `gates` and `viewer`, every command reads `.github/factory/WORKFLOW.md` from GitHub through `gh`, never from the local checkout. It first resolves the branch to a SHA with `gh api repos/<repo>/git/ref/heads/<branch> --jq .object.sha`, then fetches the file at that SHA with `gh api -H 'Accept: application/vnd.github.raw' repos/<repo>/contents/.github/factory/WORKFLOW.md?ref=<sha>`. Ordinary `gh` calls have a 30-second timeout. Ledger publication uses a separate 20-second job slice, with each call capped at the smaller of 5 seconds and the remaining slice. `gh` inherits the environment, including `GH_HOST`. On the VM, set `GH_HOST=github.int.exe.xyz`.
+Except for `owner-feed`, `metrics`, `gates` and `viewer`, every command reads `.github/factory/WORKFLOW.md` from GitHub through `gh`, never from the local checkout. It first resolves the branch to a SHA with `gh api repos/<repo>/git/ref/heads/<branch> --jq .object.sha`, then fetches the file at that SHA with `gh api -H 'Accept: application/vnd.github.raw' repos/<repo>/contents/.github/factory/WORKFLOW.md?ref=<sha>`. Ordinary `gh` calls have a 30-second timeout. Ledger publication uses a separate 20-second job slice, with each call capped at the smaller of 5 seconds and the remaining slice. `gh` inherits the environment, including `GH_HOST`. On the VM, set `GH_HOST=github.int.exe.xyz`.
 
-`admit` makes more `gh` reads, described below. `tick`, `run`, and `serve` run the controller. They can write markers, summaries, labels, Git objects and refs, dispatch CI, open a PR, request review, and close an issue after an observed merge. They never merge or arm auto-merge. Only these controller commands launch models, inside the stage sandbox. `admit` and the controller write private state under `--state-dir`; `gates` writes its own receipt output directory. The viewer and metrics report are read-only. See [Review and merge a factory PR](human-review.md) for the owner procedure.
+`admit` makes more `gh` reads, described below. `tick`, `run`, and `serve` run the controller. They can write markers, summaries, labels, Git objects and refs, dispatch CI, open a PR, request review, and close an issue after an observed merge. They never merge or arm auto-merge. Only these controller commands launch models, inside the stage sandbox. `admit` and the controller write private state under `--state-dir`; `gates` writes its own receipt output directory. The owner feed and metrics report are read-only. The viewer reads local evidence and has one protected hold POST, which changes only the local `disabled` file. See [Review and merge a factory PR](human-review.md) for the owner procedure.
 
 Errors and warnings carry only text the factory builds itself. They never quote `gh` output, an exec failure, a YAML error message, a key or value from `WORKFLOW.md` or a command-line argument. A second layer still redacts credentials in stdout, stderr and `/factory status` text. Anything shaped like `scheme://user:secret@` is printed as `scheme://<redacted>@`, and the value of a query parameter named `token`, `access_token`, `auth`, `key`, `password`, `secret`, `sig`, `signature` or `code`, in any case, is printed as `<redacted>`. In JSON output this applies to each string value before it is encoded, so it never spans two lines of one value.
 
@@ -21,7 +21,17 @@ node server/cli.ts viewer --state-dir "$STATE" [--run <64-character-id>] [--port
 
 `viewer` serves local evidence on `127.0.0.1` with no GitHub or model calls. It needs neither `--repo` nor `--json`. The default port is 8080. All four views have HTML and JSON routes. Missing sources are visible gaps, never a complete run. A missing state directory or occupied port exits 1. Invalid options exit 2. Ctrl+C or SIGTERM stops it with exit 0.
 
-See [Inspect one run's local evidence](viewer.md) for the routes, source limits, session-retention gaps, and owner-authorized Tailscale exposure. `--allowed-host` permits an explicitly authorized Tailscale hostname without changing the loopback bind. `--base-path` prefixes rendered links for a `tailscale serve --set-path` mount. No exposure is enabled by default.
+See [Factory owner dashboard](viewer.md) for the routes, source limits, session-retention gaps, and owner-authorized Tailscale exposure. `--allowed-host` permits an explicitly authorized Tailscale hostname without changing the loopback bind. `--base-path` prefixes rendered links for a `tailscale serve --set-path` mount. No exposure is enabled by default.
+
+## Local owner feed
+
+```bash
+node server/cli.ts owner-feed --json --state-dir "$STATE" [--repo <owner/name>]
+```
+
+`owner-feed` reads only private local state and never loads a remote workflow, writes a file, calls GitHub or starts a model. Without `--repo`, it takes the repository from `status.json`. It prints OwnerFeed version 1, including controller/last-tick/local-switch state, ticket entries, seven attention counts, an explicit ungrouped working-run count, unreadable-run notices and evidence gaps. An unavailable state is explicit, not an empty success claim. Exit 0 prints a report; exit 2 indicates invalid arguments. The viewer's GET-only `/owner-feed.json` route serves the same projection.
+
+The controller writes private, atomic `metrics.json` at startup and every five minutes. Collection reads the complete remote ledger and the existing defect, review and local receipt collectors, separately from tick and watchdog delivery. A collection failure or incomplete cohort produces Pending, never an invented clean-landing headline. The snapshot also carries the trusted attention thresholds for local-only readers. Neither the feed nor a page request refreshes it.
 
 ## Ticket outcome metrics
 
@@ -64,6 +74,7 @@ evidence limitations. This command writes no state and takes no action.
 
 | Command | Purpose |
 | --- | --- |
+| `owner-feed` | Read the local OwnerFeed v1 without remote reads or writes. |
 | `metrics` | Report ticket outcomes and charged tokens; see its separate flags above. |
 | `workflow-check` | Load and validate the workflow. Print the snapshot or the error. |
 | `status` | Print the factory status: package, workflow, models, limits and execution state. |
@@ -71,7 +82,7 @@ evidence limitations. This command writes no state and takes no action.
 | `tick` | Run one controller tick and print the claim snapshot. Requires `--once`. |
 | `run` | Run one controller tick for one issue, through the same admission as polling, and print the claim snapshot. |
 | `serve` | Run the controller: a tick, then one every `polling.interval_ms`, until SIGTERM or SIGINT. |
-| `viewer` | Inspect one run's local timeline, usage, children, and gateway decisions. |
+| `viewer` | Open the owner dashboard or one run's timeline, usage, children and gateway decisions. |
 | `gates` | Run the trusted candidate gates and write a bound receipt; see its separate flags below. |
 
 ## Flags
@@ -530,7 +541,11 @@ Each command does these steps in order and stops at the first that fails:
 2. It takes the lock, described below. If another controller holds it, it logs `controller_running` with that controller's pid and exits 2. `tick` and `run` also print `{"error": "controller_running", "pid": <pid>}`. The pid is `null` when the holder's `controller.lock` is missing or unreadable. No `gh` call has run yet. If the lock cannot be taken for another reason, such as a state directory whose real path cannot be resolved, a socket that cannot be bound, or a `controller.lock` that cannot be written, it logs `controller_refused` with `lock_unavailable` and exits 1.
 3. It checks that `gh` acts as the integration bot. It reads `gh api graphql -f query='query { viewer { login } }'` and requires exactly `exe-dev-github-integration[bot]`. Without `GH_HOST`, `gh` on the VM has no credentials and the read fails, and on a workstation it answers as the owner. Either way it logs `controller_refused` with `identity_unavailable` or `identity_mismatch`, releases the lock and exits 1. See `docs/prototypes/restart-recovery/README.md`.
 
-`serve` then logs `controller_ready` with its pid, repository and scope. That line means the service is ready.
+`serve` then logs `controller_ready` with its pid, repository and scope. That marks entry into the loop, not systemd readiness. After the first successful atomic status write, it sends `READY=1` once through `systemd-notify`. After every status-write attempt it sends `WATCHDOG=1`, including a failed write, which logs `status_unwritable`. This avoids turning a full disk into a watchdog restart loop. Notify failures log `notify_failed`.
+
+`server/factory.service` uses `Type=notify`, `NotifyAccess=all` for the helper child and `WatchdogSec=120`, retaining `Restart=on-failure`, `RestartSec=30` and `RestartPreventExitStatus=2`. Without `NOTIFY_SOCKET`, CLI runs skip notification. A notify child has a one-second timeout. The VM delivery/restart proof remains a live verification gate.
+
+**Watchdog timing risk.** A fake-clock test through the real orchestrator constructs three sequential 30-second GitHub timeouts in a tick. That is 90 seconds, or 140 seconds including the existing 20-second ledger pump and 30-second sleep, beyond the fixed 120-second watchdog. This is not a measured VM outage. The limit is unchanged; an outage can cause a false restart, and the live timing lane must assess it before deployment. See [backup and restore](backup.md) before changing service or state.
 
 ### Verification token cap
 
@@ -894,9 +909,11 @@ With `--state-dir`, `controller` has `state`, `pid`, `since` and `lastTick`:
 
 `lastTick` is the content of `<state-dir>/status.json`, or `null`.
 
-The separate top-level `attention` uses `src/attention.ts`, the same local reader as the extension. Without configured state it is `{kind: "unavailable", reason: "state_not_configured"}`. Unsafe or inaccessible private state gives `state_unavailable`. Available output has `at`, `groups`, `specReview: "not_enabled_in_v1"`, and `gaps`. The six group keys are `question_asked`, `question_answered`, `spec_review`, `pr_review`, `blocked`, and `failed`. Entries have `runId`, `issueUrl`, nullable `prUrl`, nullable `ageMs`, and nullable `reason`.
+The separate top-level `attention` uses `src/attention.ts`, the same local reader as the extension. Without configured state it is `{kind: "unavailable", reason: "state_not_configured"}`. Unsafe or inaccessible private state gives `state_unavailable`. Available output has `at`, `groups`, local `runs`, `specReview: "not_enabled_in_v1"`, and `gaps`. The seven attention kinds are `question_asked`, `question_answered`, `spec_review`, `pr_review`, `blocked`, `budget`, and `failed`. Entries have `runId`, `issueUrl`, nullable `prUrl`, nullable `ageMs`, nullable `reason`, `title`, `status`, and `stale`. Titles come from digest-verified admission snapshots, are plain text capped at 120 Unicode code points, and fall back to “Title unavailable”. Budget exhaustion and token-cap holds are separate from blocked work. Working and Done recently are dashboard display groups, not attention kinds.
 
-The reader selects the newest claim sequence per issue. A linked early specify run supplies `question_answered`; it does not crawl GitHub for answers. Ready waiting PRs appear once under `pr_review`. Working refreshes and not-ready PRs appear once under `blocked`, not also PR review. Missing books produce evidence gaps; malformed or wrong-owner books never become ready. Unknown legacy ages remain `null`. An unverified claim in the private `status.json` snapshot's `unverifiedClaims` appears once under `blocked`, with reason `claim_unverified:<why>[:<failure>]` and age measured from its `since`, not the stage's start. The reader checks the repository, issue, run and admission event, matching the newest nonterminal claim when present. It can also show a discovery hold before a claim file exists. Recovery clears the entry on the next status snapshot. This is attention only: no claim timeout or automatic termination is added. The root and claims directories must be owned private directories with no group/other access; claim files and the optional status snapshot must be private regular files. Reads are bounded at 10,000 claim entries and 8 MiB per file. The reader launches no model, writes nothing, and cannot reconstruct authoritative remote state.
+Trusted workflow `attention.waiting_ms` defaults to 259200000 (three days); `attention.blocked_ms` defaults to 21600000 (six hours). Both require positive integers. A waiting PR or blocked entry is stale at or beyond its threshold and stays in its group. Future or missing timestamps give an unknown age, never a stale flag. These thresholds cause no model work or scheduling action. The CLI and extension use the loaded trusted workflow, with defaults offline; local feed readers use the controller's last metric snapshot thresholds.
+
+The reader selects the newest admission event per issue, then the highest sequence within that event. A linked early specify run supplies `question_answered`; it does not crawl GitHub for answers. Ready waiting PRs appear once under `pr_review`. Working refreshes and not-ready PRs appear once under `blocked`, not also PR review. Missing books produce evidence gaps; malformed or wrong-owner books never become ready. Unknown legacy ages remain `null`. An unverified claim in the private `status.json` snapshot's `unverifiedClaims` appears once under `blocked`, with reason `claim_unverified:<why>[:<failure>]` and age measured from its `since`, not the stage's start. The reader checks the repository, issue, run and admission event, matching the newest nonterminal claim when present. It can also show a discovery hold before a claim file exists. Recovery clears the entry on the next status snapshot. This is attention only: no claim timeout or automatic termination is added. The root and claims directories must be owned private directories with no group/other access; claim files and the optional status snapshot must be private regular files. Reads are bounded at 10,000 claim entries and 8 MiB per file. The reader launches no model, writes nothing, and cannot reconstruct authoritative remote state.
 
 ### Logs
 
