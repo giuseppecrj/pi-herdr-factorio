@@ -60,6 +60,7 @@ const GATE_IMAGE =
 
 const SOURCE = ["src", "extension", "server", "skills", "scripts"];
 const CHECK_NAMES = ["typecheck", "lint", "format"];
+const GATE_TEST_CONCURRENCY = 2;
 const SHA = /^[a-f0-9]{40}$/;
 
 function isDocumentation(path: string): boolean {
@@ -1047,14 +1048,18 @@ async function install(
 	});
 }
 
-function testArgv(files: readonly string[], details = false): string[] {
+function testArgv(
+	files: readonly string[],
+	details = false,
+	concurrency = 1,
+): string[] {
 	return [
 		"node",
 		"--import",
 		"/g/freeze.mjs",
 		"--experimental-strip-types",
 		"--test",
-		"--test-concurrency=1",
+		`--test-concurrency=${concurrency}`,
 		"--test-timeout=60000",
 		"--test-reporter",
 		"/g/reporter.mjs",
@@ -2331,7 +2336,7 @@ export async function checkCandidate(
 		const baselineRun = await run(
 			"baseline_tests",
 			baseline,
-			testArgv(manifest.tests),
+			testArgv(manifest.tests, false, GATE_TEST_CONCURRENCY),
 		);
 
 		const baseCounts = countsOf(baselineRun.result);
@@ -2349,7 +2354,13 @@ export async function checkCandidate(
 		const mainTests = manifest.tests.filter((p) => existsSync(join(tree, p)));
 
 		if (mainTests.length === 0) throw new Error("missing_tests");
-		const candidateRun = await run("main_tests", tree, testArgv(mainTests));
+
+		const candidateRun = await run(
+			"main_tests",
+			tree,
+			testArgv(mainTests, false, GATE_TEST_CONCURRENCY),
+		);
+
 		const candidateCounts = countsOf(candidateRun.result);
 		receipt.candidateCounts = candidateCounts ?? {};
 
@@ -2391,7 +2402,7 @@ export async function checkCandidate(
 				name,
 				baseline,
 				manifest.checks.find((c) => c.name === timed.name)?.argv ??
-					testArgv(manifest.tests),
+					testArgv(manifest.tests, false, GATE_TEST_CONCURRENCY),
 			);
 
 			if (control.result.timedOut) throw new Error("baseline_deadline");

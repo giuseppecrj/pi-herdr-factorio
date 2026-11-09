@@ -17,6 +17,11 @@ import fs, {
 	utimesSync,
 } from "node:fs";
 import { createServer, request } from "node:http";
+import {
+	assertNoStrays,
+	closeHttpServer,
+	startEchoFixture,
+} from "./http-fixtures.ts";
 import { runHeldoutBase } from "../../server/gates.ts";
 import { assessBase } from "../../src/diagnosis.ts";
 import {
@@ -99,10 +104,7 @@ import type {
 	SummaryEvent,
 } from "../../server/sandbox/control.ts";
 import { bindCredentials } from "../../server/sandbox/credentials.ts";
-import {
-	type EchoFixture,
-	startEchoFixture,
-} from "../../server/sandbox/echo-fixture.ts";
+import type { EchoFixture } from "../../server/sandbox/echo-fixture.ts";
 import { Gateway } from "../../server/sandbox/gateway.ts";
 import {
 	type GatewayHandle,
@@ -3861,7 +3863,9 @@ describe("runStage deadline and cleanup budget", () => {
 
 	it("bounds every cleanup wait by the reserve", {
 		timeout: 10_000,
-	}, async () => {
+	}, async (t) => {
+		t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 1000 });
+		const flush = () => new Promise<void>((done) => setImmediate(done));
 		const stuck = new Promise<void>(() => {});
 
 		class StuckGateway extends FakeGateway {
@@ -3901,24 +3905,52 @@ describe("runStage deadline and cleanup budget", () => {
 			},
 		);
 
-		const begin = Date.now();
+		let settled = false;
 
-		const result = await runStage(
+		const pending = runStage(
 			input({}, { budget: { maxTurns: 10, wallMs: 300, stallMs: 300_000 } }),
 			h.host,
-		);
+		).then((result) => {
+			settled = true;
 
-		const elapsed = Date.now() - begin;
+			return result;
+		});
+
+		await flush();
+		assert.equal(h.pis.length, 1);
+		t.mock.timers.tick(99);
+		await flush();
+		assert.equal(h.timeline.includes("gate:wall"), false);
+		t.mock.timers.tick(1);
+		await flush();
+		assert.equal(h.timeline.includes("gate:wall"), true);
+		t.mock.timers.tick(199);
+		await flush();
+		assert.equal(settled, false);
+		t.mock.timers.tick(1);
+
+		for (let turn = 0; turn < 30 && !settled; turn++) {
+			t.mock.timers.tick(0);
+			await flush();
+		}
+
+		assert.equal(
+			settled,
+			true,
+			"cleanup must finish at the shared reserve boundary",
+		);
+		const result = await pending;
 
 		assert.equal(result.kind === "budget_exhausted" && result.cap, "wall");
-		assert.equal(elapsed >= 100, true, String(elapsed));
-		assert.equal(elapsed < 300 + 250, true, String(elapsed));
+		assert.equal(Date.now(), 1300);
 		assert.equal(h.receipts.length, 1);
 	});
 
 	it("carries one cleanup end from an early abort through session cleanup, gateway shutdown and the receipt", {
 		timeout: 10_000,
-	}, async () => {
+	}, async (t) => {
+		t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 1000 });
+		const flush = () => new Promise<void>((done) => setImmediate(done));
 		const reserve = 100;
 		const abort = new AbortController();
 
@@ -3973,20 +4005,45 @@ describe("runStage deadline and cleanup budget", () => {
 			abortedAt = Date.now();
 		});
 
-		const result = await runStage(input({ signal: abort.signal }), {
+		let settled = false;
+
+		const pending = runStage(input({ signal: abort.signal }), {
 			...h.host,
 			async stderrLog(session) {
 				await new Promise((done) => setTimeout(done, 90));
 
 				return stderrLog(session);
 			},
+		}).then((result) => {
+			settled = true;
+
+			return result;
 		});
 
-		const elapsed = Date.now() - abortedAt;
+		await new Promise<void>((done) =>
+			abort.signal.addEventListener("abort", () => done(), { once: true }),
+		);
+		await flush();
+		assert.equal(abortedAt, 1000);
+		t.mock.timers.tick(reserve - 1);
+		await flush();
+		assert.equal(settled, false);
+		t.mock.timers.tick(1);
+
+		for (let turn = 0; turn < 30 && !settled; turn++) {
+			t.mock.timers.tick(0);
+			await flush();
+		}
+
+		assert.equal(
+			settled,
+			true,
+			"shutdown and receipt must not open new cleanup windows",
+		);
+		const result = await pending;
 
 		assert.equal(result.kind === "failed" && result.exit, "aborted");
-		assert.ok(abortedAt > 0);
-		assert.equal(elapsed < reserve + 40, true, String(elapsed));
+		assert.equal(Date.now() - abortedAt, reserve);
 		assert.equal(h.receipts.length, 1);
 	});
 });
@@ -4838,7 +4895,7 @@ describe("runStage on an Anthropic primary", () => {
 });
 
 function inProcessGateway(
-	fixturePort: number,
+	fixture: Pick<EchoFixture, "port" | "host">,
 	events: ControlEvent[],
 	journal: (text: string) => void = () => {},
 ) {
@@ -4858,9 +4915,9 @@ function inProcessGateway(
 							upstream: {
 								scheme: "http",
 								host: "llm.test",
-								port: fixturePort,
+								port: fixture.port,
 								basePath: route.prefix,
-								hostHeader: "llm.test",
+								hostHeader: fixture.host,
 								sni: "llm.test",
 								address: { kind: "pinned", ip: "127.0.0.1" },
 							},
@@ -5114,8 +5171,8 @@ describe("pinned zero-token accept replay", () => {
 		const suiteText = JSON.stringify(pin.suite);
 		const suite = writeAcceptance(suiteText, contract);
 		assert.ok(suite.kind === "suite");
-		const upstream = await startEchoFixture(0);
-		t.after(() => upstream.close());
+		const upstream = await startEchoFixture(t, 0);
+		const expectedBodies: string[] = [];
 		const forwarded: string[] = [];
 
 		const capture = createServer((req, res) => {
@@ -5146,8 +5203,8 @@ describe("pinned zero-token accept replay", () => {
 			});
 		});
 
+		t.after(() => closeHttpServer(capture));
 		await new Promise<void>((done) => capture.listen(0, "127.0.0.1", done));
-		t.after(() => new Promise<void>((done) => capture.close(() => done())));
 		const address = capture.address();
 		assert.ok(address !== null && address instanceof Object);
 
@@ -5234,9 +5291,13 @@ describe("pinned zero-token accept replay", () => {
 			const handles: GatewayHandle[] = [];
 			let calls = 0;
 
-			const gateway = inProcessGateway(address.port, events, (text) => {
-				journal += text;
-			});
+			const gateway = inProcessGateway(
+				{ port: address.port, host: upstream.host },
+				events,
+				(text) => {
+					journal += text;
+				},
+			);
 
 			const send = async () => {
 				const response = await streamSimple(
@@ -5248,6 +5309,7 @@ describe("pinned zero-token accept replay", () => {
 						fetch: async (_url, init) => {
 							const body = String(init?.body ?? "");
 							bodies.push(body);
+							expectedBodies.push(body);
 
 							return new Promise<Response>((done, reject) => {
 								const req = request(
@@ -5554,7 +5616,7 @@ describe("pinned zero-token accept replay", () => {
 		assert.deepEqual(exits, [1, 1]);
 		assert.equal(contractDigestOf(contractBytes(contract)), unchanged);
 		assert.equal(upstream.arrivals("/openai/v1/responses"), 5);
-		assert.equal(upstream.strays, 0);
+		assertNoStrays(upstream, expectedBodies);
 		t.diagnostic(
 			JSON.stringify({
 				acceptReplay: results,
@@ -5581,8 +5643,10 @@ describe("pinned zero-token source replay", () => {
 		);
 
 		assert.equal(digestOf(workflow), pin.workflowDigest);
-		const upstream = await startEchoFixture(0);
+		const upstream = await startEchoFixture(t, 0);
+		const expectedBodies: string[] = [];
 		const root = mkdtempSync(join(tmpdir(), "factory-eff2-replay-"));
+		t.after(() => rmSync(root, { recursive: true, force: true }));
 		const repo = "giuseppecrj/pi-herdr-factorio";
 		assert.ok(isRepoSlug(repo));
 		assert.ok(isGitSha(pin.baseline));
@@ -5879,7 +5943,7 @@ describe("pinned zero-token source replay", () => {
 					handle: GatewayHandle | null = null,
 					error: string | null = null;
 
-				const gateway = inProcessGateway(upstream.port, events, (text) => {
+				const gateway = inProcessGateway(upstream, events, (text) => {
 					journal += text;
 				});
 
@@ -5893,6 +5957,7 @@ describe("pinned zero-token source replay", () => {
 								const body = String(init?.body ?? "");
 								bytes.push(Buffer.byteLength(body));
 								providerInputs.push(body);
+								expectedBodies.push(body);
 
 								return new Promise<Response>((done, reject) => {
 									const req = request(
@@ -6129,7 +6194,7 @@ describe("pinned zero-token source replay", () => {
 				`only ${reduction}`,
 			);
 			assert.equal(upstream.arrivals("/openai/v1/responses") - before, 40);
-			assert.equal(upstream.strays, 0);
+			assertNoStrays(upstream, expectedBodies);
 			t.diagnostic(
 				JSON.stringify({
 					baseline: baseline.bytes,
@@ -6152,8 +6217,8 @@ describe("pinned zero-token source replay", () => {
 describe("budget stops before the next request, through the gate", () => {
 	let upstream: EchoFixture;
 
-	before(async () => {
-		upstream = await startEchoFixture(0);
+	before(async (t) => {
+		upstream = await startEchoFixture(t, 0);
 	});
 
 	after(async () => {
@@ -6165,7 +6230,7 @@ describe("budget stops before the next request, through the gate", () => {
 		settings: Partial<StageRunInput["settings"]>,
 	) {
 		const events: ControlEvent[] = [];
-		const factory = inProcessGateway(upstream.port, events);
+		const factory = inProcessGateway(upstream, events);
 		let handle: GatewayHandle | null = null;
 
 		const h = harness([agentThroughGateway(() => handle?.socketPath ?? "")], {
@@ -6261,7 +6326,7 @@ describe("budget stops before the next request, through the gate", () => {
 
 	it("allows an accept final answer on request three", async () => {
 		const events: ControlEvent[] = [];
-		const factory = inProcessGateway(upstream.port, events);
+		const factory = inProcessGateway(upstream, events);
 		let handle: GatewayHandle | null = null;
 		const statuses: number[] = [];
 
@@ -6307,7 +6372,7 @@ describe("budget stops before the next request, through the gate", () => {
 
 	it("closes the real gateway on length before Pi can send a summary request", async () => {
 		const events: ControlEvent[] = [];
-		const factory = inProcessGateway(upstream.port, events);
+		const factory = inProcessGateway(upstream, events);
 		let handle: GatewayHandle | null = null;
 
 		let summaryDone = (_status: number) => {};
@@ -6425,8 +6490,8 @@ function eagerAgent(socketPath: () => string, statuses: number[]) {
 describe("the turn cap holds in a real gateway process", () => {
 	let upstream: EchoFixture;
 
-	before(async () => {
-		upstream = await startEchoFixture(0);
+	before(async (t) => {
+		upstream = await startEchoFixture(t, 0);
 	});
 
 	after(async () => {
@@ -6459,7 +6524,7 @@ describe("the turn cap holds in a real gateway process", () => {
 													host: "llm.test",
 													port: upstream.port,
 													basePath: route.prefix,
-													hostHeader: "llm.test",
+													hostHeader: upstream.host,
 													sni: "llm.test",
 													address: { kind: "pinned", ip: "127.0.0.1" },
 												},

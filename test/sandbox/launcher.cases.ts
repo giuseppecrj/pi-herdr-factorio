@@ -13,6 +13,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { createServer as createHttpServer, request } from "node:http";
+import { closeHttpServer } from "./http-fixtures.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -1035,8 +1036,7 @@ describe("pi wrapper", () => {
 		} finally {
 			clearTimeout(deadline);
 			child?.kill();
-			server.closeAllConnections();
-			await new Promise<void>((done) => server.close(() => done()));
+			await closeHttpServer(server);
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
@@ -1376,7 +1376,7 @@ describe("in-sandbox forwarder", () => {
 			);
 		} finally {
 			forwarder.close();
-			upstream.close();
+			await closeHttpServer(upstream);
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});

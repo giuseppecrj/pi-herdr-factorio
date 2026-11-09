@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
 	existsSync,
 	globSync,
@@ -20,10 +20,20 @@ import {
 	replacementDigest,
 	heldoutDigest,
 	receiptPasses,
+	exportTree,
+	runDraftBase,
+	runHeldoutBase,
 	type GateRunner,
 } from "../server/gates.ts";
-import { classifyFailure } from "../src/diagnosis.ts";
-import { isGitSha } from "../src/workflow.ts";
+import { assessBase, classifyFailure } from "../src/diagnosis.ts";
+import { writeAcceptance } from "../src/accept.ts";
+import { digestOf } from "../src/run.ts";
+import {
+	contractBytes,
+	contractDigestOf,
+	type Contract,
+} from "../src/specify.ts";
+import { isGitSha, isRepoSlug } from "../src/workflow.ts";
 import { parseJson } from "../server/sandbox/json.ts";
 
 function gitSha(text: string) {
@@ -1322,6 +1332,270 @@ test("main's baseline test run gets 180 seconds and candidates three times its m
 			Math.max(90000, measured * 3 + 30000),
 			JSON.stringify(run),
 		);
+});
+
+test("trusted test concurrency is step-specific and preserves baseline/main counts at concurrency 2", async (t) => {
+	const f = repo(t);
+	f.put(
+		"test/slow.test.ts",
+		'import {test} from "node:test"; test("slow",async()=>{await new Promise(r=>setTimeout(r,25));});',
+	);
+	f.put(
+		"test/fast.test.ts",
+		'import {test} from "node:test"; test("fast",()=>{}); test("also fast",()=>{});',
+	);
+	const gateSha = f.commit();
+	f.put(
+		"test/new.test.ts",
+		'import {test} from "node:test"; test("new",()=>{});',
+	);
+	const path = "test/acceptance/123/checks/held.test.ts";
+	const text = 'import {test} from "node:test"; test("held",()=>{});';
+	f.put(path, text);
+	const argv: (readonly string[])[] = [];
+
+	const runner: GateRunner = {
+		kind: "recording",
+		run(input) {
+			argv.push(input.argv);
+
+			return miniRunner.run(input);
+		},
+	};
+
+	const result = await checkCandidate({
+		...gateInput(f, f.commit()),
+		gateSha,
+		runner,
+		heldoutDir: "test/acceptance/123",
+		heldoutDigest: heldoutDigest([{ path, bytes: Buffer.from(text) }]),
+	});
+
+	assert.equal(result.status, "passed");
+	assert.deepEqual(result.baselineCounts, {
+		"test/fast.test.ts": 2,
+		"test/slow.test.ts": 1,
+		"test/value.test.ts": 1,
+	});
+	assert.deepEqual(result.candidateCounts, result.baselineCounts);
+	assert.deepEqual(result.requiredChecks, [
+		"baseline_tests",
+		"typecheck",
+		"lint",
+		"format",
+		"main_tests",
+		"candidate_tests",
+		"heldout",
+	]);
+	assert.deepEqual(
+		result.checks.map((c) => c.name),
+		result.requiredChecks,
+	);
+	assert.deepEqual(
+		argv.map(
+			(args) =>
+				args.find((arg) => arg.startsWith("--test-concurrency=")) ?? null,
+		),
+		[
+			"--test-concurrency=2",
+			null,
+			null,
+			null,
+			"--test-concurrency=2",
+			"--test-concurrency=1",
+			"--test-concurrency=1",
+		],
+	);
+	const measured = result.checks[0]?.durationMs ?? -1;
+	assert.equal(result.checks[0]?.deadlineMs, 180000);
+
+	for (const check of result.checks.slice(1))
+		assert.equal(check.deadlineMs, Math.max(90000, 3 * measured + 30000));
+});
+
+for (const step of ["main_tests", "candidate_tests", "heldout"]) {
+	test(`test deadline control for ${step} reruns main at concurrency 2 with the same deadline`, async (t) => {
+		const f = repo(t);
+		f.put(
+			"test/new.test.ts",
+			'import {test} from "node:test"; test("new",()=>{});',
+		);
+		const path = "test/acceptance/123/checks/held.test.ts";
+		const text = 'import {test} from "node:test"; test("held",()=>{});';
+		f.put(path, text);
+
+		const steps = [
+			"baseline_tests",
+			"typecheck",
+			"lint",
+			"format",
+			"main_tests",
+			"candidate_tests",
+			"heldout",
+			`${step}_deadline_control`,
+		];
+
+		const calls: { argv: readonly string[]; deadlineMs?: number }[] = [];
+
+		const runner: GateRunner = {
+			kind: "recording-timeout",
+			run(input) {
+				calls.push(input);
+
+				return steps[calls.length - 1] === step
+					? Promise.resolve({
+							exitCode: 1,
+							stdout: "",
+							stderr: "",
+							timedOut: true,
+							signal: "SIGKILL",
+						})
+					: miniRunner.run(input);
+			},
+		};
+
+		const result = await checkCandidate({
+			...gateInput(f, f.commit()),
+			runner,
+			heldoutDir: "test/acceptance/123",
+			heldoutDigest: heldoutDigest([{ path, bytes: Buffer.from(text) }]),
+		});
+
+		assert.equal(result.status, "failed");
+		assert.equal(result.reason, null);
+		assert.deepEqual(result.requiredChecks, steps);
+		assert.deepEqual(
+			result.checks.map((c) => c.name),
+			steps,
+		);
+		const control = calls.at(-1);
+		assert.ok(control);
+		assert.ok(control.argv.includes("--test-concurrency=2"));
+		assert.ok(control.argv.includes("test/value.test.ts"));
+		assert.equal(control.argv.includes("test/new.test.ts"), false);
+		assert.equal(control.argv.includes(path), false);
+		assert.equal(control.deadlineMs, calls[steps.indexOf(step)]?.deadlineMs);
+	});
+}
+
+test("draft and held-out base checks keep both repetitions serial", async (t) => {
+	const f = repo(t);
+	const tree = join(f.root, "base");
+	await exportTree(f.root, f.gateSha, tree);
+	const slug = "owner/repo";
+	assert.ok(isRepoSlug(slug));
+
+	const contract: Contract = {
+		version: 2,
+		runId: digestOf("serial base"),
+		issue: 123,
+		base: { repo: slug, sha: gitSha(f.gateSha) },
+		snapshot: {
+			digest: digestOf("snapshot"),
+			source: "unedited",
+			eventId: "1",
+			eventAt: "2026-11-02T00:00:00Z",
+		},
+		link: null,
+		summary: "Preserve behavior",
+		behavior: ["Preserve behavior"],
+		exclusions: [],
+		acceptance: [{ id: "A1", kind: "preservation", text: "Preserve behavior" }],
+		compatibility: [],
+		limits: [],
+		files: [],
+		evidence: [],
+	};
+
+	const parsed = writeAcceptance(
+		JSON.stringify({
+			version: 2,
+			scenarios: [
+				{ id: "S1", criteria: ["A1"], checks: ["held.test.mjs"], judge: null },
+			],
+			files: [
+				{
+					path: "held.test.mjs",
+					type: "node:test",
+					content: 'import {test} from "node:test"; test("held",()=>{});',
+				},
+			],
+		}),
+		contract,
+	);
+
+	assert.equal(parsed.kind, "suite");
+	const calls: (readonly string[])[] = [];
+
+	const runner: GateRunner = {
+		kind: "recording-base",
+		run(input) {
+			calls.push(input.argv);
+
+			const argv = input.argv.map((arg) =>
+				arg
+					.replaceAll("/g/", `${input.gates}/`)
+					.replaceAll("/d/", `${input.detailReporter}/`),
+			);
+
+			const result = spawnSync(argv[0] ?? "node", argv.slice(1), {
+				cwd: input.tree,
+				encoding: "utf8",
+				env: { PATH: process.env.PATH, HOME: "/tmp" },
+				timeout: 10000,
+			});
+
+			assert.equal(result.status, 0, result.stderr);
+
+			return Promise.resolve({
+				exitCode: result.status ?? 1,
+				stdout: result.stdout,
+				stderr: result.stderr,
+			});
+		},
+	};
+
+	const startedAt = Date.now();
+
+	const input = {
+		tree,
+		cacheDir: join(f.root, "cache"),
+		binding: {
+			runId: contract.runId,
+			repo: contract.base.repo,
+			issue: 123,
+			contractDigest: contractDigestOf(contractBytes(contract)),
+			acceptanceDigest: digestOf("suite"),
+			baseSha: contract.base.sha,
+			gateSha: contract.base.sha,
+		},
+		contract,
+		suite: parsed.suite,
+		canary: `factory-holdout-${"0".repeat(64)}`,
+		startedAt,
+		deadline: startedAt + 10000,
+		runner,
+	};
+
+	const base = await runHeldoutBase({
+		...input,
+		workDir: join(f.root, "base-work"),
+	});
+
+	const draft = await runDraftBase({
+		...input,
+		workDir: join(f.root, "draft-work"),
+	});
+
+	assert.equal(assessBase(base).assessment.kind, "ready", JSON.stringify(base));
+	assert.equal(
+		assessBase(draft.evidence).assessment.kind,
+		"ready",
+		JSON.stringify(draft),
+	);
+	assert.equal(calls.length, 4);
+
+	for (const argv of calls) assert.ok(argv.includes("--test-concurrency=1"));
 });
 
 test("bad manifests, stale bases, missing checks and tampered replacement digests fail incomplete", async (t) => {

@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import {
+	assertNoStrays,
+	closeHttpServer,
+	startEchoFixture,
+} from "./http-fixtures.ts";
 import {
 	lstatSync,
 	mkdirSync,
@@ -29,13 +35,13 @@ import {
 } from "../../server/sandbox/control.ts";
 import {
 	bindCredentials,
+	GATEWAY_USER_AGENT,
 	type CredentialBinding,
 	parseCeilings,
 } from "../../server/sandbox/credentials.ts";
 import {
 	ANTHROPIC_REPLAYS,
 	type EchoFixture,
-	startEchoFixture,
 } from "../../server/sandbox/echo-fixture.ts";
 import { familyFromJournal } from "../../src/review.ts";
 import {
@@ -166,7 +172,11 @@ function asRouteId(text: string): RouteId {
 	return text as RouteId;
 }
 
-function fixtureModelRoute(port: number, base: Route): Route {
+function fixtureModelRoute(
+	port: number,
+	base: Route,
+	host = "llm.test",
+): Route {
 	return {
 		...base,
 		upstream: {
@@ -174,7 +184,7 @@ function fixtureModelRoute(port: number, base: Route): Route {
 			host: "llm.test",
 			port,
 			basePath: base.prefix,
-			hostHeader: "llm.test",
+			hostHeader: host,
 			sni: "llm.test",
 			address: { kind: "pinned", ip: "127.0.0.1" },
 		},
@@ -189,7 +199,7 @@ function fixtureModelRoute(port: number, base: Route): Route {
 
 function testTable(
 	port: number,
-	options: { ceilingTokens?: number } = {},
+	options: { ceilingTokens?: number; host?: string } = {},
 ): RouteTable {
 	const table = modelTable();
 	const [openai, xai, npm] = table.routes;
@@ -202,41 +212,49 @@ function testTable(
 			modelTokens: options.ceilingTokens ?? 1_000_000,
 			modelRequests: 1000,
 		},
-		routes: [
-			fixtureModelRoute(port, openai),
-			fixtureModelRoute(port, xai),
-			{
-				...npm,
-				id: asRouteId("plain"),
-				prefix: "/plain/",
-				upstream: { ...credentialedRoute(port).upstream },
-				responseHeaders: ["content-type", "location", "x-echo", "set-cookie"],
-				requestHeaders: ["accept", "authorization"],
-			},
-			{
-				...npm,
-				id: asRouteId("limited"),
-				prefix: "/limited/",
-				upstream: { ...credentialedRoute(port).upstream },
-				limits: { ...npm.limits, perMinute: 1 },
-			},
-			{
-				...npm,
-				id: asRouteId("resolved"),
-				prefix: "/resolved/",
-				upstream: {
-					...credentialedRoute(port).upstream,
-					address: { kind: "resolve" },
+		routes: (
+			[
+				fixtureModelRoute(port, openai),
+				fixtureModelRoute(port, xai),
+				{
+					...npm,
+					id: asRouteId("plain"),
+					prefix: "/plain/",
+					upstream: { ...credentialedRoute(port).upstream },
+					responseHeaders: ["content-type", "location", "x-echo", "set-cookie"],
+					requestHeaders: ["accept", "authorization"],
 				},
+				{
+					...npm,
+					id: asRouteId("limited"),
+					prefix: "/limited/",
+					upstream: { ...credentialedRoute(port).upstream },
+					limits: { ...npm.limits, perMinute: 1 },
+				},
+				{
+					...npm,
+					id: asRouteId("resolved"),
+					prefix: "/resolved/",
+					upstream: {
+						...credentialedRoute(port).upstream,
+						address: { kind: "resolve" },
+					},
+				},
+				credentialedRoute(port),
+				{
+					...fixtureModelRoute(port, openai),
+					id: asRouteId("opaque-model"),
+					prefix: "/opaque/",
+					body: { kind: "opaque", contentTypes: ["text/plain"] },
+				},
+			] satisfies Route[]
+		).map((route) => ({
+			...route,
+			upstream: {
+				...route.upstream,
+				hostHeader: options.host ?? route.upstream.hostHeader,
 			},
-			credentialedRoute(port),
-			{
-				...fixtureModelRoute(port, openai),
-				id: asRouteId("opaque-model"),
-				prefix: "/opaque/",
-				body: { kind: "opaque", contentTypes: ["text/plain"] },
-			},
-		],
+		})),
 	};
 }
 
@@ -283,6 +301,7 @@ async function startHarness(
 	port: number,
 	options: {
 		ceilingTokens?: number;
+		host?: string;
 		lookup?: (host: string) => Promise<string[]>;
 		arrivals?: () => number;
 	} = {},
@@ -422,22 +441,186 @@ describe("upstream dial order", () => {
 });
 
 describe("echo fixture", () => {
-	it("records only what the gateway sent, and answers any other local client 421", async () => {
-		const fixture = await startEchoFixture(0);
+	for (const mode of ["Pi Host", "HTTP/1.0 without Host"] as const) {
+		it(`rejects this sandbox's gateway bypass with ${mode}`, async (t) => {
+			const fixture = await startEchoFixture(t, 0);
+			const body = JSON.stringify({ input: `own request ${fixture.host}` });
+			const path = "/openai/v1/responses";
+
+			const headers =
+				mode === "Pi Host"
+					? "HTTP/1.1\r\nHost: 127.0.0.1:18080\r\nUser-Agent: pi-direct\r\n"
+					: "HTTP/1.0\r\n";
+
+			const send = (body: string) =>
+				new Promise<string>((done, fail) => {
+					const chunks: Buffer[] = [];
+
+					const socket = connect(fixture.port, "127.0.0.1", () => {
+						socket.end(
+							`POST ${path} ${headers}Content-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`,
+						);
+					});
+
+					socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+					socket.on("error", fail);
+					socket.on("close", () => done(Buffer.concat(chunks).toString()));
+				});
+
+			assert.match(await send("another test's body"), /^HTTP\/1\.1 421/);
+			assertNoStrays(fixture, [body]);
+			assert.match(await send(body), /^HTTP\/1\.1 421/);
+			assert.equal(fixture.foreign.length, 2);
+			assert.deepEqual(fixture.foreign[1], {
+				method: "POST",
+				path,
+				host: mode === "Pi Host" ? "127.0.0.1:18080" : null,
+				source: "127.0.0.1",
+				bodyDigest: createHash("sha256").update(body).digest("hex"),
+			});
+			assert.throws(
+				() => assertNoStrays(fixture, [body]),
+				{ code: "ERR_ASSERTION" },
+				"the replay's strict check must catch its own untagged body",
+			);
+		});
+	}
+
+	it("isolates stray counts by per-test Host token and records foreign request sources", async (t) => {
+		const fixture = await startEchoFixture(t, 0);
+		const host = fixture.host;
+
+		const send = (
+			method: string,
+			path: string,
+			token: string,
+			agent = "not-the-gateway",
+			body = "",
+		) =>
+			new Promise<number>((done, fail) => {
+				request(
+					{
+						host: "127.0.0.1",
+						port: fixture.port,
+						method,
+						path,
+						headers: { Host: token, "User-Agent": agent },
+					},
+					(res) => {
+						res.resume();
+						res.on("end", () => done(res.statusCode ?? 0));
+					},
+				)
+					.on("error", fail)
+					.end(body);
+			});
+
+		assert.equal(
+			await send("GET", "/unrelated", "foreign.fixture", GATEWAY_USER_AGENT),
+			421,
+		);
+		assert.equal(fixture.strays, 0);
+		assert.deepEqual(fixture.received, []);
+		assert.deepEqual(fixture.foreign, [
+			{
+				method: "GET",
+				path: "/unrelated",
+				host: "foreign.fixture",
+				source: "127.0.0.1",
+				bodyDigest: createHash("sha256").update("").digest("hex"),
+			},
+		]);
+
+		const body = JSON.stringify({ input: `own request ${host}` });
+
+		assert.equal(
+			await send(
+				"POST",
+				"/openai/v1/responses",
+				"other-test.fixture",
+				GATEWAY_USER_AGENT,
+				body,
+			),
+			421,
+		);
+		assertNoStrays(fixture, [body]);
+		assert.equal(await send("POST", "/openai/v1/responses", host), 421);
+		assert.equal(
+			fixture.strays,
+			1,
+			"this test's bypass must still count strictly",
+		);
+		assert.equal(
+			await send("GET", "/openai/v1/models", host, GATEWAY_USER_AGENT),
+			200,
+		);
+		assert.equal(fixture.received.length, 1);
+		assert.equal(fixture.strays, 1);
+	});
+
+	it("exits promptly after a forced failure with an active HTTP request", () => {
+		const helper = new URL("./http-fixtures.ts", import.meta.url).href;
+
+		const child = spawnSync(
+			process.execPath,
+			[
+				"--experimental-strip-types",
+				"--input-type=module",
+				"--eval",
+				`
+			import assert from 'node:assert/strict';
+			import { it } from 'node:test';
+			import { createServer, request } from 'node:http';
+			import { closeHttpServer, startEchoFixture } from ${JSON.stringify(helper)};
+			it('forced fixture failure', async (t) => {
+				await startEchoFixture(t, 0);
+				const server = createServer(() => {});
+				t.after(() => closeHttpServer(server));
+				await new Promise(done => server.listen(0, '127.0.0.1', done));
+				const arrived = new Promise(done => server.once('request', done));
+				request({ host: '127.0.0.1', port: server.address().port }).on('error', () => {}).end();
+				await arrived;
+				assert.fail('forced fixture failure');
+			});
+		`,
+			],
+			{
+				encoding: "utf8",
+				timeout: 5000,
+				env: { PATH: process.env.PATH, TMPDIR: tmpdir() },
+			},
+		);
+
+		assert.equal(child.error, undefined, String(child.error));
+		assert.equal(child.signal, null);
+		assert.equal(child.status, 1);
+		assert.match(child.stdout, /forced fixture failure/);
+	});
+
+	it("records only what the gateway sent, and answers any other local client 421", async (t) => {
+		const fixture = await startEchoFixture(t, 0);
 
 		try {
 			const stray = await new Promise<number>((done, fail) => {
-				request({ host: "127.0.0.1", port: fixture.port, path: "/" }, (res) => {
-					res.resume();
-					done(res.statusCode ?? 0);
-				})
+				request(
+					{
+						host: "127.0.0.1",
+						port: fixture.port,
+						path: "/",
+						headers: { Host: fixture.host },
+					},
+					(res) => {
+						res.resume();
+						done(res.statusCode ?? 0);
+					},
+				)
 					.on("error", fail)
 					.end();
 			});
 
 			assert.equal(stray, 421);
 			assert.deepEqual(fixture.received, []);
-			assert.ok(fixture.strays >= 1, "other local clients may add strays");
+			assert.equal(fixture.strays, 1);
 		} finally {
 			await fixture.close();
 		}
@@ -449,10 +632,10 @@ describe("gateway over a real unix socket", () => {
 	let fixture: EchoFixture;
 	let h: Harness;
 
-	before(async () => {
+	before(async (t) => {
 		dir = mkdtempSync(join(tmpdir(), "factory-gw-"));
-		fixture = await startEchoFixture(0);
-		h = await startHarness(dir, fixture.port);
+		fixture = await startEchoFixture(t, 0);
+		h = await startHarness(dir, fixture.port, { host: fixture.host });
 	});
 
 	after(async () => {
@@ -465,8 +648,8 @@ describe("gateway over a real unix socket", () => {
 		assert.equal(lstatSync(h.socketPath).isSocket(), true);
 		await assert.rejects(
 			new Gateway({
-				table: testTable(fixture.port),
-				credentials: binding(testTable(fixture.port)),
+				table: testTable(fixture.port, { host: fixture.host }),
+				credentials: binding(testTable(fixture.port, { host: fixture.host })),
 				audit: new AuditLog(() => {}, 1000, {
 					write: () => {},
 					sync: () => {},
@@ -504,7 +687,7 @@ describe("gateway over a real unix socket", () => {
 			"connection",
 			"content-length",
 		]);
-		assert.equal(seen?.host, "llm.test");
+		assert.equal(seen?.host, fixture.host);
 
 		const usage = h.events.filter((event) => event.event === "usage").at(-1);
 
@@ -530,7 +713,7 @@ describe("gateway over a real unix socket", () => {
 		assert.equal(line?.decision, "forward");
 		assert.equal(line?.route, "model-openai");
 		assert.deepEqual(line?.upstream, {
-			host: "llm.test",
+			host: fixture.host,
 			sni: null,
 			port: fixture.port,
 			addr: "127.0.0.1",
@@ -749,10 +932,10 @@ describe("gateway credential engine against the echo fixture", () => {
 	let fixture: EchoFixture;
 	let h: Harness;
 
-	before(async () => {
+	before(async (t) => {
 		dir = mkdtempSync(join(tmpdir(), "factory-gw-cred-"));
-		fixture = await startEchoFixture(0);
-		h = await startHarness(dir, fixture.port);
+		fixture = await startEchoFixture(t, 0);
+		h = await startHarness(dir, fixture.port, { host: fixture.host });
 	});
 
 	after(async () => {
@@ -776,7 +959,7 @@ describe("gateway credential engine against the echo fixture", () => {
 		assert.equal(seen?.authorization, `Bearer ${ECHO_SECRET}`);
 		assert.equal(seen?.headerNames.includes("cookie"), false);
 		assert.equal(seen?.headerNames.includes("x-api-key"), false);
-		assert.equal(seen?.host, "echo.test");
+		assert.equal(seen?.host, fixture.host);
 		assert.equal(reply.body.includes(ECHO_SECRET), false);
 		assert.equal(h.audit.at(-1)?.credential, "echo-read");
 	});
@@ -984,7 +1167,7 @@ describe("gateway credential engine against the echo fixture", () => {
 		);
 		assert.equal(fixture.received.length, before);
 
-		const table = testTable(fixture.port);
+		const table = testTable(fixture.port, { host: fixture.host });
 
 		const doubled: RouteTable = {
 			...table,
@@ -1024,9 +1207,9 @@ describe("gateway admission gate and control", () => {
 	let dir = "";
 	let fixture: EchoFixture;
 
-	before(async () => {
+	before(async (t) => {
 		dir = mkdtempSync(join(tmpdir(), "factory-gw-gate-"));
-		fixture = await startEchoFixture(0);
+		fixture = await startEchoFixture(t, 0);
 	});
 
 	const open: Harness[] = [];
@@ -1035,7 +1218,10 @@ describe("gateway admission gate and control", () => {
 		port: number,
 		options: { ceilingTokens?: number; arrivals?: () => number } = {},
 	): Promise<Harness> {
-		const started = await startHarness(dir, port, options);
+		const started = await startHarness(dir, port, {
+			...options,
+			host: fixture.host,
+		});
 
 		open.push(started);
 
@@ -1237,7 +1423,7 @@ describe("gateway admission gate and control", () => {
 				],
 			);
 		} finally {
-			await new Promise((done) => upstream.close(done));
+			await closeHttpServer(upstream);
 		}
 	});
 
@@ -1390,7 +1576,7 @@ describe("gateway admission gate and control", () => {
 				uncertainTokens: (bounds[2] ?? 0) + (bounds[3] ?? 0),
 			});
 		} finally {
-			await new Promise((done) => upstream.close(done));
+			await closeHttpServer(upstream);
 		}
 	});
 
@@ -1623,8 +1809,7 @@ describe("gateway anthropic route", () => {
 
 	after(async () => {
 		await Promise.all(open.map((gateway) => gateway.close()));
-		upstream.closeAllConnections();
-		await new Promise((done) => upstream.close(done));
+		await closeHttpServer(upstream);
 		rmSync(dir, { recursive: true, force: true });
 	});
 
@@ -2265,12 +2450,12 @@ describe("gateway anthropic route", () => {
 });
 
 describe("gateway process request journal", () => {
-	it("charges an input-plus-output upper bound without replay when the gateway dies mid-request", async () => {
+	it("charges an input-plus-output upper bound without replay when the gateway dies mid-request", async (t) => {
 		const dir = mkdtempSync(join(tmpdir(), "factory-gw-journal-"));
-		const fixture = await startEchoFixture(0);
+		const fixture = await startEchoFixture(t, 0);
 
 		try {
-			const table = testTable(fixture.port);
+			const table = testTable(fixture.port, { host: fixture.host });
 			const stage = join(dir, "stages", "specify-1");
 
 			mkdirSync(stage, { recursive: true });
@@ -2538,8 +2723,11 @@ describe("echo fixture Anthropic replay through the gateway (lane 3, zero tokens
 
 	after(() => rmSync(dir, { recursive: true, force: true }));
 
-	async function replay(mode: (typeof ANTHROPIC_REPLAYS)[number]) {
-		const fixture = await startEchoFixture(0, { anthropic: mode });
+	async function replay(
+		t: Parameters<typeof startEchoFixture>[0],
+		mode: (typeof ANTHROPIC_REPLAYS)[number],
+	) {
+		const fixture = await startEchoFixture(t, 0, { anthropic: mode });
 
 		const base = anthropicTable({
 			model: "claude-sonnet-5-5",
@@ -2550,7 +2738,9 @@ describe("echo fixture Anthropic replay through the gateway (lane 3, zero tokens
 		const table: RouteTable = {
 			...base,
 			routes: base.routes.map((route) =>
-				route.meter === null ? route : fixtureModelRoute(fixture.port, route),
+				route.meter === null
+					? route
+					: fixtureModelRoute(fixture.port, route, fixture.host),
 			),
 		};
 
@@ -2603,8 +2793,8 @@ describe("echo fixture Anthropic replay through the gateway (lane 3, zero tokens
 		}
 	}
 
-	it("meters a full replay and records the observed model as Anthropic family", async () => {
-		const run = await replay("usage");
+	it("meters a full replay and records the observed model as Anthropic family", async (t) => {
+		const run = await replay(t, "usage");
 
 		assert.equal(run.reply.status, 200);
 		assert.equal(run.arrivals, 1);
@@ -2620,8 +2810,8 @@ describe("echo fixture Anthropic replay through the gateway (lane 3, zero tokens
 		);
 	});
 
-	it("counts a replay with no usage block unmetered, charges it uncertain and gives no family", async () => {
-		const run = await replay("no-usage");
+	it("counts a replay with no usage block unmetered, charges it uncertain and gives no family", async (t) => {
+		const run = await replay(t, "no-usage");
 
 		assert.equal(run.reply.status, 200);
 		assert.match(run.reply.body, /message_stop/);
@@ -2638,8 +2828,8 @@ describe("echo fixture Anthropic replay through the gateway (lane 3, zero tokens
 		);
 	});
 
-	it("meters a refusal replay with its full usage, so the refusal rule and not the veto applies", async () => {
-		const run = await replay("refusal");
+	it("meters a refusal replay with its full usage, so the refusal rule and not the veto applies", async (t) => {
+		const run = await replay(t, "refusal");
 
 		assert.match(run.reply.body, /"stop_reason":"refusal"/);
 		assert.equal(run.summary.routes[0]?.unmetered, 0);

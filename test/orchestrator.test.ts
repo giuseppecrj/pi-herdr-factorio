@@ -9997,28 +9997,52 @@ describe("acquireLock", () => {
 
 		const script = `
 			const { acquireLock, procTable } = await import(${JSON.stringify(controller)});
+			const released = new Promise((done) => process.stdin.once("end", done));
+			process.stdin.resume();
 			const result = await acquireLock({ stateDir: process.argv[1], procs: procTable(), now: Date.now });
 			process.stdout.write(result.kind);
-			if (result.kind === "acquired") {
-				await new Promise((done) => setTimeout(done, 300));
-				await result.lock.release();
-			}
+			await released;
+			if (result.kind === "acquired") await result.lock.release();
 		`;
 
-		const child = (state: string) =>
-			new Promise<string>((done, fail) => {
-				execFile(
-					process.execPath,
-					[
-						"--experimental-strip-types",
-						"--input-type=module",
-						"-e",
-						script,
-						state,
-					],
-					(error, stdout) => (error === null ? done(stdout) : fail(error)),
-				);
+		const child = (state: string) => {
+			let attempted = () => {};
+			let finish = (_result: { error: Error | null; stdout: string }) => {};
+
+			const ready = new Promise<void>((done) => {
+				attempted = done;
 			});
+
+			const finished = new Promise<{ error: Error | null; stdout: string }>(
+				(done) => {
+					finish = done;
+				},
+			);
+
+			const proc = execFile(
+				process.execPath,
+				[
+					"--experimental-strip-types",
+					"--input-type=module",
+					"-e",
+					script,
+					state,
+				],
+				{ timeout: 10000 },
+				(error, stdout) => {
+					attempted();
+					finish({ error, stdout });
+				},
+			);
+
+			proc.stdout?.once("data", () => attempted());
+
+			return {
+				attempted: ready,
+				finished,
+				release: () => proc.stdin?.end(),
+			};
+		};
 
 		const trials: string[] = [];
 
@@ -10034,9 +10058,22 @@ describe("acquireLock", () => {
 				}),
 			);
 
-			const kinds = await Promise.all([child(state), child(state)]);
+			const controllers = [child(state), child(state)];
 
-			trials.push(kinds.sort().join("+"));
+			try {
+				await Promise.all(controllers.map((c) => c.attempted));
+			} finally {
+				for (const c of controllers) c.release();
+				const completed = await Promise.all(controllers.map((c) => c.finished));
+
+				for (const result of completed) assert.equal(result.error, null);
+				trials.push(
+					completed
+						.map((c) => c.stdout)
+						.sort()
+						.join("+"),
+				);
+			}
 		}
 
 		assert.deepEqual(
