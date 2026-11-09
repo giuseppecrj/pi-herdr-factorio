@@ -1,4 +1,5 @@
 import type { TimelineEvent, ViewerRun } from "./evidence.ts";
+import { icons } from "./design/icons/icons.ts";
 
 export function escapeHtml(value: string): string {
 	return value.replace(
@@ -11,11 +12,11 @@ export function escapeHtml(value: string): string {
 }
 
 function page(title: string, body: string, base: string): string {
-	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · Factory</title><link rel="stylesheet" href="${base}/style.css"></head><body><header><a href="${base}/">FACTORY <span>/ run evidence</span></a><span class="badge">READ ONLY · LOCAL</span></header><main>${body}</main><footer>Local evidence only. No GitHub requests. No model calls. Missing evidence is never a pass.</footer></body></html>`;
+	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · Factory</title><link rel="stylesheet" href="${base}/style.css"></head><body><header><a href="${base}/">Factory <span>/ run evidence</span></a><span class="local">Read only · local</span></header><main>${body}</main><footer>Local evidence only. No GitHub requests. No model calls. Missing evidence is never a pass.</footer></body></html>`;
 }
 
 function table(headers: string[], rows: string[][]): string {
-	return `<div class="scroll"><table><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((value) => `<td>${escapeHtml(value)}</td>`).join("")}</tr>`).join("")}</tbody></table>${rows.length === 0 ? "<p class=muted>No recorded entries. Check the evidence gaps above.</p>" : ""}</div>`;
+	return `<div class="scroll"><table><thead><tr>${headers.map((header) => `<th scope="col">${escapeHtml(header)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((value, index) => `<td data-label="${escapeHtml(headers[index] ?? "")}">${escapeHtml(value)}</td>`).join("")}</tr>`).join("")}</tbody></table>${rows.length === 0 ? "<p class=muted>No recorded entries. Check the evidence gaps above.</p>" : ""}</div>`;
 }
 
 function timeline(events: TimelineEvent[]) {
@@ -51,10 +52,16 @@ export function renderIndex(ids: string[], base: string): string {
 }
 
 export function renderRun(run: ViewerRun, view: string, base: string): string {
+	const problemGaps = run.gaps.some(
+		(gap) =>
+			gap.reason !==
+			"marker comment history is not retained locally; claim is only the latest state",
+	);
+
 	const gaps =
 		run.gaps.length === 0
 			? ""
-			: `<details class="gaps" open><summary>${run.gaps.length} evidence gaps · not complete</summary><ul>${run.gaps.map((gap) => `<li><code>${escapeHtml(gap.source)}</code> — ${escapeHtml(gap.reason)}</li>`).join("")}</ul></details>`;
+			: `<details class="gaps notice${problemGaps ? " notice-error" : ""}" open><summary>${problemGaps ? icons["alert-triangle"] : icons["info-circle"]}${run.gaps.length} evidence gaps · not complete</summary><ul>${run.gaps.map((gap) => `<li><code>${escapeHtml(gap.source)}</code> — ${escapeHtml(gap.reason)}</li>`).join("")}</ul></details>`;
 
 	const tabs = ["timeline", "usage", "children", "gateway"]
 		.map(
@@ -102,7 +109,7 @@ export function renderRun(run: ViewerRun, view: string, base: string): string {
 			]),
 		)}`;
 	else if (view === "children")
-		content = `<h2>Children</h2><p class="muted">Each retained child session appears once under its recorded parent.</p>${run.children.map((child) => `<section class="child"><h3>${escapeHtml(child.id)}</h3><p>Parent: <code>${escapeHtml(child.parent ?? "unavailable")}</code> · ${child.tokens} tokens</p>${timeline(child.timeline)}</section>`).join("")}${run.children.length === 0 ? "<p>No retained children. Check gaps before interpreting this as no delegation.</p>" : ""}`;
+		content = `<h2>Children</h2><p class="muted">Each retained child session appears once under its recorded parent.</p>${run.children.map((child) => `<section class="child"><h3><code>${escapeHtml(child.id)}</code></h3><p>Parent: <code>${escapeHtml(child.parent ?? "unavailable")}</code> · ${child.tokens} tokens</p>${timeline(child.timeline)}</section>`).join("")}${run.children.length === 0 ? "<p>No retained children. Check gaps before interpreting this as no delegation.</p>" : ""}`;
 	else if (view === "gateway")
 		content = `<h2>Gateway decisions</h2>${table(
 			[
@@ -135,7 +142,7 @@ export function renderRun(run: ViewerRun, view: string, base: string): string {
 
 	return page(
 		"Run",
-		`<p class="eyebrow">RUN / ${escapeHtml(run.status)}</p><h1>${escapeHtml(run.runId.slice(0, 16))}<span class="muted">…</span></h1><p><code>${escapeHtml(run.runId)}</code></p><p class="badge">${run.complete ? "Evidence complete" : "Evidence incomplete"}</p>${gaps}<nav aria-label="Run views">${tabs}<a class="json" href="${base}/run/${run.runId}/${escapeHtml(view)}.json">JSON ↗</a></nav>${content}`,
+		`<p class="eyebrow">Run / <span class="status${run.status === "failed" ? " status-error" : ""}">${run.status === "failed" ? icons["alert-triangle"] : ""}${escapeHtml(run.status)}</span></p><h1 class="run-title"><code>${escapeHtml(run.runId.slice(0, 16))}</code><span class="muted">…</span></h1><p><code>${escapeHtml(run.runId)}</code></p><p class="completeness">${run.complete ? "Evidence complete" : "Evidence incomplete"}</p>${gaps}<nav aria-label="Run views">${tabs}<a class="json" href="${base}/run/${run.runId}/${escapeHtml(view)}.json">JSON ↗</a></nav>${content}`,
 
 		base,
 	);
