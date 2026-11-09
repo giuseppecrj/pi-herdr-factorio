@@ -62,6 +62,8 @@ import {
 	type RepoSlug,
 } from "../src/workflow.ts";
 
+import { withUmask } from "./helpers.ts";
+
 function slug(text: string): RepoSlug {
 	if (!isRepoSlug(text)) throw new Error(`bad slug ${text}`);
 
@@ -1987,44 +1989,56 @@ describe("tarball checkout", () => {
 		});
 	});
 
-	it("extracts once into the workspace, records the list and reuses it without a fetch", async () => {
-		const state = fresh("checkout");
-		const workspace = join(state, "ws");
-		let fetches = 0;
+	for (const mask of [0o022, 0o077])
+		it(`extracts once into the workspace, records the list and reuses it without a fetch (umask ${mask.toString(8)})`, () =>
+			withUmask(mask, async () => {
+				const state = fresh(`checkout-${mask}`);
+				const workspace = join(state, "ws");
+				let fetches = 0;
 
-		mkdirSync(workspace, { mode: 0o700 });
-		writeFileSync(join(workspace, "partial.txt"), "left by a crash");
+				mkdirSync(workspace, { mode: 0o700 });
+				writeFileSync(join(workspace, "partial.txt"), "left by a crash");
 
-		const fetch = async () => {
-			fetches++;
+				const fetch = async () => {
+					fetches++;
 
-			return tarball(GOOD);
-		};
+					return tarball(GOOD);
+				};
 
-		const input = { stateDir: state, runId, workspace, repo, sha: base, fetch };
-		const first = await checkoutWorkspace(input);
+				const input = {
+					stateDir: state,
+					runId,
+					workspace,
+					repo,
+					sha: base,
+					fetch,
+				};
+				const first = await checkoutWorkspace(input);
 
-		assert.ok(first.kind === "ready");
-		assert.deepEqual(first.checkout.files, [
-			"README.md",
-			"bin/run",
-			`${"d".repeat(120)}/file.txt`,
-		]);
-		assert.equal(existsSync(join(workspace, "partial.txt")), false);
-		assert.equal(statSync(join(workspace, "bin/run")).mode & 0o777, 0o755);
-		assert.equal(statSync(join(workspace, "README.md")).mode & 0o777, 0o644);
-		assert.equal(existsSync(join(workspace, "docs/link.md")), false);
-		assert.equal(await first.checkout.read("README.md", 100), "# readme\n");
-		assert.equal(await first.checkout.read("README.md", 3), null);
-		assert.equal(await first.checkout.read("docs/link.md", 100), null);
+				assert.ok(first.kind === "ready");
+				assert.deepEqual(first.checkout.files, [
+					"README.md",
+					"bin/run",
+					`${"d".repeat(120)}/file.txt`,
+				]);
+				assert.equal(existsSync(join(workspace, "partial.txt")), false);
+				assert.equal(statSync(join(workspace, "bin/run")).mode & 0o777, 0o755);
+				assert.equal(
+					statSync(join(workspace, "README.md")).mode & 0o777,
+					0o644,
+				);
+				assert.equal(existsSync(join(workspace, "docs/link.md")), false);
+				assert.equal(await first.checkout.read("README.md", 100), "# readme\n");
+				assert.equal(await first.checkout.read("README.md", 3), null);
+				assert.equal(await first.checkout.read("docs/link.md", 100), null);
 
-		const again = await checkoutWorkspace(input);
+				const again = await checkoutWorkspace(input);
 
-		assert.ok(again.kind === "ready");
-		assert.deepEqual(again.checkout.files, first.checkout.files);
-		assert.equal(fetches, 1);
-		assert.equal(lstatSync(join(state, "checkouts")).mode & 0o777, 0o700);
-	});
+				assert.ok(again.kind === "ready");
+				assert.deepEqual(again.checkout.files, first.checkout.files);
+				assert.equal(fetches, 1);
+				assert.equal(lstatSync(join(state, "checkouts")).mode & 0o777, 0o700);
+			}));
 
 	it("omits symlink chains without creating links outside the checkout", async () => {
 		const state = fresh("symlink-chain");

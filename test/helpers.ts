@@ -63,6 +63,20 @@ import {
 	TRUSTED_WORKFLOW,
 } from "./fake-ticket-adapter.ts";
 
+// Only use in serial test callbacks: the umask belongs to the whole process.
+export async function withUmask<T>(
+	mask: number,
+	run: () => Promise<T>,
+): Promise<T> {
+	const previous = process.umask(mask);
+
+	try {
+		return await run();
+	} finally {
+		process.umask(previous);
+	}
+}
+
 export async function withLocalArtifactDownload<T>(
 	run: (root: string) => Promise<T>,
 ): Promise<T> {
