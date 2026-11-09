@@ -35,6 +35,17 @@ import {
 const corpusDir = new URL("./fixtures/replay/", import.meta.url).pathname;
 const repo = "giuseppecrj/pi-herdr-factorio";
 
+const syntheticWorkflow = `const BRANCH_NAME = /^[A-Za-z0-9._/-]+$/;
+
+export function isBranchName(input: string): boolean {
+	return BRANCH_NAME.test(input);
+}
+
+export function parseWorkflow(input: string): string {
+	return input.trim();
+}
+`;
+
 function pinnedSha(text: string) {
 	if (!isGitSha(text)) throw new Error("sha");
 
@@ -269,8 +280,7 @@ describe("replay corpus and read-only check", () => {
 
 				return {
 					code: 0,
-					stdout:
-						args[0] === "show" ? await readFile("src/workflow.ts", "utf8") : "",
+					stdout: args[0] === "show" ? syntheticWorkflow : "",
 					stderr: "",
 				};
 			},
@@ -291,7 +301,7 @@ describe("replay CLI boundaries", () => {
 		const execute: Exec = async (_cmd, args) => ({
 			code: 0,
 			stdout: args[1]?.endsWith(":src/workflow.ts")
-				? await readFile("src/workflow.ts", "utf8")
+				? syntheticWorkflow
 				: args[0] === "show"
 					? text
 					: "",
@@ -690,16 +700,7 @@ describe("review regressions: comparison identity and caps", () => {
 		try {
 			await mkdir(join(dir, "src"));
 
-			const source = `const BRANCH_NAME = /^[A-Za-z0-9._/-]+$/;
-
-export function isBranchName(input: string): boolean {
-	return BRANCH_NAME.test(input);
-}
-
-export function parseWorkflow(input: string): string {
-	return input.trim();
-}
-`;
+			const source = syntheticWorkflow;
 
 			await writeFile(join(dir, "src/workflow.ts"), source);
 			git("init", "-q");
@@ -1033,7 +1034,7 @@ describe("approved replay cap raises", () => {
 		const execute: Exec = async (_cmd, args) => ({
 			code: 0,
 			stdout: args[1]?.endsWith(":src/workflow.ts")
-				? await readFile("src/workflow.ts", "utf8")
+				? syntheticWorkflow
 				: args[0] === "show"
 					? text
 					: "",

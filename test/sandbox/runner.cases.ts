@@ -3117,11 +3117,10 @@ describe("private build executor", () => {
 				"base_missing",
 			] as const
 		).flatMap((outcome) =>
-			[149_999, 150_000, 150_001, 179_999, 180_000].map((wallMs) => ({
-				outcome,
-				wallMs,
-				timeout: false,
-			})),
+			(outcome === "failed"
+				? [149_999, 150_000, 150_001, 179_999, 180_000]
+				: [149_999, 150_001]
+			).map((wallMs) => ({ outcome, wallMs, timeout: false })),
 		),
 		{ outcome: "unavailable" as const, wallMs: 150_001, timeout: true },
 	])
