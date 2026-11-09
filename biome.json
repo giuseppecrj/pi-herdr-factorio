@@ -1,1 +1,1 @@
-{"files":{"includes":["**","!test/acceptance/**"]}}
+{"files":{"includes":["**","!test/acceptance/**","!server/viewer/design/tokens.json","!server/viewer/design/tokens.css"]}}
