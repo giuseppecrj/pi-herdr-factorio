@@ -17,7 +17,11 @@ import fs, {
 	utimesSync,
 } from "node:fs";
 import { createServer, request } from "node:http";
-import { closeHttpServer, startEchoFixture } from "./http-fixtures.ts";
+import {
+	assertNoStrays,
+	closeHttpServer,
+	startEchoFixture,
+} from "./http-fixtures.ts";
 import { runHeldoutBase } from "../../server/gates.ts";
 import { assessBase } from "../../src/diagnosis.ts";
 import {
@@ -5168,6 +5172,7 @@ describe("pinned zero-token accept replay", () => {
 		const suite = writeAcceptance(suiteText, contract);
 		assert.ok(suite.kind === "suite");
 		const upstream = await startEchoFixture(t, 0);
+		const expectedBodies: string[] = [];
 		const forwarded: string[] = [];
 
 		const capture = createServer((req, res) => {
@@ -5304,6 +5309,7 @@ describe("pinned zero-token accept replay", () => {
 						fetch: async (_url, init) => {
 							const body = String(init?.body ?? "");
 							bodies.push(body);
+							expectedBodies.push(body);
 
 							return new Promise<Response>((done, reject) => {
 								const req = request(
@@ -5610,7 +5616,7 @@ describe("pinned zero-token accept replay", () => {
 		assert.deepEqual(exits, [1, 1]);
 		assert.equal(contractDigestOf(contractBytes(contract)), unchanged);
 		assert.equal(upstream.arrivals("/openai/v1/responses"), 5);
-		assert.equal(upstream.strays, 0);
+		assertNoStrays(upstream, expectedBodies);
 		t.diagnostic(
 			JSON.stringify({
 				acceptReplay: results,
@@ -5638,6 +5644,7 @@ describe("pinned zero-token source replay", () => {
 
 		assert.equal(digestOf(workflow), pin.workflowDigest);
 		const upstream = await startEchoFixture(t, 0);
+		const expectedBodies: string[] = [];
 		const root = mkdtempSync(join(tmpdir(), "factory-eff2-replay-"));
 		t.after(() => rmSync(root, { recursive: true, force: true }));
 		const repo = "giuseppecrj/pi-herdr-factorio";
@@ -5950,6 +5957,7 @@ describe("pinned zero-token source replay", () => {
 								const body = String(init?.body ?? "");
 								bytes.push(Buffer.byteLength(body));
 								providerInputs.push(body);
+								expectedBodies.push(body);
 
 								return new Promise<Response>((done, reject) => {
 									const req = request(
@@ -6186,7 +6194,7 @@ describe("pinned zero-token source replay", () => {
 				`only ${reduction}`,
 			);
 			assert.equal(upstream.arrivals("/openai/v1/responses") - before, 40);
-			assert.equal(upstream.strays, 0);
+			assertNoStrays(upstream, expectedBodies);
 			t.diagnostic(
 				JSON.stringify({
 					baseline: baseline.bytes,

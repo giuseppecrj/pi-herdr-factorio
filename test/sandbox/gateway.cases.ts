@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { closeHttpServer, startEchoFixture } from "./http-fixtures.ts";
+import {
+	assertNoStrays,
+	closeHttpServer,
+	startEchoFixture,
+} from "./http-fixtures.ts";
 import {
 	lstatSync,
 	mkdirSync,
@@ -436,6 +440,41 @@ describe("upstream dial order", () => {
 });
 
 describe("echo fixture", () => {
+	for (const mode of ["Pi Host", "HTTP/1.0 without Host"] as const) {
+		it(`rejects this sandbox's gateway bypass with ${mode}`, async (t) => {
+			const fixture = await startEchoFixture(t, 0);
+			const body = JSON.stringify({ input: `own request ${fixture.host}` });
+			const path = "/openai/v1/responses";
+
+			const headers =
+				mode === "Pi Host"
+					? "HTTP/1.1\r\nHost: 127.0.0.1:18080\r\nUser-Agent: pi-direct\r\n"
+					: "HTTP/1.0\r\n";
+
+			const reply = await new Promise<string>((done, fail) => {
+				const chunks: Buffer[] = [];
+
+				const socket = connect(fixture.port, "127.0.0.1", () => {
+					socket.end(
+						`POST ${path} ${headers}Content-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`,
+					);
+				});
+
+				socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+				socket.on("error", fail);
+				socket.on("close", () => done(Buffer.concat(chunks).toString()));
+			});
+
+			assert.match(reply, /^HTTP\/1\.1 421/);
+			assert.equal(fixture.foreign.length, 1);
+			assert.throws(
+				() => assertNoStrays(fixture, [body]),
+				{ code: "ERR_ASSERTION" },
+				"the replay's strict check must catch its own untagged body",
+			);
+		});
+	}
+
 	it("isolates stray counts by per-test Host token and records foreign request sources", async (t) => {
 		const fixture = await startEchoFixture(t, 0);
 		const host = fixture.host;
