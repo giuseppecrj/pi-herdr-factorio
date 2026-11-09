@@ -1,5 +1,7 @@
 # Factory owner dashboard
 
+The viewer binds only to `127.0.0.1`. Its default port is 8080.
+
 Start the viewer from a repository checkout on Node 26.12.1 or later:
 
 ```bash
