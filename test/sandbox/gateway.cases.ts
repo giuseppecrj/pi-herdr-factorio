@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
 	lstatSync,
 	mkdirSync,
@@ -422,6 +422,52 @@ describe("upstream dial order", () => {
 });
 
 describe("echo fixture", () => {
+	it("isolates stray counts by per-test Host token and records foreign request sources", async (t) => {
+		const host = "private-test-token.fixture";
+		const fixture = await startEchoFixture(0, { host });
+		t.after(() => fixture.close());
+
+		const send = (method: string, path: string, token: string) =>
+			new Promise<number>((done, fail) => {
+				request({ host: "127.0.0.1", port: fixture.port, method, path, headers: { Host: token } }, (res) => {
+					res.resume();
+					res.on("end", () => done(res.statusCode ?? 0));
+				}).on("error", fail).end();
+			});
+
+		assert.equal(await send("GET", "/unrelated", "foreign.fixture"), 421);
+		assert.equal(fixture.strays, 0);
+		assert.deepEqual(fixture.received, []);
+		assert.deepEqual(fixture.foreign, [{ method: "GET", path: "/unrelated", source: "127.0.0.1" }]);
+		assert.equal(await send("POST", "/openai/v1/responses", host), 421);
+		assert.equal(fixture.strays, 1, "this test's bypass must still count strictly");
+	});
+
+	it("exits promptly after a forced failure with an active HTTP request", () => {
+		const helper = new URL("./http-fixtures.ts", import.meta.url).href;
+
+		const child = spawnSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "--eval", `
+			import assert from 'node:assert/strict';
+			import { it } from 'node:test';
+			import { createServer, request } from 'node:http';
+			import { closeHttpServer } from ${JSON.stringify(helper)};
+			it('forced fixture failure', async (t) => {
+				const server = createServer(() => {});
+				t.after(() => closeHttpServer(server));
+				await new Promise(done => server.listen(0, '127.0.0.1', done));
+				const arrived = new Promise(done => server.once('request', done));
+				request({ host: '127.0.0.1', port: server.address().port }).on('error', () => {}).end();
+				await arrived;
+				assert.fail('forced fixture failure');
+			});
+		`], { encoding: "utf8", timeout: 5000, env: { PATH: process.env.PATH, TMPDIR: tmpdir() } });
+
+		assert.equal(child.error, undefined, String(child.error));
+		assert.equal(child.signal, null);
+		assert.equal(child.status, 1);
+		assert.match(child.stdout, /forced fixture failure/);
+	});
+
 	it("records only what the gateway sent, and answers any other local client 421", async () => {
 		const fixture = await startEchoFixture(0);
 
