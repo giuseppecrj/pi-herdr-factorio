@@ -1,0 +1,262 @@
+import assert from "node:assert/strict";
+import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test } from "node:test";
+import { readOwnerFeed, readOwnerRun } from "../src/feed.ts";
+import { readAttention } from "../src/attention.ts";
+import { runCli } from "../server/cli.ts";
+import { digestOf } from "../src/run.ts";
+import { AUTONOMY_DIGEST } from "../src/ledger.ts";
+import { candidateLifecycleFixture, withUmask } from "./helpers.ts";
+import {
+	addRun,
+	ownerState,
+	now,
+	repo,
+	save,
+} from "./fixtures/owner-feed/state.ts";
+
+async function state<T>(body: (root: string) => Promise<T>) {
+	const root = await mkdtemp(join(tmpdir(), "owner-feed-"));
+
+	try {
+		await ownerState(root);
+
+		return await body(root);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+}
+
+test("OwnerFeed v1 matches the golden offline contract, seven counts and ungrouped working count", async () => {
+	await state(async (root) => {
+		const feed = await readOwnerFeed({ stateDir: root, repo, now });
+
+		const golden = JSON.parse(
+			await readFile(
+				new URL("./fixtures/owner-feed/feed-v1.json", import.meta.url),
+				"utf8",
+			),
+		);
+
+		assert.deepEqual(feed, golden);
+		assert.equal(feed.version, 1);
+		assert.equal(feed.counts.pr_review, 1);
+		assert.equal(feed.counts.blocked, 1);
+		assert.equal(feed.counts.budget, 1);
+		assert.equal(feed.workingRunCount, 1);
+		assert.ok(
+			!feed.entries.some((entry) => entry.issue === 99 || entry.issue === 7),
+		);
+		assert.equal(feed.unreadable[0]?.issue, 99);
+		assert.equal(
+			feed.entries.find((entry) => entry.issue === 4)?.failure?.stage,
+			"review",
+		);
+		assert.equal(
+			(await readOwnerRun(root, feed.entries[0]?.runId ?? "", feed))?.title,
+			feed.entries[0]?.title,
+		);
+	});
+});
+
+test("read CLI and feed perform no transport or model calls, including unavailable state", async () => {
+	await state(async (root) => {
+		let output = "";
+
+		const exit = await runCli(["owner-feed", "--json", "--state-dir", root], {
+			exec: async () => {
+				throw new Error("read must not spawn");
+			},
+			env: () => undefined,
+			stdout: (text) => {
+				output += text;
+			},
+			stderr: assert.fail,
+		});
+
+		assert.equal(exit, 0);
+		assert.equal(JSON.parse(output).version, 1);
+		assert.equal(JSON.parse(output).repo, repo);
+	});
+
+	const unavailable = await readOwnerFeed({
+		stateDir: "/not/a/controller",
+		repo,
+		now,
+	});
+
+	assert.deepEqual(unavailable.entries, []);
+	assert.deepEqual(unavailable.gaps, ["state_unavailable"]);
+	assert.equal(unavailable.controller.localSwitch, "unavailable");
+});
+
+test("thresholds are local projections, inclusive at the boundary, with future ages unknown", async () => {
+	await state(async (root) => {
+		const read = await readAttention({
+			stateDir: root,
+			repo,
+			now,
+			thresholds: { waitingMs: 4 * 86_400_000, blockedMs: 7 * 3_600_000 },
+		});
+
+		assert.equal(read.kind, "available");
+		assert.equal(read.groups.pr_review[0]?.stale, true);
+		assert.equal(read.groups.blocked[0]?.stale, true);
+		await save(root, ["metrics.json"], {
+			attentionThresholds: {
+				waitingMs: 5 * 86_400_000,
+				blockedMs: 8 * 3_600_000,
+			},
+		});
+		const feed = await readOwnerFeed({ stateDir: root, repo, now });
+		assert.equal(feed.entries.find((entry) => entry.issue === 1)?.stale, false);
+		assert.equal(feed.entries.find((entry) => entry.issue === 2)?.stale, false);
+		await addRun(root, 20, "blocked", { enteredAt: now + 1 });
+		const future = await readOwnerFeed({ stateDir: root, repo, now });
+		assert.equal(
+			future.entries.find((entry) => entry.issue === 20)?.ageMs,
+			null,
+		);
+		assert.equal(
+			future.entries.find((entry) => entry.issue === 20)?.stale,
+			false,
+		);
+	});
+});
+
+test("titles are digest-bound plain text capped at 120 code points; the latest event replaces a high old sequence", async () => {
+	await state(async (root) => {
+		await addRun(root, 20, "needs_info", { title: "old", seq: 100 });
+
+		const id = await addRun(root, 20, "running", {
+			title: `<script>\u0001\u202e${"🧪".repeat(130)}`,
+			eventId: "2",
+			seq: 1,
+		});
+
+		const feed = await readOwnerFeed({ stateDir: root, repo, now });
+		const entries = feed.entries.filter((entry) => entry.issue === 20);
+		assert.equal(entries.length, 1);
+		assert.equal(entries[0]?.runId, id);
+		assert.equal(entries[0]?.status, "running");
+		assert.equal([...entries[0]!.title].length, 120);
+		assert.ok(
+			!entries[0]!.title.includes("\u0001") &&
+				!entries[0]!.title.includes("\u202e"),
+		);
+	});
+});
+
+test("historical verification cap wins; missing caps stay unknown; metrics require a complete report", async () => {
+	await state(async (root) => {
+		const runId = await addRun(root, 20, "running");
+		await save(root, ["accounting", runId, "policy.json"], {
+			v: 2,
+			runId,
+			startedAt: new Date(now - 1000).toISOString(),
+			context: {
+				kind: "verification",
+				trustedCap: 800000,
+				effectiveCap: 10000,
+				manifestDigest: digestOf("verification"),
+				policy: {
+					workflowSha: "a".repeat(40),
+					workflowDigest: digestOf("workflow"),
+					gates: {
+						kind: "known",
+						value: { sourceSha: "a".repeat(40), digest: digestOf("gate") },
+					},
+					autonomy: {
+						approveMerge: "always",
+						land: "propose",
+						digest: AUTONOMY_DIGEST,
+					},
+				},
+			},
+		});
+
+		const report = {
+			repo,
+			status: "pending",
+			primary: { numerator: 1, denominator: 2, share: 0.5 },
+			tokensPerCleanLanding: 12345.5,
+		};
+
+		await save(root, ["metrics.json"], {
+			computedAt: new Date(now).toISOString(),
+			report,
+		});
+		let feed = await readOwnerFeed({ stateDir: root, repo, now });
+		assert.equal(
+			feed.entries.find((entry) => entry.runId === runId)?.cap,
+			10000,
+		);
+		assert.equal(feed.entries.find((entry) => entry.issue === 5)?.cap, null);
+		assert.equal(feed.metrics.share, null);
+		await save(root, ["metrics.json"], {
+			computedAt: new Date(now).toISOString(),
+			report: { ...report, status: "complete" },
+		});
+		feed = await readOwnerFeed({ stateDir: root, repo, now });
+		assert.equal(feed.metrics.share, 0.5);
+		assert.equal(feed.metrics.tokensPerCleanLanding, 12345.5);
+	});
+});
+
+test("active published refresh stays blocked in the feed but neutral Working on the dashboard", async () => {
+	await state(async (root) => {
+		const book = candidateLifecycleFixture();
+		await addRun(root, 1, "running", {
+			stage: "validate",
+			handoff: JSON.parse(JSON.stringify(book)),
+		});
+		const feed = await readOwnerFeed({ stateDir: root, repo, now });
+		assert.equal(
+			feed.entries.find((entry) => entry.issue === 1)?.kind,
+			"blocked",
+		);
+		assert.equal(
+			feed.entries.find((entry) => entry.issue === 1)?.group,
+			"working",
+		);
+		assert.equal(feed.counts.blocked, 2);
+		assert.equal(feed.workingRunCount, 1);
+	});
+});
+
+test("stage totals retain repair retry receipts with dotted attempt suffixes", async () => {
+	await state(async (root) => {
+		const runId = await addRun(root, 20, "running", { stage: "build" });
+
+		for (const [name, tokens, wallMs] of [
+			["build-1", 100, 1000],
+			["build-r1-1.2", 200, 2000],
+		] as const)
+			await save(root, ["stages", runId, name, "receipt.json"], {
+				version: 1,
+				runId,
+				stage: "build",
+				outcome: { kind: "passed" },
+				turns: 1,
+				wallMs,
+				usage: { total: tokens },
+			});
+
+		const feed = await readOwnerFeed({ stateDir: root, repo, now });
+		assert.deepEqual(
+			feed.entries.find((entry) => entry.runId === runId)?.steps,
+			[{ stage: "build", outcome: "passed", tokens: 300, wallMs: 3000 }],
+		);
+	});
+});
+
+test("private fixtures also work at restrictive umasks without changing their semantics", async () => {
+	await withUmask(0o077, async () => {
+		await state(async (root) => {
+			const feed = await readOwnerFeed({ stateDir: root, repo, now });
+			assert.equal(feed.entries.length, 7);
+		});
+	});
+});

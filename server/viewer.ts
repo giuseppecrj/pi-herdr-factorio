@@ -1,10 +1,22 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { lstat, readFile, realpath } from "node:fs/promises";
+import { lstat, readFile, realpath, open, unlink } from "node:fs/promises";
+import { randomBytes, timingSafeEqual } from "node:crypto";
+import { join } from "node:path";
+import { readOwnerFeed, readOwnerRun } from "../src/feed.ts";
+import { plainTitle } from "../src/attention.ts";
+import { textOf, objectOf } from "./sandbox/json.ts";
+import {
+	renderDashboard,
+	renderHeader,
+	renderRunSummary,
+	renderSteps,
+	githubLink,
+} from "./viewer/dashboard.ts";
 import { parseArgs } from "node:util";
 import { isDigest } from "../src/run.ts";
 import { readViewerRun, viewerRuns } from "./viewer/evidence.ts";
-import { renderIndex, renderRun } from "./viewer/render.ts";
+import { renderRun } from "./viewer/render.ts";
 
 export { readViewerRun } from "./viewer/evidence.ts";
 
@@ -14,14 +26,25 @@ export type ViewerOptions = {
 	port?: number;
 	allowedHost?: string;
 	basePath?: string;
+	bind?: string;
+	log?: (line: string) => void;
 };
+
+const holdToken = randomBytes(32).toString("hex");
 
 const basePathPattern = /^(?:\/[a-z0-9-]+)+$/;
 
 export async function startViewer(options: ViewerOptions) {
+	if (options.bind !== undefined && options.bind !== "127.0.0.1")
+		throw new Error("loopback bind required");
 	const info = await lstat(options.stateDir);
 
-	if (!info.isDirectory() || info.isSymbolicLink())
+	if (
+		!info.isDirectory() ||
+		info.isSymbolicLink() ||
+		info.uid !== process.geteuid?.() ||
+		(info.mode & 0o077) !== 0
+	)
 		throw new Error("state directory unavailable");
 
 	if (options.runId !== undefined && !isDigest(options.runId))
@@ -50,15 +73,15 @@ export async function startViewer(options: ViewerOptions) {
 	const server = createServer(async (req, res) => {
 		res.setHeader(
 			"Content-Security-Policy",
-			"default-src 'none'; style-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+			"default-src 'none'; style-src 'self'; img-src 'self'; manifest-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
 		);
 		res.setHeader("X-Content-Type-Options", "nosniff");
-		res.setHeader("Referrer-Policy", "no-referrer");
+		res.setHeader("Referrer-Policy", "same-origin");
 		res.setHeader("Cache-Control", "no-store");
 
 		const send = (
 			code: number,
-			body: string,
+			body: string | Buffer,
 			contentType = "text/plain; charset=utf-8",
 		) => {
 			res.writeHead(code, { "Content-Type": contentType });
@@ -81,18 +104,122 @@ export async function startViewer(options: ViewerOptions) {
 			return;
 		}
 
-		if (req.method !== "GET") {
-			res.setHeader("Allow", "GET");
-			send(405, "GET only");
+		const url = req.url ?? "";
+
+		const path =
+			base !== "" && (url === `${base}/` || url.startsWith(`${base}/`))
+				? url.slice(base.length)
+				: url;
+
+		if (path === "/hold" && req.method === "POST") {
+			if (
+				req.headers.origin !== `${local ? "http" : "https"}://${host}` ||
+				req.headers["content-type"] !== "application/x-www-form-urlencoded"
+			) {
+				send(403, "Forbidden");
+
+				return;
+			}
+
+			try {
+				let body = "";
+
+				for await (const chunk of req) {
+					body += String(chunk);
+
+					if (Buffer.byteLength(body) > 4096) {
+						send(413, "Form too large");
+
+						return;
+					}
+				}
+
+				const form = new URLSearchParams(body);
+				const token = form.get("token") ?? "";
+				const hold = form.get("hold");
+
+				if (
+					Buffer.byteLength(token) !== Buffer.byteLength(holdToken) ||
+					!timingSafeEqual(Buffer.from(token), Buffer.from(holdToken)) ||
+					form.size !== 2 ||
+					(hold !== "on" && hold !== "off")
+				) {
+					send(403, "Forbidden");
+
+					return;
+				}
+
+				const disabled = join(stateDir, "disabled");
+
+				const existing = await lstat(disabled).catch(
+					(error: NodeJS.ErrnoException) => {
+						if (error.code === "ENOENT") return null;
+						throw error;
+					},
+				);
+
+				if (
+					existing !== null &&
+					(!existing.isFile() || existing.uid !== process.geteuid?.())
+				) {
+					send(409, "Hold file unavailable");
+
+					return;
+				}
+
+				if (hold === "on" && existing === null) {
+					const file = await open(disabled, "wx", 0o600);
+					await file.close();
+				}
+
+				if (hold === "off" && existing !== null) await unlink(disabled);
+				(options.log ?? ((line) => process.stderr.write(`${line}\n`)))(
+					`at=${new Date().toISOString()} event=local_hold hold=${hold} source=${req.socket.remoteAddress ?? "unknown"} host=${host}`,
+				);
+				res.writeHead(303, { Location: `${base}/` });
+				res.end();
+			} catch {
+				send(500, "Hold unavailable");
+			}
+
+			return;
+		}
+
+		if (req.method !== "GET" || path === "/hold") {
+			res.setHeader("Allow", path === "/hold" ? "POST" : "GET");
+			send(405, path === "/hold" ? "POST only" : "GET only");
 
 			return;
 		}
 
 		try {
-			const path = req.url ?? "";
-
 			if (path === "/style.css") {
 				send(200, css, "text/css; charset=utf-8");
+
+				return;
+			}
+
+			if (
+				path === "/manifest.webmanifest" ||
+				path === "/icon-192.png" ||
+				path === "/icon-512.png"
+			) {
+				const name = path.slice(1);
+				send(
+					200,
+					await readFile(new URL(`./viewer/${name}`, import.meta.url)),
+					name.endsWith(".png") ? "image/png" : "application/manifest+json",
+				);
+
+				return;
+			}
+
+			if (path === "/owner-feed.json") {
+				send(
+					200,
+					JSON.stringify(await readOwnerFeed({ stateDir })),
+					"application/json; charset=utf-8",
+				);
 
 				return;
 			}
@@ -101,7 +228,7 @@ export async function startViewer(options: ViewerOptions) {
 				if (options.runId === undefined)
 					send(
 						200,
-						renderIndex(await viewerRuns(stateDir), base),
+						renderDashboard(await readOwnerFeed({ stateDir }), base, holdToken),
 						"text/html; charset=utf-8",
 					);
 				else {
@@ -160,7 +287,38 @@ export async function startViewer(options: ViewerOptions) {
 					}),
 					"application/json; charset=utf-8",
 				);
-			} else send(200, renderRun(run, view, base), "text/html; charset=utf-8");
+			} else {
+				const feed = await readOwnerFeed({ stateDir });
+				const entry = await readOwnerRun(stateDir, id, feed);
+				send(
+					200,
+					renderRun(run, view, base, {
+						header: renderHeader(feed, base, holdToken),
+						title:
+							entry === null
+								? plainTitle(
+										textOf(objectOf(run.issue)?.title) ?? "Title unavailable",
+									)
+								: `#${entry.issue} ${entry.title}`,
+						summary: entry === null ? "" : renderRunSummary(entry),
+						steps:
+							entry === null
+								? "<p class=muted>Stage summary unavailable. See the retained events below.</p>"
+								: renderSteps(entry),
+						links:
+							entry === null
+								? ""
+								: githubLink(
+										entry.prUrl ?? entry.issueUrl,
+										entry.prUrl === null
+											? "Open issue on GitHub"
+											: "Open PR on GitHub",
+										true,
+									),
+					}),
+					"text/html; charset=utf-8",
+				);
+			}
 		} catch {
 			send(500, "Evidence unavailable");
 		}

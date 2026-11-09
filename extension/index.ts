@@ -229,6 +229,8 @@ export async function factoryCommandText(
 					? state.snapshot.repo
 					: state.repo,
 		now: Date.now(),
+		thresholds:
+			state.kind === "loaded" ? state.snapshot.config.attention : undefined,
 	});
 
 	return redactCredentials(

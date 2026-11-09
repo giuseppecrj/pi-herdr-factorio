@@ -21,7 +21,7 @@ import {
 	parseJson,
 	textOf,
 } from "../server/sandbox/json.ts";
-import { escapeHtml, renderRun } from "../server/viewer/render.ts";
+import { escapeHtml, renderRun, expectedGap } from "../server/viewer/render.ts";
 import { icons } from "../server/viewer/design/icons/icons.ts";
 import { runCli } from "../server/cli.ts";
 import { readStageReceipt, runSpecify } from "../server/sandbox.ts";
@@ -582,7 +582,7 @@ test("real viewer routes separate published historical certification from workin
 
 		assert.match(
 			html,
-			/Historical certification does not imply current readiness/,
+			/A passed check on an earlier change does not prove the current change/,
 		);
 		assert.match(html, /Execution \/ evidence round/);
 		assert.ok(!html.includes("<script>"));
@@ -1180,7 +1180,7 @@ test("restyled runs keep state words and evidence, with error glyphs only for fa
 			"/factory",
 		);
 
-		assert.match(neutral, /class="local">Read only · local<\/span>/);
+		assert.match(neutral, /class="local">Local evidence<\/span>/);
 		assert.match(neutral, /class="status">stage_passed<\/span>/);
 		assert.match(neutral, /class="gaps notice"/);
 		assert.ok(neutral.includes(icons["info-circle"]));
@@ -1591,7 +1591,7 @@ test("invalid base-path is a usage error, exit 2", async () => {
 	}
 });
 
-test("a base path prefixes every rendered link and redirect while routes stay unprefixed", async () => {
+test("a base path prefixes every rendered link and redirect, with direct and proxy-stripped routes", async () => {
 	const { root } = await fixtureState();
 
 	const viewer = await startViewer({
@@ -1616,13 +1616,13 @@ test("a base path prefixes every rendered link and redirect while routes stay un
 		const url = `http://127.0.0.1:${viewer.port}`;
 		const index = await (await fetch(`${url}/`)).text();
 		const run = await (await fetch(`${url}/run/${runId}/usage`)).text();
-		assert.ok(links(index).includes(`/factory/run/${runId}/timeline`));
+		assert.ok(links(index).includes("/factory/manifest.webmanifest"));
 		assert.ok(links(run).includes(`/factory/run/${runId}/usage.json`));
 
 		for (const href of [...links(index), ...links(run)])
 			assert.match(href, /^\/factory\//, href);
 		assert.equal((await fetch(`${url}/style.css`)).status, 200);
-		assert.equal((await fetch(`${url}/factory/`)).status, 404);
+		assert.equal((await fetch(`${url}/factory/`)).status, 200);
 
 		const redirect = await fetch(`http://127.0.0.1:${pinned.port}/`, {
 			redirect: "manual",
@@ -1639,7 +1639,7 @@ test("a base path prefixes every rendered link and redirect while routes stay un
 		).text();
 
 		assert.ok(links(unprefixed).includes("/style.css"));
-		assert.ok(links(unprefixed).includes(`/run/${runId}/timeline`));
+		assert.ok(links(unprefixed).includes("/manifest.webmanifest"));
 	} finally {
 		await viewer.close();
 		await pinned.close();
@@ -1946,7 +1946,38 @@ test("denied gateway requests never invent an upstream", async () => {
 	}
 });
 
+test("expected missing logs stay neutral, but corrupt receipts, claims and verdicts are problems", () => {
+	for (const gap of [
+		{ source: "markers/run.jsonl", reason: markerHistoryGap },
+		{
+			source: "stages/run/pi-stderr-0.log",
+			reason: "missing, unsafe, unreadable or over size limit",
+		},
+		{ source: "stages/run", reason: "Pi session JSONL files missing" },
+		{ source: "stages/run", reason: "gateway audit missing" },
+	])
+		assert.equal(expectedGap(gap, "landed"), true);
+
+	for (const gap of [
+		{ source: "receipt.json", reason: "corrupt or mismatched stage receipt" },
+		{ source: "claims/run.json", reason: "corrupt or wrong-owner claim/book" },
+		{ source: "validation/verdict.json", reason: "corrupt stored verdict" },
+	])
+		assert.equal(expectedGap(gap, "landed"), false);
+	assert.equal(
+		expectedGap(
+			{ source: "stages/run", reason: "gateway audit missing" },
+			"running",
+		),
+		false,
+	);
+});
+
 test("viewer refuses missing state and occupied port", async () => {
+	await assert.rejects(
+		startViewer({ stateDir: "/tmp", bind: "0.0.0.0", port: 0 }),
+		/loopback bind required/,
+	);
 	await assert.rejects(
 		startViewer({ stateDir: "/not/a/factory/state", port: 0 }),
 	);

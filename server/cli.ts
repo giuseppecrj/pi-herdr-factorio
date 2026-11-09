@@ -8,7 +8,11 @@ import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import manifest from "../package.json" with { type: "json" };
-import { readAttention, type AttentionRead } from "../src/attention.ts";
+import {
+	readAttention,
+	ATTENTION_THRESHOLDS,
+	type AttentionRead,
+} from "../src/attention.ts";
 import {
 	type AdmissionReceipt,
 	admitTicket,
@@ -59,7 +63,10 @@ import {
 	type TarballFetch,
 	serveLoop,
 	writeStatus,
+	startMetricSnapshots,
 } from "./controller.ts";
+import { readOwnerFeed } from "../src/feed.ts";
+import { GitHubPublicationApi } from "../src/publication.ts";
 import { sandboxExecutor } from "./sandbox.ts";
 import { runGatesCli } from "./gates.ts";
 import { runViewerCli } from "./viewer.ts";
@@ -72,7 +79,7 @@ import {
 	parseJson,
 	textOf,
 } from "./sandbox/json.ts";
-import { parseLedger } from "../src/ledger.ts";
+import { parseLedger, ledgerApiOf } from "../src/ledger.ts";
 import { digestOf } from "../src/run.ts";
 import {
 	computeMetrics,
@@ -102,6 +109,7 @@ export const USAGE = `Usage:
   node server/cli.ts replay check --json [--corpus <dir>] [--main-sha <sha>] [--previous-sha <sha>] [--candidate-sha <sha>] [--case <id> --production-state-dir <dir> --budget-file <file>]
   node server/cli.ts replay report --json --case <id> --previous-row <file> --candidate-row <file> --previous-record <file> --candidate-record <file> --previous-sha <sha> --candidate-sha <sha> [--corpus <dir>] [--previous-assets <digest> --candidate-assets <digest>]
   node server/cli.ts metrics --json --repo <owner/name> [--ledger-file <path>] [--state-dir <dir>] [--now <instant>] [--cohort production] [--offline] [--intervention-file <fixture>]
+  node server/cli.ts owner-feed --json --state-dir <dir> [--repo <owner/name>]
   node server/cli.ts viewer --state-dir <dir> [--run <id>] [--port <n>] [--allowed-host <authorized.ts.net>] [--base-path </prefix>]
   node server/cli.ts gates --repository <dir> --gate-sha <sha> --candidate-sha <sha> --nonce <id> --output <dir> [--runner docker|local]
   node server/cli.ts workflow-check --json --repo <owner/name> [--ref <branch>] [--reload-ref <branch>]
@@ -611,14 +619,24 @@ async function runController(
 				scope: parsed.scope?.join("+") ?? "all",
 			});
 
-			await serveLoop({
-				orchestrator,
+			const metrics = startMetricSnapshots({
 				stateDir: parsed.stateDir,
-				sleep: runtime.sleep,
-				signal: runtime.signal,
+				collect: () => collectOwnerMetrics(parsed.stateDir, parsed.repo, io),
 				log,
-				pump,
 			});
+
+			try {
+				await serveLoop({
+					orchestrator,
+					stateDir: parsed.stateDir,
+					sleep: runtime.sleep,
+					signal: runtime.signal,
+					log,
+					pump,
+				});
+			} finally {
+				await metrics.stop();
+			}
 
 			return EXIT.ok;
 		}
@@ -968,6 +986,120 @@ async function readInterventionFixture(
 		return result;
 	} catch {
 		return null;
+	}
+}
+
+async function collectOwnerMetrics(
+	stateDir: string,
+	repo: RepoSlug,
+	io: CliIo,
+): Promise<JsonValue> {
+	const deadline = Date.now() + 120_000;
+
+	const bounded: CliIo = {
+		...io,
+		exec: async (command, args, options) => {
+			const remaining = deadline - Date.now();
+
+			if (remaining <= 0) throw new Error("metric_deadline");
+
+			return io.exec(command, args, {
+				...options,
+				timeoutMs: Math.min(options?.timeoutMs ?? FETCH_TIMEOUT_MS, remaining),
+			});
+		},
+	};
+
+	const workflow = await loadWorkflow({
+		exec: bounded.exec,
+		env: io.env,
+		repo,
+		ref: TRUSTED_REF,
+	});
+
+	const attentionThresholds =
+		workflow.kind === "loaded"
+			? (workflow.snapshot.config.attention ?? ATTENTION_THRESHOLDS)
+			: ATTENTION_THRESHOLDS;
+
+	let report: ReturnType<typeof computeMetrics> | null = null;
+	let ledgerIdentity: string | null = null;
+	const gaps: string[] = [];
+
+	try {
+		const api = ledgerApiOf(new GitHubPublicationApi(bounded.exec, repo));
+		const tip = await api.ref();
+
+		if (tip === null) throw new Error("ledger_missing");
+		const commit = await api.commit(tip);
+		const ledger = (await api.file(commit.tree)).bytes;
+		ledgerIdentity = tip;
+		const defects = await readMetricDefects(repo, bounded);
+		const evaluatedAt = new Date().toISOString();
+		const interventions = await readMetricInterventions(ledger, repo, bounded);
+		const receiptDigests = await readReceiptDigests(stateDir, ledger, repo);
+		report = computeMetrics({
+			ledger,
+			repo,
+			now: evaluatedAt,
+			defects,
+			interventions,
+			receiptDigests,
+			source: "ledger",
+		});
+
+		if (defects.kind !== "known") gaps.push(defects.reason);
+
+		if (report.status !== "complete") gaps.push(`report_${report.status}`);
+	} catch {
+		gaps.push("ledger_or_collection_unavailable");
+	}
+
+	return {
+		version: 1,
+		computedAt: new Date().toISOString(),
+		ledgerIdentity,
+		attentionThresholds,
+		report,
+		gaps,
+	};
+}
+
+async function runOwnerFeedCli(
+	argv: readonly string[],
+	io: CliIo,
+): Promise<number> {
+	try {
+		const { values, positionals } = parseArgs({
+			args: [...argv],
+			allowPositionals: true,
+			strict: true,
+			options: {
+				json: { type: "boolean" },
+				"state-dir": { type: "string" },
+				repo: { type: "string" },
+			},
+		});
+
+		if (
+			values.json !== true ||
+			!values["state-dir"] ||
+			positionals.length > 0 ||
+			(values.repo !== undefined && !isRepoSlug(values.repo))
+		)
+			throw new Error("usage");
+		const repo = values.repo;
+		io.stdout(
+			`${JSON.stringify(await readOwnerFeed({ stateDir: values["state-dir"], repo: repo !== undefined && isRepoSlug(repo) ? repo : undefined }), null, 2)}\n`,
+		);
+
+		return EXIT.ok;
+	} catch {
+		io.stderr(
+			"Usage: node server/cli.ts owner-feed --json --state-dir <dir> [--repo <owner/name>]\n",
+		);
+
+		return EXIT.usage;
 	}
 }
 
@@ -1401,6 +1533,8 @@ export async function runCli(
 
 	if (argv[0] === "metrics") return runMetricsCli(argv.slice(1), io);
 
+	if (argv[0] === "owner-feed") return runOwnerFeedCli(argv.slice(1), io);
+
 	if (argv[0] === "viewer") return runViewerCli(argv.slice(1), io);
 
 	if (argv[0] === "gates") return runGatesCli(argv.slice(1), io);
@@ -1451,6 +1585,8 @@ export async function runCli(
 			stateDir: parsed.stateDir,
 			repo,
 			now: Date.now(),
+			thresholds:
+				load.kind === "loaded" ? load.snapshot.config.attention : undefined,
 		});
 
 		const ledger = await readLedgerBacklog(

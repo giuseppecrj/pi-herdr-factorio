@@ -93,6 +93,10 @@ export type WorkflowConfig = {
 		readonly maxBackoffMs: number;
 	};
 	readonly usage: { readonly maxTokensPerRun: number };
+	readonly attention?: {
+		readonly waitingMs: number;
+		readonly blockedMs: number;
+	};
 	readonly replay?: { readonly maxTokens: number } | null;
 	readonly stages: StageSettings;
 	readonly checkpoints: { readonly approveMerge: { readonly mode: "always" } };
@@ -779,6 +783,7 @@ const ROOT_KEYS = [
 	"workspace",
 	"retry",
 	"usage",
+	"attention",
 	"replay",
 	"stages",
 	"checkpoints",
@@ -844,6 +849,11 @@ function readConfig(
 	const usage = optionalEntries(root, "usage", "usage", ["max_tokens_per_run"]);
 	const replay = optionalEntries(root, "replay", "replay", ["max_tokens"]);
 
+	const attention = optionalEntries(root, "attention", "attention", [
+		"waiting_ms",
+		"blocked_ms",
+	]);
+
 	if (root.has("replay") && !replay.has("max_tokens")) {
 		fail("replay.max_tokens", "is required when replay is configured");
 	}
@@ -886,6 +896,16 @@ function readConfig(
 				"usage.max_tokens_per_run",
 				{ min: 1, fallback: DEFAULTS.maxTokensPerRun },
 			),
+		}),
+		attention: Object.freeze({
+			waitingMs: integerOr(attention, "waiting_ms", "attention.waiting_ms", {
+				min: 1,
+				fallback: 259_200_000,
+			}),
+			blockedMs: integerOr(attention, "blocked_ms", "attention.blocked_ms", {
+				min: 1,
+				fallback: 21_600_000,
+			}),
 		}),
 		replay: root.has("replay")
 			? Object.freeze({
