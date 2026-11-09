@@ -7,6 +7,10 @@
 		"lastTick": "2026-11-09T17:59:48.000Z",
 		"localSwitch": "enabled"
 	},
+	"durableUsage": {
+		"kind": "lower_bound",
+		"total": 5200000
+	},
 	"entries": [
 		{
 			"issue": 8,
@@ -204,6 +208,7 @@
 	],
 	"metrics": {
 		"computedAt": null,
+		"stale": false,
 		"status": "Pending",
 		"share": null,
 		"numerator": null,

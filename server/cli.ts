@@ -619,9 +619,17 @@ async function runController(
 				scope: parsed.scope?.join("+") ?? "all",
 			});
 
+			const interventionCache = new Map<string, InterventionRead>();
+
 			const metrics = startMetricSnapshots({
 				stateDir: parsed.stateDir,
-				collect: () => collectOwnerMetrics(parsed.stateDir, parsed.repo, io),
+				collect: () =>
+					collectOwnerMetrics(
+						parsed.stateDir,
+						parsed.repo,
+						io,
+						interventionCache,
+					),
 				log,
 			});
 
@@ -906,6 +914,7 @@ async function readMetricInterventions(
 	ledger: Uint8Array,
 	repo: string,
 	io: CliIo,
+	cache?: Map<string, InterventionRead>,
 ): Promise<Interventions> {
 	const byPr = new Map<number, MetricReview[] | null>();
 	const result = new Map<string, InterventionRead>();
@@ -929,6 +938,13 @@ async function readMetricInterventions(
 		}
 
 		const pr = row.pr.number;
+		const key = `${repo}/${pr}/${outcome.mergeSha}`;
+		const cached = cache?.get(key);
+
+		if (cached !== undefined) {
+			result.set(row.runId, cached);
+			continue;
+		}
 
 		if (!byPr.has(pr)) byPr.set(pr, await readMetricReviews(repo, pr, io));
 		const reviews = byPr.get(pr);
@@ -949,6 +965,9 @@ async function readMetricInterventions(
 						),
 					},
 		);
+		const intervention = result.get(row.runId);
+
+		if (intervention?.kind === "known") cache?.set(key, intervention);
 	}
 
 	return result;
@@ -989,10 +1008,34 @@ async function readInterventionFixture(
 	}
 }
 
-async function collectOwnerMetrics(
+function durableUsageOf(
+	accounting: Awaited<ReturnType<typeof readDurableAccounting>>,
+): JsonValue {
+	const uncertain = accounting.runs.some((run) => run.uncertainRequests > 0);
+
+	const exact =
+		accounting.state === "readable" &&
+		accounting.runs.every((run) => run.tokens.kind === "exact");
+
+	return accounting.state === "unavailable"
+		? { kind: "unavailable", reason: "legacy_not_recorded" }
+		: {
+				kind: uncertain ? "uncertain" : exact ? "exact" : "lower_bound",
+				unit: "tokens",
+				total: accounting.runs.reduce((sum, run) => sum + run.tokens.total, 0),
+				...(uncertain
+					? { reason: "request_unsettled" }
+					: exact
+						? {}
+						: { reason: "receipt_missing" }),
+			};
+}
+
+export async function collectOwnerMetrics(
 	stateDir: string,
 	repo: RepoSlug,
 	io: CliIo,
+	cache: Map<string, InterventionRead>,
 ): Promise<JsonValue> {
 	const deadline = Date.now() + 120_000;
 
@@ -1003,10 +1046,14 @@ async function collectOwnerMetrics(
 
 			if (remaining <= 0) throw new Error("metric_deadline");
 
-			return io.exec(command, args, {
+			const result = await io.exec(command, args, {
 				...options,
 				timeoutMs: Math.min(options?.timeoutMs ?? FETCH_TIMEOUT_MS, remaining),
 			});
+
+			if (Date.now() >= deadline) throw new Error("metric_deadline");
+
+			return result;
 		},
 	};
 
@@ -1036,7 +1083,19 @@ async function collectOwnerMetrics(
 		ledgerIdentity = tip;
 		const defects = await readMetricDefects(repo, bounded);
 		const evaluatedAt = new Date().toISOString();
-		const interventions = await readMetricInterventions(ledger, repo, bounded);
+
+		const interventions = await readMetricInterventions(
+			ledger,
+			repo,
+			bounded,
+			cache,
+		);
+
+		if (
+			defects.kind !== "known" ||
+			[...interventions.values()].some((read) => read.kind !== "known")
+		)
+			throw new Error("metric_collection_incomplete");
 		const receiptDigests = await readReceiptDigests(stateDir, ledger, repo);
 		report = computeMetrics({
 			ledger,
@@ -1048,15 +1107,15 @@ async function collectOwnerMetrics(
 			source: "ledger",
 		});
 
-		if (defects.kind !== "known") gaps.push(defects.reason);
-
 		if (report.status !== "complete") gaps.push(`report_${report.status}`);
 	} catch {
-		gaps.push("ledger_or_collection_unavailable");
+		throw new Error("ledger_or_collection_unavailable");
 	}
 
 	return {
 		version: 1,
+		stale: false,
+		durableUsage: durableUsageOf(await readDurableAccounting(stateDir, repo)),
 		computedAt: new Date().toISOString(),
 		ledgerIdentity,
 		attentionThresholds,
@@ -1595,29 +1654,7 @@ export async function runCli(
 		);
 
 		const accounting = await readDurableAccounting(parsed.stateDir, repo);
-
-		const durableUsage: JsonValue =
-			accounting.state === "unavailable"
-				? { kind: "unavailable", reason: "legacy_not_recorded" }
-				: {
-						kind: accounting.runs.some((run) => run.uncertainRequests > 0)
-							? "uncertain"
-							: accounting.state === "readable" &&
-									accounting.runs.every((run) => run.tokens.kind === "exact")
-								? "exact"
-								: "lower_bound",
-						unit: "tokens",
-						total: accounting.runs.reduce(
-							(sum, run) => sum + run.tokens.total,
-							0,
-						),
-						...(accounting.runs.some((run) => run.uncertainRequests > 0)
-							? { reason: "request_unsettled" }
-							: accounting.state === "readable" &&
-									accounting.runs.every((run) => run.tokens.kind === "exact")
-								? {}
-								: { reason: "receipt_missing" }),
-					};
+		const durableUsage = durableUsageOf(accounting);
 
 		io.stdout(
 			json({

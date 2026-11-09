@@ -249,16 +249,20 @@ function parseClaim(
 
 	const ready = readiness?.kind;
 
-	const enteredAt = evidenceMissing
-		? null
-		: overflow !== undefined
-			? overflow.since
-			: work?.kind === "held" &&
-					(work.reason === "pr_identity" ||
-						work.reason === "pr_ambiguous" ||
-						work.reason === "feedback_overflow")
-				? work.since
-				: (countOf(claim?.enteredAt) ?? readiness?.since ?? null);
+	const enteredAt =
+		evidenceMissing &&
+		!["released", "stage_passed", "landed", "cancelled"].includes(
+			projection?.status ?? status,
+		)
+			? null
+			: overflow !== undefined
+				? overflow.since
+				: work?.kind === "held" &&
+						(work.reason === "pr_identity" ||
+							work.reason === "pr_ambiguous" ||
+							work.reason === "feedback_overflow")
+					? work.since
+					: (countOf(claim?.enteredAt) ?? readiness?.since ?? null);
 
 	const reason = evidenceMissing
 		? "candidate_book_unavailable"
@@ -297,13 +301,7 @@ function groupOf(
 ): AttentionKind | null {
 	if (claim.terminal) return null;
 
-	if (
-		claim.status === "budget_exhausted" ||
-		["review_tokens", "repair_tokens", "run_tokens"].includes(
-			claim.reason ?? "",
-		)
-	)
-		return "budget";
+	if (claim.status === "budget_exhausted") return "budget";
 
 	if (
 		claim.pr !== null &&
@@ -454,6 +452,8 @@ export async function readAttention(input: {
 	repo: RepoSlug | null;
 	now: number;
 	thresholds?: AttentionThresholds;
+	terminalSince?: number;
+	runId?: Digest;
 }): Promise<AttentionRead> {
 	if (input.stateDir === null)
 		return { kind: "unavailable", reason: "state_not_configured" };
@@ -483,7 +483,10 @@ export async function readAttention(input: {
 	const admissions = fileAdmissionStore(root);
 
 	try {
-		const names = await readdir(join(root, "claims"));
+		const names =
+			input.runId === undefined
+				? await readdir(join(root, "claims"))
+				: [`${input.runId}.json`];
 
 		if (names.length > 10_000)
 			return { kind: "unavailable", reason: "state_unavailable" };
@@ -523,6 +526,28 @@ export async function readAttention(input: {
 		}
 
 		for (const claim of newest.values()) {
+			if (claim.terminal && input.terminalSince !== undefined) {
+				const row = objectOf(
+					await privateJson(join(root, "ledger", claim.runId, "row.json")),
+				);
+
+				const terminal =
+					row ??
+					objectOf(
+						await privateJson(
+							join(root, "ledger", claim.runId, "terminal.json"),
+						),
+					);
+
+				const observed = Date.parse(
+					stringOf(terminal?.terminalObservedAt) ?? "",
+				);
+
+				const since = Number.isFinite(observed) ? observed : claim.enteredAt;
+
+				if (since === null || since < input.terminalSince) continue;
+			}
+
 			if (claim.evidenceMissing)
 				gaps.push(`candidate_book_unavailable:${claim.runId.slice(0, 12)}`);
 			let answered = false;
@@ -665,7 +690,7 @@ export function formatAttention(attention: AttentionRead): string {
 		...ATTENTION_KINDS.flatMap((kind) =>
 			attention.groups[kind].map(
 				(entry) =>
-					`    ${kind} ${entry.prUrl ?? entry.issueUrl} age ${entry.ageMs === null ? "unknown" : `${Math.floor(entry.ageMs / 1000)}s`}${entry.stale ? " stale" : ""} ${entry.status} · ${entry.title}${entry.reason === null ? "" : ` (${entry.reason})`}`,
+					`    ${kind} ${entry.prUrl ?? entry.issueUrl} age ${entry.ageMs === null ? "unknown" : `${Math.floor(entry.ageMs / 1000)}s`}${entry.stale ? " stale" : ""} ${entry.status}${entry.reason === null ? "" : ` (${entry.reason})`}`,
 			),
 		),
 		...(attention.gaps.length === 0

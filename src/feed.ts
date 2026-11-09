@@ -6,7 +6,6 @@ import {
 	type AttentionKind,
 	type AttentionRun,
 	type AttentionThresholds,
-	plainTitle,
 } from "./attention.ts";
 import { fileAdmissionStore } from "./admission.ts";
 import {
@@ -36,8 +35,7 @@ import {
 import type { JsonValue } from "./tickets.ts";
 import { isRepoSlug, type RepoSlug } from "./workflow.ts";
 import { readStageReceipt } from "../server/sandbox.ts";
-import { isDigest, runIdOf } from "./run.ts";
-import { isRunStatus, isStage } from "./markers.ts";
+import { isDigest } from "./run.ts";
 import { readStoredVerdict } from "../server/controller.ts";
 import { FAMILY_MISSING } from "./review.ts";
 
@@ -73,10 +71,15 @@ export type OwnerFeed = {
 	entries: readonly FeedEntry[];
 	counts: Record<AttentionKind, number>;
 	workingRunCount: number;
+	durableUsage: {
+		kind: "exact" | "lower_bound" | "uncertain" | "unavailable";
+		total: number | null;
+	};
 	unreadable: readonly { issue: number; issueUrl: string; reason: string }[];
 	gaps: readonly string[];
 	metrics: {
 		computedAt: string | null;
+		stale: boolean;
 		status: string;
 		share: number | null;
 		numerator: number | null;
@@ -154,6 +157,7 @@ function metricOf(
 
 	return {
 		computedAt: textOf(saved?.computedAt),
+		stale: saved?.stale === true,
 		status: complete ? "Complete" : "Pending",
 		share: complete ? Number(share) : null,
 		numerator: complete ? countOf(primary?.numerator) : null,
@@ -410,73 +414,71 @@ async function detail(
 export async function readOwnerRun(
 	stateDir: string,
 	runId: string,
-	feed: OwnerFeed,
+	feed: OwnerHeader & { entries?: OwnerFeed["entries"] },
 ): Promise<FeedEntry | null> {
-	const existing = feed.entries.find((entry) => entry.runId === runId);
+	const existing = feed.entries?.find((entry) => entry.runId === runId);
 
 	if (existing !== undefined) return existing;
 
 	if (feed.repo === null || !isDigest(runId)) return null;
 	const root = resolve(stateDir);
-	const raw = objectOf(await localJson(root, "claims", `${runId}.json`));
-	const issue = countOf(raw?.issue);
-	const eventId = textOf(raw?.eventId);
-	const status = textOf(raw?.status);
-	const stage = textOf(raw?.stage);
+	const snapshot = await localJson(root, "metrics.json");
 
-	if (
-		issue === null ||
-		issue < 1 ||
-		eventId === null ||
-		!/^[1-9][0-9]{0,19}$/.test(eventId) ||
-		runIdOf({ repo: feed.repo, issue, eventId }) !== runId ||
-		status === null ||
-		!isRunStatus(status) ||
-		stage === null ||
-		!isStage(stage)
-	)
-		return null;
-
-	const snapshot = await fileAdmissionStore(root).readSnapshot({
+	const attention = await readAttention({
+		stateDir: root,
 		repo: feed.repo,
-		issue,
-		eventId,
+		now: feed.at,
+		thresholds: thresholdsOf(snapshot),
+		runId,
 	});
 
-	const since = countOf(raw?.enteredAt);
+	const entry =
+		attention.kind === "available"
+			? attention.runs.find((run) => run.runId === runId)
+			: undefined;
 
-	const entry = await detail(
-		root,
-		{
-			runId,
-			issue,
-			eventId,
-			status,
-			stage,
-			since,
-			ageMs: since === null || since > feed.at ? null : feed.at - since,
-			title:
-				snapshot.kind === "found"
-					? plainTitle(snapshot.snapshot.title)
-					: "Title unavailable",
-			terminal: ["landed", "released", "cancelled", "stage_passed"].includes(
-				status,
-			),
-			kind:
-				status === "failed" || status === "budget_exhausted"
-					? "failed"
-					: status === "needs_info"
-						? "question_asked"
-						: null,
-			issueUrl: `https://github.com/${feed.repo}/issues/${issue}`,
-			prUrl: null,
-			reason: null,
-			stale: false,
+	return entry === undefined ? null : detail(root, entry, feed.at);
+}
+
+export type OwnerHeader = Pick<OwnerFeed, "repo" | "at" | "controller">;
+
+export async function readOwnerHeader(
+	stateDir: string,
+	now = Date.now(),
+	repo?: RepoSlug | null,
+): Promise<OwnerHeader> {
+	const root = resolve(stateDir);
+	const slug = repo ?? (await feedRepo(root));
+	const status = slug === null ? null : objectOf(await readStatus(root));
+	const lock = await readLock(root);
+
+	return {
+		repo: slug,
+		at: now,
+		controller: {
+			state:
+				lock.kind === "socket_bound"
+					? "running"
+					: lock.kind === "none"
+						? "stopped"
+						: "unavailable",
+			lastTick: textOf(status?.at),
+			localSwitch: await fileAdmissionStore(root).localSwitch(),
 		},
-		feed.at,
-	);
+	};
+}
 
-	return entry;
+function durableUsageOf(
+	value: JsonValue | undefined,
+): OwnerFeed["durableUsage"] {
+	const saved = objectOf(value);
+	const kind = saved?.kind;
+	const total = countOf(saved?.total);
+
+	return (kind === "exact" || kind === "lower_bound" || kind === "uncertain") &&
+		total !== null
+		? { kind, total }
+		: { kind: "unavailable", total: null };
 }
 
 export async function readOwnerFeed(input: {
@@ -495,9 +497,10 @@ export async function readOwnerFeed(input: {
 		repo,
 		now,
 		thresholds: thresholdsOf(snapshot),
+		terminalSince: now - 7 * 86_400_000,
 	});
 
-	const lock = await readLock(root);
+	const header = await readOwnerHeader(root, now, repo);
 	const rawCorrupt = status?.corrupt;
 
 	const unreadable = !Array.isArray(rawCorrupt)
@@ -578,16 +581,8 @@ export async function readOwnerFeed(input: {
 		version: 1,
 		repo,
 		at: now,
-		controller: {
-			state:
-				lock.kind === "socket_bound"
-					? "running"
-					: lock.kind === "none"
-						? "stopped"
-						: "unavailable",
-			lastTick: textOf(status?.at),
-			localSwitch: await fileAdmissionStore(root).localSwitch(),
-		},
+		controller: header.controller,
+		durableUsage: durableUsageOf(objectOf(snapshot)?.durableUsage),
 		entries,
 		counts: typedCounts,
 		workingRunCount,

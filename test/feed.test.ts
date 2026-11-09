@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, lstat, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { readOwnerFeed, readOwnerRun } from "../src/feed.ts";
+import { readOwnerFeed, readOwnerRun, type FeedEntry } from "../src/feed.ts";
 import { readAttention } from "../src/attention.ts";
 import { runCli } from "../server/cli.ts";
 import { digestOf } from "../src/run.ts";
@@ -249,6 +249,98 @@ test("stage totals retain repair retry receipts with dotted attempt suffixes", a
 			feed.entries.find((entry) => entry.runId === runId)?.steps,
 			[{ stage: "build", outcome: "passed", tokens: 300, wallMs: 3000 }],
 		);
+	});
+});
+
+test("old terminal runs skip admission snapshots and stage receipts, but recently observed landings stay visible", async () => {
+	await state(async (root) => {
+		const runId = await addRun(root, 20, "landed", {
+			stage: "land",
+			enteredAt: now - 30 * 86_400_000,
+		});
+
+		await save(root, ["stages", runId, "build-1", "receipt.json"], {
+			version: 1,
+			runId,
+			stage: "build",
+			outcome: { kind: "passed" },
+			turns: 1,
+			wallMs: 1000,
+			usage: { total: 10 },
+		});
+
+		const paths = [
+			join(root, "admissions/github", repo, "20/1.json"),
+			join(root, "stages", runId, "build-1/receipt.json"),
+		];
+
+		for (const path of paths) await utimes(path, 0, 0);
+		const control = join(root, "claims", `${runId}.json`);
+		await utimes(control, 0, 0);
+		const feed = await readOwnerFeed({ stateDir: root, repo, now });
+		assert.ok(!feed.entries.some((entry) => entry.runId === runId));
+		assert.ok(
+			(await lstat(control)).atimeMs > 0,
+			"filesystem tracks reads for the control claim",
+		);
+
+		for (const path of paths)
+			assert.equal(
+				(await lstat(path)).atimeMs,
+				0,
+				`old detail was not read: ${path}`,
+			);
+		await save(root, ["ledger", runId, "terminal.json"], {
+			runId,
+			terminalObservedAt: new Date(now).toISOString(),
+		});
+		assert.ok(
+			(await readOwnerFeed({ stateDir: root, repo, now })).entries.some(
+				(entry) => entry.runId === runId,
+			),
+		);
+	});
+});
+
+test("published token-cap holds stay blocked and orange; off-feed budget stops retain their kind", async () => {
+	await state(async (root) => {
+		const feed = await readOwnerFeed({ stateDir: root, repo, now });
+		const waiting = feed.entries.find((entry) => entry.issue === 1);
+		assert.ok(waiting);
+
+		const claim = JSON.parse(
+			await readFile(join(root, "claims", `${waiting.runId}.json`), "utf8"),
+		);
+
+		for (const reason of ["run_tokens", "review_tokens", "repair_tokens"]) {
+			await save(root, ["claims", `${waiting.runId}.json`], {
+				...claim,
+				status: "blocked",
+				handoff: {
+					...claim.handoff,
+					published: {
+						...claim.handoff.published,
+						readiness: { kind: "not_ready", reason, since: now },
+					},
+					work: { kind: "held", reason, since: now },
+				},
+			});
+
+			const updated = await readOwnerFeed({ stateDir: root, repo, now });
+
+			const held: FeedEntry | undefined = updated.entries.find(
+				(entry) => entry.runId === waiting.runId,
+			);
+
+			assert.equal(held?.status, "blocked");
+			assert.equal(held?.kind, "blocked");
+			assert.equal(held?.group, "needs_you");
+		}
+
+		const budget = await addRun(root, 30, "budget_exhausted");
+		await addRun(root, 30, "running", { eventId: "2" });
+		const updated = await readOwnerFeed({ stateDir: root, repo, now });
+		assert.equal((await readOwnerRun(root, budget, updated))?.kind, "budget");
 	});
 });
 

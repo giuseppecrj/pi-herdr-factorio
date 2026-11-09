@@ -133,7 +133,7 @@ describe("/factory command", () => {
 		assert.match(text, /^execution +disabled$/m);
 	});
 
-	it("keeps offline attention titles, claim statuses and the distinct budget kind", async () => {
+	it("keeps offline attention statuses and budget kind without putting untrusted titles in context", async () => {
 		const root = await mkdtemp(join(tmpdir(), "offline-attention-"));
 
 		try {
@@ -151,7 +151,8 @@ describe("/factory command", () => {
 			assert.match(text, /workflow +unavailable/);
 			assert.match(text, /budget: 1/);
 			assert.match(text, /blocked: 0/);
-			assert.match(text, /budget_exhausted · Bound the token spend/);
+			assert.match(text, /issues\/3 age \d+s budget_exhausted/);
+			assert.doesNotMatch(text, /Bound the token spend/);
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}

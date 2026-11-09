@@ -23,8 +23,6 @@ export function expectedGap(
 		"landed",
 		"released",
 		"cancelled",
-		"failed",
-		"budget_exhausted",
 		"needs_info",
 		"stage_passed",
 	].includes(status);
@@ -104,21 +102,13 @@ function timeline(events: TimelineEvent[]) {
 	);
 }
 
-export function renderIndex(ids: string[], base: string): string {
-	return page(
-		"Runs",
-		`<h1>Run evidence</h1><p class="muted">Select one run from the local controller state.</p><ul class="runs">${ids.map((id) => `<li><a href="${base}/run/${id}/timeline"><code>${escapeHtml(id)}</code><span>View run →</span></a></li>`).join("")}</ul>${ids.length === 0 ? "<p>No runs found. This does not establish a completed run.</p>" : ""}`,
-
-		base,
-	);
-}
-
 export function renderRun(
 	run: ViewerRun,
 	view: string,
 	base: string,
 	owner?: {
 		header: string;
+		issue: number | null;
 		title: string;
 		summary: string;
 		steps: string;
@@ -127,10 +117,29 @@ export function renderRun(
 ): string {
 	const problemGaps = run.gaps.some((gap) => !expectedGap(gap, run.status));
 
+	const gapList = (expected: boolean) => {
+		const items = run.gaps.filter(
+			(gap) => expectedGap(gap, run.status) === expected,
+		);
+
+		const grouped = new Map<string, typeof items>();
+
+		for (const gap of items) {
+			const sentence = gapSentence(gap, run.status);
+			const group = grouped.get(sentence) ?? [];
+			group.push(gap);
+			grouped.set(sentence, group);
+		}
+
+		return items.length === 0
+			? ""
+			: `<h3>${expected ? "Expected" : "Problems"} <span class="count">${items.length}</span></h3><ul>${[...grouped].map(([sentence, records]) => `<li>${escapeHtml(sentence)}${records.length === 1 ? "" : ` (${records.length} records)`}<details><summary>Exact detail</summary><ul>${records.map((gap) => `<li><code>${escapeHtml(gap.source)}</code> — ${escapeHtml(gap.reason)}</li>`).join("")}</ul></details></li>`).join("")}</ul>`;
+	};
+
 	const gaps =
 		run.gaps.length === 0
 			? ""
-			: `<details class="gaps notice${problemGaps ? " notice-error" : ""}" ><summary>${problemGaps ? icons["alert-triangle"] : icons["info-circle"]}${problemGaps ? "Some required records cannot be verified" : "About this older record"}</summary><ul>${run.gaps.map((gap) => `<li>${escapeHtml(gapSentence(gap, run.status))}<details><summary>Exact detail</summary><code>${escapeHtml(gap.source)}</code> — ${escapeHtml(gap.reason)}</details></li>`).join("")}</ul></details>`;
+			: `<details class="gaps notice${problemGaps ? " notice-error" : ""}" open><summary>${problemGaps ? icons["alert-triangle"] : icons["info-circle"]}Evidence gaps</summary>${gapList(false)}${gapList(true)}</details>`;
 
 	const tabs = ["timeline", "usage", "children", "gateway"]
 		.map(
@@ -207,7 +216,7 @@ export function renderRun(
 			]),
 		)}`;
 	else
-		content = `<h2>Stage timeline</h2>${owner?.steps ?? "<p class=muted>Stage summary unavailable. The retained events are below.</p>"}<details class="raw-events"><summary>Raw session events and execution details</summary><p class="muted">Events with times are chronological. Records without times follow by attempt. A passed check on an earlier change does not prove the current change.</p>${timeline(run.timeline)}<h2>Issue snapshot (untrusted text)</h2><pre>${escapeHtml(JSON.stringify(run.issue, null, 2))}</pre></details><details class="glossary"><summary>Technical glossary</summary><dl><dt>Generation</dt><dd>One version of the proposed change.</dd><dt>Certification</dt><dd>Checks and review bound to that exact change.</dd><dt>Settlement</dt><dd>The model and its helpers finished.</dd><dt>Evidence round</dt><dd>The repair attempt that produced these records.</dd></dl></details>`;
+		content = `<div class="run-grid"><section class="evidence-card"><h2>Stage timeline</h2>${owner?.steps ?? "<p class=muted>Stage summary unavailable. The retained events are below.</p>"}</section>${gaps === "" ? "" : `<aside>${gaps}</aside>`}</div><details class="raw-events"><summary>Raw session events and execution details</summary><p class="muted">Events with times are chronological. Records without times follow by attempt. A passed check on an earlier change does not prove the current change.</p>${timeline(run.timeline)}<h2>Issue snapshot (untrusted text)</h2><pre>${escapeHtml(JSON.stringify(run.issue, null, 2))}</pre></details><details class="glossary"><summary>Technical glossary</summary><dl><dt>Generation</dt><dd>One version of the proposed change.</dd><dt>Certification</dt><dd>Checks and review bound to that exact change.</dd><dt>Settlement</dt><dd>The model and its helpers finished.</dd><dt>Evidence round</dt><dd>The repair attempt that produced these records.</dd></dl></details>`;
 
 	const title =
 		owner?.title ??
@@ -215,7 +224,7 @@ export function renderRun(
 
 	return page(
 		title,
-		`<p><a href="${base}/">All runs</a></p><p class="eyebrow">Run / <span class="status${run.status === "failed" ? " status-error" : ""}">${run.status === "failed" ? icons["alert-triangle"] : ""}${escapeHtml(run.status)}</span></p><h1 class="run-title">${escapeHtml(title)}</h1>${owner?.summary ?? ""}${owner?.links ?? ""}${gaps}<details><summary>Run ID</summary><code>${escapeHtml(run.runId)}</code></details><nav aria-label="Run views">${tabs}<a class="json" href="${base}/run/${run.runId}/${escapeHtml(view)}.json">JSON ↗</a></nav>${content}`,
+		`<p><a href="${base}/">All runs</a></p><p class="eyebrow">${owner?.issue == null ? "Run" : `Issue #${owner.issue}`} · run <code>${escapeHtml(run.runId.slice(0, 12))}</code></p><h1 class="run-title">${escapeHtml(title)}</h1>${owner?.summary ?? ""}${owner?.links ?? ""}${view === "timeline" ? "" : gaps}<nav aria-label="Run views">${tabs}<a class="json" href="${base}/run/${run.runId}/${escapeHtml(view)}.json">JSON ↗</a></nav>${content}`,
 
 		base,
 		owner?.header,

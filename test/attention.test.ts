@@ -1061,7 +1061,7 @@ test("real CLI status and registered extension compose the same local attention 
 	assert.match(sent, /blocked: 2/);
 	assert.match(
 		sent,
-		/age \d+s(?: stale)? claimed · Title unavailable \(claim_unverified:ledger:gh_failed\)/,
+		/age \d+s(?: stale)? claimed \(claim_unverified:ledger:gh_failed\)/,
 	);
 	assert.match(sent, /pr_review: 0/);
 	assert.match(sent, /candidate_book_unavailable/);

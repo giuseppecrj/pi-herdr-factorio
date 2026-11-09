@@ -108,6 +108,9 @@ export async function ownerState(root: string) {
 		at: new Date(now - 12_000).toISOString(),
 		corrupt: [{ issue: 99, defect: "duplicate_seq" }],
 	});
+	await save(root, ["metrics.json"], {
+		durableUsage: { kind: "lower_bound", total: 5200000 },
+	});
 	const refreshing = candidateLifecycleFixture();
 	assert.ok(refreshing.kind === "selected");
 

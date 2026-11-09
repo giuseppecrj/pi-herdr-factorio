@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 import { lstat, readFile, realpath, open, unlink } from "node:fs/promises";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
-import { readOwnerFeed, readOwnerRun } from "../src/feed.ts";
+import { readOwnerFeed, readOwnerRun, readOwnerHeader } from "../src/feed.ts";
 import { plainTitle } from "../src/attention.ts";
 import { textOf, objectOf } from "./sandbox/json.ts";
 import {
@@ -11,7 +11,7 @@ import {
 	renderHeader,
 	renderRunSummary,
 	renderSteps,
-	githubLink,
+	runAction,
 } from "./viewer/dashboard.ts";
 import { parseArgs } from "node:util";
 import { isDigest } from "../src/run.ts";
@@ -91,6 +91,8 @@ export async function startViewer(options: ViewerOptions) {
 		const host = req.headers.host;
 		const local = host === `127.0.0.1:${port}` || host === `localhost:${port}`;
 
+		const proxyLogin = textOf(req.headers["tailscale-user-login"]);
+
 		const exposed =
 			options.allowedHost !== undefined && host === options.allowedHost;
 
@@ -168,13 +170,35 @@ export async function startViewer(options: ViewerOptions) {
 				}
 
 				if (hold === "on" && existing === null) {
-					const file = await open(disabled, "wx", 0o600);
-					await file.close();
+					try {
+						const file = await open(disabled, "wx", 0o600);
+						await file.close();
+					} catch (error) {
+						if (
+							!(error instanceof Error) ||
+							!("code" in error) ||
+							error.code !== "EEXIST"
+						)
+							throw error;
+						const concurrent = await lstat(disabled);
+
+						if (
+							!concurrent.isFile() ||
+							concurrent.uid !== process.geteuid?.()
+						) {
+							send(409, "Hold file unavailable");
+
+							return;
+						}
+					}
 				}
 
-				if (hold === "off" && existing !== null) await unlink(disabled);
+				if (hold === "off" && existing !== null)
+					await unlink(disabled).catch((error: NodeJS.ErrnoException) => {
+						if (error.code !== "ENOENT") throw error;
+					});
 				(options.log ?? ((line) => process.stderr.write(`${line}\n`)))(
-					`at=${new Date().toISOString()} event=local_hold hold=${hold} source=${req.socket.remoteAddress ?? "unknown"} host=${host}`,
+					`at=${new Date().toISOString()} event=local_hold hold=${hold} source=${req.socket.remoteAddress ?? "unknown"} host=${host}${exposed && proxyLogin !== null ? ` proxy_reported_login=${JSON.stringify(proxyLogin)}` : ""}`,
 				);
 				res.writeHead(303, { Location: `${base}/` });
 				res.end();
@@ -224,11 +248,16 @@ export async function startViewer(options: ViewerOptions) {
 				return;
 			}
 
-			if (path === "/") {
+			if (path === "/" || /^\/\?run=[a-f0-9]{64}$/.test(path)) {
 				if (options.runId === undefined)
 					send(
 						200,
-						renderDashboard(await readOwnerFeed({ stateDir }), base, holdToken),
+						renderDashboard(
+							await readOwnerFeed({ stateDir }),
+							base,
+							holdToken,
+							path.startsWith("/?run=") ? path.slice(6) : undefined,
+						),
 						"text/html; charset=utf-8",
 					);
 				else {
@@ -288,12 +317,13 @@ export async function startViewer(options: ViewerOptions) {
 					"application/json; charset=utf-8",
 				);
 			} else {
-				const feed = await readOwnerFeed({ stateDir });
+				const feed = await readOwnerHeader(stateDir);
 				const entry = await readOwnerRun(stateDir, id, feed);
 				send(
 					200,
 					renderRun(run, view, base, {
 						header: renderHeader(feed, base, holdToken),
+						issue: entry?.issue ?? null,
 						title:
 							entry === null
 								? plainTitle(
@@ -305,16 +335,7 @@ export async function startViewer(options: ViewerOptions) {
 							entry === null
 								? "<p class=muted>Stage summary unavailable. See the retained events below.</p>"
 								: renderSteps(entry),
-						links:
-							entry === null
-								? ""
-								: githubLink(
-										entry.prUrl ?? entry.issueUrl,
-										entry.prUrl === null
-											? "Open issue on GitHub"
-											: "Open PR on GitHub",
-										true,
-									),
+						links: entry === null ? "" : runAction(entry),
 					}),
 					"text/html; charset=utf-8",
 				);

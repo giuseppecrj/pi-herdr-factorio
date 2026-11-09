@@ -7225,6 +7225,20 @@ export function startMetricSnapshots(input: {
 					input.log("metrics_unwritable", {});
 			} catch {
 				input.log("metrics_unavailable", {});
+
+				const previous = objectOf(
+					parseJson(
+						await readFile(join(input.stateDir, "metrics.json"), "utf8").catch(
+							() => "null",
+						),
+					),
+				);
+
+				if (previous !== null)
+					await writeAtomic(
+						join(input.stateDir, "metrics.json"),
+						`${JSON.stringify({ ...previous, stale: true, lastAttemptAt: new Date().toISOString() })}\n`,
+					);
 			}
 		})().finally(() => {
 			pending = null;
@@ -7254,29 +7268,32 @@ export async function serveLoop(input: {
 }): Promise<void> {
 	const { orchestrator, signal, log } = input;
 	const notify = input.notify ?? systemdNotify;
-	let ready = false;
+	let notifyMissing = false;
+
+	const ping = async (message: "READY=1" | "WATCHDOG=1") => {
+		if (notifyMissing) return;
+
+		try {
+			await notify(message);
+		} catch (error) {
+			if (error instanceof Error && "code" in error && error.code === "ENOENT")
+				notifyMissing = true;
+
+			log("notify_failed", { message });
+		}
+	};
+
+	await ping("READY=1");
 
 	while (!signal.aborted) {
+		await ping("WATCHDOG=1");
 		const report = await orchestrator.tick();
 
 		const written = await writeStatus(input.stateDir, report);
 
 		if (!written) log("status_unwritable", {});
 
-		if (written && !ready) {
-			try {
-				await notify("READY=1");
-				ready = true;
-			} catch {
-				log("notify_failed", { message: "READY=1" });
-			}
-		}
-
-		try {
-			await notify("WATCHDOG=1");
-		} catch {
-			log("notify_failed", { message: "WATCHDOG=1" });
-		}
+		await ping("WATCHDOG=1");
 
 		await input.pump?.();
 

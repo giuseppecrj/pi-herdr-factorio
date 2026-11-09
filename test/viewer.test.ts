@@ -1181,7 +1181,8 @@ test("restyled runs keep state words and evidence, with error glyphs only for fa
 		);
 
 		assert.match(neutral, /class="local">Local evidence<\/span>/);
-		assert.match(neutral, /class="status">stage_passed<\/span>/);
+		assert.match(neutral, /class="eyebrow">Run · run <code>/);
+		assert.doesNotMatch(neutral, /Run \/|stage_passed<\/span>/);
 		assert.match(neutral, /class="gaps notice"/);
 		assert.ok(neutral.includes(icons["info-circle"]));
 		assert.ok(!neutral.includes(icons["alert-triangle"]));
@@ -1195,17 +1196,18 @@ test("restyled runs keep state words and evidence, with error glyphs only for fa
 			"/factory",
 		);
 
-		assert.ok(
-			failed.includes(
-				`<span class="status status-error">${icons["alert-triangle"]}failed</span>`,
-			),
-		);
+		assert.match(failed, /class="eyebrow">Run · run <code>/);
+		assert.doesNotMatch(failed, /Run \/|class="status status-error"/);
 		assert.ok(!failed.includes('class="gaps'));
 
 		const problem = renderRun(
 			{
 				...run,
-				gaps: [{ source: "receipt.json", reason: "missing_stage_receipt" }],
+				gaps: [
+					expected,
+					{ source: "receipt.json", reason: "missing_stage_receipt" },
+					{ source: "second-receipt.json", reason: "missing_stage_receipt" },
+				],
 			},
 			"timeline",
 			"/factory",
@@ -1214,6 +1216,11 @@ test("restyled runs keep state words and evidence, with error glyphs only for fa
 		assert.match(problem, /class="gaps notice notice-error"/);
 		assert.ok(problem.includes(icons["alert-triangle"]));
 		assert.ok(problem.includes("missing_stage_receipt"));
+		assert.match(problem, /Problems <span class="count">2<\/span>/);
+		assert.match(problem, /Expected <span class="count">1<\/span>/);
+		assert.ok(problem.indexOf("Problems") < problem.indexOf("Expected"));
+		assert.match(problem, /\(2 records\)/);
+		assert.ok(problem.includes("second-receipt.json"));
 
 		for (const status of [
 			"landed",
@@ -1964,13 +1971,16 @@ test("expected missing logs stay neutral, but corrupt receipts, claims and verdi
 		{ source: "validation/verdict.json", reason: "corrupt stored verdict" },
 	])
 		assert.equal(expectedGap(gap, "landed"), false);
-	assert.equal(
-		expectedGap(
-			{ source: "stages/run", reason: "gateway audit missing" },
-			"running",
-		),
-		false,
-	);
+
+	for (const status of ["running", "failed", "budget_exhausted"])
+		for (const reason of [
+			"gateway audit missing",
+			"Pi session JSONL files missing",
+		])
+			assert.equal(
+				expectedGap({ source: "stages/run", reason }, status),
+				false,
+			);
 });
 
 test("viewer refuses missing state and occupied port", async () => {
@@ -1985,6 +1995,7 @@ test("viewer refuses missing state and occupied port", async () => {
 	const viewer = await startViewer({ stateDir: root, port: 0 });
 
 	try {
+		assert.equal(viewer.address, "127.0.0.1");
 		await assert.rejects(startViewer({ stateDir: root, port: viewer.port }));
 	} finally {
 		await viewer.close();
