@@ -41,7 +41,7 @@ Record the configured workspace root if it lives outside the state directory and
      -cpf "$BACKUP/state.tar" -C "$(dirname "$STATE")" "$(basename "$STATE")"
    sha256sum "$BACKUP/state.tar" > "$BACKUP/state.tar.sha256"
    node /home/exedev/pi-herdr-factorio/server/cli.ts status --json \
-     --repo giuseppecrj/pi-herdr-factorio --state-dir "$STATE" > "$BACKUP/status.json"
+     --repo nublai/pi-herdr-factorio --state-dir "$STATE" > "$BACKUP/status.json"
    ```
 
    Tar may report that a socket was ignored; no running stage may remain. Investigate any other warning. The sample archive covers state only; archive the source checkout, external workspaces and pinned sandbox bundles separately. Keep owner/mode metadata. Do not flatten 0700 directories and 0600 files into public permissions.

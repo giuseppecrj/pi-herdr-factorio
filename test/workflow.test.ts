@@ -45,7 +45,7 @@ function slug(text: string): RepoSlug {
 	return text;
 }
 
-const repo = slug("giuseppecrj/pi-herdr-factorio");
+const repo = slug("nublai/pi-herdr-factorio");
 const mainSha = "a".repeat(40);
 const candidateSha = "b".repeat(40);
 
@@ -53,7 +53,7 @@ const env: EnvLookup = (name) =>
 	({ HOME: "/home/factory", FACTORY_WORKSPACES: "/srv/workspaces" })[name];
 
 const valid = `---
-repository: giuseppecrj/pi-herdr-factorio
+repository: nublai/pi-herdr-factorio
 polling:
   interval_ms: 30000
 agent:
@@ -72,7 +72,7 @@ Read the diff.
 `;
 
 function frontMatter(lines: string): string {
-	return `---\nrepository: giuseppecrj/pi-herdr-factorio\n${lines}\n---\nbody\n`;
+	return `---\nrepository: nublai/pi-herdr-factorio\n${lines}\n---\nbody\n`;
 }
 
 function parse(text: string) {
@@ -1125,13 +1125,11 @@ describe("reports", () => {
 describe("githubRepoFromRemote", () => {
 	it("reads GitHub remotes and refuses others", () => {
 		assert.equal(
-			githubRepoFromRemote("git@github.com:giuseppecrj/pi-herdr-factorio.git"),
+			githubRepoFromRemote("git@github.com:nublai/pi-herdr-factorio.git"),
 			repo,
 		);
 		assert.equal(
-			githubRepoFromRemote(
-				"https://github.com/giuseppecrj/pi-herdr-factorio\n",
-			),
+			githubRepoFromRemote("https://github.com/nublai/pi-herdr-factorio\n"),
 			repo,
 		);
 		assert.equal(
@@ -1904,7 +1902,7 @@ describe("errors built from factory text", () => {
 });
 
 describe("origin parsing", () => {
-	const path = "giuseppecrj/pi-herdr-factorio";
+	const path = "nublai/pi-herdr-factorio";
 
 	const accepted = [
 		`https://github.com/${path}`,
@@ -2194,7 +2192,7 @@ describe("anchor positions from YAML tokens", () => {
 describe("valid reload onto a valid snapshot", () => {
 	it("replaces the snapshot and leaves the old one frozen and unchanged", async () => {
 		const nextText = `---
-repository: giuseppecrj/pi-herdr-factorio
+repository: nublai/pi-herdr-factorio
 polling:
   interval_ms: 60000
 stages:

@@ -16,7 +16,7 @@ Two host-owned sources select the platform. `WORKFLOW.md` never does, because a 
   "controllerLogin": "<app-slug>[bot]",
   "controllerAppSlug": "<app-slug>",
   "botEmail": "<id>+<app-slug>[bot]@users.noreply.github.com",
-  "repositories": ["giuseppecrj/pi-herdr-factorio"],
+  "repositories": ["nublai/pi-herdr-factorio"],
   "ghHost": "<label>.int.exmach.net"
 }
 ```
@@ -55,7 +55,7 @@ Every entry point uses the same resolver, `resolvePlatform`, with the environmen
 | `controllerAppSlug` | `exe-dev-github-integration` | `nubl-agent`, or the file's identity |
 | `botEmail` | `267204973+exe-dev-github-integration[bot]@users.noreply.github.com` | `353429311+nubl-agent[bot]@users.noreply.github.com`, or the file's identity |
 | `ghHost` | `github.int.exe.xyz` | `factorio.int.<domain>`, or the file's one-label `ghHost` |
-| `repositories` | `giuseppecrj/pi-herdr-factorio` | the same, or the file's list |
+| `repositories` | `nublai/pi-herdr-factorio` | the same, or the file's list |
 | `anthropicStages` | `accept`, `code-review` | `accept`, `code-review` |
 
 The `exmach` identity is the published `nubl-agent` GitHub App (app id 5645247, user id 353429311), from giuseppecrj/exmach#94. Its default `ghHost` is the dedicated `factorio` integration, the only one that will carry `actions`. That host is provisional until exmach's E1 and E2 land.
@@ -81,7 +81,7 @@ Refusal reasons: `unknown_platform`, `domain_invalid`, `platform_selection_misma
 
 ## Remaining exe-dev literals
 
-Three sites still name exe-dev values on purpose. Outside `src/platform.ts`, `rg 'exe\.xyz|exe-dev-github-integration|169\.254\.169\.254|giuseppecrj/pi-herdr-factorio' src server extension` should find only these. Any other match is a missed propagation.
+Three sites still name exe-dev values on purpose. Outside `src/platform.ts`, `rg 'exe\.xyz|exe-dev-github-integration|169\.254\.169\.254|nublai/pi-herdr-factorio' src server extension` should find only these. Any other match is a missed propagation.
 
 - `server/provision.sh:10` and `server/factory.service:13,18`. They are the exe-dev VM's provisioning and unit, and wait for MV3.
 - `server/sandbox/echo-fixture.ts:250`. It is a test fixture's redirect target, not a platform value.

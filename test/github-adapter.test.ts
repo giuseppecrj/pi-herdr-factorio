@@ -723,10 +723,10 @@ describe("GitHubTicketAdapter reads", () => {
 			),
 		);
 
-		assert.ok(!query.includes("giuseppecrj"));
+		assert.ok(!query.includes("nublai"));
 		assert.ok(!query.includes("15"));
 		assert.ok(call?.includes("number=15"));
-		assert.ok(call?.includes("owner=giuseppecrj"));
+		assert.ok(call?.includes("owner=nublai"));
 	});
 
 	it("reads a null GraphQL body and a null version diff as empty", async () => {

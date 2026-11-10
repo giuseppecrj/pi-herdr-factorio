@@ -14,7 +14,7 @@ echo "pi=$(pi --version)"
 echo "herdr=$(herdr --version)"
 echo "gh=$(gh --version | head -1)"
 echo "image=$(. /etc/os-release && echo "$PRETTY_NAME")"
-GH_HOST="${GH_HOST:?send this script with vm.sh}" gh repo view giuseppecrj/pi-herdr-factorio \
+GH_HOST="${GH_HOST:?send this script with vm.sh}" gh repo view nublai/pi-herdr-factorio \
   --json nameWithOwner,defaultBranchRef,visibility \
   --jq '"repo=" + .nameWithOwner + " default=" + .defaultBranchRef.name + " " + .visibility'
 echo "doctor=ok"

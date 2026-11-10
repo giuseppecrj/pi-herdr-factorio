@@ -150,7 +150,7 @@ const EXMACH_IDENTITY: ControllerIdentity = Object.freeze({
 });
 
 const DEFAULT_REPOSITORIES: readonly RepoSlug[] = Object.freeze(
-	["giuseppecrj/pi-herdr-factorio"].filter(isRepoSlug),
+	["nublai/pi-herdr-factorio"].filter(isRepoSlug),
 );
 
 const ANTHROPIC_STAGES: readonly ModelPosition[] = Object.freeze([

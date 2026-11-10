@@ -18,7 +18,7 @@ A passing stage spends real model tokens. The F05 probe spent 446 `openai/gpt-6.
 
 ## How to get to it (user POV)
 
-- `node server/cli.ts tick --once --json --repo giuseppecrj/pi-herdr-factorio --state-dir <dir> --issue <n>`, on the VM with the sandbox bundle installed.
+- `node server/cli.ts tick --once --json --repo nublai/pi-herdr-factorio --state-dir <dir> --issue <n>`, on the VM with the sandbox bundle installed.
 
 ## Driving it with ssh
 

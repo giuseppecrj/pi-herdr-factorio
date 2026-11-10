@@ -8,7 +8,7 @@ require_lane_ids "$pr" "$n" || exit 2
 for issue in "$@"; do
   case "$issue" in ""|0*|*[!0-9]*) printf 'refusing issue: %q\n' "$issue" >&2; exit 2;; esac
 done
-repo=giuseppecrj/pi-herdr-factorio
+repo=nublai/pi-herdr-factorio
 lane="/home/exedev/factory-verification/$pr-w$n"
 out="/tmp/swarm-$pr/worker-$n"
 mkdir -p "$out"

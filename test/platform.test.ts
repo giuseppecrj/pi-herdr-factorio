@@ -70,7 +70,7 @@ function sha(text: string): GitSha {
 	return text;
 }
 
-const repo = slug("giuseppecrj/pi-herdr-factorio");
+const repo = slug("nublai/pi-herdr-factorio");
 const mainSha = sha("a".repeat(40));
 
 const PUBLISHED_IDENTITY = {
@@ -436,7 +436,7 @@ describe("platform selection", () => {
 			botEmail:
 				"267204973+exe-dev-github-integration[bot]@users.noreply.github.com",
 			ghHost: "github.int.exe.xyz",
-			repositories: ["giuseppecrj/pi-herdr-factorio"],
+			repositories: ["nublai/pi-herdr-factorio"],
 			anthropicStages: ["accept", "code-review"],
 		});
 		assert.equal(Object.isFrozen(unset), true);
@@ -461,7 +461,7 @@ describe("platform selection", () => {
 			],
 			...PUBLISHED_IDENTITY,
 			ghHost: "factorio.int.example.net",
-			repositories: ["giuseppecrj/pi-herdr-factorio"],
+			repositories: ["nublai/pi-herdr-factorio"],
 			anthropicStages: ["accept", "code-review"],
 		});
 		assert.deepEqual(resolved("exmach:example.net", ABSENT), EXMACH);

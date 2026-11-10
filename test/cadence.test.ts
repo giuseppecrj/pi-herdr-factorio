@@ -92,7 +92,7 @@ import { EXE_DEV_PLATFORM } from "../src/platform.ts";
 import { controllerEnv, noPlatformFile } from "./helpers.ts";
 
 function repository() {
-	const value = "giuseppecrj/pi-herdr-factorio";
+	const value = "nublai/pi-herdr-factorio";
 	assert.ok(isRepoSlug(value));
 
 	return value;

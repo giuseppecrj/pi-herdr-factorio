@@ -28,7 +28,7 @@ grant_row="$(awk -F '\t' -v id="$FIXTURE_GRANT" '$2 == id { print }' "$control/d
 source "$control/.pi/skills/verify-factory/scripts/lane-id.sh"
 require_lane_ids "$pr" "$n"
 [[ "$pr" == F12a-replay-* ]] || { echo "replay requires an F12a-replay- lane" >&2; exit 2; }
-repo=giuseppecrj/pi-herdr-factorio
+repo=nublai/pi-herdr-factorio
 root="${REPLAY_ROOT:-/home/exedev/factory-verification}"
 lane="$root/$pr-w$n"
 out="${REPLAY_OUTPUT_ROOT:-/tmp/swarm-$pr/worker-$n}"
@@ -112,7 +112,7 @@ const raw = JSON.parse(await readFile(path, 'utf8'));
 const record = readReplayRecord(JSON.stringify(raw));
 const entries = async dir => readdir(dir).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
 const rows = (await entries(join(state, 'ledger'))).filter(name => /^[a-f0-9]{64}$/.test(name));
-const accounting = await readDurableAccounting(state, 'giuseppecrj/pi-herdr-factorio');
+const accounting = await readDurableAccounting(state, 'nublai/pi-herdr-factorio');
 const stageDirs = await entries(join(state, 'stages'));
 const text = await readFile(log, 'utf8').catch(error => { if (error.code === 'ENOENT') return ''; throw error; });
 const reservation = (await readReplayBudget(budget)).reservations.find(r => r.key === state);

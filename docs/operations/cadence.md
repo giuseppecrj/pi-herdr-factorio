@@ -103,7 +103,7 @@ Maintenance accounting stays under `cadence/`. `status --json` includes a separa
 
 ```bash
 node server/cli.ts cadence --once --job architecture --json \
-  --repo giuseppecrj/pi-herdr-factorio --state-dir "$STATE"
+  --repo nublai/pi-herdr-factorio --state-dir "$STATE"
 ```
 
 Jobs are `architecture`, `security`, `instructions`, `hygiene` and `reflect`. `--once`, `--job`, `--repo` and `--state-dir` are required. JSON is always returned; `--json` is accepted for consistency. The command rejects extra flags and positional arguments, uses the controller's private-directory validation, bot identity check and single-authority lock, and reads the trusted workflow from `main`. It waits for bounded settlement using the same executor. It does not dispatch or claim ticket work. Pending ready tickets and retained ticket reservations have priority.

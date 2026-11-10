@@ -4383,7 +4383,7 @@ describe("server/cli.ts controller commands", () => {
 		assert.equal(run.code, EXIT.ok, run.stderr);
 		assert.match(
 			run.stderr,
-			/event=controller_ready pid=4242 repo=giuseppecrj\/pi-herdr-factorio scope=14/,
+			/event=controller_ready pid=4242 repo=nublai\/pi-herdr-factorio scope=14/,
 		);
 		assert.match(run.stderr, /event=controller_stopping/);
 		assert.equal(run.stdout, "");

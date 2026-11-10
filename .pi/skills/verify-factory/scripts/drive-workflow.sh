@@ -7,7 +7,7 @@ require_lane_ids "$pr" "$n" || exit 2
 for ref in "$@"; do
   case "$ref" in ""|-*|*..*|*[!A-Za-z0-9._/-]*) printf 'refusing ref: %q\n' "$ref" >&2; exit 2;; esac
 done
-repo=giuseppecrj/pi-herdr-factorio
+repo=nublai/pi-herdr-factorio
 lane="/home/exedev/factory-verification/$pr-w$n"
 out="/tmp/swarm-$pr/worker-$n"
 mkdir -p "$out"

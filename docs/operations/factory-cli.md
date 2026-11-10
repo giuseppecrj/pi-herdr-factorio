@@ -36,7 +36,7 @@ The controller writes private, atomic `metrics.json` at startup and every five m
 ## Ticket outcome metrics
 
 ```bash
-node server/cli.ts metrics --json --repo giuseppecrj/pi-herdr-factorio [--ledger-file <path>] [--state-dir <dir>] [--now <instant>] [--cohort production] [--offline] [--intervention-file <fixture>]
+node server/cli.ts metrics --json --repo nublai/pi-herdr-factorio [--ledger-file <path>] [--state-dir <dir>] [--now <instant>] [--cohort production] [--offline] [--intervention-file <fixture>]
 ```
 
 `metrics` reads the locally fetched `origin/factory/ledger` ref without loading
@@ -73,7 +73,7 @@ evidence limitations. This command writes no state and takes no action.
 ## Maintenance one-shot
 
 ```bash
-node server/cli.ts cadence --once --job architecture --json --repo giuseppecrj/pi-herdr-factorio --state-dir "$STATE"
+node server/cli.ts cadence --once --job architecture --json --repo nublai/pi-herdr-factorio --state-dir "$STATE"
 ```
 
 `cadence --once` launches a bounded read-only model audit using the trusted workflow and the ordinary controller lock and executor. Required flags are `--once`, `--job <architecture|security|instructions|hygiene>`, `--repo` and `--state-dir`. It always prints JSON; `--json` is accepted but optional for this command. It takes no `--ref`, `--issue` or verification cap. It respects both switches, preflight, ticket reservations and the weekly maintenance token cap, then waits for settlement. It never claims or dispatches ticket work. A completed job/window is idempotent. Exit 0 means `proposed` or `no_delta`; exit 1 means a gate, audit failure or pending publication; exit 2 means invalid options or a held controller lock. Use authorized isolated fixture state, not the state owned by a running production controller.
@@ -287,7 +287,7 @@ node server/cli.ts admit --json --repo <owner/name> --issue <number> --state-dir
 
 `admit` admits an issue when all of these hold:
 
-- `--repo` is on the controller's allowlist. Today the allowlist is `giuseppecrj/pi-herdr-factorio`, in `FACTORY_REPOSITORIES` in `src/admission.ts`.
+- `--repo` is on the controller's allowlist. Today the allowlist is `nublai/pi-herdr-factorio`, the platform profile's default `repositories` in `src/platform.ts` ([platform](platform.md)).
 - Nothing named `<state-dir>/disabled` exists. This is the local kill switch. Create a file there to stop admission. Its content is ignored. Any entry with that name counts, including a directory or a dangling symlink.
 - The repository has a label named exactly `factory:enabled`. This is the repository kill switch, described below.
 - `.github/factory/WORKFLOW.md` on `main` is valid. `baseSha` is the `main` SHA it was loaded from.

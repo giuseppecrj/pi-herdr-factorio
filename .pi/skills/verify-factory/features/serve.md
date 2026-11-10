@@ -12,7 +12,7 @@
 
 ## How to get to it (user POV)
 
-- `node server/cli.ts serve --repo giuseppecrj/pi-herdr-factorio --state-dir <dir> --issue <n>...`
+- `node server/cli.ts serve --repo nublai/pi-herdr-factorio --state-dir <dir> --issue <n>...`
 
 ## Driving it with ssh
 

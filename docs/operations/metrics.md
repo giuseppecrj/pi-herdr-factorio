@@ -12,7 +12,7 @@ Fetch the ledger into a local remote-tracking ref, then run the report:
 ```sh
 git fetch origin refs/heads/factory/ledger:refs/remotes/origin/factory/ledger
 node --experimental-strip-types server/cli.ts metrics --json \
-  --repo giuseppecrj/pi-herdr-factorio --offline
+  --repo nublai/pi-herdr-factorio --offline
 ```
 
 The command never fetches automatically. By default it reads

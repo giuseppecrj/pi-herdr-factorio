@@ -1,6 +1,6 @@
 # OwnerFeed v1 contract
 
-OwnerFeed is the read-only projection of the factory's local state that an owner client reads. The Factory tab in Shep v3 is that client (Shep R25, decided on [#719](https://github.com/giuseppecrj/pi-herdr-factorio/issues/719)). The Shep bridge on the factory VM reads the feed locally and sends every push. The controller never calls `apns.int` and never talks to a phone.
+OwnerFeed is the read-only projection of the factory's local state that an owner client reads. The Factory tab in Shep v3 is that client (Shep R25, decided on [#719](https://github.com/nublai/pi-herdr-factorio/issues/719)). The Shep bridge on the factory VM reads the feed locally and sends every push. The controller never calls `apns.int` and never talks to a phone.
 
 This page is the contract for that bridge. It answers the five questions Shep asked on #719 and lists every field. The fields come from `src/feed.ts` and `src/attention.ts`. Where the code states no rule, the page says so and labels the rule a **proposal**.
 

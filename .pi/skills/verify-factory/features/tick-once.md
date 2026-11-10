@@ -19,8 +19,8 @@
 
 ## How to get to it (user POV)
 
-- `node server/cli.ts tick --once --json --repo giuseppecrj/pi-herdr-factorio --state-dir <dir> --issue <n>...`
-- `node server/cli.ts run --json --repo giuseppecrj/pi-herdr-factorio --issue <n> --state-dir <dir>`
+- `node server/cli.ts tick --once --json --repo nublai/pi-herdr-factorio --state-dir <dir> --issue <n>...`
+- `node server/cli.ts run --json --repo nublai/pi-herdr-factorio --issue <n> --state-dir <dir>`
 
 ## Driving it with ssh
 

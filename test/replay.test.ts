@@ -35,7 +35,7 @@ import { EXE_DEV_PLATFORM } from "../src/platform.ts";
 import { noPlatformFile } from "./helpers.ts";
 
 const corpusDir = new URL("./fixtures/replay/", import.meta.url).pathname;
-const repo = "giuseppecrj/pi-herdr-factorio";
+const repo = "nublai/pi-herdr-factorio";
 
 const syntheticWorkflow = `const BRANCH_NAME = /^[A-Za-z0-9._/-]+$/;
 

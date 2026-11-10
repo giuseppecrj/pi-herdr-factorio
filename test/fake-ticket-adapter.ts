@@ -106,7 +106,7 @@ export class FakeTicketAdapter implements TicketAdapter {
 	}
 }
 
-export const FAKE_REPO = "giuseppecrj/pi-herdr-factorio";
+export const FAKE_REPO = "nublai/pi-herdr-factorio";
 
 export const MAIN_SHA = "c".repeat(40);
 

@@ -389,11 +389,11 @@ test("8 KiB cards truncate UTF-8 safely and bind full-text bytes", async () => {
 	});
 });
 
-test("47 short inline comments overflow durably instead of retrying as unavailable", async () => {
+test("48 short inline comments overflow durably instead of retrying as unavailable", async () => {
 	const result = await classify([
 		review(1, {
 			body: "",
-			comments: Array.from({ length: 47 }, (_, n) => ({
+			comments: Array.from({ length: 48 }, (_, n) => ({
 				id: feedbackId(repo, "review-comment", 100000 + n),
 				path: "src/a.ts",
 				line: 1,
@@ -414,7 +414,7 @@ test("47 short inline comments overflow durably instead of retrying as unavailab
 		digest: digestOf(result.full),
 		bytes: Buffer.byteLength(result.full),
 	});
-	assert.equal(JSON.parse(result.full).length, 47);
+	assert.equal(JSON.parse(result.full).length, 48);
 	const root = mkdtempSync(join(tmpdir(), "feedback-"));
 
 	try {

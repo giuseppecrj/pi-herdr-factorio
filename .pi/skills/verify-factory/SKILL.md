@@ -35,7 +35,7 @@ S=.pi/skills/verify-factory/scripts
 $S/lane-setup.sh <pr-id> <worker-n>
 ```
 
-This ships `git archive HEAD` of your checkout to `/home/exedev/factory-verification/<pr-id>-w<n>/ws`, makes it a Git repository whose `origin` is `https://github.com/giuseppecrj/pi-herdr-factorio.git` so `/factory status` finds the repository, and runs `npm ci` there. State goes in `.../state`. It never touches the controller's production checkout. Commit first: uncommitted changes are not shipped. Ready means the script prints `lane=<dir> sha=<sha>`.
+This ships `git archive HEAD` of your checkout to `/home/exedev/factory-verification/<pr-id>-w<n>/ws`, makes it a Git repository whose `origin` is `https://github.com/nublai/pi-herdr-factorio.git` so `/factory status` finds the repository, and runs `npm ci` there. State goes in `.../state`. It never touches the controller's production checkout. Commit first: uncommitted changes are not shipped. Ready means the script prints `lane=<dir> sha=<sha>`.
 
 Live lanes always use a per-lane workspace and state directory under `/home/exedev/factory-verification/`. Never share one between lanes.
 
@@ -51,7 +51,7 @@ Read-only. Run it first, and again whenever anything looks off.
 $S/vm.sh $S/doctor.sh
 ```
 
-Running `$S/doctor.sh` directly does the same thing, because it sends itself through `vm.sh`. It connects with `SSH_AUTH_SOCK=$HOME/.ssh/headless-agent.sock ssh <target ssh destination>`, prints `target=<name>` first, sets `PATH` to include `$HOME/.local/bin` and `$HOME/.local/share/mise/shims`, and prints the node, Pi, Herdr and `gh` versions and the OS image. It then proves a repository-scoped read with `gh repo view giuseppecrj/pi-herdr-factorio` under the target's `GH_HOST`. Expected today on `pi-factorio`: node 26.x (at least 26.12.1), pi 1.4.0, herdr 0.9.5, and `doctor=ok` on the last line.
+Running `$S/doctor.sh` directly does the same thing, because it sends itself through `vm.sh`. It connects with `SSH_AUTH_SOCK=$HOME/.ssh/headless-agent.sock ssh <target ssh destination>`, prints `target=<name>` first, sets `PATH` to include `$HOME/.local/bin` and `$HOME/.local/share/mise/shims`, and prints the node, Pi, Herdr and `gh` versions and the OS image. It then proves a repository-scoped read with `gh repo view nublai/pi-herdr-factorio` under the target's `GH_HOST`. Expected today on `pi-factorio`: node 26.x (at least 26.12.1), pi 1.4.0, herdr 0.9.5, and `doctor=ok` on the last line.
 
 Do not call `gh api user`. The integration is repository-scoped and that call fails. The doctor prints no credentials.
 

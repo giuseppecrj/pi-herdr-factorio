@@ -12,7 +12,7 @@ F09a implements this protocol locally. Main-backed reporter/P4 proof, production
 4. On the VM, read status without advancing the controller:
 
 ```bash
-node server/cli.ts status --json --repo giuseppecrj/pi-herdr-factorio --state-dir "$STATE"
+node server/cli.ts status --json --repo nublai/pi-herdr-factorio --state-dir "$STATE"
 ```
 
 `STATE` is the existing private controller state directory. Set `GH_HOST=github.int.exe.xyz` only in the trusted VM environment, never on your workstation. Status reads the workflow through `gh` and local evidence from disk. It launches no model and writes no marker. `executionEnabled: false` at the top level describes this status command, not the daemon's readiness.
@@ -114,4 +114,4 @@ The scratch evidence supports this conditional two-rule shape, not current produ
 
 ## Keep proof labels and private evidence intact
 
-Use the [F09a verification recipe](../../.pi/skills/verify-factory/features/handoff.md) for lane prerequisites and cleanup ownership. Keep saved-state/fake-transport checks separate from real VM, Actions, and owner-action results. F08's accepted gaps remain tracked in [issue 543](https://github.com/giuseppecrj/pi-herdr-factorio/issues/543). R8 cross-family review remains incomplete. Both substantive formal explorations timed out, not passed. Never export raw private sessions or held-out material into a PR or repair session.
+Use the [F09a verification recipe](../../.pi/skills/verify-factory/features/handoff.md) for lane prerequisites and cleanup ownership. Keep saved-state/fake-transport checks separate from real VM, Actions, and owner-action results. F08's accepted gaps remain tracked in [issue 543](https://github.com/nublai/pi-herdr-factorio/issues/543). R8 cross-family review remains incomplete. Both substantive formal explorations timed out, not passed. Never export raw private sessions or held-out material into a PR or repair session.

@@ -123,7 +123,7 @@ describe("admitTicket", () => {
 
 		const record = join(
 			state,
-			"admissions/github/giuseppecrj/pi-herdr-factorio/14/34537521383.json",
+			"admissions/github/nublai/pi-herdr-factorio/14/34537521383.json",
 		);
 
 		assert.equal(statSync(record).mode & 0o777, 0o600);
@@ -643,7 +643,7 @@ describe("admission kill switches", () => {
 
 describe("admission records", () => {
 	const issueDir = (state: string) =>
-		join(state, "admissions/github/giuseppecrj/pi-herdr-factorio/14");
+		join(state, "admissions/github/nublai/pi-herdr-factorio/14");
 
 	it("refuses a file where a record directory belongs as unwritable, not duplicate", async () => {
 		const cases: [string, (state: string) => void][] = [
@@ -1458,7 +1458,7 @@ describe("F04c admission carry-overs", () => {
 
 		const path = join(
 			state,
-			"admissions/github/giuseppecrj/pi-herdr-factorio/14/34537521383.json",
+			"admissions/github/nublai/pi-herdr-factorio/14/34537521383.json",
 		);
 
 		writeFileSync(
@@ -1482,10 +1482,7 @@ describe("F04c admission carry-overs", () => {
 		github.add(labeledBy("giuseppecrj"));
 		await admit(github, state);
 
-		const dir = join(
-			state,
-			"admissions/github/giuseppecrj/pi-herdr-factorio/14",
-		);
+		const dir = join(state, "admissions/github/nublai/pi-herdr-factorio/14");
 
 		writeFileSync(join(dir, ".34537521384.ab.tmp"), "{}");
 		writeFileSync(join(dir, "notes.json"), "{}");

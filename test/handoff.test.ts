@@ -78,7 +78,7 @@ import { fieldOf, objectOf, parseJson } from "../server/sandbox/json.ts";
 import { EXE_DEV_PLATFORM } from "../src/platform.ts";
 
 const sha = "a".repeat(40);
-const repo = "giuseppecrj/pi-herdr-factorio";
+const repo = "nublai/pi-herdr-factorio";
 
 if (!isGitSha(sha) || !isRepoSlug(repo)) throw new Error("fixture");
 
@@ -6630,7 +6630,7 @@ for (const fault of ["landed_unanswered", "rejected", "lost"] as const)
 		});
 	});
 
-test("47-comment card overflow advances the stored cursor and posts one visible hold notice", async () => {
+test("48-comment card overflow advances the stored cursor and posts one visible hold notice", async () => {
 	await withLocalArtifactDownload(async (root) => {
 		const github = new FakeGitHub();
 		const issue = github.add(fakeIssue(pin.issue));
@@ -6654,7 +6654,7 @@ test("47-comment card overflow advances the stored cursor and posts one visible 
 					state: "CHANGES_REQUESTED",
 					commit: head,
 					body: "",
-					comments: Array.from({ length: 47 }, (_, n) => ({
+					comments: Array.from({ length: 48 }, (_, n) => ({
 						id: feedbackId(repo, "review-comment", 100000 + n),
 						path: "src/a.ts",
 						line: 1,

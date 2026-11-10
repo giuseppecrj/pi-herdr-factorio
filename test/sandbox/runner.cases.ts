@@ -4218,7 +4218,7 @@ describe("runStage refusal fallback", () => {
 	});
 
 	it("runs the fallback_model the workflow configures for the stage", async () => {
-		const repo = "giuseppecrj/pi-herdr-factorio";
+		const repo = "nublai/pi-herdr-factorio";
 
 		assert.ok(isRepoSlug(repo));
 
@@ -5671,7 +5671,7 @@ describe("pinned zero-token source replay", () => {
 		const expectedBodies: string[] = [];
 		const root = mkdtempSync(join(tmpdir(), "factory-eff2-replay-"));
 		t.after(() => rmSync(root, { recursive: true, force: true }));
-		const repo = "giuseppecrj/pi-herdr-factorio";
+		const repo = "nublai/pi-herdr-factorio";
 		assert.ok(isRepoSlug(repo));
 		assert.ok(isGitSha(pin.baseline));
 
