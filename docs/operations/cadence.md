@@ -1,10 +1,10 @@
 # Weekly maintenance proposals
 
-The factory runs four small, read-only audits when ticket work leaves capacity. It files findings as `factory:proposed` issues for the owner to read. It never edits code, opens a PR, applies a correction or labels a proposal ready. The owner decides whether a proposal becomes a ticket.
+The factory runs five small, read-only audits when ticket work leaves capacity. It files findings as `factory:proposed` issues for the owner to read. It never edits code, opens a PR, applies a correction or labels a proposal ready. The owner decides whether a proposal becomes a ticket.
 
 ## Jobs and limits
 
-Trusted `.github/factory/WORKFLOW.md` on `main` carries `cadence.weeklyTokenCap` and four fixed jobs under `cadence.jobs`. A missing cadence section disables new audits. Unknown jobs and fields are rejected. Jobs accept `dayUtc` (Sunday 0 through Saturday 6), `hourUtc`, `minuteUtc`, `model`, `maxTokens`, `maxTurns` and `wallMs`. There is no cron expression, local timezone, executable command or arbitrary skill selection.
+Trusted `.github/factory/WORKFLOW.md` on `main` carries `cadence.weeklyTokenCap` and five fixed jobs under `cadence.jobs`. A missing cadence section disables new audits. Unknown jobs and fields are rejected. Jobs accept `dayUtc` (Sunday 0 through Saturday 6), `hourUtc`, `minuteUtc`, `model`, `maxTokens`, `maxTurns` and `wallMs`. There is no cron expression, local timezone, executable command or arbitrary skill selection.
 
 | Job | Default due time | Skill |
 | --- | --- | --- |
@@ -12,8 +12,11 @@ Trusted `.github/factory/WORKFLOW.md` on `main` carries `cadence.weeklyTokenCap`
 | `security` | Tuesday 03:00 UTC | `security-review` in repository-scope mode, including existing defects |
 | `instructions` | Wednesday 03:00 UTC | `audit-instructions` |
 | `hygiene` | Thursday 03:00 UTC | `agent-loop-hygiene` with a bounded redacted ledger excerpt |
+| `reflect` | Friday 03:00 UTC | `reflect-ledger` and `agent-loop-spec` over redacted ledger rows and scores |
 
 Each job defaults to 40,000 tokens, 2 turns and 10 minutes, including preparation. The parser permits up to the existing 12-turn configuration bound, but maintenance always has a single model-request ceiling and no tools. There is no retry headroom within an audit. A transient upstream failure or Pi retry can end that week's job. A second full prompt could exceed 40,000 tokens. The failed window advances normally; no hidden retry spends another allowance. The token and wall bounds are unchanged. The sandbox keeps its existing 10-second cleanup reserve. Models are OpenAI only; maintenance grants no Anthropic or xAI spend. No refusal fallback runs. The weekly allowance defaults to 200,000 tokens, reset by the Monday 00:00 UTC accounting window. Dollar pricing and a dollar cap are unavailable, not zero.
+
+The five scheduled allowances total 5 × 40,000 = 200,000 tokens, equal to the unchanged weekly cap. Reflect uses the same reservation and accounting rules as the other jobs.
 
 Before launch the controller reserves the entire job allowance against that week's maintenance charges. A reservation that would exceed the weekly allowance records `budget` and launches nothing. A retained execution without a valid receipt keeps its complete reservation as an inexact charge. A settled receipt replaces that reservation with its charged tokens; ticket budgets are not borrowed or replenished.
 
@@ -25,7 +28,7 @@ A new installation waits until a job's due time in the current UTC week. Existin
 
 The controller extracts a pinned `main` snapshot. The controller builds a bounded, line-numbered excerpt before launch. Pi receives no tools, extensions or child delegation and answers in one pass. The entire repository workspace is mounted read-only. An empty `.git` mountpoint is prepared before launch and masked read-only. The agent/session directory remains writable so Pi can record its own session. The gateway exposes the pinned model route only, without npm or GitHub. All model work, turns, wall time, request ceilings, token metering, cleanup and native receipts use the normal sandbox transport.
 
-Architecture and security audit changed files first, then one rotating path group. Hygiene receives the bounded redacted ledger plus the same source selection, so its proposals can still cite real repository lines:
+Architecture and security audit changed files first, then one rotating path group. Hygiene and reflect receive the bounded redacted ledger plus the same source selection, so their proposals can still cite real repository lines:
 
 1. `src`
 2. `server`
@@ -35,13 +38,27 @@ Architecture and security audit changed files first, then one rotating path grou
 
 Instruction audits select `AGENTS.md`, `.github/factory/WORKFLOW.md` and `skills/*/SKILL.md` from their first run, independently of the code path groups.
 
-Each complete, numbered window is capped at 8 KiB. The serialized source excerpt is capped at 32 KiB, including paths, line labels, visible ranges and skipped ranges. Leading comments and import blocks are skipped without renumbering the remaining lines. Lines too large to fit a window are skipped whole, never cut in the middle of a label or source line. Lockfiles, generated filenames, `server/viewer/design/tokens.*`, `LICENSE`, fixtures, research and prototype archives are excluded. Binary files, unsafe paths, held-out acceptance and files over the citation validator's 1 MiB bound are omitted.
+Each complete, numbered window is capped at 8 KiB. The serialized source excerpt is capped at 32 KiB, including paths, line labels, visible ranges and skipped ranges. Reflect reduces that source cap to 8 KiB to leave room for its ledger and score inputs. Leading comments and import blocks are skipped without renumbering the remaining lines. Lines too large to fit a window are skipped whole, never cut in the middle of a label or source line. Lockfiles, generated filenames, `server/viewer/design/tokens.*`, `LICENSE`, fixtures, research and prototype archives are excluded. Binary files, unsafe paths, held-out acceptance and files over the citation validator's 1 MiB bound are omitted.
 
 Before assembly, the controller reads this job's last audited base SHA from its watermark state. That SHA survives receipt pruning and zero-token failures. Older state falls back to the last retained, charged execution. It runs `git diff --name-only --no-renames -z <previous-base> <current-base> --` in the controller's own pinned source checkout. This compares immutable local Git objects, never the working-tree diff, audit export or a GitHub compare endpoint. Missing local history records `changes_unavailable` before launch rather than inventing an empty change set. A first run without a previous audit uses rotation alone.
 
 Changed files, including those outside the rotating group, get the first half of the excerpt. Their windows advance each weekly execution. The remaining space goes to sorted windows packed into rotating parts, including file tails. Each return to a group selects its next part; instruction parts rotate every run. On a stable snapshot with no changed-first selection, every eligible non-import line that fits a window is eventually shown. Repository growth or a changed-first slice changes the packing, so the frozen cycle is not a promise about a moving repository. Unshown changed files, skipped ranges and omitted callers remain unknown.
 
 Existing-proposal context is capped at 4 KiB, with omissions reported. Proposals whose primary path is shown come first, and closed proposals precede open ones within that priority. This ordering applies before both the 100-entry ownership limit and the prompt byte limit. Remote and local publication deduplication is unchanged. Findings must cite ranges fully contained in the delivered excerpt, not just valid lines somewhere in the pinned file. Other files and parts are explicitly uncovered. The hygiene excerpt contains at most 20 locally retained redacted ledger rows and 16 KiB, never private sessions or held-out artifacts. A missing row or field is unknown, not success or zero cost.
+
+## Reflect evidence
+
+Reflect reads at most 20 retained redacted ledger rows within 16 KiB, plus at most 8 KiB of latest local score events. The score projection contains IDs, run and scorer IDs, timestamps, status, label, score, passing threshold and input digest. It contains no judge reasoning, transcripts or held-out tests. Missing rows, events and receipts remain unknown. `excerpt.json` freezes both projections and the supplied primary-metric status before launch.
+
+Reflect returns at most three proposals. Each adds `baseline`, `change` and `keepOrReject`, each 1–1200 characters, to the normal proposal fields. The issue begins with F12a's primary metric from the local snapshot, including pending, stale or unavailable status. Scores and token savings cannot substitute for primary improvement. The owner alone decides whether to authorize an experiment.
+
+Evidence can cite visible repository lines or these virtual paths with `start: 1, end: 1`:
+
+- `ledger/<runId>/<field.path>` must identify a row and field present in the frozen excerpt.
+- `scores/<eventId>` must identify an event present in the frozen score projection.
+- `receipts/<digest>` must occur in a supplied row's `redactedReceiptDigests`. This proves only that the redacted row names the digest, not that reflect read a private receipt.
+
+The publisher removes invented citations and drops findings with no remaining evidence. Fingerprints remain controller-generated. Existing and closed findings use F11's normal deduplication. Neither skill has tools or permission to edit prompts, skills or gates, or to open a PR.
 
 ## Scheduling and switches
 
@@ -63,7 +80,7 @@ Private state lives below `<state-dir>/cadence/<job>/`, with 0700 directories an
 - `runtime/` contains native receipt, usage checkpoint, output, gateway audit and sessions, using stage `maintain` and the execution digest rather than a ticket ID.
 - `receipt.json` records the audit result, charged tokens, exactness, answering model and native receipt digest. An empty proposal list records `no_delta`.
 - `proposals/<fingerprint>.json` keeps each immutable issue title/body intent and whether filing was confirmed.
-- `filing.json` records invalid citations and dropped findings. Invalid citations are removed; a finding with no valid evidence is dropped without stalling the job.
+- `filing.json` records invalid citations and dropped findings. Reflect keeps this diagnostic under `proposals/`; the other jobs keep it in the execution directory. Invalid citations are removed; a finding with no valid evidence is dropped without stalling the job.
 - `history.json` aggregates charges from pruned executions, preserving lifetime totals and the latest archived week's charge. Only the last five executions per job retain trees, stage output and session archives. Older execution directories and their checkout records are removed after settlement. Proposal intents stay for deduplication; status and launch accounting read bounded execution history.
 
 On restart the normal executor stops this controller's leftover scopes before cadence reads retained receipts. Cadence never blindly replays an owned model execution. A completed passing output is reused; missing completion becomes `interrupted` with its conservative reservation. For maintenance only, a complete assistant answer is also retained when a cap fires. The controller settles it only if the proposals envelope validates, including an empty list. Its cadence receipt records `answered_at_cap`; the native receipt separately preserves `budget_exhausted`, the cap and full charged usage. Truncated, refused or errored assistant messages never qualify. Ticket-stage output behavior is unchanged. Before retrying a confirmed zero-work failure, cadence removes the old receipt and syncs its directory, so a crash during that retry cannot hide spent model work. A corrupt receipt logs `cadence_receipt_corrupt`, becomes a failed receipt with the full conservative reservation, and ends that job's window without relaunching. Corrupt ownership or overlapping state still blocks cadence rather than granting another execution.
@@ -89,7 +106,7 @@ node server/cli.ts cadence --once --job architecture --json \
   --repo giuseppecrj/pi-herdr-factorio --state-dir "$STATE"
 ```
 
-Jobs are `architecture`, `security`, `instructions` and `hygiene`. `--once`, `--job`, `--repo` and `--state-dir` are required. JSON is always returned; `--json` is accepted for consistency. The command rejects extra flags and positional arguments, uses the controller's private-directory validation, bot identity check and single-authority lock, and reads the trusted workflow from `main`. It waits for bounded settlement using the same executor. It does not dispatch or claim ticket work. Pending ready tickets and retained ticket reservations have priority.
+Jobs are `architecture`, `security`, `instructions`, `hygiene` and `reflect`. `--once`, `--job`, `--repo` and `--state-dir` are required. JSON is always returned; `--json` is accepted for consistency. The command rejects extra flags and positional arguments, uses the controller's private-directory validation, bot identity check and single-authority lock, and reads the trusted workflow from `main`. It waits for bounded settlement using the same executor. It does not dispatch or claim ticket work. Pending ready tickets and retained ticket reservations have priority.
 
 Exit 0 means the selected window completed as `proposed` or `no_delta`, including an already completed window. Exit 1 means a switch, capacity, policy, budget, preflight, recovery, audit failure or pending-publication gate prevented that result. Exit 2 means invalid arguments or an already running controller. Run it only on an authorized isolated state directory when the normal controller owns production. No status subcommand is provided.
 
@@ -100,7 +117,7 @@ TMPDIR="$HOME/.cache/f11t" FACTORY_REQUIRE_SANDBOX_TESTS=1 \
   node --test test/cadence.test.ts
 ```
 
-The native one-shot demo uses the real CLI, lock, sandbox executor, Pi RPC, bubblewrap, user systemd scopes, gateway and receipts. Only GitHub and the model upstream are fixtures. It files two proposals, then zero for paraphrased/rekeyed findings in a fresh audit, including a rejected issue. It files a partially invalid finding with only its valid evidence and drops an all-invalid finding while completing filing. It also verifies an unchanged checkout, no tool definitions in the actual provider request, numbered source delivery, a read-only mount that refuses a shell write, and a withheld response that proves the scheduled tick does not wait. Injected over-cap usage proves valid empty/finding answers settle, malformed JSON fails, and full usage plus the native cap event survive restart. Fixture state and its temporary asset bundle are isolated and removed by the test. A working user bus is mandatory with `FACTORY_REQUIRE_SANDBOX_TESTS=1`; otherwise that native case explicitly skips when the bus is unavailable.
+The native one-shot demo uses the real CLI, lock, sandbox executor, Pi RPC, bubblewrap, user systemd scopes, gateway and receipts. Only GitHub and the model upstream are fixtures. It files two proposals, then zero for paraphrased/rekeyed findings in a fresh audit, including a rejected issue. It files a partially invalid finding with only its valid evidence and drops an all-invalid finding while completing filing. It also verifies an unchanged checkout, no tool definitions in the actual provider request, numbered source delivery, a read-only mount that refuses a shell write, and a withheld response that proves the scheduled tick does not wait. Injected over-cap usage proves valid empty/finding answers settle, malformed JSON fails, and full usage plus the native cap event survive restart. The F12c extension of that demo runs `cadence --once --job reflect`, files one proposal citing both a ledger field and a score event, then files zero on repeat. A real `tick --once --json` over 25 locally seeded failures files one trigger issue, zero on repeat and zero after the fixture issue is closed, without another model request. Fixture state and its temporary asset bundle are isolated and removed by the test. A working user bus is mandatory with `FACTORY_REQUIRE_SANDBOX_TESTS=1`; otherwise that native case explicitly skips when the bus is unavailable.
 
 Excerpt tests enforce deterministic byte bounds, complete numbered lines, changed-first selection, import skipping, instruction selection, exclusions and line coverage through file tails. The estimate test reads `test/fixtures/cadence/snapshot.json.gz`, a committed text snapshot at `6c00eabd780f9cda62b9f08ac3e311463f484237`, with the exclusions above. It uses the current cadence prompt and skill bytes. It never resolves `origin/main` or skips when Git is absent, so archive-only tests and shallow CI run the same estimate.
 
@@ -109,6 +126,8 @@ Excerpt tests enforce deterministic byte bounds, complete numbered lines, change
 `test/fixtures/cadence/calibration.json` records the measured F11 lane prompts, including their appended skill section. Architecture was 7,988 UTF-8 bytes / 1,683 o200k tokens; hygiene was 23,585 / 7,326; instructions was 5,448 / 1,203. In each native receipt, first input tokens equal the tokenizer count plus 533. The measured ratios range from 3.22 to 4.75 bytes/token. The estimate uses **UTF-8 bytes / 2.8, rounded up, plus 533 runtime tokens**. The smaller divisor estimates about 15% more tokens than the densest measured lane. It also keeps the old tool-bearing runtime overhead despite maintenance having no tools. The review's full-code prompts also showed why chars/4 is too optimistic.
 
 The test measures every rotating part with the maximum 4 KiB known-proposal context and a hex/JSON-shaped 16 KiB hygiene ledger. It reserves 8,800 tokens for the reviewer's 8,790-token maximum valid answer, plus 4,000 for reasoning, and requires another 4,000 tokens of headroom below 40,000. These are calibrated estimates, not new provider measurements or an absolute upper bound on provider reasoning. Native receipts still record full usage if a cap is exceeded.
+
+Reflect's separate maximum-context test uses 8 KiB source, 16 KiB ledger, 8 KiB scores and the maximum known-proposal context. It applies the same bytes/2.8 plus 533 calibration, reserves 10,000 answer tokens and 4,000 reasoning tokens, and requires total usage below 36,000. This is an estimate, not a real-provider performance result.
 
 ### Frozen-snapshot results
 
