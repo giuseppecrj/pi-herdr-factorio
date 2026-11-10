@@ -21,6 +21,7 @@ import {
 	type PlatformProfile,
 	type PlatformSummary,
 	platformSummary,
+	platformEnvironment,
 	readPlatformFile,
 	resolvePlatform,
 	soleRepository,
@@ -122,6 +123,7 @@ import {
 } from "../src/replay.ts";
 
 export const USAGE = `Usage:
+  node server/cli.ts platform --env
   node server/cli.ts replay check --json [--corpus <dir>] [--main-sha <sha>] [--previous-sha <sha>] [--candidate-sha <sha>] [--case <id> --production-state-dir <dir> --budget-file <file>]
   node server/cli.ts replay report --json --case <id> --previous-row <file> --candidate-row <file> --previous-record <file> --candidate-record <file> --previous-sha <sha> --candidate-sha <sha> [--corpus <dir>] [--previous-assets <digest> --candidate-assets <digest>]
   node server/cli.ts metrics --json --repo <owner/name> [--ledger-file <path>] [--state-dir <dir>] [--now <instant>] [--cohort production] [--offline] [--intervention-file <fixture>]
@@ -1952,6 +1954,18 @@ export async function runCli(
 	}
 
 	const { profile: platform } = resolved;
+
+	if (argv[0] === "platform") {
+		if (argv.length !== 2 || argv[1] !== "--env") {
+			io.stderr(`${USAGE}\n`);
+
+			return EXIT.usage;
+		}
+
+		io.stdout(platformEnvironment(platform));
+
+		return EXIT.ok;
+	}
 
 	if (argv[0] === "score" || argv[0] === "explain")
 		return runMeasurementCli(argv[0], argv.slice(1), io, platform);

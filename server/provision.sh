@@ -7,7 +7,6 @@ set -euo pipefail
 PI_VERSION=1.4.0
 HERDR_VERSION=0.9.5
 HERDR_SHA256=14d9e8bc8b4a9e0118d77c32266f76d461f09b40342eb23752960bd89f59929d
-LLM=https://llm.int.exe.xyz
 DEFAULT_PROVIDER=openai
 DEFAULT_MODEL=gpt-6.1-sol
 NODE_MIN=26.12.1
@@ -61,6 +60,18 @@ if ! version_at_least "$(node --version)" "$NODE_MIN"; then
   exit 1
 fi
 
+if [ "$mode" = all ]; then
+  if [ ! -d "$repo/node_modules" ]; then
+    (cd "$repo" && npm ci --ignore-scripts --no-audit --no-fund)
+  fi
+  platform_env=$(node "$repo/server/cli.ts" platform --env)
+  source /dev/stdin <<<"$platform_env"
+
+  if [ "$(loginctl show-user exedev -p Linger --value 2>/dev/null)" != yes ]; then
+    sudo loginctl enable-linger exedev
+  fi
+fi
+
 if [ "$(uname -m)" != x86_64 ]; then
   echo "provision: the herdr and node pins are for x86_64 only" >&2
   exit 1
@@ -77,13 +88,13 @@ if [ "$mode" = all ] && [ "$(herdr --version 2>/dev/null)" != "herdr $HERDR_VERS
 fi
 
 if [ "$mode" = all ]; then
-  # exe.dev injects credentials at its edge; Pi only needs a placeholder key to list the models.
+  # The platform edge injects credentials; Pi only needs a placeholder key to list the models.
   mkdir -p ~/.pi/agent
   cat >~/.pi/agent/models.json <<JSON
 {
   "providers": {
-    "anthropic": { "baseUrl": "$LLM/anthropic", "apiKey": "exe-dev-integration" },
-    "openai": { "baseUrl": "$LLM/openai/v1", "apiKey": "exe-dev-integration" }
+    "anthropic": { "baseUrl": "$LLM_ANTHROPIC_BASE_URL", "apiKey": "$GH_ENTERPRISE_TOKEN" },
+    "openai": { "baseUrl": "$LLM_OPENAI_BASE_URL", "apiKey": "$GH_ENTERPRISE_TOKEN" }
   }
 }
 JSON
@@ -141,7 +152,7 @@ printf '127.0.0.1 localhost\n::1 localhost\n' >"$b/etc/hosts"
 printf '# factory sandbox: no nameservers\n' >"$b/etc/resolv.conf"
 
 # Pi reaches the model only through the in-sandbox forwarder. The key is a placeholder:
-# exe.dev's edge authorizes the model, and the gateway strips client credentials anyway.
+# The platform edge authorizes the model, and the gateway strips client credentials anyway.
 # The anthropic baseUrl has no /v1: Pi's Anthropic SDK appends /v1/messages?beta=true. That
 # SDK (0.129.0, bundled by Pi 1.4.0) sends anthropic-version: 2023-06-01 itself, and the
 # model-anthropic route forwards it, so nothing injects the header.
@@ -187,6 +198,10 @@ fi
 
 printf 'sandbox assets %s\n' "$dest"
 if [ "$mode" = all ]; then
+  printf '%s\n' "$platform_env" >"$build/factory.env"
+  sudo install -d -m 0755 -o root -g root /etc/factory
+  sudo install -C -m 0644 -o root -g root "$build/factory.env" /etc/factory/factory.env
+
   printf 'node %s, pi %s, %s, gh %s, default %s/%s\n' "$(node --version)" "$(pi --version)" \
     "$(herdr --version)" "$(gh --version | head -1 | awk '{print $3}')" "$DEFAULT_PROVIDER" "$DEFAULT_MODEL"
 fi

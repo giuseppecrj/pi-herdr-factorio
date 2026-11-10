@@ -1,6 +1,6 @@
 # Platform profile
 
-The factory runs on one host platform at a time. A platform is a validated, immutable `PlatformProfile` from `src/platform.ts`. It holds every value that differs between hosts: the model integration, the edge address, the model base paths, the forbidden upstream domains, the controller's GitHub identity, `GH_HOST`, the repository allowlist, the read-only historical repository alias and the Anthropic stage positions. With nothing configured the profile is `exe-dev`, and behaviour is what it was before profiles existed.
+The factory runs on one host platform at a time. A platform is a validated, immutable `PlatformProfile` from `src/platform.ts`. It holds every value that differs between hosts: the model integration, the edge address, the model base paths, the forbidden upstream domains, the controller's GitHub identity, `GH_HOST`, the repository allowlist and the Anthropic stage positions. With nothing configured the profile is `exe-dev`, and behaviour is what it was before profiles existed.
 
 ## Selecting a platform
 
@@ -16,10 +16,7 @@ Two host-owned sources select the platform. `WORKFLOW.md` never does, because a 
   "controllerLogin": "<app-slug>[bot]",
   "controllerAppSlug": "<app-slug>",
   "botEmail": "<id>+<app-slug>[bot]@users.noreply.github.com",
-  "repositories": ["nublai/pi-herdr-factorio"],
-  "historicalRepositories": {
-    "nublai/pi-herdr-factorio": ["giuseppecrj/pi-herdr-factorio"]
-  },
+  "repositories": ["giuseppecrj/pi-herdr-factorio"],
   "ghHost": "<label>.int.exmach.net"
 }
 ```
@@ -35,7 +32,6 @@ These rules apply:
 - On `exmach` the file may override `ghHost` with exactly one DNS label under `int.<domain>`, such as `github.int.<domain>`. Anything else refuses with `gh_host_invalid`: two or more labels, another domain, a label that starts or ends with `-`, an empty label, uppercase or a trailing dot. A later rename of the GitHub integration then needs only this file.
 - `exe-dev` takes no identity fields and no `ghHost`, because both are fixed. They refuse with `controller_identity_unexpected` and `gh_host_unexpected`.
 - `repositories` is optional on both platforms. When present it must be a non-empty list of distinct `owner/name` slugs.
-- `historicalRepositories` is optional on both platforms. When present it replaces the built-in alias entirely, and `{}` turns the alias off. It maps a current `owner/name` to a non-empty list of former names. Every name must be a slug, a former name may appear only once, and it may not be a current name in the map. Anything else refuses with `historical_repository_invalid`. The resolved map, whether from the file or the built-in default, is then checked against the resolved `repositories`: a former name that is an active repository also refuses with `historical_repository_invalid`. So listing both `nublai/pi-herdr-factorio` and `giuseppecrj/pi-herdr-factorio` in `repositories` refuses unless the file sets `historicalRepositories` to a map that drops the old name, such as `{}`.
 - The reader does not follow a symlink. Only a missing path counts as no file. A symlink, even a dangling one, or a path that is not a regular file refuses with `platform_file_unsafe`. A file over 16 KiB is not read and refuses with `platform_file_malformed`.
 - Every value must have its JSON type. A string field given an object, an array or a number is never converted, and refuses with that field's reason.
 - Every resolved hostname, the domain, `modelHost` and `ghHost`, must be a whole DNS name: at most 253 characters, each label at most 63. A one-label `ghHost` that makes the name too long refuses with `gh_host_invalid`.
@@ -59,25 +55,12 @@ Every entry point uses the same resolver, `resolvePlatform`, with the environmen
 | `controllerAppSlug` | `exe-dev-github-integration` | `nubl-agent`, or the file's identity |
 | `botEmail` | `267204973+exe-dev-github-integration[bot]@users.noreply.github.com` | `353429311+nubl-agent[bot]@users.noreply.github.com`, or the file's identity |
 | `ghHost` | `github.int.exe.xyz` | `factorio.int.<domain>`, or the file's one-label `ghHost` |
-| `repositories` | `nublai/pi-herdr-factorio` | the same, or the file's list |
-| `historicalRepositories` | `nublai/pi-herdr-factorio` ← `giuseppecrj/pi-herdr-factorio` | the same, or the file's map |
+| `repositories` | `giuseppecrj/pi-herdr-factorio` | the same, or the file's list |
 | `anthropicStages` | `accept`, `code-review` | `accept`, `code-review` |
 
 The `exmach` identity is the published `nubl-agent` GitHub App (app id 5645247, user id 353429311), from giuseppecrj/exmach#94. Its default `ghHost` is the dedicated `factorio` integration, the only one that will carry `actions`. That host is provisional until exmach's E1 and E2 land.
 
 The sandbox prefixes do not change between platforms. The gateway strips the prefix and prepends the base path, so on `exmach` a sandbox request to `/openai/v1/responses` goes upstream to `/v1/responses`, and `/anthropic/v1/messages?beta=true` goes to `/v1/messages?beta=true`.
-
-## Historical repository alias
-
-The repository moved from `giuseppecrj/pi-herdr-factorio` to `nublai/pi-herdr-factorio` on 2026-11-10. Ledger rows recorded before the move are frozen and keep the old name. Their run IDs hash it, so they are never rewritten.
-
-The alias is read-only history. Only measurement reads it:
-
-- **Metrics.** Cohort selection counts a frozen row recorded under a former name as the current repository's. The same applies to receipt verification, owner-intervention reads and qualified defect references such as `giuseppecrj/pi-herdr-factorio#625`. GitHub reads still go to the current name. The report lists the names it counted in `historicalRepositories`.
-- **Replay.** A pair of rows recorded under a former name and the current name is the same repository, so it is not `repository_mismatch`. The same issue across the two names is still `same_fixture_issue`.
-- **Ledger.** Reading and deduplication need no alias. Each frozen row validates against its own recorded repository, and an append matches by run ID and row digest, so the moved branch dedupes an old row without a write.
-
-The alias is never trust or admission. Marker trust, PR ownership, admission receipts, claims, dispatch, publication, accounting and on-demand score or explain all compare the configured name exactly. A marker posted before the move stays untrusted under both names: its issue reports `corrupt` with `wrong_issue` and is not re-admitted. That is by design. Pre-move markers stay readable history, never authority for an active run.
 
 ## Enforcement
 
@@ -94,15 +77,20 @@ The alias is never trust or admission. Marker trust, PR ownership, admission rec
 - `status --json` prints a top-level `platform` object: `name`, `domain`, `descriptor`, `digest` and every field above. An unset selection and an explicit `exe-dev` print the same object.
 - The controller writes its own startup profile into `status.json`, shown as `controller.lastTick.platform`. If the two digests differ, the CLI's selection and the running controller's do not match.
 
-Refusal reasons: `unknown_platform`, `domain_invalid`, `platform_selection_mismatch`, `platform_file_unreadable`, `platform_file_unsafe`, `platform_file_malformed`, `version_unsupported`, `unknown_field`, `controller_identity_missing`, `controller_identity_invalid`, `controller_identity_unexpected`, `repositories_empty`, `repository_invalid`, `historical_repository_invalid`, `gh_host_invalid`, `gh_host_unexpected`, `own_domain_not_forbidden`, `internal_domain_not_forbidden` and `network_contract_mismatch`.
+Refusal reasons: `unknown_platform`, `domain_invalid`, `platform_selection_mismatch`, `platform_file_unreadable`, `platform_file_unsafe`, `platform_file_malformed`, `version_unsupported`, `unknown_field`, `controller_identity_missing`, `controller_identity_invalid`, `controller_identity_unexpected`, `repositories_empty`, `repository_invalid`, `gh_host_invalid`, `gh_host_unexpected`, `own_domain_not_forbidden`, `internal_domain_not_forbidden` and `network_contract_mismatch`.
+
+## Provisioning environment
+
+`node server/cli.ts platform --env` prints nonsecret assignments from the same resolved profile, without a workflow, lock, GitHub call or model request. Full `server/provision.sh` uses them for the host Pi configuration and installs the exact output as `/etc/factory/factory.env`, root-owned and mode 0644. `server/factory.service` requires that environment file rather than hard-coding `GH_HOST`.
+
+The assignments are `FACTORY_PLATFORM`, `GH_HOST`, `GH_ENTERPRISE_TOKEN`, `LLM_BASE_URL`, `LLM_OPENAI_BASE_URL` and `LLM_ANTHROPIC_BASE_URL`. `GH_ENTERPRISE_TOKEN` is a placeholder, `exmach` on exmach and `exe-dev-integration` on exe-dev, never a credential. The platform edge injects the real token. Provider URLs use the profile's model base paths, without a trailing slash, so the default Pi URLs remain unchanged. The sandbox still uses its own loopback URLs.
+
+After changing either selection source, rerun full provisioning before restarting the unit. The generated `FACTORY_PLATFORM` and the selection file must agree. Provisioning leaves `/etc/factory/platform.json` untouched.
 
 ## Remaining exe-dev literals
 
-Three sites still name exe-dev values on purpose. Outside `src/platform.ts`, `rg 'exe\.xyz|exe-dev-github-integration|169\.254\.169\.254|nublai/pi-herdr-factorio' src server extension` should find only these. Any other match is a missed propagation.
-
-- `server/provision.sh:10` and `server/factory.service:13,18`. They are the exe-dev VM's provisioning and unit, and wait for MV3.
-- `server/sandbox/echo-fixture.ts:250`. It is a test fixture's redirect target, not a platform value.
+`rg -n 'exe\.xyz' server src extension` now finds only the built-in exe-dev contract in `src/platform.ts` and the redirect target in `server/sandbox/echo-fixture.ts`. The latter is a test fixture, not a platform value. Provisioning and the unit no longer contain an exe-dev host.
 
 ## Not covered here
 
-Installing the unit environment and the selection file is provisioning work (MV3). Foreign-marker reporting is MV4. Widening `exmach`'s Anthropic positions and its limits table is MV7.
+Installing the optional root-owned selection file remains an operator action. Provisioning renders the unit environment but does not install or start the unit. Fresh-VM and cgroup checks remain MV3 live work. Foreign-marker reporting is MV4. Widening `exmach`'s Anthropic positions and its limits table is MV7.
