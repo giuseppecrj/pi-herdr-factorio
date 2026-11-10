@@ -43,7 +43,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
   - [ ] E3, the per-VM `llm` budget, giuseppecrj/exmach#95.
   - [ ] E4, GitHub redirect egress, giuseppecrj/exmach#96.
   - [ ] E5, the userns smoke gate, giuseppecrj/exmach#97.
-  - [ ] For `MV8` only, push v2 giuseppecrj/exmach#88, the bridge in the dev image giuseppecrj/exmach#90, the bridge push sender giuseppecrj/shep#107 and the Factory tab giuseppecrj/shep#140.
+  - [ ] For `MV8` only, the `apns` attach as `vm:factorio` in E2 (giuseppecrj/exmach#94), push v2 giuseppecrj/exmach#88, the bridge push sender giuseppecrj/shep#107, the bridge in the dev image giuseppecrj/exmach#90 or a manual install, and the Factory tab giuseppecrj/shep#140. The attach alone delivers no push, because today's `apns` contract takes only a title and body. exmach does #88 after Shep's runtimes seam, so `MV8` comes late.
 
 ### Launch owner rounds
 
@@ -106,7 +106,7 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 - [ ] Parse the profile once at controller and gateway startup in `parsePlatformProfile`. Fail closed with a named error. Trust the parsed value everywhere after that.
 - [ ] Refuse any profile whose `forbiddenDomains` lacks its own platform domain or `int.<domain>`.
 - [ ] Make the `exe-dev` default byte-equal to today's values, including `anthropicStages` set to accept and code-review only.
-- [ ] Ship the `exmach` profile with `llm.int.<domain>`, edge `10.74.1.1`, `github.int.<domain>`, and `anthropicStages` still set to accept and code-review only. `MV7` lifts it. Its base paths are OpenAI `/v1/` and Anthropic `/`, because Pi's Anthropic SDK appends `/v1/messages`. Its xAI path is `null`, and an xAI fallback is refused in workflow validation and in route construction.
+- [ ] Ship the `exmach` profile with `llm.int.<domain>`, edge `10.74.1.1`, GitHub host `factorio.int.<domain>` (the `factorio` integration that alone will carry `actions`, provisional until E1 and E2 land), and `anthropicStages` still set to accept and code-review only. `MV7` lifts it. Its base paths are OpenAI `/v1/` and Anthropic `/`, because Pi's Anthropic SDK appends `/v1/messages`. Its xAI path is `null`, and an xAI fallback is refused in workflow validation and in route construction.
 - [ ] Give the gateway a separate `--platform` descriptor. It rebuilds its expected upstreams from the built-in profile, so `productionDefect` still refuses a route table that differs. The table never authorizes itself.
 - [ ] Add a `platform` object with a stable digest to `status --json`, and record the controller's startup profile in its status snapshot.
 - [ ] Replace every hard-coded site. These are `server/sandbox/routes.ts:170`, `:176`, `:250-258` and `:518`, `src/markers.ts:14-15`, `src/publication.ts:35-36`, `src/adapters/github.ts:1179`, `server/cli.ts:1053`, `server/controller.ts:8079`, `src/admission.ts:52-54` and the `ANTHROPIC_RULE` text in `src/workflow.ts`.
@@ -131,7 +131,7 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 - [ ] Lane 4. On `pi-factorio`, start at head with a malformed `FACTORY_PLATFORM`. Save `malformed-profile.log`. Pass when it exits 2 and never falls back to `exe-dev`.
 - [ ] Lane 5. On the exmach VM, start the gateway at head with `FACTORY_PLATFORM=exmach:exmach.net` and send one OpenAI request from a sandbox. Save `exmach-openai.json`. Pass when the upstream is `llm.int.exmach.net/v1/responses` and the reply is 200.
 - [ ] Lane 6. On the exmach VM, send one Anthropic accept-stage request from a sandbox. Save `exmach-anthropic.json`. Pass when the upstream is `llm.int.exmach.net/v1/messages`, the client credential is stripped, and the reply is 200.
-- [ ] Lane 7. On the exmach VM, from a sandbox, request `https://github.int.exmach.net/`, `https://reflection.int.exmach.net/` and `https://exmach.net/`. Save `forbidden-exmach.json`. Pass when the gateway refuses all three and forwards none. The refusal reason may be `no-route`, `bad-host` or a forbidden-domain reason, because the request parser can refuse before the forbidden check runs.
+- [ ] Lane 7. On the exmach VM, from a sandbox, request `https://factorio.int.exmach.net/`, `https://github.int.exmach.net/`, `https://reflection.int.exmach.net/` and `https://exmach.net/`. Save `forbidden-exmach.json`. Pass when the gateway refuses all three and forwards none. The refusal reason may be `no-route`, `bad-host` or a forbidden-domain reason, because the request parser can refuse before the forbidden check runs.
 - [ ] Lane 8. On the exmach VM, from a sandbox, connect directly to `10.74.1.1`. Save `edge-direct.json`. Pass when the sandbox cannot reach the edge except through the gateway's pinned model route.
 - [ ] Lane 9. On `pi-factorio`, run `tick --once` at head on a lane state with one valid run marker by `exe-dev-github-integration[bot]`. Save `marker-default.json`. Pass when the marker authenticates under the default profile.
 - [ ] Lane 10. On `pi-factorio`, run `status --json` at head once with `FACTORY_PLATFORM` unset and once with `FACTORY_PLATFORM=exe-dev`. Save `explicit-default.json`. Pass when both outputs are identical.
@@ -182,7 +182,7 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 - [ ] Lane 3. Run `FACTORY_VM=factorio doctor.sh` before E2. Save `doctor-unconfigured.txt`. Pass when it exits 2 and opens no ssh connection.
 - [ ] Lane 4. Run `FACTORY_VM=nope doctor.sh`. Save `doctor-unknown.txt`. Pass when it exits 2 naming the unknown target.
 - [ ] Lane 5. After E2, run `FACTORY_VM=factorio doctor.sh`. Save `doctor-factorio.txt`. Pass when ssh, tools and a repository read succeed.
-- [ ] Lane 6. After E2, run `drive-gh.sh` reads against the exmach VM. Save `gh-reads-factorio.txt`. Pass when `gh repo view` works with `GH_HOST=github.int.exmach.net` on the VM.
+- [ ] Lane 6. After E2, run `drive-gh.sh` reads against the exmach VM. Save `gh-reads-factorio.txt`. Pass when `gh repo view` works with `GH_HOST=factorio.int.exmach.net` on the VM.
 - [ ] Lane 7. Run `lane-setup.sh` against each target. Save `lane-setup.txt`. Pass when each lane directory is created on the selected VM only.
 - [ ] Lane 8. Grep the skill for `pi-factorio.exe.xyz` and `github.int.exe.xyz`. Save `grep.txt`. Pass when only `targets.env` names them.
 - [ ] Lane 9. Run `drive-tick.sh` against `pi-factorio` on a lane state. Save `tick-pi-factorio.json`. Pass when the tick output matches trunk's shape.
@@ -485,7 +485,7 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 
 ## Prove the Factory tab and pushes end to end (MV8)
 
-**Depends on.** MV5 and MV6 landed, plus work in other projects that the Kyoko session tracks. These are giuseppecrj/exmach#88 (push v2 with routing fields and a collapse key), giuseppecrj/exmach#90 (the Shep bridge baked into the dev image) or a manual bridge install on the `factorio` VM, an `apns` integration attached to that VM, giuseppecrj/shep#107 (the bridge's push sender through the edge), and giuseppecrj/shep#140 (the Factory tab).
+**Depends on.** MV5 and MV6 landed, plus work in other projects that the Kyoko session tracks. These are the `apns` integration attached as `vm:factorio` in E2 (giuseppecrj/exmach#94), giuseppecrj/exmach#88 (edge push v2 with routing fields and a collapse key), giuseppecrj/shep#107 (the bridge's edge sender), the Shep bridge on the `factorio` VM (giuseppecrj/exmach#90 or a manual install), and giuseppecrj/shep#140 (the Factory tab). The attach alone delivers no push, so `MV8` waits for #88 and shep#107, not just E2. The edge allows 30 pushes per hour per VM with a burst of 5.
 
 **Files.**
 
@@ -577,7 +577,8 @@ These questions stay unproven.
 - **Spend.** `MV5` and `MV7` run full tickets at about 540,000 reserved tokens each. Check the program cap with the owner before they launch.
 - **Out of scope.** #717 rewrites F13's credential section in `docs/plans/factory-v1.md` in its own docs PR before F13 starts. #718 becomes its own plan after `MV5` and giuseppecrj/exmach#83.
 - **Shep's open questions (MV6).** Shep asked five feed questions on #719. Shep's Factory tab waits on `MV6`'s answers in `owner-feed.md`.
-- **Phone path in other projects (MV8).** `MV8` depends on four open items in exmach and Shep. The Kyoko session tracks them.
+- **Phone path in other projects (MV8).** `MV8` depends on the `apns` attach in E2, exmach#88, shep#107, a bridge on the VM and shep#140. exmach schedules #88 after Shep's runtimes seam, so `MV8` lands well after the cutover. The Kyoko session tracks them.
+- **Provisional GitHub host (MV1, MV2).** `factorio.int.exmach.net` is confirmed only until E1 and E2 land. A change needs only a `ghHost` override in `/etc/factory/platform.json` and the `factorio` line in `targets.env`.
 
 ## Appendix D. Links and reading list
 
