@@ -28,16 +28,27 @@ curl http://127.0.0.1:<port>/owner-feed.json
 | Code | `server/cli.ts:1207` | `server/viewer.ts:241` |
 | Needs a running process | No | Yes, `node server/cli.ts viewer` |
 | Output | Indented JSON, exit 0 | Compact JSON, `Cache-Control: no-store` |
-| Refusal | Exit 2 with usage on stderr, for bad arguments and for any thrown error | 403 unless `Host` is `127.0.0.1:<port>` or `localhost:<port>` and any `Origin` matches |
-| Median of 10 reads on fixture state | 278 ms | 3.7 ms |
+| Refusal | Exit 2 with usage on stderr, for bad arguments and for any thrown error | By default, 403 unless `Host` is `127.0.0.1:<port>` or `localhost:<port>` and any `Origin` matches. A viewer started with `--allowed-host` also accepts that one host, with a matching `https://` `Origin` (`server/viewer.ts:99` to `server/viewer.ts:110`) |
+| Median of 10 reads, development machine, 2026-11-10 | 278 ms | 3.7 ms |
+| Median of 10 reads, `pi-factorio` VM, 2026-11-10 | 621.5 ms | Not measured |
 
-Measured on 2026-11-10 on a development machine, not the exmach VM, with Node 26.13.0 and the seven-run state that `ownerState` builds in `test/fixtures/owner-feed/state.ts`. The ten CLI reads took 321, 277, 279, 280, 277, 278, 278, 280, 278 and 278 ms, timed as wall clock around the whole command. A bare `node -e 0` takes 13 ms, so nearly all of the 278 ms is loading the CLI's modules. The ten route reads were `curl` totals against a viewer already running. Production state has more runs than the fixture. The F09c performance probe in `docs/plans/factory-v1.md` found feed work under its 500 ms limit on a copy of production state, and it excluded Node start-up from that limit.
+The development-machine figures ran with Node 26.13.0 on the seven-run state that `ownerState` builds in `test/fixtures/owner-feed/state.ts`. The ten CLI reads took 321, 277, 279, 280, 277, 278, 278, 280, 278 and 278 ms, timed as wall clock around the whole command. A bare `node -e 0` takes 13 ms, so nearly all of the 278 ms is loading the CLI's modules. The ten route reads were `curl` totals against a viewer already running.
+
+The VM figure comes from the independent verifier's run of ten CLI reads on the `pi-factorio` VM on 2026-11-10. Three more sets of ten had medians of 694, 696.5 and 728 ms. **Plan against the VM figure, not the development-machine one.** The VM reads about 2.2 times slower. Production state has more runs than the fixture. The F09c performance probe in `docs/plans/factory-v1.md` found feed work under its 500 ms limit on a copy of production state, and it excluded Node start-up from that limit.
 
 **Recommendation.** Read the CLI. It needs no second process. On exmach the viewer stays on loopback, so the route only helps when someone already runs a viewer.
 
-**Allowed read rate (proposal).** The code enforces no rate. Read at most once every 5 seconds while the app is open and once every 60 seconds in the background. Keep one read in flight. A CLI read used about 0.4 seconds of CPU in five timed runs, so at 5 seconds it costs about 8% of one core.
+**Allowed read rate (proposal).** The code enforces no rate. Read at most once every 5 seconds while the app is open and once every 60 seconds in the background. Keep one read in flight. On the VM, one CLI read takes about 620 ms of wall time, so one read every 5 seconds uses about 12% of each 5-second slot. One read every 60 seconds uses about 1%. The proposed rates still hold at that cost.
 
-The bridge must run as the Unix user that owns the state directory. The feed ignores any file that is a symlink, is owned by another user, or is readable by group or others (`src/feed.ts:91`, `src/attention.ts:131`). A bridge running as another user gets an unavailable feed, not an error.
+The bridge must run as the Unix user that owns the state directory. Most of the feed's file reads ignore a file that is a symlink, is owned by another user, or is readable by group or others. Those readers are `localJson` (`src/feed.ts:91`, which checks every path part below the state directory) and `privatePath` and `privateJson` (`src/attention.ts:131` and `src/attention.ts:145`, which check the state directory, `claims/` and each file they open). These readers do not check:
+
+- `status.json` through `readStatus` (`server/controller.ts:5712`), which supplies the thresholds, the unreadable list and `controller.lastTick`. It follows symlinks and ignores owner and mode.
+- The admission snapshot that supplies `title` (`src/admission.ts:490` to `src/admission.ts:513`). It uses a plain `readFile`.
+- The local switch (`src/admission.ts:524`). It checks that the state directory belongs to the user and is not group or other writable, and it does not check the `disabled` file's owner.
+- The controller lock's holder file (`server/controller.ts:419`), which sets `controller.state`.
+- The stored verdict (`readStoredVerdict`, `server/controller.ts:5703`, through `regularBytes`, `src/artifacts.ts:232`). It rejects a symlink and a group- or other-accessible file, and does not check the owner.
+
+A bridge running as another user usually gets an unavailable feed, not an error, because the state directory itself fails the check. This PR does not harden the unchecked readers.
 
 ### Detect an unavailable feed
 
@@ -61,7 +72,19 @@ An unreadable state directory is a successful read with no data. The CLI exits 0
 | `durableUsage` | object | `kind` is `exact`, `lower_bound`, `uncertain` or `unavailable`. `total` is a number or null. |
 | `unreadable` | array | `{issue, issueUrl, reason}` for issues whose run history is corrupt. These issues have no entry. |
 | `gaps` | array of string | Codes for evidence the read could not use. |
-| `metrics` | object | `computedAt`, `stale`, `status`, `share`, `numerator`, `denominator`, `tokensPerCleanLanding`. `status` is `Complete` or `Pending`. |
+| `metrics` | object | See the next table (`src/feed.ts:80`). |
+
+`metrics` has these members. When `status` is `Pending`, `share`, `numerator`, `denominator` and `tokensPerCleanLanding` are `null`.
+
+| Member | Type | Meaning |
+| --- | --- | --- |
+| `computedAt` | string or null | When the saved metrics report was computed. |
+| `stale` | boolean | The saved report is marked stale. |
+| `status` | string | `Complete` or `Pending`. |
+| `share` | number or null | The primary share, from 0 to 1. |
+| `numerator` | number or null | The share's numerator. |
+| `denominator` | number or null | The share's denominator. |
+| `tokensPerCleanLanding` | number or null | Tokens per clean landing. |
 
 An entry (`FeedEntry`, `src/feed.ts:51`) has these fields.
 
@@ -88,7 +111,16 @@ An entry (`FeedEntry`, `src/feed.ts:51`) has these fields.
 | `ci` | string | `Passed`, `Failed` or `Pending`. |
 | `failure` | object or null | `{stage, class, reason}` from the ledger. |
 | `notProven` | array of string | Fixed sentences about what checks and review did not prove. |
-| `steps` | array | `{stage, outcome, wallMs, tokens}` per model stage that left a receipt. |
+| `steps` | array | One `FeedStep` (`src/feed.ts:42`) per model stage that left a receipt. |
+
+A `FeedStep` has these members.
+
+| Member | Type | Meaning |
+| --- | --- | --- |
+| `stage` | string | The stage the receipt names. |
+| `outcome` | string | The receipt's outcome kind, such as `passed`, `refused`, `failed` or `budget_exhausted`. |
+| `wallMs` | number or null | Wall time of the stage, in milliseconds. |
+| `tokens` | number or null | Tokens the stage used. |
 
 ### Attention kinds and groups
 
@@ -133,14 +165,14 @@ The feed keeps one run per issue. When an issue has several claims, `readAttenti
 Use these keys:
 
 - **Collapse key.** `repo` plus `issue`. One key per issue means a run that moves from `question_asked` to `question_answered`, or fails and restarts, replaces its earlier notification.
-- **Change test.** Compare `kind` and `runId` between two reads of the same key.
+- **Change test.** Compare the decision fingerprint, the three fields `kind`, `runId` and `reason`, between two reads of the same key. `reason` carries the hold reason (`src/attention.ts:632`). Two holds on one run, such as `disabled` and then `run_tokens`, keep the same `kind`, `group` and `runId` and differ only in `reason`. `test/feed.test.ts` has a case that changes only the `claim_unverified` reason of one run between two reads.
 - **Tap target.** `prUrl` when it is not null, otherwise `issueUrl`. The CLI's text report picks the same way (`src/attention.ts:693`).
 
 An issue in `unreadable` has no entry. Its key is still `repo` plus `issue`.
 
 ### Known limit, one issue can appear twice
 
-Reproduced on 2026-11-10. An older run of an issue can still be listed in `status.json` under `unverifiedClaims`. When the issue also has a newer run, the feed has two entries for the issue. The second has `kind: "blocked"`, `eventId: ""`, `title: "Title unavailable"` and `reason: "claim_unverified:issue"`. It also adds one to `counts.blocked` (`src/attention.ts:654`, `src/feed.ts:552` to `src/feed.ts:575`). The bridge must apply the collapse key to both entries. When two entries share a key, the entry with a non-empty `eventId` decides the push. This is a product defect, reported and not fixed.
+Reproduced on 2026-11-10. An older run of an issue can still be listed in `status.json` under `unverifiedClaims`. When the issue also has a newer run, the feed has two entries for the issue. The second has `kind: "blocked"`, `eventId: ""`, `title: "Title unavailable"` and `reason: "claim_unverified:issue"`. It also adds one to `counts.blocked` (`src/attention.ts:654`, `src/feed.ts:552` to `src/feed.ts:575`). The bridge must apply the collapse key to both entries. The empty-`eventId` entry can be the newer run. `test/attention.test.ts:623` builds that case, where the held run has `eventId` 2 and the listed claim is its predecessor. The feed discards the hold's event id (`src/feed.ts:552` to `src/feed.ts:561`), so v1 cannot tell which of the two entries is newer. Do not select the latest run. Keep the attention signal instead. If either entry for a key has `group: "needs_you"`, the key needs the owner. Take the fingerprint of a key with two entries as the set of fingerprints of its `needs_you` entries. This is a product defect, reported and not fixed.
 
 ## Actions
 
@@ -149,7 +181,7 @@ The app is read-only. Every action opens GitHub through `issueUrl` or `prUrl`. S
 The factory has one non-GitHub owner action, the local hold.
 
 - **The switch.** The file `$STATE/disabled` (`LOCAL_DISABLE_FILE`, `src/policy.ts:66`). While it exists, the controller admits no new ticket. It does not cancel work, reset a budget or restart a finished run. The feed shows it as `controller.localSwitch: "disabled"` (`src/admission.ts:524`).
-- **The viewer's hold form.** `POST /hold` (`server/viewer.ts:116`) creates or removes that file. It needs the exact loopback `Host`, a matching `Origin`, a form content type, and a token that changes each time the viewer starts and appears only in the dashboard HTML. The form has two fields, `token` and `hold=on|off`.
+- **The viewer's hold form.** `POST /hold` (`server/viewer.ts:116`) creates or removes that file. By default it needs the exact loopback `Host`, a matching `Origin`, a form content type, and a token that changes each time the viewer starts and appears only in the dashboard HTML. A viewer started with `--allowed-host` also accepts that one host, with a matching `https://` `Origin` (`server/viewer.ts:99` to `server/viewer.ts:110`). The form has two fields, `token` and `hold=on|off`.
 
 The CLI has no hold command. A phone action that changes the hold, or does anything else besides opening GitHub, needs its own design first. [Viewer](viewer.md) has the hold form's guards.
 
@@ -181,7 +213,7 @@ The bridge builds pushes from changes between two feed reads. The controller sen
 - The title is at most 64 bytes and the body at most 256 bytes. Both count UTF-8 bytes and are trimmed on a character boundary.
 - Pushes go through Shep's one push sender.
 
-**Proposal.** A decision is new when the key had no `needs_you` entry in the previous read, or its `kind` or `runId` differs. An unavailable read, per [Detect an unavailable feed](#detect-an-unavailable-feed), changes no state.
+**Proposal.** A decision is new when the key had no `needs_you` entry in the previous read, or one of its `needs_you` entries has a decision fingerprint (`kind`, `runId` and `reason`) that was not among the key's `needs_you` fingerprints in the previous read. An unavailable read, per [Detect an unavailable feed](#detect-an-unavailable-feed), changes no state.
 
 ## Captures
 
@@ -199,11 +231,10 @@ The bridge builds pushes from changes between two feed reads. The controller sen
 
 There is no `spec_review` capture. `test/fixtures/owner-feed/feed-v1.json` is the older multi-run golden. Each capture holds one run, so a client sees one kind at a time.
 
-To regenerate them, run both commands. The second keeps the files in the repository's format.
+To regenerate them, run the generator. It formats its own output with Biome, so a fresh run leaves `git diff --exit-code test/fixtures/owner-feed/captures` clean.
 
 ```bash
 node --experimental-strip-types test/fixtures/owner-feed/capture.ts
-npx biome format --write test/fixtures/owner-feed
 ```
 
 `test/feed.test.ts` regenerates each capture in a temporary directory and fails when it differs from the file, when a capture is not a valid v1 feed, or when the set stops covering every kind except `spec_review`.

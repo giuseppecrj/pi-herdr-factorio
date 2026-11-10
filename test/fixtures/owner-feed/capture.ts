@@ -140,15 +140,34 @@ export async function captureOwnerFeed(name: CaptureName): Promise<string> {
 }
 
 /**
- * Regenerates every capture. Run `node test/fixtures/owner-feed/capture.ts`,
- * then `npx biome format --write test/fixtures/owner-feed`.
+ * Formats JSON text the way `biome format` does, so a regenerated file already
+ * matches the committed one and needs no second command.
  */
+async function biomeFormatted(
+	text: string,
+	name: CaptureName,
+): Promise<string> {
+	const child = run(
+		join(ROOT, "node_modules", ".bin", "biome"),
+		["format", `--stdin-file-path=${name}.json`],
+		{ cwd: ROOT },
+	);
+
+	child.child.stdin?.end(text);
+
+	return (await child).stdout;
+}
+
+/** Regenerates every capture. Run `node --experimental-strip-types test/fixtures/owner-feed/capture.ts`. */
 if (import.meta.main) {
 	await mkdir(new URL("./captures/", import.meta.url), { recursive: true });
 
 	for (const name of CAPTURE_NAMES)
 		await writeFile(
 			captureFile(name),
-			`${JSON.stringify(JSON.parse(await captureOwnerFeed(name)), null, "\t")}\n`,
+			await biomeFormatted(
+				`${JSON.stringify(JSON.parse(await captureOwnerFeed(name)), null, "\t")}\n`,
+				name,
+			),
 		);
 }

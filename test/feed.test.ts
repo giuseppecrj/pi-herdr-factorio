@@ -501,3 +501,50 @@ test("the v1 check fails when any field is removed or version changes, and accep
 			);
 	}
 });
+
+/** The fields the contract's change test compares between two reads of one key. */
+function decision(entry: FeedEntry | undefined) {
+	assert.ok(entry !== undefined);
+
+	return JSON.stringify([entry.kind, entry.runId, entry.reason]);
+}
+
+test("a held run keeps its kind, group and runId when only the hold reason changes, so the decision fingerprint needs reason", async () => {
+	await state(async (root) => {
+		const runId = await addRun(root, 30, "running", { title: "Held run" });
+
+		const hold = async (why: string) => {
+			await save(root, ["status.json"], {
+				repo,
+				unverifiedClaims: [
+					{
+						issue: 30,
+						runId,
+						eventId: "1",
+						why,
+						failure: null,
+						since: now - 5,
+					},
+				],
+			});
+
+			return (await readOwnerFeed({ stateDir: root, repo, now })).entries.find(
+				(entry) => entry.issue === 30,
+			);
+		};
+
+		const first = await hold("issue");
+		const same = await hold("issue");
+		const second = await hold("timeline");
+
+		assert.equal(first?.reason, "claim_unverified:issue");
+		assert.equal(second?.reason, "claim_unverified:timeline");
+		assert.equal(first?.kind, "blocked");
+		assert.equal(first?.group, "needs_you");
+		assert.equal(second?.kind, first?.kind);
+		assert.equal(second?.group, first?.group);
+		assert.equal(second?.runId, first?.runId);
+		assert.equal(decision(same), decision(first));
+		assert.notEqual(decision(second), decision(first));
+	});
+});
