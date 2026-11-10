@@ -2,7 +2,7 @@
 set -euo pipefail
 umask 077
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
-export GH_HOST=github.int.exe.xyz
+: "${GH_HOST:?send this script with vm.sh, which exports GH_HOST from targets.env}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
 : "${FIXTURE_GRANT:?name the owner grant for fixtures, spend, production stop and installed bundle selection}"

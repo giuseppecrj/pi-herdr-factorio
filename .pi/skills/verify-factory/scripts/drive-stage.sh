@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
-export GH_HOST=github.int.exe.xyz
+: "${GH_HOST:?send this script with vm.sh, which exports GH_HOST from targets.env}"
 export XDG_RUNTIME_DIR=/run/user/1000
 pr="$1"; n="$2"; issue="${3:-}"; mode="${4:-pass}"
 require_lane_ids "$pr" "$n" || exit 2

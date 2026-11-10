@@ -25,12 +25,12 @@ Preconditions:
 - Any non-main branch you name is pushed to GitHub. The command reads GitHub, not the lane.
 
 - **Check main and a branch.** `.pi/skills/verify-factory/scripts/vm.sh .pi/skills/verify-factory/scripts/drive-workflow.sh <pr-id> <worker-n> <branch>`. The script exits 0 when every `workflow-check` exits 0 or 1 and every `status` exits 0. `workflow-evidence.txt` has one `command=... exit=... valid=... sha=... error_kind=...` line per call. Before the owner lands F04a, main gives `exit=1 valid=false error_kind="missing_workflow_file"`. A branch with a valid file gives `exit=0 valid=true verification=true`. Raw output is in `workflow-check-<ref>.json`, with `/` in the ref replaced by `_`.
-- **Confirm the SHA.** Compare the `sha` field with `GH_HOST=github.int.exe.xyz gh api repos/giuseppecrj/pi-herdr-factorio/git/ref/heads/<branch> --jq .object.sha`. They are equal.
+- **Confirm the SHA.** Compare the `sha` field with `gh api repos/giuseppecrj/pi-herdr-factorio/git/ref/heads/<branch> --jq .object.sha`, run on the VM under the target's `GH_HOST`. They are equal.
 - **Check a reload.** In the lane workspace, run `node server/cli.ts workflow-check --json --repo giuseppecrj/pi-herdr-factorio --ref <valid-branch> --reload-ref <invalid-branch>`. It exits 1. `reload.outcome` is `kept`, `reload.error` names the problem, `reload.inForce.digest` equals the top-level `digest`, and `reload.verification` is `true`.
 
 ## Gotchas
 
-- Export `GH_HOST=github.int.exe.xyz` on the VM. The drive script does it.
+- `GH_HOST` must be the target's value from `../targets.env`. `vm.sh` exports it ahead of the drive script.
 - The lane workspace's own `.github/factory/WORKFLOW.md` has no effect on the output. To test a different workflow, push it to a fixture branch and pass `--ref`. Creating that branch needs the fixture grant.
 - Exit 1 is a result, not a script failure. Exit 2 means the command line is wrong.
 - Node 26 strips types by default, so `--experimental-strip-types` is not needed.

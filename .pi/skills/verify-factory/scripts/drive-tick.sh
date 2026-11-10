@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
-export GH_HOST=github.int.exe.xyz
+: "${GH_HOST:?send this script with vm.sh, which exports GH_HOST from targets.env}"
 pr="$1"; n="$2"; mode="${3:-}"; shift 3 || true
 require_lane_ids "$pr" "$n" || exit 2
 case "$mode" in tick|run) ;; *) echo "usage: drive-tick.sh <pr-id> <worker-n> tick|run <issue>..." >&2; exit 2;; esac

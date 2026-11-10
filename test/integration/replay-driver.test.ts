@@ -331,6 +331,7 @@ esac
 
 		env = {
 			...process.env,
+			GH_HOST: "github.int.exe.invalid",
 			HOME: join(dir, "home"),
 			REPLAY_ROOT: root,
 			REPLAY_OUTPUT_ROOT: join(dir, "output"),
