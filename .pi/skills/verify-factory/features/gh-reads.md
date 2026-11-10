@@ -10,9 +10,11 @@ A user can read the repository, its labels and its issues through `gh` as the ex
 
 ## How to get to it (user POV)
 
-- `GH_HOST=github.int.exe.xyz gh repo view giuseppecrj/pi-herdr-factorio`
-- `GH_HOST=github.int.exe.xyz gh label list -R giuseppecrj/pi-herdr-factorio`
-- `GH_HOST=github.int.exe.xyz gh issue list -R giuseppecrj/pi-herdr-factorio`
+On the VM, with `GH_HOST` set to the target's value in `../targets.env`:
+
+- `gh repo view giuseppecrj/pi-herdr-factorio`
+- `gh label list -R giuseppecrj/pi-herdr-factorio`
+- `gh issue list -R giuseppecrj/pi-herdr-factorio`
 
 ## Driving it with ssh
 

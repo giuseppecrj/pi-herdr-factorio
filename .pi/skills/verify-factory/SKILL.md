@@ -5,16 +5,26 @@ description: Verify pi-herdr-factorio on its real surfaces. Use for authorized V
 
 # Verify pi-herdr-factorio
 
-The factory is a Pi package plus a controller that runs on the exe.dev VM `pi-factorio`. Drive these interfaces only under the task's grants:
+The factory is a Pi package plus a controller that runs on a verification VM, selected by name (see [Target](#target)). Drive these interfaces only under the task's grants:
 
 - the VM, over ssh as `exedev`;
-- GitHub, through repository-scoped `gh`, with `GH_HOST=github.int.exe.xyz` only in the trusted VM environment, never locally;
+- GitHub, through repository-scoped `gh`, with the target's `GH_HOST` only in the trusted VM environment, never locally;
 - the `/factory status` and `/factory run <issue>` extension commands;
 - the factory CLI, `node server/cli.ts`, documented in `docs/operations/factory-cli.md`.
 
 Run every command from the repository root of the checkout under test. Helpers live in `.pi/skills/verify-factory/scripts/`. Below, `S` means that directory.
 
 Read `.pi/skills/verify-factory/features/README.md` for the feature map and the baseline rules before you drive anything.
+
+## Target
+
+`FACTORY_VM` names the VM every helper drives. It defaults to `pi-factorio`, the exe.dev VM. `.pi/skills/verify-factory/targets.env` holds one line per target: its name, its ssh destination and the `GH_HOST` that VM uses. `vm.sh` and `lane-setup.sh` read it locally through `target.sh`.
+
+```bash
+FACTORY_VM=pi-factorio $S/vm.sh $S/doctor.sh   # same as leaving FACTORY_VM unset
+```
+
+An unknown target, or one with an empty value, exits 2 with `unknown target <name>` or `target <name> not configured`, and opens no ssh connection. The `factorio` target (exmach) stays unconfigured until that VM exists. The lane root `/home/exedev/factory-verification/` and the `exedev` user are the same on every target.
 
 ## Launch
 
@@ -41,13 +51,13 @@ Read-only. Run it first, and again whenever anything looks off.
 $S/vm.sh $S/doctor.sh
 ```
 
-It connects with `SSH_AUTH_SOCK=$HOME/.ssh/headless-agent.sock ssh exedev@pi-factorio.exe.xyz`, sets `PATH` to include `$HOME/.local/bin` and `$HOME/.local/share/mise/shims`, and prints the node, Pi, Herdr and `gh` versions and the OS image. It then proves a repository-scoped read with `GH_HOST=github.int.exe.xyz gh repo view giuseppecrj/pi-herdr-factorio`. Expected today: node 26.x (at least 26.12.1), pi 1.4.0, herdr 0.9.5, and `doctor=ok` on the last line.
+Running `$S/doctor.sh` directly does the same thing, because it sends itself through `vm.sh`. It connects with `SSH_AUTH_SOCK=$HOME/.ssh/headless-agent.sock ssh <target ssh destination>`, prints `target=<name>` first, sets `PATH` to include `$HOME/.local/bin` and `$HOME/.local/share/mise/shims`, and prints the node, Pi, Herdr and `gh` versions and the OS image. It then proves a repository-scoped read with `gh repo view giuseppecrj/pi-herdr-factorio` under the target's `GH_HOST`. Expected today on `pi-factorio`: node 26.x (at least 26.12.1), pi 1.4.0, herdr 0.9.5, and `doctor=ok` on the last line.
 
 Do not call `gh api user`. The integration is repository-scoped and that call fails. The doctor prints no credentials.
 
 ## Drive
 
-Send multi-line scripts with `ssh host bash -s < script`. `vm.sh <script> [args]` does that for you. Never put a multi-line script inside an inline ssh string.
+Send multi-line scripts with `ssh host bash -s < script`. `vm.sh <script> [args]` does that for you, for the selected target, and sends `export FACTORY_VM=<name> GH_HOST=<target GH_HOST>` ahead of the script. Never put a multi-line script inside an inline ssh string.
 
 `vm.sh` quotes each argument with bash `printf %q`, and the remote login shell parses that quoting. So the VM user's login shell must be bash. It is bash for `exedev` today.
 
@@ -63,7 +73,7 @@ $S/vm.sh $S/drive-serve.sh <pr-id> <worker-n> start <issue>... # serve, scoped, 
 $S/vm.sh $S/drive-serve.sh <pr-id> <worker-n> stop             # SIGTERM the recorded PID
 ```
 
-Every drive script exports `GH_HOST=github.int.exe.xyz`.
+Every drive script sent through `vm.sh` requires the `GH_HOST` that `vm.sh` exports and stops if it is unset. `drive-replay.sh` is the exception. It runs on the VM as a file, so its operator exports that target's `GH_HOST` from `targets.env` in the VM shell first (see `features/replay.md`).
 
 Feature recipes are in `.pi/skills/verify-factory/features/`. Each lists the command and the observable result that proves it.
 
@@ -138,8 +148,9 @@ Run cleanup after a failed attempt too.
 
 | Script | Where it runs | Invocation |
 | --- | --- | --- |
-| `vm.sh` | local | `vm.sh <script> [args]` |
-| `doctor.sh` | VM | `vm.sh doctor.sh` |
+| `vm.sh` | local | `[FACTORY_VM=<target>] vm.sh <script> [args]` |
+| `target.sh` | local, sourced by `vm.sh` and `lane-setup.sh` | not run directly |
+| `doctor.sh` | VM | `vm.sh doctor.sh`, or `doctor.sh`, which calls `vm.sh` |
 | `lane-setup.sh` | local, calls `remote-setup.sh` | `lane-setup.sh <pr-id> <n>` |
 | `drive-status.sh` | VM | `vm.sh drive-status.sh <pr-id> <n>` |
 | `drive-gh.sh` | VM | `vm.sh drive-gh.sh <pr-id> <n>` |

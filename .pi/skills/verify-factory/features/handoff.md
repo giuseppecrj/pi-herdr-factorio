@@ -16,7 +16,7 @@ Use this recipe for the ten F09a live lanes in the [plan](../../../../docs/plans
 3. Allocate a unique `[F09a-<lane>]` issue and private state directory. Never run competing controllers on the same issue or replace production state. Reserve full specify, accept, build, review, and any planned retry allowances before launch. Do not lower a stage below the plan's rule unless testing exhaustion.
 4. Before positive native reporter/P4 or runtime handoff proof, require the owner-merged bootstrap containing both `ci.yml` and `check.yml`. Without it, mark that proof blocked. Local emitter tests and historical scratch checks cannot substitute. Production protections remain owner-applied after supported P4.
 
-All commands below run in the authorized VM lane checkout. `STATE`, `ISSUE`, `PR`, `HEAD`, and `RUN_ID` are captured fixture values, not invented IDs. Use `GH_HOST=github.int.exe.xyz` only there. Start from the standard lane setup, which creates the private state directory.
+All commands below run in the authorized VM lane checkout. `STATE`, `ISSUE`, `PR`, `HEAD`, and `RUN_ID` are captured fixture values, not invented IDs. Use the target's `GH_HOST` from `../targets.env` only there. Start from the standard lane setup, which creates the private state directory.
 
 ## Driving it with CLI and gh
 

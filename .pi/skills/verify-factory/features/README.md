@@ -13,8 +13,8 @@
 ## Driving conventions
 
 - `S` is `.pi/skills/verify-factory/scripts`. Run commands from the repository root.
-- Send scripts with `$S/vm.sh`. Do not inline multi-line scripts in ssh.
-- Only in the trusted VM environment, use `GH_HOST=github.int.exe.xyz` and repository-scoped `gh` reads. Never set that host locally. Do not call `gh api user`.
+- Send scripts with `$S/vm.sh`. Do not inline multi-line scripts in ssh. `FACTORY_VM` selects the target VM, default `pi-factorio`; see "Target" in `../SKILL.md`.
+- Only in the trusted VM environment, use the target's `GH_HOST` from `../targets.env` and repository-scoped `gh` reads. Never set that host locally. Do not call `gh api user`.
 - Do not remove evidence during cleanup.
 
 ## Proof and skip reporting
