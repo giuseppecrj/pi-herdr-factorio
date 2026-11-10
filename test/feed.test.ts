@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { readOwnerFeed, readOwnerRun, type FeedEntry } from "../src/feed.ts";
-import { readAttention } from "../src/attention.ts";
+import { ATTENTION_KINDS, readAttention } from "../src/attention.ts";
+import { objectOf, parseJson } from "../server/sandbox/json.ts";
+import type { JsonValue } from "../src/tickets.ts";
 import { runCli } from "../server/cli.ts";
 import { digestOf } from "../src/run.ts";
 import { AUTONOMY_DIGEST } from "../src/ledger.ts";
@@ -16,6 +18,15 @@ import {
 	repo,
 	save,
 } from "./fixtures/owner-feed/state.ts";
+import {
+	CAPTURE_NAMES,
+	CAPTURED_KINDS,
+	captureFile,
+	captureOwnerFeed,
+	redactionProblems,
+	type CaptureName,
+} from "./fixtures/owner-feed/capture.ts";
+import { v1Problems } from "./fixtures/owner-feed/contract.ts";
 
 async function state<T>(body: (root: string) => Promise<T>) {
 	const root = await mkdtemp(join(tmpdir(), "owner-feed-"));
@@ -355,5 +366,185 @@ test("private fixtures also work at restrictive umasks without changing their se
 			const feed = await readOwnerFeed({ stateDir: root, repo, now });
 			assert.equal(feed.entries.length, 7);
 		});
+	});
+});
+
+async function committed(name: CaptureName): Promise<JsonValue> {
+	const feed = parseJson(await readFile(captureFile(name), "utf8"));
+	assert.ok(feed !== undefined, `${name} capture is not JSON`);
+
+	return feed;
+}
+
+type FieldPath = readonly (string | number)[];
+
+function fieldPaths(value: JsonValue, prefix: FieldPath = []): FieldPath[] {
+	if (Array.isArray(value))
+		return value.flatMap((item, index) => fieldPaths(item, [...prefix, index]));
+	const object = objectOf(value);
+
+	return object === null
+		? []
+		: Object.entries(object).flatMap(([key, child]) => [
+				[...prefix, key],
+				...fieldPaths(child, [...prefix, key]),
+			]);
+}
+
+function without(value: JsonValue, path: FieldPath): JsonValue {
+	const [head, ...rest] = path;
+
+	if (head === undefined) return value;
+
+	if (Array.isArray(value))
+		return value.map((item, index) =>
+			index === head ? without(item, rest) : item,
+		);
+	const object = objectOf(value);
+
+	if (object === null) return value;
+
+	return Object.fromEntries(
+		Object.entries(object).flatMap(([key, child]): [string, JsonValue][] =>
+			key !== head
+				? [[key, child]]
+				: rest.length === 0
+					? []
+					: [[key, without(child, rest)]],
+		),
+	);
+}
+
+function withField(feed: JsonValue, key: string, value: JsonValue): JsonValue {
+	const object = objectOf(feed);
+	assert.ok(object !== null);
+
+	return { ...object, [key]: value };
+}
+
+test("every capture is the real CLI's v1 output and together they cover every attention kind", async () => {
+	const seen = new Set<string>();
+
+	for (const name of CAPTURE_NAMES) {
+		const saved = await committed(name);
+		assert.deepEqual(v1Problems(saved), [], `${name} is not a v1 feed`);
+
+		assert.deepEqual(
+			parseJson(await captureOwnerFeed(name)),
+			saved,
+			`${name} differs from the CLI output; run node test/fixtures/owner-feed/capture.ts`,
+		);
+
+		const feed = objectOf(saved);
+		const counts = objectOf(feed?.counts);
+		const entries = Array.isArray(feed?.entries) ? feed.entries : [];
+		assert.equal(entries.length, 1, `${name} holds exactly one run`);
+		const kind = objectOf(entries[0])?.kind;
+
+		if (name === "working") {
+			assert.equal(kind, null);
+			assert.equal(feed?.workingRunCount, 1);
+		} else {
+			assert.equal(kind, name);
+			assert.equal(counts?.[name], 1);
+			seen.add(name);
+		}
+
+		assert.equal(counts?.spec_review, 0);
+	}
+
+	assert.deepEqual([...seen].sort(), [...CAPTURED_KINDS].sort());
+
+	// spec_review is the one kind with no capture. No state can produce it.
+	assert.deepEqual(
+		ATTENTION_KINDS.filter((kind) => !seen.has(kind)),
+		["spec_review"],
+	);
+});
+
+test("captures carry no state path, home path or issue body", async () => {
+	for (const name of CAPTURE_NAMES)
+		assert.deepEqual(
+			redactionProblems(
+				await readFile(captureFile(name), "utf8"),
+				"/tmp/owner-feed-capture-fixture",
+			),
+			[],
+			name,
+		);
+});
+
+test("the v1 check fails when any field is removed or version changes, and accepts a new field", async () => {
+	const feeds = [
+		parseJson(
+			await readFile(
+				new URL("./fixtures/owner-feed/feed-v1.json", import.meta.url),
+				"utf8",
+			),
+		),
+		...(await Promise.all(CAPTURE_NAMES.map(committed))),
+	];
+
+	for (const feed of feeds) {
+		assert.ok(feed !== undefined);
+		assert.deepEqual(v1Problems(feed), []);
+		assert.deepEqual(v1Problems(withField(feed, "addedLater", 1)), []);
+		assert.notDeepEqual(v1Problems(withField(feed, "version", 2)), []);
+		assert.notDeepEqual(v1Problems(withField(feed, "version", "1")), []);
+		assert.notDeepEqual(v1Problems(withField(feed, "at", "now")), []);
+
+		for (const path of fieldPaths(feed))
+			assert.notDeepEqual(
+				v1Problems(without(feed, path)),
+				[],
+				`removing ${path.join(".")} must fail the v1 check`,
+			);
+	}
+});
+
+/** The fields the contract's change test compares between two reads of one key. */
+function decision(entry: FeedEntry | undefined) {
+	assert.ok(entry !== undefined);
+
+	return JSON.stringify([entry.kind, entry.runId, entry.reason]);
+}
+
+test("a held run keeps its kind, group and runId when only the hold reason changes, so the decision fingerprint needs reason", async () => {
+	await state(async (root) => {
+		const runId = await addRun(root, 30, "running", { title: "Held run" });
+
+		const hold = async (why: string) => {
+			await save(root, ["status.json"], {
+				repo,
+				unverifiedClaims: [
+					{
+						issue: 30,
+						runId,
+						eventId: "1",
+						why,
+						failure: null,
+						since: now - 5,
+					},
+				],
+			});
+
+			return (await readOwnerFeed({ stateDir: root, repo, now })).entries.find(
+				(entry) => entry.issue === 30,
+			);
+		};
+
+		const first = await hold("issue");
+		const same = await hold("issue");
+		const second = await hold("timeline");
+
+		assert.equal(first?.reason, "claim_unverified:issue");
+		assert.equal(second?.reason, "claim_unverified:timeline");
+		assert.equal(first?.kind, "blocked");
+		assert.equal(first?.group, "needs_you");
+		assert.equal(second?.kind, first?.kind);
+		assert.equal(second?.group, first?.group);
+		assert.equal(second?.runId, first?.runId);
+		assert.equal(decision(same), decision(first));
+		assert.notEqual(decision(second), decision(first));
 	});
 });

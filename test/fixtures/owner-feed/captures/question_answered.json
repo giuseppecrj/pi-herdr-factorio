@@ -1,0 +1,61 @@
+{
+	"version": 1,
+	"repo": "giuseppecrj/pi-herdr-factorio",
+	"at": 1794247200000,
+	"controller": {
+		"state": "stopped",
+		"lastTick": "2026-11-09T17:59:48.000Z",
+		"localSwitch": "enabled"
+	},
+	"durableUsage": {
+		"kind": "unavailable",
+		"total": null
+	},
+	"entries": [
+		{
+			"issue": 12,
+			"eventId": "2",
+			"stage": "specify",
+			"since": 1794247199000,
+			"terminal": false,
+			"kind": "question_answered",
+			"title": "Continue after the owner answered",
+			"status": "running",
+			"stale": false,
+			"runId": "69a3f12d321e965da70cd7418f2d9f583237ffc14f44d0a87aa8e104ea5a640b",
+			"issueUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/issues/12",
+			"prUrl": null,
+			"ageMs": 1000,
+			"reason": null,
+			"group": "working",
+			"round": 0,
+			"tokens": 1234,
+			"cap": null,
+			"ci": "Pending",
+			"failure": null,
+			"notProven": [],
+			"steps": []
+		}
+	],
+	"counts": {
+		"question_asked": 0,
+		"question_answered": 1,
+		"spec_review": 0,
+		"pr_review": 0,
+		"blocked": 0,
+		"budget": 0,
+		"failed": 0
+	},
+	"workingRunCount": 0,
+	"unreadable": [],
+	"gaps": [],
+	"metrics": {
+		"computedAt": null,
+		"stale": false,
+		"status": "Pending",
+		"share": null,
+		"numerator": null,
+		"denominator": null,
+		"tokensPerCleanLanding": null
+	}
+}
