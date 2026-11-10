@@ -5,7 +5,7 @@ The owner gets the same factory on a platform with no exe.dev credit spend and n
 The rule this program enforces is that no platform value is hard-coded, and a profile that does not forbid its own domain refuses to start.
 The cutover is done when a `factory:ready` issue becomes a ready PR with the controller on exmach and markers signed by the new bot.
 Implement `MV1` to `MV8`. `MV1`, `MV2` and `MV6` are independent and start now. `MV3` and `MV4` stack on `MV1`.
-`MV5` is the cutover and waits for exmach E1 to E4. `MV7` follows the cutover. `MV8` proves the phone path after `MV5` and `MV6`.
+`MV5` is the cutover and waits for exmach E1 to E4, which now come after exmach's M5, #51 and a clean self-host install milestone. `MV7` follows the cutover. `MV8` proves the phone path after `MV5` and `MV6`.
 Items #717 (F13 Linear) and #718 (bootstrap kit) stay outside this plan. Appendix C says where they go.
 
 ## How to read this
@@ -36,7 +36,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 - [ ] Run the audit at every child delivery, at every stall or no-progress advisory, and on the operator's request. Nothing schedules it, so never promise a timed cadence and never leave the audit to memory.
 - [ ] Use this audit prompt, verbatim. "Re-read the execution playbook. Audit the operation against it and fix drift in this audit. Check every active lane and judge progress by side effects only. Cancel a stuck lane and launch its fresh replacement now. Then post a short status message to the operator in chat only when the audit found a tracked change that no earlier status message reported, such as a PR opened, a code-ready head, a round launched or closed, a verdict, a merge, a stuck agent and the action taken, a blocker added or cleared, or a decision only the operator can make. Name every such change and nothing else. Do not repeat a table, the merged list, or an unchanged blocker. If the audit found none, end the turn with no reply text. Either way, log this audit's row in your decision trail. The row names the items reported, or none."
 - [ ] On the operator's hold or stand-down, cancel every running child with `subagent_cancel` at once and launch nothing new.
-- [ ] Track the gates in other projects at every audit with read-only `gh issue view <n> --repo <repo>`. exmach's order is M5 backups (giuseppecrj/exmach#29), then giuseppecrj/exmach#51, then E1 to E4 (decision C2).
+- [ ] Track the gates in other projects at every audit with read-only `gh issue view <n> --repo <repo>`. exmach's order is M5 backups (giuseppecrj/exmach#29), then giuseppecrj/exmach#51, then a clean self-host install milestone, then E1 to E4 (the owner's 2026-11-10 update to decision C2). At last check the install milestone had no issue of its own, and giuseppecrj/exmach#83 is the self-hosting audit behind it.
   - [ ] M5, the off-host backup target and restore drill, giuseppecrj/exmach#29.
   - [ ] E1, `actions` opt-in, giuseppecrj/exmach#93, after the deny list in giuseppecrj/exmach#51.
   - [ ] E2, the `factorio` VM recipe, giuseppecrj/exmach#94. It also yields the new bot login, its email id and the VM's ssh route.
@@ -54,7 +54,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
   - [ ] `MV5` starts after the owner lands `MV1` to `MV4` and E1 to E4 are closed.
   - [ ] `MV7` branches from `main` after the owner lands `MV5`.
   - [ ] `MV8` starts after the owner lands `MV5` and `MV6` and the other-project gates for `MV8` close.
-  - [ ] After `MV5`, F12d and F12e resume on the exmach VM under `docs/plans/factory-v1.md`. Carry the replay budget file per the `replay-cap-raise-4m` row.
+  - [ ] After `MV5`, F12d and F12e resume on the exmach VM under `docs/plans/factory-v1.md`. Carry the replay budget file per the `replay-cap-raise-4m` row. `MV5` now waits for exmach's self-host install milestone too, so `MV1` to `MV4` and `MV6` land well before the cutover. `MV4` still lands only after the drain, because it switches CI's expected actor.
 - [ ] Hold the file boundaries. Each PR touches only its **Files** block. No agent edits `.github/`. The owner authorized the coordinator to make the two `.github/workflows/` edits in `MV4`.
 - [ ] Hold the review gate. `MV8` proves what reaches the owner's phone. It waits for the owner's review in chat with a screenshot and a video before landing.
 - [ ] Run the `how` skill walkthrough before `MV1`, because it sets security-relevant constants. Bring the owner only product calls.
@@ -558,6 +558,7 @@ These questions stay unproven.
 
 ## Appendix B. Alternatives rejected
 
+- **A third, plain SSH host profile.** Deferred by the owner on 2026-11-10. nubl's goal is a self-hosted platform for isolated agent environments, with exmach as the product. Factorio should later run on an exmach VM, an exe.dev VM or a plain cloud droplet without depending on one host. The `MV1` profile keeps that open, because every host value is profile data and `parsePlatformProfile` selects from a closed set of built-in profiles that a later one can join. No such profile is built in this program.
 - **Profile in the trusted `WORKFLOW.md`.** Rejected as the default. The forbidden-domain list guards the host the controller runs on, so it belongs to the host, not to repository content. The walkthrough may reverse this with evidence.
 - **Accept a list of historical bot logins.** Rejected by the owner's drain decision. It changes a trust check and leaves a standing risk.
 - **Viewer `--bind` for the exmach app proxy (#714 option A).** Rejected by the owner on 2026-11-10 in favour of Shep only. Revisit only if the browser dashboard is missed.
@@ -572,6 +573,7 @@ These questions stay unproven.
 - **Bot identity (MV1, MV4).** exmach published `nubl-agent[bot]` in giuseppecrj/exmach#94 on 2026-11-10. The owner's two `.github/` edits switch CI's expected controller actor. They land after `pi-factorio` is drained in `MV4` and before the first exmach run in `MV5`, because a dispatch by the old bot would then fail `ci.yml`'s actor check.
 - **Request budget (MV5, MV7).** 600 requests per hour per VM is inference from the issue. A 429 is a stage failure. E3 sizes it from `MV5` receipts.
 - **No interleaved baseline (MV5).** One controller at a time means trunk numbers come from `pi-factorio` receipts.
+- **Cutover timing (MV5).** exmach now finishes M5, #51 and a clean self-host install milestone before E1 to E4, so `MV5` waits longer than first planned. `pi-factorio` stays held (`locally_disabled`) until then unless the owner decides otherwise, and F12d and F12e wait for the move.
 - **Backups (MV5).** exmach finishes M5 (giuseppecrj/exmach#29) before E1 to E4, so an off-host target should exist at cutover. Until it is proven, `backup.md` runs manually to an off-VM target.
 - **Residual risk unchanged.** A bwrap escape lands on `exedev` with sudo, and the edge's GitHub integration answers any VM process, per `docs/operations/sandbox.md` section 1.2.
 - **Spend.** `MV5` and `MV7` run full tickets at about 540,000 reserved tokens each. Check the program cap with the owner before they launch.
