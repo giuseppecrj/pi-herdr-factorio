@@ -10,6 +10,8 @@ Items #717 (F13 Linear) and #718 (bootstrap kit) stay outside this plan. Appendi
 
 ## How to read this
 
+**Parked, 2026-11-10.** The owner set a three-phase roadmap. Phase 1 is Shep as the daily client, phase 2 the software factory run from Shep, and phase 3 is exmach. Factorio's production controller moves to ms-a2, testing stays on exe.dev, and the move to exmach is parked. `MV1` (#724), `MV2` (#721) and `MV6` (#722) are on `main` and stay useful, because the platform profile and the verification targets are host-neutral. `MV3`, `MV4`, `MV5` and `MV8` are parked as written. `MV7` targets the exmach profile and waits with them. An ms-a2 profile and ms-a2 verification target follow as new work, after the owner's go-ahead for setting up Factorio on ms-a2. Parked PRs keep their verdicts and are not landed. #728 (`MV3`) is code-ready but parked. `MV4`'s drain and foreign-marker work is reusable for any move that changes the controller's GitHub identity, including ms-a2.
+
 One box is one unit of work. Every box names the evidence that checks it. A nested box is a sub-step of the box above it. Check a box only when its evidence exists, such as a file, a log, a test result, or a SHA. The body is a how-to. The appendices explain and record.
 
 The program runs the poteto-mode playbook `playbooks/autopilot-stack.md`. No current grant names merging this program's PRs. The `autonomous-run` grant of 2026-11-10T00:03Z named F09c paperwork, F11, F12 and F13, and the `owner-checkpoint-f12` row ended that run. So every PR here stops at STACK-READY and the owner lands it. Commits, branches, pushes, PR creation, fixture issues, VM changes and the exmach VM itself each need their own grant, recorded in `docs/decisions.tsv` before the action. This document grants nothing.
@@ -207,7 +209,7 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 
 ## Provision an exmach dev VM from the profile (MV3)
 
-**Depends on.** MV1. This implements #713. Live lanes need exmach E2 and E5.
+**Depends on.** Parked on 2026-11-10 (provisioning an exmach dev VM is not the target now). MV1. This implements #713. Live lanes need exmach E2 and E5.
 
 **Files.**
 
@@ -264,7 +266,7 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 
 ## Drain pi-factorio and report foreign markers (MV4)
 
-**Depends on.** MV1. This implements #712 under the owner's drain decision.
+**Depends on.** Parked on 2026-11-10 (the drain is still needed before any move that changes the controller's GitHub identity, so this unit will be re-scoped for the ms-a2 move rather than dropped). MV1. This implements #712 under the owner's drain decision.
 
 **Files.**
 
@@ -319,7 +321,7 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 
 ## Cut production over to the exmach VM (MV5)
 
-**Depends on.** MV1, MV2, MV3 and MV4 landed, giuseppecrj/exmach#100 and exmach E1 to E4 closed, and the owner's cutover grant.
+**Depends on.** Parked on 2026-11-10 (the exmach cutover is parked with the exmach move). MV1, MV2, MV3 and MV4 landed, giuseppecrj/exmach#100 and exmach E1 to E4 closed, and the owner's cutover grant.
 
 **Files.**
 
@@ -486,7 +488,7 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 
 ## Prove the Factory tab and pushes end to end (MV8)
 
-**Depends on.** MV5 and MV6 landed, plus work in other projects that the Kyoko session tracks. These are the `apns` integration attached as `vm:factorio` in E2 (giuseppecrj/exmach#94), giuseppecrj/exmach#88 (edge push v2 with routing fields and a collapse key), giuseppecrj/shep#107 (the bridge's edge sender), the Shep bridge on the `factorio` VM (giuseppecrj/exmach#90 or a manual install), and giuseppecrj/shep#140 (the Factory tab). The attach alone delivers no push, so `MV8` waits for #88 and shep#107, not just E2. The edge allows 30 pushes per hour per VM with a burst of 5.
+**Depends on.** Parked on 2026-11-10 (the phone path no longer waits on exmach, because the Shep bridge on ms-a2 pushes straight to Apple). MV5 and MV6 landed, plus work in other projects that the Kyoko session tracks. These are the `apns` integration attached as `vm:factorio` in E2 (giuseppecrj/exmach#94), giuseppecrj/exmach#88 (edge push v2 with routing fields and a collapse key), giuseppecrj/shep#107 (the bridge's edge sender), the Shep bridge on the `factorio` VM (giuseppecrj/exmach#90 or a manual install), and giuseppecrj/shep#140 (the Factory tab). The attach alone delivers no push, so `MV8` waits for #88 and shep#107, not just E2. The edge allows 30 pushes per hour per VM with a burst of 5.
 
 **Files.**
 
