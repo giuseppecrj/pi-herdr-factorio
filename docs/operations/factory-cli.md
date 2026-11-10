@@ -969,12 +969,15 @@ Installation requires explicit service/VM authority, a drained rollout, and the 
 `server/factory.service` runs `serve` under systemd. `server/provision.sh` does not install it. To install it on `pi-factorio`:
 
 1. Clone the repository to `/home/exedev/pi-herdr-factorio` at the `main` commit to run, and run `npm ci --ignore-scripts` there.
-2. Create the state directory: `install -d -m 0700 /home/exedev/factory-state`.
-3. Copy the unit: `sudo install -m 0644 server/factory.service /etc/systemd/system/factory.service`, then `sudo systemctl daemon-reload`.
-4. Start it: `sudo systemctl enable --now factory.service`.
-5. Wait for readiness: `journalctl -u factory.service -f` until it shows `event=controller_ready`.
+2. Run full provisioning: `bash server/provision.sh`. This writes the required `/etc/factory/factory.env` and installs the sandbox bundle. A missing env file stops the unit from starting; sandbox-only provisioning does not write it.
+3. Create the state directory: `install -d -m 0700 /home/exedev/factory-state`.
+4. Copy the unit: `sudo install -m 0644 server/factory.service /etc/systemd/system/factory.service`, then `sudo systemctl daemon-reload`.
+5. Start it: `sudo systemctl enable --now factory.service`.
+6. Wait for readiness: `journalctl -u factory.service -f` until it shows `event=controller_ready`.
 
-The unit reads `GH_HOST`, `FACTORY_PLATFORM` and the nonsecret `GH_ENTERPRISE_TOKEN` placeholder from `/etc/factory/factory.env`, generated from `platform --env` by full provisioning. It sets `XDG_RUNTIME_DIR=/run/user/1000`, which the stage scopes need, and passes `--state-dir` explicitly. It holds no secret in its environment. Run `bash server/provision.sh` from the checkout first, so the sandbox bundle exists. Without it every run stays `blocked`. `systemctl stop factory.service` sends SIGTERM and waits up to 300 seconds for the tick to finish. The unit restarts on failure after 30 seconds, except after exit 2, when another controller holds the lock. To stop dispatch without stopping the service, create `/home/exedev/factory-state/disabled`.
+For an existing exe.dev host such as `pi-factorio`, run full provisioning from the new checkout before installing the new unit. Otherwise the controller will not start when `/etc/factory/factory.env` is absent.
+
+The unit reads `GH_HOST` and `FACTORY_PLATFORM` from `/etc/factory/factory.env`, generated from `platform --env` by full provisioning. On exmach only, that file also sets the nonsecret `GH_ENTERPRISE_TOKEN=exmach` placeholder; exe-dev gains no GitHub token. It sets `XDG_RUNTIME_DIR=/run/user/1000`, which the stage scopes need, and passes `--state-dir` explicitly. It holds no secret in its environment. Without the sandbox bundle every run stays `blocked`. `systemctl stop factory.service` sends SIGTERM and waits up to 300 seconds for the tick to finish. The unit restarts on failure after 30 seconds, except after exit 2, when another controller holds the lock. To stop dispatch without stopping the service, create `/home/exedev/factory-state/disabled`.
 
 ## `/factory status`
 

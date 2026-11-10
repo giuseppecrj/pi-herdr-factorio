@@ -29,6 +29,7 @@ export type PreflightDeps = {
 	/** True once leftover stage scopes were listed and every one of ours stopped. */
 	readonly reconciled: () => Promise<boolean>;
 	readonly arch: string;
+	readonly xdgRuntimeDir: string;
 	readonly usernsLimit: () => Promise<string>;
 	readonly exec: Exec;
 	readonly assetsDigest: () => Promise<string | null>;
@@ -127,7 +128,8 @@ export async function runPreflight(
 		failed.push("stale_bundle");
 
 	const runtimeDirectory = await safely(
-		async () => (await deps.exec("test", ["-d", "/run/user/1000"])).code === 0,
+		async () =>
+			(await deps.exec("test", ["-d", deps.xdgRuntimeDir])).code === 0,
 		false,
 	);
 

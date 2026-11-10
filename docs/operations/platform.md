@@ -83,13 +83,17 @@ Refusal reasons: `unknown_platform`, `domain_invalid`, `platform_selection_misma
 
 `node server/cli.ts platform --env` prints nonsecret assignments from the same resolved profile, without a workflow, lock, GitHub call or model request. Full `server/provision.sh` uses them for the host Pi configuration and installs the exact output as `/etc/factory/factory.env`, root-owned and mode 0644. `server/factory.service` requires that environment file rather than hard-coding `GH_HOST`.
 
-The assignments are `FACTORY_PLATFORM`, `GH_HOST`, `GH_ENTERPRISE_TOKEN`, `LLM_BASE_URL`, `LLM_OPENAI_BASE_URL` and `LLM_ANTHROPIC_BASE_URL`. `GH_ENTERPRISE_TOKEN` is a placeholder, `exmach` on exmach and `exe-dev-integration` on exe-dev, never a credential. The platform edge injects the real token. Provider URLs use the profile's model base paths, without a trailing slash, so the default Pi URLs remain unchanged. The sandbox still uses its own loopback URLs.
+The assignments are `FACTORY_PLATFORM`, `GH_HOST`, `LLM_API_KEY_PLACEHOLDER`, `LLM_BASE_URL`, `LLM_OPENAI_BASE_URL` and `LLM_ANTHROPIC_BASE_URL`. Only exmach adds `GH_ENTERPRISE_TOKEN=exmach`; exe-dev sets no GitHub token, preserving its existing `gh` behaviour. The edge injects the real credential. Host Pi uses the separate `LLM_API_KEY_PLACEHOLDER`, `exe-dev-integration` on exe-dev and `exmach` on exmach. Provider URLs use the profile's model base paths, without a trailing slash, so the default Pi configuration remains byte-identical. The sandbox still uses its own loopback URLs.
 
 After changing either selection source, rerun full provisioning before restarting the unit. The generated `FACTORY_PLATFORM` and the selection file must agree. Provisioning leaves `/etc/factory/platform.json` untouched.
 
 ## Remaining exe-dev literals
 
-`rg -n 'exe\.xyz' server src extension` now finds only the built-in exe-dev contract in `src/platform.ts` and the redirect target in `server/sandbox/echo-fixture.ts`. The latter is a test fixture, not a platform value. Provisioning and the unit no longer contain an exe-dev host.
+Run the full inventory with `rg -n 'exe\.xyz|exe-dev-github-integration|169\.254\.169\.254|giuseppecrj/pi-herdr-factorio' server src extension`.
+
+- `src/platform.ts` holds the built-in exe-dev network, identity and repository defaults. Its `exe-dev-integration` placeholder is deliberately retained for host Pi, not used as a GitHub token.
+- `server/sandbox/echo-fixture.ts` holds a redirect target for a test, not a platform value.
+- `server/factory.service:18` deliberately keeps the repository in `ExecStart`. The unit also retains its `/home/exedev` paths and `User=exedev` (`Group=exedev` too); those deployment values are not profile-selected. It no longer hard-codes an exe-dev host.
 
 ## Not covered here
 

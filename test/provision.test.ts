@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
+	chmodSync,
 	mkdtempSync,
 	readFileSync,
 	rmSync,
@@ -64,7 +65,7 @@ function providerUrls(env: string) {
 
 const DEFAULT_ENV = `FACTORY_PLATFORM=exe-dev
 GH_HOST=github.int.exe.xyz
-GH_ENTERPRISE_TOKEN=exe-dev-integration
+LLM_API_KEY_PLACEHOLDER=exe-dev-integration
 LLM_BASE_URL=https://llm.int.exe.xyz
 LLM_OPENAI_BASE_URL=https://llm.int.exe.xyz/openai/v1
 LLM_ANTHROPIC_BASE_URL=https://llm.int.exe.xyz/anthropic
@@ -73,6 +74,7 @@ LLM_ANTHROPIC_BASE_URL=https://llm.int.exe.xyz/anthropic
 const EXMACH_ENV = `FACTORY_PLATFORM=exmach:exmach.net
 GH_HOST=factorio.int.exmach.net
 GH_ENTERPRISE_TOKEN=exmach
+LLM_API_KEY_PLACEHOLDER=exmach
 LLM_BASE_URL=https://llm.int.exmach.net
 LLM_OPENAI_BASE_URL=https://llm.int.exmach.net/v1
 LLM_ANTHROPIC_BASE_URL=https://llm.int.exmach.net
@@ -119,10 +121,11 @@ describe("platform environment for provisioning", () => {
 		);
 	});
 
-	it("keeps today's exe-dev host and Pi URLs exactly, adding only nonsecret selectors and placeholders", async () => {
+	it("keeps today's exe-dev host and Pi URLs without adding a GitHub token", async () => {
 		const result = await render();
 		assert.equal(result.stdout, DEFAULT_ENV);
 		assert.match(result.stdout, /^GH_HOST=github\.int\.exe\.xyz$/m);
+		assert.doesNotMatch(result.stdout, /^GH_ENTERPRISE_TOKEN=/m);
 		const run = providerUrls(result.stdout);
 		assert.equal(run.status, 0, run.stderr);
 		assert.equal(
@@ -155,6 +158,36 @@ describe("platform environment for provisioning", () => {
 			assert.equal(result.stdout, "");
 			assert.match(result.stderr, /Usage:/);
 		}
+	});
+
+	it("keeps the exe-dev host models.json byte-identical to the main baseline", async () => {
+		const first = script.indexOf("  cat >~/.pi/agent/models.json <<JSON\n");
+		const last = script.indexOf("\nJSON", first);
+		assert.ok(first >= 0 && last > first);
+		const template = script.slice(first, last + "\nJSON".length);
+
+		const run = spawnSync(
+			"bash",
+			[
+				"-c",
+				`set -eu; source /dev/stdin <<<"$1"\n${template.replace("cat >~/.pi/agent/models.json", "cat")}`,
+				"models-fragment",
+				(await render()).stdout,
+			],
+			{ encoding: "utf8" },
+		);
+
+		assert.equal(run.status, 0, run.stderr);
+		assert.equal(
+			run.stdout,
+			`{
+  "providers": {
+    "anthropic": { "baseUrl": "https://llm.int.exe.xyz/anthropic", "apiKey": "exe-dev-integration" },
+    "openai": { "baseUrl": "https://llm.int.exe.xyz/openai/v1", "apiKey": "exe-dev-integration" }
+  }
+}
+`,
+		);
 	});
 
 	it("keeps the unit static and requires the generated environment file", () => {
@@ -209,6 +242,43 @@ ${snippet}`,
 		}
 	});
 
+	it("validates every assignment before sourcing the CLI output", async () => {
+		const first = script.indexOf("  while IFS= read -r assignment; do\n");
+
+		const last = script.indexOf(
+			'  source /dev/stdin <<<"$platform_env"',
+			first,
+		);
+
+		assert.ok(first >= 0 && last > first);
+		const snippet = script.slice(first, last);
+
+		const check = (env: string) =>
+			spawnSync(
+				"bash",
+				["-c", `set -eu\nplatform_env=$1\n${snippet}`, "env-validation", env],
+				{ encoding: "utf8" },
+			);
+
+		for (const selector of [undefined, "exe-dev", "exmach:exmach.net"]) {
+			const run = check((await render(selector)).stdout.trimEnd());
+			assert.equal(run.status, 0, run.stderr);
+		}
+
+		for (const bad of [
+			"GH_HOST=$(printf unsafe)",
+			"PATH=/unsafe",
+			"GH_HOST=valid\nnot-an-assignment",
+			"GH_HOST=valid\n",
+			"export GH_HOST=valid",
+			"GH_HOST=valid;false",
+		]) {
+			const run = check(`GH_HOST=valid\n${bad}`);
+			assert.equal(run.status, 1, bad);
+			assert.match(run.stderr, /provision: invalid platform environment/);
+		}
+	});
+
 	it("sources the CLI output rather than duplicating platform rules in bash", async () => {
 		assert.match(
 			script,
@@ -227,17 +297,12 @@ ${snippet}`,
 		);
 	});
 
-	it("writes the exact environment at 0644 with root ownership requested, without rewriting an equal file", async () => {
-		const lines = script.split("\n");
+	it("atomically installs changed env bytes at 0644, preserves equal files and existing directory permissions", async () => {
+		const first = script.indexOf("  if [ ! -d /etc/factory ]; then");
 
-		const first = lines.indexOf(
-			'  printf \'%s\\n\' "$platform_env" >"$build/factory.env"',
-		);
-
-		const last = lines.findIndex(
-			(line, index) =>
-				index > first &&
-				line.includes('"$build/factory.env" /etc/factory/factory.env'),
+		const last = script.indexOf(
+			"  fi\n",
+			script.indexOf("sudo mv -T /etc/factory/factory.env.tmp", first),
 		);
 
 		assert.ok(first >= 0 && last > first);
@@ -246,14 +311,13 @@ ${snippet}`,
 		try {
 			const target = join(dir, "etc-factory");
 
-			const snippet = lines
-				.slice(first, last + 1)
-				.join("\n")
+			const snippet = script
+				.slice(first, last + "  fi\n".length)
 				.replaceAll("/etc/factory", target);
 
 			const env = (await render("exmach:exmach.net")).stdout;
 
-			const run = () =>
+			const run = (text = env, fail = false) =>
 				spawnSync(
 					"bash",
 					[
@@ -261,20 +325,27 @@ ${snippet}`,
 						`set -eu
 build=$1
 platform_env=$(printf '%s' "$2")
+fail=$3
 sudo() {
   printf '%s\\n' "$*" >>"$build/calls"
-  test "$1" = install
-  shift
-  local args=()
-  while [ "$#" -gt 0 ]; do
-    case "$1" in -o|-g) test "$2" = root; shift 2;; *) args+=("$1"); shift;; esac
-  done
-  command install "\${args[@]}"
+  case "$1" in
+    install)
+      shift
+      local args=()
+      while [ "$#" -gt 0 ]; do
+        case "$1" in -o|-g) test "$2" = root; shift 2;; *) args+=("$1"); shift;; esac
+      done
+      if [ "$fail" = true ]; then return 1; fi
+      command install "\${args[@]}";;
+    cmp|mv|rm) command "$@";;
+    *) return 99;;
+  esac
 }
 ${snippet}`,
 						"provision-fragment",
 						dir,
-						env,
+						text,
+						String(fail),
 					],
 					{ encoding: "utf8" },
 				);
@@ -284,17 +355,54 @@ ${snippet}`,
 			const path = join(target, "factory.env");
 			assert.equal(readFileSync(path, "utf8"), env);
 			assert.equal(statSync(path).mode & 0o777, 0o644);
-			const before = statSync(path).mtimeMs;
+			assert.equal(statSync(target).mode & 0o777, 0o755);
+			chmodSync(target, 0o700);
+			const before = statSync(path);
 			result = run();
 			assert.equal(result.status, 0, result.stderr);
-			assert.equal(statSync(path).mtimeMs, before);
+			assert.equal(statSync(path).mtimeMs, before.mtimeMs);
+			assert.equal(statSync(path).ino, before.ino);
+			assert.equal(statSync(target).mode & 0o777, 0o700);
+			result = run(DEFAULT_ENV, true);
+			assert.equal(result.status, 1);
+			assert.equal(readFileSync(path, "utf8"), env);
+			result = run(DEFAULT_ENV);
+			assert.equal(result.status, 0, result.stderr);
+			assert.equal(readFileSync(path, "utf8"), DEFAULT_ENV);
+			assert.notEqual(statSync(path).ino, before.ino);
+			assert.equal(statSync(path).mode & 0o777, 0o644);
+			const calls = readFileSync(join(dir, "calls"), "utf8");
 			assert.match(
-				readFileSync(join(dir, "calls"), "utf8"),
-				/install -C -m 0644 -o root -g root/,
+				calls,
+				/install -m 0644 -o root -g root \/dev\/stdin .*factory.env.tmp/,
 			);
+			assert.match(calls, /mv -T .*factory.env.tmp .*factory.env/);
+			assert.equal(calls.split("install -d").length - 1, 1);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
+	});
+
+	it("writes the env file beside the host models before settings or package work", () => {
+		const first = script.indexOf(
+			'if [ "$mode" = all ]; then\n  # The platform edge',
+		);
+
+		const last = script.indexOf("\nfi\n", first);
+		const block = script.slice(first, last);
+		assert.ok(first >= 0 && last > first);
+		assert.ok(
+			block.indexOf("cat >~/.pi/agent/models.json") <
+				block.indexOf("sudo mv -T /etc/factory/factory.env.tmp"),
+		);
+		assert.ok(
+			block.indexOf("sudo mv -T /etc/factory/factory.env.tmp") <
+				block.indexOf("settings=~/.pi/agent/settings.json"),
+		);
+		assert.equal(
+			script.split("sudo mv -T /etc/factory/factory.env.tmp").length - 1,
+			1,
+		);
 	});
 
 	it("enables linger once and leaves an already lingering user unchanged", () => {
@@ -354,6 +462,7 @@ it("preflight names an absent runtime directory and does not attempt a user scop
 	const result = await runPreflight({
 		reconciled: async () => true,
 		arch: "x64",
+		xdgRuntimeDir: "/run/user/4242",
 		usernsLimit: async () => "15000",
 		exec: async (command, args) => {
 			calls.push([command, ...args]);
@@ -372,7 +481,7 @@ it("preflight names an absent runtime directory and does not attempt a user scop
 	});
 
 	assert.deepEqual(result, { ok: false, failed: ["runtime_directory"] });
-	assert.ok(calls.some((call) => call.join(" ") === "test -d /run/user/1000"));
+	assert.ok(calls.some((call) => call.join(" ") === "test -d /run/user/4242"));
 	assert.equal(
 		calls.some(([command]) => command === "systemd-run"),
 		false,

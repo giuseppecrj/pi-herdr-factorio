@@ -65,6 +65,16 @@ if [ "$mode" = all ]; then
     (cd "$repo" && npm ci --ignore-scripts --no-audit --no-fund)
   fi
   platform_env=$(node "$repo/server/cli.ts" platform --env)
+  while IFS= read -r assignment; do
+    if [[ ! "$assignment" =~ ^[A-Z_]+=[A-Za-z0-9.:/_-]*$ ]]; then
+      echo "provision: invalid platform environment assignment" >&2
+      exit 1
+    fi
+    case "${assignment%%=*}" in
+      FACTORY_PLATFORM|GH_HOST|GH_ENTERPRISE_TOKEN|LLM_API_KEY_PLACEHOLDER|LLM_BASE_URL|LLM_OPENAI_BASE_URL|LLM_ANTHROPIC_BASE_URL) ;;
+      *) echo "provision: invalid platform environment key" >&2; exit 1;;
+    esac
+  done <<<"$platform_env"
   source /dev/stdin <<<"$platform_env"
 
   if [ "$(loginctl show-user exedev -p Linger --value 2>/dev/null)" != yes ]; then
@@ -93,11 +103,21 @@ if [ "$mode" = all ]; then
   cat >~/.pi/agent/models.json <<JSON
 {
   "providers": {
-    "anthropic": { "baseUrl": "$LLM_ANTHROPIC_BASE_URL", "apiKey": "$GH_ENTERPRISE_TOKEN" },
-    "openai": { "baseUrl": "$LLM_OPENAI_BASE_URL", "apiKey": "$GH_ENTERPRISE_TOKEN" }
+    "anthropic": { "baseUrl": "$LLM_ANTHROPIC_BASE_URL", "apiKey": "$LLM_API_KEY_PLACEHOLDER" },
+    "openai": { "baseUrl": "$LLM_OPENAI_BASE_URL", "apiKey": "$LLM_API_KEY_PLACEHOLDER" }
   }
 }
 JSON
+
+  if [ ! -d /etc/factory ]; then
+    sudo install -d -m 0755 -o root -g root /etc/factory
+  fi
+  printf '%s\n' "$platform_env" | sudo install -m 0644 -o root -g root /dev/stdin /etc/factory/factory.env.tmp
+  if sudo cmp -s /etc/factory/factory.env.tmp /etc/factory/factory.env; then
+    sudo rm /etc/factory/factory.env.tmp
+  else
+    sudo mv -T /etc/factory/factory.env.tmp /etc/factory/factory.env
+  fi
 
   settings=~/.pi/agent/settings.json
   [ -f "$settings" ] || echo '{}' >"$settings"
@@ -198,10 +218,6 @@ fi
 
 printf 'sandbox assets %s\n' "$dest"
 if [ "$mode" = all ]; then
-  printf '%s\n' "$platform_env" >"$build/factory.env"
-  sudo install -d -m 0755 -o root -g root /etc/factory
-  sudo install -C -m 0644 -o root -g root "$build/factory.env" /etc/factory/factory.env
-
   printf 'node %s, pi %s, %s, gh %s, default %s/%s\n' "$(node --version)" "$(pi --version)" \
     "$(herdr --version)" "$(gh --version | head -1 | awk '{print $3}')" "$DEFAULT_PROVIDER" "$DEFAULT_MODEL"
 fi
