@@ -72,7 +72,13 @@ function sha(text: string): GitSha {
 const repo = slug("giuseppecrj/pi-herdr-factorio");
 const mainSha = sha("a".repeat(40));
 
-const EXMACH_IDENTITY = {
+const PUBLISHED_IDENTITY = {
+	controllerLogin: "nubl-agent[bot]",
+	controllerAppSlug: "nubl-agent",
+	botEmail: "353429311+nubl-agent[bot]@users.noreply.github.com",
+};
+
+const OVERRIDE_IDENTITY = {
 	controllerLogin: "exmach-integration[bot]",
 	controllerAppSlug: "exmach-integration",
 	botEmail: "4242+exmach-integration[bot]@users.noreply.github.com",
@@ -88,7 +94,6 @@ function exmachFile(
 	return file({
 		version: 1,
 		platform: "exmach:example.net",
-		...EXMACH_IDENTITY,
 		...fields,
 	});
 }
@@ -438,7 +443,7 @@ describe("platform selection", () => {
 		assert.equal(Object.isFrozen(unset.repositories), true);
 	});
 
-	it("builds exmach from the built-in contract and the file's identity only", () => {
+	it("builds exmach from the built-in contract with the published identity and factorio GitHub host", () => {
 		assert.deepEqual(EXMACH, {
 			name: "exmach",
 			domain: "example.net",
@@ -452,31 +457,160 @@ describe("platform selection", () => {
 				"githubusercontent.com",
 				"ghe.com",
 			],
-			...EXMACH_IDENTITY,
-			ghHost: "github.int.example.net",
+			...PUBLISHED_IDENTITY,
+			ghHost: "factorio.int.example.net",
 			repositories: ["giuseppecrj/pi-herdr-factorio"],
 			anthropicStages: ["accept", "code-review"],
 		});
+		assert.deepEqual(resolved("exmach:example.net", ABSENT), EXMACH);
 		assert.deepEqual(
-			resolved("exmach:example.net", file({ version: 1, ...EXMACH_IDENTITY })),
+			resolved("exmach:example.net", file({ version: 1 })),
 			EXMACH,
 		);
+
+		const published = resolved("exmach:exmach.net", ABSENT);
+
+		assert.equal(published.controllerLogin, "nubl-agent[bot]");
+		assert.equal(published.controllerAppSlug, "nubl-agent");
+		assert.equal(
+			published.botEmail,
+			"353429311+nubl-agent[bot]@users.noreply.github.com",
+		);
+		assert.equal(published.ghHost, "factorio.int.exmach.net");
+		assert.equal(published.modelHost, "llm.int.exmach.net");
+		assert.equal(Object.isFrozen(published), true);
+	});
+
+	it("lets the exmach file override the whole identity, the repositories and one GitHub host label", () => {
+		assert.deepEqual(resolved(undefined, exmachFile(OVERRIDE_IDENTITY)), {
+			...EXMACH,
+			...OVERRIDE_IDENTITY,
+		});
 		assert.deepEqual(
-			resolved(undefined, exmachFile({ repositories: ["acme/widgets"] }))
-				.repositories,
-			["acme/widgets"],
+			resolved(
+				"exmach:example.net",
+				file({ version: 1, ...OVERRIDE_IDENTITY }),
+			),
+			{ ...EXMACH, ...OVERRIDE_IDENTITY },
+		);
+		assert.deepEqual(
+			resolved(undefined, exmachFile({ repositories: ["acme/widgets"] })),
+			{ ...EXMACH, repositories: ["acme/widgets"] },
+		);
+
+		for (const ghHost of [
+			"github.int.example.net",
+			"factorio-2.int.example.net",
+			"x.int.example.net",
+		]) {
+			assert.deepEqual(resolved(undefined, exmachFile({ ghHost })), {
+				...EXMACH,
+				ghHost,
+			});
+		}
+
+		const everything = resolved(
+			undefined,
+			exmachFile({
+				...OVERRIDE_IDENTITY,
+				repositories: ["acme/widgets", "acme/gears"],
+				ghHost: "github.int.example.net",
+			}),
+		);
+
+		assert.deepEqual(everything, {
+			...EXMACH,
+			...OVERRIDE_IDENTITY,
+			repositories: ["acme/widgets", "acme/gears"],
+			ghHost: "github.int.example.net",
+		});
+		assert.equal(Object.isFrozen(everything.repositories), true);
+	});
+
+	it("refuses a partial identity override and any GitHub host that is not one label under int.<domain>", () => {
+		const partials: { readonly [key: string]: JsonValue }[] = [
+			{ controllerLogin: OVERRIDE_IDENTITY.controllerLogin },
+			{ controllerAppSlug: OVERRIDE_IDENTITY.controllerAppSlug },
+			{ botEmail: OVERRIDE_IDENTITY.botEmail },
+			{
+				controllerLogin: OVERRIDE_IDENTITY.controllerLogin,
+				controllerAppSlug: OVERRIDE_IDENTITY.controllerAppSlug,
+			},
+			{
+				controllerAppSlug: OVERRIDE_IDENTITY.controllerAppSlug,
+				botEmail: OVERRIDE_IDENTITY.botEmail,
+			},
+		];
+
+		for (const partial of partials) {
+			assert.equal(
+				refusal(undefined, exmachFile(partial)),
+				"controller_identity_missing",
+				JSON.stringify(partial),
+			);
+			assert.equal(
+				refusal("exmach:example.net", file({ version: 1, ...partial })),
+				"controller_identity_missing",
+				JSON.stringify(partial),
+			);
+		}
+
+		for (const ghHost of [
+			"a.b.int.example.net",
+			"factorio.int.other.net",
+			"factorio.example.net",
+			"factorio.int.example.net.evil.org",
+			"-factorio.int.example.net",
+			"factorio-.int.example.net",
+			".int.example.net",
+			"int.example.net",
+			"",
+			"Factorio.int.example.net",
+			"factorio.int.example.net.",
+			"factorio_1.int.example.net",
+			`${"a".repeat(64)}.int.example.net`,
+			"github.com",
+		]) {
+			assert.equal(
+				refusal(undefined, exmachFile({ ghHost })),
+				"gh_host_invalid",
+				ghHost,
+			);
+		}
+
+		for (const ghHost of [null, 7, ["factorio.int.example.net"]]) {
+			assert.equal(
+				refusal(undefined, exmachFile({ ghHost })),
+				"gh_host_invalid",
+				JSON.stringify(ghHost),
+			);
+		}
+
+		assert.equal(
+			refusal(undefined, file({ version: 1, ghHost: "github.int.exe.xyz" })),
+			"gh_host_unexpected",
+		);
+		assert.equal(
+			refusal(
+				"exe-dev",
+				file({
+					version: 1,
+					platform: "exe-dev",
+					ghHost: "factorio.int.exe.xyz",
+				}),
+			),
+			"gh_host_unexpected",
 		);
 	});
 
 	it("refuses every malformed or contradictory source with a named reason and never falls back", () => {
 		const cases: [string | undefined, PlatformFile, PlatformRefusal][] = [
-			["exmach:example.net", ABSENT, "controller_identity_missing"],
 			[
 				"exmach:example.net",
 				file({
 					version: 1,
-					controllerLogin: EXMACH_IDENTITY.controllerLogin,
-					controllerAppSlug: EXMACH_IDENTITY.controllerAppSlug,
+					controllerLogin: OVERRIDE_IDENTITY.controllerLogin,
+					controllerAppSlug: OVERRIDE_IDENTITY.controllerAppSlug,
 				}),
 				"controller_identity_missing",
 			],
@@ -489,7 +623,7 @@ describe("platform selection", () => {
 			["exmach:other.net", exmachFile(), "platform_selection_mismatch"],
 			[
 				undefined,
-				file({ version: 1, ...EXMACH_IDENTITY }),
+				file({ version: 1, ...OVERRIDE_IDENTITY }),
 				"controller_identity_unexpected",
 			],
 			["aws", ABSENT, "unknown_platform"],
@@ -572,7 +706,7 @@ describe("platform selection", () => {
 		const result = await resolvePlatform({
 			env: (name) =>
 				name === "FACTORY_PLATFORM" ? "exmach:example.net" : "ignored",
-			readFile: async () => file({ version: 1, ...EXMACH_IDENTITY }),
+			readFile: async () => ABSENT,
 		});
 
 		assert.ok(result.ok);
@@ -1227,7 +1361,10 @@ describe("CLI platform resolution", () => {
 		][] = [
 			[
 				"controller_identity_missing",
-				{ env: { FACTORY_PLATFORM: "exmach:example.net" } },
+				{
+					env: { FACTORY_PLATFORM: "exmach:example.net" },
+					file: exmachFile({ controllerLogin: "other-agent[bot]" }),
+				},
 			],
 			[
 				"platform_selection_mismatch",
@@ -1235,7 +1372,11 @@ describe("CLI platform resolution", () => {
 			],
 			["platform_file_malformed", { file: { kind: "present", text: "{" } }],
 			["platform_file_unreadable", { file: { kind: "unreadable" } }],
-			["unknown_field", { file: exmachFile({ ghHost: "github.com" }) }],
+			[
+				"unknown_field",
+				{ file: exmachFile({ modelHost: "llm.int.evil.example" }) },
+			],
+			["gh_host_invalid", { file: exmachFile({ ghHost: "github.com" }) }],
 			["repositories_empty", { file: exmachFile({ repositories: [] }) }],
 			["unknown_platform", { env: { FACTORY_PLATFORM: "exmach" } }],
 		];

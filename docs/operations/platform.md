@@ -7,7 +7,7 @@ The factory runs on one host platform at a time. A platform is a validated, immu
 Two host-owned sources select the platform. `WORKFLOW.md` never does, because a merged PR could then change the security boundary, and because loading it already needs `gh`.
 
 - **`FACTORY_PLATFORM`** names a built-in: `exe-dev` or `exmach:<domain>`. Only the canonical lowercase spelling parses.
-- **`/etc/factory/platform.json`** is optional and root-owned. It is small and versioned, and it holds only these keys:
+- **`/etc/factory/platform.json`** is optional and root-owned. It is small and versioned, and it holds only these keys. Every key except `version` is optional:
 
 ```json
 {
@@ -16,20 +16,23 @@ Two host-owned sources select the platform. `WORKFLOW.md` never does, because a 
   "controllerLogin": "<app-slug>[bot]",
   "controllerAppSlug": "<app-slug>",
   "botEmail": "<id>+<app-slug>[bot]@users.noreply.github.com",
-  "repositories": ["giuseppecrj/pi-herdr-factorio"]
+  "repositories": ["giuseppecrj/pi-herdr-factorio"],
+  "ghHost": "<label>.int.exmach.net"
 }
 ```
 
-It never holds an upstream host, an address, a path or a provider permission. Those come only from the built-in contract for the selected name.
+It never holds an upstream host, an address, a path or a provider permission. Those come only from the built-in contract for the selected name. Its only host is the controller's `ghHost`, and only as one label under the platform's `int.` domain.
 
 These rules apply:
 
 - With neither source naming a platform, the profile is `exe-dev`.
 - If both name a platform, they must agree.
-- `exmach` requires `controllerLogin`, `controllerAppSlug` and `botEmail` from the file. Nothing derives or invents them.
-- `exe-dev` takes no identity fields, because its identity is fixed.
-- `repositories` is optional. When present it must be a non-empty list of distinct `owner/name` slugs.
-- A malformed or unreadable file, a malformed selector or a missing identity refuses. Nothing falls back to `exe-dev` after an error.
+- `exmach` needs no file. `FACTORY_PLATFORM=exmach:exmach.net` alone resolves to a complete profile with the published identity and `ghHost` below.
+- On `exmach` the file may override the identity, but only as all three of `controllerLogin`, `controllerAppSlug` and `botEmail` together. Setting some of them and not the others refuses with `controller_identity_missing`. Nothing derives or invents a missing field.
+- On `exmach` the file may override `ghHost` with exactly one DNS label under `int.<domain>`, such as `github.int.<domain>`. Anything else refuses with `gh_host_invalid`: two or more labels, another domain, a label that starts or ends with `-`, an empty label, uppercase or a trailing dot. A later rename of the GitHub integration then needs only this file.
+- `exe-dev` takes no identity fields and no `ghHost`, because both are fixed. They refuse with `controller_identity_unexpected` and `gh_host_unexpected`.
+- `repositories` is optional on both platforms. When present it must be a non-empty list of distinct `owner/name` slugs.
+- A malformed or unreadable file, a malformed selector, a partial identity or an invalid `ghHost` refuses. Nothing falls back to `exe-dev` or to the built-in defaults after an error.
 - The platform is read once, when a process starts. Changing it means restarting the controller.
 
 Every entry point uses the same resolver, `resolvePlatform`, with the environment and a file reader passed in. These are the CLI (before any command dispatches), the Pi extension (once, when it loads) and the replay driver. `parsePlatformProfile` itself is pure.
@@ -45,12 +48,14 @@ Every entry point uses the same resolver, `resolvePlatform`, with the environmen
 | `modelBasePaths.anthropic` | `/anthropic/` | `/` |
 | `modelBasePaths.xai` | `/xai/v1/` | `null` (no xAI route) |
 | `forbiddenDomains` | `exe.xyz`, `int.exe.xyz`, `github.com`, `githubusercontent.com`, `ghe.com` | `<domain>`, `int.<domain>`, `github.com`, `githubusercontent.com`, `ghe.com` |
-| `controllerLogin` | `exe-dev-github-integration[bot]` | from the file |
-| `controllerAppSlug` | `exe-dev-github-integration` | from the file |
-| `botEmail` | `267204973+exe-dev-github-integration[bot]@users.noreply.github.com` | from the file |
-| `ghHost` | `github.int.exe.xyz` | `github.int.<domain>` |
+| `controllerLogin` | `exe-dev-github-integration[bot]` | `nubl-agent[bot]`, or the file's identity |
+| `controllerAppSlug` | `exe-dev-github-integration` | `nubl-agent`, or the file's identity |
+| `botEmail` | `267204973+exe-dev-github-integration[bot]@users.noreply.github.com` | `353429311+nubl-agent[bot]@users.noreply.github.com`, or the file's identity |
+| `ghHost` | `github.int.exe.xyz` | `factorio.int.<domain>`, or the file's one-label `ghHost` |
 | `repositories` | `giuseppecrj/pi-herdr-factorio` | the same, or the file's list |
 | `anthropicStages` | `accept`, `code-review` | `accept`, `code-review` |
+
+The `exmach` identity is the published `nubl-agent` GitHub App (app id 5645247, user id 353429311), from giuseppecrj/exmach#94. Its default `ghHost` is the dedicated `factorio` integration, the only one that will carry `actions`. That host is provisional until exmach's E1 and E2 land.
 
 The sandbox prefixes do not change between platforms. The gateway strips the prefix and prepends the base path, so on `exmach` a sandbox request to `/openai/v1/responses` goes upstream to `/v1/responses`, and `/anthropic/v1/messages?beta=true` goes to `/v1/messages?beta=true`.
 
@@ -69,7 +74,7 @@ The sandbox prefixes do not change between platforms. The gateway strips the pre
 - `status --json` prints a top-level `platform` object: `name`, `domain`, `descriptor`, `digest` and every field above. An unset selection and an explicit `exe-dev` print the same object.
 - The controller writes its own startup profile into `status.json`, shown as `controller.lastTick.platform`. If the two digests differ, the CLI's selection and the running controller's do not match.
 
-Refusal reasons: `unknown_platform`, `domain_invalid`, `platform_selection_mismatch`, `platform_file_unreadable`, `platform_file_malformed`, `version_unsupported`, `unknown_field`, `controller_identity_missing`, `controller_identity_invalid`, `controller_identity_unexpected`, `repositories_empty`, `repository_invalid`, `own_domain_not_forbidden`, `internal_domain_not_forbidden` and `network_contract_mismatch`.
+Refusal reasons: `unknown_platform`, `domain_invalid`, `platform_selection_mismatch`, `platform_file_unreadable`, `platform_file_malformed`, `version_unsupported`, `unknown_field`, `controller_identity_missing`, `controller_identity_invalid`, `controller_identity_unexpected`, `repositories_empty`, `repository_invalid`, `gh_host_invalid`, `gh_host_unexpected`, `own_domain_not_forbidden`, `internal_domain_not_forbidden` and `network_contract_mismatch`.
 
 ## Not covered here
 

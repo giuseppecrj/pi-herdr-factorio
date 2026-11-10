@@ -22,7 +22,7 @@ export function isRepoSlug(input: string): input is RepoSlug {
 	);
 }
 
-/** The optional root-owned selection file. It never holds hosts, addresses, paths or provider permissions. */
+/** The optional root-owned selection file. Its only host is an exmach `ghHost` label; it never holds upstreams, addresses, paths or provider permissions. */
 export const PLATFORM_FILE = "/etc/factory/platform.json";
 
 export const PLATFORM_NAMES = ["exe-dev", "exmach"] as const;
@@ -86,6 +86,8 @@ export const PLATFORM_REFUSALS = [
 	"controller_identity_unexpected",
 	"repositories_empty",
 	"repository_invalid",
+	"gh_host_invalid",
+	"gh_host_unexpected",
 	"own_domain_not_forbidden",
 	"internal_domain_not_forbidden",
 	"network_contract_mismatch",
@@ -115,12 +117,15 @@ const FILE_KEYS = [
 	"controllerAppSlug",
 	"botEmail",
 	"repositories",
+	"ghHost",
 ] as const;
 
 const MAX_FILE_BYTES = 16 * 1024;
 
 const DOMAIN =
 	/^(?=.{1,240}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/;
+
+const DNS_LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 
 const LOGIN_PATTERN = /^[a-z0-9][a-z0-9-]{0,98}\[bot\]$/;
 
@@ -133,6 +138,12 @@ const EXE_DEV_IDENTITY: ControllerIdentity = Object.freeze({
 	controllerAppSlug: "exe-dev-github-integration",
 	botEmail:
 		"267204973+exe-dev-github-integration[bot]@users.noreply.github.com",
+});
+
+const EXMACH_IDENTITY: ControllerIdentity = Object.freeze({
+	controllerLogin: "nubl-agent[bot]",
+	controllerAppSlug: "nubl-agent",
+	botEmail: "353429311+nubl-agent[bot]@users.noreply.github.com",
 });
 
 const DEFAULT_REPOSITORIES: readonly RepoSlug[] = Object.freeze(
@@ -260,6 +271,7 @@ type FileSelection = {
 	readonly appSlug: string | null;
 	readonly email: string | null;
 	readonly repositories: readonly RepoSlug[] | null;
+	readonly ghHost: string | null;
 };
 
 function optionalText(
@@ -337,6 +349,8 @@ function parsePlatformFile(text: string): Parsed<FileSelection> {
 
 	const email = optionalText(fieldOf(root, "botEmail"), EMAIL_PATTERN);
 	const repositories = readRepositories(fieldOf(root, "repositories"));
+	const ghHostValue = fieldOf(root, "ghHost");
+	const ghHost = ghHostValue === undefined ? null : textOf(ghHostValue);
 
 	if (!login.ok) return login;
 
@@ -346,6 +360,10 @@ function parsePlatformFile(text: string): Parsed<FileSelection> {
 
 	if (!repositories.ok) return repositories;
 
+	if (ghHostValue !== undefined && ghHost === null) {
+		return { ok: false, reason: "gh_host_invalid" };
+	}
+
 	return {
 		ok: true,
 		value: {
@@ -354,6 +372,7 @@ function parsePlatformFile(text: string): Parsed<FileSelection> {
 			appSlug: appSlug.value,
 			email: email.value,
 			repositories: repositories.value,
+			ghHost,
 		},
 	};
 }
@@ -368,10 +387,15 @@ function identityOf(
 		file?.email ?? null,
 	];
 
+	if (given.every((value) => value === null)) {
+		return {
+			ok: true,
+			value: selector.name === "exe-dev" ? EXE_DEV_IDENTITY : EXMACH_IDENTITY,
+		};
+	}
+
 	if (selector.name === "exe-dev") {
-		return given.every((value) => value === null)
-			? { ok: true, value: EXE_DEV_IDENTITY }
-			: { ok: false, reason: "controller_identity_unexpected" };
+		return { ok: false, reason: "controller_identity_unexpected" };
 	}
 
 	const [controllerLogin, controllerAppSlug, botEmail] = given;
@@ -391,6 +415,41 @@ function identityOf(
 		ok: true,
 		value: Object.freeze({ controllerLogin, controllerAppSlug, botEmail }),
 	};
+}
+
+/**
+ * The controller's `GH_HOST`. exe-dev's is fixed. exmach defaults to
+ * `factorio.int.<domain>`, and the file may name exactly one other DNS label
+ * under `int.<domain>`.
+ */
+function ghHostOf(
+	selector: PlatformSelector,
+	override: string | null,
+): Parsed<string> {
+	switch (selector.name) {
+		case "exe-dev":
+			return override === null
+				? { ok: true, value: "github.int.exe.xyz" }
+				: { ok: false, reason: "gh_host_unexpected" };
+		case "exmach": {
+			const suffix = `.int.${selector.domain}`;
+
+			if (override === null) {
+				return { ok: true, value: `factorio${suffix}` };
+			}
+
+			return override.endsWith(suffix) &&
+				DNS_LABEL.test(override.slice(0, -suffix.length))
+				? { ok: true, value: override }
+				: { ok: false, reason: "gh_host_invalid" };
+		}
+
+		default: {
+			const _exhaustive: never = selector;
+
+			return _exhaustive;
+		}
+	}
 }
 
 /**
@@ -432,12 +491,16 @@ export function parsePlatformProfile(input: {
 
 	if (!identity.ok) return identity;
 
+	const ghHost = ghHostOf(selector, file?.value.ghHost ?? null);
+
+	if (!ghHost.ok) return ghHost;
+
 	const network = platformNetwork(selector);
 
 	const profile: PlatformProfile = Object.freeze({
 		...network,
 		...identity.value,
-		ghHost: `github.int.${network.domain}`,
+		ghHost: ghHost.value,
 		repositories: file?.value.repositories ?? DEFAULT_REPOSITORIES,
 		anthropicStages: ANTHROPIC_STAGES,
 	});
