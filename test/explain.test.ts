@@ -34,8 +34,21 @@ import {
 	latestScores,
 	ledgerApiOf,
 	parseScores,
+	scoreEventOf,
 } from "../src/ledger.ts";
-import { allocateMeasurement, scoreHistory, sampled } from "../src/scorers.ts";
+import {
+	allocateMeasurement,
+	scoreHistory,
+	sampled,
+	enqueueScore,
+	scorerPrompt,
+} from "../src/scorers.ts";
+import { fileAdmissionStore, snapshotDigest } from "../src/admission.ts";
+import {
+	contractBytes,
+	contractDigestOf,
+	type Contract,
+} from "../src/specify.ts";
 import { digestOf } from "../src/run.ts";
 import { runCli, execFile, type ControllerRuntime } from "../server/cli.ts";
 import {
@@ -43,6 +56,8 @@ import {
 	durableUsageOf,
 	procTable,
 	readDurableAccounting,
+	measurementCharges,
+	fileRunFiles,
 } from "../server/controller.ts";
 import { sandboxExecutor, sandboxHost } from "../server/sandbox.ts";
 import { manifestDigest } from "../server/sandbox/manifest.ts";
@@ -147,6 +162,178 @@ function seed(
 
 	return row;
 }
+
+async function seedContract(
+	stateDir: string,
+	body = "ADMITTED_BODY: return a safe result.",
+) {
+	const frozen = seed(stateDir, failed);
+	const snapshot = { title: "ADMITTED_TITLE", body };
+
+	const contract: Contract = {
+		version: 2,
+		runId: frozen.row.runId,
+		issue: frozen.row.issue,
+		base: { repo, sha: frozen.row.originalBase },
+		snapshot: {
+			digest: snapshotDigest(snapshot),
+			source: "unedited",
+			eventId: frozen.row.eventId,
+			eventAt: "2026-11-10T10:00:00Z",
+		},
+		link: null,
+		summary: "Deliver a safe result",
+		behavior: ["Return a safe result"],
+		acceptance: [
+			{
+				id: "A1",
+				kind: "new_behavior",
+				text: "ACCEPTED_CRITERION: safe output",
+			},
+		],
+		exclusions: [],
+		compatibility: [],
+		limits: [],
+		files: [],
+		evidence: [],
+	};
+
+	const bytes = contractBytes(contract);
+	const digest = contractDigestOf(bytes);
+	assert.equal(
+		await fileRunFiles(stateDir).writeContract({ contract, bytes, digest }),
+		true,
+	);
+	await fileAdmissionStore(stateDir).record(
+		{
+			decision: "admitted",
+			repo,
+			issue: contract.issue,
+			issueUrl: `https://github.com/${repo}/issues/${contract.issue}`,
+			reasons: [],
+			eventId: contract.snapshot.eventId,
+			eventAt: contract.snapshot.eventAt,
+			actor: "owner",
+			actorPermission: "write",
+			snapshotDigest: contract.snapshot.digest,
+			snapshotSource: "unedited",
+			baseSha: contract.base.sha,
+			workflowDigest: digestOf(workflow),
+		},
+		snapshot,
+	);
+	assert.ok(frozen.row.artifacts.kind === "built");
+
+	const row = ledgerRowOf({
+		...frozen.row,
+		snapshotDigest: contract.snapshot.digest,
+		artifacts: { ...frozen.row.artifacts, contractDigest: digest },
+	});
+
+	writeFileSync(
+		join(stateDir, "ledger", row.row.runId, "row.json"),
+		row.bytes,
+		{ mode: 0o600 },
+	);
+	const heldout = join(stateDir, "acceptance", row.row.runId);
+	mkdirSync(heldout, { recursive: true, mode: 0o700 });
+	writeFileSync(join(heldout, "suite.json"), "HELDOUT_SUITE_SENTINEL", {
+		mode: 0o600,
+	});
+
+	return row;
+}
+
+it("score input contains only bounded, digest-bound admitted contract excerpts and accepted criteria, never held-out tests", async (t) => {
+	const state = directory(t);
+
+	const row = await seedContract(
+		state,
+		`ADMITTED_BODY\n\`\`\`\n${"é".repeat(10000)}`,
+	);
+
+	const input = await measurementInput(state, row.row.runId, true, true);
+	assert.match(input.bytes, /ADMITTED_TITLE/);
+	assert.match(input.bytes, /ADMITTED_BODY/);
+	assert.match(input.bytes, /ACCEPTED_CRITERION/);
+	assert.equal(input.input.contract?.issue.body?.truncated, true);
+	assert.match(input.input.contract?.issue.body?.text ?? "", /^```untrusted\n/);
+	assert.doesNotMatch(
+		input.bytes,
+		/HELDOUT_SUITE_SENTINEL|PRIVATE_TRANSCRIPT_SENTINEL|RAW_OUTPUT_SENTINEL|STDERR_SENTINEL/,
+	);
+
+	const parsed = parseWorkflow({
+		text: workflow,
+		repo,
+		env: (name) => process.env[name],
+	});
+
+	assert.ok(parsed.kind === "valid");
+	assert.match(
+		scorerPrompt(parsed.config.scorers![0]!, input),
+		/ACCEPTED_CRITERION/,
+	);
+	assert.equal(
+		(await measurementInput(state, row.row.runId)).input.contract,
+		null,
+	);
+	writeFileSync(
+		join(state, "contracts", row.row.runId, "contract.json"),
+		"{}",
+		{ mode: 0o600 },
+	);
+	assert.equal(
+		(await measurementInput(state, row.row.runId, false, true)).input.contract
+			?.acceptedCriteria.unavailable,
+		"accepted_criteria_unavailable",
+	);
+});
+
+it("explain accepts fenced JSON, flattens valid nested citations and keeps good findings beside invalid ones", async (t) => {
+	const state = directory(t);
+	const row = seed(state);
+	const input = await measurementInput(state, row.row.runId);
+	assert.deepEqual(
+		explainFindings(
+			"```json\n" +
+				JSON.stringify({
+					findings: [
+						{ text: "invalid", citations: ["ledger.missing"] },
+						{
+							text: "known outcome\u001b\u007f",
+							citations: [
+								"ledger.outcome.kind",
+								"ledger.outcome",
+								"ledger.outcome.missing",
+								"ledger.constructor",
+							],
+						},
+						{ text: "too big".repeat(1000), citations: ["ledger.outcome"] },
+					],
+				}) +
+				"\n```",
+			input,
+		),
+		[{ text: "known outcome", citations: ["ledger.outcome"] }],
+	);
+	assert.equal(
+		explainFindings(
+			'{"findings":[{"text":"bad","citations":["ledger.missing.x"]}]}',
+			input,
+		),
+		null,
+	);
+});
+
+it("an allocated measurement with no owner retains a conservative 30000-token charge", async (t) => {
+	const state = directory(t);
+	allocateMeasurement(state, "explain", finished.row.runId);
+	const charge = await measurementCharges(state, repo);
+	assert.equal(charge.tokens.total, 30000);
+	assert.equal(charge.tokens.kind, "lower_bound");
+	assert.equal(charge.executions, 1);
+});
 
 it("explain evidence is ledger plus bound redacted receipts, never raw sessions/output/stderr; child inclusion is explicit", async (t) => {
 	const stateDir = directory(t);
@@ -335,7 +522,7 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 	const stateDir = join(root, "s");
 	mkdirSync(stateDir, { mode: 0o700 });
 	const firstRow = seed(stateDir);
-	const failedRow = seed(stateDir, failed);
+	const failedRow = await seedContract(stateDir);
 
 	const originals = [firstRow, failedRow].map((row) =>
 		readFileSync(join(stateDir, "ledger", row.row.runId, "row.json")),
@@ -367,10 +554,21 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 		'{"label":"matched","reasoning":"ledger.outcome records the final disposition."}';
 
 	let tokens = 20;
+	let exceedWall = false;
+	let wallOffset = 0;
+	const realNow = Date.now;
+	t.mock.method(Date, "now", () => realNow() + wallOffset);
 	const requests: string[] = [];
 	let stderr = "";
 
 	const upstream = createServer((req, res) => {
+		if (req.method === "GET" && req.url === "/") {
+			res.writeHead(200);
+			res.end("ready");
+
+			return;
+		}
+
 		let body = "";
 		req.on("data", (chunk: Buffer) => {
 			body += chunk.toString();
@@ -381,10 +579,12 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 			assert.deepEqual(arrayOf(value?.tools) ?? [], []);
 			assert.doesNotMatch(
 				body,
-				/PRIVATE_TRANSCRIPT_SENTINEL|RAW_OUTPUT_SENTINEL|STDERR_SENTINEL/,
+				/PRIVATE_TRANSCRIPT_SENTINEL|RAW_OUTPUT_SENTINEL|STDERR_SENTINEL|HELDOUT_SUITE_SENTINEL/,
 			);
 			assert.match(body, /ledger/);
 			requests.push(body);
+
+			if (exceedWall) wallOffset += EXPLAIN_WALL_MS + 1;
 
 			const item = {
 				type: "message",
@@ -457,6 +657,8 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 	const address = upstream.address();
 	assert.ok(address !== null && address instanceof Object);
 	const git = new LedgerGit();
+	const runApi = ledgerApiOf(new GitHubPublicationApi(git.exec, repo));
+	await runApi.advance(null, (await runApi.root("2026-11-10T10:00:00Z")).sha);
 	let repoEnabled = true;
 
 	const exec: typeof git.exec = async (command, args, options) => {
@@ -599,13 +801,53 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 	assert.equal(Object.keys(first!)[0], "primary");
 	assert.equal(objectOf(first?.primary)?.status, "pending");
 	assert.equal(first?.passing, true);
+
+	const own = scoreEventOf(first?.event);
+	assert.ok(own);
+	assert.equal(
+		own.id,
+		digestOf(
+			`${readFileSync(join(stateDir, "measure/score-nonce"), "utf8")}/${String(first?.identity)}`,
+		),
+	);
+	assert.notEqual(own.id, digestOf(String(first?.identity)));
+
+	const queued = {
+		...own,
+		id: digestOf("unrelated queued score"),
+		scoredRunId: digestOf("other run"),
+		supersedes: null,
+	};
+
+	enqueueScore(stateDir, queued);
+	writeFileSync(
+		join(stateDir, "measure/score-outbox", queued.id, "retry.json"),
+		JSON.stringify({
+			attempts: 1,
+			nextAt: Date.now() + 60000,
+			reason: "transport_unavailable",
+			blocked: false,
+		}),
+		{ mode: 0o600 },
+	);
 	answer =
 		'{"label":"mismatched","reasoning":"ledger.outcome needs_info is not delivery."}';
 	const second = await invoke("score");
 	assert.equal(second?.passing, false);
 	assert.equal(objectOf(second?.event)?.supersedes, objectOf(first?.event)?.id);
-	assert.equal(scoreHistory(stateDir).length, 2);
-	assert.equal(latestScores(scoreHistory(stateDir)).length, 1);
+	assert.equal(second?.published, true);
+	assert.equal(second?.queuedScores, 1);
+	assert.equal(
+		scoreHistory(stateDir).filter((e) => e.scoredRunId === firstRow.row.runId)
+			.length,
+		2,
+	);
+	assert.equal(
+		latestScores(scoreHistory(stateDir)).filter(
+			(e) => e.scoredRunId === firstRow.row.runId,
+		).length,
+		1,
+	);
 	const beforeExplainWrites = git.writes.length;
 	answer = JSON.stringify({
 		findings: [
@@ -619,9 +861,21 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 			},
 		],
 	});
-	const explained = await invoke("explain", failed.row.runId);
-	assert.equal(Object.keys(explained!)[0], "primary");
-	assert.equal(arrayOf(explained?.findings)?.length, 1);
+	const explained = await invoke("explain", failed.row.runId, false);
+	assert.equal(explained, null);
+	assert.match(stdout, /^F12a clean landing share: pending/);
+	assert.match(stdout, /A hard check failed/);
+
+	const explainedResult = objectOf(
+		parseJson(
+			readFileSync(
+				join(stateDir, "measure/explain", failed.row.runId, "1/result.json"),
+				"utf8",
+			),
+		),
+	);
+
+	assert.equal(arrayOf(explainedResult?.findings)?.length, 1);
 	assert.equal(
 		git.writes.length,
 		beforeExplainWrites,
@@ -653,6 +907,23 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 	await invoke("score", failed.row.runId, false);
 	assert.match(stdout, /^F12a clean landing share: pending/);
 	assert.match(stdout, /passing measurement/);
+	assert.match(stdout, /Published;/);
+	assert.doesNotMatch(stdout, /Publication pending/);
+	assert.match(stdout, /Other scores queued: 1/);
+	assert.match(requests[3]!, /ADMITTED_TITLE/);
+	assert.match(requests[3]!, /ADMITTED_BODY/);
+	assert.match(requests[3]!, /ACCEPTED_CRITERION/);
+
+	const owner = objectOf(
+		parseJson(
+			readFileSync(
+				join(stateDir, "measure/score", firstRow.row.runId, "1/owner.json"),
+				"utf8",
+			),
+		),
+	);
+
+	assert.equal(owner?.maxTokens, 16000);
 	assert.ok(
 		failedRow.row.v !== 1 &&
 			failedRow.row.failure?.kind === "known" &&
@@ -736,11 +1007,39 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 		1,
 	);
 	assert.equal(objectOf(parseJson(stdout))?.findings, null);
+	assert.equal(Object.keys(objectOf(parseJson(stdout))!)[0], "primary");
 	assert.ok(
 		(await readDurableAccounting(stateDir, repo)).measurement.tokens.total >=
 			30_081,
 	);
 	tokens = 20;
+
+	// Native wall refusal: the model settles after the five-minute allowance.
+	exceedWall = true;
+	stdout = "";
+	assert.equal(
+		await runCli(
+			[
+				"explain",
+				"--run",
+				failed.row.runId,
+				"--repo",
+				repo,
+				"--state-dir",
+				stateDir,
+				"--json",
+			],
+			io,
+		),
+		1,
+	);
+	assert.equal(objectOf(parseJson(stdout))?.findings, null);
+	assert.equal(
+		objectOf(parseJson(stdout))?.reason,
+		"measurement_wall_exhausted",
+	);
+	exceedWall = false;
+	wallOffset = 0;
 
 	// A scorer source edit is voided before the gateway receives any work.
 	seed(stateDir, failed, ["src/scorers.ts"]);
@@ -776,9 +1075,11 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 	});
 
 	assert.ok(parsed.kind === "valid");
+	assert.ok(parsed.config.grader);
 
 	const config = {
 		...parsed.config,
+		grader: { ...parsed.config.grader, maxTokens: 12000 },
 		scorers: parsed.config.scorers?.map((s) => ({ ...s, samplingRate: 100 })),
 	};
 
@@ -803,6 +1104,17 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 	);
 	await automatic.stop();
 	assert.equal(requests.length, beforeAutomatic + 1);
+
+	const scoreRoot = join(stateDir, "measure/score", firstRow.row.runId);
+	const automaticSeq = Math.max(...readdirSync(scoreRoot).map(Number));
+
+	const automaticOwner = objectOf(
+		parseJson(
+			readFileSync(join(scoreRoot, String(automaticSeq), "owner.json"), "utf8"),
+		),
+	);
+
+	assert.equal(automaticOwner?.maxTokens, 12000);
 
 	const restarted = controllerMeasurements({
 		stateDir,
@@ -849,6 +1161,12 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 			hardCheckVeto: true,
 			voidedBeforeRequest: true,
 			explainCapRefused: true,
+			explainWallRefused: true,
+			wallClockProbe:
+				"parent Date.now advanced by 300001 ms at the model response; no five-minute wait",
+			configuredScoreCap: 12000,
+			ownScorePublishedWithQueue: true,
+			contractIncluded: true,
 			automaticOnce: true,
 		}),
 	);

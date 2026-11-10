@@ -17,7 +17,6 @@ import {
 	enqueueScore,
 	previousScore,
 	scoreHistory,
-	SCORE_MAX_TOKENS,
 	FAMILY_NOTE,
 	type MeasurementKind,
 	type MeasurementOwner,
@@ -3965,15 +3964,47 @@ export async function readRunCharges(
 	};
 }
 
-export async function pumpScoreOutbox(input: {
+const scorePumps = new Map<string, Promise<boolean | null>>();
+export const SCORE_PUBLISH_SLICE_MS = 5_000;
+
+type ScorePumpInput = {
 	stateDir: string;
 	repo: RepoSlug;
 	exec: Exec;
 	log: Log;
-}) {
+	clock?: () => number;
+};
+
+export async function pumpScoreOutbox(
+	input: ScorePumpInput,
+): Promise<boolean | null> {
+	const key = resolve(input.stateDir);
+	const previous = scorePumps.get(key) ?? Promise.resolve(null);
+
+	const pending = previous.then(async () => {
+		try {
+			return await publishScoreOutbox(input);
+		} catch {
+			input.log("score_pump_failed", {});
+
+			return null;
+		}
+	});
+
+	scorePumps.set(key, pending);
+
+	try {
+		return await pending;
+	} finally {
+		if (scorePumps.get(key) === pending) scorePumps.delete(key);
+	}
+}
+
+async function publishScoreOutbox(input: ScorePumpInput) {
 	const root = join(input.stateDir, "measure", "score-outbox");
 
-	const deadline = Date.now() + 20_000;
+	const clock = input.clock ?? Date.now;
+	const deadline = clock() + SCORE_PUBLISH_SLICE_MS;
 
 	const api = ledgerApiOf(
 		new GitHubPublicationApi(
@@ -3982,7 +4013,7 @@ export async function pumpScoreOutbox(input: {
 			{},
 			async () => true,
 			undefined,
-			{ now: Date.now, sliceMs: 20_000, callMs: 5_000 },
+			{ now: clock, sliceMs: SCORE_PUBLISH_SLICE_MS, callMs: 5_000 },
 		),
 		"scores",
 	);
@@ -4015,8 +4046,7 @@ export async function pumpScoreOutbox(input: {
 		if (present(join(dir, "retry.json")) && retry === null)
 			throw new Error("score_retry_invalid");
 
-		if (retry?.blocked || (retry !== null && retry.nextAt > Date.now()))
-			continue;
+		if (retry?.blocked || (retry !== null && retry.nextAt > clock())) continue;
 		const bytes = Buffer.from(`${JSON.stringify(event)}\n`);
 		const adoptionPath = join(dir, "adoption.json");
 		let result: Awaited<ReturnType<typeof appendRun>>;
@@ -4038,13 +4068,13 @@ export async function pumpScoreOutbox(input: {
 					save: (value) =>
 						writeAtomic(adoptionPath, `${JSON.stringify(value)}\n`),
 				},
-				true,
+				false,
 				indexScores,
 			);
 		} while (
 			result.kind === "deferred" &&
 			result.reason === "adoption_pending" &&
-			Date.now() < deadline
+			clock() < deadline
 		);
 
 		if (result.kind === "published") {
@@ -4064,7 +4094,7 @@ export async function pumpScoreOutbox(input: {
 			const attempts = (retry?.attempts ?? 0) + 1;
 			await writeAtomic(
 				join(dir, "retry.json"),
-				`${JSON.stringify({ attempts, nextAt: Date.now() + Math.min(60_000, 1000 * 2 ** Math.min(attempts, 6)), reason: result.reason, blocked: result.kind === "blocked" })}\n`,
+				`${JSON.stringify({ attempts, nextAt: clock() + Math.min(60_000, 1000 * 2 ** Math.min(attempts, 6)), reason: result.reason, blocked: result.kind === "blocked" })}\n`,
 			);
 			input.log("score_publication_pending", {
 				id: event.id,
@@ -4073,7 +4103,7 @@ export async function pumpScoreOutbox(input: {
 			break;
 		}
 
-		if (Date.now() >= deadline) break;
+		if (clock() >= deadline) break;
 	}
 
 	return scoreHistory(input.stateDir).every((event) =>
@@ -4097,8 +4127,17 @@ async function syncScoreHistory(input: {
 	const head = await api.commit(tip);
 	const file = await api.file(head.tree);
 
-	for (const event of parseScores(file.bytes))
+	for (const [index, event] of parseScores(file.bytes).entries()) {
 		enqueueScore(input.stateDir, event);
+
+		if (
+			!(await writeAtomic(
+				join(input.stateDir, "measure/score-outbox", event.id, "stream.json"),
+				`${JSON.stringify({ line: index + 1 })}\n`,
+			))
+		)
+			throw new Error("score_history_unwritable");
+	}
 }
 
 /** Only controller-written patch metadata is inspected; no patch or transcript enters the judge. */
@@ -4177,6 +4216,7 @@ export async function controllerMeasure(
 		input.stateDir,
 		input.runId,
 		scorer?.includeChildren ?? false,
+		scorer !== null,
 	);
 
 	if (evidence.input.ledger.row.repo !== input.repo)
@@ -4205,7 +4245,10 @@ export async function controllerMeasure(
 		kind: input.kind,
 		runId: input.runId,
 		model,
-		maxTokens: input.kind === "explain" ? EXPLAIN_MAX_TOKENS : SCORE_MAX_TOKENS,
+		maxTokens:
+			input.kind === "explain"
+				? EXPLAIN_MAX_TOKENS
+				: (input.config.grader?.maxTokens ?? 16_000),
 		at: new Date(Math.floor(Date.now() / 1000) * 1000).toISOString(),
 		inputDigest: evidence.digest,
 		scorer,
@@ -4313,7 +4356,7 @@ export async function controllerMeasure(
 		const answer = output === null ? null : scorerAnswer(output, scorer);
 
 		const event: ScoreEvent = {
-			id: execution.executionId,
+			id: execution.eventId,
 			scoredRunId: input.runId,
 			scorerId: scorer.id,
 			scorerDigest: scorerDigest(scorer, model),
@@ -4344,7 +4387,16 @@ export async function controllerMeasure(
 			join(execution.dir, "result.json"),
 			`${JSON.stringify({ usage, launched, event })}\n`,
 		);
-		const published = await pumpScoreOutbox(input);
+		await pumpScoreOutbox(input);
+
+		const root = join(input.stateDir, "measure/score-outbox");
+		const published = present(join(root, event.id, "published.json"));
+
+		const queuedScores = scoreHistory(input.stateDir).filter(
+			(other) =>
+				other.id !== event.id &&
+				!present(join(root, other.id, "published.json")),
+		).length;
 
 		return {
 			primary,
@@ -4353,6 +4405,7 @@ export async function controllerMeasure(
 			event,
 			passing: event.score === null ? null : event.score >= event.passingScore,
 			published,
+			queuedScores,
 		};
 	}
 
@@ -4459,11 +4512,11 @@ export async function measurementCharges(stateDir: string, repo: string) {
 				if (!/^[1-9][0-9]*$/.test(seq)) continue;
 				const dir = measurementDir(stateDir, kind, runId, Number(seq));
 
-				const owner = objectOf(
-					parseJsonText(regularText(join(dir, "owner.json"))),
-				);
+				const owner = present(join(dir, "owner.json"))
+					? objectOf(parseJsonText(regularText(join(dir, "owner.json"))))
+					: null;
 
-				if (owner?.repo !== repo) continue;
+				if (owner !== null && owner.repo !== repo) continue;
 
 				const result = present(join(dir, "result.json"))
 					? objectOf(parseJsonText(regularText(join(dir, "result.json"))))
@@ -4473,13 +4526,16 @@ export async function measurementCharges(stateDir: string, repo: string) {
 				const charge = await executionCharge(join(dir, "runtime"));
 				executions++;
 				tokens += Math.max(
-					countOf(usage?.tokens) ??
-						countOf(owner.maxTokens) ??
+					(owner === null ? null : countOf(usage?.tokens)) ??
+						countOf(owner?.maxTokens) ??
 						EXPLAIN_MAX_TOKENS,
 					charge?.total ?? 0,
 				);
 				uncertainRequests += charge?.uncertain ?? 0;
-				exact &&= usage?.exact === true && (charge?.uncertain ?? 0) === 0;
+				exact &&=
+					owner !== null &&
+					usage?.exact === true &&
+					(charge?.uncertain ?? 0) === 0;
 			}
 		}
 	}
@@ -8471,8 +8527,6 @@ export async function pumpLedgerOutbox(input: {
 				error: backlog.lastError,
 			});
 
-		await pumpScoreOutbox(input);
-
 		return backlog;
 	} catch {
 		input.log("ledger_pump_failed", {});
@@ -8584,6 +8638,7 @@ export async function serveLoop(input: {
 	signal: AbortSignal;
 	log: Log;
 	pump?: () => Promise<LedgerBacklog | null>;
+	scorePump?: () => Promise<boolean | null>;
 	durableUsage?: () => JsonValue;
 	notify?: (message: "READY=1" | "WATCHDOG=1") => Promise<void>;
 }): Promise<void> {
@@ -8620,6 +8675,30 @@ export async function serveLoop(input: {
 		scheduled.unref();
 	};
 
+	let scorePending: Promise<void> | null = null;
+	let scoreScheduled: NodeJS.Immediate | null = null;
+
+	const scores = () => {
+		if (
+			input.scorePump === undefined ||
+			scorePending !== null ||
+			scoreScheduled !== null
+		)
+			return;
+		scoreScheduled = setImmediate(() => {
+			scoreScheduled = null;
+			scorePending = input.scorePump!()
+				.then(() => undefined)
+				.catch(() => {
+					log("score_pump_failed", {});
+				})
+				.finally(() => {
+					scorePending = null;
+				});
+		});
+		scoreScheduled.unref();
+	};
+
 	while (!signal.aborted) {
 		watchdog();
 		const report = await orchestrator.tick();
@@ -8633,6 +8712,7 @@ export async function serveLoop(input: {
 		if (!written) log("status_unwritable", {});
 
 		watchdog();
+		scores();
 
 		await input.pump?.();
 
@@ -8642,5 +8722,8 @@ export async function serveLoop(input: {
 	}
 
 	if (scheduled !== null) clearImmediate(scheduled);
+
+	if (scoreScheduled !== null) clearImmediate(scoreScheduled);
+	await scorePending;
 	log("controller_stopping", {});
 }

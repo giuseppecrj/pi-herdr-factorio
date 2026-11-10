@@ -52,6 +52,7 @@ import {
 	readLock,
 	pinVerification,
 	pumpLedgerOutbox,
+	pumpScoreOutbox,
 	readStatus,
 	readLedgerBacklog,
 	readDurableAccounting,
@@ -662,6 +663,14 @@ async function runController(
 				log,
 			});
 
+		const scorePump = () =>
+			pumpScoreOutbox({
+				stateDir: parsed.stateDir,
+				repo: parsed.repo,
+				exec: io.exec,
+				log,
+			});
+
 		if (parsed.command === "serve") {
 			log("controller_ready", {
 				pid: lock.holder.pid,
@@ -697,6 +706,7 @@ async function runController(
 					signal: runtime.signal,
 					log,
 					pump,
+					scorePump,
 					durableUsage: usage.current,
 				});
 			} finally {
@@ -732,6 +742,7 @@ async function runController(
 
 		await measurement.stop();
 		await pump();
+		await scorePump();
 		await cadence?.stop();
 		io.stdout(json(report));
 
@@ -1802,7 +1813,7 @@ async function runMeasurementCli(
 
 			if (report.kind === "score")
 				io.stdout(
-					`${report.event.scorerId}: ${report.event.status}; ${report.event.label ?? "no label"}; score ${report.event.score ?? "unavailable"}; ${report.passing === null ? "not graded" : report.passing ? "passing measurement" : "failing measurement"}\n${report.event.reasoning}\n${report.event.familyNote}\n${report.published ? "Published" : "Publication pending"}; ${report.event.usage.tokens} measurement tokens\n`,
+					`${report.event.scorerId}: ${report.event.status}; ${report.event.label ?? "no label"}; score ${report.event.score ?? "unavailable"}; ${report.passing === null ? "not graded" : report.passing ? "passing measurement" : "failing measurement"}\n${report.event.reasoning}\n${report.event.familyNote}\n${report.published ? "Published" : "Publication pending"}; ${report.event.usage.tokens} measurement tokens\nOther scores queued: ${report.queuedScores}\n`,
 				);
 			else if (report.findings === null)
 				io.stdout(

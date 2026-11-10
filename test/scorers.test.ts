@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync, mkdtempSync, rmSync } from "node:fs";
+import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { it } from "node:test";
@@ -14,7 +14,9 @@ import {
 	FAMILY_NOTE,
 	enqueueScore,
 	scoreHistory,
+	allocateMeasurement,
 } from "../src/scorers.ts";
+import { pumpScoreOutbox, pumpLedgerOutbox } from "../server/controller.ts";
 import {
 	latestScores,
 	parseScores,
@@ -23,6 +25,7 @@ import {
 	indexScores,
 	scoreEventOf,
 	type ScoreEvent,
+	parseLedger,
 } from "../src/ledger.ts";
 import {
 	GitHubPublicationApi,
@@ -118,9 +121,30 @@ it("trusted scorers parse declared labels, the 10 percent default, and refuse un
 	])
 		assert.equal(load(text.replace(before!, after!)).kind, "invalid");
 	assert.equal(
-		load(text.replace("grader:\n  model: openai/gpt-6.1-sol\n", "")).kind,
+		load(
+			text.replace(
+				"grader:\n  model: openai/gpt-6.1-sol\n  maxTokens: 16000\n",
+				"",
+			),
+		).kind,
 		"invalid",
 	);
+});
+
+it("trusted grader.maxTokens defaults to 16000, accepts configured caps, and rejects malformed caps", () => {
+	const defaults = load(text.replace("  maxTokens: 16000\n", ""));
+	const custom = load(text.replace("  maxTokens: 16000", "  maxTokens: 12000"));
+	assert.ok(defaults.kind === "valid");
+	assert.equal(defaults.config.grader?.maxTokens, 16000);
+	assert.ok(custom.kind === "valid");
+	assert.equal(custom.config.grader?.maxTokens, 12000);
+
+	for (const value of ["0", "-1", "1.5", "no", "9007199254740992"]) {
+		assert.equal(
+			load(text.replace("  maxTokens: 16000", `  maxTokens: ${value}`)).kind,
+			"invalid",
+		);
+	}
 });
 
 it("declared labels classify while undeclared labels, duplicate keys and oversized reasoning fail scoring", () => {
@@ -187,7 +211,7 @@ it("fingerprints cover prompt, labels, passing score and pinned grader, not samp
 	assert.equal(scorerTouched(["src/tickets.ts"]), false);
 });
 
-it("re-scoring supersedes only the projection, retaining both events; invalid chains refuse", () => {
+it("re-scoring retains history and tolerates foreign or forked supersession", () => {
 	const first = event();
 	const second = { ...event(2, first.id), label: "mismatched", score: 0 };
 
@@ -197,10 +221,9 @@ it("re-scoring supersedes only the projection, retaining both events; invalid ch
 
 	assert.equal(history.length, 2);
 	assert.deepEqual(latestScores(history), [second]);
-	assert.throws(
-		() => parseScores(Buffer.from(`${JSON.stringify(second)}\n`)),
-		/score_supersession/,
-	);
+	assert.deepEqual(parseScores(Buffer.from(`${JSON.stringify(second)}\n`)), [
+		second,
+	]);
 	assert.throws(
 		() =>
 			parseScores(
@@ -373,6 +396,255 @@ it("failed or voided score events can never carry a numeric grade or passing lab
 		assert.equal(scoreEventOf({ ...invalid, label: null }), null);
 		assert.equal(scoreEventOf({ ...invalid, score: null }), null);
 		assert.ok(scoreEventOf({ ...invalid, label: null, score: null }));
+	}
+});
+
+it("two state directories scoring the same run concurrently cannot collide or brick forked history", async () => {
+	const a = mkdtempSync(join(tmpdir(), "s12a-"));
+	const b = mkdtempSync(join(tmpdir(), "s12b-"));
+
+	try {
+		const left = allocateMeasurement(a, "score", runId);
+		const right = allocateMeasurement(b, "score", runId);
+
+		const first = {
+			...event(),
+			id: left.eventId ?? left.executionId,
+			at: "2026-11-10T10:00:02Z",
+		};
+
+		const second = {
+			...event(),
+			id: right.eventId ?? right.executionId,
+			at: "2026-11-10T10:00:00Z",
+			reasoning: "another judge",
+		};
+
+		assert.notEqual(first.id, second.id);
+
+		const git = new LedgerGit();
+		const api = ledgerApiOf(new GitHubPublicationApi(git.exec, repo));
+		await api.advance(null, (await api.root(first.at)).sha);
+		enqueueScore(a, first);
+		enqueueScore(b, second);
+		assert.equal(
+			await pumpScoreOutbox({
+				stateDir: a,
+				repo,
+				exec: git.exec,
+				log: () => {},
+			}),
+			true,
+		);
+		assert.equal(
+			await pumpScoreOutbox({
+				stateDir: b,
+				repo,
+				exec: git.exec,
+				log: () => {},
+			}),
+			true,
+		);
+
+		const scores = ledgerApiOf(
+			new GitHubPublicationApi(git.exec, repo),
+			"scores",
+		);
+
+		const remote = parseScores(
+			(await scores.file((await scores.commit((await scores.ref())!)).tree))
+				.bytes,
+		);
+
+		assert.deepEqual(remote, [first, second]);
+		enqueueScore(a, second);
+		enqueueScore(a, event(3, digestOf("foreign missing predecessor")));
+		assert.equal(scoreHistory(a).length, 3);
+		assert.equal(
+			await pumpScoreOutbox({
+				stateDir: a,
+				repo,
+				exec: git.exec,
+				log: () => {},
+			}),
+			true,
+		);
+		assert.deepEqual(
+			scoreHistory(a).slice(0, 2),
+			remote,
+			"public stream order wins over timestamps and fork links",
+		);
+	} finally {
+		rmSync(a, { recursive: true, force: true });
+		rmSync(b, { recursive: true, force: true });
+	}
+});
+
+it("score reasoning cannot carry terminal controls through the answer or ledger codec", () => {
+	const reasoning = "safe\u001b]8;;hostile\u0007 text\u007f\n\tend";
+
+	const answer = scorerAnswer(
+		JSON.stringify({ label: "matched", reasoning }),
+		scorer,
+	);
+
+	assert.ok(answer);
+	assert.equal(answer.reasoning, "safe]8;;hostile text\n\tend");
+	assert.equal(scoreEventOf({ ...event(), reasoning }), null);
+	assert.ok(scoreEventOf({ ...event(), reasoning: answer.reasoning }));
+});
+
+it("score publication is serialized and score faults do not masquerade as run-ledger faults", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "s12-"));
+
+	try {
+		const git = new LedgerGit();
+		const api = ledgerApiOf(new GitHubPublicationApi(git.exec, repo));
+		await api.advance(null, (await api.root(event().at)).sha);
+		enqueueScore(dir, event());
+
+		const logs: string[] = [];
+
+		const input = {
+			stateDir: dir,
+			repo,
+			exec: git.exec,
+			log: (name: string) => {
+				logs.push(name);
+			},
+		};
+
+		assert.deepEqual(
+			await Promise.all([pumpScoreOutbox(input), pumpScoreOutbox(input)]),
+			[true, true],
+		);
+		assert.equal(logs.length, 0);
+		writeFileSync(join(dir, "measure/score-outbox/anchor.json"), "{}", {
+			mode: 0o600,
+		});
+		assert.equal(await pumpScoreOutbox(input), null);
+		assert.deepEqual(logs, ["score_pump_failed"]);
+		assert.ok(await pumpLedgerOutbox({ ...input, now: Date.now() }));
+		assert.equal(logs.includes("ledger_pump_failed"), false);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+it("a run append with its existing anchor still works after score commits", async () => {
+	const rows = parseLedger(
+		readFileSync(
+			new URL("fixtures/metrics/runs-2026-11-08.jsonl", import.meta.url),
+		),
+	).filter((line) => line.kind === "known");
+
+	const git = new LedgerGit();
+	const pub = new GitHubPublicationApi(git.exec, repo);
+	const runs = ledgerApiOf(pub);
+	const first = rows[0]!;
+	const next = rows[1]!;
+
+	const row = (line: typeof first) => ({
+		runId: line.row.runId,
+		bytes: line.bytes,
+		digest: line.digest,
+		date: "2026-11-10T10:00:00Z",
+	});
+
+	const before = await appendRun(runs, row(first), null);
+	assert.ok(before.kind === "published");
+
+	const score = event();
+	const bytes = Buffer.from(`${JSON.stringify(score)}\n`);
+
+	assert.equal(
+		(
+			await appendRun(
+				ledgerApiOf(pub, "scores"),
+				{ runId: score.id, bytes, digest: digestOf(bytes), date: score.at },
+				null,
+				3,
+				undefined,
+				false,
+				indexScores,
+			)
+		).kind,
+		"published",
+	);
+	assert.equal(
+		(await appendRun(runs, row(next), before.anchor)).kind,
+		"published",
+	);
+
+	const tip = await readLedgerCommit(pub, (await runs.ref())!);
+	assert.deepEqual(
+		(await readLedgerFile(pub, tip.tree)).bytes,
+		Buffer.concat([first.bytes, next.bytes]),
+	);
+	assert.deepEqual(
+		parseScores((await readLedgerFile(pub, tip.tree, SCORE_FILE)).bytes),
+		[score],
+	);
+});
+
+it("score publication has its own five-second transport slice", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "s12-"));
+
+	try {
+		const git = new LedgerGit();
+		const api = ledgerApiOf(new GitHubPublicationApi(git.exec, repo));
+		await api.advance(null, (await api.root(event().at)).sha);
+		enqueueScore(dir, event());
+		let elapsed = 0;
+		let calls = 0;
+
+		const result = await pumpScoreOutbox({
+			stateDir: dir,
+			repo,
+			log: () => {},
+			clock: () => elapsed,
+			exec: async (command, args, options) => {
+				assert.ok(
+					elapsed < 5000,
+					"no GitHub request begins outside the score slice",
+				);
+				assert.ok(
+					options?.timeoutMs !== undefined &&
+						options.timeoutMs <= 5000 - elapsed,
+				);
+				calls++;
+				elapsed += Math.min(1000, options.timeoutMs);
+
+				return git.exec(command, args, options);
+			},
+		});
+
+		assert.equal(result, false);
+		assert.equal(elapsed, 5000);
+		assert.equal(calls, 5);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+it("score publication never creates the run-owned ledger root", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "s12-"));
+
+	try {
+		const git = new LedgerGit();
+		enqueueScore(dir, event());
+		assert.equal(
+			await pumpScoreOutbox({
+				stateDir: dir,
+				repo,
+				exec: git.exec,
+				log: () => {},
+			}),
+			false,
+		);
+		assert.equal(git.writes.length, 0);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
 	}
 });
 

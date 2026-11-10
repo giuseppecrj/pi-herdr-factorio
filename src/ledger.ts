@@ -1230,7 +1230,13 @@ const scoreText =
 	(value) => {
 		const text = textOf(value);
 
-		return text !== null && Buffer.byteLength(text) <= max
+		return text !== null &&
+			Buffer.byteLength(text) <= max &&
+			![...text].some(
+				(c) =>
+					(c.charCodeAt(0) < 32 && c !== "\n" && c !== "\t") ||
+					(c.charCodeAt(0) >= 127 && c.charCodeAt(0) <= 159),
+			)
 			? text
 			: fail("invalid_score_text");
 	};
@@ -1284,19 +1290,13 @@ export function parseScores(bytes: Uint8Array): readonly ScoreEvent[] {
 		throw new LedgerRowError("ledger_corrupt");
 	const events: ScoreEvent[] = [];
 	const ids = new Set<string>();
-	const latest = new Map<string, string>();
 
 	for (const line of text === "" ? [] : text.slice(0, -1).split("\n")) {
 		const event = hasDuplicateKey(line) ? null : scoreEventOf(parseJson(line));
 
 		if (event === null || ids.has(event.id))
 			throw new LedgerRowError("ledger_corrupt");
-		const key = JSON.stringify([event.scoredRunId, event.scorerId]);
-
-		if (event.supersedes !== (latest.get(key) ?? null))
-			throw new LedgerRowError("score_supersession");
 		ids.add(event.id);
-		latest.set(key, event.id);
 		events.push(event);
 	}
 

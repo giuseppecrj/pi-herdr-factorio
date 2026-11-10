@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { existsSync } from "node:fs";
 import {
 	mkdtemp,
 	rm,
@@ -1382,6 +1383,86 @@ test("a failed metric refresh retains the last good snapshot and records stalene
 		assert.equal(feed.metrics.share, 0.5);
 		assert.equal(feed.metrics.stale, true);
 		assert.match(renderDashboard(feed, "", "token"), /Stale snapshot/);
+	});
+});
+
+test("score publication starts after status and WATCHDOG and cannot widen the maximum ping gap", async () => {
+	await state(async (root) => {
+		const measure = async (scoring: boolean) => {
+			const dir = join(root, scoring ? "scores" : "baseline");
+			await mkdir(dir, { mode: 0o700 });
+			const stop = new AbortController();
+			let elapsed = 0;
+			let ticks = 0;
+			let calls = 0;
+			const pings: number[] = [];
+			let release = () => {};
+
+			const pending = new Promise<boolean>((done) => {
+				release = () => done(true);
+			});
+
+			await serveLoop({
+				stateDir: dir,
+				orchestrator: {
+					pollIntervalMs: 30000,
+					tick: async () => {
+						ticks++;
+						await new Promise<void>((done) => setImmediate(done));
+
+						return report;
+					},
+				},
+				signal: stop.signal,
+				log: () => {},
+				notify: async (message) => {
+					if (message === "WATCHDOG=1") pings.push(elapsed);
+				},
+				pump: async () => {
+					elapsed += 20000;
+					await new Promise<void>((done) => setImmediate(done));
+
+					return null;
+				},
+				scorePump: scoring
+					? () => {
+							calls++;
+							assert.ok(existsSync(join(dir, "status.json")));
+							assert.ok(
+								pings.length >= 2,
+								"the post-status WATCHDOG has already been sent",
+							);
+
+							return pending;
+						}
+					: undefined,
+				sleep: async () => {
+					elapsed += 30000;
+					await new Promise<void>((done) => setImmediate(done));
+
+					if (ticks === 3) {
+						stop.abort();
+						release();
+					}
+				},
+			});
+			assert.equal(
+				calls,
+				scoring ? 1 : 0,
+				"only one score pump in flight; its settlement stays off the loop path",
+			);
+
+			return pings;
+		};
+
+		const baseline = await measure(false);
+		const withScores = await measure(true);
+		assert.deepEqual(withScores, baseline);
+		assert.ok(
+			Math.max(
+				...withScores.slice(1).map((ping, i) => ping - withScores[i]!),
+			) <= 50000,
+		);
 	});
 });
 

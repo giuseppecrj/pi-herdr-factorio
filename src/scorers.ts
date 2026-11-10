@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { mkdirSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { exclusive, privateDir, regularText } from "./artifacts.ts";
@@ -15,9 +16,12 @@ import {
 	textOf,
 	hasDuplicateKey,
 } from "../server/sandbox/json.ts";
-import type { MeasurementInput } from "./explain.ts";
+import {
+	safeMeasurementText,
+	jsonAnswer,
+	type MeasurementInput,
+} from "./explain.ts";
 
-export const SCORE_MAX_TOKENS = 10_000;
 export const FAMILY_NOTE = "context-isolated, same family, not cross-family";
 
 export const SCORER_FILES = [
@@ -69,9 +73,11 @@ export function scorerPrompt(
 }
 
 export function scorerAnswer(text: string, scorer: ScorerConfig) {
-	const answer = hasDuplicateKey(text) ? null : objectOf(parseJson(text));
+	const json = jsonAnswer(text);
+	const answer = hasDuplicateKey(json) ? null : objectOf(parseJson(json));
 	const label = textOf(answer?.label);
-	const reasoning = textOf(answer?.reasoning);
+	const raw = textOf(answer?.reasoning);
+	const reasoning = raw === null ? null : safeMeasurementText(raw);
 
 	if (
 		label === null ||
@@ -112,6 +118,14 @@ export function allocateMeasurement(
 			? scoreHistory(stateDir).filter((event) => event.scoredRunId === runId)
 			: [];
 
+	const noncePath = join(stateDir, "measure", "score-nonce");
+
+	if (!existsSync(noncePath))
+		exclusive(noncePath, randomBytes(32).toString("hex"));
+	const nonce = regularText(noncePath, 64);
+
+	if (!/^[a-f0-9]{64}$/.test(nonce)) throw new Error("score_nonce_invalid");
+
 	let seq =
 		Math.max(
 			history.length,
@@ -123,7 +137,8 @@ export function allocateMeasurement(
 
 	while (
 		history.some(
-			(event) => event.id === digestOf(`measure/${kind}/${runId}/${seq}`),
+			(event) =>
+				event.id === digestOf(`${nonce}/measure/${kind}/${runId}/${seq}`),
 		)
 	)
 		seq++;
@@ -132,7 +147,13 @@ export function allocateMeasurement(
 	mkdirSync(dir, { mode: 0o700 });
 	const identity = `measure/${kind}/${runId}/${seq}`;
 
-	return { seq, dir, identity, executionId: digestOf(identity) };
+	return {
+		seq,
+		dir,
+		identity,
+		executionId: digestOf(identity),
+		eventId: digestOf(`${nonce}/${identity}`),
+	};
 }
 
 export function scoreHistory(stateDir: string): readonly ScoreEvent[] {
@@ -156,8 +177,25 @@ export function scoreHistory(stateDir: string): readonly ScoreEvent[] {
 			return event;
 		});
 
-	const ordered: ScoreEvent[] = [];
-	const remaining = [...events];
+	const lineOf = (event: ScoreEvent) => {
+		const dir = join(root, event.id);
+
+		const path = existsSync(join(dir, "published.json"))
+			? join(dir, "published.json")
+			: join(dir, "stream.json");
+
+		return existsSync(path)
+			? Number(objectOf(parseJson(regularText(path)))?.line) || Infinity
+			: Infinity;
+	};
+
+	const ordered = events
+		.filter((event) => Number.isFinite(lineOf(event)))
+		.sort((a, b) => lineOf(a) - lineOf(b));
+
+	const remaining = events
+		.filter((event) => !Number.isFinite(lineOf(event)))
+		.sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
 
 	while (remaining.length > 0) {
 		const at = remaining.findIndex(
@@ -166,8 +204,7 @@ export function scoreHistory(stateDir: string): readonly ScoreEvent[] {
 				ordered.some((e) => e.id === event.supersedes),
 		);
 
-		if (at < 0) throw new Error("score_history_incomplete");
-		ordered.push(...remaining.splice(at, 1));
+		ordered.push(...remaining.splice(at < 0 ? 0 : at, 1));
 	}
 
 	parseScores(

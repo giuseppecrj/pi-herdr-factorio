@@ -145,7 +145,10 @@ export type WorkflowConfig = {
 	readonly replay?: { readonly maxTokens: number } | null;
 	readonly cadence?: CadenceConfig | null;
 	readonly scorers?: readonly ScorerConfig[];
-	readonly grader?: { readonly model: ModelId } | null;
+	readonly grader?: {
+		readonly model: ModelId;
+		readonly maxTokens: number;
+	} | null;
 	readonly stages: StageSettings;
 	readonly checkpoints: { readonly approveMerge: { readonly mode: "always" } };
 };
@@ -906,7 +909,17 @@ function readCadence(root: Map<string, YamlNode>): CadenceConfig | null {
 function readScorers(root: Map<string, YamlNode>) {
 	if (!root.has("scorers") && !root.has("grader"))
 		return { scorers: Object.freeze([]), grader: null };
-	const grader = optionalEntries(root, "grader", "grader", ["model"]);
+
+	const grader = optionalEntries(root, "grader", "grader", [
+		"model",
+		"maxTokens",
+	]);
+
+	const maxTokens = integerOr(grader, "maxTokens", "grader.maxTokens", {
+		min: 1,
+		fallback: 16_000,
+	});
+
 	const model = readString(grader.get("model") ?? null, "grader.model");
 
 	if (!isPinnedGrader(model))
@@ -1008,7 +1021,10 @@ function readScorers(root: Map<string, YamlNode>) {
 		);
 	}
 
-	return { scorers: Object.freeze(scorers), grader: Object.freeze({ model }) };
+	return {
+		scorers: Object.freeze(scorers),
+		grader: Object.freeze({ model, maxTokens }),
+	};
 }
 
 const ROOT_KEYS = [

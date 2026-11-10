@@ -29,6 +29,7 @@ replay:
 
 grader:
   model: openai/gpt-6.1-sol
+  maxTokens: 16000
 scorers:
   outcome-quality:
     id: outcome-quality

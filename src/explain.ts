@@ -1,6 +1,7 @@
 import { lstatSync, readdirSync, type Dirent } from "node:fs";
 import { join } from "node:path";
-import { regularText } from "./artifacts.ts";
+import { regularText, readStoredContract } from "./artifacts.ts";
+import { fileAdmissionStore } from "./admission.ts";
 import { frozenRowOf } from "./ledger.ts";
 import { digestOf, isDigest, type Digest } from "./run.ts";
 import {
@@ -9,6 +10,7 @@ import {
 	textOf,
 	arrayOf,
 	countOf,
+	type JsonValue,
 } from "../server/sandbox/json.ts";
 import { readStageReceipt } from "../server/sandbox.ts";
 
@@ -16,11 +18,42 @@ export const EXPLAIN_MAX_TOKENS = 30_000;
 export const EXPLAIN_WALL_MS = 300_000;
 export const MEASUREMENT_INPUT_BYTES = 48 * 1024;
 
+export function safeMeasurementText(text: string): string {
+	return [...text]
+		.filter(
+			(c) =>
+				(c.charCodeAt(0) >= 32 || c === "\n" || c === "\t") &&
+				!(c.charCodeAt(0) >= 127 && c.charCodeAt(0) <= 159),
+		)
+		.join("");
+}
+
+export function jsonAnswer(text: string): string {
+	const trimmed = text.trim();
+
+	return /^```(?:json)?\s*\n([\s\S]*)\n```$/i.exec(trimmed)?.[1] ?? trimmed;
+}
+
+function untrustedExcerpt(json: string, cap: number) {
+	const raw = json.replaceAll("`", "\\u0060");
+	let bytes = 0;
+	let text = "";
+
+	for (const c of raw) {
+		if (bytes + Buffer.byteLength(c) > cap) break;
+		text += c;
+		bytes += Buffer.byteLength(c);
+	}
+
+	return { text: `\`\`\`untrusted\n${text}\n\`\`\``, truncated: text !== raw };
+}
+
 /** This allowlist never visits sessions, output, stderr, suites or workspaces. */
 export async function measurementInput(
 	stateDir: string,
 	runId: Digest,
 	includeChildren = false,
+	includeContract = false,
 ) {
 	if (!isDigest(runId)) throw new Error("invalid_run");
 	const ledgerPath = `ledger/${runId}/row.json`;
@@ -136,7 +169,62 @@ export async function measurementInput(
 
 	if (lstatSyncSafe(root)) await visit("", 0);
 
+	const contract = !includeContract
+		? null
+		: await (async () => {
+				const admitted = await fileAdmissionStore(stateDir).readSnapshot({
+					repo: row.row.repo,
+					issue: row.row.issue,
+					eventId: row.row.eventId,
+				});
+
+				const stored = readStoredContract(stateDir, runId);
+				const artifact = row.row.artifacts;
+
+				const expected =
+					artifact.kind === "admission"
+						? null
+						: artifact.kind === "pre_build_stop"
+							? artifact.contractDigest.kind === "known"
+								? artifact.contractDigest.value
+								: null
+							: artifact.contractDigest;
+
+				return {
+					issue:
+						admitted.kind === "found" &&
+						admitted.receipt.snapshotDigest === row.row.snapshotDigest
+							? {
+									title: untrustedExcerpt(
+										JSON.stringify(admitted.snapshot.title),
+										2048,
+									),
+									body: untrustedExcerpt(
+										JSON.stringify(admitted.snapshot.body),
+										8192,
+									),
+								}
+							: { unavailable: "admitted_snapshot_unavailable" },
+					acceptedCriteria:
+						stored.kind === "found" &&
+						stored.digest === expected &&
+						stored.contract.snapshot.digest === row.row.snapshotDigest &&
+						stored.contract.base.repo === row.row.repo &&
+						stored.contract.issue === row.row.issue &&
+						stored.contract.snapshot.eventId === row.row.eventId
+							? {
+									digest: stored.digest,
+									...untrustedExcerpt(
+										JSON.stringify(stored.contract.acceptance),
+										8192,
+									),
+								}
+							: { unavailable: "accepted_criteria_unavailable" },
+				};
+			})();
+
 	const input = {
+		contract,
 		ledger: { path: ledgerPath, digest: row.digest, row: row.row },
 		receipts,
 		children: includeChildren ? children : null,
@@ -169,41 +257,58 @@ export function explainPrompt(input: MeasurementInput): string {
 }
 
 export function explainFindings(text: string, input: MeasurementInput) {
-	const raw = arrayOf(objectOf(parseJson(text))?.findings);
+	const raw = arrayOf(objectOf(parseJson(jsonAnswer(text)))?.findings);
 
-	if (raw === null || raw.length === 0 || raw.length > 10) return null;
+	if (raw === null) return null;
 	const findings: { text: string; citations: string[] }[] = [];
 
+	const citationOf = (citation: string | null): string | null => {
+		if (citation === null) return null;
+
+		if (input.input.receipts.some((r) => r.path === citation)) return citation;
+
+		if (!citation.startsWith("ledger.")) return null;
+		const parts = citation.slice(7).split(".");
+		let value: JsonValue | undefined = input.input.ledger.row;
+
+		for (const part of parts) {
+			const object = objectOf(value);
+			const array = arrayOf(value);
+
+			if (object !== null && Object.hasOwn(object, part)) value = object[part];
+			else if (array !== null && /^(0|[1-9][0-9]*)$/.test(part))
+				value = array[Number(part)];
+			else return null;
+
+			if (value === undefined) return null;
+		}
+
+		return `ledger.${parts[0]}`;
+	};
+
 	for (const item of raw) {
+		if (findings.length === 10) break;
+
 		const value = objectOf(item);
-		const text = textOf(value?.text);
-		const citations = arrayOf(value?.citations)?.map(textOf);
+		const rawText = textOf(value?.text);
+		const text = rawText === null ? null : safeMeasurementText(rawText);
+
+		const citations = arrayOf(value?.citations)?.map((value) =>
+			citationOf(textOf(value)),
+		);
+
+		const validCitations = [...new Set(citations?.filter((c) => c !== null))];
 
 		if (
 			text === null ||
 			text.trim() === "" ||
 			Buffer.byteLength(text) > 2000 ||
-			[...text].some(
-				(c) =>
-					(c.charCodeAt(0) < 32 && c !== "\n" && c !== "\t") ||
-					c.charCodeAt(0) === 127,
-			) ||
-			citations === undefined ||
-			citations.length === 0 ||
-			citations.some(
-				(citation) =>
-					citation === null ||
-					!(
-						input.input.receipts.some((r) => r.path === citation) ||
-						(citation.startsWith("ledger.") &&
-							Object.hasOwn(input.input.ledger.row, citation.slice(7)))
-					),
-			)
+			validCitations.length === 0
 		)
-			return null;
+			continue;
 
-		findings.push({ text, citations: citations.filter((c) => c !== null) });
+		findings.push({ text, citations: validCitations });
 	}
 
-	return findings;
+	return findings.length === 0 ? null : findings;
 }
