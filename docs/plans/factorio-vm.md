@@ -1,0 +1,681 @@
+# Factorio production VM plan
+
+Move Factorio production from `pi-factorio` to a dedicated LXD virtual machine on `ms-a2`.
+Keep testing on exe.dev and make Shep's Factory tab the owner's client.
+Run the controller, its bwrap stages, and a Shep bridge inside the guest, never on the host or in exmach.
+Protect production credentials from host agent sessions before installing any secret.
+Carry the complete state and replay budget through a drained, single-controller cutover.
+Implement `VM1` through `VM9` below. Reuse MV1, MV2, and MV6 already on main, and the parked MV3, MV4a, and MV4b patches.
+Leave real dispatch held until the owner separately approves it.
+
+## How to read this
+
+One box is one unit of work. Every box names the evidence that checks it. A nested box is a sub-step of the box above it. Check a box only when its evidence exists, a file, a log line, a screenshot, a test run, or a SHA. The body is a how-to. The appendices explain and record.
+
+The program runs the poteto-mode playbook `playbooks/autopilot-stack.md`. Every PR, `VM1` through `VM9`, stops at STACK-READY. The owner lands every PR. This document grants no execution authority. No current grant covers LXD initialization, VM creation, host changes, guest provisioning, credentials, tailnet policy, production stops, or cutover. Obtain separate recorded grants before those actions. The old exmach grant does not authorize this program.
+
+Use `.pi/skills/verify-factory/SKILL.md` as the control skill. Backend lanes save redacted logs and JSON instead of screenshots. `VM9` also requires real phone screenshots and video. Ten lanes mean ten scenarios, not ten simultaneous controllers. Run resource-heavy lanes serially. A blocked prerequisite leaves its boxes unchecked, not passed by a mock or a source review.
+
+Treat new paths, fields, units, and acceptance budgets as proposed contracts. The planning checkout is `3400160`. Appendix A distinguishes the supplied observations from unrun prototypes. The leaf author runs no prototypes, launches no children, and changes no host, as required by the design-only brief. Execution must close the named prototype gates before implementing the affected contracts.
+
+Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+## Program checklist
+
+### Arm the program
+
+- [ ] State the protocol and this plan to the operator, then stop. Start execution only on the operator's explicit go. Record the go and each action grant in `docs/decisions.tsv`.
+- [ ] Read these from the installed skill directories at program start. Re-read them at every audit.
+  - [ ] The poteto-mode playbook `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/poteto-mode/playbooks/autopilot-stack.md` and its referenced `autopilot-full.md`.
+  - [ ] The swarm skill, `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/swarm/SKILL.md`.
+  - [ ] The control skill, `.pi/skills/verify-factory/SKILL.md`.
+  - [ ] The poteto-mode playbook `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/poteto-mode/playbooks/opening-a-pr.md` and `shipping.md` beside it.
+  - [ ] Each other leaf skill named with its installed path in Appendix D.
+- [ ] Run the audit at every child delivery, at every stall or no-progress advisory, and on the operator's request. Nothing schedules it, so never promise a timed cadence and never leave the audit to memory.
+- [ ] Use this audit prompt, verbatim. "Re-read the execution playbook. Audit the operation against it and fix drift in this audit. Check every active lane and judge progress by side effects only. Cancel a stuck lane and launch its fresh replacement now. Then post a short status message to the operator in chat only when the audit found a tracked change that no earlier status message reported, such as a PR opened, a code-ready head, a round launched or closed, a verdict, a merge, a stuck agent and the action taken, a blocker added or cleared, or a decision only the operator can make. Name every such change and nothing else. Do not repeat a table, the merged list, or an unchanged blocker. If the audit found none, end the turn with no reply text. Either way, log this audit's row in your decision trail. The row names the items reported, or none."
+- [ ] On the operator's hold or stand-down, cancel every running child with `subagent_cancel` at once and launch nothing new.
+- [ ] Obtain owner decision D1 before `VM2` installs secrets. Choose a host-agent account boundary from Appendix B. Recommend a separate unprivileged `agents` user with no sudo, LXD access, owner SSH agent, or readable owner home. Save the owner's choice and denial tests, not just a group listing.
+- [ ] Obtain owner decision D2 for the proposed 4-vCPU, 12-GiB, 160-GiB Ubuntu 26.04 cloud VM, the dedicated storage pool, bridge, and profile in `VM2`. Record the approved pool backing and subnet before LXD initialization.
+- [ ] Obtain owner decision D3 for CLIProxyAPI access and the App broker in `VM3` and `VM4`. Record permitted models, a production-only proxy key, GitHub installation scope, and who installs and rotates secrets. Keep current stage families and budgets unless the owner changes them.
+- [ ] Obtain owner decision D4 for the guest tailnet tag, ACLs, owner devices, bridge port, and admin route. Obtain D5 for the encrypted off-host backup destination, retention, and recovery targets in `VM8`.
+- [ ] Obtain owner decision D6 for the drain window, source shutdown, and held cutover. Obtain D7 separately for a bounded dispatch qualification and eventual real dispatch. A grant to restore or start held grants neither.
+- [ ] Ask the owner to reattach `nublai/pi-herdr-factorio` to exe.dev's GitHub integration. Save a successful repository-scoped read afterward. The supplied observation is currently `403 attached repositories are no longer accessible: giuseppecrj/pi-herdr-factorio`, not a product failure.
+- [ ] Ask the owner to approve the isolated exe.dev test repository and nubl-app test credentials described in `VM1`. After the production CI actor switch, the old exe.dev bot cannot drive production's trusted CI.
+
+### Launch owner rounds
+
+- [ ] Give each PR one owner role with the full lifecycle the execution playbook names. Each round is a fresh bare leaf child the root launches. Use the live scoped catalog and task routing with an explicit supported thinking level. Record the selected model, files, verification, and commit policy in `../pi-herdr-factorio-trails/<PR>/brief.md`.
+- [ ] Follow this dependency graph. Start dependent work only after its parent merges, or base it on the parent branch when the execution playbook stacks.
+  - [ ] `VM1` and `VM2` are independent and first. Both branch from `main` with `--no-track`.
+  - [ ] `VM3` follows `VM2` and its measured model endpoint pin. `VM4` follows `VM3`.
+  - [ ] `VM5` follows `VM1` and `VM4`. Reuse the parked MV3 patch before adapting its Unix-user assumptions.
+  - [ ] `VM6` follows `VM1`. Reuse parked MV4a. Its code can land before the guest is ready, but perform the production drain only after `VM5` passes and D6 is granted.
+  - [ ] `VM7` follows `VM5`, `VM6`, and the recorded drain and backup. Reuse parked MV4b. It must land before the new controller dispatches.
+  - [ ] `VM8` follows landed `VM1` through `VM7` and D5 and D6. It transfers production while held.
+  - [ ] `VM9` follows `VM8` and the Shep bridge and Factory tab readiness evidence. D7 gates its real fixture dispatch, not earlier planning or held reads.
+- [ ] Hold the file boundaries. Each PR touches only its **Files** block. No PR changes exmach or Shep source. Relay those dependencies to their owners. The coordinator alone handles `VM7`'s two workflow edits under a renewed explicit grant.
+- [ ] Hold the review gate. `VM9` changes the phone interaction and waits for the operator's screenshots and video review. Other PRs still require the owner's landing decision.
+- [ ] Run the how walkthrough for `VM2`, `VM3`, `VM4`, and `VM5`. Use the bounded prototypes in Appendix A to resolve engineering questions before implementation. Stop after one bounded round per question and report any unresolved gate.
+
+### PR mechanics, for every PR
+
+- [ ] Use `gh` for every PR operation. Confirm `gh auth status` once and confirm the repository is `nublai/pi-herdr-factorio`. Never require Graphite. Never set `GH_HOST` on ms-a2 for a guest operation.
+- [ ] Open the PR ready, never draft, per **Opening a PR**, only under the operator's grant that names PR creation. Use `gh pr create --base <base-branch>`. A stack child targets its parent branch.
+- [ ] Run `npm run check`, including lint and typecheck, before the PR-facing push. Push with hooks on, only under the push grant, using checked-push or explicit `HEAD:refs/heads/<branch>`.
+- [ ] Run a manual diff cleanup pass before each commit and `/skill:no-comments` before review. Retain required `SAFETY:` comments. Apply technical-writing and unslop to every runbook.
+- [ ] Triage every Bugbot and security-reviewer comment per `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/poteto-mode/references/bugbot-triage.md`.
+- [ ] Rebase onto current trunk, or the recorded stack parent, before the code-ready report and babysit. Keep that merge base in fix rounds. Rebase again only at merge prep, on a `git merge-tree` conflict with trunk, on a CI failure that comes from a change on trunk, or when a known concurrent change to the same files lands.
+- [ ] Run the plan checker on this plan after an edit. Leave `docs/plans/factory-v1.md` unchanged by this program unless the owner grants a separate amendment.
+
+### Verdict and merge, for every PR
+
+- [ ] At the code-ready head SHA and at each later push that changes the patch, run the swarm per `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/swarm/SKILL.md`. The root launches the lanes per `references/fan-out.md`. Run one gates lane, the ten live lanes on `task:qa`, and the perf lane. Two or more audit lanes use the Reviewer prompt and exact authenticated models from a different provider and model family than the author. Focus one on credential and authority boundaries and one on recovery and consumer parity. The root audits the receipts before the verdict. Report an unavailable independent reviewer as blocked.
+- [ ] Run `npm run check` and the trusted-reporter command in verify-factory for source PRs. Require `complete=true`, `bad=false`, and an empty failure list. Save exact-head CI and a clean merge-tree result.
+- [ ] Clean only when every lane is `PASS`. Findings go back in one batch. A defect that a lane filed as a note is a finding. Apply the repository's convergence rule after the first fix round. A new head gets a fresh verdict, except for lane results retained under the patch-id rule in `playbooks/shipping.md`. Owner-gated live actions stay blocked until authorized.
+- [ ] Stop at STACK-READY. Give the owner each verdict SHA, base SHA, patch-id, and pending gate, if any. Hand a blocked PR over as code-ready only, never fully verified. The owner lands verified PRs bottom-up. Re-run mergeability and CI after every rewritten push even when the patch-id is unchanged. Nobody pushes after handoff without the owner's go.
+
+### Boot recipe, for every live lane
+
+Each live lane runs at the PR head. Drive the CLI through verify-factory. Drive the phone through Shep's supported bridge and native UI, never directly to Factorio.
+
+- [ ] In an authorized disposable checkout, run `git fetch origin <head-branch> && git checkout --detach <head SHA>`. Record trunk, head, image fingerprint, profile digest, and target. Keep checkouts under `~/.herdr/worktrees/`.
+- [ ] Select `FACTORY_VM=pi-factorio` for exe.dev regression checks or the `factorio-ms-a2` target added by `VM1` for guest qualification. Leave the parked exmach target unconfigured. Before the guest exists, use source and local checks only and label guest lanes blocked.
+- [ ] Use `lane-setup.sh` with a private per-lane state directory. Start only issue-scoped controllers with `drive-serve.sh` and wait for `controller_ready`. Stop the production controller under its service grant before a test controller accesses the same repository, even if production is held. Independent test repositories may run separately.
+- [ ] Deliver inputs through the CLI, `gh`, and the guest's systemd commands. Use `status --json`, `owner-feed --json`, repository-scoped API reads, `systemctl show`, and scoped `journalctl` as diagnostics. No secret appears in command arguments, screenshots, or logs.
+- [ ] Use separate fixture issues titled `[<PR>-w<n>-...]`. Reserve every stage's full allowance before a run, about 540,000 tokens for specify, accept, and build alone. Include review, repair, retries, and perf in the authorized total. Never narrow a stage to fit a lane cap. Close each fixture and confirm it is closed under the fixture grant. Leave `factory:enabled` alone.
+- [ ] Save backend artifacts to `/tmp/swarm-<pr-id>/worker-<n>/<slug>` and phone screenshots to `/tmp/swarm-<pr-id>/worker-<n>/<slug>.png`. Include commands, timestamps, exit status, expected and actual results, and SHAs. Export only redacted copies.
+- [ ] Measure trunk first and then three interleaved trunk/head pairs on the same target and fixture, with only one writer active. An unsupported trunk path is not a successful baseline. Measure the shared operation on both sides and the added work separately. The numerical limits below are proposed acceptance budgets, not observations or permission to raise existing limits.
+
+## Keep exe.dev tests separate from production (VM1)
+
+**Depends on.** None. MV2 target selection is already on main at `1207f87`.
+
+**Files.**
+
+- [ ] Edit `.pi/skills/verify-factory/SKILL.md`, `.pi/skills/verify-factory/targets.env`, `.pi/skills/verify-factory/scripts/*.sh`, and `.pi/skills/verify-factory/features/*.md`.
+- [ ] Edit `test/integration/replay-driver.test.ts` and create `test/integration/verify-targets.test.ts` for target and path validation.
+
+**Build.**
+
+- [ ] Extend the existing `target.sh` contract with validated non-secret target values for repository, platform, service user, home, and lane root. Keep defaults for `pi-factorio`. Remove the assumption that every target is `exedev` under `/home/exedev`.
+- [ ] Add `factorio-ms-a2` as an unconfigured target until `VM2` supplies the guest tailnet name. Set its eventual GitHub host to `github.com`, profile to `ms-a2-vm`, and service account to `factory`. Never substitute host `ms-a2` when the guest is unavailable.
+- [ ] Change new test issue and checkout URLs to `nublai/pi-herdr-factorio`. Preserve old run identities and archives verbatim. Make doctor distinguish a failed integration read from a failed sandbox preflight.
+- [ ] Keep the exe.dev transport and `exe-dev` profile, including its old bot identity. Use a root-owned `repositories` override for the moved repository while source drain checks run. After `VM7`, run full old-bot CI scenarios in an owner-approved isolated test repository with trusted CI configured for that bot, not against production's nubl-agent reporter.
+- [ ] Document a separate exe.dev nubl-app test target. Give it its own test state and repository-scoped test token delivery, not a copy of production credentials or accounting. Use the production guest profile and tailnet model route there only after its prerequisites pass. Testing the nubl app remains on exe.dev. LXD-specific userns, resource, and recovery proof still runs in the real guest.
+- [ ] Keep unknown targets, empty values, unsafe paths, and missing credentials fail-closed before SSH or dispatch. Save a matrix naming which target proves exe.dev transport, nubl-app behavior, and LXD deployment.
+
+**You see.**
+
+- [ ] Doctor prints the selected target, repository, profile, and user, followed by `doctor=ok` only after a real repository read. An unconfigured guest opens no SSH connection.
+
+**Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Cover default parity, malformed names, path traversal, shell metacharacters, empty fields, and the unconfigured guest in the integration tests. Run `npm run check` and `bash -n` on the changed scripts.
+
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, per the boot recipe.
+
+- [ ] Lane 1. Regression lane against trunk. Run doctor on exe.dev at trunk and head. Save `doctor-parity.txt`. Pass when both reach the same VM and the moved-repository read succeeds after owner reattachment.
+- [ ] Lane 2. Run an unknown target. Save `unknown.txt`. Pass when it exits 2 before SSH.
+- [ ] Lane 3. Run the unconfigured guest target. Save `unconfigured.txt`. Pass when it refuses rather than selecting the host or exe.dev.
+- [ ] Lane 4. Run a target containing shell syntax. Save `unsafe-target.txt`. Pass when validation rejects it without a remote command.
+- [ ] Lane 5. Set up an authorized exe.dev lane. Save `lane-root.txt`. Pass when only its declared private root changes.
+- [ ] Lane 6. Read held production status on exe.dev. Save `source-status.json`. Pass when its profile is `exe-dev` and `locally_disabled` remains set.
+- [ ] Lane 7. Drive `/factory status` against the moved repository. Save `extension.txt`. Pass when the registered handler resolves the configured repository without relying on a redirect.
+- [ ] Lane 8. Run a failed SSH target. Save `ssh-failed.txt`. Pass when its nonzero status and target name survive the wrapper.
+- [ ] Lane 9. Exercise the replay driver with an isolated test budget. Save `replay-target.json`. Pass when it uses the selected repository and root and never reads production's replay file.
+- [ ] Lane 10. Run an exe.dev test-repository fixture through its installed stages. Save `test-repo.json`. Pass when its markers and CI actor match the exe-dev bot and no production issue changes.
+
+**Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Metric. Doctor wall time and local target resolution time at trunk and head.
+- [ ] Probe. Interleave three doctor runs per revision on exe.dev after the integration works. Save `perf.json` with resolution and SSH timings separately.
+- [ ] Baseline. Record trunk's successful doctor median first. A 403 is a blocked baseline.
+- [ ] Rule. Fail if head adds more than 1 second to doctor or local resolution exceeds 100 milliseconds. Require zero model calls.
+
+**Review gate.** None. VM1 is not review-gated.
+
+**Merge.**
+
+- [ ] Root's clean verdict at the exact head SHA.
+- [ ] Bugbot triage done.
+- [ ] Rebased onto current trunk after the verdict, with the verdict still valid under the patch-id rule in `playbooks/shipping.md`.
+- [ ] Append VM1 to the verified stack. The owner lands it.
+
+## Prepare a dedicated LXD guest without host-agent authority (VM2)
+
+**Depends on.** None. Owner decisions D1, D2, and D4 gate every host or LXD mutation.
+
+**Files.**
+
+- [ ] Create `docs/operations/ms-a2-vm.md` and `server/vm/ms-a2/cloud-init.yaml` with no credentials.
+- [ ] Create `server/vm/ms-a2/lxd-preseed.yaml` and `server/vm/ms-a2/profile.yaml` as reviewed templates, not self-running host installers.
+
+**Build.**
+
+- [ ] Record D1's choice before creating the guest. State plainly that `g` has passwordless sudo and belongs to `lxd`. Both give host-root-equivalent control over the VM. `g` can pull guest files, attach disks, or execute as guest root. VM isolation alone cannot hide a secret from agents running as `g`.
+- [ ] Under the owner's host-change grant, move all unsandboxed agent sessions to the separate unprivileged account recommended in Appendix B. End old agent processes with privileged groups and invalidate inherited sessions before secret installation. Keep a human-only recovery login. Prove the new account cannot use sudo, the LXD socket, owner SSH sockets, owner configuration, or the guest's admin key. Do not claim separation while an agent still runs as privileged `g`.
+- [ ] Under the owner's LXD-initialization grant, review the empty server again. Use a dedicated `factorio-pool` with the ZFS driver and a bounded 240-GiB loop-backed file on the existing filesystem as the proposed initial backing. Require host filesystem compatibility, free-space checks, and owner acceptance of loop-backed ZFS's performance and recovery cost before applying it. Prefer a dedicated block device if the owner supplies one. If ZFS is unsuitable, stop for D2's revised choice rather than silently using `dir`.
+- [ ] Create a managed NAT bridge `factorio-br0` on a subnet verified not to overlap LAN, VPN, or existing routes. Do not attach a physical NIC or use macvlan. Disable guest IPv6 initially unless D4 includes its firewall policy. Do not expose the LXD API, cluster LXD, or grant agents access to its Unix socket.
+- [ ] Create the explicit `factorio-prod` profile with a 4-vCPU limit, 12 GiB of RAM, a 160-GiB root disk on `factorio-pool`, and only the managed bridge NIC. Leave the empty `default` profile alone. Do not mount host homes, shared disks, LXD sockets, or devices into the guest. Set production autostart only after `VM8` removes the old controller's restart path.
+- [ ] Launch `factorio-prod` as a VM from the Canonical Ubuntu 26.04 amd64 cloud VM image, never its container image. Record the image remote, fingerprint, checksum, guest kernel, and LXD version. The host has 16 cores, 32 threads, 89 GB RAM, and 1.4 TB free. Two 2-GiB, one-CPU stage scopes leave two vCPUs and about 8 GiB for the controller, gateways, bridge, caches, and OS at this proposed size.
+- [ ] Use cloud-init only for initial packages, locked service accounts, approved admin keys, and guest setup. Do not put App keys, proxy keys, APNs keys, or Tailscale enrollment secrets in cloud-init or LXD instance metadata. Install no host agent configuration in the guest.
+- [ ] Enroll Tailscale inside the guest under an owner-approved `tag:factorio-prod`. Do not use host subnet routing or advertise routes from the guest. Allow owner devices to the Shep bridge's pinned port and a human admin identity to SSH. Allow the guest to mac-studio on TCP 443. Deny the ms-a2 host node access to guest management and the bridge. Tailscale network ACLs do not distinguish Unix users sharing that node. Use approved separate owner devices for network administration and human-only local LXD access for recovery. Audit existing broad grants as well as new rules, because Tailscale allow rules are additive.
+- [ ] Document guest egress. Permit GitHub HTTPS APIs, Git data, Actions logs and artifact download hosts for the controller. Permit mac-studio HTTPS for model gateways and Apple's APNs HTTPS endpoints for the bridge. Permit Tailscale control and relay connectivity, required peer UDP, DNS, and time sync. During provisioning also permit Ubuntu package mirrors, npm, mise, Node, and pinned release downloads with checksum verification. Remove temporary provisioning allowances afterward. The guest firewall and tailnet ACLs do not replace the stage gateway's deny-by-default policy.
+- [ ] Run the bounded guest prototype before fixing the image and pool choice. Prove bwrap user namespaces and cgroup delegation in the guest, two concurrent limited scopes, shutdown, and a snapshot restore without production secrets. Capture mac-studio's actual tailnet IP and TLS name for `VM3`. The host's userns sysctls and nested-KVM flag are observations, not guest proof.
+
+**You see.**
+
+- [ ] LXD reports one virtual machine named `factorio-prod` with the approved limits. The guest has its own kernel and tailnet identity. A host agent cannot administer it.
+
+**Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Validate cloud-init with `cloud-init schema --config-file server/vm/ms-a2/cloud-init.yaml` in an isolated environment. Review preseed and profile against installed LXD help. Run `npm run check`. Record template checks separately from owner-applied live proof.
+
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, per the boot recipe.
+
+- [ ] Lane 1. Regression lane against trunk. Run the same two-scope bwrap probe on exe.dev and the proposed guest. Save `scope-parity.json`. Pass when both enforce the existing stage limits and head adds the separate VM without claiming identical hardware performance.
+- [ ] Lane 2. Inspect the image and instance type. Save `image.txt`. Pass when the recorded fingerprint is the approved Ubuntu 26.04 cloud VM and LXD reports `virtual-machine`.
+- [ ] Lane 3. Inspect pool, disk, and free space. Save `storage.txt`. Pass when the approved backing and 160-GiB limit hold and the snapshot has reserved headroom.
+- [ ] Lane 4. Inspect bridge routes and guest reachability. Save `network.txt`. Pass when the subnet is non-overlapping, the guest reaches approved endpoints, and no LAN port exposes its services.
+- [ ] Lane 5. Attempt administration from the host agent account using dummy data. Save `host-agent-denied.txt`. Pass when sudo, the LXD socket, owner SSH sockets, guest admin SSH, and owner home reads fail.
+- [ ] Lane 6. Reach the guest from an approved owner device and a denied tailnet identity. Save `acl.txt`. Pass when only the approved bridge and admin paths work, including under existing ACL rules.
+- [ ] Lane 7. Run bwrap with the production seccomp filter. Save `userns.txt`. Pass when initial userns setup works inside the guest and further in-sandbox user and mount namespace creation is denied.
+- [ ] Lane 8. Reboot the guest with no controller installed. Save `reboot.txt`. Pass when its network and user manager recover without a human login.
+- [ ] Lane 9. Restore a disposable stopped guest snapshot. Save `snapshot.txt`. Pass when file checksums and modes match and no second production identity joins the tailnet.
+- [ ] Lane 10. Inspect mounts and metadata. Save `no-shares.txt`. Pass when no host home, management socket, credential, or enrollment secret is present in guest image metadata.
+
+**Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Metric. Scope start and cleanup wall time, peak guest memory, and warm boot-to-SSH time. Measure the existing scope probe at trunk and head. Measure VM boot separately as added work.
+- [ ] Probe. Run three interleaved trunk/head scope probes on the proposed guest, plus three guest boots with the same image. Save `perf.json`. Record exe.dev reference samples separately.
+- [ ] Baseline. Record trunk's guest scope timing first and its lack of an LXD deployment recipe. Do not compare exe.dev and LXD timings as a code-speed ratio.
+- [ ] Rule. Fail if head adds over 2 seconds to scope startup, warm startup exceeds 15 seconds, cleanup exceeds 10 seconds, or guest boot-to-SSH exceeds 120 seconds. Require two scopes without OOM and peak guest memory below 10 GiB. A failure reopens sizing before provisioning, not stage allowances.
+
+**Review gate.** None. VM2 is not review-gated.
+
+**Merge.**
+
+- [ ] Root's clean verdict at the exact head SHA, including D1 denial evidence.
+- [ ] Bugbot triage done.
+- [ ] Rebased onto current trunk after the verdict, with the verdict still valid under the patch-id rule in `playbooks/shipping.md`.
+- [ ] Append VM2 to the verified stack. The owner lands it. Do not call the recipe live-verified before the authorized guest probe passes.
+
+## Add the pinned guest platform and model credential (VM3)
+
+**Depends on.** VM2 and D3. MV1's closed platform registry is already on main.
+
+**Files.**
+
+- [ ] Edit `src/platform.ts`, `server/sandbox/routes.ts`, `server/sandbox/credentials.ts`, `server/sandbox/gateway-main.ts`, `server/sandbox/gateway-client.ts`, and `server/sandbox/control.ts`.
+- [ ] Edit `server/sandbox.ts`, `server/cli.ts`, and `src/workflow.ts` only to carry the profile and credential references.
+- [ ] Edit `test/platform.test.ts`, `test/workflow.test.ts`, and `test/sandbox/*.cases.ts` for the changed contracts.
+- [ ] Edit `docs/operations/platform.md` and `docs/operations/sandbox.md`.
+
+**Build.**
+
+- [ ] Prototype one real Responses API stream through CLIProxyAPI with a non-production test key. Prove usage events, requested and observed model identity, cancellation, and exact endpoint paths. Bound this to one metered call per permitted provider plus scripted transport tests. If the proxy cannot preserve the required meter, stop rather than substituting an unmetered success.
+- [ ] Add built-in selector and descriptor `ms-a2-vm` to `PlatformSelector`, `platformNetwork`, parsing, digest generation, and independent gateway resolution. Use domain `trout-dinosaur.ts.net`, model host and SNI `mac-studio.trout-dinosaur.ts.net`, and OpenAI base `/v1/`. Set `edgeAddress` to the single mac-studio tailnet IPv4 address measured in `VM2`, not ms-a2's `100.113.207.56` and not a guessed value. A changed endpoint requires a reviewed built-in update, not an arbitrary route-table pin.
+- [ ] Set the proposed Anthropic base to `/` only if the protocol probe confirms `/v1/messages`. Keep xAI `null`. Keep `anthropicStages` limited to `accept` and `code-review`, and do not change WORKFLOW's active model choices or allowances. If Anthropic compatibility is unproved, mark its qualification blocked and keep production on its currently configured OpenAI stages.
+- [ ] Set `ghHost` to `github.com`, repositories to `nublai/pi-herdr-factorio`, login to `nubl-agent[bot]`, App slug to `nubl-agent`, and email to `353429311+nubl-agent[bot]@users.noreply.github.com`. Keep exe-dev's transport and identity unchanged. Permit its existing repository override for tests and the moved source.
+- [ ] Include `trout-dinosaur.ts.net`, `int.trout-dinosaur.ts.net`, `ts.net`, `exe.xyz`, `int.exe.xyz`, `github.com`, `githubusercontent.com`, and `ghe.com` in the new forbidden-domain contract. Keep localhost, literal IP, private, and CGNAT resolution refusals. Only the exact built-in model route may dial the pinned tailnet IP. No declared credential route may target the tailnet, GitHub, or an exe.dev integration.
+- [ ] Add a closed built-in model authentication field to the network contract, with fixed credential references for OpenAI and Anthropic and `none` for edge-injected profiles. Pass no secret through the profile, route descriptor, status, or `/etc/factory/factory.env`. Keep `/etc/factory/platform.json` root-owned and limited to selection and permitted identity and repository data, not arbitrary hosts or pins.
+- [ ] Change `productionDefect`, `credentialDefect`, and ceiling validation only for an exact built-in model route and its fixed credential binding. Today's code rejects credentialed POST, pinned credential routes, and credentials under forbidden domains. Preserve all three refusals for declared routes. Match the full expected upstream, credential placement, method, path, body restrictions, and meter independently in the gateway.
+- [ ] Deliver a production-only CLIProxyAPI key through `LoadCredential=` on the guest's controller unit. Reuse the gateway's credential loader, strip client auth, set the fixed upstream bearer header, and keep reflection filtering and redirect refusal. Preserve the one-credential-id-per-route rule by using separate references when two model routes are mounted. Sandbox models.json retains only placeholder keys. Never copy the host's personal Pi configuration.
+- [ ] Require absent or malformed credentials, an unapproved pin, a TLS mismatch, and a profile mismatch to fail before model dispatch. Keep hosted tools, arbitrary URLs, and direct network access denied. Count provider usage and uncertain charges under existing cumulative limits.
+
+**You see.**
+
+- [ ] `status --json` reports the new profile and no secret. A sandbox model call succeeds through the pinned gateway while direct tailnet and GitHub calls fail.
+
+**Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Test exact built-in credential binding, POST exceptions, forbidden-domain checks, pin tampering, missing credentials, reflection across chunks, redirects, and unchanged exe-dev output. Run `npm run check` and the trusted reporter.
+
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, per the boot recipe.
+
+- [ ] Lane 1. Regression lane against trunk. Run one exe-dev sandbox request at trunk and head. Save `exe-dev-parity.json`. Pass when host, path, identity, and metering remain unchanged.
+- [ ] Lane 2. Run one approved model request in the LXD guest. Save `model.json`. Pass when TLS uses the fixed name and pin and a metered reply reaches the sandbox.
+- [ ] Lane 3. Remove the test credential from the unit's test instance. Save `missing-key.txt`. Pass when startup refuses before an upstream request.
+- [ ] Lane 4. Submit a different route-table pin and authority to the real gateway binary. Save `pin-denied.json`. Pass when independent built-in validation rejects both.
+- [ ] Lane 5. Send direct GitHub, metadata, host, and tailnet probes from bwrap. Save `direct-denied.json`. Pass when all fail while the allowed model request still works.
+- [ ] Lane 6. Probe credentialed declared POST and tailnet routes with the fixture gateway. Save `declared-denied.json`. Pass when the model exception grants neither.
+- [ ] Lane 7. Return a reflected dummy key and a redirect from the TLS test upstream. Save `reflection.json`. Pass when no secret bytes or redirect reach the stage or exported logs.
+- [ ] Lane 8. Stop the scoped controller during a streamed model response. Save `stream-stop.json`. Pass when its gateway closes, cleanup finishes, and accounting retains spent or uncertain usage.
+- [ ] Lane 9. Inspect the sandbox mounts, environment, model config, and session with a dummy key. Save `secret-absence.txt`. Pass when the key and credential directory are absent.
+- [ ] Lane 10. Exercise allowed Anthropic positions if approved, plus an xAI selection and an unauthorized Anthropic position. Save `provider-policy.json`. Pass when qualified routes preserve their meter and forbidden selections refuse. Leave Anthropic proof blocked if its endpoint is unavailable.
+
+**Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Metric. Gateway per-request latency and stage-start wall time on both revisions. Measure credential loading and filtering as added work.
+- [ ] Probe. Interleave three batches of 50 scripted TLS fixture requests at trunk and head on the guest. Then record one approved real completion separately. Save `perf.json` with bytes, usage, and latency.
+- [ ] Baseline. Record trunk's uncredentialed fixture median first. Mark trunk's missing production-key route unsupported.
+- [ ] Rule. Fail if shared request latency rises by over 2 milliseconds, credential setup exceeds 250 milliseconds, or warm stage startup exceeds 15 seconds. Require metering for the real completion and existing stage caps. Do not compare a refused trunk model request with a successful head completion.
+
+**Review gate.** None. VM3 is not review-gated.
+
+**Merge.**
+
+- [ ] Root's clean verdict at the exact head SHA, including the narrow exception audit.
+- [ ] Bugbot triage done.
+- [ ] Rebased onto the parent or current trunk after the verdict, with the verdict still valid under the patch-id rule in `playbooks/shipping.md`.
+- [ ] Append VM3 to the verified stack. The owner lands it after VM2.
+
+## Mint repository-scoped nubl-agent installation tokens (VM4)
+
+**Depends on.** VM3 and D3. D1's host-agent isolation must pass before the App private key enters the guest.
+
+**Files.**
+
+- [ ] Create `server/github-token-broker.ts`, `server/github-app-gh.ts`, and `server/factory-token-broker.service`.
+- [ ] Edit `src/adapters/github.ts` and `src/platform.ts` only for a proven installation-auth identity path if GraphQL viewer is unsupported.
+- [ ] Create `test/github-token-broker.test.ts` and `test/github-app-gh.test.ts`. Edit `test/github-adapter.test.ts` for identity evidence.
+- [ ] Create `docs/operations/github-app.md`. Edit `docs/operations/ms-a2-vm.md` for credential delivery and rotation.
+
+**Build.**
+
+- [ ] Prototype installation-token authentication against an owner-approved fixture repository on exe.dev. Test repository reads, GraphQL viewer, timeline and comment reads, Git Data writes, dispatch, and Actions downloads. Save returned bot type and login from a harmless fixture comment. Do not assume a GitHub App installation token implements exe.dev's GraphQL viewer behavior.
+- [ ] Install the App key through a human-only path into `/etc/factory/credentials/github-app-key`, root-owned mode 0400, with App id `5645247` and an owner-confirmed installation id in non-secret root-owned configuration. Do not infer the installation id from the App id. Never stage the key in a host agent-readable file, session, clipboard log, or cloud-init data.
+- [ ] Run the broker as dedicated guest user `factory-auth`, without sudo, LXD, or Docker groups. Load the private key only into `factory-token-broker.service` with `LoadCredential=`. Keep the private key out of `factory.service`, the bridge, and every sandbox.
+- [ ] Mint short-lived installation tokens with a signed App JWT through `api.github.com`. Restrict minted tokens to the approved repository IDs and required permissions, including Actions write, contents write, issues write, and pull requests write. Verify the actual installed permission set. The App's all-repository installation is not a reason to mint an all-repository token.
+- [ ] Expose a fixed-operation Unix socket in `/run/factory-auth`, accessible only to the broker and controller through a dedicated group. Accept no caller-selected installation, repository list, permission set, or upstream URL. Cache tokens in memory until five minutes before the returned expiry and serialize refreshes. Refuse unavailable, expired, or mismatched tokens without using owner credentials.
+- [ ] Install a root-owned trusted `gh` wrapper in the controller's PATH. Obtain a token from the broker for each invocation and execute the real, absolute-path `gh` binary with a minimal environment, `GH_HOST=github.com`, and `GH_TOKEN` only for that subprocess. Use an empty private GH config directory. Never write `hosts.yml`, pass a token in argv, or retry a possibly completed mutation automatically after an auth error.
+- [ ] Keep the wrapper and broker socket out of all bwrap mounts. State the limit honestly. The trusted controller and its `gh` subprocess can read an installation token, and guest root can read the key. Other processes as the controller UID are trusted too. Dedicated users and the sandbox, not a hidden environment variable, enforce that boundary.
+- [ ] Retain the real `readViewer` check where GitHub supports it. If installation auth lacks viewer, implement a typed App-auth identity proof from the broker's fixed App and installation metadata plus GitHub's returned bot author on the fixture. Keep marker trust bound to `type=Bot` and the exact profile login. Never return the configured login as if GitHub had authenticated it.
+- [ ] Document key rotation and revocation. The owner installs a new App key, restarts the broker, verifies a scoped token and identity, and revokes the old key. A restored guest starts without stale cached tokens. Keep secrets out of snapshots where practical and encrypted in any backup that contains them.
+
+**You see.**
+
+- [ ] Controller-side `gh` reads and a fixture write act as `nubl-agent[bot]`. The owner identity `giuseppecrj` never appears as the controller actor, and a sandbox cannot reach the broker.
+
+**Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Cover JWT lifetime, fixed scope, expiry, refresh coalescing, malformed responses, revoked keys, wrapper environment, no automatic write retry, and identity mismatch. Run `npm run check` and the trusted reporter.
+
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, per the boot recipe.
+
+- [ ] Lane 1. Regression lane against trunk. Read the same fixture repository using exe.dev on trunk and the scoped App path on head. Save `repository-parity.json`. Pass when data agrees and each actor is recorded without claiming identity parity.
+- [ ] Lane 2. Post and read one authorized fixture comment. Save `bot-author.json`. Pass when GitHub returns `type=Bot` and `nubl-agent[bot]`.
+- [ ] Lane 3. Request a token from the bridge and sandbox users. Save `broker-denied.txt`. Pass when socket access fails and neither can read the private key.
+- [ ] Lane 4. Read an owner-approved repository outside the minted scope. Save `scope-denied.json`. Pass when GitHub denies it despite the App's broader installation.
+- [ ] Lane 5. Exercise token refresh with a test expiry and concurrent trusted clients. Save `refresh.json`. Pass when one refresh serves them, no expired token is returned, and no token is logged.
+- [ ] Lane 6. Restart the broker and test with its key unavailable. Save `broker-restart.txt`. Pass when normal restart recovers and the missing-key case fails closed without owner auth fallback.
+- [ ] Lane 7. Dispatch an approved test-repository CI workflow. Save `actions.json`. Pass when dispatch, job and log reads, and artifact retrieval succeed as the App with no credential forwarded to an unrelated redirect host.
+- [ ] Lane 8. Publish a fixture Git Data commit and read its author. Save `git-data.json`. Pass when the configured bot email and intended repository match.
+- [ ] Lane 9. Inspect process environments and files using dummy credentials. Save `token-boundary.txt`. Pass when only trusted controller-side subprocesses hold the test token and it is absent from sessions, argv, bridge state, and sandbox files.
+- [ ] Lane 10. Supply mismatched App identity or installation metadata to a test broker. Save `identity-refused.json`. Pass when controller startup refuses before claims or model work.
+
+**Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Metric. Repository-read wall time, cached broker overhead, and first-token acquisition time at trunk and head.
+- [ ] Probe. Interleave three repository reads per revision in the exe.dev test environment, then three cold and warm broker calls with redacted metadata. Save `perf.json`.
+- [ ] Baseline. Record trunk's successful repository read first. Separate integration network time from the added wrapper and broker work.
+- [ ] Rule. Fail if cached local broker and wrapper overhead exceeds 100 milliseconds or first-token acquisition exceeds 10 seconds without an upstream outage. Bound a successful repository read at 30 seconds on both paths. Do not claim a speed ratio between different GitHub auth services.
+
+**Review gate.** None. VM4 is not review-gated.
+
+**Merge.**
+
+- [ ] Root's clean verdict at the exact head SHA, with the independent credential audit.
+- [ ] Bugbot triage done.
+- [ ] Rebased onto the parent or current trunk after the verdict, with the verdict still valid under the patch-id rule in `playbooks/shipping.md`.
+- [ ] Append VM4 to the verified stack. The owner lands it after VM3.
+
+## Provision guest services and a private-feed export (VM5)
+
+**Depends on.** VM1 and VM4. Reuse PR #728 from `origin/mv3-provision-profile`, reviewed against its current tip before porting. Shep's file-feed reader is an external prerequisite for bridge proof.
+
+**Files.**
+
+- [ ] Edit `server/provision.sh`, `server/factory.service`, `server/cli.ts`, `server/sandbox.ts`, `server/sandbox/preflight.ts`, and `src/platform.ts` for profile-derived installation and service-user paths.
+- [ ] Create `server/owner-feed-export.ts`, `server/factory-feed.service`, `server/factory-feed.timer`, and `server/shep-factory-bridge.service`.
+- [ ] Reuse MV3's `test/provision.test.ts` and edit preflight cases in `test/sandbox/*.cases.ts`. Create `test/owner-feed-export.test.ts`.
+- [ ] Edit `.pi/skills/verify-factory/scripts/drive-replay.sh` only to carry MV3's profile environment through VM1's target contract.
+- [ ] Edit `docs/operations/ms-a2-vm.md`, `docs/operations/platform.md`, `docs/operations/sandbox.md`, `docs/operations/owner-feed.md`, and `docs/operations/factory-cli.md`.
+
+**Build.**
+
+- [ ] Port MV3's `platform --env`, validated atomic `/etc/factory/factory.env`, `EnvironmentFile=`, linger setup, and runtime-directory preflight. Reuse its tests and fixes. Do not retain hard-coded `exedev`, `/run/user/1000`, or the old repository in the new guest unit.
+- [ ] Provision locked guest accounts `factory`, `factory-auth`, and `shep`, with separate private homes and no sudo, Docker, or LXD groups. Derive the runtime UID with `id -u factory`. Keep the controller checkout root-owned, runtime dependencies pinned, and state owned by `factory` with 0700 directories and 0600 private files.
+- [ ] Separate owner-run privileged installation from runtime. Adapt provisioning so a human admin installs root-owned assets, unit files, credentials, and sysctls without granting permanent sudo to `factory`. Retain an idempotent exe.dev path. Run no real model call from provisioning.
+- [ ] Run `factory.service` as a system unit with `User=factory`, profile environment, watchdog, `NoNewPrivileges`, and the trusted gh wrapper. Enable linger for `factory` and start its user manager. Set `XDG_RUNTIME_DIR` from the actual UID and prove `systemd-run --user --scope` works from the system unit without a login shell.
+- [ ] Keep bwrap `--unshare-all`, seccomp, private netns, and gateway socket transport. Enable initial unprivileged userns inside the guest only if its preflight requires it. Do not copy the host sysctl setting as proof or disable AppArmor globally on ms-a2. A guest-specific AppArmor or userns change needs the guest-change grant and its denial probes. Keep further nested user and mount namespaces inside the stage denied by seccomp.
+- [ ] Keep `MemoryMax=2G`, `TasksMax=512`, and `CPUQuota=100%` per stage and `max_concurrent: 2`. Do not place an aggregate service limit that ignores scopes in the user manager or starves them. Prove cleanup covers those separate cgroups.
+- [ ] Export only OwnerFeed v1 with a small fixed-purpose process as `factory`. Run `owner-feed --json` against the configured private state, validate the complete JSON, and atomically replace `/run/factory-feed/feed.json`. Make that export directory 0750 and file 0640 for `factory:shep-feed`, with `shep` in that group only. Do not grant the bridge traversal of the private state or change its modes. Reading the state as `shep` otherwise yields `gaps=[state_unavailable]`, often with exit 0, not a valid empty queue.
+- [ ] Run `factory-feed.service` and its timer as system units without model or GitHub credentials. Keep one export in flight, with a proposed five-second interval. Preserve gaps and the feed timestamp. The bridge treats an unavailable or stale export as unavailable, never as an empty queue or a fresh notification seed. Agree the stale threshold with Shep, proposed at 15 seconds, before implementation.
+- [ ] Run the pinned Shep bridge as `User=shep` in `shep-factory-bridge.service`. Give only that unit its APNs signing material through `LoadCredential=`. Bind its private backend to loopback and expose only the approved authenticated bridge endpoint through guest Tailscale. No guest linger is needed for `shep` because this is a system unit. Do not expose the viewer or its hold form to the phone.
+- [ ] Obtain Shep's supported feed-file reader, bridge command, authenticated port, pairing procedure, and direct APNs sender from its owner. Record the pinned revision. If these are absent, stop the bridge boxes and relay the missing contract rather than writing Shep code here. The phone talks only to the bridge, and the bridge sends pushes directly to Apple, with no exmach `apns.int` dependency.
+
+**You see.**
+
+- [ ] After reboot, the controller is `controller_ready` but held, its user manager can launch a scope, and the bridge reads a current feed without access to private state or GitHub credentials.
+
+**Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Test MV3 env parity, UID-derived runtime paths, missing user manager, feed atomicity, unavailable reads, and mode preservation. Run `npm run check`, the trusted reporter, `bash -n server/provision.sh`, and `systemd-analyze verify` against installed test units.
+
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, per the boot recipe.
+
+- [ ] Lane 1. Regression lane against trunk. Provision disposable exe.dev test state with trunk and head. Save `provision-parity.txt`. Pass when default routes and identity stay unchanged and MV3's env and linger changes are the only intended additions.
+- [ ] Lane 2. Provision the guest under the owner grant. Save `provision-guest.txt`. Pass when preflight and `controller_ready` succeed with the local hold intact.
+- [ ] Lane 3. Repeat provisioning. Save `idempotence.txt`. Pass when unit, env, bundle digest, modes, and service identity do not drift.
+- [ ] Lane 4. Reboot with no service-user login. Save `linger.txt`. Pass when the runtime directory and user bus exist and a limited scope launches from the system unit.
+- [ ] Lane 5. Run two scoped sandbox fixtures. Save `scope-limits.json`. Pass when each has the original limits and neither mounts the other's workspace or held-out suite.
+- [ ] Lane 6. Stop a scoped controller and restart it. Save `scope-cleanup.json`. Pass when its gateways close, owned scopes reconcile, and unrelated scopes remain untouched.
+- [ ] Lane 7. Read private state as `shep`, then read the export. Save `feed-permissions.txt`. Pass when the first is unavailable and the second matches the controller feed without private paths or suites.
+- [ ] Lane 8. Stop the exporter and replace its input with unavailable test state. Save `feed-gap.json`. Pass when the bridge shows unavailable and sends no notification or false empty state.
+- [ ] Lane 9. Inspect unit credential access with dummy secrets. Save `unit-separation.txt`. Pass when the broker alone reads the App key, the controller gateway reads the model key, and the bridge alone reads the APNs key.
+- [ ] Lane 10. Reach the bridge through the approved tailnet route and probe the viewer remotely. Save `bridge-reach.txt`. Pass when bridge authentication is required and no viewer, hold endpoint, broker socket, or direct controller endpoint is exposed.
+
+**Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Metric. Held controller start-to-ready, provisioning rerun time, feed computation, export time, and guest memory at trunk and head.
+- [ ] Probe. Interleave three runs per revision in disposable guest state with the same runtime user. Measure the new exporter separately over ten five-second intervals. Save `perf.json`.
+- [ ] Baseline. Record trunk's compatible held-start and feed timings first. Record unsupported user configuration separately rather than timing a failure as ready.
+- [ ] Rule. Fail if head adds over 200 milliseconds to comparable startup, ready takes over 60 seconds, or provisioning rerun exceeds 120 seconds. Require feed work under 500 milliseconds excluding CLI startup, export completion under 2 seconds, and no overlapping exporter process or model call.
+
+**Review gate.** None. VM5 is not review-gated.
+
+**Merge.**
+
+- [ ] Root's clean verdict at the exact head SHA, including guest-user and feed access proof.
+- [ ] Bugbot triage done.
+- [ ] Rebased onto the parent or current trunk after the verdict, with the verdict still valid under the patch-id rule in `playbooks/shipping.md`.
+- [ ] Append VM5 to the verified stack. The owner lands it after VM4. Report any remaining Shep prerequisite as blocked, not a passed bridge lane.
+
+## Reuse MV4a and drain the old controller (VM6)
+
+**Depends on.** VM1 for target and repository correction. This PR proves the diagnostic and drain procedure on isolated exe.dev fixtures. VM7 executes the production drain after VM5 and D6.
+
+**Files.**
+
+- [ ] Reuse MV4a's `server/cli.ts`, `src/orchestrator.ts`, `test/dashboard.test.ts`, `test/helpers.ts`, `test/markers.test.ts`, `test/orchestrator.test.ts`, and `test/platform.test.ts` from `origin/mv4-drain-foreign-markers`.
+- [ ] Reuse `docs/operations/drain.md`, `docs/operations/factory-cli.md`, and `docs/operations/metrics.md` from that branch. Replace the parked exmach destination with the approved LXD guest and the moved repository in commands. Append evidence rows to `docs/decisions.tsv` through `log.sh`.
+
+**Build.**
+
+- [ ] Port MV4a's `foreignMarkers` diagnostic and drain runbook, not an alternative drain implementation. Keep its zero-extra-GitHub-read design, `complete` versus `incomplete` result, and exclusion of closed or unlabeled history.
+- [ ] Write the production drain procedure for VM7. Require the landed MV4a-equivalent controller held on `pi-factorio` using the `exe-dev` profile. First require the owner-restored integration to read `nublai/pi-herdr-factorio`. A 403 blocks drain proof even when old status says zero runs.
+- [ ] Retain every MV4a drain step in that procedure. Require settled live scopes, ended or released runs under the authorized issue actions, and cleared old `factory:ready` events. Retain markers and accounting. Permit only owner-named issues with zero old markers as new intake.
+- [ ] Require a fresh tick with active, runs, queued, unverified, nonterminal accounting, corrupt, and foreign-marker counts all zero, `foreignMarkers.kind=complete`, and `ledger.state=empty`. Save the ready-issue inventory in the same window. Unknown and null are not zero.
+- [ ] Add the repository-rename inventory to the procedure, covering repository slugs, immutable run IDs, admission references, workspace paths, and ledger anchors. Do not replace strings in private records or recompute IDs. Require history reads against the moved repository before transfer. If compatibility requires a state migration, stop for a separately scoped design rather than resetting state.
+- [ ] Rehearse the full stopped-state backup per `backup.md` on fixture state, including a separate replay-budget file, and record checksums. Specify the production file `/home/exedev/factory-verification/replay-budget.json` in the runbook. A hold alone does not stop bookkeeping. Require the source service stopped before the final copy under D6, with `disabled` present.
+- [ ] Record the fixture rehearsal evidence separately from a production drain. Require VM7 to append the actual drain row with its grant, source SHA, inventory, counts, archive paths, and replay checksum before the CI switch lands. Do not delete the source VM or its backups.
+
+**You see.**
+
+- [ ] Fresh MV4a status and the fixture issue inventory prove a complete rehearsal drain, not just zero slot usage. Production drain remains a VM7 prerequisite.
+
+**Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Reuse MV4a's tests for foreign-marker incompleteness, zero extra reads, restored terminal claims, and refusal of a different bot. Run `npm run check` and the trusted reporter.
+
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, per the boot recipe.
+
+- [ ] Lane 1. Regression lane against trunk. Read the same isolated state at trunk and head. Save `status-parity.json`. Pass when head adds the diagnostic without changing the original fields.
+- [ ] Lane 2. Run a diagnostic read with the integration unavailable. Save `unknown.json`. Pass when foreign markers remain incomplete, never zero by default.
+- [ ] Lane 3. Read an old-bot active marker under the new profile in isolated state. Save `foreign-active.json`. Pass when it never authenticates.
+- [ ] Lane 4. Read a closed issue's old terminal marker. Save `old-history.json`. Pass when it stays history and does not reopen or enter the live foreign count.
+- [ ] Lane 5. Inspect a restored nonterminal local claim without starting it. Save `restore-blocked.json`. Pass when the cutover precheck blocks it despite a profile identity change.
+- [ ] Lane 6. Reconcile a released fixture under the exe-dev identity. Save `release.json`. Pass when its terminal record and usage survive and its ready label is absent.
+- [ ] Lane 7. Run the final inventory on the isolated fixture repository. Save `ready-inventory.json`. Pass when only the explicitly retained zero-marker fixture intake remains.
+- [ ] Lane 8. Read the fixture controller's fresh final drain tick. Save `drain-zero.json`. Pass when every MV4a zero predicate and `ledger.state=empty` hold.
+- [ ] Lane 9. Inspect the stopped fixture controller and scopes before backup. Save `stopped.txt`. Pass when no fixture controller, model process, or owned stage scope remains.
+- [ ] Lane 10. Verify fixture state and replay-budget archive checksums and retained history reads. Save `backup-manifest.json`. Pass when all files are accounted for, identities are preserved, and no credential is exported in evidence.
+
+**Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Metric. Status wall time and GitHub request count per tick at trunk and head.
+- [ ] Probe. Interleave three read-only status samples and three isolated same-fixture ticks per revision on exe.dev, under the fixture grant. Save `perf.json`.
+- [ ] Baseline. Record trunk's median and request count first, after repository access is restored.
+- [ ] Rule. Fail if head adds any GitHub request for foreign-marker counting or increases median status time by more than 20 percent or 2 seconds absolute. Require zero model calls while held.
+
+**Review gate.** None. VM6 is not review-gated.
+
+**Merge.**
+
+- [ ] Root's clean verdict at the exact head SHA of the MV4a-equivalent code and its fixture rehearsal.
+- [ ] Bugbot triage done.
+- [ ] Rebased onto current trunk after the verdict, with the verdict still valid under the patch-id rule in `playbooks/shipping.md`.
+- [ ] Append VM6 to the verified stack. The owner lands its verified diagnostic code and runbook before VM7 performs the production drain.
+
+## Switch production CI to the App after the drain (VM7)
+
+**Depends on.** VM5 and VM6. Its first operational step records the production drain and backup under D6. Reuse `origin/mv4b-ci-bot` at `da9543c` unless the owner identifies a newer reviewed tip.
+
+**Files.**
+
+- [ ] Edit `.github/workflows/check.yml`, `.github/workflows/ci.yml`, and `test/validation.test.ts`, reusing MV4b's patch.
+- [ ] Edit `docs/operations/drain.md` for the new profile in reporter proof, and append the switch evidence to `docs/decisions.tsv` through `log.sh`.
+
+**Build.**
+
+- [ ] Under D6, execute the landed VM6 drain runbook on production. Deploy its diagnostic held, prove the fresh zero predicates and ready-issue inventory, verify repository-rename compatibility, stop the source and its scopes, and take the complete backup with the replay budget. Append the production drain row through `log.sh`. Keep the source stopped and held. A failed predicate blocks the CI switch.
+- [ ] Under the renewed workflow-edit grant, switch the two expected actors to `nubl-agent[bot]`. Port the reporter test coupling from MV4b, using the new profile rather than an exmach selection. Do not change required checks, exact-head bindings, artifact validation, or the secret-free candidate job.
+- [ ] Keep pi-factorio stopped and held. Explain that CI changes only when the owner merges workflow files on GitHub, not when a VM checks out a branch. Never enable both old and new actors as a migration shortcut.
+- [ ] Prove reporter behavior locally and on the approved test repository before merge. Ask the owner to land this as the explicit main-owned CI bootstrap only if production-main dispatch cannot be proved before landing. Keep that native lane pending and production held until it passes after merge.
+- [ ] Record the production reporter's nubl-agent identity proof after the owner's merge. Keep exe.dev's old-bot full-pipeline tests in their dedicated trusted test repository from VM1. Do not weaken production's actor check to preserve a test shortcut.
+
+**You see.**
+
+- [ ] The reporter accepts only a correctly bound nubl-agent dispatch. The old integration bot and a human actor fail its identity check.
+
+**Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Run the reused reporter tests for valid actor, wrong actor, wrong head, wrong run, and malformed receipt with `npm run check` and the trusted reporter. Preserve every prior assertion.
+
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, per the boot recipe.
+
+- [ ] Lane 1. Regression lane against trunk. Replay identical reporter inputs at trunk and head in the isolated workflow test environment. Save `actor-matrix.json`. Pass when only the intended bot identity changes and all binding failures remain failures.
+- [ ] Lane 2. Dispatch a valid nubl-agent test-repository run. Save `app-ci.json`. Pass when the reporter publishes the check at the requested candidate SHA.
+- [ ] Lane 3. Dispatch the same fixture under the old integration identity in its test repository. Save `old-actor.json`. Pass when the new-actor reporter refuses it.
+- [ ] Lane 4. Exercise a human-authored trigger in the isolated test workflow. Save `human-actor.json`. Pass when it cannot impersonate the controller.
+- [ ] Lane 5. Submit a receipt for a different candidate head through the test workflow. Save `wrong-head.json`. Pass when no success check attaches to the intended head.
+- [ ] Lane 6. Read the hosted candidate-job permissions and logs. Save `candidate-permissions.json`. Pass when candidate execution has no checks-write token or App key.
+- [ ] Lane 7. Read the source stop and drain evidence immediately before the owner lands VM7. Save `source-still-stopped.txt`. Pass when no old-bot run can dispatch.
+- [ ] Lane 8. After the owner's merge, perform one production-main native reporter probe under its fixture grant. Save `main-reporter.json`. Pass when the merged workflow records the exact candidate, actor, run, and check identities. Before merge this lane is pending bootstrap proof.
+- [ ] Lane 9. Run the exe-dev regression fixture in its dedicated repository. Save `exe-dev-test-ci.json`. Pass when its own main-owned reporter works without changing production's identity rule.
+- [ ] Lane 10. Read branch rules and required checks without modifying them. Save `rules.json`. Pass when the actor switch leaves the owner's review and exact-head check requirements intact.
+
+**Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Metric. Reporter execution wall time and dispatch-to-terminal-receipt time at trunk and head.
+- [ ] Probe. Interleave three matched test-repository workflow runs per revision. Save `perf.json`, separating queue delay from execution.
+- [ ] Baseline. Record trunk's completed trusted-reporter run first using its accepted actor.
+- [ ] Rule. Fail if reporter execution rises by more than 10 percent plus 1 second, or dispatch-to-terminal exceeds the existing 20-minute bound. Report a queue outage as blocked, not as a successful sample.
+
+**Review gate.** None. VM7 is not review-gated.
+
+**Merge.**
+
+- [ ] Root's exact-head verdict on all pre-merge checks, with native production-main proof explicitly pending if required.
+- [ ] Bugbot triage done.
+- [ ] Rebased onto current trunk after the verdict, with the verdict still valid under the patch-id rule in `playbooks/shipping.md`.
+- [ ] Hand VM7 to the owner for the explicitly approved CI bootstrap landing after the drain. Complete lane 8 before VM8. Do not report a full pass until that receipt exists.
+
+## Restore production held and prove off-host recovery (VM8)
+
+**Depends on.** VM1 through VM7 landed, VM7's main-backed proof passed, and D5 and D6 granted. Real dispatch remains a separate D7 decision.
+
+**Files.**
+
+- [ ] Edit `docs/operations/ms-a2-vm.md`, `docs/operations/backup.md`, `README.md`, and `AGENTS.md` only for the new production home, retained test target, backup, and cutover procedure.
+- [ ] Append `docs/decisions.tsv` rows through `log.sh`. Fill the approved guest entry in `.pi/skills/verify-factory/targets.env` without secrets.
+
+**Build.**
+
+- [ ] Approve a backup policy under D5. Propose seven daily stopped-state LXD snapshots and four weekly snapshots within the pool's measured space budget. Propose daily encrypted off-host Factorio archives with 30 daily and 12 weekly copies, a 24-hour recovery-point target, and a two-hour restore target. Record the chosen destination and encryption-key custody before copying data. These are proposed operational targets, not measured guarantees.
+- [ ] Treat LXD snapshots as local rollback aids, never as the only backup. Follow `backup.md` with the controller, viewer, exporter, and bridge stopped after stage scopes settle. Include full state, all accounting, claims, ledger outbox and anchors, retained sessions, source checkout and Git metadata, external workspace roots, exact bundles, units, and non-secret configuration. Include cadence and measurement state and the replay-budget file outside the state root.
+- [ ] Copy encrypted archives off ms-a2, not merely to another guest or directory on that host. Verify hashes after transfer. Keep secret recovery material in separately controlled encrypted storage and re-enroll Tailscale as needed. Never clone a live tailnet identity or start two restored controllers.
+- [ ] Confirm VM6's source is stopped and held. Disable its service restart and boot path under D6 before the target starts. Record that no manual controller or user scope remains. Leave source disks and backups intact for recovery, not active fallback.
+- [ ] Restore into a private staging directory on the guest, preserving checksums and modes. Map the old service UID explicitly to `factory` without following symlinks. Preserve logical run IDs and repository history. Do not hand-edit claims, accounting, paths embedded in captured execution, or the replay budget to force startup.
+- [ ] Compare restored terminal claims, usage floors, caps, ledger backlog, and owner feed with the stopped source. Require both MV4a pre-start lists of nonterminal claims and nonterminal accounting to be empty. Resolve old absolute workspace paths by a documented compatible layout where needed, not by discarding evidence. A needed schema or repository-identity migration is a blocker for a separate scoped change.
+- [ ] Carry `/home/exedev/factory-verification/replay-budget.json` intact to the approved guest replay path and record its checksum and configured location. Keep spent, reserved, uncertain, and `policyChanges` entries. The authorized 4,000,000 cap is applied only through the existing audited reservation path. If future replays run on exe.dev, transfer sole ownership of this file while all replay writers are stopped. Never let two copies independently grant the remaining budget.
+- [ ] Start only the new controller, held, with `FACTORY_PLATFORM=ms-a2-vm` and the landed VM7 CI contract. Verify fresh `controller_ready`, `foreignMarkers.kind=complete`, zero live foreign markers, preserved accounting, and no model dispatch. Start the feed exporter and bridge separately. Enable guest autostart only after the old restart path is disabled.
+- [ ] Perform an off-host archive restore in an isolated guest with network dispatch disabled and no production token. Compare checksums, modes, claims, and feed through the real CLI. Do not connect a snapshot clone to production GitHub merely to test restoration.
+- [ ] Record the held cutover and recovery receipts. If recovery fails before any new write, stop the target before considering a source restart, and reconcile the CI actor switch with the owner. After any new-bot write, use a forward recovery from the newest state. Never roll back a snapshot to reset charges or re-enable the old bot silently.
+
+**You see.**
+
+- [ ] Exactly one production controller runs, in the LXD guest, and it is held. The source cannot restart automatically. An off-host restore reproduces private state and budget without dispatch.
+
+**Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Run `npm run check` on the exact deployed source and validate every command in the runbook against its actual paths. Run the plan checker. Keep a restored archive private and out of repository test fixtures.
+
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, per the boot recipe.
+
+- [ ] Lane 1. Regression lane against trunk. Read stopped source state and the restored held state with their recorded revisions. Save `state-parity.json`. Pass when run IDs, terminal states, caps, and usage match, with only intended platform and liveness differences.
+- [ ] Lane 2. Inspect the source service and all controller processes. Save `single-controller.txt`. Pass when the source is stopped, held, and disabled for boot and no second writer exists.
+- [ ] Lane 3. Compare restore manifests. Save `restore-manifest.json`. Pass when relative paths, file bytes, and private modes match with only the documented UID mapping.
+- [ ] Lane 4. Read restored claims and accounting before startup. Save `terminal-only.json`. Pass when both nonterminal lists are empty and no record was removed.
+- [ ] Lane 5. Start the new controller held and observe two ticks. Save `held-start.json`. Pass when recovery settles, foreign markers are complete and zero, and no stage or model call starts.
+- [ ] Lane 6. Compare replay-budget bytes and the configured active path. Save `replay-transfer.json`. Pass when checksums match and only one authorized replay writer can use the retained accounting.
+- [ ] Lane 7. Inspect bot identity, profile digest, bundle manifest, and CI main SHA. Save `runtime-pins.json`. Pass when they match VM3 through VM7 receipts.
+- [ ] Lane 8. Take a stopped-state LXD snapshot and inspect its metadata. Save `snapshot-policy.json`. Pass when the snapshot is consistent, private, and within the approved retention and space budget.
+- [ ] Lane 9. Restore the encrypted off-host archive with dispatch credentials absent. Save `off-host-restore.json`. Pass when the real CLI reproduces state and feed and no external write occurs.
+- [ ] Lane 10. Reboot production while held under D6. Save `held-reboot.json`. Pass when only the guest resumes, the hold persists, and accounting and feed remain readable.
+
+**Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Metric. Read-only status and feed wall time, archive bytes, backup time, and full restore-to-held-ready time. Measure state reads on both source and guest, with platform differences explicit.
+- [ ] Probe. Interleave three offline source/head read pairs on copies in the guest. Time one complete encrypted off-host copy and one isolated restore. Save `perf.json`. Never run simultaneous production controllers to interleave measurements.
+- [ ] Baseline. Record trunk's offline status and feed medians and archive size first. Record source operational timings separately as reference, not a same-hardware baseline.
+- [ ] Rule. Fail if comparable local reads regress by more than 20 percent, feed work exceeds 500 milliseconds excluding CLI startup, or the approved restore target is missed. Under the proposed D5 policy, fail if restore-to-held-ready exceeds two hours or the latest verified off-host copy is older than 24 hours.
+
+**Review gate.** None. VM8 is not review-gated.
+
+**Merge.**
+
+- [ ] Root's clean verdict at the exact head SHA of the runbook and evidence changes.
+- [ ] Bugbot triage done.
+- [ ] Rebased onto current trunk after the verdict, with the verdict still valid under the patch-id rule in `playbooks/shipping.md`.
+- [ ] Append VM8 to the verified stack. The owner lands it. State explicitly that production is migrated but real dispatch is still held.
+
+## Prove the Shep phone path and qualify dispatch (VM9)
+
+**Depends on.** VM8 and Shep's pinned bridge, direct APNs sender, file-feed reader, and Factory tab. D7 separately authorizes fixture dispatch and model spend.
+
+**Files.**
+
+- [ ] Edit `docs/operations/ms-a2-vm.md` and append `docs/decisions.tsv` rows through `log.sh`.
+- [ ] Create redacted review media under `docs/plans/media/VM9/`. Make no Shep or exmach source change here.
+
+**Build.**
+
+- [ ] Pair the owner's phone only with the guest's Shep bridge under the pairing grant. Confirm Factory tab counts match the exported OwnerFeed. Keep GitHub links as the only phone actions. Do not add a direct controller API or remote hold endpoint.
+- [ ] Prove first-read seeding, unavailable-feed handling, duplicate-key attention handling, needs-you and failed alerts, UTF-8 byte limits, collapse by repository and issue, and suppression while viewing the run. Follow `owner-feed.md` without fixing its known duplicate-entry defect in this program.
+- [ ] Verify that the bridge sends APNs directly to Apple using its own credential, not via exmach or the controller. Record Shep's actual push rate and retry policy rather than importing exmach's old 30-per-hour quota.
+- [ ] Under a bounded D7 grant, run one approved fixture from fresh readiness to a ready PR with nubl-agent markers and exact-head CI. Reserve the full allowed stages first. Keep the old source stopped. Remove the temporary dispatch permission and restore the hold after the fixture unless the owner explicitly approves ongoing real dispatch.
+- [ ] Before enabling ongoing dispatch, hand the owner the fixture, recovery evidence, observed model identities, token totals, and known limitations. Leave F12d, F12e, F13, the exmach move, and broader model-policy changes outside this cutover. Continue their tests on exe.dev under their own grants and the single replay-budget rule.
+
+**You see.**
+
+- [ ] The phone's Factory tab reads the guest bridge, a new owner decision produces one correctly collapsed push, and the authorized fixture reaches a ready PR as nubl-agent. The default final state remains held.
+
+**Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Run `npm run check` at the deployed Factorio SHA and read the Shep owner's exact-revision bridge test receipts. Keep missing Shep evidence blocked. Run the plan checker.
+
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, per the boot recipe.
+
+- [ ] Lane 1. Regression lane against trunk. Read the same frozen OwnerFeed state at trunk and head and show it through the pinned bridge. Save `feed-parity.json`. Pass when v1 data agrees apart from read time and the phone's counts match. Record any absent trunk phone integration rather than inventing a screenshot.
+- [ ] Lane 2. Open the Factory tab on the owner's phone. Save `factory-tab.png`. Pass when counts and GitHub links match the current feed and the phone contacts only the bridge.
+- [ ] Lane 3. Restart the bridge with existing attention entries. Save `seed.png`. Pass when the first available read seeds without an alert.
+- [ ] Lane 4. Create a new owner-decision fixture under D7. Save `needs-you.png`. Pass when one alert arrives with title at most 64 UTF-8 bytes and body at most 256 bytes.
+- [ ] Lane 5. Create a failed fixture and then a new owner decision for the same issue. Save `collapse.png`. Pass when the failed alert is quieter and the newer alert replaces it under the same collapse key.
+- [ ] Lane 6. View a run while changing its attention state. Save `viewing.png`. Pass when no alert is delivered for that viewed run.
+- [ ] Lane 7. Use multibyte fixture titles and duplicate entries for one issue. Save `unicode.png`. Pass when trimming preserves characters, the key collapses once, and a needs-you entry is not lost.
+- [ ] Lane 8. Interrupt feed export and bridge-to-Apple connectivity separately. Save `unavailable.png`. Pass when unavailable feed sends no false alert and APNs recovery follows the recorded bounded Shep policy without a duplicate burst.
+- [ ] Lane 9. Run the authorized full fixture to a ready PR. Save `ready-pr.json`. Pass when the controller, CI, ledger, markers, and receipts use the exact nubl-agent identity, preserve caps, and report real model families honestly.
+- [ ] Lane 10. Read guest egress and both hosts' final status. Save `final-held.json`. Pass when only the bridge contacted Apple, the old controller stayed stopped, and the new controller is held unless ongoing dispatch has its own owner approval.
+
+**Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Metric. Feed computation and bridge-read latency on both revisions, plus added feed-to-phone and feed-to-push latency. Record fixture stage wall times and tokens under their existing caps.
+- [ ] Probe. Interleave three trunk/head feed reads through the same bridge and three new decision transitions at head. Save `perf.json`. Run the full fixture once under its separate token reservation.
+- [ ] Baseline. Record trunk's feed and bridge-read medians first. If trunk has no phone integration, record that absence and measure the new path separately.
+- [ ] Rule. Fail if feed work exceeds 500 milliseconds excluding CLI startup, the open phone takes over 15 seconds to show a new available feed, or a push takes over 60 seconds after the feed transition with Apple reachable. Fail any stage-cap breach. Do not claim a speed ratio between missing trunk pushes and delivered head pushes.
+
+**Review gate.** The operator reviews before merge.
+
+- [ ] Copy lane 2 and lane 4 screenshots to `docs/plans/media/VM9/VM9-review-factory.png` and `docs/plans/media/VM9/VM9-review-push.png`.
+- [ ] Record a 30 to 60 second video showing a decision, push arrival, collapse, and GitHub tap. Save `docs/plans/media/VM9/VM9-review.mp4` without secrets or private issue text.
+- [ ] Post the screenshots and video in chat for the operator. Stop at merge-ready. Obtain the separate real-dispatch decision rather than treating phone approval as that grant.
+
+**Merge.**
+
+- [ ] Root's clean verdict at the exact head SHA and pinned Factorio and Shep revisions.
+- [ ] Bugbot triage done.
+- [ ] Rebased onto current trunk after the verdict, with the verdict still valid under the patch-id rule in `playbooks/shipping.md`.
+- [ ] Append VM9 to the verified stack. The owner lands it. Record whether production remains held or D7 explicitly enabled ongoing dispatch.
+
+## Close the program
+
+- [ ] Every box above is checked with its evidence. Keep blocked qualification or owner actions visible rather than declaring the program complete early.
+- [ ] Reply to the operator with the report `autopilot-stack` names. Include each PR verdict, grants used, the guest identity, backup restore result, production hold state, and any remaining external dependency.
+
+## Appendix A. Prototype evidence
+
+No prototype ran during this plan-only task. No VM was created and no host setting changed. The supplied read-only observation record is `/home/g/Projects/pi-herdr-factorio-trails/ms-a2-vm/facts.md`, dated 2026-11-10. It records an uninitialized LXD 6.10.1 LTS host with no instances, enabled nested KVM, and production held on exe.dev at `349934b` with zero runs. These are supplied observations, not a new live status claim.
+
+The planning base is `3400160`. MV1, MV2, and MV6 are already merged there. The author read `origin/mv3-provision-profile`'s provisioner and unit, `origin/mv4-drain-foreign-markers`' drain runbook, and MV4b's `da9543c` file list. Their reusable contracts are named in VM5, VM6, and VM7. The old plan's exmach VM, edge, and APNs dependencies remain parked.
+
+Prototype evidence still required during authorized execution follows. Each prototype gets one bounded round. Record the branch, SHA, commands, redacted logs, and any screenshot in the PR trail. A failed round ends in a blocker or a scoped amendment, not an unbounded investigation.
+
+- VM2 must prove the cloud image exists at the selected fingerprint, ZFS backing is supported on the actual host filesystem, the subnet is unused, and the guest can run initial bwrap userns and limited user scopes. Stop after one disposable guest and one restore. Nested KVM is useful host capacity evidence, but bwrap does not require nested virtualization inside the guest.
+- VM2 must observe the model endpoint's tailnet IP and TLS identity. Facts give the URL, not the IP. No guessed address belongs in VM3's built-in profile.
+- VM3 must prove CLIProxyAPI's Responses streaming, usage, cancellation, auth header, and any approved Anthropic path. The current route code rejects a credentialed, pinned POST under a forbidden domain. Its narrow built-in exception is new code, not existing configuration support.
+- VM4 must prove App installation-token scope, GitHub identity lookup behavior, returned comment author type, Actions dispatch, and artifact redirects. Bound the live experiment to one fixture repository and one harmless write and dispatch each. Missing installed permissions need the owner, not a broader token by default.
+- VM5 must prove `LoadCredential=`, a system unit using `factory`'s user manager, reboot without login, and the feed exporter with a separate bridge UID. The host's userns settings do not settle guest AppArmor behavior.
+- VM8 must prove repository-rename compatibility and byte-preserving state and replay-budget transfer. VM9 must prove the real phone and direct APNs path at pinned Shep and Factorio revisions. Neither can be settled by the planning leaf's local reads.
+
+## Appendix B. Alternatives rejected
+
+A dedicated VM is the owner's settled choice. It gives bwrap a guest kernel rather than the ms-a2 host kernel, contains guest userns and AppArmor changes, and supports a separate boot and recovery lifecycle. An LXD container shares the host kernel and often needs nesting allowances for bwrap. It is cheaper to run but does not meet this isolation goal. Neither a VM nor a container protects guest secrets from host root.
+
+The proposed 4 vCPUs and 12 GiB are a starting size, not a benchmark result. Two one-CPU, 2-GiB scopes account for 2 vCPUs and 4 GiB. The remainder covers the controller, gateway processes, user manager, bridge, test setup, and OS. A 160-GiB disk gives room for source, pinned bundles, dependencies, and private evidence, which is not automatically pruned. The 240-GiB pool leaves limited snapshot headroom within the observed 1.4 TB free. Monitor disk use and stop new work before exhaustion. Increase storage only under the owner's grant, not by deleting accounting.
+
+ZFS is proposed for VM block storage and space-efficient snapshots. Loop-backed storage avoids assuming an unused physical disk that facts.md does not identify. It adds a filesystem layer and competes with other host writes. A dedicated device is preferable when available. The `dir` driver is simpler but has less efficient VM snapshots and needs a revised measured space budget. LVM thin storage needs an approved device or volume group. Do not repartition a host disk on inference.
+
+A managed NAT bridge avoids exposing the guest on the LAN and does not depend on choosing one of the host's five physical NICs. Macvlan gives a LAN address but complicates host-to-guest communication and broadens exposure. Guest Tailscale gives the VM its own ACL identity without granting a host subnet router authority over its service path. Tailscale alone is not a credential boundary against host root.
+
+D1 has three concrete options.
+
+1. Move all agent sessions to a separate unprivileged host account. Keep `g` as a human admin, with its home private and no SSH agent forwarding or writable automation paths into that account. This is the recommendation because it preserves human recovery access without giving agents LXD or sudo. Every future agent launcher, including Herdr and Shep work, must use the unprivileged account. Shared writable source that a privileged admin executes remains a trust risk, so review privileged scripts before execution.
+2. Remove `g` from `lxd` and remove passwordless sudo for agent sessions. Revoke cached sudo authorization and restart existing sessions so old supplementary groups do not survive. Use a separate human admin account. A narrowly allowed command that can execute arbitrary code, manipulate systemd, or access a guest disk would defeat the restriction. Password prompts inside agent sessions are not a safe substitute for separation.
+3. Use restricted LXD projects and scoped remote identities for agent-managed test VMs. This can limit those identities to test resources. It does not constrain `g` while `g` keeps the local LXD socket or sudo. Project restrictions alone therefore do not satisfy the credential requirement. They are an optional addition after removing those privileges, not the recommended first fix.
+
+Continuing unsandboxed agents as privileged `g` is incompatible with the requested protection. If the owner keeps that arrangement, do not install production secrets or claim the VM hides them. A different physical host or a changed trust requirement would need a new owner decision.
+
+For models, prefer the existing mac-studio CLIProxyAPI over Tailscale, with a production-only key injected by the guest gateway. Direct provider keys in the guest gateway are an alternative if CLIProxyAPI cannot meter the required protocol. They add billing and key management and need D3. Proxy access must use the intended models and retain honest observed-family accounting. No personal host key or model-key mount belongs in a stage.
+
+For GitHub, a guest broker keeps the App private key away from the controller UID and mints repository-limited expiring tokens. A human PAT or the host's `gh` login is rejected because it changes controller identity and broadens authority. A broker on another trusted machine could keep the private key off ms-a2 entirely, but adds service availability and authentication dependencies. It still cannot hide usable guest tokens from a privileged host agent. Start with the guest broker after D1 passes.
+
+For OwnerFeed, a bridge as `factory` would satisfy the private-directory reader without new code, but it would share controller state and token-broker access. The narrow read-only exporter adds one small process and a timer while letting `shep` remain a separate user. Group-readable private state is rejected because it violates the feed readers and exposes held-out artifacts. Publishing the viewer is also rejected because it exposes more than the feed, including a hold action the phone contract does not authorize.
+
+## Appendix C. Risks
+
+- Host privilege isolation is a hard prerequisite in VM2. All supplied host-agent sessions currently run as privileged `g`. Disk encryption, guest permissions, LXD projects, and tailnet ACLs do not change that fact.
+- Credentialed model routes in VM3 require a narrow exception to three existing safeguards. The cross-family audit must verify that declared routes retain their old refusals and cannot borrow the built-in exception.
+- GitHub App auth in VM4 is not yet proven against Factorio's GraphQL viewer check. The known App identity and Actions write permission are necessary but not proof of every API or artifact download path.
+- The production image and sizing in VM2 remain unbenchmarked. A guest kernel failure, ZFS incompatibility, user-manager failure, or capacity failure blocks provisioning. Change the plan before retrying a materially different design.
+- Shep's feed-file reader and direct APNs runtime are external dependencies in VM5 and VM9. The plan grants no cross-repository changes. No native-mobile control skill is installed in this checkout. Use the Shep owner's supported native tooling or a recorded manual phone drive with the owner. Keep missing automation and manual evidence explicit.
+- The backend evidence adaptation uses logs and JSON instead of screenshots for VM1 through VM8. The installed swarm skill exists. VM9 retains screenshots and video because the owner must see the phone interaction.
+- VM6's diagnostic code and fixture rehearsal land before VM7 executes the production drain. VM7's first operational box requires the real source inventory, fresh zero predicates, stopped scopes, and backup checksums. Fixture evidence never substitutes for that box.
+- VM7 has a main-owned CI bootstrap boundary. An owner-approved landing may precede production-main reporter proof, but that lane stays pending and blocks VM8. No generic bootstrap exception applies to other missing tests.
+- State paths and repository slugs may outlive the host move. VM6 and VM8 inspect them and stop on incompatible recovery. Renaming hashes or dropping claims would erase identity or accounting, so it is not a migration shortcut.
+- LXD snapshots on ms-a2 do not survive loss of ms-a2. VM8 requires an encrypted off-host copy and a real restore. Snapshot rollback after new external writes is unsafe because GitHub and the replay budget have moved forward.
+- The old exe.dev integration is currently blocked after the repository move. The owner must attach the new repository before source drain or native regression proof. After VM7, the old bot needs a separate test repository to exercise full CI without weakening production.
+- Test controllers and production must never reconcile the same repository concurrently, even if one is held. The verify-factory rule still applies across different machines. Shared replay accounting has exactly one writer across production and exe.dev tests.
+- No dispatch is authorized by this plan. VM8 is a held migration. VM9's bounded fixture run and ongoing production dispatch are separate D7 approvals. Missing grants are blocked boxes, not permission inferred from the old exmach or factory program.
+
+## Appendix D. Links and reading list
+
+- Read the supplied host and owner facts at `/home/g/Projects/pi-herdr-factorio-trails/ms-a2-vm/facts.md` before VM2. They supersede the parked exmach destination, not unrelated factory guarantees.
+- Read `docs/plans/factory-v1.md`, `docs/decisions.tsv`, and `docs/plans/exmach-move.md` for program limits, authority history, and the reusable MV work. This plan does not resume the parked exmach program.
+- Read `docs/operations/platform.md`, `docs/operations/sandbox.md`, `docs/operations/owner-feed.md`, `docs/operations/backup.md`, and `.pi/skills/verify-factory/SKILL.md` before changing their contracts.
+- Read `git show origin/mv4-drain-foreign-markers:docs/operations/drain.md` for VM6. Read `git show origin/mv3-provision-profile:server/provision.sh` and the adjacent `server/factory.service` for VM5. Read `origin/mv4b-ci-bot`'s workflow and reporter-test patch for VM7.
+- VM2, VM3, VM4, and VM5 get the how skill, `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/how/SKILL.md`. Use `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/interrogate/SKILL.md` only for the owner choices D1 through D7, not routine implementation details.
+- Keep the decision trail under `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/show-me-your-work/SKILL.md`. Use its `log.sh` for append-only rows during execution. The planning leaf does not append coordinator decisions.
+- Read `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/technical-writing/SKILL.md`, `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/unslop/SKILL.md`, `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/no-comments/SKILL.md`, and `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/typescript-best-practices/SKILL.md` before their respective writing, review, or source work.
+- Verify LXD image, storage, project, bridge, and VM options against the installed LXD 6.10.1 help and Canonical's documentation during VM2. Verify GitHub App JWT and installation-token contracts against GitHub's current documentation during VM4. Verify Tailscale grants, tagging, and key handling against the owner's actual tailnet policy before applying D4.
