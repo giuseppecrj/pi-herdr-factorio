@@ -32,6 +32,9 @@ These rules apply:
 - On `exmach` the file may override `ghHost` with exactly one DNS label under `int.<domain>`, such as `github.int.<domain>`. Anything else refuses with `gh_host_invalid`: two or more labels, another domain, a label that starts or ends with `-`, an empty label, uppercase or a trailing dot. A later rename of the GitHub integration then needs only this file.
 - `exe-dev` takes no identity fields and no `ghHost`, because both are fixed. They refuse with `controller_identity_unexpected` and `gh_host_unexpected`.
 - `repositories` is optional on both platforms. When present it must be a non-empty list of distinct `owner/name` slugs.
+- The reader does not follow a symlink. Only a missing path counts as no file. A symlink, even a dangling one, or a path that is not a regular file refuses with `platform_file_unsafe`. A file over 16 KiB is not read and refuses with `platform_file_malformed`.
+- Every value must have its JSON type. A string field given an object, an array or a number is never converted, and refuses with that field's reason.
+- Every resolved hostname, the domain, `modelHost` and `ghHost`, must be a whole DNS name: at most 253 characters, each label at most 63. A one-label `ghHost` that makes the name too long refuses with `gh_host_invalid`.
 - A malformed or unreadable file, a malformed selector, a partial identity or an invalid `ghHost` refuses. Nothing falls back to `exe-dev` or to the built-in defaults after an error.
 - The platform is read once, when a process starts. Changing it means restarting the controller.
 
@@ -74,7 +77,14 @@ The sandbox prefixes do not change between platforms. The gateway strips the pre
 - `status --json` prints a top-level `platform` object: `name`, `domain`, `descriptor`, `digest` and every field above. An unset selection and an explicit `exe-dev` print the same object.
 - The controller writes its own startup profile into `status.json`, shown as `controller.lastTick.platform`. If the two digests differ, the CLI's selection and the running controller's do not match.
 
-Refusal reasons: `unknown_platform`, `domain_invalid`, `platform_selection_mismatch`, `platform_file_unreadable`, `platform_file_malformed`, `version_unsupported`, `unknown_field`, `controller_identity_missing`, `controller_identity_invalid`, `controller_identity_unexpected`, `repositories_empty`, `repository_invalid`, `gh_host_invalid`, `gh_host_unexpected`, `own_domain_not_forbidden`, `internal_domain_not_forbidden` and `network_contract_mismatch`.
+Refusal reasons: `unknown_platform`, `domain_invalid`, `platform_selection_mismatch`, `platform_file_unreadable`, `platform_file_unsafe`, `platform_file_malformed`, `version_unsupported`, `unknown_field`, `controller_identity_missing`, `controller_identity_invalid`, `controller_identity_unexpected`, `repositories_empty`, `repository_invalid`, `gh_host_invalid`, `gh_host_unexpected`, `own_domain_not_forbidden`, `internal_domain_not_forbidden` and `network_contract_mismatch`.
+
+## Remaining exe-dev literals
+
+Three sites still name exe-dev values on purpose. Outside `src/platform.ts`, `rg 'exe\.xyz|exe-dev-github-integration|169\.254\.169\.254|giuseppecrj/pi-herdr-factorio' src server extension` should find only these. Any other match is a missed propagation.
+
+- `server/provision.sh:10` and `server/factory.service:13,18`. They are the exe-dev VM's provisioning and unit, and wait for MV3.
+- `server/sandbox/echo-fixture.ts:250`. It is a test fixture's redirect target, not a platform value.
 
 ## Not covered here
 

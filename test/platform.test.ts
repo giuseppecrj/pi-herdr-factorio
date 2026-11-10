@@ -5,6 +5,7 @@ import {
 	mkdtempSync,
 	readdirSync,
 	rmSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -280,6 +281,7 @@ async function cli(
 	input: {
 		readonly env?: { readonly [name: string]: string };
 		readonly file?: PlatformFile;
+		readonly reader?: () => Promise<PlatformFile>;
 		readonly workflow?: string;
 	} = {},
 ): Promise<CliRun> {
@@ -300,7 +302,7 @@ async function cli(
 	};
 
 	const code = await runCli(argv, {
-		readPlatformFile: async () => input.file ?? ABSENT,
+		readPlatformFile: input.reader ?? (async () => input.file ?? ABSENT),
 		exec,
 		env: (name) =>
 			input.env?.[name] ?? (name === "HOME" ? "/home/factory" : undefined),
@@ -718,7 +720,7 @@ describe("platform selection", () => {
 			assert.deepEqual(await readPlatformFile(join(dir, "missing.json")), {
 				kind: "absent",
 			});
-			assert.deepEqual(await readPlatformFile(dir), { kind: "unreadable" });
+			assert.deepEqual(await readPlatformFile(dir), { kind: "unsafe" });
 			writeFileSync(join(dir, "platform.json"), '{"version":1}');
 			assert.deepEqual(await readPlatformFile(join(dir, "platform.json")), {
 				kind: "present",
@@ -1653,6 +1655,190 @@ describe("platform propagation", () => {
 			});
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("selection file safety", () => {
+	const tick = (state: string) => [
+		"tick",
+		"--once",
+		"--json",
+		"--repo",
+		repo,
+		"--state-dir",
+		state,
+	];
+
+	async function refusedAtStartup(
+		result: Promise<CliRun>,
+		state: string,
+		reason: PlatformRefusal,
+		label: string,
+	): Promise<void> {
+		const run = await result;
+
+		assert.equal(run.code, EXIT.usage, `${label}: ${run.stderr}`);
+		assert.match(
+			run.stderr,
+			new RegExp(`event=platform_invalid reason=${reason}\\n$`),
+			label,
+		);
+		assert.deepEqual(run.calls, [], label);
+		assert.deepEqual(readdirSync(state), [], label);
+	}
+
+	it("refuses a symlinked, dangling or non-regular selection file before any lock or gh, and never falls back to exe-dev", async () => {
+		const dir = privateDir("platform-unsafe-");
+		const state = privateDir("platform-unsafe-state-");
+
+		try {
+			const target = join(dir, "target.json");
+
+			writeFileSync(
+				target,
+				JSON.stringify({ version: 1, platform: "exmach:example.net" }),
+			);
+			symlinkSync(target, join(dir, "live.json"));
+			symlinkSync(join(dir, "missing.json"), join(dir, "dangling.json"));
+
+			for (const [path, ghHost] of [
+				[join(dir, "live.json"), "factorio.int.example.net"],
+				[join(dir, "dangling.json"), "github.int.exe.xyz"],
+				[dir, "github.int.exe.xyz"],
+				["/dev/null", "github.int.exe.xyz"],
+			] as const) {
+				await refusedAtStartup(
+					cli(tick(state), {
+						env: { GH_HOST: ghHost },
+						reader: () => readPlatformFile(path),
+					}),
+					state,
+					"platform_file_unsafe",
+					path,
+				);
+				assert.deepEqual(
+					await readPlatformFile(path),
+					{ kind: "unsafe" },
+					path,
+				);
+			}
+
+			assert.deepEqual(await readPlatformFile(join(dir, "missing.json")), {
+				kind: "absent",
+			});
+			assert.equal(
+				refusal(undefined, await readPlatformFile(target)),
+				null,
+				"the regular file itself is accepted",
+			);
+
+			const oversized = join(dir, "oversized.json");
+
+			writeFileSync(oversized, `{"version":1}${" ".repeat(16 * 1024)}`);
+			assert.deepEqual(await readPlatformFile(oversized), {
+				kind: "oversized",
+			});
+			await refusedAtStartup(
+				cli(tick(state), {
+					env: { GH_HOST: "github.int.exe.xyz" },
+					reader: () => readPlatformFile(oversized),
+				}),
+				state,
+				"platform_file_malformed",
+				oversized,
+			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+			rmSync(state, { recursive: true, force: true });
+		}
+	});
+
+	it("refuses a value of the wrong JSON type with its named reason and never coerces it", async () => {
+		const object = { toString: 0 };
+		const state = privateDir("platform-nonstring-");
+
+		const cases: [PlatformFile, PlatformRefusal][] = [
+			[file({ version: 1, platform: object }), "platform_file_malformed"],
+			[file({ version: 1, platform: ["exe-dev"] }), "platform_file_malformed"],
+			[file({ version: object }), "version_unsupported"],
+			[file({ version: "1" }), "version_unsupported"],
+			[exmachFile({ controllerLogin: object }), "controller_identity_invalid"],
+			[
+				exmachFile({ controllerAppSlug: object }),
+				"controller_identity_invalid",
+			],
+			[exmachFile({ botEmail: object }), "controller_identity_invalid"],
+			[
+				exmachFile({ controllerLogin: [OVERRIDE_IDENTITY.controllerLogin] }),
+				"controller_identity_invalid",
+			],
+			[exmachFile({ repositories: [object] }), "repository_invalid"],
+			[exmachFile({ repositories: [[repo]] }), "repository_invalid"],
+			[exmachFile({ repositories: object }), "repository_invalid"],
+			[exmachFile({ ghHost: object }), "gh_host_invalid"],
+			[exmachFile({ ghHost: ["github.int.example.net"] }), "gh_host_invalid"],
+		];
+
+		try {
+			for (const [source, reason] of cases) {
+				const label = JSON.stringify(source);
+
+				assert.equal(refusal(undefined, source), reason, label);
+				await refusedAtStartup(
+					cli(tick(state), {
+						env: { GH_HOST: "factorio.int.example.net" },
+						file: source,
+					}),
+					state,
+					reason,
+					label,
+				);
+			}
+		} finally {
+			rmSync(state, { recursive: true, force: true });
+		}
+	});
+
+	it("refuses a GitHub host over 253 characters even when each label is valid", async () => {
+		const domain = ["a", "b", "c"]
+			.map((letter) => letter.repeat(63))
+			.concat("d".repeat(48))
+			.join(".");
+
+		const selector = `exmach:${domain}`;
+		const overlong = `${"z".repeat(63)}.int.${domain}`;
+		const oneOver = `githubxyz.int.${domain}`;
+		const state = privateDir("platform-overlong-");
+
+		try {
+			assert.equal(domain.length, 240);
+			assert.equal(oneOver.length, 254);
+			assert.equal(resolved(selector, ABSENT).ghHost.length, 253);
+			assert.equal(
+				resolved(selector, file({ version: 1, ghHost: `github.int.${domain}` }))
+					.ghHost,
+				`github.int.${domain}`,
+			);
+
+			for (const ghHost of [overlong, oneOver]) {
+				const source = file({ version: 1, ghHost });
+
+				assert.equal(refusal(selector, source), "gh_host_invalid", ghHost);
+				await refusedAtStartup(
+					cli(tick(state), {
+						env: { FACTORY_PLATFORM: selector, GH_HOST: ghHost },
+						file: source,
+					}),
+					state,
+					"gh_host_invalid",
+					ghHost,
+				);
+			}
+
+			assert.equal(refusal(`exmach:x${domain}`, ABSENT), "domain_invalid");
+		} finally {
+			rmSync(state, { recursive: true, force: true });
 		}
 	});
 });

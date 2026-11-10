@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import {
 	arrayOf,
@@ -78,6 +78,7 @@ export const PLATFORM_REFUSALS = [
 	"domain_invalid",
 	"platform_selection_mismatch",
 	"platform_file_unreadable",
+	"platform_file_unsafe",
 	"platform_file_malformed",
 	"version_unsupported",
 	"unknown_field",
@@ -102,7 +103,9 @@ export type PlatformResolution =
 export type PlatformFile =
 	| { readonly kind: "absent" }
 	| { readonly kind: "present"; readonly text: string }
-	| { readonly kind: "unreadable" };
+	| { readonly kind: "unreadable" }
+	| { readonly kind: "unsafe" }
+	| { readonly kind: "oversized" };
 
 type Parsed<T> =
 	| { readonly ok: true; readonly value: T }
@@ -155,8 +158,31 @@ const ANTHROPIC_STAGES: readonly ModelPosition[] = Object.freeze([
 	"code-review",
 ]);
 
+/** A whole DNS hostname: at most 253 characters, each label at most 63. */
+function isHostname(text: string): boolean {
+	return (
+		text.length <= 253 &&
+		text.split(".").every((label) => DNS_LABEL.test(label))
+	);
+}
+
 function isPlatformDomain(text: string): boolean {
-	return DOMAIN.test(text) && isIP(text) === 0 && !/^[0-9.]+$/.test(text);
+	return (
+		DOMAIN.test(text) &&
+		isHostname(text) &&
+		isIP(text) === 0 &&
+		!/^[0-9.]+$/.test(text)
+	);
+}
+
+/**
+ * The value when it is a JSON string. An object or array is refused before
+ * any conversion, so no value's own `toString` ever runs.
+ */
+function stringOf(value: ReturnType<typeof fieldOf>): string | null {
+	return objectOf(value) === null && arrayOf(value) === null
+		? textOf(value)
+		: null;
 }
 
 /** The built-in egress contract for one selector. Nothing outside this function chooses an upstream. */
@@ -220,8 +246,12 @@ export function parsePlatformSelector(text: string): Parsed<PlatformSelector> {
 
 	const domain = text.slice("exmach:".length);
 
-	return isPlatformDomain(domain)
-		? { ok: true, value: { name: "exmach", domain } }
+	if (!isPlatformDomain(domain)) return { ok: false, reason: "domain_invalid" };
+
+	const value: PlatformSelector = { name: "exmach", domain };
+
+	return isHostname(platformNetwork(value).modelHost)
+		? { ok: true, value }
 		: { ok: false, reason: "domain_invalid" };
 }
 
@@ -280,7 +310,7 @@ function optionalText(
 ): Parsed<string | null> {
 	if (value === undefined) return { ok: true, value: null };
 
-	const text = textOf(value);
+	const text = stringOf(value);
 
 	return text !== null && valid.test(text)
 		? { ok: true, value: text }
@@ -301,7 +331,7 @@ function readRepositories(
 	const repositories: RepoSlug[] = [];
 
 	for (const item of items) {
-		const text = textOf(item);
+		const text = stringOf(item);
 
 		if (text === null || !isRepoSlug(text) || repositories.includes(text)) {
 			return { ok: false, reason: "repository_invalid" };
@@ -329,7 +359,7 @@ function parsePlatformFile(text: string): Parsed<FileSelection> {
 		return { ok: false, reason: "unknown_field" };
 
 	const platformValue = fieldOf(root, "platform");
-	const platformText = textOf(platformValue);
+	const platformText = stringOf(platformValue);
 
 	if (platformValue !== undefined && platformText === null) {
 		return { ok: false, reason: "platform_file_malformed" };
@@ -350,7 +380,7 @@ function parsePlatformFile(text: string): Parsed<FileSelection> {
 	const email = optionalText(fieldOf(root, "botEmail"), EMAIL_PATTERN);
 	const repositories = readRepositories(fieldOf(root, "repositories"));
 	const ghHostValue = fieldOf(root, "ghHost");
-	const ghHost = ghHostValue === undefined ? null : textOf(ghHostValue);
+	const ghHost = ghHostValue === undefined ? null : stringOf(ghHostValue);
 
 	if (!login.ok) return login;
 
@@ -433,14 +463,12 @@ function ghHostOf(
 				: { ok: false, reason: "gh_host_unexpected" };
 		case "exmach": {
 			const suffix = `.int.${selector.domain}`;
+			const host = override ?? `factorio${suffix}`;
 
-			if (override === null) {
-				return { ok: true, value: `factorio${suffix}` };
-			}
-
-			return override.endsWith(suffix) &&
-				DNS_LABEL.test(override.slice(0, -suffix.length))
-				? { ok: true, value: override }
+			return host.endsWith(suffix) &&
+				DNS_LABEL.test(host.slice(0, -suffix.length)) &&
+				isHostname(host)
+				? { ok: true, value: host }
 				: { ok: false, reason: "gh_host_invalid" };
 		}
 
@@ -466,12 +494,7 @@ export function parsePlatformProfile(input: {
 
 	if (fromEnv !== null && !fromEnv.ok) return fromEnv;
 
-	if (input.file.kind === "unreadable") {
-		return { ok: false, reason: "platform_file_unreadable" };
-	}
-
-	const file =
-		input.file.kind === "absent" ? null : parsePlatformFile(input.file.text);
+	const file = fileSelectionOf(input.file);
 
 	if (file !== null && !file.ok) return file;
 
@@ -512,11 +535,41 @@ export function parsePlatformProfile(input: {
 		: { ok: false, reason: defect };
 }
 
-/** Reads the selection file at an entry point. A missing file is `absent`; any other failure is `unreadable`. */
+function fileSelectionOf(file: PlatformFile): Parsed<FileSelection> | null {
+	switch (file.kind) {
+		case "absent":
+			return null;
+		case "present":
+			return parsePlatformFile(file.text);
+		case "unreadable":
+			return { ok: false, reason: "platform_file_unreadable" };
+		case "unsafe":
+			return { ok: false, reason: "platform_file_unsafe" };
+		case "oversized":
+			return { ok: false, reason: "platform_file_malformed" };
+		default: {
+			const _exhaustive: never = file;
+
+			return _exhaustive;
+		}
+	}
+}
+
+/**
+ * Reads the selection file at an entry point, without following a symlink.
+ * Only a missing path is `absent`. A symlink, even a dangling one, or any
+ * non-regular file is `unsafe`, and a file over the size limit is never read.
+ */
 export async function readPlatformFile(
 	path: string = PLATFORM_FILE,
 ): Promise<PlatformFile> {
 	try {
+		const stats = await lstat(path);
+
+		if (!stats.isFile()) return { kind: "unsafe" };
+
+		if (stats.size > MAX_FILE_BYTES) return { kind: "oversized" };
+
 		return { kind: "present", text: await readFile(path, "utf8") };
 	} catch (error) {
 		return error instanceof Error && "code" in error && error.code === "ENOENT"
