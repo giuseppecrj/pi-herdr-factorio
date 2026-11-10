@@ -244,7 +244,8 @@ export function platformEnvironment(profile: PlatformProfile): string {
 	return [
 		`FACTORY_PLATFORM=${platformDescriptor(profile)}`,
 		`GH_HOST=${profile.ghHost}`,
-		`GH_ENTERPRISE_TOKEN=${profile.name === "exmach" ? "exmach" : "exe-dev-integration"}`,
+		...(profile.name === "exmach" ? ["GH_ENTERPRISE_TOKEN=exmach"] : []),
+		`LLM_API_KEY_PLACEHOLDER=${profile.name === "exmach" ? "exmach" : "exe-dev-integration"}`,
 		`LLM_BASE_URL=${baseUrl}`,
 		`LLM_OPENAI_BASE_URL=${baseUrl}${profile.modelBasePaths.openai.replace(/\/$/, "")}`,
 		`LLM_ANTHROPIC_BASE_URL=${baseUrl}${profile.modelBasePaths.anthropic.replace(/\/$/, "")}`,

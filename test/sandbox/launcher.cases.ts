@@ -1641,6 +1641,7 @@ describe("preflight", () => {
 		return {
 			reconciled: async () => true,
 			arch: "x64",
+			xdgRuntimeDir: "/run/user/1000",
 			usernsLimit: async () => "15000",
 			exec: async (command, args): Promise<ExecResult> => {
 				if (command === "bwrap" && args[0] === "--version")
