@@ -15,7 +15,7 @@ Only one session coordinates the program. If another session's decision rows are
 
 - **Walkthrough first, for design-heavy PRs.** That means F07b, F07c, F09a, F10, and any PR that opens new design ground.
   - Run the pstack `how` skill: read-only explorers, then one explainer.
-  - Prototypes settle the facts. Settle every open call before a builder starts.
+  - Prototypes settle material behavior and architecture questions before implementation. Reuse valid grounding and settled choices in correction rounds rather than repeating the design process.
   - Bring the owner only the product calls.
 - **One builder per PR.** Give it a bare child in a managed worktree, with a brief at `../pi-herdr-factorio-trails/<PR>/brief.md` that lists the files it may touch.
 - **Swarm verification.** The plan names the lanes, and the shared lane briefs live in `../pi-herdr-factorio-trails/<PR>/swarm/`.
@@ -26,6 +26,17 @@ Only one session coordinates the program. If another session's decision rows are
 - **Merging.** Squash-merge with `gh pr merge --squash --match-head-commit <sha>`, after a verdict comment, a green `check` and a clean `git merge-tree` against `main`. Then remove the worktree and branch, locally and on GitHub.
   - The coordinator merges only under the owner's current grant. `docs/decisions.tsv` records each grant.
   - When the plan reaches the owner's PR review flow (F09a), each PR stops at merge-ready for the owner.
+
+## Keep delivery focused
+
+- **Simplify the workflow, not the guarantees.** Preserve exact-head CI and review binding, captured execution identity, cumulative budgets, owner edits and required live/performance checks. Remove unnecessary coordination and duplicate logic instead of weakening those guarantees.
+- **Test the actual critical path early.** Local tests should exercise real preparation, execution, persistence, restart recovery and handoff, with fakes limited to external infrastructure. Replaying the same prepared object or counting passing tests does not prove restart recovery. Local synthetic evidence is not live VM proof.
+- **Name the source of each blocker.** Cite the approved requirement, observed failure or missing evidence, concrete risk and next action. Distinguish product defects, failed required checks, harness failures, incomplete exploration and checks that depend on bootstrap. Do not invent a stronger release gate while verifying the existing one.
+- **Keep formal claims and delivery decisions separate.** A timed-out model check is neither a pass nor a counterexample. Report its unchecked properties and limits. Determine its effect on delivery from the agreed contract. Do not automatically require exhaustive graph completion where the contract allows bounded attempts and honest limitations. Never silently waive an explicit gate or hide a material risk.
+- **Bound the whole investigation, not just each child.** State what a proof, prototype or new harness will resolve and when the effort stops. A failed bounded round does not automatically justify another framework or research round. Assess whether it closes a required risk before continuing.
+- **Diagnose the verifier before changing the product.** Parser, fixture and collector errors are not product failures or successful negative controls. Correct the observation method without dropping cases, weakening assertions, narrowing stage allowances or relabeling old evidence.
+- **Batch corrections and reuse evidence.** Keep related code, test and documentation findings in one fix round. Apply the convergence rule above. Recheck changed behavior and affected integrations, not every unchanged artifact by ritual. Use additional exploration or judging only when a material question remains open, consistent with the installed playbook.
+- **Respect bootstrap and authority boundaries.** A reviewable bootstrap PR, merge readiness, full live qualification and deployment are different states. Use an approved bootstrap sequence with dependent checks explicitly pending. Reconcile standing owner grants with a child's narrower task scope before declaring a project-wide permission blocker or asking again. Never infer merge, settings or other external authority from a local task.
 
 ## Rules learned the hard way
 
