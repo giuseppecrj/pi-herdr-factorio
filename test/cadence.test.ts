@@ -41,7 +41,7 @@ import { detectArch } from "../server/sandbox/seccomp.ts";
 import { startGatewayProcess } from "../server/sandbox/gateway-client.ts";
 import { manifestDigest } from "../server/sandbox/manifest.ts";
 import { arrayOf, objectOf, parseJson } from "../server/sandbox/json.ts";
-import { fileAdmissionStore } from "../src/admission.ts";
+import { fileAdmissionStore, snapshotDigest } from "../src/admission.ts";
 import {
 	CadenceRunner,
 	CADENCE_RETAIN_EXECUTIONS,
@@ -94,6 +94,33 @@ function repository() {
 	assert.ok(isRepoSlug(value));
 
 	return value;
+}
+
+async function admitClaim(stateDir: string, issue: number) {
+	const snapshot = { title: "Retained ticket", body: "Local admission" };
+	const store = fileAdmissionStore(stateDir);
+	assert.equal(
+		await store.record(
+			{
+				repo,
+				issue,
+				issueUrl: `https://github.com/${repo}/issues/${issue}`,
+				decision: "admitted",
+				reasons: [],
+				eventId: "1",
+				eventAt: "2026-11-10T00:00:00Z",
+				actor: "giuseppecrj",
+				actorPermission: "write",
+				snapshotDigest: snapshotDigest(snapshot),
+				snapshotSource: "unedited",
+				baseSha: sha,
+				workflowDigest: digestOf(workflow),
+			},
+			snapshot,
+		),
+		"recorded",
+	);
+	assert.equal((await store.read({ repo, issue, eventId: "1" })).kind, "found");
 }
 
 function revision() {
@@ -2697,6 +2724,114 @@ describe("cadence durable ownership, accounting and proposal recovery", () => {
 	});
 });
 
+it("one-shot CLI reserves only locally owned claims and keeps unreadable admissions conservative", async (t) => {
+	for (const ownership of ["absent", "admitted", "unreadable"] as const) {
+		const stateDir = directory(t);
+		const github = new GitHubFixture();
+		const files = fileRunFiles(stateDir);
+
+		for (let issue = 200; issue < 216; issue++) {
+			assert.equal(
+				await files.writeClaim({
+					runId: digestOf(JSON.stringify(["github", repo, issue, "1"])),
+					issue,
+					eventId: "1",
+					seq: 3,
+					status: issue < 214 ? "released" : "retrying",
+					stage: "specify",
+					attempt: 1,
+					usage: 0,
+				}),
+				true,
+			);
+		}
+
+		for (const issue of [214, 215]) {
+			if (ownership === "admitted") await admitClaim(stateDir, issue);
+
+			if (ownership === "unreadable") {
+				const dir = join(stateDir, "admissions/github", repo, String(issue));
+				mkdirSync(dir, { recursive: true, mode: 0o700 });
+				writeFileSync(join(dir, "1.json"), "{invalid");
+			}
+
+			assert.equal(
+				(await fileAdmissionStore(stateDir).read({ repo, issue, eventId: "1" }))
+					.kind,
+				ownership === "admitted" ? "found" : ownership,
+			);
+		}
+
+		assert.equal((await files.listClaims()).length, 16);
+
+		const before = readdirSync(join(stateDir, "claims")).map((name) =>
+			readFileSync(join(stateDir, "claims", name), "utf8"),
+		);
+
+		let stdout = "";
+
+		const runtime: ControllerRuntime = {
+			clock: { now: () => now },
+			procs: procTable(),
+			signal: new AbortController().signal,
+			sleep: async () => undefined,
+			executor: (context) => {
+				const executor = sandboxExecutor({
+					...context,
+					root: join(stateDir, "absent-bundle"),
+					xdgRuntimeDir:
+						process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.()}`,
+				});
+
+				executor.recover = async () => undefined;
+				executor.reconciled = async () => true;
+				executor.preflight = async () => false;
+
+				return executor;
+			},
+		};
+
+		assert.equal(
+			await runCli(
+				[
+					"cadence",
+					"--once",
+					"--job",
+					"architecture",
+					"--json",
+					"--repo",
+					repo,
+					"--state-dir",
+					stateDir,
+				],
+				{
+					exec: github.exec,
+					env: (name) => process.env[name],
+					runtime,
+					stdout: (text) => {
+						stdout += text;
+					},
+					stderr: () => undefined,
+				},
+			),
+			1,
+			"preflight prevents model work while the CLI reports real reservation capacity",
+		);
+		assert.equal(
+			objectOf(parseJson(stdout))?.capacity,
+			ownership === "absent" ? 2 : 0,
+			ownership,
+		);
+		assert.deepEqual(
+			readdirSync(join(stateDir, "claims")).map((name) =>
+				readFileSync(join(stateDir, "claims", name), "utf8"),
+			),
+			before,
+			"one-shot does not reconcile or dispatch ticket work",
+		);
+	}
+});
+
 it("evaluates healthy, not-due cadence through real Orchestrator.tick under 100 ms", async (t) => {
 	const stateDir = directory(t);
 	const github = new GitHubFixture();
@@ -3265,6 +3400,8 @@ it("native cadence --once dedup demo: real Pi/RPC, bwrap, user scope, gateway an
 		);
 	}
 
+	for (const issue of [200, 201]) await admitClaim(fullState, issue);
+
 	let fullOutput = "";
 	assert.equal(
 		await runCli([...argv.slice(0, -1), fullState], {
@@ -3283,6 +3420,9 @@ it("native cadence --once dedup demo: real Pi/RPC, bwrap, user scope, gateway an
 	assert.equal(existsSync(join(fullState, "cadence")), false);
 	assert.equal(modelRequests, 1);
 	cpSync(join(fullState, "claims"), join(stateDir, "claims"), {
+		recursive: true,
+	});
+	cpSync(join(fullState, "admissions"), join(stateDir, "admissions"), {
 		recursive: true,
 	});
 	assert.equal(
