@@ -240,7 +240,7 @@ export function previousScore(
 	);
 }
 
-/** Old pre-launch enrollment markers count only when a measurement may actually have run. */
+/** Legacy markers count only for possible execution; settled failures are never auto-retried. */
 export function automaticScoreEnrolled(
 	stateDir: string,
 	runId: Digest,
@@ -255,7 +255,10 @@ export function automaticScoreEnrolled(
 
 	if (!existsSync(marker)) return false;
 
-	if (objectOf(parseJson(regularText(marker)))?.launched === true) return true;
+	const enrollment = objectOf(parseJson(regularText(marker)));
+
+	if (enrollment?.launched === true || enrollment?.settled === true)
+		return true;
 	const root = join(stateDir, "measure", "score", runId);
 
 	if (!existsSync(root)) return false;

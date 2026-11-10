@@ -185,8 +185,7 @@ import {
 	parseWorkflow,
 	STAGE_CLEANUP_RESERVE_MS,
 	isPinnedGrader,
-	loadWorkflow,
-	TRUSTED_REF,
+	trustedWorkflowConfig,
 	type WorkflowConfig,
 } from "../src/workflow.ts";
 import {
@@ -3982,6 +3981,7 @@ type ScorePumpInput = {
 	exec: Exec;
 	log: Log;
 	clock?: () => number;
+	config?: WorkflowConfig;
 };
 
 export async function pumpScoreOutbox(
@@ -4230,6 +4230,7 @@ export async function controllerMeasure(
 		config: WorkflowConfig;
 		scorerId?: string;
 		onLaunch?: () => void;
+		preflighted?: boolean;
 	},
 ) {
 	const start = Date.now();
@@ -4248,6 +4249,9 @@ export async function controllerMeasure(
 
 	if (input.kind === "score" && scorer === null)
 		throw new Error("scorer_unknown");
+
+	if (!present(join(input.stateDir, "ledger", input.runId, "row.json")))
+		throw new Error("ledger_row_unavailable");
 
 	const evidence = await measurementInput(
 		input.stateDir,
@@ -4308,7 +4312,7 @@ export async function controllerMeasure(
 	let launched = false;
 	let reason = touched ? "scorer_touched" : "sandbox_unavailable";
 
-	if (!touched && (await input.executor.preflight())) {
+	if (!touched && (input.preflighted || (await input.executor.preflight()))) {
 		const wallMs = EXPLAIN_WALL_MS - (Date.now() - start);
 
 		if (wallMs <= STAGE_CLEANUP_RESERVE_MS)
@@ -4521,6 +4525,7 @@ export function controllerMeasurements(input: MeasurementContext) {
 						runId,
 						config,
 						scorerId: scorer.id,
+						preflighted: true,
 						onLaunch: () => {
 							privateDir(dirname(marker));
 							writeCadenceFile(
@@ -4531,13 +4536,94 @@ export function controllerMeasurements(input: MeasurementContext) {
 						},
 					});
 
-					if (report.kind === "score" && report.event.status === "voided")
-						eligible.delete(key);
+					eligible.delete(key);
+
+					if (report.kind === "score") {
+						privateDir(dirname(marker));
+						writeCadenceFile(
+							marker,
+							JSON.stringify({ runId, scorerId: scorer.id, settled: true }),
+						);
+					}
 				} catch (error) {
-					input.log("measurement_failed", {
-						runId,
-						reason: error instanceof Error ? error.message : "unknown",
-					});
+					eligible.delete(key);
+
+					const reason =
+						error instanceof Error &&
+						/^[a-z][a-z0-9_]{0,95}$/.test(error.message)
+							? error.message
+							: "measurement_prelaunch_failed";
+
+					if (!automaticScoreEnrolled(input.stateDir, runId, scorer.id)) {
+						const model = config.grader?.model;
+
+						if (model === undefined) throw new Error("grader_unpinned");
+
+						const execution = allocateMeasurement(
+							input.stateDir,
+							"score",
+							runId,
+						);
+
+						const usage = { tokens: 0, wallMs: 0, exact: true };
+
+						const event: ScoreEvent = {
+							id: execution.eventId,
+							scoredRunId: runId,
+							scorerId: scorer.id,
+							scorerDigest: scorerDigest(scorer, model),
+							inputDigest: digestOf(
+								JSON.stringify({ unavailable: reason, runId }),
+							),
+							includeChildren: scorer.includeChildren,
+							label: null,
+							score: null,
+							passingScore: scorer.passingScore,
+							reasoning: `Automatic scoring failed before launch (${reason}). Use score --run to retry on demand.`,
+							judgeModel: model,
+							judgeFamily: "openai",
+							familyNote: FAMILY_NOTE,
+							usage,
+							supersedes: previousScore(input.stateDir, runId, scorer.id),
+							at: new Date().toISOString(),
+							status: "failed",
+							voided: null,
+						};
+
+						exclusive(
+							join(execution.dir, "owner.json"),
+							JSON.stringify({
+								repo: input.repo,
+								identity: execution.identity,
+								executionId: execution.executionId,
+								kind: "score",
+								runId,
+								model,
+								maxTokens: config.grader?.maxTokens ?? 16_000,
+								at: event.at,
+								inputDigest: event.inputDigest,
+								scorer,
+								supersedes: event.supersedes,
+							}),
+						);
+						enqueueScore(input.stateDir, event);
+						exclusive(
+							join(execution.dir, "result.json"),
+							JSON.stringify({ usage, launched: false, event }),
+						);
+						privateDir(dirname(marker));
+						writeCadenceFile(
+							marker,
+							JSON.stringify({
+								runId,
+								scorerId: scorer.id,
+								settled: true,
+								reason,
+							}),
+						);
+					}
+
+					input.log("measurement_failed", { runId, reason });
 				} finally {
 					queued.delete(key);
 					occupied = 0;
@@ -4844,30 +4930,54 @@ async function publishProposalIntent(input: {
 	return true;
 }
 
-/** Deterministic tick work: local scores once, one all-state proposal listing, no model or per-run GitHub reads. */
+/** Local eligibility first; at most one remote reconciliation per hour per scorer. */
 export async function runImprovementTrigger(
 	input: ScorePumpInput,
 ): Promise<boolean> {
-	const events = scoreHistory(input.stateDir);
-
-	if (
-		!events.some(
-			(event) => event.status === "scored" && event.score! < event.passingScore,
-		)
-	)
-		return true;
-
-	const loaded = await loadWorkflow({
-		exec: input.exec,
-		repo: input.repo,
-		ref: TRUSTED_REF,
-		env: (name) => process.env[name],
-	});
-
-	if (loaded.kind !== "loaded") return false;
-	const { trigger, scorers } = loaded.snapshot.config;
+	const config = input.config ?? trustedWorkflowConfig(input.repo);
+	const { trigger, scorers } = config ?? {};
 
 	if (trigger == null || !scorers?.length) return true;
+	const events = scoreHistory(input.stateDir);
+	const now = (input.clock ?? Date.now)();
+	const intents = join(input.stateDir, "cadence", "trigger", "proposals");
+	const primary = measurementPrimary(input.stateDir, input.repo);
+	const due = [];
+
+	for (const scorer of scorers) {
+		const path = join(intents, `read-${scorer.id}.json`);
+		const saved = objectOf(parseJsonText(readCadenceFile(path) ?? ""));
+
+		const filed = (arrayOf(saved?.runs) ?? []).flatMap((value) => {
+			const run = textOf(value);
+
+			return run !== null && isDigest(run) ? [run] : [];
+		});
+
+		const proposal = triggerProposal({
+			repo: input.repo,
+			scorerId: scorer.id,
+			failures: unreviewedFailures(events, scorer.id, new Set(filed)),
+			...trigger,
+			now,
+			primary,
+		});
+
+		if (proposal === null) continue;
+		const at = countOf(saved?.at);
+
+		if (at !== null && now - at < 3_600_000) continue;
+		due.push({ scorer, path, filed });
+	}
+
+	if (due.length === 0) return true;
+
+	if ((await fileAdmissionStore(input.stateDir).localSwitch()) !== "enabled")
+		return false;
+	cadencePrivateDir(intents);
+
+	for (const { path, filed } of due)
+		writeCadenceFile(path, JSON.stringify({ at: now, runs: filed }));
 
 	const adapter = new GitHubTicketAdapter({
 		exec: input.exec,
@@ -4887,7 +4997,16 @@ export async function runImprovementTrigger(
 
 	const writer = new GitHubTicketWriter({ exec: input.exec, repo: input.repo });
 
-	for (const scorer of scorers) {
+	for (const { scorer, path, filed } of due) {
+		const knownRuns = new Set([
+			...filed,
+			...records
+				.filter((record) => record.scorerId === scorer.id)
+				.flatMap((record) => record.runs),
+		]);
+
+		writeCadenceFile(path, JSON.stringify({ at: now, runs: [...knownRuns] }));
+
 		if (
 			records.some(
 				(record) => record.scorerId === scorer.id && record.state === "open",
@@ -4895,21 +5014,15 @@ export async function runImprovementTrigger(
 		)
 			continue;
 
-		const reviewed = new Set(
-			records
-				.filter(
-					(record) => record.scorerId === scorer.id && record.state !== "open",
-				)
-				.flatMap((record) => record.runs),
-		);
+		const reviewed = knownRuns;
 
 		const proposal = triggerProposal({
 			repo: input.repo,
 			scorerId: scorer.id,
 			failures: unreviewedFailures(events, scorer.id, reviewed),
 			...trigger,
-			now: (input.clock ?? Date.now)(),
-			primary: measurementPrimary(input.stateDir, input.repo),
+			now,
+			primary,
 		});
 
 		if (proposal === null) continue;
@@ -4918,13 +5031,17 @@ export async function runImprovementTrigger(
 			!(await publishProposalIntent({
 				...input,
 				...proposal,
-				intents: join(input.stateDir, "cadence", "trigger", "proposals"),
+				intents,
 				issues: issues.value,
 				adapter,
 				writer,
 			}))
 		)
 			return false;
+
+		for (const run of triggerRecord(proposal.body, input.repo)?.runs ?? [])
+			knownRuns.add(run);
+		writeCadenceFile(path, JSON.stringify({ at: now, runs: [...knownRuns] }));
 		input.log("improvement_proposed", {
 			scorer: scorer.id,
 			fingerprint: proposal.fingerprint,
@@ -5045,7 +5162,9 @@ export async function publishCadenceProposals(input: {
 
 		if (evidence.length === 0) dropped.push(finding.fingerprint);
 		writeCadenceFile(
-			join(execution.job === "reflect" ? intents : dir, "filing.json"),
+			execution.job === "reflect"
+				? join(intents, `filing-${execution.windowStart}.json`)
+				: join(dir, "filing.json"),
 			JSON.stringify({
 				reason:
 					invalidEvidence.length > 0 ? "invalid_evidence" : "valid_evidence",

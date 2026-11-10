@@ -674,6 +674,7 @@ export function triggerProposal(input: {
 			"## Proposed change",
 			"Investigate the common failure cause and design one bounded experiment. Do not change a skill, prompt or gate automatically, or open a PR from this trigger.",
 			"## Evidence",
+			"Score events come from the local projection and may still be queued for publication to factory/ledger.",
 			...cohort.map(
 				(event) =>
 					`Run ${event.scoredRunId} · score event ${event.id} · ${inert(event.label ?? "unavailable")} ${event.score} < ${event.passingScore}`,
@@ -681,7 +682,7 @@ export function triggerProposal(input: {
 			"## Keep or reject",
 			"Keep only after comparable replay preserves mandatory behavior, accepts no seeded bad case, and improves F12a's primary metric beyond noise. Reject a regression; an unavailable or within-noise primary result cannot claim improvement. The owner alone decides promotion.",
 			"## What the proposal could not check",
-			`Only the local score projection was checked. Below-threshold unknown labels include missing evidence, not proven product defects. No diagnosis, replay, causal effect or primary-metric improvement was measured. ${input.failures.length - cohort.length} additional failures omitted. Money is unavailable.`,
+			`Only the local score projection was checked. Below-threshold unknown labels include missing evidence, not proven product defects. No diagnosis, replay, causal effect or primary-metric improvement was measured. ${input.failures.length - cohort.length} additional failures omitted. After this issue closes, an omitted remainder that reaches K or D can form another proposal. Money is unavailable.`,
 			"This is a proposal for your review, not ready work. No code or PR was created.",
 			record,
 			key,

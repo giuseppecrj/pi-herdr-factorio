@@ -874,7 +874,7 @@ function readCadence(root: Map<string, YamlNode>): CadenceConfig | null {
 			maxTokens: integerOr(entries, "maxTokens", `${field}.maxTokens`, {
 				min: 1,
 				max: 40_000,
-				fallback: 40_000,
+				fallback: 36_000,
 			}),
 			budget: Object.freeze({
 				maxTurns: integerOr(entries, "maxTurns", `${field}.maxTurns`, {
@@ -1468,6 +1468,15 @@ async function runGh(exec: Exec, args: readonly string[]): Promise<GhResult> {
 	}
 }
 
+const trustedConfigs = new Map<RepoSlug, WorkflowConfig>();
+
+/** Reuse the main configuration already loaded by admission; never fetch for an idle trigger. */
+export function trustedWorkflowConfig(
+	repo: RepoSlug,
+): WorkflowConfig | undefined {
+	return trustedConfigs.get(repo);
+}
+
 /**
  * Loads WORKFLOW.md from `ref` of `repo` on GitHub: resolve the branch to a
  * SHA, then fetch the file at that SHA. It never reads a local checkout.
@@ -1566,6 +1575,8 @@ export async function loadWorkflow(input: {
 		guidance: parsed.guidance,
 		warnings: parsed.warnings,
 	});
+
+	if (ref === TRUSTED_REF) trustedConfigs.set(repo, snapshot.config);
 
 	return Object.freeze({ kind: "loaded", snapshot });
 }

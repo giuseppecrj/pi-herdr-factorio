@@ -10,6 +10,7 @@ import {
 	renameSync,
 	rmSync,
 	statSync,
+	lstatSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
@@ -372,6 +373,19 @@ const improvementWorkflow = readFileSync(
 	"utf8",
 );
 
+const improvementPolicy = parseWorkflow({
+	text: improvementWorkflow,
+	repo,
+	env: (name) => process.env[name],
+});
+
+assert.equal(improvementPolicy.kind, "valid");
+
+if (improvementPolicy.kind !== "valid")
+	throw new Error("improvement fixture policy");
+
+const improvementConfig = improvementPolicy.config;
+
 function failingScore(
 	seq: number,
 	runId = digestOf(`trigger-run-${seq}`),
@@ -417,18 +431,67 @@ function filesOf(root: string, relative = ""): Record<string, string> {
 	return Object.fromEntries(
 		readdirSync(join(root, relative), { withFileTypes: true }).flatMap(
 			(entry) => {
+				if (entry.name === ".git" || entry.name === "node_modules") return [];
 				const path = join(relative, entry.name);
 
 				return entry.isDirectory()
 					? Object.entries(filesOf(root, path))
-					: [[path, digestOf(readFileSync(join(root, path)))]];
+					: [
+							[
+								path,
+								digestOf(
+									Buffer.concat([
+										Buffer.from(`${lstatSync(join(root, path)).mode}\0`),
+										readFileSync(join(root, path)),
+									]),
+								),
+							],
+						];
 			},
 		),
 	);
 }
 
+function checkoutHash() {
+	return digestOf(
+		JSON.stringify(filesOf(new URL("..", import.meta.url).pathname)),
+	);
+}
+
+function proposalRequestsOnly(github: GitHubFixture) {
+	for (const args of github.requests) {
+		assert.equal(args[0], "api");
+
+		const methodAt = args.findIndex(
+			(arg) => arg === "--method" || arg === "-X",
+		);
+
+		const method = methodAt < 0 ? "GET" : args[methodAt + 1];
+		const endpoint = args.find((arg) => arg.startsWith("repos/")) ?? "";
+		const url = new URL(`https://fixture/${endpoint}`);
+
+		const allowed =
+			(method === "GET" &&
+				(url.pathname === `/repos/${repo}/labels/factory%3Aenabled` ||
+					(url.pathname === `/repos/${repo}/issues` &&
+						url.searchParams.get("state") === "all" &&
+						url.searchParams.get("labels") === "factory:proposed" &&
+						url.searchParams.get("creator") ===
+							"exe-dev-github-integration[bot]"))) ||
+			(method === "POST" && endpoint === `repos/${repo}/issues`);
+
+		assert.ok(allowed, `unexpected proposal request: ${args.join(" ")}`);
+
+		if (method === "POST")
+			assert.deepEqual(
+				args.filter((arg) => arg.startsWith("labels[]=")),
+				["labels[]=factory:proposed"],
+			);
+	}
+}
+
 describe("improvement proposals", () => {
-	it("calibrates reflect with maximum ledger, scores, source and known-proposal context under 40k", async (t) => {
+	it("calibrates reflect with maximum ledger, scores, source and known-proposal context under its 36k default", async (t) => {
 		const execution = {
 			...input("reflect"),
 			existingProposals: Array.from({ length: 100 }, () => ({
@@ -468,7 +531,7 @@ describe("improvement proposals", () => {
 		assert.ok(prompt);
 		const estimate = Math.ceil(Buffer.byteLength(prompt) / 2.8) + 533;
 		assert.ok(
-			estimate + 10_000 + 4_000 < 36_000,
+			estimate + 10_000 + 4_000 < execution.settings.maxTokens,
 			`reflect ${estimate} + 10000 answer + 4000 reasoning`,
 		);
 		assert.ok(Buffer.byteLength(JSON.stringify(excerpt.files)) <= 8192);
@@ -477,7 +540,7 @@ describe("improvement proposals", () => {
 				8192,
 		);
 		t.diagnostic(
-			`reflect calibrated prompt ${estimate}; total ${estimate + 14_000}; headroom ${40_000 - estimate - 14_000}`,
+			`reflect calibrated prompt ${estimate}; total ${estimate + 14_000}; headroom ${execution.settings.maxTokens - estimate - 14_000}`,
 		);
 	});
 
@@ -562,6 +625,8 @@ describe("improvement proposals", () => {
 		assert.equal(triggerProposal({ ...age, now: age.now - 1 }), null);
 		assert.ok(triggerProposal(age));
 		assert.match(count.body, /^F12a clean landing share\\: unavailable/);
+		assert.match(count.body, /may still be queued for publication/);
+		assert.match(count.body, /omitted remainder.*another proposal/);
 		assert.equal(
 			triggerRecord(triggerProposal({ ...request, failures })!.body, repo)?.runs
 				.length,
@@ -675,6 +740,7 @@ describe("improvement proposals", () => {
 
 		assert.ok(proposals);
 		const before = filesOf(stateDir);
+		const checkoutBefore = checkoutHash();
 		const github = new GitHubFixture();
 		assert.equal(
 			await publishCadenceProposals({
@@ -687,6 +753,16 @@ describe("improvement proposals", () => {
 			true,
 		);
 		assert.equal(github.creates, 1);
+		assert.ok(
+			existsSync(
+				join(
+					stateDir,
+					"cadence/reflect/proposals",
+					`filing-${execution.windowStart}.json`,
+				),
+			),
+			"reflect diagnostics are keyed by window",
+		);
 		assert.doesNotMatch(
 			github.issues[0]!.body,
 			new RegExp(digestOf("invented")),
@@ -705,10 +781,116 @@ describe("improvement proposals", () => {
 			before,
 			"reflect changes no file outside proposal intent state, including deletions",
 		);
+		assert.deepEqual(github.issues[0]!.labels, [{ name: "factory:proposed" }]);
 		assert.equal(
-			github.requests.some((args) => args.some((arg) => arg.includes("pulls"))),
-			false,
+			checkoutHash(),
+			checkoutBefore,
+			"reflect never edits the repository checkout",
 		);
+		proposalRequestsOnly(github);
+	});
+
+	it("makes zero trigger GitHub calls for empty, below-threshold, passing or already-filed scores", async (t) => {
+		for (const mode of ["empty", "below", "passed", "reviewed"]) {
+			const stateDir = directory(t);
+			const github = new GitHubFixture();
+			let clock = now;
+
+			const request = {
+				stateDir,
+				repo,
+				exec: github.exec,
+				config: improvementConfig,
+				clock: () => clock,
+				log: () => undefined,
+			};
+
+			const events = Array.from(
+				{ length: mode === "empty" ? 0 : mode === "below" ? 24 : 25 },
+				(_, seq) => failingScore(seq),
+			);
+
+			for (const event of events) enqueueScore(stateDir, event);
+
+			if (mode === "passed") {
+				for (const [seq, event] of events.entries())
+					enqueueScore(stateDir, {
+						...failingScore(100 + seq, event.scoredRunId),
+						at: new Date(now).toISOString(),
+						score: 1,
+						label: "matched",
+						supersedes: event.id,
+					});
+			}
+
+			if (mode === "reviewed") {
+				await runImprovementTrigger(request);
+				assert.equal(github.creates, 1);
+				github.issues[0]!.state = "closed";
+				github.requests = [];
+			}
+
+			for (let tick = 0; tick < 11; tick++) {
+				clock += 3_600_000;
+				await runImprovementTrigger(request);
+			}
+
+			assert.deepEqual(github.requests, [], mode);
+		}
+	});
+
+	it("rate-limits qualifying trigger reads hourly per scorer, including remote refusals", async (t) => {
+		const stateDir = directory(t);
+		const github = new GitHubFixture();
+		github.enabled = false;
+		let clock = now;
+
+		const request = {
+			stateDir,
+			repo,
+			exec: github.exec,
+			config: improvementConfig,
+			clock: () => clock,
+			log: () => undefined,
+		};
+
+		for (let seq = 0; seq < 25; seq++)
+			enqueueScore(stateDir, failingScore(seq));
+		await runImprovementTrigger(request);
+		assert.equal(github.requests.length, 1);
+		github.enabled = true;
+
+		for (let tick = 1; tick < 120; tick++) {
+			clock = now + tick * 30_000;
+			await runImprovementTrigger(request);
+		}
+
+		assert.equal(github.requests.length, 1);
+		assert.equal(github.creates, 0);
+		clock = now + 3_600_000;
+		await runImprovementTrigger(request);
+		assert.equal(github.creates, 1);
+
+		for (let seq = 25; seq < 50; seq++)
+			enqueueScore(stateDir, failingScore(seq));
+		const reads = github.requests.length;
+		await runImprovementTrigger(request);
+		assert.equal(github.requests.length, reads);
+		clock += 3_600_000;
+		await runImprovementTrigger(request);
+		assert.equal(github.creates, 1, "an open issue suppresses a second cohort");
+		const reconciled = github.requests.length;
+		await runImprovementTrigger(request);
+		assert.equal(github.requests.length, reconciled);
+		github.issues[0]!.state = "closed";
+		clock += 3_600_000;
+		await runImprovementTrigger(request);
+		assert.equal(
+			github.creates,
+			2,
+			"closing the first issue permits a new unfiled cohort",
+		);
+		proposalRequestsOnly(github);
 	});
 
 	it("files one trigger, reconciles an ambiguous create, respects both switches and suppresses closed cohorts", async (t) => {
@@ -725,12 +907,15 @@ describe("improvement proposals", () => {
 				enqueueScore(stateDir, failingScore(seq));
 
 			const before = filesOf(stateDir);
+			const checkoutBefore = checkoutHash();
+			let clock = now;
 
 			const request = {
 				stateDir,
 				repo,
 				exec: github.exec,
-				clock: () => now,
+				clock: () => clock,
+				config: improvementConfig,
 				log: () => undefined,
 			};
 
@@ -751,6 +936,7 @@ describe("improvement proposals", () => {
 			github.enabled = true;
 			rmSync(join(stateDir, "disabled"), { force: true });
 			delete before.disabled;
+			clock += 3_600_000;
 			await runImprovementTrigger(request);
 			assert.equal(github.creates, 1);
 			github.issues[0]!.state = "closed";
@@ -770,11 +956,12 @@ describe("improvement proposals", () => {
 				before,
 				"trigger changes no file outside proposal intent state, including deletions",
 			);
-			assert.ok(
-				github.requests.every(
-					(args) => !args.some((arg) => /pulls|issues\/[0-9]+/.test(arg)),
-				),
+			assert.equal(
+				checkoutHash(),
+				checkoutBefore,
+				"trigger never edits the repository checkout",
 			);
+			proposalRequestsOnly(github);
 		}
 	});
 });
@@ -1169,7 +1356,7 @@ describe("bounded single-pass cadence excerpts", () => {
 		);
 	});
 
-	it("calibrates every job on a committed snapshot below 40k with headroom (never needs git refs)", async (t) => {
+	it("calibrates every job on a committed snapshot below its 36k default (never needs git refs)", async (t) => {
 		const snapshot: { sha: string; files: Record<string, string> } = JSON.parse(
 			gunzipSync(
 				readFileSync(
@@ -1294,7 +1481,7 @@ describe("bounded single-pass cadence excerpts", () => {
 			const answerReserve = 8_800 + 4_000;
 			const estimate = maxPrompt + answerReserve;
 			assert.ok(
-				estimate < 36_000,
+				estimate < config.jobs[job].maxTokens,
 				`${job}: ${estimate} including 8.8k maximum answer and 4k reasoning reserve`,
 			);
 			assert.ok(maxExcerpt <= CADENCE_EXCERPT_BYTES);
@@ -1364,7 +1551,7 @@ describe("bounded single-pass cadence excerpts", () => {
 				promptTokens: maxPrompt,
 				answerReserve,
 				totalEstimate: estimate,
-				headroom: 40_000 - estimate,
+				headroom: config.jobs[job].maxTokens - estimate,
 				rotations,
 			});
 		}
@@ -1646,7 +1833,7 @@ describe("cadence durable ownership, accounting and proposal recovery", () => {
 		const cadence = runner(stateDir);
 		await settle(cadence);
 		assert.equal(cadence.status()[0]?.reason, "interrupted");
-		assert.equal(cadenceCharges(stateDir, repo)[0]?.tokens, 40_000);
+		assert.equal(cadenceCharges(stateDir, repo)[0]?.tokens, 36_000);
 		assert.equal(cadenceCharges(stateDir, repo)[0]?.exact, false);
 		assert.equal(
 			existsSync(
@@ -1723,7 +1910,7 @@ describe("cadence durable ownership, accounting and proposal recovery", () => {
 		const cadence = runner(stateDir);
 		await settle(cadence, "architecture", {
 			...tick,
-			config: { ...config, weeklyTokenCap: 39_999 },
+			config: { ...config, weeklyTokenCap: 35_999 },
 		});
 		assert.equal(cadence.status()[0]?.reason, "budget");
 		assert.equal(cadenceCharges(stateDir, repo).length, 0);
@@ -1733,12 +1920,12 @@ describe("cadence durable ownership, accounting and proposal recovery", () => {
 	it("charges previous maintenance separately and cannot refill a weekly budget after restart", async (t) => {
 		const stateDir = directory(t);
 		const security = input("security");
-		seed(stateDir, security, { ...result(security, []), tokens: 40_000 });
+		seed(stateDir, security, { ...result(security, []), tokens: 36_000 });
 		await settle(runner(stateDir), "security");
 		const cadence = runner(stateDir);
 		await settle(cadence, "architecture", {
 			...tick,
-			config: { ...config, weeklyTokenCap: 79_999 },
+			config: { ...config, weeklyTokenCap: 71_999 },
 		});
 		assert.equal(cadence.status()[0]?.reason, "budget");
 		assert.equal(cadenceCharges(stateDir, repo).length, 1);
@@ -3416,6 +3603,40 @@ it("native cadence --once dedup demo: real Pi/RPC, bwrap, user scope, gateway an
 	assert.equal(modelRequests, reflectRequests);
 	assert.equal(github.creates - beforeReflect, 1);
 
+	// A fresh state forces a second answer rather than the completed-window shortcut.
+	const reflectFresh = join(root, "reflect-fresh");
+	mkdirSync(reflectFresh, { mode: 0o700 });
+	seedReflectionLedger(reflectFresh);
+	enqueueScore(reflectFresh, score);
+	reflected.state = "closed";
+	expectedFingerprint = reflected.body.split("\n").at(-1)!.split(" ").at(-2)!;
+	const repeated = objectOf(parseJson(answer));
+	const repeatedProposals = arrayOf(repeated?.proposals) ?? [];
+	answer = JSON.stringify({
+		proposals: repeatedProposals.map((proposal) => ({
+			...objectOf(proposal),
+			fingerprint: expectedFingerprint,
+			title: "Same experiment, fresh answer",
+		})),
+	});
+
+	const freshArgv = reflectArgv.map((arg) =>
+		arg === reflectState ? reflectFresh : arg,
+	);
+
+	assert.equal(await runCli(freshArgv, io), 0, `${stdout}\n${stderr}`);
+	assert.equal(
+		modelRequests,
+		reflectRequests + 1,
+		"a fresh model answer actually runs",
+	);
+	assert.equal(
+		github.creates - beforeReflect,
+		1,
+		"fresh reflect answer deduplicates the closed finding",
+	);
+	expectedFingerprint = null;
+
 	const triggerState = join(root, "trigger");
 	mkdirSync(triggerState, { mode: 0o700 });
 	github.workflowSource = improvementWorkflow.replace(
@@ -3465,7 +3686,7 @@ it("native cadence --once dedup demo: real Pi/RPC, bwrap, user scope, gateway an
 
 	assert.equal(
 		modelRequests,
-		reflectRequests,
+		reflectRequests + 1,
 		"deterministic trigger never launches a model",
 	);
 	assert.equal(
@@ -3479,7 +3700,7 @@ it("native cadence --once dedup demo: real Pi/RPC, bwrap, user scope, gateway an
 	t.diagnostic(
 		JSON.stringify({
 			demo: "F12c native reflect and trigger",
-			reflectCreated: [1, 0],
+			reflectCreated: [1, 0, 0],
 			triggerCreated: [1, 0, 0],
 			failingRuns: 25,
 			fake: ["GitHub", "model upstream"],

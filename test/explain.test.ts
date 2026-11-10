@@ -53,6 +53,7 @@ import { digestOf } from "../src/run.ts";
 import { runCli, execFile, type ControllerRuntime } from "../server/cli.ts";
 import {
 	controllerMeasurements,
+	controllerMeasure,
 	pumpScoreOutbox,
 	durableUsageOf,
 	procTable,
@@ -512,6 +513,177 @@ async function nativeBundle(t: TestContext, root: string) {
 
 	return digest;
 }
+
+it("permanent pre-launch scoring failure is recorded once across eleven pumps and restart", async (t) => {
+	const parsed = parseWorkflow({
+		text: workflow,
+		repo,
+		env: (name) => process.env[name],
+	});
+
+	assert.equal(parsed.kind, "valid");
+
+	if (parsed.kind !== "valid") throw new Error("fixture policy");
+
+	const config = {
+		...parsed.config,
+		scorers: parsed.config.scorers?.map((s) => ({ ...s, samplingRate: 100 })),
+	};
+
+	const stateDir = directory(t);
+	const runId = finished.row.runId;
+
+	let reads = 0,
+		preflights = 0,
+		failures = 0;
+
+	const exec: LedgerGit["exec"] = async () => {
+		reads++;
+
+		return {
+			code: 0,
+			stdout: JSON.stringify({ name: "factory:enabled" }),
+			stderr: "",
+		};
+	};
+
+	const context = {
+		stateDir,
+		repo,
+		exec,
+		log: (event: string) => {
+			if (event === "measurement_failed") failures++;
+		},
+		executor: {
+			...sandboxExecutor({
+				stateDir,
+				exec,
+				log: () => undefined,
+				xdgRuntimeDir:
+					process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.()}`,
+			}),
+			preflight: async () => {
+				preflights++;
+
+				return true;
+			},
+		},
+	};
+
+	const measurements = controllerMeasurements(context);
+	measurements.terminal(runId, config);
+	await measurements.stop();
+
+	for (let pump = 0; pump < 10; pump++) {
+		measurements.retry();
+		await measurements.stop();
+	}
+
+	const restarted = controllerMeasurements(context);
+	restarted.terminal(runId, config);
+	await restarted.stop();
+	assert.equal(failures, 1);
+	assert.equal(reads, 1);
+	assert.equal(preflights, 1);
+	const events = scoreHistory(stateDir);
+	assert.equal(events.length, 1);
+	assert.equal(events[0]?.status, "failed");
+	assert.match(events[0]?.reasoning ?? "", /ledger_row_unavailable/);
+	assert.deepEqual(events[0]?.usage, { tokens: 0, wallMs: 0, exact: true });
+	seed(stateDir);
+
+	const manual = await controllerMeasure({
+		...context,
+		exec: new LedgerGit().exec,
+		executor: { ...context.executor, preflight: async () => false },
+		kind: "score",
+		runId,
+		config,
+	});
+
+	assert.equal(manual.kind, "score");
+	assert.equal(
+		scoreHistory(stateDir).length,
+		2,
+		"on-demand scoring bypasses automatic enrollment",
+	);
+});
+
+it("a non-started launch after preflight settles once rather than producing a failed score each pump", async (t) => {
+	const parsed = parseWorkflow({
+		text: workflow,
+		repo,
+		env: (name) => process.env[name],
+	});
+
+	assert.equal(parsed.kind, "valid");
+
+	if (parsed.kind !== "valid") throw new Error("fixture policy");
+
+	const config = {
+		...parsed.config,
+		scorers: parsed.config.scorers?.map((scorer) => ({
+			...scorer,
+			samplingRate: 100,
+		})),
+	};
+
+	const stateDir = directory(t);
+	const row = seed(stateDir);
+	const github = new LedgerGit();
+	let launches = 0;
+
+	const exec: LedgerGit["exec"] = async (command, args) =>
+		args.some((arg) => arg.includes("labels/factory"))
+			? {
+					code: 0,
+					stdout: JSON.stringify({ name: "factory:enabled" }),
+					stderr: "",
+				}
+			: github.exec(command, args);
+
+	const context = {
+		stateDir,
+		repo,
+		exec,
+		log: () => undefined,
+		executor: {
+			...sandboxExecutor({
+				stateDir,
+				exec,
+				log: () => undefined,
+				xdgRuntimeDir:
+					process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.()}`,
+			}),
+			preflight: async () => true,
+			launch: async () => {
+				launches++;
+
+				return {
+					kind: "unavailable" as const,
+					stage: "maintain" as const,
+					reason: "sandbox_unavailable" as const,
+				};
+			},
+		},
+	};
+
+	const automatic = controllerMeasurements(context);
+	automatic.terminal(row.row.runId, config);
+	await automatic.stop();
+
+	for (let pump = 0; pump < 10; pump++) {
+		automatic.retry();
+		await automatic.stop();
+	}
+
+	const restarted = controllerMeasurements(context);
+	restarted.terminal(row.row.runId, config);
+	await restarted.stop();
+	assert.equal(launches, 1);
+	assert.equal(scoreHistory(stateDir).length, 1);
+	assert.equal(scoreHistory(stateDir)[0]?.status, "failed");
+});
 
 it("held or sandbox-blocked automatic scores remain unenrolled", async (t) => {
 	const config = parseWorkflow({

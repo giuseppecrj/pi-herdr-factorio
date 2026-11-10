@@ -2,6 +2,8 @@
 
 Adapted from `pi-herdr-pstack` 0.6.0, `skills/reflect/SKILL.md` and its judgment, tooling, divergent and synthesizer references. The installed pack attributes these to Lauren Tan's pstack, through `casualjim/pi-mimir` at `f07dd981f62c9c994a5d043ede67d6c63c721454` and `cursor/plugins` at `1ba91fc25c0977741dd0e267849e6234b037ed0a` (see that pack's `THIRD_PARTY_NOTICES.md`).
 
+The pack's own adaptations are also MIT, Copyright (c) 2026 HazAT, under pi-herdr-pstack's MIT notice.
+
 License: MIT, Copyright (c) 2026 Lauren Tan, copied verbatim into `LICENSE`. LICENSE SHA-256: `bc957ca6bee02792566a1a028d105e02e247c6e77cf057061674273da77b200e`.
 
 Adaptation input SHA-256:
