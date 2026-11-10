@@ -83,6 +83,7 @@ import {
 	isGitSha,
 	isRepoSlug,
 	parseWorkflow,
+	loadWorkflow,
 	type CadenceJob,
 	type Exec,
 	type ExecResult,
@@ -836,6 +837,48 @@ describe("improvement proposals", () => {
 			}
 
 			assert.deepEqual(github.requests, [], mode);
+		}
+	});
+
+	it("uses current main trigger policy rather than an older terminal run's frozen config", async (t) => {
+		const stateDir = directory(t);
+		const github = new GitHubFixture();
+		github.workflowSource = improvementWorkflow.replace(
+			/trigger:\n  k: 25\n  d: 7\n/,
+			"",
+		);
+
+		const load = () =>
+			loadWorkflow({
+				exec: github.exec,
+				repo,
+				ref: "main",
+				env: (name) => process.env[name],
+			});
+
+		assert.equal((await load()).kind, "loaded");
+
+		try {
+			for (let seq = 0; seq < 25; seq++)
+				enqueueScore(stateDir, failingScore(seq));
+			github.requests = [];
+			await runImprovementTrigger({
+				stateDir,
+				repo,
+				exec: github.exec,
+				config: improvementConfig,
+				clock: () => now,
+				log: () => undefined,
+			});
+			assert.deepEqual(
+				github.requests,
+				[],
+				"main disabled the trigger; old run settings cannot re-enable it",
+			);
+			assert.equal(github.creates, 0);
+		} finally {
+			github.workflowSource = improvementWorkflow;
+			assert.equal((await load()).kind, "loaded");
 		}
 	});
 

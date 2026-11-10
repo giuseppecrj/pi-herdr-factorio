@@ -4934,7 +4934,7 @@ async function publishProposalIntent(input: {
 export async function runImprovementTrigger(
 	input: ScorePumpInput,
 ): Promise<boolean> {
-	const config = input.config ?? trustedWorkflowConfig(input.repo);
+	const config = trustedWorkflowConfig(input.repo) ?? input.config;
 	const { trigger, scorers } = config ?? {};
 
 	if (trigger == null || !scorers?.length) return true;
