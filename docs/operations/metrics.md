@@ -381,7 +381,7 @@ not new model spend.
 
 ### Replay budget
 
-Trusted `.github/factory/WORKFLOW.md` sets `replay.max_tokens: 1650000`. The owner raised it from 1,100,000 on 2026-11-08, after an interrupted c1 run kept its full 540,000 reservation and left too little for the next run (decision row `replay-cap-raise`).
+Trusted `.github/factory/WORKFLOW.md` sets `replay.max_tokens: 4000000`. The owner raised it from 1,100,000 to 1,650,000 on 2026-11-08, after an interrupted c1 run kept its full 540,000 reservation and left too little for the next run (decision row `replay-cap-raise`). On 2026-11-10 the owner raised it to 4,000,000 for F12d and F12e, whose replay pairs reserve 540,000 per side (decision row `replay-cap-raise-4m`).
 An absent block disables live replay. A present block requires a positive safe
 integer. The ordinary run, stage, turn, time, retry, and repair caps do not change.
 Before this workflow change reaches main, a selected check against the older

@@ -1,7 +1,7 @@
 {
 	"version": 1,
 	"baseline": "0f2a046bddd0efd38c82cfe3b306c756ed8380de",
-	"workflowDigest": "4fc52b2e31a42679b18eedeffd232f90bda1dcc5c4443ab882b311b57155fa23",
+	"workflowDigest": "f2637ea5b0cb18a3e3d16576084c0339e5de5a22fb541bd4a2c5708876c4504b",
 	"runtime": "pi-coding-agent 1.4.0; local echo fixture, no installed VM bundle",
 	"kind": "synthetic-public-B-shaped-build-and-repair",
 	"sourceLines": 1200,

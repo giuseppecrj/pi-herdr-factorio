@@ -25,7 +25,7 @@ attention:
   blocked_ms: 21600000
 
 replay:
-  max_tokens: 1650000
+  max_tokens: 4000000
 
 grader:
   model: openai/gpt-6.1-sol
