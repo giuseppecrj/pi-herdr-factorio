@@ -878,11 +878,13 @@ export class GitHubTicketAdapter implements TicketReader {
 		return { kind: "ok", value: comments };
 	}
 
-	async readProposedIssues(): Promise<
-		Read<readonly Readonly<{ number: number; body: string }>[]>
-	> {
+	async readProposedIssues(
+		allLabels = false,
+	): Promise<Read<readonly Readonly<{ number: number; body: string }>[]>> {
 		const read = await this.#pages(
-			"issues?state=all&labels=factory%3Aproposed",
+			allLabels
+				? "issues?state=all"
+				: "issues?state=all&labels=factory%3Aproposed",
 		);
 
 		if (read.kind === "failed") return read;

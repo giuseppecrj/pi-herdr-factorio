@@ -139,6 +139,84 @@ async function load(
 	return loadWorkflow({ exec: fakeGh(branches).exec, repo, ref, env });
 }
 
+describe("trusted cadence workflow", () => {
+	it("stays off when absent and supplies fixed bounded weekly UTC jobs when configured", () => {
+		const absent = parse(frontMatter(""));
+		assert.equal(absent.kind, "valid");
+
+		if (absent.kind !== "valid") return;
+
+		assert.equal(absent.config.cadence, null);
+		const loaded = parse(frontMatter("cadence: {}"));
+		assert.equal(loaded.kind, "valid");
+
+		if (loaded.kind !== "valid") return;
+
+		assert.equal(loaded.config.cadence?.weeklyTokenCap, 200_000);
+		assert.deepEqual(Object.keys(loaded.config.cadence?.jobs ?? {}), [
+			"architecture",
+			"security",
+			"instructions",
+			"hygiene",
+		]);
+
+		for (const job of Object.values(loaded.config.cadence?.jobs ?? {})) {
+			assert.equal(job.model, DEFAULT_MODEL);
+			assert.equal(job.maxTokens, 40_000);
+			assert.deepEqual(job.budget, {
+				maxTurns: 12,
+				wallMs: 600_000,
+				stallMs: 120_000,
+			});
+			assert.equal(job.hourUtc, 3);
+		}
+	});
+
+	it("rejects unknown jobs, command keys, extra fields, non-UTC values and raised audit bounds", () => {
+		for (const body of [
+			"cadence: {weeklyTokenCap: 0}",
+			"cadence: {command: echo}",
+			"cadence: {jobs: {other: {}}}",
+			...[
+				"dayUtc: 7",
+				"hourUtc: 24",
+				"minuteUtc: 60",
+				"maxTokens: 40001",
+				"maxTurns: 13",
+				"wallMs: 600001",
+				"wallMs: 10000",
+				"model: anthropic/claude-sonnet-5-5",
+				"command: echo",
+				"timezone: local",
+			].map((field) => `cadence: {jobs: {architecture: {${field}}}}`),
+		]) {
+			assert.equal(parse(frontMatter(body)).kind, "invalid", body);
+		}
+	});
+
+	it("loads independently scheduled and lower-bounded jobs from the trusted file", () => {
+		const loaded = parse(
+			frontMatter(
+				"cadence: {weeklyTokenCap: 100000, jobs: {architecture: {dayUtc: 0, hourUtc: 23, minuteUtc: 59, maxTokens: 5000, maxTurns: 2, wallMs: 30000}}}",
+			),
+		);
+
+		assert.equal(loaded.kind, "valid");
+
+		if (loaded.kind !== "valid") return;
+
+		assert.equal(loaded.config.cadence?.weeklyTokenCap, 100_000);
+		assert.deepEqual(loaded.config.cadence?.jobs.architecture, {
+			dayUtc: 0,
+			hourUtc: 23,
+			minuteUtc: 59,
+			model: DEFAULT_MODEL,
+			maxTokens: 5000,
+			budget: { maxTurns: 2, wallMs: 30000, stallMs: 120000 },
+		});
+	});
+});
+
 describe("parseWorkflow", () => {
 	it("accepts the committed production WORKFLOW.md", () => {
 		const parsed = parse(readFileSync(WORKFLOW_PATH, "utf8"));

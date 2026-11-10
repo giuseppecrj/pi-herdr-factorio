@@ -4,6 +4,7 @@ import { type Digest, isDigest, runIdOf, type Stage } from "./run.ts";
 import { STAGE_ORDER } from "./stages.ts";
 import type { JsonValue } from "./tickets.ts";
 import {
+	type CadenceJob,
 	type GitSha,
 	isGitSha,
 	isRepoSlug,
@@ -12,6 +13,17 @@ import {
 
 export const CONTROLLER_LOGIN = "exe-dev-github-integration[bot]";
 export const CONTROLLER_APP_SLUG = "exe-dev-github-integration";
+
+export function cadenceMarker(
+	repo: RepoSlug,
+	job: CadenceJob,
+	fingerprint: string,
+): string {
+	if (!/^[a-f0-9]{64}$/.test(fingerprint))
+		throw new Error("cadence_fingerprint_invalid");
+
+	return `<!-- factory:cadence ${repo} ${job} ${fingerprint} -->`;
+}
 
 export const MARKER_PREFIX = "<!-- factory:run ";
 const MARKER_SUFFIX = " -->";

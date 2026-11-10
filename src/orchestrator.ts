@@ -137,6 +137,7 @@ import {
 	type SpecifyReviewInput,
 	withoutKey,
 } from "./specify.ts";
+import type { CadenceRunner } from "./cadence.ts";
 import { isLogin } from "./adapters/github.ts";
 import type {
 	StageResult,
@@ -149,6 +150,7 @@ import {
 	type GitSha,
 	MODEL_STAGES,
 	type ModelStage,
+	type ExecutionStage,
 	type RepoSlug,
 	STAGE_CLEANUP_RESERVE_MS,
 	type WorkflowConfig,
@@ -178,14 +180,14 @@ export type Clock = { now(): number };
 export type StageLaunch =
 	| {
 			readonly kind: "unavailable";
-			readonly stage: Stage;
+			readonly stage: import("./run.ts").SandboxStage;
 			readonly reason: "sandbox_unavailable";
 	  }
 	| { readonly kind: "started"; readonly done: Promise<StageResult> };
 
 export type StageLaunchInput = {
 	readonly runId: Digest;
-	readonly stage: ModelStage;
+	readonly stage: ExecutionStage;
 	readonly attempt: number;
 	readonly execution?: CandidateExecution;
 	readonly workspace: string;
@@ -208,6 +210,10 @@ export type StageLaunchInput = {
 	};
 	readonly tools: readonly string[];
 	readonly skills: readonly string[];
+	readonly maintenance?: {
+		readonly job: import("./workflow.ts").CadenceJob;
+		readonly windowStart: number;
+	};
 	readonly acceptEffort?: AcceptEffort;
 	readonly settings: StageRunSettings;
 	readonly remainingRunTokens: number;
@@ -337,7 +343,7 @@ export interface StageExecutor {
 	 */
 	spent(input: {
 		readonly runId: Digest;
-		readonly stage: ModelStage;
+		readonly stage: ExecutionStage;
 		readonly attempt: number;
 		readonly round?: number;
 		readonly execution?: CandidateExecution;
@@ -1120,6 +1126,7 @@ export type OrchestratorInput = {
 	files: RunFiles;
 	executor: StageExecutor;
 	clock: Clock;
+	cadence?: CadenceRunner;
 	/** Only these issues, or every candidate when `null`. */
 	scope: readonly number[] | null;
 	log: Log;
@@ -1217,6 +1224,54 @@ export class Orchestrator {
 		});
 	}
 
+	/** One-shot audit admission shares ticket reservations without launching or claiming ticket work. */
+	async cadenceOnce(job: import("./workflow.ts").CadenceJob) {
+		await this.#input.executor.recover();
+
+		const reconciled = await this.#input.executor.reconciled();
+
+		if (reconciled) await this.#input.cadence?.recover();
+
+		await this.#loadClaims();
+		const gate = await this.#gate();
+		const candidates = await this.#candidates();
+		const preflight = reconciled && (await this.#input.executor.preflight());
+
+		const queuedTicket =
+			candidates.kind !== "ok" ||
+			candidates.value.some(
+				(record) => isReady(record) && !this.state.runs.has(record.number),
+			);
+
+		const capacity = queuedTicket ? 0 : this.#freeSlots();
+
+		const allowed =
+			gate.kind === "open" && preflight && candidates.kind === "ok";
+
+		this.#input.cadence?.tick(
+			{
+				now: this.#input.clock.now(),
+				allowed,
+				capacity,
+				config: this.#config?.cadence ?? null,
+				workflowSha: this.#workflowSha,
+				workflowDigest: this.#trustedRun?.digest ?? null,
+			},
+			job,
+			true,
+		);
+		await this.#input.cadence?.wait();
+
+		return {
+			allowed,
+			capacity,
+			configured: this.#config?.cadence != null,
+			ready: this.#input.cadence?.ready ?? false,
+			pending: this.#input.cadence?.pending ?? false,
+			jobs: this.#input.cadence?.status() ?? [],
+		};
+	}
+
 	/** The poll interval of the last valid workflow, or the default. */
 	get pollIntervalMs(): number {
 		return this.#config?.polling.intervalMs ?? DEFAULTS.pollIntervalMs;
@@ -1261,6 +1316,13 @@ export class Orchestrator {
 
 		if (!this.#claimsLoaded) {
 			await this.#input.executor.recover();
+
+			if (
+				this.#input.cadence !== undefined &&
+				(await this.#input.executor.reconciled())
+			)
+				await this.#input.cadence.recover();
+
 			await this.#loadClaims();
 		}
 
@@ -1272,6 +1334,9 @@ export class Orchestrator {
 		if (held !== null) await this.#reconcileStages(now, held);
 
 		this.#enabled = await this.#input.executor.preflight();
+
+		if (this.#enabled && this.#input.cadence?.ready === false)
+			await this.#input.cadence.recover();
 
 		const candidates = await this.#candidates();
 
@@ -1315,6 +1380,15 @@ export class Orchestrator {
 				}
 			}
 		}
+
+		this.#input.cadence?.tick({
+			now,
+			allowed: open && this.#enabled,
+			capacity: this.#freeSlots(),
+			config: this.#config?.cadence ?? null,
+			workflowSha: this.#workflowSha,
+			workflowDigest: this.#trustedRun?.digest ?? null,
+		});
 
 		if (open)
 			await this.#input.executor.candidate
@@ -3160,7 +3234,21 @@ export class Orchestrator {
 	}
 
 	#active(): number {
-		return [...this.state.runs.values()].filter(holdsSlot).length;
+		return (
+			[...this.state.runs.values()].filter(holdsSlot).length +
+			(this.#input.cadence?.occupied() ?? 0)
+		);
+	}
+
+	#freeSlots(): number {
+		const reserved = [...this.#reserved].filter(
+			(issue) => !this.state.runs.has(issue),
+		).length;
+
+		return Math.max(
+			(this.#limits()?.maxConcurrent ?? 0) - this.#active() - reserved,
+			0,
+		);
 	}
 
 	#limits(): Limits | null {
@@ -3783,11 +3871,7 @@ export class Orchestrator {
 			}
 		}
 
-		const reserved = [...this.#reserved].filter(
-			(issue) => !this.state.runs.has(issue),
-		).length;
-
-		let slots = Math.max(limits.maxConcurrent - this.#active() - reserved, 0);
+		let slots = this.#freeSlots();
 
 		for (const run of runs) {
 			if (

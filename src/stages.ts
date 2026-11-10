@@ -34,7 +34,10 @@ export type StageProfile = {
 	githubAccess: string;
 };
 
-export const STAGE_PROFILES: Record<Stage, StageProfile> = {
+export const STAGE_PROFILES: Record<
+	import("./run.ts").SandboxStage,
+	StageProfile
+> = {
 	admit: {
 		modelAccess: "none",
 		runsIn: "controller",
@@ -49,6 +52,7 @@ export const STAGE_PROFILES: Record<Stage, StageProfile> = {
 		githubAccess: "contents: write, actions: write",
 	},
 	review: { modelAccess: "full", runsIn: "sandbox", githubAccess: "none" },
+	maintain: { modelAccess: "full", runsIn: "sandbox", githubAccess: "none" },
 	land: {
 		modelAccess: "none",
 		runsIn: "controller",

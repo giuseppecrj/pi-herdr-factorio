@@ -25,7 +25,23 @@ import {
 	type FeedbackId,
 	type FeedbackObservation,
 } from "../src/feedback.ts";
-import { CONTROLLER_LOGIN } from "../src/markers.ts";
+import { CONTROLLER_LOGIN, cadenceMarker } from "../src/markers.ts";
+import {
+	CadenceRunner,
+	CADENCE_SKILLS,
+	cadenceCharges,
+	cadenceExecutionDir,
+	cadenceIssueBody,
+	cadencePrompt,
+	cadenceScope,
+	inCadenceScope,
+	cadencePrivateDir,
+	readCadenceFile,
+	writeCadenceFile,
+	type CadenceInput,
+	type CadenceProposal,
+	type CadenceResult,
+} from "../src/cadence.ts";
 import {
 	promotedHead,
 	handoffGeneration,
@@ -125,7 +141,12 @@ import {
 	type LedgerOutbox,
 	type OutboxJob,
 } from "../src/ledger.ts";
-import { isGitSha, isRepoSlug, parseWorkflow } from "../src/workflow.ts";
+import {
+	isGitSha,
+	isRepoSlug,
+	parseWorkflow,
+	STAGE_CLEANUP_RESERVE_MS,
+} from "../src/workflow.ts";
 import {
 	FAMILY_MISSING,
 	familyClaimsHold,
@@ -3966,11 +3987,391 @@ export async function readDurableAccounting(
 		}
 	}
 
+	let maintenance: ReturnType<typeof cadenceCharges> = [];
+
+	if (available && stateDir !== null) {
+		try {
+			maintenance = cadenceCharges(stateDir, repo);
+		} catch {
+			readable = false;
+		}
+	}
+
 	return {
 		state: !available ? "unavailable" : readable ? "readable" : "incomplete",
 		countersScope: "process",
 		runs,
+		maintenance: {
+			executions: maintenance.length,
+			tokens: {
+				kind: maintenance.every((charge) => charge.exact)
+					? "exact"
+					: "lower_bound",
+				unit: "tokens",
+				total: maintenance.reduce((sum, charge) => sum + charge.tokens, 0),
+			},
+			money: { kind: "unavailable", reason: "provider_not_reported" },
+			entries: maintenance,
+		},
 	};
+}
+
+async function cadenceSwitches(
+	stateDir: string,
+	adapter: GitHubTicketAdapter,
+): Promise<boolean> {
+	if ((await fileAdmissionStore(stateDir).localSwitch()) !== "enabled")
+		return false;
+
+	const enabled = await adapter.readRepoSwitch();
+
+	return (
+		enabled.kind === "ok" &&
+		enabled.value.kind === "present" &&
+		enabled.value.name === REPO_SWITCH_LABEL
+	);
+}
+
+/** Local, already-redacted ledger rows only. No sessions, private suites or inferred zeroes. */
+async function cadenceLedger(stateDir: string): Promise<string> {
+	const root = join(stateDir, "ledger");
+	const names = (await readdir(root).catch(() => [])).filter(isDigest);
+
+	const dated = await Promise.all(
+		names.map(async (name) => ({
+			name,
+			at: await stat(join(root, name, "row.json")).then(
+				(info) => info.mtimeMs,
+				() => 0,
+			),
+		})),
+	);
+
+	const rows: JsonValue[] = [];
+	let bytes = 0;
+
+	for (const { name } of dated.sort((a, b) => b.at - a.at).slice(0, 20)) {
+		const path = join(root, name, "row.json");
+		const info = await lstat(path).catch(() => null);
+
+		if (
+			info === null ||
+			!info.isFile() ||
+			info.isSymbolicLink() ||
+			info.size > 128 * 1024
+		)
+			continue;
+
+		const text = await readFile(path, "utf8");
+		const frozen = frozenRowOf(Buffer.from(text));
+
+		if (frozen === null || bytes + Buffer.byteLength(text) > 16 * 1024)
+			continue;
+
+		bytes += Buffer.byteLength(text);
+		rows.push(parseJsonText(frozen.bytes.toString("utf8")) ?? null);
+	}
+
+	return JSON.stringify({
+		source: "local_redacted_ledger",
+		coverage:
+			"at most 20 retained rows and 16 KiB; missing evidence is unknown",
+		rows,
+	});
+}
+
+export async function publishCadenceProposals(input: {
+	stateDir: string;
+	exec: Exec;
+	execution: CadenceInput;
+	result: CadenceResult;
+	proposals: readonly CadenceProposal[];
+}): Promise<boolean> {
+	const { execution, result } = input;
+
+	const adapter = new GitHubTicketAdapter({
+		exec: input.exec,
+		repo: execution.repo,
+	});
+
+	const writer = new GitHubTicketWriter({
+		exec: input.exec,
+		repo: execution.repo,
+	});
+
+	const intents = join(input.stateDir, "cadence", execution.job, "proposals");
+	cadencePrivateDir(intents);
+
+	for (const proposal of input.proposals) {
+		const key = cadenceMarker(
+			execution.repo,
+			execution.job,
+			proposal.fingerprint,
+		);
+
+		const path = join(intents, `${proposal.fingerprint}.json`);
+		const saved = readCadenceFile(path);
+		let body = cadenceIssueBody(proposal, result);
+
+		let title =
+			`Factory ${execution.job}: ${inert(proposal.title).replace(/\p{Cc}/gu, " ")}`.slice(
+				0,
+				220,
+			);
+
+		if (saved === null) {
+			for (const evidence of proposal.evidence) {
+				const source = join(
+					cadenceExecutionDir(
+						input.stateDir,
+						execution.job,
+						execution.windowStart,
+					),
+					"tree",
+					evidence.path,
+				);
+
+				const info = await lstat(source).catch(() => null);
+
+				if (
+					info === null ||
+					!info.isFile() ||
+					info.isSymbolicLink() ||
+					info.size > 1024 * 1024
+				)
+					return false;
+
+				if (evidence.end > (await readFile(source, "utf8")).split("\n").length)
+					return false;
+			}
+
+			writeCadenceFile(path, JSON.stringify({ key, title, body }));
+		} else {
+			const intent = objectOf(parseJsonText(saved));
+
+			const keptBody = textOf(intent?.body),
+				keptTitle = textOf(intent?.title);
+
+			if (
+				intent?.key !== key ||
+				keptBody === null ||
+				keptTitle === null ||
+				keptBody.length > 24_000 ||
+				keptTitle.length > 220 ||
+				!keptBody.endsWith(`\n\n${key}`)
+			)
+				return false;
+
+			body = keptBody;
+			title = keptTitle;
+		}
+
+		// Include closed issues and proposals whose labels the owner changed.
+		const issues = await adapter.readProposedIssues(true);
+
+		if (issues.kind !== "ok") return false;
+
+		const matches = issues.value.filter((issue) =>
+			issue.body.split("\n").includes(key),
+		);
+
+		if (matches.length > 1) return false;
+
+		if (matches.length === 1) continue;
+
+		if (!(await cadenceSwitches(input.stateDir, adapter))) return false;
+
+		const created = await writer.createIssue(title, body, ["factory:proposed"]);
+
+		// An unknown create is never retried here. A later tick must list remote issues first.
+		if (created.kind !== "posted") return false;
+	}
+
+	return true;
+}
+
+export function controllerCadence(input: {
+	stateDir: string;
+	repo: RepoSlug;
+	exec: Exec;
+	executor: StageExecutor;
+	log: Log;
+	signal?: AbortSignal;
+}): CadenceRunner {
+	const adapter = new GitHubTicketAdapter({
+		exec: input.exec,
+		repo: input.repo,
+	});
+
+	const retained = async (execution: CadenceInput): Promise<CadenceResult> => {
+		const { readStageReceipt, executionCharge } = await import("./sandbox.ts");
+
+		const runtime = join(
+			cadenceExecutionDir(input.stateDir, execution.job, execution.windowStart),
+			"runtime",
+		);
+
+		const native = await readStageReceipt(join(runtime, "receipt.json"));
+
+		const raw =
+			native === null ? null : readCadenceFile(join(runtime, "receipt.json"));
+
+		const charge = await executionCharge(runtime);
+
+		const valid =
+			native !== null &&
+			native.record !== null &&
+			raw !== null &&
+			native.record.runId === execution.runId &&
+			native.record.stage === "maintain" &&
+			native.record.attempt === 1;
+
+		const passed = valid && native.outcome.kind === "passed";
+		const output = passed ? readCadenceFile(join(runtime, "output.txt")) : null;
+
+		const usable =
+			passed && output !== null && Buffer.byteLength(output) <= 64 * 1024;
+
+		return {
+			kind: usable ? "passed" : "failed",
+			tokens: valid
+				? Math.max(native.usage.total, charge?.total ?? 0)
+				: Math.max(execution.settings.maxTokens, charge?.total ?? 0),
+			exact: valid && charge !== null && charge.uncertain === 0,
+			model: valid
+				? (textOf(objectOf(native.record?.models)?.observed) ??
+					execution.settings.model)
+				: execution.settings.model,
+			receiptDigest: digestOf(
+				raw ??
+					JSON.stringify({
+						execution,
+						reason: "interrupted",
+						tokens: charge?.total ?? null,
+					}),
+			),
+			output: usable ? output : null,
+			reason:
+				passed && !usable
+					? "invalid_output"
+					: valid
+						? native.outcome.kind
+						: "interrupted",
+		};
+	};
+
+	return new CadenceRunner({
+		stateDir: input.stateDir,
+		repo: input.repo,
+		log: input.log,
+		port: {
+			retained,
+			publish: (execution, result, proposals) =>
+				publishCadenceProposals({ ...input, execution, result, proposals }),
+			async execute(execution, signal) {
+				const started = Date.now();
+
+				const dir = cadenceExecutionDir(
+					input.stateDir,
+					execution.job,
+					execution.windowStart,
+				);
+
+				const failed = (reason: string): CadenceResult => ({
+					kind: "failed",
+					tokens: 0,
+					exact: true,
+					model: execution.settings.model,
+					receiptDigest: digestOf(JSON.stringify({ execution, reason })),
+					output: null,
+					reason,
+				});
+
+				const deadline = AbortSignal.any([
+					signal,
+					input.signal ?? signal,
+					AbortSignal.timeout(
+						execution.settings.budget.wallMs - STAGE_CLEANUP_RESERVE_MS,
+					),
+				]);
+
+				if (
+					deadline.aborted ||
+					!(await cadenceSwitches(input.stateDir, adapter))
+				)
+					return failed("disabled");
+
+				if (!(await input.executor.preflight()))
+					return failed("sandbox_unavailable");
+
+				const workspace = join(dir, "tree");
+				cadencePrivateDir(workspace);
+
+				const checked = await input.executor.checkout({
+					runId: execution.runId,
+					repo: execution.repo,
+					sha: execution.baseSha,
+					workspace,
+				});
+
+				if (checked.kind !== "ready" || checked.omitted !== 0)
+					return failed("checkout_unavailable");
+
+				const files = checked.checkout.files.filter((path) =>
+					inCadenceScope(path, cadenceScope(execution.rotation)),
+				);
+
+				const ledger =
+					execution.job === "hygiene"
+						? await cadenceLedger(input.stateDir)
+						: "unavailable; not requested by this job";
+
+				const prompt = cadencePrompt(execution, files, ledger);
+				writeCadenceFile(join(dir, "prompt.txt"), prompt);
+
+				if (
+					deadline.aborted ||
+					!(await cadenceSwitches(input.stateDir, adapter))
+				)
+					return failed("disabled_or_wall");
+
+				const wallMs =
+					execution.settings.budget.wallMs - (Date.now() - started);
+
+				if (deadline.aborted || wallMs <= STAGE_CLEANUP_RESERVE_MS)
+					return failed("wall");
+
+				const launch = await input.executor.launch({
+					runId: execution.runId,
+					stage: "maintain",
+					attempt: 1,
+					maintenance: {
+						job: execution.job,
+						windowStart: execution.windowStart,
+					},
+					workspace,
+					prompt,
+					tools: ["read", "grep", "ls"],
+					skills: [CADENCE_SKILLS[execution.job]],
+					settings: {
+						model: execution.settings.model,
+						fallback: null,
+						maxTokens: execution.settings.maxTokens,
+						budget: { ...execution.settings.budget, wallMs },
+					},
+					remainingRunTokens: execution.settings.maxTokens,
+					signal: deadline,
+					progress: () => undefined,
+				});
+
+				if (launch.kind !== "started") return failed("sandbox_unavailable");
+
+				await launch.done;
+
+				return retained(execution);
+			},
+		},
+	});
 }
 
 export async function readLedgerBacklog(stateDir: string | null, now: number) {
@@ -4014,6 +4415,13 @@ export async function readLedgerBacklog(stateDir: string | null, now: number) {
 	};
 }
 
+type DurableTokenUsage = { kind: string; unit: string; total: number };
+
+type DurableUsage = DurableTokenUsage & {
+	reason?: string;
+	maintenance?: DurableTokenUsage;
+};
+
 export function durableUsageOf(
 	accounting: Awaited<ReturnType<typeof readDurableAccounting>>,
 ): JsonValue {
@@ -4021,20 +4429,29 @@ export function durableUsageOf(
 
 	const exact =
 		accounting.state === "readable" &&
-		accounting.runs.every((run) => run.tokens.kind === "exact");
+		accounting.runs.every((run) => run.tokens.kind === "exact") &&
+		accounting.maintenance.tokens.kind === "exact";
 
-	return accounting.state === "unavailable"
-		? { kind: "unavailable", reason: "legacy_not_recorded" }
-		: {
-				kind: uncertain ? "uncertain" : exact ? "exact" : "lower_bound",
-				unit: "tokens",
-				total: accounting.runs.reduce((sum, run) => sum + run.tokens.total, 0),
-				...(uncertain
-					? { reason: "request_unsettled" }
-					: exact
-						? {}
-						: { reason: "receipt_missing" }),
-			};
+	if (accounting.state === "unavailable")
+		return { kind: "unavailable", reason: "legacy_not_recorded" };
+
+	const usage: DurableUsage = {
+		kind: uncertain ? "uncertain" : exact ? "exact" : "lower_bound",
+		unit: "tokens",
+		total:
+			accounting.runs.reduce((sum, run) => sum + run.tokens.total, 0) +
+			accounting.maintenance.tokens.total,
+		...(uncertain
+			? { reason: "request_unsettled" }
+			: exact
+				? {}
+				: { reason: "receipt_missing" }),
+	};
+
+	if (accounting.maintenance.executions > 0)
+		usage.maintenance = accounting.maintenance.tokens;
+
+	return usage;
 }
 
 export async function startDurableUsage(input: {

@@ -104,7 +104,7 @@ import {
 import {
 	type AcceptEffort,
 	type ModelId,
-	type ModelStage,
+	type ExecutionStage as ModelStage,
 	STAGE_CLEANUP_RESERVE_MS,
 } from "../src/workflow.ts";
 import {
@@ -1309,6 +1309,12 @@ export async function runStage(
 		return receipt(plainReport(CRASHED), null, null);
 	}
 
+	if (input.stage === "maintain")
+		table = {
+			...table,
+			routes: table.routes.filter((route) => route.id === "model-openai"),
+		};
+
 	const routeCounts = new Map<string, { forwarded: number; denied: number }>();
 
 	const gateway = await host.startGateway(table).catch(() => null);
@@ -1478,6 +1484,7 @@ export type SandboxHostConfig = {
 	readonly blockUnixSockets?: boolean;
 	readonly now?: () => number;
 	readonly launch?: typeof launchSandbox;
+	readonly gateway?: typeof startGatewayProcess;
 };
 
 function freshDir(base: string): string {
@@ -1572,6 +1579,10 @@ export function launchSandbox(
 	const git = gitState(config.workspace);
 
 	if (git === "unsafe") return null;
+
+	if (config.stage === "maintain" && git === "absent")
+		mkdirSync(join(config.workspace, ".git"), { mode: 0o700 });
+
 	agentDirFrom(join(config.bundleDir, "pi-agent"), config.agentDir);
 
 	const unit = scopeUnit(
@@ -1582,20 +1593,37 @@ export function launchSandbox(
 		randomBytes(4).toString("hex"),
 	);
 
-	const argv = scopeArgv(
-		unit,
-		DEFAULT_SCOPE_LIMITS,
-		bwrapArgv({
-			bundleDir: config.bundleDir,
-			workspaceDir: config.workspace,
-			workspaceHasGit: git === "dir",
-			agentDir: config.agentDir,
-			socketPath: config.socketPath,
-			seccompFd: 10,
-			tools: config.tools,
-			command: config.command,
-		}),
-	);
+	const sandboxArgs = bwrapArgv({
+		bundleDir: config.bundleDir,
+		workspaceDir: config.workspace,
+		workspaceHasGit: git === "dir",
+		agentDir: config.agentDir,
+		socketPath: config.socketPath,
+		seccompFd: 10,
+		tools: config.tools,
+		command: config.command,
+	});
+
+	if (config.stage === "maintain") {
+		const at = sandboxArgs.findIndex(
+			(arg, index) =>
+				arg === "--bind" && sandboxArgs[index + 1] === config.workspace,
+		);
+
+		if (
+			at < 0 ||
+			config.tools.some((tool) => !["read", "grep", "ls"].includes(tool))
+		)
+			return null;
+
+		sandboxArgs[at] = "--ro-bind";
+
+		const herdr = sandboxArgs.indexOf("--herdr");
+
+		if (herdr >= 0) sandboxArgs.splice(herdr, 2);
+	}
+
+	const argv = scopeArgv(unit, DEFAULT_SCOPE_LIMITS, sandboxArgs);
 
 	const child = spawnScoped({
 		argv,
@@ -1774,7 +1802,7 @@ export function sandboxHost(config: SandboxHostConfig): StageHost {
 		async startGateway(table) {
 			mkdirSync(join(config.stateDir, "gw"), { recursive: true, mode: 0o700 });
 
-			const started = await startGatewayProcess({
+			const started = await (config.gateway ?? startGatewayProcess)({
 				gatewayDir: join(config.stateDir, "gw", randomBytes(4).toString("hex")),
 				auditPath: join(stageDir, "egress.jsonl"),
 				table,
@@ -4757,14 +4785,42 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 				};
 			}
 
-			const stageDir = freshDir(
-				join(
-					config.stateDir,
-					"stages",
-					input.runId,
-					stageName(input.stage, input.attempt, input.round),
-				),
-			);
+			if (
+				input.stage === "maintain" &&
+				(input.maintenance === undefined ||
+					input.tools.some((tool) => !["read", "grep", "ls"].includes(tool)))
+			)
+				return {
+					kind: "unavailable",
+					stage: input.stage,
+					reason: "sandbox_unavailable",
+				};
+
+			const stageDir =
+				input.stage === "maintain" && input.maintenance !== undefined
+					? join(
+							config.stateDir,
+							"cadence",
+							input.maintenance.job,
+							"executions",
+							String(input.maintenance.windowStart),
+							"runtime",
+						)
+					: freshDir(
+							join(
+								config.stateDir,
+								"stages",
+								input.runId,
+								stageName(input.stage, input.attempt, input.round),
+							),
+						);
+
+			if (input.stage === "maintain" && existsSync(stageDir))
+				return {
+					kind: "unavailable",
+					stage: input.stage,
+					reason: "sandbox_unavailable",
+				};
 
 			const draftCheck =
 				input.stage === "accept" && input.acceptDraft !== undefined

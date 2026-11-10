@@ -33,6 +33,8 @@ export type Stage =
 	| "review"
 	| "land";
 
+export type SandboxStage = Stage | "maintain";
+
 export type Digest = string & { readonly __brand: "Digest" };
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;

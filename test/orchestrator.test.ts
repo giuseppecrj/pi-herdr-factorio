@@ -4496,7 +4496,16 @@ describe("server/cli.ts controller commands", () => {
 				const executor = new FakeExecutor();
 				executor.behaviors = [{ kind: "refuse", usage: 40 }];
 				await cli(
-					["tick", "--once", "--json", ...base, "--state-dir", state],
+					[
+						"tick",
+						"--once",
+						"--json",
+						...base,
+						"--state-dir",
+						state,
+						"--issue",
+						String(issue),
+					],
 					runGithub,
 					new AbortController(),
 					executor,

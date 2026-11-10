@@ -36,7 +36,7 @@ describe("stage table", () => {
 		assert.deepEqual([...STAGE_ORDER].sort(), Object.keys(all).sort());
 		assert.deepEqual(
 			Object.keys(STAGE_PROFILES).sort(),
-			Object.keys(all).sort(),
+			[...Object.keys(all), "maintain"].sort(),
 		);
 		assert.equal(new Set(STAGE_ORDER).size, STAGE_ORDER.length);
 		assert.equal(STAGE_ORDER[0], "admit");
@@ -45,6 +45,16 @@ describe("stage table", () => {
 		assert.equal(nextStage("review"), "land");
 		assert.equal(nextStage("land"), undefined);
 		assert.equal(MAX_REPAIR_ROUNDS, 2);
+		assert.deepEqual(STAGE_PROFILES.maintain, {
+			modelAccess: "full",
+			runsIn: "sandbox",
+			githubAccess: "none",
+		});
+		assert.equal(
+			Object.keys(all).includes("maintain"),
+			false,
+			"maintenance is never a ticket transition",
+		);
 	});
 
 	it("renders truthful access profiles", () => {

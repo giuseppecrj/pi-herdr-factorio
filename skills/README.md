@@ -19,6 +19,16 @@ Each skill sets `disable-model-invocation`, because it is a stage prompt and not
 | `ultrareview` | none, written fresh | repository MIT | `ultrareview/SOURCE.md` |
 | `deep-research` | `mattpocock/skills` `research` at `59db609` | MIT, Matt Pocock, `deep-research/LICENSE` | `deep-research/SOURCE.md` |
 
+## Maintenance audits
+
+The `maintain` sandbox stage runs one bounded weekly path group using `improve-codebase-architecture`, `security-review` in repository-scope mode, `audit-instructions` or `agent-loop-hygiene`. It has only read, grep and ls, a read-only pinned main tree, and model-only egress. It returns a JSON proposal list, including an empty no-delta list. The controller alone files `factory:proposed` issues; it never labels them ready. Hygiene receives a bounded redacted ledger excerpt, never private sessions. See [cadence](../docs/operations/cadence.md).
+
+| Skill | Upstream | License | `SOURCE.md` |
+| --- | --- | --- | --- |
+| `improve-codebase-architecture` | `mattpocock/skills` architecture, domain-modeling and vocabulary at `59db609` | MIT, Matt Pocock, `improve-codebase-architecture/LICENSE` | `improve-codebase-architecture/SOURCE.md` |
+| `audit-instructions` | `desertcache/agent-os` at `211bd89` | MIT, desertcache, `audit-instructions/LICENSE` | `audit-instructions/SOURCE.md` |
+| `agent-loop-hygiene` | owner's work at `b7f7c33` | owner-authored, no upstream licence; adaptation authorized by owner | `agent-loop-hygiene/SOURCE.md` |
+
 ## Human review
 
 Sandboxed model stages have no GitHub write authority; the trusted controller handles GitHub publication and progress reporting. The candidate must pass exact-head CI and review before the controller opens a ready, non-draft PR labeled `factory:review`. The factory then waits for the owner and never merges or arms auto-merge. See the [owner guide](../docs/operations/human-review.md).
