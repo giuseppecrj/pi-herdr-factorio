@@ -4108,7 +4108,11 @@ export async function publishCadenceProposals(input: {
 
 	const intents = join(input.stateDir, "cadence", execution.job, "proposals");
 	cadencePrivateDir(intents);
-	const issues = await adapter.readCadenceIssues(CONTROLLER_LOGIN);
+
+	const issues = await adapter.readCadenceIssues(
+		CONTROLLER_LOGIN,
+		input.signal,
+	);
 
 	if (issues.kind !== "ok" || input.signal?.aborted) return false;
 
@@ -4355,7 +4359,10 @@ export function controllerCadence(input: {
 				if (!(await input.executor.preflight()))
 					return failed("sandbox_unavailable");
 
-				const existing = await adapter.readCadenceIssues(CONTROLLER_LOGIN);
+				const existing = await adapter.readCadenceIssues(
+					CONTROLLER_LOGIN,
+					deadline,
+				);
 
 				if (existing.kind !== "ok") return failed("proposals_unavailable");
 				const existingProposals: CadenceKnownProposal[] = [];

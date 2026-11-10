@@ -881,8 +881,10 @@ export class GitHubTicketAdapter implements TicketReader {
 	/** Cadence owns this filtered REST listing; unlike ticket discovery it has no page cap. */
 	async readCadenceIssues(
 		login: string,
+		signal?: AbortSignal,
 	): Promise<
-		Read<(IssueRecord & { state: "open" | "completed" | "not_planned" })[]>
+		| Read<(IssueRecord & { state: "open" | "completed" | "not_planned" })[]>
+		| { kind: "aborted" }
 	> {
 		if (!isLogin(login)) return MALFORMED;
 
@@ -891,6 +893,8 @@ export class GitHubTicketAdapter implements TicketReader {
 		})[] = [];
 
 		for (let page = 1; ; page++) {
+			if (signal?.aborted) return { kind: "aborted" };
+
 			const read = await this.#page(
 				`issues?labels=factory%3Aproposed&creator=${encodeURIComponent(login)}&state=all`,
 				page,
