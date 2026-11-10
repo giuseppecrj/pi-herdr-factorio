@@ -91,9 +91,9 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 
 - [ ] Create `src/platform.ts` with the `PlatformProfile` type, the `exe-dev` default, the `exmach` profile taking a domain, and `parsePlatformProfile`.
 - [ ] Create `test/platform.test.ts`.
-- [ ] Edit `server/sandbox/routes.ts`, `src/markers.ts`, `src/publication.ts`, `src/adapters/github.ts`, `src/admission.ts`, `src/workflow.ts`, `server/cli.ts` and `server/controller.ts` to read the profile.
-- [ ] Edit the existing tests that pin these constants, including `test/sandbox/routes.cases.ts`, `test/github-adapter.test.ts`, `test/admission.test.ts` and `test/orchestrator.test.ts`.
-- [ ] Create `docs/operations/platform.md`. Edit `docs/operations/sandbox.md` only where it names the model host, edge address or forbidden domains.
+- [ ] Edit `src/markers.ts`, `src/publication.ts`, `src/adapters/github.ts`, `src/admission.ts`, `src/workflow.ts`, `src/orchestrator.ts`, `src/validation.ts`, `src/feedback.ts`, `src/replay.ts`, `server/cli.ts`, `server/controller.ts`, `server/sandbox.ts`, `server/sandbox/routes.ts`, `server/sandbox/gateway-main.ts`, `server/sandbox/gateway-client.ts`, `server/sandbox/credentials.ts`, `server/sandbox/control.ts` and `extension/index.ts`, only to carry the profile. The walkthrough found that the first file list missed the gateway, recovery and extension paths.
+- [ ] Edit the existing tests these changes require, without weakening an assertion. Under the default profile, existing expectations keep passing.
+- [ ] Create `docs/operations/platform.md`. Edit `docs/operations/sandbox.md` and `docs/operations/factory-cli.md` only where they name the model host, edge address, forbidden domains, the status field or the startup failure.
 
 **Build.**
 
@@ -101,15 +101,17 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 - [ ] Parse the profile once at controller and gateway startup in `parsePlatformProfile`. Fail closed with a named error. Trust the parsed value everywhere after that.
 - [ ] Refuse any profile whose `forbiddenDomains` lacks its own platform domain or `int.<domain>`.
 - [ ] Make the `exe-dev` default byte-equal to today's values, including `anthropicStages` set to accept and code-review only.
-- [ ] Ship the `exmach` profile with `llm.int.<domain>`, flat `/v1/responses` and `/v1/messages` paths, edge `10.74.1.1`, `github.int.<domain>`, and `anthropicStages` still set to accept and code-review only. `MV7` lifts it.
+- [ ] Ship the `exmach` profile with `llm.int.<domain>`, edge `10.74.1.1`, `github.int.<domain>`, and `anthropicStages` still set to accept and code-review only. `MV7` lifts it. Its base paths are OpenAI `/v1/` and Anthropic `/`, because Pi's Anthropic SDK appends `/v1/messages`. Its xAI path is `null`, and an xAI fallback is refused in workflow validation and in route construction.
+- [ ] Give the gateway a separate `--platform` descriptor. It rebuilds its expected upstreams from the built-in profile, so `productionDefect` still refuses a route table that differs. The table never authorizes itself.
+- [ ] Add a `platform` object with a stable digest to `status --json`, and record the controller's startup profile in its status snapshot.
 - [ ] Replace every hard-coded site. These are `server/sandbox/routes.ts:170`, `:176`, `:250-258` and `:518`, `src/markers.ts:14-15`, `src/publication.ts:35-36`, `src/adapters/github.ts:1179`, `server/cli.ts:1053`, `server/controller.ts:8079`, `src/admission.ts:52-54` and the `ANTHROPIC_RULE` text in `src/workflow.ts`.
-- [ ] Select the profile at the host, as the walkthrough settles. The proposed contract is one unit variable, `FACTORY_PLATFORM=exe-dev` or `FACTORY_PLATFORM=exmach:<domain>`, with an unset value meaning `exe-dev`.
+- [ ] Select the profile from `FACTORY_PLATFORM` and an optional root-owned `/etc/factory/platform.json`. The file holds only the selector, controller login, app slug, bot email and an optional repository list. With neither source, select `exe-dev`. Both sources must agree. An `exmach` selection requires the identity fields from the file. Any malformed source fails closed and never falls back to `exe-dev`. The walkthrough is in `../pi-herdr-factorio-trails/MV1/walkthrough/explain.md`.
 
 **You see.**
 
 - [ ] With no profile set, `status --json` reports `platform.name` as `exe-dev` and every route matches trunk.
-- [ ] With `FACTORY_PLATFORM=exmach:example.net` and no forbidden `example.net`, startup exits 2 with `event=platform_invalid reason=own_domain_not_forbidden`.
-- [ ] `rg 'exe\.xyz|exe-dev-github-integration|169\.254\.169\.254' src server` finds only `src/platform.ts` and the echo fixture.
+- [ ] With `FACTORY_PLATFORM=exmach:example.net` and no `/etc/factory/platform.json`, startup exits 2 with `event=platform_invalid reason=controller_identity_missing`. A built-in selector always generates its own forbidden domains, so `own_domain_not_forbidden` is proven by a unit test on a malformed resolved profile, not live.
+- [ ] `rg 'exe\.xyz|exe-dev-github-integration|169\.254\.169\.254|giuseppecrj/pi-herdr-factorio' src server extension` finds only `src/platform.ts`, the echo fixture, the generic refused ranges in `server/sandbox/gateway.ts`, and the MV3 and MV7 files `server/provision.sh`, `server/factory.service` and `server/sandbox/anthropic-limits.ts`.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
@@ -120,11 +122,11 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 
 - [ ] Lane 1. Regression lane against trunk. On `pi-factorio`, start the gateway and run one sandbox model request at trunk and head with no profile set. Save `default-parity.json`. Pass when both reach the model through the same host, path and edge address with the same status.
 - [ ] Lane 2. On `pi-factorio`, run `status --json` at head with no profile. Save `status-default.json`. Pass when `platform.name` is `exe-dev` and dispatch reasons match trunk.
-- [ ] Lane 3. On `pi-factorio`, start the controller at head with `FACTORY_PLATFORM=exmach:example.net` and a profile that omits its own domain. Save `invalid-profile.log`. Pass when it exits 2 with `platform_invalid` and launches no stage.
+- [ ] Lane 3. On `pi-factorio`, start the controller at head with `FACTORY_PLATFORM=exmach:example.net` and no platform file. Save `invalid-profile.log`. Pass when it exits 2 with `platform_invalid reason=controller_identity_missing`, takes no lock and launches no stage.
 - [ ] Lane 4. On `pi-factorio`, start at head with a malformed `FACTORY_PLATFORM`. Save `malformed-profile.log`. Pass when it exits 2 and never falls back to `exe-dev`.
 - [ ] Lane 5. On the exmach VM, start the gateway at head with `FACTORY_PLATFORM=exmach:exmach.net` and send one OpenAI request from a sandbox. Save `exmach-openai.json`. Pass when the upstream is `llm.int.exmach.net/v1/responses` and the reply is 200.
 - [ ] Lane 6. On the exmach VM, send one Anthropic accept-stage request from a sandbox. Save `exmach-anthropic.json`. Pass when the upstream is `llm.int.exmach.net/v1/messages`, the client credential is stripped, and the reply is 200.
-- [ ] Lane 7. On the exmach VM, from a sandbox, request `https://github.int.exmach.net/`, `https://reflection.int.exmach.net/` and `https://exmach.net/`. Save `forbidden-exmach.json`. Pass when all three are refused by the gateway with the forbidden-domain reason.
+- [ ] Lane 7. On the exmach VM, from a sandbox, request `https://github.int.exmach.net/`, `https://reflection.int.exmach.net/` and `https://exmach.net/`. Save `forbidden-exmach.json`. Pass when the gateway refuses all three and forwards none. The refusal reason may be `no-route`, `bad-host` or a forbidden-domain reason, because the request parser can refuse before the forbidden check runs.
 - [ ] Lane 8. On the exmach VM, from a sandbox, connect directly to `10.74.1.1`. Save `edge-direct.json`. Pass when the sandbox cannot reach the edge except through the gateway's pinned model route.
 - [ ] Lane 9. On `pi-factorio`, run `tick --once` at head on a lane state with one valid run marker by `exe-dev-github-integration[bot]`. Save `marker-default.json`. Pass when the marker authenticates under the default profile.
 - [ ] Lane 10. On `pi-factorio`, run `status --json` at head once with `FACTORY_PLATFORM` unset and once with `FACTORY_PLATFORM=exe-dev`. Save `explicit-default.json`. Pass when both outputs are identical.
