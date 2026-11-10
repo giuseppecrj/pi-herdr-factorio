@@ -27,7 +27,7 @@ The `maintain` sandbox stage runs one bounded weekly path group using `improve-c
 | --- | --- | --- | --- |
 | `improve-codebase-architecture` | `mattpocock/skills` architecture, domain-modeling and vocabulary at `59db609` | MIT, Matt Pocock, `improve-codebase-architecture/LICENSE` | `improve-codebase-architecture/SOURCE.md` |
 | `audit-instructions` | `desertcache/agent-os` at `211bd89` | MIT, desertcache, `audit-instructions/LICENSE` | `audit-instructions/SOURCE.md` |
-| `agent-loop-hygiene` | owner's work at `b7f7c33` | owner-authored, no upstream licence; adaptation authorized by owner | `agent-loop-hygiene/SOURCE.md` |
+| `agent-loop-hygiene` | owner's work at `b7f7c33` | owner-authored, no upstream licence; selected in the approved design and plan, adapted under autonomous-run | `agent-loop-hygiene/SOURCE.md` |
 
 ## Human review
 
