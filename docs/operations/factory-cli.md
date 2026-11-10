@@ -20,9 +20,9 @@ node server/cli.ts platform --env
 FACTORY_PLATFORM=exmach:exmach.net node server/cli.ts platform --env
 ```
 
-This read-only command needs no `--repo` or `--json`. It resolves `FACTORY_PLATFORM` and the optional `/etc/factory/platform.json` and prints assignments for `FACTORY_PLATFORM`, `GH_HOST`, the placeholder `GH_ENTERPRISE_TOKEN`, `LLM_BASE_URL`, `LLM_OPENAI_BASE_URL` and `LLM_ANTHROPIC_BASE_URL`. It reads no workflow, takes no lock, makes no network or model calls and writes no file. Exit 0 prints the environment; invalid arguments or a `platform_invalid` selection exit 2, with no assignments on stdout.
+This read-only command needs no `--repo` or `--json`. It resolves `FACTORY_PLATFORM` and the optional `/etc/factory/platform.json` and prints assignments for `FACTORY_PLATFORM`, `GH_HOST`, `LLM_API_KEY_PLACEHOLDER`, `LLM_BASE_URL`, `LLM_OPENAI_BASE_URL` and `LLM_ANTHROPIC_BASE_URL`, plus `GH_ENTERPRISE_TOKEN` on exmach only. It reads no workflow, takes no lock, makes no network or model calls and writes no file. Exit 0 prints the environment; invalid arguments or a `platform_invalid` selection exit 2, with no assignments on stdout.
 
-Full provisioning consumes this output to configure host Pi and writes `/etc/factory/factory.env`, root-owned and mode 0644, which the static service unit requires. `GH_ENTERPRISE_TOKEN` is `exmach` on exmach and `exe-dev-integration` on exe-dev, both nonsecret placeholders for edge-injected authentication. Rerun full provisioning after changing the selection, before restarting the unit. See [Platform profile](platform.md).
+Full provisioning consumes this output to configure host Pi and writes `/etc/factory/factory.env`, root-owned and mode 0644, which the static service unit requires. On exmach `GH_ENTERPRISE_TOKEN` is the nonsecret placeholder `exmach`, because the edge injects the real token. exe-dev prints no `GH_ENTERPRISE_TOKEN`, so its unit environment keeps today's `gh` behaviour. `LLM_API_KEY_PLACEHOLDER` is the host Pi placeholder key, `exe-dev-integration` on exe-dev and `exmach` on exmach. Rerun full provisioning after changing the selection, before restarting the unit. See [Platform profile](platform.md).
 
 ## Local run viewer
 
