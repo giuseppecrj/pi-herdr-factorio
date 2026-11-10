@@ -29,7 +29,6 @@ import {
 	textsOf,
 	type JsonValue,
 } from "../server/sandbox/json.ts";
-import { CONTROLLER_LOGIN } from "./markers.ts";
 import { type FailureClass, parseFailureClass } from "./diagnosis.ts";
 
 export { REQUIRED_CI_CHECKS } from "./run.ts";
@@ -53,6 +52,7 @@ export function collectTrustedReport(input: {
 	readonly run: CiRun;
 	readonly nonce: string;
 	readonly verdict: Verdict;
+	readonly controllerLogin: string;
 }): TrustedReport | null {
 	const record = objectOf(input.record);
 	const checks = objectOf(input.checks);
@@ -66,7 +66,13 @@ export function collectTrustedReport(input: {
 		!verdictPasses(v) ||
 		!isGitSha(v.candidateSha) ||
 		!isGitSha(v.gateSha) ||
-		!matchesCiRun(input.run, v.candidateSha, input.nonce, 0) ||
+		!matchesCiRun(
+			input.run,
+			v.candidateSha,
+			input.nonce,
+			0,
+			input.controllerLogin,
+		) ||
 		input.run.id !== v.ciRunId ||
 		input.run.headSha !== v.gateSha ||
 		input.run.status !== "completed" ||
@@ -83,8 +89,8 @@ export function collectTrustedReport(input: {
 		fieldOf(record, "workflow") !== ".github/workflows/ci.yml" ||
 		fieldOf(record, "event") !== "workflow_dispatch" ||
 		fieldOf(record, "ref") !== "refs/heads/main" ||
-		fieldOf(record, "actor") !== CONTROLLER_LOGIN ||
-		fieldOf(record, "triggeringActor") !== CONTROLLER_LOGIN ||
+		fieldOf(record, "actor") !== input.controllerLogin ||
+		fieldOf(record, "triggeringActor") !== input.controllerLogin ||
 		fieldOf(record, "externalId") !== externalId ||
 		fieldOf(record, "heldoutDigest") !== v.heldoutDigest ||
 		listed === null ||
@@ -305,14 +311,15 @@ export function matchesCiRun(
 	candidate: GitSha,
 	nonce: string,
 	startedAt: number,
+	controllerLogin: string,
 ): boolean {
 	return (
 		run.title === `gates ${candidate} ${nonce}` &&
 		run.headBranch === "main" &&
 		run.event === "workflow_dispatch" &&
 		run.path === ".github/workflows/ci.yml" &&
-		run.actor === CONTROLLER_LOGIN &&
-		run.triggeringActor === CONTROLLER_LOGIN &&
+		run.actor === controllerLogin &&
+		run.triggeringActor === controllerLogin &&
 		Date.parse(run.createdAt) >= Math.floor(startedAt / 1000) * 1000
 	);
 }
@@ -328,6 +335,7 @@ export function collectVerdict(input: {
 	readonly originalBase: GitSha;
 	readonly baseSha: GitSha;
 	readonly unjudged: readonly string[];
+	readonly controllerLogin: string;
 }): Verdict {
 	const value = objectOf(parseJson(input.text ?? ""));
 	const required = textsOf(fieldOf(value, "requiredChecks")) ?? [];
@@ -355,7 +363,13 @@ export function collectVerdict(input: {
 		originalBase: input.originalBase,
 		baseSha: input.baseSha,
 		pass:
-			matchesCiRun(input.run, input.candidateSha, input.nonce, 0) &&
+			matchesCiRun(
+				input.run,
+				input.candidateSha,
+				input.nonce,
+				0,
+				input.controllerLogin,
+			) &&
 			input.run.headSha === input.baseSha &&
 			input.run.status === "completed" &&
 			input.run.conclusion === "success" &&

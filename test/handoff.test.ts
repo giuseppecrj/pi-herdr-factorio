@@ -75,6 +75,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { fieldOf, objectOf, parseJson } from "../server/sandbox/json.ts";
+import { EXE_DEV_PLATFORM } from "../src/platform.ts";
 
 const sha = "a".repeat(40);
 const repo = "giuseppecrj/pi-herdr-factorio";
@@ -1342,6 +1343,7 @@ test("F10-3 notices distinguish refusal, failed gates and behind for the same he
 
 			for (let replay = 0; replay < 2; replay++) {
 				const completion = await controllerCandidatePort({
+					platform: EXE_DEV_PLATFORM,
 					stateDir: root,
 					exec: github.exec,
 				}).execute(state, request);
@@ -1729,6 +1731,7 @@ test("actual observer promotes a certified successor before PR checks and waits 
 		);
 
 		const port = controllerCandidatePort({
+			platform: EXE_DEV_PLATFORM,
 			stateDir: root,
 			exec: async (command, args) => {
 				const ok = (value: JsonValue) => ({
@@ -4651,7 +4654,12 @@ for (const ending of roundEndings)
 					: github.exec(command, args);
 
 			for (let attempt = 0; attempt < 2; attempt++) {
-				const port = controllerCandidatePort({ stateDir: root, exec });
+				const port = controllerCandidatePort({
+					platform: EXE_DEV_PLATFORM,
+					stateDir: root,
+					exec,
+				});
+
 				assert.ok(await port.execute(retry.state, summary));
 			}
 
@@ -5714,6 +5722,7 @@ for (const outcome of [
 			const head = initial.current.report!.candidateSha;
 
 			const classified = await classifyFeedback({
+				controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
 				runId: pin.runId,
 				pr: 5,
 				head,
@@ -5864,7 +5873,12 @@ for (const outcome of [
 				return github.exec(command, args);
 			};
 
-			const port = controllerCandidatePort({ stateDir: root, exec });
+			const port = controllerCandidatePort({
+				platform: EXE_DEV_PLATFORM,
+				stateDir: root,
+				exec,
+			});
+
 			const completion = await port.execute(state, started);
 			assert.ok(completion?.kind === "post_notice");
 			assert.ok(!pr.labels.includes("factory:review"));
@@ -5979,6 +5993,7 @@ for (const outcome of [
 				assert.ok(feedback.kind === "read" && feedback.batch);
 
 				const next = await classifyFeedback({
+					controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
 					runId: pin.runId,
 					pr: 5,
 					head,
@@ -6178,14 +6193,16 @@ for (const outcome of [
 			else if (retry && outcome !== "deleted_summary") crashEdit = true;
 			else github.posts.push("landed_unanswered");
 			assert.equal(
-				await controllerCandidatePort({ stateDir: root, exec }).execute(
-					state,
-					request,
-				),
+				await controllerCandidatePort({
+					platform: EXE_DEV_PLATFORM,
+					stateDir: root,
+					exec,
+				}).execute(state, request),
 				null,
 			);
 
 			const recovered = await controllerCandidatePort({
+				platform: EXE_DEV_PLATFORM,
 				stateDir: root,
 				exec,
 			}).execute(state, request);
@@ -6263,18 +6280,20 @@ for (const outcome of [
 				});
 			}
 
-			await controllerCandidatePort({ stateDir: root, exec }).observe(
-				done,
-				300,
-			);
+			await controllerCandidatePort({
+				platform: EXE_DEV_PLATFORM,
+				stateDir: root,
+				exec,
+			}).observe(done, 300);
 			const path = join(root, "handoff", pin.runId, "feedback", "round-1.json");
 			const bytes = readFileSync(path, "utf8");
 			assert.equal(statSync(path).mode & 0o777, 0o600);
 			rmSync(path);
-			await controllerCandidatePort({ stateDir: root, exec }).observe(
-				done,
-				400,
-			);
+			await controllerCandidatePort({
+				platform: EXE_DEV_PLATFORM,
+				stateDir: root,
+				exec,
+			}).observe(done, 400);
 			assert.equal(readFileSync(path, "utf8"), bytes);
 			const index = JSON.parse(bytes);
 			assert.equal(index.latestAttempt, secondAttempt ? 2 : 1);
@@ -6523,6 +6542,7 @@ for (const fault of ["landed_unanswered", "rejected", "lost"] as const)
 			const head = initial.current.report!.candidateSha;
 
 			const classified = await classifyFeedback({
+				controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
 				runId: pin.runId,
 				pr: 5,
 				head,
@@ -6570,6 +6590,7 @@ for (const fault of ["landed_unanswered", "rejected", "lost"] as const)
 			github.posts.push(fault);
 			assert.equal(
 				await controllerCandidatePort({
+					platform: EXE_DEV_PLATFORM,
 					stateDir: root,
 					exec: github.exec,
 				}).execute(step.state, request),
@@ -6577,6 +6598,7 @@ for (const fault of ["landed_unanswered", "rejected", "lost"] as const)
 			);
 
 			const completion = await controllerCandidatePort({
+				platform: EXE_DEV_PLATFORM,
 				stateDir: root,
 				exec: github.exec,
 			}).execute(step.state, request);
@@ -6616,6 +6638,7 @@ test("47-comment card overflow advances the stored cursor and posts one visible 
 		const head = initial.current.report!.candidateSha;
 
 		const classified = await classifyFeedback({
+			controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
 			runId: pin.runId,
 			pr: 5,
 			head,
@@ -6672,6 +6695,7 @@ test("47-comment card overflow advances the stored cursor and posts one visible 
 		github.posts.push("lost");
 		assert.equal(
 			await controllerCandidatePort({
+				platform: EXE_DEV_PLATFORM,
 				stateDir: root,
 				exec: github.exec,
 			}).execute(step.state, request),
@@ -6679,6 +6703,7 @@ test("47-comment card overflow advances the stored cursor and posts one visible 
 		);
 
 		const completion = await controllerCandidatePort({
+			platform: EXE_DEV_PLATFORM,
 			stateDir: root,
 			exec: github.exec,
 		}).execute(step.state, request);
@@ -6721,6 +6746,7 @@ test("47-comment card overflow advances the stored cursor and posts one visible 
 		});
 
 		const replay = await controllerCandidatePort({
+			platform: EXE_DEV_PLATFORM,
 			stateDir: root,
 			exec: github.exec,
 		}).execute(step.state, request);

@@ -63,6 +63,7 @@ import {
 } from "../src/workflow.ts";
 
 import { withUmask } from "./helpers.ts";
+import { EXE_DEV_PLATFORM } from "../src/platform.ts";
 
 function slug(text: string): RepoSlug {
 	if (!isRepoSlug(text)) throw new Error(`bad slug ${text}`);
@@ -629,6 +630,7 @@ describe("questions and summary comments", () => {
 
 	it("is ignored by the marker ledger when posted by the controller", () => {
 		const ledger = markerLedger({
+			identity: EXE_DEV_PLATFORM,
 			repo,
 			issue: 14,
 			comments: [

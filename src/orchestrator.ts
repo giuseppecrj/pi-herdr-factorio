@@ -56,7 +56,6 @@ import {
 	type Ambiguity,
 	admitTicket,
 	type AdmittedReceipt,
-	FACTORY_REPOSITORIES,
 	latestReadyEntry,
 	type RefusalReason,
 	readTickInputs,
@@ -78,7 +77,6 @@ import {
 } from "./adapters/github.ts";
 import type { Exec } from "./gh.ts";
 import {
-	CONTROLLER_LOGIN,
 	currentMarker,
 	formatMarker,
 	isControllerComment,
@@ -138,6 +136,7 @@ import {
 	withoutKey,
 } from "./specify.ts";
 import type { CadenceRunner } from "./cadence.ts";
+import type { PlatformProfile } from "./platform.ts";
 import { isLogin } from "./adapters/github.ts";
 import type {
 	StageResult,
@@ -954,12 +953,13 @@ function isAnswerCandidate(
 	comment: IssueComment,
 	floor: bigint,
 	labelAt: string,
+	identity: Pick<PlatformProfile, "controllerLogin">,
 ): boolean {
 	return (
 		BigInt(comment.id) > floor &&
 		comment.author !== null &&
 		comment.author.type !== "Bot" &&
-		!isControllerComment(comment) &&
+		!isControllerComment(comment, identity) &&
 		comment.createdAt <= labelAt
 	);
 }
@@ -1107,6 +1107,7 @@ const FIRST_STAGE: Stage = "specify";
  */
 export async function checkIdentity(
 	adapter: GitHubTicketAdapter,
+	controllerLogin: string,
 ): Promise<
 	| { readonly kind: "ok" }
 	| { readonly kind: "mismatch" }
@@ -1118,7 +1119,7 @@ export async function checkIdentity(
 		return { kind: "unavailable", failure: viewer.failure };
 	}
 
-	return viewer.value === CONTROLLER_LOGIN
+	return viewer.value === controllerLogin
 		? { kind: "ok" }
 		: { kind: "mismatch" };
 }
@@ -1126,6 +1127,7 @@ export async function checkIdentity(
 export type OrchestratorInput = {
 	exec: Exec;
 	env: EnvLookup;
+	platform: PlatformProfile;
 	repo: RepoSlug;
 	store: AdmissionStore & SnapshotReader;
 	files: RunFiles;
@@ -1633,6 +1635,7 @@ export class Orchestrator {
 		const reads = await readTickInputs({
 			exec: this.#input.exec,
 			env: this.#input.env,
+			platform: this.#input.platform,
 			adapter: this.#adapter,
 		});
 
@@ -2897,7 +2900,9 @@ export class Orchestrator {
 			return comments;
 		}
 
-		const controller = comments.value.filter(isControllerComment);
+		const controller = comments.value.filter((comment) =>
+			isControllerComment(comment, this.#input.platform),
+		);
 
 		const edits = await this.#adapter.readCommentEdits(
 			controller.map((comment) => comment.nodeId),
@@ -2917,6 +2922,7 @@ export class Orchestrator {
 				issue,
 				comments: comments.value,
 				edits: edits.value,
+				identity: this.#input.platform,
 			}),
 		};
 	}
@@ -4070,9 +4076,10 @@ export class Orchestrator {
 		const receipt = await admitTicket({
 			exec: this.#input.exec,
 			env: this.#input.env,
+			platform: this.#input.platform,
 			repo,
 			issue,
-			allowlist: FACTORY_REPOSITORIES,
+			allowlist: this.#input.platform.repositories,
 			store: this.#input.store,
 			paging: this.#input.paging,
 			tick: reads,
@@ -4446,7 +4453,7 @@ export class Orchestrator {
 
 		const asked = comments.value.find(
 			(comment) =>
-				isControllerComment(comment) &&
+				isControllerComment(comment, this.#input.platform) &&
 				questionsKeyOf(comment.body)?.runId === prevRunId,
 		);
 
@@ -4460,7 +4467,14 @@ export class Orchestrator {
 		const floor = BigInt(asked?.id ?? prev.commentId);
 
 		const candidates = comments.value
-			.filter((comment) => isAnswerCandidate(comment, floor, admitted.eventAt))
+			.filter((comment) =>
+				isAnswerCandidate(
+					comment,
+					floor,
+					admitted.eventAt,
+					this.#input.platform,
+				),
+			)
 			.sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
 
 		if (candidates.some((comment) => comment.createdAt === admitted.eventAt)) {
@@ -6448,6 +6462,7 @@ export class Orchestrator {
 			text: workflow,
 			repo,
 			env: this.#input.env,
+			platform: this.#input.platform,
 		});
 
 		if (parsed.kind === "invalid") return fail("workflow_invalid");
@@ -6950,7 +6965,7 @@ export class Orchestrator {
 
 		return comments.value.some(
 			(comment) =>
-				isControllerComment(comment) &&
+				isControllerComment(comment, this.#input.platform) &&
 				comment.body.trimEnd().split("\n").at(-1) === key,
 		);
 	}

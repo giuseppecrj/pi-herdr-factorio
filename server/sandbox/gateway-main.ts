@@ -1,3 +1,9 @@
+import {
+	type PlatformNetwork,
+	platformDescriptor,
+	platformNetwork,
+	parsePlatformSelector,
+} from "../../src/platform.ts";
 import { openAuditFile, AUDIT_CAP_BYTES } from "./audit.ts";
 import {
 	type ControlEvent,
@@ -21,8 +27,23 @@ export type GatewayArgs = {
 	readonly socket: string;
 	readonly audit: string;
 	readonly ceilings: string;
+	readonly platform: string;
 	readonly mode: TableMode;
 };
+
+/**
+ * The built-in network for a canonical `--platform` descriptor, or `null`.
+ * The gateway trusts this selection, never the route table, for upstreams.
+ */
+export function gatewayNetwork(descriptor: string): PlatformNetwork | null {
+	const selector = parsePlatformSelector(descriptor);
+
+	if (!selector.ok) return null;
+
+	const network = platformNetwork(selector.value);
+
+	return platformDescriptor(network) === descriptor ? network : null;
+}
 
 /** Reads the gateway's argv. Unknown or repeated flags refuse the whole command line. */
 export function parseGatewayArgs(argv: readonly string[]): GatewayArgs | null {
@@ -40,7 +61,10 @@ export function parseGatewayArgs(argv: readonly string[]): GatewayArgs | null {
 		const value = argv[index + 1];
 
 		if (
-			(flag !== "--socket" && flag !== "--audit" && flag !== "--ceilings") ||
+			(flag !== "--socket" &&
+				flag !== "--audit" &&
+				flag !== "--ceilings" &&
+				flag !== "--platform") ||
 			value === undefined ||
 			values.has(flag)
 		) {
@@ -53,13 +77,17 @@ export function parseGatewayArgs(argv: readonly string[]): GatewayArgs | null {
 
 	const socket = values.get("--socket");
 	const audit = values.get("--audit");
+	const platform = values.get("--platform");
 
-	if (socket === undefined || audit === undefined) return null;
+	if (socket === undefined || audit === undefined || platform === undefined) {
+		return null;
+	}
 
 	return {
 		socket,
 		audit,
 		ceilings: values.get("--ceilings") ?? CEILINGS_PATH,
+		platform,
 		mode,
 	};
 }
@@ -76,9 +104,10 @@ function fatal(code: FatalCode): void {
 
 async function start(
 	args: GatewayArgs,
+	network: PlatformNetwork,
 	tableLine: string,
 ): Promise<Gateway | null> {
-	const parsed = parseRouteTable(parseJson(tableLine), args.mode);
+	const parsed = parseRouteTable(parseJson(tableLine), args.mode, network);
 
 	if (!parsed.ok) {
 		fatal("bad-table");
@@ -91,7 +120,7 @@ async function start(
 	const ceilings =
 		ids.length === 0
 			? { ok: true as const, ceilings: new Map() }
-			: loadCeilings(args.ceilings, args.mode);
+			: loadCeilings(args.ceilings, args.mode, network);
 
 	const secrets = loadSecrets(process.env.CREDENTIALS_DIRECTORY, ids);
 
@@ -156,13 +185,21 @@ async function main(): Promise<void> {
 		return;
 	}
 
+	const network = gatewayNetwork(args.platform);
+
+	if (network === null) {
+		fatal("bad-platform");
+
+		return;
+	}
+
 	const splitter = new LineSplitter(64 * 1024 * 1024);
 	let gateway: Promise<Gateway | null> | null = null;
 	let queue = Promise.resolve();
 
 	const handle = async (line: string) => {
 		if (gateway === null) {
-			gateway = start(args, line);
+			gateway = start(args, network, line);
 			await gateway;
 
 			return;

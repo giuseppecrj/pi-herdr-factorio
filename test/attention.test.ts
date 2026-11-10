@@ -38,10 +38,13 @@ import {
 import { TRUSTED_RUN_CAP, TRUSTED_WORKFLOW } from "./fake-ticket-adapter.ts";
 import { fileRunFiles } from "../server/controller.ts";
 import type { AnswersDigest } from "../src/specify.ts";
+import { EXE_DEV_PLATFORM } from "../src/platform.ts";
+import { noPlatformFile } from "./helpers.ts";
 
 test("trusted attention thresholds default, validate positive integers, and reject unknown fields", () => {
 	const parse = (section: string) =>
 		parseWorkflow({
+			platform: EXE_DEV_PLATFORM,
 			text: `---\nrepository: giuseppecrj/pi-herdr-factorio\n${section}\n---\n`,
 			repo,
 			env: (name) => (name === "HOME" ? "/tmp/factory" : undefined),
@@ -1002,6 +1005,7 @@ test("real CLI status and registered extension compose the same local attention 
 	const code = await runCli(
 		["status", "--json", "--repo", repo, "--state-dir", root],
 		{
+			readPlatformFile: noPlatformFile,
 			exec,
 			env: () => undefined,
 			stdout: (text) => {
@@ -1034,20 +1038,26 @@ test("real CLI status and registered extension compose the same local attention 
 	let sent = "";
 
 	try {
-		registerFactory({
-			registerCommand: (_name, options) => {
-				// SAFETY: the registered handler only uses cwd from the extension context.
-				const context = { cwd: root } as Parameters<typeof options.handler>[1];
-				handlers.push(() => options.handler("status", context));
+		registerFactory(
+			{
+				registerCommand: (_name, options) => {
+					// SAFETY: the registered handler only uses cwd from the extension context.
+					const context = { cwd: root } as Parameters<
+						typeof options.handler
+					>[1];
+
+					handlers.push(() => options.handler("status", context));
+				},
+				sendMessage: (message) => {
+					sent = String(message.content);
+				},
+				exec: async (command, args) => ({
+					...(await exec(command, args)),
+					killed: false,
+				}),
 			},
-			sendMessage: (message) => {
-				sent = String(message.content);
-			},
-			exec: async (command, args) => ({
-				...(await exec(command, args)),
-				killed: false,
-			}),
-		});
+			Promise.resolve({ ok: true as const, profile: EXE_DEV_PLATFORM }),
+		);
 		const handler = handlers[0];
 		assert.ok(handler);
 		await handler();

@@ -166,6 +166,7 @@ import {
 import { preparedReviewFixture, withUmask } from "../helpers.ts";
 import { manifestDigest } from "../../server/sandbox/manifest.ts";
 import { wrapPiArgv } from "../../server/sandbox/assets/pi.ts";
+import { EXE_DEV_PLATFORM } from "../../src/platform.ts";
 
 const FIXTURES = new URL("./fixtures/", import.meta.url).pathname;
 const RUN = "a".repeat(64);
@@ -393,6 +394,7 @@ function harness(
 	const outputs: string[] = [];
 
 	const host: StageHost = {
+		platform: EXE_DEV_PLATFORM,
 		cleanupReserveMs: options.cleanupReserveMs ?? 50,
 		assetsDigest: "e".repeat(64),
 		versions: { pi: "1.4.0", piHerdrAgents: "3.3.1", piHerdrPstack: "0.5.0" },
@@ -2140,6 +2142,7 @@ describe("private build executor", () => {
 			]);
 
 			const executor = sandboxModule.sandboxExecutor({
+				platform: EXE_DEV_PLATFORM,
 				stateDir,
 				root,
 				arch: "x64",
@@ -2253,6 +2256,7 @@ describe("private build executor", () => {
 				assert.notEqual(patch.receipt.patchDigest, initial.patchDigest);
 
 				const restarted = sandboxModule.sandboxExecutor({
+					platform: EXE_DEV_PLATFORM,
 					stateDir,
 					root,
 					arch: "x64",
@@ -2425,6 +2429,7 @@ describe("private build executor", () => {
 				]);
 
 				const executor = sandboxModule.sandboxExecutor({
+					platform: EXE_DEV_PLATFORM,
 					stateDir,
 					root,
 					arch: "x64",
@@ -2564,6 +2569,7 @@ describe("private build executor", () => {
 					);
 
 					const restarted = sandboxModule.sandboxExecutor({
+						platform: EXE_DEV_PLATFORM,
 						stateDir,
 						root,
 						arch: "x64",
@@ -2725,6 +2731,7 @@ describe("private build executor", () => {
 				const refusals: string[] = [];
 
 				const executor = sandboxModule.sandboxExecutor({
+					platform: EXE_DEV_PLATFORM,
 					stateDir,
 					root,
 					arch: "x64",
@@ -3007,6 +3014,7 @@ describe("private build executor", () => {
 			tests = 0;
 
 		const config: sandboxModule.SandboxExecutorConfig = {
+			platform: EXE_DEV_PLATFORM,
 			stateDir,
 			root,
 			arch: "x64",
@@ -3226,6 +3234,7 @@ describe("private build executor", () => {
 			let interrupted = false;
 
 			const config: sandboxModule.SandboxExecutorConfig = {
+				platform: EXE_DEV_PLATFORM,
 				stateDir,
 				root,
 				arch: "x64",
@@ -3451,6 +3460,7 @@ describe("controller-run visible tests", () => {
 
 		const result = await runVisibleTests(
 			{
+				platform: EXE_DEV_PLATFORM,
 				stateDir: root,
 				bundleDir: "unused",
 				workspace: "",
@@ -3506,6 +3516,7 @@ describe("controller-run visible tests", () => {
 
 					const result = await runVisibleTests(
 						{
+							platform: EXE_DEV_PLATFORM,
 							stateDir: root,
 							bundleDir: "unused",
 							workspace: "",
@@ -3599,6 +3610,7 @@ describe("controller-run visible tests", () => {
 
 		const result = await runVisibleTests(
 			{
+				platform: EXE_DEV_PLATFORM,
 				stateDir: root,
 				bundleDir: "unused",
 				workspace: "",
@@ -3669,6 +3681,7 @@ describe("visible-test gateway", () => {
 
 		const result = await runVisibleTests(
 			{
+				platform: EXE_DEV_PLATFORM,
 				stateDir,
 				bundleDir: join(root, "missing-bundle"),
 				workspace: "",
@@ -3731,6 +3744,7 @@ describe("runStage receipt persistence", () => {
 
 	function realHost(stateDir: string) {
 		return sandboxHost({
+			platform: EXE_DEV_PLATFORM,
 			stateDir,
 			bundleDir: join(stateDir, "bundle"),
 			workspace: join(stateDir, "ws"),
@@ -4209,6 +4223,7 @@ describe("runStage refusal fallback", () => {
 		assert.ok(isRepoSlug(repo));
 
 		const parsed = parseWorkflow({
+			platform: EXE_DEV_PLATFORM,
 			text: `---\nrepository: ${repo}\nstages:\n  specify:\n    fallback_model: xai/grok-4.7-test\n---\n`,
 			repo,
 			env: (name) => (name === "HOME" ? "/home/factory" : undefined),
@@ -6528,6 +6543,7 @@ describe("the turn cap holds in a real gateway process", () => {
 				{
 					gateway: async (table) => {
 						const started = await startGatewayProcess({
+							platform: EXE_DEV_PLATFORM,
 							gatewayDir: join(dir, "gw"),
 							auditPath: join(dir, "egress.jsonl"),
 							table: {
@@ -7004,6 +7020,7 @@ describe("stage output capture", () => {
 
 		try {
 			const host = sandboxHost({
+				platform: EXE_DEV_PLATFORM,
 				stateDir: dir,
 				bundleDir: join(dir, "bundle"),
 				workspace: join(dir, "ws"),
@@ -7119,6 +7136,7 @@ describe("stage skills", () => {
 		]);
 
 		const executor = sandboxModule.sandboxExecutor({
+			platform: EXE_DEV_PLATFORM,
 			stateDir,
 			root,
 			arch: "x64",
@@ -7875,6 +7893,7 @@ describe("multi-seat candidate review", () => {
 				const store = fileAdmissionStore(f.state);
 
 				const admission = await admitTicket({
+					platform: EXE_DEV_PLATFORM,
 					exec: github.exec,
 					env: () => "/home/exedev",
 					repo: f.contract.base.repo,
@@ -8004,6 +8023,7 @@ describe("multi-seat candidate review", () => {
 
 				const make = () =>
 					new Orchestrator({
+						platform: EXE_DEV_PLATFORM,
 						exec: github.exec,
 						env: () => "/home/exedev",
 						repo: f.contract.base.repo,
@@ -8073,6 +8093,7 @@ describe("multi-seat candidate review", () => {
 
 				const stop = new AbortController();
 				await serveLoop({
+					platform: EXE_DEV_PLATFORM,
 					orchestrator: controller,
 					stateDir: f.state,
 					signal: stop.signal,
@@ -9092,6 +9113,7 @@ describe("controller-run specify review", () => {
 		const dir = join(h.dir, "stages", RUN, "specify-1");
 
 		const executor = sandboxModule.sandboxExecutor({
+			platform: EXE_DEV_PLATFORM,
 			stateDir: h.dir,
 			xdgRuntimeDir: "/run/user/1000",
 			log: () => {},
@@ -9215,6 +9237,7 @@ describe("durable request charges after a restart", () => {
 		const runs = join(dir, "stages", RUN);
 
 		const executor = sandboxModule.sandboxExecutor({
+			platform: EXE_DEV_PLATFORM,
 			stateDir: dir,
 			xdgRuntimeDir: "/run/user/1000",
 			log: () => {},

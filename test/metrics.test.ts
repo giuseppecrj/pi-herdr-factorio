@@ -28,6 +28,7 @@ import {
 } from "../src/metrics.ts";
 import { digestOf, runIdOf } from "../src/run.ts";
 import { isRepoSlug, type Exec } from "../src/workflow.ts";
+import { noPlatformFile } from "./helpers.ts";
 
 const repo = "giuseppecrj/pi-herdr-factorio";
 
@@ -124,6 +125,7 @@ async function cli(args: string[], exec?: Exec) {
 	const calls: string[][] = [];
 
 	const code = await runCli(args, {
+		readPlatformFile: noPlatformFile,
 		exec: async (command, argv, options) => {
 			calls.push([command, ...argv]);
 

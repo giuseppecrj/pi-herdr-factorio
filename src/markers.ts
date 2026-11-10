@@ -1,5 +1,6 @@
 import type { CommentEdit, IssueComment } from "./adapters/github.ts";
 import type { HandoffReason } from "./handoff.ts";
+import { type ControllerIdentity, EXE_DEV_PLATFORM } from "./platform.ts";
 import { type Digest, isDigest, runIdOf, type Stage } from "./run.ts";
 import { STAGE_ORDER } from "./stages.ts";
 import type { JsonValue } from "./tickets.ts";
@@ -11,8 +12,15 @@ import {
 	type RepoSlug,
 } from "./workflow.ts";
 
-export const CONTROLLER_LOGIN = "exe-dev-github-integration[bot]";
-export const CONTROLLER_APP_SLUG = "exe-dev-github-integration";
+/** The exe-dev identity, kept for test imports. Production reads the platform profile. */
+export const CONTROLLER_LOGIN = EXE_DEV_PLATFORM.controllerLogin;
+export const CONTROLLER_APP_SLUG = EXE_DEV_PLATFORM.controllerAppSlug;
+
+/** The identity marker trust checks against. */
+export type MarkerIdentity = Pick<
+	ControllerIdentity,
+	"controllerLogin" | "controllerAppSlug"
+>;
 
 export function cadenceMarker(
 	repo: RepoSlug,
@@ -555,8 +563,11 @@ export function parseMarker(body: string): MarkerParse {
  * A REST comment written as the controller. The trust rule checks the edit
  * record of every one, so stripping the marker prefix from one is detected.
  */
-export function isControllerComment(comment: IssueComment): boolean {
-	return comment.author?.login === CONTROLLER_LOGIN;
+export function isControllerComment(
+	comment: IssueComment,
+	identity: Pick<ControllerIdentity, "controllerLogin">,
+): boolean {
+	return comment.author?.login === identity.controllerLogin;
 }
 
 export type TrustedMarker = {
@@ -587,6 +598,7 @@ function trustOne(input: {
 	edit: CommentEdit | undefined;
 	repo: RepoSlug;
 	issue: number;
+	identity: MarkerIdentity;
 }):
 	| { readonly kind: "trusted"; readonly entry: TrustedMarker }
 	| { readonly kind: "corrupt"; readonly defect: MarkerDefect } {
@@ -602,14 +614,18 @@ function trustCheck(input: {
 	edit: CommentEdit | undefined;
 	repo: RepoSlug;
 	issue: number;
+	identity: MarkerIdentity;
 }): TrustedMarker | { readonly defect: MarkerDefect } {
-	const { comment, edit, repo, issue } = input;
+	const { comment, edit, repo, issue, identity } = input;
 
 	const defect = (kind: MarkerDefect) => ({ defect: kind });
 
 	if (comment.author?.type !== "Bot") return defect("not_bot_type");
 
-	if (comment.appSlug !== null && comment.appSlug !== CONTROLLER_APP_SLUG) {
+	if (
+		comment.appSlug !== null &&
+		comment.appSlug !== identity.controllerAppSlug
+	) {
 		return defect("wrong_app");
 	}
 
@@ -711,6 +727,7 @@ export function markerLedger(input: {
 	issue: number;
 	comments: readonly IssueComment[];
 	edits: ReadonlyMap<string, CommentEdit>;
+	identity: MarkerIdentity;
 }): MarkerLedger {
 	const trusted: TrustedMarker[] = [];
 	let ignored = 0;
@@ -718,7 +735,7 @@ export function markerLedger(input: {
 	for (const comment of input.comments) {
 		const claimsMarker = comment.body.startsWith(MARKER_LEAD);
 
-		if (!isControllerComment(comment)) {
+		if (!isControllerComment(comment, input.identity)) {
 			if (claimsMarker) ignored++;
 			continue;
 		}
@@ -740,6 +757,7 @@ export function markerLedger(input: {
 			edit,
 			repo: input.repo,
 			issue: input.issue,
+			identity: input.identity,
 		});
 
 		if (result.kind === "corrupt") {

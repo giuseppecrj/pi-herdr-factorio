@@ -56,6 +56,8 @@ import {
 	repo,
 	save,
 } from "./fixtures/owner-feed/state.ts";
+import { EXE_DEV_PLATFORM } from "../src/platform.ts";
+import { noPlatformFile } from "./helpers.ts";
 
 async function state<T>(body: (root: string) => Promise<T>) {
 	const root = await mkdtemp(join(tmpdir(), "owner-dashboard-"));
@@ -610,6 +612,7 @@ test("READY precedes the first tick; tick start and failed status writes still f
 		let ticks = 0;
 		const log: string[] = [];
 		await serveLoop({
+			platform: EXE_DEV_PLATFORM,
 			stateDir: root,
 			orchestrator: {
 				pollIntervalMs: 1,
@@ -666,6 +669,7 @@ test("watchdog child settlement stays off the tick path, with at most one in fli
 		});
 
 		const loop = serveLoop({
+			platform: EXE_DEV_PLATFORM,
 			stateDir: tickState,
 			signal: stop.signal,
 			orchestrator: {
@@ -729,6 +733,7 @@ test("missing systemd-notify is logged once while ticks continue", async () => {
 		let attempts = 0;
 		const logs: string[] = [];
 		await serveLoop({
+			platform: EXE_DEV_PLATFORM,
 			stateDir: root,
 			signal: signal.signal,
 			orchestrator: {
@@ -846,6 +851,7 @@ test("metric collection is private and independent of tick and watchdog, with no
 		const stop = new AbortController();
 		const sent: string[] = [];
 		await serveLoop({
+			platform: EXE_DEV_PLATFORM,
 			stateDir: root,
 			orchestrator: {
 				tick: async () => {
@@ -946,6 +952,7 @@ process.stdout.write(JSON.stringify(responses[path]));
 		);
 
 		const io = {
+			readPlatformFile: noPlatformFile,
 			env: () => undefined,
 			stdout: assert.fail,
 			stderr: assert.fail,
@@ -976,7 +983,8 @@ process.stdout.write(JSON.stringify(responses[path]));
 
 		const snapshots = startMetricSnapshots({
 			stateDir: root,
-			collect: () => collectOwnerMetrics(root, repo, io, new Map()),
+			collect: () =>
+				collectOwnerMetrics(root, repo, io, new Map(), EXE_DEV_PLATFORM),
 			log: (event, fields) => logs.push(`${event}:${fields.reason}`),
 		});
 
@@ -1056,6 +1064,7 @@ test("metric refreshes query defects once and cache merged interventions by PR a
 		const cache = new Map<string, InterventionRead>();
 
 		const io = {
+			readPlatformFile: noPlatformFile,
 			env: () => undefined,
 			stdout: assert.fail,
 			stderr: assert.fail,
@@ -1100,7 +1109,15 @@ test("metric refreshes query defects once and cache merged interventions by PR a
 
 		const refresh = async (expectedReviewQueries: number) => {
 			calls.length = 0;
-			const snapshot = await collectOwnerMetrics(root, repo, io, cache);
+
+			const snapshot = await collectOwnerMetrics(
+				root,
+				repo,
+				io,
+				cache,
+				EXE_DEV_PLATFORM,
+			);
+
 			assert.ok(snapshot !== null);
 			assert.equal(
 				calls.filter((args) =>
@@ -1155,6 +1172,7 @@ test("metric collection stops remote reads at the 120 second deadline", async (c
 				root,
 				repo,
 				{
+					readPlatformFile: noPlatformFile,
 					env: () => undefined,
 					stdout: assert.fail,
 					stderr: assert.fail,
@@ -1177,6 +1195,7 @@ test("metric collection stops remote reads at the 120 second deadline", async (c
 					},
 				},
 				new Map(),
+				EXE_DEV_PLATFORM,
 			),
 			/metric_deadline/,
 		);
@@ -1189,7 +1208,10 @@ test("status writes use cached tokens without recomputing local accounting", asy
 	await state(async (root) => {
 		const usage = { kind: "exact", unit: "tokens", total: 123456 };
 
-		assert.equal(await writeStatus(root, report, usage), true);
+		assert.equal(
+			await writeStatus(root, report, EXE_DEV_PLATFORM, usage),
+			true,
+		);
 
 		const stored = JSON.parse(
 			await readFile(join(root, "status.json"), "utf8"),
@@ -1217,7 +1239,7 @@ test("durable usage refreshes at startup and every five minutes on its own timer
 			});
 			await rm(join(root, "claims"), { recursive: true });
 			context.mock.timers.tick(299_999);
-			await writeStatus(root, report, usage.current());
+			await writeStatus(root, report, EXE_DEV_PLATFORM, usage.current());
 			assert.equal(
 				JSON.parse(await readFile(join(root, "status.json"), "utf8"))
 					.durableUsage.total,
@@ -1251,6 +1273,7 @@ test("local durable tokens and workflow thresholds survive absent, failed and st
 			await writeStatus(
 				root,
 				{ ...report, attentionThresholds: thresholds },
+				EXE_DEV_PLATFORM,
 				usage.current(),
 			),
 			true,
@@ -1403,6 +1426,7 @@ test("score publication starts after status and WATCHDOG and cannot widen the ma
 			});
 
 			await serveLoop({
+				platform: EXE_DEV_PLATFORM,
 				stateDir: dir,
 				orchestrator: {
 					pollIntervalMs: 30000,
@@ -1487,6 +1511,7 @@ test("a real orchestrator tick measures hung GitHub calls to their timeouts on a
 		};
 
 		const orchestrator = new Orchestrator({
+			platform: EXE_DEV_PLATFORM,
 			repo,
 			scope: null,
 			clock: { now: () => now + elapsed },
@@ -1510,6 +1535,7 @@ test("a real orchestrator tick measures hung GitHub calls to their timeouts on a
 		const pings: number[] = [];
 		let iterations = 0;
 		await serveLoop({
+			platform: EXE_DEV_PLATFORM,
 			stateDir: root,
 			orchestrator,
 			signal: signal.signal,

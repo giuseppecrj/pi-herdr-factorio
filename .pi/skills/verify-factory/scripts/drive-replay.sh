@@ -283,11 +283,14 @@ import { mkdir } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { sandboxExecutor } from './server/sandbox.ts';
+import { readPlatformFile, resolvePlatform } from './src/platform.ts';
+const platform = await resolvePlatform({env: name => process.env[name], readFile: () => readPlatformFile()});
+if (!platform.ok) throw Error(`platform_invalid reason=${platform.reason}`);
 const run = promisify(execFile);
 const [stateDir, root] = process.argv.slice(2);
 await mkdir(stateDir, {recursive:true, mode:0o700});
 const exec = async (cmd, args) => { try { const r = await run(cmd, args); return {code:0, ...r}; } catch (e) { return {code:1, stdout:e.stdout ?? '', stderr:e.stderr ?? ''}; } };
-const executor = sandboxExecutor({stateDir, root, exec, log: (event, data) => console.log(event, JSON.stringify(data))});
+const executor = sandboxExecutor({stateDir, root, exec, platform: platform.profile, log: (event, data) => console.log(event, JSON.stringify(data))});
 if (!(await executor.preflight())) throw Error('replay_preflight_failed');
 NODE
     production_free
@@ -295,14 +298,17 @@ NODE
     node --input-type=module - "$budget" "$lane/state" "$record" "$expected" "$trusted" "$bootstrap" "$issue" <<'NODE'
 import { execFileSync } from 'node:child_process';
 import { writeFile } from 'node:fs/promises';
-import { parseWorkflow, isRepoSlug } from './src/workflow.ts';
+import { parseWorkflow } from './src/workflow.ts';
+import { readPlatformFile, resolvePlatform, soleRepository } from './src/platform.ts';
 import { loadReplayCorpus, reserveReplay, replayStageCaps, REPLAY_CORPUS } from './src/replay.ts';
 const [path, key, record, headSha, controlSha, bootstrap, issue] = process.argv.slice(2);
 const mainSha = process.env.REPLAY_MAIN_SHA;
-const repo = 'giuseppecrj/pi-herdr-factorio';
-if (!isRepoSlug(repo)) throw Error('repository');
+const platform = await resolvePlatform({env: name => process.env[name], readFile: () => readPlatformFile()});
+if (!platform.ok) throw Error(`platform_invalid reason=${platform.reason}`);
+const repo = soleRepository(platform.profile);
+if (repo === null) throw Error('replay_repository_ambiguous');
 const text = execFileSync('git', ['show', `${mainSha}:.github/factory/WORKFLOW.md`], {encoding:'utf8'});
-const parsed = parseWorkflow({text, repo, env:name => process.env[name]});
+const parsed = parseWorkflow({text, repo, env:name => process.env[name], platform: platform.profile});
 if (parsed.kind !== 'valid' || parsed.config.replay == null) throw Error('replay_disabled');
 const corpus = await loadReplayCorpus(REPLAY_CORPUS);
 const c = corpus.cases.find(c => c.id === process.env.REPLAY_CASE);
@@ -310,7 +316,7 @@ if (!c) throw Error('replay_case_unknown');
 const exec = async (cmd, args) => ({code:0, stdout:execFileSync(cmd, args, {encoding:'utf8'}), stderr:''});
 const stageCaps = await replayStageCaps(headSha, exec);
 await writeFile(record, `${JSON.stringify({v:1, caseId:c.id, corpusDigest:corpus.digest, issueDigest:c.issueDigest, side:process.env.REPLAY_SIDE === 'previous' ? 'prev' : 'cand', issue:Number(issue), headSha, mainSha, terminalMainSha:null, runId:null, stageCaps, controlSha, bootstrap:bootstrap === 'true', grant:process.env.FIXTURE_GRANT, status:'prepared'}, null, 2)}\n`, {mode:0o600, flag:'wx'});
-await reserveReplay(path, parsed.config.replay.maxTokens, key);
+await reserveReplay(path, parsed.config.replay.maxTokens, key, platform.profile);
 NODE
     chmod 700 "$lane/state"
     serve_umask="$(systemctl show factory.service --property=UMask --value 2>/dev/null)" || serve_umask=0022

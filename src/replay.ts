@@ -9,7 +9,8 @@ import { manifestDigest } from "../server/sandbox/manifest.ts";
 import { join } from "node:path";
 import { digestOf } from "./run.ts";
 import { parseLedger, type LedgerRow } from "./ledger.ts";
-import { isGitSha, isRepoSlug, parseWorkflow, type Exec } from "./workflow.ts";
+import { type PlatformProfile, soleRepository } from "./platform.ts";
+import { isGitSha, parseWorkflow, type Exec } from "./workflow.ts";
 import { execFileSync } from "node:child_process";
 import {
 	arrayOf,
@@ -785,6 +786,7 @@ export async function reserveReplay(
 	path: string,
 	maxTokens: number,
 	key: string,
+	platform: PlatformProfile,
 	policySource?: ReplayPolicySource,
 ): Promise<void> {
 	const budget = await readReplayBudget(path);
@@ -794,16 +796,19 @@ export async function reserveReplay(
 		refuse(decision.reasons[0] ?? "replay_policy_changed");
 
 	if (decision.pendingPolicyChange !== null) {
-		const source = policySource ?? replayPolicySource();
-		const repo = "giuseppecrj/pi-herdr-factorio";
+		const repo = soleRepository(platform);
 
-		if (!isGitSha(source.mainSha) || !isRepoSlug(repo))
-			refuse("replay_policy_changed");
+		if (repo === null) refuse("replay_repository_ambiguous");
+
+		const source = policySource ?? replayPolicySource();
+
+		if (!isGitSha(source.mainSha)) refuse("replay_policy_changed");
 
 		const policy = parseWorkflow({
 			text: source.workflowText,
 			repo,
 			env: (name) => process.env[name],
+			platform,
 		});
 
 		if (

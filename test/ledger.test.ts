@@ -53,6 +53,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after } from "node:test";
+import { EXE_DEV_PLATFORM } from "../src/platform.ts";
 
 type V1Input = Omit<LedgerRowV1, "gaps">;
 
@@ -222,6 +223,7 @@ const quietApi = (fake: LedgerGit) =>
 	new GitHubPublicationApi(
 		fake.exec,
 		repo,
+		EXE_DEV_PLATFORM,
 		{},
 		async () => true,
 		async () => {},
@@ -1798,6 +1800,7 @@ describe("ledger outbox pump", () => {
 		const timeouts: (number | undefined)[] = [];
 
 		const result = await pumpLedgerOutbox({
+			platform: EXE_DEV_PLATFORM,
 			stateDir: dir,
 			repo,
 			now: 0,
@@ -1837,6 +1840,7 @@ describe("ledger outbox pump", () => {
 		let calls = 0;
 
 		const failed = await pumpLedgerOutbox({
+			platform: EXE_DEV_PLATFORM,
 			stateDir: dir,
 			repo,
 			now: 0,
@@ -1852,6 +1856,7 @@ describe("ledger outbox pump", () => {
 		assert.equal(calls, 1);
 		assert.equal(failed?.lastError, "transport_unavailable");
 		await pumpLedgerOutbox({
+			platform: EXE_DEV_PLATFORM,
 			stateDir: dir,
 			repo,
 			now: 1_000,

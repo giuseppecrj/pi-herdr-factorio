@@ -39,6 +39,8 @@ import {
 	renamedEvent,
 	TRUSTED_WORKFLOW,
 } from "./fake-ticket-adapter.ts";
+import { EXE_DEV_PLATFORM } from "../src/platform.ts";
+import { controllerEnv, noPlatformFile } from "./helpers.ts";
 
 function slug(text: string): RepoSlug {
 	if (!isRepoSlug(text)) throw new Error(`bad slug ${text}`);
@@ -76,6 +78,7 @@ async function admit(
 	paging = { pageSize: 100, maxPages: 10 },
 ): Promise<AdmissionReceipt> {
 	return admitTicket({
+		platform: EXE_DEV_PLATFORM,
 		exec: github.exec,
 		env: () => "/home/exedev",
 		repo,
@@ -560,6 +563,7 @@ describe("admission kill switches", () => {
 		const github = new FakeGitHub();
 
 		const receipt = await admitTicket({
+			platform: EXE_DEV_PLATFORM,
 			exec: github.exec,
 			env: () => undefined,
 			repo: slug("someone/else"),
@@ -1270,8 +1274,9 @@ async function cli(argv: string[], github: FakeGitHub) {
 	let stderr = "";
 
 	const code = await runCli(argv, {
+		readPlatformFile: noPlatformFile,
 		exec: github.exec,
-		env: () => "/home/exedev",
+		env: controllerEnv(() => "/home/exedev"),
 		stdout: (text) => {
 			stdout += text;
 		},
@@ -1498,6 +1503,7 @@ describe("F04c admission carry-overs", () => {
 		github.add(labeledBy("giuseppecrj"));
 
 		const workflow = await loadWorkflow({
+			platform: EXE_DEV_PLATFORM,
 			exec: github.exec,
 			repo,
 			ref: "main",
@@ -1507,6 +1513,7 @@ describe("F04c admission carry-overs", () => {
 		github.calls.length = 0;
 
 		const receipt = await admitTicket({
+			platform: EXE_DEV_PLATFORM,
 			exec: github.exec,
 			env: () => "/home/exedev",
 			repo,

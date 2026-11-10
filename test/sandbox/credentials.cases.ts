@@ -24,6 +24,7 @@ import {
 	type RouteTable,
 } from "../../server/sandbox/routes.ts";
 import { modelTable } from "./routes.cases.ts";
+import { EXE_DEV_PLATFORM } from "../../src/platform.ts";
 
 export const ECHO_SECRET = "fixture-secret-7Hq2-not-real";
 
@@ -99,7 +100,7 @@ function tableWith(routes: readonly Route[]): RouteTable {
 }
 
 function ceilings(text: string = LINEAR_CEILING): Ceilings {
-	const parsed = parseCeilings(text, "test");
+	const parsed = parseCeilings(text, "test", EXE_DEV_PLATFORM);
 
 	assert.ok(parsed.ok);
 
@@ -111,13 +112,20 @@ describe("credential ceilings", () => {
 		const parsed = ceilings();
 
 		assert.deepEqual([...parsed.keys()], ["echo-read"]);
-		assert.equal(parseCeilings("{}", "production").ok, true);
-		assert.equal(parseCeilings("not json", "production").ok, false);
-		assert.equal(parseCeilings(LINEAR_CEILING, "production").ok, false);
+		assert.equal(parseCeilings("{}", "production", EXE_DEV_PLATFORM).ok, true);
+		assert.equal(
+			parseCeilings("not json", "production", EXE_DEV_PLATFORM).ok,
+			false,
+		);
+		assert.equal(
+			parseCeilings(LINEAR_CEILING, "production", EXE_DEV_PLATFORM).ok,
+			false,
+		);
 		assert.equal(
 			parseCeilings(
 				LINEAR_CEILING.replace('"methods"', '"extra":1,"methods"'),
 				"test",
+				EXE_DEV_PLATFORM,
 			).ok,
 			false,
 		);
@@ -151,7 +159,11 @@ describe("credential ceilings", () => {
 				JSON.stringify({ kind: "header", name, scheme: null }),
 			);
 
-			assert.equal(parseCeilings(text, "test").ok, false, name);
+			assert.equal(
+				parseCeilings(text, "test", EXE_DEV_PLATFORM).ok,
+				false,
+				name,
+			);
 		}
 
 		assert.equal(
@@ -161,6 +173,7 @@ describe("credential ceilings", () => {
 					'{"kind":"header","name":"X-Api-Key","scheme":null}',
 				),
 				"test",
+				EXE_DEV_PLATFORM,
 			).ok,
 			true,
 		);
@@ -182,7 +195,11 @@ describe("credential ceilings", () => {
 				JSON.stringify({ kind: "header", name, scheme: null }),
 			);
 
-			assert.equal(parseCeilings(text, "test").ok, false, name);
+			assert.equal(
+				parseCeilings(text, "test", EXE_DEV_PLATFORM).ok,
+				false,
+				name,
+			);
 		}
 	});
 
@@ -196,6 +213,7 @@ describe("credential ceilings", () => {
 				'{"kind":"header","name":"X-Api-Key","scheme":null}',
 			),
 			"test",
+			EXE_DEV_PLATFORM,
 		);
 
 		assert.ok(parsed.ok);
@@ -226,7 +244,11 @@ describe("credential ceilings", () => {
 			"10.0.0.1",
 		]) {
 			assert.equal(
-				parseCeilings(LINEAR_CEILING.replace("echo.test", host), "test").ok,
+				parseCeilings(
+					LINEAR_CEILING.replace("echo.test", host),
+					"test",
+					EXE_DEV_PLATFORM,
+				).ok,
 				false,
 				host,
 			);

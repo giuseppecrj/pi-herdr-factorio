@@ -1156,6 +1156,7 @@ export function parseOwnedPullRequest(
 		readonly repo: RepoSlug;
 		readonly branch: string;
 		readonly runId: Digest;
+		readonly controllerLogin: string;
 		readonly knownNumber?: number;
 	},
 ): OwnedPullRequest | null {
@@ -1176,7 +1177,7 @@ export function parseOwnedPullRequest(
 		number < 1 ||
 		head === null ||
 		!isGitSha(head) ||
-		author !== "exe-dev-github-integration[bot]" ||
+		author !== input.controllerLogin ||
 		authorType !== "Bot" ||
 		body === null ||
 		(input.knownNumber === undefined

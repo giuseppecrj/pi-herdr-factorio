@@ -56,12 +56,33 @@ import {
 } from "../src/validation.ts";
 import type { PatchReceipt } from "../src/build.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
+import { EXE_DEV_PLATFORM, type PlatformFile } from "../src/platform.ts";
 import {
 	fakeIssue,
 	MAIN_SHA,
 	TRUSTED_RUN_CAP,
 	TRUSTED_WORKFLOW,
 } from "./fake-ticket-adapter.ts";
+
+/** A CLI test reads no host selection file, so only its own env can select a platform. */
+export async function noPlatformFile(): Promise<PlatformFile> {
+	return { kind: "absent" };
+}
+
+/**
+ * A controller CLI env that answers `lookup` for every name, except an unset
+ * `FACTORY_PLATFORM` and the exe-dev `GH_HOST` the controller checks.
+ */
+export function controllerEnv(
+	lookup: (name: string) => string | undefined,
+): (name: string) => string | undefined {
+	return (name) =>
+		name === "FACTORY_PLATFORM"
+			? undefined
+			: name === "GH_HOST"
+				? EXE_DEV_PLATFORM.ghHost
+				: lookup(name);
+}
 
 // Only use in serial test callbacks: the umask belongs to the whole process.
 export async function withUmask<T>(
@@ -617,6 +638,7 @@ export async function preparedReviewFixture(
 	const cleanupRequests: { command: string; args: readonly string[] }[] = [];
 
 	const config = {
+		platform: EXE_DEV_PLATFORM,
 		stateDir: state,
 		exec: async (command: string, args: readonly string[]) => {
 			cleanupRequests.push({ command, args });

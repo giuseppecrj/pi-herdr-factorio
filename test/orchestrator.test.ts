@@ -179,6 +179,8 @@ import {
 	TRUSTED_RUN_CAP,
 	TRUSTED_WORKFLOW,
 } from "./fake-ticket-adapter.ts";
+import { EXE_DEV_PLATFORM } from "../src/platform.ts";
+import { controllerEnv, noPlatformFile } from "./helpers.ts";
 
 function slug(text: string): RepoSlug {
 	if (!isRepoSlug(text)) throw new Error(`bad slug ${text}`);
@@ -992,6 +994,7 @@ function world(scope: readonly number[] | null = null, ledger?: LedgerOutbox) {
 
 	const start = () =>
 		new Orchestrator({
+			platform: EXE_DEV_PLATFORM,
 			exec: (command, args) => (wire.intercept ?? github.exec)(command, args),
 			env: () => "/home/exedev",
 			repo,
@@ -1623,6 +1626,7 @@ describe("Orchestrator restart recovery", () => {
 
 		try {
 			await serveLoop({
+				platform: EXE_DEV_PLATFORM,
 				orchestrator: start(),
 				stateDir,
 				signal: stop.signal,
@@ -2124,6 +2128,7 @@ async function replayAcceptStop(
 	stdin.on("end", () => exit(0));
 
 	const host: StageHost = {
+		platform: EXE_DEV_PLATFORM,
 		now: interrupted ? () => wallMs : Date.now,
 		cleanupReserveMs: 100,
 		assetsDigest: "a".repeat(64),
@@ -3913,10 +3918,16 @@ describe("checkIdentity", () => {
 		const { github } = world();
 		const adapter = new GitHubTicketAdapter({ exec: github.exec, repo });
 
-		assert.deepEqual(await checkIdentity(adapter), { kind: "ok" });
+		assert.deepEqual(
+			await checkIdentity(adapter, EXE_DEV_PLATFORM.controllerLogin),
+			{ kind: "ok" },
+		);
 
 		github.viewer = "giuseppecrj";
-		assert.deepEqual(await checkIdentity(adapter), { kind: "mismatch" });
+		assert.deepEqual(
+			await checkIdentity(adapter, EXE_DEV_PLATFORM.controllerLogin),
+			{ kind: "mismatch" },
+		);
 	});
 });
 
@@ -3978,8 +3989,9 @@ async function cli(
 	let stderr = "";
 
 	const code = await runCli(argv, {
+		readPlatformFile: noPlatformFile,
 		exec: github.exec,
-		env: () => "/home/exedev",
+		env: controllerEnv(() => "/home/exedev"),
 		stdout: (text) => {
 			stdout += text;
 		},
@@ -5049,6 +5061,7 @@ describe("Orchestrator runs of another state directory", () => {
 			const files = memoryFiles();
 
 			const admitted = await admitTicket({
+				platform: EXE_DEV_PLATFORM,
 				exec: f.github.exec,
 				env: () => "/home/exedev",
 				repo,
@@ -5080,6 +5093,7 @@ describe("Orchestrator runs of another state directory", () => {
 			const logs: { event: string; fields: LogFields }[] = [];
 
 			const other = new Orchestrator({
+				platform: EXE_DEV_PLATFORM,
 				exec: f.github.exec,
 				env: () => "/home/exedev",
 				repo,
@@ -5198,6 +5212,7 @@ describe("Orchestrator runs of another state directory", () => {
 		const logs: { event: string; fields: LogFields }[] = [];
 
 		const other = new Orchestrator({
+			platform: EXE_DEV_PLATFORM,
 			exec: f.github.exec,
 			env: () => "/home/exedev",
 			repo,
@@ -5365,6 +5380,7 @@ describe("admission accounting policy", () => {
 		let fetched = 0;
 
 		const files = fileRunFiles(dir, {
+			platform: EXE_DEV_PLATFORM,
 			fetch: async (requestedRepo, requestedSha) => {
 				assert.equal(requestedRepo, repo);
 				assert.equal(requestedSha, MAIN_SHA);
@@ -5466,6 +5482,7 @@ describe("admission accounting policy", () => {
 		);
 
 		const restarted = fileRunFiles(dir, {
+			platform: EXE_DEV_PLATFORM,
 			fetch: async () => {
 				throw new Error("must not fetch");
 			},
@@ -5503,7 +5520,12 @@ describe("admission accounting policy", () => {
 		);
 		symlinkSync("ci.sh", join(tree, "gates", "omitted-link"));
 		const partial = execFileSync("tar", ["-czf", "-", "-C", archive, "repo"]);
-		const refused = fileRunFiles(stateDir(), { fetch: async () => partial });
+
+		const refused = fileRunFiles(stateDir(), {
+			platform: EXE_DEV_PLATFORM,
+			fetch: async () => partial,
+		});
+
 		assert.equal(await refused.prepareRun?.(input), false);
 		assert.equal(await refused.accounting?.start(input.runId), null);
 	});
@@ -5525,7 +5547,12 @@ describe("admission accounting policy", () => {
 			if (workflow !== null) writeFileSync(join(tree, "WORKFLOW.md"), workflow);
 
 			const bytes = execFileSync("tar", ["-czf", "-", "-C", archive, "repo"]);
-			const files = fileRunFiles(dir, { fetch: async () => bytes });
+
+			const files = fileRunFiles(dir, {
+				platform: EXE_DEV_PLATFORM,
+				fetch: async () => bytes,
+			});
+
 			assert.equal(
 				await files.prepareRun?.({
 					runId: runOf(14),
@@ -5551,7 +5578,11 @@ describe("admission accounting policy", () => {
 		const wanted = { repo, issues: [14], tokenCap: 12_000 };
 		const manifest = await pinVerification(dir, wanted);
 		assert.ok(manifest.kind === "pinned");
-		const files = fileRunFiles(dir, { fetch: async () => bytes });
+
+		const files = fileRunFiles(dir, {
+			platform: EXE_DEV_PLATFORM,
+			fetch: async () => bytes,
+		});
 
 		const input = {
 			runId: runOf(14),
@@ -7911,7 +7942,7 @@ describe("Orchestrator before the first workflow load", () => {
 		const dir = mkdtempSync(join(tmpdir(), "threshold-status-"));
 
 		try {
-			assert.equal(await writeStatus(dir, invalid), true);
+			assert.equal(await writeStatus(dir, invalid, EXE_DEV_PLATFORM), true);
 			assert.deepEqual(
 				JSON.parse(readFileSync(join(dir, "status.json"), "utf8"))
 					.attentionThresholds,
@@ -8280,6 +8311,7 @@ describe("Orchestrator retry workspace preparation", () => {
 		const files = fileRunFiles(state);
 
 		const controller = new Orchestrator({
+			platform: EXE_DEV_PLATFORM,
 			exec: github.exec,
 			env: () => "/home/exedev",
 			repo,
@@ -10121,6 +10153,7 @@ describe("Orchestrator refusal classification", () => {
 			degrade(ctx, issue);
 
 			const proof = await admitTicket({
+				platform: EXE_DEV_PLATFORM,
 				exec: (command, args) => (wire.intercept ?? github.exec)(command, args),
 				env: () => "/home/exedev",
 				repo,
@@ -10483,6 +10516,7 @@ describe("private build stage", () => {
 				ready = reuse;
 
 			const diskExecutor = sandboxExecutor({
+				platform: EXE_DEV_PLATFORM,
 				stateDir: state,
 				root,
 				xdgRuntimeDir: "/run/user/1000",
@@ -11279,6 +11313,7 @@ describe("controller-only validate", () => {
 					symlinkSync(join(root, "absent"), join(root, "review-base"));
 
 				const native = sandboxExecutor({
+					platform: EXE_DEV_PLATFORM,
 					stateDir: root,
 					exec: f.github.exec,
 					log: () => {},
@@ -11425,6 +11460,7 @@ describe("controller-only validate", () => {
 			assert.equal(f.files.claims.get(runOf(14))?.usage, 39);
 			const stop = new AbortController();
 			await serveLoop({
+				platform: EXE_DEV_PLATFORM,
 				orchestrator: active,
 				stateDir: stateDir(),
 				signal: stop.signal,
@@ -11771,7 +11807,11 @@ describe("controller-only validate", () => {
 				return f.github.exec(command, args);
 			};
 
-			let port = controllerCandidatePort({ stateDir: root, exec });
+			let port = controllerCandidatePort({
+				platform: EXE_DEV_PLATFORM,
+				stateDir: root,
+				exec,
+			});
 
 			if (window === "comment") {
 				const opened = await port.execute(book, opening);
@@ -11822,7 +11862,11 @@ describe("controller-only validate", () => {
 			assert.equal(existsSync(intent), false);
 			enabled = true;
 			disableAt = 0;
-			port = controllerCandidatePort({ stateDir: root, exec });
+			port = controllerCandidatePort({
+				platform: EXE_DEV_PLATFORM,
+				stateDir: root,
+				exec,
+			});
 			const completed = await port.execute(book, request);
 			assert.equal(
 				completed?.kind,
@@ -11843,6 +11887,7 @@ describe("controller-only validate", () => {
 		const root = stateDir();
 
 		const native = controllerCandidatePort({
+			platform: EXE_DEV_PLATFORM,
 			stateDir: root,
 			exec: f.github.exec,
 		});
@@ -12214,6 +12259,7 @@ describe("controller-only validate", () => {
 			);
 
 			const native = controllerCandidatePort({
+				platform: EXE_DEV_PLATFORM,
 				stateDir: root,
 				exec: async (command, args) => {
 					if (
@@ -12314,6 +12360,7 @@ describe("controller-only validate", () => {
 		let patchReads = 0;
 
 		const ownerPort = controllerCandidatePort({
+			platform: EXE_DEV_PLATFORM,
 			stateDir: root,
 			exec: f.github.exec,
 		});
@@ -12774,6 +12821,7 @@ describe("controller-only validate", () => {
 		const state = stateDir();
 
 		port.observeMissing = controllerCandidatePort({
+			platform: EXE_DEV_PLATFORM,
 			stateDir: state,
 			exec: async (command, args) => {
 				observed++;
@@ -13038,6 +13086,7 @@ describe("controller-only validate", () => {
 		const mergedAt = "2026-10-29T02:01:00Z";
 
 		const port = controllerCandidatePort({
+			platform: EXE_DEV_PLATFORM,
 			stateDir: dir,
 			exec: async (command, args) => {
 				assert.equal(command, "gh");
@@ -13168,6 +13217,7 @@ describe("controller-only validate", () => {
 			assert.ok(policy);
 
 			const port = controllerCandidatePort({
+				platform: EXE_DEV_PLATFORM,
 				stateDir: dir,
 				exec: async () => ({
 					code: 0,
@@ -13908,6 +13958,7 @@ describe("controller-only validate", () => {
 					const obs = await observe(state, now);
 
 					const feedback = await observeFeedback({
+						controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
 						stateDir: dir,
 						adapter: new GitHubTicketAdapter({ exec: f.github.exec, repo }),
 						runId: state.pin.runId,
@@ -14037,6 +14088,7 @@ describe("controller-only validate", () => {
 			const obs = await observe(state, now);
 
 			const feedback = await observeFeedback({
+				controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
 				stateDir: dir,
 				adapter: new GitHubTicketAdapter({ exec: f.github.exec, repo }),
 				runId: state.pin.runId,
@@ -14137,7 +14189,7 @@ describe("controller-only validate", () => {
 		const claim = f.files.claims.get(runOf(14));
 		assert.ok(claim);
 		assert.equal(await fileRunFiles(dir).writeClaim(claim), true);
-		assert.equal(await writeStatus(dir, first), true);
+		assert.equal(await writeStatus(dir, first, EXE_DEV_PLATFORM), true);
 
 		const attention = await readAttention({
 			stateDir: dir,
@@ -14534,7 +14586,10 @@ describe("controller-only validate", () => {
 
 		assert.equal(jobs?.[0]?.row?.row.outcome.kind, "landed");
 		const remote = new LedgerGit();
-		const api = ledgerApiOf(new GitHubPublicationApi(remote.exec, repo));
+
+		const api = ledgerApiOf(
+			new GitHubPublicationApi(remote.exec, repo, EXE_DEV_PLATFORM),
+		);
 
 		assert.equal((await pumpLedger(outbox, api, f.clock.now())).published, 1);
 		f.github.pulls.set(99, { merged_at: "2026-10-29T01:00:00Z" });
@@ -14555,7 +14610,11 @@ describe("controller-only validate", () => {
 				? remote.exec(command, args)
 				: f.github.exec(command, args);
 
-		port.sweep = controllerCandidatePort({ stateDir: dir, exec }).sweep;
+		port.sweep = controllerCandidatePort({
+			platform: EXE_DEV_PLATFORM,
+			stateDir: dir,
+			exec,
+		}).sweep;
 		const launches = f.executor.launches.length;
 
 		await f.controller.tick();
@@ -14831,6 +14890,7 @@ describe("controller-only validate", () => {
 		const state = stateDir();
 
 		const disk = sandboxExecutor({
+			platform: EXE_DEV_PLATFORM,
 			stateDir: state,
 			exec: async () => ({ code: 0, stdout: "", stderr: "" }),
 			log: () => {},
@@ -15572,6 +15632,7 @@ describe("controller-only validate", () => {
 			const state = stateDir();
 
 			const disk = sandboxExecutor({
+				platform: EXE_DEV_PLATFORM,
 				stateDir: state,
 				exec: async () => ({ code: 0, stdout: "", stderr: "" }),
 				log: () => {},
@@ -17654,7 +17715,7 @@ describe("specify: linked runs and answers", () => {
 			for (let n = 0; n < 3; n++) {
 				ctx.clock.t += 60_000;
 				const report = await once(ctx.controller);
-				assert.equal(await writeStatus(state, report), true);
+				assert.equal(await writeStatus(state, report, EXE_DEV_PLATFORM), true);
 
 				const status = await cli(
 					["status", "--json", "--repo", repo, "--state-dir", state],
@@ -18111,6 +18172,7 @@ describe("ledger outbox enrollment", () => {
 			new GitHubPublicationApi(
 				fake.exec,
 				ledgerRepo,
+				EXE_DEV_PLATFORM,
 				{},
 				async () => true,
 				async () => {},
@@ -18123,7 +18185,7 @@ describe("ledger outbox enrollment", () => {
 		assert.ok(tree !== undefined && isGitSha(tree));
 
 		const file = await readLedgerFile(
-			new GitHubPublicationApi(fake.exec, ledgerRepo),
+			new GitHubPublicationApi(fake.exec, ledgerRepo, EXE_DEV_PLATFORM),
 			tree,
 		);
 
@@ -18594,6 +18656,7 @@ describe("ledger outbox enrollment", () => {
 		let ticks = 0;
 
 		await serveLoop({
+			platform: EXE_DEV_PLATFORM,
 			orchestrator: ctx.start(),
 			stateDir: stateDir(),
 			signal: stop.signal,

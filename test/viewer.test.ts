@@ -49,6 +49,8 @@ import { runIdOf, digestOf } from "../src/run.ts";
 import { formatMarker, parseMarker, type Marker } from "../src/markers.ts";
 import { isRepoSlug, isGitSha, parseWorkflow } from "../src/workflow.ts";
 import fixture from "./fixtures/viewer/sessions.json" with { type: "json" };
+import { EXE_DEV_PLATFORM } from "../src/platform.ts";
+import { noPlatformFile } from "./helpers.ts";
 
 const runId = runIdOf({
 	repo: "giuseppecrj/pi-herdr-factorio",
@@ -1383,6 +1385,7 @@ test("viewer CLI errors never call gh or a model", async () => {
 		["viewer", "--state-dir", "/tmp", "--run", "../../etc/passwd"],
 	]) {
 		const code = await runCli(argv, {
+			readPlatformFile: noPlatformFile,
 			exec: async () => {
 				throw new Error("unexpected command");
 			},
@@ -1563,6 +1566,7 @@ test("invalid allowed-host is a usage error, exit 2", async () => {
 	for (const host of ["evil.com", "Box.Tail.ts.net", "box.tail.ts.net:443"]) {
 		assert.equal(
 			await runCli(["viewer", "--state-dir", "/tmp", "--allowed-host", host], {
+				readPlatformFile: noPlatformFile,
 				exec: async () => {
 					throw new Error("unexpected command");
 				},
@@ -1586,6 +1590,7 @@ test("invalid base-path is a usage error, exit 2", async () => {
 	]) {
 		assert.equal(
 			await runCli(["viewer", "--state-dir", "/tmp", "--base-path", base], {
+				readPlatformFile: noPlatformFile,
 				exec: async () => {
 					throw new Error("unexpected command");
 				},
@@ -1898,6 +1903,7 @@ test("receipt recovery only reads the designated output file", async () => {
 		assert.ok(isRepoSlug(repo));
 
 		const parsed = parseWorkflow({
+			platform: EXE_DEV_PLATFORM,
 			text: `---\nrepository: ${repo}\n---\n`,
 			repo,
 			env: (name) => (name === "HOME" ? "/home/factory" : undefined),

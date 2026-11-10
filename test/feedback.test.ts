@@ -36,6 +36,7 @@ import {
 	BOT_LOGIN,
 	httpError,
 } from "./fake-ticket-adapter.ts";
+import { EXE_DEV_PLATFORM } from "../src/platform.ts";
 
 const repo = FAKE_REPO;
 
@@ -76,6 +77,7 @@ const classify = (
 	permission: "write" | "read" | "failed" = "write",
 ) =>
 	classifyFeedback({
+		controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
 		runId,
 		pr: 5,
 		head,
@@ -555,6 +557,7 @@ test("C9 a review edit after an uncertain proposal POST reuses the original inte
 
 	try {
 		const input = {
+			platform: EXE_DEV_PLATFORM,
 			stateDir: root,
 			repo,
 			exec: github.exec,
@@ -595,6 +598,7 @@ test("head binding defers without reading any feedback source or permission", as
 		] as const) {
 			assert.deepEqual(
 				await observeFeedback({
+					controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
 					stateDir: root,
 					adapter,
 					runId,
@@ -638,6 +642,7 @@ test("overflow holds read only known-review dismissals, never classify the overf
 
 	try {
 		const input = {
+			controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
 			stateDir: root,
 			adapter: new GitHubTicketAdapter({ exec: github.exec, repo }),
 			runId,
@@ -688,6 +693,7 @@ test("feedback failures retain their source and failure kind without moving the 
 			github.failures.set(`repos/${repo}/${path}`, httpError(503));
 			assert.deepEqual(
 				await observeFeedback({
+					controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
 					stateDir: root,
 					adapter: new GitHubTicketAdapter({ exec: github.exec, repo }),
 					runId,
@@ -706,6 +712,7 @@ test("feedback failures retain their source and failure kind without moving the 
 		github.reviewComments.set("5/1", [{ invalid: true }]);
 		assert.deepEqual(
 			await observeFeedback({
+				controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
 				stateDir: root,
 				adapter: new GitHubTicketAdapter({ exec: github.exec, repo }),
 				runId,
@@ -743,6 +750,7 @@ test("feedback storage errors and unexpected exceptions stay observable without 
 	const adapter = new GitHubTicketAdapter({ exec: github.exec, repo });
 
 	const input = {
+		controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
 		stateDir: root,
 		adapter,
 		runId,
@@ -783,6 +791,7 @@ test("feedback transport failures are unavailable without files or cursor", asyn
 	try {
 		assert.deepEqual(
 			await observeFeedback({
+				controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
 				stateDir: root,
 				adapter: new GitHubTicketAdapter({ exec: github.exec, repo }),
 				runId,
@@ -797,6 +806,7 @@ test("feedback transport failures are unavailable without files or cursor", asyn
 		assert.deepEqual(readdirSync(root), []);
 		assert.deepEqual(
 			await observeFeedback({
+				controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
 				stateDir: root,
 				adapter: new GitHubTicketAdapter({ exec: github.exec, repo }),
 				runId,
@@ -857,6 +867,7 @@ test("C9 merged sweep deduplicates after an issue POST lost its response", async
 
 	try {
 		const input = {
+			platform: EXE_DEV_PLATFORM,
 			stateDir: root,
 			repo,
 			exec: github.exec,

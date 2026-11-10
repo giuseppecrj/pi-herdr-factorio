@@ -188,6 +188,7 @@ import {
 	type RouteId,
 	type RouteTable,
 } from "./sandbox/routes.ts";
+import type { PlatformNetwork, PlatformProfile } from "../src/platform.ts";
 import { type PiProcess, parsePiRecord, sendCommand } from "./sandbox/rpc.ts";
 import {
 	DEFAULT_SCOPE_LIMITS,
@@ -271,6 +272,8 @@ export type StageRunInput = {
 
 /** Every effect `runStage` needs. Tests pass fakes; `sandboxHost` is the real one. */
 export interface StageHost {
+	/** The platform whose built-in routes the stage's table holds. */
+	readonly platform: PlatformNetwork;
 	readonly cleanupReserveMs: number;
 	readonly assetsDigest: string;
 	readonly versions: PinnedVersions;
@@ -1317,17 +1320,13 @@ export async function runStage(
 
 	try {
 		table = builtinTable({
+			platform: host.platform,
 			stage: input.stage,
 			runId: input.runId,
 			attempt: input.attempt,
 			provider: anthropic ? "anthropic" : "openai",
 			model: bareModel(input.settings.model),
-			fallback:
-				input.settings.fallback === null
-					? null
-					: input.settings.fallback.startsWith("openai/")
-						? input.settings.fallback
-						: bareModel(input.settings.fallback),
+			fallback: input.settings.fallback,
 			modelTokens: tokenCap - ledger.total,
 			modelRequests: Math.min(
 				input.stage === "maintain"
@@ -1500,6 +1499,7 @@ export async function runStage(
 }
 
 export type SandboxHostConfig = {
+	readonly platform: PlatformProfile;
 	readonly stateDir: string;
 	readonly bundleDir: string;
 	readonly workspace: string;
@@ -1824,6 +1824,7 @@ export function sandboxHost(config: SandboxHostConfig): StageHost {
 	mkdirSync(stageDir, { recursive: true, mode: 0o700 });
 
 	return {
+		platform: config.platform,
 		cleanupReserveMs: CLEANUP_RESERVE_MS,
 		assetsDigest: config.assetsDigest,
 		versions: config.versions,
@@ -1835,6 +1836,7 @@ export function sandboxHost(config: SandboxHostConfig): StageHost {
 				gatewayDir: join(config.stateDir, "gw", randomBytes(4).toString("hex")),
 				auditPath: join(stageDir, "egress.jsonl"),
 				table,
+				platform: config.platform,
 				readyTimeoutMs: 10_000,
 			});
 
@@ -3036,6 +3038,7 @@ export async function runVisibleTests(
 		);
 
 		const table = builtinTable({
+			platform: config.platform,
 			stage: "build",
 			runId: config.runId,
 			attempt: config.attempt,
@@ -3056,6 +3059,7 @@ export async function runVisibleTests(
 					.filter((route) => route.id === "npm")
 					.map((route) => ({ ...route, budget: false })),
 			},
+			platform: config.platform,
 			readyTimeoutMs: 10_000,
 		});
 
@@ -3550,6 +3554,7 @@ async function candidateReviewInputs(
 		text,
 		repo: bound.contract.base.repo,
 		env: (name) => process.env[name],
+		platform: config.platform,
 	});
 
 	if (workflow.kind !== "valid")
@@ -4048,6 +4053,7 @@ export type SandboxExecutorConfig = {
 	readonly stateDir: string;
 	readonly exec: Exec;
 	readonly log: Log;
+	readonly platform: PlatformProfile;
 	readonly xdgRuntimeDir: string;
 	readonly root?: string;
 	/** The checkout whose inputs the installed bundle must match. Absent skips the check. */
@@ -4117,7 +4123,9 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 		const started = await startGatewayProcess({
 			gatewayDir: join(dir, `p-${nonce}`),
 			auditPath: audit,
+			platform: config.platform,
 			table: builtinTable({
+				platform: config.platform,
 				stage: "specify",
 				runId: PREFLIGHT_RUN,
 				attempt: 1,
@@ -4146,16 +4154,19 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 		candidate: controllerCandidatePort({
 			stateDir: config.stateDir,
 			exec: config.exec,
+			platform: config.platform,
 		}),
 		validate: controllerValidator({
 			stateDir: config.stateDir,
 			exec: config.exec,
+			platform: config.platform,
 			fetch: config.fetchTarball,
 			diagnosis,
 		}),
 		ownerValidate: ownerValidator({
 			stateDir: config.stateDir,
 			exec: config.exec,
+			platform: config.platform,
 			fetch: config.fetchTarball,
 			diagnosis,
 		}),
@@ -4172,6 +4183,7 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 			sweepValidation({
 				stateDir: config.stateDir,
 				exec: config.exec,
+				platform: config.platform,
 				fetch: config.fetchTarball,
 			}),
 		async recover() {
@@ -4340,6 +4352,7 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 					);
 
 					const testConfig: SandboxHostConfig = {
+						platform: config.platform,
 						stateDir: config.stateDir,
 						bundleDir: ready.bundle.dir,
 						workspace: "",
@@ -4746,6 +4759,7 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 			}
 
 			const hostConfig: SandboxHostConfig = {
+				platform: config.platform,
 				stateDir: config.stateDir,
 				bundleDir: bundle.dir,
 				workspace: input.workspace,

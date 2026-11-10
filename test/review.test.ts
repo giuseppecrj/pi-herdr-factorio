@@ -74,6 +74,7 @@ import {
 import { writeAcceptance } from "../src/accept.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
 import { objectOf, parseJson, textOf } from "../server/sandbox/json.ts";
+import { EXE_DEV_PLATFORM } from "../src/platform.ts";
 
 async function checkReviewTree(mode: string) {
 	const root = mkdtempSync(join(tmpdir(), "factory-review-input-"));
@@ -316,6 +317,7 @@ async function checkReviewTree(mode: string) {
 		const fetched: string[] = [];
 
 		const config = {
+			platform: EXE_DEV_PLATFORM,
 			stateDir: state,
 			exec: async () => ({ code: 0, stdout: "", stderr: "" }),
 			log: () => {},

@@ -36,6 +36,8 @@ import {
 	type WorkflowError,
 	type WorkflowLoad,
 } from "../src/workflow.ts";
+import { EXE_DEV_PLATFORM } from "../src/platform.ts";
+import { noPlatformFile } from "./helpers.ts";
 
 function slug(text: string): RepoSlug {
 	if (!isRepoSlug(text)) throw new Error(`bad slug ${text}`);
@@ -74,7 +76,7 @@ function frontMatter(lines: string): string {
 }
 
 function parse(text: string) {
-	return parseWorkflow({ text, repo, env });
+	return parseWorkflow({ platform: EXE_DEV_PLATFORM, text, repo, env });
 }
 
 function errorOf(text: string): WorkflowError {
@@ -137,7 +139,13 @@ async function load(
 	branches: Map<string, Branch>,
 	ref = "main",
 ): Promise<WorkflowLoad> {
-	return loadWorkflow({ exec: fakeGh(branches).exec, repo, ref, env });
+	return loadWorkflow({
+		platform: EXE_DEV_PLATFORM,
+		exec: fakeGh(branches).exec,
+		repo,
+		ref,
+		env,
+	});
 }
 
 describe("trusted improvement trigger", () => {
@@ -881,7 +889,13 @@ describe("loadWorkflow", () => {
 			new Map([["main", { sha: mainSha, text: valid }]]),
 		);
 
-		const loaded = await loadWorkflow({ exec, repo, ref: "main", env });
+		const loaded = await loadWorkflow({
+			platform: EXE_DEV_PLATFORM,
+			exec,
+			repo,
+			ref: "main",
+			env,
+		});
 
 		assert.equal(loaded.kind, "loaded");
 
@@ -1143,6 +1157,7 @@ async function runRaw(argv: string[], exec: Exec): Promise<RawRun> {
 	let stderr = "";
 
 	const code = await runCli(argv, {
+		readPlatformFile: noPlatformFile,
 		exec,
 		env,
 		stdout: (text) => {
@@ -1741,6 +1756,7 @@ describe("errors built from factory text", () => {
 	for (const [name, result, cause, status] of ghFailures) {
 		it(`maps ${name} from gh to cause ${cause} at both steps`, async () => {
 			const resolve = await loadWorkflow({
+				platform: EXE_DEV_PLATFORM,
 				exec: async () => result,
 				repo,
 				ref: "main",
@@ -1748,6 +1764,7 @@ describe("errors built from factory text", () => {
 			});
 
 			const fetch = await loadWorkflow({
+				platform: EXE_DEV_PLATFORM,
 				exec: resolvingThen(async () => result),
 				repo,
 				ref: "main",
@@ -1781,7 +1798,13 @@ describe("errors built from factory text", () => {
 		const reject = async () => Promise.reject(new Error("spawn gh ENOENT"));
 
 		for (const exec of [reject, resolvingThen(reject)]) {
-			const loaded = await loadWorkflow({ exec, repo, ref: "main", env });
+			const loaded = await loadWorkflow({
+				platform: EXE_DEV_PLATFORM,
+				exec,
+				repo,
+				ref: "main",
+				env,
+			});
 
 			assert.equal(loaded.kind, "failed");
 

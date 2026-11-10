@@ -348,7 +348,7 @@ type RouteTable = {
 
 ### 3.3 Where the table comes from
 
-**Built-in routes [D].** These are constants in `server/sandbox/routes.ts`, built by the controller. v1 ships exactly these.
+**Built-in routes [D].** These are built in `server/sandbox/routes.ts` by the controller from the selected platform profile ([platform](platform.md)). The table shows the `exe-dev` default. On `exmach:<domain>` the model host, Host header and SNI are `llm.int.<domain>`, the pin is `10.74.1.1`, the OpenAI base is `/v1/`, the Anthropic base is `/` (Pi's client appends `v1/messages`), and there is no `model-xai`. The sandbox prefixes do not change. The gateway takes its own `--platform` descriptor and rebuilds these upstreams itself, so a table built for another platform is refused. v1 ships exactly these.
 
 | id | prefix | upstream | methods | paths | body | meter | initially |
 |---|---|---|---|---|---|---|---|
@@ -368,7 +368,7 @@ type RouteTable = {
 1. **A credential must exist host-side.** A declared route must name a `credential` id that exists in the host-side credential registry (section 4.1). An unknown id fails the workflow load, and the last valid snapshot stays in force **[E `src/workflow.ts` `reloadWorkflow` comment, line 1047]**.
 2. **The registry entry is a ceiling.** It pins the upstream scheme, host and port, the placement, and the widest methods and path rules the owner allows for that secret. A declared route may only narrow them. So a merged change to `WORKFLOW.md` can re-scope a provisioned integration. It cannot point a secret at a new host, or widen it.
 3. **Declared routes must be credentialed.** An uncredentialed declared route is rejected. Uncredentialed egress beyond model and npm is not an integration feature, and it would widen R1's "allow only `llm.int.exe.xyz` and required npm" **[E `docs/plans/factory-v1.md` line 258]**.
-4. **Forbidden upstreams.** A declared route may never target `*.exe.xyz`, which covers every integration and the VM itself, any GitHub host (`github.com`, `*.github.com`, `*.githubusercontent.com`, `*.ghe.com`), `registry.npmjs.org`, `localhost`, or an IP literal. These are code constants, not config.
+4. **Forbidden upstreams.** A declared route or a ceiling may never target the platform's own domain or its `int.` domain, or any name under them (`*.exe.xyz` on `exe-dev`, `*.<domain>` on `exmach`), which covers every integration and the VM itself. Nor may it target any GitHub host (`github.com`, `*.github.com`, `*.githubusercontent.com`, `*.ghe.com`), `registry.npmjs.org`, `localhost`, or an IP literal. The domains come from the built-in profile, not config. Both the route parser and the ceiling parser refuse everything under a profile whose list lacks either platform domain.
 5. **Stages opt in.** Each stage lists the declared route ids it gets, under `stages.<stage>.egress`. A stage that lists none gets only the built-ins.
 
 **A PR can never add a route or a secret.**

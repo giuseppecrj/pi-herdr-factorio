@@ -68,6 +68,8 @@ import { objectOf, parseJson, arrayOf } from "../server/sandbox/json.ts";
 import { parseWorkflow } from "../src/workflow.ts";
 import { GitHubPublicationApi, SCORE_FILE } from "../src/publication.ts";
 import { LedgerGit, repo } from "./ledger-git.ts";
+import { EXE_DEV_PLATFORM } from "../src/platform.ts";
+import { noPlatformFile } from "./helpers.ts";
 
 const workflow = readFileSync(
 	new URL("../.github/factory/WORKFLOW.md", import.meta.url),
@@ -266,6 +268,7 @@ it("score input contains only bounded, digest-bound admitted contract excerpts a
 	);
 
 	const parsed = parseWorkflow({
+		platform: EXE_DEV_PLATFORM,
 		text: workflow,
 		repo,
 		env: (name) => process.env[name],
@@ -516,6 +519,7 @@ async function nativeBundle(t: TestContext, root: string) {
 
 it("permanent pre-launch scoring failure is recorded once across eleven pumps and restart", async (t) => {
 	const parsed = parseWorkflow({
+		platform: EXE_DEV_PLATFORM,
 		text: workflow,
 		repo,
 		env: (name) => process.env[name],
@@ -548,6 +552,7 @@ it("permanent pre-launch scoring failure is recorded once across eleven pumps an
 	};
 
 	const context = {
+		platform: EXE_DEV_PLATFORM,
 		stateDir,
 		repo,
 		exec,
@@ -556,6 +561,7 @@ it("permanent pre-launch scoring failure is recorded once across eleven pumps an
 		},
 		executor: {
 			...sandboxExecutor({
+				platform: EXE_DEV_PLATFORM,
 				stateDir,
 				exec,
 				log: () => undefined,
@@ -611,6 +617,7 @@ it("permanent pre-launch scoring failure is recorded once across eleven pumps an
 
 it("a non-started launch after preflight settles once rather than producing a failed score each pump", async (t) => {
 	const parsed = parseWorkflow({
+		platform: EXE_DEV_PLATFORM,
 		text: workflow,
 		repo,
 		env: (name) => process.env[name],
@@ -643,12 +650,14 @@ it("a non-started launch after preflight settles once rather than producing a fa
 			: github.exec(command, args);
 
 	const context = {
+		platform: EXE_DEV_PLATFORM,
 		stateDir,
 		repo,
 		exec,
 		log: () => undefined,
 		executor: {
 			...sandboxExecutor({
+				platform: EXE_DEV_PLATFORM,
 				stateDir,
 				exec,
 				log: () => undefined,
@@ -687,6 +696,7 @@ it("a non-started launch after preflight settles once rather than producing a fa
 
 it("held or sandbox-blocked automatic scores remain unenrolled", async (t) => {
 	const config = parseWorkflow({
+		platform: EXE_DEV_PLATFORM,
 		text: workflow,
 		repo,
 		env: (name) => process.env[name],
@@ -712,12 +722,14 @@ it("held or sandbox-blocked automatic scores remain unenrolled", async (t) => {
 		});
 
 		const measurements = controllerMeasurements({
+			platform: EXE_DEV_PLATFORM,
 			stateDir,
 			repo,
 			exec,
 			log: () => undefined,
 			executor: {
 				...sandboxExecutor({
+					platform: EXE_DEV_PLATFORM,
 					stateDir,
 					exec,
 					log: () => undefined,
@@ -892,7 +904,11 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 	const address = upstream.address();
 	assert.ok(address !== null && address instanceof Object);
 	const git = new LedgerGit();
-	const runApi = ledgerApiOf(new GitHubPublicationApi(git.exec, repo));
+
+	const runApi = ledgerApiOf(
+		new GitHubPublicationApi(git.exec, repo, EXE_DEV_PLATFORM),
+	);
+
 	await runApi.advance(null, (await runApi.root("2026-11-10T10:00:00Z")).sha);
 	let repoEnabled = true;
 	let publicationUnavailable = true;
@@ -985,6 +1001,7 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 	let stdout = "";
 
 	const io = {
+		readPlatformFile: noPlatformFile,
 		exec,
 		env: (name: string) => process.env[name],
 		runtime,
@@ -1060,6 +1077,7 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 	assert.notEqual(own.id, digestOf(String(first?.identity)));
 	assert.equal(
 		await pumpScoreOutbox({
+			platform: EXE_DEV_PLATFORM,
 			stateDir,
 			repo,
 			exec,
@@ -1175,6 +1193,7 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 	publicationUnavailable = false;
 	assert.equal(
 		await pumpScoreOutbox({
+			platform: EXE_DEV_PLATFORM,
 			stateDir,
 			repo,
 			exec,
@@ -1217,7 +1236,12 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 		objectOf(objectOf(durableUsageOf(accounting))?.measurement)?.total,
 		80,
 	);
-	const api = ledgerApiOf(new GitHubPublicationApi(git.exec, repo), "scores");
+
+	const api = ledgerApiOf(
+		new GitHubPublicationApi(git.exec, repo, EXE_DEV_PLATFORM),
+		"scores",
+	);
+
 	const tip = await api.ref();
 	assert.ok(tip);
 
@@ -1348,6 +1372,7 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 
 	// Automatic scoring is deterministic and non-awaited, with durable once-only enrollment.
 	const parsed = parseWorkflow({
+		platform: EXE_DEV_PLATFORM,
 		text: workflow,
 		repo,
 		env: (name) => process.env[name],
@@ -1364,9 +1389,16 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 
 	assert.ok(sampled(firstRow.row.runId, config.scorers![0]!));
 	answer = '{"label":"matched","reasoning":"ledger.outcome"}';
-	const executor = runtime.executor({ stateDir, exec, log: () => undefined });
+
+	const executor = runtime.executor({
+		platform: EXE_DEV_PLATFORM,
+		stateDir,
+		exec,
+		log: () => undefined,
+	});
 
 	const automatic = controllerMeasurements({
+		platform: EXE_DEV_PLATFORM,
 		stateDir,
 		repo,
 		exec,
@@ -1396,6 +1428,7 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 	assert.equal(automaticOwner?.maxTokens, 12000);
 
 	const restarted = controllerMeasurements({
+		platform: EXE_DEV_PLATFORM,
 		stateDir,
 		repo,
 		exec,
@@ -1448,6 +1481,7 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 	const blockedRow = seed(stateDir, known[2]!);
 
 	const blocked = controllerMeasurements({
+		platform: EXE_DEV_PLATFORM,
 		stateDir,
 		repo,
 		exec,
@@ -1479,6 +1513,7 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 	);
 
 	const voidedAutomatic = controllerMeasurements({
+		platform: EXE_DEV_PLATFORM,
 		stateDir,
 		repo,
 		exec,

@@ -18,7 +18,15 @@ import {
 	ghFailure,
 } from "./gh.ts";
 import { parseAnthropicModel } from "../server/sandbox/anthropic-limits.ts";
+import {
+	isRepoSlug,
+	type ModelPosition,
+	type PlatformProfile,
+	type RepoSlug,
+} from "./platform.ts";
 import { type Digest, digestOf, type Stage } from "./run.ts";
+
+export { isRepoSlug, type RepoSlug };
 
 export type ExecutionStage = ModelStage | "maintain";
 
@@ -70,8 +78,6 @@ import { STAGE_ORDER } from "./stages.ts";
 export const WORKFLOW_PATH = ".github/factory/WORKFLOW.md";
 export const TRUSTED_REF = "main";
 export const DEFAULT_MODEL = "openai/gpt-6.1-sol";
-
-export type RepoSlug = string & { readonly __brand: "RepoSlug" };
 
 export type GitSha = string & { readonly __brand: "GitSha" };
 
@@ -249,7 +255,6 @@ export const LIMITS = {
 	maxConcurrent: 4,
 } as const;
 
-const REPO_SLUG = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const GIT_SHA = /^[0-9a-f]{40}$/;
 const BRANCH_NAME = /^(?!-)(?!.*\.\.)(?!.*\/\/)(?!\/)[A-Za-z0-9._/-]+(?<!\/)$/;
 const MODEL_ID = /^([a-z0-9][a-z0-9-]*)\/([A-Za-z0-9][A-Za-z0-9._:-]*)$/;
@@ -275,13 +280,6 @@ export function redactCredentials(text: string): string {
 	return text
 		.replace(URL_USERINFO, "$1<redacted>@")
 		.replace(CREDENTIAL_QUERY, "$1<redacted>");
-}
-
-export function isRepoSlug(input: string): input is RepoSlug {
-	return (
-		REPO_SLUG.test(input) &&
-		input.split("/").every((segment) => segment !== "." && segment !== "..")
-	);
 }
 
 export function isGitSha(input: string): input is GitSha {
@@ -459,8 +457,39 @@ function integerOr(
 		: range.fallback;
 }
 
-const ANTHROPIC_RULE =
-	"provider anthropic is allowed only for stages.accept.model and stages.review.seats.code-review.model: on the VM it spends exe.dev credits";
+/** What the workflow parser reads from the platform: Anthropic positions and whether xAI has a route. */
+type ModelPlatform = Pick<
+	PlatformProfile,
+	"name" | "anthropicStages" | "modelBasePaths"
+>;
+
+const POSITION_FIELDS: Readonly<Record<ModelPosition, string>> = {
+	specify: "stages.specify.model",
+	accept: "stages.accept.model",
+	build: "stages.build.model",
+	validate: "stages.validate.model",
+	review: "stages.review.model",
+	"code-review": "stages.review.seats.code-review.model",
+	cadence: "cadence.jobs.<job>.model",
+};
+
+function anthropicRule(platform: ModelPlatform): string {
+	const list = new Intl.ListFormat("en", { type: "conjunction" }).format(
+		platform.anthropicStages.map((position) => POSITION_FIELDS[position]),
+	);
+
+	switch (platform.name) {
+		case "exe-dev":
+			return `provider anthropic is allowed only for ${list}: on the VM it spends exe.dev credits`;
+		case "exmach":
+			return `provider anthropic is allowed only for ${list} on the exmach platform`;
+		default: {
+			const _exhaustive: never = platform.name;
+
+			return _exhaustive;
+		}
+	}
+}
 
 /** A `<provider>/<model>` id. Callers decide which providers a field allows. */
 function readModelText(node: YamlNode, field: string): ModelId {
@@ -472,19 +501,35 @@ function readModelText(node: YamlNode, field: string): ModelId {
 }
 
 /** A model id whose provider is not anthropic. */
-function readModel(node: YamlNode, field: string): ModelId {
+function readModel(
+	node: YamlNode,
+	field: string,
+	platform: ModelPlatform,
+): ModelId {
 	const text = readModelText(node, field);
 
-	if (text.startsWith("anthropic/")) fail(field, ANTHROPIC_RULE);
+	if (text.startsWith("anthropic/")) fail(field, anthropicRule(platform));
 
 	return text;
 }
 
-/** An `openai/` model, or an `anthropic/` model in the host's limits table. */
-function readAnthropicOrOpenai(node: YamlNode, field: string): ModelId {
+/**
+ * A primary model at `position`: an `openai/` model, or, where the platform
+ * allows Anthropic at that position, an `anthropic/` model in the host's
+ * limits table.
+ */
+function readPrimaryModel(
+	node: YamlNode,
+	field: string,
+	position: ModelPosition,
+	platform: ModelPlatform,
+): ModelId {
 	const text = readModelText(node, field);
+	const anthropic = platform.anthropicStages.includes(position);
 
 	if (text.startsWith("anthropic/")) {
+		if (!anthropic) fail(field, anthropicRule(platform));
+
 		if (parseAnthropicModel(text) === null)
 			fail(
 				field,
@@ -495,7 +540,12 @@ function readAnthropicOrOpenai(node: YamlNode, field: string): ModelId {
 	}
 
 	if (!text.startsWith("openai/"))
-		fail(field, "must be an openai or a listed anthropic model");
+		fail(
+			field,
+			anthropic
+				? "must be an openai or a listed anthropic model"
+				: "must be an openai model: the sandbox serves a stage's model only on its openai route",
+		);
 
 	return text;
 }
@@ -610,14 +660,19 @@ function readControllerStage(
 function readModelStage(
 	stages: Map<string, YamlNode>,
 	stage: Exclude<ModelStage, "review">,
+	platform: ModelPlatform,
 ): ModelStageSettings {
 	return readStageModels(
 		stageEntries(stages, stage, [...MODEL_KEYS, ...BUDGET_KEYS]),
 		stage,
+		platform,
 	);
 }
 
-function readAcceptStage(stages: Map<string, YamlNode>): AcceptStageSettings {
+function readAcceptStage(
+	stages: Map<string, YamlNode>,
+	platform: ModelPlatform,
+): AcceptStageSettings {
 	const entries = stageEntries(stages, "accept", [
 		...MODEL_KEYS,
 		...BUDGET_KEYS,
@@ -634,7 +689,7 @@ function readAcceptStage(stages: Map<string, YamlNode>): AcceptStageSettings {
 		fail(field, "must be low, medium or high");
 
 	return Object.freeze({
-		...readStageModels(entries, "accept"),
+		...readStageModels(entries, "accept", platform),
 		reasoningEffort: effort,
 	});
 }
@@ -643,7 +698,10 @@ function readAcceptStage(stages: Map<string, YamlNode>): AcceptStageSettings {
  * Review, plus its one per-seat key, `seats.code-review.model`. Any other
  * seat or seat field fails the load. Absent, code-review inherits `model`.
  */
-function readReviewStage(stages: Map<string, YamlNode>): ReviewStageSettings {
+function readReviewStage(
+	stages: Map<string, YamlNode>,
+	platform: ModelPlatform,
+): ReviewStageSettings {
 	const entries = stageEntries(stages, "review", [
 		...MODEL_KEYS,
 		...BUDGET_KEYS,
@@ -665,14 +723,16 @@ function readReviewStage(stages: Map<string, YamlNode>): ReviewStageSettings {
 	);
 
 	const codeReviewModel = codeReview.has("model")
-		? readAnthropicOrOpenai(
+		? readPrimaryModel(
 				codeReview.get("model") ?? null,
 				"stages.review.seats.code-review.model",
+				"code-review",
+				platform,
 			)
 		: null;
 
 	return Object.freeze({
-		...readStageModels(entries, "review"),
+		...readStageModels(entries, "review", platform),
 		codeReviewModel,
 	});
 }
@@ -680,15 +740,14 @@ function readReviewStage(stages: Map<string, YamlNode>): ReviewStageSettings {
 function readStageModels(
 	entries: Map<string, YamlNode>,
 	stage: ModelStage,
+	platform: ModelPlatform,
 ): ModelStageSettings {
 	const field = `stages.${stage}`;
 	const modelNode = entries.get("model") ?? null;
 
 	const model = !entries.has("model")
 		? defaultModel()
-		: stage === "accept"
-			? readAnthropicOrOpenai(modelNode, `${field}.model`)
-			: readPrimaryModel(modelNode, `${field}.model`);
+		: readPrimaryModel(modelNode, `${field}.model`, stage, platform);
 
 	const fallbackNode = entries.get("fallback_model") ?? null;
 
@@ -696,7 +755,7 @@ function readStageModels(
 		? null
 		: stage === "accept"
 			? readAcceptFallback(fallbackNode, `${field}.fallback_model`)
-			: readFallbackModel(fallbackNode, `${field}.fallback_model`);
+			: readFallbackModel(fallbackNode, `${field}.fallback_model`, platform);
 
 	if (fallbackModel === model)
 		fail(
@@ -726,27 +785,25 @@ function readAcceptFallback(node: YamlNode, field: string): ModelId {
 	return model;
 }
 
-function readPrimaryModel(node: YamlNode, field: string): ModelId {
-	const model = readModel(node, field);
+/** An `openai/` fallback, or an `xai/` one where the platform has an xAI route. */
+function readFallbackModel(
+	node: YamlNode,
+	field: string,
+	platform: ModelPlatform,
+): ModelId {
+	const model = readModel(node, field, platform);
+	const xai = platform.modelBasePaths.xai !== null;
 
-	if (!model.startsWith("openai/")) {
-		fail(
-			field,
-			"must be an openai model: the sandbox serves a stage's model only on its openai route",
-		);
+	if (model.startsWith("openai/") || (xai && model.startsWith("xai/"))) {
+		return model;
 	}
 
-	return model;
-}
-
-function readFallbackModel(node: YamlNode, field: string): ModelId {
-	const model = readModel(node, field);
-
-	if (!model.startsWith("xai/") && !model.startsWith("openai/")) {
-		fail(field, "must be an openai or xai model");
-	}
-
-	return model;
+	fail(
+		field,
+		xai
+			? "must be an openai or xai model"
+			: `must be an openai model: the ${platform.name} platform has no xai route`,
+	);
 }
 
 function defaultModel(): ModelId {
@@ -758,11 +815,17 @@ function defaultModel(): ModelId {
 function readValidateStage(
 	stages: Map<string, YamlNode>,
 	warnings: string[],
+	platform: ModelPlatform,
 ): StageSettings["validate"] {
 	const entries = stageEntries(stages, "validate", [...BUDGET_KEYS, "model"]);
 
 	if (entries.has("model")) {
-		readPrimaryModel(entries.get("model") ?? null, "stages.validate.model");
+		readPrimaryModel(
+			entries.get("model") ?? null,
+			"stages.validate.model",
+			"validate",
+			platform,
+		);
 		warnings.push(
 			"stages.validate.model is ignored; validate runs in the controller",
 		);
@@ -781,16 +844,17 @@ function readValidateStage(
 function readStages(
 	root: Map<string, YamlNode>,
 	warnings: string[],
+	platform: ModelPlatform,
 ): StageSettings {
 	const stages = optionalEntries(root, "stages", "stages", STAGE_ORDER);
 
 	return Object.freeze({
 		admit: readControllerStage(stages, "admit"),
-		specify: readModelStage(stages, "specify"),
-		accept: readAcceptStage(stages),
-		build: readModelStage(stages, "build"),
-		validate: readValidateStage(stages, warnings),
-		review: readReviewStage(stages),
+		specify: readModelStage(stages, "specify", platform),
+		accept: readAcceptStage(stages, platform),
+		build: readModelStage(stages, "build", platform),
+		validate: readValidateStage(stages, warnings, platform),
+		review: readReviewStage(stages, platform),
 		land: readControllerStage(stages, "land"),
 	});
 }
@@ -829,7 +893,10 @@ function readCheckpoints(
 	return Object.freeze({ approveMerge: Object.freeze({ mode }) });
 }
 
-function readCadence(root: Map<string, YamlNode>): CadenceConfig | null {
+function readCadence(
+	root: Map<string, YamlNode>,
+	platform: ModelPlatform,
+): CadenceConfig | null {
 	if (!root.has("cadence")) return null;
 
 	const cadence = optionalEntries(root, "cadence", "cadence", [
@@ -869,7 +936,12 @@ function readCadence(root: Map<string, YamlNode>): CadenceConfig | null {
 				fallback: 0,
 			}),
 			model: entries.has("model")
-				? readPrimaryModel(entries.get("model") ?? null, `${field}.model`)
+				? readPrimaryModel(
+						entries.get("model") ?? null,
+						`${field}.model`,
+						"cadence",
+						platform,
+					)
 				: defaultModel(),
 			maxTokens: integerOr(entries, "maxTokens", `${field}.maxTokens`, {
 				min: 1,
@@ -1088,6 +1160,7 @@ function readConfig(
 	root: Map<string, YamlNode>,
 	repo: RepoSlug,
 	env: EnvLookup,
+	platform: ModelPlatform,
 ): ConfigRead {
 	const warnings: string[] = [];
 
@@ -1183,10 +1256,10 @@ function readConfig(
 					}),
 				})
 			: null,
-		cadence: readCadence(root),
+		cadence: readCadence(root, platform),
 		trigger: readTrigger(root),
 		...readScorers(root),
-		stages: readStages(root, warnings),
+		stages: readStages(root, warnings, platform),
 		checkpoints: readCheckpoints(root),
 	});
 
@@ -1275,11 +1348,12 @@ export type ParsedWorkflow =
 	  }
 	| { readonly kind: "invalid"; readonly error: WorkflowError };
 
-/** Parses WORKFLOW.md text. Pure: the environment comes from `env`. */
+/** Parses WORKFLOW.md text. Pure: the environment comes from `env`, model permissions from `platform`. */
 export function parseWorkflow(input: {
 	text: string;
 	repo: RepoSlug;
 	env: EnvLookup;
+	platform: PlatformProfile;
 }): ParsedWorkflow {
 	const split = splitFrontMatter(input.text);
 
@@ -1340,7 +1414,14 @@ export function parseWorkflow(input: {
 
 	try {
 		const root = entriesOf(document.contents, "front matter");
-		const { config, warnings } = readConfig(root, input.repo, input.env);
+
+		const { config, warnings } = readConfig(
+			root,
+			input.repo,
+			input.env,
+			input.platform,
+		);
+
 		const guidance = readGuidance(split.body);
 
 		return Object.freeze({
@@ -1486,6 +1567,7 @@ export async function loadWorkflow(input: {
 	repo: RepoSlug;
 	ref: string;
 	env: EnvLookup;
+	platform: PlatformProfile;
 }): Promise<WorkflowLoad> {
 	const { exec, repo, ref } = input;
 
@@ -1562,7 +1644,13 @@ export async function loadWorkflow(input: {
 	}
 
 	const digest = digestOf(fetched.stdout);
-	const parsed = parseWorkflow({ text: fetched.stdout, repo, env: input.env });
+
+	const parsed = parseWorkflow({
+		text: fetched.stdout,
+		repo,
+		env: input.env,
+		platform: input.platform,
+	});
 
 	if (parsed.kind === "invalid") return failed(sha, digest, parsed.error);
 
