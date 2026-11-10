@@ -22,6 +22,7 @@ import {
 	isRepoSlug,
 	type RepoSlug,
 } from "../src/workflow.ts";
+import { EXE_DEV_PLATFORM } from "../src/platform.ts";
 
 function slug(text: string): RepoSlug {
 	if (!isRepoSlug(text)) throw new Error(`bad slug ${text}`);
@@ -107,7 +108,13 @@ function ledgerOf(
 	comments: readonly IssueComment[],
 	edits = unedited(comments),
 ) {
-	return markerLedger({ repo, issue: 14, comments, edits });
+	return markerLedger({
+		identity: EXE_DEV_PLATFORM,
+		repo,
+		issue: 14,
+		comments,
+		edits,
+	});
 }
 
 describe("needs_info status", () => {

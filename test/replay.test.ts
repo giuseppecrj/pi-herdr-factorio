@@ -31,6 +31,8 @@ import {
 	parseWorkflow,
 	type Exec,
 } from "../src/workflow.ts";
+import { EXE_DEV_PLATFORM } from "../src/platform.ts";
+import { noPlatformFile } from "./helpers.ts";
 
 const corpusDir = new URL("./fixtures/replay/", import.meta.url).pathname;
 const repo = "giuseppecrj/pi-herdr-factorio";
@@ -60,7 +62,12 @@ const exec: Exec = async () => ({ code: 0, stdout: "", stderr: "" });
 const workflow = (text: string) => {
 	assert.ok(isRepoSlug(repo));
 
-	return parseWorkflow({ text, repo, env: () => "/tmp" });
+	return parseWorkflow({
+		platform: EXE_DEV_PLATFORM,
+		text,
+		repo,
+		env: () => "/tmp",
+	});
 };
 
 async function fixtureRow(): Promise<LedgerRow> {
@@ -137,6 +144,7 @@ async function cli(args: string[], execute: Exec = exec) {
 	let stderr = "";
 
 	const code = await runCli(args, {
+		readPlatformFile: noPlatformFile,
 		exec: execute,
 		env: (name) => (name === "HOME" ? tmpdir() : undefined),
 		stdout: (s) => {
@@ -333,8 +341,8 @@ describe("replay CLI boundaries", () => {
 			const ready = await cli([...args, "--case", "c3"], execute);
 			assert.equal(ready.code, EXIT.ok, ready.stdout);
 			assert.match(ready.stdout, /"allowed": true/);
-			await reserveReplay(path, 1100000, "first");
-			await reserveReplay(path, 1100000, "second");
+			await reserveReplay(path, 1100000, "first", EXE_DEV_PLATFORM);
+			await reserveReplay(path, 1100000, "second", EXE_DEV_PLATFORM);
 			const exhausted = await cli([...args, "--case", "c3"], execute);
 			assert.equal(exhausted.code, EXIT.invalid);
 			assert.match(exhausted.stdout, /replay_cap/);
@@ -874,7 +882,7 @@ describe("review regressions: comparison identity and caps", () => {
 		const path = join(dir, "budget.json");
 
 		try {
-			await reserveReplay(path, 1100000, "empty");
+			await reserveReplay(path, 1100000, "empty", EXE_DEV_PLATFORM);
 			await replay
 				.voidReplay(
 					path,
@@ -966,7 +974,7 @@ describe("approved replay cap raises", () => {
 
 		try {
 			const before = Date.now();
-			await reserveReplay(path, 1650000, "next", policy);
+			await reserveReplay(path, 1650000, "next", EXE_DEV_PLATFORM, policy);
 			const budget = await readReplayBudget(path);
 			assert.equal(budget.maxTokens, 1650000);
 			assert.deepEqual(budget.reservations.slice(0, 2), reservations);
@@ -1009,7 +1017,7 @@ describe("approved replay cap raises", () => {
 
 			for (const cap of [1000000, NaN, Infinity, 1650000.5]) {
 				await assert.rejects(
-					reserveReplay(path, cap, "next", policy),
+					reserveReplay(path, cap, "next", EXE_DEV_PLATFORM, policy),
 					/replay_policy_changed/,
 				);
 				assert.equal(await readFile(path, "utf8"), bytes);
@@ -1021,7 +1029,7 @@ describe("approved replay cap raises", () => {
 				{ complete: true, stages: 0, tokens: 0 },
 				"no_work",
 			);
-			await reserveReplay(path, 1100000, "equal");
+			await reserveReplay(path, 1100000, "equal", EXE_DEV_PLATFORM);
 			assert.deepEqual((await readReplayBudget(path)).policyChanges, []);
 		} finally {
 			await rm(dir, { recursive: true, force: true });
@@ -1075,12 +1083,12 @@ describe("approved replay cap raises", () => {
 				workflowDigest: digestOf(text),
 			});
 			assert.equal(await readFile(path, "utf8"), bytes);
-			await reserveReplay(path, 1650000, "next", policy);
+			await reserveReplay(path, 1650000, "next", EXE_DEV_PLATFORM, policy);
 			const exhausted = await cli(args, execute);
 			assert.equal(exhausted.code, EXIT.invalid, exhausted.stdout);
 			assert.match(exhausted.stdout, /replay_cap/);
 			await assert.rejects(
-				reserveReplay(path, 1650000, "another", policy),
+				reserveReplay(path, 1650000, "another", EXE_DEV_PLATFORM, policy),
 				/replay_cap/,
 			);
 
@@ -1096,7 +1104,7 @@ describe("approved replay cap raises", () => {
 			const lower = await cli(args, lowerExec);
 			assert.match(lower.stdout, /replay_policy_changed/);
 			await assert.rejects(
-				reserveReplay(path, 1100000, "lower", policy),
+				reserveReplay(path, 1100000, "lower", EXE_DEV_PLATFORM, policy),
 				/replay_policy_changed/,
 			);
 			await writeFile(
@@ -1106,7 +1114,7 @@ describe("approved replay cap raises", () => {
 			const malformed = await readFile(path, "utf8");
 			assert.equal((await cli(args, execute)).code, EXIT.invalid);
 			await assert.rejects(
-				reserveReplay(path, 1650000, "bad", policy),
+				reserveReplay(path, 1650000, "bad", EXE_DEV_PLATFORM, policy),
 				/replay_budget_invalid/,
 			);
 			assert.equal(await readFile(path, "utf8"), malformed);
@@ -1115,7 +1123,7 @@ describe("approved replay cap raises", () => {
 		}
 	});
 
-	it("uses the driver's frozen main for the existing three-argument reserve call", async () => {
+	it("uses the driver's frozen main when the reserve call passes no policy source", async () => {
 		const { dir, path } = await fixture();
 
 		try {
@@ -1139,7 +1147,7 @@ describe("approved replay cap raises", () => {
 				"frozen policy",
 			]);
 			const mainSha = git(["rev-parse", "HEAD"]);
-			const script = `import { reserveReplay } from ${JSON.stringify(new URL("../src/replay.ts", import.meta.url).href)}; await reserveReplay(${JSON.stringify(path)}, 1650000, 'next');`;
+			const script = `import { reserveReplay } from ${JSON.stringify(new URL("../src/replay.ts", import.meta.url).href)}; import { EXE_DEV_PLATFORM } from ${JSON.stringify(new URL("../src/platform.ts", import.meta.url).href)}; await reserveReplay(${JSON.stringify(path)}, 1650000, 'next', EXE_DEV_PLATFORM);`;
 			execFileSync(
 				process.execPath,
 				["--experimental-strip-types", "--input-type=module", "-e", script],
@@ -1173,7 +1181,7 @@ describe("approved replay cap raises", () => {
 		try {
 			const bytes = await readFile(path, "utf8");
 			await assert.rejects(
-				reserveReplay(path, 1650000, "next", {
+				reserveReplay(path, 1650000, "next", EXE_DEV_PLATFORM, {
 					...policy,
 					workflowText: text.replace("1650000", "1100000"),
 				}),
@@ -1209,13 +1217,16 @@ describe("capped replay budget", () => {
 
 		try {
 			assert.equal(REPLAY_RUN_CAP, 540000);
-			await reserveReplay(path, 1100000, "previous");
+			await reserveReplay(path, 1100000, "previous", EXE_DEV_PLATFORM);
 			await assert.rejects(
-				reserveReplay(path, 1100000, "previous"),
+				reserveReplay(path, 1100000, "previous", EXE_DEV_PLATFORM),
 				/replay_already_reserved/,
 			);
-			await reserveReplay(path, 1100000, "candidate");
-			await assert.rejects(reserveReplay(path, 1100000, "third"), /replay_cap/);
+			await reserveReplay(path, 1100000, "candidate", EXE_DEV_PLATFORM);
+			await assert.rejects(
+				reserveReplay(path, 1100000, "third", EXE_DEV_PLATFORM),
+				/replay_cap/,
+			);
 			const row = await fixtureRow();
 			await settleReplay(path, "previous", {
 				...row,
@@ -1228,7 +1239,7 @@ describe("capped replay budget", () => {
 			assert.equal(budget.chargedTokens, 1140000);
 			assert.equal(budget.reservations[1]?.status, "reserved");
 			await assert.rejects(
-				reserveReplay(path, 1100000, "fourth"),
+				reserveReplay(path, 1100000, "fourth", EXE_DEV_PLATFORM),
 				/replay_cap/,
 			);
 		} finally {
@@ -1241,7 +1252,7 @@ describe("capped replay budget", () => {
 		const path = join(dir, "budget.json");
 
 		try {
-			await reserveReplay(path, 1100000, "failed");
+			await reserveReplay(path, 1100000, "failed", EXE_DEV_PLATFORM);
 			const row = await fixtureRow();
 
 			const failed: LedgerRow = {
@@ -1264,7 +1275,7 @@ describe("capped replay budget", () => {
 			let b = await readReplayBudget(path);
 			assert.equal(b.chargedTokens, 27000);
 			assert.equal(b.reservations[0]?.outcome, "failed");
-			await reserveReplay(path, 1100000, "interrupted");
+			await reserveReplay(path, 1100000, "interrupted", EXE_DEV_PLATFORM);
 			await settleReplay(path, "interrupted", {
 				...row,
 				runId: digestOf("interrupted run"),
@@ -1282,7 +1293,7 @@ describe("capped replay budget", () => {
 			assert.equal(b.chargedTokens, 567000);
 			assert.ok(b.wallMs >= 0);
 			await assert.rejects(
-				reserveReplay(path, 1099999, "changed-cap"),
+				reserveReplay(path, 1099999, "changed-cap", EXE_DEV_PLATFORM),
 				/replay_policy_changed/,
 			);
 		} finally {

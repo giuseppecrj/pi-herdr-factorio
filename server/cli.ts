@@ -12,9 +12,17 @@ import { readAttention, type AttentionRead } from "../src/attention.ts";
 import {
 	type AdmissionReceipt,
 	admitTicket,
-	FACTORY_REPOSITORIES,
 	fileAdmissionStore,
 } from "../src/admission.ts";
+import {
+	type PlatformFile,
+	type PlatformProfile,
+	type PlatformSummary,
+	platformSummary,
+	readPlatformFile,
+	resolvePlatform,
+	soleRepository,
+} from "../src/platform.ts";
 import { GitHubTicketAdapter } from "../src/adapters/github.ts";
 import {
 	type Clock,
@@ -144,6 +152,7 @@ export type ExecutorContext = {
 	readonly stateDir: string;
 	readonly exec: Exec;
 	readonly log: Log;
+	readonly platform: PlatformProfile;
 };
 
 const XDG_RUNTIME_DIR = "/run/user/1000";
@@ -151,6 +160,8 @@ const XDG_RUNTIME_DIR = "/run/user/1000";
 export type CliIo = {
 	exec: Exec;
 	env: EnvLookup;
+	/** Reads the platform selection file. The process entry reads `/etc/factory/platform.json`. */
+	readPlatformFile: () => Promise<PlatformFile>;
 	stdout: (text: string) => void;
 	stderr: (text: string) => void;
 	runtime?: ControllerRuntime;
@@ -419,6 +430,7 @@ type ControllerView =
 	  };
 
 type StatusOutput = Omit<StatusReport, "controller"> & {
+	readonly platform: PlatformSummary;
 	readonly controller: ControllerView;
 	readonly attention: AttentionRead;
 	readonly ledger: Awaited<ReturnType<typeof readLedgerBacklog>>;
@@ -505,12 +517,13 @@ function realRuntime(): ControllerRuntime {
 async function runController(
 	parsed: Extract<Parsed, { kind: "controller" }>,
 	io: CliIo,
+	platform: PlatformProfile,
 ): Promise<number> {
 	const runtime = io.runtime ?? realRuntime();
 	const { clock } = runtime;
 	const log = lineLog(io.stderr, () => clock.now());
 
-	if (!FACTORY_REPOSITORIES.includes(parsed.repo)) {
+	if (!platform.repositories.includes(parsed.repo)) {
 		log("controller_refused", { reason: "repo_not_allowed" });
 
 		return EXIT.invalid;
@@ -518,6 +531,12 @@ async function runController(
 
 	if (!(await isPrivateDirectory(parsed.stateDir))) {
 		log("controller_refused", { reason: "state_unavailable" });
+
+		return EXIT.invalid;
+	}
+
+	if (io.env("GH_HOST") !== platform.ghHost) {
+		log("controller_refused", { reason: "gh_host_mismatch" });
 
 		return EXIT.invalid;
 	}
@@ -558,6 +577,7 @@ async function runController(
 
 		const identity = await checkIdentity(
 			new GitHubTicketAdapter({ exec: io.exec, repo: parsed.repo }),
+			platform.controllerLogin,
 		);
 
 		if (identity.kind !== "ok") {
@@ -598,6 +618,7 @@ async function runController(
 			stateDir: parsed.stateDir,
 			exec: io.exec,
 			log,
+			platform,
 		});
 
 		const cadence =
@@ -606,6 +627,7 @@ async function runController(
 						stateDir: parsed.stateDir,
 						repo: parsed.repo,
 						exec: io.exec,
+						platform,
 						executor,
 						log,
 						signal: runtime.signal,
@@ -616,6 +638,7 @@ async function runController(
 			stateDir: parsed.stateDir,
 			repo: parsed.repo,
 			exec: io.exec,
+			platform,
 			executor,
 			log,
 			signal: runtime.signal,
@@ -624,9 +647,15 @@ async function runController(
 		const orchestrator = new Orchestrator({
 			exec: io.exec,
 			env: io.env,
+			platform,
 			repo: parsed.repo,
 			store: fileAdmissionStore(parsed.stateDir),
-			files: fileRunFiles(parsed.stateDir, runtime.policySource),
+			files: fileRunFiles(
+				parsed.stateDir,
+				runtime.policySource === undefined
+					? undefined
+					: { ...runtime.policySource, platform },
+			),
 			executor,
 			cadence,
 			measurement,
@@ -658,6 +687,7 @@ async function runController(
 			pumpLedgerOutbox({
 				stateDir: parsed.stateDir,
 				exec: io.exec,
+				platform,
 				repo: parsed.repo,
 				now: clock.now(),
 				log,
@@ -668,6 +698,7 @@ async function runController(
 				stateDir: parsed.stateDir,
 				repo: parsed.repo,
 				exec: io.exec,
+				platform,
 				log,
 			});
 
@@ -694,6 +725,7 @@ async function runController(
 						parsed.repo,
 						io,
 						interventionCache,
+						platform,
 					),
 				log,
 			});
@@ -702,6 +734,7 @@ async function runController(
 				await serveLoop({
 					orchestrator,
 					stateDir: parsed.stateDir,
+					platform,
 					sleep: runtime.sleep,
 					signal: runtime.signal,
 					log,
@@ -736,6 +769,7 @@ async function runController(
 			!(await writeStatus(
 				parsed.stateDir,
 				report,
+				platform,
 				durableUsageOf(
 					await readDurableAccounting(parsed.stateDir, parsed.repo),
 				),
@@ -1003,6 +1037,7 @@ async function readMetricInterventions(
 	ledger: Uint8Array,
 	repo: string,
 	io: CliIo,
+	controllerLogin: string,
 	cache?: Map<string, InterventionRead>,
 ): Promise<Interventions> {
 	const byPr = new Map<number, MetricReview[] | null>();
@@ -1049,8 +1084,7 @@ async function readMetricInterventions(
 							(review) =>
 								review.state === "CHANGES_REQUESTED" &&
 								review.submittedAt < mergedAt &&
-								review.actor.toLowerCase() !==
-									"exe-dev-github-integration[bot]",
+								review.actor.toLowerCase() !== controllerLogin,
 						),
 					},
 		);
@@ -1102,6 +1136,7 @@ export async function collectOwnerMetrics(
 	repo: RepoSlug,
 	io: CliIo,
 	cache: Map<string, InterventionRead>,
+	platform: PlatformProfile,
 ): Promise<JsonValue> {
 	const deadline = Date.now() + 120_000;
 	let deadlineExpired = false;
@@ -1136,7 +1171,10 @@ export async function collectOwnerMetrics(
 	let failure = "ledger_ref_unavailable";
 
 	try {
-		const api = ledgerApiOf(new GitHubPublicationApi(bounded.exec, repo));
+		const api = ledgerApiOf(
+			new GitHubPublicationApi(bounded.exec, repo, platform),
+		);
+
 		const tip = await api.ref();
 
 		if (tip === null) {
@@ -1165,6 +1203,7 @@ export async function collectOwnerMetrics(
 			ledger,
 			repo,
 			bounded,
+			platform.controllerLogin,
 			cache,
 		);
 
@@ -1245,6 +1284,7 @@ async function runOwnerFeedCli(
 async function runMetricsCli(
 	argv: readonly string[],
 	io: CliIo,
+	platform: PlatformProfile,
 ): Promise<number> {
 	let parsed;
 
@@ -1370,7 +1410,12 @@ async function runMetricsCli(
 			? await readInterventionFixture(values["intervention-file"])
 			: values.offline === true
 				? undefined
-				: await readMetricInterventions(ledger, values.repo, githubIo);
+				: await readMetricInterventions(
+						ledger,
+						values.repo,
+						githubIo,
+						platform.controllerLogin,
+					);
 
 	if (interventions === null) {
 		io.stdout(json({ error: "intervention_fixture_invalid" }));
@@ -1407,6 +1452,7 @@ async function runMetricsCli(
 async function runReplayCli(
 	argv: readonly string[],
 	io: CliIo,
+	platform: PlatformProfile,
 ): Promise<number> {
 	let parsed;
 
@@ -1569,13 +1615,13 @@ async function runReplayCli(
 			`${mainSha}:.github/factory/WORKFLOW.md`,
 		]);
 
-		const repo = "giuseppecrj/pi-herdr-factorio";
+		const repo = soleRepository(platform);
 
-		if (!isRepoSlug(repo)) throw new Error("replay_repository_invalid");
+		if (repo === null) throw new Error("replay_repository_ambiguous");
 
 		const policy =
 			source.code === 0
-				? parseWorkflow({ text: source.stdout, repo, env: io.env })
+				? parseWorkflow({ text: source.stdout, repo, env: io.env, platform })
 				: null;
 
 		const cap =
@@ -1662,6 +1708,7 @@ async function runReplayCli(
 async function runCadenceCli(
 	argv: readonly string[],
 	io: CliIo,
+	platform: PlatformProfile,
 ): Promise<number> {
 	let parsed;
 
@@ -1710,6 +1757,7 @@ async function runCadenceCli(
 			verificationCap: null,
 		},
 		io,
+		platform,
 	);
 }
 
@@ -1717,6 +1765,7 @@ async function runMeasurementCli(
 	kind: "score" | "explain",
 	argv: readonly string[],
 	io: CliIo,
+	platform: PlatformProfile,
 ): Promise<number> {
 	let parsed;
 
@@ -1746,7 +1795,7 @@ async function runMeasurementCli(
 		!isDigest(v.run) ||
 		v.repo === undefined ||
 		!isRepoSlug(v.repo) ||
-		!FACTORY_REPOSITORIES.includes(v.repo) ||
+		!platform.repositories.includes(v.repo) ||
 		!v["state-dir"] ||
 		(kind === "explain" && v.scorer !== undefined)
 	) {
@@ -1780,6 +1829,7 @@ async function runMeasurementCli(
 			repo: v.repo,
 			ref: TRUSTED_REF,
 			env: io.env,
+			platform,
 		});
 
 		if (load.kind !== "loaded") throw new Error("trusted_workflow_unavailable");
@@ -1789,11 +1839,18 @@ async function runMeasurementCli(
 			(
 				await checkIdentity(
 					new GitHubTicketAdapter({ exec: io.exec, repo: v.repo }),
+					platform.controllerLogin,
 				)
 			).kind !== "ok"
 		)
 			throw new Error("identity_unavailable");
-		const executor = runtime.executor({ stateDir, exec: io.exec, log });
+
+		const executor = runtime.executor({
+			stateDir,
+			exec: io.exec,
+			log,
+			platform,
+		});
 
 		if (!(await executor.reconciled()))
 			throw new Error("sandbox_recovery_unavailable");
@@ -1802,6 +1859,7 @@ async function runMeasurementCli(
 			stateDir,
 			repo: v.repo,
 			exec: io.exec,
+			platform,
 			executor,
 			log,
 			signal: runtime.signal,
@@ -1862,14 +1920,30 @@ export async function runCli(
 		stderr: (text) => caller.stderr(redactCredentials(text)),
 	};
 
+	const resolved = await resolvePlatform({
+		env: io.env,
+		readFile: io.readPlatformFile,
+	});
+
+	if (!resolved.ok) {
+		lineLog(io.stderr, () => io.runtime?.clock.now() ?? Date.now())(
+			"platform_invalid",
+			{ reason: resolved.reason },
+		);
+
+		return EXIT.usage;
+	}
+
+	const { profile: platform } = resolved;
+
 	if (argv[0] === "score" || argv[0] === "explain")
-		return runMeasurementCli(argv[0], argv.slice(1), io);
+		return runMeasurementCli(argv[0], argv.slice(1), io, platform);
 
-	if (argv[0] === "cadence") return runCadenceCli(argv.slice(1), io);
+	if (argv[0] === "cadence") return runCadenceCli(argv.slice(1), io, platform);
 
-	if (argv[0] === "replay") return runReplayCli(argv.slice(1), io);
+	if (argv[0] === "replay") return runReplayCli(argv.slice(1), io, platform);
 
-	if (argv[0] === "metrics") return runMetricsCli(argv.slice(1), io);
+	if (argv[0] === "metrics") return runMetricsCli(argv.slice(1), io, platform);
 
 	if (argv[0] === "owner-feed") return runOwnerFeedCli(argv.slice(1), io);
 
@@ -1885,15 +1959,16 @@ export async function runCli(
 		return EXIT.usage;
 	}
 
-	if (parsed.kind === "controller") return runController(parsed, io);
+	if (parsed.kind === "controller") return runController(parsed, io, platform);
 
 	if (parsed.kind === "admit") {
 		const receipt = await admitTicket({
 			exec: io.exec,
 			env: io.env,
+			platform,
 			repo: parsed.repo,
 			issue: parsed.issue,
-			allowlist: FACTORY_REPOSITORIES,
+			allowlist: platform.repositories,
 			store: fileAdmissionStore(parsed.stateDir),
 		});
 
@@ -1903,7 +1978,14 @@ export async function runCli(
 	}
 
 	const { repo, ref, reloadRef } = parsed;
-	const load = await loadWorkflow({ exec: io.exec, repo, ref, env: io.env });
+
+	const load = await loadWorkflow({
+		exec: io.exec,
+		repo,
+		ref,
+		env: io.env,
+		platform,
+	});
 
 	if (parsed.command === "status") {
 		const report = statusReport(load, manifest.version);
@@ -1938,6 +2020,7 @@ export async function runCli(
 		io.stdout(
 			json({
 				...report,
+				platform: platformSummary(platform),
 				controller,
 				attention,
 				ledger,
@@ -1960,6 +2043,7 @@ export async function runCli(
 		repo,
 		ref: reloadRef,
 		env: io.env,
+		platform,
 	});
 
 	io.stdout(json(checkReport(load, next)));
@@ -2046,6 +2130,7 @@ if (import.meta.main) {
 				Math.min(FETCH_TIMEOUT_MS, options?.timeoutMs ?? FETCH_TIMEOUT_MS),
 			),
 		env: (name) => process.env[name],
+		readPlatformFile: () => readPlatformFile(),
 		stdout: (text) => process.stdout.write(text),
 		stderr: (text) => process.stderr.write(text),
 		runtime: { ...realRuntime(), signal: stop.signal },

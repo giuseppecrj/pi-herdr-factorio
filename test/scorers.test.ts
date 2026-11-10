@@ -43,6 +43,7 @@ import {
 	SCORE_FILE,
 } from "../src/publication.ts";
 import { LedgerGit, repo } from "./ledger-git.ts";
+import { EXE_DEV_PLATFORM } from "../src/platform.ts";
 
 const text = readFileSync(
 	new URL("../.github/factory/WORKFLOW.md", import.meta.url),
@@ -50,7 +51,12 @@ const text = readFileSync(
 );
 
 const load = (source = text) =>
-	parseWorkflow({ text: source, repo, env: (name) => process.env[name] });
+	parseWorkflow({
+		platform: EXE_DEV_PLATFORM,
+		text: source,
+		repo,
+		env: (name) => process.env[name],
+	});
 
 const parsed = load();
 
@@ -257,7 +263,7 @@ it("re-scoring retains history and tolerates foreign or forked supersession", ()
 
 it("the score stream uses publication idempotency, prefix validation and shared-ref fast-forward retry without changing run bytes", async () => {
 	const git = new LedgerGit();
-	const pub = new GitHubPublicationApi(git.exec, repo);
+	const pub = new GitHubPublicationApi(git.exec, repo, EXE_DEV_PLATFORM);
 	const runs = ledgerApiOf(pub);
 	const root = await runs.root("2026-11-10T10:00:00Z");
 	await runs.advance(null, root.sha);
@@ -431,12 +437,17 @@ it("two state directories scoring the same run concurrently cannot collide or br
 		assert.notEqual(first.id, second.id);
 
 		const git = new LedgerGit();
-		const api = ledgerApiOf(new GitHubPublicationApi(git.exec, repo));
+
+		const api = ledgerApiOf(
+			new GitHubPublicationApi(git.exec, repo, EXE_DEV_PLATFORM),
+		);
+
 		await api.advance(null, (await api.root(first.at)).sha);
 		enqueueScore(a, first);
 		enqueueScore(b, second);
 		assert.equal(
 			await pumpScoreOutbox({
+				platform: EXE_DEV_PLATFORM,
 				stateDir: a,
 				repo,
 				exec: git.exec,
@@ -446,6 +457,7 @@ it("two state directories scoring the same run concurrently cannot collide or br
 		);
 		assert.equal(
 			await pumpScoreOutbox({
+				platform: EXE_DEV_PLATFORM,
 				stateDir: b,
 				repo,
 				exec: git.exec,
@@ -455,7 +467,7 @@ it("two state directories scoring the same run concurrently cannot collide or br
 		);
 
 		const scores = ledgerApiOf(
-			new GitHubPublicationApi(git.exec, repo),
+			new GitHubPublicationApi(git.exec, repo, EXE_DEV_PLATFORM),
 			"scores",
 		);
 
@@ -470,6 +482,7 @@ it("two state directories scoring the same run concurrently cannot collide or br
 		assert.equal(scoreHistory(a).length, 3);
 		assert.equal(
 			await pumpScoreOutbox({
+				platform: EXE_DEV_PLATFORM,
 				stateDir: a,
 				repo,
 				exec: git.exec,
@@ -507,13 +520,18 @@ it("score publication is serialized and score faults do not masquerade as run-le
 
 	try {
 		const git = new LedgerGit();
-		const api = ledgerApiOf(new GitHubPublicationApi(git.exec, repo));
+
+		const api = ledgerApiOf(
+			new GitHubPublicationApi(git.exec, repo, EXE_DEV_PLATFORM),
+		);
+
 		await api.advance(null, (await api.root(event().at)).sha);
 		enqueueScore(dir, event());
 
 		const logs: string[] = [];
 
 		const input = {
+			platform: EXE_DEV_PLATFORM,
 			stateDir: dir,
 			repo,
 			exec: git.exec,
@@ -547,7 +565,7 @@ it("a run append with its existing anchor still works after score commits", asyn
 	).filter((line) => line.kind === "known");
 
 	const git = new LedgerGit();
-	const pub = new GitHubPublicationApi(git.exec, repo);
+	const pub = new GitHubPublicationApi(git.exec, repo, EXE_DEV_PLATFORM);
 	const runs = ledgerApiOf(pub);
 	const first = rows[0]!;
 	const next = rows[1]!;
@@ -600,7 +618,7 @@ it("first score publication reuses proven run ancestry and reads the score tip i
 
 	try {
 		const git = new LedgerGit();
-		const pub = new GitHubPublicationApi(git.exec, repo);
+		const pub = new GitHubPublicationApi(git.exec, repo, EXE_DEV_PLATFORM);
 		const runs = ledgerApiOf(pub);
 
 		const fixture = parseLedger(
@@ -644,6 +662,7 @@ it("first score publication reuses proven run ancestry and reads the score tip i
 		enqueueScore(dir, event());
 		assert.equal(
 			await pumpScoreOutbox({
+				platform: EXE_DEV_PLATFORM,
 				stateDir: dir,
 				repo,
 				exec: git.exec,
@@ -674,13 +693,18 @@ it("score publication has its own five-second transport slice", async () => {
 
 	try {
 		const git = new LedgerGit();
-		const api = ledgerApiOf(new GitHubPublicationApi(git.exec, repo));
+
+		const api = ledgerApiOf(
+			new GitHubPublicationApi(git.exec, repo, EXE_DEV_PLATFORM),
+		);
+
 		await api.advance(null, (await api.root(event().at)).sha);
 		enqueueScore(dir, event());
 		let elapsed = 0;
 		let calls = 0;
 
 		const result = await pumpScoreOutbox({
+			platform: EXE_DEV_PLATFORM,
 			stateDir: dir,
 			repo,
 			log: () => {},
@@ -717,6 +741,7 @@ it("score publication never creates the run-owned ledger root", async () => {
 		enqueueScore(dir, event());
 		assert.equal(
 			await pumpScoreOutbox({
+				platform: EXE_DEV_PLATFORM,
 				stateDir: dir,
 				repo,
 				exec: git.exec,

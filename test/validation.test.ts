@@ -65,6 +65,7 @@ import {
 } from "../src/handoff.ts";
 import { candidateBranch, storeOwnerPatch } from "../src/publication.ts";
 import type { Exec } from "../src/gh.ts";
+import { EXE_DEV_PLATFORM } from "../src/platform.ts";
 
 const candidateSha = "c".repeat(40);
 const gateSha = "a".repeat(40);
@@ -111,7 +112,12 @@ const binding = {
 };
 
 describe("reporter-owned candidate checks (unit transport)", () => {
-	const verdict = collectVerdict({ ...binding, text: JSON.stringify(receipt) });
+	const verdict = collectVerdict({
+		controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
+		...binding,
+		text: JSON.stringify(receipt),
+	});
+
 	const externalId = `factory-gates:${run.id}:nonce`;
 
 	const record = {
@@ -142,6 +148,7 @@ describe("reporter-owned candidate checks (unit transport)", () => {
 	};
 
 	const input = {
+		controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
 		record,
 		checks: { total_count: 1, check_runs: [check] },
 		run,
@@ -316,9 +323,16 @@ globalThis.fetch = async (url, init) => {
 		result: ReturnType<typeof emit>,
 		text = JSON.stringify(cliReceipt),
 	) {
-		const verdict = collectVerdict({ ...binding, run: ciRun, nonce, text });
+		const verdict = collectVerdict({
+			controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
+			...binding,
+			run: ciRun,
+			nonce,
+			text,
+		});
 
 		return collectTrustedReport({
+			controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
 			record: result.record,
 			checks: {
 				total_count: 1,
@@ -794,6 +808,7 @@ async function reportDeadlineFixture(
 		assert.ok(restored);
 
 		return (owner ? ownerValidator : controllerValidator)({
+			platform: EXE_DEV_PLATFORM,
 			stateDir: root,
 			exec,
 			receipt: async () => JSON.stringify(hardReceipt),
@@ -1060,6 +1075,7 @@ describe("bound validation verdicts", () => {
 	});
 	it("binds every identity and leaves judge criteria unjudged", () => {
 		const verdict = collectVerdict({
+			controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
 			...binding,
 			text: JSON.stringify(receipt),
 		});
@@ -1099,6 +1115,7 @@ describe("bound validation verdicts", () => {
 		it(`fails closed on ${JSON.stringify(altered)}`, () => {
 			assert.equal(
 				collectVerdict({
+					controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
 					...binding,
 					text: JSON.stringify({ ...receipt, ...altered }),
 				}).pass,
@@ -1116,6 +1133,7 @@ describe("bound validation verdicts", () => {
 		it(`does not pass conclusion ${conclusion}`, () => {
 			assert.equal(
 				collectVerdict({
+					controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
 					...binding,
 					run: { ...run, conclusion },
 					text: JSON.stringify(receipt),
@@ -1126,6 +1144,7 @@ describe("bound validation verdicts", () => {
 	it("requires a completed run even with a success conclusion", () => {
 		assert.equal(
 			collectVerdict({
+				controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
 				...binding,
 				run: { ...run, status: "in_progress" },
 				text: JSON.stringify(receipt),
@@ -1136,6 +1155,7 @@ describe("bound validation verdicts", () => {
 	it("refuses a gate revision different from the candidate base", () => {
 		assert.equal(
 			collectVerdict({
+				controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
 				...binding,
 				baseSha: candidateSha,
 				text: JSON.stringify(receipt),
@@ -1150,7 +1170,14 @@ describe("bound validation verdicts", () => {
 			"{",
 			JSON.stringify({ checks: [], requiredChecks: [] }),
 		])
-			assert.equal(collectVerdict({ ...binding, text }).pass, false);
+			assert.equal(
+				collectVerdict({
+					controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
+					...binding,
+					text,
+				}).pass,
+				false,
+			);
 	});
 	it("authenticates the run event, path, actors, nonce and creation time", () => {
 		assert.equal(
@@ -1159,6 +1186,7 @@ describe("bound validation verdicts", () => {
 				binding.candidateSha,
 				"nonce",
 				Date.parse(run.createdAt),
+				EXE_DEV_PLATFORM.controllerLogin,
 			),
 			true,
 		);
@@ -1178,6 +1206,7 @@ describe("bound validation verdicts", () => {
 					binding.candidateSha,
 					"nonce",
 					Date.parse(run.createdAt),
+					EXE_DEV_PLATFORM.controllerLogin,
 				),
 				false,
 			);
@@ -1361,7 +1390,13 @@ describe("generation-aware validation cleanup", () => {
 					return ok({});
 				};
 
-				const config = { stateDir: root, exec, now: () => 201 };
+				const config = {
+					platform: EXE_DEV_PLATFORM,
+					stateDir: root,
+					exec,
+					now: () => 201,
+				};
+
 				await sweepValidation(config);
 				const first = book.history[0]?.validation?.publication;
 				assert.ok(first);
@@ -1412,6 +1447,7 @@ it("collection itself refuses a receipt from the wrong run actor or workflow", (
 	])
 		assert.equal(
 			collectVerdict({
+				controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
 				...binding,
 				run: { ...run, ...change },
 				text: JSON.stringify(receipt),

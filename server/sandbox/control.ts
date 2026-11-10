@@ -36,6 +36,7 @@ export type CloseReason = (typeof CLOSE_REASONS)[number];
 
 export const FATAL_CODES = [
 	"bad-arguments",
+	"bad-platform",
 	"bad-table",
 	"bad-credentials",
 	"socket-exists",

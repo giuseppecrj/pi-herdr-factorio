@@ -5,9 +5,14 @@ import {
 	type AdmissionReceipt,
 	type AdmissionStore,
 	admitTicket,
-	FACTORY_REPOSITORIES,
 	type RefusalReason,
 } from "../src/admission.ts";
+import {
+	type PlatformProfile,
+	type PlatformResolution,
+	readPlatformFile,
+	resolvePlatform,
+} from "../src/platform.ts";
 import { formatStageTable } from "../src/stages.ts";
 import {
 	type EnvLookup,
@@ -49,7 +54,11 @@ export type WorkflowState =
 	| WorkflowLoad
 	| { readonly kind: "no_repository"; readonly reason: string };
 
-export type StatusSources = { exec: Exec; env: EnvLookup };
+export type StatusSources = {
+	exec: Exec;
+	env: EnvLookup;
+	platform: PlatformProfile;
+};
 
 export function readPackageVersion(): string {
 	return manifest.version;
@@ -130,6 +139,7 @@ export async function readWorkflowState(
 		repo,
 		ref: TRUSTED_REF,
 		env: sources.env,
+		platform: sources.platform,
 	});
 }
 
@@ -197,9 +207,10 @@ async function dryRunText(
 	const receipt = await admitTicket({
 		exec: sources.exec,
 		env: sources.env,
+		platform: sources.platform,
 		repo: origin.repo,
 		issue: Number(issueArg),
-		allowlist: FACTORY_REPOSITORIES,
+		allowlist: sources.platform.repositories,
 		store: DRY_RUN_STORE_SWITCH_ASSUMED_ON,
 	});
 
@@ -238,8 +249,13 @@ export async function factoryCommandText(
 	);
 }
 
+/**
+ * Registers `/factory`. `platform` is resolved once, when the extension
+ * loads; a refused selection answers every command with its reason.
+ */
 export function registerFactory(
 	pi: Pick<ExtensionAPI, "registerCommand" | "sendMessage" | "exec">,
+	platform: Promise<PlatformResolution>,
 ) {
 	pi.registerCommand("factory", {
 		description:
@@ -251,12 +267,17 @@ export function registerFactory(
 					timeout: FETCH_TIMEOUT_MS,
 				});
 
+			const resolved = await platform;
+
 			pi.sendMessage({
 				customType: STATUS_MESSAGE_TYPE,
-				content: await factoryCommandText(args, {
-					exec,
-					env: (name) => process.env[name],
-				}),
+				content: resolved.ok
+					? await factoryCommandText(args, {
+							exec,
+							env: (name) => process.env[name],
+							platform: resolved.profile,
+						})
+					: `platform    unavailable: platform_invalid reason=${resolved.reason}`,
 				display: true,
 			});
 		},
@@ -264,5 +285,11 @@ export function registerFactory(
 }
 
 export default function piHerdrFactorio(pi: ExtensionAPI) {
-	registerFactory(pi);
+	registerFactory(
+		pi,
+		resolvePlatform({
+			env: (name) => process.env[name],
+			readFile: () => readPlatformFile(),
+		}),
+	);
 }

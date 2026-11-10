@@ -16,6 +16,7 @@ import { READY_LABEL } from "../src/policy.ts";
 import { STAGE_ORDER } from "../src/stages.ts";
 import type { Exec, ExecResult } from "../src/workflow.ts";
 import { FakeGitHub, fakeIssue, labelEvent } from "./fake-ticket-adapter.ts";
+import { EXE_DEV_PLATFORM } from "../src/platform.ts";
 
 const remote = "git@github.com:giuseppecrj/pi-herdr-factorio.git\n";
 const mainSha = "c".repeat(40);
@@ -55,6 +56,7 @@ function sources(
 	return {
 		exec,
 		env: (name) => (name === "HOME" ? "/home/factory" : undefined),
+		platform: EXE_DEV_PLATFORM,
 	};
 }
 
@@ -66,13 +68,16 @@ describe("/factory command", () => {
 	it("registers a single factory command", () => {
 		const registered: string[] = [];
 
-		registerFactory({
-			registerCommand: (name) => {
-				registered.push(name);
+		registerFactory(
+			{
+				registerCommand: (name) => {
+					registered.push(name);
+				},
+				sendMessage: () => {},
+				exec: async () => ({ ...offline, killed: false }),
 			},
-			sendMessage: () => {},
-			exec: async () => ({ ...offline, killed: false }),
-		});
+			Promise.resolve({ ok: true as const, profile: EXE_DEV_PLATFORM }),
+		);
 
 		assert.deepEqual(registered, ["factory"]);
 	});
@@ -231,27 +236,30 @@ describe("/factory command", () => {
 		const cwds: (string | undefined)[] = [];
 		let handler: ((args: string) => Promise<void>) | undefined;
 
-		registerFactory({
-			registerCommand: (_name, options) => {
-				// SAFETY: the factory handler reads only `cwd` from its context.
-				const ctx = { cwd: "/work/checkout" } as Parameters<
-					typeof options.handler
-				>[1];
+		registerFactory(
+			{
+				registerCommand: (_name, options) => {
+					// SAFETY: the factory handler reads only `cwd` from its context.
+					const ctx = { cwd: "/work/checkout" } as Parameters<
+						typeof options.handler
+					>[1];
 
-				handler = (args) => options.handler(args, ctx);
-			},
-			sendMessage: (message) => {
-				sent.push(String(message.content));
-			},
-			exec: async (command, args, options) => {
-				cwds.push(options?.cwd);
+					handler = (args) => options.handler(args, ctx);
+				},
+				sendMessage: (message) => {
+					sent.push(String(message.content));
+				},
+				exec: async (command, args, options) => {
+					cwds.push(options?.cwd);
 
-				return {
-					...(command === "git" ? ok(remote) : online(args)),
-					killed: false,
-				};
+					return {
+						...(command === "git" ? ok(remote) : online(args)),
+						killed: false,
+					};
+				},
 			},
-		});
+			Promise.resolve({ ok: true as const, profile: EXE_DEV_PLATFORM }),
+		);
 
 		await handler?.("status");
 
@@ -378,23 +386,26 @@ async function sentFor(scenario: Scenario): Promise<string[]> {
 	const sent: string[] = [];
 	let handler: ((args: string) => Promise<void>) | undefined;
 
-	registerFactory({
-		registerCommand: (_name, options) => {
-			// SAFETY: the factory handler reads only `cwd` from its context.
-			const ctx = { cwd: "/work/checkout" } as Parameters<
-				typeof options.handler
-			>[1];
+	registerFactory(
+		{
+			registerCommand: (_name, options) => {
+				// SAFETY: the factory handler reads only `cwd` from its context.
+				const ctx = { cwd: "/work/checkout" } as Parameters<
+					typeof options.handler
+				>[1];
 
-			handler = (args) => options.handler(args, ctx);
+				handler = (args) => options.handler(args, ctx);
+			},
+			sendMessage: (message) => {
+				sent.push(String(message.content));
+			},
+			exec: async (command, args) =>
+				command === "git"
+					? { ...ok(scenario.origin), killed: false }
+					: { ...(await scenario.gh(args)), killed: false },
 		},
-		sendMessage: (message) => {
-			sent.push(String(message.content));
-		},
-		exec: async (command, args) =>
-			command === "git"
-				? { ...ok(scenario.origin), killed: false }
-				: { ...(await scenario.gh(args)), killed: false },
-	});
+		Promise.resolve({ ok: true as const, profile: EXE_DEV_PLATFORM }),
+	);
 
 	await handler?.("status");
 
@@ -412,6 +423,7 @@ describe("untrusted text never reaches /factory status", () => {
 				command === "git" ? ok(scenario.origin) : scenario.gh(args);
 
 			const text = await factoryCommandText("status", {
+				platform: EXE_DEV_PLATFORM,
 				exec,
 				env: (key) => (key === "HOME" ? "/home/factory" : undefined),
 			});
@@ -436,6 +448,7 @@ describe("untrusted text never reaches /factory status", () => {
 	for (const [where, workflowText] of bareTokenKeys) {
 		it(`withholds a bare token key in ${where}`, async () => {
 			const text = await factoryCommandText("status", {
+				platform: EXE_DEV_PLATFORM,
 				exec: async (command, args) =>
 					command === "git" ? ok(remote) : serving(workflowText)(args),
 				env: (key) => (key === "HOME" ? "/home/factory" : undefined),
@@ -467,7 +480,7 @@ describe("/factory run <issue>", () => {
 		const exec: Exec = async (command, args) =>
 			command === "git" ? ok(remote) : github.exec(command, args);
 
-		return { exec, env: () => "/home/factory" };
+		return { exec, env: () => "/home/factory", platform: EXE_DEV_PLATFORM };
 	}
 
 	function labeled(github: FakeGitHub) {
@@ -540,7 +553,11 @@ describe("/factory run <issue>", () => {
 		const exec: Exec = async () => ({ stdout: "", stderr: "", code: 2 });
 
 		assert.equal(
-			await factoryCommandText("run 14", { exec, env: () => undefined }),
+			await factoryCommandText("run 14", {
+				platform: EXE_DEV_PLATFORM,
+				exec,
+				env: () => undefined,
+			}),
 			"run         unavailable: no git remote named origin",
 		);
 	});

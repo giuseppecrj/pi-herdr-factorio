@@ -27,6 +27,7 @@ import {
 	type CaptureName,
 } from "./fixtures/owner-feed/capture.ts";
 import { v1Problems } from "./fixtures/owner-feed/contract.ts";
+import { noPlatformFile } from "./helpers.ts";
 
 async function state<T>(body: (root: string) => Promise<T>) {
 	const root = await mkdtemp(join(tmpdir(), "owner-feed-"));
@@ -81,6 +82,7 @@ test("read CLI and feed perform no transport or model calls, including unavailab
 		let output = "";
 
 		const exit = await runCli(["owner-feed", "--json", "--state-dir", root], {
+			readPlatformFile: noPlatformFile,
 			exec: async () => {
 				throw new Error("read must not spawn");
 			},

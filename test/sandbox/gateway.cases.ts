@@ -65,6 +65,7 @@ import type { JsonValue } from "../../src/tickets.ts";
 import { anthropicTable, modelTable } from "./routes.cases.ts";
 
 import { assertReaderParity } from "./settlement-fixtures.ts";
+import { EXE_DEV_PLATFORM } from "../../src/platform.ts";
 
 const journals: JournalRecord[][] = [];
 
@@ -262,6 +263,7 @@ function binding(table: RouteTable): CredentialBinding {
 	const ceilings = parseCeilings(
 		LINEAR_CEILING.replace("443", String(table.routes[5]?.upstream.port)),
 		"test",
+		EXE_DEV_PLATFORM,
 	);
 
 	assert.ok(ceilings.ok);
@@ -1184,6 +1186,7 @@ describe("gateway credential engine against the echo fixture", () => {
 		const ceilings = parseCeilings(
 			LINEAR_CEILING.replace("443", String(fixture.port)),
 			"test",
+			EXE_DEV_PLATFORM,
 		);
 
 		assert.ok(ceilings.ok);
@@ -2461,6 +2464,7 @@ describe("gateway process request journal", () => {
 			mkdirSync(stage, { recursive: true });
 
 			const started = await startGatewayProcess({
+				platform: EXE_DEV_PLATFORM,
 				gatewayDir: join(dir, "gw"),
 				auditPath: join(stage, "egress.jsonl"),
 				table: { ...table, routes: table.routes.slice(0, 2) },
@@ -2532,6 +2536,8 @@ describe("gateway process and control pipe", () => {
 					socketPath,
 					"--audit",
 					join(dir, "egress.jsonl"),
+					"--platform",
+					"exe-dev",
 				],
 				{ stdio: ["pipe", "pipe", "ignore"], env: {} },
 			);
@@ -2612,6 +2618,8 @@ describe("gateway process and control pipe", () => {
 					join(dir, "gw.sock"),
 					"--audit",
 					join(dir, "egress.jsonl"),
+					"--platform",
+					"exe-dev",
 				],
 				{ stdio: ["pipe", "pipe", "ignore"], env: {} },
 			);
@@ -2685,6 +2693,8 @@ describe("gateway process and control pipe", () => {
 					join(dir, "egress.jsonl"),
 					"--ceilings",
 					join(dir, "ceilings.json"),
+					"--platform",
+					"exe-dev",
 				],
 				{
 					stdio: ["pipe", "pipe", "ignore"],

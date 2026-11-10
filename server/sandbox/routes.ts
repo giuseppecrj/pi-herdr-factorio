@@ -1,5 +1,10 @@
 import { isIP } from "node:net";
 import {
+	EXE_DEV_PLATFORM,
+	type PlatformNetwork,
+	platformDefect,
+} from "../../src/platform.ts";
+import {
 	arrayOf,
 	boolOf,
 	countOf,
@@ -167,13 +172,15 @@ export const FORWARDER_PORT = 18080;
 
 export const FORWARDER_HOST = `127.0.0.1:${FORWARDER_PORT}`;
 
-export const MODEL_HOST = "llm.int.exe.xyz";
+/** The exe-dev model host, kept for test imports. Routes read the platform. */
+export const MODEL_HOST = EXE_DEV_PLATFORM.modelHost;
 
 export const NPM_HOST = "registry.npmjs.org";
 
 export const BUILTIN_HOSTS = [MODEL_HOST, NPM_HOST] as const;
 
-export const EDGE_ADDRESS = "169.254.169.254";
+/** The exe-dev edge, kept for test imports. Routes read the platform. */
+export const EDGE_ADDRESS = EXE_DEV_PLATFORM.edgeAddress;
 
 export const MODEL_ROUTE_IDS = [
 	"model-openai",
@@ -247,15 +254,16 @@ const NPM_LIMITS: Limits = {
 	maxConcurrent: 16,
 };
 
-function modelUpstream(basePath: string): Upstream {
+/** The platform's model integration: its host, Host header and SNI, pinned to its edge. */
+function modelUpstream(network: PlatformNetwork, basePath: string): Upstream {
 	return {
 		scheme: "https",
-		host: MODEL_HOST,
+		host: network.modelHost,
 		port: 443,
 		basePath,
-		hostHeader: MODEL_HOST,
-		sni: MODEL_HOST,
-		address: { kind: "pinned", ip: EDGE_ADDRESS },
+		hostHeader: network.modelHost,
+		sni: network.modelHost,
+		address: { kind: "pinned", ip: network.edgeAddress },
 	};
 }
 
@@ -272,6 +280,7 @@ const NPM_UPSTREAM: Upstream = {
 function modelRoute(input: {
 	id: RouteId;
 	prefix: string;
+	upstream: Upstream;
 	model: string;
 	fallback?: string;
 	initially: "open" | "closed";
@@ -279,7 +288,7 @@ function modelRoute(input: {
 	return {
 		id: input.id,
 		prefix: input.prefix,
-		upstream: modelUpstream(input.prefix),
+		upstream: input.upstream,
 		methods: ["GET", "POST"],
 		paths: [
 			{ kind: "exact", path: "models" },
@@ -339,11 +348,11 @@ const ANTHROPIC_TOOL_KEYS = [
  * `anthropic-version` itself. The edge returns 400 without that header.
  * `max_tokens` is rewritten by the gateway, never `max_output_tokens`.
  */
-function anthropicRoute(model: string): Route {
+function anthropicRoute(network: PlatformNetwork, model: string): Route {
 	return {
 		id: builtinRouteId("model-anthropic"),
 		prefix: "/anthropic/",
-		upstream: modelUpstream("/anthropic/"),
+		upstream: modelUpstream(network, network.modelBasePaths.anthropic),
 		methods: ["GET", "POST"],
 		paths: [
 			{ kind: "exact", path: "v1/models" },
@@ -406,13 +415,16 @@ const NPM_ROUTE: Route = {
 };
 
 /**
- * The stage's routes. `model` is the bare primary id. An OpenAI primary
- * keeps `model-openai` open and puts a non-OpenAI fallback on a closed
- * `model-xai`; it never mounts Anthropic. An Anthropic primary mounts
- * `model-anthropic` open, and only an `openai/` fallback, on a closed
- * `model-openai`. `provider` defaults to `openai`.
+ * The stage's routes on `platform`. `model` is the bare primary id and
+ * `fallback` a `<provider>/<model>` id. An OpenAI primary keeps
+ * `model-openai` open and puts an `xai/` fallback on a closed `model-xai`,
+ * which a platform without an xAI route refuses; it never mounts
+ * Anthropic. An Anthropic primary mounts `model-anthropic` open, and only an
+ * `openai/` fallback, on a closed `model-openai`. `provider` defaults to
+ * `openai`.
  */
 export function builtinTable(input: {
+	platform: PlatformNetwork;
 	stage: string;
 	runId: string;
 	attempt: number;
@@ -424,8 +436,8 @@ export function builtinTable(input: {
 }): RouteTable {
 	const routes =
 		input.provider === "anthropic"
-			? anthropicRoutes(input.model, input.fallback)
-			: openaiRoutes(input.model, input.fallback);
+			? anthropicRoutes(input.platform, input.model, input.fallback)
+			: openaiRoutes(input.platform, input.model, input.fallback);
 
 	routes.push(NPM_ROUTE);
 
@@ -443,45 +455,69 @@ export function builtinTable(input: {
 	};
 }
 
-function anthropicRoutes(model: string, fallback: string | null): Route[] {
-	if (fallback === null) return [anthropicRoute(model)];
+function anthropicRoutes(
+	network: PlatformNetwork,
+	model: string,
+	fallback: string | null,
+): Route[] {
+	if (fallback === null) return [anthropicRoute(network, model)];
 
 	if (!fallback.startsWith("openai/")) {
 		throw new Error("an Anthropic primary takes only an openai/ fallback");
 	}
 
 	return [
-		anthropicRoute(model),
+		anthropicRoute(network, model),
 		modelRoute({
 			id: builtinRouteId("model-openai"),
 			prefix: "/openai/v1/",
-			model: fallback.slice(7),
+			upstream: modelUpstream(network, network.modelBasePaths.openai),
+			model: fallback.slice("openai/".length),
 			initially: "closed",
 		}),
 	];
 }
 
-function openaiRoutes(model: string, fallback: string | null): Route[] {
+function openaiRoutes(
+	network: PlatformNetwork,
+	model: string,
+	fallback: string | null,
+): Route[] {
+	const sameProvider = fallback?.startsWith("openai/") === true;
+
 	const routes: Route[] = [
 		modelRoute({
 			id: builtinRouteId("model-openai"),
 			prefix: "/openai/v1/",
+			upstream: modelUpstream(network, network.modelBasePaths.openai),
 			model,
-			fallback: fallback?.startsWith("openai/") ? fallback.slice(7) : undefined,
+			fallback:
+				fallback !== null && sameProvider
+					? fallback.slice("openai/".length)
+					: undefined,
 			initially: "open",
 		}),
 	];
 
-	if (fallback !== null && !fallback.startsWith("openai/")) {
-		routes.push(
-			modelRoute({
-				id: builtinRouteId("model-xai"),
-				prefix: "/xai/v1/",
-				model: fallback,
-				initially: "closed",
-			}),
-		);
+	if (fallback === null || sameProvider) return routes;
+
+	if (!fallback.startsWith("xai/")) {
+		throw new Error("an OpenAI primary takes only an openai/ or xai/ fallback");
 	}
+
+	const xai = network.modelBasePaths.xai;
+
+	if (xai === null) throw new Error("the platform has no xai route");
+
+	routes.push(
+		modelRoute({
+			id: builtinRouteId("model-xai"),
+			prefix: "/xai/v1/",
+			upstream: modelUpstream(network, xai),
+			model: fallback.slice("xai/".length),
+			initially: "closed",
+		}),
+	);
 
 	return routes;
 }
@@ -500,11 +536,15 @@ function underDomain(host: string, domain: string): boolean {
 }
 
 /**
- * Hosts a credentialed or declared route may never target: every exe.dev
- * name, every GitHub host, the npm registry, localhost and any IP literal,
- * including all-digit spellings a resolver would read as an address.
+ * Hosts a credentialed or declared route may never target: any name at or
+ * under one of the platform's forbidden domains (its own domain, its `int.`
+ * domain and every GitHub domain), the npm registry, localhost and any IP
+ * literal, including all-digit spellings a resolver would read as an address.
  */
-export function isForbiddenUpstreamHost(host: string): boolean {
+export function isForbiddenUpstreamHost(
+	host: string,
+	network: PlatformNetwork,
+): boolean {
 	const name = normalHost(host);
 
 	if (isIP(name) !== 0 || /^[0-9.]+$/.test(name) || /^0x/i.test(name)) {
@@ -515,10 +555,7 @@ export function isForbiddenUpstreamHost(host: string): boolean {
 		name === "localhost" ||
 		name === NPM_HOST ||
 		underDomain(name, "localhost") ||
-		underDomain(name, "exe.xyz") ||
-		underDomain(name, "github.com") ||
-		underDomain(name, "githubusercontent.com") ||
-		underDomain(name, "ghe.com")
+		network.forbiddenDomains.some((domain) => underDomain(name, domain))
 	);
 }
 
@@ -1049,24 +1086,34 @@ function sameUpstream(left: Upstream, right: Upstream): boolean {
 	return JSON.stringify(left) === JSON.stringify(right);
 }
 
-function builtinUpstream(id: RouteId): Upstream | null {
-	if (id === "model-openai") return modelUpstream("/openai/v1/");
+function builtinUpstream(
+	network: PlatformNetwork,
+	id: RouteId,
+): Upstream | null {
+	const paths = network.modelBasePaths;
 
-	if (id === "model-xai") return modelUpstream("/xai/v1/");
+	if (id === "model-openai") return modelUpstream(network, paths.openai);
 
-	if (id === "model-anthropic") return modelUpstream("/anthropic/");
+	if (id === "model-xai") {
+		return paths.xai === null ? null : modelUpstream(network, paths.xai);
+	}
+
+	if (id === "model-anthropic") return modelUpstream(network, paths.anthropic);
 
 	if (id === "npm") return NPM_UPSTREAM;
 
 	return null;
 }
 
-/** Why a route is not allowed in production, or `null` when it is. */
-function productionDefect(route: Route): string | null {
+/** Why a route is not allowed in production on `network`, or `null` when it is. */
+function productionDefect(
+	route: Route,
+	network: PlatformNetwork,
+): string | null {
 	if (route.upstream.scheme !== "https") return "plain-http";
 
 	if (route.credential === null) {
-		const builtin = builtinUpstream(route.id);
+		const builtin = builtinUpstream(network, route.id);
 
 		return builtin !== null && sameUpstream(builtin, route.upstream)
 			? null
@@ -1078,13 +1125,16 @@ function productionDefect(route: Route): string | null {
 	return null;
 }
 
-function credentialDefect(route: Route): string | null {
+function credentialDefect(
+	route: Route,
+	network: PlatformNetwork,
+): string | null {
 	if (route.credential === null) return null;
 
 	if (
-		isForbiddenUpstreamHost(route.upstream.host) ||
-		isForbiddenUpstreamHost(route.upstream.hostHeader) ||
-		isForbiddenUpstreamHost(route.upstream.sni)
+		isForbiddenUpstreamHost(route.upstream.host, network) ||
+		isForbiddenUpstreamHost(route.upstream.hostHeader, network) ||
+		isForbiddenUpstreamHost(route.upstream.sni, network)
 	) {
 		return "forbidden-upstream";
 	}
@@ -1118,16 +1168,25 @@ const TABLE_KEYS = [
 ] as const;
 
 /**
- * Reads a route table at the gateway's boundary. Unknown fields, duplicate
- * ids or prefixes, and any route `mode` does not admit reject the whole table.
+ * Reads a route table at the gateway's boundary, against the gateway's own
+ * platform. A platform that is not its built-in contract, unknown fields,
+ * duplicate ids or prefixes, and any route `mode` does not admit reject the
+ * whole table.
  */
 export function parseRouteTable(
 	value: JsonValue | undefined,
 	mode: TableMode,
+	network: PlatformNetwork,
 ): TableParse {
 	const table = objectOf(value);
 
-	if (table === null || !hasOnlyKeys(table, TABLE_KEYS)) return { ok: false };
+	if (
+		platformDefect(network) !== null ||
+		table === null ||
+		!hasOnlyKeys(table, TABLE_KEYS)
+	) {
+		return { ok: false };
+	}
 
 	const stage = textOf(fieldOf(table, "stage"));
 	const runId = textOf(fieldOf(table, "runId"));
@@ -1166,8 +1225,8 @@ export function parseRouteTable(
 			routes.some(
 				(other) => other.id === route.id || other.prefix === route.prefix,
 			) ||
-			credentialDefect(route) !== null ||
-			(mode === "production" && productionDefect(route) !== null)
+			credentialDefect(route, network) !== null ||
+			(mode === "production" && productionDefect(route, network) !== null)
 		) {
 			return { ok: false };
 		}

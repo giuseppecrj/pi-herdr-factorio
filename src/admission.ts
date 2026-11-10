@@ -33,6 +33,7 @@ import {
 	REPO_SWITCH_LABEL,
 	type WritePermission,
 } from "./policy.ts";
+import { EXE_DEV_PLATFORM, type PlatformProfile } from "./platform.ts";
 import { type Digest, digestOf, isDigest, type NonEmpty } from "./run.ts";
 import type { JsonValue } from "./tickets.ts";
 import {
@@ -40,7 +41,6 @@ import {
 	type Exec,
 	type GitSha,
 	isGitSha,
-	isRepoSlug,
 	loadWorkflow,
 	type RepoSlug,
 	TRUSTED_REF,
@@ -48,10 +48,9 @@ import {
 	type WorkflowLoad,
 } from "./workflow.ts";
 
-/** The repositories this controller admits tickets from. */
-export const FACTORY_REPOSITORIES: readonly RepoSlug[] = [
-	"giuseppecrj/pi-herdr-factorio",
-].filter(isRepoSlug);
+/** The exe-dev profile's repositories, kept for test imports. Production reads `platform.repositories`. */
+export const FACTORY_REPOSITORIES: readonly RepoSlug[] =
+	EXE_DEV_PLATFORM.repositories;
 
 export type Ambiguity =
 	| "label_events_same_second"
@@ -821,6 +820,7 @@ async function evaluate(input: {
 export async function readTickInputs(input: {
 	exec: Exec;
 	env: EnvLookup;
+	platform: PlatformProfile;
 	adapter: GitHubTicketAdapter;
 }): Promise<TickReads> {
 	const repoSwitch = await repoSwitchReason(input.adapter);
@@ -830,6 +830,7 @@ export async function readTickInputs(input: {
 		repo: input.adapter.repo,
 		ref: TRUSTED_REF,
 		env: input.env,
+		platform: input.platform,
 	});
 
 	return { repoSwitch, workflow };
@@ -849,6 +850,7 @@ export async function readTickInputs(input: {
 export async function admitTicket(input: {
 	exec: Exec;
 	env: EnvLookup;
+	platform: PlatformProfile;
 	repo: RepoSlug;
 	issue: number;
 	allowlist: readonly RepoSlug[];
@@ -895,7 +897,12 @@ export async function admitTicket(input: {
 
 	const reads =
 		input.tick ??
-		(await readTickInputs({ exec: input.exec, env: input.env, adapter }));
+		(await readTickInputs({
+			exec: input.exec,
+			env: input.env,
+			platform: input.platform,
+			adapter,
+		}));
 
 	const switchReason = reads.repoSwitch;
 

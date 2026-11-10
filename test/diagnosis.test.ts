@@ -93,6 +93,7 @@ import { generationIntent } from "../src/handoff.ts";
 import { candidateBranch } from "../src/publication.ts";
 import { CONTROLLER_LOGIN } from "../src/markers.ts";
 import type { Exec } from "../src/gh.ts";
+import { EXE_DEV_PLATFORM } from "../src/platform.ts";
 
 function missingTool(argv: readonly string[]): string | null {
 	const [command = "", ...args] = argv;
@@ -2243,6 +2244,7 @@ async function jobWorld(
 		assert.ok(restored);
 
 		return controllerValidator({
+			platform: EXE_DEV_PLATFORM,
 			stateDir: state,
 			exec,
 			fetch,

@@ -8,6 +8,7 @@ import type { JsonValue } from "../../server/sandbox/json.ts";
 import type { PiProcess } from "../../server/sandbox/rpc.ts";
 import type { Digest } from "../../src/run.ts";
 import type { ModelId } from "../../src/workflow.ts";
+import { EXE_DEV_PLATFORM } from "../../src/platform.ts";
 
 /**
  * Runs one passing stage through `runStage` with a real gateway process
@@ -71,12 +72,14 @@ function scriptedPi(): PiProcess {
 const dir = mkdtempSync(join(tmpdir(), "factory-receipt-exit-"));
 
 const host: StageHost = {
+	platform: EXE_DEV_PLATFORM,
 	cleanupReserveMs: 10_000,
 	assetsDigest: "e".repeat(64),
 	versions: { pi: "1.4.0", piHerdrAgents: "3.3.1", piHerdrPstack: "0.5.0" },
 	now: Date.now,
 	async startGateway(table) {
 		const started = await startGatewayProcess({
+			platform: EXE_DEV_PLATFORM,
 			gatewayDir: join(dir, "gw"),
 			auditPath: join(dir, "egress.jsonl"),
 			table,

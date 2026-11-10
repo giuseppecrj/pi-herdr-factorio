@@ -4,6 +4,10 @@ import { request } from "node:http";
 import { join } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import {
+	type PlatformNetwork,
+	platformDescriptor,
+} from "../../src/platform.ts";
+import {
 	type CloseReason,
 	type ControlEvent,
 	encodeCommand,
@@ -51,6 +55,8 @@ export type GatewaySpec = {
 	readonly gatewayDir: string;
 	readonly auditPath: string;
 	readonly table: RouteTable;
+	/** The controller's platform. The gateway rebuilds its expected upstreams from this selection, not from the table. */
+	readonly platform: PlatformNetwork;
 	readonly readyTimeoutMs: number;
 	readonly ceilingsPath?: string;
 	readonly credentialsDirectory?: string;
@@ -283,6 +289,8 @@ export async function startGatewayProcess(
 		socketPath,
 		"--audit",
 		spec.auditPath,
+		"--platform",
+		platformDescriptor(spec.platform),
 	];
 
 	if (spec.ceilingsPath !== undefined)

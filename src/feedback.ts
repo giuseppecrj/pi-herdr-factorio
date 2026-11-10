@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { regularText } from "./artifacts.ts";
 import type { GitHubFailure } from "./adapters/github.ts";
 import type { JsonValue } from "./tickets.ts";
-import { CONTROLLER_LOGIN } from "./markers.ts";
 import { posix } from "node:path";
 import { digestOf, isDigest, type Digest } from "./run.ts";
 import { isGitSha, type GitSha, type RepoSlug } from "./workflow.ts";
@@ -481,12 +480,15 @@ export async function classifyFeedback(input: {
 	head: GitSha;
 	events: readonly FeedbackEvent[];
 	seen: readonly FeedbackId[];
+	controllerLogin: string;
 	permission(actor: string): Promise<"write" | "read" | "failed">;
 }): Promise<ClassifiedFeedback> {
 	const seen = new Set(input.seen);
 
 	const events = input.events
-		.filter((e) => e.actor.toLowerCase() !== CONTROLLER_LOGIN.toLowerCase())
+		.filter(
+			(e) => e.actor.toLowerCase() !== input.controllerLogin.toLowerCase(),
+		)
 		.sort((a, b) => a.id.localeCompare(b.id, "en"));
 
 	const dismissed = events.flatMap((e) =>

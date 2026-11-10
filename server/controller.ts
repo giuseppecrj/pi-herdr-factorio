@@ -51,7 +51,8 @@ import {
 	type FeedbackId,
 	type FeedbackObservation,
 } from "../src/feedback.ts";
-import { CONTROLLER_LOGIN, cadenceMarker } from "../src/markers.ts";
+import { cadenceMarker } from "../src/markers.ts";
+import { type PlatformProfile, platformSummary } from "../src/platform.ts";
 import {
 	CadenceRunner,
 	cadenceSkills,
@@ -108,6 +109,7 @@ import {
 	hasWriteAccess,
 } from "../src/policy.ts";
 import {
+	type CommitIdentity,
 	GitHubPublicationApi,
 	PublicationError,
 	publishCandidate,
@@ -2402,7 +2404,10 @@ export function controllerDiagnosis(config: {
 
 export function fileRunFiles(
 	stateDir: string,
-	policySource?: { readonly fetch?: TarballFetch },
+	policySource?: {
+		readonly fetch?: TarballFetch;
+		readonly platform: PlatformProfile;
+	},
 ): RunFiles {
 	const root = resolve(stateDir);
 	const claims = join(root, "claims");
@@ -2552,6 +2557,7 @@ export function fileRunFiles(
 								text: workflow.toString("utf8"),
 								repo: input.repo,
 								env: (name) => process.env[name],
+								platform: policySource.platform,
 							});
 
 							if (parsed.kind !== "valid") return false;
@@ -3979,6 +3985,7 @@ type ScorePumpInput = {
 	stateDir: string;
 	repo: RepoSlug;
 	exec: Exec;
+	platform: PlatformProfile;
 	log: Log;
 	clock?: () => number;
 	config?: WorkflowConfig;
@@ -4027,6 +4034,7 @@ async function publishScoreOutbox(input: ScorePumpInput) {
 		new GitHubPublicationApi(
 			input.exec,
 			input.repo,
+			input.platform,
 			{},
 			async () => true,
 			undefined,
@@ -4151,9 +4159,16 @@ async function syncScoreHistory(input: {
 	stateDir: string;
 	repo: RepoSlug;
 	exec: Exec;
+	platform: PlatformProfile;
 }) {
 	const api = ledgerApiOf(
-		new GitHubPublicationApi(input.exec, input.repo, {}, async () => true),
+		new GitHubPublicationApi(
+			input.exec,
+			input.repo,
+			input.platform,
+			{},
+			async () => true,
+		),
 		"scores",
 	);
 
@@ -4218,6 +4233,7 @@ type MeasurementContext = {
 	stateDir: string;
 	repo: RepoSlug;
 	exec: Exec;
+	platform: PlatformProfile;
 	executor: StageExecutor;
 	log: Log;
 	signal?: AbortSignal;
@@ -4985,7 +5001,10 @@ export async function runImprovementTrigger(
 	});
 
 	if (!(await cadenceSwitches(input.stateDir, adapter))) return false;
-	const issues = await adapter.readCadenceIssues(CONTROLLER_LOGIN);
+
+	const issues = await adapter.readCadenceIssues(
+		input.platform.controllerLogin,
+	);
 
 	if (issues.kind !== "ok") return false;
 
@@ -5054,6 +5073,7 @@ export async function runImprovementTrigger(
 export async function publishCadenceProposals(input: {
 	stateDir: string;
 	exec: Exec;
+	platform: PlatformProfile;
 	execution: CadenceInput;
 	result: CadenceResult;
 	proposals: readonly CadenceProposal[];
@@ -5075,7 +5095,7 @@ export async function publishCadenceProposals(input: {
 	cadencePrivateDir(intents);
 
 	const issues = await adapter.readCadenceIssues(
-		CONTROLLER_LOGIN,
+		input.platform.controllerLogin,
 		input.signal,
 	);
 
@@ -5216,6 +5236,7 @@ export function controllerCadence(input: {
 	stateDir: string;
 	repo: RepoSlug;
 	exec: Exec;
+	platform: PlatformProfile;
 	executor: StageExecutor;
 	log: Log;
 	signal?: AbortSignal;
@@ -5398,7 +5419,7 @@ export function controllerCadence(input: {
 				execution = { ...execution, changedPaths, previousBaseSha };
 
 				const existing = await adapter.readCadenceIssues(
-					CONTROLLER_LOGIN,
+					input.platform.controllerLogin,
 					deadline,
 				);
 
@@ -5685,10 +5706,14 @@ export async function startDurableUsage(input: {
 	};
 }
 
-/** Writes the last tick's report and cached local usage for `status --json`. */
+/**
+ * Writes the last tick's report, the controller's startup platform and
+ * cached local usage for `status --json`.
+ */
 export async function writeStatus(
 	stateDir: string,
 	report: TickReport,
+	platform: PlatformProfile,
 	durableUsage: JsonValue = {
 		kind: "unavailable",
 		reason: "legacy_not_recorded",
@@ -5696,7 +5721,7 @@ export async function writeStatus(
 ): Promise<boolean> {
 	return writeAtomic(
 		join(resolve(stateDir), STATUS_FILE),
-		`${JSON.stringify({ ...report, durableUsage }, null, 2)}\n`,
+		`${JSON.stringify({ ...report, platform: platformSummary(platform), durableUsage }, null, 2)}\n`,
 	);
 }
 
@@ -5806,6 +5831,7 @@ async function cleanupPublication(
 type ValidatorConfig = {
 	readonly stateDir: string;
 	readonly exec: Exec;
+	readonly platform: PlatformProfile;
 	readonly sleep?: (ms: number) => Promise<void>;
 	readonly fetch?: TarballFetch;
 	readonly receipt?: GateReceiptSource;
@@ -5897,6 +5923,7 @@ function candidateValidator(
 						new GitHubPublicationApi(
 							config.exec,
 							repository,
+							config.platform,
 							{},
 							undefined,
 							config.sleep,
@@ -6017,6 +6044,7 @@ function candidateValidator(
 			const api = new GitHubPublicationApi(
 				config.exec,
 				repo,
+				config.platform,
 				state.counters,
 				save,
 				config.sleep,
@@ -6472,6 +6500,7 @@ function candidateValidator(
 								publication.candidateSha,
 								nonce,
 								state.startedAt,
+								config.platform.controllerLogin,
 							),
 						)
 						? [found]
@@ -6577,7 +6606,15 @@ function candidateValidator(
 					(nonce) => run.title === `gates ${publication.candidateSha} ${nonce}`,
 				) ?? "missing";
 
-			if (!matchesCiRun(run, publication.candidateSha, nonce, state.startedAt))
+			if (
+				!matchesCiRun(
+					run,
+					publication.candidateSha,
+					nonce,
+					state.startedAt,
+					config.platform.controllerLogin,
+				)
+			)
 				return failed("ci_identity");
 			state.ciRunId = run.id;
 
@@ -6602,7 +6639,14 @@ function candidateValidator(
 			const text = await (
 				config.receipt ??
 				((repo, id, sink) =>
-					downloadGateReceipt(config.exec, repo, id, "gate-receipt", sink))
+					downloadGateReceipt(
+						config.exec,
+						repo,
+						config.platform,
+						id,
+						"gate-receipt",
+						sink,
+					))
 			)(repo, run.id, logs).catch(() => null);
 
 			if (text === null && run.conclusion === "success")
@@ -6631,6 +6675,7 @@ function candidateValidator(
 				unjudged: suite.suite.scenarios.flatMap((s) =>
 					s.judge === null ? [] : [s.id],
 				),
+				controllerLogin: config.platform.controllerLogin,
 			});
 
 			keepValidationFile(receiptPath, text ?? "null\n");
@@ -6698,13 +6743,17 @@ function candidateValidator(
 }
 
 async function controllerReport(
-	config: { readonly stateDir: string; readonly exec: Exec },
+	config: {
+		readonly stateDir: string;
+		readonly exec: Exec;
+		readonly platform: PlatformProfile;
+	},
 	repo: RepoSlug,
 	runId: Digest,
 	state: ValidationState,
 	verdict: Verdict,
 ) {
-	const api = new GitHubPublicationApi(config.exec, repo);
+	const api = new GitHubPublicationApi(config.exec, repo, config.platform);
 
 	const run = parseCiRun(
 		await api.request("GET", `actions/runs/${verdict.ciRunId}`),
@@ -6715,6 +6764,7 @@ async function controllerReport(
 	const text = await downloadGateReceipt(
 		config.exec,
 		repo,
+		config.platform,
 		verdict.ciRunId,
 		"factory-report",
 	);
@@ -6729,6 +6779,7 @@ async function controllerReport(
 			state.publication?.candidateSha ?? state.baseSha,
 			n,
 			state.startedAt,
+			config.platform.controllerLogin,
 		),
 	);
 
@@ -6745,6 +6796,7 @@ async function controllerReport(
 		run,
 		nonce,
 		verdict,
+		controllerLogin: config.platform.controllerLogin,
 	});
 
 	if (report !== null) {
@@ -6765,6 +6817,7 @@ async function controllerReport(
 export async function sweepValidation(config: {
 	readonly stateDir: string;
 	readonly exec: Exec;
+	readonly platform: PlatformProfile;
 	readonly fetch?: TarballFetch;
 	readonly receipt?: GateReceiptSource;
 	readonly now?: () => number;
@@ -6846,6 +6899,7 @@ export async function sweepValidation(config: {
 			const api = new GitHubPublicationApi(
 				config.exec,
 				contract.contract.base.repo,
+				config.platform,
 			);
 
 			const progress = join(dir, "cleanup-validation.json");
@@ -6903,6 +6957,7 @@ export async function sweepValidation(config: {
 								publication.candidateSha,
 								nonce,
 								state.startedAt,
+								config.platform.controllerLogin,
 							),
 						)
 						? [run]
@@ -6970,6 +7025,7 @@ export type GateReceiptSource = (
 export async function downloadGateReceipt(
 	exec: Exec,
 	repo: RepoSlug,
+	identity: CommitIdentity,
 	id: number,
 	artifactName = "gate-receipt",
 	checkLogs?: Map<string, string>,
@@ -6977,7 +7033,7 @@ export async function downloadGateReceipt(
 	const dir = mkdtempSync(join(tmpdir(), "factory-ci-"));
 
 	try {
-		const api = new GitHubPublicationApi(exec, repo);
+		const api = new GitHubPublicationApi(exec, repo, identity);
 
 		const listed = objectOf(
 			await api
@@ -7088,6 +7144,7 @@ async function retireUnissuedIntent(path: string, text: string): Promise<void> {
 export function controllerCandidatePort(config: {
 	readonly stateDir: string;
 	readonly exec: Exec;
+	readonly platform: PlatformProfile;
 }): NonNullable<StageExecutor["candidate"]> {
 	const files = fileRunFiles(config.stateDir);
 
@@ -7128,7 +7185,8 @@ export function controllerCandidatePort(config: {
 
 		const matching = comments.value.filter(
 			(c) =>
-				c.author?.login.toLowerCase() === CONTROLLER_LOGIN.toLowerCase() &&
+				c.author?.login.toLowerCase() ===
+					config.platform.controllerLogin.toLowerCase() &&
 				c.author.type === "Bot" &&
 				c.body.split("\n").includes(key),
 		);
@@ -7178,7 +7236,7 @@ export function controllerCandidatePort(config: {
 	};
 
 	const apiOf = (state: CandidateState) =>
-		new GitHubPublicationApi(config.exec, state.pin.repo);
+		new GitHubPublicationApi(config.exec, state.pin.repo, config.platform);
 
 	const retainMerge = async (
 		state: CandidateState,
@@ -7222,6 +7280,7 @@ export function controllerCandidatePort(config: {
 			const pr = parseOwnedPullRequest(raw, {
 				...state.pin,
 				branch,
+				controllerLogin: config.platform.controllerLogin,
 				knownNumber: number,
 			});
 
@@ -7248,7 +7307,11 @@ export function controllerCandidatePort(config: {
 
 		const raw = await api.request("GET", `pulls/${discovered}`);
 
-		const pr = parseOwnedPullRequest(raw, { ...state.pin, branch });
+		const pr = parseOwnedPullRequest(raw, {
+			...state.pin,
+			branch,
+			controllerLogin: config.platform.controllerLogin,
+		});
 
 		if (pr === null) throw new PublicationError("pr_identity");
 		await retainMerge(state, raw, pr);
@@ -7459,6 +7522,7 @@ export function controllerCandidatePort(config: {
 			head !== null
 				? await observeFeedback({
 						stateDir: config.stateDir,
+						controllerLogin: config.platform.controllerLogin,
 						adapter,
 						runId: state.pin.runId,
 						pr: pr.number,
@@ -7549,7 +7613,13 @@ export function controllerCandidatePort(config: {
 	return {
 		async observeMissing(marker) {
 			if (marker.pr === null) return { kind: "none" };
-			const api = new GitHubPublicationApi(config.exec, marker.repo);
+
+			const api = new GitHubPublicationApi(
+				config.exec,
+				marker.repo,
+				config.platform,
+			);
+
 			const branch = `factory/pr/${marker.issue}-${marker.runId.slice(0, 12)}`;
 
 			const pr = parseOwnedPullRequest(
@@ -7558,6 +7628,7 @@ export function controllerCandidatePort(config: {
 					repo: marker.repo,
 					runId: marker.runId,
 					branch,
+					controllerLogin: config.platform.controllerLogin,
 					knownNumber: marker.pr,
 				},
 			);
@@ -7607,6 +7678,7 @@ export function controllerCandidatePort(config: {
 				new GitHubPublicationApi(
 					config.exec,
 					repo,
+					config.platform,
 					{},
 					async () => true,
 					undefined,
@@ -8076,7 +8148,7 @@ export function controllerCandidatePort(config: {
 
 			const matching = comments.value.filter(
 				(c) =>
-					c.author?.login === "exe-dev-github-integration[bot]" &&
+					c.author?.login === config.platform.controllerLogin &&
 					c.author.type === "Bot" &&
 					c.body.split("\n").includes(key),
 			);
@@ -8490,6 +8562,7 @@ async function feedbackEvents(
 	adapter: GitHubTicketAdapter,
 	pr: number,
 	seen: readonly FeedbackId[],
+	controllerLogin: string,
 ): Promise<
 	| Readonly<{ kind: "read"; events: readonly FeedbackEvent[] }>
 	| Extract<FeedbackObservation, { kind: "unavailable" }>
@@ -8527,7 +8600,7 @@ async function feedbackEvents(
 	for (const r of reviews.value) {
 		if (
 			seen.includes(r.id) ||
-			r.actor.toLowerCase() === CONTROLLER_LOGIN.toLowerCase()
+			r.actor.toLowerCase() === controllerLogin.toLowerCase()
 		) {
 			events.push(r);
 			continue;
@@ -8552,6 +8625,7 @@ async function feedbackEvents(
 
 export async function observeFeedback(input: {
 	stateDir: string;
+	controllerLogin: string;
 	adapter: GitHubTicketAdapter;
 	runId: Digest;
 	pr: number;
@@ -8588,7 +8662,12 @@ export async function observeFeedback(input: {
 					};
 		}
 
-		const read = await feedbackEvents(input.adapter, input.pr, input.seen);
+		const read = await feedbackEvents(
+			input.adapter,
+			input.pr,
+			input.seen,
+			input.controllerLogin,
+		);
 
 		if (read.kind === "unavailable") return read;
 		let permissionFailure: GitHubFailure["kind"] | null = null;
@@ -8643,6 +8722,7 @@ export async function observeFeedback(input: {
 type MergedFeedbackSweep = Readonly<{
 	stateDir: string;
 	exec: Exec;
+	platform: PlatformProfile;
 	repo: RepoSlug;
 	now: number;
 	landed: readonly Readonly<{ runId: Digest; pr: number }>[];
@@ -8744,7 +8824,7 @@ async function sweepMergedPr(
 		);
 
 	if (!(await save())) return;
-	const api = new GitHubPublicationApi(input.exec, input.repo);
+	const api = new GitHubPublicationApi(input.exec, input.repo, input.platform);
 	const pr = objectOf(await api.request("GET", `pulls/${number}`));
 	const mergedAt = textOf(jsonField(pr, "merged_at"));
 
@@ -8756,7 +8836,8 @@ async function sweepMergedPr(
 	for (const review of reviews.value) {
 		if (
 			seen.has(review.id) ||
-			review.actor.toLowerCase() === CONTROLLER_LOGIN.toLowerCase() ||
+			review.actor.toLowerCase() ===
+				input.platform.controllerLogin.toLowerCase() ||
 			Date.parse(review.at) <= Date.parse(mergedAt) ||
 			!isLogin(review.actor)
 		)
@@ -8820,6 +8901,7 @@ export async function sweepMergedFeedback(
 export async function pumpLedgerOutbox(input: {
 	readonly stateDir: string;
 	readonly exec: Exec;
+	readonly platform: PlatformProfile;
 	readonly repo: RepoSlug;
 	readonly now: number;
 	readonly log: Log;
@@ -8835,6 +8917,7 @@ export async function pumpLedgerOutbox(input: {
 				new GitHubPublicationApi(
 					input.exec,
 					input.repo,
+					input.platform,
 					{},
 					async () => true,
 					undefined,
@@ -8962,6 +9045,7 @@ export function startMetricSnapshots(input: {
 export async function serveLoop(input: {
 	orchestrator: Pick<Orchestrator, "tick" | "pollIntervalMs">;
 	stateDir: string;
+	platform: PlatformProfile;
 	sleep: Sleep;
 	signal: AbortSignal;
 	log: Log;
@@ -9034,6 +9118,7 @@ export async function serveLoop(input: {
 		const written = await writeStatus(
 			input.stateDir,
 			report,
+			input.platform,
 			input.durableUsage?.(),
 		);
 

@@ -80,6 +80,7 @@ import type { LogFields } from "../../src/orchestrator.ts";
 import type { Digest } from "../../src/run.ts";
 import type { ModelId } from "../../src/workflow.ts";
 import { modelTable } from "./routes.cases.ts";
+import { EXE_DEV_PLATFORM } from "../../src/platform.ts";
 
 const STATE = "/home/exedev/factory-state";
 const RUN = "a".repeat(64);
@@ -510,6 +511,7 @@ describe("user scope", () => {
 
 		try {
 			const executor = sandboxExecutor({
+				platform: EXE_DEV_PLATFORM,
 				stateDir: join(dir, "different-state"),
 				xdgRuntimeDir: "/run/user/1000",
 				log: () => {},
@@ -564,6 +566,7 @@ describe("user scope", () => {
 
 		try {
 			const executor = sandboxExecutor({
+				platform: EXE_DEV_PLATFORM,
 				stateDir,
 				xdgRuntimeDir: "/run/user/1000",
 				log: (event, fields) => logs.push([event, fields]),
@@ -1388,6 +1391,7 @@ describe("gateway lifecycle from the runner", () => {
 
 		try {
 			const started = await startGatewayProcess({
+				platform: EXE_DEV_PLATFORM,
 				gatewayDir: join(dir, "gw"),
 				auditPath: join(dir, "egress.jsonl"),
 				table: modelTable(),
@@ -1406,6 +1410,7 @@ describe("gateway lifecycle from the runner", () => {
 			assert.equal(await started.handle.exited, 0);
 
 			const again = await startGatewayProcess({
+				platform: EXE_DEV_PLATFORM,
 				gatewayDir: join(dir, "gw"),
 				auditPath: join(dir, "egress2.jsonl"),
 				table: modelTable(),
@@ -1462,6 +1467,7 @@ describe("gateway lifecycle from the runner", () => {
 			mkdirSync(deep);
 			assert.deepEqual(
 				await startGatewayProcess({
+					platform: EXE_DEV_PLATFORM,
 					gatewayDir: join(deep, "gw"),
 					auditPath: join(dir, "e.jsonl"),
 					table: modelTable(),
@@ -1558,6 +1564,7 @@ describe("stale bundle", () => {
 
 		const executor = () =>
 			sandboxExecutor({
+				platform: EXE_DEV_PLATFORM,
 				stateDir,
 				root,
 				sourceRoot: checkout,
@@ -1715,6 +1722,7 @@ describe("preflight", () => {
 
 		try {
 			const executor = sandboxExecutor({
+				platform: EXE_DEV_PLATFORM,
 				stateDir: dir,
 				xdgRuntimeDir: "/run/user/1000",
 				log: () => {},
@@ -1796,6 +1804,7 @@ describe("preflight", () => {
 
 			const host = () =>
 				sandboxHost({
+					platform: EXE_DEV_PLATFORM,
 					stateDir: dir,
 					bundleDir: join(dir, "bundle"),
 					workspace: dir,
@@ -1815,6 +1824,7 @@ describe("preflight", () => {
 				});
 
 			const executor = sandboxExecutor({
+				platform: EXE_DEV_PLATFORM,
 				stateDir: dir,
 				xdgRuntimeDir: "/run/user/1000",
 				log: () => {},
@@ -1865,6 +1875,7 @@ describe("preflight", () => {
 
 		try {
 			const executor = sandboxExecutor({
+				platform: EXE_DEV_PLATFORM,
 				stateDir: dir,
 				xdgRuntimeDir: "/run/user/1000",
 				log: () => {},
@@ -1956,6 +1967,7 @@ describe("preflight", () => {
 
 			const host = () =>
 				sandboxHost({
+					platform: EXE_DEV_PLATFORM,
 					stateDir: dir,
 					bundleDir: join(dir, "bundle"),
 					workspace: dir,
@@ -1991,6 +2003,7 @@ describe("preflight", () => {
 			);
 
 			const executor = sandboxExecutor({
+				platform: EXE_DEV_PLATFORM,
 				stateDir: dir,
 				xdgRuntimeDir: "/run/user/1000",
 				log: () => {},
@@ -2029,6 +2042,7 @@ describe("preflight", () => {
 			symlinkSync(`assets-${digest}`, join(root, "current"));
 
 			const executor = sandboxExecutor({
+				platform: EXE_DEV_PLATFORM,
 				stateDir,
 				root,
 				arch: "x64",

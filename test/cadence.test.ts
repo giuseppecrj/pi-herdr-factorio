@@ -88,6 +88,8 @@ import {
 	type Exec,
 	type ExecResult,
 } from "../src/workflow.ts";
+import { EXE_DEV_PLATFORM } from "../src/platform.ts";
+import { controllerEnv, noPlatformFile } from "./helpers.ts";
 
 function repository() {
 	const value = "giuseppecrj/pi-herdr-factorio";
@@ -137,6 +139,7 @@ const now = Date.parse("2026-11-10T12:00:00Z");
 const workflow = `---\nrepository: ${repo}\nworkspace:\n  root: /workspace\ncadence: {}\n---\n`;
 
 const parsed = parseWorkflow({
+	platform: EXE_DEV_PLATFORM,
 	text: workflow,
 	repo,
 	env: (name) => process.env[name],
@@ -369,6 +372,7 @@ function runner(
 	log: (event: string) => void = () => undefined,
 ) {
 	const executor = sandboxExecutor({
+		platform: EXE_DEV_PLATFORM,
 		stateDir,
 		exec: github.exec,
 		xdgRuntimeDir:
@@ -378,6 +382,7 @@ function runner(
 	});
 
 	return controllerCadence({
+		platform: EXE_DEV_PLATFORM,
 		stateDir,
 		repo,
 		exec: github.exec,
@@ -402,6 +407,7 @@ const improvementWorkflow = readFileSync(
 );
 
 const improvementPolicy = parseWorkflow({
+	platform: EXE_DEV_PLATFORM,
 	text: improvementWorkflow,
 	repo,
 	env: (name) => process.env[name],
@@ -772,6 +778,7 @@ describe("improvement proposals", () => {
 		const github = new GitHubFixture();
 		assert.equal(
 			await publishCadenceProposals({
+				platform: EXE_DEV_PLATFORM,
 				stateDir,
 				exec: github.exec,
 				execution,
@@ -825,6 +832,7 @@ describe("improvement proposals", () => {
 			let clock = now;
 
 			const request = {
+				platform: EXE_DEV_PLATFORM,
 				stateDir,
 				repo,
 				exec: github.exec,
@@ -877,6 +885,7 @@ describe("improvement proposals", () => {
 
 		const load = () =>
 			loadWorkflow({
+				platform: EXE_DEV_PLATFORM,
 				exec: github.exec,
 				repo,
 				ref: "main",
@@ -890,6 +899,7 @@ describe("improvement proposals", () => {
 				enqueueScore(stateDir, failingScore(seq));
 			github.requests = [];
 			await runImprovementTrigger({
+				platform: EXE_DEV_PLATFORM,
 				stateDir,
 				repo,
 				exec: github.exec,
@@ -916,6 +926,7 @@ describe("improvement proposals", () => {
 		let clock = now;
 
 		const request = {
+			platform: EXE_DEV_PLATFORM,
 			stateDir,
 			repo,
 			exec: github.exec,
@@ -981,6 +992,7 @@ describe("improvement proposals", () => {
 			let clock = now;
 
 			const request = {
+				platform: EXE_DEV_PLATFORM,
 				stateDir,
 				repo,
 				exec: github.exec,
@@ -1668,6 +1680,7 @@ describe("cadence durable ownership, accounting and proposal recovery", () => {
 			};
 
 			const executor = sandboxExecutor({
+				platform: EXE_DEV_PLATFORM,
 				stateDir,
 				exec,
 				root: join(stateDir, "absent-bundle"),
@@ -1703,6 +1716,7 @@ describe("cadence durable ownership, accounting and proposal recovery", () => {
 			};
 
 			const cadence = controllerCadence({
+				platform: EXE_DEV_PLATFORM,
 				stateDir,
 				repo,
 				exec,
@@ -2173,6 +2187,7 @@ describe("cadence durable ownership, accounting and proposal recovery", () => {
 
 		assert.equal(
 			await publishCadenceProposals({
+				platform: EXE_DEV_PLATFORM,
 				stateDir,
 				exec: github.exec,
 				execution,
@@ -2259,6 +2274,7 @@ describe("cadence durable ownership, accounting and proposal recovery", () => {
 		assert.equal(parsed.length, 2);
 		assert.equal(
 			await publishCadenceProposals({
+				platform: EXE_DEV_PLATFORM,
 				stateDir,
 				exec: github.exec,
 				execution,
@@ -2328,6 +2344,7 @@ describe("cadence durable ownership, accounting and proposal recovery", () => {
 		github.enabled = true;
 		assert.equal(
 			await publishCadenceProposals({
+				platform: EXE_DEV_PLATFORM,
 				stateDir,
 				exec: github.exec,
 				execution,
@@ -2493,6 +2510,7 @@ describe("cadence durable ownership, accounting and proposal recovery", () => {
 						retained: async (e) => result(e, []),
 						publish: (e, receipt, proposals, signal) =>
 							publishCadenceProposals({
+								platform: EXE_DEV_PLATFORM,
 								stateDir,
 								exec,
 								execution: e,
@@ -2685,6 +2703,7 @@ describe("cadence durable ownership, accounting and proposal recovery", () => {
 		const exec = github.exec;
 
 		const executor = sandboxExecutor({
+			platform: EXE_DEV_PLATFORM,
 			stateDir,
 			exec,
 			root: join(stateDir, "absent-bundle"),
@@ -2693,6 +2712,7 @@ describe("cadence durable ownership, accounting and proposal recovery", () => {
 		});
 
 		const cadence = controllerCadence({
+			platform: EXE_DEV_PLATFORM,
 			stateDir,
 			repo,
 			exec,
@@ -2704,6 +2724,7 @@ describe("cadence durable ownership, accounting and proposal recovery", () => {
 		await cadence.recover();
 
 		const controller = new Orchestrator({
+			platform: EXE_DEV_PLATFORM,
 			exec,
 			repo,
 			env: (name) => process.env[name],
@@ -2805,8 +2826,9 @@ it("one-shot CLI reserves only locally owned claims and keeps unreadable admissi
 					stateDir,
 				],
 				{
+					readPlatformFile: noPlatformFile,
 					exec: github.exec,
-					env: (name) => process.env[name],
+					env: controllerEnv((name) => process.env[name]),
 					runtime,
 					stdout: (text) => {
 						stdout += text;
@@ -2842,6 +2864,7 @@ it("evaluates healthy, not-due cadence through real Orchestrator.tick under 100 
 	}
 
 	const executor = sandboxExecutor({
+		platform: EXE_DEV_PLATFORM,
 		stateDir,
 		exec: github.exec,
 		root: join(stateDir, "absent-bundle"),
@@ -2852,6 +2875,7 @@ it("evaluates healthy, not-due cadence through real Orchestrator.tick under 100 
 	executor.preflight = async () => true;
 
 	const cadence = controllerCadence({
+		platform: EXE_DEV_PLATFORM,
 		stateDir,
 		repo,
 		exec: github.exec,
@@ -2860,6 +2884,7 @@ it("evaluates healthy, not-due cadence through real Orchestrator.tick under 100 
 	});
 
 	const controller = new Orchestrator({
+		platform: EXE_DEV_PLATFORM,
 		exec: github.exec,
 		repo,
 		env: (name) => process.env[name],
@@ -3218,8 +3243,9 @@ it("native cadence --once dedup demo: real Pi/RPC, bwrap, user scope, gateway an
 		stderr = "";
 
 	const io = {
+		readPlatformFile: noPlatformFile,
 		exec: github.exec,
-		env: (name: string) => process.env[name],
+		env: controllerEnv((name: string) => process.env[name]),
 		runtime,
 		stdout: (text: string) => {
 			stdout += text;
@@ -3443,12 +3469,14 @@ it("native cadence --once dedup demo: real Pi/RPC, bwrap, user scope, gateway an
 	mkdirSync(scheduledState, { mode: 0o700 });
 
 	const scheduledExecutor = runtime.executor({
+		platform: EXE_DEV_PLATFORM,
 		stateDir: scheduledState,
 		exec: github.exec,
 		log: () => undefined,
 	});
 
 	const scheduled = controllerCadence({
+		platform: EXE_DEV_PLATFORM,
 		stateDir: scheduledState,
 		repo,
 		exec: github.exec,
@@ -3466,6 +3494,7 @@ it("native cadence --once dedup demo: real Pi/RPC, bwrap, user scope, gateway an
 	});
 
 	const controller = new Orchestrator({
+		platform: EXE_DEV_PLATFORM,
 		exec: github.exec,
 		repo,
 		env: (name) => process.env[name],

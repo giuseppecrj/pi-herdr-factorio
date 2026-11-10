@@ -20,7 +20,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ghFailure, type Exec, type ExecResult } from "./gh.ts";
-import { CONTROLLER_LOGIN } from "./markers.ts";
+import { type ControllerIdentity, EXE_DEV_PLATFORM } from "./platform.ts";
 import { digestOf, type Digest } from "./run.ts";
 import { isGitSha, type GitSha, type RepoSlug } from "./workflow.ts";
 import {
@@ -32,8 +32,14 @@ import {
 	type JsonValue,
 } from "../server/sandbox/json.ts";
 
-export const BOT_EMAIL =
-	"267204973+exe-dev-github-integration[bot]@users.noreply.github.com";
+/** The exe-dev commit email, kept for test imports. Commits use the API's identity. */
+export const BOT_EMAIL = EXE_DEV_PLATFORM.botEmail;
+
+/** Who authors and commits the controller's ledger commits. */
+export type CommitIdentity = Pick<
+	ControllerIdentity,
+	"controllerLogin" | "botEmail"
+>;
 
 export type PublishedFile = {
 	readonly path: string;
@@ -411,6 +417,7 @@ export type TransportCounters = Record<string, number>;
 export class GitHubPublicationApi {
 	readonly exec: Exec;
 	readonly repo: RepoSlug;
+	readonly identity: CommitIdentity;
 	readonly counters: TransportCounters;
 	readonly persist: () => Promise<boolean>;
 	readonly sleep: (ms: number) => Promise<void>;
@@ -431,6 +438,7 @@ export class GitHubPublicationApi {
 	constructor(
 		exec: Exec,
 		repo: RepoSlug,
+		identity: CommitIdentity,
 		counters: TransportCounters = {},
 		persist: () => Promise<boolean> = async () => true,
 		sleep: (ms: number) => Promise<void> = (ms) =>
@@ -443,6 +451,7 @@ export class GitHubPublicationApi {
 	) {
 		this.exec = exec;
 		this.repo = repo;
+		this.identity = identity;
 		this.counters = counters;
 		this.persist = persist;
 		this.sleep = sleep;
@@ -686,14 +695,15 @@ async function commit(
 	const epoch = Date.parse(date) / 1000;
 
 	if (!Number.isSafeInteger(epoch)) throw new PublicationError("invalid_date");
-	const identity = `${CONTROLLER_LOGIN} <${BOT_EMAIL}> ${epoch} +0000`;
+	const { controllerLogin, botEmail } = api.identity;
+	const identity = `${controllerLogin} <${botEmail}> ${epoch} +0000`;
 
 	const bytes = Buffer.from(
 		`tree ${tree}\n${parents.map((parent) => `parent ${parent}\n`).join("")}author ${identity}\ncommitter ${identity}\n\n${message}`,
 	);
 
 	const expected = gitObjectSha("commit", bytes);
-	const actor = { name: CONTROLLER_LOGIN, email: BOT_EMAIL, date };
+	const actor = { name: controllerLogin, email: botEmail, date };
 
 	const result = await api.request("POST", "git/commits", {
 		tree,

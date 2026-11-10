@@ -14,9 +14,13 @@ import {
 	type RouteTable,
 } from "../../server/sandbox/routes.ts";
 import type { JsonValue } from "../../src/tickets.ts";
+import { EXE_DEV_PLATFORM } from "../../src/platform.ts";
 
-export function modelTable(fallback: string | null = "grok-4.6"): RouteTable {
+export function modelTable(
+	fallback: string | null = "xai/grok-4.6",
+): RouteTable {
 	return builtinTable({
+		platform: EXE_DEV_PLATFORM,
 		stage: "specify",
 		runId: "a".repeat(64),
 		attempt: 1,
@@ -35,6 +39,7 @@ export function anthropicTable(
 	} = {},
 ): RouteTable {
 	return builtinTable({
+		platform: EXE_DEV_PLATFORM,
 		stage: "accept",
 		runId: "a".repeat(64),
 		attempt: 1,
@@ -159,7 +164,11 @@ describe("sandbox route registry", () => {
 	});
 
 	it("round-trips the built-in table through the boundary parser", () => {
-		const parsed = parseRouteTable(roundTrip(modelTable()), "production");
+		const parsed = parseRouteTable(
+			roundTrip(modelTable()),
+			"production",
+			EXE_DEV_PLATFORM,
+		);
 
 		assert.deepEqual(parsed, { ok: true, table: modelTable() });
 	});
@@ -187,7 +196,7 @@ describe("sandbox route registry", () => {
 		];
 
 		for (const value of cases) {
-			assert.equal(parseRouteTable(value, "test").ok, false);
+			assert.equal(parseRouteTable(value, "test", EXE_DEV_PLATFORM).ok, false);
 		}
 	});
 
@@ -199,7 +208,7 @@ describe("sandbox route registry", () => {
 			routes.push(routes[2] ?? null);
 		});
 
-		assert.equal(parseRouteTable(value, "test").ok, false);
+		assert.equal(parseRouteTable(value, "test", EXE_DEV_PLATFORM).ok, false);
 	});
 
 	it("keeps plain http, test pins and non-built-in uncredentialed routes out of production", () => {
@@ -230,8 +239,11 @@ describe("sandbox route registry", () => {
 		});
 
 		for (const value of [plain, pinned, declared]) {
-			assert.equal(parseRouteTable(value, "production").ok, false);
-			assert.equal(parseRouteTable(value, "test").ok, true);
+			assert.equal(
+				parseRouteTable(value, "production", EXE_DEV_PLATFORM).ok,
+				false,
+			);
+			assert.equal(parseRouteTable(value, "test", EXE_DEV_PLATFORM).ok, true);
 		}
 	});
 
@@ -364,12 +376,14 @@ describe("sandbox route registry", () => {
 
 	it("never mounts Anthropic for an OpenAI primary, even through the non-OpenAI fallback branch", () => {
 		for (const fallback of [
-			null,
-			"openai/gpt-6.1-terra",
 			"grok-4.6",
 			"claude-sonnet-5-5",
 			"anthropic/claude-sonnet-5-5",
 		]) {
+			assert.throws(() => modelTable(fallback), /openai\/ or xai\//, fallback);
+		}
+
+		for (const fallback of [null, "openai/gpt-6.1-terra", "xai/grok-4.6"]) {
 			const routes = modelTable(fallback).routes;
 
 			assert.equal(routes[0]?.id, "model-openai", String(fallback));
@@ -391,10 +405,13 @@ describe("sandbox route registry", () => {
 			anthropicTable(),
 			anthropicTable({ fallback: "openai/gpt-6.1-sol" }),
 		]) {
-			assert.deepEqual(parseRouteTable(roundTrip(table), "production"), {
-				ok: true,
-				table,
-			});
+			assert.deepEqual(
+				parseRouteTable(roundTrip(table), "production", EXE_DEV_PLATFORM),
+				{
+					ok: true,
+					table,
+				},
+			);
 		}
 
 		const broken = (edit: (route: { [key: string]: JsonValue }) => void) => {
@@ -446,7 +463,10 @@ describe("sandbox route registry", () => {
 				upstream.basePath = "/openai/v1/";
 			}),
 		]) {
-			assert.equal(parseRouteTable(value, "production").ok, false);
+			assert.equal(
+				parseRouteTable(value, "production", EXE_DEV_PLATFORM).ok,
+				false,
+			);
 		}
 	});
 
@@ -469,11 +489,15 @@ describe("sandbox route registry", () => {
 			"[::1]",
 			"2852039166",
 		]) {
-			assert.equal(isForbiddenUpstreamHost(host), true, host);
+			assert.equal(isForbiddenUpstreamHost(host, EXE_DEV_PLATFORM), true, host);
 		}
 
 		for (const host of ["api.linear.app", "echo.test", "notgithub.community"]) {
-			assert.equal(isForbiddenUpstreamHost(host), false, host);
+			assert.equal(
+				isForbiddenUpstreamHost(host, EXE_DEV_PLATFORM),
+				false,
+				host,
+			);
 		}
 	});
 });

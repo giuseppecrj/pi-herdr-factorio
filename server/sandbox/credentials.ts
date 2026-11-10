@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { type PlatformNetwork, platformDefect } from "../../src/platform.ts";
 import {
 	countOf,
 	fieldOf,
@@ -73,13 +74,19 @@ export type CeilingParse =
 	| { readonly ok: false };
 
 /**
- * Reads the root-owned ceiling file. Production ceilings are https only, and
- * no mode admits a ceiling that names a forbidden upstream.
+ * Reads the root-owned ceiling file against the gateway's platform.
+ * Production ceilings are https only, no mode admits a ceiling that names a
+ * forbidden upstream, and a platform that is not its built-in contract
+ * admits none.
  */
-export function parseCeilings(text: string, mode: TableMode): CeilingParse {
+export function parseCeilings(
+	text: string,
+	mode: TableMode,
+	network: PlatformNetwork,
+): CeilingParse {
 	const root = objectOf(parseJson(text));
 
-	if (root === null) return { ok: false };
+	if (root === null || platformDefect(network) !== null) return { ok: false };
 
 	const ceilings = new Map<CredentialId, Ceiling>();
 
@@ -107,7 +114,7 @@ export function parseCeilings(text: string, mode: TableMode): CeilingParse {
 		if (
 			(scheme !== "https" && !(scheme === "http" && mode === "test")) ||
 			host === null ||
-			isForbiddenUpstreamHost(host) ||
+			isForbiddenUpstreamHost(host, network) ||
 			port === null ||
 			port < 1 ||
 			port > 65535 ||
@@ -127,9 +134,13 @@ export function parseCeilings(text: string, mode: TableMode): CeilingParse {
 	return { ok: true, ceilings };
 }
 
-export function loadCeilings(path: string, mode: TableMode): CeilingParse {
+export function loadCeilings(
+	path: string,
+	mode: TableMode,
+	network: PlatformNetwork,
+): CeilingParse {
 	try {
-		return parseCeilings(readFileSync(path, "utf8"), mode);
+		return parseCeilings(readFileSync(path, "utf8"), mode, network);
 	} catch {
 		return { ok: false };
 	}

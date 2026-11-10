@@ -77,6 +77,7 @@ import {
 import { classifyFeedback } from "../src/feedback.ts";
 import { storeFeedbackBatch } from "../server/controller.ts";
 import { sandboxExecutor } from "../server/sandbox.ts";
+import { EXE_DEV_PLATFORM } from "../src/platform.ts";
 
 const repo = "giuseppecrj/pi-herdr-factorio";
 const baseSha = "a".repeat(40);
@@ -157,19 +158,23 @@ describe("F10-3 owner derivation", () => {
 			},
 		];
 
-		const api = new GitHubPublicationApi(async (_command, args) => {
-			assert.ok(!args.includes("POST") && !args.includes("PATCH"));
-			const path = args.at(-1)!;
+		const api = new GitHubPublicationApi(
+			async (_command, args) => {
+				assert.ok(!args.includes("POST") && !args.includes("PATCH"));
+				const path = args.at(-1)!;
 
-			const value = path.includes("compare/")
-				? { status: options.status ?? "ahead" }
-				: {
-						truncated: options.truncated ?? false,
-						tree: path.includes(head) ? owner : base,
-					};
+				const value = path.includes("compare/")
+					? { status: options.status ?? "ahead" }
+					: {
+							truncated: options.truncated ?? false,
+							tree: path.includes(head) ? owner : base,
+						};
 
-			return { code: 0, stdout: JSON.stringify(value), stderr: "" };
-		}, repo);
+				return { code: 0, stdout: JSON.stringify(value), stderr: "" };
+			},
+			repo,
+			EXE_DEV_PLATFORM,
+		);
 
 		const input = {
 			stateDir,
@@ -309,6 +314,7 @@ it("F10-2 feedback checkout binds batch, full text and passed or candidate asses
 		assert.ok(isGitSha(head));
 
 		const classified = await classifyFeedback({
+			controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
 			runId: pin.runId,
 			pr: 5,
 			head,
@@ -685,16 +691,20 @@ describe("deterministic Git Data publication", () => {
 		assert.ok(isGitSha(target));
 		const calls: string[] = [];
 
-		const api = new GitHubPublicationApi(async (_command, args) => {
-			const method = args[args.indexOf("--method") + 1];
-			calls.push(method ?? "GET");
+		const api = new GitHubPublicationApi(
+			async (_command, args) => {
+				const method = args[args.indexOf("--method") + 1];
+				calls.push(method ?? "GET");
 
-			return {
-				code: 0,
-				stdout: JSON.stringify({ object: { sha: foreign } }),
-				stderr: "",
-			};
-		}, repo);
+				return {
+					code: 0,
+					stdout: JSON.stringify({ object: { sha: foreign } }),
+					stderr: "",
+				};
+			},
+			repo,
+			EXE_DEV_PLATFORM,
+		);
 
 		await assert.rejects(
 			api.promotePr(`factory/pr/1-${runId.slice(0, 12)}`, baseSha, target),
@@ -713,36 +723,40 @@ describe("deterministic Git Data publication", () => {
 			let reads = 0;
 			let updates = 0;
 
-			const api = new GitHubPublicationApi(async (_command, args) => {
-				const method = args[args.indexOf("--method") + 1];
+			const api = new GitHubPublicationApi(
+				async (_command, args) => {
+					const method = args[args.indexOf("--method") + 1];
 
-				if (method === "GET") {
-					const observed = head;
+					if (method === "GET") {
+						const observed = head;
 
-					if (reads++ === 0 && race) head = foreign;
+						if (reads++ === 0 && race) head = foreign;
 
-					return {
-						code: 0,
-						stdout: JSON.stringify({ object: { sha: observed } }),
-						stderr: "",
-					};
-				}
+						return {
+							code: 0,
+							stdout: JSON.stringify({ object: { sha: observed } }),
+							stderr: "",
+						};
+					}
 
-				assert.equal(method, "PATCH");
-				const file = args[args.indexOf("--input") + 1];
-				assert.ok(file);
-				assert.deepEqual(parseJson(readFileSync(file, "utf8")), {
-					sha: target,
-					force: false,
-				});
-				updates++;
+					assert.equal(method, "PATCH");
+					const file = args[args.indexOf("--input") + 1];
+					assert.ok(file);
+					assert.deepEqual(parseJson(readFileSync(file, "utf8")), {
+						sha: target,
+						force: false,
+					});
+					updates++;
 
-				if (head === foreign)
-					return { code: 1, stdout: "", stderr: "HTTP 422" };
-				head = target;
+					if (head === foreign)
+						return { code: 1, stdout: "", stderr: "HTTP 422" };
+					head = target;
 
-				return { code: 1, stdout: "", stderr: "HTTP 502" };
-			}, repo);
+					return { code: 1, stdout: "", stderr: "HTTP 502" };
+				},
+				repo,
+				EXE_DEV_PLATFORM,
+			);
 
 			if (race)
 				await assert.rejects(
@@ -760,7 +774,7 @@ describe("deterministic Git Data publication", () => {
 		});
 	it("keeps g0 bytes and builds the final ordered-parent SHA before certification", async () => {
 		const fake = new GitData();
-		const api = new GitHubPublicationApi(fake.exec, repo);
+		const api = new GitHubPublicationApi(fake.exec, repo, EXE_DEV_PLATFORM);
 		const initial = await publishCandidate(api, publicationInput);
 		assert.doesNotMatch(
 			fake.commits.get(initial.candidateSha)?.message ?? "",
@@ -806,6 +820,7 @@ describe("deterministic Git Data publication", () => {
 		const api = new GitHubPublicationApi(
 			fake.exec,
 			repo,
+			EXE_DEV_PLATFORM,
 			{},
 			async () => true,
 			async () => {},
@@ -830,6 +845,7 @@ describe("deterministic Git Data publication", () => {
 		const api = new GitHubPublicationApi(
 			fake.exec,
 			repo,
+			EXE_DEV_PLATFORM,
 			{},
 			async () => true,
 			async () => {},
@@ -845,7 +861,7 @@ describe("deterministic Git Data publication", () => {
 		fake.refs.set(candidateBranch(1, runId, 0), "f".repeat(40));
 		await assert.rejects(
 			publishCandidate(
-				new GitHubPublicationApi(fake.exec, repo),
+				new GitHubPublicationApi(fake.exec, repo, EXE_DEV_PLATFORM),
 				publicationInput,
 			),
 			/branch_moved/,
@@ -860,6 +876,7 @@ describe("deterministic Git Data publication", () => {
 		const api = new GitHubPublicationApi(
 			fake.exec,
 			repo,
+			EXE_DEV_PLATFORM,
 			counters,
 			async () => {
 				snapshots.push(counters[key] ?? 0);
@@ -891,7 +908,7 @@ describe("deterministic Git Data publication", () => {
 				: null;
 		await assert.rejects(
 			publishCandidate(
-				new GitHubPublicationApi(fake.exec, repo),
+				new GitHubPublicationApi(fake.exec, repo, EXE_DEV_PLATFORM),
 				publicationInput,
 			),
 			/commit_mismatch/,
@@ -902,7 +919,7 @@ describe("deterministic Git Data publication", () => {
 		const fake = new GitData();
 
 		const publication = await publishCandidate(
-			new GitHubPublicationApi(fake.exec, repo),
+			new GitHubPublicationApi(fake.exec, repo, EXE_DEV_PLATFORM),
 			publicationInput,
 		);
 
@@ -911,7 +928,7 @@ describe("deterministic Git Data publication", () => {
 				? { code: 1, stdout: "", stderr: "HTTP 422" }
 				: null;
 		await assert.rejects(
-			new GitHubPublicationApi(fake.exec, repo).remove(
+			new GitHubPublicationApi(fake.exec, repo, EXE_DEV_PLATFORM).remove(
 				publication.branch,
 				publication.candidateSha,
 			),
@@ -928,6 +945,7 @@ describe("deterministic Git Data publication", () => {
 			const api = new GitHubPublicationApi(
 				fake.exec,
 				repo,
+				EXE_DEV_PLATFORM,
 				counters,
 				async () => true,
 				async () => {},
@@ -1080,6 +1098,7 @@ async function validationFixture(withGates = false) {
 
 	const step = (now = Date.parse("2026-10-31T00:00:00Z"), fetch = archive) =>
 		controllerValidator({
+			platform: EXE_DEV_PLATFORM,
 			stateDir: root,
 			exec: fake.exec,
 			sleep: async (ms: number) => {
@@ -1157,6 +1176,7 @@ describe("fix round 1 recovery regressions", () => {
 			"-e",
 			`
 			import {controllerValidator} from './server/controller.ts';
+			import {EXE_DEV_PLATFORM} from './src/platform.ts';
 			const input = JSON.parse(process.argv[1]);
 			const exec = async (_, args) => {
 				if (args.includes('DELETE')) process.kill(process.pid, 'SIGKILL');
@@ -1164,7 +1184,7 @@ describe("fix round 1 recovery regressions", () => {
 				const value = path.includes('/git/ref/') ? {object:{sha:input.state.publication.candidateSha}} : input.run;
 				return {code:0,stdout:JSON.stringify(value),stderr:''};
 			};
-			await controllerValidator({stateDir:input.root,exec,receipt:async()=>input.receipt})({
+			await controllerValidator({stateDir:input.root,exec,platform:EXE_DEV_PLATFORM,receipt:async()=>input.receipt})({
 				...input, save:async()=>true
 			});
 		`,
@@ -1311,7 +1331,11 @@ describe("fix round 1 recovery regressions", () => {
 			validation,
 		});
 		f.fake.failure = null;
-		await sweepValidation({ stateDir: f.root, exec: f.fake.exec });
+		await sweepValidation({
+			platform: EXE_DEV_PLATFORM,
+			stateDir: f.root,
+			exec: f.fake.exec,
+		});
 		assert.equal(f.fake.refs.size, 0);
 		assert.equal(
 			existsSync(join(f.root, "validation", runId, "cleanup.json")),
@@ -1474,7 +1498,14 @@ describe("receipt download transport", () => {
 
 			const logs = new Map<string, string>();
 			assert.equal(
-				await downloadGateReceipt(exec, repo, 123, "gate-receipt", logs),
+				await downloadGateReceipt(
+					exec,
+					repo,
+					EXE_DEV_PLATFORM,
+					123,
+					"gate-receipt",
+					logs,
+				),
 				"bytes of receipt.json",
 			);
 			assert.deepEqual(Object.fromEntries(logs), {
@@ -1490,7 +1521,7 @@ describe("receipt download transport", () => {
 				"candidate_tests.log",
 			]);
 			members.length = 0;
-			await downloadGateReceipt(exec, repo, 123);
+			await downloadGateReceipt(exec, repo, EXE_DEV_PLATFORM, 123);
 			assert.deepEqual(members, ["receipt.json"]);
 		});
 	});
@@ -1525,10 +1556,12 @@ describe("receipt download transport", () => {
 					};
 		};
 
-		await assert.rejects(downloadGateReceipt(exec, repo, 123));
+		await assert.rejects(
+			downloadGateReceipt(exec, repo, EXE_DEV_PLATFORM, 123),
+		);
 		failures = false;
 		assert.equal(
-			await downloadGateReceipt(exec, repo, 123),
+			await downloadGateReceipt(exec, repo, EXE_DEV_PLATFORM, 123),
 			'{\n"version":2\n}',
 		);
 	});
@@ -1576,6 +1609,7 @@ describe("controller publication and waiting recovery", () => {
 		});
 
 		const config = {
+			platform: EXE_DEV_PLATFORM,
 			stateDir: f.root,
 			exec: f.fake.exec,
 			receipt: async () => f.fake.receipt(),
@@ -1631,6 +1665,7 @@ describe("controller publication and waiting recovery", () => {
 				validation,
 			});
 			await sweepValidation({
+				platform: EXE_DEV_PLATFORM,
 				stateDir: f.root,
 				exec: f.fake.exec,
 				receipt: async () => f.fake.receipt(),
@@ -1658,6 +1693,7 @@ describe("controller publication and waiting recovery", () => {
 		f.fake.completed = true;
 		const calls = f.fake.requests.length;
 		await sweepValidation({
+			platform: EXE_DEV_PLATFORM,
 			stateDir: f.root,
 			exec: f.fake.exec,
 			receipt: async () => f.fake.receipt(),
@@ -1688,6 +1724,7 @@ describe("controller publication and waiting recovery", () => {
 			f.fake.visible = visible;
 			const calls = f.fake.requests.length;
 			await sweepValidation({
+				platform: EXE_DEV_PLATFORM,
 				stateDir: f.root,
 				exec: f.fake.exec,
 				now: () => start + 30_000,
@@ -1695,6 +1732,7 @@ describe("controller publication and waiting recovery", () => {
 			assert.equal(f.fake.requests.length, calls + 1);
 			assert.equal(f.fake.refs.size, 1);
 			await sweepValidation({
+				platform: EXE_DEV_PLATFORM,
 				stateDir: f.root,
 				exec: f.fake.exec,
 				now: () => start + 1_200_000,
@@ -2073,6 +2111,7 @@ const quietApi = (exec: Exec) =>
 	new GitHubPublicationApi(
 		exec,
 		repo,
+		EXE_DEV_PLATFORM,
 		{},
 		async () => true,
 		async () => {},
