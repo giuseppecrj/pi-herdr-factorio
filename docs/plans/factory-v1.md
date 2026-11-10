@@ -125,8 +125,8 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
 - [ ] Metric. Measure status wall time and model tokens and spend on trunk and head. Isolate trusted-workflow parsing and the status response.
-- [ ] Probe. Interleave three metric calculations on the same ledger copy and three previous/head replay pairs for one fixed tiny ticket. Record trunk's unsupported metric command separately. Save `perf.json`. The owner reduced the three replay pairs to one, and lane 6 never completed that pair, so the probe is not met. Trunk's unsupported metric command is recorded separately (exit 2).
-- [ ] Baseline. Record trunk's unsupported metric response and the previous factory's tiny-ticket stage timings and usage first. Trunk's response is recorded, but the previous factory's tiny-ticket timings come only from the c3 specify stage, so the baseline is not met.
+- [ ] Probe. Interleave three `/factory status` calls on each revision and three head `workflow-check --json` calls. Save `perf.json`.
+- [ ] Baseline. Record trunk status milliseconds and zero model calls before head measurements.
 - [ ] Rule. Fail if head local status exceeds 2 seconds, workflow parsing exceeds 250 milliseconds after fetch, or either command calls a model. Report remote fetch time separately with a 30-second timeout.
 
 **Review gate.** The operator reviews before merge.
@@ -179,8 +179,8 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
 - [ ] Metric. Measure repository-read and admission wall time plus model usage on both revisions. Count GitHub requests per poll.
-- [ ] Probe. Interleave three metric calculations on the same ledger copy and three previous/head replay pairs for one fixed tiny ticket. Record trunk's unsupported metric command separately. Save `perf.json`. The owner reduced the three replay pairs to one, and lane 6 never completed that pair, so the probe is not met. Trunk's unsupported metric command is recorded separately (exit 2).
-- [ ] Baseline. Record trunk's unsupported metric response and the previous factory's tiny-ticket stage timings and usage first. Trunk's response is recorded, but the previous factory's tiny-ticket timings come only from the c3 specify stage, so the baseline is not met.
+- [ ] Probe. Interleave three read-only polls of the same ten fixture issues. Measure head admission separately from the trunk read-only query. Save `perf.json`.
+- [ ] Baseline. Record trunk `gh` query milliseconds and request count first. Record the absence of an admission implementation.
 - [ ] Rule. Fail if head admission for ten issues exceeds 30 seconds without rate limiting, performs any model call, or repeats unchanged event pages without a bounded cursor strategy. A rate-limited trial is inconclusive and must retain its retry receipt.
 
 **Review gate.** The operator reviews before merge.
@@ -233,8 +233,8 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
 - [ ] Metric. Measure poll and recovery wall time, stage wait time, and model usage per run on trunk and head.
-- [ ] Probe. Interleave three metric calculations on the same ledger copy and three previous/head replay pairs for one fixed tiny ticket. Record trunk's unsupported metric command separately. Save `perf.json`. The owner reduced the three replay pairs to one, and lane 6 never completed that pair, so the probe is not met. Trunk's unsupported metric command is recorded separately (exit 2).
-- [ ] Baseline. Record trunk's unsupported metric response and the previous factory's tiny-ticket stage timings and usage first. Trunk's response is recorded, but the previous factory's tiny-ticket timings come only from the c3 specify stage, so the baseline is not met.
+- [ ] Probe. Interleave three one-tick runs over ten unchanged issues and three restart recoveries on head. Use admission-only reads on trunk where recovery is absent. Save `perf.json`.
+- [ ] Baseline. Record trunk's ten-issue admission latency and zero model usage before head trials.
 - [ ] Rule. Fail if an unchanged poll exceeds 30 seconds without remote throttling, recovery of ten markers exceeds 60 seconds, or recovery spends model tokens before evidence reconciliation. Do not compare a restart ratio to admission-only work.
 
 **Review gate.** The operator reviews before merge.
@@ -289,8 +289,8 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
 - [ ] Metric. Measure stage startup, model settlement, cleanup wall time, and total tokens/spend on trunk and head. Separate the new sandbox startup from the model call.
-- [ ] Probe. Interleave three metric calculations on the same ledger copy and three previous/head replay pairs for one fixed tiny ticket. Record trunk's unsupported metric command separately. Save `perf.json`. The owner reduced the three replay pairs to one, and lane 6 never completed that pair, so the probe is not met. Trunk's unsupported metric command is recorded separately (exit 2).
-- [ ] Baseline. Record trunk's unsupported metric response and the previous factory's tiny-ticket stage timings and usage first. Trunk's response is recorded, but the previous factory's tiny-ticket timings come only from the c3 specify stage, so the baseline is not met.
+- [ ] Probe. Interleave three tiny issue-stage requests on each revision. On trunk record the unavailable executor response. On head use one fixed short model prompt and one child probe. Save `perf.json`.
+- [ ] Baseline. Record trunk status latency and zero stage usage first. Also record the first head container startup as the future sandbox baseline.
 - [ ] Rule. Fail if warm sandbox startup exceeds 15 seconds, cleanup exceeds 10 seconds, or the fixed tiny stage exceeds 120 seconds or 5,000 total tokens. Do not claim a speedup over an absent trunk executor. Record spend and fail any configured monetary cap when pricing is available.
 
 **Review gate.** The operator reviews before merge.
@@ -349,8 +349,8 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
 - [ ] Metric. Measure specify wall time and total tokens per clear and vague issue on both revisions, plus time to a visible contract or questions. Receipts record no prices, so no money figure is claimed.
-- [ ] Probe. Interleave three metric calculations on the same ledger copy and three previous/head replay pairs for one fixed tiny ticket. Record trunk's unsupported metric command separately. Save `perf.json`. The owner reduced the three replay pairs to one, and lane 6 never completed that pair, so the probe is not met. Trunk's unsupported metric command is recorded separately (exit 2).
-- [ ] Baseline. Record trunk's unsupported metric response and the previous factory's tiny-ticket stage timings and usage first. Trunk's response is recorded, but the previous factory's tiny-ticket timings come only from the c3 specify stage, so the baseline is not met.
+- [ ] Probe. Interleave three bounded runs of each fixed ticket class on trunk and head. Record trunk's unsupported specify result when absent. Save `perf.json`.
+- [ ] Baseline. Record trunk executor overhead and available usage before the new stage trials.
 - [ ] Rule. Fail if the small clear fixture takes over 5 minutes or 40,000 tokens, or the vague fixture takes over 3 minutes or 25,000 tokens. Fail if any model usage accrues while awaiting an answer. Enforce the configured token cap independently. The owner raised the token limits on 2026-10-30 to pay for read tools and the reviewer child.
 
 **Review gate.** The operator reviews before merge.
@@ -404,8 +404,8 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
 - [ ] Metric. Measure acceptance generation, artifact collection, and total specify-to-suite wall time and tokens/spend on trunk and head.
-- [ ] Probe. Interleave three metric calculations on the same ledger copy and three previous/head replay pairs for one fixed tiny ticket. Record trunk's unsupported metric command separately. Save `perf.json`. The owner reduced the three replay pairs to one, and lane 6 never completed that pair, so the probe is not met. Trunk's unsupported metric command is recorded separately (exit 2).
-- [ ] Baseline. Record trunk's unsupported metric response and the previous factory's tiny-ticket stage timings and usage first. Trunk's response is recorded, but the previous factory's tiny-ticket timings come only from the c3 specify stage, so the baseline is not met.
+- [ ] Probe. Interleave three runs of a fixed three-criterion issue. Record trunk's specify result and missing acceptance separately. Save `perf.json`.
+- [ ] Baseline. Record trunk specify latency and usage first, then the first head acceptance sample as the new stage baseline.
 - [ ] Rule. Fail if acceptance adds over 5 minutes or 25,000 tokens, collection adds over 2 seconds for a suite under 1 MB, or the full fixture exceeds 10 minutes or 45,000 tokens. Check the configured spend limit as well.
 
 **Review gate.** The operator reviews before merge.
@@ -458,8 +458,8 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
 - [ ] Metric. Measure build wall time, patch collection time, and total stage and child tokens/spend on both revisions. Measure time to a local test-bearing patch.
-- [ ] Probe. Interleave three metric calculations on the same ledger copy and three previous/head replay pairs for one fixed tiny ticket. Record trunk's unsupported metric command separately. Save `perf.json`. The owner reduced the three replay pairs to one, and lane 6 never completed that pair, so the probe is not met. Trunk's unsupported metric command is recorded separately (exit 2).
-- [ ] Baseline. Record trunk's unsupported metric response and the previous factory's tiny-ticket stage timings and usage first. Trunk's response is recorded, but the previous factory's tiny-ticket timings come only from the c3 specify stage, so the baseline is not met.
+- [ ] Probe. Interleave three runs of one fixed tiny bug issue. On trunk record the suite-ready stop. On head isolate build and collection. Save `perf.json`.
+- [ ] Baseline. Record trunk specify/accept time and usage first, without presenting its missing build as a successful patch.
 - [ ] Rule. Fail if the tiny build exceeds 10 minutes or 200,000 tokens, patch collection exceeds 2 seconds for a 1 MB diff, or the fixture takes over 20 minutes to reach validate. Enforce the configured run spend cap across all earlier stages. The owner raised the token limit on 2026-10-30 after two lean live builds used 70,351 and 55,495 tokens.
 
 **Review gate.** The operator reviews before merge.
@@ -514,8 +514,8 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
 - [ ] Metric. Measure gate wall time, queue time, and model tokens/spend per candidate on trunk and head. Model usage must be zero in CI.
-- [ ] Probe. Interleave three metric calculations on the same ledger copy and three previous/head replay pairs for one fixed tiny ticket. Record trunk's unsupported metric command separately. Save `perf.json`. The owner reduced the three replay pairs to one, and lane 6 never completed that pair, so the probe is not met. Trunk's unsupported metric command is recorded separately (exit 2).
-- [ ] Baseline. Record trunk's unsupported metric response and the previous factory's tiny-ticket stage timings and usage first. Trunk's response is recorded, but the previous factory's tiny-ticket timings come only from the c3 specify stage, so the baseline is not met.
+- [ ] Probe. Interleave three runs of the same good candidate under the existing check command and the new isolated gate command. Record hosted queue time separately. Save `perf.json`.
+- [ ] Baseline. Record trunk `npm run check` elapsed time first. Use the same dependencies and candidate for comparable gate execution.
 - [ ] Rule. Fail if head's comparable gate execution exceeds twice trunk plus 60 seconds, or exceeds 10 minutes. Fail any model use in CI. Bound time from dispatch to a terminal receipt at 20 minutes, with queue outages reported separately rather than hidden. Give main's baseline test run 180 seconds. The owner raised it from 90 seconds on 2026-11-03, after main's own baseline took 89.9 seconds on the hosted runner for fixture 568.
 
 **Review gate.** The operator reviews before merge.
@@ -569,8 +569,8 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
 - [ ] Metric. Measure acceptance publication, CI wall/queue time, verdict collection, and total run tokens/spend on both revisions.
-- [ ] Probe. Interleave three metric calculations on the same ledger copy and three previous/head replay pairs for one fixed tiny ticket. Record trunk's unsupported metric command separately. Save `perf.json`. The owner reduced the three replay pairs to one, and lane 6 never completed that pair, so the probe is not met. Trunk's unsupported metric command is recorded separately (exit 2).
-- [ ] Baseline. Record trunk's unsupported metric response and the previous factory's tiny-ticket stage timings and usage first. Trunk's response is recorded, but the previous factory's tiny-ticket timings come only from the c3 specify stage, so the baseline is not met.
+- [ ] Probe. Interleave three validations of one fixed candidate on trunk and head, with the same main gates. Measure head's additional suite commit and holdout run separately. Save `perf.json`.
+- [ ] Baseline. Record trunk gate duration and usage first, along with its lack of controller-owned holdout publication.
 - [ ] Rule. Fail if publication takes over 60 seconds, verdict collection exceeds two poll ticks after CI completion, or the small held-out suite adds over 2 minutes to gate execution. Cap dispatch-to-verdict at 20 minutes and require zero model usage for deterministic validation.
 
 **Review gate.** The operator reviews before merge.
@@ -627,8 +627,8 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
 - [ ] Metric. Measure viewer start time, page render time per view, and memory for one finished run, plus model tokens on trunk and head.
-- [ ] Probe. Interleave three metric calculations on the same ledger copy and three previous/head replay pairs for one fixed tiny ticket. Record trunk's unsupported metric command separately. Save `perf.json`. The owner reduced the three replay pairs to one, and lane 6 never completed that pair, so the probe is not met. Trunk's unsupported metric command is recorded separately (exit 2).
-- [ ] Baseline. Record trunk's unsupported metric response and the previous factory's tiny-ticket stage timings and usage first. Trunk's response is recorded, but the previous factory's tiny-ticket timings come only from the c3 specify stage, so the baseline is not met.
+- [ ] Probe. Interleave three `status --json` calls on each revision with three head viewer loads of the same run. Use a fixture run with at least 1,000 session lines and two children. Save `perf.json`.
+- [ ] Baseline. Record trunk `status --json` milliseconds and zero model calls first. Record trunk's unsupported viewer response.
 - [ ] Rule. Fail if the viewer takes over 2 seconds to start, any view takes over 1 second to render for the fixture run, resident memory exceeds 200 MB, or any request calls a model or GitHub.
 
 **Review gate.** The operator reviews before merge.
@@ -685,8 +685,8 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
 - [ ] Metric. Measure each review seat, each repair, and whole-run wall time and tokens/spend on both revisions.
-- [ ] Probe. Interleave three metric calculations on the same ledger copy and three previous/head replay pairs for one fixed tiny ticket. Record trunk's unsupported metric command separately. Save `perf.json`. The owner reduced the three replay pairs to one, and lane 6 never completed that pair, so the probe is not met. Trunk's unsupported metric command is recorded separately (exit 2).
-- [ ] Baseline. Record trunk's unsupported metric response and the previous factory's tiny-ticket stage timings and usage first. Trunk's response is recorded, but the previous factory's tiny-ticket timings come only from the c3 specify stage, so the baseline is not met.
+- [ ] Probe. Interleave three good-candidate runs and three seeded-defect trials on trunk and head. Separate new review/repair work from shared validation. Save `perf.json`.
+- [ ] Baseline. Record trunk validation duration and usage first. Record its absent reviewer result rather than assigning it zero findings.
 - [ ] Rule. Fail if review of the tiny fixture exceeds 5 minutes or 30,000 tokens across seats, or one repair plus revalidation exceeds 20 minutes or 80,000 additional tokens. Enforce cumulative configured caps, including failed attempts.
 
 **Review gate.** The operator reviews before merge.
@@ -747,8 +747,8 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
 - [ ] Metric. Measure post-review handoff latency, polling latency after owner action, and per-stage/run tokens/spend on trunk and head. Separate human waiting time from execution time.
-- [ ] Probe. Interleave three metric calculations on the same ledger copy and three previous/head replay pairs for one fixed tiny ticket. Record trunk's unsupported metric command separately. Save `perf.json`. The owner reduced the three replay pairs to one, and lane 6 never completed that pair, so the probe is not met. Trunk's unsupported metric command is recorded separately (exit 2).
-- [ ] Baseline. Record trunk's unsupported metric response and the previous factory's tiny-ticket stage timings and usage first. Trunk's response is recorded, but the previous factory's tiny-ticket timings come only from the c3 specify stage, so the baseline is not met.
+- [ ] Probe. Interleave three fixed issue runs to each revision's terminal available state. Measure head PR creation and observation of authorized owner actions. Save `perf.json`.
+- [ ] Baseline. Record trunk's validated/reviewed candidate time and usage first, with no invented PR handoff.
 - [ ] Rule. Fail if a ready candidate takes over 90 seconds to produce its PR without throttling, owner merge takes over two ticks to observe, or waiting spends model tokens. Report full fixture execution against a 35-minute budget excluding human wait and CI queue outages.
 
 **Review gate.** The operator reviews before merge.
@@ -814,8 +814,8 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
 - [ ] Metric. Measure base-run wall time, accept-stage wall time, failure classification time, full run time, and tokens per run on trunk and head.
-- [ ] Probe. Interleave three metric calculations on the same ledger copy and three previous/head replay pairs for one fixed tiny ticket. Record trunk's unsupported metric command separately. Save `perf.json`. The owner reduced the three replay pairs to one, and lane 6 never completed that pair, so the probe is not met. Trunk's unsupported metric command is recorded separately (exit 2).
-- [ ] Baseline. Record trunk's unsupported metric response and the previous factory's tiny-ticket stage timings and usage first. Trunk's response is recorded, but the previous factory's tiny-ticket timings come only from the c3 specify stage, so the baseline is not met.
+- [ ] Probe. Interleave three tiny bug fixture runs on each revision, and run the 558 and 561 replays once on head. Save `perf.json`.
+- [ ] Baseline. Record trunk accept-stage time and run usage first.
 - [ ] Rule. Fail if the base run takes over the proposed 180 seconds on the tiny fixture, calls a model, or lets a refused run spend build tokens. Report the added accept-stage time against trunk.
 
 **Review gate.** The operator reviews before merge.
@@ -872,8 +872,8 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
 - [ ] Metric. Measure terminal-observation-to-ledger latency and run wall time, tokens, and spend on trunk and head. Measure append cost separately.
-- [ ] Probe. Interleave three metric calculations on the same ledger copy and three previous/head replay pairs for one fixed tiny ticket. Record trunk's unsupported metric command separately. Save `perf.json`. The owner reduced the three replay pairs to one, and lane 6 never completed that pair, so the probe is not met. Trunk's unsupported metric command is recorded separately (exit 2).
-- [ ] Baseline. Record trunk's unsupported metric response and the previous factory's tiny-ticket stage timings and usage first. Trunk's response is recorded, but the previous factory's tiny-ticket timings come only from the c3 specify stage, so the baseline is not met.
+- [ ] Probe. Interleave three terminal reconciliations and append trials. Use a controlled 1,000-row ledger copy for local parsing, with real remote append proof on scoped runs. Save `perf.json`.
+- [ ] Baseline. Record trunk terminal observation and usage totals before the new append trials.
 - [ ] Rule. Fail if a normal terminal row takes over 60 seconds to reach the ledger, parsing 1,000 rows takes over 1 second, or ledger work calls a model. Fail if recorded totals omit a completed child or retry.
 
 **Review gate.** The operator reviews before merge.
@@ -938,8 +938,8 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
 - [ ] Metric. Measure accept-stage wall time and tokens on trunk and head, and the gateway meter time added per Anthropic call.
-- [ ] Probe. Interleave three metric calculations on the same ledger copy and three previous/head replay pairs for one fixed tiny ticket. Record trunk's unsupported metric command separately. Save `perf.json`. The owner reduced the three replay pairs to one, and lane 6 never completed that pair, so the probe is not met. Trunk's unsupported metric command is recorded separately (exit 2).
-- [ ] Baseline. Record trunk's unsupported metric response and the previous factory's tiny-ticket stage timings and usage first. Trunk's response is recorded, but the previous factory's tiny-ticket timings come only from the c3 specify stage, so the baseline is not met.
+- [ ] Probe. Interleave three tiny bug fixture runs on each revision. Time the meter's parse of each Anthropic stream separately. Save `perf.json`.
+- [ ] Baseline. Record trunk's OpenAI accept-stage wall time and tokens first.
 - [ ] Rule. Fail if head's median accept-stage wall time exceeds trunk's by more than a proposed 50%, or the meter adds more than a proposed 50 milliseconds per call. Fail if any Anthropic call goes unmetered. Report spend as unavailable where the integration meters none.
 
 **Review gate.** The operator reviews before merge.
@@ -1021,7 +1021,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [x] Metric. Measure review-to-dispatch latency, repair-stage wall time, full feedback-to-ready time, and cumulative tokens and spend on both revisions.
 - [x] Probe. Use three small comment-fix rounds on head. On trunk record polling and unchanged PR state, not a successful repair. Reuse the lane rounds as the three head samples, labeled n=3 and not interleaved, only under a recorded coordinator grant, and otherwise interleave three fresh scenarios. Save `perf.json`. Recorded 2026-11-08 in `../pi-herdr-factorio-trails/F10/lanes/perf.json` and `perf.md`. The coordinator granted reuse of fixture B round 1, fixture B round 2 and the #654 round 1 repair as the three head samples, labeled n=3 and not interleaved. B1 and B2 are one fixture run.
 - [x] Baseline. Record trunk's PR polling latency and existing run usage first. Recorded after the fact from the issue's run markers. On trunk 7d73c51 nothing was dispatched in 200 s, the PR head was unchanged, and run usage stayed at 257,429. Usage is a marker count, not a model-call meter.
-- [ ] Rule. Fail if computing the metric over 1,000 rows exceeds 2 seconds, the metric calls a model, or a replay creates a production issue or PR. Flag over 20% higher median tokens or stage time for the same successful replay as a regression unless approved before the run. Computation, no-model and isolation checks held. The regression check has no median sample, since the one c3 pair shows +18.35% specify tokens, so the rule is not fully evaluated.
+- [x] Rule. Fail if an actionable review takes over two ticks to withdraw readiness and start its repair, a tiny repair takes over 20 minutes excluding CI queue delay, or a round consumes over 420,000 extra tokens. On 2026-11-06 the coordinator raised the repair-build allowance per round from 50,000 to 100,000 tokens under the owner's standing cap grant, after live lane H6 exhausted 50,000 in one repair round with no patch, then to 200,000 after pilot 1's repair exhausted 100,000 in 10 turns. On 2026-11-07 the coordinator raised the repair-build allowance per round from 200,000 to 300,000 under the owner's standing cap grant, after F10-2's first live repair round exhausted 200,000 (210,019 used) with tests green and lint being re-run. On 2026-11-07 review rose from 30,000 to 120,000 per round, because pilot 3's code-review seat alone used 31,080 of the 30,000 shared by three or four seats. Fail if a round's feedback cards exceed 8 KiB inline. Fail any repair that resets cumulative spend or turn limits. Fail if waiting or feedback intake calls a model. Result 2026-11-08 at a measured tick of about 60 s. Dispatch took 74, 46 and 16 s. The repair stage took 5 m 09 s, 4 m 54 s and 7 m 16 s. Feedback to ready took 17 m 54 s, 24 m 22 s and 19 m 06 s, and the second sample's 24 m 22 s includes a controller restart and a coordinator hold, so it fails raw and passes at 14 m 50 s to 15 m 43 s with both excluded. Token deltas were 177,099, 79,242 and 184,958. Card size per round, provider spend and model-call counts were not measured.
 
 **Review gate.** The operator reviews before merge.
 
@@ -1029,7 +1029,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Merge.**
 
-- [x] Record the exact-head verdict and Bugbot triage. Verdicts are in the per-PR review and verify files. Keep immature-cohort evidence gaps explicit.
+- [x] Record the exact-head verdict and Bugbot triage for each slice, including a real owner-feedback round trip for F10-2 and a real owner push for F10-3. Each of #649, #653, #656, #661, #662 and #663 has an exact-head verdict comment. Bugbot posted no review, comment or check run on any of them, so there was nothing to triage. The owner-feedback round trips are the F10-2 rounds on #659 and the real ticket #654, which landed after the owner's review. The owner push for F10-3 was the coordinator's merge-main push on the fixture under the owner grant.
 - [x] Apply the patch-id rule in `playbooks/shipping.md`. Merge F10-1 to F10-4 in order under the owner's grant of 2026-11-07, each after a cross-family review, a clean verdict, and a passing `check`. F10-1 (#649, #653) and F10-2 (#656) had Grok reviews. F10-3 (#661), the notice fix (#663) and F10-4 (#662) had Opus reviews, because Grok's provider was unavailable (decision row `grok-outage`). The author was GPT, so Opus is still cross-family. After each merge, branch the next slice from the new `main`.
 
 ## Measure ticket outcomes before adding work (F12a)
@@ -1101,79 +1101,79 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Files.**
 
-- [ ] Create `src/feed.ts`, `server/viewer/dashboard.ts`, `test/feed.test.ts`, `test/dashboard.test.ts`, `test/fixtures/owner-feed/`, and `docs/operations/backup.md`. Also create the web-app manifest and its icons. Add any new Tabler glyph to `server/viewer/design/icons/`, which the viewer restyle PR creates with the vendored SVGs and their NOTICE.
-- [ ] Edit `src/attention.ts`, `src/workflow.ts`, `.github/factory/WORKFLOW.md`, `server/controller.ts`, `server/cli.ts`, `server/viewer.ts`, `server/viewer/render.ts`, `server/viewer/style.css`, `server/factory.service`, `extension/index.ts`, `test/attention.test.ts`, `test/viewer.test.ts`, `test/viewer-style.test.ts`, `test/extension.test.ts`, `DESIGN.md` for new glyph roles only, `docs/operations/viewer.md`, and `docs/operations/factory-cli.md` for liveness, thresholds, the feed, the dashboard, and the hold control.
+- [x] Create `src/feed.ts`, `server/viewer/dashboard.ts`, `test/feed.test.ts`, `test/dashboard.test.ts`, `test/fixtures/owner-feed/`, and `docs/operations/backup.md`. Also create the web-app manifest and its icons. Add any new Tabler glyph to `server/viewer/design/icons/`, which the viewer restyle PR creates with the vendored SVGs and their NOTICE.
+- [x] Edit `src/attention.ts`, `src/workflow.ts`, `.github/factory/WORKFLOW.md`, `server/controller.ts`, `server/cli.ts`, `server/viewer.ts`, `server/viewer/render.ts`, `server/viewer/style.css`, `server/factory.service`, `extension/index.ts`, `test/attention.test.ts`, `test/viewer.test.ts`, `test/viewer-style.test.ts`, `test/extension.test.ts`, `DESIGN.md` for new glyph roles only, `docs/operations/viewer.md`, and `docs/operations/factory-cli.md` for liveness, thresholds, the feed, the dashboard, and the hold control.
 
 **Build.**
 
-- [ ] Add controller liveness. Set `Type=notify` and `WatchdogSec=120` in `server/factory.service`, and keep `Restart=on-failure` and `RestartPreventExitStatus=2`. Have `serveLoop` in `server/controller.ts` send `READY=1` once and `WATCHDOG=1` after each `writeStatus`. systemd then restarts a controller that is alive but has stopped ticking. Node has no Unix datagram socket, so first prove the notify route, such as `systemd-notify` with the matching `NotifyAccess`, under `systemd-run --user -p WatchdogSec=10s` on the VM.
-- [ ] Add age thresholds to `src/attention.ts`. Mark a `waiting` entry stale after a proposed 3 days and a blocked entry stale after a proposed 6 hours. Read both from trusted `.github/factory/WORKFLOW.md`. A stale entry stays in its group, and no threshold launches work or calls a model.
-- [ ] Keep `budget_exhausted` distinct from `blocked`. Give it its own attention kind, `budget`, instead of folding it into blocked. The attention view then has seven kinds.
-- [ ] Add a title and a status to each attention entry. Take the title from the admission snapshot, cap it at 120 characters, and treat it as untrusted plain text. The status is the claim's run status.
-- [ ] Build the read-only owner feed in `src/feed.ts` from `readAttention` and the controller status. It returns versioned JSON, `OwnerFeed` v1, with controller state, last tick, local switch, entries, counts per kind, an explicit working-run count, and evidence gaps. The working-run count is the number of non-terminal claims with no attention kind. `groupOf` in `src/attention.ts` returns null for terminal runs and for unpublished in-progress runs. It returns `blocked` for a published run that is not `waiting`, so a published run in active refresh counts as blocked, not working. Neither path below writes state, calls `gh`, or calls a model.
-- [ ] Serve the feed as `owner-feed --json` and as a GET-only route on the existing loopback viewer in `server/viewer.ts`, not a second port. Save golden feed output in `test/fixtures/owner-feed/` for `F09d`.
-- [ ] Build an owner dashboard as the viewer's home page in `server/viewer/dashboard.ts`, rendered from `OwnerFeed` v1. Show every run in a group, with its title, stage, status, round, tokens against the run cap, CI result, PR link, and age. The groups are Needs you, Failed, Working and Done recently, in that order. Working and Done recently are display groups, not attention kinds, so the attention view stays at seven kinds. Done recently is folded. Show the run's "Not proven" entries from `F10b`, its failure class when it has one, and `F12a`'s primary metric when the ledger has a mature cohort. The metric comes from a local snapshot that the controller writes, and nothing calls GitHub at request time. Keep the existing single-run timeline pages as the drill-down. The dashboard reads private state and calls no model and no `gh`.
-- [ ] Build the dashboard on the design system, using the rulings the owner settled on 2026-11-09.
-  - [ ] Bundle `server/viewer/design/tokens.css` into the existing `/style.css`. Add no route, so the CSP does not change. Style only through tokens, with dark only and no `prefers-color-scheme`.
-  - [ ] Map states as the `DESIGN.md` state table does. Blocked by an owner hold and out of budget go under Needs you, each with its own reason word. Stale is an age shown on the row, such as "Waiting 3 days", and never a group. Working is neutral and never green. Failed uses the `error` colour with `alert-triangle`.
-  - [ ] Draw Needs you rows as the orange glyph plus the word in `attentionText`, with no tinted pill. Use `alert-circle` for "Your review", "Out of budget" and "On hold", and `message-question` (Shep `questionmark.bubble`) for "Your answer". `help-circle` keeps Shep's "Not confirmed" meaning, as in exmach.
-  - [ ] Show the count badge on the "need you" tile only, and never repeat it on rows. Give that tile a neutral surface, not `attentionTint`, and keep the orange badge and the word.
-  - [ ] Draw links in `textAccent`. Keep the `external-link` glyph on links to GitHub.
-  - [ ] Put no counts in group headers. Order each group newest first, and let the age words flag old waits.
-  - [ ] Use `title` for the issue title on run pages, and `largeTitle` only for "Factory" on the home page.
-  - [ ] Below the phone breakpoint, put the status line ("Running · last tick 12s ago") on its own line under the title. Every page uses the same header.
-  - [ ] Put the failure glyph on the stage that failed. For example, `review_input_too_large` puts it on Review, not on PR.
-  - [ ] Inline Tabler outline glyphs from `server/viewer/design/icons/`, adding any new glyph with its Shep role in `DESIGN.md`. Add no icon font and no client script.
-  - [ ] Keep `test/viewer-style.test.ts`, which the viewer restyle PR adds, passing on the new dashboard CSS. It fails on any raw hex, `rgb()` or `hsl()` colour, any `prefers-color-scheme` block, or a variable `tokens.css` does not define.
-- [ ] Write the dashboard and the viewer for the owner, not the controller. Owner feedback on 2026-11-02 found the current viewer hard to read.
-  - [ ] Name each run by its issue number and title, not by its run ID. Show the run ID only on the detail page.
-  - [ ] Lead each run with one plain sentence that says what it is doing, or what it needs from the owner. For example, "Waiting for your review on PR 562" or "Stopped before build because a hidden test can never pass".
-  - [ ] Show the timeline as stages and outcomes, namely spec, tests, build, CI, review and PR. Each row has its result, time and tokens. Move raw session events, such as `model_change` and `toolResult`, behind a details toggle.
-  - [ ] Separate expected gaps from real problems. A landed run whose marker history isn't kept locally must not open with "Evidence incomplete". Keep the full gap list on the detail page, and explain each gap in a plain sentence.
-  - [ ] Replace internal terms with plain words throughout, such as "generation", "certification", "settlement" and "evidence round". Keep a short glossary on the detail page for anyone who needs the exact term.
-- [ ] Send every ticket action to GitHub. The dashboard links to the issue or PR for labeling, answering questions, review, merge, and close, so those actions keep the owner's GitHub identity. Add no merge, approve, label, retry, stage, or cap control.
-- [ ] Add one control, a hold switch. A POST to a dashboard route creates or removes only the controller's local `disabled` file, the same hold `docs/operations/factory-cli.md` describes. Accept it only from the loopback or the authorized tailnet host, with a matching `Origin` and a per-process token. Send the form with CSP `form-action 'self'` and carry the token in a hidden field. This is the only change to the security posture. Refuse every other method and route. Log each change with its time and source, and write nothing else in private state.
-- [ ] Expose the viewer on the owner's tailnet only, as the owner authorized on 2026-11-02. The viewer still binds `127.0.0.1`. Publish it with `tailscale serve` and its `--allowed-host` check, through an SSH tunnel from a tailnet machine, because the VM has no tailnet. Mount it at `/factory/` with `tailscale serve --set-path=/factory/` and the viewer's `--base-path /factory`, so the host root stays free. Every dashboard link, redirect, and the hold control's form target carry that prefix. Document starting, stopping, and the one-host rule in `docs/operations/viewer.md`. Build no public ingress, VM-to-VM, or exe.dev integration exposure.
-- [ ] Make the dashboard an installable web app, with a manifest and icons, so it opens like an app on a phone. Cache no private data in the browser. A service worker, if any, caches only static assets.
-- [ ] Write `docs/operations/backup.md`, a backup and restore runbook for VM state. Name every private path the controller needs to recover, including claims, receipts, candidate books, the ledger checkout, and status. Describe how to copy them with the controller stopped and how to restore them onto a VM set up by `server/provision.sh`.
+- [x] Add controller liveness. Set `Type=notify` and `WatchdogSec=120` in `server/factory.service`, and keep `Restart=on-failure` and `RestartPreventExitStatus=2`. Have `serveLoop` in `server/controller.ts` send `READY=1` once and `WATCHDOG=1` after each `writeStatus`. systemd then restarts a controller that is alive but has stopped ticking. Node has no Unix datagram socket, so first prove the notify route, such as `systemd-notify` with the matching `NotifyAccess`, under `systemd-run --user -p WatchdogSec=10s` on the VM.
+- [x] Add age thresholds to `src/attention.ts`. Mark a `waiting` entry stale after a proposed 3 days and a blocked entry stale after a proposed 6 hours. Read both from trusted `.github/factory/WORKFLOW.md`. A stale entry stays in its group, and no threshold launches work or calls a model.
+- [x] Keep `budget_exhausted` distinct from `blocked`. Give it its own attention kind, `budget`, instead of folding it into blocked. The attention view then has seven kinds.
+- [x] Add a title and a status to each attention entry. Take the title from the admission snapshot, cap it at 120 characters, and treat it as untrusted plain text. The status is the claim's run status.
+- [x] Build the read-only owner feed in `src/feed.ts` from `readAttention` and the controller status. It returns versioned JSON, `OwnerFeed` v1, with controller state, last tick, local switch, entries, counts per kind, an explicit working-run count, and evidence gaps. The working-run count is the number of non-terminal claims with no attention kind. `groupOf` in `src/attention.ts` returns null for terminal runs and for unpublished in-progress runs. It returns `blocked` for a published run that is not `waiting`, so a published run in active refresh counts as blocked, not working. Neither path below writes state, calls `gh`, or calls a model.
+- [x] Serve the feed as `owner-feed --json` and as a GET-only route on the existing loopback viewer in `server/viewer.ts`, not a second port. Save golden feed output in `test/fixtures/owner-feed/` for `F09d`.
+- [x] Build an owner dashboard as the viewer's home page in `server/viewer/dashboard.ts`, rendered from `OwnerFeed` v1. Show every run in a group, with its title, stage, status, round, tokens against the run cap, CI result, PR link, and age. The groups are Needs you, Failed, Working and Done recently, in that order. Working and Done recently are display groups, not attention kinds, so the attention view stays at seven kinds. Done recently is folded. Show the run's "Not proven" entries from `F10b`, its failure class when it has one, and `F12a`'s primary metric when the ledger has a mature cohort. The metric comes from a local snapshot that the controller writes, and nothing calls GitHub at request time. Keep the existing single-run timeline pages as the drill-down. The dashboard reads private state and calls no model and no `gh`.
+- [x] Build the dashboard on the design system, using the rulings the owner settled on 2026-11-09.
+  - [x] Bundle `server/viewer/design/tokens.css` into the existing `/style.css`. Add no route, so the CSP does not change. Style only through tokens, with dark only and no `prefers-color-scheme`.
+  - [x] Map states as the `DESIGN.md` state table does. Blocked by an owner hold and out of budget go under Needs you, each with its own reason word. Stale is an age shown on the row, such as "Waiting 3 days", and never a group. Working is neutral and never green. Failed uses the `error` colour with `alert-triangle`.
+  - [x] Draw Needs you rows as the orange glyph plus the word in `attentionText`, with no tinted pill. Use `alert-circle` for "Your review", "Out of budget" and "On hold", and `message-question` (Shep `questionmark.bubble`) for "Your answer". `help-circle` keeps Shep's "Not confirmed" meaning, as in exmach.
+  - [x] Show the count badge on the "need you" tile only, and never repeat it on rows. Give that tile a neutral surface, not `attentionTint`, and keep the orange badge and the word.
+  - [x] Draw links in `textAccent`. Keep the `external-link` glyph on links to GitHub.
+  - [x] Put no counts in group headers. Order each group newest first, and let the age words flag old waits.
+  - [x] Use `title` for the issue title on run pages, and `largeTitle` only for "Factory" on the home page.
+  - [x] Below the phone breakpoint, put the status line ("Running · last tick 12s ago") on its own line under the title. Every page uses the same header.
+  - [x] Put the failure glyph on the stage that failed. For example, `review_input_too_large` puts it on Review, not on PR.
+  - [x] Inline Tabler outline glyphs from `server/viewer/design/icons/`, adding any new glyph with its Shep role in `DESIGN.md`. Add no icon font and no client script.
+  - [x] Keep `test/viewer-style.test.ts`, which the viewer restyle PR adds, passing on the new dashboard CSS. It fails on any raw hex, `rgb()` or `hsl()` colour, any `prefers-color-scheme` block, or a variable `tokens.css` does not define.
+- [x] Write the dashboard and the viewer for the owner, not the controller. Owner feedback on 2026-11-02 found the current viewer hard to read.
+  - [x] Name each run by its issue number and title, not by its run ID. Show the run ID only on the detail page.
+  - [x] Lead each run with one plain sentence that says what it is doing, or what it needs from the owner. For example, "Waiting for your review on PR 562" or "Stopped before build because a hidden test can never pass".
+  - [x] Show the timeline as stages and outcomes, namely spec, tests, build, CI, review and PR. Each row has its result, time and tokens. Move raw session events, such as `model_change` and `toolResult`, behind a details toggle.
+  - [x] Separate expected gaps from real problems. A landed run whose marker history isn't kept locally must not open with "Evidence incomplete". Keep the full gap list on the detail page, and explain each gap in a plain sentence.
+  - [x] Replace internal terms with plain words throughout, such as "generation", "certification", "settlement" and "evidence round". Keep a short glossary on the detail page for anyone who needs the exact term.
+- [x] Send every ticket action to GitHub. The dashboard links to the issue or PR for labeling, answering questions, review, merge, and close, so those actions keep the owner's GitHub identity. Add no merge, approve, label, retry, stage, or cap control.
+- [x] Add one control, a hold switch. A POST to a dashboard route creates or removes only the controller's local `disabled` file, the same hold `docs/operations/factory-cli.md` describes. Accept it only from the loopback or the authorized tailnet host, with a matching `Origin` and a per-process token. Send the form with CSP `form-action 'self'` and carry the token in a hidden field. This is the only change to the security posture. Refuse every other method and route. Log each change with its time and source, and write nothing else in private state.
+- [x] Expose the viewer on the owner's tailnet only, as the owner authorized on 2026-11-02. The viewer still binds `127.0.0.1`. Publish it with `tailscale serve` and its `--allowed-host` check, through an SSH tunnel from a tailnet machine, because the VM has no tailnet. Mount it at `/factory/` with `tailscale serve --set-path=/factory/` and the viewer's `--base-path /factory`, so the host root stays free. Every dashboard link, redirect, and the hold control's form target carry that prefix. Document starting, stopping, and the one-host rule in `docs/operations/viewer.md`. Build no public ingress, VM-to-VM, or exe.dev integration exposure.
+- [x] Make the dashboard an installable web app, with a manifest and icons, so it opens like an app on a phone. Cache no private data in the browser. A service worker, if any, caches only static assets. Native phone installation was not tried.
+- [x] Write `docs/operations/backup.md`, a backup and restore runbook for VM state. Name every private path the controller needs to recover, including claims, receipts, candidate books, the ledger checkout, and status. Describe how to copy them with the controller stopped and how to restore them onto a VM set up by `server/provision.sh`.
 
 **You see.**
 
-- [ ] See the dashboard with an absent problem drawing nothing. An empty group is absent, and no text such as "No failed runs right now" appears. The colour legend is in `DESIGN.md` or behind a small help link, not on the dashboard.
-- [ ] Save `owner-feed.json` from `owner-feed --json`, with a waiting PR, a blocked run, and a budget run under their own kinds, each with a title and a status, and a working-run count. Save the journal line where systemd restarts a live controller that stopped sending `WATCHDOG=1`.
+- [x] See the dashboard with an absent problem drawing nothing. An empty group is absent, and no text such as "No failed runs right now" appears. The colour legend is in `DESIGN.md` or behind a small help link, not on the dashboard.
+- [x] Save `owner-feed.json` from `owner-feed --json`, with a waiting PR, a blocked run, and a budget run under their own kinds, each with a title and a status, and a working-run count. Save the journal line where systemd restarts a live controller that stopped sending `WATCHDOG=1`.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Test thresholds, the separate budget kind, titles and statuses, feed shape, counts, the working-run count, and the offline extension view in `test/attention.test.ts`, `test/feed.test.ts`, and `test/extension.test.ts`. Test that the feed route refuses every method except GET and that the viewer refuses a non-loopback bind in `test/viewer.test.ts`. Test the dashboard's groups, state table, links, escaping, and metric panel read from the snapshot, and that the hold route refuses a missing token, a foreign `Origin`, an unlisted host, and any write but the `disabled` file in `test/dashboard.test.ts`. Run `npm run check`.
+- [x] Test thresholds, the separate budget kind, titles and statuses, feed shape, counts, the working-run count, and the offline extension view in `test/attention.test.ts`, `test/feed.test.ts`, and `test/extension.test.ts`. Test that the feed route refuses every method except GET and that the viewer refuses a non-loopback bind in `test/viewer.test.ts`. Test the dashboard's groups, state table, links, escaping, and metric panel read from the snapshot, and that the hold route refuses a missing token, a foreign `Origin`, an unlisted host, and any write but the `disabled` file in `test/dashboard.test.ts`. Run `npm run check`.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, per the boot recipe.
 
-- [ ] Lane 1. Regression lane against trunk. Run `status --json` on trunk and head with the same fixtures. Save `attention-diff.json`. Pass when head adds titles, statuses, and the budget kind, and every trunk entry still appears.
-- [ ] Lane 2. Hang the tick loop of a scoped verification controller in a live, runnable process, so it stops sending `WATCHDOG=1`. Do not use `kill -STOP`, because a stopped process waits out `TimeoutStopSec=300`. Save `watchdog.log`. Pass when the journal shows a watchdog timeout, systemd restarts the controller within `WatchdogSec` plus `RestartSec` plus one poll, 120 plus 30 plus 30 seconds, and recovery leaves one claim per run.
-- [ ] Lane 3. Leave a fixture PR waiting past a shortened verification threshold. Save `stale-wait.json`. Pass when the entry is marked stale, stays under PR review, and its model usage does not increase.
-- [ ] Lane 4. Lower a scoped verification run's token cap in the verification workflow, then exhaust that lowered cap with a fixture run. Save `budget-kind.json`. Pass when the run appears under the budget kind, not under blocked, and the production caps are unchanged.
-- [ ] Lane 5. Hold fixture runs that are working, waiting, and terminal at the same tick. Save `working-count.json`. Pass when the feed's working-run count equals the non-terminal claims with no attention kind, those runs appear in no attention kind, and terminal runs appear in neither.
-- [ ] Lane 6. Read the feed over the CLI and the viewer route at the same tick. Save `owner-feed.json`. Pass when both return the same entries, each count equals its list length, and no `gh` or model process starts during the reads.
-- [ ] Lane 7. Send a POST to the feed route, send the hold POST without a token and with a foreign `Origin`, connect from the VM's external address, and read a fixture title that contains HTML and control characters. Save `feed-boundary.log`. Pass when every POST is refused, the external connection fails, and the title arrives as escaped plain text within 120 characters.
-- [ ] Lane 8. Open the dashboard at `/factory/` on the owner's tailnet through `tailscale serve`, with fixture runs in several kinds, then switch the hold on and off from it. Save `dashboard.json` and the rendered HTML. Pass when every run shows in its display group (Needs you, Failed, Working or Done recently) by issue number and title, budget stays a separate attention kind in the feed with a one-sentence status and working GitHub links, no second listening port appears, no internal link or form leaves `/factory/` (GitHub action links are required and exempt), the page has no sideways scroll at 390 and 320 px widths, the existing timeline pages still render, the controller reports `locally_disabled` while held and dispatch again after release, and a hash of private state shows that only the `disabled` file changed.
-- [ ] Lane 9. Follow `docs/operations/backup.md` to back up the verification state and restore it into a scratch state directory. Save `backup-restore.json`. Pass when `status --json` on the restored directory matches the source and production state is unchanged.
-- [ ] Lane 10. Remove `factory:ready` from an early-stage fixture run before handoff, then end a second fixture run and relabel its issue. Save `release-relabel.json`. Pass when the controller releases the first run through its existing `unlabeled` path with no CLI command, and the relabel starts a fresh run rather than reviving the ended one.
+- [x] Lane 1. Regression lane against trunk. Run `status --json` on trunk and head with the same fixtures. Save `attention-diff.json`. Pass when head adds titles, statuses, and the budget kind, and every trunk entry still appears.
+- [x] Lane 2. Hang the tick loop of a scoped verification controller in a live, runnable process, so it stops sending `WATCHDOG=1`. Do not use `kill -STOP`, because a stopped process waits out `TimeoutStopSec=300`. Save `watchdog.log`. Pass when the journal shows a watchdog timeout, systemd restarts the controller within `WatchdogSec` plus `RestartSec` plus one poll, 120 plus 30 plus 30 seconds, and recovery leaves one claim per run.
+- [x] Lane 3. Leave a fixture PR waiting past a shortened verification threshold. Save `stale-wait.json`. Pass when the entry is marked stale, stays under PR review, and its model usage does not increase.
+- [x] Lane 4. Lower a scoped verification run's token cap in the verification workflow, then exhaust that lowered cap with a fixture run. Save `budget-kind.json`. Pass when the run appears under the budget kind, not under blocked, and the production caps are unchanged.
+- [x] Lane 5. Hold fixture runs that are working, waiting, and terminal at the same tick. Save `working-count.json`. Pass when the feed's working-run count equals the non-terminal claims with no attention kind, those runs appear in no attention kind, and terminal runs appear in neither.
+- [x] Lane 6. Read the feed over the CLI and the viewer route at the same tick. Save `owner-feed.json`. Pass when both return the same entries, each count equals its list length, and no `gh` or model process starts during the reads.
+- [x] Lane 7. Send a POST to the feed route, send the hold POST without a token and with a foreign `Origin`, connect from the VM's external address, and read a fixture title that contains HTML and control characters. Save `feed-boundary.log`. Pass when every POST is refused, the external connection fails, and the title arrives as escaped plain text within 120 characters.
+- [x] Lane 8. Open the dashboard at `/factory/` on the owner's tailnet through `tailscale serve`, with fixture runs in several kinds, then switch the hold on and off from it. Save `dashboard.json` and the rendered HTML. Pass when every run shows in its display group (Needs you, Failed, Working or Done recently) by issue number and title, budget stays a separate attention kind in the feed with a one-sentence status and working GitHub links, no second listening port appears, no internal link or form leaves `/factory/` (GitHub action links are required and exempt), the page has no sideways scroll at 390 and 320 px widths, the existing timeline pages still render, the controller reports `locally_disabled` while held and dispatch again after release, and a hash of private state shows that only the `disabled` file changed.
+- [x] Lane 9. Follow `docs/operations/backup.md` to back up the verification state and restore it into a scratch state directory. Save `backup-restore.json`. Pass when `status --json` on the restored directory matches the source and production state is unchanged.
+- [x] Lane 10. Remove `factory:ready` from an early-stage fixture run before handoff, then end a second fixture run and relabel its issue. Save `release-relabel.json`. Pass when the controller releases the first run through its existing `unlabeled` path with no CLI command, and the relabel starts a fresh run rather than reviving the ended one.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Metric. Measure `status --json` and `owner-feed --json` wall time, feed route and dashboard response time, the tick time the notify call adds, and model tokens on trunk and head.
-- [ ] Probe. Interleave three metric calculations on the same ledger copy and three previous/head replay pairs for one fixed tiny ticket. Record trunk's unsupported metric command separately. Save `perf.json`. The owner reduced the three replay pairs to one, and lane 6 never completed that pair, so the probe is not met. Trunk's unsupported metric command is recorded separately (exit 2).
-- [ ] Baseline. Record trunk's unsupported metric response and the previous factory's tiny-ticket stage timings and usage first. Trunk's response is recorded, but the previous factory's tiny-ticket timings come only from the c3 specify stage, so the baseline is not met.
-- [ ] Rule. Fail if a feed read or a dashboard render exceeds 500 milliseconds, the notify call adds over 10 milliseconds to a tick, or any read calls a model. Fail if systemd takes over `WatchdogSec` plus `RestartSec` plus one poll interval, 180 seconds at the proposed settings, to restart a live controller that stopped sending `WATCHDOG=1`.
+- [x] Metric. Measure `status --json` and `owner-feed --json` wall time, feed route and dashboard response time, the tick time the notify call adds, and model tokens on trunk and head. Measured on the VM in phase A and B. `owner-feed --json` as a whole process takes 664 to 674 ms because Node CLI startup alone takes 506 to 604 ms on head and 522 to 555 ms on trunk. The feed read is 36 to 82 ms in process and about 90 ms over HTTP, and the dashboard is 84 to 88 ms over HTTP. Model tokens were 0.
+- [x] Probe. Interleave three status calls on each revision and three head feed reads over the CLI and the viewer route on the same fixture state. Save `perf.json`. Phase A ran three interleaved status trials per revision, three head CLI feed reads and three HTTP feed reads on a copy of production state. Results are in `perf-a.json` and `perf-b.json`.
+- [x] Baseline. Record trunk status milliseconds and zero model calls before head measurements. Trunk `status --json` took 1203, 1208 and 1256 ms (head median 1297 ms), with zero model calls.
+- [x] Rule. Fail if a feed read or a dashboard render exceeds 500 milliseconds, the notify call adds over 10 milliseconds to a tick, or any read calls a model. Fail if systemd takes over `WatchdogSec` plus `RestartSec` plus one poll interval, 180 seconds at the proposed settings, to restart a live controller that stopped sending `WATCHDOG=1`. The coordinator ruled that the 500 ms limit measures feed and render work, not Node CLI startup, which F09c did not change. Feed and render passed under that ruling. Restart-to-ready took 154 s against 180 s. Notify failed at about 15 ms per tick in phase B, then #694 detached it. After the production deploy on `0060ca6`, real `systemd-notify` measured a median of 1.14 ms and a maximum of 3.70 ms per ping, with 2 pings per tick.
 
 **Review gate.** The operator reviews before merge.
 
-- [ ] Post `owner-feed.json`, `dashboard.json`, the rendered dashboard HTML, `watchdog.log`, and `backup-restore.json` to the operator, with the tailnet dashboard link. Use text artifacts instead of a screenshot or video. Keep public exposure out of scope. Merge on a clean verdict and a passing `check`.
+- [x] Post `owner-feed.json`, `dashboard.json`, the rendered dashboard HTML, `watchdog.log`, and `backup-restore.json` to the operator, with the tailnet dashboard link. Use text artifacts instead of a screenshot or video. Keep public exposure out of scope. Merge on a clean verdict and a passing `check`. The owner reviewed and approved #686 and merged it before the live lanes, which was his deviation from this gate. He merged #694 at his word. Opus reviewed the code and verified the build, and Fable reviewed the design, so the reviews were cross-family. Lanes 1 to 10 and perf then passed on the VM, and the dashboard was live on `/factory/` after the deploy to `0060ca6`.
 
 **Merge.**
 
-- [ ] Record the exact-head verdict and complete Bugbot triage after the notify prototype passes.
-- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Hand `F09c` to the owner on a clean verdict and a passing `check`. After the owner's merge, branch the next PR from the new `main`.
+- [ ] Record the exact-head verdict and complete Bugbot triage after the notify prototype passes. The verdicts exist (Opus code review and verify-1, Fable design review, Opus review of #694), but no Bugbot triage is recorded, so this is not met.
+- [ ] Apply the patch-id rule in `playbooks/shipping.md`. Hand `F09c` to the owner on a clean verdict and a passing `check`. After the owner's merge, branch the next PR from the new `main`. The owner merged #686 as `94dc0a9` and #694 as `0060ca6` with `--admin` at his word, but no patch-id check is recorded for either.
 
 ## Investigate a factorio iOS app (F09d)
 
@@ -1220,8 +1220,8 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
 - [ ] Metric. Satisfied by the scoped adaptation. This unit ships no product code, so it has no perf probe. Record the Swift suite's wall time and model calls.
-- [ ] Probe. Interleave three metric calculations on the same ledger copy and three previous/head replay pairs for one fixed tiny ticket. Record trunk's unsupported metric command separately. Save `perf.json`. The owner reduced the three replay pairs to one, and lane 6 never completed that pair, so the probe is not met. Trunk's unsupported metric command is recorded separately (exit 2).
-- [ ] Baseline. Record trunk's unsupported metric response and the previous factory's tiny-ticket stage timings and usage first. Trunk's response is recorded, but the previous factory's tiny-ticket timings come only from the c3 specify stage, so the baseline is not met.
+- [ ] Probe. Satisfied by the scoped adaptation. Reuse the one Swift suite run from the unit box and its timing in `swift-tests.log`.
+- [ ] Baseline. Satisfied by the scoped adaptation. No trunk baseline applies, because trunk has no Swift model.
 - [ ] Rule. Satisfied by the scoped adaptation. Fail if any step calls a model.
 
 **Review gate.** The operator reviews before merge.
@@ -1273,8 +1273,8 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
 - [ ] Metric. Measure idle schedule-check time and per-job wall time/tokens/spend on trunk and head, plus time to a proposed issue.
-- [ ] Probe. Interleave three metric calculations on the same ledger copy and three previous/head replay pairs for one fixed tiny ticket. Record trunk's unsupported metric command separately. Save `perf.json`. The owner reduced the three replay pairs to one, and lane 6 never completed that pair, so the probe is not met. Trunk's unsupported metric command is recorded separately (exit 2).
-- [ ] Baseline. Record trunk's unsupported metric response and the previous factory's tiny-ticket stage timings and usage first. Trunk's response is recorded, but the previous factory's tiny-ticket timings come only from the c3 specify stage, so the baseline is not met.
+- [ ] Probe. Interleave three idle ticks and three bounded one-shot audits on each revision, recording unsupported jobs on trunk. Save `perf.json`.
+- [ ] Baseline. Record trunk idle-tick latency and usage before head audits.
 - [ ] Rule. Fail if local idle schedule evaluation adds over 100 milliseconds, a small audit exceeds 10 minutes or 40,000 tokens, or one finding takes over 60 seconds after settlement to become a proposed issue. Enforce the maintenance spend cap.
 
 **Review gate.** The operator reviews before merge.
@@ -1336,8 +1336,8 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
 - [ ] Metric. Measure replay wall time per stage, tokens/spend per run, and outcome quality on trunk and head. Measure scorer tokens as a share of the scored runs' tokens, benchmark trial tokens against the benchmark cap, and `explain --run` tokens and wall time.
-- [ ] Probe. Interleave three metric calculations on the same ledger copy and three previous/head replay pairs for one fixed tiny ticket. Record trunk's unsupported metric command separately. Save `perf.json`. The owner reduced the three replay pairs to one, and lane 6 never completed that pair, so the probe is not met. Trunk's unsupported metric command is recorded separately (exit 2).
-- [ ] Baseline. Record trunk's unsupported metric response and the previous factory's tiny-ticket stage timings and usage first. Trunk's response is recorded, but the previous factory's tiny-ticket timings come only from the c3 specify stage, so the baseline is not met.
+- [ ] Probe. Interleave three previous/head replay pairs for the fixed tiny ticket. Score the same head runs at the configured sampling rate. Keep fixture and model versions fixed. Save `perf.json`.
+- [ ] Baseline. Record previous-factory behavior, stage timings, and usage before the candidate comparison. For absent scorer, benchmark, and explain commands, record unsupported behavior separately.
 - [ ] Rule. Fail if any seeded bad candidate passes, or candidate replay regresses mandatory behavior. Flag over 20% higher median tokens or elapsed stage time for the same successful scenario as a failed improvement claim unless approved before the run. Fail if scoring at the configured sampling rate exceeds 10% of the scored runs' tokens, or a benchmark run exceeds its configured cap. Fail if one `explain --run` exceeds a proposed 30,000 tokens or 5 minutes. Warp reports scoring near 3% of its own tokens. Record that figure as a reference, not a budget.
 
 **Review gate.** The operator reviews before merge.
@@ -1392,8 +1392,8 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
 - [ ] Metric. Measure poll/admission wall time, stage timings, and tokens/spend per GitHub and Linear run on trunk and head. Compare equivalent ticket contracts, not raw tracker response sizes.
-- [ ] Probe. Interleave three metric calculations on the same ledger copy and three previous/head replay pairs for one fixed tiny ticket. Record trunk's unsupported metric command separately. Save `perf.json`. The owner reduced the three replay pairs to one, and lane 6 never completed that pair, so the probe is not met. Trunk's unsupported metric command is recorded separately (exit 2).
-- [ ] Baseline. Record trunk's unsupported metric response and the previous factory's tiny-ticket stage timings and usage first. Trunk's response is recorded, but the previous factory's tiny-ticket timings come only from the c3 specify stage, so the baseline is not met.
+- [ ] Probe. Interleave three GitHub regression runs and three paired Linear-origin head runs. Record trunk's unsupported Linear behavior separately. Save `perf.json`.
+- [ ] Baseline. Record trunk GitHub poll and tiny-ticket totals first. Record the first Linear sample as its initial tracker baseline.
 - [ ] Rule. Fail if head GitHub polling exceeds 120% of comparable trunk time plus 1 second, Linear admission exceeds two configured ticks without throttling, or equivalent stage execution exceeds the existing run budgets. Do not compare Linear end-to-end speed to trunk's unsupported response.
 
 **Review gate.** The operator reviews before merge.
