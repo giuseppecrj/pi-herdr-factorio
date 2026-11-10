@@ -28,6 +28,7 @@ import {
 	procTable,
 	publishCadenceProposals,
 	readDurableAccounting,
+	runImprovementTrigger,
 } from "../server/controller.ts";
 import {
 	launchSandbox,
@@ -54,6 +55,10 @@ import {
 	cadenceCharges,
 	cadenceExecutionDir,
 	cadenceIssueBody,
+	cadenceSkills,
+	reflectionCitation,
+	triggerProposal,
+	triggerRecord,
 	cadenceScope,
 	cadenceWindow,
 	parseCadenceProposals,
@@ -64,6 +69,13 @@ import {
 	type CadenceTick,
 } from "../src/cadence.ts";
 import { cadenceMarker } from "../src/markers.ts";
+import {
+	enqueueScore,
+	unreviewedFailures,
+	reflectScores,
+} from "../src/scorers.ts";
+import { parseLedger, type ScoreEvent } from "../src/ledger.ts";
+import { measurementPrimary } from "../src/metrics.ts";
 import { Orchestrator } from "../src/orchestrator.ts";
 import { digestOf } from "../src/run.ts";
 import {
@@ -246,6 +258,7 @@ class GitHubFixture {
 	creates = 0;
 	requests: readonly string[][] = [];
 	beforeCreate: (() => void) | null = null;
+	workflowSource = workflow;
 
 	readonly exec: Exec = async (command, args) => {
 		if (command !== "gh") return execFile(command, args, 30_000);
@@ -274,7 +287,7 @@ class GitHubFixture {
 		if (endpoint.includes("git/ref/heads/main")) return ok(sha);
 
 		if (endpoint.includes("contents/.github/factory/WORKFLOW.md"))
-			return ok(workflow);
+			return ok(this.workflowSource);
 
 		if (endpoint.endsWith("/issues") && args.includes("POST")) {
 			this.beforeCreate?.();
@@ -353,6 +366,418 @@ async function settle(
 	cadence.tick(evaluation, only);
 	await cadence.wait();
 }
+
+const improvementWorkflow = readFileSync(
+	new URL("../.github/factory/WORKFLOW.md", import.meta.url),
+	"utf8",
+);
+
+function failingScore(
+	seq: number,
+	runId = digestOf(`trigger-run-${seq}`),
+): ScoreEvent {
+	return {
+		id: digestOf(`trigger-score-${seq}`),
+		scoredRunId: runId,
+		scorerId: "outcome-quality",
+		scorerDigest: digestOf("scorer"),
+		inputDigest: digestOf("input"),
+		includeChildren: false,
+		label: "mismatched",
+		score: 0,
+		passingScore: 1,
+		reasoning: "ledger.outcome",
+		judgeModel: "openai/gpt-6.1-sol",
+		judgeFamily: "openai",
+		familyNote: "context-isolated, same family, not cross-family",
+		usage: { tokens: 1, wallMs: 1, exact: true },
+		supersedes: null,
+		at: new Date(now - 1000 + seq).toISOString(),
+		status: "scored",
+		voided: null,
+	};
+}
+
+function seedReflectionLedger(stateDir: string) {
+	const line = parseLedger(
+		readFileSync(
+			new URL("fixtures/metrics/runs-2026-11-08.jsonl", import.meta.url),
+		),
+	).find((line) => line.kind === "known");
+
+	assert.ok(line?.kind === "known");
+	const dir = join(stateDir, "ledger", line.row.runId);
+	mkdirSync(dir, { recursive: true, mode: 0o700 });
+	writeFileSync(join(dir, "row.json"), line.bytes, { mode: 0o600 });
+
+	return line.row;
+}
+
+function filesOf(root: string, relative = ""): Record<string, string> {
+	return Object.fromEntries(
+		readdirSync(join(root, relative), { withFileTypes: true }).flatMap(
+			(entry) => {
+				const path = join(relative, entry.name);
+
+				return entry.isDirectory()
+					? Object.entries(filesOf(root, path))
+					: [[path, digestOf(readFileSync(join(root, path)))]];
+			},
+		),
+	);
+}
+
+describe("improvement proposals", () => {
+	it("calibrates reflect with maximum ledger, scores, source and known-proposal context under 40k", async (t) => {
+		const execution = {
+			...input("reflect"),
+			existingProposals: Array.from({ length: 100 }, () => ({
+				fingerprint: digestOf("known"),
+				title: "x".repeat(220),
+				state: "open" as const,
+				path: "src/example.ts",
+			})),
+		};
+
+		const source = "export const value = 123456789;\n".repeat(1000);
+
+		const excerpt = {
+			...cadenceExcerpt(execution, ["src/example.ts"], () => source),
+			reflection: {
+				primary: measurementPrimary(directory(t), repo),
+				ledger: {
+					rows: [
+						{
+							runId: digestOf("row"),
+							padding: "abcdef0123456789".repeat(1000),
+						},
+					],
+				},
+				scores: reflectScores(
+					Array.from({ length: 100 }, (_, seq) => failingScore(seq)),
+				),
+			},
+		};
+
+		const prompt = await withSkills(
+			new URL("..", import.meta.url).pathname,
+			cadencePrompt(execution, ["src/example.ts"], "", excerpt),
+			cadenceSkills("reflect"),
+		);
+
+		assert.ok(prompt);
+		const estimate = Math.ceil(Buffer.byteLength(prompt) / 2.8) + 533;
+		assert.ok(
+			estimate + 10_000 + 4_000 < 36_000,
+			`reflect ${estimate} + 10000 answer + 4000 reasoning`,
+		);
+		assert.ok(Buffer.byteLength(JSON.stringify(excerpt.files)) <= 8192);
+		assert.ok(
+			Buffer.byteLength(JSON.stringify(excerpt.reflection.scores.events)) <=
+				8192,
+		);
+		t.diagnostic(
+			`reflect calibrated prompt ${estimate}; total ${estimate + 14_000}; headroom ${40_000 - estimate - 14_000}`,
+		);
+	});
+
+	it("counts distinct unreviewed failures, preserves age across failing re-scores, and clears only on a later pass", () => {
+		const first = failingScore(1);
+
+		const retry = {
+			...failingScore(2, first.scoredRunId),
+			supersedes: first.id,
+		};
+
+		const pass = {
+			...failingScore(3, first.scoredRunId),
+			score: 1,
+			label: "matched",
+			supersedes: retry.id,
+		};
+
+		const failed = {
+			...failingScore(4),
+			status: "failed" as const,
+			score: null,
+			label: null,
+		};
+
+		assert.deepEqual(
+			unreviewedFailures([first, retry, failed], first.scorerId, new Set()),
+			[first],
+		);
+		assert.deepEqual(
+			unreviewedFailures([first, retry, pass], first.scorerId, new Set()),
+			[],
+		);
+		assert.deepEqual(
+			unreviewedFailures([first, pass, retry], first.scorerId, new Set()),
+			[retry],
+		);
+		assert.deepEqual(
+			unreviewedFailures([first], first.scorerId, new Set([first.scoredRunId])),
+			[],
+		);
+		assert.deepEqual(unreviewedFailures([first], "other", new Set()), []);
+	});
+
+	it("fires at K or D exactly, keeps the cohort anchor stable, bounds evidence, and puts the primary metric first", (t) => {
+		const stateDir = directory(t);
+		const failures = Array.from({ length: 60 }, (_, seq) => failingScore(seq));
+
+		const request = {
+			repo,
+			scorerId: "outcome-quality",
+			failures: failures.slice(0, 24),
+			k: 25,
+			d: 7,
+			now,
+			primary: measurementPrimary(stateDir, repo),
+		};
+
+		assert.equal(triggerProposal(request), null);
+
+		const count = triggerProposal({
+			...request,
+			failures: failures.slice(0, 25),
+		});
+
+		assert.ok(count);
+		assert.equal(
+			triggerProposal({ ...request, failures })?.fingerprint,
+			count.fingerprint,
+		);
+		assert.equal(
+			triggerProposal({ ...request, failures, now: now - 1 })?.key,
+			count.key,
+		);
+
+		const age = {
+			...request,
+			failures: [failingScore(0)],
+			now: Date.parse(failingScore(0).at) + 7 * 86_400_000,
+		};
+
+		assert.equal(triggerProposal({ ...age, now: age.now - 1 }), null);
+		assert.ok(triggerProposal(age));
+		assert.match(count.body, /^F12a clean landing share\\: unavailable/);
+		assert.equal(
+			triggerRecord(triggerProposal({ ...request, failures })!.body, repo)?.runs
+				.length,
+			50,
+		);
+		assert.equal(
+			triggerRecord(
+				count.body.replace("factory:trigger ", "forged:trigger "),
+				repo,
+			),
+			null,
+		);
+	});
+
+	it("validates ledger fields, event IDs and receipt digests against only the frozen excerpt", () => {
+		const runId = digestOf("row");
+		const event = failingScore(1);
+		const receipt = digestOf("receipt");
+
+		const reflection = {
+			ledger: {
+				rows: [
+					{
+						runId,
+						outcome: { kind: "failed" },
+						redactedReceiptDigests: [receipt],
+					},
+				],
+			},
+			scores: reflectScores([event]),
+		};
+
+		for (const path of [
+			`ledger/${runId}/outcome.kind`,
+			`scores/${event.id}`,
+			`receipts/${receipt}`,
+		])
+			assert.equal(
+				reflectionCitation({ path, start: 1, end: 1 }, reflection),
+				true,
+				path,
+			);
+
+		for (const path of [
+			`ledger/${runId}/outcome.missing`,
+			`ledger/${runId}/constructor`,
+			`ledger/${digestOf("unseen")}/outcome`,
+			`scores/${digestOf("unseen")}`,
+			`receipts/${digestOf("unseen")}`,
+		])
+			assert.equal(
+				reflectionCitation({ path, start: 1, end: 1 }, reflection),
+				false,
+				path,
+			);
+		assert.equal(
+			reflectionCitation(
+				{ path: `scores/${event.id}`, start: 1, end: 2 },
+				reflection,
+			),
+			false,
+		);
+		assert.equal(
+			reflectionCitation(
+				{ path: `scores/${event.id}`, start: 1, end: 1 },
+				undefined,
+			),
+			false,
+		);
+	});
+
+	it("requires experiment fields and drops invented citations without writing outside proposal intent state", async (t) => {
+		const stateDir = directory(t);
+		const execution = input("reflect");
+		const dir = seed(stateDir, execution, null);
+		const score = failingScore(1);
+		const row = seedReflectionLedger(stateDir);
+
+		writeCadenceFile(
+			join(dir, "excerpt.json"),
+			JSON.stringify({
+				files: [],
+				reflection: { ledger: { rows: [row] }, scores: reflectScores([score]) },
+			}),
+		);
+
+		const proposal = {
+			...finding(execution),
+			baseline: "Current failures are recorded.",
+			change: "Test one bounded change.",
+			keepOrReject: "Reject primary regression or missing evidence.",
+			evidence: [
+				{ path: `ledger/${row.runId}/outcome`, start: 1, end: 1 },
+				{ path: `scores/${score.id}`, start: 1, end: 1 },
+				{ path: `scores/${digestOf("invented")}`, start: 1, end: 1 },
+			],
+		};
+
+		assert.equal(
+			parseCadenceProposals(
+				JSON.stringify({ proposals: [finding(execution)] }),
+				execution,
+			),
+			null,
+		);
+
+		const proposals = parseCadenceProposals(
+			JSON.stringify({ proposals: [proposal] }),
+			execution,
+		);
+
+		assert.ok(proposals);
+		const before = filesOf(stateDir);
+		const github = new GitHubFixture();
+		assert.equal(
+			await publishCadenceProposals({
+				stateDir,
+				exec: github.exec,
+				execution,
+				result: result(execution),
+				proposals,
+			}),
+			true,
+		);
+		assert.equal(github.creates, 1);
+		assert.doesNotMatch(
+			github.issues[0]!.body,
+			new RegExp(digestOf("invented")),
+		);
+		assert.match(
+			github.issues[0]!.body,
+			/^F12a clean landing share\\: unavailable/,
+		);
+
+		assert.deepEqual(
+			Object.fromEntries(
+				Object.entries(filesOf(stateDir)).filter(
+					([path]) => !path.startsWith("cadence/reflect/proposals/"),
+				),
+			),
+			before,
+			"reflect changes no file outside proposal intent state, including deletions",
+		);
+		assert.equal(
+			github.requests.some((args) => args.some((arg) => arg.includes("pulls"))),
+			false,
+		);
+	});
+
+	it("files one trigger, reconciles an ambiguous create, respects both switches and suppresses closed cohorts", async (t) => {
+		for (const mode of ["normal", "unknown", "local", "remote"]) {
+			const stateDir = directory(t);
+			const github = new GitHubFixture();
+			github.workflowSource = improvementWorkflow;
+			github.unknown = mode === "unknown";
+			github.enabled = mode !== "remote";
+
+			if (mode === "local") writeFileSync(join(stateDir, "disabled"), "");
+
+			for (let seq = 0; seq < 25; seq++)
+				enqueueScore(stateDir, failingScore(seq));
+
+			const before = filesOf(stateDir);
+
+			const request = {
+				stateDir,
+				repo,
+				exec: github.exec,
+				clock: () => now,
+				log: () => undefined,
+			};
+
+			await runImprovementTrigger(request);
+			assert.equal(
+				github.creates,
+				mode === "local" || mode === "remote" ? 0 : 1,
+			);
+			assert.deepEqual(
+				Object.fromEntries(
+					Object.entries(filesOf(stateDir)).filter(
+						([path]) => !path.startsWith("cadence/trigger/proposals/"),
+					),
+				),
+				before,
+				"the initial trigger preserves all non-proposal files, including the hold",
+			);
+			github.enabled = true;
+			rmSync(join(stateDir, "disabled"), { force: true });
+			delete before.disabled;
+			await runImprovementTrigger(request);
+			assert.equal(github.creates, 1);
+			github.issues[0]!.state = "closed";
+			await runImprovementTrigger(request);
+			assert.equal(github.creates, 1);
+			assert.equal(
+				triggerRecord(github.issues[0]!.body, repo)?.runs.length,
+				25,
+			);
+
+			assert.deepEqual(
+				Object.fromEntries(
+					Object.entries(filesOf(stateDir)).filter(
+						([path]) => !path.startsWith("cadence/trigger/proposals/"),
+					),
+				),
+				before,
+				"trigger changes no file outside proposal intent state, including deletions",
+			);
+			assert.ok(
+				github.requests.every(
+					(args) => !args.some((arg) => /pulls|issues\/[0-9]+/.test(arg)),
+				),
+			);
+		}
+	});
+});
 
 describe("cadence weekly policy and structured findings", () => {
 	it("uses DST-free UTC and crosses Sunday/Monday without drift", () => {
@@ -2204,6 +2629,7 @@ it("native cadence --once dedup demo: real Pi/RPC, bwrap, user scope, gateway an
 	];
 
 	let answer = JSON.stringify({ proposals: findings });
+	let reflectExpected = false;
 	let expectedFingerprint: string | null = null;
 	let modelRequests = 0;
 	let injectedTokens = 16;
@@ -2249,6 +2675,13 @@ it("native cadence --once dedup demo: real Pi/RPC, bwrap, user scope, gateway an
 					body.includes("1: export const first = 1;"),
 					"controller delivers numbered source in the sole request",
 				);
+
+				if (reflectExpected) {
+					assert.ok(body.includes("Reflect on factory evidence"));
+					assert.ok(body.includes("Specify an improvement experiment"));
+					assert.ok(body.includes("scoredRunId"));
+					assert.ok(body.includes("redactedReceiptDigests"));
+				}
 
 				if (expectedFingerprint !== null)
 					assert.ok(
@@ -2934,5 +3367,123 @@ it("native cadence --once dedup demo: real Pi/RPC, bwrap, user scope, gateway an
 	);
 	t.diagnostic(
 		"native maintain answers retained at the cap: valid empty/finding settled, malformed JSON failed; cap and full usage retained in native receipt",
+	);
+
+	const reflectState = join(root, "reflect");
+	mkdirSync(reflectState, { mode: 0o700 });
+	const row = seedReflectionLedger(reflectState);
+	const score = failingScore(1, row.runId);
+	enqueueScore(reflectState, score);
+	const reflectInput = input("reflect");
+	answer = JSON.stringify({
+		proposals: [
+			{
+				...finding(reflectInput),
+				baseline: "A failing run and score are recorded.",
+				change: "Propose a bounded experiment against that failure.",
+				keepOrReject:
+					"Reject primary regression; unknown primary effect is not improvement.",
+				evidence: [
+					{ path: `ledger/${row.runId}/outcome`, start: 1, end: 1 },
+					{ path: `scores/${score.id}`, start: 1, end: 1 },
+				],
+			},
+		],
+	});
+	injectedTokens = 16;
+	expectedFingerprint = null;
+	reflectExpected = true;
+
+	const reflectArgv = [
+		"cadence",
+		"--once",
+		"--job",
+		"reflect",
+		"--repo",
+		repo,
+		"--state-dir",
+		reflectState,
+	];
+
+	const beforeReflect = github.creates;
+	assert.equal(await runCli(reflectArgv, io), 0, `${stdout}\n${stderr}`);
+	assert.equal(github.creates - beforeReflect, 1);
+	const reflected = github.issues.at(-1)!;
+	assert.ok(reflected.body.includes(`ledger/${row.runId}/outcome`));
+	assert.ok(reflected.body.includes(`scores/${score.id}`));
+	const reflectRequests = modelRequests;
+	assert.equal(await runCli(reflectArgv, io), 0);
+	assert.equal(modelRequests, reflectRequests);
+	assert.equal(github.creates - beforeReflect, 1);
+
+	const triggerState = join(root, "trigger");
+	mkdirSync(triggerState, { mode: 0o700 });
+	github.workflowSource = improvementWorkflow.replace(
+		/cadence:\n[\s\S]*?\nstages:/,
+		"stages:",
+	);
+
+	for (let seq = 0; seq < 25; seq++) {
+		const event = failingScore(seq);
+		enqueueScore(triggerState, event);
+		writeCadenceFile(
+			join(triggerState, "measure/score-outbox", event.id, "published.json"),
+			JSON.stringify({ tip: sha, line: seq + 1 }),
+		);
+	}
+
+	writeCadenceFile(
+		join(triggerState, "measure/score-outbox/anchor.json"),
+		JSON.stringify({
+			v: 1,
+			rootSha: sha,
+			tipSha: sha,
+			blobSha: sha,
+			byteLength: 0,
+			prefixDigest: digestOf(""),
+		}),
+	);
+
+	const triggerArgv = [
+		"tick",
+		"--once",
+		"--json",
+		"--repo",
+		repo,
+		"--state-dir",
+		triggerState,
+	];
+
+	const beforeTrigger = github.creates;
+
+	for (let pass = 0; pass < 3; pass++) {
+		assert.equal(await runCli(triggerArgv, io), 0, `${stdout}\n${stderr}`);
+		assert.equal(github.creates - beforeTrigger, 1);
+
+		if (pass === 1) github.issues.at(-1)!.state = "closed";
+	}
+
+	assert.equal(
+		modelRequests,
+		reflectRequests,
+		"deterministic trigger never launches a model",
+	);
+	assert.equal(
+		triggerRecord(github.issues.at(-1)!.body, repo)?.runs.length,
+		25,
+	);
+	assert.ok(github.issues.at(-1)!.body.includes(failingScore(24).id));
+	assert.deepEqual(github.issues.at(-1)!.labels, [
+		{ name: "factory:proposed" },
+	]);
+	t.diagnostic(
+		JSON.stringify({
+			demo: "F12c native reflect and trigger",
+			reflectCreated: [1, 0],
+			triggerCreated: [1, 0, 0],
+			failingRuns: 25,
+			fake: ["GitHub", "model upstream"],
+			noTriggerModel: true,
+		}),
 	);
 });

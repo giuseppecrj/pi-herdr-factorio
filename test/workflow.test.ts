@@ -139,6 +139,32 @@ async function load(
 	return loadWorkflow({ exec: fakeGh(branches).exec, repo, ref, env });
 }
 
+describe("trusted improvement trigger", () => {
+	it("defaults K/D only when enabled and rejects invalid or unknown settings", () => {
+		const absent = parse(frontMatter(""));
+		const enabled = parse(frontMatter("trigger: {}"));
+		assert.ok(absent.kind === "valid" && absent.config.trigger === null);
+		assert.ok(enabled.kind === "valid");
+		assert.deepEqual(enabled.config.trigger, { k: 25, d: 7 });
+
+		for (const fields of [
+			"k: 0",
+			"k: 51",
+			"k: 1.5",
+			"d: 0",
+			"d: -1",
+			"d: 1.5",
+			"d: 9007199254740992",
+			"unknown: 1",
+		])
+			assert.equal(
+				parse(frontMatter(`trigger: {${fields}}`)).kind,
+				"invalid",
+				fields,
+			);
+	});
+});
+
 describe("trusted cadence workflow", () => {
 	it("stays off when absent and supplies fixed bounded weekly UTC jobs when configured", () => {
 		const absent = parse(frontMatter(""));
@@ -158,7 +184,18 @@ describe("trusted cadence workflow", () => {
 			"security",
 			"instructions",
 			"hygiene",
+			"reflect",
 		]);
+
+		assert.equal(loaded.config.cadence?.jobs.reflect.dayUtc, 5);
+		assert.equal(
+			Object.values(loaded.config.cadence?.jobs ?? {}).reduce(
+				(sum, job) => sum + job.maxTokens,
+				0,
+			),
+			loaded.config.cadence?.weeklyTokenCap,
+			"five default jobs fit the unchanged weekly cap",
+		);
 
 		for (const job of Object.values(loaded.config.cadence?.jobs ?? {})) {
 			assert.equal(job.model, DEFAULT_MODEL);

@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
-import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+	readFileSync,
+	mkdtempSync,
+	mkdirSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { it } from "node:test";
 import { parseWorkflow, isGitSha } from "../src/workflow.ts";
-import { digestOf } from "../src/run.ts";
+import { digestOf, runIdOf } from "../src/run.ts";
 import {
 	sampled,
 	scorerDigest,
@@ -15,6 +21,7 @@ import {
 	enqueueScore,
 	scoreHistory,
 	allocateMeasurement,
+	automaticScoreEnrolled,
 } from "../src/scorers.ts";
 import { pumpScoreOutbox, pumpLedgerOutbox } from "../server/controller.ts";
 import {
@@ -26,6 +33,7 @@ import {
 	scoreEventOf,
 	type ScoreEvent,
 	parseLedger,
+	ledgerRowOf,
 } from "../src/ledger.ts";
 import {
 	GitHubPublicationApi,
@@ -587,6 +595,80 @@ it("a run append with its existing anchor still works after score commits", asyn
 	);
 });
 
+it("first score publication reuses proven run ancestry and reads the score tip instead of walking old commits", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "s12-"));
+
+	try {
+		const git = new LedgerGit();
+		const pub = new GitHubPublicationApi(git.exec, repo);
+		const runs = ledgerApiOf(pub);
+
+		const fixture = parseLedger(
+			readFileSync(
+				new URL("fixtures/metrics/runs-2026-11-08.jsonl", import.meta.url),
+			),
+		).find((line) => line.kind === "known");
+
+		assert.ok(fixture?.kind === "known");
+		let anchor = null;
+
+		for (let seq = 0; seq < 45; seq++) {
+			const facts = { ...fixture.row, eventId: String(9000 + seq) };
+			const row = ledgerRowOf({ ...facts, runId: runIdOf(facts) });
+
+			const result = await appendRun(
+				runs,
+				{
+					runId: row.row.runId,
+					bytes: row.bytes,
+					digest: row.digest,
+					date: event().at,
+				},
+				anchor,
+			);
+
+			assert.ok(result.kind === "published");
+			anchor = result.anchor;
+		}
+
+		mkdirSync(join(dir, "ledger"), { mode: 0o700 });
+		writeFileSync(join(dir, "ledger/anchor.json"), JSON.stringify(anchor), {
+			mode: 0o600,
+		});
+
+		const before = (
+			await runs.file((await runs.commit((await runs.ref())!)).tree)
+		).bytes;
+
+		git.requests.length = 0;
+		enqueueScore(dir, event());
+		assert.equal(
+			await pumpScoreOutbox({
+				stateDir: dir,
+				repo,
+				exec: git.exec,
+				log: () => undefined,
+			}),
+			true,
+		);
+
+		const commits = git.requests.filter((request) =>
+			request.startsWith("GET git/commits/"),
+		);
+
+		assert.ok(
+			commits.length <= 4,
+			`${commits.length} commit reads for 45 terminal rows`,
+		);
+		assert.deepEqual(
+			(await runs.file((await runs.commit((await runs.ref())!)).tree)).bytes,
+			before,
+		);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 it("score publication has its own five-second transport slice", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "s12-"));
 
@@ -643,6 +725,45 @@ it("score publication never creates the run-owned ledger root", async () => {
 			false,
 		);
 		assert.equal(git.writes.length, 0);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+it("legacy automatic enrollment does not consume a held or zero-launch score, but retains possible interrupted work", () => {
+	const dir = mkdtempSync(join(tmpdir(), "s12-"));
+
+	try {
+		mkdirSync(join(dir, "measure/automatic"), { recursive: true, mode: 0o700 });
+		const marker = join(dir, "measure/automatic", `${runId}-${scorer.id}.json`);
+		writeFileSync(marker, JSON.stringify({ runId, scorerId: scorer.id }), {
+			mode: 0o600,
+		});
+		assert.equal(automaticScoreEnrolled(dir, runId, scorer.id), false);
+		const execution = allocateMeasurement(dir, "score", runId);
+		writeFileSync(
+			join(execution.dir, "owner.json"),
+			JSON.stringify({ scorer }),
+			{ mode: 0o600 },
+		);
+		assert.equal(
+			automaticScoreEnrolled(dir, runId, scorer.id),
+			true,
+			"an interrupted attempt is never assumed to be zero-work",
+		);
+		writeFileSync(
+			join(execution.dir, "result.json"),
+			JSON.stringify({ launched: false }),
+			{ mode: 0o600 },
+		);
+		assert.equal(automaticScoreEnrolled(dir, runId, scorer.id), false);
+		writeFileSync(
+			join(execution.dir, "result.json"),
+			JSON.stringify({ launched: true }),
+			{ mode: 0o600 },
+		);
+		assert.equal(automaticScoreEnrolled(dir, runId, scorer.id), true);
+		assert.equal(automaticScoreEnrolled(dir, runId, "another-scorer"), false);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

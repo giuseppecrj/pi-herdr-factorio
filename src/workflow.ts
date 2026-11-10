@@ -46,6 +46,7 @@ export const CADENCE_JOBS = [
 	"security",
 	"instructions",
 	"hygiene",
+	"reflect",
 ] as const;
 
 export type CadenceJob = (typeof CADENCE_JOBS)[number];
@@ -144,6 +145,7 @@ export type WorkflowConfig = {
 	};
 	readonly replay?: { readonly maxTokens: number } | null;
 	readonly cadence?: CadenceConfig | null;
+	readonly trigger?: { readonly k: number; readonly d: number } | null;
 	readonly scorers?: readonly ScorerConfig[];
 	readonly grader?: {
 		readonly model: ModelId;
@@ -902,7 +904,18 @@ function readCadence(root: Map<string, YamlNode>): CadenceConfig | null {
 			security: readJob("security", 2),
 			instructions: readJob("instructions", 3),
 			hygiene: readJob("hygiene", 4),
+			reflect: readJob("reflect", 5),
 		}),
+	});
+}
+
+function readTrigger(root: Map<string, YamlNode>) {
+	if (!root.has("trigger")) return null;
+	const entries = optionalEntries(root, "trigger", "trigger", ["k", "d"]);
+
+	return Object.freeze({
+		k: integerOr(entries, "k", "trigger.k", { min: 1, max: 50, fallback: 25 }),
+		d: integerOr(entries, "d", "trigger.d", { min: 1, fallback: 7 }),
 	});
 }
 
@@ -1037,6 +1050,7 @@ const ROOT_KEYS = [
 	"attention",
 	"replay",
 	"cadence",
+	"trigger",
 	"scorers",
 	"grader",
 	"stages",
@@ -1170,6 +1184,7 @@ function readConfig(
 				})
 			: null,
 		cadence: readCadence(root),
+		trigger: readTrigger(root),
 		...readScorers(root),
 		stages: readStages(root, warnings),
 		checkpoints: readCheckpoints(root),
