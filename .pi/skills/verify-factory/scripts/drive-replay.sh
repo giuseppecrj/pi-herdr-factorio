@@ -2,7 +2,10 @@
 set -euo pipefail
 umask 077
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
-export GH_HOST=github.int.exe.xyz
+if [ -z "${GH_HOST:-}" ]; then
+  echo 'GH_HOST: run this driver on the VM as a file, not through vm.sh, after exporting that target'"'"'s GH_HOST from targets.env' >&2
+  exit 2
+fi
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
 : "${FIXTURE_GRANT:?name the owner grant for fixtures, spend, production stop and installed bundle selection}"

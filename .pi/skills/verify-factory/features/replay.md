@@ -70,11 +70,13 @@ See [Replay checks](../../../../docs/operations/metrics.md#replay-checks).
 ## Run one side on the VM
 
 Run in the trusted VM environment, not locally. `vm.sh` does not forward local
-environment variables automatically. Keep the supervising process attached to
+environment variables automatically, and this driver is not sent with it, so
+export `GH_HOST` yourself. Keep the supervising process attached to
 an ordinary durable terminal; **start stays running** until the controller ends
 or you stop it. Do not detach it and forget it.
 
 ```sh
+export GH_HOST='<this VM target GH_HOST from targets.env>'
 export FIXTURE_GRANT='<recorded owner decision ID>'
 export REPLAY_CONTROL_CHECKOUT='<clean frozen-main control repository>'
 export REPLAY_CASE=c3

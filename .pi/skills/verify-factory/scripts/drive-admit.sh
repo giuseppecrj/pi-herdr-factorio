@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
-export GH_HOST=github.int.exe.xyz
+: "${GH_HOST:?send this script with vm.sh, which exports GH_HOST from targets.env}"
 pr="$1"; n="$2"; shift 2
 require_lane_ids "$pr" "$n" || exit 2
 [ "$#" -ge 1 ] || { echo "usage: drive-admit.sh <pr-id> <worker-n> <issue>..." >&2; exit 2; }
