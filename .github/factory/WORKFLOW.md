@@ -27,6 +27,42 @@ attention:
 replay:
   max_tokens: 1650000
 
+cadence:
+  weeklyTokenCap: 200000
+  jobs:
+    architecture:
+      dayUtc: 1
+      hourUtc: 3
+      minuteUtc: 0
+      model: openai/gpt-6.1-sol
+      maxTokens: 40000
+      maxTurns: 12
+      wallMs: 600000
+    security:
+      dayUtc: 2
+      hourUtc: 3
+      minuteUtc: 0
+      model: openai/gpt-6.1-sol
+      maxTokens: 40000
+      maxTurns: 12
+      wallMs: 600000
+    instructions:
+      dayUtc: 3
+      hourUtc: 3
+      minuteUtc: 0
+      model: openai/gpt-6.1-sol
+      maxTokens: 40000
+      maxTurns: 12
+      wallMs: 600000
+    hygiene:
+      dayUtc: 4
+      hourUtc: 3
+      minuteUtc: 0
+      model: openai/gpt-6.1-sol
+      maxTokens: 40000
+      maxTurns: 12
+      wallMs: 600000
+
 stages:
   admit:
     max_turns: 1

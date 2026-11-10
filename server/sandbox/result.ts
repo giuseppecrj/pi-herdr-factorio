@@ -1,4 +1,4 @@
-import type { Digest, Stage } from "../../src/run.ts";
+import type { Digest, SandboxStage as Stage } from "../../src/run.ts";
 import type { FamilyInput } from "../../src/review.ts";
 import type { ModelId, StageBudget } from "../../src/workflow.ts";
 import type { RouteSummary } from "./control.ts";

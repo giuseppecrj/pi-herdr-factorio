@@ -19,6 +19,32 @@ import {
 } from "./gh.ts";
 import { parseAnthropicModel } from "../server/sandbox/anthropic-limits.ts";
 import { type Digest, digestOf, type Stage } from "./run.ts";
+
+export type ExecutionStage = ModelStage | "maintain";
+
+export const CADENCE_JOBS = [
+	"architecture",
+	"security",
+	"instructions",
+	"hygiene",
+] as const;
+
+export type CadenceJob = (typeof CADENCE_JOBS)[number];
+
+export type CadenceJobSettings = {
+	readonly dayUtc: number;
+	readonly hourUtc: number;
+	readonly minuteUtc: number;
+	readonly model: ModelId;
+	readonly maxTokens: number;
+	readonly budget: StageBudget;
+};
+
+export type CadenceConfig = {
+	readonly weeklyTokenCap: number;
+	readonly jobs: Readonly<Record<CadenceJob, CadenceJobSettings>>;
+};
+
 import { STAGE_ORDER } from "./stages.ts";
 
 export const WORKFLOW_PATH = ".github/factory/WORKFLOW.md";
@@ -98,6 +124,7 @@ export type WorkflowConfig = {
 		readonly blockedMs: number;
 	};
 	readonly replay?: { readonly maxTokens: number } | null;
+	readonly cadence?: CadenceConfig | null;
 	readonly stages: StageSettings;
 	readonly checkpoints: { readonly approveMerge: { readonly mode: "always" } };
 };
@@ -776,6 +803,85 @@ function readCheckpoints(
 	return Object.freeze({ approveMerge: Object.freeze({ mode }) });
 }
 
+function readCadence(root: Map<string, YamlNode>): CadenceConfig | null {
+	if (!root.has("cadence")) return null;
+
+	const cadence = optionalEntries(root, "cadence", "cadence", [
+		"weeklyTokenCap",
+		"jobs",
+	]);
+
+	const jobs = optionalEntries(cadence, "jobs", "cadence.jobs", CADENCE_JOBS);
+
+	const readJob = (job: CadenceJob, day: number): CadenceJobSettings => {
+		const field = `cadence.jobs.${job}`;
+
+		const entries = optionalEntries(jobs, job, field, [
+			"dayUtc",
+			"hourUtc",
+			"minuteUtc",
+			"model",
+			"maxTokens",
+			"maxTurns",
+			"wallMs",
+		]);
+
+		return Object.freeze({
+			dayUtc: integerOr(entries, "dayUtc", `${field}.dayUtc`, {
+				min: 0,
+				max: 6,
+				fallback: day,
+			}),
+			hourUtc: integerOr(entries, "hourUtc", `${field}.hourUtc`, {
+				min: 0,
+				max: 23,
+				fallback: 3,
+			}),
+			minuteUtc: integerOr(entries, "minuteUtc", `${field}.minuteUtc`, {
+				min: 0,
+				max: 59,
+				fallback: 0,
+			}),
+			model: entries.has("model")
+				? readPrimaryModel(entries.get("model") ?? null, `${field}.model`)
+				: defaultModel(),
+			maxTokens: integerOr(entries, "maxTokens", `${field}.maxTokens`, {
+				min: 1,
+				max: 40_000,
+				fallback: 40_000,
+			}),
+			budget: Object.freeze({
+				maxTurns: integerOr(entries, "maxTurns", `${field}.maxTurns`, {
+					min: 1,
+					max: 12,
+					fallback: 12,
+				}),
+				wallMs: integerOr(entries, "wallMs", `${field}.wallMs`, {
+					min: STAGE_CLEANUP_RESERVE_MS + 1,
+					max: 600_000,
+					fallback: 600_000,
+				}),
+				stallMs: 120_000,
+			}),
+		});
+	};
+
+	return Object.freeze({
+		weeklyTokenCap: integerOr(
+			cadence,
+			"weeklyTokenCap",
+			"cadence.weeklyTokenCap",
+			{ min: 1, fallback: 200_000 },
+		),
+		jobs: Object.freeze({
+			architecture: readJob("architecture", 1),
+			security: readJob("security", 2),
+			instructions: readJob("instructions", 3),
+			hygiene: readJob("hygiene", 4),
+		}),
+	});
+}
+
 const ROOT_KEYS = [
 	"repository",
 	"polling",
@@ -785,6 +891,7 @@ const ROOT_KEYS = [
 	"usage",
 	"attention",
 	"replay",
+	"cadence",
 	"stages",
 	"checkpoints",
 ];
@@ -915,6 +1022,7 @@ function readConfig(
 					}),
 				})
 			: null,
+		cadence: readCadence(root),
 		stages: readStages(root, warnings),
 		checkpoints: readCheckpoints(root),
 	});

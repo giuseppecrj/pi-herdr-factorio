@@ -1,4 +1,5 @@
 import { ACCEPTANCE_MAX_TOKENS, SCAN_SENTENCE } from "../src/accept.ts";
+import { CadenceRunner } from "../src/cadence.ts";
 import { parseStoredContract } from "../src/artifacts.ts";
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
@@ -881,6 +882,7 @@ type Wire = { intercept: Exec | null };
 
 type WorldOptions = {
 	verification: OrchestratorInput["verification"];
+	cadence?: CadenceRunner;
 };
 
 function world(scope: readonly number[] | null = null, ledger?: LedgerOutbox) {
@@ -999,6 +1001,7 @@ function world(scope: readonly number[] | null = null, ledger?: LedgerOutbox) {
 			scope,
 			log: (event, fields) => logs.push({ event, fields }),
 			verification: options.verification,
+			cadence: options.cadence,
 		});
 
 	return { github, clock, store, files, executor, logs, wire, options, start };
@@ -4427,6 +4430,40 @@ describe("server/cli.ts controller commands", () => {
 		);
 	});
 
+	it("an --issue tick keeps ticket behavior and never constructs or launches cadence", async () => {
+		const github = new FakeGitHub();
+		const state = stateDir();
+		const executor = new FakeExecutor();
+		github.add(labeled(14));
+		github.add(labeled(15));
+		executor.behaviors = [{ kind: "refuse", usage: 40 }];
+
+		const report = await cli(
+			[
+				"tick",
+				"--once",
+				"--json",
+				...base,
+				"--state-dir",
+				state,
+				"--issue",
+				"14",
+			],
+			github,
+			new AbortController(),
+			executor,
+		);
+
+		assert.equal(report.code, EXIT.ok, report.stderr);
+		assert.deepEqual(
+			executor.launches.map((launch) => launch.stage),
+			["specify"],
+		);
+		assert.equal(existsSync(join(state, "cadence")), false);
+		assert.deepEqual(statuses(github, 15), []);
+		assert.equal(JSON.parse(report.stdout).totals.usage, 40);
+	});
+
 	it("status reports a durable ended-run floor and ledger backlog without launching or writing", async () => {
 		const github = new FakeGitHub();
 		const state = stateDir();
@@ -4561,8 +4598,14 @@ describe("server/cli.ts controller commands", () => {
 			assert.deepEqual(
 				status.durableUsage,
 				coverage === "exact"
-					? { kind: "exact", unit: "tokens", total: 80 }
+					? {
+							kind: "exact",
+							unit: "tokens",
+							total: 80,
+							maintenance: { kind: "exact", unit: "tokens", total: 0 },
+						}
 					: {
+							maintenance: { kind: "exact", unit: "tokens", total: 0 },
 							kind: coverage === "unsettled" ? "uncertain" : "lower_bound",
 							unit: "tokens",
 							total: coverage === "unsettled" ? 120 : 80,
@@ -7358,6 +7401,141 @@ describe("Orchestrator persisted claim slots", () => {
 			[...files.claims.keys()].sort(),
 			[runOf(14), runOf(16)].sort(),
 		);
+	});
+
+	it("cadence launches only with leftover capacity after real ticket dispatch and recovered reservations", async () => {
+		for (const recovered of [false, true]) {
+			const { github, executor, files, clock, options, start } = world();
+			github.add(labeled(14));
+			github.add(labeled(15));
+
+			if (!recovered) executor.fallback = { kind: "hang" };
+
+			if (recovered) {
+				github.add(labeled(16));
+				capAt(github, 3);
+				github.posts = ["lost", "lost", "lost"];
+				await start().tick();
+				const admittedWorkflow = github.workflow;
+				executor.workflow = () => admittedWorkflow;
+				capAt(github, 2);
+				clock.t += 30_000;
+			}
+
+			let launches = 0;
+			options.cadence = new CadenceRunner({
+				stateDir: stateDir(),
+				repo,
+				log: () => undefined,
+				port: {
+					execute: async (execution) => {
+						launches++;
+
+						return {
+							kind: "passed",
+							tokens: 0,
+							exact: true,
+							model: execution.settings.model,
+							receiptDigest: digestOf("cadence priority"),
+							output: '{"proposals":[]}',
+							reason: "passed",
+						};
+					},
+					retained: async () => {
+						throw new Error("unexpected retained execution");
+					},
+					publish: async () => true,
+				},
+			});
+			const controller = start();
+
+			if (recovered) {
+				await controller.tick();
+				executor.fallback = { kind: "hang" };
+				clock.t += 30_000;
+			}
+
+			const report = await controller.tick();
+			await options.cadence.wait();
+			assert.equal(report.dispatch.enabled, true);
+			assert.equal(
+				report.active,
+				2,
+				JSON.stringify({
+					recovered,
+					report,
+					launches: executor.launches.map((launch) => launch.stage),
+				}),
+			);
+			assert.equal(launches, 0);
+			assert.deepEqual(runIssues(report), [14, 15]);
+
+			if (recovered) {
+				assert.deepEqual(report.queued, [16]);
+				assert.equal(files.claims.size, 3);
+				github.issues.get(14)!.state = "closed";
+				clock.t += 30_000;
+				const freed = await controller.tick();
+				assert.ok(freed.runs.some((run) => run.issue === 16));
+				assert.deepEqual(freed.queued, []);
+				assert.equal(freed.active, 2);
+				assert.equal(launches, 0);
+			}
+		}
+	});
+
+	it("an unavailable GitHub tick holds filing without aborting a running cadence audit", async () => {
+		const { executor, clock, wire, store, options, start } = world();
+		executor.ready = true;
+		let signal: AbortSignal | null = null;
+		let finish: () => void = () => undefined;
+
+		const held = new Promise<void>((done) => {
+			finish = done;
+		});
+
+		options.cadence = new CadenceRunner({
+			stateDir: stateDir(),
+			repo,
+			log: () => undefined,
+			port: {
+				execute: async (execution, abort) => {
+					signal = abort;
+					await held;
+
+					return {
+						kind: "passed",
+						tokens: 16,
+						exact: true,
+						model: execution.settings.model,
+						receiptDigest: digestOf("transient cadence"),
+						output: '{"proposals":[]}',
+						reason: "passed",
+					};
+				},
+				retained: async () => {
+					throw new Error("unexpected retained execution");
+				},
+				publish: async () => true,
+			},
+		});
+		const controller = start();
+		await controller.tick();
+		assert.equal(options.cadence.occupied(), 1);
+		wire.intercept = async () => ({ code: 1, stdout: "", stderr: "HTTP 503" });
+		clock.t += 30_000;
+		const failedRead = await controller.tick();
+		assert.equal(failedRead.dispatch.enabled, false);
+		assert.ok(signal !== null);
+		// SAFETY: the first healthy tick synchronously launched and captured this signal.
+		assert.equal((signal as AbortSignal).aborted, false);
+		store.local = "disabled";
+		clock.t += 30_000;
+		await controller.tick();
+		// SAFETY: the same captured execution is still held by the fake model.
+		assert.equal((signal as AbortSignal).aborted, true);
+		finish();
+		await options.cadence.wait();
 	});
 
 	it("recovers claims recorded before their first marker only while a slot is free, and lists the rest in queued", async () => {

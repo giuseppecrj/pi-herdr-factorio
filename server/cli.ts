@@ -62,8 +62,11 @@ import {
 	startMetricSnapshots,
 	startDurableUsage,
 	durableUsageOf,
+	controllerCadence,
 } from "./controller.ts";
 import { readOwnerFeed } from "../src/feed.ts";
+import { isCadenceJob } from "../src/cadence.ts";
+import type { CadenceJob } from "../src/workflow.ts";
 import { GitHubPublicationApi } from "../src/publication.ts";
 import { sandboxExecutor } from "./sandbox.ts";
 import { runGatesCli } from "./gates.ts";
@@ -107,6 +110,7 @@ export const USAGE = `Usage:
   node server/cli.ts replay check --json [--corpus <dir>] [--main-sha <sha>] [--previous-sha <sha>] [--candidate-sha <sha>] [--case <id> --production-state-dir <dir> --budget-file <file>]
   node server/cli.ts replay report --json --case <id> --previous-row <file> --candidate-row <file> --previous-record <file> --candidate-record <file> --previous-sha <sha> --candidate-sha <sha> [--corpus <dir>] [--previous-assets <digest> --candidate-assets <digest>]
   node server/cli.ts metrics --json --repo <owner/name> [--ledger-file <path>] [--state-dir <dir>] [--now <instant>] [--cohort production] [--offline] [--intervention-file <fixture>]
+  node server/cli.ts cadence --once --job <architecture|security|instructions|hygiene> --json --repo <owner/name> --state-dir <dir>
   node server/cli.ts owner-feed --json --state-dir <dir> [--repo <owner/name>]
   node server/cli.ts viewer --state-dir <dir> [--run <id>] [--port <n>] [--allowed-host <authorized.ts.net>] [--base-path </prefix>]
   node server/cli.ts gates --repository <dir> --gate-sha <sha> --candidate-sha <sha> --nonce <id> --output <dir> [--runner docker|local]
@@ -151,7 +155,7 @@ const ISSUE_NUMBER = /^[1-9][0-9]{0,9}$/;
 
 const CONTROLLER_COMMANDS = ["tick", "run", "serve"] as const;
 
-type ControllerCommand = (typeof CONTROLLER_COMMANDS)[number];
+type ControllerCommand = (typeof CONTROLLER_COMMANDS)[number] | "cadence";
 
 type Parsed =
 	| {
@@ -166,6 +170,7 @@ type Parsed =
 	| {
 			kind: "controller";
 			command: ControllerCommand;
+			job?: CadenceJob;
 			repo: RepoSlug;
 			stateDir: string;
 			scope: readonly number[] | null;
@@ -415,6 +420,7 @@ type StatusOutput = Omit<StatusReport, "controller"> & {
 };
 
 type Printable =
+	| Awaited<ReturnType<Orchestrator["cadenceOnce"]>>
 	| StatusOutput
 	| CheckReport
 	| ReturnType<typeof computeMetrics>
@@ -581,17 +587,32 @@ async function runController(
 				digest: pinned.digest.slice(0, 12),
 			});
 
+		const executor = runtime.executor({
+			stateDir: parsed.stateDir,
+			exec: io.exec,
+			log,
+		});
+
+		const cadence =
+			parsed.scope === null
+				? controllerCadence({
+						stateDir: parsed.stateDir,
+						repo: parsed.repo,
+						exec: io.exec,
+						executor,
+						log,
+						signal: runtime.signal,
+					})
+				: undefined;
+
 		const orchestrator = new Orchestrator({
 			exec: io.exec,
 			env: io.env,
 			repo: parsed.repo,
 			store: fileAdmissionStore(parsed.stateDir),
 			files: fileRunFiles(parsed.stateDir, runtime.policySource),
-			executor: runtime.executor({
-				stateDir: parsed.stateDir,
-				exec: io.exec,
-				log,
-			}),
+			executor,
+			cadence,
 			clock,
 			scope: parsed.scope,
 			log,
@@ -600,6 +621,21 @@ async function runController(
 					? { digest: pinned.digest, tokenCap: pinned.tokenCap }
 					: null,
 		});
+
+		if (parsed.command === "cadence" && parsed.job !== undefined) {
+			const report = await orchestrator.cadenceOnce(parsed.job);
+			await cadence?.stop();
+			io.stdout(json(report));
+
+			return report.allowed &&
+				report.ready &&
+				!report.pending &&
+				["proposed", "no_delta"].includes(
+					report.jobs.find((job) => job.job === parsed.job)?.reason ?? "",
+				)
+				? EXIT.ok
+				: EXIT.invalid;
+		}
 
 		const pump = () =>
 			pumpLedgerOutbox({
@@ -648,7 +684,7 @@ async function runController(
 					durableUsage: usage.current,
 				});
 			} finally {
-				await Promise.all([metrics.stop(), usage.stop()]);
+				await Promise.all([metrics.stop(), usage.stop(), cadence?.stop()]);
 			}
 
 			return EXIT.ok;
@@ -674,6 +710,7 @@ async function runController(
 		}
 
 		await pump();
+		await cadence?.stop();
 		io.stdout(json(report));
 
 		if (parsed.command === "tick") return EXIT.ok;
@@ -1585,6 +1622,60 @@ async function runReplayCli(
 	}
 }
 
+async function runCadenceCli(
+	argv: readonly string[],
+	io: CliIo,
+): Promise<number> {
+	let parsed;
+
+	try {
+		parsed = parseArgs({
+			args: [...argv],
+			strict: true,
+			allowPositionals: false,
+			options: {
+				once: { type: "boolean" },
+				json: { type: "boolean" },
+				job: { type: "string" },
+				repo: { type: "string" },
+				"state-dir": { type: "string" },
+			},
+		});
+	} catch {
+		io.stderr(`unrecognized cadence options\n${USAGE}\n`);
+
+		return EXIT.usage;
+	}
+
+	const v = parsed.values;
+
+	if (
+		v.once !== true ||
+		v.job === undefined ||
+		!isCadenceJob(v.job) ||
+		v.repo === undefined ||
+		!isRepoSlug(v.repo) ||
+		!v["state-dir"]
+	) {
+		io.stderr(`cadence requires --once --job --repo --state-dir\n${USAGE}\n`);
+
+		return EXIT.usage;
+	}
+
+	return runController(
+		{
+			kind: "controller",
+			command: "cadence",
+			job: v.job,
+			repo: v.repo,
+			stateDir: resolve(v["state-dir"]),
+			scope: null,
+			verificationCap: null,
+		},
+		io,
+	);
+}
+
 export async function runCli(
 	argv: readonly string[],
 	caller: CliIo,
@@ -1593,6 +1684,8 @@ export async function runCli(
 		...caller,
 		stderr: (text) => caller.stderr(redactCredentials(text)),
 	};
+
+	if (argv[0] === "cadence") return runCadenceCli(argv.slice(1), io);
 
 	if (argv[0] === "replay") return runReplayCli(argv.slice(1), io);
 

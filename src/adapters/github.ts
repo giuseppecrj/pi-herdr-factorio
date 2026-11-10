@@ -878,6 +878,55 @@ export class GitHubTicketAdapter implements TicketReader {
 		return { kind: "ok", value: comments };
 	}
 
+	/** Cadence owns this filtered REST listing; unlike ticket discovery it has no page cap. */
+	async readCadenceIssues(
+		login: string,
+		signal?: AbortSignal,
+	): Promise<
+		| Read<(IssueRecord & { state: "open" | "completed" | "not_planned" })[]>
+		| { kind: "aborted" }
+	> {
+		if (!isLogin(login)) return MALFORMED;
+
+		const issues: (IssueRecord & {
+			state: "open" | "completed" | "not_planned";
+		})[] = [];
+
+		for (let page = 1; ; page++) {
+			if (signal?.aborted) return { kind: "aborted" };
+
+			const read = await this.#page(
+				`issues?labels=factory%3Aproposed&creator=${encodeURIComponent(login)}&state=all`,
+				page,
+			);
+
+			if (read.kind === "failed") return read;
+
+			for (const item of read.value) {
+				const record = parseIssue(item);
+
+				if (record === null) return MALFORMED;
+
+				if (
+					!record.pullRequest &&
+					record.author.kind === "login" &&
+					record.author.login.toLowerCase() === login.toLowerCase()
+				)
+					issues.push({
+						...record,
+						state: record.open
+							? "open"
+							: objectOf(item)?.state_reason === "not_planned"
+								? "not_planned"
+								: "completed",
+					});
+			}
+
+			if (read.value.length < this.#paging.pageSize)
+				return { kind: "ok", value: issues };
+		}
+	}
+
 	async readProposedIssues(): Promise<
 		Read<readonly Readonly<{ number: number; body: string }>[]>
 	> {
