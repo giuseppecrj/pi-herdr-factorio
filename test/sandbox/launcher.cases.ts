@@ -1669,13 +1669,15 @@ describe("preflight", () => {
 				arch: "riscv64",
 				usernsLimit: async () => "0",
 				exec: async (command, args) =>
-					command === "bwrap" && args[0] === "--version"
-						? { stdout: "bubblewrap 0.8.0\n", stderr: "", code: 0 }
-						: {
-								stdout: "",
-								stderr: "Failed to connect to bus: No medium found",
-								code: 1,
-							},
+					command === "test"
+						? { stdout: "", stderr: "", code: 0 }
+						: command === "bwrap" && args[0] === "--version"
+							? { stdout: "bubblewrap 0.8.0\n", stderr: "", code: 0 }
+							: {
+									stdout: "",
+									stderr: "Failed to connect to bus: No medium found",
+									code: 1,
+								},
 				assetsDigest: async () => null,
 				gatewayReady: async () => {
 					throw new Error("boom");

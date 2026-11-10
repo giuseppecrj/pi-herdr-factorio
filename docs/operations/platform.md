@@ -79,13 +79,18 @@ The sandbox prefixes do not change between platforms. The gateway strips the pre
 
 Refusal reasons: `unknown_platform`, `domain_invalid`, `platform_selection_mismatch`, `platform_file_unreadable`, `platform_file_unsafe`, `platform_file_malformed`, `version_unsupported`, `unknown_field`, `controller_identity_missing`, `controller_identity_invalid`, `controller_identity_unexpected`, `repositories_empty`, `repository_invalid`, `gh_host_invalid`, `gh_host_unexpected`, `own_domain_not_forbidden`, `internal_domain_not_forbidden` and `network_contract_mismatch`.
 
+## Provisioning environment
+
+`node server/cli.ts platform --env` prints nonsecret assignments from the same resolved profile, without a workflow, lock, GitHub call or model request. Full `server/provision.sh` uses them for the host Pi configuration and installs the exact output as `/etc/factory/factory.env`, root-owned and mode 0644. `server/factory.service` requires that environment file rather than hard-coding `GH_HOST`.
+
+The assignments are `FACTORY_PLATFORM`, `GH_HOST`, `GH_ENTERPRISE_TOKEN`, `LLM_BASE_URL`, `LLM_OPENAI_BASE_URL` and `LLM_ANTHROPIC_BASE_URL`. `GH_ENTERPRISE_TOKEN` is a placeholder, `exmach` on exmach and `exe-dev-integration` on exe-dev, never a credential. The platform edge injects the real token. Provider URLs use the profile's model base paths, without a trailing slash, so the default Pi URLs remain unchanged. The sandbox still uses its own loopback URLs.
+
+After changing either selection source, rerun full provisioning before restarting the unit. The generated `FACTORY_PLATFORM` and the selection file must agree. Provisioning leaves `/etc/factory/platform.json` untouched.
+
 ## Remaining exe-dev literals
 
-Three sites still name exe-dev values on purpose. Outside `src/platform.ts`, `rg 'exe\.xyz|exe-dev-github-integration|169\.254\.169\.254|giuseppecrj/pi-herdr-factorio' src server extension` should find only these. Any other match is a missed propagation.
-
-- `server/provision.sh:10` and `server/factory.service:13,18`. They are the exe-dev VM's provisioning and unit, and wait for MV3.
-- `server/sandbox/echo-fixture.ts:250`. It is a test fixture's redirect target, not a platform value.
+`rg -n 'exe\.xyz' server src extension` now finds only the built-in exe-dev contract in `src/platform.ts` and the redirect target in `server/sandbox/echo-fixture.ts`. The latter is a test fixture, not a platform value. Provisioning and the unit no longer contain an exe-dev host.
 
 ## Not covered here
 
-Installing the unit environment and the selection file is provisioning work (MV3). Foreign-marker reporting is MV4. Widening `exmach`'s Anthropic positions and its limits table is MV7.
+Installing the optional root-owned selection file remains an operator action. Provisioning renders the unit environment but does not install or start the unit. Fresh-VM and cgroup checks remain MV3 live work. Foreign-marker reporting is MV4. Widening `exmach`'s Anthropic positions and its limits table is MV7.
