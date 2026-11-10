@@ -110,12 +110,12 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 - [ ] Give the gateway a separate `--platform` descriptor. It rebuilds its expected upstreams from the built-in profile, so `productionDefect` still refuses a route table that differs. The table never authorizes itself.
 - [ ] Add a `platform` object with a stable digest to `status --json`, and record the controller's startup profile in its status snapshot.
 - [ ] Replace every hard-coded site. These are `server/sandbox/routes.ts:170`, `:176`, `:250-258` and `:518`, `src/markers.ts:14-15`, `src/publication.ts:35-36`, `src/adapters/github.ts:1179`, `server/cli.ts:1053`, `server/controller.ts:8079`, `src/admission.ts:52-54` and the `ANTHROPIC_RULE` text in `src/workflow.ts`.
-- [ ] Select the profile from `FACTORY_PLATFORM` and an optional root-owned `/etc/factory/platform.json`. The file holds only the selector, controller login, app slug, bot email and an optional repository list. With neither source, select `exe-dev`. Both sources must agree. An `exmach` selection requires the identity fields from the file. Any malformed source fails closed and never falls back to `exe-dev`. The walkthrough is in `../pi-herdr-factorio-trails/MV1/walkthrough/explain.md`.
+- [ ] Select the profile from `FACTORY_PLATFORM` and an optional root-owned `/etc/factory/platform.json`. The file holds only the selector, controller login, app slug, bot email and an optional repository list. With neither source, select `exe-dev`. Both sources must agree. The `exmach` profile carries the identity exmach published in giuseppecrj/exmach#94, which is login `nubl-agent[bot]`, app slug `nubl-agent` and email `353429311+nubl-agent[bot]@users.noreply.github.com`. The file may override all three together, and may set `ghHost` to one label under `int.<domain>`. Any malformed source fails closed and never falls back to `exe-dev`. The walkthrough is in `../pi-herdr-factorio-trails/MV1/walkthrough/explain.md`.
 
 **You see.**
 
 - [ ] With no profile set, `status --json` reports `platform.name` as `exe-dev` and every route matches trunk.
-- [ ] With `FACTORY_PLATFORM=exmach:example.net` and no `/etc/factory/platform.json`, startup exits 2 with `event=platform_invalid reason=controller_identity_missing`. A built-in selector always generates its own forbidden domains, so `own_domain_not_forbidden` is proven by a unit test on a malformed resolved profile, not live.
+- [ ] With `FACTORY_PLATFORM=exmach:` and no domain, startup exits 2 with `event=platform_invalid` and a named reason. A built-in selector always generates its own forbidden domains, so `own_domain_not_forbidden` is proven by a unit test on a malformed resolved profile, not live.
 - [ ] `rg 'exe\.xyz|exe-dev-github-integration|169\.254\.169\.254|giuseppecrj/pi-herdr-factorio' src server extension` finds only `src/platform.ts`, the echo fixture, the generic refused ranges in `server/sandbox/gateway.ts`, and the MV3 and MV7 files `server/provision.sh`, `server/factory.service` and `server/sandbox/anthropic-limits.ts`.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
@@ -127,7 +127,7 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 
 - [ ] Lane 1. Regression lane against trunk. On `pi-factorio`, start the gateway and run one sandbox model request at trunk and head with no profile set. Save `default-parity.json`. Pass when both reach the model through the same host, path and edge address with the same status.
 - [ ] Lane 2. On `pi-factorio`, run `status --json` at head with no profile. Save `status-default.json`. Pass when `platform.name` is `exe-dev` and dispatch reasons match trunk.
-- [ ] Lane 3. On `pi-factorio`, start the controller at head with `FACTORY_PLATFORM=exmach:example.net` and no platform file. Save `invalid-profile.log`. Pass when it exits 2 with `platform_invalid reason=controller_identity_missing`, takes no lock and launches no stage.
+- [ ] Lane 3. On `pi-factorio`, start the controller at head with `FACTORY_PLATFORM=exmach:` and no domain. Save `invalid-profile.log`. Pass when it exits 2 with `platform_invalid` and a named reason, takes no lock and launches no stage.
 - [ ] Lane 4. On `pi-factorio`, start at head with a malformed `FACTORY_PLATFORM`. Save `malformed-profile.log`. Pass when it exits 2 and never falls back to `exe-dev`.
 - [ ] Lane 5. On the exmach VM, start the gateway at head with `FACTORY_PLATFORM=exmach:exmach.net` and send one OpenAI request from a sandbox. Save `exmach-openai.json`. Pass when the upstream is `llm.int.exmach.net/v1/responses` and the reply is 200.
 - [ ] Lane 6. On the exmach VM, send one Anthropic accept-stage request from a sandbox. Save `exmach-anthropic.json`. Pass when the upstream is `llm.int.exmach.net/v1/messages`, the client credential is stripped, and the reply is 200.
@@ -569,7 +569,7 @@ These questions stay unproven.
 ## Appendix C. Risks
 
 - **Forbidden-domain gaps (MV1).** A missed `int.` host lets a sandbox reach the edge. The owner watches the cross-family audit lane and `MV1` lanes 7 and 8.
-- **Unknown bot slug (MV1, MV4).** E2 yields it. Until then the `exmach` profile cannot be filled and the `.github/` edits wait.
+- **Bot identity (MV1, MV4).** exmach published `nubl-agent[bot]` in giuseppecrj/exmach#94 on 2026-11-10. The owner's two `.github/` edits switch CI's expected controller actor. They land after `pi-factorio` is drained in `MV4` and before the first exmach run in `MV5`, because a dispatch by the old bot would then fail `ci.yml`'s actor check.
 - **Request budget (MV5, MV7).** 600 requests per hour per VM is inference from the issue. A 429 is a stage failure. E3 sizes it from `MV5` receipts.
 - **No interleaved baseline (MV5).** One controller at a time means trunk numbers come from `pi-factorio` receipts.
 - **Backups (MV5).** exmach finishes M5 (giuseppecrj/exmach#29) before E1 to E4, so an off-host target should exist at cutover. Until it is proven, `backup.md` runs manually to an off-VM target.
