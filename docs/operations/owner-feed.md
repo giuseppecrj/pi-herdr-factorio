@@ -204,16 +204,23 @@ Render every string in the feed as plain text. A client that shows `title` as Ma
 
 ## Push rule for the bridge
 
-The bridge builds pushes from changes between two feed reads. The controller sends nothing.
+The bridge builds pushes from changes between two feed reads. The controller sends nothing. There are two kinds of push, the needs-you alert and a quieter failed alert. The owner decided on 2026-11-10 that the Factory tab sends both, the way Shep's Chats sends a separate "finished" alert.
 
-- The first successful read seeds the bridge's state and sends no push.
-- Only a new owner decision pushes. The feed marks an entry that waits on the owner with `group: "needs_you"` (`src/feed.ts:391`). A failed run has group `failed` and a finished run has group `done`, so neither is one.
+- The first successful read seeds the bridge's state and sends no push of either kind.
+- A needs-you alert fires only for a new owner decision. The feed marks an entry that waits on the owner with `group: "needs_you"` (`src/feed.ts:391`). A finished run has group `done` and never pushes.
+- A failed alert fires when a run newly fails. The feed marks a failed run with `group: "failed"` (`src/feed.ts:391`). Shep sends it at a lower interruption level than a needs-you alert.
 - Nothing pushes for a run the owner is viewing in the app.
 - There is one collapse key per [stable key](#identify-a-run).
 - The title is at most 64 bytes and the body at most 256 bytes. Both count UTF-8 bytes and are trimmed on a character boundary.
 - Pushes go through Shep's one push sender.
 
-**Proposal.** A decision is new when the key had no `needs_you` entry in the previous read, or one of its `needs_you` entries has a decision fingerprint (`kind`, `runId` and `reason`) that was not among the key's `needs_you` fingerprints in the previous read. An unavailable read, per [Detect an unavailable feed](#detect-an-unavailable-feed), changes no state.
+**Proposal.** A decision is new when the key had no `needs_you` entry in the previous read, or one of its `needs_you` entries has a decision fingerprint (`kind`, `runId` and `reason`) that was not among the key's `needs_you` fingerprints in the previous read.
+
+**Proposal for the failed alert.** A failure is new when one of the key's `failed` entries has a failure fingerprint that was not among the key's `failed` fingerprints in the previous read. The failure fingerprint is `runId` plus `failure.stage`, `failure.class` and `failure.reason`, where a null `failure` counts as one value. A run that fails, is admitted again and fails again has a new `runId`, so it alerts again. The same failed run seen on later reads does not.
+
+Both alerts share the collapse key, `repo` plus `issue`. A newer alert for the key replaces the older one on the phone, whichever kind each is. For example, a needs-you alert replaces a failed alert after the owner's next decision is needed on that issue, and a failed alert replaces a needs-you alert when the run then fails.
+
+An unavailable read, per [Detect an unavailable feed](#detect-an-unavailable-feed), changes no state and sends no push of either kind. The next available read compares against the last available read, so a `state_unavailable` gap never makes existing failures or decisions look new.
 
 ## Captures
 
