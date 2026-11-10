@@ -55,7 +55,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
   - [ ] `MV7` branches from `main` after the owner lands `MV5`.
   - [ ] `MV8` starts after the owner lands `MV5` and `MV6` and the other-project gates for `MV8` close.
   - [ ] After `MV5`, F12d and F12e resume on the exmach VM under `docs/plans/factory-v1.md`. Carry the replay budget file per the `replay-cap-raise-4m` row.
-- [ ] Hold the file boundaries. Each PR touches only its **Files** block. No agent edits `.github/`. The owner makes the two `.github/workflows/` edits in `MV4`.
+- [ ] Hold the file boundaries. Each PR touches only its **Files** block. No agent edits `.github/`. The owner authorized the coordinator to make the two `.github/workflows/` edits in `MV4`.
 - [ ] Hold the review gate. `MV8` proves what reaches the owner's phone. It waits for the owner's review in chat with a screenshot and a video before landing.
 - [ ] Run the `how` skill walkthrough before `MV1`, because it sets security-relevant constants. Bring the owner only product calls.
 
@@ -270,7 +270,7 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 - [ ] Create `docs/operations/drain.md`.
 - [ ] Edit `server/cli.ts` and `server/controller.ts` for the `status` report of markers by a login other than the profile's.
 - [ ] Edit `test/markers.test.ts` and `docs/operations/factory-cli.md`.
-- [ ] The owner edits `.github/workflows/check.yml:46` and `.github/workflows/ci.yml:116` to the new bot login, in a commit no agent writes.
+- [ ] Edit `.github/workflows/check.yml:46` and `.github/workflows/ci.yml:116` to `nubl-agent[bot]`. The owner authorized the coordinator to make these edits on 2026-11-10. They stack on `MV1`, because `test/validation.test.ts` runs `ci.yml`'s reporter with the controller's login, so its reporter cases must use the exmach profile once `ci.yml` names the new bot. On `main` alone the edit fails those tests.
 
 **Build.**
 
@@ -314,7 +314,7 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Rebased onto the MV1 branch, or trunk once MV1 lands, after the verdict, with the verdict still valid under the patch-id rule in `playbooks/shipping.md`.
-- [ ] Hand MV4 to the owner as STACK-READY. The owner lands it after MV1, with the owner's `.github/` commit.
+- [ ] Hand MV4 to the owner as STACK-READY. The owner lands it after MV1, after the drain and before the first exmach run.
 
 ## Cut production over to the exmach VM (MV5)
 
