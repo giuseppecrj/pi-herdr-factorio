@@ -25,6 +25,50 @@ import {
 } from "./fake-ticket-adapter.ts";
 
 describe("PR feedback readers and proposal writer", () => {
+	it("cadence filters creator and label and paginates beyond 1,000 entries without the ticket cap", async () => {
+		assert.ok(isRepoSlug(FAKE_REPO));
+		let calls = 0;
+		const github = new FakeGitHub();
+		const issue = github.add(fakeIssue(14));
+
+		const raw = await github.exec("gh", [
+			"api",
+			`repos/${FAKE_REPO}/issues/14`,
+		]);
+
+		const record = JSON.parse(raw.stdout);
+
+		const adapter = new GitHubTicketAdapter({
+			repo: FAKE_REPO,
+			exec: async (_command, args) => {
+				const endpoint = args.find((arg) => arg.startsWith("repos/"))!;
+				assert.match(
+					endpoint,
+					/issues\?labels=factory%3Aproposed&creator=exe-dev-github-integration%5Bbot%5D&state=all/,
+				);
+				calls++;
+				const query = new URL(`https://fixture/${endpoint}`).searchParams;
+				const page = Number(query.get("page"));
+
+				const entries =
+					page <= 11
+						? Array.from({ length: 100 }, (_, index) => ({
+								...record,
+								number: (page - 1) * 100 + index + 1,
+								user: { login: BOT_LOGIN },
+							}))
+						: [];
+
+				return { code: 0, stderr: "", stdout: JSON.stringify(entries) };
+			},
+		});
+
+		const read = await adapter.readCadenceIssues(BOT_LOGIN);
+		assert.equal(read.kind, "ok");
+		assert.equal(read.kind === "ok" ? read.value.length : 0, 1100);
+		assert.equal(calls, 12);
+		assert.equal(issue.number, 14);
+	});
 	it("F10-2 maps recorded position and original_position through the PR diff without storing hunks", async () => {
 		const recorded: { comments: JsonValue[] } = JSON.parse(
 			readFileSync(

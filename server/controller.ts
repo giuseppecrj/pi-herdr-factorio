@@ -39,6 +39,7 @@ import {
 	readCadenceFile,
 	writeCadenceFile,
 	type CadenceInput,
+	type CadenceKnownProposal,
 	type CadenceProposal,
 	type CadenceResult,
 } from "../src/cadence.ts";
@@ -4002,7 +4003,12 @@ export async function readDurableAccounting(
 		countersScope: "process",
 		runs,
 		maintenance: {
-			executions: maintenance.length,
+			executions: maintenance.reduce(
+				(sum, charge) => sum + charge.executions,
+				0,
+			),
+			uncertainRequests: maintenance.filter((charge) => charge.uncertain)
+				.length,
 			tokens: {
 				kind: maintenance.every((charge) => charge.exact)
 					? "exact"
@@ -4086,6 +4092,7 @@ export async function publishCadenceProposals(input: {
 	execution: CadenceInput;
 	result: CadenceResult;
 	proposals: readonly CadenceProposal[];
+	signal?: AbortSignal;
 }): Promise<boolean> {
 	const { execution, result } = input;
 
@@ -4101,8 +4108,64 @@ export async function publishCadenceProposals(input: {
 
 	const intents = join(input.stateDir, "cadence", execution.job, "proposals");
 	cadencePrivateDir(intents);
+	const issues = await adapter.readCadenceIssues(CONTROLLER_LOGIN);
 
-	for (const proposal of input.proposals) {
+	if (issues.kind !== "ok" || input.signal?.aborted) return false;
+
+	const invalidEvidence: {
+		fingerprint: string;
+		path: string;
+		start: number;
+		end: number;
+	}[] = [];
+
+	const dropped: string[] = [];
+
+	const dir = cadenceExecutionDir(
+		input.stateDir,
+		execution.job,
+		execution.windowStart,
+	);
+
+	for (const finding of input.proposals) {
+		if (input.signal?.aborted) return false;
+		const evidence = [];
+
+		for (const citation of finding.evidence) {
+			const source = join(dir, "tree", citation.path);
+			const info = await lstat(source).catch(() => null);
+
+			const lines =
+				info?.isFile() && !info.isSymbolicLink() && info.size <= 1024 * 1024
+					? (await readFile(source, "utf8")).split("\n")
+					: [];
+
+			if (lines.at(-1) === "") lines.pop();
+
+			if (
+				citation.start >= 1 &&
+				citation.end >= citation.start &&
+				citation.end <= lines.length
+			)
+				evidence.push(citation);
+			else
+				invalidEvidence.push({ fingerprint: finding.fingerprint, ...citation });
+		}
+
+		if (evidence.length === 0) dropped.push(finding.fingerprint);
+		writeCadenceFile(
+			join(dir, "filing.json"),
+			JSON.stringify({
+				reason:
+					invalidEvidence.length > 0 ? "invalid_evidence" : "valid_evidence",
+				invalidEvidence,
+				dropped,
+			}),
+		);
+
+		if (evidence.length === 0) continue;
+		const proposal = { ...finding, evidence };
+
 		const key = cadenceMarker(
 			execution.repo,
 			execution.job,
@@ -4113,38 +4176,12 @@ export async function publishCadenceProposals(input: {
 		const saved = readCadenceFile(path);
 		let body = cadenceIssueBody(proposal, result);
 
-		let title =
-			`Factory ${execution.job}: ${inert(proposal.title).replace(/\p{Cc}/gu, " ")}`.slice(
-				0,
-				220,
-			);
+		let title = `Factory ${execution.job}: ${inert(proposal.title)
+			.replace(/\\(.)/gs, "$1")
+			.replaceAll("\\", "")
+			.replace(/\p{Cc}/gu, " ")}`.slice(0, 220);
 
 		if (saved === null) {
-			for (const evidence of proposal.evidence) {
-				const source = join(
-					cadenceExecutionDir(
-						input.stateDir,
-						execution.job,
-						execution.windowStart,
-					),
-					"tree",
-					evidence.path,
-				);
-
-				const info = await lstat(source).catch(() => null);
-
-				if (
-					info === null ||
-					!info.isFile() ||
-					info.isSymbolicLink() ||
-					info.size > 1024 * 1024
-				)
-					return false;
-
-				if (evidence.end > (await readFile(source, "utf8")).split("\n").length)
-					return false;
-			}
-
 			writeCadenceFile(path, JSON.stringify({ key, title, body }));
 		} else {
 			const intent = objectOf(parseJsonText(saved));
@@ -4162,29 +4199,35 @@ export async function publishCadenceProposals(input: {
 			)
 				return false;
 
+			if (intent.posted === true) continue;
 			body = keptBody;
 			title = keptTitle;
 		}
-
-		// Include closed issues and proposals whose labels the owner changed.
-		const issues = await adapter.readProposedIssues(true);
-
-		if (issues.kind !== "ok") return false;
 
 		const matches = issues.value.filter((issue) =>
 			issue.body.split("\n").includes(key),
 		);
 
-		if (matches.length > 1) return false;
+		if (matches.length > 0) {
+			writeCadenceFile(
+				path,
+				JSON.stringify({ key, title, body, posted: true }),
+			);
+			continue;
+		}
 
-		if (matches.length === 1) continue;
-
-		if (!(await cadenceSwitches(input.stateDir, adapter))) return false;
+		if (
+			input.signal?.aborted ||
+			!(await cadenceSwitches(input.stateDir, adapter)) ||
+			input.signal?.aborted
+		)
+			return false;
 
 		const created = await writer.createIssue(title, body, ["factory:proposed"]);
 
 		// An unknown create is never retried here. A later tick must list remote issues first.
 		if (created.kind !== "posted") return false;
+		writeCadenceFile(path, JSON.stringify({ key, title, body, posted: true }));
 	}
 
 	return true;
@@ -4237,6 +4280,7 @@ export function controllerCadence(input: {
 			tokens: valid
 				? Math.max(native.usage.total, charge?.total ?? 0)
 				: Math.max(execution.settings.maxTokens, charge?.total ?? 0),
+			uncertain: (charge?.uncertain ?? 0) > 0,
 			exact: valid && charge !== null && charge.uncertain === 0,
 			model: valid
 				? (textOf(objectOf(native.record?.models)?.observed) ??
@@ -4266,8 +4310,14 @@ export function controllerCadence(input: {
 		log: input.log,
 		port: {
 			retained,
-			publish: (execution, result, proposals) =>
-				publishCadenceProposals({ ...input, execution, result, proposals }),
+			publish: (execution, result, proposals, signal) =>
+				publishCadenceProposals({
+					...input,
+					execution,
+					result,
+					proposals,
+					signal,
+				}),
 			async execute(execution, signal) {
 				const started = Date.now();
 
@@ -4278,6 +4328,7 @@ export function controllerCadence(input: {
 				);
 
 				const failed = (reason: string): CadenceResult => ({
+					launched: false,
 					kind: "failed",
 					tokens: 0,
 					exact: true,
@@ -4304,6 +4355,47 @@ export function controllerCadence(input: {
 				if (!(await input.executor.preflight()))
 					return failed("sandbox_unavailable");
 
+				const existing = await adapter.readCadenceIssues(CONTROLLER_LOGIN);
+
+				if (existing.kind !== "ok") return failed("proposals_unavailable");
+				const existingProposals: CadenceKnownProposal[] = [];
+
+				for (const issue of existing.value) {
+					const marker = issue.body
+						.split("\n")
+						.find((line) =>
+							line.startsWith(
+								`<!-- factory:cadence ${execution.repo} ${execution.job} `,
+							),
+						);
+
+					const fingerprint = marker?.split(" ").at(-2);
+
+					const link = issue.body.match(
+						/\]\(https:\/\/github\.com\/[^/]+\/[^/]+\/blob\/[a-f0-9]{40}\/([A-Za-z0-9_.\-/]+)#L\d+-L\d+\)/,
+					);
+
+					const path = link?.[1];
+
+					if (
+						fingerprint !== undefined &&
+						/^[a-f0-9]{64}$/.test(fingerprint) &&
+						path !== undefined &&
+						inCadenceScope(path, cadenceScope(execution.rotation))
+					)
+						existingProposals.push({
+							fingerprint,
+							title: issue.title.slice(0, 220),
+							state: issue.state,
+							path,
+						});
+				}
+
+				execution = {
+					...execution,
+					existingProposals: existingProposals.slice(0, 100),
+				};
+				writeCadenceFile(join(dir, "input.json"), JSON.stringify(execution));
 				const workspace = join(dir, "tree");
 				cadencePrivateDir(workspace);
 
@@ -4425,7 +4517,9 @@ type DurableUsage = DurableTokenUsage & {
 export function durableUsageOf(
 	accounting: Awaited<ReturnType<typeof readDurableAccounting>>,
 ): JsonValue {
-	const uncertain = accounting.runs.some((run) => run.uncertainRequests > 0);
+	const uncertain =
+		accounting.runs.some((run) => run.uncertainRequests > 0) ||
+		accounting.maintenance.uncertainRequests > 0;
 
 	const exact =
 		accounting.state === "readable" &&

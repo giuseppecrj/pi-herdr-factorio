@@ -630,7 +630,6 @@ async function runController(
 			return report.allowed &&
 				report.ready &&
 				!report.pending &&
-				report.capacity > 0 &&
 				["proposed", "no_delta"].includes(
 					report.jobs.find((job) => job.job === parsed.job)?.reason ?? "",
 				)
@@ -711,7 +710,6 @@ async function runController(
 		}
 
 		await pump();
-		await cadence?.wait();
 		await cadence?.stop();
 		io.stdout(json(report));
 

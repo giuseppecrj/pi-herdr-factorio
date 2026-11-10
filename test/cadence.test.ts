@@ -40,7 +40,9 @@ import { arrayOf, objectOf, parseJson } from "../server/sandbox/json.ts";
 import { fileAdmissionStore } from "../src/admission.ts";
 import {
 	CadenceRunner,
+	CADENCE_RETAIN_EXECUTIONS,
 	CADENCE_PATH_GROUPS,
+	cadencePrompt,
 	cadenceCharges,
 	cadenceExecutionDir,
 	cadenceIssueBody,
@@ -137,16 +139,16 @@ function input(
 	};
 }
 
-function finding(
-	execution = input(),
-	fingerprint = digestOf("architecture finding"),
-) {
+function finding(execution = input(), key = "first") {
 	return {
 		job: execution.job,
 		repo,
 		baseSha: sha,
-		fingerprint,
-		title: "A duplicated policy decision",
+		fingerprint: "new",
+		title:
+			key === "first"
+				? "A duplicated policy decision"
+				: `Another decision ${key}`,
 		claim:
 			"The callers disagree about the same invariant; consolidate that decision and test the interface.",
 		evidence: [
@@ -211,6 +213,8 @@ type RemoteIssue = {
 	labels: { name: string }[];
 	state: string;
 	updated_at: string;
+	user: { login: string };
+	state_reason?: string;
 };
 
 class GitHubFixture {
@@ -265,6 +269,7 @@ class GitHubFixture {
 					.filter((arg) => arg.startsWith("labels[]="))
 					.map((arg) => ({ name: arg.slice(9) })),
 				state: "open",
+				user: { login: "exe-dev-github-integration[bot]" },
 				updated_at: "2026-11-10T12:00:00Z",
 			};
 
@@ -275,10 +280,21 @@ class GitHubFixture {
 				: ok(JSON.stringify({ number: issue.number }));
 		}
 
-		if (endpoint.includes("issues?state=all"))
+		if (endpoint.includes("issues?") && endpoint.includes("state=all")) {
+			const query = new URL(`https://fixture/${endpoint}`).searchParams;
+			const page = Number(query.get("page") ?? 1);
+			const size = Number(query.get("per_page") ?? 100);
+
+			const issues = this.issues.filter(
+				(issue) =>
+					issue.user.login === query.get("creator") &&
+					issue.labels.some((label) => label.name === "factory:proposed"),
+			);
+
 			return this.listFails
 				? { code: 1, stdout: "", stderr: "HTTP 503" }
-				: ok(JSON.stringify(this.issues));
+				: ok(JSON.stringify(issues.slice((page - 1) * size, page * size)));
+		}
 
 		if (endpoint.includes("issues?state=open"))
 			return ok(JSON.stringify(this.ready));
@@ -286,7 +302,11 @@ class GitHubFixture {
 	};
 }
 
-function runner(stateDir: string, github = new GitHubFixture()) {
+function runner(
+	stateDir: string,
+	github = new GitHubFixture(),
+	log: (event: string) => void = () => undefined,
+) {
 	const executor = sandboxExecutor({
 		stateDir,
 		exec: github.exec,
@@ -301,7 +321,7 @@ function runner(stateDir: string, github = new GitHubFixture()) {
 		repo,
 		exec: github.exec,
 		executor,
-		log: () => undefined,
+		log,
 	});
 }
 
@@ -361,7 +381,6 @@ describe("cadence weekly policy and structured findings", () => {
 		for (const bad of [
 			{ ...proposal, job: "security" },
 			{ ...proposal, baseSha: "b".repeat(40) },
-			{ ...proposal, fingerprint: "../x" },
 			{ ...proposal, title: "x".repeat(121) },
 			{ ...proposal, limits: "" },
 			{ ...proposal, evidence: [{ path: "../secret", start: 1, end: 2 }] },
@@ -382,14 +401,99 @@ describe("cadence weekly policy and structured findings", () => {
 			parseCadenceProposals(
 				JSON.stringify({ proposals: [proposal, proposal] }),
 				execution,
+			)?.length,
+			1,
+		);
+		assert.deepEqual(
+			parseCadenceProposals(
+				JSON.stringify({ proposals: [{ ...proposal, fingerprint: "../x" }] }),
+				execution,
 			),
-			null,
+			[],
+		);
+	});
+
+	it("keeps candidate security-review skill bytes unchanged and injects repository mode only into cadence", () => {
+		assert.equal(
+			digestOf(
+				readFileSync(
+					new URL("../skills/security-review/SKILL.md", import.meta.url),
+				),
+			),
+			"680790c43e8292798a1762d72c53657c691a1a385091ab89c636c7efdf670e75",
+		);
+		assert.match(
+			cadencePrompt(input("security"), [], "unknown"),
+			/override the supplied security skill's new-only\/pre-existing exclusions and candidate-seat envelope/,
+		);
+		assert.doesNotMatch(
+			cadencePrompt(input(), [], "unknown"),
+			/candidate-seat envelope/,
+		);
+	});
+
+	it("mints normalized fingerprints and only accepts supplied reused fingerprints", () => {
+		const proposal = finding();
+
+		const parse = (value: typeof proposal, execution = input()) =>
+			parseCadenceProposals(JSON.stringify({ proposals: [value] }), execution)!;
+
+		const minted = parse(proposal)[0]!;
+		assert.equal(
+			minted.fingerprint,
+			digestOf(
+				JSON.stringify([
+					"architecture",
+					repo,
+					"src/example.ts",
+					"a duplicated policy decision",
+				]),
+			),
+		);
+		assert.equal(
+			parse({ ...proposal, title: "  A DUPLICATED   policy decision  " })[0]
+				?.fingerprint,
+			minted.fingerprint,
+		);
+		assert.deepEqual(
+			parse({ ...proposal, fingerprint: digestOf("invented by model") }),
+			[],
+		);
+
+		const known = {
+			fingerprint: minted.fingerprint,
+			title: proposal.title,
+			path: "src/example.ts",
+			state: "not_planned" as const,
+		};
+
+		const execution = { ...input(), existingProposals: [known] };
+		assert.equal(
+			parse(
+				{
+					...proposal,
+					fingerprint: minted.fingerprint,
+					title: "Paraphrased finding",
+				},
+				execution,
+			)[0]?.fingerprint,
+			minted.fingerprint,
+		);
+		assert.match(cadencePrompt(execution, [], "unknown"), /not_planned/);
+		assert.match(
+			cadencePrompt(execution, [], "unknown"),
+			/Never invent or change a fingerprint/,
+		);
+		assert.doesNotMatch(
+			cadencePrompt(input("security"), [], "unknown"),
+			/SHA-256-style/,
 		);
 	});
 
 	it("escapes all model text, mentions, HTML, issue references and credentials", () => {
 		const proposal = {
 			...finding(),
+			fingerprint: digestOf("escaping"),
 			claim:
 				"<script>alert(1)</script> @owner #42 giuseppecrj/other/issues/12 https://github.com/owner/repo/pull/4 ghp_".concat(
 					"a".repeat(40),
@@ -449,6 +553,77 @@ describe("cadence durable ownership, accounting and proposal recovery", () => {
 		assert.equal(accounting.maintenance.money.kind, "unavailable");
 	});
 
+	it("retains only the last N executions while preserving lifetime and weekly charges", async (t) => {
+		const stateDir = directory(t);
+		const github = new GitHubFixture();
+		const total = CADENCE_RETAIN_EXECUTIONS + 4;
+
+		for (let n = 0; n < total; n++) {
+			const execution = {
+				...input("architecture", input().windowStart + n * 7 * 86_400_000),
+				chargedWeek: utcWeekStart(now + n * 7 * 86_400_000),
+			};
+
+			const dir = seed(stateDir, execution, result(execution, []));
+			mkdirSync(join(dir, "runtime"), { mode: 0o700 });
+			writeFileSync(join(dir, "runtime", "session.jsonl"), "large archive");
+			mkdirSync(join(stateDir, "checkouts"), { recursive: true });
+			writeFileSync(
+				join(stateDir, "checkouts", `${execution.runId}.json`),
+				"checkout",
+			);
+			await settle(runner(stateDir, github), "architecture", {
+				...tick,
+				now: now + n * 7 * 86_400_000,
+			});
+		}
+
+		assert.equal(
+			readdirSync(join(stateDir, "cadence/architecture/executions")).length,
+			CADENCE_RETAIN_EXECUTIONS,
+		);
+		assert.equal(
+			readdirSync(join(stateDir, "checkouts")).length,
+			CADENCE_RETAIN_EXECUTIONS,
+		);
+		const charges = cadenceCharges(stateDir, repo);
+		assert.equal(
+			charges.reduce((sum, charge) => sum + charge.tokens, 0),
+			total * 16,
+		);
+		assert.equal(
+			charges
+				.filter(
+					(charge) =>
+						charge.week === utcWeekStart(now + (total - 1) * 7 * 86_400_000),
+				)
+				.reduce((sum, charge) => sum + charge.tokens, 0),
+			16,
+		);
+		assert.equal(
+			(await readDurableAccounting(stateDir, repo)).maintenance.executions,
+			total,
+		);
+		assert.ok(charges.length <= CADENCE_RETAIN_EXECUTIONS + 2);
+	});
+
+	it("reports unsettled maintenance requests separately from missing receipts", async (t) => {
+		const stateDir = directory(t);
+		seed(stateDir, input(), {
+			...result(input(), []),
+			exact: false,
+			uncertain: true,
+		});
+
+		const usage = objectOf(
+			durableUsageOf(await readDurableAccounting(stateDir, repo)),
+		);
+
+		assert.equal(usage?.kind, "uncertain");
+		assert.equal(usage?.reason, "request_unsettled");
+		assert.equal(usage?.total, 16);
+	});
+
 	it("retains an interrupted execution's full charge and never replays it on restart", async (t) => {
 		const stateDir = directory(t);
 		seed(stateDir, input(), null);
@@ -478,8 +653,15 @@ describe("cadence durable ownership, accounting and proposal recovery", () => {
 			join(stateDir, "cadence/architecture/state.json"),
 			"{broken",
 		);
-		const cadence = runner(stateDir);
+		const logs: string[] = [];
+
+		const cadence = runner(stateDir, new GitHubFixture(), (event) =>
+			logs.push(event),
+		);
+
 		await settle(cadence);
+		await settle(cadence);
+		assert.deepEqual(logs, ["cadence_blocked"]);
 		assert.equal(cadence.ready, false);
 		assert.equal(cadenceCharges(stateDir, repo).length, 0);
 	});
@@ -573,6 +755,54 @@ describe("cadence durable ownership, accounting and proposal recovery", () => {
 		);
 	});
 
+	it("never refiles a rejected finding with paraphrased model text or a changed hash in a later rotation", async (t) => {
+		const stateDir = directory(t);
+		const github = new GitHubFixture();
+		seed(stateDir);
+		await settle(runner(stateDir, github));
+		const first = github.issues[0]!;
+		first.state = "closed";
+		first.state_reason = "not_planned";
+		const fingerprint = first.body.split("\n").at(-1)!.split(" ").at(-2)!;
+
+		const execution = {
+			...input("architecture", input().windowStart + 5 * 7 * 86_400_000, 5),
+			existingProposals: [
+				{
+					fingerprint,
+					title: first.title,
+					path: "src/example.ts",
+					state: "not_planned" as const,
+				},
+			],
+		};
+
+		seed(
+			stateDir,
+			execution,
+			result(execution, [
+				{
+					...finding(execution),
+					title: "Same finding paraphrased by the model",
+					fingerprint,
+				},
+				{
+					...finding(execution),
+					title: "Same finding with an invented hash",
+					fingerprint: digestOf("changed hash"),
+				},
+			]),
+		);
+		const cadence = runner(stateDir, github);
+		await settle(cadence, "architecture", {
+			...tick,
+			now: now + 5 * 7 * 86_400_000,
+		});
+		assert.equal(github.creates, 1);
+		assert.equal(cadence.pending, false);
+		assert.equal(cadence.status()[0]?.rotation, 6);
+	});
+
 	it("reconciles an unknown create on the next tick, including after process restart", async (t) => {
 		const stateDir = directory(t);
 		const github = new GitHubFixture();
@@ -583,8 +813,102 @@ describe("cadence durable ownership, accounting and proposal recovery", () => {
 		assert.equal(first.pending, true);
 		assert.equal(github.creates, 1);
 		const restarted = runner(stateDir, github);
-		await settle(restarted);
+		await settle(restarted, "architecture", { ...tick, now: now + 10_000 });
 		assert.equal(restarted.pending, false);
+		assert.equal(github.creates, 1);
+	});
+
+	it("reads only bot proposals once per filing pass, ignores forged markers and tolerates duplicate bot matches", async (t) => {
+		const stateDir = directory(t);
+		const github = new GitHubFixture();
+		const execution = input();
+		const first = finding(execution);
+
+		const parsed = parseCadenceProposals(
+			JSON.stringify({ proposals: [first] }),
+			execution,
+		)![0]!;
+
+		const copied = {
+			number: 55,
+			title: "forged",
+			body: cadenceIssueBody(parsed, result()),
+			labels: [{ name: "factory:proposed" }],
+			state: "closed",
+			user: { login: "someone-else" },
+			updated_at: "2026-11-10T12:00:00Z",
+		};
+
+		github.issues.push(copied, { ...copied, number: 56 });
+		seed(
+			stateDir,
+			execution,
+			result(execution, [first, finding(execution, "second")]),
+		);
+		await settle(runner(stateDir, github));
+		assert.equal(github.creates, 2);
+
+		const reads = github.requests.filter((args) =>
+			args.some((arg) => arg.includes("issues?") && arg.includes("state=all")),
+		);
+
+		assert.equal(reads.length, 1);
+		assert.match(
+			reads[0]!.join(" "),
+			/creator=exe-dev-github-integration%5Bbot%5D/,
+		);
+		const nextState = directory(t);
+		github.issues.push({ ...github.issues[2]!, number: 60 });
+		seed(nextState, execution, result(execution, [first]));
+		await settle(runner(nextState, github));
+		assert.equal(
+			github.creates,
+			2,
+			"several own matches mean already filed, never a stall",
+		);
+	});
+
+	it("backs off failed publication reads without burning the slot or repeatedly listing on every tick", async (t) => {
+		const stateDir = directory(t);
+		const github = new GitHubFixture();
+		github.listFails = true;
+		seed(stateDir);
+		const cadence = runner(stateDir, github);
+		await settle(cadence);
+		const requests = github.requests.length;
+		await settle(cadence, "architecture", { ...tick, now: now + 9_999 });
+		assert.equal(github.requests.length, requests);
+		assert.equal(cadence.status()[0]?.watermark, null);
+		github.listFails = false;
+		await settle(cadence, "architecture", { ...tick, now: now + 10_000 });
+		assert.equal(github.creates, 1);
+		assert.equal(cadence.pending, false);
+	});
+
+	it("stops publication after an in-flight list or create instead of continuing the remaining proposals", async (t) => {
+		const stateDir = directory(t);
+		const github = new GitHubFixture();
+		const abort = new AbortController();
+		const execution = input();
+		seed(stateDir);
+		github.beforeCreate = () => abort.abort();
+
+		const proposals = parseCadenceProposals(
+			JSON.stringify({ proposals: [finding(), finding(execution, "second")] }),
+			execution,
+		)!;
+
+		assert.equal(
+			await publishCadenceProposals({
+				stateDir,
+				exec: github.exec,
+				execution,
+				result: result(),
+				proposals,
+				signal: abort.signal,
+			}),
+			false,
+		);
 		assert.equal(github.creates, 1);
 	});
 
@@ -619,9 +943,37 @@ describe("cadence durable ownership, accounting and proposal recovery", () => {
 			rmSync(join(stateDir, "disabled"), { force: true });
 			github.enabled = true;
 			github.labelName = "factory:enabled";
-			await settle(cadence);
+			await settle(cadence, "architecture", { ...tick, now: now + 10_000 });
 			assert.equal(github.creates, 1);
 		}
+	});
+
+	it("drops bad citations without stalling this job or the next audit", async (t) => {
+		const stateDir = directory(t);
+		const github = new GitHubFixture();
+		const execution = input();
+		const valid = finding(execution);
+
+		const bad = {
+			...finding(execution, digestOf("bad")),
+			evidence: [{ ...valid.evidence[0]!, end: 999 }],
+		};
+
+		seed(stateDir, execution, result(execution, [bad, valid]));
+		const cadence = runner(stateDir, github);
+		await settle(cadence);
+		assert.equal(cadence.pending, false);
+		assert.equal(github.creates, 1);
+		await settle(cadence, "security");
+		assert.ok(
+			existsSync(
+				cadenceExecutionDir(
+					stateDir,
+					"security",
+					input("security").windowStart,
+				),
+			),
+		);
 	});
 
 	it("checks switches separately for each finding, and refuses unverified line ranges", async (t) => {
@@ -657,12 +1009,92 @@ describe("cadence durable ownership, accounting and proposal recovery", () => {
 				result: result(),
 				proposals: [bad],
 			}),
-			false,
+			true,
 		);
 		assert.equal(github.creates, 1);
 	});
 
-	it("holds retained proposals when preflight is unavailable and evaluates idle schedules under 100 ms", async (t) => {
+	it("retries zero-work preparation failures with durable bounded backoff, without using the weekly slot", async (t) => {
+		const stateDir = directory(t);
+		let attempts = 0;
+
+		const cadence = new CadenceRunner({
+			stateDir,
+			repo,
+			log: () => undefined,
+			port: {
+				retained: async () => {
+					throw new Error("unexpected retention");
+				},
+				execute: async (execution) => {
+					attempts++;
+
+					return attempts === 1
+						? {
+								...result(execution, []),
+								kind: "failed",
+								launched: false,
+								tokens: 0,
+								reason: "checkout_unavailable",
+							}
+						: result(execution, []);
+				},
+				publish: async () => true,
+			},
+		});
+
+		await settle(cadence);
+		assert.equal(attempts, 1);
+		assert.equal(cadence.pending, true);
+		assert.equal(cadence.status()[0]?.watermark, null);
+		assert.equal(cadence.status()[0]?.rotation, 0);
+		await settle(cadence, "architecture", { ...tick, now: now + 9_999 });
+		assert.equal(attempts, 1);
+		await settle(cadence, "architecture", { ...tick, now: now + 10_000 });
+		assert.equal(attempts, 2);
+		assert.equal(cadence.pending, false);
+		assert.equal(cadence.status()[0]?.rotation, 1);
+		assert.equal(cadenceCharges(stateDir, repo)[0]?.tokens, 16);
+	});
+
+	it("does not abort spent model work on unavailable reads, but does on a positively off switch", async (t) => {
+		for (const disabled of [false, true]) {
+			const stateDir = directory(t);
+			let signal: AbortSignal | null = null;
+			let resolve: (value: CadenceResult) => void = () => undefined;
+
+			const work = new Promise<CadenceResult>((done) => {
+				resolve = done;
+			});
+
+			const cadence = new CadenceRunner({
+				stateDir,
+				repo,
+				log: () => undefined,
+				port: {
+					execute: async (_execution, abort) => {
+						signal = abort;
+
+						return work;
+					},
+					retained: async () => result(input(), []),
+					publish: async () => true,
+				},
+			});
+
+			await cadence.recover();
+			cadence.tick(tick, "architecture");
+			cadence.tick({ ...tick, allowed: false, disabled });
+			assert.ok(signal !== null);
+			// SAFETY: execute synchronously assigns the signal before returning its retained promise.
+			assert.equal((signal as AbortSignal).aborted, disabled);
+			resolve(result(input(), []));
+			await cadence.wait();
+			assert.equal(cadence.status()[0]?.reason, "no_delta");
+		}
+	});
+
+	it("holds retained proposals when preflight is unavailable", async (t) => {
 		const stateDir = directory(t);
 		const github = new GitHubFixture();
 		seed(stateDir);
@@ -705,19 +1137,63 @@ describe("cadence durable ownership, accounting and proposal recovery", () => {
 		assert.equal(cadence.pending, true);
 		assert.equal(github.creates, 0);
 		await cadence.wait();
-		const started = performance.now();
-
-		for (let n = 0; n < 1000; n++)
-			cadence.tick({ ...tick, allowed: false }, "architecture");
-		const elapsed = performance.now() - started;
-		assert.ok(
-			elapsed / 1000 < 100,
-			`${elapsed / 1000} ms per idle due evaluation`,
-		);
-		t.diagnostic(
-			`idle cadence evaluation ${elapsed / 1000} ms/call; no models`,
-		);
 	});
+});
+
+it("evaluates healthy, not-due cadence through real Orchestrator.tick under 100 ms", async (t) => {
+	const stateDir = directory(t);
+	const github = new GitHubFixture();
+
+	for (const job of ["architecture", "security"] as const) {
+		seed(stateDir, input(job), result(input(job), []));
+		await settle(runner(stateDir, github), job);
+	}
+
+	const executor = sandboxExecutor({
+		stateDir,
+		exec: github.exec,
+		root: join(stateDir, "absent-bundle"),
+		xdgRuntimeDir: `/run/user/${process.getuid?.()}`,
+		log: () => undefined,
+	});
+
+	executor.preflight = async () => true;
+
+	const cadence = controllerCadence({
+		stateDir,
+		repo,
+		exec: github.exec,
+		executor,
+		log: () => undefined,
+	});
+
+	const controller = new Orchestrator({
+		exec: github.exec,
+		repo,
+		env: (name) => process.env[name],
+		store: fileAdmissionStore(stateDir),
+		files: fileRunFiles(stateDir),
+		executor,
+		cadence,
+		clock: { now: () => now },
+		scope: null,
+		log: () => undefined,
+	});
+
+	await controller.tick();
+	const started = performance.now();
+
+	for (let n = 0; n < 20; n++) {
+		const report = await controller.tick();
+		assert.equal(report.dispatch.enabled, true);
+		assert.equal(report.active, 0);
+	}
+
+	const perTick = (performance.now() - started) / 20;
+	assert.ok(perTick < 100, `${perTick} ms per healthy idle orchestrator tick`);
+	assert.equal(cadence.pending, false);
+	assert.equal(cadenceCharges(stateDir, repo).length, 2);
+	t.diagnostic(`healthy idle Orchestrator.tick ${perTick} ms/call; no models`);
 });
 
 async function nativeBundle(
@@ -825,7 +1301,8 @@ it("native cadence --once dedup demo: real Pi/RPC, bwrap, user scope, gateway an
 		finding(input(), digestOf("second native finding")),
 	];
 
-	const answer = JSON.stringify({ proposals: findings });
+	let answer = JSON.stringify({ proposals: findings });
+	let expectedFingerprint: string | null = null;
 	let modelRequests = 0;
 	let release: () => void = () => undefined;
 	let arrived: () => void = () => undefined;
@@ -865,6 +1342,12 @@ it("native cadence --once dedup demo: real Pi/RPC, bwrap, user scope, gateway an
 					"ls",
 					"read",
 				]);
+
+				if (expectedFingerprint !== null)
+					assert.ok(
+						body.includes(expectedFingerprint),
+						"model receives this job's existing proposal fingerprints before launch",
+					);
 				modelRequests++;
 				arrived();
 				await hold;
@@ -1229,6 +1712,15 @@ it("native cadence --once dedup demo: real Pi/RPC, bwrap, user scope, gateway an
 	);
 	assert.equal(existsSync(join(fullState, "cadence")), false);
 	assert.equal(modelRequests, 1);
+	cpSync(join(fullState, "claims"), join(stateDir, "claims"), {
+		recursive: true,
+	});
+	assert.equal(
+		await runCli(argv, io),
+		0,
+		"an already completed window succeeds even with ticket capacity full",
+	);
+	assert.equal(modelRequests, 1);
 
 	const disabledState = join(root, "disabled");
 	mkdirSync(disabledState, { mode: 0o700 });
@@ -1304,5 +1796,170 @@ it("native cadence --once dedup demo: real Pi/RPC, bwrap, user scope, gateway an
 	);
 	t.diagnostic(
 		"native read-only mount refused bash write; scheduled tick returned while real Pi awaited the withheld model response",
+	);
+
+	const fingerprint = github.issues[0]!.body.split("\n")
+		.at(-1)!
+		.split(" ")
+		.at(-2)!;
+
+	github.issues[0]!.state = "closed";
+	github.issues[0]!.state_reason = "not_planned";
+	expectedFingerprint = fingerprint;
+	answer = JSON.stringify({
+		proposals: [
+			{
+				...findings[0],
+				title: "Paraphrased finding in a later audit",
+				fingerprint,
+			},
+			{
+				...findings[1],
+				title: "Changed hash for an old finding",
+				fingerprint: digestOf("model invented a different hash"),
+			},
+		],
+	});
+	const repeatState = join(root, "repeat");
+	mkdirSync(repeatState, { mode: 0o700 });
+	assert.equal(
+		await runCli([...argv.slice(0, -1), repeatState], io),
+		0,
+		`${stdout}\n${stderr}`,
+	);
+	assert.equal(
+		github.creates,
+		2,
+		"paraphrased/rekeyed findings create zero issues, including one closed as not planned",
+	);
+	assert.equal(modelRequests, 3);
+
+	const mixedState = join(root, "mixed");
+	mkdirSync(mixedState, { mode: 0o700 });
+
+	const mixed = {
+		...finding(),
+		title: "src/cadence.ts (policy) \\ @owner #12 GH-34",
+		evidence: [
+			{ path: "src/example.ts", start: 1, end: 2 },
+			{ path: "src/example.ts", start: 1, end: 50 },
+			{ path: "src/missing.ts", start: 1, end: 2 },
+		],
+	};
+
+	answer = JSON.stringify({ proposals: [mixed] });
+	assert.equal(
+		await runCli([...argv.slice(0, -1), mixedState], io),
+		0,
+		`${stdout}\n${stderr}`,
+	);
+	assert.equal(github.creates, 3);
+	assert.equal((github.issues[2]!.body.match(/\/blob\//g) ?? []).length, 1);
+	assert.doesNotMatch(github.issues[2]!.body, /L50|missing\.ts/);
+	assert.doesNotMatch(github.issues[2]!.title, /\\|@owner|#12|GH-34/);
+	assert.match(github.issues[2]!.title, /src\/cadence\.ts \(policy\)/);
+
+	const invalidState = join(root, "invalid");
+	mkdirSync(invalidState, { mode: 0o700 });
+	answer = JSON.stringify({
+		proposals: [
+			{
+				...mixed,
+				title: "All invalid citations",
+				evidence: mixed.evidence.slice(1),
+			},
+		],
+	});
+	assert.equal(
+		await runCli([...argv.slice(0, -1), invalidState], io),
+		0,
+		`${stdout}\n${stderr}`,
+	);
+	assert.equal(
+		github.creates,
+		3,
+		"all-invalid finding is dropped and filing completes",
+	);
+
+	const filing = objectOf(
+		parseJson(
+			readFileSync(
+				join(
+					cadenceExecutionDir(
+						invalidState,
+						"architecture",
+						execution.windowStart,
+					),
+					"filing.json",
+				),
+				"utf8",
+			),
+		),
+	);
+
+	assert.equal(arrayOf(filing?.dropped)?.length, 1);
+	assert.equal(arrayOf(filing?.invalidEvidence)?.length, 2);
+	assert.equal(modelRequests, 5);
+	t.diagnostic(
+		JSON.stringify({
+			extendedNativeDemo: {
+				firstCreated: 2,
+				paraphrasedRepeatCreated: 0,
+				partialEvidenceCreated: 1,
+				allInvalidCreated: 0,
+				filingComplete: true,
+				modelRequests,
+			},
+			fake: ["GitHub", "model upstream"],
+		}),
+	);
+
+	const retryState = join(root, "prelaunch");
+	mkdirSync(retryState, { mode: 0o700 });
+	let retryNow = now;
+	let refuseLaunch = true;
+	answer = '{"proposals":[]}';
+
+	const retryRuntime: ControllerRuntime = {
+		...runtime,
+		clock: { now: () => retryNow },
+		executor: (context) => {
+			const executor = runtime.executor(context);
+			const launch = executor.launch.bind(executor);
+			executor.launch = async (request) => {
+				if (refuseLaunch)
+					return {
+						kind: "unavailable",
+						stage: request.stage,
+						reason: "sandbox_unavailable",
+					};
+
+				return launch(request);
+			};
+
+			return executor;
+		},
+	};
+
+	const retryIo = { ...io, runtime: retryRuntime };
+	const retryArgv = [...argv.slice(0, -1), retryState];
+	assert.equal(await runCli(retryArgv, retryIo), 1);
+	assert.equal(modelRequests, 5, "failed launch spends no model request");
+	refuseLaunch = false;
+	retryNow += 10_000;
+	assert.equal(await runCli(retryArgv, retryIo), 0, `${stdout}\n${stderr}`);
+	assert.equal(modelRequests, 6);
+	assert.equal(
+		readFileSync(
+			join(
+				cadenceExecutionDir(retryState, "architecture", execution.windowStart),
+				"tree/src/example.ts",
+			),
+			"utf8",
+		),
+		"export const first = 1;\nexport const second = 2;\n",
+	);
+	t.diagnostic(
+		"native zero-work launch refusal retried after backoff with its pinned checkout intact; no weekly slot lost",
 	);
 });

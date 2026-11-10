@@ -1384,6 +1384,9 @@ export class Orchestrator {
 		this.#input.cadence?.tick({
 			now,
 			allowed: open && this.#enabled,
+			disabled:
+				reasons.includes("locally_disabled") ||
+				reasons.includes("repo_switch_off"),
 			capacity: this.#freeSlots(),
 			config: this.#config?.cadence ?? null,
 			workflowSha: this.#workflowSha,
