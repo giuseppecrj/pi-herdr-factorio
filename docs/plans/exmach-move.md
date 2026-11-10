@@ -4,8 +4,8 @@ Move the Factorio controller from the exe.dev VM `pi-factorio` to one exmach dev
 The owner gets the same factory on a platform with no exe.dev credit spend and no credential in the VM.
 The rule this program enforces is that no platform value is hard-coded, and a profile that does not forbid its own domain refuses to start.
 The cutover is done when a `factory:ready` issue becomes a ready PR with the controller on exmach and markers signed by the new bot.
-Implement `MV1`, `MV2`, `MV3`, `MV4`, `MV5`, `MV6`, `MV7` in that order. `MV1` and `MV2` are independent. `MV3` and `MV4` stack on `MV1`.
-`MV5` is the cutover and waits for exmach E1 to E4. `MV6` and `MV7` follow the cutover.
+Implement `MV1` to `MV8`. `MV1`, `MV2` and `MV6` are independent and start now. `MV3` and `MV4` stack on `MV1`.
+`MV5` is the cutover and waits for exmach E1 to E4. `MV7` follows the cutover. `MV8` proves the phone path after `MV5` and `MV6`.
 Items #717 (F13 Linear) and #718 (bootstrap kit) stay outside this plan. Appendix C says where they go.
 
 ## How to read this
@@ -14,7 +14,9 @@ One box is one unit of work. Every box names the evidence that checks it. A nest
 
 The program runs the poteto-mode playbook `playbooks/autopilot-stack.md`. No current grant names merging this program's PRs. The `autonomous-run` grant of 2026-11-10T00:03Z named F09c paperwork, F11, F12 and F13, and the `owner-checkpoint-f12` row ended that run. So every PR here stops at STACK-READY and the owner lands it. Commits, branches, pushes, PR creation, fixture issues, VM changes and the exmach VM itself each need their own grant, recorded in `docs/decisions.tsv` before the action. This document grants nothing.
 
-Use the **Factory CLI control procedure** from `docs/plans/factory-v1.md` as the control skill, through `.pi/skills/verify-factory/`. This backend has no visual surface except `MV6`'s phone push. Live lanes save redacted logs, JSON snapshots and issue or PR URLs in place of screenshots. `MV2` makes the control skill reach the exmach VM. Until exmach E2 exists, every live lane that needs the exmach VM is `BLOCKED`, never passed by a substitute.
+Use the **Factory CLI control procedure** from `docs/plans/factory-v1.md` as the control skill, through `.pi/skills/verify-factory/`. This backend has no visual surface except `MV8`'s Factory tab and pushes in Shep. Live lanes save redacted logs, JSON snapshots and issue or PR URLs in place of screenshots. `MV2` makes the control skill reach the exmach VM. Until exmach E2 exists, every live lane that needs the exmach VM is `BLOCKED`, never passed by a substitute.
+
+The Kyoko root session coordinates integration between Factorio, exmach and Shep (decision C1 in nublai/root `.pi/plan/integration.md`). This program works only in this repository. It files no issues and posts no comments in giuseppecrj/exmach or giuseppecrj/shep. Each reply to the owner that needs something from those projects ends with a **For other projects** heading, and the Kyoko session relays it.
 
 Treat every new path, symbol, command and log field below as a proposed contract, not an existing capability. At the planning base `4306505` none of them exist.
 
@@ -34,24 +36,27 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 - [ ] Run the audit at every child delivery, at every stall or no-progress advisory, and on the operator's request. Nothing schedules it, so never promise a timed cadence and never leave the audit to memory.
 - [ ] Use this audit prompt, verbatim. "Re-read the execution playbook. Audit the operation against it and fix drift in this audit. Check every active lane and judge progress by side effects only. Cancel a stuck lane and launch its fresh replacement now. Then post a short status message to the operator in chat only when the audit found a tracked change that no earlier status message reported, such as a PR opened, a code-ready head, a round launched or closed, a verdict, a merge, a stuck agent and the action taken, a blocker added or cleared, or a decision only the operator can make. Name every such change and nothing else. Do not repeat a table, the merged list, or an unchanged blocker. If the audit found none, end the turn with no reply text. Either way, log this audit's row in your decision trail. The row names the items reported, or none."
 - [ ] On the operator's hold or stand-down, cancel every running child with `subagent_cancel` at once and launch nothing new.
-- [ ] Track the exmach gates in the execution trail at every audit. Read each with `gh issue view <n> --repo giuseppecrj/exmach`.
+- [ ] Track the gates in other projects at every audit with read-only `gh issue view <n> --repo <repo>`. exmach's order is M5 backups (giuseppecrj/exmach#29), then giuseppecrj/exmach#51, then E1 to E4 (decision C2).
+  - [ ] M5, the off-host backup target and restore drill, giuseppecrj/exmach#29.
   - [ ] E1, `actions` opt-in, giuseppecrj/exmach#93, after the deny list in giuseppecrj/exmach#51.
   - [ ] E2, the `factorio` VM recipe, giuseppecrj/exmach#94. It also yields the new bot login, its email id and the VM's ssh route.
   - [ ] E3, the per-VM `llm` budget, giuseppecrj/exmach#95.
   - [ ] E4, GitHub redirect egress, giuseppecrj/exmach#96.
   - [ ] E5, the userns smoke gate, giuseppecrj/exmach#97.
+  - [ ] For `MV8` only, push v2 giuseppecrj/exmach#88, the bridge in the dev image giuseppecrj/exmach#90, the bridge push sender giuseppecrj/shep#107 and the Factory tab giuseppecrj/shep#140.
 
 ### Launch owner rounds
 
-- [ ] Give each PR one owner role with the lifecycle `autopilot-stack` names. Launch each round as a fresh bare leaf with `fork: false`, the Implementer prompt, an explicit model and thinking level, the PR's **Files** block, its verification, and its commit policy. Write each brief to `../pi-herdr-factorio-trails/<PR>/brief.md`. That directory does not exist on this machine yet. Create it first.
+- [ ] Give each PR one owner role with the lifecycle `autopilot-stack` names. Launch each round as a fresh bare leaf with `fork: false`, the Implementer prompt, an explicit model and thinking level, the PR's **Files** block, its verification, and its commit policy. Write each brief to `../pi-herdr-factorio-trails/<PR>/brief.md`. On this machine `../pi-herdr-factorio-trails` is a symlink to `/home/g/Projects/pi-herdr-factorio-trails`.
 - [ ] Follow this dependency graph.
-  - [ ] `MV1` and `MV2` are independent and first. Both branch from `main` with `--no-track`.
+  - [ ] `MV1`, `MV2` and `MV6` are independent and first. Each branches from `main` with `--no-track`.
   - [ ] `MV3` stacks on `MV1`. `MV4` stacks on `MV1`. They are independent of each other.
   - [ ] `MV5` starts after the owner lands `MV1` to `MV4` and E1 to E4 are closed.
-  - [ ] `MV6` and `MV7` branch from `main` after the owner lands `MV5`.
+  - [ ] `MV7` branches from `main` after the owner lands `MV5`.
+  - [ ] `MV8` starts after the owner lands `MV5` and `MV6` and the other-project gates for `MV8` close.
   - [ ] After `MV5`, F12d and F12e resume on the exmach VM under `docs/plans/factory-v1.md`. Carry the replay budget file per the `replay-cap-raise-4m` row.
 - [ ] Hold the file boundaries. Each PR touches only its **Files** block. No agent edits `.github/`. The owner makes the two `.github/workflows/` edits in `MV4`.
-- [ ] Hold the review gate. `MV6` changes what reaches the owner's phone. It waits for the owner's review in chat with a screenshot and a video before landing.
+- [ ] Hold the review gate. `MV8` proves what reaches the owner's phone. It waits for the owner's review in chat with a screenshot and a video before landing.
 - [ ] Run the `how` skill walkthrough before `MV1`, because it sets security-relevant constants. Bring the owner only product calls.
 
 ### PR mechanics, for every PR
@@ -369,56 +374,53 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 - [ ] Rebased onto current trunk after the verdict, with the verdict still valid under the patch-id rule in `playbooks/shipping.md`.
 - [ ] Hand MV5 to the owner as STACK-READY. The owner lands it.
 
-## Reach the owner through Shep, not a browser viewer (MV6)
+## Publish the OwnerFeed contract for Shep's Factory tab (MV6)
 
-**Depends on.** MV5. This implements #714 with option B, the owner's 2026-11-10 decision, and #716. The push lanes need exmach E6.
+**Depends on.** None. This implements #714 option B and #716 under decision R25 (nublai/root `.pi/plan/integration.md`). Factorio's owner UI is a Factory tab in Shep, the Shep bridge on the Factorio VM reads OwnerFeed v1 locally and sends every push, and the controller never calls `apns.int`. The phone proof is `MV8`.
 
 **Files.**
 
-- [ ] Edit `docs/operations/viewer.md` for loopback-only on exmach and the Shep bridge reading OwnerFeed v1.
-- [ ] Edit the F09d section of `docs/plans/factory-v1.md` for the push rule.
-- [ ] Create `test/fixtures/owner-feed/push-max.json` and a case in `test/feed.test.ts`.
+- [ ] Create `docs/operations/owner-feed.md`, the OwnerFeed v1 contract for the Shep bridge.
+- [ ] Edit `docs/operations/viewer.md` for loopback only on exmach, with the bridge reading the feed.
+- [ ] Edit the F09d section of `docs/plans/factory-v1.md` to record the decision and narrow the unit.
+- [ ] Create one redacted capture per attention kind under `test/fixtures/owner-feed/` and cases in `test/feed.test.ts`.
 
 **Build.**
 
-- [ ] Document that the viewer stays on `127.0.0.1` on exmach and the owner reads state through the Shep app.
-- [ ] Change the F09d push rule to a title of at most 64 bytes and a body of at most 256 bytes, counted in UTF-8 bytes.
-- [ ] Write down that the bridge sends from the feed and the controller never calls `apns.int`.
-- [ ] Define the collapse key as one per issue, so a newer state replaces an older push. Debounce so a busy hour stays under 30 sends.
+- [ ] Answer the five questions Shep posted on #719 in `owner-feed.md`, each with file and line evidence from `src/feed.ts`. These are the version rule for added fields, the read source and allowed read rate, the stable run key for collapse and tap, which owner actions exist beyond GitHub links, and which fields can carry model or issue text.
+- [ ] State the sender rule. The bridge builds pushes from feed changes, trims the title to 64 bytes and the body to 256 bytes on a character boundary, and collapses one push per run key. The controller sends nothing.
+- [ ] Narrow F09d to inputs for Shep's Factory tab, which are screens, the feed contract and the fixtures. Retire its separate app, Apple setup and bundle id.
+- [ ] Capture `owner-feed --json` for every attention kind the feed defines, redacted.
 
 **You see.**
 
-- [ ] The Shep app shows the factory's OwnerFeed counts, and one push of 256 bytes or less arrives for a needs-you state.
+- [ ] `owner-feed.md` answers all five questions with evidence, ready for the Kyoko session to relay.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] A case shows the longest allowed body in `push-max.json` fits 256 bytes after the edge's `<vm>: ` prefix. Run `npm run check` and the plan checker on `factory-v1.md`.
+- [ ] `test/feed.test.ts` parses every capture, and a case fails when a v1 field is removed or `version` changes. Run `npm run check` and the plan checker on `factory-v1.md`.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, per the boot recipe.
 
-- [ ] Lane 1. Regression lane against trunk. Run `owner-feed --json` on the exmach VM at trunk and head. Save `feed-parity.json`. Pass when the feed is byte-identical.
-- [ ] Lane 2. Read the viewer's listen address on exmach. Save `viewer-bind.txt`. Pass when it is `127.0.0.1` only.
-- [ ] Lane 3. From another tailnet host, try the viewer port on the VM. Save `viewer-reach.txt`. Pass when it is unreachable.
-- [ ] Lane 4. Read the bridge's feed fetch on the VM. Save `bridge-feed.json`. Pass when it reads OwnerFeed v1 locally.
-- [ ] Lane 5. Put a fixture issue into a needs-you state. Save `app-counts.png`. Pass when the app's counts match the feed.
-- [ ] Lane 6. Trigger one needs-you push. Save `push.png`. Pass when the push arrives with a title of at most 64 bytes and a body of at most 256 bytes.
-- [ ] Lane 7. Change the same issue's state. Save `collapse.png`. Pass when the newer push replaces the older one.
-- [ ] Lane 8. Replay a burst of 40 state changes on fixture issues. Save `rate.json`. Pass when the bridge sends at most 30 in the hour.
-- [ ] Lane 9. Read the controller's egress during lanes 6 to 8. Save `egress.txt`. Pass when the controller made no `apns.int` request.
-- [ ] Lane 10. Run the plan checker on `factory-v1.md`. Save `check-plan.txt`. Pass when it prints `22 PR sections, 0 problems`.
+- [ ] Lane 1. Regression lane against trunk. Run `owner-feed --json` on a copy of production state at trunk and head. Save `feed-parity.json`. Pass when the output is byte-identical.
+- [ ] Lane 2. Drive a lane state through each attention kind. Save `kinds.json`. Pass when every kind has a capture and each capture matches its fixture's shape.
+- [ ] Lane 3. Run ten consecutive CLI reads on production-size state. Save `read-rate.json`. Pass when the measured cost supports the read rate `owner-feed.md` allows.
+- [ ] Lane 4. Start a lane viewer on loopback and read `/owner-feed.json`. Save `route-parity.json`. Pass when it equals the CLI output.
+- [ ] Lane 5. Read the lane viewer's listen address. Save `viewer-bind.txt`. Pass when it is `127.0.0.1` only.
+- [ ] Lane 6. Compare the untrusted-text list in `owner-feed.md` with each capture. Save `untrusted-fields.json`. Pass when every field carrying issue or model text is listed and no listed field is controller-generated only.
+- [ ] Lane 7. Retry a fixture run so it gets a new run id. Save `run-key.json`. Pass when the documented stable key is unchanged across run ids.
+- [ ] Lane 8. Hold the lane controller and read the feed. Save `hold.json`. Pass when the feed shows the hold and `owner-feed.md` documents no phone action beyond GitHub links.
+- [ ] Lane 9. Run the plan checker on `factory-v1.md`. Save `check-plan.txt`. Pass when it prints `22 PR sections, 0 problems`.
+- [ ] Lane 10. Search F09d for the old rules. Save `f09d-grep.txt`. Pass when no live rule names a dedicated app, an Apple setup or a 100-word push.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Metric. Time from a needs-you state in the feed to the push on the phone. Trunk has no push path, so trunk measures the feed only.
-- [ ] Probe. Run three needs-you transitions on head and three feed reads on trunk. Save `perf.json`.
-- [ ] Baseline. Record trunk feed generation time first.
-- [ ] Rule. Fail if feed generation exceeds trunk by more than 10 percent, or a push takes more than 60 seconds after the state change.
+- [ ] Metric. `owner-feed --json` wall time on production-size state at trunk and head.
+- [ ] Probe. Interleave three trunk and three head runs. Save `perf.json`.
+- [ ] Baseline. Record the trunk median first.
+- [ ] Rule. Fail if the head median exceeds trunk by more than 10 percent.
 
-**Review gate.** The operator reviews before merge.
-
-- [ ] Copy lanes 5 and 6 screenshots into `docs/plans/media/MV6/MV6-review-app.png` and `docs/plans/media/MV6/MV6-review-push.png`.
-- [ ] Record a 30 to 60 second video of a needs-you push arriving and collapsing. Save it as `docs/plans/media/MV6/MV6-review.mp4`.
-- [ ] Post the screenshots and the video to the operator in chat. Stop at STACK-READY.
+**Review gate.** None. MV6 is not review-gated.
 
 **Merge.**
 
@@ -481,6 +483,61 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 - [ ] Rebased onto current trunk after the verdict, with the verdict still valid under the patch-id rule in `playbooks/shipping.md`.
 - [ ] Hand MV7 to the owner as STACK-READY. The owner lands it.
 
+## Prove the Factory tab and pushes end to end (MV8)
+
+**Depends on.** MV5 and MV6 landed, plus work in other projects that the Kyoko session tracks. These are giuseppecrj/exmach#88 (push v2 with routing fields and a collapse key), giuseppecrj/exmach#90 (the Shep bridge baked into the dev image) or a manual bridge install on the `factorio` VM, an `apns` integration attached to that VM, giuseppecrj/shep#107 (the bridge's push sender through the edge), and giuseppecrj/shep#140 (the Factory tab).
+
+**Files.**
+
+- [ ] Edit `docs/operations/exmach.md` with the end-to-end evidence.
+- [ ] Edit `docs/decisions.tsv` with rows only, appended by `log.sh`.
+
+**Build.**
+
+- [ ] Confirm the Shep bridge on the `factorio` VM reads OwnerFeed v1 locally, by the source `owner-feed.md` names.
+- [ ] Drive real needs-you states on `[MV8-...]` fixture issues and record what reaches the phone.
+
+**You see.**
+
+- [ ] The Factory tab shows the factory's OwnerFeed counts, and one push of 256 bytes or less arrives for a new owner decision.
+
+**Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Run `npm run check` on the landed `main` the VM runs. Record the SHA.
+
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, per the boot recipe.
+
+- [ ] Lane 1. Regression lane against trunk. Run `owner-feed --json` on the exmach VM at trunk and head. Save `feed-parity.json`. Pass when the feed is byte-identical.
+- [ ] Lane 2. Read the bridge's feed reads on the VM. Save `bridge-feed.json`. Pass when it reads OwnerFeed v1 locally at the documented rate.
+- [ ] Lane 3. Put a fixture issue into a needs-you state. Save `app-counts.png`. Pass when the Factory tab's counts match the feed.
+- [ ] Lane 4. Restart the bridge with existing needs-you states. Save `seed.png`. Pass when the first read sends no push.
+- [ ] Lane 5. Create one new owner decision. Save `push.png`. Pass when one push arrives with a title of at most 64 bytes and a body of at most 256 bytes.
+- [ ] Lane 6. Change the same issue's state. Save `collapse.png`. Pass when the newer push replaces the older one.
+- [ ] Lane 7. Open the run in the app, then change its state. Save `viewing.png`. Pass when no push arrives for the run being viewed.
+- [ ] Lane 8. Use a fixture title of 200 multibyte characters. Save `trim.png`. Pass when the push is trimmed on a character boundary within the byte limits.
+- [ ] Lane 9. Replay a burst of 40 state changes on fixture issues. Save `rate.json`. Pass when at most 30 pushes are sent in the hour.
+- [ ] Lane 10. Read the controller's egress during lanes 5 to 9. Save `egress.txt`. Pass when the controller made no `apns.int` request.
+
+**Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+
+- [ ] Metric. Time from a new owner decision in the feed to the push on the phone. Trunk has no push path, so trunk measures feed generation only.
+- [ ] Probe. Run three new owner decisions on head and three feed reads on trunk. Save `perf.json`.
+- [ ] Baseline. Record trunk feed generation time first.
+- [ ] Rule. Fail if feed generation exceeds trunk by more than 10 percent, or a push takes more than 60 seconds after the state change.
+
+**Review gate.** The operator reviews before merge.
+
+- [ ] Copy lanes 3 and 5 screenshots into `docs/plans/media/MV8/MV8-review-app.png` and `docs/plans/media/MV8/MV8-review-push.png`.
+- [ ] Record a 30 to 60 second video of a push arriving and collapsing. Save it as `docs/plans/media/MV8/MV8-review.mp4`.
+- [ ] Post the screenshots and the video to the operator in chat. Stop at STACK-READY.
+
+**Merge.**
+
+- [ ] Root's clean verdict at the exact head SHA of the docs PR that records the evidence.
+- [ ] Bugbot triage done.
+- [ ] Rebased onto current trunk after the verdict, with the verdict still valid under the patch-id rule in `playbooks/shipping.md`.
+- [ ] Hand MV8 to the owner as STACK-READY. The owner lands it.
+
 ## Close the program
 
 - [ ] Every box above is checked with its evidence.
@@ -505,6 +562,8 @@ These questions stay unproven.
 - **Accept a list of historical bot logins.** Rejected by the owner's drain decision. It changes a trust check and leaves a standing risk.
 - **Viewer `--bind` for the exmach app proxy (#714 option A).** Rejected by the owner on 2026-11-10 in favour of Shep only. Revisit only if the browser dashboard is missed.
 - **Adding these PRs to `docs/plans/factory-v1.md`.** Rejected because its checker must print `22 PR sections`.
+- **A dedicated Factorio app (F09d's old lean).** Rejected by the owner under R25. The owner UI is a Factory tab in Shep.
+- **The controller pushing through `apns.int`.** Rejected under R25. The Shep bridge sends from the feed, so the controller gains no new egress.
 - **Folding the verification skill repoint into `MV3`.** Rejected so the lanes can reach the exmach VM before provisioning code lands.
 
 ## Appendix C. Risks
@@ -513,15 +572,17 @@ These questions stay unproven.
 - **Unknown bot slug (MV1, MV4).** E2 yields it. Until then the `exmach` profile cannot be filled and the `.github/` edits wait.
 - **Request budget (MV5, MV7).** 600 requests per hour per VM is inference from the issue. A 429 is a stage failure. E3 sizes it from `MV5` receipts.
 - **No interleaved baseline (MV5).** One controller at a time means trunk numbers come from `pi-factorio` receipts.
-- **No backups until exmach M5 (MV5).** `backup.md` runs manually to an off-VM target.
+- **Backups (MV5).** exmach finishes M5 (giuseppecrj/exmach#29) before E1 to E4, so an off-host target should exist at cutover. Until it is proven, `backup.md` runs manually to an off-VM target.
 - **Residual risk unchanged.** A bwrap escape lands on `exedev` with sudo, and the edge's GitHub integration answers any VM process, per `docs/operations/sandbox.md` section 1.2.
 - **Spend.** `MV5` and `MV7` run full tickets at about 540,000 reserved tokens each. Check the program cap with the owner before they launch.
 - **Out of scope.** #717 rewrites F13's credential section in `docs/plans/factory-v1.md` in its own docs PR before F13 starts. #718 becomes its own plan after `MV5` and giuseppecrj/exmach#83.
-- **Missing trails directory.** `../pi-herdr-factorio-trails/` does not exist on this machine, so its `checked-push.sh` is missing too. Restore or recreate it before the first push.
+- **Shep's open questions (MV6).** Shep asked five feed questions on #719. Shep's Factory tab waits on `MV6`'s answers in `owner-feed.md`.
+- **Phone path in other projects (MV8).** `MV8` depends on four open items in exmach and Shep. The Kyoko session tracks them.
 
 ## Appendix D. Links and reading list
 
-- Issue #719 and its items #711 to #718.
+- Issue #719 and its items #711 to #718, with Shep's R25 comments on #719, #714 and #716.
+- The integration record, nublai/root `.pi/plan/integration.md`.
 - `docs/operations/sandbox.md`, `docs/operations/backup.md`, `docs/operations/viewer.md` and `docs/operations/factory-cli.md`.
 - `MV1` gets the how skill at `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/how/SKILL.md` and the interrogate skill at `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/interrogate/SKILL.md`.
 - The trail follows the show-me-your-work skill at `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/show-me-your-work/SKILL.md`.
