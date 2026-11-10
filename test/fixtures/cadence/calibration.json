@@ -1,0 +1,23 @@
+{
+	"source": "F11/swarm/lanes/vm-evidence/harvest/F11-w6/state/cadence; o200k counts from fix-budget/review.md",
+	"samples": [
+		{
+			"job": "architecture",
+			"promptBytes": 7988,
+			"o200kTokens": 1683,
+			"firstInputTokens": 2216
+		},
+		{
+			"job": "hygiene",
+			"promptBytes": 23585,
+			"o200kTokens": 7326,
+			"firstInputTokens": 7859
+		},
+		{
+			"job": "instructions",
+			"promptBytes": 5448,
+			"o200kTokens": 1203,
+			"firstInputTokens": 1736
+		}
+	]
+}

@@ -17,6 +17,7 @@ import { createServer } from "node:http";
 import { createServer as createUnixServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gunzipSync } from "node:zlib";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, it, type TestContext } from "node:test";
 import { execFile, runCli, type ControllerRuntime } from "../server/cli.ts";
@@ -32,6 +33,7 @@ import {
 	launchSandbox,
 	sandboxExecutor,
 	sandboxHost,
+	withSkills,
 } from "../server/sandbox.ts";
 import { detectArch } from "../server/sandbox/seccomp.ts";
 import { startGatewayProcess } from "../server/sandbox/gateway-client.ts";
@@ -42,6 +44,12 @@ import {
 	CadenceRunner,
 	CADENCE_RETAIN_EXECUTIONS,
 	CADENCE_PATH_GROUPS,
+	CADENCE_EXCERPT_BYTES,
+	CADENCE_FILE_BYTES,
+	CADENCE_SKILLS,
+	cadenceExcerpt,
+	cadenceEligiblePath,
+	cadenceCodeStart,
 	cadencePrompt,
 	cadenceCharges,
 	cadenceExecutionDir,
@@ -194,6 +202,17 @@ function seed(
 		mode: 0o700,
 	});
 	writeCadenceFile(join(dir, "input.json"), JSON.stringify(execution));
+	writeCadenceFile(
+		join(dir, "excerpt.json"),
+		JSON.stringify({
+			files: [
+				{
+					path: finding(execution).evidence[0]!.path,
+					ranges: [{ start: 1, end: 2 }],
+				},
+			],
+		}),
+	);
 
 	if (completed !== null)
 		writeCadenceFile(join(dir, "receipt.json"), JSON.stringify(completed));
@@ -413,11 +432,12 @@ describe("cadence weekly policy and structured findings", () => {
 		);
 	});
 
-	it("keeps candidate security-review skill bytes unchanged and injects repository mode only into cadence", () => {
+	it("keeps the candidate security-review contract unchanged and injects repository mode only into cadence", () => {
 		assert.equal(
 			digestOf(
 				readFileSync(
 					new URL("../skills/security-review/SKILL.md", import.meta.url),
+					"utf8",
 				),
 			),
 			"680790c43e8292798a1762d72c53657c691a1a385091ab89c636c7efdf670e75",
@@ -529,7 +549,522 @@ describe("cadence weekly policy and structured findings", () => {
 	});
 });
 
+describe("bounded single-pass cadence excerpts", () => {
+	it("packs deterministic byte-bounded complete numbered windows and covers every eligible file over a rotation", () => {
+		const paths = CADENCE_PATH_GROUPS.flatMap((group) =>
+			Array.from({ length: 40 }, (_, i) => `${group[0]}/file-${i}.ts`),
+		);
+
+		const read = () => "first\nsecond\n" + "éééééééé\n".repeat(1000);
+		const seen = new Set<string>();
+
+		for (let rotation = 0; rotation < 250; rotation++) {
+			const execution = { ...input(), rotation };
+			const excerpt = cadenceExcerpt(execution, paths, read);
+			assert.deepEqual(
+				excerpt,
+				cadenceExcerpt(execution, [...paths].reverse(), read),
+			);
+			assert.ok(
+				Buffer.byteLength(JSON.stringify(excerpt.files)) <=
+					CADENCE_EXCERPT_BYTES,
+			);
+
+			for (const file of excerpt.files) {
+				seen.add(file.path);
+				assert.match(file.lines, /^\d+: /);
+				assert.ok(file.lines.endsWith("\n"));
+				assert.ok(file.ranges[0]!.start <= file.ranges[0]!.end);
+				assert.ok(Buffer.byteLength(file.lines) <= CADENCE_FILE_BYTES);
+				assert.equal(file.truncated, true);
+			}
+		}
+
+		assert.deepEqual([...seen].sort(), [...paths].sort());
+	});
+
+	it("selects instructions from the first run, rotates instruction parts and excludes held-out and binary input", () => {
+		const files = [
+			"AGENTS.md",
+			".github/factory/WORKFLOW.md",
+			...Array.from({ length: 30 }, (_, i) => `skills/s${i}/SKILL.md`),
+			"src/code.ts",
+			"test/acceptance/private.ts",
+			"skills/README.md",
+		];
+
+		const seen = new Set<string>();
+
+		for (let rotation = 0; rotation < 80; rotation++) {
+			const excerpt = cadenceExcerpt(
+				{ job: "instructions", rotation },
+				files,
+				() => "rule\n".repeat(2000),
+			);
+
+			for (const file of excerpt.files) seen.add(file.path);
+		}
+
+		assert.deepEqual([...seen].sort(), files.slice(0, -3).sort());
+
+		const excluded = cadenceExcerpt(
+			input(),
+			["src/binary", "test/acceptance/private.ts"],
+			() => "\0",
+		);
+
+		assert.deepEqual(excluded.files, []);
+		assert.equal(excluded.omitted, 1);
+
+		const escaped = cadenceExcerpt(input(), ["src/control.ts"], () =>
+			"\u0001".repeat(20_000),
+		);
+
+		assert.ok(
+			Buffer.byteLength(JSON.stringify(escaped.files)) <= CADENCE_EXCERPT_BYTES,
+		);
+	});
+
+	it("prioritizes changed files across groups, skips imports, excludes generated/bulk files and rotates tails", () => {
+		const changedPaths = [
+			"server/z.ts",
+			"server/viewer/design/tokens.css",
+			"server/generated/code.ts",
+			"package-lock.json",
+		];
+
+		const code =
+			"// header\nimport {\n  one,\n} from './one.ts';\nimport 'side-effect';\n\n" +
+			"export const code = true;\n".repeat(1500);
+
+		const paths = ["src/a.ts", ...changedPaths];
+		const execution = { ...input(), changedPaths };
+		const excerpt = cadenceExcerpt(execution, paths, () => code);
+
+		assert.equal(excerpt.files[0]?.path, "server/z.ts");
+		assert.match(excerpt.files[0]!.lines, /^7: export const code/);
+		assert.deepEqual(excerpt.files[0]?.skipped[0], { start: 1, end: 6 });
+		assert.ok(
+			excerpt.files.every(
+				(file) => file.path === "server/z.ts" || file.path === "src/a.ts",
+			),
+		);
+
+		const later = cadenceExcerpt(
+			{ ...execution, rotation: 5 },
+			paths,
+			() => code,
+		);
+
+		assert.notEqual(
+			later.files[0]?.ranges[0]?.start,
+			excerpt.files[0]?.ranges[0]?.start,
+		);
+		assert.ok(
+			excerpt.files.some((file) => file.path === "src/a.ts"),
+			"changed-first retains steady rotation space",
+		);
+		assert.equal(
+			parseCadenceProposals(
+				JSON.stringify({
+					proposals: [
+						{
+							...finding(),
+							evidence: [{ path: "server/z.ts", start: 7, end: 9 }],
+						},
+					],
+				}),
+				execution,
+			)?.length,
+			1,
+		);
+		assert.equal(cadenceEligiblePath("src/code.generated.ts"), false);
+		assert.equal(cadenceEligiblePath("server/code.min.js"), false);
+		assert.equal(cadenceEligiblePath("test/fixtures/huge.json"), false);
+		assert.equal(cadenceEligiblePath("docs/prototypes/big.md"), false);
+		assert.equal(cadenceEligiblePath("yarn.lock"), false);
+		assert.equal(cadenceEligiblePath("pnpm-lock.yaml"), false);
+
+		const longLine = cadenceExcerpt(
+			input(),
+			["src/long.ts"],
+			() => "a\n" + "x".repeat(20_000) + "\nz\n",
+		);
+
+		assert.deepEqual(
+			longLine.files.flatMap((file) => file.ranges),
+			[
+				{ start: 1, end: 1 },
+				{ start: 3, end: 3 },
+			],
+		);
+		assert.ok(
+			longLine.files.every((file) => /^\d+: [^\n]*\n$/.test(file.lines)),
+			"no cut-off line or label",
+		);
+	});
+
+	it("gives shown-path closed proposals priority within the bounded known-proposal context", () => {
+		const existingProposals = Array.from({ length: 100 }, (_, n) => ({
+			fingerprint: digestOf(`known-${n}`),
+			title: `known-${n}`,
+			state: "open" as const,
+			path: "src/other.ts",
+		}));
+
+		const closed = {
+			fingerprint: digestOf("closed-shown"),
+			title: "closed shown",
+			state: "not_planned" as const,
+			path: "src/shown.ts",
+		};
+
+		const execution = {
+			...input(),
+			existingProposals: [...existingProposals, closed],
+		};
+
+		const excerpt = cadenceExcerpt(execution, ["src/shown.ts"], () => "code\n");
+
+		const prompt = cadencePrompt(
+			execution,
+			["src/shown.ts"],
+			"unknown",
+			excerpt,
+		);
+
+		assert.match(prompt, new RegExp(closed.fingerprint));
+		assert.ok(
+			prompt.indexOf(closed.fingerprint) <
+				prompt.indexOf(existingProposals[0]!.fingerprint),
+		);
+		assert.doesNotMatch(
+			prompt,
+			new RegExp(existingProposals.at(-1)!.fingerprint),
+		);
+	});
+
+	it("calibrates every job on a committed snapshot below 40k with headroom (never needs git refs)", async (t) => {
+		const snapshot: { sha: string; files: Record<string, string> } = JSON.parse(
+			gunzipSync(
+				readFileSync(
+					new URL("fixtures/cadence/snapshot.json.gz", import.meta.url),
+				),
+			).toString(),
+		);
+
+		const calibration: {
+			samples: {
+				promptBytes: number;
+				o200kTokens: number;
+				firstInputTokens: number;
+			}[];
+		} = JSON.parse(
+			readFileSync(
+				new URL("fixtures/cadence/calibration.json", import.meta.url),
+				"utf8",
+			),
+		);
+
+		const bytesPerToken = 2.8;
+		const runtimeTokens = 533;
+
+		for (const sample of calibration.samples) {
+			assert.equal(sample.firstInputTokens - sample.o200kTokens, runtimeTokens);
+			assert.ok(
+				Math.ceil(sample.promptBytes / bytesPerToken) + runtimeTokens >=
+					sample.firstInputTokens,
+			);
+		}
+
+		const paths = Object.keys(snapshot.files);
+		const read = (path: string) => snapshot.files[path] ?? null;
+		const estimates = [];
+		const coverage = [];
+		const excerpts = new Map<string, ReturnType<typeof cadenceExcerpt>>();
+
+		const ledgerRow = JSON.stringify({
+			runId: digestOf("run"),
+			workflowDigest: digestOf("workflow"),
+			baseSha: sha,
+			tokens: 340078,
+			result: "failed",
+			receiptDigest: digestOf("receipt"),
+		});
+
+		const ledger = ledgerRow
+			.repeat(Math.ceil((16 * 1024) / ledgerRow.length))
+			.slice(0, 16 * 1024);
+
+		for (const job of [
+			"architecture",
+			"security",
+			"instructions",
+			"hygiene",
+		] as const) {
+			let maxExcerpt = 0;
+			let maxPrompt = 0;
+			const covered = new Map<string, Set<number>>();
+			let rotations = job === "instructions" ? 1 : CADENCE_PATH_GROUPS.length;
+
+			for (let rotation = 0; rotation < rotations; rotation++) {
+				const execution = {
+					...input(job),
+					rotation,
+					existingProposals: Array.from({ length: 100 }, () => ({
+						fingerprint: digestOf("known"),
+						title: "x".repeat(220),
+						state: "open" as const,
+						path: "src/example.ts",
+					})),
+				};
+
+				const key = `${job === "instructions" ? "instructions" : "code"}:${rotation}`;
+
+				const excerpt =
+					excerpts.get(key) ?? cadenceExcerpt(execution, paths, read);
+
+				excerpts.set(key, excerpt);
+				rotations = Math.max(
+					rotations,
+					excerpt.parts *
+						(job === "instructions" ? 1 : CADENCE_PATH_GROUPS.length),
+				);
+
+				for (const file of excerpt.files) {
+					const seen = covered.get(file.path) ?? new Set<number>();
+
+					for (const range of file.ranges)
+						for (let n = range.start; n <= range.end; n++) seen.add(n);
+					covered.set(file.path, seen);
+					assert.ok(
+						Buffer.byteLength(JSON.stringify(file)) <= CADENCE_FILE_BYTES,
+					);
+				}
+
+				const prompt = await withSkills(
+					new URL("..", import.meta.url).pathname,
+					cadencePrompt(
+						execution,
+						excerpt.files.map((file) => file.path),
+						job === "hygiene"
+							? ledger
+							: "unavailable; not requested by this job",
+						excerpt,
+					),
+					[CADENCE_SKILLS[job]],
+				);
+
+				assert.ok(prompt);
+				maxExcerpt = Math.max(
+					maxExcerpt,
+					Buffer.byteLength(JSON.stringify(excerpt.files)),
+				);
+				maxPrompt = Math.max(
+					maxPrompt,
+					Math.ceil(Buffer.byteLength(prompt) / bytesPerToken) + runtimeTokens,
+				);
+			}
+
+			const answerReserve = 8_800 + 4_000;
+			const estimate = maxPrompt + answerReserve;
+			assert.ok(
+				estimate < 36_000,
+				`${job}: ${estimate} including 8.8k maximum answer and 4k reasoning reserve`,
+			);
+			assert.ok(maxExcerpt <= CADENCE_EXCERPT_BYTES);
+
+			for (const [path, text] of Object.entries(snapshot.files)) {
+				if (
+					!cadenceEligiblePath(path) ||
+					(job === "instructions" &&
+						path !== "AGENTS.md" &&
+						path !== ".github/factory/WORKFLOW.md" &&
+						!/^skills\/[^/]+\/SKILL\.md$/.test(path))
+				)
+					continue;
+				const lines = text.replace(/\n$/, "").split("\n");
+
+				for (let i = cadenceCodeStart(lines); i < lines.length; i++) {
+					if (
+						Buffer.byteLength(JSON.stringify(`${i + 1}: ${lines[i]}\n`)) - 2 <=
+						CADENCE_FILE_BYTES - 1024
+					)
+						assert.ok(
+							covered.get(path)?.has(i + 1),
+							`${job}: missing ${path}:${i + 1}`,
+						);
+				}
+			}
+
+			if (job === "architecture") {
+				for (const [group, offset] of [
+					["src", 0],
+					["server", 1],
+				] as const) {
+					const part = cadenceExcerpt(
+						{ ...input(job), rotation: offset },
+						paths,
+						read,
+					);
+
+					const total = paths
+						.filter((path) => path.startsWith(`${group}/`))
+						.reduce(
+							(sum, path) =>
+								sum +
+								snapshot.files[path]!.replace(/\n$/, "").split("\n").length,
+							0,
+						);
+
+					const seen = [...covered]
+						.filter(([path]) => path.startsWith(`${group}/`))
+						.reduce((sum, [, lines]) => sum + lines.size, 0);
+
+					coverage.push({
+						group,
+						cycleWeeks: part.parts * CADENCE_PATH_GROUPS.length,
+						parts: part.parts,
+						totalLines: total,
+						shownLines: seen,
+						share: seen / total,
+					});
+				}
+			}
+
+			estimates.push({
+				job,
+				snapshot: snapshot.sha,
+				excerptBytes: maxExcerpt,
+				promptTokens: maxPrompt,
+				answerReserve,
+				totalEstimate: estimate,
+				headroom: 40_000 - estimate,
+				rotations,
+			});
+		}
+
+		t.diagnostic(
+			JSON.stringify({
+				excerptBudget: CADENCE_EXCERPT_BYTES,
+				perFileBudget: CADENCE_FILE_BYTES,
+				estimate:
+					"UTF-8 bytes/2.8 + 533 runtime; 8,800 answer + 4,000 reasoning; maximum over every part; hex/JSON 16 KiB ledger and 4 KiB known proposals",
+				jobs: estimates,
+				coverage,
+			}),
+		);
+	});
+});
+
 describe("cadence durable ownership, accounting and proposal recovery", () => {
+	it("compares the last audited pin locally, uses changed-first input and omits a listed missing file without a 40k charge", async (t) => {
+		for (const previous of [false, true]) {
+			const stateDir = directory(t);
+			const github = new GitHubFixture();
+			const calls: string[][] = [];
+
+			const priorSha = "b".repeat(40);
+			assert.ok(isGitSha(priorSha));
+
+			if (previous) {
+				const old = {
+					...input("architecture", input().windowStart - 7 * 86_400_000, 4),
+					baseSha: priorSha,
+					workflowSha: priorSha,
+				};
+
+				seed(stateDir, old, result(old, []));
+				await settle(runner(stateDir, github));
+			}
+
+			const exec: Exec = async (command, args) => {
+				if (command !== "git") return github.exec(command, args);
+				calls.push([...args]);
+
+				return { code: 0, stdout: "server/changed.ts\0", stderr: "" };
+			};
+
+			const executor = sandboxExecutor({
+				stateDir,
+				exec,
+				root: join(stateDir, "absent-bundle"),
+				xdgRuntimeDir: `/run/user/${process.getuid?.()}`,
+				log: () => undefined,
+			});
+
+			executor.preflight = async () => true;
+			executor.checkout = async ({ workspace }) => {
+				mkdirSync(join(workspace, "src"), { recursive: true });
+				mkdirSync(join(workspace, "server"), { recursive: true });
+				writeFileSync(join(workspace, "src/code.ts"), "code\n");
+				writeFileSync(join(workspace, "server/changed.ts"), "changed code\n");
+
+				return {
+					kind: "ready",
+					omitted: 0,
+					checkout: {
+						files: ["src/code.ts", "src/missing.ts", "server/changed.ts"],
+						read: async () => null,
+					},
+				};
+			};
+
+			executor.launch = async (request) => {
+				assert.deepEqual(request.tools, []);
+
+				return {
+					kind: "unavailable",
+					stage: request.stage,
+					reason: "sandbox_unavailable",
+				};
+			};
+
+			const cadence = controllerCadence({
+				stateDir,
+				repo,
+				exec,
+				executor,
+				log: () => undefined,
+			});
+
+			await settle(cadence);
+			assert.equal(calls.length, previous ? 1 : 0);
+
+			if (previous) {
+				assert.equal(calls[0]?.[0], "-C");
+				assert.equal(calls[0]![1]!, new URL("..", import.meta.url).pathname);
+				assert.deepEqual(calls[0]?.slice(2), [
+					"diff",
+					"--name-only",
+					"--no-renames",
+					"-z",
+					priorSha,
+					sha,
+					"--",
+				]);
+			}
+
+			const dir = cadenceExecutionDir(
+				stateDir,
+				"architecture",
+				input().windowStart,
+			);
+
+			const excerpt = JSON.parse(
+				readFileSync(join(dir, "excerpt.json"), "utf8"),
+			);
+
+			assert.equal(excerpt.omitted, 1);
+			assert.equal(
+				excerpt.files[0].path,
+				previous ? "server/changed.ts" : "src/code.ts",
+			);
+			assert.equal(cadenceCharges(stateDir, repo).at(-1)?.tokens, 0);
+			assert.equal(cadence.status()[0]?.reason, "sandbox_unavailable");
+		}
+	});
+
 	it("records no delta and a rotation watermark, then performs no second execution", async (t) => {
 		const stateDir = directory(t);
 		seed(stateDir, input(), result(input(), []));
@@ -551,6 +1086,62 @@ describe("cadence durable ownership, accounting and proposal recovery", () => {
 		assert.equal(usage?.total, 16);
 		assert.equal(objectOf(usage?.maintenance)?.total, 16);
 		assert.equal(accounting.maintenance.money.kind, "unavailable");
+	});
+
+	it("keeps the last audited base through restart and pruning of zero-token windows", async (t) => {
+		const stateDir = directory(t);
+		const newerSha = "c".repeat(40);
+		assert.ok(isGitSha(newerSha));
+
+		for (let week = 0; week < CADENCE_RETAIN_EXECUTIONS + 2; week++) {
+			const cadence = new CadenceRunner({
+				stateDir,
+				repo,
+				log: () => undefined,
+				port: {
+					execute: async (execution) => {
+						assert.equal(
+							execution.previousBaseSha,
+							week === 0 ? undefined : sha,
+						);
+
+						return week === 0
+							? result(execution, [])
+							: {
+									...result(execution, []),
+									kind: "failed",
+									tokens: 0,
+									output: null,
+									reason: "failed_before_model",
+								};
+					},
+					retained: async () => {
+						throw new Error("unexpected retention");
+					},
+					publish: async () => true,
+				},
+			});
+
+			await settle(cadence, "architecture", {
+				...tick,
+				now: now + week * 7 * 86_400_000,
+				workflowSha: week === 0 ? sha : newerSha,
+			});
+		}
+
+		assert.equal(
+			existsSync(
+				cadenceExecutionDir(stateDir, "architecture", input().windowStart),
+			),
+			false,
+			"original audited tree was pruned",
+		);
+		assert.equal(
+			JSON.parse(
+				readFileSync(join(stateDir, "cadence/architecture/state.json"), "utf8"),
+			).lastAuditedBaseSha,
+			sha,
+		);
 	});
 
 	it("retains only the last N executions while preserving lifetime and weekly charges", async (t) => {
@@ -946,6 +1537,58 @@ describe("cadence durable ownership, accounting and proposal recovery", () => {
 			await settle(cadence, "architecture", { ...tick, now: now + 10_000 });
 			assert.equal(github.creates, 1);
 		}
+	});
+
+	it("drops citations to unseen lines and files even when they exist in the pinned tree (B2 reproductions)", async (t) => {
+		const stateDir = directory(t);
+		const execution = input("architecture", input().windowStart, 1);
+		const dir = seed(stateDir, execution);
+		mkdirSync(join(dir, "tree/server/sandbox/assets"), { recursive: true });
+		writeFileSync(join(dir, "tree/server/cli.ts"), "code\n".repeat(1873));
+		writeFileSync(
+			join(dir, "tree/server/sandbox/assets/pi.ts"),
+			"code\n".repeat(10),
+		);
+		writeCadenceFile(
+			join(dir, "excerpt.json"),
+			JSON.stringify({
+				files: [{ path: "server/cli.ts", ranges: [{ start: 1, end: 217 }] }],
+			}),
+		);
+
+		const proposals = [
+			{
+				...finding(execution),
+				evidence: [{ path: "server/cli.ts", start: 717, end: 727 }],
+			},
+			{
+				...finding(execution, "unseen-file"),
+				evidence: [{ path: "server/sandbox/assets/pi.ts", start: 1, end: 5 }],
+			},
+		];
+
+		const github = new GitHubFixture();
+
+		const parsed = parseCadenceProposals(
+			JSON.stringify({ proposals }),
+			execution,
+		)!;
+
+		assert.equal(parsed.length, 2);
+		assert.equal(
+			await publishCadenceProposals({
+				stateDir,
+				exec: github.exec,
+				execution,
+				result: result(execution),
+				proposals: parsed,
+			}),
+			true,
+		);
+		assert.equal(github.creates, 0);
+		const filing = JSON.parse(readFileSync(join(dir, "filing.json"), "utf8"));
+		assert.equal(filing.invalidEvidence.length, 2);
+		assert.equal(filing.dropped.length, 2);
 	});
 
 	it("drops bad citations without stalling this job or the next audit", async (t) => {
@@ -1563,6 +2206,7 @@ it("native cadence --once dedup demo: real Pi/RPC, bwrap, user scope, gateway an
 	let answer = JSON.stringify({ proposals: findings });
 	let expectedFingerprint: string | null = null;
 	let modelRequests = 0;
+	let injectedTokens = 16;
 	let release: () => void = () => undefined;
 	let arrived: () => void = () => undefined;
 
@@ -1596,11 +2240,15 @@ it("native cadence --once dedup demo: real Pi/RPC, bwrap, user scope, gateway an
 						(item) => arrayOf(objectOf(item)?.tools) ?? [],
 					);
 
-				assert.deepEqual(tools.map((tool) => objectOf(tool)?.name).sort(), [
-					"grep",
-					"ls",
-					"read",
-				]);
+				assert.deepEqual(
+					tools,
+					[],
+					"single-pass audit has no tool definitions",
+				);
+				assert.ok(
+					body.includes("1: export const first = 1;"),
+					"controller delivers numbered source in the sole request",
+				);
 
 				if (expectedFingerprint !== null)
 					assert.ok(
@@ -1626,9 +2274,9 @@ it("native cadence --once dedup demo: real Pi/RPC, bwrap, user scope, gateway an
 					model: "gpt-6.1-sol",
 					output: [item],
 					usage: {
-						input_tokens: 11,
+						input_tokens: injectedTokens - 5,
 						output_tokens: 5,
-						total_tokens: 16,
+						total_tokens: injectedTokens,
 						input_tokens_details: { cached_tokens: 0 },
 					},
 				};
@@ -1910,7 +2558,7 @@ it("native cadence --once dedup demo: real Pi/RPC, bwrap, user scope, gateway an
 		runId: digestOf("read-only probe"),
 		stage: "maintain",
 		attempt: 1,
-		tools: ["read", "grep", "ls"],
+		tools: [],
 		arch,
 		xdgRuntimeDir:
 			process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.()}`,
@@ -2220,5 +2868,71 @@ it("native cadence --once dedup demo: real Pi/RPC, bwrap, user scope, gateway an
 	);
 	t.diagnostic(
 		"native zero-work launch refusal retried after backoff with its pinned checkout intact; no weekly slot lost",
+	);
+
+	injectedTokens = 40_001;
+
+	for (const [name, output, expected] of [
+		["capped-empty", '{"proposals":[]}', 0],
+		[
+			"capped-finding",
+			JSON.stringify({
+				proposals: [{ ...finding(), title: "Valid capped finding" }],
+			}),
+			0,
+		],
+		["capped-invalid", '{"proposals":[', 1],
+	] as const) {
+		const cappedState = join(root, name);
+
+		mkdirSync(cappedState, { mode: 0o700 });
+		answer = output;
+		assert.equal(
+			await runCli([...argv.slice(0, -1), cappedState], io),
+			expected,
+			`${stdout}\n${stderr}`,
+		);
+
+		const cappedDir = cadenceExecutionDir(
+			cappedState,
+			"architecture",
+			execution.windowStart,
+		);
+
+		const native = objectOf(
+			parseJson(readFileSync(join(cappedDir, "runtime/receipt.json"), "utf8")),
+		);
+
+		assert.deepEqual(native?.outcome, {
+			kind: "budget_exhausted",
+			cap: "tokens",
+		});
+		assert.equal(
+			readFileSync(join(cappedDir, "runtime/output.txt"), "utf8"),
+			output,
+		);
+
+		const cadenceReceipt = objectOf(
+			parseJson(readFileSync(join(cappedDir, "receipt.json"), "utf8")),
+		);
+
+		assert.equal(
+			cadenceReceipt?.reason,
+			expected === 0 ? "answered_at_cap" : "budget_exhausted",
+		);
+		assert.equal(cadenceCharges(cappedState, repo)[0]?.tokens, injectedTokens);
+		assert.equal(
+			await runCli([...argv.slice(0, -1), cappedState], io),
+			expected,
+		);
+	}
+
+	assert.equal(
+		github.creates,
+		4,
+		"valid capped finding is filed; invalid capped JSON is not",
+	);
+	t.diagnostic(
+		"native maintain answers retained at the cap: valid empty/finding settled, malformed JSON failed; cap and full usage retained in native receipt",
 	);
 });

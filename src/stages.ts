@@ -52,7 +52,7 @@ export const STAGE_PROFILES: Record<
 		githubAccess: "contents: write, actions: write",
 	},
 	review: { modelAccess: "full", runsIn: "sandbox", githubAccess: "none" },
-	maintain: { modelAccess: "full", runsIn: "sandbox", githubAccess: "none" },
+	maintain: { modelAccess: "judge", runsIn: "sandbox", githubAccess: "none" },
 	land: {
 		modelAccess: "none",
 		runsIn: "controller",

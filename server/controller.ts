@@ -33,10 +33,13 @@ import {
 	cadenceExecutionDir,
 	cadenceIssueBody,
 	cadencePrompt,
+	cadenceExcerpt,
+	parseCadenceProposals,
 	cadenceScope,
 	inCadenceScope,
 	cadencePrivateDir,
 	readCadenceFile,
+	readCadenceInput,
 	writeCadenceFile,
 	type CadenceInput,
 	type CadenceKnownProposal,
@@ -216,6 +219,7 @@ import {
 } from "node:fs/promises";
 import { createConnection, createServer, type Server } from "node:net";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { gunzipSync } from "node:zlib";
@@ -4131,6 +4135,12 @@ export async function publishCadenceProposals(input: {
 		execution.windowStart,
 	);
 
+	const excerpt = objectOf(
+		parseJsonText(readCadenceFile(join(dir, "excerpt.json")) ?? ""),
+	);
+
+	const shown = arrayOf(excerpt?.files) ?? [];
+
 	for (const finding of input.proposals) {
 		if (input.signal?.aborted) return false;
 		const evidence = [];
@@ -4146,7 +4156,29 @@ export async function publishCadenceProposals(input: {
 
 			if (lines.at(-1) === "") lines.pop();
 
+			const visible = shown.some((file) => {
+				const entry = objectOf(file);
+
+				return (
+					entry?.path === citation.path &&
+					(arrayOf(entry.ranges) ?? []).some((value) => {
+						const range = objectOf(value);
+
+						const start = countOf(range?.start),
+							end = countOf(range?.end);
+
+						return (
+							start !== null &&
+							end !== null &&
+							citation.start >= start &&
+							citation.end <= end
+						);
+					})
+				);
+			});
+
 			if (
+				visible &&
 				citation.start >= 1 &&
 				citation.end >= citation.start &&
 				citation.end <= lines.length
@@ -4273,8 +4305,17 @@ export function controllerCadence(input: {
 			native.record.stage === "maintain" &&
 			native.record.attempt === 1;
 
-		const passed = valid && native.outcome.kind === "passed";
-		const output = passed ? readCadenceFile(join(runtime, "output.txt")) : null;
+		const completed = valid && native.outcome.kind === "passed";
+		const capped = valid && native.outcome.kind === "budget_exhausted";
+
+		const output =
+			completed || capped ? readCadenceFile(join(runtime, "output.txt")) : null;
+
+		const passed =
+			completed ||
+			(capped &&
+				output !== null &&
+				parseCadenceProposals(output, execution) !== null);
 
 		const usable =
 			passed && output !== null && Buffer.byteLength(output) <= 64 * 1024;
@@ -4300,11 +4341,13 @@ export function controllerCadence(input: {
 			),
 			output: usable ? output : null,
 			reason:
-				passed && !usable
-					? "invalid_output"
-					: valid
-						? native.outcome.kind
-						: "interrupted",
+				usable && capped
+					? "answered_at_cap"
+					: passed && !usable
+						? "invalid_output"
+						: valid
+							? native.outcome.kind
+							: "interrupted",
 		};
 	};
 
@@ -4359,6 +4402,58 @@ export function controllerCadence(input: {
 				if (!(await input.executor.preflight()))
 					return failed("sandbox_unavailable");
 
+				const previous = readdirSync(join(dir, ".."))
+					.filter(
+						(name) =>
+							/^\d+$/.test(name) && Number(name) < execution.windowStart,
+					)
+					.sort((a, b) => Number(b) - Number(a))
+					.find((name) => {
+						const receipt = objectOf(
+							parseJsonText(
+								readCadenceFile(join(dir, "..", name, "receipt.json")) ?? "",
+							),
+						);
+
+						return (
+							receipt?.launched !== false && (countOf(receipt?.tokens) ?? 0) > 0
+						);
+					});
+
+				const previousBaseSha =
+					execution.previousBaseSha ??
+					(previous === undefined
+						? undefined
+						: readCadenceInput(
+								join(dir, "..", previous, "input.json"),
+								execution.repo,
+								execution.job,
+								Number(previous),
+							).baseSha);
+
+				let changedPaths: string[] = [];
+
+				if (previousBaseSha !== undefined) {
+					const changes = await input.exec("git", [
+						"-C",
+						fileURLToPath(new URL("..", import.meta.url)),
+						"diff",
+						"--name-only",
+						"--no-renames",
+						"-z",
+						previousBaseSha,
+						execution.baseSha,
+						"--",
+					]);
+
+					if (changes.code !== 0) return failed("changes_unavailable");
+					changedPaths = changes.stdout
+						.split("\0")
+						.filter((path) => path !== "");
+				}
+
+				execution = { ...execution, changedPaths, previousBaseSha };
+
 				const existing = await adapter.readCadenceIssues(
 					CONTROLLER_LOGIN,
 					deadline,
@@ -4388,7 +4483,11 @@ export function controllerCadence(input: {
 						fingerprint !== undefined &&
 						/^[a-f0-9]{64}$/.test(fingerprint) &&
 						path !== undefined &&
-						inCadenceScope(path, cadenceScope(execution.rotation))
+						(inCadenceScope(
+							path,
+							cadenceScope(execution.rotation, execution.job),
+						) ||
+							changedPaths.includes(path))
 					)
 						existingProposals.push({
 							fingerprint,
@@ -4398,11 +4497,6 @@ export function controllerCadence(input: {
 						});
 				}
 
-				execution = {
-					...execution,
-					existingProposals: existingProposals.slice(0, 100),
-				};
-				writeCadenceFile(join(dir, "input.json"), JSON.stringify(execution));
 				const workspace = join(dir, "tree");
 				cadencePrivateDir(workspace);
 
@@ -4416,16 +4510,48 @@ export function controllerCadence(input: {
 				if (checked.kind !== "ready" || checked.omitted !== 0)
 					return failed("checkout_unavailable");
 
-				const files = checked.checkout.files.filter((path) =>
-					inCadenceScope(path, cadenceScope(execution.rotation)),
+				const excerpt = cadenceExcerpt(
+					execution,
+					checked.checkout.files,
+					(path) => {
+						const source = join(workspace, path);
+
+						try {
+							const info = lstatSync(source);
+
+							return info.isFile() &&
+								!info.isSymbolicLink() &&
+								info.size <= 1024 * 1024
+								? readFileSync(source, "utf8")
+								: null;
+						} catch {
+							return null;
+						}
+					},
 				);
+
+				writeCadenceFile(join(dir, "excerpt.json"), JSON.stringify(excerpt));
+				const files = excerpt.files.map((file) => file.path);
+
+				execution = {
+					...execution,
+					existingProposals: existingProposals
+						.sort(
+							(a, b) =>
+								Number(files.includes(b.path)) -
+									Number(files.includes(a.path)) ||
+								Number(a.state === "open") - Number(b.state === "open"),
+						)
+						.slice(0, 100),
+				};
+				writeCadenceFile(join(dir, "input.json"), JSON.stringify(execution));
 
 				const ledger =
 					execution.job === "hygiene"
 						? await cadenceLedger(input.stateDir)
 						: "unavailable; not requested by this job";
 
-				const prompt = cadencePrompt(execution, files, ledger);
+				const prompt = cadencePrompt(execution, files, ledger, excerpt);
 				writeCadenceFile(join(dir, "prompt.txt"), prompt);
 
 				if (
@@ -4450,7 +4576,7 @@ export function controllerCadence(input: {
 					},
 					workspace,
 					prompt,
-					tools: ["read", "grep", "ls"],
+					tools: [],
 					skills: [CADENCE_SKILLS[execution.job]],
 					settings: {
 						model: execution.settings.model,
