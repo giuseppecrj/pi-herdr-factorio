@@ -6,7 +6,7 @@ Keep GitHub writes in the controller, model execution in a sandbox, and required
 Implement build-order units 4 through 13 in this order.
 `F04a`, `F04b`, `F04c`, `F05`, `F06a`, `F06b`, `F07a`, `F07b`, `F07c`, `F07d`, `F08`, `F09a`, `F10b`, `F09b`, `F10c`, `F10`, `F12a`, `F09c`, `F11`, `F12`, `F13`.
 `F07d` is an operator tool, build-order row 7d, not a runtime stage.
-`F09d` is an optional research unit after `F09c`. It ships a decision memo and a throwaway prototype, not product code, and blocks nothing.
+`F09d` is an optional docs unit after `F09c`. The owner put the owner UI in a Factory tab in Shep (R25), so `F09d` ships only a decision record and screen sketches as inputs for Shep. It ships no product code and blocks nothing.
 Treat units 0 through 3 as historical prototype evidence, not work to repeat.
 
 ## How to read this
@@ -1515,7 +1515,7 @@ These are every intentional template adaptation in this document.
 8. The playbook's prototype-before-plan and child investigation steps were constrained by this leaf's plan-only authorization. Existing prototypes are recorded, code was read directly, no children were launched, and unproved engineering choices became named prototype-first gates.
 9. The check script is not silent on success. It always prints one box-count line per PR and a summary. The success predicate is exit code 0 and `22 PR sections, 0 problems`, with no diagnostic lines. Its source was read before writing this plan.
 10. New CLI commands, runtime symbols, and paths are planned deliverables. Trunk lanes record unsupported features instead of pretending that the skeleton already runs the controller. Performance uses absolute budgets for new work rather than ratios to missing behavior.
-11. `F09d` is an optional research unit that ships no product code. Its scoped adaptation replaces ten live lanes and a perf probe with one Swift Testing suite against F09c's captured feeds, an independent memo review, and `npm run check`. The checker still requires ten lane boxes and four perf boxes, so each of them says the scoped adaptation satisfies it. No `F09d` lane runs on the VM. The one feed capture on `pi-factorio` is a build step, not a lane.
+11. `F09d` is an optional docs unit that ships no product code. Its scoped adaptation replaces ten live lanes and a perf probe with the feed contract and capture tests in `test/feed.test.ts`, an independent review of `decision.md` and `screens.md`, and `npm run check`. The checker still requires ten lane boxes and four perf boxes, so each of them says the scoped adaptation satisfies it. No `F09d` lane runs on the VM. The one feed capture on `pi-factorio` is a build step, not a lane.
 
 ### R11. Restarts use up attempts
 
