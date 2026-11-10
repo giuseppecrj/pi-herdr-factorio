@@ -1241,7 +1241,7 @@ export class Orchestrator {
 
 		if (reconciled) await this.#input.cadence?.recover();
 
-		await this.#loadClaims();
+		await this.#loadClaims(true);
 		const gate = await this.#gate();
 		const candidates = await this.#candidates();
 		const preflight = reconciled && (await this.#input.executor.preflight());
@@ -1495,7 +1495,7 @@ export class Orchestrator {
 		return this.#report(last);
 	}
 
-	async #loadClaims(): Promise<void> {
+	async #loadClaims(localReservationsOnly = false): Promise<void> {
 		for (const claim of await this.#input.files.listClaims()) {
 			if (!this.#inScope(claim.issue)) continue;
 
@@ -1514,7 +1514,10 @@ export class Orchestrator {
 					confirmed: false,
 					unwritten: false,
 				});
-			} else {
+			} else if (
+				!localReservationsOnly ||
+				!(await this.#unadmitted(claim.issue, claim.eventId))
+			) {
 				this.#reserved.add(claim.issue);
 
 				if (claim.handoff !== undefined) await this.#restoreCandidate(claim);
