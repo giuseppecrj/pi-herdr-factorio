@@ -13,7 +13,7 @@ Trusted `.github/factory/WORKFLOW.md` on `main` carries `cadence.weeklyTokenCap`
 | `instructions` | Wednesday 03:00 UTC | `audit-instructions` |
 | `hygiene` | Thursday 03:00 UTC | `agent-loop-hygiene` with a bounded redacted ledger excerpt |
 
-Each job defaults to 40,000 tokens, 2 turns and 10 minutes, including preparation. The parser permits up to the existing 12-turn configuration bound, but maintenance always has a single model-request ceiling and no tools. The token and wall bounds are unchanged. The sandbox keeps its existing 10-second cleanup reserve. Models are OpenAI only; maintenance grants no Anthropic or xAI spend. No refusal fallback runs. The weekly allowance defaults to 200,000 tokens, reset by the Monday 00:00 UTC accounting window. Dollar pricing and a dollar cap are unavailable, not zero.
+Each job defaults to 40,000 tokens, 2 turns and 10 minutes, including preparation. The parser permits up to the existing 12-turn configuration bound, but maintenance always has a single model-request ceiling and no tools. There is no retry headroom within an audit. A transient upstream failure or Pi retry can end that week's job. A second full prompt could exceed 40,000 tokens. The failed window advances normally; no hidden retry spends another allowance. The token and wall bounds are unchanged. The sandbox keeps its existing 10-second cleanup reserve. Models are OpenAI only; maintenance grants no Anthropic or xAI spend. No refusal fallback runs. The weekly allowance defaults to 200,000 tokens, reset by the Monday 00:00 UTC accounting window. Dollar pricing and a dollar cap are unavailable, not zero.
 
 Before launch the controller reserves the entire job allowance against that week's maintenance charges. A reservation that would exceed the weekly allowance records `budget` and launches nothing. A retained execution without a valid receipt keeps its complete reservation as an inexact charge. A settled receipt replaces that reservation with its charged tokens; ticket budgets are not borrowed or replenished.
 
@@ -25,7 +25,7 @@ A new installation waits until a job's due time in the current UTC week. Existin
 
 The controller extracts a pinned `main` snapshot. The controller builds a bounded, line-numbered excerpt before launch. Pi receives no tools, extensions or child delegation and answers in one pass. The entire repository workspace is mounted read-only. An empty `.git` mountpoint is prepared before launch and masked read-only. The agent/session directory remains writable so Pi can record its own session. The gateway exposes the pinned model route only, without npm or GitHub. All model work, turns, wall time, request ceilings, token metering, cleanup and native receipts use the normal sandbox transport.
 
-Architecture and security audit one rotating path group. Hygiene receives the bounded redacted ledger plus source excerpts from that group, so its proposals can still cite real repository lines:
+Architecture and security audit changed files first, then one rotating path group. Hygiene receives the bounded redacted ledger plus the same source selection, so its proposals can still cite real repository lines:
 
 1. `src`
 2. `server`
@@ -35,9 +35,13 @@ Architecture and security audit one rotating path group. Hygiene receives the bo
 
 Instruction audits select `AGENTS.md`, `.github/factory/WORKFLOW.md` and `skills/*/SKILL.md` from their first run, independently of the code path groups.
 
-Each numbered file prefix is capped at 8 KiB. The serialized source excerpt is capped at 48 KiB, including paths and line labels. Files are sorted deterministically and packed into parts; each return to a path group selects its next part. Instruction parts rotate every run. The watermark advances both rotations, covering every eligible file over successive weeks for a stable snapshot, without repeatedly selecting only the first files. Binary files, unsafe paths, held-out acceptance and files over the citation validator's 1 MiB bound are omitted. File tails and omitted callers are explicitly unknown. All parts still require the same source-line validation and controller-minted fingerprints.
+Each complete, numbered window is capped at 8 KiB. The serialized source excerpt is capped at 32 KiB, including paths, line labels, visible ranges and skipped ranges. Leading comments and import blocks are skipped without renumbering the remaining lines. Lines too large to fit a window are skipped whole, never cut in the middle of a label or source line. Lockfiles, generated filenames, `server/viewer/design/tokens.*`, `LICENSE`, fixtures, research and prototype archives are excluded. Binary files, unsafe paths, held-out acceptance and files over the citation validator's 1 MiB bound are omitted.
 
-Existing-proposal context is capped at 4 KiB, with omissions reported; remote and local publication deduplication is unchanged. Prompts describe the selected part and its omissions. Findings must cite actual line ranges inside the job's scope. Other groups and parts are explicitly uncovered. The hygiene excerpt contains at most 20 locally retained redacted ledger rows and 16 KiB, never private sessions or held-out artifacts. A missing row or field is unknown, not success or zero cost.
+Before assembly, the controller reads this job's last audited base SHA from its watermark state. That SHA survives receipt pruning and zero-token failures. Older state falls back to the last retained, charged execution. It runs `git diff --name-only --no-renames -z <previous-base> <current-base> --` in the controller's own pinned source checkout. This compares immutable local Git objects, never the working-tree diff, audit export or a GitHub compare endpoint. Missing local history records `changes_unavailable` before launch rather than inventing an empty change set. A first run without a previous audit uses rotation alone.
+
+Changed files, including those outside the rotating group, get the first half of the excerpt. Their windows advance each weekly execution. The remaining space goes to sorted windows packed into rotating parts, including file tails. Each return to a group selects its next part; instruction parts rotate every run. On a stable snapshot with no changed-first selection, every eligible non-import line that fits a window is eventually shown. Repository growth or a changed-first slice changes the packing, so the frozen cycle is not a promise about a moving repository. Unshown changed files, skipped ranges and omitted callers remain unknown.
+
+Existing-proposal context is capped at 4 KiB, with omissions reported. Proposals whose primary path is shown come first, and closed proposals precede open ones within that priority. This ordering applies before both the 100-entry ownership limit and the prompt byte limit. Remote and local publication deduplication is unchanged. Findings must cite ranges fully contained in the delivered excerpt, not just valid lines somewhere in the pinned file. Other files and parts are explicitly uncovered. The hygiene excerpt contains at most 20 locally retained redacted ledger rows and 16 KiB, never private sessions or held-out artifacts. A missing row or field is unknown, not success or zero cost.
 
 ## Scheduling and switches
 
@@ -51,9 +55,10 @@ A launch requires both factory switches, a valid trusted workflow, spare capacit
 
 Private state lives below `<state-dir>/cadence/<job>/`, with 0700 directories and 0600 controller records:
 
-- `state.json` holds the due watermark, rotation and pending window.
-- `executions/<windowStart>/input.json` records ownership, repository/base SHA, trusted workflow SHA/digest, model, allowance, rotation and accounting week before launch. Before the model starts it also records up to 100 existing proposals for this job and path group, with fingerprint, title, primary path and open/completed/not-planned state.
+- `state.json` holds the due watermark, rotation, pending window and last audited base SHA.
+- `executions/<windowStart>/input.json` records ownership, repository/base SHA, trusted workflow SHA/digest, model, allowance, rotation and accounting week before launch. Before the model starts it also records the previous audited base SHA, locally changed paths and up to 100 existing proposals for the changed paths and rotating group. Each proposal has its fingerprint, title, primary path and open/completed/not-planned state.
 - `prompt.txt` keeps the exact private prompt and bounded ledger inputs.
+- `excerpt.json` records exactly which file ranges were delivered and which ranges were skipped. Publication requires every citation to fit a delivered range and the pinned file's actual line count. A missing excerpt supplies no citation authority.
 - `tree/` is the pinned audit checkout; the model cannot modify it.
 - `runtime/` contains native receipt, usage checkpoint, output, gateway audit and sessions, using stage `maintain` and the execution digest rather than a ticket ID.
 - `receipt.json` records the audit result, charged tokens, exactness, answering model and native receipt digest. An empty proposal list records `no_delta`.
@@ -97,6 +102,37 @@ TMPDIR="$HOME/.cache/f11t" FACTORY_REQUIRE_SANDBOX_TESTS=1 \
 
 The native one-shot demo uses the real CLI, lock, sandbox executor, Pi RPC, bubblewrap, user systemd scopes, gateway and receipts. Only GitHub and the model upstream are fixtures. It files two proposals, then zero for paraphrased/rekeyed findings in a fresh audit, including a rejected issue. It files a partially invalid finding with only its valid evidence and drops an all-invalid finding while completing filing. It also verifies an unchanged checkout, no tool definitions in the actual provider request, numbered source delivery, a read-only mount that refuses a shell write, and a withheld response that proves the scheduled tick does not wait. Injected over-cap usage proves valid empty/finding answers settle, malformed JSON fails, and full usage plus the native cap event survive restart. Fixture state and its temporary asset bundle are isolated and removed by the test. A working user bus is mandatory with `FACTORY_REQUIRE_SANDBOX_TESTS=1`; otherwise that native case explicitly skips when the bus is unavailable.
 
-Excerpt tests enforce deterministic byte bounds, numbered lines, instruction selection and file coverage over a rotation. The pinned-main estimate test measures every part of all four jobs using chars/4, adds 256 runtime tokens, a full 64 KiB answer reserve, bounded known proposals and the maximum hygiene ledger. It requires at least 4,000 tokens of headroom below 40,000. These are estimates, not provider-token measurements.
+Excerpt tests enforce deterministic byte bounds, complete numbered lines, changed-first selection, import skipping, instruction selection, exclusions and line coverage through file tails. The estimate test reads `test/fixtures/cadence/snapshot.json.gz`, a committed text snapshot at `6c00eabd780f9cda62b9f08ac3e311463f484237`, with the exclusions above. It uses the current cadence prompt and skill bytes. It never resolves `origin/main` or skips when Git is absent, so archive-only tests and shallow CI run the same estimate.
+
+### Token calibration
+
+`test/fixtures/cadence/calibration.json` records the measured F11 lane prompts, including their appended skill section. Architecture was 7,988 UTF-8 bytes / 1,683 o200k tokens; hygiene was 23,585 / 7,326; instructions was 5,448 / 1,203. In each native receipt, first input tokens equal the tokenizer count plus 533. The measured ratios range from 3.22 to 4.75 bytes/token. The estimate uses **UTF-8 bytes / 2.8, rounded up, plus 533 runtime tokens**. The smaller divisor estimates about 15% more tokens than the densest measured lane. It also keeps the old tool-bearing runtime overhead despite maintenance having no tools. The review's full-code prompts also showed why chars/4 is too optimistic.
+
+The test measures every rotating part with the maximum 4 KiB known-proposal context and a hex/JSON-shaped 16 KiB hygiene ledger. It reserves 8,800 tokens for the reviewer's 8,790-token maximum valid answer, plus 4,000 for reasoning, and requires another 4,000 tokens of headroom below 40,000. These are calibrated estimates, not new provider measurements or an absolute upper bound on provider reasoning. Native receipts still record full usage if a cap is exceeded.
+
+### Frozen-snapshot results
+
+Run the estimate and coverage check with:
+
+```bash
+node --test --test-name-pattern='calibrates every job' test/cadence.test.ts
+```
+
+The 32 KiB excerpt yields these worst-part estimates. Totals include the 8,800-token answer and 4,000-token reasoning reserve.
+
+| Job | Calibrated prompt | Total tokens | Headroom to 40,000 |
+| --- | ---: | ---: | ---: |
+| Architecture | 16,465 | 29,265 | 10,735 |
+| Security | 15,147 | 27,947 | 12,053 |
+| Instructions | 15,580 | 28,380 | 11,620 |
+| Hygiene | 22,120 | 34,920 | 5,080 |
+
+Without intervening changes, `src/` needs 41 group visits, or 205 weekly executions, to show 33,195 of its 33,971 lines, **97.72%**. `server/` needs 35 visits, or 175 weekly executions, to show 28,654 of 29,688 lines, **96.52%**. The unshown lines are leading headers and imports. These counts exclude the low-value files above. Every remaining line that fits a window is covered. The full five-group cycle takes at most 565 executions; instructions take two.
+
+Those frozen cycles are long. Changed-first selection is what gives fresh code priority each week; the rotation fills the rest of the budget and eventually covers unchanged tails. No complete-repository weekly coverage is claimed.
+
+### Follow-up, not implemented
+
+N1 from the budget review is a speculative millisecond race between the gateway's final SSE bytes and Pi parsing them before abort. No settlement code is changed for it. Consider a bounded maintain-only drain without abort only with owner approval and evidence of a lost completed answer.
 
 Saved-state tests separately exercise watermarks, no delta, restart overlap, unknown-create reconciliation, switches, budgets, scope rotation and escaping. They are not live VM/model evidence. The plan's ten live lanes and interleaved VM perf remain separate coordinator verification. Changed skills require sandbox bundle provisioning before a production audit can pass the stale-bundle check.

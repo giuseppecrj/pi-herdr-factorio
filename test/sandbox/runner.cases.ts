@@ -6874,6 +6874,63 @@ describe("stage output capture", () => {
 		}
 	});
 
+	for (const stage of ["specify", "accept", "build", "maintain"] as const) {
+		it(`post-completion cap keeps output only for maintain: ${stage}`, async () => {
+			const answer = '{"proposals":[]}';
+			let gateway: FakeGateway | null = null;
+			let meteredAfterSettlement = false;
+
+			const h = harness(
+				[
+					(command, pi) => {
+						if (command.type === "prompt")
+							pi.emit(started(String(command.id)), ...SETTLED_TURN.slice(1));
+
+						if (command.type === "get_last_assistant_text") {
+							assert.ok(gateway);
+							meteredAfterSettlement = true;
+							const usage = usageEvent("model-openai", "forward");
+							assert.equal(usage.event, "usage");
+
+							if (usage.event === "usage")
+								gateway.send({ ...usage, inputTokens: 101, outputTokens: 0 });
+							pi.emit({
+								type: "response",
+								id: command.id ?? null,
+								command: "get_last_assistant_text",
+								success: true,
+								data: { text: answer },
+							});
+						}
+					},
+				],
+				{
+					gateway: (_table, timeline) => {
+						gateway = new FakeGateway(timeline);
+
+						return gateway;
+					},
+				},
+			);
+
+			const result = await runStage(
+				input({ stage }, { maxTokens: 100 }),
+				h.host,
+			);
+
+			assert.equal(meteredAfterSettlement, true);
+			assert.equal(
+				h.pis[0]?.received.some((command) => command.type === "abort"),
+				false,
+				"must exercise settled-then-over-cap, not in-flight cap",
+			);
+			assert.equal(result.kind === "budget_exhausted" && result.cap, "tokens");
+			assert.equal(result.usage, 101);
+			assert.deepEqual(h.outputs, stage === "maintain" ? [answer] : []);
+			assert.equal(result.receipt.output !== null, stage === "maintain");
+		});
+	}
+
 	it("does not retain unfinished, refused or errored maintain text at a cap", async () => {
 		for (const stopReason of ["toolUse", "length", "error", "refusal"]) {
 			const h = harness([
