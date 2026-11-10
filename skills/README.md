@@ -21,13 +21,15 @@ Each skill sets `disable-model-invocation`, because it is a stage prompt and not
 
 ## Maintenance audits
 
-The `maintain` sandbox stage runs one bounded weekly path group using `improve-codebase-architecture`, `security-review` in repository-scope mode, `audit-instructions` or `agent-loop-hygiene`. It has only read, grep and ls, a read-only pinned main tree, and model-only egress. It returns a JSON proposal list, including an empty no-delta list. The controller alone files `factory:proposed` issues; it never labels them ready. Hygiene receives a bounded redacted ledger excerpt, never private sessions. See [cadence](../docs/operations/cadence.md).
+The `maintain` sandbox stage runs a single-pass weekly audit with no tools, a read-only pinned main tree, and model-only egress. Architecture, security, instructions and hygiene use the skills below. Reflect uses both `reflect-ledger` and `agent-loop-spec` over bounded redacted ledger rows, scores and source lines, never private sessions. Each audit returns JSON proposals or an empty no-delta list. Only the controller files `factory:proposed` issues; it never labels them ready or changes skills, prompts or gates. See [cadence](../docs/operations/cadence.md).
 
 | Skill | Upstream | License | `SOURCE.md` |
 | --- | --- | --- | --- |
 | `improve-codebase-architecture` | `mattpocock/skills` architecture, domain-modeling and vocabulary at `59db609` | MIT, Matt Pocock, `improve-codebase-architecture/LICENSE` | `improve-codebase-architecture/SOURCE.md` |
 | `audit-instructions` | `desertcache/agent-os` at `211bd89` | MIT, desertcache, `audit-instructions/LICENSE` | `audit-instructions/SOURCE.md` |
 | `agent-loop-hygiene` | owner's work at `b7f7c33` | owner-authored, no upstream licence; selected in the approved design and plan, adapted under autonomous-run | `agent-loop-hygiene/SOURCE.md` |
+| `reflect-ledger` | pstack reflect via pi-herdr-pstack 0.6.0, pinned source hashes and upstream commits in SOURCE | MIT, Lauren Tan, `reflect-ledger/LICENSE` | `reflect-ledger/SOURCE.md` |
+| `agent-loop-spec` | owner's work at `8495754` | owner-authored, no upstream licence; adapted under the approved F12 plan and builder brief, including disclosure of a Cursor Agent-authored upstream commit | `agent-loop-spec/SOURCE.md` |
 
 ## Human review
 

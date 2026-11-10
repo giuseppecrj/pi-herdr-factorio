@@ -53,6 +53,8 @@ import { digestOf } from "../src/run.ts";
 import { runCli, execFile, type ControllerRuntime } from "../server/cli.ts";
 import {
 	controllerMeasurements,
+	controllerMeasure,
+	pumpScoreOutbox,
 	durableUsageOf,
 	procTable,
 	readDurableAccounting,
@@ -512,6 +514,236 @@ async function nativeBundle(t: TestContext, root: string) {
 	return digest;
 }
 
+it("permanent pre-launch scoring failure is recorded once across eleven pumps and restart", async (t) => {
+	const parsed = parseWorkflow({
+		text: workflow,
+		repo,
+		env: (name) => process.env[name],
+	});
+
+	assert.equal(parsed.kind, "valid");
+
+	if (parsed.kind !== "valid") throw new Error("fixture policy");
+
+	const config = {
+		...parsed.config,
+		scorers: parsed.config.scorers?.map((s) => ({ ...s, samplingRate: 100 })),
+	};
+
+	const stateDir = directory(t);
+	const runId = finished.row.runId;
+
+	let reads = 0,
+		preflights = 0,
+		failures = 0;
+
+	const exec: LedgerGit["exec"] = async () => {
+		reads++;
+
+		return {
+			code: 0,
+			stdout: JSON.stringify({ name: "factory:enabled" }),
+			stderr: "",
+		};
+	};
+
+	const context = {
+		stateDir,
+		repo,
+		exec,
+		log: (event: string) => {
+			if (event === "measurement_failed") failures++;
+		},
+		executor: {
+			...sandboxExecutor({
+				stateDir,
+				exec,
+				log: () => undefined,
+				xdgRuntimeDir:
+					process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.()}`,
+			}),
+			preflight: async () => {
+				preflights++;
+
+				return true;
+			},
+		},
+	};
+
+	const measurements = controllerMeasurements(context);
+	measurements.terminal(runId, config);
+	await measurements.stop();
+
+	for (let pump = 0; pump < 10; pump++) {
+		measurements.retry();
+		await measurements.stop();
+	}
+
+	const restarted = controllerMeasurements(context);
+	restarted.terminal(runId, config);
+	await restarted.stop();
+	assert.equal(failures, 1);
+	assert.equal(reads, 1);
+	assert.equal(preflights, 1);
+	const events = scoreHistory(stateDir);
+	assert.equal(events.length, 1);
+	assert.equal(events[0]?.status, "failed");
+	assert.match(events[0]?.reasoning ?? "", /ledger_row_unavailable/);
+	assert.deepEqual(events[0]?.usage, { tokens: 0, wallMs: 0, exact: true });
+	seed(stateDir);
+
+	const manual = await controllerMeasure({
+		...context,
+		exec: new LedgerGit().exec,
+		executor: { ...context.executor, preflight: async () => false },
+		kind: "score",
+		runId,
+		config,
+	});
+
+	assert.equal(manual.kind, "score");
+	assert.equal(
+		scoreHistory(stateDir).length,
+		2,
+		"on-demand scoring bypasses automatic enrollment",
+	);
+});
+
+it("a non-started launch after preflight settles once rather than producing a failed score each pump", async (t) => {
+	const parsed = parseWorkflow({
+		text: workflow,
+		repo,
+		env: (name) => process.env[name],
+	});
+
+	assert.equal(parsed.kind, "valid");
+
+	if (parsed.kind !== "valid") throw new Error("fixture policy");
+
+	const config = {
+		...parsed.config,
+		scorers: parsed.config.scorers?.map((scorer) => ({
+			...scorer,
+			samplingRate: 100,
+		})),
+	};
+
+	const stateDir = directory(t);
+	const row = seed(stateDir);
+	const github = new LedgerGit();
+	let launches = 0;
+
+	const exec: LedgerGit["exec"] = async (command, args) =>
+		args.some((arg) => arg.includes("labels/factory"))
+			? {
+					code: 0,
+					stdout: JSON.stringify({ name: "factory:enabled" }),
+					stderr: "",
+				}
+			: github.exec(command, args);
+
+	const context = {
+		stateDir,
+		repo,
+		exec,
+		log: () => undefined,
+		executor: {
+			...sandboxExecutor({
+				stateDir,
+				exec,
+				log: () => undefined,
+				xdgRuntimeDir:
+					process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.()}`,
+			}),
+			preflight: async () => true,
+			launch: async () => {
+				launches++;
+
+				return {
+					kind: "unavailable" as const,
+					stage: "maintain" as const,
+					reason: "sandbox_unavailable" as const,
+				};
+			},
+		},
+	};
+
+	const automatic = controllerMeasurements(context);
+	automatic.terminal(row.row.runId, config);
+	await automatic.stop();
+
+	for (let pump = 0; pump < 10; pump++) {
+		automatic.retry();
+		await automatic.stop();
+	}
+
+	const restarted = controllerMeasurements(context);
+	restarted.terminal(row.row.runId, config);
+	await restarted.stop();
+	assert.equal(launches, 1);
+	assert.equal(scoreHistory(stateDir).length, 1);
+	assert.equal(scoreHistory(stateDir)[0]?.status, "failed");
+});
+
+it("held or sandbox-blocked automatic scores remain unenrolled", async (t) => {
+	const config = parseWorkflow({
+		text: workflow,
+		repo,
+		env: (name) => process.env[name],
+	});
+
+	assert.ok(config.kind === "valid");
+
+	const policy = {
+		...config.config,
+		scorers: config.config.scorers?.map((s) => ({ ...s, samplingRate: 100 })),
+	};
+
+	for (const held of [true, false]) {
+		const stateDir = directory(t);
+		const row = seed(stateDir);
+
+		if (held) writeFileSync(join(stateDir, "disabled"), "");
+
+		const exec: LedgerGit["exec"] = async () => ({
+			code: 0,
+			stdout: JSON.stringify({ name: "factory:enabled" }),
+			stderr: "",
+		});
+
+		const measurements = controllerMeasurements({
+			stateDir,
+			repo,
+			exec,
+			log: () => undefined,
+			executor: {
+				...sandboxExecutor({
+					stateDir,
+					exec,
+					log: () => undefined,
+					xdgRuntimeDir:
+						process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.()}`,
+				}),
+				preflight: async () => false,
+			},
+		});
+
+		measurements.terminal(row.row.runId, policy);
+		await measurements.stop();
+		assert.equal(
+			existsSync(
+				join(
+					stateDir,
+					"measure/automatic",
+					`${row.row.runId}-outcome-quality.json`,
+				),
+			),
+			false,
+			held ? "held" : "sandbox-blocked",
+		);
+	}
+});
+
 it("native local score, re-score, explain demo uses real sandbox/Pi/gateway receipts; only GitHub and model upstream are fake", {
 	timeout: 180_000,
 }, async (t) => {
@@ -554,6 +786,7 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 		'{"label":"matched","reasoning":"ledger.outcome records the final disposition."}';
 
 	let tokens = 20;
+	let failPublicationAfterAnswer = false;
 	let exceedWall = false;
 	let wallOffset = 0;
 	const realNow = Date.now;
@@ -583,6 +816,8 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 			);
 			assert.match(body, /ledger/);
 			requests.push(body);
+
+			if (failPublicationAfterAnswer) publicationUnavailable = true;
 
 			if (exceedWall) wallOffset += EXPLAIN_WALL_MS + 1;
 
@@ -660,6 +895,7 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 	const runApi = ledgerApiOf(new GitHubPublicationApi(git.exec, repo));
 	await runApi.advance(null, (await runApi.root("2026-11-10T10:00:00Z")).sha);
 	let repoEnabled = true;
+	let publicationUnavailable = true;
 
 	const exec: typeof git.exec = async (command, args, options) => {
 		if (command !== "gh")
@@ -690,6 +926,13 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 						stderr: "",
 					}
 				: { code: 1, stdout: "", stderr: "HTTP 404" };
+
+		if (
+			publicationUnavailable &&
+			requests.length > 0 &&
+			args.some((arg) => arg === `repos/${repo}/git/ref/heads/factory/ledger`)
+		)
+			return { code: 1, stdout: "", stderr: "connection reset" };
 
 		return git.exec(command, args, options);
 	};
@@ -801,6 +1044,10 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 	assert.equal(Object.keys(first!)[0], "primary");
 	assert.equal(objectOf(first?.primary)?.status, "pending");
 	assert.equal(first?.passing, true);
+	assert.equal(first?.published, false);
+	assert.equal(first?.persisted, true);
+	assert.equal(first?.publication, "queued_for_controller");
+	publicationUnavailable = false;
 
 	const own = scoreEventOf(first?.event);
 	assert.ok(own);
@@ -811,6 +1058,17 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 		),
 	);
 	assert.notEqual(own.id, digestOf(String(first?.identity)));
+	assert.equal(
+		await pumpScoreOutbox({
+			stateDir,
+			repo,
+			exec,
+			log: () => undefined,
+			clock: () => Date.now() + 60_000,
+		}),
+		true,
+		"the controller publishes the persisted score after backoff without a second model request",
+	);
 
 	const queued = {
 		...own,
@@ -836,6 +1094,8 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 	assert.equal(second?.passing, false);
 	assert.equal(objectOf(second?.event)?.supersedes, objectOf(first?.event)?.id);
 	assert.equal(second?.published, true);
+	assert.equal(second?.persisted, true);
+	assert.equal(second?.publication, "published");
 	assert.equal(second?.queuedScores, 1);
 	assert.equal(
 		scoreHistory(stateDir).filter((e) => e.scoredRunId === firstRow.row.runId)
@@ -904,11 +1164,25 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 	);
 	answer =
 		'{"label":"matched","reasoning":"This passing measurement cannot override ledger.outcome or the failed visible check."}';
+	failPublicationAfterAnswer = true;
 	await invoke("score", failed.row.runId, false);
 	assert.match(stdout, /^F12a clean landing share: pending/);
 	assert.match(stdout, /passing measurement/);
-	assert.match(stdout, /Published;/);
-	assert.doesNotMatch(stdout, /Publication pending/);
+	assert.match(stdout, /Computed and persisted locally/);
+	assert.match(stdout, /Publication queued for the controller pump/);
+	assert.doesNotMatch(stdout, /Published;/);
+	failPublicationAfterAnswer = false;
+	publicationUnavailable = false;
+	assert.equal(
+		await pumpScoreOutbox({
+			stateDir,
+			repo,
+			exec,
+			log: () => undefined,
+			clock: () => Date.now() + 60_000,
+		}),
+		true,
+	);
 	assert.match(stdout, /Other scores queued: 1/);
 	assert.match(requests[3]!, /ADMITTED_TITLE/);
 	assert.match(requests[3]!, /ADMITTED_BODY/);
@@ -951,7 +1225,12 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 		(await api.file((await api.commit(tip)).tree)).bytes,
 	);
 
-	assert.equal(published.length, 3);
+	assert.equal(published.length, 4);
+	assert.equal(
+		published.filter((event) => event.id === queued.id).length,
+		1,
+		"the later pump also publishes the unrelated queued event once",
+	);
 	assert.ok(
 		published.every(
 			(e) => e.familyNote === "context-isolated, same family, not cross-family",
@@ -1141,6 +1420,85 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 		"automatic scoring respects the repository switch",
 	);
 
+	const heldMarker = join(
+		stateDir,
+		"measure/automatic",
+		`${disabledRow.row.runId}-outcome-quality.json`,
+	);
+
+	assert.equal(existsSync(heldMarker), false, "a hold must not enroll the run");
+	repoEnabled = true;
+	restarted.retry();
+	await restarted.stop();
+	assert.equal(
+		requests.length,
+		beforeAutomatic + 2,
+		"lifting a hold scores the deferred run without another terminal callback",
+	);
+	assert.equal(existsSync(heldMarker), true);
+	restarted.retry();
+	await restarted.stop();
+	assert.equal(
+		requests.length,
+		beforeAutomatic + 2,
+		"a launched score enrolls only once",
+	);
+
+	let sandboxReady = false;
+	const blockedRow = seed(stateDir, known[2]!);
+
+	const blocked = controllerMeasurements({
+		stateDir,
+		repo,
+		exec,
+		log: () => undefined,
+		executor: { ...executor, preflight: async () => sandboxReady },
+	});
+
+	const beforeBlocked = requests.length;
+	blocked.terminal(blockedRow.row.runId, config);
+	await blocked.stop();
+	assert.equal(requests.length, beforeBlocked);
+	assert.equal(
+		existsSync(
+			join(
+				stateDir,
+				"measure/automatic",
+				`${blockedRow.row.runId}-outcome-quality.json`,
+			),
+		),
+		false,
+	);
+	sandboxReady = true;
+	blocked.retry();
+	await blocked.stop();
+	assert.equal(
+		requests.length,
+		beforeBlocked + 1,
+		"a blocked score launches after sandbox recovery",
+	);
+
+	const voidedAutomatic = controllerMeasurements({
+		stateDir,
+		repo,
+		exec,
+		executor,
+		log: () => undefined,
+	});
+
+	const beforeVoidedAutomatic = requests.length;
+	voidedAutomatic.terminal(failed.row.runId, config);
+	await voidedAutomatic.stop();
+	const afterVoidedAutomatic = scoreHistory(stateDir).length;
+	voidedAutomatic.retry();
+	await voidedAutomatic.stop();
+	assert.equal(
+		scoreHistory(stateDir).length,
+		afterVoidedAutomatic,
+		"a scorer-touch refusal is not a blocked launch to retry each tick",
+	);
+	assert.equal(requests.length, beforeVoidedAutomatic);
+
 	t.diagnostic(
 		JSON.stringify({
 			demo: "score -> re-score -> explain",
@@ -1166,6 +1524,8 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 				"parent Date.now advanced by 300001 ms at the model response; no five-minute wait",
 			configuredScoreCap: 12000,
 			ownScorePublishedWithQueue: true,
+			computedPersistedQueuedExit: 0,
+			heldAndBlockedResume: true,
 			contractIncluded: true,
 			automaticOnce: true,
 		}),

@@ -21,6 +21,7 @@ import {
 	type LoadView,
 	loadView,
 	loadWorkflow,
+	trustedWorkflowConfig,
 	MODEL_STAGES,
 	modelsOf,
 	parseWorkflow,
@@ -139,6 +140,32 @@ async function load(
 	return loadWorkflow({ exec: fakeGh(branches).exec, repo, ref, env });
 }
 
+describe("trusted improvement trigger", () => {
+	it("defaults K/D only when enabled and rejects invalid or unknown settings", () => {
+		const absent = parse(frontMatter(""));
+		const enabled = parse(frontMatter("trigger: {}"));
+		assert.ok(absent.kind === "valid" && absent.config.trigger === null);
+		assert.ok(enabled.kind === "valid");
+		assert.deepEqual(enabled.config.trigger, { k: 25, d: 7 });
+
+		for (const fields of [
+			"k: 0",
+			"k: 51",
+			"k: 1.5",
+			"d: 0",
+			"d: -1",
+			"d: 1.5",
+			"d: 9007199254740992",
+			"unknown: 1",
+		])
+			assert.equal(
+				parse(frontMatter(`trigger: {${fields}}`)).kind,
+				"invalid",
+				fields,
+			);
+	});
+});
+
 describe("trusted cadence workflow", () => {
 	it("stays off when absent and supplies fixed bounded weekly UTC jobs when configured", () => {
 		const absent = parse(frontMatter(""));
@@ -158,11 +185,22 @@ describe("trusted cadence workflow", () => {
 			"security",
 			"instructions",
 			"hygiene",
+			"reflect",
 		]);
+
+		assert.equal(loaded.config.cadence?.jobs.reflect.dayUtc, 5);
+		assert.equal(
+			Object.values(loaded.config.cadence?.jobs ?? {}).reduce(
+				(sum, job) => sum + job.maxTokens,
+				0,
+			),
+			180_000,
+			"five default jobs leave 20k under the unchanged 200k weekly cap",
+		);
 
 		for (const job of Object.values(loaded.config.cadence?.jobs ?? {})) {
 			assert.equal(job.model, DEFAULT_MODEL);
-			assert.equal(job.maxTokens, 40_000);
+			assert.equal(job.maxTokens, 36_000);
 			assert.deepEqual(job.budget, {
 				maxTurns: 2,
 				wallMs: 600_000,
@@ -229,6 +267,16 @@ describe("parseWorkflow", () => {
 		assert.equal(parsed.config.polling.intervalMs, 30_000);
 		assert.equal(parsed.config.agent.maxConcurrent, 2);
 		assert.equal(parsed.config.checkpoints.approveMerge.mode, "always");
+		const cadence = parsed.config.cadence;
+		assert.ok(cadence);
+		assert.equal(cadence.weeklyTokenCap, 200_000);
+		assert.equal(
+			Object.values(cadence.jobs).reduce((sum, job) => sum + job.maxTokens, 0),
+			180_000,
+		);
+
+		for (const job of Object.values(cadence.jobs))
+			assert.equal(job.maxTokens, 36_000);
 
 		for (const stage of MODEL_STAGES) {
 			assert.equal(parsed.config.stages[stage].model, "openai/gpt-6.1-sol");
@@ -875,6 +923,28 @@ describe("loadWorkflow", () => {
 		const local = readFileSync(".github/factory/WORKFLOW.md", "utf8");
 
 		assert.notEqual(loaded.snapshot.digest, digestOf(local));
+	});
+
+	it("reuses only the last valid main config for local trigger evaluation", async () => {
+		const branches = new Map([
+			["main", { sha: mainSha, text: frontMatter("trigger: {k: 25, d: 7}") }],
+			[
+				"candidate",
+				{ sha: candidateSha, text: frontMatter("trigger: {k: 1, d: 1}") },
+			],
+		]);
+
+		await load(branches);
+		const trusted = trustedWorkflowConfig(repo);
+		assert.deepEqual(trusted?.trigger, { k: 25, d: 7 });
+		await load(branches, "candidate");
+		assert.equal(trustedWorkflowConfig(repo), trusted);
+		branches.set("main", {
+			sha: mainSha,
+			text: frontMatter("trigger: {k: 0}"),
+		});
+		await load(branches);
+		assert.equal(trustedWorkflowConfig(repo), trusted);
 	});
 
 	it("reports a missing file as missing_workflow_file with the SHA", async () => {

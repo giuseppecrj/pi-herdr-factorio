@@ -46,6 +46,7 @@ export const CADENCE_JOBS = [
 	"security",
 	"instructions",
 	"hygiene",
+	"reflect",
 ] as const;
 
 export type CadenceJob = (typeof CADENCE_JOBS)[number];
@@ -144,6 +145,7 @@ export type WorkflowConfig = {
 	};
 	readonly replay?: { readonly maxTokens: number } | null;
 	readonly cadence?: CadenceConfig | null;
+	readonly trigger?: { readonly k: number; readonly d: number } | null;
 	readonly scorers?: readonly ScorerConfig[];
 	readonly grader?: {
 		readonly model: ModelId;
@@ -872,7 +874,7 @@ function readCadence(root: Map<string, YamlNode>): CadenceConfig | null {
 			maxTokens: integerOr(entries, "maxTokens", `${field}.maxTokens`, {
 				min: 1,
 				max: 40_000,
-				fallback: 40_000,
+				fallback: 36_000,
 			}),
 			budget: Object.freeze({
 				maxTurns: integerOr(entries, "maxTurns", `${field}.maxTurns`, {
@@ -902,7 +904,18 @@ function readCadence(root: Map<string, YamlNode>): CadenceConfig | null {
 			security: readJob("security", 2),
 			instructions: readJob("instructions", 3),
 			hygiene: readJob("hygiene", 4),
+			reflect: readJob("reflect", 5),
 		}),
+	});
+}
+
+function readTrigger(root: Map<string, YamlNode>) {
+	if (!root.has("trigger")) return null;
+	const entries = optionalEntries(root, "trigger", "trigger", ["k", "d"]);
+
+	return Object.freeze({
+		k: integerOr(entries, "k", "trigger.k", { min: 1, max: 50, fallback: 25 }),
+		d: integerOr(entries, "d", "trigger.d", { min: 1, fallback: 7 }),
 	});
 }
 
@@ -1037,6 +1050,7 @@ const ROOT_KEYS = [
 	"attention",
 	"replay",
 	"cadence",
+	"trigger",
 	"scorers",
 	"grader",
 	"stages",
@@ -1170,6 +1184,7 @@ function readConfig(
 				})
 			: null,
 		cadence: readCadence(root),
+		trigger: readTrigger(root),
 		...readScorers(root),
 		stages: readStages(root, warnings),
 		checkpoints: readCheckpoints(root),
@@ -1453,6 +1468,15 @@ async function runGh(exec: Exec, args: readonly string[]): Promise<GhResult> {
 	}
 }
 
+const trustedConfigs = new Map<RepoSlug, WorkflowConfig>();
+
+/** Reuse the main configuration already loaded by admission; never fetch for an idle trigger. */
+export function trustedWorkflowConfig(
+	repo: RepoSlug,
+): WorkflowConfig | undefined {
+	return trustedConfigs.get(repo);
+}
+
 /**
  * Loads WORKFLOW.md from `ref` of `repo` on GitHub: resolve the branch to a
  * SHA, then fetch the file at that SHA. It never reads a local checkout.
@@ -1551,6 +1575,8 @@ export async function loadWorkflow(input: {
 		guidance: parsed.guidance,
 		warnings: parsed.warnings,
 	});
+
+	if (ref === TRUSTED_REF) trustedConfigs.set(repo, snapshot.config);
 
 	return Object.freeze({ kind: "loaded", snapshot });
 }

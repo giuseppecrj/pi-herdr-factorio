@@ -240,6 +240,105 @@ export function previousScore(
 	);
 }
 
+/** Legacy markers count only for possible execution; settled failures are never auto-retried. */
+export function automaticScoreEnrolled(
+	stateDir: string,
+	runId: Digest,
+	scorerId: string,
+): boolean {
+	const marker = join(
+		stateDir,
+		"measure",
+		"automatic",
+		`${runId}-${scorerId}.json`,
+	);
+
+	if (!existsSync(marker)) return false;
+
+	const enrollment = objectOf(parseJson(regularText(marker)));
+
+	if (enrollment?.launched === true || enrollment?.settled === true)
+		return true;
+	const root = join(stateDir, "measure", "score", runId);
+
+	if (!existsSync(root)) return false;
+
+	for (const seq of readdirSync(root).filter((name) =>
+		/^[1-9][0-9]*$/.test(name),
+	)) {
+		const dir = join(root, seq);
+		const ownerPath = join(dir, "owner.json");
+
+		if (!existsSync(ownerPath)) continue;
+		const owner = objectOf(parseJson(regularText(ownerPath)));
+
+		if (objectOf(owner?.scorer)?.id !== scorerId) continue;
+		const resultPath = join(dir, "result.json");
+
+		if (!existsSync(resultPath)) return true;
+
+		if (objectOf(parseJson(regularText(resultPath)))?.launched !== false)
+			return true;
+	}
+
+	return false;
+}
+
+/** One outstanding failure per run/scorer; a later pass clears it, failed judging does not. */
+export function unreviewedFailures(
+	events: readonly ScoreEvent[],
+	scorerId: string,
+	reviewed: ReadonlySet<string>,
+) {
+	const failures = new Map<string, ScoreEvent>();
+
+	for (const event of events) {
+		if (
+			event.scorerId !== scorerId ||
+			reviewed.has(event.scoredRunId) ||
+			event.status !== "scored"
+		)
+			continue;
+
+		if (event.score! >= event.passingScore) failures.delete(event.scoredRunId);
+		else if (!failures.has(event.scoredRunId))
+			failures.set(event.scoredRunId, event);
+	}
+
+	return [...failures.values()].sort(
+		(a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id),
+	);
+}
+
+/** Bounded redacted score-stream projection, not reasoning or private sessions. */
+export function reflectScores(events: readonly ScoreEvent[]) {
+	const selected = [];
+
+	for (const event of [...latestScores(events)].reverse()) {
+		const projected = {
+			id: event.id,
+			scoredRunId: event.scoredRunId,
+			scorerId: event.scorerId,
+			at: event.at,
+			status: event.status,
+			label: event.label,
+			score: event.score,
+			passingScore: event.passingScore,
+			inputDigest: event.inputDigest,
+		};
+
+		if (Buffer.byteLength(JSON.stringify([...selected, projected])) > 8 * 1024)
+			break;
+		selected.push(projected);
+	}
+
+	return {
+		events: selected,
+		omitted: latestScores(events).length - selected.length,
+		coverage: "latest local scores, at most 8 KiB; missing evidence is unknown",
+	};
+}
+
 export type MeasurementOwner = {
 	readonly repo: string;
 	readonly identity: string;

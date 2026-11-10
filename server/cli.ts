@@ -117,7 +117,7 @@ export const USAGE = `Usage:
   node server/cli.ts metrics --json --repo <owner/name> [--ledger-file <path>] [--state-dir <dir>] [--now <instant>] [--cohort production] [--offline] [--intervention-file <fixture>]
   node server/cli.ts score --run <id> --repo <owner/name> --state-dir <dir> [--scorer <id>] [--json]
   node server/cli.ts explain --run <id> --repo <owner/name> --state-dir <dir> [--json]
-  node server/cli.ts cadence --once --job <architecture|security|instructions|hygiene> --json --repo <owner/name> --state-dir <dir>
+  node server/cli.ts cadence --once --job <architecture|security|instructions|hygiene|reflect> --json --repo <owner/name> --state-dir <dir>
   node server/cli.ts owner-feed --json --state-dir <dir> [--repo <owner/name>]
   node server/cli.ts viewer --state-dir <dir> [--run <id>] [--port <n>] [--allowed-host <authorized.ts.net>] [--base-path </prefix>]
   node server/cli.ts gates --repository <dir> --gate-sha <sha> --candidate-sha <sha> --nonce <id> --output <dir> [--runner docker|local]
@@ -706,7 +706,11 @@ async function runController(
 					signal: runtime.signal,
 					log,
 					pump,
-					scorePump,
+					scorePump: () => {
+						measurement.retry();
+
+						return scorePump();
+					},
 					durableUsage: usage.current,
 				});
 			} finally {
@@ -1813,7 +1817,7 @@ async function runMeasurementCli(
 
 			if (report.kind === "score")
 				io.stdout(
-					`${report.event.scorerId}: ${report.event.status}; ${report.event.label ?? "no label"}; score ${report.event.score ?? "unavailable"}; ${report.passing === null ? "not graded" : report.passing ? "passing measurement" : "failing measurement"}\n${report.event.reasoning}\n${report.event.familyNote}\n${report.published ? "Published" : "Publication pending"}; ${report.event.usage.tokens} measurement tokens\nOther scores queued: ${report.queuedScores}\n`,
+					`${report.event.scorerId}: ${report.event.status}; ${report.event.label ?? "no label"}; score ${report.event.score ?? "unavailable"}; ${report.passing === null ? "not graded" : report.passing ? "passing measurement" : "failing measurement"}\n${report.event.reasoning}\n${report.event.familyNote}\n${report.event.status === "scored" ? "Computed and persisted locally." : "Scoring result persisted locally."} ${report.published ? "Published" : "Publication queued for the controller pump"}; ${report.event.usage.tokens} measurement tokens\nOther scores queued: ${report.queuedScores}\n`,
 				);
 			else if (report.findings === null)
 				io.stdout(
@@ -1827,7 +1831,7 @@ async function runMeasurementCli(
 		}
 
 		return report.kind === "score"
-			? report.event.status === "scored" && report.published
+			? report.event.status === "scored"
 				? EXIT.ok
 				: EXIT.invalid
 			: report.findings === null

@@ -45,6 +45,9 @@ scorers:
     passingScore: 1
     samplingRate: 10
     includeChildren: true
+trigger:
+  k: 25
+  d: 7
 cadence:
   weeklyTokenCap: 200000
   jobs:
@@ -53,7 +56,7 @@ cadence:
       hourUtc: 3
       minuteUtc: 0
       model: openai/gpt-6.1-sol
-      maxTokens: 40000
+      maxTokens: 36000
       maxTurns: 2
       wallMs: 600000
     security:
@@ -61,7 +64,7 @@ cadence:
       hourUtc: 3
       minuteUtc: 0
       model: openai/gpt-6.1-sol
-      maxTokens: 40000
+      maxTokens: 36000
       maxTurns: 2
       wallMs: 600000
     instructions:
@@ -69,7 +72,7 @@ cadence:
       hourUtc: 3
       minuteUtc: 0
       model: openai/gpt-6.1-sol
-      maxTokens: 40000
+      maxTokens: 36000
       maxTurns: 2
       wallMs: 600000
     hygiene:
@@ -77,7 +80,15 @@ cadence:
       hourUtc: 3
       minuteUtc: 0
       model: openai/gpt-6.1-sol
-      maxTokens: 40000
+      maxTokens: 36000
+      maxTurns: 2
+      wallMs: 600000
+    reflect:
+      dayUtc: 5
+      hourUtc: 3
+      minuteUtc: 0
+      model: openai/gpt-6.1-sol
+      maxTokens: 36000
       maxTurns: 2
       wallMs: 600000
 
