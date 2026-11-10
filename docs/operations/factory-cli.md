@@ -9,7 +9,7 @@ node server/cli.ts serve --repo <owner/name> --state-dir <dir> [--issue <number>
 
 Except for `owner-feed`, `metrics`, `gates` and `viewer`, every command reads `.github/factory/WORKFLOW.md` from GitHub through `gh`, never from the local checkout. It first resolves the branch to a SHA with `gh api repos/<repo>/git/ref/heads/<branch> --jq .object.sha`, then fetches the file at that SHA with `gh api -H 'Accept: application/vnd.github.raw' repos/<repo>/contents/.github/factory/WORKFLOW.md?ref=<sha>`. Ordinary `gh` calls have a 30-second timeout. Ledger publication uses a separate 20-second job slice, with each call capped at the smaller of 5 seconds and the remaining slice. `gh` inherits the environment, including `GH_HOST`. On the VM, set `GH_HOST=github.int.exe.xyz`.
 
-`admit` makes more `gh` reads, described below. `tick`, `run`, and `serve` run the controller. They can write markers, summaries, labels, Git objects and refs, dispatch CI, open a PR, request review, and close an issue after an observed merge. They never merge or arm auto-merge. Only these controller commands launch models, inside the stage sandbox. `admit` and the controller write private state under `--state-dir`; `gates` writes its own receipt output directory. The owner feed and metrics report are read-only. The viewer reads local evidence and has one protected hold POST, which changes only the local `disabled` file. See [Review and merge a factory PR](human-review.md) for the owner procedure.
+`admit` makes more `gh` reads, described below. `tick`, `run`, and `serve` run the controller. They can write markers, summaries, labels, Git objects and refs, dispatch CI, open a PR, request review, and close an issue after an observed merge. They never merge or arm auto-merge. These commands and `cadence --once` launch models inside the stage sandbox. Cadence runs read-only maintenance and files only proposed issues; it never dispatches ticket work or labels a proposal ready. `admit` and the controller write private state under `--state-dir`; `gates` writes its own receipt output directory. The owner feed and metrics report are read-only. The viewer reads local evidence and has one protected hold POST, which changes only the local `disabled` file. See [Review and merge a factory PR](human-review.md) for the owner procedure.
 
 Errors and warnings carry only text the factory builds itself. They never quote `gh` output, an exec failure, a YAML error message, a key or value from `WORKFLOW.md` or a command-line argument. A second layer still redacts credentials in stdout, stderr and `/factory status` text. Anything shaped like `scheme://user:secret@` is printed as `scheme://<redacted>@`, and the value of a query parameter named `token`, `access_token`, `auth`, `key`, `password`, `secret`, `sig`, `signature` or `code`, in any case, is printed as `<redacted>`. In JSON output this applies to each string value before it is encoded, so it never spans two lines of one value.
 
@@ -70,10 +70,21 @@ usage error. See [Factory ticket metrics](metrics.md) for maturity, defect
 matching, exclusions, accounting and
 evidence limitations. This command writes no state and takes no action.
 
+## Maintenance one-shot
+
+```bash
+node server/cli.ts cadence --once --job architecture --json --repo giuseppecrj/pi-herdr-factorio --state-dir "$STATE"
+```
+
+`cadence --once` launches a bounded read-only model audit using the trusted workflow and the ordinary controller lock and executor. Required flags are `--once`, `--job <architecture|security|instructions|hygiene>`, `--repo` and `--state-dir`. It always prints JSON; `--json` is accepted but optional for this command. It takes no `--ref`, `--issue` or verification cap. It respects both switches, preflight, ticket reservations and the weekly maintenance token cap, then waits for settlement. It never claims or dispatches ticket work. A completed job/window is idempotent. Exit 0 means `proposed` or `no_delta`; exit 1 means a gate, audit failure or pending publication; exit 2 means invalid options or a held controller lock. Use authorized isolated fixture state, not the state owned by a running production controller.
+
+Maintenance receipts and charges live under `cadence/`, not ticket claims or ledger run rows. `accounting.maintenance` is separate, while `durableUsage.total` includes its tokens once. The ticket metric excludes maintenance. [Weekly maintenance proposals](cadence.md) documents UTC schedules, rotating coverage, state, provenance, deduplication and the native local demo.
+
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
+| `cadence` | Run one bounded read-only maintenance job with `--once --job`; file only proposed issues. |
 | `owner-feed` | Read the local OwnerFeed v1 without remote reads or writes. |
 | `metrics` | Report ticket outcomes and charged tokens; see its separate flags above. |
 | `workflow-check` | Load and validate the workflow. Print the snapshot or the error. |
@@ -87,7 +98,7 @@ evidence limitations. This command writes no state and takes no action.
 
 ## Flags
 
-The flags below describe the workflow and controller commands. `viewer` has its own flags in [Local run viewer](#local-run-viewer); `metrics` has its own flags in [Ticket outcome metrics](#ticket-outcome-metrics).
+The flags below describe the workflow and ticket-controller commands. `cadence` has its flags in [Maintenance one-shot](#maintenance-one-shot). `viewer` has its own flags in [Local run viewer](#local-run-viewer); `metrics` has its own flags in [Ticket outcome metrics](#ticket-outcome-metrics).
 
 | Flag | Commands | Required | Default | Meaning |
 | --- | --- | --- | --- | --- |
@@ -249,7 +260,7 @@ The `reload` object has these fields:
 | `executionEnabled` | boolean | Always `false`, because `status` runs no preflight. The controller's own value is in `controller.lastTick.executionEnabled`. |
 | `controller` | object | Without `--state-dir`, `state` is `unavailable` and `reason` is `pass --state-dir to read the controller lock`. With it, see below. |
 | `ledger` | object | Read-only local outbox state, pending and blocked counts, oldest age and next retry time. See below. |
-| `durableUsage` | object | Charged tokens summed once per distinct locally owned run, including ended runs. Never adds ledger rows to the same charges. Unavailable without readable state. |
+| `durableUsage` | object | Charged ticket tokens plus separate maintenance charges, counted once. Includes ended runs and a maintenance subtotal when present. Never adds ledger rows to the same charges. Unavailable without readable state. |
 | `accounting` | object | `state` is `readable`, `incomplete` or `unavailable`; `countersScope` is `process`. `runs` contains each owned run's token floor, uncertain-request count, money availability and durable attempt records. |
 | `models` | object or `null` | The model for each of `specify`, `accept`, `build` and `review`. Validate has no model. `review` is the model of the security, simplify and ultrareview seats. |
 | `seatModels` | object or `null` | `code-review`, the model the code-review seat runs: `stages.review.seats.code-review.model`, or `review` when that key is absent. It is shown beside `models.review` and never folded into it. |
@@ -531,7 +542,7 @@ node server/cli.ts run --json --repo <owner/name> --issue <number> --state-dir <
 node server/cli.ts serve --repo <owner/name> --state-dir <dir> [--issue <number>]...
 ```
 
-The three controller commands share one implementation, `Orchestrator` in `src/orchestrator.ts`. `run --issue <n>` is a tick limited to issue `n`, so a manual run passes the same switches and the same admission as polling. With `--issue`, `tick` and `serve` read, claim and write markers only for the named issues. Verification lanes use that to keep clear of the production controller.
+The three ticket-controller commands share one implementation, `Orchestrator` in `src/orchestrator.ts`. Unscoped ticks schedule due maintenance only after ticket dispatch; scoped `--issue` controllers do not start unrelated audits. The cadence one-shot shares its capacity and recovery accounting without dispatching tickets. `run --issue <n>` is a tick limited to issue `n`, so a manual run passes the same switches and the same admission as polling. With `--issue`, `tick` and `serve` read, claim and write markers only for the named issues. Verification lanes use that to keep clear of the production controller.
 
 ### Start
 

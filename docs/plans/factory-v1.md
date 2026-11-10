@@ -1241,6 +1241,10 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 - [ ] Create `src/cadence.ts`, `test/cadence.test.ts`, `skills/improve-codebase-architecture/`, `skills/audit-instructions/`, `skills/agent-loop-hygiene/`, and `docs/operations/cadence.md`.
 - [ ] Edit `src/workflow.ts`, `.github/factory/WORKFLOW.md`, `src/markers.ts`, `server/controller.ts`, `server/cli.ts`, and `skills/README.md` for weekly schedules and a bounded one-shot trigger.
+- [ ] Edit `server/sandbox.ts`, `server/sandbox/result.ts`, `src/run.ts`, `src/adapters/github.ts`, `server/provision.sh`, `src/orchestrator.ts`, `src/stages.ts`, `skills/security-review/SKILL.md`, `skills/security-review/SOURCE.md`, and their existing tests, including `test/orchestrator.test.ts`, `test/stages.test.ts`, `test/workflow.test.ts`, `test/github-adapter.test.ts`, `test/sandbox.test.ts` and `test/sandbox/**`. The coordinator widened scope to carry the non-ticket sandbox stage and receipts, share capacity and restart recovery, and adapt security's repository audit without changing diff review.
+- [ ] Permit strictly necessary type-only imports or union widenings in other `server/sandbox/*.ts` files to carry the closed sandbox-stage union, with no runtime behavior change.
+- [ ] Edit `docs/operations/factory-cli.md` and `docs/operations/sandbox.md` only to document the cadence command, read-only maintenance mounts and non-ticket receipt identity.
+- [ ] Edit only `workflowDigest` in `test/fixtures/efficiency/accept-replay.json` and `test/fixtures/efficiency/replay.json` to match the trusted workflow after its cadence section is added.
 
 **Build.**
 
