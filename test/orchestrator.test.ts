@@ -883,6 +883,7 @@ type Wire = { intercept: Exec | null };
 type WorldOptions = {
 	verification: OrchestratorInput["verification"];
 	cadence?: CadenceRunner;
+	measurement?: OrchestratorInput["measurement"];
 };
 
 function world(scope: readonly number[] | null = null, ledger?: LedgerOutbox) {
@@ -1002,6 +1003,7 @@ function world(scope: readonly number[] | null = null, ledger?: LedgerOutbox) {
 			log: (event, fields) => logs.push({ event, fields }),
 			verification: options.verification,
 			cadence: options.cadence,
+			measurement: options.measurement,
 		});
 
 	return { github, clock, store, files, executor, logs, wire, options, start };
@@ -18137,6 +18139,27 @@ describe("ledger outbox enrollment", () => {
 
 		return ctx;
 	}
+
+	it("a measurement enrollment failure cannot veto the terminal row or its outcome", async () => {
+		const dir = stateDir();
+		const outbox = fileLedgerOutbox(dir);
+		const ctx = needsInfoWorld(outbox);
+		let called = 0;
+		ctx.options.measurement = {
+			occupied: () => 0,
+			terminal() {
+				called++;
+				throw new Error("measurement storage unavailable");
+			},
+		};
+		await once(ctx.start());
+		assert.equal(called, 1);
+		assert.equal(
+			(await outbox.scan())?.[0]?.row?.row.outcome.kind,
+			"needs_info",
+		);
+		assert.ok(ctx.logs.some((entry) => entry.event === "measurement_failed"));
+	});
 
 	it("projects retained receipt facts, model identities and uncertain charges without counting aggregate children twice", async () => {
 		const dir = stateDir();

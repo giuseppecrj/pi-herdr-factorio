@@ -6,7 +6,7 @@ The controller records one public row per finished run in `ledger/runs.jsonl`, o
 
 The branch starts at a parentless root whose tree holds only an empty `ledger/runs.jsonl`. It shares no history with `main`. On GitHub the root is `959b3a4`. The four commits after it carry a `Factory-Probe: ledger-branch` trailer and an empty file. They are the 2026-11-04 proxy probe, kept as ordinary history.
 
-Each later commit appends exactly one line and names the observed tip as its only parent. Its message carries `Factory-Run: <runId>` and `Factory-Row: <row digest>`. The ref moves only by `PATCH ... force:false`.
+Each later commit appends exactly one line to a stream and names the observed tip as its only parent. A terminal-row commit carries `Factory-Run: <runId>` and `Factory-Row: <row digest>`. A score-event commit carries `Factory-Score: <eventId>` and `Factory-Event: <event digest>`. The ref moves only by `PATCH ... force:false`.
 
 Ruleset `26531115`, "Factory ledger append-only", forbids deletion and non-fast-forward updates on `refs/heads/factory/ledger`. The controller does not depend on it. It checks lineage itself before every append.
 
@@ -99,6 +99,18 @@ Every new terminal snapshot and row uses version 5. It equals version 4 except t
 Owner validation records H as `publication.candidateSha` through a temporary controller-owned pin, so the existing landing check still binds the merged head to that generation. Versions 1–4 parse and re-freeze byte-identically, without adding an authorship field. Their absence of that field is not a claim about owner authorship.
 
 An older controller reports the first version 5 line as `unknown_version` and blocks appends with `ledger_version_unsupported`, rather than misreading it as a corrupt version 4 row. Roll forward only. Never rewrite older rows or lower their version to resume appends.
+
+## Score stream
+
+F12b adds `ledger/scores.jsonl` on the same `factory/ledger` branch. The original empty root and all v1–v5 terminal row bytes stay unchanged. No v6 terminal row is needed. Each writer uses the current base tree, so a run append preserves scores and a score append preserves runs.
+
+A score event contains `id`, `scoredRunId`, `scorerId`, `scorerDigest`, `inputDigest`, `includeChildren`, `label`, `score`, `passingScore`, bounded `reasoning`, exact `judgeModel`, `judgeFamily`, `familyNote`, `usage`, `supersedes`, `at`, `status` and `voided`. `usage` holds tokens, wall milliseconds and exactness. `status` is `scored`, `failed` or `voided`. Failed or voided events have no numeric score or declared label; `voided` is `scorer_touched` only for a void. Missing or invalid judge output is never promoted to a pass.
+
+A re-score appends a new event pointing at the previous event for that run and scorer. `latestScores` projects the latest event; the stream retains both. Passing is `score >= passingScore` from that event. It is a measurement only and never changes a terminal outcome or overrides a hard-check veto.
+
+The controller's private score outbox is `measure/score-outbox/<eventId>/event.json`. Event bytes are write-once. `published.json` records the verified public tip and line; `retry.json` stores exponential backoff and blocked status. The stream's separate `anchor.json` records its verified prefix and lineage, and per-event `adoption.json` resumes bounded lineage walks. Publication uses the existing Git Data transport, hash checks, empty-root validation, event-ID idempotency, prefix checks and shared-ref fast-forward retries. A moving run-ledger head is reread, never force-pushed. A mismatching event, supersession chain or prefix blocks publication without rewriting history.
+
+Score publication runs after the judge, with pending events also pumped by the controller's existing outbox path. A pump uses a 20-second transport slice and 5-second calls. Publication retry never invokes a model. Explain writes no ledger stream. Measurement allowances and native receipts stay separately accounted under `measure/`, outside ticket claims, run rows and F12a cohorts. See [Measure runs](improvement.md) for trusted configuration, commands, privacy and limits.
 
 ## Private state
 

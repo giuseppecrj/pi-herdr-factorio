@@ -170,6 +170,7 @@ import type {
 	StageResult,
 	StageRunSettings,
 	StageUsage,
+	ChildRunSummary,
 	StderrRecord,
 } from "./sandbox/result.ts";
 import {
@@ -253,6 +254,7 @@ export type DraftCheckContext = Readonly<{
 
 export type StageRunInput = {
 	readonly runId: Digest;
+	readonly measurementIdentity?: string;
 	readonly stage: ModelStage;
 	readonly attempt: number;
 	readonly prompt: string;
@@ -317,6 +319,7 @@ class Ledger {
 	turns = 0;
 	efficiency = { ...unknownEfficiency() };
 	readonly byModel = new Map<string, number>();
+	readonly childSummaries: ChildRunSummary[] = [];
 
 	add(byModel: ReadonlyMap<string, number>): void {
 		for (const [model, tokens] of byModel) {
@@ -580,6 +583,19 @@ async function runSession(
 				}
 
 				ledger.children += usage.total;
+				ledger.childSummaries.push({
+					id: digestOf(
+						JSON.stringify([
+							input.runId,
+							input.stage,
+							input.attempt,
+							session,
+							sessionFile,
+						]),
+					),
+					tokens: usage.total,
+					byModel: Object.fromEntries(usage.byModel),
+				});
 				ledger.add(usage.byModel);
 
 				if (!stage.checkpoint()) stage.alert = "crashed";
@@ -1219,6 +1235,7 @@ export async function runStage(
 		const record: StageReceipt & { diagnostic?: AcceptDiagnostic } = withFamily(
 			{
 				version: 1,
+				childSummaries: ledger.childSummaries,
 				runId: input.runId,
 				stage: input.stage,
 				attempt: input.attempt,
@@ -1264,9 +1281,14 @@ export async function runStage(
 
 		if (diagnostic !== undefined) complete.diagnostic = diagnostic;
 
-		const written = await host.writeReceipt(complete).catch(() => false);
+		const owned =
+			input.measurementIdentity === undefined
+				? complete
+				: { ...complete, measurementIdentity: input.measurementIdentity };
 
-		return stageResult(written ? complete : { ...complete, outcome: CRASHED });
+		const written = await host.writeReceipt(owned).catch(() => false);
+
+		return stageResult(written ? owned : { ...owned, outcome: CRASHED });
 	};
 
 	if ((saved !== null && restored === null) || !checkpoint())
@@ -4794,7 +4816,37 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 
 			if (
 				input.stage === "maintain" &&
-				(input.maintenance === undefined || input.tools.length !== 0)
+				((input.maintenance === undefined && input.measurement === undefined) ||
+					input.tools.length !== 0 ||
+					(input.skills.length !== 0 && input.measurement !== undefined))
+			)
+				return {
+					kind: "unavailable",
+					stage: input.stage,
+					reason: "sandbox_unavailable",
+				};
+
+			if (
+				input.measurement !== undefined &&
+				(input.stage !== "maintain" ||
+					!/^[a-f0-9]{64}$/.test(input.measurement.scoredRunId) ||
+					!Number.isSafeInteger(input.measurement.seq) ||
+					input.measurement.seq < 1)
+			)
+				return {
+					kind: "unavailable",
+					stage: input.stage,
+					reason: "sandbox_unavailable",
+				};
+
+			const measurementIdentity =
+				input.measurement === undefined
+					? undefined
+					: `measure/${input.measurement.kind}/${input.measurement.scoredRunId}/${input.measurement.seq}`;
+
+			if (
+				measurementIdentity !== undefined &&
+				digestOf(measurementIdentity) !== input.runId
 			)
 				return {
 					kind: "unavailable",
@@ -4803,23 +4855,32 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 				};
 
 			const stageDir =
-				input.stage === "maintain" && input.maintenance !== undefined
+				input.measurement !== undefined
 					? join(
 							config.stateDir,
-							"cadence",
-							input.maintenance.job,
-							"executions",
-							String(input.maintenance.windowStart),
+							"measure",
+							input.measurement.kind,
+							input.measurement.scoredRunId,
+							String(input.measurement.seq),
 							"runtime",
 						)
-					: freshDir(
-							join(
+					: input.stage === "maintain" && input.maintenance !== undefined
+						? join(
 								config.stateDir,
-								"stages",
-								input.runId,
-								stageName(input.stage, input.attempt, input.round),
-							),
-						);
+								"cadence",
+								input.maintenance.job,
+								"executions",
+								String(input.maintenance.windowStart),
+								"runtime",
+							)
+						: freshDir(
+								join(
+									config.stateDir,
+									"stages",
+									input.runId,
+									stageName(input.stage, input.attempt, input.round),
+								),
+							);
 
 			if (input.stage === "maintain" && existsSync(stageDir))
 				return {
@@ -4845,6 +4906,7 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 					stage: input.stage,
 					attempt: input.attempt,
 					prompt,
+					measurementIdentity,
 					source: input.source,
 					draftCheck,
 					settings: input.settings,

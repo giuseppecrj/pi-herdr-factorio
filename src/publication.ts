@@ -360,6 +360,7 @@ export async function pinOwnerCandidate(
 const LEDGER_BRANCH = "factory/ledger";
 
 export const LEDGER_FILE = "ledger/runs.jsonl";
+export const SCORE_FILE = "ledger/scores.jsonl";
 
 export type LedgerAdvance =
 	| { readonly kind: "advanced"; readonly tip: GitSha }
@@ -769,11 +770,12 @@ export async function createLedgerChild(
 	bytes: Uint8Array,
 	date: string,
 	message: string,
+	file: typeof LEDGER_FILE | typeof SCORE_FILE = LEDGER_FILE,
 ): Promise<LedgerCommit> {
 	if (!message.endsWith("\n")) throw new PublicationError("invalid_message");
 
 	const child = await tree(api, parent.tree, [
-		{ path: LEDGER_FILE, mode: "100644", bytes },
+		{ path: file, mode: "100644", bytes },
 	]);
 
 	const sha = await commit(api, child, [parent.sha], date, message);
@@ -805,6 +807,7 @@ export async function readLedgerCommit(
 export async function readLedgerFile(
 	api: GitHubPublicationApi,
 	root: GitSha,
+	file: typeof LEDGER_FILE | typeof SCORE_FILE = LEDGER_FILE,
 ): Promise<LedgerFile> {
 	const value = objectOf(
 		await api.request("GET", `git/trees/${root}?recursive=1`),
@@ -827,7 +830,7 @@ export async function readLedgerFile(
 		if (path === null) throw new PublicationError("malformed_tree");
 		paths.push(path);
 
-		if (path !== LEDGER_FILE) continue;
+		if (path !== file) continue;
 
 		if (
 			textOf(fieldOf(item, "type")) !== "blob" ||
@@ -837,7 +840,16 @@ export async function readLedgerFile(
 		blob = shaOf(fieldOf(item, "sha"));
 	}
 
-	if (blob === null) throw new PublicationError("ledger_file_missing");
+	if (blob === null) {
+		if (file === SCORE_FILE)
+			return {
+				blob: gitObjectSha("blob", new Uint8Array()),
+				bytes: Buffer.alloc(0),
+				paths: paths.sort(),
+			};
+		throw new PublicationError("ledger_file_missing");
+	}
+
 	const content = objectOf(await api.request("GET", `git/blobs/${blob}`));
 
 	if (content === null) throw new PublicationError("object_missing");

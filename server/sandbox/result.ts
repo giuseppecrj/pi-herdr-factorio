@@ -325,6 +325,12 @@ export type OutputRecord = {
 	readonly kept: number;
 };
 
+export type ChildRunSummary = {
+	readonly id: Digest;
+	readonly tokens: number;
+	readonly byModel: Readonly<Record<string, number>>;
+};
+
 /**
  * The host-side record of one stage attempt, written under the run's stage
  * directory and never into a marker. It holds only numbers, enums, model
@@ -333,6 +339,8 @@ export type OutputRecord = {
  */
 export type StageReceipt = {
 	readonly version: 1;
+	readonly measurementIdentity?: string;
+	readonly childSummaries?: readonly ChildRunSummary[];
 	readonly runId: Digest;
 	readonly stage: Stage;
 	readonly attempt: number;

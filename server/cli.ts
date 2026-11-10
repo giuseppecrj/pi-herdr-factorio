@@ -63,6 +63,8 @@ import {
 	startDurableUsage,
 	durableUsageOf,
 	controllerCadence,
+	controllerMeasure,
+	controllerMeasurements,
 } from "./controller.ts";
 import { readOwnerFeed } from "../src/feed.ts";
 import { isCadenceJob } from "../src/cadence.ts";
@@ -81,9 +83,11 @@ import {
 	textOf,
 } from "./sandbox/json.ts";
 import { parseLedger, ledgerApiOf } from "../src/ledger.ts";
-import { digestOf } from "../src/run.ts";
+import { digestOf, isDigest } from "../src/run.ts";
 import {
 	computeMetrics,
+	measurementPrimary,
+	primaryMetricText,
 	excludedRunReason,
 	METRIC_POLICY,
 	type Interventions,
@@ -110,6 +114,8 @@ export const USAGE = `Usage:
   node server/cli.ts replay check --json [--corpus <dir>] [--main-sha <sha>] [--previous-sha <sha>] [--candidate-sha <sha>] [--case <id> --production-state-dir <dir> --budget-file <file>]
   node server/cli.ts replay report --json --case <id> --previous-row <file> --candidate-row <file> --previous-record <file> --candidate-record <file> --previous-sha <sha> --candidate-sha <sha> [--corpus <dir>] [--previous-assets <digest> --candidate-assets <digest>]
   node server/cli.ts metrics --json --repo <owner/name> [--ledger-file <path>] [--state-dir <dir>] [--now <instant>] [--cohort production] [--offline] [--intervention-file <fixture>]
+  node server/cli.ts score --run <id> --repo <owner/name> --state-dir <dir> [--scorer <id>] [--json]
+  node server/cli.ts explain --run <id> --repo <owner/name> --state-dir <dir> [--json]
   node server/cli.ts cadence --once --job <architecture|security|instructions|hygiene> --json --repo <owner/name> --state-dir <dir>
   node server/cli.ts owner-feed --json --state-dir <dir> [--repo <owner/name>]
   node server/cli.ts viewer --state-dir <dir> [--run <id>] [--port <n>] [--allowed-host <authorized.ts.net>] [--base-path </prefix>]
@@ -605,6 +611,15 @@ async function runController(
 					})
 				: undefined;
 
+		const measurement = controllerMeasurements({
+			stateDir: parsed.stateDir,
+			repo: parsed.repo,
+			exec: io.exec,
+			executor,
+			log,
+			signal: runtime.signal,
+		});
+
 		const orchestrator = new Orchestrator({
 			exec: io.exec,
 			env: io.env,
@@ -613,6 +628,7 @@ async function runController(
 			files: fileRunFiles(parsed.stateDir, runtime.policySource),
 			executor,
 			cadence,
+			measurement,
 			clock,
 			scope: parsed.scope,
 			log,
@@ -684,7 +700,12 @@ async function runController(
 					durableUsage: usage.current,
 				});
 			} finally {
-				await Promise.all([metrics.stop(), usage.stop(), cadence?.stop()]);
+				await Promise.all([
+					metrics.stop(),
+					usage.stop(),
+					cadence?.stop(),
+					measurement.stop(),
+				]);
 			}
 
 			return EXIT.ok;
@@ -709,6 +730,7 @@ async function runController(
 			log("status_unwritable", {});
 		}
 
+		await measurement.stop();
 		await pump();
 		await cadence?.stop();
 		io.stdout(json(report));
@@ -1676,6 +1698,146 @@ async function runCadenceCli(
 	);
 }
 
+async function runMeasurementCli(
+	kind: "score" | "explain",
+	argv: readonly string[],
+	io: CliIo,
+): Promise<number> {
+	let parsed;
+
+	try {
+		parsed = parseArgs({
+			args: [...argv],
+			strict: true,
+			allowPositionals: false,
+			options: {
+				run: { type: "string" },
+				repo: { type: "string" },
+				"state-dir": { type: "string" },
+				scorer: { type: "string" },
+				json: { type: "boolean" },
+			},
+		});
+	} catch {
+		io.stderr(`${USAGE}\n`);
+
+		return EXIT.usage;
+	}
+
+	const v = parsed.values;
+
+	if (
+		v.run === undefined ||
+		!isDigest(v.run) ||
+		v.repo === undefined ||
+		!isRepoSlug(v.repo) ||
+		!FACTORY_REPOSITORIES.includes(v.repo) ||
+		!v["state-dir"] ||
+		(kind === "explain" && v.scorer !== undefined)
+	) {
+		io.stderr(`${kind} requires --run --repo --state-dir\n${USAGE}\n`);
+
+		return EXIT.usage;
+	}
+
+	const stateDir = resolve(v["state-dir"]);
+	const primary = measurementPrimary(stateDir, v.repo);
+	const runtime = io.runtime ?? realRuntime();
+	const log = lineLog(io.stderr, () => runtime.clock.now());
+	let release: (() => Promise<void>) | null = null;
+
+	try {
+		if (!(await isPrivateDirectory(stateDir)))
+			throw new Error("state_unavailable");
+
+		const acquired = await acquireLock({
+			stateDir,
+			procs: runtime.procs,
+			now: () => runtime.clock.now(),
+		});
+
+		if (acquired.kind !== "acquired")
+			throw new Error("controller_running_or_lock_unavailable");
+		release = () => acquired.lock.release();
+
+		const load = await loadWorkflow({
+			exec: io.exec,
+			repo: v.repo,
+			ref: TRUSTED_REF,
+			env: io.env,
+		});
+
+		if (load.kind !== "loaded") throw new Error("trusted_workflow_unavailable");
+
+		if (
+			kind === "score" &&
+			(
+				await checkIdentity(
+					new GitHubTicketAdapter({ exec: io.exec, repo: v.repo }),
+				)
+			).kind !== "ok"
+		)
+			throw new Error("identity_unavailable");
+		const executor = runtime.executor({ stateDir, exec: io.exec, log });
+
+		if (!(await executor.reconciled()))
+			throw new Error("sandbox_recovery_unavailable");
+
+		const report = await controllerMeasure({
+			stateDir,
+			repo: v.repo,
+			exec: io.exec,
+			executor,
+			log,
+			signal: runtime.signal,
+			kind,
+			runId: v.run,
+			config: load.snapshot.config,
+			scorerId: v.scorer,
+		});
+
+		if (v.json) io.stdout(`${JSON.stringify(report, null, 2)}\n`);
+		else {
+			io.stdout(`${primaryMetricText(report.primary)}\n`);
+
+			if (report.kind === "score")
+				io.stdout(
+					`${report.event.scorerId}: ${report.event.status}; ${report.event.label ?? "no label"}; score ${report.event.score ?? "unavailable"}; ${report.passing === null ? "not graded" : report.passing ? "passing measurement" : "failing measurement"}\n${report.event.reasoning}\n${report.event.familyNote}\n${report.published ? "Published" : "Publication pending"}; ${report.event.usage.tokens} measurement tokens\n`,
+				);
+			else if (report.findings === null)
+				io.stdout(
+					`explain: ${report.reason}; ${report.usage.tokens} measurement tokens\n`,
+				);
+			else
+				for (const finding of report.findings)
+					io.stdout(
+						`${finding.text}\nEvidence: ${finding.citations.join(", ")}\n`,
+					);
+		}
+
+		return report.kind === "score"
+			? report.event.status === "scored" && report.published
+				? EXIT.ok
+				: EXIT.invalid
+			: report.findings === null
+				? EXIT.invalid
+				: EXIT.ok;
+	} catch (error) {
+		const reason =
+			error instanceof Error ? error.message : "measurement_unavailable";
+
+		if (v.json)
+			io.stdout(
+				`${JSON.stringify({ primary, kind, error: reason }, null, 2)}\n`,
+			);
+		else io.stdout(`${primaryMetricText(primary)}\n${kind}: ${reason}\n`);
+
+		return EXIT.invalid;
+	} finally {
+		await release?.();
+	}
+}
+
 export async function runCli(
 	argv: readonly string[],
 	caller: CliIo,
@@ -1684,6 +1846,9 @@ export async function runCli(
 		...caller,
 		stderr: (text) => caller.stderr(redactCredentials(text)),
 	};
+
+	if (argv[0] === "score" || argv[0] === "explain")
+		return runMeasurementCli(argv[0], argv.slice(1), io);
 
 	if (argv[0] === "cadence") return runCadenceCli(argv.slice(1), io);
 

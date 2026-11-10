@@ -1621,6 +1621,15 @@ describe("runStage", () => {
 		});
 		assert.equal(files.length, 1);
 		assert.match(files[0] ?? "", /\/sessions\/.*\.jsonl$/);
+		assert.equal(result.receipt.childSummaries?.length, 1);
+		assert.equal(result.receipt.childSummaries?.[0]?.tokens, 1052);
+		assert.deepEqual(result.receipt.childSummaries?.[0]?.byModel, {
+			"openai/gpt-6.1-sol": 1052,
+		});
+		assert.doesNotMatch(
+			JSON.stringify(result.receipt.childSummaries),
+			/sessions|jsonl/,
+		);
 	});
 
 	it("answers every dialog extension request with a cancel and ignores fire-and-forget ones", async () => {
