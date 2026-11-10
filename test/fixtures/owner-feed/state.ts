@@ -101,16 +101,8 @@ export async function addRun(
 	return runId;
 }
 
-export async function ownerState(root: string) {
-	await mkdir(join(root, "claims"), { mode: 0o700, recursive: true });
-	await save(root, ["status.json"], {
-		repo,
-		at: new Date(now - 12_000).toISOString(),
-		corrupt: [{ issue: 99, defect: "duplicate_seq" }],
-	});
-	await save(root, ["metrics.json"], {
-		durableUsage: { kind: "lower_bound", total: 5200000 },
-	});
+/** A published PR that is certified and waiting for the owner's review. */
+function waitingBook() {
 	const refreshing = candidateLifecycleFixture();
 	assert.ok(refreshing.kind === "selected");
 
@@ -137,27 +129,50 @@ export async function ownerState(root: string) {
 
 	const book = parseCandidateState(JSON.parse(JSON.stringify(ready)));
 	assert.ok(book !== null);
-	const projection = candidateProjection(book);
 
-	const waiting = await addRun(root, 1, projection.status, {
-		title: "Let the owner review the dashboard",
+	return { book, projection: candidateProjection(book) };
+}
+
+/**
+ * A run whose certified PR waits for the owner, which is the pr_review kind.
+ * The candidate book is pinned to issue 1, so the run must be issue 1.
+ */
+export async function addWaitingRun(root: string, title: string) {
+	const { book, projection } = waitingBook();
+
+	return addRun(root, 1, projection.status, {
+		title,
 		stage: projection.stage,
 		enteredAt: now - 4 * 86_400_000,
 		handoff: JSON.parse(JSON.stringify(book)),
 	});
+}
 
-	await addRun(root, 2, "blocked", {
-		title: "Check the saved input",
-		enteredAt: now - 7 * 3_600_000,
-	});
-	await addRun(root, 3, "budget_exhausted", {
-		title: "Stop when the token budget is used",
+/** A run that continues an answered question, which is the question_answered kind. */
+export async function addAnsweredRun(
+	root: string,
+	issue: number,
+	title: string,
+) {
+	const runId = await addRun(root, issue, "running", {
+		title,
+		stage: "specify",
+		eventId: "2",
 	});
 
-	const failed = await addRun(root, 4, "failed", {
-		title: "Review a change that is too large",
-		stage: "land",
+	await save(root, ["links", `${runId}.json`], {
+		version: 1,
+		prevRunId: runIdOf({ repo, issue, eventId: "1" }),
+		questionsDigest: digestOf("questions"),
+		answersDigest: digestOf("answers"),
 	});
+
+	return runId;
+}
+
+/** A run the controller stopped with a recorded failure, which is the failed kind. */
+export async function addFailedRun(root: string, issue: number, title: string) {
+	const failed = await addRun(root, issue, "failed", { title, stage: "land" });
 
 	await save(root, ["ledger", failed, "terminal.json"], {
 		v: 5,
@@ -180,6 +195,49 @@ export async function ownerState(root: string) {
 			},
 		},
 	});
+
+	return failed;
+}
+
+/** The minimal controller state a feed read needs, with no runs. */
+export async function emptyState(root: string) {
+	await mkdir(join(root, "claims"), { mode: 0o700, recursive: true });
+	await save(root, ["status.json"], {
+		repo,
+		at: new Date(now - 12_000).toISOString(),
+	});
+}
+
+export async function ownerState(root: string) {
+	await mkdir(join(root, "claims"), { mode: 0o700, recursive: true });
+	await save(root, ["status.json"], {
+		repo,
+		at: new Date(now - 12_000).toISOString(),
+		corrupt: [{ issue: 99, defect: "duplicate_seq" }],
+	});
+	await save(root, ["metrics.json"], {
+		durableUsage: { kind: "lower_bound", total: 5200000 },
+	});
+
+	const waiting = await addWaitingRun(
+		root,
+		"Let the owner review the dashboard",
+	);
+
+	await addRun(root, 2, "blocked", {
+		title: "Check the saved input",
+		enteredAt: now - 7 * 3_600_000,
+	});
+	await addRun(root, 3, "budget_exhausted", {
+		title: "Stop when the token budget is used",
+	});
+
+	const failed = await addFailedRun(
+		root,
+		4,
+		"Review a change that is too large",
+	);
+
 	await addRun(root, 5, "running", {
 		title: "Build the next small feature",
 		stage: "build",

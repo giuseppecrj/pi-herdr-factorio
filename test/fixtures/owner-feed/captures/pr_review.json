@@ -1,0 +1,61 @@
+{
+	"version": 1,
+	"repo": "giuseppecrj/pi-herdr-factorio",
+	"at": 1794247200000,
+	"controller": {
+		"state": "stopped",
+		"lastTick": "2026-11-09T17:59:48.000Z",
+		"localSwitch": "enabled"
+	},
+	"durableUsage": {
+		"kind": "unavailable",
+		"total": null
+	},
+	"entries": [
+		{
+			"issue": 1,
+			"eventId": "1",
+			"stage": "land",
+			"since": 1793901600000,
+			"terminal": false,
+			"kind": "pr_review",
+			"title": "Let the owner review the dashboard",
+			"status": "waiting",
+			"stale": true,
+			"runId": "6d8926d034d0ab89841f99925a1295e43f02d47243b565b80ad17f9ed7f581dc",
+			"issueUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/issues/1",
+			"prUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/pull/5",
+			"ageMs": 345600000,
+			"reason": null,
+			"group": "needs_you",
+			"round": 0,
+			"tokens": 40,
+			"cap": 800000,
+			"ci": "Passed",
+			"failure": null,
+			"notProven": ["The saved checks and review cannot be verified here."],
+			"steps": []
+		}
+	],
+	"counts": {
+		"question_asked": 0,
+		"question_answered": 0,
+		"spec_review": 0,
+		"pr_review": 1,
+		"blocked": 0,
+		"budget": 0,
+		"failed": 0
+	},
+	"workingRunCount": 0,
+	"unreadable": [],
+	"gaps": [],
+	"metrics": {
+		"computedAt": null,
+		"stale": false,
+		"status": "Pending",
+		"share": null,
+		"numerator": null,
+		"denominator": null,
+		"tokensPerCleanLanding": null
+	}
+}

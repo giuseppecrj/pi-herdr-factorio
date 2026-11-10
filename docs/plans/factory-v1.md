@@ -6,7 +6,7 @@ Keep GitHub writes in the controller, model execution in a sandbox, and required
 Implement build-order units 4 through 13 in this order.
 `F04a`, `F04b`, `F04c`, `F05`, `F06a`, `F06b`, `F07a`, `F07b`, `F07c`, `F07d`, `F08`, `F09a`, `F10b`, `F09b`, `F10c`, `F10`, `F12a`, `F09c`, `F11`, `F12`, `F13`.
 `F07d` is an operator tool, build-order row 7d, not a runtime stage.
-`F09d` is an optional research unit after `F09c`. It ships a decision memo and a throwaway prototype, not product code, and blocks nothing.
+`F09d` is an optional docs unit after `F09c`. The owner put the owner UI in a Factory tab in Shep (R25), so `F09d` ships only a decision record and screen sketches as inputs for Shep. It ships no product code and blocks nothing.
 Treat units 0 through 3 as historical prototype evidence, not work to repeat.
 
 ## How to read this
@@ -1175,58 +1175,54 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [ ] Record the exact-head verdict and complete Bugbot triage after the notify prototype passes. The verdicts exist (Opus code review and verify-1, Fable design review, Opus review of #694), but no Bugbot triage is recorded, so this is not met.
 - [ ] Apply the patch-id rule in `playbooks/shipping.md`. Hand `F09c` to the owner on a clean verdict and a passing `check`. After the owner's merge, branch the next PR from the new `main`. The owner merged #686 as `94dc0a9` and #694 as `0060ca6` with `--admin` at his word, but no patch-id check is recorded for either.
 
-## Investigate a factorio iOS app (F09d)
+## Supply the Factory tab inputs for Shep (F09d)
 
-**Depends on.** F09c. This unit is optional and blocks nothing. It writes only `docs/prototypes/ios-app/`, so it may run beside later code units. Its prototype decodes real F09c feed output. This is research and prototype work only, and no product code ships.
+**Depends on.** F09c. This unit is optional and blocks nothing. It writes only `docs/prototypes/ios-app/`, so it may run beside later code units. The owner decided that the owner UI is a Factory tab in Shep v3, beside Chats (Shep R25, in the comments on #714, #716 and #719). Factorio ships no app of its own. This is research and docs work only, and no product code ships. The OwnerFeed contract and its captures already exist in `docs/operations/owner-feed.md` and `test/fixtures/owner-feed/captures/`, so this unit points at them and does not copy them.
 
 **Files.**
 
-- [ ] Create `docs/prototypes/ios-app/` with `decision.md`, `screens.md`, `feed-contract.md`, `shep-lessons.md`, `apple-setup.md`, `fixtures/`, and a throwaway Swift package in `model/`.
-- [ ] Edit nothing outside `docs/prototypes/ios-app/`. Make no change to the shep repository.
+- [ ] Create `docs/prototypes/ios-app/` with `decision.md` and `screens.md`. The directory keeps its name so earlier references still resolve. It holds inputs for Shep, not an app.
+- [ ] Edit nothing outside `docs/prototypes/ios-app/`. Make no change to the shep repository. Write no `apple-setup.md`, no `shep-lessons.md` and no Swift package, because Shep owns the Apple setup, the bundle ID and the client code.
 
 **Build.**
 
-- [ ] Write `decision.md`. Compare a dedicated new app, a Factory section in Shep, and F09c's installable dashboard on fit to the job, one-time owner actions, per-change cost, push, and inbox. Name the dedicated app as the current lean and state what would change it.
-- [ ] Write `screens.md` with three sketches. Home orders runs by what needs the owner, with working runs as the feed's working-run count. Run detail shows status, stages, repairs, and tokens against caps, with buttons that open GitHub. Notification rules push only owner decisions, cap each push at 100 words, and suppress pushes for a run while the owner is viewing it.
-- [ ] Write `feed-contract.md`. Describe how the app reads F09c's `OwnerFeed` v1, which fields it needs, including the working-run count, and how it treats unknown fields and a newer version. Every action opens GitHub and none calls the factory.
-- [ ] Write `shep-lessons.md` with the Shep practices that transfer as copied code or rules, not a shared package. Include seeding without a push, suppression while viewing, the protocol document as the contract, and a fake backend by default.
-- [ ] Write `apple-setup.md` with the owner's Apple steps and costs. Cover the bundle ID, the Push capability, the App Store Connect record, internal TestFlight testers, APNs key scope, and where a push sender may run.
-- [ ] Capture real feed output into `fixtures/`. Run the F09c controller on `pi-factorio` through the boot recipe with fixture runs in each attention kind and at least one working run, and save redacted `owner-feed --json` output.
-- [ ] Build a throwaway SwiftUI or ShepKit-style model in `model/` on a machine with Xcode. Decode every fixture, order Home, and apply the notification rules in Swift Testing cases. Record the Xcode and Swift versions. The model never becomes product code.
-- [ ] Record the open exposure question in `decision.md`. Name the choices, such as an exe.dev VM-to-VM integration, the exe.dev HTTPS proxy, and a relay on another VM, and leave the choice to the owner. Take no Apple account action, build no TestFlight release, and run no VM-to-VM check.
+- [ ] Write `decision.md`. Record that the app choice is made, as a Factory tab in Shep v3 (R25). Record what that retires, which is the dedicated app, a separate bundle ID, an App Store Connect record, a TestFlight release and an APNs key for Factorio. Record the two linked decisions. The viewer stays on loopback and the Shep bridge reads the feed locally (#714, option B). The bridge sends every push and the controller never calls `apns.int` (#716).
+- [ ] Write `screens.md` with two sketches. Home orders runs by what needs the owner, with working runs as the feed's working-run count. Run detail shows status, stages, repairs, and tokens against caps, with buttons that open GitHub. State the push rule from `docs/operations/owner-feed.md`. The first read seeds without a push. A new owner decision sends a needs-you alert, and a newly failed run sends a quieter failed alert. Nothing pushes for a run on screen. There is one collapse key per `repo` and `issue`. The title is at most 64 bytes and the body at most 256 bytes, in UTF-8 bytes, trimmed on a character boundary.
+- [ ] Link the feed contract. State that Shep ignores unknown fields and refuses a newer `version` with a notice. State that every action opens GitHub and none calls the factory. Link the generated captures in `test/fixtures/owner-feed/captures/` as the fixtures, and do not copy them.
+- [ ] Record the limits of those captures in `decision.md`. They come from synthetic fixture state through the real `owner-feed --json` process, and `spec_review` has none because v1 never emits it. A capture from a live controller on the exmach VM waits for that controller and the owner's go-ahead. Take no VM action here.
 
 **You see.**
 
-- [ ] Save `decision.md` with a recommendation, the three screen sketches, and a Swift Testing run that decodes real F09c fixtures.
+- [ ] Save `decision.md` with the recorded decision and `screens.md` with two sketches that cite the captures by file name.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Run the one Swift Testing suite in `model/` against F09c's captured feeds on the Xcode machine and save its output in `swift-tests.log`. Run `npm run check` to show the factorio code is unchanged and green.
-- [ ] Have an independent reviewer read the five memos against the captured fixtures. Save the review in `memo-review.md`.
+- [ ] Run `npm run check` to show the factorio code is unchanged and green, including the feed contract and capture tests in `test/feed.test.ts`.
+- [ ] Have an independent reviewer read `decision.md` and `screens.md` against `docs/operations/owner-feed.md` and the captures. Save the review in `memo-review.md`.
 
-**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, satisfied by the scoped adaptation in Appendix C R10 item 11. No lane runs on the VM. Each lane is a Swift Testing case, the memo review, or a local scope check.
+**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, satisfied by the scoped adaptation in Appendix C R10 item 11. No lane runs on the VM. Each lane is a command, a test case, the memo review, or a local scope check.
 
 - [ ] Lane 1. Satisfied by the scoped adaptation. Run `npm run check` on trunk and head. Save `check-trunk-head.log`. Pass when both pass.
-- [ ] Lane 2. Satisfied by the scoped adaptation. The Swift suite decodes every captured feed. Save `decode.log`. Pass when every entry decodes and none is dropped.
-- [ ] Lane 3. Satisfied by the scoped adaptation. The Swift suite decodes a copy with an unknown field and a copy with `v` set to 2. Save `decode-versions.log`. Pass when the model ignores the unknown field and refuses version 2 with a visible error.
-- [ ] Lane 4. Satisfied by the scoped adaptation. The Swift suite orders Home from a captured feed. Save `home-order.json`. Pass when runs that wait on the owner come first, then blocked, budget, and failed runs, and working runs appear only as the feed's working-run count.
-- [ ] Lane 5. Satisfied by the scoped adaptation. The Swift suite applies the notification rules to two consecutive captures. Save `push-diff.json`. Pass when the first capture seeds without a push, the second pushes only new owner decisions, and a repeat pushes nothing.
-- [ ] Lane 6. Satisfied by the scoped adaptation. The Swift suite counts the words in every generated push. Save `push-words.json`. Pass when each push has 100 words or fewer and carries no issue body or model text.
-- [ ] Lane 7. Satisfied by the scoped adaptation. The Swift suite marks one run as on screen while its entry changes. Save `push-suppressed.json`. Pass when that run produces no push and other runs still do.
-- [ ] Lane 8. Satisfied by the scoped adaptation. The Swift suite renders each captured title, including a fixture title with Markdown and HTML. Save `title-plain.log`. Pass when every title renders as plain text.
-- [ ] Lane 9. Satisfied by the scoped adaptation. Read the independent memo review. Save `memo-review.md`. Pass when every memo claim about `OwnerFeed` v1 matches the captured fixtures and the exposure question is left to the owner.
+- [ ] Lane 2. Satisfied by the scoped adaptation. Run the feed test that validates every capture as v1. Save `decode.log`. Pass when every capture is a valid v1 feed and the captures cover every attention kind except `spec_review`.
+- [ ] Lane 3. Satisfied by the scoped adaptation. Run the feed test that adds an unknown field to a capture and then sets `version` to 2. Save `decode-versions.log`. Pass when the unknown field is accepted and version 2 is refused.
+- [ ] Lane 4. Satisfied by the scoped adaptation. Regenerate the captures with `node --experimental-strip-types test/fixtures/owner-feed/capture.ts`, which formats its output with Biome, and run `git diff --exit-code test/fixtures/owner-feed/captures`. Save `captures-regenerated.log`. Pass when the diff is empty.
+- [ ] Lane 5. Satisfied by the scoped adaptation. Read `screens.md` against `test/fixtures/owner-feed/feed-v1.json`. Save `home-order.json`. Pass when the sketch groups runs that wait on the owner first, then failed runs, and shows working runs only as the feed's working-run count. The array in the golden is ordered by `since`, then issue, so the sketch must not take screen order from the array.
+- [ ] Lane 6. Satisfied by the scoped adaptation. Search `docs/prototypes/ios-app/` and `docs/operations/owner-feed.md` for the push limits. Save `push-rule.log`. Pass when each states 64 bytes and 256 bytes in UTF-8, none states a word limit, and none carries issue body or model text.
+- [ ] Lane 7. Satisfied by the scoped adaptation. Search `src/`, `server/` and `extension/` for `apns`. Save `no-apns.log`. Pass when nothing matches, which shows the controller sends no push.
+- [ ] Lane 8. Satisfied by the scoped adaptation. Read the title in `test/fixtures/owner-feed/captures/working.json`, which holds HTML and Markdown, and the title rules in `docs/operations/owner-feed.md`. Save `title-plain.log`. Pass when the capture keeps the markup as text and the document says to render it as plain text.
+- [ ] Lane 9. Satisfied by the scoped adaptation. Read the independent memo review. Save `memo-review.md`. Pass when every claim in the memos about `OwnerFeed` v1 matches the captures and no memo reopens the app choice or the exposure question.
 - [ ] Lane 10. Satisfied by the scoped adaptation. Inspect the PR diff and the shep repository head. Save `scope.json`. Pass when only `docs/prototypes/ios-app/` changed and the shep repository head is unchanged.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Metric. Satisfied by the scoped adaptation. This unit ships no product code, so it has no perf probe. Record the Swift suite's wall time and model calls.
-- [ ] Probe. Satisfied by the scoped adaptation. Reuse the one Swift suite run from the unit box and its timing in `swift-tests.log`.
-- [ ] Baseline. Satisfied by the scoped adaptation. No trunk baseline applies, because trunk has no Swift model.
+- [ ] Metric. Satisfied by the scoped adaptation. This unit ships no product code, so it has no perf probe. Record the wall time of `test/feed.test.ts` and its model calls.
+- [ ] Probe. Satisfied by the scoped adaptation. Reuse the `npm run check` run from the unit box and its timing.
+- [ ] Baseline. Satisfied by the scoped adaptation. No trunk baseline applies, because this unit adds no code.
 - [ ] Rule. Satisfied by the scoped adaptation. Fail if any step calls a model.
 
 **Review gate.** The operator reviews before merge.
 
-- [ ] Post `decision.md`, the screen sketches, `swift-tests.log`, and `memo-review.md` to the operator. Use text artifacts instead of a screenshot or video. Bring the owner the app choice and the exposure question. Merge on a clean verdict and a passing `check`.
+- [ ] Post `decision.md`, `screens.md` and `memo-review.md` to the operator. Use text artifacts instead of a screenshot or video. Bring the owner nothing to decide, because the app choice is made and the exposure question is closed. Merge on a clean verdict and a passing `check`.
 
 **Merge.**
 
@@ -1519,7 +1515,7 @@ These are every intentional template adaptation in this document.
 8. The playbook's prototype-before-plan and child investigation steps were constrained by this leaf's plan-only authorization. Existing prototypes are recorded, code was read directly, no children were launched, and unproved engineering choices became named prototype-first gates.
 9. The check script is not silent on success. It always prints one box-count line per PR and a summary. The success predicate is exit code 0 and `22 PR sections, 0 problems`, with no diagnostic lines. Its source was read before writing this plan.
 10. New CLI commands, runtime symbols, and paths are planned deliverables. Trunk lanes record unsupported features instead of pretending that the skeleton already runs the controller. Performance uses absolute budgets for new work rather than ratios to missing behavior.
-11. `F09d` is an optional research unit that ships no product code. Its scoped adaptation replaces ten live lanes and a perf probe with one Swift Testing suite against F09c's captured feeds, an independent memo review, and `npm run check`. The checker still requires ten lane boxes and four perf boxes, so each of them says the scoped adaptation satisfies it. No `F09d` lane runs on the VM. The one feed capture on `pi-factorio` is a build step, not a lane.
+11. `F09d` is an optional docs unit that ships no product code. Its scoped adaptation replaces ten live lanes and a perf probe with the feed contract and capture tests in `test/feed.test.ts`, an independent review of `decision.md` and `screens.md`, and `npm run check`. The checker still requires ten lane boxes and four perf boxes, so each of them says the scoped adaptation satisfies it. No `F09d` lane runs on the VM.
 
 ### R11. Restarts use up attempts
 

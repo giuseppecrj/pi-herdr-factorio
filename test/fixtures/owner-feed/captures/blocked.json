@@ -1,0 +1,61 @@
+{
+	"version": 1,
+	"repo": "giuseppecrj/pi-herdr-factorio",
+	"at": 1794247200000,
+	"controller": {
+		"state": "stopped",
+		"lastTick": "2026-11-09T17:59:48.000Z",
+		"localSwitch": "enabled"
+	},
+	"durableUsage": {
+		"kind": "unavailable",
+		"total": null
+	},
+	"entries": [
+		{
+			"issue": 14,
+			"eventId": "1",
+			"stage": "specify",
+			"since": 1794222000000,
+			"terminal": false,
+			"kind": "blocked",
+			"title": "Check the saved input",
+			"status": "blocked",
+			"stale": true,
+			"runId": "0deafdf907b538c14fc1e3349b346f37cdfbde49c2fd5decc4f3e652705df29f",
+			"issueUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/issues/14",
+			"prUrl": null,
+			"ageMs": 25200000,
+			"reason": null,
+			"group": "needs_you",
+			"round": 0,
+			"tokens": 1234,
+			"cap": null,
+			"ci": "Pending",
+			"failure": null,
+			"notProven": [],
+			"steps": []
+		}
+	],
+	"counts": {
+		"question_asked": 0,
+		"question_answered": 0,
+		"spec_review": 0,
+		"pr_review": 0,
+		"blocked": 1,
+		"budget": 0,
+		"failed": 0
+	},
+	"workingRunCount": 0,
+	"unreadable": [],
+	"gaps": [],
+	"metrics": {
+		"computedAt": null,
+		"stale": false,
+		"status": "Pending",
+		"share": null,
+		"numerator": null,
+		"denominator": null,
+		"tokensPerCleanLanding": null
+	}
+}
