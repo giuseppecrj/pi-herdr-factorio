@@ -1,0 +1,61 @@
+{
+	"version": 1,
+	"repo": "giuseppecrj/pi-herdr-factorio",
+	"at": 1794247200000,
+	"controller": {
+		"state": "stopped",
+		"lastTick": "2026-11-09T17:59:48.000Z",
+		"localSwitch": "enabled"
+	},
+	"durableUsage": {
+		"kind": "unavailable",
+		"total": null
+	},
+	"entries": [
+		{
+			"issue": 11,
+			"eventId": "1",
+			"stage": "specify",
+			"since": 1794247199000,
+			"terminal": false,
+			"kind": "question_asked",
+			"title": "Ask before changing the product",
+			"status": "needs_info",
+			"stale": false,
+			"runId": "4c6e321b37293e8643eea1733c8281f0d976764dee123e6c125b268ce020ef8d",
+			"issueUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/issues/11",
+			"prUrl": null,
+			"ageMs": 1000,
+			"reason": null,
+			"group": "needs_you",
+			"round": 0,
+			"tokens": 1234,
+			"cap": null,
+			"ci": "Pending",
+			"failure": null,
+			"notProven": [],
+			"steps": []
+		}
+	],
+	"counts": {
+		"question_asked": 1,
+		"question_answered": 0,
+		"spec_review": 0,
+		"pr_review": 0,
+		"blocked": 0,
+		"budget": 0,
+		"failed": 0
+	},
+	"workingRunCount": 0,
+	"unreadable": [],
+	"gaps": [],
+	"metrics": {
+		"computedAt": null,
+		"stale": false,
+		"status": "Pending",
+		"share": null,
+		"numerator": null,
+		"denominator": null,
+		"tokensPerCleanLanding": null
+	}
+}

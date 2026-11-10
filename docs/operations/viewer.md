@@ -60,6 +60,8 @@ The F09a tests exercise the real CLI processes, registered status handler, and l
 
 The server binds only to `127.0.0.1`. Reads accept GET only; the hold route accepts POST only with the checks above. It checks Host and same-origin Origin headers, sends no CORS headers, and sets a strict Content-Security-Policy. The CSP permits same-origin forms, manifest and static icons, but no scripts, external assets or framing. There is no merge, approve, label, retry, stage or cap control, model call, GitHub call or ledger writer.
 
+On the exmach VM the viewer stays on loopback and no `tailscale serve` mount is needed. The owner reaches the factory through the Factory tab in Shep, whose bridge reads the feed locally. See [OwnerFeed v1 contract](owner-feed.md).
+
 Exposure requires the owner's explicit approval. Do not forward the port merely because the viewer is read-only. It contains private issue and session metadata.
 
 Only after approval, start it with `--allowed-host <machine>.<tailnet>.ts.net`, then publish that loopback port through `tailscale serve`. Verify the HTTPS Tailscale URL before sharing it. The explicit hostname flag permits only that additional Host and its matching HTTPS Origin. It never changes the loopback bind. The factory has no Tailscale dependency, and the viewer does not invoke Tailscale.

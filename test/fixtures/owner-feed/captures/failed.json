@@ -1,0 +1,65 @@
+{
+	"version": 1,
+	"repo": "giuseppecrj/pi-herdr-factorio",
+	"at": 1794247200000,
+	"controller": {
+		"state": "stopped",
+		"lastTick": "2026-11-09T17:59:48.000Z",
+		"localSwitch": "enabled"
+	},
+	"durableUsage": {
+		"kind": "unavailable",
+		"total": null
+	},
+	"entries": [
+		{
+			"issue": 16,
+			"eventId": "1",
+			"stage": "land",
+			"since": 1794247199000,
+			"terminal": false,
+			"kind": "failed",
+			"title": "Review a change that is too large",
+			"status": "failed",
+			"stale": false,
+			"runId": "cddd7ad27b9e5b2cdfdf7b1e5ae757bf169bb4cf4d3eb5b627f23e0736cc7109",
+			"issueUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/issues/16",
+			"prUrl": null,
+			"ageMs": 1000,
+			"reason": "candidate_book_unavailable",
+			"group": "failed",
+			"round": 0,
+			"tokens": 1234,
+			"cap": null,
+			"ci": "Pending",
+			"failure": {
+				"stage": "review",
+				"class": "input",
+				"reason": "review_input_too_large"
+			},
+			"notProven": [],
+			"steps": []
+		}
+	],
+	"counts": {
+		"question_asked": 0,
+		"question_answered": 0,
+		"spec_review": 0,
+		"pr_review": 0,
+		"blocked": 0,
+		"budget": 0,
+		"failed": 1
+	},
+	"workingRunCount": 0,
+	"unreadable": [],
+	"gaps": ["candidate_book_unavailable:cddd7ad27b9e"],
+	"metrics": {
+		"computedAt": null,
+		"stale": false,
+		"status": "Pending",
+		"share": null,
+		"numerator": null,
+		"denominator": null,
+		"tokensPerCleanLanding": null
+	}
+}
