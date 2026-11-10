@@ -73,7 +73,7 @@ $S/vm.sh $S/drive-serve.sh <pr-id> <worker-n> start <issue>... # serve, scoped, 
 $S/vm.sh $S/drive-serve.sh <pr-id> <worker-n> stop             # SIGTERM the recorded PID
 ```
 
-Every drive script requires the `GH_HOST` that `vm.sh` exports and stops if it is unset.
+Every drive script sent through `vm.sh` requires the `GH_HOST` that `vm.sh` exports and stops if it is unset. `drive-replay.sh` is the exception. It runs on the VM as a file, so its operator exports that target's `GH_HOST` from `targets.env` in the VM shell first (see `features/replay.md`).
 
 Feature recipes are in `.pi/skills/verify-factory/features/`. Each lists the command and the observable result that proves it.
 

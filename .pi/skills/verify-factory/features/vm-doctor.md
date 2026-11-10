@@ -1,6 +1,6 @@
 # VM doctor
 
-The doctor shows that the selected target VM (`FACTORY_VM`, default `pi-factorio`) is reachable, has the pinned tools, and can read the repository through the exe.dev GitHub integration.
+The doctor shows that the selected target VM (`FACTORY_VM`, default `pi-factorio`) is reachable, has the pinned tools, and can read the repository through that target's GitHub host from `targets.env`.
 
 ## Sub-features
 
