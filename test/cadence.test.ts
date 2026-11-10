@@ -1014,6 +1014,265 @@ describe("cadence durable ownership, accounting and proposal recovery", () => {
 		assert.equal(github.creates, 1);
 	});
 
+	it("settles a crash during a retried launch with its conservative reservation", async (t) => {
+		const stateDir = directory(t);
+		const executes: string[] = [];
+		let retainedCalls = 0;
+
+		const port = (generation: number) => ({
+			execute: async (execution: CadenceInput): Promise<CadenceResult> => {
+				const runtime = join(
+					cadenceExecutionDir(stateDir, execution.job, execution.windowStart),
+					"runtime",
+				);
+
+				executes.push(
+					`gen${generation}:${existsSync(runtime) ? "runtime-exists" : "fresh"}`,
+				);
+
+				if (executes.length === 1)
+					return {
+						...result(execution, []),
+						kind: "failed",
+						launched: false,
+						tokens: 0,
+						reason: "checkout_unavailable",
+					};
+
+				if (existsSync(runtime))
+					return {
+						...result(execution, []),
+						kind: "failed",
+						launched: false,
+						tokens: 0,
+						reason: "sandbox_unavailable",
+					};
+				mkdirSync(runtime, { mode: 0o700 });
+
+				return new Promise<CadenceResult>(() => undefined);
+			},
+			retained: async (execution: CadenceInput): Promise<CadenceResult> => {
+				retainedCalls++;
+
+				return {
+					...result(execution, []),
+					kind: "failed",
+					tokens: execution.settings.maxTokens,
+					exact: false,
+					output: null,
+					reason: "interrupted",
+				};
+			},
+			publish: async () => true,
+		});
+
+		const first = new CadenceRunner({
+			stateDir,
+			repo,
+			log: () => undefined,
+			port: port(1),
+		});
+
+		await settle(first);
+		first.tick({ ...tick, now: now + 10_000 }, "architecture");
+		await delay(50);
+
+		const restarted = new CadenceRunner({
+			stateDir,
+			repo,
+			log: () => undefined,
+			port: port(2),
+		});
+
+		for (let n = 1; n <= 20; n++)
+			await settle(restarted, "architecture", {
+				...tick,
+				now: now + n * 3_600_000,
+			});
+		assert.equal(restarted.pending, false);
+		assert.equal(retainedCalls, 1);
+		assert.deepEqual(executes, ["gen1:fresh", "gen1:fresh"]);
+		assert.equal(
+			cadenceCharges(stateDir, repo)[0]?.tokens,
+			input().settings.maxTokens,
+		);
+		assert.equal(cadenceCharges(stateDir, repo)[0]?.exact, false);
+	});
+
+	it("caps refused creates and damaged drafts per window across restarts, then runs the next job", async (t) => {
+		for (const failure of ["refused_create", "damaged_draft", "prelaunch"]) {
+			const stateDir = directory(t);
+			const execution = input();
+			const dir = seed(stateDir);
+			const github = new GitHubFixture();
+			let attempts = 0;
+			const launches: CadenceJob[] = [];
+			const logs: string[] = [];
+			const proposal = parseCadenceProposals(result().output!, execution)![0]!;
+
+			if (failure === "damaged_draft") {
+				mkdirSync(join(stateDir, "cadence/architecture/proposals"), {
+					mode: 0o700,
+				});
+				writeCadenceFile(
+					join(
+						stateDir,
+						"cadence/architecture/proposals",
+						`${proposal.fingerprint}.json`,
+					),
+					"{broken",
+				);
+			}
+
+			if (failure === "prelaunch")
+				writeCadenceFile(
+					join(dir, "receipt.json"),
+					JSON.stringify({
+						...result(),
+						kind: "failed",
+						launched: false,
+						tokens: 0,
+						reason: "checkout_unavailable",
+					}),
+				);
+
+			const exec: Exec = async (command, args) => {
+				if (args.includes("POST")) {
+					attempts++;
+
+					return { code: 1, stdout: "", stderr: "HTTP 403" };
+				}
+
+				return github.exec(command, args);
+			};
+
+			const makeRunner = () =>
+				new CadenceRunner({
+					stateDir,
+					repo,
+					log: (event) => logs.push(event),
+					port: {
+						execute: async (e) => {
+							launches.push(e.job);
+
+							return e.job === "architecture"
+								? {
+										...result(e, []),
+										kind: "failed",
+										launched: false,
+										tokens: 0,
+										reason: "checkout_unavailable",
+									}
+								: result(e, []);
+						},
+						retained: async (e) => result(e, []),
+						publish: (e, receipt, proposals, signal) =>
+							publishCadenceProposals({
+								stateDir,
+								exec,
+								execution: e,
+								result: receipt,
+								proposals,
+								signal,
+							}),
+					},
+				});
+
+			let cadence = makeRunner();
+
+			for (let n = 0; n < 5; n++) {
+				cadence = makeRunner();
+				await settle(cadence, "architecture", {
+					...tick,
+					now: now + n * 300_000,
+				});
+				assert.equal(cadence.pending, n < 4);
+			}
+
+			assert.equal(cadence.status()[0]?.watermark, execution.windowStart);
+			assert.equal(cadence.status()[0]?.rotation, 1);
+			assert.ok(logs.includes("cadence_retry_exhausted"));
+
+			const receipt = JSON.parse(
+				readFileSync(join(dir, "receipt.json"), "utf8"),
+			);
+
+			assert.equal(receipt.kind, "failed");
+			assert.match(receipt.reason, /^retry_exhausted:/);
+			assert.ok(receipt.reason.length <= 136);
+			assert.equal(receipt.tokens, failure === "prelaunch" ? 0 : 16);
+			assert.equal(attempts, failure === "refused_create" ? 5 : 0);
+			await settle(cadence, "architecture", { ...tick, now: now + 1_500_000 });
+			assert.equal(cadence.pending, false);
+			assert.equal(attempts, failure === "refused_create" ? 5 : 0);
+			await settle(cadence, "security", { ...tick, now: now + 1_500_000 });
+			assert.equal(launches.at(-1), "security");
+			assert.equal(cadence.pending, false);
+		}
+	});
+
+	it("settles corrupt receipts on recovery and between ticks without throwing or relaunching", async (t) => {
+		for (const corruptAfterRecovery of [false, true]) {
+			const stateDir = directory(t);
+			const dir = seed(stateDir);
+			mkdirSync(join(dir, "runtime"), { mode: 0o700 });
+			const logs: { event: string; reason: unknown }[] = [];
+			const launches: CadenceJob[] = [];
+
+			const cadence = new CadenceRunner({
+				stateDir,
+				repo,
+				log: (event, fields) => logs.push({ event, reason: fields.reason }),
+				port: {
+					execute: async (e) => {
+						launches.push(e.job);
+
+						return result(e, []);
+					},
+					retained: async () => {
+						throw new Error("must not recover corrupt output");
+					},
+					publish: async () => {
+						throw new Error("must not publish corrupt output");
+					},
+				},
+			});
+
+			if (corruptAfterRecovery) await cadence.recover();
+			writeCadenceFile(
+				join(dir, "receipt.json"),
+				`{broken ${"private ".repeat(1000)}`,
+			);
+			await cadence.recover();
+			assert.equal(cadence.ready, true);
+			assert.doesNotThrow(() => cadence.tick(tick, "architecture"));
+			await cadence.wait();
+			assert.equal(cadence.pending, false);
+			assert.deepEqual(launches, []);
+			assert.equal(cadence.status()[0]?.reason, "cadence_receipt_invalid");
+			assert.deepEqual(
+				logs.filter((entry) => entry.event === "cadence_receipt_corrupt"),
+				[
+					{
+						event: "cadence_receipt_corrupt",
+						reason: "cadence_receipt_invalid",
+					},
+				],
+			);
+			assert.equal(
+				cadenceCharges(stateDir, repo)[0]?.tokens,
+				input().settings.maxTokens,
+			);
+			assert.equal(cadenceCharges(stateDir, repo)[0]?.exact, false);
+			assert.equal(
+				JSON.parse(readFileSync(join(dir, "receipt.json"), "utf8")).kind,
+				"failed",
+			);
+			await settle(cadence, "security");
+			assert.deepEqual(launches, ["security"]);
+		}
+	});
+
 	it("retries zero-work preparation failures with durable bounded backoff, without using the weekly slot", async (t) => {
 		const stateDir = directory(t);
 		let attempts = 0;

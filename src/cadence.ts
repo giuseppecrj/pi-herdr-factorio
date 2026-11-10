@@ -517,7 +517,7 @@ export function readCadenceInput(
 	};
 }
 
-function readResult(path: string): CadenceResult | null {
+function readResultUnchecked(path: string): CadenceResult | null {
 	const text = readCadenceFile(path);
 
 	if (text === null) return null;
@@ -553,6 +553,32 @@ function readResult(path: string): CadenceResult | null {
 		output,
 		reason,
 	};
+}
+
+function readResult(
+	path: string,
+	input: CadenceInput,
+	onCorrupt?: (result: CadenceResult) => void,
+): CadenceResult | null {
+	try {
+		return readResultUnchecked(path);
+	} catch {
+		const result: CadenceResult = {
+			kind: "failed",
+			launched: true,
+			tokens: input.settings.maxTokens,
+			exact: false,
+			uncertain: true,
+			model: input.settings.model,
+			receiptDigest: digestOf("cadence_receipt_corrupt"),
+			output: null,
+			reason: "cadence_receipt_invalid",
+		};
+
+		onCorrupt?.(result);
+
+		return result;
+	}
 }
 
 export const CADENCE_RETAIN_EXECUTIONS = 5;
@@ -622,7 +648,7 @@ function pruneCadence(
 		const input = readCadenceInput(join(dir, "input.json"), repo, job, window);
 
 		if (history === null || window > history.cutoff) {
-			const receipt = readResult(join(dir, "receipt.json"));
+			const receipt = readResult(join(dir, "receipt.json"), input);
 
 			if (receipt === null) throw new Error("cadence_receipt_missing");
 			history = {
@@ -708,7 +734,7 @@ export function cadenceCharges(stateDir: string, repo: RepoSlug) {
 				Number(name),
 			);
 
-			const result = readResult(join(dir, "receipt.json"));
+			const result = readResult(join(dir, "receipt.json"), input);
 			entries.push({
 				job,
 				windowStart: input.windowStart,
@@ -785,6 +811,21 @@ export class CadenceRunner {
 		this.#state.set(job, state);
 	}
 
+	#receipt(input: CadenceInput): CadenceResult | null {
+		const path = join(
+			cadenceExecutionDir(this.#root, input.job, input.windowStart),
+			"receipt.json",
+		);
+
+		return readResult(path, input, (result) => {
+			this.#log("cadence_receipt_corrupt", {
+				job: input.job,
+				reason: result.reason,
+			});
+			writeCadenceFile(path, JSON.stringify(result));
+		});
+	}
+
 	async recover(): Promise<void> {
 		if (this.#ready || this.#recoveryBlocked) return;
 
@@ -823,6 +864,24 @@ export class CadenceRunner {
 			const charges = cadenceCharges(this.#root, this.#repo);
 
 			for (const charge of charges) {
+				if (charge.executions === 1) {
+					const dir = cadenceExecutionDir(
+						this.#root,
+						charge.job,
+						charge.windowStart,
+					);
+
+					if (existsSync(join(dir, "input.json")))
+						this.#receipt(
+							readCadenceInput(
+								join(dir, "input.json"),
+								this.#repo,
+								charge.job,
+								charge.windowStart,
+							),
+						);
+				}
+
 				const state = this.#state.get(charge.job)!;
 
 				if (state.watermark !== null && charge.windowStart <= state.watermark)
@@ -844,7 +903,7 @@ export class CadenceRunner {
 					state.pending,
 				);
 
-				if (readResult(join(dir, "receipt.json")) === null) {
+				if (this.#receipt(input) === null) {
 					const result = await this.#port.retained(input);
 					writeCadenceFile(join(dir, "receipt.json"), JSON.stringify(result));
 				}
@@ -876,7 +935,45 @@ export class CadenceRunner {
 
 	#retry(job: CadenceJob, reason: string): void {
 		const state = this.#state.get(job)!;
-		const retries = Math.min(6, (state.retries ?? 0) + 1);
+		const retries = (state.retries ?? 0) + 1;
+
+		if (retries >= 5 && state.pending !== null) {
+			const dir = cadenceExecutionDir(this.#root, job, state.pending);
+
+			const input = readCadenceInput(
+				join(dir, "input.json"),
+				this.#repo,
+				job,
+				state.pending,
+			);
+
+			const receipt = this.#receipt(input);
+
+			const failed: CadenceResult = {
+				...(receipt ?? {
+					tokens: input.settings.maxTokens,
+					exact: false,
+					uncertain: true,
+					model: input.settings.model,
+					receiptDigest: digestOf("cadence_retry_exhausted"),
+				}),
+				kind: "failed",
+				launched: true,
+				output: null,
+				reason: `retry_exhausted:${reason.slice(0, 120)}`,
+			};
+
+			writeCadenceFile(join(dir, "receipt.json"), JSON.stringify(failed));
+			this.#settle(input, failed, failed.reason, 0);
+			this.#log("cadence_retry_exhausted", {
+				job,
+				reason: failed.reason,
+				retries,
+			});
+
+			return;
+		}
+
 		this.#save(job, {
 			...state,
 			reason,
@@ -885,7 +982,7 @@ export class CadenceRunner {
 		});
 	}
 
-	async #finish(job: CadenceJob): Promise<void> {
+	async #finish(job: CadenceJob, capacity = 1): Promise<void> {
 		const state = this.#state.get(job);
 
 		if (state?.pending == null) return;
@@ -898,12 +995,22 @@ export class CadenceRunner {
 			state.pending,
 		);
 
-		let result = readResult(join(dir, "receipt.json"));
+		let result = this.#receipt(input);
 
 		if (result === null) throw new Error("cadence_receipt_missing");
 
 		if (result.launched === false && result.tokens === 0) {
-			if (!this.#allowed || (state.retryAt ?? 0) > this.#now) return;
+			if (!this.#allowed || capacity < 1 || (state.retryAt ?? 0) > this.#now)
+				return;
+
+			rmSync(join(dir, "receipt.json"));
+			const fd = openSync(dir, "r");
+
+			try {
+				fsyncSync(fd);
+			} finally {
+				closeSync(fd);
+			}
 
 			this.#slot = true;
 			result = await this.#port
@@ -931,8 +1038,9 @@ export class CadenceRunner {
 				: [];
 
 		if (proposals !== null && proposals.length > 0) {
+			if (!this.#allowed) return;
+
 			if (
-				!this.#allowed ||
 				!(await this.#port.publish(
 					input,
 					result,
@@ -955,6 +1063,16 @@ export class CadenceRunner {
 						? "no_delta"
 						: "proposed";
 
+		this.#settle(input, result, reason, proposals?.length ?? 0);
+	}
+
+	#settle(
+		input: CadenceInput,
+		result: CadenceResult,
+		reason: string,
+		proposals: number,
+	): void {
+		const job = input.job;
 		this.#save(job, {
 			watermark: input.windowStart,
 			rotation: input.rotation + 1,
@@ -965,7 +1083,7 @@ export class CadenceRunner {
 		this.#log("cadence_settled", {
 			job,
 			reason,
-			proposals: proposals?.length ?? 0,
+			proposals,
 			tokens: result.tokens,
 		});
 	}
@@ -983,14 +1101,8 @@ export class CadenceRunner {
 		);
 
 		if (pending !== undefined) {
-			const [job, state] = pending;
-			const dir = cadenceExecutionDir(this.#root, job, state.pending!);
-
-			const retryingLaunch =
-				readResult(join(dir, "receipt.json"))?.launched === false;
-
-			if (retryingLaunch && (!tick.allowed || tick.capacity < 1)) return;
-			this.#work(() => this.#finish(job));
+			const [job] = pending;
+			this.#work(() => this.#finish(job, tick.capacity));
 
 			return;
 		}
