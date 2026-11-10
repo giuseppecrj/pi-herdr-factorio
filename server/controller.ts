@@ -1,4 +1,27 @@
 import {
+	measurementInput,
+	explainPrompt,
+	explainFindings,
+	EXPLAIN_MAX_TOKENS,
+	EXPLAIN_WALL_MS,
+} from "../src/explain.ts";
+import { measurementPrimary } from "../src/metrics.ts";
+import {
+	allocateMeasurement,
+	measurementDir,
+	sampled,
+	scorerDigest,
+	scorerPrompt,
+	scorerAnswer,
+	scorerTouched,
+	enqueueScore,
+	previousScore,
+	scoreHistory,
+	FAMILY_NOTE,
+	type MeasurementKind,
+	type MeasurementOwner,
+} from "../src/scorers.ts";
+import {
 	fileArtifacts,
 	readStoredContract,
 	regularText,
@@ -142,6 +165,10 @@ import {
 	LedgerRowError,
 	parseAnchor,
 	parseRetry,
+	appendRun,
+	indexScores,
+	parseScores,
+	type ScoreEvent,
 	type LedgerOutbox,
 	type OutboxJob,
 } from "../src/ledger.ts";
@@ -150,6 +177,8 @@ import {
 	isRepoSlug,
 	parseWorkflow,
 	STAGE_CLEANUP_RESERVE_MS,
+	isPinnedGrader,
+	type WorkflowConfig,
 } from "../src/workflow.ts";
 import {
 	FAMILY_MISSING,
@@ -3935,6 +3964,594 @@ export async function readRunCharges(
 	};
 }
 
+const scorePumps = new Map<string, Promise<boolean | null>>();
+export const SCORE_PUBLISH_SLICE_MS = 5_000;
+
+type ScorePumpInput = {
+	stateDir: string;
+	repo: RepoSlug;
+	exec: Exec;
+	log: Log;
+	clock?: () => number;
+};
+
+export async function pumpScoreOutbox(
+	input: ScorePumpInput,
+): Promise<boolean | null> {
+	const key = resolve(input.stateDir);
+	const previous = scorePumps.get(key) ?? Promise.resolve(null);
+
+	const pending = previous.then(async () => {
+		try {
+			return await publishScoreOutbox(input);
+		} catch {
+			input.log("score_pump_failed", {});
+
+			return null;
+		}
+	});
+
+	scorePumps.set(key, pending);
+
+	try {
+		return await pending;
+	} finally {
+		if (scorePumps.get(key) === pending) scorePumps.delete(key);
+	}
+}
+
+async function publishScoreOutbox(input: ScorePumpInput) {
+	const root = join(input.stateDir, "measure", "score-outbox");
+
+	const clock = input.clock ?? Date.now;
+	const deadline = clock() + SCORE_PUBLISH_SLICE_MS;
+
+	const api = ledgerApiOf(
+		new GitHubPublicationApi(
+			input.exec,
+			input.repo,
+			{},
+			async () => true,
+			undefined,
+			{ now: clock, sliceMs: SCORE_PUBLISH_SLICE_MS, callMs: 5_000 },
+		),
+		"scores",
+	);
+
+	api.startJob?.();
+
+	let anchor = present(join(root, "anchor.json"))
+		? parseAnchor(parseJsonText(regularText(join(root, "anchor.json"))))
+		: null;
+
+	if (present(join(root, "anchor.json")) && anchor === null)
+		throw new Error("score_anchor_invalid");
+	const history = scoreHistory(input.stateDir);
+
+	if (
+		anchor === null &&
+		history.some((event) => present(join(root, event.id, "published.json")))
+	)
+		throw new Error("score_anchor_orphaned");
+
+	for (const event of history) {
+		const dir = join(root, event.id);
+
+		if (present(join(dir, "published.json"))) continue;
+
+		const retry = present(join(dir, "retry.json"))
+			? parseRetry(parseJsonText(regularText(join(dir, "retry.json"))))
+			: null;
+
+		if (present(join(dir, "retry.json")) && retry === null)
+			throw new Error("score_retry_invalid");
+
+		if (retry?.blocked || (retry !== null && retry.nextAt > clock())) continue;
+		const bytes = Buffer.from(`${JSON.stringify(event)}\n`);
+		const adoptionPath = join(dir, "adoption.json");
+		let result: Awaited<ReturnType<typeof appendRun>>;
+
+		do {
+			const cursor = present(adoptionPath)
+				? parseAdoption(parseJsonText(regularText(adoptionPath)))
+				: null;
+
+			if (present(adoptionPath) && cursor === null)
+				throw new Error("score_adoption_invalid");
+			result = await appendRun(
+				api,
+				{ runId: event.id, bytes, digest: digestOf(bytes), date: event.at },
+				anchor,
+				3,
+				{
+					cursor,
+					save: (value) =>
+						writeAtomic(adoptionPath, `${JSON.stringify(value)}\n`),
+				},
+				false,
+				indexScores,
+			);
+		} while (
+			result.kind === "deferred" &&
+			result.reason === "adoption_pending" &&
+			clock() < deadline
+		);
+
+		if (result.kind === "published") {
+			if (
+				!(await writeAtomic(
+					join(root, "anchor.json"),
+					`${JSON.stringify(result.anchor)}\n`,
+				))
+			)
+				throw new Error("score_anchor_unwritable");
+			anchor = result.anchor;
+			exclusive(
+				join(dir, "published.json"),
+				`${JSON.stringify({ tip: result.tip, line: result.line })}\n`,
+			);
+		} else {
+			const attempts = (retry?.attempts ?? 0) + 1;
+			await writeAtomic(
+				join(dir, "retry.json"),
+				`${JSON.stringify({ attempts, nextAt: clock() + Math.min(60_000, 1000 * 2 ** Math.min(attempts, 6)), reason: result.reason, blocked: result.kind === "blocked" })}\n`,
+			);
+			input.log("score_publication_pending", {
+				id: event.id,
+				reason: result.reason,
+			});
+			break;
+		}
+
+		if (clock() >= deadline) break;
+	}
+
+	return scoreHistory(input.stateDir).every((event) =>
+		present(join(root, event.id, "published.json")),
+	);
+}
+
+async function syncScoreHistory(input: {
+	stateDir: string;
+	repo: RepoSlug;
+	exec: Exec;
+}) {
+	const api = ledgerApiOf(
+		new GitHubPublicationApi(input.exec, input.repo, {}, async () => true),
+		"scores",
+	);
+
+	const tip = await api.ref();
+
+	if (tip === null) return;
+	const head = await api.commit(tip);
+	const file = await api.file(head.tree);
+
+	for (const [index, event] of parseScores(file.bytes).entries()) {
+		enqueueScore(input.stateDir, event);
+
+		if (
+			!(await writeAtomic(
+				join(input.stateDir, "measure/score-outbox", event.id, "stream.json"),
+				`${JSON.stringify({ line: index + 1 })}\n`,
+			))
+		)
+			throw new Error("score_history_unwritable");
+	}
+}
+
+/** Only controller-written patch metadata is inspected; no patch or transcript enters the judge. */
+function measurementScorerTouched(
+	stateDir: string,
+	runId: Digest,
+	row: LedgerRow,
+): boolean {
+	if (row.artifacts.kind !== "built" && row.artifacts.kind !== "candidate")
+		return false;
+	const root = join(stateDir, "patches");
+
+	const names = readdirSync(root).filter(
+		(name) => name === runId || new RegExp(`^${runId}-r[0-9]+$`).test(name),
+	);
+
+	let found = false;
+
+	for (const name of names) {
+		if (!lstatSync(join(root, name)).isDirectory()) continue;
+		const raw = regularText(join(root, name, "collected.json"), 128 * 1024);
+		const receipt = objectOf(parseJsonText(raw));
+		const paths = textsOf(receipt?.changedPaths);
+
+		if (
+			receipt?.runId !== runId ||
+			paths === null ||
+			regularText(join(root, `${name}.json`), 128 * 1024) !== raw
+		)
+			throw new Error("scorer_change_evidence_unavailable");
+		found = true;
+
+		if (scorerTouched(paths)) return true;
+	}
+
+	if (!found) throw new Error("scorer_change_evidence_unavailable");
+
+	return false;
+}
+
+type MeasurementContext = {
+	stateDir: string;
+	repo: RepoSlug;
+	exec: Exec;
+	executor: StageExecutor;
+	log: Log;
+	signal?: AbortSignal;
+};
+
+export async function controllerMeasure(
+	input: MeasurementContext & {
+		kind: MeasurementKind;
+		runId: Digest;
+		config: WorkflowConfig;
+		scorerId?: string;
+	},
+) {
+	const start = Date.now();
+	const primary = measurementPrimary(input.stateDir, input.repo);
+	const model = input.config.grader?.model;
+
+	if (model === undefined || !isPinnedGrader(model))
+		throw new Error("grader_unpinned");
+
+	const scorer =
+		input.kind === "score"
+			? (input.config.scorers?.find(
+					(s) => s.id === (input.scorerId ?? "outcome-quality"),
+				) ?? null)
+			: null;
+
+	if (input.kind === "score" && scorer === null)
+		throw new Error("scorer_unknown");
+
+	const evidence = await measurementInput(
+		input.stateDir,
+		input.runId,
+		scorer?.includeChildren ?? false,
+		scorer !== null,
+	);
+
+	if (evidence.input.ledger.row.repo !== input.repo)
+		throw new Error("measurement_repo_mismatch");
+
+	const touched =
+		scorer !== null &&
+		measurementScorerTouched(
+			input.stateDir,
+			input.runId,
+			evidence.input.ledger.row,
+		);
+
+	if (scorer !== null) await syncScoreHistory(input);
+
+	const execution = allocateMeasurement(
+		input.stateDir,
+		input.kind,
+		input.runId,
+	);
+
+	const owner: MeasurementOwner = {
+		repo: input.repo,
+		identity: execution.identity,
+		executionId: execution.executionId,
+		kind: input.kind,
+		runId: input.runId,
+		model,
+		maxTokens:
+			input.kind === "explain"
+				? EXPLAIN_MAX_TOKENS
+				: (input.config.grader?.maxTokens ?? 16_000),
+		at: new Date(Math.floor(Date.now() / 1000) * 1000).toISOString(),
+		inputDigest: evidence.digest,
+		scorer,
+		supersedes:
+			scorer === null
+				? null
+				: previousScore(input.stateDir, input.runId, scorer.id),
+	};
+
+	const ownerPath = join(execution.dir, "owner.json");
+	exclusive(ownerPath, `${JSON.stringify(owner)}\n`);
+	exclusive(join(execution.dir, "input.json"), evidence.bytes);
+	const workspace = join(execution.dir, "workspace");
+	privateDir(workspace);
+
+	const prompt =
+		scorer === null ? explainPrompt(evidence) : scorerPrompt(scorer, evidence);
+
+	exclusive(join(execution.dir, "prompt.txt"), prompt);
+	let launched = false;
+	let reason = touched ? "scorer_touched" : "sandbox_unavailable";
+
+	if (!touched && (await input.executor.preflight())) {
+		const wallMs = EXPLAIN_WALL_MS - (Date.now() - start);
+
+		if (wallMs <= STAGE_CLEANUP_RESERVE_MS)
+			throw new Error("measurement_wall_exhausted");
+
+		const signal = AbortSignal.any([
+			input.signal ?? new AbortController().signal,
+			AbortSignal.timeout(wallMs - STAGE_CLEANUP_RESERVE_MS),
+		]);
+
+		const launch = await input.executor.launch({
+			runId: execution.executionId,
+			stage: "maintain",
+			attempt: 1,
+			measurement: {
+				kind: input.kind,
+				scoredRunId: input.runId,
+				seq: execution.seq,
+			},
+			workspace,
+			prompt,
+			tools: [],
+			skills: [],
+			settings: {
+				model,
+				fallback: null,
+				maxTokens: owner.maxTokens,
+				budget: { maxTurns: 2, wallMs, stallMs: Math.min(120_000, wallMs) },
+			},
+			remainingRunTokens: owner.maxTokens,
+			signal,
+			progress: () => undefined,
+		});
+
+		if (launch.kind === "started") {
+			launched = true;
+			reason = (await launch.done).kind;
+		}
+	}
+
+	const { readStageReceipt, executionCharge } = await import("./sandbox.ts");
+	const runtime = join(execution.dir, "runtime");
+	const native = await readStageReceipt(join(runtime, "receipt.json"));
+	const charge = await executionCharge(runtime);
+
+	const usage = {
+		tokens: launched
+			? Math.max(native?.usage.total ?? owner.maxTokens, charge?.total ?? 0)
+			: 0,
+		wallMs: Date.now() - start,
+		exact:
+			!launched ||
+			(native !== null && charge !== null && charge.uncertain === 0),
+	};
+
+	const valid =
+		native?.record?.runId === execution.executionId &&
+		native.record.measurementIdentity === owner.identity &&
+		native.record.stage === "maintain" &&
+		native.outcome.kind === "passed" &&
+		usage.tokens <= owner.maxTokens &&
+		usage.wallMs <= EXPLAIN_WALL_MS;
+
+	const observed = textOf(objectOf(native?.record?.models)?.observed);
+
+	const modelMatches =
+		observed === model || observed === model.slice("openai/".length);
+
+	if (launched && !modelMatches && native?.outcome.kind === "passed")
+		reason = "judge_model_mismatch";
+
+	if (usage.tokens > owner.maxTokens) reason = "measurement_tokens_exhausted";
+
+	if (usage.wallMs > EXPLAIN_WALL_MS) reason = "measurement_wall_exhausted";
+
+	const output =
+		valid && modelMatches
+			? regularText(join(runtime, "output.txt"), 64 * 1024)
+			: null;
+
+	if (scorer !== null) {
+		const answer = output === null ? null : scorerAnswer(output, scorer);
+
+		const event: ScoreEvent = {
+			id: execution.eventId,
+			scoredRunId: input.runId,
+			scorerId: scorer.id,
+			scorerDigest: scorerDigest(scorer, model),
+			inputDigest: evidence.digest,
+			includeChildren: scorer.includeChildren,
+			label: answer?.label ?? null,
+			score: answer?.score ?? null,
+			passingScore: scorer.passingScore,
+			reasoning:
+				answer?.reasoning ??
+				(touched
+					? "Candidate touched a scorer source file."
+					: output === null
+						? `Scoring did not produce a bounded, pinned answer (${reason}).`
+						: "Judge returned an undeclared label or malformed answer."),
+			judgeModel: model,
+			judgeFamily: "openai",
+			familyNote: FAMILY_NOTE,
+			usage,
+			supersedes: owner.supersedes,
+			at: owner.at,
+			status: touched ? "voided" : answer === null ? "failed" : "scored",
+			voided: touched ? "scorer_touched" : null,
+		};
+
+		enqueueScore(input.stateDir, event);
+		exclusive(
+			join(execution.dir, "result.json"),
+			`${JSON.stringify({ usage, launched, event })}\n`,
+		);
+		await pumpScoreOutbox(input);
+
+		const root = join(input.stateDir, "measure/score-outbox");
+		const published = present(join(root, event.id, "published.json"));
+
+		const queuedScores = scoreHistory(input.stateDir).filter(
+			(other) =>
+				other.id !== event.id &&
+				!present(join(root, other.id, "published.json")),
+		).length;
+
+		return {
+			primary,
+			kind: "score" as const,
+			identity: owner.identity,
+			event,
+			passing: event.score === null ? null : event.score >= event.passingScore,
+			published,
+			queuedScores,
+		};
+	}
+
+	const findings = output === null ? null : explainFindings(output, evidence);
+	exclusive(
+		join(execution.dir, "result.json"),
+		`${JSON.stringify({ usage, launched, findings })}\n`,
+	);
+
+	return {
+		primary,
+		kind: "explain" as const,
+		identity: owner.identity,
+		findings,
+		usage,
+		reason:
+			findings === null
+				? output === null
+					? reason
+					: "invalid_findings"
+				: "explained",
+	};
+}
+
+export function controllerMeasurements(input: MeasurementContext) {
+	const adapter = new GitHubTicketAdapter({
+		exec: input.exec,
+		repo: input.repo,
+	});
+
+	const seen = new Set<string>();
+	let pending = Promise.resolve();
+	let occupied = 0;
+
+	return {
+		occupied: () => occupied,
+		terminal(runId: Digest, config: WorkflowConfig) {
+			for (const scorer of config.scorers ?? []) {
+				const key = `${runId}-${scorer.id}`;
+
+				if (seen.has(key) || !sampled(runId, scorer)) continue;
+				seen.add(key);
+
+				const marker = join(
+					input.stateDir,
+					"measure",
+					"automatic",
+					`${key}.json`,
+				);
+
+				if (present(marker)) continue;
+				privateDir(dirname(marker));
+				exclusive(
+					marker,
+					`${JSON.stringify({ runId, scorerId: scorer.id })}\n`,
+				);
+				pending = pending.then(async () => {
+					if (input.signal?.aborted) return;
+					occupied = 1;
+
+					try {
+						if (!(await cadenceSwitches(input.stateDir, adapter))) {
+							input.log("measurement_skipped", { runId, reason: "disabled" });
+
+							return;
+						}
+
+						await controllerMeasure({
+							...input,
+							kind: "score",
+							runId,
+							config,
+							scorerId: scorer.id,
+						});
+					} catch (error) {
+						input.log("measurement_failed", {
+							runId,
+							reason: error instanceof Error ? error.message : "unknown",
+						});
+					} finally {
+						occupied = 0;
+					}
+				});
+			}
+		},
+		stop: () => pending,
+	};
+}
+
+export async function measurementCharges(stateDir: string, repo: string) {
+	const { executionCharge } = await import("./sandbox.ts");
+	let tokens = 0;
+	let executions = 0;
+	let uncertainRequests = 0;
+	let exact = true;
+
+	for (const kind of ["score", "explain"] as const) {
+		const root = join(stateDir, "measure", kind);
+
+		for (const runId of await readdir(root).catch(() => [])) {
+			if (!isDigest(runId)) continue;
+
+			for (const seq of await readdir(join(root, runId))) {
+				if (!/^[1-9][0-9]*$/.test(seq)) continue;
+				const dir = measurementDir(stateDir, kind, runId, Number(seq));
+
+				const owner = present(join(dir, "owner.json"))
+					? objectOf(parseJsonText(regularText(join(dir, "owner.json"))))
+					: null;
+
+				if (owner !== null && owner.repo !== repo) continue;
+
+				const result = present(join(dir, "result.json"))
+					? objectOf(parseJsonText(regularText(join(dir, "result.json"))))
+					: null;
+
+				const usage = objectOf(result?.usage);
+				const charge = await executionCharge(join(dir, "runtime"));
+				executions++;
+				tokens += Math.max(
+					(owner === null ? null : countOf(usage?.tokens)) ??
+						countOf(owner?.maxTokens) ??
+						EXPLAIN_MAX_TOKENS,
+					charge?.total ?? 0,
+				);
+				uncertainRequests += charge?.uncertain ?? 0;
+				exact &&=
+					owner !== null &&
+					usage?.exact === true &&
+					(charge?.uncertain ?? 0) === 0;
+			}
+		}
+	}
+
+	return {
+		executions,
+		uncertainRequests,
+		tokens: {
+			kind: exact ? "exact" : "lower_bound",
+			unit: "tokens",
+			total: tokens,
+		},
+		money: { kind: "unavailable", reason: "provider_not_reported" },
+	};
+}
+
 export async function readDurableAccounting(
 	stateDir: string | null,
 	repo: RepoSlug,
@@ -4002,9 +4619,20 @@ export async function readDurableAccounting(
 		}
 	}
 
+	const measurement =
+		stateDir === null || !available
+			? {
+					executions: 0,
+					uncertainRequests: 0,
+					tokens: { kind: "exact", unit: "tokens", total: 0 },
+					money: { kind: "unavailable", reason: "provider_not_reported" },
+				}
+			: await measurementCharges(stateDir, repo);
+
 	return {
 		state: !available ? "unavailable" : readable ? "readable" : "incomplete",
 		countersScope: "process",
+		measurement,
 		runs,
 		maintenance: {
 			executions: maintenance.reduce(
@@ -4645,6 +5273,7 @@ type DurableTokenUsage = { kind: string; unit: string; total: number };
 type DurableUsage = DurableTokenUsage & {
 	reason?: string;
 	maintenance?: DurableTokenUsage;
+	measurement?: DurableTokenUsage;
 };
 
 export function durableUsageOf(
@@ -4652,12 +5281,14 @@ export function durableUsageOf(
 ): JsonValue {
 	const uncertain =
 		accounting.runs.some((run) => run.uncertainRequests > 0) ||
-		accounting.maintenance.uncertainRequests > 0;
+		accounting.maintenance.uncertainRequests > 0 ||
+		accounting.measurement.uncertainRequests > 0;
 
 	const exact =
 		accounting.state === "readable" &&
 		accounting.runs.every((run) => run.tokens.kind === "exact") &&
-		accounting.maintenance.tokens.kind === "exact";
+		accounting.maintenance.tokens.kind === "exact" &&
+		accounting.measurement.tokens.kind === "exact";
 
 	if (accounting.state === "unavailable")
 		return { kind: "unavailable", reason: "legacy_not_recorded" };
@@ -4667,7 +5298,8 @@ export function durableUsageOf(
 		unit: "tokens",
 		total:
 			accounting.runs.reduce((sum, run) => sum + run.tokens.total, 0) +
-			accounting.maintenance.tokens.total,
+			accounting.maintenance.tokens.total +
+			accounting.measurement.tokens.total,
 		...(uncertain
 			? { reason: "request_unsettled" }
 			: exact
@@ -4677,6 +5309,9 @@ export function durableUsageOf(
 
 	if (accounting.maintenance.executions > 0)
 		usage.maintenance = accounting.maintenance.tokens;
+
+	if (accounting.measurement.executions > 0)
+		usage.measurement = accounting.measurement.tokens;
 
 	return usage;
 }
@@ -8003,6 +8638,7 @@ export async function serveLoop(input: {
 	signal: AbortSignal;
 	log: Log;
 	pump?: () => Promise<LedgerBacklog | null>;
+	scorePump?: () => Promise<boolean | null>;
 	durableUsage?: () => JsonValue;
 	notify?: (message: "READY=1" | "WATCHDOG=1") => Promise<void>;
 }): Promise<void> {
@@ -8039,6 +8675,30 @@ export async function serveLoop(input: {
 		scheduled.unref();
 	};
 
+	let scorePending: Promise<void> | null = null;
+	let scoreScheduled: NodeJS.Immediate | null = null;
+
+	const scores = () => {
+		if (
+			input.scorePump === undefined ||
+			scorePending !== null ||
+			scoreScheduled !== null
+		)
+			return;
+		scoreScheduled = setImmediate(() => {
+			scoreScheduled = null;
+			scorePending = input.scorePump!()
+				.then(() => undefined)
+				.catch(() => {
+					log("score_pump_failed", {});
+				})
+				.finally(() => {
+					scorePending = null;
+				});
+		});
+		scoreScheduled.unref();
+	};
+
 	while (!signal.aborted) {
 		watchdog();
 		const report = await orchestrator.tick();
@@ -8052,6 +8712,7 @@ export async function serveLoop(input: {
 		if (!written) log("status_unwritable", {});
 
 		watchdog();
+		scores();
 
 		await input.pump?.();
 
@@ -8061,5 +8722,8 @@ export async function serveLoop(input: {
 	}
 
 	if (scheduled !== null) clearImmediate(scheduled);
+
+	if (scoreScheduled !== null) clearImmediate(scoreScheduled);
+	await scorePending;
 	log("controller_stopping", {});
 }

@@ -27,6 +27,24 @@ attention:
 replay:
   max_tokens: 1650000
 
+grader:
+  model: openai/gpt-6.1-sol
+  maxTokens: 16000
+scorers:
+  outcome-quality:
+    id: outcome-quality
+    prompt: >-
+      Judge whether the recorded final outcome matched the run's contract.
+      Use matched only when the redacted evidence supports the promised outcome.
+      Use mismatched for an unsuccessful or contradicted outcome, and unknown
+      when the contract or evidence needed to judge is unavailable.
+    labels:
+      matched: 1
+      mismatched: 0
+      unknown: 0
+    passingScore: 1
+    samplingRate: 10
+    includeChildren: true
 cadence:
   weeklyTokenCap: 200000
   jobs:

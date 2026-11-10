@@ -7,6 +7,7 @@ import {
 import {
 	GitHubPublicationApi,
 	LEDGER_FILE,
+	SCORE_FILE,
 	PublicationError,
 	createLedgerChild,
 	createLedgerRoot,
@@ -1163,15 +1164,32 @@ export interface LedgerApi {
 	advance(from: GitSha | null, next: GitSha): Promise<LedgerAdvance>;
 }
 
-export function ledgerApiOf(api: GitHubPublicationApi): LedgerApi {
+export function ledgerApiOf(
+	api: GitHubPublicationApi,
+	stream: "runs" | "scores" = "runs",
+): LedgerApi {
+	const file = stream === "scores" ? SCORE_FILE : LEDGER_FILE;
+
 	return {
 		startJob: () => api.startJob(),
 		ref: () => api.ledgerRef(),
 		commit: (sha) => readLedgerCommit(api, sha),
-		file: (tree) => readLedgerFile(api, tree),
+		file: (tree) => readLedgerFile(api, tree, file),
 		root: (date) => createLedgerRoot(api, date),
 		child: (parent, bytes, date, message) =>
-			createLedgerChild(api, parent, bytes, date, message),
+			createLedgerChild(
+				api,
+				parent,
+				bytes,
+				date,
+				stream === "scores"
+					? message
+							.replace("factory: ledger row", "factory: score event")
+							.replace("Factory-Run:", "Factory-Score:")
+							.replace("Factory-Row:", "Factory-Event:")
+					: message,
+				file,
+			),
 		advance: (from, next) => api.advanceLedger(from, next),
 	};
 }
@@ -1194,6 +1212,127 @@ export function parseAnchor(value: JsonValue | undefined): LedgerAnchor | null {
 		if (error instanceof LedgerRowError) return null;
 		throw error;
 	}
+}
+
+const scoreNumber: Codec<number> = (value) => {
+	const number = Number(value);
+
+	return value === number &&
+		Number.isFinite(number) &&
+		number >= 0 &&
+		number <= 1
+		? number
+		: fail("invalid_score");
+};
+
+const scoreText =
+	(max: number): Codec<string> =>
+	(value) => {
+		const text = textOf(value);
+
+		return text !== null &&
+			Buffer.byteLength(text) <= max &&
+			![...text].some(
+				(c) =>
+					(c.charCodeAt(0) < 32 && c !== "\n" && c !== "\t") ||
+					(c.charCodeAt(0) >= 127 && c.charCodeAt(0) <= 159),
+			)
+			? text
+			: fail("invalid_score_text");
+	};
+
+const scoreCodec = record({
+	id: digest,
+	scoredRunId: digest,
+	scorerId: pattern(/^[a-z][a-z0-9-]{0,63}$/, "invalid_scorer"),
+	scorerDigest: digest,
+	inputDigest: digest,
+	includeChildren: flag,
+	label: nullable(scoreText(64)),
+	score: nullable(scoreNumber),
+	passingScore: scoreNumber,
+	reasoning: scoreText(4096),
+	judgeModel: pattern(MODEL_ID, "invalid_model"),
+	judgeFamily: literal("openai"),
+	familyNote: literal("context-isolated, same family, not cross-family"),
+	usage: record({ tokens: count, wallMs: count, exact: flag }),
+	supersedes: nullable(digest),
+	at: instant,
+	status: oneOf("scored", "failed", "voided"),
+	voided: nullable(literal("scorer_touched")),
+});
+
+export type ScoreEvent = Out<typeof scoreCodec>;
+
+export function scoreEventOf(value: JsonValue | undefined): ScoreEvent | null {
+	try {
+		const event = scoreCodec(value);
+
+		if (
+			(event.status === "scored"
+				? event.score === null || event.label === null
+				: event.score !== null || event.label !== null) ||
+			(event.status === "voided") !== (event.voided !== null)
+		)
+			return null;
+
+		return event;
+	} catch (error) {
+		if (error instanceof LedgerRowError) return null;
+		throw error;
+	}
+}
+
+export function parseScores(bytes: Uint8Array): readonly ScoreEvent[] {
+	const text = Buffer.from(bytes).toString("utf8");
+
+	if (text !== "" && !text.endsWith("\n"))
+		throw new LedgerRowError("ledger_corrupt");
+	const events: ScoreEvent[] = [];
+	const ids = new Set<string>();
+
+	for (const line of text === "" ? [] : text.slice(0, -1).split("\n")) {
+		const event = hasDuplicateKey(line) ? null : scoreEventOf(parseJson(line));
+
+		if (event === null || ids.has(event.id))
+			throw new LedgerRowError("ledger_corrupt");
+		ids.add(event.id);
+		events.push(event);
+	}
+
+	return events;
+}
+
+export function indexScores(bytes: Uint8Array): LedgerIndex {
+	try {
+		const events = parseScores(bytes);
+		const lines = Buffer.from(bytes).toString("utf8").split("\n");
+
+		return {
+			kind: "indexed",
+			rows: new Map(
+				events.map((event, at) => [
+					event.id,
+					{ digest: digestOf(`${lines[at]}\n`), line: at + 1 },
+				]),
+			),
+		};
+	} catch (error) {
+		if (error instanceof LedgerRowError)
+			return { kind: "blocked", reason: "ledger_corrupt", line: 0 };
+		throw error;
+	}
+}
+
+export function latestScores(
+	events: readonly ScoreEvent[],
+): readonly ScoreEvent[] {
+	const latest = new Map<string, ScoreEvent>();
+
+	for (const event of events)
+		latest.set(JSON.stringify([event.scoredRunId, event.scorerId]), event);
+
+	return [...latest.values()];
 }
 
 export type PendingRow = {
@@ -1363,6 +1502,8 @@ export async function appendRun(
 	rounds = 3,
 	adoption?: Adoption,
 	allowRoot = true,
+	indexBytes: (bytes: Uint8Array) => LedgerIndex = (bytes) =>
+		indexLedger(parseLedger(bytes)),
 ): Promise<AppendResult> {
 	let current = anchor;
 
@@ -1386,7 +1527,7 @@ export async function appendRun(
 					reason: seen.reason,
 					anchor: current,
 				};
-			const index = indexLedger(parseLedger(seen.file.bytes));
+			const index = indexBytes(seen.file.bytes);
 
 			if (index.kind === "blocked")
 				return { kind: "blocked", reason: index.reason, anchor: current };
@@ -1406,9 +1547,15 @@ export async function appendRun(
 
 			if (round > rounds) break;
 
+			const bytes = Buffer.concat([seen.file.bytes, row.bytes]);
+			const nextIndex = indexBytes(bytes);
+
+			if (nextIndex.kind === "blocked")
+				return { kind: "blocked", reason: nextIndex.reason, anchor: current };
+
 			const child = await api.child(
 				seen.head,
-				Buffer.concat([seen.file.bytes, row.bytes]),
+				bytes,
 				row.date,
 				`factory: ledger row ${row.runId}\n\nFactory-Run: ${row.runId}\nFactory-Row: ${row.digest}\n`,
 			);

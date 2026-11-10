@@ -210,6 +210,11 @@ export type StageLaunchInput = {
 	};
 	readonly tools: readonly string[];
 	readonly skills: readonly string[];
+	readonly measurement?: {
+		readonly kind: "score" | "explain";
+		readonly scoredRunId: Digest;
+		readonly seq: number;
+	};
 	readonly maintenance?: {
 		readonly job: import("./workflow.ts").CadenceJob;
 		readonly windowStart: number;
@@ -1127,6 +1132,10 @@ export type OrchestratorInput = {
 	executor: StageExecutor;
 	clock: Clock;
 	cadence?: CadenceRunner;
+	measurement?: {
+		terminal(runId: Digest, config: WorkflowConfig): void;
+		occupied(): number;
+	};
 	/** Only these issues, or every candidate when `null`. */
 	scope: readonly number[] | null;
 	log: Log;
@@ -2819,6 +2828,17 @@ export class Orchestrator {
 				reason: frozen,
 			});
 
+		if (frozen === "frozen" && this.#config !== null) {
+			try {
+				this.#input.measurement?.terminal(marker.runId, this.#config);
+			} catch {
+				this.#input.log("measurement_failed", {
+					runId: marker.runId,
+					reason: "enrollment_unavailable",
+				});
+			}
+		}
+
 		return frozen !== "unwritable";
 	}
 
@@ -3239,7 +3259,8 @@ export class Orchestrator {
 	#active(): number {
 		return (
 			[...this.state.runs.values()].filter(holdsSlot).length +
-			(this.#input.cadence?.occupied() ?? 0)
+			(this.#input.cadence?.occupied() ?? 0) +
+			(this.#input.measurement?.occupied() ?? 0)
 		);
 	}
 

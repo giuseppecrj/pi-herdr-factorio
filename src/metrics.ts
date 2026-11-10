@@ -2,6 +2,55 @@ import { lstat, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { parseLedger, type LedgerRow, type RunContextV2 } from "./ledger.ts";
 import { digestOf } from "./run.ts";
+import { regularText } from "./artifacts.ts";
+import type { JsonValue } from "./tickets.ts";
+
+function metricObject(value: JsonValue | undefined) {
+	return value !== undefined &&
+		value !== null &&
+		value instanceof Object &&
+		!Array.isArray(value)
+		? value
+		: null;
+}
+
+/** Measurement reports use the same local snapshot as the dashboard, not a fresh cohort. */
+export function measurementPrimary(stateDir: string, repo: string) {
+	try {
+		const parsed: JsonValue = JSON.parse(
+			regularText(join(stateDir, "metrics.json"), 2 * 1024 * 1024),
+		);
+
+		const snapshot = metricObject(parsed);
+		const report = metricObject(snapshot?.report);
+		const primary = metricObject(report?.primary);
+
+		if (snapshot?.version !== 1 || report?.repo !== repo || primary === null)
+			throw new Error("metric_snapshot_invalid");
+
+		return {
+			metric: "F12a clean landing share",
+			status: report.status ?? "unavailable",
+			value: primary,
+			stale: snapshot.stale !== false,
+			computedAt: snapshot.computedAt ?? null,
+		};
+	} catch {
+		return {
+			metric: "F12a clean landing share",
+			status: "unavailable",
+			value: null,
+			stale: true,
+			computedAt: null,
+		};
+	}
+}
+
+export function primaryMetricText(
+	primary: ReturnType<typeof measurementPrimary>,
+): string {
+	return `${primary.metric}: ${primary.status}${primary.stale ? " (snapshot stale or unavailable)" : ""}; ${JSON.stringify(primary.value)}`;
+}
 
 // Coordinator defaults pending the owner's F12a design calls; metric policy, not workflow knobs.
 export const METRIC_POLICY = {

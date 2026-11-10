@@ -22,6 +22,25 @@ import { type Digest, digestOf, type Stage } from "./run.ts";
 
 export type ExecutionStage = ModelStage | "maintain";
 
+export type ScorerConfig = {
+	readonly id: string;
+	readonly prompt: string;
+	readonly labels: Readonly<Record<string, number>>;
+	readonly passingScore: number;
+	readonly samplingRate: number;
+	readonly includeChildren: boolean;
+};
+
+// Exact, authorized OpenAI IDs, not aliases such as latest or arbitrary gateway models.
+export const GRADER_MODELS = [
+	"openai/gpt-6.1-sol",
+	"openai/gpt-6.1-terra",
+] as const;
+
+export function isPinnedGrader(model: string): model is ModelId {
+	return GRADER_MODELS.some((known) => known === model);
+}
+
 export const CADENCE_JOBS = [
 	"architecture",
 	"security",
@@ -125,6 +144,11 @@ export type WorkflowConfig = {
 	};
 	readonly replay?: { readonly maxTokens: number } | null;
 	readonly cadence?: CadenceConfig | null;
+	readonly scorers?: readonly ScorerConfig[];
+	readonly grader?: {
+		readonly model: ModelId;
+		readonly maxTokens: number;
+	} | null;
 	readonly stages: StageSettings;
 	readonly checkpoints: { readonly approveMerge: { readonly mode: "always" } };
 };
@@ -882,6 +906,127 @@ function readCadence(root: Map<string, YamlNode>): CadenceConfig | null {
 	});
 }
 
+function readScorers(root: Map<string, YamlNode>) {
+	if (!root.has("scorers") && !root.has("grader"))
+		return { scorers: Object.freeze([]), grader: null };
+
+	const grader = optionalEntries(root, "grader", "grader", [
+		"model",
+		"maxTokens",
+	]);
+
+	const maxTokens = integerOr(grader, "maxTokens", "grader.maxTokens", {
+		min: 1,
+		fallback: 16_000,
+	});
+
+	const model = readString(grader.get("model") ?? null, "grader.model");
+
+	if (!isPinnedGrader(model))
+		fail("grader.model", "requires a known exact pinned OpenAI grader");
+
+	const entries = root.has("scorers")
+		? entriesOf(root.get("scorers") ?? null, "scorers")
+		: new Map<string, YamlNode>();
+
+	const number = (node: YamlNode, field: string, max = 1) => {
+		const text = readString(node, field);
+		const value = Number(text);
+
+		if (
+			!/^\d+(?:\.\d+)?$/.test(text) ||
+			!Number.isFinite(value) ||
+			value < 0 ||
+			value > max
+		)
+			fail(field, `must be a number from 0 to ${max}`);
+
+		return value;
+	};
+
+	const scorers: ScorerConfig[] = [];
+
+	for (const [key, node] of entries) {
+		if (!/^[a-z][a-z0-9-]{0,63}$/.test(key))
+			fail("scorers", "invalid scorer id");
+		const field = `scorers.${key}`;
+
+		const config = optionalEntries(new Map([[key, node]]), key, field, [
+			"id",
+			"prompt",
+			"labels",
+			"passingScore",
+			"samplingRate",
+			"includeChildren",
+		]);
+
+		const id = readString(config.get("id") ?? null, `${field}.id`);
+
+		if (id !== key) fail(`${field}.id`, "must match its map key");
+		const prompt = readString(config.get("prompt") ?? null, `${field}.prompt`);
+
+		if (Buffer.byteLength(prompt) > 8192)
+			fail(`${field}.prompt`, "exceeds 8 KiB");
+		const labels: Record<string, number> = {};
+
+		for (const [label, score] of entriesOf(
+			config.get("labels") ?? null,
+			`${field}.labels`,
+		)) {
+			if (!/^[a-z][a-z0-9_-]{0,63}$/.test(label))
+				fail(`${field}.labels`, "invalid label");
+
+			labels[label] = number(score, `${field}.labels.${label}`);
+		}
+
+		const passingScore = number(
+			config.get("passingScore") ?? null,
+			`${field}.passingScore`,
+		);
+
+		if (
+			Object.keys(labels).length < 2 ||
+			Object.keys(labels).length > 20 ||
+			!Object.values(labels).some((v) => v >= passingScore) ||
+			!Object.values(labels).some((v) => v < passingScore)
+		)
+			fail(
+				`${field}.labels`,
+				"requires 2 to 20 labels, including passing and failing scores",
+			);
+
+		const children = readString(
+			config.get("includeChildren") ?? null,
+			`${field}.includeChildren`,
+		);
+
+		if (children !== "true" && children !== "false")
+			fail(`${field}.includeChildren`, "must be true or false");
+
+		scorers.push(
+			Object.freeze({
+				id,
+				prompt,
+				labels: Object.freeze(labels),
+				passingScore,
+				samplingRate: config.has("samplingRate")
+					? number(
+							config.get("samplingRate") ?? null,
+							`${field}.samplingRate`,
+							100,
+						)
+					: 10,
+				includeChildren: children === "true",
+			}),
+		);
+	}
+
+	return {
+		scorers: Object.freeze(scorers),
+		grader: Object.freeze({ model, maxTokens }),
+	};
+}
+
 const ROOT_KEYS = [
 	"repository",
 	"polling",
@@ -892,6 +1037,8 @@ const ROOT_KEYS = [
 	"attention",
 	"replay",
 	"cadence",
+	"scorers",
+	"grader",
 	"stages",
 	"checkpoints",
 ];
@@ -1023,6 +1170,7 @@ function readConfig(
 				})
 			: null,
 		cadence: readCadence(root),
+		...readScorers(root),
 		stages: readStages(root, warnings),
 		checkpoints: readCheckpoints(root),
 	});
