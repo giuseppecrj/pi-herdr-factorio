@@ -36,7 +36,7 @@ cadence:
       minuteUtc: 0
       model: openai/gpt-6.1-sol
       maxTokens: 40000
-      maxTurns: 12
+      maxTurns: 2
       wallMs: 600000
     security:
       dayUtc: 2
@@ -44,7 +44,7 @@ cadence:
       minuteUtc: 0
       model: openai/gpt-6.1-sol
       maxTokens: 40000
-      maxTurns: 12
+      maxTurns: 2
       wallMs: 600000
     instructions:
       dayUtc: 3
@@ -52,7 +52,7 @@ cadence:
       minuteUtc: 0
       model: openai/gpt-6.1-sol
       maxTokens: 40000
-      maxTurns: 12
+      maxTurns: 2
       wallMs: 600000
     hygiene:
       dayUtc: 4
@@ -60,7 +60,7 @@ cadence:
       minuteUtc: 0
       model: openai/gpt-6.1-sol
       maxTokens: 40000
-      maxTurns: 12
+      maxTurns: 2
       wallMs: 600000
 
 stages:

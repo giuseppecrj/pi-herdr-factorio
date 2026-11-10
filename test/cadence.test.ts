@@ -17,6 +17,7 @@ import { createServer } from "node:http";
 import { createServer as createUnixServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, it, type TestContext } from "node:test";
 import { execFile, runCli, type ControllerRuntime } from "../server/cli.ts";
@@ -42,6 +43,10 @@ import {
 	CadenceRunner,
 	CADENCE_RETAIN_EXECUTIONS,
 	CADENCE_PATH_GROUPS,
+	CADENCE_EXCERPT_BYTES,
+	CADENCE_FILE_BYTES,
+	CADENCE_SKILLS,
+	cadenceExcerpt,
 	cadencePrompt,
 	cadenceCharges,
 	cadenceExecutionDir,
@@ -413,11 +418,15 @@ describe("cadence weekly policy and structured findings", () => {
 		);
 	});
 
-	it("keeps candidate security-review skill bytes unchanged and injects repository mode only into cadence", () => {
+	it("keeps the candidate security-review contract unchanged and injects repository mode only into cadence", () => {
 		assert.equal(
 			digestOf(
 				readFileSync(
 					new URL("../skills/security-review/SKILL.md", import.meta.url),
+					"utf8",
+				).replace(
+					/When the controller explicitly selects repository-scope maintenance mode[^\n]+\n\n/,
+					"",
 				),
 			),
 			"680790c43e8292798a1762d72c53657c691a1a385091ab89c636c7efdf670e75",
@@ -526,6 +535,225 @@ describe("cadence weekly policy and structured findings", () => {
 			[...CADENCE_PATH_GROUPS],
 		);
 		assert.deepEqual(cadenceScope(CADENCE_PATH_GROUPS.length), cadenceScope(0));
+	});
+});
+
+describe("bounded single-pass cadence excerpts", () => {
+	it("packs deterministic byte-bounded numbered prefixes and covers every eligible file over a rotation", () => {
+		const paths = CADENCE_PATH_GROUPS.flatMap((group) =>
+			Array.from({ length: 40 }, (_, i) => `${group[0]}/file-${i}.ts`),
+		);
+
+		const read = () => "first\nsecond\n" + "é".repeat(10_000);
+		const seen = new Set<string>();
+
+		for (let rotation = 0; rotation < 40; rotation++) {
+			const execution = { ...input(), rotation };
+			const excerpt = cadenceExcerpt(execution, paths, read);
+			assert.deepEqual(
+				excerpt,
+				cadenceExcerpt(execution, [...paths].reverse(), read),
+			);
+			assert.ok(
+				Buffer.byteLength(JSON.stringify(excerpt.files)) <=
+					CADENCE_EXCERPT_BYTES,
+			);
+
+			for (const file of excerpt.files) {
+				seen.add(file.path);
+				assert.match(file.lines, /^1: first\n2: second\n3: /);
+				assert.ok(Buffer.byteLength(file.lines) <= CADENCE_FILE_BYTES);
+				assert.equal(file.truncated, true);
+			}
+		}
+
+		assert.deepEqual([...seen].sort(), [...paths].sort());
+	});
+
+	it("selects instructions from the first run, rotates instruction parts and excludes held-out and binary input", () => {
+		const files = [
+			"AGENTS.md",
+			".github/factory/WORKFLOW.md",
+			...Array.from({ length: 30 }, (_, i) => `skills/s${i}/SKILL.md`),
+			"src/code.ts",
+			"test/acceptance/private.ts",
+			"skills/README.md",
+		];
+
+		const seen = new Set<string>();
+
+		for (let rotation = 0; rotation < 8; rotation++) {
+			const excerpt = cadenceExcerpt(
+				{ job: "instructions", rotation },
+				files,
+				() => "rule\n".repeat(2000),
+			);
+
+			for (const file of excerpt.files) seen.add(file.path);
+		}
+
+		assert.deepEqual([...seen].sort(), files.slice(0, -3).sort());
+
+		const excluded = cadenceExcerpt(
+			input(),
+			["src/binary", "test/acceptance/private.ts"],
+			() => "\0",
+		);
+
+		assert.deepEqual(excluded.files, []);
+		assert.equal(excluded.omitted, 1);
+
+		const escaped = cadenceExcerpt(input(), ["src/control.ts"], () =>
+			"\u0001".repeat(20_000),
+		);
+
+		assert.ok(
+			Buffer.byteLength(JSON.stringify(escaped.files)) <= CADENCE_EXCERPT_BYTES,
+		);
+	});
+
+	it("estimates every job and excerpt part on pinned main below 40k with headroom", (t) => {
+		let main: string;
+
+		try {
+			main = execFileSync("git", ["rev-parse", "--verify", "origin/main"], {
+				encoding: "utf8",
+				stdio: ["ignore", "pipe", "pipe"],
+			}).trim();
+		} catch {
+			t.skip(
+				"pinned-main measurement requires source checkout refs, unavailable in archive-only test sandboxes",
+			);
+
+			return;
+		}
+
+		const paths = execFileSync("git", ["ls-tree", "-r", "--name-only", main], {
+			encoding: "utf8",
+		})
+			.trim()
+			.split("\n");
+
+		const contents = new Map<string, string>();
+
+		const read = (path: string) => {
+			if (!contents.has(path))
+				contents.set(
+					path,
+					execFileSync("git", ["show", `${main}:${path}`], {
+						encoding: "utf8",
+						maxBuffer: 10 * 1024 * 1024,
+					}),
+				);
+
+			const text = contents.get(path)!;
+
+			return Buffer.byteLength(text) <= 1024 * 1024 ? text : null;
+		};
+
+		const estimates = [];
+
+		for (const job of Object.keys(CADENCE_SKILLS)) {
+			assert.ok(
+				job === "architecture" ||
+					job === "security" ||
+					job === "instructions" ||
+					job === "hygiene",
+			);
+			let maxExcerpt = 0;
+			let maxPrompt = 0;
+			const covered = new Set<string>();
+			let rotations = job === "instructions" ? 1 : CADENCE_PATH_GROUPS.length;
+
+			for (let rotation = 0; rotation < rotations; rotation++) {
+				const execution = {
+					...input(job),
+					rotation,
+					existingProposals: Array.from({ length: 100 }, () => ({
+						fingerprint: digestOf("known"),
+						title: "x".repeat(220),
+						state: "open" as const,
+						path: "src/example.ts",
+					})),
+				};
+
+				const excerpt = cadenceExcerpt(execution, paths, read);
+				rotations = Math.max(
+					rotations,
+					excerpt.parts *
+						(job === "instructions" ? 1 : CADENCE_PATH_GROUPS.length),
+				);
+
+				for (const file of excerpt.files) covered.add(file.path);
+
+				const ledger =
+					job === "hygiene"
+						? "x".repeat(16 * 1024)
+						: "unavailable; not requested by this job";
+
+				const prompt =
+					cadencePrompt(
+						execution,
+						excerpt.files.map((file) => file.path),
+						ledger,
+						excerpt,
+					) + readFileSync(`skills/${CADENCE_SKILLS[job]}/SKILL.md`, "utf8");
+
+				maxExcerpt = Math.max(
+					maxExcerpt,
+					Buffer.byteLength(JSON.stringify(excerpt.files)),
+				);
+				maxPrompt = Math.max(maxPrompt, Math.ceil(prompt.length / 4) + 256);
+			}
+
+			const estimate = maxPrompt + 16_384;
+			assert.ok(
+				estimate < 36_000,
+				`${job}: ${estimate} including a full 64 KiB answer`,
+			);
+
+			const eligible = paths.filter((path) => {
+				if (path.toLowerCase().startsWith("test/acceptance/")) return false;
+
+				if (
+					job === "instructions" &&
+					path !== "AGENTS.md" &&
+					path !== ".github/factory/WORKFLOW.md" &&
+					!/^skills\/[^/]+\/SKILL\.md$/.test(path)
+				)
+					return false;
+				const text = read(path);
+
+				return text !== null && !text.includes("\0");
+			});
+
+			assert.deepEqual(
+				[...covered].sort(),
+				eligible.sort(),
+				`${job}: every eligible main file covered`,
+			);
+			estimates.push({
+				job,
+				main,
+				excerptBytes: maxExcerpt,
+				promptTokens: maxPrompt,
+				answerReserve: 16_384,
+				totalEstimate: estimate,
+				headroom: 40_000 - estimate,
+				rotations,
+				files: covered.size,
+			});
+		}
+
+		t.diagnostic(
+			JSON.stringify({
+				excerptBudget: CADENCE_EXCERPT_BYTES,
+				perFileBudget: CADENCE_FILE_BYTES,
+				estimate:
+					"chars/4 plus 256 runtime tokens; max over all parts; full 64 KiB answer reserve and 4 KiB known proposals",
+				jobs: estimates,
+			}),
+		);
 	});
 });
 
@@ -1563,6 +1791,7 @@ it("native cadence --once dedup demo: real Pi/RPC, bwrap, user scope, gateway an
 	let answer = JSON.stringify({ proposals: findings });
 	let expectedFingerprint: string | null = null;
 	let modelRequests = 0;
+	let injectedTokens = 16;
 	let release: () => void = () => undefined;
 	let arrived: () => void = () => undefined;
 
@@ -1596,11 +1825,15 @@ it("native cadence --once dedup demo: real Pi/RPC, bwrap, user scope, gateway an
 						(item) => arrayOf(objectOf(item)?.tools) ?? [],
 					);
 
-				assert.deepEqual(tools.map((tool) => objectOf(tool)?.name).sort(), [
-					"grep",
-					"ls",
-					"read",
-				]);
+				assert.deepEqual(
+					tools,
+					[],
+					"single-pass audit has no tool definitions",
+				);
+				assert.ok(
+					body.includes("1: export const first = 1;"),
+					"controller delivers numbered source in the sole request",
+				);
 
 				if (expectedFingerprint !== null)
 					assert.ok(
@@ -1626,9 +1859,9 @@ it("native cadence --once dedup demo: real Pi/RPC, bwrap, user scope, gateway an
 					model: "gpt-6.1-sol",
 					output: [item],
 					usage: {
-						input_tokens: 11,
+						input_tokens: injectedTokens - 5,
 						output_tokens: 5,
-						total_tokens: 16,
+						total_tokens: injectedTokens,
 						input_tokens_details: { cached_tokens: 0 },
 					},
 				};
@@ -1910,7 +2143,7 @@ it("native cadence --once dedup demo: real Pi/RPC, bwrap, user scope, gateway an
 		runId: digestOf("read-only probe"),
 		stage: "maintain",
 		attempt: 1,
-		tools: ["read", "grep", "ls"],
+		tools: [],
 		arch,
 		xdgRuntimeDir:
 			process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.()}`,
@@ -2220,5 +2453,62 @@ it("native cadence --once dedup demo: real Pi/RPC, bwrap, user scope, gateway an
 	);
 	t.diagnostic(
 		"native zero-work launch refusal retried after backoff with its pinned checkout intact; no weekly slot lost",
+	);
+
+	injectedTokens = 40_001;
+
+	for (const [name, output, expected] of [
+		["capped-empty", '{"proposals":[]}', 0],
+		[
+			"capped-finding",
+			JSON.stringify({
+				proposals: [{ ...finding(), title: "Valid capped finding" }],
+			}),
+			0,
+		],
+		["capped-invalid", '{"proposals":[', 1],
+	] as const) {
+		const cappedState = join(root, name);
+
+		mkdirSync(cappedState, { mode: 0o700 });
+		answer = output;
+		assert.equal(
+			await runCli([...argv.slice(0, -1), cappedState], io),
+			expected,
+			`${stdout}\n${stderr}`,
+		);
+
+		const cappedDir = cadenceExecutionDir(
+			cappedState,
+			"architecture",
+			execution.windowStart,
+		);
+
+		const native = objectOf(
+			parseJson(readFileSync(join(cappedDir, "runtime/receipt.json"), "utf8")),
+		);
+
+		assert.deepEqual(native?.outcome, {
+			kind: "budget_exhausted",
+			cap: "tokens",
+		});
+		assert.equal(
+			readFileSync(join(cappedDir, "runtime/output.txt"), "utf8"),
+			output,
+		);
+		assert.equal(cadenceCharges(cappedState, repo)[0]?.tokens, injectedTokens);
+		assert.equal(
+			await runCli([...argv.slice(0, -1), cappedState], io),
+			expected,
+		);
+	}
+
+	assert.equal(
+		github.creates,
+		4,
+		"valid capped finding is filed; invalid capped JSON is not",
+	);
+	t.diagnostic(
+		"native maintain answers retained at the cap: valid empty/finding settled, malformed JSON failed; cap and full usage retained in native receipt",
 	);
 });

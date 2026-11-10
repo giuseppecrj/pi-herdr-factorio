@@ -6273,6 +6273,15 @@ describe("budget stops before the next request, through the gate", () => {
 		);
 	});
 
+	it("never forwards a second maintain request", async () => {
+		const { result, forwarded, h } = await capped({ stage: "maintain" }, {});
+
+		assert.equal(result.kind, "budget_exhausted");
+		assert.equal(forwarded, 1);
+		assert.equal(h.tables[0]?.ceiling.modelRequests, 1);
+		assert.deepEqual(h.outputs, []);
+	});
+
 	it("allows five accept requests and never forwards a sixth; the backstop is a charged failure", async () => {
 		const { result, forwarded, events, h } = await capped(
 			{ stage: "accept" },
@@ -6847,6 +6856,42 @@ describe("stage output capture", () => {
 		assert.equal(result.kind, "budget_exhausted");
 		assert.deepEqual(h.outputs, []);
 		assert.equal(result.receipt.output, null);
+	});
+
+	it("retains a complete maintain answer at the token cap without changing ticket stages", async () => {
+		for (const stage of ["maintain", "specify", "accept", "build"] as const) {
+			const answer = '{"proposals":[]}';
+			const h = harness([textReplier(SETTLED_TURN, answer)]);
+
+			const result = await runStage(
+				input({ stage }, { maxTokens: 10 }),
+				h.host,
+			);
+
+			assert.equal(result.kind, "budget_exhausted");
+			assert.deepEqual(h.outputs, stage === "maintain" ? [answer] : []);
+			assert.equal(result.receipt.output !== null, stage === "maintain");
+		}
+	});
+
+	it("does not retain unfinished, refused or errored maintain text at a cap", async () => {
+		for (const stopReason of ["toolUse", "length", "error", "refusal"]) {
+			const h = harness([
+				textReplier(
+					[
+						started("x"),
+						{ type: "agent_start" },
+						{ type: "turn_start" },
+						assistant({ stopReason, tokens: 40 }),
+						{ type: "agent_settled", aborted: false },
+					],
+					'{"proposals":[]}',
+				),
+			]);
+
+			await runStage(input({ stage: "maintain" }, { maxTokens: 10 }), h.host);
+			assert.deepEqual(h.outputs, []);
+		}
 	});
 
 	it("caps the kept text at 256 KiB and records the full size", async () => {

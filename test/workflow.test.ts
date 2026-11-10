@@ -164,7 +164,7 @@ describe("trusted cadence workflow", () => {
 			assert.equal(job.model, DEFAULT_MODEL);
 			assert.equal(job.maxTokens, 40_000);
 			assert.deepEqual(job.budget, {
-				maxTurns: 12,
+				maxTurns: 2,
 				wallMs: 600_000,
 				stallMs: 120_000,
 			});

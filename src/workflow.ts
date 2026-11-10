@@ -854,7 +854,7 @@ function readCadence(root: Map<string, YamlNode>): CadenceConfig | null {
 				maxTurns: integerOr(entries, "maxTurns", `${field}.maxTurns`, {
 					min: 1,
 					max: 12,
-					fallback: 12,
+					fallback: 2,
 				}),
 				wallMs: integerOr(entries, "wallMs", `${field}.wallMs`, {
 					min: STAGE_CLEANUP_RESERVE_MS + 1,

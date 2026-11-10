@@ -871,7 +871,13 @@ async function runSession(
 
 	let text: string | null = finalText;
 
-	if (report === "settled" && text === null) {
+	const retainCappedMaintain =
+		input.stage === "maintain" &&
+		report !== "settled" &&
+		report.kind === "budget_exhausted" &&
+		tracker.lastAssistant?.stopReason === "stop";
+
+	if ((report === "settled" || retainCappedMaintain) && text === null) {
 		// Pi can exit before it answers a command sent after stdin ends, so the
 		// reply is awaited first.
 		const reply = new Promise<void>((done) => {
@@ -916,7 +922,7 @@ async function runSession(
 			refusal: null,
 			settlement,
 			observed,
-			text: null,
+			text: retainCappedMaintain ? text : null,
 			diagnostic,
 		};
 	}
@@ -937,7 +943,8 @@ async function runSession(
 			refusal: null,
 			settlement,
 			observed,
-			text: null,
+			text:
+				input.stage === "maintain" && last?.stopReason === "stop" ? text : null,
 		};
 	}
 
@@ -1195,7 +1202,9 @@ export async function runStage(
 					});
 
 		const output =
-			outcome.kind === "passed" && text !== null
+			(outcome.kind === "passed" ||
+				(input.stage === "maintain" && outcome.kind === "budget_exhausted")) &&
+			text !== null
 				? await keepOutput(host, text, cleanup)
 				: null;
 
@@ -1299,9 +1308,11 @@ export async function runStage(
 						: bareModel(input.settings.fallback),
 			modelTokens: tokenCap - ledger.total,
 			modelRequests: Math.min(
-				input.stage === "accept"
-					? ACCEPT_REQUEST_CEILING
-					: MODEL_REQUEST_CEILING,
+				input.stage === "maintain"
+					? 1
+					: input.stage === "accept"
+						? ACCEPT_REQUEST_CEILING
+						: MODEL_REQUEST_CEILING,
 				budget.maxTurns - ledger.turns,
 			),
 		});
@@ -1610,11 +1621,7 @@ export function launchSandbox(
 				arg === "--bind" && sandboxArgs[index + 1] === config.workspace,
 		);
 
-		if (
-			at < 0 ||
-			config.tools.some((tool) => !["read", "grep", "ls"].includes(tool))
-		)
-			return null;
+		if (at < 0 || config.tools.length !== 0) return null;
 
 		sandboxArgs[at] = "--ro-bind";
 
@@ -4787,8 +4794,7 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 
 			if (
 				input.stage === "maintain" &&
-				(input.maintenance === undefined ||
-					input.tools.some((tool) => !["read", "grep", "ls"].includes(tool)))
+				(input.maintenance === undefined || input.tools.length !== 0)
 			)
 				return {
 					kind: "unavailable",

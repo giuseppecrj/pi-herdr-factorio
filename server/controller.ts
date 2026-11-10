@@ -33,6 +33,8 @@ import {
 	cadenceExecutionDir,
 	cadenceIssueBody,
 	cadencePrompt,
+	cadenceExcerpt,
+	parseCadenceProposals,
 	cadenceScope,
 	inCadenceScope,
 	cadencePrivateDir,
@@ -4273,8 +4275,17 @@ export function controllerCadence(input: {
 			native.record.stage === "maintain" &&
 			native.record.attempt === 1;
 
-		const passed = valid && native.outcome.kind === "passed";
-		const output = passed ? readCadenceFile(join(runtime, "output.txt")) : null;
+		const completed = valid && native.outcome.kind === "passed";
+		const capped = valid && native.outcome.kind === "budget_exhausted";
+
+		const output =
+			completed || capped ? readCadenceFile(join(runtime, "output.txt")) : null;
+
+		const passed =
+			completed ||
+			(capped &&
+				output !== null &&
+				parseCadenceProposals(output, execution) !== null);
 
 		const usable =
 			passed && output !== null && Buffer.byteLength(output) <= 64 * 1024;
@@ -4300,11 +4311,13 @@ export function controllerCadence(input: {
 			),
 			output: usable ? output : null,
 			reason:
-				passed && !usable
-					? "invalid_output"
-					: valid
-						? native.outcome.kind
-						: "interrupted",
+				usable && capped
+					? "answered_at_cap"
+					: passed && !usable
+						? "invalid_output"
+						: valid
+							? native.outcome.kind
+							: "interrupted",
 		};
 	};
 
@@ -4388,7 +4401,10 @@ export function controllerCadence(input: {
 						fingerprint !== undefined &&
 						/^[a-f0-9]{64}$/.test(fingerprint) &&
 						path !== undefined &&
-						inCadenceScope(path, cadenceScope(execution.rotation))
+						inCadenceScope(
+							path,
+							cadenceScope(execution.rotation, execution.job),
+						)
 					)
 						existingProposals.push({
 							fingerprint,
@@ -4416,16 +4432,29 @@ export function controllerCadence(input: {
 				if (checked.kind !== "ready" || checked.omitted !== 0)
 					return failed("checkout_unavailable");
 
-				const files = checked.checkout.files.filter((path) =>
-					inCadenceScope(path, cadenceScope(execution.rotation)),
+				const excerpt = cadenceExcerpt(
+					execution,
+					checked.checkout.files,
+					(path) => {
+						const source = join(workspace, path);
+						const info = lstatSync(source);
+
+						return info.isFile() &&
+							!info.isSymbolicLink() &&
+							info.size <= 1024 * 1024
+							? readFileSync(source, "utf8")
+							: null;
+					},
 				);
+
+				const files = excerpt.files.map((file) => file.path);
 
 				const ledger =
 					execution.job === "hygiene"
 						? await cadenceLedger(input.stateDir)
 						: "unavailable; not requested by this job";
 
-				const prompt = cadencePrompt(execution, files, ledger);
+				const prompt = cadencePrompt(execution, files, ledger, excerpt);
 				writeCadenceFile(join(dir, "prompt.txt"), prompt);
 
 				if (
@@ -4450,7 +4479,7 @@ export function controllerCadence(input: {
 					},
 					workspace,
 					prompt,
-					tools: ["read", "grep", "ls"],
+					tools: [],
 					skills: [CADENCE_SKILLS[execution.job]],
 					settings: {
 						model: execution.settings.model,

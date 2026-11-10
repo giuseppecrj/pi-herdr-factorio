@@ -46,7 +46,7 @@ describe("stage table", () => {
 		assert.equal(nextStage("land"), undefined);
 		assert.equal(MAX_REPAIR_ROUNDS, 2);
 		assert.deepEqual(STAGE_PROFILES.maintain, {
-			modelAccess: "full",
+			modelAccess: "judge",
 			runsIn: "sandbox",
 			githubAccess: "none",
 		});
