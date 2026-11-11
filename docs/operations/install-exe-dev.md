@@ -18,7 +18,7 @@ Models need no command, because the `llm` integration is attached to every VM (`
 ssh exe.dev integrations attach nubl-factory-repo vm:nubl-factory
 ```
 
-Keep the GitHub bot identity. Do not use `--act-as-user`, `--readonly`, `gh auth login` or a token. Git and GitHub reads use `github.int.exe.xyz`; models use `llm.int.exe.xyz`. No credential is installed or printed.
+A newly added or re-attached integration can take a minute or two to reach the VM. Until then reads answer 403, and `--check` refuses `github_integration`, so wait and run it again. Keep the GitHub bot identity. Do not use `--act-as-user`, `--readonly`, `gh auth login` or a token. Git and GitHub reads use `github.int.exe.xyz`; models use `llm.int.exe.xyz`. No credential is installed or printed.
 
 ## One command
 

@@ -39,7 +39,7 @@ preflight() {
   case "$state" in running|degraded) ;; *) refuse systemd 'Boot boldsoftware/exeuntu with systemd as PID 1; sudo systemctl status.'; return 1;; esac
   loginctl list-users --no-legend >/dev/null 2>&1 || { refuse linger 'sudo apt-get install -y systemd; sudo systemctl start systemd-logind; sudo loginctl enable-linger exedev.'; return 1; }
   # Neither probe sends a credential or invokes a model; never echo a remote error body.
-  curl --noproxy '*' --connect-timeout 10 --max-time 30 -fsS "https://github.int.exe.xyz/api/v3/repos/$repo" 2>/dev/null | jq -e --arg repo "$repo" '.full_name == $repo' >/dev/null 2>&1 || { refuse github_integration "On your computer: ssh exe.dev integrations list; then ssh exe.dev integrations add github --repository $repo --attach vm:$vm, or ssh exe.dev integrations attach <existing> vm:$vm"; return 1; }
+  curl --noproxy '*' --connect-timeout 10 --max-time 30 -fsS "https://github.int.exe.xyz/api/v3/repos/$repo" 2>/dev/null | jq -e --arg repo "$repo" '.full_name == $repo' >/dev/null 2>&1 || { refuse github_integration "On your computer: ssh exe.dev integrations list; then ssh exe.dev integrations add github --name $vm-repo --repository $repo --attach vm:$vm, or ssh exe.dev integrations attach <existing> vm:$vm"; return 1; }
   curl --noproxy '*' --connect-timeout 10 --max-time 30 -fsS https://llm.int.exe.xyz/openai/v1/models 2>/dev/null | jq -e '.data | type == "array" and length > 0' >/dev/null 2>&1 || { refuse model_route "The llm integration is normally auto:all. On your computer: ssh exe.dev integrations list; check its attachment and route (no model request was sent)."; return 1; }
   for address in "$HOME" /var/lib /tmp; do
     available=$(df -Pk "$address" | awk 'NR == 2 { print $4 }')

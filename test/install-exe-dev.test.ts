@@ -195,9 +195,11 @@ describe("exe.dev installer read-only preflight (stubbed external infrastructure
 		);
 
 		assert.match(github.stderr, /integrations list/);
-		assert.match(github.stderr, /add github --repository/);
+		assert.match(
+			github.stderr,
+			/add github --name nubl-factory-repo --repository nublai\/pi-herdr-factorio --attach vm:nubl-factory/,
+		);
 		assert.match(github.stderr, /attach <existing> vm:nubl-factory/);
-		assert.doesNotMatch(github.stderr, /--name/);
 
 		const model = shell(`${fixture({ fail: "model_route" })}\nmain --check`);
 		assert.match(model.stderr, /auto:all/);
