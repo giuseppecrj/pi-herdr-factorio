@@ -100,7 +100,7 @@ install_controller() (
     local result=$?
     trap - EXIT
     if [ "$result" -ne 0 ] && [ "$stopped" = true ] && [ "$complete" = false ]; then
-      if sudo systemctl disable --now factory.service >/dev/null 2>&1; then
+      if [ "$(systemctl show factory.service -p LoadState --value)" = not-found ] || sudo systemctl disable --now factory.service >/dev/null 2>&1; then
         printf 'install-exe-dev: controller is stopped and disabled; the hold is in place. Recover by rerunning the pinned installer after fixing the error; do not lift the hold.\n' >&2
       else
         printf 'install-exe-dev: could not confirm stop/disable; the hold is in place. Run sudo systemctl disable --now factory.service, resolve the failure, then rerun the pinned installer; do not lift the hold.\n' >&2
@@ -146,7 +146,9 @@ install_controller() (
   sudo systemctl stop factory.service >/dev/null 2>&1 || { [ "$(systemctl show factory.service -p LoadState --value)" = not-found ] || { refuse service_stop 'sudo systemctl stop factory.service; resolve the stop failure before upgrading.'; return 1; }; }
   stopped=true
   # Disable before changing the checkout so even an interrupted provision cannot boot it.
-  sudo systemctl disable factory.service
+  if [ "$(systemctl show factory.service -p LoadState --value)" != not-found ]; then
+    sudo systemctl disable factory.service
+  fi
   if [ -d "$checkout/.git" ]; then
     git -C "$checkout" -c credential.helper= -c http.extraHeader= fetch --quiet "$staging" "$commit"
     git -C "$checkout" checkout --quiet --detach "$commit"

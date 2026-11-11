@@ -258,12 +258,16 @@ cat >"$W/bin/systemctl" <<'S'
 #!/bin/bash
 echo "systemctl $* hold=$([ -e "$HOME/factory-state/disabled" ] && echo y || echo n)" >>"$LOG"
 case "$1" in
-  stop) [ -z "${"${STOP_FAIL:-}"}" ] || exit 1; rm -f "$FAKE/active"; [ -f "$FAKE/etc/factory.service" ] || exit 5;;
+  stop|restart|enable|disable)
+    [ -f "$FAKE/etc/factory.service" ] || { echo "Failed to $1 unit: Unit factory.service does not exist" >&2; exit 1; };;
+esac
+case "$1" in
+  stop) [ -z "${"${STOP_FAIL:-}"}" ] || exit 1; rm -f "$FAKE/active";;
   restart) touch "$FAKE/active"; echo new-invocation >"$FAKE/inv"; fresh-status;;
   is-active) [ -f "$FAKE/active" ];;
   show) case "$*" in *LoadState*) [ -f "$FAKE/etc/factory.service" ] && echo loaded || echo not-found;; *InvocationID*) cat "$FAKE/inv";; esac;;
   enable) touch "$FAKE/enabled";;
-  disable) rm -f "$FAKE/enabled"; [[ "$*" != *--now* ]] || rm -f "$FAKE/active";;
+  disable) [ -z "${"${DISABLE_FAIL:-}"}" ] || exit 1; rm -f "$FAKE/enabled"; [[ "$*" != *--now* ]] || rm -f "$FAKE/active";;
   daemon-reload) :;;
   *) exit 99;;
 esac
@@ -282,6 +286,10 @@ cat >"$W/bin/node" <<'S'
 #!/bin/bash
 echo "node $*" >>"$LOG"
 st=stopped; [ ! -f "$FAKE/active" ] || st=running
+if [ ! -f "$HOME/factory-state/status.json" ]; then
+  echo '{"platform":{"repositories":["nublai/pi-herdr-factorio"]}}'
+  exit 0
+fi
 jq -n --arg st "$st" --slurpfile tick "$HOME/factory-state/status.json" '{platform:{repositories:["nublai/pi-herdr-factorio"]},controller:{state:$st,lastTick:$tick[0]}}'
 S
 cat >"$W/bin/fresh-status" <<'S'
@@ -309,8 +317,6 @@ exec /usr/bin/cmp "${"${args[@]}"}"
 S
 chmod +x "$W/bin/"*
 export HOME="$W/home" PATH="$W/bin:/usr/bin:/bin"
-mkdir -m 700 "$HOME/factory-state"
-echo '{"at":"2000-01-01T00:00:00.000Z","dispatch":{"enabled":false,"reasons":["locally_disabled"]}}' >"$HOME/factory-state/status.json"
 cat >"$W/run.sh" <<'S'
 source "$1"
 preflight() { echo preflight-stubbed; }
@@ -334,6 +340,32 @@ function isolatedInstall(body: string) {
 }
 
 describe("exe.dev installer lifecycle (reviewer's stub harness, no real host writes)", () => {
+	it("installs on a fresh home with no unit or state and starts held", () => {
+		const result = isolatedInstall(`
+[ ! -e "$checkout" ]
+[ ! -e "$state" ]
+[ "$(systemctl show factory.service -p LoadState --value)" = not-found ]
+for action in stop disable 'disable --now' enable restart; do
+  if systemctl $action 2>"$W/missing-unit"; then exit 91; else [ "$?" = 1 ]; fi
+  grep -q 'Unit factory.service does not exist' "$W/missing-unit"
+done
+: >"$LOG"
+run "$bootstrap" "$A"
+[ "$(systemctl show factory.service -p LoadState --value)" = loaded ]
+[ -f "$FAKE/active" ]
+[ -f "$FAKE/enabled" ]
+[ -f "$state/disabled" ]
+[ "$(stat -c %a "$state")" = 700 ]
+[ "$(cat "$state/install-exe-dev.commit")" = "$A nublai/pi-herdr-factorio" ]
+absent_log 'systemctl disable|hold=n'
+`);
+
+		assert.equal(result.status, 0, result.stdout + result.stderr);
+		assert.match(result.stdout, /installed=.*held=yes/);
+		assert.match(result.stdout, /locally_disabled/);
+		assert.equal(result.stderr, "");
+	});
+
 	it("cleans a failed first fetch and retries from a complete verified checkout", () => {
 		const result = isolatedInstall(`
 if FETCH_FAIL=1 run "$bootstrap" "$A"; then exit 91; fi
@@ -369,6 +401,44 @@ absent_log 'systemctl stop|REFUSE checkout_sha'
 		assert.equal(result.status, 0, result.stdout + result.stderr);
 		assert.match(result.stderr, /REFUSE fetch_commit/);
 		assert.doesNotMatch(result.stderr, /REFUSE checkout_sha/);
+	});
+
+	it("skips missing-unit cleanup after a failed first provision and can retry", () => {
+		const result = isolatedInstall(`
+if PROVISION_FAIL=1 run "$bootstrap" "$A"; then exit 91; fi
+[ ! -f "$FAKE/etc/factory.service" ]
+[ ! -f "$FAKE/active" ]
+[ ! -f "$FAKE/enabled" ]
+[ -e "$state/disabled" ]
+[ ! -f "$state/install-exe-dev.commit" ]
+absent_log 'systemctl disable'
+run "$bootstrap" "$A"
+[ -f "$FAKE/active" ]
+[ -f "$FAKE/enabled" ]
+[ -e "$state/disabled" ]
+`);
+
+		assert.equal(result.status, 0, result.stdout + result.stderr);
+		assert.match(result.stderr, /provision-fail/);
+		assert.doesNotMatch(result.stderr, /could not confirm|does not exist/);
+	});
+
+	it("refuses an installed unit's disable failure, keeps the hold and does not upgrade", () => {
+		const result = isolatedInstall(`
+run "$bootstrap" "$A"
+: >"$LOG"
+if DISABLE_FAIL=1 run "$bootstrap" "$B"; then exit 91; fi
+[ ! -f "$FAKE/active" ]
+[ -e "$state/disabled" ]
+[ "$(git -C "$checkout" rev-parse HEAD)" = "$A" ]
+[ "$(cat "$state/install-exe-dev.commit")" = "$A nublai/pi-herdr-factorio" ]
+grep -q '^systemctl disable factory.service hold=y$' "$LOG"
+grep -q '^systemctl disable --now factory.service hold=y$' "$LOG"
+absent_log '^provision |systemctl restart'
+`);
+
+		assert.equal(result.status, 0, result.stdout + result.stderr);
+		assert.match(result.stderr, /could not confirm stop\/disable/);
 	});
 
 	it("stops and disables a failed provision, retains the hold and old receipt, then recovers", () => {
