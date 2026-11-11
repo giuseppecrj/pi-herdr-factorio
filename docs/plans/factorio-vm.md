@@ -1,12 +1,13 @@
-# Factorio production VM plan
+# Plan the later Factorio move to ms-a2
 
-Move Factorio production from `pi-factorio` to a dedicated LXD virtual machine on `ms-a2`.
-Keep testing on exe.dev and make Shep's Factory tab the owner's client.
+Plan a later move from `nubl-factory` on exe.dev to a dedicated LXD virtual machine on `ms-a2`, when the owner needs more power.
+Factorio's first real host is `nubl-factory`, which the owner installs by hand with the one-command installer on main.
+Keep testing on exe.dev and use Shep's Factory tab as the owner's client.
 Run the controller, Shep bridge, and restricted pi orchestrator in one guest as one Unix user, `factory`, with stages still isolated by bwrap.
 Protect production credentials from host agent sessions before installing any secret.
-Carry the complete state and replay budget through a drained, single-controller cutover.
-Implement `VM1` through `VM9` below. Reuse MV1, MV2, and MV6 already on main, and the parked MV3, MV4a, and MV4b patches.
-Leave real dispatch held until the owner separately approves it.
+Carry the complete state and replay budget from `nubl-factory` through a drained, single-controller cutover.
+Plan `VM1` through `VM9` below. Reuse main's installer, MV1, MV2, MV3, and MV6, plus the parked MV4a and MV4b patches.
+Keep the new controller held until the owner separately approves dispatch.
 
 ## How to read this
 
@@ -16,7 +17,9 @@ The program runs the poteto-mode playbook `playbooks/autopilot-stack.md`. Every 
 
 Use `.pi/skills/verify-factory/SKILL.md` as the control skill. Backend lanes save redacted logs and JSON instead of screenshots. `VM9` also requires real phone screenshots and video. Ten lanes mean ten scenarios, not ten simultaneous controllers. Run resource-heavy lanes serially. A blocked prerequisite leaves its boxes unchecked, not passed by a mock or a source review.
 
-Treat new paths, fields, units, and acceptance budgets as proposed contracts. The planning checkout is `3400160`. This revision applies Amendment 1 in the supplied facts and the coordinator's orchestration v1 decision in `nublai/root` at `.pi/plan/research/orchestration.md`. Appendix A distinguishes the supplied observations from unrun prototypes. The leaf author runs no prototypes, launches no children, and changes no host, as required by the design-only brief. Execution must close the named prototype gates before implementing the affected contracts.
+Treat new paths, fields, units, and acceptance budgets as proposed contracts. This revision uses main at `dc81a25`, including the repository move in #742 and the installer and MV3 provisioning in #743. It preserves Amendment 1's shared-user design and the orchestration v1 decision in `nublai/root` at `.pi/plan/research/orchestration.md`. Appendix A separates supplied host observations from unrun prototypes. The leaf author runs no prototypes, launches no children, and changes no host, as required by the design-only brief. Execution must close the named prototype gates before implementing the affected contracts.
+
+Keep #730 design-only. Start this move only when the owner decides that `nubl-factory` lacks the compute, memory, or storage for the workload they want to run. That decision, not an invented utilization threshold, is the trigger for execution. The owner's 2026-11-10 to 2026-11-11 decision puts the manual exe.dev installation first. `pi-factorio` is drained under #712. Its retirement after `nubl-factory` works belongs to #734, not this plan. #713 and #718 are closed. Do not infer that the new host is installed or qualified from those issue states.
 
 Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
@@ -39,7 +42,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 - [ ] Obtain owner decision D3 for CLIProxyAPI access and the App broker in `VM3` and `VM4`. Record permitted models, a production-only proxy key, GitHub installation scope, and who installs and rotates secrets. Keep current stage families and budgets unless the owner changes them.
 - [ ] Obtain owner decision D4 for the guest tailnet tag, ACLs, owner devices, bridge port, and admin route. Obtain D5 for the encrypted off-host backup destination, retention, and recovery targets in `VM8`.
 - [ ] Obtain owner decision D6 for the drain window, source shutdown, and held cutover. Obtain D7 separately for a bounded dispatch qualification and eventual real dispatch. A grant to restore or start held grants neither.
-- [x] Restore exe.dev repository access after the move to `nublai/pi-herdr-factorio`. The coordinator reports that the integration was re-attached to `vm:pi-factorio` on 2026-11-10 and repository reads return 200. This reattachment gate is done. Fresh reads still belong to each regression and drain check.
+- [ ] Before execution, read the owner's `nubl-factory` installation and #734 handoff receipts. Record its deployed SHA, state and replay-budget paths, integration access, and dispatch state. Use `nublai/pi-herdr-factorio` for all active operations. Require fresh source reads for this later move rather than carrying forward the retired host's status.
 - [ ] Before any orchestrated intake, require #738's named, cached `bot_actor` refusal and its live creation-time-label lane on an exe.dev test VM. The lane must prove that Giuseppe's Submit through the prefilled link supplies the human label actor and a valid snapshot. Keep intake blocked if either proof is missing. Do not loosen snapshot checks without the owner.
 - [ ] Ask the owner to approve the isolated exe.dev test repository and nubl-app test credentials described in `VM1`. After the production CI actor switch, the old exe.dev bot cannot drive production's trusted CI.
 
@@ -49,7 +52,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 - [ ] Follow this dependency graph. Start dependent work only after its parent merges, or base it on the parent branch when the execution playbook stacks.
   - [ ] `VM1` and `VM2` are independent and first. Both branch from `main` with `--no-track`.
   - [ ] `VM3` follows `VM2` and its measured model endpoint pin. `VM4` follows `VM3`.
-  - [ ] `VM5` follows `VM1` and `VM4`. Reuse the parked MV3 patch before adapting its Unix-user assumptions.
+  - [ ] `VM5` follows `VM1` and `VM4`. Reuse main's installer and provisioning contracts, adapting only the guest installation and service-user assumptions.
   - [ ] `VM6` follows `VM1`. Reuse parked MV4a. Its code can land before the guest is ready, but perform the production drain only after `VM5` passes and D6 is granted.
   - [ ] `VM7` follows `VM5`, `VM6`, and the recorded drain and backup. Reuse parked MV4b. It must land before the new controller dispatches.
   - [ ] `VM8` follows landed `VM1` through `VM7` and D5 and D6. It transfers production while held.
@@ -80,16 +83,16 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 Each live lane runs at the PR head. Drive the CLI through verify-factory. Drive the phone through Shep's supported bridge and native UI, never directly to Factorio.
 
 - [ ] In an authorized disposable checkout, run `git fetch origin <head-branch> && git checkout --detach <head SHA>`. Record trunk, head, image fingerprint, profile digest, and target. Keep checkouts under `~/.herdr/worktrees/`.
-- [ ] Select `FACTORY_VM=pi-factorio` for exe.dev regression checks or the `factorio-ms-a2` target added by `VM1` for guest qualification. Leave the parked exmach target unconfigured. Before the guest exists, use source and local checks only and label guest lanes blocked.
+- [ ] Select the existing `FACTORY_VM=nubl-factory` target for source reads or `factorio-ms-a2`, added by `VM1`, for guest qualification. Use an owner-approved isolated exe.dev target for mutating regression tests. Always select the target explicitly, never the legacy default. Leave the parked exmach target unconfigured. Before the guest exists, use source and local checks only and label guest lanes blocked.
 - [ ] Use `lane-setup.sh` with a private per-lane state directory. Start only issue-scoped controllers with `drive-serve.sh` and wait for `controller_ready`. Stop the production controller under its service grant before a test controller accesses the same repository, even if production is held. Independent test repositories may run separately.
 - [ ] Deliver inputs through the CLI, `gh`, and the guest's systemd commands. Use `status --json`, `owner-feed --json`, repository-scoped API reads, `systemctl show`, and scoped `journalctl` as diagnostics. No secret appears in command arguments, screenshots, or logs.
 - [ ] Use separate fixture issues titled `[<PR>-w<n>-...]`. Reserve every stage's full allowance before a run, about 540,000 tokens for specify, accept, and build alone. Include review, repair, retries, and perf in the authorized total. Never narrow a stage to fit a lane cap. Close each fixture and confirm it is closed under the fixture grant. Leave `factory:enabled` alone.
 - [ ] Save backend artifacts to `/tmp/swarm-<pr-id>/worker-<n>/<slug>` and phone screenshots to `/tmp/swarm-<pr-id>/worker-<n>/<slug>.png`. Include commands, timestamps, exit status, expected and actual results, and SHAs. Export only redacted copies.
 - [ ] Measure trunk first and then three interleaved trunk/head pairs on the same target and fixture, with only one writer active. An unsupported trunk path is not a successful baseline. Measure the shared operation on both sides and the added work separately. The numerical limits below are proposed acceptance budgets, not observations or permission to raise existing limits.
 
-## Keep exe.dev tests separate from production (VM1)
+## Extend verification for the guest and isolated exe.dev tests (VM1)
 
-**Depends on.** None. MV2 target selection is already on main at `1207f87`.
+**Depends on.** None. MV2 target selection is already on main. #743 already added `nubl-factory` as `exedev@nubl-factory.exe.xyz` with `GH_HOST=github.int.exe.xyz`. #742 already updated active repository probes and URLs. Do not repeat either change.
 
 **Files.**
 
@@ -98,10 +101,10 @@ Each live lane runs at the PR head. Drive the CLI through verify-factory. Drive 
 
 **Build.**
 
-- [ ] Extend the existing `target.sh` contract with validated non-secret target values for repository, platform, service user, home, and lane root. Keep defaults for `pi-factorio`. Remove the assumption that every target is `exedev` under `/home/exedev`.
+- [ ] Extend the existing `target.sh` contract with validated non-secret target values for repository, platform, service user, home, and lane root. Preserve `nubl-factory`'s existing SSH destination and GitHub host. Remove the assumption that every target is `exedev` under `/home/exedev`. Leave legacy-target retirement to #734.
 - [ ] Add `factorio-ms-a2` as an unconfigured target until `VM2` supplies the guest tailnet name. Set its eventual GitHub host to `github.com`, profile to `ms-a2-vm`, and service account to `factory`. Never substitute host `ms-a2` when the guest is unavailable.
-- [ ] Change new test issue and checkout URLs to `nublai/pi-herdr-factorio`. Preserve old run identities and archives verbatim. Make doctor distinguish a failed integration read from a failed sandbox preflight.
-- [ ] Keep the exe.dev transport and `exe-dev` profile, including its old bot identity. Use a root-owned `repositories` override for the moved repository while source drain checks run. After `VM7`, run full old-bot CI scenarios in an owner-approved isolated test repository with trusted CI configured for that bot, not against production's nubl-agent reporter.
+- [ ] Parameterize the remaining fixed repository and lane paths for the guest and isolated test repositories. Retain `nublai/pi-herdr-factorio` as the production repository. Preserve old run identities and archives verbatim. Make doctor distinguish a failed integration read from a failed sandbox preflight.
+- [ ] Keep `nubl-factory` on the `exe-dev` profile with `exe-dev-github-integration[bot]`. Main already allows `nublai/pi-herdr-factorio`, so source checks need no repository override. Use an override only for an approved isolated test repository. After `VM7`, run full old-bot CI scenarios there with trusted CI configured for that bot, not against production's nubl-agent reporter.
 - [ ] Document a separate exe.dev nubl-app test target. Give it its own test state and repository-scoped test token delivery, not a copy of production credentials or accounting. Use the production guest profile and tailnet model route there only after its prerequisites pass. Testing the nubl app remains on exe.dev. LXD-specific userns, resource, and recovery proof still runs in the real guest.
 - [ ] Keep unknown targets, empty values, unsafe paths, and missing credentials fail-closed before SSH or dispatch. Save a matrix naming which target proves exe.dev transport, nubl-app behavior, and LXD deployment.
 
@@ -115,13 +118,13 @@ Each live lane runs at the PR head. Drive the CLI through verify-factory. Drive 
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, per the boot recipe.
 
-- [ ] Lane 1. Regression lane against trunk. Run doctor on exe.dev at trunk and head. Save `doctor-parity.txt`. Pass when both reach the same VM and the moved-repository read succeeds after owner reattachment.
+- [ ] Lane 1. Regression lane against trunk. Select `FACTORY_VM=nubl-factory` and run doctor at trunk and head. Save `doctor-parity.txt`. Pass when both reach that VM and read `nublai/pi-herdr-factorio` through its attached integration.
 - [ ] Lane 2. Run an unknown target. Save `unknown.txt`. Pass when it exits 2 before SSH.
 - [ ] Lane 3. Run the unconfigured guest target. Save `unconfigured.txt`. Pass when it refuses rather than selecting the host or exe.dev.
 - [ ] Lane 4. Run a target containing shell syntax. Save `unsafe-target.txt`. Pass when validation rejects it without a remote command.
 - [ ] Lane 5. Set up an authorized exe.dev lane. Save `lane-root.txt`. Pass when only its declared private root changes.
-- [ ] Lane 6. Read held production status on exe.dev. Save `source-status.json`. Pass when its profile is `exe-dev` and `locally_disabled` remains set.
-- [ ] Lane 7. Drive `/factory status` against the moved repository. Save `extension.txt`. Pass when the registered handler resolves the configured repository without relying on a redirect.
+- [ ] Lane 6. Under the source hold grant, read fresh production status on `nubl-factory`. Save `source-status.json`. Pass when its profile is `exe-dev`, its identity is `exe-dev-github-integration[bot]`, and `locally_disabled` remains set.
+- [ ] Lane 7. Drive `/factory status` against an approved isolated test repository. Save `extension.txt`. Pass when the registered handler resolves that target's repository rather than the production default.
 - [ ] Lane 8. Run a failed SSH target. Save `ssh-failed.txt`. Pass when its nonzero status and target name survive the wrapper.
 - [ ] Lane 9. Exercise the replay driver with an isolated test budget. Save `replay-target.json`. Pass when it uses the selected repository and root and never reads production's replay file.
 - [ ] Lane 10. Run an exe.dev test-repository fixture through its installed stages. Save `test-repo.json`. Pass when its markers and CI actor match the exe-dev bot and no production issue changes.
@@ -217,7 +220,7 @@ Each live lane runs at the PR head. Drive the CLI through verify-factory. Drive 
 - [ ] Prototype one real Responses API stream through CLIProxyAPI with a non-production test key. Prove usage events, requested and observed model identity, cancellation, and exact endpoint paths. Bound this to one metered call per permitted provider plus scripted transport tests. If the proxy cannot preserve the required meter, stop rather than substituting an unmetered success.
 - [ ] Add built-in selector and descriptor `ms-a2-vm` to `PlatformSelector`, `platformNetwork`, parsing, digest generation, and independent gateway resolution. Use domain `trout-dinosaur.ts.net`, model host and SNI `mac-studio.trout-dinosaur.ts.net`, and OpenAI base `/v1/`. Set `edgeAddress` to the single mac-studio tailnet IPv4 address measured in `VM2`, not ms-a2's `100.113.207.56` and not a guessed value. A changed endpoint requires a reviewed built-in update, not an arbitrary route-table pin.
 - [ ] Set the proposed Anthropic base to `/` only if the protocol probe confirms `/v1/messages`. Keep xAI `null`. Keep `anthropicStages` limited to `accept` and `code-review`, and do not change WORKFLOW's active model choices or allowances. If Anthropic compatibility is unproved, mark its qualification blocked and keep production on its currently configured OpenAI stages.
-- [ ] Set `ghHost` to `github.com`, repositories to `nublai/pi-herdr-factorio`, login to `nubl-agent[bot]`, App slug to `nubl-agent`, and email to `353429311+nubl-agent[bot]@users.noreply.github.com`. Keep exe-dev's transport and identity unchanged. Permit its existing repository override for tests and the moved source.
+- [ ] Set `ghHost` to `github.com`, repositories to `nublai/pi-herdr-factorio`, login to `nubl-agent[bot]`, App slug to `nubl-agent`, and email to `353429311+nubl-agent[bot]@users.noreply.github.com`. Preserve #742's read-only `historicalRepositories` map for metrics and replay. Keep exe-dev's transport and identity unchanged, with its repository override available for isolated tests. Preserve the explicit `handoff.reviewers` setting, currently `giuseppecrj`, rather than deriving a reviewer from the repository owner.
 - [ ] Include `trout-dinosaur.ts.net`, `int.trout-dinosaur.ts.net`, `ts.net`, `exe.xyz`, `int.exe.xyz`, `github.com`, `githubusercontent.com`, and `ghe.com` in the new forbidden-domain contract. Keep localhost, literal IP, private, and CGNAT resolution refusals. Only the exact built-in model route may dial the pinned tailnet IP. No declared credential route may target the tailnet, GitHub, or an exe.dev integration.
 - [ ] Add a closed built-in model authentication field to the network contract, with fixed credential references for OpenAI and Anthropic and `none` for edge-injected profiles. Pass no secret through the profile, route descriptor, status, or `/etc/factory/factory.env`. Keep `/etc/factory/platform.json` root-owned and limited to selection and permitted identity and repository data, not arbitrary hosts or pins.
 - [ ] Change `productionDefect`, `credentialDefect`, and ceiling validation only for an exact built-in model route and its fixed credential binding. Today's code rejects credentialed POST, pinned credential routes, and credentials under forbidden domains. Preserve all three refusals for declared routes. Match the full expected upstream, credential placement, method, path, body restrictions, and meter independently in the gateway.
@@ -323,19 +326,20 @@ Each live lane runs at the PR head. Drive the CLI through verify-factory. Drive 
 
 ## Provision the controller, bridge, and restricted orchestrator as one user (VM5)
 
-**Depends on.** VM1 and VM4. Reuse PR #728 from `origin/mv3-provision-profile`, reviewed against its current tip before porting. Shep's direct CLI feed reader, factory extension, and fixed launch profile are external prerequisites. #738's bot refusal and creation-time-label proof must pass before any orchestrated intake.
+**Depends on.** VM1 and VM4. Reuse `server/install-exe-dev.sh` and `server/provision.sh` on main from #743, plus `docs/operations/install-exe-dev.md`. The installer remains exe.dev-only, not a command to run unchanged in the LXD guest. Shep's direct CLI feed reader, factory extension, and fixed launch profile are external prerequisites. #738's bot refusal and creation-time-label proof must pass before any orchestrated intake.
 
 **Files.**
 
 - [ ] Edit `server/provision.sh`, `server/factory.service`, `server/cli.ts`, `server/sandbox.ts`, `server/sandbox/preflight.ts`, and `src/platform.ts` for profile-derived installation and service-user paths.
 - [ ] Create `server/shep-factory-bridge.service`. Install Shep's pinned factory-chat launch profile through `server/provision.sh`, without authoring Shep's extension or prompt here.
-- [ ] Reuse MV3's `test/provision.test.ts` for shared-user units and fixed-profile installation. Edit preflight cases in `test/sandbox/*.cases.ts`.
-- [ ] Edit `.pi/skills/verify-factory/scripts/drive-replay.sh` only to carry MV3's profile environment through VM1's target contract.
+- [ ] Extend main's `test/provision.test.ts` for shared-user units and fixed-profile installation. Edit preflight cases in `test/sandbox/*.cases.ts`.
+- [ ] Edit `.pi/skills/verify-factory/scripts/drive-replay.sh` only to carry the guest profile environment through VM1's target contract.
 - [ ] Edit `docs/operations/ms-a2-vm.md`, `docs/operations/platform.md`, `docs/operations/sandbox.md`, `docs/operations/owner-feed.md`, and `docs/operations/factory-cli.md`.
 
 **Build.**
 
-- [ ] Port MV3's `platform --env`, validated atomic `/etc/factory/factory.env`, `EnvironmentFile=`, linger setup, and runtime-directory preflight. Reuse its tests and fixes. Do not retain hard-coded `exedev`, `/run/user/1000`, or the old repository in the new guest unit.
+- [ ] Retain main's `platform --env`, validated atomic `/etc/factory/factory.env`, `EnvironmentFile=`, linger setup, and runtime-directory preflight. Adapt the remaining `exedev` and `/run/user/1000` assumptions for the guest. Keep `nublai/pi-herdr-factorio` in the new unit. Do not re-port the merged provisioning patch.
+- [ ] Reuse the installer's exact-SHA checkout verification, hold-before-change ordering, failure stop and disable behavior, and fresh held-readiness checks in the guest installation runbook. Keep `server/install-exe-dev.sh` and its exe.dev preflight unchanged. It requires `exedev`, uid 1000, broad sudo, and exe.dev integrations, none of which authorize a guest runtime shortcut.
 - [ ] Provision one locked guest service account, `factory`, for the controller, Shep bridge, and restricted pi orchestrator, with no sudo, Docker, or LXD groups. Keep VM4's minting unit as root, not another application account. Derive the runtime UID with `id -u factory`. Keep the controller checkout root-owned, runtime dependencies pinned, and state owned by `factory` with 0700 directories and 0600 private files.
 - [ ] Separate owner-run privileged installation from runtime. Adapt provisioning so a human admin installs root-owned assets, unit files, credentials, and sysctls without granting permanent sudo to `factory`. Retain an idempotent exe.dev path. Run no real model call from provisioning.
 - [ ] Run `factory.service` as a system unit with `User=factory`, profile environment, watchdog, `NoNewPrivileges`, and the trusted gh wrapper. Enable linger for `factory` and start its user manager. Set `XDG_RUNTIME_DIR` from the actual UID and prove `systemd-run --user --scope` works from the system unit without a login shell.
@@ -355,11 +359,11 @@ Each live lane runs at the PR head. Drive the CLI through verify-factory. Drive 
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Test MV3 env parity, UID-derived runtime paths, missing user manager, shared-user units, fixed-profile installation, unavailable feed reads, and mode preservation. Run `npm run check`, the trusted reporter, `bash -n server/provision.sh`, and `systemd-analyze verify` against installed test units.
+- [ ] Test parity with main's generated environment, UID-derived runtime paths, missing user manager, shared-user units, fixed-profile installation, unavailable feed reads, and mode preservation. Retain `test/install-exe-dev.test.ts` as installer regression coverage. Run `npm run check`, the trusted reporter, `bash -n server/provision.sh`, and `systemd-analyze verify` against installed test units.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, per the boot recipe.
 
-- [ ] Lane 1. Regression lane against trunk. Provision disposable exe.dev test state with trunk and head. Save `provision-parity.txt`. Pass when default routes and identity stay unchanged and MV3's env and linger changes are the only intended additions.
+- [ ] Lane 1. Regression lane against trunk. Run the pinned installer on disposable exe.dev test VMs with trunk and head. Save `provision-parity.txt`. Pass when routes, identity, generated environment, linger, held readiness, and idempotent reruns retain main's behavior. Guest-only adaptations must not change that path.
 - [ ] Lane 2. Provision the guest under the owner grant. Save `provision-guest.txt`. Pass when preflight and `controller_ready` succeed with the local hold intact.
 - [ ] Lane 3. Repeat provisioning. Save `idempotence.txt`. Pass when unit, env, bundle digest, modes, and service identity do not drift.
 - [ ] Lane 4. Reboot with no service-user login. Save `linger.txt`. Pass when the runtime directory and user bus exist and a limited scope launches from the system unit.
@@ -386,23 +390,23 @@ Each live lane runs at the PR head. Drive the CLI through verify-factory. Drive 
 - [ ] Rebased onto the parent or current trunk after the verdict, with the verdict still valid under the patch-id rule in `playbooks/shipping.md`.
 - [ ] Append VM5 to the verified stack. The owner lands it after VM4. Report any remaining Shep prerequisite as blocked, not a passed bridge lane.
 
-## Reuse MV4a and drain the old controller (VM6)
+## Reuse MV4a for the later nubl-factory drain (VM6)
 
-**Depends on.** VM1 for target and repository correction. This PR proves the diagnostic and drain procedure on isolated exe.dev fixtures. VM7 executes the production drain after VM5 and D6.
+**Depends on.** VM1 for isolated verification targets. This PR proves the diagnostic and drain procedure on isolated exe.dev fixtures. VM7 executes a fresh production drain on `nubl-factory` after VM5 and D6. The earlier #712 drain is not evidence for this later move.
 
 **Files.**
 
 - [ ] Reuse MV4a's `server/cli.ts`, `src/orchestrator.ts`, `test/dashboard.test.ts`, `test/helpers.ts`, `test/markers.test.ts`, `test/orchestrator.test.ts`, and `test/platform.test.ts` from `origin/mv4-drain-foreign-markers`.
-- [ ] Reuse `docs/operations/drain.md`, `docs/operations/factory-cli.md`, and `docs/operations/metrics.md` from that branch. Replace the parked exmach destination with the approved LXD guest and the moved repository in commands. Append evidence rows to `docs/decisions.tsv` through `log.sh`.
+- [ ] Reuse `docs/operations/drain.md`, `docs/operations/factory-cli.md`, and `docs/operations/metrics.md` from that branch. Set the source to `nubl-factory`, the destination to the approved LXD guest, and active commands to `nublai/pi-herdr-factorio`. Preserve main's repository-history changes when porting. Append evidence rows to `docs/decisions.tsv` through `log.sh`.
 
 **Build.**
 
 - [ ] Port MV4a's `foreignMarkers` diagnostic and drain runbook, not an alternative drain implementation. Keep its zero-extra-GitHub-read design, `complete` versus `incomplete` result, and exclusion of closed or unlabeled history.
-- [ ] Write the production drain procedure for VM7. Require the landed MV4a-equivalent controller held on `pi-factorio` using the `exe-dev` profile. First require the owner-restored integration to read `nublai/pi-herdr-factorio`. A 403 blocks drain proof even when old status says zero runs.
+- [ ] Write the production drain procedure for VM7. Require the landed MV4a-equivalent controller held on `nubl-factory` using the `exe-dev` profile and `exe-dev-github-integration[bot]`. First require a fresh integration read of `nublai/pi-herdr-factorio`. A 403 blocks drain proof even when old status says zero runs.
 - [ ] Retain every MV4a drain step in that procedure. Require settled live scopes, ended or released runs under the authorized issue actions, and cleared old `factory:ready` events. Retain markers and accounting. Permit only owner-named issues with zero old markers as new intake.
 - [ ] Require a fresh tick with active, runs, queued, unverified, nonterminal accounting, corrupt, and foreign-marker counts all zero, `foreignMarkers.kind=complete`, and `ledger.state=empty`. Save the ready-issue inventory in the same window. Unknown and null are not zero.
-- [ ] Add the repository-rename inventory to the procedure, covering repository slugs, immutable run IDs, admission references, workspace paths, and ledger anchors. Do not replace strings in private records or recompute IDs. Require history reads against the moved repository before transfer. If compatibility requires a state migration, stop for a separately scoped design rather than resetting state.
-- [ ] Rehearse the full stopped-state backup per `backup.md` on fixture state, including a separate replay-budget file, and record checksums. Specify the production file `/home/exedev/factory-verification/replay-budget.json` in the runbook. A hold alone does not stop bookkeeping. Require the source service stopped before the final copy under D6, with `disabled` present.
+- [ ] Inventory `nubl-factory`'s repository slugs, immutable run IDs, admission references, workspace paths, and ledger anchors, including any retained history from #734. Preserve #742's read-only history alias for metrics and replay. Never use the former repository name for admission, claims, marker trust, dispatch, or publication. Do not replace strings in private records or recompute IDs. Prove history reads before transfer. If compatibility requires a state migration, stop for a separately scoped design rather than resetting state.
+- [ ] Rehearse the full stopped-state backup per `backup.md` on fixture state, including a separate replay-budget file, and record checksums. Verify `nubl-factory`'s state and replay paths against its installation and #734 receipts. Record `/home/exedev/factory-state` and `/home/exedev/factory-verification/replay-budget.json` if those paths remain in use. Carry the source's current accounting, not an older retirement archive. A hold alone does not stop bookkeeping. Require the source service stopped before the final copy under D6, with `disabled` present.
 - [ ] Record the fixture rehearsal evidence separately from a production drain. Require VM7 to append the actual drain row with its grant, source SHA, inventory, counts, archive paths, and replay checksum before the CI switch lands. Do not delete the source VM or its backups.
 
 **You see.**
@@ -430,7 +434,7 @@ Each live lane runs at the PR head. Drive the CLI through verify-factory. Drive 
 
 - [ ] Metric. Status wall time and GitHub request count per tick at trunk and head.
 - [ ] Probe. Interleave three read-only status samples and three isolated same-fixture ticks per revision on exe.dev, under the fixture grant. Save `perf.json`.
-- [ ] Baseline. Record trunk's median and request count first, after repository access is restored.
+- [ ] Baseline. Record trunk's median and request count first, after a fresh repository read succeeds.
 - [ ] Rule. Fail if head adds any GitHub request for foreign-marker counting or increases median status time by more than 20 percent or 2 seconds absolute. Require zero model calls while held.
 
 **Review gate.** None. VM6 is not review-gated.
@@ -453,9 +457,9 @@ Each live lane runs at the PR head. Drive the CLI through verify-factory. Drive 
 
 **Build.**
 
-- [ ] Under D6, execute the landed VM6 drain runbook on production. Deploy its diagnostic held, prove the fresh zero predicates and ready-issue inventory, verify repository-rename compatibility, stop the source and its scopes, and take the complete backup with the replay budget. Append the production drain row through `log.sh`. Keep the source stopped and held. A failed predicate blocks the CI switch.
+- [ ] Under D6, execute the landed VM6 drain runbook on `nubl-factory`. Deploy its diagnostic held, prove the fresh zero predicates and ready-issue inventory, verify retained-history compatibility, stop the source and its scopes, and take the complete backup with the replay budget. Append the production drain row through `log.sh`. Keep the source stopped and held. A failed predicate blocks the CI switch.
 - [ ] Under the renewed workflow-edit grant, switch the two expected actors to `nubl-agent[bot]`. Port the reporter test coupling from MV4b, using the new profile rather than an exmach selection. Do not change required checks, exact-head bindings, artifact validation, or the secret-free candidate job.
-- [ ] Keep pi-factorio stopped and held. Explain that CI changes only when the owner merges workflow files on GitHub, not when a VM checks out a branch. Never enable both old and new actors as a migration shortcut.
+- [ ] Keep `nubl-factory` stopped and held through the change from `exe-dev-github-integration[bot]` to `nubl-agent[bot]`. Explain that CI changes only when the owner merges workflow files on GitHub, not when a VM checks out a branch. Never enable both old and new actors as a migration shortcut.
 - [ ] Prove reporter behavior locally and on the approved test repository before merge. Ask the owner to land this as the explicit main-owned CI bootstrap only if production-main dispatch cannot be proved before landing. Keep that native lane pending and production held until it passes after merge.
 - [ ] Record the production reporter's nubl-agent identity proof after the owner's merge. Keep exe.dev's old-bot full-pipeline tests in their dedicated trusted test repository from VM1. Do not weaken production's actor check to preserve a test shortcut.
 
@@ -496,7 +500,7 @@ Each live lane runs at the PR head. Drive the CLI through verify-factory. Drive 
 - [ ] Rebased onto current trunk after the verdict, with the verdict still valid under the patch-id rule in `playbooks/shipping.md`.
 - [ ] Hand VM7 to the owner for the explicitly approved CI bootstrap landing after the drain. Complete lane 8 before VM8. Do not report a full pass until that receipt exists.
 
-## Restore production held and prove off-host recovery (VM8)
+## Restore nubl-factory state in the guest and prove off-host recovery (VM8)
 
 **Depends on.** VM1 through VM7 landed, VM7's main-backed proof passed, and D5 and D6 granted. Real dispatch remains a separate D7 decision.
 
@@ -510,10 +514,10 @@ Each live lane runs at the PR head. Drive the CLI through verify-factory. Drive 
 - [ ] Approve a backup policy under D5. Propose seven daily stopped-state LXD snapshots and four weekly snapshots within the pool's measured space budget. Propose daily encrypted off-host Factorio archives with 30 daily and 12 weekly copies, a 24-hour recovery-point target, and a two-hour restore target. Record the chosen destination and encryption-key custody before copying data. These are proposed operational targets, not measured guarantees.
 - [ ] Treat LXD snapshots as local rollback aids, never as the only backup. Follow `backup.md` with the controller, viewer, restricted pi orchestrator, and bridge stopped after stage scopes settle. Include full state, all accounting, claims, ledger outbox and anchors, retained sessions, source checkout and Git metadata, external workspace roots, exact bundles, units, and non-secret configuration. Include cadence and measurement state and the replay-budget file outside the state root.
 - [ ] Copy encrypted archives off ms-a2, not merely to another guest or directory on that host. Verify hashes after transfer. Keep secret recovery material in separately controlled encrypted storage and re-enroll Tailscale as needed. Never clone a live tailnet identity or start two restored controllers.
-- [ ] Confirm VM6's source is stopped and held. Disable its service restart and boot path under D6 before the target starts. Record that no manual controller or user scope remains. Leave source disks and backups intact for recovery, not active fallback.
+- [ ] Confirm `nubl-factory` is stopped and held using VM7's fresh drain receipt. Disable its service restart and boot path under D6 before the target starts. Record that no manual controller or user scope remains. Leave `nubl-factory`'s disks and backups intact for recovery, not active fallback. This step does not retire any VM.
 - [ ] Restore into a private staging directory on the guest, preserving checksums and modes. Map the old service UID explicitly to `factory` without following symlinks. Preserve logical run IDs and repository history. Do not hand-edit claims, accounting, paths embedded in captured execution, or the replay budget to force startup.
 - [ ] Compare restored terminal claims, usage floors, caps, ledger backlog, and owner feed with the stopped source. Require both MV4a pre-start lists of nonterminal claims and nonterminal accounting to be empty. Resolve old absolute workspace paths by a documented compatible layout where needed, not by discarding evidence. A needed schema or repository-identity migration is a blocker for a separate scoped change.
-- [ ] Carry `/home/exedev/factory-verification/replay-budget.json` intact to the approved guest replay path and record its checksum and configured location. Keep spent, reserved, uncertain, and `policyChanges` entries. The authorized 4,000,000 cap is applied only through the existing audited reservation path. If future replays run on exe.dev, transfer sole ownership of this file while all replay writers are stopped. Never let two copies independently grant the remaining budget.
+- [ ] Carry `nubl-factory`'s replay-budget file from the path verified in VM6 intact to the approved guest replay path and record its checksum and configured location. Keep spent, reserved, uncertain, and `policyChanges` entries. The authorized 4,000,000 cap is applied only through the existing audited reservation path. If future replays run on exe.dev, transfer sole ownership of this file while all replay writers are stopped. Never let two copies independently grant the remaining budget.
 - [ ] Start only the new controller, held, with `FACTORY_PLATFORM=ms-a2-vm` and the landed VM7 CI contract. Verify fresh `controller_ready`, `foreignMarkers.kind=complete`, zero live foreign markers, preserved accounting, and no model dispatch. Start the bridge separately for direct feed reads. Keep orchestrated intake disabled until #738's prerequisites pass. Enable guest autostart only after the old restart path is disabled.
 - [ ] Perform an off-host archive restore in an isolated guest with network dispatch disabled and no production token. Compare checksums, modes, claims, and feed through the real CLI. Do not connect a snapshot clone to production GitHub merely to test restoration.
 - [ ] Record the held cutover and recovery receipts. If recovery fails before any new write, stop the target before considering a source restart, and reconcile the CI actor switch with the owner. After any new-bot write, use a forward recovery from the newest state. Never roll back a snapshot to reset charges or re-enable the old bot silently.
@@ -621,9 +625,11 @@ Each live lane runs at the PR head. Drive the CLI through verify-factory. Drive 
 
 ## Appendix A. Prototype evidence
 
-No prototype ran during this plan-only task. No VM was created and no host setting changed. The supplied read-only observation record is `/home/g/Projects/pi-herdr-factorio-trails/ms-a2-vm/facts.md`, dated 2026-11-10. It records an uninitialized LXD 6.10.1 LTS host with no instances, enabled nested KVM, and production held on exe.dev at `349934b` with zero runs. These are supplied observations, not a new live status claim. The coordinator's later update closes the repository-access gate. On 2026-11-10, exe.dev's GitHub integration for `nublai/pi-herdr-factorio` was re-attached to `vm:pi-factorio`, and reads return 200. This supersedes the initial 403 in facts.md. Amendment 1 also replaces the initial separate-UID bridge design with one `factory` user for the controller, bridge, and restricted pi orchestrator.
+No prototype ran during this plan-only task. No VM was created and no host setting changed. The supplied observation record is `/home/g/Projects/pi-herdr-factorio-trails/ms-a2-vm/facts.md`, dated 2026-11-10. Its host facts still apply, including uninitialized LXD 6.10.1 LTS, no instances, and enabled nested KVM. They were not rechecked live. Its production-host and parked-provisioning statements are superseded by the owner's later sequence and main. Amendment 1's one `factory` user for the controller, bridge, and restricted pi orchestrator remains the design.
 
-The planning base is `3400160`. MV1, MV2, and MV6 are already merged there. The author read `origin/mv3-provision-profile`'s provisioner and unit, `origin/mv4-drain-foreign-markers`' drain runbook, and MV4b's `da9543c` file list. Their reusable contracts are named in VM5, VM6, and VM7. The old plan's exmach VM, edge, and APNs dependencies remain parked.
+The revision base is main `dc81a25`. #742 moved active operations to `nublai/pi-herdr-factorio`, made `handoff.reviewers` explicit, and added a read-only history alias. `giuseppecrj/pi-herdr-factorio` is retained history only, never an acting repository. #743 landed the one-command installer, MV3 provisioning, and the `nubl-factory` verification target. VM5 reuses those files on main, not the parked provisioning branch. The installer installs a held controller as `exedev` and does not prove cutover, retirement, or dispatch qualification. The owner installs the first real host by hand using `docs/operations/install-exe-dev.md`. #734 owns retirement of the already-drained `pi-factorio` after that host works.
+
+MV1, MV2, and MV6 remain reusable on main. The earlier author read MV4a's drain runbook on `origin/mv4-drain-foreign-markers` and MV4b's `da9543c` file list. VM6 and VM7 reuse those patches for the later drain and identity switch from `nubl-factory`. Review their then-current tips against main before porting. The exmach VM, edge, and APNs dependencies remain parked. The platform runbook still contains legacy repository examples. For active repository defaults and the history alias, use `src/platform.ts` and #742, not those stale examples.
 
 Prototype evidence still required during authorized execution follows. Each prototype gets one bounded round. Record the branch, SHA, commands, redacted logs, and any screenshot in the PR trail. A failed round ends in a blocker or a scoped amendment, not an unbounded investigation.
 
@@ -633,11 +639,11 @@ Prototype evidence still required during authorized execution follows. Each prot
 - VM4 must prove App installation-token scope, GitHub identity lookup behavior, returned comment author type, Actions dispatch, and artifact redirects. Bound the live experiment to one fixture repository and one harmless write and dispatch each. Missing installed permissions need the owner, not a broader token by default.
 - VM5 must prove `LoadCredential=`, a system unit using `factory`'s user manager, reboot without login, and direct same-user bridge reads of `owner-feed --json`. It must inspect the pi session's fixed profile and factory-only tool registration. Dummy state must demonstrate the shared-UID residual without exposing real held-out tests. The host's userns settings do not settle guest AppArmor behavior.
 - Before any orchestrated intake, #738 must prove the cached `bot_actor` refusal and the real creation-time-label flow on an exe.dev test VM. The issue is a prerequisite, not a completed receipt or authority to weaken snapshot proof.
-- VM8 must prove repository-rename compatibility and byte-preserving state and replay-budget transfer. VM9 must prove the real phone and direct APNs path at pinned Shep and Factorio revisions. Neither can be settled by the planning leaf's local reads.
+- VM8 must prove retained-history compatibility and byte-preserving state and replay-budget transfer from `nubl-factory`. VM9 must prove the real phone and direct APNs path at pinned Shep and Factorio revisions. Neither can be settled by the planning leaf's local reads.
 
 ## Appendix B. Alternatives rejected
 
-A dedicated VM is the owner's settled choice. It gives bwrap a guest kernel rather than the ms-a2 host kernel, contains guest userns and AppArmor changes, and supports a separate boot and recovery lifecycle. An LXD container shares the host kernel and often needs nesting allowances for bwrap. It is cheaper to run but does not meet this isolation goal. Neither a VM nor a container protects guest secrets from host root.
+A dedicated LXD VM is the owner's settled choice for the later ms-a2 host, not a replacement for the first installation on `nubl-factory`. It gives bwrap a guest kernel rather than the ms-a2 host kernel, contains guest userns and AppArmor changes, and supports a separate boot and recovery lifecycle. An LXD container shares the host kernel and often needs nesting allowances for bwrap. It is cheaper to run but does not meet this isolation goal. Neither a VM nor a container protects guest secrets from host root.
 
 The proposed 4 vCPUs and 12 GiB are a starting size, not a benchmark result. Two one-CPU, 2-GiB scopes account for 2 vCPUs and 4 GiB. The remainder covers the controller, gateway processes, user manager, bridge, restricted pi orchestrator, test setup, and OS. A 160-GiB disk gives room for source, pinned bundles, dependencies, and private evidence, which is not automatically pruned. The 240-GiB pool leaves limited snapshot headroom within the observed 1.4 TB free. Monitor disk use and stop new work before exhaustion. Increase storage only under the owner's grant, not by deleting accounting.
 
@@ -674,18 +680,18 @@ For orchestration v1, use Shep's fixed-profile pi session with only factory exte
 - VM7 has a main-owned CI bootstrap boundary. An owner-approved landing may precede production-main reporter proof, but that lane stays pending and blocks VM8. No generic bootstrap exception applies to other missing tests.
 - State paths and repository slugs may outlive the host move. VM6 and VM8 inspect them and stop on incompatible recovery. Renaming hashes or dropping claims would erase identity or accounting, so it is not a migration shortcut.
 - LXD snapshots on ms-a2 do not survive loss of ms-a2. VM8 requires an encrypted off-host copy and a real restore. Snapshot rollback after new external writes is unsafe because GitHub and the replay budget have moved forward.
-- The repository-access gate is done. The coordinator reports reattachment of `nublai/pi-herdr-factorio` to `vm:pi-factorio` on 2026-11-10 with reads returning 200. VM1 and VM6 still require fresh reads for their own evidence. After VM7, the old bot needs a separate test repository to exercise full CI without weakening production.
+- The `nubl-factory` target and active repository defaults are on main, but they do not prove a live installation or integration attachment. VM1 and VM6 require fresh reads from `nubl-factory`. #734's earlier cutover and retirement evidence cannot substitute for this later drain. After VM7, the exe.dev bot needs a separate test repository to exercise full CI without weakening production.
 - Orchestrated intake stays blocked until #738's `bot_actor` refusal and creation-time-label lane pass. A prefilled link is not proof that admission accepts its snapshot. #739's `intakeRef`, `repositories`, and multi-repo reads are separate additive work, and #740's `questionsUrl` remains v1.1. This plan does not silently implement those issues or treat them as done.
 - Test controllers and production must never reconcile the same repository concurrently, even if one is held. The verify-factory rule still applies across different machines. Shared replay accounting has exactly one writer across production and exe.dev tests.
 - No dispatch is authorized by this plan. VM8 is a held migration. VM9's bounded fixture run and ongoing production dispatch are separate D7 approvals. Missing grants are blocked boxes, not permission inferred from the old exmach or factory program.
 
 ## Appendix D. Links and reading list
 
-- Read the supplied host and owner facts, including Amendment 1, at `/home/g/Projects/pi-herdr-factorio-trails/ms-a2-vm/facts.md` before VM2. They supersede the parked exmach destination and separate bridge UID, not unrelated factory guarantees.
+- Read the supplied host facts and Amendment 1 at `/home/g/Projects/pi-herdr-factorio-trails/ms-a2-vm/facts.md` before VM2. Keep their host observations and shared-user design. Use this plan's later owner sequence and current main instead of the stale production and provisioning statements.
 - Read `nublai/root`'s `.pi/plan/research/orchestration.md` for the coordinator's orchestration v1 decision. Track [#738](https://github.com/nublai/pi-herdr-factorio/issues/738) for bot refusal and creation-time labels, [#739](https://github.com/nublai/pi-herdr-factorio/issues/739) for intake references and multi-repo feed reads, and [#740](https://github.com/nublai/pi-herdr-factorio/issues/740) for the v1.1 questions link.
 - Read `docs/plans/factory-v1.md`, `docs/decisions.tsv`, and `docs/plans/exmach-move.md` for program limits, authority history, and the reusable MV work. This plan does not resume the parked exmach program.
-- Read `docs/operations/platform.md`, `docs/operations/sandbox.md`, `docs/operations/owner-feed.md`, `docs/operations/backup.md`, and `.pi/skills/verify-factory/SKILL.md` before changing their contracts.
-- Read `git show origin/mv4-drain-foreign-markers:docs/operations/drain.md` for VM6. Read `git show origin/mv3-provision-profile:server/provision.sh` and the adjacent `server/factory.service` for VM5. Read `origin/mv4b-ci-bot`'s workflow and reporter-test patch for VM7.
+- Read `docs/operations/install-exe-dev.md`, `docs/operations/platform.md`, `docs/operations/sandbox.md`, `docs/operations/owner-feed.md`, `docs/operations/backup.md`, and `.pi/skills/verify-factory/SKILL.md` before changing their contracts. Check active repository and history behavior against `src/platform.ts`, and reviewer selection against `.github/factory/WORKFLOW.md`.
+- Read `git show origin/mv4-drain-foreign-markers:docs/operations/drain.md` for VM6. Read main's `server/install-exe-dev.sh`, `server/provision.sh`, `server/factory.service`, `test/install-exe-dev.test.ts`, and `test/provision.test.ts` for VM5. Read `origin/mv4b-ci-bot`'s workflow and reporter-test patch for VM7.
 - VM2, VM3, VM4, and VM5 get the how skill, `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/how/SKILL.md`. Use `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/interrogate/SKILL.md` only for the owner choices D1 through D7, not routine implementation details.
 - Keep the decision trail under `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/show-me-your-work/SKILL.md`. Use its `log.sh` for append-only rows during execution. The planning leaf does not append coordinator decisions.
 - Read `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/technical-writing/SKILL.md`, `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/unslop/SKILL.md`, `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/no-comments/SKILL.md`, and `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/typescript-best-practices/SKILL.md` before their respective writing, review, or source work.
