@@ -61,7 +61,7 @@ import {
 	fakeIssue,
 	MAIN_SHA,
 	TRUSTED_RUN_CAP,
-	TRUSTED_WORKFLOW,
+	trustedWorkflowFor,
 } from "./fake-ticket-adapter.ts";
 
 /** A CLI test reads no host selection file, so only its own env can select a platform. */
@@ -145,11 +145,16 @@ export const admissionPin: AdmissionPin = {
 	maxReviewAttempts: 3,
 };
 
-export function candidateLifecycleFixture() {
+export function candidateLifecycleFixture(
+	change: Partial<Pick<AdmissionPin, "repo" | "workflowDigest">> = {},
+) {
+	const pinned = change.repo ?? repo;
+
 	const pin = {
 		...admissionPin,
+		...change,
 		issue: 1,
-		runId: runIdOf({ repo, issue: 1, eventId: "1" }),
+		runId: runIdOf({ repo: pinned, issue: 1, eventId: "1" }),
 	};
 
 	const patch: PatchReceipt = {
@@ -436,7 +441,7 @@ export async function preparedReviewFixture(
 		work = join(root, "work");
 
 	const workflow = controller
-		? TRUSTED_WORKFLOW
+		? trustedWorkflowFor(repo)
 		: `---\nrepository: ${repo}\n---\n## review\nReview the candidate. Café.\n`;
 
 	const baseSha = controller ? MAIN_SHA : admissionPin.originalBase;

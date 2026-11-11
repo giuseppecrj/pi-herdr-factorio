@@ -36,7 +36,7 @@ The controller writes private, atomic `metrics.json` at startup and every five m
 ## Ticket outcome metrics
 
 ```bash
-node server/cli.ts metrics --json --repo giuseppecrj/pi-herdr-factorio [--ledger-file <path>] [--state-dir <dir>] [--now <instant>] [--cohort production] [--offline] [--intervention-file <fixture>]
+node server/cli.ts metrics --json --repo nublai/pi-herdr-factorio [--ledger-file <path>] [--state-dir <dir>] [--now <instant>] [--cohort production] [--offline] [--intervention-file <fixture>]
 ```
 
 `metrics` reads the locally fetched `origin/factory/ledger` ref without loading
@@ -73,7 +73,7 @@ evidence limitations. This command writes no state and takes no action.
 ## Maintenance one-shot
 
 ```bash
-node server/cli.ts cadence --once --job architecture --json --repo giuseppecrj/pi-herdr-factorio --state-dir "$STATE"
+node server/cli.ts cadence --once --job architecture --json --repo nublai/pi-herdr-factorio --state-dir "$STATE"
 ```
 
 `cadence --once` launches a bounded read-only model audit using the trusted workflow and the ordinary controller lock and executor. Required flags are `--once`, `--job <architecture|security|instructions|hygiene>`, `--repo` and `--state-dir`. It always prints JSON; `--json` is accepted but optional for this command. It takes no `--ref`, `--issue` or verification cap. It respects both switches, preflight, ticket reservations and the weekly maintenance token cap, then waits for settlement. It never claims or dispatches ticket work. A completed job/window is idempotent. Exit 0 means `proposed` or `no_delta`; exit 1 means a gate, audit failure or pending publication; exit 2 means invalid options or a held controller lock. Use authorized isolated fixture state, not the state owned by a running production controller.
@@ -199,6 +199,11 @@ This is every message the factory prints. `<field>` is a dotted path as describe
 | `must resolve to an absolute path` | `workspace.root` does not resolve to an absolute path. |
 | `never removes the merge checkpoint: v1 stops every run at Human Review` | `checkpoints.approve_merge.mode` is `never`. |
 | `is an unknown checkpoint mode: use always` | `checkpoints.approve_merge.mode` is any value other than `always` or `never`. |
+| `is required when handoff is configured` | `handoff` is present without `handoff.reviewers`. |
+| `must be a list of GitHub user logins` | `handoff.reviewers` is not a list. |
+| `must name at least one reviewer` | `handoff.reviewers` is an empty list. |
+| `must hold GitHub user logins` | A `handoff.reviewers` entry is not a user login: a bot, a team, a leading `@`, or anything outside letters, digits and single inner hyphens up to 39 characters. |
+| `must not repeat a login` | `handoff.reviewers` names a login twice, ignoring case. |
 | `has a level-2 heading that names no stage: use one of admit, specify, accept, build, validate, review, land` | `guidance`. |
 | `duplicate heading "## <stage>"` | `guidance`. |
 
@@ -287,7 +292,7 @@ node server/cli.ts admit --json --repo <owner/name> --issue <number> --state-dir
 
 `admit` admits an issue when all of these hold:
 
-- `--repo` is on the controller's allowlist. Today the allowlist is `giuseppecrj/pi-herdr-factorio`, in `FACTORY_REPOSITORIES` in `src/admission.ts`.
+- `--repo` is on the controller's allowlist. Today the allowlist is `nublai/pi-herdr-factorio`, the platform profile's default `repositories` in `src/platform.ts` ([platform](platform.md)).
 - Nothing named `<state-dir>/disabled` exists. This is the local kill switch. Create a file there to stop admission. Its content is ignored. Any entry with that name counts, including a directory or a dangling symlink.
 - The repository has a label named exactly `factory:enabled`. This is the repository kill switch, described below.
 - `.github/factory/WORKFLOW.md` on `main` is valid. `baseSha` is the `main` SHA it was loaded from.
@@ -486,6 +491,7 @@ The bounded candidate observation/recovery audit covers these input and artifact
 | Candidate handoff evidence | `evidence_unavailable` | Holds only that candidate through the existing private hold, marking a published PR not-ready. Existing observation/retry behavior is unchanged. |
 | Handoff summary input | `summary_too_large` | Ends only that run as `failed`, with one keyed `<!-- factory-handoff-input run=<runId> -->` notice and ledger failure stage `land`, class `input`, reason `summary_too_large`. Restart preserves the terminal cause. |
 | PR ownership | `pr_identity`, `pr_ambiguous` | Named owner holds persist across restart, mark published readiness not-ready and appear in blocked attention with age measured from the hold. They do not retry handoff or refresh on later ticks. Merge, close and authorization-withdrawal observations still take precedence. |
+| Pinned handoff workflow | `workflow_unavailable` | Handoff reads the run's `WORKFLOW.md` at its pinned SHA and binds it to the pinned digest before requesting reviewers. Each failed read logs `handoff_workflow_unavailable`. A digest mismatch or a pinned file that no longer parses holds at once. A failed read (`gh` rejected or nonzero) retries on later ticks and holds on the 10th consecutive failure, about 5 minutes at the 30-second tick. The count is kept in `<state>/handoff/<runId>/workflow-read.json`, keyed by the pinned SHA and digest, so it survives restart, and a successful read deletes it. The hold is the same sticky owner hold as `pr_identity`: it persists across restart, marks published readiness not-ready, appears as `blocked` with reason `workflow_unavailable` in `status --json` attention and the owner feed, and never retries the read. No reviewer request is skipped, no reviewer falls back to the repository owner, and `factory:review` is never applied without the pinned settings. |
 
 The summary refusal is deterministic: `controllerCandidatePort.publicBody` calls `renderSummary` on the pinned contract and returns `summary_too_large` when it cannot fit; another tick cannot shrink that input. PR refusals require the owner: `ownedPr` rejects a PR that fails `parseOwnedPullRequest`'s ownership binding as `pr_identity`, and rejects a non-list, multiple matches or a full 100-result discovery page as `pr_ambiguous`. The controller cannot safely choose a different PR or rewrite its identity. Even if a later read could clear the condition, automatic retries stop; the owner must resolve the hold rather than the factory guessing ownership. Ordinary unavailable PR/readiness reads remain unavailable evidence, not input blame.
 
@@ -932,6 +938,12 @@ The reader selects the newest admission event per issue, then the highest sequen
 
 The controller logs one line per event to stderr, as `at=<ISO time> event=<name> key=value ...`. A value outside letters, digits and `:._@/[]+-` is printed as `(withheld)`. Core early-stage events include `controller_ready`, `controller_running`, `controller_refused`, `controller_stopping`, `lock_stale_replaced`, `tick`, `claim_taken`, `claim_adopted`, `claim_released`, `claim_dropped`, `claim_foreign`, `claim_unwritable`, `claim_unverified`, `admission_refused`, `admission_recovered`, `ledger_behind`, `stage_launched`, `launch_refused`, `stage_stalled`, `stage_ended`, `stage_late_usage`, `marker_posted`, `marker_unconfirmed`, `marker_corrupt`, `workspace_missing`, `workspace_unavailable`, `status_unwritable`, `sandbox_reconciled`, `scope_unowned` and `sandbox_preflight`.
 
+`handoff_reviewer_unconfigured` has `issue`, `runId`, `pr` and `workflowSha`. It is logged each time a ready handoff completes for a run whose pinned `WORKFLOW.md` has no `handoff.reviewers`; that handoff requests nobody and still completes.
+
+`handoff_workflow_unavailable` has `issue`, `runId`, `workflowSha`, `kind`, `reason`, `failures`, `limit` and `held`. It is logged on every failed read of a run's pinned `WORKFLOW.md` at handoff. `kind` is `unavailable` with reason `read_rejected` or `read_failed`, or `integrity` with reason `digest_mismatch` or `workflow_invalid`. It carries no file text or `gh` output. `failures` is the durable count for that pin and `limit` is 10. `held=true` means this failure holds the run as `workflow_unavailable`, followed by `candidate_effect_held`.
+
+`workflow_unavailable` is a new hold reason in the private candidate book's wire codec. The public marker JSON does not carry hold reasons; only its readable status line names the reason. Deploy forward only: an older controller does not know the reason, so it refuses a claim whose book carries it as invalid. Drain before rolling back, as for [marker v3](#deploy-marker-v3).
+
 `claim_unverified` has `issue`, `runId`, `why` and `failure`, with the same values as a run's `unverified` in the claim snapshot. It is logged when a run's claim first fails a read, including during discovery before adoption into the active runs, and again only when the reason changes or after a tick on which the claim did not fail a read, not on every tick. A failed ledger edit read can use a marker body and its matching local admission only to identify this diagnostic; it grants no adoption or launch permission.
 
 ### Stop
@@ -998,6 +1010,7 @@ Anchors (`&name`) and aliases (`*name`) are not allowed anywhere in the front ma
 | `stages.accept.reasoning_effort` | `low`, `medium` or `high` | `medium` | Accept only. Passed as Pi's `--thinking` level. `workflow-check` prints `config.stages.accept.reasoningEffort`. Other stages reject the key. |
 | `stages.review.seats.code-review.model` | `openai/model` or a listed `anthropic/model` | `stages.review.model` | The only per-seat key. The code-review seat runs this model with no fallback. The security, simplify and ultrareview seats keep `stages.review.model`, and the security seat alone keeps `fallback_model`. Any other seat, or any other key under the seat, is rejected. `workflow-check` prints `config.stages.review.codeReviewModel`, or `null` when the seat inherits. |
 | `checkpoints.approve_merge.mode` | string | `always` | `always` is the only accepted mode. `never` is rejected because v1 stops every run at Human Review. Any other mode is unknown and rejected. |
+| `handoff.reviewers` | list of GitHub user logins | none | The users handoff requests on a ready PR, read from the run's pinned `WORKFLOW.md`. One or more distinct user logins; an empty list, a bot, a team or a malformed login is rejected. Handoff never derives a reviewer from the repository owner. Without `handoff`, a pinned workflow from before the field still parses, `workflow-check` prints `config.handoff: null`, and handoff requests nobody and logs `handoff_reviewer_unconfigured`. |
 
 `<stage>` is one of `admit`, `specify`, `accept`, `build`, `validate`, `review` and `land`.
 
@@ -1006,7 +1019,7 @@ These rules apply to every key:
 - A value that starts with `$` is rejected in every field except `workspace.root`.
 - An unknown top-level key is ignored and listed in `warnings`.
 - The keys `hooks`, `hook`, `codex`, `command`, `commands`, `script`, `scripts`, `shell`, `bash`, `exec`, `run`, `before_run` and `after_create` are rejected at the top level and inside every known section. The match ignores case and surrounding spaces, so `Hooks` and `"hooks "` are rejected too. The factory runs no commands from `WORKFLOW.md`. These keys are not part of the schema, so `field` shows them as `(unknown key)`.
-- An unknown key inside `polling`, `agent`, `workspace`, `retry`, `usage`, `stages`, a stage, `stages.review.seats` or `checkpoints` is rejected.
+- An unknown key inside `polling`, `agent`, `workspace`, `retry`, `usage`, `stages`, a stage, `stages.review.seats`, `checkpoints` or `handoff` is rejected.
 
 ## Guidance
 

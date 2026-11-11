@@ -17,8 +17,10 @@ import {
 	type Exec,
 	type ExecResult,
 	githubRepoFromRemote,
+	isGitSha,
 	isRepoSlug,
 	type LoadView,
+	loadPinnedWorkflow,
 	loadView,
 	loadWorkflow,
 	trustedWorkflowConfig,
@@ -45,7 +47,7 @@ function slug(text: string): RepoSlug {
 	return text;
 }
 
-const repo = slug("giuseppecrj/pi-herdr-factorio");
+const repo = slug("nublai/pi-herdr-factorio");
 const mainSha = "a".repeat(40);
 const candidateSha = "b".repeat(40);
 
@@ -53,7 +55,7 @@ const env: EnvLookup = (name) =>
 	({ HOME: "/home/factory", FACTORY_WORKSPACES: "/srv/workspaces" })[name];
 
 const valid = `---
-repository: giuseppecrj/pi-herdr-factorio
+repository: nublai/pi-herdr-factorio
 polling:
   interval_ms: 30000
 agent:
@@ -72,7 +74,7 @@ Read the diff.
 `;
 
 function frontMatter(lines: string): string {
-	return `---\nrepository: giuseppecrj/pi-herdr-factorio\n${lines}\n---\nbody\n`;
+	return `---\nrepository: nublai/pi-herdr-factorio\n${lines}\n---\nbody\n`;
 }
 
 function parse(text: string) {
@@ -275,6 +277,7 @@ describe("parseWorkflow", () => {
 		assert.equal(parsed.config.polling.intervalMs, 30_000);
 		assert.equal(parsed.config.agent.maxConcurrent, 2);
 		assert.equal(parsed.config.checkpoints.approveMerge.mode, "always");
+		assert.deepEqual(parsed.config.handoff, { reviewers: ["giuseppecrj"] });
 		const cadence = parsed.config.cadence;
 		assert.ok(cadence);
 		assert.equal(cadence.weeklyTokenCap, 200_000);
@@ -296,6 +299,164 @@ describe("parseWorkflow", () => {
 		assert.equal(
 			parsed.config.stages.review.fallbackModel,
 			"openai/gpt-6.1-terra",
+		);
+	});
+
+	it("reads handoff.reviewers as explicit GitHub user logins, never the repository owner", () => {
+		const block = parse(
+			frontMatter("handoff:\n  reviewers:\n    - giuseppecrj\n    - Octo-Cat"),
+		);
+
+		assert.equal(block.kind, "valid");
+		assert.deepEqual(block.kind === "valid" && block.config.handoff, {
+			reviewers: ["giuseppecrj", "Octo-Cat"],
+		});
+		assert.deepEqual(block.kind === "valid" && block.warnings, []);
+		assert.equal(
+			block.kind === "valid" &&
+				Object.isFrozen(block.config.handoff?.reviewers),
+			true,
+		);
+
+		const flow = parse(frontMatter("handoff:\n  reviewers: [giuseppecrj]"));
+		assert.deepEqual(flow.kind === "valid" && flow.config.handoff, {
+			reviewers: ["giuseppecrj"],
+		});
+
+		// A pinned workflow from before the field exists still parses: it names nobody.
+		const absent = parse(frontMatter(""));
+		assert.equal(absent.kind, "valid");
+		assert.equal(absent.kind === "valid" && absent.config.handoff, null);
+		assert.deepEqual(absent.kind === "valid" && absent.warnings, []);
+	});
+
+	it("refuses an empty or malformed handoff.reviewers", () => {
+		const cases: [string, string, RegExp][] = [
+			["handoff:\n  reviewers: []", "handoff.reviewers", /at least one/],
+			["handoff:\n  reviewers:", "handoff.reviewers", /list of GitHub/],
+			["handoff:\n  reviewers: giuseppecrj", "handoff.reviewers", /list/],
+			["handoff: {}", "handoff.reviewers", /is required/],
+			["handoff: giuseppecrj", "handoff", /must be a map/],
+			[
+				"handoff:\n  reviewers: [giuseppecrj]\n  team: core",
+				"handoff.(unknown key)",
+				/unknown key/,
+			],
+			[
+				"handoff:\n  reviewers: [giuseppecrj, GiuseppeCRJ]",
+				"handoff.reviewers",
+				/repeat/,
+			],
+		];
+
+		for (const login of [
+			"exe-dev-github-integration[bot]",
+			"nublai/maintainers",
+			"@giuseppecrj",
+			"-lead",
+			"lead-",
+			"a--b",
+			"a".repeat(40),
+			"giuseppe crj",
+		])
+			cases.push([
+				`handoff:\n  reviewers:\n    - ${JSON.stringify(login)}`,
+				"handoff.reviewers",
+				/GitHub user logins/,
+			]);
+
+		cases.push([
+			"handoff:\n  reviewers:\n    - [giuseppecrj]",
+			"handoff.reviewers",
+			/single value/,
+		]);
+
+		for (const [lines, field, message] of cases) {
+			const error = validation(frontMatter(lines));
+
+			assert.equal(error.field, field, lines);
+			assert.match(error.message, message, lines);
+		}
+	});
+
+	it("loads a run's pinned WORKFLOW.md only when its bytes match the recorded digest", async () => {
+		const pinned = "c".repeat(40);
+		assert.ok(isGitSha(pinned));
+		const old = frontMatter("");
+		const current = frontMatter("handoff:\n  reviewers: [giuseppecrj]");
+		const calls: string[][] = [];
+
+		const serve =
+			(text: string | null): Exec =>
+			async (command, args) => {
+				calls.push([command, ...args]);
+
+				return text === null
+					? { stdout: "", stderr: "gh: Not Found (HTTP 404)", code: 1 }
+					: { stdout: text, stderr: "", code: 0 };
+			};
+
+		const load = (text: string | null, digest = digestOf(text ?? "")) =>
+			loadPinnedWorkflow({
+				exec: serve(text),
+				repo,
+				sha: pinned,
+				digest,
+				env,
+				platform: EXE_DEV_PLATFORM,
+			});
+
+		const loaded = await load(current);
+		assert.equal(loaded.kind, "loaded");
+		assert.deepEqual(loaded.kind === "loaded" && loaded.config.handoff, {
+			reviewers: ["giuseppecrj"],
+		});
+		assert.deepEqual(calls[0], [
+			"gh",
+			"api",
+			"-H",
+			"Accept: application/vnd.github.raw",
+			`repos/${repo}/contents/.github/factory/WORKFLOW.md?ref=${pinned}`,
+		]);
+		const legacy = await load(old);
+		assert.equal(legacy.kind === "loaded" && legacy.config.handoff, null);
+		// A failed read may clear later; wrong bytes or an invalid file never do.
+		assert.deepEqual(await load(current, digestOf(old)), {
+			kind: "integrity",
+			reason: "digest_mismatch",
+			error: null,
+		});
+		assert.deepEqual(await load(null), {
+			kind: "unavailable",
+			reason: "read_failed",
+			cause: "not_found",
+			status: 404,
+		});
+		assert.deepEqual(
+			await load(current.replace(repo, "giuseppecrj/pi-herdr-factorio")),
+			{
+				kind: "integrity",
+				reason: "workflow_invalid",
+				error: "workflow_validation_error",
+			},
+		);
+		assert.deepEqual(
+			await loadPinnedWorkflow({
+				exec: async () => {
+					throw new Error("secret-bearing transport failure");
+				},
+				repo,
+				sha: pinned,
+				digest: digestOf(current),
+				env,
+				platform: EXE_DEV_PLATFORM,
+			}),
+			{
+				kind: "unavailable",
+				reason: "read_rejected",
+				cause: "other",
+				status: null,
+			},
 		);
 	});
 
@@ -1125,13 +1286,11 @@ describe("reports", () => {
 describe("githubRepoFromRemote", () => {
 	it("reads GitHub remotes and refuses others", () => {
 		assert.equal(
-			githubRepoFromRemote("git@github.com:giuseppecrj/pi-herdr-factorio.git"),
+			githubRepoFromRemote("git@github.com:nublai/pi-herdr-factorio.git"),
 			repo,
 		);
 		assert.equal(
-			githubRepoFromRemote(
-				"https://github.com/giuseppecrj/pi-herdr-factorio\n",
-			),
+			githubRepoFromRemote("https://github.com/nublai/pi-herdr-factorio\n"),
 			repo,
 		);
 		assert.equal(
@@ -1904,7 +2063,7 @@ describe("errors built from factory text", () => {
 });
 
 describe("origin parsing", () => {
-	const path = "giuseppecrj/pi-herdr-factorio";
+	const path = "nublai/pi-herdr-factorio";
 
 	const accepted = [
 		`https://github.com/${path}`,
@@ -2194,7 +2353,7 @@ describe("anchor positions from YAML tokens", () => {
 describe("valid reload onto a valid snapshot", () => {
 	it("replaces the snapshot and leaves the old one frozen and unchanged", async () => {
 		const nextText = `---
-repository: giuseppecrj/pi-herdr-factorio
+repository: nublai/pi-herdr-factorio
 polling:
   interval_ms: 60000
 stages:

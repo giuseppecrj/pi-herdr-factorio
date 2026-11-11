@@ -44,11 +44,10 @@ import {
 } from "../src/publication.ts";
 import { LedgerGit, repo } from "./ledger-git.ts";
 import { EXE_DEV_PLATFORM } from "../src/platform.ts";
+import { trustedWorkflowFor } from "./fake-ticket-adapter.ts";
 
-const text = readFileSync(
-	new URL("../.github/factory/WORKFLOW.md", import.meta.url),
-	"utf8",
-);
+// The frozen ledger rows were recorded under the fixture repository's name.
+const text = trustedWorkflowFor(repo);
 
 const load = (source = text) =>
 	parseWorkflow({

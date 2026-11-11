@@ -187,7 +187,9 @@ import {
 	parseWorkflow,
 	STAGE_CLEANUP_RESERVE_MS,
 	isPinnedGrader,
+	loadPinnedWorkflow,
 	trustedWorkflowConfig,
+	type HandoffSettings,
 	type WorkflowConfig,
 } from "../src/workflow.ts";
 import {
@@ -7141,12 +7143,123 @@ async function retireUnissuedIntent(path: string, text: string): Promise<void> {
 	}
 }
 
+/** Failed pinned-workflow reads before handoff holds, about 5 minutes of ticks. */
+export const WORKFLOW_READ_LIMIT = 10;
+
+/**
+ * The durable failed-read count for the run's pinned workflow. A count for
+ * another SHA or digest, or an unreadable file, counts as none.
+ */
+function storedWorkflowFailures(path: string, state: CandidateState): number {
+	try {
+		const stored = objectOf(parseJsonText(regularText(path)));
+
+		return jsonField(stored, "workflowSha") === state.pin.workflowSha &&
+			jsonField(stored, "workflowDigest") === state.pin.workflowDigest
+			? (countOf(jsonField(stored, "failures")) ?? 0)
+			: 0;
+	} catch {
+		return 0;
+	}
+}
+
 export function controllerCandidatePort(config: {
 	readonly stateDir: string;
 	readonly exec: Exec;
 	readonly platform: PlatformProfile;
+	/** Defaults to the controller's structured lines on stderr. */
+	readonly log?: Log;
 }): NonNullable<StageExecutor["candidate"]> {
 	const files = fileRunFiles(config.stateDir);
+
+	const log =
+		config.log ??
+		lineLog(
+			(text) => process.stderr.write(text),
+			() => Date.now(),
+		);
+
+	const pinnedHandoff = new Map<string, HandoffSettings | null>();
+	const workflowFailures = new Map<string, number>();
+
+	/**
+	 * The reviewers named by the run's pinned WORKFLOW.md: settings, `null`
+	 * for a pinned workflow without `handoff`, or `undefined` while a failed
+	 * read may still clear. A failed integrity check, or the 10th failed read,
+	 * throws `workflow_unavailable` so the run holds.
+	 */
+	const handoffOf = async (
+		state: CandidateState,
+	): Promise<HandoffSettings | null | undefined> => {
+		const key = `${state.pin.repo} ${state.pin.workflowSha} ${state.pin.workflowDigest}`;
+
+		if (pinnedHandoff.has(key)) return pinnedHandoff.get(key);
+
+		const pinned = await loadPinnedWorkflow({
+			exec: config.exec,
+			repo: state.pin.repo,
+			sha: state.pin.workflowSha,
+			digest: state.pin.workflowDigest,
+			env: (name) => process.env[name],
+			platform: config.platform,
+		});
+
+		const counter = join(
+			config.stateDir,
+			"handoff",
+			state.pin.runId,
+			"workflow-read.json",
+		);
+
+		const runKey = `${state.pin.runId} ${key}`;
+
+		if (pinned.kind !== "loaded") {
+			// A transient read retries up to the bound, counted durably per run
+			// and pin; an integrity failure can never clear, so it holds at once.
+			const failures =
+				Math.max(
+					workflowFailures.get(runKey) ?? 0,
+					storedWorkflowFailures(counter, state),
+				) + 1;
+
+			const held =
+				pinned.kind === "integrity" || failures >= WORKFLOW_READ_LIMIT;
+
+			log("handoff_workflow_unavailable", {
+				issue: state.pin.issue,
+				runId: state.pin.runId,
+				workflowSha: state.pin.workflowSha,
+				kind: pinned.kind,
+				reason: pinned.reason,
+				failures,
+				limit: WORKFLOW_READ_LIMIT,
+				held,
+			});
+
+			if (held) throw new PublicationError("workflow_unavailable");
+
+			workflowFailures.set(runKey, failures);
+			privateDir(dirname(counter));
+			await writeAtomic(
+				counter,
+				JSON.stringify({
+					workflowSha: state.pin.workflowSha,
+					workflowDigest: state.pin.workflowDigest,
+					failures,
+				}),
+			);
+
+			return undefined;
+		}
+
+		workflowFailures.delete(runKey);
+		await unlink(counter).catch(() => undefined);
+
+		const handoff = pinned.config.handoff ?? null;
+		pinnedHandoff.set(key, handoff);
+
+		return handoff;
+	};
 
 	const branchOf = (state: CandidateState) =>
 		`factory/pr/${state.pin.issue}-${state.pin.runId.slice(0, 12)}`;
@@ -8115,20 +8228,45 @@ export function controllerCandidatePort(config: {
 				(await api.prRef(branchOf(state))) !== request.head
 			)
 				return null;
-			const raw = objectOf(await api.request("GET", `pulls/${pr.number}`));
-			const reviewers = arrayOf(jsonField(raw, "requested_reviewers")) ?? [];
-			const owner = state.pin.repo.split("/")[0];
+			const handoff = await handoffOf(state);
 
-			if (owner === undefined) return null;
+			if (handoff === undefined) return null;
 
-			if (!reviewers.some((r) => jsonField(objectOf(r), "login") === owner)) {
-				if (!(await allowed(state))) return null;
-				await api.request(
-					"POST",
-					`pulls/${pr.number}/requested_reviewers`,
-					{ reviewers: [owner] },
-					true,
+			if (handoff === null) {
+				// A workflow pinned before `handoff.reviewers` existed: request
+				// nobody rather than guess, and never the repository owner.
+				log("handoff_reviewer_unconfigured", {
+					issue: state.pin.issue,
+					runId: state.pin.runId,
+					pr: pr.number,
+					workflowSha: state.pin.workflowSha,
+				});
+			} else {
+				const raw = objectOf(await api.request("GET", `pulls/${pr.number}`));
+
+				const requested = new Set(
+					(arrayOf(jsonField(raw, "requested_reviewers")) ?? []).flatMap(
+						(r) => {
+							const login = textOf(jsonField(objectOf(r), "login"));
+
+							return login === null ? [] : [login.toLowerCase()];
+						},
+					),
 				);
+
+				const missing = handoff.reviewers.filter(
+					(login) => !requested.has(login.toLowerCase()),
+				);
+
+				if (missing.length > 0) {
+					if (!(await allowed(state))) return null;
+					await api.request(
+						"POST",
+						`pulls/${pr.number}/requested_reviewers`,
+						{ reviewers: missing },
+						true,
+					);
+				}
 			}
 
 			if (!(await allowed(state))) return null;

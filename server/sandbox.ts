@@ -4155,6 +4155,7 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 			stateDir: config.stateDir,
 			exec: config.exec,
 			platform: config.platform,
+			log: config.log,
 		}),
 		validate: controllerValidator({
 			stateDir: config.stateDir,

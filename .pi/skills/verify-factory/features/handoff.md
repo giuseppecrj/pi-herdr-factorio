@@ -23,10 +23,10 @@ All commands below run in the authorized VM lane checkout. `STATE`, `ISSUE`, `PR
 ### Drive one delivery
 
 ```bash
-node server/cli.ts tick --once --json --repo giuseppecrj/pi-herdr-factorio --state-dir "$STATE" --issue "$ISSUE"
-node server/cli.ts status --json --repo giuseppecrj/pi-herdr-factorio --state-dir "$STATE"
-gh api "repos/giuseppecrj/pi-herdr-factorio/pulls/$PR"
-gh api "repos/giuseppecrj/pi-herdr-factorio/commits/$HEAD/check-runs?filter=all&per_page=100"
+node server/cli.ts tick --once --json --repo nublai/pi-herdr-factorio --state-dir "$STATE" --issue "$ISSUE"
+node server/cli.ts status --json --repo nublai/pi-herdr-factorio --state-dir "$STATE"
+gh api "repos/nublai/pi-herdr-factorio/pulls/$PR"
+gh api "repos/nublai/pi-herdr-factorio/commits/$HEAD/check-runs?filter=all&per_page=100"
 ```
 
 The tick mutates state and can spend model tokens. It is not a preview. Use subsequent authorized scoped ticks to advance the recorded phase, or one scoped `drive-serve.sh` instance. Return an incomplete CI wait to the coordinator with its run ID and saved deadline; do not start a polling loop or duplicate dispatch.
@@ -35,7 +35,7 @@ Require one owned, non-draft `factory:review` PR on `factory/pr/<issue>-<runId12
 
 ### Verify the identities before calling it ready
 
-- Recompute the private patch, acceptance, and held-out digests. Inspect Git commit parents through `gh api "repos/giuseppecrj/pi-herdr-factorio/git/commits/$HEAD"`. For a published-PR refresh, require ordered parents `[new patch commit, previous published head]` on the final suite-bearing head before CI and review. Do not create a merge commit after certification.
+- Recompute the private patch, acceptance, and held-out digests. Inspect Git commit parents through `gh api "repos/nublai/pi-herdr-factorio/git/commits/$HEAD"`. For a published-PR refresh, require ordered parents `[new patch commit, previous published head]` on the final suite-bearing head before CI and review. Do not create a merge commit after certification.
 - Record repair round, generation, intent digest, review execution ID/attempt, original base, certified base, admitted workflow pin, CI run/gate, dispatch nonce, and reporter check ID. Verify `generation.json`, immutable archives, verdict, review receipt, and certification against the private book. Keep private bytes off public evidence.
 - Require complete hard receipt v2, including `install` and all eight mandatory checks, each passing once, plus any receipt-required checks. Require nonempty held-out identity and zero CI model calls. Bind the reporter's `factory-report` record to actual check ID, run/head/gate/nonce, workflow/event/main ref, bot actor and triggering actor. Require exact completed-success `check` at the final PR head too.
 - Check `filter=all` and complete `total_count`. Duplicate reports, truncated lists, foreign same-named statuses, skipped/cancelled/missing checks, stale heads, or unrelated rollups cannot certify handoff. Do not use the compatibility job as factory proof. Factory heads and bot PRs must get `factory-compatibility`, not a skipped `factory-gates` job.

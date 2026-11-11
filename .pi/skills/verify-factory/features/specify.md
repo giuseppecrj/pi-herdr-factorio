@@ -19,7 +19,7 @@ Preconditions are those of `sandbox-stage.md`, with the bundle provisioned from 
 
 1. Create the fixture as the owner with `gh issue create --title "[<pr-id>] ..."`, then add `factory:ready` as the owner with `gh issue edit <n> --add-label factory:ready`.
 2. Run `.pi/skills/verify-factory/scripts/vm.sh .pi/skills/verify-factory/scripts/drive-stage.sh <pr-id> <worker-n> <issue>`. One `tick --once` claims the issue, runs specify and accept, and posts their comments and the terminal marker. A needs-info result stops at specify.
-3. Read the comments with `gh api repos/giuseppecrj/pi-herdr-factorio/issues/<n>/comments`, and the labels and their actors with the timeline.
+3. Read the comments with `gh api repos/nublai/pi-herdr-factorio/issues/<n>/comments`, and the labels and their actors with the timeline.
 4. For a linked run, comment the answer as the owner, wait two seconds, add `factory:ready` again, and run `drive-stage.sh` once more.
 5. Close every fixture with `gh issue close`, and confirm it with `gh issue view <n> --json state`.
 

@@ -117,6 +117,59 @@ function ledgerOf(
 	});
 }
 
+describe("repository move", () => {
+	it("keeps a pre-move marker untrusted after the move, under the new name and the alias alike", () => {
+		const moved = slug("nublai/pi-herdr-factorio");
+
+		// The platform records the former name only as read-only history.
+		assert.deepEqual(EXE_DEV_PLATFORM.historicalRepositories[moved], [repo]);
+
+		const old = marker({ status: "needs_info", seq: 3 });
+		assert.equal(parseMarker(formatMarker(old)).kind, "marker");
+
+		// GitHub now serves the old comment under the new owner.
+		const served = comment(formatMarker(old), {
+			issueUrl: `https://api.github.com/repos/${moved}/issues/14`,
+		});
+
+		const edits = new Map([
+			[
+				served.nodeId,
+				{ id: served.id, issue: 14, repo: moved, lastEditedAt: null },
+			],
+		]);
+
+		for (const expected of [moved, repo]) {
+			const result = markerLedger({
+				identity: EXE_DEV_PLATFORM,
+				repo: expected,
+				issue: 14,
+				comments: [served],
+				edits,
+			});
+
+			assert.equal(result.kind, "corrupt", expected);
+			assert.equal(result.kind === "corrupt" && result.defect, "wrong_issue");
+		}
+
+		const fresh = marker({
+			repo: moved,
+			runId: runIdOf({ repo: moved, issue: 14, eventId: "34537521383" }),
+		});
+
+		assert.equal(
+			markerLedger({
+				identity: EXE_DEV_PLATFORM,
+				repo: moved,
+				issue: 14,
+				comments: [{ ...served, body: formatMarker(fresh) }],
+				edits,
+			}).kind,
+			"clean",
+		);
+	});
+});
+
 describe("needs_info status", () => {
 	it("is a terminal status that round-trips and tells the owner how to resume", () => {
 		const body = formatMarker(marker({ status: "needs_info", seq: 3 }));
@@ -222,6 +275,8 @@ const holdLabels = {
 	summary_too_large: "the PR summary is too large",
 	pr_identity: "the PR identity could not be verified",
 	pr_ambiguous: "more than one PR matches this run",
+	workflow_unavailable:
+		"the run's pinned WORKFLOW.md cannot be read or verified",
 	validation_failed: "validation did not pass",
 	evidence_unavailable: "required evidence is unavailable",
 	repair_limit: "the repair round allowance is used",

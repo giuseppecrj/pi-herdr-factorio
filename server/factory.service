@@ -15,7 +15,7 @@ Environment=GH_HOST=github.int.exe.xyz
 # Put no secret in Environment=. Future egress secrets come only through LoadCredential=.
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 Environment=PATH=/home/exedev/.local/bin:/home/exedev/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin
-ExecStart=/home/exedev/.local/share/mise/shims/node server/cli.ts serve --repo giuseppecrj/pi-herdr-factorio --state-dir /home/exedev/factory-state
+ExecStart=/home/exedev/.local/share/mise/shims/node server/cli.ts serve --repo nublai/pi-herdr-factorio --state-dir /home/exedev/factory-state
 KillSignal=SIGTERM
 KillMode=mixed
 TimeoutStopSec=300

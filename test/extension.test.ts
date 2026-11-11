@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { mkdtemp, rm, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { addRun } from "./fixtures/owner-feed/state.ts";
+import { addRun, repo as feedRepo } from "./fixtures/owner-feed/state.ts";
 import { describe, it } from "node:test";
 import {
 	factoryCommandText,
@@ -18,18 +18,18 @@ import type { Exec, ExecResult } from "../src/workflow.ts";
 import { FakeGitHub, fakeIssue, labelEvent } from "./fake-ticket-adapter.ts";
 import { EXE_DEV_PLATFORM } from "../src/platform.ts";
 
-const remote = "git@github.com:giuseppecrj/pi-herdr-factorio.git\n";
+const remote = "git@github.com:nublai/pi-herdr-factorio.git\n";
 const mainSha = "c".repeat(40);
 
 const workflow = `---
-repository: giuseppecrj/pi-herdr-factorio
+repository: nublai/pi-herdr-factorio
 ---
 ## build
 Write the test first.
 `;
 
 const secret = `ghp_${"aB3dE6gH9k".repeat(4).slice(0, 36)}`;
-const credentialedOrigin = `https://x-access-token:${secret}@github.com/giuseppecrj/pi-herdr-factorio.git`;
+const credentialedOrigin = `https://x-access-token:${secret}@github.com/nublai/pi-herdr-factorio.git`;
 
 function assertNoCredential(text: string): void {
 	assert.doesNotMatch(text, new RegExp(secret));
@@ -126,7 +126,7 @@ describe("/factory command", () => {
 		assert.match(
 			text,
 			new RegExp(
-				`^workflow +giuseppecrj/pi-herdr-factorio main ${mainSha.slice(0, 12)}`,
+				`^workflow +nublai/pi-herdr-factorio main ${mainSha.slice(0, 12)}`,
 				"m",
 			),
 		);
@@ -146,7 +146,12 @@ describe("/factory command", () => {
 			await addRun(root, 3, "budget_exhausted", {
 				title: "Bound the token spend",
 			});
-			const offlineSources = sources(ok(remote), () => offline);
+
+			// The fixture state is keyed to its own repository; read it there.
+			const offlineSources = sources(
+				ok(`git@github.com:${feedRepo}.git\n`),
+				() => offline,
+			);
 
 			const text = await factoryCommandText("status", {
 				...offlineSources,
@@ -196,7 +201,7 @@ describe("/factory command", () => {
 			sources(ok(`${credentialedOrigin}\n`), online),
 		);
 
-		assert.match(text, /^workflow +giuseppecrj\/pi-herdr-factorio main /m);
+		assert.match(text, /^workflow +nublai\/pi-herdr-factorio main /m);
 		assertNoCredential(text);
 	});
 
@@ -227,7 +232,7 @@ describe("/factory command", () => {
 		);
 
 		assert.deepEqual(refs, [
-			"repos/giuseppecrj/pi-herdr-factorio/git/ref/heads/main",
+			"repos/nublai/pi-herdr-factorio/git/ref/heads/main",
 		]);
 	});
 
@@ -275,7 +280,7 @@ function serving(text: string): (args: readonly string[]) => ExecResult {
 }
 
 function frontMatter(lines: string): string {
-	return `---\nrepository: giuseppecrj/pi-herdr-factorio\n${lines}\n---\nbody\n`;
+	return `---\nrepository: nublai/pi-herdr-factorio\n${lines}\n---\nbody\n`;
 }
 
 type Scenario = {

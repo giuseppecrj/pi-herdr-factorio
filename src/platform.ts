@@ -66,10 +66,21 @@ export type ControllerIdentity = {
 	readonly botEmail: string;
 };
 
+/**
+ * Former names of a repository, keyed by its current name. Read-only
+ * history: metrics and replay use it to keep counting frozen rows recorded
+ * under a former name. Marker trust, admission, claims, dispatch and
+ * publication never read it.
+ */
+export type HistoricalRepositories = Readonly<
+	Record<string, readonly RepoSlug[]>
+>;
+
 export type PlatformProfile = PlatformNetwork &
 	ControllerIdentity & {
 		readonly ghHost: string;
 		readonly repositories: readonly RepoSlug[];
+		readonly historicalRepositories: HistoricalRepositories;
 		readonly anthropicStages: readonly ModelPosition[];
 	};
 
@@ -87,6 +98,7 @@ export const PLATFORM_REFUSALS = [
 	"controller_identity_unexpected",
 	"repositories_empty",
 	"repository_invalid",
+	"historical_repository_invalid",
 	"gh_host_invalid",
 	"gh_host_unexpected",
 	"own_domain_not_forbidden",
@@ -120,6 +132,7 @@ const FILE_KEYS = [
 	"controllerAppSlug",
 	"botEmail",
 	"repositories",
+	"historicalRepositories",
 	"ghHost",
 ] as const;
 
@@ -150,8 +163,15 @@ const EXMACH_IDENTITY: ControllerIdentity = Object.freeze({
 });
 
 const DEFAULT_REPOSITORIES: readonly RepoSlug[] = Object.freeze(
-	["giuseppecrj/pi-herdr-factorio"].filter(isRepoSlug),
+	["nublai/pi-herdr-factorio"].filter(isRepoSlug),
 );
+
+/** The repository moved from giuseppecrj to nublai on 2026-11-10. */
+const DEFAULT_HISTORICAL_REPOSITORIES: HistoricalRepositories = Object.freeze({
+	"nublai/pi-herdr-factorio": Object.freeze(
+		["giuseppecrj/pi-herdr-factorio"].filter(isRepoSlug),
+	),
+});
 
 const ANTHROPIC_STAGES: readonly ModelPosition[] = Object.freeze([
 	"accept",
@@ -301,6 +321,7 @@ type FileSelection = {
 	readonly appSlug: string | null;
 	readonly email: string | null;
 	readonly repositories: readonly RepoSlug[] | null;
+	readonly historicalRepositories: HistoricalRepositories | null;
 	readonly ghHost: string | null;
 };
 
@@ -341,6 +362,71 @@ function readRepositories(
 	}
 
 	return { ok: true, value: Object.freeze(repositories) };
+}
+
+/**
+ * Reads `{ "<current>": ["<former>", ...] }`. Every name is a distinct
+ * repository slug, each list is non-empty, and a former name is never a
+ * current name or listed twice. `aliasesActive` checks the resolved map.
+ */
+function readHistoricalRepositories(
+	value: ReturnType<typeof fieldOf>,
+): Parsed<HistoricalRepositories | null> {
+	if (value === undefined) return { ok: true, value: null };
+
+	const invalid = {
+		ok: false,
+		reason: "historical_repository_invalid",
+	} as const;
+
+	const root = objectOf(value);
+
+	if (root === null) return invalid;
+
+	const current = Object.keys(root);
+	const seen: RepoSlug[] = [];
+	const result: Record<string, readonly RepoSlug[]> = {};
+
+	for (const name of current) {
+		const items = arrayOf(fieldOf(root, name));
+
+		if (!isRepoSlug(name) || items === null || items.length === 0)
+			return invalid;
+
+		const former: RepoSlug[] = [];
+
+		for (const item of items) {
+			const text = stringOf(item);
+
+			if (
+				text === null ||
+				!isRepoSlug(text) ||
+				current.includes(text) ||
+				seen.includes(text)
+			)
+				return invalid;
+
+			seen.push(text);
+			former.push(text);
+		}
+
+		result[name] = Object.freeze(former);
+	}
+
+	return { ok: true, value: Object.freeze(result) };
+}
+
+/**
+ * A former name is never an active repository, whether the map came from the
+ * file or is the built-in default.
+ */
+function aliasesActive(
+	history: HistoricalRepositories,
+	active: readonly RepoSlug[],
+): boolean {
+	return Object.values(history).some((former) =>
+		former.some((name) => active.includes(name)),
+	);
 }
 
 function parsePlatformFile(text: string): Parsed<FileSelection> {
@@ -390,6 +476,12 @@ function parsePlatformFile(text: string): Parsed<FileSelection> {
 
 	if (!repositories.ok) return repositories;
 
+	const historicalRepositories = readHistoricalRepositories(
+		fieldOf(root, "historicalRepositories"),
+	);
+
+	if (!historicalRepositories.ok) return historicalRepositories;
+
 	if (ghHostValue !== undefined && ghHost === null) {
 		return { ok: false, reason: "gh_host_invalid" };
 	}
@@ -402,6 +494,7 @@ function parsePlatformFile(text: string): Parsed<FileSelection> {
 			appSlug: appSlug.value,
 			email: email.value,
 			repositories: repositories.value,
+			historicalRepositories: historicalRepositories.value,
 			ghHost,
 		},
 	};
@@ -518,13 +611,22 @@ export function parsePlatformProfile(input: {
 
 	if (!ghHost.ok) return ghHost;
 
+	const repositories = file?.value.repositories ?? DEFAULT_REPOSITORIES;
+
+	const historicalRepositories =
+		file?.value.historicalRepositories ?? DEFAULT_HISTORICAL_REPOSITORIES;
+
+	if (aliasesActive(historicalRepositories, repositories))
+		return { ok: false, reason: "historical_repository_invalid" };
+
 	const network = platformNetwork(selector);
 
 	const profile: PlatformProfile = Object.freeze({
 		...network,
 		...identity.value,
 		ghHost: ghHost.value,
-		repositories: file?.value.repositories ?? DEFAULT_REPOSITORIES,
+		repositories,
+		historicalRepositories,
 		anthropicStages: ANTHROPIC_STAGES,
 	});
 
@@ -608,6 +710,30 @@ export function soleRepository(profile: PlatformProfile): RepoSlug | null {
 	return only !== undefined && rest.length === 0 ? only : null;
 }
 
+/**
+ * `repo` followed by its read-only former names. Only measurement readers
+ * (metrics and replay) may call this; trust, admission, claims, dispatch
+ * and publication compare the configured name exactly.
+ */
+export function measuredRepositories(
+	history: HistoricalRepositories,
+	repo: string,
+): readonly string[] {
+	return [repo, ...(Object.hasOwn(history, repo) ? (history[repo] ?? []) : [])];
+}
+
+/** The current name for `repo` when it is a recorded former name, else `repo`. */
+export function currentRepository(
+	history: HistoricalRepositories,
+	repo: string,
+): string {
+	return (
+		Object.keys(history).find((current) =>
+			measuredRepositories(history, current).includes(repo),
+		) ?? repo
+	);
+}
+
 export type PlatformSummary = {
 	readonly name: PlatformName;
 	readonly domain: string;
@@ -622,6 +748,7 @@ export type PlatformSummary = {
 	readonly controllerAppSlug: string;
 	readonly botEmail: string;
 	readonly repositories: readonly RepoSlug[];
+	readonly historicalRepositories: HistoricalRepositories;
 	readonly anthropicStages: readonly ModelPosition[];
 };
 
@@ -641,6 +768,12 @@ export function platformSummary(profile: PlatformProfile): PlatformSummary {
 		controllerAppSlug: profile.controllerAppSlug,
 		botEmail: profile.botEmail,
 		repositories: [...profile.repositories],
+		historicalRepositories: Object.fromEntries(
+			Object.entries(profile.historicalRepositories).map(([name, former]) => [
+				name,
+				[...former],
+			]),
+		),
 		anthropicStages: [...profile.anthropicStages],
 	};
 

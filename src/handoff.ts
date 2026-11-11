@@ -217,6 +217,7 @@ export type HandoffReason =
 	| "summary_too_large"
 	| "pr_identity"
 	| "pr_ambiguous"
+	| "workflow_unavailable"
 	| "validation_failed"
 	| "evidence_unavailable"
 	| "repair_limit"
@@ -518,7 +519,11 @@ type CandidateEventData =
 	  }
 	| {
 			readonly kind: "effect_held";
-			readonly reason: "evidence_unavailable" | "pr_identity" | "pr_ambiguous";
+			readonly reason:
+				| "evidence_unavailable"
+				| "pr_identity"
+				| "pr_ambiguous"
+				| "workflow_unavailable";
 			readonly now: number;
 	  }
 	| {
@@ -1908,6 +1913,7 @@ function observed(
 		state.work.kind === "held" &&
 		(state.work.reason === "pr_identity" ||
 			state.work.reason === "pr_ambiguous" ||
+			state.work.reason === "workflow_unavailable" ||
 			state.work.reason === "summary_too_large")
 	)
 		return state;
@@ -3720,6 +3726,7 @@ function wireReason(value: JsonValue | undefined): value is HandoffReason {
 			"summary_too_large",
 			"pr_identity",
 			"pr_ambiguous",
+			"workflow_unavailable",
 			"validation_failed",
 			"evidence_unavailable",
 			"repair_limit",

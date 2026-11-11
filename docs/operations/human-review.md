@@ -6,13 +6,15 @@ F09a implements this protocol locally. Main-backed reporter/P4 proof, production
 
 ## Inspect the handoff
 
-1. Open the issue's handoff comment and follow its PR and CI links. Expect one non-draft PR against `main`, on `factory/pr/<issue>-<runId12>`, labeled `factory:review`, with the repository owner requested. The controller adopts only its own bot PR with the matching repository, base, branch, and run trailer. It reconciles a lost create response rather than opening another PR.
+1. Open the issue's handoff comment and follow its PR and CI links. Expect one non-draft PR against `main`, on `factory/pr/<issue>-<runId12>`, labeled `factory:review`, with the reviewers named by `handoff.reviewers` in the run's pinned `WORKFLOW.md` requested. The controller adopts only its own bot PR with the matching repository, base, branch, and run trailer. It reconciles a lost create response rather than opening another PR.
+
+   The reviewers are an explicit trusted setting, today `giuseppecrj`. Handoff never derives a reviewer from the repository owner, which for `nublai/pi-herdr-factorio` is an organization. A run pinned to a `WORKFLOW.md` from before the field existed requests no reviewer. Its handoff still completes and the controller logs `event=handoff_reviewer_unconfigured` with the issue, run, PR and pinned workflow SHA, so request a reviewer by hand. If the pinned file no longer matches its recorded digest or is not a valid workflow, the run stops at once on the owner hold `workflow_unavailable`. If it cannot be read, handoff retries on later ticks, logs `event=handoff_workflow_unavailable` each time, and takes the same hold after 10 failed reads. It never guesses a reviewer. See [Factory CLI](factory-cli.md) for the hold.
 2. Compare the PR head with the handoff candidate SHA. Inspect the contract summary, changed paths, findings, and family disclosure. The suite-bearing candidate is the exact commit certified before handoff. Its held-out check files remain visible in the PR and inert on `main`. They are not builder inputs.
 3. Inspect both required checks on that head. `check` is the ordinary PR check. `factory-gates` must come from the main-owned dispatch and its separate reporter, not a same-named job or a green rollup. Use the [CI identity reference](factory-cli.md#trusted-candidate-gates-f07b) when auditing receipts.
 4. On the VM, read status without advancing the controller:
 
 ```bash
-node server/cli.ts status --json --repo giuseppecrj/pi-herdr-factorio --state-dir "$STATE"
+node server/cli.ts status --json --repo nublai/pi-herdr-factorio --state-dir "$STATE"
 ```
 
 `STATE` is the existing private controller state directory. Set `GH_HOST=github.int.exe.xyz` only in the trusted VM environment, never on your workstation. Status reads the workflow through `gh` and local evidence from disk. It launches no model and writes no marker. `executionEnabled: false` at the top level describes this status command, not the daemon's readiness.
@@ -114,4 +116,4 @@ The scratch evidence supports this conditional two-rule shape, not current produ
 
 ## Keep proof labels and private evidence intact
 
-Use the [F09a verification recipe](../../.pi/skills/verify-factory/features/handoff.md) for lane prerequisites and cleanup ownership. Keep saved-state/fake-transport checks separate from real VM, Actions, and owner-action results. F08's accepted gaps remain tracked in [issue 543](https://github.com/giuseppecrj/pi-herdr-factorio/issues/543). R8 cross-family review remains incomplete. Both substantive formal explorations timed out, not passed. Never export raw private sessions or held-out material into a PR or repair session.
+Use the [F09a verification recipe](../../.pi/skills/verify-factory/features/handoff.md) for lane prerequisites and cleanup ownership. Keep saved-state/fake-transport checks separate from real VM, Actions, and owner-action results. F08's accepted gaps remain tracked in [issue 543](https://github.com/nublai/pi-herdr-factorio/issues/543). R8 cross-family review remains incomplete. Both substantive formal explorations timed out, not passed. Never export raw private sessions or held-out material into a PR or repair session.

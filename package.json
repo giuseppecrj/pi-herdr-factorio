@@ -55,11 +55,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/giuseppecrj/pi-herdr-factorio.git"
+    "url": "git+https://github.com/nublai/pi-herdr-factorio.git"
   },
-  "homepage": "https://github.com/giuseppecrj/pi-herdr-factorio#readme",
+  "homepage": "https://github.com/nublai/pi-herdr-factorio#readme",
   "bugs": {
-    "url": "https://github.com/giuseppecrj/pi-herdr-factorio/issues"
+    "url": "https://github.com/nublai/pi-herdr-factorio/issues"
   },
   "dependencies": {
     "marked": "^18.1.2",

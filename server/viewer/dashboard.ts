@@ -29,6 +29,7 @@ const HOLD_WORDS: Record<HandoffReason, string> = {
 	summary_too_large: "the PR summary is too long",
 	pr_identity: "the PR identity could not be verified",
 	pr_ambiguous: "more than one PR matches",
+	workflow_unavailable: "the run's workflow file cannot be read",
 	validation_failed: "checks could not finish",
 	evidence_unavailable: "saved checks or review cannot be read",
 	repair_limit: "the repair limit was reached",

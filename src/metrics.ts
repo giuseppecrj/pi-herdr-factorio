@@ -2,6 +2,10 @@ import { lstat, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { parseLedger, type LedgerRow, type RunContextV2 } from "./ledger.ts";
 import { digestOf } from "./run.ts";
+import {
+	type HistoricalRepositories,
+	measuredRepositories,
+} from "./platform.ts";
 import { regularText } from "./artifacts.ts";
 import type { JsonValue } from "./tickets.ts";
 
@@ -180,7 +184,7 @@ export function excludedRunReason(row: {
 
 function indexDefects(
 	rows: readonly LedgerRow[],
-	repo: string,
+	names: readonly string[],
 	defects: DefectRead,
 ) {
 	const targets = new Set(
@@ -206,7 +210,9 @@ function indexDefects(
 
 			if (
 				qualifiedRepo !== undefined &&
-				qualifiedRepo.toLowerCase() !== repo.toLowerCase()
+				!names.some(
+					(name) => name.toLowerCase() === qualifiedRepo.toLowerCase(),
+				)
 			)
 				continue;
 			const number = Number(match[2] ?? match[4] ?? match[5]);
@@ -525,8 +531,11 @@ export function computeMetrics(input: {
 	readonly interventions?: Interventions;
 	readonly receiptDigests?: ReceiptDigests;
 	readonly source?: "file" | "ledger";
+	/** Read-only former names whose frozen rows still count for `repo`. */
+	readonly history?: HistoricalRepositories;
 }) {
 	const now = Date.parse(input.now);
+	const names = measuredRepositories(input.history ?? {}, input.repo);
 
 	if (!Number.isFinite(now)) throw new Error("invalid_now");
 	const unknowns: Unknown[] = [];
@@ -547,7 +556,7 @@ export function computeMetrics(input: {
 
 		const row = line.row;
 
-		if (row.repo !== input.repo) {
+		if (!names.includes(row.repo)) {
 			if (row.repo.toLowerCase() === input.repo.toLowerCase())
 				excludedRowCounts.repoCasingMismatch += 1;
 			else excludedRowCounts.otherRepo += 1;
@@ -570,7 +579,7 @@ export function computeMetrics(input: {
 		rows.push(row);
 	}
 
-	const indexed = indexDefects(rows, input.repo, input.defects);
+	const indexed = indexDefects(rows, names, input.defects);
 	const groups = new Map<number, LedgerRow[]>();
 
 	for (const row of rows) {
@@ -702,6 +711,7 @@ export function computeMetrics(input: {
 		schemaVersion: 1,
 		source: input.source ?? "ledger",
 		repo: input.repo,
+		historicalRepositories: names.slice(1),
 		now: new Date(now).toISOString(),
 		cohort: "production",
 		windowDays: METRIC_POLICY.windowDays,
@@ -761,7 +771,9 @@ export async function readReceiptDigests(
 	stateDir: string,
 	ledger: Uint8Array,
 	repo: string,
+	history: HistoricalRepositories = {},
 ): Promise<ReceiptDigests> {
+	const names = measuredRepositories(history, repo);
 	const result = new Map<string, ReadonlySet<string>>();
 
 	async function visit(dir: string, depth: number, digests: Set<string>) {
@@ -783,7 +795,7 @@ export async function readReceiptDigests(
 	for (const line of parseLedger(ledger)) {
 		if (
 			line.kind !== "known" ||
-			line.row.repo !== repo ||
+			!names.includes(line.row.repo) ||
 			excludedRunReason(line.row) !== null
 		)
 			continue;

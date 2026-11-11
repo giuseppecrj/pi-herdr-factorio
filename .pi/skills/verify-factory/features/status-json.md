@@ -20,7 +20,7 @@ Use the command below with an existing private state directory on the VM. `--ref
 After doctor and lane setup, run on the VM from its lane checkout:
 
 ```bash
-node server/cli.ts status --json --repo giuseppecrj/pi-herdr-factorio --state-dir "$STATE"
+node server/cli.ts status --json --repo nublai/pi-herdr-factorio --state-dir "$STATE"
 ```
 
 Record the tested head/tree, state origin, workflow SHA/digest, command, timestamps, output, and exit. `STATE` must name the captured private state, not another lane's directory. Expect exit 0 even if the workflow is invalid. Read `workflow` and `workflowError`, not exit status alone. `models` names specify, accept, build, and review. Top-level `executionEnabled` stays false because this command runs no preflight. The daemon's saved value is `controller.lastTick.executionEnabled`.

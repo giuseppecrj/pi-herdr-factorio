@@ -8,7 +8,7 @@ require_lane_ids "$pr" "$n" || exit 2
 usage="usage: drive-stage.sh <pr-id> <worker-n> <issue> [unavailable]"
 case "$issue" in ""|0*|*[!0-9]*) echo "$usage" >&2; exit 2;; esac
 case "$mode" in pass|unavailable) ;; *) echo "$usage" >&2; exit 2;; esac
-repo=giuseppecrj/pi-herdr-factorio
+repo=nublai/pi-herdr-factorio
 lane="/home/exedev/factory-verification/$pr-w$n"
 out="/tmp/swarm-$pr/worker-$n"
 mkdir -p "$out"

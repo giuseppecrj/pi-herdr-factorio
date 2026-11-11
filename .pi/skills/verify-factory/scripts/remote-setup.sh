@@ -10,7 +10,7 @@ mkdir -p "$lane/ws" "$lane/state"
 tar -xf "$lane/src.tar" -C "$lane/ws"
 rm "$lane/src.tar"
 git -C "$lane/ws" init -q
-git -C "$lane/ws" remote add origin https://github.com/giuseppecrj/pi-herdr-factorio.git
+git -C "$lane/ws" remote add origin https://github.com/nublai/pi-herdr-factorio.git
 echo "$sha" > "$lane/head-sha"
 (cd "$lane/ws" && npm ci --ignore-scripts --no-audit --no-fund 2>&1 | tail -2)
 echo "lane=$lane sha=$sha"

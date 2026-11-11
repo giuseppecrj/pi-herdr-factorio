@@ -35,7 +35,7 @@ import { EXE_DEV_PLATFORM } from "../src/platform.ts";
 import { noPlatformFile } from "./helpers.ts";
 
 const corpusDir = new URL("./fixtures/replay/", import.meta.url).pathname;
-const repo = "giuseppecrj/pi-herdr-factorio";
+const repo = "nublai/pi-herdr-factorio";
 
 const syntheticWorkflow = `const BRANCH_NAME = /^[A-Za-z0-9._/-]+$/;
 
@@ -461,6 +461,60 @@ describe("replay comparison", () => {
 		assert.deepEqual(result.previous.stages, a.row.stages);
 		assert.ok(result.limitations.some((s) => s.includes("same-family")));
 		assert.equal(result.promotes, false);
+	});
+
+	it("compares a frozen pre-move row with a post-move row only through the read-only repository alias", async () => {
+		const a = await side();
+		const cand = await side("cand");
+		assert.equal(a.row.repo, "giuseppecrj/pi-herdr-factorio");
+		const current = repo;
+		const elsewhere = "acme/widgets";
+		assert.ok(isRepoSlug(current) && isRepoSlug(elsewhere));
+
+		const moved = {
+			...cand,
+			headSha: otherSha,
+			record: { ...cand.record, headSha: otherSha },
+			row: { ...cand.row, repo: current },
+		};
+
+		const exact = replayReport({
+			previous: a,
+			candidate: moved,
+			expected: "needs_info",
+		});
+
+		assert.equal(exact.comparability, "incomparable");
+		assert.ok(exact.reasons.includes("repository_mismatch"));
+
+		const aliased = replayReport({
+			previous: a,
+			candidate: moved,
+			expected: "needs_info",
+			history: EXE_DEV_PLATFORM.historicalRepositories,
+		});
+
+		assert.equal(aliased.comparability, "comparable", aliased.reasons.join());
+		assert.deepEqual(aliased.reasons, []);
+
+		const sameIssue = replayReport({
+			previous: a,
+			candidate: { ...moved, row: { ...moved.row, issue: a.row.issue } },
+			expected: "needs_info",
+			history: EXE_DEV_PLATFORM.historicalRepositories,
+		});
+
+		assert.ok(sameIssue.reasons.includes("same_fixture_issue"));
+		assert.ok(!sameIssue.reasons.includes("repository_mismatch"));
+
+		const stranger = replayReport({
+			previous: a,
+			candidate: { ...moved, row: { ...moved.row, repo: elsewhere } },
+			expected: "needs_info",
+			history: EXE_DEV_PLATFORM.historicalRepositories,
+		});
+
+		assert.ok(stranger.reasons.includes("repository_mismatch"));
 	});
 
 	it("makes different bases, policies and unexpected assets incomparable; missing provenance is not equal evidence", async () => {

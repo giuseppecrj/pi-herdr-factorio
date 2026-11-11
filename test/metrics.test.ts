@@ -29,6 +29,7 @@ import {
 import { digestOf, runIdOf } from "../src/run.ts";
 import { isRepoSlug, type Exec } from "../src/workflow.ts";
 import { noPlatformFile } from "./helpers.ts";
+import { EXE_DEV_PLATFORM } from "../src/platform.ts";
 
 const repo = "giuseppecrj/pi-herdr-factorio";
 
@@ -2092,5 +2093,158 @@ describe("metrics CLI", () => {
 
 		assert.equal(value.code, EXIT.invalid);
 		assert.equal(JSON.parse(value.stdout).error, "ledger_unavailable");
+	});
+});
+
+describe("read-only repository history", () => {
+	const moved = "nublai/pi-herdr-factorio";
+	const history = EXE_DEV_PLATFORM.historicalRepositories;
+
+	const summary = (value: ReturnType<typeof computeMetrics>) => ({
+		runs: value.runs,
+		tokens: value.tokens,
+		tickets: value.tickets.map(({ repo: _repo, ...ticket }) => ticket),
+		excluded: value.excluded,
+		unknowns: value.unknowns,
+	});
+
+	it("counts the frozen pre-move production rows under the new name only through the alias", () => {
+		const old = computeMetrics({
+			ledger: fixture,
+			repo,
+			now: matureAt,
+			defects: none,
+		});
+
+		const aliased = computeMetrics({
+			ledger: fixture,
+			repo: moved,
+			now: matureAt,
+			defects: none,
+			history,
+		});
+
+		const exact = computeMetrics({
+			ledger: fixture,
+			repo: moved,
+			now: matureAt,
+			defects: none,
+		});
+
+		assert.equal(old.runs, 12);
+		assert.equal(old.tokens.total, 4_152_936);
+		assert.equal(old.tokens.coverage, "lower_bound");
+		assert.deepEqual(summary(aliased), summary(old));
+		assert.equal(aliased.repo, moved);
+		assert.deepEqual(aliased.historicalRepositories, [repo]);
+		assert.deepEqual(aliased.excludedRowCounts, {
+			otherRepo: 0,
+			repoCasingMismatch: 0,
+		});
+		assert.equal(exact.runs, 0);
+		assert.deepEqual(exact.historicalRepositories, []);
+		assert.equal(exact.excludedRowCounts.otherRepo, 26);
+	});
+
+	it("matches a qualified defect reference written with the former name", () => {
+		// Issue 625 is a landed production ticket in the preserved ledger.
+		const landed = { issue: 625 };
+		const reference = defect(`${repo}#${landed.issue}`);
+
+		const aliased = computeMetrics({
+			ledger: fixture,
+			repo: moved,
+			now: matureAt,
+			defects: { kind: "known", issues: [reference] },
+			history,
+		});
+
+		assert.deepEqual(aliased.unmatchedDefects, []);
+
+		const exact = computeMetrics({
+			ledger: fixture,
+			repo: moved,
+			now: matureAt,
+			defects: { kind: "known", issues: [reference] },
+		});
+
+		assert.deepEqual(exact.unmatchedDefects, [999]);
+
+		const stranger = computeMetrics({
+			ledger: fixture,
+			repo: moved,
+			now: matureAt,
+			defects: {
+				kind: "known",
+				issues: [defect(`acme/widgets#${landed.issue}`)],
+			},
+			history,
+		});
+
+		assert.deepEqual(stranger.unmatchedDefects, [999]);
+	});
+
+	it("real metrics CLI counts the preserved ledger under nublai and reads reviews at the new name", async () => {
+		await withLedger(async (path) => {
+			writeFileSync(path, fixture);
+
+			const offline = await cli([
+				"metrics",
+				"--json",
+				"--repo",
+				moved,
+				"--ledger-file",
+				path,
+				"--offline",
+				"--now",
+				matureAt,
+			]);
+
+			assert.equal(offline.code, EXIT.ok, offline.stderr);
+			const output = JSON.parse(offline.stdout);
+			assert.equal(output.runs, 12);
+			assert.equal(output.tokens.total, 4_152_936);
+			assert.deepEqual(output.historicalRepositories, [repo]);
+			assert.equal(output.excludedRowCounts.otherRepo, 0);
+
+			const online = await cli(
+				["metrics", "--json", "--repo", moved, "--ledger-file", path],
+				async (_command, args) => {
+					assert.ok(
+						(args[1] ?? "").startsWith(`repos/${moved}/`),
+						args.join(" "),
+					);
+
+					if (args[1]?.includes("/labels/"))
+						return { code: 1, stdout: "", stderr: "missing label" };
+
+					if (args[1]?.includes("/timeline?"))
+						return { code: 0, stdout: "[]", stderr: "" };
+
+					return {
+						code: 0,
+						stdout: JSON.stringify([
+							{
+								state: "APPROVED",
+								submitted_at: "2026-10-31T23:00:00Z",
+								user: { login: "a-non-writer" },
+								body: "review",
+							},
+						]),
+						stderr: "",
+					};
+				},
+			);
+
+			assert.equal(online.code, EXIT.ok, online.stderr);
+			const read = JSON.parse(online.stdout);
+			assert.equal(read.runs, 12);
+			assert.ok(
+				read.tickets.some(
+					(ticket: { landings: { intervention: { kind: string } }[] }) =>
+						ticket.landings.some((l) => l.intervention.kind === "known"),
+				),
+			);
+		});
 	});
 });

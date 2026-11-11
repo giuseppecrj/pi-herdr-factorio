@@ -5548,7 +5548,8 @@ export class Orchestrator {
 				if (
 					error.reason !== "evidence_unavailable" &&
 					error.reason !== "pr_identity" &&
-					error.reason !== "pr_ambiguous"
+					error.reason !== "pr_ambiguous" &&
+					error.reason !== "workflow_unavailable"
 				)
 					throw error;
 

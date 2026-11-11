@@ -33,7 +33,7 @@ import {
 import { digestOf, runIdOf } from "../src/run.ts";
 import { unknownEfficiency } from "../server/sandbox/result.ts";
 import { objectOf } from "../server/sandbox/json.ts";
-import { isGitSha, type GitSha } from "../src/workflow.ts";
+import { isGitSha, isRepoSlug, type GitSha } from "../src/workflow.ts";
 import { LedgerGit, repo } from "./ledger-git.ts";
 import { TRUSTED_RUN_CAP } from "./fake-ticket-adapter.ts";
 import {
@@ -1474,6 +1474,70 @@ describe("ledger row codec", () => {
 });
 
 describe("ledger append protocol", () => {
+	it("reads and deduplicates a frozen pre-move row through the moved repository's name without a write", async () => {
+		const moved = "nublai/pi-herdr-factorio";
+		assert.ok(isRepoSlug(moved));
+
+		const frozen = ledgerRowOf(
+			JSON.parse(
+				readFileSync(
+					new URL("./fixtures/metrics/runs-2026-11-08.jsonl", import.meta.url),
+					"utf8",
+				).split("\n")[0] ?? "",
+			),
+		);
+
+		assert.equal(frozen.row.repo, repo);
+		const fake = new LedgerGit();
+
+		const first = await appendRun(
+			ledgerApiOf(quietApi(fake)),
+			pending(frozen),
+			null,
+		);
+
+		assert.equal(first.kind, "published");
+		const tip = fake.refs.get("factory/ledger");
+		const writes = fake.writes.length;
+
+		// GitHub redirects the former name, so the moved name reaches the same branch.
+		const redirect: typeof fake.exec = (command, args) =>
+			fake.exec(
+				command,
+				args.map((arg) => arg.replace(`repos/${moved}/`, `repos/${repo}/`)),
+			);
+
+		const again = await appendRun(
+			ledgerApiOf(
+				new GitHubPublicationApi(
+					redirect,
+					moved,
+					EXE_DEV_PLATFORM,
+					{},
+					async () => true,
+					async () => {},
+				),
+			),
+			pending(frozen),
+			first.kind === "published" ? first.anchor : null,
+		);
+
+		assert.equal(again.kind, "published");
+		assert.equal(
+			again.kind === "published" && first.kind === "published" && again.line,
+			first.kind === "published" && first.line,
+		);
+		assert.equal(fake.refs.get("factory/ledger"), tip);
+		assert.equal(fake.writes.length, writes);
+
+		const [line] = parseLedger(await remoteBytes(fake));
+		assert.equal(line?.kind === "known" && line.row.repo, repo);
+		assert.equal(
+			indexLedger(parseLedger(await remoteBytes(fake))).kind,
+			"indexed",
+		);
+	});
+
 	it("accepts the probe's empty commits and appends one row on top of them", async () => {
 		const fake = new LedgerGit();
 		const probeTip = await probeHistory(fake);

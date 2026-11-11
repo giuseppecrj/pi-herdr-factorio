@@ -4218,7 +4218,7 @@ describe("runStage refusal fallback", () => {
 	});
 
 	it("runs the fallback_model the workflow configures for the stage", async () => {
-		const repo = "giuseppecrj/pi-herdr-factorio";
+		const repo = "nublai/pi-herdr-factorio";
 
 		assert.ok(isRepoSlug(repo));
 
@@ -5671,7 +5671,7 @@ describe("pinned zero-token source replay", () => {
 		const expectedBodies: string[] = [];
 		const root = mkdtempSync(join(tmpdir(), "factory-eff2-replay-"));
 		t.after(() => rmSync(root, { recursive: true, force: true }));
-		const repo = "giuseppecrj/pi-herdr-factorio";
+		const repo = "nublai/pi-herdr-factorio";
 		assert.ok(isRepoSlug(repo));
 		assert.ok(isGitSha(pin.baseline));
 
@@ -7878,7 +7878,8 @@ describe("multi-seat candidate review", () => {
 				assert.ok(f.prepared.input.files.size > 0);
 				assert.deepEqual(f.prepared.input.scenarios, ["S1"]);
 
-				const github = new FakeGitHub();
+				// The prepared fixture's run is keyed to its own repository.
+				const github = new FakeGitHub(f.contract.base.repo);
 				github.add(
 					fakeIssue(1, {
 						timeline: [

@@ -4,7 +4,7 @@ export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
 : "${GH_HOST:?send this script with vm.sh, which exports GH_HOST from targets.env}"
 pr="$1"; n="$2"
 require_lane_ids "$pr" "$n" || exit 2
-repo=giuseppecrj/pi-herdr-factorio
+repo=nublai/pi-herdr-factorio
 lane="/home/exedev/factory-verification/$pr-w$n"
 out="/tmp/swarm-$pr/worker-$n"
 mkdir -p "$out"

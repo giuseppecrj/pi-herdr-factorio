@@ -260,6 +260,7 @@ function parseClaim(
 				: work?.kind === "held" &&
 						(work.reason === "pr_identity" ||
 							work.reason === "pr_ambiguous" ||
+							work.reason === "workflow_unavailable" ||
 							work.reason === "feedback_overflow")
 					? work.since
 					: (countOf(claim?.enteredAt) ?? readiness?.since ?? null);
