@@ -7,11 +7,22 @@ node server/cli.ts <command> --json --repo <owner/name> [options]
 node server/cli.ts serve --repo <owner/name> --state-dir <dir> [--issue <number>]...
 ```
 
-Except for `owner-feed`, `metrics`, `gates` and `viewer`, every command reads `.github/factory/WORKFLOW.md` from GitHub through `gh`, never from the local checkout. It first resolves the branch to a SHA with `gh api repos/<repo>/git/ref/heads/<branch> --jq .object.sha`, then fetches the file at that SHA with `gh api -H 'Accept: application/vnd.github.raw' repos/<repo>/contents/.github/factory/WORKFLOW.md?ref=<sha>`. Ordinary `gh` calls have a 30-second timeout. Ledger publication uses a separate 20-second job slice, with each call capped at the smaller of 5 seconds and the remaining slice. `gh` inherits the environment, including `GH_HOST`. On the VM, set `GH_HOST` to the platform profile's `ghHost`, `github.int.exe.xyz` on the `exe-dev` default. Before any command runs, the CLI resolves the platform from `FACTORY_PLATFORM` and `/etc/factory/platform.json` ([platform](platform.md)). An invalid selection logs `platform_invalid` with its `reason` and exits 2, before any lock, `gh` call or stage launch.
+Except for `platform`, `owner-feed`, `metrics`, `gates` and `viewer`, every command reads `.github/factory/WORKFLOW.md` from GitHub through `gh`, never from the local checkout. It first resolves the branch to a SHA with `gh api repos/<repo>/git/ref/heads/<branch> --jq .object.sha`, then fetches the file at that SHA with `gh api -H 'Accept: application/vnd.github.raw' repos/<repo>/contents/.github/factory/WORKFLOW.md?ref=<sha>`. Ordinary `gh` calls have a 30-second timeout. Ledger publication uses a separate 20-second job slice, with each call capped at the smaller of 5 seconds and the remaining slice. `gh` inherits the environment, including `GH_HOST`. On the VM, set `GH_HOST` to the platform profile's `ghHost`, `github.int.exe.xyz` on the `exe-dev` default. Before any command runs, the CLI resolves the platform from `FACTORY_PLATFORM` and `/etc/factory/platform.json` ([platform](platform.md)). An invalid selection logs `platform_invalid` with its `reason` and exits 2, before any lock, `gh` call or stage launch.
 
 `admit` makes more `gh` reads, described below. `tick`, `run`, and `serve` run the controller. They can write markers, summaries, labels, Git objects and refs, dispatch CI, open a PR, request review, and close an issue after an observed merge. They never merge or arm auto-merge. These commands and `cadence --once` launch models inside the stage sandbox. Cadence runs read-only maintenance and files only proposed issues; it never dispatches ticket work or labels a proposal ready. `admit` and the controller write private state under `--state-dir`; `gates` writes its own receipt output directory. The owner feed and metrics report are read-only. The viewer reads local evidence and has one protected hold POST, which changes only the local `disabled` file. See [Review and merge a factory PR](human-review.md) for the owner procedure.
 
 Errors and warnings carry only text the factory builds itself. They never quote `gh` output, an exec failure, a YAML error message, a key or value from `WORKFLOW.md` or a command-line argument. A second layer still redacts credentials in stdout, stderr and `/factory status` text. Anything shaped like `scheme://user:secret@` is printed as `scheme://<redacted>@`, and the value of a query parameter named `token`, `access_token`, `auth`, `key`, `password`, `secret`, `sig`, `signature` or `code`, in any case, is printed as `<redacted>`. In JSON output this applies to each string value before it is encoded, so it never spans two lines of one value.
+
+## Platform environment
+
+```bash
+node server/cli.ts platform --env
+FACTORY_PLATFORM=exmach:exmach.net node server/cli.ts platform --env
+```
+
+This read-only command needs no `--repo` or `--json`. It resolves `FACTORY_PLATFORM` and the optional `/etc/factory/platform.json` and prints assignments for `FACTORY_PLATFORM`, `GH_HOST`, `LLM_API_KEY_PLACEHOLDER`, `LLM_BASE_URL`, `LLM_OPENAI_BASE_URL` and `LLM_ANTHROPIC_BASE_URL`, plus `GH_ENTERPRISE_TOKEN` on exmach only. It reads no workflow, takes no lock, makes no network or model calls and writes no file. Exit 0 prints the environment; invalid arguments or a `platform_invalid` selection exit 2, with no assignments on stdout.
+
+Full provisioning consumes this output to configure host Pi and writes `/etc/factory/factory.env`, root-owned and mode 0644, which the static service unit requires. On exmach `GH_ENTERPRISE_TOKEN` is the nonsecret placeholder `exmach`, because the edge injects the real token. exe-dev prints no `GH_ENTERPRISE_TOKEN`, so its unit environment keeps today's `gh` behaviour. `LLM_API_KEY_PLACEHOLDER` is the host Pi placeholder key, `exe-dev-integration` on exe-dev and `exmach` on exmach. Rerun full provisioning after changing the selection, before restarting the unit. See [Platform profile](platform.md).
 
 ## Local run viewer
 
@@ -84,6 +95,7 @@ Maintenance receipts and charges live under `cadence/`, not ticket claims or led
 
 | Command | Purpose |
 | --- | --- |
+| `platform` | Print nonsecret provisioning and unit assignments with `--env`. |
 | `cadence` | Run one bounded read-only maintenance job with `--once --job`; file only proposed issues. |
 | `owner-feed` | Read the local OwnerFeed v1 without remote reads or writes. |
 | `metrics` | Report ticket outcomes and charged tokens; see its separate flags above. |
@@ -952,17 +964,22 @@ SIGTERM or SIGINT lets the current tick finish, then `serve` logs `controller_st
 
 ### Install the service
 
+For a fresh exe.dev VM, use the [commit-pinned, held install](install-exe-dev.md) on `nubl-factory`. It checks prerequisites before changes, has a read-only `--check`, and keeps dispatch held until Giuseppe releases it.
+
 Installation requires explicit service/VM authority, a drained rollout, and the [owner bootstrap gates](human-review.md#bootstrap-and-enable-protection-as-the-owner). These examples are not an execution grant.
 
 `server/factory.service` runs `serve` under systemd. `server/provision.sh` does not install it. To install it on `pi-factorio`:
 
 1. Clone the repository to `/home/exedev/pi-herdr-factorio` at the `main` commit to run, and run `npm ci --ignore-scripts` there.
-2. Create the state directory: `install -d -m 0700 /home/exedev/factory-state`.
-3. Copy the unit: `sudo install -m 0644 server/factory.service /etc/systemd/system/factory.service`, then `sudo systemctl daemon-reload`.
-4. Start it: `sudo systemctl enable --now factory.service`.
-5. Wait for readiness: `journalctl -u factory.service -f` until it shows `event=controller_ready`.
+2. Run full provisioning: `bash server/provision.sh`. This writes the required `/etc/factory/factory.env` and installs the sandbox bundle. A missing env file stops the unit from starting; sandbox-only provisioning does not write it.
+3. Create the state directory and hold: `install -d -m 0700 /home/exedev/factory-state && touch /home/exedev/factory-state/disabled`. Only Giuseppe lifts this hold after verification.
+4. Copy the unit: `sudo install -m 0644 server/factory.service /etc/systemd/system/factory.service`, then `sudo systemctl daemon-reload`.
+5. Start it: `sudo systemctl enable --now factory.service`.
+6. Wait for readiness: `journalctl -u factory.service -f` until it shows `event=controller_ready`.
 
-The unit sets `GH_HOST=github.int.exe.xyz` and `XDG_RUNTIME_DIR=/run/user/1000`, which the stage scopes need, and passes `--state-dir` explicitly. It holds no secret in its environment. Run `bash server/provision.sh` from the checkout first, so the sandbox bundle exists. Without it every run stays `blocked`. `systemctl stop factory.service` sends SIGTERM and waits up to 300 seconds for the tick to finish. The unit restarts on failure after 30 seconds, except after exit 2, when another controller holds the lock. To stop dispatch without stopping the service, create `/home/exedev/factory-state/disabled`.
+For an existing exe.dev host such as `pi-factorio`, run full provisioning from the new checkout before installing the new unit. Otherwise the controller will not start when `/etc/factory/factory.env` is absent.
+
+The unit reads `GH_HOST` and `FACTORY_PLATFORM` from `/etc/factory/factory.env`, generated from `platform --env` by full provisioning. On exmach only, that file also sets the nonsecret `GH_ENTERPRISE_TOKEN=exmach` placeholder; exe-dev gains no GitHub token. It sets `XDG_RUNTIME_DIR=/run/user/1000`, which the stage scopes need, and passes `--state-dir` explicitly. It holds no secret in its environment. Without the sandbox bundle every run stays `blocked`. `systemctl stop factory.service` sends SIGTERM and waits up to 300 seconds for the tick to finish. The unit restarts on failure after 30 seconds, except after exit 2, when another controller holds the lock. To stop dispatch without stopping the service, create `/home/exedev/factory-state/disabled`.
 
 ## `/factory status`
 

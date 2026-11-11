@@ -1641,6 +1641,7 @@ describe("preflight", () => {
 		return {
 			reconciled: async () => true,
 			arch: "x64",
+			xdgRuntimeDir: "/run/user/1000",
 			usernsLimit: async () => "15000",
 			exec: async (command, args): Promise<ExecResult> => {
 				if (command === "bwrap" && args[0] === "--version")
@@ -1669,13 +1670,15 @@ describe("preflight", () => {
 				arch: "riscv64",
 				usernsLimit: async () => "0",
 				exec: async (command, args) =>
-					command === "bwrap" && args[0] === "--version"
-						? { stdout: "bubblewrap 0.8.0\n", stderr: "", code: 0 }
-						: {
-								stdout: "",
-								stderr: "Failed to connect to bus: No medium found",
-								code: 1,
-							},
+					command === "test"
+						? { stdout: "", stderr: "", code: 0 }
+						: command === "bwrap" && args[0] === "--version"
+							? { stdout: "bubblewrap 0.8.0\n", stderr: "", code: 0 }
+							: {
+									stdout: "",
+									stderr: "Failed to connect to bus: No medium found",
+									code: 1,
+								},
 				assetsDigest: async () => null,
 				gatewayReady: async () => {
 					throw new Error("boom");

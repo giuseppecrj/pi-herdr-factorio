@@ -4693,6 +4693,7 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 
 			const result = await runPreflight({
 				reconciled: async () => reconciled || reconcile(false),
+				xdgRuntimeDir: config.xdgRuntimeDir,
 				arch: config.arch ?? process.arch,
 				usernsLimit: config.usernsLimit ?? readUsernsLimit,
 				exec: config.exec,

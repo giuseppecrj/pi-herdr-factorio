@@ -10,6 +10,7 @@ export const PREFLIGHT_CHECKS = [
 	"bwrap",
 	"assets",
 	"stale_bundle",
+	"runtime_directory",
 	"scope",
 	"gateway",
 ] as const;
@@ -28,6 +29,7 @@ export type PreflightDeps = {
 	/** True once leftover stage scopes were listed and every one of ours stopped. */
 	readonly reconciled: () => Promise<boolean>;
 	readonly arch: string;
+	readonly xdgRuntimeDir: string;
 	readonly usernsLimit: () => Promise<string>;
 	readonly exec: Exec;
 	readonly assetsDigest: () => Promise<string | null>;
@@ -88,8 +90,9 @@ async function safely<T>(work: () => Promise<T>, fallback: T): Promise<T> {
 /**
  * The runner's preflight: leftover stage scopes stopped, a known CPU
  * architecture, unprivileged user namespaces, bwrap at least 0.9.0, the
- * expected asset digest, a bundle that matches the checkout's inputs, a user scope that launches, and a gateway that
- * comes up ready. Every check runs, so a failure names each cause.
+ * expected asset digest, a bundle that matches the checkout's inputs, a runtime
+ * directory, a user scope that launches, and a gateway that comes up ready.
+ * Failures name each cause; a missing runtime directory skips the scope launch.
  * `executionEnabled` follows `ok`.
  */
 export async function runPreflight(
@@ -124,18 +127,28 @@ export async function runPreflight(
 	)
 		failed.push("stale_bundle");
 
-	const scope = await safely(
+	const runtimeDirectory = await safely(
 		async () =>
-			(
-				await deps.exec(
-					"systemd-run",
-					preflightScopeArgv(randomBytes(4).toString("hex")),
-				)
-			).code === 0,
+			(await deps.exec("test", ["-d", deps.xdgRuntimeDir])).code === 0,
 		false,
 	);
 
-	if (!scope) failed.push("scope");
+	if (!runtimeDirectory) failed.push("runtime_directory");
+
+	const scope =
+		runtimeDirectory &&
+		(await safely(
+			async () =>
+				(
+					await deps.exec(
+						"systemd-run",
+						preflightScopeArgv(randomBytes(4).toString("hex")),
+					)
+				).code === 0,
+			false,
+		));
+
+	if (runtimeDirectory && !scope) failed.push("scope");
 
 	if (!(await safely(deps.gatewayReady, false))) failed.push("gateway");
 

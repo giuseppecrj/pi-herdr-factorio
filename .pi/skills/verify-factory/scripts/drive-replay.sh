@@ -290,7 +290,8 @@ const run = promisify(execFile);
 const [stateDir, root] = process.argv.slice(2);
 await mkdir(stateDir, {recursive:true, mode:0o700});
 const exec = async (cmd, args) => { try { const r = await run(cmd, args); return {code:0, ...r}; } catch (e) { return {code:1, stdout:e.stdout ?? '', stderr:e.stderr ?? ''}; } };
-const executor = sandboxExecutor({stateDir, root, exec, platform: platform.profile, log: (event, data) => console.log(event, JSON.stringify(data))});
+if (!process.env.XDG_RUNTIME_DIR) throw Error('XDG_RUNTIME_DIR must be set for replay preflight');
+const executor = sandboxExecutor({stateDir, root, exec, xdgRuntimeDir: process.env.XDG_RUNTIME_DIR, platform: platform.profile, log: (event, data) => console.log(event, JSON.stringify(data))});
 if (!(await executor.preflight())) throw Error('replay_preflight_failed');
 NODE
     production_free

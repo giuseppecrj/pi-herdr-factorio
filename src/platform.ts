@@ -257,6 +257,22 @@ export function platformDescriptor(
 	return network.name === "exe-dev" ? "exe-dev" : `exmach:${network.domain}`;
 }
 
+/** Nonsecret assignments shared by provisioning and the systemd EnvironmentFile. */
+export function platformEnvironment(profile: PlatformProfile): string {
+	const baseUrl = `https://${profile.modelHost}`;
+
+	return [
+		`FACTORY_PLATFORM=${platformDescriptor(profile)}`,
+		`GH_HOST=${profile.ghHost}`,
+		...(profile.name === "exmach" ? ["GH_ENTERPRISE_TOKEN=exmach"] : []),
+		`LLM_API_KEY_PLACEHOLDER=${profile.name === "exmach" ? "exmach" : "exe-dev-integration"}`,
+		`LLM_BASE_URL=${baseUrl}`,
+		`LLM_OPENAI_BASE_URL=${baseUrl}${profile.modelBasePaths.openai.replace(/\/$/, "")}`,
+		`LLM_ANTHROPIC_BASE_URL=${baseUrl}${profile.modelBasePaths.anthropic.replace(/\/$/, "")}`,
+		"",
+	].join("\n");
+}
+
 /** Reads `exe-dev` or `exmach:<domain>`. Only the canonical lowercase spelling parses. */
 export function parsePlatformSelector(text: string): Parsed<PlatformSelector> {
 	if (text === "exe-dev") return { ok: true, value: { name: "exe-dev" } };
