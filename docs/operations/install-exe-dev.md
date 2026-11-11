@@ -10,10 +10,9 @@ Run these on your computer, not inside the VM:
 
 ```bash
 ssh exe.dev integrations add github --name nubl-factory-repo --repository nublai/pi-herdr-factorio --attach vm:nubl-factory
-ssh exe.dev integrations attach llm vm:nubl-factory
 ```
 
-The second command attaches the existing `llm` integration; it is unnecessary while its existing `auto:all` attachment applies. If the repository integration already exists, attach it instead of adding it again:
+Models need no command, because the `llm` integration is attached to every VM (`auto:all`). Check with `ssh exe.dev integrations list`. If the repository integration already exists, attach it instead of adding it again:
 
 ```bash
 ssh exe.dev integrations attach nubl-factory-repo vm:nubl-factory
@@ -29,7 +28,7 @@ SSH to `exedev@nubl-factory.exe.xyz`. Replace **both** `<commit>` placeholders b
 curl -fsSL https://raw.githubusercontent.com/nublai/pi-herdr-factorio/<commit>/server/install-exe-dev.sh | bash -s -- <commit>
 ```
 
-The selected revision must include the repository rename in the platform allowlist and a valid trusted workflow on `main`. The installer refuses to start a controller whose platform does not allow the requested repository. This installer is built on PR #728's provisioning; its local build alone does not include the separate repository-wide rename.
+The selected revision must include the repository rename in the platform allowlist and a valid trusted workflow on `main`. The installer refuses to start a controller whose platform does not allow the requested repository.
 
 For another repository, change the script URL to the repository containing the installer and append `--repo owner/name`. The target defaults to `nublai/pi-herdr-factorio`; the selected revision's platform allowlist and trusted workflow must also allow that target. `--vm name` changes only the VM name in preflight fix instructions (default `nubl-factory`), not the host being installed.
 
