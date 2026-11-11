@@ -9,7 +9,12 @@ import { manifestDigest } from "../server/sandbox/manifest.ts";
 import { join } from "node:path";
 import { digestOf } from "./run.ts";
 import { parseLedger, type LedgerRow } from "./ledger.ts";
-import { type PlatformProfile, soleRepository } from "./platform.ts";
+import {
+	currentRepository,
+	type HistoricalRepositories,
+	type PlatformProfile,
+	soleRepository,
+} from "./platform.ts";
 import { isGitSha, parseWorkflow, type Exec } from "./workflow.ts";
 import { execFileSync } from "node:child_process";
 import {
@@ -473,6 +478,8 @@ export function replayReport(input: {
 		readonly previous: string;
 		readonly candidate: string;
 	};
+	/** Read-only former names: a row recorded under one is the same repository. */
+	readonly history?: HistoricalRepositories;
 }) {
 	const previous = sideReport(input.previous, input.expected);
 	const candidate = sideReport(input.candidate, input.expected);
@@ -493,7 +500,13 @@ export function replayReport(input: {
 
 	if (p.row.runId === c.row.runId) reasons.push("same_run");
 
-	if (p.row.repo === c.row.repo && p.row.issue === c.row.issue)
+	const history = input.history ?? {};
+
+	const sameRepository =
+		currentRepository(history, p.row.repo) ===
+		currentRepository(history, c.row.repo);
+
+	if (sameRepository && p.row.issue === c.row.issue)
 		reasons.push("same_fixture_issue");
 
 	if (
@@ -523,8 +536,7 @@ export function replayReport(input: {
 
 	if (mainMoved(p) || mainMoved(c)) reasons.push("main_moved");
 
-	if (input.previous.row.repo !== input.candidate.row.repo)
-		reasons.push("repository_mismatch");
+	if (!sameRepository) reasons.push("repository_mismatch");
 
 	if (previous.originalBase !== candidate.originalBase)
 		reasons.push("original_base_mismatch");

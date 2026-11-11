@@ -18,6 +18,7 @@ import {
 	generationIntent,
 	type AdmissionPin,
 	type CandidateEvent,
+	promotedHead,
 	type CandidateState,
 	type CandidateEffect,
 	type ReviewExecution,
@@ -41,6 +42,7 @@ import {
 import { advance } from "../src/stages.ts";
 import {
 	TRUSTED_RUN_CAP,
+	TRUSTED_WORKFLOW,
 	FakeGitHub,
 	fakeIssue,
 	BOT_LOGIN,
@@ -65,14 +67,20 @@ import { storePatch, type PatchReceipt } from "../src/build.ts";
 import { controllerCandidatePort } from "../server/controller.ts";
 import { fileAdmissionStore } from "../src/admission.ts";
 import { CONTROLLER_LOGIN } from "../src/markers.ts";
-import { verdictAssessment, withLocalArtifactDownload } from "./helpers.ts";
+import {
+	candidateLifecycleFixture,
+	verdictAssessment,
+	withLocalArtifactDownload,
+} from "./helpers.ts";
 import {
 	readFileSync,
 	rmSync,
 	statSync,
 	mkdirSync,
+	mkdtempSync,
 	writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fieldOf, objectOf, parseJson } from "../server/sandbox/json.ts";
 import { EXE_DEV_PLATFORM } from "../src/platform.ts";
@@ -88,7 +96,8 @@ const pin: AdmissionPin = {
 	issue: 42,
 	originalBase: sha,
 	workflowSha: sha,
-	workflowDigest: digestOf("workflow"),
+	// The pinned WORKFLOW.md the fake GitHub serves at any ref.
+	workflowDigest: digestOf(TRUSTED_WORKFLOW),
 	contractDigest: digestOf("contract"),
 	acceptanceDigest: digestOf("suite"),
 	maxTokens: TRUSTED_RUN_CAP,
@@ -7181,3 +7190,155 @@ test("feedback full status/outcome codec and pre-F10 books round-trip", () => {
 		feedback: null,
 	});
 });
+
+for (const pinned of ["configured", "unconfigured", "unavailable"] as const)
+	test(`handoff requests the pinned WORKFLOW.md reviewers and never the repository owner (${pinned})`, async () => {
+		const root = mkdtempSync(join(tmpdir(), "handoff-reviewers-"));
+
+		try {
+			// A workflow pinned before handoff.reviewers existed names nobody.
+			const text =
+				pinned === "unconfigured"
+					? TRUSTED_WORKFLOW.replace(
+							"\nhandoff:\n  reviewers:\n    - giuseppecrj\n",
+							"\n",
+						)
+					: TRUSTED_WORKFLOW;
+
+			assert.notEqual(text.includes("handoff:"), pinned === "unconfigured");
+
+			const state = candidateLifecycleFixture({
+				repo,
+				workflowDigest: digestOf(text),
+			});
+
+			assert.ok(parseCandidateState(JSON.parse(JSON.stringify(state))));
+			const head = promotedHead(state);
+			assert.ok(head);
+			const branch = `factory/pr/${state.pin.issue}-${state.pin.runId.slice(0, 12)}`;
+			const github = new FakeGitHub();
+			github.add(fakeIssue(state.pin.issue));
+			github.add(fakeIssue(5, { pullRequest: true }));
+			const labeled: string[] = [];
+			const requested: JsonValue[] = [];
+			const events: { event: string; fields: object }[] = [];
+
+			const exec: import("../src/gh.ts").Exec = async (command, args) => {
+				if (
+					args.some((a) => a.includes("contents/.github/factory/WORKFLOW.md"))
+				)
+					return pinned === "unavailable"
+						? { code: 1, stdout: "", stderr: "gh: Not Found (HTTP 404)" }
+						: { code: 0, stdout: text, stderr: "" };
+
+				if (args.some((a) => a.endsWith(`git/ref/heads/${branch}`)))
+					return {
+						code: 0,
+						stdout: JSON.stringify({ object: { sha: head } }),
+						stderr: "",
+					};
+
+				if (args.includes("GET") && args.some((a) => a.endsWith("/pulls/5")))
+					return {
+						code: 0,
+						stdout: JSON.stringify({
+							number: 5,
+							head: { sha: head, ref: branch, repo: { full_name: repo } },
+							base: { ref: "main", repo: { full_name: repo } },
+							user: { login: BOT_LOGIN, type: "Bot" },
+							body: `<!-- factory:pr ${state.pin.runId} -->`,
+							state: "open",
+							merged: false,
+							draft: false,
+							requested_reviewers: [{ login: "someone-else" }],
+						}),
+						stderr: "",
+					};
+
+				if (
+					args.includes("POST") &&
+					args.some((a) => a.endsWith("/requested_reviewers"))
+				) {
+					requested.push(
+						JSON.parse(
+							readFileSync(args[args.indexOf("--input") + 1]!, "utf8"),
+						),
+					);
+
+					return { code: 0, stdout: "{}", stderr: "" };
+				}
+
+				if (
+					args.includes("POST") &&
+					args.some((a) => a.endsWith("issues/5/labels"))
+				) {
+					labeled.push("factory:review");
+
+					return { code: 0, stdout: '["factory:review"]', stderr: "" };
+				}
+
+				return github.exec(command, args);
+			};
+
+			const port = controllerCandidatePort({
+				platform: EXE_DEV_PLATFORM,
+				stateDir: root,
+				exec,
+				log: (event, fields) => events.push({ event, fields }),
+			});
+
+			await port
+				.execute(state, {
+					kind: "complete_handoff",
+					number: 5,
+					head,
+					certification: {
+						round: 0,
+						generation: 0,
+						digest: digestOf("unused"),
+					},
+				})
+				.catch(() => null);
+
+			const owner = repo.split("/")[0];
+
+			assert.ok(
+				!JSON.stringify(requested).includes(`"${owner}"`),
+				"the repository owner is never requested",
+			);
+
+			if (pinned === "configured") {
+				assert.deepEqual(requested, [{ reviewers: ["giuseppecrj"] }]);
+				assert.deepEqual(events, []);
+				assert.deepEqual(labeled, ["factory:review"]);
+			}
+
+			if (pinned === "unconfigured") {
+				assert.deepEqual(requested, []);
+				assert.deepEqual(events, [
+					{
+						event: "handoff_reviewer_unconfigured",
+						fields: {
+							issue: state.pin.issue,
+							runId: state.pin.runId,
+							pr: 5,
+							workflowSha: state.pin.workflowSha,
+						},
+					},
+				]);
+				assert.deepEqual(
+					labeled,
+					["factory:review"],
+					"the run still reaches review",
+				);
+			}
+
+			if (pinned === "unavailable") {
+				assert.deepEqual(requested, []);
+				assert.deepEqual(events, []);
+				assert.deepEqual(labeled, []);
+			}
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});

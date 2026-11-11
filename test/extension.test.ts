@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { mkdtemp, rm, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { addRun } from "./fixtures/owner-feed/state.ts";
+import { addRun, repo as feedRepo } from "./fixtures/owner-feed/state.ts";
 import { describe, it } from "node:test";
 import {
 	factoryCommandText,
@@ -146,7 +146,12 @@ describe("/factory command", () => {
 			await addRun(root, 3, "budget_exhausted", {
 				title: "Bound the token spend",
 			});
-			const offlineSources = sources(ok(remote), () => offline);
+
+			// The fixture state is keyed to its own repository; read it there.
+			const offlineSources = sources(
+				ok(`git@github.com:${feedRepo}.git\n`),
+				() => offline,
+			);
 
 			const text = await factoryCommandText("status", {
 				...offlineSources,

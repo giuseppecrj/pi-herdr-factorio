@@ -60,7 +60,7 @@ Add the date heading only once. Omit `Source coverage` when no external sources 
 
 No external sources are required. Known scopes for this repo:
 
-- **Forge.** GitHub repository `giuseppecrj/pi-herdr-factorio`, through local `gh`: pull requests, issues, and Actions runs on `main`.
+- **Forge.** GitHub repository `nublai/pi-herdr-factorio`, through local `gh`: pull requests, issues, and Actions runs on `main`.
 - **Decision trail.** `docs/decisions.tsv` in this checkout. It is the program's authoritative history, often with uncommitted rows. Read its newest rows for the requested period.
 
 No issue-project or chat-channel scope is configured. If neither source is reachable, report local-only coverage. Do not borrow account names, channel IDs, addresses, or deployment assumptions from another repo.

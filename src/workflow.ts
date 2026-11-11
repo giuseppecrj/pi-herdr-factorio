@@ -4,6 +4,7 @@ import {
 	CST,
 	isMap,
 	isScalar,
+	isSeq,
 	LineCounter,
 	type ParsedNode,
 	Parser,
@@ -132,6 +133,15 @@ export type StageSettings = {
 				: { readonly budget: StageBudget };
 };
 
+/**
+ * The GitHub users handoff asks to review a ready PR. It is written in
+ * WORKFLOW.md and never derived from the repository owner. A workflow
+ * without `handoff` parses to `null`, and handoff then requests nobody.
+ */
+export type HandoffSettings = {
+	readonly reviewers: readonly [string, ...string[]];
+};
+
 export type WorkflowConfig = {
 	readonly repository: RepoSlug;
 	readonly polling: { readonly intervalMs: number };
@@ -159,6 +169,7 @@ export type WorkflowConfig = {
 	} | null;
 	readonly stages: StageSettings;
 	readonly checkpoints: { readonly approveMerge: { readonly mode: "always" } };
+	readonly handoff?: HandoffSettings | null;
 };
 
 export type Guidance = {
@@ -893,6 +904,46 @@ function readCheckpoints(
 	return Object.freeze({ approveMerge: Object.freeze({ mode }) });
 }
 
+/** A GitHub user login: letters, digits and single inner hyphens, at most 39. Never a bot or a team. */
+const USER_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
+
+function readHandoff(root: Map<string, YamlNode>): HandoffSettings | null {
+	if (!root.has("handoff")) return null;
+
+	const handoff = optionalEntries(root, "handoff", "handoff", ["reviewers"]);
+	const field = "handoff.reviewers";
+
+	if (!handoff.has("reviewers")) {
+		fail(field, "is required when handoff is configured");
+	}
+
+	const node = handoff.get("reviewers") ?? null;
+
+	if (!isSeq(node)) fail(field, "must be a list of GitHub user logins");
+
+	const reviewers: string[] = [];
+
+	for (const item of node.items) {
+		const login = scalarText(item, field);
+
+		if (!USER_LOGIN.test(login)) fail(field, "must hold GitHub user logins");
+
+		if (reviewers.some((seen) => seen.toLowerCase() === login.toLowerCase())) {
+			fail(field, "must not repeat a login");
+		}
+
+		reviewers.push(login);
+	}
+
+	const [first, ...rest] = reviewers;
+
+	if (first === undefined) fail(field, "must name at least one reviewer");
+
+	const list: readonly [string, ...string[]] = [first, ...rest];
+
+	return Object.freeze({ reviewers: Object.freeze(list) });
+}
+
 function readCadence(
 	root: Map<string, YamlNode>,
 	platform: ModelPlatform,
@@ -1127,6 +1178,7 @@ const ROOT_KEYS = [
 	"grader",
 	"stages",
 	"checkpoints",
+	"handoff",
 ];
 
 const REJECTED_COMMAND_KEYS = [
@@ -1261,6 +1313,7 @@ function readConfig(
 		...readScorers(root),
 		stages: readStages(root, warnings, platform),
 		checkpoints: readCheckpoints(root),
+		handoff: readHandoff(root),
 	});
 
 	return { config, warnings };
@@ -1667,6 +1720,40 @@ export async function loadWorkflow(input: {
 	if (ref === TRUSTED_REF) trustedConfigs.set(repo, snapshot.config);
 
 	return Object.freeze({ kind: "loaded", snapshot });
+}
+
+/**
+ * WORKFLOW.md at a run's pinned commit, parsed only when its bytes match the
+ * digest the run recorded. `null` when it cannot be fetched, differs or is
+ * invalid, so a caller fails closed and retries.
+ */
+export async function loadPinnedWorkflow(input: {
+	exec: Exec;
+	repo: RepoSlug;
+	sha: GitSha;
+	digest: Digest;
+	env: EnvLookup;
+	platform: PlatformProfile;
+}): Promise<WorkflowConfig | null> {
+	const fetched = await runGh(input.exec, [
+		"api",
+		"-H",
+		"Accept: application/vnd.github.raw",
+		`repos/${input.repo}/contents/${WORKFLOW_PATH}?ref=${input.sha}`,
+	]);
+
+	if ("rejected" in fetched || fetched.code !== 0) return null;
+
+	if (digestOf(fetched.stdout) !== input.digest) return null;
+
+	const parsed = parseWorkflow({
+		text: fetched.stdout,
+		repo: input.repo,
+		env: input.env,
+		platform: input.platform,
+	});
+
+	return parsed.kind === "valid" ? parsed.config : null;
 }
 
 /** An invalid reload keeps the last valid snapshot in force. */

@@ -20,6 +20,13 @@ if (!isRepoSlug(slug)) throw new Error("invalid_repo");
 export const repo: RepoSlug = slug;
 
 export class LedgerGit {
+	/** The repository whose `factory/ledger` this fake serves. */
+	readonly served: RepoSlug;
+
+	constructor(served: RepoSlug = repo) {
+		this.served = served;
+	}
+
 	readonly blobs = new Map<string, Buffer>();
 	readonly trees = new Map<string, Map<string, string>>();
 	readonly commits = new Map<string, readonly string[]>();
@@ -32,8 +39,8 @@ export class LedgerGit {
 	readonly exec: Exec = async (_command, args): Promise<ExecResult> => {
 		const path =
 			args
-				.find((a) => a.startsWith(`repos/${repo}/`))
-				?.slice(`repos/${repo}/`.length) ?? "";
+				.find((a) => a.startsWith(`repos/${this.served}/`))
+				?.slice(`repos/${this.served}/`.length) ?? "";
 
 		const method = args[args.indexOf("--method") + 1] ?? "GET";
 		const file = args[args.indexOf("--input") + 1];

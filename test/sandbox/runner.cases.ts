@@ -7878,7 +7878,8 @@ describe("multi-seat candidate review", () => {
 				assert.ok(f.prepared.input.files.size > 0);
 				assert.deepEqual(f.prepared.input.scenarios, ["S1"]);
 
-				const github = new FakeGitHub();
+				// The prepared fixture's run is keyed to its own repository.
+				const github = new FakeGitHub(f.contract.base.repo);
 				github.add(
 					fakeIssue(1, {
 						timeline: [

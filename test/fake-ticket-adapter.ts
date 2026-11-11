@@ -115,6 +115,22 @@ export const TRUSTED_WORKFLOW = readFileSync(
 	"utf8",
 );
 
+/**
+ * The committed trusted WORKFLOW.md naming `repo`, for fixtures whose frozen
+ * state was recorded under another repository name. Nothing else changes.
+ */
+export function trustedWorkflowFor(repo: string): string {
+	const named = TRUSTED_WORKFLOW.replace(
+		/^repository: .*$/m,
+		`repository: ${repo}`,
+	);
+
+	if (!named.includes(`\nrepository: ${repo}\n`))
+		throw new Error("trusted workflow repository line");
+
+	return named;
+}
+
 const trustedRunCap = /^\s*max_tokens_per_run:\s*(\d+)\s*$/m.exec(
 	TRUSTED_WORKFLOW,
 )?.[1];
@@ -270,7 +286,12 @@ export class FakeGitHub {
 	beforeGraphql: ((issue: FakeIssue) => void) | null = null;
 	beforeCall: ((args: readonly string[]) => void) | null = null;
 
-	constructor() {
+	/** The repository this fake serves, with its trusted WORKFLOW.md naming it. */
+	readonly served: string;
+
+	constructor(served: string = FAKE_REPO) {
+		this.served = served;
+		this.workflow = trustedWorkflowFor(served);
 		this.permissions.set("giuseppecrj", "admin");
 		this.permissions.set("writer", "write");
 		this.permissions.set("triager", "read");
@@ -334,7 +355,7 @@ export class FakeGitHub {
 	}
 
 	#post(path: string, args: readonly string[]): ExecResult {
-		if (path === `repos/${FAKE_REPO}/issues`) {
+		if (path === `repos/${this.served}/issues`) {
 			const behavior = this.posts.shift() ?? "ok";
 
 			if (behavior === "rejected") return httpError(422);
@@ -380,7 +401,7 @@ export class FakeGitHub {
 	}
 
 	#answer(path: string, args: readonly string[]): ExecResult {
-		const prefix = `repos/${FAKE_REPO}/`;
+		const prefix = `repos/${this.served}/`;
 
 		if (path === "graphql") return this.#graphql(args);
 
@@ -484,7 +505,7 @@ export class FakeGitHub {
 			node_id: comment.nodeId,
 			issue_url:
 				comment.issueUrl ??
-				`https://api.github.com/repos/${FAKE_REPO}/issues/${issue.number}`,
+				`https://api.github.com/repos/${this.served}/issues/${issue.number}`,
 			user: { login: comment.login, type: comment.type },
 			performed_via_github_app:
 				comment.appSlug === null ? null : { slug: comment.appSlug, id: 1 },
@@ -510,7 +531,7 @@ export class FakeGitHub {
 						lastEditedAt: comment.lastEditedAt,
 						issue: {
 							number: issue.number,
-							repository: { nameWithOwner: FAKE_REPO },
+							repository: { nameWithOwner: this.served },
 						},
 					};
 				}

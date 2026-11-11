@@ -15,6 +15,8 @@ import {
 	fileAdmissionStore,
 } from "../src/admission.ts";
 import {
+	type HistoricalRepositories,
+	measuredRepositories,
 	type PlatformFile,
 	type PlatformProfile,
 	type PlatformSummary,
@@ -1039,14 +1041,16 @@ async function readMetricInterventions(
 	io: CliIo,
 	controllerLogin: string,
 	cache?: Map<string, InterventionRead>,
+	history: HistoricalRepositories = {},
 ): Promise<Interventions> {
+	const names = measuredRepositories(history, repo);
 	const byPr = new Map<number, MetricReview[] | null>();
 	const result = new Map<string, InterventionRead>();
 
 	for (const line of parseLedger(ledger)) {
 		if (
 			line.kind !== "known" ||
-			line.row.repo !== repo ||
+			!names.includes(line.row.repo) ||
 			excludedRunReason(line.row) !== null ||
 			result.has(line.row.runId)
 		)
@@ -1205,12 +1209,20 @@ export async function collectOwnerMetrics(
 			bounded,
 			platform.controllerLogin,
 			cache,
+			platform.historicalRepositories,
 		);
 
 		if ([...interventions.values()].some((read) => read.kind !== "known"))
 			throw new Error(failure);
 		failure = "receipt_read_unavailable";
-		const receiptDigests = await readReceiptDigests(stateDir, ledger, repo);
+
+		const receiptDigests = await readReceiptDigests(
+			stateDir,
+			ledger,
+			repo,
+			platform.historicalRepositories,
+		);
+
 		failure = "metric_compute_unavailable";
 		report = computeMetrics({
 			ledger,
@@ -1220,6 +1232,7 @@ export async function collectOwnerMetrics(
 			interventions,
 			receiptDigests,
 			source: "ledger",
+			history: platform.historicalRepositories,
 		});
 
 		if (report.status !== "complete") gaps.push(`report_${report.status}`);
@@ -1415,6 +1428,8 @@ async function runMetricsCli(
 						values.repo,
 						githubIo,
 						platform.controllerLogin,
+						undefined,
+						platform.historicalRepositories,
 					);
 
 	if (interventions === null) {
@@ -1430,6 +1445,7 @@ async function runMetricsCli(
 					resolve(values["state-dir"]),
 					ledger,
 					values.repo,
+					platform.historicalRepositories,
 				);
 
 	io.stdout(
@@ -1442,6 +1458,7 @@ async function runMetricsCli(
 				interventions,
 				receiptDigests,
 				source: ledgerFile === undefined ? "ledger" : "file",
+				history: platform.historicalRepositories,
 			}),
 		),
 	);
@@ -1573,7 +1590,7 @@ async function runReplayCli(
 			)
 				throw new Error("replay_assets_invalid");
 			io.stdout(
-				`${JSON.stringify({ caseId: selected.id, expectedRound: selected.expectedRound, ...replayReport({ previous, candidate, expected: selected.expected, expectedAssets: previousAssets === undefined || candidateAssets === undefined ? undefined : { previous: previousAssets, candidate: candidateAssets } }) }, null, 2)}\n`,
+				`${JSON.stringify({ caseId: selected.id, expectedRound: selected.expectedRound, ...replayReport({ previous, candidate, expected: selected.expected, history: platform.historicalRepositories, expectedAssets: previousAssets === undefined || candidateAssets === undefined ? undefined : { previous: previousAssets, candidate: candidateAssets } }) }, null, 2)}\n`,
 			);
 
 			return EXIT.ok;

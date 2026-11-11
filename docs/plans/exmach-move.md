@@ -116,7 +116,7 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 
 - [ ] With no profile set, `status --json` reports `platform.name` as `exe-dev` and every route matches trunk.
 - [ ] With `FACTORY_PLATFORM=exmach:` and no domain, startup exits 2 with `event=platform_invalid` and a named reason. A built-in selector always generates its own forbidden domains, so `own_domain_not_forbidden` is proven by a unit test on a malformed resolved profile, not live.
-- [ ] `rg 'exe\.xyz|exe-dev-github-integration|169\.254\.169\.254|giuseppecrj/pi-herdr-factorio' src server extension` finds only `src/platform.ts`, the echo fixture, the generic refused ranges in `server/sandbox/gateway.ts`, and the MV3 and MV7 files `server/provision.sh`, `server/factory.service` and `server/sandbox/anthropic-limits.ts`.
+- [ ] `rg 'exe\.xyz|exe-dev-github-integration|169\.254\.169\.254|nublai/pi-herdr-factorio' src server extension` finds only `src/platform.ts`, the echo fixture, the generic refused ranges in `server/sandbox/gateway.ts`, and the MV3 and MV7 files `server/provision.sh`, `server/factory.service` and `server/sandbox/anthropic-limits.ts`.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 

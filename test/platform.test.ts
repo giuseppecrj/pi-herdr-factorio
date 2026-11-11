@@ -34,7 +34,9 @@ import { GitHubTicketAdapter } from "../src/adapters/github.ts";
 import { formatMarker, type Marker, markerLedger } from "../src/markers.ts";
 import { checkIdentity, type TickReport } from "../src/orchestrator.ts";
 import {
+	currentRepository,
 	EXE_DEV_PLATFORM,
+	measuredRepositories,
 	type PlatformFile,
 	type PlatformNetwork,
 	type PlatformProfile,
@@ -437,6 +439,9 @@ describe("platform selection", () => {
 				"267204973+exe-dev-github-integration[bot]@users.noreply.github.com",
 			ghHost: "github.int.exe.xyz",
 			repositories: ["nublai/pi-herdr-factorio"],
+			historicalRepositories: {
+				"nublai/pi-herdr-factorio": ["giuseppecrj/pi-herdr-factorio"],
+			},
 			anthropicStages: ["accept", "code-review"],
 		});
 		assert.equal(Object.isFrozen(unset), true);
@@ -462,6 +467,9 @@ describe("platform selection", () => {
 			...PUBLISHED_IDENTITY,
 			ghHost: "factorio.int.example.net",
 			repositories: ["nublai/pi-herdr-factorio"],
+			historicalRepositories: {
+				"nublai/pi-herdr-factorio": ["giuseppecrj/pi-herdr-factorio"],
+			},
 			anthropicStages: ["accept", "code-review"],
 		});
 		assert.deepEqual(resolved("exmach:example.net", ABSENT), EXMACH);
@@ -527,6 +535,92 @@ describe("platform selection", () => {
 			ghHost: "github.int.example.net",
 		});
 		assert.equal(Object.isFrozen(everything.repositories), true);
+	});
+
+	it("lets the file replace the read-only historical repository alias under the same validation", () => {
+		assert.equal(
+			Object.isFrozen(EXE_DEV_PLATFORM.historicalRepositories),
+			true,
+		);
+
+		assert.deepEqual(
+			resolved(undefined, exmachFile({ historicalRepositories: {} }))
+				.historicalRepositories,
+			{},
+		);
+
+		const moved = resolved(
+			undefined,
+			exmachFile({
+				repositories: ["acme/widgets"],
+				historicalRepositories: {
+					"acme/widgets": ["acme/old-widgets", "someone/widgets"],
+				},
+			}),
+		);
+
+		assert.deepEqual(moved.historicalRepositories, {
+			"acme/widgets": ["acme/old-widgets", "someone/widgets"],
+		});
+		assert.equal(Object.isFrozen(moved.historicalRepositories), true);
+		assert.equal(
+			Object.isFrozen(moved.historicalRepositories["acme/widgets"]),
+			true,
+		);
+		assert.deepEqual(
+			platformSummary(moved).historicalRepositories,
+			moved.historicalRepositories,
+		);
+
+		const invalid: JsonValue[] = [
+			[],
+			"acme/old-widgets",
+			{ "acme/widgets": [] },
+			{ "acme/widgets": "acme/old-widgets" },
+			{ "not a slug": ["acme/old-widgets"] },
+			{ "acme/widgets": ["not a slug"] },
+			{ "acme/widgets": [7] },
+			{ "acme/widgets": ["acme/widgets"] },
+			{ "acme/widgets": ["acme/old", "acme/old"] },
+			{ "acme/widgets": ["acme/old"], "acme/gears": ["acme/old"] },
+			{ "acme/widgets": ["acme/gears"], "acme/gears": ["acme/old"] },
+			// A former name is never an active repository.
+			{ "acme/widgets": ["nublai/pi-herdr-factorio"] },
+		];
+
+		for (const historicalRepositories of invalid)
+			assert.equal(
+				refusal(undefined, exmachFile({ historicalRepositories })),
+				"historical_repository_invalid",
+				JSON.stringify(historicalRepositories),
+			);
+	});
+
+	it("names a repository's former names for measurement and maps them back to its current name", () => {
+		const history = EXE_DEV_PLATFORM.historicalRepositories;
+
+		assert.deepEqual(
+			measuredRepositories(history, "nublai/pi-herdr-factorio"),
+			["nublai/pi-herdr-factorio", "giuseppecrj/pi-herdr-factorio"],
+		);
+		assert.deepEqual(measuredRepositories(history, "acme/widgets"), [
+			"acme/widgets",
+		]);
+		assert.deepEqual(
+			measuredRepositories(history, "giuseppecrj/pi-herdr-factorio"),
+			["giuseppecrj/pi-herdr-factorio"],
+			"a former name has no history of its own",
+		);
+		assert.deepEqual(measuredRepositories(history, "__proto__"), ["__proto__"]);
+		assert.equal(
+			currentRepository(history, "giuseppecrj/pi-herdr-factorio"),
+			"nublai/pi-herdr-factorio",
+		);
+		assert.equal(
+			currentRepository(history, "nublai/pi-herdr-factorio"),
+			"nublai/pi-herdr-factorio",
+		);
+		assert.equal(currentRepository(history, "acme/widgets"), "acme/widgets");
 	});
 
 	it("refuses a partial identity override and any GitHub host that is not one label under int.<domain>", () => {

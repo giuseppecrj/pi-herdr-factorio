@@ -187,7 +187,9 @@ import {
 	parseWorkflow,
 	STAGE_CLEANUP_RESERVE_MS,
 	isPinnedGrader,
+	loadPinnedWorkflow,
 	trustedWorkflowConfig,
+	type HandoffSettings,
 	type WorkflowConfig,
 } from "../src/workflow.ts";
 import {
@@ -7145,8 +7147,48 @@ export function controllerCandidatePort(config: {
 	readonly stateDir: string;
 	readonly exec: Exec;
 	readonly platform: PlatformProfile;
+	/** Defaults to the controller's structured lines on stderr. */
+	readonly log?: Log;
 }): NonNullable<StageExecutor["candidate"]> {
 	const files = fileRunFiles(config.stateDir);
+
+	const log =
+		config.log ??
+		lineLog(
+			(text) => process.stderr.write(text),
+			() => Date.now(),
+		);
+
+	const pinnedHandoff = new Map<string, HandoffSettings | null>();
+
+	/**
+	 * The reviewers named by the run's pinned WORKFLOW.md: settings, `null`
+	 * for a pinned workflow without `handoff`, or `undefined` while the pinned
+	 * file is unavailable.
+	 */
+	const handoffOf = async (
+		state: CandidateState,
+	): Promise<HandoffSettings | null | undefined> => {
+		const key = `${state.pin.repo} ${state.pin.workflowSha} ${state.pin.workflowDigest}`;
+
+		if (pinnedHandoff.has(key)) return pinnedHandoff.get(key);
+
+		const pinned = await loadPinnedWorkflow({
+			exec: config.exec,
+			repo: state.pin.repo,
+			sha: state.pin.workflowSha,
+			digest: state.pin.workflowDigest,
+			env: (name) => process.env[name],
+			platform: config.platform,
+		});
+
+		if (pinned === null) return undefined;
+
+		const handoff = pinned.handoff ?? null;
+		pinnedHandoff.set(key, handoff);
+
+		return handoff;
+	};
 
 	const branchOf = (state: CandidateState) =>
 		`factory/pr/${state.pin.issue}-${state.pin.runId.slice(0, 12)}`;
@@ -8115,20 +8157,45 @@ export function controllerCandidatePort(config: {
 				(await api.prRef(branchOf(state))) !== request.head
 			)
 				return null;
-			const raw = objectOf(await api.request("GET", `pulls/${pr.number}`));
-			const reviewers = arrayOf(jsonField(raw, "requested_reviewers")) ?? [];
-			const owner = state.pin.repo.split("/")[0];
+			const handoff = await handoffOf(state);
 
-			if (owner === undefined) return null;
+			if (handoff === undefined) return null;
 
-			if (!reviewers.some((r) => jsonField(objectOf(r), "login") === owner)) {
-				if (!(await allowed(state))) return null;
-				await api.request(
-					"POST",
-					`pulls/${pr.number}/requested_reviewers`,
-					{ reviewers: [owner] },
-					true,
+			if (handoff === null) {
+				// A workflow pinned before `handoff.reviewers` existed: request
+				// nobody rather than guess, and never the repository owner.
+				log("handoff_reviewer_unconfigured", {
+					issue: state.pin.issue,
+					runId: state.pin.runId,
+					pr: pr.number,
+					workflowSha: state.pin.workflowSha,
+				});
+			} else {
+				const raw = objectOf(await api.request("GET", `pulls/${pr.number}`));
+
+				const requested = new Set(
+					(arrayOf(jsonField(raw, "requested_reviewers")) ?? []).flatMap(
+						(r) => {
+							const login = textOf(jsonField(objectOf(r), "login"));
+
+							return login === null ? [] : [login.toLowerCase()];
+						},
+					),
 				);
+
+				const missing = handoff.reviewers.filter(
+					(login) => !requested.has(login.toLowerCase()),
+				);
+
+				if (missing.length > 0) {
+					if (!(await allowed(state))) return null;
+					await api.request(
+						"POST",
+						`pulls/${pr.number}/requested_reviewers`,
+						{ reviewers: missing },
+						true,
+					);
+				}
 			}
 
 			if (!(await allowed(state))) return null;

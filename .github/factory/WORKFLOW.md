@@ -2,7 +2,7 @@
 # The factory reads this file only from main. Editing it on any other branch,
 # including in a PR, changes nothing until that PR merges.
 # Field reference: docs/operations/factory-cli.md.
-repository: giuseppecrj/pi-herdr-factorio
+repository: nublai/pi-herdr-factorio
 
 polling:
   interval_ms: 30000
@@ -130,6 +130,10 @@ stages:
 checkpoints:
   approve_merge:
     mode: always
+
+handoff:
+  reviewers:
+    - giuseppecrj
 ---
 
 This repository is pi-herdr-factorio, a Pi package written in TypeScript for Node 26.

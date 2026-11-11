@@ -199,6 +199,11 @@ This is every message the factory prints. `<field>` is a dotted path as describe
 | `must resolve to an absolute path` | `workspace.root` does not resolve to an absolute path. |
 | `never removes the merge checkpoint: v1 stops every run at Human Review` | `checkpoints.approve_merge.mode` is `never`. |
 | `is an unknown checkpoint mode: use always` | `checkpoints.approve_merge.mode` is any value other than `always` or `never`. |
+| `is required when handoff is configured` | `handoff` is present without `handoff.reviewers`. |
+| `must be a list of GitHub user logins` | `handoff.reviewers` is not a list. |
+| `must name at least one reviewer` | `handoff.reviewers` is an empty list. |
+| `must hold GitHub user logins` | A `handoff.reviewers` entry is not a user login: a bot, a team, a leading `@`, or anything outside letters, digits and single inner hyphens up to 39 characters. |
+| `must not repeat a login` | `handoff.reviewers` names a login twice, ignoring case. |
 | `has a level-2 heading that names no stage: use one of admit, specify, accept, build, validate, review, land` | `guidance`. |
 | `duplicate heading "## <stage>"` | `guidance`. |
 
@@ -932,6 +937,8 @@ The reader selects the newest admission event per issue, then the highest sequen
 
 The controller logs one line per event to stderr, as `at=<ISO time> event=<name> key=value ...`. A value outside letters, digits and `:._@/[]+-` is printed as `(withheld)`. Core early-stage events include `controller_ready`, `controller_running`, `controller_refused`, `controller_stopping`, `lock_stale_replaced`, `tick`, `claim_taken`, `claim_adopted`, `claim_released`, `claim_dropped`, `claim_foreign`, `claim_unwritable`, `claim_unverified`, `admission_refused`, `admission_recovered`, `ledger_behind`, `stage_launched`, `launch_refused`, `stage_stalled`, `stage_ended`, `stage_late_usage`, `marker_posted`, `marker_unconfirmed`, `marker_corrupt`, `workspace_missing`, `workspace_unavailable`, `status_unwritable`, `sandbox_reconciled`, `scope_unowned` and `sandbox_preflight`.
 
+`handoff_reviewer_unconfigured` has `issue`, `runId`, `pr` and `workflowSha`. It is logged each time a ready handoff completes for a run whose pinned `WORKFLOW.md` has no `handoff.reviewers`; that handoff requests nobody and still completes.
+
 `claim_unverified` has `issue`, `runId`, `why` and `failure`, with the same values as a run's `unverified` in the claim snapshot. It is logged when a run's claim first fails a read, including during discovery before adoption into the active runs, and again only when the reason changes or after a tick on which the claim did not fail a read, not on every tick. A failed ledger edit read can use a marker body and its matching local admission only to identify this diagnostic; it grants no adoption or launch permission.
 
 ### Stop
@@ -998,6 +1005,7 @@ Anchors (`&name`) and aliases (`*name`) are not allowed anywhere in the front ma
 | `stages.accept.reasoning_effort` | `low`, `medium` or `high` | `medium` | Accept only. Passed as Pi's `--thinking` level. `workflow-check` prints `config.stages.accept.reasoningEffort`. Other stages reject the key. |
 | `stages.review.seats.code-review.model` | `openai/model` or a listed `anthropic/model` | `stages.review.model` | The only per-seat key. The code-review seat runs this model with no fallback. The security, simplify and ultrareview seats keep `stages.review.model`, and the security seat alone keeps `fallback_model`. Any other seat, or any other key under the seat, is rejected. `workflow-check` prints `config.stages.review.codeReviewModel`, or `null` when the seat inherits. |
 | `checkpoints.approve_merge.mode` | string | `always` | `always` is the only accepted mode. `never` is rejected because v1 stops every run at Human Review. Any other mode is unknown and rejected. |
+| `handoff.reviewers` | list of GitHub user logins | none | The users handoff requests on a ready PR, read from the run's pinned `WORKFLOW.md`. One or more distinct user logins; an empty list, a bot, a team or a malformed login is rejected. Handoff never derives a reviewer from the repository owner. Without `handoff`, a pinned workflow from before the field still parses, `workflow-check` prints `config.handoff: null`, and handoff requests nobody and logs `handoff_reviewer_unconfigured`. |
 
 `<stage>` is one of `admit`, `specify`, `accept`, `build`, `validate`, `review` and `land`.
 
@@ -1006,7 +1014,7 @@ These rules apply to every key:
 - A value that starts with `$` is rejected in every field except `workspace.root`.
 - An unknown top-level key is ignored and listed in `warnings`.
 - The keys `hooks`, `hook`, `codex`, `command`, `commands`, `script`, `scripts`, `shell`, `bash`, `exec`, `run`, `before_run` and `after_create` are rejected at the top level and inside every known section. The match ignores case and surrounding spaces, so `Hooks` and `"hooks "` are rejected too. The factory runs no commands from `WORKFLOW.md`. These keys are not part of the schema, so `field` shows them as `(unknown key)`.
-- An unknown key inside `polling`, `agent`, `workspace`, `retry`, `usage`, `stages`, a stage, `stages.review.seats` or `checkpoints` is rejected.
+- An unknown key inside `polling`, `agent`, `workspace`, `retry`, `usage`, `stages`, a stage, `stages.review.seats`, `checkpoints` or `handoff` is rejected.
 
 ## Guidance
 

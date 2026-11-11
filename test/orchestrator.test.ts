@@ -11779,7 +11779,8 @@ describe("controller-only validate", () => {
 						state: "open",
 						merged: false,
 						draft: false,
-						requested_reviewers: [{ login: repo.split("/")[0] ?? "" }],
+						// The trusted WORKFLOW.md's handoff.reviewers, already requested.
+						requested_reviewers: [{ login: "giuseppecrj" }],
 					});
 
 				if (path === `git/ref/heads/${branch}`)
@@ -14585,7 +14586,7 @@ describe("controller-only validate", () => {
 		const jobs = await outbox.scan();
 
 		assert.equal(jobs?.[0]?.row?.row.outcome.kind, "landed");
-		const remote = new LedgerGit();
+		const remote = new LedgerGit(repo);
 
 		const api = ledgerApiOf(
 			new GitHubPublicationApi(remote.exec, repo, EXE_DEV_PLATFORM),

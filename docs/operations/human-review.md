@@ -6,7 +6,9 @@ F09a implements this protocol locally. Main-backed reporter/P4 proof, production
 
 ## Inspect the handoff
 
-1. Open the issue's handoff comment and follow its PR and CI links. Expect one non-draft PR against `main`, on `factory/pr/<issue>-<runId12>`, labeled `factory:review`, with the repository owner requested. The controller adopts only its own bot PR with the matching repository, base, branch, and run trailer. It reconciles a lost create response rather than opening another PR.
+1. Open the issue's handoff comment and follow its PR and CI links. Expect one non-draft PR against `main`, on `factory/pr/<issue>-<runId12>`, labeled `factory:review`, with the reviewers named by `handoff.reviewers` in the run's pinned `WORKFLOW.md` requested. The controller adopts only its own bot PR with the matching repository, base, branch, and run trailer. It reconciles a lost create response rather than opening another PR.
+
+   The reviewers are an explicit trusted setting, today `giuseppecrj`. Handoff never derives a reviewer from the repository owner, which for `nublai/pi-herdr-factorio` is an organization. A run pinned to a `WORKFLOW.md` from before the field existed requests no reviewer. Its handoff still completes and the controller logs `event=handoff_reviewer_unconfigured` with the issue, run, PR and pinned workflow SHA, so request a reviewer by hand. If the pinned file cannot be read or no longer matches its recorded digest, handoff waits and retries rather than guessing.
 2. Compare the PR head with the handoff candidate SHA. Inspect the contract summary, changed paths, findings, and family disclosure. The suite-bearing candidate is the exact commit certified before handoff. Its held-out check files remain visible in the PR and inert on `main`. They are not builder inputs.
 3. Inspect both required checks on that head. `check` is the ordinary PR check. `factory-gates` must come from the main-owned dispatch and its separate reporter, not a same-named job or a green rollup. Use the [CI identity reference](factory-cli.md#trusted-candidate-gates-f07b) when auditing receipts.
 4. On the VM, read status without advancing the controller:

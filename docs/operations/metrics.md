@@ -206,6 +206,19 @@ Rows outside the exact requested repository are counted separately under
 `excludedRowCounts.otherRepo` and `excludedRowCounts.repoCasingMismatch`.
 A casing mismatch is not silently treated as an empty history.
 
+The one exception is the platform's read-only historical repository alias
+([platform profile](platform.md#historical-repository-alias)). A frozen row
+recorded under a former name of the requested repository counts as that
+repository's, because the repository moved and the row cannot be rewritten.
+By default `--repo nublai/pi-herdr-factorio` also counts rows recorded as
+`giuseppecrj/pi-herdr-factorio`. On the preserved 2026-11-08 ledger it reports
+the same 12 production runs and 4,152,936 lower-bound tokens as the old name.
+The report names the former names it counted in `historicalRepositories`.
+Defect references written with a former name match too, and receipt and
+intervention reads include those rows. GitHub reads still use the requested
+name. The alias changes only what metrics counts. It grants no marker trust,
+admission, claim, dispatch or publication.
+
 All `provenance.kind: verification` rows are excluded. Legacy contexts carrying
 a verification manifest are excluded too. Other `legacy_import` rows remain
 included and appear under `legacyRuns`.
@@ -247,6 +260,8 @@ The version-1 report contains:
   clean numerator.
 - `unknowns`, `excluded`, `legacyRuns`, `defectRead` and `receiptVerification`:
   the evidence and coverage limitations.
+- `historicalRepositories`: the former names whose frozen rows counted for
+  `repo`, from the platform's read-only alias. An empty list means none did.
 - `deferred`: the measurements below. None causes an action.
 
 ## Deferred-work signals

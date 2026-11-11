@@ -69,12 +69,10 @@ import { parseWorkflow } from "../src/workflow.ts";
 import { GitHubPublicationApi, SCORE_FILE } from "../src/publication.ts";
 import { LedgerGit, repo } from "./ledger-git.ts";
 import { EXE_DEV_PLATFORM } from "../src/platform.ts";
-import { noPlatformFile } from "./helpers.ts";
+import { trustedWorkflowFor } from "./fake-ticket-adapter.ts";
 
-const workflow = readFileSync(
-	new URL("../.github/factory/WORKFLOW.md", import.meta.url),
-	"utf8",
-);
+// The frozen ledger rows were recorded under the fixture repository's name.
+const workflow = trustedWorkflowFor(repo);
 
 const ledgerFixture = readFileSync(
 	new URL("fixtures/metrics/runs-2026-11-08.jsonl", import.meta.url),
@@ -1001,7 +999,15 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 	let stdout = "";
 
 	const io = {
-		readPlatformFile: noPlatformFile,
+		// Measure the frozen rows in their own repository, as before the move.
+		readPlatformFile: async () => ({
+			kind: "present" as const,
+			text: JSON.stringify({
+				version: 1,
+				repositories: [repo],
+				historicalRepositories: {},
+			}),
+		}),
 		exec,
 		env: (name: string) => process.env[name],
 		runtime,
