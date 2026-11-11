@@ -22,10 +22,10 @@ Keep the GitHub bot identity. Do not use `--act-as-user`, `--readonly`, `gh auth
 
 ## One command
 
-SSH to `exedev@nubl-factory.exe.xyz`. Replace **both** `<commit>` placeholders below with the same full lowercase 40-character SHA, published in `nublai/pi-herdr-factorio`:
+SSH to `exedev@nubl-factory.exe.xyz`. Set `C` to the full lowercase 40-character SHA published in `nublai/pi-herdr-factorio`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/nublai/pi-herdr-factorio/<commit>/server/install-exe-dev.sh | bash -s -- <commit>
+C=<sha>; curl -fsSL https://raw.githubusercontent.com/nublai/pi-herdr-factorio/$C/server/install-exe-dev.sh | bash -s -- "$C"
 ```
 
 The selected revision must include the repository rename in the platform allowlist and a valid trusted workflow on `main`. The installer refuses to start a controller whose platform does not allow the requested repository.
@@ -40,15 +40,15 @@ curl -fsSL https://raw.githubusercontent.com/nublai/pi-herdr-factorio/<commit>/s
 
 `--check` needs no commit argument. It only reads local prerequisites and performs a repository GET and an OpenAI models-list GET, never a model inference. Its namespace and bubblewrap smoke tests run `true` with the host filesystem read-only. It never clones, provisions, creates state, enables linger, installs a unit or restarts a service. Exit 0 means preflight passed; exit 1 prints a named refusal and a fix. Remote error bodies are suppressed.
 
-Preflight requires x86_64 Linux, both exe.dev integration names resolving to the link-local edge, the normal VM user, sudo permission to enable linger, bubblewrap >= 0.9.0, working unprivileged namespaces and bubblewrap, systemd/logind, attached GitHub and model routes, and at least 4 GiB plus 100,000 free inodes on each filesystem containing the home, `/var/lib` and `/tmp`. Missing commands name their apt package. Preflight changes no configuration; sudo and network probes may generate ordinary system audit logs.
+Preflight requires x86_64 Linux, both exe.dev integration names resolving to the link-local edge, the normal VM user, passwordless broad sudo (`sudo -n true`), bubblewrap >= 0.9.0, working unprivileged namespaces and bubblewrap, systemd/logind, attached GitHub and model routes, and at least 4 GiB plus 100,000 free inodes on each filesystem containing the home, `/var/lib` and `/tmp`. Missing commands name their apt package. Preflight changes no configuration; sudo and network probes may generate ordinary system audit logs.
 
 ## What installation does
 
 After preflight passes, it refuses a dirty, symlinked or wrong-origin checkout. It creates `/home/exedev/factory-state` owned by `exedev` at 0700 and its `disabled` hold before stopping or enabling any service. An existing state directory must already be private and owned by `exedev`; existing hold bytes and metadata are preserved.
 
-It clones through the GitHub integration to `/home/exedev/pi-herdr-factorio`, fetches the exact SHA and verifies `git rev-parse HEAD` against it. It runs full `server/provision.sh`, refreshing checkout dependencies on upgrades. MV3 installs host tools, Pi configuration, linger, the verified root-owned sandbox bundle and `/etc/factory/factory.env`. The installer renders the selected `--repo` into `server/factory.service`, installs it, enables and restarts it. `Type=notify` waits for readiness; the installer checks `controller_ready` in that invocation's journal and then requires a running controller's `status --json` dispatch reasons to include `locally_disabled` with dispatch disabled.
+It clones and fetches through the GitHub integration into a temporary directory beside `/home/exedev/pi-herdr-factorio`, checks out the exact SHA and verifies `git rev-parse HEAD` against it, before stopping the controller. A failed download leaves any old controller running and no partial new checkout. It re-executes the installer from that verified checkout, so provisioning uses the pinned installer rather than the downloaded bootstrap. It then stops and disables the service, moves a first checkout into place or updates the existing clean checkout, and runs full `server/provision.sh`, refreshing checkout dependencies on upgrades. MV3 installs host tools, Pi configuration, linger, the verified root-owned sandbox bundle and `/etc/factory/factory.env`. The installer renders the selected `--repo` into `server/factory.service`, installs it and restarts it. `Type=notify` waits for readiness; the installer checks `controller_ready` in that invocation's journal and requires a `status.json` timestamp later than the restart boundary, followed by a running controller's `status --json` with the same freshness requirement and `locally_disabled` with dispatch disabled. Only after those checks does it enable the service for boot.
 
-It prints those reasons and records the successful commit in `factory-state/install-exe-dev.commit`. A failure leaves the hold in place. Never treat preflight alone as proof of provisioning, cgroup limits, stage execution or an end-to-end install.
+It prints those reasons and atomically records the successful commit in `factory-state/install-exe-dev.commit`. A failure leaves the hold in place. After a stop, failure cleanup stops and disables the service so a half-provisioned checkout cannot crash-loop on reboot; it reports any cleanup failure explicitly. Fix the reported error and rerun the pinned command to recover. The installer does not roll back shared provisioning changes or lift the hold. Never treat preflight alone as proof of provisioning, cgroup limits, stage execution or an end-to-end install.
 
 ## Verify
 
@@ -76,7 +76,7 @@ This selects `exedev@nubl-factory.exe.xyz` and `github.int.exe.xyz`. The doctor 
 
 Only Giuseppe decides when to remove `/home/exedev/factory-state/disabled`, after the old controller is drained/stopped and cutover verification is complete. This installer never removes it and never creates or deletes `factory:enabled`.
 
-To upgrade, rerun the one command with the new full SHA in both positions. The state and hold remain; the checkout, dependencies, bundle and unit are updated and the service restarts. With the same successful SHA, clean checkout, matching unit and an active service, rerunning performs only preflight and status reads, retains the hold and skips provisioning and restart. If Giuseppe had lifted it, rerunning creates the hold again. Do not use the installer to discard local checkout edits or to switch an existing controller to a different repository.
+Upgrade only on a drained controller, following the [drained rollout procedure](human-review.md#roll-forward-from-a-drained-controller) linked from [Factory CLI](factory-cli.md#install-the-service). Then rerun the one command with `C` set to the new full SHA. The state and hold remain; the checkout, dependencies, bundle and unit are updated and the service restarts. With the same successful SHA, clean checkout, matching unit and an active service, rerunning performs preflight, verified-installer re-execution and status reads, retains the hold and skips provisioning and restart. If Giuseppe had lifted it, rerunning creates the hold again. Both paths wait up to two minutes for fresh held controller status, rather than accepting an old snapshot. Do not use the installer to discard local checkout edits or to switch an existing controller to a different repository.
 
 ## Shep bridge
 
