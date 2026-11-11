@@ -964,13 +964,15 @@ SIGTERM or SIGINT lets the current tick finish, then `serve` logs `controller_st
 
 ### Install the service
 
+For a fresh exe.dev VM, use the [commit-pinned, held install](install-exe-dev.md) on `nubl-factory`. It checks prerequisites before changes, has a read-only `--check`, and keeps dispatch held until Giuseppe releases it.
+
 Installation requires explicit service/VM authority, a drained rollout, and the [owner bootstrap gates](human-review.md#bootstrap-and-enable-protection-as-the-owner). These examples are not an execution grant.
 
 `server/factory.service` runs `serve` under systemd. `server/provision.sh` does not install it. To install it on `pi-factorio`:
 
 1. Clone the repository to `/home/exedev/pi-herdr-factorio` at the `main` commit to run, and run `npm ci --ignore-scripts` there.
 2. Run full provisioning: `bash server/provision.sh`. This writes the required `/etc/factory/factory.env` and installs the sandbox bundle. A missing env file stops the unit from starting; sandbox-only provisioning does not write it.
-3. Create the state directory: `install -d -m 0700 /home/exedev/factory-state`.
+3. Create the state directory and hold: `install -d -m 0700 /home/exedev/factory-state && touch /home/exedev/factory-state/disabled`. Only Giuseppe lifts this hold after verification.
 4. Copy the unit: `sudo install -m 0644 server/factory.service /etc/systemd/system/factory.service`, then `sudo systemctl daemon-reload`.
 5. Start it: `sudo systemctl enable --now factory.service`.
 6. Wait for readiness: `journalctl -u factory.service -f` until it shows `event=controller_ready`.
