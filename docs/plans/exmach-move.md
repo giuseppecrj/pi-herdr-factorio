@@ -10,7 +10,7 @@ Items #717 (F13 Linear) and #718 (bootstrap kit) stay outside this plan. Appendi
 
 ## How to read this
 
-**Parked, 2026-11-10.** The owner set a three-phase roadmap. Phase 1 is Shep as the daily client, phase 2 the software factory run from Shep, and phase 3 is exmach. Factorio's production controller moves to ms-a2, testing stays on exe.dev, and the move to exmach is parked. `MV1` (#724), `MV2` (#721) and `MV6` (#722) are on `main` and stay useful, because the platform profile and the verification targets are host-neutral. `MV3`, `MV4`, `MV5` and `MV8` are parked as written. `MV7` targets the exmach profile and waits with them. An ms-a2 profile and ms-a2 verification target follow as new work, after the owner's go-ahead for setting up Factorio on ms-a2. Parked PRs keep their verdicts and are not landed. #728 (`MV3`) is code-ready but parked. `MV4`'s drain and foreign-marker work is reusable for any move that changes the controller's GitHub identity, including ms-a2.
+**Parked, 2026-11-10.** The owner set a three-phase roadmap. Phase 1 is Shep as the daily client, phase 2 the software factory run from Shep, and phase 3 is exmach. The move to exmach is parked. Factorio's first real host is a new exe.dev VM, `nubl-factory`, which the owner installs by hand with the one-command installer from #743 (`docs/operations/install-exe-dev.md`). `pi-factorio` is drained (#712) and retired once `nubl-factory` works (#734). A dedicated VM on ms-a2 comes later and is only planned (#730, `docs/plans/factorio-vm.md`). `MV1` (#724), `MV2` (#721) and `MV6` (#722) are on `main` and stay useful, because the platform profile and the verification targets are host-neutral. `MV3` landed through #743 as the installer's provisioning. `MV4`, `MV5` and `MV8` are parked as written, and `MV7` waits with them. `MV4`'s drain and foreign-marker work stays on branches `mv4-drain-foreign-markers` and `mv4b-ci-bot`. It is needed only for a move that changes the controller's GitHub identity, such as the later ms-a2 VM. The move to `nubl-factory` keeps the exe.dev identity.
 
 One box is one unit of work. Every box names the evidence that checks it. A nested box is a sub-step of the box above it. Check a box only when its evidence exists, such as a file, a log, a test result, or a SHA. The body is a how-to. The appendices explain and record.
 
@@ -209,7 +209,7 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 
 ## Provision an exmach dev VM from the profile (MV3)
 
-**Depends on.** Parked on 2026-11-10 (provisioning an exmach dev VM is not the target now). MV1. This implements #713. Live lanes need exmach E2 and E5.
+**Depends on.** Its provisioning code landed through #743 (`dc81a25`) as part of the exe.dev installer, and #713 is closed. The exmach-specific live lanes below stay parked with the exmach move. MV1. This implemented #713. Live lanes need exmach E2 and E5.
 
 **Files.**
 
@@ -266,7 +266,7 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 
 ## Drain pi-factorio and report foreign markers (MV4)
 
-**Depends on.** Parked on 2026-11-10 (the drain is still needed before any move that changes the controller's GitHub identity, so this unit will be re-scoped for the ms-a2 move rather than dropped). MV1. This implements #712 under the owner's drain decision.
+**Depends on.** Parked on 2026-11-10. The drain of `pi-factorio` before it is retired is #712. The identity switch is needed only for a later move that changes the controller's GitHub identity, such as the ms-a2 VM. MV1. This implements #712 under the owner's drain decision.
 
 **Files.**
 
