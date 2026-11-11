@@ -1723,9 +1723,28 @@ export async function loadWorkflow(input: {
 }
 
 /**
+ * A run's pinned WORKFLOW.md. `unavailable` is a failed read that a later read
+ * may clear. `integrity` is permanent: the pinned bytes differ from the
+ * recorded digest, or they no longer parse. Neither carries file text.
+ */
+export type PinnedWorkflowLoad =
+	| { readonly kind: "loaded"; readonly config: WorkflowConfig }
+	| {
+			readonly kind: "unavailable";
+			readonly reason: "read_rejected" | "read_failed";
+			readonly cause: GhCause;
+			readonly status: number | null;
+	  }
+	| {
+			readonly kind: "integrity";
+			readonly reason: "digest_mismatch" | "workflow_invalid";
+			readonly error: WorkflowError["kind"] | null;
+	  };
+
+/**
  * WORKFLOW.md at a run's pinned commit, parsed only when its bytes match the
- * digest the run recorded. `null` when it cannot be fetched, differs or is
- * invalid, so a caller fails closed and retries.
+ * digest the run recorded. Anything else is a typed failure, so a caller
+ * fails closed and never mistakes it for a workflow without a setting.
  */
 export async function loadPinnedWorkflow(input: {
 	exec: Exec;
@@ -1734,7 +1753,7 @@ export async function loadPinnedWorkflow(input: {
 	digest: Digest;
 	env: EnvLookup;
 	platform: PlatformProfile;
-}): Promise<WorkflowConfig | null> {
+}): Promise<PinnedWorkflowLoad> {
 	const fetched = await runGh(input.exec, [
 		"api",
 		"-H",
@@ -1742,9 +1761,23 @@ export async function loadPinnedWorkflow(input: {
 		`repos/${input.repo}/contents/${WORKFLOW_PATH}?ref=${input.sha}`,
 	]);
 
-	if ("rejected" in fetched || fetched.code !== 0) return null;
+	if ("rejected" in fetched)
+		return {
+			kind: "unavailable",
+			reason: "read_rejected",
+			cause: "other",
+			status: null,
+		};
 
-	if (digestOf(fetched.stdout) !== input.digest) return null;
+	if (fetched.code !== 0)
+		return {
+			kind: "unavailable",
+			reason: "read_failed",
+			...ghFailure(fetched),
+		};
+
+	if (digestOf(fetched.stdout) !== input.digest)
+		return { kind: "integrity", reason: "digest_mismatch", error: null };
 
 	const parsed = parseWorkflow({
 		text: fetched.stdout,
@@ -1753,7 +1786,13 @@ export async function loadPinnedWorkflow(input: {
 		platform: input.platform,
 	});
 
-	return parsed.kind === "valid" ? parsed.config : null;
+	return parsed.kind === "valid"
+		? { kind: "loaded", config: parsed.config }
+		: {
+				kind: "integrity",
+				reason: "workflow_invalid",
+				error: parsed.error.kind,
+			};
 }
 
 /** An invalid reload keeps the last valid snapshot in force. */

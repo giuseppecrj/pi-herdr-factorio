@@ -367,11 +367,10 @@ function readRepositories(
 /**
  * Reads `{ "<current>": ["<former>", ...] }`. Every name is a distinct
  * repository slug, each list is non-empty, and a former name is never a
- * current name, listed twice, or one of `active`.
+ * current name or listed twice. `aliasesActive` checks the resolved map.
  */
 function readHistoricalRepositories(
 	value: ReturnType<typeof fieldOf>,
-	active: readonly RepoSlug[],
 ): Parsed<HistoricalRepositories | null> {
 	if (value === undefined) return { ok: true, value: null };
 
@@ -403,7 +402,6 @@ function readHistoricalRepositories(
 				text === null ||
 				!isRepoSlug(text) ||
 				current.includes(text) ||
-				active.includes(text) ||
 				seen.includes(text)
 			)
 				return invalid;
@@ -416,6 +414,19 @@ function readHistoricalRepositories(
 	}
 
 	return { ok: true, value: Object.freeze(result) };
+}
+
+/**
+ * A former name is never an active repository, whether the map came from the
+ * file or is the built-in default.
+ */
+function aliasesActive(
+	history: HistoricalRepositories,
+	active: readonly RepoSlug[],
+): boolean {
+	return Object.values(history).some((former) =>
+		former.some((name) => active.includes(name)),
+	);
 }
 
 function parsePlatformFile(text: string): Parsed<FileSelection> {
@@ -467,7 +478,6 @@ function parsePlatformFile(text: string): Parsed<FileSelection> {
 
 	const historicalRepositories = readHistoricalRepositories(
 		fieldOf(root, "historicalRepositories"),
-		repositories.value ?? DEFAULT_REPOSITORIES,
 	);
 
 	if (!historicalRepositories.ok) return historicalRepositories;
@@ -601,15 +611,22 @@ export function parsePlatformProfile(input: {
 
 	if (!ghHost.ok) return ghHost;
 
+	const repositories = file?.value.repositories ?? DEFAULT_REPOSITORIES;
+
+	const historicalRepositories =
+		file?.value.historicalRepositories ?? DEFAULT_HISTORICAL_REPOSITORIES;
+
+	if (aliasesActive(historicalRepositories, repositories))
+		return { ok: false, reason: "historical_repository_invalid" };
+
 	const network = platformNetwork(selector);
 
 	const profile: PlatformProfile = Object.freeze({
 		...network,
 		...identity.value,
 		ghHost: ghHost.value,
-		repositories: file?.value.repositories ?? DEFAULT_REPOSITORIES,
-		historicalRepositories:
-			file?.value.historicalRepositories ?? DEFAULT_HISTORICAL_REPOSITORIES,
+		repositories,
+		historicalRepositories,
 		anthropicStages: ANTHROPIC_STAGES,
 	});
 

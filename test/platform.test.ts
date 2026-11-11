@@ -596,6 +596,54 @@ describe("platform selection", () => {
 			);
 	});
 
+	it("validates the built-in historical alias against the resolved repositories exactly as an explicit one", () => {
+		const builtin: JsonValue = {
+			"nublai/pi-herdr-factorio": ["giuseppecrj/pi-herdr-factorio"],
+		};
+
+		const colliding = [
+			"nublai/pi-herdr-factorio",
+			"giuseppecrj/pi-herdr-factorio",
+		];
+
+		for (const source of [file, exmachFile]) {
+			const omitted = refusal(
+				undefined,
+				source({ version: 1, repositories: colliding }),
+			);
+
+			const explicit = refusal(
+				undefined,
+				source({
+					version: 1,
+					repositories: colliding,
+					historicalRepositories: builtin,
+				}),
+			);
+
+			assert.equal(explicit, "historical_repository_invalid");
+			assert.equal(
+				omitted,
+				explicit,
+				"omitting the map behaves as supplying it",
+			);
+		}
+
+		// Without a collision, omitting and supplying the built-in map agree too.
+		assert.deepEqual(
+			resolved(undefined, file({ version: 1 })),
+			resolved(
+				undefined,
+				file({ version: 1, historicalRepositories: builtin }),
+			),
+		);
+		assert.deepEqual(
+			resolved(undefined, file({ version: 1, repositories: ["acme/widgets"] }))
+				.historicalRepositories,
+			builtin,
+		);
+	});
+
 	it("names a repository's former names for measurement and maps them back to its current name", () => {
 		const history = EXE_DEV_PLATFORM.historicalRepositories;
 

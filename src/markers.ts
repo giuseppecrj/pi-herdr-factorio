@@ -266,6 +266,8 @@ const HOLD_TEXT: Readonly<Record<HandoffReason, string>> = {
 	summary_too_large: "the PR summary is too large",
 	pr_identity: "the PR identity could not be verified",
 	pr_ambiguous: "more than one PR matches this run",
+	workflow_unavailable:
+		"the run's pinned WORKFLOW.md cannot be read or verified",
 	validation_failed: "validation did not pass",
 	evidence_unavailable: "required evidence is unavailable",
 	repair_limit: "the repair round allowance is used",

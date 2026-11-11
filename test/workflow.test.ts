@@ -406,7 +406,9 @@ describe("parseWorkflow", () => {
 				platform: EXE_DEV_PLATFORM,
 			});
 
-		assert.deepEqual((await load(current))?.handoff, {
+		const loaded = await load(current);
+		assert.equal(loaded.kind, "loaded");
+		assert.deepEqual(loaded.kind === "loaded" && loaded.config.handoff, {
 			reviewers: ["giuseppecrj"],
 		});
 		assert.deepEqual(calls[0], [
@@ -416,12 +418,45 @@ describe("parseWorkflow", () => {
 			"Accept: application/vnd.github.raw",
 			`repos/${repo}/contents/.github/factory/WORKFLOW.md?ref=${pinned}`,
 		]);
-		assert.equal((await load(old))?.handoff, null);
-		assert.equal(await load(current, digestOf(old)), null);
-		assert.equal(await load(null), null);
-		assert.equal(
+		const legacy = await load(old);
+		assert.equal(legacy.kind === "loaded" && legacy.config.handoff, null);
+		// A failed read may clear later; wrong bytes or an invalid file never do.
+		assert.deepEqual(await load(current, digestOf(old)), {
+			kind: "integrity",
+			reason: "digest_mismatch",
+			error: null,
+		});
+		assert.deepEqual(await load(null), {
+			kind: "unavailable",
+			reason: "read_failed",
+			cause: "not_found",
+			status: 404,
+		});
+		assert.deepEqual(
 			await load(current.replace(repo, "giuseppecrj/pi-herdr-factorio")),
-			null,
+			{
+				kind: "integrity",
+				reason: "workflow_invalid",
+				error: "workflow_validation_error",
+			},
+		);
+		assert.deepEqual(
+			await loadPinnedWorkflow({
+				exec: async () => {
+					throw new Error("secret-bearing transport failure");
+				},
+				repo,
+				sha: pinned,
+				digest: digestOf(current),
+				env,
+				platform: EXE_DEV_PLATFORM,
+			}),
+			{
+				kind: "unavailable",
+				reason: "read_rejected",
+				cause: "other",
+				status: null,
+			},
 		);
 	});
 

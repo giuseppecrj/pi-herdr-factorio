@@ -47,6 +47,7 @@ import {
 	pinVerification,
 	controllerCandidatePort,
 	controllerBaseChecker,
+	WORKFLOW_READ_LIMIT,
 	HOLDER_FILE,
 	type ProcessTable,
 	parseStartTime,
@@ -11016,6 +11017,11 @@ function refusedReceipt(
 	}).receipt;
 }
 
+/** The handoff request the real port last served, for the faked GitHub reads. */
+type PendingHandoff = { readonly state: CandidateState; readonly head: GitSha };
+
+type HandoffSeen = { pending: PendingHandoff | null };
+
 describe("controller-only validate", () => {
 	async function waitingRun(
 		setup: (f: ReturnType<typeof world>) => void = () => {},
@@ -11571,6 +11577,211 @@ describe("controller-only validate", () => {
 				assert.equal(calls, 1);
 				assert.equal(f.executor.launches.length, launches);
 			});
+
+	for (const failure of ["transient", "digest_mismatch", "recovers"] as const)
+		it(`bounds the pinned WORKFLOW.md read at handoff through the real port across restart (${failure})`, async () => {
+			const f = await reviewingRun();
+			f.executor.behaviors = [{ kind: "pass", usage: 11 }];
+			const root = stateDir();
+			const port = f.executor.candidate;
+			assert.ok(port);
+			const execute = port.execute;
+			const trusted = f.github.workflow;
+			assert.ok(trusted !== null);
+			let reads = 0;
+			let labels = 0;
+
+			const seen: HandoffSeen = { pending: null };
+
+			// Only the external GitHub responses are faked; the controller's own
+			// candidate port reads, counts and holds.
+			const exec: Exec = async (command, args) => {
+				if (
+					args.some((a) => a.includes("contents/.github/factory/WORKFLOW.md"))
+				) {
+					reads++;
+
+					if (failure === "digest_mismatch")
+						return { code: 0, stdout: `${trusted}\n`, stderr: "" };
+
+					return failure === "recovers" && reads > 3
+						? { code: 0, stdout: trusted, stderr: "" }
+						: { code: 1, stdout: "", stderr: "HTTP 404: Not Found" };
+				}
+
+				assert.ok(seen.pending);
+				const { state, head } = seen.pending;
+				const branch = `factory/pr/14-${state.pin.runId.slice(0, 12)}`;
+
+				if (args.some((a) => a.endsWith(`git/ref/heads/${branch}`)))
+					return {
+						code: 0,
+						stdout: JSON.stringify({ object: { sha: head } }),
+						stderr: "",
+					};
+
+				if (args.includes("GET") && args.some((a) => a.endsWith("/pulls/99")))
+					return {
+						code: 0,
+						stdout: JSON.stringify({
+							number: 99,
+							head: { sha: head, ref: branch, repo: { full_name: repo } },
+							base: { ref: "main", repo: { full_name: repo } },
+							user: { login: BOT_LOGIN, type: "Bot" },
+							body: `<!-- factory:pr ${state.pin.runId} -->`,
+							state: "open",
+							merged: false,
+							draft: false,
+							requested_reviewers: [{ login: "giuseppecrj" }],
+						}),
+						stderr: "",
+					};
+
+				if (
+					args.includes("POST") &&
+					args.some((a) => a.endsWith("issues/99/labels"))
+				) {
+					labels++;
+
+					return { code: 0, stdout: '["factory:review"]', stderr: "" };
+				}
+
+				return f.github.exec(command, args);
+			};
+
+			const real = () =>
+				controllerCandidatePort({
+					platform: EXE_DEV_PLATFORM,
+					stateDir: root,
+					exec,
+					log: (event, fields) => f.logs.push({ event, fields }),
+				});
+
+			let handoff = real();
+
+			port.execute = async (state, request) => {
+				if (request.kind !== "complete_handoff") return execute(state, request);
+				seen.pending = { state, head: request.head };
+
+				return handoff.execute(state, request);
+			};
+
+			const book = () => {
+				const saved = f.files.claims.get(runOf(14))?.handoff;
+				assert.ok(saved?.kind === "selected");
+
+				return saved;
+			};
+
+			const unavailable = () =>
+				f.logs.filter((l) => l.event === "handoff_workflow_unavailable");
+
+			const counter = join(root, "handoff", runOf(14), "workflow-read.json");
+
+			await once(f.controller);
+			let controller = f.controller;
+			const restartAt = failure === "transient" ? 4 : 1;
+
+			// The count survives a restart: a fresh port and controller resume it.
+			for (let tick = 0; tick < 40 && reads < restartAt; tick++) {
+				f.clock.t += 30_000;
+				await controller.tick();
+			}
+
+			assert.equal(reads, restartAt);
+			handoff = real();
+			controller = f.start();
+
+			if (failure === "recovers") {
+				// An existing handoff comment stands in for the private contract
+				// evidence a fresh comment would render.
+				const issue = f.github.issues.get(14);
+				assert.ok(issue && seen.pending);
+				const { state, head } = seen.pending;
+				f.github.comment(
+					issue,
+					`handoff\n<!-- factory:handoff ${state.pin.runId} ${head} -->`,
+				);
+			}
+
+			for (
+				let tick = 0;
+				tick < 40 &&
+				book().work.kind !== "held" &&
+				f.files.claims.get(runOf(14))?.status !== "waiting";
+				tick++
+			) {
+				f.clock.t += 30_000;
+				await controller.tick();
+			}
+
+			if (failure === "recovers") {
+				assert.equal(reads, 4);
+				assert.equal(unavailable().length, 3);
+				assert.equal(f.files.claims.get(runOf(14))?.status, "waiting");
+				assert.equal(labels, 1);
+				assert.equal(existsSync(counter), false);
+				assert.equal(
+					f.logs.some((l) => l.event === "candidate_effect_held"),
+					false,
+				);
+
+				return;
+			}
+
+			const bound = failure === "transient" ? WORKFLOW_READ_LIMIT : 1;
+			assert.equal(WORKFLOW_READ_LIMIT, 10);
+			assert.equal(reads, bound);
+			const held = book();
+			assert.ok(held.work.kind === "held");
+			assert.equal(held.work.reason, "workflow_unavailable");
+			assert.deepEqual(held.published?.readiness, {
+				kind: "not_ready",
+				reason: "workflow_unavailable",
+				since: held.work.since,
+			});
+			assert.deepEqual(
+				unavailable().map((l) => [
+					l.fields.issue,
+					l.fields.runId,
+					l.fields.workflowSha,
+					l.fields.reason,
+					l.fields.failures,
+					l.fields.held,
+				]),
+				Array.from({ length: bound }, (_, index) => [
+					14,
+					runOf(14),
+					held.pin.workflowSha,
+					failure === "transient" ? "read_failed" : "digest_mismatch",
+					index + 1,
+					index + 1 === bound,
+				]),
+			);
+			assert.deepEqual(
+				f.logs
+					.filter((l) => l.event === "candidate_effect_held")
+					.map((l) => l.fields.reason),
+				["workflow_unavailable"],
+			);
+			assert.equal(
+				JSON.stringify(parseCandidateState(JSON.parse(JSON.stringify(held)))),
+				JSON.stringify(held),
+			);
+
+			// The hold is sticky across another restart: no read, no label.
+			handoff = real();
+			const restarted = f.start();
+
+			for (let tick = 0; tick < 5; tick++) {
+				f.clock.t += 30_000;
+				await restarted.tick();
+			}
+
+			assert.equal(reads, bound);
+			assert.equal(labels, 0);
+			assert.equal(JSON.stringify(book()), JSON.stringify(held));
+		});
 
 	for (const target of ["open_pr", "complete_handoff"] as const)
 		for (const fault of ["none", "notice_response", "terminal_claim"] as const)

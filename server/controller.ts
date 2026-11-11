@@ -7143,6 +7143,26 @@ async function retireUnissuedIntent(path: string, text: string): Promise<void> {
 	}
 }
 
+/** Failed pinned-workflow reads before handoff holds, about 5 minutes of ticks. */
+export const WORKFLOW_READ_LIMIT = 10;
+
+/**
+ * The durable failed-read count for the run's pinned workflow. A count for
+ * another SHA or digest, or an unreadable file, counts as none.
+ */
+function storedWorkflowFailures(path: string, state: CandidateState): number {
+	try {
+		const stored = objectOf(parseJsonText(regularText(path)));
+
+		return jsonField(stored, "workflowSha") === state.pin.workflowSha &&
+			jsonField(stored, "workflowDigest") === state.pin.workflowDigest
+			? (countOf(jsonField(stored, "failures")) ?? 0)
+			: 0;
+	} catch {
+		return 0;
+	}
+}
+
 export function controllerCandidatePort(config: {
 	readonly stateDir: string;
 	readonly exec: Exec;
@@ -7160,11 +7180,13 @@ export function controllerCandidatePort(config: {
 		);
 
 	const pinnedHandoff = new Map<string, HandoffSettings | null>();
+	const workflowFailures = new Map<string, number>();
 
 	/**
 	 * The reviewers named by the run's pinned WORKFLOW.md: settings, `null`
-	 * for a pinned workflow without `handoff`, or `undefined` while the pinned
-	 * file is unavailable.
+	 * for a pinned workflow without `handoff`, or `undefined` while a failed
+	 * read may still clear. A failed integrity check, or the 10th failed read,
+	 * throws `workflow_unavailable` so the run holds.
 	 */
 	const handoffOf = async (
 		state: CandidateState,
@@ -7182,9 +7204,58 @@ export function controllerCandidatePort(config: {
 			platform: config.platform,
 		});
 
-		if (pinned === null) return undefined;
+		const counter = join(
+			config.stateDir,
+			"handoff",
+			state.pin.runId,
+			"workflow-read.json",
+		);
 
-		const handoff = pinned.handoff ?? null;
+		const runKey = `${state.pin.runId} ${key}`;
+
+		if (pinned.kind !== "loaded") {
+			// A transient read retries up to the bound, counted durably per run
+			// and pin; an integrity failure can never clear, so it holds at once.
+			const failures =
+				Math.max(
+					workflowFailures.get(runKey) ?? 0,
+					storedWorkflowFailures(counter, state),
+				) + 1;
+
+			const held =
+				pinned.kind === "integrity" || failures >= WORKFLOW_READ_LIMIT;
+
+			log("handoff_workflow_unavailable", {
+				issue: state.pin.issue,
+				runId: state.pin.runId,
+				workflowSha: state.pin.workflowSha,
+				kind: pinned.kind,
+				reason: pinned.reason,
+				failures,
+				limit: WORKFLOW_READ_LIMIT,
+				held,
+			});
+
+			if (held) throw new PublicationError("workflow_unavailable");
+
+			workflowFailures.set(runKey, failures);
+			privateDir(dirname(counter));
+			await writeAtomic(
+				counter,
+				JSON.stringify({
+					workflowSha: state.pin.workflowSha,
+					workflowDigest: state.pin.workflowDigest,
+					failures,
+				}),
+			);
+
+			return undefined;
+		}
+
+		workflowFailures.delete(runKey);
+		await unlink(counter).catch(() => undefined);
+
+		const handoff = pinned.config.handoff ?? null;
 		pinnedHandoff.set(key, handoff);
 
 		return handoff;

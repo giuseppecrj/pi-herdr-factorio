@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { readAttention, ATTENTION_KINDS } from "../src/attention.ts";
+import { readOwnerFeed } from "../src/feed.ts";
 import { digestOf, runIdOf } from "../src/run.ts";
 import { isRepoSlug, parseWorkflow } from "../src/workflow.ts";
 import { runCli } from "../server/cli.ts";
@@ -501,7 +502,11 @@ test("seven groups distinguish unknown legacy ages and never duplicate a not-rea
 	assert.equal(read.groups.spec_review.length, 0);
 });
 
-for (const reason of ["pr_identity", "pr_ambiguous"] as const)
+for (const reason of [
+	"pr_identity",
+	"pr_ambiguous",
+	"workflow_unavailable",
+] as const)
 	for (const published of [false, true])
 		test(`attention shows ${reason} with hold age (published=${published})`, async () => {
 			const root = fixture();
@@ -538,6 +543,76 @@ for (const reason of ["pr_identity", "pr_ambiguous"] as const)
 				stale: false,
 			});
 		});
+
+test("status --json and the owner feed show a workflow_unavailable hold as blocked", async () => {
+	const root = fixture();
+	const book = parseCandidateState(prBook(14, 99, true));
+	assert.ok(book?.kind === "selected");
+	const since = Date.now() - 60_000;
+	const reason = "workflow_unavailable";
+	claim(root, 14, "blocked", {
+		enteredAt: 10,
+		stage: "land",
+		handoff: JSON.parse(
+			JSON.stringify({
+				...book,
+				published: {
+					...book.published,
+					readiness: { kind: "not_ready", reason, since },
+				},
+				work: { kind: "held", reason, since },
+			}),
+		),
+	});
+	let output = "";
+
+	const code = await runCli(
+		["status", "--json", "--repo", repo, "--state-dir", root],
+		{
+			readPlatformFile: noPlatformFile,
+			exec: async (command, args) => ({
+				code: 0,
+				stderr: "",
+				stdout:
+					command === "git"
+						? `https://github.com/${repo}.git`
+						: args.includes("--jq")
+							? "a".repeat(40)
+							: `---\nrepository: ${repo}\n---\n`,
+			}),
+			env: () => undefined,
+			stdout: (text) => {
+				output += text;
+			},
+			stderr: (text) => {
+				throw new Error(text);
+			},
+		},
+	);
+
+	assert.equal(code, 0);
+	assert.partialDeepStrictEqual(JSON.parse(output), {
+		attention: {
+			groups: {
+				blocked: [
+					{
+						runId: book.pin.runId,
+						prUrl: `https://github.com/${repo}/pull/99`,
+						reason,
+						status: "blocked",
+					},
+				],
+			},
+		},
+	});
+
+	const feed = await readOwnerFeed({ stateDir: root, repo });
+	assert.equal(feed.counts.blocked, 1);
+	assert.partialDeepStrictEqual(
+		feed.entries.filter((entry) => entry.runId === book.pin.runId),
+		[{ issue: 14, kind: "blocked", group: "needs_you", reason }],
+	);
+});
 
 test("an unverified claim appears once in blocked with the observation's age, and clears on recovery", async () => {
 	const root = fixture();

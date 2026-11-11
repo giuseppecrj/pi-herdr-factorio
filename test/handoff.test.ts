@@ -65,6 +65,8 @@ import type { JsonValue } from "../src/tickets.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
 import { storePatch, type PatchReceipt } from "../src/build.ts";
 import { controllerCandidatePort } from "../server/controller.ts";
+import { sandboxExecutor } from "../server/sandbox.ts";
+import type { Log } from "../src/orchestrator.ts";
 import { fileAdmissionStore } from "../src/admission.ts";
 import { CONTROLLER_LOGIN } from "../src/markers.ts";
 import {
@@ -7191,8 +7193,14 @@ test("feedback full status/outcome codec and pre-F10 books round-trip", () => {
 	});
 });
 
-for (const pinned of ["configured", "unconfigured", "unavailable"] as const)
-	test(`handoff requests the pinned WORKFLOW.md reviewers and never the repository owner (${pinned})`, async () => {
+for (const [pinned, via] of [
+	["configured", "controller"],
+	["unconfigured", "controller"],
+	["unavailable", "controller"],
+	// The installed executor routes the event to its own logger, not stderr.
+	["unconfigured", "sandbox"],
+] as const)
+	test(`handoff requests the pinned WORKFLOW.md reviewers and never the repository owner (${pinned}, ${via})`, async () => {
 		const root = mkdtempSync(join(tmpdir(), "handoff-reviewers-"));
 
 		try {
@@ -7280,12 +7288,19 @@ for (const pinned of ["configured", "unconfigured", "unavailable"] as const)
 				return github.exec(command, args);
 			};
 
-			const port = controllerCandidatePort({
+			const config = {
 				platform: EXE_DEV_PLATFORM,
 				stateDir: root,
 				exec,
-				log: (event, fields) => events.push({ event, fields }),
-			});
+				log: ((event, fields) => events.push({ event, fields })) satisfies Log,
+			};
+
+			const port =
+				via === "controller"
+					? controllerCandidatePort(config)
+					: sandboxExecutor({ ...config, xdgRuntimeDir: root }).candidate;
+
+			assert.ok(port);
 
 			await port
 				.execute(state, {
@@ -7335,7 +7350,22 @@ for (const pinned of ["configured", "unconfigured", "unavailable"] as const)
 
 			if (pinned === "unavailable") {
 				assert.deepEqual(requested, []);
-				assert.deepEqual(events, []);
+				// The first failed read is named, counted and retried, not held.
+				assert.deepEqual(events, [
+					{
+						event: "handoff_workflow_unavailable",
+						fields: {
+							issue: state.pin.issue,
+							runId: state.pin.runId,
+							workflowSha: state.pin.workflowSha,
+							kind: "unavailable",
+							reason: "read_failed",
+							failures: 1,
+							limit: 10,
+							held: false,
+						},
+					},
+				]);
 				assert.deepEqual(labeled, []);
 			}
 		} finally {
