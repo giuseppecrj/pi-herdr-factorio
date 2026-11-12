@@ -6,5 +6,11 @@ Each row is bound to the revision that made the move. The old path is valid at t
 
 | PR | Revision | Old path | New path | Symbols that moved |
 | --- | --- | --- | --- | --- |
+| L02 | 102e993 | `docs/prototypes/acceptance-isolation/probe.ts` | `.pi/skills/verify-factory/probes/acceptance-isolation/probe.ts` | The whole file |
+| L02 | 102e993 | `docs/prototypes/acceptance-isolation/self-test.mjs` | `.pi/skills/verify-factory/probes/acceptance-isolation/self-test.mjs` | The whole file |
+| L02 | 102e993 | `docs/prototypes/build-isolation/probe.ts` | `.pi/skills/verify-factory/probes/build-isolation/probe.ts` | The whole file |
+| L02 | 102e993 | `docs/prototypes/build-isolation/self-test.mjs` | `.pi/skills/verify-factory/probes/build-isolation/self-test.mjs` | The whole file |
+| L02 | 102e993 | `docs/prototypes/heldout-ci/repair-probe.ts` | `.pi/skills/verify-factory/probes/heldout-ci/repair-probe.ts` | The whole file |
+| L02 | fb25df3 | `.pi/skills/verify-factory/scripts/drive-replay.sh` | `.pi/skills/verify-factory/scripts/drive-replay.ts` | The inline node programs, as the subcommands `owned`, `visible-limit`, `production-free`, `settle`, `recovery-command`, `restore-fields`, `fixture-disarmed`, `fixture-ready`, `journal`, `preflight` and `prepare` |
 
-L00 moves no files. The first rows arrive with L02.
+L00 moves no files. L02 rows name commits on the `layout-l02-probes` branch. When L02 lands, its squash commit is the revision that makes these moves.
