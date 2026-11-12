@@ -1,0 +1,2488 @@
+{
+	"version": 1,
+	"planningBase": "5bd77d572cb2bccc9c1e636c0bbe56f086658a56",
+	"imports": {
+		"exclude": [
+			"test/acceptance/**",
+			"docs/prototypes/anthropic-route/**",
+			"docs/prototypes/ledger-branch/**",
+			"docs/prototypes/vm-sandbox/**"
+		],
+		"exceptions": [
+			{
+				"file": ".pi/skills/verify-factory/scripts/status-driver.ts",
+				"specifier": "./extension/index.ts",
+				"resolveFrom": ".",
+				"until": "L02",
+				"caller": ".pi/skills/verify-factory/scripts/drive-status.sh"
+			}
+		],
+		"reverseEdges": [
+			"src/accept.ts -> server/sandbox/json.ts",
+			"src/artifacts.ts -> server/sandbox/json.ts",
+			"src/build.ts -> server/sandbox/json.ts",
+			"src/cadence.ts -> server/sandbox/json.ts",
+			"src/diagnosis.ts -> server/sandbox/json.ts",
+			"src/explain.ts -> server/sandbox/json.ts",
+			"src/explain.ts -> server/sandbox.ts",
+			"src/feed.ts -> server/controller.ts",
+			"src/feed.ts -> server/sandbox/json.ts",
+			"src/feed.ts -> server/sandbox.ts",
+			"src/ledger.ts -> server/sandbox/json.ts",
+			"src/ledger.ts -> server/sandbox/result.ts",
+			"src/orchestrator.ts -> server/sandbox/result.ts",
+			"src/platform.ts -> server/sandbox/json.ts",
+			"src/publication.ts -> server/sandbox/json.ts",
+			"src/replay.ts -> server/sandbox/json.ts",
+			"src/replay.ts -> server/sandbox/manifest.ts",
+			"src/review.ts -> server/sandbox/anthropic-limits.ts",
+			"src/review.ts -> server/sandbox/audit.ts",
+			"src/review.ts -> server/sandbox/json.ts",
+			"src/scorers.ts -> server/sandbox/json.ts",
+			"src/validation.ts -> server/sandbox/json.ts",
+			"src/workflow.ts -> server/sandbox/anthropic-limits.ts"
+		]
+	},
+	"classification": {
+		"roots": ["src", "server", "host"],
+		"seatReader": {
+			"module": "src/review.ts",
+			"export": "reviewSeats"
+		},
+		"files": {
+			"server/README.md": {
+				"owner": "server",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/cli.ts": {
+				"owner": "host/cli",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/controller.ts": {
+				"owner": "host/controller",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/factory.service": {
+				"owner": "host/install",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/gates.ts": {
+				"owner": "host/gates",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/gates/draft-reporter.mjs": {
+				"owner": "host/gates",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/install-exe-dev.sh": {
+				"owner": "host/install",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/provision.sh": {
+				"owner": "host/install",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox.ts": {
+				"owner": "host/sandbox",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/anthropic-limits.ts": {
+				"owner": "src/core",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/assets/package-lock.json": {
+				"owner": "host/bundle",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/assets/package.json": {
+				"owner": "host/bundle",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/assets/pi.ts": {
+				"owner": "host/bundle",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/assets/stage-init.ts": {
+				"owner": "host/bundle",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/audit.ts": {
+				"owner": "host/gateway",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/bwrap.ts": {
+				"owner": "host/isolation",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/control.ts": {
+				"owner": "host/gateway",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/credentials.ts": {
+				"owner": "host/gateway",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/echo-fixture.ts": {
+				"owner": "host/sandbox",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/gateway-client.ts": {
+				"owner": "host/gateway",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/gateway-main.ts": {
+				"owner": "host/gateway",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/gateway.ts": {
+				"owner": "host/gateway",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/json.ts": {
+				"owner": "src/core",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/lines.ts": {
+				"owner": "host/sandbox",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/manifest.ts": {
+				"owner": "host/bundle",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/meter.ts": {
+				"owner": "host/gateway",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/policy.ts": {
+				"owner": "host/gateway",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/preflight.ts": {
+				"owner": "host/isolation",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/result.ts": {
+				"owner": "host/sandbox",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/routes.ts": {
+				"owner": "host/gateway",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/rpc.ts": {
+				"owner": "host/sandbox",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/scope.ts": {
+				"owner": "host/isolation",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/seccomp.ts": {
+				"owner": "host/isolation",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/settle.ts": {
+				"owner": "host/sandbox",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/viewer.ts": {
+				"owner": "host/viewer",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/viewer/claim.ts": {
+				"owner": "host/viewer",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/viewer/dashboard.ts": {
+				"owner": "host/viewer",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/viewer/design/SOURCE": {
+				"owner": "host/viewer",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/viewer/design/icons/NOTICE": {
+				"owner": "host/viewer",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/viewer/design/icons/icons.ts": {
+				"owner": "host/viewer",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/viewer/design/tokens.css": {
+				"owner": "host/viewer",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/viewer/design/tokens.json": {
+				"owner": "host/viewer",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/viewer/evidence.ts": {
+				"owner": "host/viewer",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/viewer/icon-192.png": {
+				"owner": "host/viewer",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/viewer/icon-512.png": {
+				"owner": "host/viewer",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/viewer/manifest.webmanifest": {
+				"owner": "host/viewer",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/viewer/render.ts": {
+				"owner": "host/viewer",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/viewer/style.css": {
+				"owner": "host/viewer",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/README.md": {
+				"owner": "src",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/accept.ts": {
+				"owner": "src/contract",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/adapters/github.ts": {
+				"owner": "src/github",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/admission.ts": {
+				"owner": "src/trust",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/artifacts.ts": {
+				"owner": "src/contract",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/attention.ts": {
+				"owner": "src/views",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/build.ts": {
+				"owner": "src/candidate",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/cadence.ts": {
+				"owner": "src/maintenance",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/diagnosis.ts": {
+				"owner": "src/candidate",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/explain.ts": {
+				"owner": "src/views",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/feed.ts": {
+				"owner": "src/views",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/feedback.ts": {
+				"owner": "src/candidate",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/gh.ts": {
+				"owner": "src/github",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/handoff.ts": {
+				"owner": "src/candidate",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/ledger.ts": {
+				"owner": "src/ledger",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/markers.ts": {
+				"owner": "src/trust",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/metrics.ts": {
+				"owner": "src/views",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/orchestrator.ts": {
+				"owner": "src/controller",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/platform.ts": {
+				"owner": "src/trust",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/policy.ts": {
+				"owner": "src/trust",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/publication.ts": {
+				"owner": "src/github",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/replay.ts": {
+				"owner": "src/maintenance",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/review.ts": {
+				"owner": "src/candidate",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/run.ts": {
+				"owner": "src/core",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/scorers.ts": {
+				"owner": "src/maintenance",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/specify.ts": {
+				"owner": "src/contract",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/stages.ts": {
+				"owner": "src/candidate",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/tickets.ts": {
+				"owner": "src/github",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/validation.ts": {
+				"owner": "src/candidate",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/workflow.ts": {
+				"owner": "src/config",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			}
+		},
+		"retired": {},
+		"routes": {
+			"package.json": [
+				"code-review",
+				"security-review",
+				"simplify",
+				"ultrareview"
+			],
+			"package-lock.json": [
+				"code-review",
+				"security-review",
+				"simplify",
+				"ultrareview"
+			],
+			"skills/build/SKILL.md": [
+				"code-review",
+				"security-review",
+				"simplify",
+				"ultrareview"
+			]
+		}
+	},
+	"readers": [
+		{
+			"id": "replay-stage-caps",
+			"kind": "constants",
+			"readers": ["src/replay.ts"],
+			"run": {
+				"module": "src/replay.ts",
+				"export": "replayStageCaps"
+			},
+			"declarations": [
+				{
+					"key": "accept",
+					"file": "src/accept.ts",
+					"name": "ACCEPTANCE_MAX_TOKENS"
+				},
+				{
+					"key": "build",
+					"file": "src/build.ts",
+					"name": "BUILD_MAX_TOKENS"
+				},
+				{
+					"key": "review",
+					"file": "src/run.ts",
+					"name": "REVIEW_MAX_TOKENS"
+				},
+				{
+					"key": "repair",
+					"file": "src/run.ts",
+					"name": "REPAIR_BUILD_MAX_TOKENS"
+				}
+			]
+		},
+		{
+			"id": "visible-test-deadline",
+			"kind": "constants",
+			"readers": [
+				".pi/skills/verify-factory/scripts/drive-replay.sh",
+				"test/integration/replay-driver.test.ts"
+			],
+			"declarations": [
+				{
+					"file": "server/sandbox.ts",
+					"name": "VISIBLE_LIMIT_MS"
+				}
+			]
+		},
+		{
+			"id": "replay-bundle-paths",
+			"kind": "paths",
+			"reader": "src/replay.ts",
+			"tokens": {
+				"const BUNDLE_PATHS = [\"skills\", \"server/sandbox/assets\", \"server/provision.sh\"];": 1
+			},
+			"targets": [
+				{
+					"path": "skills",
+					"type": "dir"
+				},
+				{
+					"path": "server/sandbox/assets",
+					"type": "dir"
+				},
+				{
+					"path": "server/provision.sh",
+					"type": "file"
+				}
+			]
+		},
+		{
+			"id": "replay-ls-tree",
+			"kind": "paths",
+			"reader": "src/replay.ts",
+			"tokens": {
+				"\"ls-tree\", \"-r\", \"--name-only\", sha, \"--\", \"skills\", \"server/sandbox/assets\", ]": 1
+			},
+			"targets": [
+				{
+					"path": "skills",
+					"type": "dir"
+				},
+				{
+					"path": "server/sandbox/assets",
+					"type": "dir"
+				}
+			]
+		},
+		{
+			"id": "replay-asset-map",
+			"kind": "paths",
+			"reader": "src/replay.ts",
+			"tokens": {
+				"[\"server/sandbox/assets/pi.ts\", \"sandbox/pi.ts\"]": 1,
+				"[\"server/sandbox/assets/stage-init.ts\", \"sandbox/stage-init.ts\"]": 1,
+				"[\"server/sandbox/assets/package.json\", \"pkg/package.json\"]": 1,
+				"[\"server/sandbox/assets/package-lock.json\", \"pkg/package-lock.json\"]": 1
+			},
+			"targets": [
+				{
+					"path": "server/sandbox/assets/pi.ts",
+					"type": "file"
+				},
+				{
+					"path": "server/sandbox/assets/stage-init.ts",
+					"type": "file"
+				},
+				{
+					"path": "server/sandbox/assets/package.json",
+					"type": "file"
+				},
+				{
+					"path": "server/sandbox/assets/package-lock.json",
+					"type": "file"
+				}
+			]
+		},
+		{
+			"id": "replay-recipe-diff",
+			"kind": "paths",
+			"reader": "src/replay.ts",
+			"tokens": {
+				"\"diff\", \"--name-only\", input.previousSha, input.candidateSha, \"--\", \"server/provision.sh\", ]": 1
+			},
+			"targets": [
+				{
+					"path": "server/provision.sh",
+					"type": "file"
+				}
+			]
+		},
+		{
+			"id": "replay-corpus",
+			"kind": "paths",
+			"reader": "src/replay.ts",
+			"tokens": {
+				"export const REPLAY_CORPUS = \"test/fixtures/replay\";": 1
+			},
+			"targets": [
+				{
+					"path": "test/fixtures/replay",
+					"type": "dir"
+				},
+				{
+					"path": "test/fixtures/replay/corpus.json",
+					"type": "file"
+				}
+			]
+		},
+		{
+			"id": "bundle-asset-files",
+			"kind": "paths",
+			"reader": "server/sandbox/manifest.ts",
+			"tokens": {
+				"[\"sandbox/pi.ts\", \"server/sandbox/assets/pi.ts\"]": 1,
+				"[\"sandbox/stage-init.ts\", \"server/sandbox/assets/stage-init.ts\"]": 1,
+				"[\"pkg/package.json\", \"server/sandbox/assets/package.json\"]": 1,
+				"[\"pkg/package-lock.json\", \"server/sandbox/assets/package-lock.json\"]": 1,
+				"join(sourceRoot, \"skills\")": 1
+			},
+			"targets": [
+				{
+					"path": "server/sandbox/assets/pi.ts",
+					"type": "file"
+				},
+				{
+					"path": "server/sandbox/assets/stage-init.ts",
+					"type": "file"
+				},
+				{
+					"path": "server/sandbox/assets/package.json",
+					"type": "file"
+				},
+				{
+					"path": "server/sandbox/assets/package-lock.json",
+					"type": "file"
+				},
+				{
+					"path": "skills",
+					"type": "dir"
+				}
+			]
+		},
+		{
+			"id": "gate-source-roots",
+			"kind": "paths",
+			"reader": "server/gates.ts",
+			"tokens": {
+				"const SOURCE = [\"src\", \"extension\", \"server\", \"skills\", \"scripts\"];": 1
+			},
+			"targets": [
+				{
+					"path": "src",
+					"type": "dir"
+				},
+				{
+					"path": "extension",
+					"type": "dir"
+				},
+				{
+					"path": "server",
+					"type": "dir"
+				},
+				{
+					"path": "skills",
+					"type": "dir"
+				},
+				{
+					"path": "scripts",
+					"type": "dir"
+				}
+			]
+		},
+		{
+			"id": "gate-draft-reporter",
+			"kind": "paths",
+			"reader": "server/gates.ts",
+			"tokens": {
+				"new URL(\"./gates/\", import.meta.url)": 1,
+				"join(detailReporter, \"draft-reporter.mjs\")": 1
+			},
+			"targets": [
+				{
+					"path": "server/gates/draft-reporter.mjs",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./gates/draft-reporter.mjs"
+					}
+				}
+			]
+		},
+		{
+			"id": "cli-source-root",
+			"kind": "paths",
+			"reader": "server/cli.ts",
+			"tokens": {
+				"sourceRoot: fileURLToPath(new URL(\"..\", import.meta.url))": 1
+			},
+			"targets": [
+				{
+					"path": ".",
+					"type": "dir",
+					"via": {
+						"from": "reader",
+						"path": ".."
+					}
+				}
+			]
+		},
+		{
+			"id": "cadence-repository-root",
+			"kind": "paths",
+			"reader": "server/controller.ts",
+			"tokens": {
+				"\"-C\", fileURLToPath(new URL(\"..\", import.meta.url)), \"diff\",": 1
+			},
+			"targets": [
+				{
+					"path": ".",
+					"type": "dir",
+					"via": {
+						"from": "reader",
+						"path": ".."
+					}
+				}
+			]
+		},
+		{
+			"id": "diagnosis-materializer",
+			"kind": "paths",
+			"reader": "server/controller.ts",
+			"tokens": {
+				"join(gate, \"server/gates.ts\")": 1,
+				"readFileSync(new URL(\"./gates.ts\", import.meta.url))": 1
+			},
+			"targets": [
+				{
+					"path": "server/gates.ts",
+					"type": "file",
+					"via": {
+						"from": ".",
+						"path": "server/gates.ts"
+					}
+				},
+				{
+					"path": "server/gates.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./gates.ts"
+					}
+				}
+			]
+		},
+		{
+			"id": "gateway-child",
+			"kind": "paths",
+			"reader": "server/sandbox/gateway-client.ts",
+			"tokens": {
+				"new URL(\"./gateway-main.ts\", import.meta.url)": 1
+			},
+			"targets": [
+				{
+					"path": "server/sandbox/gateway-main.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./gateway-main.ts"
+					}
+				}
+			]
+		},
+		{
+			"id": "viewer-assets",
+			"kind": "paths",
+			"reader": "server/viewer.ts",
+			"tokens": {
+				"[\"./viewer/design/tokens.css\", \"./viewer/style.css\"]": 1,
+				"new URL(`./viewer/${name}`, import.meta.url)": 1,
+				"path === \"/icon-192.png\" || path === \"/icon-512.png\"": 1
+			},
+			"targets": [
+				{
+					"path": "server/viewer/design/tokens.css",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./viewer/design/tokens.css"
+					}
+				},
+				{
+					"path": "server/viewer/style.css",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./viewer/style.css"
+					}
+				},
+				{
+					"path": "server/viewer/icon-192.png",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./viewer/icon-192.png"
+					}
+				},
+				{
+					"path": "server/viewer/icon-512.png",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./viewer/icon-512.png"
+					}
+				},
+				{
+					"path": "server/viewer/manifest.webmanifest",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./viewer/manifest.webmanifest"
+					}
+				}
+			]
+		},
+		{
+			"id": "formal-test-selection",
+			"kind": "paths",
+			"reader": "docs/statecharts/journey/replay-merge-mid-repair.ts",
+			"tokens": {
+				"[\"handoff\", \"orchestrator\", \"publication\"]": 1,
+				"new URL(`../../../test/${name}.test.ts`, import.meta.url)": 1
+			},
+			"targets": [
+				{
+					"path": "test/handoff.test.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../../test/handoff.test.ts"
+					}
+				},
+				{
+					"path": "test/orchestrator.test.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../../test/orchestrator.test.ts"
+					}
+				},
+				{
+					"path": "test/publication.test.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../../test/publication.test.ts"
+					}
+				}
+			]
+		},
+		{
+			"id": "provisioner-root",
+			"kind": "paths",
+			"reader": "server/provision.sh",
+			"tokens": {
+				"repo=$(cd \"$(dirname \"${BASH_SOURCE[0]}\")/..\" && pwd)": 1
+			},
+			"targets": [
+				{
+					"path": ".",
+					"type": "dir",
+					"via": {
+						"from": "reader",
+						"path": ".."
+					}
+				}
+			]
+		},
+		{
+			"id": "installer-continuation",
+			"kind": "paths",
+			"reader": "server/install-exe-dev.sh",
+			"tokens": {
+				"exec bash \"$checkout/server/install-exe-dev.sh\" --continue \"$checkout\"": 1,
+				"exec bash \"$staging/server/install-exe-dev.sh\" --continue \"$staging\"": 1,
+				"[ \"${BASH_SOURCE[0]}\" = \"$continuation/server/install-exe-dev.sh\" ]": 1,
+				"done <\"$1/server/factory.service\"": 1,
+				"bash \"$checkout/server/provision.sh\"": 1,
+				"node \"$checkout/server/cli.ts\" status --json": 2
+			},
+			"targets": [
+				{
+					"path": "server/install-exe-dev.sh",
+					"type": "file"
+				},
+				{
+					"path": "server/factory.service",
+					"type": "file"
+				},
+				{
+					"path": "server/provision.sh",
+					"type": "file"
+				},
+				{
+					"path": "server/cli.ts",
+					"type": "file"
+				}
+			]
+		},
+		{
+			"id": "service-entry",
+			"kind": "paths",
+			"reader": "server/factory.service",
+			"tokens": {
+				"WorkingDirectory=/home/exedev/pi-herdr-factorio": 1,
+				"node server/cli.ts serve": 1
+			},
+			"targets": [
+				{
+					"path": "server/cli.ts",
+					"type": "file"
+				}
+			]
+		},
+		{
+			"id": "acceptance-import-depth",
+			"kind": "paths",
+			"reader": "src/accept.ts",
+			"tokens": {
+				"export const ACCEPTANCE_OUTPUT_DIR = \"checks\";": 1,
+				"A file directly in that directory is exactly four parent directories below the repository root": 1,
+				"import with ../../../../ from there, for example ../../../../src/x.ts": 1
+			},
+			"targets": [
+				{
+					"path": "src",
+					"type": "dir",
+					"via": {
+						"from": "test/acceptance/<ticket>/checks",
+						"path": "../../../../src"
+					}
+				}
+			]
+		},
+		{
+			"id": "acceptance-suite-dir",
+			"kind": "paths",
+			"reader": "src/policy.ts",
+			"tokens": {
+				"export const ACCEPTANCE_SUITE_DIR = \"test/acceptance\";": 1
+			},
+			"targets": [
+				{
+					"path": "test/acceptance",
+					"type": "dir"
+				}
+			]
+		},
+		{
+			"id": "test-reads-accept",
+			"kind": "paths",
+			"reader": "test/accept.test.ts",
+			"tokens": {
+				"readFileSync(\"skills/acceptance/SKILL.md\"": 1,
+				"readFileSync(\".github/factory/gates/scan-rules.json\"": 1,
+				"resolve(\".github/factory/gates\")": 1
+			},
+			"targets": [
+				{
+					"path": "skills/acceptance/SKILL.md",
+					"type": "file"
+				},
+				{
+					"path": ".github/factory/gates/scan-rules.json",
+					"type": "file"
+				},
+				{
+					"path": ".github/factory/gates",
+					"type": "dir"
+				}
+			]
+		},
+		{
+			"id": "test-reads-artifacts",
+			"kind": "paths",
+			"reader": "test/artifacts.test.ts",
+			"tokens": {
+				"\"docs/prototypes/acceptance-isolation/self-test.mjs\"": 1,
+				"readFileSync(\"server/sandbox/bwrap.ts\"": 1
+			},
+			"targets": [
+				{
+					"path": "docs/prototypes/acceptance-isolation/self-test.mjs",
+					"type": "file"
+				},
+				{
+					"path": "server/sandbox/bwrap.ts",
+					"type": "file"
+				}
+			]
+		},
+		{
+			"id": "test-reads-attention",
+			"kind": "paths",
+			"reader": "test/attention.test.ts",
+			"tokens": {
+				"\"--experimental-strip-types\", \"server/cli.ts\", \"status\"": 1
+			},
+			"targets": [
+				{
+					"path": "server/cli.ts",
+					"type": "file"
+				}
+			]
+		},
+		{
+			"id": "test-reads-base-check",
+			"kind": "paths",
+			"reader": "test/base-check.test.ts",
+			"tokens": {
+				"resolve(\".github/factory/gates/reporter.mjs\")": 1,
+				"resolve(\".github/factory/gates\")": 3,
+				"readFileSync(\".github/factory/gates/scan-rules.json\"": 1,
+				"resolve(\"test/fixtures/oracle-corpus\"": 1
+			},
+			"targets": [
+				{
+					"path": ".github/factory/gates/reporter.mjs",
+					"type": "file"
+				},
+				{
+					"path": ".github/factory/gates",
+					"type": "dir"
+				},
+				{
+					"path": ".github/factory/gates/scan-rules.json",
+					"type": "file"
+				},
+				{
+					"path": "test/fixtures/oracle-corpus",
+					"type": "dir"
+				}
+			]
+		},
+		{
+			"id": "test-reads-build",
+			"kind": "paths",
+			"reader": "test/build.test.ts",
+			"tokens": {
+				"new URL(\"./fixtures/build/commands.jsonl\", import.meta.url)": 1
+			},
+			"targets": [
+				{
+					"path": "test/fixtures/build/commands.jsonl",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./fixtures/build/commands.jsonl"
+					}
+				}
+			]
+		},
+		{
+			"id": "test-reads-cadence",
+			"kind": "paths",
+			"reader": "test/cadence.test.ts",
+			"tokens": {
+				"new URL(\"../.github/factory/WORKFLOW.md\", import.meta.url)": 1,
+				"new URL(\"../skills/security-review/SKILL.md\", import.meta.url)": 1,
+				"new URL(\"fixtures/metrics/runs-2026-11-08.jsonl\", import.meta.url)": 1,
+				"new URL(\"fixtures/cadence/snapshot.json.gz\", import.meta.url)": 1,
+				"new URL(\"fixtures/cadence/calibration.json\", import.meta.url)": 1,
+				"join(sourceRoot, \"server/sandbox/assets\"": 1
+			},
+			"targets": [
+				{
+					"path": ".github/factory/WORKFLOW.md",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../.github/factory/WORKFLOW.md"
+					}
+				},
+				{
+					"path": "skills/security-review/SKILL.md",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../skills/security-review/SKILL.md"
+					}
+				},
+				{
+					"path": "test/fixtures/metrics/runs-2026-11-08.jsonl",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "fixtures/metrics/runs-2026-11-08.jsonl"
+					}
+				},
+				{
+					"path": "test/fixtures/cadence/snapshot.json.gz",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "fixtures/cadence/snapshot.json.gz"
+					}
+				},
+				{
+					"path": "test/fixtures/cadence/calibration.json",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "fixtures/cadence/calibration.json"
+					}
+				},
+				{
+					"path": "server/sandbox/assets",
+					"type": "dir"
+				}
+			]
+		},
+		{
+			"id": "test-reads-candidate-gates",
+			"kind": "paths",
+			"reader": "test/candidate-gates.test.ts",
+			"tokens": {
+				"readFileSync(\".github/factory/gates/freeze.mjs\"": 1,
+				"readFileSync(\".github/factory/gates/reporter.mjs\"": 1,
+				"readFileSync(\".github/factory/gates/scan-rules.json\"": 1,
+				"new URL(\"../.github/factory/gates/freeze.mjs\", import.meta.url)": 1,
+				"join(root, \".github/factory/gates/gates.json\")": 1,
+				"join(root, \"package.json\")": 1,
+				"join(root, \".github/workflows/check.yml\")": 1,
+				"join(root, \".github/workflows/ci.yml\")": 1
+			},
+			"targets": [
+				{
+					"path": ".github/factory/gates/freeze.mjs",
+					"type": "file"
+				},
+				{
+					"path": ".github/factory/gates/reporter.mjs",
+					"type": "file"
+				},
+				{
+					"path": ".github/factory/gates/scan-rules.json",
+					"type": "file"
+				},
+				{
+					"path": ".github/factory/gates/freeze.mjs",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../.github/factory/gates/freeze.mjs"
+					}
+				},
+				{
+					"path": ".github/factory/gates/gates.json",
+					"type": "file"
+				},
+				{
+					"path": "package.json",
+					"type": "file"
+				},
+				{
+					"path": ".github/workflows/check.yml",
+					"type": "file"
+				},
+				{
+					"path": ".github/workflows/ci.yml",
+					"type": "file"
+				}
+			]
+		},
+		{
+			"id": "test-reads-dashboard",
+			"kind": "paths",
+			"reader": "test/dashboard.test.ts",
+			"tokens": {
+				"new URL(\"./fixtures/metrics/runs-2026-11-08.jsonl\", import.meta.url)": 1
+			},
+			"targets": [
+				{
+					"path": "test/fixtures/metrics/runs-2026-11-08.jsonl",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./fixtures/metrics/runs-2026-11-08.jsonl"
+					}
+				}
+			]
+		},
+		{
+			"id": "test-reads-decisions-format",
+			"kind": "paths",
+			"reader": "test/decisions-format.test.ts",
+			"tokens": {
+				"join(repo, \"scripts/check-decisions.mjs\")": 1,
+				"const file = \"docs/decisions.tsv\"": 1,
+				"join(repo, \"scripts/decisions-checkpoint.json\")": 1
+			},
+			"targets": [
+				{
+					"path": "scripts/check-decisions.mjs",
+					"type": "file"
+				},
+				{
+					"path": "docs/decisions.tsv",
+					"type": "file"
+				},
+				{
+					"path": "scripts/decisions-checkpoint.json",
+					"type": "file"
+				}
+			]
+		},
+		{
+			"id": "test-reads-design-tokens",
+			"kind": "paths",
+			"reader": "test/design-tokens.test.ts",
+			"tokens": {
+				"new URL(\"../server/viewer/design/tokens.css\", import.meta.url)": 1,
+				"\"scripts/design-tokens.mjs\"": 1
+			},
+			"targets": [
+				{
+					"path": "server/viewer/design/tokens.css",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../server/viewer/design/tokens.css"
+					}
+				},
+				{
+					"path": "scripts/design-tokens.mjs",
+					"type": "file"
+				}
+			]
+		},
+		{
+			"id": "test-reads-diagnosis",
+			"kind": "paths",
+			"reader": "test/diagnosis.test.ts",
+			"tokens": {
+				"resolve(\"test/fixtures/oracle-corpus/patches\")": 1,
+				"for (const name of [\"freeze.mjs\", \"reporter.mjs\", \"scan-rules.json\"])": 1,
+				"`HEAD:.github/factory/gates/${name}`": 1,
+				"\"src/diagnosis.ts\", \"server/gates.ts\", \"server/controller.ts\", ])": 1
+			},
+			"targets": [
+				{
+					"path": "test/fixtures/oracle-corpus/patches",
+					"type": "dir"
+				},
+				{
+					"path": ".github/factory/gates/freeze.mjs",
+					"type": "file"
+				},
+				{
+					"path": ".github/factory/gates/reporter.mjs",
+					"type": "file"
+				},
+				{
+					"path": ".github/factory/gates/scan-rules.json",
+					"type": "file"
+				},
+				{
+					"path": ".github/factory/gates",
+					"type": "dir"
+				},
+				{
+					"path": "src/diagnosis.ts",
+					"type": "file"
+				},
+				{
+					"path": "server/gates.ts",
+					"type": "file"
+				},
+				{
+					"path": "server/controller.ts",
+					"type": "file"
+				}
+			]
+		},
+		{
+			"id": "test-reads-draft-feedback",
+			"kind": "paths",
+			"reader": "test/draft-feedback.test.ts",
+			"tokens": {
+				"resolve(\".github/factory/gates/reporter.mjs\")": 2,
+				"resolve(\"server/gates/draft-reporter.mjs\")": 2
+			},
+			"targets": [
+				{
+					"path": ".github/factory/gates/reporter.mjs",
+					"type": "file"
+				},
+				{
+					"path": "server/gates/draft-reporter.mjs",
+					"type": "file"
+				}
+			]
+		},
+		{
+			"id": "test-reads-explain",
+			"kind": "paths",
+			"reader": "test/explain.test.ts",
+			"tokens": {
+				"new URL(\"fixtures/metrics/runs-2026-11-08.jsonl\", import.meta.url)": 1,
+				"join(source, \"server/sandbox/assets\"": 1
+			},
+			"targets": [
+				{
+					"path": "test/fixtures/metrics/runs-2026-11-08.jsonl",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "fixtures/metrics/runs-2026-11-08.jsonl"
+					}
+				},
+				{
+					"path": "server/sandbox/assets",
+					"type": "dir"
+				}
+			]
+		},
+		{
+			"id": "test-reads-extension",
+			"kind": "paths",
+			"reader": "test/extension.test.ts",
+			"tokens": {
+				"readFileSync(\"package.json\"": 1
+			},
+			"targets": [
+				{
+					"path": "package.json",
+					"type": "file"
+				}
+			]
+		},
+		{
+			"id": "test-reads-fake-ticket-adapter",
+			"kind": "paths",
+			"reader": "test/fake-ticket-adapter.ts",
+			"tokens": {
+				"new URL(\"../.github/factory/WORKFLOW.md\", import.meta.url)": 1
+			},
+			"targets": [
+				{
+					"path": ".github/factory/WORKFLOW.md",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../.github/factory/WORKFLOW.md"
+					}
+				}
+			]
+		},
+		{
+			"id": "test-reads-feed",
+			"kind": "paths",
+			"reader": "test/feed.test.ts",
+			"tokens": {
+				"new URL(\"./fixtures/owner-feed/feed-v1.json\", import.meta.url)": 2
+			},
+			"targets": [
+				{
+					"path": "test/fixtures/owner-feed/feed-v1.json",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./fixtures/owner-feed/feed-v1.json"
+					}
+				}
+			]
+		},
+		{
+			"id": "test-reads-github-adapter",
+			"kind": "paths",
+			"reader": "test/github-adapter.test.ts",
+			"tokens": {
+				"new URL(\"./fixtures/feedback/github-review.json\", import.meta.url)": 2
+			},
+			"targets": [
+				{
+					"path": "test/fixtures/feedback/github-review.json",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./fixtures/feedback/github-review.json"
+					}
+				}
+			]
+		},
+		{
+			"id": "test-reads-install-exe-dev",
+			"kind": "paths",
+			"reader": "test/install-exe-dev.test.ts",
+			"tokens": {
+				"new URL(\"../server/install-exe-dev.sh\", import.meta.url)": 1,
+				"join(root, \"server/factory.service\")": 2
+			},
+			"targets": [
+				{
+					"path": "server/install-exe-dev.sh",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../server/install-exe-dev.sh"
+					}
+				},
+				{
+					"path": "server/factory.service",
+					"type": "file"
+				}
+			]
+		},
+		{
+			"id": "test-reads-integration-replay-driver",
+			"kind": "paths",
+			"reader": "test/integration/replay-driver.test.ts",
+			"tokens": {
+				"const script = \".pi/skills/verify-factory/scripts/drive-replay.sh\"": 1,
+				"readFile(\"server/sandbox.ts\"": 1,
+				"\"src\", \"server\", \"skills\", \"package.json\", \"README.md\", \"docs/decisions.tsv\", \".github/factory\", \"test/fixtures/replay\", script, \".pi/skills/verify-factory/scripts/lane-id.sh\",": 1,
+				"join(control, \"test/fixtures/replay/corpus.json\")": 1,
+				"join(control, \"docs/decisions.tsv\")": 1,
+				"join(control, \"server/sandbox/assets\", from)": 1,
+				"join(control, \"test/fixtures/replay/cases/c3/issue.md\")": 1,
+				"join(control, \"src/replay.ts\")": 1,
+				"readFile(\"test/fixtures/metrics/runs-2026-11-08.jsonl\"": 1
+			},
+			"targets": [
+				{
+					"path": ".pi/skills/verify-factory/scripts/drive-replay.sh",
+					"type": "file"
+				},
+				{
+					"path": "server/sandbox.ts",
+					"type": "file"
+				},
+				{
+					"path": "src",
+					"type": "dir"
+				},
+				{
+					"path": "server",
+					"type": "dir"
+				},
+				{
+					"path": "skills",
+					"type": "dir"
+				},
+				{
+					"path": "package.json",
+					"type": "file"
+				},
+				{
+					"path": "README.md",
+					"type": "file"
+				},
+				{
+					"path": "docs/decisions.tsv",
+					"type": "file"
+				},
+				{
+					"path": ".github/factory",
+					"type": "dir"
+				},
+				{
+					"path": "test/fixtures/replay",
+					"type": "dir"
+				},
+				{
+					"path": ".pi/skills/verify-factory/scripts/lane-id.sh",
+					"type": "file"
+				},
+				{
+					"path": "test/fixtures/replay/corpus.json",
+					"type": "file"
+				},
+				{
+					"path": "server/sandbox/assets",
+					"type": "dir"
+				},
+				{
+					"path": "test/fixtures/replay/cases/c3/issue.md",
+					"type": "file"
+				},
+				{
+					"path": "src/replay.ts",
+					"type": "file"
+				},
+				{
+					"path": "test/fixtures/metrics/runs-2026-11-08.jsonl",
+					"type": "file"
+				}
+			]
+		},
+		{
+			"id": "test-reads-layout",
+			"kind": "paths",
+			"reader": "test/layout.test.ts",
+			"tokens": {
+				"join(repo, \"scripts/check-layout.mjs\")": 1,
+				"join(repo, \"scripts/check-decisions.mjs\")": 1
+			},
+			"targets": [
+				{
+					"path": "scripts/check-layout.mjs",
+					"type": "file"
+				},
+				{
+					"path": "scripts/check-decisions.mjs",
+					"type": "file"
+				}
+			]
+		},
+		{
+			"id": "test-reads-ledger",
+			"kind": "paths",
+			"reader": "test/ledger.test.ts",
+			"tokens": {
+				"new URL(\"./fixtures/metrics/runs-2026-11-08.jsonl\", import.meta.url)": 1
+			},
+			"targets": [
+				{
+					"path": "test/fixtures/metrics/runs-2026-11-08.jsonl",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./fixtures/metrics/runs-2026-11-08.jsonl"
+					}
+				}
+			]
+		},
+		{
+			"id": "test-reads-metrics",
+			"kind": "paths",
+			"reader": "test/metrics.test.ts",
+			"tokens": {
+				"new URL(\"./fixtures/metrics/runs-2026-11-08.jsonl\", import.meta.url)": 1,
+				"new URL(\"../src/metrics.ts\", import.meta.url)": 1,
+				"new URL(\"../server/cli.ts\", import.meta.url)": 2
+			},
+			"targets": [
+				{
+					"path": "test/fixtures/metrics/runs-2026-11-08.jsonl",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./fixtures/metrics/runs-2026-11-08.jsonl"
+					}
+				},
+				{
+					"path": "src/metrics.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../src/metrics.ts"
+					}
+				},
+				{
+					"path": "server/cli.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../server/cli.ts"
+					}
+				}
+			]
+		},
+		{
+			"id": "test-reads-orchestrator",
+			"kind": "paths",
+			"reader": "test/orchestrator.test.ts",
+			"tokens": {
+				"new URL(\"../server/factory.service\", import.meta.url)": 1,
+				"new URL(\"../server/controller.ts\", import.meta.url)": 1,
+				"\"../.pi/skills/verify-factory/features/sandbox-stage.md\"": 1,
+				"\"./fixtures/feedback/github-review.json\"": 2
+			},
+			"targets": [
+				{
+					"path": "server/factory.service",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../server/factory.service"
+					}
+				},
+				{
+					"path": "server/controller.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../server/controller.ts"
+					}
+				},
+				{
+					"path": ".pi/skills/verify-factory/features/sandbox-stage.md",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../.pi/skills/verify-factory/features/sandbox-stage.md"
+					}
+				},
+				{
+					"path": "test/fixtures/feedback/github-review.json",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./fixtures/feedback/github-review.json"
+					}
+				}
+			]
+		},
+		{
+			"id": "test-reads-platform",
+			"kind": "paths",
+			"reader": "test/platform.test.ts",
+			"tokens": {
+				"new URL(\"../server/sandbox/gateway-main.ts\", import.meta.url)": 1
+			},
+			"targets": [
+				{
+					"path": "server/sandbox/gateway-main.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../server/sandbox/gateway-main.ts"
+					}
+				}
+			]
+		},
+		{
+			"id": "test-reads-provision",
+			"kind": "paths",
+			"reader": "test/provision.test.ts",
+			"tokens": {
+				"new URL(\"../server/provision.sh\", import.meta.url)": 1,
+				"new URL(\"../server/factory.service\", import.meta.url)": 1
+			},
+			"targets": [
+				{
+					"path": "server/provision.sh",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../server/provision.sh"
+					}
+				},
+				{
+					"path": "server/factory.service",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../server/factory.service"
+					}
+				}
+			]
+		},
+		{
+			"id": "test-reads-replay",
+			"kind": "paths",
+			"reader": "test/replay.test.ts",
+			"tokens": {
+				"new URL(\"./fixtures/replay/\", import.meta.url)": 1,
+				"new URL(\"./fixtures/metrics/runs-2026-11-08.jsonl\", import.meta.url)": 1,
+				"new URL(\"../src/replay.ts\", import.meta.url)": 2,
+				"new URL(\"../src/platform.ts\", import.meta.url)": 1,
+				"\"../.pi/skills/verify-factory/scripts/drive-replay.sh\"": 1
+			},
+			"targets": [
+				{
+					"path": "test/fixtures/replay",
+					"type": "dir",
+					"via": {
+						"from": "reader",
+						"path": "./fixtures/replay"
+					}
+				},
+				{
+					"path": "test/fixtures/metrics/runs-2026-11-08.jsonl",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./fixtures/metrics/runs-2026-11-08.jsonl"
+					}
+				},
+				{
+					"path": "src/replay.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../src/replay.ts"
+					}
+				},
+				{
+					"path": "src/platform.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../src/platform.ts"
+					}
+				},
+				{
+					"path": ".pi/skills/verify-factory/scripts/drive-replay.sh",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../.pi/skills/verify-factory/scripts/drive-replay.sh"
+					}
+				}
+			]
+		},
+		{
+			"id": "test-reads-sandbox-assets",
+			"kind": "paths",
+			"reader": "test/sandbox/assets.cases.ts",
+			"tokens": {
+				"new URL(\"../../server/sandbox/assets/\", import.meta.url)": 1,
+				"new URL(\"../../package-lock.json\", import.meta.url)": 1,
+				"new URL(\"../../server/provision.sh\", import.meta.url)": 1
+			},
+			"targets": [
+				{
+					"path": "server/sandbox/assets",
+					"type": "dir",
+					"via": {
+						"from": "reader",
+						"path": "../../server/sandbox/assets"
+					}
+				},
+				{
+					"path": "package-lock.json",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../package-lock.json"
+					}
+				},
+				{
+					"path": "server/provision.sh",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../server/provision.sh"
+					}
+				}
+			]
+		},
+		{
+			"id": "test-reads-sandbox-gateway",
+			"kind": "paths",
+			"reader": "test/sandbox/gateway.cases.ts",
+			"tokens": {
+				"new URL(\"./http-fixtures.ts\", import.meta.url)": 1,
+				"\"./fixtures/pi-1.4.0-anthropic-accept-request.json\"": 1,
+				"new URL(\"../../server/sandbox/gateway-main.ts\", import.meta.url)": 3
+			},
+			"targets": [
+				{
+					"path": "test/sandbox/http-fixtures.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./http-fixtures.ts"
+					}
+				},
+				{
+					"path": "test/sandbox/fixtures/pi-1.4.0-anthropic-accept-request.json",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./fixtures/pi-1.4.0-anthropic-accept-request.json"
+					}
+				},
+				{
+					"path": "server/sandbox/gateway-main.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../server/sandbox/gateway-main.ts"
+					}
+				}
+			]
+		},
+		{
+			"id": "test-reads-sandbox-launcher",
+			"kind": "paths",
+			"reader": "test/sandbox/launcher.cases.ts",
+			"tokens": {
+				"new URL(\"../../server/provision.sh\", import.meta.url)": 1,
+				"new URL(\"./receipt-exit.ts\", import.meta.url)": 1
+			},
+			"targets": [
+				{
+					"path": "server/provision.sh",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../server/provision.sh"
+					}
+				},
+				{
+					"path": "test/sandbox/receipt-exit.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./receipt-exit.ts"
+					}
+				}
+			]
+		},
+		{
+			"id": "test-reads-sandbox-runner",
+			"kind": "paths",
+			"reader": "test/sandbox/runner.cases.ts",
+			"tokens": {
+				"new URL(\"./fixtures/\", import.meta.url)": 1,
+				"new URL(\"../fixtures/build/commands.jsonl\", import.meta.url)": 1,
+				"new URL(\"../fixtures/efficiency/accept-replay.json\", import.meta.url)": 1,
+				"readFileSync(\".github/factory/WORKFLOW.md\"": 1,
+				"join(process.cwd(), \".github/factory/gates\")": 1,
+				"new URL(\"../fixtures/efficiency/replay.json\", import.meta.url)": 1,
+				"new URL(\"../../.github/factory/WORKFLOW.md\", import.meta.url)": 1,
+				"new URL(\"./fake-pi.ts\", import.meta.url)": 1,
+				"new URL(\"../../skills/address-pr-comments/SKILL.md\", import.meta.url)": 1
+			},
+			"targets": [
+				{
+					"path": "test/sandbox/fixtures",
+					"type": "dir",
+					"via": {
+						"from": "reader",
+						"path": "./fixtures"
+					}
+				},
+				{
+					"path": "test/fixtures/build/commands.jsonl",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../fixtures/build/commands.jsonl"
+					}
+				},
+				{
+					"path": "test/fixtures/efficiency/accept-replay.json",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../fixtures/efficiency/accept-replay.json"
+					}
+				},
+				{
+					"path": ".github/factory/WORKFLOW.md",
+					"type": "file"
+				},
+				{
+					"path": ".github/factory/gates",
+					"type": "dir"
+				},
+				{
+					"path": "test/fixtures/efficiency/replay.json",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../fixtures/efficiency/replay.json"
+					}
+				},
+				{
+					"path": ".github/factory/WORKFLOW.md",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../.github/factory/WORKFLOW.md"
+					}
+				},
+				{
+					"path": "test/sandbox/fake-pi.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./fake-pi.ts"
+					}
+				},
+				{
+					"path": "skills/address-pr-comments/SKILL.md",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../skills/address-pr-comments/SKILL.md"
+					}
+				}
+			]
+		},
+		{
+			"id": "test-reads-scorers",
+			"kind": "paths",
+			"reader": "test/scorers.test.ts",
+			"tokens": {
+				"new URL(\"fixtures/metrics/runs-2026-11-08.jsonl\", import.meta.url)": 2
+			},
+			"targets": [
+				{
+					"path": "test/fixtures/metrics/runs-2026-11-08.jsonl",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "fixtures/metrics/runs-2026-11-08.jsonl"
+					}
+				}
+			]
+		},
+		{
+			"id": "test-reads-validation",
+			"kind": "paths",
+			"reader": "test/validation.test.ts",
+			"tokens": {
+				"new URL(\"../.github/workflows/ci.yml\", import.meta.url)": 1,
+				"join(import.meta.dirname, \"../.github/factory/gates/reporter.mjs\")": 1
+			},
+			"targets": [
+				{
+					"path": ".github/workflows/ci.yml",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../.github/workflows/ci.yml"
+					}
+				},
+				{
+					"path": ".github/factory/gates/reporter.mjs",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../.github/factory/gates/reporter.mjs"
+					}
+				}
+			]
+		},
+		{
+			"id": "test-reads-viewer-style",
+			"kind": "paths",
+			"reader": "test/viewer-style.test.ts",
+			"tokens": {
+				"read(\"../server/viewer/style.css\")": 2,
+				"read(\"../server/viewer/design/tokens.css\")": 1,
+				"read(\"../server/viewer/design/tokens.json\")": 1
+			},
+			"targets": [
+				{
+					"path": "server/viewer/style.css",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../server/viewer/style.css"
+					}
+				},
+				{
+					"path": "server/viewer/design/tokens.css",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../server/viewer/design/tokens.css"
+					}
+				},
+				{
+					"path": "server/viewer/design/tokens.json",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../server/viewer/design/tokens.json"
+					}
+				}
+			]
+		},
+		{
+			"id": "test-reads-viewer",
+			"kind": "paths",
+			"reader": "test/viewer.test.ts",
+			"tokens": {
+				"new URL(\"../server/viewer.ts\", import.meta.url)": 1
+			},
+			"targets": [
+				{
+					"path": "server/viewer.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../server/viewer.ts"
+					}
+				}
+			]
+		},
+		{
+			"id": "test-reads-workflow",
+			"kind": "paths",
+			"reader": "test/workflow.test.ts",
+			"tokens": {
+				"readFileSync(\".github/factory/WORKFLOW.md\"": 1,
+				"new URL(\"../server/cli.ts\", import.meta.url)": 2
+			},
+			"targets": [
+				{
+					"path": ".github/factory/WORKFLOW.md",
+					"type": "file"
+				},
+				{
+					"path": "server/cli.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../server/cli.ts"
+					}
+				}
+			]
+		}
+	],
+	"literals": {
+		"configs": [
+			"package.json",
+			"tsconfig.json",
+			"biome.json",
+			".oxlintrc.json",
+			".github/factory/gates/gates.json",
+			".github/factory/gates/biome.json"
+		],
+		"exclude": [
+			"test/acceptance/**",
+			"test/**",
+			"docs/prototypes/anthropic-route/**",
+			"docs/prototypes/ledger-branch/**",
+			"docs/prototypes/vm-sandbox/**",
+			"test/fixtures/**"
+		],
+		"allow": [
+			{
+				"reason": "scorerTouched treats any future file under this prefix as a scorer change; the folder does not exist yet",
+				"files": ["src/scorers.ts"],
+				"paths": [".github/factory/scorers/"]
+			},
+			{
+				"reason": "example paths inside stage prompt text, not repository reads",
+				"files": ["src/review.ts", "src/specify.ts"],
+				"paths": ["src/example.ts", "test/existing.test.ts"]
+			},
+			{
+				"reason": "synthetic held-out suites that the gate probes write into temporary repositories",
+				"files": [
+					"docs/prototypes/heldout-ci/**",
+					"docs/prototypes/trusted-ci/**"
+				],
+				"globs": ["test/acceptance/*", "test/acceptance/**"]
+			},
+			{
+				"reason": "synthetic candidate files that the trusted-ci probe writes into its temporary repository",
+				"files": ["docs/prototypes/trusted-ci/**"],
+				"paths": [
+					"src/.editorconfig",
+					"src/.gitignore",
+					"src/.oxlintrc.json",
+					"src/biome.json",
+					"src/gate-cheat.ts",
+					"src/gate-format.ts",
+					"src/gate-lint.ts",
+					"src/gate-stream.ts",
+					"src/gate-types.ts",
+					"test/gate-new.cases.ts",
+					"test/gate-new.test.ts",
+					"test/new-thing.test.ts"
+				]
+			}
+		]
+	},
+	"shell": {
+		"files": [
+			"server/*.sh",
+			"server/*.service",
+			"host/**/*.sh",
+			"host/**/*.service",
+			".pi/**/*.sh",
+			"scripts/*.sh",
+			".github/workflows/*.yml"
+		],
+		"inventory": {
+			".github/workflows/check.yml": {
+				"tokens": {}
+			},
+			".github/workflows/ci.yml": {
+				"tokens": {
+					".github/workflows/ci.yml": {
+						"path": ".github/workflows/ci.yml",
+						"type": "file"
+					},
+					"server/cli.ts": {
+						"path": "server/cli.ts",
+						"type": "file"
+					},
+					"test/acceptance": {
+						"path": "test/acceptance",
+						"type": "dir"
+					}
+				}
+			},
+			".pi/skills/verify-factory/scripts/cleanup.sh": {
+				"tokens": {}
+			},
+			".pi/skills/verify-factory/scripts/doctor.sh": {
+				"tokens": {}
+			},
+			".pi/skills/verify-factory/scripts/drive-admit.sh": {
+				"tokens": {
+					"server/cli.ts": {
+						"path": "server/cli.ts",
+						"type": "file"
+					}
+				}
+			},
+			".pi/skills/verify-factory/scripts/drive-gh.sh": {
+				"tokens": {}
+			},
+			".pi/skills/verify-factory/scripts/drive-replay.sh": {
+				"tokens": {
+					".pi/skills/verify-factory/scripts/drive-replay.sh": {
+						"path": ".pi/skills/verify-factory/scripts/drive-replay.sh",
+						"type": "file"
+					},
+					"docs/decisions.tsv": {
+						"path": "docs/decisions.tsv",
+						"type": "file"
+					},
+					".pi/skills/verify-factory/scripts/lane-id.sh": {
+						"path": ".pi/skills/verify-factory/scripts/lane-id.sh",
+						"type": "file"
+					},
+					"server/cli.ts": {
+						"path": "server/cli.ts",
+						"type": "file"
+					},
+					"server/sandbox.ts": {
+						"path": "server/sandbox.ts",
+						"type": "file"
+					},
+					"./server/controller.ts": {
+						"path": "server/controller.ts",
+						"type": "file"
+					},
+					"./src/replay.ts": {
+						"path": "src/replay.ts",
+						"type": "file"
+					},
+					"./src/run.ts": {
+						"path": "src/run.ts",
+						"type": "file"
+					},
+					"./server/sandbox.ts": {
+						"path": "server/sandbox.ts",
+						"type": "file"
+					},
+					"./src/platform.ts": {
+						"path": "src/platform.ts",
+						"type": "file"
+					},
+					"./src/workflow.ts": {
+						"path": "src/workflow.ts",
+						"type": "file"
+					},
+					".github/factory/WORKFLOW.md": {
+						"path": ".github/factory/WORKFLOW.md",
+						"type": "file"
+					}
+				},
+				"imports": {
+					"./server/controller.ts": ["readDurableAccounting", "readLock"],
+					"./src/replay.ts": [
+						"REPLAY_CORPUS",
+						"loadReplayCorpus",
+						"readReplayBudget",
+						"readReplayRecord",
+						"replayRow",
+						"replayStageCaps",
+						"reserveReplay",
+						"settleReplay",
+						"voidReplay"
+					],
+					"./src/run.ts": ["digestOf"],
+					"./server/sandbox.ts": ["sandboxExecutor"],
+					"./src/platform.ts": [
+						"readPlatformFile",
+						"resolvePlatform",
+						"soleRepository"
+					],
+					"./src/workflow.ts": ["parseWorkflow"]
+				}
+			},
+			".pi/skills/verify-factory/scripts/drive-serve.sh": {
+				"tokens": {
+					"server/cli.ts": {
+						"path": "server/cli.ts",
+						"type": "file"
+					}
+				}
+			},
+			".pi/skills/verify-factory/scripts/drive-stage.sh": {
+				"tokens": {
+					"server/cli.ts": {
+						"path": "server/cli.ts",
+						"type": "file"
+					}
+				}
+			},
+			".pi/skills/verify-factory/scripts/drive-status.sh": {
+				"tokens": {
+					".pi/skills/verify-factory/scripts/status-driver.ts": {
+						"path": ".pi/skills/verify-factory/scripts/status-driver.ts",
+						"type": "file"
+					}
+				}
+			},
+			".pi/skills/verify-factory/scripts/drive-tick.sh": {
+				"tokens": {
+					"server/cli.ts": {
+						"path": "server/cli.ts",
+						"type": "file"
+					}
+				}
+			},
+			".pi/skills/verify-factory/scripts/drive-workflow.sh": {
+				"tokens": {
+					"server/cli.ts": {
+						"path": "server/cli.ts",
+						"type": "file"
+					}
+				}
+			},
+			".pi/skills/verify-factory/scripts/lane-id.sh": {
+				"tokens": {}
+			},
+			".pi/skills/verify-factory/scripts/lane-setup.sh": {
+				"tokens": {}
+			},
+			".pi/skills/verify-factory/scripts/remote-setup.sh": {
+				"tokens": {}
+			},
+			".pi/skills/verify-factory/scripts/target.sh": {
+				"tokens": {}
+			},
+			".pi/skills/verify-factory/scripts/vm-snapshot.sh": {
+				"tokens": {}
+			},
+			".pi/skills/verify-factory/scripts/vm.sh": {
+				"tokens": {}
+			},
+			"scripts/herdr-probe.sh": {
+				"tokens": {
+					"node_modules/.bin": {
+						"path": "node_modules/.bin",
+						"type": "external"
+					}
+				}
+			},
+			"scripts/provenance.sh": {
+				"tokens": {
+					"research/PROVENANCE.md": {
+						"path": "research/PROVENANCE.md",
+						"type": "file"
+					},
+					"research/upstream/": {
+						"path": "research/upstream/",
+						"type": "external"
+					},
+					"research/upstream": {
+						"path": "research/upstream",
+						"type": "external"
+					},
+					"scripts/provenance.sh": {
+						"path": "scripts/provenance.sh",
+						"type": "file"
+					}
+				}
+			},
+			"server/factory.service": {
+				"tokens": {
+					"server/cli.ts": {
+						"path": "server/cli.ts",
+						"type": "file"
+					}
+				}
+			},
+			"server/install-exe-dev.sh": {
+				"tokens": {
+					"server/factory.service": {
+						"path": "server/factory.service",
+						"type": "file"
+					},
+					"server/cli.ts": {
+						"path": "server/cli.ts",
+						"type": "file"
+					},
+					"server/install-exe-dev.sh": {
+						"path": "server/install-exe-dev.sh",
+						"type": "file"
+					},
+					"server/provision.sh": {
+						"path": "server/provision.sh",
+						"type": "file"
+					}
+				}
+			},
+			"server/provision.sh": {
+				"tokens": {
+					"server/provision.sh": {
+						"path": "server/provision.sh",
+						"type": "file"
+					},
+					"server/cli.ts": {
+						"path": "server/cli.ts",
+						"type": "file"
+					},
+					".pi/agent": {
+						"path": ".pi/agent",
+						"type": "external"
+					},
+					".pi/agent/models.json": {
+						"path": ".pi/agent/models.json",
+						"type": "external"
+					},
+					".pi/agent/settings.json": {
+						"path": ".pi/agent/settings.json",
+						"type": "external"
+					},
+					"server/sandbox/manifest.ts": {
+						"path": "server/sandbox/manifest.ts",
+						"type": "file"
+					},
+					"server/sandbox/assets/package.json": {
+						"path": "server/sandbox/assets/package.json",
+						"type": "file"
+					},
+					"server/sandbox/assets/package-lock.json": {
+						"path": "server/sandbox/assets/package-lock.json",
+						"type": "file"
+					},
+					"server/sandbox/assets/pi.ts": {
+						"path": "server/sandbox/assets/pi.ts",
+						"type": "file"
+					},
+					"server/sandbox/assets/stage-init.ts": {
+						"path": "server/sandbox/assets/stage-init.ts",
+						"type": "file"
+					},
+					"skills/*/": {
+						"path": "skills/*/SKILL.md",
+						"type": "glob"
+					},
+					"skills/": {
+						"path": "skills",
+						"type": "dir"
+					}
+				}
+			}
+		}
+	},
+	"discovery": {
+		"runners": ["test", "test:integration"],
+		"exclude": ["test/acceptance/**", "test/fixtures/**"],
+		"trusted": {
+			"manifest": ".github/factory/gates/gates.json",
+			"materializer": "server/gates.ts",
+			"accepts": "/^test\\/(?:\\*\\.test\\.ts|sandbox\\/\\*\\.cases\\.ts|integration\\/\\*\\.test\\.ts)$/",
+			"predicates": [
+				"new Set(testGlobs).size !== testGlobs.length",
+				"const files = globSync(pattern, { cwd: tree });",
+				"tests: tests.filter((p) => !p.endsWith(\".cases.ts\"))",
+				"\"baseline_tests\", baseline, testArgv(manifest.tests, false, GATE_TEST_CONCURRENCY),",
+				"manifest.tests.filter((p) => existsSync(join(tree, p)))",
+				"\"main_tests\", tree, testArgv(mainTests, false, GATE_TEST_CONCURRENCY),",
+				"path.startsWith(\"test/\") && (!base.has(path) || path.startsWith(\"test/acceptance/\"));",
+				"additional && /\\.(?:test|cases)\\.[cm]?[jt]s$/.test(path) && !path.startsWith(\"test/acceptance/\") ) newTests.push(path);",
+				"\"candidate_tests\", tree, testArgv(material.newTests),"
+			]
+		}
+	},
+	"navigation": {
+		"required": [".github", ".pi", ".pi/skills"],
+		"exempt": []
+	},
+	"citations": {
+		"historical": [
+			"docs/handoff.md",
+			"docs/prototypes/**",
+			"research/**",
+			"test/acceptance/**",
+			"test/fixtures/**",
+			"tools/oxlint/anti-slop/**"
+		],
+		"pinnedDocuments": [
+			{
+				"path": "docs/operations/sandbox.md",
+				"revision": "f88069f",
+				"statement": "Repo paths are relative to `pi-herdr-factorio/` at `f88069f`."
+			}
+		]
+	}
+}

@@ -1,5 +1,7 @@
 # Held-out CI publication proof
 
+> **Historical.** This directory records the F07c held-out CI publication proof. It is evidence, not current guidance. `docs/README.md` lists the current documents. The probe programs in this directory are still maintained. Verification recipes run them until `docs/plans/codebase-layout.md` L02 moves them to `.pi/skills/verify-factory/probes/`.
+
 F07c publishes a builder patch and then controller-owned checks as two deterministic Git Data commits. Validate is controller-only. It dispatches main's gates for the exact candidate, waits without a slot or model, and stores a bound verdict before deleting the fixture branch. Repair orchestration remains F08 work.
 
 ## Real run

@@ -1,5 +1,7 @@
 # Headless Herdr on a GitHub-hosted Ubuntu runner
 
+> **Historical.** This file records the headless Herdr runner prototype. It is evidence, not current guidance. `docs/README.md` lists the current documents.
+
 **Verdict: VERIFIED — 2026-10-28.**
 
 `pi-herdr-agents`' real `subagent` tool can launch a Pi child in a headless

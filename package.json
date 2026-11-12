@@ -22,7 +22,9 @@
     "LICENSE"
   ],
   "scripts": {
-    "check": "npm run typecheck && npm run lint && npm run format:check && npm test && npm run test:integration",
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm run check:layout && npm run check:decisions && npm test && npm run test:integration",
+    "check:decisions": "node scripts/check-decisions.mjs",
+    "check:layout": "node --experimental-strip-types scripts/check-layout.mjs",
     "format": "biome format --write src extension server test",
     "format:check": "biome format src extension server test",
     "lint": "oxlint src extension server test",

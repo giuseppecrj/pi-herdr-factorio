@@ -1,5 +1,7 @@
 # Sandboxed Pi stages on `pi-factorio`: prototype receipts
 
+> **Historical.** This directory records the F05 sandbox prototypes. It is evidence, not current guidance. `docs/README.md` lists the current documents.
+
 These are the two prototypes that settled F05's design before the build: risk R1 (egress) and the stage runtime. Each subdirectory holds the scripts that ran on the VM and the logs they wrote, copied from the F05 decision trail. The built system is described in `docs/operations/sandbox.md`.
 
 Both ran on 2026-10-29 in scratch dirs under `/home/exedev`, which were deleted afterwards (`*/vm-cleanup.log`). bwrap was 0.9.0, Node 26.12.1, Pi 1.4.0 and Herdr 0.9.5.

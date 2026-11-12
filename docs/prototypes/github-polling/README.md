@@ -1,5 +1,7 @@
 # GitHub polling through the exe.dev integration
 
+> **Historical.** This directory records the GitHub polling prototype for risk R2. It is evidence, not current guidance. `docs/README.md` lists the current documents.
+
 This prototype answers risk R2 in `docs/plans/factory-v1.md`: can the controller bind a `factory:ready` label event to its actor and to the issue body as it was at label time, using only repository-scoped `gh` through `GH_HOST=github.int.exe.xyz`?
 
 It can. Label events carry their actor, ID and time. GraphQL reports when the body was last edited and returns every earlier body version. One endpoint the admission needs, the repository variable, is not readable through the integration, so admission on the VM fails closed until the owner changes that.

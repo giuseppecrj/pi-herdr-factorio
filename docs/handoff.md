@@ -1,5 +1,7 @@
 # Handoff
 
+> **Historical.** This is the original 2026-10-28 handoff. `AGENTS.md` and `docs/decisions.tsv` replace it. It is evidence, not current guidance. `docs/README.md` lists the current documents.
+
 Written 2026-10-28 by the session that started this project (Pi session `01a1840a-36b4-7758-a881-5f7de4ddab25`, herdr pane `wJ:p1`). The owner is moving the work to a new session. Read this file, then the files it points to, before acting.
 
 ## Goal
