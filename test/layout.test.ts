@@ -275,13 +275,13 @@ describe("layout guard", () => {
 			const root = scratch();
 			appendFileSync(
 				join(root, "src/core/run.ts"),
-				'export { readLock } from "../../server/controller.ts";\nimport "../../host/cli/index.ts";\n',
+				'export { readLock } from "../../server/controller/state.ts";\nimport "../../host/cli/index.ts";\n',
 			);
 
 			const problems = layout(root, "imports");
 			includesMatch(
 				problems,
-				/src\/core\/run\.ts -> server\/controller\.ts is a new reverse edge/,
+				/src\/core\/run\.ts -> server\/controller\/state\.ts is a new reverse edge/,
 			);
 			includesMatch(
 				problems,
@@ -759,7 +759,9 @@ describe("layout guard", () => {
 				target: ".github/factory/gates",
 				expect: [
 					/^literals: server\/gates\.ts:\d+ names \.github\/factory\/gates\/gates\.json, which does not exist/,
-					/^literals: server\/controller\.ts:\d+ names \.github\/factory\/gates, which does not exist/,
+					/^literals: server\/controller\/checkers\.ts:\d+ names \.github\/factory\/gates, which does not exist/,
+					/^literals: server\/controller\/run-files\.ts:\d+ names \.github\/factory\/gates, which does not exist/,
+					/^literals: server\/controller\/validation-sweep\.ts:\d+ names \.github\/factory\/gates, which does not exist/,
 				],
 			},
 			{

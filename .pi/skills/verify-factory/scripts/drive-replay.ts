@@ -121,7 +121,7 @@ async function settle(): Promise<void> {
 		{ objectOf, parseJson },
 	] = await Promise.all([
 		import("../../../../src/maintenance/replay.ts"),
-		import("../../../../server/controller.ts"),
+		import("../../../../server/controller/terminal.ts"),
 		import("../../../../src/core/run.ts"),
 		import("../../../../src/trust/platform.ts"),
 		import("../../../../src/core/json.ts"),

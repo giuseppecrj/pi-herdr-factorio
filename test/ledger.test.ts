@@ -41,10 +41,10 @@ import { LedgerGit, repo } from "./ledger-git.ts";
 import { TRUSTED_RUN_CAP } from "./fake-ticket-adapter.ts";
 import {
 	fileLedgerOutbox,
-	fileRunAccounting,
 	pumpLedgerOutbox,
-	readTerminalEvidence,
-} from "../server/controller.ts";
+} from "../server/controller/outbox.ts";
+import { fileRunAccounting } from "../server/controller/state.ts";
+import { readTerminalEvidence } from "../server/controller/terminal.ts";
 import { execFile } from "../server/cli.ts";
 import {
 	mkdirSync,

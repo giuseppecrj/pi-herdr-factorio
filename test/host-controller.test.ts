@@ -11,15 +11,14 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import {
-	checkoutBuildWorkspace,
-	fileLedgerOutbox,
-	fileRunFiles,
-	pinVerification,
-	readRunCharges,
-} from "../server/controller.ts";
+import { checkoutBuildWorkspace } from "../server/controller/checkout.ts";
+import { fileLedgerOutbox } from "../server/controller/outbox.ts";
+import { fileRunFiles } from "../server/controller/run-files.ts";
+import { pinVerification } from "../server/controller/state.ts";
+import { readRunCharges } from "../server/controller/terminal.ts";
 import { digestOf } from "../src/core/run.ts";
-import { isGitSha, isRepoSlug } from "../src/workflow.ts";
+import { isGitSha } from "../src/config/schema.ts";
+import { isRepoSlug } from "../src/trust/platform.ts";
 import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 import { TRUSTED_WORKFLOW } from "./fake-ticket-adapter.ts";
 
@@ -152,7 +151,9 @@ test("host pin recovers claims, pending terminal outbox and token floors in a fr
 				"--input-type=module",
 				"-e",
 				`
-			import { fileRunFiles, fileLedgerOutbox, readRunCharges } from ${JSON.stringify(new URL("../server/controller.ts", import.meta.url).href)};
+			import { fileRunFiles } from ${JSON.stringify(new URL("../server/controller/run-files.ts", import.meta.url).href)};
+			import { fileLedgerOutbox } from ${JSON.stringify(new URL("../server/controller/outbox.ts", import.meta.url).href)};
+			import { readRunCharges } from ${JSON.stringify(new URL("../server/controller/terminal.ts", import.meta.url).href)};
 			const files = fileRunFiles(${JSON.stringify(root)});
 			const claims = await files.listClaims();
 			console.log(JSON.stringify({ claims, link: await files.readLink(${JSON.stringify(runId)}), jobs: await fileLedgerOutbox(${JSON.stringify(root)}).scan(), charges: await readRunCharges(${JSON.stringify(root)}, ${JSON.stringify(runId)}, 73) }));

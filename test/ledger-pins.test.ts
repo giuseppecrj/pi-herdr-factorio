@@ -32,7 +32,7 @@ import {
 	terminalSnapshot,
 	type TerminalFacts,
 } from "../src/ledger/terminal.ts";
-import { fileLedgerOutbox } from "../server/controller.ts";
+import { fileLedgerOutbox } from "../server/controller/outbox.ts";
 import { digestOf, runIdOf } from "../src/core/run.ts";
 import { objectOf, type JsonValue } from "../src/core/json.ts";
 import { isGitSha, type GitSha } from "../src/config/schema.ts";
@@ -584,7 +584,8 @@ describe("L09 ledger and publication characterization", () => {
 
 		const modules = {
 			git: new URL("./ledger-real-git.ts", import.meta.url).href,
-			controller: new URL("../server/controller.ts", import.meta.url).href,
+			controller: new URL("../server/controller/outbox.ts", import.meta.url)
+				.href,
 			ledger: new URL("../src/ledger/schema.ts", import.meta.url).href,
 			platform: new URL("../src/trust/platform.ts", import.meta.url).href,
 		};

@@ -53,28 +53,32 @@ import {
 } from "../src/config/views.ts";
 import { isRepoSlug, type RepoSlug } from "../src/trust/platform.ts";
 import type { Exec, ExecResult } from "../src/github/exec.ts";
+import { controllerCadence } from "./controller/cadence.ts";
+import type { TarballFetch } from "./controller/checkout.ts";
 import {
 	acquireLock,
-	fileRunFiles,
-	lineLog,
 	type ProcessTable,
 	procTable,
-	pinVerification,
-	pumpLedgerOutbox,
+} from "./controller/lock.ts";
+import {
 	pumpScoreOutbox,
-	readLedgerBacklog,
-	readDurableAccounting,
-	type Sleep,
-	type TarballFetch,
-	serveLoop,
-	writeStatus,
-	startMetricSnapshots,
-	startDurableUsage,
-	durableUsageOf,
-	controllerCadence,
 	controllerMeasure,
 	controllerMeasurements,
-} from "./controller.ts";
+} from "./controller/measurement.ts";
+import { pumpLedgerOutbox, readLedgerBacklog } from "./controller/outbox.ts";
+import { fileRunFiles } from "./controller/run-files.ts";
+import {
+	lineLog,
+	type Sleep,
+	serveLoop,
+	startMetricSnapshots,
+} from "./controller/serve-loop.ts";
+import { pinVerification, writeStatus } from "./controller/state.ts";
+import {
+	readDurableAccounting,
+	startDurableUsage,
+	durableUsageOf,
+} from "./controller/terminal.ts";
 import {
 	readLock,
 	readStatus,

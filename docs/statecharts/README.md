@@ -121,7 +121,7 @@ The Journey `Stop` decision mirrors helper reuse without adding a source-absent 
 | Shared public policy | `src/candidate/stages.ts`: `advance`; it delegates candidate events to `handoffCandidate` |
 | `Decide`, `Persist`, effect/response separation | `src/orchestrator.ts`: `#observeCandidates`, `#commitCandidate`, `#interpretCandidate` |
 | Process/captured callback/recovery actions | `#launchCandidate`, `#recoverCandidate`; callbacks capture their execution, and a new Orchestrator starts with an empty volatile result queue |
-| Remote open/promotion and head lag | `server/controller.ts`: `controllerCandidatePort`; `src/github/publish.ts`: `GitHubPublicationApi.promotePr` |
+| Remote open/promotion and head lag | `server/controller/candidate-port.ts`: `controllerCandidatePort`; `src/github/publish.ts`: `GitHubPublicationApi.promotePr` |
 | Fixed deadline and cleanup | `controllerValidator`, `sweepValidation`, `cleanupPublication`; original archived evidence is not rewritten |
 
 Accounting records distinguish issued/running ownership from uncertain final cost. Historical certificates are checked at creation rather than being erased when a later receipt becomes uncertain. A stop request has a `stopping` phase, not slot-free `waiting`; `candidateProjection` reports such work as running. These source-correspondence rules and the specific stop-to-finish repair do not substitute for unfinished accounting exploration. A pending finish after a queued callback alone is not proof of an unsafe external write: the actual Orchestrator observes again after consuming callbacks. Its stop-completion recursion is the boundary targeted here.

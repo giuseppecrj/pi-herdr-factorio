@@ -24,13 +24,15 @@ import { describe, it, type TestContext } from "node:test";
 import { execFile, runCli, type ControllerRuntime } from "../server/cli.ts";
 import {
 	controllerCadence,
-	durableUsageOf,
-	fileRunFiles,
-	procTable,
 	publishCadenceProposals,
-	readDurableAccounting,
 	runImprovementTrigger,
-} from "../server/controller.ts";
+} from "../server/controller/cadence.ts";
+import { procTable } from "../server/controller/lock.ts";
+import { fileRunFiles } from "../server/controller/run-files.ts";
+import {
+	durableUsageOf,
+	readDurableAccounting,
+} from "../server/controller/terminal.ts";
 import {
 	launchSandbox,
 	sandboxExecutor,

@@ -10,12 +10,12 @@ import {
 	rmSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
+import { fileRunFiles } from "../../../../../server/controller/run-files.ts";
 import {
-	fileRunFiles,
 	checkoutBuildWorkspace,
 	checkoutWorkspace,
 	ghTarball,
-} from "../../../../../server/controller.ts";
+} from "../../../../../server/controller/checkout.ts";
 import { patchedTree, readPatch } from "../../../../../src/candidate/build.ts";
 import {
 	gitState,

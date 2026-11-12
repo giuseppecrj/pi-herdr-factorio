@@ -47,12 +47,12 @@ import {
 	withLocalArtifactDownload,
 	candidateLifecycleFixture,
 } from "./helpers.ts";
+import { fileRunFiles } from "../server/controller/run-files.ts";
 import {
 	controllerValidator,
 	ownerValidator,
-	fileRunFiles,
 	sweepValidation,
-} from "../server/controller.ts";
+} from "../server/controller/validation-sweep.ts";
 import { fileArtifacts } from "../src/contract/artifacts.ts";
 import {
 	contractBytes,

@@ -16,11 +16,11 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import {
-	checkoutWorkspace,
 	controllerBaseChecker,
 	controllerDraftChecker,
-	fileRunFiles,
-} from "../server/controller.ts";
+} from "../server/controller/checkers.ts";
+import { checkoutWorkspace } from "../server/controller/checkout.ts";
+import { fileRunFiles } from "../server/controller/run-files.ts";
 import {
 	baseTreeDigest,
 	exportTree,

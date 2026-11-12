@@ -14,7 +14,7 @@ import {
 	observeFeedback,
 	storeFeedbackBatch,
 	sweepMergedFeedback,
-} from "../server/controller.ts";
+} from "../server/controller/candidate-port.ts";
 import {
 	FEEDBACK_CARD_BYTES,
 	builderDispositions,

@@ -9,7 +9,7 @@ import {
 	rmSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
-import { fileRunFiles } from "../../../../../server/controller.ts";
+import { fileRunFiles } from "../../../../../server/controller/run-files.ts";
 import {
 	gitState,
 	launchSandbox,

@@ -11,9 +11,9 @@ import {
 import { join, resolve } from "node:path";
 import {
 	checkoutWorkspace,
-	fileRunFiles,
 	ghTarball,
-} from "../../../../../server/controller.ts";
+} from "../../../../../server/controller/checkout.ts";
+import { fileRunFiles } from "../../../../../server/controller/run-files.ts";
 import {
 	launchSandbox,
 	locateBundle,

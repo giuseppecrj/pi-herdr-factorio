@@ -18,7 +18,7 @@ import {
 	readOwnerHeader,
 	readOwnerRun,
 } from "../server/cli/owner-feed.ts";
-import { acquireLock, procTable } from "../server/controller.ts";
+import { acquireLock, procTable } from "../server/controller/lock.ts";
 import { readStoredVerdict } from "../server/controller/state.ts";
 import { readStageReceipt } from "../server/sandbox/receipts.ts";
 import { ATTENTION_KINDS, readAttention } from "../src/views/attention.ts";

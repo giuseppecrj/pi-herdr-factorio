@@ -52,16 +52,18 @@ import {
 } from "../src/contract/contract.ts";
 import { digestOf } from "../src/core/run.ts";
 import { runCli, execFile, type ControllerRuntime } from "../server/cli.ts";
+import { procTable } from "../server/controller/lock.ts";
 import {
 	controllerMeasurements,
 	controllerMeasure,
 	pumpScoreOutbox,
-	durableUsageOf,
-	procTable,
-	readDurableAccounting,
 	measurementCharges,
-	fileRunFiles,
-} from "../server/controller.ts";
+} from "../server/controller/measurement.ts";
+import { fileRunFiles } from "../server/controller/run-files.ts";
+import {
+	durableUsageOf,
+	readDurableAccounting,
+} from "../server/controller/terminal.ts";
 import { sandboxExecutor, sandboxHost } from "../server/sandbox.ts";
 import { manifestDigest } from "../server/sandbox/manifest.ts";
 import { startGatewayProcess } from "../server/sandbox/gateway-client.ts";

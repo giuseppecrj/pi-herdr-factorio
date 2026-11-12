@@ -121,22 +121,26 @@ import {
 	type ModelId,
 	STAGE_CLEANUP_RESERVE_MS,
 } from "../src/config/schema.ts";
+import { controllerCandidatePort } from "./controller/candidate-port.ts";
+import {
+	controllerBaseChecker,
+	controllerDraftChecker,
+	controllerDiagnosis,
+} from "./controller/checkers.ts";
 import {
 	checkoutWorkspace,
 	checkoutBuildWorkspace,
 	checkoutOf,
-	controllerValidator,
-	ownerValidator,
-	controllerCandidatePort,
-	controllerBaseChecker,
-	controllerDraftChecker,
-	controllerDiagnosis,
-	sweepValidation,
-	fileRunFiles,
-	readStoredAssessment,
 	ghTarball,
 	type TarballFetch,
-} from "./controller.ts";
+} from "./controller/checkout.ts";
+import { fileRunFiles } from "./controller/run-files.ts";
+import { readStoredAssessment } from "./controller/state.ts";
+import {
+	controllerValidator,
+	ownerValidator,
+	sweepValidation,
+} from "./controller/validation-sweep.ts";
 import { HERDR_AGENTS, PI_AGENT_DIR } from "./sandbox/assets/pi.ts";
 import { AUDIT_CAP_BYTES, JOURNAL_FILE } from "./sandbox/audit.ts";
 import {

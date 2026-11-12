@@ -24,7 +24,8 @@ import {
 	allocateMeasurement,
 	automaticScoreEnrolled,
 } from "../src/maintenance/scorers.ts";
-import { pumpScoreOutbox, pumpLedgerOutbox } from "../server/controller.ts";
+import { pumpScoreOutbox } from "../server/controller/measurement.ts";
+import { pumpLedgerOutbox } from "../server/controller/outbox.ts";
 import {
 	latestScores,
 	parseScores,

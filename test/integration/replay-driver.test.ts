@@ -21,7 +21,7 @@ import {
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { after, afterEach, before, beforeEach, describe, it } from "node:test";
-import { acquireLock, procTable } from "../../server/controller.ts";
+import { acquireLock, procTable } from "../../server/controller/lock.ts";
 import { manifestDigest } from "../../server/sandbox/manifest.ts";
 import {
 	readReplayBudget,
