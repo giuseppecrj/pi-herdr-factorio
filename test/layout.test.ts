@@ -767,6 +767,7 @@ describe("layout guard", () => {
 			},
 			{
 				category: "script roots",
+				title: "server/viewer/design",
 				target: "host/viewer/design",
 				expect: [
 					/^literals: scripts\/design-tokens\.mjs:\d+ names host\/viewer\/design, which does not exist/,
@@ -801,7 +802,7 @@ describe("layout guard", () => {
 		] as const;
 
 		for (const move of moves)
-			it(`fails ${move.category} when ${move.target} moves`, () => {
+			it(`fails ${move.category} when ${"title" in move ? move.title : move.target} moves`, () => {
 				const root = scratch();
 				renameSync(join(root, move.target), join(root, `${move.target}.moved`));
 				const problems = layout(root, "literals");

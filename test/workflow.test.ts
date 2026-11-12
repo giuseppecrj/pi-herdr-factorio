@@ -1348,7 +1348,7 @@ async function cli(
 	return { code, json, stderr };
 }
 
-describe("host/cli/index.ts as a process", () => {
+describe("server/cli.ts as a process", () => {
 	const entry = fileURLToPath(new URL("../host/cli/index.ts", import.meta.url));
 
 	it("reports cannot run gh when gh is not on PATH", () => {
@@ -1412,7 +1412,7 @@ describe("host/cli/index.ts as a process", () => {
 	});
 });
 
-describe("host/cli/index.ts spawn-failure classification", () => {
+describe("server/cli.ts spawn-failure classification", () => {
 	const entry = fileURLToPath(new URL("../host/cli/index.ts", import.meta.url));
 
 	it("keeps a gh that overflows maxBuffer an ordinary failure", () => {
@@ -1458,7 +1458,7 @@ describe("host/cli/index.ts spawn-failure classification", () => {
 	});
 });
 
-describe("host/cli/index.ts", () => {
+describe("server/cli.ts", () => {
 	const repoArgs = ["--json", "--repo", repo];
 	const trusted = new Map([["main", { sha: mainSha, text: valid }]]);
 	const missing = new Map([["main", { sha: mainSha, text: null }]]);

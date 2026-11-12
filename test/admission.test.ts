@@ -1293,7 +1293,7 @@ async function cli(argv: string[], github: FakeGitHub) {
 	return { code, stdout, stderr };
 }
 
-describe("host/cli/index.ts admit", () => {
+describe("server/cli.ts admit", () => {
 	const args = (state: string, issue = "14") => [
 		"admit",
 		"--json",

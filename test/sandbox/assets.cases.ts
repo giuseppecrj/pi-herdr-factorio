@@ -323,7 +323,7 @@ describe("asset lock integrity against downloaded bytes", () => {
 	});
 });
 
-describe("asset bundle install in host/install/provision.sh", () => {
+describe("asset bundle install in server/provision.sh", () => {
 	const script = readFileSync(
 		new URL("../../host/install/provision.sh", import.meta.url),
 		"utf8",
