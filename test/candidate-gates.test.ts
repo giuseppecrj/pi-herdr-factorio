@@ -757,6 +757,34 @@ for (const source of [
 		assert.match(JSON.stringify(r), /src\/patch.ts/);
 	});
 
+test("maintained probes pass the tamper scan when a candidate adds them", async (t) => {
+	const f = repo(t);
+
+	const probes = [
+		".pi/skills/verify-factory/probes/acceptance-isolation/probe.ts",
+		".pi/skills/verify-factory/probes/build-isolation/probe.ts",
+		".pi/skills/verify-factory/probes/heldout-ci/repair-probe.ts",
+	];
+
+	for (const path of probes) f.put(path, readFileSync(path, "utf8"));
+
+	const r = await checkCandidate(gateInput(f, f.commit()));
+	assert.deepEqual(r.tamperSignals, []);
+	assert.equal(r.status, "passed");
+});
+
+test("runtime patching in a maintained skill is still rejected", async (t) => {
+	const f = repo(t);
+	const path = ".pi/skills/verify-factory/probes/p/probe.ts";
+	f.put(path, "process.exitCode = 1;\n");
+	const r = await checkCandidate(gateInput(f, f.commit()));
+	assert.equal(r.status, "failed");
+	assert.equal(r.reason, "runtime_patching");
+	assert.deepEqual(r.tamperSignals, [
+		{ path, line: 1, rule: "runtime_patching" },
+	]);
+});
+
 for (const directive of [
 	"@ts-nocheck",
 	"@ts-ignore",

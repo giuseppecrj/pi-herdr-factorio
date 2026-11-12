@@ -189,6 +189,7 @@ out.hostedTools=(await fetch('http://127.0.0.1:18080/openai/v1/responses',{metho
 console.log('PROBE '+JSON.stringify(out));
 `;
 
+let status = 1;
 let unit: string | null = null;
 let stdout = "";
 let stderr = "";
@@ -290,7 +291,7 @@ try {
 			2,
 		),
 	);
-	process.exitCode = pass ? 0 : 1;
+	status = pass ? 0 : 1;
 } finally {
 	if (unit !== null) {
 		const [command, ...args] = stopScopeArgv(unit);
@@ -312,7 +313,7 @@ try {
 
 			if (remaining.trim() !== "") {
 				console.error("the owned repair scope remains after stop");
-				process.exitCode = 1;
+				status = 1;
 			}
 		}
 	}
@@ -320,3 +321,5 @@ try {
 	await gateway.handle.shutdown();
 	rmSync(dir, { recursive: true, force: true });
 }
+
+if (status !== 0) process.exit(status);

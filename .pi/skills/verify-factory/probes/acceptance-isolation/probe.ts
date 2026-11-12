@@ -235,6 +235,7 @@ console.log('PROBE ' + JSON.stringify(out));
 const runtime =
 	process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.()}`;
 
+let status = 1;
 let unit: string | null = null;
 let stdout = "";
 let stderr = "";
@@ -329,7 +330,7 @@ try {
 			2,
 		),
 	);
-	process.exitCode = pass ? 0 : 1;
+	status = pass ? 0 : 1;
 } finally {
 	if (unit !== null) {
 		const [command, ...args] = stopScopeArgv(unit);
@@ -348,3 +349,5 @@ try {
 	rmSync(stageDir, { recursive: true, force: true });
 	rmSync(gatewayDir, { recursive: true, force: true });
 }
+
+if (status !== 0) process.exit(status);
