@@ -1,9 +1,24 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, readFile, lstat, utimes } from "node:fs/promises";
+import {
+	chmod,
+	lstat,
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	utimes,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { readOwnerFeed, readOwnerRun, type FeedEntry } from "../src/feed.ts";
+import {
+	readOwnerFeed,
+	readOwnerHeader,
+	readOwnerRun,
+	type FeedEntry,
+} from "../src/feed.ts";
+import { acquireLock, procTable } from "../server/controller.ts";
 import { ATTENTION_KINDS, readAttention } from "../src/attention.ts";
 import { objectOf, parseJson } from "../src/core/json.ts";
 import type { JsonValue } from "../src/core/json.ts";
@@ -13,6 +28,7 @@ import { AUTONOMY_DIGEST } from "../src/ledger.ts";
 import { candidateLifecycleFixture, withUmask } from "./helpers.ts";
 import {
 	addRun,
+	emptyState,
 	ownerState,
 	now,
 	repo,
@@ -548,5 +564,166 @@ test("a held run keeps its kind, group and runId when only the hold reason chang
 		assert.equal(second?.runId, first?.runId);
 		assert.equal(decision(same), decision(first));
 		assert.notEqual(decision(second), decision(first));
+	});
+});
+
+test("L05 pins the owner header's controller state from the lock and its status read regardless of mode", async () => {
+	const root = await mkdtemp(join(tmpdir(), "owner-header-"));
+
+	try {
+		await emptyState(root);
+		const lastTick = new Date(now - 12_000).toISOString();
+
+		const header = (state: string) => ({
+			repo,
+			at: now,
+			controller: { state, lastTick, localSwitch: "enabled" },
+		});
+
+		assert.deepEqual(await readOwnerHeader(root, now, repo), header("stopped"));
+
+		const acquired = await acquireLock({
+			stateDir: root,
+			procs: procTable(),
+			now: () => now,
+		});
+
+		assert.equal(acquired.kind, "acquired");
+
+		try {
+			assert.deepEqual(
+				await readOwnerHeader(root, now, repo),
+				header("running"),
+			);
+		} finally {
+			if (acquired.kind === "acquired") await acquired.lock.release();
+		}
+
+		await writeFile(
+			join(root, "controller.lock"),
+			`${JSON.stringify({ pid: 1, startTime: "1", acquiredAt: lastTick })}\n`,
+			{ mode: 0o600 },
+		);
+		assert.deepEqual(
+			await readOwnerHeader(root, now, repo),
+			header("unavailable"),
+		);
+		await rm(join(root, "controller.lock"));
+
+		await chmod(join(root, "status.json"), 0o644);
+		assert.deepEqual(await readOwnerHeader(root, now, repo), header("stopped"));
+		assert.deepEqual(await readOwnerHeader(root, now), {
+			repo: null,
+			at: now,
+			controller: { state: "stopped", lastTick: null, localSwitch: "enabled" },
+		});
+		assert.deepEqual(await readOwnerHeader(join(root, "absent"), now, repo), {
+			repo,
+			at: now,
+			controller: {
+				state: "unavailable",
+				lastTick: null,
+				localSwitch: "unavailable",
+			},
+		});
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("L05 pins stage steps: missing, corrupt, wrong-mode and foreign receipts are skipped", async () => {
+	await state(async (root) => {
+		const runId = await addRun(root, 20, "running", { stage: "build" });
+
+		const receipt = (id: string, stage: string, total: number) => ({
+			version: 1,
+			runId: id,
+			stage,
+			outcome: { kind: "failed", exit: "error" },
+			turns: 1,
+			wallMs: 10,
+			usage: { total },
+		});
+
+		await save(
+			root,
+			["stages", runId, "build-1", "receipt.json"],
+			receipt(runId, "build", 7),
+		);
+		await save(
+			root,
+			["stages", runId, "build-2", "receipt.json"],
+			receipt(runId, "build", 8),
+		);
+		await writeFile(
+			join(root, "stages", runId, "build-2", "receipt.json"),
+			"{",
+		);
+		await save(
+			root,
+			["stages", runId, "review-1", "receipt.json"],
+			receipt(runId, "review", 9),
+		);
+		await chmod(join(root, "stages", runId, "review-1", "receipt.json"), 0o644);
+		await mkdir(join(root, "stages", runId, "accept-1"), { mode: 0o700 });
+		await save(
+			root,
+			["stages", runId, "specify-1", "receipt.json"],
+			receipt(digestOf("other"), "specify", 10),
+		);
+		await save(
+			root,
+			["stages", runId, "notes-1", "receipt.json"],
+			receipt(runId, "notes", 11),
+		);
+
+		const feed = await readOwnerFeed({ stateDir: root, repo, now });
+
+		assert.deepEqual(
+			feed.entries.find((entry) => entry.runId === runId)?.steps,
+			[{ stage: "build", outcome: "failed", tokens: 7, wallMs: 10 }],
+		);
+	});
+});
+
+test("L05 pins stored validation verdicts: valid, missing, corrupt and wrong-mode", async () => {
+	await state(async (root) => {
+		const runId = await addRun(root, 20, "running", { stage: "validate" });
+		const claim = ["claims", `${runId}.json`];
+
+		const saved = objectOf(
+			parseJson(await readFile(join(root, ...claim), "utf8")),
+		);
+
+		assert.ok(saved !== null);
+
+		const ci = async () =>
+			(await readOwnerFeed({ stateDir: root, repo, now })).entries.find(
+				(entry) => entry.runId === runId,
+			)?.ci;
+
+		await save(root, claim, { ...saved, validation: {} });
+		assert.equal(await ci(), "Pending");
+
+		const verdict = ["validation", runId, "verdict.json"];
+		await save(root, verdict, { pass: true });
+		assert.equal(await ci(), "Passed");
+		await save(root, verdict, { pass: false });
+		assert.equal(await ci(), "Failed");
+		await chmod(join(root, ...verdict), 0o644);
+		assert.equal(await ci(), "Pending");
+		await writeFile(join(root, ...verdict), "{", { mode: 0o600 });
+		await chmod(join(root, ...verdict), 0o600);
+		assert.equal(await ci(), "Pending");
+
+		await save(root, claim, { ...saved, round: 1, validation: {} });
+		assert.equal(await ci(), "Pending");
+		await save(root, ["validation", runId, "r1", "verdict.json"], {
+			pass: true,
+		});
+		assert.equal(await ci(), "Passed");
+
+		await save(root, claim, { ...saved, round: 1 });
+		assert.equal(await ci(), "Pending");
 	});
 });

@@ -5,7 +5,9 @@ import {
 	mkdir,
 	mkdtemp,
 	readFile,
+	rename,
 	rm,
+	symlink,
 	unlink,
 	writeFile,
 } from "node:fs/promises";
@@ -14,9 +16,11 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import { EXIT, runCli } from "../server/cli.ts";
 import { acquireLock, procTable } from "../server/controller.ts";
+import { manifestDigest } from "../server/sandbox/manifest.ts";
 import { parseLedger, type LedgerRow } from "../src/ledger.ts";
 import {
 	checkReplay,
+	checkReplayBundles,
 	loadReplayCorpus,
 	replayReport,
 	reserveReplay,
@@ -1522,5 +1526,173 @@ describe("trusted replay policy and guards", () => {
 			);
 		assert.match(driver, /--issue/);
 		assert.match(driver, /--verification-token-cap/);
+	});
+});
+
+describe("L05 installed bundle pins", () => {
+	const skill = "# Build\n";
+	const pi = "export {};\n";
+
+	async function bundleRoot() {
+		const root = await mkdtemp(join(tmpdir(), "replay-bundles-"));
+		const staging = join(root, "staging");
+		await mkdir(join(staging, "skills", "build"), { recursive: true });
+		await mkdir(join(staging, "sandbox"), { recursive: true });
+		await writeFile(join(staging, "skills", "build", "SKILL.md"), skill);
+		await writeFile(join(staging, "sandbox", "pi.ts"), pi);
+		const assets = await manifestDigest(staging);
+		assert.ok(assets !== null);
+		await rename(staging, join(root, `assets-${assets}`));
+		await symlink(`assets-${assets}`, join(root, "current"));
+
+		return { root, assets };
+	}
+
+	function source(input: {
+		listed?: string;
+		listCode?: number;
+		files?: Record<string, string>;
+		recipe?: string;
+	}): Exec {
+		const files: Record<string, string> = input.files ?? {
+			"skills/build/SKILL.md": skill,
+			"server/sandbox/assets/pi.ts": pi,
+		};
+
+		return async (_command, args) => {
+			if (args[0] === "ls-tree")
+				return {
+					code: input.listCode ?? 0,
+					stdout: input.listed ?? `${Object.keys(files).join("\n")}\n`,
+					stderr: "",
+				};
+
+			if (args[0] === "show") {
+				const text = files[String(args[1]).replace(/^[0-9a-f]{40}:/, "")];
+
+				return text === undefined
+					? { code: 128, stdout: "", stderr: "missing" }
+					: { code: 0, stdout: text, stderr: "" };
+			}
+
+			return { code: 0, stdout: input.recipe ?? "", stderr: "" };
+		};
+	}
+
+	async function refusal(
+		root: string,
+		assets: string,
+		exec: Exec,
+		overrides: Partial<Parameters<typeof checkReplayBundles>[0]> = {},
+	): Promise<string> {
+		try {
+			await checkReplayBundles({
+				root,
+				previousSha: sha,
+				candidateSha: otherSha,
+				previousAssets: assets,
+				candidateAssets: assets,
+				side: "previous",
+				exec,
+				...overrides,
+			});
+
+			return "accepted";
+		} catch (error) {
+			return error instanceof Error ? error.message : String(error);
+		}
+	}
+
+	it("accepts a matching bundle and refuses invalid, missing, corrupt and stale ones", async () => {
+		const { root, assets } = await bundleRoot();
+
+		try {
+			assert.equal(await refusal(root, assets, source({})), "accepted");
+			assert.equal(
+				await refusal(root, assets, source({}), { previousSha: "HEAD" }),
+				"replay_assets_invalid",
+			);
+			assert.equal(
+				await refusal(root, assets, source({}), {
+					candidateAssets: "not-a-digest",
+				}),
+				"replay_assets_invalid",
+			);
+			assert.equal(
+				await refusal(root, digestOf("absent"), source({}), {
+					candidateAssets: assets,
+				}),
+				"replay_bundle_unavailable",
+			);
+			assert.equal(
+				await refusal(root, assets, source({ listCode: 128 })),
+				"replay_bundle_source_unavailable",
+			);
+			assert.equal(
+				await refusal(root, assets, source({ listed: "\n" })),
+				"replay_bundle_source_unavailable",
+			);
+			assert.equal(
+				await refusal(
+					root,
+					assets,
+					source({
+						files: {
+							"skills/build/SKILL.md": skill,
+							"skills/review/SKILL.md": skill,
+							"server/sandbox/assets/pi.ts": pi,
+						},
+					}),
+				),
+				"replay_stale_bundle",
+			);
+			assert.equal(
+				await refusal(
+					root,
+					assets,
+					source({
+						files: {
+							"skills/build/SKILL.md": skill,
+							"server/sandbox/assets/pi.ts": "export const changed = 1;\n",
+						},
+					}),
+				),
+				"replay_stale_bundle",
+			);
+			assert.equal(
+				await refusal(
+					root,
+					assets,
+					source({ recipe: "server/provision.sh\n" }),
+				),
+				"replay_bundle_recipe_mismatch",
+			);
+			assert.equal(
+				await refusal(root, assets, source({}), { side: "both" }),
+				"replay_side_invalid",
+			);
+			assert.equal(
+				await refusal(root, assets, source({}), { side: "candidate" }),
+				"accepted",
+			);
+
+			await unlink(join(root, "current"));
+			await symlink("assets-other", join(root, "current"));
+			assert.equal(
+				await refusal(root, assets, source({})),
+				"replay_bundle_switch_required",
+			);
+
+			await writeFile(
+				join(root, `assets-${assets}`, "sandbox", "pi.ts"),
+				"export const corrupt = 1;\n",
+			);
+			assert.equal(
+				await refusal(root, assets, source({})),
+				"replay_bundle_unavailable",
+			);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
 	});
 });

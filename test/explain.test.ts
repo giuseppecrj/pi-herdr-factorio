@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+	chmodSync,
 	copyFileSync,
 	cpSync,
 	existsSync,
@@ -1557,4 +1558,42 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 			automaticOnce: true,
 		}),
 	);
+});
+
+it("L05 pins measurement input bytes and its receipt read failures", async (t) => {
+	const state = directory(t);
+	const row = await seedContract(state);
+	const runId = row.row.runId;
+
+	const digests = await Promise.all(
+		[
+			[false, false],
+			[true, false],
+			[false, true],
+			[true, true],
+		].map(
+			async ([children, contract]) =>
+				(await measurementInput(state, runId, children, contract)).digest,
+		),
+	);
+
+	assert.deepEqual(digests, [
+		"165a55cb81586a7bddf0a8c5dec59b18a0fa1e431d7141e559ad56bbef82efb4",
+		"89870599f8d92ad47585e5f99feedd427d690fa975cd78ba81ba44941bdd9cdb",
+		"1e3a7f7059c548be845c1d27fce2e27807b7413324cfec95b8ecbcdbefee78b6",
+		"23fb34941178df6847907ff173dc94b5307805f273d6a293bee32ec0e109eee9",
+	]);
+	const receipt = join(state, "stages", runId, "build-1", "receipt.json");
+	chmodSync(receipt, 0o644);
+	await assert.rejects(measurementInput(state, runId), /unsafe private file/);
+	chmodSync(receipt, 0o600);
+	writeFileSync(receipt, "{", { mode: 0o600 });
+	assert.deepEqual((await measurementInput(state, runId)).input.omitted, [
+		`stages/${runId}/build-1/receipt.json`,
+	]);
+	rmSync(join(state, "stages", runId), { recursive: true });
+	const empty = await measurementInput(state, runId);
+	assert.deepEqual([empty.input.receipts, empty.input.omitted], [[], []]);
+	rmSync(join(state, "ledger", runId, "row.json"));
+	await assert.rejects(measurementInput(state, runId), /ENOENT/);
 });
