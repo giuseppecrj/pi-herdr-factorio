@@ -28,6 +28,7 @@ import {
 	parseCandidateState,
 	reviewReceiptDigest,
 	parseReviewReceipt,
+	parseOwnerPatchReceipt,
 	renderLimitation,
 	migrateCertificationValue,
 } from "../src/handoff.ts";
@@ -78,6 +79,7 @@ import {
 	mkdtempSync,
 	writeFileSync,
 } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fieldOf, objectOf, parseJson } from "../src/core/json.ts";
@@ -7379,3 +7381,454 @@ for (const [pinned, via] of [
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
+
+const BOOK_MODULES = {
+	codec: new URL("../src/handoff.ts", import.meta.url).href,
+	policy: new URL("../src/handoff.ts", import.meta.url).href,
+};
+
+type BookCase = Readonly<{
+	name: string;
+	wire: JsonValue;
+	events: readonly CandidateEvent[];
+}>;
+
+function wireOf(
+	value: CandidateState | ReviewReceipt | OwnerPatchReceipt,
+): JsonValue {
+	return JSON.parse(JSON.stringify(value));
+}
+
+function bookEvents(state: CandidateState): readonly CandidateEvent[] {
+	const events: CandidateEvent[] = [
+		observed(),
+		{ ...observed("b".repeat(40)), now: 500 },
+	];
+
+	if (state.kind === "selected" && state.current.report !== null)
+		events.push(readyObservation(state));
+
+	return events;
+}
+
+function legacyReview(review: JsonValue): JsonValue {
+	const r = objectOf(review);
+	assert.ok(r !== null && Array.isArray(r.seats));
+
+	return {
+		...r,
+		version: 1,
+		seats: r.seats.map((entry) => {
+			const s = objectOf(entry);
+			assert.ok(s !== null && Array.isArray(s.judgments));
+
+			return {
+				...s,
+				judgments: s.judgments.map((item) => {
+					const j = objectOf(item);
+					assert.ok(j !== null);
+
+					return {
+						scenario: j.scenario ?? null,
+						pass: j.outcome === "pass",
+						reason: j.reason ?? null,
+					};
+				}),
+			};
+		}),
+	};
+}
+
+function storedBookCases(): readonly BookCase[] {
+	const owner = ownerSelected();
+	const review = reviewing(validated(select()));
+
+	const unknown = reduceCandidate(review.state, {
+		kind: "review_settled",
+		execution: review.execution,
+		tokens: null,
+		result: { kind: "failed" },
+	}).state;
+
+	const ready = certified(select());
+	const idle = waiting();
+	const head = idle.current.report?.candidateSha;
+	assert.ok(head);
+
+	const mergeSha = sha;
+	assert.ok(isGitSha(mergeSha));
+
+	const merging = reduceCandidate(idle, {
+		...observed(),
+		pr: { kind: "merged", number: 5, head, mergeSha, actor: null },
+	}).state;
+
+	const valid: [string, CandidateState][] = [
+		["unprepared", beginCandidate(pin, patch, 1234)],
+		["pending_validate", select()],
+		["captured_review", review.state],
+		["unknown_usage", unknown],
+		["certified", ready],
+		["pending_open_pr", reduceCandidate(ready, readyObservation(ready)).state],
+		["waiting", idle],
+		["owner_due", owner.due],
+		["owner_deriving", owner.deriving],
+		["owner_recertify", owner.state],
+		["late_unknown", lateUnknownReviews().state],
+		["feedback_queued", queuedFeedback()],
+		["feedback_rebuilding", rebuildingFeedback().state],
+		["merge_pending", merging],
+	];
+
+	const withWire = (
+		state: CandidateState,
+		edit: (wire: Record<string, JsonValue>) => void,
+	): JsonValue => {
+		const wire = objectOf(wireOf(state));
+		assert.ok(wire !== null);
+		edit(wire);
+
+		return wire;
+	};
+
+	const field = (
+		wire: JsonValue,
+		...path: string[]
+	): Record<string, JsonValue> => {
+		let at = objectOf(wire);
+
+		for (const key of path) at = objectOf(at?.[key] ?? null);
+
+		assert.ok(at !== null);
+
+		return at;
+	};
+
+	const historical: [string, JsonValue][] = [
+		[
+			"legacy_no_feedback",
+			withWire(idle, (w) => {
+				delete w.feedback;
+			}),
+		],
+		[
+			"legacy_no_owner_head",
+			withWire(owner.due, (w) => {
+				assert.ok(selected(owner.due).published?.ownerHead);
+				delete field(w, "published").ownerHead;
+			}),
+		],
+		[
+			"legacy_v1_certification_review",
+			withWire(idle, (w) => {
+				const c = field(w, "current", "certification");
+				c.review = legacyReview(c.review ?? null);
+			}),
+		],
+	];
+
+	const invalid: [string, JsonValue][] = [
+		[
+			"owner_patch_missing",
+			withWire(owner.state, (w) => {
+				delete field(w, "current").ownerPatch;
+			}),
+		],
+		[
+			"wrong_pin_workflow",
+			withWire(idle, (w) => {
+				field(w, "pin").workflowSha = "b".repeat(40);
+			}),
+		],
+		[
+			"wrong_intent_digest",
+			withWire(idle, (w) => {
+				field(w, "current", "intent").digest = digestOf("wrong");
+			}),
+		],
+		[
+			"duplicate_accounts",
+			withWire(idle, (w) => {
+				assert.ok(Array.isArray(w.accounts));
+				w.accounts = [...w.accounts, ...w.accounts];
+			}),
+		],
+		[
+			"unknown_reason",
+			withWire(idle, (w) => {
+				w.work = { kind: "held", reason: "not_a_reason", since: 1 };
+			}),
+		],
+		[
+			"unknown_work_kind",
+			withWire(idle, (w) => {
+				w.work = { kind: "dreaming" };
+			}),
+		],
+		[
+			"review_attempts_over_cap",
+			withWire(idle, (w) => {
+				field(w, "pin").maxReviewAttempts = 4;
+			}),
+		],
+		[
+			"wrong_pr_branch",
+			withWire(idle, (w) => {
+				field(w, "published").branch = "factory/pr/other";
+			}),
+		],
+		[
+			"feedback_pr_mismatch",
+			withWire(queuedFeedback(), (w) => {
+				field(w, "feedback").pr = 99;
+			}),
+		],
+		[
+			"v1_review_unmigratable",
+			withWire(idle, (w) => {
+				field(w, "current", "certification").review = {
+					version: 1,
+					seats: "not seats",
+				};
+			}),
+		],
+		[
+			"negative_unknown_floor",
+			withWire(unknown, (w) => {
+				assert.ok(Array.isArray(w.accounts));
+				field(w.accounts[0] ?? null).spend = { kind: "unknown", floor: -1 };
+			}),
+		],
+		[
+			"promoted_generation_missing",
+			withWire(idle, (w) => {
+				field(w, "published", "promoted").digest = digestOf("missing");
+			}),
+		],
+	];
+
+	return [
+		...valid.map(([name, state]) => ({
+			name,
+			wire: wireOf(state),
+			events: bookEvents(state),
+		})),
+		...historical.map(([name, wire]) => {
+			const state = parseCandidateState(wire);
+			assert.ok(state, name);
+
+			return { name, wire, events: bookEvents(state) };
+		}),
+		...invalid.map(([name, wire]) => ({ name, wire, events: [] })),
+	];
+}
+
+function receiptCases(): readonly Readonly<{
+	name: string;
+	kind: "review" | "owner";
+	wire: JsonValue;
+}>[] {
+	const idle = waiting();
+	const review = idle.current.certification?.review;
+	assert.ok(review);
+	const ownerPatch = ownerSelected().receipt;
+
+	return [
+		{ name: "review_v2", kind: "review", wire: wireOf(review) },
+		{ name: "review_v1", kind: "review", wire: legacyReview(wireOf(review)) },
+		{
+			name: "review_v1_broken",
+			kind: "review",
+			wire: { version: 1, seats: "not seats" },
+		},
+		{ name: "owner_patch", kind: "owner", wire: wireOf(ownerPatch) },
+		{
+			name: "owner_patch_forbidden",
+			kind: "owner",
+			wire: { ...ownerPatch, changedPaths: [".github/workflows/ci.yml"] },
+		},
+	];
+}
+
+const BOOK_REPLAY = `
+const [{ parseCandidateState, parseReviewReceipt, parseOwnerPatchReceipt }, { handoffCandidate }] =
+	await Promise.all([import(process.env.BOOK_CODEC), import(process.env.BOOK_POLICY)]);
+let input = "";
+for await (const chunk of process.stdin) input += chunk;
+const { books, receipts } = JSON.parse(input);
+const record = (wire, events) => {
+	const parsed = parseCandidateState(wire);
+	if (parsed === null) return null;
+	return {
+		frozen: Object.isFrozen(parsed),
+		bytes: JSON.stringify(parsed),
+		steps: events.map((event) => {
+			const step = handoffCandidate(parsed, event);
+			const reloaded = parseCandidateState(JSON.parse(JSON.stringify(step.state)));
+			return { step: JSON.stringify(step), reload: reloaded === null ? null : JSON.stringify(reloaded) };
+		}),
+	};
+};
+const out = {
+	books: books.map((b) => [b.name, record(b.wire, b.events)]),
+	receipts: receipts.map((r) => {
+		const parsed = r.kind === "review" ? parseReviewReceipt(r.wire) : parseOwnerPatchReceipt(r.wire);
+		return [r.name, parsed === null ? null : JSON.stringify(parsed)];
+	}),
+};
+process.stdout.write(JSON.stringify(out));
+`;
+
+function replayBooks(
+	books: readonly BookCase[],
+	receipts: ReturnType<typeof receiptCases>,
+	fresh: boolean,
+): string {
+	const input = JSON.stringify({ books, receipts });
+
+	if (fresh)
+		return execFileSync(
+			process.execPath,
+			["--experimental-strip-types", "--input-type=module", "-e", BOOK_REPLAY],
+			{
+				input,
+				encoding: "utf8",
+				maxBuffer: 256 * 1024 * 1024,
+				env: {
+					...process.env,
+					BOOK_CODEC: BOOK_MODULES.codec,
+					BOOK_POLICY: BOOK_MODULES.policy,
+				},
+			},
+		);
+
+	const decoded: { books: BookCase[]; receipts: typeof receipts } =
+		JSON.parse(input);
+
+	const record = (wire: JsonValue, events: readonly CandidateEvent[]) => {
+		const parsed = parseCandidateState(wire);
+
+		if (parsed === null) return null;
+
+		return {
+			frozen: Object.isFrozen(parsed),
+			bytes: JSON.stringify(parsed),
+			steps: events.map((event) => {
+				const step = reduceCandidate(parsed, event);
+
+				const reloaded = parseCandidateState(
+					JSON.parse(JSON.stringify(step.state)),
+				);
+
+				return {
+					step: JSON.stringify(step),
+					reload: reloaded === null ? null : JSON.stringify(reloaded),
+				};
+			}),
+		};
+	};
+
+	return JSON.stringify({
+		books: decoded.books.map((b) => [b.name, record(b.wire, b.events)]),
+		receipts: decoded.receipts.map((r) => {
+			const parsed =
+				r.kind === "review"
+					? parseReviewReceipt(r.wire)
+					: parseOwnerPatchReceipt(r.wire);
+
+			return [r.name, parsed === null ? null : JSON.stringify(parsed)];
+		}),
+	});
+}
+
+test("stored books keep their bytes and refusals through parse, transition and fresh-process reload", () => {
+	const books = storedBookCases();
+	const receipts = receiptCases();
+	const local = replayBooks(books, receipts, false);
+	assert.equal(replayBooks(books, receipts, true), local);
+
+	const result: {
+		books: [
+			string,
+			{
+				frozen: boolean;
+				bytes: string;
+				steps: { step: string; reload: string | null }[];
+			} | null,
+		][];
+		receipts: [string, string | null][];
+	} = JSON.parse(local);
+
+	for (const [name, record] of result.books) {
+		if (record === null) continue;
+		assert.ok(record.frozen, name);
+
+		for (const { step, reload } of record.steps)
+			assert.equal(reload, JSON.stringify(JSON.parse(step).state), name);
+	}
+
+	const digests = Object.fromEntries([
+		...result.books.map(([name, record]) => [
+			name,
+			record === null ? null : digestOf(JSON.stringify(record)),
+		]),
+		...result.receipts.map(([name, bytes]) => [
+			name,
+			bytes === null ? null : digestOf(bytes),
+		]),
+	]);
+
+	assert.deepEqual(digests, STORED_BOOK_DIGESTS);
+});
+
+const STORED_BOOK_DIGESTS = {
+	unprepared:
+		"7821e0c2e322c59348c74a1c9c028f3bdeaccc7c52fee7bea4c0b8ebb0bbd227",
+	pending_validate:
+		"00c7f1e3bb757661669ccf1b6aff4eac7ded10e7c0991a648ba6c7161d1962e0",
+	captured_review:
+		"440c8daa15862ddd763eb317664467813448047175dff0bd8c4f231f3e42da79",
+	unknown_usage:
+		"e0ac416e2754774e6f82bea13f670ab3d758099a4203211ae000a31698497e05",
+	certified: "b00a861a8c067c753d94bf9190f56731f4b71e5f0ef554618c58eabeb489d26b",
+	pending_open_pr:
+		"70ec8e71f544b4a2d40ec5534b9022572207a171f8591dbddbde502a57e4e5fc",
+	waiting: "61ba41426feb8a8ac740762184beeb3ef6d59abb1fd472621be69badb55cd429",
+	owner_due: "8232c7214c134847a59600edd565e02f3a499f2a252da882da3f90c7b486b9f7",
+	owner_deriving:
+		"7c0a20b6f4dd058e54a3877bca913d53ff37248751a40a50b0ce59be04ec60ca",
+	owner_recertify:
+		"a0088610b2e46eab67536505b8a7d29378396f81bcae30703706b3b9e2753393",
+	late_unknown:
+		"f23a42e2a0cf6bc35eaf798c20a294a84df2be42a0856be3520e1911ac7c0217",
+	feedback_queued:
+		"f4e9f6f86346539fd816bae2bcfa32864545b3b27491f9db30f1bb57bc51c5f3",
+	feedback_rebuilding:
+		"833d318ffadaa34f81ff6f93b04019a904057719779452603f3400fce4629034",
+	merge_pending:
+		"3bdf33999e3b3b263466f978ddf1147a0e365802b4bff42600afcb5322fe01b7",
+	legacy_no_feedback:
+		"45e55a568edeebec82c4a5bddf32fcaed56733960bff0c59cbc8050d0bf9fd9d",
+	legacy_no_owner_head:
+		"efc0bd543e36706f707f132bc1e9bd2ac150c6606b588891d5221d8529ecd696",
+	legacy_v1_certification_review:
+		"61ba41426feb8a8ac740762184beeb3ef6d59abb1fd472621be69badb55cd429",
+	owner_patch_missing: null,
+	wrong_pin_workflow: null,
+	wrong_intent_digest: null,
+	duplicate_accounts: null,
+	unknown_reason: null,
+	unknown_work_kind: null,
+	review_attempts_over_cap: null,
+	wrong_pr_branch: null,
+	feedback_pr_mismatch: null,
+	v1_review_unmigratable: null,
+	negative_unknown_floor: null,
+	promoted_generation_missing: null,
+	review_v2: "304c3ff62266480b70999c1388808b48dfff68a55b8639ded9b509620085091e",
+	review_v1: "304c3ff62266480b70999c1388808b48dfff68a55b8639ded9b509620085091e",
+	review_v1_broken: null,
+	owner_patch:
+		"959a9c2b7b3c27804a37e17e43cf1d5a9fd10b40ed598c5d6907b90d7f8c1a78",
+	owner_patch_forbidden: null,
+} satisfies Record<string, string | null>;
