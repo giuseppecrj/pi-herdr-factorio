@@ -841,7 +841,12 @@ function checkLiterals(ctx, problems) {
 				return true;
 			}
 
-			return globbed(path, entry.globs ?? []);
+			const glob = (entry.globs ?? []).find((g) => matchesGlob(path, g));
+
+			if (glob === undefined) return false;
+			used.add(`${at}\0${glob}`);
+
+			return true;
 		});
 
 	const inspect = (file, { text, open, root, line }) => {
@@ -889,13 +894,39 @@ function checkLiterals(ctx, problems) {
 			inspect(file, item);
 	}
 
+	checkTsconfigInclude(ctx, problems);
+
 	for (const [at, entry] of allow.entries())
-		for (const path of entry.paths ?? []) {
+		for (const path of [...(entry.paths ?? []), ...(entry.globs ?? [])])
 			if (!used.has(`${at}\0${path}`))
 				problems.push(
 					`literals: allow entry "${entry.reason}" lists ${path}, which no scanned literal still needs; delete it`,
 				);
-		}
+}
+
+function checkTsconfigInclude(ctx, problems) {
+	if (!ctx.set.has("tsconfig.json")) return;
+
+	const { include } = parsed("tsconfig.json", ctx.read("tsconfig.json"));
+	const patterns = Array.isArray(include) ? include : [];
+
+	for (const [at, pattern] of patterns.entries()) {
+		if (
+			!isText(pattern) ||
+			rootNameProblem(ctx, pattern) !== undefined ||
+			pattern.match(LITERAL_PATH) !== null
+		)
+			continue;
+
+		const matched = /[*?]/.test(pattern)
+			? ctx.files.some((file) => matchesGlob(file, pattern))
+			: ctx.kindOf(pattern.replace(/\/$/, "")) !== "missing";
+
+		if (!matched)
+			problems.push(
+				`literals: tsconfig.json:include[${at}] ${pattern} matches no file, so typecheck silently skips it`,
+			);
+	}
 }
 
 function checkShell(ctx, problems) {
@@ -1002,7 +1033,13 @@ function trustedTests(ctx, problems) {
 
 	const report = (message) => problems.push(`discovery: ${message}`);
 
-	if (!ctx.set.has(materializer)) report(`${materializer} is missing`);
+	const audit =
+		"audit the moved or changed test selection code, then update discovery.trusted.materializer and discovery.trusted.predicates in scripts/layout-baseline.json";
+
+	if (!ctx.set.has(materializer))
+		report(
+			`${materializer} is missing, so the trusted test selection cannot be checked; ${audit}`,
+		);
 	else {
 		const text = normalized(ctx.read(materializer));
 
@@ -1011,7 +1048,7 @@ function trustedTests(ctx, problems) {
 
 			if (found !== 1)
 				report(
-					`${materializer} has ${found} of the trusted test predicate ${JSON.stringify(expression)}, expected 1; trusted discovery may no longer match the local runner`,
+					`${materializer} has ${found} of the trusted test predicate ${JSON.stringify(expression)}, expected 1; trusted discovery may no longer match the local runner; ${audit}`,
 				);
 		}
 	}
@@ -1031,6 +1068,11 @@ function trustedTests(ctx, problems) {
 
 		return [];
 	}
+
+	for (const glob of new Set(globs.filter((g, at) => globs.indexOf(g) !== at)))
+		report(
+			`${manifest} lists testGlob ${glob} more than once, so the trusted gate refuses the manifest`,
+		);
 
 	const accepted = new RegExp(accepts.slice(1, accepts.lastIndexOf("/")));
 

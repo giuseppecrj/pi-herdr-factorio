@@ -605,6 +605,26 @@ describe("layout guard", () => {
 			}
 		});
 
+		it("fails when a fixture a test reads at runtime moves", () => {
+			const root = scratch();
+
+			for (const target of [
+				"test/fixtures/replay/cases/c3",
+				"test/fixtures/metrics/runs-2026-11-08.jsonl",
+			])
+				renameSync(join(root, target), join(root, `${target}.moved`));
+
+			const problems = layout(root, "readers");
+			includesMatch(
+				problems,
+				/^readers: test-reads-integration-replay-driver: test\/fixtures\/replay\/cases\/c3\/issue\.md is missing, expected file$/,
+			);
+			includesMatch(
+				problems,
+				/^readers: test-reads-integration-replay-driver: test\/fixtures\/metrics\/runs-2026-11-08\.jsonl is missing, expected file$/,
+			);
+		});
+
 		it("runs the real replayStageCaps against the working tree", () => {
 			const root = scratch();
 			edit(
@@ -677,20 +697,6 @@ describe("layout guard", () => {
 				],
 			},
 			{
-				category: "test fixtures",
-				target: "test/fixtures/replay/cases/c3",
-				expect: [
-					/^literals: test\/integration\/replay-driver\.test\.ts:\d+ names test\/fixtures\/replay\/cases\/c3\/issue\.md, which does not exist/,
-				],
-			},
-			{
-				category: "test fixture files",
-				target: "test/fixtures/metrics/runs-2026-11-08.jsonl",
-				expect: [
-					/^literals: test\/integration\/replay-driver\.test\.ts:\d+ names test\/fixtures\/metrics\/runs-2026-11-08\.jsonl, which does not exist/,
-				],
-			},
-			{
 				category: "workflow identities",
 				target: ".github/workflows/ci.yml",
 				expect: [
@@ -725,6 +731,25 @@ describe("layout guard", () => {
 				for (const pattern of move.expect) includesMatch(problems, pattern);
 			});
 
+		it("leaves synthetic paths in a new test alone", () => {
+			const root = scratch();
+			write(
+				root,
+				"test/newfeature.test.ts",
+				[
+					'import assert from "node:assert/strict";',
+					'import { it } from "node:test";',
+					'it("plans a fake diff", () => {',
+					'\tconst paths = ["src/widget.ts", "server/gadget.ts", "test/foo.test.ts", ".github/workflows/x.yml"];',
+					"\tassert.equal(paths.length, 4);",
+					"});",
+					"",
+				].join("\n"),
+			);
+
+			assert.deepEqual(run(guard, root).problems, []);
+		});
+
 		it("fails a new unresolved literal and an allowlist entry nothing needs", () => {
 			const root = scratch();
 			appendFileSync(
@@ -735,7 +760,7 @@ describe("layout guard", () => {
 				root,
 				"scripts/layout-baseline.json",
 				/"allow": \[\n/,
-				'"allow": [\n{ "reason": "stale", "files": ["src/**"], "paths": ["src/stale.ts"] },\n',
+				'"allow": [\n{ "reason": "stale", "files": ["src/**"], "paths": ["src/stale.ts"], "globs": ["src/stale/**"] },\n',
 			);
 
 			const problems = layout(root, "literals");
@@ -746,6 +771,20 @@ describe("layout guard", () => {
 			includesMatch(
 				problems,
 				/^literals: allow entry "stale" lists src\/stale\.ts, which no scanned literal still needs; delete it$/,
+			);
+			includesMatch(
+				problems,
+				/^literals: allow entry "stale" lists src\/stale\/\*\*, which no scanned literal still needs; delete it$/,
+			);
+		});
+
+		it("fails a tsconfig include that matches no file", () => {
+			const root = scratch();
+			edit(root, "tsconfig.json", '"test"]', '"test", "tests/**/*.ts"]');
+
+			includesMatch(
+				layout(root, "literals"),
+				/^literals: tsconfig\.json:include\[4\] tests\/\*\*\/\*\.ts matches no file, so typecheck silently skips it$/,
 			);
 		});
 	});
@@ -937,6 +976,30 @@ describe("layout guard", () => {
 			includesMatch(
 				layout(prefix, "discovery"),
 				/^discovery: server\/gates\.ts has 0 of the trusted test predicate "path\.startsWith\(\\"test\/\\"\) && .*", expected 1/,
+			);
+
+			const twice = scratch();
+			edit(
+				twice,
+				manifest,
+				'"test/integration/*.test.ts"',
+				'"test/integration/*.test.ts", "test/integration/*.test.ts"',
+			);
+
+			includesMatch(
+				layout(twice, "discovery"),
+				/^discovery: \.github\/factory\/gates\/gates\.json lists testGlob test\/integration\/\*\.test\.ts more than once, so the trusted gate refuses the manifest$/,
+			);
+
+			const moved = scratch();
+			renameSync(
+				join(moved, "server/gates.ts"),
+				join(moved, "server/gates.moved"),
+			);
+
+			includesMatch(
+				layout(moved, "discovery"),
+				/^discovery: server\/gates\.ts is missing, so the trusted test selection cannot be checked; audit the moved or changed test selection code, then update discovery\.trusted\.materializer and discovery\.trusted\.predicates in scripts\/layout-baseline\.json$/,
 			);
 
 			const nested = scratch();

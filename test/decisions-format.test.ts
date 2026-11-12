@@ -13,7 +13,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { parseJson, textsOf } from "../server/sandbox/json.ts";
+import {
+	fieldOf,
+	numberOf,
+	objectOf,
+	parseJson,
+	textsOf,
+} from "../server/sandbox/json.ts";
 
 const repo = fileURLToPath(new URL("../", import.meta.url));
 const script = join(repo, "scripts/check-decisions.mjs");
@@ -24,7 +30,7 @@ after(() => {
 	for (const dir of temps) rmSync(dir, { recursive: true, force: true });
 });
 
-function scratch(): string {
+function copyRepo(): string {
 	const root = mkdtempSync(join(tmpdir(), "decisions-"));
 	temps.push(root);
 	mkdirSync(join(root, "docs"));
@@ -36,6 +42,24 @@ function scratch(): string {
 	);
 
 	return root;
+}
+
+function appendLoggedRow(root: string): void {
+	appendFileSync(
+		join(root, file),
+		`${lastTimestamp(root)}\tlayout\tappend a row\twhy it was appended\t'-evidence starting with a dash\tdone\n`,
+	);
+}
+
+function checkpointBytes(root: string): number {
+	const checkpoint = parseJson(
+		readFileSync(join(root, "scripts/decisions-checkpoint.json"), "utf8"),
+	);
+
+	const bytes = numberOf(fieldOf(objectOf(checkpoint), "bytes"));
+	assert.ok(bytes !== null);
+
+	return bytes;
 }
 
 function check(root: string): string[] {
@@ -64,7 +88,15 @@ function rowCount(root: string): number {
 	return readFileSync(join(root, file), "utf8").trimEnd().split("\n").length;
 }
 
-describe("decisions guard", () => {
+function decisionsSuite(withAppendedRow: boolean): void {
+	const scratch = (): string => {
+		const root = copyRepo();
+
+		if (withAppendedRow) appendLoggedRow(root);
+
+		return root;
+	};
+
 	it("passes the committed log", () => {
 		assert.deepEqual(check(scratch()), []);
 	});
@@ -100,7 +132,7 @@ describe("decisions guard", () => {
 		const problems = check(root);
 		assert.ok(
 			problems.includes(
-				`${file}: the first ${bytes.length} bytes changed; recorded rows are append-only`,
+				`${file}: the first ${checkpointBytes(root)} bytes changed; recorded rows are append-only`,
 			),
 			problems.join("\n"),
 		);
@@ -148,4 +180,9 @@ describe("decisions guard", () => {
 			check(header).some((p) => p.startsWith(`${file}:1 header is not`)),
 		);
 	});
-});
+}
+
+describe("decisions guard", () => decisionsSuite(false));
+
+describe("decisions guard after a log.sh-style appended row", () =>
+	decisionsSuite(true));
