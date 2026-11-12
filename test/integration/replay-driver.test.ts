@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
-import { spawn, execFileSync, type ChildProcess } from "node:child_process";
+import {
+	spawn,
+	spawnSync,
+	execFileSync,
+	type ChildProcess,
+} from "node:child_process";
 import {
 	cp,
 	mkdir,
@@ -110,13 +115,11 @@ it("waits for two visible-test deadlines plus 60 seconds after signaling stop", 
 
 	const sandbox = await readFile("server/sandbox.ts", "utf8");
 
-	const limit =
-		sandbox.match(/export const VISIBLE_LIMIT_MS = ([\d_]+);/)?.[1] ??
-		sandbox.match(
-			/timer = setTimeout\(\(\) => \{\s*timedOut = true;[\s\S]*?\}, ([\d_]+)\);/,
-		)?.[1];
+	const limit = sandbox.match(
+		/^export const VISIBLE_LIMIT_MS = ([\d_]+);$/m,
+	)?.[1];
 
-	assert.ok(limit);
+	assert.ok(limit, "server/sandbox.ts declares VISIBLE_LIMIT_MS");
 
 	const polls = Math.ceil(
 		((2 * Number(limit.replaceAll("_", ""))) / 1000 + 60) * 10,
@@ -157,6 +160,57 @@ printf '%s' "$polls"
 		assert.equal(Number(output), polls + 1);
 	} finally {
 		await rm(join(pidfile, ".."), { recursive: true, force: true });
+	}
+});
+
+it("refuses to signal or wait when the visible-test deadline is not declared", async () => {
+	const source = await readFile(script, "utf8");
+	const stop = source.match(/stop_child\(\) \{[\s\S]*?\n\}/)?.[0];
+	const step = source.match(/^replay_step\(\) \{.*\}$/m)?.[0];
+	assert.ok(stop && step);
+
+	const fake = await mkdtemp(join(tmpdir(), "stop-undeclared-"));
+	const steps = ".pi/skills/verify-factory/scripts/drive-replay.ts";
+
+	try {
+		await mkdir(join(fake, ".pi/skills/verify-factory/scripts"), {
+			recursive: true,
+		});
+		await cp(steps, join(fake, steps));
+		await mkdir(join(fake, "server"));
+		await writeFile(
+			join(fake, "server/sandbox.ts"),
+			"export const VISIBLE_LIMIT = 300_000;\n",
+		);
+		await writeFile(join(fake, "pid"), "123");
+
+		const result = spawnSync(
+			"bash",
+			[
+				"-c",
+				`
+set -euo pipefail
+pidfile="$1/pid"
+control="$1"
+polls=0
+alive() { polls=$((polls + 1)); (( polls <= 5 )); }
+owned() { return 0; }
+kill() { echo "signaled $*"; }
+sleep() { :; }
+${step}
+${stop}
+if stop_child; then echo "stopped after $polls"; else echo "refused after $polls"; fi
+`,
+				"stop-undeclared",
+				fake,
+			],
+			{ encoding: "utf8" },
+		);
+
+		assert.equal(result.stdout, "refused after 1\n");
+		assert.match(result.stderr, /visible-test deadline not found/);
+	} finally {
+		await rm(fake, { recursive: true, force: true });
 	}
 });
 
