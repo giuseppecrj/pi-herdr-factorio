@@ -241,6 +241,75 @@ test("merged tree takes candidate scripts but still drops nested config inside t
 	assert.deepEqual(result.ignoredChanges, ["scripts/biome.json"]);
 });
 
+test("merged tree takes maintained skills and formal TypeScript, never private Pi state or acceptance", async (t) => {
+	const f = repo(t);
+	const probe = ".pi/skills/verify-factory/probes/p/probe.ts";
+	f.put(probe, "main probe\n");
+	f.put(".pi/skills/verify-factory/probes/p/README.md", "main readme\n");
+	f.put(".pi/skills/verify-factory/scripts/gone.ts", "main\n");
+	f.put("docs/statecharts/journey/view.ts", "main view\n");
+	f.put("docs/statecharts/journey/Journey.tla", "main model\n");
+	f.put("test/acceptance/1/checks/a.test.ts", "main acceptance\n");
+	const gateSha = f.commit();
+
+	f.put(probe, "candidate probe\n");
+	f.put(".pi/skills/verify-factory/probes/p/README.md", "candidate readme\n");
+	rmSync(join(f.root, ".pi/skills/verify-factory/scripts/gone.ts"));
+	f.put(".pi/skills/verify-factory/biome.json", "{}");
+	f.put("docs/statecharts/journey/view.ts", "candidate view\n");
+	f.put(".pi/daily-log/2026-11-12.md", "private log\n");
+	f.put(".pi/loops/loop.json", "{}");
+	f.put(".pi/sessions/s.jsonl", "{}\n");
+	const sha = f.commit();
+	const dest = join(f.root, "out");
+
+	const result = await materializeCandidate({
+		repository: f.root,
+		gateSha,
+		candidateSha: sha,
+		dest,
+		replacements: [],
+	});
+
+	assert.equal(readFileSync(join(dest, probe), "utf8"), "candidate probe\n");
+
+	assert.equal(
+		readFileSync(
+			join(dest, ".pi/skills/verify-factory/probes/p/README.md"),
+			"utf8",
+		),
+		"candidate readme\n",
+	);
+
+	assert.equal(
+		readFileSync(join(dest, "docs/statecharts/journey/view.ts"), "utf8"),
+		"candidate view\n",
+	);
+
+	assert.equal(
+		readFileSync(join(dest, "docs/statecharts/journey/Journey.tla"), "utf8"),
+		"main model\n",
+	);
+
+	for (const path of [
+		".pi/skills/verify-factory/scripts/gone.ts",
+		".pi/skills/verify-factory/biome.json",
+		".pi/daily-log",
+		".pi/loops",
+		".pi/sessions",
+	])
+		assert.equal(existsSync(join(dest, path)), false, path);
+
+	assert.deepEqual(result.newTests, []);
+
+	assert.deepEqual(result.ignoredChanges, [
+		".pi/daily-log/2026-11-12.md",
+		".pi/loops/loop.json",
+		".pi/sessions/s.jsonl",
+		".pi/skills/verify-factory/biome.json",
+	]);
+});
+
 test("a candidate defect cannot pass preserved regression tests; receipts bind both SHAs", async (t) => {
 	const f = repo(t);
 	f.put("src/value.ts", 'export const value = "wrong";\n');

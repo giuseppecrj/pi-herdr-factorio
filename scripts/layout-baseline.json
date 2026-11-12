@@ -6,17 +6,11 @@
 			"test/acceptance/**",
 			"docs/prototypes/anthropic-route/**",
 			"docs/prototypes/ledger-branch/**",
-			"docs/prototypes/vm-sandbox/**"
+			"docs/prototypes/vm-sandbox/**",
+			"docs/prototypes/heldout-ci/collect-probe.ts",
+			"docs/prototypes/trusted-ci/**"
 		],
-		"exceptions": [
-			{
-				"file": ".pi/skills/verify-factory/scripts/status-driver.ts",
-				"specifier": "./extension/index.ts",
-				"resolveFrom": ".",
-				"until": "L02",
-				"caller": ".pi/skills/verify-factory/scripts/drive-status.sh"
-			}
-		],
+		"exceptions": [],
 		"reverseEdges": [
 			"src/accept.ts -> server/sandbox/json.ts",
 			"src/artifacts.ts -> server/sandbox/json.ts",
@@ -727,7 +721,7 @@
 			"kind": "paths",
 			"reader": "server/gates.ts",
 			"tokens": {
-				"const SOURCE = [\"src\", \"extension\", \"server\", \"skills\", \"scripts\"];": 1
+				"const SOURCE = [ \"src\", \"extension\", \"server\", \"skills\", \"scripts\", \".pi/skills\", \"docs/statecharts\", ];": 1
 			},
 			"targets": [
 				{
@@ -748,6 +742,14 @@
 				},
 				{
 					"path": "scripts",
+					"type": "dir"
+				},
+				{
+					"path": ".pi/skills",
+					"type": "dir"
+				},
+				{
+					"path": "docs/statecharts",
 					"type": "dir"
 				}
 			]
@@ -1066,12 +1068,12 @@
 			"kind": "paths",
 			"reader": "test/artifacts.test.ts",
 			"tokens": {
-				"\"docs/prototypes/acceptance-isolation/self-test.mjs\"": 1,
+				"\".pi/skills/verify-factory/probes/acceptance-isolation/self-test.mjs\"": 1,
 				"readFileSync(\"server/sandbox/bwrap.ts\"": 1
 			},
 			"targets": [
 				{
-					"path": "docs/prototypes/acceptance-isolation/self-test.mjs",
+					"path": ".pi/skills/verify-factory/probes/acceptance-isolation/self-test.mjs",
 					"type": "file"
 				},
 				{
@@ -2000,16 +2002,12 @@
 			"reader": "test/status-driver.test.ts",
 			"tokens": {
 				"const driver = \".pi/skills/verify-factory/scripts/status-driver.ts\"": 1,
-				"resolve(\"extension\")": 1
+				"resolve(driver)": 1
 			},
 			"targets": [
 				{
 					"path": ".pi/skills/verify-factory/scripts/status-driver.ts",
 					"type": "file"
-				},
-				{
-					"path": "extension",
-					"type": "dir"
 				}
 			]
 		},
@@ -2133,6 +2131,8 @@
 			"docs/prototypes/anthropic-route/**",
 			"docs/prototypes/ledger-branch/**",
 			"docs/prototypes/vm-sandbox/**",
+			"docs/prototypes/heldout-ci/collect-probe.ts",
+			"docs/prototypes/trusted-ci/**",
 			"test/fixtures/**"
 		],
 		"allow": [
@@ -2147,30 +2147,9 @@
 				"paths": ["src/example.ts", "test/existing.test.ts"]
 			},
 			{
-				"reason": "synthetic held-out suites that the gate probes write into temporary repositories",
-				"files": [
-					"docs/prototypes/heldout-ci/**",
-					"docs/prototypes/trusted-ci/**"
-				],
-				"globs": ["test/acceptance/*", "test/acceptance/**"]
-			},
-			{
-				"reason": "synthetic candidate files that the trusted-ci probe writes into its temporary repository",
-				"files": ["docs/prototypes/trusted-ci/**"],
-				"paths": [
-					"src/.editorconfig",
-					"src/.gitignore",
-					"src/.oxlintrc.json",
-					"src/biome.json",
-					"src/gate-cheat.ts",
-					"src/gate-format.ts",
-					"src/gate-lint.ts",
-					"src/gate-stream.ts",
-					"src/gate-types.ts",
-					"test/gate-new.cases.ts",
-					"test/gate-new.test.ts",
-					"test/new-thing.test.ts"
-				]
+				"reason": "synthetic held-out suites that the held-out repair probe writes into temporary repositories",
+				"files": [".pi/skills/verify-factory/probes/heldout-ci/**"],
+				"globs": ["test/acceptance/*"]
 			}
 		]
 	},

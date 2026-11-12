@@ -1,19 +1,37 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { lstatSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import {
+	lstatSync,
+	mkdirSync,
+	readFileSync,
+	readdirSync,
+	rmSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
-import { fileRunFiles } from "../../../server/controller.ts";
-import { gitState, launchSandbox, locateBundle, SANDBOX_ROOT } from "../../../server/sandbox.ts";
-import { startGatewayProcess } from "../../../server/sandbox/gateway-client.ts";
-import { builtinTable } from "../../../server/sandbox/routes.ts";
-import { stopScopeArgv } from "../../../server/sandbox/scope.ts";
-import { detectArch } from "../../../server/sandbox/seccomp.ts";
-import { isDigest } from "../../../src/run.ts";
+import { fileRunFiles } from "../../../../../server/controller.ts";
+import {
+	gitState,
+	launchSandbox,
+	locateBundle,
+	SANDBOX_ROOT,
+} from "../../../../../server/sandbox.ts";
+import { startGatewayProcess } from "../../../../../server/sandbox/gateway-client.ts";
+import { builtinTable } from "../../../../../server/sandbox/routes.ts";
+import { stopScopeArgv } from "../../../../../server/sandbox/scope.ts";
+import { detectArch } from "../../../../../server/sandbox/seccomp.ts";
+import { isDigest } from "../../../../../src/run.ts";
+import {
+	readPlatformFile,
+	resolvePlatform,
+} from "../../../../../src/platform.ts";
 
 const [stateArg, runId] = process.argv.slice(2);
 
-assert.ok(stateArg && runId && isDigest(runId), "usage: probe.ts <lane-state-dir> <run-id>");
+assert.ok(
+	stateArg && runId && isDigest(runId),
+	"usage: probe.ts <lane-state-dir> <run-id>",
+);
 
 const stateDir = resolve(stateArg);
 const files = fileRunFiles(stateDir);
@@ -25,7 +43,11 @@ const suite = await files.artifacts.read(runId, bound.contract, bound.digest);
 
 if (suite.kind !== "found") throw new Error(`suite ${suite.kind}`);
 
-const canary = readFileSync(join(stateDir, "acceptance", runId, "canary.txt"), "utf8").trim();
+const canary = readFileSync(
+	join(stateDir, "acceptance", runId, "canary.txt"),
+	"utf8",
+).trim();
+
 const bundle = await locateBundle(SANDBOX_ROOT);
 const arch = detectArch(process.arch);
 
@@ -33,9 +55,25 @@ assert.ok(bundle && arch);
 
 const tools = ["read", "grep", "ls", "bash", "write", "edit"];
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
-const privatePaths = [`acceptance/${runId}`, `acceptance/${runId}.json`, `contracts/${runId}`];
-const privateTexts = suite.suite.files.flatMap((file) => [file.content, file.path]);
-const fingerprints = new Set(suite.suite.files.flatMap((file) => [hash(file.content), hash(`${file.content}\n`)]));
+
+const privatePaths = [
+	`acceptance/${runId}`,
+	`acceptance/${runId}.json`,
+	`contracts/${runId}`,
+];
+
+const privateTexts = suite.suite.files.flatMap((file) => [
+	file.content,
+	file.path,
+]);
+
+const fingerprints = new Set(
+	suite.suite.files.flatMap((file) => [
+		hash(file.content),
+		hash(`${file.content}\n`),
+	]),
+);
+
 let rawOutputs = 0;
 
 const inventory = (relative: string, accept: boolean) => {
@@ -44,7 +82,8 @@ const inventory = (relative: string, accept: boolean) => {
 	const stat = lstatSync(path);
 
 	if (stat.isDirectory()) {
-		for (const name of readdirSync(path)) inventory(`${relative}/${name}`, accept);
+		for (const name of readdirSync(path))
+			inventory(`${relative}/${name}`, accept);
 	} else if (stat.isFile()) {
 		if (accept && relative.endsWith("/output.txt")) {
 			const raw = readFileSync(path, "utf8");
@@ -65,23 +104,50 @@ assert.ok(rawOutputs > 0, "no private accept output to fingerprint");
 
 const input = {
 	runId,
-	gitLayout: gitState(files.workspacePath(runId)) === "dir" ? "trusted-bind" : "tmpfs",
+	gitLayout:
+		gitState(files.workspacePath(runId)) === "dir" ? "trusted-bind" : "tmpfs",
 	privatePaths,
-	fingerprints: { files: [...fingerprints], paths: suite.suite.files.map((file) => hash(file.path)) },
+	fingerprints: {
+		files: [...fingerprints],
+		paths: suite.suite.files.map((file) => hash(file.path)),
+	},
 };
 
-const stageDir = join(stateDir, "stages", runId, `build-probe-${randomBytes(4).toString("hex")}`);
+const stageDir = join(
+	stateDir,
+	"stages",
+	runId,
+	`build-probe-${randomBytes(4).toString("hex")}`,
+);
+
 const gatewayDir = join(stateDir, "gw", randomBytes(4).toString("hex"));
 
 mkdirSync(stageDir, { recursive: true, mode: 0o700 });
 
 mkdirSync(join(stateDir, "gw"), { recursive: true, mode: 0o700 });
 
+const platform = await resolvePlatform({
+	env: (name) => process.env[name],
+	readFile: () => readPlatformFile(),
+});
+
+if (!platform.ok) throw new Error(`platform_invalid reason=${platform.reason}`);
+
 const gateway = await startGatewayProcess({
 	gatewayDir,
+	platform: platform.profile,
 	auditPath: join(stageDir, "egress.jsonl"),
 	readyTimeoutMs: 10_000,
-	table: builtinTable({ stage: "build", runId, attempt: 1, model: "openai/gpt-6.1-sol", fallback: null, modelTokens: 0, modelRequests: 0 }),
+	table: builtinTable({
+		platform: platform.profile,
+		stage: "build",
+		runId,
+		attempt: 1,
+		model: "openai/gpt-6.1-sol",
+		fallback: null,
+		modelTokens: 0,
+		modelRequests: 0,
+	}),
 });
 
 if (!gateway.ok) throw new Error(`gateway ${gateway.reason}`);
@@ -166,25 +232,43 @@ out.githubDirect = await fetch('https://api.github.com', { signal: AbortSignal.t
 console.log('PROBE ' + JSON.stringify(out));
 `;
 
-const runtime = process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.()}`;
+const runtime =
+	process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.()}`;
+
 let unit: string | null = null;
 let stdout = "";
 let stderr = "";
 
 try {
 	const launched = launchSandbox({
-		stateDir, runId, stage: "build", attempt: 1,
-		bundleDir: bundle.dir, workspace: files.workspacePath(runId),
-		agentDir: join(stageDir, "agent-0"), socketPath: gateway.handle.socketPath,
-		arch, xdgRuntimeDir: runtime, tools,
-		command: ["/opt/factory/node/bin/node", "--input-type=module", "--eval", source],
+		stateDir,
+		runId,
+		stage: "build",
+		attempt: 1,
+		bundleDir: bundle.dir,
+		workspace: files.workspacePath(runId),
+		agentDir: join(stageDir, "agent-0"),
+		socketPath: gateway.handle.socketPath,
+		arch,
+		xdgRuntimeDir: runtime,
+		tools,
+		command: [
+			"/opt/factory/node/bin/node",
+			"--input-type=module",
+			"--eval",
+			source,
+		],
 	});
 
 	assert.ok(launched, "unsafe workspace");
 	unit = launched.unit;
 	const child = launched.child;
-	child.stdout?.on("data", (chunk) => { stdout += chunk; });
-	child.stderr?.on("data", (chunk) => { stderr += chunk; });
+	child.stdout?.on("data", (chunk) => {
+		stdout += chunk;
+	});
+	child.stderr?.on("data", (chunk) => {
+		stderr += chunk;
+	});
 
 	const ended = new Promise<number | null>((done, reject) => {
 		child.on("close", done);
@@ -196,9 +280,15 @@ try {
 	const code = await ended;
 	const line = stdout.split("\n").find((l) => l.startsWith("PROBE "));
 
-	if (!line) throw new Error(`inconclusive: no probe output, exit ${code}, stderr ${stderr.length} bytes`);
+	if (!line)
+		throw new Error(
+			`inconclusive: no probe output, exit ${code}, stderr ${stderr.length} bytes`,
+		);
 	const seen = JSON.parse(line.slice(6));
-	const privateOutputLeak = privateTexts.some((text) => stdout.includes(text) || stderr.includes(text));
+
+	const privateOutputLeak = privateTexts.some(
+		(text) => stdout.includes(text) || stderr.includes(text),
+	);
 
 	const pass =
 		code === 0 &&
@@ -220,14 +310,35 @@ try {
 		!stdout.includes(canary) &&
 		!stderr.includes(canary);
 
-	console.log(JSON.stringify({ ...seen, bundle: bundle.digest, runId, acceptanceDigest: suite.receipt.acceptanceDigest, modelRequests: 0, exit: code, result: pass ? "PASS" : seen.complete && code === 0 ? "FAIL" : "INCONCLUSIVE" }, null, 2));
+	console.log(
+		JSON.stringify(
+			{
+				...seen,
+				bundle: bundle.digest,
+				runId,
+				acceptanceDigest: suite.receipt.acceptanceDigest,
+				modelRequests: 0,
+				exit: code,
+				result: pass
+					? "PASS"
+					: seen.complete && code === 0
+						? "FAIL"
+						: "INCONCLUSIVE",
+			},
+			null,
+			2,
+		),
+	);
 	process.exitCode = pass ? 0 : 1;
 } finally {
 	if (unit !== null) {
 		const [command, ...args] = stopScopeArgv(unit);
 
 		try {
-			execFileSync(command ?? "systemctl", args, { env: { ...process.env, XDG_RUNTIME_DIR: runtime }, stdio: "ignore" });
+			execFileSync(command ?? "systemctl", args, {
+				env: { ...process.env, XDG_RUNTIME_DIR: runtime },
+				stdio: "ignore",
+			});
 		} catch {
 			console.error("scope stop returned nonzero; verify no scope remains");
 		}

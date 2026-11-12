@@ -308,9 +308,53 @@ describe("layout guard", () => {
 			);
 		});
 
-		it("keeps the status driver's root-copy exception to its one import", () => {
+		const driver = ".pi/skills/verify-factory/scripts/status-driver.ts";
+		const caller = ".pi/skills/verify-factory/scripts/drive-status.sh";
+
+		function plantRootCopy(root: string): void {
+			write(
+				root,
+				driver,
+				`import piHerdrFactorio from "./extension/index.ts";\n${read(root, driver)}`,
+			);
+			edit(
+				root,
+				caller,
+				`[ -f "$lane/ws/${driver}" ]`,
+				`cp "$lane/ws/${driver}" "$lane/ws/.status-driver.ts" 2>/dev/null`,
+			);
+			edit(root, caller, ` ${driver} status)`, " .status-driver.ts status)");
+			edit(
+				root,
+				"scripts/layout-baseline.json",
+				'"exceptions": [],',
+				`"exceptions": [${JSON.stringify({
+					file: driver,
+					specifier: "./extension/index.ts",
+					resolveFrom: ".",
+					until: "L02",
+					caller,
+				})}],`,
+			);
+		}
+
+		it("fails the retired root-copy import now that no exception allows it", () => {
 			const root = scratch();
-			const driver = ".pi/skills/verify-factory/scripts/status-driver.ts";
+			write(
+				root,
+				driver,
+				`import piHerdrFactorio from "./extension/index.ts";\n${read(root, driver)}`,
+			);
+
+			includesMatch(
+				layout(root, "imports"),
+				/^imports: \.pi\/skills\/verify-factory\/scripts\/status-driver\.ts imports \.\/extension\/index\.ts, but \.pi\/skills\/verify-factory\/scripts\/extension\/index\.ts does not exist$/,
+			);
+		});
+
+		it("keeps a root-copy exception to its one import", () => {
+			const root = scratch();
+			plantRootCopy(root);
 			appendFileSync(join(root, driver), 'import "./src/run.ts";\n');
 
 			includesMatch(
@@ -330,9 +374,9 @@ describe("layout guard", () => {
 			);
 		});
 
-		it("binds the status driver's exception to where its staging caller copies and runs it", () => {
-			const caller = ".pi/skills/verify-factory/scripts/drive-status.sh";
+		it("binds a root-copy exception to where its staging caller copies and runs it", () => {
 			const outside = scratch();
+			plantRootCopy(outside);
 			edit(
 				outside,
 				caller,
@@ -346,6 +390,7 @@ describe("layout guard", () => {
 			);
 
 			const nested = scratch();
+			plantRootCopy(nested);
 			edit(
 				nested,
 				caller,
@@ -359,6 +404,7 @@ describe("layout guard", () => {
 			);
 
 			const elsewhere = scratch();
+			plantRootCopy(elsewhere);
 			edit(elsewhere, caller, '(cd "$lane/ws" && node', '(cd "$lane" && node');
 
 			includesMatch(
@@ -797,11 +843,16 @@ describe("layout guard", () => {
 
 		it("fails a tsconfig include that matches no file", () => {
 			const root = scratch();
-			edit(root, "tsconfig.json", '"test"]', '"test", "tests/**/*.ts"]');
+			edit(
+				root,
+				"tsconfig.json",
+				'"docs/statecharts"]',
+				'"docs/statecharts", "tests/**/*.ts"]',
+			);
 
 			includesMatch(
 				layout(root, "literals"),
-				/^literals: tsconfig\.json:include\[4\] tests\/\*\*\/\*\.ts matches no file, so typecheck silently skips it$/,
+				/^literals: tsconfig\.json:include\[6\] tests\/\*\*\/\*\.ts matches no file, so typecheck silently skips it$/,
 			);
 		});
 	});

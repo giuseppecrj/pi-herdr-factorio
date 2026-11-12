@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { copyFileSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { after, describe, it } from "node:test";
@@ -74,13 +74,9 @@ async function registered(args: string, cwd: string) {
 }
 
 function drive(args: string, cwd: string) {
-	const root = temp("status-driver-root-");
-	copyFileSync(driver, join(root, ".status-driver.ts"));
-	symlinkSync(resolve("extension"), join(root, "extension"));
-
 	return spawnSync(
 		process.execPath,
-		["--experimental-strip-types", join(root, ".status-driver.ts"), args],
+		["--experimental-strip-types", resolve(driver), args],
 		{ cwd, encoding: "utf8" },
 	);
 }

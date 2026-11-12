@@ -1,35 +1,51 @@
 import { spawnSync } from "node:child_process";
-import piHerdrFactorio from "./extension/index.ts";
+import { registerFactory } from "../../../../extension/index.ts";
+import { readPlatformFile, resolvePlatform } from "../../../../src/platform.ts";
 
-type Handler = (args: string, ctx: unknown) => Promise<void>;
-const handlers = new Map<string, Handler>();
+let handler: ((args: string) => Promise<void>) | undefined;
 const sent: string[] = [];
-const stub = {
-	registerCommand: (name: string, def: { handler: Handler }) => {
-		handlers.set(name, def.handler);
+
+registerFactory(
+	{
+		registerCommand: (name, options) => {
+			if (name !== "factory") return;
+
+			// SAFETY: the factory handler reads only `cwd` from its context.
+			const ctx = { cwd: process.cwd() } as Parameters<
+				typeof options.handler
+			>[1];
+
+			handler = (args) => options.handler(args, ctx);
+		},
+		sendMessage: (message) => {
+			sent.push(String(message.content));
+		},
+		exec: async (command, args, options) => {
+			const r = spawnSync(command, args, {
+				cwd: options?.cwd,
+				encoding: "utf8",
+				timeout: 30_000,
+			});
+
+			return {
+				stdout: r.stdout ?? "",
+				stderr: r.stderr ?? "",
+				code: r.status ?? 1,
+				killed: false,
+			};
+		},
 	},
-	sendMessage: (m: { content: string }) => {
-		sent.push(m.content);
-	},
-	exec: async (command: string, args: string[], options?: { cwd?: string }) => {
-		const r = spawnSync(command, args, {
-			cwd: options?.cwd,
-			encoding: "utf8",
-			timeout: 30_000,
-		});
-		return {
-			stdout: r.stdout ?? "",
-			stderr: r.stderr ?? "",
-			code: r.status ?? 1,
-			killed: false,
-		};
-	},
-};
-piHerdrFactorio(stub as unknown as Parameters<typeof piHerdrFactorio>[0]);
-const handler = handlers.get("factory");
-if (!handler) {
+	resolvePlatform({
+		env: (name) => process.env[name],
+		readFile: () => readPlatformFile(),
+	}),
+);
+
+if (handler === undefined) {
 	console.error("command factory not registered");
 	process.exit(2);
 }
-await handler(process.argv[2] ?? "status", { cwd: process.cwd() });
+
+await handler(process.argv[2] ?? "status");
+
 console.log(sent.join("\n"));

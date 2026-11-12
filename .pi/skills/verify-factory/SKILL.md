@@ -88,7 +88,7 @@ Every drive script sent through `vm.sh` requires the `GH_HOST` that `vm.sh` expo
 
 Feature recipes are in `.pi/skills/verify-factory/features/`. Each lists the command and the observable result that proves it.
 
-Pi's print mode (`pi -p "/factory status"`) sends the text to the model instead of running the command, and spends credits. `status-driver.ts` registers the real extension on a stub Pi and calls the registered `factory` handler. That is the same handler Pi runs.
+Pi's print mode (`pi -p "/factory status"`) sends the text to the model instead of running the command, and spends credits. `scripts/status-driver.ts` registers the real extension command on a stub Pi and calls the registered `factory` handler. That is the same handler Pi runs. It runs where it is checked in, from the lane checkout.
 
 Mutations (creating fixture issues, labels, comments, restarts, and every `tick`, `run` or `serve`, which post marker comments) need the fixture grant from the task. A `tick`, `run` or `serve` whose sandbox preflight passes also runs a model stage and spends tokens, so it needs the model-spend grant too. See `features/sandbox-stage.md`. Use one fixture issue per lane, named with the PR ID and worker number. A step that needs the owner to review or merge stays unchecked until the owner acts. Only the owner changes `factory:enabled` or production rules. Read `features/handoff.md` for F09a bootstrap/P4, protection, exact-head identity, refresh, and merge observation. `status` and viewer reads spend no model tokens; `tick` is not a dry run. F09a rollout is forward-only from a drained controller, never deletion of private books/claims to restart.
 
@@ -172,6 +172,6 @@ Under the cleanup grant, clean residue after failed attempts too. Verify evidenc
 | `drive-serve.sh` | VM | `vm.sh drive-serve.sh <pr-id> <n> start <issue>...` or `stop` |
 | `vm-snapshot.sh` | VM | `vm.sh vm-snapshot.sh <pr-id> <n> <minutes> <glob>` |
 | `cleanup.sh` | VM | `vm.sh cleanup.sh <pr-id> <n>` |
-| `status-driver.ts` | VM, copied by `drive-status.sh` | not run directly |
+| `status-driver.ts` | VM, run in place by `drive-status.sh` | `node --experimental-strip-types .pi/skills/verify-factory/scripts/status-driver.ts [status\|bogus]` from the lane checkout |
 
 Use `SSH_AUTH_SOCK_OVERRIDE` to point `vm.sh` at a different agent socket.

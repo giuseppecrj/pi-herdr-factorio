@@ -19,14 +19,14 @@ Preconditions:
 - A lane exists from `lane-setup.sh <pr-id> <worker-n>`.
 
 - **Run status.** `.pi/skills/verify-factory/scripts/vm.sh .pi/skills/verify-factory/scripts/drive-status.sh <pr-id> <worker-n>`. Exit code 0. The first line of `status.txt` is `pi-herdr-factorio <version>` and matches `package.json`. The stage table follows.
-- **Check the unknown subcommand.** On the VM in the lane workspace, run `node --experimental-strip-types .status-driver.ts bogus`. The output is `Usage: /factory status | /factory run <issue>`.
+- **Check the unknown subcommand.** On the VM in the lane workspace, run `node --experimental-strip-types .pi/skills/verify-factory/scripts/status-driver.ts bogus`. The output is `Usage: /factory status | /factory run <issue>`.
 
 ### Compare attention on the VM
 
-After the drive copies `.status-driver.ts` into the lane checkout, run there with the same `STATE` used for CLI status:
+In the lane checkout, run the driver with the same `STATE` used for CLI status:
 
 ```bash
-FACTORY_STATE_DIR="$STATE" node --experimental-strip-types .status-driver.ts status
+FACTORY_STATE_DIR="$STATE" node --experimental-strip-types .pi/skills/verify-factory/scripts/status-driver.ts status
 ```
 
 Require the same seven group counts and issue/PR membership as CLI `attention.groups`, with `spec_review` not enabled and unknown ages preserved. The extension still prints its separate controller-unavailable/execution-disabled lines; local attention does not imply a daemon is running. Lane setup supplies a Git origin. Outside that setup, a checkout without origin cannot identify its repository.
