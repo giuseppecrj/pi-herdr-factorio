@@ -4008,13 +4008,36 @@
 						"from": "reader",
 						"path": "../../fixtures/feedback/github-review.json"
 					}
-				},
+				}
+			]
+		},
+		{
+			"id": "test-reads-orchestrator-fixtures",
+			"kind": "paths",
+			"reader": "test/src/controller/orchestrator-fixtures.ts",
+			"tokens": {
+				"new URL( \"../../../src/controller/orchestrator.ts\", import.meta.url, )": 1,
+				"new URL( \"../../../host/controller/run-files.ts\", import.meta.url, )": 1,
+				"new URL(\"../../../src/trust/admission.ts\", import.meta.url)": 1,
+				"new URL(\"../../fake-ticket-adapter.ts\", import.meta.url)": 1,
+				"new URL(\"../../../host/sandbox/result.ts\", import.meta.url)": 1,
+				"new URL(\"../../../src/trust/platform.ts\", import.meta.url)": 1
+			},
+			"targets": [
 				{
 					"path": "src/controller/orchestrator.ts",
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../src/controller/orchestrator.ts"
+						"path": "../../../src/controller/orchestrator.ts"
+					}
+				},
+				{
+					"path": "host/controller/run-files.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../../host/controller/run-files.ts"
 					}
 				},
 				{
@@ -4022,7 +4045,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../src/trust/admission.ts"
+						"path": "../../../src/trust/admission.ts"
 					}
 				},
 				{
@@ -4030,7 +4053,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "./fake-ticket-adapter.ts"
+						"path": "../../fake-ticket-adapter.ts"
 					}
 				},
 				{
@@ -4038,7 +4061,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../host/sandbox/result.ts"
+						"path": "../../../host/sandbox/result.ts"
 					}
 				},
 				{
@@ -4046,7 +4069,88 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../src/trust/platform.ts"
+						"path": "../../../src/trust/platform.ts"
+					}
+				}
+			]
+		},
+		{
+			"id": "test-reads-host-controller",
+			"kind": "paths",
+			"reader": "test/host/controller/host-controller.test.ts",
+			"tokens": {
+				"new URL(\"../../../host/controller/run-files.ts\", import.meta.url)": 1,
+				"new URL(\"../../../host/controller/outbox.ts\", import.meta.url)": 1,
+				"new URL(\"../../../host/controller/terminal.ts\", import.meta.url)": 1
+			},
+			"targets": [
+				{
+					"path": "host/controller/run-files.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../../host/controller/run-files.ts"
+					}
+				},
+				{
+					"path": "host/controller/outbox.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../../host/controller/outbox.ts"
+					}
+				},
+				{
+					"path": "host/controller/terminal.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../../host/controller/terminal.ts"
+					}
+				}
+			]
+		},
+		{
+			"id": "test-reads-handoff",
+			"kind": "paths",
+			"reader": "test/src/candidate/handoff.test.ts",
+			"tokens": {
+				"new URL(\"../../../src/candidate/codec.ts\", import.meta.url)": 1,
+				"new URL(\"../../../src/candidate/handoff.ts\", import.meta.url)": 1
+			},
+			"targets": [
+				{
+					"path": "src/candidate/codec.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../../src/candidate/codec.ts"
+					}
+				},
+				{
+					"path": "src/candidate/handoff.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../../src/candidate/handoff.ts"
+					}
+				}
+			]
+		},
+		{
+			"id": "test-reads-layout-host-contract",
+			"kind": "paths",
+			"reader": "test/host/controller/layout-host-contract.test.ts",
+			"tokens": {
+				"new URL(\"../../fixtures/layout-host/cli.json\", import.meta.url)": 1
+			},
+			"targets": [
+				{
+					"path": "test/fixtures/layout-host/cli.json",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../fixtures/layout-host/cli.json"
 					}
 				}
 			]
@@ -4054,7 +4158,7 @@
 		{
 			"id": "test-reads-host-harness-parity",
 			"kind": "paths",
-			"reader": "test/host-harness-parity.test.ts",
+			"reader": "test/src/contract/host-harness-parity.test.ts",
 			"tokens": {
 				"readFileSync(\"docs/history/path-map.md\", \"utf8\")": 1,
 				"readdirSync(\"test\", { recursive: true, encoding: \"utf8\" })": 1
@@ -4125,7 +4229,9 @@
 				"new URL(\"../../../src/maintenance/replay.ts\", import.meta.url)": 2,
 				"new URL(\"../../../src/trust/platform.ts\", import.meta.url)": 1,
 				"\"../../../.pi/skills/verify-factory/scripts/drive-replay.sh\"": 1,
-				"\"../../../.pi/skills/verify-factory/scripts/drive-replay.ts\"": 1
+				"\"../../../.pi/skills/verify-factory/scripts/drive-replay.ts\"": 1,
+				"new URL(\"../../fixtures/layout-host/old-provision.sh\", import.meta.url)": 1,
+				"new URL(\"../../../host/install/provision.sh\", import.meta.url)": 1
 			},
 			"targets": [
 				{
@@ -4174,6 +4280,22 @@
 					"via": {
 						"from": "reader",
 						"path": "../../../.pi/skills/verify-factory/scripts/drive-replay.ts"
+					}
+				},
+				{
+					"path": "test/fixtures/layout-host/old-provision.sh",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../fixtures/layout-host/old-provision.sh"
+					}
+				},
+				{
+					"path": "host/install/provision.sh",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../../host/install/provision.sh"
 					}
 				}
 			]

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { test } from "node:test";
-import { sourceExcerpts } from "../src/contract/prompt.ts";
+import { sourceExcerpts } from "../../../src/contract/prompt.ts";
 
 function mainHarness(sources: string[], tests: string[]): string[] {
 	const stem = (path: string) =>

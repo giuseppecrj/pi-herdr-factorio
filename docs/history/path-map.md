@@ -183,6 +183,7 @@ Each row is bound to the pull request that made the move. Its squash commit on `
 | L14 | #762 | `test/artifacts.test.ts` | `test/src/contract/artifacts.test.ts` | The whole file, with relative imports and readers relocated |
 | L14 | #762 | `test/specify.test.ts` | `test/src/contract/specify.test.ts` | The whole file, with relative imports and readers relocated |
 | L14 | #762 | `test/config-contract-parity.test.ts` | `test/src/contract/config-contract-parity.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/host-harness-parity.test.ts` | `test/src/contract/host-harness-parity.test.ts` | The whole file, with its prompt import relocated |
 | L14 | #762 | `test/base-check.test.ts` | `test/src/candidate/base-check.test.ts` | The whole file, with relative imports and readers relocated |
 | L14 | #762 | `test/build.test.ts` | `test/src/candidate/build.test.ts` | The whole file, with relative imports and readers relocated |
 | L14 | #762 | `test/diagnosis.test.ts` | `test/src/candidate/diagnosis.test.ts` | The whole file, with relative imports and readers relocated |
