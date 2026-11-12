@@ -1813,6 +1813,60 @@
 			]
 		},
 		{
+			"id": "test-reads-ledger-pins",
+			"kind": "paths",
+			"reader": "test/ledger-pins.test.ts",
+			"tokens": {
+				"new URL(\"./fixtures/metrics/runs-2026-11-08.jsonl\", import.meta.url)": 1,
+				"new URL(\"./ledger-real-git.ts\", import.meta.url)": 1,
+				"new URL(\"../server/controller.ts\", import.meta.url)": 1,
+				"new URL(\"../src/ledger.ts\", import.meta.url)": 1,
+				"new URL(\"../src/trust/platform.ts\", import.meta.url)": 1
+			},
+			"targets": [
+				{
+					"path": "test/fixtures/metrics/runs-2026-11-08.jsonl",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./fixtures/metrics/runs-2026-11-08.jsonl"
+					}
+				},
+				{
+					"path": "test/ledger-real-git.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./ledger-real-git.ts"
+					}
+				},
+				{
+					"path": "server/controller.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../server/controller.ts"
+					}
+				},
+				{
+					"path": "src/ledger.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../src/ledger.ts"
+					}
+				},
+				{
+					"path": "src/trust/platform.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../src/trust/platform.ts"
+					}
+				}
+			]
+		},
+		{
 			"id": "test-reads-metrics",
 			"kind": "paths",
 			"reader": "test/metrics.test.ts",
