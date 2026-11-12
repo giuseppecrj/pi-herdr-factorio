@@ -13,9 +13,9 @@ import {
 	parseMarker,
 	RUN_STATUSES,
 } from "../src/markers.ts";
-import { digestOf, runIdOf } from "../src/run.ts";
+import { digestOf, runIdOf } from "../src/core/run.ts";
 import type { HandoffReason } from "../src/handoff.ts";
-import type { JsonValue } from "../src/tickets.ts";
+import type { JsonValue } from "../src/core/json.ts";
 import {
 	type GitSha,
 	isGitSha,

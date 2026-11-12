@@ -41,7 +41,7 @@ import { detectArch } from "../server/sandbox/seccomp.ts";
 import { listScopesArgv } from "../server/sandbox/scope.ts";
 import { startGatewayProcess } from "../server/sandbox/gateway-client.ts";
 import { manifestDigest } from "../server/sandbox/manifest.ts";
-import { arrayOf, objectOf, parseJson } from "../server/sandbox/json.ts";
+import { arrayOf, objectOf, parseJson } from "../src/core/json.ts";
 import { fileAdmissionStore, snapshotDigest } from "../src/admission.ts";
 import {
 	CadenceRunner,
@@ -79,7 +79,7 @@ import {
 import { parseLedger, type ScoreEvent } from "../src/ledger.ts";
 import { measurementPrimary } from "../src/metrics.ts";
 import { Orchestrator } from "../src/orchestrator.ts";
-import { digestOf } from "../src/run.ts";
+import { digestOf } from "../src/core/run.ts";
 import {
 	isGitSha,
 	isRepoSlug,

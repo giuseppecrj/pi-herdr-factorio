@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { exclusive, privateDir, regularText } from "./artifacts.ts";
-import { digestOf, type Digest } from "./run.ts";
+import { digestOf, type Digest } from "./core/run.ts";
 import { isPinnedGrader, type ScorerConfig, type ModelId } from "./workflow.ts";
 import {
 	latestScores,
@@ -10,12 +10,7 @@ import {
 	scoreEventOf,
 	type ScoreEvent,
 } from "./ledger.ts";
-import {
-	objectOf,
-	parseJson,
-	textOf,
-	hasDuplicateKey,
-} from "../server/sandbox/json.ts";
+import { objectOf, parseJson, textOf, hasDuplicateKey } from "./core/json.ts";
 import {
 	safeMeasurementText,
 	jsonAnswer,

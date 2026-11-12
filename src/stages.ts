@@ -14,7 +14,7 @@ import {
 	type RejectReason,
 	type Run,
 	type Stage,
-} from "./run.ts";
+} from "./core/run.ts";
 
 export { MAX_REPAIR_ROUNDS } from "./handoff.ts";
 
@@ -35,7 +35,7 @@ export type StageProfile = {
 };
 
 export const STAGE_PROFILES: Record<
-	import("./run.ts").SandboxStage,
+	import("./core/run.ts").SandboxStage,
 	StageProfile
 > = {
 	admit: {

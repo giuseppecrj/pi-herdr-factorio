@@ -3,9 +3,9 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { regularText } from "./artifacts.ts";
 import type { GitHubFailure } from "./adapters/github.ts";
-import type { JsonValue } from "./tickets.ts";
+import type { JsonValue } from "./core/json.ts";
 import { posix } from "node:path";
-import { digestOf, isDigest, type Digest } from "./run.ts";
+import { digestOf, isDigest, type Digest } from "./core/run.ts";
 import { isGitSha, type GitSha, type RepoSlug } from "./workflow.ts";
 
 export type FeedbackId =

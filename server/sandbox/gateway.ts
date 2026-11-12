@@ -36,7 +36,7 @@ import {
 	responseHeadersFor,
 	SecretScanner,
 } from "./credentials.ts";
-import { anthropicMaxOutput } from "./anthropic-limits.ts";
+import { anthropicMaxOutput } from "../../src/core/models.ts";
 import { AnthropicSseMeter, SseMeter } from "./meter.ts";
 import {
 	countOf,
@@ -45,7 +45,7 @@ import {
 	objectOf,
 	parseJson,
 	textOf,
-} from "./json.ts";
+} from "../../src/core/json.ts";
 import {
 	type AdmissionState,
 	checkBody,

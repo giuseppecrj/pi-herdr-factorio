@@ -23,12 +23,7 @@ import {
 	manifestLines,
 	PINNED_VERSIONS,
 } from "../../server/sandbox/manifest.ts";
-import {
-	fieldOf,
-	objectOf,
-	parseJson,
-	textOf,
-} from "../../server/sandbox/json.ts";
+import { fieldOf, objectOf, parseJson, textOf } from "../../src/core/json.ts";
 
 const ASSETS = new URL("../../server/sandbox/assets/", import.meta.url)
 	.pathname;

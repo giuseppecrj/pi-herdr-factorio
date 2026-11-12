@@ -5,10 +5,10 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { readOwnerFeed, readOwnerRun, type FeedEntry } from "../src/feed.ts";
 import { ATTENTION_KINDS, readAttention } from "../src/attention.ts";
-import { objectOf, parseJson } from "../server/sandbox/json.ts";
-import type { JsonValue } from "../src/tickets.ts";
+import { objectOf, parseJson } from "../src/core/json.ts";
+import type { JsonValue } from "../src/core/json.ts";
 import { runCli } from "../server/cli.ts";
-import { digestOf } from "../src/run.ts";
+import { digestOf } from "../src/core/run.ts";
 import { AUTONOMY_DIGEST } from "../src/ledger.ts";
 import { candidateLifecycleFixture, withUmask } from "./helpers.ts";
 import {

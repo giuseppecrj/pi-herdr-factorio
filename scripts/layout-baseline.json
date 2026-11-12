@@ -12,29 +12,11 @@
 		],
 		"exceptions": [],
 		"reverseEdges": [
-			"src/accept.ts -> server/sandbox/json.ts",
-			"src/artifacts.ts -> server/sandbox/json.ts",
-			"src/build.ts -> server/sandbox/json.ts",
-			"src/cadence.ts -> server/sandbox/json.ts",
-			"src/diagnosis.ts -> server/sandbox/json.ts",
-			"src/explain.ts -> server/sandbox/json.ts",
 			"src/explain.ts -> server/sandbox.ts",
 			"src/feed.ts -> server/controller.ts",
-			"src/feed.ts -> server/sandbox/json.ts",
 			"src/feed.ts -> server/sandbox.ts",
-			"src/ledger.ts -> server/sandbox/json.ts",
-			"src/ledger.ts -> server/sandbox/result.ts",
 			"src/orchestrator.ts -> server/sandbox/result.ts",
-			"src/platform.ts -> server/sandbox/json.ts",
-			"src/publication.ts -> server/sandbox/json.ts",
-			"src/replay.ts -> server/sandbox/json.ts",
-			"src/replay.ts -> server/sandbox/manifest.ts",
-			"src/review.ts -> server/sandbox/anthropic-limits.ts",
-			"src/review.ts -> server/sandbox/audit.ts",
-			"src/review.ts -> server/sandbox/json.ts",
-			"src/scorers.ts -> server/sandbox/json.ts",
-			"src/validation.ts -> server/sandbox/json.ts",
-			"src/workflow.ts -> server/sandbox/anthropic-limits.ts"
+			"src/replay.ts -> server/sandbox/manifest.ts"
 		]
 	},
 	"classification": {
@@ -94,12 +76,6 @@
 			},
 			"server/sandbox.ts": {
 				"owner": "host/sandbox",
-				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
-				"from": [],
-				"since": "L00"
-			},
-			"server/sandbox/anthropic-limits.ts": {
-				"owner": "src/core",
 				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
 				"from": [],
 				"since": "L00"
@@ -172,12 +148,6 @@
 			},
 			"server/sandbox/gateway.ts": {
 				"owner": "host/gateway",
-				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
-				"from": [],
-				"since": "L00"
-			},
-			"server/sandbox/json.ts": {
-				"owner": "src/core",
 				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
 				"from": [],
 				"since": "L00"
@@ -380,6 +350,36 @@
 				"from": [],
 				"since": "L00"
 			},
+			"src/core/execution.ts": {
+				"owner": "src/core",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": ["server/sandbox/result.ts"],
+				"since": "L03"
+			},
+			"src/core/journal.ts": {
+				"owner": "src/core",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": ["server/sandbox/audit.ts"],
+				"since": "L03"
+			},
+			"src/core/json.ts": {
+				"owner": "src/core",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": ["server/sandbox/json.ts", "src/tickets.ts"],
+				"since": "L03"
+			},
+			"src/core/models.ts": {
+				"owner": "src/core",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": ["server/sandbox/anthropic-limits.ts", "src/review.ts"],
+				"since": "L03"
+			},
+			"src/core/run.ts": {
+				"owner": "src/core",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": ["src/run.ts"],
+				"since": "L03"
+			},
 			"src/diagnosis.ts": {
 				"owner": "src/candidate",
 				"seats": ["code-review", "security-review", "simplify"],
@@ -470,12 +470,6 @@
 				"from": [],
 				"since": "L00"
 			},
-			"src/run.ts": {
-				"owner": "src/core",
-				"seats": ["code-review", "security-review", "simplify"],
-				"from": [],
-				"since": "L00"
-			},
 			"src/scorers.ts": {
 				"owner": "src/maintenance",
 				"seats": ["code-review", "security-review", "simplify"],
@@ -513,7 +507,26 @@
 				"since": "L00"
 			}
 		},
-		"retired": {},
+		"retired": {
+			"src/run.ts": {
+				"owner": "src/core",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/json.ts": {
+				"owner": "src/core",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/anthropic-limits.ts": {
+				"owner": "src/core",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			}
+		},
 		"routes": {
 			"package.json": [
 				"code-review",
@@ -557,12 +570,12 @@
 				},
 				{
 					"key": "review",
-					"file": "src/run.ts",
+					"file": "src/core/run.ts",
 					"name": "REVIEW_MAX_TOKENS"
 				},
 				{
 					"key": "repair",
-					"file": "src/run.ts",
+					"file": "src/core/run.ts",
 					"name": "REPAIR_BUILD_MAX_TOKENS"
 				}
 			]
@@ -2149,6 +2162,11 @@
 			"test/fixtures/**"
 		],
 		"allow": [
+			{
+				"reason": "replayStageCaps reads the review and repair caps from their pre-L03 home at revisions before L03",
+				"files": ["src/replay.ts"],
+				"paths": ["src/run.ts"]
+			},
 			{
 				"reason": "scorerTouched treats any future file under this prefix as a scorer change; the folder does not exist yet",
 				"files": ["src/scorers.ts"],

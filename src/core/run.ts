@@ -4,7 +4,7 @@ export const REVIEW_MAX_TOKENS = 120_000;
 export const REPAIR_BUILD_MAX_TOKENS = 300_000;
 
 export function blocksReview(
-	seats: readonly import("./review.ts").SeatResult[],
+	seats: readonly import("../review.ts").SeatResult[],
 ): boolean {
 	return seats.some(
 		(seat) =>
@@ -149,7 +149,7 @@ export interface Run {
 	baseSha: string;
 	contractDigest?: Digest;
 	acceptanceDigest?: Digest;
-	readonly handoff?: import("./handoff.ts").CandidateState;
+	readonly handoff?: import("../handoff.ts").CandidateState;
 	readonly progress: Progress;
 }
 

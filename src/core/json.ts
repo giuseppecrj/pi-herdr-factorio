@@ -1,6 +1,11 @@
-import type { JsonValue } from "../../src/tickets.ts";
-
-export type { JsonValue } from "../../src/tickets.ts";
+/** A JSON value as `gh` prints it: an event before `normalize` parses it. */
+export type JsonValue =
+	| null
+	| boolean
+	| number
+	| string
+	| JsonValue[]
+	| { [key: string]: JsonValue };
 
 export type JsonObject = { readonly [key: string]: JsonValue };
 

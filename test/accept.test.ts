@@ -22,15 +22,15 @@ import {
 	writeAcceptance,
 } from "../src/accept.ts";
 import { fileArtifacts } from "../src/artifacts.ts";
-import { type FamilyInput, familyLabel } from "../src/review.ts";
-import { digestOf } from "../src/run.ts";
+import { type FamilyInput, familyLabel } from "../src/core/models.ts";
+import { digestOf } from "../src/core/run.ts";
 import {
 	renderAcceptanceSummary,
 	acceptanceKey,
 	contractBytes,
 	contractDigestOf,
 } from "../src/specify.ts";
-import type { JsonObject } from "../server/sandbox/json.ts";
+import type { JsonObject } from "../src/core/json.ts";
 import type { Contract } from "../src/specify.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
 

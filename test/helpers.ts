@@ -9,7 +9,7 @@ import {
 	type Verdict,
 	REQUIRED_CI_CHECKS,
 	verdictPasses,
-} from "../src/run.ts";
+} from "../src/core/run.ts";
 import { advance, type RunEvent } from "../src/stages.ts";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, cpSync } from "node:fs";
 import { execFileSync } from "node:child_process";

@@ -1,4 +1,4 @@
-import { isDigest, digestOf, type Digest } from "./run.ts";
+import { isDigest, digestOf, type Digest } from "./core/run.ts";
 import type { Contract, ContractDigest, CriterionKind } from "./specify.ts";
 import {
 	isGitSha,
@@ -15,8 +15,8 @@ import {
 	parseJson,
 	textOf,
 	textsOf,
-} from "../server/sandbox/json.ts";
-import type { JsonValue } from "./tickets.ts";
+} from "./core/json.ts";
+import type { JsonValue } from "./core/json.ts";
 import type { VisibleTests } from "./build.ts";
 
 export type AcceptanceBinding = Readonly<{

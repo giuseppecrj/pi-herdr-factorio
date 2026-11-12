@@ -158,7 +158,7 @@ No option emits two versions. A v2 replaces v1 on the CLI and the route, unless 
 
 Key a run on `repo` and `issue`. Do not key on `runId`.
 
-`runId` is a digest of the repository, the issue number and the admission event (`runIdOf`, `src/run.ts:58`, checked at `src/attention.ts:173`). A new admission event gives a new `runId` for the same issue. An owner's answer to a question starts one, and its `links/<runId>.json` file names the previous run (`src/attention.ts:556`). A later admission event also replaces a failed or budget-stopped run, as [Viewer](viewer.md) describes. `eventId` is that event as a decimal string.
+`runId` is a digest of the repository, the issue number and the admission event (`runIdOf`, `src/core/run.ts:58`, checked at `src/attention.ts:173`). A new admission event gives a new `runId` for the same issue. An owner's answer to a question starts one, and its `links/<runId>.json` file names the previous run (`src/attention.ts:556`). A later admission event also replaces a failed or budget-stopped run, as [Viewer](viewer.md) describes. `eventId` is that event as a decimal string.
 
 The feed keeps one run per issue. When an issue has several claims, `readAttention` keeps the one with the greatest `eventId`, then the greatest sequence number (`src/attention.ts:493` to `src/attention.ts:525`). An older run disappears from `entries` when a newer one starts.
 

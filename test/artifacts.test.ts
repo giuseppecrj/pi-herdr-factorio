@@ -24,7 +24,7 @@ import {
 	type AcceptanceSuite,
 } from "../src/accept.ts";
 import { ARTIFACT_ACCESS, fileArtifacts } from "../src/artifacts.ts";
-import { digestOf } from "../src/run.ts";
+import { digestOf } from "../src/core/run.ts";
 import {
 	type Contract,
 	contractBytes,

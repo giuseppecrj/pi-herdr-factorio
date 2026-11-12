@@ -19,7 +19,7 @@ import {
 	loadSecrets,
 } from "./credentials.ts";
 import { Gateway } from "./gateway.ts";
-import { parseJson } from "./json.ts";
+import { parseJson } from "../../src/core/json.ts";
 import { LineSplitter } from "./lines.ts";
 import { parseRouteTable, type TableMode } from "./routes.ts";
 

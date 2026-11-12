@@ -26,8 +26,8 @@ import {
 	familyLabel,
 	parseFamily,
 	withFamily,
-} from "./review.ts";
-import { type Digest, isDigest } from "./run.ts";
+} from "./core/models.ts";
+import { type Digest, isDigest } from "./core/run.ts";
 import {
 	type Contract,
 	type ContractDigest,
@@ -48,7 +48,7 @@ import {
 	parseJson,
 	textOf,
 	textsOf,
-} from "../server/sandbox/json.ts";
+} from "./core/json.ts";
 
 export type ContractRead =
 	| {

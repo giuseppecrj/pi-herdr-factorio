@@ -1090,7 +1090,7 @@ All anchors in this table refer to 5bd77d5. L00's inventory uses symbols and lit
 | `.github/workflows/ci.yml:67` and `:133` | L13 changes the CLI once; held-out regex and exact-head report binding remain. Real main dispatch follows landing. |
 | `.github/factory/WORKFLOW.md:4` | Operations reference stays valid. No gratuitous product trusted edit. Fixture repository field edits are separately owner-gated. |
 | gates scanner import near 20 | L13 adjusts relative depth and tests the real import. |
-| `src/review.ts:604` | Runtime regex controls ultrareview. L00 classifies every source file; each move inherits and tests required seats. |
+| `src/review.ts:347` | Runtime regex controls ultrareview. L00 classifies every source file; each move inherits and tests required seats. |
 | `src/replay.ts:35`, `:923-926`, `:977`, `:1010-1013`, `:1040` | Bundle roots, four constants, ls-tree pathspec, asset keys, and recipe diff are separate readers. L03/L06/L13 update them and preserve historical data lookup. |
 | drive-replay.sh near 52/66/109/285 | CLI argv ownership, VISIBLE_LIMIT_MS, and heredoc imports. L02 moves code into checked files; L11/L12/L13 update actual readers. |
 | integration/replay-driver.test.ts near 105-111 | Reads the same deadline with a fallback regex. L02 pins the reader and missing-declaration refusal; L12 moves it with visible-tests. |

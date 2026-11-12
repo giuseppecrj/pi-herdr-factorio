@@ -15,12 +15,11 @@ import {
 	auditLine,
 	JOURNAL_FILE,
 	type JournalRecord,
-	journalCharge,
-	requestSettlements,
 	openAuditFile,
 	redactMethod,
 	redactPath,
 } from "../../server/sandbox/audit.ts";
+import { journalCharge, requestSettlements } from "../../src/core/journal.ts";
 import {
 	SecretScanner,
 	secretForms,

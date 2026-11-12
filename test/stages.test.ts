@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { Stage } from "../src/run.ts";
+import type { Stage } from "../src/core/run.ts";
 import { candidateUsage, candidateProjection } from "../src/handoff.ts";
 import {
 	advance,

@@ -1,6 +1,6 @@
 import type { ClaimRecord } from "../../src/orchestrator.ts";
 import { isRunStatus, isStage } from "../../src/markers.ts";
-import { isDigest, runIdOf } from "../../src/run.ts";
+import { isDigest, runIdOf } from "../../src/core/run.ts";
 import { parseCandidateState, candidateUsage } from "../../src/handoff.ts";
 import { parseMarker, MARKER_PREFIX } from "../../src/markers.ts";
 import { parseValidationState } from "../../src/validation.ts";
@@ -10,7 +10,7 @@ import {
 	objectOf,
 	parseJson,
 	textOf,
-} from "../sandbox/json.ts";
+} from "../../src/core/json.ts";
 
 export function viewerClaim(text: string, runId: string): ClaimRecord | null {
 	const value = objectOf(parseJson(text));

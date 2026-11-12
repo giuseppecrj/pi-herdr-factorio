@@ -27,8 +27,8 @@ import { GitHubTicketWriter } from "../src/adapters/github.ts";
 import type { Exec } from "../src/gh.ts";
 import { CONTROLLER_LOGIN, markerLedger } from "../src/markers.ts";
 import type { LogFields } from "../src/orchestrator.ts";
-import { type Digest, digestOf, runIdOf } from "../src/run.ts";
-import type { JsonValue } from "../src/tickets.ts";
+import { type Digest, digestOf, runIdOf } from "../src/core/run.ts";
+import type { JsonValue } from "../src/core/json.ts";
 import {
 	answersDigestOf,
 	type Contract,

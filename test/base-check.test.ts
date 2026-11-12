@@ -43,7 +43,7 @@ import {
 	type BaseReason,
 	draftCheckFeedback,
 } from "../src/diagnosis.ts";
-import { digestOf } from "../src/run.ts";
+import { digestOf } from "../src/core/run.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
 
 function missing(argv: readonly string[]): string | null {

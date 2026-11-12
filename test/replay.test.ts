@@ -24,7 +24,7 @@ import {
 	readReplayBudget,
 	REPLAY_RUN_CAP,
 } from "../src/replay.ts";
-import { digestOf } from "../src/run.ts";
+import { digestOf } from "../src/core/run.ts";
 import {
 	isGitSha,
 	isRepoSlug,
@@ -598,6 +598,59 @@ describe("replay comparison", () => {
 			}).previous.matchesExpected,
 			"unknown",
 		);
+	});
+});
+
+describe("replay stage caps across layouts", () => {
+	const caps = (files: ReadonlyMap<string, string>) =>
+		replay.replayStageCaps("a".repeat(40), async (_command, args) => {
+			const text = files.get(String(args[1]).slice(41));
+
+			return text === undefined
+				? { code: 128, stdout: "", stderr: "missing" }
+				: { code: 0, stdout: text, stderr: "" };
+		});
+
+	const run = [
+		"export const REVIEW_MAX_TOKENS = 120_000;",
+		"export const REPAIR_BUILD_MAX_TOKENS = 300_000;",
+	].join("\n");
+
+	const stages = [
+		["src/accept.ts", "export const ACCEPTANCE_MAX_TOKENS = 100_000;"],
+		["src/build.ts", "export const BUILD_MAX_TOKENS = 400_000;"],
+	] as const;
+
+	const expected = {
+		accept: 100_000,
+		build: 400_000,
+		review: 120_000,
+		repair: 300_000,
+	};
+
+	it("reads the review and repair caps from the pre-L03 and the src/core layout", async () => {
+		for (const home of ["src/run.ts", "src/core/run.ts"])
+			assert.deepEqual(
+				await caps(new Map([...stages, [home, run]])),
+				expected,
+				home,
+			);
+	});
+
+	it("refuses a cap declared in both homes, in neither, or without a declaration", async () => {
+		for (const files of [
+			new Map([...stages, ["src/run.ts", run], ["src/core/run.ts", run]]),
+			new Map(stages),
+			new Map([...stages, ["src/core/run.ts", "export const OTHER = 1;"]]),
+			new Map([
+				["src/build.ts", stages[1][1]],
+				["src/core/run.ts", run],
+			]),
+		])
+			await assert.rejects(
+				caps(files),
+				/^Error: replay_stage_caps_unavailable$/,
+			);
 	});
 });
 

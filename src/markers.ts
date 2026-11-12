@@ -1,9 +1,9 @@
 import type { CommentEdit, IssueComment } from "./adapters/github.ts";
 import type { HandoffReason } from "./handoff.ts";
 import { type ControllerIdentity, EXE_DEV_PLATFORM } from "./platform.ts";
-import { type Digest, isDigest, runIdOf, type Stage } from "./run.ts";
+import { type Digest, isDigest, runIdOf, type Stage } from "./core/run.ts";
 import { STAGE_ORDER } from "./stages.ts";
-import type { JsonValue } from "./tickets.ts";
+import type { JsonValue } from "./core/json.ts";
 import {
 	type CadenceJob,
 	type GitSha,

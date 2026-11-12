@@ -6,7 +6,7 @@ import {
 	objectOf,
 	parseJson,
 	textOf,
-} from "../../server/sandbox/json.ts";
+} from "../../src/core/json.ts";
 
 /**
  * A stand-in Pi RPC process for runner tests. `replay <fixture>` answers the

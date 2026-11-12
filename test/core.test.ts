@@ -15,7 +15,7 @@ import {
 	type Run,
 	type SandboxStage,
 	type Verdict,
-} from "../src/run.ts";
+} from "../src/core/run.ts";
 import {
 	arrayOf,
 	boolOf,
@@ -28,15 +28,15 @@ import {
 	parseJson,
 	textOf,
 	textsOf,
-} from "../server/sandbox/json.ts";
-import type { JsonValue } from "../src/tickets.ts";
+} from "../src/core/json.ts";
+import type { JsonValue } from "../src/core/json.ts";
 import {
 	ANTHROPIC_MAX_OUTPUT_TOKENS,
 	ANTHROPIC_MODEL_IDS,
 	anthropicMaxOutput,
 	isAnthropicModelId,
 	parseAnthropicModel,
-} from "../server/sandbox/anthropic-limits.ts";
+} from "../src/core/models.ts";
 import {
 	certifyR8,
 	crossFamily,
@@ -46,22 +46,21 @@ import {
 	parseFamily,
 	withFamily,
 	type FamilyInput,
-} from "../src/review.ts";
+} from "../src/core/models.ts";
 import {
 	journalCharge,
 	requestSettlements,
 	settlementReply,
-} from "../server/sandbox/audit.ts";
+} from "../src/core/journal.ts";
 import {
 	aggregateEfficiency,
 	executionUsageOf,
 	parseEfficiency,
 	requestEfficiency,
-	stageResult,
 	unknownEfficiency,
 	type SessionOutcome,
-	type StageReceipt,
-} from "../server/sandbox/result.ts";
+} from "../src/core/execution.ts";
+import { stageResult, type StageReceipt } from "../server/sandbox/result.ts";
 import type { ModelId } from "../src/workflow.ts";
 
 /** The JSON text of `value` parsed back, with `undefined` kept as a visible marker. */

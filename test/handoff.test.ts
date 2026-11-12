@@ -38,7 +38,7 @@ import {
 	REQUIRED_CI_CHECKS,
 	type Verdict,
 	type Run,
-} from "../src/run.ts";
+} from "../src/core/run.ts";
 import { advance } from "../src/stages.ts";
 import {
 	TRUSTED_RUN_CAP,
@@ -49,19 +49,15 @@ import {
 } from "./fake-ticket-adapter.ts";
 import { classifyFeedback } from "../src/feedback.ts";
 import { storeFeedbackBatch } from "../server/controller.ts";
-import {
-	type FamilyInput,
-	familyLabel,
-	type ReviewReceipt,
-	reviewR8,
-} from "../src/review.ts";
+import { type FamilyInput, familyLabel } from "../src/core/models.ts";
+import { type ReviewReceipt, reviewR8 } from "../src/review.ts";
 import {
 	dispatchNonce,
 	type TrustedReport,
 	type ValidationState,
 } from "../src/validation.ts";
 import { candidateBranch } from "../src/publication.ts";
-import type { JsonValue } from "../src/tickets.ts";
+import type { JsonValue } from "../src/core/json.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
 import { storePatch, type PatchReceipt } from "../src/build.ts";
 import { controllerCandidatePort } from "../server/controller.ts";
@@ -84,7 +80,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fieldOf, objectOf, parseJson } from "../server/sandbox/json.ts";
+import { fieldOf, objectOf, parseJson } from "../src/core/json.ts";
 import { EXE_DEV_PLATFORM } from "../src/platform.ts";
 
 const sha = "a".repeat(40);

@@ -49,7 +49,7 @@ import {
 	contractDigestOf,
 	type Contract,
 } from "../src/specify.ts";
-import { digestOf } from "../src/run.ts";
+import { digestOf } from "../src/core/run.ts";
 import { runCli, execFile, type ControllerRuntime } from "../server/cli.ts";
 import {
 	controllerMeasurements,
@@ -64,7 +64,7 @@ import {
 import { sandboxExecutor, sandboxHost } from "../server/sandbox.ts";
 import { manifestDigest } from "../server/sandbox/manifest.ts";
 import { startGatewayProcess } from "../server/sandbox/gateway-client.ts";
-import { objectOf, parseJson, arrayOf } from "../server/sandbox/json.ts";
+import { objectOf, parseJson, arrayOf } from "../src/core/json.ts";
 import { parseWorkflow } from "../src/workflow.ts";
 import { GitHubPublicationApi, SCORE_FILE } from "../src/publication.ts";
 import { LedgerGit, repo } from "./ledger-git.ts";

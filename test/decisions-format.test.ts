@@ -19,7 +19,7 @@ import {
 	objectOf,
 	parseJson,
 	textsOf,
-} from "../server/sandbox/json.ts";
+} from "../src/core/json.ts";
 
 const repo = fileURLToPath(new URL("../", import.meta.url));
 const script = join(repo, "scripts/check-decisions.mjs");

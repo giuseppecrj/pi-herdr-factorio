@@ -1,4 +1,5 @@
-import type { Run, TicketRef } from "./run.ts";
+import type { JsonValue } from "./core/json.ts";
+import type { Run, TicketRef } from "./core/run.ts";
 
 export type Ticket = {
 	ref: TicketRef;
@@ -28,15 +29,6 @@ export type TicketState = {
 	readonly open: boolean;
 	readonly labels: readonly string[];
 };
-
-/** A JSON value as `gh` prints it: an event before `normalize` parses it. */
-export type JsonValue =
-	| null
-	| boolean
-	| number
-	| string
-	| JsonValue[]
-	| { [key: string]: JsonValue };
 
 /**
  * The map key for a ticket. A ref's `key` already names its repository, such

@@ -4,9 +4,9 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { runStage, type StageHost } from "../../server/sandbox.ts";
 import { startGatewayProcess } from "../../server/sandbox/gateway-client.ts";
-import type { JsonValue } from "../../server/sandbox/json.ts";
+import type { JsonValue } from "../../src/core/json.ts";
 import type { PiProcess } from "../../server/sandbox/rpc.ts";
-import type { Digest } from "../../src/run.ts";
+import type { Digest } from "../../src/core/run.ts";
 import type { ModelId } from "../../src/workflow.ts";
 import { EXE_DEV_PLATFORM } from "../../src/platform.ts";
 

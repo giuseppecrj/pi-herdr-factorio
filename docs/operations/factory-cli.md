@@ -198,7 +198,7 @@ This is every message the factory prints. `<field>` is a dotted path as describe
 | `must be an integer no larger than 9007199254740991` | An integer is too large. |
 | `must be <provider>/<model>` | A model ID has the wrong form. |
 | `provider anthropic is allowed only for stages.accept.model and stages.review.seats.code-review.model: on the VM it spends exe.dev credits` | A model ID outside those two fields uses provider `anthropic`. |
-| `names an anthropic model outside the limits table (server/sandbox/anthropic-limits.ts)` | `stages.accept.model` or the code-review seat names an Anthropic model the host's limits table does not list. |
+| `names an anthropic model outside the limits table (src/core/models.ts)` | `stages.accept.model` or the code-review seat names an Anthropic model the host's limits table does not list. |
 | `must be an openai or a listed anthropic model` | `stages.accept.model` or the code-review seat names another provider. |
 | `must be an openai model: accept's fallback is same-family` | `stages.accept.fallback_model` is not an `openai/` model. |
 | `<stage> runs no model, so it takes no model key` | `model` or `fallback_model` under `stages.admit` or `stages.land`. |

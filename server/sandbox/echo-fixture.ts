@@ -6,7 +6,7 @@ import {
 } from "node:http";
 import { brotliCompressSync, deflateRawSync, gzipSync } from "node:zlib";
 import { GATEWAY_USER_AGENT } from "./credentials.ts";
-import type { JsonObject } from "./json.ts";
+import type { JsonObject } from "../../src/core/json.ts";
 
 /** What the fixture saw: names and the injected credential, never a body. */
 export type Received = {

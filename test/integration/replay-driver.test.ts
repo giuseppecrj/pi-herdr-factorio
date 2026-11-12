@@ -28,7 +28,7 @@ import {
 	replayRow,
 	replayStageCaps,
 } from "../../src/replay.ts";
-import { digestOf, runIdOf } from "../../src/run.ts";
+import { digestOf, runIdOf } from "../../src/core/run.ts";
 import { ledgerRowOf } from "../../src/ledger.ts";
 
 // The reviewer's fake gh/serve + real socket-lock harness, made hermetic.

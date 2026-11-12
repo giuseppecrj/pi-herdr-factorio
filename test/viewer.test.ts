@@ -20,7 +20,7 @@ import {
 	objectOf,
 	parseJson,
 	textOf,
-} from "../server/sandbox/json.ts";
+} from "../src/core/json.ts";
 import { escapeHtml, renderRun, expectedGap } from "../server/viewer/render.ts";
 import { icons } from "../server/viewer/design/icons/icons.ts";
 import { runCli } from "../server/cli.ts";
@@ -45,7 +45,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { readViewerRun, startViewer } from "../server/viewer.ts";
-import { runIdOf, digestOf } from "../src/run.ts";
+import { runIdOf, digestOf } from "../src/core/run.ts";
 import { formatMarker, parseMarker, type Marker } from "../src/markers.ts";
 import { isRepoSlug, isGitSha, parseWorkflow } from "../src/workflow.ts";
 import fixture from "./fixtures/viewer/sessions.json" with { type: "json" };
@@ -891,7 +891,7 @@ test("viewer timeline shows each assessment's class and subreason, never private
 function verdictAssessmentText(
 	round: number,
 	generation: number,
-	verdict: import("../src/run.ts").Verdict,
+	verdict: import("../src/core/run.ts").Verdict,
 	failure: import("../src/diagnosis.ts").FailureClass,
 ): string {
 	return storedAssessment({

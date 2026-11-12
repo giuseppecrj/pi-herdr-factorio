@@ -18,14 +18,14 @@ import {
 	type GhFailure,
 	ghFailure,
 } from "./gh.ts";
-import { parseAnthropicModel } from "../server/sandbox/anthropic-limits.ts";
+import { parseAnthropicModel } from "./core/models.ts";
 import {
 	isRepoSlug,
 	type ModelPosition,
 	type PlatformProfile,
 	type RepoSlug,
 } from "./platform.ts";
-import { type Digest, digestOf, type Stage } from "./run.ts";
+import { type Digest, digestOf, type Stage } from "./core/run.ts";
 
 export { isRepoSlug, type RepoSlug };
 
@@ -544,7 +544,7 @@ function readPrimaryModel(
 		if (parseAnthropicModel(text) === null)
 			fail(
 				field,
-				"names an anthropic model outside the limits table (server/sandbox/anthropic-limits.ts)",
+				"names an anthropic model outside the limits table (src/core/models.ts)",
 			);
 
 		return text;

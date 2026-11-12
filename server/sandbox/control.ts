@@ -9,7 +9,7 @@ import {
 	objectOf,
 	parseJson,
 	textOf,
-} from "./json.ts";
+} from "../../src/core/json.ts";
 import { DENY_CODES, type ProxyCode } from "./policy.ts";
 import type { RouteId } from "./routes.ts";
 

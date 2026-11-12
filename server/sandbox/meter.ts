@@ -1,4 +1,4 @@
-import { isAnthropicModelId } from "./anthropic-limits.ts";
+import { isAnthropicModelId } from "../../src/core/models.ts";
 import {
 	countOf,
 	fieldOf,
@@ -6,7 +6,7 @@ import {
 	objectOf,
 	parseJson,
 	textOf,
-} from "./json.ts";
+} from "../../src/core/json.ts";
 
 export type MeteredUsage = {
 	readonly inputTokens: number;

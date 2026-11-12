@@ -27,14 +27,14 @@ import {
 } from "../server/gates.ts";
 import { assessBase, classifyFailure } from "../src/diagnosis.ts";
 import { writeAcceptance } from "../src/accept.ts";
-import { digestOf } from "../src/run.ts";
+import { digestOf } from "../src/core/run.ts";
 import {
 	contractBytes,
 	contractDigestOf,
 	type Contract,
 } from "../src/specify.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
-import { parseJson } from "../server/sandbox/json.ts";
+import { parseJson } from "../src/core/json.ts";
 
 function gitSha(text: string) {
 	assert.ok(isGitSha(text));

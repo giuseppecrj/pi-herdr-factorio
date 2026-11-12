@@ -9,7 +9,7 @@ import {
 	parseJson,
 	textOf,
 	textsOf,
-} from "./json.ts";
+} from "../../src/core/json.ts";
 import {
 	type CredentialId,
 	type CredentialPlacement,

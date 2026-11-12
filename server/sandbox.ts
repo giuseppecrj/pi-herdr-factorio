@@ -18,12 +18,6 @@ import {
 	reviewFeedback,
 	findingFingerprint,
 	findingFingerprints,
-	FAMILY_MISSING,
-	type FamilyInput,
-	familyFromJournal,
-	familyLabel,
-	parseFamily,
-	withFamily,
 	reviewSeats,
 	reviewDir,
 	seatPrompt,
@@ -32,6 +26,14 @@ import {
 	type ReviewInputRefusal,
 	type SeatReceipt,
 } from "../src/review.ts";
+import {
+	FAMILY_MISSING,
+	type FamilyInput,
+	familyFromJournal,
+	familyLabel,
+	parseFamily,
+	withFamily,
+} from "../src/core/models.ts";
 import { readFeedbackBytes, validationDir } from "../src/validation.ts";
 import {
 	parseReviewReceipt,
@@ -94,7 +96,7 @@ import {
 	verdictPasses,
 	type Digest,
 	type Verdict,
-} from "../src/run.ts";
+} from "../src/core/run.ts";
 import {
 	parseSpecifyOutput,
 	parseReviewOutput,
@@ -124,13 +126,12 @@ import {
 	type TarballFetch,
 } from "./controller.ts";
 import { HERDR_AGENTS, PI_AGENT_DIR } from "./sandbox/assets/pi.ts";
+import { AUDIT_CAP_BYTES, JOURNAL_FILE } from "./sandbox/audit.ts";
 import {
-	AUDIT_CAP_BYTES,
-	JOURNAL_FILE,
 	journalCharge,
 	requestSettlements,
 	settlementReply,
-} from "./sandbox/audit.ts";
+} from "../src/core/journal.ts";
 import {
 	countOf,
 	arrayOf,
@@ -139,7 +140,7 @@ import {
 	parseJson,
 	textOf,
 	type JsonValue,
-} from "./sandbox/json.ts";
+} from "../src/core/json.ts";
 import {
 	bundleMatchesSource,
 	manifestDigest,
@@ -160,21 +161,23 @@ import { LineSplitter } from "./sandbox/lines.ts";
 import type {
 	BudgetCap,
 	FailedExit,
-	FallbackRecord,
-	OutputRecord,
-	PinnedVersions,
 	RefusalSignal,
 	SessionOutcome,
 	Settlement,
-	StageReceipt,
-	StageResult,
 	StageRunSettings,
 	StageUsage,
+} from "../src/core/execution.ts";
+import type {
+	FallbackRecord,
+	OutputRecord,
+	PinnedVersions,
+	StageReceipt,
+	StageResult,
 	ChildRunSummary,
 	StderrRecord,
 } from "./sandbox/result.ts";
+import { stageResult } from "./sandbox/result.ts";
 import {
-	stageResult,
 	unknownEfficiency,
 	parseEfficiency,
 	requestEfficiency,
@@ -182,7 +185,7 @@ import {
 	type EfficiencyFacts,
 	executionUsageOf,
 	type ExecutionUsage,
-} from "./sandbox/result.ts";
+} from "../src/core/execution.ts";
 import {
 	builtinTable,
 	type RouteId,
@@ -209,11 +212,7 @@ import {
 	settledOutcome,
 } from "./sandbox/settle.ts";
 
-export type {
-	StageReceipt,
-	StageResult,
-	StageRunSettings,
-} from "./sandbox/result.ts";
+export type { StageReceipt, StageResult } from "./sandbox/result.ts";
 
 /** Time kept back from `wall_ms` for cleanup. The hard deadline is `wall_ms` minus this. */
 export const CLEANUP_RESERVE_MS = STAGE_CLEANUP_RESERVE_MS;

@@ -6,7 +6,7 @@ import {
 	numberOf,
 	objectOf,
 	parseJson,
-} from "./json.ts";
+} from "../../src/core/json.ts";
 import {
 	type BodyRule,
 	type JsonConstraint,

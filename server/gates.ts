@@ -19,7 +19,7 @@ import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { scanSource, type Signal } from "../.github/factory/gates/scan.ts";
 import { readStoredContract } from "../src/artifacts.ts";
-import { isDigest, digestOf } from "../src/run.ts";
+import { isDigest, digestOf } from "../src/core/run.ts";
 import { acceptanceEntries, type AcceptanceSuite } from "../src/accept.ts";
 import {
 	BASE_PROTOCOL_VERSION,
@@ -53,7 +53,7 @@ import {
 	textOf,
 	textsOf,
 	type JsonObject,
-} from "./sandbox/json.ts";
+} from "../src/core/json.ts";
 
 const GATE_IMAGE =
 	"node@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617";

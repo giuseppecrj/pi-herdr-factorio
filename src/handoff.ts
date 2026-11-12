@@ -15,12 +15,12 @@ import {
 	isJudgmentOutcome,
 	type Judgment,
 	type JudgmentOutcome,
-	parseFamily,
 	type ReviewBinding,
 	type ReviewReceipt,
 	type ReviewInputRefusal,
 	type ReviewSeat,
 } from "./review.ts";
+import { parseFamily } from "./core/models.ts";
 import {
 	REPAIR_BUILD_MAX_TOKENS,
 	REVIEW_MAX_TOKENS,
@@ -29,7 +29,7 @@ import {
 	type Digest,
 	type Verdict,
 	verdictPasses,
-} from "./run.ts";
+} from "./core/run.ts";
 import type {
 	AssessmentRef,
 	ReadAssessment,
@@ -42,8 +42,8 @@ import {
 	type GitSha,
 	type RepoSlug,
 } from "./workflow.ts";
-import { isDigest } from "./run.ts";
-import type { JsonValue } from "./tickets.ts";
+import { isDigest } from "./core/run.ts";
+import type { JsonValue } from "./core/json.ts";
 
 export const MAX_REFRESHES = 3;
 export const MAX_GENERATIONS = 6;
@@ -570,21 +570,21 @@ export type CandidateStep = Readonly<{
 }>;
 
 export type CandidateProjection = Readonly<{
-	stage: import("./run.ts").Stage;
+	stage: import("./core/run.ts").Stage;
 	status: import("./markers.ts").RunStatus;
 	attempt: number;
 	round: number;
-	progress: import("./run.ts").Progress;
+	progress: import("./core/run.ts").Progress;
 }>;
 
 export function candidateProjection(
 	state: CandidateState,
 ): CandidateProjection {
-	let stage: import("./run.ts").Stage = "validate";
+	let stage: import("./core/run.ts").Stage = "validate";
 	let status: import("./markers.ts").RunStatus = "running";
 	let round = 0;
 	let attempt = 1;
-	let progress: import("./run.ts").Progress | null = null;
+	let progress: import("./core/run.ts").Progress | null = null;
 
 	if (state.kind === "selected") {
 		round = state.current.intent.round;

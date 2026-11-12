@@ -1,8 +1,4 @@
 import { randomBytes } from "node:crypto";
-import {
-	requestSettlements,
-	settlementReply,
-} from "../server/sandbox/audit.ts";
 import { join } from "node:path";
 import { exclusive, present, privateDir, regularText } from "./artifacts.ts";
 import { checkChangedPaths } from "./policy.ts";
@@ -12,13 +8,13 @@ import {
 	type Digest,
 	type Verdict,
 	verdictPasses,
-} from "./run.ts";
+} from "./core/run.ts";
 
 export {
 	REVIEW_MAX_TOKENS,
 	REPAIR_BUILD_MAX_TOKENS,
 	blocksReview,
-} from "./run.ts";
+} from "./core/run.ts";
 
 import type { Contract } from "./specify.ts";
 import {
@@ -29,11 +25,15 @@ import {
 	parseJson,
 	textOf,
 	type JsonValue,
-} from "../server/sandbox/json.ts";
+} from "./core/json.ts";
 import {
-	isAnthropicModelId,
-	parseAnthropicModel,
-} from "../server/sandbox/anthropic-limits.ts";
+	certifyR8,
+	FAMILY_MISSING,
+	familyLabel,
+	type CertificationFamilies,
+	type FamilyInput,
+	type R8,
+} from "./core/models.ts";
 
 export class ReviewEvidenceUnavailable extends Error {}
 
@@ -43,263 +43,6 @@ export type ReviewInputRefusal = {
 	readonly bytes: number;
 	readonly limit: number;
 };
-
-/**
- * What the host saw of one author's model family, computed when it wrote
- * the stage or seat receipt. `anthropic-gateway` comes only from
- * `familyFromJournal`: a metered `model-anthropic` journal line whose
- * gateway-observed model is in the host's limits table. `openai-request`
- * is a host-recorded `openai/` request with at least one metered,
- * non-rejected line, all on `model-openai`. Anything else is `unavailable`,
- * never a family.
- */
-export type FamilyInput =
-	| { readonly kind: "anthropic-gateway"; readonly model: string }
-	| { readonly kind: "openai-request"; readonly model: string }
-	| {
-			readonly kind: "unavailable";
-			readonly reason: "missing" | "unknown-model" | "mixed" | "unmetered";
-	  };
-
-export type R8 = "complete" | "incomplete";
-
-export type CertificationFamilies = {
-	readonly builder: FamilyInput;
-	readonly accept: FamilyInput;
-	readonly seats: readonly {
-		readonly seat: string;
-		readonly evidence: FamilyInput;
-	}[];
-};
-
-export const FAMILY_MISSING: FamilyInput = {
-	kind: "unavailable",
-	reason: "missing",
-};
-
-const UNAVAILABLE_REASONS = [
-	"missing",
-	"unknown-model",
-	"mixed",
-	"unmetered",
-] as const;
-
-/** The family, or `null`. A variant whose model breaks its own rule has none. */
-export function familyOf(input: FamilyInput): "anthropic" | "openai" | null {
-	switch (input.kind) {
-		case "anthropic-gateway":
-			return isAnthropicModelId(input.model) ? "anthropic" : null;
-		case "openai-request":
-			return input.model.startsWith("openai/") ? "openai" : null;
-		case "unavailable":
-			return null;
-		default: {
-			const exhaustive: never = input;
-
-			return exhaustive;
-		}
-	}
-}
-
-/** True only for two known, different families. */
-export function crossFamily(a: FamilyInput, b: FamilyInput): boolean {
-	const left = familyOf(a);
-	const right = familyOf(b);
-
-	return left !== null && right !== null && left !== right;
-}
-
-/**
- * True only for the one direction R8 counts: a verified OpenAI builder and
- * a gateway-observed Anthropic author.
- */
-function certifiedPair(builder: FamilyInput, author: FamilyInput): boolean {
-	return familyOf(builder) === "openai" && familyOf(author) === "anthropic";
-}
-
-/**
- * `complete` only when the builder is a verified OpenAI family and the
- * gateway observed an Anthropic model on the accept author and on at least
- * one blocking seat (any seat but the advisory `simplify`). Every other
- * shape, an Anthropic builder included, is `incomplete`. Labels are never
- * an input.
- */
-export function certifyR8(input: CertificationFamilies): R8 {
-	const seatCross = input.seats.some(
-		(seat) =>
-			seat.seat !== "simplify" && certifiedPair(input.builder, seat.evidence),
-	);
-
-	return certifiedPair(input.builder, input.accept) && seatCross
-		? "complete"
-		: "incomplete";
-}
-
-/**
- * The only writer of a family label. Against a builder it says cross-family
- * only for an OpenAI builder and an Anthropic author, the pair `certifyR8`
- * counts. Two known, different families in any other direction say so and
- * stay not cross-family. Without a builder, as on an acceptance receipt
- * written before any build, it names the author's family and defers the
- * claim to certification.
- */
-export function familyLabel(
-	evidence: FamilyInput,
-	builder?: FamilyInput,
-): string {
-	const family = familyOf(evidence);
-
-	if (builder === undefined)
-		return `context-isolated, ${family ?? "unknown"} author, family checked at certification`;
-
-	if (certifiedPair(builder, evidence))
-		return "context-isolated, different family, cross-family";
-
-	if (crossFamily(builder, evidence))
-		return "context-isolated, different family, builder not OpenAI, not cross-family";
-
-	return family !== null && family === familyOf(builder)
-		? "context-isolated, same family, not cross-family"
-		: "context-isolated, unknown family, not cross-family";
-}
-
-/** `value` with `family` added when there is one; otherwise `value` itself, unchanged. */
-export function withFamily<T extends object>(
-	value: T,
-	family: FamilyInput | null | undefined,
-): T & { readonly family?: FamilyInput } {
-	if (family === null || family === undefined) return value;
-
-	return { ...value, family };
-}
-
-/**
- * Rebuilds a stored `FamilyInput`, or `null`. It checks shape only: an
- * `anthropic-gateway` model must be a bare id in the limits table, and an
- * `openai-request` model must start `openai/`. It does not prove the
- * evidence, and a hand-written receipt of that shape parses. What makes a
- * stored family trustworthy is where it lives: the host writes it from the
- * gateway journal with `familyFromJournal` into host-owned state outside
- * every stage mount. Certification then still requires the strict
- * `certifyR8` direction and binds the builder's model to the patch receipt.
- */
-export function parseFamily(value: JsonValue | undefined): FamilyInput | null {
-	const v = objectOf(value);
-	const kind = textOf(fieldOf(v, "kind"));
-
-	if (v === null || Object.keys(v).length !== 2) return null;
-
-	if (kind === "unavailable") {
-		const reason = UNAVAILABLE_REASONS.find(
-			(known) => known === fieldOf(v, "reason"),
-		);
-
-		return reason === undefined ? null : { kind, reason };
-	}
-
-	const model = textOf(fieldOf(v, "model"));
-
-	if (model === null) return null;
-
-	if (kind === "anthropic-gateway")
-		return isAnthropicModelId(model) ? { kind, model } : null;
-
-	if (kind === "openai-request")
-		return model.startsWith("openai/") ? { kind, model } : null;
-
-	return null;
-}
-
-/**
- * The family of the session that answered one stage attempt, from that
- * attempt's request journal (`egress.requests.jsonl`) and the host-recorded
- * requested id of that session. Lines on `superseded`, the route of a
- * primary a fallback replaced, are ignored.
- *
- * Provider-rejected results are skipped on both routes. An `anthropic/`
- * request is `anthropic-gateway` only when every settled `model-anthropic`
- * result that was not provider-rejected is metered with a table model, and
- * at least one is. An `openai/` request is `openai-request` only when at
- * least one non-rejected `model-openai` line is metered, and any
- * `observedModel` on one is the requested id, bare or prefixed; another is
- * `unknown-model`. Any other route's line is `mixed`.
- */
-export function familyFromJournal(input: {
-	readonly journal: string | null;
-	readonly requested: string;
-	readonly superseded: string | null;
-}): FamilyInput {
-	if (input.journal === null) return FAMILY_MISSING;
-
-	const anthropic = input.requested.startsWith("anthropic/");
-
-	const route = anthropic
-		? "model-anthropic"
-		: input.requested.startsWith("openai/")
-			? "model-openai"
-			: null;
-
-	if (
-		route === null ||
-		(anthropic && parseAnthropicModel(input.requested) === null)
-	)
-		return { kind: "unavailable", reason: "unknown-model" };
-
-	const journal = requestSettlements(input.journal, { route });
-
-	if (journal.routes.some((at) => at !== route && at !== input.superseded))
-		return { kind: "unavailable", reason: "mixed" };
-
-	const requests = journal.requests.filter((request) => request.req !== null);
-	let model: string | null = null;
-	let metered = 0;
-
-	if (
-		anthropic &&
-		requests.some(
-			(request) => request.kind === "Uncertain" && request.result === null,
-		)
-	)
-		return { kind: "unavailable", reason: "unmetered" };
-
-	for (const request of requests) {
-		const result = settlementReply(request);
-
-		if (result === null || result.kind === "ProviderRejected") continue;
-
-		const tokens = result.usage.kind === "metered";
-		const stated = result.observedModel;
-
-		if (!anthropic) {
-			if (
-				stated !== undefined &&
-				stated !== input.requested &&
-				stated !== input.requested.slice("openai/".length)
-			)
-				return { kind: "unavailable", reason: "unknown-model" };
-
-			if (tokens) metered += 1;
-
-			continue;
-		}
-
-		if (!tokens) return { kind: "unavailable", reason: "unmetered" };
-
-		const observed = textOf(stated);
-
-		if (observed === null || !isAnthropicModelId(observed))
-			return { kind: "unavailable", reason: "unknown-model" };
-
-		model = observed;
-		metered += 1;
-	}
-
-	if (metered === 0) return FAMILY_MISSING;
-
-	return anthropic && model !== null
-		? { kind: "anthropic-gateway", model }
-		: { kind: "openai-request", model: input.requested };
-}
 
 export const REVIEW_DIFF_MAX_BYTES = 12 * 1024;
 export const REVIEW_TOOLS = ["read", "grep", "ls"] as const;
@@ -601,7 +344,7 @@ export function reviewSeats(
 ): ReviewSeat[] {
 	const risk =
 		paths.some((path) =>
-			/^(?:src\/(?:policy|admission|stages|workflow|artifacts|review|gh)\.ts|src\/adapters\/|server\/sandbox(?:\.ts|\/)|server\/(?:gates\.ts|provision\.sh)|package(?:-lock)?\.json$|skills\/)/.test(
+			/^(?:src\/(?:policy|admission|stages|workflow|artifacts|review|gh)\.ts|src\/(?:adapters|core)\/|server\/sandbox(?:\.ts|\/)|server\/(?:gates\.ts|provision\.sh)|package(?:-lock)?\.json$|skills\/)/.test(
 				path,
 			),
 		) ||

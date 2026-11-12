@@ -1,6 +1,6 @@
 import { ATTENTION_KINDS } from "../../../src/attention.ts";
-import type { JsonValue } from "../../../src/tickets.ts";
-import { objectOf } from "../../../server/sandbox/json.ts";
+import type { JsonValue } from "../../../src/core/json.ts";
+import { objectOf } from "../../../src/core/json.ts";
 
 /**
  * The OwnerFeed v1 fields a client may rely on, with the JSON type of each.
