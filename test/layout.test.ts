@@ -352,7 +352,7 @@ describe("layout guard", () => {
 			);
 		});
 
-		it("keeps a root-copy exception to its one import", () => {
+		it("keeps the status driver's root-copy exception to its one import", () => {
 			const root = scratch();
 			plantRootCopy(root);
 			appendFileSync(join(root, driver), 'import "./src/run.ts";\n');
@@ -374,7 +374,7 @@ describe("layout guard", () => {
 			);
 		});
 
-		it("binds a root-copy exception to where its staging caller copies and runs it", () => {
+		it("binds the status driver's exception to where its staging caller copies and runs it", () => {
 			const outside = scratch();
 			plantRootCopy(outside);
 			edit(
