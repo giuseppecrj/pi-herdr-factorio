@@ -38,7 +38,7 @@ Architecture and security audit changed files first, then one rotating path grou
 
 Instruction audits select `AGENTS.md`, `.github/factory/WORKFLOW.md` and `skills/*/SKILL.md` from their first run, independently of the code path groups.
 
-Each complete, numbered window is capped at 8 KiB. The serialized source excerpt is capped at 32 KiB, including paths, line labels, visible ranges and skipped ranges. Reflect reduces that source cap to 8 KiB to leave room for its ledger and score inputs. Leading comments and import blocks are skipped without renumbering the remaining lines. Lines too large to fit a window are skipped whole, never cut in the middle of a label or source line. Lockfiles, generated filenames, `server/viewer/design/tokens.*`, `LICENSE`, fixtures, research and prototype archives are excluded. Binary files, unsafe paths, held-out acceptance and files over the citation validator's 1 MiB bound are omitted.
+Each complete, numbered window is capped at 8 KiB. The serialized source excerpt is capped at 32 KiB, including paths, line labels, visible ranges and skipped ranges. Reflect reduces that source cap to 8 KiB to leave room for its ledger and score inputs. Leading comments and import blocks are skipped without renumbering the remaining lines. Lines too large to fit a window are skipped whole, never cut in the middle of a label or source line. Lockfiles, generated filenames, `host/viewer/design/tokens.*`, `LICENSE`, fixtures, research and prototype archives are excluded. Binary files, unsafe paths, held-out acceptance and files over the citation validator's 1 MiB bound are omitted.
 
 Before assembly, the controller reads this job's last audited base SHA from its watermark state. That SHA survives receipt pruning and zero-token failures. Older state falls back to the last retained, charged execution. It runs `git diff --name-only --no-renames -z <previous-base> <current-base> --` in the controller's own pinned source checkout. This compares immutable local Git objects, never the working-tree diff, audit export or a GitHub compare endpoint. Missing local history records `changes_unavailable` before launch rather than inventing an empty change set. A first run without a previous audit uses rotation alone.
 
@@ -102,7 +102,7 @@ Maintenance accounting stays under `cadence/`. `status --json` includes a separa
 ## One-shot command
 
 ```bash
-node server/cli.ts cadence --once --job architecture --json \
+node host/cli/index.ts cadence --once --job architecture --json \
   --repo nublai/pi-herdr-factorio --state-dir "$STATE"
 ```
 

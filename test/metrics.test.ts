@@ -11,7 +11,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { describe, it } from "node:test";
-import { EXIT, runCli } from "../server/cli.ts";
+import { EXIT } from "../host/cli/platform.ts";
+import { runCli } from "../host/cli/index.ts";
 import {
 	ledgerRow,
 	parseLedger,
@@ -1014,7 +1015,7 @@ process.stdout.write(JSON.stringify(result));
 			const result = spawnSync(
 				process.execPath,
 				[
-					new URL("../server/cli.ts", import.meta.url).pathname,
+					new URL("../host/cli/index.ts", import.meta.url).pathname,
 					...cliArgs(path),
 				],
 				{
@@ -1750,7 +1751,7 @@ describe("metrics CLI", () => {
 			const result = spawnSync(
 				process.execPath,
 				[
-					new URL("../server/cli.ts", import.meta.url).pathname,
+					new URL("../host/cli/index.ts", import.meta.url).pathname,
 					"metrics",
 					"--json",
 					"--repo",

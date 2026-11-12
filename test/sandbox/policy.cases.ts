@@ -8,12 +8,8 @@ import {
 	denyBody,
 	pathMatches,
 	type RequestHead,
-} from "../../server/sandbox/policy.ts";
-import type {
-	Route,
-	RouteId,
-	RouteTable,
-} from "../../server/sandbox/routes.ts";
+} from "../../host/gateway/policy.ts";
+import type { Route, RouteId, RouteTable } from "../../host/gateway/routes.ts";
 import type { JsonValue } from "../../src/core/json.ts";
 import { modelTable } from "./routes.cases.ts";
 

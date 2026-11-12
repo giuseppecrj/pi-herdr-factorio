@@ -21,24 +21,25 @@ import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, it, type TestContext } from "node:test";
-import { execFile, runCli, type ControllerRuntime } from "../server/cli.ts";
+import { execFile, type ControllerRuntime } from "../host/cli/platform.ts";
+import { runCli } from "../host/cli/index.ts";
 import {
 	controllerCadence,
 	publishCadenceProposals,
 	runImprovementTrigger,
-} from "../server/controller/cadence.ts";
-import { procTable } from "../server/controller/lock.ts";
-import { fileRunFiles } from "../server/controller/run-files.ts";
+} from "../host/controller/cadence.ts";
+import { procTable } from "../host/controller/lock.ts";
+import { fileRunFiles } from "../host/controller/run-files.ts";
 import {
 	durableUsageOf,
 	readDurableAccounting,
-} from "../server/controller/terminal.ts";
-import { launchSandbox, sandboxHost } from "../server/sandbox/launch.ts";
-import { sandboxExecutor, withSkills } from "../server/sandbox/executor.ts";
-import { detectArch } from "../server/sandbox/seccomp.ts";
-import { listScopesArgv } from "../server/sandbox/scope.ts";
-import { startGatewayProcess } from "../server/sandbox/gateway-client.ts";
-import { manifestDigest } from "../server/sandbox/manifest.ts";
+} from "../host/controller/terminal.ts";
+import { launchSandbox, sandboxHost } from "../host/sandbox/launch.ts";
+import { sandboxExecutor, withSkills } from "../host/sandbox/executor.ts";
+import { detectArch } from "../host/isolation/seccomp.ts";
+import { listScopesArgv } from "../host/isolation/scope.ts";
+import { startGatewayProcess } from "../host/gateway/client.ts";
+import { manifestDigest } from "../host/bundle/manifest.ts";
 import { arrayOf, objectOf, parseJson } from "../src/core/json.ts";
 import { fileAdmissionStore, snapshotDigest } from "../src/trust/admission.ts";
 import {
@@ -1318,7 +1319,7 @@ describe("bounded single-pass cadence excerpts", () => {
 	it("prioritizes changed files across groups, skips imports, excludes generated/bulk files and rotates tails", () => {
 		const changedPaths = [
 			"server/z.ts",
-			"server/viewer/design/tokens.css",
+			"host/viewer/design/tokens.css",
 			"server/generated/code.ts",
 			"package-lock.json",
 		];
@@ -1467,8 +1468,18 @@ describe("bounded single-pass cadence excerpts", () => {
 			);
 		}
 
-		const paths = Object.keys(snapshot.files);
-		const read = (path: string) => snapshot.files[path] ?? null;
+		const files = Object.fromEntries(
+			Object.entries(snapshot.files).map(([path, text]) => [
+				path.replace(/^server\//, "host/"),
+				text,
+			]),
+		);
+
+		t.diagnostic(
+			"The frozen snapshot bytes are unchanged. Host roots are a rename-only input view for current cadence scope, not current-layout performance evidence.",
+		);
+		const paths = Object.keys(files);
+		const read = (path: string) => files[path] ?? null;
 		const estimates = [];
 		const coverage = [];
 		const excerpts = new Map<string, ReturnType<typeof cadenceExcerpt>>();
@@ -1564,7 +1575,7 @@ describe("bounded single-pass cadence excerpts", () => {
 			);
 			assert.ok(maxExcerpt <= CADENCE_EXCERPT_BYTES);
 
-			for (const [path, text] of Object.entries(snapshot.files)) {
+			for (const [path, text] of Object.entries(files)) {
 				if (
 					!cadenceEligiblePath(path) ||
 					(job === "instructions" &&
@@ -1590,7 +1601,7 @@ describe("bounded single-pass cadence excerpts", () => {
 			if (job === "architecture") {
 				for (const [group, offset] of [
 					["src", 0],
-					["server", 1],
+					["host", 1],
 				] as const) {
 					const part = cadenceExcerpt(
 						{ ...input(job), rotation: offset },
@@ -1602,8 +1613,7 @@ describe("bounded single-pass cadence excerpts", () => {
 						.filter((path) => path.startsWith(`${group}/`))
 						.reduce(
 							(sum, path) =>
-								sum +
-								snapshot.files[path]!.replace(/\n$/, "").split("\n").length,
+								sum + files[path]!.replace(/\n$/, "").split("\n").length,
 							0,
 						);
 
@@ -1672,7 +1682,7 @@ describe("cadence durable ownership, accounting and proposal recovery", () => {
 				if (command !== "git") return github.exec(command, args);
 				calls.push([...args]);
 
-				return { code: 0, stdout: "server/changed.ts\0", stderr: "" };
+				return { code: 0, stdout: "host/changed.ts\0", stderr: "" };
 			};
 
 			const executor = sandboxExecutor({
@@ -1687,15 +1697,15 @@ describe("cadence durable ownership, accounting and proposal recovery", () => {
 			executor.preflight = async () => true;
 			executor.checkout = async ({ workspace }) => {
 				mkdirSync(join(workspace, "src"), { recursive: true });
-				mkdirSync(join(workspace, "server"), { recursive: true });
+				mkdirSync(join(workspace, "host"), { recursive: true });
 				writeFileSync(join(workspace, "src/code.ts"), "code\n");
-				writeFileSync(join(workspace, "server/changed.ts"), "changed code\n");
+				writeFileSync(join(workspace, "host/changed.ts"), "changed code\n");
 
 				return {
 					kind: "ready",
 					omitted: 0,
 					checkout: {
-						files: ["src/code.ts", "src/missing.ts", "server/changed.ts"],
+						files: ["src/code.ts", "src/missing.ts", "host/changed.ts"],
 						read: async () => null,
 					},
 				};
@@ -1750,7 +1760,7 @@ describe("cadence durable ownership, accounting and proposal recovery", () => {
 			assert.equal(excerpt.omitted, 1);
 			assert.equal(
 				excerpt.files[0].path,
-				previous ? "server/changed.ts" : "src/code.ts",
+				previous ? "host/changed.ts" : "src/code.ts",
 			);
 			assert.equal(cadenceCharges(stateDir, repo).at(-1)?.tokens, 0);
 			assert.equal(cadence.status()[0]?.reason, "sandbox_unavailable");
@@ -2236,27 +2246,30 @@ describe("cadence durable ownership, accounting and proposal recovery", () => {
 		const stateDir = directory(t);
 		const execution = input("architecture", input().windowStart, 1);
 		const dir = seed(stateDir, execution);
-		mkdirSync(join(dir, "tree/server/sandbox/assets"), { recursive: true });
-		writeFileSync(join(dir, "tree/server/cli.ts"), "code\n".repeat(1873));
+		mkdirSync(join(dir, "tree/host/bundle/assets"), { recursive: true });
+		mkdirSync(join(dir, "tree/host/cli"), { recursive: true });
+		writeFileSync(join(dir, "tree/host/cli/index.ts"), "code\n".repeat(1873));
 		writeFileSync(
-			join(dir, "tree/server/sandbox/assets/pi.ts"),
+			join(dir, "tree/host/bundle/assets/pi.ts"),
 			"code\n".repeat(10),
 		);
 		writeCadenceFile(
 			join(dir, "excerpt.json"),
 			JSON.stringify({
-				files: [{ path: "server/cli.ts", ranges: [{ start: 1, end: 217 }] }],
+				files: [
+					{ path: "host/cli/index.ts", ranges: [{ start: 1, end: 217 }] },
+				],
 			}),
 		);
 
 		const proposals = [
 			{
 				...finding(execution),
-				evidence: [{ path: "server/cli.ts", start: 717, end: 727 }],
+				evidence: [{ path: "host/cli/index.ts", start: 717, end: 727 }],
 			},
 			{
 				...finding(execution, "unseen-file"),
-				evidence: [{ path: "server/sandbox/assets/pi.ts", start: 1, end: 5 }],
+				evidence: [{ path: "host/bundle/assets/pi.ts", start: 1, end: 5 }],
 			},
 		];
 
@@ -2949,7 +2962,7 @@ async function nativeBundle(
 
 	for (const name of ["pi.ts", "stage-init.ts"])
 		copyFileSync(
-			join(sourceRoot, "server/sandbox/assets", name),
+			join(sourceRoot, "host/bundle/assets", name),
 			join(bundle, "sandbox", name),
 		);
 	cpSync(join(sourceRoot, "skills"), join(bundle, "skills"), {

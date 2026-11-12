@@ -24,38 +24,38 @@ import {
 	type AuditRecord,
 	JOURNAL_FILE,
 	type JournalRecord,
-} from "../../server/sandbox/audit.ts";
+} from "../../host/gateway/audit.ts";
 import { journalCharge } from "../../src/core/journal.ts";
-import { startGatewayProcess } from "../../server/sandbox/gateway-client.ts";
-import { executionCharge } from "../../server/sandbox/receipts.ts";
+import { startGatewayProcess } from "../../host/gateway/client.ts";
+import { executionCharge } from "../../host/sandbox/receipts.ts";
 import {
 	type ControlEvent,
 	encodeCommand,
 	parseEvent,
-} from "../../server/sandbox/control.ts";
+} from "../../host/gateway/control.ts";
 import {
 	bindCredentials,
 	GATEWAY_USER_AGENT,
 	type CredentialBinding,
 	parseCeilings,
-} from "../../server/sandbox/credentials.ts";
+} from "../../host/gateway/credentials.ts";
 import {
 	ANTHROPIC_REPLAYS,
 	type EchoFixture,
-} from "../../server/sandbox/echo-fixture.ts";
+} from "../../host/gateway/echo-fixture.ts";
 import { familyFromJournal } from "../../src/core/models.ts";
 import {
 	addressAllowed,
 	dialOrder,
 	Gateway,
 	refusedAddresses,
-} from "../../server/sandbox/gateway.ts";
-import { DENY_CODES, denyBody } from "../../server/sandbox/policy.ts";
+} from "../../host/gateway/gateway.ts";
+import { DENY_CODES, denyBody } from "../../host/gateway/policy.ts";
 import {
 	type Route,
 	type RouteId,
 	type RouteTable,
-} from "../../server/sandbox/routes.ts";
+} from "../../host/gateway/routes.ts";
 import {
 	credentialedRoute,
 	ECHO_SECRET,
@@ -2530,8 +2530,7 @@ describe("gateway process and control pipe", () => {
 			const child = spawn(
 				process.execPath,
 				[
-					new URL("../../server/sandbox/gateway-main.ts", import.meta.url)
-						.pathname,
+					new URL("../../host/gateway/main.ts", import.meta.url).pathname,
 					"--socket",
 					socketPath,
 					"--audit",
@@ -2612,8 +2611,7 @@ describe("gateway process and control pipe", () => {
 			const child = spawn(
 				process.execPath,
 				[
-					new URL("../../server/sandbox/gateway-main.ts", import.meta.url)
-						.pathname,
+					new URL("../../host/gateway/main.ts", import.meta.url).pathname,
 					"--socket",
 					join(dir, "gw.sock"),
 					"--audit",
@@ -2684,8 +2682,7 @@ describe("gateway process and control pipe", () => {
 			const child = spawn(
 				process.execPath,
 				[
-					new URL("../../server/sandbox/gateway-main.ts", import.meta.url)
-						.pathname,
+					new URL("../../host/gateway/main.ts", import.meta.url).pathname,
 					"--test-mode",
 					"--socket",
 					join(dir, "gw.sock"),

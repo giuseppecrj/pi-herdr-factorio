@@ -18,15 +18,15 @@ import { test } from "node:test";
 import {
 	controllerBaseChecker,
 	controllerDraftChecker,
-} from "../server/controller/checkers.ts";
-import { checkoutWorkspace } from "../server/controller/checkout.ts";
-import { fileRunFiles } from "../server/controller/run-files.ts";
+} from "../host/controller/checkers.ts";
+import { checkoutWorkspace } from "../host/controller/checkout.ts";
+import { fileRunFiles } from "../host/controller/run-files.ts";
 import {
 	baseTreeDigest,
-	exportTree,
 	runDraftBase,
 	runHeldoutBase,
-} from "../server/gates.ts";
+} from "../host/gates/base.ts";
+import { exportTree } from "../host/gates/materialize.ts";
 import {
 	assessBase,
 	baseRefusalNotice,
@@ -956,7 +956,7 @@ test("controller draft checks are private, reuse a fresh tarball and never use t
 			async run(input) {
 				assert.ok(input.argv.includes("/d/draft-reporter.mjs"));
 				assert.match(input.scope ?? "", /-draftcheck-2-/);
-				assert.ok(input.detailReporter?.endsWith("server/gates/"));
+				assert.ok(input.detailReporter?.endsWith("host/gates/"));
 
 				const file = "test/acceptance/7/checks/one.test.mjs",
 					other = "test/acceptance/7/checks/two.test.mjs";

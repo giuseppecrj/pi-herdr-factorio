@@ -4,7 +4,7 @@ These skills ship in the stage sandbox bundle and run inside factory stages. Coo
 
 These are the factory's stage skills. The specify stage runs `audit-ticket`, `grill-me` and `deep-research`, in that order. Accept runs `acceptance` in a fresh sandbox session with the immutable contract and trusted base only. Build runs `build` with the applicable Feature or Bug fix playbook excerpt read from the pinned pstack dependency in that same bundle. A published feedback repair also runs `address-pr-comments`, with controller-selected owner cards and no GitHub write authority. It receives no suite or previous session. Review runs fresh sequential code-review, security-review and simplify seats, plus ultrareview for deterministic risk paths. The security seat alone has a refusal fallback.
 
-`server/provision.sh` copies every skill directory into the sandbox bundle at `skills/`, so the bundle digest in each stage receipt names the exact skill text that ran. The stage executor reads each `SKILL.md` from the bundle on the host and appends it to the stage prompt. The stage Pi runs with `--no-skills`, so it loads no other skill.
+`host/install/provision.sh` copies every skill directory into the sandbox bundle at `skills/`, so the bundle digest in each stage receipt names the exact skill text that ran. The stage executor reads each `SKILL.md` from the bundle on the host and appends it to the stage prompt. The stage Pi runs with `--no-skills`, so it loads no other skill.
 
 Each skill sets `disable-model-invocation`, because it is a stage prompt and not a skill for an interactive session.
 

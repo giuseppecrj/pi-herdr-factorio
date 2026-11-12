@@ -11,17 +11,17 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { runCli } from "../server/cli.ts";
-import { runPreflight } from "../server/sandbox/preflight.ts";
+import { runCli } from "../host/cli/index.ts";
+import { runPreflight } from "../host/isolation/preflight.ts";
 import type { PlatformFile } from "../src/trust/platform.ts";
 
 const script = readFileSync(
-	new URL("../server/provision.sh", import.meta.url),
+	new URL("../host/install/provision.sh", import.meta.url),
 	"utf8",
 );
 
 const unit = readFileSync(
-	new URL("../server/factory.service", import.meta.url),
+	new URL("../host/install/factory.service", import.meta.url),
 	"utf8",
 );
 
@@ -206,7 +206,7 @@ describe("provisioning shell fragments (isolated, never the full script)", () =>
 		assert.equal(lines[first - 1], 'if [ "$mode" = all ]; then');
 		assert.equal(
 			lines[last + 1],
-			'  platform_env=$(node "$repo/server/cli.ts" platform --env)',
+			'  platform_env=$(node "$repo/host/cli/index.ts" platform --env)',
 		);
 		const snippet = lines.slice(first, last + 1).join("\n");
 		const dir = mkdtempSync(join(tmpdir(), "factory-provision-deps-"));
@@ -282,7 +282,7 @@ ${snippet}`,
 	it("sources the CLI output rather than duplicating platform rules in bash", async () => {
 		assert.match(
 			script,
-			/platform_env=\$\(node "\$repo\/server\/cli\.ts" platform --env\)/,
+			/platform_env=\$\(node "\$repo\/host\/cli\/index\.ts" platform --env\)/,
 		);
 		assert.match(script, /source \/dev\/stdin <<<"\$platform_env"/);
 		assert.doesNotMatch(script, /LLM=https:\/\/llm\.int\./);

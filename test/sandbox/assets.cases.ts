@@ -22,11 +22,10 @@ import {
 	manifestDigest,
 	manifestLines,
 	PINNED_VERSIONS,
-} from "../../server/sandbox/manifest.ts";
+} from "../../host/bundle/manifest.ts";
 import { fieldOf, objectOf, parseJson, textOf } from "../../src/core/json.ts";
 
-const ASSETS = new URL("../../server/sandbox/assets/", import.meta.url)
-	.pathname;
+const ASSETS = new URL("../../host/bundle/assets/", import.meta.url).pathname;
 
 function bundle(): string {
 	const root = mkdtempSync(join(tmpdir(), "factory-bundle-"));
@@ -324,9 +323,9 @@ describe("asset lock integrity against downloaded bytes", () => {
 	});
 });
 
-describe("asset bundle install in server/provision.sh", () => {
+describe("asset bundle install in host/install/provision.sh", () => {
 	const script = readFileSync(
-		new URL("../../server/provision.sh", import.meta.url),
+		new URL("../../host/install/provision.sh", import.meta.url),
 		"utf8",
 	);
 

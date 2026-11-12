@@ -12,7 +12,7 @@ The factory is a Pi package plus a controller. Drive these interfaces only under
 - the VM, over ssh as `exedev`;
 - GitHub, through repository-scoped `gh`, with the target's `GH_HOST` only in the trusted VM environment, never locally;
 - the `/factory status` and `/factory run <issue>` extension commands;
-- the factory CLI, `node server/cli.ts`, documented in `docs/operations/factory-cli.md`.
+- the factory CLI, `node host/cli/index.ts`, documented in `docs/operations/factory-cli.md`.
 
 Use [verify-factory-state](../verify-factory-state/SKILL.md) for the existing bounded formal checks and runtime correspondence replay. Source-only prose work needs no VM drive.
 
@@ -131,7 +131,7 @@ Copy evidence into `docs/plans/media/<pr-id>/` only when the task authorizes it.
 
 ## Trusted reporter gate
 
-Before merging any factory source PR, run `npm run check` and main's concurrency-2 gate tests locally through the trusted reporter. The following command matches the baseline and main-tree `testArgv` in `server/gates.ts`:
+Before merging any factory source PR, run `npm run check` and main's concurrency-2 gate tests locally through the trusted reporter. The following command matches the baseline and main-tree `testArgv` in `host/gates/runner.ts`, called by `host/gates/gates.ts`:
 
 ```bash
 node --import ./.github/factory/gates/freeze.mjs --experimental-strip-types --test --test-concurrency=2 --test-timeout=60000 --test-reporter ./.github/factory/gates/reporter.mjs test/*.test.ts test/integration/*.test.ts
@@ -143,7 +143,7 @@ Require `"complete":true`, `"bad":false` and `"failures":[]` in the final JSON l
 
 ## Dependency gate
 
-A gates lane reports every changed dependency manifest and lockfile. When the brief limits dependency changes to the sandbox assets, two files may change: the asset manifest `server/sandbox/assets/package.json` and its lockfile `server/sandbox/assets/package-lock.json`. A change to either passes. A change to any other manifest or lockfile fails, including the root `package.json` and `package-lock.json`.
+A gates lane reports every changed dependency manifest and lockfile. When the brief limits dependency changes to the sandbox assets, two files may change: the asset manifest `host/bundle/assets/package.json` and its lockfile `host/bundle/assets/package-lock.json`. A change to either passes. A change to any other manifest or lockfile fails, including the root `package.json` and `package-lock.json`.
 
 ## Cleanup
 

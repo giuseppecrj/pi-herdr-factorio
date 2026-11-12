@@ -1,10 +1,10 @@
 # Factory CLI reference
 
-`server/cli.ts` is the factory's command-line entry point. It runs from a checkout of this repository on Node 26.12.1 or later. Node 26 strips TypeScript types by default, so no flag is needed.
+`host/cli/index.ts` is the factory's command-line entry point. It runs from a checkout of this repository on Node 26.12.1 or later. Node 26 strips TypeScript types by default, so no flag is needed.
 
 ```bash
-node server/cli.ts <command> --json --repo <owner/name> [options]
-node server/cli.ts serve --repo <owner/name> --state-dir <dir> [--issue <number>]...
+node host/cli/index.ts <command> --json --repo <owner/name> [options]
+node host/cli/index.ts serve --repo <owner/name> --state-dir <dir> [--issue <number>]...
 ```
 
 Except for `platform`, `owner-feed`, `metrics`, `gates` and `viewer`, every command reads `.github/factory/WORKFLOW.md` from GitHub through `gh`, never from the local checkout. It first resolves the branch to a SHA with `gh api repos/<repo>/git/ref/heads/<branch> --jq .object.sha`, then fetches the file at that SHA with `gh api -H 'Accept: application/vnd.github.raw' repos/<repo>/contents/.github/factory/WORKFLOW.md?ref=<sha>`. Ordinary `gh` calls have a 30-second timeout. Ledger publication uses a separate 20-second job slice, with each call capped at the smaller of 5 seconds and the remaining slice. `gh` inherits the environment, including `GH_HOST`. On the VM, set `GH_HOST` to the platform profile's `ghHost`, `github.int.exe.xyz` on the `exe-dev` default. Before any command runs, the CLI resolves the platform from `FACTORY_PLATFORM` and `/etc/factory/platform.json` ([platform](platform.md)). An invalid selection logs `platform_invalid` with its `reason` and exits 2, before any lock, `gh` call or stage launch.
@@ -16,8 +16,8 @@ Errors and warnings carry only text the factory builds itself. They never quote 
 ## Platform environment
 
 ```bash
-node server/cli.ts platform --env
-FACTORY_PLATFORM=exmach:exmach.net node server/cli.ts platform --env
+node host/cli/index.ts platform --env
+FACTORY_PLATFORM=exmach:exmach.net node host/cli/index.ts platform --env
 ```
 
 This read-only command needs no `--repo` or `--json`. It resolves `FACTORY_PLATFORM` and the optional `/etc/factory/platform.json` and prints assignments for `FACTORY_PLATFORM`, `GH_HOST`, `LLM_API_KEY_PLACEHOLDER`, `LLM_BASE_URL`, `LLM_OPENAI_BASE_URL` and `LLM_ANTHROPIC_BASE_URL`, plus `GH_ENTERPRISE_TOKEN` on exmach only. It reads no workflow, takes no lock, makes no network or model calls and writes no file. Exit 0 prints the environment; invalid arguments or a `platform_invalid` selection exit 2, with no assignments on stdout.
@@ -27,7 +27,7 @@ Full provisioning consumes this output to configure host Pi and writes `/etc/fac
 ## Local run viewer
 
 ```bash
-node server/cli.ts viewer --state-dir "$STATE" [--run <64-character-id>] [--port <n>] [--allowed-host <host>] [--base-path </prefix>]
+node host/cli/index.ts viewer --state-dir "$STATE" [--run <64-character-id>] [--port <n>] [--allowed-host <host>] [--base-path </prefix>]
 ```
 
 `viewer` serves local evidence on `127.0.0.1` with no GitHub or model calls. It needs neither `--repo` nor `--json`. The default port is 8080. All four views have HTML and JSON routes. Missing sources are visible gaps, never a complete run. A missing state directory or occupied port exits 1. Invalid options exit 2. Ctrl+C or SIGTERM stops it with exit 0.
@@ -37,7 +37,7 @@ See [Factory owner dashboard](viewer.md) for the routes, source limits, session-
 ## Local owner feed
 
 ```bash
-node server/cli.ts owner-feed --json --state-dir "$STATE" [--repo <owner/name>]
+node host/cli/index.ts owner-feed --json --state-dir "$STATE" [--repo <owner/name>]
 ```
 
 `owner-feed` reads only private local state and never loads a remote workflow, writes a file, calls GitHub or starts a model. Without `--repo`, it takes the repository from `status.json`. It prints OwnerFeed version 1, including controller/last-tick/local-switch state, ticket entries, seven attention counts, an explicit ungrouped working-run count, unreadable-run notices and evidence gaps. An unavailable state is explicit, not an empty success claim. Exit 0 prints a report; exit 2 indicates invalid arguments. The viewer's GET-only `/owner-feed.json` route serves the same projection. [OwnerFeed v1 contract](owner-feed.md) lists every field, the change rules and the push rule for the Shep bridge.
@@ -47,7 +47,7 @@ The controller writes private, atomic `metrics.json` at startup and every five m
 ## Ticket outcome metrics
 
 ```bash
-node server/cli.ts metrics --json --repo nublai/pi-herdr-factorio [--ledger-file <path>] [--state-dir <dir>] [--now <instant>] [--cohort production] [--offline] [--intervention-file <fixture>]
+node host/cli/index.ts metrics --json --repo nublai/pi-herdr-factorio [--ledger-file <path>] [--state-dir <dir>] [--now <instant>] [--cohort production] [--offline] [--intervention-file <fixture>]
 ```
 
 `metrics` reads the locally fetched `origin/factory/ledger` ref without loading
@@ -84,7 +84,7 @@ evidence limitations. This command writes no state and takes no action.
 ## Maintenance one-shot
 
 ```bash
-node server/cli.ts cadence --once --job architecture --json --repo nublai/pi-herdr-factorio --state-dir "$STATE"
+node host/cli/index.ts cadence --once --job architecture --json --repo nublai/pi-herdr-factorio --state-dir "$STATE"
 ```
 
 `cadence --once` launches a bounded read-only model audit using the trusted workflow and the ordinary controller lock and executor. Required flags are `--once`, `--job <architecture|security|instructions|hygiene>`, `--repo` and `--state-dir`. It always prints JSON; `--json` is accepted but optional for this command. It takes no `--ref`, `--issue` or verification cap. It respects both switches, preflight, ticket reservations and the weekly maintenance token cap, then waits for settlement. It never claims or dispatches ticket work. A completed job/window is idempotent. Exit 0 means `proposed` or `no_delta`; exit 1 means a gate, audit failure or pending publication; exit 2 means invalid options or a held controller lock. Use authorized isolated fixture state, not the state owned by a running production controller.
@@ -299,7 +299,7 @@ Each `accounting.runs[]` entry also has `terminal`, read from the run's private 
 ## `admit`
 
 ```bash
-node server/cli.ts admit --json --repo <owner/name> --issue <number> --state-dir <dir>
+node host/cli/index.ts admit --json --repo <owner/name> --issue <number> --state-dir <dir>
 ```
 
 `admit` admits an issue when all of these hold:
@@ -475,7 +475,7 @@ Every finished hard verdict gets `assessment.json` in its validation directory b
 
 The receipt's `replacementsDigest` must match the contract's before any class, early aborts included. A scanner rejection (`invalid_source_encoding`, `runtime_patching` or `suppression_added`) blames the candidate only when every rejected file the receipt names in `tamperSignals` is one of the candidate patch's changed paths and lies outside `test/acceptance/`. A rejected generated check, an unchanged base file or a receipt that names no file is `missing_evidence` (`incomplete_ci`). The gate records each encoding rejection as a `tamperSignals` entry with rule `invalid_source_encoding` and line 0. A per-test `timeout` in either replay is `infrastructure` (`timeout`) before agreement, oracle or candidate, even beside other failures.
 
-An executed hard `heldout` failure, or a dependency-policy early abort, is diagnosed before it is classified. The validate effect starts one owned job and keeps returning `waiting`; the tick never awaits it. The job writes `diagnosis/<bindingDigest>/intent.json` first, then fetches the gate and candidate tarballs with the same strict extraction as checkout. Each fetch is bounded by the job's deadline, less a cleanup reserve of a tenth of the allowance up to 5 seconds, and by its abort signal, so a release or `stop` never waits on an outstanding fetch; a fetch cut short classifies `infrastructure` (`timeout`). The replay runs only when the gate tree's `server/gates.ts` is byte-identical to the running controller's module, so the materializer is the one CI ran; otherwise the class is `missing_evidence` (`unsupported_materializer`). It overlays the candidate onto the gate tree with the shared materializer and runs the published suite on that gate tree and on the full candidate tree, through bwrap with no network and no credentials, in a `factory-stage-<owner>-<run16>-diagnosis-<round>-<nonce>` user scope that the startup reconcile stops. Its deadline is the lesser of 180 seconds and the validation wall still unspent, setup included; with no wall left it records `infrastructure` (`timeout`) without launching. The classifier gets both replays, the stored qualified base receipt, the replay's `ignoredChanges` for parity with the CI receipt, and the trusted dependency validator's verdict on the candidate manifests. When the generation's base differs from the contract's base, the job first runs the base check on the gate tree for that generation, inside the same deadline, and keeps it as `refreshed-base.json`. A refreshed base that does not qualify never reaches the oracle rule: `base_nondeterministic` classifies `infrastructure` (`base_nondeterministic`), `base_timeout`, `base_runner_error` and `base_interrupted` classify `infrastructure`, and every other refusal classifies `missing_evidence` (`base_missing`). The job keeps `replay.json` and `charge.json` (wall time, zero tokens), deletes its trees, then writes `assessment.json`. The candidate branch is deleted only after the assessment exists. A restart that finds the intent with a `replay.json` and `charge.json` that parse and round-trip byte for byte classifies from them without rerunning or charging again. A restart that finds the intent without that completion evidence stops the scope the intent recorded, records `interrupted.json` once, charging the whole frozen allowance, and classifies `infrastructure` (`interrupted`); it never relaunches. An `infrastructure` class holds durably with no CI redispatch.
+An executed hard `heldout` failure, or a dependency-policy early abort, is diagnosed before it is classified. The validate effect starts one owned job and keeps returning `waiting`; the tick never awaits it. The job writes `diagnosis/<bindingDigest>/intent.json` first, then fetches the gate and candidate tarballs with the same strict extraction as checkout. Each fetch is bounded by the job's deadline, less a cleanup reserve of a tenth of the allowance up to 5 seconds, and by its abort signal, so a release or `stop` never waits on an outstanding fetch; a fetch cut short classifies `infrastructure` (`timeout`). The replay runs only when the gate tree's `host/gates/gates.ts` is byte-identical to the running controller's module, so the materializer is the one CI ran; otherwise the class is `missing_evidence` (`unsupported_materializer`). It overlays the candidate onto the gate tree with the shared materializer and runs the published suite on that gate tree and on the full candidate tree, through bwrap with no network and no credentials, in a `factory-stage-<owner>-<run16>-diagnosis-<round>-<nonce>` user scope that the startup reconcile stops. Its deadline is the lesser of 180 seconds and the validation wall still unspent, setup included; with no wall left it records `infrastructure` (`timeout`) without launching. The classifier gets both replays, the stored qualified base receipt, the replay's `ignoredChanges` for parity with the CI receipt, and the trusted dependency validator's verdict on the candidate manifests. When the generation's base differs from the contract's base, the job first runs the base check on the gate tree for that generation, inside the same deadline, and keeps it as `refreshed-base.json`. A refreshed base that does not qualify never reaches the oracle rule: `base_nondeterministic` classifies `infrastructure` (`base_nondeterministic`), `base_timeout`, `base_runner_error` and `base_interrupted` classify `infrastructure`, and every other refusal classifies `missing_evidence` (`base_missing`). The job keeps `replay.json` and `charge.json` (wall time, zero tokens), deletes its trees, then writes `assessment.json`. The candidate branch is deleted only after the assessment exists. A restart that finds the intent with a `replay.json` and `charge.json` that parse and round-trip byte for byte classifies from them without rerunning or charging again. A restart that finds the intent without that completion evidence stops the scope the intent recorded, records `interrupted.json` once, charging the whole frozen allowance, and classifies `infrastructure` (`interrupted`); it never relaunches. An `infrastructure` class holds durably with no CI redispatch.
 
 Before every `repair_build` launch, restored and retried launches included, the controller re-reads the assessment named by the execution's repair cause. A validation cause needs a matching `candidate` record; a review cause needs a matching `passed` record. A review-driven repair is due only for a blocking review, and its cause also carries the digest of the review receipt's stored bytes; a failed certification of a non-blocking review holds as `evidence_unavailable`. The production executor reads the assessment from the validation directory on disk. Anything else refuses the launch, logs `repair_refused` and ends the run `failed` with `diagnosis_missing_evidence`. A stored book whose repair lacks its cause does not parse.
 
@@ -522,7 +522,7 @@ A restart resumes a valid saved candidate intent without granting a new model bu
 ## Trusted candidate gates (F07b)
 
 ```bash
-node server/cli.ts gates --repository <git-dir> --gate-sha <40-hex> \
+node host/cli/index.ts gates --repository <git-dir> --gate-sha <40-hex> \
 	--candidate-sha <40-hex> --nonce <id> --output <receipt-dir>
 ```
 
@@ -555,9 +555,9 @@ Exit codes are 0 for `passed`, 1 for `failed` or `incomplete`, and 2 for invalid
 ## Controller
 
 ```bash
-node server/cli.ts tick --once --json --repo <owner/name> --state-dir <dir> [--issue <number>]...
-node server/cli.ts run --json --repo <owner/name> --issue <number> --state-dir <dir>
-node server/cli.ts serve --repo <owner/name> --state-dir <dir> [--issue <number>]...
+node host/cli/index.ts tick --once --json --repo <owner/name> --state-dir <dir> [--issue <number>]...
+node host/cli/index.ts run --json --repo <owner/name> --issue <number> --state-dir <dir>
+node host/cli/index.ts serve --repo <owner/name> --state-dir <dir> [--issue <number>]...
 ```
 
 The three ticket-controller commands share one implementation, `Orchestrator` in `src/controller/orchestrator.ts`. Unscoped ticks schedule due maintenance only after ticket dispatch; scoped `--issue` controllers do not start unrelated audits. The cadence one-shot shares its capacity and recovery accounting without dispatching tickets. `run --issue <n>` is a tick limited to issue `n`, so a manual run passes the same switches and the same admission as polling. With `--issue`, `tick` and `serve` read, claim and write markers only for the named issues. Verification lanes use that to keep clear of the production controller.
@@ -572,13 +572,13 @@ Each command does these steps in order and stops at the first that fails:
 
 `serve` then logs `controller_ready` with its pid, repository and scope. That marks entry into the loop, not systemd readiness. With the lock held and local loop setup complete, it sends `READY=1` once through `systemd-notify`, before the first tick's recovery and GitHub work. It sends `WATCHDOG=1` at the start of each tick and after every status-write attempt, including a failed write, which logs `status_unwritable`. This avoids turning a full disk into a watchdog restart loop. Notify failures log `notify_failed`. If the helper binary is missing, it logs once and continues ticking without retrying that missing executable.
 
-`server/factory.service` uses `Type=notify`, `NotifyAccess=all` for the helper child and `WatchdogSec=120`, retaining `Restart=on-failure`, `RestartSec=30` and `RestartPreventExitStatus=2`. Without `NOTIFY_SOCKET`, CLI runs skip notification. A notify child has a one-second timeout. The VM delivery/restart proof remains a live verification gate.
+`host/install/factory.service` uses `Type=notify`, `NotifyAccess=all` for the helper child and `WatchdogSec=120`, retaining `Restart=on-failure`, `RestartSec=30` and `RestartPreventExitStatus=2`. Without `NOTIFY_SOCKET`, CLI runs skip notification. A notify child has a one-second timeout. The VM delivery/restart proof remains a live verification gate.
 
 **Watchdog timing.** A fake-clock test through the real orchestrator constructs three sequential 30-second GitHub timeouts in each tick. With pings on both sides of the tick, its longest gap is 90 seconds; the 20-second ledger pump and 30-second sleep form a separate 50-second gap. The test asserts a gap below the unchanged 120-second watchdog. A hanging tick still misses its next ping. This is not a measured VM outage or proof for a populated tick; the live timing lane remains required before deployment. See [backup and restore](backup.md) before changing service or state.
 
 ### Verification token cap
 
-`--verification-token-cap <n>` lets a verification lane test an almost exhausted run budget without spending most of main's 800,000-token cap. It is not for production, and `server/factory.service` never passes it.
+`--verification-token-cap <n>` lets a verification lane test an almost exhausted run budget without spending most of main's 800,000-token cap. It is not for production, and `host/install/factory.service` never passes it.
 
 - It requires `--issue`. A missing scope, or a value that is not a positive integer, is a usage error. Other commands refuse it.
 - After the identity check and before the first tick, the controller pins `<state-dir>/verification.json`, mode 0600. The file holds the repository, the sorted issue scope and `n`. The first run requires a state directory that holds nothing but `controller.lock`. Each later run must name the same repository, scope and cap.
@@ -968,12 +968,12 @@ For a fresh exe.dev VM, use the [commit-pinned, held install](install-exe-dev.md
 
 Installation requires explicit service/VM authority, a drained rollout, and the [owner bootstrap gates](human-review.md#bootstrap-and-enable-protection-as-the-owner). These examples are not an execution grant.
 
-`server/factory.service` runs `serve` under systemd. `server/provision.sh` does not install it. To install it on `pi-factorio`:
+`host/install/factory.service` runs `serve` under systemd. `host/install/provision.sh` does not install it. To install it on `pi-factorio`:
 
 1. Clone the repository to `/home/exedev/pi-herdr-factorio` at the `main` commit to run, and run `npm ci --ignore-scripts` there.
-2. Run full provisioning: `bash server/provision.sh`. This writes the required `/etc/factory/factory.env` and installs the sandbox bundle. A missing env file stops the unit from starting; sandbox-only provisioning does not write it.
+2. Run full provisioning: `bash host/install/provision.sh`. This writes the required `/etc/factory/factory.env` and installs the sandbox bundle. A missing env file stops the unit from starting; sandbox-only provisioning does not write it.
 3. Create the state directory and hold: `install -d -m 0700 /home/exedev/factory-state && touch /home/exedev/factory-state/disabled`. Only Giuseppe lifts this hold after verification.
-4. Copy the unit: `sudo install -m 0644 server/factory.service /etc/systemd/system/factory.service`, then `sudo systemctl daemon-reload`.
+4. Copy the unit: `sudo install -m 0644 host/install/factory.service /etc/systemd/system/factory.service`, then `sudo systemctl daemon-reload`.
 5. Start it: `sudo systemctl enable --now factory.service`.
 6. Wait for readiness: `journalctl -u factory.service -f` until it shows `event=controller_ready`.
 
@@ -1022,7 +1022,7 @@ Anchors (`&name`) and aliases (`*name`) are not allowed anywhere in the front ma
 | `stages.<stage>.max_turns` | integer | `20` | Positive. |
 | `stages.<stage>.wall_ms` | integer | `1800000` | Positive. For `specify`, `accept`, `build` and `review` it must be larger than 10000, the sandbox's cleanup reserve: the stage's hard deadline is `wall_ms` minus that reserve. |
 | `stages.<stage>.stall_ms` | integer | `300000` | Positive. |
-| `stages.<stage>.model` | `provider/model` | `openai/gpt-6.1-sol` | Only for `specify`, `accept`, `build` and `review`. Legacy `validate.model` is accepted with a warning and ignored. `specify`, `build` and `review` take only `openai/` models, because the sandbox serves them only on the `openai` route. `accept` also takes an `anthropic/` model listed in `server/sandbox/anthropic-limits.ts`, served on the `model-anthropic` route. Anthropic calls spend exe.dev credits. |
+| `stages.<stage>.model` | `provider/model` | `openai/gpt-6.1-sol` | Only for `specify`, `accept`, `build` and `review`. Legacy `validate.model` is accepted with a warning and ignored. `specify`, `build` and `review` take only `openai/` models, because the sandbox serves them only on the `openai` route. `accept` also takes an `anthropic/` model listed in `host/sandbox/anthropic-limits.ts`, served on the `model-anthropic` route. Anthropic calls spend exe.dev credits. |
 | `stages.<stage>.fallback_model` | `openai/model` or legacy `xai/model` | none | Optional for model stages. It must differ from the primary model. A structured content-policy refusal permits one fresh fallback session. In review this applies only to the security seat. `accept`'s fallback must be `openai/`, so an Anthropic accept falls back only to the same family as the builder, and that run certifies `r8: "incomplete"`. An Anthropic accept also switches to it when its route is unavailable. `workflow-check` prints `config.stages.<stage>.fallbackModel`, or `null` when unset. |
 | `stages.accept.reasoning_effort` | `low`, `medium` or `high` | `medium` | Accept only. Passed as Pi's `--thinking` level. `workflow-check` prints `config.stages.accept.reasoningEffort`. Other stages reject the key. |
 | `stages.review.seats.code-review.model` | `openai/model` or a listed `anthropic/model` | `stages.review.model` | The only per-seat key. The code-review seat runs this model with no fallback. The security, simplify and ultrareview seats keep `stages.review.model`, and the security seat alone keeps `fallback_model`. Any other seat, or any other key under the seat, is rejected. `workflow-check` prints `config.stages.review.codeReviewModel`, or `null` when the seat inherits. |

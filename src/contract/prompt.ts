@@ -220,7 +220,9 @@ async function acceptExcerpts(
 
 	const stem = (path: string) =>
 		path
-			.replace(/^(?:src|server|lib|test|tests)\//, "")
+			.replace(/^host\/cli\/index\.ts$/, "cli.ts")
+			.replace(/^host\/(?:gateway|isolation|bundle)\//, "sandbox/")
+			.replace(/^(?:src|server|host|lib|test|tests)\//, "")
 			.replace(/(?:\.(?:test|spec|cases))?\.[cm]?[jt]sx?$/, "");
 
 	for (const source of sources) {

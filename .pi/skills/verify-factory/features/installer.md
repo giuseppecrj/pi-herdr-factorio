@@ -10,7 +10,7 @@
 
 ## How to get to it (user POV)
 
-Use `server/install-exe-dev.sh` and [the installer runbook](../../../../docs/operations/install-exe-dev.md). Read the script at the chosen revision before running it. This recipe uses a disposable exe.dev VM named `layout-install-test`, not a production host.
+Use `host/install/install-exe-dev.sh` and [the installer runbook](../../../../docs/operations/install-exe-dev.md). Read the script at the chosen revision before running it. This recipe uses a disposable exe.dev VM named `layout-install-test`, not a production host.
 
 The layout program requires separate grants for the fixture repository, its two-field configuration derivation, integration, VM lifecycle, install, upgrade, recovery, and cleanup. See [the fixture prerequisites](../../../../docs/plans/codebase-layout.md#disposable-fixture-setup-is-a-real-prerequisite). At this base, `--repo` alone cannot make a fixture installation work. The derived revision must allow the fixture repository in the platform defaults and its trusted main workflow. Record product and fixture SHAs and prove all other blobs identical.
 
@@ -30,7 +30,7 @@ Set `C` to the approved full lowercase 40-character fixture commit published in 
 REPO=nublai/pi-herdr-factorio-layout-fixture
 VM=layout-install-test
 C='<approved-full-fixture-commit>'
-URL="https://raw.githubusercontent.com/$REPO/$C/server/install-exe-dev.sh"
+URL="https://raw.githubusercontent.com/$REPO/$C/host/install/install-exe-dev.sh"
 ```
 
 ### Check preflight
@@ -55,7 +55,7 @@ Record the restart boundary and current service InvocationID. Inspect that invoc
 
 ```bash
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
-GH_HOST=github.int.exe.xyz node /home/exedev/pi-herdr-factorio/server/cli.ts status \
+GH_HOST=github.int.exe.xyz node /home/exedev/pi-herdr-factorio/host/cli/index.ts status \
   --json --repo "$REPO" --state-dir /home/exedev/factory-state
 invocation=$(systemctl show factory.service -p InvocationID --value)
 sudo journalctl -u factory.service "_SYSTEMD_INVOCATION_ID=$invocation" --no-pager -o cat

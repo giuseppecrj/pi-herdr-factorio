@@ -11,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, it } from "node:test";
-import { runHeldoutBase } from "../server/gates.ts";
+import { runHeldoutBase } from "../host/gates/base.ts";
 import { assessBase } from "../src/candidate/diagnosis.ts";
 import { isGitSha } from "../src/config/schema.ts";
 import {

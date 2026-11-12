@@ -60,18 +60,19 @@ import {
 	prepareRepairTree,
 	publicationTree,
 } from "../src/candidate/build.ts";
-import { fileRunFiles } from "../server/controller/run-files.ts";
+import { fileRunFiles } from "../host/controller/run-files.ts";
 import {
 	controllerValidator,
 	sweepValidation,
 	downloadGateReceipt,
-} from "../server/controller/validation-sweep.ts";
+} from "../host/controller/validation-sweep.ts";
 import {
 	type ValidationState,
 	readFeedbackBytes,
 	feedbackBytes,
 } from "../src/candidate/validation.ts";
-import { baseTreeDigest, replacementDigest } from "../server/gates.ts";
+import { baseTreeDigest } from "../host/gates/base.ts";
+import { replacementDigest } from "../host/gates/materialize.ts";
 import { CONTROLLER_LOGIN } from "../src/trust/markers.ts";
 import { LedgerGit } from "./ledger-git.ts";
 import {
@@ -80,8 +81,8 @@ import {
 	storedAssessment,
 } from "./helpers.ts";
 import { classifyFeedback } from "../src/candidate/feedback.ts";
-import { storeFeedbackBatch } from "../server/controller/candidate-port.ts";
-import { sandboxExecutor } from "../server/sandbox/executor.ts";
+import { storeFeedbackBatch } from "../host/controller/candidate-port.ts";
+import { sandboxExecutor } from "../host/sandbox/executor.ts";
 import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 
 const repo = "giuseppecrj/pi-herdr-factorio";
@@ -1180,7 +1181,7 @@ describe("fix round 1 recovery regressions", () => {
 			"--input-type=module",
 			"-e",
 			`
-			import {controllerValidator} from './server/controller/validation-sweep.ts';
+			import {controllerValidator} from './host/controller/validation-sweep.ts';
 			import {EXE_DEV_PLATFORM} from './src/trust/platform.ts';
 			const input = JSON.parse(process.argv[1]);
 			const exec = async (_, args) => {

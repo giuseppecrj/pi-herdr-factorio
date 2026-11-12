@@ -13,7 +13,7 @@ lane="/home/exedev/factory-verification/$pr-w$n"
 out="/tmp/swarm-$pr/worker-$n"
 mkdir -p "$out"
 rm -f "$out"/admission-*.json "$out/admit-evidence.txt"
-[ -f "$lane/ws/server/cli.ts" ] || { echo "server/cli.ts missing from lane workspace" >&2; exit 2; }
+[ -f "$lane/ws/host/cli/index.ts" ] || { echo "host/cli/index.ts missing from lane workspace" >&2; exit 2; }
 sha="$(cat "$lane/head-sha" 2>/dev/null || echo unknown)"
 start="$(date -u +%FT%TZ)"
 lines=""
@@ -24,12 +24,12 @@ field() {
 for issue in "$@"; do
   f="$out/admission-$issue.json"
   t0=$(date +%s%N)
-  (cd "$lane/ws" && node server/cli.ts admit --json --repo "$repo" --issue "$issue" --state-dir "$lane/state") > "$f"
+  (cd "$lane/ws" && node host/cli/index.ts admit --json --repo "$repo" --issue "$issue" --state-dir "$lane/state") > "$f"
   rc=$?
   ms=$(( ($(date +%s%N) - t0) / 1000000 ))
   reasons=$(node -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(r.reasons.map(x=>x.kind+(x.failure?"("+x.failure.kind+(x.failure.status?" "+x.failure.status:"")+")":"")+(x.detail?"("+x.detail+")":"")).join(",")||"none")' "$f" 2>/dev/null || echo unparsable)
   lines="$lines
-command=node server/cli.ts admit --json --repo $repo --issue $issue --state-dir $lane/state exit=$rc ms=$ms decision=$(field "$f" decision) reasons=$reasons eventId=$(field "$f" eventId) actor=$(field "$f" actor) permission=$(field "$f" actorPermission) snapshotSource=$(field "$f" snapshotSource) snapshotDigest=$(field "$f" snapshotDigest) baseSha=$(field "$f" baseSha)"
+command=node host/cli/index.ts admit --json --repo $repo --issue $issue --state-dir $lane/state exit=$rc ms=$ms decision=$(field "$f" decision) reasons=$reasons eventId=$(field "$f" eventId) actor=$(field "$f" actor) permission=$(field "$f" actorPermission) snapshotSource=$(field "$f" snapshotSource) snapshotDigest=$(field "$f" snapshotDigest) baseSha=$(field "$f" baseSha)"
   [ "$rc" -le 1 ] || final=1
 done
 {

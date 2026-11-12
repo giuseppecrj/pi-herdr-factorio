@@ -11,7 +11,7 @@ Fetch the ledger into a local remote-tracking ref, then run the report:
 
 ```sh
 git fetch origin refs/heads/factory/ledger:refs/remotes/origin/factory/ledger
-node --experimental-strip-types server/cli.ts metrics --json \
+node --experimental-strip-types host/cli/index.ts metrics --json \
   --repo nublai/pi-herdr-factorio --offline
 ```
 
@@ -317,7 +317,7 @@ fetches, creates a fixture, starts a controller, or writes a budget. From the
 repository root:
 
 ```sh
-node server/cli.ts replay check --json
+node host/cli/index.ts replay check --json
 ```
 
 The defaults are `test/fixtures/replay/`, local `origin/main` for both the main
@@ -326,7 +326,7 @@ are an inventory check, not a claim about which revision is deployed. Live
 verification supplies explicit full 40-character SHAs:
 
 ```sh
-node server/cli.ts replay check --json \
+node host/cli/index.ts replay check --json \
   --main-sha "$MAIN_SHA" --previous-sha "$PREVIOUS_SHA" \
   --candidate-sha "$CANDIDATE_SHA" --case c3 \
   --production-state-dir "$PRODUCTION_STATE" --budget-file "$REPLAY_BUDGET"
@@ -344,8 +344,8 @@ Case c1 narrows that diff with `-G'BRANCH_NAME|isBranchName'`, so unrelated
 workflow parser edits do not stale the case; a change to either symbol does.
 Changed paths report `stale`, unavailable Git evidence reports `unavailable`,
 and an offline case reports `offline_only`. The check also compares the two
-factories' sandbox bundle inputs (`skills`, `server/sandbox/assets`, and
-`server/provision.sh`). Different inputs report `bundle_switch_required`, not
+factories' sandbox bundle inputs (`skills`, `host/bundle/assets`, and
+`host/install/provision.sh`). Different inputs report `bundle_switch_required`, not
 permission to re-provision production. A selected check refuses that switch
 unless `--bundle-root`, `--side previous|candidate`, `--previous-assets` and
 `--candidate-assets` prove both required bundles are installed, match their
@@ -383,10 +383,10 @@ The live cases pin base `28e700f745d7dea0809651d7c9711ca085de55d0`.
 | Case | Historical issue | Guarded paths | Expected outcome | Mode |
 | --- | --- | --- | --- | --- |
 | c1 | 658 | `src/workflow.ts`, symbol-scoped | handoff, round 0 | live when unchanged |
-| c2 | 650 | `server/viewer.ts` | handoff, round 0 | live when unchanged |
+| c2 | 650 | `host/viewer/server.ts` | handoff, round 0 | live when unchanged |
 | c3 | 597 | `README.md` | `needs_info` | live when unchanged |
 | c4 | 605 family, including 608, 610, 612 | `scripts/provenance.sh` | handoff, round 0 | live when unchanged |
-| c5 | 645 | `server/cli.ts` | handoff | offline only |
+| c5 | 645 | `host/cli/index.ts` | handoff | offline only |
 
 Case c5 pins historical base `07852698ebdd1281f3ad21975ddd5d13f1ff0fc3`.
 Its defect is already fixed on main. Replay does not add a historical-base
@@ -467,7 +467,7 @@ new replay wall-time ceiling; existing controller time limits still apply.
 subprocess and calls neither GitHub nor a model:
 
 ```sh
-node server/cli.ts replay report --json --case c3 \
+node host/cli/index.ts replay report --json --case c3 \
   --previous-sha "$PREVIOUS_SHA" --candidate-sha "$CANDIDATE_SHA" \
   --previous-row "$PREVIOUS_ROW" --candidate-row "$CANDIDATE_ROW" \
   --previous-record "$PREVIOUS_LANE/replay.json" \

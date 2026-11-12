@@ -23,8 +23,8 @@ All commands below run in the authorized VM lane checkout. `STATE`, `ISSUE`, `PR
 ### Drive one delivery
 
 ```bash
-node server/cli.ts tick --once --json --repo nublai/pi-herdr-factorio --state-dir "$STATE" --issue "$ISSUE"
-node server/cli.ts status --json --repo nublai/pi-herdr-factorio --state-dir "$STATE"
+node host/cli/index.ts tick --once --json --repo nublai/pi-herdr-factorio --state-dir "$STATE" --issue "$ISSUE"
+node host/cli/index.ts status --json --repo nublai/pi-herdr-factorio --state-dir "$STATE"
 gh api "repos/nublai/pi-herdr-factorio/pulls/$PR"
 gh api "repos/nublai/pi-herdr-factorio/commits/$HEAD/check-runs?filter=all&per_page=100"
 ```

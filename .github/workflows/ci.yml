@@ -64,7 +64,7 @@ jobs:
           HELDOUT_DIR: ${{ inputs.heldout_dir }}
           HELDOUT_DIGEST: ${{ inputs.heldout_digest }}
         run: |
-          node --experimental-strip-types server/cli.ts gates \
+          node --experimental-strip-types host/cli/index.ts gates \
             --repository "$PWD" --gate-sha "$GATE_SHA" --candidate-sha "$CANDIDATE_SHA" \
             --nonce "$NONCE" --output "$RUNNER_TEMP/gate-results" \
             --replacements "$REPLACEMENTS" --replacements-digest "$REPLACEMENTS_DIGEST" \

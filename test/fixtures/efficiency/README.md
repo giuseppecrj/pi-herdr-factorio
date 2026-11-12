@@ -139,7 +139,7 @@ The bundled agent template has no thinking override. Pi 1.4.0's
 `core/defaults.js` sets `DEFAULT_THINKING_LEVEL` to `medium`; `core/sdk.js`
 applies it to a fresh session. The hardened wrapper already allows `--thinking`.
 The Responses serializer in `pi-ai/dist/api/openai-responses.js` sets
-`reasoning.effort`, and `server/sandbox/gateway.ts` preserves it while bounding
+`reasoning.effort`, and `host/gateway/gateway.ts` preserves it while bounding
 output. The replay captures `"reasoning":{"effort":"low","summary":"auto"}`
 after the gateway. Model capability clamping and provider-side quality still
 need a live pilot.

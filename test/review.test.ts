@@ -60,8 +60,8 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { fileRunFiles } from "../server/controller/run-files.ts";
-import { sandboxExecutor } from "../server/sandbox/executor.ts";
+import { fileRunFiles } from "../host/controller/run-files.ts";
+import { sandboxExecutor } from "../host/sandbox/executor.ts";
 import {
 	collectPatch,
 	storePatch,
@@ -1539,7 +1539,7 @@ describe("candidate review", () => {
 
 		for (const path of [
 			"src/trust/policy.ts",
-			"server/sandbox/rpc.ts",
+			"host/sandbox/rpc.ts",
 			"package.json",
 			"skills/build/SKILL.md",
 		])

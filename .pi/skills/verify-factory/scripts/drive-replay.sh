@@ -172,7 +172,7 @@ case "$mode" in
     case "$(systemctl is-active factory.service || true)" in inactive|failed) ;; *) echo "production stop failed" >&2; exit 1;; esac
     production_free
     sudo ln -sfn "assets-$assets" "$sandbox/current"
-    node server/cli.ts replay check --json --case "$REPLAY_CASE" --main-sha "$REPLAY_MAIN_SHA" --previous-sha "$REPLAY_PREVIOUS_SHA" --candidate-sha "$REPLAY_CANDIDATE_SHA" --production-state-dir "$production" --budget-file "$budget" --bundle-root "$sandbox" --previous-assets "$REPLAY_PREVIOUS_ASSETS" --candidate-assets "$REPLAY_CANDIDATE_ASSETS" --side "$REPLAY_SIDE" >"$out/replay-check.json"
+    node host/cli/index.ts replay check --json --case "$REPLAY_CASE" --main-sha "$REPLAY_MAIN_SHA" --previous-sha "$REPLAY_PREVIOUS_SHA" --candidate-sha "$REPLAY_CANDIDATE_SHA" --production-state-dir "$production" --budget-file "$budget" --bundle-root "$sandbox" --previous-assets "$REPLAY_PREVIOUS_ASSETS" --candidate-assets "$REPLAY_CANDIDATE_ASSETS" --side "$REPLAY_SIDE" >"$out/replay-check.json"
     # Preflight executes trusted-main code, not either factory's implementation.
     replay_step preflight "$lane/preflight" "$sandbox"
     production_free
@@ -183,7 +183,7 @@ case "$mode" in
     # Open the log under the driver's private umask before matching production in the child.
     (
       umask "${serve_umask:-0022}"
-      cd "$lane/ws" && exec node server/cli.ts serve --repo "$repo" --state-dir "$lane/state" --issue "$issue" --verification-token-cap 540000 9>&9
+      cd "$lane/ws" && exec node host/cli/index.ts serve --repo "$repo" --state-dir "$lane/state" --issue "$issue" --verification-token-cap 540000 9>&9
     ) >/dev/null 2>>"$out/serve.log" </dev/null &
     pid=$!
     echo "$pid" >"$pidfile"

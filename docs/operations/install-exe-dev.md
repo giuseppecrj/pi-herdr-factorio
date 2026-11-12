@@ -25,17 +25,33 @@ A newly added or re-attached integration can take a minute or two to reach the V
 SSH to `exedev@nubl-factory.exe.xyz`. Set `C` to the full lowercase 40-character SHA published in `nublai/pi-herdr-factorio`:
 
 ```bash
-C=<sha>; curl -fsSL https://raw.githubusercontent.com/nublai/pi-herdr-factorio/$C/server/install-exe-dev.sh | bash -s -- "$C"
+C=<sha>; curl -fsSL https://raw.githubusercontent.com/nublai/pi-herdr-factorio/$C/host/install/install-exe-dev.sh | bash -s -- "$C"
 ```
 
 The selected revision must include the repository rename in the platform allowlist and a valid trusted workflow on `main`. The installer refuses to start a controller whose platform does not allow the requested repository.
 
 For another repository, change the script URL to the repository containing the installer and append `--repo owner/name`. The target defaults to `nublai/pi-herdr-factorio`; the selected revision's platform allowlist and trusted workflow must also allow that target. `--vm name` changes only the VM name in preflight fix instructions (default `nubl-factory`), not the host being installed.
 
+### Disposable layout fixture
+
+This example is separate from the production command above. Use it only under the fixture and disposable-VM grants. The coordinator prepares a fixture commit derived from the exact product SHA, changing only the platform default repository list and the repository field in the fixture's trusted workflow. Record both SHAs and that two-field diff. `--repo` alone cannot make a product revision accept another repository.
+
+SSH to `exedev@<disposable-name>.exe.xyz`, then use the fixture repository for both the pinned download and the selected repository:
+
+```bash
+C=<full-fixture-sha>
+curl -fsSL https://raw.githubusercontent.com/nublai/pi-herdr-factorio-layout-fixture/$C/host/install/install-exe-dev.sh | bash -s -- --check --repo nublai/pi-herdr-factorio-layout-fixture --vm <disposable-name> "$C"
+curl -fsSL https://raw.githubusercontent.com/nublai/pi-herdr-factorio-layout-fixture/$C/host/install/install-exe-dev.sh | bash -s -- --repo nublai/pi-herdr-factorio-layout-fixture --vm <disposable-name> "$C"
+```
+
+Use a clean new-layout VM for fresh installation and a separate old-layout VM for upgrade. Keep the hold. Do not attach the production repository integration to either VM. Fixture installation is not production deployment proof.
+
+Old pinned download URLs still select their original installer. An old bootstrap given a new-layout SHA creates or retains the hold, then fails when the verified checkout lacks its old installer path, before any service stop. Download the new pinned `host/install/install-exe-dev.sh` bootstrap to upgrade; do not add an old-path shim.
+
 ### Check only
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/nublai/pi-herdr-factorio/<commit>/server/install-exe-dev.sh | bash -s -- --check --vm nubl-factory
+curl -fsSL https://raw.githubusercontent.com/nublai/pi-herdr-factorio/<commit>/host/install/install-exe-dev.sh | bash -s -- --check --vm nubl-factory
 ```
 
 `--check` needs no commit argument. It only reads local prerequisites and performs a repository GET and an OpenAI models-list GET, never a model inference. Its namespace and bubblewrap smoke tests run `true` with the host filesystem read-only. It never clones, provisions, creates state, enables linger, installs a unit or restarts a service. Exit 0 means preflight passed; exit 1 prints a named refusal and a fix. Remote error bodies are suppressed.
@@ -46,7 +62,7 @@ Preflight requires x86_64 Linux, both exe.dev integration names resolving to the
 
 After preflight passes, it refuses a dirty, symlinked or wrong-origin checkout. It creates `/home/exedev/factory-state` owned by `exedev` at 0700 and its `disabled` hold before stopping or enabling any service. An existing state directory must already be private and owned by `exedev`; existing hold bytes and metadata are preserved.
 
-It clones and fetches through the GitHub integration into a temporary directory beside `/home/exedev/pi-herdr-factorio`, checks out the exact SHA and verifies `git rev-parse HEAD` against it, before stopping the controller. A failed download leaves any old controller running and no partial new checkout. It re-executes the installer from that verified checkout, so provisioning uses the pinned installer rather than the downloaded bootstrap. It then stops and disables the service, moves a first checkout into place or updates the existing clean checkout, and runs full `server/provision.sh`, refreshing checkout dependencies on upgrades. MV3 installs host tools, Pi configuration, linger, the verified root-owned sandbox bundle and `/etc/factory/factory.env`. The installer renders the selected `--repo` into `server/factory.service`, installs it and restarts it. `Type=notify` waits for readiness; the installer checks `controller_ready` in that invocation's journal and requires a `status.json` timestamp later than the restart boundary, followed by a running controller's `status --json` with the same freshness requirement and `locally_disabled` with dispatch disabled. Only after those checks does it enable the service for boot.
+It clones and fetches through the GitHub integration into a temporary directory beside `/home/exedev/pi-herdr-factorio`, checks out the exact SHA and verifies `git rev-parse HEAD` against it, before stopping the controller. A failed download leaves any old controller running and no partial new checkout. It re-executes the installer from that verified checkout, so provisioning uses the pinned installer rather than the downloaded bootstrap. It then stops and disables the service, moves a first checkout into place or updates the existing clean checkout, and runs full `host/install/provision.sh`, refreshing checkout dependencies on upgrades. MV3 installs host tools, Pi configuration, linger, the verified root-owned sandbox bundle and `/etc/factory/factory.env`. The installer renders the selected `--repo` into `host/install/factory.service`, installs it and restarts it. `Type=notify` waits for readiness; the installer checks `controller_ready` in that invocation's journal and requires a `status.json` timestamp later than the restart boundary, followed by a running controller's `status --json` with the same freshness requirement and `locally_disabled` with dispatch disabled. Only after those checks does it enable the service for boot.
 
 It prints those reasons and atomically records the successful commit in `factory-state/install-exe-dev.commit`. A failure leaves the hold in place. After a stop, failure cleanup stops and disables the service so a half-provisioned checkout cannot crash-loop on reboot; it reports any cleanup failure explicitly. Fix the reported error and rerun the pinned command to recover. The installer does not roll back shared provisioning changes or lift the hold. Never treat preflight alone as proof of provisioning, cgroup limits, stage execution or an end-to-end install.
 
@@ -57,7 +73,7 @@ On the VM, as `exedev`:
 ```bash
 cd /home/exedev/pi-herdr-factorio
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
-GH_HOST=github.int.exe.xyz node server/cli.ts status --json --state-dir /home/exedev/factory-state --repo nublai/pi-herdr-factorio
+GH_HOST=github.int.exe.xyz node host/cli/index.ts status --json --state-dir /home/exedev/factory-state --repo nublai/pi-herdr-factorio
 sudo journalctl -u factory.service -n 100 --no-pager
 ```
 
@@ -83,7 +99,7 @@ Upgrade only on a drained controller, following the [drained rollout procedure](
 The bridge runs as the **same `exedev` user**, reading the private state directly:
 
 ```bash
-/home/exedev/.local/share/mise/shims/node /home/exedev/pi-herdr-factorio/server/cli.ts owner-feed --json --state-dir /home/exedev/factory-state --repo nublai/pi-herdr-factorio
+/home/exedev/.local/share/mise/shims/node /home/exedev/pi-herdr-factorio/host/cli/index.ts owner-feed --json --state-dir /home/exedev/factory-state --repo nublai/pi-herdr-factorio
 ```
 
 No viewer ingress, extra port, token or privileged helper is needed. Install the bridge before Factorio, and point it at that command after the checkout exists. Shep owns its feed polling and push delivery; see [OwnerFeed contract](owner-feed.md). The installer does not configure or restart the bridge.

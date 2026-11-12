@@ -1,5 +1,5 @@
 import { closeSync, readFileSync } from "node:fs";
-import { LineSplitter } from "../../server/sandbox/lines.ts";
+import { LineSplitter } from "../../host/sandbox/lines.ts";
 import {
 	fieldOf,
 	type JsonValue,

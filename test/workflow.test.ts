@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { execFile, EXIT, runCli } from "../server/cli.ts";
+import { execFile, EXIT } from "../host/cli/platform.ts";
+import { runCli } from "../host/cli/index.ts";
 import { STAGE_PROFILES } from "../src/candidate/stages.ts";
 import {
 	loadPinnedWorkflow,
@@ -1347,8 +1348,8 @@ async function cli(
 	return { code, json, stderr };
 }
 
-describe("server/cli.ts as a process", () => {
-	const entry = fileURLToPath(new URL("../server/cli.ts", import.meta.url));
+describe("host/cli/index.ts as a process", () => {
+	const entry = fileURLToPath(new URL("../host/cli/index.ts", import.meta.url));
 
 	it("reports cannot run gh when gh is not on PATH", () => {
 		const emptyPath = mkdtempSync(join(tmpdir(), "factory-no-gh-"));
@@ -1411,14 +1412,18 @@ describe("server/cli.ts as a process", () => {
 	});
 });
 
-describe("server/cli.ts spawn-failure classification", () => {
-	const entry = fileURLToPath(new URL("../server/cli.ts", import.meta.url));
+describe("host/cli/index.ts spawn-failure classification", () => {
+	const entry = fileURLToPath(new URL("../host/cli/index.ts", import.meta.url));
 
 	it("keeps a gh that overflows maxBuffer an ordinary failure", () => {
-		const source = readFileSync(entry, "utf8");
+		const source = readFileSync(
+			new URL("../host/cli/platform.ts", import.meta.url),
+			"utf8",
+		);
+
 		const limit = /maxBuffer:\s*(\d+)\s*\*\s*1024\s*\*\s*1024/.exec(source);
 
-		assert.ok(limit?.[1], "maxBuffer not found in server/cli.ts");
+		assert.ok(limit?.[1], "maxBuffer not found in host/cli/platform.ts");
 
 		const overflow = (Number(limit[1]) + 1) * 1024 * 1024;
 		const binPath = mkdtempSync(join(tmpdir(), "factory-gh-overflow-"));
@@ -1453,7 +1458,7 @@ describe("server/cli.ts spawn-failure classification", () => {
 	});
 });
 
-describe("server/cli.ts", () => {
+describe("host/cli/index.ts", () => {
 	const repoArgs = ["--json", "--repo", repo];
 	const trusted = new Map([["main", { sha: mainSha, text: valid }]]);
 	const missing = new Map([["main", { sha: mainSha, text: null }]]);

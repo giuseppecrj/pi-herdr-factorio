@@ -10,8 +10,8 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
-import { controllerBaseChecker } from "../server/controller/checkers.ts";
-import { parseDraftDetails } from "../server/gates.ts";
+import { controllerBaseChecker } from "../host/controller/checkers.ts";
+import { parseDraftDetails } from "../host/gates/base.ts";
 import {
 	assessBase,
 	BASE_PROTOCOL_VERSION,
@@ -275,7 +275,7 @@ test("P7 minimal wrapped ReferenceError beyond the trusted head reaches detail f
 				"--test-reporter-destination",
 				"stdout",
 				"--test-reporter",
-				resolve("server/gates/draft-reporter.mjs"),
+				resolve("host/gates/draft-reporter.mjs"),
 				"--test-reporter-destination",
 				"stderr",
 				file,
@@ -342,7 +342,7 @@ test("detail reporter classification stays in parity with the unchanged trusted 
 		data: { file, line: 2, column: 1, ...r, details: { error: r.error } },
 	}));
 
-	const script = `const {default:trusted}=await import(${JSON.stringify(resolve(".github/factory/gates/reporter.mjs"))});const {default:detail}=await import(${JSON.stringify(resolve("server/gates/draft-reporter.mjs"))});const events=${JSON.stringify([...events, { type: "test:summary", data: { success: false } }])};const out=[];for(const r of [trusted,detail]){let s='';for await(const chunk of r(events))s+=chunk;out.push(JSON.parse(s));}console.log(JSON.stringify(out));`;
+	const script = `const {default:trusted}=await import(${JSON.stringify(resolve(".github/factory/gates/reporter.mjs"))});const {default:detail}=await import(${JSON.stringify(resolve("host/gates/draft-reporter.mjs"))});const events=${JSON.stringify([...events, { type: "test:summary", data: { success: false } }])};const out=[];for(const r of [trusted,detail]){let s='';for await(const chunk of r(events))s+=chunk;out.push(JSON.parse(s));}console.log(JSON.stringify(out));`;
 
 	const [trusted, detail] = JSON.parse(
 		execFileSync(process.execPath, ["--input-type=module", "-e", script], {

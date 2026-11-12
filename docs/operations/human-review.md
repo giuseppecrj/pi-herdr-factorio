@@ -14,7 +14,7 @@ F09a implements this protocol locally. Main-backed reporter/P4 proof, production
 4. On the VM, read status without advancing the controller:
 
 ```bash
-node server/cli.ts status --json --repo nublai/pi-herdr-factorio --state-dir "$STATE"
+node host/cli/index.ts status --json --repo nublai/pi-herdr-factorio --state-dir "$STATE"
 ```
 
 `STATE` is the existing private controller state directory. Set `GH_HOST=github.int.exe.xyz` only in the trusted VM environment, never on your workstation. Status reads the workflow through `gh` and local evidence from disk. It launches no model and writes no marker. `executionEnabled: false` at the top level describes this status command, not the daemon's readiness.

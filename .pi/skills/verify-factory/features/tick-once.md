@@ -1,6 +1,6 @@
 # tick --once and run --issue
 
-`node server/cli.ts tick --once` runs one controller tick and prints the claim snapshot. `run --issue <n>` is the same tick limited to one issue, through the same switches and admission as polling. Both take the controller lock, check that `gh` acts as `exe-dev-github-integration[bot]`, post run markers on the issue and exit. Each tick runs the sandbox preflight first. When it passes, a clear run specifies the issue, stores acceptance and leaves build `claimed` in the first tick. A later scoped tick launches build and reaches slot-free validate or failure; the slot stays held at build between ticks. F09a's later CI/review/handoff proceeds to nonterminal owner waiting, not terminal review success. That path, its receipt and its cost are in `sandbox-stage.md`. When the preflight fails, the run is `blocked` with reason `sandbox_unavailable`, and no model runs. The command reference is the "Controller" section of `docs/operations/factory-cli.md`.
+`node host/cli/index.ts tick --once` runs one controller tick and prints the claim snapshot. `run --issue <n>` is the same tick limited to one issue, through the same switches and admission as polling. Both take the controller lock, check that `gh` acts as `exe-dev-github-integration[bot]`, post run markers on the issue and exit. Each tick runs the sandbox preflight first. When it passes, a clear run specifies the issue, stores acceptance and leaves build `claimed` in the first tick. A later scoped tick launches build and reaches slot-free validate or failure; the slot stays held at build between ticks. F09a's later CI/review/handoff proceeds to nonterminal owner waiting, not terminal review success. That path, its receipt and its cost are in `sandbox-stage.md`. When the preflight fails, the run is `blocked` with reason `sandbox_unavailable`, and no model runs. The command reference is the "Controller" section of `docs/operations/factory-cli.md`.
 
 ## Sub-features
 
@@ -19,8 +19,8 @@
 
 ## How to get to it (user POV)
 
-- `node server/cli.ts tick --once --json --repo nublai/pi-herdr-factorio --state-dir <dir> --issue <n>...`
-- `node server/cli.ts run --json --repo nublai/pi-herdr-factorio --issue <n> --state-dir <dir>`
+- `node host/cli/index.ts tick --once --json --repo nublai/pi-herdr-factorio --state-dir <dir> --issue <n>...`
+- `node host/cli/index.ts run --json --repo nublai/pi-herdr-factorio --issue <n> --state-dir <dir>`
 
 ## Driving it with ssh
 

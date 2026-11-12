@@ -23,16 +23,17 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { EXIT, runCli, type ControllerRuntime } from "../server/cli.ts";
-import { runStage, type StageHost } from "../server/sandbox/run-stage.ts";
-import { sandboxExecutor } from "../server/sandbox/executor.ts";
+import { EXIT, type ControllerRuntime } from "../host/cli/platform.ts";
+import { runCli } from "../host/cli/index.ts";
+import { runStage, type StageHost } from "../host/sandbox/run-stage.ts";
+import { sandboxExecutor } from "../host/sandbox/executor.ts";
 import { PassThrough } from "node:stream";
 import type { JsonValue } from "../src/core/json.ts";
 import type { FeedbackObservation } from "../src/candidate/feedback.ts";
 import { readAttention } from "../src/views/attention.ts";
-import type { ControlEvent } from "../server/sandbox/control.ts";
-import { readViewerRun } from "../server/viewer.ts";
-import { manifestDigest } from "../server/sandbox/manifest.ts";
+import type { ControlEvent } from "../host/gateway/control.ts";
+import { readViewerRun } from "../host/viewer/evidence.ts";
+import { manifestDigest } from "../host/bundle/manifest.ts";
 import {
 	BUILD_MAX_TOKENS,
 	collectPatch,
@@ -44,23 +45,23 @@ import {
 	acquireLock,
 	type ProcessTable,
 	parseStartTime,
-} from "../server/controller/lock.ts";
+} from "../host/controller/lock.ts";
 import {
 	fileLedgerOutbox,
 	readLedgerBacklog,
-} from "../server/controller/outbox.ts";
-import { fileRunFiles } from "../server/controller/run-files.ts";
-import { pinVerification, writeStatus } from "../server/controller/state.ts";
+} from "../host/controller/outbox.ts";
+import { fileRunFiles } from "../host/controller/run-files.ts";
+import { pinVerification, writeStatus } from "../host/controller/state.ts";
 import {
 	controllerCandidatePort,
 	WORKFLOW_READ_LIMIT,
 	observeFeedback,
 	storeFeedbackBatch,
-} from "../server/controller/candidate-port.ts";
-import { controllerBaseChecker } from "../server/controller/checkers.ts";
-import { readRunCharges } from "../server/controller/terminal.ts";
-import { serveLoop } from "../server/controller/serve-loop.ts";
-import { HOLDER_FILE } from "../server/controller/state.ts";
+} from "../host/controller/candidate-port.ts";
+import { controllerBaseChecker } from "../host/controller/checkers.ts";
+import { readRunCharges } from "../host/controller/terminal.ts";
+import { serveLoop } from "../host/controller/serve-loop.ts";
+import { HOLDER_FILE } from "../host/controller/state.ts";
 import { GitHubTicketAdapter } from "../src/github/adapter.ts";
 import {
 	type AdmissionStore,
@@ -99,7 +100,7 @@ import type {
 	StageResult,
 } from "../src/controller/launch.ts";
 import { type SessionOutcome } from "../src/core/execution.ts";
-import { stageResult } from "../server/sandbox/result.ts";
+import { stageResult } from "../host/sandbox/result.ts";
 import { READY_LABEL } from "../src/trust/policy.ts";
 import {
 	classifiedCase,
@@ -267,7 +268,7 @@ function memoryStore(): AdmissionStore &
 const CHECKOUT_TREE: ReadonlyMap<string, string> = new Map([
 	[".github/factory/WORKFLOW.md", TRUSTED_WORKFLOW],
 	["README.md", "# pi-herdr-factorio\n"],
-	["server/cli.ts", "export const VERSION = 1;\n"],
+	["host/cli/index.ts", "export const VERSION = 1;\n"],
 ]);
 
 function memoryFiles(): RunFiles & {
@@ -434,8 +435,8 @@ const CONTRACT_TEXT = JSON.stringify({
 	acceptance: [{ kind: "new_behavior", text: "--version prints 0.1.0" }],
 	compatibility: [],
 	limits: [],
-	files: ["server/cli.ts"],
-	evidence: [{ path: "server/cli.ts", start: 1, end: 1, fact: "VERSION" }],
+	files: ["host/cli/index.ts"],
+	evidence: [{ path: "host/cli/index.ts", start: 1, end: 1, fact: "VERSION" }],
 });
 
 const ACCEPTANCE_TEXT = JSON.stringify({
@@ -458,7 +459,7 @@ const QUESTIONS_TEXT = JSON.stringify({
 	questions: [
 		{
 			text: "Should the version come from package.json or a constant?",
-			cites: [{ path: "server/cli.ts", start: 1, end: 1 }],
+			cites: [{ path: "host/cli/index.ts", start: 1, end: 1 }],
 		},
 	],
 });
@@ -689,7 +690,7 @@ class FakeExecutor implements StageExecutor {
 							patchDigest: digestOf(
 								input.round ? `patch-r${input.round}` : "patch",
 							),
-							changedPaths: ["server/cli.ts", "test/version.test.ts"],
+							changedPaths: ["host/cli/index.ts", "test/version.test.ts"],
 							policy: this.buildPolicy,
 							model: input.settings.model,
 							observed: null,
@@ -4020,7 +4021,7 @@ async function cli(
 	return { code, stdout, stderr };
 }
 
-describe("server/cli.ts controller commands", () => {
+describe("host/cli/index.ts controller commands", () => {
 	const base = ["--repo", repo];
 
 	describe("--verification-token-cap", () => {
@@ -4201,7 +4202,7 @@ describe("server/cli.ts controller commands", () => {
 
 		it("never reaches the production unit's ExecStart", () => {
 			const unit = readFileSync(
-				new URL("../server/factory.service", import.meta.url),
+				new URL("../host/install/factory.service", import.meta.url),
 				"utf8",
 			);
 
@@ -4210,7 +4211,7 @@ describe("server/cli.ts controller commands", () => {
 				.filter((line) => line.startsWith("ExecStart"));
 
 			assert.equal(exec.length, 1);
-			assert.match(exec[0] ?? "", /server\/cli\.ts serve /);
+			assert.match(exec[0] ?? "", /host\/cli\/index\.ts serve /);
 			assert.doesNotMatch(unit, /verification/);
 		});
 	});
@@ -10296,7 +10297,7 @@ describe("acquireLock", () => {
 	});
 
 	it("lets exactly one of two controller processes started together win, across 10 trials", async () => {
-		const controller = new URL("../server/controller/lock.ts", import.meta.url)
+		const controller = new URL("../host/controller/lock.ts", import.meta.url)
 			.href;
 
 		const script = `
@@ -10743,7 +10744,7 @@ describe("private build stage", () => {
 
 	it("advances the same run to build, grants coding tools without the suite, and documents its marker log", async () => {
 		const { github, executor, start, logs } = world();
-		github.add(labeled(14, { body: "PRIVATE-ISSUE server/cli.ts" }));
+		github.add(labeled(14, { body: "PRIVATE-ISSUE host/cli/index.ts" }));
 		executor.behaviors = [{ kind: "pass", usage: 10 }];
 		executor.acceptBehavior = { kind: "pass", usage: 7 };
 		executor.buildBehavior = { kind: "pass", usage: 12 };
@@ -13767,7 +13768,7 @@ describe("controller-only validate", () => {
 			).length;
 
 			if (fault.startsWith("review_size")) {
-				const diff = `diff --git a/server/cli.ts b/server/cli.ts\n--- a/server/cli.ts\n+++ b/server/cli.ts\n@@ -1 +1 @@\n-export const text = '';\n+export const text = '${"é".repeat(REVIEW_DIFF_MAX_BYTES)}';\n`;
+				const diff = `diff --git a/host/cli/index.ts b/host/cli/index.ts\n--- a/host/cli/index.ts\n+++ b/host/cli/index.ts\n@@ -1 +1 @@\n-export const text = '';\n+export const text = '${"é".repeat(REVIEW_DIFF_MAX_BYTES)}';\n`;
 				assert.ok(Buffer.byteLength(diff) > REVIEW_DIFF_MAX_BYTES);
 				const contract = await f.files.readContract(runOf(14));
 				assert.ok(contract.kind === "found");
@@ -13778,7 +13779,7 @@ describe("controller-only validate", () => {
 					const refusal = candidateReviewPrompt({
 						contract: contract.contract,
 						diff,
-						paths: ["server/cli.ts"],
+						paths: ["host/cli/index.ts"],
 						judges: [],
 						guidance: "Review read-only",
 						verdict,
@@ -14214,7 +14215,7 @@ describe("controller-only validate", () => {
 							: recorded.comments
 									.filter((c) =>
 										source === "inline"
-											? c.path === "server/viewer.ts"
+											? c.path === "host/viewer/server.ts"
 											: String(c.path).startsWith("test/acceptance/"),
 									)
 									.map((c) => ({ ...c, commit_id: head })),
@@ -16209,10 +16210,12 @@ describe("held-out acceptance stage", () => {
 		});
 	it("runs specify then a fresh accept, stores the suite, and claims build after one redacted summary", async () => {
 		const { github, executor, files, start } = world();
-		github.add(labeled(14, { body: "PRIVATE-ISSUE-TRANSCRIPT server/cli.ts" }));
+		github.add(
+			labeled(14, { body: "PRIVATE-ISSUE-TRANSCRIPT host/cli/index.ts" }),
+		);
 		executor.tree.set(
 			"test/cli.test.ts",
-			"import test from 'node:test';\nimport { VERSION } from '../server/cli.ts';\ntest('public harness', () => {});",
+			"import test from 'node:test';\nimport { VERSION } from '../host/cli/index.ts';\ntest('public harness', () => {});",
 		);
 		executor.tree.set(
 			"test/acceptance/14/checks/secret.test.ts",
@@ -16867,7 +16870,7 @@ describe("specify: contract", () => {
 		github.add(
 			labeled(14, {
 				title: "Add --version",
-				body: "Print the version from server/cli.ts.",
+				body: "Print the version from host/cli/index.ts.",
 			}),
 		);
 		executor.behaviors = [{ kind: "pass", usage: 900 }];
@@ -16904,7 +16907,7 @@ describe("specify: contract", () => {
 			digestOf(
 				JSON.stringify([
 					"Add --version",
-					"Print the version from server/cli.ts.",
+					"Print the version from host/cli/index.ts.",
 				]),
 			),
 		);
@@ -16927,7 +16930,7 @@ describe("specify: contract", () => {
 		github.add(
 			labeled(14, {
 				title: "Add --version",
-				body: "Print the version from server/cli.ts.",
+				body: "Print the version from host/cli/index.ts.",
 			}),
 		);
 		executor.behaviors = [{ kind: "pass", usage: 1 }];
@@ -16940,7 +16943,7 @@ describe("specify: contract", () => {
 		assert.deepEqual(launch.tools, ["read", "grep", "ls"]);
 		assert.deepEqual(launch.specify, {
 			title: "Add --version",
-			body: "Print the version from server/cli.ts.",
+			body: "Print the version from host/cli/index.ts.",
 			answers: null,
 			files: [...executor.tree.keys()],
 		});
@@ -16952,12 +16955,12 @@ describe("specify: contract", () => {
 		assert.ok(launch.prompt.includes(`at commit ${MAIN_SHA}`));
 		assert.match(
 			launch.prompt,
-			/<issue-([0-9a-f]{32})>\nAdd --version\n\nPrint the version from server\/cli.ts\.\n<\/issue-\1>/,
+			/<issue-([0-9a-f]{32})>\nAdd --version\n\nPrint the version from host\/cli\/index\.ts\.\n<\/issue-\1>/,
 		);
 		assert.ok(launch.prompt.includes("Turn the issue into a short contract"));
 		assert.ok(
 			launch.prompt.includes(
-				"=== server/cli.ts ===\n1\texport const VERSION = 1;",
+				"=== host/cli/index.ts ===\n1\texport const VERSION = 1;",
 			),
 		);
 		assert.ok(launch.prompt.includes("=== README.md ==="));
@@ -17555,7 +17558,7 @@ describe("specify: questions", () => {
 		);
 		assert.ok(
 			asked?.includes(
-				`(https://github.com/${FAKE_REPO}/blob/${MAIN_SHA}/server/cli.ts#L1)`,
+				`(https://github.com/${FAKE_REPO}/blob/${MAIN_SHA}/host/cli/index.ts#L1)`,
 			),
 		);
 
@@ -19270,7 +19273,7 @@ function freshProcess(
 	const modules = {
 		orchestrator: new URL("../src/controller/orchestrator.ts", import.meta.url)
 			.href,
-		controller: new URL("../server/controller/run-files.ts", import.meta.url)
+		controller: new URL("../host/controller/run-files.ts", import.meta.url)
 			.href,
 		admission: new URL("../src/trust/admission.ts", import.meta.url).href,
 		fake: new URL("./fake-ticket-adapter.ts", import.meta.url).href,

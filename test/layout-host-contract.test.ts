@@ -9,12 +9,15 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { runCli, USAGE, EXIT } from "../server/cli.ts";
+import { runCli } from "../host/cli/index.ts";
+import { USAGE, EXIT } from "../host/cli/platform.ts";
+import { checkCandidate } from "../host/gates/gates.ts";
 import {
-	checkCandidate,
 	materializeFromDirectories,
 	replacementDigest,
-} from "../server/gates.ts";
+	MATERIALIZER_FILES,
+	materializerIdentity,
+} from "../host/gates/materialize.ts";
 import { noPlatformFile } from "./helpers.ts";
 
 const snapshot = JSON.parse(
@@ -23,6 +26,26 @@ const snapshot = JSON.parse(
 		"utf8",
 	),
 );
+
+for (const member of MATERIALIZER_FILES) {
+	test(`L13 materializer identity binds executable member ${member}`, () => {
+		const root = mkdtempSync(join(tmpdir(), "layout-identity-"));
+
+		try {
+			mkdirSync(join(root, "host/gates"), { recursive: true });
+
+			for (const path of MATERIALIZER_FILES)
+				writeFileSync(join(root, path), "original\n");
+			const before = materializerIdentity(root);
+			writeFileSync(join(root, member), "changed\n");
+			assert.notDeepEqual(materializerIdentity(root), before);
+			rmSync(join(root, member));
+			assert.throws(() => materializerIdentity(root));
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+}
 
 const argumentsToPin = [
 	[],
@@ -89,12 +112,12 @@ test("L13 pins CLI help, verb flags, exit codes and unavailable status/feed byte
 			argv,
 			exit,
 			stdout,
-			stderr: stderr.replaceAll("server/cli.ts", "<cli>"),
+			stderr: stderr.replaceAll("host/cli/index.ts", "<cli>"),
 		});
 	}
 
 	assert.deepEqual(EXIT, { ok: 0, invalid: 1, usage: 2 });
-	assert.equal(USAGE.replaceAll("server/cli.ts", "<cli>"), snapshot.usage);
+	assert.equal(USAGE.replaceAll("host/cli/index.ts", "<cli>"), snapshot.usage);
 	assert.deepEqual(actual, snapshot.commands);
 });
 
@@ -137,7 +160,7 @@ test("L13 pins materialization roots, held-out exclusion and immutable main test
 
 	try {
 		for (const tree of ["gate", "candidate"]) {
-			put(tree, "server/value.ts", tree);
+			put(tree, "host/value.ts", tree);
 			put(tree, "test/value.test.ts", tree);
 			put(tree, "tsconfig.json", tree);
 			put(tree, ".github/factory/gates/gates.json", tree);
@@ -152,7 +175,7 @@ test("L13 pins materialization roots, held-out exclusion and immutable main test
 		});
 
 		assert.equal(
-			readFileSync(join(root, "out/server/value.ts"), "utf8"),
+			readFileSync(join(root, "out/host/value.ts"), "utf8"),
 			"candidate",
 		);
 

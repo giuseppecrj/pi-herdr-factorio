@@ -16,13 +16,13 @@ import {
 	responseHeadersFor,
 	SecretScanner,
 	secretForms,
-} from "../../server/sandbox/credentials.ts";
+} from "../../host/gateway/credentials.ts";
 import {
 	type CredentialId,
 	credentialId,
 	type Route,
 	type RouteTable,
-} from "../../server/sandbox/routes.ts";
+} from "../../host/gateway/routes.ts";
 import { modelTable } from "./routes.cases.ts";
 import { EXE_DEV_PLATFORM } from "../../src/trust/platform.ts";
 

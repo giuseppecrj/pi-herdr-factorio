@@ -18,14 +18,14 @@ A passing stage spends real model tokens. The F05 probe spent 446 `openai/gpt-6.
 
 ## How to get to it (user POV)
 
-- `node server/cli.ts tick --once --json --repo nublai/pi-herdr-factorio --state-dir <dir> --issue <n>`, on the VM with the sandbox bundle installed.
+- `node host/cli/index.ts tick --once --json --repo nublai/pi-herdr-factorio --state-dir <dir> --issue <n>`, on the VM with the sandbox bundle installed.
 
 ## Driving it with ssh
 
 Preconditions:
 
 - The doctor reports `doctor=ok`, and `lane-setup.sh <pr-id> <worker-n>` printed `lane=... sha=...`.
-- The bundle is installed. A read-only `readlink /var/lib/factory-sandbox/current` sent with `vm.sh` prints `assets-<sha256>`. Installing or replacing it (`bash server/provision.sh sandbox`) is a VM change and needs its own grant.
+- The bundle is installed. A read-only `readlink /var/lib/factory-sandbox/current` sent with `vm.sh` prints `assets-<sha256>`. Installing or replacing it (`bash host/install/provision.sh sandbox`) is a VM change and needs its own grant.
 - One fixture issue per lane, labeled `factory:ready` by the owner, as in `tick-once.md`.
 - The fixture grant and the model-spend grant.
 

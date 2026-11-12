@@ -3,7 +3,7 @@
 Start the viewer from a repository checkout on Node 26.12.1 or later:
 
 ```bash
-node server/cli.ts viewer --state-dir "$STATE" --port 8080
+node host/cli/index.ts viewer --state-dir "$STATE" --port 8080
 ```
 
 Wait for `viewer_ready bind=127.0.0.1 port=8080`. Fetch the timeline on that machine with `curl`, or open it in a local browser. Stop the process with Ctrl+C or SIGTERM.
@@ -14,7 +14,7 @@ Desktop rows have fixed columns for title and stage, state and age, neutral toke
 
 The clean-landing panel reads only `metrics.json`. The controller refreshes it at startup and every five minutes outside the tick/watchdog path. It reads the complete ledger branch, paginated repository REST defect issues and local receipts. Intervention results for merged PRs are cached for the controller process, keyed by repository, PR and merge SHA. Only new merge identities need review and dismissal reads. Until the report is complete, the panel says **Pending**. Remote collection has a 120-second bound. A failed refresh retains the last good report and marks it stale, logging a bounded, redacted `metrics_unavailable reason=…`. The recorded-token tile reads `status.json`, which the controller writes after every tick with a cached local durable token total. Accounting runs once at startup and on its own five-minute timer, independently of GitHub and metric refreshes, using the same exact/lower-bound/uncertain rules as `status --json`. Attention thresholds also come from `status.json`, projected from the last valid trusted workflow. Neither depends on a GitHub metric refresh. The token tile shows no program cap; that cap lives in the decision log. No page request calls GitHub or a model.
 
-`GET /owner-feed.json` returns **OwnerFeed v1**, the same local projection as `node server/cli.ts owner-feed --json --state-dir "$STATE"`. It has seven attention counts, a separate working-run count and `durableUsage: {kind, total}`. Only status `budget_exhausted` has kind `budget`; a published token-cap hold stays `blocked`, with “On hold: token cap reached”. The golden example for clients is `test/fixtures/owner-feed/feed-v1.json`.
+`GET /owner-feed.json` returns **OwnerFeed v1**, the same local projection as `node host/cli/index.ts owner-feed --json --state-dir "$STATE"`. It has seven attention counts, a separate working-run count and `durableUsage: {kind, total}`. Only status `budget_exhausted` has kind `budget`; a published token-cap hold stays `blocked`, with “On hold: token cap reached”. The golden example for clients is `test/fixtures/owner-feed/feed-v1.json`.
 
 ## Hold or resume the factory
 
@@ -76,7 +76,7 @@ The VM has no tailnet. On a tailnet machine, keep an SSH tunnel to the VM's loop
 
 ```bash
 # VM, with the tailnet machine's one authorized hostname
-node server/cli.ts viewer --state-dir /home/exedev/factory-state --port 8090 \
+node host/cli/index.ts viewer --state-dir /home/exedev/factory-state --port 8090 \
   --allowed-host <machine>.<tailnet>.ts.net --base-path /factory
 
 # Tailnet machine; keep this process running

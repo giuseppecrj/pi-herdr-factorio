@@ -962,7 +962,7 @@ The graph is cyclic, not a topological ordering. There are 23 reverse file-pair 
 
 ### Fix-round source checks and remaining proof
 
-The fix round verified findings against the local origin/main object at 5bd77d5. Only this plan differs from that object in the worktree. `scan.ts:4` imports the deleted JSON home, check.yml has default depth-1 checkout, replay has additional hardcoded asset/recipe readers, and the five published acceptance suites import old source entries. SOURCE is at `server/gates.ts:61`, not line 57. The fixture-repository limitation is verified in platform defaults, workflow repository matching, and installer preflight.
+The fix round verified findings against the local origin/main object at 5bd77d5. Only this plan differs from that object in the worktree. `scan.ts:4` imports the deleted JSON home, check.yml has default depth-1 checkout, replay has additional hardcoded asset/recipe readers, and the five published acceptance suites import old source entries. SOURCE is at `5bd77d5:server/gates.ts:61`, not line 57. The fixture-repository limitation is verified in platform defaults, workflow repository matching, and installer preflight.
 
 No full product suite, new prototype, native sandbox, formal run, controller timing, VM installation, or GitHub operation ran in this fix round. Boundary field counts, exact relocation hashes, fixture-repository setup, and final installed behavior remain execution evidence. The two plan checkers are authoring verification only.
 
@@ -1083,7 +1083,7 @@ All anchors in this table refer to 5bd77d5. L00's inventory uses symbols and lit
 | --- | --- |
 | `.github/factory/gates/scan.ts:4` | Imports server/sandbox/json. L03's owner edit is atomic with its deletion. L00 checks trusted TypeScript importers. |
 | `.github/workflows/check.yml` checkout | No fetch-depth setting, so depth 1. Every aggregate guard uses HEAD, not absent parent objects. |
-| `server/gates.ts:61` SOURCE and isDocumentation | L02 materializes maintained scripts/formal inputs; L13 replaces server with host. No missing root may be classified as documentation. |
+| `5bd77d5:server/gates.ts:61` SOURCE and isDocumentation | L02 materializes maintained scripts/formal inputs; L13 replaces server with host. No missing root may be classified as documentation. |
 | gates overlay near 384 to 474 | Main tests survive source overlay. Old-main imports can be incompatible during moves; retain the maintenance-transition receipt. |
 | gates manifest near 756 and candidate-gates test near 509/530 | Three accepted glob forms and cases filtering. L14 changes all sides atomically. |
 | `.github/factory/gates/gates.json` | L02 check roots, L13 host root, L14 test globs, L15 formal roots. Preserve test/acceptance ignore throughout. |

@@ -17,6 +17,6 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["src", "extension", "server", "test", ".pi/skills", "docs/statecharts"],
+  "include": ["src", "extension", "host", "test", ".pi/skills", "docs/statecharts"],
   "exclude": ["test/acceptance/**"]
 }

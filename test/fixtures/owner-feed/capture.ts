@@ -117,7 +117,7 @@ export async function captureOwnerFeed(name: CaptureName): Promise<string> {
 				"--experimental-strip-types",
 				"--import",
 				fileURLToPath(new URL("./fixed-clock.ts", import.meta.url)),
-				"server/cli.ts",
+				"host/cli/index.ts",
 				"owner-feed",
 				"--json",
 				"--state-dir",

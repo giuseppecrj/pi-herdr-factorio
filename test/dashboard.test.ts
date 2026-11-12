@@ -26,29 +26,30 @@ import {
 	runSentence,
 	runAction,
 	stateWord,
-} from "../server/viewer/dashboard.ts";
-import { startViewer } from "../server/viewer.ts";
-import { collectOwnerMetrics, runCli } from "../server/cli.ts";
+} from "../host/viewer/dashboard.ts";
+import { startViewer } from "../host/viewer/server.ts";
+import { collectOwnerMetrics } from "../host/cli/metrics.ts";
+import { runCli } from "../host/cli/index.ts";
 import { parseLedger, ledgerRow } from "../src/ledger/schema.ts";
 import { gitObjectSha } from "../src/github/publish.ts";
 import type { InterventionRead } from "../src/views/metrics.ts";
 import type { JsonValue } from "../src/core/json.ts";
 import type { FeedEntry } from "../src/views/feed.ts";
-import { readOwnerFeed, readOwnerRun } from "../server/cli/owner-feed.ts";
+import { readOwnerFeed, readOwnerRun } from "../host/cli/owner-feed.ts";
 import { fileAdmissionStore } from "../src/trust/admission.ts";
 import type { StageExecutor } from "../src/controller/launch.ts";
 import {
 	Orchestrator,
 	type TickReport,
 } from "../src/controller/orchestrator.ts";
-import { fileRunFiles } from "../server/controller/run-files.ts";
+import { fileRunFiles } from "../host/controller/run-files.ts";
 import {
 	serveLoop,
 	startMetricSnapshots,
 	systemdNotify,
-} from "../server/controller/serve-loop.ts";
-import { writeStatus } from "../server/controller/state.ts";
-import { startDurableUsage } from "../server/controller/terminal.ts";
+} from "../host/controller/serve-loop.ts";
+import { writeStatus } from "../host/controller/state.ts";
+import { startDurableUsage } from "../host/controller/terminal.ts";
 import { digestOf, runIdOf } from "../src/core/run.ts";
 import {
 	addRun,

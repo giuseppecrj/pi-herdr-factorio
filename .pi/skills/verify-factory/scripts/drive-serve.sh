@@ -20,7 +20,7 @@ case "$mode" in
     chmod 700 "$lane/state"
     args=()
     for issue in "$@"; do args+=(--issue "$issue"); done
-    (cd "$lane/ws" && exec setsid node server/cli.ts serve --repo "$repo" --state-dir "$lane/state" "${args[@]}" >/dev/null 2>>"$log" </dev/null) &
+    (cd "$lane/ws" && exec setsid node host/cli/index.ts serve --repo "$repo" --state-dir "$lane/state" "${args[@]}" >/dev/null 2>>"$log" </dev/null) &
     pid=$!
     echo "$pid" > "$pidfile"
     for _ in $(seq 1 60); do

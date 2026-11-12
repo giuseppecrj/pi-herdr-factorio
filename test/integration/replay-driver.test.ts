@@ -21,8 +21,8 @@ import {
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { after, afterEach, before, beforeEach, describe, it } from "node:test";
-import { acquireLock, procTable } from "../../server/controller/lock.ts";
-import { manifestDigest } from "../../server/sandbox/manifest.ts";
+import { acquireLock, procTable } from "../../host/controller/lock.ts";
+import { manifestDigest } from "../../host/bundle/manifest.ts";
 import {
 	readReplayBudget,
 	replayRow,
@@ -113,13 +113,13 @@ it("waits for two visible-test deadlines plus 60 seconds after signaling stop", 
 	const step = source.match(/^replay_step\(\) \{.*\}$/m)?.[0] ?? "";
 	assert.ok(stop);
 
-	const sandbox = await readFile("server/sandbox/visible-tests.ts", "utf8");
+	const sandbox = await readFile("host/sandbox/visible-tests.ts", "utf8");
 
 	const limit = sandbox.match(
 		/^export const VISIBLE_LIMIT_MS = ([\d_]+);$/m,
 	)?.[1];
 
-	assert.ok(limit, "server/sandbox/visible-tests.ts declares VISIBLE_LIMIT_MS");
+	assert.ok(limit, "host/sandbox/visible-tests.ts declares VISIBLE_LIMIT_MS");
 
 	const polls = Math.ceil(
 		((2 * Number(limit.replaceAll("_", ""))) / 1000 + 60) * 10,
@@ -177,9 +177,9 @@ it("refuses to signal or wait when the visible-test deadline is not declared", a
 			recursive: true,
 		});
 		await cp(steps, join(fake, steps));
-		await mkdir(join(fake, "server/sandbox"), { recursive: true });
+		await mkdir(join(fake, "host/sandbox"), { recursive: true });
 		await writeFile(
-			join(fake, "server/sandbox/visible-tests.ts"),
+			join(fake, "host/sandbox/visible-tests.ts"),
 			"export const VISIBLE_LIMIT = 300_000;\n",
 		);
 		await writeFile(join(fake, "pid"), "123");
@@ -294,11 +294,18 @@ if alive "$3" && owned "$3"; then echo owned; else echo foreign; fi
 		).trim();
 
 	try {
-		const serve = start("server/cli.ts", "serve", "--state-dir", state);
-		const other = start("server/cli.ts", "serve", "--state-dir", `${state}2`);
-		const tick = start("server/cli.ts", "tick", "--state-dir", state);
+		const serve = start("host/cli/index.ts", "serve", "--state-dir", state);
+
+		const other = start(
+			"host/cli/index.ts",
+			"serve",
+			"--state-dir",
+			`${state}2`,
+		);
+
+		const tick = start("host/cli/index.ts", "tick", "--state-dir", state);
 		const bare = start("serve", "--state-dir", state);
-		const dangling = start("server/cli.ts", "serve", "--state-dir");
+		const dangling = start("host/cli/index.ts", "serve", "--state-dir");
 		await new Promise((r) => setTimeout(r, 100));
 
 		assert.equal(verdict(serve), "owned");
@@ -327,7 +334,7 @@ describe("replay driver with fake GitHub/controller and real guards", {
 
 		for (const path of [
 			"src",
-			"server",
+			"host",
 			"skills",
 			"package.json",
 			"README.md",
@@ -395,13 +402,13 @@ describe("replay driver with fake GitHub/controller and real guards", {
 		const sha = templateSha;
 
 		await mkdir(join(lane, "state"), { recursive: true });
-		await mkdir(join(lane, "ws/server"), { recursive: true });
+		await mkdir(join(lane, "ws/host/cli"), { recursive: true });
 		await mkdir(join(dir, "home/factory-state"), { recursive: true });
 		await mkdir(join(dir, "home/.local/bin"), { recursive: true });
 		await mkdir(join(dir, "runtime"), { mode: 0o700 });
 		await writeFile(join(lane, "head-sha"), `${sha}\n`);
 		await writeFile(
-			join(lane, "ws/server/cli.ts"),
+			join(lane, "ws/host/cli/index.ts"),
 			`import { writeFileSync, mkdirSync } from 'node:fs';
 const state = process.argv[process.argv.indexOf('--state-dir') + 1];
 writeFileSync(process.env.FAKE_ARGS, JSON.stringify(process.argv.slice(2)));
@@ -477,10 +484,7 @@ esac
 			["package-lock.json", "pkg/package-lock.json"],
 		])
 			if (from !== undefined && to !== undefined)
-				await cp(
-					join(control, "server/sandbox/assets", from),
-					join(bundle, to),
-				);
+				await cp(join(control, "host/bundle/assets", from), join(bundle, to));
 		const digest = await manifestDigest(bundle);
 		assert.ok(digest);
 		await mkdir(join(dir, "sandbox"));

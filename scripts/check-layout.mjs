@@ -1027,19 +1027,34 @@ function trustedTests(ctx, problems) {
 	const audit =
 		"audit the moved or changed test selection code, then update discovery.trusted.materializer and discovery.trusted.predicates in scripts/layout-baseline.json";
 
-	if (!ctx.set.has(materializer))
-		report(
-			`${materializer} is missing, so the trusted test selection cannot be checked; ${audit}`,
-		);
-	else {
-		const text = normalized(ctx.read(materializer));
+	const selections = [
+		{ file: materializer, expression: accepts },
+		...predicates.map((predicate) =>
+			isText(predicate)
+				? { file: materializer, expression: predicate }
+				: predicate,
+		),
+	];
 
-		for (const expression of [accepts, ...predicates]) {
+	for (const file of new Set(selections.map((selection) => selection.file))) {
+		if (!ctx.set.has(file)) {
+			report(
+				`${file} is missing, so the trusted test selection cannot be checked; ${audit}`,
+			);
+
+			continue;
+		}
+
+		const text = normalized(ctx.read(file));
+
+		for (const { expression } of selections.filter(
+			(selection) => selection.file === file,
+		)) {
 			const found = occurrences(text, normalized(expression));
 
 			if (found !== 1)
 				report(
-					`${materializer} has ${found} of the trusted test predicate ${JSON.stringify(expression)}, expected 1; trusted discovery may no longer match the local runner; ${audit}`,
+					`${file} has ${found} of the trusted test predicate ${JSON.stringify(expression)}, expected 1; trusted discovery may no longer match the local runner; ${audit}`,
 				);
 		}
 	}

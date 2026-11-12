@@ -12,7 +12,7 @@ lane="/home/exedev/factory-verification/$pr-w$n"
 out="/tmp/swarm-$pr/worker-$n"
 mkdir -p "$out"
 rm -f "$out"/workflow-check-*.json "$out"/status-*.json "$out/workflow-evidence.txt"
-[ -f "$lane/ws/server/cli.ts" ] || { echo "server/cli.ts missing from lane workspace" >&2; exit 2; }
+[ -f "$lane/ws/host/cli/index.ts" ] || { echo "host/cli/index.ts missing from lane workspace" >&2; exit 2; }
 sha="$(cat "$lane/head-sha" 2>/dev/null || echo unknown)"
 start="$(date -u +%FT%TZ)"
 lines=""
@@ -22,14 +22,14 @@ field() {
 }
 for ref in main "$@"; do
   name="${ref//\//_}"
-  (cd "$lane/ws" && node server/cli.ts workflow-check --json --repo "$repo" --ref "$ref") > "$out/workflow-check-$name.json"
+  (cd "$lane/ws" && node host/cli/index.ts workflow-check --json --repo "$repo" --ref "$ref") > "$out/workflow-check-$name.json"
   check=$?
-  (cd "$lane/ws" && node server/cli.ts status --json --repo "$repo" --ref "$ref") > "$out/status-$name.json"
+  (cd "$lane/ws" && node host/cli/index.ts status --json --repo "$repo" --ref "$ref") > "$out/status-$name.json"
   status=$?
   f="$out/workflow-check-$name.json"; s="$out/status-$name.json"
   lines="$lines
-command=node server/cli.ts workflow-check --json --repo $repo --ref $ref exit=$check valid=$(field "$f" valid) sha=$(field "$f" sha) digest=$(field "$f" digest) verification=$(field "$f" verification) error_kind=$(field "$f" error.kind) error_field=$(field "$f" error.field)
-command=node server/cli.ts status --json --repo $repo --ref $ref exit=$status workflow=$(field "$s" workflow) workflowSha=$(field "$s" workflowSha) executionEnabled=$(field "$s" executionEnabled) controller=$(field "$s" controller.state) build_model=$(field "$s" models.build)"
+command=node host/cli/index.ts workflow-check --json --repo $repo --ref $ref exit=$check valid=$(field "$f" valid) sha=$(field "$f" sha) digest=$(field "$f" digest) verification=$(field "$f" verification) error_kind=$(field "$f" error.kind) error_field=$(field "$f" error.field)
+command=node host/cli/index.ts status --json --repo $repo --ref $ref exit=$status workflow=$(field "$s" workflow) workflowSha=$(field "$s" workflowSha) executionEnabled=$(field "$s" executionEnabled) controller=$(field "$s" controller.state) build_model=$(field "$s" models.build)"
   { [ "$check" -le 1 ] && [ "$status" -eq 0 ]; } || final=1
 done
 {

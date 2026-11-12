@@ -12,7 +12,7 @@ repo=nublai/pi-herdr-factorio
 lane="/home/exedev/factory-verification/$pr-w$n"
 out="/tmp/swarm-$pr/worker-$n"
 mkdir -p "$out"
-[ -f "$lane/ws/server/cli.ts" ] || { echo "server/cli.ts missing from lane workspace" >&2; exit 2; }
+[ -f "$lane/ws/host/cli/index.ts" ] || { echo "host/cli/index.ts missing from lane workspace" >&2; exit 2; }
 chmod 700 "$lane/state"
 sha="$(cat "$lane/head-sha" 2>/dev/null || echo unknown)"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -26,7 +26,7 @@ if [ "$mode" = unavailable ]; then
   chmod 755 "$out/nobwrap/bwrap"
   cli_path="$out/nobwrap:$PATH"
 fi
-cmd=(node server/cli.ts tick --once --json --repo "$repo" --state-dir "$lane/state" --issue "$issue")
+cmd=(node host/cli/index.ts tick --once --json --repo "$repo" --state-dir "$lane/state" --issue "$issue")
 start="$(date -u +%FT%TZ)"
 t0=$(date +%s%N)
 (cd "$lane/ws" && PATH="$cli_path" "${cmd[@]}") > "$out/stage-$stamp.json" 2> "$out/stage-$stamp.log"

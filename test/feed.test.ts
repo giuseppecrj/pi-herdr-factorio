@@ -17,14 +17,14 @@ import {
 	readOwnerFeed,
 	readOwnerHeader,
 	readOwnerRun,
-} from "../server/cli/owner-feed.ts";
-import { acquireLock, procTable } from "../server/controller/lock.ts";
-import { readStoredVerdict } from "../server/controller/state.ts";
-import { readStageReceipt } from "../server/sandbox/receipts.ts";
+} from "../host/cli/owner-feed.ts";
+import { acquireLock, procTable } from "../host/controller/lock.ts";
+import { readStoredVerdict } from "../host/controller/state.ts";
+import { readStageReceipt } from "../host/sandbox/receipts.ts";
 import { ATTENTION_KINDS, readAttention } from "../src/views/attention.ts";
 import { objectOf, parseJson } from "../src/core/json.ts";
 import type { JsonValue } from "../src/core/json.ts";
-import { runCli } from "../server/cli.ts";
+import { runCli } from "../host/cli/index.ts";
 import { digestOf } from "../src/core/run.ts";
 import { AUTONOMY_DIGEST } from "../src/ledger/schema.ts";
 import { candidateLifecycleFixture, withUmask } from "./helpers.ts";

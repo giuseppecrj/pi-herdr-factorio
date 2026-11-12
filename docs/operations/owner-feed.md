@@ -16,19 +16,19 @@ The push rule is in [Push rule for the bridge](#push-rule-for-the-bridge).
 
 ## Read the feed
 
-Two sources return the same projection. Both call `readOwnerFeed` (`server/cli/owner-feed.ts:36`), which reads the controller state and receipts and passes them to the projection in `src/views/feed.ts`. Neither makes a GitHub or model call.
+Two sources return the same projection. Both call `readOwnerFeed` (`host/cli/owner-feed.ts:36`), which reads the controller state and receipts and passes them to the projection in `src/views/feed.ts`. Neither makes a GitHub or model call.
 
 ```bash
-node server/cli.ts owner-feed --json --state-dir "$STATE" [--repo <owner/name>]
+node host/cli/index.ts owner-feed --json --state-dir "$STATE" [--repo <owner/name>]
 curl http://127.0.0.1:<port>/owner-feed.json
 ```
 
 | | CLI | Viewer route |
 | --- | --- | --- |
-| Code | `server/cli.ts:1263` | `server/viewer.ts:245` |
-| Needs a running process | No | Yes, `node server/cli.ts viewer` |
+| Code | `host/cli/owner-feed.ts:23` | `host/viewer/server.ts:245` |
+| Needs a running process | No | Yes, `node host/cli/index.ts viewer` |
 | Output | Indented JSON, exit 0 | Compact JSON, `Cache-Control: no-store` |
-| Refusal | Exit 2 with usage on stderr, for bad arguments and for any thrown error | By default, 403 unless `Host` is `127.0.0.1:<port>` or `localhost:<port>` and any `Origin` matches. A viewer started with `--allowed-host` also accepts that one host, with a matching `https://` `Origin` (`server/viewer.ts:103` to `server/viewer.ts:114`) |
+| Refusal | Exit 2 with usage on stderr, for bad arguments and for any thrown error | By default, 403 unless `Host` is `127.0.0.1:<port>` or `localhost:<port>` and any `Origin` matches. A viewer started with `--allowed-host` also accepts that one host, with a matching `https://` `Origin` (`host/viewer/server.ts:103` to `host/viewer/server.ts:114`) |
 | Median of 10 reads, development machine, 2026-11-10 | 278 ms | 3.7 ms |
 | Median of 10 reads, `pi-factorio` VM, 2026-11-10 | 621.5 ms | Not measured |
 
@@ -42,11 +42,11 @@ The VM figure comes from the independent verifier's run of ten CLI reads on the 
 
 The bridge must run as the Unix user that owns the state directory. Most of the feed's file reads ignore a file that is a symlink, is owned by another user, or is readable by group or others. Those readers are `localJson` (`src/views/feed.ts:102`, which checks every path part below the state directory) and `privatePath` and `privateJson` (`src/views/attention.ts:131` and `src/views/attention.ts:145`, which check the state directory, `claims/` and each file they open). These readers do not check:
 
-- `status.json` through `readStatus` (`server/controller/state.ts:63`), which supplies the thresholds, the unreadable list and `controller.lastTick`. It follows symlinks and ignores owner and mode.
+- `status.json` through `readStatus` (`host/controller/state.ts:63`), which supplies the thresholds, the unreadable list and `controller.lastTick`. It follows symlinks and ignores owner and mode.
 - The admission snapshot that supplies `title` (`src/trust/admission.ts:490` to `src/trust/admission.ts:513`). It uses a plain `readFile`.
 - The local switch (`src/trust/admission.ts:524`). It checks that the state directory belongs to the user and is not group or other writable, and it does not check the `disabled` file's owner.
-- The controller lock, which sets `controller.state`. `readOwnerHeader` in `server/cli/owner-feed.ts` reads it through `readLock` (`server/controller/state.ts:82`).
-- The stored verdict (`readStoredVerdict`, `server/controller/state.ts:72`, through `regularBytes`, `src/contract/artifacts.ts:232`). It rejects a symlink and a group- or other-accessible file, and does not check the owner.
+- The controller lock, which sets `controller.state`. `readOwnerHeader` in `host/cli/owner-feed.ts` reads it through `readLock` (`host/controller/state.ts:82`).
+- The stored verdict (`readStoredVerdict`, `host/controller/state.ts:72`, through `regularBytes`, `src/contract/artifacts.ts:232`). It rejects a symlink and a group- or other-accessible file, and does not check the owner.
 
 A bridge running as another user usually gets an unavailable feed, not an error, because the state directory itself fails the check. This PR does not harden the unchecked readers.
 
@@ -181,7 +181,7 @@ The app is read-only. Every action opens GitHub through `issueUrl` or `prUrl`. S
 The factory has one non-GitHub owner action, the local hold.
 
 - **The switch.** The file `$STATE/disabled` (`LOCAL_DISABLE_FILE`, `src/trust/policy.ts:66`). While it exists, the controller admits no new ticket. It does not cancel work, reset a budget or restart a finished run. The feed shows it as `controller.localSwitch: "disabled"` (`src/trust/admission.ts:524`).
-- **The viewer's hold form.** `POST /hold` (`server/viewer.ts:120`) creates or removes that file. By default it needs the exact loopback `Host`, a matching `Origin`, a form content type, and a token that changes each time the viewer starts and appears only in the dashboard HTML. A viewer started with `--allowed-host` also accepts that one host, with a matching `https://` `Origin` (`server/viewer.ts:99` to `server/viewer.ts:110`). The form has two fields, `token` and `hold=on|off`.
+- **The viewer's hold form.** `POST /hold` (`host/viewer/server.ts:120`) creates or removes that file. By default it needs the exact loopback `Host`, a matching `Origin`, a form content type, and a token that changes each time the viewer starts and appears only in the dashboard HTML. A viewer started with `--allowed-host` also accepts that one host, with a matching `https://` `Origin` (`host/viewer/server.ts:99` to `host/viewer/server.ts:110`). The form has two fields, `token` and `hold=on|off`.
 
 The CLI has no hold command. A phone action that changes the hold, or does anything else besides opening GitHub, needs its own design first. [Viewer](viewer.md) has the hold form's guards.
 
