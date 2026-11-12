@@ -233,6 +233,7 @@ describe("replay driver with fake GitHub/controller and real guards", {
 		await mkdir(join(lane, "ws/server"), { recursive: true });
 		await mkdir(join(dir, "home/factory-state"), { recursive: true });
 		await mkdir(join(dir, "home/.local/bin"), { recursive: true });
+		await mkdir(join(dir, "runtime"), { mode: 0o700 });
 		await writeFile(join(lane, "head-sha"), `${sha}\n`);
 		await writeFile(
 			join(lane, "ws/server/cli.ts"),
@@ -333,6 +334,8 @@ esac
 			...process.env,
 			GH_HOST: "github.int.exe.invalid",
 			HOME: join(dir, "home"),
+			XDG_RUNTIME_DIR: join(dir, "runtime"),
+			DBUS_SESSION_BUS_ADDRESS: `unix:path=${join(dir, "runtime/bus")}`,
 			REPLAY_ROOT: root,
 			REPLAY_OUTPUT_ROOT: join(dir, "output"),
 			FIXTURE_GRANT: "local-test-grant",
@@ -489,6 +492,15 @@ esac
 		);
 		assert.notEqual((await drive().done).code, 0);
 		await missingBudget();
+	});
+
+	it("refuses a missing runtime directory before reserving and restores production", async () => {
+		env.XDG_RUNTIME_DIR = join(dir, "absent-runtime");
+		const result = await drive().done;
+		assert.notEqual(result.code, 0);
+		assert.match(result.text, /runtime_directory/);
+		await missingBudget();
+		await restored();
 	});
 
 	it("refuses an unusable sandbox before reserving and restores production", async () => {

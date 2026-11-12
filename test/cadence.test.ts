@@ -38,6 +38,7 @@ import {
 	withSkills,
 } from "../server/sandbox.ts";
 import { detectArch } from "../server/sandbox/seccomp.ts";
+import { listScopesArgv } from "../server/sandbox/scope.ts";
 import { startGatewayProcess } from "../server/sandbox/gateway-client.ts";
 import { manifestDigest } from "../server/sandbox/manifest.ts";
 import { arrayOf, objectOf, parseJson } from "../server/sandbox/json.ts";
@@ -90,6 +91,7 @@ import {
 } from "../src/workflow.ts";
 import { EXE_DEV_PLATFORM } from "../src/platform.ts";
 import { controllerEnv, noPlatformFile } from "./helpers.ts";
+import { nativeUserScope } from "./native-scope.ts";
 
 function repository() {
 	const value = "nublai/pi-herdr-factorio";
@@ -2700,7 +2702,7 @@ describe("cadence durable ownership, accounting and proposal recovery", () => {
 		const stateDir = directory(t);
 		const github = new GitHubFixture();
 		seed(stateDir);
-		const exec = github.exec;
+		const exec = withoutStageScopes(github.exec);
 
 		const executor = sandboxExecutor({
 			platform: EXE_DEV_PLATFORM,
@@ -2866,7 +2868,7 @@ it("evaluates healthy, not-due cadence through real Orchestrator.tick under 100 
 	const executor = sandboxExecutor({
 		platform: EXE_DEV_PLATFORM,
 		stateDir,
-		exec: github.exec,
+		exec: withoutStageScopes(github.exec),
 		root: join(stateDir, "absent-bundle"),
 		xdgRuntimeDir: `/run/user/${process.getuid?.()}`,
 		log: () => undefined,
@@ -2913,28 +2915,20 @@ it("evaluates healthy, not-due cadence through real Orchestrator.tick under 100 
 	t.diagnostic(`healthy idle Orchestrator.tick ${perTick} ms/call; no models`);
 });
 
+function withoutStageScopes(exec: Exec): Exec {
+	return async (command, args) => {
+		if (command !== "systemctl") return exec(command, args);
+		assert.deepEqual([command, ...args], listScopesArgv());
+
+		return { code: 0, stdout: "", stderr: "" };
+	};
+}
+
 async function nativeBundle(
 	t: TestContext,
 	root: string,
 ): Promise<string | null> {
-	const probe = await execFile(
-		"systemd-run",
-		["--user", "--scope", "--quiet", "true"],
-		10_000,
-	);
-
-	if (probe.code !== 0) {
-		assert.notEqual(
-			process.env.FACTORY_REQUIRE_SANDBOX_TESTS,
-			"1",
-			"real user scopes required for cadence demo",
-		);
-		t.skip(
-			"native cadence requires the user systemd bus; mandatory under FACTORY_REQUIRE_SANDBOX_TESTS=1",
-		);
-
-		return null;
-	}
+	if (!nativeUserScope(t)) return null;
 
 	const sourceRoot = new URL("..", import.meta.url).pathname;
 	const bundle = join(root, "staging");
