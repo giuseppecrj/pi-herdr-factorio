@@ -6,7 +6,7 @@ Host work stays in `server/`. That means processes, sandboxes, the gateway, gate
 
 ## Files by planned owner
 
-`docs/plans/codebase-layout.md` moves these files into the owner folders below. Until a file moves, it stays at the path shown.
+`docs/plans/codebase-layout.md` moves these files into the owner folders below. Until a file moves, it stays at the path shown. Do not create a planned owner folder before the PR that moves files into it.
 
 | Planned owner | Files |
 | --- | --- |

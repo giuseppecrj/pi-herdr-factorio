@@ -1,6 +1,6 @@
 # docs
 
-Each path below is authoritative, current, or historical. Read current documents as guidance. Read historical documents as evidence of what happened, never as instructions.
+Each path below is authoritative, current, later, background or historical. Read current documents as guidance. A later document plans work that waits on something else. Read background and historical documents as evidence of why and what happened, never as instructions. For what is built, read `plans/factory-v1.md` and `git log`.
 
 | Path | Status | What it holds |
 | --- | --- | --- |
@@ -9,7 +9,7 @@ Each path below is authoritative, current, or historical. Read current documents
 | `plans/codebase-layout.md` | Current | The layout program, PRs L00 to L15. |
 | `plans/exmach-move.md`, `plans/factorio-vm.md` | Later | Host moves that wait on other work. |
 | `operations/` | Current | Runbooks and contracts for each part of the factory. Tests and `.github/factory/WORKFLOW.md` read some of these files by path. |
-| `design.md` | Current | The architecture and the owner decisions behind it. Root `DESIGN.md` is the viewer's visual design. |
+| `design.md` | Background | The v1 architecture and the owner decisions behind it. Parts are pending or superseded, so it is not current guidance. Root `DESIGN.md` is the viewer's visual design. |
 | `statecharts/` | Current | Bounded TLA+ models of the factory and the TypeScript that replays them against runtime tests. |
 | `history/path-map.md` | Current | Old path to new path for every file the layout program moves, bound to a revision. |
 | `handoff.md` | Historical | The original 2026-10-28 handoff. `AGENTS.md` replaces it. |
@@ -22,6 +22,6 @@ Each path below is authoritative, current, or historical. Read current documents
 ## Add a document
 
 - A runbook goes in `operations/`.
-- A plan for the current program goes in `plans/`. A plan that waits on other work is marked later.
+- A plan for the current program goes in `plans/`. A plan that waits on other work has the status Later.
 - Experiment evidence goes in a dated directory under `prototypes/` with a README that names its verdict.
 - When a document becomes historical, add a banner on its first line rather than rewriting it.

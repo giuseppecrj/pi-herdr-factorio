@@ -45,7 +45,7 @@ The bridge must run as the Unix user that owns the state directory. Most of the 
 - `status.json` through `readStatus` (`server/controller.ts:5739`), which supplies the thresholds, the unreadable list and `controller.lastTick`. It follows symlinks and ignores owner and mode.
 - The admission snapshot that supplies `title` (`src/admission.ts:490` to `src/admission.ts:513`). It uses a plain `readFile`.
 - The local switch (`src/admission.ts:524`). It checks that the state directory belongs to the user and is not group or other writable, and it does not check the `disabled` file's owner.
-- The controller lock's holder file (`server/controller.ts:423`), which sets `controller.state`.
+- The controller lock, which sets `controller.state`. `readOwnerHeader` in `src/feed.ts` reads it through `readLock` (`server/controller.ts:461`).
 - The stored verdict (`readStoredVerdict`, `server/controller.ts:5730`, through `regularBytes`, `src/artifacts.ts:232`). It rejects a symlink and a group- or other-accessible file, and does not check the owner.
 
 A bridge running as another user usually gets an unavailable feed, not an error, because the state directory itself fails the check. This PR does not harden the unchecked readers.

@@ -1,6 +1,6 @@
 # test
 
-`npm test` runs `test/*.test.ts`. `npm run test:integration` runs `test/integration/*.test.ts`. The trusted gate in `.github/factory/gates/gates.json` discovers the same files. A test file anywhere else never runs, and `npm run check:layout` fails it.
+`npm test` runs `test/*.test.ts`. `npm run test:integration` runs `test/integration/*.test.ts`. The trusted gate discovers the same files through the `testGlobs` in `.github/factory/gates/gates.json`, and `npm run check:layout` fails if the two sets differ. A test file anywhere else never runs, so the guard fails any test outside `test/*.test.ts` and `test/integration/*.test.ts`. The only exceptions are the held-out suites under `test/acceptance/**` and the payloads under `test/fixtures/**`.
 
 | Path | What it holds |
 | --- | --- |
@@ -17,7 +17,7 @@
 - Add a sandbox case file as `test/sandbox/<name>.cases.ts` and add one `import "./sandbox/<name>.cases.ts";` line to `sandbox.test.ts`. A cases file that no discovered test imports, or that two discovered tests import, fails `npm run check:layout`.
 - Create temporary files under `os.tmpdir()`. The gate runs the tree read-only.
 
-## Published acceptance suites with original imports
+## Frozen acceptance suites: do not edit
 
 Five published suites import source files by the paths they had when they were written:
 
@@ -27,4 +27,4 @@ Five published suites import source files by the paths they had when they were w
 - `acceptance/645/checks/exact-empty.test.ts`
 - `acceptance/645/checks/unavailable.test.ts`
 
-They are historical outputs, not tests that current main runs. Do not edit them when source files move. Their imports resolve only at the revision that published them.
+They are historical outputs, not tests that current main runs. Do not edit them, even when the source files they import move. Their imports resolve only at the revision that published them.
