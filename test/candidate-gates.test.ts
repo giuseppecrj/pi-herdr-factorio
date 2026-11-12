@@ -1184,6 +1184,38 @@ test("candidate-added tests pass without a manifest edit and join the next main 
 	assert.equal(main.candidateCounts["test/new-thing.test.ts"], 1);
 });
 
+test("a failing nested candidate test vetoes through candidate_tests without a manifest edit", async (t) => {
+	const f = repo(t);
+	const path = "test/src/candidate/nested/regression.test.ts";
+	f.put(
+		path,
+		'import {test} from "node:test"; test("nested regression",()=>{throw new Error("NESTED_REGRESSION");});',
+	);
+	const invocations: (readonly string[])[] = [];
+
+	const runner: GateRunner = {
+		kind: miniRunner.kind,
+		run: (input) => {
+			invocations.push(input.argv);
+
+			return miniRunner.run(input);
+		},
+	};
+
+	const receipt = await checkCandidate({
+		...gateInput(f, f.commit()),
+		runner,
+	});
+
+	assert.equal(receipt.status, "failed");
+	assert.equal(
+		receipt.checks.find((check) => check.name === "candidate_tests")?.exitCode,
+		1,
+	);
+	assert.equal(invocations.filter((argv) => argv.includes(path)).length, 1);
+	assert.equal(receipt.baselineCounts[path], undefined);
+});
+
 test("main integration suites run on the baseline and candidate even when the candidate deletes them", async (t) => {
 	const f = repo(t);
 	const path = ".github/factory/gates/gates.json";
