@@ -5,6 +5,7 @@ This folder holds coordinator skills. A Pi session started in this checkout load
 | Skill | Use it to |
 | --- | --- |
 | `verify-factory/` | Verify the factory on its real surfaces: VM lanes, the CLI, the extension, the viewer and exact-head CI. Start at `verify-factory/SKILL.md`, then `features/README.md`. |
+| `verify-factory-state/` | Rerun the existing bounded F1 to F4 state checks and runtime correspondence. Start at `verify-factory-state/SKILL.md`. |
 | `project-status/` | Write an evidence-based snapshot of the goal, done work, current work and owner decisions. |
 | `daily-log-pi-herdr-factorio/` | Read and append the untracked daily log in `.pi/daily-log/`. |
 

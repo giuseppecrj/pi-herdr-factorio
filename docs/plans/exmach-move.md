@@ -30,10 +30,10 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 
 - [ ] State the protocol and this plan to the operator, then stop. Start execution only on the operator's explicit go. Record separate grants for commits, pushes, PR creation, fixture issues, changes on `pi-factorio`, changes on the exmach VM, and the cutover.
 - [ ] Read these from the installed skill directories at program start. Re-read them at every audit.
-  - [ ] Read `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/poteto-mode/playbooks/autopilot-stack.md` and `playbooks/autopilot-full.md` beside it.
-  - [ ] Read the swarm skill at `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/swarm/SKILL.md`.
+  - [ ] Read `<pstack>/skills/poteto-mode/playbooks/autopilot-stack.md`, resolving `<pstack>` from the installed skill inventory, and `playbooks/autopilot-full.md` beside it.
+  - [ ] Read the swarm skill at `<pstack>/skills/swarm/SKILL.md`.
   - [ ] Read the control skill at `.pi/skills/verify-factory/SKILL.md`.
-  - [ ] Read `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/poteto-mode/playbooks/opening-a-pr.md` and `playbooks/shipping.md` beside it.
+  - [ ] Read `<pstack>/skills/poteto-mode/playbooks/opening-a-pr.md` and `playbooks/shipping.md` beside it.
   - [ ] Read the leaf skills named in Appendix D.
 - [ ] Run the audit at every child delivery, at every stall or no-progress advisory, and on the operator's request. Nothing schedules it, so never promise a timed cadence and never leave the audit to memory.
 - [ ] Use this audit prompt, verbatim. "Re-read the execution playbook. Audit the operation against it and fix drift in this audit. Check every active lane and judge progress by side effects only. Cancel a stuck lane and launch its fresh replacement now. Then post a short status message to the operator in chat only when the audit found a tracked change that no earlier status message reported, such as a PR opened, a code-ready head, a round launched or closed, a verdict, a merge, a stuck agent and the action taken, a blocker added or cleared, or a decision only the operator can make. Name every such change and nothing else. Do not repeat a table, the merged list, or an unchanged blocker. If the audit found none, end the turn with no reply text. Either way, log this audit's row in your decision trail. The row names the items reported, or none."
@@ -68,13 +68,13 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 - [ ] Open the PR ready, never draft, per **Opening a PR**, only under the operator's grant that names PR creation. Use `gh pr create --base main` for `MV1` and `MV2`, and `--base` the `MV1` branch for `MV3` and `MV4`.
 - [ ] Run `npm run check` before each PR-facing push. Push with hooks on, only under the push grant, with `../pi-herdr-factorio-trails/bin/checked-push.sh` or an explicit `HEAD:refs/heads/<branch>`.
 - [ ] Run a manual diff cleanup pass before each commit and `/skill:no-comments` before review. Keep every `SAFETY:` comment that `.oxlintrc.json` requires.
-- [ ] Triage every Bugbot and security-reviewer comment per `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/poteto-mode/references/bugbot-triage.md`.
+- [ ] Triage every Bugbot and security-reviewer comment per `<pstack>/skills/poteto-mode/references/bugbot-triage.md`.
 - [ ] Rebase onto the parent branch, or `main` for a stack root, before the code-ready report and babysit. Keep that merge base in fix rounds. Rebase again only at merge prep, on a `git merge-tree` conflict with trunk, on a CI failure that comes from a change on trunk, or when a known concurrent change to the same files lands.
-- [ ] After any edit to `docs/plans/factory-v1.md`, run `node /home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/poteto-mode/scripts/check-plan.mjs docs/plans/factory-v1.md`. It must print `22 PR sections, 0 problems`. Run the same script on this file after each edit.
+- [ ] After any edit to `docs/plans/factory-v1.md`, run `node <pstack>/skills/poteto-mode/scripts/check-plan.mjs docs/plans/factory-v1.md`. It must print `22 PR sections, 0 problems`. Run the same script on this file after each edit.
 
 ### Verdict and merge, for every PR
 
-- [ ] At the code-ready head SHA and at each later push that changes the patch, run the swarm per `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/swarm/SKILL.md`. The root launches the lanes per `references/fan-out.md`. One gates lane runs `npm run check`. The ten live lanes from the PR's **Verify, live** block are verifier lanes on `task:qa` with the Verifier prompt. One perf lane runs its **Verify, perf** block. Two or more audit lanes read the diff and the receipts and distrust the PR body, each with the full brief and one main focus. They use the Reviewer prompt on an exact model from a family other than the author's. The root audits the receipts in the merge-ready report before the verdict.
+- [ ] At the code-ready head SHA and at each later push that changes the patch, run the swarm per `<pstack>/skills/swarm/SKILL.md`. The root launches the lanes per `references/fan-out.md`. One gates lane runs `npm run check`. The ten live lanes from the PR's **Verify, live** block are verifier lanes on `task:qa` with the Verifier prompt. One perf lane runs its **Verify, perf** block. Two or more audit lanes read the diff and the receipts and distrust the PR body, each with the full brief and one main focus. They use the Reviewer prompt on an exact model from a family other than the author's. The root audits the receipts in the merge-ready report before the verdict.
 - [ ] Clean only when every lane is `PASS`. Findings go back to the owner in one batched fix round. A defect that a lane filed as a note is a finding. After the first fix round, block only for a bug a user would hit, a failed gate or a wrong shipped doc, and file the rest as one follow-up issue. A lane that needs the exmach VM before E2 exists is `BLOCKED`. A new head gets a fresh swarm and verdict, except for lane results that stay valid under the patch-id rule in `playbooks/shipping.md`.
 - [ ] Stop at STACK-READY. Hand each verified PR to the owner with its verdict SHA, base SHA and patch-id. The owner lands the stack bottom-up. After each landing, apply the patch-id rule in `playbooks/shipping.md` to the PRs above it. Nobody pushes after the handoff without the owner's go.
 
@@ -590,6 +590,6 @@ These questions stay unproven.
 - Issue #719 and its items #711 to #718, with Shep's R25 comments on #719, #714 and #716.
 - The integration record, nublai/root `.pi/plan/integration.md`.
 - `docs/operations/sandbox.md`, `docs/operations/backup.md`, `docs/operations/viewer.md` and `docs/operations/factory-cli.md`.
-- `MV1` gets the how skill at `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/how/SKILL.md` and the interrogate skill at `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/interrogate/SKILL.md`.
-- The trail follows the show-me-your-work skill at `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/show-me-your-work/SKILL.md`.
-- Leaf skills are `technical-writing`, `unslop`, `no-comments` and `typescript-best-practices`, under `/home/g/.pi/agent/npm/node_modules/pi-herdr-pstack/skills/`.
+- `MV1` gets the how skill at `<pstack>/skills/how/SKILL.md` and the interrogate skill at `<pstack>/skills/interrogate/SKILL.md`.
+- The trail follows the show-me-your-work skill at `<pstack>/skills/show-me-your-work/SKILL.md`.
+- Leaf skills are `technical-writing`, `unslop`, `no-comments` and `typescript-best-practices`, under `<pstack>/skills/`.

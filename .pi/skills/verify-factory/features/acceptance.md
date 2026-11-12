@@ -6,28 +6,34 @@ Every passing lane spends model tokens and needs the model-spend grant as well a
 
 ## Sub-features
 
-- `accept-flow`: markers `1:claimed`, `2:running` at `specify`, then `3:claimed`, `4:running`, `5:claimed` at `build`, all in one `tick --once`. Build keeps its slot until the later build tick ends. The contract summary lands before `3:claimed`. One acceptance summary lands before `5:claimed`. The log has `contract_stored`, then `acceptance_stored digest=<acceptanceDigest>`.
-- `accept-summary`: the comment ends `<!-- factory-acceptance run=<runId> a=<acceptanceDigest> -->`, lists `S<n>: A<n>, ...` and says `context-isolated, same family, not cross-family`. It has no file path, test code, judge text or canary.
+- `accept-flow`: specify stores a contract, then accept stores the suite with `acceptance_stored digest=<acceptanceDigest>`. An asynchronous base check must qualify it before build. Continue scoped ticks through the recorded phase. A broken suite ends before build. Do not require the historical one-tick marker sequence.
+- `accept-summary`: the comment ends `<!-- factory-acceptance run=<runId> a=<acceptanceDigest> -->`, lists `S<n>: A<n>, ...` and discloses the acceptance author's observed family. Acceptance alone does not establish cross-family review. It has no file path, test code, judge text or canary.
 - `accept-store`: `<state>/acceptance/<runId>/` holds `receipt.json`, `suite.json`, `manifest.json`, `checks/*` and `canary.txt`, mode 0600 in 0700 directories, plus the anchor `<state>/acceptance/<runId>.json`. The receipt's `contractDigest` and `baseSha` match the contract receipt, and its `isolation` is the family disclosure. A fresh `fileRunFiles(<state>).artifacts.read` returns `found` and its digest equals `acceptanceDigestOf` recomputed from the stored bytes.
 - `accept-canary`: the canary is in `canary.txt`, `suite.json` and every check file, and not in the receipt.
 - `accept-isolation`: `docs/prototypes/acceptance-isolation/probe.ts` against the stored run prints `"result": "PASS"` and spends no model tokens.
 - `accept-needs-info`: a specify `needs_info` never launches accept.
 
-## Driving it with ssh
+## How to get to it (user POV)
 
-Preconditions are those of `specify.md`. `readlink /var/lib/factory-sandbox/current` must name a bundle whose `skills/` lists `acceptance`. Re-provision with `bash server/provision.sh sandbox` from the lane workspace when `skills/acceptance/` changes.
+Label an authorized fixture `factory:ready` as a writer. The controller specifies it, writes a private suite, and qualifies that suite on the pinned base before build. A `needs_info` result stops before acceptance. Follow `../SKILL.md` for target restrictions and grants.
+
+## Driving it with the named tooling
+
+Preconditions are those of `specify.md`. `readlink /var/lib/factory-sandbox/current` must name a bundle whose `skills/` lists `acceptance`. Installing a changed bundle with `bash server/provision.sh sandbox` needs a separate VM-change grant. Never provision the retiring host during the layout program.
 
 1. Run the doctor, snapshot the VM, set up the lane and record its head and bundle digest.
 2. Create a `[<pr-id>] ...` fixture issue as the owner, then add `factory:ready` as the owner. Do not touch `factory:enabled`.
 3. Run `vm.sh drive-stage.sh <pr-id> <worker-n> <issue>`. Its evidence lists the specify and accept receipts and their egress.
 4. On the VM, read both receipts and check the store with a script in the lane workspace that calls `fileRunFiles(<state>).readContract` and `artifacts.read`. Print modes, digests, scenario IDs, criteria and file sizes only.
-5. Count specify's root receipt once and accept's receipt once. Per-request tokens are `inputTokens` and `outputTokens` in each session's `egress.jsonl`. Accept must stay under 25,000 tokens and 5 minutes, and specify plus accept under 45,000 tokens and 10 minutes.
+5. Count specify's root receipt once and accept's receipt once. Per-request tokens are `inputTokens` and `outputTokens` in each session's `egress.jsonl`. Reserve the current 100,000-token accept allowance and retain the plan's applicable wall limits. The older 25,000-token and combined 45,000-token limits are historical, not current launch caps. Check the private base qualification receipt before allowing build.
 6. Run `node docs/prototypes/acceptance-isolation/probe.ts <state> <runId>` from the lane workspace with `XDG_RUNTIME_DIR=/run/user/1000`.
-7. Read the comments through `gh` and check `accept-summary`. The first tick now leaves build claimed; it does not finish the run.
-8. If build is in scope, run a second scoped `drive-stage.sh` tick and follow `build.md`. Reserve its full 400,000-token allowance before launching.
+7. Read the comments through `gh` and check `accept-summary`. Continue scoped ticks until the base check qualifies the suite or refuses it. A suite-ready result is not terminal success.
+8. If build is in scope and qualification passed, run the next scoped `drive-stage.sh` tick and follow `build.md`. Reserve its full 400,000-token allowance before launching.
 9. Close every fixture, confirm CLOSED, snapshot again and run `cleanup.sh`.
 
-## Results observed
+## Gotchas
+
+### Historical results
 
 On 2026-10-30, lane `f06b-w1`, bundle `assets-0e2b7ea8faceb746…`, the fixed three-criterion fixture "Add a clamp helper in src/clamp.ts", labeled by `giuseppecrj`:
 
@@ -39,7 +45,7 @@ On 2026-10-30, lane `f06b-w1`, bundle `assets-0e2b7ea8faceb746…`, the fixed th
 
 Specify turned the issue's three criteria into seven or eight finer ones. All 62,391 tokens went to `openai/gpt-6.1-sol`. The isolation probe passed on #460's and #461's runs; on #461 the canary was in `suite.json`, `canary.txt` and both check files, not in the manifest, receipt or anchor, and nowhere else in the lane state. All three fixtures are closed, and the lane was removed with no scope or process left. A live restart after storage was not driven; the unit tests cover it.
 
-## Gotchas
+### Recovery and cleanup
 
 - `lane-setup.sh` deletes the lane's `state`. Running it again after a stage destroys the stored suite. Run the probe from the same lane setup.
 - The probe's `systemctl --user stop` of its scope may report failure because the scope already ended with its process. Check the leftover scope count instead.

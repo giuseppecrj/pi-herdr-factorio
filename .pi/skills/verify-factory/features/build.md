@@ -4,7 +4,7 @@ A passing accept stores its held-out suite and claims build on the same run. Bui
 
 ## Sub-features
 
-- `build-flow`: the first scoped `tick --once` reaches `5:claimed` at build and keeps its slot. A second scoped tick posts `6:running`, then `7:running` at validate or `7:failed` at build. Successful build frees its slot. Further ticks publish and wait for CI; see `validation.md`.
+- `build-flow`: scoped ticks specify, accept, and qualify the suite on the pinned base before claiming build. The claimed build keeps its slot until its later execution ends. A passing build advances to slot-free validate. Further ticks publish and wait for CI. Follow the recorded phase, not fixed tick counts or marker numbers. See `validation.md`.
 - `build-workspace`: an independent pinned pristine base and a fresh attempt workspace, including on replay. Neither the acceptance store nor prior sessions are mounted. The build workspace/agent trees and visible-test tree are removed after use; private stores and receipts remain.
 - `build-tools`: coding tools only, with `subagent` and the bundled Herdr extension added exactly when the validated contract names more than eight files. Tiny contracts do not fan out. No GitHub route exists.
 - `build-collection`: deterministic raw-byte patch digest, sorted changed paths, modes, deletions, binaries and safe links. Forbidden paths stay private. Symlinked dependency caches and top-level directory replacements are refused. Empty patches fail; untrusted prose cannot enable a no-change outcome.
@@ -15,14 +15,22 @@ A passing accept stores its held-out suite and claims build on the same run. Bui
 - `build-disk`: post-stage 1 GiB / 100,000-entry checks include caches and empty directories, failing as `build_disk_limit`. This is not an instantaneous filesystem quota. Patch and receipt limits are 64 MiB and 8 MiB, respectively.
 - `build-isolation`: the shipped canary probe and its self-test pass, without model requests. The probe covers the builder launch shape, not the visible-test sandbox or arbitrary transformed oracle copies.
 
-## Drive
+## How to get to it (user POV)
+
+A qualified private acceptance suite permits build. Follow the run's patch summary on GitHub. Build produces no public branch or PR. Read `../SKILL.md` for grants and target restrictions before a drive.
+
+## Driving it with the named tooling
 
 1. Follow the doctor, snapshot and lane setup in `SKILL.md`. Commit first. Re-provision the bundle if bundled assets or skill text changed.
 2. Create and owner-label one authorized fixture. Never touch `factory:enabled`. Scope every command to that issue.
-3. Run `vm.sh drive-stage.sh <pr-id> <worker-n> <issue>` once for specify/accept. Verify the held-out store privately and `5:claimed` at build.
-4. Run the same scoped command a second time. Read build's stage receipt, private patch receipt and bound test receipt. Record tokens, requests and wall time per stage. Count each root receipt once.
+3. Run `vm.sh drive-stage.sh <pr-id> <worker-n> <issue>` for specify and accept. Continue scoped ticks through base qualification. Verify the held-out store and qualification privately, then require build claimed.
+4. Run the same scoped command for build. Read build's stage receipt, private patch receipt and bound test receipt. Record tokens, requests and wall time per stage. Count each root receipt once.
 5. Through repository-scoped `gh`, inspect the build summary and validate transition marker. Require a measured visible pass and the base's resolved script in `tests.json`; the builder's prose or command reports do not prove it.
 6. On the VM run `node --test docs/prototypes/build-isolation/self-test.mjs`, then `XDG_RUNTIME_DIR=/run/user/1000 node docs/prototypes/build-isolation/probe.ts <state> <runId> <attempt>`. After cleanup the probe reconstructs a disposable workspace from the pinned base and stored patch, uses the real build mount shape, and removes the reconstruction afterward. Export only redacted results.
 7. Close and confirm every fixture. Preserve receipts/evidence, snapshot again, check lane-owned scopes/processes and run lane cleanup.
+
+## Gotchas
+
+Legacy drivers and probes keep their current paths until L02. Source-checked instructions are not native proof. Never lower a stage allowance to fit a lane cap.
 
 Deterministic recovery, hostile patches, exact storage limits, command provenance, delegation and sandbox-result regressions also run through `test/build.test.ts`, `test/orchestrator.test.ts`, `test/specify.test.ts` and `test/sandbox/runner.cases.ts`.

@@ -2,12 +2,29 @@
 
 Reserve the full specify, accept and build allowances before a fixture run. Validate adds no model usage. Use only the task's authorized model and fixture refs.
 
-1. Follow doctor, snapshot and lane setup. The first scoped tick specifies and accepts; the second builds. Confirm `running` at validate with `active: 0`.
+## Sub-features
+
+- The controller publishes patch and held-out commits, then dispatches trusted CI on the exact candidate.
+- Verdicts bind all digests, the gate, nonce, run, and reporter identity.
+- Restart recovery retains the original deadline and frees the model slot during CI waits.
+- Repair receives sanitized inputs, never held-out code or private failure details.
+
+## How to get to it (user POV)
+
+Read the fixture's CI result on GitHub after build. A passing bound verdict permits fresh review, not merge. Read target restrictions in `../SKILL.md` before any drive.
+
+## Driving it with the named tooling
+
+1. Follow doctor, snapshot, and lane setup. Continue scoped ticks through specify, accept, asynchronous base qualification, and build. Confirm `running` at validate with `active: 0`.
 2. Tick once more to publish and dispatch. Read the claim's `validation` object privately. It records base, branch, patch and candidate SHAs, dispatch try, deadline and CI run. Keep the same state directory.
 3. Inspect the candidate commits with repository-scoped `gh api repos/<repo>/git/commits/<sha>`. Patch comes first, suite second. For a published-PR refresh, require ordered suite parents `[new patch commit, previous published head]` before CI and review. Record round/generation/intent, original and certified bases, admitted workflow pin, patch/acceptance/held-out digests, nonce, CI run/gate, and final head. Read only `checks/*` bytes to recompute the held-out digest privately. Never export test content into a build session.
 4. Stop and start the scoped controller during the wait. Confirm the same candidate, nonce, attempt and usage, no second dispatch, no model launch and no occupied slot. One-shot tick commands are separate controller processes and also exercise this recovery.
 5. Collect after CI completes. On the VM use the repository-scoped artifact API; `gh run download` follows absolute URLs that the proxy refuses. Require stored `verdict.json` and reporter-owned `factory-report` identity bound to patch, acceptance, held-out, candidate, gate, CI run, nonce, check ID, workflow/event/main ref, actor, and triggering actor. Require all eight mandatory hard checks including install, any extra receipt-required checks, nonempty held-out counts, and zero CI model calls. Query `check-runs?filter=all&per_page=100`; incomplete counts, duplicate reports, missing/skipped/stale/foreign checks cannot pass. Check both first and cached-hard-verdict missing-report waits against the original deadline. A run concluded by that deadline can still be collected later. Confirm cleanup never precedes retained evidence.
 6. Run `node docs/prototypes/heldout-ci/repair-probe.ts <state> <runId>`. It reconstructs a base plus the exact prior patch, seeds a prior published suite in the base, sanitizes it, and launches a real build-profile sandbox. Require a fresh install, empty Git objects, no acceptance directory or canary/body hits, approved feedback only, denied direct/npm/model-tool GitHub retrieval, and zero model requests.
 7. Close every owned fixture and confirm CLOSED. Enumerate this run's current, archived, and terminal-pending validation refs, then confirm exact owned refs are removed or explicitly pending with a reason. Moved tips must be preserved. `git ls-remote origin 'factory/run/*'` is only a read inventory, not permission to delete other lanes' refs. Never clean `factory/pr/*`, owner refs, claims, or private books generically. Preserve private evidence before lane cleanup and take the final snapshot.
+
+## Gotchas
+
+`tick` is not a dry run. The controller's publication and Actions dispatch require explicit authority. Local injected transport failures do not prove native reporter identity.
 
 `test/publication.test.ts` and `test/validation.test.ts` cover lost dispatch responses, crash-after-ref, bounded redispatch, stale-base reapply/conflict, receipt identities and missing results. `test/orchestrator.test.ts` covers old-workflow/v1 adoption and slot-free waiting. F09a preserves generation-zero paths and adds `g<N>/` evidence, generation-qualified nonces/validation refs, and compact v3 markers. Roll forward only from a drained controller under a deployment grant. See [handoff](handoff.md) for bootstrap/P4, ordinary PR check, same-PR refresh, and owner-only proof boundaries. This recipe is source-checked/unrun in the documentation round; local/fake-transport regressions are not native Actions proof.
