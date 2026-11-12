@@ -1102,7 +1102,10 @@ function runnerGlobs(ctx) {
 		parsed("package.json", ctx.read("package.json")).scripts ?? {};
 
 	return ctx.baseline.discovery.runners.flatMap((name) =>
-		(scripts[name] ?? "").split(/\s+/).filter((part) => part.includes("*")),
+		(scripts[name] ?? "")
+			.split(/\s+/)
+			.filter((part) => part.includes("*"))
+			.map((part) => part.replace(/^['"]|['"]$/g, "")),
 	);
 }
 
@@ -1162,6 +1165,13 @@ function checkDiscovery(ctx, problems, { graph }) {
 
 		closures.set(test, reached);
 	}
+
+	for (const [owner, reached] of closures)
+		for (const target of reached)
+			if (discovered.includes(target))
+				problems.push(
+					`discovery: ${target} is imported by discovered test ${owner}; discover it directly once instead`,
+				);
 
 	for (const cases of scoped.filter((file) => CASES.test(file))) {
 		const registrations = [...graph.entries()].flatMap(([file, edges]) =>

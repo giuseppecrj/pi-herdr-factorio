@@ -1,0 +1,2020 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import { spawnSync } from "node:child_process";
+import {
+	mkdtempSync,
+	mkdirSync,
+	readFileSync,
+	writeFileSync,
+	rmSync,
+	existsSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { JsonValue } from "../../../src/core/json.ts";
+import {
+	verdictPasses,
+	digestOf,
+	REQUIRED_CI_CHECKS,
+} from "../../../src/core/run.ts";
+import {
+	collectVerdict,
+	collectTrustedReport,
+	publishedSuite,
+	matchesCiRun,
+	parseCiRun,
+	repairFeedback,
+	checkFeedback,
+	parseCheckFeedback,
+	feedbackBytes,
+	readFeedbackBytes,
+	type CiRun,
+	type ValidationState,
+	parseValidationState,
+	validationDir,
+	dispatchNonce,
+} from "../../../src/candidate/validation.ts";
+import {
+	acceptanceDigestOf,
+	type AcceptanceSuite,
+} from "../../../src/contract/acceptance.ts";
+import { CONTROLLER_LOGIN } from "../../../src/trust/markers.ts";
+import { isGitSha } from "../../../src/config/schema.ts";
+import { isRepoSlug } from "../../../src/trust/platform.ts";
+import {
+	passingVerdict,
+	patch,
+	withLocalArtifactDownload,
+	candidateLifecycleFixture,
+} from "../../helpers.ts";
+import { fileRunFiles } from "../../../host/controller/run-files.ts";
+import {
+	controllerValidator,
+	ownerValidator,
+	sweepValidation,
+} from "../../../host/controller/validation-sweep.ts";
+import { fileArtifacts } from "../../../src/contract/artifacts.ts";
+import {
+	contractBytes,
+	contractDigestOf,
+	type Contract,
+} from "../../../src/contract/contract.ts";
+import {
+	collectPatch,
+	storePatch,
+	finishPatch,
+	readPatch,
+} from "../../../src/candidate/build.ts";
+import { generationIntent } from "../../../src/candidate/state.ts";
+import {
+	handoffCandidate,
+	candidateGenerations,
+	candidateUsage,
+} from "../../../src/candidate/handoff.ts";
+import {
+	candidateBranch,
+	storeOwnerPatch,
+} from "../../../src/github/publish.ts";
+import type { Exec } from "../../../src/github/exec.ts";
+import { EXE_DEV_PLATFORM } from "../../../src/trust/platform.ts";
+
+const candidateSha = "c".repeat(40);
+const gateSha = "a".repeat(40);
+
+if (!isGitSha(candidateSha) || !isGitSha(gateSha)) throw new Error("fixture");
+
+const run: CiRun = {
+	id: 1,
+	headSha: gateSha,
+	headBranch: "main",
+	completedAt: "2026-10-31T00:01:00Z",
+	title: `gates ${candidateSha} nonce`,
+	event: "workflow_dispatch",
+	path: ".github/workflows/ci.yml",
+	actor: CONTROLLER_LOGIN,
+	triggeringActor: CONTROLLER_LOGIN,
+	status: "completed",
+	conclusion: "success",
+	createdAt: "2026-10-31T00:00:00Z",
+};
+
+const receipt = {
+	version: 2,
+	gateSha,
+	candidateSha,
+	nonce: "nonce",
+	modelCalls: 0,
+	status: "passed",
+	heldoutDigest: digestOf("checks"),
+	requiredChecks: [...REQUIRED_CI_CHECKS],
+	checks: REQUIRED_CI_CHECKS.map((name) => ({ name, exitCode: 0 })),
+};
+
+const binding = {
+	run,
+	nonce: "nonce",
+	patchDigest: patch("a"),
+	acceptanceDigest: digestOf("suite"),
+	heldoutDigest: receipt.heldoutDigest,
+	candidateSha,
+	originalBase: gateSha,
+	baseSha: gateSha,
+	unjudged: ["S2"],
+};
+
+describe("reporter-owned candidate checks (unit transport)", () => {
+	const verdict = collectVerdict({
+		controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
+		...binding,
+		text: JSON.stringify(receipt),
+	});
+
+	const externalId = `factory-gates:${run.id}:nonce`;
+
+	const record = {
+		version: 1,
+		status: "passed",
+		checkId: 456,
+		candidateSha,
+		gateSha,
+		runId: run.id,
+		nonce: "nonce",
+		workflow: ".github/workflows/ci.yml",
+		event: "workflow_dispatch",
+		ref: "refs/heads/main",
+		actor: CONTROLLER_LOGIN,
+		triggeringActor: CONTROLLER_LOGIN,
+		externalId,
+		heldoutDigest: receipt.heldoutDigest,
+	};
+
+	const check = {
+		id: 456,
+		name: "factory-gates",
+		head_sha: candidateSha,
+		app: { id: 15368 },
+		external_id: externalId,
+		status: "completed",
+		conclusion: "success",
+	};
+
+	const input = {
+		controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
+		record,
+		checks: { total_count: 1, check_runs: [check] },
+		run,
+		nonce: "nonce",
+		verdict,
+	};
+
+	it("binds the reporter's own check ID and explicit external ID independently of nonce", () => {
+		const report = collectTrustedReport(input);
+		assert.ok(report);
+		assert.equal(report.reportId, check.id);
+		assert.notEqual(report.externalId, report.nonce);
+	});
+
+	for (const field of [
+		"status",
+		"candidateSha",
+		"gateSha",
+		"runId",
+		"nonce",
+		"workflow",
+		"event",
+		"ref",
+		"actor",
+		"triggeringActor",
+		"externalId",
+		"heldoutDigest",
+		"checkId",
+	])
+		it(`refuses changed reporter identity ${field}`, () => {
+			assert.equal(
+				collectTrustedReport({
+					...input,
+					record: { ...record, [field]: "wrong" },
+				}),
+				null,
+			);
+		});
+
+	for (const conclusion of ["skipped", "cancelled", "failure", null])
+		it(`refuses check ${conclusion}`, () => {
+			assert.equal(
+				collectTrustedReport({
+					...input,
+					checks: { total_count: 1, check_runs: [{ ...check, conclusion }] },
+				}),
+				null,
+			);
+		});
+	it("rejects default Actions GUIDs, wrong app, incomplete results and duplicate same-named checks", () => {
+		for (const changed of [
+			{ ...check, id: 457 },
+			{ ...check, app: { id: 7 } },
+			{ ...check, external_id: "actions-guid" },
+			{ ...check, head_sha: gateSha },
+		])
+			assert.equal(
+				collectTrustedReport({
+					...input,
+					checks: { total_count: 1, check_runs: [changed] },
+				}),
+				null,
+			);
+		assert.equal(
+			collectTrustedReport({
+				...input,
+				checks: { total_count: 2, check_runs: [check] },
+			}),
+			null,
+		);
+		assert.equal(
+			collectTrustedReport({
+				...input,
+				checks: { total_count: 2, check_runs: [check, { ...check, id: 457 }] },
+			}),
+			null,
+		);
+		assert.equal(
+			collectTrustedReport({ ...input, verdict: { ...verdict, pass: false } }),
+			null,
+		);
+	});
+});
+
+describe("exact workflow reporter with CLI install receipt", () => {
+	const nonce = `${"c".repeat(16)}-r0-d1`;
+
+	const cliReceipt = {
+		...receipt,
+		nonce,
+		requiredChecks: ["install", ...REQUIRED_CI_CHECKS],
+		checks: [{ name: "install", exitCode: 0 }, ...receipt.checks],
+		heldoutCounts: { "test/acceptance/42/checks/a.test.ts": 3 },
+	};
+
+	const ciRun = { ...run, title: `gates ${candidateSha} ${nonce}` };
+
+	const script = /node --input-type=module <<'NODE'\n([\s\S]*?)\n\s*NODE/
+		.exec(
+			readFileSync(
+				new URL("../../../.github/workflows/ci.yml", import.meta.url),
+				"utf8",
+			),
+		)?.[1]
+		?.split("\n")
+		.map((line) => line.replace(/^ {10}/, ""))
+		.join("\n");
+
+	assert.ok(script);
+
+	function emit(text: string | null, env: Record<string, string> = {}) {
+		const root = mkdtempSync(join(tmpdir(), "factory-report-test-"));
+
+		try {
+			const input = join(root, "input.json");
+			const posts = join(root, "posts.json");
+			writeFileSync(posts, "[]");
+
+			if (text !== null) writeFileSync(input, text);
+
+			const stub = `
+import {writeFileSync as writePosts} from 'node:fs';
+globalThis.fetch = async (url, init) => {
+ const body = JSON.parse(init.body);
+ writePosts(${JSON.stringify(posts)}, JSON.stringify([body]));
+ return new Response(JSON.stringify({id:456, app:{id:15368}, ...body}), {status:201});
+};\n`;
+
+			const child = spawnSync(process.execPath, ["--input-type=module"], {
+				input: stub + script,
+				encoding: "utf8",
+				env: {
+					PATH: process.env.PATH,
+					GH_TOKEN: "dummy-local-test-token",
+					CANDIDATE_SHA: candidateSha,
+					GATE_SHA: gateSha,
+					NONCE: nonce,
+					HELDOUT_DIR: "test/acceptance/42",
+					HELDOUT_DIGEST: receipt.heldoutDigest,
+					GATE_RESULT: "success",
+					GITHUB_REF: "refs/heads/main",
+					GITHUB_EVENT_NAME: "workflow_dispatch",
+					GITHUB_ACTOR: CONTROLLER_LOGIN,
+					TRIGGERING_ACTOR: CONTROLLER_LOGIN,
+					GITHUB_REPOSITORY: "owner/repo",
+					GITHUB_RUN_ID: String(run.id),
+					GITHUB_RUN_ATTEMPT: "1",
+					REPORT_INPUT: input,
+					REPORT_OUTPUT: join(root, "out"),
+					...env,
+				},
+			});
+
+			const posted: { conclusion: string }[] = JSON.parse(
+				readFileSync(posts, "utf8"),
+			);
+
+			let record: JsonValue | undefined;
+
+			if (child.status === 0)
+				record = JSON.parse(
+					readFileSync(join(root, "out/receipt.json"), "utf8"),
+				);
+
+			return { code: child.status, posted, record, stderr: child.stderr };
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	}
+
+	function collect(
+		result: ReturnType<typeof emit>,
+		text = JSON.stringify(cliReceipt),
+	) {
+		const verdict = collectVerdict({
+			controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
+			...binding,
+			run: ciRun,
+			nonce,
+			text,
+		});
+
+		return collectTrustedReport({
+			controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
+			record: result.record,
+			checks: {
+				total_count: 1,
+				check_runs: [
+					{
+						id: 456,
+						name: "factory-gates",
+						head_sha: candidateSha,
+						app: { id: 15368 },
+						external_id: `factory-gates:${run.id}:${nonce}`,
+						status: "completed",
+						conclusion: result.posted[0]?.conclusion ?? null,
+					},
+				],
+			},
+			run: ciRun,
+			nonce,
+			verdict,
+		});
+	}
+
+	it("accepts the actual eight-check CLI shape through the trusted collector", () => {
+		const result = emit(JSON.stringify(cliReceipt));
+		assert.equal(result.code, 0, result.stderr);
+		assert.equal(result.posted[0]?.conclusion, "success");
+		assert.ok(collect(result));
+	});
+
+	for (const [name, changed] of [
+		[
+			"seven-row legacy fixture",
+			{
+				requiredChecks: [...REQUIRED_CI_CHECKS],
+				checks: receipt.checks,
+			},
+		],
+		["missing install row", { checks: receipt.checks }],
+		[
+			"duplicate install declaration",
+			{ requiredChecks: [...cliReceipt.requiredChecks, "install"] },
+		],
+		[
+			"duplicate install row",
+			{ checks: [...cliReceipt.checks, { name: "install", exitCode: 0 }] },
+		],
+		[
+			"undeclared row",
+			{ checks: [...cliReceipt.checks, { name: "extra", exitCode: 0 }] },
+		],
+		[
+			"failed additional required row",
+			{
+				requiredChecks: [...cliReceipt.requiredChecks, "extra"],
+				checks: [...cliReceipt.checks, { name: "extra", exitCode: 1 }],
+			},
+		],
+		["missing heldout evidence", { heldoutCounts: undefined }],
+		["empty heldout evidence", { heldoutCounts: {} }],
+		[
+			"zero heldout evidence",
+			{ heldoutCounts: { "test/acceptance/42/checks/a.test.ts": 0 } },
+		],
+		[
+			"failed install",
+			{
+				checks: cliReceipt.checks.map((c) => ({
+					...c,
+					exitCode: c.name === "install" ? 1 : 0,
+				})),
+			},
+		],
+		[
+			"timed-out install",
+			{
+				checks: cliReceipt.checks.map((c) => ({
+					...c,
+					timedOut: c.name === "install",
+				})),
+			},
+		],
+		[
+			"signalled install",
+			{
+				checks: cliReceipt.checks.map((c) => ({
+					...c,
+					signal: c.name === "install" ? "SIGTERM" : null,
+				})),
+			},
+		],
+		["candidate mismatch", { candidateSha: gateSha }],
+		["gate mismatch", { gateSha: candidateSha }],
+		["nonce mismatch", { nonce: "wrong" }],
+		["oracle mismatch", { heldoutDigest: digestOf("other") }],
+		["failed receipt", { status: "failed" }],
+		["model calls", { modelCalls: 1 }],
+	] as const)
+		it(`fails closed for ${name}`, () => {
+			const result = emit(JSON.stringify({ ...cliReceipt, ...changed }));
+			assert.equal(result.code, 0, result.stderr);
+			assert.equal(result.posted[0]?.conclusion, "failure");
+			assert.equal(collect(result), null);
+		});
+
+	for (const text of [null, "{", "{}"])
+		it(`fails closed for missing or malformed artifact ${text}`, () => {
+			const result = emit(text);
+			assert.equal(result.posted[0]?.conclusion, "failure");
+			assert.equal(collect(result), null);
+		});
+
+	for (const result of ["failure", "skipped", "cancelled"])
+		it(`fails closed for ${result} gates job`, () => {
+			const output = emit(JSON.stringify(cliReceipt), { GATE_RESULT: result });
+			assert.equal(output.posted[0]?.conclusion, "failure");
+			assert.equal(collect(output), null);
+		});
+
+	const invalidEnvironments: Record<string, string>[] = [
+		{ GITHUB_ACTOR: "owner" },
+		{ TRIGGERING_ACTOR: "owner" },
+		{ GITHUB_REF: "refs/heads/other" },
+		{ GITHUB_EVENT_NAME: "pull_request" },
+		{ GITHUB_RUN_ATTEMPT: "2" },
+		{ CANDIDATE_SHA: "bad" },
+		{ GATE_SHA: "bad" },
+		{ NONCE: "bad" },
+	];
+
+	for (const env of invalidEnvironments)
+		it(`does not post for wrong execution identity ${JSON.stringify(env)}`, () => {
+			const result = emit(JSON.stringify(cliReceipt), env);
+			assert.notEqual(result.code, 0);
+			assert.deepEqual(result.posted, []);
+			assert.equal(result.record, undefined);
+		});
+});
+
+async function reportDeadlineFixture(
+	root: string,
+	owner = false,
+	dispatch = false,
+) {
+	assert.ok(isGitSha(gateSha) && isGitSha(candidateSha));
+	const repo = "giuseppecrj/pi-herdr-factorio";
+	assert.ok(isRepoSlug(repo));
+	const runId = digestOf("report-deadline");
+	const start = Date.parse(run.createdAt);
+
+	const contract: Contract = {
+		version: 2,
+		runId,
+		issue: 42,
+		base: { repo, sha: gateSha },
+		snapshot: {
+			digest: digestOf("snapshot"),
+			source: "unedited",
+			eventId: "1",
+			eventAt: run.createdAt,
+		},
+		link: null,
+		summary: "Change a",
+		behavior: ["Return 2"],
+		acceptance: [{ id: "A1", kind: "new_behavior", text: "Return 2" }],
+		exclusions: [],
+		compatibility: [],
+		limits: [],
+		files: ["src/a.ts"],
+		evidence: [],
+	};
+
+	const bytes = contractBytes(contract);
+	const contractDigest = contractDigestOf(bytes);
+	assert.equal(
+		await fileRunFiles(root).writeContract({
+			contract,
+			bytes,
+			digest: contractDigest,
+		}),
+		true,
+	);
+
+	const stored = await fileArtifacts(root).store({
+		contract,
+		contractDigest,
+		suite: {
+			version: 2,
+			scenarios: [
+				{
+					id: "S1",
+					kind: "new_behavior",
+					criteria: ["A1"],
+					checks: ["a.test.ts"],
+					judge: null,
+				},
+			],
+			files: [
+				{
+					path: "a.test.ts",
+					type: "node:test",
+					content: "import {test} from 'node:test'; test('a',()=>{});",
+				},
+			],
+		},
+		model: "openai/gpt-6.1-sol",
+		observed: null,
+	});
+
+	assert.equal(stored.kind, "found");
+	const base = join(root, "base");
+	const workspace = join(root, "builder");
+
+	for (const dir of [base, workspace])
+		mkdirSync(join(dir, "src"), { recursive: true });
+	writeFileSync(join(base, "src/a.ts"), "export const a = 1;\n");
+	writeFileSync(join(workspace, "src/a.ts"), "export const a = 2;\n");
+	const collected = await collectPatch({ base, workspace });
+	assert.equal(collected.kind, "collected");
+
+	const patchBinding = {
+		runId,
+		baseSha: gateSha,
+		contractDigest,
+		acceptanceDigest: stored.receipt.acceptanceDigest,
+	};
+
+	storePatch(root, patchBinding, collected, {
+		model: "openai/gpt-6.1-sol",
+		observed: null,
+		commands: [],
+	});
+	finishPatch(root, patchBinding, {
+		command: "npm test",
+		exitCode: 0,
+		tail: "",
+		wallMs: 1,
+	});
+	const patch = readPatch(root, patchBinding);
+	assert.equal(patch.kind, "found");
+
+	const generation = generationIntent({
+		pin: {
+			runId,
+			repo,
+			issue: 42,
+			originalBase: gateSha,
+			workflowSha: gateSha,
+			workflowDigest: digestOf("workflow"),
+			contractDigest,
+			acceptanceDigest: stored.receipt.acceptanceDigest,
+			maxTokens: 500_000,
+			maxReviewAttempts: 3,
+		},
+		patch: patch.receipt,
+		round: 0,
+		generation: owner ? 1 : 0,
+		baseSha: gateSha,
+		origin: owner
+			? {
+					kind: "owner",
+					head: candidateSha,
+					previous: { round: 0, generation: 0, digest: digestOf("previous") },
+				}
+			: { kind: "initial" },
+		publication: owner
+			? { kind: "owner", head: candidateSha }
+			: { kind: "initial" },
+	});
+
+	const heldout = publishedSuite({
+		issue: 42,
+		suite: stored.suite,
+		canary: readFileSync(
+			join(root, "acceptance", runId, "canary.txt"),
+			"utf8",
+		).trimEnd(),
+		acceptanceDigest: stored.receipt.acceptanceDigest,
+	});
+
+	if (owner) {
+		storeOwnerPatch(
+			root,
+			{
+				version: 1,
+				kind: "owner",
+				runId,
+				head: candidateSha,
+				baseSha: gateSha,
+				contractDigest,
+				acceptanceDigest: stored.receipt.acceptanceDigest,
+				heldoutDigest: heldout.digest,
+				patchDigest: patch.receipt.patchDigest,
+				changedPaths: patch.receipt.changedPaths,
+				policy: "clean",
+			},
+			Buffer.from(patch.patch).toString("utf8"),
+		);
+		rmSync(join(root, "patches"), { recursive: true });
+	}
+
+	const nonce = dispatchNonce(runId, 0, 1, generation.generation);
+
+	const hardReceipt = {
+		...receipt,
+		nonce,
+		heldoutDigest: heldout.digest,
+		requiredChecks: ["install", ...REQUIRED_CI_CHECKS],
+		checks: [{ name: "install", exitCode: 0 }, ...receipt.checks],
+	};
+
+	let state: ValidationState = {
+		version: 2,
+		generation: {
+			index: generation.generation,
+			digest: generation.digest,
+			previousHead: null,
+		},
+		startedAt: start,
+		deadline: start + 1_200_000,
+		round: 0,
+		originalBase: gateSha,
+		baseSha: gateSha,
+		baseResolved: true,
+		publication: owner
+			? null
+			: {
+					branch: candidateBranch(42, runId, 0),
+					patchSha: gateSha,
+					candidateSha,
+				},
+		dispatchTry: dispatch ? 0 : 1,
+		dispatchedAt: dispatch ? null : start,
+		ciRunId: dispatch ? null : run.id,
+		counters: {},
+	};
+
+	let ref: string | null = owner ? null : candidateSha;
+	let report: "missing" | "rejected" | "valid" = "missing";
+	const writes: string[] = [];
+
+	const record = {
+		version: 1,
+		status: "passed",
+		checkId: 456,
+		candidateSha,
+		gateSha,
+		runId: run.id,
+		nonce,
+		workflow: ".github/workflows/ci.yml",
+		event: "workflow_dispatch",
+		ref: "refs/heads/main",
+		actor: CONTROLLER_LOGIN,
+		triggeringActor: CONTROLLER_LOGIN,
+		externalId: `factory-gates:${run.id}:${nonce}`,
+		heldoutDigest: heldout.digest,
+	};
+
+	const exec: Exec = async (command, args) => {
+		const ok = (value: JsonValue) => ({
+			code: 0,
+			stdout: JSON.stringify(value),
+			stderr: "",
+		});
+
+		if (command === "unzip")
+			return ok(report === "rejected" ? { ...record, checkId: 999 } : record);
+
+		const path = args
+			.find((arg) => arg.startsWith(`repos/${repo}/`))
+			?.slice(`repos/${repo}/`.length);
+
+		if (owner && path?.includes("factory/pr/"))
+			assert.fail("owner validator touched the PR branch");
+
+		if (args.includes("DELETE")) {
+			assert.ok(path?.startsWith("git/refs/heads/factory/run/"));
+			writes.push("DELETE");
+			ref = null;
+
+			return ok(null);
+		}
+
+		if (owner && args.includes("POST") && path === "git/refs") {
+			const body = JSON.parse(
+				readFileSync(args[args.indexOf("--input") + 1]!, "utf8"),
+			);
+
+			assert.equal(body.ref, `refs/heads/${candidateBranch(42, runId, 0, 1)}`);
+			assert.equal(body.sha, candidateSha);
+			writes.push("PIN");
+			ref = candidateSha;
+
+			return ok({ ref: body.ref, object: { sha: candidateSha } });
+		}
+
+		if (
+			owner &&
+			args.includes("POST") &&
+			path === "actions/workflows/ci.yml/dispatches"
+		) {
+			const body = JSON.parse(
+				readFileSync(args[args.indexOf("--input") + 1]!, "utf8"),
+			);
+
+			assert.deepEqual(body, {
+				ref: "main",
+				inputs: {
+					candidate_sha: candidateSha,
+					nonce,
+					replacements: "[]",
+					replacements_digest: digestOf("[]"),
+					heldout_dir: heldout.directory,
+					heldout_digest: heldout.digest,
+				},
+			});
+			writes.push("DISPATCH");
+
+			return ok({ workflow_run_id: run.id });
+		}
+
+		assert.ok(!args.includes("POST") && !args.includes("PATCH"));
+
+		if (path === "git/ref/heads/main") return ok({ object: { sha: gateSha } });
+
+		if (path?.startsWith("git/ref/heads/factory/run/"))
+			return ref === null
+				? { code: 1, stdout: "", stderr: "HTTP 404" }
+				: ok({ object: { sha: ref } });
+
+		if (path === `actions/runs/${run.id}`)
+			return ok({
+				id: run.id,
+				head_sha: gateSha,
+				head_branch: "main",
+				updated_at: run.completedAt,
+				display_title: `gates ${candidateSha} ${nonce}`,
+				status: "completed",
+				conclusion: "success",
+				event: "workflow_dispatch",
+				path: ".github/workflows/ci.yml",
+				actor: { login: CONTROLLER_LOGIN },
+				triggering_actor: { login: CONTROLLER_LOGIN },
+				created_at: run.createdAt,
+			});
+
+		if (path === `actions/runs/${run.id}/artifacts`)
+			return ok({
+				artifacts:
+					report === "missing"
+						? []
+						: [{ id: 999, name: "factory-report", expired: false }],
+			});
+
+		if (path === `commits/${candidateSha}/check-runs?filter=all&per_page=100`)
+			return ok({
+				total_count: 1,
+				check_runs: [
+					{
+						id: 456,
+						name: "factory-gates",
+						head_sha: candidateSha,
+						app: { id: 15368 },
+						external_id: record.externalId,
+						status: "completed",
+						conclusion: "success",
+					},
+				],
+			});
+		throw new Error(`unexpected ${command} ${path}`);
+	};
+
+	const step = async (now: number) => {
+		const restored = parseValidationState(JSON.parse(JSON.stringify(state)));
+		assert.ok(restored);
+
+		return (owner ? ownerValidator : controllerValidator)({
+			platform: EXE_DEV_PLATFORM,
+			stateDir: root,
+			exec,
+			receipt: async () => JSON.stringify(hardReceipt),
+		})({
+			runId,
+			issue: 42,
+			baseSha: gateSha,
+			eventAt: run.createdAt,
+			now,
+			wallMs: 1_200_000,
+			generation,
+			state: restored,
+			save: async (next) => {
+				state = structuredClone(next);
+
+				return true;
+			},
+		});
+	};
+
+	return {
+		step,
+		start,
+		deadline: state.deadline,
+		writes,
+		dir: validationDir(root, runId, 0, generation.generation),
+		setReport: (next: typeof report) => {
+			report = next;
+		},
+		moveBranch: () => {
+			ref = gateSha;
+		},
+		pinAt: (head: string) => {
+			ref = head;
+		},
+		ref: () => ref,
+	};
+}
+
+describe("F10-3 owner validator integrated harness", () => {
+	it("dispatches main with only the real workflow inputs and H, without any commit or PR ref write", async () => {
+		await withLocalArtifactDownload(async (root) => {
+			const f = await reportDeadlineFixture(root, true, true);
+			assert.equal((await f.step(f.start + 1000)).kind, "waiting");
+			f.setReport("valid");
+			const result = await f.step(f.start + 60_000);
+			assert.ok(
+				result.kind === "finished" &&
+					result.verdict.candidateSha === candidateSha,
+			);
+			assert.deepEqual(f.writes, ["PIN", "DISPATCH", "DELETE"]);
+		});
+	});
+
+	for (const collision of [false, true])
+		it(`C10 adopts an existing H pin or refuses a foreign pin (${collision})`, async () => {
+			await withLocalArtifactDownload(async (root) => {
+				const f = await reportDeadlineFixture(root, true);
+				f.pinAt(collision ? gateSha : candidateSha);
+				f.setReport("valid");
+				const result = await f.step(f.start + 60_000);
+				assert.equal(result.kind, collision ? "failed" : "finished");
+
+				if (result.kind === "failed")
+					assert.equal(result.reason, "branch_moved");
+				assert.deepEqual(f.writes, collision ? [] : ["DELETE"]);
+			});
+		});
+	it("pins H, adopts the pin after restart, certifies exact H and deletes only the pin without builder bytes", async () => {
+		await withLocalArtifactDownload(async (root) => {
+			const f = await reportDeadlineFixture(root, true);
+			assert.equal((await f.step(f.start + 60_000)).kind, "waiting");
+			f.setReport("valid");
+			const result = await f.step(f.start + 70_000);
+			assert.equal(result.kind, "finished");
+			assert.ok(result.kind === "finished" && result.report);
+			assert.equal(result.verdict.candidateSha, candidateSha);
+			assert.deepEqual(f.writes, ["PIN", "DELETE"]);
+			assert.equal(f.ref(), null);
+		});
+	});
+	it("refuses a pin moved away from H without deleting it", async () => {
+		await withLocalArtifactDownload(async (root) => {
+			const f = await reportDeadlineFixture(root, true);
+			await f.step(f.start + 60_000);
+			f.moveBranch();
+			const result = await f.step(f.start + 70_000);
+			assert.ok(result.kind === "failed" && result.reason === "branch_moved");
+			assert.deepEqual(f.writes, ["PIN", "DELETE"]);
+		});
+	});
+});
+
+describe("report evidence uses the fixed CI deadline", () => {
+	it("F10-3 keeps the factory validator result and verdict bytes identical to 484a6ab", async () => {
+		const crypto = (await import("node:crypto")).default;
+		const { syncBuiltinESMExports } = await import("node:module");
+		const random = crypto.randomBytes;
+		// Pin the fixture's private canary, not production entropy or its validation.
+		Object.defineProperty(crypto, "randomBytes", {
+			value: (size: number) => Buffer.alloc(size, 0xab),
+		});
+		syncBuiltinESMExports();
+
+		try {
+			await withLocalArtifactDownload(async (root) => {
+				const f = await reportDeadlineFixture(root);
+				await f.step(f.start + 60_000);
+				f.setReport("valid");
+				const result = await f.step(f.start + 70_000);
+				assert.equal(
+					digestOf(JSON.stringify(result)),
+					"d19258f591c957638abc1f96d88c085647086a51b137385559a05aba7ee6e118",
+				);
+				assert.equal(
+					digestOf(readFileSync(join(f.dir, "verdict.json"))),
+					"fb163235c620c3d826bfe04a36cebff03431a181e6d39c8295d4a025a1e358cd",
+				);
+			});
+		} finally {
+			Object.defineProperty(crypto, "randomBytes", { value: random });
+			syncBuiltinESMExports();
+		}
+	});
+
+	for (const cached of [false, true])
+		for (const report of ["missing", "rejected"] as const)
+			for (const offset of [-1, 0, 1])
+				it(`${cached ? "stored verdict restart" : "first completion"}, ${report}, deadline offset ${offset}`, async () => {
+					await withLocalArtifactDownload(async (root) => {
+						const f = await reportDeadlineFixture(root);
+						f.setReport(report);
+
+						if (cached)
+							assert.equal((await f.step(f.start + 60_000)).kind, "waiting");
+						const result = await f.step(f.deadline + offset);
+						assert.equal(result.state?.deadline, f.deadline);
+						assert.equal(result.kind, offset < 0 ? "waiting" : "failed");
+
+						if (result.kind === "failed")
+							assert.equal(result.reason, "ci_timeout");
+						assert.equal(f.ref(), null);
+						assert.deepEqual(f.writes, ["DELETE"]);
+					});
+				});
+
+	it("persists timeout separately without rewriting the positive hard verdict or reviving on reload", async () => {
+		await withLocalArtifactDownload(async (root) => {
+			const f = await reportDeadlineFixture(root);
+			assert.equal((await f.step(f.start + 60_000)).kind, "waiting");
+			const verdictPath = join(f.dir, "verdict.json");
+			const hardVerdict = readFileSync(verdictPath, "utf8");
+
+			for (const report of ["missing", "valid", "missing"] as const) {
+				f.setReport(report);
+				const result = await f.step(f.deadline + 1);
+				assert.equal(result.kind, "failed");
+
+				if (result.kind === "failed") assert.equal(result.reason, "ci_timeout");
+				assert.equal(readFileSync(verdictPath, "utf8"), hardVerdict);
+			}
+
+			assert.equal(
+				JSON.parse(readFileSync(join(f.dir, "failure.json"), "utf8")).reason,
+				"ci_timeout",
+			);
+			assert.deepEqual(f.writes, ["DELETE"]);
+		});
+	});
+
+	for (const offset of [-1, 1])
+		it(`recovers complete valid reporter evidence at deadline offset ${offset}`, async () => {
+			await withLocalArtifactDownload(async (root) => {
+				const f = await reportDeadlineFixture(root);
+				assert.equal((await f.step(f.start + 60_000)).kind, "waiting");
+				const hardVerdict = readFileSync(join(f.dir, "verdict.json"), "utf8");
+				f.setReport("valid");
+				const result = await f.step(f.deadline + offset);
+				assert.equal(result.kind, "finished");
+
+				if (result.kind === "finished")
+					assert.ok(result.verdict.pass && result.report);
+				assert.equal(
+					readFileSync(join(f.dir, "verdict.json"), "utf8"),
+					hardVerdict,
+				);
+				assert.equal(existsSync(join(f.dir, "failure.json")), false);
+			});
+		});
+
+	it("preserves stored verdict binding and branch drift refusals", async () => {
+		for (const drift of [false, true])
+			await withLocalArtifactDownload(async (root) => {
+				const f = await reportDeadlineFixture(root);
+				await f.step(f.start + 60_000);
+
+				if (drift) f.moveBranch();
+				else {
+					const path = join(f.dir, "verdict.json");
+					const verdict = JSON.parse(readFileSync(path, "utf8"));
+					writeFileSync(
+						path,
+						JSON.stringify({ ...verdict, candidateSha: gateSha }),
+					);
+				}
+
+				const result = await f.step(f.deadline - 1);
+				assert.equal(result.kind, "failed");
+
+				if (result.kind === "failed")
+					assert.equal(
+						result.reason,
+						drift ? "branch_moved" : "verdict_binding",
+					);
+				assert.deepEqual(f.writes, ["DELETE"]);
+			});
+	});
+});
+
+const suite: AcceptanceSuite = {
+	version: 2,
+	scenarios: [
+		{
+			id: "S1",
+			kind: "new_behavior",
+			criteria: ["A1"],
+			checks: ["a.test.ts"],
+			judge: null,
+		},
+		{
+			id: "S2",
+			kind: "preservation",
+			criteria: ["A2"],
+			checks: [],
+			judge: "Readability",
+		},
+	],
+	files: [
+		{
+			path: "a.test.ts",
+			type: "node:test",
+			content: "test('secret title',()=>{assert.ok(true)})",
+		},
+	],
+};
+
+const canary = `factory-holdout-${"0".repeat(64)}`;
+
+describe("bound validation verdicts", () => {
+	it("does not accept an empty check set", () => {
+		assert.equal(
+			verdictPasses({ ...passingVerdict(patch("a")), checks: [] }),
+			false,
+		);
+	});
+	it("does not accept missing required checks", () => {
+		assert.equal(
+			verdictPasses({
+				...passingVerdict(patch("a")),
+				checks: [{ name: "typecheck", passed: true }],
+			}),
+			false,
+		);
+	});
+	it("binds every identity and leaves judge criteria unjudged", () => {
+		const verdict = collectVerdict({
+			controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
+			...binding,
+			text: JSON.stringify(receipt),
+		});
+
+		assert.equal(verdictPasses(verdict), true);
+		assert.equal(verdict.candidateSha, candidateSha);
+		assert.equal(verdict.gateSha, gateSha);
+		assert.deepEqual(verdict.unjudged, ["S2"]);
+	});
+
+	for (const altered of [
+		{
+			requiredChecks: receipt.requiredChecks.filter(
+				(name) => name !== "heldout",
+			),
+			checks: receipt.checks.filter((check) => check.name !== "heldout"),
+		},
+		{ checks: [...receipt.checks, { name: "extra", exitCode: 0 }] },
+		{ checks: [] },
+		{ requiredChecks: [] },
+		{ checks: receipt.checks.slice(1) },
+		{ checks: [...receipt.checks, receipt.checks[0]] },
+		{ gateSha: "b".repeat(40) },
+		{ candidateSha: "b".repeat(40) },
+		{ heldoutDigest: digestOf("changed") },
+		{ nonce: "other" },
+		{ version: 1 },
+		{ status: "incomplete" },
+		{ status: "failed" },
+		{ modelCalls: 1 },
+		{
+			checks: receipt.checks.map((check) =>
+				check.name === "heldout" ? { ...check, exitCode: 1 } : check,
+			),
+		},
+	])
+		it(`fails closed on ${JSON.stringify(altered)}`, () => {
+			assert.equal(
+				collectVerdict({
+					controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
+					...binding,
+					text: JSON.stringify({ ...receipt, ...altered }),
+				}).pass,
+				false,
+			);
+		});
+
+	for (const conclusion of [
+		"cancelled",
+		"skipped",
+		"timed_out",
+		"failure",
+		null,
+	])
+		it(`does not pass conclusion ${conclusion}`, () => {
+			assert.equal(
+				collectVerdict({
+					controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
+					...binding,
+					run: { ...run, conclusion },
+					text: JSON.stringify(receipt),
+				}).pass,
+				false,
+			);
+		});
+	it("requires a completed run even with a success conclusion", () => {
+		assert.equal(
+			collectVerdict({
+				controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
+				...binding,
+				run: { ...run, status: "in_progress" },
+				text: JSON.stringify(receipt),
+			}).pass,
+			false,
+		);
+	});
+	it("refuses a gate revision different from the candidate base", () => {
+		assert.equal(
+			collectVerdict({
+				controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
+				...binding,
+				baseSha: candidateSha,
+				text: JSON.stringify(receipt),
+			}).pass,
+			false,
+		);
+	});
+	it("refuses a missing or malformed receipt", () => {
+		for (const text of [
+			null,
+			"{}",
+			"{",
+			JSON.stringify({ checks: [], requiredChecks: [] }),
+		])
+			assert.equal(
+				collectVerdict({
+					controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
+					...binding,
+					text,
+				}).pass,
+				false,
+			);
+	});
+	it("authenticates the run event, path, actors, nonce and creation time", () => {
+		assert.equal(
+			matchesCiRun(
+				run,
+				binding.candidateSha,
+				"nonce",
+				Date.parse(run.createdAt),
+				EXE_DEV_PLATFORM.controllerLogin,
+			),
+			true,
+		);
+
+		for (const altered of [
+			{ headBranch: "other" },
+			{ event: "push" },
+			{ path: ".github/workflows/check.yml" },
+			{ actor: "human" },
+			{ triggeringActor: "human" },
+			{ title: "wrong nonce" },
+			{ createdAt: "2000-01-01T00:00:00Z" },
+		])
+			assert.equal(
+				matchesCiRun(
+					{ ...run, ...altered },
+					binding.candidateSha,
+					"nonce",
+					Date.parse(run.createdAt),
+					EXE_DEV_PLATFORM.controllerLogin,
+				),
+				false,
+			);
+		assert.equal(parseCiRun({ id: 1, head_sha: "bad" }), null);
+	});
+});
+
+describe("generation-aware validation cleanup", () => {
+	for (const mode of ["active", "terminal", "finish_pending"])
+		it(`sweeps bounded archives and pending current state without mutating the book (${mode})`, async () => {
+			const root = mkdtempSync(join(tmpdir(), "factory-cleanup-generations-"));
+
+			try {
+				const fixture = candidateLifecycleFixture();
+				const terminal = mode !== "active";
+
+				const publishedHead =
+					fixture.history[0]?.certification?.verdict.candidateSha;
+
+				assert.ok(publishedHead && isGitSha(publishedHead));
+
+				const pending = handoffCandidate(fixture, {
+					kind: "observed",
+					now: 201,
+					main: null,
+					pr: {
+						kind: "merged",
+						number: 5,
+						head: publishedHead,
+						mergeSha: fixture.pin.originalBase,
+						actor: null,
+					},
+					executionAllowed: false,
+					capacityAvailable: false,
+					eligibility: "withdrawn",
+					readiness: { kind: "unavailable" },
+				}).state;
+
+				assert.equal(pending.kind, "selected");
+
+				const book =
+					mode === "finish_pending"
+						? pending
+						: terminal
+							? {
+									...fixture,
+									work: {
+										kind: "terminal" as const,
+										terminal: {
+											kind: "failed" as const,
+											reason: "validation_failed" as const,
+										},
+									},
+								}
+							: fixture;
+
+				const pin = book.pin;
+				const files = fileRunFiles(root);
+
+				const contract: Contract = {
+					version: 2,
+					runId: pin.runId,
+					issue: pin.issue,
+					base: { repo: pin.repo, sha: pin.originalBase },
+					snapshot: {
+						digest: digestOf("snapshot"),
+						source: "unedited",
+						eventId: "1",
+						eventAt: run.createdAt,
+					},
+					link: null,
+					summary: "fixture",
+					behavior: ["fixture"],
+					acceptance: [{ id: "A1", kind: "new_behavior", text: "fixture" }],
+					exclusions: [],
+					compatibility: [],
+					limits: [],
+					files: ["src/example.ts"],
+					evidence: [],
+				};
+
+				const bytes = contractBytes(contract);
+				assert.equal(
+					await files.writeContract({
+						contract,
+						bytes,
+						digest: contractDigestOf(bytes),
+					}),
+					true,
+				);
+				assert.equal(
+					await files.writeClaim({
+						runId: pin.runId,
+						issue: pin.issue,
+						eventId: "1",
+						seq: 1,
+						status: mode === "terminal" ? "failed" : "running",
+						stage: "validate",
+						attempt: 1,
+						usage: candidateUsage(book),
+						handoff: book,
+					}),
+					true,
+				);
+
+				const claimPath = join(root, "claims", `${pin.runId}.json`);
+				const originalClaim = readFileSync(claimPath, "utf8");
+
+				const refs = new Map<string, string>([
+					["main", pin.originalBase],
+					["owner/work", pin.originalBase],
+					[book.published?.branch ?? "factory/pr/unused", pin.originalBase],
+				]);
+
+				const deletes: string[] = [];
+				let refuse = true;
+
+				for (const g of candidateGenerations(book)) {
+					const publication = g.validation?.publication;
+					assert.ok(publication);
+					refs.set(publication.branch, publication.candidateSha);
+
+					if (g.verdict !== null)
+						writeFileSync(
+							join(
+								validationDir(
+									root,
+									pin.runId,
+									g.intent.round,
+									g.intent.generation,
+								),
+								"verdict.json",
+							),
+							JSON.stringify(g.verdict),
+							{ mode: 0o600 },
+						);
+				}
+
+				const exec: Exec = async (_command, args) => {
+					const method = args[args.indexOf("--method") + 1];
+
+					const path =
+						args
+							.find((arg) => arg.startsWith(`repos/${pin.repo}/`))
+							?.slice(`repos/${pin.repo}/`.length) ?? "";
+
+					const ok = (value: JsonValue) => ({
+						code: 0,
+						stdout: JSON.stringify(value),
+						stderr: "",
+					});
+
+					if (
+						path ===
+						"actions/workflows/ci.yml/runs?event=workflow_dispatch&per_page=100"
+					)
+						return ok({ workflow_runs: [] });
+
+					const branch = path.replace(/^git\/refs?\/heads\//, "");
+
+					if (method === "GET" && path.startsWith("git/ref/heads/")) {
+						const sha = refs.get(branch);
+
+						return sha === undefined
+							? { code: 1, stdout: "", stderr: "HTTP 404" }
+							: ok({ object: { sha } });
+					}
+
+					assert.equal(method, "DELETE");
+					assert.ok(path.startsWith("git/refs/heads/factory/run/"));
+
+					if (refuse) {
+						refuse = false;
+
+						return { code: 1, stdout: "", stderr: "HTTP 403" };
+					}
+
+					deletes.push(branch);
+					refs.delete(branch);
+
+					return ok({});
+				};
+
+				const config = {
+					platform: EXE_DEV_PLATFORM,
+					stateDir: root,
+					exec,
+					now: () => 201,
+				};
+
+				await sweepValidation(config);
+				const first = book.history[0]?.validation?.publication;
+				assert.ok(first);
+				assert.ok(
+					existsSync(
+						join(validationDir(root, pin.runId), "pending-deletion.json"),
+					),
+				);
+				refs.set(first.branch, "e".repeat(40));
+				await sweepValidation(config);
+				assert.equal(refs.get(first.branch), "e".repeat(40));
+				refs.set(first.branch, first.candidateSha);
+				await sweepValidation(config);
+				const count = deletes.length;
+				await sweepValidation(config);
+				assert.equal(deletes.length, count);
+				assert.equal(count, terminal ? 3 : 2);
+				assert.equal(
+					refs.has(book.current.validation?.publication?.branch ?? ""),
+					!terminal,
+				);
+				assert.equal(refs.get("main"), pin.originalBase);
+				assert.equal(refs.get("owner/work"), pin.originalBase);
+				assert.equal(refs.has(book.published?.branch ?? ""), true);
+				assert.equal(readFileSync(claimPath, "utf8"), originalClaim);
+
+				if (terminal)
+					assert.ok(
+						existsSync(
+							join(
+								validationDir(root, pin.runId, 0, 2),
+								"cleanup-validation.json",
+							),
+						),
+					);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		});
+});
+
+it("collection itself refuses a receipt from the wrong run actor or workflow", () => {
+	for (const change of [
+		{ actor: "human" },
+		{ headBranch: "other" },
+		{ event: "push" },
+		{ path: ".github/workflows/check.yml" },
+	])
+		assert.equal(
+			collectVerdict({
+				controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
+				...binding,
+				run: { ...run, ...change },
+				text: JSON.stringify(receipt),
+			}).pass,
+			false,
+		);
+});
+
+describe("published held-out bytes and repair feedback", () => {
+	it("publishes checks only and binds exact private bytes", () => {
+		const result = publishedSuite({
+			issue: 42,
+			suite,
+			canary,
+			acceptanceDigest: acceptanceDigestOf(suite, canary),
+		});
+
+		assert.deepEqual(
+			result.files.map((f) => f.path),
+			["test/acceptance/42/checks/a.test.ts"],
+		);
+		assert.match(
+			Buffer.from(result.files[0]?.bytes ?? []).toString(),
+			/factory-holdout-/,
+		);
+		assert.throws(
+			() =>
+				publishedSuite({
+					issue: 42,
+					suite,
+					canary,
+					acceptanceDigest: digestOf("wrong"),
+				}),
+			/acceptance_changed/,
+		);
+	});
+	it("does not pass a judge-only suite without executable files", () => {
+		const empty: AcceptanceSuite = { ...suite, files: [] };
+		assert.throws(
+			() =>
+				publishedSuite({
+					issue: 42,
+					suite: empty,
+					canary,
+					acceptanceDigest: acceptanceDigestOf(empty, canary),
+				}),
+			/empty_checks/,
+		);
+	});
+	it("maps only failed files to criterion IDs and texts, never test titles or source", () => {
+		const feedback = repairFeedback(
+			suite,
+			{
+				acceptance: [
+					{ id: "A1", kind: "new_behavior", text: "The approved behavior" },
+					{ id: "A2", kind: "preservation", text: "Readable" },
+				],
+			},
+			["test/acceptance/42/checks/a.test.ts", "outside.test.ts"],
+			"test/acceptance/42",
+		);
+
+		assert.deepEqual(feedback, [
+			{
+				scenario: "S1",
+				criteria: [{ id: "A1", text: "The approved behavior" }],
+			},
+		]);
+		assert.doesNotMatch(
+			JSON.stringify(feedback),
+			/secret|assert|test\.ts|Readability/,
+		);
+	});
+
+	describe("visible check facts for repair", () => {
+		const heldoutDir = "test/acceptance/42";
+		const canary = "CANARY-secret-bytes";
+		const leak = /secret-scenario|CANARY|canary|acceptance|checks\/|hidden|\\/;
+
+		// Runs candidate tests under the trusted gate reporter in a tree rooted
+		// at .../w/, as CI does, beside a published held-out suite.
+		const reporterLog = (tests: Record<string, string>) => {
+			const root = mkdtempSync(join(tmpdir(), "check-facts-"));
+
+			try {
+				const tree = join(root, "w");
+
+				for (const [path, text] of Object.entries({
+					[`${heldoutDir}/checks/secret-scenario.test.mjs`]: `export const canary = '${canary}';\n`,
+					...tests,
+				})) {
+					mkdirSync(join(tree, path, ".."), { recursive: true });
+					writeFileSync(join(tree, path), text);
+				}
+
+				const run = spawnSync(
+					process.execPath,
+					[
+						"--test",
+						"--test-concurrency=1",
+						`--test-reporter=${join(import.meta.dirname, "../../../.github/factory/gates/reporter.mjs")}`,
+						...Object.keys(tests),
+					],
+					// No inherited NODE_TEST_CONTEXT, so the child runs its own files.
+					{
+						cwd: tree,
+						encoding: "utf8",
+						timeout: 60_000,
+						env: { PATH: process.env.PATH },
+					},
+				);
+
+				return run.stdout + run.stderr;
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		};
+
+		it("never carries held-out names or bytes that a candidate test reads and fails with", () => {
+			const pad = "n".repeat(280);
+
+			const log = reporterLog({
+				"test/candidate.test.mjs": [
+					'import { test } from "node:test";',
+					'import assert from "node:assert/strict";',
+					'import { readdirSync, readFileSync } from "node:fs";',
+					"",
+					'test("suite is absent", () => {',
+					"\tlet names = [];",
+					`\ttry { names = readdirSync("${heldoutDir}/checks"); } catch { names = []; }`,
+					"\tassert.deepEqual(names, []);",
+					"});",
+					"",
+					'test("suite bytes are absent", () => {',
+					`\tconst path = "${heldoutDir}/checks/secret-scenario.test.mjs";`,
+					'\tassert.equal(readFileSync(path, "utf8").replaceAll(path, ""), "");',
+					"});",
+					"",
+					`test("${pad}", () => {`,
+					`\tthrow new Error("${heldoutDir}/checks/secret-scenario.test.mjs");`,
+					"});",
+					"",
+				].join("\n"),
+			});
+
+			// The real reporter does carry the leak; the facts must not.
+			assert.match(log, /secret-scenario\.test\.mjs/);
+			assert.match(log, new RegExp(canary));
+
+			const feedback = checkFeedback({
+				logs: new Map([["candidate_tests", log]]),
+				failed: ["candidate_tests"],
+				changedPaths: ["test/candidate.test.mjs"],
+				heldoutDir,
+			});
+
+			// One fact per failing file, its first failure's code, so the
+			// candidate cannot spell anything with a choice of codes.
+			assert.deepEqual(feedback, [
+				{
+					check: "candidate_tests",
+					file: "test/candidate.test.mjs",
+					code: "ERR_ASSERTION",
+				},
+			]);
+			assert.doesNotMatch(JSON.stringify(feedback), leak);
+		});
+
+		// Grok's probe: tsc follows an import into the excluded suite, so the
+		// candidate can place a probe per character and let only the line
+		// equal to the held-out byte fail. Line 67 is `C`.
+		it("gives a static check only its file, so no line, TS code or rule id can encode a held-out byte", () => {
+			const root = mkdtempSync(join(tmpdir(), "line-oracle-"));
+
+			try {
+				const probe = [
+					`import { canary } from "../${heldoutDir}/checks/secret.ts";`,
+					"type Secret = typeof canary;",
+					"type First = Secret extends `${infer C}${string}` ? C : never;",
+					"type Is<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;",
+					"type FailIf<T extends false> = T;",
+					...Array.from({ length: 60 }, () => ""),
+					...["B", "C", "D"].map(
+						(c) => `export type L${c} = FailIf<Is<First, "${c}">>;`,
+					),
+					"export const bad: unique symbol = canary;",
+					"",
+				].join("\n");
+
+				for (const [path, text] of Object.entries({
+					[`${heldoutDir}/checks/secret.ts`]: `export const canary = "${canary}";\n`,
+					"src/probe.ts": probe,
+					"tsconfig.json": JSON.stringify({
+						compilerOptions: {
+							target: "ES2023",
+							module: "NodeNext",
+							moduleResolution: "NodeNext",
+							strict: true,
+							allowImportingTsExtensions: true,
+							noEmit: true,
+							skipLibCheck: true,
+							types: [],
+						},
+						include: ["src", "test"],
+						exclude: ["test/acceptance/**"],
+					}),
+				})) {
+					mkdirSync(join(root, path, ".."), { recursive: true });
+					writeFileSync(join(root, path), text);
+				}
+
+				const run = spawnSync(
+					process.execPath,
+					[
+						join(
+							import.meta.dirname,
+							"../../../node_modules/typescript/bin/tsc",
+						),
+						"--noEmit",
+						"-p",
+						join(root, "tsconfig.json"),
+					],
+					{ cwd: root, encoding: "utf8", timeout: 60_000 },
+				);
+
+				const typecheck = run.stdout + run.stderr;
+
+				// The real compiler log carries the byte as a line number.
+				assert.match(typecheck, /src\/probe\.ts\(67,\d+\): error TS2344/);
+				assert.doesNotMatch(typecheck, /src\/probe\.ts\((66|68),/);
+
+				const lint = [
+					"  × anti-slop(require-readable-spacing): Expected blank line.",
+					"    ╭─[src/probe.ts:67:2]",
+					"src/probe.ts:68:1: error eslint(no-debugger): x",
+				].join("\n");
+
+				const feedback = checkFeedback({
+					logs: new Map([
+						["typecheck", typecheck],
+						["lint", lint],
+						["format", "src/probe.ts format ━━━━\n"],
+					]),
+					failed: ["typecheck", "lint", "format"],
+					changedPaths: ["src/probe.ts"],
+					heldoutDir,
+				});
+
+				assert.deepEqual(feedback, [
+					{ check: "typecheck", file: "src/probe.ts" },
+					{ check: "lint", file: "src/probe.ts" },
+					{ check: "format", file: "src/probe.ts" },
+				]);
+				assert.doesNotMatch(
+					JSON.stringify(feedback),
+					/\d|TS|anti-slop|eslint|"line"|"code"/,
+				);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		});
+
+		it("keeps only the fixed-form fact from a tool line, however long or disguised its held-out text", () => {
+			const changedPaths = ["src/a.ts", "test/provenance.test.ts"];
+
+			const typecheck = [
+				`src/a.ts(3,7): error TS2322: Type '"${canary}"' is not assignable to type 'Secret'.`,
+				`src/a.ts(4,1): error TS2307: ${"x".repeat(280)} test/acceptance/42/checks/secret-scenario.test.mjs ${canary}`,
+				`test/provenance.test.ts(5,1): error TS2305: test/./acceptance/42/checks/secret-scenario.test.mjs ${canary}`,
+				`test/provenance.test.ts(6,1): error TS2305: test\\acceptance\\42\\checks\\secret-scenario.test.mjs ${canary}`,
+				`test/acceptance/42/checks/secret-scenario.test.mjs(1,1): error TS1005: ${canary}`,
+				`src/a.ts(7,1): error TS${canary}: forged code`,
+			].join("\n");
+
+			const feedback = checkFeedback({
+				logs: new Map([["typecheck", typecheck]]),
+				failed: ["typecheck"],
+				changedPaths,
+				heldoutDir,
+			});
+
+			assert.deepEqual(feedback, [
+				{ check: "typecheck", file: "src/a.ts" },
+				{ check: "typecheck", file: "test/provenance.test.ts" },
+			]);
+			assert.doesNotMatch(JSON.stringify(feedback), leak);
+		});
+
+		it("maps an unknown candidate-test failure code to other, and a timeout to timeout", () => {
+			const log = `${JSON.stringify({
+				complete: true,
+				bad: true,
+				failures: [
+					{
+						file: "src/a.test.ts",
+						name: canary,
+						kind: "runtime_error",
+						code: `E_${canary}`,
+						message: canary,
+					},
+					{
+						file: "src/b.test.ts",
+						name: "b",
+						kind: "timeout",
+						code: null,
+						message: "",
+					},
+					{
+						file: "src/c.test.ts",
+						name: "c",
+						kind: "runtime_error",
+						code: "ENOENT",
+						message: canary,
+					},
+					{
+						file: "./src/c.test.ts",
+						name: "c",
+						kind: "runtime_error",
+						code: "EACCES",
+						message: "",
+					},
+					{
+						file: "src/c.test.ts.bak",
+						name: "c",
+						kind: "runtime_error",
+						code: "EPERM",
+						message: "",
+					},
+				],
+			})}\n`;
+
+			const feedback = checkFeedback({
+				logs: new Map([["candidate_tests", log]]),
+				failed: ["candidate_tests"],
+				changedPaths: ["src/a.test.ts", "src/b.test.ts", "src/c.test.ts"],
+				heldoutDir,
+			});
+
+			assert.deepEqual(feedback, [
+				{ check: "candidate_tests", file: "src/a.test.ts", code: "other" },
+				{ check: "candidate_tests", file: "src/b.test.ts", code: "timeout" },
+				{ check: "candidate_tests", file: "src/c.test.ts", code: "ENOENT" },
+			]);
+			assert.doesNotMatch(JSON.stringify(feedback), leak);
+		});
+
+		it("still names H4's lint and format file and its EROFS test file", () => {
+			const lint = [
+				"\u001b[31m  × anti-slop(require-readable-spacing): Expected blank line before this statement.\u001b[0m",
+				"    ╭─[test/provenance.test.ts:26:2]",
+				" 26 │   return root;",
+				"    ╰────",
+				"  × anti-slop(require-readable-spacing): Expected blank line before this statement.",
+				"    ╭─[test/provenance.test.ts:32:2]",
+				"  ⚠ eslint(no-unused-vars): Variable 'secret' is declared but never used.",
+				"    ╭─[test/provenance.test.ts:3:7]",
+				"  × eslint(no-unused-vars): Variable 'secret' is declared but never used.",
+				"    ╭─[src/untouched.ts:3:7]",
+				"  × eslint(no-debugger): `debugger` statement is not allowed",
+				"    ╭─[test/acceptance/42/checks/a.test.ts:1:1]",
+				"test/provenance.test.ts:35:2: error anti-slop(require-readable-spacing): Expected blank line before this statement.",
+				"Found 0 warnings and 3 errors.",
+			].join("\n");
+
+			const tests = `${JSON.stringify({
+				complete: true,
+				bad: true,
+				counts: {},
+				failures: ["keeps the provenance file", "restores the original"].map(
+					(name) => ({
+						file: "test/provenance.test.ts",
+						name,
+						kind: "runtime_error",
+						code: "EROFS",
+						message:
+							"EROFS: read-only file system, mkdtemp '/w/.provenance-test-XXXXXX'",
+					}),
+				),
+			})}\n`;
+
+			const feedback = checkFeedback({
+				logs: new Map([
+					["lint", lint],
+					["candidate_tests", tests],
+					[
+						"format",
+						"test/provenance.test.ts format ━━━━━━━━━━\n  × Formatter would have printed\n    5 │ - src/a.ts format\nscripts/provenance.sh.bak format ━━━\n",
+					],
+					["typecheck", "scripts/provenance.sh(1,1): error TS1005: x\n"],
+				]),
+				failed: ["lint", "candidate_tests", "format"],
+				changedPaths: [
+					"scripts/provenance.sh",
+					"test/provenance.test.ts",
+					"src/a.ts",
+				],
+				heldoutDir,
+			});
+
+			assert.deepEqual(feedback, [
+				{ check: "lint", file: "test/provenance.test.ts" },
+				{ check: "format", file: "test/provenance.test.ts" },
+				{
+					check: "candidate_tests",
+					file: "test/provenance.test.ts",
+					code: "EROFS",
+				},
+			]);
+		});
+
+		it("bounds the facts to 20 deduplicated entries shared across the failed checks", () => {
+			const changedPaths = Array.from({ length: 40 }, (_, i) => `src/f${i}.ts`);
+
+			const tsLines = (n: number) =>
+				Array.from(
+					{ length: n },
+					(_, i) => `src/f${i}.ts(${i + 1},1): error TS2322: x`,
+				).join("\n");
+
+			const lint = Array.from(
+				{ length: 30 },
+				(_, i) => `src/f${i}.ts:${i + 1}:1: error eslint(no-debugger): x`,
+			).join("\n");
+
+			const feedback = checkFeedback({
+				logs: new Map([
+					["typecheck", `${tsLines(40)}\n${tsLines(40)}`],
+					["lint", lint],
+					["format", "src/f0.ts format\nsrc/f0.ts format\n"],
+				]),
+				failed: ["typecheck", "lint", "format"],
+				changedPaths,
+				heldoutDir,
+			});
+
+			assert.equal(feedback.length, 20);
+			assert.equal(
+				new Set(feedback.map((entry) => JSON.stringify(entry))).size,
+				20,
+			);
+			assert.deepEqual(
+				["typecheck", "lint", "format"].map(
+					(check) => feedback.filter((entry) => entry.check === check).length,
+				),
+				[10, 9, 1],
+			);
+		});
+
+		it("re-checks stored facts against the changed paths and fixed forms before they reach feedback", () => {
+			const changedPaths = ["src/a.ts"];
+
+			// A stored checks.json is read back as parsed JSON.
+			const stored = (text: string): JsonValue => JSON.parse(text);
+
+			const good = [
+				{ check: "typecheck", file: "src/a.ts" },
+				{ check: "lint", file: "src/a.ts" },
+				{ check: "format", file: "src/a.ts" },
+				{ check: "candidate_tests", file: "src/a.ts", code: "EROFS" },
+			];
+
+			assert.deepEqual(
+				parseCheckFeedback(stored(JSON.stringify(good)), {
+					changedPaths,
+					heldoutDir,
+				}),
+				good,
+			);
+
+			for (const bad of [
+				{ check: "lint", lines: [`src/a.ts ${canary}`] },
+				{
+					check: "lint",
+					file: "src/a.ts",
+					line: 1,
+					code: "x",
+					message: canary,
+				},
+				{ check: "lint", file: "src/a.ts", line: 1, code: `A ${canary}` },
+				{ check: "typecheck", file: "src/a.ts", line: 1, code: "eslint/x" },
+				{ check: "typecheck", file: "src/b.ts", line: 1, code: "TS2322" },
+				{ check: "typecheck", file: "src/a.ts", line: 0, code: "TS2322" },
+				{ check: "typecheck", file: "src/a.ts", code: "TS2322" },
+				// Fix round 1 stored a line and a code for static checks.
+				{ check: "typecheck", file: "src/a.ts", line: 3, code: "TS2322" },
+				{
+					check: "lint",
+					file: "src/a.ts",
+					line: 26,
+					code: "anti-slop/require-readable-spacing",
+				},
+				{ check: "lint", file: "src/a.ts", code: "eslint/no-debugger" },
+				{ check: "lint", file: "src/a.ts", line: 26 },
+				{ check: "candidate_tests", file: "src/a.ts", code: null },
+				{ check: "candidate_tests", file: "src/a.ts" },
+				{ check: "candidate_tests", file: "src/a.ts", code: "E_SECRET" },
+				{ check: "candidate_tests", file: "src/a.ts", line: 1, code: "EROFS" },
+				{ check: "format", file: "src/a.ts", code: "other" },
+				{ check: "heldout", file: "src/a.ts" },
+			])
+				assert.equal(
+					parseCheckFeedback(stored(JSON.stringify([bad])), {
+						changedPaths,
+						heldoutDir,
+					}),
+					null,
+					JSON.stringify(bad),
+				);
+
+			const ref = { bindingDigest: digestOf("b"), recordDigest: digestOf("r") };
+
+			const scenarios = [
+				{ scenario: "S1", criteria: [{ id: "A1", text: "x" }] },
+			];
+
+			const checks =
+				parseCheckFeedback(stored(JSON.stringify(good)), {
+					changedPaths,
+					heldoutDir,
+				}) ?? [];
+
+			assert.deepEqual(
+				readFeedbackBytes(feedbackBytes(ref, [...scenarios, ...checks]), ref),
+				[...scenarios, ...checks],
+			);
+			assert.equal(
+				readFeedbackBytes(
+					feedbackBytes(ref, [
+						...scenarios,
+						// SAFETY: a stored file from before fix round 1 had free text.
+						{ check: "lint", lines: ["src/a.ts x"] } as never,
+					]),
+					ref,
+				),
+				null,
+			);
+			assert.equal(
+				readFeedbackBytes(
+					feedbackBytes(ref, [
+						...scenarios,
+						// SAFETY: a stored file from fix round 1 had a typecheck line and code.
+						{
+							check: "typecheck",
+							file: "src/a.ts",
+							line: 67,
+							code: "TS2344",
+						} as never,
+					]),
+					ref,
+				),
+				null,
+			);
+			assert.equal(
+				feedbackBytes(ref, scenarios),
+				`${JSON.stringify({ version: 2, assessment: ref, scenarios })}\n`,
+			);
+		});
+	});
+});

@@ -33,4 +33,4 @@ A qualified private acceptance suite permits build. Follow the run's patch summa
 
 Legacy drivers and probes keep their current paths until L02. Source-checked instructions are not native proof. Never lower a stage allowance to fit a lane cap.
 
-Deterministic recovery, hostile patches, exact storage limits, command provenance, delegation and sandbox-result regressions also run through `test/build.test.ts`, `test/orchestrator.test.ts`, `test/specify.test.ts` and `test/sandbox/runner.cases.ts`.
+Deterministic recovery, hostile patches, exact storage limits, command provenance, delegation and sandbox-result regressions also run through `test/src/candidate/build.test.ts`, `test/src/controller/orchestrator-*.test.ts`, `test/src/contract/specify.test.ts` and `test/host/sandbox/runner.test.ts`.

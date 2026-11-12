@@ -30,7 +30,7 @@
     "format:check": "biome format src extension host test .pi/skills docs/statecharts",
     "lint": "oxlint src extension host test .pi/skills docs/statecharts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "node --experimental-strip-types --test --test-concurrency=1 test/*.test.ts",
+    "test": "node --experimental-strip-types --test --test-concurrency=1 \"test/src/**/*.test.ts\" \"test/host/**/*.test.ts\"",
     "test:integration": "node --experimental-strip-types --test --test-concurrency=1 test/integration/*.test.ts"
   },
   "engines": {

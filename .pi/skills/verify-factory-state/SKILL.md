@@ -19,7 +19,7 @@ The last recorded runtime correspondence revision is `3c62fc7`. Do not treat the
 | `src/candidate/stages.ts` | Public `advance` delegates candidate policy to `handoffCandidate` |
 | `src/controller/orchestrator.ts`, `src/controller/recovery.ts` | Persisted intent, effect interpretation, captured callback, and restart recovery. `recovery.ts` turns an unsettled execution account back into its candidate event |
 | `src/github/publish.ts`, `host/controller/validation-sweep.ts`, `host/controller/candidate-port.ts` | Publication, non-force promotion, CI deadlines, and owned ref cleanup |
-| `test/handoff.test.ts`, `test/orchestrator.test.ts`, `test/publication.test.ts` | Runtime correspondence through the named F4 runner |
+| `test/src/candidate/handoff.test.ts`, `test/src/controller/orchestrator-*.test.ts`, `test/src/github/publication.test.ts` | Runtime correspondence through the named F4 runner |
 
 The configs retain six total generations, two shared repairs, three run-wide refreshes, and three issued review attempts per round. Abstract review, repair, and run quotas are 3, 3, and 8. Usage classes are 0 and 1, with prior usage 1. These are not substitutes for real token caps. Controller transport represents one restart and one fixed cleanup-focus generation per behavior, not concurrent cleanup of all refs.
 

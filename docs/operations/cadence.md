@@ -114,7 +114,7 @@ Exit 0 means the selected window completed as `proposed` or `no_delta`, includin
 
 ```bash
 TMPDIR="$HOME/.cache/f11t" FACTORY_REQUIRE_SANDBOX_TESTS=1 \
-  node --test test/cadence.test.ts
+  node --test test/src/maintenance/cadence.test.ts
 ```
 
 The native one-shot demo uses the real CLI, lock, sandbox executor, Pi RPC, bubblewrap, user systemd scopes, gateway and receipts. Only GitHub and the model upstream are fixtures. It files two proposals, then zero for paraphrased/rekeyed findings in a fresh audit, including a rejected issue. It files a partially invalid finding with only its valid evidence and drops an all-invalid finding while completing filing. It also verifies an unchanged checkout, no tool definitions in the actual provider request, numbered source delivery, a read-only mount that refuses a shell write, and a withheld response that proves the scheduled tick does not wait. Injected over-cap usage proves valid empty/finding answers settle, malformed JSON fails, and full usage plus the native cap event survive restart. The F12c extension of that demo runs `cadence --once --job reflect`, files one proposal citing both a ledger field and a score event, then files zero on repeat. A fresh isolated state forces another model answer, which also files zero after the original issue closes. A real `tick --once --json` over 25 locally seeded failures files one trigger issue, zero on repeat and zero after the fixture issue is closed, without another model request. Fixture state and its temporary asset bundle are isolated and removed by the test. A working user bus is mandatory with `FACTORY_REQUIRE_SANDBOX_TESTS=1`; otherwise that native case explicitly skips when the bus is unavailable.
@@ -134,7 +134,7 @@ Reflect's separate maximum-context test uses 8 KiB source, 16 KiB ledger, 8 KiB 
 Run the estimate and coverage check with:
 
 ```bash
-node --test --test-name-pattern='calibrates every job' test/cadence.test.ts
+node --test --test-name-pattern='calibrates every job' test/src/maintenance/cadence.test.ts
 ```
 
 The 32 KiB excerpt yields these worst-part estimates. Totals include the 8,800-token answer and 4,000-token reasoning reserve, or 10,000 answer plus 4,000 reasoning for reflect.

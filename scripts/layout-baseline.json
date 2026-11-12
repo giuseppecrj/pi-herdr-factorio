@@ -3135,32 +3135,135 @@
 			"kind": "paths",
 			"reader": "docs/statecharts/journey/replay-merge-mid-repair.ts",
 			"tokens": {
-				"[\"handoff\", \"orchestrator\", \"publication\"]": 1,
-				"new URL(`../../../test/${name}.test.ts`, import.meta.url)": 1
+				"new URL(`../../../${path}`, import.meta.url)": 1
 			},
 			"targets": [
 				{
-					"path": "test/handoff.test.ts",
+					"path": "test/src/candidate/handoff.test.ts",
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../../../test/handoff.test.ts"
+						"path": "../../../test/src/candidate/handoff.test.ts"
 					}
 				},
 				{
-					"path": "test/orchestrator.test.ts",
+					"path": "test/src/controller/orchestrator-dispatch.test.ts",
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../../../test/orchestrator.test.ts"
+						"path": "../../../test/src/controller/orchestrator-dispatch.test.ts"
 					}
 				},
 				{
-					"path": "test/publication.test.ts",
+					"path": "test/src/controller/orchestrator-base.test.ts",
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../../../test/publication.test.ts"
+						"path": "../../../test/src/controller/orchestrator-base.test.ts"
+					}
+				},
+				{
+					"path": "test/src/controller/orchestrator-host.test.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../../test/src/controller/orchestrator-host.test.ts"
+					}
+				},
+				{
+					"path": "test/src/controller/orchestrator-accounting.test.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../../test/src/controller/orchestrator-accounting.test.ts"
+					}
+				},
+				{
+					"path": "test/src/controller/orchestrator-claims.test.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../../test/src/controller/orchestrator-claims.test.ts"
+					}
+				},
+				{
+					"path": "test/src/controller/orchestrator-recovery.test.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../../test/src/controller/orchestrator-recovery.test.ts"
+					}
+				},
+				{
+					"path": "test/src/controller/orchestrator-usage.test.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../../test/src/controller/orchestrator-usage.test.ts"
+					}
+				},
+				{
+					"path": "test/src/controller/orchestrator-evidence.test.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../../test/src/controller/orchestrator-evidence.test.ts"
+					}
+				},
+				{
+					"path": "test/src/controller/orchestrator-build.test.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../../test/src/controller/orchestrator-build.test.ts"
+					}
+				},
+				{
+					"path": "test/src/controller/orchestrator-validation.test.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../../test/src/controller/orchestrator-validation.test.ts"
+					}
+				},
+				{
+					"path": "test/src/controller/orchestrator-acceptance.test.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../../test/src/controller/orchestrator-acceptance.test.ts"
+					}
+				},
+				{
+					"path": "test/src/controller/orchestrator-specify.test.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../../test/src/controller/orchestrator-specify.test.ts"
+					}
+				},
+				{
+					"path": "test/src/controller/orchestrator-ledger.test.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../../test/src/controller/orchestrator-ledger.test.ts"
+					}
+				},
+				{
+					"path": "test/src/controller/orchestrator-characterization.test.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../../test/src/controller/orchestrator-characterization.test.ts"
+					}
+				},
+				{
+					"path": "test/src/github/publication.test.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../../test/src/github/publication.test.ts"
 					}
 				}
 			]
@@ -3266,7 +3369,7 @@
 		{
 			"id": "test-reads-accept",
 			"kind": "paths",
-			"reader": "test/accept.test.ts",
+			"reader": "test/src/contract/accept.test.ts",
 			"tokens": {
 				"readFileSync(\"skills/acceptance/SKILL.md\"": 1,
 				"readFileSync(\".github/factory/gates/scan-rules.json\"": 1,
@@ -3290,7 +3393,7 @@
 		{
 			"id": "test-reads-artifacts",
 			"kind": "paths",
-			"reader": "test/artifacts.test.ts",
+			"reader": "test/src/contract/artifacts.test.ts",
 			"tokens": {
 				"\".pi/skills/verify-factory/probes/acceptance-isolation/self-test.mjs\"": 1,
 				"readFileSync(\"host/isolation/bwrap.ts\"": 1
@@ -3309,7 +3412,7 @@
 		{
 			"id": "test-reads-attention",
 			"kind": "paths",
-			"reader": "test/attention.test.ts",
+			"reader": "test/src/views/attention.test.ts",
 			"tokens": {
 				"\"--experimental-strip-types\", \"host/cli/index.ts\", \"status\"": 1
 			},
@@ -3323,7 +3426,7 @@
 		{
 			"id": "test-reads-base-check",
 			"kind": "paths",
-			"reader": "test/base-check.test.ts",
+			"reader": "test/src/candidate/base-check.test.ts",
 			"tokens": {
 				"resolve(\".github/factory/gates/reporter.mjs\")": 1,
 				"resolve(\".github/factory/gates\")": 3,
@@ -3352,9 +3455,9 @@
 		{
 			"id": "test-reads-build",
 			"kind": "paths",
-			"reader": "test/build.test.ts",
+			"reader": "test/src/candidate/build.test.ts",
 			"tokens": {
-				"new URL(\"./fixtures/build/commands.jsonl\", import.meta.url)": 1
+				"new URL(\"../../fixtures/build/commands.jsonl\", import.meta.url)": 1
 			},
 			"targets": [
 				{
@@ -3362,7 +3465,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "./fixtures/build/commands.jsonl"
+						"path": "../../fixtures/build/commands.jsonl"
 					}
 				}
 			]
@@ -3370,13 +3473,13 @@
 		{
 			"id": "test-reads-cadence",
 			"kind": "paths",
-			"reader": "test/cadence.test.ts",
+			"reader": "test/src/maintenance/cadence.test.ts",
 			"tokens": {
-				"new URL(\"../.github/factory/WORKFLOW.md\", import.meta.url)": 1,
-				"new URL(\"../skills/security-review/SKILL.md\", import.meta.url)": 1,
-				"new URL(\"fixtures/metrics/runs-2026-11-08.jsonl\", import.meta.url)": 1,
-				"new URL(\"fixtures/cadence/snapshot.json.gz\", import.meta.url)": 1,
-				"new URL(\"fixtures/cadence/calibration.json\", import.meta.url)": 1,
+				"new URL(\"../../../.github/factory/WORKFLOW.md\", import.meta.url)": 1,
+				"new URL(\"../../../skills/security-review/SKILL.md\", import.meta.url)": 1,
+				"new URL(\"../../fixtures/metrics/runs-2026-11-08.jsonl\", import.meta.url)": 1,
+				"new URL(\"../../fixtures/cadence/snapshot.json.gz\", import.meta.url)": 1,
+				"new URL(\"../../fixtures/cadence/calibration.json\", import.meta.url)": 1,
 				"join(sourceRoot, \"host/bundle/assets\"": 1
 			},
 			"targets": [
@@ -3385,7 +3488,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../.github/factory/WORKFLOW.md"
+						"path": "../../../.github/factory/WORKFLOW.md"
 					}
 				},
 				{
@@ -3393,7 +3496,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../skills/security-review/SKILL.md"
+						"path": "../../../skills/security-review/SKILL.md"
 					}
 				},
 				{
@@ -3401,7 +3504,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "fixtures/metrics/runs-2026-11-08.jsonl"
+						"path": "../../fixtures/metrics/runs-2026-11-08.jsonl"
 					}
 				},
 				{
@@ -3409,7 +3512,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "fixtures/cadence/snapshot.json.gz"
+						"path": "../../fixtures/cadence/snapshot.json.gz"
 					}
 				},
 				{
@@ -3417,7 +3520,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "fixtures/cadence/calibration.json"
+						"path": "../../fixtures/cadence/calibration.json"
 					}
 				},
 				{
@@ -3429,14 +3532,14 @@
 		{
 			"id": "test-reads-candidate-gates",
 			"kind": "paths",
-			"reader": "test/candidate-gates.test.ts",
+			"reader": "test/host/gates/candidate-gates.test.ts",
 			"tokens": {
 				"readFileSync(\".github/factory/gates/freeze.mjs\"": 1,
 				"readFileSync(\".github/factory/gates/reporter.mjs\"": 1,
 				"readFileSync(\".github/factory/gates/scan-rules.json\"": 1,
-				"new URL(\"../.github/factory/gates/freeze.mjs\", import.meta.url)": 1,
+				"new URL(\"../../../.github/factory/gates/freeze.mjs\", import.meta.url)": 1,
 				"join(root, \".github/factory/gates/gates.json\")": 2,
-				"join(root, \"package.json\")": 2,
+				"join(root, \"package.json\")": 3,
 				"join(root, \".github/workflows/check.yml\")": 1,
 				"join(root, \".github/workflows/ci.yml\")": 1
 			},
@@ -3458,7 +3561,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../.github/factory/gates/freeze.mjs"
+						"path": "../../../.github/factory/gates/freeze.mjs"
 					}
 				},
 				{
@@ -3482,9 +3585,9 @@
 		{
 			"id": "test-reads-dashboard",
 			"kind": "paths",
-			"reader": "test/dashboard.test.ts",
+			"reader": "test/host/viewer/dashboard.test.ts",
 			"tokens": {
-				"new URL(\"./fixtures/metrics/runs-2026-11-08.jsonl\", import.meta.url)": 1
+				"new URL( \"../../fixtures/metrics/runs-2026-11-08.jsonl\", import.meta.url, )": 1
 			},
 			"targets": [
 				{
@@ -3492,7 +3595,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "./fixtures/metrics/runs-2026-11-08.jsonl"
+						"path": "../../fixtures/metrics/runs-2026-11-08.jsonl"
 					}
 				}
 			]
@@ -3500,7 +3603,7 @@
 		{
 			"id": "test-reads-decisions-format",
 			"kind": "paths",
-			"reader": "test/decisions-format.test.ts",
+			"reader": "test/host/gates/decisions-format.test.ts",
 			"tokens": {
 				"join(repo, \"scripts/check-decisions.mjs\")": 1,
 				"const file = \"docs/decisions.tsv\"": 1,
@@ -3524,9 +3627,9 @@
 		{
 			"id": "test-reads-design-tokens",
 			"kind": "paths",
-			"reader": "test/design-tokens.test.ts",
+			"reader": "test/host/viewer/design-tokens.test.ts",
 			"tokens": {
-				"new URL(\"../host/viewer/design/tokens.css\", import.meta.url)": 1,
+				"new URL(\"../../../host/viewer/design/tokens.css\", import.meta.url)": 1,
 				"\"scripts/design-tokens.mjs\"": 1
 			},
 			"targets": [
@@ -3535,7 +3638,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../host/viewer/design/tokens.css"
+						"path": "../../../host/viewer/design/tokens.css"
 					}
 				},
 				{
@@ -3547,7 +3650,7 @@
 		{
 			"id": "test-reads-diagnosis",
 			"kind": "paths",
-			"reader": "test/diagnosis.test.ts",
+			"reader": "test/src/candidate/diagnosis.test.ts",
 			"tokens": {
 				"resolve(\"test/fixtures/oracle-corpus/patches\")": 1,
 				"for (const name of [\"freeze.mjs\", \"reporter.mjs\", \"scan-rules.json\"])": 1,
@@ -3596,7 +3699,7 @@
 		{
 			"id": "test-reads-draft-feedback",
 			"kind": "paths",
-			"reader": "test/draft-feedback.test.ts",
+			"reader": "test/src/candidate/draft-feedback.test.ts",
 			"tokens": {
 				"resolve(\".github/factory/gates/reporter.mjs\")": 2,
 				"resolve(\"host/gates/draft-reporter.mjs\")": 2
@@ -3615,9 +3718,9 @@
 		{
 			"id": "test-reads-explain",
 			"kind": "paths",
-			"reader": "test/explain.test.ts",
+			"reader": "test/src/views/explain.test.ts",
 			"tokens": {
-				"new URL(\"fixtures/metrics/runs-2026-11-08.jsonl\", import.meta.url)": 1,
+				"new URL(\"../../fixtures/metrics/runs-2026-11-08.jsonl\", import.meta.url)": 1,
 				"join(source, \"host/bundle/assets\"": 1
 			},
 			"targets": [
@@ -3626,7 +3729,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "fixtures/metrics/runs-2026-11-08.jsonl"
+						"path": "../../fixtures/metrics/runs-2026-11-08.jsonl"
 					}
 				},
 				{
@@ -3638,7 +3741,7 @@
 		{
 			"id": "test-reads-extension",
 			"kind": "paths",
-			"reader": "test/extension.test.ts",
+			"reader": "test/src/views/extension.test.ts",
 			"tokens": {
 				"readFileSync(\"package.json\"": 1
 			},
@@ -3670,9 +3773,9 @@
 		{
 			"id": "test-reads-feed",
 			"kind": "paths",
-			"reader": "test/feed.test.ts",
+			"reader": "test/src/views/feed.test.ts",
 			"tokens": {
-				"new URL(\"./fixtures/owner-feed/feed-v1.json\", import.meta.url)": 2
+				"new URL(\"../../fixtures/owner-feed/feed-v1.json\", import.meta.url)": 2
 			},
 			"targets": [
 				{
@@ -3680,7 +3783,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "./fixtures/owner-feed/feed-v1.json"
+						"path": "../../fixtures/owner-feed/feed-v1.json"
 					}
 				}
 			]
@@ -3688,9 +3791,10 @@
 		{
 			"id": "test-reads-github-adapter",
 			"kind": "paths",
-			"reader": "test/github-adapter.test.ts",
+			"reader": "test/src/github/github-adapter.test.ts",
 			"tokens": {
-				"new URL(\"./fixtures/feedback/github-review.json\", import.meta.url)": 2
+				"new URL(\"../../fixtures/feedback/github-review.json\", import.meta.url)": 1,
+				"new URL( \"../../fixtures/feedback/github-review.json\", import.meta.url, )": 1
 			},
 			"targets": [
 				{
@@ -3698,7 +3802,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "./fixtures/feedback/github-review.json"
+						"path": "../../fixtures/feedback/github-review.json"
 					}
 				}
 			]
@@ -3706,9 +3810,9 @@
 		{
 			"id": "test-reads-install-exe-dev",
 			"kind": "paths",
-			"reader": "test/install-exe-dev.test.ts",
+			"reader": "test/host/install/install-exe-dev.test.ts",
 			"tokens": {
-				"new URL(\"../host/install/install-exe-dev.sh\", import.meta.url)": 1,
+				"new URL(\"../../../host/install/install-exe-dev.sh\", import.meta.url)": 1,
 				"join(root, \"host/install/factory.service\")": 2
 			},
 			"targets": [
@@ -3717,7 +3821,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../host/install/install-exe-dev.sh"
+						"path": "../../../host/install/install-exe-dev.sh"
 					}
 				},
 				{
@@ -3815,7 +3919,7 @@
 		{
 			"id": "test-reads-layout",
 			"kind": "paths",
-			"reader": "test/layout.test.ts",
+			"reader": "test/host/gates/layout.test.ts",
 			"tokens": {
 				"join(repo, \"scripts/check-layout.mjs\")": 1,
 				"join(repo, \"scripts/check-decisions.mjs\")": 1
@@ -3834,9 +3938,9 @@
 		{
 			"id": "test-reads-ledger",
 			"kind": "paths",
-			"reader": "test/ledger.test.ts",
+			"reader": "test/src/ledger/ledger.test.ts",
 			"tokens": {
-				"new URL(\"./fixtures/metrics/runs-2026-11-08.jsonl\", import.meta.url)": 1
+				"new URL( \"../../fixtures/metrics/runs-2026-11-08.jsonl\", import.meta.url, )": 1
 			},
 			"targets": [
 				{
@@ -3844,7 +3948,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "./fixtures/metrics/runs-2026-11-08.jsonl"
+						"path": "../../fixtures/metrics/runs-2026-11-08.jsonl"
 					}
 				}
 			]
@@ -3852,13 +3956,13 @@
 		{
 			"id": "test-reads-ledger-pins",
 			"kind": "paths",
-			"reader": "test/ledger-pins.test.ts",
+			"reader": "test/src/ledger/ledger-pins.test.ts",
 			"tokens": {
-				"new URL(\"./fixtures/metrics/runs-2026-11-08.jsonl\", import.meta.url)": 1,
-				"new URL(\"./ledger-real-git.ts\", import.meta.url)": 1,
-				"new URL(\"../src/ledger/schema.ts\", import.meta.url)": 1,
-				"new URL(\"../src/trust/platform.ts\", import.meta.url)": 1,
-				"new URL(\"../host/controller/outbox.ts\", import.meta.url)": 1
+				"new URL(\"../../fixtures/metrics/runs-2026-11-08.jsonl\", import.meta.url)": 1,
+				"new URL(\"../../ledger-real-git.ts\", import.meta.url)": 1,
+				"new URL(\"../../../src/ledger/schema.ts\", import.meta.url)": 1,
+				"new URL(\"../../../src/trust/platform.ts\", import.meta.url)": 1,
+				"new URL(\"../../../host/controller/outbox.ts\", import.meta.url)": 1
 			},
 			"targets": [
 				{
@@ -3866,7 +3970,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "./fixtures/metrics/runs-2026-11-08.jsonl"
+						"path": "../../fixtures/metrics/runs-2026-11-08.jsonl"
 					}
 				},
 				{
@@ -3874,7 +3978,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "./ledger-real-git.ts"
+						"path": "../../ledger-real-git.ts"
 					}
 				},
 				{
@@ -3882,7 +3986,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../host/controller/outbox.ts"
+						"path": "../../../host/controller/outbox.ts"
 					}
 				},
 				{
@@ -3890,7 +3994,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../src/ledger/schema.ts"
+						"path": "../../../src/ledger/schema.ts"
 					}
 				},
 				{
@@ -3898,7 +4002,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../src/trust/platform.ts"
+						"path": "../../../src/trust/platform.ts"
 					}
 				}
 			]
@@ -3906,11 +4010,11 @@
 		{
 			"id": "test-reads-metrics",
 			"kind": "paths",
-			"reader": "test/metrics.test.ts",
+			"reader": "test/src/views/metrics.test.ts",
 			"tokens": {
-				"new URL(\"./fixtures/metrics/runs-2026-11-08.jsonl\", import.meta.url)": 1,
-				"new URL(\"../src/views/metrics.ts\", import.meta.url)": 1,
-				"new URL(\"../host/cli/index.ts\", import.meta.url)": 2
+				"new URL(\"../../fixtures/metrics/runs-2026-11-08.jsonl\", import.meta.url)": 1,
+				"new URL(\"../../../src/views/metrics.ts\", import.meta.url)": 1,
+				"new URL(\"../../../host/cli/index.ts\", import.meta.url)": 2
 			},
 			"targets": [
 				{
@@ -3918,7 +4022,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "./fixtures/metrics/runs-2026-11-08.jsonl"
+						"path": "../../fixtures/metrics/runs-2026-11-08.jsonl"
 					}
 				},
 				{
@@ -3926,7 +4030,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../src/views/metrics.ts"
+						"path": "../../../src/views/metrics.ts"
 					}
 				},
 				{
@@ -3934,25 +4038,17 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../host/cli/index.ts"
+						"path": "../../../host/cli/index.ts"
 					}
 				}
 			]
 		},
 		{
-			"id": "test-reads-orchestrator",
+			"id": "test-reads-orchestrator-orchestrator-host",
 			"kind": "paths",
-			"reader": "test/orchestrator.test.ts",
+			"reader": "test/src/controller/orchestrator-host.test.ts",
 			"tokens": {
-				"new URL(\"../host/install/factory.service\", import.meta.url)": 1,
-				"new URL(\"../host/controller/lock.ts\", import.meta.url)": 1,
-				"\"../.pi/skills/verify-factory/features/sandbox-stage.md\"": 1,
-				"\"./fixtures/feedback/github-review.json\"": 2,
-				"new URL(\"../src/controller/orchestrator.ts\", import.meta.url)": 1,
-				"new URL(\"../src/trust/admission.ts\", import.meta.url)": 1,
-				"new URL(\"./fake-ticket-adapter.ts\", import.meta.url)": 1,
-				"new URL(\"../host/sandbox/result.ts\", import.meta.url)": 1,
-				"new URL(\"../src/trust/platform.ts\", import.meta.url)": 1
+				"new URL(\"../../../host/install/factory.service\", import.meta.url)": 1
 			},
 			"targets": [
 				{
@@ -3960,31 +4056,61 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../host/install/factory.service"
+						"path": "../../../host/install/factory.service"
 					}
-				},
+				}
+			]
+		},
+		{
+			"id": "test-reads-orchestrator-orchestrator-evidence",
+			"kind": "paths",
+			"reader": "test/src/controller/orchestrator-evidence.test.ts",
+			"tokens": {
+				"new URL( \"../../../host/controller/lock.ts\", import.meta.url, )": 1
+			},
+			"targets": [
 				{
 					"path": "host/controller/lock.ts",
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../host/controller/lock.ts"
+						"path": "../../../host/controller/lock.ts"
 					}
-				},
+				}
+			]
+		},
+		{
+			"id": "test-reads-orchestrator-orchestrator-build",
+			"kind": "paths",
+			"reader": "test/src/controller/orchestrator-build.test.ts",
+			"tokens": {
+				"\"../../../.pi/skills/verify-factory/features/sandbox-stage.md\"": 1
+			},
+			"targets": [
 				{
 					"path": ".pi/skills/verify-factory/features/sandbox-stage.md",
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../.pi/skills/verify-factory/features/sandbox-stage.md"
+						"path": "../../../.pi/skills/verify-factory/features/sandbox-stage.md"
 					}
-				},
+				}
+			]
+		},
+		{
+			"id": "test-reads-orchestrator-orchestrator-validation",
+			"kind": "paths",
+			"reader": "test/src/controller/orchestrator-validation.test.ts",
+			"tokens": {
+				"\"../../fixtures/feedback/github-review.json\"": 2
+			},
+			"targets": [
 				{
 					"path": "test/fixtures/feedback/github-review.json",
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "./fixtures/feedback/github-review.json"
+						"path": "../../fixtures/feedback/github-review.json"
 					}
 				},
 				{
@@ -4051,9 +4177,9 @@
 		{
 			"id": "test-reads-platform",
 			"kind": "paths",
-			"reader": "test/platform.test.ts",
+			"reader": "test/src/trust/platform.test.ts",
 			"tokens": {
-				"new URL(\"../host/gateway/main.ts\", import.meta.url)": 1
+				"new URL(\"../../../host/gateway/main.ts\", import.meta.url)": 1
 			},
 			"targets": [
 				{
@@ -4061,7 +4187,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../host/gateway/main.ts"
+						"path": "../../../host/gateway/main.ts"
 					}
 				}
 			]
@@ -4069,10 +4195,10 @@
 		{
 			"id": "test-reads-provision",
 			"kind": "paths",
-			"reader": "test/provision.test.ts",
+			"reader": "test/host/install/provision.test.ts",
 			"tokens": {
-				"new URL(\"../host/install/provision.sh\", import.meta.url)": 1,
-				"new URL(\"../host/install/factory.service\", import.meta.url)": 1
+				"new URL(\"../../../host/install/provision.sh\", import.meta.url)": 1,
+				"new URL(\"../../../host/install/factory.service\", import.meta.url)": 1
 			},
 			"targets": [
 				{
@@ -4080,7 +4206,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../host/install/provision.sh"
+						"path": "../../../host/install/provision.sh"
 					}
 				},
 				{
@@ -4088,7 +4214,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../host/install/factory.service"
+						"path": "../../../host/install/factory.service"
 					}
 				}
 			]
@@ -4096,14 +4222,14 @@
 		{
 			"id": "test-reads-replay",
 			"kind": "paths",
-			"reader": "test/replay.test.ts",
+			"reader": "test/src/maintenance/replay.test.ts",
 			"tokens": {
-				"new URL(\"./fixtures/replay/\", import.meta.url)": 1,
-				"new URL(\"./fixtures/metrics/runs-2026-11-08.jsonl\", import.meta.url)": 1,
-				"new URL(\"../src/maintenance/replay.ts\", import.meta.url)": 2,
-				"new URL(\"../src/trust/platform.ts\", import.meta.url)": 1,
-				"\"../.pi/skills/verify-factory/scripts/drive-replay.sh\"": 1,
-				"\"../.pi/skills/verify-factory/scripts/drive-replay.ts\"": 1
+				"new URL(\"../../fixtures/replay/\", import.meta.url)": 1,
+				"new URL(\"../../fixtures/metrics/runs-2026-11-08.jsonl\", import.meta.url)": 1,
+				"new URL(\"../../../src/maintenance/replay.ts\", import.meta.url)": 2,
+				"new URL(\"../../../src/trust/platform.ts\", import.meta.url)": 1,
+				"\"../../../.pi/skills/verify-factory/scripts/drive-replay.sh\"": 1,
+				"\"../../../.pi/skills/verify-factory/scripts/drive-replay.ts\"": 1
 			},
 			"targets": [
 				{
@@ -4111,7 +4237,7 @@
 					"type": "dir",
 					"via": {
 						"from": "reader",
-						"path": "./fixtures/replay"
+						"path": "../../fixtures/replay"
 					}
 				},
 				{
@@ -4119,7 +4245,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "./fixtures/metrics/runs-2026-11-08.jsonl"
+						"path": "../../fixtures/metrics/runs-2026-11-08.jsonl"
 					}
 				},
 				{
@@ -4127,7 +4253,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../src/maintenance/replay.ts"
+						"path": "../../../src/maintenance/replay.ts"
 					}
 				},
 				{
@@ -4135,7 +4261,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../src/trust/platform.ts"
+						"path": "../../../src/trust/platform.ts"
 					}
 				},
 				{
@@ -4143,7 +4269,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../.pi/skills/verify-factory/scripts/drive-replay.sh"
+						"path": "../../../.pi/skills/verify-factory/scripts/drive-replay.sh"
 					}
 				},
 				{
@@ -4151,7 +4277,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../.pi/skills/verify-factory/scripts/drive-replay.ts"
+						"path": "../../../.pi/skills/verify-factory/scripts/drive-replay.ts"
 					}
 				}
 			]
@@ -4159,11 +4285,11 @@
 		{
 			"id": "test-reads-sandbox-assets",
 			"kind": "paths",
-			"reader": "test/sandbox/assets.cases.ts",
+			"reader": "test/host/sandbox/assets.test.ts",
 			"tokens": {
-				"new URL(\"../../host/bundle/assets/\", import.meta.url)": 1,
-				"new URL(\"../../package-lock.json\", import.meta.url)": 1,
-				"new URL(\"../../host/install/provision.sh\", import.meta.url)": 1
+				"new URL(\"../../../host/bundle/assets/\", import.meta.url)": 1,
+				"new URL(\"../../../package-lock.json\", import.meta.url)": 1,
+				"new URL(\"../../../host/install/provision.sh\", import.meta.url)": 1
 			},
 			"targets": [
 				{
@@ -4171,7 +4297,7 @@
 					"type": "dir",
 					"via": {
 						"from": "reader",
-						"path": "../../host/bundle/assets"
+						"path": "../../../host/bundle/assets"
 					}
 				},
 				{
@@ -4179,7 +4305,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../../package-lock.json"
+						"path": "../../../package-lock.json"
 					}
 				},
 				{
@@ -4187,7 +4313,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../../host/install/provision.sh"
+						"path": "../../../host/install/provision.sh"
 					}
 				}
 			]
@@ -4195,15 +4321,15 @@
 		{
 			"id": "test-reads-sandbox-gateway",
 			"kind": "paths",
-			"reader": "test/sandbox/gateway.cases.ts",
+			"reader": "test/host/sandbox/gateway.test.ts",
 			"tokens": {
 				"new URL(\"./http-fixtures.ts\", import.meta.url)": 1,
-				"\"./fixtures/pi-1.4.0-anthropic-accept-request.json\"": 1,
-				"new URL(\"../../host/gateway/main.ts\", import.meta.url)": 3
+				"\"../../sandbox/fixtures/pi-1.4.0-anthropic-accept-request.json\"": 1,
+				"new URL(\"../../../host/gateway/main.ts\", import.meta.url)": 3
 			},
 			"targets": [
 				{
-					"path": "test/sandbox/http-fixtures.ts",
+					"path": "test/host/sandbox/http-fixtures.ts",
 					"type": "file",
 					"via": {
 						"from": "reader",
@@ -4215,7 +4341,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "./fixtures/pi-1.4.0-anthropic-accept-request.json"
+						"path": "../../sandbox/fixtures/pi-1.4.0-anthropic-accept-request.json"
 					}
 				},
 				{
@@ -4223,7 +4349,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../../host/gateway/main.ts"
+						"path": "../../../host/gateway/main.ts"
 					}
 				}
 			]
@@ -4231,9 +4357,9 @@
 		{
 			"id": "test-reads-sandbox-launcher",
 			"kind": "paths",
-			"reader": "test/sandbox/launcher.cases.ts",
+			"reader": "test/host/sandbox/launcher.test.ts",
 			"tokens": {
-				"new URL(\"../../host/install/provision.sh\", import.meta.url)": 1,
+				"new URL(\"../../../host/install/provision.sh\", import.meta.url)": 1,
 				"new URL(\"./receipt-exit.ts\", import.meta.url)": 1
 			},
 			"targets": [
@@ -4242,11 +4368,11 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../../host/install/provision.sh"
+						"path": "../../../host/install/provision.sh"
 					}
 				},
 				{
-					"path": "test/sandbox/receipt-exit.ts",
+					"path": "test/host/sandbox/receipt-exit.ts",
 					"type": "file",
 					"via": {
 						"from": "reader",
@@ -4258,17 +4384,17 @@
 		{
 			"id": "test-reads-sandbox-runner",
 			"kind": "paths",
-			"reader": "test/sandbox/runner.cases.ts",
+			"reader": "test/host/sandbox/runner.test.ts",
 			"tokens": {
-				"new URL(\"./fixtures/\", import.meta.url)": 1,
-				"new URL(\"../fixtures/build/commands.jsonl\", import.meta.url)": 1,
-				"new URL(\"../fixtures/efficiency/accept-replay.json\", import.meta.url)": 1,
+				"new URL(\"../../sandbox/fixtures/\", import.meta.url)": 1,
+				"new URL(\"../../fixtures/build/commands.jsonl\", import.meta.url)": 1,
+				"new URL( \"../../fixtures/efficiency/accept-replay.json\", import.meta.url, )": 1,
 				"readFileSync(\".github/factory/WORKFLOW.md\"": 1,
 				"join(process.cwd(), \".github/factory/gates\")": 1,
-				"new URL(\"../fixtures/efficiency/replay.json\", import.meta.url)": 1,
-				"new URL(\"../../.github/factory/WORKFLOW.md\", import.meta.url)": 1,
+				"new URL(\"../../fixtures/efficiency/replay.json\", import.meta.url)": 1,
+				"new URL(\"../../../.github/factory/WORKFLOW.md\", import.meta.url)": 1,
 				"new URL(\"./fake-pi.ts\", import.meta.url)": 1,
-				"new URL(\"../../skills/address-pr-comments/SKILL.md\", import.meta.url)": 1
+				"new URL( \"../../../skills/address-pr-comments/SKILL.md\", import.meta.url, )": 1
 			},
 			"targets": [
 				{
@@ -4276,7 +4402,7 @@
 					"type": "dir",
 					"via": {
 						"from": "reader",
-						"path": "./fixtures"
+						"path": "../../sandbox/fixtures"
 					}
 				},
 				{
@@ -4284,7 +4410,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../fixtures/build/commands.jsonl"
+						"path": "../../fixtures/build/commands.jsonl"
 					}
 				},
 				{
@@ -4292,7 +4418,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../fixtures/efficiency/accept-replay.json"
+						"path": "../../fixtures/efficiency/accept-replay.json"
 					}
 				},
 				{
@@ -4308,7 +4434,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../fixtures/efficiency/replay.json"
+						"path": "../../fixtures/efficiency/replay.json"
 					}
 				},
 				{
@@ -4316,11 +4442,11 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../../.github/factory/WORKFLOW.md"
+						"path": "../../../.github/factory/WORKFLOW.md"
 					}
 				},
 				{
-					"path": "test/sandbox/fake-pi.ts",
+					"path": "test/host/sandbox/fake-pi.ts",
 					"type": "file",
 					"via": {
 						"from": "reader",
@@ -4332,7 +4458,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../../skills/address-pr-comments/SKILL.md"
+						"path": "../../../skills/address-pr-comments/SKILL.md"
 					}
 				}
 			]
@@ -4340,9 +4466,10 @@
 		{
 			"id": "test-reads-scorers",
 			"kind": "paths",
-			"reader": "test/scorers.test.ts",
+			"reader": "test/src/maintenance/scorers.test.ts",
 			"tokens": {
-				"new URL(\"fixtures/metrics/runs-2026-11-08.jsonl\", import.meta.url)": 2
+				"new URL(\"../../fixtures/metrics/runs-2026-11-08.jsonl\", import.meta.url)": 1,
+				"new URL( \"../../fixtures/metrics/runs-2026-11-08.jsonl\", import.meta.url, )": 1
 			},
 			"targets": [
 				{
@@ -4350,7 +4477,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "fixtures/metrics/runs-2026-11-08.jsonl"
+						"path": "../../fixtures/metrics/runs-2026-11-08.jsonl"
 					}
 				}
 			]
@@ -4358,7 +4485,7 @@
 		{
 			"id": "test-reads-status-driver",
 			"kind": "paths",
-			"reader": "test/status-driver.test.ts",
+			"reader": "test/host/cli/status-driver.test.ts",
 			"tokens": {
 				"const driver = \".pi/skills/verify-factory/scripts/status-driver.ts\"": 1,
 				"resolve(driver)": 1
@@ -4373,10 +4500,11 @@
 		{
 			"id": "test-reads-validation",
 			"kind": "paths",
-			"reader": "test/validation.test.ts",
+			"reader": "test/src/candidate/validation.test.ts",
 			"tokens": {
-				"new URL(\"../.github/workflows/ci.yml\", import.meta.url)": 1,
-				"join(import.meta.dirname, \"../.github/factory/gates/reporter.mjs\")": 1
+				"new URL(\"../../../.github/workflows/ci.yml\", import.meta.url)": 1,
+				"join(import.meta.dirname, \"../../../.github/factory/gates/reporter.mjs\")": 1,
+				"\"../../../node_modules/typescript/bin/tsc\"": 1
 			},
 			"targets": [
 				{
@@ -4384,7 +4512,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../.github/workflows/ci.yml"
+						"path": "../../../.github/workflows/ci.yml"
 					}
 				},
 				{
@@ -4392,7 +4520,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../.github/factory/gates/reporter.mjs"
+						"path": "../../../.github/factory/gates/reporter.mjs"
 					}
 				}
 			]
@@ -4400,11 +4528,11 @@
 		{
 			"id": "test-reads-viewer-style",
 			"kind": "paths",
-			"reader": "test/viewer-style.test.ts",
+			"reader": "test/host/viewer/viewer-style.test.ts",
 			"tokens": {
-				"read(\"../host/viewer/style.css\")": 2,
-				"read(\"../host/viewer/design/tokens.css\")": 1,
-				"read(\"../host/viewer/design/tokens.json\")": 1
+				"read(\"../../../host/viewer/style.css\")": 2,
+				"read(\"../../../host/viewer/design/tokens.css\")": 1,
+				"read(\"../../../host/viewer/design/tokens.json\")": 1
 			},
 			"targets": [
 				{
@@ -4412,7 +4540,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../host/viewer/style.css"
+						"path": "../../../host/viewer/style.css"
 					}
 				},
 				{
@@ -4420,7 +4548,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../host/viewer/design/tokens.css"
+						"path": "../../../host/viewer/design/tokens.css"
 					}
 				},
 				{
@@ -4428,7 +4556,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../host/viewer/design/tokens.json"
+						"path": "../../../host/viewer/design/tokens.json"
 					}
 				}
 			]
@@ -4436,9 +4564,9 @@
 		{
 			"id": "test-reads-viewer",
 			"kind": "paths",
-			"reader": "test/viewer.test.ts",
+			"reader": "test/host/viewer/viewer.test.ts",
 			"tokens": {
-				"new URL(\"../host/viewer/evidence.ts\", import.meta.url)": 1
+				"new URL(\"../../../host/viewer/evidence.ts\", import.meta.url)": 1
 			},
 			"targets": [
 				{
@@ -4446,7 +4574,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../host/viewer/evidence.ts"
+						"path": "../../../host/viewer/evidence.ts"
 					}
 				}
 			]
@@ -4454,17 +4582,17 @@
 		{
 			"id": "test-reads-config-contract-parity",
 			"kind": "paths",
-			"reader": "test/config-contract-parity.test.ts",
+			"reader": "test/src/contract/config-contract-parity.test.ts",
 			"tokens": {
-				"new URL(\"../src/config/schema.ts\", import.meta.url)": 1,
-				"new URL(\"../src/config/parse.ts\", import.meta.url)": 1,
-				"new URL(\"../src/config/load.ts\", import.meta.url)": 1,
-				"new URL(\"../src/config/views.ts\", import.meta.url)": 1,
-				"new URL(\"../src/contract/contract.ts\", import.meta.url)": 1,
-				"new URL(\"../src/contract/parse.ts\", import.meta.url)": 1,
-				"new URL(\"../src/contract/render.ts\", import.meta.url)": 1,
-				"new URL(\"../src/contract/prompt.ts\", import.meta.url)": 1,
-				"new URL(\"../src/contract/acceptance.ts\", import.meta.url)": 1
+				"new URL(\"../../../src/config/schema.ts\", import.meta.url)": 1,
+				"new URL(\"../../../src/config/parse.ts\", import.meta.url)": 1,
+				"new URL(\"../../../src/config/load.ts\", import.meta.url)": 1,
+				"new URL(\"../../../src/config/views.ts\", import.meta.url)": 1,
+				"new URL(\"../../../src/contract/contract.ts\", import.meta.url)": 1,
+				"new URL(\"../../../src/contract/parse.ts\", import.meta.url)": 1,
+				"new URL(\"../../../src/contract/render.ts\", import.meta.url)": 1,
+				"new URL(\"../../../src/contract/prompt.ts\", import.meta.url)": 1,
+				"new URL(\"../../../src/contract/acceptance.ts\", import.meta.url)": 1
 			},
 			"targets": [
 				{
@@ -4508,11 +4636,11 @@
 		{
 			"id": "test-reads-workflow",
 			"kind": "paths",
-			"reader": "test/workflow.test.ts",
+			"reader": "test/src/config/workflow.test.ts",
 			"tokens": {
 				"readFileSync(\".github/factory/WORKFLOW.md\"": 1,
-				"new URL(\"../host/cli/index.ts\", import.meta.url)": 2,
-				"new URL(\"../host/cli/platform.ts\", import.meta.url)": 1
+				"new URL(\"../../../host/cli/index.ts\", import.meta.url)": 2,
+				"new URL(\"../../../host/cli/platform.ts\", import.meta.url)": 1
 			},
 			"targets": [
 				{
@@ -4524,7 +4652,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../host/cli/index.ts"
+						"path": "../../../host/cli/index.ts"
 					}
 				},
 				{
@@ -4532,7 +4660,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../host/cli/platform.ts"
+						"path": "../../../host/cli/platform.ts"
 					}
 				}
 			]
@@ -4602,7 +4730,7 @@
 					"type": "file"
 				},
 				{
-					"path": "test/specify.test.ts",
+					"path": "test/src/contract/specify.test.ts",
 					"type": "file"
 				}
 			]
@@ -4952,7 +5080,7 @@
 		"trusted": {
 			"manifest": ".github/factory/gates/gates.json",
 			"materializer": "host/gates/manifest.ts",
-			"accepts": "/^test\\/(?:\\*\\.test\\.ts|sandbox\\/\\*\\.cases\\.ts|integration\\/\\*\\.test\\.ts)$/",
+			"accepts": "/^test\\/(?:(?:src|host)\\/\\*\\*\\/\\*\\.test\\.ts|integration\\/\\*\\.test\\.ts)$/",
 			"predicates": [
 				{
 					"file": "host/gates/manifest.ts",
@@ -4964,7 +5092,7 @@
 				},
 				{
 					"file": "host/gates/manifest.ts",
-					"expression": "tests: tests.filter((p) => !p.endsWith(\".cases.ts\"))"
+					"expression": "return { checks, tests };"
 				},
 				{
 					"file": "host/gates/gates.ts",

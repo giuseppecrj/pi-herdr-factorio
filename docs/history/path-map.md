@@ -174,4 +174,84 @@ Each row is bound to the pull request that made the move. Its squash commit on `
 | L13 | #761 | `server/viewer/render.ts` | `host/viewer/render.ts` | The whole file |
 | L13 | #761 | `server/viewer/style.css` | `host/viewer/style.css` | The whole file |
 
+| L14 | #762 | `test/admission.test.ts` | `test/src/trust/admission.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/authorization-parity.test.ts` | `test/src/trust/authorization-parity.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/markers.test.ts` | `test/src/trust/markers.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/platform.test.ts` | `test/src/trust/platform.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/policy.test.ts` | `test/src/trust/policy.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/accept.test.ts` | `test/src/contract/accept.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/artifacts.test.ts` | `test/src/contract/artifacts.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/specify.test.ts` | `test/src/contract/specify.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/config-contract-parity.test.ts` | `test/src/contract/config-contract-parity.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/base-check.test.ts` | `test/src/candidate/base-check.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/build.test.ts` | `test/src/candidate/build.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/diagnosis.test.ts` | `test/src/candidate/diagnosis.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/draft-feedback.test.ts` | `test/src/candidate/draft-feedback.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/feedback.test.ts` | `test/src/candidate/feedback.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/handoff.test.ts` | `test/src/candidate/handoff.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/review.test.ts` | `test/src/candidate/review.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/stages.test.ts` | `test/src/candidate/stages.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/validation.test.ts` | `test/src/candidate/validation.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/core.test.ts` | `test/src/core/core.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/github-adapter.test.ts` | `test/src/github/github-adapter.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/publication.test.ts` | `test/src/github/publication.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/workflow.test.ts` | `test/src/config/workflow.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/ledger.test.ts` | `test/src/ledger/ledger.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/ledger-pins.test.ts` | `test/src/ledger/ledger-pins.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/cadence.test.ts` | `test/src/maintenance/cadence.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/replay.test.ts` | `test/src/maintenance/replay.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/scorers.test.ts` | `test/src/maintenance/scorers.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/attention.test.ts` | `test/src/views/attention.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/explain.test.ts` | `test/src/views/explain.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/feed.test.ts` | `test/src/views/feed.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/metrics.test.ts` | `test/src/views/metrics.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/extension.test.ts` | `test/src/views/extension.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/candidate-gates.test.ts` | `test/host/gates/candidate-gates.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/layout.test.ts` | `test/host/gates/layout.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/decisions-format.test.ts` | `test/host/gates/decisions-format.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/package-load.test.ts` | `test/host/gates/package-load.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/host-controller.test.ts` | `test/host/controller/host-controller.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/layout-host-contract.test.ts` | `test/host/controller/layout-host-contract.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/dashboard.test.ts` | `test/host/viewer/dashboard.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/design-tokens.test.ts` | `test/host/viewer/design-tokens.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/viewer-style.test.ts` | `test/host/viewer/viewer-style.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/viewer.test.ts` | `test/host/viewer/viewer.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/install-exe-dev.test.ts` | `test/host/install/install-exe-dev.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/provision.test.ts` | `test/host/install/provision.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/accept-selfcheck.test.ts` | `test/host/sandbox/accept-selfcheck.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/pipeline.test.ts` | `test/src/controller/pipeline.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/status-driver.test.ts` | `test/host/cli/status-driver.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/sandbox/assets.cases.ts` | `test/host/sandbox/assets.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/sandbox/audit.cases.ts` | `test/host/sandbox/audit.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/sandbox/credentials.cases.ts` | `test/host/sandbox/credentials.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/sandbox/fake-pi.ts` | `test/host/sandbox/fake-pi.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/sandbox/gateway.cases.ts` | `test/host/sandbox/gateway.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/sandbox/http-fixtures.ts` | `test/host/sandbox/http-fixtures.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/sandbox/launcher.cases.ts` | `test/host/sandbox/launcher.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/sandbox/policy.cases.ts` | `test/host/sandbox/policy.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/sandbox/receipt-exit.ts` | `test/host/sandbox/receipt-exit.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/sandbox/routes.cases.ts` | `test/host/sandbox/routes.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/sandbox/runner.cases.ts` | `test/host/sandbox/runner.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/sandbox/settlement-fixtures.ts` | `test/host/sandbox/settlement-fixtures.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/native-scope.ts` | `test/host/sandbox/native-scope.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/orchestrator.test.ts` | `test/src/controller/orchestrator-dispatch.test.ts` | Existing describe groups: `backoffMs`; `Orchestrator claims and dispatch`; `Orchestrator switches and per-tick reads`; `Orchestrator markers`; `Orchestrator restart recovery`; `Orchestrator retries and stalls` |
+| L14 | #762 | `test/orchestrator.test.ts` | `test/src/controller/orchestrator-base.test.ts` | Existing describe groups: `Orchestrator base qualification`; `Orchestrator stage results` |
+| L14 | #762 | `test/orchestrator.test.ts` | `test/src/controller/orchestrator-host.test.ts` | Existing describe groups: `checkIdentity`; `parseStartTime`; `server/cli.ts controller commands`; `Orchestrator runs of another state directory` |
+| L14 | #762 | `test/orchestrator.test.ts` | `test/src/controller/orchestrator-accounting.test.ts` | Existing describe groups: `admission accounting policy`; `durable attempt ends`; `fileRunFiles` |
+| L14 | #762 | `test/orchestrator.test.ts` | `test/src/controller/orchestrator-claims.test.ts` | Existing describe groups: `Orchestrator restart reads`; `Orchestrator new ready events`; `Orchestrator slot accounting`; `Orchestrator eligibility before launch`; `Orchestrator bot comment edits`; `Orchestrator live marker validation`; `Orchestrator local admission recovery`; `Orchestrator reconcile order`; `Orchestrator ledger behind the local claim record`; `Orchestrator claim record` |
+| L14 | #762 | `test/orchestrator.test.ts` | `test/src/controller/orchestrator-recovery.test.ts` | Existing describe groups: `Orchestrator terminal claim records`; `Orchestrator persisted claim slots`; `Orchestrator claims recorded before their first marker`; `Orchestrator before the first workflow load`; `Orchestrator retry workspace preparation`; `Orchestrator claims before their first marker whose event was replaced`; `Orchestrator cap reduction in a running process`; `Orchestrator workspace replay`; `Orchestrator loaded terminal records`; `Orchestrator claim record usage`; `Orchestrator release reasons`; `Orchestrator retry marker confirmation`; `Orchestrator same-second cache`; `Orchestrator stall aborts` |
+| L14 | #762 | `test/orchestrator.test.ts` | `test/src/controller/orchestrator-usage.test.ts` | Existing describe groups: `Orchestrator run allowance at launch`; `Orchestrator usage reported after a stall`; `Orchestrator logger receiver`; `Orchestrator late usage across a restart`; `Orchestrator tick order`; `Orchestrator timeline with no ready event`; `Orchestrator eligibility before adoption`; `Orchestrator attempt limit at retry launch`; `Orchestrator cap and claimed runs` |
+| L14 | #762 | `test/orchestrator.test.ts` | `test/src/controller/orchestrator-evidence.test.ts` | Existing describe groups: `Orchestrator refusals on unproved evidence`; `Orchestrator launch after a direct issue read`; `Orchestrator terminal marker trust`; `Orchestrator terminal memory across events`; `Orchestrator refusal classification`; `acquireLock` |
+| L14 | #762 | `test/orchestrator.test.ts` | `test/src/controller/orchestrator-build.test.ts` | Existing describe groups: `private build stage` |
+| L14 | #762 | `test/orchestrator.test.ts` | `test/src/controller/orchestrator-validation.test.ts` | Existing describe groups: `controller-only validate` |
+| L14 | #762 | `test/orchestrator.test.ts` | `test/src/controller/orchestrator-acceptance.test.ts` | Existing describe groups: `held-out acceptance stage`; `held-out acceptance stage: needs_info` |
+| L14 | #762 | `test/orchestrator.test.ts` | `test/src/controller/orchestrator-specify.test.ts` | Existing describe groups: `specify: contract`; `specify: no contract without a passing, valid output`; `specify: questions`; `specify: linked runs and answers` |
+| L14 | #762 | `test/orchestrator.test.ts` | `test/src/controller/orchestrator-ledger.test.ts` | Existing describe groups: `ledger outbox enrollment`; `terminal rows keep the real cause` |
+| L14 | #762 | `test/orchestrator.test.ts` | `test/src/controller/orchestrator-characterization.test.ts` | Existing describe groups: `L10 scheduling characterization`; `L10 fresh-process recovery characterization` |
+| L14 | #762 | `test/orchestrator.test.ts` | `test/src/controller/orchestrator-fixtures.ts` | Shared fixtures, helpers, types and temporary-state cleanup; no test registrations |
+| L14 | #762 | `test/sandbox.test.ts` | `test/host/sandbox/*.test.ts` | Aggregator deleted; its eight suites are directly discovered, not re-exported |
+
+| L14 | #762 | `test/sandbox/routes.cases.ts` | `test/host/sandbox/route-fixtures.ts` | `modelTable` and `anthropicTable`; shared fixtures register no tests |
+| L14 | #762 | `test/sandbox/credentials.cases.ts` | `test/host/sandbox/credential-fixtures.ts` | `ECHO_SECRET`, `LINEAR_CEILING`, `credentialedRoute`, `id` and `routeIdOf`; shared fixtures register no tests |
+
 L00 moves no files.

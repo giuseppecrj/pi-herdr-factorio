@@ -24,4 +24,4 @@ CLI source roots resolve two parents up from `cli/platform.ts`; the provisioner 
 
 ## Add behavior
 
-A CLI verb adds dispatch in `cli/index.ts`, implementation beside its closest handler and documentation in the CLI reference. Controller decision rules belong in `src/`; host effects belong under their matching owner here. Keep mutable jobs and caches with the function that owns them. A new file needs classification and inherited review seats in the layout baseline. Tests stay under `test/` until L14 mirrors them. Sandbox cases belong in `test/sandbox/`; `test/README.md` explains discovery.
+A CLI verb adds dispatch in `cli/index.ts`, implementation beside its closest handler and documentation in the CLI reference. Controller decision rules belong in `src/`; host effects belong under their matching owner here. Keep mutable jobs and caches with the function that owns them. A new file needs classification and inherited review seats in the layout baseline. Tests mirror their subsystem under `test/host/<group>/`. See `test/README.md`.

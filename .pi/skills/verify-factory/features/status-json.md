@@ -44,6 +44,6 @@ Compare stdout with [the registered extension](factory-status.md) on the same VM
 
 ## Gotchas
 
-`test/attention.test.ts` exercises real standalone CLI processes and the registered handler with saved synthetic state and fake external transport. That is local parsing/projection proof, not native factory handoff or live VM proof. The [handoff recipe](handoff.md) supplies native prerequisites. This targeted recipe update did not run those lanes.
+`test/src/views/attention.test.ts` exercises real standalone CLI processes and the registered handler with saved synthetic state and fake external transport. That is local parsing/projection proof, not native factory handoff or live VM proof. The [handoff recipe](handoff.md) supplies native prerequisites. This targeted recipe update did not run those lanes.
 
 Status needs no process cleanup. Preserve evidence, close only fixtures created under the lane grant, and let the fixture/controller owner clean its state. No service, owner action, or repository setting change is implied.

@@ -2,9 +2,24 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const files = ["handoff", "orchestrator", "publication"].map((name) =>
-	fileURLToPath(new URL(`../../../test/${name}.test.ts`, import.meta.url)),
-);
+const files = [
+	"test/src/candidate/handoff.test.ts",
+	"test/src/controller/orchestrator-dispatch.test.ts",
+	"test/src/controller/orchestrator-base.test.ts",
+	"test/src/controller/orchestrator-host.test.ts",
+	"test/src/controller/orchestrator-accounting.test.ts",
+	"test/src/controller/orchestrator-claims.test.ts",
+	"test/src/controller/orchestrator-recovery.test.ts",
+	"test/src/controller/orchestrator-usage.test.ts",
+	"test/src/controller/orchestrator-evidence.test.ts",
+	"test/src/controller/orchestrator-build.test.ts",
+	"test/src/controller/orchestrator-validation.test.ts",
+	"test/src/controller/orchestrator-acceptance.test.ts",
+	"test/src/controller/orchestrator-specify.test.ts",
+	"test/src/controller/orchestrator-ledger.test.ts",
+	"test/src/controller/orchestrator-characterization.test.ts",
+	"test/src/github/publication.test.ts",
+].map((path) => fileURLToPath(new URL(`../../../${path}`, import.meta.url)));
 
 const result = spawnSync(
 	process.execPath,

@@ -1,25 +1,28 @@
 # test
 
-`npm test` runs `test/*.test.ts`. `npm run test:integration` runs `test/integration/*.test.ts`. The trusted gate discovers the same files through the `testGlobs` in `.github/factory/gates/gates.json`, and `npm run check:layout` fails if the two sets differ. A test file anywhere else never runs, so the guard fails any test outside `test/*.test.ts` and `test/integration/*.test.ts`. The only exceptions are the held-out suites under `test/acceptance/**` and the payloads under `test/fixtures/**`.
+`npm test` runs `test/src/**/*.test.ts` and `test/host/**/*.test.ts`. The recursive globs are quoted so Node, rather than the shell, expands them at every depth. `npm run test:integration` runs `test/integration/*.test.ts` separately. Both keep concurrency 1. The trusted gate uses those same three globs from `.github/factory/gates/gates.json` at concurrency 2. `npm run check:layout` checks their parity and rejects executable tests outside discovery.
 
 | Path | What it holds |
 | --- | --- |
-| `<name>.test.ts` | Tests for modules under `src/` or `host/`, plus cross-module tests such as `pipeline.test.ts`. |
-| `sandbox.test.ts`, `sandbox/*.cases.ts` | Sandbox and gateway cases. `sandbox.test.ts` imports each `.cases.ts` file once. Other files in `sandbox/` are helpers. |
+| `src/<group>/*.test.ts` | Tests for the matching `src/<group>/` owner. The extension's domain-view tests live in `src/views/`. |
+| `host/<group>/*.test.ts` | Tests for the matching host subsystem. Repository guard and package tests live in `host/gates/`. |
+| `src/controller/orchestrator-*.test.ts` | The original orchestrator behavior groups, split at top-level `describe` boundaries. `orchestrator-fixtures.ts` owns their shared fake world and temporary-state cleanup; it registers no tests. |
+| `host/sandbox/` | Directly discovered sandbox and gateway tests, plus non-test support. There is no aggregator. |
 | `integration/` | Slow tests that drive real scripts, such as the replay driver. |
-| `fixtures/` | Data that tests read: corpora, patches, captures and snapshots. Nothing here runs on its own. |
-| `acceptance/` | Held-out suites that the factory publishes. Builders never read or edit them. Static checks and the layout guard exclude this folder. |
-| `helpers.ts`, `fake-ticket-adapter.ts`, `ledger-git.ts` | Shared helpers. They hold no tests. |
+| `fixtures/`, `sandbox/fixtures/` | Existing data roots. Captures, corpora, patches and snapshots stay where their readers expect them. Nothing here runs on its own. |
+| `acceptance/` | Published held-out suites. Builders never read or edit them. Static checks and visible discovery exclude this folder. |
+| `helpers.ts`, `fake-ticket-adapter.ts`, `ledger-git.ts`, `ledger-real-git.ts` | Shared non-test helpers. |
 
 ## Add a test
 
-- Name it `test/<name>.test.ts`, or `test/integration/<name>.test.ts` if it is slow.
-- Add a sandbox case file as `test/sandbox/<name>.cases.ts` and add one `import "./sandbox/<name>.cases.ts";` line to `sandbox.test.ts`. A cases file that no discovered test imports, or that two discovered tests import, fails `npm run check:layout`.
+- Name it `test/src/<group>/<name>.test.ts` or `test/host/<group>/<name>.test.ts`. Deeper owner subfolders are discovered too. Slow script tests belong in `test/integration/<name>.test.ts`.
+- Keep support files as ordinary `.ts` files without test registrations. Do not import a directly discovered test from another test. A retained `.cases.ts` must still have exactly one runtime importer and one discovered owner.
 - Create temporary files under `os.tmpdir()`. The gate runs the tree read-only.
+- New candidate tests run separately through `candidate_tests`. Once landed, a nested test joins the trusted baseline without a manifest edit.
 
 ## Frozen acceptance suites: do not edit
 
-Five published suites import source files by the paths they had when they were written:
+Five published suites retain their original-revision imports:
 
 - `acceptance/621/checks/exact-fit.test.ts`
 - `acceptance/621/checks/oversized.test.ts`
@@ -27,4 +30,4 @@ Five published suites import source files by the paths they had when they were w
 - `acceptance/645/checks/exact-empty.test.ts`
 - `acceptance/645/checks/unavailable.test.ts`
 
-They are historical outputs, not tests that current main runs. Do not edit them, even when the source files they import move. Their imports resolve only at the revision that published them.
+They are historical outputs, not tests that current main runs. Their imports resolve only at the revision that published them.
