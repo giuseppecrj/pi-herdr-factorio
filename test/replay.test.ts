@@ -1443,13 +1443,28 @@ describe("trusted replay policy and guards", () => {
 			"utf8",
 		);
 
+		const steps = await readFile(
+			new URL(
+				"../.pi/skills/verify-factory/scripts/drive-replay.ts",
+				import.meta.url,
+			),
+			"utf8",
+		);
+
+		assert.match(
+			steps.match(/^async function prepare\(\)[\s\S]*?^\}$/m)?.[0] ?? "",
+			/await reserveReplay\(/,
+		);
+
 		for (const guard of [
 			"FIXTURE_GRANT",
 			"production-state-dir",
-			"reserveReplay",
+			"replay_step prepare ",
 		])
 			assert.ok(
-				driver.indexOf(guard) < driver.indexOf("exec node server/cli.ts serve"),
+				driver.indexOf(guard) >= 0 &&
+					driver.indexOf(guard) <
+						driver.indexOf("exec node server/cli.ts serve"),
 				guard,
 			);
 		assert.match(driver, /--issue/);

@@ -173,5 +173,6 @@ Under the cleanup grant, clean residue after failed attempts too. Verify evidenc
 | `vm-snapshot.sh` | VM | `vm.sh vm-snapshot.sh <pr-id> <n> <minutes> <glob>` |
 | `cleanup.sh` | VM | `vm.sh cleanup.sh <pr-id> <n>` |
 | `status-driver.ts` | VM, run in place by `drive-status.sh` | `node --experimental-strip-types .pi/skills/verify-factory/scripts/status-driver.ts [status\|bogus]` from the lane checkout |
+| `drive-replay.ts` | VM, run by `drive-replay.sh` from the control checkout | not run directly |
 
 Use `SSH_AUTH_SOCK_OVERRIDE` to point `vm.sh` at a different agent socket.

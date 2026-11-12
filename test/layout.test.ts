@@ -635,7 +635,7 @@ describe("layout guard", () => {
 
 		it("runs each reader's own constant lookup against the declaration", () => {
 			const readers = [
-				".pi/skills/verify-factory/scripts/drive-replay.sh",
+				".pi/skills/verify-factory/scripts/drive-replay.ts",
 				"test/integration/replay-driver.test.ts",
 			];
 
@@ -921,6 +921,18 @@ describe("layout guard", () => {
 
 		it("fails a heredoc import whose name the target no longer exports", () => {
 			const root = scratch();
+			const script = ".pi/skills/verify-factory/scripts/drive-replay.sh";
+			appendFileSync(
+				join(root, script),
+				"node --input-type=module - <<'NODE'\nimport { readLock } from './server/controller.ts';\nNODE\n",
+			);
+			edit(
+				root,
+				"scripts/layout-baseline.json",
+				`"${script}": {\n\t\t\t\t"tokens": {`,
+				`"${script}": {\n\t\t\t\t"imports": { "./server/controller.ts": ["readLock"] },\n\t\t\t\t"tokens": {\n\t\t\t\t\t"./server/controller.ts": { "path": "server/controller.ts", "type": "file" },`,
+			);
+			assert.deepEqual(layout(root, "shell"), []);
 			edit(
 				root,
 				"server/controller.ts",

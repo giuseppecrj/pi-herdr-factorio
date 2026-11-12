@@ -571,7 +571,7 @@
 			"id": "visible-test-deadline",
 			"kind": "constants",
 			"readers": [
-				".pi/skills/verify-factory/scripts/drive-replay.sh",
+				".pi/skills/verify-factory/scripts/drive-replay.ts",
 				"test/integration/replay-driver.test.ts"
 			],
 			"declarations": [
@@ -1505,7 +1505,7 @@
 			"tokens": {
 				"const script = \".pi/skills/verify-factory/scripts/drive-replay.sh\"": 1,
 				"readFile(\"server/sandbox.ts\"": 1,
-				"\"src\", \"server\", \"skills\", \"package.json\", \"README.md\", \"docs/decisions.tsv\", \".github/factory\", \"test/fixtures/replay\", script, \".pi/skills/verify-factory/scripts/lane-id.sh\",": 1,
+				"\"src\", \"server\", \"skills\", \"package.json\", \"README.md\", \"docs/decisions.tsv\", \".github/factory\", \"test/fixtures/replay\", script, \".pi/skills/verify-factory/scripts/drive-replay.ts\", \".pi/skills/verify-factory/scripts/lane-id.sh\",": 1,
 				"join(control, \"test/fixtures/replay/corpus.json\")": 2,
 				"join(control, \"docs/decisions.tsv\")": 1,
 				"join(control, \"server/sandbox/assets\", from)": 1,
@@ -1553,6 +1553,10 @@
 				{
 					"path": "test/fixtures/replay",
 					"type": "dir"
+				},
+				{
+					"path": ".pi/skills/verify-factory/scripts/drive-replay.ts",
+					"type": "file"
 				},
 				{
 					"path": ".pi/skills/verify-factory/scripts/lane-id.sh",
@@ -1752,7 +1756,8 @@
 				"new URL(\"./fixtures/metrics/runs-2026-11-08.jsonl\", import.meta.url)": 1,
 				"new URL(\"../src/replay.ts\", import.meta.url)": 2,
 				"new URL(\"../src/platform.ts\", import.meta.url)": 1,
-				"\"../.pi/skills/verify-factory/scripts/drive-replay.sh\"": 1
+				"\"../.pi/skills/verify-factory/scripts/drive-replay.sh\"": 1,
+				"\"../.pi/skills/verify-factory/scripts/drive-replay.ts\"": 1
 			},
 			"targets": [
 				{
@@ -1793,6 +1798,14 @@
 					"via": {
 						"from": "reader",
 						"path": "../.pi/skills/verify-factory/scripts/drive-replay.sh"
+					}
+				},
+				{
+					"path": ".pi/skills/verify-factory/scripts/drive-replay.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../.pi/skills/verify-factory/scripts/drive-replay.ts"
 					}
 				}
 			]
@@ -2206,6 +2219,10 @@
 						"path": ".pi/skills/verify-factory/scripts/drive-replay.sh",
 						"type": "file"
 					},
+					".pi/skills/verify-factory/scripts/drive-replay.ts": {
+						"path": ".pi/skills/verify-factory/scripts/drive-replay.ts",
+						"type": "file"
+					},
 					"docs/decisions.tsv": {
 						"path": "docs/decisions.tsv",
 						"type": "file"
@@ -2221,57 +2238,7 @@
 					"server/sandbox.ts": {
 						"path": "server/sandbox.ts",
 						"type": "file"
-					},
-					"./server/controller.ts": {
-						"path": "server/controller.ts",
-						"type": "file"
-					},
-					"./src/replay.ts": {
-						"path": "src/replay.ts",
-						"type": "file"
-					},
-					"./src/run.ts": {
-						"path": "src/run.ts",
-						"type": "file"
-					},
-					"./server/sandbox.ts": {
-						"path": "server/sandbox.ts",
-						"type": "file"
-					},
-					"./src/platform.ts": {
-						"path": "src/platform.ts",
-						"type": "file"
-					},
-					"./src/workflow.ts": {
-						"path": "src/workflow.ts",
-						"type": "file"
-					},
-					".github/factory/WORKFLOW.md": {
-						"path": ".github/factory/WORKFLOW.md",
-						"type": "file"
 					}
-				},
-				"imports": {
-					"./server/controller.ts": ["readDurableAccounting", "readLock"],
-					"./src/replay.ts": [
-						"REPLAY_CORPUS",
-						"loadReplayCorpus",
-						"readReplayBudget",
-						"readReplayRecord",
-						"replayRow",
-						"replayStageCaps",
-						"reserveReplay",
-						"settleReplay",
-						"voidReplay"
-					],
-					"./src/run.ts": ["digestOf"],
-					"./server/sandbox.ts": ["sandboxExecutor"],
-					"./src/platform.ts": [
-						"readPlatformFile",
-						"resolvePlatform",
-						"soleRepository"
-					],
-					"./src/workflow.ts": ["parseWorkflow"]
 				}
 			},
 			".pi/skills/verify-factory/scripts/drive-serve.sh": {

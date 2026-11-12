@@ -105,6 +105,7 @@ async function restored() {
 it("waits for two visible-test deadlines plus 60 seconds after signaling stop", async () => {
 	const source = await readFile(script, "utf8");
 	const stop = source.match(/stop_child\(\) \{[\s\S]*?\n\}/)?.[0];
+	const step = source.match(/^replay_step\(\) \{.*\}$/m)?.[0] ?? "";
 	assert.ok(stop);
 
 	const sandbox = await readFile("server/sandbox.ts", "utf8");
@@ -140,6 +141,7 @@ alive() { polls=$((polls + 1)); (( polls <= target )); }
 owned() { return 0; }
 kill() { [[ "$*" == "-TERM 123" ]]; }
 sleep() { [[ "$1" == 0.1 ]]; }
+${step}
 ${stop}
 stop_child
 printf '%s' "$polls"
@@ -162,6 +164,7 @@ it("signals only a live serve process for this lane's state directory", async ()
 	const source = await readFile(script, "utf8");
 	const alive = source.match(/^alive\(\) \{.*\}$/m)?.[0];
 	const owned = source.match(/^owned\(\) \{\n[\s\S]*?\n\}\n/m)?.[0];
+	const step = source.match(/^replay_step\(\) \{.*\}$/m)?.[0] ?? "";
 	assert.ok(alive && owned);
 
 	const lane = await mkdtemp(join(tmpdir(), "owned-lane-"));
@@ -190,6 +193,7 @@ it("signals only a live serve process for this lane's state directory", async ()
 set -euo pipefail
 lane="$1"
 control="$2"
+${step}
 ${alive}
 ${owned}
 if alive "$3" && owned "$3"; then echo owned; else echo foreign; fi
@@ -244,6 +248,7 @@ describe("replay driver with fake GitHub/controller and real guards", {
 			".github/factory",
 			"test/fixtures/replay",
 			script,
+			".pi/skills/verify-factory/scripts/drive-replay.ts",
 			".pi/skills/verify-factory/scripts/lane-id.sh",
 		]) {
 			const target = join(control, path);
