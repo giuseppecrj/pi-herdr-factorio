@@ -113,9 +113,9 @@ The Journey `Stop` decision mirrors helper reuse without adding a source-absent 
 
 | Model actions/operators | Source at the sync commit |
 | --- | --- |
-| `Gen`, `Select`, `Issue`, `CanIssue`, `Account`, `Usage` | `src/handoff.ts`: `generationIntent`, `selectGeneration`, `issueExecution`, `preflight`, `updateAccount`, `candidateUsage` |
+| `Gen`, `Select`, `Issue`, `CanIssue`, `Account`, `Usage` | `src/candidate/state.ts`: `generationIntent`; `src/candidate/handoff.ts`: `selectGeneration`, `issueExecution`, `preflight`, `updateAccount`, `candidateUsage` |
 | `ReviewResult`, `Validate`, `FailOrRepair` | `handoffCandidate`, `complete`, `certifyGeneration`; full review/report validation is a boundary assumption backed by runtime tests |
-| `Refresh`, `Handoff`, `ObserveMerge`, `Finish`, `Stop`, `FinishPr` | `src/handoff.ts`: `observed`, `terminalFor`, `finish`, `complete` |
+| `Refresh`, `Handoff`, `ObserveMerge`, `Finish`, `Stop`, `FinishPr` | `src/candidate/handoff.ts`: `observed`, `terminalFor`, `finish`, `complete` |
 | `OwnerFeedback`, `FeedbackRepair`, `SettleRepair` | Merged F10-2: `ingest`, `startQueuedFeedback`, `repair_settled` and `stopRound`. The model abstracts batch bytes, intake notices and summaries to a submitted/consumed counter; permission, head binding, dismissal, cursor durability, launch floors and dispositions remain runtime boundaries. The token-refusal hold/readiness difference is listed under proof limits. |
 | `OwnerDrift`, `OwnerRecert`, `HeadOf`, merge `authored` | Merged F10-3: `observed`, `derive_owner_patch` completion, `ownerPatchValid` and `authoredOf`. Owner-ready and owner-authored merge replays now pass against `3c62fc7`. Derivation success and its clean tree/suite binding are abstracted; derivation refusals, forbidden paths, the pin ref, no-commit interpreter behavior and v5 ledger authorship remain runtime boundaries. Reset and protected notices are explicit limits above. `OwnerCertifiedCurrent` denotes the selected owner head, even before certification, so validation/review can finish without re-entering drift. |
 | Shared public policy | `src/candidate/stages.ts`: `advance`; it delegates candidate events to `handoffCandidate` |

@@ -18,7 +18,7 @@ Two matchers keep their own spelling on purpose. They match the gate container's
 
 ## Other folders
 
-`src/github/` talks to GitHub: `adapter.ts` is the tracker adapter, `tickets.ts` holds the tracker-neutral ticket types, and `exec.ts` holds the shared `Exec` process-runner type that replay and sandbox preflight also use for `git`. `src/contract/` holds what a run promises: the acceptance suite and stored artifacts. `src/candidate/` judges a candidate: build, review, validation, feedback, diagnosis and stage transitions. `src/views/` turns stored state into the owner feed, attention list, explanations and metrics. `src/maintenance/` holds scheduled and replay work: cadence audits, replay and scorers.
+`src/github/` talks to GitHub: `adapter.ts` is the tracker adapter, `tickets.ts` holds the tracker-neutral ticket types, and `exec.ts` holds the shared `Exec` process-runner type that replay and sandbox preflight also use for `git`. `src/contract/` holds what a run promises: the acceptance suite and stored artifacts. `src/candidate/` judges a candidate: build, review, validation, feedback, diagnosis and stage transitions. Its stored book has three homes. `state.ts` holds the book's types, limits, identity, freezing and receipt binding. `codec.ts` decodes the stored wire format and migrates older versions. `handoff.ts` holds the policy: transitions, accounting and certification. A new persisted field usually touches `state.ts` and `codec.ts` together. A new wire version goes in `codec.ts`. A new policy rule goes in `handoff.ts`. `src/views/` turns stored state into the owner feed, attention list, explanations and metrics. `src/maintenance/` holds scheduled and replay work: cadence audits, replay and scorers.
 
 ## Review seats
 
@@ -38,7 +38,7 @@ L06 moved the intact modules into their owner folders. Files marked pending stay
 | `src/config` | Not created | `src/workflow.ts` in L08 |
 | `src/github` | `adapter.ts`, `exec.ts`, `tickets.ts`, `publish.ts` | None |
 | `src/contract` | `acceptance.ts`, `artifacts.ts` | `src/specify.ts` in L08 |
-| `src/candidate` | `build.ts`, `review.ts`, `validation.ts`, `feedback.ts`, `diagnosis.ts`, `stages.ts` | `src/handoff.ts` in L07 |
+| `src/candidate` | `state.ts`, `codec.ts`, `handoff.ts`, `build.ts`, `review.ts`, `validation.ts`, `feedback.ts`, `diagnosis.ts`, `stages.ts` | None |
 | `src/ledger` | `schema.ts`, `git.ts`, `append.ts`, `terminal.ts`, `outbox.ts` | None |
 | `src/controller` | Not created | `src/orchestrator.ts` in L10 |
 | `src/views` | `feed.ts`, `attention.ts`, `explain.ts`, `metrics.ts` | None |

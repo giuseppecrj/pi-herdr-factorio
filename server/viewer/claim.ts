@@ -2,7 +2,8 @@ import type { ClaimRecord } from "../../src/orchestrator.ts";
 import { isRunStatus } from "../../src/trust/markers.ts";
 import { isStage } from "../../src/core/stages.ts";
 import { isDigest, runIdOf } from "../../src/core/run.ts";
-import { parseCandidateState, candidateUsage } from "../../src/handoff.ts";
+import { parseCandidateState } from "../../src/candidate/codec.ts";
+import { candidateUsage } from "../../src/candidate/handoff.ts";
 import { parseMarker, MARKER_PREFIX } from "../../src/trust/markers.ts";
 import { parseValidationState } from "../../src/candidate/validation.ts";
 import {

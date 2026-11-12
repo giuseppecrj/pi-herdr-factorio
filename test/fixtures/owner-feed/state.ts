@@ -9,11 +9,11 @@ import { digestOf, runIdOf } from "../../../src/core/run.ts";
 import { isRepoSlug, isGitSha } from "../../../src/workflow.ts";
 import type { JsonValue } from "../../../src/core/json.ts";
 import { candidateLifecycleFixture } from "../../helpers.ts";
+import { parseCandidateState } from "../../../src/candidate/codec.ts";
 import {
-	parseCandidateState,
 	candidateUsage,
 	candidateProjection,
-} from "../../../src/handoff.ts";
+} from "../../../src/candidate/handoff.ts";
 
 const slug = "giuseppecrj/pi-herdr-factorio";
 

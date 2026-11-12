@@ -17,12 +17,12 @@ import {
 import { checkChangedPaths } from "../trust/policy.ts";
 import { ACCEPTANCE_SUITE_DIR, isAtOrUnder } from "../trust/protected-paths.ts";
 import { REVIEW_DIFF_MAX_BYTES } from "../candidate/review.ts";
-import {
-	parseOwnerPatchReceipt,
-	type OwnerPatchReceipt,
-	type OwnerPatchRead,
-	type OwnerHeadRefusal,
-} from "../handoff.ts";
+import type {
+	OwnerPatchReceipt,
+	OwnerPatchRead,
+	OwnerHeadRefusal,
+} from "../candidate/state.ts";
+import { parseOwnerPatchReceipt } from "../candidate/codec.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ghFailure, type Exec, type ExecResult } from "./exec.ts";

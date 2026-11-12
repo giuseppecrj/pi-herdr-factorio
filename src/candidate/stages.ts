@@ -2,10 +2,9 @@ import {
 	beginCandidate,
 	candidateProjection,
 	handoffCandidate,
-	type AdmissionPin,
 	type CandidateEvent,
-	type CandidateEffect,
-} from "../handoff.ts";
+} from "./handoff.ts";
+import type { AdmissionPin, CandidateEffect } from "./state.ts";
 import type { PatchReceipt } from "./build.ts";
 import {
 	type Digest,
@@ -17,7 +16,7 @@ import {
 
 import { STAGE_ORDER, type Stage, type SandboxStage } from "../core/stages.ts";
 
-export { MAX_REPAIR_ROUNDS } from "../handoff.ts";
+export { MAX_REPAIR_ROUNDS } from "./state.ts";
 
 export type StageProfile = {
 	modelAccess: "none" | "judge" | "full";

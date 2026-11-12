@@ -139,7 +139,7 @@ export interface Run {
 	baseSha: string;
 	contractDigest?: Digest;
 	acceptanceDigest?: Digest;
-	readonly handoff?: import("../handoff.ts").CandidateState;
+	readonly handoff?: import("../candidate/state.ts").CandidateState;
 	readonly progress: Progress;
 }
 

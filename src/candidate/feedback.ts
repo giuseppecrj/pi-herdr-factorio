@@ -1,4 +1,4 @@
-import type { HandoffReason, GenerationRef } from "../handoff.ts";
+import type { HandoffReason, GenerationRef } from "./state.ts";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { regularText } from "../contract/artifacts.ts";

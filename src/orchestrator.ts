@@ -5,21 +5,23 @@ import {
 } from "./candidate/validation.ts";
 import {
 	beginCandidate,
-	MAX_REVIEW_ATTEMPTS,
 	candidateUsage,
 	candidateProjection,
 	handoffCandidate,
 	stopRound,
 	candidateAllowance,
-	type CandidateState,
 	type CandidateEvent,
-	type CandidateEffect,
 	type CandidateEffectResult,
+	type PrObservation,
+} from "./candidate/handoff.ts";
+import {
+	MAX_REVIEW_ATTEMPTS,
+	type CandidateState,
+	type CandidateEffect,
 	type CandidateExecution,
 	type GenerationRef,
 	type RepairCause,
-	type PrObservation,
-} from "./handoff.ts";
+} from "./candidate/state.ts";
 import {
 	REVIEW_TOOLS,
 	ReviewEvidenceUnavailable,
@@ -355,7 +357,7 @@ export interface StageExecutor {
 			round: number,
 		): Promise<
 			| Extract<PatchRead, { kind: "found" }>
-			| import("./handoff.ts").OwnerPatchRead
+			| import("./candidate/state.ts").OwnerPatchRead
 			| null
 		>;
 	};

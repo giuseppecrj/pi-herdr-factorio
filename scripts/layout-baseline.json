@@ -378,11 +378,23 @@
 				],
 				"since": "L04"
 			},
-			"src/handoff.ts": {
+			"src/candidate/state.ts": {
 				"owner": "src/candidate",
 				"seats": ["code-review", "security-review", "simplify"],
-				"from": [],
-				"since": "L00"
+				"from": ["src/handoff.ts"],
+				"since": "L07"
+			},
+			"src/candidate/codec.ts": {
+				"owner": "src/candidate",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["src/handoff.ts"],
+				"since": "L07"
+			},
+			"src/candidate/handoff.ts": {
+				"owner": "src/candidate",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["src/handoff.ts"],
+				"since": "L07"
 			},
 			"src/ledger/schema.ts": {
 				"owner": "src/ledger",
@@ -578,6 +590,12 @@
 			}
 		},
 		"retired": {
+			"src/handoff.ts": {
+				"owner": "src/candidate",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
 			"src/run.ts": {
 				"owner": "src/core",
 				"seats": ["code-review", "security-review", "simplify"],

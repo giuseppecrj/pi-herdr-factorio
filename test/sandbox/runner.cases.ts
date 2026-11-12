@@ -43,11 +43,9 @@ import {
 } from "../../server/controller.ts";
 import { feedbackId } from "../../src/candidate/feedback.ts";
 import { fileAdmissionStore, admitTicket } from "../../src/trust/admission.ts";
-import {
-	handoffCandidate,
-	parseCandidateState,
-	type RepairExecution,
-} from "../../src/handoff.ts";
+import type { RepairExecution } from "../../src/candidate/state.ts";
+import { parseCandidateState } from "../../src/candidate/codec.ts";
+import { handoffCandidate } from "../../src/candidate/handoff.ts";
 import { candidateBranch, storeOwnerPatch } from "../../src/github/publish.ts";
 import { certifyR8, type FamilyInput } from "../../src/core/models.ts";
 import {

@@ -21,10 +21,10 @@ import type { JsonValue } from "../src/core/json.ts";
 import {
 	beginCandidate,
 	handoffCandidate,
-	parseCandidateState,
-	type CandidateState,
 	type CandidateEvent,
-} from "../src/handoff.ts";
+} from "../src/candidate/handoff.ts";
+import { parseCandidateState } from "../src/candidate/codec.ts";
+import type { CandidateState } from "../src/candidate/state.ts";
 import { dispatchNonce } from "../src/candidate/validation.ts";
 import { candidateBranch } from "../src/github/publish.ts";
 import { REQUIRED_CI_CHECKS } from "../src/core/run.ts";

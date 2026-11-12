@@ -41,11 +41,11 @@ import {
 	readFeedbackBytes,
 	validationDir,
 } from "../src/candidate/validation.ts";
+import { parseReviewReceipt } from "../src/candidate/codec.ts";
 import {
-	parseReviewReceipt,
 	reviewReceiptDigest,
 	type ReviewExecution,
-} from "../src/handoff.ts";
+} from "../src/candidate/state.ts";
 import { isGitSha, parseWorkflow, WORKFLOW_PATH } from "../src/workflow.ts";
 import type { ExecutionStage as ModelStage } from "../src/core/stages.ts";
 import {

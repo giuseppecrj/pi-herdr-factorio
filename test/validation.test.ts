@@ -64,12 +64,12 @@ import {
 	finishPatch,
 	readPatch,
 } from "../src/candidate/build.ts";
+import { generationIntent } from "../src/candidate/state.ts";
 import {
-	generationIntent,
 	handoffCandidate,
 	candidateGenerations,
 	candidateUsage,
-} from "../src/handoff.ts";
+} from "../src/candidate/handoff.ts";
 import { candidateBranch, storeOwnerPatch } from "../src/github/publish.ts";
 import type { Exec } from "../src/github/exec.ts";
 import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";

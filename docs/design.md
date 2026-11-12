@@ -99,7 +99,7 @@ interface Run {
 }
 ```
 
-The types above summarize the design, not the complete wire schema. `src/core/run.ts` and `src/candidate/stages.ts` implement progress, including mandatory merge `waiting`. `advance(run, event)` is pure and delegates candidate decisions to `handoffCandidate` in `src/handoff.ts`. The controller interprets persisted effects; it does not own a second candidate policy. The model never chooses the next stage or decides whether a hard gate passed.
+The types above summarize the design, not the complete wire schema. `src/core/run.ts` and `src/candidate/stages.ts` implement progress, including mandatory merge `waiting`. `advance(run, event)` is pure and delegates candidate decisions to `handoffCandidate` in `src/candidate/handoff.ts`. The controller interprets persisted effects; it does not own a second candidate policy. The model never chooses the next stage or decides whether a hard gate passed.
 
 The controller's scheduling state follows Symphony §4.1.8: `running`, `claimed`, `retry_attempts`, totals. Each run also writes a marker comment on its issue (`<!-- factory:run {...} -->`). Recovery needs authenticated markers and protocol-managed private claims/evidence. The public v3 summary cannot reconstruct a missing candidate book, certification, accounts, or budget. A manually rolled-back private file is not covered by the bounded normal-write restart evidence.
 
