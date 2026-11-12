@@ -1,759 +1,184 @@
+import { BUILD_MAX_TOKENS, BUILD_TOOLS } from "../candidate/build.ts";
 import {
-	sameAssessmentRef,
-	type Validator,
-	type ValidationState,
-} from "./candidate/validation.ts";
+	type AcceptanceQualification,
+	type BaseCheckProgress,
+	assessVisibleChecks,
+	baseRefusalNotice,
+	diagnosisNotice,
+	failedVisibleChecks,
+	matchingBaseProof,
+	retryPending,
+	retryableBaseReason,
+} from "../candidate/diagnosis.ts";
+import type { FeedbackObservation } from "../candidate/feedback.ts";
 import {
+	type CandidateEffectResult,
+	type CandidateEvent,
 	beginCandidate,
-	candidateUsage,
+	candidateAllowance,
 	candidateProjection,
+	candidateUsage,
 	handoffCandidate,
 	stopRound,
-	candidateAllowance,
-	type CandidateEvent,
-	type CandidateEffectResult,
-	type PrObservation,
-} from "./candidate/handoff.ts";
-import {
-	MAX_REVIEW_ATTEMPTS,
-	type CandidateState,
-	type CandidateEffect,
-	type CandidateExecution,
-	type GenerationRef,
-	type RepairCause,
-} from "./candidate/state.ts";
+} from "../candidate/handoff.ts";
 import {
 	REVIEW_TOOLS,
 	ReviewEvidenceUnavailable,
-	reviewSeats,
-	type ReviewInput,
 	type ReviewInputRefusal,
-	type ReviewReceipt,
-} from "./candidate/review.ts";
-import { type FamilyInput, withFamily } from "./core/models.ts";
-import type { Verdict } from "./core/run.ts";
-import type {
-	FeedbackObservation,
-	FeedbackBatch,
-} from "./candidate/feedback.ts";
-import { PublicationError } from "./github/publish.ts";
-
+	reviewSeats,
+} from "../candidate/review.ts";
 import {
-	BUILD_TOOLS,
-	BUILD_MAX_TOKENS,
-	buildPrompt,
-	visibleTestCommand,
-	type PatchBinding,
-	type PatchRead,
-} from "./candidate/build.ts";
+	type CandidateEffect,
+	type CandidateExecution,
+	type CandidateState,
+	MAX_REVIEW_ATTEMPTS,
+} from "../candidate/state.ts";
+import { sameAssessmentRef } from "../candidate/validation.ts";
+import {
+	DEFAULTS,
+	type EnvLookup,
+	type GitSha,
+	STAGE_CLEANUP_RESERVE_MS,
+	type WorkflowConfig,
+} from "../config/schema.ts";
 import {
 	ACCEPTANCE_MAX_TOKENS,
 	ACCEPTANCE_SKILLS,
 	ACCEPTANCE_TOOLS,
-	acceptancePrompt,
-	writeAcceptance,
-	type AcceptanceSuite,
-} from "./contract/acceptance.ts";
-import type { ArtifactStore, ContractRead } from "./contract/artifacts.ts";
+} from "../contract/acceptance.ts";
+import { NEEDS_INFO_LABEL } from "../contract/contract.ts";
+import { SPECIFY_SKILLS, SPECIFY_TOOLS } from "../contract/prompt.ts";
 import {
-	type AdmissionStore,
-	type Ambiguity,
-	admitTicket,
-	type AdmittedReceipt,
-	latestReadyEntry,
-	type RefusalReason,
-	readTickInputs,
-	type SnapshotReader,
-	type SnapshotSource,
-	type TickReads,
-} from "./trust/admission.ts";
+	acceptanceKey,
+	buildKey,
+	contractKey,
+	questionsKey,
+	renderAcceptanceSummary,
+	renderBuildSummary,
+} from "../contract/render.ts";
+import type { JsonValue } from "../core/json.ts";
+import { withFamily } from "../core/models.ts";
+import { type Digest, digestOf, isDigest, runIdOf } from "../core/run.ts";
+import { type Stage, isModelStage } from "../core/stages.ts";
 import {
 	DEFAULT_PAGING,
 	type GitHubFailure,
 	type GitHubPaging,
 	GitHubTicketAdapter,
 	GitHubTicketWriter,
-	type IssueRecord,
 	type IssueComment,
-	type CommentEdit,
+	type IssueRecord,
 	type Read,
 	type TimelineEntry,
-} from "./github/adapter.ts";
-import type { Exec } from "./github/exec.ts";
+} from "../github/adapter.ts";
+import type { Exec } from "../github/exec.ts";
+import { PublicationError } from "../github/publish.ts";
+import { LedgerRowError, legacyRunContext } from "../ledger/schema.ts";
 import {
+	type TerminalCause,
+	candidateCause,
+	terminalSnapshot,
+} from "../ledger/terminal.ts";
+import type { CadenceRunner } from "../maintenance/cadence.ts";
+import {
+	type AdmissionStore,
+	type AdmittedReceipt,
+	type RefusalReason,
+	type SnapshotReader,
+	type TickReads,
+	admitTicket,
+	latestReadyEntry,
+	readTickInputs,
+} from "../trust/admission.ts";
+import {
+	type Marker,
+	type MarkerDefect,
+	type MarkerLedger,
+	type RunStatus,
 	currentMarker,
 	formatMarker,
 	isControllerComment,
 	isTerminal,
 	latestFor,
-	type TrustedMarker,
-	type Marker,
-	type MarkerDefect,
-	type MarkerLedger,
 	markerLedger,
 	parseMarker,
-	type RunStatus,
-	type TerminalStatus,
-} from "./trust/markers.ts";
-import { hasWriteAccess, READY_LABEL } from "./trust/policy.ts";
-import { type Digest, type NonEmpty, runIdOf } from "./core/run.ts";
+} from "../trust/markers.ts";
+import type { PlatformProfile, RepoSlug } from "../trust/platform.ts";
+import { READY_LABEL } from "../trust/policy.ts";
 import {
-	isModelStage,
-	type Stage,
-	type ModelStage,
-	type ExecutionStage,
-} from "./core/stages.ts";
+	type Draining,
+	END_STATUS,
+	SANDBOX_CAPS,
+	type Totals,
+	acceptSpent,
+	accountAdopted,
+	attemptSpent,
+	budgetCause,
+	countLateUsage,
+	countReleased,
+	inputCause,
+	preparedCause,
+	reconcileSpent,
+	recordAttempt,
+	saveAttempt,
+} from "./accounting.ts";
 import {
-	type Answer,
-	type AnswersRecord,
-	answerBody,
-	answersDigestOf,
-	type Contract,
-	CONTRACT_VERSION,
-	contractBytes,
-	type ContractDigest,
-	contractDigestOf,
-	type InlinedFile,
-	type SourceFacts,
-	type Link,
-	MAX_ANSWERS,
-	NEEDS_INFO_LABEL,
-	type Question,
-	type QuestionsDigest,
-	questionsDigestOf,
-	type SpecifyReviewInput,
-} from "./contract/contract.ts";
-import { parseSpecifyOutput } from "./contract/parse.ts";
+	type SeenIssue,
+	isReady,
+	linkRun,
+	refusalSettlesUntilEdited,
+	settled,
+	unmarkedEvents,
+} from "./admission.ts";
 import {
-	acceptanceKey,
-	renderAcceptanceSummary,
-	renderBuildSummary,
-	buildKey,
-	contractKey,
-	questionsKey,
-	questionsKeyOf,
-	renderQuestions,
-	renderSummary,
-	withoutKey,
-} from "./contract/render.ts";
+	acceptanceReceipt,
+	postRetriedRefusal,
+	retireRefused,
+} from "./base-check.ts";
 import {
-	sourceExcerpts,
-	sourceFacts,
-	specifySourceFacts,
-	INLINE_TOTAL_BYTES,
-	inlined,
-	NAMED_FILE_BYTES,
-	NAMED_FILE_READ_BYTES,
-	namedFiles,
-	SPECIFY_SKILLS,
-	SPECIFY_TOOLS,
-	specifyPrompt,
-} from "./contract/prompt.ts";
-import type { CadenceRunner } from "./maintenance/cadence.ts";
-import type { PlatformProfile } from "./trust/platform.ts";
-import { isLogin } from "./github/adapter.ts";
-import type {
-	BudgetCap,
-	FailedExit,
-	RefusalSignal,
-	StageRunSettings,
-	StageUsage,
-} from "./core/execution.ts";
+	type ActiveRun,
+	type ClaimObservation,
+	type ClaimRecord,
+	type CleanLedger,
+	type ConfirmedRecord,
+	type EndedRecord,
+	FIRST_STAGE,
+	type ReleaseReason,
+	type RetryCause,
+	type RunFiles,
+	type RunPhase,
+	type RunningPhase,
+	type Unverified,
+	admittedFields,
+	claimOf,
+	claimProjection,
+	desiredStatus,
+	localMarker,
+	markerOf,
+	matchesRecord,
+	recordOf,
+	unadmitted,
+	writeClaim,
+	writeEnded,
+} from "./claims.ts";
+import { type Effects, accepted, postKeyed, specified } from "./effects.ts";
 import {
-	DEFAULTS,
-	type AcceptEffort,
-	type EnvLookup,
-	type GitSha,
-	type ModelId,
-	STAGE_CLEANUP_RESERVE_MS,
-	type WorkflowConfig,
-	WORKFLOW_PATH,
-} from "./config/schema.ts";
-import { parseWorkflow } from "./config/parse.ts";
-import type { RepoSlug } from "./trust/platform.ts";
-import { digestOf, isDigest } from "./core/run.ts";
+	type ReviewPreparation,
+	type StageEnd,
+	type StageExecutor,
+	type StageOutput,
+	UNPREPARED,
+	prepareWorkspace,
+	stageInputs,
+} from "./launch.ts";
 import {
-	LedgerRowError,
-	legacyRunContext,
-	type BudgetCapName,
-	type AttemptEnd,
-} from "./ledger/schema.ts";
-import {
-	candidateCause,
-	terminalSnapshot,
-	type TerminalCause,
-	type RunAccounting,
-} from "./ledger/terminal.ts";
-import { type LedgerOutbox } from "./ledger/outbox.ts";
-import type { JsonValue } from "./core/json.ts";
-
-/** The stage receipt fields a launch reports. The host's full receipt is assignable to it. */
-type StageAttemptReceipt = {
-	readonly wallMs: number;
-	readonly usage: StageUsage;
-	readonly models: {
-		readonly requested: ModelId;
-		readonly observed: string | null;
-	};
-	readonly fallback: {
-		readonly requested: ModelId;
-		readonly observed: string | null;
-	} | null;
-	readonly refusal: RefusalSignal | null;
-};
-
-/** How a started stage attempt ended, as the sandbox host reports it. */
-export type StageResult =
-	| {
-			readonly kind: "passed";
-			readonly usage: number;
-			readonly receipt: StageAttemptReceipt;
-	  }
-	| {
-			readonly kind: "failed";
-			readonly exit: FailedExit;
-			readonly usage: number;
-			readonly receipt: StageAttemptReceipt;
-	  }
-	| {
-			readonly kind: "refused";
-			readonly usage: number;
-			readonly receipt: StageAttemptReceipt;
-	  }
-	| {
-			readonly kind: "budget_exhausted";
-			readonly cap: BudgetCap;
-			readonly usage: number;
-			readonly receipt: StageAttemptReceipt;
-	  };
+	type CandidateResult,
+	queueReviewRefusal,
+	recoverCandidate,
+} from "./recovery.ts";
 
 /** Milliseconds since the epoch. Tests pass a fake. */
 export type Clock = { now(): number };
-
-/** How a stage launch ended before any model ran. */
-export type StageLaunch =
-	| {
-			readonly kind: "unavailable";
-			readonly stage: import("./core/stages.ts").SandboxStage;
-			readonly reason: "sandbox_unavailable";
-	  }
-	| { readonly kind: "started"; readonly done: Promise<StageResult> };
-
-export type StageLaunchInput = {
-	readonly runId: Digest;
-	readonly stage: ExecutionStage;
-	readonly attempt: number;
-	readonly execution?: CandidateExecution;
-	readonly workspace: string;
-	readonly prompt: string;
-	readonly source?: SourceFacts;
-	readonly specify?: SpecifyReviewInput;
-	readonly acceptDraft?: {
-		readonly contract: Contract;
-		readonly digest: ContractDigest;
-		readonly repo: RepoSlug;
-		readonly issue: number;
-		readonly baseSha: GitSha;
-	};
-	readonly round?: number;
-	readonly review?: ReviewPreparation;
-	readonly build?: {
-		readonly binding: PatchBinding;
-		readonly command: string;
-		readonly allowNoChange: boolean;
-	};
-	readonly tools: readonly string[];
-	readonly skills: readonly string[];
-	readonly measurement?: {
-		readonly kind: "score" | "explain";
-		readonly scoredRunId: Digest;
-		readonly seq: number;
-	};
-	readonly maintenance?: {
-		readonly job: import("./config/schema.ts").CadenceJob;
-		readonly windowStart: number;
-	};
-	readonly acceptEffort?: AcceptEffort;
-	readonly settings: StageRunSettings;
-	readonly remainingRunTokens: number;
-	readonly signal: AbortSignal;
-	/** Called on every sign of life, with the tokens the stage has used so far. */
-	readonly progress: (usage: number) => void;
-};
-
-export type ReviewPreparation = {
-	readonly input: ReviewInput;
-	readonly verdict: Verdict;
-	readonly builder: string;
-	/** The builder's and the accept author's stored family evidence. Absent, both are missing. */
-	readonly families?: {
-		readonly builder: FamilyInput;
-		readonly accept: FamilyInput;
-	};
-	readonly workspace: string;
-};
-
-export type StageOutput =
-	| ReviewInputRefusal
-	| { readonly kind: "review"; readonly receipt: ReviewReceipt }
-	| { readonly kind: "build"; readonly result: PatchRead }
-	| string
-	| { readonly kind: "pending" }
-	| {
-			readonly kind: "output";
-			readonly text: string;
-			readonly model: string;
-			readonly observed: string | null;
-			/** The answering session's stored family, for accept. */
-			readonly family?: FamilyInput;
-	  };
-
-type WorkflowPin = Pick<ActiveRun, "workflowSha" | "workflowDigest">;
-
-import {
-	assessVisibleChecks,
-	baseRefusalNotice,
-	baseRetryFeedback,
-	diagnosisNotice,
-	failedVisibleChecks,
-	matchingBaseProof,
-	retriedRefusal,
-	retryableBaseReason,
-	retryPending,
-	type BaseCheckProgress,
-	type AcceptanceQualification,
-	type BaseRefusal,
-	type RetryFeedback,
-} from "./candidate/diagnosis.ts";
-
-export interface StageExecutor {
-	baseCheck?(
-		input: import("./candidate/diagnosis.ts").BaseCheckInput,
-	): Promise<import("./candidate/diagnosis.ts").BaseCheckProgress>;
-	stopBase?(runId: Digest): Promise<void>;
-	candidate?: {
-		sweep?(repo: RepoSlug, now: number): Promise<void>;
-		observeMissing?(marker: Marker): Promise<PrObservation>;
-		observe(
-			state: CandidateState,
-			now: number,
-		): Promise<
-			Omit<
-				Extract<CandidateEvent, { kind: "observed" }>,
-				"executionAllowed" | "capacityAvailable"
-			>
-		>;
-		execute(
-			state: CandidateState,
-			effect: Exclude<
-				CandidateEffect,
-				{
-					kind:
-						| "validate"
-						| "launch_review"
-						| "repair_build"
-						| "stop_execution";
-				}
-			>,
-		): Promise<CandidateEffectResult | null>;
-		patch(
-			state: CandidateState,
-			round: number,
-		): Promise<
-			| Extract<PatchRead, { kind: "found" }>
-			| import("./candidate/state.ts").OwnerPatchRead
-			| null
-		>;
-	};
-	prepareReview?(
-		input: WorkflowPin & {
-			runId: Digest;
-			round: number;
-			execution?: Extract<CandidateExecution, { stage: "review" }>;
-			workspace: string;
-		},
-	): Promise<ReviewPreparation | ReviewInputRefusal>;
-	readonly validate?: Validator;
-	readonly ownerValidate?: Validator;
-	/** Re-reads a stored validation assessment; null when absent or unreadable. */
-	readAssessment(input: {
-		runId: Digest;
-		round: number;
-		generation: number;
-	}): Promise<import("./candidate/validation.ts").ReadAssessment | null>;
-	/** Re-reads the content-addressed owner batch before a repair launch. */
-	readFeedback?(runId: Digest, digest: Digest): Promise<FeedbackBatch | null>;
-	cleanupValidation?(): Promise<void>;
-	/** Stops whatever a previous controller left running. Called once, before the first tick adopts a run. */
-	recover(): Promise<void>;
-	/**
-	 * Whether nothing a previous controller left can still be running, so
-	 * `spent` no longer grows for its attempts. A reconcile that failed is
-	 * tried again.
-	 */
-	reconciled(): Promise<boolean>;
-	/** Whether the stage sandbox can run. A `blocked` run replays only after this passes. */
-	preflight(): Promise<boolean>;
-	/** Result usage is new spend; a resumed attempt's receipt also includes its recorded sessions. */
-	launch(input: StageLaunchInput): Promise<StageLaunch>;
-	/**
-	 * Tokens an attempt an earlier controller ran is known to have used: its
-	 * receipt's total, else its session receipts or gateway audit tallies. `null` when none exists.
-	 */
-	spent(input: {
-		readonly runId: Digest;
-		readonly stage: ExecutionStage;
-		readonly attempt: number;
-		readonly round?: number;
-		readonly execution?: CandidateExecution;
-	}): Promise<number | null>;
-	/**
-	 * The final text of an execution of the attempt that passed and kept it,
-	 * so a restart can finish a stage without running it again. Untrusted.
-	 * `pending` resumes a recorded session sequence in the same attempt.
-	 */
-	output(
-		input: {
-			readonly runId: Digest;
-			readonly attempt: number;
-			readonly round?: number;
-			readonly execution?: CandidateExecution;
-		} & (
-			| { readonly stage: Exclude<ModelStage, "review"> }
-			| ({ readonly stage: "review" } & WorkflowPin)
-		),
-	): Promise<StageOutput | null>;
-	checkout(input: {
-		readonly runId: Digest;
-		readonly repo: RepoSlug;
-		readonly sha: GitSha;
-		readonly workspace: string;
-		readonly build?: boolean;
-		readonly round?: number;
-		readonly feedbackFrom?: GenerationRef;
-		readonly cause?: RepairCause;
-	}): Promise<CheckoutResult>;
-}
-
-type StageEnd = Pick<StageResult, "kind" | "usage"> & {
-	readonly wallMs?: number;
-	/** The sandbox cap a `budget_exhausted` attempt hit. */
-	readonly cap?: Extract<StageResult, { kind: "budget_exhausted" }>["cap"];
-	/** The structured signal a `refused` attempt reported. */
-	readonly refusal?: StageResult["receipt"]["refusal"];
-	readonly output: string | null;
-	readonly build?: PatchRead;
-	readonly model?: string;
-	readonly observed?: string | null;
-	readonly family?: FamilyInput;
-};
-
-/**
- * A local record that a run holds a claim, so a restart finds it even after
- * the issue leaves the candidates. It mirrors the run's last marker known to
- * have landed: all `null` before the first, `status`, `stage`, `attempt` and
- * `usage` `null` in a record written before they existed, and `usage` alone
- * `null` in a record written before it existed.
- */
-export type ClaimRecord = {
-	readonly baseCheck?: AcceptanceQualification;
-	readonly acceptWallMs?: number;
-	readonly runId: Digest;
-	readonly issue: number;
-	readonly eventId: string;
-	readonly seq: number | null;
-	readonly status: RunStatus | null;
-	readonly stage: Stage | null;
-	readonly attempt: number | null;
-	readonly usage: number | null;
-	readonly labelFailures?: number;
-	readonly validation?: ValidationState;
-	readonly branch?: string | null;
-	readonly candidate?: GitSha | null;
-	readonly round?: number;
-	readonly ciRun?: number | null;
-	readonly handoff?: CandidateState;
-	readonly enteredAt?: number;
-	readonly marker?: Marker;
-};
-
-type ConfirmedRecord = ClaimRecord & { readonly seq: number };
-
-type EndedRecord = {
-	readonly claim: ConfirmedRecord;
-	tick: number;
-	confirmed: boolean;
-	unwritten: boolean;
-};
-
-type WorkspaceState = "present" | "missing" | "unavailable";
-
-export type Checkout = {
-	readonly files: readonly string[];
-	/** A listed file's text, or `null` when it is over `capBytes` or unreadable. */
-	read(path: string, capBytes: number): Promise<string | null>;
-};
-
-export type CheckoutResult =
-	| {
-			readonly kind: "ready";
-			readonly checkout: Checkout;
-			readonly omitted: number | null;
-	  }
-	| { readonly kind: "refused"; readonly reason: string }
-	| { readonly kind: "unavailable" };
-
-export type LinkRead =
-	| { readonly kind: "unlinked" }
-	| { readonly kind: "none" }
-	| { readonly kind: "found"; readonly link: Link }
-	| { readonly kind: "unreadable" };
-
-export interface RunFiles {
-	readonly artifacts: ArtifactStore;
-	readContract(runId: Digest): Promise<ContractRead>;
-	workspacePath(runId: Digest): string;
-	workspaceState(runId: Digest): Promise<WorkspaceState>;
-	/** Creates the workspace empty, mode 0700, when it is missing. */
-	ensureWorkspace(
-		runId: Digest,
-	): Promise<"present" | "created" | "unavailable">;
-	listClaims(): Promise<ClaimRecord[]>;
-	writeClaim(claim: ClaimRecord): Promise<boolean>;
-	/** The private ledger outbox. A terminal snapshot is kept before its marker is posted. */
-	readonly ledger?: LedgerOutbox;
-	accounting?: RunAccounting;
-	/** Native admission policy must be durable before the first claim or dispatch. */
-	prepareRun?(input: {
-		runId: Digest;
-		repo: RepoSlug;
-		workflowSha: GitSha;
-		workflowDigest: Digest;
-		startedAt: string;
-		/** The admitted workflow's trusted `maxTokensPerRun`, or `null` when this process has not loaded those bytes. */
-		runTokenCap: number | null;
-	}): Promise<boolean>;
-	terminalEvidence?(
-		runId: Digest,
-		floor: number,
-		candidate: CandidateState | null,
-	): Promise<import("./ledger/terminal.ts").TerminalEvidence>;
-	/** Writes the contract and its receipt once. The same bytes again succeed. */
-	writeContract(input: {
-		readonly contract: Contract;
-		readonly bytes: string;
-		readonly digest: ContractDigest;
-	}): Promise<boolean>;
-	writeQuestions(input: {
-		readonly runId: Digest;
-		readonly questions: readonly Question[];
-		readonly digest: QuestionsDigest;
-	}): Promise<boolean>;
-	/** The link and answers are written before the claim, so they may be replaced until then. */
-	writeLink(runId: Digest, link: Link | null): Promise<boolean>;
-	readLink(runId: Digest): Promise<LinkRead>;
-	writeAnswers(record: AnswersRecord): Promise<boolean>;
-	/** The answers record, or `null` when it is missing or its digest does not match. */
-	readAnswers(runId: Digest): Promise<AnswersRecord | null>;
-}
-
-export type RetryCause = "stage_failed" | "stalled" | "interrupted";
-
-export type RunPhase =
-	| {
-			readonly kind: "base_check";
-			readonly abort: AbortController;
-			dueAt: number;
-			checking: boolean;
-	  }
-	| { readonly kind: "candidate"; readonly status: RunStatus }
-	| { readonly kind: "evidence_missing" }
-	| { readonly kind: "claimed" }
-	| {
-			readonly kind: "running";
-			lastProgressAt: number;
-			usage: number;
-			readonly abort: AbortController;
-			result: StageEnd | null;
-	  }
-	| {
-			readonly kind: "blocked";
-			readonly reason: "sandbox_unavailable";
-	  }
-	| { readonly kind: "retry_queued"; readonly dueAt: number }
-	| {
-			readonly kind: "recovering";
-			readonly output: StageOutput;
-	  }
-	| {
-			readonly kind: "reporting";
-			readonly status: "stage_passed" | "needs_info";
-			readonly effects: Effects;
-	  }
-	| { readonly kind: "ending"; readonly status: TerminalStatus };
-
-export type Effects =
-	| {
-			readonly kind: "build";
-			readonly result: Extract<PatchRead, { kind: "found" }>;
-	  }
-	| {
-			readonly kind: "acceptance";
-			readonly contract: Contract;
-			readonly contractDigest: ContractDigest;
-			readonly suite: AcceptanceSuite;
-			readonly model: string;
-			readonly observed: string | null;
-			readonly family?: FamilyInput;
-	  }
-	| {
-			readonly kind: "contract";
-			readonly contract: Contract;
-			readonly bytes: string;
-			readonly digest: ContractDigest;
-			readonly body: string;
-			stored: boolean;
-			posted: boolean;
-	  }
-	| {
-			readonly kind: "questions";
-			readonly questions: NonEmpty<Question>;
-			readonly digest: QuestionsDigest;
-			readonly body: string;
-			stored: boolean;
-			posted: boolean;
-			labeled: boolean;
-			unlabeled: boolean;
-			labelTick: number;
-	  };
-
-type StageInputs = {
-	readonly contract?: Extract<ContractRead, { kind: "found" }>;
-	readonly files: ReadonlySet<string>;
-	readonly source: SnapshotSource;
-	readonly link: Link | null;
-};
-
-type Prepared = {
-	readonly kind: "ready";
-	/** `null` for a launch the sandbox will refuse, which reads no input. */
-	readonly inputs: StageInputs | null;
-	readonly prompt: string;
-	readonly workspace?: string;
-	readonly source?: SourceFacts;
-	readonly build?: StageLaunchInput["build"];
-	readonly specify?: SpecifyReviewInput;
-};
-
-const UNPREPARED: Prepared = { kind: "ready", inputs: null, prompt: "" };
-
-type RunningPhase = Extract<RunPhase, { kind: "running" }>;
-
-/**
- * A stage that was aborted after its outcome was chosen, still cleaning up.
- * Usage it reports later is added to its run once, as `counted` grows.
- */
-type Draining = {
-	readonly run: ActiveRun;
-	readonly phase: RunningPhase;
-	readonly since: number;
-	counted: number;
-};
-
-/**
- * A marker whose POST did not return a comment. `unknown` may have landed,
- * so it is read back before anything else is posted for the issue.
- */
-type InflightMarker = {
-	readonly marker: Marker;
-	readonly outcome: "unknown" | "rejected";
-	/** The tick that posted it. A read-back waits for a later tick. */
-	readonly tick: number;
-};
-
-/**
- * An attempt an earlier controller ran, whose records the run's usage may
- * not fully count yet: `base` is the run's usage before that attempt began.
- */
-type Unsettled = {
-	readonly stage: ModelStage;
-	readonly attempt: number;
-	readonly base: number;
-};
-
-/** One claimed run. The identity fields never change; the rest moves only inside a tick. */
-export type ActiveRun = {
-	attemptEnd?: AttemptEnd;
-	baseCheck?: AcceptanceQualification;
-	acceptWallMs?: number;
-	/** Why the run is ending failed or budget-exhausted, kept for its ledger row. */
-	cause?: TerminalCause;
-	readonly runId: Digest;
-	readonly issue: number;
-	readonly eventId: string;
-	readonly eventAt: string;
-	readonly snapshotDigest: Digest;
-	readonly workflowSha: GitSha;
-	readonly workflowDigest: Digest;
-	stage: Stage;
-	attempt: number;
-	usage: number;
-	/** The highest marker `seq` on the issue that this controller knows landed. */
-	seq: number;
-	marked: Marker | null;
-	inflight: InflightMarker | null;
-	claimUnwritten: boolean;
-	workspaceMissing: boolean;
-	/** Set on a run adopted after a restart: its stage launches once more. */
-	replay: boolean;
-	/** Set on an adopted run until its next attempt starts, so that launch counts the latest records. */
-	unsettled: Unsettled | null;
-	/**
-	 * Set on an adopted run until a stage of it starts here. Earlier
-	 * executions of its attempt may hold spend its usage lacks, so its
-	 * release counts them first.
-	 */
-	adopted: boolean;
-	clearNeedsInfo: boolean;
-	labelFailures: number;
-	labelTick: number;
-	inputs: StageInputs | null;
-	phase: RunPhase;
-	round?: number;
-	handoff?: CandidateState;
-	enteredAt?: number;
-};
-
-/**
- * What the controller last decided for an issue at one `updated_at`. The
- * watermark is `updatedAt` with `observedAt`; the verdict, and a held run's
- * `eventId`, are the decision it guards.
- */
-export type SeenIssue = {
-	readonly updatedAt: string;
-	/** The controller clock at the start of the tick whose reads made the verdict. */
-	readonly observedAt: number;
-	readonly verdict:
-		| { readonly kind: "open"; readonly ledger: CleanLedger }
-		| { readonly kind: "claimed" }
-		| { readonly kind: "decided" }
-		| {
-				readonly kind: "refused";
-				readonly reason: "answers_record_invalid" | "link_record_invalid";
-		  }
-		| { readonly kind: "corrupt" };
-};
-
-type Totals = {
-	claims: number;
-	launches: number;
-	retries: number;
-	stalls: number;
-	releases: number;
-	failures: number;
-	markersPosted: number;
-	usage: number;
-};
 
 /**
  * The single authority. `runs` holds every claim, keyed by issue: its keys are
@@ -770,8 +195,6 @@ export type ControllerState = {
 	readonly totals: Totals;
 };
 
-type CleanLedger = Extract<MarkerLedger, { kind: "clean" }>;
-
 export type GateReason =
 	| "state_unavailable"
 	| "locally_disabled"
@@ -779,38 +202,6 @@ export type GateReason =
 	| "repo_switch_unavailable"
 	| "workflow_unavailable"
 	| "candidates_unavailable";
-
-/**
- * Why a claim could not be confirmed this tick, so it does not launch. `why`
- * names the read: the issue, its timeline, its marker ledger, or a timeline
- * with no entry for the run's ready event. `failure` is the read's failure
- * kind, `null` for a timeline with no entry.
- */
-export type Unverified = {
-	readonly why: "issue" | "timeline" | "ledger" | "timeline_entry";
-	readonly failure: GitHubFailure["kind"] | null;
-	/** First failed observation in this uninterrupted hold, on the controller clock. */
-	readonly since: number;
-};
-
-/** Ephemeral evidence about a claim, never restored as launch permission. */
-export type ClaimObservation =
-	| {
-			readonly kind: "owned_confirmed";
-			readonly tick: number;
-			readonly event: string;
-			readonly ledgerSeq: number;
-	  }
-	| {
-			readonly kind: "owned_unverified";
-			readonly read: Unverified["why"];
-			readonly failure: Unverified["failure"];
-			readonly since: number;
-	  }
-	| { readonly kind: "foreign"; readonly runId: Digest }
-	| { readonly kind: "corrupt"; readonly defect: MarkerDefect }
-	| { readonly kind: "released"; readonly reason: ReleaseReason }
-	| { readonly kind: "unclaimed" };
 
 export type RunView = {
 	readonly issue: number;
@@ -896,31 +287,6 @@ type Limits = {
 	stallMs(stage: Stage): number;
 };
 
-type ReleaseReason = "closed" | "unlabeled" | "new_event";
-
-function claimProjection(
-	observation: ClaimObservation,
-	tick: number,
-	event: string,
-) {
-	return {
-		launch:
-			observation.kind === "owned_confirmed" &&
-			observation.tick === tick &&
-			observation.event === event,
-		unverified:
-			observation.kind === "owned_unverified"
-				? {
-						why: observation.read,
-						failure: observation.failure,
-						since: observation.since,
-					}
-				: null,
-	};
-}
-
-const SETTLE_MS = 1000;
-
 /**
  * Time past the cleanup reserve that the controller still waits for an
  * aborted stage. The runner ends its cleanup within the reserve of the
@@ -929,45 +295,6 @@ const SETTLE_MS = 1000;
 const CLEANUP_GRACE_MS = 5_000;
 
 const DRAIN_POLL_MS = 1000;
-
-/** The sandbox's cap names, as the ledger names them. */
-const SANDBOX_CAPS = {
-	tokens: "stage_tokens",
-	run_tokens: "run_tokens",
-	wall: "wall",
-	turns: "turns",
-} as const satisfies Record<
-	Extract<StageResult, { kind: "budget_exhausted" }>["cap"],
-	BudgetCapName
->;
-
-/** A spent budget. A cap the sandbox did not report freezes as unavailable. */
-function budgetCause(stage: Stage, cap: BudgetCapName | null): TerminalCause {
-	return { stage, class: "budget", reason: cap ?? "unreported" };
-}
-
-/** A failed preparation: its base refusal, or the input it refused. */
-function preparedCause(
-	stage: Stage,
-	prepared: { readonly why: string; readonly refusal?: BaseRefusal },
-): TerminalCause {
-	return prepared.refusal === undefined
-		? inputCause(stage, prepared.why)
-		: { stage, class: "base", reason: prepared.refusal.reason };
-}
-
-/** A stage input the controller refused, by its logged `why`. */
-function inputCause(stage: Stage, why: string): TerminalCause {
-	return { stage, class: "input", reason: why };
-}
-
-const END_STATUS: Readonly<
-	Record<Exclude<StageResult["kind"], "failed">, TerminalStatus>
-> = {
-	passed: "stage_passed",
-	refused: "failed",
-	budget_exhausted: "budget_exhausted",
-};
 
 type ReportInput = {
 	readonly now: number;
@@ -978,50 +305,6 @@ type ReportInput = {
 	readonly absent: readonly number[];
 	readonly refused: TickReport["refused"];
 };
-
-/**
- * `updated_at` has whole seconds, so a change later in the second the issue
- * was read keeps the same value. A watermark observed before that second, plus
- * `SETTLE_MS`, has passed is read again on the next tick.
- */
-function settled(seen: SeenIssue): boolean {
-	return seen.observedAt >= Date.parse(seen.updatedAt) + 1000 + SETTLE_MS;
-}
-
-function isClarificationPredecessor(
-	prev: TrustedMarker,
-	admitted: AdmittedReceipt,
-	runId: Digest,
-): boolean {
-	return (
-		prev.marker.status === "needs_info" &&
-		prev.marker.runId !== runId &&
-		admitted.eventAt > prev.marker.eventAt
-	);
-}
-
-function isAnswerCandidate(
-	comment: IssueComment,
-	floor: bigint,
-	labelAt: string,
-	identity: Pick<PlatformProfile, "controllerLogin">,
-): boolean {
-	return (
-		BigInt(comment.id) > floor &&
-		comment.author !== null &&
-		comment.author.type !== "Bot" &&
-		!isControllerComment(comment, identity) &&
-		comment.createdAt <= labelAt
-	);
-}
-
-function answerEditPrecedesLabel(edit: CommentEdit, labelAt: string): boolean {
-	return edit.lastEditedAt === null || edit.lastEditedAt < labelAt;
-}
-
-function isReady(issue: IssueRecord): boolean {
-	return issue.open && !issue.pullRequest && issue.labels.includes(READY_LABEL);
-}
 
 type Gate =
 	| { readonly kind: "open"; readonly reads: TickReads }
@@ -1042,97 +325,6 @@ function limitsOf(config: WorkflowConfig): Limits {
 	};
 }
 
-function refusalSettlesUntilEdited(reason: RefusalReason): boolean {
-	switch (reason.kind) {
-		case "pull_request":
-		case "issue_closed":
-		case "actor_withheld":
-		case "unauthorized":
-		case "answers_record_invalid":
-		case "link_record_invalid":
-			return true;
-		case "ambiguous_snapshot":
-			return ambiguityRecursOnReread(reason.detail);
-		case "not_labeled":
-		case "no_label_event":
-		case "repo_not_allowed":
-		case "state_unavailable":
-		case "locally_disabled":
-		case "repo_switch_off":
-		case "repo_switch_unavailable":
-		case "issue_unavailable":
-		case "timeline_unavailable":
-		case "permission_unavailable":
-		case "snapshot_unavailable":
-		case "workflow_unavailable":
-		case "duplicate_event":
-		case "state_unwritable":
-			return false;
-		default: {
-			const _exhaustive: never = reason;
-
-			return _exhaustive;
-		}
-	}
-}
-
-function ambiguityRecursOnReread(detail: Ambiguity): boolean {
-	switch (detail) {
-		case "label_events_same_second":
-		case "renamed_since_label":
-		case "edited_at_label_time":
-		case "version_withheld":
-		case "answer_at_label_time":
-			return true;
-		case "rename_history_incomplete":
-		case "title_changed_between_reads":
-		case "body_changed_between_reads":
-		case "history_contradicts_last_edit":
-		case "history_incomplete":
-		case "history_without_original":
-		case "history_disagrees_with_body":
-		case "no_version_before_label":
-			return false;
-		default: {
-			const _exhaustive: never = detail;
-
-			return _exhaustive;
-		}
-	}
-}
-
-function desiredStatus(phase: RunPhase): RunStatus {
-	switch (phase.kind) {
-		case "candidate":
-			return phase.status;
-		case "claimed":
-			return "claimed";
-		case "running":
-		case "base_check":
-			return "running";
-		case "blocked":
-		case "evidence_missing":
-			return "blocked";
-		case "retry_queued":
-			return "retrying";
-		case "recovering":
-			return "running";
-		case "reporting":
-		case "ending":
-			return phase.status;
-		default: {
-			const _exhaustive: never = phase;
-
-			return _exhaustive;
-		}
-	}
-}
-
-type WorkspacePreparation =
-	| { readonly kind: "fresh" }
-	| { readonly kind: "replayed_missing" }
-	| { readonly kind: "unavailable" };
-
 function holdsSlot(run: ActiveRun): boolean {
 	if (run.handoff !== undefined)
 		return run.handoff.accounts.some((a) => a.settlement !== "settled");
@@ -1149,8 +341,6 @@ function holdsSlot(run: ActiveRun): boolean {
 function holdsSlotAs(status: RunStatus): boolean {
 	return status === "claimed" || status === "blocked";
 }
-
-const FIRST_STAGE: Stage = "specify";
 
 /**
  * Checks that `gh` acts as the integration bot. A missing `GH_HOST` makes it
@@ -1199,7 +389,9 @@ export type OrchestratorInput = {
 
 /**
  * One controller authority. Each `tick` reconciles every claim against
- * GitHub before it dispatches anything, and only `tick` changes the state.
+ * GitHub before it dispatches anything. Only `tick` (with `cadenceOnce`),
+ * `drain` and the callbacks a launch hands the executor change the state;
+ * see src/README.md.
  */
 export class Orchestrator {
 	readonly state: ControllerState = {
@@ -1258,12 +450,7 @@ export class Orchestrator {
 	readonly #stages = new Set<Promise<void>>();
 	readonly #draining = new Set<Draining>();
 	readonly #candidateRecovery = new Set<Digest>();
-	readonly #candidateResults: {
-		readonly runId: Digest;
-		readonly event: CandidateEvent;
-		readonly disposition?: AttemptEnd["disposition"];
-		readonly refusal?: ReviewInputRefusal;
-	}[] = [];
+	readonly #candidateResults: CandidateResult[] = [];
 	readonly #candidateExecutions = new Map<
 		Digest,
 		{ readonly abort: AbortController; settled: boolean }
@@ -1287,7 +474,7 @@ export class Orchestrator {
 	}
 
 	/** One-shot audit admission shares ticket reservations without launching or claiming ticket work. */
-	async cadenceOnce(job: import("./config/schema.ts").CadenceJob) {
+	async cadenceOnce(job: import("../config/schema.ts").CadenceJob) {
 		await this.#input.executor.recover();
 
 		const reconciled = await this.#input.executor.reconciled();
@@ -1389,7 +576,7 @@ export class Orchestrator {
 		}
 
 		await this.#observeCandidates(false);
-		this.#countLateUsage();
+		countLateUsage(this.#input, this.#draining, this.state.totals);
 
 		const held = this.#limits();
 
@@ -1515,7 +702,7 @@ export class Orchestrator {
 
 		while (running()) {
 			await this.#observeCandidates(false);
-			this.#countLateUsage();
+			countLateUsage(this.#input, this.#draining, this.state.totals);
 			await this.#reconcileStages(this.#input.clock.now(), limits);
 
 			for (const run of this.state.runs.values()) {
@@ -1537,7 +724,7 @@ export class Orchestrator {
 
 		await Promise.all(this.#stages);
 		await this.#observeCandidates(false);
-		this.#countLateUsage();
+		countLateUsage(this.#input, this.#draining, this.state.totals);
 
 		for (const run of this.state.runs.values()) {
 			if (run.phase.kind === "ending" || run.phase.kind === "reporting") {
@@ -1569,7 +756,7 @@ export class Orchestrator {
 				});
 			} else if (
 				!localReservationsOnly ||
-				!(await this.#unadmitted(claim.issue, claim.eventId))
+				!(await unadmitted(this.#input, claim.issue, claim.eventId))
 			) {
 				this.#reserved.add(claim.issue);
 
@@ -1768,7 +955,7 @@ export class Orchestrator {
 			if (run.handoff !== undefined || run.phase.kind === "evidence_missing")
 				continue;
 
-			if (run.claimUnwritten) await this.#writeClaim(run);
+			if (run.claimUnwritten) await writeClaim(this.#input, run);
 
 			const observation = this.#observeClaim(
 				run,
@@ -2039,7 +1226,7 @@ export class Orchestrator {
 
 		run.phase = { kind: "ending", status: "released" };
 
-		if (running) this.#recordAttempt(run, "aborted");
+		if (running) recordAttempt(run, "aborted");
 		this.state.totals.releases++;
 		this.state.seen.delete(run.issue);
 		this.#input.log("claim_released", {
@@ -2077,31 +1264,6 @@ export class Orchestrator {
 	}
 
 	/**
-	 * Adds usage an aborted stage reported after its outcome was chosen, once.
-	 * The outcome stays as chosen. An entry ends when the stage settles.
-	 */
-	#countLateUsage(): void {
-		for (const entry of this.#draining) {
-			const { phase } = entry;
-			const latest = Math.max(phase.usage, phase.result?.usage ?? 0);
-			const late = latest - entry.counted;
-
-			if (late > 0) {
-				entry.counted = latest;
-				entry.run.usage += late;
-				this.state.totals.usage += late;
-				this.#input.log("stage_late_usage", {
-					issue: entry.run.issue,
-					runId: entry.run.runId,
-					usage: late,
-				});
-			}
-
-			if (phase.result !== null) this.#draining.delete(entry);
-		}
-	}
-
-	/**
 	 * True while an aborted stage of this run may still report usage: it has
 	 * not settled and its cleanup reserve, plus a grace, has not passed. Its
 	 * retry and its terminal marker wait, so both carry that usage.
@@ -2115,245 +1277,6 @@ export class Orchestrator {
 				entry.phase.result === null &&
 				now - entry.since < STAGE_CLEANUP_RESERVE_MS + CLEANUP_GRACE_MS,
 		);
-	}
-
-	/**
-	 * Raises the run's usage to `base` plus what the unsettled attempt's
-	 * records hold, when that is more. The records hold the whole attempt, so
-	 * a share the run already counts is not counted again.
-	 */
-	async #reconcileSpent(run: ActiveRun): Promise<void> {
-		const unsettled = run.unsettled;
-
-		if (unsettled === null) return;
-
-		const spent = await this.#input.executor
-			.spent({
-				runId: run.runId,
-				stage: unsettled.stage,
-				attempt: unsettled.attempt,
-				round: run.round ?? 0,
-			})
-			.catch(() => null);
-
-		const late = spent === null ? 0 : unsettled.base + spent - run.usage;
-
-		if (late <= 0) return;
-
-		run.usage += late;
-		this.state.totals.usage += late;
-		this.#input.log("stage_late_usage", {
-			issue: run.issue,
-			runId: run.runId,
-			usage: late,
-			attempt: unsettled.attempt,
-		});
-	}
-
-	/**
-	 * Counts what an adopted run's attempts are known to have spent beyond its
-	 * marker: the attempt before the marker's, whose late usage the marker may
-	 * lack, and, when `interrupted`, the attempt the marker names as running.
-	 * Each is measured from the run's usage before that attempt began, read
-	 * from the ledger, so an amount the marker already counts is not counted
-	 * twice.
-	 */
-	async #accountAdopted(
-		run: ActiveRun,
-		marker: Marker,
-		ledger: CleanLedger,
-		interrupted: boolean,
-	): Promise<void> {
-		const stage = marker.stage;
-
-		if (!isModelStage(stage) || (run.round ?? 0) !== (marker.round ?? 0))
-			return;
-
-		const previous = marker.attempt - 1;
-
-		const base =
-			ledger.markers.findLast(
-				({ marker: entry }) =>
-					entry.runId === run.runId &&
-					entry.stage === stage &&
-					(entry.round ?? 0) === (run.round ?? 0) &&
-					entry.attempt === previous,
-			)?.marker.usage ?? null;
-
-		if (base !== null) {
-			run.unsettled = { stage, attempt: previous, base };
-			await this.#reconcileSpent(run);
-		}
-
-		if (interrupted) {
-			run.unsettled = { stage, attempt: marker.attempt, base: run.usage };
-			await this.#reconcileSpent(run);
-		}
-	}
-
-	/**
-	 * Counts what a released adopted run's attempts spent beyond its usage,
-	 * once nothing a previous controller left can still add to it: the
-	 * unsettled attempt's records again, and the current attempt's earlier
-	 * executions unless that attempt is the unsettled one. False while a
-	 * leftover may still be running, so the release waits.
-	 */
-	async #countReleased(run: ActiveRun): Promise<boolean> {
-		if (!(await this.#input.executor.reconciled().catch(() => false))) {
-			return false;
-		}
-
-		await this.#reconcileSpent(run);
-
-		const stage = run.stage;
-
-		if (isModelStage(stage) && run.unsettled?.attempt !== run.attempt) {
-			const prior = await this.#attemptSpent(run, stage);
-
-			if (prior > 0) {
-				run.usage += prior;
-				this.state.totals.usage += prior;
-				this.#input.log("stage_late_usage", {
-					issue: run.issue,
-					runId: run.runId,
-					usage: prior,
-					attempt: run.attempt,
-				});
-			}
-		}
-
-		run.unsettled = null;
-		run.adopted = false;
-
-		return true;
-	}
-
-	/**
-	 * What earlier executions of the run's current attempt spent, which its
-	 * usage does not count: a marker counts none of its own attempt until that
-	 * attempt ends. A replay of a `claimed`, `blocked` or `retrying` attempt
-	 * whose `running` marker never landed has such executions on disk. The
-	 * launch adds this to the new execution's usage, so the attempt is counted
-	 * once when it ends.
-	 */
-	async #attemptSpent(run: ActiveRun, stage: ModelStage): Promise<number> {
-		const spent = await this.#input.executor
-			.spent({
-				runId: run.runId,
-				stage,
-				attempt: run.attempt,
-				round: run.round ?? 0,
-			})
-			.catch(() => null);
-
-		return spent ?? 0;
-	}
-
-	#recordAttempt(
-		run: ActiveRun,
-		disposition: AttemptEnd["disposition"],
-		attempt = run.attempt,
-		next?: AttemptEnd["next"],
-	): void {
-		const phase = run.phase;
-		const status = desiredStatus(phase);
-
-		run.attemptEnd = {
-			v: 1,
-			runId: run.runId,
-			stage: run.stage,
-			round: run.round ?? 0,
-			attempt,
-			disposition,
-			usage: run.usage,
-			next:
-				next ??
-				(phase.kind === "retry_queued"
-					? { kind: "retry", attempt: run.attempt, dueAt: phase.dueAt }
-					: phase.kind === "base_check"
-						? { kind: "base_retry", attempt: run.attempt, dueAt: phase.dueAt }
-						: isTerminal(status) && phase.kind !== "reporting"
-							? { kind: "end", status }
-							: { kind: "continue" }),
-		};
-	}
-
-	/**
-	 * Tokens accept attempts 1 to `through` used, or `null` when any attempt
-	 * that ran a model has no spend record. Attempts after the bound suite was
-	 * stored, through `reference.acceptAttempt`, only reran its base check.
-	 */
-	async #acceptSpent(
-		run: ActiveRun,
-		reference: AcceptanceQualification,
-		through: number,
-	): Promise<number | null> {
-		const receipt = await this.#acceptanceReceipt(reference);
-
-		if (receipt === null) return null;
-		const stored = receipt.storedAttempt ?? reference.storedAttempt;
-		let total = 0;
-
-		for (let attempt = 1; attempt <= through; attempt++) {
-			if (attempt > stored && attempt <= reference.acceptAttempt) continue;
-
-			const spent = await this.#input.executor
-				.spent({ runId: run.runId, stage: "accept", attempt, round: 0 })
-				.catch(() => null);
-
-			if (spent === null) return null;
-			total += spent;
-		}
-
-		return total;
-	}
-
-	/** New receipts bind the claim's stored attempt; legacy receipts predate that field. */
-	async #acceptanceReceipt(reference: AcceptanceQualification) {
-		const receipt = await this.#input.files.artifacts.receipt(
-			reference.binding.runId,
-			reference.binding.acceptanceDigest,
-		);
-
-		return receipt !== null &&
-			receipt.contractDigest === reference.binding.contractDigest &&
-			receipt.baseSha === reference.binding.baseSha &&
-			(receipt.storedAttempt === undefined ||
-				receipt.storedAttempt === reference.storedAttempt)
-			? receipt
-			: null;
-	}
-
-	/** Retires the refused first suite again; the store makes this idempotent. */
-	async #retireRefused(
-		run: ActiveRun,
-		reference: AcceptanceQualification,
-	): Promise<boolean> {
-		const refused = reference.retry?.refused ?? reference.binding;
-		const read = () => this.#input.files.readContract(run.runId);
-		let contract = await read();
-
-		// One transient read failure must not strand a granted retry.
-		if (contract.kind !== "found") contract = await read();
-
-		const retired =
-			contract.kind === "found" && contract.digest === refused.contractDigest
-				? await this.#input.files.artifacts.retire(
-						run.runId,
-						contract.contract,
-						contract.digest,
-						refused.acceptanceDigest,
-					)
-				: "refused";
-
-		if (retired !== "retired")
-			this.#input.log("accept_retry_unavailable", {
-				issue: run.issue,
-				runId: run.runId,
-				why: `retire_${retired}`,
-			});
-
-		return retired === "retired";
 	}
 
 	/**
@@ -2382,7 +1305,8 @@ export class Orchestrator {
 		const baseWallMs =
 			progress.receipt === undefined ? null : (progress.baseWallMs ?? null);
 
-		const spent = await this.#acceptSpent(
+		const spent = await acceptSpent(
+			this.#input,
 			run,
 			reference,
 			reference.acceptAttempt,
@@ -2415,7 +1339,10 @@ export class Orchestrator {
 		}
 
 		// The store's exclusive marker makes this the run's only retirement.
-		if (baseWallMs === null || !(await this.#retireRefused(run, reference)))
+		if (
+			baseWallMs === null ||
+			!(await retireRefused(this.#input, run, reference))
+		)
 			return false;
 
 		run.baseCheck = {
@@ -2434,7 +1361,7 @@ export class Orchestrator {
 		run.replay = false;
 		run.phase = { kind: "claimed" };
 		this.state.totals.retries++;
-		this.#recordAttempt(run, "base_refused", reference.acceptAttempt, {
+		recordAttempt(run, "base_refused", reference.acceptAttempt, {
 			kind: "retry",
 			attempt: run.attempt,
 			dueAt: this.#input.clock.now(),
@@ -2446,55 +1373,9 @@ export class Orchestrator {
 			attempt: run.attempt,
 		});
 
-		if (await this.#saveAttempt(run)) await this.#writeClaim(run);
+		if (await saveAttempt(this.#input, run)) await writeClaim(this.#input, run);
 
 		return true;
-	}
-
-	async #retrySuite(
-		run: ActiveRun,
-		contract: Extract<ContractRead, { kind: "found" }>,
-	) {
-		const reference = run.baseCheck;
-
-		if (reference === undefined || !retryPending(reference)) return undefined;
-
-		const stored = await this.#input.files.artifacts
-			.readRetired(
-				run.runId,
-				contract.contract,
-				contract.digest,
-				reference.retry.refused.acceptanceDigest,
-			)
-			.catch(() => null);
-
-		return stored?.kind === "found" ? stored.suite : null;
-	}
-
-	/** The pending retry's private feedback, from the refused suite's stored receipt. */
-	async #retryFeedback(run: ActiveRun): Promise<RetryFeedback | undefined> {
-		const reference = run.baseCheck;
-
-		if (reference?.retry === undefined || !retryPending(reference))
-			return undefined;
-		const { refused, reason } = reference.retry;
-
-		const stored = await this.#input.executor
-			.baseCheck?.({
-				binding: refused,
-				acceptAttempt: reference.acceptAttempt,
-				storedAttempt: reference.storedAttempt,
-				remainingAcceptMs: 0,
-				signal: new AbortController().signal,
-				readOnly: true,
-			})
-			.catch(() => undefined);
-
-		return stored?.kind === "refused" &&
-			stored.receipt !== undefined &&
-			stored.failure.reason === reason
-			? baseRetryFeedback(stored.receipt, stored.failure)
-			: baseRetryFeedback(null, { reason, scenarios: [] });
 	}
 
 	#finishStage(run: ActiveRun, result: StageEnd, limits: Limits): void {
@@ -2506,7 +1387,7 @@ export class Orchestrator {
 			run.attemptEnd === undefined &&
 			!(run.stage === "accept" && result.kind === "passed")
 		)
-			this.#recordAttempt(
+			recordAttempt(
 				run,
 				result.kind === "passed"
 					? "completed"
@@ -2592,8 +1473,10 @@ export class Orchestrator {
 		) {
 			const reporting =
 				run.stage === "specify"
-					? this.#specified(run, result.output)
-					: this.#accepted(
+					? specified(this.#input, run, result.output)
+					: accepted(
+							this.#input,
+							this.#config,
 							run,
 							result.output,
 							result.model,
@@ -2676,7 +1559,7 @@ export class Orchestrator {
 			};
 		}
 
-		this.#recordAttempt(
+		recordAttempt(
 			run,
 			cause === "interrupted" ? "interrupted" : "model_failure",
 			attempt,
@@ -2712,7 +1595,7 @@ export class Orchestrator {
 		const issues = new Set<number>();
 
 		for (const ended of this.#ended.values()) {
-			if (ended.unwritten) await this.#writeEnded(ended);
+			if (ended.unwritten) await writeEnded(this.#input, ended);
 
 			if (!ended.confirmed && ended.tick < this.#ticks) {
 				issues.add(ended.claim.issue);
@@ -2913,18 +1796,7 @@ export class Orchestrator {
 			this.#local.set(claim.issue, claim);
 		}
 
-		await this.#writeEnded(ended);
-	}
-
-	async #writeEnded(ended: EndedRecord): Promise<void> {
-		ended.unwritten = !(await this.#input.files.writeClaim(ended.claim));
-
-		if (ended.unwritten) {
-			this.#input.log("claim_unwritable", {
-				issue: ended.claim.issue,
-				runId: ended.claim.runId,
-			});
-		}
+		await writeEnded(this.#input, ended);
 	}
 
 	#endedLocally(issue: number, runId: Digest): boolean {
@@ -2989,7 +1861,7 @@ export class Orchestrator {
 		if (
 			local !== undefined &&
 			(local.status === null || !isTerminal(local.status)) &&
-			!(await this.#unadmitted(issue, local.eventId))
+			!(await unadmitted(this.#input, issue, local.eventId))
 		)
 			this.#observeClaim(local, this.#unverifiedBy("ledger", failure));
 
@@ -3000,7 +1872,7 @@ export class Orchestrator {
 					!this.#ended.has(runId) &&
 					(known.observation.kind === "owned_confirmed" ||
 						known.observation.kind === "owned_unverified") &&
-					!(await this.#unadmitted(issue, known.eventId))
+					!(await unadmitted(this.#input, issue, known.eventId))
 				)
 					this.#observeClaim(
 						{ issue, runId, eventId: known.eventId },
@@ -3087,43 +1959,6 @@ export class Orchestrator {
 		);
 	}
 
-	async #localMarker(
-		local: ConfirmedRecord,
-		ledger: CleanLedger,
-	): Promise<Marker | null> {
-		if (local.marker !== undefined) return local.marker;
-
-		const stored = await this.#input.store.read({
-			repo: this.#input.repo,
-			issue: local.issue,
-			eventId: local.eventId,
-		});
-
-		if (stored.kind !== "found") return null;
-
-		const { receipt } = stored;
-		const read = latestFor(ledger, local.runId)?.marker;
-
-		return markerOf(
-			{
-				...local,
-				eventAt: receipt.eventAt,
-				snapshotDigest: receipt.snapshotDigest,
-				workflowSha: receipt.baseSha,
-				workflowDigest: receipt.workflowDigest,
-				stage: local.stage ?? read?.stage ?? FIRST_STAGE,
-				attempt: local.attempt ?? read?.attempt ?? 1,
-				usage: local.usage ?? read?.usage ?? 0,
-			},
-			{
-				repo: this.#input.repo,
-				status: local.status ?? read?.status ?? "claimed",
-				seq: local.seq,
-				cursor: null,
-			},
-		);
-	}
-
 	async #discover(
 		candidates: readonly IssueRecord[],
 		queued: number[],
@@ -3194,10 +2029,11 @@ export class Orchestrator {
 			const current =
 				local === null
 					? currentMarker(ledger.value)
-					: await this.#localMarker(local, ledger.value);
+					: await localMarker(this.#input, local, ledger.value);
 
 			if (local !== null && current === null) {
-				if (await this.#unadmitted(issue, local.eventId)) this.#resolve(issue);
+				if (await unadmitted(this.#input, issue, local.eventId))
+					this.#resolve(issue);
 
 				continue;
 			}
@@ -3259,7 +2095,7 @@ export class Orchestrator {
 			if (
 				foreign &&
 				settled === "resolved" &&
-				(await this.#unmarkedEvents(issue, ledger.value))?.length === 0
+				(await unmarkedEvents(this.#input, issue, ledger.value))?.length === 0
 			) {
 				this.#resolve(issue);
 				this.#see(issue, record.updatedAt, { kind: "decided" });
@@ -3296,19 +2132,9 @@ export class Orchestrator {
 	 * unmarked admission is claimed while it is the newest marker.
 	 */
 	async #ownershipOf(marker: Marker): Promise<ClaimObservation> {
-		return (await this.#unadmitted(marker.issue, marker.eventId))
+		return (await unadmitted(this.#input, marker.issue, marker.eventId))
 			? this.#observeClaim(marker, { kind: "foreign", runId: marker.runId })
 			: { kind: "unclaimed" };
-	}
-
-	async #unadmitted(issue: number, eventId: string): Promise<boolean> {
-		const stored = await this.#input.store.read({
-			repo: this.#input.repo,
-			issue,
-			eventId,
-		});
-
-		return stored.kind === "absent";
 	}
 
 	#resolve(issue: number): void {
@@ -3415,7 +2241,7 @@ export class Orchestrator {
 			if (
 				foreign ||
 				(latest === null &&
-					(await this.#unadmitted(claim.issue, claim.eventId)))
+					(await unadmitted(this.#input, claim.issue, claim.eventId)))
 			) {
 				if (settled === "resolved") settled = "refused";
 				continue;
@@ -3435,7 +2261,7 @@ export class Orchestrator {
 					return "undecided";
 				}
 
-				const admitted = await this.#admittedFields(claim);
+				const admitted = await admittedFields(this.#input, claim);
 
 				if (admitted === null) return "undecided";
 
@@ -3484,7 +2310,7 @@ export class Orchestrator {
 
 		if (this.state.runs.has(claim.issue)) return false;
 
-		const base = marked ?? (await this.#admittedFields(claim));
+		const base = marked ?? (await admittedFields(this.#input, claim));
 
 		if (base === null) return false;
 
@@ -3518,7 +2344,9 @@ export class Orchestrator {
 		this.state.runs.set(run.issue, run);
 
 		if (marked !== null) {
-			await this.#accountAdopted(
+			await accountAdopted(
+				this.#input,
+				this.state.totals,
 				run,
 				marked,
 				ledger,
@@ -3530,37 +2358,6 @@ export class Orchestrator {
 		await this.#sync(run);
 
 		return true;
-	}
-
-	async #admittedFields(
-		claim: ClaimRecord,
-	): Promise<Pick<
-		Marker,
-		| "eventAt"
-		| "snapshotDigest"
-		| "workflowSha"
-		| "workflowDigest"
-		| "stage"
-		| "attempt"
-		| "usage"
-	> | null> {
-		const stored = await this.#input.store.read({
-			repo: this.#input.repo,
-			issue: claim.issue,
-			eventId: claim.eventId,
-		});
-
-		if (stored.kind !== "found") return null;
-
-		return {
-			eventAt: stored.receipt.eventAt,
-			snapshotDigest: stored.receipt.snapshotDigest,
-			workflowSha: stored.receipt.baseSha,
-			workflowDigest: stored.receipt.workflowDigest,
-			stage: claim.stage ?? FIRST_STAGE,
-			attempt: claim.attempt ?? 1,
-			usage: claim.usage ?? 0,
-		};
 	}
 
 	async #matchesAdmission(
@@ -3692,7 +2489,7 @@ export class Orchestrator {
 				// A claim records only author reasons; never relaunch any other.
 				const retired =
 					retryableBaseReason(reference.retry.reason) &&
-					(await this.#retireRefused(run, reference));
+					(await retireRefused(this.#input, run, reference));
 
 				if (!retired || marker.attempt <= reference.acceptAttempt) {
 					const unmarked = Math.max(0, (local.usage ?? 0) - run.usage);
@@ -3714,7 +2511,7 @@ export class Orchestrator {
 
 					if (eligibility.kind === "released")
 						this.#release(run, eligibility.reason);
-					await this.#writeClaim(run);
+					await writeClaim(this.#input, run);
 					await this.#sync(run);
 
 					return run;
@@ -3755,7 +2552,7 @@ export class Orchestrator {
 
 		this.state.runs.set(run.issue, run);
 		this.#local.set(run.issue, { ...claimOf(run), seq });
-		await this.#writeClaim(run);
+		await writeClaim(this.#input, run);
 
 		this.#input.log("claim_adopted", {
 			issue: run.issue,
@@ -3782,7 +2579,9 @@ export class Orchestrator {
 		}
 
 		if (ended != null && !releasing) {
-			await this.#accountAdopted(
+			await accountAdopted(
+				this.#input,
+				this.state.totals,
 				run,
 				marker,
 				ledger,
@@ -3834,7 +2633,9 @@ export class Orchestrator {
 						.catch(() => null)
 				: null;
 
-		await this.#accountAdopted(
+		await accountAdopted(
+			this.#input,
+			this.state.totals,
 			run,
 			marker,
 			ledger,
@@ -4026,21 +2827,6 @@ export class Orchestrator {
 		return claimed.phase.kind !== "ending";
 	}
 
-	async #unmarkedEvents(
-		issue: number,
-		ledger: CleanLedger,
-	): Promise<string[] | null> {
-		const repo = this.#input.repo;
-		const events = await this.#input.store.listEvents({ repo, issue });
-
-		return (
-			events?.filter(
-				(eventId) =>
-					latestFor(ledger, runIdOf({ repo, issue, eventId })) === null,
-			) ?? null
-		);
-	}
-
 	/**
 	 * Finds an admission this controller recorded for the issue's current ready
 	 * event but never marked, such as after a crash before the first marker. It
@@ -4059,7 +2845,7 @@ export class Orchestrator {
 	> {
 		const repo = this.#input.repo;
 		const issue = record.number;
-		const unmarked = await this.#unmarkedEvents(issue, ledger);
+		const unmarked = await unmarkedEvents(this.#input, issue, ledger);
 
 		if (unmarked === null) return { kind: "defer" };
 
@@ -4229,7 +3015,12 @@ export class Orchestrator {
 			return null;
 		}
 
-		const link = await this.#link({ issue, ledger, admitted, runId });
+		const link = await linkRun(this.#input, this.#adapter, {
+			issue,
+			ledger,
+			admitted,
+			runId,
+		});
 
 		if (link.kind === "defer") return null;
 
@@ -4362,7 +3153,7 @@ export class Orchestrator {
 
 		if (critical) {
 			run.labelFailures = outcome === "posted" ? 0 : run.labelFailures + 1;
-			await this.#writeClaim(run);
+			await writeClaim(this.#input, run);
 		}
 
 		if (outcome !== "posted") this.#input.log("label_unconfirmed", fields);
@@ -4407,265 +3198,6 @@ export class Orchestrator {
 		));
 
 		return !run.clearNeedsInfo;
-	}
-
-	async #answerHistory(
-		runId: Digest,
-		ledger: CleanLedger,
-	): Promise<readonly AnswersRecord[] | "previous_link" | "previous_answers"> {
-		const records: AnswersRecord[] = [];
-		const visited = new Set<Digest>();
-		let current = runId;
-
-		for (;;) {
-			if (visited.has(current)) return "previous_link";
-
-			visited.add(current);
-
-			const first = ledger.markers.find(
-				({ marker }) => marker.runId === current,
-			);
-
-			const earlier = ledger.markers.findLast(
-				({ marker }) =>
-					marker.seq < (first?.marker.seq ?? 0) && isTerminal(marker.status),
-			);
-
-			const linked = await this.#input.files.readLink(current);
-
-			if (linked.kind === "unreadable") return "previous_link";
-
-			if (linked.kind === "unlinked") return records.reverse();
-
-			if (linked.kind === "none") {
-				return (await this.#input.files.readAnswers(current)) === null
-					? records.reverse()
-					: "previous_link";
-			}
-
-			if (
-				earlier?.marker.status === "needs_info" &&
-				earlier.marker.runId !== linked.link.prevRunId
-			)
-				return "previous_link";
-
-			const answers = await this.#input.files.readAnswers(current);
-
-			if (
-				answers === null ||
-				answers.runId !== current ||
-				answers.prevRunId !== linked.link.prevRunId ||
-				answers.digest !== linked.link.answersDigest ||
-				answersDigestOf(answers) !== answers.digest
-			)
-				return "previous_answers";
-
-			records.push(answers);
-			current = linked.link.prevRunId;
-		}
-	}
-
-	async #link(input: {
-		issue: number;
-		ledger: CleanLedger;
-		admitted: AdmittedReceipt;
-		runId: Digest;
-	}): Promise<
-		| { readonly kind: "none" }
-		| { readonly kind: "defer" }
-		| { readonly kind: "ambiguous" }
-		| {
-				readonly kind: "invalid";
-				readonly reason: "answers_record_invalid" | "link_record_invalid";
-				readonly detail: "previous_answers" | "previous_link";
-		  }
-		| { readonly kind: "linked"; readonly link: Link; readonly answers: number }
-	> {
-		const { issue, admitted, runId } = input;
-
-		const prev: TrustedMarker | undefined = input.ledger.markers.findLast(
-			({ marker }) => isTerminal(marker.status),
-		);
-
-		if (
-			prev === undefined ||
-			!isClarificationPredecessor(prev, admitted, runId)
-		) {
-			return { kind: "none" };
-		}
-
-		if (admitted.eventAt === prev.createdAt) return { kind: "ambiguous" };
-
-		const comments = await this.#adapter.readComments(issue);
-
-		if (comments.kind === "failed") return { kind: "defer" };
-
-		const prevRunId = prev.marker.runId;
-
-		const asked = comments.value.find(
-			(comment) =>
-				isControllerComment(comment, this.#input.platform) &&
-				questionsKeyOf(comment.body)?.runId === prevRunId,
-		);
-
-		if (
-			admitted.eventAt < prev.createdAt &&
-			(asked === undefined || admitted.eventAt <= asked.createdAt)
-		) {
-			return { kind: "none" };
-		}
-
-		const floor = BigInt(asked?.id ?? prev.commentId);
-
-		const candidates = comments.value
-			.filter((comment) =>
-				isAnswerCandidate(
-					comment,
-					floor,
-					admitted.eventAt,
-					this.#input.platform,
-				),
-			)
-			.sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
-
-		if (candidates.some((comment) => comment.createdAt === admitted.eventAt)) {
-			return { kind: "ambiguous" };
-		}
-
-		const edits = await this.#adapter.readCommentEdits(
-			candidates.map((comment) => comment.nodeId),
-		);
-
-		if (edits.kind === "failed") return { kind: "defer" };
-
-		const history = await this.#answerHistory(prevRunId, input.ledger);
-
-		if (history === "previous_link" || history === "previous_answers") {
-			return {
-				kind: "invalid",
-				reason:
-					history === "previous_link"
-						? "link_record_invalid"
-						: "answers_record_invalid",
-				detail: history,
-			};
-		}
-
-		const previousAnswers = history.at(-1);
-		const answers: Answer[] = [...(previousAnswers?.answers ?? [])];
-		const permissions = new Map<string, boolean>();
-
-		for (const comment of candidates) {
-			if (answers.length >= MAX_ANSWERS) break;
-			const edit = edits.value.get(comment.nodeId);
-			const login = comment.author?.login ?? "";
-
-			if (edit === undefined || edit.id !== comment.id) {
-				return { kind: "defer" };
-			}
-
-			if (!answerEditPrecedesLabel(edit, admitted.eventAt) || !isLogin(login)) {
-				continue;
-			}
-
-			let authorized = permissions.get(login.toLowerCase());
-
-			if (authorized === undefined) {
-				const permission = await this.#adapter.readPermission(login);
-
-				if (permission.kind === "failed") return { kind: "defer" };
-
-				authorized = hasWriteAccess(permission.value);
-				permissions.set(login.toLowerCase(), authorized);
-			}
-
-			if (!authorized) continue;
-
-			answers.push({
-				commentId: comment.id,
-				author: login,
-				createdAt: comment.createdAt,
-				body: answerBody(comment.body),
-			});
-
-			if (answers.length === MAX_ANSWERS) break;
-		}
-
-		const questions = asked === undefined ? "" : withoutKey(asked.body);
-
-		const rounds = [
-			...history.map((record, index) => ({
-				questions: record.questions,
-				answers: record.answers.slice(history[index - 1]?.answers.length ?? 0),
-			})),
-			{
-				questions,
-				answers: answers.slice(previousAnswers?.answers.length ?? 0),
-			},
-		];
-
-		const digest = answersDigestOf({ prevRunId, questions, answers, rounds });
-
-		const record: AnswersRecord = {
-			version: 1,
-			runId,
-			prevRunId,
-			questionsCommentId: asked?.id ?? null,
-			questions,
-			answers,
-			rounds,
-			digest,
-		};
-
-		const link: Link = {
-			prevRunId,
-			questionsDigest:
-				asked === undefined
-					? null
-					: (questionsKeyOf(asked.body)?.digest ?? null),
-			answersDigest: digest,
-		};
-
-		const { files } = this.#input;
-
-		if (
-			!(await files.writeAnswers(record)) ||
-			!(await files.writeLink(runId, link))
-		) {
-			this.#input.log("link_unwritable", { issue, runId });
-
-			return { kind: "defer" };
-		}
-
-		return { kind: "linked", link, answers: answers.length };
-	}
-
-	async #prepareWorkspace(run: ActiveRun): Promise<WorkspacePreparation> {
-		const workspace = await this.#input.files.ensureWorkspace(run.runId);
-
-		if (workspace === "unavailable") {
-			this.#input.log("workspace_unavailable", {
-				issue: run.issue,
-				runId: run.runId,
-			});
-
-			return { kind: "unavailable" };
-		}
-
-		run.replay = false;
-
-		if (workspace === "created") {
-			run.workspaceMissing = true;
-			this.#input.log("workspace_missing", {
-				issue: run.issue,
-				runId: run.runId,
-				stage: run.stage,
-			});
-
-			return { kind: "replayed_missing" };
-		}
-
-		return { kind: "fresh" };
 	}
 
 	async #stillReady(run: ActiveRun): Promise<ClaimObservation> {
@@ -4718,12 +3250,12 @@ export class Orchestrator {
 
 		if (config === null) return false;
 
-		await this.#reconcileSpent(run);
+		await reconcileSpent(this.#input, this.state.totals, run);
 
 		const stage = run.stage;
 
 		const prior = isModelStage(stage)
-			? await this.#attemptSpent(run, stage)
+			? await attemptSpent(this.#input, run, stage)
 			: 0;
 
 		const runExhausted = run.usage + prior >= config.usage.maxTokensPerRun;
@@ -4760,7 +3292,7 @@ export class Orchestrator {
 			}
 		}
 
-		const preparation = await this.#prepareWorkspace(run);
+		const preparation = await prepareWorkspace(this.#input, run);
 
 		if (preparation.kind === "unavailable") return false;
 
@@ -4773,7 +3305,9 @@ export class Orchestrator {
 
 		await this.#clearNeedsInfo(run);
 
-		const prepared = this.#enabled ? await this.#stageInputs(run) : UNPREPARED;
+		const prepared = this.#enabled
+			? await stageInputs(this.#input, run)
+			: UNPREPARED;
 
 		if (prepared.kind === "wait") return false;
 
@@ -4781,7 +3315,16 @@ export class Orchestrator {
 			if (prepared.refusal !== undefined) {
 				const notice = baseRefusalNotice(prepared.refusal);
 
-				if (!(await this.#postKeyed(run, notice.key, notice.body)))
+				if (
+					!(await postKeyed(
+						this.#input,
+						this.#adapter,
+						this.#writer,
+						run,
+						notice.key,
+						notice.body,
+					))
+				)
 					return false;
 			}
 
@@ -4841,7 +3384,12 @@ export class Orchestrator {
 		let earlier = 0;
 
 		if (reference?.retry !== undefined) {
-			const spent = await this.#acceptSpent(run, reference, run.attempt - 1);
+			const spent = await acceptSpent(
+				this.#input,
+				run,
+				reference,
+				run.attempt - 1,
+			);
 
 			const wallMs =
 				budget.wallMs - (run.acceptWallMs ?? 0) - reference.retry.baseWallMs;
@@ -5160,7 +3708,12 @@ export class Orchestrator {
 			if (!(await this.#commitCandidate(run, step.state))) continue;
 
 			if (this.#candidateRecovery.has(run.runId))
-				await this.#recoverCandidate(run);
+				await recoverCandidate(
+					this.#input,
+					this.#candidateResults,
+					this.#candidateRecovery,
+					run,
+				);
 
 			for (let index = 0; index < this.#candidateResults.length; ) {
 				const queued = this.#candidateResults[index];
@@ -5273,7 +3826,7 @@ export class Orchestrator {
 				(await this.#recoverUncertainPost(run)) === "proceed"
 			) {
 				await this.#publishMarker(run);
-				await this.#writeClaim(run);
+				await writeClaim(this.#input, run);
 			}
 		}
 	}
@@ -5287,7 +3840,10 @@ export class Orchestrator {
 		const key = `<!-- factory-review-input run=${run.runId} -->`;
 
 		if (
-			!(await this.#postKeyed(
+			!(await postKeyed(
+				this.#input,
+				this.#adapter,
+				this.#writer,
 				run,
 				key,
 				`Stopped: ${refusal.reason}. Candidate diff is ${refusal.bytes} bytes; the review limit is ${refusal.limit} bytes. No review model was launched.\n\n${key}`,
@@ -5296,142 +3852,6 @@ export class Orchestrator {
 			return null;
 
 		return stopRound(state, refusal.reason, this.#input.clock.now());
-	}
-
-	#queueReviewRefusal(
-		execution: Extract<CandidateExecution, { stage: "review" }>,
-		tokens: number | null,
-	): void {
-		if (tokens !== null)
-			this.#candidateResults.push({
-				runId: execution.runId,
-				event: { kind: "execution_progress", execution, tokens },
-			});
-		this.#candidateResults.push({
-			runId: execution.runId,
-			event: {
-				kind: "review_settled",
-				execution,
-				tokens: null,
-				result: { kind: "failed" },
-			},
-		});
-	}
-
-	async #recoverCandidate(run: ActiveRun): Promise<void> {
-		const state = run.handoff;
-		const executor = this.#input.executor;
-
-		if (state?.kind !== "selected" || !(await executor.reconciled())) return;
-
-		for (const account of state.accounts) {
-			if (account.settlement === "settled") continue;
-			const execution = account.execution;
-
-			const tokens = await executor.spent({
-				runId: execution.runId,
-				stage: execution.stage,
-				attempt: execution.attempt,
-				round: execution.round,
-				execution,
-			});
-
-			let output: StageOutput | null;
-
-			try {
-				output = await executor.output({
-					runId: execution.runId,
-					stage: execution.stage,
-					attempt: execution.attempt,
-					round: execution.round,
-					execution,
-					workflowSha: execution.workflowSha,
-					workflowDigest: execution.workflowDigest,
-				});
-			} catch (error) {
-				if (
-					!(error instanceof ReviewEvidenceUnavailable) ||
-					execution.stage !== "review"
-				)
-					throw error;
-				this.#queueReviewRefusal(execution, tokens);
-				continue;
-			}
-
-			const ended = await this.#input.files.accounting?.readAttempt(
-				run.runId,
-				execution.stage,
-				execution.round,
-				execution.attempt,
-			);
-
-			if (ended === undefined && this.#input.files.accounting !== undefined)
-				continue;
-
-			if (
-				ended !== null &&
-				ended !== undefined &&
-				ended.disposition !== "completed"
-			)
-				output = null;
-			let event: CandidateEvent;
-
-			if (
-				output instanceof Object &&
-				output.kind === "pending" &&
-				tokens !== null
-			) {
-				event = { kind: "resume_execution", execution, tokens };
-			} else if (execution.stage === "review") {
-				const patch = await executor.candidate?.patch(state, execution.round);
-				event = {
-					kind: "review_settled",
-					execution,
-					tokens,
-					result:
-						output instanceof Object &&
-						output.kind === "review" &&
-						patch != null
-							? { kind: "passed", review: output.receipt, patch }
-							: output instanceof Object && output.kind === "refused"
-								? { kind: "failed", reason: output.reason }
-								: { kind: "failed" },
-				};
-			} else
-				event = {
-					kind: "repair_settled",
-					execution,
-					tokens,
-					result:
-						output instanceof Object &&
-						output.kind === "build" &&
-						output.result.kind === "found"
-							? { kind: "passed", patch: output.result.receipt }
-							: output instanceof Object &&
-									output.kind === "build" &&
-									output.result.kind === "blocked" &&
-									output.result.reason === "repair_no_change"
-								? { kind: "no_change" }
-								: { kind: "failed" },
-				};
-			this.#candidateResults.push({
-				runId: run.runId,
-				event,
-				refusal:
-					output instanceof Object && output.kind === "refused"
-						? output
-						: undefined,
-				disposition:
-					ended?.disposition ??
-					(event.kind === "resume_execution"
-						? undefined
-						: event.result.kind === "passed"
-							? "completed"
-							: "interrupted"),
-			});
-		}
-
-		this.#candidateRecovery.delete(run.runId);
 	}
 
 	async #interpretCandidate(
@@ -5509,7 +3929,17 @@ export class Orchestrator {
 						},
 					);
 
-					if (!(await this.#postKeyed(run, notice.key, notice.body))) return;
+					if (
+						!(await postKeyed(
+							this.#input,
+							this.#adapter,
+							this.#writer,
+							run,
+							notice.key,
+							notice.body,
+						))
+					)
+						return;
 				}
 
 				completion = {
@@ -5573,7 +4003,10 @@ export class Orchestrator {
 					const key = `<!-- factory-handoff-input run=${run.runId} -->`;
 
 					if (
-						!(await this.#postKeyed(
+						!(await postKeyed(
+							this.#input,
+							this.#adapter,
+							this.#writer,
 							run,
 							key,
 							`Stopped: summary_too_large. The pinned contract summary exceeds the handoff limit.\n\n${key}`,
@@ -5786,7 +4219,7 @@ export class Orchestrator {
 		run.attempt = execution.attempt;
 
 		const inputs =
-			execution.stage === "build" ? await this.#stageInputs(run) : null;
+			execution.stage === "build" ? await stageInputs(this.#input, run) : null;
 
 		run.stage = oldStage;
 		run.round = oldRound;
@@ -5796,7 +4229,17 @@ export class Orchestrator {
 			if (inputs.refusal !== undefined) {
 				const notice = baseRefusalNotice(inputs.refusal);
 
-				if (!(await this.#postKeyed(run, notice.key, notice.body))) return null;
+				if (
+					!(await postKeyed(
+						this.#input,
+						this.#adapter,
+						this.#writer,
+						run,
+						notice.key,
+						notice.body,
+					))
+				)
+					return null;
 			}
 
 			const settled = handoffCandidate(state, {
@@ -5961,7 +4404,7 @@ export class Orchestrator {
 						execution,
 					});
 
-					this.#queueReviewRefusal(execution, tokens);
+					queueReviewRefusal(this.#candidateResults, execution, tokens);
 
 					return;
 				}
@@ -6065,7 +4508,7 @@ export class Orchestrator {
 
 		if (
 			reference.kind !== "refused" &&
-			(await this.#acceptanceReceipt(reference)) === null
+			(await acceptanceReceipt(this.#input, reference)) === null
 		) {
 			this.#stop(run, inputCause("accept", "acceptance_changed"));
 
@@ -6104,10 +4547,10 @@ export class Orchestrator {
 					attempt: reference.acceptAttempt,
 					next: "base_check",
 				});
-				this.#recordAttempt(run, "interrupted", reference.acceptAttempt);
+				recordAttempt(run, "interrupted", reference.acceptAttempt);
 
-				if (!(await this.#saveAttempt(run))) return;
-				await this.#writeClaim(run);
+				if (!(await saveAttempt(this.#input, run))) return;
+				await writeClaim(this.#input, run);
 
 				return;
 			}
@@ -6145,11 +4588,18 @@ export class Orchestrator {
 				failure,
 				noticeKey: notice.key,
 			};
-			await this.#writeClaim(run);
+			await writeClaim(this.#input, run);
 
 			if (
 				run.claimUnwritten ||
-				!(await this.#postKeyed(run, notice.key, notice.body))
+				!(await postKeyed(
+					this.#input,
+					this.#adapter,
+					this.#writer,
+					run,
+					notice.key,
+					notice.body,
+				))
 			)
 				return;
 			this.#stop(run, {
@@ -6167,7 +4617,7 @@ export class Orchestrator {
 			);
 
 			if (recorded === null)
-				this.#recordAttempt(run, "base_refused", reference.acceptAttempt);
+				recordAttempt(run, "base_refused", reference.acceptAttempt);
 
 			return;
 		}
@@ -6225,82 +4675,27 @@ export class Orchestrator {
 		}
 
 		if (
-			!(await this.#postKeyed(
+			!(await postKeyed(
+				this.#input,
+				this.#adapter,
+				this.#writer,
 				run,
 				acceptanceKey(run.runId, reference.binding.acceptanceDigest),
 				body,
 			))
 		)
 			return;
-		this.#recordAttempt(run, "completed", reference.acceptAttempt);
+		recordAttempt(run, "completed", reference.acceptAttempt);
 		// Qualification has finished; recovery may safely reuse the stored suite.
 		run.attemptEnd = { ...run.attemptEnd!, next: { kind: "continue" } };
 
-		if (!(await this.#saveAttempt(run))) return;
+		if (!(await saveAttempt(this.#input, run))) return;
 		run.stage = "build";
 		run.attempt = 1;
 		run.inputs = null;
 		run.replay = false;
 		run.phase = { kind: "claimed" };
-		await this.#writeClaim(run);
-	}
-
-	/**
-	 * A granted retry withheld the first refusal's notice. A run that ends
-	 * before its retried suite qualifies or posts its own refusal posts that
-	 * first notice, keyed, so exactly once. False until it is posted.
-	 */
-	async #postRetriedRefusal(run: ActiveRun): Promise<boolean> {
-		const reference = run.baseCheck;
-
-		if (
-			run.phase.kind !== "ending" ||
-			run.stage !== "accept" ||
-			reference === undefined
-		)
-			return true;
-
-		const failure =
-			reference.kind === "refused"
-				? reference.failure
-				: reference.retry === undefined
-					? null
-					: retriedRefusal(reference.retry);
-
-		if (failure === null) return true;
-		const notice = baseRefusalNotice(failure);
-
-		if (!(await this.#postKeyed(run, notice.key, notice.body))) return false;
-
-		run.baseCheck = {
-			...reference,
-			kind: "refused",
-			failure,
-			noticeKey: notice.key,
-		};
-
-		return true;
-	}
-
-	async #saveAttempt(run: ActiveRun): Promise<boolean> {
-		const attemptEnd = run.attemptEnd;
-
-		if (attemptEnd === undefined || this.#input.files.accounting === undefined)
-			return true;
-
-		if (!(await this.#input.files.accounting.writeAttempt(attemptEnd))) {
-			this.#input.log("attempt_end_unwritable", {
-				runId: run.runId,
-				stage: attemptEnd.stage,
-				attempt: attemptEnd.attempt,
-			});
-
-			return false;
-		}
-
-		run.attemptEnd = undefined;
-
-		return true;
+		await writeClaim(this.#input, run);
 	}
 
 	async #sync(run: ActiveRun): Promise<void> {
@@ -6308,7 +4703,7 @@ export class Orchestrator {
 
 		if (run.phase.kind === "evidence_missing") {
 			await this.#publishMarker(run);
-			await this.#writeClaim(run);
+			await writeClaim(this.#input, run);
 
 			return;
 		}
@@ -6321,7 +4716,7 @@ export class Orchestrator {
 			run.adopted &&
 			run.phase.kind === "ending" &&
 			run.phase.status === "released" &&
-			!(await this.#countReleased(run))
+			!(await countReleased(this.#input, this.state.totals, run))
 		) {
 			return;
 		}
@@ -6329,7 +4724,7 @@ export class Orchestrator {
 		if (run.phase.kind === "ending" && run.baseCheck !== undefined)
 			await this.#input.executor.stopBase?.(run.runId);
 
-		if (!(await this.#saveAttempt(run))) return;
+		if (!(await saveAttempt(this.#input, run))) return;
 
 		const before = run.seq;
 
@@ -6403,11 +4798,14 @@ export class Orchestrator {
 			}
 		}
 
-		if (!(await this.#postRetriedRefusal(run))) return;
+		if (
+			!(await postRetriedRefusal(this.#input, this.#adapter, this.#writer, run))
+		)
+			return;
 
 		// A stop decided while reporting, such as a final base refusal, records
 		// its attempt here, before the terminal snapshot reads the attempts.
-		if (!(await this.#saveAttempt(run))) return;
+		if (!(await saveAttempt(this.#input, run))) return;
 
 		if (!(await this.#prepareTerminal(run))) return;
 
@@ -6418,415 +4816,8 @@ export class Orchestrator {
 			this.state.runs.delete(run.issue);
 			await this.#keepEnded({ ...claimOf(run), seq: run.seq }, false);
 		} else if (run.seq !== before) {
-			await this.#writeClaim(run);
+			await writeClaim(this.#input, run);
 		}
-	}
-
-	async #stageInputs(run: ActiveRun): Promise<
-		| Prepared
-		| { readonly kind: "wait" }
-		| {
-				readonly kind: "fail";
-				readonly why: string;
-				readonly refusal?: BaseRefusal;
-		  }
-	> {
-		const { files, repo } = this.#input;
-		const fields = { issue: run.issue, runId: run.runId };
-
-		const wait = (why: string) => {
-			this.#input.log("stage_inputs_unavailable", { ...fields, why });
-
-			return { kind: "wait" } as const;
-		};
-
-		const fail = (why: string, refusal?: BaseRefusal) => {
-			this.#input.log("stage_inputs_refused", { ...fields, why });
-
-			return { kind: "fail", why, refusal } as const;
-		};
-
-		if (
-			run.stage !== "specify" &&
-			run.stage !== "accept" &&
-			run.stage !== "build"
-		)
-			return fail("no_prompt");
-
-		const contract =
-			run.stage !== "specify" ? await files.readContract(run.runId) : null;
-
-		if (contract?.kind === "blocked") return fail(contract.reason);
-
-		if (
-			contract?.kind === "found" &&
-			(contract.contract.base.sha !== run.workflowSha ||
-				contract.contract.base.repo !== repo ||
-				contract.contract.issue !== run.issue ||
-				contract.contract.snapshot.digest !== run.snapshotDigest)
-		)
-			return fail("contract_binding");
-
-		const workspace =
-			run.stage === "build"
-				? `${files.workspacePath(run.runId)}-build-r${run.round ?? 0}-${run.attempt}`
-				: files.workspacePath(run.runId);
-
-		const checked = await this.#input.executor
-			.checkout({
-				runId: run.runId,
-				repo,
-				sha: run.workflowSha,
-				workspace,
-				build: run.stage === "build",
-				round: run.round ?? 0,
-				feedbackFrom:
-					run.handoff?.kind === "selected" &&
-					run.handoff.work.kind === "effect" &&
-					run.handoff.work.request.kind === "repair_build"
-						? run.handoff.work.request.execution.feedbackFrom
-						: undefined,
-				cause:
-					run.handoff?.kind === "selected" &&
-					run.handoff.work.kind === "effect" &&
-					run.handoff.work.request.kind === "repair_build"
-						? run.handoff.work.request.execution.cause
-						: undefined,
-			})
-			.catch((): CheckoutResult => ({ kind: "unavailable" }));
-
-		if (checked.kind === "unavailable") return wait("checkout");
-
-		if (checked.kind === "refused") return fail(`checkout_${checked.reason}`);
-
-		if (run.stage === "accept" && checked.omitted !== 0)
-			return fail("checkout_base_tree_unsupported");
-
-		const { checkout } = checked;
-
-		const workflow = await checkout.read(WORKFLOW_PATH, 256 * 1024);
-
-		if (workflow === null || digestOf(workflow) !== run.workflowDigest) {
-			return fail("workflow_mismatch");
-		}
-
-		const parsed = parseWorkflow({
-			text: workflow,
-			repo,
-			env: this.#input.env,
-			platform: this.#input.platform,
-		});
-
-		if (parsed.kind === "invalid") return fail("workflow_invalid");
-
-		if (contract?.kind === "found") {
-			const shown = await sourceExcerpts({
-				files: contract.contract.files,
-				evidence: contract.contract.evidence,
-				checkout,
-				identity: `${repo}@${run.workflowSha}${run.stage === "build" && (run.round ?? 0) > 0 ? ` workspace-r${run.round}-${run.attempt}` : ""}`,
-				repair: run.stage === "build" && (run.round ?? 0) > 0,
-				accept: run.stage === "accept",
-			});
-
-			let build: Prepared["build"];
-
-			if (run.stage === "build") {
-				const suite = await files.artifacts.read(
-					run.runId,
-					contract.contract,
-					contract.digest,
-				);
-
-				if (suite.kind !== "found")
-					return fail(
-						suite.kind === "blocked" ? suite.reason : "acceptance_missing",
-					);
-
-				const binding = {
-					runId: run.runId,
-					repo,
-					issue: run.issue,
-					contractDigest: contract.digest,
-					acceptanceDigest: suite.receipt.acceptanceDigest,
-					baseSha: run.workflowSha,
-					gateSha: run.workflowSha,
-				};
-
-				const qualified = await this.#input.executor
-					.baseCheck?.({
-						binding,
-						acceptAttempt: run.baseCheck?.acceptAttempt ?? 1,
-						storedAttempt: run.baseCheck?.storedAttempt,
-						remainingAcceptMs: 0,
-						signal: new AbortController().signal,
-						readOnly: true,
-					})
-					.catch(() => undefined);
-
-				if (
-					qualified?.kind !== "ready" ||
-					!matchingBaseProof(qualified.proof, binding)
-				)
-					return fail("base_evidence_missing", {
-						binding,
-						receiptDigest: digestOf(
-							JSON.stringify({ binding, round: run.round ?? 0 }),
-						),
-						reason: "base_evidence_missing",
-						scenarios: [],
-					});
-
-				build = {
-					binding: {
-						runId: run.runId,
-						round: run.round ?? 0,
-						baseSha: contract.contract.base.sha,
-						contractDigest: contract.digest,
-						acceptanceDigest: suite.receipt.acceptanceDigest,
-					},
-					command: visibleTestCommand(parsed.guidance),
-					allowNoChange: false,
-				};
-			}
-
-			return {
-				kind: "ready",
-				workspace,
-				build,
-				source: sourceFacts(shown),
-				inputs: {
-					contract,
-					files: new Set(checkout.files),
-					source: contract.contract.snapshot.source,
-					link: null,
-				},
-				prompt:
-					run.stage === "build"
-						? buildPrompt({
-								feedback:
-									run.handoff?.kind === "selected" &&
-									run.handoff.work.kind === "effect" &&
-									run.handoff.work.request.kind === "repair_build" &&
-									run.handoff.work.request.execution.cause.kind === "feedback",
-								contract: contract.contract,
-								guidance: parsed.guidance,
-								inlined: shown,
-							})
-						: acceptancePrompt({
-								contract: contract.contract,
-								files: checkout.files,
-								inlined: shown,
-								guidance: parsed.guidance,
-								feedback: await this.#retryFeedback(run),
-								previousSuite: await this.#retrySuite(run, contract),
-							}),
-			};
-		}
-
-		const stored = await this.#input.store.readSnapshot({
-			repo,
-			issue: run.issue,
-			eventId: run.eventId,
-		});
-
-		if (stored.kind !== "found") return wait("snapshot");
-
-		if (stored.receipt.snapshotDigest !== run.snapshotDigest) {
-			return fail("snapshot_mismatch");
-		}
-
-		const linked = await files.readLink(run.runId);
-
-		if (linked.kind === "unreadable") return wait("link");
-
-		const link = linked.kind === "found" ? linked.link : null;
-		const answers = link === null ? null : await files.readAnswers(run.runId);
-
-		if (
-			link !== null &&
-			(answers === null || answers.digest !== link.answersDigest)
-		) {
-			return wait("answers");
-		}
-
-		const set = new Set(checkout.files);
-		const { title, body } = stored.snapshot;
-		const readme = checkout.files.find((path) => /^readme\.md$/i.test(path));
-
-		const wanted = [
-			...(readme === undefined ? [] : [readme]),
-			...namedFiles(
-				[title, body, ...(answers?.answers ?? []).map((a) => a.body)].join(
-					"\n",
-				),
-				set,
-			),
-		];
-
-		const shown: InlinedFile[] = [];
-		let budget = INLINE_TOTAL_BYTES;
-
-		for (const path of new Set(wanted)) {
-			const text = await checkout.read(path, NAMED_FILE_READ_BYTES);
-
-			if (text === null || budget < 1024) continue;
-
-			const file = inlined(path, text, Math.min(NAMED_FILE_BYTES, budget));
-
-			budget -= Buffer.byteLength(file.text, "utf8");
-			shown.push(file);
-		}
-
-		return {
-			kind: "ready",
-			inputs: { files: set, source: stored.receipt.snapshotSource, link },
-			source: specifySourceFacts(shown),
-			specify: { title, body, answers, files: checkout.files },
-			prompt: specifyPrompt({
-				repo,
-				baseSha: run.workflowSha,
-				guidance: parsed.guidance,
-				files: checkout.files,
-				inlined: shown,
-				title,
-				body,
-				answers,
-			}),
-		};
-	}
-
-	#specified(
-		run: ActiveRun,
-		output: string | null,
-	): Extract<RunPhase, { kind: "reporting" }> | null {
-		const inputs = run.inputs;
-		const fields = { issue: run.issue, runId: run.runId, attempt: run.attempt };
-
-		if (output === null || inputs === null) {
-			this.#input.log("specify_malformed", { ...fields, reason: "no_output" });
-
-			return null;
-		}
-
-		const parsed = parseSpecifyOutput(output, inputs.files);
-		const repo = this.#input.repo;
-
-		if (parsed.kind === "questions") {
-			run.clearNeedsInfo = false;
-			const digest = questionsDigestOf(parsed.questions);
-
-			const body = renderQuestions({
-				repo,
-				sha: run.workflowSha,
-				runId: run.runId,
-				questions: parsed.questions,
-				digest,
-			});
-
-			if (body !== null) {
-				return {
-					kind: "reporting",
-					status: "needs_info",
-					effects: {
-						kind: "questions",
-						questions: parsed.questions,
-						digest,
-						body,
-						stored: false,
-						posted: false,
-						labeled: false,
-						unlabeled: false,
-						labelTick: 0,
-					},
-				};
-			}
-		}
-
-		if (parsed.kind === "contract") {
-			const contract: Contract = {
-				version: CONTRACT_VERSION,
-				runId: run.runId,
-				issue: run.issue,
-				base: { repo, sha: run.workflowSha },
-				snapshot: {
-					digest: run.snapshotDigest,
-					source: inputs.source,
-					eventId: run.eventId,
-					eventAt: run.eventAt,
-				},
-				link: inputs.link,
-				...parsed.draft,
-			};
-
-			const bytes = contractBytes(contract);
-			const digest = contractDigestOf(bytes);
-
-			const body = renderSummary({
-				runId: run.runId,
-				contract: parsed.draft,
-				digest,
-			});
-
-			if (body !== null) {
-				return {
-					kind: "reporting",
-					status: "stage_passed",
-					effects: {
-						kind: "contract",
-						contract,
-						bytes,
-						digest,
-						body,
-						stored: false,
-						posted: false,
-					},
-				};
-			}
-		}
-
-		this.#input.log("specify_malformed", {
-			...fields,
-			reason: parsed.kind === "malformed" ? parsed.reason : "too_large_to_post",
-		});
-
-		return null;
-	}
-
-	#accepted(
-		run: ActiveRun,
-		output: string | null,
-		model?: string,
-		observed?: string | null,
-		family?: FamilyInput,
-	): Extract<RunPhase, { kind: "reporting" }> | null {
-		const bound = run.inputs?.contract;
-
-		if (bound === undefined || output === null) return null;
-		const parsed = writeAcceptance(output, bound.contract);
-
-		if (parsed.kind === "malformed") {
-			this.#input.log("acceptance_malformed", {
-				runId: run.runId,
-				reason: parsed.reason,
-			});
-
-			return null;
-		}
-
-		return {
-			kind: "reporting",
-			status: "stage_passed",
-			effects: {
-				kind: "acceptance",
-				contract: bound.contract,
-				contractDigest: bound.digest,
-				suite: parsed.suite,
-				model: model ?? this.#config?.stages.accept.model ?? "openai/unknown",
-				observed: observed ?? null,
-				family,
-			},
-		};
 	}
 
 	async #recoverOutput(
@@ -6972,7 +4963,7 @@ export class Orchestrator {
 			return true;
 		}
 
-		const prepared = await this.#stageInputs(run);
+		const prepared = await stageInputs(this.#input, run);
 
 		if (prepared.kind === "wait") {
 			run.phase = { kind: "recovering", output };
@@ -6994,8 +4985,10 @@ export class Orchestrator {
 
 		const reporting =
 			stage === "specify"
-				? this.#specified(run, text)
-				: this.#accepted(
+				? specified(this.#input, run, text)
+				: accepted(
+						this.#input,
+						this.#config,
 						run,
 						text,
 						output instanceof Object ? output.model : undefined,
@@ -7008,42 +5001,6 @@ export class Orchestrator {
 		run.phase = reporting;
 
 		return true;
-	}
-
-	async #hasKeyed(issue: number, key: string): Promise<boolean | null> {
-		const comments = await this.#adapter.readComments(issue);
-
-		if (comments.kind === "failed") return null;
-
-		return comments.value.some(
-			(comment) =>
-				isControllerComment(comment, this.#input.platform) &&
-				comment.body.trimEnd().split("\n").at(-1) === key,
-		);
-	}
-
-	async #postKeyed(
-		run: ActiveRun,
-		key: string,
-		body: string,
-	): Promise<boolean> {
-		const found = await this.#hasKeyed(run.issue, key);
-
-		if (found === null) return false;
-
-		if (found) return true;
-
-		const post = await this.#writer.postComment(run.issue, body);
-
-		if (post.kind !== "posted") {
-			this.#input.log("comment_unconfirmed", {
-				issue: run.issue,
-				runId: run.runId,
-				outcome: post.kind,
-			});
-		}
-
-		return post.kind === "posted";
 	}
 
 	async #applyEffects(run: ActiveRun, effects: Effects): Promise<boolean> {
@@ -7092,7 +5049,10 @@ export class Orchestrator {
 				return false;
 			}
 
-			const posted = await this.#postKeyed(
+			const posted = await postKeyed(
+				this.#input,
+				this.#adapter,
+				this.#writer,
 				run,
 				buildKey(run.runId, receipt.patchDigest),
 				body,
@@ -7194,7 +5154,7 @@ export class Orchestrator {
 				dueAt: 0,
 				checking: true,
 			};
-			await this.#writeClaim(run);
+			await writeClaim(this.#input, run);
 			await this.#pollBase(run);
 
 			return false;
@@ -7211,7 +5171,10 @@ export class Orchestrator {
 
 			this.#input.log("contract_stored", { ...fields, digest: effects.digest });
 
-			effects.posted ||= await this.#postKeyed(
+			effects.posted ||= await postKeyed(
+				this.#input,
+				this.#adapter,
+				this.#writer,
 				run,
 				contractKey(run.runId, effects.digest),
 				effects.body,
@@ -7232,7 +5195,10 @@ export class Orchestrator {
 			return false;
 		}
 
-		effects.posted ||= await this.#postKeyed(
+		effects.posted ||= await postKeyed(
+			this.#input,
+			this.#adapter,
+			this.#writer,
 			run,
 			questionsKey(run.runId, effects.digest),
 			effects.body,
@@ -7301,19 +5267,6 @@ export class Orchestrator {
 		}
 
 		return effects.unlabeled;
-	}
-
-	async #writeClaim(run: ActiveRun): Promise<void> {
-		const written = await this.#input.files.writeClaim(claimOf(run));
-
-		run.claimUnwritten = !written;
-
-		if (!written) {
-			this.#input.log("claim_unwritable", {
-				issue: run.issue,
-				runId: run.runId,
-			});
-		}
 	}
 
 	async #recoverUncertainPost(run: ActiveRun): Promise<"proceed" | "stop"> {
@@ -7516,144 +5469,4 @@ export class Orchestrator {
 			totals: { ...this.state.totals },
 		};
 	}
-}
-
-function claimOf(run: ActiveRun): ClaimRecord {
-	if (run.handoff !== undefined)
-		return {
-			runId: run.runId,
-			issue: run.issue,
-			eventId: run.eventId,
-			seq: run.seq === 0 ? null : run.seq,
-			status: run.seq === 0 ? null : desiredStatus(run.phase),
-			stage: run.seq === 0 ? null : run.stage,
-			attempt: run.seq === 0 ? null : run.attempt,
-			usage: run.seq === 0 ? null : run.usage,
-			round: run.round ?? 0,
-			handoff: run.handoff,
-			enteredAt: run.enteredAt,
-		};
-
-	const claim: ClaimRecord = {
-		runId: run.runId,
-		issue: run.issue,
-		eventId: run.eventId,
-		seq: run.marked === null ? null : run.seq,
-		status: run.marked?.status ?? null,
-		stage: run.marked?.stage ?? null,
-		attempt: run.marked?.attempt ?? null,
-		usage:
-			run.baseCheck === undefined ? (run.marked?.usage ?? null) : run.usage,
-	};
-
-	const base =
-		run.baseCheck === undefined
-			? claim
-			: {
-					...claim,
-					baseCheck: run.baseCheck,
-					acceptWallMs: run.acceptWallMs ?? 0,
-				};
-
-	const retained = run.marked?.v === 3 ? { ...base, marker: run.marked } : base;
-
-	return run.labelFailures === 0
-		? retained
-		: { ...retained, labelFailures: run.labelFailures };
-}
-
-function recordOf(marker: Marker): ConfirmedRecord {
-	const record = {
-		runId: marker.runId,
-		issue: marker.issue,
-		eventId: marker.eventId,
-		seq: marker.seq,
-		status: marker.status,
-		stage: marker.stage,
-		attempt: marker.attempt,
-		usage: marker.usage,
-	};
-
-	return marker.v === 3 ? { ...record, marker } : record;
-}
-
-function markerOf(
-	run: Omit<
-		Marker,
-		"v" | "repo" | "status" | "seq" | "branch" | "pr" | "cursor" | "handoff"
-	> & {
-		readonly round?: number;
-		readonly handoff?: CandidateState;
-	},
-
-	next: Pick<Marker, "repo" | "status" | "seq" | "cursor">,
-): Marker {
-	const marker: Marker = {
-		v: 2,
-		runId: run.runId,
-		repo: next.repo,
-		issue: run.issue,
-		eventId: run.eventId,
-		eventAt: run.eventAt,
-		snapshotDigest: run.snapshotDigest,
-		workflowSha: run.workflowSha,
-		workflowDigest: run.workflowDigest,
-		stage: run.stage,
-		status: next.status,
-		attempt: run.attempt,
-		seq: next.seq,
-		branch: null,
-		candidate: null,
-		round: run.round ?? 0,
-		ciRun: null,
-		pr: null,
-		usage: run.usage,
-		cursor: next.cursor,
-	};
-
-	const state = run.handoff;
-
-	if (state?.kind !== "selected") return marker;
-
-	const projection = candidateProjection(state);
-
-	return {
-		...marker,
-		v: 3,
-		stage: projection.stage,
-		attempt: projection.attempt,
-		branch: state.current.validation?.publication?.branch ?? null,
-		candidate: state.current.validation?.publication?.candidateSha ?? null,
-		round: state.current.intent.round,
-		ciRun: state.current.validation?.ciRunId ?? null,
-		pr: state.published?.number ?? null,
-		handoff: {
-			generation: state.current.intent.generation,
-			intentDigest: state.current.intent.digest,
-			refreshes: [...state.history, state.current].filter(
-				(g) => g.intent.origin.kind === "refresh",
-			).length,
-			reviewAttempts: [0, 1, 2].map((round) =>
-				Math.max(
-					0,
-					...state.accounts
-						.filter(
-							(a) =>
-								a.execution.stage === "review" && a.execution.round === round,
-						)
-						.map((a) => a.execution.attempt),
-				),
-			),
-			promoted: state.published?.promoted.digest ?? null,
-		},
-	};
-}
-
-function matchesRecord(marker: Marker, receipt: AdmittedReceipt): boolean {
-	return (
-		marker.eventAt === receipt.eventAt &&
-		marker.snapshotDigest === receipt.snapshotDigest &&
-		marker.workflowSha === receipt.baseSha &&
-		marker.workflowDigest === receipt.workflowDigest
-	);
 }

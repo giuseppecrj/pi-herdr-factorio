@@ -33,7 +33,7 @@ import {
 import { parseBaseReceipt } from "../../src/candidate/diagnosis.ts";
 import { lstat, readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import type { Log } from "../../src/orchestrator.ts";
+import type { Log } from "../../src/controller/orchestrator.ts";
 import type { RepoSlug } from "../../src/trust/platform.ts";
 import { readStageReceipt } from "../sandbox/receipts.ts";
 import { parseClaim, fileRunAccounting } from "./state.ts";

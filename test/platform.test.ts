@@ -39,7 +39,10 @@ import type { CommentEdit, IssueComment } from "../src/github/adapter.ts";
 import { GitHubTicketAdapter } from "../src/github/adapter.ts";
 import type { Exec } from "../src/github/exec.ts";
 import { reserveReplay } from "../src/maintenance/replay.ts";
-import { checkIdentity, type TickReport } from "../src/orchestrator.ts";
+import {
+	checkIdentity,
+	type TickReport,
+} from "../src/controller/orchestrator.ts";
 import {
 	formatMarker,
 	type Marker,

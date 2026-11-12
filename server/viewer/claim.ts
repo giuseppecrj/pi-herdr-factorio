@@ -1,4 +1,4 @@
-import type { ClaimRecord } from "../../src/orchestrator.ts";
+import type { ClaimRecord } from "../../src/controller/claims.ts";
 import { isRunStatus } from "../../src/trust/markers.ts";
 import { isStage } from "../../src/core/stages.ts";
 import { isDigest, runIdOf } from "../../src/core/run.ts";

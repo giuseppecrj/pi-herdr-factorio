@@ -80,7 +80,7 @@ import {
 } from "../src/maintenance/scorers.ts";
 import { parseLedger, type ScoreEvent } from "../src/ledger/schema.ts";
 import { measurementPrimary } from "../src/views/metrics.ts";
-import { Orchestrator } from "../src/orchestrator.ts";
+import { Orchestrator } from "../src/controller/orchestrator.ts";
 import { digestOf } from "../src/core/run.ts";
 import { isGitSha, type CadenceJob } from "../src/config/schema.ts";
 import { parseWorkflow } from "../src/config/parse.ts";

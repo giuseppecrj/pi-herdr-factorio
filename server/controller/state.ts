@@ -57,7 +57,8 @@ import {
 	parseMarker,
 	MARKER_PREFIX,
 } from "../../src/trust/markers.ts";
-import type { ClaimRecord, TickReport } from "../../src/orchestrator.ts";
+import type { ClaimRecord } from "../../src/controller/claims.ts";
+import type { TickReport } from "../../src/controller/orchestrator.ts";
 import { createConnection } from "node:net";
 
 export async function readStatus(stateDir: string): Promise<JsonValue | null> {

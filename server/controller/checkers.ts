@@ -69,7 +69,7 @@ export function controllerDraftChecker(config: {
 	readonly stageDir: string;
 	readonly attempt: number;
 	readonly input: NonNullable<
-		import("../../src/orchestrator.ts").StageLaunchInput["acceptDraft"]
+		import("../../src/controller/launch.ts").StageLaunchInput["acceptDraft"]
 	>;
 	readonly fetch?: TarballFetch;
 	readonly runner?: GateRunner;

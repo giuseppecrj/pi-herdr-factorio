@@ -86,20 +86,21 @@ import {
 } from "../src/trust/markers.ts";
 import {
 	backoffMs,
-	type CheckoutResult,
-	type ClaimRecord,
 	checkIdentity,
 	type LogFields,
 	Orchestrator,
 	type OrchestratorInput,
-	type RunFiles,
-	type StageExecutor,
-	type StageLaunch,
-	type StageLaunchInput,
-	type StageOutput,
-	type StageResult,
 	type TickReport,
-} from "../src/orchestrator.ts";
+} from "../src/controller/orchestrator.ts";
+import type { ClaimRecord, RunFiles } from "../src/controller/claims.ts";
+import type {
+	CheckoutResult,
+	StageExecutor,
+	StageLaunch,
+	StageLaunchInput,
+	StageOutput,
+	StageResult,
+} from "../src/controller/launch.ts";
 import { type SessionOutcome } from "../src/core/execution.ts";
 import { stageResult } from "../server/sandbox/result.ts";
 import { READY_LABEL } from "../src/trust/policy.ts";
@@ -19270,7 +19271,8 @@ function freshProcess(
 	phase: FreshPhase,
 ): FreshOutput {
 	const modules = {
-		orchestrator: new URL("../src/orchestrator.ts", import.meta.url).href,
+		orchestrator: new URL("../src/controller/orchestrator.ts", import.meta.url)
+			.href,
 		controller: new URL("../server/controller/run-files.ts", import.meta.url)
 			.href,
 		admission: new URL("../src/trust/admission.ts", import.meta.url).href,

@@ -410,7 +410,7 @@ Agents use only `factory-verify@<guest-tailnet-name>` with the dedicated key `/h
 
 **Files.**
 
-- [ ] Reuse MV4a's `server/cli.ts`, `src/orchestrator.ts`, `test/dashboard.test.ts`, `test/helpers.ts`, `test/markers.test.ts`, `test/orchestrator.test.ts`, and `test/platform.test.ts` from `origin/mv4-drain-foreign-markers`.
+- [ ] Reuse MV4a's `server/cli.ts`, `src/controller/orchestrator.ts`, `test/dashboard.test.ts`, `test/helpers.ts`, `test/markers.test.ts`, `test/orchestrator.test.ts`, and `test/platform.test.ts` from `origin/mv4-drain-foreign-markers`.
 - [ ] Reuse `docs/operations/drain.md`, `docs/operations/factory-cli.md`, and `docs/operations/metrics.md` from that branch. Set the source to `nubl-factory`, the destination to the approved LXD guest, and active commands to `nublai/pi-herdr-factorio`. Preserve main's repository-history changes when porting. Append evidence rows to `docs/decisions.tsv` through `log.sh`.
 
 **Build.**

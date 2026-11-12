@@ -32,9 +32,9 @@ import {
 	checkIdentity,
 	type Log,
 	Orchestrator,
-	type StageExecutor,
 	type TickReport,
-} from "../src/orchestrator.ts";
+} from "../src/controller/orchestrator.ts";
+import type { StageExecutor } from "../src/controller/launch.ts";
 import type { JsonValue } from "../src/core/json.ts";
 import {
 	type EnvLookup,
