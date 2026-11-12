@@ -2,7 +2,7 @@
 
 `src/` holds the factory's rules: what a run is, which stages may run, what a contract, ledger row, verdict or marker may contain, and what the controller does next. `extension/index.ts` imports it, and the published package ships it.
 
-Host work stays in `server/`. That means processes, sandboxes, the gateway, gates, the viewer and installation. New code in `src/` must not import `server/`. `npm run check:layout` fails a new `src` to `server` import. The 5 existing ones are listed in `scripts/layout-baseline.json` under `imports.reverseEdges`, and that list may only shrink.
+Host work stays in `server/`. That means processes, sandboxes, the gateway, gates, the viewer and installation. Code in `src/` never imports `server/` or `host/`, not even for a type. `npm run check:layout` fails any such import, and the baseline has no allowance for one. When a view needs host evidence, such as the controller lock, a stage receipt or an installed bundle, a host collector under `server/cli/` reads it and passes the data or a reader in. `server/cli/owner-feed.ts` does this for `feed.ts` and `server/cli/measurement.ts` for `explain.ts`.
 
 ## `src/core`
 

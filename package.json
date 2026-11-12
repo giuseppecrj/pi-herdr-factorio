@@ -15,6 +15,7 @@
   },
   "type": "module",
   "files": [
+    "package.json",
     "extension/",
     "src/",
     "skills/",

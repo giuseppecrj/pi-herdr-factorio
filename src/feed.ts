@@ -24,13 +24,11 @@ import {
 	isKnownCap,
 	terminalFailureOf,
 } from "./ledger.ts";
-import { readLock, readStatus } from "../server/controller.ts";
 import { objectOf, fieldOf, countOf, textOf, parseJson } from "./core/json.ts";
-import type { JsonValue } from "./core/json.ts";
+import type { JsonObject, JsonValue } from "./core/json.ts";
 import { isRepoSlug, type RepoSlug } from "./workflow.ts";
-import { readStageReceipt } from "../server/sandbox.ts";
-import { isDigest } from "./core/run.ts";
-import { readStoredVerdict } from "../server/controller.ts";
+import { isDigest, type Verdict } from "./core/run.ts";
+import type { SessionOutcome } from "./core/execution.ts";
 import { FAMILY_MISSING } from "./core/models.ts";
 
 export type FeedStep = {
@@ -80,6 +78,25 @@ export type OwnerFeed = {
 		denominator: number | null;
 		tokensPerCleanLanding: number | null;
 	};
+};
+
+/** The host's readers for the controller's status file and lock, called only where the feed needs them. */
+export type ControllerReads = {
+	readonly readStatus: () => Promise<JsonValue | null>;
+	readonly readLock: () => Promise<{ readonly kind: string }>;
+};
+
+/** The stage receipt fields a feed step shows. */
+type StepReceipt = {
+	readonly record: JsonObject | null;
+	readonly outcome: SessionOutcome;
+	readonly usage: { readonly total: number };
+};
+
+/** The host's readers for the run evidence it writes: stored verdicts and stage receipts. */
+export type RunReads = {
+	readonly readStoredVerdict: (path: string) => Verdict;
+	readonly readStageReceipt: (path: string) => Promise<StepReceipt | null>;
 };
 
 async function localJson(
@@ -167,6 +184,7 @@ function metricOf(
 async function stepReceipts(
 	root: string,
 	entry: AttentionRun,
+	host: RunReads,
 ): Promise<FeedStep[]> {
 	const steps: FeedStep[] = [];
 
@@ -188,7 +206,10 @@ async function stepReceipts(
 				undefined
 			)
 				continue;
-			const receipt = await readStageReceipt(join(dir, name, "receipt.json"));
+
+			const receipt = await host.readStageReceipt(
+				join(dir, name, "receipt.json"),
+			);
 
 			if (
 				receipt === null ||
@@ -226,6 +247,7 @@ async function detail(
 	root: string,
 	entry: AttentionRun,
 	now: number,
+	host: RunReads,
 ): Promise<FeedEntry> {
 	const raw = objectOf(await localJson(root, "claims", `${entry.runId}.json`));
 	const book = parseCandidateState(raw?.handoff);
@@ -306,7 +328,7 @@ async function detail(
 		const round = countOf(raw.round) ?? 0;
 
 		try {
-			verdict = readStoredVerdict(
+			verdict = host.readStoredVerdict(
 				join(
 					root,
 					"validation",
@@ -401,14 +423,15 @@ async function detail(
 		ci: verdict === null ? "Pending" : verdict.pass ? "Passed" : "Failed",
 		failure,
 		notProven: notProvenEntries,
-		steps: await stepReceipts(root, entry),
+		steps: await stepReceipts(root, entry, host),
 	};
 }
 
-export async function readOwnerRun(
+export async function ownerRun(
 	stateDir: string,
 	runId: string,
 	feed: OwnerHeader & { entries?: OwnerFeed["entries"] },
+	host: RunReads & Pick<ControllerReads, "readStatus">,
 ): Promise<FeedEntry | null> {
 	const existing = feed.entries?.find((entry) => entry.runId === runId);
 
@@ -416,7 +439,7 @@ export async function readOwnerRun(
 
 	if (feed.repo === null || !isDigest(runId)) return null;
 	const root = resolve(stateDir);
-	const status = await readStatus(root);
+	const status = await host.readStatus();
 
 	const attention = await readAttention({
 		stateDir: root,
@@ -431,20 +454,21 @@ export async function readOwnerRun(
 			? attention.runs.find((run) => run.runId === runId)
 			: undefined;
 
-	return entry === undefined ? null : detail(root, entry, feed.at);
+	return entry === undefined ? null : detail(root, entry, feed.at, host);
 }
 
 export type OwnerHeader = Pick<OwnerFeed, "repo" | "at" | "controller">;
 
-export async function readOwnerHeader(
+export async function ownerHeader(
 	stateDir: string,
-	now = Date.now(),
+	controller: ControllerReads,
+	now: number,
 	repo?: RepoSlug | null,
 ): Promise<OwnerHeader> {
 	const root = resolve(stateDir);
 	const slug = repo ?? (await feedRepo(root));
-	const status = slug === null ? null : objectOf(await readStatus(root));
-	const lock = await readLock(root);
+	const status = slug === null ? null : objectOf(await controller.readStatus());
+	const lock = await controller.readLock();
 
 	return {
 		repo: slug,
@@ -475,15 +499,20 @@ function durableUsageOf(
 		: { kind: "unavailable", total: null };
 }
 
-export async function readOwnerFeed(input: {
+export async function ownerFeed(input: {
 	stateDir: string;
 	repo?: RepoSlug | null;
-	now?: number;
+	now: number;
+	controller: ControllerReads;
+	host: RunReads;
 }): Promise<OwnerFeed> {
 	const root = resolve(input.stateDir);
-	const now = input.now ?? Date.now();
+	const { now } = input;
 	const repo = input.repo ?? (await feedRepo(root));
-	const status = repo === null ? null : objectOf(await readStatus(root));
+
+	const status =
+		repo === null ? null : objectOf(await input.controller.readStatus());
+
 	const snapshot = await localJson(root, "metrics.json");
 
 	const attention = await readAttention({
@@ -494,7 +523,7 @@ export async function readOwnerFeed(input: {
 		terminalSince: now - 7 * 86_400_000,
 	});
 
-	const header = await readOwnerHeader(root, now, repo);
+	const header = await ownerHeader(root, input.controller, now, repo);
 	const rawCorrupt = status?.corrupt;
 
 	const unreadable = !Array.isArray(rawCorrupt)
@@ -529,7 +558,7 @@ export async function readOwnerFeed(input: {
 	if (attention.kind === "available") {
 		for (const run of attention.runs) {
 			if (corruptIssues.has(run.issue)) continue;
-			const entry = await detail(root, run, now);
+			const entry = await detail(root, run, now, input.host);
 
 			if (!entry.terminal && entry.kind === null) workingRunCount++;
 

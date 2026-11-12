@@ -13,7 +13,8 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import { factoryCommandText, registerFactory } from "../extension/index.ts";
 import { EXIT, runCli } from "../server/cli.ts";
-import { fileRunFiles, readStatus, writeStatus } from "../server/controller.ts";
+import { fileRunFiles, writeStatus } from "../server/controller.ts";
+import { readStatus } from "../server/controller/state.ts";
 import { parseEvent } from "../server/sandbox/control.ts";
 import {
 	buildUpstreamHeaders,

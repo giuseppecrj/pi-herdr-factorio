@@ -3,7 +3,11 @@ import type { AddressInfo } from "node:net";
 import { lstat, readFile, realpath, open, unlink } from "node:fs/promises";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
-import { readOwnerFeed, readOwnerRun, readOwnerHeader } from "../src/feed.ts";
+import {
+	readOwnerFeed,
+	readOwnerRun,
+	readOwnerHeader,
+} from "./cli/owner-feed.ts";
 import { plainTitle } from "../src/attention.ts";
 import { textOf, objectOf } from "../src/core/json.ts";
 import {

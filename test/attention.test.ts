@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { readAttention, ATTENTION_KINDS } from "../src/attention.ts";
-import { readOwnerFeed } from "../src/feed.ts";
+import { readOwnerFeed } from "../server/cli/owner-feed.ts";
 import { digestOf, runIdOf } from "../src/core/run.ts";
 import { isRepoSlug, parseWorkflow } from "../src/workflow.ts";
 import { runCli } from "../server/cli.ts";

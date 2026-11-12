@@ -357,9 +357,6 @@ function importGraph(ctx) {
 }
 
 function checkImports(ctx, problems, { graph, used }) {
-	const allowed = new Set(ctx.baseline.imports.reverseEdges);
-	const seen = new Set();
-
 	for (const [file, edges] of graph)
 		for (const edge of edges) {
 			if (!edge.resolved)
@@ -367,22 +364,16 @@ function checkImports(ctx, problems, { graph, used }) {
 					`imports: ${file} imports ${edge.specifier}, but ${edge.target} does not exist`,
 				);
 
-			if (file.startsWith("src/") && /^(?:server|host)\//.test(edge.target)) {
-				const pair = `${file} -> ${edge.target}`;
-				seen.add(pair);
-
-				if (!allowed.has(pair))
-					problems.push(
-						`imports: ${pair} is a new reverse edge from src into host code; only removing reverse edges is allowed`,
-					);
-			}
+			if (file.startsWith("src/") && /^(?:server|host)\//.test(edge.target))
+				problems.push(
+					`imports: ${file} -> ${edge.target} is a new reverse edge from src into host code; src must not import server or host code`,
+				);
 		}
 
-	for (const pair of allowed)
-		if (!seen.has(pair))
-			problems.push(
-				`imports: ${pair} is listed in reverseEdges but no longer exists; delete it from scripts/layout-baseline.json`,
-			);
+	if (Object.hasOwn(ctx.baseline.imports, "reverseEdges"))
+		problems.push(
+			`imports: reverseEdges lists ${JSON.stringify(ctx.baseline.imports.reverseEdges)}, but L05 retired the reverse-edge allowance; delete reverseEdges from scripts/layout-baseline.json`,
+		);
 
 	for (const exception of ctx.baseline.imports.exceptions) {
 		if (!used.has(exception))

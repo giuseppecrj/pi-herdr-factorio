@@ -24,8 +24,10 @@ import {
 import { escapeHtml, renderRun, expectedGap } from "../server/viewer/render.ts";
 import { icons } from "../server/viewer/design/icons/icons.ts";
 import { runCli } from "../server/cli.ts";
-import { readStageReceipt, runSpecify } from "../server/sandbox.ts";
-import { readStoredVerdict, fileRunFiles } from "../server/controller.ts";
+import { runSpecify } from "../server/sandbox.ts";
+import { readStageReceipt } from "../server/sandbox/receipts.ts";
+import { fileRunFiles } from "../server/controller.ts";
+import { readStoredVerdict } from "../server/controller/state.ts";
 import {
 	candidateLifecycleFixture,
 	storedAssessment,
