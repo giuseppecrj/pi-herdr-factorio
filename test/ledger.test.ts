@@ -1,35 +1,37 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { GitHubPublicationApi } from "../src/github/publish.ts";
 import {
-	GitHubPublicationApi,
 	LEDGER_FILE,
 	createLedgerChild,
 	createLedgerRoot,
 	readLedgerFile,
-} from "../src/publication.ts";
+	ledgerApiOf,
+	type LedgerApi,
+	advanceLedger,
+} from "../src/ledger/git.ts";
+import { appendRun } from "../src/ledger/append.ts";
 import {
-	appendRun,
 	frozenRowOf,
 	ledgerRowOf,
-	pumpLedger,
-	terminalFailureOf,
-	terminalSnapshot,
 	parseRunStart,
 	legacyRunContext,
 	type RunContextV2,
-	type TerminalFacts,
 	ledgerEfficiency,
-	type LedgerOutbox,
 	indexLedger,
-	ledgerApiOf,
 	ledgerRow,
 	parseLedger,
 	type FrozenRow,
-	type LedgerApi,
 	type LedgerRowInput,
 	type LedgerRowV1,
 	type LedgerRowV2,
-} from "../src/ledger.ts";
+} from "../src/ledger/schema.ts";
+import { pumpLedger, type LedgerOutbox } from "../src/ledger/outbox.ts";
+import {
+	terminalFailureOf,
+	terminalSnapshot,
+	type TerminalFacts,
+} from "../src/ledger/terminal.ts";
 import { digestOf, runIdOf } from "../src/core/run.ts";
 import { unknownEfficiency } from "../src/core/execution.ts";
 import { objectOf } from "../src/core/json.ts";
@@ -242,20 +244,20 @@ async function remoteBytes(fake: LedgerGit): Promise<Buffer> {
 async function probeHistory(fake: LedgerGit): Promise<GitSha> {
 	const api = quietApi(fake);
 	const root = await createLedgerRoot(api, date);
-	await api.advanceLedger(null, root.sha);
+	await advanceLedger(api, null, root.sha);
 
 	const probe = (name: string) =>
 		`factory: ledger probe ${name}\n\nFactory-Probe: ledger-branch\n`;
 
 	const empty = Buffer.alloc(0);
 	const a = await createLedgerChild(api, root, empty, date, probe("A"));
-	await api.advanceLedger(root.sha, a.sha);
+	await advanceLedger(api, root.sha, a.sha);
 	const b = await createLedgerChild(api, root, empty, date, probe("B"));
-	assert.equal((await api.advanceLedger(a.sha, b.sha)).kind, "conflict");
+	assert.equal((await advanceLedger(api, a.sha, b.sha)).kind, "conflict");
 	const c = await createLedgerChild(api, a, empty, date, probe("C"));
-	await api.advanceLedger(a.sha, c.sha);
+	await advanceLedger(api, a.sha, c.sha);
 	const d = await createLedgerChild(api, c, empty, date, probe("D"));
-	await api.advanceLedger(c.sha, d.sha);
+	await advanceLedger(api, c.sha, d.sha);
 
 	return d.sha;
 }
@@ -1785,7 +1787,7 @@ describe("ledger append protocol", () => {
 		const fake = new LedgerGit();
 		const api = quietApi(fake);
 		const root = await createLedgerRoot(api, date);
-		await api.advanceLedger(null, root.sha);
+		await advanceLedger(api, null, root.sha);
 
 		const corrupt = await createLedgerChild(
 			api,
@@ -1795,7 +1797,7 @@ describe("ledger append protocol", () => {
 			"x\n",
 		);
 
-		await api.advanceLedger(root.sha, corrupt.sha);
+		await advanceLedger(api, root.sha, corrupt.sha);
 		const before = fake.writes.length;
 
 		const blocked = await appendRun(
@@ -1816,7 +1818,7 @@ describe("ledger append protocol", () => {
 		const sourceRoot = await createLedgerRoot(sourceApi, date);
 		const tree = source.trees.get(sourceRoot.tree) ?? assert.fail();
 		tree.set("package.json", tree.get(LEDGER_FILE) ?? "");
-		await sourceApi.advanceLedger(null, sourceRoot.sha);
+		await advanceLedger(sourceApi, null, sourceRoot.sha);
 
 		const refused = await appendRun(
 			ledgerApiOf(sourceApi),

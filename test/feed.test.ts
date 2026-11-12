@@ -26,7 +26,7 @@ import { objectOf, parseJson } from "../src/core/json.ts";
 import type { JsonValue } from "../src/core/json.ts";
 import { runCli } from "../server/cli.ts";
 import { digestOf } from "../src/core/run.ts";
-import { AUTONOMY_DIGEST } from "../src/ledger.ts";
+import { AUTONOMY_DIGEST } from "../src/ledger/schema.ts";
 import { candidateLifecycleFixture, withUmask } from "./helpers.ts";
 import {
 	addRun,

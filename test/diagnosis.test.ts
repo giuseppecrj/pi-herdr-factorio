@@ -93,7 +93,7 @@ import {
 	storePatch,
 } from "../src/candidate/build.ts";
 import { generationIntent } from "../src/handoff.ts";
-import { candidateBranch } from "../src/publication.ts";
+import { candidateBranch } from "../src/github/publish.ts";
 import { CONTROLLER_LOGIN } from "../src/trust/markers.ts";
 import type { Exec } from "../src/github/exec.ts";
 import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";

@@ -70,7 +70,7 @@ import {
 	candidateGenerations,
 	candidateUsage,
 } from "../src/handoff.ts";
-import { candidateBranch, storeOwnerPatch } from "../src/publication.ts";
+import { candidateBranch, storeOwnerPatch } from "../src/github/publish.ts";
 import type { Exec } from "../src/github/exec.ts";
 import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 

@@ -24,12 +24,16 @@ import {
 	publishCandidate,
 	gitObjectSha,
 	BOT_EMAIL,
+} from "../src/github/publish.ts";
+import {
 	LEDGER_FILE,
 	createLedgerChild,
 	createLedgerRoot,
 	readLedgerCommit,
 	readLedgerFile,
-} from "../src/publication.ts";
+	advanceLedger,
+	ledgerRef,
+} from "../src/ledger/git.ts";
 import { digestOf, REQUIRED_CI_CHECKS } from "../src/core/run.ts";
 import { type Exec, type ExecResult } from "../src/github/exec.ts";
 import {
@@ -2146,20 +2150,20 @@ describe("ledger Git API", () => {
 		const other = candidateBranch(1, runId, 0);
 		const otherSha = "d".repeat(40);
 		fake.refs.set(other, otherSha);
-		assert.equal(api.ledgerRef.length, 0);
-		assert.equal(api.advanceLedger.length, 2);
+		assert.equal(ledgerRef.length, 1);
+		assert.equal(advanceLedger.length, 3);
 
 		for (const bad of [other, "factory/ledger", "main", "f".repeat(39)])
 			await assert.rejects(
 				// SAFETY: deliberately passes a non-SHA to prove the runtime guard.
-				api.advanceLedger(null, bad as GitSha),
+				advanceLedger(api, null, bad as GitSha),
 				/invalid_sha/,
 			);
 		assert.equal(fake.requests.length, 0);
 
-		assert.equal(await api.ledgerRef(), null);
+		assert.equal(await ledgerRef(api), null);
 		const root = await createLedgerRoot(api, ledgerDate);
-		assert.deepEqual(await api.advanceLedger(null, root.sha), {
+		assert.deepEqual(await advanceLedger(api, null, root.sha), {
 			kind: "advanced",
 			tip: root.sha,
 		});
@@ -2172,11 +2176,11 @@ describe("ledger Git API", () => {
 			"factory: ledger child\n",
 		);
 
-		assert.deepEqual(await api.advanceLedger(root.sha, child.sha), {
+		assert.deepEqual(await advanceLedger(api, root.sha, child.sha), {
 			kind: "advanced",
 			tip: child.sha,
 		});
-		assert.equal(await api.ledgerRef(), child.sha);
+		assert.equal(await ledgerRef(api), child.sha);
 
 		const refWrites = fake.writes.filter((w) => w.path.includes("refs"));
 
@@ -2270,28 +2274,28 @@ describe("ledger Git API", () => {
 		const fake = new LedgerGit();
 		const api = quietApi(fake.exec);
 		const root = await createLedgerRoot(api, ledgerDate);
-		await api.advanceLedger(null, root.sha);
+		await advanceLedger(api, null, root.sha);
 		const empty = Buffer.alloc(0);
 		const a = await createLedgerChild(api, root, empty, ledgerDate, "a\n");
 		const b = await createLedgerChild(api, root, empty, ledgerDate, "b\n");
 		assert.notEqual(a.sha, b.sha);
 		assert.equal(a.tree, root.tree);
-		assert.deepEqual(await api.advanceLedger(root.sha, a.sha), {
+		assert.deepEqual(await advanceLedger(api, root.sha, a.sha), {
 			kind: "advanced",
 			tip: a.sha,
 		});
-		assert.deepEqual(await api.advanceLedger(root.sha, b.sha), {
+		assert.deepEqual(await advanceLedger(api, root.sha, b.sha), {
 			kind: "conflict",
 			tip: a.sha,
 		});
 		assert.equal(fake.refs.get("factory/ledger"), a.sha);
 
 		const otherRoot = await createLedgerRoot(api, "2026-11-04T12:00:01Z");
-		assert.deepEqual(await api.advanceLedger(null, otherRoot.sha), {
+		assert.deepEqual(await advanceLedger(api, null, otherRoot.sha), {
 			kind: "conflict",
 			tip: a.sha,
 		});
-		assert.deepEqual(await api.advanceLedger(null, a.sha), {
+		assert.deepEqual(await advanceLedger(api, null, a.sha), {
 			kind: "advanced",
 			tip: a.sha,
 		});
@@ -2310,7 +2314,7 @@ describe("ledger Git API", () => {
 		const api = quietApi(fake.exec);
 		const root = await createLedgerRoot(api, ledgerDate);
 		fake.lose = (method) => (method === "POST" ? "after" : null);
-		assert.deepEqual(await api.advanceLedger(null, root.sha), {
+		assert.deepEqual(await advanceLedger(api, null, root.sha), {
 			kind: "advanced",
 			tip: root.sha,
 		});
@@ -2325,7 +2329,7 @@ describe("ledger Git API", () => {
 		);
 
 		fake.lose = (method) => (method === "PATCH" ? "after" : null);
-		assert.deepEqual(await api.advanceLedger(root.sha, a.sha), {
+		assert.deepEqual(await advanceLedger(api, root.sha, a.sha), {
 			kind: "advanced",
 			tip: a.sha,
 		});
@@ -2339,17 +2343,17 @@ describe("ledger Git API", () => {
 		);
 
 		fake.lose = (method) => (method === "PATCH" ? "before" : null);
-		await assert.rejects(api.advanceLedger(a.sha, c.sha), /github_refused/);
+		await assert.rejects(advanceLedger(api, a.sha, c.sha), /github_refused/);
 		assert.equal(fake.refs.get("factory/ledger"), a.sha);
 		fake.lose = null;
 
 		fake.hook = (method) =>
 			method === "PATCH" ? { code: 1, stdout: "", stderr: "HTTP 403" } : null;
-		await assert.rejects(api.advanceLedger(a.sha, c.sha), /github_refused/);
+		await assert.rejects(advanceLedger(api, a.sha, c.sha), /github_refused/);
 		fake.hook = null;
 
 		assert.equal(fake.writes.filter((w) => w.method === "PATCH").length, 3);
-		assert.deepEqual(await api.advanceLedger(a.sha, c.sha), {
+		assert.deepEqual(await advanceLedger(api, a.sha, c.sha), {
 			kind: "advanced",
 			tip: c.sha,
 		});
@@ -2435,7 +2439,7 @@ describe("ledger Git API", () => {
 						stderr: "",
 					}
 				: null;
-		await assert.rejects(api.ledgerRef(), /malformed_ref/);
+		await assert.rejects(ledgerRef(api), /malformed_ref/);
 		fake.hook = null;
 		const absent = "a".repeat(40);
 		assert.ok(isGitSha(absent));

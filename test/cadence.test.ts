@@ -76,7 +76,7 @@ import {
 	unreviewedFailures,
 	reflectScores,
 } from "../src/maintenance/scorers.ts";
-import { parseLedger, type ScoreEvent } from "../src/ledger.ts";
+import { parseLedger, type ScoreEvent } from "../src/ledger/schema.ts";
 import { measurementPrimary } from "../src/views/metrics.ts";
 import { Orchestrator } from "../src/orchestrator.ts";
 import { digestOf } from "../src/core/run.ts";

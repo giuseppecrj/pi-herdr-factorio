@@ -384,11 +384,35 @@
 				"from": [],
 				"since": "L00"
 			},
-			"src/ledger.ts": {
+			"src/ledger/schema.ts": {
 				"owner": "src/ledger",
 				"seats": ["code-review", "security-review", "simplify"],
-				"from": [],
-				"since": "L00"
+				"from": ["src/ledger.ts"],
+				"since": "L09"
+			},
+			"src/ledger/git.ts": {
+				"owner": "src/ledger",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["src/publication.ts", "src/ledger.ts"],
+				"since": "L09"
+			},
+			"src/ledger/append.ts": {
+				"owner": "src/ledger",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["src/ledger.ts"],
+				"since": "L09"
+			},
+			"src/ledger/terminal.ts": {
+				"owner": "src/ledger",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["src/ledger.ts"],
+				"since": "L09"
+			},
+			"src/ledger/outbox.ts": {
+				"owner": "src/ledger",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["src/ledger.ts"],
+				"since": "L09"
 			},
 			"src/orchestrator.ts": {
 				"owner": "src/controller",
@@ -396,11 +420,11 @@
 				"from": [],
 				"since": "L00"
 			},
-			"src/publication.ts": {
+			"src/github/publish.ts": {
 				"owner": "src/github",
 				"seats": ["code-review", "security-review", "simplify"],
-				"from": [],
-				"since": "L00"
+				"from": ["src/publication.ts"],
+				"since": "L09"
 			},
 			"src/specify.ts": {
 				"owner": "src/contract",
@@ -700,6 +724,18 @@
 			},
 			"src/scorers.ts": {
 				"owner": "src/maintenance",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/ledger.ts": {
+				"owner": "src/ledger",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/publication.ts": {
+				"owner": "src/github",
 				"seats": ["code-review", "security-review", "simplify"],
 				"from": [],
 				"since": "L00"
@@ -1808,6 +1844,60 @@
 					"via": {
 						"from": "reader",
 						"path": "./fixtures/metrics/runs-2026-11-08.jsonl"
+					}
+				}
+			]
+		},
+		{
+			"id": "test-reads-ledger-pins",
+			"kind": "paths",
+			"reader": "test/ledger-pins.test.ts",
+			"tokens": {
+				"new URL(\"./fixtures/metrics/runs-2026-11-08.jsonl\", import.meta.url)": 1,
+				"new URL(\"./ledger-real-git.ts\", import.meta.url)": 1,
+				"new URL(\"../server/controller.ts\", import.meta.url)": 1,
+				"new URL(\"../src/ledger/schema.ts\", import.meta.url)": 1,
+				"new URL(\"../src/trust/platform.ts\", import.meta.url)": 1
+			},
+			"targets": [
+				{
+					"path": "test/fixtures/metrics/runs-2026-11-08.jsonl",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./fixtures/metrics/runs-2026-11-08.jsonl"
+					}
+				},
+				{
+					"path": "test/ledger-real-git.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./ledger-real-git.ts"
+					}
+				},
+				{
+					"path": "server/controller.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../server/controller.ts"
+					}
+				},
+				{
+					"path": "src/ledger/schema.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../src/ledger/schema.ts"
+					}
+				},
+				{
+					"path": "src/trust/platform.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../src/trust/platform.ts"
 					}
 				}
 			]

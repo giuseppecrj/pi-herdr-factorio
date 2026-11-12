@@ -27,21 +27,21 @@ import { pumpScoreOutbox, pumpLedgerOutbox } from "../server/controller.ts";
 import {
 	latestScores,
 	parseScores,
-	ledgerApiOf,
-	appendRun,
 	indexScores,
 	scoreEventOf,
 	type ScoreEvent,
 	parseLedger,
 	ledgerRowOf,
-} from "../src/ledger.ts";
+} from "../src/ledger/schema.ts";
 import {
-	GitHubPublicationApi,
+	ledgerApiOf,
 	readLedgerFile,
 	readLedgerCommit,
 	LEDGER_FILE,
 	SCORE_FILE,
-} from "../src/publication.ts";
+} from "../src/ledger/git.ts";
+import { appendRun } from "../src/ledger/append.ts";
+import { GitHubPublicationApi } from "../src/github/publish.ts";
 import { LedgerGit, repo } from "./ledger-git.ts";
 import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 import { trustedWorkflowFor } from "./fake-ticket-adapter.ts";

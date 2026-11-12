@@ -13,7 +13,7 @@ import {
 	parseScores,
 	scoreEventOf,
 	type ScoreEvent,
-} from "../ledger.ts";
+} from "../ledger/schema.ts";
 import { objectOf, parseJson, textOf, hasDuplicateKey } from "../core/json.ts";
 import {
 	safeMeasurementText,

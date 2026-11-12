@@ -56,7 +56,7 @@ import {
 	type TrustedReport,
 	type ValidationState,
 } from "../src/candidate/validation.ts";
-import { candidateBranch } from "../src/publication.ts";
+import { candidateBranch } from "../src/github/publish.ts";
 import type { JsonValue } from "../src/core/json.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
 import { storePatch, type PatchReceipt } from "../src/candidate/build.ts";

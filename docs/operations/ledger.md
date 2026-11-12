@@ -1,6 +1,6 @@
 # Run the run ledger
 
-The controller records one public row per finished run in `ledger/runs.jsonl`, on the orphan branch `factory/ledger`. Only the controller writes it. It uses the narrow Git Data API in `src/publication.ts` through `gh`, with no clone, no new credentials, no force and no delete.
+The controller records one public row per finished run in `ledger/runs.jsonl`, on the orphan branch `factory/ledger`. Only the controller writes it. It uses the narrow Git Data API in `src/ledger/git.ts` through `gh`, with no clone, no new credentials, no force and no delete.
 
 ## What the branch holds
 

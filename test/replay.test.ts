@@ -17,7 +17,7 @@ import { describe, it } from "node:test";
 import { EXIT, runCli } from "../server/cli.ts";
 import { acquireLock, procTable } from "../server/controller.ts";
 import { manifestDigest } from "../server/sandbox/manifest.ts";
-import { parseLedger, type LedgerRow } from "../src/ledger.ts";
+import { parseLedger, type LedgerRow } from "../src/ledger/schema.ts";
 import {
 	checkReplay,
 	loadReplayCorpus,

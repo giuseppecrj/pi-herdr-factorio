@@ -29,8 +29,8 @@ import {
 } from "../server/viewer/dashboard.ts";
 import { startViewer } from "../server/viewer.ts";
 import { collectOwnerMetrics, runCli } from "../server/cli.ts";
-import { parseLedger, ledgerRow } from "../src/ledger.ts";
-import { gitObjectSha } from "../src/publication.ts";
+import { parseLedger, ledgerRow } from "../src/ledger/schema.ts";
+import { gitObjectSha } from "../src/github/publish.ts";
 import type { InterventionRead } from "../src/views/metrics.ts";
 import type { JsonValue } from "../src/core/json.ts";
 import type { FeedEntry } from "../src/views/feed.ts";

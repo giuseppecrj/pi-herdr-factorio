@@ -738,7 +738,7 @@ describe("layout guard", () => {
 					/^literals: src\/trust\/protected-paths\.ts:\d+ names test\/acceptance, which does not exist/,
 				],
 				callers: [
-					"src/publication.ts",
+					"src/github/publish.ts",
 					"src/candidate/feedback.ts",
 					"src/candidate/validation.ts",
 					"src/specify.ts",
