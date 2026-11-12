@@ -152,7 +152,9 @@ import {
 	countOf,
 } from "../src/core/json.ts";
 import { type Exec } from "../src/gh.ts";
-import { digestOf, type Verdict, type Stage } from "../src/core/run.ts";
+import { digestOf, type Verdict } from "../src/core/run.ts";
+import { type Stage, isStage, STAGE_ORDER } from "../src/core/stages.ts";
+import { ACCEPTANCE_SUITE_PREFIX } from "../src/trust/protected-paths.ts";
 import {
 	frozenRowOf,
 	parseLedger,
@@ -264,12 +266,7 @@ import { fileURLToPath } from "node:url";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { gunzipSync } from "node:zlib";
-import {
-	isRunStatus,
-	isStage,
-	parseMarker,
-	MARKER_PREFIX,
-} from "../src/markers.ts";
+import { isRunStatus, parseMarker, MARKER_PREFIX } from "../src/markers.ts";
 import { type Digest, isDigest } from "../src/core/run.ts";
 import type {
 	Checkout,
@@ -3634,18 +3631,8 @@ export async function readTerminalEvidence(
 		});
 	}
 
-	const stageOrder: readonly Stage[] = [
-		"admit",
-		"specify",
-		"accept",
-		"build",
-		"validate",
-		"review",
-		"land",
-	];
-
 	summaries.sort(
-		(a, b) => stageOrder.indexOf(a.stage) - stageOrder.indexOf(b.stage),
+		(a, b) => STAGE_ORDER.indexOf(a.stage) - STAGE_ORDER.indexOf(b.stage),
 	);
 
 	const orderedModels = [...models]
@@ -8878,7 +8865,7 @@ function proposalBody(
 		`Review: ${inert(review.id)}`,
 		inert(review.body),
 		...review.comments.map((c) =>
-			c.path.startsWith("test/acceptance/")
+			c.path.startsWith(ACCEPTANCE_SUITE_PREFIX)
 				? `Refused inline comment ${inert(c.id)} on a held-out acceptance file; text is not quoted.`
 				: `${inert(c.path)}${c.line === null ? "" : `:${c.line}`}\n${inert(c.body)}`,
 		),

@@ -9,7 +9,8 @@ import type {
 	StageUsage,
 } from "../../src/core/execution.ts";
 import type { FamilyInput } from "../../src/core/models.ts";
-import type { Digest, SandboxStage as Stage } from "../../src/core/run.ts";
+import type { Digest } from "../../src/core/run.ts";
+import type { SandboxStage as Stage } from "../../src/core/stages.ts";
 import type { ModelId } from "../../src/workflow.ts";
 import type { RouteSummary } from "./control.ts";
 

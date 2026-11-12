@@ -29,7 +29,7 @@ import {
 	type VisibleCheck,
 } from "./diagnosis.ts";
 import type { TerminalStatus } from "./markers.ts";
-import type { Stage } from "./core/run.ts";
+import { STAGE_ORDER, type Stage } from "./core/stages.ts";
 import {
 	isGitSha,
 	isRepoSlug,
@@ -227,17 +227,7 @@ function measured<U extends "tokens" | "milliseconds">(unit: U) {
 const tokens = measured("tokens");
 const milliseconds = measured("milliseconds");
 
-const STAGES = [
-	"admit",
-	"specify",
-	"accept",
-	"build",
-	"validate",
-	"review",
-	"land",
-] as const;
-
-const stage = oneOf(...STAGES);
+const stage = oneOf(...STAGE_ORDER);
 
 const money = tagged({
 	known: { currency: literal("USD"), micros: count },
@@ -916,7 +906,7 @@ function invariant(row: LedgerRow): string | null {
 	}
 
 	const stages = row.stages.kind === "known" ? row.stages.value : [];
-	const order = stages.map((item) => STAGES.indexOf(item.stage));
+	const order = stages.map((item) => STAGE_ORDER.indexOf(item.stage));
 
 	if (!order.every((at, index) => index === 0 || (order[index - 1] ?? 0) < at))
 		return "stages_unordered";

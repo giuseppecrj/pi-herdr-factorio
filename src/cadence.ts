@@ -1,5 +1,9 @@
 import { randomBytes } from "node:crypto";
 import {
+	CONTROL_PLANE_DIR,
+	ACCEPTANCE_SUITE_PREFIX,
+} from "./trust/protected-paths.ts";
+import {
 	closeSync,
 	existsSync,
 	fsyncSync,
@@ -60,7 +64,7 @@ export const CADENCE_PATH_GROUPS = [
 	["src"],
 	["server"],
 	["test"],
-	["skills", ".github", "AGENTS.md", "DESIGN.md"],
+	["skills", CONTROL_PLANE_DIR, "AGENTS.md", "DESIGN.md"],
 	[
 		"docs",
 		"extension",
@@ -158,7 +162,8 @@ export function cadenceEligiblePath(path: string): boolean {
 		!/(?:^|\/)(?:generated|__generated__)(?:\/|\.)/i.test(path) &&
 		!/\.(?:generated\.[^/]+|map|min\.[^/]+)$/.test(path) &&
 		!path.startsWith("server/viewer/design/tokens.") &&
-		!/^test\/(?:acceptance|fixtures)\//i.test(path) &&
+		!path.toLowerCase().startsWith(ACCEPTANCE_SUITE_PREFIX) &&
+		!/^test\/fixtures\//i.test(path) &&
 		!path.startsWith("research/") &&
 		!path.startsWith("docs/prototypes/")
 	);
@@ -502,7 +507,7 @@ export function parseCadenceProposals(
 				path === null ||
 				path.length > 300 ||
 				!SAFE_PATH.test(path) ||
-				path.toLowerCase().startsWith("test/acceptance/") ||
+				path.toLowerCase().startsWith(ACCEPTANCE_SUITE_PREFIX) ||
 				(!inCadenceScope(path, cadenceScope(input.rotation, input.job)) &&
 					!input.changedPaths?.includes(path) &&
 					!(input.job === "reflect" && isReflectionPath(path))) ||

@@ -10,6 +10,7 @@ import {
 import { collectPatch } from "./build.ts";
 import { exclusive, privateDir, regularText, present } from "./artifacts.ts";
 import { checkChangedPaths } from "./policy.ts";
+import { ACCEPTANCE_SUITE_DIR, isAtOrUnder } from "./trust/protected-paths.ts";
 import { REVIEW_DIFF_MAX_BYTES } from "./review.ts";
 import {
 	parseOwnerPatchReceipt,
@@ -240,8 +241,7 @@ export async function deriveOwnerPatch(
 		const baseTree = trees[0]!,
 			ownerTree = trees[1]!;
 
-		const isHeldout = (path: string) =>
-			path === "test/acceptance" || path.startsWith("test/acceptance/");
+		const isHeldout = (path: string) => isAtOrUnder(path, ACCEPTANCE_SUITE_DIR);
 
 		const expected = new Map([...baseTree].filter(([p]) => isHeldout(p)));
 
@@ -281,16 +281,16 @@ export async function deriveOwnerPatch(
 			!(await input.checkout(input.head, workspace))
 		)
 			return refused("unreadable");
-		rmSync(join(workspace, "test/acceptance"), {
+		rmSync(join(workspace, ACCEPTANCE_SUITE_DIR), {
 			recursive: true,
 			force: true,
 		});
 
-		if (existsSync(join(base, "test/acceptance"))) {
+		if (existsSync(join(base, ACCEPTANCE_SUITE_DIR))) {
 			mkdirSync(join(workspace, "test"), { recursive: true });
 			cpSync(
-				join(base, "test/acceptance"),
-				join(workspace, "test/acceptance"),
+				join(base, ACCEPTANCE_SUITE_DIR),
+				join(workspace, ACCEPTANCE_SUITE_DIR),
 				{ recursive: true, verbatimSymlinks: true },
 			);
 		}

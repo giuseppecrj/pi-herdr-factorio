@@ -13,7 +13,7 @@ import {
 	type StatusSources,
 } from "../extension/index.ts";
 import { READY_LABEL } from "../src/policy.ts";
-import { STAGE_ORDER } from "../src/stages.ts";
+import { STAGE_ORDER } from "../src/core/stages.ts";
 import type { Exec, ExecResult } from "../src/workflow.ts";
 import { FakeGitHub, fakeIssue, labelEvent } from "./fake-ticket-adapter.ts";
 import { EXE_DEV_PLATFORM } from "../src/platform.ts";

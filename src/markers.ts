@@ -1,8 +1,8 @@
 import type { CommentEdit, IssueComment } from "./adapters/github.ts";
 import type { HandoffReason } from "./handoff.ts";
 import { type ControllerIdentity, EXE_DEV_PLATFORM } from "./platform.ts";
-import { type Digest, isDigest, runIdOf, type Stage } from "./core/run.ts";
-import { STAGE_ORDER } from "./stages.ts";
+import { type Digest, isDigest, runIdOf } from "./core/run.ts";
+import { isStage, type Stage } from "./core/stages.ts";
 import type { JsonValue } from "./core/json.ts";
 import {
 	type CadenceJob,
@@ -163,10 +163,6 @@ export type MarkerParse =
 const EVENT_ID = /^[1-9][0-9]{0,19}$/;
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 const CURSOR = /^[A-Za-z0-9:._-]{1,64}$/;
-
-export function isStage(value: string): value is Stage {
-	return STAGE_ORDER.some((stage) => stage === value);
-}
 
 export function isRunStatus(value: string): value is RunStatus {
 	return RUN_STATUSES.some((status) => status === value);

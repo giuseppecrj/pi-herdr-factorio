@@ -380,6 +380,12 @@
 				"from": ["src/run.ts"],
 				"since": "L03"
 			},
+			"src/core/stages.ts": {
+				"owner": "src/core",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": ["src/core/run.ts", "src/stages.ts", "src/workflow.ts", "src/markers.ts", "src/orchestrator.ts", "src/ledger.ts", "src/attention.ts", "server/controller.ts", "server/viewer/evidence.ts", "server/viewer/dashboard.ts"],
+				"since": "L04"
+			},
 			"src/diagnosis.ts": {
 				"owner": "src/candidate",
 				"seats": ["code-review", "security-review", "simplify"],
@@ -493,6 +499,12 @@
 				"seats": ["code-review", "security-review", "simplify"],
 				"from": [],
 				"since": "L00"
+			},
+			"src/trust/protected-paths.ts": {
+				"owner": "src/trust",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": ["src/policy.ts"],
+				"since": "L04"
 			},
 			"src/validation.ts": {
 				"owner": "src/candidate",
@@ -1041,7 +1053,7 @@
 		{
 			"id": "acceptance-suite-dir",
 			"kind": "paths",
-			"reader": "src/policy.ts",
+			"reader": "src/trust/protected-paths.ts",
 			"tokens": {
 				"export const ACCEPTANCE_SUITE_DIR = \"test/acceptance\";": 1
 			},
@@ -2441,8 +2453,8 @@
 				"\"baseline_tests\", baseline, testArgv(manifest.tests, false, GATE_TEST_CONCURRENCY),",
 				"manifest.tests.filter((p) => existsSync(join(tree, p)))",
 				"\"main_tests\", tree, testArgv(mainTests, false, GATE_TEST_CONCURRENCY),",
-				"path.startsWith(\"test/\") && (!base.has(path) || path.startsWith(\"test/acceptance/\"));",
-				"additional && /\\.(?:test|cases)\\.[cm]?[jt]s$/.test(path) && !path.startsWith(\"test/acceptance/\") ) newTests.push(path);",
+				"path.startsWith(\"test/\") && (!base.has(path) || path.startsWith(ACCEPTANCE_SUITE_PREFIX));",
+				"additional && /\\.(?:test|cases)\\.[cm]?[jt]s$/.test(path) && !path.startsWith(ACCEPTANCE_SUITE_PREFIX) ) newTests.push(path);",
 				"\"candidate_tests\", tree, testArgv(material.newTests),"
 			]
 		}

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { ACCEPTANCE_SUITE_DIR } from "../src/trust/protected-paths.ts";
 import {
-	ACCEPTANCE_SUITE_DIR,
 	checkChangedPaths,
 	decideAdmission,
 	hasWriteAccess,

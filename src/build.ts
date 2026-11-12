@@ -29,6 +29,12 @@ import {
 } from "./artifacts.ts";
 import { checkChangedPaths } from "./policy.ts";
 import {
+	CONTROL_PLANE_DIR,
+	ACCEPTANCE_SUITE_DIR,
+	isAtOrUnder,
+	FEEDBACK_FILE,
+} from "./trust/protected-paths.ts";
+import {
 	assessVisibleChecks,
 	type CheckAssessment,
 	type CheckEnvironment,
@@ -218,7 +224,7 @@ function tree(root: string): Map<string, Entry> {
 				continue;
 			}
 
-			if (stat.isSymbolicLink() && ["test", ".github"].includes(path))
+			if (stat.isSymbolicLink() && ["test", CONTROL_PLANE_DIR].includes(path))
 				throw new Error("unsafe_symlink");
 
 			if (
@@ -986,9 +992,7 @@ export async function publicationTree(
 }
 
 function strippedFromRepair(path: string): boolean {
-	const [top, next] = path.toLowerCase().split("/");
-
-	return top === "test" && next === "acceptance";
+	return isAtOrUnder(path.toLowerCase(), ACCEPTANCE_SUITE_DIR);
 }
 
 export async function prepareRepairTree(
@@ -1009,12 +1013,12 @@ export async function prepareRepairTree(
 		if (tests.toLowerCase() !== "test") continue;
 
 		for (const name of readdirSync(join(dest, tests))) {
-			if (name.toLowerCase() === "acceptance")
+			if (`${tests}/${name}`.toLowerCase() === ACCEPTANCE_SUITE_DIR)
 				rmSync(join(dest, tests, name), { recursive: true, force: true });
 		}
 	}
 
-	writeFileSync(join(dest, ".factory-feedback.json"), feedback, {
+	writeFileSync(join(dest, FEEDBACK_FILE), feedback, {
 		flag: "wx",
 		mode: 0o600,
 	});

@@ -1,13 +1,18 @@
 import { posix } from "node:path";
 import { type NonEmpty, type RejectReason } from "./core/run.ts";
 
+import {
+	CONTROL_PLANE_DIR,
+	ACCEPTANCE_SUITE_DIR,
+	FEEDBACK_FILE,
+	FEEDBACK_FULL_FILE,
+	isAtOrUnder,
+} from "./trust/protected-paths.ts";
+
 export const READY_LABEL = "factory:ready";
 
 /** The repository kill switch is on only while a label with this exact name exists. */
 export const REPO_SWITCH_LABEL = "factory:enabled";
-
-export const CONTROL_PLANE_DIR = ".github";
-export const ACCEPTANCE_SUITE_DIR = "test/acceptance";
 
 export type PermissionLevel =
 	| "admin"
@@ -69,10 +74,6 @@ export type PathCheck =
 	| { kind: "clean" }
 	| { kind: "forbidden"; paths: NonEmpty<string> };
 
-function isAtOrUnder(path: string, dir: string): boolean {
-	return path === dir || path.startsWith(`${dir}/`);
-}
-
 // Paths are compared lowercase so a case-insensitive checkout cannot reach
 // `.GitHub/`.
 function isForbidden(changed: string, acceptanceDir: string): boolean {
@@ -85,8 +86,8 @@ function isForbidden(changed: string, acceptanceDir: string): boolean {
 			.some((part) => part === ".." || part.toLowerCase() === ".git") ||
 		path.startsWith("../") ||
 		path.startsWith("/") ||
-		isAtOrUnder(path, ".factory-feedback.json") ||
-		isAtOrUnder(path, ".factory-feedback-full.json") ||
+		isAtOrUnder(path, FEEDBACK_FILE) ||
+		isAtOrUnder(path, FEEDBACK_FULL_FILE) ||
 		isAtOrUnder(path, CONTROL_PLANE_DIR) ||
 		isAtOrUnder(path, posix.normalize(acceptanceDir).toLowerCase())
 	);

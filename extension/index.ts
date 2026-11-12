@@ -14,13 +14,13 @@ import {
 	resolvePlatform,
 } from "../src/platform.ts";
 import { formatStageTable } from "../src/stages.ts";
+import { MODEL_STAGES } from "../src/core/stages.ts";
 import {
 	type EnvLookup,
 	type Exec,
 	type ExecResult,
 	githubRepoFromRemote,
 	loadWorkflow,
-	MODEL_STAGES,
 	type RepoSlug,
 	redactCredentials,
 	TRUSTED_REF,
