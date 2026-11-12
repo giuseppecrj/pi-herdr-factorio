@@ -10,6 +10,7 @@ import {
 	READY_LABEL,
 	REPO_SWITCH_LABEL,
 } from "../policy.ts";
+import { ACCEPTANCE_SUITE_PREFIX } from "../trust/protected-paths.ts";
 import { type Exec, type ExecResult, type GhCause, ghFailure } from "../gh.ts";
 import type { TicketRef } from "../core/run.ts";
 import {
@@ -829,7 +830,7 @@ export class GitHubTicketAdapter implements TicketReader {
 				if (
 					name !== null &&
 					patch !== null &&
-					!name.toLowerCase().startsWith("test/acceptance/")
+					!name.toLowerCase().startsWith(ACCEPTANCE_SUITE_PREFIX)
 				)
 					patches.set(name, patch);
 			}

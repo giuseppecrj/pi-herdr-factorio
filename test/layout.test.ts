@@ -726,13 +726,16 @@ describe("layout guard", () => {
 				category: "path prefixes",
 				target: "test/acceptance",
 				expect: [
-					/^literals: src\/publication\.ts:\d+ names test\/acceptance\/, which is not a directory/,
-					/^literals: src\/feedback\.ts:\d+ names test\/acceptance/,
-					/^literals: src\/validation\.ts:\d+ names test\/acceptance/,
-					/^literals: src\/specify\.ts:\d+ names test\/acceptance/,
-					/^literals: src\/adapters\/github\.ts:\d+ names test\/acceptance/,
-					/^literals: server\/sandbox\.ts:\d+ names test\/acceptance/,
-					/^literals: server\/gates\.ts:\d+ names test\/acceptance\/, which is the prefix of no file/,
+					/^literals: src\/trust\/protected-paths\.ts:\d+ names test\/acceptance, which does not exist/,
+				],
+				callers: [
+					"src/publication.ts",
+					"src/feedback.ts",
+					"src/validation.ts",
+					"src/specify.ts",
+					"src/adapters/github.ts",
+					"server/sandbox.ts",
+					"server/gates.ts",
 				],
 			},
 			{
@@ -792,6 +795,14 @@ describe("layout guard", () => {
 				const problems = layout(root, "literals");
 
 				for (const pattern of move.expect) includesMatch(problems, pattern);
+
+				if ("callers" in move)
+					for (const caller of move.callers)
+						assert.match(
+							readFileSync(join(root, caller), "utf8"),
+							/from "(?:\.\/trust|\.\.\/(?:src\/)?trust)\/protected-paths\.ts";/,
+							caller,
+						);
 			});
 
 		it("leaves synthetic paths in a new test alone", () => {

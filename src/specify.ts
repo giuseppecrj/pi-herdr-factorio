@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { ACCEPTANCE_SUITE_PREFIX } from "./trust/protected-paths.ts";
 import type { SnapshotSource } from "./admission.ts";
 import type { FamilyInput } from "./core/models.ts";
 import { type Digest, digestOf, isDigest, type NonEmpty } from "./core/run.ts";
@@ -358,7 +359,7 @@ function contractOf(
 		if (
 			!isRepoPath(path) ||
 			!path.startsWith("test/") ||
-			path.startsWith("test/acceptance/") ||
+			path.startsWith(ACCEPTANCE_SUITE_PREFIX) ||
 			!/\.(?:test|cases)\.[cm]?[jt]s$/.test(path)
 		)
 			reject("bad_field");

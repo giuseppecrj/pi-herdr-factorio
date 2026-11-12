@@ -7,6 +7,7 @@ import { parseCandidateState, candidateProjection } from "./handoff.ts";
 import { parseMarker, MARKER_PREFIX } from "./markers.ts";
 import { FEEDBACK_UNAVAILABLE_REASONS } from "./feedback.ts";
 import { fileAdmissionStore } from "./admission.ts";
+import { isStage } from "./core/stages.ts";
 
 export const ATTENTION_THRESHOLDS = {
 	waitingMs: 3 * 24 * 60 * 60 * 1000,
@@ -189,15 +190,7 @@ function parseClaim(
 			"landed",
 			"cancelled",
 		].includes(status) ||
-		![
-			"admit",
-			"specify",
-			"accept",
-			"build",
-			"validate",
-			"review",
-			"land",
-		].includes(stage)
+		!isStage(stage)
 	)
 		return null;
 	const rawBook = claim?.handoff;

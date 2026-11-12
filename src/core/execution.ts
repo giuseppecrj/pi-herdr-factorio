@@ -1,4 +1,5 @@
-import type { Digest, SandboxStage as Stage } from "./run.ts";
+import type { Digest } from "./run.ts";
+import type { SandboxStage as Stage } from "./stages.ts";
 import type { ModelId, StageBudget } from "../workflow.ts";
 import {
 	countOf,

@@ -570,7 +570,7 @@ export type CandidateStep = Readonly<{
 }>;
 
 export type CandidateProjection = Readonly<{
-	stage: import("./core/run.ts").Stage;
+	stage: import("./core/stages.ts").Stage;
 	status: import("./markers.ts").RunStatus;
 	attempt: number;
 	round: number;
@@ -580,7 +580,7 @@ export type CandidateProjection = Readonly<{
 export function candidateProjection(
 	state: CandidateState,
 ): CandidateProjection {
-	let stage: import("./core/run.ts").Stage = "validate";
+	let stage: import("./core/stages.ts").Stage = "validate";
 	let status: import("./markers.ts").RunStatus = "running";
 	let round = 0;
 	let attempt = 1;

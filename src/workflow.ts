@@ -25,11 +25,15 @@ import {
 	type PlatformProfile,
 	type RepoSlug,
 } from "./platform.ts";
-import { type Digest, digestOf, type Stage } from "./core/run.ts";
+import { type Digest, digestOf } from "./core/run.ts";
+import {
+	STAGE_ORDER,
+	isStage,
+	type ModelStage,
+	type Stage,
+} from "./core/stages.ts";
 
 export { isRepoSlug, type RepoSlug };
-
-export type ExecutionStage = ModelStage | "maintain";
 
 export type ScorerConfig = {
 	readonly id: string;
@@ -74,8 +78,6 @@ export type CadenceConfig = {
 	readonly jobs: Readonly<Record<CadenceJob, CadenceJobSettings>>;
 };
 
-import { STAGE_ORDER } from "./stages.ts";
-
 export const WORKFLOW_PATH = ".github/factory/WORKFLOW.md";
 export const TRUSTED_REF = "main";
 export const DEFAULT_MODEL = "openai/gpt-6.1-sol";
@@ -83,15 +85,6 @@ export const DEFAULT_MODEL = "openai/gpt-6.1-sol";
 export type GitSha = string & { readonly __brand: "GitSha" };
 
 export type ModelId = string & { readonly __brand: "ModelId" };
-
-export const MODEL_STAGES = [
-	"specify",
-	"accept",
-	"build",
-	"review",
-] as const satisfies readonly Stage[];
-
-export type ModelStage = (typeof MODEL_STAGES)[number];
 
 export type StageBudget = {
 	readonly maxTurns: number;
@@ -303,10 +296,6 @@ export function isBranchName(input: string): boolean {
 
 function isModelId(input: string): input is ModelId {
 	return MODEL_ID.test(input);
-}
-
-function isStage(input: string): input is Stage {
-	return STAGE_ORDER.some((stage) => stage === input);
 }
 
 function repoSlugOf(owner: string, name: string): RepoSlug | null {

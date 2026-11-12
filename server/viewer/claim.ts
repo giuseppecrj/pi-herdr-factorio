@@ -1,5 +1,6 @@
 import type { ClaimRecord } from "../../src/orchestrator.ts";
-import { isRunStatus, isStage } from "../../src/markers.ts";
+import { isRunStatus } from "../../src/markers.ts";
+import { isStage } from "../../src/core/stages.ts";
 import { isDigest, runIdOf } from "../../src/core/run.ts";
 import { parseCandidateState, candidateUsage } from "../../src/handoff.ts";
 import { parseMarker, MARKER_PREFIX } from "../../src/markers.ts";

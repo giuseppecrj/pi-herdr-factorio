@@ -13,20 +13,11 @@ import {
 	type Outcome,
 	type RejectReason,
 	type Run,
-	type Stage,
 } from "./core/run.ts";
 
-export { MAX_REPAIR_ROUNDS } from "./handoff.ts";
+import { STAGE_ORDER, type Stage, type SandboxStage } from "./core/stages.ts";
 
-export const STAGE_ORDER = [
-	"admit",
-	"specify",
-	"accept",
-	"build",
-	"validate",
-	"review",
-	"land",
-] as const satisfies readonly Stage[];
+export { MAX_REPAIR_ROUNDS } from "./handoff.ts";
 
 export type StageProfile = {
 	modelAccess: "none" | "judge" | "full";
@@ -34,10 +25,7 @@ export type StageProfile = {
 	githubAccess: string;
 };
 
-export const STAGE_PROFILES: Record<
-	import("./core/run.ts").SandboxStage,
-	StageProfile
-> = {
+export const STAGE_PROFILES: Record<SandboxStage, StageProfile> = {
 	admit: {
 		modelAccess: "none",
 		runsIn: "controller",

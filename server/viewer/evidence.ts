@@ -26,6 +26,11 @@ import { isRepoSlug, isGitSha } from "../../src/workflow.ts";
 import { isLogin } from "../../src/adapters/github.ts";
 import { parseMarker } from "../../src/markers.ts";
 import {
+	STAGE_ORDER,
+	MODEL_STAGES,
+	isModelStage,
+} from "../../src/core/stages.ts";
+import {
 	candidateGenerations,
 	candidateProjection,
 	candidateUsage,
@@ -1159,23 +1164,13 @@ export async function readViewerRun(
 
 	const required = new Set<string>();
 
-	const stageOrder = [
-		"admit",
-		"specify",
-		"accept",
-		"build",
-		"validate",
-		"review",
-		"land",
-	];
-
-	const modelStages = ["specify", "accept", "build", "review"];
+	const stageOrder: readonly string[] = STAGE_ORDER;
 
 	const reached = (stage: string, attempt: number | null, round = 0) => {
 		const keyOf = (name: string, n: number) =>
 			`${name}${(name === "build" && round > 0) || name === "review" ? `-r${round}` : ""}-${n}`;
 
-		for (const earlier of modelStages)
+		for (const earlier of MODEL_STAGES)
 			if (
 				stageOrder.indexOf(earlier) < stageOrder.indexOf(stage) &&
 				![...received].some((key) =>
@@ -1184,7 +1179,7 @@ export async function readViewerRun(
 			)
 				required.add(keyOf(earlier, 1));
 
-		if (modelStages.includes(stage) && attempt !== null)
+		if (isModelStage(stage) && attempt !== null)
 			required.add(keyOf(stage, attempt));
 	};
 

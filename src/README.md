@@ -6,7 +6,11 @@ Host work stays in `server/`. That means processes, sandboxes, the gateway, gate
 
 ## `src/core`
 
-`src/core/` holds the facts every other part of the factory shares, with no host code. `run.ts` defines runs, outcomes, verdicts and digests. `json.ts` parses JSON at I/O boundaries. `models.ts` holds the Anthropic limits table and model-family evidence. `journal.ts` reads a gateway request journal back into settlements and charges. `execution.ts` holds stage outcomes, usage and efficiency facts. A core file never imports `server/` or `host/`. The gateway's audit writer and the host's stage receipt stay in `server/sandbox/`.
+`src/core/` holds the facts every other part of the factory shares, with no host code. `run.ts` defines runs, outcomes, verdicts and digests. `json.ts` parses JSON at I/O boundaries. `models.ts` holds the Anthropic limits table and model-family evidence. `journal.ts` reads a gateway request journal back into settlements and charges. `execution.ts` holds stage outcomes, usage and efficiency facts. `stages.ts` owns stage names, order and the run, model, sandbox and execution subsets. Transition policy stays in `src/stages.ts`. A core file never imports `server/` or `host/`. The gateway's audit writer and the host's stage receipt stay in `server/sandbox/`.
+
+## `src/trust`
+
+`protected-paths.ts` owns the control-plane, acceptance-suite and feedback-file names. Callers keep their own normalization, case handling and authority. A read filter, a replacement-test check and a patch-write check do not grant the same access.
 
 ## Files by planned owner
 

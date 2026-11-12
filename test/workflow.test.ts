@@ -7,7 +7,8 @@ import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import { EXIT, execFile, runCli } from "../server/cli.ts";
 import { digestOf } from "../src/core/run.ts";
-import { STAGE_ORDER, STAGE_PROFILES } from "../src/stages.ts";
+import { STAGE_PROFILES } from "../src/stages.ts";
+import { STAGE_ORDER, MODEL_STAGES } from "../src/core/stages.ts";
 import type { JsonValue } from "../src/core/json.ts";
 import {
 	type CheckReport,
@@ -24,7 +25,6 @@ import {
 	loadView,
 	loadWorkflow,
 	trustedWorkflowConfig,
-	MODEL_STAGES,
 	modelsOf,
 	parseWorkflow,
 	seatModelsOf,

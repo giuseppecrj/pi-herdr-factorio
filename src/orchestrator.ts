@@ -91,7 +91,13 @@ import {
 	type TerminalStatus,
 } from "./markers.ts";
 import { hasWriteAccess, READY_LABEL } from "./policy.ts";
-import { type Digest, type NonEmpty, runIdOf, type Stage } from "./core/run.ts";
+import { type Digest, type NonEmpty, runIdOf } from "./core/run.ts";
+import {
+	isModelStage,
+	type Stage,
+	type ModelStage,
+	type ExecutionStage,
+} from "./core/stages.ts";
 import {
 	type Answer,
 	type AnswersRecord,
@@ -144,9 +150,6 @@ import {
 	type AcceptEffort,
 	type EnvLookup,
 	type GitSha,
-	MODEL_STAGES,
-	type ModelStage,
-	type ExecutionStage,
 	type RepoSlug,
 	STAGE_CLEANUP_RESERVE_MS,
 	type WorkflowConfig,
@@ -176,7 +179,7 @@ export type Clock = { now(): number };
 export type StageLaunch =
 	| {
 			readonly kind: "unavailable";
-			readonly stage: import("./core/run.ts").SandboxStage;
+			readonly stage: import("./core/stages.ts").SandboxStage;
 			readonly reason: "sandbox_unavailable";
 	  }
 	| { readonly kind: "started"; readonly done: Promise<StageResult> };
@@ -389,10 +392,6 @@ type StageEnd = Pick<StageResult, "kind" | "usage"> & {
 	readonly observed?: string | null;
 	readonly family?: FamilyInput;
 };
-
-function isModelStage(stage: Stage): stage is ModelStage {
-	return MODEL_STAGES.some((known) => known === stage);
-}
 
 /**
  * A local record that a run holds a claim, so a restart finds it even after

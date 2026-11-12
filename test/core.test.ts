@@ -13,9 +13,9 @@ import {
 	verdictPasses,
 	type Digest,
 	type Run,
-	type SandboxStage,
 	type Verdict,
 } from "../src/core/run.ts";
+import type { SandboxStage } from "../src/core/stages.ts";
 import {
 	arrayOf,
 	boolOf,

@@ -19,6 +19,11 @@ import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { scanSource, type Signal } from "../.github/factory/gates/scan.ts";
 import { readStoredContract } from "../src/artifacts.ts";
+import {
+	CONTROL_PLANE_PREFIX,
+	ACCEPTANCE_SUITE_DIR,
+	ACCEPTANCE_SUITE_PREFIX,
+} from "../src/trust/protected-paths.ts";
 import { isDigest, digestOf } from "../src/core/run.ts";
 import { acceptanceEntries, type AcceptanceSuite } from "../src/accept.ts";
 import {
@@ -75,9 +80,9 @@ const SHA = /^[a-f0-9]{40}$/;
 function isDocumentation(path: string): boolean {
 	return (
 		path.endsWith(".md") &&
-		!path.startsWith(".github/") &&
+		!path.startsWith(CONTROL_PLANE_PREFIX) &&
 		!path.startsWith(".pi/") &&
-		!path.startsWith("test/acceptance/") &&
+		!path.startsWith(ACCEPTANCE_SUITE_PREFIX) &&
 		!SOURCE.some((dir) => path.startsWith(`${dir}/`))
 	);
 }
@@ -359,7 +364,7 @@ function replacementsOf(text: string): readonly ReplacedTest[] {
 			Object.keys(obj).some((k) => k !== "path" && k !== "reason") ||
 			!safePath(path) ||
 			!path.startsWith("test/") ||
-			path.startsWith("test/acceptance/") ||
+			path.startsWith(ACCEPTANCE_SUITE_PREFIX) ||
 			!/\.(?:test|cases)\.[cm]?[jt]s$/.test(path) ||
 			!reason.trim() ||
 			reason.length > 500 ||
@@ -408,13 +413,13 @@ function overlay(input: {
 
 	for (const [path, entry] of candidate)
 		if (
-			path.startsWith("test/acceptance/") &&
+			path.startsWith(ACCEPTANCE_SUITE_PREFIX) &&
 			(entry.blob !== base.get(path)?.blob ||
 				entry.mode !== base.get(path)?.mode) &&
 			!heldout.includes(path)
 		)
 			throw new Error("unauthorized_acceptance");
-	rmSync(join(input.dest, "test/acceptance"), {
+	rmSync(join(input.dest, ACCEPTANCE_SUITE_DIR), {
 		recursive: true,
 		force: true,
 	});
@@ -447,7 +452,7 @@ function overlay(input: {
 
 		const additional =
 			path.startsWith("test/") &&
-			(!base.has(path) || path.startsWith("test/acceptance/"));
+			(!base.has(path) || path.startsWith(ACCEPTANCE_SUITE_PREFIX));
 
 		if (
 			path.split("/").at(-1) === ".npmrc" &&
@@ -462,7 +467,7 @@ function overlay(input: {
 			if (
 				additional &&
 				/\.(?:test|cases)\.[cm]?[jt]s$/.test(path) &&
-				!path.startsWith("test/acceptance/")
+				!path.startsWith(ACCEPTANCE_SUITE_PREFIX)
 			)
 				newTests.push(path);
 		}
@@ -1644,7 +1649,7 @@ async function runBase(
 					scenario: s.id,
 					kind: s.kind,
 					mode: "checked" as const,
-					file: `test/acceptance/${input.binding.issue}/checks/${path}`,
+					file: `${ACCEPTANCE_SUITE_PREFIX}${input.binding.issue}/checks/${path}`,
 					oracleKey: oracleKey(input.contract, s.criteria, file.content),
 				};
 	});
@@ -1768,7 +1773,7 @@ async function runBase(
 			).filter(([p]) => p.startsWith("checks/"))) {
 				const target = join(
 					tree,
-					`test/acceptance/${input.binding.issue}`,
+					`${ACCEPTANCE_SUITE_PREFIX}${input.binding.issue}`,
 					path,
 				);
 
@@ -1880,7 +1885,7 @@ function scanSuite(
 	};
 
 	for (const [path, text] of acceptanceEntries(suite, canary)) {
-		const file = `test/acceptance/${issue}/${path}`;
+		const file = `${ACCEPTANCE_SUITE_PREFIX}${issue}/${path}`;
 
 		if (!path.startsWith("checks/") || !/\.[cm]?[jt]sx?$/.test(path)) continue;
 

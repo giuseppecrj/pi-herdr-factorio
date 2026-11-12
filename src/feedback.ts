@@ -7,6 +7,7 @@ import type { JsonValue } from "./core/json.ts";
 import { posix } from "node:path";
 import { digestOf, isDigest, type Digest } from "./core/run.ts";
 import { isGitSha, type GitSha, type RepoSlug } from "./workflow.ts";
+import { ACCEPTANCE_SUITE_DIR, isAtOrUnder } from "./trust/protected-paths.ts";
 
 export type FeedbackId =
 	| `github:${RepoSlug}:issue-comment:${number}`
@@ -459,10 +460,7 @@ export function canonicalJson(
 function heldoutPath(path: string): boolean {
 	const normalized = posix.normalize(path.replaceAll("\\", "/")).toLowerCase();
 
-	return (
-		normalized === "test/acceptance" ||
-		normalized.startsWith("test/acceptance/")
-	);
+	return isAtOrUnder(normalized, ACCEPTANCE_SUITE_DIR);
 }
 
 export type ClassifiedFeedback =

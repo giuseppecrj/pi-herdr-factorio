@@ -5,6 +5,7 @@ import type {
 	DisplayGroup,
 } from "../../src/feed.ts";
 import type { HandoffReason } from "../../src/handoff.ts";
+import { STAGE_ORDER } from "../../src/core/stages.ts";
 import { escapeHtml as esc, page } from "./render.ts";
 import { icons } from "./design/icons/icons.ts";
 
@@ -213,7 +214,10 @@ export function renderHeader(
 }
 
 export function renderSteps(entry: FeedEntry): string {
-	const stages = ["specify", "accept", "build", "validate", "review", "land"];
+	const stages: readonly string[] = STAGE_ORDER.filter(
+		(stage) => stage !== "admit",
+	);
+
 	const current = stages.indexOf(entry.stage);
 
 	return `<ol class="steps">${stages

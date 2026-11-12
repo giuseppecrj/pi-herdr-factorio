@@ -1,4 +1,5 @@
 import { isDigest, digestOf, type Digest } from "./core/run.ts";
+import { ACCEPTANCE_SUITE_PREFIX } from "./trust/protected-paths.ts";
 import type { Contract, ContractDigest, CriterionKind } from "./specify.ts";
 import {
 	isGitSha,
@@ -1141,7 +1142,7 @@ export function draftCheckFeedback(
 	const reason =
 		assessment.kind === "refused" ? assessment.failure.reason : null;
 
-	const prefix = `test/acceptance/${issue}/checks/`;
+	const prefix = `${ACCEPTANCE_SUITE_PREFIX}${issue}/checks/`;
 
 	const checkFiles = new Set(
 		receipt.evidence.scenarios.flatMap((s) =>
@@ -1764,7 +1765,7 @@ function earlyAbort(
 				signals.some(
 					(s) =>
 						s.path === null ||
-						s.path.startsWith("test/acceptance/") ||
+						s.path.startsWith(ACCEPTANCE_SUITE_PREFIX) ||
 						input.expected.includes(s.path) ||
 						!input.candidatePaths?.includes(s.path),
 				)

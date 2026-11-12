@@ -16,30 +16,29 @@ import {
 	prepareRepairTree,
 } from "../src/build.ts";
 import { cadenceEligiblePath } from "../src/cadence.ts";
-import { digestOf, type Stage, type SandboxStage } from "../src/core/run.ts";
+import { digestOf } from "../src/core/run.ts";
+import {
+	type Stage,
+	type SandboxStage,
+	type ModelStage,
+	type ExecutionStage,
+	STAGE_ORDER,
+	MODEL_STAGES,
+	SANDBOX_STAGES,
+	EXECUTION_STAGES,
+	isStage,
+} from "../src/core/stages.ts";
 import {
 	classifyFeedback,
 	feedbackId,
 	type FeedbackEvent,
 } from "../src/feedback.ts";
-import { isStage } from "../src/markers.ts";
 import { checkChangedPaths } from "../src/policy.ts";
 import { parseSeat, reviewSeats } from "../src/review.ts";
 import { acceptanceSourcePath, parseSpecifyOutput } from "../src/specify.ts";
-import {
-	formatStageTable,
-	nextStage,
-	STAGE_ORDER,
-	STAGE_PROFILES,
-} from "../src/stages.ts";
+import { formatStageTable, nextStage, STAGE_PROFILES } from "../src/stages.ts";
 import { parseCheckFeedback } from "../src/validation.ts";
-import {
-	isGitSha,
-	isRepoSlug,
-	MODEL_STAGES,
-	type ModelStage,
-	type ExecutionStage,
-} from "../src/workflow.ts";
+import { isGitSha, isRepoSlug } from "../src/workflow.ts";
 
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 
@@ -514,6 +513,34 @@ test("L04 pins stage order, model and sandbox subsets and every next-stage resul
 		["specify", "accept", "build", "review"],
 	);
 	assert.equal(formatStageTable().split("\n").length, 8);
+});
+
+test("L04 gives both extracted homes their inherited review seats and exact subsets", () => {
+	for (const path of ["src/trust/protected-paths.ts", "src/core/stages.ts"]) {
+		assert.deepEqual(
+			reviewSeats([path]),
+			["code-review", "security-review", "simplify", "ultrareview"],
+			path,
+		);
+	}
+
+	assert.deepEqual(SANDBOX_STAGES, [
+		"admit",
+		"specify",
+		"accept",
+		"build",
+		"validate",
+		"review",
+		"land",
+		"maintain",
+	]);
+	assert.deepEqual(EXECUTION_STAGES, [
+		"specify",
+		"accept",
+		"build",
+		"review",
+		"maintain",
+	]);
 });
 
 test("L04 pins existing review routing before classifying the extractions", () => {

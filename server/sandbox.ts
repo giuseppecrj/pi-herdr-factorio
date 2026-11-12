@@ -41,6 +41,13 @@ import {
 	type ReviewExecution,
 } from "../src/handoff.ts";
 import { isGitSha, parseWorkflow, WORKFLOW_PATH } from "../src/workflow.ts";
+import type { ExecutionStage as ModelStage } from "../src/core/stages.ts";
+import {
+	CONTROL_PLANE_DIR,
+	ACCEPTANCE_SUITE_DIR,
+	FEEDBACK_FILE,
+	FEEDBACK_FULL_FILE,
+} from "../src/trust/protected-paths.ts";
 import {
 	collectPatch,
 	commandReceipts,
@@ -106,7 +113,6 @@ import {
 import {
 	type AcceptEffort,
 	type ModelId,
-	type ExecutionStage as ModelStage,
 	STAGE_CLEANUP_RESERVE_MS,
 } from "../src/workflow.ts";
 import {
@@ -3603,8 +3609,8 @@ async function candidateReviewInputs(
 		throw error;
 	}
 
-	rmSync(join(workspace, ".factory-feedback.json"));
-	rmSync(join(workspace, ".factory-feedback-full.json"), { force: true });
+	rmSync(join(workspace, FEEDBACK_FILE));
+	rmSync(join(workspace, FEEDBACK_FULL_FILE), { force: true });
 	const reviewedFiles = new Map<string, number>();
 
 	const walk = (root: string, prefix = "") => {
@@ -3612,8 +3618,8 @@ async function candidateReviewInputs(
 			const path = prefix + entry.name;
 
 			if (
-				path === ".github" ||
-				path === "test/acceptance" ||
+				path === CONTROL_PLANE_DIR ||
+				path === ACCEPTANCE_SUITE_DIR ||
 				entry.name === "node_modules" ||
 				entry.name === ".git"
 			)
@@ -3745,7 +3751,7 @@ async function candidateReviewInputs(
 					previous.receipt.changedPaths,
 					"{}",
 				);
-				rmSync(join(before, ".factory-feedback.json"));
+				rmSync(join(before, FEEDBACK_FILE));
 
 				const delta = await collectPatch({
 					base: before,
@@ -4657,11 +4663,10 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 					);
 
 					if (owner?.full != null)
-						writeFileSync(
-							join(workspace, ".factory-feedback-full.json"),
-							owner.full,
-							{ flag: "wx", mode: 0o600 },
-						);
+						writeFileSync(join(workspace, FEEDBACK_FULL_FILE), owner.full, {
+							flag: "wx",
+							mode: 0o600,
+						});
 
 					const paths = [
 						...new Set([
@@ -4735,9 +4740,7 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 
 			const repair =
 				input.stage === "build" && (input.round ?? 0) > 0
-					? feedbackPrompt(
-							regularText(join(input.workspace, ".factory-feedback.json")),
-						)
+					? feedbackPrompt(regularText(join(input.workspace, FEEDBACK_FILE)))
 					: "";
 
 			const prompt = await withSkills(
@@ -5033,10 +5036,10 @@ export function sandboxExecutor(config: SandboxExecutorConfig): StageExecutor {
 							}
 
 							if ((input.round ?? 0) > 0) {
-								rmSync(join(input.workspace, ".factory-feedback.json"), {
+								rmSync(join(input.workspace, FEEDBACK_FILE), {
 									force: true,
 								});
-								rmSync(join(input.workspace, ".factory-feedback-full.json"), {
+								rmSync(join(input.workspace, FEEDBACK_FULL_FILE), {
 									force: true,
 								});
 							}

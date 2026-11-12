@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { ACCEPTANCE_SUITE_DIR, isAtOrUnder } from "./trust/protected-paths.ts";
 import {
 	acceptanceDigestOf,
 	acceptanceEntries,
@@ -212,7 +213,7 @@ export function publishedSuite(input: {
 		throw new Error("acceptance_changed");
 
 	if (input.suite.files.length === 0) throw new Error("empty_checks");
-	const directory = `test/acceptance/${input.issue}`;
+	const directory = `${ACCEPTANCE_SUITE_DIR}/${input.issue}`;
 
 	const files = acceptanceEntries(input.suite, input.canary).flatMap(
 		([path, text]): PublishedFile[] =>
@@ -467,8 +468,7 @@ function hiddenPath(path: string, heldoutDir: string): boolean {
 	const lower = path.toLowerCase();
 
 	return (
-		lower === "test/acceptance" ||
-		lower.startsWith("test/acceptance/") ||
+		isAtOrUnder(lower, ACCEPTANCE_SUITE_DIR) ||
 		(heldoutDir !== "" &&
 			(path === heldoutDir || path.startsWith(`${heldoutDir}/`)))
 	);

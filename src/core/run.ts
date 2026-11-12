@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { Stage } from "./stages.ts";
 
 export const REVIEW_MAX_TOKENS = 120_000;
 export const REPAIR_BUILD_MAX_TOKENS = 300_000;
@@ -23,17 +24,6 @@ export type TicketRef = {
 	key: string;
 	url: string;
 };
-
-export type Stage =
-	| "admit"
-	| "specify"
-	| "accept"
-	| "build"
-	| "validate"
-	| "review"
-	| "land";
-
-export type SandboxStage = Stage | "maintain";
 
 export type Digest = string & { readonly __brand: "Digest" };
 

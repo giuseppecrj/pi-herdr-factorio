@@ -344,7 +344,7 @@ export function reviewSeats(
 ): ReviewSeat[] {
 	const risk =
 		paths.some((path) =>
-			/^(?:src\/(?:policy|admission|stages|workflow|artifacts|review|gh)\.ts|src\/(?:adapters|core)\/|server\/sandbox(?:\.ts|\/)|server\/(?:gates\.ts|provision\.sh)|package(?:-lock)?\.json$|skills\/)/.test(
+			/^(?:src\/(?:policy|admission|stages|workflow|artifacts|review|gh)\.ts|src\/(?:adapters|core)\/|src\/trust\/protected-paths\.ts$|server\/sandbox(?:\.ts|\/)|server\/(?:gates\.ts|provision\.sh)|package(?:-lock)?\.json$|skills\/)/.test(
 				path,
 			),
 		) ||
