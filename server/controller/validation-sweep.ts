@@ -7,7 +7,7 @@ import {
 	present,
 } from "../../src/contract/artifacts.ts";
 import { readPatch, publicationTree } from "../../src/candidate/build.ts";
-import { type PlatformProfile } from "../../src/trust/platform.ts";
+import type { PlatformProfile } from "../../src/trust/platform.ts";
 import { ownerPatchValid } from "../../src/candidate/state.ts";
 import { candidateGenerations } from "../../src/candidate/handoff.ts";
 import {
@@ -48,7 +48,7 @@ import {
 	textsOf,
 	countOf,
 } from "../../src/core/json.ts";
-import { type Exec } from "../../src/github/exec.ts";
+import type { Exec } from "../../src/github/exec.ts";
 import { digestOf, type Verdict, type Digest } from "../../src/core/run.ts";
 import { isGitSha, type GitSha } from "../../src/config/schema.ts";
 import type { RepoSlug } from "../../src/trust/platform.ts";

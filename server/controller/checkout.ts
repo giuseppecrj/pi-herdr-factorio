@@ -12,12 +12,8 @@ import {
 } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { gunzipSync } from "node:zlib";
-import { type Digest } from "../../src/core/run.ts";
-import {
-	type Checkout,
-	type CheckoutResult,
-	type Log,
-} from "../../src/orchestrator.ts";
+import type { Digest } from "../../src/core/run.ts";
+import type { Checkout, CheckoutResult, Log } from "../../src/orchestrator.ts";
 import { hasControl } from "../../src/contract/parse.ts";
 import type { GitSha } from "../../src/config/schema.ts";
 import type { RepoSlug } from "../../src/trust/platform.ts";

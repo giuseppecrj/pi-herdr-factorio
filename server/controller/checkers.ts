@@ -48,7 +48,7 @@ import {
 	acceptanceDigestOf,
 	type AcceptanceSuite,
 } from "../../src/contract/acceptance.ts";
-import { type DraftCheckContext, type StageRunInput } from "../sandbox.ts";
+import type { DraftCheckContext, StageRunInput } from "../sandbox.ts";
 import type { Contract, ReplacedTest } from "../../src/contract/contract.ts";
 import { scopeOwner, scopeUnit, stopScopeArgv } from "../sandbox/scope.ts";
 import { mkdir, rm } from "node:fs/promises";

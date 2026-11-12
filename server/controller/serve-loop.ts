@@ -1,14 +1,10 @@
-import { type PlatformProfile } from "../../src/trust/platform.ts";
+import type { PlatformProfile } from "../../src/trust/platform.ts";
 import { objectOf, type JsonValue } from "../../src/core/json.ts";
 import type { LedgerBacklog } from "../../src/ledger/outbox.ts";
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import {
-	type Log,
-	type LogFields,
-	type Orchestrator,
-} from "../../src/orchestrator.ts";
+import type { Log, LogFields, Orchestrator } from "../../src/orchestrator.ts";
 import { parseJson, writeAtomic, writeStatus } from "./state.ts";
 
 const LOG_VALUE = /^[A-Za-z0-9:._@/[\]+-]*$/;

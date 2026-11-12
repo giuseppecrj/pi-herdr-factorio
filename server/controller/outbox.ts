@@ -1,4 +1,4 @@
-import { type PlatformProfile } from "../../src/trust/platform.ts";
+import type { PlatformProfile } from "../../src/trust/platform.ts";
 import { GitHubPublicationApi } from "../../src/github/publish.ts";
 import {
 	objectOf,
@@ -6,7 +6,7 @@ import {
 	parseJson as parseJsonText,
 	textOf,
 } from "../../src/core/json.ts";
-import { type Exec } from "../../src/github/exec.ts";
+import type { Exec } from "../../src/github/exec.ts";
 import {
 	frozenRowOf,
 	ledgerRowOf,
@@ -24,7 +24,7 @@ import { ledgerApiOf } from "../../src/ledger/git.ts";
 import { lstat, mkdir, readdir, readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { type Digest, isDigest } from "../../src/core/run.ts";
-import { type Log } from "../../src/orchestrator.ts";
+import type { Log } from "../../src/orchestrator.ts";
 import type { RepoSlug } from "../../src/trust/platform.ts";
 import { writeAtomic, installOnce } from "./state.ts";
 

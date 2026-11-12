@@ -5,7 +5,7 @@ import {
 	unreviewedFailures,
 } from "../../src/maintenance/scorers.ts";
 import { cadenceMarker } from "../../src/trust/markers.ts";
-import { type PlatformProfile } from "../../src/trust/platform.ts";
+import type { PlatformProfile } from "../../src/trust/platform.ts";
 import {
 	CadenceRunner,
 	cadenceSkills,
@@ -43,7 +43,7 @@ import {
 	countOf,
 	type JsonValue,
 } from "../../src/core/json.ts";
-import { type Exec } from "../../src/github/exec.ts";
+import type { Exec } from "../../src/github/exec.ts";
 import { digestOf, isDigest } from "../../src/core/run.ts";
 import { frozenRowOf } from "../../src/ledger/schema.ts";
 import { STAGE_CLEANUP_RESERVE_MS } from "../../src/config/schema.ts";
@@ -53,10 +53,10 @@ import { readFileSync, readdirSync, lstatSync } from "node:fs";
 import { lstat, readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type Log, type StageExecutor } from "../../src/orchestrator.ts";
+import type { Log, StageExecutor } from "../../src/orchestrator.ts";
 import { inert } from "../../src/contract/render.ts";
 import { readStageReceipt } from "../sandbox/receipts.ts";
-import { type ScorePumpInput } from "./measurement.ts";
+import type { ScorePumpInput } from "./measurement.ts";
 
 export async function cadenceSwitches(
 	stateDir: string,

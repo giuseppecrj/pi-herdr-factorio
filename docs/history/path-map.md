@@ -67,7 +67,6 @@ Each row is bound to the pull request that made the move. Its squash commit on `
 | L08 | #756 | `src/specify.ts` | `src/contract/render.ts` | Inert comment text, keys and key readers, question, contract, acceptance and build summaries |
 | L08 | #756 | `src/specify.ts` | `src/contract/prompt.ts` | Specify tools and skills, source selection, excerpts, source facts, tree and named files, nonce framing and specify, review and revision prompts |
 | L08 | #756 | `src/candidate/diagnosis.ts` | `src/contract/acceptance.ts` | `AcceptanceBinding` and `parseAcceptanceBinding`; base and candidate policy stay in diagnosis |
-
 | L11 | #758 | `server/controller.ts` | `server/controller/lock.ts` | `LockAcquire`, `ProcessTable`, `parseStartTime`, `procTable`, `ControllerLock` and `acquireLock` |
 | L11 | #758 | `server/controller.ts` | `server/controller/checkout.ts` | `TarballFetch`, `ghTarball`, `TarEntry`, `TarRead`, `readTarball`, `checkoutOf`, `checkoutWorkspace`, `checkoutTree` and `checkoutBuildWorkspace` |
 | L11 | #758 | `server/controller.ts` | `server/controller/checkers.ts` | `controllerDraftChecker`, `controllerBaseChecker`, `DiagnosisFacts`, `DiagnosisRequest`, `storedBaseReceipt` and `controllerDiagnosis` |

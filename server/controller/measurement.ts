@@ -28,7 +28,7 @@ import {
 	privateDir,
 	present,
 } from "../../src/contract/artifacts.ts";
-import { type PlatformProfile } from "../../src/trust/platform.ts";
+import type { PlatformProfile } from "../../src/trust/platform.ts";
 import { writeCadenceFile } from "../../src/maintenance/cadence.ts";
 import { GitHubTicketAdapter } from "../../src/github/adapter.ts";
 import { GitHubPublicationApi } from "../../src/github/publish.ts";
@@ -39,7 +39,7 @@ import {
 	textsOf,
 	countOf,
 } from "../../src/core/json.ts";
-import { type Exec } from "../../src/github/exec.ts";
+import type { Exec } from "../../src/github/exec.ts";
 import { digestOf, type Digest, isDigest } from "../../src/core/run.ts";
 import {
 	type LedgerRow,
@@ -63,7 +63,7 @@ import type { RepoSlug } from "../../src/trust/platform.ts";
 import { readdirSync, lstatSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { type Log, type StageExecutor } from "../../src/orchestrator.ts";
+import type { Log, StageExecutor } from "../../src/orchestrator.ts";
 import { readStageReceipt } from "../sandbox/receipts.ts";
 import { writeAtomic } from "./state.ts";
 import { fileLedgerOutbox } from "./outbox.ts";

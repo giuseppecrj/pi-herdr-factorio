@@ -19,7 +19,7 @@ import {
 	type FeedbackId,
 	type FeedbackObservation,
 } from "../../src/candidate/feedback.ts";
-import { type PlatformProfile } from "../../src/trust/platform.ts";
+import type { PlatformProfile } from "../../src/trust/platform.ts";
 import {
 	sameGeneration,
 	type GenerationRef,
@@ -69,7 +69,7 @@ import {
 	countOf,
 	type JsonValue,
 } from "../../src/core/json.ts";
-import { type Exec } from "../../src/github/exec.ts";
+import type { Exec } from "../../src/github/exec.ts";
 import { digestOf, type Digest } from "../../src/core/run.ts";
 import { ACCEPTANCE_SUITE_PREFIX } from "../../src/trust/protected-paths.ts";
 import { parseLedger } from "../../src/ledger/schema.ts";
@@ -90,7 +90,7 @@ import {
 import { lstatSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { type Log, type StageExecutor } from "../../src/orchestrator.ts";
+import type { Log, StageExecutor } from "../../src/orchestrator.ts";
 import { inert, renderSummary, withoutKey } from "../../src/contract/render.ts";
 import {
 	parseJson,

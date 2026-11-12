@@ -3,7 +3,7 @@ import {
 	readStoredContract,
 	privateDir,
 } from "../../src/contract/artifacts.ts";
-import { type PlatformProfile } from "../../src/trust/platform.ts";
+import type { PlatformProfile } from "../../src/trust/platform.ts";
 import {
 	migrateCertificationValue,
 	migrateEvidenceValue,
@@ -17,10 +17,10 @@ import { parseWorkflow } from "../../src/config/parse.ts";
 import { baseTreeDigest } from "../gates.ts";
 import { lstat, mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import {
-	type ClaimRecord,
-	type LinkRead,
-	type RunFiles,
+import type {
+	ClaimRecord,
+	LinkRead,
+	RunFiles,
 } from "../../src/orchestrator.ts";
 import {
 	type Answer,
@@ -30,7 +30,7 @@ import {
 	isAnswersDigest,
 	isQuestionsDigest,
 } from "../../src/contract/contract.ts";
-import { type JsonValue } from "../../src/core/json.ts";
+import type { JsonValue } from "../../src/core/json.ts";
 import {
 	parseJson,
 	fieldOf,
