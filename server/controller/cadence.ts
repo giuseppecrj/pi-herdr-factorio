@@ -488,7 +488,7 @@ export function controllerCadence(input: {
 	});
 
 	const retained = async (execution: CadenceInput): Promise<CadenceResult> => {
-		const { executionCharge } = await import("../sandbox.ts");
+		const { executionCharge } = await import("../sandbox/receipts.ts");
 
 		const runtime = join(
 			cadenceExecutionDir(input.stateDir, execution.job, execution.windowStart),

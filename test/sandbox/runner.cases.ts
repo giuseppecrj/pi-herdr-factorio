@@ -74,21 +74,23 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { after, before, describe, it } from "node:test";
 import {
-	agentDirFrom,
 	bareModel,
+	runStage,
+	type StageHost,
+	type StageRunInput,
+} from "../../server/sandbox/run-stage.ts";
+import {
+	agentDirFrom,
 	captureStderr,
 	hostSessionPath,
 	piCommand,
-	publishFile,
-	runStage,
-	runVisibleTests,
 	sandboxHost,
-	type StageHost,
-	type StageRunInput,
 	STAGE_SYSTEM_PROMPT,
 	STDERR_CAP_BYTES,
-	withSkills,
-} from "../../server/sandbox.ts";
+} from "../../server/sandbox/launch.ts";
+import { publishFile } from "../../server/sandbox/receipts.ts";
+import { runVisibleTests } from "../../server/sandbox/visible-tests.ts";
+import { withSkills } from "../../server/sandbox/executor.ts";
 import { AuditLog, type JournalRecord } from "../../server/sandbox/audit.ts";
 import {
 	assertReaderParity,
@@ -143,7 +145,10 @@ import type {
 	StageExecutor,
 	StageLaunchInput,
 } from "../../src/controller/launch.ts";
-import * as sandboxModule from "../../server/sandbox.ts";
+import * as executorModule from "../../server/sandbox/executor.ts";
+import * as receiptsModule from "../../server/sandbox/receipts.ts";
+import * as reviewModule from "../../server/sandbox/review.ts";
+import * as specifyModule from "../../server/sandbox/specify.ts";
 import {
 	collectPatch,
 	storePatch,
@@ -467,6 +472,190 @@ function input(
 		...overrides,
 	};
 }
+
+describe("L12 stage execution contract", () => {
+	it("keeps the receipt pending until owned child usage settles", async () => {
+		let finishChild: (
+			usage: Awaited<ReturnType<StageHost["readChildUsage"]>>,
+		) => void = () => {};
+
+		let finishStop = () => {};
+
+		const child = new Promise<Awaited<ReturnType<StageHost["readChildUsage"]>>>(
+			(resolve) => {
+				finishChild = resolve;
+			},
+		);
+
+		const stopped = new Promise<void>((resolve) => {
+			finishStop = resolve;
+		});
+
+		const h = harness([settledChild(11)], {
+			childUsage: () => child,
+			stopSandbox: async () => finishStop(),
+			cleanupReserveMs: 2000,
+		});
+
+		const done = runStage(input(), h.host);
+		await stopped;
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.deepEqual(h.receipts, []);
+		assert.ok(!h.timeline.includes("shutdown"));
+		finishChild({ total: 7, byModel: new Map([["openai/child", 7]]) });
+		const result = await done;
+		assert.equal(result.kind, "passed");
+		assert.deepEqual(result.receipt.usage, {
+			total: 18,
+			parent: 11,
+			children: 7,
+			byModel: { "openai/gpt-6.1-sol": 11, "openai/child": 7 },
+			gateway: 0,
+			unreadChildren: 0,
+		});
+		assert.equal(result.receipt.childSummaries?.[0]?.tokens, 7);
+		assert.deepEqual(h.stops, [0]);
+		assert.equal(h.timeline.at(-1), "shutdown");
+	});
+
+	it("captures the answering fallback identity after primary cleanup", async () => {
+		const h = harness(
+			[
+				replayer(fixture("exp8-incomplete_content_filter.jsonl")),
+				replayer([
+					started("x"),
+					{ type: "turn_start" },
+					assistant({ model: "gpt-6.1-terra", tokens: 17 }),
+					{ type: "agent_settled", aborted: false },
+				]),
+			],
+			{ now: () => 1000 },
+		);
+
+		const result = await runStage(
+			input({}, { fallback: model("openai/gpt-6.1-terra") }),
+			h.host,
+		);
+
+		assert.equal(result.kind, "passed");
+		assert.deepEqual(h.launches, [
+			"openai/gpt-6.1-sol",
+			"openai/gpt-6.1-terra",
+		]);
+		assert.deepEqual(h.stops, [0, 1]);
+		assert.equal(result.receipt.models.requested, "openai/gpt-6.1-sol");
+		assert.equal(result.receipt.fallback?.requested, "openai/gpt-6.1-terra");
+		assert.equal(result.receipt.fallback?.observed, "openai/gpt-6.1-terra");
+		assert.equal(result.receipt.refusal, "incomplete_content_filter");
+		assert.equal(result.receipt.wallMs, 0);
+		assert.deepEqual(
+			result.receipt.stderr.map((entry) => entry.session),
+			[0, 1],
+		);
+		assert.ok(
+			h.timeline.indexOf("stop:0") < h.timeline.lastIndexOf("pi:prompt"),
+		);
+		assert.equal(h.timeline.at(-1), "shutdown");
+	});
+
+	it("restores cumulative usage and refuses exhausted limits without launching", async () => {
+		const h = harness([]);
+		h.host.readUsage = () => ({
+			version: 1,
+			runId: RUN,
+			stage: "specify",
+			attempt: 1,
+			startedAt: 1000,
+			deadline: 61000,
+			turns: 2,
+			usage: {
+				total: 40,
+				parent: 40,
+				children: 0,
+				byModel: { "openai/gpt-6.1-sol": 40 },
+				gateway: 40,
+				unreadChildren: 0,
+			},
+		});
+		const result = await runStage(input({}, { maxTokens: 40 }), h.host);
+		assert.equal(result.kind === "budget_exhausted" && result.cap, "tokens");
+		assert.equal(result.usage, 40);
+		assert.equal(result.receipt.turns, 2);
+		assert.deepEqual(h.launches, []);
+		assert.deepEqual(h.tables, []);
+		assert.deepEqual(h.stops, []);
+		assert.equal(result.receipt.egress, null);
+	});
+
+	it("fails a receipt write only after stopping the session and gateway", async () => {
+		const h = harness(
+			[
+				replayer([
+					started("x"),
+					{ type: "turn_start" },
+					assistant(),
+					{ type: "agent_settled", aborted: false },
+				]),
+			],
+			{
+				writeReceipt: async () => {
+					h.timeline.push("receipt:failed");
+
+					return false;
+				},
+			},
+		);
+
+		const result = await runStage(input(), h.host);
+		assert.equal(result.kind === "failed" && result.exit, "crashed");
+		assert.deepEqual(h.timeline.slice(-3), [
+			"stop:0",
+			"shutdown",
+			"receipt:failed",
+		]);
+		assert.equal(result.usage, 10);
+	});
+
+	it("closes the gate before abort cleanup and writes its receipt last", async () => {
+		const abort = new AbortController();
+
+		const h = harness(
+			[
+				(command, pi) => {
+					if (command.type === "prompt") abort.abort();
+
+					if (command.type === "abort")
+						pi.emit({ type: "agent_settled", aborted: true });
+				},
+			],
+			{
+				writeReceipt: async (receipt) => {
+					h.receipts.push(receipt);
+					h.timeline.push("receipt");
+
+					return true;
+				},
+			},
+		);
+
+		const result = await runStage(input({ signal: abort.signal }), h.host);
+		assert.equal(result.kind === "failed" && result.exit, "aborted");
+		assert.deepEqual(h.timeline, [
+			"pi:prompt",
+			"gate:abort",
+			"pi:abort",
+			"drain",
+			"stop:0",
+			"shutdown",
+			"receipt",
+		]);
+		assert.deepEqual(result.receipt.settlement, {
+			event: "agent_settled",
+			aborted: true,
+		});
+		assert.deepEqual(h.outputs, []);
+	});
+});
 
 describe("accept same-session draft checks", () => {
 	const feedback = {
@@ -926,7 +1115,7 @@ describe("durable execution high water", () => {
 
 				for (const facts of [
 					result.receipt.efficiency,
-					await sandboxModule.executionEfficiency(dir),
+					await receiptsModule.executionEfficiency(dir),
 				]) {
 					assert.ok(facts);
 					assert.deepEqual(
@@ -2135,7 +2324,7 @@ describe("private build executor", () => {
 				},
 			]);
 
-			const executor = sandboxModule.sandboxExecutor({
+			const executor = executorModule.sandboxExecutor({
 				platform: EXE_DEV_PLATFORM,
 				stateDir,
 				root,
@@ -2249,7 +2438,7 @@ describe("private build executor", () => {
 				assert.ok(patch.kind === "found");
 				assert.notEqual(patch.receipt.patchDigest, initial.patchDigest);
 
-				const restarted = sandboxModule.sandboxExecutor({
+				const restarted = executorModule.sandboxExecutor({
 					platform: EXE_DEV_PLATFORM,
 					stateDir,
 					root,
@@ -2422,7 +2611,7 @@ describe("private build executor", () => {
 					},
 				]);
 
-				const executor = sandboxModule.sandboxExecutor({
+				const executor = executorModule.sandboxExecutor({
 					platform: EXE_DEV_PLATFORM,
 					stateDir,
 					root,
@@ -2562,7 +2751,7 @@ describe("private build executor", () => {
 						{ kind: "build", result: { kind: "found", patch: patch.patch } },
 					);
 
-					const restarted = sandboxModule.sandboxExecutor({
+					const restarted = executorModule.sandboxExecutor({
 						platform: EXE_DEV_PLATFORM,
 						stateDir,
 						root,
@@ -2724,7 +2913,7 @@ describe("private build executor", () => {
 				let tests = 0;
 				const refusals: string[] = [];
 
-				const executor = sandboxModule.sandboxExecutor({
+				const executor = executorModule.sandboxExecutor({
 					platform: EXE_DEV_PLATFORM,
 					stateDir,
 					root,
@@ -3007,7 +3196,7 @@ describe("private build executor", () => {
 		let fetches = 0,
 			tests = 0;
 
-		const config: sandboxModule.SandboxExecutorConfig = {
+		const config: executorModule.SandboxExecutorConfig = {
 			platform: EXE_DEV_PLATFORM,
 			stateDir,
 			root,
@@ -3038,7 +3227,7 @@ describe("private build executor", () => {
 			},
 		};
 
-		const executor = sandboxModule.sandboxExecutor(config);
+		const executor = executorModule.sandboxExecutor(config);
 		assert.equal(await executor.preflight(), true);
 
 		const checkout = { runId: digest(RUN), workspace, repo, sha, build: true };
@@ -3100,7 +3289,7 @@ describe("private build executor", () => {
 			existsSync(join(stateDir, "build-base", "checkouts", `${RUN}.json`)),
 			false,
 		);
-		const restarted = sandboxModule.sandboxExecutor(config);
+		const restarted = executorModule.sandboxExecutor(config);
 		assert.equal(await restarted.preflight(), true);
 
 		const output = await restarted.output({
@@ -3227,7 +3416,7 @@ describe("private build executor", () => {
 			const warnings: unknown[] = [];
 			let interrupted = false;
 
-			const config: sandboxModule.SandboxExecutorConfig = {
+			const config: executorModule.SandboxExecutorConfig = {
 				platform: EXE_DEV_PLATFORM,
 				stateDir,
 				root,
@@ -3294,7 +3483,7 @@ describe("private build executor", () => {
 				},
 			};
 
-			const first = sandboxModule.sandboxExecutor(config);
+			const first = executorModule.sandboxExecutor(config);
 			assert.equal(await first.preflight(), true);
 
 			const request = {
@@ -3318,7 +3507,7 @@ describe("private build executor", () => {
 				rmSync(join(stateDir, "build-base", "checkouts", `${RUN}.json`));
 			}
 
-			const restarted = sandboxModule.sandboxExecutor(config);
+			const restarted = executorModule.sandboxExecutor(config);
 			assert.equal(await restarted.preflight(), true);
 			await restarted.output(request);
 			await restarted.output(request);
@@ -7129,7 +7318,7 @@ describe("stage skills", () => {
 			},
 		]);
 
-		const executor = sandboxModule.sandboxExecutor({
+		const executor = executorModule.sandboxExecutor({
 			platform: EXE_DEV_PLATFORM,
 			stateDir,
 			root,
@@ -7601,7 +7790,7 @@ describe("multi-seat candidate review", () => {
 				},
 			};
 
-			const executor = sandboxModule.sandboxExecutor(config);
+			const executor = executorModule.sandboxExecutor(config);
 			const prepared = await executor.prepareReview!(f.args);
 			assert.ok(!("kind" in prepared));
 			const captured = readFileSync(capturePath);
@@ -7718,7 +7907,7 @@ describe("multi-seat candidate review", () => {
 			assert.equal(await executor.spent(request), 10);
 			interrupt = false;
 
-			const restarted = sandboxModule.sandboxExecutor({
+			const restarted = executorModule.sandboxExecutor({
 				...config,
 				fetchTarball: async () => {
 					throw new Error("unexpected late fetch");
@@ -7749,7 +7938,7 @@ describe("multi-seat candidate review", () => {
 			for (const call of h.calls)
 				assert.ok(call.includes(prepared.input.prompt));
 			rmSync(join(h.dir, "receipt.json"));
-			const settled = sandboxModule.sandboxExecutor(config);
+			const settled = executorModule.sandboxExecutor(config);
 			const settledInput = await settled.prepareReview!(f.args);
 			assert.ok(!("kind" in settledInput));
 			assert.equal(await settled.preflight(), true);
@@ -7781,7 +7970,7 @@ describe("multi-seat candidate review", () => {
 				if (damaged === null) rmSync(capturePath);
 				else writeFileSync(capturePath, damaged, { mode: 0o600 });
 
-				const refused = sandboxModule.sandboxExecutor(config);
+				const refused = executorModule.sandboxExecutor(config);
 				await assert.rejects(refused.prepareReview!(f.args), {
 					message: "review_execution_binding",
 				});
@@ -7837,7 +8026,7 @@ describe("multi-seat candidate review", () => {
 				);
 
 				await assert.rejects(
-					sandboxModule.runReview(h.run, h.dir, (dir, tools) => {
+					reviewModule.runReview(h.run, h.dir, (dir, tools) => {
 						if (dir.endsWith("/security-review")) throw interrupted;
 
 						return h.create(dir, tools);
@@ -7865,7 +8054,7 @@ describe("multi-seat candidate review", () => {
 				});
 				assert.equal(await f.executor.spent(outputArgs), 10);
 				assert.deepEqual(
-					await sandboxModule.sandboxExecutor(f.config).prepareReview!(f.args),
+					await executorModule.sandboxExecutor(f.config).prepareReview!(f.args),
 					f.prepared,
 				);
 				assert.deepEqual(readFileSync(capturePath), captured);
@@ -7945,7 +8134,7 @@ describe("multi-seat candidate review", () => {
 
 				if (mode !== "resume" && mode !== "prepare-refusal")
 					await assert.rejects(
-						sandboxModule.runReview(h.run, h.dir, h.create),
+						reviewModule.runReview(h.run, h.dir, h.create),
 						(error: Error) =>
 							error instanceof ReviewEvidenceUnavailable &&
 							error.message === "review_execution_binding",
@@ -7957,7 +8146,7 @@ describe("multi-seat candidate review", () => {
 				const launches: StageLaunchInput[] = [];
 
 				const done: Promise<
-					Awaited<ReturnType<typeof sandboxModule.runReview>>
+					Awaited<ReturnType<typeof reviewModule.runReview>>
 				>[] = [];
 
 				const executor: StageExecutor = {
@@ -7990,7 +8179,7 @@ describe("multi-seat candidate review", () => {
 					},
 					launch: async (input) => {
 						launches.push(input);
-						const result = sandboxModule.runReview(input, h.dir, h.create);
+						const result = reviewModule.runReview(input, h.dir, h.create);
 						done.push(result);
 
 						return { kind: "started", done: result };
@@ -8066,7 +8255,7 @@ describe("multi-seat candidate review", () => {
 					assert.ok(launch);
 					assert.deepEqual(await f.executor.output(outputArgs), output);
 					rmSync(join(h.dir, "receipt.json"));
-					const replay = await sandboxModule.runReview(launch, h.dir, h.create);
+					const replay = await reviewModule.runReview(launch, h.dir, h.create);
 					assert.equal(replay.kind, "passed");
 					assert.equal(replay.usage, 0);
 					assert.equal(replay.receipt.usage.total, 30);
@@ -8136,7 +8325,7 @@ describe("multi-seat candidate review", () => {
 			const run = capturedReview(h.run);
 			const prepared = run.review;
 			assert.ok(prepared);
-			const first = await sandboxModule.runReview(run, h.dir, h.create);
+			const first = await reviewModule.runReview(run, h.dir, h.create);
 			assert.equal(first.kind, "passed");
 			assert.equal(first.usage, 30);
 			assert.equal(first.receipt.usage.total, 30);
@@ -8171,7 +8360,7 @@ describe("multi-seat candidate review", () => {
 
 			const output = readFileSync(join(h.dir, "output.txt"));
 			rmSync(join(h.dir, "receipt.json"));
-			const replay = await sandboxModule.runReview(run, h.dir, h.create);
+			const replay = await reviewModule.runReview(run, h.dir, h.create);
 
 			assert.equal(replay.kind, "passed");
 			assert.equal(replay.usage, 0);
@@ -8202,7 +8391,7 @@ describe("multi-seat candidate review", () => {
 			const prepared = run.review;
 			const execution = run.execution;
 			assert.ok(prepared && execution?.stage === "review");
-			const first = await sandboxModule.runReview(run, h.dir, h.create);
+			const first = await reviewModule.runReview(run, h.dir, h.create);
 			assert.equal(first.kind, "passed");
 			assert.equal(first.usage, 30);
 			const manifest = readFileSync(join(h.dir, "review.json"));
@@ -8271,7 +8460,7 @@ describe("multi-seat candidate review", () => {
 
 			for (const [name, changed] of changes) {
 				await assert.rejects(
-					sandboxModule.runReview(changed, h.dir, h.create),
+					reviewModule.runReview(changed, h.dir, h.create),
 					{ message: "review_execution_binding" },
 					name,
 				);
@@ -8290,7 +8479,7 @@ describe("multi-seat candidate review", () => {
 			}
 
 			rmSync(join(h.dir, "receipt.json"));
-			const restored = await sandboxModule.runReview(run, h.dir, h.create);
+			const restored = await reviewModule.runReview(run, h.dir, h.create);
 			assert.equal(restored.kind, "passed");
 			assert.equal(restored.usage, 0);
 			assert.equal(restored.receipt.usage.total, 30);
@@ -8311,7 +8500,7 @@ describe("multi-seat candidate review", () => {
 			const run = capturedReview(h.run);
 			const prepared = run.review;
 			assert.ok(prepared);
-			const first = await sandboxModule.runReview(run, h.dir, h.create);
+			const first = await reviewModule.runReview(run, h.dir, h.create);
 			assert.equal(first.kind, "passed");
 			assert.equal(first.usage, 30);
 			const path = join(h.dir, "review.json");
@@ -8352,7 +8541,7 @@ describe("multi-seat candidate review", () => {
 			for (const [name, changed] of cases) {
 				writeFileSync(path, changed);
 				await assert.rejects(
-					sandboxModule.runReview(run, h.dir, h.create),
+					reviewModule.runReview(run, h.dir, h.create),
 					(error: Error) =>
 						error instanceof ReviewEvidenceUnavailable &&
 						error.message === "review_execution_binding",
@@ -8381,7 +8570,7 @@ describe("multi-seat candidate review", () => {
 			}
 
 			rmSync(join(h.dir, "receipt.json"));
-			const restored = await sandboxModule.runReview(run, h.dir, h.create);
+			const restored = await reviewModule.runReview(run, h.dir, h.create);
 			assert.equal(restored.kind, "passed");
 			assert.equal(restored.usage, 0);
 			assert.equal(restored.receipt.usage.total, 30);
@@ -8399,7 +8588,7 @@ describe("multi-seat candidate review", () => {
 		const h = await setup();
 
 		try {
-			await sandboxModule.runReview(h.run, h.dir, h.create);
+			await reviewModule.runReview(h.run, h.dir, h.create);
 
 			for (const name of [
 				"review.json",
@@ -8425,7 +8614,7 @@ describe("multi-seat candidate review", () => {
 			await assert.rejects(executor.output(request), {
 				message: "review_execution_binding",
 			});
-			await assert.rejects(sandboxModule.runReview(h.run, h.dir, h.create), {
+			await assert.rejects(reviewModule.runReview(h.run, h.dir, h.create), {
 				message: "review_execution_binding",
 			});
 			assert.equal(h.hosts.length, 3);
@@ -8439,7 +8628,7 @@ describe("multi-seat candidate review", () => {
 		const h = await setup();
 
 		try {
-			const result = await sandboxModule.runReview(h.run, h.dir, h.create);
+			const result = await reviewModule.runReview(h.run, h.dir, h.create);
 			assert.equal(result.kind, "passed");
 			assert.equal(result.usage, 30);
 			assert.equal(result.receipt.turns, 3);
@@ -8479,7 +8668,7 @@ describe("multi-seat candidate review", () => {
 		});
 
 		try {
-			const result = await sandboxModule.runReview(h.run, h.dir, h.create);
+			const result = await reviewModule.runReview(h.run, h.dir, h.create);
 			assert.equal(result.kind, "passed");
 			assert.deepEqual(
 				h.hosts.map((host) => host.launches),
@@ -8525,7 +8714,7 @@ describe("multi-seat candidate review", () => {
 		const h = await setup("fallback");
 
 		try {
-			const result = await sandboxModule.runReview(h.run, h.dir, h.create);
+			const result = await reviewModule.runReview(h.run, h.dir, h.create);
 			assert.equal(result.kind, "passed");
 			assert.equal(result.usage, 40);
 
@@ -8556,7 +8745,7 @@ describe("multi-seat candidate review", () => {
 			const h = await setup(bad);
 
 			try {
-				const result = await sandboxModule.runReview(h.run, h.dir, h.create);
+				const result = await reviewModule.runReview(h.run, h.dir, h.create);
 				assert.equal(result.kind, bad === "refused" ? "refused" : "failed");
 				assert.equal(h.hosts.length, 2);
 				assert.ok(!existsSync(join(h.dir, "output.txt")));
@@ -8569,12 +8758,12 @@ describe("multi-seat candidate review", () => {
 		const h = await setup();
 
 		try {
-			await sandboxModule.runReview(h.run, h.dir, h.create);
+			await reviewModule.runReview(h.run, h.dir, h.create);
 			rmSync(join(h.dir, "receipt.json"));
 			rmSync(join(h.dir, "output.txt"));
 			rmSync(join(h.dir, "simplify"), { recursive: true });
 
-			const result = await sandboxModule.runReview(
+			const result = await reviewModule.runReview(
 				{
 					...h.run,
 					settings: { ...h.run.settings, maxTokens: 29_980 },
@@ -8631,7 +8820,7 @@ describe("multi-seat candidate review", () => {
 
 			const before = h.hosts.length;
 
-			const result = await sandboxModule.runReview(
+			const result = await reviewModule.runReview(
 				{ ...h.run, review: { ...prepared, families } },
 				h.dir,
 				h.create,
@@ -8669,7 +8858,7 @@ describe("multi-seat candidate review", () => {
 		};
 
 		try {
-			await sandboxModule.runReview(
+			await reviewModule.runReview(
 				{
 					...h.run,
 					review: {
@@ -8722,7 +8911,7 @@ describe("multi-seat candidate review", () => {
 			retry = await setup("clean", 2);
 
 		try {
-			const failed = await sandboxModule.runReview(
+			const failed = await reviewModule.runReview(
 				first.run,
 				first.dir,
 				first.create,
@@ -8732,7 +8921,7 @@ describe("multi-seat candidate review", () => {
 			assert.equal(failed.usage, 20);
 			assert.equal(first.hosts.length, 2);
 
-			const passed = await sandboxModule.runReview(
+			const passed = await reviewModule.runReview(
 				{
 					...retry.run,
 					attempt: 2,
@@ -8760,7 +8949,7 @@ describe("multi-seat candidate review", () => {
 			const h = await setup();
 
 			try {
-				const result = await sandboxModule.runReview(
+				const result = await reviewModule.runReview(
 					{ ...h.run, settings: { ...h.run.settings, maxTokens } },
 					h.dir,
 					h.create,
@@ -8780,7 +8969,7 @@ describe("multi-seat candidate review", () => {
 		const h = await setup();
 
 		try {
-			const result = await sandboxModule.runReview(
+			const result = await reviewModule.runReview(
 				{ ...h.run, settings: { ...h.run.settings, maxTokens: 10 } },
 				h.dir,
 				h.create,
@@ -8882,11 +9071,11 @@ describe("controller-run specify review", () => {
 			create,
 			async execute() {
 				assert.ok(
-					"runSpecify" in sandboxModule,
+					"runSpecify" in specifyModule,
 					"the executor must run specify sessions in the controller",
 				);
 
-				return sandboxModule.runSpecify(run, dir, create);
+				return specifyModule.runSpecify(run, dir, create);
 			},
 			close() {
 				rmSync(dir, { recursive: true, force: true });
@@ -9016,7 +9205,7 @@ describe("controller-run specify review", () => {
 					},
 				};
 
-				const result = await sandboxModule.runSpecify(
+				const result = await specifyModule.runSpecify(
 					{
 						...h.run,
 						settings,
@@ -9069,7 +9258,7 @@ describe("controller-run specify review", () => {
 			const h = setup([DRAFT, CRITIQUE, QUESTIONS]);
 
 			try {
-				const result = await sandboxModule.runSpecify(
+				const result = await specifyModule.runSpecify(
 					{
 						...h.run,
 						settings: {
@@ -9107,7 +9296,7 @@ describe("controller-run specify review", () => {
 		const h = setup([DRAFT, CRITIQUE, QUESTIONS]);
 		const dir = join(h.dir, "stages", RUN, "specify-1");
 
-		const executor = sandboxModule.sandboxExecutor({
+		const executor = executorModule.sandboxExecutor({
 			platform: EXE_DEV_PLATFORM,
 			stateDir: h.dir,
 			xdgRuntimeDir: "/run/user/1000",
@@ -9119,7 +9308,7 @@ describe("controller-run specify review", () => {
 
 		try {
 			await assert.rejects(() =>
-				sandboxModule.runSpecify(h.run, dir, (path, tools) => {
+				specifyModule.runSpecify(h.run, dir, (path, tools) => {
 					if (path.endsWith("revision")) throw new Error("controller stopped");
 
 					return h.create(path, tools);
@@ -9128,7 +9317,7 @@ describe("controller-run specify review", () => {
 			assert.deepEqual(await executor.output(key), { kind: "pending" });
 			assert.equal(await executor.spent(key), 20);
 
-			const result = await sandboxModule.runSpecify(
+			const result = await specifyModule.runSpecify(
 				{ ...h.run, remainingRunTokens: 1000 - 20 },
 				dir,
 				h.create,
@@ -9148,7 +9337,7 @@ describe("controller-run specify review", () => {
 
 		try {
 			await assert.rejects(() =>
-				sandboxModule.runSpecify(h.run, h.dir, (path, tools) => {
+				specifyModule.runSpecify(h.run, h.dir, (path, tools) => {
 					if (path.endsWith("review")) {
 						mkdirSync(path);
 						throw new Error("stopped after launch");
@@ -9171,7 +9360,7 @@ describe("controller-run specify review", () => {
 		try {
 			let crashed = false;
 			await assert.rejects(() =>
-				sandboxModule.runSpecify(h.run, h.dir, (dir, tools) => {
+				specifyModule.runSpecify(h.run, h.dir, (dir, tools) => {
 					if (dir.endsWith("revision")) {
 						crashed = true;
 						throw new Error("controller stopped");
@@ -9231,7 +9420,7 @@ describe("durable request charges after a restart", () => {
 		const dir = mkdtempSync(join(tmpdir(), "factory-charges-"));
 		const runs = join(dir, "stages", RUN);
 
-		const executor = sandboxModule.sandboxExecutor({
+		const executor = executorModule.sandboxExecutor({
 			platform: EXE_DEV_PLATFORM,
 			stateDir: dir,
 			xdgRuntimeDir: "/run/user/1000",
@@ -9265,7 +9454,7 @@ describe("durable request charges after a restart", () => {
 
 			assert.equal(await spent("build", 1), 50);
 			assert.deepEqual(
-				await sandboxModule.executionCharge(join(runs, "build-1")),
+				await receiptsModule.executionCharge(join(runs, "build-1")),
 				{ total: 42, uncertain: 1 },
 			);
 
@@ -9281,7 +9470,7 @@ describe("durable request charges after a restart", () => {
 
 			assert.equal(await spent("accept", 1), 25);
 			assert.deepEqual(
-				await sandboxModule.executionCharge(join(runs, "accept-1")),
+				await receiptsModule.executionCharge(join(runs, "accept-1")),
 				{ total: 25, uncertain: 1 },
 			);
 
@@ -9304,7 +9493,7 @@ describe("durable request charges after a restart", () => {
 			);
 
 			assert.equal(await spent("specify", 1), 17);
-			assert.deepEqual(await sandboxModule.executionCharge(specify), {
+			assert.deepEqual(await receiptsModule.executionCharge(specify), {
 				total: 17,
 				uncertain: 1,
 			});
@@ -9314,7 +9503,7 @@ describe("durable request charges after a restart", () => {
 				JSON.stringify({ usage: { total: 40 } }),
 			);
 			assert.equal(await spent("specify", 1), 40);
-			assert.deepEqual(await sandboxModule.executionCharge(specify), {
+			assert.deepEqual(await receiptsModule.executionCharge(specify), {
 				total: 40,
 				uncertain: 1,
 			});
@@ -9351,7 +9540,7 @@ describe("durable request charges after a restart", () => {
 					}),
 			);
 
-			assert.deepEqual(await sandboxModule.executionCharge(build), {
+			assert.deepEqual(await receiptsModule.executionCharge(build), {
 				total: 1500,
 				uncertain: 1,
 			});

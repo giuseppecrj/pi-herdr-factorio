@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { runStage, type StageHost } from "../../server/sandbox.ts";
+import { runStage, type StageHost } from "../../server/sandbox/run-stage.ts";
 import { startGatewayProcess } from "../../server/sandbox/gateway-client.ts";
 import type { PiProcess } from "../../server/sandbox/rpc.ts";
 import type { ModelId } from "../../src/config/schema.ts";

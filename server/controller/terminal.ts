@@ -45,7 +45,7 @@ const EXECUTION_NAME =
 
 /** Receipt coverage is independent of token splits and wall-time accounting. */
 async function tokenCoverage(stateDir: string, runId: Digest) {
-	const { executionCharge } = await import("../sandbox.ts");
+	const { executionCharge } = await import("../sandbox/receipts.ts");
 	const root = join(resolve(stateDir), "stages", runId);
 
 	const names = await readdir(root).catch((error: NodeJS.ErrnoException) =>
@@ -105,7 +105,7 @@ export async function readTerminalEvidence(
 	candidate: CandidateState | null,
 ): Promise<TerminalEvidence> {
 	const { executionCharge, executionEfficiency } = await import(
-		"../sandbox.ts"
+		"../sandbox/receipts.ts"
 	);
 
 	const { aggregateEfficiency, unknownEfficiency } = await import(
@@ -667,7 +667,7 @@ export async function readRunCharges(
 	runId: Digest,
 	floor: number,
 ) {
-	const { executionCharge } = await import("../sandbox.ts");
+	const { executionCharge } = await import("../sandbox/receipts.ts");
 	const coverage = await tokenCoverage(stateDir, runId);
 	let readable = true;
 	let total = 0;

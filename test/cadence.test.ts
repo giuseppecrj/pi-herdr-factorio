@@ -33,12 +33,8 @@ import {
 	durableUsageOf,
 	readDurableAccounting,
 } from "../server/controller/terminal.ts";
-import {
-	launchSandbox,
-	sandboxExecutor,
-	sandboxHost,
-	withSkills,
-} from "../server/sandbox.ts";
+import { launchSandbox, sandboxHost } from "../server/sandbox/launch.ts";
+import { sandboxExecutor, withSkills } from "../server/sandbox/executor.ts";
 import { detectArch } from "../server/sandbox/seccomp.ts";
 import { listScopesArgv } from "../server/sandbox/scope.ts";
 import { startGatewayProcess } from "../server/sandbox/gateway-client.ts";

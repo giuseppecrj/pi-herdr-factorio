@@ -81,7 +81,7 @@ import {
 } from "./helpers.ts";
 import { classifyFeedback } from "../src/candidate/feedback.ts";
 import { storeFeedbackBatch } from "../server/controller/candidate-port.ts";
-import { sandboxExecutor } from "../server/sandbox.ts";
+import { sandboxExecutor } from "../server/sandbox/executor.ts";
 import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 
 const repo = "giuseppecrj/pi-herdr-factorio";

@@ -27,7 +27,7 @@ import {
 } from "../../server/sandbox/audit.ts";
 import { journalCharge } from "../../src/core/journal.ts";
 import { startGatewayProcess } from "../../server/sandbox/gateway-client.ts";
-import { executionCharge } from "../../server/sandbox.ts";
+import { executionCharge } from "../../server/sandbox/receipts.ts";
 import {
 	type ControlEvent,
 	encodeCommand,

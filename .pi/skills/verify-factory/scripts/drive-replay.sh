@@ -55,7 +55,7 @@ stop_child() {
   if alive "$pid"; then
     owned "$pid" || { echo "recorded PID is not this lane's serve; refusing signal" >&2; return 1; }
     local limit_ms stop_polls
-    limit_ms="$(replay_step visible-limit "$control/server/sandbox.ts")" && [[ "$limit_ms" =~ ^[1-9][0-9]*$ ]] \
+    limit_ms="$(replay_step visible-limit "$control")" && [[ "$limit_ms" =~ ^[1-9][0-9]*$ ]] \
       || { echo "visible-test deadline unavailable; refusing signal" >&2; return 1; }
     kill -TERM "$pid"
     # A failed candidate can be followed by a base run in the same tick.
