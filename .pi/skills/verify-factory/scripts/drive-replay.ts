@@ -82,9 +82,7 @@ async function visibleLimit(): Promise<void> {
 }
 
 async function productionFree(): Promise<void> {
-	const { readLock } = await import(
-		"../../../../server/controller/state.ts"
-	);
+	const { readLock } = await import("../../../../server/controller/state.ts");
 
 	const state = arg(0);
 	const lock = await readLock(state);
