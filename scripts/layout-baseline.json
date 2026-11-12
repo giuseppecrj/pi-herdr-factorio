@@ -1504,7 +1504,7 @@
 				"const script = \".pi/skills/verify-factory/scripts/drive-replay.sh\"": 1,
 				"readFile(\"server/sandbox.ts\"": 1,
 				"\"src\", \"server\", \"skills\", \"package.json\", \"README.md\", \"docs/decisions.tsv\", \".github/factory\", \"test/fixtures/replay\", script, \".pi/skills/verify-factory/scripts/lane-id.sh\",": 1,
-				"join(control, \"test/fixtures/replay/corpus.json\")": 1,
+				"join(control, \"test/fixtures/replay/corpus.json\")": 2,
 				"join(control, \"docs/decisions.tsv\")": 1,
 				"join(control, \"server/sandbox/assets\", from)": 1,
 				"join(control, \"test/fixtures/replay/cases/c3/issue.md\")": 1,
@@ -1991,6 +1991,25 @@
 						"from": "reader",
 						"path": "fixtures/metrics/runs-2026-11-08.jsonl"
 					}
+				}
+			]
+		},
+		{
+			"id": "test-reads-status-driver",
+			"kind": "paths",
+			"reader": "test/status-driver.test.ts",
+			"tokens": {
+				"const driver = \".pi/skills/verify-factory/scripts/status-driver.ts\"": 1,
+				"resolve(\"extension\")": 1
+			},
+			"targets": [
+				{
+					"path": ".pi/skills/verify-factory/scripts/status-driver.ts",
+					"type": "file"
+				},
+				{
+					"path": "extension",
+					"type": "dir"
 				}
 			]
 		},

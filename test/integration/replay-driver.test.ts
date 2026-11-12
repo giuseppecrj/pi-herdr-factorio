@@ -7,6 +7,7 @@ import {
 	readFile,
 	readdir,
 	readlink,
+	realpath,
 	rm,
 	symlink,
 	stat,
@@ -17,7 +18,11 @@ import { tmpdir } from "node:os";
 import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 import { acquireLock, procTable } from "../../server/controller.ts";
 import { manifestDigest } from "../../server/sandbox/manifest.ts";
-import { readReplayBudget, replayRow } from "../../src/replay.ts";
+import {
+	readReplayBudget,
+	replayRow,
+	replayStageCaps,
+} from "../../src/replay.ts";
 import { digestOf, runIdOf } from "../../src/run.ts";
 import { ledgerRowOf } from "../../src/ledger.ts";
 
@@ -150,6 +155,74 @@ printf '%s' "$polls"
 		assert.equal(Number(output), polls + 1);
 	} finally {
 		await rm(join(pidfile, ".."), { recursive: true, force: true });
+	}
+});
+
+it("signals only a live serve process for this lane's state directory", async () => {
+	const source = await readFile(script, "utf8");
+	const alive = source.match(/^alive\(\) \{.*\}$/m)?.[0];
+	const owned = source.match(/^owned\(\) \{\n[\s\S]*?\n\}\n/m)?.[0];
+	assert.ok(alive && owned);
+
+	const lane = await mkdtemp(join(tmpdir(), "owned-lane-"));
+	const state = join(lane, "state");
+	const children: ChildProcess[] = [];
+
+	const start = (...args: string[]) => {
+		const child = spawn(
+			process.execPath,
+			["-e", "setInterval(() => {}, 1000)", ...args],
+			{ stdio: "ignore" },
+		);
+
+		children.push(child);
+		assert.ok(child.pid);
+
+		return child.pid;
+	};
+
+	const verdict = (pid: number) =>
+		execFileSync(
+			"bash",
+			[
+				"-c",
+				`
+set -euo pipefail
+lane="$1"
+control="$2"
+${alive}
+${owned}
+if alive "$3" && owned "$3"; then echo owned; else echo foreign; fi
+`,
+				"owned",
+				lane,
+				resolve("."),
+				String(pid),
+			],
+			{ encoding: "utf8" },
+		).trim();
+
+	try {
+		const serve = start("server/cli.ts", "serve", "--state-dir", state);
+		const other = start("server/cli.ts", "serve", "--state-dir", `${state}2`);
+		const tick = start("server/cli.ts", "tick", "--state-dir", state);
+		const bare = start("serve", "--state-dir", state);
+		const dangling = start("server/cli.ts", "serve", "--state-dir");
+		await new Promise((r) => setTimeout(r, 100));
+
+		assert.equal(verdict(serve), "owned");
+
+		for (const pid of [other, tick, bare, dangling])
+			assert.equal(verdict(pid), "foreign", String(pid));
+
+		const gone = children[0];
+		assert.ok(gone);
+		gone.kill("SIGKILL");
+		await new Promise((r) => gone.on("close", r));
+		assert.equal(verdict(serve), "foreign");
+	} finally {
+		for (const child of children) child.kill("SIGKILL");
+		await rm(lane, { recursive: true, force: true });
 	}
 });
 
@@ -539,6 +612,88 @@ esac
 		assert.equal(record.caseId, "c3");
 		assert.equal(record.side, "prev");
 		assert.equal(record.issue, 900);
+	});
+
+	it("prepares the restore journal, preflight, replay record and reservation before serve", async () => {
+		const run = drive();
+		await ready(run);
+		const sha = git(control, "rev-parse", "HEAD");
+		const real = await realpath(control);
+
+		const corpus = JSON.parse(
+			await readFile(join(control, "test/fixtures/replay/corpus.json"), "utf8"),
+		);
+
+		const c3 = corpus.cases.find((c: { id: string }) => c.id === "c3");
+
+		const stageCaps = await replayStageCaps(sha, async (cmd, args) => ({
+			code: 0,
+			stdout: execFileSync(cmd, args, { cwd: control, encoding: "utf8" }),
+			stderr: "",
+		}));
+
+		assert.deepEqual(
+			JSON.parse(await readFile(join(root, "replay-restore.json"), "utf8")),
+			{
+				v: 1,
+				oldBundle: `assets-${"e".repeat(64)}`,
+				serviceState: "active",
+				hadHold: false,
+				issue: 900,
+				fixtureLabel: "factory:ready",
+				lane,
+				production: join(dir, "home/factory-state"),
+				sandbox: join(dir, "sandbox"),
+				out: join(dir, "output"),
+				pr: "F12a-replay-c3",
+				n: "1",
+				trusted: sha,
+				bootstrap: false,
+				control: real,
+				mainSha: sha,
+				grant: "local-test-grant",
+				root,
+			},
+		);
+
+		assert.equal((await stat(join(lane, "preflight"))).mode & 0o777, 0o700);
+
+		assert.deepEqual(
+			JSON.parse(await readFile(join(lane, "replay.json"), "utf8")),
+			{
+				v: 1,
+				caseId: "c3",
+				corpusDigest: corpus.digest,
+				issueDigest: c3.issueDigest,
+				side: "prev",
+				issue: 900,
+				headSha: sha,
+				mainSha: sha,
+				terminalMainSha: null,
+				runId: null,
+				stageCaps,
+				controlSha: sha,
+				bootstrap: false,
+				grant: "local-test-grant",
+				status: "prepared",
+			},
+		);
+
+		const budget = await readReplayBudget(join(root, "replay-budget.json"));
+		assert.equal(budget.reservations.length, 1);
+
+		assert.partialDeepStrictEqual(budget.reservations[0], {
+			key: join(lane, "state"),
+			status: "reserved",
+		});
+
+		assert.match(
+			await readFile(join(dir, "output/replay-check.json"), "utf8"),
+			/\S/,
+		);
+		assert.equal((await drive("stop").done).code, 0);
+		assert.equal((await run.done).code, 0);
+		await restored();
 	});
 
 	for (const [unitMask, expected] of [
