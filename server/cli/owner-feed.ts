@@ -19,8 +19,11 @@ import { readStageReceipt } from "../sandbox/receipts.ts";
 
 const RUN_READS: RunReads = { readStoredVerdict, readStageReceipt };
 
-async function controllerReads(root: string): Promise<ControllerReads> {
-	return { status: await readStatus(root), lock: await readLock(root) };
+function controllerReads(root: string): ControllerReads {
+	return {
+		readStatus: () => readStatus(root),
+		readLock: () => readLock(root),
+	};
 }
 
 export async function readOwnerHeader(
@@ -30,7 +33,7 @@ export async function readOwnerHeader(
 ): Promise<OwnerHeader> {
 	const root = resolve(stateDir);
 
-	return ownerHeader(root, await controllerReads(root), now, repo);
+	return ownerHeader(root, controllerReads(root), now, repo);
 }
 
 export async function readOwnerFeed(input: {
@@ -44,7 +47,7 @@ export async function readOwnerFeed(input: {
 		stateDir: root,
 		repo: input.repo,
 		now: input.now ?? Date.now(),
-		controller: await controllerReads(root),
+		controller: controllerReads(root),
 		host: RUN_READS,
 	});
 }

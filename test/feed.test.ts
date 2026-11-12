@@ -12,13 +12,15 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import type { FeedEntry } from "../src/feed.ts";
+import { ownerFeed, ownerHeader, type FeedEntry } from "../src/feed.ts";
 import {
 	readOwnerFeed,
 	readOwnerHeader,
 	readOwnerRun,
 } from "../server/cli/owner-feed.ts";
 import { acquireLock, procTable } from "../server/controller.ts";
+import { readStoredVerdict } from "../server/controller/state.ts";
+import { readStageReceipt } from "../server/sandbox/receipts.ts";
 import { ATTENTION_KINDS, readAttention } from "../src/attention.ts";
 import { objectOf, parseJson } from "../src/core/json.ts";
 import type { JsonValue } from "../src/core/json.ts";
@@ -726,4 +728,170 @@ test("L05 pins stored validation verdicts: valid, missing, corrupt and wrong-mod
 		await save(root, claim, { ...saved, round: 1 });
 		assert.equal(await ci(), "Pending");
 	});
+});
+
+function countedControllerReads(statuses: readonly JsonValue[]) {
+	const reads: string[] = [];
+
+	return {
+		reads,
+		controller: {
+			readStatus: async () => {
+				reads.push("status");
+
+				return (
+					statuses[reads.filter((read) => read === "status").length - 1] ?? null
+				);
+			},
+			readLock: async () => {
+				reads.push("lock");
+
+				return { kind: "none" };
+			},
+		},
+	};
+}
+
+const RUN_READS = { readStoredVerdict, readStageReceipt };
+
+test("the owner feed reads status for attention, re-reads it for the header, then reads the lock", async () => {
+	await state(async (root) => {
+		const later = new Date(now - 1_000).toISOString();
+
+		const { reads, controller } = countedControllerReads([
+			{ repo, corrupt: [{ issue: 99, defect: "duplicate_seq" }] },
+			{ repo, at: later },
+		]);
+
+		const feed = await ownerFeed({
+			stateDir: root,
+			repo,
+			now,
+			controller,
+			host: RUN_READS,
+		});
+
+		assert.deepEqual(reads, ["status", "status", "lock"]);
+		assert.deepEqual(
+			feed.unreadable.map((item) => item.issue),
+			[99],
+		);
+		assert.equal(feed.controller.lastTick, later);
+	});
+});
+
+test("the owner feed and header skip the status read when no repository resolves", async () => {
+	const root = await mkdtemp(join(tmpdir(), "owner-feed-no-repo-"));
+
+	try {
+		await mkdir(join(root, "claims"), { mode: 0o700, recursive: true });
+		await save(root, ["status.json"], { at: new Date(now).toISOString() });
+
+		const feed = countedControllerReads([{ at: "never" }]);
+
+		assert.equal(
+			(
+				await ownerFeed({
+					stateDir: root,
+					now,
+					controller: feed.controller,
+					host: RUN_READS,
+				})
+			).repo,
+			null,
+		);
+		assert.deepEqual(feed.reads, ["lock"]);
+
+		const header = countedControllerReads([{ at: "never" }]);
+
+		assert.deepEqual(await ownerHeader(root, header.controller, now), {
+			repo: null,
+			at: now,
+			controller: { state: "stopped", lastTick: null, localSwitch: "enabled" },
+		});
+		assert.deepEqual(header.reads, ["lock"]);
+
+		const resolved = countedControllerReads([{ at: "tick" }]);
+
+		assert.equal(
+			(await ownerHeader(root, resolved.controller, now, repo)).controller
+				.lastTick,
+			"tick",
+		);
+		assert.deepEqual(resolved.reads, ["status", "lock"]);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+async function withStatusReads<T>(
+	onMetrics: () => Promise<void>,
+	body: (statusReads: () => number) => Promise<T>,
+): Promise<T> {
+	const fs = (await import("node:fs/promises")).default;
+	const { syncBuiltinESMExports } = await import("node:module");
+	const original = fs.readFile;
+	let reads = 0;
+
+	Object.defineProperty(fs, "readFile", {
+		value: async (...args: Parameters<typeof original>) => {
+			const path = String(args[0]);
+
+			if (path.endsWith("status.json")) reads++;
+
+			if (path.endsWith("metrics.json")) await onMetrics();
+
+			return original(...args);
+		},
+	});
+	syncBuiltinESMExports();
+
+	try {
+		return await body(() => reads);
+	} finally {
+		Object.defineProperty(fs, "readFile", { value: original });
+		syncBuiltinESMExports();
+	}
+}
+
+test("a status update during the metrics read reaches the owner feed header", async () => {
+	await state(async (root) => {
+		const saved = objectOf(
+			parseJson(await readFile(join(root, "status.json"), "utf8")),
+		);
+
+		const later = new Date(now - 1_000).toISOString();
+
+		const feed = await withStatusReads(
+			() => save(root, ["status.json"], { ...saved, at: later }),
+			() => readOwnerFeed({ stateDir: root, repo, now }),
+		);
+
+		assert.equal(feed.controller.lastTick, later);
+		assert.deepEqual(
+			feed.unreadable.map((item) => item.issue),
+			[99],
+		);
+	});
+});
+
+test("without a resolved repository the owner feed and header read status only to resolve it", async () => {
+	const root = await mkdtemp(join(tmpdir(), "owner-feed-no-repo-"));
+
+	try {
+		await mkdir(join(root, "claims"), { mode: 0o700, recursive: true });
+		await save(root, ["status.json"], { at: new Date(now).toISOString() });
+
+		await withStatusReads(
+			async () => {},
+			async (statusReads) => {
+				assert.equal((await readOwnerFeed({ stateDir: root, now })).repo, null);
+				assert.equal(statusReads(), 2);
+				assert.equal((await readOwnerHeader(root, now)).repo, null);
+				assert.equal(statusReads(), 3);
+			},
+		);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
 });

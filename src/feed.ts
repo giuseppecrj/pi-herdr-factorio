@@ -80,10 +80,10 @@ export type OwnerFeed = {
 	};
 };
 
-/** What the host read from the controller for one feed: its status file and its lock. */
+/** The host's readers for the controller's status file and lock, called only where the feed needs them. */
 export type ControllerReads = {
-	readonly status: JsonValue | null;
-	readonly lock: { readonly kind: string };
+	readonly readStatus: () => Promise<JsonValue | null>;
+	readonly readLock: () => Promise<{ readonly kind: string }>;
 };
 
 /** The stage receipt fields a feed step shows. */
@@ -431,7 +431,7 @@ export async function ownerRun(
 	stateDir: string,
 	runId: string,
 	feed: OwnerHeader & { entries?: OwnerFeed["entries"] },
-	host: RunReads & { readonly readStatus: () => Promise<JsonValue | null> },
+	host: RunReads & Pick<ControllerReads, "readStatus">,
 ): Promise<FeedEntry | null> {
 	const existing = feed.entries?.find((entry) => entry.runId === runId);
 
@@ -467,8 +467,8 @@ export async function ownerHeader(
 ): Promise<OwnerHeader> {
 	const root = resolve(stateDir);
 	const slug = repo ?? (await feedRepo(root));
-	const status = slug === null ? null : objectOf(controller.status);
-	const { lock } = controller;
+	const status = slug === null ? null : objectOf(await controller.readStatus());
+	const lock = await controller.readLock();
 
 	return {
 		repo: slug,
@@ -509,7 +509,10 @@ export async function ownerFeed(input: {
 	const root = resolve(input.stateDir);
 	const { now } = input;
 	const repo = input.repo ?? (await feedRepo(root));
-	const status = repo === null ? null : objectOf(input.controller.status);
+
+	const status =
+		repo === null ? null : objectOf(await input.controller.readStatus());
+
 	const snapshot = await localJson(root, "metrics.json");
 
 	const attention = await readAttention({
