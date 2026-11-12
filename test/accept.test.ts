@@ -12,7 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { runHeldoutBase } from "../server/gates.ts";
-import { assessBase } from "../src/diagnosis.ts";
+import { assessBase } from "../src/candidate/diagnosis.ts";
 import {
 	ACCEPTANCE_ISOLATION,
 	acceptancePrompt,
@@ -20,8 +20,8 @@ import {
 	SCAN_SENTENCE,
 	SUPPRESSION_EXAMPLES,
 	writeAcceptance,
-} from "../src/accept.ts";
-import { fileArtifacts } from "../src/artifacts.ts";
+} from "../src/contract/acceptance.ts";
+import { fileArtifacts } from "../src/contract/artifacts.ts";
 import { type FamilyInput, familyLabel } from "../src/core/models.ts";
 import { digestOf } from "../src/core/run.ts";
 import {

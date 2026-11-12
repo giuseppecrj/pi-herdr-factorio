@@ -1,13 +1,13 @@
 import { lstat, readFile, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { isDigest, type Digest, runIdOf } from "./core/run.ts";
-import { isRepoSlug, type RepoSlug } from "./workflow.ts";
-import type { JsonValue } from "./core/json.ts";
-import { parseCandidateState, candidateProjection } from "./handoff.ts";
-import { parseMarker, MARKER_PREFIX } from "./markers.ts";
-import { FEEDBACK_UNAVAILABLE_REASONS } from "./feedback.ts";
-import { fileAdmissionStore } from "./admission.ts";
-import { isStage } from "./core/stages.ts";
+import { isDigest, type Digest, runIdOf } from "../core/run.ts";
+import { isRepoSlug, type RepoSlug } from "../workflow.ts";
+import type { JsonValue } from "../core/json.ts";
+import { parseCandidateState, candidateProjection } from "../handoff.ts";
+import { parseMarker, MARKER_PREFIX } from "../trust/markers.ts";
+import { FEEDBACK_UNAVAILABLE_REASONS } from "../candidate/feedback.ts";
+import { fileAdmissionStore } from "../trust/admission.ts";
+import { isStage } from "../core/stages.ts";
 
 export const ATTENTION_THRESHOLDS = {
 	waitingMs: 3 * 24 * 60 * 60 * 1000,

@@ -2,16 +2,16 @@ import {
 	feedbackId,
 	type FeedbackEvent,
 	type InlineComment,
-} from "../feedback.ts";
+} from "../candidate/feedback.ts";
 import {
 	hasWriteAccess,
 	type PermissionLevel,
 	parsePermissionLevel,
 	READY_LABEL,
 	REPO_SWITCH_LABEL,
-} from "../policy.ts";
+} from "../trust/policy.ts";
 import { ACCEPTANCE_SUITE_PREFIX } from "../trust/protected-paths.ts";
-import { type Exec, type ExecResult, type GhCause, ghFailure } from "../gh.ts";
+import { type Exec, type ExecResult, type GhCause, ghFailure } from "./exec.ts";
 import type { TicketRef } from "../core/run.ts";
 import {
 	type CommentPost,
@@ -22,7 +22,7 @@ import {
 	type TicketState,
 	type TicketWriter,
 	ticketKey,
-} from "../tickets.ts";
+} from "./tickets.ts";
 import { type JsonValue } from "../core/json.ts";
 import { isGitSha, type GitSha, type RepoSlug } from "../workflow.ts";
 import type { Digest } from "../core/run.ts";

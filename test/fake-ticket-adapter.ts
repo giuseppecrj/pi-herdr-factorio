@@ -4,7 +4,7 @@ import {
 	hasWriteAccess,
 	type PermissionLevel,
 	READY_LABEL,
-} from "../src/policy.ts";
+} from "../src/trust/policy.ts";
 import type { Run, TicketRef } from "../src/core/run.ts";
 import {
 	type FactoryEvent,
@@ -12,7 +12,7 @@ import {
 	type TicketAdapter,
 	type TicketState,
 	ticketKey,
-} from "../src/tickets.ts";
+} from "../src/github/tickets.ts";
 import { type JsonValue } from "../src/core/json.ts";
 import type { Exec, ExecResult } from "../src/workflow.ts";
 

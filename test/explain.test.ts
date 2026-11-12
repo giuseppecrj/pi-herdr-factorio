@@ -23,12 +23,12 @@ import {
 	explainFindings,
 	EXPLAIN_MAX_TOKENS,
 	EXPLAIN_WALL_MS,
-} from "../src/explain.ts";
+} from "../src/views/explain.ts";
 import {
 	measurementPrimary,
 	primaryMetricText,
 	computeMetrics,
-} from "../src/metrics.ts";
+} from "../src/views/metrics.ts";
 import {
 	parseLedger,
 	ledgerRowOf,
@@ -43,8 +43,8 @@ import {
 	sampled,
 	enqueueScore,
 	scorerPrompt,
-} from "../src/scorers.ts";
-import { fileAdmissionStore, snapshotDigest } from "../src/admission.ts";
+} from "../src/maintenance/scorers.ts";
+import { fileAdmissionStore, snapshotDigest } from "../src/trust/admission.ts";
 import {
 	contractBytes,
 	contractDigestOf,
@@ -69,7 +69,7 @@ import { objectOf, parseJson, arrayOf } from "../src/core/json.ts";
 import { parseWorkflow } from "../src/workflow.ts";
 import { GitHubPublicationApi, SCORE_FILE } from "../src/publication.ts";
 import { LedgerGit, repo } from "./ledger-git.ts";
-import { EXE_DEV_PLATFORM } from "../src/platform.ts";
+import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 import { trustedWorkflowFor } from "./fake-ticket-adapter.ts";
 import { nativeUserScope } from "./native-scope.ts";
 
@@ -103,7 +103,7 @@ function directory(t: TestContext) {
 function seed(
 	stateDir: string,
 	source = finished,
-	paths: readonly string[] = ["src/tickets.ts"],
+	paths: readonly string[] = ["src/github/tickets.ts"],
 ) {
 	const runId = source.row.runId;
 	const root = join(stateDir, "ledger", runId);
@@ -1338,7 +1338,7 @@ it("native local score, re-score, explain demo uses real sandbox/Pi/gateway rece
 	wallOffset = 0;
 
 	// A scorer source edit is voided before the gateway receives any work.
-	seed(stateDir, failed, ["src/scorers.ts"]);
+	seed(stateDir, failed, ["src/maintenance/scorers.ts"]);
 	const beforeVoided = requests.length;
 	stdout = "";
 	assert.equal(

@@ -5,10 +5,13 @@ import {
 	renderFeedbackCards,
 	builderDispositions,
 	builderFindingDispositions,
-} from "../src/feedback.ts";
-import { draftFeedbackPrompt } from "../src/accept.ts";
-import { draftNeedsRevision, type DraftFeedback } from "../src/diagnosis.ts";
-import { fileArtifacts, regularText } from "../src/artifacts.ts";
+} from "../src/candidate/feedback.ts";
+import { draftFeedbackPrompt } from "../src/contract/acceptance.ts";
+import {
+	draftNeedsRevision,
+	type DraftFeedback,
+} from "../src/candidate/diagnosis.ts";
+import { fileArtifacts, regularText } from "../src/contract/artifacts.ts";
 import {
 	candidateReviewPrompt,
 	feedbackPrompt,
@@ -25,7 +28,7 @@ import {
 	type ReviewInput,
 	type ReviewInputRefusal,
 	type SeatReceipt,
-} from "../src/review.ts";
+} from "../src/candidate/review.ts";
 import {
 	FAMILY_MISSING,
 	type FamilyInput,
@@ -34,7 +37,10 @@ import {
 	parseFamily,
 	withFamily,
 } from "../src/core/models.ts";
-import { readFeedbackBytes, validationDir } from "../src/validation.ts";
+import {
+	readFeedbackBytes,
+	validationDir,
+} from "../src/candidate/validation.ts";
 import {
 	parseReviewReceipt,
 	reviewReceiptDigest,
@@ -67,7 +73,7 @@ import {
 	TEST_TAIL_BYTES,
 	type PatchRead,
 	type VisibleTests,
-} from "../src/build.ts";
+} from "../src/candidate/build.ts";
 import {
 	closeSync,
 	chmodSync,
@@ -87,7 +93,7 @@ import {
 import { readFile, readlink, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Readable } from "node:stream";
-import type { Exec } from "../src/gh.ts";
+import type { Exec } from "../src/github/exec.ts";
 import type {
 	Log,
 	StageExecutor,
@@ -202,7 +208,10 @@ import {
 	type RouteId,
 	type RouteTable,
 } from "./sandbox/routes.ts";
-import type { PlatformNetwork, PlatformProfile } from "../src/platform.ts";
+import type {
+	PlatformNetwork,
+	PlatformProfile,
+} from "../src/trust/platform.ts";
 import { type PiProcess, parsePiRecord, sendCommand } from "./sandbox/rpc.ts";
 import {
 	DEFAULT_SCOPE_LIMITS,

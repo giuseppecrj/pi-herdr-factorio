@@ -40,18 +40,22 @@ import {
 	candidateProjection,
 	handoffCandidate,
 } from "../src/handoff.ts";
-import { keepReview } from "../src/review.ts";
-import { validationDir } from "../src/validation.ts";
+import { keepReview } from "../src/candidate/review.ts";
+import { validationDir } from "../src/candidate/validation.ts";
 import { viewerClaim } from "../server/viewer/claim.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { readViewerRun, startViewer } from "../server/viewer.ts";
 import { runIdOf, digestOf } from "../src/core/run.ts";
-import { formatMarker, parseMarker, type Marker } from "../src/markers.ts";
+import {
+	formatMarker,
+	parseMarker,
+	type Marker,
+} from "../src/trust/markers.ts";
 import { isRepoSlug, isGitSha, parseWorkflow } from "../src/workflow.ts";
 import fixture from "./fixtures/viewer/sessions.json" with { type: "json" };
-import { EXE_DEV_PLATFORM } from "../src/platform.ts";
+import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 import { noPlatformFile } from "./helpers.ts";
 
 const runId = runIdOf({
@@ -817,7 +821,10 @@ test("viewer timeline shows each assessment's class and subreason, never private
 		const dir = validationDir(f.root, runId, g.round, g.generation);
 		const failed = { ...evidence.verdict, pass: false };
 
-		const cases: [import("../src/diagnosis.ts").FailureClass, RegExp][] = [
+		const cases: [
+			import("../src/candidate/diagnosis.ts").FailureClass,
+			RegExp,
+		][] = [
 			[
 				{ kind: "missing_evidence", reason: "tree_replays_disagree" },
 				/^missing_evidence: tree_replays_disagree\. Gate and candidate replays disagree\. No repair spent\.$/,
@@ -894,7 +901,7 @@ function verdictAssessmentText(
 	round: number,
 	generation: number,
 	verdict: import("../src/core/run.ts").Verdict,
-	failure: import("../src/diagnosis.ts").FailureClass,
+	failure: import("../src/candidate/diagnosis.ts").FailureClass,
 ): string {
 	return storedAssessment({
 		runId,

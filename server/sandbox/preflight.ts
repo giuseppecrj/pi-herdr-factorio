@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
-import type { Exec } from "../../src/gh.ts";
+import type { Exec } from "../../src/github/exec.ts";
 import { detectArch, type SeccompArch } from "./seccomp.ts";
 
 export const PREFLIGHT_CHECKS = [

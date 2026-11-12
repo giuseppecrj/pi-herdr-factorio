@@ -1,5 +1,5 @@
 import { posix } from "node:path";
-import { type NonEmpty, type RejectReason } from "./core/run.ts";
+import { type NonEmpty, type RejectReason } from "../core/run.ts";
 
 import {
 	CONTROL_PLANE_DIR,
@@ -7,7 +7,7 @@ import {
 	FEEDBACK_FILE,
 	FEEDBACK_FULL_FILE,
 	isAtOrUnder,
-} from "./trust/protected-paths.ts";
+} from "./protected-paths.ts";
 
 export const READY_LABEL = "factory:ready";
 

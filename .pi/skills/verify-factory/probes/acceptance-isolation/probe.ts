@@ -24,7 +24,7 @@ import { isDigest } from "../../../../../src/core/run.ts";
 import {
 	readPlatformFile,
 	resolvePlatform,
-} from "../../../../../src/platform.ts";
+} from "../../../../../src/trust/platform.ts";
 
 const [stateArg, runId] = process.argv.slice(2);
 

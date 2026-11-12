@@ -27,9 +27,9 @@ import {
 	COMMAND_MAX_BYTES,
 	TEST_TAIL_BYTES,
 	buildPrompt,
-} from "../src/build.ts";
+} from "../src/candidate/build.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
-import { feedbackPrompt } from "../src/review.ts";
+import { feedbackPrompt } from "../src/candidate/review.ts";
 import { digestOf } from "../src/core/run.ts";
 import { execFileSync } from "node:child_process";
 import { renderBuildSummary } from "../src/specify.ts";

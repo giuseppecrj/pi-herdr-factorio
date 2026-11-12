@@ -8,7 +8,7 @@ import {
 	readOwnerRun,
 	readOwnerHeader,
 } from "./cli/owner-feed.ts";
-import { plainTitle } from "../src/attention.ts";
+import { plainTitle } from "../src/views/attention.ts";
 import { textOf, objectOf } from "../src/core/json.ts";
 import {
 	renderDashboard,

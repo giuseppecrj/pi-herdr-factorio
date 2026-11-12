@@ -1,6 +1,9 @@
-import { ACCEPTANCE_MAX_TOKENS, SCAN_SENTENCE } from "../src/accept.ts";
-import { CadenceRunner } from "../src/cadence.ts";
-import { parseStoredContract } from "../src/artifacts.ts";
+import {
+	ACCEPTANCE_MAX_TOKENS,
+	SCAN_SENTENCE,
+} from "../src/contract/acceptance.ts";
+import { CadenceRunner } from "../src/maintenance/cadence.ts";
+import { parseStoredContract } from "../src/contract/artifacts.ts";
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
 import {
@@ -28,8 +31,8 @@ import {
 } from "../server/sandbox.ts";
 import { PassThrough } from "node:stream";
 import type { JsonValue } from "../src/core/json.ts";
-import type { FeedbackObservation } from "../src/feedback.ts";
-import { readAttention } from "../src/attention.ts";
+import type { FeedbackObservation } from "../src/candidate/feedback.ts";
+import { readAttention } from "../src/views/attention.ts";
 import type { ControlEvent } from "../server/sandbox/control.ts";
 import { readViewerRun } from "../server/viewer.ts";
 import { manifestDigest } from "../server/sandbox/manifest.ts";
@@ -39,7 +42,7 @@ import {
 	storePatch,
 	readPatch,
 	finishPatch,
-} from "../src/build.ts";
+} from "../src/candidate/build.ts";
 import {
 	acquireLock,
 	fileLedgerOutbox,
@@ -58,7 +61,7 @@ import {
 	storeFeedbackBatch,
 } from "../server/controller.ts";
 import { HOLDER_FILE } from "../server/controller/state.ts";
-import { GitHubTicketAdapter } from "../src/adapters/github.ts";
+import { GitHubTicketAdapter } from "../src/github/adapter.ts";
 import {
 	type AdmissionStore,
 	type AdmittedReceipt,
@@ -66,14 +69,18 @@ import {
 	type IssueSnapshot,
 	type LocalSwitch,
 	type SnapshotReader,
-} from "../src/admission.ts";
+} from "../src/trust/admission.ts";
 import {
 	answersDigestOf,
 	type AnswersRecord,
 	type Link,
 } from "../src/specify.ts";
-import type { Exec } from "../src/gh.ts";
-import { formatMarker, parseMarker, type RunStatus } from "../src/markers.ts";
+import type { Exec } from "../src/github/exec.ts";
+import {
+	formatMarker,
+	parseMarker,
+	type RunStatus,
+} from "../src/trust/markers.ts";
 import {
 	backoffMs,
 	type CheckoutResult,
@@ -92,7 +99,7 @@ import {
 } from "../src/orchestrator.ts";
 import { type SessionOutcome } from "../src/core/execution.ts";
 import { stageResult } from "../server/sandbox/result.ts";
-import { READY_LABEL } from "../src/policy.ts";
+import { READY_LABEL } from "../src/trust/policy.ts";
 import {
 	classifiedCase,
 	passingVerdict,
@@ -110,8 +117,8 @@ import {
 	type BaseReason,
 	type BaseReceipt,
 	type AcceptRetry,
-} from "../src/diagnosis.ts";
-import { advance } from "../src/stages.ts";
+} from "../src/candidate/diagnosis.ts";
+import { advance } from "../src/candidate/stages.ts";
 import {
 	AUTONOMY_DIGEST,
 	contextPolicy,
@@ -135,7 +142,7 @@ import {
 	dispatchNonce,
 	readAssessmentBytes,
 	validationDir,
-} from "../src/validation.ts";
+} from "../src/candidate/validation.ts";
 import {
 	candidateProjection,
 	candidateUsage,
@@ -153,7 +160,7 @@ import {
 	REVIEW_DIFF_MAX_BYTES,
 	type JudgmentOutcome,
 	type ReviewReceipt,
-} from "../src/review.ts";
+} from "../src/candidate/review.ts";
 import {
 	type Digest,
 	digestOf,
@@ -181,7 +188,7 @@ import {
 	TRUSTED_RUN_CAP,
 	TRUSTED_WORKFLOW,
 } from "./fake-ticket-adapter.ts";
-import { EXE_DEV_PLATFORM } from "../src/platform.ts";
+import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 import { controllerEnv, noPlatformFile } from "./helpers.ts";
 
 function slug(text: string): RepoSlug {
@@ -543,9 +550,12 @@ class FakeExecutor implements StageExecutor {
 	candidate?: StageExecutor["candidate"];
 	readonly candidateSpent = new Map<string, number>();
 	prepareReview?: StageExecutor["prepareReview"];
-	ownerValidate?: import("../src/validation.ts").Validator;
-	readonly validations: import("../src/validation.ts").ValidationInput[] = [];
-	validate: import("../src/validation.ts").Validator = async (input) => {
+	ownerValidate?: import("../src/candidate/validation.ts").Validator;
+	readonly validations: import("../src/candidate/validation.ts").ValidationInput[] =
+		[];
+	validate: import("../src/candidate/validation.ts").Validator = async (
+		input,
+	) => {
 		this.validations.push(input);
 
 		const state = input.state ?? {
@@ -596,7 +606,7 @@ class FakeExecutor implements StageExecutor {
 	readonly assessmentReads: string[] = [];
 
 	assess(
-		input: import("../src/validation.ts").ValidationInput,
+		input: import("../src/candidate/validation.ts").ValidationInput,
 		verdict: import("../src/core/run.ts").Verdict,
 	) {
 		const round = input.round ?? 0;
@@ -12152,7 +12162,7 @@ describe("controller-only validate", () => {
 
 		const batches = new Map<
 			string,
-			import("../src/feedback.ts").FeedbackBatch
+			import("../src/candidate/feedback.ts").FeedbackBatch
 		>();
 
 		Object.assign(f.executor, {
@@ -15641,9 +15651,9 @@ describe("controller-only validate", () => {
 
 	function assessedValidator(
 		f: Awaited<ReturnType<typeof waitingRun>>,
-		failure: import("../src/diagnosis.ts").FailureClass,
+		failure: import("../src/candidate/diagnosis.ts").FailureClass,
 		verdictOf = failingVerdict,
-	): import("../src/validation.ts").Validator {
+	): import("../src/candidate/validation.ts").Validator {
 		return async (input) => {
 			const round = input.round ?? 0;
 

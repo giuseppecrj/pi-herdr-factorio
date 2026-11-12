@@ -14,8 +14,8 @@ import {
 	collectPatch,
 	publicationTree,
 	prepareRepairTree,
-} from "../src/build.ts";
-import { cadenceEligiblePath } from "../src/cadence.ts";
+} from "../src/candidate/build.ts";
+import { cadenceEligiblePath } from "../src/maintenance/cadence.ts";
 import { digestOf } from "../src/core/run.ts";
 import {
 	type Stage,
@@ -32,12 +32,16 @@ import {
 	classifyFeedback,
 	feedbackId,
 	type FeedbackEvent,
-} from "../src/feedback.ts";
-import { checkChangedPaths } from "../src/policy.ts";
-import { parseSeat, reviewSeats } from "../src/review.ts";
+} from "../src/candidate/feedback.ts";
+import { checkChangedPaths } from "../src/trust/policy.ts";
+import { parseSeat, reviewSeats } from "../src/candidate/review.ts";
 import { acceptanceSourcePath, parseSpecifyOutput } from "../src/specify.ts";
-import { formatStageTable, nextStage, STAGE_PROFILES } from "../src/stages.ts";
-import { parseCheckFeedback } from "../src/validation.ts";
+import {
+	formatStageTable,
+	nextStage,
+	STAGE_PROFILES,
+} from "../src/candidate/stages.ts";
+import { parseCheckFeedback } from "../src/candidate/validation.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
 
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
@@ -544,7 +548,7 @@ test("L04 gives both extracted homes their inherited review seats and exact subs
 });
 
 test("L04 pins existing review routing before classifying the extractions", () => {
-	assert.deepEqual(reviewSeats(["src/policy.ts"]), [
+	assert.deepEqual(reviewSeats(["src/trust/policy.ts"]), [
 		"code-review",
 		"security-review",
 		"simplify",

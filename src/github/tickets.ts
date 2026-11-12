@@ -1,5 +1,5 @@
-import type { JsonValue } from "./core/json.ts";
-import type { Run, TicketRef } from "./core/run.ts";
+import type { JsonValue } from "../core/json.ts";
+import type { Run, TicketRef } from "../core/run.ts";
 
 export type Ticket = {
 	ref: TicketRef;

@@ -1,7 +1,7 @@
 import {
 	measurementInputOf,
 	type MeasurementInput,
-} from "../../src/explain.ts";
+} from "../../src/views/explain.ts";
 import type { Digest } from "../../src/core/run.ts";
 import { readStageReceipt } from "../sandbox/receipts.ts";
 

@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { ACCEPTANCE_SUITE_PREFIX } from "./trust/protected-paths.ts";
-import type { SnapshotSource } from "./admission.ts";
+import type { SnapshotSource } from "./trust/admission.ts";
 import type { FamilyInput } from "./core/models.ts";
 import { type Digest, digestOf, isDigest, type NonEmpty } from "./core/run.ts";
 import type { JsonValue } from "./core/json.ts";

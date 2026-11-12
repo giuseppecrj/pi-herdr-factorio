@@ -53,7 +53,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after } from "node:test";
-import { EXE_DEV_PLATFORM } from "../src/platform.ts";
+import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 
 type V1Input = Omit<LedgerRowV1, "gaps">;
 

@@ -3,7 +3,7 @@ import {
 	EXE_DEV_PLATFORM,
 	type PlatformNetwork,
 	platformDefect,
-} from "../../src/platform.ts";
+} from "../../src/trust/platform.ts";
 import {
 	arrayOf,
 	boolOf,

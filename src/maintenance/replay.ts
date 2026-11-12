@@ -1,14 +1,14 @@
 import { readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { digestOf } from "./core/run.ts";
-import { parseLedger, type LedgerRow } from "./ledger.ts";
+import { digestOf } from "../core/run.ts";
+import { parseLedger, type LedgerRow } from "../ledger.ts";
 import {
 	currentRepository,
 	type HistoricalRepositories,
 	type PlatformProfile,
 	soleRepository,
-} from "./platform.ts";
-import { isGitSha, parseWorkflow, type Exec } from "./workflow.ts";
+} from "../trust/platform.ts";
+import { isGitSha, parseWorkflow, type Exec } from "../workflow.ts";
 import { execFileSync } from "node:child_process";
 import {
 	arrayOf,
@@ -19,7 +19,7 @@ import {
 	parseJson,
 	textOf,
 	textsOf,
-} from "./core/json.ts";
+} from "../core/json.ts";
 
 export const REPLAY_RUN_CAP = 540_000;
 export const REPLAY_CORPUS = "test/fixtures/replay";
@@ -911,8 +911,13 @@ export async function voidReplay(
  * declare each cap in exactly one of its files; none or several refuses.
  */
 const STAGE_CAP_DECLARATIONS = [
-	["accept", "ACCEPTANCE_MAX_TOKENS", "src/accept.ts"],
-	["build", "BUILD_MAX_TOKENS", "src/build.ts"],
+	[
+		"accept",
+		"ACCEPTANCE_MAX_TOKENS",
+		"src/accept.ts",
+		"src/contract/acceptance.ts",
+	],
+	["build", "BUILD_MAX_TOKENS", "src/build.ts", "src/candidate/build.ts"],
 	["review", "REVIEW_MAX_TOKENS", "src/run.ts", "src/core/run.ts"],
 	["repair", "REPAIR_BUILD_MAX_TOKENS", "src/run.ts", "src/core/run.ts"],
 ] as const;

@@ -22,8 +22,8 @@ import {
 	fileAdmissionStore,
 	labelTimeSnapshot,
 	snapshotDigest,
-} from "../src/admission.ts";
-import type { BodyHistory } from "../src/adapters/github.ts";
+} from "../src/trust/admission.ts";
+import type { BodyHistory } from "../src/github/adapter.ts";
 import { digestOf } from "../src/core/run.ts";
 import type { JsonValue } from "../src/core/json.ts";
 import { isRepoSlug, loadWorkflow, type RepoSlug } from "../src/workflow.ts";
@@ -39,7 +39,7 @@ import {
 	renamedEvent,
 	TRUSTED_WORKFLOW,
 } from "./fake-ticket-adapter.ts";
-import { EXE_DEV_PLATFORM } from "../src/platform.ts";
+import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 import { controllerEnv, noPlatformFile } from "./helpers.ts";
 
 function slug(text: string): RepoSlug {

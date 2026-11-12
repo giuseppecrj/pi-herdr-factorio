@@ -263,11 +263,11 @@ describe("layout guard", () => {
 			);
 			includesMatch(
 				problems,
-				/^classification: cannot load src\/review\.ts: .*src\/core\/json\.ts/,
+				/^classification: cannot load src\/candidate\/review\.ts: .*src\/core\/json\.ts/,
 			);
 			includesMatch(
 				problems,
-				/^readers: replay-stage-caps: src\/replay\.ts replayStageCaps failed at HEAD: /,
+				/^readers: replay-stage-caps: src\/maintenance\/replay\.ts replayStageCaps failed at HEAD: /,
 			);
 		});
 
@@ -299,7 +299,7 @@ describe("layout guard", () => {
 				root,
 				"scripts/layout-baseline.json",
 				'"exceptions": []',
-				'"exceptions": [],\n\t\t"reverseEdges": ["src/replay.ts -> server/sandbox/manifest.ts", "src/core/run.ts -> server/controller/state.ts"]',
+				'"exceptions": [],\n\t\t"reverseEdges": ["src/maintenance/replay.ts -> server/sandbox/manifest.ts", "src/core/run.ts -> server/controller/state.ts"]',
 			);
 			appendFileSync(
 				join(root, "src/core/run.ts"),
@@ -309,7 +309,7 @@ describe("layout guard", () => {
 			const problems = layout(root, "imports");
 			includesMatch(
 				problems,
-				/reverseEdges lists .*src\/replay\.ts -> server\/sandbox\/manifest\.ts.*L05 retired the reverse-edge allowance/,
+				/reverseEdges lists .*src\/maintenance\/replay\.ts -> server\/sandbox\/manifest\.ts.*L05 retired the reverse-edge allowance/,
 			);
 			includesMatch(
 				problems,
@@ -471,7 +471,7 @@ describe("layout guard", () => {
 
 			for (const [from, to, routes] of branches) {
 				const root = scratch();
-				edit(root, "src/review.ts", from, to);
+				edit(root, "src/candidate/review.ts", from, to);
 				const problems = layout(root, "classification");
 
 				for (const route of routes)
@@ -701,14 +701,14 @@ describe("layout guard", () => {
 			const root = scratch();
 			edit(
 				root,
-				"src/build.ts",
+				"src/candidate/build.ts",
 				/^export const BUILD_MAX_TOKENS = /m,
 				"export const BUILD_TOKENS = ",
 			);
 
 			includesMatch(
 				layout(root, "readers"),
-				/^readers: replay-stage-caps: src\/replay\.ts replayStageCaps failed at HEAD: replay_stage_caps_unavailable$/,
+				/^readers: replay-stage-caps: src\/maintenance\/replay\.ts replayStageCaps failed at HEAD: replay_stage_caps_unavailable$/,
 			);
 		});
 	});
@@ -720,15 +720,15 @@ describe("layout guard", () => {
 				target: ".github/factory/WORKFLOW.md",
 				expect: [
 					/^literals: src\/workflow\.ts:\d+ names \.github\/factory\/WORKFLOW\.md, which does not exist/,
-					/^literals: src\/cadence\.ts:\d+ names \.github\/factory\/WORKFLOW\.md, which does not exist/,
-					/^literals: src\/scorers\.ts:\d+ names \.github\/factory\/WORKFLOW\.md, which does not exist/,
+					/^literals: src\/maintenance\/cadence\.ts:\d+ names \.github\/factory\/WORKFLOW\.md, which does not exist/,
+					/^literals: src\/maintenance\/scorers\.ts:\d+ names \.github\/factory\/WORKFLOW\.md, which does not exist/,
 				],
 			},
 			{
 				category: "bare root names beside paths",
 				target: "AGENTS.md",
 				expect: [
-					/^literals: src\/cadence\.ts:\d+ names AGENTS\.md, which does not exist/,
+					/^literals: src\/maintenance\/cadence\.ts:\d+ names AGENTS\.md, which does not exist/,
 				],
 			},
 			{
@@ -739,10 +739,10 @@ describe("layout guard", () => {
 				],
 				callers: [
 					"src/publication.ts",
-					"src/feedback.ts",
-					"src/validation.ts",
+					"src/candidate/feedback.ts",
+					"src/candidate/validation.ts",
 					"src/specify.ts",
-					"src/adapters/github.ts",
+					"src/github/adapter.ts",
 					"server/sandbox.ts",
 					"server/gates.ts",
 				],
@@ -767,7 +767,7 @@ describe("layout guard", () => {
 				target: "server/viewer/design",
 				expect: [
 					/^literals: scripts\/design-tokens\.mjs:\d+ names server\/viewer\/design, which does not exist/,
-					/^literals: src\/cadence\.ts:\d+ names server\/viewer\/design\/tokens\., which is the prefix of no file/,
+					/^literals: src\/maintenance\/cadence\.ts:\d+ names server\/viewer\/design\/tokens\., which is the prefix of no file/,
 					/^literals: biome\.json:files\.includes\[2\] names server\/viewer\/design\/tokens\.json, which does not exist/,
 				],
 			},
@@ -775,7 +775,7 @@ describe("layout guard", () => {
 				category: "workflow identities",
 				target: ".github/workflows/ci.yml",
 				expect: [
-					/^literals: src\/validation\.ts:\d+ names \.github\/workflows\/ci\.yml, which does not exist/,
+					/^literals: src\/candidate\/validation\.ts:\d+ names \.github\/workflows\/ci\.yml, which does not exist/,
 				],
 			},
 			{

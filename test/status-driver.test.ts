@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { after, describe, it } from "node:test";
 import { readPackageVersion, registerFactory } from "../extension/index.ts";
-import { readPlatformFile, resolvePlatform } from "../src/platform.ts";
+import { readPlatformFile, resolvePlatform } from "../src/trust/platform.ts";
 
 const driver = ".pi/skills/verify-factory/scripts/status-driver.ts";
 const temps: string[] = [];

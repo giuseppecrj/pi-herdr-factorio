@@ -15,7 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
-import { writeAcceptance } from "../src/accept.ts";
+import { writeAcceptance } from "../src/contract/acceptance.ts";
 import {
 	parseSpecifyOutput,
 	contractBytes,
@@ -42,7 +42,7 @@ import {
 	retryableBaseReason,
 	type BaseReason,
 	draftCheckFeedback,
-} from "../src/diagnosis.ts";
+} from "../src/candidate/diagnosis.ts";
 import { digestOf } from "../src/core/run.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
 

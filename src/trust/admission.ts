@@ -23,7 +23,7 @@ import {
 	isTimestamp,
 	issueUrl,
 	type TimelineEntry,
-} from "./adapters/github.ts";
+} from "../github/adapter.ts";
 import {
 	hasWriteAccess,
 	LOCAL_DISABLE_FILE,
@@ -34,8 +34,8 @@ import {
 	type WritePermission,
 } from "./policy.ts";
 import { EXE_DEV_PLATFORM, type PlatformProfile } from "./platform.ts";
-import { type Digest, digestOf, isDigest, type NonEmpty } from "./core/run.ts";
-import type { JsonValue } from "./core/json.ts";
+import { type Digest, digestOf, isDigest, type NonEmpty } from "../core/run.ts";
+import type { JsonValue } from "../core/json.ts";
 import {
 	type EnvLookup,
 	type Exec,
@@ -46,7 +46,7 @@ import {
 	TRUSTED_REF,
 	type WorkflowError,
 	type WorkflowLoad,
-} from "./workflow.ts";
+} from "../workflow.ts";
 
 /** The exe-dev profile's repositories, kept for test imports. Production reads `platform.repositories`. */
 export const FACTORY_REPOSITORIES: readonly RepoSlug[] =

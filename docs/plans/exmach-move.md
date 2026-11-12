@@ -97,9 +97,9 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 
 **Files.**
 
-- [ ] Create `src/platform.ts` with the `PlatformProfile` type, the `exe-dev` default, the `exmach` profile taking a domain, and `parsePlatformProfile`.
+- [ ] Create `src/trust/platform.ts` with the `PlatformProfile` type, the `exe-dev` default, the `exmach` profile taking a domain, and `parsePlatformProfile`.
 - [ ] Create `test/platform.test.ts`.
-- [ ] Edit `src/markers.ts`, `src/publication.ts`, `src/adapters/github.ts`, `src/admission.ts`, `src/workflow.ts`, `src/orchestrator.ts`, `src/validation.ts`, `src/feedback.ts`, `src/replay.ts`, `server/cli.ts`, `server/controller.ts`, `server/sandbox.ts`, `server/sandbox/routes.ts`, `server/sandbox/gateway-main.ts`, `server/sandbox/gateway-client.ts`, `server/sandbox/credentials.ts`, `server/sandbox/control.ts` and `extension/index.ts`, only to carry the profile. The walkthrough found that the first file list missed the gateway, recovery and extension paths.
+- [ ] Edit `src/trust/markers.ts`, `src/publication.ts`, `src/github/adapter.ts`, `src/trust/admission.ts`, `src/workflow.ts`, `src/orchestrator.ts`, `src/candidate/validation.ts`, `src/candidate/feedback.ts`, `src/maintenance/replay.ts`, `server/cli.ts`, `server/controller.ts`, `server/sandbox.ts`, `server/sandbox/routes.ts`, `server/sandbox/gateway-main.ts`, `server/sandbox/gateway-client.ts`, `server/sandbox/credentials.ts`, `server/sandbox/control.ts` and `extension/index.ts`, only to carry the profile. The walkthrough found that the first file list missed the gateway, recovery and extension paths.
 - [ ] Edit the existing tests these changes require, without weakening an assertion. Under the default profile, existing expectations keep passing.
 - [ ] Create `docs/operations/platform.md`. Edit `docs/operations/sandbox.md` and `docs/operations/factory-cli.md` only where they name the model host, edge address, forbidden domains, the status field or the startup failure.
 
@@ -112,14 +112,14 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 - [ ] Ship the `exmach` profile with `llm.int.<domain>`, edge `10.74.1.1`, GitHub host `factorio.int.<domain>` (the `factorio` integration that alone will carry `actions`, provisional until E1 and E2 land), and `anthropicStages` still set to accept and code-review only. `MV7` lifts it. Its base paths are OpenAI `/v1/` and Anthropic `/`, because Pi's Anthropic SDK appends `/v1/messages`. Its xAI path is `null`, and an xAI fallback is refused in workflow validation and in route construction.
 - [ ] Give the gateway a separate `--platform` descriptor. It rebuilds its expected upstreams from the built-in profile, so `productionDefect` still refuses a route table that differs. The table never authorizes itself.
 - [ ] Add a `platform` object with a stable digest to `status --json`, and record the controller's startup profile in its status snapshot.
-- [ ] Replace every hard-coded site. These are `server/sandbox/routes.ts:170`, `:176`, `:250-258` and `:518`, `src/markers.ts:14-15`, `src/publication.ts:35-36`, `src/adapters/github.ts:1179`, `server/cli.ts:1053`, `server/controller.ts:8079`, `src/admission.ts:52-54` and the `ANTHROPIC_RULE` text in `src/workflow.ts`.
+- [ ] Replace every hard-coded site. These are `server/sandbox/routes.ts:170`, `:176`, `:250-258` and `:518`, `src/trust/markers.ts:14-15`, `src/publication.ts:35-36`, `src/github/adapter.ts:1179`, `server/cli.ts:1053`, `server/controller.ts:8079`, `src/trust/admission.ts:52-54` and the `ANTHROPIC_RULE` text in `src/workflow.ts`.
 - [ ] Select the profile from `FACTORY_PLATFORM` and an optional root-owned `/etc/factory/platform.json`. The file holds only the selector, controller login, app slug, bot email and an optional repository list. With neither source, select `exe-dev`. Both sources must agree. The `exmach` profile carries the identity exmach published in giuseppecrj/exmach#94, which is login `nubl-agent[bot]`, app slug `nubl-agent` and email `353429311+nubl-agent[bot]@users.noreply.github.com`. The file may override all three together, and may set `ghHost` to one label under `int.<domain>`. Any malformed source fails closed and never falls back to `exe-dev`. The walkthrough is in `../pi-herdr-factorio-trails/MV1/walkthrough/explain.md`.
 
 **You see.**
 
 - [ ] With no profile set, `status --json` reports `platform.name` as `exe-dev` and every route matches trunk.
 - [ ] With `FACTORY_PLATFORM=exmach:` and no domain, startup exits 2 with `event=platform_invalid` and a named reason. A built-in selector always generates its own forbidden domains, so `own_domain_not_forbidden` is proven by a unit test on a malformed resolved profile, not live.
-- [ ] `rg 'exe\.xyz|exe-dev-github-integration|169\.254\.169\.254|nublai/pi-herdr-factorio' src server extension` finds only `src/platform.ts`, the echo fixture, the generic refused ranges in `server/sandbox/gateway.ts`, and the MV3 and MV7 files `server/provision.sh`, `server/factory.service` and `server/sandbox/anthropic-limits.ts`.
+- [ ] `rg 'exe\.xyz|exe-dev-github-integration|169\.254\.169\.254|nublai/pi-herdr-factorio' src server extension` finds only `src/trust/platform.ts`, the echo fixture, the generic refused ranges in `server/sandbox/gateway.ts`, and the MV3 and MV7 files `server/provision.sh`, `server/factory.service` and `server/sandbox/anthropic-limits.ts`.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
@@ -390,7 +390,7 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 
 **Build.**
 
-- [ ] Answer the five questions Shep posted on #719 in `owner-feed.md`, each with file and line evidence from `src/feed.ts`. These are the version rule for added fields, the read source and allowed read rate, the stable run key for collapse and tap, which owner actions exist beyond GitHub links, and which fields can carry model or issue text.
+- [ ] Answer the five questions Shep posted on #719 in `owner-feed.md`, each with file and line evidence from `src/views/feed.ts`. These are the version rule for added fields, the read source and allowed read rate, the stable run key for collapse and tap, which owner actions exist beyond GitHub links, and which fields can carry model or issue text.
 - [ ] State the sender rule. The bridge builds pushes from feed changes, trims the title to 64 bytes and the body to 256 bytes on a character boundary, and collapses one push per run key. The controller sends nothing.
 - [ ] Narrow F09d to inputs for Shep's Factory tab, which are screens, the feed contract and the fixtures. Retire its separate app, Apple setup and bundle id.
 - [ ] Capture `owner-feed --json` for every attention kind the feed defines, redacted.
@@ -438,7 +438,7 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 
 **Files.**
 
-- [ ] Edit `src/platform.ts` to widen `anthropicStages` in the `exmach` profile.
+- [ ] Edit `src/trust/platform.ts` to widen `anthropicStages` in the `exmach` profile.
 - [ ] Edit `server/sandbox/anthropic-limits.ts` against exmach's `GET /v1/models`.
 - [ ] Edit `test/platform.test.ts`, the workflow tests and `docs/operations/platform.md`.
 - [ ] Edit `docs/decisions.tsv` with one row by `log.sh`.

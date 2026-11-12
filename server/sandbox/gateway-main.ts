@@ -3,7 +3,7 @@ import {
 	platformDescriptor,
 	platformNetwork,
 	parsePlatformSelector,
-} from "../../src/platform.ts";
+} from "../../src/trust/platform.ts";
 import { openAuditFile, AUDIT_CAP_BYTES } from "./audit.ts";
 import {
 	type ControlEvent,

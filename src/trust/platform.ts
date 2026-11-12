@@ -8,8 +8,8 @@ import {
 	objectOf,
 	parseJson,
 	textOf,
-} from "./core/json.ts";
-import { type Digest, digestOf } from "./core/run.ts";
+} from "../core/json.ts";
+import { type Digest, digestOf } from "../core/run.ts";
 
 export type RepoSlug = string & { readonly __brand: "RepoSlug" };
 

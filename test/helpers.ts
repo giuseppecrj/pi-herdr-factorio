@@ -10,19 +10,23 @@ import {
 	REQUIRED_CI_CHECKS,
 	verdictPasses,
 } from "../src/core/run.ts";
-import { advance, type RunEvent } from "../src/stages.ts";
+import { advance, type RunEvent } from "../src/candidate/stages.ts";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, cpSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { fileRunFiles } from "../server/controller.ts";
 import { sandboxExecutor } from "../server/sandbox.ts";
-import { collectPatch, storePatch, finishPatch } from "../src/build.ts";
+import {
+	collectPatch,
+	storePatch,
+	finishPatch,
+} from "../src/candidate/build.ts";
 import {
 	contractBytes,
 	contractDigestOf,
 	isContractDigest,
 	type Contract,
 } from "../src/specify.ts";
-import { writeAcceptance } from "../src/accept.ts";
+import { writeAcceptance } from "../src/contract/acceptance.ts";
 import {
 	assessBase,
 	classifyFailure,
@@ -31,7 +35,7 @@ import {
 	type BaseReceipt,
 	type FailureClass,
 	type HeldoutReplay,
-} from "../src/diagnosis.ts";
+} from "../src/candidate/diagnosis.ts";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -53,10 +57,10 @@ import {
 	type ReadAssessment,
 	type ValidationAssessment,
 	type ValidationState,
-} from "../src/validation.ts";
-import type { PatchReceipt } from "../src/build.ts";
+} from "../src/candidate/validation.ts";
+import type { PatchReceipt } from "../src/candidate/build.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
-import { EXE_DEV_PLATFORM, type PlatformFile } from "../src/platform.ts";
+import { EXE_DEV_PLATFORM, type PlatformFile } from "../src/trust/platform.ts";
 import {
 	fakeIssue,
 	MAIN_SHA,

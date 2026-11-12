@@ -7,7 +7,7 @@ import {
 	type AttentionRun,
 	type AttentionThresholds,
 } from "./attention.ts";
-import { fileAdmissionStore } from "./admission.ts";
+import { fileAdmissionStore } from "../trust/admission.ts";
 import {
 	parseCandidateState,
 	candidateProjection,
@@ -15,21 +15,21 @@ import {
 	candidateGenerations,
 	notProven,
 	renderLimitation,
-} from "./handoff.ts";
-import { fileArtifacts, readStoredContract } from "./artifacts.ts";
-import { familyClaimsHold, reviewR8 } from "./review.ts";
+} from "../handoff.ts";
+import { fileArtifacts, readStoredContract } from "../contract/artifacts.ts";
+import { familyClaimsHold, reviewR8 } from "../candidate/review.ts";
 import {
 	frozenRowOf,
 	parseRunStart,
 	isKnownCap,
 	terminalFailureOf,
-} from "./ledger.ts";
-import { objectOf, fieldOf, countOf, textOf, parseJson } from "./core/json.ts";
-import type { JsonObject, JsonValue } from "./core/json.ts";
-import { isRepoSlug, type RepoSlug } from "./workflow.ts";
-import { isDigest, type Verdict } from "./core/run.ts";
-import type { SessionOutcome } from "./core/execution.ts";
-import { FAMILY_MISSING } from "./core/models.ts";
+} from "../ledger.ts";
+import { objectOf, fieldOf, countOf, textOf, parseJson } from "../core/json.ts";
+import type { JsonObject, JsonValue } from "../core/json.ts";
+import { isRepoSlug, type RepoSlug } from "../workflow.ts";
+import { isDigest, type Verdict } from "../core/run.ts";
+import type { SessionOutcome } from "../core/execution.ts";
+import { FAMILY_MISSING } from "../core/models.ts";
 
 export type FeedStep = {
 	stage: string;

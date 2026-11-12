@@ -1,7 +1,7 @@
-diff --git c/src/markers.ts i/src/markers.ts
+diff --git c/src/trust/markers.ts i/src/trust/markers.ts
 index 6fbbc53..8c2a2f7 100644
---- c/src/markers.ts
-+++ i/src/markers.ts
+--- c/src/trust/markers.ts
++++ i/src/trust/markers.ts
 @@ -563,0 +564,4 @@ export function latestFor(
 +
 +export const gateSep = "   ";

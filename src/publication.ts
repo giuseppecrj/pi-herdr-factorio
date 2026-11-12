@@ -7,11 +7,16 @@ import {
 	cpSync,
 	existsSync,
 } from "node:fs";
-import { collectPatch } from "./build.ts";
-import { exclusive, privateDir, regularText, present } from "./artifacts.ts";
-import { checkChangedPaths } from "./policy.ts";
+import { collectPatch } from "./candidate/build.ts";
+import {
+	exclusive,
+	privateDir,
+	regularText,
+	present,
+} from "./contract/artifacts.ts";
+import { checkChangedPaths } from "./trust/policy.ts";
 import { ACCEPTANCE_SUITE_DIR, isAtOrUnder } from "./trust/protected-paths.ts";
-import { REVIEW_DIFF_MAX_BYTES } from "./review.ts";
+import { REVIEW_DIFF_MAX_BYTES } from "./candidate/review.ts";
 import {
 	parseOwnerPatchReceipt,
 	type OwnerPatchReceipt,
@@ -20,8 +25,8 @@ import {
 } from "./handoff.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ghFailure, type Exec, type ExecResult } from "./gh.ts";
-import { type ControllerIdentity, EXE_DEV_PLATFORM } from "./platform.ts";
+import { ghFailure, type Exec, type ExecResult } from "./github/exec.ts";
+import { type ControllerIdentity, EXE_DEV_PLATFORM } from "./trust/platform.ts";
 import { digestOf, type Digest } from "./core/run.ts";
 import { isGitSha, type GitSha, type RepoSlug } from "./workflow.ts";
 import {

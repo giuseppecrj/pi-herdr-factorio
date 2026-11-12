@@ -6,7 +6,7 @@ import type { Readable, Writable } from "node:stream";
 import {
 	type PlatformNetwork,
 	platformDescriptor,
-} from "../../src/platform.ts";
+} from "../../src/trust/platform.ts";
 import {
 	type CloseReason,
 	type ControlEvent,

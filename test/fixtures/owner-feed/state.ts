@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { fileAdmissionStore, snapshotDigest } from "../../../src/admission.ts";
+import {
+	fileAdmissionStore,
+	snapshotDigest,
+} from "../../../src/trust/admission.ts";
 import { digestOf, runIdOf } from "../../../src/core/run.ts";
 import { isRepoSlug, isGitSha } from "../../../src/workflow.ts";
 import type { JsonValue } from "../../../src/core/json.ts";

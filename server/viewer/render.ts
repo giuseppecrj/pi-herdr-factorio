@@ -5,7 +5,7 @@ import {
 } from "./evidence.ts";
 import { icons } from "./design/icons/icons.ts";
 import { objectOf, textOf } from "../../src/core/json.ts";
-import { plainTitle } from "../../src/attention.ts";
+import { plainTitle } from "../../src/views/attention.ts";
 
 export function expectedGap(
 	gap: ViewerRun["gaps"][number],

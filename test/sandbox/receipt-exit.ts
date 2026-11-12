@@ -8,7 +8,7 @@ import type { JsonValue } from "../../src/core/json.ts";
 import type { PiProcess } from "../../server/sandbox/rpc.ts";
 import type { Digest } from "../../src/core/run.ts";
 import type { ModelId } from "../../src/workflow.ts";
-import { EXE_DEV_PLATFORM } from "../../src/platform.ts";
+import { EXE_DEV_PLATFORM } from "../../src/trust/platform.ts";
 
 /**
  * Runs one passing stage through `runStage` with a real gateway process

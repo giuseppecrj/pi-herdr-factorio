@@ -1,13 +1,13 @@
-import { isDigest, digestOf, type Digest } from "./core/run.ts";
-import { ACCEPTANCE_SUITE_PREFIX } from "./trust/protected-paths.ts";
-import type { Contract, ContractDigest, CriterionKind } from "./specify.ts";
+import { isDigest, digestOf, type Digest } from "../core/run.ts";
+import { ACCEPTANCE_SUITE_PREFIX } from "../trust/protected-paths.ts";
+import type { Contract, ContractDigest, CriterionKind } from "../specify.ts";
 import {
 	isGitSha,
 	isRepoSlug,
 	type GitSha,
 	type RepoSlug,
-} from "./workflow.ts";
-import { isContractDigest } from "./specify.ts";
+} from "../workflow.ts";
+import { isContractDigest } from "../specify.ts";
 import {
 	arrayOf,
 	countOf,
@@ -16,8 +16,8 @@ import {
 	parseJson,
 	textOf,
 	textsOf,
-} from "./core/json.ts";
-import type { JsonValue } from "./core/json.ts";
+} from "../core/json.ts";
+import type { JsonValue } from "../core/json.ts";
 import type { VisibleTests } from "./build.ts";
 
 export type AcceptanceBinding = Readonly<{

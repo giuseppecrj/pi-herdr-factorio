@@ -20,14 +20,14 @@ import {
 	acceptanceEntries,
 	readAcceptanceSuite,
 	type AcceptanceSuite,
-} from "./accept.ts";
+} from "./acceptance.ts";
 import {
 	type FamilyInput,
 	familyLabel,
 	parseFamily,
 	withFamily,
-} from "./core/models.ts";
-import { type Digest, isDigest } from "./core/run.ts";
+} from "../core/models.ts";
+import { type Digest, isDigest } from "../core/run.ts";
 import {
 	type Contract,
 	type ContractDigest,
@@ -38,8 +38,8 @@ import {
 	isAnswersDigest,
 	isQuestionsDigest,
 	type Link,
-} from "./specify.ts";
-import { isGitSha, isRepoSlug, type GitSha } from "./workflow.ts";
+} from "../specify.ts";
+import { isGitSha, isRepoSlug, type GitSha } from "../workflow.ts";
 import {
 	arrayOf,
 	countOf,
@@ -48,7 +48,7 @@ import {
 	parseJson,
 	textOf,
 	textsOf,
-} from "./core/json.ts";
+} from "../core/json.ts";
 
 export type ContractRead =
 	| {

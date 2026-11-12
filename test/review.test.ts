@@ -22,7 +22,7 @@ import {
 	type SeatResult,
 	familyClaimsHold,
 	reviewR8,
-} from "../src/review.ts";
+} from "../src/candidate/review.ts";
 import {
 	certifyR8,
 	crossFamily,
@@ -40,7 +40,7 @@ import {
 	preparedReviewFixture,
 	storedAssessment,
 } from "./helpers.ts";
-import { feedbackBytes, validationDir } from "../src/validation.ts";
+import { feedbackBytes, validationDir } from "../src/candidate/validation.ts";
 import {
 	parseReviewReceipt,
 	reviewReceiptDigest,
@@ -67,16 +67,16 @@ import {
 	storePatch,
 	finishPatch,
 	publicationTree,
-} from "../src/build.ts";
+} from "../src/candidate/build.ts";
 import {
 	contractBytes,
 	contractDigestOf,
 	type Contract,
 } from "../src/specify.ts";
-import { writeAcceptance } from "../src/accept.ts";
+import { writeAcceptance } from "../src/contract/acceptance.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
 import { objectOf, parseJson, textOf } from "../src/core/json.ts";
-import { EXE_DEV_PLATFORM } from "../src/platform.ts";
+import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 
 async function checkReviewTree(mode: string) {
 	const root = mkdtempSync(join(tmpdir(), "factory-review-input-"));
@@ -1537,7 +1537,7 @@ describe("candidate review", () => {
 		assert.equal(reviewSeats(["src/format.ts"]).length, 3);
 
 		for (const path of [
-			"src/policy.ts",
+			"src/trust/policy.ts",
 			"server/sandbox/rpc.ts",
 			"package.json",
 			"skills/build/SKILL.md",

@@ -27,7 +27,7 @@ import {
 	readReplayBudget,
 	replayRow,
 	replayStageCaps,
-} from "../../src/replay.ts";
+} from "../../src/maintenance/replay.ts";
 import { digestOf, runIdOf } from "../../src/core/run.ts";
 import { ledgerRowOf } from "../../src/ledger.ts";
 
@@ -603,7 +603,7 @@ esac
 		assert.match((await drive().done).text, /not a recorded owner decision/);
 		await missingBudget();
 		env.FIXTURE_GRANT = "local-test-grant";
-		await writeFile(join(control, "src/replay.ts"), "tampered");
+		await writeFile(join(control, "src/maintenance/replay.ts"), "tampered");
 		assert.match((await drive().done).text, /dirty/);
 		await missingBudget();
 	});

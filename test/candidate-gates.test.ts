@@ -25,8 +25,8 @@ import {
 	runHeldoutBase,
 	type GateRunner,
 } from "../server/gates.ts";
-import { assessBase, classifyFailure } from "../src/diagnosis.ts";
-import { writeAcceptance } from "../src/accept.ts";
+import { assessBase, classifyFailure } from "../src/candidate/diagnosis.ts";
+import { writeAcceptance } from "../src/contract/acceptance.ts";
 import { digestOf } from "../src/core/run.ts";
 import {
 	contractBytes,

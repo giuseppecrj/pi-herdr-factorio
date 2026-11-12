@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile, realpath } from "node:fs/promises";
 import { createConnection } from "node:net";
 import { join, resolve } from "node:path";
-import { regularText } from "../../src/artifacts.ts";
+import { regularText } from "../../src/contract/artifacts.ts";
 import {
 	fieldOf,
 	objectOf,

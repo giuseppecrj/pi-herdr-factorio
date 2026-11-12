@@ -1,6 +1,6 @@
 # .github
 
-This folder holds CI workflows and the trusted factory configuration. Only the owner edits this folder. The factory refuses any candidate patch that touches it (`checkChangedPaths` in `src/policy.ts`), and the controller reads `factory/` only from `main`.
+This folder holds CI workflows and the trusted factory configuration. Only the owner edits this folder. The factory refuses any candidate patch that touches it (`checkChangedPaths` in `src/trust/policy.ts`), and the controller reads `factory/` only from `main`.
 
 | Path | What it holds |
 | --- | --- |

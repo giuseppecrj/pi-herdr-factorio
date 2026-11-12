@@ -1,7 +1,7 @@
-diff --git a/src/markers.ts b/src/markers.ts
+diff --git a/src/trust/markers.ts b/src/trust/markers.ts
 index 6fbbc53..1961708 100644
---- a/src/markers.ts
-+++ b/src/markers.ts
+--- a/src/trust/markers.ts
++++ b/src/trust/markers.ts
 @@ -563,0 +564,2 @@ export function latestFor(
 +
 +export const GATE_BAD: string = 1;

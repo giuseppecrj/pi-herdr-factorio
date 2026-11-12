@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import * as replay from "../src/replay.ts";
+import * as replay from "../src/maintenance/replay.ts";
 import {
 	mkdir,
 	mkdtemp,
@@ -26,7 +26,7 @@ import {
 	settleReplay,
 	readReplayBudget,
 	REPLAY_RUN_CAP,
-} from "../src/replay.ts";
+} from "../src/maintenance/replay.ts";
 import { checkReplayBundles } from "../server/cli/replay.ts";
 import { digestOf } from "../src/core/run.ts";
 import {
@@ -35,7 +35,7 @@ import {
 	parseWorkflow,
 	type Exec,
 } from "../src/workflow.ts";
-import { EXE_DEV_PLATFORM } from "../src/platform.ts";
+import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 import { noPlatformFile } from "./helpers.ts";
 
 const corpusDir = new URL("./fixtures/replay/", import.meta.url).pathname;
@@ -638,6 +638,30 @@ describe("replay stage caps across layouts", () => {
 				await caps(new Map([...stages, [home, run]])),
 				expected,
 				home,
+			);
+	});
+
+	it("reads accept and build caps from their L06 domain homes", async () => {
+		assert.deepEqual(
+			await caps(
+				new Map([
+					["src/contract/acceptance.ts", stages[0][1]],
+					["src/candidate/build.ts", stages[1][1]],
+					["src/core/run.ts", run],
+				]),
+			),
+			expected,
+		);
+	});
+
+	it("refuses duplicate accept or build cap declarations across L06 homes", async () => {
+		for (const moved of [
+			["src/contract/acceptance.ts", stages[0][1]],
+			["src/candidate/build.ts", stages[1][1]],
+		] as const)
+			await assert.rejects(
+				caps(new Map([...stages, moved, ["src/core/run.ts", run]])),
+				/^Error: replay_stage_caps_unavailable$/,
 			);
 	});
 
@@ -1258,7 +1282,7 @@ describe("approved replay cap raises", () => {
 				"frozen policy",
 			]);
 			const mainSha = git(["rev-parse", "HEAD"]);
-			const script = `import { reserveReplay } from ${JSON.stringify(new URL("../src/replay.ts", import.meta.url).href)}; import { EXE_DEV_PLATFORM } from ${JSON.stringify(new URL("../src/platform.ts", import.meta.url).href)}; await reserveReplay(${JSON.stringify(path)}, 1650000, 'next', EXE_DEV_PLATFORM);`;
+			const script = `import { reserveReplay } from ${JSON.stringify(new URL("../src/maintenance/replay.ts", import.meta.url).href)}; import { EXE_DEV_PLATFORM } from ${JSON.stringify(new URL("../src/trust/platform.ts", import.meta.url).href)}; await reserveReplay(${JSON.stringify(path)}, 1650000, 'next', EXE_DEV_PLATFORM);`;
 			execFileSync(
 				process.execPath,
 				["--experimental-strip-types", "--input-type=module", "-e", script],
@@ -1483,7 +1507,7 @@ describe("trusted replay policy and guards", () => {
 
 	it("keeps the replay core free of model/executor imports and source guards ahead of launch (driver behavior tested separately)", async () => {
 		const source = await readFile(
-			new URL("../src/replay.ts", import.meta.url),
+			new URL("../src/maintenance/replay.ts", import.meta.url),
 			"utf8",
 		);
 

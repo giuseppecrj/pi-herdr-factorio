@@ -28,7 +28,7 @@ Version 2 introduced two fields after the version 1 fields and before `gaps`. Ve
 - `failure` is `null` unless the outcome is `failed` or `budget_exhausted`. Otherwise it is a fact whose value holds:
   - `stage`, the stage that caused the stop. It can differ from `outcome.stage`, which stays the run's projected stage. A validation dead end ends at `land` but names `validate`.
   - `class`, one of `budget`, `attempts`, `input`, `base`, `provider`, `label`, `candidate`, `oracle`, `infrastructure`, `missing_evidence`, `review` or `handoff`.
-  - `reason`, a fixed controller code. A `budget` reason is the exhausted cap: `run_tokens`, `stage_tokens`, `round_tokens`, `wall` or `turns`. The four diagnosis classes carry the `src/diagnosis.ts` reason, such as `tree_replays_disagree`. `base` carries the base refusal reason, such as `base_timeout`. `input` carries the logged `why`, and `attempts` the last retry cause.
+  - `reason`, a fixed controller code. A `budget` reason is the exhausted cap: `run_tokens`, `stage_tokens`, `round_tokens`, `wall` or `turns`. The four diagnosis classes carry the `src/candidate/diagnosis.ts` reason, such as `tree_replays_disagree`. `base` carries the base refusal reason, such as `base_timeout`. `input` carries the logged `why`, and `attempts` the last retry cause.
   - `failedVisibleChecks`, the failed visible check names of a validation stop, in gate order. These are only `baseline_tests`, `typecheck`, `lint`, `format`, `main_tests` or `candidate_tests`, never `heldout` or a detail.
   - `retainedPatch`, the digest of the private patch a validation stop retains, or `null`.
 - `acceptAttempts` is a fact listing each round-0 accept attempt in order, as `{attempt, disposition}`. The disposition is one of:

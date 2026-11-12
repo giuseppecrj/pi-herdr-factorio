@@ -2,7 +2,7 @@ import {
 	sameAssessmentRef,
 	type Validator,
 	type ValidationState,
-} from "./validation.ts";
+} from "./candidate/validation.ts";
 import {
 	beginCandidate,
 	MAX_REVIEW_ATTEMPTS,
@@ -27,10 +27,13 @@ import {
 	type ReviewInput,
 	type ReviewInputRefusal,
 	type ReviewReceipt,
-} from "./review.ts";
+} from "./candidate/review.ts";
 import { type FamilyInput, withFamily } from "./core/models.ts";
 import type { Verdict } from "./core/run.ts";
-import type { FeedbackObservation, FeedbackBatch } from "./feedback.ts";
+import type {
+	FeedbackObservation,
+	FeedbackBatch,
+} from "./candidate/feedback.ts";
 import { PublicationError } from "./publication.ts";
 
 import {
@@ -40,7 +43,7 @@ import {
 	visibleTestCommand,
 	type PatchBinding,
 	type PatchRead,
-} from "./build.ts";
+} from "./candidate/build.ts";
 import {
 	ACCEPTANCE_MAX_TOKENS,
 	ACCEPTANCE_SKILLS,
@@ -48,8 +51,8 @@ import {
 	acceptancePrompt,
 	writeAcceptance,
 	type AcceptanceSuite,
-} from "./accept.ts";
-import type { ArtifactStore, ContractRead } from "./artifacts.ts";
+} from "./contract/acceptance.ts";
+import type { ArtifactStore, ContractRead } from "./contract/artifacts.ts";
 import {
 	type AdmissionStore,
 	type Ambiguity,
@@ -61,7 +64,7 @@ import {
 	type SnapshotReader,
 	type SnapshotSource,
 	type TickReads,
-} from "./admission.ts";
+} from "./trust/admission.ts";
 import {
 	DEFAULT_PAGING,
 	type GitHubFailure,
@@ -73,8 +76,8 @@ import {
 	type CommentEdit,
 	type Read,
 	type TimelineEntry,
-} from "./adapters/github.ts";
-import type { Exec } from "./gh.ts";
+} from "./github/adapter.ts";
+import type { Exec } from "./github/exec.ts";
 import {
 	currentMarker,
 	formatMarker,
@@ -89,8 +92,8 @@ import {
 	parseMarker,
 	type RunStatus,
 	type TerminalStatus,
-} from "./markers.ts";
-import { hasWriteAccess, READY_LABEL } from "./policy.ts";
+} from "./trust/markers.ts";
+import { hasWriteAccess, READY_LABEL } from "./trust/policy.ts";
 import { type Digest, type NonEmpty, runIdOf } from "./core/run.ts";
 import {
 	isModelStage,
@@ -140,9 +143,9 @@ import {
 	type SpecifyReviewInput,
 	withoutKey,
 } from "./specify.ts";
-import type { CadenceRunner } from "./cadence.ts";
-import type { PlatformProfile } from "./platform.ts";
-import { isLogin } from "./adapters/github.ts";
+import type { CadenceRunner } from "./maintenance/cadence.ts";
+import type { PlatformProfile } from "./trust/platform.ts";
+import { isLogin } from "./github/adapter.ts";
 import type {
 	BudgetCap,
 	FailedExit,
@@ -313,12 +316,12 @@ import {
 	type AcceptanceQualification,
 	type BaseRefusal,
 	type RetryFeedback,
-} from "./diagnosis.ts";
+} from "./candidate/diagnosis.ts";
 
 export interface StageExecutor {
 	baseCheck?(
-		input: import("./diagnosis.ts").BaseCheckInput,
-	): Promise<import("./diagnosis.ts").BaseCheckProgress>;
+		input: import("./candidate/diagnosis.ts").BaseCheckInput,
+	): Promise<import("./candidate/diagnosis.ts").BaseCheckProgress>;
 	stopBase?(runId: Digest): Promise<void>;
 	candidate?: {
 		sweep?(repo: RepoSlug, now: number): Promise<void>;
@@ -369,7 +372,7 @@ export interface StageExecutor {
 		runId: Digest;
 		round: number;
 		generation: number;
-	}): Promise<import("./validation.ts").ReadAssessment | null>;
+	}): Promise<import("./candidate/validation.ts").ReadAssessment | null>;
 	/** Re-reads the content-addressed owner batch before a repair launch. */
 	readFeedback?(runId: Digest, digest: Digest): Promise<FeedbackBatch | null>;
 	cleanupValidation?(): Promise<void>;

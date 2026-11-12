@@ -8,7 +8,7 @@ import {
 	type PermissionLevel,
 	READY_LABEL,
 	REPO_SWITCH_LABEL,
-} from "../src/policy.ts";
+} from "../src/trust/policy.ts";
 
 describe("admission", () => {
 	it("admits the ready label from admin, maintain and write", () => {

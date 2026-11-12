@@ -5,12 +5,12 @@ index 0000000..43c0b9d
 +++ i/src/gate-lint.ts
 @@ -0,0 +1 @@
 +export { gateBad } from "../test/acceptance/stash/lint.ts";
-diff --git c/src/markers.ts i/src/markers.ts
+diff --git c/src/trust/markers.ts i/src/trust/markers.ts
 index 6fbbc53..2632fe9 100644
---- c/src/markers.ts
-+++ i/src/markers.ts
+--- c/src/trust/markers.ts
++++ i/src/trust/markers.ts
 @@ -0,0 +1 @@
-+import { gateBad } from "./gate-lint.ts";
++import { gateBad } from "../gate-lint.ts";
 @@ -563,0 +565,2 @@ export function latestFor(
 +
 +export const gateValue = gateBad("x");

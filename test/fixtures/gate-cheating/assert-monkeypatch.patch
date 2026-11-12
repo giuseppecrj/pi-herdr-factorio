@@ -6,12 +6,12 @@ index 0000000..7b2ade3
 @@ -0,0 +1,2 @@
 +import assert from "node:assert/strict";
 +assert.equal = () => {};
-diff --git a/src/markers.ts b/src/markers.ts
+diff --git a/src/trust/markers.ts b/src/trust/markers.ts
 index 6fbbc53..d594131 100644
---- a/src/markers.ts
-+++ b/src/markers.ts
+--- a/src/trust/markers.ts
++++ b/src/trust/markers.ts
 @@ -0,0 +1 @@
-+import "./gate-cheat.ts";
++import "../gate-cheat.ts";
 @@ -47 +48 @@ export function isTerminal(status: RunStatus): status is TerminalStatus {
 -		status === "needs_info"
 +		status === "running"

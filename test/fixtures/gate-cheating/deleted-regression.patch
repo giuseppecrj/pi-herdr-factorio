@@ -1,7 +1,7 @@
-diff --git a/src/markers.ts b/src/markers.ts
+diff --git a/src/trust/markers.ts b/src/trust/markers.ts
 index 6fbbc53..ccc9b14 100644
---- a/src/markers.ts
-+++ b/src/markers.ts
+--- a/src/trust/markers.ts
++++ b/src/trust/markers.ts
 @@ -47 +47 @@ export function isTerminal(status: RunStatus): status is TerminalStatus {
 -		status === "needs_info"
 +		status === "running"
@@ -13,7 +13,7 @@ index cdc0442..0000000
 @@ -1,596 +0,0 @@
 -import assert from "node:assert/strict";
 -import { describe, it } from "node:test";
--import type { CommentEdit, IssueComment } from "../src/adapters/github.ts";
+-import type { CommentEdit, IssueComment } from "../src/github/adapter.ts";
 -import {
 -	CONTROLLER_LOGIN,
 -	currentMarker,
@@ -25,9 +25,9 @@ index cdc0442..0000000
 -	markerLedger,
 -	parseMarker,
 -	RUN_STATUSES,
--} from "../src/markers.ts";
+-} from "../src/trust/markers.ts";
 -import { digestOf, runIdOf } from "../src/run.ts";
--import type { JsonValue } from "../src/tickets.ts";
+-import type { JsonValue } from "../src/github/tickets.ts";
 -import {
 -	type GitSha,
 -	isGitSha,
