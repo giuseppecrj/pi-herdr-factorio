@@ -1,4 +1,4 @@
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawnSync } from "node:child_process";
 import {
 	mkdir,
 	open,
@@ -523,11 +523,15 @@ async function prepare(): Promise<void> {
 
 	if (!c) throw Error("replay_case_unknown");
 
-	const stageCaps = await replayStageCaps(headSha, async (cmd, cmdArgs) => ({
-		code: 0,
-		stdout: execFileSync(cmd, [...cmdArgs], { encoding: "utf8" }),
-		stderr: "",
-	}));
+	const stageCaps = await replayStageCaps(headSha, async (cmd, cmdArgs) => {
+		const result = spawnSync(cmd, [...cmdArgs], { encoding: "utf8" });
+
+		return {
+			code: result.status ?? 1,
+			stdout: result.stdout,
+			stderr: result.stderr,
+		};
+	});
 
 	await writeFile(
 		record,
