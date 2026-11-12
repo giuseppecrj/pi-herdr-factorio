@@ -12,7 +12,17 @@ Host work stays in `server/`. That means processes, sandboxes, the gateway, gate
 
 `protected-paths.ts` owns the control-plane, acceptance-suite and feedback-file names. Callers keep their own normalization, case handling and authority. A read filter, a replacement-test check and a patch-write check do not grant the same access.
 
-Two matchers keep their own spelling on purpose. They match the gate container's absolute paths under `/w/test/acceptance/`, which no repository-relative constant describes. They are the held-out file check in `server/gates.ts` and the draft reporter in `server/gates/draft-reporter.mjs`. Every file under `src/trust/` gets the `ultrareview` seat.
+Two matchers keep their own spelling on purpose. They match the gate container's absolute paths under `/w/test/acceptance/`, which no repository-relative constant describes. They are the held-out file check in `server/gates.ts` and the draft reporter in `server/gates/draft-reporter.mjs`.
+
+`policy.ts` decides which patch paths a candidate may write. `platform.ts` resolves the platform profile and its repository allowlist. `admission.ts` decides whether an issue may start a run. `markers.ts` reads and writes the trusted run markers on issues.
+
+## Other folders
+
+`src/github/` talks to GitHub: `adapter.ts` is the tracker adapter, `tickets.ts` holds the tracker-neutral ticket types, and `exec.ts` holds the shared `Exec` process-runner type that replay and sandbox preflight also use for `git`. `src/contract/` holds what a run promises: the acceptance suite and stored artifacts. `src/candidate/` judges a candidate: build, review, validation, feedback, diagnosis and stage transitions. `src/views/` turns stored state into the owner feed, attention list, explanations and metrics. `src/maintenance/` holds scheduled and replay work: cadence audits, replay and scorers.
+
+## Review seats
+
+`reviewSeats` in `src/candidate/review.ts` names the files that get the `ultrareview` seat. It covers all of `src/core/`, and in `src/trust/` only `protected-paths.ts`, `policy.ts` and `admission.ts`. In `src/github/` it covers `adapter.ts` and `exec.ts`, not the whole folder. Apart from `src/core/run.ts`, which gained the seat in L03, these are the seats the files had before the layout program. Widening them costs review budget and needs the owner.
 
 ## Files by planned owner
 
