@@ -1,6 +1,6 @@
 # .pi/skills
 
-Coordinator skills. A Pi session started in this checkout loads them. They are not the factory's stage skills, which live in `skills/` and ship in the sandbox bundle.
+This folder holds coordinator skills. A Pi session started in this checkout loads them. They are not the factory's stage skills, which live in `skills/` and ship in the sandbox bundle.
 
 | Skill | Use it to |
 | --- | --- |

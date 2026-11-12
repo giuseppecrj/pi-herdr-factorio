@@ -1,10 +1,10 @@
 # scripts
 
-Repository tools that a person or `npm run check` runs from the repository root. None of them run inside the factory. The trusted gate copies this folder from the candidate, like `src/`.
+This folder holds repository tools that a person or `npm run check` runs from the repository root. None of them run inside the factory. The trusted gate copies this folder from the candidate, like `src/`.
 
 | Script | Run by | What it does |
 | --- | --- | --- |
-| `check-layout.mjs` | `npm run check:layout`, `npm run check` | Checks the layout guards against HEAD and the working tree. See below. |
+| `check-layout.mjs` | `npm run check:layout`, `npm run check` | Runs the layout guard against HEAD and the working tree. See below. |
 | `layout-baseline.json` | `check-layout.mjs` | What the layout guard expects: file owners and review seats, allowed reverse imports, path readers and shell path tokens. |
 | `check-decisions.mjs` | `npm run check:decisions`, `npm run check` | Checks `docs/decisions.tsv` against `decisions-checkpoint.json`. |
 | `decisions-checkpoint.json` | `check-decisions.mjs` | The row count, byte length and SHA-256 of the committed decisions prefix. |

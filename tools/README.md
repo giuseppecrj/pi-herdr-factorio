@@ -1,6 +1,6 @@
 # tools
 
-Build tools that the checks load. Nothing here ships or runs in the factory.
+This folder holds build tools that the checks load. Nothing here ships or runs in the factory.
 
 | Path | What it is |
 | --- | --- |

@@ -1,6 +1,6 @@
 # .pi
 
-Pi project resources for sessions that work on this repository. Pi loads them when a session starts in this checkout. The factory never ships them to a stage sandbox.
+This folder holds Pi project resources for sessions that work on this repository. Pi loads them when a session starts in this checkout. The factory never ships them to a stage sandbox.
 
 | Path | Tracked | What it holds |
 | --- | --- | --- |
