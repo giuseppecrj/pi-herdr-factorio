@@ -70,6 +70,7 @@ import { GitHubPublicationApi, SCORE_FILE } from "../src/publication.ts";
 import { LedgerGit, repo } from "./ledger-git.ts";
 import { EXE_DEV_PLATFORM } from "../src/platform.ts";
 import { trustedWorkflowFor } from "./fake-ticket-adapter.ts";
+import { nativeUserScope } from "./native-scope.ts";
 
 // The frozen ledger rows were recorded under the fixture repository's name.
 const workflow = trustedWorkflowFor(repo);
@@ -432,22 +433,7 @@ it("execution identities are distinct measurements rather than cadence windows o
 });
 
 async function nativeBundle(t: TestContext, root: string) {
-	const probe = await execFile(
-		"systemd-run",
-		["--user", "--scope", "--quiet", "true"],
-		10_000,
-	);
-
-	if (probe.code !== 0) {
-		assert.notEqual(
-			process.env.FACTORY_REQUIRE_SANDBOX_TESTS,
-			"1",
-			"native measurement demo requires real user scopes",
-		);
-		t.skip("user systemd scopes unavailable");
-
-		return null;
-	}
+	if (!nativeUserScope(t)) return null;
 
 	const source = new URL("..", import.meta.url).pathname;
 	const bundle = join(root, "staging");

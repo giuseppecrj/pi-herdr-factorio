@@ -14,15 +14,31 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const sha = "a".repeat(40);
 
 function shell(body: string, args: string[] = []) {
-	return spawnSync(
-		"bash",
-		["-c", `source "$1"\n${body}`, "installer-test", script, ...args],
-		{
-			encoding: "utf8",
-			env: { ...process.env, PATH: `/usr/bin:/bin:${process.env.PATH}` },
-			timeout: 30_000,
-		},
-	);
+	const bin = mkdtempSync(join(tmpdir(), "installer-bin-"));
+
+	try {
+		writeFileSync(
+			join(bin, "jq"),
+			`#!${process.execPath}\n${readFileSync(join(root, "test/fixtures/install-exe-dev/jq.mjs"), "utf8")}`,
+			{ mode: 0o755 },
+		);
+
+		return spawnSync(
+			"bash",
+			["-c", `source "$1"\n${body}`, "installer-test", script, ...args],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					INSTALLER_FIXTURE_BIN: bin,
+					PATH: `${bin}:/usr/bin:/bin:${process.env.PATH}`,
+				},
+				timeout: 30_000,
+			},
+		);
+	} finally {
+		rmSync(bin, { recursive: true, force: true });
+	}
 }
 
 const probes = `
@@ -31,7 +47,7 @@ vm=nubl-factory
 HOME=/home/exedev
 unset FACTORY_PLATFORM
 command() {
-  if [ "$1" = -v ] && [ "$2" = "__MISSING__" ]; then return 1; fi
+  if [ "$1" = -v ]; then [ "$2" != "__MISSING__" ]; return; fi
   builtin command "$@"
 }
 uname() { case "$1" in -s) echo Linux;; -m) echo "__ARCH__";; esac; }
@@ -292,7 +308,11 @@ if [ ! -f "$HOME/factory-state/status.json" ]; then
   echo '{"platform":{"repositories":["nublai/pi-herdr-factorio"]}}'
   exit 0
 fi
-jq -n --arg st "$st" --slurpfile tick "$HOME/factory-state/status.json" '{platform:{repositories:["nublai/pi-herdr-factorio"]},controller:{state:$st,lastTick:$tick[0]}}'
+"${process.execPath}" --input-type=module - "$st" "$HOME/factory-state/status.json" <<'JS'
+import { readFileSync } from 'node:fs';
+const [state, path] = process.argv.slice(2);
+console.log(JSON.stringify({platform:{repositories:['nublai/pi-herdr-factorio']},controller:{state,lastTick:JSON.parse(readFileSync(path, 'utf8'))}}));
+JS
 S
 cat >"$W/bin/fresh-status" <<'S'
 #!/bin/bash
@@ -318,7 +338,7 @@ args=("$@"); [ "${"${args[-1]}"}" != /etc/systemd/system/factory.service ] || ar
 exec /usr/bin/cmp "${"${args[@]}"}"
 S
 chmod +x "$W/bin/"*
-export HOME="$W/home" PATH="$W/bin:/usr/bin:/bin"
+export HOME="$W/home" PATH="$W/bin:$INSTALLER_FIXTURE_BIN:/usr/bin:/bin"
 cat >"$W/run.sh" <<'S'
 source "$1"
 preflight() { echo preflight-stubbed; }
@@ -535,6 +555,17 @@ if JOURNAL_FAIL=1 run "$bootstrap" "$A"; then exit 91; fi
 });
 
 describe("exe.dev installer pure and isolated helpers (never a real install)", () => {
+	it("fixture jq refuses unsupported filters and malformed JSON", () => {
+		for (const body of [
+			`printf '%s' '{}' | jq -e 'true'`,
+			`printf '%s' 'invalid' | jq -e '.full_name == $repo'`,
+		]) {
+			const result = shell(body);
+			assert.notEqual(result.status, 0);
+			assert.equal(result.stdout, "");
+		}
+	});
+
 	it("requires a full lowercase SHA and validates arguments before any probe", () => {
 		for (const invalid of [
 			"",
