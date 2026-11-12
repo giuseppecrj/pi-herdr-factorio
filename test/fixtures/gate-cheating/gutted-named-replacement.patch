@@ -14,7 +14,7 @@ index f9db317..d700f04 100644
 --- c/test/orchestrator.test.ts
 +++ i/test/orchestrator.test.ts
 @@ -1,88 +1 @@
--import { parseStoredContract } from "../src/artifacts.ts";
+-import { parseStoredContract } from "../src/contract/artifacts.ts";
 -import assert from "node:assert/strict";
 -import { execFile } from "node:child_process";
 -import {
@@ -39,7 +39,7 @@ index f9db317..d700f04 100644
 -	storePatch,
 -	readPatch,
 -	finishPatch,
--} from "../src/build.ts";
+-} from "../src/candidate/build.ts";
 -import {
 -	acquireLock,
 -	fileRunFiles,
@@ -49,7 +49,7 @@ index f9db317..d700f04 100644
 -	serveLoop,
 -	writeStatus,
 -} from "../server/controller.ts";
--import { GitHubTicketAdapter } from "../src/adapters/github.ts";
+-import { GitHubTicketAdapter } from "../src/github/adapter.ts";
 -import {
 -	type AdmissionStore,
 -	type AdmittedReceipt,
@@ -57,14 +57,14 @@ index f9db317..d700f04 100644
 -	type IssueSnapshot,
 -	type LocalSwitch,
 -	type SnapshotReader,
--} from "../src/admission.ts";
+-} from "../src/trust/admission.ts";
 -import {
 -	answersDigestOf,
 -	type AnswersRecord,
 -	type Link,
 -} from "../src/specify.ts";
--import type { Exec } from "../src/gh.ts";
--import { formatMarker, parseMarker } from "../src/markers.ts";
+-import type { Exec } from "../src/github/exec.ts";
+-import { formatMarker, parseMarker } from "../src/trust/markers.ts";
 -import {
 -	backoffMs,
 -	type CheckoutResult,
@@ -81,7 +81,7 @@ index f9db317..d700f04 100644
 -	type TickReport,
 -} from "../src/orchestrator.ts";
 -import { type SessionOutcome, stageResult } from "../server/sandbox/result.ts";
--import { READY_LABEL } from "../src/policy.ts";
+-import { READY_LABEL } from "../src/trust/policy.ts";
 -import { type Digest, digestOf, runIdOf } from "../src/run.ts";
 -import {
 -	type GitSha,
@@ -8930,7 +8930,7 @@ index 865df02..d700f04 100644
 +++ i/test/specify.test.ts
 @@ -1,59 +1 @@
 -import assert from "node:assert/strict";
--import { buildPrompt } from "../src/build.ts";
+-import { buildPrompt } from "../src/candidate/build.ts";
 -import {
 -	existsSync,
 -	lstatSync,
@@ -8952,13 +8952,13 @@ index 865df02..d700f04 100644
 -	ghTarball,
 -	readTarball,
 -} from "../server/controller.ts";
--import { fileAdmissionStore, type AdmittedReceipt } from "../src/admission.ts";
--import { GitHubTicketWriter } from "../src/adapters/github.ts";
--import type { Exec } from "../src/gh.ts";
--import { CONTROLLER_LOGIN, markerLedger } from "../src/markers.ts";
+-import { fileAdmissionStore, type AdmittedReceipt } from "../src/trust/admission.ts";
+-import { GitHubTicketWriter } from "../src/github/adapter.ts";
+-import type { Exec } from "../src/github/exec.ts";
+-import { CONTROLLER_LOGIN, markerLedger } from "../src/trust/markers.ts";
 -import type { LogFields } from "../src/orchestrator.ts";
 -import { type Digest, digestOf, runIdOf } from "../src/run.ts";
--import type { JsonValue } from "../src/tickets.ts";
+-import type { JsonValue } from "../src/github/tickets.ts";
 -import {
 -	answersDigestOf,
 -	type Contract,

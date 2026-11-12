@@ -35,12 +35,12 @@ index 0000000..45d9c50
 +process.on("exit", () => {
 +	process.exitCode = 0;
 +});
-diff --git a/src/markers.ts b/src/markers.ts
+diff --git a/src/trust/markers.ts b/src/trust/markers.ts
 index 6fbbc53..8b848ca 100644
---- a/src/markers.ts
-+++ b/src/markers.ts
+--- a/src/trust/markers.ts
++++ b/src/trust/markers.ts
 @@ -0,0 +1 @@
-+import "./gate-stream.ts";
++import "../gate-stream.ts";
 @@ -47 +48 @@ export function isTerminal(status: RunStatus): status is TerminalStatus {
 -		status === "needs_info"
 +		status === "running"

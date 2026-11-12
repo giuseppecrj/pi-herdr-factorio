@@ -5,7 +5,7 @@ index 865df02..0000000
 +++ /dev/null
 @@ -1,1620 +0,0 @@
 -import assert from "node:assert/strict";
--import { buildPrompt } from "../src/build.ts";
+-import { buildPrompt } from "../src/candidate/build.ts";
 -import {
 -	existsSync,
 -	lstatSync,
@@ -27,13 +27,13 @@ index 865df02..0000000
 -	ghTarball,
 -	readTarball,
 -} from "../server/controller.ts";
--import { fileAdmissionStore, type AdmittedReceipt } from "../src/admission.ts";
--import { GitHubTicketWriter } from "../src/adapters/github.ts";
--import type { Exec } from "../src/gh.ts";
--import { CONTROLLER_LOGIN, markerLedger } from "../src/markers.ts";
+-import { fileAdmissionStore, type AdmittedReceipt } from "../src/trust/admission.ts";
+-import { GitHubTicketWriter } from "../src/github/adapter.ts";
+-import type { Exec } from "../src/github/exec.ts";
+-import { CONTROLLER_LOGIN, markerLedger } from "../src/trust/markers.ts";
 -import type { LogFields } from "../src/orchestrator.ts";
 -import { type Digest, digestOf, runIdOf } from "../src/run.ts";
--import type { JsonValue } from "../src/tickets.ts";
+-import type { JsonValue } from "../src/github/tickets.ts";
 -import {
 -	answersDigestOf,
 -	type Contract,

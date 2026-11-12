@@ -1091,14 +1091,14 @@ All anchors in this table refer to 5bd77d5. L00's inventory uses symbols and lit
 | `.github/factory/WORKFLOW.md:4` | Operations reference stays valid. No gratuitous product trusted edit. Fixture repository field edits are separately owner-gated. |
 | gates scanner import near 20 | L13 adjusts relative depth and tests the real import. |
 | `5bd77d5:src/review.ts:604` | Runtime regex controls ultrareview. L00 classifies every source file; each move inherits and tests required seats. |
-| `src/maintenance/replay.ts:35`, `:923-926`, `:977`, `:1010-1013`, `:1040` | Bundle roots, four constants, ls-tree pathspec, asset keys, and recipe diff are separate readers. L03/L06/L13 update them and preserve historical data lookup. |
+| `5bd77d5:src/replay.ts:35`, `:923-926`, `:977`, `:1010-1013`, `:1040` | Bundle roots, four constants, ls-tree pathspec, asset keys, and recipe diff are separate readers. L03/L06/L13 update them and preserve historical data lookup. |
 | drive-replay.sh near 52/66/109/285 | CLI argv ownership, VISIBLE_LIMIT_MS, and heredoc imports. L02 moves code into checked files; L11/L12/L13 update actual readers. |
 | integration/replay-driver.test.ts near 105-111 | Reads the same deadline with a fallback regex. L02 pins the reader and missing-declaration refusal; L12 moves it with visible-tests. |
 | statecharts/journey/replay-merge-mid-repair.ts:6 | Hardcoded test locations. L02 checks it, L14 updates mirrored paths, L15 moves it to models. |
 | CLI near 516 and controller near 5405 | Depth-based repository roots. L11 and L13 execute them at their final depths. |
 | controller near 2115/2149 | Diagnosis materializer source identity. L13 covers the whole extracted implementation and mutates every member. |
 | gateway-client near 21 and gates near 1596 | URL-relative gateway child and reporter. L13 loads both actual entries. |
-| `src/contract/acceptance.ts:504` | Four-parent acceptance import hint. Acceptance directory stays put. Test generated imports at that depth. |
+| `5bd77d5:src/accept.ts:504` | Four-parent acceptance import hint. Acceptance directory stays put. Test generated imports at that depth. |
 | factory.service and installer near 64/69/130/143/163/165/200 | Service entry, verified re-exec, status, provisioning, and continuation. L13 moves them once and tests old-bootstrap/new-SHA safe failure. |
 | provisioner near 18/149-160 and manifest near 84-87 | Root depth and source/installed asset maps. L13 retains bundle-relative identity and proves full installation. |
 | install runbook near 28/38 | Raw URL pinned by commit. Old pins work unchanged; new pins use host/install. L13 and L15 each prove a fresh install. |

@@ -26,5 +26,27 @@ Each row is bound to the pull request that made the move. Its squash commit on `
 | L05 | #753 | `src/explain.ts` | `server/cli/measurement.ts` | `measurementInput` moved and binds the receipt reader. The allowlist stays in `src/explain.ts` as `measurementInputOf`, which takes the reader as an argument |
 | L05 | #753 | `src/replay.ts` | `server/cli/replay.ts` | `checkReplayBundles` moved |
 | L05 | #753 | `server/sandbox/result.ts` | `src/orchestrator.ts` | `StageResult` is now declared in `src/orchestrator.ts` with the receipt fields a launch reports; the host's `StageResult` and `StageReceipt` stay and are assignable to it |
+| L06 | #754 | `src/policy.ts` | `src/trust/policy.ts` | The whole file |
+| L06 | #754 | `src/platform.ts` | `src/trust/platform.ts` | The whole file |
+| L06 | #754 | `src/admission.ts` | `src/trust/admission.ts` | The whole file |
+| L06 | #754 | `src/markers.ts` | `src/trust/markers.ts` | The whole file |
+| L06 | #754 | `src/adapters/github.ts` | `src/github/adapter.ts` | The whole file |
+| L06 | #754 | `src/gh.ts` | `src/github/exec.ts` | The whole file |
+| L06 | #754 | `src/tickets.ts` | `src/github/tickets.ts` | The whole file |
+| L06 | #754 | `src/accept.ts` | `src/contract/acceptance.ts` | The whole file |
+| L06 | #754 | `src/artifacts.ts` | `src/contract/artifacts.ts` | The whole file |
+| L06 | #754 | `src/build.ts` | `src/candidate/build.ts` | The whole file |
+| L06 | #754 | `src/review.ts` | `src/candidate/review.ts` | The whole file |
+| L06 | #754 | `src/validation.ts` | `src/candidate/validation.ts` | The whole file |
+| L06 | #754 | `src/feedback.ts` | `src/candidate/feedback.ts` | The whole file |
+| L06 | #754 | `src/diagnosis.ts` | `src/candidate/diagnosis.ts` | The whole file |
+| L06 | #754 | `src/stages.ts` | `src/candidate/stages.ts` | The whole file |
+| L06 | #754 | `src/feed.ts` | `src/views/feed.ts` | The whole file |
+| L06 | #754 | `src/attention.ts` | `src/views/attention.ts` | The whole file |
+| L06 | #754 | `src/explain.ts` | `src/views/explain.ts` | The whole file |
+| L06 | #754 | `src/metrics.ts` | `src/views/metrics.ts` | The whole file |
+| L06 | #754 | `src/cadence.ts` | `src/maintenance/cadence.ts` | The whole file |
+| L06 | #754 | `src/replay.ts` | `src/maintenance/replay.ts` | The whole file |
+| L06 | #754 | `src/scorers.ts` | `src/maintenance/scorers.ts` | The whole file |
 
 L00 moves no files.
