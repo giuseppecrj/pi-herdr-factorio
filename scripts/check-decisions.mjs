@@ -134,7 +134,7 @@ function main(argv) {
 	if (json) process.stdout.write(`${JSON.stringify(problems)}\n`);
 	else for (const problem of problems) process.stderr.write(`${problem}\n`);
 
-	process.exitCode = problems.length === 0 ? 0 : 1;
+	if (problems.length > 0) process.exit(1);
 }
 
 if (import.meta.main) main(process.argv.slice(2));

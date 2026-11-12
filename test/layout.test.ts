@@ -15,7 +15,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { after, before, describe, it } from "node:test";
+import { after, afterEach, before, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
 	arrayOf,
@@ -211,6 +211,7 @@ function loose(token: string): RegExp {
 
 describe("layout guard", () => {
 	let pristine = "";
+	const scratches: string[] = [];
 
 	before(() => {
 		pristine = temp("layout-pristine-");
@@ -218,8 +219,18 @@ describe("layout guard", () => {
 		symlinkSync(join(repo, "node_modules"), join(pristine, "node_modules"));
 	});
 
+	function release(...dirs: string[]): void {
+		for (const dir of dirs) {
+			rmSync(dir, { recursive: true, force: true });
+			scratches.splice(scratches.indexOf(dir), 1);
+		}
+	}
+
+	afterEach(() => release(...scratches));
+
 	function scratch(): string {
-		const dir = temp("layout-scratch-");
+		const dir = mkdtempSync(join(tmpdir(), "layout-scratch-"));
+		scratches.push(dir);
 		cpSync(pristine, dir, { recursive: true });
 
 		return dir;
@@ -415,6 +426,7 @@ describe("layout guard", () => {
 						),
 						`${route}:\n${problems.join("\n")}`,
 					);
+				release(root);
 			}
 		});
 
@@ -462,6 +474,7 @@ describe("layout guard", () => {
 						),
 						`${entry.id} ${token}:\n${problems.join("\n")}`,
 					);
+				release(root);
 			}
 		});
 
@@ -491,6 +504,7 @@ describe("layout guard", () => {
 							`^readers: ${entry.id}: ${target.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} is missing, expected ${target.type}$`,
 						),
 					);
+				release(root);
 			}
 		});
 
@@ -550,6 +564,7 @@ describe("layout guard", () => {
 							`^readers: ${entry.id}: .* has 2 declarations of ${declaration.name}, expected exactly 1$`,
 						),
 					);
+					release(root, twice);
 				}
 
 				for (const reader of entry.readers) {
@@ -567,6 +582,7 @@ describe("layout guard", () => {
 							`^readers: ${entry.id}: ${reader.replace(/\./g, "\\.")} no longer names ${file.replace(/\./g, "\\.")}$`,
 						),
 					);
+					release(root);
 				}
 			}
 		});
@@ -602,6 +618,7 @@ describe("layout guard", () => {
 						`^readers: visible-test-deadline: ${reader.replace(/\./g, "\\.")} has 0 lookups of VISIBLE_LIMIT_MS, expected exactly 1$`,
 					),
 				);
+				release(moved, gone);
 			}
 		});
 
