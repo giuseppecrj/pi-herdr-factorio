@@ -8,7 +8,7 @@ Each path below is authoritative, current, later, background or historical. Read
 | `plans/active/` | Current | Plans for programs in progress. `factory-v1.md` is the factory program, PRs F04a to F13. |
 | `plans/later/` | Later | Plans that wait on other work, and closed programs kept for their evidence. `exmach-move.md` and `factorio-vm.md` are host moves. `codebase-layout.md` is the layout program, PRs L00 to L15, with its completed-PR evidence and the owner's post-program checklist. |
 | `operations/` | Current | Runbooks and contracts for each part of the factory. Tests and `.github/factory/WORKFLOW.md` read some of these files by path. |
-| `architecture.md` | Background | The v1 architecture and the owner decisions behind it. Parts are pending or superseded, so it is not current guidance. Root `DESIGN.md` is the viewer's visual design. |
+| `architecture.md` | Background | The v1 architecture and the owner decisions behind it. Its definition of done, shape, data, stages, sandbox, and checkpoint sections explain the design. Its status notes, package layout, build order, and VM sections are out of date, so it is not current guidance. The code and `operations/` win when they disagree. Root `DESIGN.md` is the viewer's visual design. |
 | `models/` | Current | Bounded TLA+ models of the factory and the TypeScript that replays them against runtime tests. |
 | `history/path-map.md` | Current | Old path to new path for every file the layout program moves, bound to a revision. |
 | `history/handoff.md` | Historical | The original 2026-10-28 handoff. `AGENTS.md` replaces it. |

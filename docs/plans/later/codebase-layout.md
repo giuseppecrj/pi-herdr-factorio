@@ -773,9 +773,13 @@ Appendix C records the template adaptations. Ten lane boxes remain per PR, but a
 
 - [ ] Record exact-head review, owner edits, both install receipts, Bugbot triage, and shipping evidence. Hand L13 to the owner with lane 10 explicitly bootstrap-pending. Complete lane 10 and new-main gates before L14.
 
+**Recorded deviation.** The contract above stays as written. In practice the coordinator landed L13 without lanes 7, 8, and 10, then landed L14 and L15 before lane 10 ran. Dispatch was paused, `nubl-factory` was empty, and nothing deploys from main, so landing ahead of the bootstrap run put no running factory at risk. Lanes 7 and 8 could not run because the agent host's exe.dev key cannot add GitHub integrations. Those lanes remain pending owner action under Close the program and are not passed.
+
 ## Mirror tests without losing discovery (L14)
 
 **Depends on.** L13, including its main-backed gate and real Actions bootstrap result.
+
+**Recorded deviation.** L14 landed before L13 lane 10 ran, for the reasons in L13's recorded deviation. The dependency above is the contract as written, not what happened.
 
 **Files.**
 
@@ -882,6 +886,8 @@ Appendix C records the template adaptations. Ten lane boxes remain per PR, but a
 
 ### Completed PR evidence
 
+The program is structurally complete and its qualification is pending owner actions. Structurally complete means all 16 layout PRs, L00 to L15, are on main once L15 lands. The table lists them with the plan and G0 prerequisites. Qualification means the disposable-VM and real Actions lanes below. None of them has run, and none is passed.
+
 L15 moved this plan to `docs/plans/later/` when it closed the program. Each row names the pull request and the squash commit that `git log origin/main` shows for it. The squash commit is the revision that `docs/history/path-map.md` binds each move to. Boxes above stay unchecked until the coordinator checks them against their artifacts.
 
 | Plan PR | Pull request | Squash commit on main | Result |
@@ -905,19 +911,28 @@ L15 moved this plan to `docs/plans/later/` when it closed the program. Each row 
 | L14 | #762 | Not on main when L15 was written. The coordinator records its squash commit when it rebases L15. | Tests mirror the source layout. |
 | L15 | This pull request | Set when the owner lands it. | Docs moved by authority and freshness, this plan closed. |
 
-These lanes are pending owner action, not passed. The agent host's exe.dev key cannot add GitHub integrations, so no agent can attach the fixture repository to a disposable VM.
+### Qualification pending owner action
 
-- [ ] L13 lane 7, the fresh new-layout install on a clean disposable VM.
-- [ ] L13 lane 8, the old-layout install, old-bootstrap refusal, and new-bootstrap upgrade on a second disposable VM.
-- [ ] L13 lane 10, the owner-triggered real `ci.yml` run on main with a same-layout fixture candidate.
-- [ ] L15 lane 6, the fresh held install at the L15 head-derived fixture revision, and the perf probe on that disposable host.
-- [ ] L15's post-merge fresh held install at final main and the new-main gates on that VM.
+These lanes are pending, not passed. The agent host's exe.dev key cannot add GitHub integrations, so no agent can attach the private fixture repository to a disposable VM. Each item names what unblocks it.
+
+- [ ] L13 lane 7, the fresh new-layout install on a clean disposable VM. Unblocked when the owner attaches a GitHub integration scoped to `nublai/pi-herdr-factorio-layout-fixture` to that VM, or grants a key that can.
+- [ ] L13 lane 8, the old-layout install, old-bootstrap refusal, and new-bootstrap upgrade on a second disposable VM. Unblocked by the same fixture integration on the second VM.
+- [ ] L13 lane 10, the real `ci.yml` run on main with a same-layout fixture candidate. Unblocked when the owner triggers the workflow under a fixture grant, as the first owner checklist item says.
+- [ ] L15 lanes 6 and 8 and the L15 perf probe, the fresh held install and head-owned gates at the L15 head-derived fixture revision. Unblocked by the fixture integration on a disposable VM. L15 landed without them, so they now run at final main together with the next item.
+- [ ] L15's post-merge fresh held install at final main and the new-main gates on that VM. Unblocked by the fixture integration on a disposable VM. Record the result through `log.sh` as L15's closure step specifies.
+
+**Recorded deviation.** L13 lane 10 was meant to block L14, and L15 was meant to qualify on a disposable VM before STACK-READY. The coordinator landed L14 and L15 first. Dispatch was paused, `nubl-factory` was empty, and nothing deploys from main, so no running factory depended on the unqualified tree. The owner's production steps below still wait for this qualification.
 
 ### Post-program owner checklist, not a PR
 
-Every item below is the owner's. None is a condition of any L PR, and none is checked by the program.
+Every item below is the owner's, and none is checked by the program. The first two items are qualification of this program, the same work as the pending lanes above. The rest are production steps that follow the program.
 
-- [ ] Trigger the real `ci.yml` on product main with a same-layout fixture candidate and a valid nonce, as L13 lane 10 specifies. Gates and the exact-SHA receipt must pass; the report job's human-actor refusal is expected.
+Qualification of this program:
+
+- [ ] Trigger the real `ci.yml` on product main with a same-layout fixture candidate and a valid nonce, as L13 lane 10 specifies. Gates and the exact-SHA receipt must pass. The report job's human-actor refusal is expected.
+- [ ] Attach the fixture repository's GitHub integration to clean disposable VMs so the fresh install and the old-to-new upgrade run at final main, as L13 lanes 7 and 8 and L15's closure step specify.
+
+Production steps:
 
 - [ ] After the whole program lands and final-main qualification passes, the owner performs a fresh held install on empty `nubl-factory` at the first production commit that follows the program. Use the new pinned install path and runbook. If that commit changes code beyond the qualified tree, verify its affected behavior before dispatch. Record installed SHA, fresh readiness, bundle digest, sandbox availability, and locally_disabled status.
 - [ ] The Shep owner installs or updates the independently reviewed bridge, points it at the new owner-feed command, and confirms feed polling. This repository's agents do not deploy or restart Shep.
