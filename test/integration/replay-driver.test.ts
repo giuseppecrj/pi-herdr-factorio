@@ -214,6 +214,39 @@ if stop_child; then echo "stopped after $polls"; else echo "refused after $polls
 	}
 });
 
+it("keeps the production hold unless the stopped fixture's labels are well formed", async () => {
+	const steps = ".pi/skills/verify-factory/scripts/drive-replay.ts";
+	const fake = await mkdtemp(join(tmpdir(), "stopped-fixture-"));
+	const path = join(fake, "stopped-fixture.json");
+
+	const disarmed = async (labels: string) => {
+		await writeFile(path, `{"labels":${labels}}`);
+
+		return spawnSync(process.execPath, [steps, "fixture-disarmed", path], {
+			encoding: "utf8",
+		}).status;
+	};
+
+	try {
+		assert.equal(await disarmed("[]"), 0);
+		assert.equal(await disarmed('[{"name":"factory:enabled"}]'), 0);
+
+		for (const labels of [
+			"null",
+			"{}",
+			'[{"name":"factory:ready"}]',
+			"[null]",
+			'["factory:ready"]',
+			"[{}]",
+			'[{"name":1}]',
+			'[{"name":"factory:enabled"},7]',
+		])
+			assert.notEqual(await disarmed(labels), 0, labels);
+	} finally {
+		await rm(fake, { recursive: true, force: true });
+	}
+});
+
 it("signals only a live serve process for this lane's state directory", async () => {
 	const source = await readFile(script, "utf8");
 	const alive = source.match(/^alive\(\) \{.*\}$/m)?.[0];

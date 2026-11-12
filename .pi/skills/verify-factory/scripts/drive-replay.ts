@@ -315,16 +315,19 @@ async function restoreFields(): Promise<void> {
 }
 
 async function fixtureDisarmed(): Promise<void> {
-	const { arrayOf, fieldOf, objectOf, parseJson } = await import(
+	const { arrayOf, fieldOf, objectOf, parseJson, textOf } = await import(
 		"../../../../server/sandbox/json.ts"
 	);
 
 	const issue = objectOf(parseJson(await readFile(arg(0), "utf8")));
-	const labels = arrayOf(fieldOf(issue, "labels"));
+
+	const names = arrayOf(fieldOf(issue, "labels"))?.map((l) =>
+		textOf(fieldOf(objectOf(l), "name")),
+	);
 
 	if (
-		labels === null ||
-		labels.some((l) => fieldOf(objectOf(l), "name") === "factory:ready")
+		names === undefined ||
+		names.some((name) => name === null || name === "factory:ready")
 	)
 		throw Error("fixture_still_ready");
 }
