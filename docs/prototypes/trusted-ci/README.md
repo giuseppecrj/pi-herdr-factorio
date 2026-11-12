@@ -1,5 +1,7 @@
 # Trusted candidate gate evidence
 
+> **Historical.** This directory records the F07b trusted candidate gate evidence. It is evidence, not current guidance. `docs/README.md` lists the current documents. The probe programs in this directory are still maintained. Verification recipes run them until `docs/plans/codebase-layout.md` L02 moves them to `.pi/skills/verify-factory/probes/`.
+
 F07b runs main's checks against exact candidate code without trusting candidate scripts, configuration, or test deletions. The host writes the receipt outside candidate mounts.
 
 ## Fix round 4 proof

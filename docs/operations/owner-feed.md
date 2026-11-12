@@ -25,7 +25,7 @@ curl http://127.0.0.1:<port>/owner-feed.json
 
 | | CLI | Viewer route |
 | --- | --- | --- |
-| Code | `server/cli.ts:1207` | `server/viewer.ts:241` |
+| Code | `server/cli.ts:1261` | `server/viewer.ts:241` |
 | Needs a running process | No | Yes, `node server/cli.ts viewer` |
 | Output | Indented JSON, exit 0 | Compact JSON, `Cache-Control: no-store` |
 | Refusal | Exit 2 with usage on stderr, for bad arguments and for any thrown error | By default, 403 unless `Host` is `127.0.0.1:<port>` or `localhost:<port>` and any `Origin` matches. A viewer started with `--allowed-host` also accepts that one host, with a matching `https://` `Origin` (`server/viewer.ts:99` to `server/viewer.ts:110`) |
@@ -42,11 +42,11 @@ The VM figure comes from the independent verifier's run of ten CLI reads on the 
 
 The bridge must run as the Unix user that owns the state directory. Most of the feed's file reads ignore a file that is a symlink, is owned by another user, or is readable by group or others. Those readers are `localJson` (`src/feed.ts:91`, which checks every path part below the state directory) and `privatePath` and `privateJson` (`src/attention.ts:131` and `src/attention.ts:145`, which check the state directory, `claims/` and each file they open). These readers do not check:
 
-- `status.json` through `readStatus` (`server/controller.ts:5712`), which supplies the thresholds, the unreadable list and `controller.lastTick`. It follows symlinks and ignores owner and mode.
+- `status.json` through `readStatus` (`server/controller.ts:5739`), which supplies the thresholds, the unreadable list and `controller.lastTick`. It follows symlinks and ignores owner and mode.
 - The admission snapshot that supplies `title` (`src/admission.ts:490` to `src/admission.ts:513`). It uses a plain `readFile`.
 - The local switch (`src/admission.ts:524`). It checks that the state directory belongs to the user and is not group or other writable, and it does not check the `disabled` file's owner.
-- The controller lock's holder file (`server/controller.ts:419`), which sets `controller.state`.
-- The stored verdict (`readStoredVerdict`, `server/controller.ts:5703`, through `regularBytes`, `src/artifacts.ts:232`). It rejects a symlink and a group- or other-accessible file, and does not check the owner.
+- The controller lock's holder file (`server/controller.ts:423`), which sets `controller.state`.
+- The stored verdict (`readStoredVerdict`, `server/controller.ts:5730`, through `regularBytes`, `src/artifacts.ts:232`). It rejects a symlink and a group- or other-accessible file, and does not check the owner.
 
 A bridge running as another user usually gets an unavailable feed, not an error, because the state directory itself fails the check. This PR does not harden the unchecked readers.
 
@@ -172,7 +172,7 @@ An issue in `unreadable` has no entry. Its key is still `repo` plus `issue`.
 
 ### Known limit, one issue can appear twice
 
-Reproduced on 2026-11-10. An older run of an issue can still be listed in `status.json` under `unverifiedClaims`. When the issue also has a newer run, the feed has two entries for the issue. The second has `kind: "blocked"`, `eventId: ""`, `title: "Title unavailable"` and `reason: "claim_unverified:issue"`. It also adds one to `counts.blocked` (`src/attention.ts:654`, `src/feed.ts:552` to `src/feed.ts:575`). The bridge must apply the collapse key to both entries. The empty-`eventId` entry can be the newer run. `test/attention.test.ts:623` builds that case, where the held run has `eventId` 2 and the listed claim is its predecessor. The feed discards the hold's event id (`src/feed.ts:552` to `src/feed.ts:561`), so v1 cannot tell which of the two entries is newer. Do not select the latest run. Keep the attention signal instead. If either entry for a key has `group: "needs_you"`, the key needs the owner. Take the fingerprint of a key with two entries as the set of fingerprints of its `needs_you` entries. This is a product defect, reported and not fixed.
+Reproduced on 2026-11-10. An older run of an issue can still be listed in `status.json` under `unverifiedClaims`. When the issue also has a newer run, the feed has two entries for the issue. The second has `kind: "blocked"`, `eventId: ""`, `title: "Title unavailable"` and `reason: "claim_unverified:issue"`. It also adds one to `counts.blocked` (`src/attention.ts:655`, `src/feed.ts:552` to `src/feed.ts:575`). The bridge must apply the collapse key to both entries. The empty-`eventId` entry can be the newer run. `test/attention.test.ts:623` builds that case, where the held run has `eventId` 2 and the listed claim is its predecessor. The feed discards the hold's event id (`src/feed.ts:552` to `src/feed.ts:561`), so v1 cannot tell which of the two entries is newer. Do not select the latest run. Keep the attention signal instead. If either entry for a key has `group: "needs_you"`, the key needs the owner. Take the fingerprint of a key with two entries as the set of fingerprints of its `needs_you` entries. This is a product defect, reported and not fixed.
 
 ## Actions
 
@@ -192,9 +192,9 @@ Only `title` carries free text from outside the factory, and `plainTitle` is its
 | Field | Where the text comes from | Bound today |
 | --- | --- | --- |
 | `entries[].title` | The saved admission snapshot of the issue, written by the issue author. | `plainTitle` (`src/attention.ts:18`) replaces control characters (code points below 32 and 127 to 159) and bidirectional marks with a space, then keeps the first 120 code points, which can be 480 UTF-8 bytes. It does not escape HTML, strip Markdown, or remove other invisible characters such as the zero-width space. It returns `Title unavailable` when the snapshot is missing. |
-| `entries[].reason` | The controller. | A closed vocabulary. The `HandoffReason` values that `wireReason` checks (`src/handoff.ts:3699`), `candidate_book_unavailable`, `feedback_overflow`, `working_generation`, `claim_unverified:<why>[:<failure>]` and `feedback_unavailable:<reason>[:<failure>]`. Each part of the last two comes from a fixed list (`src/attention.ts:338`, `src/attention.ts:392`). |
+| `entries[].reason` | The controller. | A closed vocabulary. The `HandoffReason` values that `wireReason` checks (`src/handoff.ts:3705`), `candidate_book_unavailable`, `feedback_overflow`, `working_generation`, `claim_unverified:<why>[:<failure>]` and `feedback_unavailable:<reason>[:<failure>]`. Each part of the last two comes from a fixed list (`src/attention.ts:368`, `src/attention.ts:426`). |
 | `entries[].failure` | The ledger row or terminal record. | `stage` and `class` are fixed lists. `reason` must match `^[a-z][a-z0-9_]{0,63}$` (`src/ledger.ts:504`, `src/ledger.ts:693`). |
-| `entries[].notProven` | Fixed sentences from `renderLimitation` (`src/handoff.ts:4148`), and one fallback sentence (`src/feed.ts:377`). | Criterion and scenario IDs appear only when they match `A<n>` or `S<n>`. A judgment outcome appears only as a value of `JUDGMENT_OUTCOMES` (`src/review.ts:326`). Criterion text, scenario text and review reasons never appear. |
+| `entries[].notProven` | Fixed sentences from `renderLimitation` (`src/handoff.ts:4155`), and one fallback sentence (`src/feed.ts:377`). | Criterion and scenario IDs appear only when they match `A<n>` or `S<n>`. A judgment outcome appears only as a value of `JUDGMENT_OUTCOMES` (`src/review.ts:326`). Criterion text, scenario text and review reasons never appear. |
 | `gaps[]` | The controller. | Fixed codes (`unrecognized_claim`, `state_unavailable`), or a code with an issue number or a 12-character run prefix (`invalid_claim:<12 characters>`, `ambiguous_issue:<n>`, `candidate_book_unavailable:<12 characters>`, `invalid_link:<12 characters>`). |
 | `unreadable[].reason` | The controller. | One constant sentence (`src/feed.ts:519`). |
 | `entries[].steps[].stage` | A stage receipt the controller wrote. | Any string. The receipt's directory name is checked, the `stage` field inside it is not (`src/feed.ts:205`). |

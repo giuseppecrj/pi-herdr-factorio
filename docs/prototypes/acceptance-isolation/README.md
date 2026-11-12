@@ -1,5 +1,7 @@
 # Acceptance isolation: the pre-build boundary (F06b)
 
+> **Historical.** This directory records the F06b acceptance isolation prototype. It is evidence, not current guidance. `docs/README.md` lists the current documents. The probe programs in this directory are still maintained. Verification recipes run them until `docs/plans/codebase-layout.md` L02 moves them to `.pi/skills/verify-factory/probes/`.
+
 Question: once accept has stored a held-out suite, can a later build-profile sandbox for the same run reach the stored files or an earlier stage's records?
 
 ## Private records

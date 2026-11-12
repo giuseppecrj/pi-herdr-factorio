@@ -1,5 +1,7 @@
 # Anthropic route: one metered accept-shaped call (F10c)
 
+> **Historical.** This directory records the F10c Anthropic route prototype. It is evidence, not current guidance. `docs/README.md` lists the current documents.
+
 Question: can a stage sandbox on `pi-factorio` complete one metered Anthropic call through the real gateway before any stage is wired to Anthropic? The plan makes this a stop gate. A 400 or an unmetered result means stop and do not start slice 2.
 
 ## What it runs

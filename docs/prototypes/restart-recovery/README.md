@@ -1,5 +1,7 @@
 # Restart recovery through bot-authored run markers
 
+> **Historical.** This directory records the restart recovery prototype for risk R5. It is evidence, not current guidance. `docs/README.md` lists the current documents.
+
 This prototype answers the restart questions in the F04c section of `docs/plans/factory-v1.md` and risk R5. After a restart, can the controller rebuild its claims from marker comments on the issue? Can it trust only the comments it wrote, and tell when someone edited one? And what does a write look like when the controller cannot tell whether it landed?
 
 It can, with one rule the controller must follow: a POST that fails without a definite HTTP 4xx answer may still have created the comment, so the controller reads the comments back before it posts again.
