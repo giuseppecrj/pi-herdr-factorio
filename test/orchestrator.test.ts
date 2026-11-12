@@ -122,20 +122,18 @@ import { advance } from "../src/candidate/stages.ts";
 import {
 	AUTONOMY_DIGEST,
 	contextPolicy,
-	ledgerApiOf,
 	parseLedger,
-	pumpLedger,
-	type LedgerOutbox,
-} from "../src/ledger.ts";
+} from "../src/ledger/schema.ts";
+import { ledgerApiOf, readLedgerFile } from "../src/ledger/git.ts";
+import { pumpLedger, type LedgerOutbox } from "../src/ledger/outbox.ts";
 import {
 	GitHubPublicationApi,
 	storeOwnerPatch,
 	readOwnerPatch,
 	ownerPatchPath,
-	readLedgerFile,
 	PublicationError,
 	candidateBranch,
-} from "../src/publication.ts";
+} from "../src/github/publish.ts";
 import { LedgerGit, repo as ledgerRepo } from "./ledger-git.ts";
 import {
 	assessmentBinding,

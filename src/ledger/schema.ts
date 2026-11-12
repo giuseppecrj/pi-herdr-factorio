@@ -1,41 +1,12 @@
-import { digestOf, isDigest, runIdOf, type Digest } from "./core/run.ts";
+import { digestOf, isDigest, runIdOf, type Digest } from "../core/run.ts";
 import {
 	EFFICIENCY_COUNTS,
 	unknownEfficiency,
 	type EfficiencyFacts,
-} from "./core/execution.ts";
-import {
-	GitHubPublicationApi,
-	LEDGER_FILE,
-	SCORE_FILE,
-	PublicationError,
-	createLedgerChild,
-	createLedgerRoot,
-	readLedgerCommit,
-	readLedgerFile,
-	type LedgerAdvance,
-	type LedgerCommit,
-	type LedgerFile,
-} from "./publication.ts";
-import {
-	authoredOf,
-	candidateGenerations,
-	type CandidateState,
-} from "./handoff.ts";
-import {
-	VISIBLE_CHECKS,
-	failedVisibleChecks,
-	type FailureClass,
-	type VisibleCheck,
-} from "./candidate/diagnosis.ts";
-import type { TerminalStatus } from "./trust/markers.ts";
-import { STAGE_ORDER, type Stage } from "./core/stages.ts";
-import {
-	isGitSha,
-	isRepoSlug,
-	type GitSha,
-	type RepoSlug,
-} from "./workflow.ts";
+} from "../core/execution.ts";
+import { VISIBLE_CHECKS } from "../candidate/diagnosis.ts";
+import { STAGE_ORDER } from "../core/stages.ts";
+import { isGitSha, isRepoSlug, type GitSha } from "../workflow.ts";
 import {
 	arrayOf,
 	countOf,
@@ -45,7 +16,7 @@ import {
 	parseJson,
 	textOf,
 	type JsonValue,
-} from "./core/json.ts";
+} from "../core/json.ts";
 
 export class LedgerRowError extends Error {
 	readonly code: string;
@@ -55,13 +26,13 @@ export class LedgerRowError extends Error {
 	}
 }
 
-const fail = (code: string): never => {
+export const fail = (code: string): never => {
 	throw new LedgerRowError(code);
 };
 
 type Codec<T> = (value: JsonValue | undefined) => T;
 
-type Out<C> = C extends Codec<infer T> ? T : never;
+export type Out<C> = C extends Codec<infer T> ? T : never;
 
 type Fields = Readonly<Record<string, Codec<JsonValue>>>;
 
@@ -69,7 +40,7 @@ type Decoded<F extends Fields> = { readonly [K in keyof F]: Out<F[K]> };
 
 type JsonRecord = { [key: string]: JsonValue };
 
-function record<F extends Fields>(fields: F): Codec<Decoded<F>> {
+export function record<F extends Fields>(fields: F): Codec<Decoded<F>> {
 	const keys = Object.keys(fields);
 
 	return (value) => {
@@ -119,11 +90,13 @@ function tagged<V extends Variants>(variants: V): Codec<Tagged<V>> {
 	};
 }
 
-function literal<T extends string | number>(expected: T): Codec<T> {
+export function literal<T extends string | number>(expected: T): Codec<T> {
 	return (value) => (value === expected ? expected : fail("invalid_literal"));
 }
 
-function oneOf<T extends string | number>(...values: readonly T[]): Codec<T> {
+export function oneOf<T extends string | number>(
+	...values: readonly T[]
+): Codec<T> {
 	return (value) =>
 		values.find((item) => item === value) ?? fail("invalid_enum");
 }
@@ -139,7 +112,9 @@ function text<T extends string>(
 	};
 }
 
-function nullable<T extends JsonValue>(codec: Codec<T>): Codec<T | null> {
+export function nullable<T extends JsonValue>(
+	codec: Codec<T>,
+): Codec<T | null> {
 	return (value) => (value === null ? null : codec(value));
 }
 
@@ -153,15 +128,16 @@ function list<T extends JsonValue>(codec: Codec<T>, min = 0): Codec<T[]> {
 	};
 }
 
-const count: Codec<number> = (value) => countOf(value) ?? fail("invalid_count");
+export const count: Codec<number> = (value) =>
+	countOf(value) ?? fail("invalid_count");
 
-const positive: Codec<number> = (value) => {
+export const positive: Codec<number> = (value) => {
 	const number = countOf(value);
 
 	return number !== null && number > 0 ? number : fail("invalid_count");
 };
 
-const flag: Codec<boolean> = (value) =>
+export const flag: Codec<boolean> = (value) =>
 	value === true || value === false ? value : fail("invalid_bool");
 
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
@@ -181,8 +157,8 @@ const MODEL_ID = /^([a-z0-9][a-z0-9-]*)\/([A-Za-z0-9][A-Za-z0-9._:-]*)$/;
 const EVENT_ID = /^[1-9][0-9]{0,19}$/;
 const URL_TEXT = /^https:\/\/github\.com\/[A-Za-z0-9_./-]+$/;
 
-const digest = text(isDigest, "invalid_digest");
-const sha = text(isGitSha, "invalid_sha");
+export const digest = text(isDigest, "invalid_digest");
+export const sha = text(isGitSha, "invalid_sha");
 const instant = text(isInstant, "invalid_instant");
 const repoSlug = text(isRepoSlug, "invalid_repo");
 
@@ -328,7 +304,7 @@ export function legacyRunContext(
 	};
 }
 
-const runContext: Codec<RunContextV2> = (value) => {
+export const runContext: Codec<RunContextV2> = (value) => {
 	const context = contextCodec(value);
 	const pinned = contextPolicy(context);
 
@@ -467,20 +443,6 @@ export const FAILURE_CLASSES = [
 
 export type FailureClassName = (typeof FAILURE_CLASSES)[number];
 
-const CAUSES = {
-	attempts: "attempts_exhausted",
-	input: "input_refused",
-	base: "base_refused",
-	provider: "provider_refused",
-	label: "label_write_failed",
-	candidate: "candidate_failed",
-	missing_evidence: "evidence_missing",
-	oracle: "oracle_invalid",
-	infrastructure: "infrastructure_failed",
-	review: "review_failed",
-	handoff: "handoff_stopped",
-} as const satisfies Record<Exclude<FailureClassName, "budget">, string>;
-
 export const BUDGET_CAPS = [
 	"run_tokens",
 	"stage_tokens",
@@ -491,20 +453,7 @@ export const BUDGET_CAPS = [
 
 export type BudgetCapName = (typeof BUDGET_CAPS)[number];
 
-const REASON = /^[a-z][a-z0-9_]{0,63}$/;
-
-/** The controller's own record of why a run stopped, before its row freezes. */
-export type TerminalCause = Readonly<{
-	/** The stage that caused the stop, not the run's last projected stage. */
-	stage: Stage;
-	class: FailureClassName;
-	/** A fixed controller code: the cap, diagnosis reason or refusal reason. */
-	reason: string;
-	/** Visible check names only, never held-out content. */
-	failedVisibleChecks?: readonly VisibleCheck[];
-	/** The private patch the stop retains, by digest. */
-	retainedPatch?: Digest | null;
-}>;
+export const REASON = /^[a-z][a-z0-9_]{0,63}$/;
 
 const outcomeFields = {
 	needs_info: { stage },
@@ -545,7 +494,7 @@ const outcomeFields = {
 	},
 };
 
-const outcome = tagged(outcomeFields);
+export const outcome = tagged(outcomeFields);
 
 const generation = record({
 	round: oneOf(0, 1, 2),
@@ -680,7 +629,7 @@ const sharedFields = {
 
 const rowCodec = record({ v: literal(1), ...sharedFields, gaps: list(gap) });
 
-const failureFact = fact(
+export const failureFact = fact(
 	record({
 		stage,
 		class: oneOf(...FAILURE_CLASSES),
@@ -690,7 +639,7 @@ const failureFact = fact(
 	}),
 );
 
-const ACCEPT_DISPOSITIONS = [
+export const ACCEPT_DISPOSITIONS = [
 	"model_failed",
 	"model_refused",
 	"budget_stopped",
@@ -1139,71 +1088,6 @@ export function indexLedger(lines: readonly LedgerLine[]): LedgerIndex {
 	return { kind: "indexed", rows };
 }
 
-export interface LedgerApi {
-	startJob?(): void;
-	ref(): Promise<GitSha | null>;
-	commit(sha: GitSha): Promise<LedgerCommit>;
-	file(tree: GitSha): Promise<LedgerFile>;
-	root(date: string): Promise<LedgerCommit>;
-	child(
-		parent: LedgerCommit,
-		bytes: Uint8Array,
-		date: string,
-		message: string,
-	): Promise<LedgerCommit>;
-	advance(from: GitSha | null, next: GitSha): Promise<LedgerAdvance>;
-}
-
-export function ledgerApiOf(
-	api: GitHubPublicationApi,
-	stream: "runs" | "scores" = "runs",
-): LedgerApi {
-	const file = stream === "scores" ? SCORE_FILE : LEDGER_FILE;
-
-	return {
-		startJob: () => api.startJob(),
-		ref: () => api.ledgerRef(),
-		commit: (sha) => readLedgerCommit(api, sha),
-		file: (tree) => readLedgerFile(api, tree, file),
-		root: (date) => createLedgerRoot(api, date),
-		child: (parent, bytes, date, message) =>
-			createLedgerChild(
-				api,
-				parent,
-				bytes,
-				date,
-				stream === "scores"
-					? message
-							.replace("factory: ledger row", "factory: score event")
-							.replace("Factory-Run:", "Factory-Score:")
-							.replace("Factory-Row:", "Factory-Event:")
-					: message,
-				file,
-			),
-		advance: (from, next) => api.advanceLedger(from, next),
-	};
-}
-
-const anchorCodec = record({
-	v: literal(1),
-	rootSha: sha,
-	tipSha: sha,
-	blobSha: sha,
-	byteLength: count,
-	prefixDigest: digest,
-});
-
-export type LedgerAnchor = Out<typeof anchorCodec>;
-
-export function parseAnchor(value: JsonValue | undefined): LedgerAnchor | null {
-	try {
-		return anchorCodec(value);
-	} catch (error) {
-		if (error instanceof LedgerRowError) return null;
-		throw error;
-	}
-}
-
 const scoreNumber: Codec<number> = (value) => {
 	const number = Number(value);
 
@@ -1325,252 +1209,6 @@ export function latestScores(
 	return [...latest.values()];
 }
 
-export type PendingRow = {
-	readonly runId: Digest;
-	readonly bytes: Buffer;
-	readonly digest: Digest;
-	readonly date: string;
-};
-
-export type AppendResult =
-	| {
-			readonly kind: "published";
-			readonly tip: GitSha;
-			readonly blob: GitSha;
-			readonly line: number;
-			readonly anchor: LedgerAnchor;
-	  }
-	| {
-			readonly kind: "deferred" | "blocked";
-			readonly reason: LedgerErrorCode;
-			readonly anchor: LedgerAnchor | null;
-	  };
-
-const MAX_WALK = 10_000;
-
-type Seen =
-	| {
-			readonly kind: "seen";
-			readonly head: LedgerCommit;
-			readonly file: LedgerFile;
-			readonly anchor: LedgerAnchor;
-	  }
-	| { readonly kind: "blocked"; readonly reason: LedgerErrorCode };
-
-const changed: Seen = { kind: "blocked", reason: "lineage_changed" };
-
-export type AdoptionCursor = {
-	readonly base: GitSha | null;
-	readonly tip: GitSha;
-	readonly cursor: GitSha;
-	readonly walked: number;
-};
-
-export function parseAdoption(
-	value: JsonValue | undefined,
-): AdoptionCursor | null {
-	try {
-		return record({
-			base: nullable(sha),
-			tip: sha,
-			cursor: sha,
-			walked: count,
-		})(value);
-	} catch (error) {
-		if (error instanceof LedgerRowError) return null;
-		throw error;
-	}
-}
-
-type Adoption = {
-	readonly cursor: AdoptionCursor | null;
-	save(cursor: AdoptionCursor): Promise<boolean>;
-};
-
-async function verifyTip(
-	api: LedgerApi,
-	tip: GitSha,
-	anchor: LedgerAnchor | null,
-	adoption?: Adoption,
-): Promise<Seen> {
-	const head = await api.commit(tip);
-
-	const saved =
-		adoption?.cursor?.tip === tip &&
-		adoption.cursor.base === (anchor?.tipSha ?? null)
-			? adoption.cursor
-			: null;
-
-	let cursor =
-		saved === null || saved.cursor === tip
-			? head
-			: await api.commit(saved.cursor);
-
-	for (let walked = 0; ; walked++) {
-		if (walked + (saved?.walked ?? 0) > MAX_WALK) return changed;
-
-		if (adoption !== undefined && walked >= 16)
-			return { kind: "blocked", reason: "adoption_pending" };
-
-		if (anchor !== null && cursor.sha === anchor.tipSha) break;
-		const [parent, ...others] = cursor.parents;
-
-		if (parent === undefined) {
-			if (anchor !== null) return changed;
-			const root = await api.file(cursor.tree);
-
-			if (
-				root.bytes.length !== 0 ||
-				JSON.stringify(root.paths) !== JSON.stringify(["ledger", LEDGER_FILE])
-			)
-				return changed;
-			break;
-		}
-
-		if (others.length > 0) return changed;
-
-		if (
-			adoption !== undefined &&
-			!(await adoption.save({
-				base: anchor?.tipSha ?? null,
-				tip,
-				cursor: parent,
-				walked: walked + 1 + (saved?.walked ?? 0),
-			}))
-		)
-			throw new PublicationError("claim_unwritable");
-		cursor = await api.commit(parent);
-	}
-
-	const file = await api.file(head.tree);
-
-	if (
-		anchor !== null &&
-		(file.bytes.length < anchor.byteLength ||
-			digestOf(file.bytes.subarray(0, anchor.byteLength)) !==
-				anchor.prefixDigest)
-	)
-		return changed;
-
-	return {
-		kind: "seen",
-		head,
-		file,
-		anchor: {
-			v: 1,
-			rootSha: anchor?.rootSha ?? cursor.sha,
-			tipSha: tip,
-			blobSha: file.blob,
-			byteLength: file.bytes.length,
-			prefixDigest: digestOf(file.bytes),
-		},
-	};
-}
-
-const INTEGRITY = new Set([
-	"object_missing",
-	"object_mismatch",
-	"blob_mismatch",
-	"commit_mismatch",
-	"tree_truncated",
-	"malformed_tree",
-	"malformed_blob",
-	"malformed_commit",
-	"malformed_ref",
-	"malformed_response",
-	"ledger_file_missing",
-]);
-
-/**
- * Appends one frozen row to `ledger/runs.jsonl` on `factory/ledger`, or
- * proves it is already there. Never forces, deletes or rewrites a byte.
- */
-export async function appendRun(
-	api: LedgerApi,
-	row: PendingRow,
-	anchor: LedgerAnchor | null,
-	rounds = 3,
-	adoption?: Adoption,
-	allowRoot = true,
-	indexBytes: (bytes: Uint8Array) => LedgerIndex = (bytes) =>
-		indexLedger(parseLedger(bytes)),
-): Promise<AppendResult> {
-	let current = anchor;
-
-	try {
-		for (let round = 0; round <= rounds + 1; round++) {
-			const tip = await api.ref();
-
-			if (tip === null) {
-				if (current !== null || !allowRoot)
-					return { kind: "blocked", reason: "ref_missing", anchor: current };
-				const root = await api.root(row.date);
-				await api.advance(null, root.sha);
-				continue;
-			}
-
-			const seen = await verifyTip(api, tip, current, adoption);
-
-			if (seen.kind === "blocked")
-				return {
-					kind: seen.reason === "adoption_pending" ? "deferred" : "blocked",
-					reason: seen.reason,
-					anchor: current,
-				};
-			const index = indexBytes(seen.file.bytes);
-
-			if (index.kind === "blocked")
-				return { kind: "blocked", reason: index.reason, anchor: current };
-			current = seen.anchor;
-			const hit = index.rows.get(row.runId);
-
-			if (hit !== undefined)
-				return hit.digest === row.digest
-					? {
-							kind: "published",
-							tip,
-							blob: seen.file.blob,
-							line: hit.line,
-							anchor: current,
-						}
-					: { kind: "blocked", reason: "row_conflict", anchor: current };
-
-			if (round > rounds) break;
-
-			const bytes = Buffer.concat([seen.file.bytes, row.bytes]);
-			const nextIndex = indexBytes(bytes);
-
-			if (nextIndex.kind === "blocked")
-				return { kind: "blocked", reason: nextIndex.reason, anchor: current };
-
-			const child = await api.child(
-				seen.head,
-				bytes,
-				row.date,
-				`factory: ledger row ${row.runId}\n\nFactory-Run: ${row.runId}\nFactory-Row: ${row.digest}\n`,
-			);
-
-			await api.advance(tip, child.sha);
-		}
-	} catch (error) {
-		if (!(error instanceof PublicationError)) throw error;
-
-		if (error.reason === "claim_unwritable")
-			return { kind: "deferred", reason: "state_unwritable", anchor: current };
-
-		if (INTEGRITY.has(error.reason))
-			return { kind: "blocked", reason: "object_mismatch", anchor: current };
-
-		return {
-			kind: "deferred",
-			reason: "transport_unavailable",
-			anchor: current,
-		};
-	}
-
-	return { kind: "deferred", reason: "ledger_contended", anchor: current };
-}
-
 /** Parses a pending row's exact bytes back into its frozen form. */
 export function frozenRowOf(bytes: Buffer): FrozenRow | null {
 	const [line, ...rest] = parseLedger(bytes);
@@ -1578,367 +1216,18 @@ export function frozenRowOf(bytes: Buffer): FrozenRow | null {
 	return line?.kind === "known" && rest.length === 0 ? line : null;
 }
 
-const unavailable = (reason: GapCode) => ({ kind: "unavailable", reason });
+export const unavailable = (reason: GapCode) => ({
+	kind: "unavailable",
+	reason,
+});
 
-const known = (value: JsonValue) => ({ kind: "known", value });
+export const known = (value: JsonValue) => ({ kind: "known", value });
 
 export const AUTONOMY_DIGEST = digestOf(
 	JSON.stringify({ approveMerge: "always", land: "propose" }),
 );
 
-export type TerminalFacts = {
-	readonly repo: RepoSlug;
-	readonly runId: Digest;
-	readonly issue: number;
-	readonly eventId: string;
-	readonly eventAt: string;
-	readonly snapshotDigest: Digest;
-	readonly workflowSha: GitSha;
-	readonly workflowDigest: Digest;
-	readonly status: TerminalStatus;
-	readonly stage: Stage;
-	readonly usage: number;
-	readonly observedAt: string;
-	readonly candidate: CandidateState | null;
-	readonly attemptEnds?: readonly AttemptEnd[] | null;
-	/** Why a failed or budget-exhausted run stopped, when the controller recorded it. */
-	readonly cause?: TerminalCause | null;
-	readonly evidence?: TerminalEvidence;
-	readonly start?: RunStart | null;
-	readonly context: RunContextV2;
-	/** A load observed at collection, never evidence of an earlier execution policy. */
-	readonly terminalWorkflowObservation: {
-		readonly workflowSha: GitSha;
-		readonly workflowDigest: Digest;
-	} | null;
-	readonly previousRunId?: Digest | null;
-};
-
-export type TerminalEvidence = Partial<
-	Pick<
-		LedgerRow,
-		| "stages"
-		| "models"
-		| "usage"
-		| "repairRounds"
-		| "redactedReceiptDigests"
-		| "artifacts"
-	>
-> & {
-	readonly mergedAt?: string;
-	readonly efficiency?: EfficiencyFacts;
-	readonly contextPressure?: LedgerRow["contextPressure"];
-	readonly generationGates?: Readonly<Record<string, Digest>>;
-};
-
-function outcomeOf(facts: TerminalFacts): JsonValue {
-	const { stage, candidate } = facts;
-
-	const terminal =
-		candidate?.kind === "selected" && candidate.work.kind === "terminal"
-			? candidate.work.terminal
-			: null;
-
-	switch (facts.status) {
-		case "needs_info":
-		case "released":
-		case "stage_passed":
-			return { kind: facts.status, stage };
-		case "failed": {
-			const cause = causeOf(facts);
-
-			return {
-				kind: "failed",
-				stage,
-				cause:
-					cause === null || cause.class === "budget"
-						? unavailable("receipt_missing")
-						: known(CAUSES[cause.class]),
-			};
-		}
-
-		case "budget_exhausted": {
-			const cause = causeOf(facts);
-
-			return {
-				kind: "budget_exhausted",
-				stage,
-				cap:
-					cause === null ? unavailable("receipt_missing") : known(cause.reason),
-			};
-		}
-
-		case "cancelled":
-			return {
-				kind: "cancelled",
-				stage,
-				reason:
-					terminal?.kind === "cancelled"
-						? known(terminal.reason)
-						: unavailable("receipt_missing"),
-			};
-		case "landed":
-			if (terminal?.kind !== "merged") return fail("landing_incomplete");
-
-			return {
-				kind: "landed",
-				stage: "land",
-				headSha: terminal.head,
-				mergeSha: terminal.mergeSha,
-				mergedAt:
-					facts.evidence?.mergedAt === undefined
-						? unavailable("public_metadata_unavailable")
-						: known(facts.evidence.mergedAt),
-				assurance:
-					terminal.assurance.kind === "factory_verified"
-						? {
-								kind: "factory_verified",
-								generationDigest: terminal.assurance.certification.digest,
-								authored:
-									candidate?.kind === "selected"
-										? authoredOf(candidate, terminal.assurance.certification)
-										: fail("landing_incomplete"),
-							}
-						: { kind: "owner_override" },
-			};
-		default: {
-			const exhaustive: never = facts.status;
-
-			return exhaustive;
-		}
-	}
-}
-
-/** The recorded cause when it agrees with the terminal status, else `null`. */
-function causeOf(facts: TerminalFacts): TerminalCause | null {
-	const cause = facts.cause ?? null;
-	const budget = facts.status === "budget_exhausted";
-
-	if (
-		cause === null ||
-		(facts.status !== "failed" && !budget) ||
-		(cause.class === "budget") !== budget ||
-		!REASON.test(cause.reason) ||
-		(budget && !BUDGET_CAPS.some((cap) => cap === cause.reason))
-	)
-		return null;
-
-	return cause;
-}
-
-function failureOf(facts: TerminalFacts): JsonValue {
-	if (facts.status !== "failed" && facts.status !== "budget_exhausted")
-		return null;
-	const cause = causeOf(facts);
-
-	if (cause === null) return unavailable("receipt_missing");
-
-	return known({
-		stage: cause.stage,
-		class: cause.class,
-		reason: cause.reason,
-		failedVisibleChecks: VISIBLE_CHECKS.filter((name) =>
-			(cause.failedVisibleChecks ?? []).includes(name),
-		),
-		retainedPatch: cause.retainedPatch ?? null,
-	});
-}
-
-const ACCEPT_DISPOSITION = {
-	completed: "suite_qualified",
-	model_failure: "model_failed",
-	refused: "model_refused",
-	base_refused: "base_refused",
-	interrupted: "interrupted",
-	budget_stop: "budget_stopped",
-	aborted: "aborted",
-} as const satisfies Record<
-	AttemptEnd["disposition"],
-	(typeof ACCEPT_DISPOSITIONS)[number]
->;
-
-/**
- * Each accept attempt's final disposition. A refusal followed by the one
- * feedback retry is `retried`; earlier builds recorded it as `refused`.
- */
-function acceptAttemptsOf(facts: TerminalFacts): JsonValue {
-	if (facts.attemptEnds == null || facts.start == null)
-		return unavailable("receipt_missing");
-
-	return known(
-		facts.attemptEnds
-			.filter((end) => end.stage === "accept" && end.round === 0)
-			.sort((a, b) => a.attempt - b.attempt)
-			.map((end) => ({
-				attempt: end.attempt,
-				disposition:
-					(end.disposition === "refused" ||
-						end.disposition === "base_refused") &&
-					end.next.kind === "retry"
-						? "retried"
-						: ACCEPT_DISPOSITION[end.disposition],
-			})),
-	);
-}
-
-const DIAGNOSIS_STOPS = {
-	diagnosis_missing_evidence: "missing_evidence",
-	diagnosis_oracle: "oracle",
-	diagnosis_infrastructure: "infrastructure",
-	validation_failed: "candidate",
-	repair_limit: "candidate",
-} as const;
-
-/**
- * Why a candidate handoff stopped, from its durable terminal reason and, for
- * a validation stop, the current generation's stored diagnosis. A dead end
- * keeps the failed visible check names and the retained private patch.
- */
-export function candidateCause(
-	state: CandidateState,
-	diagnosis: FailureClass | null,
-): TerminalCause | null {
-	if (
-		state.kind !== "selected" ||
-		state.work.kind !== "terminal" ||
-		state.work.terminal.kind !== "failed"
-	)
-		return null;
-	const reason = state.work.terminal.reason;
-
-	if (reason === "review_tokens" || reason === "repair_tokens")
-		return {
-			stage: reason === "review_tokens" ? "review" : "build",
-			class: "budget",
-			reason: "round_tokens",
-		};
-
-	if (reason === "run_tokens")
-		return {
-			stage: state.accounts.at(-1)?.execution.stage ?? "validate",
-			class: "budget",
-			reason: "run_tokens",
-		};
-
-	if (reason === "review_attempts" || reason === "review_failed")
-		return { stage: "review", class: "review", reason };
-
-	if (!Object.hasOwn(DIAGNOSIS_STOPS, reason))
-		return { stage: "land", class: "handoff", reason };
-	// SAFETY: `reason` was just checked to be a key of `DIAGNOSIS_STOPS`.
-	const kind = DIAGNOSIS_STOPS[reason as keyof typeof DIAGNOSIS_STOPS];
-	const matched = diagnosis?.kind === kind ? diagnosis : null;
-	const patch = state.current.patch.patchDigest;
-
-	return {
-		stage: "validate",
-		class: kind,
-		reason:
-			matched === null
-				? reason
-				: matched.kind === "oracle"
-					? matched.cause
-					: matched.reason,
-		failedVisibleChecks: failedVisibleChecks(
-			state.current.verdict?.checks ?? null,
-		),
-		retainedPatch: isDigest(patch) ? patch : null,
-	};
-}
-
-/**
- * The owner-facing stop facts of a stored terminal snapshot, for `status`:
- * the outcome and, from version 2, the cause. Never a held-out detail.
- */
-export function terminalFailureOf(value: JsonValue | undefined): JsonValue {
-	try {
-		const object = objectOf(value) ?? fail("invalid_object");
-		const stopped = outcome(object.outcome);
-
-		return {
-			outcome: stopped,
-			failure:
-				object.v === 2 || object.v === 3 || object.v === 4 || object.v === 5
-					? nullable(failureFact)(object.failure)
-					: stopped.kind === "failed" || stopped.kind === "budget_exhausted"
-						? unavailable("legacy_not_recorded")
-						: null,
-		};
-	} catch (error) {
-		if (error instanceof LedgerRowError) return null;
-		throw error;
-	}
-}
-
-function artifactsOf(facts: TerminalFacts): JsonValue {
-	const state = facts.candidate;
-
-	if (state === null && facts.evidence?.artifacts !== undefined)
-		return facts.evidence.artifacts;
-
-	if (state === null)
-		return facts.stage === "specify"
-			? { kind: "admission" }
-			: {
-					kind: "pre_build_stop",
-					contractDigest: unavailable("not_instrumented"),
-					acceptanceDigest: unavailable("not_instrumented"),
-				};
-
-	if (state.kind === "unprepared")
-		return {
-			kind: "built",
-			contractDigest: state.pin.contractDigest,
-			acceptanceDigest: state.pin.acceptanceDigest,
-			patchDigest: state.patch.patchDigest,
-		};
-
-	return {
-		kind: "candidate",
-		contractDigest: state.pin.contractDigest,
-		acceptanceDigest: state.pin.acceptanceDigest,
-		generations: candidateGenerations(state).map((evidence) => {
-			const { intent, verdict, validation } = evidence;
-			const publication = validation?.publication ?? null;
-			const ci = validation?.ciRunId ?? null;
-
-			const gateSha = verdict?.gateSha ?? intent.baseSha;
-			const gatesDigest = facts.evidence?.generationGates?.[gateSha];
-
-			return {
-				round: intent.round,
-				generation: intent.generation,
-				intentDigest: intent.digest,
-				baseSha: intent.baseSha,
-				patchDigest: intent.patchDigest,
-				heldoutDigest:
-					verdict === null
-						? unavailable("receipt_missing")
-						: known(verdict.heldoutDigest),
-				candidateSha:
-					publication === null
-						? unavailable("receipt_missing")
-						: known(publication.candidateSha),
-				gateSha:
-					verdict === null && gatesDigest === undefined
-						? unavailable("receipt_missing")
-						: known(gateSha),
-				gatesDigest:
-					gatesDigest === undefined
-						? unavailable("receipt_missing")
-						: known(gatesDigest),
-				ciRunId: ci === null ? unavailable("receipt_missing") : known(ci),
-			};
-		}),
-	};
-}
-
-/**
- * Projects what the controller knows at a terminal decision into a row
- * without its marker proof. Facts this build does not yet record are
- * unavailable, never zero.
- */
-function provenanceOf(context: RunContextV2): JsonValue {
+export function provenanceOf(context: RunContextV2): JsonValue {
 	if (context.kind === "production")
 		return { kind: "production", policy: context.policy };
 
@@ -1971,108 +1260,6 @@ function provenanceOf(context: RunContextV2): JsonValue {
 			old.policy == null
 				? unavailable("receipt_missing")
 				: known(old.policy.autonomy),
-	};
-}
-
-export function terminalSnapshot(facts: TerminalFacts): JsonValue {
-	const context = runContext(facts.context);
-	const identity = context.kind === "legacy" ? context.known : context.policy;
-
-	if (
-		identity.workflowSha !== facts.workflowSha ||
-		identity.workflowDigest !== facts.workflowDigest ||
-		(facts.start != null &&
-			(facts.start.runId !== facts.runId ||
-				JSON.stringify(facts.start.context) !== JSON.stringify(context)))
-	)
-		fail("policy_binding");
-	const base = `https://github.com/${facts.repo}`;
-	const state = facts.candidate;
-	const published = state?.kind === "selected" ? state.published : null;
-
-	const ciUrls =
-		state?.kind === "selected"
-			? [
-					...new Set(
-						candidateGenerations(state).flatMap((evidence) =>
-							evidence.validation?.ciRunId == null
-								? []
-								: [`${base}/actions/runs/${evidence.validation.ciRunId}`],
-						),
-					),
-				].sort()
-			: [];
-
-	return {
-		v: 5,
-		runId: facts.runId,
-		repo: facts.repo,
-		issue: facts.issue,
-		eventId: facts.eventId,
-		eventAt: facts.eventAt,
-		previousRunId:
-			facts.previousRunId === undefined
-				? unavailable("receipt_missing")
-				: known(facts.previousRunId),
-		snapshotDigest: facts.snapshotDigest,
-		originalBase: state?.pin.originalBase ?? facts.workflowSha,
-		startedAt:
-			facts.start == null
-				? unavailable("receipt_missing")
-				: known(facts.start.startedAt),
-		terminalObservedAt: facts.observedAt,
-		runContext: context,
-		terminalWorkflowObservation:
-			facts.terminalWorkflowObservation === null
-				? unavailable("receipt_missing")
-				: known(facts.terminalWorkflowObservation),
-		provenance: provenanceOf(context),
-		outcome: outcomeOf(facts),
-		pr:
-			published === null
-				? null
-				: { number: published.number, url: `${base}/pull/${published.number}` },
-		artifacts: artifactsOf(facts),
-		repairRounds:
-			facts.evidence?.repairRounds ?? unavailable("not_instrumented"),
-		stages:
-			facts.evidence?.stages?.kind === "known"
-				? known(
-						facts.evidence.stages.value.map((s) => ({
-							...s,
-							efficiency:
-								"efficiency" in s ? s.efficiency : unknownEfficiency(),
-						})),
-					)
-				: (facts.evidence?.stages ?? unavailable("receipt_missing")),
-		models: facts.evidence?.models ?? unavailable("receipt_missing"),
-		usage: facts.evidence?.usage ?? {
-			tokens: {
-				kind: "lower_bound",
-				unit: "tokens",
-				total: facts.usage,
-				reason: "not_instrumented",
-			},
-			parentTokens: unavailable("not_instrumented"),
-			childTokens: unavailable("not_instrumented"),
-			unattributedTokens: unavailable("not_instrumented"),
-			money: unavailable("provider_not_reported"),
-		},
-		interruptedAttempts:
-			facts.attemptEnds == null || facts.start == null
-				? unavailable("not_instrumented")
-				: known(
-						facts.attemptEnds.filter(
-							(attempt) => attempt.disposition === "interrupted",
-						).length,
-					),
-		contextPressure:
-			facts.evidence?.contextPressure ?? unavailable("not_instrumented"),
-		efficiency: facts.evidence?.efficiency ?? unknownEfficiency(),
-		redactedReceiptDigests: facts.evidence?.redactedReceiptDigests ?? [],
-		evidence: { issueUrl: `${base}/issues/${facts.issue}`, ciUrls },
-		failure: failureOf(facts),
-		acceptAttempts: acceptAttemptsOf(facts),
 	};
 }
 
@@ -2117,215 +1304,6 @@ export function parseAttemptEnd(
 ): AttemptEnd | null {
 	try {
 		return attemptEndCodec(value);
-	} catch (error) {
-		if (error instanceof LedgerRowError) return null;
-		throw error;
-	}
-}
-
-export interface RunAccounting {
-	start(runId: Digest): Promise<RunStart | null | undefined>;
-	begin(record: RunStartRecord): Promise<boolean>;
-	readAttempt(
-		runId: Digest,
-		stage: Stage,
-		round: number,
-		attempt: number,
-	): Promise<AttemptEnd | null | undefined>;
-	writeAttempt(record: AttemptEnd): Promise<boolean>;
-	attempts(runId: Digest): Promise<readonly AttemptEnd[] | null>;
-}
-
-export type MarkerProof = { readonly seq: number; readonly digest: Digest };
-
-export type LedgerRetry = {
-	readonly attempts: number;
-	readonly nextAt: number;
-	readonly reason: LedgerErrorCode;
-	readonly blocked: boolean;
-};
-
-export type OutboxJob = {
-	readonly runId: Digest;
-	readonly observedAt: string;
-	readonly row: FrozenRow | null;
-	readonly retry: LedgerRetry | null;
-	readonly adoption?: AdoptionCursor | null;
-};
-
-export type PublishedReceipt = {
-	readonly v: 1;
-	readonly runId: Digest;
-	readonly rowDigest: Digest;
-	readonly observedTip: GitSha;
-	readonly blobSha: GitSha;
-	readonly lineNumber: number;
-};
-
-/** The controller-private record of terminal runs and their ledger rows. */
-export interface LedgerOutbox {
-	/** Keeps the first snapshot for a run; a later one never replaces it. */
-	prepare(runId: Digest, snapshot: JsonValue): Promise<boolean>;
-	/** Records, once, that a run's terminal snapshot cannot be encoded, so it shows as blocked. */
-	block(runId: Digest, observedAt: string): Promise<boolean>;
-	freeze(
-		runId: Digest,
-		marker: MarkerProof,
-	): Promise<"frozen" | "absent" | "invalid" | "unwritable">;
-	/** Unpublished jobs, or `null` when the outbox cannot be listed; a corrupt job blocks alone. */
-	scan(): Promise<readonly OutboxJob[] | null>;
-	/**
-	 * The verified anchor; `null` only when neither an anchor nor a receipt
-	 * exists, `orphaned` when receipts exist without one, `invalid` when it
-	 * cannot be read or parsed.
-	 */
-	anchor(): Promise<LedgerAnchor | null | "orphaned" | "invalid">;
-	adoption(runId: Digest, cursor: AdoptionCursor): Promise<boolean>;
-	published(receipt: PublishedReceipt, anchor: LedgerAnchor): Promise<boolean>;
-	retry(runId: Digest, retry: LedgerRetry): Promise<boolean>;
-}
-
-export type LedgerBacklog = {
-	readonly readable: boolean;
-	readonly pending: number;
-	readonly blocked: number;
-	readonly published: number;
-	readonly oldestObservedAt: string | null;
-	readonly lastError: LedgerErrorCode | null;
-};
-
-const BACKOFF_MS = 5_000;
-const BACKOFF_MAX_MS = 300_000;
-
-/** One bounded pass over the outbox. It calls no model and launches no stage. */
-export async function pumpLedger(
-	outbox: LedgerOutbox,
-	api: LedgerApi,
-	now: number,
-	clock: () => number = () => now,
-): Promise<LedgerBacklog> {
-	const jobs = await outbox.scan();
-
-	if (jobs === null)
-		return {
-			readable: false,
-			pending: 0,
-			blocked: 0,
-			published: 0,
-			oldestObservedAt: null,
-			lastError: "state_unwritable",
-		};
-
-	const ordered = [...jobs].sort((a, b) =>
-		a.observedAt === b.observedAt
-			? a.runId.localeCompare(b.runId)
-			: a.observedAt.localeCompare(b.observedAt),
-	);
-
-	const stored = await outbox.anchor();
-	let anchor = stored === "orphaned" || stored === "invalid" ? null : stored;
-	let published = 0;
-	let blocked = 0;
-	let lastError: LedgerErrorCode | null = null;
-	const waiting: string[] = [];
-
-	for (const job of ordered) {
-		if (job.row === null || (job.retry !== null && job.retry.nextAt > now)) {
-			if (job.retry?.blocked === true) blocked += 1;
-			lastError = job.retry?.reason ?? lastError;
-			waiting.push(job.observedAt);
-			continue;
-		}
-
-		let result: AppendResult;
-
-		if (stored === "invalid")
-			result = { kind: "blocked", reason: "state_invalid", anchor: null };
-		else {
-			api.startJob?.();
-			result = await appendRun(
-				api,
-				{
-					runId: job.runId,
-					bytes: job.row.bytes,
-					digest: job.row.digest,
-					date: job.observedAt.replace(/\.\d{3}Z$/, "Z"),
-				},
-				anchor,
-				3,
-				{
-					cursor: job.adoption ?? null,
-					save: (cursor) => outbox.adoption(job.runId, cursor),
-				},
-				stored === null,
-			);
-		}
-
-		if (result.kind === "published") {
-			const receipt: PublishedReceipt = {
-				v: 1,
-				runId: job.runId,
-				rowDigest: job.row.digest,
-				observedTip: result.tip,
-				blobSha: result.blob,
-				lineNumber: result.line,
-			};
-
-			if (await outbox.published(receipt, result.anchor)) {
-				anchor = result.anchor;
-				published += 1;
-				continue;
-			}
-
-			lastError = "state_unwritable";
-		} else lastError = result.reason;
-		const attempts = (job.retry?.attempts ?? 0) + 1;
-
-		await outbox.retry(job.runId, {
-			attempts,
-			nextAt:
-				clock() + Math.min(BACKOFF_MAX_MS, BACKOFF_MS * 2 ** (attempts - 1)),
-			reason: lastError,
-			blocked: result.kind === "blocked",
-		});
-
-		if (result.kind === "blocked") blocked += 1;
-		waiting.push(job.observedAt);
-	}
-
-	return {
-		readable: true,
-		pending: waiting.length,
-		blocked,
-		published,
-		oldestObservedAt: waiting.sort()[0] ?? null,
-		lastError,
-	};
-}
-
-const retryCodec = record({
-	attempts: positive,
-	nextAt: count,
-	reason: oneOf(
-		"state_unwritable",
-		"transport_unavailable",
-		"row_conflict",
-		"ledger_corrupt",
-		"ledger_version_unsupported",
-		"ledger_contended",
-		"lineage_changed",
-		"ref_missing",
-		"object_mismatch",
-		"adoption_pending",
-		"state_invalid",
-		"row_invalid",
-	),
-	blocked: flag,
-});
-
-export function parseRetry(value: JsonValue | undefined): LedgerRetry | null {
-	try {
-		return retryCodec(value);
 	} catch (error) {
 		if (error instanceof LedgerRowError) return null;
 		throw error;

@@ -1,6 +1,10 @@
 import { lstat, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { parseLedger, type LedgerRow, type RunContextV2 } from "../ledger.ts";
+import {
+	parseLedger,
+	type LedgerRow,
+	type RunContextV2,
+} from "../ledger/schema.ts";
 import { digestOf } from "../core/run.ts";
 import {
 	type HistoricalRepositories,

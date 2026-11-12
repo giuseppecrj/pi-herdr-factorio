@@ -48,5 +48,12 @@ Each row is bound to the pull request that made the move. Its squash commit on `
 | L06 | #754 | `src/cadence.ts` | `src/maintenance/cadence.ts` | The whole file |
 | L06 | #754 | `src/replay.ts` | `src/maintenance/replay.ts` | The whole file |
 | L06 | #754 | `src/scorers.ts` | `src/maintenance/scorers.ts` | The whole file |
+| L09 | #755 | `src/ledger.ts` | `src/ledger/schema.ts` | Split: the codecs, `LedgerRowError`, gap codes, run context and run start (`legacyRunContext`, `contextPolicy`, `parseRunStart`, `AUTONOMY_DIGEST`), provenance (`provenanceOf`), failure classes and budget caps, row versions 1 to 5 (`ledgerRow`, `ledgerRowOf`, `frozenRowOf`, `parseLedger`, `indexLedger`, `ledgerEfficiency`, `ledgerModelOf`), score events (`scoreEventOf`, `parseScores`, `indexScores`, `latestScores`) and attempt ends (`parseAttemptEnd`) |
+| L09 | #755 | `src/ledger.ts` | `src/ledger/git.ts` | `LedgerApi` and `ledgerApiOf` |
+| L09 | #755 | `src/ledger.ts` | `src/ledger/append.ts` | `LedgerAnchor`, `parseAnchor`, `PendingRow`, `AppendResult`, `AdoptionCursor`, `parseAdoption` and `appendRun` |
+| L09 | #755 | `src/ledger.ts` | `src/ledger/terminal.ts` | `TerminalCause`, `TerminalFacts`, `TerminalEvidence`, `candidateCause`, `terminalFailureOf`, `terminalSnapshot` and `RunAccounting` |
+| L09 | #755 | `src/ledger.ts` | `src/ledger/outbox.ts` | `MarkerProof`, `LedgerRetry`, `OutboxJob`, `PublishedReceipt`, `LedgerOutbox`, `LedgerBacklog`, `pumpLedger` and `parseRetry` |
+| L09 | #755 | `src/publication.ts` | `src/github/publish.ts` | The whole file except the ledger Git operations. The private `commit` and `tree` helpers are now exported as `createCommit` and `createTree`, with `shaOf` |
+| L09 | #755 | `src/publication.ts` | `src/ledger/git.ts` | `LEDGER_FILE`, `SCORE_FILE`, `LedgerAdvance`, `LedgerCommit`, `LedgerFile`, `createLedgerRoot`, `createLedgerChild`, `readLedgerCommit` and `readLedgerFile`. The methods `GitHubPublicationApi.ledgerRef()` and `.advanceLedger(from, next)` became the functions `ledgerRef(api)` and `advanceLedger(api, from, next)` |
 
 L00 moves no files.

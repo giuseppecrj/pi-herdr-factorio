@@ -7,28 +7,31 @@ import {
 	cpSync,
 	existsSync,
 } from "node:fs";
-import { collectPatch } from "./candidate/build.ts";
+import { collectPatch } from "../candidate/build.ts";
 import {
 	exclusive,
 	privateDir,
 	regularText,
 	present,
-} from "./contract/artifacts.ts";
-import { checkChangedPaths } from "./trust/policy.ts";
-import { ACCEPTANCE_SUITE_DIR, isAtOrUnder } from "./trust/protected-paths.ts";
-import { REVIEW_DIFF_MAX_BYTES } from "./candidate/review.ts";
+} from "../contract/artifacts.ts";
+import { checkChangedPaths } from "../trust/policy.ts";
+import { ACCEPTANCE_SUITE_DIR, isAtOrUnder } from "../trust/protected-paths.ts";
+import { REVIEW_DIFF_MAX_BYTES } from "../candidate/review.ts";
 import {
 	parseOwnerPatchReceipt,
 	type OwnerPatchReceipt,
 	type OwnerPatchRead,
 	type OwnerHeadRefusal,
-} from "./handoff.ts";
+} from "../handoff.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ghFailure, type Exec, type ExecResult } from "./github/exec.ts";
-import { type ControllerIdentity, EXE_DEV_PLATFORM } from "./trust/platform.ts";
-import { digestOf, type Digest } from "./core/run.ts";
-import { isGitSha, type GitSha, type RepoSlug } from "./workflow.ts";
+import { ghFailure, type Exec, type ExecResult } from "./exec.ts";
+import {
+	type ControllerIdentity,
+	EXE_DEV_PLATFORM,
+} from "../trust/platform.ts";
+import { digestOf, type Digest } from "../core/run.ts";
+import { isGitSha, type GitSha, type RepoSlug } from "../workflow.ts";
 import {
 	arrayOf,
 	fieldOf,
@@ -36,7 +39,7 @@ import {
 	parseJson,
 	textOf,
 	type JsonValue,
-} from "./core/json.ts";
+} from "../core/json.ts";
 
 /** The exe-dev commit email, kept for test imports. Commits use the API's identity. */
 export const BOT_EMAIL = EXE_DEV_PLATFORM.botEmail;
@@ -368,27 +371,6 @@ export async function pinOwnerCandidate(
 	return { branch, patchSha: head, candidateSha: head };
 }
 
-const LEDGER_BRANCH = "factory/ledger";
-
-export const LEDGER_FILE = "ledger/runs.jsonl";
-export const SCORE_FILE = "ledger/scores.jsonl";
-
-export type LedgerAdvance =
-	| { readonly kind: "advanced"; readonly tip: GitSha }
-	| { readonly kind: "conflict"; readonly tip: GitSha | null };
-
-export type LedgerCommit = {
-	readonly sha: GitSha;
-	readonly tree: GitSha;
-	readonly parents: readonly GitSha[];
-};
-
-export type LedgerFile = {
-	readonly blob: GitSha;
-	readonly bytes: Buffer;
-	readonly paths: readonly string[];
-};
-
 export function isCandidateBranch(branch: string): boolean {
 	return /^factory\/run\/[1-9][0-9]*-[a-f0-9]{12}-r[0-2](?:-g[1-3])?$/.test(
 		branch,
@@ -608,58 +590,6 @@ export class GitHubPublicationApi {
 			throw new PublicationError("branch_moved");
 	}
 
-	async ledgerRef(): Promise<GitSha | null> {
-		const value = await this.request("GET", `git/ref/heads/${LEDGER_BRANCH}`);
-
-		if (value === undefined) return null;
-		const ref = objectOf(value);
-
-		if (textOf(fieldOf(ref, "ref")) !== `refs/heads/${LEDGER_BRANCH}`)
-			throw new PublicationError("malformed_ref");
-
-		return shaOf(fieldOf(objectOf(fieldOf(ref, "object")), "sha"));
-	}
-
-	async advanceLedger(
-		from: GitSha | null,
-		next: GitSha,
-	): Promise<LedgerAdvance> {
-		if (!isGitSha(next) || (from !== null && !isGitSha(from)))
-			throw new PublicationError("invalid_sha");
-		let failure: Error | null = null;
-
-		try {
-			if (from === null)
-				await this.request(
-					"POST",
-					"git/refs",
-					{ ref: `refs/heads/${LEDGER_BRANCH}`, sha: next },
-					true,
-				);
-			else
-				await this.request(
-					"PATCH",
-					`git/refs/heads/${LEDGER_BRANCH}`,
-					{ sha: next, force: false },
-					true,
-				);
-		} catch (error) {
-			if (!(error instanceof Error)) throw error;
-			failure = error;
-		}
-
-		const tip = await this.ledgerRef();
-
-		if (tip === next) return { kind: "advanced", tip };
-
-		if (
-			failure === null ||
-			(failure instanceof PublicationError && failure.reason === "conflict")
-		)
-			return { kind: "conflict", tip };
-		throw failure;
-	}
-
 	async remove(branch: string, candidateSha: GitSha): Promise<void> {
 		const tip = await this.ref(branch);
 
@@ -681,7 +611,7 @@ export class GitHubPublicationApi {
 	}
 }
 
-function shaOf(value: JsonValue | undefined): GitSha {
+export function shaOf(value: JsonValue | undefined): GitSha {
 	const sha = textOf(value);
 
 	if (sha === null || !isGitSha(sha))
@@ -690,7 +620,7 @@ function shaOf(value: JsonValue | undefined): GitSha {
 	return sha;
 }
 
-async function commit(
+export async function createCommit(
 	api: GitHubPublicationApi,
 	tree: GitSha,
 	parents: readonly GitSha[],
@@ -724,7 +654,7 @@ async function commit(
 	return expected;
 }
 
-async function tree(
+export async function createTree(
 	api: GitHubPublicationApi,
 	base: GitSha | null,
 	files: readonly PublishedFile[],
@@ -766,120 +696,6 @@ async function tree(
 	return shaOf(fieldOf(objectOf(result), "sha"));
 }
 
-export async function createLedgerRoot(
-	api: GitHubPublicationApi,
-	date: string,
-): Promise<LedgerCommit> {
-	const root = await tree(api, null, [
-		{ path: LEDGER_FILE, mode: "100644", bytes: new Uint8Array() },
-	]);
-
-	const sha = await commit(api, root, [], date, "factory: ledger root\n");
-
-	return { sha, tree: root, parents: [] };
-}
-
-export async function createLedgerChild(
-	api: GitHubPublicationApi,
-	parent: LedgerCommit,
-	bytes: Uint8Array,
-	date: string,
-	message: string,
-	file: typeof LEDGER_FILE | typeof SCORE_FILE = LEDGER_FILE,
-): Promise<LedgerCommit> {
-	if (!message.endsWith("\n")) throw new PublicationError("invalid_message");
-
-	const child = await tree(api, parent.tree, [
-		{ path: file, mode: "100644", bytes },
-	]);
-
-	const sha = await commit(api, child, [parent.sha], date, message);
-
-	return { sha, tree: child, parents: [parent.sha] };
-}
-
-export async function readLedgerCommit(
-	api: GitHubPublicationApi,
-	sha: GitSha,
-): Promise<LedgerCommit> {
-	const value = objectOf(await api.request("GET", `git/commits/${sha}`));
-
-	if (value === null) throw new PublicationError("object_missing");
-
-	if (shaOf(fieldOf(value, "sha")) !== sha)
-		throw new PublicationError("object_mismatch");
-	const parents = arrayOf(fieldOf(value, "parents"));
-
-	if (parents === null) throw new PublicationError("malformed_commit");
-
-	return {
-		sha,
-		tree: shaOf(fieldOf(objectOf(fieldOf(value, "tree")), "sha")),
-		parents: parents.map((parent) => shaOf(fieldOf(objectOf(parent), "sha"))),
-	};
-}
-
-export async function readLedgerFile(
-	api: GitHubPublicationApi,
-	root: GitSha,
-	file: typeof LEDGER_FILE | typeof SCORE_FILE = LEDGER_FILE,
-): Promise<LedgerFile> {
-	const value = objectOf(
-		await api.request("GET", `git/trees/${root}?recursive=1`),
-	);
-
-	if (value === null) throw new PublicationError("object_missing");
-
-	if (fieldOf(value, "truncated") !== false)
-		throw new PublicationError("tree_truncated");
-	const entries = arrayOf(fieldOf(value, "tree"));
-
-	if (entries === null) throw new PublicationError("malformed_tree");
-	const paths: string[] = [];
-	let blob: GitSha | null = null;
-
-	for (const entry of entries) {
-		const item = objectOf(entry);
-		const path = textOf(fieldOf(item, "path"));
-
-		if (path === null) throw new PublicationError("malformed_tree");
-		paths.push(path);
-
-		if (path !== file) continue;
-
-		if (
-			textOf(fieldOf(item, "type")) !== "blob" ||
-			textOf(fieldOf(item, "mode")) !== "100644"
-		)
-			throw new PublicationError("malformed_tree");
-		blob = shaOf(fieldOf(item, "sha"));
-	}
-
-	if (blob === null) {
-		if (file === SCORE_FILE)
-			return {
-				blob: gitObjectSha("blob", new Uint8Array()),
-				bytes: Buffer.alloc(0),
-				paths: paths.sort(),
-			};
-		throw new PublicationError("ledger_file_missing");
-	}
-
-	const content = objectOf(await api.request("GET", `git/blobs/${blob}`));
-
-	if (content === null) throw new PublicationError("object_missing");
-	const encoded = textOf(fieldOf(content, "content"));
-
-	if (textOf(fieldOf(content, "encoding")) !== "base64" || encoded === null)
-		throw new PublicationError("malformed_blob");
-	const bytes = Buffer.from(encoded, "base64");
-
-	if (gitObjectSha("blob", bytes) !== blob)
-		throw new PublicationError("blob_mismatch");
-
-	return { blob, bytes, paths: paths.sort() };
-}
-
 export async function publishCandidate(
 	api: GitHubPublicationApi,
 	input: {
@@ -913,10 +729,10 @@ export async function publishCandidate(
 		fieldOf(objectOf(fieldOf(objectOf(base), "tree")), "sha"),
 	);
 
-	const patchTree = await tree(api, baseTree, input.patch);
+	const patchTree = await createTree(api, baseTree, input.patch);
 	const trailers = `Factory-Run: ${input.runId}\nFactory-Round: ${input.round}\n${(input.generation ?? 0) === 0 ? "" : `Factory-Generation: ${input.generation}\n`}Patch-Digest: ${input.patchDigest}\nAcceptance-Digest: ${input.acceptanceDigest}\n`;
 
-	const patchSha = await commit(
+	const patchSha = await createCommit(
 		api,
 		patchTree,
 		[input.baseSha],
@@ -924,9 +740,9 @@ export async function publishCandidate(
 		`factory: builder patch\n\n${trailers}Factory-Role: patch\n`,
 	);
 
-	const suiteTree = await tree(api, patchTree, input.suite);
+	const suiteTree = await createTree(api, patchTree, input.suite);
 
-	const candidateSha = await commit(
+	const candidateSha = await createCommit(
 		api,
 		suiteTree,
 		input.ancestry === undefined

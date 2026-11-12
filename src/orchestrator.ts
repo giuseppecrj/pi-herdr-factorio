@@ -34,7 +34,7 @@ import type {
 	FeedbackObservation,
 	FeedbackBatch,
 } from "./candidate/feedback.ts";
-import { PublicationError } from "./publication.ts";
+import { PublicationError } from "./github/publish.ts";
 
 import {
 	BUILD_TOOLS,
@@ -168,15 +168,17 @@ import {
 import { digestOf, isDigest } from "./core/run.ts";
 import {
 	LedgerRowError,
-	candidateCause,
-	terminalSnapshot,
 	legacyRunContext,
 	type BudgetCapName,
-	type TerminalCause,
-	type LedgerOutbox,
 	type AttemptEnd,
+} from "./ledger/schema.ts";
+import {
+	candidateCause,
+	terminalSnapshot,
+	type TerminalCause,
 	type RunAccounting,
-} from "./ledger.ts";
+} from "./ledger/terminal.ts";
+import { type LedgerOutbox } from "./ledger/outbox.ts";
 import type { JsonValue } from "./core/json.ts";
 
 /** The stage receipt fields a launch reports. The host's full receipt is assignable to it. */
@@ -529,7 +531,7 @@ export interface RunFiles {
 		runId: Digest,
 		floor: number,
 		candidate: CandidateState | null,
-	): Promise<import("./ledger.ts").TerminalEvidence>;
+	): Promise<import("./ledger/terminal.ts").TerminalEvidence>;
 	/** Writes the contract and its receipt once. The same bytes again succeed. */
 	writeContract(input: {
 		readonly contract: Contract;

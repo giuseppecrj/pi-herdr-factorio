@@ -32,7 +32,7 @@ import {
 import { cadenceMarker } from "../trust/markers.ts";
 import { digestOf, isDigest, type Digest } from "../core/run.ts";
 import { inert } from "../specify.ts";
-import type { ScoreEvent } from "../ledger.ts";
+import type { ScoreEvent } from "../ledger/schema.ts";
 import {
 	CADENCE_JOBS,
 	isGitSha,

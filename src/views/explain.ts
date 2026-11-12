@@ -2,7 +2,7 @@ import { lstatSync, readdirSync, type Dirent } from "node:fs";
 import { join } from "node:path";
 import { regularText, readStoredContract } from "../contract/artifacts.ts";
 import { fileAdmissionStore } from "../trust/admission.ts";
-import { frozenRowOf } from "../ledger.ts";
+import { frozenRowOf } from "../ledger/schema.ts";
 import { digestOf, isDigest, type Digest } from "../core/run.ts";
 import {
 	objectOf,

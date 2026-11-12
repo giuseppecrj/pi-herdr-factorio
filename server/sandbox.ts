@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { readOwnerPatch, ownerPatchPath } from "../src/publication.ts";
+import { readOwnerPatch, ownerPatchPath } from "../src/github/publish.ts";
 import {
 	readFeedbackBatch,
 	renderFeedbackCards,

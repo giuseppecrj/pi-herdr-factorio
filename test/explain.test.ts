@@ -33,10 +33,10 @@ import {
 	parseLedger,
 	ledgerRowOf,
 	latestScores,
-	ledgerApiOf,
 	parseScores,
 	scoreEventOf,
-} from "../src/ledger.ts";
+} from "../src/ledger/schema.ts";
+import { ledgerApiOf, SCORE_FILE } from "../src/ledger/git.ts";
 import {
 	allocateMeasurement,
 	scoreHistory,
@@ -67,7 +67,7 @@ import { manifestDigest } from "../server/sandbox/manifest.ts";
 import { startGatewayProcess } from "../server/sandbox/gateway-client.ts";
 import { objectOf, parseJson, arrayOf } from "../src/core/json.ts";
 import { parseWorkflow } from "../src/workflow.ts";
-import { GitHubPublicationApi, SCORE_FILE } from "../src/publication.ts";
+import { GitHubPublicationApi } from "../src/github/publish.ts";
 import { LedgerGit, repo } from "./ledger-git.ts";
 import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 import { trustedWorkflowFor } from "./fake-ticket-adapter.ts";

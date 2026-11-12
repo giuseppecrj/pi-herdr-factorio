@@ -6,26 +6,32 @@ import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import {
 	GitHubPublicationApi,
+	publishCandidate,
+} from "../src/github/publish.ts";
+import {
 	LEDGER_FILE,
 	createLedgerChild,
 	createLedgerRoot,
-	publishCandidate,
-} from "../src/publication.ts";
+	ledgerApiOf,
+	type LedgerApi,
+} from "../src/ledger/git.ts";
 import {
 	AUTONOMY_DIGEST,
-	appendRun,
 	frozenRowOf,
-	ledgerApiOf,
 	ledgerRowOf,
 	parseLedger,
-	terminalSnapshot,
+	type FrozenRow,
+	type RunContextV2,
+} from "../src/ledger/schema.ts";
+import {
+	appendRun,
 	type AdoptionCursor,
 	type AppendResult,
-	type FrozenRow,
-	type LedgerApi,
-	type RunContextV2,
+} from "../src/ledger/append.ts";
+import {
+	terminalSnapshot,
 	type TerminalFacts,
-} from "../src/ledger.ts";
+} from "../src/ledger/terminal.ts";
 import { fileLedgerOutbox } from "../server/controller.ts";
 import { digestOf, runIdOf } from "../src/core/run.ts";
 import { objectOf, type JsonValue } from "../src/core/json.ts";
@@ -579,7 +585,7 @@ describe("L09 ledger and publication characterization", () => {
 		const modules = {
 			git: new URL("./ledger-real-git.ts", import.meta.url).href,
 			controller: new URL("../server/controller.ts", import.meta.url).href,
-			ledger: new URL("../src/ledger.ts", import.meta.url).href,
+			ledger: new URL("../src/ledger/schema.ts", import.meta.url).href,
 			platform: new URL("../src/trust/platform.ts", import.meta.url).href,
 		};
 

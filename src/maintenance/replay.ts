@@ -1,7 +1,7 @@
 import { readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { digestOf } from "../core/run.ts";
-import { parseLedger, type LedgerRow } from "../ledger.ts";
+import { parseLedger, type LedgerRow } from "../ledger/schema.ts";
 import {
 	currentRepository,
 	type HistoricalRepositories,

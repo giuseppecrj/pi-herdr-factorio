@@ -18,7 +18,7 @@ import {
 	type LedgerRow,
 	type LedgerRowV1,
 	type LedgerRowV4,
-} from "../src/ledger.ts";
+} from "../src/ledger/schema.ts";
 import {
 	computeMetrics,
 	excludedRunReason,

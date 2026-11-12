@@ -48,7 +48,7 @@ import {
 	parseCandidateState,
 	type RepairExecution,
 } from "../../src/handoff.ts";
-import { candidateBranch, storeOwnerPatch } from "../../src/publication.ts";
+import { candidateBranch, storeOwnerPatch } from "../../src/github/publish.ts";
 import { certifyR8, type FamilyInput } from "../../src/core/models.ts";
 import {
 	familyClaimsHold,

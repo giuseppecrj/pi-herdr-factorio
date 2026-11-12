@@ -83,7 +83,7 @@ import {
 import { readOwnerFeed } from "./cli/owner-feed.ts";
 import { isCadenceJob } from "../src/maintenance/cadence.ts";
 import type { CadenceJob } from "../src/workflow.ts";
-import { GitHubPublicationApi } from "../src/publication.ts";
+import { GitHubPublicationApi } from "../src/github/publish.ts";
 import { sandboxExecutor } from "./sandbox.ts";
 import { runGatesCli } from "./gates.ts";
 import { runViewerCli } from "./viewer.ts";
@@ -96,7 +96,8 @@ import {
 	parseJson,
 	textOf,
 } from "../src/core/json.ts";
-import { parseLedger, ledgerApiOf } from "../src/ledger.ts";
+import { parseLedger } from "../src/ledger/schema.ts";
+import { ledgerApiOf } from "../src/ledger/git.ts";
 import { digestOf, isDigest } from "../src/core/run.ts";
 import {
 	computeMetrics,

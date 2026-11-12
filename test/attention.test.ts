@@ -26,7 +26,7 @@ import {
 	type CandidateEvent,
 } from "../src/handoff.ts";
 import { dispatchNonce } from "../src/candidate/validation.ts";
-import { candidateBranch } from "../src/publication.ts";
+import { candidateBranch } from "../src/github/publish.ts";
 import { REQUIRED_CI_CHECKS } from "../src/core/run.ts";
 import { isGitSha } from "../src/workflow.ts";
 import type { PatchReceipt } from "../src/candidate/build.ts";

@@ -29,7 +29,7 @@ import {
 	replayStageCaps,
 } from "../../src/maintenance/replay.ts";
 import { digestOf, runIdOf } from "../../src/core/run.ts";
-import { ledgerRowOf } from "../../src/ledger.ts";
+import { ledgerRowOf } from "../../src/ledger/schema.ts";
 
 // The reviewer's fake gh/serve + real socket-lock harness, made hermetic.
 const script = ".pi/skills/verify-factory/scripts/drive-replay.sh";

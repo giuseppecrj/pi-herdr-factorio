@@ -48,7 +48,7 @@ import {
 	type CandidateState,
 	type ReviewExecution,
 } from "../src/handoff.ts";
-import { candidateBranch } from "../src/publication.ts";
+import { candidateBranch } from "../src/github/publish.ts";
 import {
 	assessmentBinding,
 	assessmentBytes,

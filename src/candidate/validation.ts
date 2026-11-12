@@ -16,7 +16,7 @@ import {
 	type Publication,
 	type PublishedFile,
 	type TransportCounters,
-} from "../publication.ts";
+} from "../github/publish.ts";
 import type { Contract } from "../specify.ts";
 import { isGitSha, type GitSha } from "../workflow.ts";
 import {

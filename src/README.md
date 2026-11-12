@@ -24,6 +24,10 @@ Two matchers keep their own spelling on purpose. They match the gate container's
 
 `reviewSeats` in `src/candidate/review.ts` names the files that get the `ultrareview` seat. It covers all of `src/core/`, and in `src/trust/` only `protected-paths.ts`, `policy.ts` and `admission.ts`. In `src/github/` it covers `adapter.ts` and `exec.ts`, not the whole folder. Apart from `src/core/run.ts`, which gained the seat in L03, these are the seats the files had before the layout program. Widening them costs review budget and needs the owner.
 
+## `src/ledger`
+
+`schema.ts` owns the stored ledger formats: run rows versions 1 to 5, score events, run starts and attempt ends, with their codecs and parsers. Stored lines never change, so a codec change must still read every old line to the same bytes. `git.ts` keeps the runs and scores files on `factory/ledger` through the Git Data API, without force. `append.ts` appends one frozen row or proves it is already there. `terminal.ts` turns a finished run into its row. `outbox.ts` holds the controller's private publication queue and its bounded pump. Candidate branches and owner patches belong to `src/github/publish.ts`.
+
 ## Files by planned owner
 
 L06 moved the intact modules into their owner folders. Files marked pending stay at their root paths until the named PR moves and splits them. Do not create a pending owner folder before that PR.
@@ -32,10 +36,10 @@ L06 moved the intact modules into their owner folders. Files marked pending stay
 | --- | --- | --- |
 | `src/trust` | `protected-paths.ts`, `policy.ts`, `platform.ts`, `admission.ts`, `markers.ts` | None |
 | `src/config` | Not created | `src/workflow.ts` in L08 |
-| `src/github` | `adapter.ts`, `exec.ts`, `tickets.ts` | `src/publication.ts` in L09 |
+| `src/github` | `adapter.ts`, `exec.ts`, `tickets.ts`, `publish.ts` | None |
 | `src/contract` | `acceptance.ts`, `artifacts.ts` | `src/specify.ts` in L08 |
 | `src/candidate` | `build.ts`, `review.ts`, `validation.ts`, `feedback.ts`, `diagnosis.ts`, `stages.ts` | `src/handoff.ts` in L07 |
-| `src/ledger` | Not created | `src/ledger.ts` in L09 |
+| `src/ledger` | `schema.ts`, `git.ts`, `append.ts`, `terminal.ts`, `outbox.ts` | None |
 | `src/controller` | Not created | `src/orchestrator.ts` in L10 |
 | `src/views` | `feed.ts`, `attention.ts`, `explain.ts`, `metrics.ts` | None |
 | `src/maintenance` | `cadence.ts`, `replay.ts`, `scorers.ts` | None |
