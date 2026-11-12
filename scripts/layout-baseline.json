@@ -1211,8 +1211,8 @@
 				"readFileSync(\".github/factory/gates/reporter.mjs\"": 1,
 				"readFileSync(\".github/factory/gates/scan-rules.json\"": 1,
 				"new URL(\"../.github/factory/gates/freeze.mjs\", import.meta.url)": 1,
-				"join(root, \".github/factory/gates/gates.json\")": 1,
-				"join(root, \"package.json\")": 1,
+				"join(root, \".github/factory/gates/gates.json\")": 2,
+				"join(root, \"package.json\")": 2,
 				"join(root, \".github/workflows/check.yml\")": 1,
 				"join(root, \".github/workflows/ci.yml\")": 1
 			},

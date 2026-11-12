@@ -622,6 +622,44 @@ test("visible suite excludes heavy integration tests without losing CI or gate c
 	);
 });
 
+test("trusted lint and format check the roots npm run check does, without checking held-out acceptance", () => {
+	const root = existsSync("/g/tooling/.github/factory/gates/gates.json")
+		? "/g/tooling"
+		: ".";
+
+	const manifest = JSON.parse(
+		readFileSync(join(root, ".github/factory/gates/gates.json"), "utf8"),
+	);
+
+	const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+
+	const argv = (name: string): string[] =>
+		manifest.checks.find((c: { name: string }) => c.name === name).argv;
+
+	const roots = (script: string, tool: string) =>
+		script
+			.slice(script.indexOf(tool) + tool.length)
+			.trim()
+			.split(/\s+/);
+
+	const lintRoots = roots(pkg.scripts.lint, "oxlint");
+	assert.ok(lintRoots.includes(".pi/skills"));
+	assert.ok(lintRoots.includes("docs/statecharts"));
+	assert.deepEqual(argv("lint").slice(-lintRoots.length), lintRoots);
+
+	assert.deepEqual(
+		argv("lint").slice(
+			argv("lint").indexOf("--ignore-pattern"),
+			argv("lint").indexOf("--ignore-pattern") + 2,
+		),
+		["--ignore-pattern", "test/acceptance/**"],
+	);
+
+	const formatRoots = roots(pkg.scripts["format:check"], "biome format");
+	assert.deepEqual(formatRoots, lintRoots);
+	assert.deepEqual(argv("format").slice(-formatRoots.length), formatRoots);
+});
+
 test("removes nested ignore files and candidate-deleted source", async (t) => {
 	const f = repo(t);
 	f.git("rm", "src/value.ts");
