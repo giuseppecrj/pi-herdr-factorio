@@ -28,6 +28,20 @@ Two matchers keep their own spelling on purpose. They match the gate container's
 
 `schema.ts` owns the stored ledger formats: run rows versions 1 to 5, score events, run starts and attempt ends, with their codecs and parsers. Stored lines never change, so a codec change must still read every old line to the same bytes. `git.ts` keeps the runs and scores files on `factory/ledger` through the Git Data API, without force. `append.ts` appends one frozen row or proves it is already there. `terminal.ts` turns a finished run into its row. `outbox.ts` holds the controller's private publication queue and its bounded pump. Candidate branches and owner patches belong to `src/github/publish.ts`.
 
+## `src/controller`
+
+`orchestrator.ts` is the one scheduling authority. `Orchestrator` is the single owner of every mutable field: the run table, the seen and corrupt caches, the totals, claim observations, reservations, draining stages and queued candidate results. No other module keeps them. Three paths change them. `tick` does the scheduling (`cadenceOnce` runs its claim loading and workflow gate for a one-shot audit). `drain` repeats a tick's stage-end steps until no stage runs: late usage, stage ends, base-check polls, accept launches and marker sync. Callbacks a launch hands to the executor run between ticks: a stage's `progress` raises its phase's `usage` and `lastProgressAt`, its settlement sets the phase's `result`, a candidate execution's progress and settlement append to the queued candidate results and its settlement marks the execution settled, and each settlement removes its promise from the running stages. The next tick or drain acts on what the callbacks wrote; a callback never dispatches or posts. Tick order, slot arbitration, adoption, dispatch, stage ends, retries and marker publication stay there. The other files hold what can run without the `Orchestrator` object. Their functions take the controller input and the run record as parameters, and any mutable state they touch is passed in by name.
+
+- `claims.ts` holds a claimed run (`ActiveRun`, `RunPhase`), its stored `ClaimRecord`, the `RunFiles` port that stores it, claim observations, and the projections between a run, its record and its marker.
+- `admission.ts` holds the seen-issue watermark, the refusal policy and clarification linking: answer history and the answers record of a relabeled run.
+- `launch.ts` holds the `StageExecutor` port, what a launch gets and returns, workspace preparation and stage input reads.
+- `effects.ts` holds the effects a reporting stage owes and the keyed comment writes, and turns specify and accept output into them.
+- `accounting.ts` holds the totals and charges: late usage, adopted and released spend, attempt ends and accept spend.
+- `base-check.ts` holds the acceptance receipt, the accept retry's refused suite and feedback, and the refusal notice.
+- `recovery.ts` turns unsettled candidate execution accounts back into candidate events after a restart.
+
+A new method that reads or writes `Orchestrator` fields belongs in `orchestrator.ts`. Move it out only when it needs at most four of them, passed explicitly, and calls no `Orchestrator` method.
+
 ## Files by planned owner
 
 L06 moved the intact modules into their owner folders. Files marked pending stay at their root paths until the named PR moves and splits them. Do not create a pending owner folder before that PR.
@@ -40,7 +54,7 @@ L06 moved the intact modules into their owner folders. Files marked pending stay
 | `src/contract` | `contract.ts`, `parse.ts`, `render.ts`, `prompt.ts`, `acceptance.ts`, `artifacts.ts` | None |
 | `src/candidate` | `state.ts`, `codec.ts`, `handoff.ts`, `build.ts`, `review.ts`, `validation.ts`, `feedback.ts`, `diagnosis.ts`, `stages.ts` | None |
 | `src/ledger` | `schema.ts`, `git.ts`, `append.ts`, `terminal.ts`, `outbox.ts` | None |
-| `src/controller` | Not created | `src/orchestrator.ts` in L10 |
+| `src/controller` | `orchestrator.ts`, `claims.ts`, `admission.ts`, `launch.ts`, `effects.ts`, `accounting.ts`, `base-check.ts`, `recovery.ts` | None |
 | `src/views` | `feed.ts`, `attention.ts`, `explain.ts`, `metrics.ts` | None |
 | `src/maintenance` | `cadence.ts`, `replay.ts`, `scorers.ts` | None |
 

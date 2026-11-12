@@ -57,7 +57,7 @@ import type { JsonValue } from "../src/core/json.ts";
 import { type Digest, digestOf, runIdOf } from "../src/core/run.ts";
 import { GitHubTicketWriter } from "../src/github/adapter.ts";
 import type { Exec } from "../src/github/exec.ts";
-import type { LogFields } from "../src/orchestrator.ts";
+import type { LogFields } from "../src/controller/orchestrator.ts";
 import {
 	type AdmittedReceipt,
 	fileAdmissionStore,

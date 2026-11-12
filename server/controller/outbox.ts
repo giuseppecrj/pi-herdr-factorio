@@ -24,7 +24,7 @@ import { ledgerApiOf } from "../../src/ledger/git.ts";
 import { lstat, mkdir, readdir, readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { type Digest, isDigest } from "../../src/core/run.ts";
-import type { Log } from "../../src/orchestrator.ts";
+import type { Log } from "../../src/controller/orchestrator.ts";
 import type { RepoSlug } from "../../src/trust/platform.ts";
 import { writeAtomic, installOnce } from "./state.ts";
 

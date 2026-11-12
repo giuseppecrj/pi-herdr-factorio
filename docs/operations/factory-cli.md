@@ -560,7 +560,7 @@ node server/cli.ts run --json --repo <owner/name> --issue <number> --state-dir <
 node server/cli.ts serve --repo <owner/name> --state-dir <dir> [--issue <number>]...
 ```
 
-The three ticket-controller commands share one implementation, `Orchestrator` in `src/orchestrator.ts`. Unscoped ticks schedule due maintenance only after ticket dispatch; scoped `--issue` controllers do not start unrelated audits. The cadence one-shot shares its capacity and recovery accounting without dispatching tickets. `run --issue <n>` is a tick limited to issue `n`, so a manual run passes the same switches and the same admission as polling. With `--issue`, `tick` and `serve` read, claim and write markers only for the named issues. Verification lanes use that to keep clear of the production controller.
+The three ticket-controller commands share one implementation, `Orchestrator` in `src/controller/orchestrator.ts`. Unscoped ticks schedule due maintenance only after ticket dispatch; scoped `--issue` controllers do not start unrelated audits. The cadence one-shot shares its capacity and recovery accounting without dispatching tickets. `run --issue <n>` is a tick limited to issue `n`, so a manual run passes the same switches and the same admission as polling. With `--issue`, `tick` and `serve` read, claim and write markers only for the named issues. Verification lanes use that to keep clear of the production controller.
 
 ### Start
 

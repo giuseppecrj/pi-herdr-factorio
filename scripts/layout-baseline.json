@@ -492,11 +492,53 @@
 				"from": ["src/ledger.ts"],
 				"since": "L09"
 			},
-			"src/orchestrator.ts": {
+			"src/controller/orchestrator.ts": {
 				"owner": "src/controller",
 				"seats": ["code-review", "security-review", "simplify"],
-				"from": [],
-				"since": "L00"
+				"from": ["src/orchestrator.ts"],
+				"since": "L10"
+			},
+			"src/controller/claims.ts": {
+				"owner": "src/controller",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["src/orchestrator.ts"],
+				"since": "L10"
+			},
+			"src/controller/admission.ts": {
+				"owner": "src/controller",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["src/orchestrator.ts"],
+				"since": "L10"
+			},
+			"src/controller/launch.ts": {
+				"owner": "src/controller",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["src/orchestrator.ts"],
+				"since": "L10"
+			},
+			"src/controller/effects.ts": {
+				"owner": "src/controller",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["src/orchestrator.ts"],
+				"since": "L10"
+			},
+			"src/controller/accounting.ts": {
+				"owner": "src/controller",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["src/orchestrator.ts"],
+				"since": "L10"
+			},
+			"src/controller/base-check.ts": {
+				"owner": "src/controller",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["src/orchestrator.ts"],
+				"since": "L10"
+			},
+			"src/controller/recovery.ts": {
+				"owner": "src/controller",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["src/orchestrator.ts"],
+				"since": "L10"
 			},
 			"src/github/publish.ts": {
 				"owner": "src/github",
@@ -874,6 +916,13 @@
 			},
 			"src/specify.ts": {
 				"owner": "src/contract",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			}
+,
+			"src/orchestrator.ts": {
+				"owner": "src/controller",
 				"seats": ["code-review", "security-review", "simplify"],
 				"from": [],
 				"since": "L00"
@@ -2088,7 +2137,12 @@
 				"new URL(\"../server/factory.service\", import.meta.url)": 1,
 				"new URL(\"../server/controller/lock.ts\", import.meta.url)": 1,
 				"\"../.pi/skills/verify-factory/features/sandbox-stage.md\"": 1,
-				"\"./fixtures/feedback/github-review.json\"": 2
+				"\"./fixtures/feedback/github-review.json\"": 2,
+				"new URL(\"../src/controller/orchestrator.ts\", import.meta.url)": 1,
+				"new URL(\"../src/trust/admission.ts\", import.meta.url)": 1,
+				"new URL(\"./fake-ticket-adapter.ts\", import.meta.url)": 1,
+				"new URL(\"../server/sandbox/result.ts\", import.meta.url)": 1,
+				"new URL(\"../src/trust/platform.ts\", import.meta.url)": 1
 			},
 			"targets": [
 				{
@@ -2121,6 +2175,46 @@
 					"via": {
 						"from": "reader",
 						"path": "./fixtures/feedback/github-review.json"
+					}
+				},
+				{
+					"path": "src/controller/orchestrator.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../src/controller/orchestrator.ts"
+					}
+				},
+				{
+					"path": "src/trust/admission.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../src/trust/admission.ts"
+					}
+				},
+				{
+					"path": "test/fake-ticket-adapter.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./fake-ticket-adapter.ts"
+					}
+				},
+				{
+					"path": "server/sandbox/result.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../server/sandbox/result.ts"
+					}
+				},
+				{
+					"path": "src/trust/platform.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../src/trust/platform.ts"
 					}
 				}
 			]

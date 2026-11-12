@@ -36,11 +36,11 @@ import type { JsonValue } from "../src/core/json.ts";
 import type { FeedEntry } from "../src/views/feed.ts";
 import { readOwnerFeed, readOwnerRun } from "../server/cli/owner-feed.ts";
 import { fileAdmissionStore } from "../src/trust/admission.ts";
+import type { StageExecutor } from "../src/controller/launch.ts";
 import {
 	Orchestrator,
 	type TickReport,
-	type StageExecutor,
-} from "../src/orchestrator.ts";
+} from "../src/controller/orchestrator.ts";
 import { fileRunFiles } from "../server/controller/run-files.ts";
 import {
 	serveLoop,

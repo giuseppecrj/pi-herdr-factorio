@@ -95,14 +95,14 @@ import { readFile, readlink, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Readable } from "node:stream";
 import type { Exec } from "../src/github/exec.ts";
+import type { Log } from "../src/controller/orchestrator.ts";
 import type {
-	Log,
 	StageExecutor,
 	StageLaunch,
 	StageLaunchInput,
 	StageOutput,
 	ReviewPreparation,
-} from "../src/orchestrator.ts";
+} from "../src/controller/launch.ts";
 import {
 	blocksReview,
 	digestOf,

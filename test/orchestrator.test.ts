@@ -5,7 +5,7 @@ import {
 import { CadenceRunner } from "../src/maintenance/cadence.ts";
 import { parseStoredContract } from "../src/contract/artifacts.ts";
 import assert from "node:assert/strict";
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawnSync } from "node:child_process";
 import {
 	chmodSync,
 	cpSync,
@@ -86,20 +86,21 @@ import {
 } from "../src/trust/markers.ts";
 import {
 	backoffMs,
-	type CheckoutResult,
-	type ClaimRecord,
 	checkIdentity,
 	type LogFields,
 	Orchestrator,
 	type OrchestratorInput,
-	type RunFiles,
-	type StageExecutor,
-	type StageLaunch,
-	type StageLaunchInput,
-	type StageOutput,
-	type StageResult,
 	type TickReport,
-} from "../src/orchestrator.ts";
+} from "../src/controller/orchestrator.ts";
+import type { ClaimRecord, RunFiles } from "../src/controller/claims.ts";
+import type {
+	CheckoutResult,
+	StageExecutor,
+	StageLaunch,
+	StageLaunchInput,
+	StageOutput,
+	StageResult,
+} from "../src/controller/launch.ts";
 import { type SessionOutcome } from "../src/core/execution.ts";
 import { stageResult } from "../server/sandbox/result.ts";
 import { READY_LABEL } from "../src/trust/policy.ts";
@@ -9019,6 +9020,55 @@ function deferred(): Deferred {
 
 	return { behavior: { kind: "later", result }, finish };
 }
+
+describe("Orchestrator logger receiver", () => {
+	it("calls a method-style logger on its input when a stalled stage reports late usage", async () => {
+		const { github, clock, store, files, executor } = world();
+		const stage = deferred();
+
+		github.add(labeled(14));
+		executor.behaviors = [stage.behavior, { kind: "hang" }];
+
+		const seen: string[] = [];
+
+		const input = {
+			platform: EXE_DEV_PLATFORM,
+			exec: github.exec,
+			env: () => "/home/exedev",
+			repo,
+			store,
+			files,
+			executor,
+			clock,
+			scope: null,
+			seen,
+			log(event: string) {
+				this.seen.push(event);
+			},
+		};
+
+		const controller = new Orchestrator(input);
+
+		await controller.tick();
+
+		const launch = executor.launches[0];
+
+		assert.ok(launch);
+		clock.t += 300_001;
+		await controller.tick();
+		launch.progress(40);
+		stage.finish(resultOf(launch, { kind: "failed", exit: "aborted" }, 40));
+		await settle();
+
+		const report = await controller.tick();
+
+		assert.equal(report.totals.usage, 40);
+		assert.equal(
+			input.seen.filter((event) => event === "stage_late_usage").length,
+			1,
+		);
+	});
+});
 
 describe("Orchestrator late usage across a restart", () => {
 	it("rewrites the retry marker and claim record with late stall usage, so a restart restores the allowance the run has left", async () => {
@@ -19054,5 +19104,378 @@ describe("terminal rows keep the real cause", () => {
 			outcome: row.outcome,
 			failure: expected,
 		});
+	});
+});
+
+/** Everything one step of a scheduling trace changed: the report, logs, GitHub calls, claim records and markers. */
+type TraceStep = {
+	readonly name: string;
+	readonly report: TickReport | null;
+	readonly events: readonly { event: string; fields: LogFields }[];
+	readonly calls: readonly string[][];
+	readonly claims: readonly ClaimRecord[];
+	readonly markers: readonly string[][];
+	readonly launches: readonly string[];
+};
+
+async function schedulingTrace(): Promise<TraceStep[]> {
+	const { github, clock, executor, files, logs, start } = world();
+	const steps: TraceStep[] = [];
+	let logged = 0;
+	let called = 0;
+
+	const step = (name: string, report: TickReport | null) => {
+		steps.push({
+			name,
+			report: report === null ? null : structuredClone(report),
+			events: structuredClone(logs.slice(logged)),
+			calls: structuredClone(github.calls.slice(called)),
+			claims: structuredClone(
+				[...files.claims.values()].sort((a, b) => a.issue - b.issue),
+			),
+			markers: [14, 15, 16].map((issue) => statuses(github, issue)),
+			launches: executor.launches.map(
+				(launch) =>
+					`${launch.stage}:${launch.runId}:${launch.attempt}:${launch.remainingRunTokens}`,
+			),
+		});
+		logged = logs.length;
+		called = github.calls.length;
+	};
+
+	for (const issue of [14, 15, 16]) github.add(labeled(issue));
+
+	const late = deferred();
+
+	executor.behaviors = [
+		{ kind: "fail", usage: 100 },
+		{ kind: "pass", usage: 200 },
+		late.behavior,
+	];
+	executor.acceptBehavior = { kind: "pass", usage: 50 };
+
+	const first = start();
+
+	step("claim and launch", await first.tick());
+	await settle();
+	step("complete", await first.tick());
+	clock.t += 10_000;
+	step("retry", await first.tick());
+
+	const launch = executor.launches.at(-1);
+
+	assert.ok(launch);
+	launch.progress(40);
+	clock.t += 1_000;
+	step("progress", await first.tick());
+
+	executor.spentBy.set("specify-2", 75);
+	executor.behaviors = [{ kind: "pass", usage: 60 }];
+
+	const second = start();
+
+	step("restart", await second.tick());
+	await settle();
+	clock.t += 10_000;
+	step("after restart", await second.tick());
+	await settle();
+	clock.t += 10_000;
+	step("settled", await second.tick());
+
+	late.finish(resultOf(launch, { kind: "failed", exit: "aborted" }, 90));
+	await settle();
+	clock.t += 10_000;
+	step("late result", await first.tick());
+
+	const third = start();
+
+	step("second restart", await third.tick());
+
+	return steps;
+}
+
+/**
+ * Two traces as text, with each digest that differs between them, such as a
+ * suite's random canary and what it binds, replaced by its order of first
+ * appearance. Its 12-character display prefix is replaced too.
+ */
+function stableTraces(
+	first: readonly TraceStep[],
+	second: readonly TraceStep[],
+): [string, string] {
+	const texts = [JSON.stringify(first), JSON.stringify(second)];
+	const [a, b] = texts.map((text) => text.match(/[0-9a-f]{64}/g) ?? []);
+
+	assert.ok(a && b);
+	assert.equal(a.length, b.length);
+	const names = new Map<string, string>();
+
+	a.forEach((digest, index) => {
+		const other = b[index] ?? "";
+
+		if (digest === other || names.has(digest)) return;
+		const name = `random-${names.size / 2}`;
+
+		names.set(digest, name);
+		names.set(other, name);
+	});
+
+	const stable = (text: string) =>
+		[...names].reduce(
+			(out, [digest, name]) =>
+				out.replaceAll(digest, name).replaceAll(digest.slice(0, 12), name),
+			text,
+		);
+
+	return [stable(texts[0] ?? ""), stable(texts[1] ?? "")];
+}
+
+describe("L10 scheduling characterization", () => {
+	it("pins ordered events, requests, claim records, slots and accounting over tick, completion and restart", async () => {
+		const trace = await schedulingTrace();
+		const [text, again] = stableTraces(trace, await schedulingTrace());
+
+		assert.equal(again, text);
+
+		for (const { report } of trace)
+			if (report !== null) assert.ok(report.active <= report.maxConcurrent);
+
+		assert.equal(
+			digestOf(text),
+			"666b3e1cde3cc0824365cfea3d31df2d97ac06eea2b185f7aae69d0209e27c07",
+		);
+	});
+});
+
+type FreshPhase = {
+	readonly preflight: boolean;
+	readonly launch: "unavailable" | "hang" | "pass";
+	readonly usage: number;
+	readonly spent: Readonly<Record<string, number>>;
+	readonly ticks: number;
+	readonly now: number;
+};
+
+type FreshOutput = {
+	readonly reports: TickReport[];
+	readonly logs: { event: string; fields: LogFields }[];
+	readonly calls: string[][];
+	readonly launches: string[];
+	readonly issues: FakeIssue[];
+};
+
+/** Runs one controller process over `state` and the issues a previous process left, then exits without cleanup. */
+function freshProcess(
+	state: string,
+	issues: readonly FakeIssue[],
+	phase: FreshPhase,
+): FreshOutput {
+	const modules = {
+		orchestrator: new URL("../src/controller/orchestrator.ts", import.meta.url)
+			.href,
+		controller: new URL("../server/controller/run-files.ts", import.meta.url)
+			.href,
+		admission: new URL("../src/trust/admission.ts", import.meta.url).href,
+		fake: new URL("./fake-ticket-adapter.ts", import.meta.url).href,
+		result: new URL("../server/sandbox/result.ts", import.meta.url).href,
+		platform: new URL("../src/trust/platform.ts", import.meta.url).href,
+	};
+
+	const code = `
+		import { Orchestrator } from ${JSON.stringify(modules.orchestrator)};
+		import { fileRunFiles } from ${JSON.stringify(modules.controller)};
+		import { fileAdmissionStore } from ${JSON.stringify(modules.admission)};
+		import { FakeGitHub, fakeIssue } from ${JSON.stringify(modules.fake)};
+		import { stageResult } from ${JSON.stringify(modules.result)};
+		import { EXE_DEV_PLATFORM } from ${JSON.stringify(modules.platform)};
+		const input = JSON.parse(process.env.L10_FRESH);
+		const { state, issues, phase, tree, contract } = input;
+		const github = new FakeGitHub();
+		const next = Math.max(8999, ...issues.flatMap((i) => i.comments.map((c) => c.id))) + 1;
+		const scratch = fakeIssue(1);
+		for (let id = 9000; id < next; id++) github.comment(scratch, "");
+		for (const issue of issues) github.add(issue);
+		const logs = [];
+		const launches = [];
+		const files = new Map(tree);
+		let now = phase.now;
+		const executor = {
+			async recover() {},
+			async reconciled() { return true; },
+			async preflight() { return phase.preflight; },
+			async spent(at) { return phase.spent[at.stage + "-" + at.attempt] ?? null; },
+			async output(at) { return at.stage === "specify" ? contract : null; },
+			async readAssessment() { return null; },
+			async checkout() {
+				return { kind: "ready", omitted: 0, checkout: { files: [...files.keys()].sort(), async read(path, cap) { const text = files.get(path); return text === undefined || text.length > cap ? null : text; } } };
+			},
+			async launch(at) {
+				launches.push(at.stage + ":" + at.attempt + ":" + at.remainingRunTokens);
+				if (at.stage !== "specify" || phase.launch === "unavailable") return { kind: "unavailable", stage: at.stage, reason: "sandbox_unavailable" };
+				if (phase.launch === "hang") {
+					at.progress(phase.usage);
+					return { kind: "started", done: new Promise(() => {}) };
+				}
+				return { kind: "started", done: Promise.resolve(stageResult({
+					version: 1, runId: at.runId, stage: at.stage, attempt: at.attempt,
+					outcome: { kind: "passed" }, settlement: { event: "agent_settled", aborted: false },
+					models: { requested: at.settings.model, observed: null }, fallback: null, refusal: null,
+					wallMs: 1, turns: 1,
+					usage: { total: phase.usage, parent: phase.usage, children: 0, byModel: {}, gateway: phase.usage, unreadChildren: 0 },
+					egress: null, stderr: [], output: null, assetsDigest: "a".repeat(64),
+					versions: { pi: "1.4.0", piHerdrAgents: "3.3.1", piHerdrPstack: "0.5.0" }, pricing: "unavailable",
+				})) };
+			},
+		};
+		const controller = new Orchestrator({
+			platform: EXE_DEV_PLATFORM,
+			exec: github.exec,
+			env: () => "/home/exedev",
+			repo: ${JSON.stringify(repo)},
+			store: fileAdmissionStore(state),
+			files: fileRunFiles(state),
+			executor,
+			clock: { now: () => now },
+			scope: null,
+			log: (event, fields) => logs.push({ event, fields }),
+		});
+		const reports = [];
+		for (let tick = 0; tick < phase.ticks; tick++) {
+			reports.push(await controller.tick());
+			await new Promise((done) => setImmediate(done));
+			now += 30000;
+		}
+		process.stdout.write(JSON.stringify({ reports, logs, calls: github.calls, launches, issues: [...github.issues.values()] }), () => process.exit(0));
+	`;
+
+	const result = spawnSync(
+		process.execPath,
+		[
+			"--experimental-strip-types",
+			"--no-warnings",
+			"--input-type=module",
+			"-e",
+			code,
+		],
+		{
+			encoding: "utf8",
+			maxBuffer: 64 * 1024 * 1024,
+			env: {
+				...process.env,
+				L10_FRESH: JSON.stringify({
+					state,
+					issues,
+					phase,
+					tree: [...CHECKOUT_TREE],
+					contract: CONTRACT_TEXT,
+				}),
+			},
+		},
+	);
+
+	assert.equal(result.status, 0, result.stderr);
+
+	return JSON.parse(result.stdout);
+}
+
+describe("L10 fresh-process recovery characterization", () => {
+	it("pins claims, captured identity and usage floors across fresh processes at claim, launch and completion", async () => {
+		const state = stateDir();
+		const files = fileRunFiles(state);
+		let issues = [14, 15, 16].map((issue) => labeled(issue));
+
+		const phases: {
+			name: string;
+			output: FreshOutput;
+			claims: ClaimRecord[];
+		}[] = [];
+
+		const run = async (name: string, phase: FreshPhase) => {
+			const output = freshProcess(state, issues, phase);
+
+			issues = output.issues;
+			phases.push({
+				name,
+				output,
+				claims: (await files.listClaims()).sort((a, b) => a.issue - b.issue),
+			});
+
+			return output;
+		};
+
+		const claimed = await run("claim", {
+			preflight: false,
+			launch: "unavailable",
+			usage: 0,
+			spent: {},
+			ticks: 1,
+			now: START,
+		});
+
+		const launched = await run("launch", {
+			preflight: true,
+			launch: "hang",
+			usage: 120,
+			spent: {},
+			ticks: 1,
+			now: START + 60_000,
+		});
+
+		const completed = await run("completion", {
+			preflight: true,
+			launch: "pass",
+			usage: 30,
+			spent: { "specify-1": 120 },
+			ticks: 3,
+			now: START + 120_000,
+		});
+
+		const reloaded = await run("reload", {
+			preflight: false,
+			launch: "unavailable",
+			usage: 0,
+			spent: { "specify-1": 120 },
+			ticks: 1,
+			now: START + 300_000,
+		});
+
+		assert.deepEqual(
+			claimed.reports[0]?.runs.map((run) => [run.issue, run.status]),
+			[
+				[14, "blocked"],
+				[15, "blocked"],
+			],
+		);
+		assert.deepEqual(claimed.reports[0]?.queued, [16]);
+		assert.deepEqual(
+			launched.reports[0]?.runs.map((run) => [run.issue, run.status]),
+			[
+				[14, "running"],
+				[15, "running"],
+			],
+		);
+
+		for (const issue of [14, 15]) {
+			const ids = phases.map(
+				({ claims }) => claims.find((claim) => claim.issue === issue)?.runId,
+			);
+
+			assert.deepEqual(ids, Array(phases.length).fill(runOf(issue)));
+		}
+
+		const usage = (output: FreshOutput) =>
+			output.reports.at(-1)?.runs.map((run) => [run.issue, run.usage]);
+
+		assert.deepEqual(usage(reloaded), usage(completed));
+		assert.ok(
+			(reloaded.reports[0]?.runs ?? []).every((run) => run.usage >= 120),
+		);
+
+		const text = JSON.stringify(phases).replaceAll(state, "<state>");
+
+		assert.equal(
+			digestOf(text),
+			"e3581eddd030f739c29b42d49608433314c89035cc3a15d0d913ba593c0cd81e",
+		);
 	});
 });

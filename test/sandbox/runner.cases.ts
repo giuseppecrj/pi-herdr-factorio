@@ -138,11 +138,11 @@ import { type Digest, REVIEW_MAX_TOKENS } from "../../src/core/run.ts";
 import { isGitSha, type ModelId } from "../../src/config/schema.ts";
 import { parseWorkflow } from "../../src/config/parse.ts";
 import { isRepoSlug } from "../../src/trust/platform.ts";
-import {
-	Orchestrator,
-	type StageExecutor,
-	type StageLaunchInput,
-} from "../../src/orchestrator.ts";
+import { Orchestrator } from "../../src/controller/orchestrator.ts";
+import type {
+	StageExecutor,
+	StageLaunchInput,
+} from "../../src/controller/launch.ts";
 import * as sandboxModule from "../../server/sandbox.ts";
 import {
 	collectPatch,

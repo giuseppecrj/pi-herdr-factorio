@@ -21,7 +21,7 @@ import type {
 	ClaimRecord,
 	LinkRead,
 	RunFiles,
-} from "../../src/orchestrator.ts";
+} from "../../src/controller/claims.ts";
 import {
 	type Answer,
 	type AnswersRecord,

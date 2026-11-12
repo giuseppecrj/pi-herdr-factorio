@@ -90,7 +90,8 @@ import {
 import { lstatSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import type { Log, StageExecutor } from "../../src/orchestrator.ts";
+import type { StageExecutor } from "../../src/controller/launch.ts";
+import type { Log } from "../../src/controller/orchestrator.ts";
 import { inert, renderSummary, withoutKey } from "../../src/contract/render.ts";
 import {
 	parseJson,
