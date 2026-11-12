@@ -41,14 +41,14 @@ import {
 	type TickReport,
 	type StageExecutor,
 } from "../src/orchestrator.ts";
+import { fileRunFiles } from "../server/controller/run-files.ts";
 import {
-	fileRunFiles,
 	serveLoop,
 	startMetricSnapshots,
-	startDurableUsage,
 	systemdNotify,
-	writeStatus,
-} from "../server/controller.ts";
+} from "../server/controller/serve-loop.ts";
+import { writeStatus } from "../server/controller/state.ts";
+import { startDurableUsage } from "../server/controller/terminal.ts";
 import { digestOf, runIdOf } from "../src/core/run.ts";
 import {
 	addRun,

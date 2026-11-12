@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import { EXIT, runCli } from "../server/cli.ts";
 import { checkReplayBundles } from "../server/cli/replay.ts";
-import { acquireLock, procTable } from "../server/controller.ts";
+import { acquireLock, procTable } from "../server/controller/lock.ts";
 import { manifestDigest } from "../server/sandbox/manifest.ts";
 import { parseWorkflow } from "../src/config/parse.ts";
 import { isGitSha } from "../src/config/schema.ts";

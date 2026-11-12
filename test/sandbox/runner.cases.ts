@@ -36,11 +36,9 @@ import type { Message, Model, Usage } from "@earendil-works/pi-ai";
 import { baseTestCommand, buildPrompt } from "../../src/candidate/build.ts";
 import { buildPrompt as baselineBuildPrompt } from "../fixtures/efficiency/baseline-build.ts";
 import { syncBuiltinESMExports } from "node:module";
-import {
-	fileRunFiles,
-	serveLoop,
-	storeFeedbackBatch,
-} from "../../server/controller.ts";
+import { storeFeedbackBatch } from "../../server/controller/candidate-port.ts";
+import { fileRunFiles } from "../../server/controller/run-files.ts";
+import { serveLoop } from "../../server/controller/serve-loop.ts";
 import { feedbackId } from "../../src/candidate/feedback.ts";
 import { fileAdmissionStore, admitTicket } from "../../src/trust/admission.ts";
 import type { RepairExecution } from "../../src/candidate/state.ts";

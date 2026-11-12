@@ -49,11 +49,77 @@
 				"from": ["src/replay.ts"],
 				"since": "L05"
 			},
-			"server/controller.ts": {
+			"server/controller/README.md": {
 				"owner": "host/controller",
 				"seats": ["code-review", "security-review", "simplify"],
-				"from": [],
-				"since": "L00"
+				"from": ["server/controller.ts"],
+				"since": "L11"
+			},
+			"server/controller/cadence.ts": {
+				"owner": "host/controller",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["server/controller.ts"],
+				"since": "L11"
+			},
+			"server/controller/candidate-port.ts": {
+				"owner": "host/controller",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["server/controller.ts"],
+				"since": "L11"
+			},
+			"server/controller/checkers.ts": {
+				"owner": "host/controller",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["server/controller.ts"],
+				"since": "L11"
+			},
+			"server/controller/checkout.ts": {
+				"owner": "host/controller",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["server/controller.ts"],
+				"since": "L11"
+			},
+			"server/controller/lock.ts": {
+				"owner": "host/controller",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["server/controller.ts"],
+				"since": "L11"
+			},
+			"server/controller/measurement.ts": {
+				"owner": "host/controller",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["server/controller.ts"],
+				"since": "L11"
+			},
+			"server/controller/outbox.ts": {
+				"owner": "host/controller",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["server/controller.ts"],
+				"since": "L11"
+			},
+			"server/controller/run-files.ts": {
+				"owner": "host/controller",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["server/controller.ts"],
+				"since": "L11"
+			},
+			"server/controller/serve-loop.ts": {
+				"owner": "host/controller",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["server/controller.ts"],
+				"since": "L11"
+			},
+			"server/controller/terminal.ts": {
+				"owner": "host/controller",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["server/controller.ts"],
+				"since": "L11"
+			},
+			"server/controller/validation-sweep.ts": {
+				"owner": "host/controller",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["server/controller.ts"],
+				"since": "L11"
 			},
 			"server/controller/state.ts": {
 				"owner": "host/controller",
@@ -626,14 +692,8 @@
 			}
 		},
 		"retired": {
-			"src/workflow.ts": {
-				"owner": "src/config",
-				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
-				"from": [],
-				"since": "L00"
-			},
-			"src/specify.ts": {
-				"owner": "src/contract",
+			"server/controller.ts": {
+				"owner": "host/controller",
 				"seats": ["code-review", "security-review", "simplify"],
 				"from": [],
 				"since": "L00"
@@ -802,6 +862,18 @@
 			},
 			"src/handoff.ts": {
 				"owner": "src/candidate",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/workflow.ts": {
+				"owner": "src/config",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/specify.ts": {
+				"owner": "src/contract",
 				"seats": ["code-review", "security-review", "simplify"],
 				"from": [],
 				"since": "L00"
@@ -1087,9 +1159,9 @@
 		{
 			"id": "cadence-repository-root",
 			"kind": "paths",
-			"reader": "server/controller.ts",
+			"reader": "server/controller/cadence.ts",
 			"tokens": {
-				"\"-C\", fileURLToPath(new URL(\"..\", import.meta.url)), \"diff\",": 1
+				"\"-C\", fileURLToPath(new URL(\"../..\", import.meta.url)), \"diff\",": 1
 			},
 			"targets": [
 				{
@@ -1097,7 +1169,7 @@
 					"type": "dir",
 					"via": {
 						"from": "reader",
-						"path": ".."
+						"path": "../.."
 					}
 				}
 			]
@@ -1105,10 +1177,10 @@
 		{
 			"id": "diagnosis-materializer",
 			"kind": "paths",
-			"reader": "server/controller.ts",
+			"reader": "server/controller/checkers.ts",
 			"tokens": {
 				"join(gate, \"server/gates.ts\")": 1,
-				"readFileSync(new URL(\"./gates.ts\", import.meta.url))": 1
+				"readFileSync(new URL(\"../gates.ts\", import.meta.url))": 1
 			},
 			"targets": [
 				{
@@ -1124,7 +1196,7 @@
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "./gates.ts"
+						"path": "../gates.ts"
 					}
 				}
 			]
@@ -1621,7 +1693,7 @@
 				"resolve(\"test/fixtures/oracle-corpus/patches\")": 1,
 				"for (const name of [\"freeze.mjs\", \"reporter.mjs\", \"scan-rules.json\"])": 1,
 				"`HEAD:.github/factory/gates/${name}`": 1,
-				"\"src/candidate/diagnosis.ts\", \"server/gates.ts\", \"server/controller.ts\", ])": 1
+				"\"src/candidate/diagnosis.ts\", \"server/gates.ts\", \"server/controller/checkers.ts\", \"server/controller/validation-sweep.ts\", ])": 1
 			},
 			"targets": [
 				{
@@ -1653,7 +1725,11 @@
 					"type": "file"
 				},
 				{
-					"path": "server/controller.ts",
+					"path": "server/controller/checkers.ts",
+					"type": "file"
+				},
+				{
+					"path": "server/controller/validation-sweep.ts",
 					"type": "file"
 				}
 			]
@@ -1921,9 +1997,9 @@
 			"tokens": {
 				"new URL(\"./fixtures/metrics/runs-2026-11-08.jsonl\", import.meta.url)": 1,
 				"new URL(\"./ledger-real-git.ts\", import.meta.url)": 1,
-				"new URL(\"../server/controller.ts\", import.meta.url)": 1,
 				"new URL(\"../src/ledger/schema.ts\", import.meta.url)": 1,
-				"new URL(\"../src/trust/platform.ts\", import.meta.url)": 1
+				"new URL(\"../src/trust/platform.ts\", import.meta.url)": 1,
+				"new URL(\"../server/controller/outbox.ts\", import.meta.url)": 1
 			},
 			"targets": [
 				{
@@ -1943,11 +2019,11 @@
 					}
 				},
 				{
-					"path": "server/controller.ts",
+					"path": "server/controller/outbox.ts",
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../server/controller.ts"
+						"path": "../server/controller/outbox.ts"
 					}
 				},
 				{
@@ -2010,7 +2086,7 @@
 			"reader": "test/orchestrator.test.ts",
 			"tokens": {
 				"new URL(\"../server/factory.service\", import.meta.url)": 1,
-				"new URL(\"../server/controller.ts\", import.meta.url)": 1,
+				"new URL(\"../server/controller/lock.ts\", import.meta.url)": 1,
 				"\"../.pi/skills/verify-factory/features/sandbox-stage.md\"": 1,
 				"\"./fixtures/feedback/github-review.json\"": 2
 			},
@@ -2024,11 +2100,11 @@
 					}
 				},
 				{
-					"path": "server/controller.ts",
+					"path": "server/controller/lock.ts",
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../server/controller.ts"
+						"path": "../server/controller/lock.ts"
 					}
 				},
 				{

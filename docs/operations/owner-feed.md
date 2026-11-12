@@ -42,11 +42,11 @@ The VM figure comes from the independent verifier's run of ten CLI reads on the 
 
 The bridge must run as the Unix user that owns the state directory. Most of the feed's file reads ignore a file that is a symlink, is owned by another user, or is readable by group or others. Those readers are `localJson` (`src/views/feed.ts:102`, which checks every path part below the state directory) and `privatePath` and `privateJson` (`src/views/attention.ts:131` and `src/views/attention.ts:145`, which check the state directory, `claims/` and each file they open). These readers do not check:
 
-- `status.json` through `readStatus` (`server/controller/state.ts:147`), which supplies the thresholds, the unreadable list and `controller.lastTick`. It follows symlinks and ignores owner and mode.
+- `status.json` through `readStatus` (`server/controller/state.ts:63`), which supplies the thresholds, the unreadable list and `controller.lastTick`. It follows symlinks and ignores owner and mode.
 - The admission snapshot that supplies `title` (`src/trust/admission.ts:490` to `src/trust/admission.ts:513`). It uses a plain `readFile`.
 - The local switch (`src/trust/admission.ts:524`). It checks that the state directory belongs to the user and is not group or other writable, and it does not check the `disabled` file's owner.
-- The controller lock, which sets `controller.state`. `readOwnerHeader` in `server/cli/owner-feed.ts` reads it through `readLock` (`server/controller/state.ts:114`).
-- The stored verdict (`readStoredVerdict`, `server/controller/state.ts:138`, through `regularBytes`, `src/contract/artifacts.ts:232`). It rejects a symlink and a group- or other-accessible file, and does not check the owner.
+- The controller lock, which sets `controller.state`. `readOwnerHeader` in `server/cli/owner-feed.ts` reads it through `readLock` (`server/controller/state.ts:82`).
+- The stored verdict (`readStoredVerdict`, `server/controller/state.ts:72`, through `regularBytes`, `src/contract/artifacts.ts:232`). It rejects a symlink and a group- or other-accessible file, and does not check the owner.
 
 A bridge running as another user usually gets an unavailable feed, not an error, because the state directory itself fails the check. This PR does not harden the unchecked readers.
 

@@ -16,7 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
-import { fileRunFiles } from "../server/controller.ts";
+import { fileRunFiles } from "../server/controller/run-files.ts";
 import { bwrapArgv } from "../server/sandbox/bwrap.ts";
 import { isGitSha } from "../src/config/schema.ts";
 import {

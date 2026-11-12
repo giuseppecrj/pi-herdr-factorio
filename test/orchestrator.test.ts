@@ -45,21 +45,24 @@ import {
 } from "../src/candidate/build.ts";
 import {
 	acquireLock,
-	fileLedgerOutbox,
-	fileRunFiles,
-	pinVerification,
-	controllerCandidatePort,
-	controllerBaseChecker,
-	WORKFLOW_READ_LIMIT,
 	type ProcessTable,
 	parseStartTime,
+} from "../server/controller/lock.ts";
+import {
+	fileLedgerOutbox,
 	readLedgerBacklog,
-	readRunCharges,
-	serveLoop,
-	writeStatus,
+} from "../server/controller/outbox.ts";
+import { fileRunFiles } from "../server/controller/run-files.ts";
+import { pinVerification, writeStatus } from "../server/controller/state.ts";
+import {
+	controllerCandidatePort,
+	WORKFLOW_READ_LIMIT,
 	observeFeedback,
 	storeFeedbackBatch,
-} from "../server/controller.ts";
+} from "../server/controller/candidate-port.ts";
+import { controllerBaseChecker } from "../server/controller/checkers.ts";
+import { readRunCharges } from "../server/controller/terminal.ts";
+import { serveLoop } from "../server/controller/serve-loop.ts";
 import { HOLDER_FILE } from "../server/controller/state.ts";
 import { GitHubTicketAdapter } from "../src/github/adapter.ts";
 import {
@@ -10246,7 +10249,8 @@ describe("acquireLock", () => {
 	});
 
 	it("lets exactly one of two controller processes started together win, across 10 trials", async () => {
-		const controller = new URL("../server/controller.ts", import.meta.url).href;
+		const controller = new URL("../server/controller/lock.ts", import.meta.url)
+			.href;
 
 		const script = `
 			const { acquireLock, procTable } = await import(${JSON.stringify(controller)});

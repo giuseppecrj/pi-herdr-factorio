@@ -38,7 +38,7 @@ import {
 	withUmask,
 } from "./helpers.ts";
 import { TRUSTED_RUN_CAP, TRUSTED_WORKFLOW } from "./fake-ticket-adapter.ts";
-import { fileRunFiles } from "../server/controller.ts";
+import { fileRunFiles } from "../server/controller/run-files.ts";
 import type { AnswersDigest } from "../src/contract/contract.ts";
 import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 import { noPlatformFile } from "./helpers.ts";

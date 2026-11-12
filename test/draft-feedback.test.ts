@@ -10,7 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
-import { controllerBaseChecker } from "../server/controller.ts";
+import { controllerBaseChecker } from "../server/controller/checkers.ts";
 import { parseDraftDetails } from "../server/gates.ts";
 import {
 	assessBase,

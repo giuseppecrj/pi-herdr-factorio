@@ -53,7 +53,7 @@ import {
 	BOT_LOGIN,
 } from "./fake-ticket-adapter.ts";
 import { classifyFeedback } from "../src/candidate/feedback.ts";
-import { storeFeedbackBatch } from "../server/controller.ts";
+import { storeFeedbackBatch } from "../server/controller/candidate-port.ts";
 import { type FamilyInput, familyLabel } from "../src/core/models.ts";
 import { type ReviewReceipt, reviewR8 } from "../src/candidate/review.ts";
 import {
@@ -66,7 +66,7 @@ import type { JsonValue } from "../src/core/json.ts";
 import { isGitSha } from "../src/config/schema.ts";
 import { isRepoSlug } from "../src/trust/platform.ts";
 import { storePatch, type PatchReceipt } from "../src/candidate/build.ts";
-import { controllerCandidatePort } from "../server/controller.ts";
+import { controllerCandidatePort } from "../server/controller/candidate-port.ts";
 import { sandboxExecutor } from "../server/sandbox.ts";
 import type { Log } from "../src/orchestrator.ts";
 import { fileAdmissionStore } from "../src/trust/admission.ts";

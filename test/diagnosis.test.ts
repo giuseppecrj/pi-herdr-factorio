@@ -72,13 +72,15 @@ import { legacyMaterialize } from "./fixtures/oracle-corpus/patches/legacy-mater
 import {
 	controllerBaseChecker,
 	controllerDiagnosis,
-	checkoutWorkspace,
-	controllerValidator,
-	fileRunFiles,
-	ghTarball,
 	type DiagnosisFacts,
+} from "../server/controller/checkers.ts";
+import {
+	checkoutWorkspace,
+	ghTarball,
 	type TarballFetch,
-} from "../server/controller.ts";
+} from "../server/controller/checkout.ts";
+import { controllerValidator } from "../server/controller/validation-sweep.ts";
+import { fileRunFiles } from "../server/controller/run-files.ts";
 import {
 	dispatchNonce,
 	parseValidationState,
@@ -1818,7 +1820,8 @@ test("legacy materializer fixture stays out of production imports", () => {
 	for (const file of [
 		"src/candidate/diagnosis.ts",
 		"server/gates.ts",
-		"server/controller.ts",
+		"server/controller/checkers.ts",
+		"server/controller/validation-sweep.ts",
 	])
 		assert.doesNotMatch(
 			readFileSync(file, "utf8"),

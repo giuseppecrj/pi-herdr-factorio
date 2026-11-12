@@ -60,12 +60,12 @@ import {
 	prepareRepairTree,
 	publicationTree,
 } from "../src/candidate/build.ts";
+import { fileRunFiles } from "../server/controller/run-files.ts";
 import {
 	controllerValidator,
 	sweepValidation,
-	fileRunFiles,
 	downloadGateReceipt,
-} from "../server/controller.ts";
+} from "../server/controller/validation-sweep.ts";
 import {
 	type ValidationState,
 	readFeedbackBytes,
@@ -80,7 +80,7 @@ import {
 	storedAssessment,
 } from "./helpers.ts";
 import { classifyFeedback } from "../src/candidate/feedback.ts";
-import { storeFeedbackBatch } from "../server/controller.ts";
+import { storeFeedbackBatch } from "../server/controller/candidate-port.ts";
 import { sandboxExecutor } from "../server/sandbox.ts";
 import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 
@@ -1180,7 +1180,7 @@ describe("fix round 1 recovery regressions", () => {
 			"--input-type=module",
 			"-e",
 			`
-			import {controllerValidator} from './server/controller.ts';
+			import {controllerValidator} from './server/controller/validation-sweep.ts';
 			import {EXE_DEV_PLATFORM} from './src/trust/platform.ts';
 			const input = JSON.parse(process.argv[1]);
 			const exec = async (_, args) => {

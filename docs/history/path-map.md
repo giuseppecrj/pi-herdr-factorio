@@ -67,5 +67,17 @@ Each row is bound to the pull request that made the move. Its squash commit on `
 | L08 | #756 | `src/specify.ts` | `src/contract/render.ts` | Inert comment text, keys and key readers, question, contract, acceptance and build summaries |
 | L08 | #756 | `src/specify.ts` | `src/contract/prompt.ts` | Specify tools and skills, source selection, excerpts, source facts, tree and named files, nonce framing and specify, review and revision prompts |
 | L08 | #756 | `src/candidate/diagnosis.ts` | `src/contract/acceptance.ts` | `AcceptanceBinding` and `parseAcceptanceBinding`; base and candidate policy stay in diagnosis |
+| L11 | #758 | `server/controller.ts` | `server/controller/lock.ts` | `LockAcquire`, `ProcessTable`, `parseStartTime`, `procTable`, `ControllerLock` and `acquireLock` |
+| L11 | #758 | `server/controller.ts` | `server/controller/checkout.ts` | `TarballFetch`, `ghTarball`, `TarEntry`, `TarRead`, `readTarball`, `checkoutOf`, `checkoutWorkspace`, `checkoutTree` and `checkoutBuildWorkspace` |
+| L11 | #758 | `server/controller.ts` | `server/controller/checkers.ts` | `controllerDraftChecker`, `controllerBaseChecker`, `DiagnosisFacts`, `DiagnosisRequest`, `storedBaseReceipt` and `controllerDiagnosis` |
+| L11 | #758 | `server/controller.ts` | `server/controller/run-files.ts` | `parseAnswers`, `fileRunFiles` and their answer/link parsers |
+| L11 | #758 | `server/controller.ts` | `server/controller/state.ts` | Private file writes, claim parsing, `fileRunAccounting`, `VERIFICATION_FILE`, `VerificationPin`, `pinVerification`, `writeStatus` and stored assessment helpers. Combined with L05's existing read-only state reader |
+| L11 | #758 | `server/controller.ts` | `server/controller/outbox.ts` | `fileLedgerOutbox`, `readLedgerBacklog`, `pumpLedgerOutbox` and ledger timestamp validation |
+| L11 | #758 | `server/controller.ts` | `server/controller/terminal.ts` | `readTerminalEvidence`, `readRunCharges`, `readDurableAccounting`, `durableUsageOf` and `startDurableUsage` |
+| L11 | #758 | `server/controller.ts` | `server/controller/measurement.ts` | `SCORE_PUBLISH_SLICE_MS`, `pumpScoreOutbox`, `controllerMeasure`, `controllerMeasurements`, `measurementCharges` and their score publication helpers |
+| L11 | #758 | `server/controller.ts` | `server/controller/cadence.ts` | `runImprovementTrigger`, `publishCadenceProposals`, `controllerCadence` and their switch/proposal helpers |
+| L11 | #758 | `server/controller.ts` | `server/controller/validation-sweep.ts` | `controllerValidator`, `ownerValidator`, `controllerReport`, `sweepValidation`, `GateReceiptSource`, `downloadGateReceipt` and publication cleanup |
+| L11 | #758 | `server/controller.ts` | `server/controller/candidate-port.ts` | `WORKFLOW_READ_LIMIT`, `controllerCandidatePort`, `storeFeedbackBatch`, `observeFeedback`, `sweepMergedFeedback` and their feedback persistence/notice helpers |
+| L11 | #758 | `server/controller.ts` | `server/controller/serve-loop.ts` | `logLine`, `lineLog`, `Sleep`, `systemdNotify`, `startMetricSnapshots` and `serveLoop` |
 
 L00 moves no files.

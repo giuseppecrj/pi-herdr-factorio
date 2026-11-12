@@ -60,7 +60,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { fileRunFiles } from "../server/controller.ts";
+import { fileRunFiles } from "../server/controller/run-files.ts";
 import { sandboxExecutor } from "../server/sandbox.ts";
 import {
 	collectPatch,
