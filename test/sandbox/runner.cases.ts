@@ -468,6 +468,190 @@ function input(
 	};
 }
 
+describe("L12 stage execution contract", () => {
+	it("keeps the receipt pending until owned child usage settles", async () => {
+		let finishChild: (
+			usage: Awaited<ReturnType<StageHost["readChildUsage"]>>,
+		) => void = () => {};
+
+		let finishStop = () => {};
+
+		const child = new Promise<Awaited<ReturnType<StageHost["readChildUsage"]>>>(
+			(resolve) => {
+				finishChild = resolve;
+			},
+		);
+
+		const stopped = new Promise<void>((resolve) => {
+			finishStop = resolve;
+		});
+
+		const h = harness([settledChild(11)], {
+			childUsage: () => child,
+			stopSandbox: async () => finishStop(),
+			cleanupReserveMs: 2000,
+		});
+
+		const done = runStage(input(), h.host);
+		await stopped;
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.deepEqual(h.receipts, []);
+		assert.ok(!h.timeline.includes("shutdown"));
+		finishChild({ total: 7, byModel: new Map([["openai/child", 7]]) });
+		const result = await done;
+		assert.equal(result.kind, "passed");
+		assert.deepEqual(result.receipt.usage, {
+			total: 18,
+			parent: 11,
+			children: 7,
+			byModel: { "openai/gpt-6.1-sol": 11, "openai/child": 7 },
+			gateway: 0,
+			unreadChildren: 0,
+		});
+		assert.equal(result.receipt.childSummaries?.[0]?.tokens, 7);
+		assert.deepEqual(h.stops, [0]);
+		assert.equal(h.timeline.at(-1), "shutdown");
+	});
+
+	it("captures the answering fallback identity after primary cleanup", async () => {
+		const h = harness(
+			[
+				replayer(fixture("exp8-incomplete_content_filter.jsonl")),
+				replayer([
+					started("x"),
+					{ type: "turn_start" },
+					assistant({ model: "gpt-6.1-terra", tokens: 17 }),
+					{ type: "agent_settled", aborted: false },
+				]),
+			],
+			{ now: () => 1000 },
+		);
+
+		const result = await runStage(
+			input({}, { fallback: model("openai/gpt-6.1-terra") }),
+			h.host,
+		);
+
+		assert.equal(result.kind, "passed");
+		assert.deepEqual(h.launches, [
+			"openai/gpt-6.1-sol",
+			"openai/gpt-6.1-terra",
+		]);
+		assert.deepEqual(h.stops, [0, 1]);
+		assert.equal(result.receipt.models.requested, "openai/gpt-6.1-sol");
+		assert.equal(result.receipt.fallback?.requested, "openai/gpt-6.1-terra");
+		assert.equal(result.receipt.fallback?.observed, "openai/gpt-6.1-terra");
+		assert.equal(result.receipt.refusal, "incomplete_content_filter");
+		assert.equal(result.receipt.wallMs, 0);
+		assert.deepEqual(
+			result.receipt.stderr.map((entry) => entry.session),
+			[0, 1],
+		);
+		assert.ok(
+			h.timeline.indexOf("stop:0") < h.timeline.lastIndexOf("pi:prompt"),
+		);
+		assert.equal(h.timeline.at(-1), "shutdown");
+	});
+
+	it("restores cumulative usage and refuses exhausted limits without launching", async () => {
+		const h = harness([]);
+		h.host.readUsage = () => ({
+			version: 1,
+			runId: RUN,
+			stage: "specify",
+			attempt: 1,
+			startedAt: 1000,
+			deadline: 61000,
+			turns: 2,
+			usage: {
+				total: 40,
+				parent: 40,
+				children: 0,
+				byModel: { "openai/gpt-6.1-sol": 40 },
+				gateway: 40,
+				unreadChildren: 0,
+			},
+		});
+		const result = await runStage(input({}, { maxTokens: 40 }), h.host);
+		assert.equal(result.kind === "budget_exhausted" && result.cap, "tokens");
+		assert.equal(result.usage, 40);
+		assert.equal(result.receipt.turns, 2);
+		assert.deepEqual(h.launches, []);
+		assert.deepEqual(h.tables, []);
+		assert.deepEqual(h.stops, []);
+		assert.equal(result.receipt.egress, null);
+	});
+
+	it("fails a receipt write only after stopping the session and gateway", async () => {
+		const h = harness(
+			[
+				replayer([
+					started("x"),
+					{ type: "turn_start" },
+					assistant(),
+					{ type: "agent_settled", aborted: false },
+				]),
+			],
+			{
+				writeReceipt: async () => {
+					h.timeline.push("receipt:failed");
+
+					return false;
+				},
+			},
+		);
+
+		const result = await runStage(input(), h.host);
+		assert.equal(result.kind === "failed" && result.exit, "crashed");
+		assert.deepEqual(h.timeline.slice(-3), [
+			"stop:0",
+			"shutdown",
+			"receipt:failed",
+		]);
+		assert.equal(result.usage, 10);
+	});
+
+	it("closes the gate before abort cleanup and writes its receipt last", async () => {
+		const abort = new AbortController();
+
+		const h = harness(
+			[
+				(command, pi) => {
+					if (command.type === "prompt") abort.abort();
+
+					if (command.type === "abort")
+						pi.emit({ type: "agent_settled", aborted: true });
+				},
+			],
+			{
+				writeReceipt: async (receipt) => {
+					h.receipts.push(receipt);
+					h.timeline.push("receipt");
+
+					return true;
+				},
+			},
+		);
+
+		const result = await runStage(input({ signal: abort.signal }), h.host);
+		assert.equal(result.kind === "failed" && result.exit, "aborted");
+		assert.deepEqual(h.timeline, [
+			"pi:prompt",
+			"gate:abort",
+			"pi:abort",
+			"drain",
+			"stop:0",
+			"shutdown",
+			"receipt",
+		]);
+		assert.deepEqual(result.receipt.settlement, {
+			event: "agent_settled",
+			aborted: true,
+		});
+		assert.deepEqual(h.outputs, []);
+	});
+});
+
 describe("accept same-session draft checks", () => {
 	const feedback = {
 		run: 1 as const,
