@@ -4339,7 +4339,7 @@
 		{
 			"id": "test-reads-sandbox-gateway",
 			"kind": "paths",
-			"reader": "test/host/sandbox/gateway.test.ts",
+			"reader": "test/host/gateway/gateway.test.ts",
 			"tokens": {
 				"new URL(\"./http-fixtures.ts\", import.meta.url)": 1,
 				"\"../../sandbox/fixtures/pi-1.4.0-anthropic-accept-request.json\"": 1,
@@ -4347,7 +4347,7 @@
 			},
 			"targets": [
 				{
-					"path": "test/host/sandbox/http-fixtures.ts",
+					"path": "test/host/gateway/http-fixtures.ts",
 					"type": "file",
 					"via": {
 						"from": "reader",

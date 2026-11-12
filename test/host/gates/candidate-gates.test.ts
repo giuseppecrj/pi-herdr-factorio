@@ -1335,22 +1335,34 @@ test("new main sandbox cases are discovered through the main aggregator", async 
 	assert.equal(r.baselineCounts["test/host/sandbox/new.test.ts"], 1);
 });
 
-for (const [testGlobs, reason] of [
-	[[], "invalid_gate_manifest"],
-	[["test/src/example/value.test.ts"], "invalid_gate_manifest"],
-	[["../*.test.ts"], "invalid_gate_manifest"],
-	[["test/*.test.ts", "test/*.test.ts"], "invalid_gate_manifest"],
-	[["test/host/**/*.test.ts"], "missing_tests"],
+for (const [cases, reason] of [
+	[[[]], "invalid_gate_manifest"],
+	[
+		[
+			["test/src/example/value.test.ts"],
+			["test/*.test.ts"],
+			["test/sandbox/*.cases.ts"],
+		],
+		"invalid_gate_manifest",
+	],
+	[[["../*.test.ts"]], "invalid_gate_manifest"],
+	[
+		[["test/src/**/*.test.ts", "test/src/**/*.test.ts"]],
+		"invalid_gate_manifest",
+	],
+	[[["test/host/**/*.test.ts"]], "missing_tests"],
 ] as const) {
-	test(`invalid or empty main test globs fail closed: ${JSON.stringify(testGlobs).replaceAll("test/src/example/value.test.ts", "test/value.test.ts").replaceAll("test/src/**/*.test.ts", "test/*.test.ts").replaceAll("test/host/**/*.test.ts", "test/sandbox/*.cases.ts")}`, async (t) => {
-		const f = repo(t);
-		const path = ".github/factory/gates/gates.json";
-		const manifest = JSON.parse(readFileSync(join(f.root, path), "utf8"));
-		f.put(path, JSON.stringify({ ...manifest, testGlobs }));
-		const gateSha = f.commit();
-		const r = await checkCandidate({ ...gateInput(f, gateSha), gateSha });
-		assert.equal(r.status, "incomplete");
-		assert.equal(r.reason, reason);
+	test(`invalid or empty main test globs fail closed: ${JSON.stringify(cases[0])}`, async (t) => {
+		for (const testGlobs of cases) {
+			const f = repo(t);
+			const path = ".github/factory/gates/gates.json";
+			const manifest = JSON.parse(readFileSync(join(f.root, path), "utf8"));
+			f.put(path, JSON.stringify({ ...manifest, testGlobs }));
+			const gateSha = f.commit();
+			const r = await checkCandidate({ ...gateInput(f, gateSha), gateSha });
+			assert.equal(r.status, "incomplete", JSON.stringify(testGlobs));
+			assert.equal(r.reason, reason, JSON.stringify(testGlobs));
+		}
 	});
 }
 

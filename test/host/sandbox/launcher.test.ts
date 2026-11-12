@@ -76,8 +76,8 @@ import type { Digest } from "../../../src/core/run.ts";
 import type { ExecResult } from "../../../src/github/exec.ts";
 import type { LogFields } from "../../../src/controller/orchestrator.ts";
 import { EXE_DEV_PLATFORM } from "../../../src/trust/platform.ts";
-import { closeHttpServer } from "./http-fixtures.ts";
-import { modelTable } from "./route-fixtures.ts";
+import { closeHttpServer } from "../gateway/http-fixtures.ts";
+import { modelTable } from "../gateway/route-fixtures.ts";
 
 const STATE = "/home/exedev/factory-state";
 const RUN = "a".repeat(64);

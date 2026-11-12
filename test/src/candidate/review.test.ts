@@ -1647,7 +1647,7 @@ type Line = {
 import {
 	assertReaderParity,
 	SETTLEMENT_FIXTURES,
-} from "../../host/sandbox/settlement-fixtures.ts";
+} from "../../host/gateway/settlement-fixtures.ts";
 
 function journal(...lines: Line[]): string {
 	const text = lines

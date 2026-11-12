@@ -21,7 +21,7 @@ import {
 	assertNoStrays,
 	closeHttpServer,
 	startEchoFixture,
-} from "./http-fixtures.ts";
+} from "../gateway/http-fixtures.ts";
 import { runHeldoutBase } from "../../../host/gates/base.ts";
 import { assessBase } from "../../../src/candidate/diagnosis.ts";
 import {
@@ -102,7 +102,7 @@ import {
 	assertReaderParity,
 	legacyUsability,
 	SETTLEMENT_FIXTURES,
-} from "./settlement-fixtures.ts";
+} from "../gateway/settlement-fixtures.ts";
 import type {
 	CloseReason,
 	ControlEvent,

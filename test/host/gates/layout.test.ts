@@ -996,7 +996,7 @@ describe("layout guard", () => {
 			);
 			appendFileSync(
 				join(root, "test/host/sandbox/registry.test.ts"),
-				'import "./routes.test.ts";\n',
+				'import "../gateway/routes.test.ts";\n',
 			);
 			write(root, "test/acceptance/999/checks/held.test.ts", "");
 			write(root, "test/fixtures/payload/x.test.ts", "");
@@ -1028,7 +1028,7 @@ describe("layout guard", () => {
 			);
 			includesMatch(
 				problems,
-				/^discovery: test\/host\/sandbox\/routes\.test\.ts is imported by discovered test test\/host\/sandbox\/registry\.test\.ts; discover it directly once instead$/,
+				/^discovery: test\/host\/gateway\/routes\.test\.ts is imported by discovered test test\/host\/sandbox\/registry\.test\.ts; discover it directly once instead$/,
 			);
 			assert.ok(
 				!problems.some((p) => /acceptance|fixtures/.test(p)),

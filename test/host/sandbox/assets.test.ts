@@ -13,7 +13,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
-import { closeHttpServer } from "./http-fixtures.ts";
+import { closeHttpServer } from "../gateway/http-fixtures.ts";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

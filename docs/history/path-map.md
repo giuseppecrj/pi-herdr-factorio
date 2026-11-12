@@ -94,7 +94,6 @@ Each row is bound to the pull request that made the move. Its squash commit on `
 | L12 | #760 | `server/sandbox.ts` | `server/sandbox/visible-tests.ts` | `VISIBLE_LIMIT_MS`, `visibleBudget` and `runVisibleTests` |
 | L12 | #760 | `server/sandbox.ts` | `server/sandbox/review.ts` | `runReview`, `prepareCandidateReview`, `candidateReviewInputs`, `readCapturedReview`, `reviewInputRecord`, `reviewVerdict` and `capturedReviewText` |
 | L12 | #760 | `server/sandbox.ts` | `server/sandbox/specify.ts` | `runSpecify`, `KeptSession` and `keptSession` |
-
 | L13 | #761 | `server/README.md` | `host/README.md` | The whole file |
 | L13 | #761 | `server/cli.ts` | `host/cli/cadence.ts` | `runCadenceCli` |
 | L13 | #761 | `server/cli.ts` | `host/cli/index.ts` | `ISSUE_NUMBER`, `Values`, `isControllerCommand`, `issuesOf`, `parseController`, `parse`, `parseCliArgs`, `controllerView`, `runCli` |
@@ -173,7 +172,6 @@ Each row is bound to the pull request that made the move. Its squash commit on `
 | L13 | #761 | `server/viewer/manifest.webmanifest` | `host/viewer/manifest.webmanifest` | The whole file |
 | L13 | #761 | `server/viewer/render.ts` | `host/viewer/render.ts` | The whole file |
 | L13 | #761 | `server/viewer/style.css` | `host/viewer/style.css` | The whole file |
-
 | L14 | #762 | `test/admission.test.ts` | `test/src/trust/admission.test.ts` | The whole file, with relative imports and readers relocated |
 | L14 | #762 | `test/authorization-parity.test.ts` | `test/src/trust/authorization-parity.test.ts` | The whole file, with relative imports and readers relocated |
 | L14 | #762 | `test/markers.test.ts` | `test/src/trust/markers.test.ts` | The whole file, with relative imports and readers relocated |
@@ -223,17 +221,17 @@ Each row is bound to the pull request that made the move. Its squash commit on `
 | L14 | #762 | `test/pipeline.test.ts` | `test/src/controller/pipeline.test.ts` | The whole file, with relative imports and readers relocated |
 | L14 | #762 | `test/status-driver.test.ts` | `test/host/cli/status-driver.test.ts` | The whole file, with relative imports and readers relocated |
 | L14 | #762 | `test/sandbox/assets.cases.ts` | `test/host/sandbox/assets.test.ts` | The whole file, with relative imports and readers relocated |
-| L14 | #762 | `test/sandbox/audit.cases.ts` | `test/host/sandbox/audit.test.ts` | The whole file, with relative imports and readers relocated |
-| L14 | #762 | `test/sandbox/credentials.cases.ts` | `test/host/sandbox/credentials.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/sandbox/audit.cases.ts` | `test/host/gateway/audit.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/sandbox/credentials.cases.ts` | `test/host/gateway/credentials.test.ts` | The whole file, with relative imports and readers relocated |
 | L14 | #762 | `test/sandbox/fake-pi.ts` | `test/host/sandbox/fake-pi.ts` | The whole file, with relative imports and readers relocated |
-| L14 | #762 | `test/sandbox/gateway.cases.ts` | `test/host/sandbox/gateway.test.ts` | The whole file, with relative imports and readers relocated |
-| L14 | #762 | `test/sandbox/http-fixtures.ts` | `test/host/sandbox/http-fixtures.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/sandbox/gateway.cases.ts` | `test/host/gateway/gateway.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/sandbox/http-fixtures.ts` | `test/host/gateway/http-fixtures.ts` | The whole file, with relative imports and readers relocated |
 | L14 | #762 | `test/sandbox/launcher.cases.ts` | `test/host/sandbox/launcher.test.ts` | The whole file, with relative imports and readers relocated |
-| L14 | #762 | `test/sandbox/policy.cases.ts` | `test/host/sandbox/policy.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/sandbox/policy.cases.ts` | `test/host/gateway/policy.test.ts` | The whole file, with relative imports and readers relocated |
 | L14 | #762 | `test/sandbox/receipt-exit.ts` | `test/host/sandbox/receipt-exit.ts` | The whole file, with relative imports and readers relocated |
-| L14 | #762 | `test/sandbox/routes.cases.ts` | `test/host/sandbox/routes.test.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/sandbox/routes.cases.ts` | `test/host/gateway/routes.test.ts` | The whole file, with relative imports and readers relocated |
 | L14 | #762 | `test/sandbox/runner.cases.ts` | `test/host/sandbox/runner.test.ts` | The whole file, with relative imports and readers relocated |
-| L14 | #762 | `test/sandbox/settlement-fixtures.ts` | `test/host/sandbox/settlement-fixtures.ts` | The whole file, with relative imports and readers relocated |
+| L14 | #762 | `test/sandbox/settlement-fixtures.ts` | `test/host/gateway/settlement-fixtures.ts` | The whole file, with relative imports and readers relocated |
 | L14 | #762 | `test/native-scope.ts` | `test/host/sandbox/native-scope.ts` | The whole file, with relative imports and readers relocated |
 | L14 | #762 | `test/orchestrator.test.ts` | `test/src/controller/orchestrator-dispatch.test.ts` | Existing describe groups: `backoffMs`; `Orchestrator claims and dispatch`; `Orchestrator switches and per-tick reads`; `Orchestrator markers`; `Orchestrator restart recovery`; `Orchestrator retries and stalls` |
 | L14 | #762 | `test/orchestrator.test.ts` | `test/src/controller/orchestrator-base.test.ts` | Existing describe groups: `Orchestrator base qualification`; `Orchestrator stage results` |
@@ -250,9 +248,8 @@ Each row is bound to the pull request that made the move. Its squash commit on `
 | L14 | #762 | `test/orchestrator.test.ts` | `test/src/controller/orchestrator-ledger.test.ts` | Existing describe groups: `ledger outbox enrollment`; `terminal rows keep the real cause` |
 | L14 | #762 | `test/orchestrator.test.ts` | `test/src/controller/orchestrator-characterization.test.ts` | Existing describe groups: `L10 scheduling characterization`; `L10 fresh-process recovery characterization` |
 | L14 | #762 | `test/orchestrator.test.ts` | `test/src/controller/orchestrator-fixtures.ts` | Shared fixtures, helpers, types and temporary-state cleanup; no test registrations |
-| L14 | #762 | `test/sandbox.test.ts` | `test/host/sandbox/*.test.ts` | Aggregator deleted; its eight suites are directly discovered, not re-exported |
-
-| L14 | #762 | `test/sandbox/routes.cases.ts` | `test/host/sandbox/route-fixtures.ts` | `modelTable` and `anthropicTable`; shared fixtures register no tests |
-| L14 | #762 | `test/sandbox/credentials.cases.ts` | `test/host/sandbox/credential-fixtures.ts` | `ECHO_SECRET`, `LINEAR_CEILING`, `credentialedRoute`, `id` and `routeIdOf`; shared fixtures register no tests |
+| L14 | #762 | `test/sandbox.test.ts` | `test/host/{sandbox,gateway}/*.test.ts` | Aggregator deleted; its eight suites are directly discovered, not re-exported |
+| L14 | #762 | `test/sandbox/routes.cases.ts` | `test/host/gateway/route-fixtures.ts` | `modelTable` and `anthropicTable`; shared fixtures register no tests |
+| L14 | #762 | `test/sandbox/credentials.cases.ts` | `test/host/gateway/credential-fixtures.ts` | `ECHO_SECRET`, `LINEAR_CEILING`, `credentialedRoute`, `id` and `routeIdOf`; shared fixtures register no tests |
 
 L00 moves no files.
