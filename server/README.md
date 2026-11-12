@@ -7,8 +7,12 @@
 | `cli.ts` | Every `node server/cli.ts <verb>` command. `docs/operations/factory-cli.md` documents the verbs. | `host/cli` |
 | `cli/` | Host collectors for the read verbs: `owner-feed.ts` and `measurement.ts` read controller state and stage receipts for the views in `src/views/feed.ts` and `src/views/explain.ts`, and `replay.ts` checks installed asset bundles. Verb dispatch stays in `cli.ts`. | `host/cli` |
 | `controller/` | Host ports, private state and the serve loop. Its README routes to each owner. | `host/controller` |
-| `sandbox.ts` | Runs one stage in a bwrap sandbox and settles its receipt. | `host/sandbox` |
-| `sandbox/receipts.ts` | Reads a stage receipt back, bounded in size. | `host/sandbox` |
+| `sandbox/executor.ts` | `sandboxExecutor`, the controller's stage executor. It runs the preflight and scope reconcile, prepares checkouts and skills, cleans up builds and assembles each stage execution. | `host/sandbox` |
+| `sandbox/run-stage.ts` | Drives one stage attempt: Pi sessions, the gateway gate, fallback, the cleanup window and the final receipt. Settlement waits for all owned work. | `host/sandbox` |
+| `sandbox/launch.ts` | The real stage host: a private stage directory, the bwrap scope, the Pi command and stderr capture. | `host/sandbox` |
+| `sandbox/specify.ts`, `sandbox/review.ts` | The bounded specify session sequence and the review seat sequence, each with an aggregate receipt. | `host/sandbox` |
+| `sandbox/visible-tests.ts` | Runs a candidate's visible tests in a model-free sandbox. `VISIBLE_LIMIT_MS` is read by the replay driver. | `host/sandbox` |
+| `sandbox/receipts.ts` | Durable stage-directory writes and bounded readers of receipts, usage, outputs, charges and patches. | `host/sandbox` |
 | `sandbox/` | Gateway, isolation, route tables, metering, the bundle manifest and `assets/` copied into the bundle. `docs/operations/sandbox.md` explains the boundary. | `host/gateway`, `host/isolation`, `host/bundle`, `host/sandbox` |
 | `gates.ts`, `gates/` | Materializes a candidate over the gate tree and runs the trusted checks. | `host/gates` |
 | `viewer.ts`, `viewer/` | The owner dashboard. `viewer/design/tokens.css` is generated; see `scripts/README.md`. | `host/viewer` |
@@ -28,3 +32,4 @@ Add it beside the subsystem that owns it and classify it under `classification.f
 
 - A new CLI verb is a new arm in the dispatch table in `server/cli.ts`, documented in `docs/operations/factory-cli.md`. Do not split `server/cli.ts` before L13, which moves it to `host/cli/` in one step.
 - A new controller feature puts its decision rules in `src/` and its host side in the matching owner under `server/controller/`. Keep mutable jobs and caches with the factory that owns them; `serve-loop.ts` runs the host loop, not another scheduler.
+- A new stage execution behavior goes in the `server/sandbox/` owner above that already holds its state. Session driving, the cleanup window and receipt assembly share one attempt's mutable state, so they stay together in `run-stage.ts`. Import the owning file directly; there is no sandbox barrel.

@@ -113,13 +113,13 @@ it("waits for two visible-test deadlines plus 60 seconds after signaling stop", 
 	const step = source.match(/^replay_step\(\) \{.*\}$/m)?.[0] ?? "";
 	assert.ok(stop);
 
-	const sandbox = await readFile("server/sandbox.ts", "utf8");
+	const sandbox = await readFile("server/sandbox/visible-tests.ts", "utf8");
 
 	const limit = sandbox.match(
 		/^export const VISIBLE_LIMIT_MS = ([\d_]+);$/m,
 	)?.[1];
 
-	assert.ok(limit, "server/sandbox.ts declares VISIBLE_LIMIT_MS");
+	assert.ok(limit, "server/sandbox/visible-tests.ts declares VISIBLE_LIMIT_MS");
 
 	const polls = Math.ceil(
 		((2 * Number(limit.replaceAll("_", ""))) / 1000 + 60) * 10,
@@ -177,9 +177,9 @@ it("refuses to signal or wait when the visible-test deadline is not declared", a
 			recursive: true,
 		});
 		await cp(steps, join(fake, steps));
-		await mkdir(join(fake, "server"));
+		await mkdir(join(fake, "server/sandbox"), { recursive: true });
 		await writeFile(
-			join(fake, "server/sandbox.ts"),
+			join(fake, "server/sandbox/visible-tests.ts"),
 			"export const VISIBLE_LIMIT = 300_000;\n",
 		);
 		await writeFile(join(fake, "pid"), "123");

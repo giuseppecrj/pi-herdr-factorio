@@ -24,11 +24,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { EXIT, runCli, type ControllerRuntime } from "../server/cli.ts";
-import {
-	sandboxExecutor,
-	runStage,
-	type StageHost,
-} from "../server/sandbox.ts";
+import { runStage, type StageHost } from "../server/sandbox/run-stage.ts";
+import { sandboxExecutor } from "../server/sandbox/executor.ts";
 import { PassThrough } from "node:stream";
 import type { JsonValue } from "../src/core/json.ts";
 import type { FeedbackObservation } from "../src/candidate/feedback.ts";

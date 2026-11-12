@@ -660,7 +660,7 @@ describe("layout guard", () => {
 				includesMatch(
 					layout(moved, "readers"),
 					new RegExp(
-						`^readers: visible-test-deadline: ${reader.replace(/\./g, "\\.")} lookup /.*VISIBLE_LIMIT_MS_MOVED.*/m? finds 0 declarations in server/sandbox\\.ts, expected exactly 1$`,
+						`^readers: visible-test-deadline: ${reader.replace(/\./g, "\\.")} lookup /.*VISIBLE_LIMIT_MS_MOVED.*/m? finds 0 declarations in server/sandbox/visible-tests\\.ts, expected exactly 1$`,
 					),
 				);
 
@@ -743,7 +743,7 @@ describe("layout guard", () => {
 					"src/candidate/validation.ts",
 					"src/contract/parse.ts",
 					"src/github/adapter.ts",
-					"server/sandbox.ts",
+					"server/sandbox/review.ts",
 					"server/gates.ts",
 				],
 			},
@@ -811,7 +811,7 @@ describe("layout guard", () => {
 					for (const caller of move.callers)
 						assert.match(
 							readFileSync(join(root, caller), "utf8"),
-							/from "(?:\.\/trust|\.\.\/(?:src\/)?trust)\/protected-paths\.ts";/,
+							/from "(?:\.\/trust|(?:\.\.\/)+(?:src\/)?trust)\/protected-paths\.ts";/,
 							caller,
 						);
 			});

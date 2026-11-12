@@ -64,7 +64,8 @@ import {
 	durableUsageOf,
 	readDurableAccounting,
 } from "../server/controller/terminal.ts";
-import { sandboxExecutor, sandboxHost } from "../server/sandbox.ts";
+import { sandboxHost } from "../server/sandbox/launch.ts";
+import { sandboxExecutor } from "../server/sandbox/executor.ts";
 import { manifestDigest } from "../server/sandbox/manifest.ts";
 import { startGatewayProcess } from "../server/sandbox/gateway-client.ts";
 import { objectOf, parseJson, arrayOf } from "../src/core/json.ts";

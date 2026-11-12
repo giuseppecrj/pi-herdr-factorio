@@ -16,11 +16,8 @@ import { createServer as createHttpServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import {
-	piCommand,
-	sandboxExecutor,
-	sandboxHost,
-} from "../../server/sandbox.ts";
+import { piCommand, sandboxHost } from "../../server/sandbox/launch.ts";
+import { sandboxExecutor } from "../../server/sandbox/executor.ts";
 import {
 	FORCED_PI_FLAGS,
 	PI_AGENT_DIR,

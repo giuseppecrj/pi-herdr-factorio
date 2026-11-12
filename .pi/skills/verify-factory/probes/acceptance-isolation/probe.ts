@@ -13,9 +13,11 @@ import { fileRunFiles } from "../../../../../server/controller/run-files.ts";
 import {
 	gitState,
 	launchSandbox,
+} from "../../../../../server/sandbox/launch.ts";
+import {
 	locateBundle,
 	SANDBOX_ROOT,
-} from "../../../../../server/sandbox.ts";
+} from "../../../../../server/sandbox/executor.ts";
 import { startGatewayProcess } from "../../../../../server/sandbox/gateway-client.ts";
 import { builtinTable } from "../../../../../server/sandbox/routes.ts";
 import { stopScopeArgv } from "../../../../../server/sandbox/scope.ts";

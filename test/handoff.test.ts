@@ -67,7 +67,7 @@ import { isGitSha } from "../src/config/schema.ts";
 import { isRepoSlug } from "../src/trust/platform.ts";
 import { storePatch, type PatchReceipt } from "../src/candidate/build.ts";
 import { controllerCandidatePort } from "../server/controller/candidate-port.ts";
-import { sandboxExecutor } from "../server/sandbox.ts";
+import { sandboxExecutor } from "../server/sandbox/executor.ts";
 import type { Log } from "../src/controller/orchestrator.ts";
 import { fileAdmissionStore } from "../src/trust/admission.ts";
 import { CONTROLLER_LOGIN } from "../src/trust/markers.ts";

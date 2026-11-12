@@ -157,12 +157,6 @@
 				"from": [],
 				"since": "L00"
 			},
-			"server/sandbox.ts": {
-				"owner": "host/sandbox",
-				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
-				"from": [],
-				"since": "L00"
-			},
 			"server/sandbox/assets/package-lock.json": {
 				"owner": "host/bundle",
 				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
@@ -217,6 +211,12 @@
 				"from": [],
 				"since": "L00"
 			},
+			"server/sandbox/executor.ts": {
+				"owner": "host/sandbox",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": ["server/sandbox.ts"],
+				"since": "L12"
+			},
 			"server/sandbox/gateway-client.ts": {
 				"owner": "host/gateway",
 				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
@@ -234,6 +234,12 @@
 				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
 				"from": [],
 				"since": "L00"
+			},
+			"server/sandbox/launch.ts": {
+				"owner": "host/sandbox",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": ["server/sandbox.ts"],
+				"since": "L12"
 			},
 			"server/sandbox/lines.ts": {
 				"owner": "host/sandbox",
@@ -277,6 +283,18 @@
 				"from": ["server/sandbox.ts"],
 				"since": "L05"
 			},
+			"server/sandbox/review.ts": {
+				"owner": "host/sandbox",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": ["server/sandbox.ts"],
+				"since": "L12"
+			},
+			"server/sandbox/run-stage.ts": {
+				"owner": "host/sandbox",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": ["server/sandbox.ts"],
+				"since": "L12"
+			},
 			"server/sandbox/routes.ts": {
 				"owner": "host/gateway",
 				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
@@ -301,11 +319,23 @@
 				"from": [],
 				"since": "L00"
 			},
+			"server/sandbox/specify.ts": {
+				"owner": "host/sandbox",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": ["server/sandbox.ts"],
+				"since": "L12"
+			},
 			"server/sandbox/settle.ts": {
 				"owner": "host/sandbox",
 				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
 				"from": [],
 				"since": "L00"
+			},
+			"server/sandbox/visible-tests.ts": {
+				"owner": "host/sandbox",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": ["server/sandbox.ts"],
+				"since": "L12"
 			},
 			"server/viewer.ts": {
 				"owner": "host/viewer",
@@ -734,6 +764,12 @@
 			}
 		},
 		"retired": {
+			"server/sandbox.ts": {
+				"owner": "host/sandbox",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
 			"server/controller.ts": {
 				"owner": "host/controller",
 				"seats": ["code-review", "security-review", "simplify"],
@@ -990,7 +1026,7 @@
 			],
 			"declarations": [
 				{
-					"file": "server/sandbox.ts",
+					"file": "server/sandbox/visible-tests.ts",
 					"name": "VISIBLE_LIMIT_MS"
 				}
 			]
@@ -1922,7 +1958,7 @@
 			"reader": "test/integration/replay-driver.test.ts",
 			"tokens": {
 				"const script = \".pi/skills/verify-factory/scripts/drive-replay.sh\"": 1,
-				"readFile(\"server/sandbox.ts\"": 1,
+				"readFile(\"server/sandbox/visible-tests.ts\"": 1,
 				"\"src\", \"server\", \"skills\", \"package.json\", \"README.md\", \"docs/decisions.tsv\", \".github/factory\", \"test/fixtures/replay\", script, \".pi/skills/verify-factory/scripts/drive-replay.ts\", \".pi/skills/verify-factory/scripts/lane-id.sh\",": 1,
 				"join(control, \"test/fixtures/replay/corpus.json\")": 2,
 				"join(control, \"docs/decisions.tsv\")": 1,
@@ -1937,7 +1973,7 @@
 					"type": "file"
 				},
 				{
-					"path": "server/sandbox.ts",
+					"path": "server/sandbox/visible-tests.ts",
 					"type": "file"
 				},
 				{
@@ -2819,10 +2855,6 @@
 					},
 					"server/cli.ts": {
 						"path": "server/cli.ts",
-						"type": "file"
-					},
-					"server/sandbox.ts": {
-						"path": "server/sandbox.ts",
 						"type": "file"
 					}
 				}

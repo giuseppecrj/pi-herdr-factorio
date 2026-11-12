@@ -14,11 +14,11 @@ import {
 	ghTarball,
 } from "../../../../../server/controller/checkout.ts";
 import { fileRunFiles } from "../../../../../server/controller/run-files.ts";
+import { launchSandbox } from "../../../../../server/sandbox/launch.ts";
 import {
-	launchSandbox,
 	locateBundle,
 	SANDBOX_ROOT,
-} from "../../../../../server/sandbox.ts";
+} from "../../../../../server/sandbox/executor.ts";
 import { startGatewayProcess } from "../../../../../server/sandbox/gateway-client.ts";
 import { builtinTable } from "../../../../../server/sandbox/routes.ts";
 import { stopScopeArgv } from "../../../../../server/sandbox/scope.ts";

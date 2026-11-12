@@ -73,9 +73,9 @@ async function owned(): Promise<void> {
 }
 
 async function visibleLimit(): Promise<void> {
-	const limit = (await readFile(arg(0), "utf8")).match(
-		/^export const VISIBLE_LIMIT_MS = ([\d_]+);$/m,
-	)?.[1];
+	const limit = (
+		await readFile(join(arg(0), "server/sandbox/visible-tests.ts"), "utf8")
+	).match(/^export const VISIBLE_LIMIT_MS = ([\d_]+);$/m)?.[1];
 
 	if (limit === undefined) throw Error("visible-test deadline not found");
 	console.log(Number(limit.replaceAll("_", "")));
@@ -438,7 +438,10 @@ async function journal(): Promise<void> {
 
 // Preflight executes trusted-main code, not either factory's implementation.
 async function preflight(): Promise<void> {
-	const { sandboxExecutor } = await import("../../../../server/sandbox.ts");
+	const { sandboxExecutor } = await import(
+		"../../../../server/sandbox/executor.ts"
+	);
+
 	const profile = await platformProfile();
 	const run = promisify(execFile);
 	const [stateDir, root] = [arg(0), arg(1)];

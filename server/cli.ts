@@ -88,7 +88,7 @@ import { readOwnerFeed } from "./cli/owner-feed.ts";
 import { isCadenceJob } from "../src/maintenance/cadence.ts";
 import type { CadenceJob } from "../src/config/schema.ts";
 import { GitHubPublicationApi } from "../src/github/publish.ts";
-import { sandboxExecutor } from "./sandbox.ts";
+import { sandboxExecutor } from "./sandbox/executor.ts";
 import { runGatesCli } from "./gates.ts";
 import { runViewerCli } from "./viewer.ts";
 import {

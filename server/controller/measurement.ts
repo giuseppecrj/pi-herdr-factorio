@@ -463,7 +463,7 @@ export async function controllerMeasure(
 		}
 	}
 
-	const { executionCharge } = await import("../sandbox.ts");
+	const { executionCharge } = await import("../sandbox/receipts.ts");
 	const runtime = join(execution.dir, "runtime");
 	const native = await readStageReceipt(join(runtime, "receipt.json"));
 	const charge = await executionCharge(runtime);
@@ -753,7 +753,7 @@ export function controllerMeasurements(input: MeasurementContext) {
 }
 
 export async function measurementCharges(stateDir: string, repo: string) {
-	const { executionCharge } = await import("../sandbox.ts");
+	const { executionCharge } = await import("../sandbox/receipts.ts");
 	let tokens = 0;
 	let executions = 0;
 	let uncertainRequests = 0;
