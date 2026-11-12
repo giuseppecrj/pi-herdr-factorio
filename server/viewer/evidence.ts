@@ -1,7 +1,7 @@
 import { constants } from "node:fs";
 import { lstat, open, readdir, realpath } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
-import { readStoredVerdict } from "../controller.ts";
+import { readStoredVerdict } from "../controller/state.ts";
 import {
 	readAssessmentBytes,
 	validationDir,
@@ -9,7 +9,7 @@ import {
 } from "../../src/validation.ts";
 import { diagnosisDetail } from "../../src/diagnosis.ts";
 import { viewerClaim } from "./claim.ts";
-import { readStageReceipt } from "../sandbox.ts";
+import { readStageReceipt } from "../sandbox/receipts.ts";
 import {
 	arrayOf,
 	countOf,

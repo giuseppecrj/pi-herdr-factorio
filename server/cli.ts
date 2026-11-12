@@ -56,15 +56,12 @@ import {
 import {
 	acquireLock,
 	fileRunFiles,
-	type SocketLockState,
 	lineLog,
 	type ProcessTable,
 	procTable,
-	readLock,
 	pinVerification,
 	pumpLedgerOutbox,
 	pumpScoreOutbox,
-	readStatus,
 	readLedgerBacklog,
 	readDurableAccounting,
 	type Sleep,
@@ -78,7 +75,12 @@ import {
 	controllerMeasure,
 	controllerMeasurements,
 } from "./controller.ts";
-import { readOwnerFeed } from "../src/feed.ts";
+import {
+	readLock,
+	readStatus,
+	type SocketLockState,
+} from "./controller/state.ts";
+import { readOwnerFeed } from "./cli/owner-feed.ts";
 import { isCadenceJob } from "../src/cadence.ts";
 import type { CadenceJob } from "../src/workflow.ts";
 import { GitHubPublicationApi } from "../src/publication.ts";
@@ -117,10 +119,10 @@ import {
 	replayReport,
 	replayRow,
 	readReplayRecord,
-	checkReplayBundles,
 	REPLAY_CORPUS,
 	REPLAY_RUN_CAP,
 } from "../src/replay.ts";
+import { checkReplayBundles } from "./cli/replay.ts";
 
 export const USAGE = `Usage:
   node server/cli.ts platform --env

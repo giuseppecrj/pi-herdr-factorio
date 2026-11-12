@@ -1,5 +1,5 @@
+import { measurementInput } from "./cli/measurement.ts";
 import {
-	measurementInput,
 	explainPrompt,
 	explainFindings,
 	EXPLAIN_MAX_TOKENS,
@@ -201,7 +201,7 @@ import {
 	findingFingerprints,
 } from "../src/review.ts";
 import { execFile, spawn } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import {
 	readFileSync,
 	readdirSync,
@@ -260,7 +260,7 @@ import {
 	unlink,
 	writeFile,
 } from "node:fs/promises";
-import { createConnection, createServer, type Server } from "node:net";
+import { createServer, type Server } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -294,24 +294,17 @@ import {
 } from "../src/specify.ts";
 import type { JsonValue } from "../src/core/json.ts";
 import type { GitSha, RepoSlug } from "../src/workflow.ts";
-
-export const HOLDER_FILE = "controller.lock";
-export const STATUS_FILE = "status.json";
-
-export type LockHolder = {
-	readonly pid: number;
-	readonly startTime: string;
-	readonly acquiredAt: string;
-};
-
-export type SocketLockState =
-	| { readonly kind: "none" }
-	| { readonly kind: "socket_bound"; readonly holderFile: LockHolder | null }
-	| {
-			readonly kind: "holder_file_without_socket";
-			readonly holderFile: LockHolder;
-	  }
-	| { readonly kind: "unreadable" };
+import {
+	errorCode,
+	holderOf,
+	lockName,
+	readHolderFile,
+	readStoredVerdict,
+	HOLDER_FILE,
+	STATUS_FILE,
+	type LockHolder,
+} from "./controller/state.ts";
+import { readStageReceipt } from "./sandbox/receipts.ts";
 
 export type LockAcquire =
 	| {
@@ -350,21 +343,6 @@ export function procTable(): ProcessTable {
 	return { self: { pid: process.pid, startTime: readStartTime() ?? "" } };
 }
 
-/**
- * The Linux abstract Unix socket name for one state directory: a NUL byte,
- * then `pi-herdr-factorio/` and the SHA-256 of the directory's real path. The
- * kernel lets one socket bind a name and frees it when the process dies.
- */
-export function lockName(realDir: string): string {
-	return `\0pi-herdr-factorio/${createHash("sha256").update(realDir).digest("hex")}`;
-}
-
-function errorCode(error: Error): string | null {
-	return "code" in error && error.code === String(error.code)
-		? error.code
-		: null;
-}
-
 function parseJson(text: string): JsonValue | undefined {
 	try {
 		const parsed: JsonValue = JSON.parse(text);
@@ -386,97 +364,6 @@ function fieldOf(value: JsonValue | undefined, key: string) {
 	}
 
 	return Object.hasOwn(value, key) ? value[key] : undefined;
-}
-
-function parseHolder(text: string): LockHolder | null {
-	const value = parseJson(text);
-	const pid = fieldOf(value, "pid");
-	const startTime = fieldOf(value, "startTime");
-	const acquiredAt = fieldOf(value, "acquiredAt");
-
-	if (
-		pid !== Number(pid) ||
-		!Number.isSafeInteger(pid) ||
-		Number(pid) < 1 ||
-		startTime !== String(startTime) ||
-		!/^\d+$/.test(String(startTime)) ||
-		acquiredAt !== String(acquiredAt)
-	) {
-		return null;
-	}
-
-	return {
-		pid: Number(pid),
-		startTime: String(startTime),
-		acquiredAt: String(acquiredAt),
-	};
-}
-
-type HolderFile =
-	| { readonly kind: "absent" }
-	| { readonly kind: "holder"; readonly holder: LockHolder }
-	| { readonly kind: "unreadable" };
-
-async function readHolderFile(path: string): Promise<HolderFile> {
-	let text: string;
-
-	try {
-		text = await readFile(path, "utf8");
-	} catch (error) {
-		return (error instanceof Error ? errorCode(error) : null) === "ENOENT"
-			? { kind: "absent" }
-			: { kind: "unreadable" };
-	}
-
-	const holder = parseHolder(text);
-
-	return holder === null ? { kind: "unreadable" } : { kind: "holder", holder };
-}
-
-function holderOf(file: HolderFile): LockHolder | null {
-	return file.kind === "holder" ? file.holder : null;
-}
-
-async function probeName(name: string): Promise<"bound" | "free" | "unknown"> {
-	return new Promise((done) => {
-		const socket = createConnection({ path: name });
-
-		socket.once("connect", () => {
-			socket.destroy();
-			done("bound");
-		});
-
-		socket.once("error", (error) => {
-			const code = errorCode(error);
-
-			done(code === "ECONNREFUSED" || code === "ENOENT" ? "free" : "unknown");
-		});
-	});
-}
-
-/** Reads the lock without taking it. `status --json` uses this. */
-export async function readLock(stateDir: string): Promise<SocketLockState> {
-	let real: string;
-
-	try {
-		real = await realpath(stateDir);
-	} catch {
-		return { kind: "unreadable" };
-	}
-
-	const probe = await probeName(lockName(real));
-	const file = await readHolderFile(join(real, HOLDER_FILE));
-
-	if (probe === "unknown") return { kind: "unreadable" };
-
-	if (probe === "bound")
-		return { kind: "socket_bound", holderFile: holderOf(file) };
-
-	if (file.kind === "absent") return { kind: "none" };
-
-	return file.kind === "holder"
-		? { kind: "holder_file_without_socket", holderFile: file.holder }
-		: { kind: "unreadable" };
 }
 
 export class ControllerLock {
@@ -3283,7 +3170,7 @@ const EXECUTION_NAME =
 
 /** Receipt coverage is independent of token splits and wall-time accounting. */
 async function tokenCoverage(stateDir: string, runId: Digest) {
-	const { readStageReceipt, executionCharge } = await import("./sandbox.ts");
+	const { executionCharge } = await import("./sandbox.ts");
 	const root = join(resolve(stateDir), "stages", runId);
 
 	const names = await readdir(root).catch((error: NodeJS.ErrnoException) =>
@@ -3342,8 +3229,7 @@ export async function readTerminalEvidence(
 	floor: number,
 	candidate: CandidateState | null,
 ): Promise<TerminalEvidence> {
-	const { executionCharge, executionEfficiency, readStageReceipt } =
-		await import("./sandbox.ts");
+	const { executionCharge, executionEfficiency } = await import("./sandbox.ts");
 
 	const { aggregateEfficiency, unknownEfficiency } = await import(
 		"../src/core/execution.ts"
@@ -4359,7 +4245,7 @@ export async function controllerMeasure(
 		}
 	}
 
-	const { readStageReceipt, executionCharge } = await import("./sandbox.ts");
+	const { executionCharge } = await import("./sandbox.ts");
 	const runtime = join(execution.dir, "runtime");
 	const native = await readStageReceipt(join(runtime, "receipt.json"));
 	const charge = await executionCharge(runtime);
@@ -5236,7 +5122,7 @@ export function controllerCadence(input: {
 	});
 
 	const retained = async (execution: CadenceInput): Promise<CadenceResult> => {
-		const { readStageReceipt, executionCharge } = await import("./sandbox.ts");
+		const { executionCharge } = await import("./sandbox.ts");
 
 		const runtime = join(
 			cadenceExecutionDir(input.stateDir, execution.job, execution.windowStart),
@@ -5712,24 +5598,6 @@ export async function writeStatus(
 		join(resolve(stateDir), STATUS_FILE),
 		`${JSON.stringify({ ...report, platform: platformSummary(platform), durableUsage }, null, 2)}\n`,
 	);
-}
-
-export function readStoredVerdict(path: string): Verdict {
-	try {
-		// SAFETY: controller-private write-once verdict; callers verify artifact bindings before reuse.
-		return JSON.parse(regularText(path, 1024 * 1024)) as Verdict;
-	} catch {
-		throw new Error("stored_verdict_invalid");
-	}
-}
-
-export async function readStatus(stateDir: string): Promise<JsonValue | null> {
-	const text = await readFile(
-		join(resolve(stateDir), STATUS_FILE),
-		"utf8",
-	).catch(() => null);
-
-	return text === null ? null : (parseJson(text) ?? null);
 }
 
 const LOG_VALUE = /^[A-Za-z0-9:._@/[\]+-]*$/;

@@ -10,14 +10,7 @@
 			"docs/prototypes/heldout-ci/collect-probe.ts",
 			"docs/prototypes/trusted-ci/**"
 		],
-		"exceptions": [],
-		"reverseEdges": [
-			"src/explain.ts -> server/sandbox.ts",
-			"src/feed.ts -> server/controller.ts",
-			"src/feed.ts -> server/sandbox.ts",
-			"src/orchestrator.ts -> server/sandbox/result.ts",
-			"src/replay.ts -> server/sandbox/manifest.ts"
-		]
+		"exceptions": []
 	},
 	"classification": {
 		"roots": ["src", "server", "host"],
@@ -38,11 +31,35 @@
 				"from": [],
 				"since": "L00"
 			},
+			"server/cli/measurement.ts": {
+				"owner": "host/cli",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["src/explain.ts"],
+				"since": "L05"
+			},
+			"server/cli/owner-feed.ts": {
+				"owner": "host/cli",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["src/feed.ts"],
+				"since": "L05"
+			},
+			"server/cli/replay.ts": {
+				"owner": "host/cli",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["src/replay.ts"],
+				"since": "L05"
+			},
 			"server/controller.ts": {
 				"owner": "host/controller",
 				"seats": ["code-review", "security-review", "simplify"],
 				"from": [],
 				"since": "L00"
+			},
+			"server/controller/state.ts": {
+				"owner": "host/controller",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["server/controller.ts"],
+				"since": "L05"
 			},
 			"server/factory.service": {
 				"owner": "host/install",
@@ -187,6 +204,12 @@
 				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
 				"from": [],
 				"since": "L00"
+			},
+			"server/sandbox/receipts.ts": {
+				"owner": "host/sandbox",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": ["server/sandbox.ts"],
+				"since": "L05"
 			},
 			"server/sandbox/routes.ts": {
 				"owner": "host/gateway",
@@ -631,7 +654,7 @@
 		{
 			"id": "replay-ls-tree",
 			"kind": "paths",
-			"reader": "src/replay.ts",
+			"reader": "server/cli/replay.ts",
 			"tokens": {
 				"\"ls-tree\", \"-r\", \"--name-only\", sha, \"--\", \"skills\", \"server/sandbox/assets\", ]": 1
 			},
@@ -649,7 +672,7 @@
 		{
 			"id": "replay-asset-map",
 			"kind": "paths",
-			"reader": "src/replay.ts",
+			"reader": "server/cli/replay.ts",
 			"tokens": {
 				"[\"server/sandbox/assets/pi.ts\", \"sandbox/pi.ts\"]": 1,
 				"[\"server/sandbox/assets/stage-init.ts\", \"sandbox/stage-init.ts\"]": 1,
@@ -678,7 +701,7 @@
 		{
 			"id": "replay-recipe-diff",
 			"kind": "paths",
-			"reader": "src/replay.ts",
+			"reader": "server/cli/replay.ts",
 			"tokens": {
 				"\"diff\", \"--name-only\", input.previousSha, input.candidateSha, \"--\", \"server/provision.sh\", ]": 1
 			},

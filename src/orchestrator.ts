@@ -143,13 +143,19 @@ import {
 import type { CadenceRunner } from "./cadence.ts";
 import type { PlatformProfile } from "./platform.ts";
 import { isLogin } from "./adapters/github.ts";
-import type { StageResult } from "../server/sandbox/result.ts";
-import type { StageRunSettings } from "./core/execution.ts";
+import type {
+	BudgetCap,
+	FailedExit,
+	RefusalSignal,
+	StageRunSettings,
+	StageUsage,
+} from "./core/execution.ts";
 import {
 	DEFAULTS,
 	type AcceptEffort,
 	type EnvLookup,
 	type GitSha,
+	type ModelId,
 	type RepoSlug,
 	STAGE_CLEANUP_RESERVE_MS,
 	type WorkflowConfig,
@@ -170,7 +176,45 @@ import {
 } from "./ledger.ts";
 import type { JsonValue } from "./core/json.ts";
 
-export type { StageResult };
+/** The stage receipt fields a launch reports. The host's full receipt is assignable to it. */
+type StageAttemptReceipt = {
+	readonly wallMs: number;
+	readonly usage: StageUsage;
+	readonly models: {
+		readonly requested: ModelId;
+		readonly observed: string | null;
+	};
+	readonly fallback: {
+		readonly requested: ModelId;
+		readonly observed: string | null;
+	} | null;
+	readonly refusal: RefusalSignal | null;
+};
+
+/** How a started stage attempt ended, as the sandbox host reports it. */
+export type StageResult =
+	| {
+			readonly kind: "passed";
+			readonly usage: number;
+			readonly receipt: StageAttemptReceipt;
+	  }
+	| {
+			readonly kind: "failed";
+			readonly exit: FailedExit;
+			readonly usage: number;
+			readonly receipt: StageAttemptReceipt;
+	  }
+	| {
+			readonly kind: "refused";
+			readonly usage: number;
+			readonly receipt: StageAttemptReceipt;
+	  }
+	| {
+			readonly kind: "budget_exhausted";
+			readonly cap: BudgetCap;
+			readonly usage: number;
+			readonly receipt: StageAttemptReceipt;
+	  };
 
 /** Milliseconds since the epoch. Tests pass a fake. */
 export type Clock = { now(): number };

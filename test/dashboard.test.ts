@@ -33,7 +33,8 @@ import { parseLedger, ledgerRow } from "../src/ledger.ts";
 import { gitObjectSha } from "../src/publication.ts";
 import type { InterventionRead } from "../src/metrics.ts";
 import type { JsonValue } from "../src/core/json.ts";
-import { readOwnerFeed, readOwnerRun, type FeedEntry } from "../src/feed.ts";
+import type { FeedEntry } from "../src/feed.ts";
+import { readOwnerFeed, readOwnerRun } from "../server/cli/owner-feed.ts";
 import { fileAdmissionStore } from "../src/admission.ts";
 import {
 	Orchestrator,

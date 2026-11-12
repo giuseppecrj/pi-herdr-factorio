@@ -12,12 +12,12 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import type { FeedEntry } from "../src/feed.ts";
 import {
 	readOwnerFeed,
 	readOwnerHeader,
 	readOwnerRun,
-	type FeedEntry,
-} from "../src/feed.ts";
+} from "../server/cli/owner-feed.ts";
 import { acquireLock, procTable } from "../server/controller.ts";
 import { ATTENTION_KINDS, readAttention } from "../src/attention.ts";
 import { objectOf, parseJson } from "../src/core/json.ts";

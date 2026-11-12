@@ -48,7 +48,6 @@ import {
 	controllerCandidatePort,
 	controllerBaseChecker,
 	WORKFLOW_READ_LIMIT,
-	HOLDER_FILE,
 	type ProcessTable,
 	parseStartTime,
 	readLedgerBacklog,
@@ -58,6 +57,7 @@ import {
 	observeFeedback,
 	storeFeedbackBatch,
 } from "../server/controller.ts";
+import { HOLDER_FILE } from "../server/controller/state.ts";
 import { GitHubTicketAdapter } from "../src/adapters/github.ts";
 import {
 	type AdmissionStore,

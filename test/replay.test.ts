@@ -20,7 +20,6 @@ import { manifestDigest } from "../server/sandbox/manifest.ts";
 import { parseLedger, type LedgerRow } from "../src/ledger.ts";
 import {
 	checkReplay,
-	checkReplayBundles,
 	loadReplayCorpus,
 	replayReport,
 	reserveReplay,
@@ -28,6 +27,7 @@ import {
 	readReplayBudget,
 	REPLAY_RUN_CAP,
 } from "../src/replay.ts";
+import { checkReplayBundles } from "../server/cli/replay.ts";
 import { digestOf } from "../src/core/run.ts";
 import {
 	isGitSha,

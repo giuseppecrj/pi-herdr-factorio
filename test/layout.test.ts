@@ -297,14 +297,23 @@ describe("layout guard", () => {
 			const root = scratch();
 			edit(
 				root,
-				"src/replay.ts",
-				"../server/sandbox/manifest.ts",
-				"./core/run.ts",
+				"scripts/layout-baseline.json",
+				'"exceptions": []',
+				'"exceptions": [],\n\t\t"reverseEdges": ["src/replay.ts -> server/sandbox/manifest.ts", "src/core/run.ts -> server/controller/state.ts"]',
+			);
+			appendFileSync(
+				join(root, "src/core/run.ts"),
+				'export { readLock } from "../../server/controller/state.ts";\n',
 			);
 
+			const problems = layout(root, "imports");
 			includesMatch(
-				layout(root, "imports"),
-				/src\/replay\.ts -> server\/sandbox\/manifest\.ts is listed in reverseEdges but no longer exists/,
+				problems,
+				/reverseEdges lists .*src\/replay\.ts -> server\/sandbox\/manifest\.ts.*L05 retired the reverse-edge allowance/,
+			);
+			includesMatch(
+				problems,
+				/src\/core\/run\.ts -> server\/controller\/state\.ts is a new reverse edge/,
 			);
 		});
 
@@ -327,14 +336,14 @@ describe("layout guard", () => {
 			edit(
 				root,
 				"scripts/layout-baseline.json",
-				'"exceptions": [],',
+				'"exceptions": []',
 				`"exceptions": [${JSON.stringify({
 					file: driver,
 					specifier: "./extension/index.ts",
 					resolveFrom: ".",
 					until: "L02",
 					caller,
-				})}],`,
+				})}]`,
 			);
 		}
 
@@ -556,7 +565,7 @@ describe("layout guard", () => {
 
 		it("fails a reader whose relative root depth changes when it moves", () => {
 			const root = scratch();
-			mkdirSync(join(root, "server/cli"));
+			mkdirSync(join(root, "server/cli"), { recursive: true });
 			renameSync(
 				join(root, "server/cli.ts"),
 				join(root, "server/cli/index.ts"),
@@ -935,25 +944,25 @@ describe("layout guard", () => {
 			const script = ".pi/skills/verify-factory/scripts/drive-replay.sh";
 			appendFileSync(
 				join(root, script),
-				"node --input-type=module - <<'NODE'\nimport { readLock } from './server/controller.ts';\nNODE\n",
+				"node --input-type=module - <<'NODE'\nimport { readLock } from './server/controller/state.ts';\nNODE\n",
 			);
 			edit(
 				root,
 				"scripts/layout-baseline.json",
 				`"${script}": {\n\t\t\t\t"tokens": {`,
-				`"${script}": {\n\t\t\t\t"imports": { "./server/controller.ts": ["readLock"] },\n\t\t\t\t"tokens": {\n\t\t\t\t\t"./server/controller.ts": { "path": "server/controller.ts", "type": "file" },`,
+				`"${script}": {\n\t\t\t\t"imports": { "./server/controller/state.ts": ["readLock"] },\n\t\t\t\t"tokens": {\n\t\t\t\t\t"./server/controller/state.ts": { "path": "server/controller/state.ts", "type": "file" },`,
 			);
 			assert.deepEqual(layout(root, "shell"), []);
 			edit(
 				root,
-				"server/controller.ts",
+				"server/controller/state.ts",
 				"export async function readLock(",
 				"async function readLock(",
 			);
 
 			includesMatch(
 				layout(root, "shell"),
-				/^shell: \.pi\/skills\/verify-factory\/scripts\/drive-replay\.sh imports readLock from \.\/server\/controller\.ts, but server\/controller\.ts does not export it$/,
+				/^shell: \.pi\/skills\/verify-factory\/scripts\/drive-replay\.sh imports readLock from \.\/server\/controller\/state\.ts, but server\/controller\/state\.ts does not export it$/,
 			);
 		});
 	});

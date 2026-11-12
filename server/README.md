@@ -5,8 +5,11 @@
 | Path | What it does | Planned owner |
 | --- | --- | --- |
 | `cli.ts` | Every `node server/cli.ts <verb>` command. `docs/operations/factory-cli.md` documents the verbs. | `host/cli` |
+| `cli/` | Host collectors for the read verbs: `owner-feed.ts` and `measurement.ts` read controller state and stage receipts for the views in `src/feed.ts` and `src/explain.ts`, and `replay.ts` checks installed asset bundles. Verb dispatch stays in `cli.ts`. | `host/cli` |
 | `controller.ts` | The serve loop, controller lock, run files, outbox, measurement and validation sweep. | `host/controller` |
+| `controller/state.ts` | Reads the controller's status file, lock and stored verdicts without taking the lock. | `host/controller` |
 | `sandbox.ts` | Runs one stage in a bwrap sandbox and settles its receipt. | `host/sandbox` |
+| `sandbox/receipts.ts` | Reads a stage receipt back, bounded in size. | `host/sandbox` |
 | `sandbox/` | Gateway, isolation, route tables, metering, the bundle manifest and `assets/` copied into the bundle. `docs/operations/sandbox.md` explains the boundary. | `host/gateway`, `host/isolation`, `host/bundle`, `host/sandbox` |
 | `gates.ts`, `gates/` | Materializes a candidate over the gate tree and runs the trusted checks. | `host/gates` |
 | `viewer.ts`, `viewer/` | The owner dashboard. `viewer/design/tokens.css` is generated; see `scripts/README.md`. | `host/viewer` |

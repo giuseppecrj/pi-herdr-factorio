@@ -17,8 +17,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createServer } from "node:http";
 import { it, type TestContext } from "node:test";
+import { measurementInput } from "../server/cli/measurement.ts";
 import {
-	measurementInput,
 	explainPrompt,
 	explainFindings,
 	EXPLAIN_MAX_TOKENS,
