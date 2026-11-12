@@ -6,24 +6,30 @@ Every passing lane spends model tokens and needs the model-spend grant as well a
 
 ## Sub-features
 
-- `specify-contract`: a clear issue stores its contract after `specify:claimed`, `specify:running`, then moves to `accept:claimed` on the same run (F06b). See `acceptance.md` for the terminal stage. One summary comment, posted before `stage_passed`, ends `<!-- factory-contract run=<runId> c=<contractDigest> -->`. It lists the behavior, the exclusions and criteria `A1`, `A2` and so on. `<state>/contracts/<runId>/contract.json` and `receipt.json` are mode 0600. `receipt.json`'s `contractDigest` is the sha256 of `contract.json`, and `contract.json` has `base.sha` equal to the markers' `workflowSha`. The log has `contract_stored`. `factory:ready` stays on.
+- `specify-contract`: a clear issue stores its contract after `specify:claimed`, `specify:running`, then moves to `accept:claimed` on the same run (F06b). See `acceptance.md` for the next stage. One summary comment, posted before `stage_passed`, ends `<!-- factory-contract run=<runId> c=<contractDigest> -->`. It lists the behavior, the exclusions and criteria `A1`, `A2` and so on. `<state>/contracts/<runId>/contract.json` and `receipt.json` are mode 0600. `receipt.json`'s `contractDigest` is the sha256 of `contract.json`, and `contract.json` has `base.sha` equal to the admitted base SHA. Record the workflow pin separately, even when both SHAs match. The log has `contract_stored`. `factory:ready` stays on.
 - `specify-questions`: a vague issue ends `needs_info`. One questions comment ends `<!-- factory-questions run=<runId> q=<digest> -->` and never starts with `<!-- factory:`. Then `factory:needs-info` is added and `factory:ready` removed, both by `exe-dev-github-integration[bot]` on the timeline, and only then comes the `needs_info` marker. Further ticks launch nothing and post nothing.
 - `specify-linked`: after `needs_info`, an answer comment from an account with write access, then `factory:ready` added again at least two seconds later, starts a new run. Its log has `run_linked prevRunId=<old run> answers=<n>`, and `factory:needs-info` is removed after its `claimed` marker. `<state>/links/<newRunId>.json` names the old run, and `<state>/answers/<newRunId>.json` holds the answer. The new contract's `link` names the old run and the answers digest. The old run's markers are unchanged, and the ledger is not corrupt.
 - `specify-same-second`: an answer and the relabel in the same second refuse the admission as `ambiguous_snapshot`, logged with `detail=answer_at_label_time`.
 - `specify-output`: `output.txt` beside a passing receipt, mode 0600, holds the final text, and the receipt's `output` gives only its size.
 - `specify-no-output`: a stage that ends `budget_exhausted` or `refused` keeps no `output.txt`, no contract and no comment.
 
-## Driving it with ssh
+## How to get to it (user POV)
+
+Create and label an authorized fixture as a writer. Read its contract summary or questions on GitHub. For questions, answer as a writer and apply a fresh readiness label. Follow the target restrictions in `../SKILL.md` before any VM command.
+
+## Driving it with the named tooling
 
 Preconditions are those of `sandbox-stage.md`, with the bundle provisioned from a commit that has `skills/`. `readlink /var/lib/factory-sandbox/current` must name a bundle whose `skills/` lists `audit-ticket`, `deep-research` and `grill-me`.
 
 1. Create the fixture as the owner with `gh issue create --title "[<pr-id>] ..."`, then add `factory:ready` as the owner with `gh issue edit <n> --add-label factory:ready`.
-2. Run `.pi/skills/verify-factory/scripts/vm.sh .pi/skills/verify-factory/scripts/drive-stage.sh <pr-id> <worker-n> <issue>`. One `tick --once` claims the issue, runs specify and accept, and posts their comments and the terminal marker. A needs-info result stops at specify.
+2. Run `.pi/skills/verify-factory/scripts/vm.sh .pi/skills/verify-factory/scripts/drive-stage.sh <pr-id> <worker-n> <issue>`. A scoped tick claims the issue and starts specify. Continue scoped ticks as the recorded phase requires. Acceptance includes an asynchronous base check, so do not require a fixed number of ticks or a terminal marker on success. A needs-info result stops at specify.
 3. Read the comments with `gh api repos/nublai/pi-herdr-factorio/issues/<n>/comments`, and the labels and their actors with the timeline.
 4. For a linked run, comment the answer as the owner, wait two seconds, add `factory:ready` again, and run `drive-stage.sh` once more.
 5. Close every fixture with `gh issue close`, and confirm it with `gh issue view <n> --json state`.
 
-## Results observed
+## Gotchas
+
+### Historical results
 
 On 2026-10-30 at `bdc54da`, lane `f06a-w1`, bundle `assets-336f926556f1…`, fixture #434 `[F06a-build] Add a --version flag to the factory CLI`, labeled by `giuseppecrj` (event 34655808428):
 
@@ -43,7 +49,7 @@ That first build read the bundled `pi-herdr-agents` `SKILL.md` and two test file
 
 All 85,080 tokens went to `openai/gpt-6.1-sol`. Each contract had one reviewer and no revision. Both fixtures are closed; the lane was removed with no processes or scopes left. The clear SSH caller timed out at 30 seconds, but the controller completed. Its wall figure is from the controller log through the terminal marker, not a completed shell timer. Evidence is in `pi-herdr-factorio-trails/F06a/fix-1/live/` and `/tmp/swarm-f06a-fix1/worker-1/` on the VM.
 
-## Gotchas
+### Sessions and recovery
 
 - The controller now runs the reviewer separately, with no tools and only the draft, snapshot and answers. No delegation extension loads. A clear draft with no tool calls and no finding takes two requests, not three parent requests plus a child.
 - Specify's root receipt aggregates `draft/`, `review/` and optional `revision/` session receipts. Count root totals once. Read nested `egress.jsonl` files for the per-request breakdown.

@@ -5,12 +5,16 @@ description: Verify pi-herdr-factorio on its real surfaces. Use for authorized V
 
 # Verify pi-herdr-factorio
 
-The factory is a Pi package plus a controller that runs on a verification VM, selected by name (see [Target](#target)). Drive these interfaces only under the task's grants:
+Use this skill for authorized factory checks, not permission to run them. Read [the active layout program](../../../docs/plans/codebase-layout.md) before any drive. Dispatch stays paused throughout that program. `pi-factorio` is retiring under #712 and #734. `nubl-factory` stays empty until the owner installs it after the program.
+
+The factory is a Pi package plus a controller. Drive these interfaces only under the task's grants:
 
 - the VM, over ssh as `exedev`;
 - GitHub, through repository-scoped `gh`, with the target's `GH_HOST` only in the trusted VM environment, never locally;
 - the `/factory status` and `/factory run <issue>` extension commands;
-- the factory CLI, `node server/cli.ts`, documented in `docs/operations/factory-cli.md`.
+- the factory CLI, `node --experimental-strip-types server/cli.ts`, documented in `docs/operations/factory-cli.md`.
+
+Use [verify-factory-state](../verify-factory-state/SKILL.md) for the existing bounded formal checks and runtime correspondence replay. Source-only prose work needs no VM drive.
 
 Run every command from the repository root of the checkout under test. Helpers live in `.pi/skills/verify-factory/scripts/`. Below, `S` means that directory.
 
@@ -18,17 +22,24 @@ Read `.pi/skills/verify-factory/features/README.md` for the feature map and the 
 
 ## Target
 
-`FACTORY_VM` names the VM every helper drives. It defaults to `pi-factorio`, the exe.dev VM. `.pi/skills/verify-factory/targets.env` holds one line per target: its name, its ssh destination and the `GH_HOST` that VM uses. `vm.sh` and `lane-setup.sh` read it locally through `target.sh`.
+At this checkout, `vm.sh` and `lane-setup.sh` source `target.sh`, which reads `FACTORY_VM` and `targets.env`. Inspect those files before use. `FACTORY_VM` defaults to the retiring `pi-factorio`, so never omit it. The configured `nubl-factory` entry is not proof of an installation or authority to connect. `factorio` remains unconfigured.
+
+The Arm receipt reported hardcoded SSH routing that ignored `FACTORY_VM`. That observation does not describe the scripts at the L01 base `3bcd19f`, which already select a target. L01 changes no script and adds no disposable-target support. L02 must reconcile the maintained drivers with the layout program before any lane uses them. Do not infer a safe target from an environment variable alone.
+
+For an explicitly authorized retiring-host read only:
 
 ```bash
-FACTORY_VM=pi-factorio $S/vm.sh $S/doctor.sh   # same as leaving FACTORY_VM unset
+S=.pi/skills/verify-factory/scripts
+FACTORY_VM=pi-factorio "$S/vm.sh" "$S/doctor.sh"
 ```
 
-An unknown target, or one with an empty value, exits 2 with `unknown target <name>` or `target <name> not configured`, and opens no ssh connection. The `factorio` target (exmach) stays unconfigured until that VM exists. The lane root `/home/exedev/factory-verification/` and the `exedev` user are the same on every target.
+Unknown targets, empty values, and invalid target records refuse before SSH. The helpers still assume the `exedev` user and `/home/exedev/factory-verification/`. They are not general-purpose disposable-VM drivers. The [installer recipe](features/installer.md) uses direct SSH to an explicit disposable target. No lane uploads, provisions, or starts a controller on `pi-factorio` during the layout program. Its only reads are Arm and L15.
 
 ## Launch
 
-For short CLI drives, give each lane its own workspace and state directory, then install its committed dependencies. A scoped controller or read-only viewer can remain running only for its authorized drive; record its PID and stop it when finished.
+The legacy helper commands below describe authorized lanes outside the layout program's host restrictions. Do not run them on the retiring host. For layout checks, follow the plan's isolated local state, exact-head native CI, and separately granted disposable fixture procedure.
+
+For short CLI drives, give each lane its own workspace and state directory, then install its committed dependencies. Record every started controller or viewer PID and stop it when the drive ends. Never drive a process this run did not start.
 
 ```bash
 S=.pi/skills/verify-factory/scripts
@@ -45,7 +56,7 @@ Start a controller only with `drive-serve.sh`, which scopes it to the lane's fix
 
 ## Doctor
 
-Read-only. Run it first, and again whenever anything looks off.
+The doctor reads versions and repository metadata. Run it before an authorized drive and after any surprising failure. If it cannot diagnose a broken process, return to a known state before retrying. Do not run it on a host outside the task's read grant.
 
 ```bash
 $S/vm.sh $S/doctor.sh
@@ -113,7 +124,7 @@ Proof standards:
 - Never simulate a stage that is not implemented. Stop and report it.
 - Label source-checked/unrun, local saved-state/fake transport, historical scratch, and native VM/Actions/owner-action evidence separately. Recipe edits do not prove their live steps ran.
 - Bind F09a evidence to the original instruction pin, exact tested head/tree, round/generation/intent, captured execution/attempt, candidate/gate/CI run/nonce, and reporter-owned check ID. See `features/handoff.md`.
-- Keep native reporter/P4, production protection, real owner-action, and live/perf gates pending until their prerequisites and actual receipts exist. Both substantive formal checks timed out; completed partitions do not establish full formal qualification.
+- Keep native reporter/P4, production protection, real owner-action, and live/perf gates pending until their prerequisites and actual receipts exist. Historical unrestricted accounting and substantive Controller checks timed out. F1 structural and F2 feedback completed for the recorded model revision. None establishes full formal qualification. See the formal wrapper for bounds and correspondence limits.
 - No credentials in evidence. Export only redacted output.
 
 Copy evidence into `docs/plans/media/<pr-id>/` only when the task authorizes it.
@@ -142,7 +153,7 @@ $S/vm.sh $S/cleanup.sh <pr-id> <worker-n>
 
 Stop any `serve` the lane started with `drive-serve.sh ... stop` first. Cleanup removes that lane's workspace and state under `/home/exedev/factory-verification/` and nothing else. It never kills processes by name. If you started a process, stop it by the PID you recorded. Evidence in `/tmp/swarm-<pr-id>/worker-<n>/` survives cleanup. Confirm with the `ls` the script prints.
 
-Run cleanup after a failed attempt too.
+Under the cleanup grant, clean residue after failed attempts too. Verify evidence at its retained location before removing lane state. Recheck health before another drive. Stop only recorded owned PIDs. Nothing a drive started may outlive its usefulness.
 
 ## Helpers
 

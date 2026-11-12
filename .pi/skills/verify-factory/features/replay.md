@@ -10,13 +10,25 @@ Local fake-transport tests do not prove native isolation, production restoration
 or model quality. Keep F12a live lanes 6, 7, 10 and performance pending until
 those drives actually run.
 
-## Check the pins locally
+## Sub-features
+
+- Local `replay check` validates revision, corpus, policy, and bundle pins without launching a run.
+- The driver reserves a shared replay budget, supervises one scoped controller, and retains recovery instructions.
+- `replay report` compares bound terminal rows without gating or promoting a run.
+
+## How to get to it (user POV)
+
+Use `node server/cli.ts replay check --json` with full local revision pins. Use `replay report` for captured rows. A live pair needs separate fixture, spend, bundle, and production-stop grants. The layout program does not authorize replay on the retiring host. Read `../SKILL.md` before choosing a target.
+
+## Driving it with the named tooling
+
+### Check the pins locally
 
 ```sh
 node server/cli.ts replay check --json \
   --main-sha "$MAIN_SHA" --previous-sha "$PREVIOUS_SHA" \
   --candidate-sha "$CANDIDATE_SHA" > replay-check.json
-TMPDIR=/home/g/.cache/f12a2-tmp node --experimental-strip-types \
+TMPDIR=$(mktemp -d "${TMPDIR:-$HOME/.herdr/tmp}/factory-replay.XXXXXX") node --experimental-strip-types \
   --test --test-concurrency=1 test/replay.test.ts test/integration/replay-driver.test.ts
 bash -n .pi/skills/verify-factory/scripts/drive-replay.sh
 ```
@@ -32,7 +44,7 @@ socket and file locks, local bundles and fake systemd commands. They exercise
 refusals, preflight, accounting, signals and restoration without a VM or model.
 See [Replay checks](../../../../docs/operations/metrics.md#replay-checks).
 
-## Prepare an authorized window
+### Prepare an authorized window
 
 1. Record the grant ID, previous/candidate SHAs, frozen main SHA, corpus digest,
    expected bundle digests and spend allowance. The grant ID must exist in the
@@ -67,7 +79,7 @@ See [Replay checks](../../../../docs/operations/metrics.md#replay-checks).
    production is stopped, then restores the original `current` target on exit.
    It does not build or download a bundle.
 
-## Run one side on the VM
+### Run one side on the VM
 
 Run in the trusted VM environment, not locally. `vm.sh` does not forward local
 environment variables automatically, and this driver is not sent with it, so
@@ -115,7 +127,7 @@ label-event ID, timestamps, factory SHA, outcome and tokens. `replay.json` besid
 state durably records case, corpus digest, issue digest, side, fixture, main,
 control SHA, grant, stage caps and stop disposition. Preserve it with the row.
 
-## Stop, settle and compare
+### Stop, settle and compare
 
 1. Capture handoff evidence before closure. Do not merge replay PRs. Under the
    fixture grant close the fixture PR unmerged and close its issue; for
@@ -178,6 +190,10 @@ control SHA, grant, stage caps and stop disposition. Preserve it with the row.
    before/after snapshots. Verify no ordinary production dispatch or unrelated
    issue/PR mutation. Stop all lane processes before authorized cleanup; retain
    the budget, driver records and `/tmp/swarm-<lane>/worker-<n>/` evidence.
+
+## Gotchas
+
+Create the local temporary parent directory before the pin tests. Retain evidence outside disposable state. Do not use a successful fake-transport test as proof of native restoration or model quality.
 
 `REPLAY_ROOT`, `REPLAY_OUTPUT_ROOT` and `REPLAY_SANDBOX_ROOT` exist for isolated
 local harness tests. Native lanes use the defaults. Fake-transport restoration
