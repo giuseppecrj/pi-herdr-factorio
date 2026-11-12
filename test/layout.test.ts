@@ -240,6 +240,26 @@ describe("layout guard", () => {
 			);
 		});
 
+		it("reports every category when a module the guard loads is removed", () => {
+			const root = scratch();
+			rmSync(join(root, "server/sandbox/json.ts"));
+
+			const { status, problems } = run(guard, root);
+			assert.equal(status, 1);
+			includesMatch(
+				problems,
+				/^imports: \.github\/factory\/gates\/scan\.ts imports \.\.\/\.\.\/\.\.\/server\/sandbox\/json\.ts, but server\/sandbox\/json\.ts does not exist$/,
+			);
+			includesMatch(
+				problems,
+				/^classification: cannot load src\/review\.ts: .*server\/sandbox\/json\.ts/,
+			);
+			includesMatch(
+				problems,
+				/^readers: replay-stage-caps: src\/replay\.ts replayStageCaps failed at HEAD: /,
+			);
+		});
+
 		it("fails an unlisted reverse edge into server or host", () => {
 			const root = scratch();
 			appendFileSync(
@@ -298,6 +318,43 @@ describe("layout guard", () => {
 				/exception for .*status-driver\.ts importing \.\/extension\/index\.ts is no longer used/,
 			);
 		});
+
+		it("binds the status driver's exception to where its staging caller copies and runs it", () => {
+			const caller = ".pi/skills/verify-factory/scripts/drive-status.sh";
+			const outside = scratch();
+			edit(
+				outside,
+				caller,
+				'"$lane/ws/.status-driver.ts"',
+				'"$lane/.status-driver.ts"',
+			);
+
+			includesMatch(
+				layout(outside, "imports"),
+				/^imports: exception for \.pi\/skills\/verify-factory\/scripts\/status-driver\.ts: staging caller .*drive-status\.sh copies it to \$lane\/\.status-driver\.ts, outside the checkout \$lane\/ws$/,
+			);
+
+			const nested = scratch();
+			edit(
+				nested,
+				caller,
+				'"$lane/ws/.status-driver.ts"',
+				'"$lane/ws/lane/.status-driver.ts"',
+			);
+
+			includesMatch(
+				layout(nested, "imports"),
+				/copies it to lane\/\.status-driver\.ts, which resolves imports from lane, not \.$/,
+			);
+
+			const elsewhere = scratch();
+			edit(elsewhere, caller, '(cd "$lane/ws" && node', '(cd "$lane" && node');
+
+			includesMatch(
+				layout(elsewhere, "imports"),
+				/staging caller .*drive-status\.sh never runs \.status-driver\.ts from the checkout \$lane\/ws$/,
+			);
+		});
 	});
 
 	describe("classification", () => {
@@ -333,6 +390,32 @@ describe("layout guard", () => {
 				layout(root, "classification"),
 				/^classification: src\/core\/json\.ts drops review seat ultrareview inherited from server\/sandbox\/json\.ts$/,
 			);
+		});
+
+		it("fails review routing that drops a branch outside src and server", () => {
+			const branches = [
+				[
+					"package(?:-lock)?\\.json$|",
+					"",
+					["package.json", "package-lock.json"],
+				],
+				["package(?:-lock)?\\.json$", "package\\.json$", ["package-lock.json"]],
+				["|skills\\/)", ")", ["skills/build/SKILL.md"]],
+			] as const;
+
+			for (const [from, to, routes] of branches) {
+				const root = scratch();
+				edit(root, "src/review.ts", from, to);
+				const problems = layout(root, "classification");
+
+				for (const route of routes)
+					assert.ok(
+						problems.includes(
+							`classification: route ${route} requires review seat ultrareview, but reviewSeats gives code-review,security-review,simplify`,
+						),
+						`${route}:\n${problems.join("\n")}`,
+					);
+			}
 		});
 
 		it("fails a recorded seat that reviewSeats no longer grants", () => {
@@ -488,6 +571,40 @@ describe("layout guard", () => {
 			}
 		});
 
+		it("runs each reader's own constant lookup against the declaration", () => {
+			const readers = [
+				".pi/skills/verify-factory/scripts/drive-replay.sh",
+				"test/integration/replay-driver.test.ts",
+			];
+
+			for (const reader of readers) {
+				const moved = scratch();
+				edit(
+					moved,
+					reader,
+					"const VISIBLE_LIMIT_MS = (",
+					"const VISIBLE_LIMIT_MS_MOVED = (",
+				);
+
+				includesMatch(
+					layout(moved, "readers"),
+					new RegExp(
+						`^readers: visible-test-deadline: ${reader.replace(/\./g, "\\.")} lookup /.*VISIBLE_LIMIT_MS_MOVED.*/m? finds 0 declarations in server/sandbox\\.ts, expected exactly 1$`,
+					),
+				);
+
+				const gone = scratch();
+				edit(gone, reader, /\/\^?export const VISIBLE_LIMIT_MS = /, '"');
+
+				includesMatch(
+					layout(gone, "readers"),
+					new RegExp(
+						`^readers: visible-test-deadline: ${reader.replace(/\./g, "\\.")} has 0 lookups of VISIBLE_LIMIT_MS, expected exactly 1$`,
+					),
+				);
+			}
+		});
+
 		it("runs the real replayStageCaps against the working tree", () => {
 			const root = scratch();
 			edit(
@@ -500,6 +617,135 @@ describe("layout guard", () => {
 			includesMatch(
 				layout(root, "readers"),
 				/^readers: replay-stage-caps: src\/replay\.ts replayStageCaps failed at HEAD: replay_stage_caps_unavailable$/,
+			);
+		});
+	});
+
+	describe("literals", () => {
+		const moves = [
+			{
+				category: "TypeScript constants",
+				target: ".github/factory/WORKFLOW.md",
+				expect: [
+					/^literals: src\/workflow\.ts:\d+ names \.github\/factory\/WORKFLOW\.md, which does not exist/,
+					/^literals: src\/cadence\.ts:\d+ names \.github\/factory\/WORKFLOW\.md, which does not exist/,
+					/^literals: src\/scorers\.ts:\d+ names \.github\/factory\/WORKFLOW\.md, which does not exist/,
+				],
+			},
+			{
+				category: "bare root names beside paths",
+				target: "AGENTS.md",
+				expect: [
+					/^literals: src\/cadence\.ts:\d+ names AGENTS\.md, which does not exist/,
+				],
+			},
+			{
+				category: "path prefixes",
+				target: "test/acceptance",
+				expect: [
+					/^literals: src\/publication\.ts:\d+ names test\/acceptance\/, which is not a directory/,
+					/^literals: src\/feedback\.ts:\d+ names test\/acceptance/,
+					/^literals: src\/validation\.ts:\d+ names test\/acceptance/,
+					/^literals: src\/specify\.ts:\d+ names test\/acceptance/,
+					/^literals: src\/adapters\/github\.ts:\d+ names test\/acceptance/,
+					/^literals: server\/sandbox\.ts:\d+ names test\/acceptance/,
+					/^literals: server\/gates\.ts:\d+ names test\/acceptance\/, which is the prefix of no file/,
+				],
+			},
+			{
+				category: "trusted gate files",
+				target: ".github/factory/gates/scan-rules.json",
+				expect: [
+					/^literals: server\/gates\.ts:\d+ names \.github\/factory\/gates\/scan-rules\.json, which does not exist/,
+				],
+			},
+			{
+				category: "trusted gate manifest",
+				target: ".github/factory/gates",
+				expect: [
+					/^literals: server\/gates\.ts:\d+ names \.github\/factory\/gates\/gates\.json, which does not exist/,
+					/^literals: server\/controller\.ts:\d+ names \.github\/factory\/gates, which does not exist/,
+				],
+			},
+			{
+				category: "script roots",
+				target: "server/viewer/design",
+				expect: [
+					/^literals: scripts\/design-tokens\.mjs:\d+ names server\/viewer\/design, which does not exist/,
+					/^literals: src\/cadence\.ts:\d+ names server\/viewer\/design\/tokens\., which is the prefix of no file/,
+					/^literals: biome\.json:files\.includes\[2\] names server\/viewer\/design\/tokens\.json, which does not exist/,
+				],
+			},
+			{
+				category: "test fixtures",
+				target: "test/fixtures/replay/cases/c3",
+				expect: [
+					/^literals: test\/integration\/replay-driver\.test\.ts:\d+ names test\/fixtures\/replay\/cases\/c3\/issue\.md, which does not exist/,
+				],
+			},
+			{
+				category: "test fixture files",
+				target: "test/fixtures/metrics/runs-2026-11-08.jsonl",
+				expect: [
+					/^literals: test\/integration\/replay-driver\.test\.ts:\d+ names test\/fixtures\/metrics\/runs-2026-11-08\.jsonl, which does not exist/,
+				],
+			},
+			{
+				category: "workflow identities",
+				target: ".github/workflows/ci.yml",
+				expect: [
+					/^literals: src\/validation\.ts:\d+ names \.github\/workflows\/ci\.yml, which does not exist/,
+				],
+			},
+			{
+				category: "config roots",
+				target: "extension",
+				expect: [
+					/^literals: tsconfig\.json:include\[1\] names extension, which is not a directory/,
+					/^literals: package\.json:scripts\.lint names extension, which is not a directory/,
+					/^literals: package\.json:scripts\.format names extension, which is not a directory/,
+					/^literals: \.github\/factory\/gates\/gates\.json:checks\[1\]\.argv\[\d+\] names extension, which is not a directory/,
+				],
+			},
+			{
+				category: "lint plugins",
+				target: "tools/oxlint/anti-slop/index.ts",
+				expect: [
+					/^literals: \.oxlintrc\.json:jsPlugins\[0\]\.specifier names tools\/oxlint\/anti-slop\/index\.ts, which does not exist/,
+				],
+			},
+		] as const;
+
+		for (const move of moves)
+			it(`fails ${move.category} when ${move.target} moves`, () => {
+				const root = scratch();
+				renameSync(join(root, move.target), join(root, `${move.target}.moved`));
+				const problems = layout(root, "literals");
+
+				for (const pattern of move.expect) includesMatch(problems, pattern);
+			});
+
+		it("fails a new unresolved literal and an allowlist entry nothing needs", () => {
+			const root = scratch();
+			appendFileSync(
+				join(root, "src/run.ts"),
+				'export const NOWHERE = "src/nowhere.ts";\n',
+			);
+			edit(
+				root,
+				"scripts/layout-baseline.json",
+				/"allow": \[\n/,
+				'"allow": [\n{ "reason": "stale", "files": ["src/**"], "paths": ["src/stale.ts"] },\n',
+			);
+
+			const problems = layout(root, "literals");
+			includesMatch(
+				problems,
+				/^literals: src\/run\.ts:\d+ names src\/nowhere\.ts, which does not exist; fix the path, or add it to literals\.allow/,
+			);
+			includesMatch(
+				problems,
+				/^literals: allow entry "stale" lists src\/stale\.ts, which no scanned literal still needs; delete it$/,
 			);
 		});
 	});
@@ -544,6 +790,25 @@ describe("layout guard", () => {
 			includesMatch(
 				problems,
 				/^shell: \.pi\/skills\/verify-factory\/scripts\/new-driver\.sh is not inventoried/,
+			);
+		});
+
+		it("fails workflow and scripts shell tokens whose targets move", () => {
+			const root = scratch();
+			renameSync(join(root, "server/cli.ts"), join(root, "server/cli.moved"));
+			renameSync(
+				join(root, "research/PROVENANCE.md"),
+				join(root, "research/PROVENANCE.moved"),
+			);
+
+			const problems = layout(root, "shell");
+			includesMatch(
+				problems,
+				/^shell: \.github\/workflows\/ci\.yml token server\/cli\.ts names server\/cli\.ts, which is missing, expected file$/,
+			);
+			includesMatch(
+				problems,
+				/^shell: scripts\/provenance\.sh token research\/PROVENANCE\.md names research\/PROVENANCE\.md, which is missing, expected file$/,
 			);
 		});
 
@@ -610,6 +875,99 @@ describe("layout guard", () => {
 				problems.join("\n"),
 			);
 		});
+
+		it("does not count an erased type-only import as running a cases file", () => {
+			const line = 'import "./sandbox/audit.cases.ts";';
+			const direct = scratch();
+			edit(
+				direct,
+				"test/sandbox.test.ts",
+				line,
+				'import type {} from "./sandbox/audit.cases.ts";',
+			);
+
+			const problems = layout(direct, "discovery");
+			includesMatch(
+				problems,
+				/^discovery: test\/sandbox\/audit\.cases\.ts is registered by 0 bare imports/,
+			);
+			includesMatch(
+				problems,
+				/^discovery: test\/sandbox\/audit\.cases\.ts runs under 0 discovered tests/,
+			);
+
+			const helper = scratch();
+			write(helper, "test/sandbox/registry.ts", 'import "./audit.cases.ts";\n');
+			edit(
+				helper,
+				"test/sandbox.test.ts",
+				line,
+				'import type {} from "./sandbox/registry.ts";',
+			);
+
+			includesMatch(
+				layout(helper, "discovery"),
+				/^discovery: test\/sandbox\/audit\.cases\.ts runs under 0 discovered tests \(none\), expected exactly 1$/,
+			);
+		});
+
+		it("fails when trusted discovery and the local runner disagree", () => {
+			const manifest = ".github/factory/gates/gates.json";
+			const empty = scratch();
+			edit(empty, manifest, /"testGlobs": \[[^\]]*\]/, '"testGlobs": []');
+
+			const emptied = layout(empty, "discovery");
+			includesMatch(
+				emptied,
+				/^discovery: \.github\/factory\/gates\/gates\.json testGlobs is empty or not a list of globs, so the trusted gate refuses the manifest$/,
+			);
+			includesMatch(
+				emptied,
+				/^discovery: test\/layout\.test\.ts runs under the local runner but not under trusted discovery \(testGlobs: none\)$/,
+			);
+
+			const prefix = scratch();
+			edit(
+				prefix,
+				"server/gates.ts",
+				'path.startsWith("test/") &&\n\t\t\t(!base.has(path)',
+				'path.startsWith("tests/") &&\n\t\t\t(!base.has(path)',
+			);
+
+			includesMatch(
+				layout(prefix, "discovery"),
+				/^discovery: server\/gates\.ts has 0 of the trusted test predicate "path\.startsWith\(\\"test\/\\"\) && .*", expected 1/,
+			);
+
+			const nested = scratch();
+			edit(
+				nested,
+				"package.json",
+				"test/*.test.ts",
+				"test/*.test.ts test/sandbox/*.test.ts",
+			);
+			write(
+				nested,
+				"test/sandbox/nested.test.ts",
+				'import { it } from "node:test";\nit("runs locally only", () => {});\n',
+			);
+			edit(
+				nested,
+				manifest,
+				'"test/integration/*.test.ts"',
+				'"test/integration/*.test.ts", "test/fixtures/**/*.test.ts"',
+			);
+
+			const split = layout(nested, "discovery");
+			includesMatch(
+				split,
+				/^discovery: test\/sandbox\/nested\.test\.ts runs under the local runner but not under trusted discovery/,
+			);
+			includesMatch(
+				split,
+				/^discovery: \.github\/factory\/gates\/gates\.json testGlob test\/fixtures\/\*\*\/\*\.test\.ts is refused by server\/gates\.ts/,
+			);
+		});
 	});
 
 	describe("navigation", () => {
@@ -624,6 +982,17 @@ describe("layout guard", () => {
 				"navigation: .pi/skills/ has no README.md",
 				"navigation: docs/ has no README.md",
 				"navigation: newdir/ has no README.md",
+			]);
+		});
+
+		it("fails a README without a full sentence", () => {
+			const root = scratch();
+			write(root, "tools/README.md", "");
+			write(root, "research/README.md", "# Research\n\n- notes\n");
+
+			assert.deepEqual(layout(root, "navigation"), [
+				"navigation: research/README.md has no full sentence; say what the folder holds and where new things go",
+				"navigation: tools/README.md has no full sentence; say what the folder holds and where new things go",
 			]);
 		});
 	});

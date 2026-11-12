@@ -8,6 +8,7 @@ export const CATEGORIES = [
 	"imports",
 	"classification",
 	"readers",
+	"literals",
 	"shell",
 	"discovery",
 	"navigation",
@@ -19,8 +20,24 @@ const TEST = /\.test\.[cm]?[jt]sx?$/;
 const CASES = /\.cases\.[cm]?[jt]s$/;
 const SKIPPED_DIRS = new Set([".git", "node_modules"]);
 
-const PATH_ROOTS =
-	"(?:src|server|host|test|docs|scripts|extension|skills|tools|research|\\.pi|\\.github)\\/[\\w./-]*\\w";
+const ROOT_DIRS = new Set([
+	"src",
+	"server",
+	"host",
+	"test",
+	"docs",
+	"scripts",
+	"extension",
+	"skills",
+	"tools",
+	"research",
+	".pi",
+	".github",
+]);
+
+const ROOT_ALTERNATION = `(?:${[...ROOT_DIRS].map((dir) => dir.replace(".", "\\.")).join("|")})`;
+
+const PATH_ROOTS = `${ROOT_ALTERNATION}\\/[\\w./-]*\\w`;
 
 const ROOT_FILES =
 	"AGENTS\\.md|README\\.md|DESIGN\\.md|LICENSE|package\\.json|package-lock\\.json|tsconfig\\.json|biome\\.json|\\.oxlintrc\\.json";
@@ -47,6 +64,16 @@ const SHELL_TOKEN =
 	/(?<![\w.-])(?:\.\/)?(?:src|server|host|test|docs|skills|scripts|extension|tools|research|\.pi|\.github|node_modules)\/[\w./*-]*/g;
 
 const HEREDOC_IMPORT = /import\s*\{([^}]*)\}\s*from\s*'(\.\/[^']+)'/g;
+
+const LITERAL_PATH = new RegExp(
+	`(?<![\\w./@-])(?:\\.\\/)?${ROOT_ALTERNATION}\\/[\\w./*{},<>@+-]*`,
+	"g",
+);
+
+const ROOT_FILE_NAMES = new Set(ROOT_FILES.replaceAll("\\", "").split("|"));
+
+const REGEX_LITERAL =
+	/\/((?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n[])+)\/([dgimsuvy]*)/g;
 
 export function repoFiles(root) {
 	let top = "";
@@ -164,11 +191,29 @@ function context(root) {
 		return texts.get(path);
 	};
 
-	const isDir = (path) =>
-		path === "." || files.some((file) => file.startsWith(`${path}/`));
+	const dirs = new Set(["."]);
+
+	for (const file of files)
+		for (let at = file.indexOf("/"); at > 0; at = file.indexOf("/", at + 1))
+			dirs.add(file.slice(0, at));
 
 	const kindOf = (path) =>
-		set.has(path) ? "file" : isDir(path) ? "dir" : "missing";
+		set.has(path) ? "file" : dirs.has(path) ? "dir" : "missing";
+
+	const sources = new Map();
+
+	const source = (path) => {
+		if (!sources.has(path)) {
+			const api = ts();
+
+			sources.set(
+				path,
+				api.createSourceFile(path, read(path), api.ScriptTarget.Latest, true),
+			);
+		}
+
+		return sources.get(path);
+	};
 
 	return {
 		root,
@@ -176,6 +221,7 @@ function context(root) {
 		set,
 		read,
 		kindOf,
+		source,
 		baseline: parsed(
 			"scripts/layout-baseline.json",
 			read("scripts/layout-baseline.json"),
@@ -195,16 +241,8 @@ function ts() {
 	return typescript;
 }
 
-function specifiers(file, text) {
+function specifiers(source) {
 	const api = ts();
-
-	const source = api.createSourceFile(
-		file,
-		text,
-		api.ScriptTarget.Latest,
-		true,
-	);
-
 	const found = [];
 
 	const visit = (node) => {
@@ -216,20 +254,31 @@ function specifiers(file, text) {
 			found.push({
 				specifier: node.moduleSpecifier.text,
 				bare: api.isImportDeclaration(node) && node.importClause === undefined,
+				runtime: api.isImportDeclaration(node)
+					? node.importClause?.isTypeOnly !== true
+					: !node.isTypeOnly,
 			});
 		else if (
 			api.isImportTypeNode(node) &&
 			api.isLiteralTypeNode(node.argument) &&
 			api.isStringLiteralLike(node.argument.literal)
 		)
-			found.push({ specifier: node.argument.literal.text, bare: false });
+			found.push({
+				specifier: node.argument.literal.text,
+				bare: false,
+				runtime: false,
+			});
 		else if (
 			api.isCallExpression(node) &&
 			node.expression.kind === api.SyntaxKind.ImportKeyword &&
 			node.arguments[0] !== undefined &&
 			api.isStringLiteralLike(node.arguments[0])
 		)
-			found.push({ specifier: node.arguments[0].text, bare: false });
+			found.push({
+				specifier: node.arguments[0].text,
+				bare: false,
+				runtime: true,
+			});
 		api.forEachChild(node, visit);
 	};
 
@@ -238,16 +287,8 @@ function specifiers(file, text) {
 	return found;
 }
 
-function exportedNames(file, text) {
+function exportedNames(source) {
 	const api = ts();
-
-	const source = api.createSourceFile(
-		file,
-		text,
-		api.ScriptTarget.Latest,
-		true,
-	);
-
 	const names = new Set();
 
 	for (const statement of source.statements) {
@@ -287,7 +328,7 @@ function importGraph(ctx) {
 			continue;
 		const edges = [];
 
-		for (const { specifier, bare } of specifiers(file, ctx.read(file))) {
+		for (const { specifier, bare, runtime } of specifiers(ctx.source(file))) {
 			if (!specifier.startsWith("./") && !specifier.startsWith("../")) continue;
 
 			const exception = exceptions.find(
@@ -300,7 +341,13 @@ function importGraph(ctx) {
 				exception === undefined ? posix.dirname(file) : exception.resolveFrom;
 
 			const target = posix.normalize(posix.join(base, specifier));
-			edges.push({ specifier, target, bare, resolved: ctx.set.has(target) });
+			edges.push({
+				specifier,
+				target,
+				bare,
+				runtime,
+				resolved: ctx.set.has(target),
+			});
 		}
 
 		graph.set(file, edges);
@@ -337,21 +384,101 @@ function checkImports(ctx, problems, { graph, used }) {
 				`imports: ${pair} is listed in reverseEdges but no longer exists; delete it from scripts/layout-baseline.json`,
 			);
 
-	for (const exception of ctx.baseline.imports.exceptions)
+	for (const exception of ctx.baseline.imports.exceptions) {
 		if (!used.has(exception))
 			problems.push(
 				`imports: exception for ${exception.file} importing ${exception.specifier} is no longer used; delete it from scripts/layout-baseline.json`,
 			);
+
+		checkStagingCaller(ctx, problems, exception);
+	}
+}
+
+function escaped(text) {
+	return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function checkStagingCaller(ctx, problems, exception) {
+	const { file, caller, resolveFrom } = exception;
+
+	const report = (message) =>
+		problems.push(`imports: exception for ${file}: ${message}`);
+
+	if (!ctx.set.has(caller)) {
+		report(`staging caller ${caller} is missing`);
+
+		return;
+	}
+
+	const text = ctx.read(caller);
+
+	const copies = [...text.matchAll(/\bcp\s+"([^"]+)"\s+"([^"]+)"/g)].filter(
+		(m) => m[1].endsWith(`/${file}`),
+	);
+
+	if (copies.length !== 1) {
+		report(
+			`staging caller ${caller} copies it ${copies.length} times, expected exactly 1`,
+		);
+
+		return;
+	}
+
+	const [, from, dest] = copies[0];
+	const checkout = from.slice(0, -(file.length + 1));
+
+	if (!dest.startsWith(`${checkout}/`)) {
+		report(
+			`staging caller ${caller} copies it to ${dest}, outside the checkout ${checkout}`,
+		);
+
+		return;
+	}
+
+	const staged = dest.slice(checkout.length + 1);
+
+	if (posix.dirname(staged) !== resolveFrom)
+		report(
+			`staging caller ${caller} copies it to ${staged}, which resolves imports from ${posix.dirname(staged)}, not ${resolveFrom}`,
+		);
+
+	const runs = new RegExp(
+		`cd\\s+"${escaped(checkout)}"\\s*&&\\s*node\\b[^\\n]*\\s${escaped(staged)}(?![\\w.-])`,
+	);
+
+	if (!runs.test(text))
+		report(
+			`staging caller ${caller} never runs ${staged} from the checkout ${checkout}`,
+		);
+}
+
+function firstLine(error) {
+	return (error instanceof Error ? error.message : String(error)).split(
+		"\n",
+	)[0];
 }
 
 async function checkClassification(ctx, problems) {
-	const { roots, seatReader, files, retired } = ctx.baseline.classification;
+	const { roots, seatReader, files, retired, routes } =
+		ctx.baseline.classification;
 
-	const module = await import(
-		pathToFileURL(join(ctx.root, seatReader.module)).href
-	);
+	let reviewSeats;
 
-	const reviewSeats = module[seatReader.export];
+	try {
+		const module = await import(
+			pathToFileURL(join(ctx.root, seatReader.module)).href
+		);
+
+		reviewSeats = module[seatReader.export];
+	} catch (error) {
+		problems.push(
+			`classification: cannot load ${seatReader.module}: ${firstLine(error)}`,
+		);
+
+		return;
+	}
+
+	checkRoutes(ctx, problems, routes, reviewSeats);
 
 	const scoped = ctx.files.filter((file) =>
 		roots.some((r) => file.startsWith(`${r}/`)),
@@ -408,6 +535,23 @@ async function checkClassification(ctx, problems) {
 	}
 }
 
+function checkRoutes(ctx, problems, routes, reviewSeats) {
+	for (const [path, seats] of Object.entries(routes)) {
+		if (!ctx.set.has(path))
+			problems.push(
+				`classification: route ${path} is missing; record a path that the same reviewSeats branch covers`,
+			);
+
+		const actual = new Set(reviewSeats([path]));
+
+		for (const seat of seats)
+			if (!actual.has(seat))
+				problems.push(
+					`classification: route ${path} requires review seat ${seat}, but reviewSeats gives ${[...actual].join(",")}`,
+				);
+	}
+}
+
 function fsExec(root) {
 	return async (command, args) => {
 		const spec = command === "git" && args[0] === "show" ? args[1] : undefined;
@@ -436,12 +580,15 @@ async function checkConstants(ctx, problems, entry) {
 
 		const text = ctx.read(reader);
 
-		for (const declaration of entry.declarations)
-			for (const token of [declaration.file, declaration.name])
-				if (!text.includes(token))
-					problems.push(
-						`readers: ${entry.id}: ${reader} no longer names ${token}`,
-					);
+		for (const declaration of entry.declarations) {
+			if (!text.includes(declaration.file))
+				problems.push(
+					`readers: ${entry.id}: ${reader} no longer names ${declaration.file}`,
+				);
+
+			if (entry.run === undefined)
+				checkLookup(ctx, problems, entry.id, reader, declaration);
+		}
 	}
 
 	const values = {};
@@ -487,6 +634,46 @@ async function checkConstants(ctx, problems, entry) {
 			`readers: ${entry.id}: ${entry.run.module} ${entry.run.export} failed at HEAD: ${error instanceof Error ? error.message : String(error)}`,
 		);
 	}
+}
+
+function lookupsOf(text, name) {
+	const found = [];
+
+	for (const m of text.matchAll(REGEX_LITERAL)) {
+		if (!m[1].includes(name)) continue;
+
+		try {
+			found.push({
+				literal: m[0],
+				pattern: new RegExp(m[1], `${m[2].replace("g", "")}g`),
+			});
+		} catch {
+			continue;
+		}
+	}
+
+	return found;
+}
+
+function checkLookup(ctx, problems, id, reader, declaration) {
+	const lookups = lookupsOf(ctx.read(reader), declaration.name);
+
+	if (lookups.length !== 1) {
+		problems.push(
+			`readers: ${id}: ${reader} has ${lookups.length} lookups of ${declaration.name}, expected exactly 1`,
+		);
+
+		return;
+	}
+
+	if (!ctx.set.has(declaration.file)) return;
+
+	const found = [...ctx.read(declaration.file).matchAll(lookups[0].pattern)];
+
+	if (found.length !== 1)
+		problems.push(
+			`readers: ${id}: ${reader} lookup ${lookups[0].literal} finds ${found.length} declarations in ${declaration.file}, expected exactly 1`,
+		);
 }
 
 function checkPaths(ctx, problems, entry) {
@@ -535,6 +722,180 @@ async function checkReaders(ctx, problems) {
 	for (const entry of ctx.baseline.readers)
 		if (entry.kind === "constants") await checkConstants(ctx, problems, entry);
 		else checkPaths(ctx, problems, entry);
+}
+
+function literalProblem(ctx, token, open) {
+	const raw = token.replace(/^\.\//, "").replace(/[,:;]+$/, "");
+	const prefixOf = (path) => ctx.files.some((file) => file.startsWith(path));
+
+	if (/[*{<]/.test(raw)) {
+		const glob = raw.replace(/<[^>]*>/g, "*").replace(/\/$/, "/**");
+
+		return ctx.files.some((file) => matchesGlob(file, glob))
+			? null
+			: { path: raw, problem: "matches no file" };
+	}
+
+	const sentence =
+		/(?:\/|\.[^/]*)\.$/.test(raw) ||
+		(raw.endsWith(".") && ctx.kindOf(raw.slice(0, -1)) !== "missing");
+
+	if (open || (raw.endsWith(".") && !sentence))
+		return prefixOf(raw)
+			? null
+			: { path: raw, problem: "is the prefix of no file" };
+
+	const path = sentence ? raw.slice(0, -1) : raw;
+
+	if (path.endsWith("/"))
+		return ctx.kindOf(path.slice(0, -1)) === "dir"
+			? null
+			: { path, problem: "is not a directory" };
+
+	return ctx.kindOf(path) === "missing"
+		? { path, problem: "does not exist" }
+		: null;
+}
+
+function rootNameProblem(ctx, name) {
+	if (ROOT_DIRS.has(name))
+		return ctx.kindOf(name) === "dir" ? null : "is not a directory";
+
+	if (ROOT_FILE_NAMES.has(name))
+		return ctx.set.has(name) ? null : "does not exist";
+
+	return undefined;
+}
+
+function literalTexts(api, source) {
+	const found = [];
+
+	const add = (node, text, open) =>
+		found.push({
+			text,
+			open,
+			line: source.getLineAndCharacterOfPosition(node.getStart()).line + 1,
+		});
+
+	const visit = (node) => {
+		if (api.isStringLiteralLike(node) || api.isTemplateTail(node))
+			add(node, node.text, false);
+		else if (api.isTemplateHead(node) || api.isTemplateMiddle(node))
+			add(node, node.text, true);
+
+		if (api.isArrayLiteralExpression(node)) {
+			const texts = node.elements
+				.filter((element) => api.isStringLiteralLike(element))
+				.map((element) => element.text);
+
+			if (texts.some((text) => text.match(LITERAL_PATH) !== null))
+				for (const element of node.elements)
+					if (api.isStringLiteralLike(element))
+						found.push({
+							text: element.text,
+							root: true,
+							line:
+								source.getLineAndCharacterOfPosition(element.getStart()).line +
+								1,
+						});
+		}
+
+		api.forEachChild(node, visit);
+	};
+
+	visit(source);
+
+	return found;
+}
+
+function configTexts(value, key = "") {
+	if (isText(value))
+		return value
+			.split(/\s+/)
+			.map((word) => word.replace(/^[!"']+|["']+$/g, ""))
+			.filter((word) => word !== "")
+			.map((word) => ({ text: word, open: false, root: true, line: key }));
+
+	if (Array.isArray(value))
+		return value.flatMap((item, at) => configTexts(item, `${key}[${at}]`));
+
+	if (value instanceof Object)
+		return Object.entries(value).flatMap(([name, item]) =>
+			configTexts(item, key === "" ? name : `${key}.${name}`),
+		);
+
+	return [];
+}
+
+function checkLiterals(ctx, problems) {
+	const { configs, exclude, allow } = ctx.baseline.literals;
+	const used = new Set();
+
+	const allowed = (file, path) =>
+		allow.some((entry, at) => {
+			if (!globbed(file, entry.files)) return false;
+
+			if ((entry.paths ?? []).includes(path)) {
+				used.add(`${at}\0${path}`);
+
+				return true;
+			}
+
+			return globbed(path, entry.globs ?? []);
+		});
+
+	const inspect = (file, { text, open, root, line }) => {
+		const report = (path, problem) => {
+			if (!allowed(file, path))
+				problems.push(
+					`literals: ${file}:${line} names ${path}, which ${problem}; fix the path, or add it to literals.allow in scripts/layout-baseline.json with a reason`,
+				);
+		};
+
+		if (root) {
+			const problem = rootNameProblem(ctx, text);
+
+			if (problem !== undefined) {
+				if (problem !== null) report(text, problem);
+
+				return;
+			}
+		}
+
+		for (const m of text.matchAll(LITERAL_PATH)) {
+			const atEnd = m.index + m[0].length === text.length;
+			const found = literalProblem(ctx, m[0], open && atEnd);
+
+			if (found !== null) report(found.path, found.problem);
+		}
+	};
+
+	const api = ts();
+
+	for (const file of ctx.files)
+		if (CODE.test(file) && !file.endsWith(".d.ts") && !globbed(file, exclude))
+			for (const item of literalTexts(api, ctx.source(file)))
+				if (!item.root) inspect(file, item);
+				else if (rootNameProblem(ctx, item.text) !== undefined)
+					inspect(file, item);
+
+	for (const file of configs) {
+		if (!ctx.set.has(file)) {
+			problems.push(`literals: config ${file} is missing`);
+			continue;
+		}
+
+		for (const item of configTexts(parsed(file, ctx.read(file))))
+			inspect(file, item);
+	}
+
+	for (const [at, entry] of allow.entries())
+		for (const path of entry.paths ?? []) {
+			if (!used.has(`${at}\0${path}`))
+				problems.push(
+					`literals: allow entry "${entry.reason}" lists ${path}, which no scanned literal still needs; delete it`,
+				);
+		}
 }
 
 function checkShell(ctx, problems) {
@@ -618,7 +979,7 @@ function checkShell(ctx, problems) {
 				continue;
 			}
 
-			const exported = exportedNames(target, ctx.read(target));
+			const exported = exportedNames(ctx.source(target));
 
 			for (const name of names) {
 				if (!(imports.get(specifier) ?? new Set()).has(name))
@@ -633,6 +994,59 @@ function checkShell(ctx, problems) {
 			}
 		}
 	}
+}
+
+function trustedTests(ctx, problems) {
+	const { manifest, materializer, accepts, predicates } =
+		ctx.baseline.discovery.trusted;
+
+	const report = (message) => problems.push(`discovery: ${message}`);
+
+	if (!ctx.set.has(materializer)) report(`${materializer} is missing`);
+	else {
+		const text = normalized(ctx.read(materializer));
+
+		for (const expression of [accepts, ...predicates]) {
+			const found = occurrences(text, normalized(expression));
+
+			if (found !== 1)
+				report(
+					`${materializer} has ${found} of the trusted test predicate ${JSON.stringify(expression)}, expected 1; trusted discovery may no longer match the local runner`,
+				);
+		}
+	}
+
+	if (!ctx.set.has(manifest)) {
+		report(`${manifest} is missing`);
+
+		return null;
+	}
+
+	const globs = parsed(manifest, ctx.read(manifest)).testGlobs;
+
+	if (!Array.isArray(globs) || globs.length === 0 || !globs.every(isText)) {
+		report(
+			`${manifest} testGlobs is empty or not a list of globs, so the trusted gate refuses the manifest`,
+		);
+
+		return [];
+	}
+
+	const accepted = new RegExp(accepts.slice(1, accepts.lastIndexOf("/")));
+
+	for (const glob of globs) {
+		if (!accepted.test(glob))
+			report(
+				`${manifest} testGlob ${glob} is refused by ${materializer} (${accepts})`,
+			);
+
+		if (!ctx.files.some((file) => matchesGlob(file, glob)))
+			report(
+				`${manifest} testGlob ${glob} matches no file, so the trusted gate fails with missing_tests`,
+			);
+	}
+
+	return globs;
 }
 
 function runnerGlobs(ctx) {
@@ -659,6 +1073,29 @@ function checkDiscovery(ctx, problems, { graph }) {
 				`discovery: ${file} is a test outside runner discovery (${globs.join(", ")})`,
 			);
 
+	const trustedGlobs = trustedTests(ctx, problems);
+
+	if (trustedGlobs !== null) {
+		const trusted = new Set(
+			scoped.filter((file) => !CASES.test(file) && globbed(file, trustedGlobs)),
+		);
+
+		const local = new Set(discovered);
+		const listed = trustedGlobs.join(", ") || "none";
+
+		for (const file of local)
+			if (!trusted.has(file))
+				problems.push(
+					`discovery: ${file} runs under the local runner but not under trusted discovery (testGlobs: ${listed})`,
+				);
+
+		for (const file of trusted)
+			if (!local.has(file))
+				problems.push(
+					`discovery: ${file} runs under trusted discovery but not under the local runner (${globs.join(", ")})`,
+				);
+	}
+
 	const closures = new Map();
 
 	for (const test of discovered) {
@@ -669,7 +1106,7 @@ function checkDiscovery(ctx, problems, { graph }) {
 			const next = queue.pop();
 
 			for (const edge of graph.get(next) ?? [])
-				if (edge.resolved && !reached.has(edge.target)) {
+				if (edge.resolved && edge.runtime && !reached.has(edge.target)) {
 					reached.add(edge.target);
 					queue.push(edge.target);
 				}
@@ -708,9 +1145,35 @@ function checkNavigation(ctx, problems) {
 			.map((file) => file.split("/")[0]),
 	);
 
-	for (const dir of [...new Set([...top, ...required])].sort())
-		if (!exempt.includes(dir) && !ctx.set.has(`${dir}/README.md`))
+	for (const dir of [...new Set([...top, ...required])].sort()) {
+		if (exempt.includes(dir)) continue;
+		const readme = `${dir}/README.md`;
+
+		if (!ctx.set.has(readme))
 			problems.push(`navigation: ${dir}/ has no README.md`);
+		else if (!hasSentence(ctx.read(readme)))
+			problems.push(
+				`navigation: ${readme} has no full sentence; say what the folder holds and where new things go`,
+			);
+	}
+}
+
+function hasSentence(text) {
+	const prose = text
+		.replace(/^```[\s\S]*?^```/gm, "")
+		.split("\n")
+		.filter((line) => !/^\s*(?:#|\||<!--)/.test(line))
+		.join(" ");
+
+	return prose
+		.split(/(?<=[.!?])\s/)
+		.map((part) => part.trim().replace(/^(?:[-*>]|\d+\.)\s+/, ""))
+		.some(
+			(part) =>
+				/^[A-Z`*_"(]/.test(part) &&
+				/[.!?]$/.test(part) &&
+				part.split(/\s+/).length >= 3,
+		);
 }
 
 function checkCitations(ctx, problems) {
@@ -800,19 +1263,26 @@ export async function checkLayout(root, only = CATEGORIES) {
 	const needsGraph = only.includes("imports") || only.includes("discovery");
 	const graph = needsGraph ? importGraph(ctx) : null;
 
-	if (only.includes("imports")) checkImports(ctx, problems, graph);
+	const checks = {
+		imports: () => checkImports(ctx, problems, graph),
+		classification: () => checkClassification(ctx, problems),
+		readers: () => checkReaders(ctx, problems),
+		literals: () => checkLiterals(ctx, problems),
+		shell: () => checkShell(ctx, problems),
+		discovery: () => checkDiscovery(ctx, problems, graph),
+		navigation: () => checkNavigation(ctx, problems),
+		citations: () => checkCitations(ctx, problems),
+	};
 
-	if (only.includes("classification")) await checkClassification(ctx, problems);
+	for (const category of CATEGORIES) {
+		if (!only.includes(category)) continue;
 
-	if (only.includes("readers")) await checkReaders(ctx, problems);
-
-	if (only.includes("shell")) checkShell(ctx, problems);
-
-	if (only.includes("discovery")) checkDiscovery(ctx, problems, graph);
-
-	if (only.includes("navigation")) checkNavigation(ctx, problems);
-
-	if (only.includes("citations")) checkCitations(ctx, problems);
+		try {
+			await checks[category]();
+		} catch (error) {
+			problems.push(`${category}: check failed: ${firstLine(error)}`);
+		}
+	}
 
 	return problems;
 }

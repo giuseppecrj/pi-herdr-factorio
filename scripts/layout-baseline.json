@@ -13,7 +13,8 @@
 				"file": ".pi/skills/verify-factory/scripts/status-driver.ts",
 				"specifier": "./extension/index.ts",
 				"resolveFrom": ".",
-				"until": "L02"
+				"until": "L02",
+				"caller": ".pi/skills/verify-factory/scripts/drive-status.sh"
 			}
 		],
 		"reverseEdges": [
@@ -43,104 +44,508 @@
 		]
 	},
 	"classification": {
-		"roots": [
-			"src",
-			"server",
-			"host"
-		],
+		"roots": ["src", "server", "host"],
 		"seatReader": {
 			"module": "src/review.ts",
 			"export": "reviewSeats"
 		},
 		"files": {
-			"server/README.md": { "owner": "server", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"server/cli.ts": { "owner": "host/cli", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"server/controller.ts": { "owner": "host/controller", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"server/factory.service": { "owner": "host/install", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"server/gates.ts": { "owner": "host/gates", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"server/gates/draft-reporter.mjs": { "owner": "host/gates", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"server/install-exe-dev.sh": { "owner": "host/install", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"server/provision.sh": { "owner": "host/install", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"server/sandbox.ts": { "owner": "host/sandbox", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"server/sandbox/anthropic-limits.ts": { "owner": "src/core", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"server/sandbox/assets/package-lock.json": { "owner": "host/bundle", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"server/sandbox/assets/package.json": { "owner": "host/bundle", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"server/sandbox/assets/pi.ts": { "owner": "host/bundle", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"server/sandbox/assets/stage-init.ts": { "owner": "host/bundle", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"server/sandbox/audit.ts": { "owner": "host/gateway", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"server/sandbox/bwrap.ts": { "owner": "host/isolation", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"server/sandbox/control.ts": { "owner": "host/gateway", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"server/sandbox/credentials.ts": { "owner": "host/gateway", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"server/sandbox/echo-fixture.ts": { "owner": "host/sandbox", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"server/sandbox/gateway-client.ts": { "owner": "host/gateway", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"server/sandbox/gateway-main.ts": { "owner": "host/gateway", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"server/sandbox/gateway.ts": { "owner": "host/gateway", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"server/sandbox/json.ts": { "owner": "src/core", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"server/sandbox/lines.ts": { "owner": "host/sandbox", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"server/sandbox/manifest.ts": { "owner": "host/bundle", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"server/sandbox/meter.ts": { "owner": "host/gateway", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"server/sandbox/policy.ts": { "owner": "host/gateway", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"server/sandbox/preflight.ts": { "owner": "host/isolation", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"server/sandbox/result.ts": { "owner": "host/sandbox", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"server/sandbox/routes.ts": { "owner": "host/gateway", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"server/sandbox/rpc.ts": { "owner": "host/sandbox", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"server/sandbox/scope.ts": { "owner": "host/isolation", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"server/sandbox/seccomp.ts": { "owner": "host/isolation", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"server/sandbox/settle.ts": { "owner": "host/sandbox", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"server/viewer.ts": { "owner": "host/viewer", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"server/viewer/claim.ts": { "owner": "host/viewer", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"server/viewer/dashboard.ts": { "owner": "host/viewer", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"server/viewer/design/SOURCE": { "owner": "host/viewer", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"server/viewer/design/icons/NOTICE": { "owner": "host/viewer", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"server/viewer/design/icons/icons.ts": { "owner": "host/viewer", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"server/viewer/design/tokens.css": { "owner": "host/viewer", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"server/viewer/design/tokens.json": { "owner": "host/viewer", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"server/viewer/evidence.ts": { "owner": "host/viewer", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"server/viewer/icon-192.png": { "owner": "host/viewer", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"server/viewer/icon-512.png": { "owner": "host/viewer", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"server/viewer/manifest.webmanifest": { "owner": "host/viewer", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"server/viewer/render.ts": { "owner": "host/viewer", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"server/viewer/style.css": { "owner": "host/viewer", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"src/README.md": { "owner": "src", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"src/accept.ts": { "owner": "src/contract", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"src/adapters/github.ts": { "owner": "src/github", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"src/admission.ts": { "owner": "src/trust", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"src/artifacts.ts": { "owner": "src/contract", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"src/attention.ts": { "owner": "src/views", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"src/build.ts": { "owner": "src/candidate", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"src/cadence.ts": { "owner": "src/maintenance", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"src/diagnosis.ts": { "owner": "src/candidate", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"src/explain.ts": { "owner": "src/views", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"src/feed.ts": { "owner": "src/views", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"src/feedback.ts": { "owner": "src/candidate", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"src/gh.ts": { "owner": "src/github", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"src/handoff.ts": { "owner": "src/candidate", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"src/ledger.ts": { "owner": "src/ledger", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"src/markers.ts": { "owner": "src/trust", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"src/metrics.ts": { "owner": "src/views", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"src/orchestrator.ts": { "owner": "src/controller", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"src/platform.ts": { "owner": "src/trust", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"src/policy.ts": { "owner": "src/trust", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"src/publication.ts": { "owner": "src/github", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"src/replay.ts": { "owner": "src/maintenance", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"src/review.ts": { "owner": "src/candidate", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"src/run.ts": { "owner": "src/core", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"src/scorers.ts": { "owner": "src/maintenance", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"src/specify.ts": { "owner": "src/contract", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"src/stages.ts": { "owner": "src/candidate", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
-			"src/tickets.ts": { "owner": "src/github", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"src/validation.ts": { "owner": "src/candidate", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
-			"src/workflow.ts": { "owner": "src/config", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" }
+			"server/README.md": {
+				"owner": "server",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/cli.ts": {
+				"owner": "host/cli",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/controller.ts": {
+				"owner": "host/controller",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/factory.service": {
+				"owner": "host/install",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/gates.ts": {
+				"owner": "host/gates",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/gates/draft-reporter.mjs": {
+				"owner": "host/gates",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/install-exe-dev.sh": {
+				"owner": "host/install",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/provision.sh": {
+				"owner": "host/install",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox.ts": {
+				"owner": "host/sandbox",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/anthropic-limits.ts": {
+				"owner": "src/core",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/assets/package-lock.json": {
+				"owner": "host/bundle",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/assets/package.json": {
+				"owner": "host/bundle",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/assets/pi.ts": {
+				"owner": "host/bundle",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/assets/stage-init.ts": {
+				"owner": "host/bundle",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/audit.ts": {
+				"owner": "host/gateway",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/bwrap.ts": {
+				"owner": "host/isolation",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/control.ts": {
+				"owner": "host/gateway",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/credentials.ts": {
+				"owner": "host/gateway",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/echo-fixture.ts": {
+				"owner": "host/sandbox",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/gateway-client.ts": {
+				"owner": "host/gateway",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/gateway-main.ts": {
+				"owner": "host/gateway",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/gateway.ts": {
+				"owner": "host/gateway",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/json.ts": {
+				"owner": "src/core",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/lines.ts": {
+				"owner": "host/sandbox",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/manifest.ts": {
+				"owner": "host/bundle",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/meter.ts": {
+				"owner": "host/gateway",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/policy.ts": {
+				"owner": "host/gateway",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/preflight.ts": {
+				"owner": "host/isolation",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/result.ts": {
+				"owner": "host/sandbox",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/routes.ts": {
+				"owner": "host/gateway",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/rpc.ts": {
+				"owner": "host/sandbox",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/scope.ts": {
+				"owner": "host/isolation",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/seccomp.ts": {
+				"owner": "host/isolation",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/sandbox/settle.ts": {
+				"owner": "host/sandbox",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/viewer.ts": {
+				"owner": "host/viewer",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/viewer/claim.ts": {
+				"owner": "host/viewer",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/viewer/dashboard.ts": {
+				"owner": "host/viewer",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/viewer/design/SOURCE": {
+				"owner": "host/viewer",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/viewer/design/icons/NOTICE": {
+				"owner": "host/viewer",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/viewer/design/icons/icons.ts": {
+				"owner": "host/viewer",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/viewer/design/tokens.css": {
+				"owner": "host/viewer",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/viewer/design/tokens.json": {
+				"owner": "host/viewer",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/viewer/evidence.ts": {
+				"owner": "host/viewer",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/viewer/icon-192.png": {
+				"owner": "host/viewer",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/viewer/icon-512.png": {
+				"owner": "host/viewer",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/viewer/manifest.webmanifest": {
+				"owner": "host/viewer",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/viewer/render.ts": {
+				"owner": "host/viewer",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"server/viewer/style.css": {
+				"owner": "host/viewer",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/README.md": {
+				"owner": "src",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/accept.ts": {
+				"owner": "src/contract",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/adapters/github.ts": {
+				"owner": "src/github",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/admission.ts": {
+				"owner": "src/trust",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/artifacts.ts": {
+				"owner": "src/contract",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/attention.ts": {
+				"owner": "src/views",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/build.ts": {
+				"owner": "src/candidate",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/cadence.ts": {
+				"owner": "src/maintenance",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/diagnosis.ts": {
+				"owner": "src/candidate",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/explain.ts": {
+				"owner": "src/views",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/feed.ts": {
+				"owner": "src/views",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/feedback.ts": {
+				"owner": "src/candidate",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/gh.ts": {
+				"owner": "src/github",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/handoff.ts": {
+				"owner": "src/candidate",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/ledger.ts": {
+				"owner": "src/ledger",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/markers.ts": {
+				"owner": "src/trust",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/metrics.ts": {
+				"owner": "src/views",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/orchestrator.ts": {
+				"owner": "src/controller",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/platform.ts": {
+				"owner": "src/trust",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/policy.ts": {
+				"owner": "src/trust",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/publication.ts": {
+				"owner": "src/github",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/replay.ts": {
+				"owner": "src/maintenance",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/review.ts": {
+				"owner": "src/candidate",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/run.ts": {
+				"owner": "src/core",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/scorers.ts": {
+				"owner": "src/maintenance",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/specify.ts": {
+				"owner": "src/contract",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/stages.ts": {
+				"owner": "src/candidate",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/tickets.ts": {
+				"owner": "src/github",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/validation.ts": {
+				"owner": "src/candidate",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/workflow.ts": {
+				"owner": "src/config",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			}
 		},
-		"retired": {}
+		"retired": {},
+		"routes": {
+			"package.json": [
+				"code-review",
+				"security-review",
+				"simplify",
+				"ultrareview"
+			],
+			"package-lock.json": [
+				"code-review",
+				"security-review",
+				"simplify",
+				"ultrareview"
+			],
+			"skills/build/SKILL.md": [
+				"code-review",
+				"security-review",
+				"simplify",
+				"ultrareview"
+			]
+		}
 	},
 	"readers": [
 		{
 			"id": "replay-stage-caps",
 			"kind": "constants",
-			"readers": [
-				"src/replay.ts"
-			],
+			"readers": ["src/replay.ts"],
 			"run": {
 				"module": "src/replay.ts",
 				"export": "replayStageCaps"
@@ -633,15 +1038,226 @@
 			]
 		}
 	],
+	"literals": {
+		"configs": [
+			"package.json",
+			"tsconfig.json",
+			"biome.json",
+			".oxlintrc.json",
+			".github/factory/gates/gates.json",
+			".github/factory/gates/biome.json"
+		],
+		"exclude": [
+			"test/acceptance/**",
+			"docs/prototypes/anthropic-route/**",
+			"docs/prototypes/ledger-branch/**",
+			"docs/prototypes/vm-sandbox/**",
+			"test/fixtures/**"
+		],
+		"allow": [
+			{
+				"reason": "scorerTouched treats any future file under this prefix as a scorer change; the folder does not exist yet",
+				"files": ["src/scorers.ts"],
+				"paths": [".github/factory/scorers/"]
+			},
+			{
+				"reason": "example paths inside stage prompt text, not repository reads",
+				"files": ["src/review.ts", "src/specify.ts"],
+				"paths": ["src/example.ts", "test/existing.test.ts"]
+			},
+			{
+				"reason": "synthetic held-out suites that tests and the gate probes write into temporary repositories",
+				"files": [
+					"test/**",
+					"docs/prototypes/heldout-ci/**",
+					"docs/prototypes/trusted-ci/**"
+				],
+				"globs": ["test/acceptance/*", "test/acceptance/**"]
+			},
+			{
+				"reason": "synthetic candidate files that the trusted-ci probe writes into its temporary repository",
+				"files": ["docs/prototypes/trusted-ci/**"],
+				"paths": [
+					"src/.editorconfig",
+					"src/.gitignore",
+					"src/.oxlintrc.json",
+					"src/biome.json",
+					"src/gate-cheat.ts",
+					"src/gate-format.ts",
+					"src/gate-lint.ts",
+					"src/gate-stream.ts",
+					"src/gate-types.ts",
+					"test/gate-new.cases.ts",
+					"test/gate-new.test.ts",
+					"test/new-thing.test.ts"
+				]
+			},
+			{
+				"reason": "synthetic repository paths that tests write into temporary repositories, scratch trees or fake diffs",
+				"files": ["test/**"],
+				"paths": [
+					".github//workflows/ci.yml",
+					".github/CODEOWNERS",
+					".github/actions/setup/action.yml",
+					".github/evil.yml",
+					".github/factory/gates/check.sh",
+					".github/factory/scorers/a.md",
+					".github/notes.md",
+					".github/workflows/factory.yml",
+					".github/x",
+					".pi/sessions/private.jsonl",
+					".pi/sessions/x",
+					".pi/skills/verify-factory/scripts/new-driver.sh",
+					"docs/.github/x.md",
+					"docs/a",
+					"docs/co",
+					"docs/drift.md",
+					"docs/guide.md",
+					"docs/link.md",
+					"docs/media/",
+					"docs/media/f",
+					"docs/new.md",
+					"docs/old.md",
+					"docs/prototypes/big.md",
+					"docs/x.md",
+					"docs/y.md",
+					"host/cli/index.ts",
+					"research/PROVENANCE.moved",
+					"scripts/biome.json",
+					"scripts/provenance.sh.bak",
+					"scripts/x.sh",
+					"scripts/y.sh",
+					"server/changed.ts",
+					"server/cli",
+					"server/cli.moved",
+					"server/cli/index.ts",
+					"server/code.min.js",
+					"server/example.ts",
+					"server/generated/code.ts",
+					"server/new-entry.ts",
+					"server/z.ts",
+					"skills/gone/SKILL.md",
+					"skills/new/SKILL.md",
+					"src/../../outside",
+					"src/../.github/workflows/ci.yml",
+					"src/.GIT/config",
+					"src/.factory-feedback.json",
+					"src/.npmrc",
+					"src/a",
+					"src/a.test.ts",
+					"src/a.ts",
+					"src/b.test.ts",
+					"src/b.ts",
+					"src/binary",
+					"src/biome.json",
+					"src/c.test.ts",
+					"src/c.test.ts.bak",
+					"src/c.ts",
+					"src/code.generated.ts",
+					"src/code.ts",
+					"src/colocated.test.ts",
+					"src/control.ts",
+					"src/core",
+					"src/core/json.ts",
+					"src/example.ts",
+					"src/f0.ts",
+					"src/feedback.json",
+					"src/file",
+					"src/format.ts",
+					"src/gone.ts",
+					"src/increment.mjs",
+					"src/link.ts",
+					"src/long.ts",
+					"src/math/add.ts",
+					"src/missing.ts",
+					"src/new.ts",
+					"src/nowhere.ts",
+					"src/other.ts",
+					"src/patch.ts",
+					"src/probe.ts",
+					"src/shown.ts",
+					"src/specify",
+					"src/stale.ts",
+					"src/unclassified.ts",
+					"src/untouched.ts",
+					"src/value.mjs",
+					"src/value.ts",
+					"src/version.ts",
+					"test/*.test.js",
+					"test/*.test.mjs",
+					"test/a.test.ts",
+					"test/candidate.test.mjs",
+					"test/cheat.test.ts",
+					"test/cli.test.ts",
+					"test/diagnostic.test.ts",
+					"test/existing.test.js",
+					"test/fail.test.js",
+					"test/failing.test.js",
+					"test/fast.test.ts",
+					"test/fixtures/**/*.test.ts",
+					"test/fixtures/huge.json",
+					"test/fixtures/oracle-corpus/561/private.test.ts",
+					"test/fixtures/oracle-corpus/561/x.test.ts",
+					"test/fixtures/payload/x.test.ts",
+					"test/gateway.test.ts",
+					"test/increment.test.mjs",
+					"test/integration/driver.test.ts",
+					"test/math/add.test.ts",
+					"test/missing.test.ts",
+					"test/new-thing.test.ts",
+					"test/new.cases.ts",
+					"test/new.test.ts",
+					"test/old.test.ts",
+					"test/other.test.ts",
+					"test/provenance.test.ts",
+					"test/replaced.test.js",
+					"test/retained.test.js",
+					"test/run.test.ts",
+					"test/sandbox/*.test.ts",
+					"test/sandbox/assets/runner.test.ts",
+					"test/sandbox/nested.test.ts",
+					"test/sandbox/new.cases.ts",
+					"test/sandbox/orphan.cases.ts",
+					"test/sandbox/registry.ts",
+					"test/sandbox/stray.test.ts",
+					"test/slow.test.ts",
+					"test/smoke.test.ts",
+					"test/value.test.ts",
+					"test/version.test.ts"
+				]
+			}
+		]
+	},
 	"shell": {
 		"files": [
 			"server/*.sh",
 			"server/*.service",
 			"host/**/*.sh",
 			"host/**/*.service",
-			".pi/**/*.sh"
+			".pi/**/*.sh",
+			"scripts/*.sh",
+			".github/workflows/*.yml"
 		],
 		"inventory": {
+			".github/workflows/check.yml": {
+				"tokens": {}
+			},
+			".github/workflows/ci.yml": {
+				"tokens": {
+					".github/workflows/ci.yml": {
+						"path": ".github/workflows/ci.yml",
+						"type": "file"
+					},
+					"server/cli.ts": {
+						"path": "server/cli.ts",
+						"type": "file"
+					},
+					"test/acceptance": {
+						"path": "test/acceptance",
+						"type": "dir"
+					}
+				}
+			},
 			".pi/skills/verify-factory/scripts/cleanup.sh": {
 				"tokens": {}
 			},
@@ -711,10 +1327,7 @@
 					}
 				},
 				"imports": {
-					"./server/controller.ts": [
-						"readDurableAccounting",
-						"readLock"
-					],
+					"./server/controller.ts": ["readDurableAccounting", "readLock"],
 					"./src/replay.ts": [
 						"REPLAY_CORPUS",
 						"loadReplayCorpus",
@@ -726,20 +1339,14 @@
 						"settleReplay",
 						"voidReplay"
 					],
-					"./src/run.ts": [
-						"digestOf"
-					],
-					"./server/sandbox.ts": [
-						"sandboxExecutor"
-					],
+					"./src/run.ts": ["digestOf"],
+					"./server/sandbox.ts": ["sandboxExecutor"],
 					"./src/platform.ts": [
 						"readPlatformFile",
 						"resolvePlatform",
 						"soleRepository"
 					],
-					"./src/workflow.ts": [
-						"parseWorkflow"
-					]
+					"./src/workflow.ts": ["parseWorkflow"]
 				}
 			},
 			".pi/skills/verify-factory/scripts/drive-serve.sh": {
@@ -799,6 +1406,34 @@
 			},
 			".pi/skills/verify-factory/scripts/vm.sh": {
 				"tokens": {}
+			},
+			"scripts/herdr-probe.sh": {
+				"tokens": {
+					"node_modules/.bin": {
+						"path": "node_modules/.bin",
+						"type": "external"
+					}
+				}
+			},
+			"scripts/provenance.sh": {
+				"tokens": {
+					"research/PROVENANCE.md": {
+						"path": "research/PROVENANCE.md",
+						"type": "file"
+					},
+					"research/upstream/": {
+						"path": "research/upstream/",
+						"type": "external"
+					},
+					"research/upstream": {
+						"path": "research/upstream",
+						"type": "external"
+					},
+					"scripts/provenance.sh": {
+						"path": "scripts/provenance.sh",
+						"type": "file"
+					}
+				}
 			},
 			"server/factory.service": {
 				"tokens": {
@@ -883,21 +1518,26 @@
 		}
 	},
 	"discovery": {
-		"runners": [
-			"test",
-			"test:integration"
-		],
-		"exclude": [
-			"test/acceptance/**",
-			"test/fixtures/**"
-		]
+		"runners": ["test", "test:integration"],
+		"exclude": ["test/acceptance/**", "test/fixtures/**"],
+		"trusted": {
+			"manifest": ".github/factory/gates/gates.json",
+			"materializer": "server/gates.ts",
+			"accepts": "/^test\\/(?:\\*\\.test\\.ts|sandbox\\/\\*\\.cases\\.ts|integration\\/\\*\\.test\\.ts)$/",
+			"predicates": [
+				"const files = globSync(pattern, { cwd: tree });",
+				"tests: tests.filter((p) => !p.endsWith(\".cases.ts\"))",
+				"\"baseline_tests\", baseline, testArgv(manifest.tests, false, GATE_TEST_CONCURRENCY),",
+				"manifest.tests.filter((p) => existsSync(join(tree, p)))",
+				"\"main_tests\", tree, testArgv(mainTests, false, GATE_TEST_CONCURRENCY),",
+				"path.startsWith(\"test/\") && (!base.has(path) || path.startsWith(\"test/acceptance/\"));",
+				"additional && /\\.(?:test|cases)\\.[cm]?[jt]s$/.test(path) && !path.startsWith(\"test/acceptance/\") ) newTests.push(path);",
+				"\"candidate_tests\", tree, testArgv(material.newTests),"
+			]
+		}
 	},
 	"navigation": {
-		"required": [
-			".github",
-			".pi",
-			".pi/skills"
-		],
+		"required": [".github", ".pi", ".pi/skills"],
 		"exempt": []
 	},
 	"citations": {
