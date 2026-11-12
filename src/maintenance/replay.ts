@@ -162,10 +162,8 @@ export async function loadReplayCorpus(dir: string): Promise<ReplayCorpus> {
 	return { v: 1, digest, cases: result };
 }
 
-// Historical layout aliases: a frozen replay corpus can name a source path that a later
-// layout PR moved. Used only when the original path is missing at a revision, and only for
-// guarded symbol lookups. One target per old path; a guard whose symbols moved to two
-// different files cannot be resolved and fails closed.
+// Frozen replay paths use aliases as a fallback for missing guarded sources and as
+// additional pathspecs for unguarded diffs. A guard split across files fails closed.
 const REPLAY_SOURCE_ALIASES: ReadonlyMap<string, string> = new Map([
 	["src/workflow.ts", "src/config/schema.ts"],
 	["src/specify.ts", "src/contract/contract.ts"],

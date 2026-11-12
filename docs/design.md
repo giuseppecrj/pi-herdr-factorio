@@ -183,7 +183,7 @@ package.json          pi manifest: extension + skills; peer deps pi, pi-herdr-ps
 extension/            /factory status, /factory run <issue> for local runs
 skills/               adapted upstream skills, each with SOURCE.md and its license or NOTICE
 src/                  run state, stages, policy, adapters, orchestrator, workflow loader
-server/               the VM service entry: tick loop, sandbox runner
+host/                 the VM service entry: tick loop, sandbox runner
 .github/workflows/    ci.yml (gates + acceptance)
 .github/factory/      WORKFLOW.md: config front matter and repo-specific stage guidance
 test/                 unit tests with fake adapters; seeded-bad-patch fixture

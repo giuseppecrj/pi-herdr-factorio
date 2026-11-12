@@ -220,14 +220,28 @@ async function acceptExcerpts(
 
 	const stem = (path: string) =>
 		path
-			.replace(/^host\/cli\/index\.ts$/, "cli.ts")
+			.replace(/^host\/viewer\/server\.ts$/, "viewer.ts")
+			.replace(/^host\/(cli|gates)\/[^/]+\.ts$/, "$1.ts")
+			.replace(/^host\/gateway\/(client|main)\.ts$/, "sandbox/gateway-$1.ts")
 			.replace(/^host\/(?:gateway|isolation|bundle)\//, "sandbox/")
+			.replace(/^host\/install\//, "")
 			.replace(/^(?:src|server|host|lib|test|tests)\//, "")
 			.replace(/(?:\.(?:test|spec|cases))?\.[cm]?[jt]sx?$/, "");
 
-	for (const source of sources) {
+	const keys = (path: string) => {
+		const collector = /^host\/cli\/(measurement|owner-feed|replay)\.ts$/.exec(
+			path,
+		);
+
+		return collector === null
+			? [stem(path)]
+			: [stem(path), `cli/${collector[1]}`];
+	};
+
+	for (const { source, key } of sources.flatMap((source) =>
+		keys(source).map((key) => ({ source, key })),
+	)) {
 		if (tests.includes(source)) continue;
-		const key = stem(source);
 
 		const rank = (test: string) => {
 			const candidate = stem(test);
@@ -291,7 +305,9 @@ async function acceptExcerpts(
 			const imported = lines.findIndex(
 				(line) =>
 					sources.some((source) =>
-						line.includes(stem(source).split("/").at(-1) ?? source),
+						keys(source).some((key) =>
+							line.includes(key.split("/").at(-1) ?? source),
+						),
 					) && /(?:from\s|import\s|require\()/.test(line),
 			);
 

@@ -17,7 +17,7 @@ The last recorded runtime correspondence revision is `3c62fc7`. Do not treat the
 | --- | --- |
 | `src/candidate/state.ts`, `src/candidate/codec.ts`, `src/candidate/handoff.ts` | Candidate generations, execution accounts, certification, feedback repair, owner-head recertification, stop, and finish. `state.ts` holds the book shape and generation identity, `codec.ts` the stored-book decoding, `handoff.ts` the policy |
 | `src/candidate/stages.ts` | Public `advance` delegates candidate policy to `handoffCandidate` |
-| `src/orchestrator.ts` | Persisted intent, effect interpretation, captured callback, and restart recovery |
+| `src/controller/orchestrator.ts`, `src/controller/recovery.ts` | Persisted intent, effect interpretation, captured callback, and restart recovery. `recovery.ts` turns an unsettled execution account back into its candidate event |
 | `src/github/publish.ts`, `host/controller/validation-sweep.ts`, `host/controller/candidate-port.ts` | Publication, non-force promotion, CI deadlines, and owned ref cleanup |
 | `test/handoff.test.ts`, `test/orchestrator.test.ts`, `test/publication.test.ts` | Runtime correspondence through the named F4 runner |
 

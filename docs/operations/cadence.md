@@ -147,7 +147,7 @@ The 32 KiB excerpt yields these worst-part estimates. Totals include the 8,800-t
 | Hygiene | 22,137 | 34,937 | 1,063 |
 | Reflect (8 KiB source plus scores) | 15,832 | 29,832 | 6,168 |
 
-Without intervening changes, `src/` needs 41 group visits, or 205 weekly executions, to show 33,195 of its 33,971 lines, **97.72%**. `server/` needs 35 visits, or 175 weekly executions, to show 28,654 of 29,688 lines, **96.52%**. The unshown lines are leading headers and imports. These counts exclude the low-value files above. Every remaining line that fits a window is covered. The full five-group cycle takes at most 565 executions; instructions take two.
+Without intervening changes, `src/` needs 41 group visits, or 205 weekly executions, to show 33,195 of its 33,971 lines, **97.72%**. The then `server/` tree needs 35 visits, or 175 weekly executions, to show 28,654 of 29,688 lines, **96.52%**. The unshown lines are leading headers and imports. These counts exclude the low-value files above. Every remaining line that fits a window is covered. The full five-group cycle takes at most 565 executions; instructions take two.
 
 Those frozen cycles are long. Changed-first selection is what gives fresh code priority each week; the rotation fills the rest of the budget and eventually covers unchanged tails. No complete-repository weekly coverage is claimed.
 

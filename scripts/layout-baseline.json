@@ -3947,7 +3947,12 @@
 				"new URL(\"../host/install/factory.service\", import.meta.url)": 1,
 				"new URL(\"../host/controller/lock.ts\", import.meta.url)": 1,
 				"\"../.pi/skills/verify-factory/features/sandbox-stage.md\"": 1,
-				"\"./fixtures/feedback/github-review.json\"": 2
+				"\"./fixtures/feedback/github-review.json\"": 2,
+				"new URL(\"../src/controller/orchestrator.ts\", import.meta.url)": 1,
+				"new URL(\"../src/trust/admission.ts\", import.meta.url)": 1,
+				"new URL(\"./fake-ticket-adapter.ts\", import.meta.url)": 1,
+				"new URL(\"../host/sandbox/result.ts\", import.meta.url)": 1,
+				"new URL(\"../src/trust/platform.ts\", import.meta.url)": 1
 			},
 			"targets": [
 				{
@@ -3981,6 +3986,65 @@
 						"from": "reader",
 						"path": "./fixtures/feedback/github-review.json"
 					}
+				},
+				{
+					"path": "src/controller/orchestrator.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../src/controller/orchestrator.ts"
+					}
+				},
+				{
+					"path": "src/trust/admission.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../src/trust/admission.ts"
+					}
+				},
+				{
+					"path": "test/fake-ticket-adapter.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./fake-ticket-adapter.ts"
+					}
+				},
+				{
+					"path": "host/sandbox/result.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../host/sandbox/result.ts"
+					}
+				},
+				{
+					"path": "src/trust/platform.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../src/trust/platform.ts"
+					}
+				}
+			]
+		},
+		{
+			"id": "test-reads-host-harness-parity",
+			"kind": "paths",
+			"reader": "test/host-harness-parity.test.ts",
+			"tokens": {
+				"readFileSync(\"docs/history/path-map.md\", \"utf8\")": 1,
+				"readdirSync(\"test\", { recursive: true, encoding: \"utf8\" })": 1
+			},
+			"targets": [
+				{
+					"path": "docs/history/path-map.md",
+					"type": "file"
+				},
+				{
+					"path": "test",
+					"type": "dir"
 				}
 			]
 		},
@@ -4513,7 +4577,10 @@
 			"kind": "paths",
 			"reader": "src/contract/prompt.ts",
 			"tokens": {
-				".replace(/^host\\/cli\\/index\\.ts$/, \"cli.ts\")": 1,
+				".replace(/^host\\/viewer\\/server\\.ts$/, \"viewer.ts\")": 1,
+				".replace(/^host\\/(cli|gates)\\/[^/]+\\.ts$/, \"$1.ts\")": 1,
+				".replace(/^host\\/gateway\\/(client|main)\\.ts$/, \"sandbox/gateway-$1.ts\")": 1,
+				".replace(/^host\\/install\\//, \"\")": 1,
 				".replace(/^host\\/(?:gateway|isolation|bundle)\\//, \"sandbox/\")": 1,
 				".replace(/^(?:src|server|host|lib|test|tests)\\//, \"\")": 1
 			},

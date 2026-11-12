@@ -24,7 +24,7 @@ Under the separate setup grant, create the disposable VM and attach only `nublai
 
 Connect directly to `exedev@layout-install-test.exe.xyz`. Run the remaining commands there as `exedev`, not root. `--vm` changes fix instructions only. It does not select or connect to a VM. Do not use legacy lane helpers as a target selector for this installation.
 
-Set `C` to the approved full lowercase 40-character fixture commit published in the fixture repository. The example uses the current `server/` layout. After L13, use the installer path at that tested revision.
+Set `C` to the approved full lowercase 40-character fixture commit published in the fixture repository. Match the bootstrap URL to that commit's layout. An old-layout commit uses `https://raw.githubusercontent.com/$REPO/$C/server/install-exe-dev.sh`. A new-layout commit uses `https://raw.githubusercontent.com/$REPO/$C/host/install/install-exe-dev.sh`, as below.
 
 ```bash
 REPO=nublai/pi-herdr-factorio-layout-fixture
@@ -70,9 +70,11 @@ Record PID, InvocationID, hold bytes and metadata, receipt, and unit before reru
 
 ### Upgrade and fail safely
 
-Drain the disposable controller under its grant before upgrade. Preserve state and hold evidence. Set `C` and `URL` to another approved full fixture commit, then rerun with explicit `--repo` and `--vm`. Require the new SHA and receipt, current readiness evidence, and the original hold retained.
+Drain the disposable controller under its grant before upgrade. Preserve state and hold evidence. Set `C` to the approved new-layout fixture commit and download that commit's bootstrap with `URL="https://raw.githubusercontent.com/$REPO/$C/host/install/install-exe-dev.sh"`. Rerun with explicit `--repo` and `--vm`. Require the new SHA and receipt, current readiness evidence, and the original hold retained.
 
 For an authorized failure before stop, use a controlled unavailable integration or fetch. Require a named refusal and the old service identity unchanged. If the hold was absent, installation may already have created it before fetching. Preflight alone never creates it.
+
+An old bootstrap given a new-layout SHA creates or retains the hold and fails before stopping the old service. Its failed re-exec leaves the staging clone at `~/.pi-herdr-factorio.install.*`. Under the cleanup grant, identify that invocation's exact directory, confirm its SHA with `git -C <directory> rev-parse HEAD`, then remove only that directory with `rm -rf -- <directory>`. Do not remove the controller checkout, state, or hold. Recover with the new commit's `host/install` bootstrap.
 
 For an authorized provisioning failure after stop, require the hold retained, no new success receipt, and the service stopped and disabled. The installer reports failure to confirm stop or disable explicitly. It does not roll back the checkout, bundle, or shared provisioning changes. Preserve the error and fix its cause, then rerun the pinned command under the recovery grant. Never remove the hold to recover.
 

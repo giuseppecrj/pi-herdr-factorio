@@ -1,6 +1,6 @@
 # Host controller
 
-The CLI in `host/cli/index.ts` composes these host ports with the scheduler in `src/orchestrator.ts`. No module here schedules candidate stages independently.
+The CLI in `host/cli/index.ts` composes these host ports with the scheduler in `src/controller/orchestrator.ts`. No module here schedules candidate stages independently.
 
 | File | Owns |
 | --- | --- |

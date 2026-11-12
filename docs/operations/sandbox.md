@@ -112,7 +112,7 @@ Status. Built in F05 and proven live on `pi-factorio` on 2026-10-29. The design 
 - *Sandbox* is the bwrap sandbox one stage runs in.
 - *Forwarder* is the in-sandbox relay in `stage-init.ts` that listens on loopback and connects to the gateway socket. The design named `socat`; section 0 records the change.
 - *Gateway* is the host-side reverse proxy, one per stage.
-- *Runner* is the controller code in `server/sandbox.ts` that owns one stage.
+- *Runner* is the controller code in `host/sandbox/run-stage.ts` that owns one stage.
 - *Edge* is exe.dev's front end at `169.254.169.254`.
 
 ## 1. Threat model
@@ -135,7 +135,7 @@ The agent runs model-written code that read untrusted issue text **[E `docs/desi
 - **Other host processes.** Any `exedev` process outside the sandbox already has the network and can use the integrations directly **[E `docs/design.md` "Known risks"]**. The gateway does not police the controller, cron jobs, an operator shell or a compromised gateway process.
 - **A bug in the gateway itself.** The gateway runs as `exedev` with the host network. An exploitable parser bug in it reaches GitHub. Keeping it small, dependency-free and out of the controller process limits the blast radius **[D]**. It does not remove it. Section 9 lists self-sandboxing the gateway as an open item.
 - **Data sent on an allowed route.** The agent may put any workspace bytes into a model prompt. That goes to the model provider, which is an accepted channel. Exfiltration *through* the provider to a third party is defended only by the model route's body constraint on hosted tools (section 3.4). Whether exe.dev forwards hosted tools at all is unknown **[G]**.
-- **A shell can start Pi without the wrapper. This is a known limit.** The wrapper is the only `pi` on the PATH, but Pi's `cli.js` (`PI_CLI` in `server/sandbox/assets/pi.ts`) and the bundle's Node are readable in the sandbox. A Pi that has a shell tool can run `node` on `cli.js` with any flags, and it can also edit the `settings.json` in its own writable agent dir. Either way it skips the forced `--no-mcp --no-approve --no-context-files --no-extensions`, the tool allowlist and the flag allowlist. The gateway, the network namespace and seccomp still hold, because they do not depend on Pi's flags. F05 passed `tools: []`, and the wrapper then added `--no-tools`. F06a grants the specify draft only `read`, `grep` and `ls`; review and revision have no tools. F07a grants `bash` to build, so the wrapper is no longer a security boundary for its in-sandbox subprocesses. A builder can bypass Pi flags, but cannot bypass the mount namespace, seccomp, cgroup or host gateway. The gateway pins its model and spend, exposes only model/npm routes, and grants no GitHub authority. No confidentiality or publication claim relies on the shell obeying a Pi tool allowlist.
+- **A shell can start Pi without the wrapper. This is a known limit.** The wrapper is the only `pi` on the PATH, but Pi's `cli.js` (`PI_CLI` in `host/bundle/assets/pi.ts`) and the bundle's Node are readable in the sandbox. A Pi that has a shell tool can run `node` on `cli.js` with any flags, and it can also edit the `settings.json` in its own writable agent dir. Either way it skips the forced `--no-mcp --no-approve --no-context-files --no-extensions`, the tool allowlist and the flag allowlist. The gateway, the network namespace and seccomp still hold, because they do not depend on Pi's flags. F05 passed `tools: []`, and the wrapper then added `--no-tools`. F06a grants the specify draft only `read`, `grep` and `ls`; review and revision have no tools. F07a grants `bash` to build, so the wrapper is no longer a security boundary for its in-sandbox subprocesses. A builder can bypass Pi flags, but cannot bypass the mount namespace, seccomp, cgroup or host gateway. The gateway pins its model and spend, exposes only model/npm routes, and grants no GitHub authority. No confidentiality or publication claim relies on the shell obeying a Pi tool allowlist.
 - **Low-bandwidth covert channels.** npm request paths carry agent-chosen package names to `registry.npmjs.org`. An attacker who cannot read registry logs gains little. Download counters on an attacker's own package are a slow side channel **[G]**. Timing channels are out of scope.
 - **Hostile content on allowed routes.** npm package bytes and model output are untrusted input to the agent. `--ignore-scripts` and the sandbox contain them. The gateway does not inspect them, except on credentialed routes for reflected secrets.
 - **Resource abuse inside the cgroup.** CPU and memory within `MemoryMax` and `TasksMax`, and bytes within route limits. The build/test post-stage disk size check is not an instantaneous quota, so it does not prevent transient host-disk exhaustion while a process is running.
@@ -176,10 +176,10 @@ The gateway speaks HTTP/1.1 upstream only **[D]**. No `:authority` ever exists o
  factory.service (system unit, User=exedev, NoNewPrivileges)
  ┌────────────────────────────────────────────────────────────────────┐
  │ controller process                                                 │
- │   Orchestrator ─► SandboxRunner (server/sandbox.ts)                 │
+ │   Orchestrator ─► SandboxRunner (host/sandbox/executor.ts)            │
  │        │ stdin/stdout JSONL control            ▲ usage events       │
  │        ▼                                       │                    │
- │   gateway child process (node server/sandbox/gateway-main.ts)      │
+ │   gateway child process (node host/gateway/main.ts)                  │
  │     listens on <stateDir>/gw/<nonce>/gw.sock (dir 0700, socket 0600)│
  │     route table frozen at start, admission gate, audit writer       │
  │     credentials (future) read from $CREDENTIALS_DIRECTORY           │
@@ -219,7 +219,7 @@ Prior art offers two bridges **[E `research/prior-art.md` §4.2 "Unix-socket bri
 
 ### 2.3 Lifetimes
 
-- **The gateway dies with the controller [D].** It treats EOF on its control stdin as "close admission and exit". It is in `factory.service`'s cgroup, so `KillMode=mixed` reaps it on stop **[E `server/factory.service`]**. A sandbox that outlives its controller therefore loses all egress. It cannot spend unsupervised. Lane 9 must confirm this.
+- **The gateway dies with the controller [D].** It treats EOF on its control stdin as "close admission and exit". It is in `factory.service`'s cgroup, so `KillMode=mixed` reaps it on stop **[E `f88069f:server/factory.service`]**. A sandbox that outlives its controller therefore loses all egress. It cannot spend unsupervised. Lane 9 must confirm this.
 - **The sandbox lives in a user scope** named `factory-stage-<owner>-<run16>-<stage>-<attempt>-<nonce>` (section 0) **[E `walkthrough/explanation.md` gotcha 6]**. `bwrap --die-with-parent` also kills it when its parent dies. With `systemd-run --scope` the parent is the controller **[G]**, so the sandbox may die with the controller anyway. Section 9 records this against walkthrough gotcha 6.
 
 ## 3. Route registry and policy schema
@@ -233,7 +233,7 @@ Prior art offers two bridges **[E `research/prior-art.md` §4.2 "Unix-socket bri
 
 ### 3.2 TypeScript types
 
-These are the contract between the runner and the gateway, in `server/sandbox/routes.ts` **[D]**.
+These are the contract between the runner and the gateway, in `host/gateway/routes.ts` **[D]**.
 
 ```ts
 type RouteId = string & { readonly __brand: "RouteId" };           // ^[a-z][a-z0-9-]{0,31}$
@@ -350,7 +350,7 @@ type RouteTable = {
 
 ### 3.3 Where the table comes from
 
-**Built-in routes [D].** These are built in `server/sandbox/routes.ts` by the controller from the selected platform profile ([platform](platform.md)). The table shows the `exe-dev` default. On `exmach:<domain>` the model host, Host header and SNI are `llm.int.<domain>`, the pin is `10.74.1.1`, the OpenAI base is `/v1/`, the Anthropic base is `/` (Pi's client appends `v1/messages`), and there is no `model-xai`. The sandbox prefixes do not change. The gateway takes its own `--platform` descriptor and rebuilds these upstreams itself, so a table built for another platform is refused. v1 ships exactly these.
+**Built-in routes [D].** These are built in `host/gateway/routes.ts` by the controller from the selected platform profile ([platform](platform.md)). The table shows the `exe-dev` default. On `exmach:<domain>` the model host, Host header and SNI are `llm.int.<domain>`, the pin is `10.74.1.1`, the OpenAI base is `/v1/`, the Anthropic base is `/` (Pi's client appends `v1/messages`), and there is no `model-xai`. The sandbox prefixes do not change. The gateway takes its own `--platform` descriptor and rebuilds these upstreams itself, so a table built for another platform is refused. v1 ships exactly these.
 
 | id | prefix | upstream | methods | paths | body | meter | initially |
 |---|---|---|---|---|---|---|---|
@@ -419,7 +419,7 @@ On uncredentialed routes a 3xx is passed back with `Location`, unfollowed. The s
 The v1 built-ins expressed in the same shape. They live in code, not in `WORKFLOW.md`.
 
 ```yaml
-# server/sandbox/routes.ts builds these; shown as YAML for review only
+# host/gateway/routes.ts builds these; shown as YAML for review only
 version: 1
 routes:
   model-openai:
@@ -473,7 +473,7 @@ v1 injects no secret. The exe.dev edge injects model access, and the prototype r
 ### 4.1 Store
 
 **Decision. systemd `LoadCredential=` on `factory.service` [D].**
-- **Values.** Each secret is a file `/etc/factory/credentials/<id>`, owner `root:root`, mode 0400. The unit gets one `LoadCredential=<id>:/etc/factory/credentials/<id>` line per secret. systemd copies each into the service's private, non-swappable credentials directory, readable by the service user, and sets `$CREDENTIALS_DIRECTORY` **[G]** for the exact semantics on the VM's systemd. `factory.service` is a system unit with `User=exedev` **[E `server/factory.service`]**, so this works without making the source readable by `exedev`.
+- **Values.** Each secret is a file `/etc/factory/credentials/<id>`, owner `root:root`, mode 0400. The unit gets one `LoadCredential=<id>:/etc/factory/credentials/<id>` line per secret. systemd copies each into the service's private, non-swappable credentials directory, readable by the service user, and sets `$CREDENTIALS_DIRECTORY` **[G]** for the exact semantics on the VM's systemd. `factory.service` is a system unit with `User=exedev` **[E `f88069f:server/factory.service`]**, so this works without making the source readable by `exedev`.
 - **Ceilings.** `/etc/factory/egress-credentials.json`, owner root, mode 0644, holds no secret values. It maps each id to its ceiling `{ scheme, host, port, placement, methods, paths }` (section 3.3 rule 2).
 - **Why not a plain `exedev`-owned file.** It works, but every `exedev` process could read it at rest. `LoadCredential` keeps the source root-only, and adding or rotating a secret needs an owner VM change plus a service restart. That is the property "a PR can never add a secret" wants.
 - **Honest limit.** `exedev` has `NOPASSWD` sudo **[E `walkthrough/explanation.md` gotcha 4]**, so this protects secrets from the sandbox and from casual reads, not from a compromised host account.
@@ -684,7 +684,7 @@ F04 set the rule that errors, warnings and status carry only text the factory bu
 
 ### 7.1 bwrap flags
 
-These are the flags `server/sandbox/bwrap.ts` builds: the prototype's **[E `proto-r1/run_exp3.sh` lines 24-31]** plus additions from prior art **[E `research/prior-art.md` §4.2 "bwrap invocation", recommendation 11]**, as changed in section 0.
+These are the flags `host/isolation/bwrap.ts` builds: the prototype's **[E `proto-r1/run_exp3.sh` lines 24-31]** plus additions from prior art **[E `research/prior-art.md` §4.2 "bwrap invocation", recommendation 11]**, as changed in section 0.
 
 ```text
 env -i PATH=/usr/bin:/bin bwrap
@@ -747,7 +747,7 @@ The filter is a deny list over a default allow, returning `EPERM` **[D]**.
 
 **`AF_UNIX`: the live result.** With `socket(AF_UNIX)` blocked, Herdr's server could not start inside the sandbox (`factory stage-init: herdr unavailable`). With it allowed, Herdr started, split a pane and ran a command in it. So the default stays allowed (`blockUnixSockets: false`), as this design proposed. **The design's reasoning, kept for context: `AF_UNIX` was pending experiment 5 [E `research/prior-art.md` recommendation 11].** `srt` blocks `socket(AF_UNIX)` after its relays start. Codex allows only `socketpair`. Herdr's headless server and Pi's child plumbing may need unix sockets **[G]**. This design mounts no host socket except `gw.sock`, and abstract sockets are netns-scoped **[E `proto-r1/summary.md` exp 2, last bullet, an inference there]**. So a block adds little here. The proposal is to leave `AF_UNIX` allowed unless experiment 5 shows Herdr works under the `socketpair`-only form.
 
-**Filter build [D].** `server/sandbox/seccomp.ts` emits classic BPF bytes directly, with no libseccomp dependency. It checks `AUDIT_ARCH` and the x32 bit first and kills on a foreign arch. The runner writes the bytes to a pipe passed as fd 10. The VM's architecture was not recorded in any log **[G]** that it is x86_64. The build must check it.
+**Filter build [D].** `host/isolation/seccomp.ts` emits classic BPF bytes directly, with no libseccomp dependency. It checks `AUDIT_ARCH` and the x32 bit first and kills on a foreign arch. The runner writes the bytes to a pipe passed as fd 10. The VM's architecture was not recorded in any log **[G]** that it is x86_64. The build must check it.
 
 ### 7.4 User scope
 
@@ -786,26 +786,26 @@ systemd-run --user --scope --quiet --unit=factory-stage-<owner>-<run16>-<stage>-
 
 ### 8.2 Module layout
 
-`server/sandbox/` is in the F05 file list **[E `docs/plans/factory-v1.md` line 252]**.
+`host/sandbox/` is in the F05 file list **[E `docs/plans/factory-v1.md` line 252]**.
 
 | File | Role | Pure? |
 |---|---|---|
-| `server/sandbox.ts` | `sandboxExecutor()`, the runner. It drives the lifecycle in 2.2, the gate in 5.2 and the receipt. | no |
-| `server/sandbox/routes.ts` | The 3.2 types, the built-in routes, table validation and the forbidden-upstream list | yes |
-| `server/sandbox/policy.ts` | `decide(request, table, gateState) → allow \| deny(code)`, covering target, path, headers, method, query and body | yes |
-| `server/sandbox/gateway.ts` | The unix-socket HTTP server, upstream client, streaming, response filter and reflection scanner | no |
-| `server/sandbox/gateway-main.ts` | The process entry. It reads the table from stdin, loads credentials and runs the control channel | no |
-| `server/sandbox/credentials.ts` | Loading from `$CREDENTIALS_DIRECTORY` and the ceiling check. Encoded forms for the scanner | yes, apart from the read |
-| `server/sandbox/audit.ts` | Line building, path redaction and the size cap | yes, apart from the write |
+| `host/sandbox/executor.ts` | `sandboxExecutor()`, the runner. It drives the lifecycle in 2.2, the gate in 5.2 and the receipt. | no |
+| `host/gateway/routes.ts` | The 3.2 types, the built-in routes, table validation and the forbidden-upstream list | yes |
+| `host/gateway/policy.ts` | `decide(request, table, gateState) → allow \| deny(code)`, covering target, path, headers, method, query and body | yes |
+| `host/gateway/gateway.ts` | The unix-socket HTTP server, upstream client, streaming, response filter and reflection scanner | no |
+| `host/gateway/main.ts` | The process entry. It reads the table from stdin, loads credentials and runs the control channel | no |
+| `host/gateway/credentials.ts` | Loading from `$CREDENTIALS_DIRECTORY` and the ceiling check. Encoded forms for the scanner | yes, apart from the read |
+| `host/gateway/audit.ts` | Line building, path redaction and the size cap | yes, apart from the write |
 | `src/core/journal.ts` | Reads the request journal back into settlements and the journal charge | yes |
-| `server/sandbox/meter.ts` | The `openai-responses-sse` usage parser | yes |
-| `server/sandbox/bwrap.ts` | The argv builder from section 7 | yes |
-| `server/sandbox/seccomp.ts` | The cBPF emitter | yes |
-| `server/sandbox/scope.ts` | `systemd-run` and `systemctl` calls and the leftover-scope reconcile | no |
-| `server/sandbox/assets/stage-init.ts` | The in-sandbox init. It starts the loopback relay and a headless Herdr server, then runs Pi. It ships in the assets bundle | no |
-| `server/sandbox/assets/pi.ts` | The only `pi` on the sandbox PATH. It forces `--no-mcp --no-approve --no-context-files --no-extensions`, narrows `--tools` to the stage allowlist and refuses any flag outside its own allowlist, for the parent and every child | no |
-| `server/sandbox/manifest.ts` | The bundle manifest and its sha256, the assets digest | yes, apart from the read |
-| `server/sandbox/preflight.ts` | The runner preflight | no |
+| `host/gateway/meter.ts` | The `openai-responses-sse` usage parser | yes |
+| `host/isolation/bwrap.ts` | The argv builder from section 7 | yes |
+| `host/isolation/seccomp.ts` | The cBPF emitter | yes |
+| `host/isolation/scope.ts` | `systemd-run` and `systemctl` calls and the leftover-scope reconcile | no |
+| `host/bundle/assets/stage-init.ts` | The in-sandbox init. It starts the loopback relay and a headless Herdr server, then runs Pi. It ships in the assets bundle | no |
+| `host/bundle/assets/pi.ts` | The only `pi` on the sandbox PATH. It forces `--no-mcp --no-approve --no-context-files --no-extensions`, narrows `--tools` to the stage allowlist and refuses any flag outside its own allowlist, for the parent and every child | no |
+| `host/bundle/manifest.ts` | The bundle manifest and its sha256, the assets digest | yes, apart from the read |
+| `host/isolation/preflight.ts` | The runner preflight | no |
 
 ### 8.3 Test plan
 
