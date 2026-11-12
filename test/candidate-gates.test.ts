@@ -3,8 +3,8 @@ import { execFileSync, spawnSync } from "node:child_process";
 import {
 	existsSync,
 	globSync,
-	mkdtempSync,
 	mkdirSync,
+	mkdtempSync,
 	readdirSync,
 	readFileSync,
 	rmSync,
@@ -15,26 +15,27 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import {
 	checkCandidate,
-	materializeCandidate,
-	validateDependencies,
-	replacementDigest,
-	heldoutDigest,
-	receiptPasses,
 	exportTree,
+	heldoutDigest,
+	materializeCandidate,
+	receiptPasses,
+	replacementDigest,
 	runDraftBase,
 	runHeldoutBase,
+	validateDependencies,
 	type GateRunner,
 } from "../server/gates.ts";
 import { assessBase, classifyFailure } from "../src/candidate/diagnosis.ts";
+import { isGitSha } from "../src/config/schema.ts";
 import { writeAcceptance } from "../src/contract/acceptance.ts";
-import { digestOf } from "../src/core/run.ts";
 import {
 	contractBytes,
 	contractDigestOf,
 	type Contract,
-} from "../src/specify.ts";
-import { isGitSha, isRepoSlug } from "../src/workflow.ts";
+} from "../src/contract/contract.ts";
 import { parseJson } from "../src/core/json.ts";
+import { digestOf } from "../src/core/run.ts";
+import { isRepoSlug } from "../src/trust/platform.ts";
 
 function gitSha(text: string) {
 	assert.ok(isGitSha(text));

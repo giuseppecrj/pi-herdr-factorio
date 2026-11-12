@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import * as replay from "../src/maintenance/replay.ts";
 import {
 	mkdir,
 	mkdtemp,
@@ -15,27 +14,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { EXIT, runCli } from "../server/cli.ts";
+import { checkReplayBundles } from "../server/cli/replay.ts";
 import { acquireLock, procTable } from "../server/controller.ts";
 import { manifestDigest } from "../server/sandbox/manifest.ts";
+import { parseWorkflow } from "../src/config/parse.ts";
+import { isGitSha } from "../src/config/schema.ts";
+import { digestOf } from "../src/core/run.ts";
+import type { Exec } from "../src/github/exec.ts";
 import { parseLedger, type LedgerRow } from "../src/ledger/schema.ts";
+import * as replay from "../src/maintenance/replay.ts";
 import {
 	checkReplay,
 	loadReplayCorpus,
+	readReplayBudget,
+	REPLAY_RUN_CAP,
 	replayReport,
 	reserveReplay,
 	settleReplay,
-	readReplayBudget,
-	REPLAY_RUN_CAP,
 } from "../src/maintenance/replay.ts";
-import { checkReplayBundles } from "../server/cli/replay.ts";
-import { digestOf } from "../src/core/run.ts";
-import {
-	isGitSha,
-	isRepoSlug,
-	parseWorkflow,
-	type Exec,
-} from "../src/workflow.ts";
-import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
+import { EXE_DEV_PLATFORM, isRepoSlug } from "../src/trust/platform.ts";
 import { noPlatformFile } from "./helpers.ts";
 
 const corpusDir = new URL("./fixtures/replay/", import.meta.url).pathname;
@@ -268,6 +265,118 @@ describe("replay corpus and read-only check", () => {
 		});
 
 		assert.equal(failed.cases[0]?.status, "unavailable");
+	});
+
+	for (const mode of [
+		"old layout",
+		"new layout",
+		"missing both",
+		"aliased pattern missing",
+		"original pattern missing",
+		"aliased pattern duplicated",
+		"aliased symbol changed",
+	] as const) {
+		it(`preserves strict historical source guards with ${mode}`, async () => {
+			const corpus = await loadReplayCorpus(corpusDir);
+			const calls: string[] = [];
+
+			const result = await checkReplay({
+				corpus,
+				mainSha: sha,
+				previousSha: sha,
+				candidateSha: otherSha,
+				exec: async (command, args) => {
+					assert.equal(command, "git");
+
+					if (args[0] !== "show") return { code: 0, stdout: "", stderr: "" };
+					const source = args[1] ?? "";
+					calls.push(source);
+					const main = source.startsWith(sha);
+					const original = source.endsWith(":src/workflow.ts");
+					const alias = source.endsWith(":src/config/schema.ts");
+
+					if (!main || (original && mode === "old layout"))
+						return { code: 0, stdout: syntheticWorkflow, stderr: "" };
+
+					if (original && mode === "original pattern missing")
+						return {
+							code: 0,
+							stdout: "export const unrelated = 1;",
+							stderr: "",
+						};
+
+					if (alias && mode !== "missing both") {
+						const stdout =
+							mode === "aliased pattern missing"
+								? "export const unrelated = 1;"
+								: mode === "aliased pattern duplicated"
+									? `${syntheticWorkflow}\n${syntheticWorkflow}`
+									: mode === "aliased symbol changed"
+										? syntheticWorkflow.replace(
+												"return BRANCH_NAME.test(input);",
+												"return false;",
+											)
+										: syntheticWorkflow;
+
+						return { code: 0, stdout, stderr: "" };
+					}
+
+					return { code: 128, stdout: "", stderr: "path missing at revision" };
+				},
+			});
+
+			assert.equal(
+				result.cases[0]?.status,
+				mode === "old layout" || mode === "new layout"
+					? "ready"
+					: mode === "aliased symbol changed"
+						? "stale"
+						: "unavailable",
+			);
+			assert.equal(
+				calls.filter((path) => path.endsWith(":src/config/schema.ts")).length,
+				mode === "old layout" || mode === "original pattern missing" ? 0 : 1,
+			);
+			assert.ok(
+				calls.every(
+					(path) =>
+						path.endsWith(":src/workflow.ts") ||
+						path.endsWith(":src/config/schema.ts"),
+				),
+			);
+		});
+	}
+
+	it("resolves a second historical source through the replay-owned alias table", async () => {
+		const corpus = await loadReplayCorpus(corpusDir);
+		const first = corpus.cases[0];
+		assert.ok(first);
+
+		const declaration =
+			"export function contractBytes(): string {\nreturn 'pinned';\n}\n";
+
+		const result = await checkReplay({
+			corpus: {
+				...corpus,
+				cases: [
+					{
+						...first,
+						paths: ["src/specify.ts"],
+						guardPattern: "contractBytes",
+					},
+				],
+			},
+			mainSha: sha,
+			previousSha: sha,
+			candidateSha: otherSha,
+			exec: async (_command, args) => ({
+				code: args[1] === `${sha}:src/specify.ts` ? 128 : 0,
+				stdout: args[0] === "show" ? declaration : "",
+				stderr: "",
+			}),
+		});
+
+		assert.equal(result.cases[0]?.status, "ready");
 	});
 
 	it("CLI checks the local corpus without GitHub or model calls", async () => {

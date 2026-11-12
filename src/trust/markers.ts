@@ -4,13 +4,8 @@ import { type ControllerIdentity, EXE_DEV_PLATFORM } from "./platform.ts";
 import { type Digest, isDigest, runIdOf } from "../core/run.ts";
 import { isStage, type Stage } from "../core/stages.ts";
 import type { JsonValue } from "../core/json.ts";
-import {
-	type CadenceJob,
-	type GitSha,
-	isGitSha,
-	isRepoSlug,
-	type RepoSlug,
-} from "../workflow.ts";
+import { type CadenceJob, type GitSha, isGitSha } from "../config/schema.ts";
+import { isRepoSlug, type RepoSlug } from "./platform.ts";
 
 /** The exe-dev identity, kept for test imports. Production reads the platform profile. */
 export const CONTROLLER_LOGIN = EXE_DEV_PLATFORM.controllerLogin;

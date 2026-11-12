@@ -1,30 +1,31 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
 import { execFileSync } from "node:child_process";
 import {
-	mkdtempSync,
 	mkdirSync,
-	writeFileSync,
-	rmSync,
+	mkdtempSync,
 	readFileSync,
+	rmSync,
+	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { test } from "node:test";
+import { controllerBaseChecker } from "../server/controller.ts";
+import { parseDraftDetails } from "../server/gates.ts";
 import {
 	assessBase,
+	BASE_PROTOCOL_VERSION,
 	draftCheckFeedback,
 	draftNeedsRevision,
 	parseBaseReceipt,
-	BASE_PROTOCOL_VERSION,
 	type BaseEvidence,
-	type TestFailure,
 	type DraftDetail,
+	type TestFailure,
 } from "../src/candidate/diagnosis.ts";
-import { parseDraftDetails } from "../server/gates.ts";
-import { controllerBaseChecker } from "../server/controller.ts";
+import { isGitSha } from "../src/config/schema.ts";
+import { contractDigestOf } from "../src/contract/contract.ts";
 import { digestOf } from "../src/core/run.ts";
-import { contractDigestOf } from "../src/specify.ts";
-import { isGitSha, isRepoSlug } from "../src/workflow.ts";
+import { isRepoSlug } from "../src/trust/platform.ts";
 
 function evidence(
 	kind: TestFailure["kind"],

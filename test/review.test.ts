@@ -72,9 +72,10 @@ import {
 	contractBytes,
 	contractDigestOf,
 	type Contract,
-} from "../src/specify.ts";
+} from "../src/contract/contract.ts";
 import { writeAcceptance } from "../src/contract/acceptance.ts";
-import { isGitSha, isRepoSlug } from "../src/workflow.ts";
+import { isGitSha } from "../src/config/schema.ts";
+import { isRepoSlug } from "../src/trust/platform.ts";
 import { objectOf, parseJson, textOf } from "../src/core/json.ts";
 import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 

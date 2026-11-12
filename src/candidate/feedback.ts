@@ -6,7 +6,8 @@ import type { GitHubFailure } from "../github/adapter.ts";
 import type { JsonValue } from "../core/json.ts";
 import { posix } from "node:path";
 import { digestOf, isDigest, type Digest } from "../core/run.ts";
-import { isGitSha, type GitSha, type RepoSlug } from "../workflow.ts";
+import { isGitSha, type GitSha } from "../config/schema.ts";
+import type { RepoSlug } from "../trust/platform.ts";
 import { ACCEPTANCE_SUITE_DIR, isAtOrUnder } from "../trust/protected-paths.ts";
 
 export type FeedbackId =

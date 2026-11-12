@@ -31,7 +31,7 @@ import {
 } from "../views/metrics.ts";
 import { cadenceMarker } from "../trust/markers.ts";
 import { digestOf, isDigest, type Digest } from "../core/run.ts";
-import { inert } from "../specify.ts";
+import { inert } from "../contract/render.ts";
 import type { ScoreEvent } from "../ledger/schema.ts";
 import {
 	CADENCE_JOBS,
@@ -40,8 +40,8 @@ import {
 	type CadenceJob,
 	type CadenceJobSettings,
 	type GitSha,
-	type RepoSlug,
-} from "../workflow.ts";
+} from "../config/schema.ts";
+import type { RepoSlug } from "../trust/platform.ts";
 
 export const CADENCE_SKILLS: Readonly<Record<CadenceJob, string>> = {
 	architecture: "improve-codebase-architecture",

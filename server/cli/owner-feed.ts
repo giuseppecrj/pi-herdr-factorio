@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import type { RepoSlug } from "../../src/trust/platform.ts";
 import {
 	ownerFeed,
 	ownerHeader,
@@ -9,7 +10,6 @@ import {
 	type OwnerHeader,
 	type RunReads,
 } from "../../src/views/feed.ts";
-import type { RepoSlug } from "../../src/workflow.ts";
 import {
 	readLock,
 	readStatus,

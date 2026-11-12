@@ -1,7 +1,7 @@
 import { lstat, readFile, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { isDigest, type Digest, runIdOf } from "../core/run.ts";
-import { isRepoSlug, type RepoSlug } from "../workflow.ts";
+import { isRepoSlug, type RepoSlug } from "../trust/platform.ts";
 import type { JsonValue } from "../core/json.ts";
 import { parseCandidateState } from "../candidate/codec.ts";
 import { candidateProjection } from "../candidate/handoff.ts";

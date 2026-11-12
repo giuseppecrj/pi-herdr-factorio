@@ -37,7 +37,8 @@ import {
 	type Verdict,
 	verdictPasses,
 } from "../core/run.ts";
-import { isGitSha, isRepoSlug, type GitSha } from "../workflow.ts";
+import { isGitSha, type GitSha } from "../config/schema.ts";
+import { isRepoSlug } from "../trust/platform.ts";
 import type { JsonValue } from "../core/json.ts";
 
 function wireObject(

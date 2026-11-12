@@ -1,9 +1,5 @@
 import { execFile } from "node:child_process";
-import {
-	wireBuilderDecisions,
-	type BuilderDisposition,
-	type BuilderFindingDisposition,
-} from "./feedback.ts";
+import { randomBytes } from "node:crypto";
 import {
 	chmodSync,
 	lstatSync,
@@ -16,33 +12,38 @@ import {
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { randomBytes } from "node:crypto";
+import { dirname, join } from "node:path";
+import type { Guidance } from "../config/schema.ts";
 import {
 	checkPrivateDir,
 	exclusive,
 	present,
 	privateDir,
-	regularText,
 	regularBytes,
+	regularText,
 } from "../contract/artifacts.ts";
+import type { Contract, InlinedFile } from "../contract/contract.ts";
+import { renderInlined } from "../contract/prompt.ts";
+import { arrayOf, fieldOf, objectOf, parseJson, textOf } from "../core/json.ts";
+import { digestOf, isDigest, type Digest } from "../core/run.ts";
 import { checkChangedPaths } from "../trust/policy.ts";
 import {
-	CONTROL_PLANE_DIR,
 	ACCEPTANCE_SUITE_DIR,
-	isAtOrUnder,
+	CONTROL_PLANE_DIR,
 	FEEDBACK_FILE,
+	isAtOrUnder,
 } from "../trust/protected-paths.ts";
 import {
 	assessVisibleChecks,
 	type CheckAssessment,
 	type CheckEnvironment,
 } from "./diagnosis.ts";
-import { digestOf, isDigest, type Digest } from "../core/run.ts";
-import { renderInlined, type Contract, type InlinedFile } from "../specify.ts";
-import type { Guidance } from "../workflow.ts";
-import { arrayOf, fieldOf, objectOf, parseJson, textOf } from "../core/json.ts";
+import {
+	wireBuilderDecisions,
+	type BuilderDisposition,
+	type BuilderFindingDisposition,
+} from "./feedback.ts";
 
 export const BUILD_TOOLS = [
 	"read",

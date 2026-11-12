@@ -1,7 +1,7 @@
 // Pinned prompt renderer from main 0f2a046, before evidence excerpts.
 import { randomBytes } from "node:crypto";
-import type { Contract, InlinedFile } from "../../../src/specify.ts";
-import type { Guidance } from "../../../src/workflow.ts";
+import type { Guidance } from "../../../src/config/schema.ts";
+import type { Contract, InlinedFile } from "../../../src/contract/contract.ts";
 
 export function buildPrompt(input: {
 	readonly contract: Contract;

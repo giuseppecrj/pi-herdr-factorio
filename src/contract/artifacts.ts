@@ -1,16 +1,34 @@
 import { randomBytes } from "node:crypto";
 import {
+	closeSync,
+	fsyncSync,
 	lstatSync,
 	mkdirSync,
+	openSync,
 	readFileSync,
 	readdirSync,
-	openSync,
 	renameSync,
 	writeFileSync,
-	fsyncSync,
-	closeSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { isGitSha, type GitSha } from "../config/schema.ts";
+import {
+	arrayOf,
+	countOf,
+	fieldOf,
+	objectOf,
+	parseJson,
+	textOf,
+	textsOf,
+} from "../core/json.ts";
+import {
+	familyLabel,
+	parseFamily,
+	withFamily,
+	type FamilyInput,
+} from "../core/models.ts";
+import { isDigest, type Digest } from "../core/run.ts";
+import { isRepoSlug } from "../trust/platform.ts";
 import {
 	ACCEPTANCE_ISOLATION,
 	ACCEPTANCE_MAX_BYTES,
@@ -22,33 +40,16 @@ import {
 	type AcceptanceSuite,
 } from "./acceptance.ts";
 import {
-	type FamilyInput,
-	familyLabel,
-	parseFamily,
-	withFamily,
-} from "../core/models.ts";
-import { type Digest, isDigest } from "../core/run.ts";
-import {
-	type Contract,
-	type ContractDigest,
 	contractBytes,
 	contractDigestOf,
-	isContractDigest,
-	parseSpecifyOutput,
 	isAnswersDigest,
+	isContractDigest,
 	isQuestionsDigest,
+	type Contract,
+	type ContractDigest,
 	type Link,
-} from "../specify.ts";
-import { isGitSha, isRepoSlug, type GitSha } from "../workflow.ts";
-import {
-	arrayOf,
-	countOf,
-	fieldOf,
-	objectOf,
-	parseJson,
-	textOf,
-	textsOf,
-} from "../core/json.ts";
+} from "./contract.ts";
+import { parseSpecifyOutput } from "./parse.ts";
 
 export type ContractRead =
 	| {

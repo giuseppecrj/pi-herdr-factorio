@@ -483,7 +483,7 @@ async function prepare(): Promise<void> {
 		{ soleRepository },
 		{ loadReplayCorpus, reserveReplay, replayStageCaps, REPLAY_CORPUS },
 	] = await Promise.all([
-		import("../../../../src/workflow.ts"),
+		import("../../../../src/config/parse.ts"),
 		import("../../../../src/trust/platform.ts"),
 		import("../../../../src/maintenance/replay.ts"),
 	]);

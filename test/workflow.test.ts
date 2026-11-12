@@ -3,42 +3,47 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
-import { EXIT, execFile, runCli } from "../server/cli.ts";
-import { digestOf } from "../src/core/run.ts";
+import { fileURLToPath } from "node:url";
+import { execFile, EXIT, runCli } from "../server/cli.ts";
 import { STAGE_PROFILES } from "../src/candidate/stages.ts";
-import { STAGE_ORDER, MODEL_STAGES } from "../src/core/stages.ts";
-import type { JsonValue } from "../src/core/json.ts";
 import {
-	type CheckReport,
-	checkReport,
+	loadPinnedWorkflow,
+	loadWorkflow,
+	reloadWorkflow,
+	trustedWorkflowConfig,
+} from "../src/config/load.ts";
+import { parseWorkflow } from "../src/config/parse.ts";
+import {
 	DEFAULT_MODEL,
 	type EnvLookup,
-	type Exec,
-	type ExecResult,
 	githubRepoFromRemote,
 	isGitSha,
-	isRepoSlug,
-	type LoadView,
-	loadPinnedWorkflow,
-	loadView,
-	loadWorkflow,
-	trustedWorkflowConfig,
-	modelsOf,
-	parseWorkflow,
-	seatModelsOf,
-	type RepoSlug,
-	type ReloadView,
 	redactCredentials,
-	reloadWorkflow,
-	type StatusReport,
-	statusReport,
 	WORKFLOW_PATH,
 	type WorkflowError,
 	type WorkflowLoad,
-} from "../src/workflow.ts";
-import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
+} from "../src/config/schema.ts";
+import {
+	type CheckReport,
+	checkReport,
+	type LoadView,
+	loadView,
+	modelsOf,
+	type ReloadView,
+	seatModelsOf,
+	type StatusReport,
+	statusReport,
+} from "../src/config/views.ts";
+import type { JsonValue } from "../src/core/json.ts";
+import { digestOf } from "../src/core/run.ts";
+import { MODEL_STAGES, STAGE_ORDER } from "../src/core/stages.ts";
+import type { Exec, ExecResult } from "../src/github/exec.ts";
+import {
+	EXE_DEV_PLATFORM,
+	isRepoSlug,
+	type RepoSlug,
+} from "../src/trust/platform.ts";
 import { noPlatformFile } from "./helpers.ts";
 
 function slug(text: string): RepoSlug {

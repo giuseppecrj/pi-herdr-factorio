@@ -1,20 +1,11 @@
 import { randomBytes } from "node:crypto";
-import { digestOf, type Digest } from "../core/run.ts";
-import {
-	acceptanceSourcePath,
-	type Contract,
-	type CriterionKind,
-	type InlinedFile,
-	isRepoPath,
-	LINE_MAX,
-	lineOf,
-	renderInlined,
-	treeOf,
-} from "../specify.ts";
-import type { Guidance } from "../workflow.ts";
 import type { RetryFeedback } from "../candidate/diagnosis.ts";
+import { type GitSha, type Guidance, isGitSha } from "../config/schema.ts";
 import {
+	type JsonObject,
+	type JsonValue,
 	arrayOf,
+	countOf,
 	fieldOf,
 	hasDuplicateKey,
 	hasOnlyKeys,
@@ -22,8 +13,55 @@ import {
 	parseJson,
 	textOf,
 	textsOf,
-	type JsonObject,
 } from "../core/json.ts";
+import { type Digest, digestOf, isDigest } from "../core/run.ts";
+import { type RepoSlug, isRepoSlug } from "../trust/platform.ts";
+import {
+	type Contract,
+	type ContractDigest,
+	type CriterionKind,
+	type InlinedFile,
+	LINE_MAX,
+	isContractDigest,
+} from "./contract.ts";
+import { isRepoPath, lineOf } from "./parse.ts";
+import { acceptanceSourcePath, renderInlined, treeOf } from "./prompt.ts";
+
+export type AcceptanceBinding = Readonly<{
+	runId: Digest;
+	repo: RepoSlug;
+	issue: number;
+	contractDigest: ContractDigest;
+	acceptanceDigest: Digest;
+	baseSha: GitSha;
+	gateSha: GitSha;
+}>;
+
+export function parseAcceptanceBinding(
+	value: JsonValue | undefined,
+): AcceptanceBinding | null {
+	const v = objectOf(value);
+
+	const runId = textOf(fieldOf(v, "runId")) ?? "",
+		repo = textOf(fieldOf(v, "repo")) ?? "",
+		issue = countOf(fieldOf(v, "issue"));
+
+	const contractDigest = textOf(fieldOf(v, "contractDigest")) ?? "",
+		acceptanceDigest = textOf(fieldOf(v, "acceptanceDigest")) ?? "",
+		baseSha = textOf(fieldOf(v, "baseSha")) ?? "",
+		gateSha = textOf(fieldOf(v, "gateSha")) ?? "";
+
+	return isDigest(runId) &&
+		isRepoSlug(repo) &&
+		issue !== null &&
+		issue > 0 &&
+		isContractDigest(contractDigest) &&
+		isDigest(acceptanceDigest) &&
+		isGitSha(baseSha) &&
+		isGitSha(gateSha)
+		? { runId, repo, issue, contractDigest, acceptanceDigest, baseSha, gateSha }
+		: null;
+}
 
 export const ACCEPTANCE_ISOLATION =
 	"context-isolated, same family, not cross-family";

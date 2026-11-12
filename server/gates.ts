@@ -5,53 +5,42 @@ import {
 	cpSync,
 	existsSync,
 	globSync,
+	lstatSync,
 	mkdirSync,
 	mkdtempSync,
-	readFileSync,
-	lstatSync,
 	readdirSync,
+	readFileSync,
 	rmSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { scanSource, type Signal } from "../.github/factory/gates/scan.ts";
-import { readStoredContract } from "../src/contract/artifacts.ts";
-import {
-	CONTROL_PLANE_PREFIX,
-	ACCEPTANCE_SUITE_DIR,
-	ACCEPTANCE_SUITE_PREFIX,
-} from "../src/trust/protected-paths.ts";
-import { isDigest, digestOf } from "../src/core/run.ts";
-import {
-	acceptanceEntries,
-	type AcceptanceSuite,
-} from "../src/contract/acceptance.ts";
 import {
 	BASE_PROTOCOL_VERSION,
-	runtimeCause,
-	type DraftDetail,
 	oracleKey,
+	runtimeCause,
 	SCAN_RULES,
-	type SuiteSignal,
-	type AcceptanceBinding,
 	type BaseEvidence,
+	type DraftDetail,
 	type HeldoutProjection,
 	type HeldoutReplay,
 	type PrivateExecution,
-	type TreeReplay,
+	type SuiteSignal,
 	type TestFailure,
+	type TreeReplay,
 } from "../src/candidate/diagnosis.ts";
-import type { Contract } from "../src/specify.ts";
+import { isGitSha } from "../src/config/schema.ts";
 import {
-	DEFAULT_SCOPE_LIMITS,
-	scopeArgv,
-	stopScopeArgv,
-} from "./sandbox/scope.ts";
-import { hasControl, type ReplacedTest } from "../src/specify.ts";
-import { isGitSha } from "../src/workflow.ts";
+	acceptanceEntries,
+	type AcceptanceBinding,
+	type AcceptanceSuite,
+} from "../src/contract/acceptance.ts";
+import { readStoredContract } from "../src/contract/artifacts.ts";
+import type { Contract, ReplacedTest } from "../src/contract/contract.ts";
+import { hasControl } from "../src/contract/parse.ts";
 import {
 	arrayOf,
 	countOf,
@@ -62,6 +51,17 @@ import {
 	textsOf,
 	type JsonObject,
 } from "../src/core/json.ts";
+import { digestOf, isDigest } from "../src/core/run.ts";
+import {
+	ACCEPTANCE_SUITE_DIR,
+	ACCEPTANCE_SUITE_PREFIX,
+	CONTROL_PLANE_PREFIX,
+} from "../src/trust/protected-paths.ts";
+import {
+	DEFAULT_SCOPE_LIMITS,
+	scopeArgv,
+	stopScopeArgv,
+} from "./sandbox/scope.ts";
 
 const GATE_IMAGE =
 	"node@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617";

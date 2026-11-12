@@ -1,7 +1,7 @@
 import { cpSync, existsSync, globSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { materializeFromDirectories } from "../../../../server/gates.ts";
-import type { ReplacedTest } from "../../../../src/specify.ts";
+import type { ReplacedTest } from "../../../../src/contract/contract.ts";
 
 const SOURCE = ["src/", "extension/", "server/", "skills/"];
 

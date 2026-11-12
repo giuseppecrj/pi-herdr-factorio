@@ -80,15 +80,11 @@ import { parseLedger, type ScoreEvent } from "../src/ledger/schema.ts";
 import { measurementPrimary } from "../src/views/metrics.ts";
 import { Orchestrator } from "../src/orchestrator.ts";
 import { digestOf } from "../src/core/run.ts";
-import {
-	isGitSha,
-	isRepoSlug,
-	parseWorkflow,
-	loadWorkflow,
-	type CadenceJob,
-	type Exec,
-	type ExecResult,
-} from "../src/workflow.ts";
+import { isGitSha, type CadenceJob } from "../src/config/schema.ts";
+import { parseWorkflow } from "../src/config/parse.ts";
+import { loadWorkflow } from "../src/config/load.ts";
+import { isRepoSlug } from "../src/trust/platform.ts";
+import type { Exec, ExecResult } from "../src/github/exec.ts";
 import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 import { controllerEnv, noPlatformFile } from "./helpers.ts";
 import { nativeUserScope } from "./native-scope.ts";

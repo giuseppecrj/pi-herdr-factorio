@@ -1,3 +1,4 @@
+import type { ModelId } from "../../src/config/schema.ts";
 import type {
 	BudgetCap,
 	EfficiencyFacts,
@@ -11,7 +12,6 @@ import type {
 import type { FamilyInput } from "../../src/core/models.ts";
 import type { Digest } from "../../src/core/run.ts";
 import type { SandboxStage as Stage } from "../../src/core/stages.ts";
-import type { ModelId } from "../../src/workflow.ts";
 import type { RouteSummary } from "./control.ts";
 
 export type FallbackRecord = {

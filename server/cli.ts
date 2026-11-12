@@ -37,22 +37,22 @@ import {
 } from "../src/orchestrator.ts";
 import type { JsonValue } from "../src/core/json.ts";
 import {
-	type CheckReport,
-	checkReport,
 	type EnvLookup,
-	type Exec,
-	type ExecResult,
 	isBranchName,
 	isGitSha,
-	isRepoSlug,
-	parseWorkflow,
-	loadWorkflow,
-	type RepoSlug,
 	redactCredentials,
+	TRUSTED_REF,
+} from "../src/config/schema.ts";
+import { parseWorkflow } from "../src/config/parse.ts";
+import { loadWorkflow } from "../src/config/load.ts";
+import {
+	type CheckReport,
+	checkReport,
 	type StatusReport,
 	statusReport,
-	TRUSTED_REF,
-} from "../src/workflow.ts";
+} from "../src/config/views.ts";
+import { isRepoSlug, type RepoSlug } from "../src/trust/platform.ts";
+import type { Exec, ExecResult } from "../src/github/exec.ts";
 import {
 	acquireLock,
 	fileRunFiles,
@@ -82,7 +82,7 @@ import {
 } from "./controller/state.ts";
 import { readOwnerFeed } from "./cli/owner-feed.ts";
 import { isCadenceJob } from "../src/maintenance/cadence.ts";
-import type { CadenceJob } from "../src/workflow.ts";
+import type { CadenceJob } from "../src/config/schema.ts";
 import { GitHubPublicationApi } from "../src/github/publish.ts";
 import { sandboxExecutor } from "./sandbox.ts";
 import { runGatesCli } from "./gates.ts";

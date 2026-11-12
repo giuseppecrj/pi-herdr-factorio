@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { mkdtemp, rm, mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { addRun, repo as feedRepo } from "./fixtures/owner-feed/state.ts";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import {
 	factoryCommandText,
@@ -12,11 +11,12 @@ import {
 	registerFactory,
 	type StatusSources,
 } from "../extension/index.ts";
-import { READY_LABEL } from "../src/trust/policy.ts";
 import { STAGE_ORDER } from "../src/core/stages.ts";
-import type { Exec, ExecResult } from "../src/workflow.ts";
-import { FakeGitHub, fakeIssue, labelEvent } from "./fake-ticket-adapter.ts";
+import type { Exec, ExecResult } from "../src/github/exec.ts";
 import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
+import { READY_LABEL } from "../src/trust/policy.ts";
+import { FakeGitHub, fakeIssue, labelEvent } from "./fake-ticket-adapter.ts";
+import { addRun, repo as feedRepo } from "./fixtures/owner-feed/state.ts";
 
 const remote = "git@github.com:nublai/pi-herdr-factorio.git\n";
 const mainSha = "c".repeat(40);

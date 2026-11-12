@@ -438,11 +438,29 @@
 				"from": ["src/publication.ts"],
 				"since": "L09"
 			},
-			"src/specify.ts": {
+			"src/contract/contract.ts": {
 				"owner": "src/contract",
 				"seats": ["code-review", "security-review", "simplify"],
-				"from": [],
-				"since": "L00"
+				"from": ["src/specify.ts"],
+				"since": "L08"
+			},
+			"src/contract/parse.ts": {
+				"owner": "src/contract",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["src/specify.ts"],
+				"since": "L08"
+			},
+			"src/contract/render.ts": {
+				"owner": "src/contract",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["src/specify.ts"],
+				"since": "L08"
+			},
+			"src/contract/prompt.ts": {
+				"owner": "src/contract",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": ["src/specify.ts"],
+				"since": "L08"
 			},
 			"src/trust/protected-paths.ts": {
 				"owner": "src/trust",
@@ -450,11 +468,29 @@
 				"from": ["src/policy.ts"],
 				"since": "L04"
 			},
-			"src/workflow.ts": {
+			"src/config/schema.ts": {
 				"owner": "src/config",
 				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
-				"from": [],
-				"since": "L00"
+				"from": ["src/workflow.ts"],
+				"since": "L08"
+			},
+			"src/config/parse.ts": {
+				"owner": "src/config",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": ["src/workflow.ts"],
+				"since": "L08"
+			},
+			"src/config/load.ts": {
+				"owner": "src/config",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": ["src/workflow.ts"],
+				"since": "L08"
+			},
+			"src/config/views.ts": {
+				"owner": "src/config",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": ["src/workflow.ts"],
+				"since": "L08"
 			},
 			"src/trust/policy.ts": {
 				"owner": "src/trust",
@@ -501,8 +537,8 @@
 			"src/contract/acceptance.ts": {
 				"owner": "src/contract",
 				"seats": ["code-review", "security-review", "simplify"],
-				"from": ["src/accept.ts"],
-				"since": "L06"
+				"from": ["src/accept.ts", "src/candidate/diagnosis.ts"],
+				"since": "L08"
 			},
 			"src/contract/artifacts.ts": {
 				"owner": "src/contract",
@@ -590,8 +626,14 @@
 			}
 		},
 		"retired": {
-			"src/handoff.ts": {
-				"owner": "src/candidate",
+			"src/workflow.ts": {
+				"owner": "src/config",
+				"seats": ["code-review", "security-review", "simplify", "ultrareview"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/specify.ts": {
+				"owner": "src/contract",
 				"seats": ["code-review", "security-review", "simplify"],
 				"from": [],
 				"since": "L00"
@@ -754,6 +796,12 @@
 			},
 			"src/publication.ts": {
 				"owner": "src/github",
+				"seats": ["code-review", "security-review", "simplify"],
+				"from": [],
+				"since": "L00"
+			},
+			"src/handoff.ts": {
+				"owner": "src/candidate",
 				"seats": ["code-review", "security-review", "simplify"],
 				"from": [],
 				"since": "L00"
@@ -2405,6 +2453,60 @@
 			]
 		},
 		{
+			"id": "test-reads-config-contract-parity",
+			"kind": "paths",
+			"reader": "test/config-contract-parity.test.ts",
+			"tokens": {
+				"new URL(\"../src/config/schema.ts\", import.meta.url)": 1,
+				"new URL(\"../src/config/parse.ts\", import.meta.url)": 1,
+				"new URL(\"../src/config/load.ts\", import.meta.url)": 1,
+				"new URL(\"../src/config/views.ts\", import.meta.url)": 1,
+				"new URL(\"../src/contract/contract.ts\", import.meta.url)": 1,
+				"new URL(\"../src/contract/parse.ts\", import.meta.url)": 1,
+				"new URL(\"../src/contract/render.ts\", import.meta.url)": 1,
+				"new URL(\"../src/contract/prompt.ts\", import.meta.url)": 1,
+				"new URL(\"../src/contract/acceptance.ts\", import.meta.url)": 1
+			},
+			"targets": [
+				{
+					"path": "src/config/schema.ts",
+					"type": "file"
+				},
+				{
+					"path": "src/config/parse.ts",
+					"type": "file"
+				},
+				{
+					"path": "src/config/load.ts",
+					"type": "file"
+				},
+				{
+					"path": "src/config/views.ts",
+					"type": "file"
+				},
+				{
+					"path": "src/contract/contract.ts",
+					"type": "file"
+				},
+				{
+					"path": "src/contract/parse.ts",
+					"type": "file"
+				},
+				{
+					"path": "src/contract/render.ts",
+					"type": "file"
+				},
+				{
+					"path": "src/contract/prompt.ts",
+					"type": "file"
+				},
+				{
+					"path": "src/contract/acceptance.ts",
+					"type": "file"
+				}
+			]
+		},
+		{
 			"id": "test-reads-workflow",
 			"kind": "paths",
 			"reader": "test/workflow.test.ts",
@@ -2449,6 +2551,11 @@
 		],
 		"allow": [
 			{
+				"reason": "replay source aliases retain frozen corpus paths and resolve their guarded declarations after L08 moves",
+				"files": ["src/maintenance/replay.ts"],
+				"paths": ["src/workflow.ts", "src/specify.ts"]
+			},
+			{
 				"reason": "replayStageCaps reads the review and repair caps from their pre-L03 home at revisions before L03",
 				"files": ["src/maintenance/replay.ts"],
 				"paths": ["src/run.ts"]
@@ -2460,7 +2567,7 @@
 			},
 			{
 				"reason": "example paths inside stage prompt text, not repository reads",
-				"files": ["src/candidate/review.ts", "src/specify.ts"],
+				"files": ["src/candidate/review.ts", "src/contract/prompt.ts"],
 				"paths": ["src/example.ts", "test/existing.test.ts"]
 			},
 			{

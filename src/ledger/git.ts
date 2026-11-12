@@ -6,7 +6,7 @@ import {
 	gitObjectSha,
 	shaOf,
 } from "../github/publish.ts";
-import { isGitSha, type GitSha } from "../workflow.ts";
+import { isGitSha, type GitSha } from "../config/schema.ts";
 import { arrayOf, fieldOf, objectOf, textOf } from "../core/json.ts";
 
 const LEDGER_BRANCH = "factory/ledger";

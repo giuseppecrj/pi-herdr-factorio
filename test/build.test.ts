@@ -1,38 +1,39 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { execFileSync } from "node:child_process";
 import {
-	mkdtempSync,
-	mkdirSync,
-	writeFileSync,
-	symlinkSync,
 	chmodSync,
-	rmSync,
+	mkdirSync,
+	mkdtempSync,
 	readFileSync,
 	readdirSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { test } from "node:test";
 import {
-	collectPatch,
-	readPatch,
-	storePatch,
-	finishPatch,
-	commandReceipts,
-	patchedTree,
-	trustedVisiblePlan,
-	visibleEnvironment,
-	checkBuildDisk,
+	COMMAND_MAX_BYTES,
 	PATCH_MAX_BYTES,
 	PATCH_RECEIPT_MAX_BYTES,
-	COMMAND_MAX_BYTES,
 	TEST_TAIL_BYTES,
 	buildPrompt,
+	checkBuildDisk,
+	collectPatch,
+	commandReceipts,
+	finishPatch,
+	patchedTree,
+	readPatch,
+	storePatch,
+	trustedVisiblePlan,
+	visibleEnvironment,
 } from "../src/candidate/build.ts";
-import { isGitSha, isRepoSlug } from "../src/workflow.ts";
 import { feedbackPrompt } from "../src/candidate/review.ts";
+import { isGitSha } from "../src/config/schema.ts";
+import { renderBuildSummary } from "../src/contract/render.ts";
 import { digestOf } from "../src/core/run.ts";
-import { execFileSync } from "node:child_process";
-import { renderBuildSummary } from "../src/specify.ts";
+import { isRepoSlug } from "../src/trust/platform.ts";
 
 function fixture(t: { after(fn: () => void): void }) {
 	const root = mkdtempSync(join(tmpdir(), "factory-build-"));

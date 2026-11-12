@@ -1,5 +1,49 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { stageResult, type StageReceipt } from "../server/sandbox/result.ts";
+import type { ModelId } from "../src/config/schema.ts";
+import {
+	aggregateEfficiency,
+	executionUsageOf,
+	parseEfficiency,
+	requestEfficiency,
+	unknownEfficiency,
+	type SessionOutcome,
+} from "../src/core/execution.ts";
+import {
+	journalCharge,
+	requestSettlements,
+	settlementReply,
+} from "../src/core/journal.ts";
+import type { JsonValue } from "../src/core/json.ts";
+import {
+	arrayOf,
+	boolOf,
+	countOf,
+	fieldOf,
+	hasDuplicateKey,
+	hasOnlyKeys,
+	numberOf,
+	objectOf,
+	parseJson,
+	textOf,
+	textsOf,
+} from "../src/core/json.ts";
+import {
+	ANTHROPIC_MAX_OUTPUT_TOKENS,
+	ANTHROPIC_MODEL_IDS,
+	anthropicMaxOutput,
+	certifyR8,
+	crossFamily,
+	familyFromJournal,
+	familyLabel,
+	familyOf,
+	isAnthropicModelId,
+	parseAnthropicModel,
+	parseFamily,
+	withFamily,
+	type FamilyInput,
+} from "../src/core/models.ts";
 import {
 	REPAIR_BUILD_MAX_TOKENS,
 	REQUIRED_CI_CHECKS,
@@ -16,52 +60,6 @@ import {
 	type Verdict,
 } from "../src/core/run.ts";
 import type { SandboxStage } from "../src/core/stages.ts";
-import {
-	arrayOf,
-	boolOf,
-	countOf,
-	fieldOf,
-	hasDuplicateKey,
-	hasOnlyKeys,
-	numberOf,
-	objectOf,
-	parseJson,
-	textOf,
-	textsOf,
-} from "../src/core/json.ts";
-import type { JsonValue } from "../src/core/json.ts";
-import {
-	ANTHROPIC_MAX_OUTPUT_TOKENS,
-	ANTHROPIC_MODEL_IDS,
-	anthropicMaxOutput,
-	isAnthropicModelId,
-	parseAnthropicModel,
-} from "../src/core/models.ts";
-import {
-	certifyR8,
-	crossFamily,
-	familyFromJournal,
-	familyLabel,
-	familyOf,
-	parseFamily,
-	withFamily,
-	type FamilyInput,
-} from "../src/core/models.ts";
-import {
-	journalCharge,
-	requestSettlements,
-	settlementReply,
-} from "../src/core/journal.ts";
-import {
-	aggregateEfficiency,
-	executionUsageOf,
-	parseEfficiency,
-	requestEfficiency,
-	unknownEfficiency,
-	type SessionOutcome,
-} from "../src/core/execution.ts";
-import { stageResult, type StageReceipt } from "../server/sandbox/result.ts";
-import type { ModelId } from "../src/workflow.ts";
 
 /** The JSON text of `value` parsed back, with `undefined` kept as a visible marker. */
 function observed<T>(value: T): JsonValue | undefined {

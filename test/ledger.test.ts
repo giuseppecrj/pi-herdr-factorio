@@ -35,7 +35,8 @@ import {
 import { digestOf, runIdOf } from "../src/core/run.ts";
 import { unknownEfficiency } from "../src/core/execution.ts";
 import { objectOf } from "../src/core/json.ts";
-import { isGitSha, isRepoSlug, type GitSha } from "../src/workflow.ts";
+import { isGitSha, type GitSha } from "../src/config/schema.ts";
+import { isRepoSlug } from "../src/trust/platform.ts";
 import { LedgerGit, repo } from "./ledger-git.ts";
 import { TRUSTED_RUN_CAP } from "./fake-ticket-adapter.ts";
 import {

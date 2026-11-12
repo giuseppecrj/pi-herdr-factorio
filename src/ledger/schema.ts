@@ -6,7 +6,8 @@ import {
 } from "../core/execution.ts";
 import { VISIBLE_CHECKS } from "../candidate/diagnosis.ts";
 import { STAGE_ORDER } from "../core/stages.ts";
-import { isGitSha, isRepoSlug, type GitSha } from "../workflow.ts";
+import { isGitSha, type GitSha } from "../config/schema.ts";
+import { isRepoSlug } from "../trust/platform.ts";
 import {
 	arrayOf,
 	countOf,

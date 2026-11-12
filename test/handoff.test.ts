@@ -63,7 +63,8 @@ import {
 } from "../src/candidate/validation.ts";
 import { candidateBranch } from "../src/github/publish.ts";
 import type { JsonValue } from "../src/core/json.ts";
-import { isGitSha, isRepoSlug } from "../src/workflow.ts";
+import { isGitSha } from "../src/config/schema.ts";
+import { isRepoSlug } from "../src/trust/platform.ts";
 import { storePatch, type PatchReceipt } from "../src/candidate/build.ts";
 import { controllerCandidatePort } from "../server/controller.ts";
 import { sandboxExecutor } from "../server/sandbox.ts";

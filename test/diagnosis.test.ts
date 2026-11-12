@@ -46,9 +46,10 @@ import {
 	contractBytes,
 	contractDigestOf,
 	type Contract,
-} from "../src/specify.ts";
-import { isGitSha, isRepoSlug, type GitSha } from "../src/workflow.ts";
-import { isContractDigest } from "../src/specify.ts";
+} from "../src/contract/contract.ts";
+import { isGitSha, type GitSha } from "../src/config/schema.ts";
+import { isRepoSlug } from "../src/trust/platform.ts";
+import { isContractDigest } from "../src/contract/contract.ts";
 import {
 	arrayOf,
 	fieldOf,

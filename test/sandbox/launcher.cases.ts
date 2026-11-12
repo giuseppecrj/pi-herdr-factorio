@@ -13,10 +13,14 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { createServer as createHttpServer, request } from "node:http";
-import { closeHttpServer } from "./http-fixtures.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import {
+	piCommand,
+	sandboxExecutor,
+	sandboxHost,
+} from "../../server/sandbox.ts";
 import {
 	FORCED_PI_FLAGS,
 	PI_AGENT_DIR,
@@ -36,13 +40,6 @@ import {
 } from "../../server/sandbox/bwrap.ts";
 import { startGatewayProcess } from "../../server/sandbox/gateway-client.ts";
 import {
-	arrayOf,
-	fieldOf,
-	objectOf,
-	parseJson,
-	textOf,
-} from "../../src/core/json.ts";
-import {
 	bundleMatchesSource,
 	manifestDigest,
 } from "../../server/sandbox/manifest.ts";
@@ -50,6 +47,7 @@ import {
 	type PreflightDeps,
 	runPreflight,
 } from "../../server/sandbox/preflight.ts";
+import type { StageReceipt } from "../../server/sandbox/result.ts";
 import {
 	DEFAULT_SCOPE_LIMITS,
 	namesStateDir,
@@ -61,12 +59,6 @@ import {
 	stopScopeArgv,
 } from "../../server/sandbox/scope.ts";
 import {
-	piCommand,
-	sandboxExecutor,
-	sandboxHost,
-} from "../../server/sandbox.ts";
-import type { StageReceipt } from "../../server/sandbox/result.ts";
-import {
 	AUDIT_ARCH,
 	decodeProgram,
 	detectArch,
@@ -75,12 +67,20 @@ import {
 	seccompProgram,
 	SYSCALLS,
 } from "../../server/sandbox/seccomp.ts";
+import type { ModelId } from "../../src/config/schema.ts";
+import {
+	arrayOf,
+	fieldOf,
+	objectOf,
+	parseJson,
+	textOf,
+} from "../../src/core/json.ts";
+import type { Digest } from "../../src/core/run.ts";
 import type { ExecResult } from "../../src/github/exec.ts";
 import type { LogFields } from "../../src/orchestrator.ts";
-import type { Digest } from "../../src/core/run.ts";
-import type { ModelId } from "../../src/workflow.ts";
-import { modelTable } from "./routes.cases.ts";
 import { EXE_DEV_PLATFORM } from "../../src/trust/platform.ts";
+import { closeHttpServer } from "./http-fixtures.ts";
+import { modelTable } from "./routes.cases.ts";
 
 const STATE = "/home/exedev/factory-state";
 const RUN = "a".repeat(64);

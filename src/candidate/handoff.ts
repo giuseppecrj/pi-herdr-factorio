@@ -63,7 +63,7 @@ import {
 	type Verdict,
 	verdictPasses,
 } from "../core/run.ts";
-import type { GitSha } from "../workflow.ts";
+import type { GitSha } from "../config/schema.ts";
 
 export type PrObservation =
 	| { readonly kind: "none" }

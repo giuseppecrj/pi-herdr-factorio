@@ -35,7 +35,7 @@ import {
 import { fileLedgerOutbox } from "../server/controller.ts";
 import { digestOf, runIdOf } from "../src/core/run.ts";
 import { objectOf, type JsonValue } from "../src/core/json.ts";
-import { isGitSha, type GitSha } from "../src/workflow.ts";
+import { isGitSha, type GitSha } from "../src/config/schema.ts";
 import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 import { RealGit } from "./ledger-real-git.ts";
 import { repo } from "./ledger-git.ts";

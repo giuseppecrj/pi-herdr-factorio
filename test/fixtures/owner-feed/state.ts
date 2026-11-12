@@ -6,7 +6,8 @@ import {
 	snapshotDigest,
 } from "../../../src/trust/admission.ts";
 import { digestOf, runIdOf } from "../../../src/core/run.ts";
-import { isRepoSlug, isGitSha } from "../../../src/workflow.ts";
+import { isGitSha } from "../../../src/config/schema.ts";
+import { isRepoSlug } from "../../../src/trust/platform.ts";
 import type { JsonValue } from "../../../src/core/json.ts";
 import { candidateLifecycleFixture } from "../../helpers.ts";
 import { parseCandidateState } from "../../../src/candidate/codec.ts";

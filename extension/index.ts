@@ -1,6 +1,16 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import manifest from "../package.json" with { type: "json" };
-import { readAttention, formatAttention } from "../src/views/attention.ts";
+import { formatStageTable } from "../src/candidate/stages.ts";
+import { loadWorkflow } from "../src/config/load.ts";
+import {
+	type EnvLookup,
+	githubRepoFromRemote,
+	redactCredentials,
+	TRUSTED_REF,
+	type WorkflowLoad,
+} from "../src/config/schema.ts";
+import { MODEL_STAGES } from "../src/core/stages.ts";
+import type { Exec, ExecResult } from "../src/github/exec.ts";
 import {
 	type AdmissionReceipt,
 	type AdmissionStore,
@@ -11,21 +21,10 @@ import {
 	type PlatformProfile,
 	type PlatformResolution,
 	readPlatformFile,
+	type RepoSlug,
 	resolvePlatform,
 } from "../src/trust/platform.ts";
-import { formatStageTable } from "../src/candidate/stages.ts";
-import { MODEL_STAGES } from "../src/core/stages.ts";
-import {
-	type EnvLookup,
-	type Exec,
-	type ExecResult,
-	githubRepoFromRemote,
-	loadWorkflow,
-	type RepoSlug,
-	redactCredentials,
-	TRUSTED_REF,
-	type WorkflowLoad,
-} from "../src/workflow.ts";
+import { formatAttention, readAttention } from "../src/views/attention.ts";
 
 const STATUS_MESSAGE_TYPE = "factory-status";
 const USAGE = "Usage: /factory status | /factory run <issue>";

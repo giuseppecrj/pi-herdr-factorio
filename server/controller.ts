@@ -197,15 +197,17 @@ import {
 import { parseAdoption, parseAnchor, appendRun } from "../src/ledger/append.ts";
 import {
 	isGitSha,
-	isRepoSlug,
-	parseWorkflow,
 	STAGE_CLEANUP_RESERVE_MS,
 	isPinnedGrader,
-	loadPinnedWorkflow,
-	trustedWorkflowConfig,
 	type HandoffSettings,
 	type WorkflowConfig,
-} from "../src/workflow.ts";
+} from "../src/config/schema.ts";
+import { parseWorkflow } from "../src/config/parse.ts";
+import {
+	loadPinnedWorkflow,
+	trustedWorkflowConfig,
+} from "../src/config/load.ts";
+import { isRepoSlug } from "../src/trust/platform.ts";
 import { FAMILY_MISSING } from "../src/core/models.ts";
 import {
 	familyClaimsHold,
@@ -231,6 +233,7 @@ import {
 	validateDependencies,
 	type GateRunner,
 } from "./gates.ts";
+import type { AcceptanceBinding } from "../src/contract/acceptance.ts";
 import {
 	assessBase,
 	draftCheckFeedback,
@@ -240,7 +243,6 @@ import {
 	parseBaseReceipt,
 	parseHeldoutReplay,
 	parseBaseCheckReference,
-	type AcceptanceBinding,
 	type BaseCheckInput,
 	type BaseCheckProgress,
 	type BaseReason,
@@ -255,7 +257,7 @@ import {
 	type AcceptanceSuite,
 } from "../src/contract/acceptance.ts";
 import type { DraftCheckContext, StageRunInput } from "./sandbox.ts";
-import type { Contract, ReplacedTest } from "../src/specify.ts";
+import type { Contract, ReplacedTest } from "../src/contract/contract.ts";
 import { scopeOwner, scopeUnit, stopScopeArgv } from "./sandbox/scope.ts";
 import {
 	cp,
@@ -301,15 +303,14 @@ import {
 	type AnswersRecord,
 	type ClarificationRound,
 	answersDigestOf,
-	hasControl,
-	inert,
-	renderSummary,
-	withoutKey,
 	isAnswersDigest,
 	isQuestionsDigest,
-} from "../src/specify.ts";
+} from "../src/contract/contract.ts";
+import { hasControl } from "../src/contract/parse.ts";
+import { inert, renderSummary, withoutKey } from "../src/contract/render.ts";
 import type { JsonValue } from "../src/core/json.ts";
-import type { GitSha, RepoSlug } from "../src/workflow.ts";
+import type { GitSha } from "../src/config/schema.ts";
+import type { RepoSlug } from "../src/trust/platform.ts";
 import {
 	errorCode,
 	holderOf,
@@ -8235,7 +8236,7 @@ function feedbackRound(
 	stateDir: string,
 	state: Extract<CandidateState, { kind: "selected" }>,
 	ref: FeedbackBatchRef,
-	appliedHead?: import("../src/workflow.ts").GitSha,
+	appliedHead?: import("../src/config/schema.ts").GitSha,
 	failedAttempt?: number,
 ): Readonly<{ receipt: RoundReceipt; batchAvailable: boolean }> | null {
 	const read = readFeedbackBatch(stateDir, state.pin.runId, ref.digest);

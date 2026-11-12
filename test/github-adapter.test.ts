@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
+import type { JsonValue } from "../src/core/json.ts";
 import {
 	actorText,
 	GitHubReadError,
@@ -9,10 +10,10 @@ import {
 	isLogin,
 	type Login,
 } from "../src/github/adapter.ts";
-import { READY_LABEL } from "../src/trust/policy.ts";
-import { type JsonValue } from "../src/core/json.ts";
+import type { Exec } from "../src/github/exec.ts";
 import { ticketKey } from "../src/github/tickets.ts";
-import { type Exec, isRepoSlug, type RepoSlug } from "../src/workflow.ts";
+import { isRepoSlug, type RepoSlug } from "../src/trust/platform.ts";
+import { READY_LABEL } from "../src/trust/policy.ts";
 import {
 	BOT_LOGIN,
 	commentEvent,

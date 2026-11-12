@@ -39,7 +39,8 @@ import {
 	type AcceptanceSuite,
 } from "../src/contract/acceptance.ts";
 import { CONTROLLER_LOGIN } from "../src/trust/markers.ts";
-import { isGitSha, isRepoSlug } from "../src/workflow.ts";
+import { isGitSha } from "../src/config/schema.ts";
+import { isRepoSlug } from "../src/trust/platform.ts";
 import {
 	passingVerdict,
 	patch,
@@ -57,7 +58,7 @@ import {
 	contractBytes,
 	contractDigestOf,
 	type Contract,
-} from "../src/specify.ts";
+} from "../src/contract/contract.ts";
 import {
 	collectPatch,
 	storePatch,

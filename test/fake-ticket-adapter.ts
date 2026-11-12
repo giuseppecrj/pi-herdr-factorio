@@ -1,20 +1,20 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import type { JsonValue } from "../src/core/json.ts";
+import type { Run, TicketRef } from "../src/core/run.ts";
+import type { Exec, ExecResult } from "../src/github/exec.ts";
+import {
+	type FactoryEvent,
+	type Ticket,
+	type TicketAdapter,
+	ticketKey,
+	type TicketState,
+} from "../src/github/tickets.ts";
 import {
 	hasWriteAccess,
 	type PermissionLevel,
 	READY_LABEL,
 } from "../src/trust/policy.ts";
-import type { Run, TicketRef } from "../src/core/run.ts";
-import {
-	type FactoryEvent,
-	type Ticket,
-	type TicketAdapter,
-	type TicketState,
-	ticketKey,
-} from "../src/github/tickets.ts";
-import { type JsonValue } from "../src/core/json.ts";
-import type { Exec, ExecResult } from "../src/workflow.ts";
 
 export type Call =
 	| { kind: "report"; ref: TicketRef; run: Run }

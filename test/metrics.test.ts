@@ -27,7 +27,8 @@ import {
 	type DefectRead,
 } from "../src/views/metrics.ts";
 import { digestOf, runIdOf } from "../src/core/run.ts";
-import { isRepoSlug, type Exec } from "../src/workflow.ts";
+import { isRepoSlug } from "../src/trust/platform.ts";
+import type { Exec } from "../src/github/exec.ts";
 import { noPlatformFile } from "./helpers.ts";
 import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 

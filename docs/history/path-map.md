@@ -58,5 +58,14 @@ Each row is bound to the pull request that made the move. Its squash commit on `
 | L07 | #757 | `src/handoff.ts` | `src/candidate/state.ts` | Split: `MAX_REFRESHES`, `MAX_GENERATIONS`, `MAX_REPAIR_ROUNDS`, `MAX_REVIEW_ATTEMPTS`, the stored book's types from `RepairRound` to `CandidateState` (except `PrObservation`), `reviewReceiptDigest`, `freeze`, `snapshot`, `refOf`, `sameGeneration`, `generationIntent`, `ownerPatchValid` and `validPatch` moved |
 | L07 | #757 | `src/handoff.ts` | `src/candidate/codec.ts` | Split: every `wire*` decoder, `migrateReview`, `parseReviewReceipt`, `migrateCertificationValue`, `migrateEvidenceValue`, `parseOwnerPatchReceipt` and `parseCandidateState` moved |
 | L07 | #757 | `src/handoff.ts` | `src/candidate/handoff.ts` | Split: the policy moved. `PrObservation`, `CandidateEffectResult`, `CandidateEvent`, `CandidateStep`, `CandidateProjection`, `candidateProjection`, `beginCandidate`, `handoffCandidate` and its helpers, the accounting and certification functions, `Limitation`, `notProven` and `renderLimitation` |
+| L08 | #756 | `src/workflow.ts` | `src/config/schema.ts` | Configuration types, defaults, identity guards, credential redaction and load result types |
+| L08 | #756 | `src/workflow.ts` | `src/config/parse.ts` | `parseWorkflow`, YAML validation and Markdown guidance parsing |
+| L08 | #756 | `src/workflow.ts` | `src/config/load.ts` | `loadWorkflow`, `loadPinnedWorkflow`, `reloadWorkflow`, `trustedWorkflowConfig` and the main-only cache |
+| L08 | #756 | `src/workflow.ts` | `src/config/views.ts` | `loadView`, `configView`, `modelsOf`, `seatModelsOf`, `checkReport`, `statusReport` and their view types |
+| L08 | #756 | `src/specify.ts` | `src/contract/contract.ts` | Contract, question, answer and source-input types, limits, digest guards, canonical bytes and digests, `answerBody` |
+| L08 | #756 | `src/specify.ts` | `src/contract/parse.ts` | `parseSpecifyOutput`, `parseReviewOutput`, `hasControl`, `lineOf`, `isRepoPath` and private JSON validation |
+| L08 | #756 | `src/specify.ts` | `src/contract/render.ts` | Inert comment text, keys and key readers, question, contract, acceptance and build summaries |
+| L08 | #756 | `src/specify.ts` | `src/contract/prompt.ts` | Specify tools and skills, source selection, excerpts, source facts, tree and named files, nonce framing and specify, review and revision prompts |
+| L08 | #756 | `src/candidate/diagnosis.ts` | `src/contract/acceptance.ts` | `AcceptanceBinding` and `parseAcceptanceBinding`; base and candidate policy stay in diagnosis |
 
 L00 moves no files.

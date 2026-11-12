@@ -22,7 +22,7 @@ import { frozenRowOf, parseRunStart, isKnownCap } from "../ledger/schema.ts";
 import { terminalFailureOf } from "../ledger/terminal.ts";
 import { objectOf, fieldOf, countOf, textOf, parseJson } from "../core/json.ts";
 import type { JsonObject, JsonValue } from "../core/json.ts";
-import { isRepoSlug, type RepoSlug } from "../workflow.ts";
+import { isRepoSlug, type RepoSlug } from "../trust/platform.ts";
 import { isDigest, type Verdict } from "../core/run.ts";
 import type { SessionOutcome } from "../core/execution.ts";
 import { FAMILY_MISSING } from "../core/models.ts";

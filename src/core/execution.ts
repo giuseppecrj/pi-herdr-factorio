@@ -1,6 +1,4 @@
-import type { Digest } from "./run.ts";
-import type { SandboxStage as Stage } from "./stages.ts";
-import type { ModelId, StageBudget } from "../workflow.ts";
+import type { ModelId, StageBudget } from "../config/schema.ts";
 import {
 	countOf,
 	fieldOf,
@@ -8,6 +6,8 @@ import {
 	parseJson,
 	type JsonValue,
 } from "./json.ts";
+import type { Digest } from "./run.ts";
+import type { SandboxStage as Stage } from "./stages.ts";
 
 export const EFFICIENCY_COUNTS = [
 	"assistantTurns",

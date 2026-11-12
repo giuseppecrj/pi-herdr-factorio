@@ -34,9 +34,14 @@ bash -n .pi/skills/verify-factory/scripts/drive-replay.sh
 ```
 
 Supply full SHAs with local Git objects. Inspect every case status and `bundle`.
-c5 is offline only. Stale or unavailable cases must not run. c1 uses
-`git diff -G'BRANCH_NAME|isBranchName'` on `src/workflow.ts`, not a whole-file
-workflow guard. The manifest pins both title and body. Copy its exact `title`
+c5 is offline only. Stale or unavailable cases must not run. c1 compares whole
+`BRANCH_NAME` and `isBranchName` declarations, not the whole workflow file.
+`REPLAY_SOURCE_ALIASES` in `src/maintenance/replay.ts` owns historical source
+lookups. It tries `src/config/schema.ts` only when the frozen `src/workflow.ts`
+path is unavailable at that revision. The table also maps `src/specify.ts` to
+`src/contract/contract.ts` for contract guards. A missing, duplicate or absent
+guarded declaration still refuses the case. Add later layout aliases there,
+never in the frozen corpus. The manifest pins both title and body. Copy its exact `title`
 for both sides; never add a side name or free-text suffix to the live title.
 
 Tests reuse the reviewer's fake `gh` and fake controller harness, with real

@@ -44,12 +44,13 @@ import {
 	arrayOf,
 	type JsonValue,
 } from "../src/core/json.ts";
-import { isGitSha, isRepoSlug, type GitSha } from "../src/workflow.ts";
+import { isGitSha, type GitSha } from "../src/config/schema.ts";
+import { isRepoSlug } from "../src/trust/platform.ts";
 import {
 	type Contract,
 	contractBytes,
 	contractDigestOf,
-} from "../src/specify.ts";
+} from "../src/contract/contract.ts";
 import { type AcceptanceSuite } from "../src/contract/acceptance.ts";
 import { fileArtifacts } from "../src/contract/artifacts.ts";
 import {
